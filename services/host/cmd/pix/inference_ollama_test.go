@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/inference"
 )
 
 // ollamaListEnv fakes a healthy daemon whose `ollama list` prints tags, plus a
@@ -186,7 +187,9 @@ func TestVerifyOllamaInferencePromotesOnlyAnsweringModels(t *testing.T) {
 	)
 	f := &fakeProber{fail: map[string]error{"deepseek-v4-pro:cloud": fmt.Errorf("endpoint rejected the request (HTTP 401)")}}
 	env := shellEnv{ollamaInferenceProbe: f.probe}
-	attempted, verified, failures, notProbed := verifyOllamaInference(cfg, env, io.Discard)
+	probe, probeErr := verifyOllamaInference(cfg, env, io.Discard)
+	mustNoProbeErr(t, probeErr)
+	attempted, verified, failures, notProbed := probe.Attempted, probe.Verified, probe.Failures, probe.NotProbed
 	if attempted != 3 || verified != 2 || len(failures) != 1 || len(notProbed) != 0 {
 		t.Fatalf("attempted=%d verified=%d failures=%v notProbed=%v", attempted, verified, failures, notProbed)
 	}
@@ -207,7 +210,7 @@ func TestVerifiedBindingRecordsProbeProvenance(t *testing.T) {
 	cfg := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
 	f := &fakeProber{}
 	env := shellEnv{ollamaInferenceProbe: f.probe}
-	if _, verified, _, _ := verifyOllamaInference(cfg, env, io.Discard); verified != 1 {
+	if probe, _ := verifyOllamaInference(cfg, env, io.Discard); probe.Verified != 1 {
 		t.Fatal("probe succeeded but nothing was promoted")
 	}
 	got := cfg.Inference.Models[0]
@@ -216,7 +219,7 @@ func TestVerifiedBindingRecordsProbeProvenance(t *testing.T) {
 	}
 	// Now demote: the same binding, a refusing prober.
 	f2 := &fakeProber{fail: map[string]error{"qwen3.5:9b": fmt.Errorf("endpoint rejected the request (HTTP 500)")}}
-	if _, verified, _, _ := verifyOllamaInference(cfg, shellEnv{ollamaInferenceProbe: f2.probe}, io.Discard); verified != 0 {
+	if probe, _ := verifyOllamaInference(cfg, shellEnv{ollamaInferenceProbe: f2.probe}, io.Discard); probe.Verified != 0 {
 		t.Fatal("a refused probe must not verify")
 	}
 	got = cfg.Inference.Models[0]
@@ -225,13 +228,22 @@ func TestVerifiedBindingRecordsProbeProvenance(t *testing.T) {
 	}
 }
 
-// TestNilOllamaProbeSeamLeavesBindingsUnverified: a test-mode default that
-// fabricates success, or a real network call leaking out of a hermetic test.
+// TestNilOllamaProbeSeamLeavesBindingsUnverified guards the thing that must
+// never happen with a missing prober: a test-mode default that fabricates
+// success, or a real network call leaking out of a hermetic test.
+//
+// It used to also assert the RETURN was a clean zero. That assertion was the
+// bug in miniature — it pinned "no probe configured" as indistinguishable from
+// "probed nothing" — so the return contract is now an error, and what remains
+// here is the part that was always right: nothing gets marked verified.
 func TestNilOllamaProbeSeamLeavesBindingsUnverified(t *testing.T) {
 	cfg := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
-	attempted, verified, failures, notProbed := verifyOllamaInference(cfg, shellEnv{}, io.Discard)
-	if attempted != 0 || verified != 0 || failures != nil || notProbed != nil {
-		t.Fatalf("a nil prober must probe nothing: %d %d %v %v", attempted, verified, failures, notProbed)
+	probe, err := verifyOllamaInference(cfg, shellEnv{}, io.Discard)
+	if err == nil {
+		t.Fatal("a nil prober must be reported, not silently treated as nothing to do")
+	}
+	if probe.Attempted != 0 || probe.Verified != 0 {
+		t.Fatalf("a nil prober must probe nothing: %+v", probe)
 	}
 	if cfg.Inference.Models[0].Verified {
 		t.Fatal("a nil prober must never produce a verified binding")
@@ -255,7 +267,7 @@ func TestVerifyOllamaInferenceUsesResolvedEndpoint(t *testing.T) {
 			return nil
 		},
 	}
-	verifyOllamaInference(cfg, env, io.Discard)
+	_, _ = verifyOllamaInference(cfg, env, io.Discard)
 	if seen != "http://10.0.0.5:11500" {
 		t.Fatalf("probe endpoint = %q, want the resolved OLLAMA_HOST", seen)
 	}
@@ -288,7 +300,7 @@ func TestLocalOllamaProbesAreSerialized(t *testing.T) {
 		}
 		return base(endpoint, model, numCtx, timeout)
 	}}
-	verifyOllamaInference(cfg, env, io.Discard)
+	_, _ = verifyOllamaInference(cfg, env, io.Discard)
 	if got := atomic.LoadInt32(&f.maxLocal); got != 1 {
 		t.Fatalf("max concurrent LOCAL probes = %d, want 1 (two resident models is a budget nobody computed)", got)
 	}
@@ -306,7 +318,7 @@ func TestLocalProbeOrderIsLargestRungFirst(t *testing.T) {
 		binding("ollama/qwen3.5:9b"),
 	)
 	f := &fakeProber{}
-	verifyOllamaInference(cfg, shellEnv{ollamaInferenceProbe: f.probe}, io.Discard)
+	_, _ = verifyOllamaInference(cfg, shellEnv{ollamaInferenceProbe: f.probe}, io.Discard)
 	want := []string{"qwen3.5:27b", "qwen3.5:9b", "qwen3.5:4b"}
 	if strings.Join(f.order, ",") != strings.Join(want, ",") {
 		t.Fatalf("probe order = %v, want %v", f.order, want)
@@ -332,7 +344,9 @@ func TestLocalProbeBudgetMarksRemainderNotProbedNotFailed(t *testing.T) {
 	)
 	f := &fakeProber{delay: 70 * time.Millisecond}
 	var out bytes.Buffer
-	attempted, verified, failures, notProbed := verifyOllamaInference(cfg, shellEnv{ollamaInferenceProbe: f.probe}, &out)
+	probe, probeErr := verifyOllamaInference(cfg, shellEnv{ollamaInferenceProbe: f.probe}, &out)
+	mustNoProbeErr(t, probeErr)
+	attempted, verified, failures, notProbed := probe.Attempted, probe.Verified, probe.Failures, probe.NotProbed
 	if len(notProbed) == 0 {
 		t.Fatal("the budget must leave a remainder unprobed rather than running forever")
 	}
@@ -418,7 +432,7 @@ func TestLiveOllamaProbeRejectsUnauthorized(t *testing.T) {
 // `Auth != "1password"` shortcut fails here in three places at once.
 func TestUnverifiedOllamaBindingIsNotCallable(t *testing.T) {
 	cfg := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
-	if inferenceBindingCallable(cfg, cfg.Inference.Models[0]) {
+	if inference.Callable(cfg, cfg.Inference.Models[0]) {
 		t.Fatal("an unverified ollama binding must not be callable")
 	}
 	if ids, err := callableRuntimeModels(cfg); err != nil || len(ids) != 0 {
@@ -432,7 +446,7 @@ func TestUnverifiedOllamaBindingIsNotCallable(t *testing.T) {
 		t.Fatalf("an unproven binding reached the compiled manifest: %+v", manifest.Models)
 	}
 	cfg.Inference.Models[0].Verified = true
-	if !inferenceBindingCallable(cfg, cfg.Inference.Models[0]) {
+	if !inference.Callable(cfg, cfg.Inference.Models[0]) {
 		t.Fatal("a probe-verified ollama binding must be callable")
 	}
 }
@@ -448,13 +462,13 @@ func TestPackDeclaredOllamaBindingStaysCallableWithoutHostProof(t *testing.T) {
 			{Model: "ollama/qwen3.5:9b", Backend: "ollama", Upstream: "qwen3.5:9b", Available: true, Source: "/packs/work"},
 		},
 	}}
-	if !inferenceBindingCallable(cfg, cfg.Inference.Models[0]) {
+	if !inference.Callable(cfg, cfg.Inference.Models[0]) {
 		t.Fatal("a pack-declared ollama binding must stay callable without a host probe")
 	}
 	// And a host probe must not even try to demote it.
 	f := &fakeProber{}
-	if attempted, _, _, _ := verifyOllamaInference(cfg, shellEnv{ollamaInferenceProbe: f.probe}, io.Discard); attempted != 0 {
-		t.Fatalf("a pack binding was probed (%d attempts): %v", attempted, f.order)
+	if probe, _ := verifyOllamaInference(cfg, shellEnv{ollamaInferenceProbe: f.probe}, io.Discard); probe.Attempted != 0 {
+		t.Fatalf("a pack binding was probed (%d attempts): %v", probe.Attempted, f.order)
 	}
 }
 
@@ -527,14 +541,14 @@ func TestLegacyVerifiedOllamaBindingFlaggedOnceThenClears(t *testing.T) {
 	if got := legacyVerifiedOllamaBindings(cfg); len(got) != 1 {
 		t.Fatalf("a listing-derived claim must be flagged: %v", got)
 	}
-	if !inferenceBindingCallable(cfg, cfg.Inference.Models[0]) {
+	if !inference.Callable(cfg, cfg.Inference.Models[0]) {
 		t.Fatal("legacy bindings are grandfathered as callable, not demoted at load")
 	}
 	// Promote path: the next setup re-probes and earns it.
 	promoted := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
 	promoted.Inference.Models[0].Verified = true
 	f := &fakeProber{}
-	verifyOllamaInference(promoted, shellEnv{ollamaInferenceProbe: f.probe}, io.Discard)
+	_, _ = verifyOllamaInference(promoted, shellEnv{ollamaInferenceProbe: f.probe}, io.Discard)
 	if got := legacyVerifiedOllamaBindings(promoted); len(got) != 0 {
 		t.Fatalf("the row must clear once a probe earns the claim: %v", got)
 	}
@@ -543,7 +557,7 @@ func TestLegacyVerifiedOllamaBindingFlaggedOnceThenClears(t *testing.T) {
 	demoted := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
 	demoted.Inference.Models[0].Verified = true
 	f2 := &fakeProber{fail: map[string]error{"qwen3.5:9b": fmt.Errorf("endpoint rejected the request (HTTP 500)")}}
-	verifyOllamaInference(demoted, shellEnv{ollamaInferenceProbe: f2.probe}, io.Discard)
+	_, _ = verifyOllamaInference(demoted, shellEnv{ollamaInferenceProbe: f2.probe}, io.Discard)
 	if got := legacyVerifiedOllamaBindings(demoted); len(got) != 0 {
 		t.Fatalf("the row must clear on demotion too: %v", got)
 	}
@@ -578,8 +592,12 @@ func TestDeclinedPullLeavesNoCallableModelAndExitsZero(t *testing.T) {
 	cfg := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
 	cfg.OllamaBridgeModel = "qwen3.5:9b"
 	var out bytes.Buffer
-	// No prober wired: nothing was pulled, so nothing can be probed.
-	err := runSetupInferenceStep(cfg, shellEnv{}, strings.NewReader(""), &out, false, setupModelsOutcome{consent: "prompt-no"})
+	// The prober is wired and REFUSES: nothing was pulled, so the probe cannot
+	// succeed. That is the honest fixture. Leaving the seam nil to mean the same
+	// thing is what this change deletes — "no prober" and "the prober said no"
+	// are different facts, and only the second is what a declined pull produces.
+	refuses := &fakeProber{fail: map[string]error{"qwen3.5:9b": fmt.Errorf("model not found")}}
+	err := runSetupInferenceStep(cfg, shellEnv{ollamaInferenceProbe: refuses.probe}, strings.NewReader(""), &out, false, setupModelsOutcome{consent: "prompt-no"})
 	if err != nil {
 		t.Fatalf("a declined pull must not fail setup: %v", err)
 	}
@@ -657,13 +675,13 @@ func TestPackOnePasswordBindingStillNeedsHostProof(t *testing.T) {
 			{Model: "anthropic/claude-sonnet-5", Backend: "anthropic", Upstream: "anthropic/claude-sonnet-5", Available: true, Source: "/packs/work"},
 		},
 	}}
-	if inferenceBindingCallable(cfg, cfg.Inference.Models[0]) {
+	if inference.Callable(cfg, cfg.Inference.Models[0]) {
 		t.Fatal("an unverified pack 1password binding must NOT be callable: the host can probe that auth, so it must")
 	}
 	// Earning it the honest way makes it callable, so the rule gates on proof,
 	// not on origin.
 	cfg.Inference.Models[0].Verified = true
-	if !inferenceBindingCallable(cfg, cfg.Inference.Models[0]) {
+	if !inference.Callable(cfg, cfg.Inference.Models[0]) {
 		t.Fatal("a probe-verified pack 1password binding must be callable")
 	}
 }

@@ -30,6 +30,7 @@ import (
 	"strings"
 
 	"pix/host/config"
+	"pix/host/inference"
 )
 
 // generatedInputMarker prefixes any user-role message that `pix` itself
@@ -695,7 +696,7 @@ func setupMutationSteps(env shellEnv, inv setupInventory, opts onboardOpts, in i
 			// reconcileDirectInference so `pix models add` runs the IDENTICAL
 			// sequence. It living only here is why a key added any other way stayed
 			// inert: the ref was written and nothing ever rebuilt the bindings.
-			res, err := reconcileDirectInference(cfg, env, in, out, interactive, opts.models)
+			res, err := reconcileDirectInference(cfg, env, in, out, interactive, opts.models, "")
 			if err != nil {
 				return err
 			}
@@ -849,7 +850,11 @@ func setupMutationSteps(env shellEnv, inv setupInventory, opts onboardOpts, in i
 // that was consented to and then failed (which the models step already reports
 // — a second error would double-report one cause).
 func runSetupInferenceStep(cfg *config.Config, env shellEnv, in io.Reader, out io.Writer, interactive bool, models setupModelsOutcome) error {
-	attempted, verified, failures, notProbed := verifyOllamaInference(cfg, env, out)
+	probe, err := verifyOllamaInference(cfg, env, out)
+	if err != nil {
+		return fmt.Errorf("verifying ollama models: %w", err)
+	}
+	attempted, verified, failures, notProbed := probe.Attempted, probe.Verified, probe.Failures, probe.NotProbed
 	callable, _ := configuredInferenceSummary(cfg)
 	if callable > 0 {
 		// Deviation from the design: the roster prompt is NOT taken from
@@ -877,7 +882,23 @@ func runSetupInferenceStep(cfg *config.Config, env shellEnv, in io.Reader, out i
 		return fmt.Errorf("Ollama Cloud was selected, but no cloud model answered a request: %s. Sign in with `ollama signin`, then re-run `pix setup`",
 			strings.Join(failures, "; "))
 	}
-	if attempted > 0 {
+	// A DECLINED (or never-offered) pull explains the failure completely: the
+	// weights are not on disk, so the probe had nothing to answer with. That is
+	// the documented contract of this whole step — "declining a multi-gigabyte
+	// download is a decision, not a failure" — and it belongs ahead of the
+	// generic hard error below, which would otherwise exit non-zero for a user
+	// who simply said no.
+	//
+	// This was live and invisible: the test covering it wired NO probe, so
+	// `attempted` was 0 and control fell through to the consent switch by
+	// accident. With a probe that actually refuses — which is what a real host
+	// does when the tag was never pulled — `pix setup`, choose Ollama local,
+	// decline the download, exited non-zero.
+	//
+	// Cloud is deliberately excluded (handled above): an entitlement refusal is
+	// not explained by a download nobody started.
+	declinedPull := models.consent == "none" || models.consent == "prompt-no"
+	if attempted > 0 && !declinedPull {
 		return fmt.Errorf("ollama models are bound, but none answered a request: %s", strings.Join(failures, "; "))
 	}
 	if len(unverifiedOllamaCandidates(cfg)) == 0 {
@@ -1116,7 +1137,7 @@ func setupProvidersAxis(cfg *config.Config, env shellEnv) []check {
 		callable := 0
 		candidates := 0
 		for _, b := range cfg.Inference.Models {
-			if b.Available && inferenceBindingAllowed(cfg, b) {
+			if b.Available && inference.Allowed(cfg, b) {
 				candidates++
 				if b.Verified {
 					callable++

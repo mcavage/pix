@@ -28,13 +28,29 @@ func runModelsAdd(argv []string) {
 		fmt.Print(modelsAddUsage())
 		return
 	}
-	if len(argv) != 1 {
+	var positional []string
+	sel := ollamaSelection{}
+	for _, a := range argv {
+		switch a {
+		case "--local":
+			sel.Local = true
+		case "--cloud":
+			sel.Cloud = true
+		default:
+			if strings.HasPrefix(a, "-") {
+				fmt.Fprintf(os.Stderr, "pix models add: unknown flag %q\n", a)
+				os.Exit(2)
+			}
+			positional = append(positional, a)
+		}
+	}
+	if len(positional) != 1 {
 		fmt.Fprintf(os.Stderr, "pix models add: want exactly one provider (%s)\n", strings.Join(providerNames(), ", "))
 		os.Exit(2)
 	}
-	p, ok := providerByName(argv[0])
-	if !ok {
-		fmt.Fprintf(os.Stderr, "pix models add: unknown provider %q (want one of: %s)\n", argv[0], strings.Join(providerNames(), ", "))
+	name := strings.ToLower(strings.TrimSpace(positional[0]))
+	if (sel.Local || sel.Cloud) && name != "ollama" {
+		fmt.Fprintf(os.Stderr, "pix models add: --local/--cloud only apply to ollama, not %q\n", positional[0])
 		os.Exit(2)
 	}
 
@@ -43,6 +59,15 @@ func runModelsAdd(argv []string) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix models add: %v\n", err)
 		os.Exit(1)
+	}
+	if name == "ollama" {
+		runModelsAddOllama(cfg, env, sel)
+		return
+	}
+	p, ok := providerByName(positional[0])
+	if !ok {
+		fmt.Fprintf(os.Stderr, "pix models add: unknown provider %q (want one of: %s)\n", positional[0], strings.Join(providerNames(), ", "))
+		os.Exit(2)
 	}
 	// Refuse under a mandatory pack BEFORE touching anything. configureDirect-
 	// Inference would happily write bindings that the topology filter then drops
@@ -75,7 +100,7 @@ func runModelsAdd(argv []string) {
 		}
 	}
 
-	res, err := reconcileDirectInference(cfg, env, os.Stdin, os.Stdout, interactive, "")
+	res, err := reconcileDirectInference(cfg, env, os.Stdin, os.Stdout, interactive, "", p.name)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix models add: %v\n", err)
 		os.Exit(1)
@@ -86,6 +111,65 @@ func runModelsAdd(argv []string) {
 	// so a key that never reaches sbx is wired for host mode only. Reconcile it
 	// the same way setup does rather than quietly leaving half the job done.
 	runSecretSync(env, os.Stdout)
+}
+
+// runModelsAddOllama is the keyless half of `models add`. Ollama needs no
+// credential, so there is no ref to prompt for and nothing to sync into sbx —
+// the whole job is: is the daemon up, what does it list, which of those can this
+// machine/plan actually run, and put the survivors in the roster.
+//
+// With neither --local nor --cloud, it does BOTH. They are separate products
+// (a `:cloud` row appears on every signed-in machine and says nothing about what
+// this box can run; a local tag says nothing about what the subscription may
+// call), but a user typing `pix models add ollama` means "take everything you
+// can prove", and making them guess which of two flags they needed would be the
+// discoverability failure this command was written to end.
+func runModelsAddOllama(cfg *config.Config, env shellEnv, sel ollamaSelection) {
+	if !sel.Local && !sel.Cloud {
+		sel = ollamaSelection{Local: true, Cloud: true}
+	}
+	if cfg.Inference.ExclusiveSource != "" {
+		fmt.Fprintf(os.Stderr, "pix models add: the active pack (%s) owns inference on this host, so Ollama cannot be wired in.\n", cfg.Inference.ExclusiveSource)
+		fmt.Fprintln(os.Stderr, "  It gets wired the moment the pack stops being the exclusive source (`pix pack rm`, or a pack that does not claim inference).")
+		os.Exit(2)
+	}
+	res, plan, err := reconcileOllamaInference(cfg, env, os.Stdin, os.Stdout, isTTY(os.Stdin), sel)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pix models add: %v\n", err)
+		os.Exit(1)
+	}
+	renderModelsAddOllama(os.Stdout, res, plan)
+}
+
+// renderModelsAddOllama reports proof, then the two things a user can act on:
+// a rung worth pulling, and rungs this machine is too small for. Both are said
+// out loud because the alternative — binding nothing and reporting a bare count
+// — is what made the local flow feel broken.
+func renderModelsAddOllama(out io.Writer, res reconcileResult, plan ollamaPlan) {
+	if len(res.Added) == 0 {
+		fmt.Fprintln(out, "ollama was already wired; re-checked it.")
+	}
+	fmt.Fprintf(out, "%d Ollama model(s) answered a live generate at %s.\n", res.Verified, plan.Endpoint)
+	if len(res.Failures) > 0 {
+		fmt.Fprintf(out, "%d candidate(s) did not answer: %s\n", len(res.Failures), strings.Join(res.Failures, "; "))
+	}
+	// Name the pullable rung in BOTH cases, or the offer line configureOllama-
+	// Inference already printed ("offering qwen3.5:35b") is left hanging: the
+	// user is told a model was offered and then never hears about it again
+	// because a smaller one happened to be on disk.
+	switch {
+	case plan.WantPull != "":
+		fmt.Fprintf(out, "\nNot downloaded: %s is the largest local model that fits this machine, but it is not pulled.\n", plan.WantPull)
+		fmt.Fprintf(out, "  ollama pull %s && pix models add ollama --local\n", plan.WantPull)
+	case plan.BestFit != "" && !containsString(plan.LocalBoundTags(), plan.BestFit):
+		fmt.Fprintf(out, "\nA larger local model fits this machine but is not pulled: %s\n", plan.BestFit)
+		fmt.Fprintf(out, "  ollama pull %s && pix models add ollama --local\n", plan.BestFit)
+	}
+	if len(plan.SkippedRAM) > 0 {
+		fmt.Fprintf(out, "Too large for this machine (%0.f GB usable): %s\n", plan.Memory.UsableGB, strings.Join(plan.SkippedRAM, ", "))
+	}
+	fmt.Fprintln(out, "Next: pix models        (see the roster)")
+	fmt.Fprintln(out, "      pix models route  (re-resolve intents onto it)")
 }
 
 // renderModelsAdd reports what was PROVEN, never what was merely written. The
@@ -104,11 +188,16 @@ func renderModelsAdd(out io.Writer, provider string, res reconcileResult) {
 	fmt.Fprintln(out, "      pix models route  (re-resolve intents onto it)")
 }
 
+// providerNames is what `models add` accepts, which is NOT the same list as
+// providerKeyRefOrder: ollama is a provider you can add and has no key ref, and
+// leaving it out of the error message is how a user concludes it cannot be
+// added at all.
 func providerNames() []string {
-	names := make([]string, 0, len(providerKeyRefOrder))
+	names := make([]string, 0, len(providerKeyRefOrder)+1)
 	for _, p := range providerKeyRefOrder {
 		names = append(names, p.name)
 	}
+	names = append(names, "ollama")
 	sort.Strings(names)
 	return names
 }
@@ -130,13 +219,25 @@ func providerByName(raw string) (struct{ envVar, name string }, bool) {
 }
 
 func modelsAddUsage() string {
-	return `usage: pix models add <provider>
+	return `usage: pix models add <provider> [--local] [--cloud]
 
-Wire a model provider key into callable models, end to end: store its
-1Password ref if it has none yet, rebuild the model bindings, prove each one
-with a live request, widen the roster, and reconcile the key into sbx.
+Wire a provider into callable models, end to end: rebuild the model bindings,
+prove each one with a live request, widen the roster to include it, and leave
+nothing claimed that was not proven.
 
 providers: ` + strings.Join(providerNames(), ", ") + `
+
+  anthropic | openai | google    keyed. Stores the provider's 1Password ref if
+                                 it has none yet (prompts on a terminal), then
+                                 reconciles the key into sbx so the sandbox can
+                                 use it too.
+  ollama                         keyless. Reads what your local daemon lists and
+                                 proves each one with a real generate. Does both
+                                 local and cloud models unless you narrow it:
+                                   --local   models that run on this machine
+                                   --cloud   models on your ollama.com plan
+                                 Downloads nothing; it names a tag worth pulling
+                                 and leaves the decision to you.
 
 This is the command setup means by "you can add others later". ` + "`pix secret set`" + `
 stores a credential ref; it deliberately does not make network calls, so it

@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/inference"
 )
 
 // reconcileEnv fakes a host where the named providers have resolvable 1Password
@@ -88,7 +89,7 @@ func TestReconcileWidensRosterForNewProviderOnLegacyConfig(t *testing.T) {
 		// RosterProviders deliberately absent: this is a pre-feature config.
 	}}
 
-	res, err := reconcileDirectInference(cfg, modelsAddEnv(t, "anthropic", "google"), strings.NewReader(""), io.Discard, false, "")
+	res, err := reconcileDirectInference(cfg, modelsAddEnv(t, "anthropic", "google"), strings.NewReader(""), io.Discard, false, "", "")
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -107,7 +108,7 @@ func TestReconcileWidensRosterForNewProviderOnLegacyConfig(t *testing.T) {
 	// wired" actually means. A roster entry that never got probed is the bug.
 	callable := false
 	for _, b := range cfg.Inference.Models {
-		if b.Backend == "google" && inferenceBindingCallable(cfg, b) {
+		if b.Backend == "google" && inference.Callable(cfg, b) {
 			callable = true
 		}
 	}
@@ -137,7 +138,7 @@ func TestReconcileWithNoNewProviderLeavesRosterAlone(t *testing.T) {
 		RosterProviders: []string{"anthropic"},
 	}}
 
-	if _, err := reconcileDirectInference(cfg, modelsAddEnv(t, "anthropic"), strings.NewReader(""), io.Discard, false, ""); err != nil {
+	if _, err := reconcileDirectInference(cfg, modelsAddEnv(t, "anthropic"), strings.NewReader(""), io.Discard, false, "", ""); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 	if len(cfg.Inference.AllowedModels) != 1 || cfg.Inference.AllowedModels[0] != "anthropic/claude-sonnet-5" {
@@ -150,7 +151,7 @@ func TestReconcileWithNoNewProviderLeavesRosterAlone(t *testing.T) {
 // behind it.
 func TestReconcileRefusesUnderMandatoryPack(t *testing.T) {
 	cfg := &config.Config{Inference: config.InferenceConfig{ExclusiveSource: "/packs/work"}}
-	_, err := reconcileDirectInference(cfg, modelsAddEnv(t, "anthropic"), strings.NewReader(""), io.Discard, false, "")
+	_, err := reconcileDirectInference(cfg, modelsAddEnv(t, "anthropic"), strings.NewReader(""), io.Discard, false, "", "")
 	if err != errInferenceExclusive {
 		t.Fatalf("want errInferenceExclusive, got %v", err)
 	}

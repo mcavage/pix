@@ -41,6 +41,7 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/inference"
 )
 
 // setupModelsOutcome is what the local-models step actually did and proved:
@@ -391,7 +392,7 @@ func printSetupSummary(cfg *config.Config, env shellEnv, out io.Writer, models s
 	callable := 0
 	candidates := 0
 	for _, b := range cfg.Inference.Models {
-		if b.Available && inferenceBindingAllowed(cfg, b) {
+		if b.Available && inference.Allowed(cfg, b) {
 			candidates++
 			if b.Verified {
 				callable++
@@ -406,7 +407,7 @@ func printSetupSummary(cfg *config.Config, env shellEnv, out io.Writer, models s
 		seenBackends := map[string]bool{}
 		var backends []string
 		for _, binding := range cfg.Inference.Models {
-			if binding.Verified && inferenceBindingAllowed(cfg, binding) && !seenBackends[binding.Backend] {
+			if binding.Verified && inference.Allowed(cfg, binding) && !seenBackends[binding.Backend] {
 				seenBackends[binding.Backend] = true
 				backends = append(backends, binding.Backend)
 			}

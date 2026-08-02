@@ -30,6 +30,7 @@ import (
 	"unicode"
 
 	"pix/host/config"
+	"pix/host/inference"
 )
 
 type hostStateKeys struct {
@@ -223,11 +224,11 @@ func hasConfiguredKeylessModel(cfg *config.Config) bool {
 		return false
 	}
 	for _, binding := range cfg.Inference.Models {
-		if !binding.Available || !inferenceBindingAllowed(cfg, binding) {
+		if !binding.Available || !inference.Allowed(cfg, binding) {
 			continue
 		}
 		backend, ok := cfg.Inference.Backends[binding.Backend]
-		if ok && inferenceBackendAllowed(cfg, backend, binding.Backend) && (backend.Auth == "sbx-session" || backend.Auth == "none") {
+		if ok && inference.BackendAllowed(cfg, backend, binding.Backend) && (backend.Auth == "sbx-session" || backend.Auth == "none") {
 			return true
 		}
 	}

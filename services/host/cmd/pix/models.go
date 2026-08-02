@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"pix/host/config"
+	"pix/host/inference"
 	"pix/host/routing"
 )
 
@@ -55,7 +56,7 @@ func resolveSessionModel(intent string) (string, error) {
 	// shipped catalog alone never proves that a model is callable.
 	var binding *routing.Binding
 	if cfg, cerr := config.Load(); cerr == nil && len(cfg.Inference.Models) > 0 {
-		bindings := routingBindings(cfg)
+		bindings := inference.Bindings(cfg)
 		reg = routing.RegistryForBindings(reg, bindings, "")
 		d := routing.Resolve(reg, sc, pol, it)
 		for _, b := range bindings {
@@ -68,7 +69,7 @@ func resolveSessionModel(intent string) (string, error) {
 		if binding == nil {
 			return "", fmt.Errorf("intent %q has no callable model binding", intent)
 		}
-		return boundRuntimeID(*binding), nil
+		return inference.RuntimeID(*binding), nil
 	}
 	d := routing.Resolve(reg, sc, pol, it)
 	if d.Model == "" {
@@ -176,7 +177,7 @@ func modelsBackendRows(cfg *config.Config) []modelsBackendRow {
 	rows := map[string]*modelsBackendRow{}
 	var order []string
 	for _, b := range cfg.Inference.Models {
-		if !inferenceBindingAllowed(cfg, b) {
+		if !inference.Allowed(cfg, b) {
 			continue
 		}
 		r, ok := rows[b.Backend]
@@ -283,31 +284,39 @@ func renderModelsStatus(cfg *config.Config, out io.Writer) {
 // hardcoded guess — and never the repo's embedded default source, which only
 // exists in a pix checkout and means nothing on a consumer's machine.
 func modelsUsage() string {
-	return `usage: pix models <command>
+	return `usage: pix models [command]
 
-Which models pix can use, and which are wired up. Bare ` + "`pix models`" + ` is a
-read-only status screen (runtime, bound providers, roster, resolved session
-model). ` + "`ls`" + `/` + "`show`" + `/` + "`pick`" + ` are read-only; ` + "`route`" + ` is the one
-command here that writes.
+Which models pix can use, and which are wired up. Every command here describes
+THIS HOST: the shipped catalog narrowed to the models a probed backend binding
+makes callable. ls/show/pick/route also take --catalog, which drops the host
+filter and describes the shipped catalog itself.
 
 commands:
-  ls [--json]              list the model registry
-  show [--json]             registry + scorecard + resolved intent table
-  pick <intent> [--json]   resolve one intent to a model (+ rationale)
-  add <provider>            wire a provider key into callable models: store its
-                            1Password ref if missing, rebuild the bindings, prove
-                            each with a live request, widen the roster, sync sbx.
-                            This is what setup means by "add others later".  (writes)
-  route [--out PATH]        resolve every intent and write the intent->model map
-                            (routing.json), read by the sandbox. With no --out it
-                            writes into the override dir below; --out PATH targets
-                            a specific file (a pix checkout uses --out ./routing.json,
-                            then ` + "`make load`" + ` to bake it into the image — maintainer-only).   (writes)
+  (none)                   status: runtime, wired providers, roster, and the
+                           model your session would launch with        (read-only)
+  ls [--json]              one row per model, with why each is or is not usable
+                           here: wired / unwired / retired             (read-only)
+  show [--json]            ls, plus the scorecard and the resolved intent table
+                                                                       (read-only)
+  pick <intent> [--json]   resolve one intent to a model, with the rationale
+                                                                       (read-only)
+  add <provider>           wire a provider in and prove it with a live request.
+                           This is what setup means by "add others later".
+                           ` + "`pix models add -h`" + ` for the per-provider detail  (WRITES)
+  route [--out PATH]       resolve every intent and write the intent->model map
+                           read by host-mode subagents. Intents with no callable
+                           model are left out rather than pointed at a provider
+                           you cannot call.                            (WRITES)
 
-Add a model: one entry in ` + routing.ModelsPath() + `.
-Hand-edit its scores into ` + routing.ScorecardPath() + `, then run
-` + "`pix models route`" + `.
-(Maintaining pix itself, not a personal override? The shipped defaults
-live in services/host/routing/defaults/*.json in the pix repo checkout.)
+Add a model to the catalog: one entry in
+  ` + routing.ModelsPath() + `
+and its scores in
+  ` + routing.ScorecardPath() + `
+then ` + "`pix models route`" + `. Neither file exists until you create it — absent
+means "use the defaults built into this binary", so create only the one you
+want to override.
+(Maintainer-only, not a personal override: the shipped defaults live in
+services/host/routing/defaults/*.json in the pix repo checkout, and the image's
+baked map is compiled with ` + "`--catalog --out ./routing.json`" + ` + ` + "`make load`" + `.)
 `
 }

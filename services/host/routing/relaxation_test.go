@@ -24,30 +24,37 @@ func ollamaOnlyRegistry(t *testing.T) (*Registry, *Scorecard) {
 	return reg, sc
 }
 
-// TestResolveRelaxesProviderBeforeAccuracy pins the ladder's ORDER, not just
-// the fact that it degrades. An intent with a provider allowlist nothing here
-// satisfies must drop the allowlist FIRST and keep the accuracy floor, because
-// relaxing accuracy first hands back a worse same-vendor model while a better
-// cross-vendor one sits right there.
-func TestResolveRelaxesProviderBeforeAccuracy(t *testing.T) {
+// TestUnreachableVendorPreferenceRelaxesNothing is the inverse of the test it
+// replaces. That one pinned the ladder dropping the provider allowlist FIRST —
+// correct given a hard allowlist, but the allowlist itself was the mistake: a
+// preference on a ladder of surrendered constraints turns "your vendor is not
+// wired here" into "this route failed its constraints".
+//
+// Now an unreachable preference costs nothing. The accuracy floor — a real
+// constraint — must still hold, which is what the old test was really
+// protecting.
+func TestUnreachableVendorPreferenceRelaxesNothing(t *testing.T) {
 	reg, sc := ollamaOnlyRegistry(t)
 	pol := &Policy{DefaultFallback: "anthropic/claude-sonnet-5"}
 	in := Intent{
 		Name: "overlord", TaskType: "reasoning", Objective: "accuracy",
-		Providers: []string{"openai"}, MinAccuracy: 0.50, Fallback: "openai/gpt-5.6-sol",
+		PreferProviders: []string{"openai"}, MinAccuracy: 0.50, Fallback: "openai/gpt-5.6-sol",
 	}
 	d := Resolve(reg, sc, pol, in)
-	if d.ConstraintsMet {
-		t.Fatalf("constraints cannot be met on an ollama-only box: %+v", d)
+	if !d.ConstraintsMet {
+		t.Fatalf("an ollama-only box meets every CONSTRAINT this intent declares: %+v", d)
 	}
-	if got := strings.Join(d.Relaxed, ","); got != "provider" {
-		t.Fatalf("relaxed = %q, want exactly \"provider\" (accuracy must still hold)", got)
+	if len(d.Relaxed) != 0 {
+		t.Fatalf("relaxed = %v, want nothing: a preference is not a constraint", d.Relaxed)
+	}
+	if d.PreferenceMet {
+		t.Fatal("the openai preference could not be honored and must be reported as such")
 	}
 	if d.Chosen == nil || d.Chosen.Accuracy < in.MinAccuracy {
-		t.Fatalf("stage 1 must still honor the accuracy floor: %+v", d.Chosen)
+		t.Fatalf("the accuracy floor must still hold: %+v", d.Chosen)
 	}
-	if !strings.Contains(d.Reason, "relaxed provider") {
-		t.Fatalf("reason must name the relaxation: %q", d.Reason)
+	if !strings.Contains(d.Reason, "preference did not apply") {
+		t.Fatalf("reason must say the preference went unmet: %q", d.Reason)
 	}
 }
 
@@ -86,12 +93,20 @@ func TestRelaxedRouteIsVisibleInReasonAndCompiledOutput(t *testing.T) {
 	reg, sc := ollamaOnlyRegistry(t)
 	pol := embeddedDefaults[Policy](t, "policy.json")
 	compiled := Compile(reg, sc, pol, time.Unix(0, 0))
-	route, ok := compiled.Routes["overlord"]
+	// `code` declares min_accuracy no local rung reaches, so it is genuinely
+	// relaxed here. `overlord` is the CONTRAST: it merely prefers OpenAI, and a
+	// vendor this box cannot reach must not be reported as a broken constraint —
+	// that false alarm on the default install's default route is why the
+	// allowlist became a preference.
+	route, ok := compiled.Routes["code"]
 	if !ok {
-		t.Fatal("overlord route missing")
+		t.Fatal("code route missing")
 	}
 	if len(route.Relaxed) == 0 {
-		t.Fatalf("overlord (providers=[openai]) must be relaxed on an ollama-only box: %+v", route)
+		t.Fatalf("code (min_accuracy above every local rung) must be relaxed on an ollama-only box: %+v", route)
+	}
+	if o := compiled.Routes["overlord"]; len(o.Relaxed) != 0 || !o.ConstraintsMet {
+		t.Fatalf("overlord only PREFERS openai; an unreachable preference must relax nothing: %+v", o)
 	}
 	path := filepath.Join(t.TempDir(), "routing.json")
 	if err := WriteCompiled(path, compiled); err != nil {
@@ -105,7 +120,7 @@ func TestRelaxedRouteIsVisibleInReasonAndCompiledOutput(t *testing.T) {
 	if err := json.Unmarshal(b, &back); err != nil {
 		t.Fatal(err)
 	}
-	if len(back.Routes["overlord"].Relaxed) == 0 {
+	if len(back.Routes["code"].Relaxed) == 0 {
 		t.Fatalf("relaxed did not survive to routing.json: %s", b)
 	}
 	if !strings.Contains(string(b), "\"relaxed\"") {

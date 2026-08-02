@@ -8,7 +8,75 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## Unreleased
 
+### Fixed
+
+- **The model router described the shipped catalog, not your host.** `pix
+  models show|ls|pick|route` (i.e. the whole `pix-host route` tree) loaded
+  `models.json` and nothing else, so its `AVAIL` column reported "Pix ships
+  support for this" under a name every user reads as "you can call this" — and
+  every intent resolved against it. On a host with no OpenAI key, `pix models
+  show` reported the default intent routing to `openai/gpt-5.6-sol`, and `pix
+  models route` WROTE that into `routing.json`, which host-mode subagents read.
+  The binding-aware resolve already existed but lived in the launcher, out of
+  the host binary's reach. It is now `services/host/inference` and both
+  binaries share it. `AVAIL` becomes `STATUS` (`wired` / `unwired` /
+  `retired`), an intent with no callable model is DROPPED from the compiled map
+  and named rather than pointed at an unreachable provider, and `--catalog`
+  restores the host-independent view for baking the image default.
+- **A declined model download made `pix setup` exit non-zero.** Choosing Ollama
+  local and answering "no" to the multi-gigabyte pull bound a candidate,
+  probed it, and — since the weights were not on disk — hard-failed with
+  "ollama models are bound, but none answered a request", contradicting the
+  documented contract that declining is a decision, not a failure. The consent
+  check now precedes that error. It was invisible because the covering test
+  wired no probe at all (see below).
+- **Verification could be silently switched off.** `verifyDirectInference` /
+  `verifyOllamaInference` returned `0 attempted, 0 verified, no failures` when
+  handed a `shellEnv` with no probe function — a value indistinguishable from a
+  clean pass, so callers printed "0 model(s) answered a live request" and
+  exited 0. They now return `(probeOutcome, error)` with an explicit
+  `errNoProbeSeam`, which is what surfaced the setup bug above.
+- **Three `pix doctor` tests failed on a clean checkout** because they read the
+  developer's real `~/.config/pix/op-refs.env`. A `TestMain` guard now points
+  the launcher package's config resolution at a temp dir.
+
+### Added
+
+- **`pix models add ollama`** — the keyless half of `models add`. `models add`
+  derived its provider list from `providerKeyRefOrder`
+  (anthropic/openai/google), so the one backend that needs no credential had no
+  post-setup path at all: pulling a new local model or gaining a cloud
+  entitlement meant re-running `pix setup`. It reads what the daemon lists,
+  proves each with a real generate, and widens the roster. `--local` /
+  `--cloud` narrow it; the default is both. Downloads nothing — it names a tag
+  worth pulling and leaves the decision to you. An explicit `models add
+  <provider>` now also widens the roster for a provider already recorded in
+  `roster_providers`, without which the SECOND add of any provider bound and
+  probed models that then sat outside the roster while the command reported
+  success.
+- **Sandbox sessions no longer warn `No models match pattern "ollama/…"`.**
+  `pix run` passes pi a `--models` cycle built from every callable binding,
+  but `extensions/ollama-bridge.ts` registered exactly one hardcoded model. It
+  now registers what the host's generated `inference.json` declares, with the
+  configured bridge tag guaranteed present.
+
 ### Changed
+
+- **An intent's `providers` list is a PREFERENCE, not an allowlist**, and is
+  spelled `prefer_providers` in `policy.json` (the old key still loads, with
+  the new semantics). The resolver ranks by objective and then floats preferred
+  vendors to the front, so a preference can reorder the feasible set but never
+  exclude the last usable model, and an unreachable vendor is reported via
+  `Decision.PreferenceMet` instead of `ConstraintsMet: false`. The relaxation
+  ladder loses its provider rung — the code implementing it already said
+  "vendor diversity is a PREFERENCE encoded as a constraint". This mattered
+  because the shipped policy pins `overlord` (the interactive orchestrator and
+  the default `run_intent`) to OpenAI while `pix setup` wires Anthropic: every
+  default install resolved through the ladder and reported `FALLBACK` on its
+  most important route while working perfectly. A genuinely hard vendor rule
+  belongs in `inference.exclusive_backend` / `exclusive_source`, which enforce
+  it at the binding layer where an excluded vendor is uncallable rather than
+  merely outranked.
 
 - **Renamed `pix route` to `pix models`** (docs/design/models-cli.md): the
   noun a user actually wants ("what models can pix use, and which are wired

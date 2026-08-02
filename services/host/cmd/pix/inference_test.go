@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/inference"
 )
 
 func TestCompileInferenceRuntimeNoModelAndExclusiveFiltering(t *testing.T) {
@@ -163,7 +164,9 @@ func TestDirectInferenceProbeDoesNotVerifyRejectedOrUnavailableKey(t *testing.T)
 					return fmt.Errorf("%s", probeFailure)
 				},
 			}
-			attempted, verified, failures := verifyDirectInference(cfg, env)
+			probe, probeErr := verifyDirectInference(cfg, env)
+			mustNoProbeErr(t, probeErr)
+			attempted, verified, failures := probe.Attempted, probe.Verified, probe.Failures
 			if attempted != len(cfg.Inference.Models) || verified != 0 || len(failures) != attempted {
 				t.Fatalf("attempted=%d verified=%d failures=%v", attempted, verified, failures)
 			}
@@ -171,7 +174,7 @@ func TestDirectInferenceProbeDoesNotVerifyRejectedOrUnavailableKey(t *testing.T)
 				t.Fatal("probe failure leaked the resolved key")
 			}
 			for _, binding := range cfg.Inference.Models {
-				if binding.Verified || inferenceBindingCallable(cfg, binding) {
+				if binding.Verified || inference.Callable(cfg, binding) {
 					t.Fatalf("unverified binding became callable: %+v", binding)
 				}
 			}
@@ -198,7 +201,9 @@ func TestDirectInferenceProbeVerifiesOnlySuccessfulModel(t *testing.T) {
 			return nil
 		},
 	}
-	attempted, verified, failures := verifyDirectInference(cfg, env)
+	probe, probeErr := verifyDirectInference(cfg, env)
+	mustNoProbeErr(t, probeErr)
+	attempted, verified, failures := probe.Attempted, probe.Verified, probe.Failures
 	if attempted != len(cfg.Inference.Models) || verified != attempted || len(failures) != 0 {
 		t.Fatalf("attempted=%d verified=%d failures=%v", attempted, verified, failures)
 	}
@@ -226,13 +231,15 @@ func TestDirectInferenceProbePromotesBindingsIndependently(t *testing.T) {
 			return nil
 		},
 	}
-	attempted, verified, failures := verifyDirectInference(cfg, env)
+	probe, probeErr := verifyDirectInference(cfg, env)
+	mustNoProbeErr(t, probeErr)
+	attempted, verified, failures := probe.Attempted, probe.Verified, probe.Failures
 	if attempted != len(cfg.Inference.Models) || verified != attempted-1 || len(failures) != 1 {
 		t.Fatalf("attempted=%d verified=%d failures=%v", attempted, verified, failures)
 	}
 	for _, binding := range cfg.Inference.Models {
 		want := !strings.Contains(binding.Upstream, "sol")
-		if binding.Verified != want || inferenceBindingCallable(cfg, binding) != want {
+		if binding.Verified != want || inference.Callable(cfg, binding) != want {
 			t.Fatalf("binding verification was not independent: %+v want-callable=%v", binding, want)
 		}
 	}

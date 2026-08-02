@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 // stepEnv sets up a temp config+state dir (so syncedrefs.go's real os-backed
@@ -63,6 +64,17 @@ func stepEnv(t *testing.T, refsContent, sbxLsOut string, opReadVal string) (shel
 			return nil
 		},
 		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		// This fixture's premise is a working 1Password path: `op read` returns a
+		// key, so the provider probe answers. The seam was nil, which made
+		// verifyDirectInference return a silent zero and quietly contradicted that
+		// premise; it is now an explicit error, so the fixture states what it meant.
+		directInferenceProbe: func(string, string, string) error { return nil },
+		// No ollama backend is configured here, so this is never called — but
+		// runSetupInferenceStep still ASKS, and "nobody asked" must not be spelled
+		// the same way as "nothing to ask about".
+		ollamaInferenceProbe: func(_, model string, _ int, _ time.Duration) error {
+			return fmt.Errorf("no ollama daemon in this fixture (%s)", model)
+		},
 		run: func(name string, args ...string) (string, error) {
 			*calls = append(*calls, name+" "+strings.Join(args, " "))
 			switch {

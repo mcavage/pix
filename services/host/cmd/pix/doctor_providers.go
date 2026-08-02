@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"pix/host/config"
+	"pix/host/inference"
 	"pix/host/routing"
 )
 
@@ -123,7 +124,7 @@ func runIntentKeyCheck(cfg *config.Config, sbxOut string, sbxOK bool) check {
 			detail: "run_intent does not resolve to a model — launch will use pi's default; fix with `pix config set run_intent <intent>`"}
 	}
 	if b, ok := configuredBindingForModel(cfg, model); ok {
-		runtimeID := boundRuntimeID(routing.Binding{Model: b.Model, Backend: b.Backend, UpstreamID: b.Upstream, Available: b.Available})
+		runtimeID := inference.RuntimeID(routing.Binding{Model: b.Model, Backend: b.Backend, UpstreamID: b.Upstream, Available: b.Available})
 		return check{label: label, note: true, verdict: verdictReady,
 			detail: "-> " + runtimeID + " via inference backend " + b.Backend}
 	}
@@ -194,7 +195,7 @@ func unverifiedOllamaCandidates(cfg *config.Config) []string {
 		if !b.Available || b.Verified || b.Source != "" || !ollamaBindingDriver(cfg, b) {
 			continue
 		}
-		if !inferenceBindingAllowed(cfg, b) {
+		if !inference.Allowed(cfg, b) {
 			continue
 		}
 		out = append(out, b.Model)
@@ -250,8 +251,8 @@ func configuredBindingForModel(cfg *config.Config, model string) (config.Inferen
 		return config.InferenceModelBinding{}, false
 	}
 	for _, b := range cfg.Inference.Models {
-		runtimeID := boundRuntimeID(routing.Binding{Model: b.Model, Backend: b.Backend, UpstreamID: b.Upstream, Available: b.Available})
-		if (b.Model == model || runtimeID == model) && inferenceBindingCallable(cfg, b) {
+		runtimeID := inference.RuntimeID(routing.Binding{Model: b.Model, Backend: b.Backend, UpstreamID: b.Upstream, Available: b.Available})
+		if (b.Model == model || runtimeID == model) && inference.Callable(cfg, b) {
 			return b, true
 		}
 	}
@@ -290,7 +291,7 @@ func configuredInferenceSummary(cfg *config.Config) (int, []string) {
 	var backends []string
 	count := 0
 	for _, b := range cfg.Inference.Models {
-		if !inferenceBindingCallable(cfg, b) {
+		if !inference.Callable(cfg, b) {
 			continue
 		}
 		count++

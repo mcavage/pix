@@ -81,8 +81,26 @@ func modelsSetupEnv(t *testing.T, w *ollamaWorld) shellEnv {
 			return "", os.ErrNotExist
 		},
 		writeFile: func(string, []byte, os.FileMode) error { return nil },
+		// The fixture's premise is that keys ARE provisioned (it writes three
+		// op:// refs into hostmode.env and stubs setupProvisionKeysFn to succeed),
+		// so the credential resolves and the probe answers. Leaving these two
+		// seams nil made verifyDirectInference return silently and contradicted
+		// that premise without anyone noticing.
+		directInferenceProbe: func(string, string, string) error { return nil },
+		// A probe that answers iff the fake daemon actually has the tag. Modelling
+		// the daemon keeps the pull-consent tests honest: an unpulled tag must
+		// still fail its probe.
+		ollamaInferenceProbe: func(_, model string, _ int, _ time.Duration) error {
+			if w.have[model] {
+				return nil
+			}
+			return fmt.Errorf("model %q is not pulled on this fake daemon", model)
+		},
 		run: func(name string, args ...string) (string, error) {
 			w.calls = append(w.calls, name+" "+strings.Join(args, " "))
+			if name == "op" && len(args) == 2 && args[0] == "read" {
+				return "test-provider-key\n", nil
+			}
 			if name == "ollama" && len(args) > 0 {
 				switch args[0] {
 				case "list":
@@ -232,10 +250,12 @@ func TestSetupModels_InteractiveYesPulls(t *testing.T) {
 	env := modelsSetupEnv(t, w)
 	stubProvisionKeysOK(t)
 	var out bytes.Buffer
-	// inference default, then this run's memory answer. There is no roster
-	// prompt to answer: nothing is callable until a probe promotes it, and the
-	// roster never offers an unproven model.
-	if err := setupHostPhase(env, nil, strings.NewReader("\ny\n"), &out, true); err != nil {
+	// inference default, roster default (all), then this run's memory answer.
+	// The roster prompt appears because the provider keys now actually verify:
+	// this fixture left both probe seams nil, so verification silently did
+	// nothing, nothing became callable, and the roster step was skipped. The
+	// prompt was always supposed to be here.
+	if err := setupHostPhase(env, nil, strings.NewReader("\n\ny\n"), &out, true); err != nil {
 		t.Fatalf("unexpected error: %v\n%s", err, out.String())
 	}
 	if n := w.count("ollama pull"); n != 2 {
