@@ -14,6 +14,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/rpc"
+	"pix/host/service"
 	"pix/host/workspace"
 )
 
@@ -97,7 +98,7 @@ func runKnowledgeQuery(argv []string) {
 	// Lazy auto-start: spin up the knowledge daemon detached if it is down (only
 	// when the knowledge service is actually enabled; best-effort — a failure
 	// falls through to the existing rpc.ErrServiceDown degrade below).
-	ensureServeUp([]string{"knowledge"}, ensureServeTimeout)
+	service.EnsureUp([]string{"knowledge"}, service.EnsureTimeout)
 	res, err := rpc.KnowledgeClient().Call("query", params)
 	if err != nil {
 		exitFromErr("knowledge query", err)
@@ -333,7 +334,7 @@ func runKnowledgeInit(argv []string) {
 // after saving a daemon-affecting change. A package-var seam (like
 // hostBinaryResolver) so tests can observe/neutralize it without launchctl/
 // systemctl probes.
-var knowledgePropagate = func(out io.Writer) { propagateServeConfig(defaultServeReloader(), out) }
+var knowledgePropagate = func(out io.Writer) { service.PropagateConfig(service.DefaultReloader(), out) }
 
 // resolveKnowledgeInitArgs validates `knowledge init` argv WITHOUT side effects
 // so a flag typo can be rejected before any scaffold / git-init / config write.

@@ -2,10 +2,10 @@
 
 // serve_ctl_windows.go keeps `serve stop`/`serve status` compiling on non-unix
 // platforms (M1). There is no unix signalling there, so every probe/signal
-// reports failure — stopServe then treats the pid as not-running and refuses,
+// reports failure — Stop then treats the pid as not-running and refuses,
 // which is the honest degrade (managed/lazy serve is unix-only anyway).
 
-package main
+package service
 
 import (
 	"fmt"
@@ -18,5 +18,5 @@ func killProcess(pid int, sig syscall.Signal) error {
 }
 
 // discoverServeProcs: no orphan discovery on this platform (managed/lazy serve
-// is unix-only). Returns no candidates so stopServe degrades to "not running".
+// is unix-only). Returns no candidates so Stop degrades to "not running".
 func discoverServeProcs() ([]int, error) { return nil, nil }

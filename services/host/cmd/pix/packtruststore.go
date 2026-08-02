@@ -91,7 +91,7 @@ func packTrustLockPath() string {
 // (mutatePackTrustStoreLocked, clearInstalledHostPackWrappersLocked,
 // refreshHostPackWrappersLocked) instead.
 func withPackTrustLock(fn func() error) error {
-	return withFlock(packTrustLockPath(), fn)
+	return sys.Lock(packTrustLockPath(), fn)
 }
 
 // mutatePackTrustStore is the sanctioned way to WRITE the trust store

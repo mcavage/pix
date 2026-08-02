@@ -4,7 +4,7 @@
 // managed-service story: install/uninstall explain themselves, mode detection
 // never reports "managed".
 
-package main
+package service
 
 import (
 	"fmt"
@@ -19,12 +19,12 @@ func platformServeUninstall(io.Writer) error {
 	return fmt.Errorf("managed service install is only supported on macOS and Linux — nothing to uninstall")
 }
 
-func managedServiceActive() bool { return false }
+func ManagedActive() bool { return false }
 
 func restartManagedService() error {
 	return fmt.Errorf("no managed service on this platform")
 }
 
-func stopManagedService(io.Writer) error {
+func StopManaged(io.Writer) error {
 	return fmt.Errorf("no managed service on this platform")
 }

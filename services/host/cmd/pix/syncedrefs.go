@@ -125,7 +125,7 @@ func (s *syncedRefsStore) save() error {
 // lock it re-loads the store FRESH from disk, applies mutate, and saves — so
 // two concurrent `setup`/`secret sync` runs can't clobber each other's record.
 func mutateSyncedRefsStore(mutate func(*syncedRefsStore) error) error {
-	return withFlock(syncedRefsLockPath(), func() error {
+	return sys.Lock(syncedRefsLockPath(), func() error {
 		s, lerr := loadSyncedRefsStore()
 		if lerr != nil {
 			return lerr

@@ -4,7 +4,7 @@
 // (syscall.Kill only exists on unix; the windows sibling degrades with a clear
 // error so GOOS=windows compiles — M1).
 
-package main
+package service
 
 import (
 	"os/exec"

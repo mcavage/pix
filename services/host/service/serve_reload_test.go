@@ -1,4 +1,4 @@
-package main
+package service
 
 import (
 	"bytes"
@@ -18,14 +18,14 @@ import (
 func TestIsDaemonAffecting(t *testing.T) {
 	affecting := []string{"services", "memory_watcher_model", "memory_embed_model", "knowledge_bundles"}
 	for _, k := range affecting {
-		if !isDaemonAffecting(k) {
-			t.Errorf("isDaemonAffecting(%q) = false, want true", k)
+		if !IsDaemonAffecting(k) {
+			t.Errorf("IsDaemonAffecting(%q) = false, want true", k)
 		}
 	}
 	notAffecting := []string{"google_workspace_account", "ollama_bridge_model", "mcp", "pack", "host.enabled", "host.autonomy", "host.autoserve"}
 	for _, k := range notAffecting {
-		if isDaemonAffecting(k) {
-			t.Errorf("isDaemonAffecting(%q) = true, want false (must trigger NOTHING)", k)
+		if IsDaemonAffecting(k) {
+			t.Errorf("IsDaemonAffecting(%q) = true, want false (must trigger NOTHING)", k)
 		}
 	}
 }
@@ -114,14 +114,14 @@ func TestReadServeLazyMarkerPid(t *testing.T) {
 	}
 }
 
-// reloadRec records which serveReloader ops propagateServeConfig invoked.
+// reloadRec records which serveReloader ops PropagateConfig invoked.
 type reloadRec struct {
 	kicked  bool
 	stopped bool
 	ensured bool
 	order   []string
-	stopOK  bool  // what the fake stopServe returns as its stopped bool
-	stopErr error // what the fake stopServe returns as its error
+	stopOK  bool  // what the fake Stop returns as its stopped bool
+	stopErr error // what the fake Stop returns as its error
 }
 
 func (r *reloadRec) reloader(mode serveMode, kickErr, ensureErr error) serveReloader {
@@ -132,7 +132,7 @@ func (r *reloadRec) reloader(mode serveMode, kickErr, ensureErr error) serveRelo
 			r.order = append(r.order, "kick")
 			return kickErr
 		},
-		stopServe: func(io.Writer) (bool, error) {
+		Stop: func(io.Writer) (bool, error) {
 			r.stopped = true
 			r.order = append(r.order, "stop")
 			return r.stopOK, r.stopErr
@@ -148,7 +148,7 @@ func (r *reloadRec) reloader(mode serveMode, kickErr, ensureErr error) serveRelo
 func TestPropagateServeConfig_Managed(t *testing.T) {
 	rec := &reloadRec{}
 	var out bytes.Buffer
-	propagateServeConfig(rec.reloader(serveManaged, nil, nil), &out)
+	PropagateConfig(rec.reloader(serveManaged, nil, nil), &out)
 	if !rec.kicked || rec.stopped || rec.ensured {
 		t.Errorf("managed: kicked=%v stopped=%v ensured=%v, want kick only", rec.kicked, rec.stopped, rec.ensured)
 	}
@@ -160,7 +160,7 @@ func TestPropagateServeConfig_Managed(t *testing.T) {
 func TestPropagateServeConfig_ManagedKickFails(t *testing.T) {
 	rec := &reloadRec{}
 	var out bytes.Buffer
-	propagateServeConfig(rec.reloader(serveManaged, os.ErrPermission, nil), &out)
+	PropagateConfig(rec.reloader(serveManaged, os.ErrPermission, nil), &out)
 	if !strings.Contains(out.String(), "warning: could not restart the managed") {
 		t.Errorf("managed-failure message = %q", out.String())
 	}
@@ -169,7 +169,7 @@ func TestPropagateServeConfig_ManagedKickFails(t *testing.T) {
 func TestPropagateServeConfig_LazyStopsThenEnsures(t *testing.T) {
 	rec := &reloadRec{stopOK: true}
 	var out bytes.Buffer
-	propagateServeConfig(rec.reloader(serveLazy, nil, nil), &out)
+	PropagateConfig(rec.reloader(serveLazy, nil, nil), &out)
 	if rec.kicked {
 		t.Error("lazy must not kickstart (no unit exists)")
 	}
@@ -184,24 +184,24 @@ func TestPropagateServeConfig_LazyStopsThenEnsures(t *testing.T) {
 func TestPropagateServeConfig_LazyEnsureFails(t *testing.T) {
 	rec := &reloadRec{stopOK: true}
 	var out bytes.Buffer
-	propagateServeConfig(rec.reloader(serveLazy, nil, os.ErrDeadlineExceeded), &out)
+	PropagateConfig(rec.reloader(serveLazy, nil, os.ErrDeadlineExceeded), &out)
 	if !strings.Contains(out.String(), "warning: pix services were stopped but did not restart") {
 		t.Errorf("lazy-failure message = %q", out.String())
 	}
 }
 
-// M4: stopServe returning stopped=false (refused: stale/hijacked/unverifiable
+// M4: Stop returning stopped=false (refused: stale/hijacked/unverifiable
 // pid, or nothing to stop) must NOT re-spawn — ensure would double-start
 // against a possibly-still-live daemon — and must warn.
 func TestPropagateServeConfig_LazyStopRefusedDoesNotEnsure(t *testing.T) {
 	rec := &reloadRec{stopOK: false}
 	var out bytes.Buffer
-	propagateServeConfig(rec.reloader(serveLazy, nil, nil), &out)
+	PropagateConfig(rec.reloader(serveLazy, nil, nil), &out)
 	if !rec.stopped {
-		t.Error("stopServe not invoked")
+		t.Error("Stop not invoked")
 	}
 	if rec.ensured {
-		t.Error("ensure ran despite stopServe reporting stopped=false (double-start risk)")
+		t.Error("ensure ran despite Stop reporting stopped=false (double-start risk)")
 	}
 	if !strings.Contains(out.String(), "were not stopped") {
 		t.Errorf("refused-stop warning missing: %q", out.String())
@@ -212,7 +212,7 @@ func TestPropagateServeConfig_LazyStopRefusedDoesNotEnsure(t *testing.T) {
 func TestPropagateServeConfig_LazyStopErrorDoesNotEnsure(t *testing.T) {
 	rec := &reloadRec{stopOK: false, stopErr: os.ErrPermission}
 	var out bytes.Buffer
-	propagateServeConfig(rec.reloader(serveLazy, nil, nil), &out)
+	PropagateConfig(rec.reloader(serveLazy, nil, nil), &out)
 	if rec.ensured {
 		t.Error("ensure ran despite a stop error")
 	}
@@ -224,7 +224,7 @@ func TestPropagateServeConfig_LazyStopErrorDoesNotEnsure(t *testing.T) {
 func TestPropagateServeConfig_ForegroundTouchesNothing(t *testing.T) {
 	rec := &reloadRec{}
 	var out bytes.Buffer
-	propagateServeConfig(rec.reloader(serveForeground, nil, nil), &out)
+	PropagateConfig(rec.reloader(serveForeground, nil, nil), &out)
 	if rec.kicked || rec.stopped || rec.ensured {
 		t.Errorf("foreground must touch nothing: %+v", rec)
 	}
@@ -236,38 +236,11 @@ func TestPropagateServeConfig_ForegroundTouchesNothing(t *testing.T) {
 func TestPropagateServeConfig_DownTouchesNothing(t *testing.T) {
 	rec := &reloadRec{}
 	var out bytes.Buffer
-	propagateServeConfig(rec.reloader(serveDown, nil, nil), &out)
+	PropagateConfig(rec.reloader(serveDown, nil, nil), &out)
 	if rec.kicked || rec.stopped || rec.ensured {
 		t.Errorf("down must touch nothing: %+v", rec)
 	}
 	if !strings.Contains(out.String(), "applies next time pix services start") {
 		t.Errorf("down message = %q", out.String())
-	}
-}
-
-// host.autoserve is a real config key: set/unset via applyConfigChange, read
-// via configValue, defaulting to true (nil pointer).
-func TestHostAutoserveConfigKey(t *testing.T) {
-	cfg := &config.Config{}
-	if got, _ := configValue(cfg, "host.autoserve"); got != "true" {
-		t.Errorf("default host.autoserve = %q, want true", got)
-	}
-	if _, err := applyConfigChange(cfg, false, "host.autoserve", []string{"false"}); err != nil {
-		t.Fatal(err)
-	}
-	if cfg.AutoserveEnabled() {
-		t.Error("set false did not disable autoserve")
-	}
-	if got, _ := configValue(cfg, "host.autoserve"); got != "false" {
-		t.Errorf("host.autoserve = %q, want false", got)
-	}
-	if _, err := applyConfigChange(cfg, true, "host.autoserve", nil); err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Host.Autoserve != nil {
-		t.Error("unset must return to nil (inherit the default, never petrify a bool)")
-	}
-	if _, err := applyConfigChange(cfg, false, "host.autoserve", []string{"maybe"}); err == nil {
-		t.Error("non-boolean accepted")
 	}
 }

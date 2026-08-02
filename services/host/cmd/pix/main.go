@@ -28,6 +28,7 @@ import (
 
 	"pix/host/launcher"
 	"pix/host/routing"
+	"pix/host/service"
 )
 
 // version is stamped at build time via -ldflags "-X main.version=0.0.x". An
@@ -239,7 +240,7 @@ func runVerb(argv []string) {
 func runServe(argv []string) {
 	// A leading -h/--help prints serve usage instead of execing the host binary.
 	if len(argv) > 0 && (argv[0] == "-h" || argv[0] == "--help") {
-		fmt.Print(serveUsage)
+		fmt.Print(service.Usage)
 		return
 	}
 	// `serve stop` / `serve status` are launcher-side control verbs (pidfile-based)
@@ -247,19 +248,19 @@ func runServe(argv []string) {
 	if len(argv) > 0 {
 		switch argv[0] {
 		case "stop":
-			runServeStop(argv[1:])
+			service.RunStop(argv[1:])
 			return
 		case "status":
-			runServeStatus(argv[1:])
+			service.RunStatus(argv[1:])
 			return
 		case "start", "install":
 			// `start` is an alias for `install`: it registers + (re)starts the
 			// managed service, picking up a freshly-rebuilt binary — the natural
 			// partner to `serve stop`.
-			runServeInstall(argv[1:])
+			service.RunInstall(argv[1:])
 			return
 		case "uninstall":
-			runServeUninstall(argv[1:])
+			service.RunUninstall(argv[1:])
 			return
 		}
 	}

@@ -4,7 +4,7 @@
 // service (systemd --user): all logic + argv choices live (unit-tested) in
 // serve_install.go; this file only binds the real runner and $HOME.
 
-package main
+package service
 
 import (
 	"io"
@@ -33,13 +33,13 @@ func platformServeUninstall(out io.Writer) error {
 	return systemdUninstall(realCmdRunner, realInstallFS(), home, out)
 }
 
-// managedServiceActive reports whether the systemd --user unit is active (used
+// ManagedActive reports whether the systemd --user unit is active (used
 // by config propagation's lifecycle-mode detection).
-func managedServiceActive() bool { return systemdActive(realCmdRunner) }
+func ManagedActive() bool { return systemdActive(realCmdRunner) }
 
 // restartManagedService restarts the systemd --user unit.
 func restartManagedService() error { return systemdRestart(realCmdRunner) }
 
-// stopManagedService stops the systemd --user unit so Restart= stops respawning
+// StopManaged stops the systemd --user unit so Restart= stops respawning
 // it (without disabling it).
-func stopManagedService(out io.Writer) error { return systemdStop(realCmdRunner, out) }
+func StopManaged(out io.Writer) error { return systemdStop(realCmdRunner, out) }

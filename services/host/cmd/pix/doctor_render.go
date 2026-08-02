@@ -104,11 +104,6 @@ func (r *report) cfgMCP() string {
 	return strings.Join(r.mcp, " ")
 }
 
-func upDown(up bool) string {
-	if up {
-		return "up"
-	}
-	return "down"
-}
+func upDown(up bool) string { return cli.UpDown(up) }
 
 func plural(n int, noun string) string { return cli.Plural(n, noun) }

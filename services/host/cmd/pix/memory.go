@@ -13,6 +13,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/rpc"
+	"pix/host/service"
 	"pix/host/workspace"
 )
 
@@ -38,7 +39,7 @@ func runMemory(argv []string) {
 	// on a help request (help must stay side-effect free); best-effort — on
 	// failure the rpc.ErrServiceDown path below still degrades with exit 3.
 	if len(argv) > 0 && !wantsHelp(argv) {
-		ensureServeUp([]string{"memory"}, ensureServeTimeout)
+		service.EnsureUp([]string{"memory"}, service.EnsureTimeout)
 	}
 	if err := runMemoryCore(argv, workspace.LoadResolvedConfig, rpc.MemoryClient, os.Stdout); err != nil {
 		exitFromErr(ctx, err)

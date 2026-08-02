@@ -1,4 +1,4 @@
-package main
+package service
 
 import (
 	"bytes"
@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// fakeProc is a scripted process used to exercise stopServe without any real OS
+// fakeProc is a scripted process used to exercise Stop without any real OS
 // process. It tracks liveness and the signals it received, and can be told to
 // die after N SIGTERM liveness probes (to simulate a graceful exit) or to ignore
 // SIGTERM entirely (to force the SIGKILL escalation).
@@ -85,7 +85,7 @@ func TestStopServe_NoPidfile(t *testing.T) {
 	removed := false
 	ctl := ctlFor("", syscall.ENOENT, nil, &removed, nil)
 	var buf bytes.Buffer
-	stopped, err := stopServe(ctl, &buf)
+	stopped, err := Stop(ctl, &buf)
 	if err != nil || stopped {
 		t.Fatalf("stopped=%v err=%v, want false,nil", stopped, err)
 	}
@@ -105,7 +105,7 @@ func TestStopServe_NoPidfile_DiscoversOrphan(t *testing.T) {
 	ctl := ctlFor("", syscall.ENOENT, proc, &removed, nil)
 	ctl.discover = func() ([]int, error) { return []int{5150}, nil }
 	var buf bytes.Buffer
-	stopped, err := stopServe(ctl, &buf)
+	stopped, err := Stop(ctl, &buf)
 	if err != nil || !stopped {
 		t.Fatalf("stopped=%v err=%v, want true,nil; out=%q", stopped, err, buf.String())
 	}
@@ -126,7 +126,7 @@ func TestStopServe_NoPidfile_DiscoveryNotOurs(t *testing.T) {
 	ctl := ctlFor("", syscall.ENOENT, proc, &removed, notOurs)
 	ctl.discover = func() ([]int, error) { return []int{6000}, nil }
 	var buf bytes.Buffer
-	stopped, err := stopServe(ctl, &buf)
+	stopped, err := Stop(ctl, &buf)
 	if err != nil || stopped {
 		t.Fatalf("stopped=%v err=%v, want false,nil", stopped, err)
 	}
@@ -144,7 +144,7 @@ func TestStopServe_StalePidfile(t *testing.T) {
 	proc := &fakeProc{pid: 4242, alive: false} // dead
 	ctl := ctlFor("4242\n", nil, proc, &removed, nil)
 	var buf bytes.Buffer
-	stopped, err := stopServe(ctl, &buf)
+	stopped, err := Stop(ctl, &buf)
 	if err != nil || stopped {
 		t.Fatalf("stopped=%v err=%v, want false,nil", stopped, err)
 	}
@@ -163,7 +163,7 @@ func TestStopServe_AliveAndOurs_SIGTERM(t *testing.T) {
 	proc := &fakeProc{pid: 100, alive: true, dieOnTerm: true}
 	ctl := ctlFor("100", nil, proc, &removed, func(int) (bool, bool) { return true, true })
 	var buf bytes.Buffer
-	stopped, err := stopServe(ctl, &buf)
+	stopped, err := Stop(ctl, &buf)
 	if err != nil || !stopped {
 		t.Fatalf("stopped=%v err=%v, want true,nil", stopped, err)
 	}
@@ -186,7 +186,7 @@ func TestStopServe_NotOurs_Refuses(t *testing.T) {
 	notOurs := func(int) (bool, bool) { return false, true } // known, but not ours
 	ctl := ctlFor("55", nil, proc, &removed, notOurs)
 	var buf bytes.Buffer
-	stopped, err := stopServe(ctl, &buf)
+	stopped, err := Stop(ctl, &buf)
 	if err != nil || stopped {
 		t.Fatalf("stopped=%v err=%v, want false,nil", stopped, err)
 	}
@@ -209,7 +209,7 @@ func TestStopServe_SurvivesSIGTERM_Escalates(t *testing.T) {
 	proc := &fakeProc{pid: 77, alive: true, dieOnTerm: false, dieOnKill: true}
 	ctl := ctlFor("77", nil, proc, &removed, nil)
 	var buf bytes.Buffer
-	stopped, err := stopServe(ctl, &buf)
+	stopped, err := Stop(ctl, &buf)
 	if err != nil || !stopped {
 		t.Fatalf("stopped=%v err=%v, want true,nil", stopped, err)
 	}
@@ -225,7 +225,7 @@ func TestStopServe_SurvivesSIGTERM_Escalates(t *testing.T) {
 }
 
 // TestStopServe_UnverifiableRefuses: no /proc AND ps unavailable (known=false) =>
-// ownership cannot be positively verified, so stopServe REFUSES to signal (never
+// ownership cannot be positively verified, so Stop REFUSES to signal (never
 // trusts the pidfile alone: a stale/reused pid would otherwise get SIGTERM). No
 // signal is delivered and the pidfile is left in place.
 func TestStopServe_UnverifiableRefuses(t *testing.T) {
@@ -234,7 +234,7 @@ func TestStopServe_UnverifiableRefuses(t *testing.T) {
 	unknown := func(int) (bool, bool) { return false, false } // can't tell (no /proc, no ps)
 	ctl := ctlFor("88", nil, proc, &removed, unknown)
 	var buf bytes.Buffer
-	stopped, err := stopServe(ctl, &buf)
+	stopped, err := Stop(ctl, &buf)
 	if err != nil || stopped {
 		t.Fatalf("stopped=%v err=%v, want false,nil", stopped, err)
 	}
@@ -433,7 +433,7 @@ func TestCmdlineIsServe_Tight(t *testing.T) {
 
 // TestStopServe_ReVerifyBeforeKill: a pid whose identity CHANGES between the
 // up-front check and the pre-SIGKILL re-check (PID reuse during the poll) must
-// NOT be SIGKILLed — stopServe refuses on the second verify.
+// NOT be SIGKILLed — Stop refuses on the second verify.
 func TestStopServe_ReVerifyBeforeKill(t *testing.T) {
 	removed := false
 	// dieOnTerm=false so it survives SIGTERM and we reach the re-verify gate.
@@ -445,7 +445,7 @@ func TestStopServe_ReVerifyBeforeKill(t *testing.T) {
 	}
 	ctl := ctlFor("202", nil, proc, &removed, verify)
 	var buf bytes.Buffer
-	stopped, err := stopServe(ctl, &buf)
+	stopped, err := Stop(ctl, &buf)
 	if stopped {
 		t.Fatalf("must not report stopped when identity changed mid-poll (err=%v)", err)
 	}
@@ -469,7 +469,7 @@ func TestStopServe_SurvivesSIGKILL_NotSuccess(t *testing.T) {
 	proc := &fakeProc{pid: 303, alive: true, dieOnTerm: false, surviveKill: true}
 	ctl := ctlFor("303", nil, proc, &removed, nil)
 	var buf bytes.Buffer
-	stopped, err := stopServe(ctl, &buf)
+	stopped, err := Stop(ctl, &buf)
 	if stopped {
 		t.Fatal("must not report stopped when the process survived SIGKILL")
 	}

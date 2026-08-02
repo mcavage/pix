@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -15,6 +14,8 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/service"
+	"pix/host/sys"
 	"pix/host/workspace"
 )
 
@@ -319,11 +320,11 @@ func runRun(argv []string) {
 	}
 	// Lazy auto-start: make the configured host services (memory/knowledge)
 	// reachable before the sandbox tries them, with a SHORT budget — the launch
-	// waits AT MOST ensureServeRunTimeout (8s), covering spawn-lock acquisition
+	// waits AT MOST service.EnsureRunTimeout (8s), covering spawn-lock acquisition
 	// AND the health poll under one deadline (M2), then proceeds regardless
-	// (recall/knowledge degrade in-VM exactly as before). ensureServe prints its
+	// (recall/knowledge degrade in-VM exactly as before). service.Ensure prints its
 	// own progress/failure lines.
-	ensureServeUp(nil, ensureServeRunTimeout)
+	service.EnsureUp(nil, service.EnsureRunTimeout)
 
 	// Readiness, rendered from the SHARED lazy snapshot (readiness_launch.go)
 	// and reusing the key evidence the launch gate above already paid for. Two
@@ -1207,16 +1208,10 @@ func defaultKnowledgeRPC() knowledgeRPC {
 	}
 }
 
-// dialLocalPort reports whether something is listening on 127.0.0.1:port within
-// a short timeout (so a down daemon costs the launch almost nothing).
-func dialLocalPort(port int) bool {
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 300*time.Millisecond)
-	if err != nil {
-		return false
-	}
-	_ = conn.Close()
-	return true
-}
+// dialLocalPort delegates to sys: dialling a local port is an OS seam, and
+// run.go was never its owner -- serve, doctor and status all reached across for
+// it.
+func dialLocalPort(port int) bool { return sys.Real{}.DialLocal(port) }
 
 // knowledgeRPCCall POSTs a JSON-RPC 2.0 request to the daemon and returns the
 // decoded envelope, mapping a JSON-RPC error object to a Go error. Short

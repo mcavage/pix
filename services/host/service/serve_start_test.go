@@ -1,4 +1,4 @@
-package main
+package service
 
 import (
 	"bytes"
@@ -102,8 +102,8 @@ func starterCfg() *config.Config {
 // Fast path: everything already up -> nil, no spawn, SILENT.
 func TestEnsureServeFastPathAlreadyUp(t *testing.T) {
 	rec := &starterRec{up: true}
-	if err := ensureServe(rec.starter(), starterCfg(), ensureServeOpts{}); err != nil {
-		t.Fatalf("ensureServe: %v", err)
+	if err := Ensure(rec.starter(), starterCfg(), EnsureOpts{}); err != nil {
+		t.Fatalf("Ensure: %v", err)
 	}
 	if rec.spawns != 0 {
 		t.Errorf("spawned %d times, want 0", rec.spawns)
@@ -116,8 +116,8 @@ func TestEnsureServeFastPathAlreadyUp(t *testing.T) {
 // Down -> spawn once, mark lazy, wait until up, legible messages.
 func TestEnsureServeSpawnsAndBecomesReady(t *testing.T) {
 	rec := &starterRec{upAfter: 8}
-	if err := ensureServe(rec.starter(), starterCfg(), ensureServeOpts{}); err != nil {
-		t.Fatalf("ensureServe: %v", err)
+	if err := Ensure(rec.starter(), starterCfg(), EnsureOpts{}); err != nil {
+		t.Fatalf("Ensure: %v", err)
 	}
 	if rec.spawns != 1 {
 		t.Errorf("spawned %d times, want 1", rec.spawns)
@@ -145,7 +145,7 @@ func TestEnsureServeSpawnFailure(t *testing.T) {
 		rec.spawns++
 		return serveChildHandle{}, os.ErrPermission
 	}
-	err := ensureServe(st, starterCfg(), ensureServeOpts{})
+	err := Ensure(st, starterCfg(), EnsureOpts{})
 	if err == nil || !strings.Contains(err.Error(), "could not start pix services") {
 		t.Fatalf("err = %v, want could-not-start", err)
 	}
@@ -161,7 +161,7 @@ func TestEnsureServeSpawnFailure(t *testing.T) {
 // clock advances via sleep so the test never real-waits.
 func TestEnsureServeHealthWaitTimeout(t *testing.T) {
 	rec := &starterRec{} // ports never up
-	err := ensureServe(rec.starter(), starterCfg(), ensureServeOpts{Timeout: 2 * time.Second})
+	err := Ensure(rec.starter(), starterCfg(), EnsureOpts{Timeout: 2 * time.Second})
 	if err == nil {
 		t.Fatal("want timeout error")
 	}
@@ -187,7 +187,7 @@ func TestEnsureServeOptOutEnv(t *testing.T) {
 		}
 		return ""
 	}
-	if err := ensureServe(st, starterCfg(), ensureServeOpts{}); err != errAutoserveDisabled {
+	if err := Ensure(st, starterCfg(), EnsureOpts{}); err != errAutoserveDisabled {
 		t.Fatalf("err = %v, want errAutoserveDisabled", err)
 	}
 	if rec.spawns != 0 {
@@ -204,7 +204,7 @@ func TestEnsureServeOptOutConfig(t *testing.T) {
 	cfg := starterCfg()
 	no := false
 	cfg.Host.Autoserve = &no
-	if err := ensureServe(rec.starter(), cfg, ensureServeOpts{}); err != errAutoserveDisabled {
+	if err := Ensure(rec.starter(), cfg, EnsureOpts{}); err != errAutoserveDisabled {
 		t.Fatalf("err = %v, want errAutoserveDisabled", err)
 	}
 	if rec.spawns != 0 {
@@ -217,8 +217,8 @@ func TestEnsureServeOptOutButAlreadyUp(t *testing.T) {
 	rec := &starterRec{up: true}
 	st := rec.starter()
 	st.getenv = func(string) string { return "1" }
-	if err := ensureServe(st, starterCfg(), ensureServeOpts{}); err != nil {
-		t.Fatalf("ensureServe: %v", err)
+	if err := Ensure(st, starterCfg(), EnsureOpts{}); err != nil {
+		t.Fatalf("Ensure: %v", err)
 	}
 }
 
@@ -234,8 +234,8 @@ func TestEnsureServePidfileOwnedNoDoubleSpawn(t *testing.T) {
 		verify:  func(int) (bool, bool) { return true, true },
 		sleep:   func(time.Duration) {},
 	}
-	if err := ensureServe(st, starterCfg(), ensureServeOpts{}); err != nil {
-		t.Fatalf("ensureServe: %v", err)
+	if err := Ensure(st, starterCfg(), EnsureOpts{}); err != nil {
+		t.Fatalf("Ensure: %v", err)
 	}
 	if rec.spawns != 0 {
 		t.Errorf("double-spawned despite an owned live pidfile")
@@ -252,8 +252,8 @@ func TestEnsureServeHijackedPidfileStillSpawns(t *testing.T) {
 	st.ctl.readPid = func(string) (string, error) { return "99\n", nil }
 	st.ctl.kill = func(int, syscall.Signal) error { return nil }
 	st.ctl.verify = func(int) (bool, bool) { return false, true }
-	if err := ensureServe(st, starterCfg(), ensureServeOpts{}); err != nil {
-		t.Fatalf("ensureServe: %v", err)
+	if err := Ensure(st, starterCfg(), EnsureOpts{}); err != nil {
+		t.Fatalf("Ensure: %v", err)
 	}
 	if rec.spawns != 1 {
 		t.Errorf("spawned %d times, want 1 (unowned pidfile must not suppress)", rec.spawns)
@@ -269,8 +269,8 @@ func TestEnsureServeRaceLoserDoesNotSpawn(t *testing.T) {
 		rec.up = true // the racing process bound the ports while we blocked
 		return true, fn()
 	}
-	if err := ensureServe(st, starterCfg(), ensureServeOpts{}); err != nil {
-		t.Fatalf("ensureServe: %v", err)
+	if err := Ensure(st, starterCfg(), EnsureOpts{}); err != nil {
+		t.Fatalf("Ensure: %v", err)
 	}
 	if rec.spawns != 0 {
 		t.Errorf("race loser spawned anyway")
@@ -283,8 +283,8 @@ func TestEnsureServeRaceLoserDoesNotSpawn(t *testing.T) {
 // release() only runs AFTER recordPid succeeds, and strictly before markLazy.
 func TestEnsureServeRecordsPidBeforeUnlock(t *testing.T) {
 	rec := &starterRec{upAfter: 5}
-	if err := ensureServe(rec.starter(), starterCfg(), ensureServeOpts{}); err != nil {
-		t.Fatalf("ensureServe: %v", err)
+	if err := Ensure(rec.starter(), starterCfg(), EnsureOpts{}); err != nil {
+		t.Fatalf("Ensure: %v", err)
 	}
 	if rec.recordedPid != 4242 {
 		t.Fatalf("recorded pid = %d, want the spawned pid 4242", rec.recordedPid)
@@ -324,7 +324,7 @@ func TestEnsureServeColdInitTwoCallersSingleSpawn(t *testing.T) {
 	}
 
 	recA := &starterRec{upAfter: 5}
-	if err := ensureServe(mkStarter(recA), starterCfg(), ensureServeOpts{}); err != nil {
+	if err := Ensure(mkStarter(recA), starterCfg(), EnsureOpts{}); err != nil {
 		t.Fatalf("caller A: %v", err)
 	}
 	if recA.spawns != 1 {
@@ -334,7 +334,7 @@ func TestEnsureServeColdInitTwoCallersSingleSpawn(t *testing.T) {
 	// Caller B: daemon process alive (pidfile recorded by A) but its ports are
 	// still down (cold init: config load / store open / indexing in progress).
 	recB := &starterRec{upAfter: 5}
-	if err := ensureServe(mkStarter(recB), starterCfg(), ensureServeOpts{}); err != nil {
+	if err := Ensure(mkStarter(recB), starterCfg(), EnsureOpts{}); err != nil {
 		t.Fatalf("caller B: %v", err)
 	}
 	if recB.spawns != 0 {
@@ -367,7 +367,7 @@ func TestEnsureServeRecordPidFailureKillSucceeds(t *testing.T) {
 			release: func() { released = true },
 		}, nil
 	}
-	err := ensureServe(st, starterCfg(), ensureServeOpts{})
+	err := Ensure(st, starterCfg(), EnsureOpts{})
 	if err == nil {
 		t.Fatal("want an error when recordPid fails")
 	}
@@ -413,7 +413,7 @@ func TestEnsureServeRecordPidFailureKillFails(t *testing.T) {
 			release: func() { t.Error("release() must not run when the cleanup kill failed") },
 		}, nil
 	}
-	err := ensureServe(st, starterCfg(), ensureServeOpts{})
+	err := Ensure(st, starterCfg(), EnsureOpts{})
 	if err == nil {
 		t.Fatal("want an error when recordPid AND the cleanup kill both fail")
 	}
@@ -456,7 +456,7 @@ func TestEnsureServeLockBusyBoundedByDeadline(t *testing.T) {
 		tries++
 		return false, nil // always busy
 	}
-	err := ensureServe(st, starterCfg(), ensureServeOpts{Timeout: 2 * time.Second})
+	err := Ensure(st, starterCfg(), EnsureOpts{Timeout: 2 * time.Second})
 	if err == nil {
 		t.Fatal("want a bounded-timeout error, got nil")
 	}
@@ -490,7 +490,7 @@ func TestRequiredServePorts(t *testing.T) {
 	if got := requiredServePorts(st, both, []string{"memory", "memory", "bogus"}); len(got) != 1 || got[0].name != "memory" {
 		t.Errorf("dedupe/unknown = %v", got)
 	}
-	// Port env override flows through servePort.
+	// Port env override flows through Port.
 	st.getenv = func(k string) string {
 		if k == "MEMORY_PORT" {
 			return "21435"
@@ -502,7 +502,7 @@ func TestRequiredServePorts(t *testing.T) {
 	}
 }
 
-// stopServe clears the serve.lazy marker on a successful stop.
+// Stop clears the serve.lazy marker on a successful stop.
 func TestStopServeClearsLazyMarker(t *testing.T) {
 	removedLazy := false
 	proc := &fakeProc{pid: 321, alive: true}
@@ -511,9 +511,9 @@ func TestStopServeClearsLazyMarker(t *testing.T) {
 	ctl.removeLazy = func() { removedLazy = true }
 
 	var out bytes.Buffer
-	stopped, err := stopServe(ctl, &out)
+	stopped, err := Stop(ctl, &out)
 	if err != nil || !stopped {
-		t.Fatalf("stopServe = %v, %v", stopped, err)
+		t.Fatalf("Stop = %v, %v", stopped, err)
 	}
 	if !removedLazy {
 		t.Error("serve.lazy marker not cleared on successful stop")

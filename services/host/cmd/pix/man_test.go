@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os/exec"
+	"pix/host/service"
 	"regexp"
 	"sort"
 	"strings"
@@ -196,12 +197,12 @@ func TestExtractManFlag(t *testing.T) {
 	}
 }
 
-// serveSubverbsFromUsage parses the subverb names out of serveUsage's
+// serveSubverbsFromUsage parses the subverb names out of service.Usage's
 // `subcommands:` block (two-space-indented leading token), the same
 // single-source-of-truth pattern configKeysFromHelp uses.
 func serveSubverbsFromUsage(t *testing.T) []string {
 	t.Helper()
-	block := serveUsage
+	block := service.Usage
 	if i := strings.Index(block, "subcommands:"); i >= 0 {
 		block = block[i:]
 	}
@@ -215,7 +216,7 @@ func serveSubverbsFromUsage(t *testing.T) []string {
 		}
 	}
 	if len(subs) == 0 {
-		t.Fatal("no subverbs parsed from serveUsage")
+		t.Fatal("no subverbs parsed from service.Usage")
 	}
 	return subs
 }
@@ -224,7 +225,7 @@ func serveSubverbsFromUsage(t *testing.T) []string {
 // the sibling of TestManPageDocumentsEveryConfigKey: the verb-level check only
 // guards `pix serve`, so `serve install`/`serve uninstall` could silently
 // drift out of the man page while the CLI help stayed complete. Every subverb
-// the CLI's own serveUsage advertises MUST appear in the man page as an
+// the CLI's own service.Usage advertises MUST appear in the man page as an
 // invocable `pix serve <sub>` form.
 func TestManPageDocumentsServeSubverbs(t *testing.T) {
 	page := string(manPage)

@@ -9,7 +9,7 @@
 // + fs ops, unit-tested on any OS. Only the tiny real-exec dispatch lives in
 // the build-tagged serve_install_{darwin,linux,other}.go files.
 
-package main
+package service
 
 import (
 	"bytes"
@@ -24,7 +24,9 @@ import (
 	"text/template"
 	"time"
 
+	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/launcher"
 )
 
 // serveLaunchdLabel is the LaunchAgent label (and plist basename).
@@ -319,7 +321,7 @@ var errNoSystemd = fmt.Errorf("no systemd --user found; use lazy auto-start (def
 
 // systemdInstall writes the unit and enables it now.
 func systemdInstall(run cmdRunner, fs installFS, home, hostBin string, env []envKV, out io.Writer) error {
-	if _, err := run("systemctl", "--user", "--version"); err != nil {
+	if _, err := run("systemctl", "--user", "--launcher.Version"); err != nil {
 		return errNoSystemd
 	}
 	logPath := config.ServeLogPath()
@@ -384,11 +386,11 @@ func systemdRestart(run cmdRunner) error {
 
 // --- shared entry points ------------------------------------------------------
 
-// resolvedHostBinary is findHostBinary + EvalSymlinks: launchd/systemd need the
+// resolvedHostBinary is launcher.FindHostBinary + EvalSymlinks: launchd/systemd need the
 // REAL absolute path (a ~/.local/bin symlink into a repo's out/ dir would break
 // when the repo moves, and launchd has a minimal PATH).
 func resolvedHostBinary() (string, error) {
-	bin, err := findHostBinary()
+	bin, err := launcher.FindHostBinary()
 	if err != nil {
 		return "", fmt.Errorf("pix-host not found — run `make install` first")
 	}
@@ -476,19 +478,19 @@ func reportManagedServeHealth(dial func(int) bool, ports []servePortSpec,
 	}
 }
 
-// runServeInstall is the `serve install` entry point (platform dispatch is in
+// RunInstall is the `serve install` entry point (platform dispatch is in
 // serve_install_{darwin,linux,other}.go).
-func runServeInstall(argv []string) {
-	if wantsHelp(argv) {
-		fmt.Print(serveUsage)
+func RunInstall(argv []string) {
+	if cli.WantsHelp(argv) {
+		fmt.Print(Usage)
 		return
 	}
 	if len(argv) > 0 {
-		fmt.Fprintf(os.Stderr, "pix serve install: unexpected argument %q\n\n%s", argv[0], serveUsage)
+		fmt.Fprintf(os.Stderr, "pix serve install: unexpected argument %q\n\n%s", argv[0], Usage)
 		os.Exit(2)
 	}
-	rl := defaultServeReloader()
-	if err := preInstallGuard(rl.mode, rl.stopServe, os.Stdout); err != nil {
+	rl := DefaultReloader()
+	if err := preInstallGuard(rl.mode, rl.Stop, os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "pix serve install: %v\n", err)
 		os.Exit(1)
 	}
@@ -501,17 +503,17 @@ func runServeInstall(argv []string) {
 	// (exit 0 either way — the install itself succeeded; the warning + pointers
 	// are the honest signal).
 	cfg, cfgErr := config.Load()
-	verifyManagedInstallHealth(cfg, cfgErr, defaultServeStarter(), os.Stdout)
+	verifyManagedInstallHealth(cfg, cfgErr, DefaultStarter(), os.Stdout)
 }
 
-// runServeUninstall is the `serve uninstall` entry point.
-func runServeUninstall(argv []string) {
-	if wantsHelp(argv) {
-		fmt.Print(serveUsage)
+// RunUninstall is the `serve uninstall` entry point.
+func RunUninstall(argv []string) {
+	if cli.WantsHelp(argv) {
+		fmt.Print(Usage)
 		return
 	}
 	if len(argv) > 0 {
-		fmt.Fprintf(os.Stderr, "pix serve uninstall: unexpected argument %q\n\n%s", argv[0], serveUsage)
+		fmt.Fprintf(os.Stderr, "pix serve uninstall: unexpected argument %q\n\n%s", argv[0], Usage)
 		os.Exit(2)
 	}
 	if err := platformServeUninstall(os.Stdout); err != nil {
@@ -520,7 +522,7 @@ func runServeUninstall(argv []string) {
 	}
 }
 
-// realCmdRunner is the concrete exec shim (kept thin like defaultServeCtl's
+// realCmdRunner is the concrete exec shim (kept thin like DefaultCtl's
 // syscalls; the argv sequences around it are what the tests prove).
 func realCmdRunner(name string, args ...string) (string, error) {
 	out, err := exec.Command(name, args...).CombinedOutput()

@@ -6,7 +6,7 @@
 // lock helpers run their critical sections unserialized (the daemon's own
 // store locking — where available — remains the backstop).
 
-package main
+package service
 
 import (
 	"fmt"
@@ -18,10 +18,10 @@ func spawnDetachedServe(string, []string, string) (serveChildHandle, error) {
 	return serveChildHandle{}, fmt.Errorf("auto-start is not supported on this platform; run `pix serve` yourself")
 }
 
-// readFileNoSymlink: O_NOFOLLOW does not exist on this platform; refuse to
+// ReadFileNoSymlink: O_NOFOLLOW does not exist on this platform; refuse to
 // read at all rather than risk following a symlink. tailFileLines degrades to
 // "" (the same safe-empty result the unix TOCTOU fix produces on a symlink).
-func readFileNoSymlink(string) ([]byte, error) {
+func ReadFileNoSymlink(string) ([]byte, error) {
 	return nil, fmt.Errorf("log tail is not supported on this platform")
 }
 

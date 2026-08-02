@@ -8,7 +8,7 @@
 // injected via serveReloader so every mode routes are unit-tested with no real
 // process.
 
-package main
+package service
 
 import (
 	"fmt"
@@ -28,11 +28,11 @@ var daemonAffectingKeys = map[string]bool{
 	"knowledge_bundles":    true,
 }
 
-// isDaemonAffecting reports whether a config key change requires a serve
+// IsDaemonAffecting reports whether a config key change requires a serve
 // restart. knowledge_bundles is included because serve indexes it at startup
 // via AllKnowledgeBundles (now just the single deduped list; profiles, which
 // it used to union across, were removed).
-func isDaemonAffecting(key string) bool { return daemonAffectingKeys[key] }
+func IsDaemonAffecting(key string) bool { return daemonAffectingKeys[key] }
 
 // serveMode is the detected lifecycle mode of the running (or not) daemon.
 type serveMode int
@@ -49,26 +49,26 @@ const (
 type serveReloader struct {
 	mode        func() serveMode              // detectServeMode
 	kickManaged func() error                  // launchctl kickstart -k / systemctl --user restart
-	stopServe   func(io.Writer) (bool, error) // REUSE stopServe(defaultServeCtl(), out)
-	ensure      func() error                  // ensureServe with the config set (re-lazy-start)
+	Stop        func(io.Writer) (bool, error) // REUSE Stop(DefaultCtl(), out)
+	ensure      func() error                  // Ensure with the config set (re-lazy-start)
 }
 
-// defaultServeReloader wires the real ops (platform managed-service calls live
+// DefaultReloader wires the real ops (platform managed-service calls live
 // behind build tags in serve_install_*.go).
-func defaultServeReloader() serveReloader {
-	ctl := defaultServeCtl()
+func DefaultReloader() serveReloader {
+	ctl := DefaultCtl()
 	return serveReloader{
 		mode: func() serveMode {
-			return detectServeMode(ctl, managedServiceActive, readServeLazyMarkerPid)
+			return detectServeMode(ctl, ManagedActive, readServeLazyMarkerPid)
 		},
 		kickManaged: restartManagedService,
-		stopServe:   func(out io.Writer) (bool, error) { return stopServe(defaultServeCtl(), out) },
+		Stop:        func(out io.Writer) (bool, error) { return Stop(DefaultCtl(), out) },
 		ensure: func() error {
 			cfg, err := config.Load()
 			if err != nil {
 				return err
 			}
-			return ensureServe(defaultServeStarter(), cfg, ensureServeOpts{})
+			return Ensure(DefaultStarter(), cfg, EnsureOpts{})
 		},
 	}
 }
@@ -95,11 +95,11 @@ func detectServeMode(ctl serveCtl, managedActive func() bool, lazyPid func() (in
 	return serveDown
 }
 
-// propagateServeConfig restarts (or advises about) the running daemon after a
+// PropagateConfig restarts (or advises about) the running daemon after a
 // daemon-affecting config write. Best-effort on every branch: the config file
 // is already saved and is the source of truth — a failed restart prints a
 // warning and the user restarts manually.
-func propagateServeConfig(rl serveReloader, out io.Writer) {
+func PropagateConfig(rl serveReloader, out io.Writer) {
 	switch rl.mode() {
 	case serveManaged:
 		if err := rl.kickManaged(); err != nil {
@@ -108,13 +108,13 @@ func propagateServeConfig(rl serveReloader, out io.Writer) {
 		}
 		fmt.Fprintln(out, "restarted managed pix services to apply the change.")
 	case serveLazy:
-		stopped, err := rl.stopServe(io.Discard)
+		stopped, err := rl.Stop(io.Discard)
 		if err != nil {
 			fmt.Fprintf(out, "warning: could not stop the background pix services (%v) — restart them manually to apply the change.\n", err)
 			return
 		}
 		if !stopped {
-			// stopServe refused (stale/hijacked/unverifiable pid) or found nothing:
+			// Stop refused (stale/hijacked/unverifiable pid) or found nothing:
 			// re-spawning NOW could double-start against a still-live daemon (M4).
 			fmt.Fprintln(out, "warning: the background pix services were not stopped — run `pix serve stop` then restart to apply the change.")
 			return

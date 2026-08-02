@@ -4,7 +4,7 @@
 // service: all logic + argv choices live (unit-tested) in serve_install.go;
 // this file only binds the real runner, uid, and $HOME.
 
-package main
+package service
 
 import (
 	"io"
@@ -33,15 +33,15 @@ func platformServeUninstall(out io.Writer) error {
 	return launchdUninstall(realCmdRunner, realInstallFS(), os.Getuid(), home, out)
 }
 
-// managedServiceActive reports whether the launchd unit is loaded (used by
+// ManagedActive reports whether the launchd unit is loaded (used by
 // config propagation's lifecycle-mode detection).
-func managedServiceActive() bool { return launchdActive(realCmdRunner, os.Getuid()) }
+func ManagedActive() bool { return launchdActive(realCmdRunner, os.Getuid()) }
 
 // restartManagedService kickstarts the launchd unit in place.
 func restartManagedService() error { return launchdRestart(realCmdRunner, os.Getuid()) }
 
-// stopManagedService boots the launchd unit out so KeepAlive stops respawning it
+// StopManaged boots the launchd unit out so KeepAlive stops respawning it
 // (without removing the plist).
-func stopManagedService(out io.Writer) error {
+func StopManaged(out io.Writer) error {
 	return launchdStop(realCmdRunner, os.Getuid(), out)
 }

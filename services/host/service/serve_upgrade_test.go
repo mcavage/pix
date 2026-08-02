@@ -1,4 +1,4 @@
-package main
+package service
 
 import (
 	"bytes"
@@ -7,20 +7,21 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/rpc"
 	"pix/host/sys/systest"
 )
 
 func TestStaleServeVersionRequiresPositivePixIdentity(t *testing.T) {
 	cfg := &config.Config{Services: []string{"memory"}}
-	env := shellEnv{System: &systest.Fake{DialLocalFn: func(int) bool { return true }, GetenvFn: func(string) string { return "" }}}
-	if from, stale := staleServeVersion(cfg, env, nil, func(int) (serviceIdentityResult, error) {
-		return serviceIdentityResult{Name: rpc.MemoryName, Version: "0.1.7"}, nil
+	env := hostenv.Env{System: &systest.Fake{DialLocalFn: func(int) bool { return true }, GetenvFn: func(string) string { return "" }}}
+	if from, stale := staleServeVersion(cfg, env, nil, func(int) (rpc.ServiceIdentity, error) {
+		return rpc.ServiceIdentity{Name: rpc.MemoryName, Version: "0.1.7"}, nil
 	}); !stale || from != "0.1.7" {
 		t.Fatalf("staleServeVersion = %q, %v", from, stale)
 	}
-	if _, stale := staleServeVersion(cfg, env, nil, func(int) (serviceIdentityResult, error) {
-		return serviceIdentityResult{Name: "someone-else", Version: "0.1.7"}, nil
+	if _, stale := staleServeVersion(cfg, env, nil, func(int) (rpc.ServiceIdentity, error) {
+		return rpc.ServiceIdentity{Name: "someone-else", Version: "0.1.7"}, nil
 	}); stale {
 		t.Fatal("a foreign port holder must never be restarted")
 	}
@@ -30,7 +31,7 @@ func TestRestartStaleServeLazyUsesSafeStopThenEnsure(t *testing.T) {
 	var calls []string
 	rl := serveReloader{
 		mode: func() serveMode { return serveLazy },
-		stopServe: func(io.Writer) (bool, error) {
+		Stop: func(io.Writer) (bool, error) {
 			calls = append(calls, "stop")
 			return true, nil
 		},
@@ -50,7 +51,7 @@ func TestRestartStaleServeUnrecordedOrphanUsesSafeDiscoveryStop(t *testing.T) {
 	var calls []string
 	rl := serveReloader{
 		mode: func() serveMode { return serveDown },
-		stopServe: func(io.Writer) (bool, error) {
+		Stop: func(io.Writer) (bool, error) {
 			calls = append(calls, "stop")
 			return true, nil
 		},

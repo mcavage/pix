@@ -25,6 +25,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/routing"
+	"pix/host/service"
 	"pix/host/sys"
 	"pix/host/workspace"
 
@@ -3392,7 +3393,7 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	if env.Quiet {
 		serveOut = io.Discard
 	}
-	propagateServeConfig(defaultServeReloader(), serveOut)
+	service.PropagateConfig(service.DefaultReloader(), serveOut)
 
 	// ADR-3: --mcp/--kit are create-only. Print the recreate line UNCONDITIONALLY
 	// (this is "the change" for the purposes of packs.md §13's must-fix), so the
@@ -3510,7 +3511,7 @@ func runPackRm(out io.Writer, rest []string) {
 		fmt.Fprintf(out, "knowledge bundle detached: %s\n", id)
 	}
 	if len(removedKnowledge) > 0 {
-		propagateServeConfig(defaultServeReloader(), out)
+		service.PropagateConfig(service.DefaultReloader(), out)
 	}
 	if len(removedMCP) > 0 {
 		printPackRecreateLine(out)

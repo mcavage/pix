@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/service"
 	"pix/host/workspace"
 
 	"github.com/BurntSushi/toml"
@@ -187,8 +188,8 @@ func runConfigWrite(unset bool, argv []string) {
 	// user per the detected lifecycle mode (managed/lazy restart; foreground/down
 	// just advise). Composes with sparse Save: the change is both persisted
 	// correctly AND live, no manual step.
-	if isDaemonAffecting(argv[0]) {
-		propagateServeConfig(defaultServeReloader(), os.Stdout)
+	if service.IsDaemonAffecting(argv[0]) {
+		service.PropagateConfig(service.DefaultReloader(), os.Stdout)
 	}
 }
 
@@ -367,7 +368,7 @@ func applyConfigChange(cfg *config.Config, unset bool, key string, args []string
 		return fmt.Sprintf("host.enabled = %v", cfg.Host.Enabled), nil
 
 	case "host.autoserve":
-		// Opt-out flag for lazy auto-start (ensureServe). Unset = nil = inherit the
+		// Opt-out flag for lazy auto-start (service.Ensure). Unset = nil = inherit the
 		// default (true) so a future default change reaches users (no petrified
 		// bool). NOT daemon-affecting: it changes launcher behavior, not serve.
 		if unset {

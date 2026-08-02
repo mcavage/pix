@@ -9,7 +9,7 @@
 // serveCtl so the stale / alive / not-ours / term-then-kill paths are all
 // unit-testable WITHOUT real processes (mirroring how reset.go injects resetFS).
 
-package main
+package service
 
 import (
 	"encoding/json"
@@ -18,6 +18,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"pix/host/cli"
+	"pix/host/hostenv"
 	"pix/host/rpc"
 	"pix/host/sys"
 	"strconv"
@@ -29,7 +31,7 @@ import (
 )
 
 // serveCtl bundles the injectable OS operations `serve stop`/`serve status` need.
-// defaultServeCtl() wires the real syscall-backed ops; tests substitute fakes.
+// DefaultCtl() wires the real syscall-backed ops; tests substitute fakes.
 type serveCtl struct {
 	pidPath    func() string                           // where the pidfile lives (config.ServePidPath)
 	readPid    func(path string) (string, error)       // read the pidfile's raw contents
@@ -41,8 +43,8 @@ type serveCtl struct {
 	discover   func() ([]int, error)                   // find running pix-host serve pids when the pidfile is gone (optional; nil = skip)
 }
 
-// defaultServeCtl wires the real OS-backed control surface.
-func defaultServeCtl() serveCtl {
+// DefaultCtl wires the real OS-backed control surface.
+func DefaultCtl() serveCtl {
 	return serveCtl{
 		pidPath:    config.ServePidPath,
 		readPid:    func(path string) (string, error) { b, err := os.ReadFile(path); return string(b), err },
@@ -151,13 +153,13 @@ func cmdlineIsServe(argv []string) bool {
 	return len(argv) >= 2 && filepath.Base(argv[0]) == "pix-host" && argv[1] == "serve"
 }
 
-// stopServe is the SAFE replacement for `pkill -f 'pix-host serve'`. It
+// Stop is the SAFE replacement for `pkill -f 'pix-host serve'`. It
 // returns stopped=true only when it signalled a live, verified-ours process and
 // confirmed it exited. Every "not running" / stale / not-ours case returns
 // stopped=false with a nil error and an explanatory line on out. A hard error
 // (e.g. an unreadable pidfile that is NOT ENOENT) is returned so a caller can
 // distinguish it.
-func stopServe(ctl serveCtl, out io.Writer) (stopped bool, err error) {
+func Stop(ctl serveCtl, out io.Writer) (stopped bool, err error) {
 	path := ctl.pidPath()
 
 	raw, rerr := ctl.readPid(path)
@@ -346,12 +348,12 @@ type serveState struct {
 	KnowledgePort int    `json:"knowledge_port"`
 }
 
-// servePort resolves a service port honoring the MEMORY_PORT / KNOWLEDGE_PORT env
+// Port resolves a service port honoring the MEMORY_PORT / KNOWLEDGE_PORT env
 // overrides `serve` itself reads, preferring the injected env.Getenv (so tests
 // stay hermetic) and falling back to the process environment.
-// servePort takes sys.Getenver, not the whole world: it reads one variable.
+// Port takes sys.Getenver, not the whole world: it reads one variable.
 // The signature is now the documentation.
-func servePort(env sys.Getenver, name string, def int) int {
+func Port(env sys.Getenver, name string, def int) int {
 	if v := strings.TrimSpace(env.Getenv(name)); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n
@@ -362,7 +364,7 @@ func servePort(env sys.Getenver, name string, def int) int {
 
 // resolveServeStatus reads the pidfile + probes the process and the service ports
 // WITHOUT signalling anything. Split from the printer so it is unit-testable.
-func resolveServeStatus(ctl serveCtl, env shellEnv) serveState {
+func resolveServeStatus(ctl serveCtl, env hostenv.Env) serveState {
 	var st serveState
 	path := ctl.pidPath()
 	if raw, err := ctl.readPid(path); err == nil {
@@ -384,8 +386,8 @@ func resolveServeStatus(ctl serveCtl, env shellEnv) serveState {
 	} else if !os.IsNotExist(err) {
 		st.Detail = "could not read pidfile: " + err.Error()
 	}
-	st.MemoryPort = servePort(env, "MEMORY_PORT", rpc.MemoryPortDefault)
-	st.KnowledgePort = servePort(env, "KNOWLEDGE_PORT", rpc.KnowledgePortDefault)
+	st.MemoryPort = Port(env, "MEMORY_PORT", rpc.MemoryPortDefault)
+	st.KnowledgePort = Port(env, "KNOWLEDGE_PORT", rpc.KnowledgePortDefault)
 	st.Memory = env.DialLocal(st.MemoryPort)
 	st.Knowledge = env.DialLocal(st.KnowledgePort)
 	return st
@@ -412,59 +414,59 @@ func printServeStatus(st serveState, out io.Writer, jsonOut bool) {
 	if kbPort == 0 {
 		kbPort = rpc.KnowledgePortDefault
 	}
-	fmt.Fprintf(out, "  memory    (:%d): %s\n", memPort, upDown(st.Memory))
-	fmt.Fprintf(out, "  knowledge (:%d): %s\n", kbPort, upDown(st.Knowledge))
+	fmt.Fprintf(out, "  memory    (:%d): %s\n", memPort, cli.UpDown(st.Memory))
+	fmt.Fprintf(out, "  knowledge (:%d): %s\n", kbPort, cli.UpDown(st.Knowledge))
 }
 
-// stopServeAnyMode stops the serve daemon in whatever lifecycle mode it is in.
+// StopAnyMode stops the serve daemon in whatever lifecycle mode it is in.
 // A MANAGED service (launchd KeepAlive / systemd Restart=) MUST be stopped via
 // its supervisor — a bare SIGTERM to the pid is respawned within a second — so
-// managed is handled FIRST via stopManagedService. Lazy/foreground/down all fall
-// through to the pidfile-based (and discovery-fallback) stopServe. Injectable
+// managed is handled FIRST via StopManaged. Lazy/foreground/down all fall
+// through to the pidfile-based (and discovery-fallback) Stop. Injectable
 // deps mirror the rest of this file so it stays unit-testable.
-func stopServeAnyMode(managedActive func() bool, stopManaged func(io.Writer) error, ctl serveCtl, out io.Writer) (bool, error) {
+func StopAnyMode(managedActive func() bool, stopManaged func(io.Writer) error, ctl serveCtl, out io.Writer) (bool, error) {
 	if managedActive() {
 		if err := stopManaged(out); err != nil {
 			return false, err
 		}
 		return true, nil
 	}
-	return stopServe(ctl, out)
+	return Stop(ctl, out)
 }
 
-// runServeStop is the `serve stop` entry point.
-func runServeStop(argv []string) {
-	if wantsHelp(argv) {
-		fmt.Print(serveUsage)
+// RunStop is the `serve stop` entry point.
+func RunStop(argv []string) {
+	if cli.WantsHelp(argv) {
+		fmt.Print(Usage)
 		return
 	}
 	if len(argv) > 0 {
-		fmt.Fprintf(os.Stderr, "pix serve stop: unexpected argument %q\n\n%s", argv[0], serveUsage)
+		fmt.Fprintf(os.Stderr, "pix serve stop: unexpected argument %q\n\n%s", argv[0], Usage)
 		os.Exit(2)
 	}
-	_, err := stopServeAnyMode(managedServiceActive, stopManagedService, defaultServeCtl(), os.Stdout)
+	_, err := StopAnyMode(ManagedActive, StopManaged, DefaultCtl(), os.Stdout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix serve stop: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-// runServeStatus is the `serve status` entry point.
-func runServeStatus(argv []string) {
+// RunStatus is the `serve status` entry point.
+func RunStatus(argv []string) {
 	jsonOut := false
 	for _, a := range argv {
 		switch a {
 		case "-h", "--help":
-			fmt.Print(serveUsage)
+			fmt.Print(Usage)
 			return
 		case "--json":
 			jsonOut = true
 		default:
-			fmt.Fprintf(os.Stderr, "pix serve status: unknown flag %q\n\n%s", a, serveUsage)
+			fmt.Fprintf(os.Stderr, "pix serve status: unknown flag %q\n\n%s", a, Usage)
 			os.Exit(2)
 		}
 	}
-	env := defaultShellEnv()
-	st := resolveServeStatus(defaultServeCtl(), env)
+	env := hostenv.Env{System: sys.Real{}}
+	st := resolveServeStatus(DefaultCtl(), env)
 	printServeStatus(st, os.Stdout, jsonOut)
 }

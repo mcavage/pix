@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"pix/host/config"
+	"pix/host/service"
 )
 
 // runPackSetup runs a pack's required setup contributions after the
@@ -78,7 +79,7 @@ func snapshotAcceptedPackSetup(env shellEnv, p *packInfo, wanted map[string]bool
 	}
 	allBytes := map[string][]byte{}
 	for _, step := range p.Manifest.Setup {
-		data, err := readFileNoSymlink(filepath.Join(p.Root, step.Path))
+		data, err := service.ReadFileNoSymlink(filepath.Join(p.Root, step.Path))
 		if err != nil {
 			return nil, cleanup, fmt.Errorf("setup hook %q could not be snapshotted safely: %w", step.ID, err)
 		}

@@ -257,3 +257,13 @@ func Plural(n int, noun string) string {
 	}
 	return fmt.Sprintf("%d %ss", n, noun)
 }
+
+// UpDown renders a liveness boolean. Trivial, and shared because two renderers
+// disagreeing about the word for "not running" is a real bug class in a
+// diagnostic tool.
+func UpDown(up bool) string {
+	if up {
+		return "up"
+	}
+	return "down"
+}

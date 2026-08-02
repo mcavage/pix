@@ -6,7 +6,7 @@
 // still compiles). Everything around these thin wrappers is unit-tested via
 // the injected serveStarter seams in serve_start.go.
 
-package main
+package service
 
 import (
 	"errors"
@@ -22,11 +22,11 @@ import (
 )
 
 // spawnDetachedServe is the real detached-spawn shim (kept a thin one-liner-ish
-// wrapper like defaultServeCtl's syscalls; everything around it is tested via
+// wrapper like DefaultCtl's syscalls; everything around it is tested via
 // fakes). Setsid gives the child its own session so a terminal close / SIGHUP
 // to the launcher never reaches it. Round 3 (H10): Process.Release() is NO
 // LONGER called here — it is handed to the caller as handle.release(), to be
-// invoked ONLY after ensureServe's recordPid succeeds. Releasing unconditionally
+// invoked ONLY after Ensure's recordPid succeeds. Releasing unconditionally
 // (the old behavior) meant a recordPid failure had no way to Wait()/reap the
 // child after killing it (a released *os.Process can't be waited on), leaking a
 // zombie and giving no confirmation the kill even landed. The launcher records
@@ -82,10 +82,10 @@ func openServeLogFile(logPath string) (*os.File, error) {
 	return f, nil
 }
 
-// readFileNoSymlink reads path via O_NOFOLLOW so the open itself atomically
+// ReadFileNoSymlink reads path via O_NOFOLLOW so the open itself atomically
 // refuses a symlink — there is no separate Lstat-then-open TOCTOU window for
 // an attacker to swap the target in (round 2, H8: tailFileLines' read side).
-func readFileNoSymlink(path string) ([]byte, error) {
+func ReadFileNoSymlink(path string) ([]byte, error) {
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, err
@@ -96,7 +96,7 @@ func readFileNoSymlink(path string) ([]byte, error) {
 
 // tryServeSpawnLock attempts (NON-blocking) the exclusive flock that serializes
 // the spawn decision on config.ServeSpawnLockPath(): two concurrent `pix
-// run`s cannot both fork a daemon. (false, nil) = the lock is busy; ensureServe
+// run`s cannot both fork a daemon. (false, nil) = the lock is busy; Ensure
 // retries under its own deadline (M2), so a wedged holder can never hang the
 // caller. The daemon's own memory-store flock remains the correctness backstop
 // if this lock is ever lost (exotic NFS home).

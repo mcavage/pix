@@ -139,7 +139,7 @@ func TestExecuteReset_MovesConfigAndData(t *testing.T) {
 	}
 
 	if !*called {
-		t.Error("executeReset must stop host services via stopServe")
+		t.Error("executeReset must stop host services via service.Stop")
 	}
 	if exists(p.configDir) {
 		t.Error("config dir should have been moved aside")
@@ -873,7 +873,7 @@ func TestExecuteReset_KeepMemoryReadDirErrorSurfaces(t *testing.T) {
 
 // noToolEnv is a shellEnv with no sbx on PATH, so the executor degrades (prints
 // commands) without touching the host. The serve-stop no longer probes PATH (it
-// is pidfile-based via stopServe), so this env exercises the sbx path only.
+// is pidfile-based via service.Stop), so this env exercises the sbx path only.
 func noToolEnv() shellEnv {
 	return fakeEnv{present: map[string]bool{}, output: map[string]string{}}.env()
 }

@@ -62,6 +62,7 @@ var pkgLayer = map[string]int{
 	"plugin":      layerCapability,
 	"slackoauth":  layerCapability,
 	"workspace":   layerCapability,
+	"service":     layerCapability,
 
 	// L4 — the command layer.
 	"cmd/pix": layerCommand,

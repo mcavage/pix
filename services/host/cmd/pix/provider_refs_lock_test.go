@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"pix/host/sys"
 	"pix/host/sys/systest"
 	"strings"
 	"sync"
@@ -516,7 +517,7 @@ func TestLockAcquisitionErrorSkipsProviderInOfferOnePasswordKeys(t *testing.T) {
 
 // --- real flock: concurrency + no-deadlock ---
 
-// realFileEnv is a shellEnv over REAL temp files with the REAL withFlock and a
+// realFileEnv is a shellEnv over REAL temp files with the REAL sys.Lock and a
 // deliberately lost-update-prone writer (plain WriteFile after a small delay),
 // so unserialized concurrent read-modify-writes would drop keys.
 func realFileEnv(t *testing.T) (shellEnv, string) {
@@ -535,7 +536,7 @@ func realFileEnv(t *testing.T) (shellEnv, string) {
 	}, WriteFileFn: func(p string, d []byte, perm os.FileMode) error {
 		time.Sleep(2 * time.Millisecond) // widen the read..write race window
 		return os.WriteFile(p, d, perm)
-	}, LockFn: withFlock}}
+	}, LockFn: sys.Lock}}
 	if err := os.WriteFile(defaultOpRefsPath(env), []byte("# header\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -1,4 +1,4 @@
-package main
+package service
 
 import (
 	"bytes"
@@ -222,7 +222,7 @@ func TestSystemdInstall(t *testing.T) {
 	}
 	joined := strings.Join(r.calls, "\n")
 	for _, want := range []string{
-		"systemctl --user --version",
+		"systemctl --user --launcher.Version",
 		"systemctl --user daemon-reload",
 		"systemctl --user enable --now pix-serve.service",
 	} {

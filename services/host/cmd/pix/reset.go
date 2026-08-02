@@ -12,6 +12,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/rpc"
+	"pix/host/service"
 	"pix/host/workspace"
 )
 
@@ -407,10 +408,10 @@ func underDir(path, dir string) bool {
 // checking only the memory port would let its db be split mid-move.
 func serveStillUp(env shellEnv) bool {
 
-	if env.DialLocal(servePort(env, "MEMORY_PORT", rpc.MemoryPortDefault)) {
+	if env.DialLocal(service.Port(env, "MEMORY_PORT", rpc.MemoryPortDefault)) {
 		return true
 	}
-	return env.DialLocal(servePort(env, "KNOWLEDGE_PORT", rpc.KnowledgePortDefault))
+	return env.DialLocal(service.Port(env, "KNOWLEDGE_PORT", rpc.KnowledgePortDefault))
 }
 
 // executeReset performs the plan: stop services (best-effort), move each backup
@@ -592,13 +593,13 @@ func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now
 
 // restartServeForReset brings a fresh daemon up after a reset, indirected through
 // a package var so tests can stub it. It loads the (now-default) config and lazy-
-// starts serve; ensureServe is flock-guarded and health-waited.
+// starts serve; service.Ensure is flock-guarded and health-waited.
 var restartServeForReset = func(out io.Writer) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
-	return ensureServe(defaultServeStarter(), cfg, ensureServeOpts{})
+	return service.Ensure(service.DefaultStarter(), cfg, service.EnsureOpts{})
 }
 
 // stopServeForReset is the serve-stop the reset executor uses, indirected through
@@ -606,14 +607,14 @@ var restartServeForReset = func(out io.Writer) error {
 // serve during unit tests). It is MODE-AWARE: a managed service (launchd/systemd)
 // is stopped via its supervisor so KeepAlive/Restart= cannot respawn it mid-reset
 // (which would trip the data-move guard); otherwise it falls through to the
-// pidfile-based stopServe (with its discovery fallback for an orphaned daemon).
+// pidfile-based service.Stop (with its discovery fallback for an orphaned daemon).
 var stopServeForReset = func(out io.Writer) (bool, error) {
-	return stopServeAnyMode(managedServiceActive, stopManagedService, defaultServeCtl(), out)
+	return service.StopAnyMode(service.ManagedActive, service.StopManaged, service.DefaultCtl(), out)
 }
 
 // stopHostServices best-effort stops any running `pix-host serve` so it
 // releases the db files before they move. It delegates to the pidfile-based
-// stopServe (which verifies the pid is ours before signalling); stopServe prints
+// service.Stop (which verifies the pid is ours before signalling); service.Stop prints
 // exactly what it did (stopped / not running / stale / refused). Best-effort: a
 // hard error is reported but never aborts the reset, keeping the "cannot stop, do
 // it yourself" degradation.

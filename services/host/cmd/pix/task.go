@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"pix/host/monitor/tui"
+	"pix/host/sys"
 	"pix/host/workspace"
 	"sort"
 	"strconv"
@@ -299,7 +300,7 @@ func taskLockPath(repokey, name string) string {
 func withTaskLock(repokey, name string, fn func() error) error {
 	// Shared flock helper (serve_start.go) — the same dance the serve spawn lock
 	// uses, factored so it is written once.
-	return withFlock(taskLockPath(repokey, name), fn)
+	return sys.Lock(taskLockPath(repokey, name), fn)
 }
 
 // sanitizeTaskName keeps a task name safe as a path + sandbox-name segment
