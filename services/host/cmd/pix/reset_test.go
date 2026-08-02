@@ -927,7 +927,7 @@ func TestExecuteReset_ClearsRuntimeFilesAndRestarts(t *testing.T) {
 	// sees it down (so the data move isn't blocked and restart runs).
 	firstDial := true
 	env := noToolEnv()
-	fakeOf(env).DialLocalFn = func(int) bool {
+	systest.Of(env.System).DialLocalFn = func(int) bool {
 		if firstDial {
 			firstDial = false
 			return true

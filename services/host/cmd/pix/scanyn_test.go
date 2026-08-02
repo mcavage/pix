@@ -2,18 +2,19 @@ package main
 
 import (
 	"bufio"
+	"pix/host/secret"
 	"strings"
 	"testing"
 )
 
-// scanYN's contract (item 3): (line, ok). ok is false ONLY on a genuine scan
+// secret.ScanYN's contract (item 3): (line, ok). ok is false ONLY on a genuine scan
 // failure (EOF or a Scanner error, including an oversized token past
 // bufio.Scanner's default buffer) — NEVER treated as consent by any caller. A
 // blank (Enter-only) line is a legitimate answer: ok=true, line="".
 
 func TestScanYN_BlankLineIsOkWithEmptyAnswer(t *testing.T) {
 	sc := bufio.NewScanner(strings.NewReader("\n"))
-	line, ok := scanYN(sc)
+	line, ok := secret.ScanYN(sc)
 	if !ok {
 		t.Fatal("a blank line must scan successfully (ok=true)")
 	}
@@ -31,7 +32,7 @@ func TestScanYN_YesAndNoAnswers(t *testing.T) {
 		{"No\n", "no"},
 	} {
 		sc := bufio.NewScanner(strings.NewReader(tc.in))
-		line, ok := scanYN(sc)
+		line, ok := secret.ScanYN(sc)
 		if !ok {
 			t.Fatalf("input %q: expected ok=true", tc.in)
 		}
@@ -43,12 +44,12 @@ func TestScanYN_YesAndNoAnswers(t *testing.T) {
 
 // EOF (no input at all, not even a blank line) is a scan failure, NEVER
 // consent — this is the exact bug the (answer, ok) API replaces: the old
-// bool-returning scanYN(sc, true) collapsed EOF into "return the default",
+// bool-returning secret.ScanYN(sc, true) collapsed EOF into "return the default",
 // which for the reconcile overwrite prompt's default-YES meant a broken/EOF'd
 // stdin was silently read as "yes, replace my sbx secrets".
 func TestScanYN_EOFIsNotConsent(t *testing.T) {
 	sc := bufio.NewScanner(strings.NewReader(""))
-	line, ok := scanYN(sc)
+	line, ok := secret.ScanYN(sc)
 	if ok {
 		t.Fatal("EOF must report ok=false, never true")
 	}
@@ -63,7 +64,7 @@ func TestScanYN_EOFIsNotConsent(t *testing.T) {
 func TestScanYN_OversizedTokenIsScannerErrorNotConsent(t *testing.T) {
 	huge := strings.Repeat("y", 128*1024) // well past bufio.MaxScanTokenSize default use
 	sc := bufio.NewScanner(strings.NewReader(huge))
-	line, ok := scanYN(sc)
+	line, ok := secret.ScanYN(sc)
 	if ok {
 		t.Fatal("an oversized token must report ok=false")
 	}
@@ -79,7 +80,7 @@ func TestScanYN_OversizedTokenIsScannerErrorNotConsent(t *testing.T) {
 func TestScanYN_RepeatedCallsAfterEOFStayFalse(t *testing.T) {
 	sc := bufio.NewScanner(strings.NewReader(""))
 	for i := 0; i < 3; i++ {
-		if _, ok := scanYN(sc); ok {
+		if _, ok := secret.ScanYN(sc); ok {
 			t.Fatalf("call %d: expected ok=false after EOF", i)
 		}
 	}

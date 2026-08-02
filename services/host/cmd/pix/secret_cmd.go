@@ -13,7 +13,12 @@ package main
 // one, required, named in generated help, with kong producing the error.
 
 import (
+	"errors"
+	"fmt"
+	"os"
 	"pix/host/cli"
+	"pix/host/secret"
+	"pix/host/sys"
 )
 
 const secretDescription = `Provider credentials, as 1Password references.
@@ -21,6 +26,23 @@ const secretDescription = `Provider credentials, as 1Password references.
 Pix never stores a secret value: op-refs.env maps ENV_VAR to an op:// reference,
 and the value is resolved just-in-time when a host MCP server is spawned. The
 secret never touches disk or the sandbox.`
+
+// runSecretCmd is the seam between argv and the command contract. The verb
+// tree, its arities and its usage live below; the behaviour lives in
+// pix/host/secret.
+func runSecretCmd(argv []string) {
+	d := &cli.Deps{
+		Sys: sys.Real{}, Out: os.Stdout, Err: os.Stderr,
+		In: os.Stdin, Interactive: cli.IsTTY(os.Stdin),
+	}
+	if err := cli.Run[SecretCmd]("secret", secretDescription, argv, d); err != nil {
+		var silent cli.SilentError
+		if !errors.As(err, &silent) {
+			fmt.Fprintf(os.Stderr, "pix secret: %v\n", err)
+		}
+		os.Exit(cli.ExitCode(err))
+	}
+}
 
 type SecretCmd struct {
 	Ls    SecretLsCmd    `cmd:"" default:"1" help:"List configured references and whether they resolve."`
@@ -33,7 +55,7 @@ type SecretCmd struct {
 type SecretLsCmd struct{}
 
 func (c *SecretLsCmd) Run(d *cli.Deps) error {
-	runSecretLs(defaultShellEnv(), d.Out)
+	secret.RunSecretLs(defaultShellEnv(), d.Out)
 	return nil
 }
 
@@ -47,7 +69,7 @@ type SecretSetCmd struct {
 func (c *SecretSetCmd) Run(d *cli.Deps) error {
 	// A returned error is exit 1: a mirror failure must never leave the CLI
 	// exiting 0 while quietly reporting a shortfall.
-	return runSecretSet(defaultShellEnv(), d.Out, c.EnvVar, c.Ref)
+	return secret.RunSecretSet(defaultShellEnv(), d.Out, c.EnvVar, c.Ref)
 }
 
 type SecretRmCmd struct {
@@ -55,19 +77,19 @@ type SecretRmCmd struct {
 }
 
 func (c *SecretRmCmd) Run(d *cli.Deps) error {
-	return runSecretRm(defaultShellEnv(), d.Out, c.EnvVar)
+	return secret.RunSecretRm(defaultShellEnv(), d.Out, c.EnvVar)
 }
 
 type SecretCheckCmd struct{}
 
 func (c *SecretCheckCmd) Run(d *cli.Deps) error {
-	runSecretCheck(defaultShellEnv(), d.Out)
+	secret.RunSecretCheck(defaultShellEnv(), d.Out)
 	return nil
 }
 
 type SecretSyncCmd struct{}
 
 func (c *SecretSyncCmd) Run(d *cli.Deps) error {
-	runSecretSync(defaultShellEnv(), d.Out)
+	secret.RunSecretSync(defaultShellEnv(), d.Out)
 	return nil
 }

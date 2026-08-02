@@ -17,6 +17,7 @@ import (
 	"pix/host/config"
 	"pix/host/inference"
 	"pix/host/routing"
+	"pix/host/secret"
 )
 
 const directInferenceProbeTimeout = 8 * time.Second
@@ -913,13 +914,13 @@ func verifyDirectInference(cfg *config.Config, env shellEnv) (res probeOutcome, 
 		}
 		provider := c.provider
 		backend := cfg.Inference.Backends[provider]
-		ref, ok := currentOpRef(env, backend.KeyEnv)
+		ref, ok := secret.CurrentOpRef(env, backend.KeyEnv)
 		if !ok {
 			res.Failures = append(res.Failures, provider+": credential ref missing")
 			keyOK[provider] = false
 			continue
 		}
-		key, ok := opReadNonEmpty(env, ref)
+		key, ok := secret.OpReadNonEmpty(env, ref)
 		if !ok {
 			res.Failures = append(res.Failures, provider+": credential could not be resolved")
 			keyOK[provider] = false
@@ -1348,7 +1349,7 @@ func reconcileDirectInference(cfg *config.Config, env shellEnv, in io.Reader, ou
 	}
 	prior := boundNativeProviders(cfg)
 
-	providers, err := hostModeProviderKeys(env)
+	providers, err := secret.HostModeProviderKeys(env)
 	if err != nil {
 		return res, fmt.Errorf("reading configured providers: %w", err)
 	}
@@ -1432,7 +1433,7 @@ func widenRosterForProvider(cfg *config.Config, provider string) {
 // endpoint rather than from a 1Password ref plus a provider API call.
 //
 // It exists because `pix models add` was built entirely around
-// providerKeyRefOrder (anthropic/openai/google), so the ONE backend a user can
+// secret.ProviderKeyRefOrder (anthropic/openai/google), so the ONE backend a user can
 // wire without a credential was the one backend with no post-setup path at all:
 // pulling a new local model or gaining a cloud entitlement left you re-running
 // `pix setup` to make Pix notice.

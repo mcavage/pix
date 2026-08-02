@@ -18,7 +18,9 @@ import (
 
 	"pix/host/config"
 	"pix/host/readiness"
+	"pix/host/secret"
 	"pix/host/slackoauth"
+	"pix/host/sys/systest"
 )
 
 // slackOAuthRuntimeFakeRunner is a slackoauth.CommandRunner for these tests:
@@ -129,8 +131,8 @@ func slackOAuthRegisteredEnv(t *testing.T, f *slackTestEnv, calls *[][]string, m
 	stateDir := t.TempDir()
 	e := f.env()
 	e.HostBinary = func() (string, error) { return "/fake/bin/pix-host", nil }
-	fakeOf(e).StateDirFn = func() (string, error) { return stateDir, nil }
-	fakeOf(e).RunFn = func(name string, args ...string) (string, error) {
+	systest.Of(e.System).StateDirFn = func() (string, error) { return stateDir, nil }
+	systest.Of(e.System).RunFn = func(name string, args ...string) (string, error) {
 		if mu != nil {
 			mu.Lock()
 			*calls = append(*calls, append([]string{name}, args...))
@@ -280,8 +282,8 @@ func TestSlackDisableOAuthOrdering(t *testing.T) {
 	var calls [][]string
 	e := slackOAuthRegisteredEnv(t, f, &calls, &mu)
 	// Wrap env.Run so its calls land in the SAME order log as revoke/op calls.
-	inner := fakeOf(e).RunFn
-	fakeOf(e).RunFn = func(name string, args ...string) (string, error) {
+	inner := systest.Of(e.System).RunFn
+	systest.Of(e.System).RunFn = func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) >= 3 && args[0] == "mcp" && args[1] == "rm" {
 			mu.Lock()
 			order = append(order, "sbx:mcp:rm")
@@ -371,8 +373,8 @@ func TestSlackDisableOAuthRevokeFailureLeavesLocalWiringUntouched(t *testing.T) 
 	if reloaded.Slack.OAuthVaultID == "" || reloaded.Slack.OAuthDocumentID == "" {
 		t.Error("config must be untouched when revoke fails")
 	}
-	for _, r := range parseOpRefs(opRefsFileContent(t)) {
-		if r.key == "SLACK_TEAM_ID" && r.value != "T123" {
+	for _, r := range secret.ParseOpRefs(opRefsFileContent(t)) {
+		if r.Key == "SLACK_TEAM_ID" && r.Value != "T123" {
 			t.Error("identity pin refs must be untouched when revoke fails")
 		}
 	}
@@ -524,9 +526,9 @@ func TestSlackDisableOAuthConfigClearRetainsClientID(t *testing.T) {
 	if mcpConfigured(got, slackServerName) {
 		t.Error("slack must be removed from the configured mcp set")
 	}
-	for _, r := range parseOpRefs(opRefsFileContent(t)) {
-		if r.key == "SLACK_TEAM_ID" || r.key == "SLACK_USER_ID" {
-			t.Errorf("identity pin %s must be removed, got:\n%s", r.key, opRefsFileContent(t))
+	for _, r := range secret.ParseOpRefs(opRefsFileContent(t)) {
+		if r.Key == "SLACK_TEAM_ID" || r.Key == "SLACK_USER_ID" {
+			t.Errorf("identity pin %s must be removed, got:\n%s", r.Key, opRefsFileContent(t))
 		}
 	}
 }
@@ -544,7 +546,7 @@ func TestSlackDisableOAuthNeverRemovesForeignRegistration(t *testing.T) {
 
 	f := &slackTestEnv{sbxPresent: true}
 	e := f.env()
-	fakeOf(e).RunFn = func(name string, args ...string) (string, error) {
+	systest.Of(e.System).RunFn = func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "ls" {
 			return "slack\n", nil
 		}
@@ -681,7 +683,7 @@ func TestSlackOAuthRuntimeFailsClosedWithoutStateDir(t *testing.T) {
 
 	f := &slackTestEnv{sbxPresent: true}
 	e := f.env()
-	fakeOf(e).StateDirFn = func() (string, error) { return "", fmt.Errorf("$HOME could not be determined") }
+	systest.Of(e.System).StateDirFn = func() (string, error) { return "", fmt.Errorf("$HOME could not be determined") }
 
 	_, _, ok := slackOAuthRuntime(cfg, e, slackOAuthRuntimeDeps{runner: &slackOAuthRuntimeFakeRunner{}, clock: slackoauth.SystemClock{}})
 	if ok {

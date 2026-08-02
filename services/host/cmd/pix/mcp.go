@@ -8,12 +8,12 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 
 	"pix/host/config"
 	"pix/host/rpc"
+	"pix/host/secret"
 	"pix/host/workspace"
 )
 
@@ -704,7 +704,7 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 	// Repair the exact malformed prose emitted by Pix 0.1.14 before handing the
 	// file to `op run`; otherwise every wrapped local MCP exits during dotenv
 	// parsing. Unknown malformed content still fails closed in op itself.
-	if err := repairLegacyOpRefsFile(env, defaultOpRefsPath(env)); err != nil {
+	if err := secret.RepairLegacyOpRefsFile(env, secret.DefaultOpRefsPath(env)); err != nil {
 		return fmt.Errorf("repairing op-refs.env: %w", err)
 	}
 
@@ -733,7 +733,7 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 			// local name) can actually use op-refs. Best-effort: seed a template op-refs.env at
 			// the absolute XDG path so the user has a concrete file to fill in later,
 			// and note that we registered bare rather than failing.
-			refsPath := defaultOpRefsPath(env)
+			refsPath := secret.DefaultOpRefsPath(env)
 			// ONE seeder: route through config.SeedOpRefsAt so the template + 0700 dir
 			// / 0600 file + no-clobber rule is identical to `pix setup`'s seeding.
 			if created, err := config.SeedOpRefsAt(refsPath); err == nil && created {
@@ -1047,22 +1047,4 @@ func localMCPNames(env shellEnv, hostResolver func() (string, error)) (map[strin
 		}
 	}
 	return set, true
-}
-
-// defaultOpRefsPath computes the absolute XDG op-refs.env path from the injected
-// env (mirrors config.OpRefsPath but stays hermetic under test): $PIX_CONFIG
-// dir, else $XDG_CONFIG_HOME/pix, else ~/.config/pix — all + op-refs.env.
-// This is the path repo-less hosts must create, so every user-facing message and
-// the seeder reference it (never a meaningless repo-relative config/op-refs.env).
-func defaultOpRefsPath(env shellEnv) string {
-	if p := env.Getenv("PIX_CONFIG"); p != "" {
-		return filepath.Join(filepath.Dir(p), "op-refs.env")
-	}
-	if xdg := env.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		return filepath.Join(xdg, "pix", "op-refs.env")
-	}
-	if home := env.HomeDir(); home != "" {
-		return filepath.Join(home, ".config", "pix", "op-refs.env")
-	}
-	return config.OpRefsPath()
 }

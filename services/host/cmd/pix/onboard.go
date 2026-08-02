@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/workspace"
 )
@@ -344,14 +345,8 @@ func parseOnboardArgs(argv []string) (onboardOpts, error) {
 	return o, nil
 }
 
-// confirmYN reads a [Y/n] answer. def is the answer for a bare Enter.
+// confirmYN moved to cli.ConfirmYN: a y/N prompt is a CLI primitive, and
+// onboard was only its first caller.
 func confirmYN(in io.Reader, out io.Writer, prompt string, def bool) bool {
-	fmt.Fprint(out, prompt)
-	var line string
-	fmt.Fscanln(in, &line)
-	ans := strings.ToLower(strings.TrimSpace(line))
-	if ans == "" {
-		return def
-	}
-	return ans == "y" || ans == "yes"
+	return cli.ConfirmYN(in, out, prompt, def)
 }

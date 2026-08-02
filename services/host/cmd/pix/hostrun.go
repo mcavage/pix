@@ -13,6 +13,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/rpc"
+	"pix/host/secret"
 	"pix/host/workspace"
 )
 
@@ -385,7 +386,7 @@ func runHostSetup(errw *os.File) error {
 	// Tri-state: an unreadable hostmode.env is neither "local-only" nor
 	// "configured" — both would be a confident guess about state we couldn't
 	// actually read. Host mode itself is already provisioned above regardless.
-	keys, kerr := hostModeProviderKeys(env)
+	keys, kerr := secret.HostModeProviderKeys(env)
 	switch {
 	case kerr != nil:
 		fmt.Fprintf(errw, "Cloud keys: credential state unreadable: %v\n", kerr)

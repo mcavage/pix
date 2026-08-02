@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"pix/host/readiness"
+	"pix/host/secret"
 	"regexp"
 	"strings"
 
@@ -119,7 +120,7 @@ func gogSpawnCheck(env shellEnv, res probeResult, readyDetail, noToolsDetail str
 		return readiness.Check{Label: "headless spawn", Verdict: readiness.VerdictTodo,
 			Detail:   noToolsDetail,
 			Evidence: "--list-tools exited cleanly with an empty tool list",
-			Todo:     "add GOG_KEYRING_BACKEND=file + GOG_KEYRING_PASSWORD + GOG_ACCOUNT + GOG_HOME to " + defaultOpRefsPath(env)}
+			Todo:     "add GOG_KEYRING_BACKEND=file + GOG_KEYRING_PASSWORD + GOG_ACCOUNT + GOG_HOME to " + secret.DefaultOpRefsPath(env)}
 	case probeDeniedByPolicy:
 		return readiness.Check{Label: "headless spawn", Verdict: readiness.VerdictDenied,
 			Detail:   "the spawn was positively refused by policy/permission — an organizational denial, not a setup gap",

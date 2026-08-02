@@ -307,7 +307,7 @@ func TestProvidersGroup_RenderZeroConfirmed_OneTodoLine(t *testing.T) {
 // sbxSecretLsScript writes a fake `sbx` on the given dir's PATH that answers
 // ONLY `secret ls` (with the given output/exit code) and no-ops everything
 // else (0, empty), so a real subprocess run of runDoctorCmd can exercise the
-// exact tri-state sbxModelKeyState/probeSbxSecrets share, without a real sbx
+// exact tri-state sbxModelKeyState/secret.ProbeSbxSecrets share, without a real sbx
 // install.
 func sbxSecretLsScript(t *testing.T, dir, output string, exitCode int) {
 	t.Helper()

@@ -18,6 +18,7 @@ import (
 
 	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/secret"
 )
 
 // addKeyedProvider and addOllamaProvider are the two shapes a provider comes
@@ -39,12 +40,12 @@ func addKeyedProvider(d *cli.Deps, cfg *config.Config, env shellEnv, provider st
 		return fmt.Errorf("the active pack (%s) owns inference on this host, so a provider key cannot be wired in.\n"+
 			"  The key itself is still worth storing now: pix secret set %s op://vault/item/field\n"+
 			"  It gets wired the moment the pack stops being the exclusive source (`pix pack rm`, or a pack that does not claim inference).",
-			cfg.Inference.ExclusiveSource, p.envVar)
+			cfg.Inference.ExclusiveSource, p.EnvVar)
 	}
-	if _, hasRef := currentOpRef(env, p.envVar); !hasRef {
+	if _, hasRef := secret.CurrentOpRef(env, p.EnvVar); !hasRef {
 		if !d.Interactive {
 			return fmt.Errorf("no 1Password ref for %s yet, and there is no terminal to ask on.\n"+
-				"  pix secret set %s op://vault/item/field && pix models add %s", p.name, p.envVar, p.name)
+				"  pix secret set %s op://vault/item/field && pix models add %s", p.Name, p.EnvVar, p.Name)
 		}
 		if err := ensureSetupPrereqsFor(env, d.In, d.Out, d.Interactive, true); err != nil {
 			return err
@@ -53,18 +54,18 @@ func addKeyedProvider(d *cli.Deps, cfg *config.Config, env shellEnv, provider st
 		if !ok {
 			return cli.SilentError{Code: 1}
 		}
-		if err := runSecretSet(env, d.Out, p.envVar, ref); err != nil {
+		if err := secret.RunSecretSet(env, d.Out, p.EnvVar, ref); err != nil {
 			return cli.SilentError{Code: 1}
 		}
 	}
-	res, err := reconcileDirectInference(cfg, env, d.In, d.Out, d.Interactive, "", p.name)
+	res, err := reconcileDirectInference(cfg, env, d.In, d.Out, d.Interactive, "", p.Name)
 	if err != nil {
 		return err
 	}
-	renderModelsAdd(d.Out, p.name, res)
+	renderModelsAdd(d.Out, p.Name, res)
 	// The sandbox reads the credential from sbx, not from this host's refs file,
 	// so a key that never reaches sbx is wired for host mode only.
-	runSecretSync(env, d.Out)
+	secret.RunSecretSync(env, d.Out)
 	return nil
 }
 
@@ -141,13 +142,13 @@ func renderModelsAdd(out io.Writer, provider string, res reconcileResult) {
 }
 
 // providerNames is what `models add` accepts, which is NOT the same list as
-// providerKeyRefOrder: ollama is a provider you can add and has no key ref, and
+// secret.ProviderKeyRefOrder: ollama is a provider you can add and has no key ref, and
 // leaving it out of the error message is how a user concludes it cannot be
 // added at all.
 func providerNames() []string {
-	names := make([]string, 0, len(providerKeyRefOrder)+1)
-	for _, p := range providerKeyRefOrder {
-		names = append(names, p.name)
+	names := make([]string, 0, len(secret.ProviderKeyRefOrder)+1)
+	for _, p := range secret.ProviderKeyRefOrder {
+		names = append(names, p.Name)
 	}
 	names = append(names, "ollama")
 	sort.Strings(names)
@@ -157,17 +158,17 @@ func providerNames() []string {
 // providerByName accepts the provider name, its env var, and the obvious alias
 // (gemini for google), so a user who read the key name in a doc is not told
 // their own credential's name is wrong.
-func providerByName(raw string) (struct{ envVar, name string }, bool) {
+func providerByName(raw string) (secret.ProviderKeyRef, bool) {
 	want := strings.ToLower(strings.TrimSpace(raw))
 	if want == "gemini" {
 		want = "google"
 	}
-	for _, p := range providerKeyRefOrder {
-		if want == p.name || strings.EqualFold(want, p.envVar) {
+	for _, p := range secret.ProviderKeyRefOrder {
+		if want == p.Name || strings.EqualFold(want, p.EnvVar) {
 			return p, true
 		}
 	}
-	return struct{ envVar, name string }{}, false
+	return secret.ProviderKeyRef{}, false
 }
 
 func modelsAddUsage() string {
@@ -214,7 +215,7 @@ func unwiredProviderKeys(cfg *config.Config, env shellEnv) []string {
 	if cfg == nil || cfg.Inference.ExclusiveSource != "" {
 		return nil
 	}
-	names, err := hostModeProviderKeys(env)
+	names, err := secret.HostModeProviderKeys(env)
 	if err != nil || len(names) == 0 {
 		return nil
 	}

@@ -28,6 +28,7 @@ import (
 	"os"
 	"pix/host/hostenv"
 	"pix/host/readiness"
+	"pix/host/secret"
 	"strings"
 	"time"
 
@@ -468,7 +469,7 @@ func slackSetup(env shellEnv, opts slackSetupOpts, in io.Reader, out io.Writer, 
 // failed live auth.test, or a declined confirmation all leave op-refs.env,
 // the sbx gateway, and config.toml completely untouched.
 func slackSetupStatic(env shellEnv, opts slackSetupOpts, in io.Reader, out io.Writer, tty bool, hostResolver func() (string, error)) error {
-	ref := normalizeOpRef(strings.TrimSpace(opts.tokenRef))
+	ref := secret.NormalizeOpRef(strings.TrimSpace(opts.tokenRef))
 	if !strings.HasPrefix(ref, "op://") {
 		return fmt.Errorf("--token-ref must be an op://vault/item/field reference — " +
 			"pix never accepts or stores a pasted token directly")
@@ -495,7 +496,7 @@ func slackSetupStatic(env shellEnv, opts slackSetupOpts, in io.Reader, out io.Wr
 	if err != nil {
 		return err
 	}
-	token, ok := opReadNonEmpty(env, ref)
+	token, ok := secret.OpReadNonEmpty(env, ref)
 	if !ok {
 		return fmt.Errorf("could not resolve --token-ref via op read; check the reference and that op is signed in")
 	}
@@ -525,13 +526,13 @@ func slackSetupStatic(env shellEnv, opts slackSetupOpts, in io.Reader, out io.Wr
 		}
 	}
 
-	if err := runSecretSet(env, out, "SLACK_TOKEN", ref); err != nil {
+	if err := secret.RunSecretSet(env, out, "SLACK_TOKEN", ref); err != nil {
 		return fmt.Errorf("writing SLACK_TOKEN: %w", err)
 	}
-	if err := runSecretSet(env, out, "SLACK_TEAM_ID", id.TeamID); err != nil {
+	if err := secret.RunSecretSet(env, out, "SLACK_TEAM_ID", id.TeamID); err != nil {
 		return fmt.Errorf("writing SLACK_TEAM_ID: %w", err)
 	}
-	if err := runSecretSet(env, out, "SLACK_USER_ID", id.UserID); err != nil {
+	if err := secret.RunSecretSet(env, out, "SLACK_USER_ID", id.UserID); err != nil {
 		return fmt.Errorf("writing SLACK_USER_ID: %w", err)
 	}
 
@@ -593,12 +594,12 @@ func runSlackStatusCmd(argv []string) {
 // values straight out of op-refs.env content — they are allowlisted
 // non-secret literals (config.NonSecretOpRefsKeys), never op:// refs.
 func slackIdentityPins(content string) (teamID, userID string) {
-	for _, r := range parseOpRefs(content) {
-		switch r.key {
+	for _, r := range secret.ParseOpRefs(content) {
+		switch r.Key {
 		case "SLACK_TEAM_ID":
-			teamID = r.value
+			teamID = r.Value
 		case "SLACK_USER_ID":
-			userID = r.value
+			userID = r.Value
 		}
 	}
 	return
@@ -640,13 +641,13 @@ func slackStatus(cfg *config.Config, env shellEnv, out io.Writer, now time.Time)
 // before calling it), so it can never demand SLACK_TOKEN when OAuth is what
 // is actually configured.
 func slackStaticStatusChecks(env shellEnv) []readiness.Check {
-	path, content, exists := opRefsContent(env)
+	path, content, exists := secret.OpRefsContent(env)
 	var ref string
 	var refFilled bool
 	if exists {
-		for _, r := range parseOpRefs(content) {
-			if r.key == "SLACK_TOKEN" {
-				ref, refFilled = r.value, r.isRef && !r.placeholder
+		for _, r := range secret.ParseOpRefs(content) {
+			if r.Key == "SLACK_TOKEN" {
+				ref, refFilled = r.Value, r.IsRef && !r.Placeholder
 			}
 		}
 	}
@@ -668,7 +669,7 @@ func slackStaticStatusChecks(env shellEnv) []readiness.Check {
 	var id slackIdentity
 	haveIdentity := false
 	if refFilled {
-		token, ok := opReadNonEmpty(env, ref)
+		token, ok := secret.OpReadNonEmpty(env, ref)
 		switch {
 		case !ok:
 			checks = append(checks, readiness.Check{Label: "resolution", Verdict: readiness.VerdictUnverifiable,
@@ -808,11 +809,11 @@ func slackDisable(cfg *config.Config, env shellEnv, out io.Writer) error {
 // SLACK_TOKEN/SLACK_TEAM_ID/SLACK_USER_ID refs. It never revokes the token
 // at Slack — see the printed notice at the end.
 func slackDisableStatic(cfg *config.Config, env shellEnv, out io.Writer) error {
-	_, content, exists := opRefsContent(env)
+	_, content, exists := secret.OpRefsContent(env)
 	hasManagedRef := false
 	if exists {
-		for _, r := range parseOpRefs(content) {
-			switch r.key {
+		for _, r := range secret.ParseOpRefs(content) {
+			switch r.Key {
 			case "SLACK_TOKEN", "SLACK_TEAM_ID", "SLACK_USER_ID":
 				hasManagedRef = true
 			}
@@ -853,7 +854,7 @@ func slackDisableStatic(cfg *config.Config, env shellEnv, out io.Writer) error {
 	}
 
 	for _, key := range []string{"SLACK_TOKEN", "SLACK_TEAM_ID", "SLACK_USER_ID"} {
-		if err := runSecretRm(env, out, key); err != nil {
+		if err := secret.RunSecretRm(env, out, key); err != nil {
 			return fmt.Errorf("removing %s: %w", key, err)
 		}
 	}

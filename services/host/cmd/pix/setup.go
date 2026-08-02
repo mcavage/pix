@@ -28,6 +28,7 @@ import (
 	"io"
 	"os"
 	"pix/host/readiness"
+	"pix/host/secret"
 	"strings"
 
 	"pix/host/config"
@@ -691,7 +692,7 @@ func setupMutationSteps(env shellEnv, inv setupInventory, opts onboardOpts, in i
 			// The ONLY mutation that may write to the real terminal: on a TTY
 			// it collects the mandatory op:// refs, and on failure it prints
 			// exactly what is wrong. It prints no ✓ — the keys row in the
-			// report comes from hostModeProviderKeys AFTER this ran.
+			// report comes from secret.HostModeProviderKeys AFTER this ran.
 			if !setupProvisionKeysFn(env, in, out, interactive, opts.assumeYes) {
 				return fmt.Errorf("provider keys not fully configured — follow the fix printed above")
 			}
@@ -944,9 +945,9 @@ func syncGitHubCredentialFromHost(env shellEnv) error {
 	if err == nil {
 		return nil
 	}
-	detail := redactSecretValue(strings.TrimSpace(firstLine(out)), token)
+	detail := secret.RedactSecretValue(strings.TrimSpace(secret.FirstLine(out)), token)
 	if detail == "" {
-		detail = redactSecretValue(err.Error(), token)
+		detail = secret.RedactSecretValue(err.Error(), token)
 	}
 	return fmt.Errorf("sbx secret set github failed: %s", detail)
 }
@@ -1160,7 +1161,7 @@ func setupProvidersAxis(cfg *config.Config, env shellEnv) []readiness.Check {
 		return []readiness.Check{{Label: "inference", Requirement: readiness.RequirementCore, Verdict: readiness.VerdictTodo,
 			Detail: "no callable model", Evidence: "configured bindings have no successful probe"}}
 	}
-	names, err := hostModeProviderKeys(env)
+	names, err := secret.HostModeProviderKeys(env)
 	switch {
 	case err != nil:
 		return []readiness.Check{{Label: "provider keys", Requirement: readiness.RequirementCore, Verdict: readiness.VerdictUnverifiable,
@@ -1183,7 +1184,7 @@ func setupSelectRunnableIntent(cfg *config.Config, env shellEnv) bool {
 	if cfg == nil || cfg.RunIntent != config.DefaultRunIntent {
 		return false
 	}
-	names, err := hostModeProviderKeys(env)
+	names, err := secret.HostModeProviderKeys(env)
 	if err != nil || len(names) != 1 {
 		return false
 	}
@@ -1256,7 +1257,7 @@ const providerKeyPromptAttempts = 3
 // validated. When none exists, an interactive setup asks which ONE provider to
 // configure and then collects that provider's ref. One provider is enough to
 // run Pix; additional providers can be added later with `pix secret set`.
-//   - a ref already configured (op-refs.env OR hostmode.env, via currentOpRef)
+//   - a ref already configured (op-refs.env OR hostmode.env, via secret.CurrentOpRef)
 //     is CONFIRMED, not re-solicited — but it still must resolve via `op read`
 //     to a non-empty value; a broken existing ref fails setup outright.
 //   - a ref with NO configuration yet, on an interactive TTY, is prompted for
@@ -1270,7 +1271,7 @@ const providerKeyPromptAttempts = 3
 // (sandbox) and hostmode.env (host mode); setup then verifies they all landed
 // in hostmode.env.
 //
-// Step 3 (reconcile sbx): reconcileProviderKeysWithSbx brings sbx to the same
+// Step 3 (reconcile sbx): secret.ReconcileProviderKeysWithSbx brings sbx to the same
 // state as the validated refs, fed the Step-1 snapshot. A reconcile failure
 // fails setup. Step 4 (final probe) requires every configured key usable in sbx.
 //
@@ -1294,16 +1295,16 @@ func setupProvisionKeys(env shellEnv, in io.Reader, out io.Writer, interactive, 
 func runStrictProviderKeyFlow(env shellEnv, sc *bufio.Scanner, out io.Writer, interactive, assumeYes bool) bool {
 	fmt.Fprintln(out, "")
 
-	if !opInstalled(env) {
+	if !secret.OpInstalled(env) {
 		fmt.Fprintln(out, "1Password provider setup requires the `op` CLI, but it isn't installed.")
 		fmt.Fprintln(out, "  fix: brew install 1password-cli   (or https://developer.1password.com/docs/cli/)")
 		fmt.Fprintln(out, "then re-run the same setup command.")
 		return false
 	}
-	if !opSignedIn(env) {
+	if !secret.OpSignedIn(env) {
 		if interactive {
 			fmt.Fprintln(out, "1Password needs authorization. Continuing with the official `op signin` flow.")
-			if err := env.RunInteractive("op", "signin"); err == nil && opSignedIn(env) {
+			if err := env.RunInteractive("op", "signin"); err == nil && secret.OpSignedIn(env) {
 				// Continue directly into provider selection. No separate user command
 				// or Pix identity is introduced.
 			} else {
@@ -1325,11 +1326,11 @@ func runStrictProviderKeyFlow(env shellEnv, sc *bufio.Scanner, out io.Writer, in
 	// verification, and the sbx reconciliation + synced-ref metadata. A lock
 	// acquisition failure fails setup honestly — never proceed unlocked.
 	ok := false
-	if lerr := withProviderRefsLock(env, func() error {
+	if lerr := secret.WithProviderRefsLock(env, func() error {
 		ok = strictProviderKeyFlowLocked(env, sc, out, interactive, assumeYes)
 		return nil
 	}); lerr != nil {
-		fmt.Fprintf(out, "  \u2717 could not lock provider refs (%s): %v — another pix credential operation may hold it; fix that and re-run the same setup command.\n", providerRefsLockPath(env), lerr)
+		fmt.Fprintf(out, "  \u2717 could not lock provider refs (%s): %v — another pix credential operation may hold it; fix that and re-run the same setup command.\n", secret.ProviderRefsLockPath(env), lerr)
 		return false
 	}
 	return ok
@@ -1343,21 +1344,21 @@ func strictProviderKeyFlowLocked(env shellEnv, sc *bufio.Scanner, out io.Writer,
 	// op:// ref — every entry validated AND canonical-written to both files
 	// below); resolved caches each provider's validated op-read value so
 	// reconcile never pays for a second `op read` of the same ref.
-	refs := make(map[string]string, len(providerKeyRefOrder))
-	resolved := make(map[string]string, len(providerKeyRefOrder))
-	configured := make([]struct{ envVar, name string }, 0, len(providerKeyRefOrder))
-	for _, p := range providerKeyRefOrder {
-		if _, ok := currentOpRef(env, p.envVar); ok {
+	refs := make(map[string]string, len(secret.ProviderKeyRefOrder))
+	resolved := make(map[string]string, len(secret.ProviderKeyRefOrder))
+	configured := make([]secret.ProviderKeyRef, 0, len(secret.ProviderKeyRefOrder))
+	for _, p := range secret.ProviderKeyRefOrder {
+		if _, ok := secret.CurrentOpRef(env, p.EnvVar); ok {
 			configured = append(configured, p)
 		}
 	}
 	if len(configured) == 0 {
 		if !interactive {
 			fmt.Fprintln(out, "No model provider is configured. Add any ONE provider:")
-			for _, p := range providerKeyRefOrder {
+			for _, p := range secret.ProviderKeyRefOrder {
 				// No terminal here, so `pix models add` cannot collect a ref: it would
 				// exit 2 pointing back at this command. Lead with the scripted form.
-				fmt.Fprintf(out, "  pix secret set %s op://Vault/Item/field  # %s\n", p.envVar, p.name)
+				fmt.Fprintf(out, "  pix secret set %s op://Vault/Item/field  # %s\n", p.EnvVar, p.Name)
 			}
 			fmt.Fprintln(out, "then re-run: pix setup   (or, on a terminal: pix models add <provider>)")
 			return false
@@ -1370,27 +1371,27 @@ func strictProviderKeyFlowLocked(env shellEnv, sc *bufio.Scanner, out io.Writer,
 	}
 
 	for _, p := range configured {
-		ref, hasRef := currentOpRef(env, p.envVar)
+		ref, hasRef := secret.CurrentOpRef(env, p.EnvVar)
 		switch {
 		case hasRef:
-			val, ok := opReadNonEmpty(env, ref)
+			val, ok := secret.OpReadNonEmpty(env, ref)
 			if !ok {
-				fmt.Fprintf(out, "  %s \u2717 configured 1Password ref does not resolve (op read failed or empty)\n", p.name)
-				fmt.Fprintf(out, "    fix it: pix secret set %s op://Vault/Item/field\n", p.envVar)
+				fmt.Fprintf(out, "  %s \u2717 configured 1Password ref does not resolve (op read failed or empty)\n", p.Name)
+				fmt.Fprintf(out, "    fix it: pix secret set %s op://Vault/Item/field\n", p.EnvVar)
 				return false
 			}
-			// currentOpRef may have found this ref in EITHER file (op-refs.env OR
+			// secret.CurrentOpRef may have found this ref in EITHER file (op-refs.env OR
 			// hostmode.env), not necessarily both. Idempotently upsert it into BOTH
 			// here — a no-op where it already matches — and FAIL setup if either
 			// write errors, rather than silently backfilling one file and calling
 			// that success (the bug: a ref found only in hostmode.env must not be
 			// allowed to leave op-refs.env permanently missing it).
-			if err := writeOpRefQuietLocked(env, p.envVar, ref); err != nil {
-				fmt.Fprintf(out, "  %s \u2717 could not write ref to op-refs.env: %v\n", p.name, err)
+			if err := secret.WriteOpRefQuietLocked(env, p.EnvVar, ref); err != nil {
+				fmt.Fprintf(out, "  %s \u2717 could not write ref to op-refs.env: %v\n", p.Name, err)
 				return false
 			}
-			if err := writeOpRefFileQuietLocked(env, hostModeRefsPath(env), p.envVar, ref); err != nil {
-				fmt.Fprintf(out, "  %s \u2717 could not write ref to hostmode.env: %v\n", p.name, err)
+			if err := secret.WriteOpRefFileQuietLocked(env, secret.HostModeRefsPath(env), p.EnvVar, ref); err != nil {
+				fmt.Fprintf(out, "  %s \u2717 could not write ref to hostmode.env: %v\n", p.Name, err)
 				return false
 			}
 			// No ✓ here on purpose (AC-P0-302): the keys step runs in the
@@ -1398,23 +1399,23 @@ func strictProviderKeyFlowLocked(env shellEnv, sc *bufio.Scanner, out io.Writer,
 			// setup's report is rendered from a post-mutation read of
 			// hostmode.env, so a run whose key writes fail cannot have
 			// printed a green line for them earlier.
-			refs[p.envVar] = ref
-			resolved[p.envVar] = val
+			refs[p.EnvVar] = ref
+			resolved[p.EnvVar] = val
 		case interactive:
 			ref, val, ok := promptProviderRef(env, sc, out, p)
 			if !ok {
 				return false
 			}
-			if err := writeOpRefQuietLocked(env, p.envVar, ref); err != nil {
-				fmt.Fprintf(out, "  %s \u2717 could not save ref: %v\n", p.name, err)
+			if err := secret.WriteOpRefQuietLocked(env, p.EnvVar, ref); err != nil {
+				fmt.Fprintf(out, "  %s \u2717 could not save ref: %v\n", p.Name, err)
 				return false
 			}
-			if err := writeOpRefFileQuietLocked(env, hostModeRefsPath(env), p.envVar, ref); err != nil {
-				fmt.Fprintf(out, "  %s \u2717 could not save host-mode ref: %v\n", p.name, err)
+			if err := secret.WriteOpRefFileQuietLocked(env, secret.HostModeRefsPath(env), p.EnvVar, ref); err != nil {
+				fmt.Fprintf(out, "  %s \u2717 could not save host-mode ref: %v\n", p.Name, err)
 				return false
 			}
-			refs[p.envVar] = ref
-			resolved[p.envVar] = val
+			refs[p.EnvVar] = ref
+			resolved[p.EnvVar] = val
 		default:
 			// Only reachable for the one provider selected above.
 			return false
@@ -1425,7 +1426,7 @@ func strictProviderKeyFlowLocked(env shellEnv, sc *bufio.Scanner, out io.Writer,
 	// there is no reread-and-remirror pass here — just the final membership
 	// verification that every configured provider landed in hostmode.env (host mode reads ONLY
 	// hostmode.env via `op run --env-file`, never op-refs.env).
-	got, kerr := hostModeProviderKeys(env)
+	got, kerr := secret.HostModeProviderKeys(env)
 	if kerr != nil {
 		fmt.Fprintf(out, "  \u2717 credential state unreadable: %v\n", kerr)
 		return false
@@ -1435,32 +1436,32 @@ func strictProviderKeyFlowLocked(env shellEnv, sc *bufio.Scanner, out io.Writer,
 		gotSet[name] = true
 	}
 	for _, p := range configured {
-		if !gotSet[p.name] {
-			fmt.Fprintf(out, "  \u2717 hostmode.env is missing configured provider %s after mirroring\n", p.name)
+		if !gotSet[p.Name] {
+			fmt.Fprintf(out, "  \u2717 hostmode.env is missing configured provider %s after mirroring\n", p.Name)
 			return false
 		}
 	}
 
-	if !reconcileProviderKeysWithSbx(env, sc, out, interactive, assumeYes, refs, resolved) {
+	if !secret.ReconcileProviderKeysWithSbx(env, sc, out, interactive, assumeYes, refs, resolved) {
 		return false
 	}
 
 	// Tri-state: only abort setup when we can POSITIVELY confirm sbx is missing
-	// a key (sbxSecretsOK). sbx being entirely ABSENT is portability — fail
+	// a key (secret.SbxSecretsOK). sbx being entirely ABSENT is portability — fail
 	// open, we can't tell. sbx being installed but the check command FAILING is
 	// a real, diagnosable problem — fail CLOSED with a message, never silently
 	// pass a box whose completeness we couldn't actually verify.
-	sbxOut, state := probeSbxSecrets(env)
+	sbxOut, state := secret.ProbeSbxSecrets(env)
 	switch state {
-	case sbxSecretsAbsent:
+	case secret.SbxSecretsAbsent:
 		return true
-	case sbxSecretsError:
+	case secret.SbxSecretsError:
 		fmt.Fprintln(out, "  \u2717 could not verify sbx has the configured provider keys (`sbx secret ls` failed) \u2014 check sbx and re-run the same setup command")
 		return false
 	}
-	for _, p := range providerKeyRefOrder {
-		if _, configured := refs[p.envVar]; configured && !grepWord(sbxOut, p.name) {
-			fmt.Fprintf(out, "  \u2717 sbx is missing configured provider %s after reconciliation\n", p.name)
+	for _, p := range secret.ProviderKeyRefOrder {
+		if _, configured := refs[p.EnvVar]; configured && !grepWord(sbxOut, p.Name) {
+			fmt.Fprintf(out, "  \u2717 sbx is missing configured provider %s after reconciliation\n", p.Name)
 			return false
 		}
 	}
@@ -1470,8 +1471,8 @@ func strictProviderKeyFlowLocked(env shellEnv, sc *bufio.Scanner, out io.Writer,
 // promptProviderChoice keeps first-run setup to one decision and one ref. It
 // accepts either the displayed number or provider name and defaults to OpenAI,
 // matching Pix's default overlord route.
-func promptProviderChoice(sc *bufio.Scanner, out io.Writer) (struct{ envVar, name string }, bool) {
-	empty := struct{ envVar, name string }{}
+func promptProviderChoice(sc *bufio.Scanner, out io.Writer) (secret.ProviderKeyRef, bool) {
+	empty := secret.ProviderKeyRef{}
 	fmt.Fprintln(out, "One model provider is enough to start.")
 	// Name the literal command. "You can add others later" was true and useless:
 	// the only later path was `pix secret set`, which stores a ref and stops, so
@@ -1498,8 +1499,8 @@ func promptProviderChoice(sc *bufio.Scanner, out io.Writer) (struct{ envVar, nam
 		fmt.Fprintf(out, "  unknown provider %q; choose 1, 2, or 3 and re-run setup\n", choice)
 		return empty, false
 	}
-	for _, p := range providerKeyRefOrder {
-		if p.envVar == envVar {
+	for _, p := range secret.ProviderKeyRefOrder {
+		if p.EnvVar == envVar {
 			return p, true
 		}
 	}
@@ -1512,31 +1513,31 @@ func promptProviderChoice(sc *bufio.Scanner, out io.Writer) (struct{ envVar, nam
 // the resolved value. Empty input or EOF is a hard failure (a key is
 // mandatory, not optional to skip); an invalid or unresolvable ref explains
 // why and reprompts, up to providerKeyPromptAttempts, then fails.
-func promptProviderRef(env shellEnv, sc *bufio.Scanner, out io.Writer, p struct{ envVar, name string }) (ref, value string, ok bool) {
+func promptProviderRef(env shellEnv, sc *bufio.Scanner, out io.Writer, p secret.ProviderKeyRef) (ref, value string, ok bool) {
 	for attempt := 1; attempt <= providerKeyPromptAttempts; attempt++ {
-		fmt.Fprintf(out, "  %s: paste a 1Password ref (op://Vault/Item/field): ", p.name)
+		fmt.Fprintf(out, "  %s: paste a 1Password ref (op://Vault/Item/field): ", p.Name)
 		if !sc.Scan() {
 			fmt.Fprintln(out, "")
-			fmt.Fprintf(out, "  %s: no input — a 1Password ref is required; setup cannot continue.\n", p.name)
+			fmt.Fprintf(out, "  %s: no input — a 1Password ref is required; setup cannot continue.\n", p.Name)
 			return "", "", false
 		}
-		ref = normalizeOpRef(sc.Text())
+		ref = secret.NormalizeOpRef(sc.Text())
 		if ref == "" {
-			fmt.Fprintf(out, "    a ref is required for %s (it is not optional) — try again.\n", p.name)
+			fmt.Fprintf(out, "    a ref is required for %s (it is not optional) — try again.\n", p.Name)
 			continue
 		}
 		if !validOpRefSyntax(ref) {
 			fmt.Fprintln(out, "    not a valid op:// ref (want op://Vault/Item/field) — try again.")
 			continue
 		}
-		val, resolves := opReadNonEmpty(env, ref)
+		val, resolves := secret.OpReadNonEmpty(env, ref)
 		if !resolves {
-			fmt.Fprintf(out, "    could not resolve that ref for %s via `op read` (check the vault/item/field) — try again.\n", p.name)
+			fmt.Fprintf(out, "    could not resolve that ref for %s via `op read` (check the vault/item/field) — try again.\n", p.Name)
 			continue
 		}
 		return ref, val, true
 	}
-	fmt.Fprintf(out, "  %s: too many invalid attempts — aborting setup.\n", p.name)
+	fmt.Fprintf(out, "  %s: too many invalid attempts — aborting setup.\n", p.Name)
 	return "", "", false
 }
 
@@ -1548,7 +1549,7 @@ func validOpRefSyntax(ref string) bool {
 	if !strings.HasPrefix(ref, "op://") {
 		return false
 	}
-	if hasPlaceholder(ref) {
+	if secret.HasPlaceholder(ref) {
 		return false
 	}
 	for _, r := range ref {
@@ -1557,32 +1558,6 @@ func validOpRefSyntax(ref string) bool {
 		}
 	}
 	return true
-}
-
-// currentOpRef returns the current FILLED op:// ref for a provider env var. It
-// checks op-refs.env (sandbox) AND hostmode.env (host mode): a ref given via
-// EITHER path counts, so setup never re-prompts for a ref the user already
-// provided in one file but not the other. Pure/read-only — it does NOT write
-// anything: a ref found only in hostmode.env is backfilled into op-refs.env by
-// the caller (setupProvisionKeys' hasRef branch), which writes to BOTH files
-// and fails setup outright if either write errors, rather than this function
-// doing a silent best-effort backfill whose failure nobody checks.
-func currentOpRef(env shellEnv, envVar string) (string, bool) {
-	if _, content, exists := opRefsContent(env); exists {
-		for _, r := range parseOpRefs(content) {
-			if r.key == envVar && r.isRef && !r.placeholder {
-				return r.value, true
-			}
-		}
-	}
-	if content, err := env.ReadFile(hostModeRefsPath(env)); err == nil {
-		for _, r := range parseOpRefs(content) {
-			if r.key == envVar && r.isRef && !r.placeholder {
-				return r.value, true
-			}
-		}
-	}
-	return "", false
 }
 
 // identityMemory is the slice of the memory client seedIdentity needs,

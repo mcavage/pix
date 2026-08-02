@@ -30,7 +30,7 @@ func ollamaListEnv(tags []string, _ string, totalGB float64) shellEnv {
 	for _, tag := range tags {
 		rows += tag + " abc 1GB - now\n"
 	}
-	fakeOf(env).RunTimedFn = func(name string, args ...string) (string, bool, error) {
+	systest.Of(env.System).RunTimedFn = func(name string, args ...string) (string, bool, error) {
 		switch name {
 		case "ollama":
 			return rows, false, nil
@@ -39,7 +39,7 @@ func ollamaListEnv(tags []string, _ string, totalGB float64) shellEnv {
 		}
 		return "", false, fmt.Errorf("unexpected command %s", name)
 	}
-	fakeOf(env).ReadFileFn = func(path string) (string, error) {
+	systest.Of(env.System).ReadFileFn = func(path string) (string, error) {
 		if path == "/proc/meminfo" {
 			return fmt.Sprintf("MemTotal: %d kB\n", int64(totalGB*bytesPerGB/1024)), nil
 		}
@@ -726,8 +726,8 @@ func TestEmptyOllamaSelectionPersistsNothing(t *testing.T) {
 			// one, and the 24 GB floor is a TOTAL-RAM rule, so it fires identically
 			// whichever usable-fraction applies.
 			env := hwMemEnv(t, runtime.GOOS, tc.totalGB)
-			base := fakeOf(env).RunFn
-			fakeOf(env).RunFn = func(name string, args ...string) (string, error) {
+			base := systest.Of(env.System).RunFn
+			systest.Of(env.System).RunFn = func(name string, args ...string) (string, error) {
 				if name == "ollama" && len(args) == 1 && args[0] == "list" {
 					return tc.listing, nil
 				}

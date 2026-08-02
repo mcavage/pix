@@ -25,7 +25,7 @@ func ollamaAddEnv(t *testing.T, tags []string, totalGB float64, endpoint string)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fakeOf(env).GetenvFn = func(k string) string {
+	systest.Of(env.System).GetenvFn = func(k string) string {
 		if k == "OLLAMA_HOST" {
 			return u.Host
 		}
@@ -43,7 +43,7 @@ func ollamaAddEnv(t *testing.T, tags []string, totalGB float64, endpoint string)
 // TestModelsAddAcceptsOllama is the reported bug, verbatim: `pix models add
 // ollama` answered "unknown provider \"ollama\" (want one of: anthropic,
 // google, openai)". Ollama is a provider you can add and has no key ref, so
-// deriving the accepted list from providerKeyRefOrder alone both rejected it
+// deriving the accepted list from secret.ProviderKeyRefOrder alone both rejected it
 // and told the user it did not exist.
 func TestModelsAddAcceptsOllama(t *testing.T) {
 	names := providerNames()
@@ -142,7 +142,7 @@ func TestRequireOllamaReady_NamesTheRightProblem(t *testing.T) {
 	}
 
 	installed := ollamaListEnv(nil, "darwin", 32)
-	fakeOf(installed).RunTimedFn = func(string, ...string) (string, bool, error) { return "", true, nil } // timeout
+	systest.Of(installed.System).RunTimedFn = func(string, ...string) (string, bool, error) { return "", true, nil } // timeout
 	err = requireOllamaReady(installed)
 	if err == nil || !strings.Contains(err.Error(), "daemon") {
 		t.Fatalf("dead daemon: err = %v, want a daemon message", err)

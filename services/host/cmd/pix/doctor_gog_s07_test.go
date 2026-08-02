@@ -123,8 +123,8 @@ func TestDoctorGog_NonCanonicalRegisteredPathNeverExecuted(t *testing.T) {
 		ports:   map[int]bool{11435: true},
 	}
 	env := f.env()
-	baseRun := fakeOf(env).RunFn
-	fakeOf(env).RunFn = func(name string, args ...string) (string, error) {
+	baseRun := systest.Of(env.System).RunFn
+	systest.Of(env.System).RunFn = func(name string, args ...string) (string, error) {
 		if strings.HasPrefix(name, "/tmp/") {
 			executed = append(executed, name)
 		}

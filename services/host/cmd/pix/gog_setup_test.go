@@ -662,7 +662,7 @@ func TestGogSetup_NoCredentialContentReads(t *testing.T) {
 		sbxRegisterOK: true,
 	}
 	env := ge.env()
-	fakeOf(env).ReadFileFn = func(path string) (string, error) {
+	systest.Of(env.System).ReadFileFn = func(path string) (string, error) {
 		readFileCalled = true
 		return "", fmt.Errorf("must not be called")
 	}
@@ -716,7 +716,7 @@ func TestGogSetup_ExpandsPromptedHomeCredentialsPath(t *testing.T) {
 		sbxRegisterOK: true,
 	}
 	env := ge.env()
-	fakeOf(env).HomeDirFn = func() string { return home }
+	systest.Of(env.System).HomeDirFn = func() string { return home }
 	var out bytes.Buffer
 	in := strings.NewReader("you@example.com\n~/.config/pix/credentials/gog.json\n")
 	if err := gogSetup(env, gogSetupOpts{}, in, &out, true); err != nil {

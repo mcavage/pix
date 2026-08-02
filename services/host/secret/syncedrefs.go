@@ -23,7 +23,7 @@
 // a symlinked store on both read and write, same-dir temp + rename for an
 // atomic write, and a cross-process flock serializing every
 // read-modify-write.
-package main
+package secret
 
 import (
 	"crypto/sha256"
@@ -52,11 +52,11 @@ type syncedRefsStore struct {
 	Digests map[string]string `json:"digests,omitempty"`
 }
 
-// secretDigestHex returns the hex-encoded SHA-256 digest of s. Used only to
+// SecretDigestHex returns the hex-encoded SHA-256 digest of s. Used only to
 // fingerprint a resolved secret value for the synced-refs store — the digest is metadata
 // (proves "same value" without storing or printing the value itself) and must
 // never itself be treated as sensitive-equivalent to the secret (it's one-way).
-func secretDigestHex(s string) string {
+func SecretDigestHex(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
 }
@@ -137,12 +137,12 @@ func mutateSyncedRefsStore(mutate func(*syncedRefsStore) error) error {
 	})
 }
 
-// syncedRef returns the ref recorded as last synced to sbx for envVar, if
+// SyncedRef returns the ref recorded as last synced to sbx for envVar, if
 // any. A load error (symlinked/corrupt store) degrades to "no record" — the
 // caller then just re-confirms before overwriting, never silently overwrites.
 // Ref-only: callers deciding whether it's safe to skip a confirm must use
 // syncedRefKnownSame instead, which also requires the digest to match.
-func syncedRef(envVar string) (string, bool) {
+func SyncedRef(envVar string) (string, bool) {
 	s, err := loadSyncedRefsStore()
 	if err != nil || s.Synced == nil {
 		return "", false
@@ -151,10 +151,10 @@ func syncedRef(envVar string) (string, bool) {
 	return r, ok
 }
 
-// syncedRefDigest returns the digest recorded alongside envVar's synced ref,
+// SyncedRefDigest returns the digest recorded alongside envVar's synced ref,
 // if any. Absent for a legacy record (predates the Digests map) or when there
 // is no record at all; both degrade to "" which never matches a real digest.
-func syncedRefDigest(envVar string) string {
+func SyncedRefDigest(envVar string) string {
 	s, err := loadSyncedRefsStore()
 	if err != nil || s.Digests == nil {
 		return ""
@@ -164,7 +164,7 @@ func syncedRefDigest(envVar string) string {
 
 // syncedRefKnownSame is the ONLY condition under which reconcile may skip a
 // provider without asking: the recorded ref must equal ref (the CURRENT
-// op-refs.env ref) AND the recorded digest must equal secretDigestHex(value) (the
+// op-refs.env ref) AND the recorded digest must equal SecretDigestHex(value) (the
 // CURRENT resolved value). Either mismatch — including a legacy record whose
 // digest is empty — returns false, so the caller treats it as changed/unknown
 // and routes it through the normal batched confirm-before-overwrite (or
@@ -172,26 +172,26 @@ func syncedRefDigest(envVar string) string {
 // stable op:// ref changed) and "legacy record, no digest" both fail closed
 // instead of silently trusting a ref string alone.
 func syncedRefKnownSame(envVar, ref, value string) bool {
-	recordedRef, ok := syncedRef(envVar)
+	recordedRef, ok := SyncedRef(envVar)
 	if !ok || recordedRef != ref {
 		return false
 	}
-	digest := syncedRefDigest(envVar)
+	digest := SyncedRefDigest(envVar)
 	if digest == "" {
 		return false // legacy record (or no digest yet) — unknown, not same
 	}
-	return digest == secretDigestHex(value)
+	return digest == SecretDigestHex(value)
 }
 
-// recordSyncedRef records ref as the value successfully synced to sbx for
+// RecordSyncedRef records ref as the value successfully synced to sbx for
 // envVar just now, WITHOUT a digest — this is the legacy/back-compat shape
 // (used by callers that don't have the resolved value handy, e.g. older
 // bookkeeping and tests simulating a pre-digest record). Production code
-// after an actual sbx sync must use recordSyncedRefWithDigest instead, so the
+// after an actual sbx sync must use RecordSyncedRefWithDigest instead, so the
 // record it leaves behind is never mistaken for "known-same" without also
 // having proven the resolved value. Clears any stale digest for envVar (a new
 // ref invalidates whatever digest was recorded against the old one).
-func recordSyncedRef(envVar, ref string) error {
+func RecordSyncedRef(envVar, ref string) error {
 	return mutateSyncedRefsStore(func(s *syncedRefsStore) error {
 		if s.Synced == nil {
 			s.Synced = map[string]string{}
@@ -204,7 +204,7 @@ func recordSyncedRef(envVar, ref string) error {
 	})
 }
 
-// recordSyncedRefWithDigest records ref AND the SHA-256 digest of the resolved
+// RecordSyncedRefWithDigest records ref AND the SHA-256 digest of the resolved
 // value ATOMICALLY (a single mutateSyncedRefsStore call — one flock-guarded
 // load+mutate+save, so a reader never observes the ref updated without its
 // digest or vice versa) as the state successfully synced to sbx for envVar
@@ -212,7 +212,7 @@ func recordSyncedRef(envVar, ref string) error {
 // has actually succeeded (secret_sync.go), so a record always reflects a
 // value genuinely in sbx. digest is metadata (proves sameness) and is never
 // itself printed by any caller.
-func recordSyncedRefWithDigest(envVar, ref, digest string) error {
+func RecordSyncedRefWithDigest(envVar, ref, digest string) error {
 	return mutateSyncedRefsStore(func(s *syncedRefsStore) error {
 		if s.Synced == nil {
 			s.Synced = map[string]string{}

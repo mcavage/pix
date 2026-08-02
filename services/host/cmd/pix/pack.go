@@ -27,6 +27,7 @@ import (
 	"pix/host/config"
 	"pix/host/knowledge"
 	"pix/host/routing"
+	"pix/host/secret"
 	"pix/host/service"
 	"pix/host/sys"
 	"pix/host/workspace"
@@ -2914,12 +2915,12 @@ func runPackShow(out io.Writer, rest []string) {
 
 // opRefFilled reports whether op-refs.env has a FILLED op:// ref for env var key.
 func opRefFilled(env shellEnv, key string) bool {
-	_, content, exists := opRefsContent(env)
+	_, content, exists := secret.OpRefsContent(env)
 	if !exists {
 		return false
 	}
-	for _, r := range parseOpRefs(content) {
-		if r.key == key && r.isRef && !r.placeholder {
+	for _, r := range secret.ParseOpRefs(content) {
+		if r.Key == key && r.IsRef && !r.Placeholder {
 			return true
 		}
 	}
@@ -2931,7 +2932,7 @@ func opRefFilled(env shellEnv, key string) bool {
 // isn't installed; missing refs then just surface as warnings at run time. The
 // pack ships no secret — only the user's own op:// reference is stored.
 func solicitPackCredentials(env shellEnv, in io.Reader, out io.Writer, tty bool, p *packInfo) {
-	if !tty || in == nil || !opInstalled(env) {
+	if !tty || in == nil || !secret.OpInstalled(env) {
 		return
 	}
 	var missing []packIntegration
@@ -2942,7 +2943,7 @@ func solicitPackCredentials(env shellEnv, in io.Reader, out io.Writer, tty bool,
 		if ig.Setup != "" {
 			continue
 		}
-		if !envVarNameRe.MatchString(ig.Env) {
+		if !secret.EnvVarNameRe.MatchString(ig.Env) {
 			fmt.Fprintf(out, "  (skipping integration %q: invalid env var name %q)\n", ig.Name, ig.Env)
 			continue
 		}
@@ -2960,7 +2961,7 @@ func solicitPackCredentials(env shellEnv, in io.Reader, out io.Writer, tty bool,
 		if !sc.Scan() {
 			return
 		}
-		ref := normalizeOpRef(sc.Text())
+		ref := secret.NormalizeOpRef(sc.Text())
 		if ref == "" {
 			continue
 		}
@@ -2968,7 +2969,7 @@ func solicitPackCredentials(env shellEnv, in io.Reader, out io.Writer, tty bool,
 			fmt.Fprintf(out, "    skipped %s: not an op:// ref\n", ig.Env)
 			continue
 		}
-		if err := writeOpRefQuiet(env, ig.Env, ref); err != nil {
+		if err := secret.WriteOpRefQuiet(env, ig.Env, ref); err != nil {
 			fmt.Fprintf(out, "    could not save %s: %v\n", ig.Env, err)
 			continue
 		}

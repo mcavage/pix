@@ -1,4 +1,4 @@
-package main
+package secret
 
 import (
 	"bytes"
@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/hostenv"
+	"pix/host/sys"
 	"pix/host/sys/systest"
 )
 
@@ -20,27 +22,27 @@ UNFILLED=op://<vault>/<item>/credential
 GOG_ACCOUNT=me@example.com
 PASTED=xoxb-123-secret
 `
-	refs := parseOpRefs(content)
-	byKey := map[string]opRef{}
+	refs := ParseOpRefs(content)
+	byKey := map[string]OpRef{}
 	for _, r := range refs {
-		byKey[r.key] = r
+		byKey[r.Key] = r
 	}
-	if r := byKey["SLACK_TOKEN"]; !r.isRef || r.placeholder {
-		t.Errorf("SLACK_TOKEN: isRef=%v placeholder=%v, want filled ref", r.isRef, r.placeholder)
+	if r := byKey["SLACK_TOKEN"]; !r.IsRef || r.Placeholder {
+		t.Errorf("SLACK_TOKEN: isRef=%v placeholder=%v, want filled ref", r.IsRef, r.Placeholder)
 	}
-	if r := byKey["UNFILLED"]; !r.isRef || !r.placeholder {
-		t.Errorf("UNFILLED: isRef=%v placeholder=%v, want unfilled placeholder", r.isRef, r.placeholder)
+	if r := byKey["UNFILLED"]; !r.IsRef || !r.Placeholder {
+		t.Errorf("UNFILLED: isRef=%v placeholder=%v, want unfilled placeholder", r.IsRef, r.Placeholder)
 	}
-	if r := byKey["GOG_ACCOUNT"]; !r.nonSecret {
+	if r := byKey["GOG_ACCOUNT"]; !r.NonSecret {
 		t.Errorf("GOG_ACCOUNT should be on the non-secret allowlist")
 	}
-	if r := byKey["PASTED"]; r.isRef || r.nonSecret {
-		t.Errorf("PASTED literal: isRef=%v nonSecret=%v, want neither", r.isRef, r.nonSecret)
+	if r := byKey["PASTED"]; r.IsRef || r.NonSecret {
+		t.Errorf("PASTED literal: isRef=%v nonSecret=%v, want neither", r.IsRef, r.NonSecret)
 	}
 }
 
 // TestSeededOpRefsHasNoActiveEntries covers F1: a freshly seeded op-refs.env has
-// ZERO active (uncommented) ref lines — parseOpRefs finds no entries.
+// ZERO active (uncommented) ref lines — ParseOpRefs finds no entries.
 func TestSeededOpRefsHasNoActiveEntries(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
@@ -55,7 +57,7 @@ func TestSeededOpRefsHasNoActiveEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read seeded file: %v", err)
 	}
-	if refs := parseOpRefs(string(content)); len(refs) != 0 {
+	if refs := ParseOpRefs(string(content)); len(refs) != 0 {
 		t.Errorf("freshly seeded op-refs.env has %d active entries, want 0: %+v", len(refs), refs)
 	}
 	for i, line := range strings.Split(string(content), "\n") {
@@ -93,7 +95,7 @@ func TestSecretLsShortLiteralFlagged(t *testing.T) {
 		files:   map[string]string{"/fake/config/op-refs.env": "SLACK_TOKEN=" + val + "\n"},
 	}
 	var out bytes.Buffer
-	runSecretLs(f.env(), &out)
+	RunSecretLs(f.env(), &out)
 	s := out.String()
 	if strings.Contains(s, val) {
 		t.Errorf("secret ls LEAKED the literal value:\n%s", s)
@@ -103,63 +105,11 @@ func TestSecretLsShortLiteralFlagged(t *testing.T) {
 	}
 }
 
-// TestSecretCheckRejectsTrailingArg covers F6: `secret check --bogus` exits 2.
-// runSecretCmd calls os.Exit, so we exercise it in a subprocess.
-func TestSecretCheckRejectsTrailingArg(t *testing.T) {
-	if os.Getenv("PIX_SECRET_BOGUS") == "1" {
-		runSecretCmd([]string{"check", "--bogus"})
-		return
-	}
-	cmd := exec.Command(os.Args[0], "-test.run", "TestSecretCheckRejectsTrailingArg")
-	cmd.Env = append(os.Environ(), "PIX_SECRET_BOGUS=1")
-	err := cmd.Run()
-	var ee *exec.ExitError
-	if !errors.As(err, &ee) {
-		t.Fatalf("expected an ExitError, got %v", err)
-	}
-	if ee.ExitCode() != 2 {
-		t.Errorf("secret check --bogus exit code = %d, want 2", ee.ExitCode())
-	}
-}
-
-// TestSecretCmdArgCounts covers the dispatch surface: `set` requires exactly 2
-// args, `rm` requires exactly 1, and an unknown subcommand names the new CRUD
-// surface. All run in a subprocess since runSecretCmd calls os.Exit.
-func TestSecretCmdArgCounts(t *testing.T) {
-	cases := []struct {
-		name string
-		argv []string
-	}{
-		{"set too few", []string{"set", "ONLY_ONE"}},
-		{"set too many", []string{"set", "A", "op://v/i/f", "extra"}},
-		{"rm too many", []string{"rm", "A", "B"}},
-		{"unknown", []string{"frobnicate"}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if os.Getenv("PIX_SECRET_ARGCOUNT") == tc.name {
-				runSecretCmd(tc.argv)
-				return
-			}
-			cmd := exec.Command(os.Args[0], "-test.run", "TestSecretCmdArgCounts/"+strings.ReplaceAll(tc.name, " ", "_"))
-			cmd.Env = append(os.Environ(), "PIX_SECRET_ARGCOUNT="+tc.name)
-			err := cmd.Run()
-			var ee *exec.ExitError
-			if !errors.As(err, &ee) {
-				t.Fatalf("expected an ExitError, got %v", err)
-			}
-			if ee.ExitCode() != 2 {
-				t.Errorf("exit code = %d, want 2", ee.ExitCode())
-			}
-		})
-	}
-}
-
 func TestHasPlaceholder(t *testing.T) {
-	if !hasPlaceholder("op://<vault>/x/y") {
+	if !HasPlaceholder("op://<vault>/x/y") {
 		t.Error("angle-bracket placeholder not detected")
 	}
-	if hasPlaceholder("op://Private/Slack/credential") {
+	if HasPlaceholder("op://Private/Slack/credential") {
 		t.Error("a filled ref wrongly flagged as placeholder")
 	}
 }
@@ -174,7 +124,7 @@ func TestSecretLsNeverLeaksValue(t *testing.T) {
 		files:   map[string]string{"/fake/config/op-refs.env": "SLACK_TOKEN=" + pasted + "\n"},
 	}
 	var out bytes.Buffer
-	runSecretLs(f.env(), &out)
+	RunSecretLs(f.env(), &out)
 	s := out.String()
 	if strings.Contains(s, pasted) {
 		t.Errorf("secret ls LEAKED the pasted value:\n%s", s)
@@ -196,7 +146,7 @@ func TestSecretLsStates(t *testing.T) {
 			"OTHER=op://<vault>/<item>/credential\n"},
 	}
 	var out bytes.Buffer
-	runSecretLs(f.env(), &out)
+	RunSecretLs(f.env(), &out)
 	s := out.String()
 	if !strings.Contains(s, "installed + account configured") {
 		t.Errorf("want op installed+account-configured state:\n%s", s)
@@ -216,7 +166,7 @@ func TestSecretLsOpNotSignedIn(t *testing.T) {
 		envVars: map[string]string{"PIX_CONFIG": "/fake/config/config.toml"},
 	}
 	var out bytes.Buffer
-	runSecretLs(f.env(), &out)
+	RunSecretLs(f.env(), &out)
 	s := out.String()
 	if !strings.Contains(s, "no account configured") {
 		t.Errorf("want no-account-configured state:\n%s", s)
@@ -243,7 +193,7 @@ func TestSecretCheckOKNeverLeaks(t *testing.T) {
 		files:   map[string]string{"/fake/config/op-refs.env": "SLACK_TOKEN=op://Private/Slack/credential\n"},
 	}
 	var out bytes.Buffer
-	runSecretCheck(f.env(), &out)
+	RunSecretCheck(f.env(), &out)
 	s := out.String()
 	if strings.Contains(s, resolved) {
 		t.Errorf("secret check LEAKED the resolved value:\n%s", s)
@@ -254,12 +204,12 @@ func TestSecretCheckOKNeverLeaks(t *testing.T) {
 }
 
 // TestSecretCheckMissingRefsHintsSet: with no op-refs.env, `secret check`
-// points at the new `secret set` primitive, not the removed `edit`. runSecretCheck
+// points at the new `secret set` primitive, not the removed `edit`. RunSecretCheck
 // calls os.Exit(3) on a missing file, so this runs in a subprocess.
 func TestSecretCheckMissingRefsHintsSet(t *testing.T) {
 	if os.Getenv("PIX_SECRET_CHECK_MISSING") == "1" {
 		f := fakeEnv{envVars: map[string]string{"PIX_CONFIG": "/fake/config/config.toml"}}
-		runSecretCheck(f.env(), os.Stdout)
+		RunSecretCheck(f.env(), os.Stdout)
 		return
 	}
 	cmd := exec.Command(os.Args[0], "-test.run", "TestSecretCheckMissingRefsHintsSet")
@@ -277,27 +227,14 @@ func TestSecretCheckMissingRefsHintsSet(t *testing.T) {
 	}
 }
 
-func TestSecretHelpConfigIndependent(t *testing.T) {
-	// -h must print usage and NOT touch config/op — runSecretCmd handles help
-	// before any env work. We can't call os.Exit-free easily, so assert the
-	// help sentinel path via wantsHelp used inside runSecretCmd is honored by
-	// checking secretUsage() is non-empty and wantsHelp detects the flag.
-	if !wantsHelp([]string{"--help"}) || !wantsHelp([]string{"ls", "-h"}) {
-		t.Error("wantsHelp should detect secret help flags")
-	}
-	if secretUsage() == "" {
-		t.Error("secretUsage() must be defined")
-	}
-}
-
-// --- secret set / rm: hermetic, via an in-memory shellEnv (readFile/writeFile
+// --- secret set / rm: hermetic, via an in-memory hostenv.Env (readFile/writeFile
 // backed by a plain map — no real disk touched). ---
 
-// memEnv builds a shellEnv whose readFile/writeFile operate on an in-memory
-// files map, and whose getenv resolves PIX_CONFIG so defaultOpRefsPath
+// memEnv builds a hostenv.Env whose readFile/writeFile operate on an in-memory
+// files map, and whose getenv resolves PIX_CONFIG so DefaultOpRefsPath
 // lines up with the fake path used by the test.
-func memEnv(files map[string]string) shellEnv {
-	return shellEnv{System: &systest.Fake{GetenvFn: func(name string) string {
+func memEnv(files map[string]string) hostenv.Env {
+	return hostenv.Env{System: &systest.Fake{GetenvFn: func(name string) string {
 		if name == "PIX_CONFIG" {
 			return "/fake/config/config.toml"
 		}
@@ -318,7 +255,7 @@ const fakeRefsPath = "/fake/config/op-refs.env"
 func TestSecretSetUpsertsNewKey(t *testing.T) {
 	files := map[string]string{fakeRefsPath: "# header\nSLACK_TOKEN=op://Private/Slack/credential\n"}
 	var out bytes.Buffer
-	runSecretSet(memEnv(files), &out, "GITHUB_TOKEN", "op://Private/GitHub/credential")
+	RunSecretSet(memEnv(files), &out, "GITHUB_TOKEN", "op://Private/GitHub/credential")
 	got := files[fakeRefsPath]
 	want := "# header\nSLACK_TOKEN=op://Private/Slack/credential\nGITHUB_TOKEN=op://Private/GitHub/credential\n"
 	if got != want {
@@ -331,7 +268,7 @@ func TestSecretSetUpsertsNewKey(t *testing.T) {
 
 func TestSecretSetReplacesExistingKeyPreservingOthers(t *testing.T) {
 	files := map[string]string{fakeRefsPath: "# a comment\nSLACK_TOKEN=op://Private/Slack/old\n\nGOG_ACCOUNT=me@example.com\n"}
-	runSecretSet(memEnv(files), &bytes.Buffer{}, "SLACK_TOKEN", "op://Private/Slack/new")
+	RunSecretSet(memEnv(files), &bytes.Buffer{}, "SLACK_TOKEN", "op://Private/Slack/new")
 	got := files[fakeRefsPath]
 	want := "# a comment\nSLACK_TOKEN=op://Private/Slack/new\n\nGOG_ACCOUNT=me@example.com\n"
 	if got != want {
@@ -341,7 +278,7 @@ func TestSecretSetReplacesExistingKeyPreservingOthers(t *testing.T) {
 
 func TestSecretSetRejectsNonRefForSecretKey(t *testing.T) {
 	if os.Getenv("PIX_SECRET_SET_REJECT") == "1" {
-		runSecretSet(memEnv(map[string]string{fakeRefsPath: "X=1\n"}), os.Stdout, "SLACK_TOKEN", "xoxb-pasted-secret-value")
+		RunSecretSet(memEnv(map[string]string{fakeRefsPath: "X=1\n"}), os.Stdout, "SLACK_TOKEN", "xoxb-pasted-secret-value")
 		return
 	}
 	cmd := exec.Command(os.Args[0], "-test.run", "TestSecretSetRejectsNonRefForSecretKey")
@@ -367,7 +304,7 @@ func TestSecretSetRejectsNonRefForSecretKey(t *testing.T) {
 // SECOND KEY=value line (e.g. a pasted plaintext secret) into op-refs.env.
 func TestSecretSetRejectsControlChars(t *testing.T) {
 	if os.Getenv("PIX_SECRET_SET_NL") == "1" {
-		runSecretSet(memEnv(map[string]string{fakeRefsPath: "X=1\n"}), os.Stdout,
+		RunSecretSet(memEnv(map[string]string{fakeRefsPath: "X=1\n"}), os.Stdout,
 			"GITHUB_TOKEN", "op://V/I/f\nSLACK_TOKEN=xoxb-injected")
 		return
 	}
@@ -392,7 +329,7 @@ func TestSecretSetRejectsControlChars(t *testing.T) {
 func TestSecretSetAllowsNonSecretAllowlistLiteral(t *testing.T) {
 	files := map[string]string{fakeRefsPath: "X=1\n"}
 	var out bytes.Buffer
-	runSecretSet(memEnv(files), &out, "GOG_ACCOUNT", "me@example.com")
+	RunSecretSet(memEnv(files), &out, "GOG_ACCOUNT", "me@example.com")
 	got := files[fakeRefsPath]
 	if !strings.Contains(got, "GOG_ACCOUNT=me@example.com") {
 		t.Errorf("content after set = %q, want GOG_ACCOUNT set to the literal", got)
@@ -417,7 +354,7 @@ func TestUpsertOpRefCanonicalizesConflictingDuplicates(t *testing.T) {
 func TestSecretSetKeepsLiteralSpacedField(t *testing.T) {
 	files := map[string]string{fakeRefsPath: "X=1\n"}
 	var out bytes.Buffer
-	runSecretSet(memEnv(files), &out, "OPENAI_API_KEY", "op://Docker/OPENAI_API_KEY/api key")
+	RunSecretSet(memEnv(files), &out, "OPENAI_API_KEY", "op://Docker/OPENAI_API_KEY/api key")
 	got := files[fakeRefsPath]
 	if !strings.Contains(got, "OPENAI_API_KEY=op://Docker/OPENAI_API_KEY/api key") {
 		t.Errorf("content after set = %q, want the space kept literal", got)
@@ -432,15 +369,15 @@ func TestSecretSetKeepsLiteralSpacedField(t *testing.T) {
 
 // Regression: `pix secret set` given a %20-encoded ref (the value the OLD
 // help/man/hostrun guidance told users to type) must normalize it to a
-// literal space in op-refs.env, matching what writeOpRefFileQuietLocked
+// literal space in op-refs.env, matching what WriteOpRefFileQuietLocked
 // already self-heals on the hostmode.env mirror. Before this fix,
-// runSecretSetLocked wrote the %20 unchanged, so a provider key's op-refs.env
+// RunSecretSetLocked wrote the %20 unchanged, so a provider key's op-refs.env
 // entry and its hostmode.env mirror permanently disagreed on the same ref.
 func TestSecretSetNormalizesPercentEncodedSpaceToLiteral(t *testing.T) {
 	files := map[string]string{fakeRefsPath: ""}
 	env := memEnv(files)
 	var out bytes.Buffer
-	runSecretSet(env, &out, "ANTHROPIC_API_KEY", "op://Vault/Item/api%20key")
+	RunSecretSet(env, &out, "ANTHROPIC_API_KEY", "op://Vault/Item/api%20key")
 
 	opRefs := files[fakeRefsPath]
 	if !strings.Contains(opRefs, "ANTHROPIC_API_KEY=op://Vault/Item/api key") {
@@ -450,7 +387,7 @@ func TestSecretSetNormalizesPercentEncodedSpaceToLiteral(t *testing.T) {
 		t.Errorf("op-refs.env = %q, must NOT keep the percent-encoded space", opRefs)
 	}
 
-	hostMode, err := env.ReadFile(hostModeRefsPath(env))
+	hostMode, err := env.ReadFile(HostModeRefsPath(env))
 	if err != nil {
 		t.Fatalf("read hostmode.env: %v", err)
 	}
@@ -475,8 +412,8 @@ func TestSecretSetMirrorsProviderKeyToHostMode(t *testing.T) {
 	files := map[string]string{fakeRefsPath: ""}
 	env := memEnv(files)
 	var out bytes.Buffer
-	runSecretSet(env, &out, "ANTHROPIC_API_KEY", "op://v/anthropic/key")
-	hostMode, err := env.ReadFile(hostModeRefsPath(env))
+	RunSecretSet(env, &out, "ANTHROPIC_API_KEY", "op://v/anthropic/key")
+	hostMode, err := env.ReadFile(HostModeRefsPath(env))
 	if err != nil {
 		t.Fatalf("read hostmode.env: %v", err)
 	}
@@ -494,8 +431,8 @@ func TestSecretSetDoesNotMirrorNonProviderKeys(t *testing.T) {
 	files := map[string]string{fakeRefsPath: ""}
 	env := memEnv(files)
 	var out bytes.Buffer
-	runSecretSet(env, &out, "SLACK_TOKEN", "op://v/slack/token")
-	if _, err := env.ReadFile(hostModeRefsPath(env)); err == nil {
+	RunSecretSet(env, &out, "SLACK_TOKEN", "op://v/slack/token")
+	if _, err := env.ReadFile(HostModeRefsPath(env)); err == nil {
 		t.Error("a non-provider key must not create/mirror into hostmode.env")
 	}
 }
@@ -503,9 +440,9 @@ func TestSecretSetDoesNotMirrorNonProviderKeys(t *testing.T) {
 func TestSecretSetSeedsFileWhenAbsent(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	env := defaultShellEnv()
+	env := hostenv.Env{System: sys.Real{}}
 	var out bytes.Buffer
-	runSecretSet(env, &out, "SLACK_TOKEN", "op://Private/Slack/credential")
+	RunSecretSet(env, &out, "SLACK_TOKEN", "op://Private/Slack/credential")
 
 	path := config.OpRefsPath()
 	content, err := os.ReadFile(path)
@@ -524,7 +461,7 @@ func TestSecretSetSeedsFileWhenAbsent(t *testing.T) {
 func TestSecretRmRemovesKeyPreservingRest(t *testing.T) {
 	files := map[string]string{fakeRefsPath: "# header\nSLACK_TOKEN=op://Private/Slack/credential\nGOG_ACCOUNT=me@example.com\n"}
 	var out bytes.Buffer
-	runSecretRm(memEnv(files), &out, "SLACK_TOKEN")
+	RunSecretRm(memEnv(files), &out, "SLACK_TOKEN")
 	got := files[fakeRefsPath]
 	want := "# header\nGOG_ACCOUNT=me@example.com\n"
 	if got != want {
@@ -538,7 +475,7 @@ func TestSecretRmRemovesKeyPreservingRest(t *testing.T) {
 func TestSecretRmMissingKeyIsCleanNoop(t *testing.T) {
 	files := map[string]string{fakeRefsPath: "SLACK_TOKEN=op://Private/Slack/credential\n"}
 	var out bytes.Buffer
-	runSecretRm(memEnv(files), &out, "NOPE_NOT_THERE")
+	RunSecretRm(memEnv(files), &out, "NOPE_NOT_THERE")
 	if files[fakeRefsPath] != "SLACK_TOKEN=op://Private/Slack/credential\n" {
 		t.Errorf("rm on a missing key must not modify the file, got %q", files[fakeRefsPath])
 	}
@@ -549,7 +486,7 @@ func TestSecretRmMissingKeyIsCleanNoop(t *testing.T) {
 
 func TestSecretRmMissingFileIsCleanNoop(t *testing.T) {
 	var out bytes.Buffer
-	runSecretRm(memEnv(map[string]string{}), &out, "SLACK_TOKEN")
+	RunSecretRm(memEnv(map[string]string{}), &out, "SLACK_TOKEN")
 	if !strings.Contains(out.String(), "not found") {
 		t.Errorf("output = %q, want a clear missing-file message", out.String())
 	}
@@ -557,10 +494,10 @@ func TestSecretRmMissingFileIsCleanNoop(t *testing.T) {
 
 func TestSecretSetAndRmFailOnUnreadableOpRefs(t *testing.T) {
 	env := memEnv(map[string]string{})
-	fakeOf(env).ReadFileFn = func(string) (string, error) { return "", os.ErrPermission }
+	systest.Of(env.System).ReadFileFn = func(string) (string, error) { return "", os.ErrPermission }
 
 	var setOut bytes.Buffer
-	if err := runSecretSet(env, &setOut, "SLACK_TOKEN", "op://v/slack/token"); err == nil {
+	if err := RunSecretSet(env, &setOut, "SLACK_TOKEN", "op://v/slack/token"); err == nil {
 		t.Fatal("secret set must fail when op-refs.env cannot be read")
 	}
 	if !strings.Contains(setOut.String(), "could not read") {
@@ -568,7 +505,7 @@ func TestSecretSetAndRmFailOnUnreadableOpRefs(t *testing.T) {
 	}
 
 	var rmOut bytes.Buffer
-	if err := runSecretRm(env, &rmOut, "SLACK_TOKEN"); err == nil {
+	if err := RunSecretRm(env, &rmOut, "SLACK_TOKEN"); err == nil {
 		t.Fatal("secret rm must fail when op-refs.env cannot be read")
 	}
 	if !strings.Contains(rmOut.String(), "could not read") {
@@ -579,42 +516,6 @@ func TestSecretSetAndRmFailOnUnreadableOpRefs(t *testing.T) {
 // --- item 1: `secret set`/`secret rm` exit codes + dual-file provider-key
 // lifecycle -------------------------------------------------------------
 
-// TestSecretSetMirrorFailure_DispatcherExitsNonzero: a hostmode.env mirror
-// failure for a provider key must make the CLI exit nonzero, never quietly
-// succeed. Runs through the REAL dispatcher (runSecretCmd) against the real
-// filesystem in a subprocess, so the exit code is genuinely observed rather
-// than merely a returned error value nobody acted on.
-func TestSecretSetMirrorFailure_DispatcherExitsNonzero(t *testing.T) {
-	if cfgDir := os.Getenv("PIX_SECRET_SET_MIRROR_FAIL_CFGDIR"); cfgDir != "" {
-		runSecretCmd([]string{"set", "ANTHROPIC_API_KEY", "op://v/anthropic/key"})
-		return
-	}
-	dir := t.TempDir()
-	cfgDir := filepath.Join(dir, "cfg")
-	// Sabotage hostmode.env: pre-create it as a DIRECTORY, so the atomic
-	// rename-into-place mirror write fails (EISDIR), while op-refs.env (which
-	// doesn't exist yet, and gets freshly seeded) stays a normal writable file.
-	if err := os.MkdirAll(filepath.Join(cfgDir, "hostmode.env"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command(os.Args[0], "-test.run", "TestSecretSetMirrorFailure_DispatcherExitsNonzero")
-	cmd.Env = append(os.Environ(),
-		"PIX_SECRET_SET_MIRROR_FAIL_CFGDIR="+cfgDir,
-		"PIX_CONFIG="+filepath.Join(cfgDir, "config.toml"),
-	)
-	outBuf, err := cmd.CombinedOutput()
-	var ee *exec.ExitError
-	if !errors.As(err, &ee) {
-		t.Fatalf("expected an ExitError (a mirror failure must exit nonzero), got %v (output: %s)", err, outBuf)
-	}
-	if ee.ExitCode() == 0 {
-		t.Errorf("exit code = 0, want nonzero, output: %s", outBuf)
-	}
-	if !strings.Contains(string(outBuf), "could not mirror") {
-		t.Errorf("output should explain the mirror failure, got:\n%s", outBuf)
-	}
-}
-
 // A provider key present in BOTH op-refs.env and hostmode.env is removed from
 // BOTH by a single `secret rm`.
 func TestSecretRm_ProviderKey_RemovesFromBothFiles(t *testing.T) {
@@ -622,12 +523,12 @@ func TestSecretRm_ProviderKey_RemovesFromBothFiles(t *testing.T) {
 		fakeRefsPath: "ANTHROPIC_API_KEY=op://v/anthropic/key\nSLACK_TOKEN=op://v/slack/token\n",
 	}
 	env := memEnv(files)
-	hmPath := hostModeRefsPath(env)
+	hmPath := HostModeRefsPath(env)
 	if err := env.WriteFile(hmPath, []byte("ANTHROPIC_API_KEY=op://v/anthropic/key\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if err := runSecretRm(env, &out, "ANTHROPIC_API_KEY"); err != nil {
+	if err := RunSecretRm(env, &out, "ANTHROPIC_API_KEY"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if strings.Contains(files[fakeRefsPath], "ANTHROPIC_API_KEY") {
@@ -649,12 +550,12 @@ func TestSecretRm_ProviderKey_RemovesFromBothFiles(t *testing.T) {
 func TestSecretRm_NonProviderKey_OnlyTouchesOpRefs(t *testing.T) {
 	files := map[string]string{fakeRefsPath: "SLACK_TOKEN=op://v/slack/token\n"}
 	env := memEnv(files)
-	hmPath := hostModeRefsPath(env)
+	hmPath := HostModeRefsPath(env)
 	if err := env.WriteFile(hmPath, []byte("SLACK_TOKEN=op://v/slack/token\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if err := runSecretRm(env, &out, "SLACK_TOKEN"); err != nil {
+	if err := RunSecretRm(env, &out, "SLACK_TOKEN"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if strings.Contains(files[fakeRefsPath], "SLACK_TOKEN") {
@@ -675,19 +576,19 @@ func TestSecretRm_ProviderKey_PartialFailure_HostModeWriteFails(t *testing.T) {
 		fakeRefsPath: "ANTHROPIC_API_KEY=op://v/anthropic/key\n",
 	}
 	env := memEnv(files)
-	hmPath := hostModeRefsPath(env)
+	hmPath := HostModeRefsPath(env)
 	if err := env.WriteFile(hmPath, []byte("ANTHROPIC_API_KEY=op://v/anthropic/key\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	realWrite := fakeOf(env).WriteFileFn
-	fakeOf(env).WriteFileFn = func(p string, d []byte, m os.FileMode) error {
+	realWrite := systest.Of(env.System).WriteFileFn
+	systest.Of(env.System).WriteFileFn = func(p string, d []byte, m os.FileMode) error {
 		if p == hmPath {
 			return os.ErrPermission
 		}
 		return realWrite(p, d, m)
 	}
 	var out bytes.Buffer
-	err := runSecretRm(env, &out, "ANTHROPIC_API_KEY")
+	err := RunSecretRm(env, &out, "ANTHROPIC_API_KEY")
 	if err == nil {
 		t.Fatal("a hostmode.env write failure must return a non-nil error")
 	}
@@ -699,52 +600,16 @@ func TestSecretRm_ProviderKey_PartialFailure_HostModeWriteFails(t *testing.T) {
 	}
 }
 
-// TestSecretRm_DispatcherExitsNonzeroOnPartialFailure exercises the same
-// partial failure through the real dispatcher, proving the CLI itself exits
-// nonzero (not merely that runSecretRm returns an error nobody consumed).
-func TestSecretRm_DispatcherExitsNonzeroOnPartialFailure(t *testing.T) {
-	if cfgDir := os.Getenv("PIX_SECRET_RM_PARTIAL_FAIL_CFGDIR"); cfgDir != "" {
-		runSecretCmd([]string{"rm", "ANTHROPIC_API_KEY"})
-		return
-	}
-	dir := t.TempDir()
-	cfgDir := filepath.Join(dir, "cfg")
-	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(cfgDir, "op-refs.env"), []byte("ANTHROPIC_API_KEY=op://v/anthropic/key\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	// hostmode.env exists with the same key, but AS A DIRECTORY so the rename-in
-	// removal write fails (EISDIR).
-	if err := os.MkdirAll(filepath.Join(cfgDir, "hostmode.env"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command(os.Args[0], "-test.run", "TestSecretRm_DispatcherExitsNonzeroOnPartialFailure")
-	cmd.Env = append(os.Environ(),
-		"PIX_SECRET_RM_PARTIAL_FAIL_CFGDIR="+cfgDir,
-		"PIX_CONFIG="+filepath.Join(cfgDir, "config.toml"),
-	)
-	outBuf, err := cmd.CombinedOutput()
-	var ee *exec.ExitError
-	if !errors.As(err, &ee) {
-		t.Fatalf("expected an ExitError (a partial rm failure must exit nonzero), got %v (output: %s)", err, outBuf)
-	}
-	if ee.ExitCode() == 0 {
-		t.Errorf("exit code = 0, want nonzero, output: %s", outBuf)
-	}
-}
-
 // TestSecretSetThenRm_FullLifecycle: `secret set` mirrors a provider key into
 // both files, and a subsequent `secret rm` fully undoes it in both — the
 // full round trip, not just each half in isolation.
 func TestSecretSetThenRm_FullLifecycle(t *testing.T) {
 	files := map[string]string{fakeRefsPath: ""}
 	env := memEnv(files)
-	hmPath := hostModeRefsPath(env)
+	hmPath := HostModeRefsPath(env)
 
 	var setOut bytes.Buffer
-	if err := runSecretSet(env, &setOut, "OPENAI_API_KEY", "op://v/openai/key"); err != nil {
+	if err := RunSecretSet(env, &setOut, "OPENAI_API_KEY", "op://v/openai/key"); err != nil {
 		t.Fatalf("set: unexpected error: %v", err)
 	}
 	if !strings.Contains(files[fakeRefsPath], "OPENAI_API_KEY") || !strings.Contains(files[hmPath], "OPENAI_API_KEY") {
@@ -752,7 +617,7 @@ func TestSecretSetThenRm_FullLifecycle(t *testing.T) {
 	}
 
 	var rmOut bytes.Buffer
-	if err := runSecretRm(env, &rmOut, "OPENAI_API_KEY"); err != nil {
+	if err := RunSecretRm(env, &rmOut, "OPENAI_API_KEY"); err != nil {
 		t.Fatalf("rm: unexpected error: %v", err)
 	}
 	if strings.Contains(files[fakeRefsPath], "OPENAI_API_KEY") {

@@ -22,7 +22,9 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/secret"
 	"pix/host/slackoauth"
+	"pix/host/sys/systest"
 )
 
 // --- PKCE material -----------------------------------------------------
@@ -678,8 +680,8 @@ func TestSlackSetupPKCEHappyPath(t *testing.T) {
 
 	// op-refs.env: legacy SLACK_TOKEN gone, non-secret pins present.
 	remaining := map[string]string{}
-	for _, r := range parseOpRefs(opRefsFileContent(t)) {
-		remaining[r.key] = r.value
+	for _, r := range secret.ParseOpRefs(opRefsFileContent(t)) {
+		remaining[r.Key] = r.Value
 	}
 	if _, ok := remaining["SLACK_TOKEN"]; ok {
 		t.Error("the legacy SLACK_TOKEN ref must be removed by the PKCE path")
@@ -939,9 +941,9 @@ func TestSlackSetupPKCERefusesDifferentIdentityUnderYes(t *testing.T) {
 	if len(*revoked) != 1 || (*revoked)[0] != testRotatingAccessToken {
 		t.Errorf("revoked tokens = %v, want exactly [%s]", *revoked, testRotatingAccessToken)
 	}
-	for _, r := range parseOpRefs(opRefsFileContent(t)) {
-		if r.key == "SLACK_TEAM_ID" && r.value != "T_OLD" {
-			t.Errorf("the OLD pin must be untouched on refusal, got %s=%s", r.key, r.value)
+	for _, r := range secret.ParseOpRefs(opRefsFileContent(t)) {
+		if r.Key == "SLACK_TEAM_ID" && r.Value != "T_OLD" {
+			t.Errorf("the OLD pin must be untouched on refusal, got %s=%s", r.Key, r.Value)
 		}
 	}
 }
@@ -964,9 +966,9 @@ func TestSlackSetupPKCEAllowsDifferentIdentityInteractivelyOnConfirm(t *testing.
 	if len(*revoked) != 0 {
 		t.Errorf("a confirmed identity change must not revoke anything, got: %v", *revoked)
 	}
-	for _, r := range parseOpRefs(opRefsFileContent(t)) {
-		if r.key == "SLACK_TEAM_ID" && r.value != "T123" {
-			t.Errorf("the pin must be replaced with the new identity, got %s=%s", r.key, r.value)
+	for _, r := range secret.ParseOpRefs(opRefsFileContent(t)) {
+		if r.Key == "SLACK_TEAM_ID" && r.Value != "T123" {
+			t.Errorf("the pin must be replaced with the new identity, got %s=%s", r.Key, r.Value)
 		}
 	}
 }
@@ -991,9 +993,9 @@ func TestSlackSetupPKCEDeclinesDifferentIdentityInteractively(t *testing.T) {
 	if len(*revoked) != 1 || (*revoked)[0] != testRotatingAccessToken {
 		t.Errorf("revoked tokens = %v, want exactly [%s]", *revoked, testRotatingAccessToken)
 	}
-	for _, r := range parseOpRefs(opRefsFileContent(t)) {
-		if r.key == "SLACK_TEAM_ID" && r.value != "T_OLD" {
-			t.Errorf("the OLD pin must be untouched, got %s=%s", r.key, r.value)
+	for _, r := range secret.ParseOpRefs(opRefsFileContent(t)) {
+		if r.Key == "SLACK_TEAM_ID" && r.Value != "T_OLD" {
+			t.Errorf("the OLD pin must be untouched, got %s=%s", r.Key, r.Value)
 		}
 	}
 }
@@ -1045,7 +1047,7 @@ func TestSlackSetupPKCEDoesNotRevokeAfterDocumentPersisted(t *testing.T) {
 	deps, opts, env, cfg, revoked := slackOAuthRevokeFixture(t, func(string) (slackIdentity, error) {
 		return slackIdentity{Team: "Acme", TeamID: "T123", User: "jane", UserID: "U456"}, nil
 	})
-	fakeOf(env).LockFn = func(string, func() error) error { return fmt.Errorf("lock busy") }
+	systest.Of(env.System).LockFn = func(string, func() error) error { return fmt.Errorf("lock busy") }
 	var out bytes.Buffer
 	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader(""), &out, false, fakeHostResolver)
 	if err == nil || !strings.Contains(err.Error(), "writing SLACK_TEAM_ID") {

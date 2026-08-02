@@ -69,7 +69,7 @@ func TestDoctorRender_NoDisclosure_WhenNoMCPConfigured(t *testing.T) {
 }
 
 // hostTrustSummaryEnv is a minimal shellEnv sufficient for
-// printSetupSummary's own reads (hostModeProviderKeys, gogSetupAccountHealthy)
+// printSetupSummary's own reads (secret.HostModeProviderKeys, gogSetupAccountHealthy)
 // without touching the real filesystem.
 func hostTrustSummaryEnv(t *testing.T) shellEnv {
 	t.Helper()

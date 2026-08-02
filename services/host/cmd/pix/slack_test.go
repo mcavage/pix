@@ -16,6 +16,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/rpc"
+	"pix/host/secret"
 	"pix/host/sys"
 	"pix/host/sys/systest"
 )
@@ -133,7 +134,7 @@ func TestParseSlackSetupArgsRejectsMixedStaticAndPKCEFlags(t *testing.T) {
 // --- slackSetup hermetic harness ----------------------------------------
 
 // slackTestEnv builds a shellEnv over a real (but temp-dir-scoped) config +
-// op-refs.env — config.Load/Save and defaultOpRefsPath both honor PIX_CONFIG,
+// op-refs.env — config.Load/Save and secret.DefaultOpRefsPath both honor PIX_CONFIG,
 // so using defaultShellEnv() here means the disk-touching bits behave exactly
 // as production, while run/lookPath/probe/slackAuthTest are faked so nothing
 // ever shells out or hits the network.
@@ -158,7 +159,7 @@ func (f *slackTestEnv) env() shellEnv {
 	e.HostBinary = func() (string, error) { return hostBinaryResolver() }
 	e.IdentityProbe = rpc.IdentityProbe
 	e.SlackAuth = liveSlackAuthTest
-	fakeOf(e).LookPathFn = func(name string) (string, error) {
+	systest.Of(e.System).LookPathFn = func(name string) (string, error) {
 		switch name {
 		case "sbx":
 			if f.sbxPresent {
@@ -170,7 +171,7 @@ func (f *slackTestEnv) env() shellEnv {
 		}
 		return "", fmt.Errorf("not found")
 	}
-	fakeOf(e).RunFn = func(name string, args ...string) (string, error) {
+	systest.Of(e.System).RunFn = func(name string, args ...string) (string, error) {
 		f.calls = append(f.calls, append([]string{name}, args...))
 		switch name {
 		case "op":
@@ -258,7 +259,7 @@ func TestSlackSetupRefusesForeignExistingRegistration(t *testing.T) {
 	slackTestCfg(t)
 	f := &slackTestEnv{opOK: true, opToken: "xoxp-unused", sbxPresent: true}
 	e := f.env()
-	fakeOf(e).RunFn = func(name string, args ...string) (string, error) {
+	systest.Of(e.System).RunFn = func(name string, args ...string) (string, error) {
 		f.calls = append(f.calls, append([]string{name}, args...))
 		if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "ls" {
 			return "slack\n", nil
@@ -557,7 +558,7 @@ func TestSlackStatusRejectsForeignRegistration(t *testing.T) {
 	slackTestCfg(t)
 	f := &slackTestEnv{sbxPresent: true}
 	e := f.env()
-	fakeOf(e).RunFn = func(name string, args ...string) (string, error) {
+	systest.Of(e.System).RunFn = func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) >= 3 && args[0] == "mcp" && args[1] == "get" && args[2] == "slack" {
 			return "name: slack\ncommand: /tmp/not-pix-host mcp slack\n", nil
 		}
@@ -620,7 +621,7 @@ func TestSlackDisableRemovesRefsAndWarnsAboutRevocation(t *testing.T) {
 	e.HostBinary = func() (string, error) { return "/fake/bin/pix-host", nil }
 	// The tri-state probe reports slack present, and definition inspection
 	// proves it is the canonical Pix host command before disable removes it.
-	fakeOf(e).RunFn = func(name string, args ...string) (string, error) {
+	systest.Of(e.System).RunFn = func(name string, args ...string) (string, error) {
 		f.calls = append(f.calls, append([]string{name}, args...))
 		if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "ls" {
 			return "slack\n", nil
@@ -658,8 +659,8 @@ func TestSlackDisableRemovesRefsAndWarnsAboutRevocation(t *testing.T) {
 	// ("# SLACK_TOKEN=op://<vault>/<item>/<field>") is never mistaken for a
 	// surviving active entry.
 	remaining := map[string]bool{}
-	for _, r := range parseOpRefs(opRefsFileContent(t)) {
-		remaining[r.key] = true
+	for _, r := range secret.ParseOpRefs(opRefsFileContent(t)) {
+		remaining[r.Key] = true
 	}
 	for _, key := range []string{"SLACK_TOKEN", "SLACK_TEAM_ID", "SLACK_USER_ID"} {
 		if remaining[key] {
@@ -685,7 +686,7 @@ func TestSlackDisableRemovesOrphanIdentityPins(t *testing.T) {
 	}
 	f := &slackTestEnv{sbxPresent: true}
 	e := f.env()
-	fakeOf(e).RunFn = func(name string, args ...string) (string, error) {
+	systest.Of(e.System).RunFn = func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "ls" {
 			return "", nil
 		}
@@ -695,9 +696,9 @@ func TestSlackDisableRemovesOrphanIdentityPins(t *testing.T) {
 	if err := slackDisable(cfg, e, &out); err != nil {
 		t.Fatalf("slackDisable with orphan pins: %v", err)
 	}
-	for _, r := range parseOpRefs(opRefsFileContent(t)) {
-		if r.key == "SLACK_TEAM_ID" || r.key == "SLACK_USER_ID" {
-			t.Fatalf("orphan pin survived disable: %s", r.key)
+	for _, r := range secret.ParseOpRefs(opRefsFileContent(t)) {
+		if r.Key == "SLACK_TEAM_ID" || r.Key == "SLACK_USER_ID" {
+			t.Fatalf("orphan pin survived disable: %s", r.Key)
 		}
 	}
 }
@@ -710,7 +711,7 @@ func TestSlackDisableRefusesForeignRegistration(t *testing.T) {
 	}
 	f := &slackTestEnv{sbxPresent: true}
 	e := f.env()
-	fakeOf(e).RunFn = func(name string, args ...string) (string, error) {
+	systest.Of(e.System).RunFn = func(name string, args ...string) (string, error) {
 		f.calls = append(f.calls, append([]string{name}, args...))
 		if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "ls" {
 			return "slack\n", nil
@@ -739,7 +740,7 @@ func TestSlackDisableNoopWhenNothingConfigured(t *testing.T) {
 	}
 	f := &slackTestEnv{sbxPresent: true}
 	e := f.env()
-	fakeOf(e).RunFn = func(name string, args ...string) (string, error) {
+	systest.Of(e.System).RunFn = func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "ls" {
 			return "", nil // nothing registered
 		}

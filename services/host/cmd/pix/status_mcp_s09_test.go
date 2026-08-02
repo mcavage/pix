@@ -141,8 +141,8 @@ func TestStatusMCPPositiveReceiptDominatesDeregistration(t *testing.T) {
 	// probe answers ONLY the `pix-host mcp --list` classification call;
 	// every other bounded probe (sbx secret ls / mcp ls / sbx ls now route
 	// through probeRun too) falls back to the canned env.Run outputs.
-	run := fakeOf(env).RunFn
-	fakeOf(env).RunTimedFn = func(name string, args ...string) (string, bool, error) {
+	run := systest.Of(env.System).RunFn
+	systest.Of(env.System).RunTimedFn = func(name string, args ...string) (string, bool, error) {
 		if name == "/usr/local/bin/pix-host" {
 			return "slack\n", false, nil
 		}
@@ -219,8 +219,8 @@ func TestStatusMCPLoadTodoExactCommand(t *testing.T) {
 func TestStatusMCPDiscoveryUnavailableNotNoSandboxes(t *testing.T) {
 	cfg := &config.Config{MCP: []string{gwServerName, "slack"}}
 	env, _ := statusMCPEnv(t, "", "google-workspace\nslack\n")
-	inner := fakeOf(env).RunFn
-	fakeOf(env).RunFn = func(name string, args ...string) (string, error) {
+	inner := systest.Of(env.System).RunFn
+	systest.Of(env.System).RunFn = func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) == 1 && args[0] == "ls" {
 			return "", fmt.Errorf("sbx daemon down")
 		}

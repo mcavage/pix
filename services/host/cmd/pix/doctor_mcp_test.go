@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"pix/host/readiness"
+	"pix/host/sys/systest"
 	"strings"
 	"testing"
 	"time"
@@ -142,8 +143,8 @@ func receiptEnv(t *testing.T, f fakeEnv, ws string) (shellEnv, string) {
 	t.Helper()
 	stateDir := t.TempDir()
 	env := f.env()
-	fakeOf(env).GetwdFn = func() (string, error) { return ws, nil }
-	fakeOf(env).StateDirFn = func() (string, error) { return stateDir, nil }
+	systest.Of(env.System).GetwdFn = func() (string, error) { return ws, nil }
+	systest.Of(env.System).StateDirFn = func() (string, error) { return stateDir, nil }
 	return env, stateDir
 }
 
@@ -450,7 +451,7 @@ func TestMCPRemoteAuth(t *testing.T) {
 	authCase := func(out string, err error) readiness.Check {
 		f := mcpFake()
 		env := f.env()
-		fakeOf(env).RunTimedFn = func(name string, args ...string) (string, bool, error) {
+		systest.Of(env.System).RunTimedFn = func(name string, args ...string) (string, bool, error) {
 			key := strings.Join(append([]string{name}, args...), " ")
 			if key == "sbx mcp auth status notion" {
 				return out, false, err
@@ -486,7 +487,7 @@ func TestMCPRemoteAuth(t *testing.T) {
 	// Timeout: bounded probe deadline hit -> unverifiable.
 	f := mcpFake()
 	env := f.env()
-	fakeOf(env).RunTimedFn = func(name string, args ...string) (string, bool, error) {
+	systest.Of(env.System).RunTimedFn = func(name string, args ...string) (string, bool, error) {
 		key := strings.Join(append([]string{name}, args...), " ")
 		if key == "sbx mcp auth status notion" {
 			return "", true, fmt.Errorf("context deadline exceeded")
@@ -509,8 +510,8 @@ func TestMCPLocalNeverOAuthChecked(t *testing.T) {
 	cfg.MCP = []string{"slack"}
 	f := mcpFake()
 	env := f.env()
-	inner := fakeOf(env).RunFn
-	fakeOf(env).RunFn = func(name string, args ...string) (string, error) {
+	inner := systest.Of(env.System).RunFn
+	systest.Of(env.System).RunFn = func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "auth" {
 			t.Fatalf("local stdio server hit the native OAuth check: sbx %v", args)
 		}
@@ -532,8 +533,8 @@ func TestMCPUnknownClassificationFailsClosed(t *testing.T) {
 		},
 	}
 	env := f.env()
-	inner := fakeOf(env).RunFn
-	fakeOf(env).RunFn = func(name string, args ...string) (string, error) {
+	inner := systest.Of(env.System).RunFn
+	systest.Of(env.System).RunFn = func(name string, args ...string) (string, error) {
 		if name == "/bin/rm" {
 			t.Fatalf("unknown-classification server was exec'd: %s %v", name, args)
 		}
@@ -596,7 +597,7 @@ func TestMCPProbeTimeoutIsUnverifiable(t *testing.T) {
 	f := mcpFake()
 	f.output["sbx mcp get slack"] = "name: slack\ncommand: " + regCmd + "\n"
 	env := f.env()
-	fakeOf(env).RunTimedFn = func(name string, args ...string) (string, bool, error) {
+	systest.Of(env.System).RunTimedFn = func(name string, args ...string) (string, bool, error) {
 		key := strings.Join(append([]string{name}, args...), " ")
 		if key == regCmd+" --list-tools" {
 			return "", true, fmt.Errorf("context deadline exceeded")
@@ -625,8 +626,8 @@ func TestMCPCanonicalExecutableGate(t *testing.T) {
 		f := mcpFake()
 		f.output["sbx mcp get slack"] = "name: slack\ncommand: /tmp/malicious/pix-host mcp slack\n"
 		env := f.env()
-		inner := fakeOf(env).RunFn
-		fakeOf(env).RunFn = func(name string, args ...string) (string, error) {
+		inner := systest.Of(env.System).RunFn
+		systest.Of(env.System).RunFn = func(name string, args ...string) (string, error) {
 			if strings.HasPrefix(name, "/tmp/malicious/") {
 				t.Fatalf("doctor exec'd a look-alike pix-host: %s %v", name, args)
 			}
@@ -648,8 +649,8 @@ func TestMCPCanonicalExecutableGate(t *testing.T) {
 		f.output["sbx mcp get slack"] = "name: slack\ncommand: " + reg + "\n"
 		var execd string
 		env := f.env()
-		inner := fakeOf(env).RunFn
-		fakeOf(env).RunFn = func(name string, args ...string) (string, error) {
+		inner := systest.Of(env.System).RunFn
+		systest.Of(env.System).RunFn = func(name string, args ...string) (string, error) {
 			if strings.HasSuffix(name, "pix-host") && len(args) > 0 && args[len(args)-1] == "--list-tools" {
 				execd = name
 				return "slack_search\n", nil
@@ -671,8 +672,8 @@ func TestMCPCanonicalExecutableGate(t *testing.T) {
 		f.present["op"] = true // lookPath("op") -> /usr/bin/op
 		f.output["sbx mcp get slack"] = "name: slack\ncommand: /tmp/op run --env-file=/x -- /usr/local/bin/pix-host mcp slack\n"
 		env := f.env()
-		inner := fakeOf(env).RunFn
-		fakeOf(env).RunFn = func(name string, args ...string) (string, error) {
+		inner := systest.Of(env.System).RunFn
+		systest.Of(env.System).RunFn = func(name string, args ...string) (string, error) {
 			if name == "/tmp/op" {
 				t.Fatalf("doctor exec'd a look-alike op: %s %v", name, args)
 			}
@@ -696,8 +697,8 @@ func TestMCPCanonicalExecutableGate(t *testing.T) {
 		f.output["sbx mcp get slack"] = "name: slack\ncommand: " + reg + "\n"
 		var execd string
 		env := f.env()
-		inner := fakeOf(env).RunFn
-		fakeOf(env).RunFn = func(name string, args ...string) (string, error) {
+		inner := systest.Of(env.System).RunFn
+		systest.Of(env.System).RunFn = func(name string, args ...string) (string, error) {
 			if len(args) > 0 && args[len(args)-1] == "--list-tools" {
 				execd = name
 				return "slack_search\nslack_post\n", nil
@@ -718,8 +719,8 @@ func TestMCPCanonicalExecutableGate(t *testing.T) {
 		f := mcpFake()
 		f.output["sbx mcp get slack"] = "name: slack\ncommand: /tmp/evil -- /usr/local/bin/pix-host mcp slack\n"
 		env := f.env()
-		inner := fakeOf(env).RunFn
-		fakeOf(env).RunFn = func(name string, args ...string) (string, error) {
+		inner := systest.Of(env.System).RunFn
+		systest.Of(env.System).RunFn = func(name string, args ...string) (string, error) {
 			if name == "/tmp/evil" {
 				t.Fatalf("doctor exec'd a foreign wrapper: %s %v", name, args)
 			}

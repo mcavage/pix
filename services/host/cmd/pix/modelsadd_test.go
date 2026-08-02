@@ -16,6 +16,7 @@ import (
 	"pix/host/config"
 	"pix/host/inference"
 	"pix/host/readiness"
+	"pix/host/secret"
 	"pix/host/sys/systest"
 )
 
@@ -25,9 +26,9 @@ func modelsAddEnv(t *testing.T, providers ...string) shellEnv {
 	t.Helper()
 	var lines []string
 	for _, p := range providers {
-		for _, r := range providerKeyRefOrder {
-			if r.name == p {
-				lines = append(lines, r.envVar+"=op://v/i/f")
+		for _, r := range secret.ProviderKeyRefOrder {
+			if r.Name == p {
+				lines = append(lines, r.EnvVar+"=op://v/i/f")
 			}
 		}
 	}
@@ -230,21 +231,21 @@ func TestSecretSetNudgesTowardWiring(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "op-refs.env")
 	env := shellEnv{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "", nil }, WriteFileFn: func(string, []byte, os.FileMode) error { return nil }}}
-	fakeOf(env).ReadFileFn = func(p string) (string, error) {
+	systest.Of(env.System).ReadFileFn = func(p string) (string, error) {
 		if p == path {
 			return "", nil
 		}
 		return "", os.ErrNotExist
 	}
 	var out bytes.Buffer
-	_ = runSecretSetLocked(env, &out, "ANTHROPIC_API_KEY", "op://v/i/f")
+	_ = secret.RunSecretSetLocked(env, &out, "ANTHROPIC_API_KEY", "op://v/i/f")
 	if !strings.Contains(out.String(), "pix models add anthropic") {
 		t.Errorf("setting a provider key must name the command that wires it, got:\n%s", out.String())
 	}
 
 	// A non-provider key has nothing to wire, so it must stay quiet.
 	out.Reset()
-	_ = runSecretSetLocked(env, &out, "SLACK_BOT_TOKEN", "op://v/i/f")
+	_ = secret.RunSecretSetLocked(env, &out, "SLACK_BOT_TOKEN", "op://v/i/f")
 	if strings.Contains(out.String(), "pix models add") {
 		t.Errorf("a non-provider secret must not suggest wiring a model provider, got:\n%s", out.String())
 	}

@@ -45,6 +45,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"pix/host/readiness"
+	"pix/host/secret"
 	"runtime"
 	"strconv"
 	"strings"
@@ -580,7 +581,7 @@ func slackSetupPKCE(env shellEnv, cfg *config.Config, opts slackSetupOpts, deps 
 	// interactively it needs its own explicit confirmation, distinct from the
 	// ordinary "wire up Slack" prompt below. --allow-identity-change (or
 	// --yes with it set) skips this gate entirely.
-	_, existingRefsContent, _ := opRefsContent(env)
+	_, existingRefsContent, _ := secret.OpRefsContent(env)
 	pinTeam, pinUser := slackIdentityPins(existingRefsContent)
 	identityChanged := (pinTeam != "" || pinUser != "") && (pinTeam != id.TeamID || pinUser != id.UserID)
 	if identityChanged && !opts.allowIdentityChange {
@@ -633,17 +634,17 @@ func slackSetupPKCE(env shellEnv, cfg *config.Config, opts slackSetupOpts, deps 
 	itemID, vaultID := store.ItemID(), store.VaultID()
 	orphan := slackOAuthOrphanNote(itemID, vaultID)
 
-	if err := runSecretSet(env, out, "SLACK_TEAM_ID", blob.TeamID); err != nil {
+	if err := secret.RunSecretSet(env, out, "SLACK_TEAM_ID", blob.TeamID); err != nil {
 		return fmt.Errorf("writing SLACK_TEAM_ID: %w; %s", err, orphan)
 	}
-	if err := runSecretSet(env, out, "SLACK_USER_ID", blob.UserID); err != nil {
+	if err := secret.RunSecretSet(env, out, "SLACK_USER_ID", blob.UserID); err != nil {
 		return fmt.Errorf("writing SLACK_USER_ID: %w; %s", err, orphan)
 	}
 	// The static-token flow's SLACK_TOKEN ref is meaningless once the rotating
 	// credential lives in 1Password under Slack.OAuthVaultID/OAuthDocumentID —
 	// remove it so a stale ref never shadows the OAuth path. A no-op when
-	// absent (runSecretRm is idempotent).
-	if err := runSecretRm(env, out, "SLACK_TOKEN"); err != nil {
+	// absent (secret.RunSecretRm is idempotent).
+	if err := secret.RunSecretRm(env, out, "SLACK_TOKEN"); err != nil {
 		return fmt.Errorf("removing the legacy SLACK_TOKEN ref: %w; %s", err, orphan)
 	}
 
@@ -892,7 +893,7 @@ func slackOAuthStatusChecks(cfg *config.Config, env shellEnv, now time.Time) []r
 			Detail: "could not build the OAuth runtime source (the shared 1Password-credential lock's state directory could not be resolved)"})
 		return checks
 	}
-	_, content, _ := opRefsContent(env)
+	_, content, _ := secret.OpRefsContent(env)
 	pinTeam, pinUser := slackIdentityPins(content)
 	checks = append(checks, slackOAuthAccessChecks(env, mgr, pinTeam, pinUser)...)
 	return checks
@@ -1004,7 +1005,7 @@ func slackDisableOAuth(cfg *config.Config, env shellEnv, out io.Writer, deps sla
 	fmt.Fprintln(out, "  cleared config: mcp "+slackServerName+", OAuth vault/document (client_id and redirect_uri kept for re-setup)")
 
 	for _, key := range []string{"SLACK_TEAM_ID", "SLACK_USER_ID", "SLACK_TOKEN"} {
-		if err := runSecretRm(env, out, key); err != nil {
+		if err := secret.RunSecretRm(env, out, key); err != nil {
 			return fmt.Errorf("removing %s: %w", key, err)
 		}
 	}

@@ -15,6 +15,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/knowledge"
+	"pix/host/secret"
 	"pix/host/service"
 	"pix/host/sys"
 	"pix/host/workspace"
@@ -108,7 +109,7 @@ func runRun(argv []string) {
 		bootstrapProviderKeys(env, os.Stdin, os.Stderr, isTTY(os.Stdin))
 		keyEvidence = probeSbxKeyEvidence(env)
 		if keyEvidence.ok() && !anyModelKeyInOutput(keyEvidence.out) {
-			fmt.Fprint(os.Stderr, modelKeyMissingMessage(env))
+			fmt.Fprint(os.Stderr, secret.ModelKeyMissingMessage(env))
 			exit(1)
 		}
 	}
@@ -833,28 +834,6 @@ func runReplaceCommand(ws string) string {
 		return "pix run --replace"
 	}
 	return "pix run " + shellQuoteArg(ws) + " --replace"
-}
-
-// modelProviders are the model-provider secret keys a pi session needs at least
-// one of to run. github is deliberately excluded: it authorizes git operations,
-// not the model.
-var modelProviders = []string{"anthropic", "openai", "google"}
-
-// modelKeyMissingMessage is the guidance printed when no model key could be put
-// in place. (The launch-blocking presence CHECK lives in runRun/launchTask via
-// sbxModelKeyState's tri-state; this is only the how-to-fix text.)
-func modelKeyMissingMessage(env shellEnv) string {
-	msg := fmt.Sprintf("pix run: no model provider key is set (need one of %s).\n",
-		strings.Join(modelProviders, ", "))
-	if providerKeyRefsPresent(env) {
-		msg += "You have 1Password key refs; resolve them into sbx with:\n  pix secret sync\n"
-	} else {
-		msg += "Keys come from 1Password (op is required). Configure them, then re-run:\n" +
-			"  pix setup                                                       (guided, all providers)\n" +
-			"  pix models add anthropic                                        (one provider, prompts for the ref)\n" +
-			"  pix secret set ANTHROPIC_API_KEY op://vault/item/field           (scripted; then `pix models add anthropic`)\n"
-	}
-	return msg
 }
 
 // parseRunArgs is a small hand-rolled parser (no cobra, no third-party flags) so

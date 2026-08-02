@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"pix/host/secret"
 	"pix/host/sys/systest"
 	"strings"
 	"testing"
@@ -46,38 +47,38 @@ func TestBootstrapProviderKeys_MissingNoTTY(t *testing.T) {
 
 // --- item 6: sbx-absent (portability) vs sbx-error (diagnostic) -----------
 
-// sbx not on PATH at all is genuine portability: probeSbxSecrets/
-// sbxAllModelKeysPresent must classify it sbxSecretsAbsent, distinct from a
+// sbx not on PATH at all is genuine portability: secret.ProbeSbxSecrets/
+// secret.SbxAllModelKeysPresent must classify it secret.SbxSecretsAbsent, distinct from a
 // present-but-erroring sbx.
 func TestProbeSbxSecrets_Absent(t *testing.T) {
 	env := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("not found") }}}
-	if _, state := probeSbxSecrets(env); state != sbxSecretsAbsent {
-		t.Errorf("sbx not on PATH must classify sbxSecretsAbsent, got %v", state)
+	if _, state := secret.ProbeSbxSecrets(env); state != secret.SbxSecretsAbsent {
+		t.Errorf("sbx not on PATH must classify secret.SbxSecretsAbsent, got %v", state)
 	}
 }
 
 // sbx on PATH but `sbx secret ls` itself fails is a REAL, diagnosable problem
-// — must classify sbxSecretsError, never conflated with "absent".
+// — must classify secret.SbxSecretsError, never conflated with "absent".
 func TestProbeSbxSecrets_CommandFails(t *testing.T) {
 	env := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunFn: func(string, ...string) (string, error) { return "", fmt.Errorf("control plane down") }}}
-	if _, state := probeSbxSecrets(env); state != sbxSecretsError {
-		t.Errorf("a failing `sbx secret ls` must classify sbxSecretsError, got %v", state)
+	if _, state := secret.ProbeSbxSecrets(env); state != secret.SbxSecretsError {
+		t.Errorf("a failing `sbx secret ls` must classify secret.SbxSecretsError, got %v", state)
 	}
 }
 
 func TestSbxAllModelKeysPresent_DistinguishesAbsentFromError(t *testing.T) {
 	absent := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("not found") }}}
-	if all, state := sbxAllModelKeysPresent(absent); all || state != sbxSecretsAbsent {
-		t.Errorf("absent sbx: got all=%v state=%v, want false,sbxSecretsAbsent", all, state)
+	if all, state := secret.SbxAllModelKeysPresent(absent); all || state != secret.SbxSecretsAbsent {
+		t.Errorf("absent sbx: got all=%v state=%v, want false,secret.SbxSecretsAbsent", all, state)
 	}
 
 	errored := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunFn: func(string, ...string) (string, error) { return "", fmt.Errorf("boom") }}}
-	if all, state := sbxAllModelKeysPresent(errored); all || state != sbxSecretsError {
-		t.Errorf("erroring sbx: got all=%v state=%v, want false,sbxSecretsError", all, state)
+	if all, state := secret.SbxAllModelKeysPresent(errored); all || state != secret.SbxSecretsError {
+		t.Errorf("erroring sbx: got all=%v state=%v, want false,secret.SbxSecretsError", all, state)
 	}
 
 	complete := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunFn: func(string, ...string) (string, error) { return "anthropic\nopenai\ngoogle\n", nil }}}
-	if all, state := sbxAllModelKeysPresent(complete); !all || state != sbxSecretsOK {
-		t.Errorf("complete: got all=%v state=%v, want true,sbxSecretsOK", all, state)
+	if all, state := secret.SbxAllModelKeysPresent(complete); !all || state != secret.SbxSecretsOK {
+		t.Errorf("complete: got all=%v state=%v, want true,secret.SbxSecretsOK", all, state)
 	}
 }

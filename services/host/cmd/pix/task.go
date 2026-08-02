@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"pix/host/monitor/tui"
+	"pix/host/secret"
 	"pix/host/sys"
 	"pix/host/workspace"
 	"sort"
@@ -1155,11 +1156,11 @@ func launchTask(o runOpts) error {
 	if _, err := env.LookPath("sbx"); err == nil && !configuredKeylessInference() {
 		// Resolve any 1Password key refs into sbx first (same no-ritual path as run),
 		// so a task on a fresh machine isn't rejected for a key it can auto-provision.
-		ensureProviderKeysFromRefs(env, os.Stderr)
+		secret.EnsureProviderKeysFromRefs(env, os.Stderr)
 		// Tri-state (same as run): refuse ONLY when we can POSITIVELY confirm no key.
 		// A transient `sbx secret ls` failure (probeOK=false) must not abort a task.
 		if present, probeOK := sbxModelKeyState(env); probeOK && !present {
-			return fmt.Errorf("%s", strings.TrimRight(modelKeyMissingMessage(env), "\n"))
+			return fmt.Errorf("%s", strings.TrimRight(secret.ModelKeyMissingMessage(env), "\n"))
 		}
 	}
 	cfg, _, err := workspace.LoadResolvedConfig()

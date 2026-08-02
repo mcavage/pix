@@ -37,6 +37,7 @@ import (
 	"os"
 	"path/filepath"
 	"pix/host/readiness"
+	"pix/host/secret"
 	"sort"
 	"strings"
 	"time"
@@ -163,7 +164,7 @@ func setupLocalModels(cfg *config.Config, env shellEnv, in io.Reader, out io.Wri
 			fmt.Fprintf(out, "  %-18s (%s)  — optional\n", m.tag, roles)
 		}
 		fmt.Fprintf(out, "Pull %s now? Each download can be several GB of network and disk. [y/N] ", plural(len(o.missing), "model"))
-		line, ok := scanYN(bufio.NewScanner(in))
+		line, ok := secret.ScanYN(bufio.NewScanner(in))
 		if !ok || (line != "y" && line != "yes") {
 			o.consent = "prompt-no"
 			fmt.Fprintln(out, "")

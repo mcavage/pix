@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"pix/host/cli"
 	"pix/host/readiness"
+	"pix/host/secret"
 	"strings"
 	"time"
 
@@ -204,7 +205,7 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 	// and the two warrant different guidance.
 	keyEvidence := probeSbxKeyEvidence(env)
 	sbxOut, sbxOK := keyEvidence.out, keyEvidence.ok()
-	sbxOnPath := keyEvidence.state != sbxSecretsAbsent
+	sbxOnPath := keyEvidence.state != secret.SbxSecretsAbsent
 
 	// The SHARED lazy snapshot (readiness_launch.go): the one core launch
 	// requirement plus the two host services, identity-verified. status renders

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"pix/host/readiness"
+	"pix/host/secret"
 	"sort"
 	"strings"
 
@@ -310,7 +311,7 @@ func configuredInferenceSummary(cfg *config.Config) (int, []string) {
 // sbxModelKeyState uses for `run`'s launch gate \u2014 so doctor and the launch
 // gate can never disagree about what "a key is present" means.
 func modelKeyCoreCheck(sbxOut string, sbxOK bool) readiness.Check {
-	names := strings.Join(modelProviders, "/")
+	names := strings.Join(secret.ModelProviders, "/")
 	if !sbxOK {
 		return readiness.Check{
 			Label:       "model key",
@@ -335,16 +336,16 @@ func modelKeyCoreCheck(sbxOut string, sbxOK bool) readiness.Check {
 		Verdict:     readiness.VerdictTodo,
 		Detail:      "none of " + names + " is set \u2014 pix cannot launch a model",
 		Todo:        modelKeyFixCmd,
-		Evidence:    "sbx secret ls: none of " + strings.Join(modelProviders, ", ") + " present",
+		Evidence:    "sbx secret ls: none of " + strings.Join(secret.ModelProviders, ", ") + " present",
 	}
 }
 
-// presentModelProviders lists which of modelProviders sbxOut shows as set, for
+// presentModelProviders lists which of secret.ModelProviders sbxOut shows as set, for
 // the core check's evidence string (alternatives belong in evidence, never in
 // the fix command).
 func presentModelProviders(sbxOut string) string {
 	var got []string
-	for _, k := range modelProviders {
+	for _, k := range secret.ModelProviders {
 		if grepWord(sbxOut, k) {
 			got = append(got, k)
 		}

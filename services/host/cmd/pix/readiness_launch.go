@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"pix/host/readiness"
+	"pix/host/secret"
 
 	"pix/host/config"
 )
@@ -33,18 +34,18 @@ import (
 // (unverifiable either way, but only the second is a host problem).
 type sbxKeyEvidence struct {
 	out   string
-	state sbxSecretsProbeState
+	state secret.SbxSecretsProbeState
 }
 
 // ok reports whether the probe actually answered, i.e. whether out may be read
 // as truth about which keys are set.
-func (e sbxKeyEvidence) ok() bool { return e.state == sbxSecretsOK }
+func (e sbxKeyEvidence) ok() bool { return e.state == secret.SbxSecretsOK }
 
 // probeSbxKeyEvidence runs the ONE shared secrets probe, for a caller that has
 // no evidence in hand yet. A caller that already probed passes its own result
 // instead of calling this.
 func probeSbxKeyEvidence(env shellEnv) sbxKeyEvidence {
-	out, state := probeSbxSecrets(env)
+	out, state := secret.ProbeSbxSecrets(env)
 	return sbxKeyEvidence{out: out, state: state}
 }
 

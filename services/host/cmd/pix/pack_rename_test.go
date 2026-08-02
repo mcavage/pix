@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/secret"
 )
 
 // TestPackDir_DefaultsToDefault: the built-in pack dir basename ("pack" ->
@@ -842,7 +843,7 @@ func TestSetupHostPhase_ActivatesExistingMigratedDefaultPack_WhenCfgPackEmpty(t 
 		"OPENAI_API_KEY":    "op://v/openai/key",
 		"GEMINI_API_KEY":    "op://v/gemini/key",
 	} {
-		if err := recordSyncedRefWithDigest(envVar, ref, secretDigestHex("sk-val")); err != nil {
+		if err := secret.RecordSyncedRefWithDigest(envVar, ref, secret.SecretDigestHex("sk-val")); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -894,7 +895,7 @@ func TestSetupHostPhase_PackActivationFailure_FailsSetup(t *testing.T) {
 		"OPENAI_API_KEY":    "op://v/openai/key",
 		"GEMINI_API_KEY":    "op://v/gemini/key",
 	} {
-		if err := recordSyncedRefWithDigest(envVar, ref, secretDigestHex("sk-val")); err != nil {
+		if err := secret.RecordSyncedRefWithDigest(envVar, ref, secret.SecretDigestHex("sk-val")); err != nil {
 			t.Fatal(err)
 		}
 	}

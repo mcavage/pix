@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/secret"
 )
 
 // contains reports whether the ordered args slice contains the given
@@ -564,7 +565,7 @@ func TestAnyModelKeyPresent(t *testing.T) {
 
 func TestModelKeyMissingMessage(t *testing.T) {
 	f := fakeEnv{present: map[string]bool{"sbx": true}, output: map[string]string{"sbx secret ls": "github\n"}}
-	msg := modelKeyMissingMessage(f.env())
+	msg := secret.ModelKeyMissingMessage(f.env())
 	for _, want := range []string{"anthropic", "openai", "google", "pix setup", "op://vault/item/field"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("guidance missing %q, got:\n%s", want, msg)

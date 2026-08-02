@@ -70,6 +70,7 @@ var pkgLayer = map[string]int{
 	"service":     layerCapability,
 	"memory":      layerCapability,
 	"knowledge":   layerCapability,
+	"secret":      layerCapability,
 
 	// L2 — the shared model of "is this working".
 	"readiness": layerReadiness,

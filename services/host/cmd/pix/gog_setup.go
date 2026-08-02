@@ -66,6 +66,7 @@ import (
 	"strings"
 
 	"pix/host/config"
+	"pix/host/secret"
 )
 
 // The `gog` verb layer that used to live here (gogUsage, gogSetupUsage,
@@ -500,7 +501,7 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 		fmt.Fprintln(out, "interactive auth is healthy, but the headless path returns 0 tools.")
 		fmt.Fprintln(out, "  this is the documented trap: the gateway spawns gog in a bare, non-interactive")
 		fmt.Fprintln(out, "  env and can't unlock the keyring without help.")
-		fmt.Fprintf(out, "  add GOG_KEYRING_BACKEND=file + GOG_KEYRING_PASSWORD + GOG_ACCOUNT + GOG_HOME to %s\n", defaultOpRefsPath(env))
+		fmt.Fprintf(out, "  add GOG_KEYRING_BACKEND=file + GOG_KEYRING_PASSWORD + GOG_ACCOUNT + GOG_HOME to %s\n", secret.DefaultOpRefsPath(env))
 		return fmt.Errorf("authorization succeeded but the headless tool listing returned 0 tools; nothing was registered (account %s)", account)
 	default: // probeTimedOut, probeError, probeDeniedByPolicy — never claimed as success
 		fmt.Fprintf(out, "headless verification could not be confirmed (%s): not registering until this is fixed\n", head.detail)

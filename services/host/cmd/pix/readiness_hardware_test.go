@@ -15,14 +15,14 @@ func hwMemEnv(t *testing.T, goos string, totalGB float64) shellEnv {
 	env := shellEnv{System: &systest.Fake{}}
 	switch goos {
 	case "darwin":
-		fakeOf(env).RunFn = func(name string, args ...string) (string, error) {
+		systest.Of(env.System).RunFn = func(name string, args ...string) (string, error) {
 			if name == "sysctl" {
 				return fmt.Sprintf("%d\n", int64(totalGB*bytesPerGB)), nil
 			}
 			return "", fmt.Errorf("unexpected command %s", name)
 		}
 	case "linux":
-		fakeOf(env).ReadFileFn = func(path string) (string, error) {
+		systest.Of(env.System).ReadFileFn = func(path string) (string, error) {
 			if path != "/proc/meminfo" {
 				return "", fmt.Errorf("unexpected file %s", path)
 			}

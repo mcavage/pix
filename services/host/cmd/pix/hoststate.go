@@ -27,6 +27,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"pix/host/readiness"
+	"pix/host/secret"
 	"strings"
 	"unicode"
 
@@ -330,7 +331,7 @@ func buildTrustedHostState(cfg *config.Config, env shellEnv, packOverride string
 	}
 	dial := env.DialLocal
 	source := "sbx"
-	if providerKeyRefsPresent(env) {
+	if secret.ProviderKeyRefsPresent(env) {
 		source = "1password"
 	}
 	hs := buildHostState(cfg, sbxOut, sbxOK, dial, source, resolveHostStatePack(cfg, packOverride))

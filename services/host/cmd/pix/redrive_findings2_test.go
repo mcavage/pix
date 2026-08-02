@@ -25,6 +25,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/readiness"
+	"pix/host/secret"
 	"pix/host/sys"
 	"pix/host/sys/systest"
 	"pix/host/workspace"
@@ -114,7 +115,7 @@ func TestVerifyCatalogMCPReady_ProbeFailureIsUnverifiableRetry(t *testing.T) {
 	}
 	// Listing itself unavailable (sbx absent) — also unverifiable, fail closed.
 	absent := catalogGateEnv(t, nil)
-	fakeOf(absent).LookPathFn = func(string) (string, error) { return "", fmt.Errorf("not found") }
+	systest.Of(absent.System).LookPathFn = func(string) (string, error) { return "", fmt.Errorf("not found") }
 	if err := verifyCatalogMCPReady(absent, []string{"notion"}); err == nil || !strings.Contains(err.Error(), "could not verify") {
 		t.Errorf("sbx-absent must fail closed as unverifiable, got: %v", err)
 	}
@@ -122,7 +123,7 @@ func TestVerifyCatalogMCPReady_ProbeFailureIsUnverifiableRetry(t *testing.T) {
 
 func TestVerifyCatalogMCPReady_NonCatalogNamesNeverProbed(t *testing.T) {
 	env := catalogGateEnv(t, nil) // any probe would error the run below
-	fakeOf(env).RunFn = func(name string, args ...string) (string, error) {
+	systest.Of(env.System).RunFn = func(name string, args ...string) (string, error) {
 		t.Fatalf("non-catalog names must never be probed by the gate: %s %v", name, args)
 		return "", nil
 	}
@@ -311,12 +312,12 @@ func TestRunWithTimeoutD_HangingProcessBounded(t *testing.T) {
 func TestProbeSbxSecrets_HangingSbxIsErrorNotAbsent(t *testing.T) {
 	env := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
 	start := time.Now()
-	_, state := probeSbxSecrets(env)
-	if state != sbxSecretsError {
-		t.Errorf("hanging `sbx secret ls` must classify sbxSecretsError, got %v", state)
+	_, state := secret.ProbeSbxSecrets(env)
+	if state != secret.SbxSecretsError {
+		t.Errorf("hanging `sbx secret ls` must classify secret.SbxSecretsError, got %v", state)
 	}
 	if el := time.Since(start); el > 10*time.Second {
-		t.Fatalf("probeSbxSecrets took %s — unbounded", el)
+		t.Fatalf("secret.ProbeSbxSecrets took %s — unbounded", el)
 	}
 }
 

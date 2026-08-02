@@ -146,8 +146,8 @@ func ollamaWorldRun(w *ollamaWorld, name string, args ...string) (string, error)
 }
 
 func stubLiveInferenceOK(env *shellEnv) {
-	run := fakeOf(*env).RunFn
-	fakeOf(*env).RunFn = func(name string, args ...string) (string, error) {
+	run := systest.Of(env.System).RunFn
+	systest.Of(env.System).RunFn = func(name string, args ...string) (string, error) {
 		if name == "op" && len(args) == 2 && args[0] == "read" {
 			return "test-provider-key\n", nil
 		}

@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"pix/host/readiness"
+	"pix/host/secret"
 	"pix/host/sys/systest"
 	"reflect"
 	"strings"
@@ -145,9 +146,9 @@ func TestEnsureProviderKeysFromRefs_HangingSbxBoundedNoMutation(t *testing.T) {
 	}, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
 	var out bytes.Buffer
 	start := time.Now()
-	ensureProviderKeysFromRefsLocked(env, &out)
+	secret.EnsureProviderKeysFromRefsLocked(env, &out)
 	if el := time.Since(start); el > 10*time.Second {
-		t.Fatalf("ensureProviderKeysFromRefsLocked took %s — unbounded", el)
+		t.Fatalf("secret.EnsureProviderKeysFromRefsLocked took %s — unbounded", el)
 	}
 	if strings.Contains(out.String(), "resolved") {
 		t.Errorf("a hung probe must not claim any key was resolved, got:\n%s", out.String())
@@ -245,7 +246,7 @@ func TestUnwrapOpRun_AcceptsOnlyLauncherGrammar(t *testing.T) {
 	// wrapped registration is rejected rather than blessed against an unknown
 	// env file.
 	noRefs := env
-	fakeOf(noRefs).IsFileFn = func(string) bool { return false }
+	systest.Of(noRefs.System).IsFileFn = func(string) bool { return false }
 	if _, ok := unwrapOpRun(noRefs, canonical); ok {
 		t.Error("an op-wrapped registration must be rejected when the launcher refs file is unresolvable")
 	}
@@ -318,7 +319,7 @@ func TestRecognizedMCPArgv_WrapperGrammar(t *testing.T) {
 func TestMcpLocalCheck_RejectedWrapperNeverProbed(t *testing.T) {
 	env := f2Env()
 	reg := f2Op + " run --no-masking --env-file=/tmp/evil.env -- " + f2Host + " mcp slack"
-	fakeOf(env).RunTimedFn = func(name string, args ...string) (string, bool, error) {
+	systest.Of(env.System).RunTimedFn = func(name string, args ...string) (string, bool, error) {
 		key := strings.Join(append([]string{name}, args...), " ")
 		if strings.Contains(key, "--list-tools") {
 			t.Fatalf("doctor must never probe a rejected registration: %s", key)
@@ -328,7 +329,7 @@ func TestMcpLocalCheck_RejectedWrapperNeverProbed(t *testing.T) {
 		}
 		return "", false, fmt.Errorf("no fake output for %q", key)
 	}
-	fakeOf(env).RunFn = func(name string, args ...string) (string, error) {
+	systest.Of(env.System).RunFn = func(name string, args ...string) (string, error) {
 		t.Fatalf("rejected registration must never be exec'd: %s %v", name, args)
 		return "", nil
 	}

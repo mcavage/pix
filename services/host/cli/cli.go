@@ -288,3 +288,30 @@ func SafeGitURL(url string) bool {
 	}
 	return false
 }
+
+// grepWord reports whether out contains name as a whole word (matches the
+// Makefile's `grep -qw`).
+func GrepWord(out, name string) bool {
+	for _, line := range strings.Split(out, "\n") {
+		for _, f := range strings.FieldsFunc(line, func(r rune) bool {
+			return r == ' ' || r == '\t' || r == ',' || r == ':' || r == '/' || r == '"' || r == '='
+		}) {
+			if f == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// confirmYN reads a [Y/n] answer. def is the answer for a bare Enter.
+func ConfirmYN(in io.Reader, out io.Writer, prompt string, def bool) bool {
+	fmt.Fprint(out, prompt)
+	var line string
+	fmt.Fscanln(in, &line)
+	ans := strings.ToLower(strings.TrimSpace(line))
+	if ans == "" {
+		return def
+	}
+	return ans == "y" || ans == "yes"
+}

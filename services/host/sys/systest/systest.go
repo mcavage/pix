@@ -291,3 +291,74 @@ func (f *Fake) DialLocal(port int) bool {
 // compile-time proof that Fake is a complete System, so a method added to the
 // interface breaks here rather than at 205 call sites.
 var _ sys.System = (*Fake)(nil)
+
+// Of asserts that s is a Fake and returns it, for fixtures that build a base
+// env and then override one seam. TEST-ONLY: it panics on a real System, which
+// is the right outcome for test-only code reached in production -- the
+// alternative is a silent no-op, and silent no-ops are what this refactor
+// exists to delete.
+func Of(s sys.System) *Fake { return s.(*Fake) }
+
+// --- lock observation ---------------------------------------------------
+//
+// LockRecorder is a sys.Lock double that records acquire/release events into a
+// shared log and reports a NESTED acquisition of the same path as a fatal --
+// which with the real flock (per-open-file-description) would block forever,
+// so it is exactly the deadlock a test suite must catch deterministically.
+//
+// It takes a Fatalf callback rather than a *testing.T so this package need not
+// import "testing"; callers pass t.Fatalf.
+type LockRecorder struct {
+	fatalf func(string, ...any)
+	mu     sync.Mutex
+	depth  map[string]int
+	events *[]string
+}
+
+func NewLockRecorder(fatalf func(string, ...any), events *[]string) *LockRecorder {
+	return &LockRecorder{fatalf: fatalf, depth: map[string]int{}, events: events}
+}
+
+// Lock is the sys.System-shaped method; assign it to Fake.LockFn.
+func (l *LockRecorder) Lock(path string, fn func() error) error {
+	l.mu.Lock()
+	if l.depth[path] > 0 {
+		l.mu.Unlock()
+		l.fatalf("nested flock acquisition on %s — a real flock would deadlock here (use a *Locked variant)", path)
+	}
+	l.depth[path]++
+	*l.events = append(*l.events, "acquire "+path)
+	l.mu.Unlock()
+	err := fn()
+	l.mu.Lock()
+	l.depth[path]--
+	*l.events = append(*l.events, "release "+path)
+	l.mu.Unlock()
+	return err
+}
+
+// LockWindow returns the index of the first acquire and last release of
+// lockPath in events; (-1, -1) if either is missing.
+func LockWindow(events []string, lockPath string) (first, last int) {
+	first, last = -1, -1
+	for i, e := range events {
+		if e == "acquire "+lockPath && first < 0 {
+			first = i
+		}
+		if e == "release "+lockPath {
+			last = i
+		}
+	}
+	return first, last
+}
+
+// CountEvents counts events with the given prefix.
+func CountEvents(events []string, prefix string) int {
+	n := 0
+	for _, e := range events {
+		if strings.HasPrefix(e, prefix) {
+			n++
+		}
+	}
+	return n
+}

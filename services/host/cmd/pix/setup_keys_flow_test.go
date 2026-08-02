@@ -5,7 +5,7 @@
 // signed in are hard preconditions; an existing ref is confirmed, not
 // re-pasted, but must still resolve; a missing ref is prompted for once on a
 // TTY, or reported as an exact `pix secret set` command otherwise), then
-// reconcileProviderKeysWithSbx (secret_sync.go) brings sbx into line using the
+// secret.ReconcileProviderKeysWithSbx (secret_sync.go) brings sbx into line using the
 // launcher-owned synced-ref record (syncedrefs.go) since sbx secret values are
 // write-only.
 package main
@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"pix/host/secret"
 	"pix/host/sys/systest"
 	"sort"
 	"strings"
@@ -150,14 +151,14 @@ func TestSetupProvisionKeys_OpNotSignedIn_FailsWithExactFix(t *testing.T) {
 func TestSetupProvisionKeys_InteractiveRunsOfficialOpSignin(t *testing.T) {
 	signedIn := false
 	env, _ := stepEnv(t, "OPENAI_API_KEY=op://v/openai/key\n", "openai", "sk-val")
-	baseRun := fakeOf(env).RunFn
-	fakeOf(env).RunFn = func(name string, args ...string) (string, error) {
+	baseRun := systest.Of(env.System).RunFn
+	systest.Of(env.System).RunFn = func(name string, args ...string) (string, error) {
 		if name == "op" && len(args) >= 1 && args[0] == "account" && !signedIn {
 			return "", nil
 		}
 		return baseRun(name, args...)
 	}
-	fakeOf(env).RunInteractiveFn = func(name string, args ...string) error {
+	systest.Of(env.System).RunInteractiveFn = func(name string, args ...string) error {
 		if name != "op" || strings.Join(args, " ") != "signin" {
 			t.Fatalf("unexpected interactive command: %s %v", name, args)
 		}
@@ -190,7 +191,7 @@ func TestSetupProvisionKeys_RefsPresent_ConfirmedNotRepastedNoResync(t *testing.
 		"OPENAI_API_KEY":    "op://v/openai/key",
 		"GEMINI_API_KEY":    "op://v/gemini/key",
 	} {
-		if err := recordSyncedRefWithDigest(envVar, ref, secretDigestHex("sk-val")); err != nil {
+		if err := secret.RecordSyncedRefWithDigest(envVar, ref, secret.SecretDigestHex("sk-val")); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -233,7 +234,7 @@ func TestSetupProvisionKeys_ExistingRefBroken_FailsNoPersist(t *testing.T) {
 	if !strings.Contains(out.String(), "pix secret set ANTHROPIC_API_KEY") {
 		t.Errorf("must print the exact fix command, got:\n%s", out.String())
 	}
-	if _, ok := syncedRef("ANTHROPIC_API_KEY"); ok {
+	if _, ok := secret.SyncedRef("ANTHROPIC_API_KEY"); ok {
 		t.Error("a broken ref must never be recorded as synced")
 	}
 }
@@ -256,10 +257,10 @@ func TestSetupProvisionKeys_MissingRefs_InteractivePromptsCollectsAndPersistsBot
 	hostMode := ""
 	// re-read through the env's own readFile so this checks the ACTUAL paths
 	// setup writes, not a hardcoded guess.
-	if c, err := env.ReadFile(defaultOpRefsPath(env)); err == nil {
+	if c, err := env.ReadFile(secret.DefaultOpRefsPath(env)); err == nil {
 		opRefs = c
 	}
-	if c, err := env.ReadFile(hostModeRefsPath(env)); err == nil {
+	if c, err := env.ReadFile(secret.HostModeRefsPath(env)); err == nil {
 		hostMode = c
 	}
 	for _, want := range []string{"ANTHROPIC_API_KEY=op://V/anthropic/key"} {
@@ -351,10 +352,10 @@ func TestSetupProvisionKeys_MissingRefs_NonInteractive_ExactCommandsNoPrompt(t *
 func TestReconcile_SbxMissingOneKey_SetsAndRecords(t *testing.T) {
 	refs := allRefs("", "", "")
 	env, calls := stepEnv(t, refs, "openai google", "sk-val") // anthropic missing from sbx
-	if err := recordSyncedRefWithDigest("OPENAI_API_KEY", "op://v/openai/key", secretDigestHex("sk-val")); err != nil {
+	if err := secret.RecordSyncedRefWithDigest("OPENAI_API_KEY", "op://v/openai/key", secret.SecretDigestHex("sk-val")); err != nil {
 		t.Fatal(err)
 	}
-	if err := recordSyncedRefWithDigest("GEMINI_API_KEY", "op://v/gemini/key", secretDigestHex("sk-val")); err != nil {
+	if err := secret.RecordSyncedRefWithDigest("GEMINI_API_KEY", "op://v/gemini/key", secret.SecretDigestHex("sk-val")); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
@@ -365,7 +366,7 @@ func TestReconcile_SbxMissingOneKey_SetsAndRecords(t *testing.T) {
 	if !strings.Contains(joined, "sbx secret set -f -g anthropic -t sk-val") {
 		t.Errorf("missing key must be set in sbx:\n%s", joined)
 	}
-	if ref, ok := syncedRef("ANTHROPIC_API_KEY"); !ok || ref != "op://v/anthropic/key" {
+	if ref, ok := secret.SyncedRef("ANTHROPIC_API_KEY"); !ok || ref != "op://v/anthropic/key" {
 		t.Errorf("synced ref not recorded: %q, %v", ref, ok)
 	}
 }
@@ -380,7 +381,7 @@ func TestReconcile_SbxPresentSameRef_NoOp(t *testing.T) {
 		"OPENAI_API_KEY":    "op://v/openai/key",
 		"GEMINI_API_KEY":    "op://v/gemini/key",
 	} {
-		if err := recordSyncedRefWithDigest(envVar, ref, secretDigestHex("sk-val")); err != nil {
+		if err := secret.RecordSyncedRefWithDigest(envVar, ref, secret.SecretDigestHex("sk-val")); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -409,13 +410,13 @@ func TestReconcile_SbxPresentChangedRef_OverwritePrompt(t *testing.T) {
 	// updated to the declined NEW ref), so the mismatch persists and a real
 	// change keeps re-prompting on the next run.
 	env, calls := stepEnv(t, refs, "anthropic openai google", "sk-val")
-	if err := recordSyncedRef("ANTHROPIC_API_KEY", "op://v/anthropic/key-OLD"); err != nil {
+	if err := secret.RecordSyncedRef("ANTHROPIC_API_KEY", "op://v/anthropic/key-OLD"); err != nil {
 		t.Fatal(err)
 	}
-	if err := recordSyncedRef("OPENAI_API_KEY", "op://v/openai/key"); err != nil {
+	if err := secret.RecordSyncedRef("OPENAI_API_KEY", "op://v/openai/key"); err != nil {
 		t.Fatal(err)
 	}
-	if err := recordSyncedRef("GEMINI_API_KEY", "op://v/gemini/key"); err != nil {
+	if err := secret.RecordSyncedRef("GEMINI_API_KEY", "op://v/gemini/key"); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
@@ -432,7 +433,7 @@ func TestReconcile_SbxPresentChangedRef_OverwritePrompt(t *testing.T) {
 	if strings.Contains(joined, "secret set") {
 		t.Errorf("declined overwrite must not touch sbx:\n%s", joined)
 	}
-	if ref, ok := syncedRef("ANTHROPIC_API_KEY"); !ok || ref != "op://v/anthropic/key-OLD" {
+	if ref, ok := secret.SyncedRef("ANTHROPIC_API_KEY"); !ok || ref != "op://v/anthropic/key-OLD" {
 		t.Errorf("declined overwrite must leave the stale record as-is (still mismatched, so it re-prompts): %q, %v", ref, ok)
 	}
 
@@ -440,13 +441,13 @@ func TestReconcile_SbxPresentChangedRef_OverwritePrompt(t *testing.T) {
 	// ref, reusing STEP 1's already-validated value (no second op read of the
 	// same ref).
 	env2, calls2 := stepEnv(t, refs, "anthropic openai google", "sk-new-val")
-	if err := recordSyncedRef("ANTHROPIC_API_KEY", "op://v/anthropic/key-OLD"); err != nil {
+	if err := secret.RecordSyncedRef("ANTHROPIC_API_KEY", "op://v/anthropic/key-OLD"); err != nil {
 		t.Fatal(err)
 	}
-	if err := recordSyncedRef("OPENAI_API_KEY", "op://v/openai/key"); err != nil {
+	if err := secret.RecordSyncedRef("OPENAI_API_KEY", "op://v/openai/key"); err != nil {
 		t.Fatal(err)
 	}
-	if err := recordSyncedRef("GEMINI_API_KEY", "op://v/gemini/key"); err != nil {
+	if err := secret.RecordSyncedRef("GEMINI_API_KEY", "op://v/gemini/key"); err != nil {
 		t.Fatal(err)
 	}
 	var out2 bytes.Buffer
@@ -460,7 +461,7 @@ func TestReconcile_SbxPresentChangedRef_OverwritePrompt(t *testing.T) {
 	if !strings.Contains(joined2, "sbx secret set -f -g anthropic -t sk-new-val") {
 		t.Errorf("accepted overwrite must set sbx:\n%s", joined2)
 	}
-	if ref, ok := syncedRef("ANTHROPIC_API_KEY"); !ok || ref != "op://v/anthropic/key-NEW" {
+	if ref, ok := secret.SyncedRef("ANTHROPIC_API_KEY"); !ok || ref != "op://v/anthropic/key-NEW" {
 		t.Errorf("accepted overwrite must record the new ref: %q, %v", ref, ok)
 	}
 }
@@ -475,7 +476,7 @@ func TestReconcile_MultipleChangedRefs_OneBatchedPrompt(t *testing.T) {
 		"OPENAI_API_KEY":    "op://v/openai/key-OLD",
 		"GEMINI_API_KEY":    "op://v/gemini/key",
 	} {
-		if err := recordSyncedRef(envVar, ref); err != nil {
+		if err := secret.RecordSyncedRef(envVar, ref); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -504,10 +505,10 @@ func TestSetupProvisionKeys_NonInteractive_MissingSyncsButChangedRefFailsWithRer
 	// (recorded key-OLD) -> must NOT be silently overwritten without --yes, and
 	// must fail setup. gemini: missing from sbx -> must still be set.
 	env, calls := stepEnv(t, refs, "anthropic openai", "resolved")
-	if err := recordSyncedRefWithDigest("ANTHROPIC_API_KEY", "op://v/anthropic/key", secretDigestHex("resolved")); err != nil {
+	if err := secret.RecordSyncedRefWithDigest("ANTHROPIC_API_KEY", "op://v/anthropic/key", secret.SecretDigestHex("resolved")); err != nil {
 		t.Fatal(err)
 	}
-	if err := recordSyncedRef("OPENAI_API_KEY", "op://v/openai/key-OLD"); err != nil {
+	if err := secret.RecordSyncedRef("OPENAI_API_KEY", "op://v/openai/key-OLD"); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
@@ -527,7 +528,7 @@ func TestSetupProvisionKeys_NonInteractive_MissingSyncsButChangedRefFailsWithRer
 	if strings.Contains(joined, "sbx secret set -f -g openai") {
 		t.Errorf("changed ref for an sbx-present key must NOT be overwritten without --yes:\n%s", joined)
 	}
-	if ref, ok := syncedRef("OPENAI_API_KEY"); !ok || ref != "op://v/openai/key-OLD" {
+	if ref, ok := secret.SyncedRef("OPENAI_API_KEY"); !ok || ref != "op://v/openai/key-OLD" {
 		t.Errorf("openai record must be untouched: %q, %v", ref, ok)
 	}
 }
@@ -537,13 +538,13 @@ func TestSetupProvisionKeys_NonInteractive_MissingSyncsButChangedRefFailsWithRer
 func TestSetupProvisionKeys_NonInteractiveAssumeYes_Overwrites(t *testing.T) {
 	refs := allRefs("", "op://v/openai/key-NEW", "")
 	env, calls := stepEnv(t, refs, "anthropic openai google", "resolved")
-	if err := recordSyncedRefWithDigest("ANTHROPIC_API_KEY", "op://v/anthropic/key", secretDigestHex("resolved")); err != nil {
+	if err := secret.RecordSyncedRefWithDigest("ANTHROPIC_API_KEY", "op://v/anthropic/key", secret.SecretDigestHex("resolved")); err != nil {
 		t.Fatal(err)
 	}
-	if err := recordSyncedRef("OPENAI_API_KEY", "op://v/openai/key-OLD"); err != nil {
+	if err := secret.RecordSyncedRef("OPENAI_API_KEY", "op://v/openai/key-OLD"); err != nil {
 		t.Fatal(err)
 	}
-	if err := recordSyncedRefWithDigest("GEMINI_API_KEY", "op://v/gemini/key", secretDigestHex("resolved")); err != nil {
+	if err := secret.RecordSyncedRefWithDigest("GEMINI_API_KEY", "op://v/gemini/key", secret.SecretDigestHex("resolved")); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
@@ -554,7 +555,7 @@ func TestSetupProvisionKeys_NonInteractiveAssumeYes_Overwrites(t *testing.T) {
 	if !strings.Contains(joined, "sbx secret set -f -g openai -t resolved") {
 		t.Errorf("--yes must overwrite a changed ref even non-interactively:\n%s", joined)
 	}
-	if ref, ok := syncedRef("OPENAI_API_KEY"); !ok || ref != "op://v/openai/key-NEW" {
+	if ref, ok := secret.SyncedRef("OPENAI_API_KEY"); !ok || ref != "op://v/openai/key-NEW" {
 		t.Errorf("record must be updated to the new ref: %q, %v", ref, ok)
 	}
 }
@@ -569,8 +570,8 @@ func TestSetupProvisionKeys_HostModeMissingRef_Fails(t *testing.T) {
 	env, _ := stepEnv(t, refs, "anthropic openai google", "sk-val")
 	// Sabotage the mirror step: writes to hostmode.env silently fail (as if the
 	// file were unwritable), while op-refs.env itself stays readable/writable.
-	realWrite := fakeOf(env).WriteFileFn
-	fakeOf(env).WriteFileFn = func(p string, d []byte, m os.FileMode) error {
+	realWrite := systest.Of(env.System).WriteFileFn
+	systest.Of(env.System).WriteFileFn = func(p string, d []byte, m os.FileMode) error {
 		if strings.HasSuffix(p, "hostmode.env") {
 			return os.ErrPermission
 		}
@@ -592,7 +593,7 @@ func TestSetupProvisionKeys_HostModeMissingRef_Fails(t *testing.T) {
 func TestSetupProvisionKeys_SbxUnavailable_FailsOpen(t *testing.T) {
 	refs := allRefs("", "", "")
 	env, _ := stepEnv(t, refs, "", "sk-val")
-	fakeOf(env).LookPathFn = func(name string) (string, error) {
+	systest.Of(env.System).LookPathFn = func(name string) (string, error) {
 		if name == "sbx" {
 			return "", os.ErrNotExist
 		}
@@ -613,7 +614,7 @@ func TestSetupProvisionKeys_FinalProbeRequiresAllThree(t *testing.T) {
 	// reconcile pass — simulate a sync that silently didn't take by having
 	// `sbx secret set` succeed yet never actually add the name (a broken sbx).
 	env, _ := stepEnv(t, refs, "anthropic openai", "sk-val")
-	fakeOf(env).RunFn = func(name string, args ...string) (string, error) {
+	systest.Of(env.System).RunFn = func(name string, args ...string) (string, error) {
 		switch {
 		case name == "op" && len(args) >= 1 && args[0] == "--version":
 			return "2.0", nil
@@ -653,12 +654,12 @@ func TestSetupProvisionKeys_FinalProbe_SbxCommandFails_FailsClosed(t *testing.T)
 		"OPENAI_API_KEY":    "op://v/openai/key",
 		"GEMINI_API_KEY":    "op://v/gemini/key",
 	} {
-		if err := recordSyncedRefWithDigest(envVar, ref, secretDigestHex("sk-val")); err != nil {
+		if err := secret.RecordSyncedRefWithDigest(envVar, ref, secret.SecretDigestHex("sk-val")); err != nil {
 			t.Fatal(err)
 		}
 	}
 	calls := 0
-	fakeOf(env).RunFn = func(name string, args ...string) (string, error) {
+	systest.Of(env.System).RunFn = func(name string, args ...string) (string, error) {
 		switch {
 		case name == "op" && len(args) >= 1 && args[0] == "--version":
 			return "2.0", nil
@@ -690,7 +691,7 @@ func TestSetupProvisionKeys_FinalProbe_SbxCommandFails_FailsClosed(t *testing.T)
 
 // --- item 7: no cached secret value ever reaches printed output -----------
 
-// syncProviderKeyToSbx must redact the resolved value from BOTH sbx's raw
+// secret.SyncProviderKeyToSbx must redact the resolved value from BOTH sbx's raw
 // output and the wrapping Go error text before printing either — an exec
 // error can echo the full argv (including "-t <value>") back verbatim.
 func TestSyncProviderKeyToSbx_RedactsValueFromOutputAndError(t *testing.T) {
@@ -706,8 +707,8 @@ func TestSyncProviderKeyToSbx_RedactsValueFromOutputAndError(t *testing.T) {
 		return "", nil
 	}}}
 	var out bytes.Buffer
-	p := struct{ envVar, name string }{"ANTHROPIC_API_KEY", "anthropic"}
-	if syncProviderKeyToSbx(env, &out, p, "op://v/a/k", secretVal) {
+	p := secret.ProviderKeyRef{EnvVar: "ANTHROPIC_API_KEY", Name: "anthropic"}
+	if secret.SyncProviderKeyToSbx(env, &out, p, "op://v/a/k", secretVal) {
 		t.Fatal("expected failure (sbx secret set errored)")
 	}
 	if strings.Contains(out.String(), secretVal) {
@@ -736,7 +737,7 @@ func TestReconcile_SameRefRotatedValue_TreatedAsChanged(t *testing.T) {
 	} {
 		// Recorded digest is for the OLD value ("sk-val"), not what op read
 		// resolves to now ("sk-rotated").
-		if err := recordSyncedRefWithDigest(envVar, ref, secretDigestHex("sk-val")); err != nil {
+		if err := secret.RecordSyncedRefWithDigest(envVar, ref, secret.SecretDigestHex("sk-val")); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -752,7 +753,7 @@ func TestReconcile_SameRefRotatedValue_TreatedAsChanged(t *testing.T) {
 			t.Errorf("rotated value at an unchanged ref must be re-synced for %s:\n%s", name, joined)
 		}
 	}
-	if ref, ok := syncedRef("ANTHROPIC_API_KEY"); !ok || ref != "op://v/anthropic/key" {
+	if ref, ok := secret.SyncedRef("ANTHROPIC_API_KEY"); !ok || ref != "op://v/anthropic/key" {
 		t.Errorf("ref must still be recorded after rotation resync: %q, %v", ref, ok)
 	}
 }
@@ -769,7 +770,7 @@ func TestReconcile_SameRefRotatedValue_PromptsAndDeclineFails(t *testing.T) {
 		"OPENAI_API_KEY":    "op://v/openai/key",
 		"GEMINI_API_KEY":    "op://v/gemini/key",
 	} {
-		if err := recordSyncedRefWithDigest(envVar, ref, secretDigestHex("sk-val")); err != nil {
+		if err := secret.RecordSyncedRefWithDigest(envVar, ref, secret.SecretDigestHex("sk-val")); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -798,9 +799,9 @@ func TestReconcile_LegacyRecordNoDigest_TreatedAsUnknownNotSame(t *testing.T) {
 		"OPENAI_API_KEY":    "op://v/openai/key",
 		"GEMINI_API_KEY":    "op://v/gemini/key",
 	} {
-		// recordSyncedRef (no digest) is exactly the legacy shape: a store
+		// secret.RecordSyncedRef (no digest) is exactly the legacy shape: a store
 		// written before this feature existed.
-		if err := recordSyncedRef(envVar, ref); err != nil {
+		if err := secret.RecordSyncedRef(envVar, ref); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -824,7 +825,7 @@ func TestReconcile_LegacyRecordNoDigest_TreatedAsUnknownNotSame(t *testing.T) {
 		"OPENAI_API_KEY":    "op://v/openai/key",
 		"GEMINI_API_KEY":    "op://v/gemini/key",
 	} {
-		if err := recordSyncedRef(envVar, ref); err != nil {
+		if err := secret.RecordSyncedRef(envVar, ref); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -836,7 +837,7 @@ func TestReconcile_LegacyRecordNoDigest_TreatedAsUnknownNotSame(t *testing.T) {
 	if !strings.Contains(joined2, "sbx secret set -f -g anthropic -t sk-val") {
 		t.Errorf("--yes must resync a legacy record:\n%s", joined2)
 	}
-	if digest := syncedRefDigest("ANTHROPIC_API_KEY"); digest != secretDigestHex("sk-val") {
+	if digest := secret.SyncedRefDigest("ANTHROPIC_API_KEY"); digest != secret.SecretDigestHex("sk-val") {
 		t.Errorf("resyncing a legacy record must upgrade it to carry a digest, got %q", digest)
 	}
 }

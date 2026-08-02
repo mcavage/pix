@@ -289,11 +289,11 @@ func TestRegisterServers_RemoteURLUsesInteractiveRunner(t *testing.T) {
 		output:  map[string]string{"/usr/bin/pix-host mcp --list": "slack\n"},
 	}.env()
 	var interactive []string
-	fakeOf(env).RunInteractiveFn = func(name string, args ...string) error {
+	systest.Of(env.System).RunInteractiveFn = func(name string, args ...string) error {
 		interactive = append([]string{name}, args...)
 		return nil
 	}
-	fakeOf(env).RunTimedFn = func(name string, args ...string) (string, bool, error) {
+	systest.Of(env.System).RunTimedFn = func(name string, args ...string) (string, bool, error) {
 		if name == "sbx" && len(args) >= 2 && args[1] == "add" {
 			t.Fatalf("remote OAuth registration was sent through the bounded probe: %s %s", name, strings.Join(args, " "))
 		}
@@ -317,7 +317,7 @@ func TestRegisterServers_RemoteURLUsesInteractiveRunner(t *testing.T) {
 func TestRegisterServers_CurrentRemoteDoesNotReopenOAuth(t *testing.T) {
 	endpoint := "https://app.trymeetings.com/mcp"
 	env := fakeEnv{present: map[string]bool{"sbx": true}}.env()
-	fakeOf(env).RunTimedFn = func(name string, args ...string) (string, bool, error) {
+	systest.Of(env.System).RunTimedFn = func(name string, args ...string) (string, bool, error) {
 		command := strings.Join(args, " ")
 		if name == "sbx" && command == "mcp inspect meetings" {
 			return "URL: " + endpoint, false, nil
@@ -327,7 +327,7 @@ func TestRegisterServers_CurrentRemoteDoesNotReopenOAuth(t *testing.T) {
 		}
 		return "slack\n", false, nil
 	}
-	fakeOf(env).RunInteractiveFn = func(string, ...string) error {
+	systest.Of(env.System).RunInteractiveFn = func(string, ...string) error {
 		t.Fatal("an unchanged registered remote must not reopen OAuth")
 		return nil
 	}
@@ -343,7 +343,7 @@ func TestRegisterServers_CurrentUnauthorizedRemoteRepairsOAuthOnce(t *testing.T)
 	endpoint := "https://app.trymeetings.com/mcp"
 	authorized := false
 	env := fakeEnv{present: map[string]bool{"sbx": true}}.env()
-	fakeOf(env).RunTimedFn = func(name string, args ...string) (string, bool, error) {
+	systest.Of(env.System).RunTimedFn = func(name string, args ...string) (string, bool, error) {
 		command := strings.Join(args, " ")
 		switch command {
 		case "mcp inspect meetings":
@@ -358,7 +358,7 @@ func TestRegisterServers_CurrentUnauthorizedRemoteRepairsOAuthOnce(t *testing.T)
 		}
 	}
 	var interactive []string
-	fakeOf(env).RunInteractiveFn = func(name string, args ...string) error {
+	systest.Of(env.System).RunInteractiveFn = func(name string, args ...string) error {
 		interactive = append([]string{name}, args...)
 		authorized = true
 		return nil

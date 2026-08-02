@@ -369,9 +369,9 @@ func TestDoctor_GogAttachDespiteMissingExecutable(t *testing.T) {
 		},
 	}
 	env := f.env()
-	fakeOf(env).GetwdFn = func() (string, error) { return ws, nil }
+	systest.Of(env.System).GetwdFn = func() (string, error) { return ws, nil }
 	stateDir := t.TempDir()
-	fakeOf(env).StateDirFn = func() (string, error) { return stateDir, nil }
+	systest.Of(env.System).StateDirFn = func() (string, error) { return stateDir, nil }
 	if err := workspace.WriteCreateReceipt(stateDir, box, ws, []string{gwServerName}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
@@ -1013,8 +1013,8 @@ func TestDoctor_MCPUnrecognizedCommand(t *testing.T) {
 	})
 	// Wrap the fake run so an attempt to exec the untrusted command fails loudly.
 	env := f.env()
-	inner := fakeOf(env).RunFn
-	fakeOf(env).RunFn = func(name string, args ...string) (string, error) {
+	inner := systest.Of(env.System).RunFn
+	systest.Of(env.System).RunFn = func(name string, args ...string) (string, error) {
 		if name == "/bin/rm" {
 			t.Fatalf("doctor exec'd an unrecognized registered command: %s %v", name, args)
 		}

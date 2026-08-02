@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"pix/host/readiness"
+	"pix/host/secret"
 
 	"pix/host/config"
 )
@@ -21,7 +22,7 @@ import (
 func secretsGroup(cfg *config.Config, env shellEnv) readiness.Group {
 	g := readiness.Group{Title: "Secrets (1Password, host MCP creds via op-refs.env)"}
 
-	if !anyOpWrappedServer(cfg) {
+	if !secret.AnyOpWrappedServer(cfg) {
 		// Positive info: verified there is nothing 1Password-dependent configured,
 		// so there is genuinely nothing to set up here.
 		g.Checks = append(g.Checks, readiness.Check{Label: "1Password", Note: true, Verdict: readiness.VerdictReady,
@@ -30,9 +31,9 @@ func secretsGroup(cfg *config.Config, env shellEnv) readiness.Group {
 	}
 
 	// op installed? (advisory sign-in only when installed — never a blocker).
-	if opInstalled(env) {
+	if secret.OpInstalled(env) {
 		g.Checks = append(g.Checks, readiness.Check{Label: "op CLI", Verdict: readiness.VerdictReady, Detail: "installed"})
-		if opSignedIn(env) {
+		if secret.OpSignedIn(env) {
 			g.Checks = append(g.Checks, readiness.Check{Label: "account configured", Verdict: readiness.VerdictReady,
 				Detail: "op account list ok (advisory — not a proof of an unlocked session)"})
 		} else {
@@ -46,7 +47,7 @@ func secretsGroup(cfg *config.Config, env shellEnv) readiness.Group {
 	}
 
 	// op-refs.env present at the absolute XDG path?
-	path := defaultOpRefsPath(env)
+	path := secret.DefaultOpRefsPath(env)
 	content, exists := "", false
 	if c, err := env.ReadFile(path); err == nil {
 		content, exists = c, true
@@ -73,30 +74,30 @@ func secretsGroup(cfg *config.Config, env shellEnv) readiness.Group {
 	}
 
 	// Per-ref: filled vs placeholder, plus the refs-only lint. NEVER print a value.
-	for _, rf := range parseOpRefs(content) {
+	for _, rf := range secret.ParseOpRefs(content) {
 		switch {
-		case rf.nonSecret:
-			g.Checks = append(g.Checks, readiness.Check{Label: rf.key, Note: true, Verdict: readiness.VerdictReady, Detail: "non-secret env (allowed literal)"})
-		case rf.isRef && rf.placeholder:
-			g.Checks = append(g.Checks, readiness.Check{Label: rf.key, Verdict: readiness.VerdictTodo,
+		case rf.NonSecret:
+			g.Checks = append(g.Checks, readiness.Check{Label: rf.Key, Note: true, Verdict: readiness.VerdictReady, Detail: "non-secret env (allowed literal)"})
+		case rf.IsRef && rf.Placeholder:
+			g.Checks = append(g.Checks, readiness.Check{Label: rf.Key, Verdict: readiness.VerdictTodo,
 				Detail: "unfilled placeholder — set the op:// ref",
 				Todo:   "pix secret set <ENV_VAR> op://vault/item/field"})
-		case rf.isRef:
-			g.Checks = append(g.Checks, readiness.Check{Label: rf.key, Verdict: readiness.VerdictReady, Detail: "op:// ref filled"})
-		case rf.placeholder:
+		case rf.IsRef:
+			g.Checks = append(g.Checks, readiness.Check{Label: rf.Key, Verdict: readiness.VerdictReady, Detail: "op:// ref filled"})
+		case rf.Placeholder:
 			// A non-ref value still carrying an unfilled <...> placeholder.
-			g.Checks = append(g.Checks, readiness.Check{Label: rf.key, Verdict: readiness.VerdictTodo,
+			g.Checks = append(g.Checks, readiness.Check{Label: rf.Key, Verdict: readiness.VerdictTodo,
 				Detail: "unfilled placeholder — set the op:// ref",
 				Todo:   "pix secret set <ENV_VAR> op://vault/item/field"})
-		case looksSecretShaped(rf.key, rf.value):
+		case looksSecretShaped(rf.Key, rf.Value):
 			// MEDIUM finding — a pasted secret. NEVER echo the value.
-			g.Checks = append(g.Checks, readiness.Check{Label: rf.key, Verdict: readiness.VerdictTodo,
+			g.Checks = append(g.Checks, readiness.Check{Label: rf.Key, Verdict: readiness.VerdictTodo,
 				Detail: "possible pasted secret — replace with op://vault/item/field",
 				Todo:   "pix secret set <ENV_VAR> op://vault/item/field"})
 		default:
 			// Refs-only policy: ANY other non-ref, non-allowlisted value is flagged.
 			// NEVER echo the value.
-			g.Checks = append(g.Checks, readiness.Check{Label: rf.key, Verdict: readiness.VerdictTodo,
+			g.Checks = append(g.Checks, readiness.Check{Label: rf.Key, Verdict: readiness.VerdictTodo,
 				Detail: "not an op:// ref — this file is refs-only; use op://vault/item/field or move it to the non-secret allowlist",
 				Todo:   "pix secret set <ENV_VAR> op://vault/item/field"})
 		}

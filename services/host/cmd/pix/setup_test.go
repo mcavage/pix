@@ -13,6 +13,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/readiness"
+	"pix/host/secret"
 	"pix/host/sys/systest"
 )
 
@@ -320,31 +321,6 @@ func TestHostStateHostReadiness(t *testing.T) {
 	}
 }
 
-func TestProviderRefSet(t *testing.T) {
-	mk := func(refs string) shellEnv {
-		return shellEnv{System: &systest.Fake{GetenvFn: func(k string) string {
-			if k == "XDG_CONFIG_HOME" {
-				return "/cfg"
-			}
-			return ""
-		}, ReadFileFn: func(p string) (string, error) {
-			if p == filepath.Join("/cfg", "pix", "op-refs.env") {
-				return refs, nil
-			}
-			return "", os.ErrNotExist
-		}}}
-	}
-	if providerRefSet(mk(""), "ANTHROPIC_API_KEY") {
-		t.Error("empty op-refs.env must report no ref")
-	}
-	if !providerRefSet(mk("ANTHROPIC_API_KEY=op://v/a/k\n"), "ANTHROPIC_API_KEY") {
-		t.Error("a filled ref must be detected")
-	}
-	if providerRefSet(mk("OPENAI_API_KEY=op://v/o/k\n"), "ANTHROPIC_API_KEY") {
-		t.Error("a different provider's ref must not count")
-	}
-}
-
 func TestSetupSelectRunnableIntentForSingleProvider(t *testing.T) {
 	for _, tc := range []struct {
 		refs, start, want string
@@ -396,10 +372,10 @@ func TestHostModeProviderKeys(t *testing.T) {
 			return "", os.ErrNotExist
 		}}}
 	}
-	if got, err := hostModeProviderKeys(mk("")); len(got) != 0 || err != nil {
+	if got, err := secret.HostModeProviderKeys(mk("")); len(got) != 0 || err != nil {
 		t.Errorf("empty hostmode.env: want none/nil, got %v, %v", got, err)
 	}
-	got, err := hostModeProviderKeys(mk("OPENAI_API_KEY=op://v/o/k\nANTHROPIC_API_KEY=op://v/a/k\nSLACK_TOKEN=op://v/s/t\n"))
+	got, err := secret.HostModeProviderKeys(mk("OPENAI_API_KEY=op://v/o/k\nANTHROPIC_API_KEY=op://v/a/k\nSLACK_TOKEN=op://v/s/t\n"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -413,7 +389,7 @@ func TestHostModeProviderKeys(t *testing.T) {
 // same as a real read failure.
 func TestHostModeProviderKeys_ENOENTIsNoneNotError(t *testing.T) {
 	env := shellEnv{System: &systest.Fake{GetenvFn: func(string) string { return "/cfg" }, ReadFileFn: func(string) (string, error) { return "", os.ErrNotExist }}}
-	got, err := hostModeProviderKeys(env)
+	got, err := secret.HostModeProviderKeys(env)
 	if err != nil || len(got) != 0 {
 		t.Errorf("ENOENT: got %v, %v; want none, nil", got, err)
 	}
@@ -423,7 +399,7 @@ func TestHostModeProviderKeys_ENOENTIsNoneNotError(t *testing.T) {
 // as a non-nil error naming the path, never silently downgraded to "none".
 func TestHostModeProviderKeys_RealReadErrorIsError(t *testing.T) {
 	env := shellEnv{System: &systest.Fake{GetenvFn: func(string) string { return "/cfg" }, ReadFileFn: func(string) (string, error) { return "", os.ErrPermission }}}
-	got, err := hostModeProviderKeys(env)
+	got, err := secret.HostModeProviderKeys(env)
 	if err == nil {
 		t.Fatal("a real read error must not be masked as none")
 	}
@@ -442,7 +418,7 @@ func TestHostModeProviderKeys_SymlinkLoopIsError(t *testing.T) {
 	env := shellEnv{System: &systest.Fake{GetenvFn: func(string) string { return "/cfg" }, ReadFileFn: func(string) (string, error) {
 		return "", &os.PathError{Op: "open", Path: "hostmode.env", Err: os.ErrInvalid}
 	}}}
-	_, err := hostModeProviderKeys(env)
+	_, err := secret.HostModeProviderKeys(env)
 	if err == nil {
 		t.Error("a symlink-loop-shaped read error must classify as an error, never none")
 	}

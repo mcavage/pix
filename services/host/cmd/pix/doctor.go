@@ -12,8 +12,8 @@ import (
 	"pix/host/hostenv"
 	"pix/host/readiness"
 	"pix/host/rpc"
+	"pix/host/secret"
 	"pix/host/sys"
-	"pix/host/sys/systest"
 	"pix/host/workspace"
 )
 
@@ -47,8 +47,6 @@ type shellEnv = hostenv.Env
 // which is the right outcome for test-only code reached in production — the
 // alternative is a silent no-op, and silent no-ops are what this refactor
 // exists to delete.
-func fakeOf(e shellEnv) *systest.Fake { return e.System.(*systest.Fake) }
-
 // probeTimeout bounds every registered-command probe so doctor can never wedge
 // on a hung MCP server; probeMaxOutput caps how much of its output we capture.
 const (
@@ -225,20 +223,9 @@ func resolveOpRefs(env shellEnv) string {
 	return ""
 }
 
-// grepWord reports whether out contains name as a whole word (matches the
-// Makefile's `grep -qw`).
-func grepWord(out, name string) bool {
-	for _, line := range strings.Split(out, "\n") {
-		for _, f := range strings.FieldsFunc(line, func(r rune) bool {
-			return r == ' ' || r == '\t' || r == ',' || r == ':' || r == '/' || r == '"' || r == '='
-		}) {
-			if f == name {
-				return true
-			}
-		}
-	}
-	return false
-}
+// grepWord moved to cli.GrepWord: a whole-word match on command output is
+// generic text handling, and doctor was only its first caller.
+func grepWord(out, name string) bool { return cli.GrepWord(out, name) }
 
 // runDoctor builds the report. Pure apart from env: no direct OS access, so the
 // tests feed a faked shellEnv and assert on the rendered output. Each group is
@@ -253,18 +240,18 @@ func runDoctor(cfg *config.Config, env shellEnv) *readiness.Report {
 
 	// sbx presence gates the provider + mcp checks (they read `sbx secret ls` /
 	// `sbx mcp ls`). Inside the sandbox sbx is absent — say so, don't crash.
-	// probeSbxSecrets is the ONE shared probe (bootstrap.go's tri-state helpers
+	// secret.ProbeSbxSecrets is the ONE shared probe (bootstrap.go's tri-state helpers
 	// use it too) so this never reimplements a divergent "is sbx reachable"
 	// check.
-	sbxOut, sbxState := probeSbxSecrets(env)
-	sbxOK := sbxState == sbxSecretsOK
+	sbxOut, sbxState := secret.ProbeSbxSecrets(env)
+	sbxOK := sbxState == secret.SbxSecretsOK
 	// sbxAbsent means POSITIVELY absent (lookPath could not find sbx) — never
 	// a generic probe failure: sbx present with `sbx secret ls` erroring or
-	// timing out is a different, diagnosable host state (sbxSecretsError) and
+	// timing out is a different, diagnosable host state (secret.SbxSecretsError) and
 	// must not render the "you're likely inside the sandbox" note.
-	r.SbxAbsent = sbxState == sbxSecretsAbsent
+	r.SbxAbsent = sbxState == secret.SbxSecretsAbsent
 	// sbxOnPath is tracked INDEPENDENTLY of sbxOK (finding #4): sbx being on
-	// PATH but `sbx secret ls` failing/timing out (sbxSecretsError) is a
+	// PATH but `sbx secret ls` failing/timing out (secret.SbxSecretsError) is a
 	// DIFFERENT state from sbx being entirely absent, and the MCP/gog groups
 	// must still get to try their OWN probe (`sbx mcp ls`) rather than being
 	// falsely gated off by an unrelated secret-probe failure.
