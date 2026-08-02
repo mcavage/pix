@@ -87,28 +87,37 @@ exempt while it is still being drained, and that exemption is the ONLY one —
 violation.
 
 ```
-L0  sys  sys/systest  config  routing  rpc  cli  hostenv        done
-L1  inference  monitor  monitor/tui  okf  plugin  slackoauth    partial
-L2  readiness                                                   pending
-L3  —                                                           pending
-L4  cmd/pix                                                     draining
+L0  sys  sys/systest  config  routing  rpc  cli  hostenv  launcher    done
+L1  inference  monitor  monitor/tui  okf  plugin  slackoauth
+    workspace  service                                               partial
+L2  readiness                                                        done
+L3  —                                     (workflows still in cmd/pix)
+L4  cmd/pix                                                          draining
 ```
+
+`cmd/pix` is **40,905 -> 33,621** production lines, and the layering is enforced
+from L0 through L2.
 
 Order to drain in is **inbound count ascending**, because inbound is the real
 blocker (an extracted package cannot import `package main`):
 
-| next | domain              | LOC   | needs back |
-|------|---------------------|-------|------------|
-| 1    | profile + workspace | 292   | 7          |
-| 2    | serve → `service`   | 1,961 | 14         |
-| 3    | readiness           | 1,926 | 17         |
-| 4    | knowledge           | 1,050 | 17         |
-| 5    | secret              | 1,441 | 19         |
-| 6    | pack                | 5,471 | 36         |
-| 7    | mcp                 | 1,479 | 39         |
-| 8    | task                | 2,550 | 35         |
-| 9    | run + sandbox       | 2,464 | 63         |
-| —    | doctor              | 2,892 | 110        |
+| next | domain              | LOC   | needs back | state |
+|------|---------------------|-------|------------|-------|
+| —    | profile + workspace | 292   | 3          | done  |
+| —    | serve → `service`   | 1,961 | 11         | done  |
+| —    | readiness machinery | 786   | 2          | done  |
+| 1    | knowledge           | 1,050 | 17         |       |
+| 2    | secret              | 1,441 | 19         |       |
+| 3    | pack                | 5,471 | 36         |       |
+| 4    | mcp                 | 1,479 | 39         |       |
+| 5    | task                | 2,550 | 35         |       |
+| 6    | run + sandbox       | 2,464 | 63         |       |
+| —    | doctor              | 2,892 | 110        | stays |
+
+**Re-measure before starting one of these.** Every extraction so far dropped the
+next one's count: `rpc` alone took `memory` from 11 to 5 without touching
+memory.go. The numbers above are from before `workspace`, `service` and
+`readiness` landed.
 
 `doctor` is last and may never move: **110 inbound is what a workflow looks
 like**. A composition root that consumes every capability is correct, not
@@ -117,3 +126,22 @@ tangled. Do not "fix" it.
 When a domain's inbound count is stubborn, the cause is almost always a
 capability calling a sibling. Invert it into the workflow rather than moving
 both.
+
+## Three lessons from doing it
+
+**Cut the machinery, not the folder.** `readiness_*.go` measured 17 inbound as a
+unit and 2 as just types+snapshot+render. The domain axis BUILDERS were the
+entanglement; the model was always independent. Before moving a directory, check
+whether a smaller thing inside it is the real package.
+
+**Go forces some moves; inject rather than surrender.** A method must live with
+its type, so `Report.Render` had to follow `Report` into `readiness` — carrying
+doctor's hard-coded advice strings with it. Making them `readiness.Hints`,
+passed in, kept the layer clean. When the compiler forces a move, look for what
+the moved code knew that it should not have.
+
+**Mechanical renames leak into prose.** Exporting `outstanding` → `Outstanding`
+silently rewrote the doctor headline a user reads. Twice a rename also landed
+inside a string literal (`"google-workspace"` → `"google-ws"`, `-test.run` →
+`-test.Run`). The gate caught all of them, which is the argument for running it
+on every commit rather than at the end.
