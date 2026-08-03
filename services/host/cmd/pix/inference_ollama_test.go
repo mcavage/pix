@@ -10,6 +10,7 @@ import (
 	"pix/host/hostenv"
 	"pix/host/readiness"
 	"pix/host/readiness/axis"
+	"pix/host/workflow/doctor"
 	"runtime"
 	"strings"
 	"sync"
@@ -384,7 +385,7 @@ func TestLocalProbeSendsKeepAliveZeroAndRungContext(t *testing.T) {
 		_, _ = w.Write([]byte(`{"response":"OK"}`))
 	}))
 	defer srv.Close()
-	if err := liveOllamaInferenceProbe(srv.URL, "qwen3.5:9b", 16384, 5*time.Second); err != nil {
+	if err := inference.LiveOllamaInferenceProbe(srv.URL, "qwen3.5:9b", 16384, 5*time.Second); err != nil {
 		t.Fatal(err)
 	}
 	if path != "/api/generate" {
@@ -403,7 +404,7 @@ func TestLocalProbeSendsKeepAliveZeroAndRungContext(t *testing.T) {
 	if _, ok := opts["num_ctx"]; ok {
 		// A cloud probe carries no num_ctx: its context is not RAM-gated here.
 		body = nil
-		if err := liveOllamaInferenceProbe(srv.URL, "glm-5.2:cloud", 0, 5*time.Second); err != nil {
+		if err := inference.LiveOllamaInferenceProbe(srv.URL, "glm-5.2:cloud", 0, 5*time.Second); err != nil {
 			t.Fatal(err)
 		}
 		cloudOpts, _ := body["options"].(map[string]any)
@@ -420,7 +421,7 @@ func TestLiveOllamaProbeRejectsUnauthorized(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
 	}))
 	defer srv.Close()
-	err := liveOllamaInferenceProbe(srv.URL, "kimi-k3:cloud", 0, 5*time.Second)
+	err := inference.LiveOllamaInferenceProbe(srv.URL, "kimi-k3:cloud", 0, 5*time.Second)
 	if err == nil || !strings.Contains(err.Error(), "HTTP 401") {
 		t.Fatalf("error = %v, want an HTTP 401 refusal", err)
 	}
@@ -537,7 +538,7 @@ func TestRunIntentRowNamesThePullForUnverifiedOllamaBinding(t *testing.T) {
 func TestLegacyVerifiedOllamaBindingFlaggedOnceThenClears(t *testing.T) {
 	cfg := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
 	cfg.Inference.Models[0].Verified = true // pre-upgrade: claimed from a listing
-	if got := legacyVerifiedOllamaBindings(cfg); len(got) != 1 {
+	if got := doctor.LegacyVerifiedOllamaBindings(cfg); len(got) != 1 {
 		t.Fatalf("a listing-derived claim must be flagged: %v", got)
 	}
 	if !inference.Callable(cfg, cfg.Inference.Models[0]) {
@@ -548,7 +549,7 @@ func TestLegacyVerifiedOllamaBindingFlaggedOnceThenClears(t *testing.T) {
 	promoted.Inference.Models[0].Verified = true
 	f := &fakeProber{}
 	_, _ = verifyOllamaInference(promoted, hostenv.Env{System: &systest.Fake{}, OllamaInference: f.probe}, io.Discard)
-	if got := legacyVerifiedOllamaBindings(promoted); len(got) != 0 {
+	if got := doctor.LegacyVerifiedOllamaBindings(promoted); len(got) != 0 {
 		t.Fatalf("the row must clear once a probe earns the claim: %v", got)
 	}
 	// Demote path: the probe refuses. The row clears there too, replaced by the
@@ -557,7 +558,7 @@ func TestLegacyVerifiedOllamaBindingFlaggedOnceThenClears(t *testing.T) {
 	demoted.Inference.Models[0].Verified = true
 	f2 := &fakeProber{fail: map[string]error{"qwen3.5:9b": fmt.Errorf("endpoint rejected the request (HTTP 500)")}}
 	_, _ = verifyOllamaInference(demoted, hostenv.Env{System: &systest.Fake{}, OllamaInference: f2.probe}, io.Discard)
-	if got := legacyVerifiedOllamaBindings(demoted); len(got) != 0 {
+	if got := doctor.LegacyVerifiedOllamaBindings(demoted); len(got) != 0 {
 		t.Fatalf("the row must clear on demotion too: %v", got)
 	}
 	if len(axis.UnverifiedOllamaCandidates(demoted)) != 1 {

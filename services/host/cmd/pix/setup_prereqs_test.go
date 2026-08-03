@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"pix/host/hostenv"
 	"pix/host/sys/systest"
+	"pix/host/workflow/doctor"
 	"strings"
 	"testing"
 )
@@ -49,7 +50,7 @@ func TestEnsureSetupPrereqsNonInteractivePrintsExactFixes(t *testing.T) {
 		return "", fmt.Errorf("missing")
 	}}}
 	err := ensureSetupPrereqs(env, nil, &bytes.Buffer{}, false)
-	if err == nil || !strings.Contains(err.Error(), sbxInstallHint) || !strings.Contains(err.Error(), "brew install 1password-cli") {
+	if err == nil || !strings.Contains(err.Error(), doctor.SbxInstallHint) || !strings.Contains(err.Error(), "brew install 1password-cli") {
 		t.Fatalf("got %v", err)
 	}
 }

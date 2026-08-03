@@ -7,6 +7,7 @@ import (
 	"pix/host/memory"
 	"pix/host/service"
 	"pix/host/workflow/backup"
+	"pix/host/workflow/doctor"
 	"pix/host/workflow/man"
 	"pix/host/workflow/pack"
 	"pix/host/workflow/reset"
@@ -182,13 +183,13 @@ func verbUsage(verb string) (string, bool) {
 	case "serve":
 		return service.Usage, true
 	case "status", "st":
-		return statusUsage, true
+		return doctor.StatusUsage, true
 	case "ls":
 		return lsUsage, true
 	case "rm":
 		return rmUsage, true
 	case "doctor":
-		return doctorUsage, true
+		return doctor.Usage, true
 	case "setup":
 		return setupUsage, true
 	case "config":
@@ -236,33 +237,6 @@ func verbUsage(verb string) (string, bool) {
 }
 
 // service.Usage moved to service.Usage, with the capability that owns the verb.
-
-const statusUsage = `usage: pix status [--json]
-
-Fast, read-only control panel: services, provider keys, knowledge bundles,
-MCP registration, and running pix-* sandboxes. Launches nothing.
-
-flags:
-  --json   emit the machine-readable status snapshot
-`
-
-const doctorUsage = `usage: pix doctor [--json] [--verbose]
-
-Diagnose host + sandbox health (provider keys, ollama/models, memory, Google Workspace, mcp),
-leading with a one-line verdict and copy-pasteable TODO commands. The default
-output is concise (verified-ready checks collapse per readiness.Group); --verbose shows
-every readiness.Check.
-
-flags:
-  --json      emit the machine-readable readiness.Report (schema_version 2)
-  --verbose   show every readiness.Check, including verified-ready detail
-
-exit codes:
-  0  ready, or only optional/unverifiable gaps (nothing verified-broken that
-     pix requires)
-  1  a positively verified core failure (or the config failed to load)
-  2  usage error
-`
 
 const configUsage = `usage: pix config <show|path|get|set|unset> [args]
 

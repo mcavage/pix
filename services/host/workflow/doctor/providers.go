@@ -1,8 +1,10 @@
-package main
+package doctor
 
 import (
 	"fmt"
 	"pix/host/cli"
+	"pix/host/hostenv"
+	"pix/host/inference"
 	"pix/host/readiness"
 	"pix/host/readiness/axis"
 	"sort"
@@ -12,12 +14,12 @@ import (
 	"pix/host/routing"
 )
 
-// secretCheck reports whether a provider secret is set. When sbx is
+// SecretCheck reports whether a provider secret is set. When sbx is
 // unreachable (e.g. inside the sandbox) it emits a TODO rather than a false OK.
 // Kept for hoststate.go/onboard.go's per-provider booleans (a DIFFERENT need
 // from doctor's readiness axes below: they just want a plain ok/not-ok per
 // key, not the core-vs-informational split doctor renders).
-func secretCheck(label, key, sbxOut string, sbxOK bool) readiness.Check {
+func SecretCheck(label, key, sbxOut string, sbxOK bool) readiness.Check {
 	cmd := "sbx secret set -g " + key
 	if !sbxOK {
 		return readiness.Check{Label: label, Verdict: readiness.VerdictTodo, Detail: "sbx unavailable here (set on the host)", Todo: cmd}
@@ -28,7 +30,7 @@ func secretCheck(label, key, sbxOut string, sbxOK bool) readiness.Check {
 	return readiness.Check{Label: label, Verdict: readiness.VerdictTodo, Detail: "not set", Todo: cmd}
 }
 
-// providersGroup builds the provider-secrets cluster: the model/github keys
+// ProvidersGroup builds the provider-secrets cluster: the model/github keys
 // injected proxy-side (never visible in the VM), read via `sbx secret ls`.
 //
 // pix only needs ONE of anthropic/openai/google to launch a model, so the
@@ -47,15 +49,15 @@ func secretCheck(label, key, sbxOut string, sbxOK bool) readiness.Check {
 // missing alternate is expected once one provider exists, and github merely
 // authorizes git operations (not the model), so it is never itself
 // outstanding.
-func providersGroup(cfg *config.Config, sbxOut string, sbxOK bool) readiness.Group {
+func ProvidersGroup(cfg *config.Config, env hostenv.Env, sbxOut string, sbxOK bool) readiness.Group {
 	g := readiness.Group{Title: "Inference / credentials (proxy-injected, never in the VM)"}
 	g.Checks = append(g.Checks, axis.InferenceCoreCheck(cfg, sbxOut, sbxOK))
-	if inferenceNeedsOnePassword(cfg) {
+	if inference.InferenceNeedsOnePassword(cfg) {
 		for _, p := range []string{"anthropic", "openai", "google", "github"} {
 			g.Checks = append(g.Checks, providerInfoCheck(p, sbxOut, sbxOK))
 		}
 	}
-	if legacy := legacyVerifiedOllamaBindings(cfg); len(legacy) > 0 {
+	if legacy := LegacyVerifiedOllamaBindings(cfg); len(legacy) > 0 {
 		// A pre-upgrade config asserted Verified from a LISTING. Grandfathered as
 		// callable (demoting at load would empty the runtime on a working local box
 		// and refuse a launch on a bookkeeping change, not on evidence), but said
@@ -66,14 +68,14 @@ func providersGroup(cfg *config.Config, sbxOut string, sbxOK bool) readiness.Gro
 			Todo:     "pix setup",
 			Evidence: "verified without verified_by=probe: " + strings.Join(legacy, ", ")})
 	}
-	if gap := inferenceBindingGapCheck(cfg); gap != nil {
+	if gap := InferenceBindingGapCheck(cfg, env); gap != nil {
 		g.Checks = append(g.Checks, *gap)
 	}
 	g.Checks = append(g.Checks, axis.RunIntentKeyCheck(cfg, sbxOut, sbxOK))
 	return g
 }
 
-// inferenceBindingGapCheck reports a provider key that resolves on this host
+// InferenceBindingGapCheck reports a provider key that resolves on this host
 // but is wired to no models — present, correct, and doing nothing.
 //
 // That state used to be unreachable except through setup, and permanent once
@@ -84,8 +86,8 @@ func providersGroup(cfg *config.Config, sbxOut string, sbxOK bool) readiness.Gro
 // Optional, never blocking: one wired provider is enough to launch, so a second
 // unwired key is a shortfall to report, not a reason to fail. It counts in
 // outstanding (note:false) because it is genuinely actionable.
-func inferenceBindingGapCheck(cfg *config.Config) *readiness.Check {
-	gaps := unwiredProviderKeys(cfg, defaultShellEnv())
+func InferenceBindingGapCheck(cfg *config.Config, env hostenv.Env) *readiness.Check {
+	gaps := UnwiredProviderKeys(cfg, env)
 	if len(gaps) == 0 {
 		return nil
 	}
@@ -100,9 +102,9 @@ func inferenceBindingGapCheck(cfg *config.Config) *readiness.Check {
 	}
 }
 
-// ollamaCloudCandidates returns bound non-local ollama models: the set whose
+// OllamaCloudCandidates returns bound non-local ollama models: the set whose
 // entitlement only a real call can establish.
-func ollamaCloudCandidates(cfg *config.Config) []string {
+func OllamaCloudCandidates(cfg *config.Config) []string {
 	if cfg == nil {
 		return nil
 	}
@@ -123,12 +125,12 @@ func ollamaCloudCandidates(cfg *config.Config) []string {
 	return out
 }
 
-// legacyVerifiedOllamaBindings returns bindings that claim Verified without
+// LegacyVerifiedOllamaBindings returns bindings that claim Verified without
 // naming a probe. Only a PRE-UPGRADE config can produce this shape: everything
 // this codebase promotes writes VerifiedBy="probe" in the same assignment, and
 // everything it demotes clears both. So the row fires exactly once and clears
 // on the next setup whether that setup promotes or demotes the binding.
-func legacyVerifiedOllamaBindings(cfg *config.Config) []string {
+func LegacyVerifiedOllamaBindings(cfg *config.Config) []string {
 	if cfg == nil {
 		return nil
 	}
@@ -143,7 +145,7 @@ func legacyVerifiedOllamaBindings(cfg *config.Config) []string {
 }
 
 // providerInfoCheck is a per-provider INFORMATIONAL annotation (note: true \u2014
-// see providersGroup's doc comment): ready/not-configured/unverifiable, purely
+// see ProvidersGroup's doc comment): ready/not-configured/unverifiable, purely
 // for transparency. It never blocks and never counts toward outstanding, so an
 // unset alternate provider (or an unset github, which is optional
 // infrastructure that authorizes git operations, not the model) is never

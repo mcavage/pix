@@ -1,4 +1,4 @@
-package main
+package doctor
 
 import (
 	"encoding/json"
@@ -27,7 +27,7 @@ import (
 // zero-tool list = a verified todo, a timeout/transport failure =
 // unverifiable, and an explicit policy denial = denied.
 
-// gogAccount resolves the Google Workspace account the best-effort fallback
+// GogAccount resolves the Google Workspace account the best-effort fallback
 // probe runs against. config.toml's `gog_account` is the SINGLE source of truth
 // (it is what `make mcp-register` / `pix mcp register` hand the gateway,
 // both sourced via `pix config get gog_account`):
@@ -36,7 +36,7 @@ import (
 //
 // NEVER a hardcoded address. Empty means "not configured" and the caller emits
 // a not-configured note rather than reporting green.
-func gogAccount(cfg *config.Config, env hostenv.Env) string {
+func GogAccount(cfg *config.Config, env hostenv.Env) string {
 	if cfg != nil {
 		if a := strings.TrimSpace(cfg.GogAccount); a != "" {
 			return a
@@ -55,25 +55,25 @@ func gogAccount(cfg *config.Config, env hostenv.Env) string {
 // EXPLICIT policy/permission refusal distinguished from a generic probe
 // error).
 
-// gogHardenedFlags are the read-only runtime flags a healthy gog registration
+// GogHardenedFlags are the read-only runtime flags a healthy gog registration
 // MUST carry (mcp.go's mcp.GogHardenedArgv). Doctor verifies their presence in the
 // registered argv and reports them as evidence — a registration missing any of
 // them is a verified gap (writes would not be blocked at runtime).
-var gogHardenedFlags = []string{"--gmail-no-send", "--wrap-untrusted", "--readonly"}
+var GogHardenedFlags = []string{"--gmail-no-send", "--wrap-untrusted", "--readonly"}
 
-// gogMissingHardenedFlags returns the hardened read-only flags absent from the
+// GogMissingHardenedFlags returns the hardened read-only flags absent from the
 // registered gog spawn's INNER argv (after unwrapping any op-run prefix).
-func gogMissingHardenedFlags(env hostenv.Env, argv []string) []string {
+func GogMissingHardenedFlags(env hostenv.Env, argv []string) []string {
 	inner, ok := mcp.GogSpawnArgv(env, argv, secret.FindOpRefs(env))
 	if !ok {
-		return append([]string(nil), gogHardenedFlags...)
+		return append([]string(nil), GogHardenedFlags...)
 	}
 	present := map[string]bool{}
 	for _, a := range inner[1:] {
 		present[a] = true
 	}
 	var missing []string
-	for _, f := range gogHardenedFlags {
+	for _, f := range GogHardenedFlags {
 		if !present[f] {
 			missing = append(missing, f)
 		}
@@ -101,9 +101,9 @@ func gogHeadlessProbe(env hostenv.Env, acct, opRefs string) axis.ProbeResult {
 	return axis.ProbeListTools(env, mcp.GogRegisteredArgv(gogPath, opPath, opRefs, acct))
 }
 
-// gogHeadlessOK is gogHeadlessProbe collapsed to a bool for callers that only
+// GogHeadlessOK is gogHeadlessProbe collapsed to a bool for callers that only
 // need pass/fail (gog setup's follow-up gate).
-func gogHeadlessOK(env hostenv.Env, acct, opRefs string) bool {
+func GogHeadlessOK(env hostenv.Env, acct, opRefs string) bool {
 	return gogHeadlessProbe(env, acct, opRefs).Status == axis.ProbeToolsOK
 }
 
@@ -114,7 +114,7 @@ const gogSetupHint = "pix gworkspace setup"
 // spawnCheck builds the "headless spawn" check from a structured probe result.
 // Shared by the honest (registered-command) path and the best-effort
 // reconstruction fallback, with per-path ready/zero-tools wording.
-func gogSpawnCheck(env hostenv.Env, res axis.ProbeResult, readyDetail, noToolsDetail string) readiness.Check {
+func GogSpawnCheck(env hostenv.Env, res axis.ProbeResult, readyDetail, noToolsDetail string) readiness.Check {
 	switch res.Status {
 	case axis.ProbeToolsOK:
 		return readiness.Check{Label: "headless spawn", Verdict: readiness.VerdictReady,
@@ -152,7 +152,7 @@ func gogGroup(cfg *config.Config, env hostenv.Env, mcpOut string, mcpOK, sbxPres
 	// HONEST PATH: probe the command sbx ACTUALLY registered for gog. This is the
 	// only check that proves the real registration — account, op-refs path, and
 	// op/gog binaries all exactly as the gateway will spawn them.
-	if argv, ok := registeredGogCommand(env); ok {
+	if argv, ok := RegisteredGogCommand(env); ok {
 		g.Checks = append(g.Checks, readiness.Check{Label: "registration", Note: true, Verdict: readiness.VerdictUnverifiable,
 			Detail: "probing the sbx-registered command: " + redactRegisteredCommand(argv)})
 
@@ -160,7 +160,7 @@ func gogGroup(cfg *config.Config, env hostenv.Env, mcpOut string, mcpOK, sbxPres
 		// exact runtime flags that block writes. Their absence is a VERIFIED gap
 		// (the runtime backstop is off), fixed by re-registering the hardened
 		// command — via the guided setup, never a raw recipe.
-		if missing := gogMissingHardenedFlags(env, argv); len(missing) > 0 {
+		if missing := GogMissingHardenedFlags(env, argv); len(missing) > 0 {
 			g.Checks = append(g.Checks, readiness.Check{Label: "read-only", Verdict: readiness.VerdictTodo,
 				Detail:   "registered command is missing hardened read-only flags: " + strings.Join(missing, " "),
 				Evidence: "registered argv lacks " + strings.Join(missing, " "),
@@ -168,7 +168,7 @@ func gogGroup(cfg *config.Config, env hostenv.Env, mcpOut string, mcpOK, sbxPres
 		} else {
 			g.Checks = append(g.Checks, readiness.Check{Label: "read-only", Verdict: readiness.VerdictReady,
 				Detail:   "registered command carries the hardened read-only flags",
-				Evidence: strings.Join(gogHardenedFlags, " ") + " present in the registered argv"})
+				Evidence: strings.Join(GogHardenedFlags, " ") + " present in the registered argv"})
 		}
 
 		// TRUST GATE: NEVER exec a registered command whose gog/op executable is
@@ -189,7 +189,7 @@ func gogGroup(cfg *config.Config, env hostenv.Env, mcpOut string, mcpOK, sbxPres
 		if !gogSpawnIsOpWrapped(argv) {
 			readyDetail = "registered command exposes tools (verified as-registered) — spawned BARE (no op-refs involved)"
 		}
-		g.Checks = append(g.Checks, gogSpawnCheck(env, axis.ProbeListTools(env, trustedArgv),
+		g.Checks = append(g.Checks, GogSpawnCheck(env, axis.ProbeListTools(env, trustedArgv),
 			readyDetail,
 			"the registered command returns 0 tools — keyring not headless"))
 		g.Checks = append(g.Checks, gogRegistrationCheck(mcpOut, mcpOK, sbxPresent))
@@ -213,7 +213,7 @@ func gogGroup(cfg *config.Config, env hostenv.Env, mcpOut string, mcpOK, sbxPres
 	}
 	g.Checks = append(g.Checks, readiness.Check{Label: "dependency CLI", Verdict: readiness.VerdictReady, Detail: "installed"})
 
-	acct := gogAccount(cfg, env)
+	acct := GogAccount(cfg, env)
 	opRefs := secret.FindOpRefs(env)
 
 	// FALLBACK / TRANSPARENCY: sbx couldn't tell us the registered command, so we
@@ -304,7 +304,7 @@ func gogGroup(cfg *config.Config, env hostenv.Env, mcpOut string, mcpOK, sbxPres
 	default:
 		g.Checks = append(g.Checks,
 			readiness.Check{Label: "account", Verdict: readiness.VerdictReady, Detail: acct + " authorized (interactive)"},
-			gogSpawnCheck(env, head,
+			GogSpawnCheck(env, head,
 				"", // unreachable: axis.ProbeToolsOK handled above
 				"auth OK in your shell but the gateway spawn gets 0 tools — keyring not headless"))
 	}
@@ -371,7 +371,7 @@ func gogSpawnIsOpWrapped(argv []string) bool {
 	return len(argv) > 0 && filepath.Base(argv[0]) == "op"
 }
 
-// registeredGogCommand asks sbx what command it ACTUALLY registered for the gog
+// RegisteredGogCommand asks sbx what command it ACTUALLY registered for the gog
 // MCP server, so doctor can probe the real registration instead of a config
 // reconstruction that may have drifted from what `make mcp-register` wired up.
 // It tries, in order, current `sbx mcp inspect google-workspace`, legacy `get`,
@@ -380,7 +380,7 @@ func gogSpawnIsOpWrapped(argv []string) bool {
 // sbx is absent or exposes no complete command; the caller then falls back to
 // the best-effort reconstruction. Every discovery subprocess is BOUNDED
 // (probeRun) so a hung sbx can never wedge the caller.
-func registeredGogCommand(env hostenv.Env) ([]string, bool) {
+func RegisteredGogCommand(env hostenv.Env) ([]string, bool) {
 	if _, err := env.LookPath("sbx"); err != nil {
 		return nil, false
 	}
@@ -417,7 +417,7 @@ var gogCommandLineRe = regexp.MustCompile(`(?im)^\s*command\s*[:=]\s*(.+?)\s*$`)
 // UNAMBIGUOUS, COMPLETE command (see gogCommandComplete). A shell-quoted line
 // (which strings.Fields cannot split reliably), or a partial capture — just
 // `op`, `op run`, or the command line when the args landed on a separate line —
-// returns (nil,false) so registeredGogCommand falls through to the structured
+// returns (nil,false) so RegisteredGogCommand falls through to the structured
 // JSON parser rather than probing a truncated/wrong argv.
 func parseGogCommandLine(env hostenv.Env, out string) ([]string, bool) {
 	m := gogCommandLineRe.FindStringSubmatch(out)

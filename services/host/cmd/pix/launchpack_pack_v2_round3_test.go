@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"pix/host/workflow/doctor"
 	"pix/host/workflow/pack"
 )
 
@@ -20,7 +21,7 @@ func TestSandboxPackMarker_NotOverwrittenOnInconclusiveProbe(t *testing.T) {
 		t.Fatal("willCreate(sbxUnknown) must fail closed")
 	}
 	cases := []struct {
-		State   sbxState
+		State   doctor.SbxState
 		replace bool
 		want    bool
 	}{

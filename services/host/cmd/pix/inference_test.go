@@ -273,7 +273,7 @@ func TestSetupChooseInferenceOffersDetectedOllamaAndNeedsNoOnePassword(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !selected || inferenceNeedsOnePassword(cfg) {
+	if !selected || inference.InferenceNeedsOnePassword(cfg) {
 		t.Fatalf("selected=%v inference=%+v", selected, cfg.Inference)
 	}
 	if !strings.Contains(out.String(), "2. Ollama local") || len(cfg.Inference.Models) != 6 {
@@ -311,7 +311,7 @@ func TestSetupChooseInferenceConfiguresKeylessGateway(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !selected || inferenceNeedsOnePassword(cfg) || len(cfg.Inference.Models) != 1 {
+	if !selected || inference.InferenceNeedsOnePassword(cfg) || len(cfg.Inference.Models) != 1 {
 		t.Fatalf("selected=%v inference=%+v", selected, cfg.Inference)
 	}
 	if got := cfg.Inference.Backends["gateway"]; got.Auth != "sbx-session" || got.BaseURL != "https://models.example.test/v1" || got.CredentialService != "sbx-login" || got.KeyEnv != "DOCKER_TOKEN" || got.CredentialHeader != "Authorization" || got.CredentialFormat != "Bearer %s" {
@@ -331,7 +331,7 @@ func TestExclusiveKeylessInferenceIgnoresDormantOnePasswordBackend(t *testing.T)
 		},
 		ExclusiveSource: "/packs/work",
 	}}
-	if inferenceNeedsOnePassword(cfg) {
+	if inference.InferenceNeedsOnePassword(cfg) {
 		t.Fatal("a dormant direct backend outside the exclusive runtime must not force 1Password")
 	}
 }
@@ -348,7 +348,7 @@ func TestExclusiveBackendKeylessInferenceIgnoresDormantOnePasswordBackend(t *tes
 		},
 		ExclusiveBackend: "gateway",
 	}}
-	if inferenceNeedsOnePassword(cfg) {
+	if inference.InferenceNeedsOnePassword(cfg) {
 		t.Fatal("a dormant direct backend outside the exclusive backend must not force 1Password")
 	}
 }
@@ -362,7 +362,7 @@ func TestActiveUnverifiedOnePasswordBindingStillNeedsOnePassword(t *testing.T) {
 			{Model: "anthropic/claude-sonnet-5", Backend: "direct", Upstream: "anthropic/claude-sonnet-5", Available: false},
 		},
 	}}
-	if !inferenceNeedsOnePassword(cfg) {
+	if !inference.InferenceNeedsOnePassword(cfg) {
 		t.Fatal("an allowed direct binding needs 1Password before availability is verified")
 	}
 }

@@ -25,7 +25,7 @@ func TestBuildHostState(t *testing.T) {
 		MemoryEmbedModel:   "nomic-embed-text",
 	}
 	cfg.Kits.Stack = []string{"/repos/pix-work/kit"}
-	// sbx secret ls output that marks anthropic present (secretCheck parses this).
+	// sbx secret ls output that marks anthropic present (doctor.SecretCheck parses this).
 	sbxOut := "anthropic\ngithub\n"
 	up := func(int) bool { return true }
 
@@ -270,7 +270,7 @@ func TestInjectTrustedHostState_NoGeneratedArg_NoProbe(t *testing.T) {
 		t.Errorf("args must be unchanged, got %v, want %v", out, args)
 	}
 	if probed {
-		t.Error("no generated-marker arg present: must not probe host state at all")
+		t.Error("no generated-marker arg Present: must not probe host state at all")
 	}
 }
 

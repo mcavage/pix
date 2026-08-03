@@ -3,7 +3,7 @@
 // setup's completion summary must both state that local/container MCP
 // servers run on the HOST, outside the sandbox, with host-user privileges,
 // and that content they return can be included in the conversation sent to
-// the model provider. Both surfaces share ONE constant (mcpHostTrustNotice,
+// the model provider. Both surfaces share ONE constant (doctor.McpHostTrustNotice,
 // doctor_render.go) so they can never say different things; these tests
 // pin the exact facts, not just "something got printed".
 package main
@@ -17,7 +17,9 @@ import (
 
 	"pix/host/config"
 	"pix/host/hostenv"
+	"pix/host/hostenv/hostenvtest"
 	"pix/host/sys/systest"
+	"pix/host/workflow/doctor"
 )
 
 // mcpHostTrustNoticeFacts are the exact facts the disclosure must state,
@@ -32,22 +34,22 @@ var mcpHostTrustNoticeFacts = []string{
 
 func TestMcpHostTrustNotice_StatesBothFacts(t *testing.T) {
 	for _, want := range mcpHostTrustNoticeFacts {
-		if !strings.Contains(mcpHostTrustNotice, want) {
-			t.Errorf("mcpHostTrustNotice missing fact %q, got: %q", want, mcpHostTrustNotice)
+		if !strings.Contains(doctor.McpHostTrustNotice, want) {
+			t.Errorf("doctor.McpHostTrustNotice missing fact %q, got: %q", want, doctor.McpHostTrustNotice)
 		}
 	}
-	if strings.Contains(mcpHostTrustNotice, "\u2014") {
-		t.Errorf("mcpHostTrustNotice must not use an em dash, got: %q", mcpHostTrustNotice)
+	if strings.Contains(doctor.McpHostTrustNotice, "\u2014") {
+		t.Errorf("doctor.McpHostTrustNotice must not use an em dash, got: %q", doctor.McpHostTrustNotice)
 	}
 }
 
 // TestDoctorRender_DisclosesHostMCPTrust_WhenMCPConfigured: doctor's footer
 // must print the disclosure when at least one MCP server is configured.
 func TestDoctorRender_DisclosesHostMCPTrust_WhenMCPConfigured(t *testing.T) {
-	r := runDoctor(defaultCfg(), fakeEnv{}.env())
+	r := doctor.RunDoctor(defaultCfg(), hostenvtest.Env{}.Build())
 	r.Services, r.MCP = defaultCfg().Services, []string{config.GWServerName}
 	var buf bytes.Buffer
-	r.Render(&buf, false, doctorHints())
+	r.Render(&buf, false, doctor.Hints())
 	out := buf.String()
 	for _, want := range mcpHostTrustNoticeFacts {
 		if !strings.Contains(out, want) {
@@ -60,11 +62,11 @@ func TestDoctorRender_DisclosesHostMCPTrust_WhenMCPConfigured(t *testing.T) {
 // there is nothing to disclose, so doctor must stay notice-free (concise,
 // never alarmist about something the user hasn't touched).
 func TestDoctorRender_NoDisclosure_WhenNoMCPConfigured(t *testing.T) {
-	r := runDoctor(defaultCfg(), fakeEnv{}.env())
+	r := doctor.RunDoctor(defaultCfg(), hostenvtest.Env{}.Build())
 	r.Services, r.MCP = defaultCfg().Services, nil
 	var buf bytes.Buffer
-	r.Render(&buf, false, doctorHints())
-	if strings.Contains(buf.String(), mcpHostTrustNotice) {
+	r.Render(&buf, false, doctor.Hints())
+	if strings.Contains(buf.String(), doctor.McpHostTrustNotice) {
 		t.Errorf("doctor must not print the MCP host-trust notice with no MCP configured, got:\n%s", buf.String())
 	}
 }
@@ -108,7 +110,7 @@ func TestPrintSetupSummary_NoDisclosure_WhenNoMCPConfigured(t *testing.T) {
 	}
 	var out bytes.Buffer
 	printSetupSummary(cfg, hostTrustSummaryEnv(t), &out, setupModelsOutcome{})
-	if strings.Contains(out.String(), mcpHostTrustNotice) {
+	if strings.Contains(out.String(), doctor.McpHostTrustNotice) {
 		t.Errorf("setup summary must not print the MCP host-trust notice with no MCP configured, got:\n%s", out.String())
 	}
 }

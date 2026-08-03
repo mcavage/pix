@@ -1,17 +1,19 @@
-package main
+package doctor
 
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"sort"
+	"strings"
 
 	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/hostenv"
+	"pix/host/inference"
 	"pix/host/readiness"
-	"pix/host/rpc"
 	"pix/host/secret"
 	"pix/host/sys"
-	"pix/host/workflow/slack"
 	"pix/host/workflow/upgrade"
 	"pix/host/workspace"
 )
@@ -46,18 +48,12 @@ import (
 // answers to a missing seam. runWithTimeout/runWithTimeoutD moved to
 // sys.RunTimed, which is where a bounded exec belongs.
 
-// defaultShellEnv returns a hostenv.Env backed by the real OS.
-func defaultShellEnv() hostenv.Env {
-	return hostenv.Env{
-		System: sys.Real{}, HostBinary: func() (string, error) { return hostBinaryResolver() }, IdentityProbe: rpc.IdentityProbe, SlackAuth: slack.LiveSlackAuthTest, DirectInference: liveDirectInferenceProbe, OllamaInference: liveOllamaInferenceProbe}
-}
-
-// runDoctor builds the report. Pure apart from env: no direct OS access, so the
+// RunDoctor builds the report. Pure apart from env: no direct OS access, so the
 // tests feed a faked hostenv.Env and assert on the rendered output. Each group is
 // built by its own builder (doctor_providers.go, doctor_ollama.go,
 // doctor_memory.go, doctor_gog.go, doctor_secrets.go, doctor_mcp.go) so later
 // stories can rework one group without touching the others.
-func runDoctor(cfg *config.Config, env hostenv.Env) *readiness.Report {
+func RunDoctor(cfg *config.Config, env hostenv.Env) *readiness.Report {
 	r := &readiness.Report{}
 	if g := upgrade.InstallDuplicatesGroup(env); len(g.Checks) > 0 {
 		r.Groups = append(r.Groups, g)
@@ -68,13 +64,13 @@ func runDoctor(cfg *config.Config, env hostenv.Env) *readiness.Report {
 	// secret.ProbeSbxSecrets is the ONE shared probe (bootstrap.go's tri-state helpers
 	// use it too) so this never reimplements a divergent "is sbx reachable"
 	// check.
-	sbxOut, sbxState := secret.ProbeSbxSecrets(env)
-	sbxOK := sbxState == secret.SbxSecretsOK
+	sbxOut, SbxState := secret.ProbeSbxSecrets(env)
+	sbxOK := SbxState == secret.SbxSecretsOK
 	// sbxAbsent means POSITIVELY absent (lookPath could not find sbx) — never
 	// a generic probe failure: sbx present with `sbx secret ls` erroring or
 	// timing out is a different, diagnosable host state (secret.SbxSecretsError) and
 	// must not render the "you're likely inside the sandbox" note.
-	r.SbxAbsent = sbxState == secret.SbxSecretsAbsent
+	r.SbxAbsent = SbxState == secret.SbxSecretsAbsent
 	// sbxOnPath is tracked INDEPENDENTLY of sbxOK (finding #4): sbx being on
 	// PATH but `sbx secret ls` failing/timing out (secret.SbxSecretsError) is a
 	// DIFFERENT state from sbx being entirely absent, and the MCP/gog groups
@@ -99,7 +95,7 @@ func runDoctor(cfg *config.Config, env hostenv.Env) *readiness.Report {
 	// (a) provider secrets — proxy-injected, never in the VM. Genuinely gated
 	// on sbxOK: this group's OWN probe (`sbx secret ls`) is the one that
 	// failed, so it stays unverifiable regardless of sbxOnPath/mcpOK.
-	r.Groups = append(r.Groups, providersGroup(cfg, sbxOut, sbxOK))
+	r.Groups = append(r.Groups, ProvidersGroup(cfg, env, sbxOut, sbxOK))
 	// (b) ollama + the configured watcher/embed models.
 	r.Groups = append(r.Groups, ollamaGroup(cfg, env))
 	// (c) memory service on :11435.
@@ -121,49 +117,11 @@ func runDoctor(cfg *config.Config, env hostenv.Env) *readiness.Report {
 	return r
 }
 
-// runDoctorCmd is the CLI entry point wired into main's dispatch. Exit codes
-// are part of the shared contract (snapshot.ExitCode): 0 = every core and
-// requested axis is ready, 1 = a POSITIVELY VERIFIED core/requested failure
-// (verdict todo/denied) or a config-load error, 2 = usage error, 3 = a
-// core/requested axis could not be verified from here.
-func runDoctorCmd(argv []string) {
-	jsonOut, verbose, err := parseDoctorArgs(argv)
-	if err != nil {
-		if err == cli.ErrHelpRequested {
-			fmt.Print(doctorUsage)
-			return
-		}
-		fmt.Fprintf(os.Stderr, "pix doctor: %v\n\n%s", err, doctorUsage)
-		os.Exit(2)
-	}
-	cfg, _, err := workspace.LoadResolvedConfig()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix doctor: %v\n", err)
-		os.Exit(1)
-	}
-	r := runDoctor(cfg, defaultShellEnv())
-	r.Services = cfg.Services
-	r.MCP = cfg.MCP
-	if jsonOut {
-		_ = cli.WriteJSONOut(os.Stdout, jsonView(r, ""))
-	} else {
-		r.Render(os.Stdout, verbose, doctorHints())
-	}
-	// The exit code is derived by the SHARED contract (snapshot.ExitCode):
-	// 0 ready, 1 a verified core/requested failure, 3 core/requested axes
-	// that could not be verified from here. Usage errors above already exit 2.
-	// Doctor used to collapse 3 into 0; two exit contracts over one snapshot
-	// would reintroduce exactly the disagreement this wave removes.
-	if code := r.Snapshot().ExitCode(); code != readiness.ExitReady {
-		os.Exit(code)
-	}
-}
-
-// parseDoctorArgs validates doctor flags: -h/--help returns cli.ErrHelpRequested,
+// ParseDoctorArgs validates doctor flags: -h/--help returns cli.ErrHelpRequested,
 // --json sets jsonOut, --verbose sets verbose (full per-check detail; the
 // default is concise and collapses ready checks), any other token is a usage
 // error (exit 2).
-func parseDoctorArgs(argv []string) (jsonOut, verbose bool, err error) {
+func ParseDoctorArgs(argv []string) (jsonOut, verbose bool, err error) {
 	for _, a := range argv {
 		switch a {
 		case "-h", "--help":
@@ -177,4 +135,95 @@ func parseDoctorArgs(argv []string) (jsonOut, verbose bool, err error) {
 		}
 	}
 	return jsonOut, verbose, nil
+}
+
+const Usage = `usage: pix doctor [--json] [--verbose]
+
+Diagnose host + sandbox health (provider keys, ollama/models, memory, Google Workspace, mcp),
+leading with a one-line verdict and copy-pasteable TODO commands. The default
+output is concise (verified-ready checks collapse per readiness.Group); --verbose shows
+every readiness.Check.
+
+flags:
+  --json      emit the machine-readable readiness.Report (schema_version 2)
+  --verbose   show every readiness.Check, including verified-ready detail
+
+exit codes:
+  0  ready, or only optional/unverifiable gaps (nothing verified-broken that
+     pix requires)
+  1  a positively verified core failure (or the config failed to load)
+  2  usage error
+`
+
+const StatusUsage = `usage: pix status [--json]
+
+Fast, read-only control panel: services, provider keys, knowledge bundles,
+MCP registration, and running pix-* sandboxes. Launches nothing.
+
+flags:
+  --json   emit the machine-readable status snapshot
+`
+
+// SbxInstallHint is shared by doctor, run, and setup because the nightly tap
+// name is expected to change when MCP support stabilizes. README.md carries the
+// one accepted non-Go copy and must change at the same time.
+const SbxInstallHint = "brew install docker/tap/sbx@nightly"
+
+// UnwiredProviderKeys is the gap this whole feature closes, as a fact both the
+// status screen and doctor can read: a provider whose key RESOLVES on this host
+// but which has no native binding in config, i.e. a key that is present,
+// correct, and doing nothing.
+//
+// It reports absence of wiring, never a verdict about the key's validity. A
+// binding that exists but failed its probe is NOT reported here — that is a
+// different problem with a different fix, and conflating them would send a user
+// to `models add` for a credential their provider rejected.
+//
+// Silent when a pack owns inference (its bindings are the pack's business) and
+// when the key list is unreadable, since an unreadable list is not evidence of
+// a gap.
+func UnwiredProviderKeys(cfg *config.Config, env hostenv.Env) []string {
+	if cfg == nil || cfg.Inference.ExclusiveSource != "" {
+		return nil
+	}
+	names, err := secret.HostModeProviderKeys(env)
+	if err != nil || len(names) == 0 {
+		return nil
+	}
+	bound := inference.BoundNativeProviders(cfg)
+	var gaps []string
+	for _, n := range names {
+		if !bound[n] {
+			gaps = append(gaps, n)
+		}
+	}
+	sort.Strings(gaps)
+	return gaps
+}
+
+// SbxState is the tri-state a task probe resolves a sandbox to. The whole point
+// is that an errored/unreachable `sbx` invocation is UNKNOWN, distinct from a
+// clean "not in the list" ABSENT: callers must refuse destructive action on
+// UNKNOWN rather than assume the safe-looking absent value.
+type SbxState int
+
+// taskStateSummary walks the task state + artifact roots to a global count of
+// task clones and the on-disk size of harvested artifacts, so `pix status`
+// can surface the pile without any per-repo git probing (that needs a cwd/repo).
+// Best-effort: an unreadable tree contributes 0.
+func taskStateSummary() (tasks int, artifactBytes int64) {
+	repos, _ := os.ReadDir(workspace.TaskStateRoot())
+	for _, r := range repos {
+		if !r.IsDir() {
+			continue
+		}
+		metas, _ := os.ReadDir(filepath.Join(workspace.TaskStateRoot(), r.Name(), "meta"))
+		for _, m := range metas {
+			if !m.IsDir() && strings.HasSuffix(m.Name(), ".json") {
+				tasks++
+			}
+		}
+	}
+	_, artifactBytes = sys.DirSize(workspace.TaskArtifactRoot())
+	return tasks, artifactBytes
 }

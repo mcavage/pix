@@ -11,6 +11,7 @@ import (
 	"pix/host/hostenv"
 	"pix/host/sys"
 	"pix/host/sys/systest"
+	"pix/host/workflow/doctor"
 )
 
 // TestPlanSandboxLaunch_AbsentCreates (a): no sandbox by that name -> a full
@@ -97,7 +98,7 @@ func TestPlanSandboxLaunch_ReplaceRecreates(t *testing.T) {
 	cfg := &config.Config{}
 	o := runOpts{Workspace: ".", Name: "pix-t", Replace: true}
 
-	for _, state := range []sbxState{sbxRunning, sbxStopped} {
+	for _, state := range []doctor.SbxState{sbxRunning, sbxStopped} {
 		plan := planSandboxLaunch(state, true, cfg, o, "0.0.99")
 		if plan.Reattach {
 			t.Errorf("state=%v --replace must not reattach", state)
@@ -204,15 +205,15 @@ func TestMcpLoadCommand_QuotesWorkspaceAndName(t *testing.T) {
 		"/tmp/a;b",
 		"/tmp/$HOME/proj",
 	} {
-		got := mcpLoadCommand("slack", ws)
+		got := doctor.McpLoadCommand("slack", ws)
 		want := "pix mcp load " + sys.ShellQuote("slack") + " " + sys.ShellQuote(ws)
 		if got != want {
-			t.Errorf("mcpLoadCommand(%q) = %q, want %q", ws, got, want)
+			t.Errorf("doctor.McpLoadCommand(%q) = %q, want %q", ws, got, want)
 		}
 	}
 	// Bare form (no workspace) still quotes the name.
-	if got := mcpLoadCommand("slack", ""); got != "pix mcp load slack" {
-		t.Errorf("mcpLoadCommand bare = %q, want %q", got, "pix mcp load slack")
+	if got := doctor.McpLoadCommand("slack", ""); got != "pix mcp load slack" {
+		t.Errorf("doctor.McpLoadCommand bare = %q, want %q", got, "pix mcp load slack")
 	}
 }
 
@@ -371,7 +372,7 @@ func TestWillCreate_MatchesPlanSandboxLaunchReattachDecision(t *testing.T) {
 	cfg := &config.Config{}
 	o := runOpts{Workspace: ".", Name: "pix-t"}
 	for _, tc := range []struct {
-		State   sbxState
+		State   doctor.SbxState
 		replace bool
 		want    bool
 	}{
@@ -405,14 +406,14 @@ func TestWillCreate_MatchesPlanSandboxLaunchReattachDecision(t *testing.T) {
 // }` branch is skipped entirely — a missing checkout is never even asked
 // about, let alone allowed to fail the launch.
 func TestRunDevResolution_SkippedOnReattach(t *testing.T) {
-	for _, state := range []sbxState{sbxRunning, sbxStopped} {
+	for _, state := range []doctor.SbxState{sbxRunning, sbxStopped} {
 		if willCreate(state, false) {
 			t.Fatalf("state=%v: willCreate must be false so --dev/checkout resolution (which needs a real repo"+
 				" checkout) is skipped on a plain re-attach", state)
 		}
 	}
 	// And the create/replace paths DO need it resolved.
-	for _, state := range []sbxState{sbxAbsent} {
+	for _, state := range []doctor.SbxState{sbxAbsent} {
 		if !willCreate(state, false) {
 			t.Fatalf("state=%v: willCreate must be true so --dev/checkout resolution runs for a fresh create", state)
 		}

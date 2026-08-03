@@ -6,6 +6,7 @@ import (
 	"io"
 	"pix/host/cli"
 	"pix/host/hostenv"
+	"pix/host/workflow/doctor"
 	"runtime"
 	"strings"
 )
@@ -44,7 +45,7 @@ func ensureSetupPrereqsFor(env hostenv.Env, in io.Reader, out io.Writer, interac
 		return nil
 	}
 	commands := map[string]string{
-		"sbx": sbxInstallHint,
+		"sbx": doctor.SbxInstallHint,
 		"op":  "brew install 1password-cli",
 	}
 	fix := func() string {

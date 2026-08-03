@@ -60,6 +60,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/hostenv/hostenvtest"
 	"pix/host/knowledge"
 	"pix/host/routing"
 	"pix/host/workflow/onboard"
@@ -233,7 +234,7 @@ func TestMarkerRoundTrip_OnboardingJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	env := fakeEnv{present: map[string]bool{}}.env()
+	env := hostenvtest.Env{Present: map[string]bool{}}.Build()
 	var out bytes.Buffer
 	onboard.ReconcileOnboarding(ws, env, strings.NewReader(""), &out, true, false, onboardDeps())
 
@@ -272,7 +273,7 @@ func TestMarkerRoundTrip_HostStateNeverBecomesAWorkspaceFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(ws, ".pix", onboard.FileName), []byte(`{"version":1}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	env := fakeEnv{present: map[string]bool{}}.env()
+	env := hostenvtest.Env{Present: map[string]bool{}}.Build()
 	onboard.ReconcileOnboarding(ws, env, strings.NewReader(""), &out, true, false, onboardDeps())
 
 	// ...and confirm host-state.json never appeared. See hoststate.go's own

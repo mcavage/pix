@@ -106,10 +106,10 @@ func TestSecretSetMirrorFailure_DispatcherExitsNonzero(t *testing.T) {
 	outBuf, err := cmd.CombinedOutput()
 	var ee *exec.ExitError
 	if !errors.As(err, &ee) {
-		t.Fatalf("expected an ExitError (a mirror failure must exit nonzero), got %v (output: %s)", err, outBuf)
+		t.Fatalf("expected an ExitError (a mirror failure must exit nonzero), got %v (Output: %s)", err, outBuf)
 	}
 	if ee.ExitCode() == 0 {
-		t.Errorf("exit code = 0, want nonzero, output: %s", outBuf)
+		t.Errorf("exit code = 0, want nonzero, Output: %s", outBuf)
 	}
 	if !strings.Contains(string(outBuf), "could not mirror") {
 		t.Errorf("output should explain the mirror failure, got:\n%s", outBuf)
@@ -145,9 +145,9 @@ func TestSecretRm_DispatcherExitsNonzeroOnPartialFailure(t *testing.T) {
 	outBuf, err := cmd.CombinedOutput()
 	var ee *exec.ExitError
 	if !errors.As(err, &ee) {
-		t.Fatalf("expected an ExitError (a partial rm failure must exit nonzero), got %v (output: %s)", err, outBuf)
+		t.Fatalf("expected an ExitError (a partial rm failure must exit nonzero), got %v (Output: %s)", err, outBuf)
 	}
 	if ee.ExitCode() == 0 {
-		t.Errorf("exit code = 0, want nonzero, output: %s", outBuf)
+		t.Errorf("exit code = 0, want nonzero, Output: %s", outBuf)
 	}
 }

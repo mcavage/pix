@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/workflow/doctor"
 	"pix/host/workspace"
 )
 
@@ -222,7 +223,7 @@ func TestMcpReattachWarning_FiresOnBothRunningAndStopped(t *testing.T) {
 	cfg := &config.Config{MCP: []string{config.GWServerName}}
 	o := runOpts{Workspace: "/repo", Name: "pix-t"}
 
-	for _, state := range []sbxState{sbxRunning, sbxStopped} {
+	for _, state := range []doctor.SbxState{sbxRunning, sbxStopped} {
 		plan := planSandboxLaunch(state, false, cfg, o, "0.0.99")
 		if !plan.Reattach {
 			t.Fatalf("expected %v to reattach", state)

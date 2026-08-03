@@ -614,7 +614,7 @@ func TestGogSetup_R114_CapabilityAndBareHeadlessProbesAreBounded(t *testing.T) {
 // gogSnapEnv builds a minimal hostenv.Env driving snapshotGogRegistration
 // directly: sbx is present, and lsOut/lsTimedOut/lsErr control the bounded
 // `sbx mcp ls` listing probe; getFixtures drives the detailed `sbx mcp get
-// gog` / `sbx mcp ls -o json` readers (registeredGogCommand) via probeRun's
+// gog` / `sbx mcp ls -o json` readers (doctor.RegisteredGogCommand) via probeRun's
 // env.Run fallback.
 func gogSnapEnv(lsOut string, lsTimedOut bool, lsErr error, getFixtures map[string]string, getErrs map[string]bool) hostenv.Env {
 	return hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
@@ -661,7 +661,7 @@ func TestSnapshotGogRegistration_ConfirmedPresent_RestorableArgv(t *testing.T) {
 
 // TestSnapshotGogRegistration_ListedButUnreadable_Unknown: the bounded
 // listing confirms gog IS registered, but BOTH detailed readers
-// (registeredGogCommand's `sbx mcp get google-workspace` and `sbx mcp ls -o json`) come up
+// (doctor.RegisteredGogCommand's `sbx mcp get google-workspace` and `sbx mcp ls -o json`) come up
 // with a quoted/unparseable command — must be gogRegUnknown, never absent.
 func TestSnapshotGogRegistration_ListedButUnreadable_Unknown(t *testing.T) {
 	env := gogSnapEnv("google-workspace\n", false, nil, map[string]string{
@@ -698,7 +698,7 @@ func TestSnapshotGogRegistration_ListingProbeTimesOut_Unknown(t *testing.T) {
 }
 
 // TestSnapshotGogRegistration_GetAndJSONTransientErrors_Unknown: the bounded
-// listing confirms presence, but BOTH of registeredGogCommand's own readers
+// listing confirms presence, but BOTH of doctor.RegisteredGogCommand's own readers
 // (`sbx mcp get google-workspace`, `sbx mcp ls -o json`) transiently error — confirmed
 // present, unreadable command -> gogRegUnknown.
 func TestSnapshotGogRegistration_GetAndJSONTransientErrors_Unknown(t *testing.T) {
@@ -762,7 +762,7 @@ func TestGogSetup_R203_UnreadablePriorRegistration_AbortsBeforeOAuth(t *testing.
 	// gog IS listed ("sbx mcp ls" -> "google-workspace\n"), but its `sbx mcp get google-workspace`
 	// command is shell-quoted (parseGogCommandLine refuses to split it), and
 	// there is deliberately NO `sbx mcp ls -o json` fixture either, so
-	// registeredGogCommand's fallback reader also comes up empty — confirmed
+	// doctor.RegisteredGogCommand's fallback reader also comes up empty — confirmed
 	// present, unreadable command.
 	env, cred := gogR203PreflightEnv(t, "google-workspace\n", false,
 		`name: gog`+"\n"+`command: /usr/bin/op run --env-file="/x/op refs.env" -- gog mcp`+"\n")

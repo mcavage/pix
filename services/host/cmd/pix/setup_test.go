@@ -17,6 +17,7 @@ import (
 	"pix/host/secret"
 	"pix/host/sys"
 	"pix/host/sys/systest"
+	"pix/host/workflow/doctor"
 	"pix/host/workflow/onboard"
 	"pix/host/workflow/pack"
 )
@@ -449,7 +450,7 @@ func TestOnboardingKickoffCarriesGeneratedMarker(t *testing.T) {
 // ("reconciled", not "current"), prints the exact choices, and never calls
 // runFn (never replays the onboarding kickoff into a live session).
 func TestRunSetupHandoff_ExistingSandbox_LeftAloneNoRunFn(t *testing.T) {
-	for _, state := range []sbxState{sbxRunning, sbxStopped} {
+	for _, state := range []doctor.SbxState{sbxRunning, sbxStopped} {
 		var out bytes.Buffer
 		called := false
 		if err := runSetupHandoff(".", "pix-demo", state, false, &out, func([]string) { called = true }); err != nil {

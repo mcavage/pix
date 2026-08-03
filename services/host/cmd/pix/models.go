@@ -28,6 +28,7 @@ import (
 	"pix/host/launcher"
 	"pix/host/readiness/axis"
 	"pix/host/sys"
+	"pix/host/workflow/doctor"
 )
 
 // execHost runs `pix-host <verb> <args...>` with inherited stdio and
@@ -142,7 +143,7 @@ func modelsRuntimeLabel(cfg *config.Config) string {
 	if len(cfg.Inference.Backends) == 0 {
 		return "not configured yet"
 	}
-	if inferenceNeedsOnePassword(cfg) {
+	if inference.InferenceNeedsOnePassword(cfg) {
 		return "direct provider keys (1Password)"
 	}
 	if b, ok := cfg.Inference.Backends["ollama"]; ok && b.Driver == "ollama" {
@@ -205,7 +206,7 @@ func renderModelsStatus(cfg *config.Config, out io.Writer) {
 	fmt.Fprintln(out, "       pix models route          rewrite routing.json (the only one here that writes)")
 	// A key that is set but wired to nothing is the failure this screen exists to
 	// surface, so name it here rather than making the user run doctor to find out.
-	for _, p := range unwiredProviderKeys(cfg, defaultShellEnv()) {
+	for _, p := range doctor.UnwiredProviderKeys(cfg, defaultShellEnv()) {
 		fmt.Fprintf(out, "\n!  %s is set but has no model bindings — the key is not in use yet.\n", p)
 		fmt.Fprintf(out, "   pix models add %s\n", p)
 	}

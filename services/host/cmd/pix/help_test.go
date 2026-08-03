@@ -6,10 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"pix/host/cli"
+	"pix/host/hostenv/hostenvtest"
 	"pix/host/knowledge"
 	"pix/host/mcp"
 	"pix/host/memory"
 	"pix/host/rpc"
+	"pix/host/workflow/doctor"
 	"pix/host/workflow/onboard"
 	"strings"
 	"testing"
@@ -287,31 +289,31 @@ func TestSuggestVerb_RetiredGog(t *testing.T) {
 // --- S2: status + doctor flag validation ---
 
 func TestParseStatusArgs(t *testing.T) {
-	if j, err := parseStatusArgs([]string{"--json"}); err != nil || !j {
+	if j, err := doctor.ParseStatusArgs([]string{"--json"}); err != nil || !j {
 		t.Errorf("--json = (%v,%v), want (true,nil)", j, err)
 	}
-	if j, err := parseStatusArgs(nil); err != nil || j {
+	if j, err := doctor.ParseStatusArgs(nil); err != nil || j {
 		t.Errorf("no args = (%v,%v), want (false,nil)", j, err)
 	}
-	if _, err := parseStatusArgs([]string{"--help"}); err != cli.ErrHelpRequested {
+	if _, err := doctor.ParseStatusArgs([]string{"--help"}); err != cli.ErrHelpRequested {
 		t.Errorf("--help err = %v, want cli.ErrHelpRequested", err)
 	}
-	if _, err := parseStatusArgs([]string{"--jsom"}); err == nil {
+	if _, err := doctor.ParseStatusArgs([]string{"--jsom"}); err == nil {
 		t.Error("--jsom (typo) should be a usage error")
 	}
 }
 
 func TestParseDoctorArgs(t *testing.T) {
-	if j, v, err := parseDoctorArgs([]string{"--json"}); err != nil || !j || v {
+	if j, v, err := doctor.ParseDoctorArgs([]string{"--json"}); err != nil || !j || v {
 		t.Errorf("--json = (%v,%v,%v), want (true,false,nil)", j, v, err)
 	}
-	if j, v, err := parseDoctorArgs([]string{"--verbose"}); err != nil || j || !v {
+	if j, v, err := doctor.ParseDoctorArgs([]string{"--verbose"}); err != nil || j || !v {
 		t.Errorf("--verbose = (%v,%v,%v), want (false,true,nil)", j, v, err)
 	}
-	if _, _, err := parseDoctorArgs([]string{"--help"}); err != cli.ErrHelpRequested {
+	if _, _, err := doctor.ParseDoctorArgs([]string{"--help"}); err != cli.ErrHelpRequested {
 		t.Errorf("--help err = %v, want cli.ErrHelpRequested", err)
 	}
-	if _, _, err := parseDoctorArgs([]string{"--bogus"}); err == nil {
+	if _, _, err := doctor.ParseDoctorArgs([]string{"--bogus"}); err == nil {
 		t.Error("--bogus should be a usage error")
 	}
 }
@@ -332,25 +334,25 @@ func TestParseOnboardArgs_Help(t *testing.T) {
 // a MIXED environment (sbx + keys present, ollama absent, no MCP) so all three
 // states appear: ok (providers/memory), todo (models/gog CLI), info (empty mcp).
 func TestDoctorJSONView(t *testing.T) {
-	f := fakeEnv{
-		present: map[string]bool{"sbx": true}, // ollama + gog absent -> TODOs
-		output: map[string]string{
+	f := hostenvtest.Env{
+		Present: map[string]bool{"sbx": true}, // ollama + gog absent -> TODOs
+		Output: map[string]string{
 			"sbx secret ls": "anthropic openai google github",
 			"sbx mcp ls":    "google-workspace\n",
 		},
-		ports: map[int]bool{11435: true}, // memory up -> an OK check
+		Ports: map[int]bool{11435: true}, // memory up -> an OK check
 	}
 	cfg := defaultCfg()
-	r := runDoctor(cfg, f.env())
+	r := doctor.RunDoctor(cfg, f.Build())
 	r.Services, r.MCP = cfg.Services, cfg.MCP
-	v := jsonView(r, "default")
+	v := doctor.JsonView(r, "default")
 
 	// Serialize through cli.WriteJSONOut (the same path `doctor --json` uses) and parse.
 	var buf bytes.Buffer
 	if err := cli.WriteJSONOut(&buf, v); err != nil {
 		t.Fatalf("cli.WriteJSONOut: %v", err)
 	}
-	var got doctorJSON
+	var got doctor.DoctorJSON
 	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal doctor JSON: %v\n%s", err, buf.String())
 	}
@@ -397,7 +399,7 @@ func TestDoctorJSONView(t *testing.T) {
 		}
 	}
 	// The serialized bytes literally carry the state strings (belt-and-suspenders
-	// against a jsonView that renders states as ints or drops them).
+	// against a doctor.JsonView that renders states as ints or drops them).
 	for _, want := range []string{`"state": "ok"`, `"state": "todo"`, `"state": "info"`} {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("serialized doctor JSON missing %s", want)

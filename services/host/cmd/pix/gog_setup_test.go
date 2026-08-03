@@ -548,7 +548,7 @@ func TestGogSetup_ZeroHeadlessToolsFailsWithGuidance(t *testing.T) {
 		t.Fatal(err)
 	}
 	ge := gogTestEnv{
-		// sbx present: the R2-04 preflight (sbx binary + registration snapshot)
+		// sbx Present: the R2-04 preflight (sbx binary + registration snapshot)
 		// runs before this test's headless-verification step, so sbx must be
 		// wired for the test to reach it at all.
 		present: map[string]bool{"gog": true, "op": true, "sbx": true},

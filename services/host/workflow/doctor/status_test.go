@@ -1,4 +1,4 @@
-package main
+package doctor
 
 import (
 	"bytes"
@@ -39,7 +39,7 @@ func fakeStatusEnv() hostenv.Env {
 
 func TestGatherStatus(t *testing.T) {
 	cfg := &config.Config{MCP: []string{config.GWServerName}, KnowledgeBundles: []string{"/kb"}}
-	st := gatherStatus(cfg, "default", fakeStatusEnv())
+	st := GatherStatus(cfg, "default", fakeStatusEnv())
 
 	if !st.Memory {
 		t.Error("memory should be up")
@@ -73,7 +73,7 @@ func TestGatherStatus(t *testing.T) {
 func TestRenderStatusHuman(t *testing.T) {
 	cfg := &config.Config{MCP: []string{config.GWServerName}, KnowledgeBundles: []string{"/kb"}}
 	var out bytes.Buffer
-	renderStatus(cfg, "default", fakeStatusEnv(), &out, false)
+	RenderStatus(cfg, "default", fakeStatusEnv(), &out, false)
 	s := out.String()
 	// anthropic+openai present already satisfies core model readiness (finding
 	// #3), so this fixture has nothing OUTSTANDING — but its sandboxes' MCP
@@ -96,7 +96,7 @@ func TestGatherStatusMonitor(t *testing.T) {
 	cfg := &config.Config{}
 	env := fakeStatusEnv()
 	systest.Of(env.System).DialLocalFn = func(port int) bool { return port == monitor.DefaultPort }
-	st := gatherStatus(cfg, "default", env)
+	st := GatherStatus(cfg, "default", env)
 	if !st.Monitor {
 		t.Error("monitor should be up when its port dials")
 	}
@@ -112,7 +112,7 @@ func TestRenderStatusMonitorLine(t *testing.T) {
 	env := fakeStatusEnv()
 	systest.Of(env.System).DialLocalFn = func(port int) bool { return port == monitor.DefaultPort }
 	var out bytes.Buffer
-	renderStatus(cfg, "default", env, &out, false)
+	RenderStatus(cfg, "default", env, &out, false)
 	s := out.String()
 	if !strings.Contains(s, fmt.Sprintf("monitor      active · :%d", monitor.DefaultPort)) {
 		t.Errorf("status output missing the monitor line:\n%s", s)
@@ -125,7 +125,7 @@ func TestRenderStatusMonitorJSON(t *testing.T) {
 	env := fakeStatusEnv()
 	systest.Of(env.System).DialLocalFn = func(port int) bool { return port == monitor.DefaultPort }
 	var out bytes.Buffer
-	renderStatus(cfg, "default", env, &out, true)
+	RenderStatus(cfg, "default", env, &out, true)
 	var st statusReport
 	if err := json.Unmarshal(out.Bytes(), &st); err != nil {
 		t.Fatalf("status --json invalid: %v\n%s", err, out.String())
@@ -140,7 +140,7 @@ func TestRenderStatusMonitorJSON(t *testing.T) {
 // gog is registered, slack is not.
 func TestGatherStatusMCP(t *testing.T) {
 	cfg := &config.Config{MCP: []string{config.GWServerName, "slack"}}
-	st := gatherStatus(cfg, "default", fakeStatusEnv())
+	st := GatherStatus(cfg, "default", fakeStatusEnv())
 	if len(st.MCPServers) != 2 {
 		t.Fatalf("MCPServers = %+v, want 2 entries", st.MCPServers)
 	}
@@ -163,7 +163,7 @@ func TestGatherStatusMCPSbxAbsent(t *testing.T) {
 	cfg := &config.Config{MCP: []string{config.GWServerName}}
 	env := fakeStatusEnv()
 	systest.Of(env.System).LookPathFn = func(name string) (string, error) { return "", fmt.Errorf("not found") }
-	st := gatherStatus(cfg, "default", env)
+	st := GatherStatus(cfg, "default", env)
 	if len(st.MCPServers) != 0 {
 		t.Errorf("MCPServers = %+v, want empty when sbx absent", st.MCPServers)
 	}
@@ -183,7 +183,7 @@ func TestGatherStatusMCPSbxAbsent(t *testing.T) {
 func TestRenderStatusMCPJSON(t *testing.T) {
 	cfg := &config.Config{MCP: []string{config.GWServerName, "slack"}}
 	var out bytes.Buffer
-	renderStatus(cfg, "default", fakeStatusEnv(), &out, true)
+	RenderStatus(cfg, "default", fakeStatusEnv(), &out, true)
 	var st statusReport
 	if err := json.Unmarshal(out.Bytes(), &st); err != nil {
 		t.Fatalf("status --json invalid: %v\n%s", err, out.String())
@@ -196,7 +196,7 @@ func TestRenderStatusMCPJSON(t *testing.T) {
 func TestRenderStatusJSON(t *testing.T) {
 	cfg := &config.Config{MCP: []string{config.GWServerName}}
 	var out bytes.Buffer
-	renderStatus(cfg, "default", fakeStatusEnv(), &out, true)
+	RenderStatus(cfg, "default", fakeStatusEnv(), &out, true)
 	var st statusReport
 	if err := json.Unmarshal(out.Bytes(), &st); err != nil {
 		t.Fatalf("status --json invalid: %v\n%s", err, out.String())
@@ -225,7 +225,7 @@ func TestStatusRegisterTodo(t *testing.T) {
 		out, err := run(name, args...)
 		return out, false, err
 	}
-	st := gatherStatus(cfg, "default", env)
+	st := GatherStatus(cfg, "default", env)
 	n := 0
 	for _, tdo := range st.Todos {
 		if tdo == "pix mcp register slack" {
@@ -242,7 +242,7 @@ func TestStatusRegisterTodo(t *testing.T) {
 // an outstanding item, but never invents a possibly-wrong repair command.
 func TestStatusRegisterTodoUnclassifiable(t *testing.T) {
 	cfg := &config.Config{MCP: []string{"slack"}}
-	st := gatherStatus(cfg, "default", fakeStatusEnv()) // no hostBinary seam -> kind unknown
+	st := GatherStatus(cfg, "default", fakeStatusEnv()) // no hostBinary seam -> kind unknown
 	found := false
 	for _, tdo := range st.Todos {
 		if strings.Contains(tdo, "slack") && strings.Contains(tdo, "pix doctor") {
@@ -261,7 +261,7 @@ func TestStatusRegisterTodoUnclassifiable(t *testing.T) {
 // no register TODO.
 func TestStatusNoRegisterTodoWhenRegistered(t *testing.T) {
 	cfg := &config.Config{MCP: []string{config.GWServerName, "notion"}} // both in `sbx mcp ls`
-	st := gatherStatus(cfg, "default", fakeStatusEnv())
+	st := GatherStatus(cfg, "default", fakeStatusEnv())
 	for _, tdo := range st.Todos {
 		if strings.Contains(tdo, "mcp register") || strings.Contains(tdo, "mcp bundle") {
 			t.Errorf("did not expect a register TODO when all servers registered: %v", st.Todos)
@@ -275,7 +275,7 @@ func TestStatusNoRegisterTodoWhenSbxAbsent(t *testing.T) {
 	cfg := &config.Config{MCP: []string{config.GWServerName, "slack"}}
 	env := fakeStatusEnv()
 	systest.Of(env.System).LookPathFn = func(name string) (string, error) { return "", fmt.Errorf("not found") }
-	st := gatherStatus(cfg, "default", env)
+	st := GatherStatus(cfg, "default", env)
 	for _, tdo := range st.Todos {
 		if strings.Contains(tdo, "mcp register") || strings.Contains(tdo, "mcp bundle") {
 			t.Errorf("did not expect a register TODO when sbx absent: %v", st.Todos)
@@ -289,12 +289,12 @@ func TestStatusNoRegisterTodoWhenSbxAbsent(t *testing.T) {
 func TestStatusSbxAbsentNotAllGreen(t *testing.T) {
 	cfg := &config.Config{}
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("not found") }, DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }}}
-	st := gatherStatus(cfg, "default", env)
+	st := GatherStatus(cfg, "default", env)
 	if len(st.Todos) == 0 {
 		t.Fatalf("expected a non-empty Todos when sbx is absent, got none")
 	}
 	var out bytes.Buffer
-	renderStatus(cfg, "default", env, &out, false)
+	RenderStatus(cfg, "default", env, &out, false)
 	if strings.Contains(out.String(), "all systems go") {
 		t.Errorf("verdict must not be falsely green when sbx is absent, got:\n%s", out.String())
 	}
@@ -315,7 +315,7 @@ func TestStatusGogNeedsAuthTodoNotAllGreen(t *testing.T) {
 		}
 		return "", nil
 	}, DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }}}
-	st := gatherStatus(cfg, "default", env)
+	st := GatherStatus(cfg, "default", env)
 	var gogTodo bool
 	for _, tdo := range st.Todos {
 		if tdo == gogSetupHint {
@@ -326,7 +326,7 @@ func TestStatusGogNeedsAuthTodoNotAllGreen(t *testing.T) {
 		t.Errorf("expected a `%s` TODO for an unauthed account, got %v", gogSetupHint, st.Todos)
 	}
 	var out bytes.Buffer
-	renderStatus(cfg, "default", env, &out, false)
+	RenderStatus(cfg, "default", env, &out, false)
 	if strings.Contains(out.String(), "all systems go") {
 		t.Errorf("verdict must not be green when gog is unauthed, got:\n%s", out.String())
 	}
@@ -343,7 +343,7 @@ func TestStatusSbxProbeFailedTodo(t *testing.T) {
 		}
 		return "", nil
 	}, DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }}}
-	st := gatherStatus(cfg, "default", env)
+	st := GatherStatus(cfg, "default", env)
 	var sawVerify, sawInstall bool
 	for _, tdo := range st.Todos {
 		if strings.Contains(tdo, "could not verify provider keys") {
@@ -360,7 +360,7 @@ func TestStatusSbxProbeFailedTodo(t *testing.T) {
 		t.Errorf("must NOT emit the install-sbx TODO when sbx is on PATH, got %v", st.Todos)
 	}
 	var out bytes.Buffer
-	renderStatus(cfg, "default", env, &out, false)
+	RenderStatus(cfg, "default", env, &out, false)
 	if strings.Contains(out.String(), "all systems go") {
 		t.Errorf("verdict must not be green when the key probe failed, got:\n%s", out.String())
 	}
@@ -377,7 +377,7 @@ func TestStatusGogNeedsAuth(t *testing.T) {
 		return "", nil
 	}, DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }}}
 	var out bytes.Buffer
-	renderStatus(cfg, "default", env, &out, false)
+	RenderStatus(cfg, "default", env, &out, false)
 	s := out.String()
 	if !strings.Contains(s, "workspace") || !strings.Contains(s, "needs auth (run "+gogSetupHint+")") {
 		t.Errorf("expected gog needs-auth integrations line, got:\n%s", s)
@@ -396,12 +396,12 @@ func TestStatusOpenAIOnlyAllSystemsGo(t *testing.T) {
 		}
 		return "", nil
 	}, DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }}}
-	st := gatherStatus(cfg, "default", env)
+	st := GatherStatus(cfg, "default", env)
 	if len(st.Todos) != 0 {
 		t.Errorf("todos = %v, want none (openai alone satisfies core readiness)", st.Todos)
 	}
 	var out bytes.Buffer
-	renderStatus(cfg, "default", env, &out, false)
+	RenderStatus(cfg, "default", env, &out, false)
 	if !strings.Contains(out.String(), "all systems go") {
 		t.Errorf("want all-systems-go with only openai present, got:\n%s", out.String())
 	}
@@ -418,12 +418,12 @@ func TestStatusZeroModelKeysOneTodo(t *testing.T) {
 		}
 		return "", nil
 	}, DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }}}
-	st := gatherStatus(cfg, "default", env)
+	st := GatherStatus(cfg, "default", env)
 	if len(st.Todos) != 1 || st.Todos[0] != axis.ModelKeyFixCmd {
 		t.Errorf("todos = %v, want exactly [%q]", st.Todos, axis.ModelKeyFixCmd)
 	}
 	var out bytes.Buffer
-	renderStatus(cfg, "default", env, &out, false)
+	RenderStatus(cfg, "default", env, &out, false)
 	if strings.Contains(out.String(), "all systems go") {
 		t.Errorf("verdict must not be green with zero confirmed keys, got:\n%s", out.String())
 	}
@@ -448,7 +448,7 @@ func TestStatusProbeFailureNoProviderTodo(t *testing.T) {
 	t.Run("sbx absent", func(t *testing.T) {
 		cfg := &config.Config{}
 		env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("not found") }, DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }}}
-		assertNoProviderTodo(t, gatherStatus(cfg, "default", env))
+		assertNoProviderTodo(t, GatherStatus(cfg, "default", env))
 	})
 
 	t.Run("sbx present, secret ls failed", func(t *testing.T) {
@@ -459,7 +459,7 @@ func TestStatusProbeFailureNoProviderTodo(t *testing.T) {
 			}
 			return "", nil
 		}, DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }}}
-		assertNoProviderTodo(t, gatherStatus(cfg, "default", env))
+		assertNoProviderTodo(t, GatherStatus(cfg, "default", env))
 	})
 }
 
@@ -483,7 +483,7 @@ func TestStatusMCPRegistrationUnverifiableBlocksAllGreen(t *testing.T) {
 		}
 		return "", nil
 	}, DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }}}
-	st := gatherStatus(cfg, "default", env)
+	st := GatherStatus(cfg, "default", env)
 	if len(st.Todos) != 0 {
 		t.Errorf("todos = %v, want none (a failed registration probe is unverifiable, never a false TODO)", st.Todos)
 	}
@@ -497,7 +497,7 @@ func TestStatusMCPRegistrationUnverifiableBlocksAllGreen(t *testing.T) {
 		t.Errorf("MCPServers = %+v, want a gog entry flagged unverifiable", st.MCPServers)
 	}
 	var out bytes.Buffer
-	renderStatus(cfg, "default", env, &out, false)
+	RenderStatus(cfg, "default", env, &out, false)
 	if strings.Contains(out.String(), "all systems go") {
 		t.Errorf("verdict must not read all-systems-go with unverifiable registration and zero sandboxes, got:\n%s", out.String())
 	}
@@ -506,7 +506,7 @@ func TestStatusMCPRegistrationUnverifiableBlocksAllGreen(t *testing.T) {
 	}
 
 	var jout bytes.Buffer
-	renderStatus(cfg, "default", env, &jout, true)
+	RenderStatus(cfg, "default", env, &jout, true)
 	var jst statusReport
 	if err := json.Unmarshal(jout.Bytes(), &jst); err != nil {
 		t.Fatalf("status --json invalid: %v\n%s", err, jout.String())
@@ -548,7 +548,7 @@ func TestStatusMCPLoadTodoQuotesWorkspace(t *testing.T) {
 	if err := workspace.WriteCreateReceipt(stateDir, box, ws, []string{"notion"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
-	st := gatherStatus(cfg, "default", env)
+	st := GatherStatus(cfg, "default", env)
 	var td string
 	for _, tdo := range st.Todos {
 		if strings.HasPrefix(tdo, "pix mcp load") {

@@ -41,6 +41,7 @@ import (
 	"pix/host/readiness"
 	"pix/host/readiness/axis"
 	"pix/host/secret"
+	"pix/host/workflow/doctor"
 	"slices"
 	"sort"
 	"strings"
@@ -463,9 +464,9 @@ func printSetupSummary(cfg *config.Config, env hostenv.Env, out io.Writer, model
 
 	// Same two-fact disclosure doctor's footer prints, gated the same way (only
 	// when at least one MCP server is configured) so a bare setup stays
-	// notice-free. Kept as ONE shared constant (mcpHostTrustNotice,
+	// notice-free. Kept as ONE shared constant (doctor.McpHostTrustNotice,
 	// doctor_render.go) so the two surfaces can never say different things.
 	if len(cfg.MCP) > 0 {
-		fmt.Fprintln(out, mcpHostTrustNotice)
+		fmt.Fprintln(out, doctor.McpHostTrustNotice)
 	}
 }

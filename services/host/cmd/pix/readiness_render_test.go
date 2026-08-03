@@ -7,6 +7,7 @@ package main
 import (
 	"bytes"
 	"pix/host/readiness"
+	"pix/host/workflow/doctor"
 	"strings"
 	"testing"
 )
@@ -15,7 +16,7 @@ import (
 func TestRenderHeadline(t *testing.T) {
 	render := func(r *readiness.Report) string {
 		var buf bytes.Buffer
-		r.Render(&buf, false, doctorHints())
+		r.Render(&buf, false, doctor.Hints())
 		return buf.String()
 	}
 	coreFail := &readiness.Report{Groups: []readiness.Group{{Title: "g", Checks: []readiness.Check{
@@ -61,7 +62,7 @@ func TestRenderConciseVsVerbose(t *testing.T) {
 		}},
 	}}
 	var concise bytes.Buffer
-	r.Render(&concise, false, doctorHints())
+	r.Render(&concise, false, doctor.Hints())
 	out := concise.String()
 	for _, hidden := range []string{"ready-detail-1", "ready-detail-2", "ready-detail-3"} {
 		if strings.Contains(out, hidden) {
@@ -81,7 +82,7 @@ func TestRenderConciseVsVerbose(t *testing.T) {
 	}
 
 	var verbose bytes.Buffer
-	r.Render(&verbose, true, doctorHints())
+	r.Render(&verbose, true, doctor.Hints())
 	vout := verbose.String()
 	for _, shown := range []string{"ready-detail-1", "ready-detail-2", "ready-detail-3", "broken", "annotation-line", "cannot-Check"} {
 		if !strings.Contains(vout, shown) {
@@ -99,7 +100,7 @@ func TestRenderConcise_NoHintWhenNothingHidden(t *testing.T) {
 		{Label: "bad", Verdict: readiness.VerdictTodo, Detail: "broken", Todo: "fix-it"},
 	}}}}
 	var buf bytes.Buffer
-	r.Render(&buf, false, doctorHints())
+	r.Render(&buf, false, doctor.Hints())
 	if strings.Contains(buf.String(), "--verbose") {
 		t.Errorf("nothing was collapsed; no hint expected:\n%s", buf.String())
 	}
@@ -111,7 +112,7 @@ func TestDoctorRender_OptionalTodoRendersWarnGlyph(t *testing.T) {
 		{Label: "opt", Detail: "needs setup", Todo: "fix-it", Verdict: readiness.VerdictTodo, Requirement: readiness.RequirementOptional},
 	}}}}
 	var buf bytes.Buffer
-	r.Render(&buf, true, doctorHints())
+	r.Render(&buf, true, doctor.Hints())
 	if !strings.Contains(buf.String(), "⚠ opt") {
 		t.Errorf("an optional verified-todo row must render ⚠, got:\n%s", buf.String())
 	}

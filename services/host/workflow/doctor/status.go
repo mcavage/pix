@@ -1,4 +1,4 @@
-package main
+package doctor
 
 import (
 	"fmt"
@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"pix/host/cli"
 	"pix/host/hostenv"
+	"pix/host/launcher"
 	"pix/host/mcp"
 	"pix/host/monitor/tui"
 	"pix/host/readiness"
@@ -24,41 +25,10 @@ import (
 	"pix/host/workspace"
 )
 
-// runStatusCmd is the `status` verb AND the bare-`pix` landing screen: a
-// fast, read-only control panel answering "what state am I in, what's my next
-// move" — WITHOUT launching anything. It replaces the old footgun where bare
-// `pix` spun up a sandbox.
-func runStatusCmd(argv []string) {
-	jsonOut, err := parseStatusArgs(argv)
-	if err != nil {
-		if err == cli.ErrHelpRequested {
-			fmt.Print(statusUsage)
-			return
-		}
-		fmt.Fprintf(os.Stderr, "pix status: %v\n\n%s", err, statusUsage)
-		os.Exit(2)
-	}
-	cfg, name, err := workspace.LoadResolvedConfig()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix status: %v\n", err)
-		os.Exit(1)
-	}
-	// ONE exit contract (snapshot.ExitCode), with the 3 arm suppressed: status
-	// is the landing screen and a JSON-scraping script must never fail merely
-	// because a fact could not be checked from here (inside the sandbox, sbx is
-	// absent and half the axes are unverifiable by construction). A POSITIVELY
-	// verified core failure still exits 1, and the same integer is published as
-	// the JSON `exit` sibling, so a reader of the rows and a reader of $? can
-	// never disagree.
-	if code := renderStatus(cfg, name, defaultShellEnv(), os.Stdout, jsonOut); code != readiness.ExitReady {
-		os.Exit(code)
-	}
-}
-
-// parseStatusArgs validates status flags: -h/--help returns cli.ErrHelpRequested,
+// ParseStatusArgs validates status flags: -h/--help returns cli.ErrHelpRequested,
 // --json sets jsonOut, and any other token is a usage error (so a typo like
 // --jsom fails loud instead of running silently as if no flag were given).
-func parseStatusArgs(argv []string) (jsonOut bool, err error) {
+func ParseStatusArgs(argv []string) (jsonOut bool, err error) {
 	for _, a := range argv {
 		switch a {
 		case "-h", "--help":
@@ -72,11 +42,11 @@ func parseStatusArgs(argv []string) (jsonOut bool, err error) {
 	return jsonOut, nil
 }
 
-// renderStatus is the testable core: it probes the environment via env and
+// RenderStatus is the testable core: it probes the environment via env and
 // renders to out. Everything is best-effort and short-timeout so status never
 // hangs on a down daemon.
-func renderStatus(cfg *config.Config, profile string, env hostenv.Env, out io.Writer, jsonOut bool) int {
-	st := gatherStatus(cfg, profile, env)
+func RenderStatus(cfg *config.Config, profile string, env hostenv.Env, out io.Writer, jsonOut bool) int {
+	st := GatherStatus(cfg, profile, env)
 	if jsonOut {
 		_ = cli.WriteJSONOut(out, st)
 		return st.Exit
@@ -87,7 +57,7 @@ func renderStatus(cfg *config.Config, profile string, env hostenv.Env, out io.Wr
 
 // statusReport is the machine-readable status snapshot (also drives --json).
 type statusReport struct {
-	Version           string                  `json:"version"`
+	Version           string                  `json:"launcher.Version"`
 	ConfigPath        string                  `json:"config_path"`
 	Profile           string                  `json:"profile"`
 	Memory            bool                    `json:"memory_up"`
@@ -157,7 +127,7 @@ type bundleStatus struct {
 	Git  string `json:"git"` // e.g. "clean", "3 ahead", "dirty", "no remote", ""
 }
 
-func gatherStatus(cfg *config.Config, profile string, env hostenv.Env) statusReport {
+func GatherStatus(cfg *config.Config, profile string, env hostenv.Env) statusReport {
 	// currentIntent is the "current config/pack" universe — cfg.MCP plus any
 	// active-pack integration name not already there — the host-global
 	// baseline BOTH the summary list and the per-sandbox rows start from
@@ -166,7 +136,7 @@ func gatherStatus(cfg *config.Config, profile string, env hostenv.Env) statusRep
 	// config/pack only.
 	currentIntent := mcp.McpCurrentIntentNames(cfg.MCP, pack.ActiveContainerMCP(cfg), nil)
 	st := statusReport{
-		Version:         version,
+		Version:         launcher.Version,
 		ConfigPath:      config.Path(),
 		Profile:         profile,
 		Providers:       map[string]bool{},
@@ -383,7 +353,7 @@ func gatherStatus(cfg *config.Config, profile string, env hostenv.Env) statusRep
 				// Unverifiable rows get guidance in their evidence only — status
 				// does not KNOW they are unattached, so no repair claim.
 				if row.State == mcp.McpJoinRegisteredNotAttached {
-					// mcpLoadCommand shell-quotes both name and workspace via
+					// McpLoadCommand shell-quotes both name and workspace via
 					// sys.ShellQuote (closure finding #3), so this repair command
 					// round-trips a workspace with spaces/apostrophe/shell
 					// metacharacters safely when copy-pasted.
@@ -392,9 +362,9 @@ func gatherStatus(cfg *config.Config, profile string, env hostenv.Env) statusRep
 					case receipt != nil && strings.TrimSpace(receipt.Workspace) != "":
 						// The receipt's own canonical workspace is the most exact
 						// DIR (a custom-named box may not match sbx's dir column).
-						td = mcpLoadCommand(row.Name, receipt.Workspace)
+						td = McpLoadCommand(row.Name, receipt.Workspace)
 					case b.Dir != "":
-						td = mcpLoadCommand(row.Name, b.Dir)
+						td = McpLoadCommand(row.Name, b.Dir)
 					}
 					st.Todos = append(st.Todos, td)
 				}

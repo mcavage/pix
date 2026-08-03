@@ -1,4 +1,4 @@
-package main
+package doctor
 
 import (
 	"errors"
@@ -68,7 +68,7 @@ func TestOllamaEvidenceNamesTheResolvedEndpoint(t *testing.T) {
 	env := ollamaEnv(t, "box.local:9999", false, "")
 	s := readiness.Build(
 		readiness.Request{Axes: []readiness.Axis{readiness.AxisOllamaHost, readiness.AxisModelWatcher, readiness.AxisModelEmbed, readiness.AxisModelBridge}},
-		ollamaReadinessAxes(cfg, env, "", nil),
+		OllamaReadinessAxes(cfg, env, "", nil),
 	)
 	for _, c := range s.All() {
 		if c.Endpoint != "http://box.local:9999" {
@@ -90,7 +90,7 @@ func TestEveryModelRoleHasAnAxis(t *testing.T) {
 	env := ollamaEnv(t, "", true, "w:1\ne:1\n")
 	s := readiness.Build(
 		readiness.Request{Axes: []readiness.Axis{readiness.AxisModelWatcher, readiness.AxisModelEmbed, readiness.AxisModelBridge}},
-		ollamaReadinessAxes(cfg, env, "", nil),
+		OllamaReadinessAxes(cfg, env, "", nil),
 	)
 	for axis, want := range map[readiness.Axis]readiness.Verdict{
 		readiness.AxisModelWatcher: readiness.VerdictReady,
@@ -112,7 +112,7 @@ func TestEveryModelRoleHasAnAxis(t *testing.T) {
 func TestOllamaSandboxAxisNeverCreatesASandbox(t *testing.T) {
 	cfg := &config.Config{}
 	env := ollamaEnv(t, "", true, "")
-	s := readiness.Build(readiness.Request{Axes: []readiness.Axis{readiness.AxisOllamaSandbox}}, ollamaReadinessAxes(cfg, env, "", nil))
+	s := readiness.Build(readiness.Request{Axes: []readiness.Axis{readiness.AxisOllamaSandbox}}, OllamaReadinessAxes(cfg, env, "", nil))
 	c, _ := s.Checks(readiness.AxisOllamaSandbox)
 	if c[0].Result() != readiness.VerdictUnverifiable || c[0].Req() != readiness.RequirementOptional {
 		t.Fatalf("no sandbox => unverifiable+optional, got %q/%q", c[0].Result(), c[0].Req())
@@ -134,7 +134,7 @@ func TestBindInferenceNeverProducesReady(t *testing.T) {
 	cfg := &config.Config{}
 	env := ollamaEnv(t, "", true, "")
 	no := false
-	s := readiness.Build(readiness.Request{Axes: []readiness.Axis{readiness.AxisOllamaSandbox}}, ollamaReadinessAxes(cfg, env, "pix-demo", &no))
+	s := readiness.Build(readiness.Request{Axes: []readiness.Axis{readiness.AxisOllamaSandbox}}, OllamaReadinessAxes(cfg, env, "pix-demo", &no))
 	c, _ := s.Checks(readiness.AxisOllamaSandbox)
 	if c[0].Result() != readiness.VerdictTodo {
 		t.Fatalf("a probed failure is a todo, got %q", c[0].Result())
@@ -143,7 +143,7 @@ func TestBindInferenceNeverProducesReady(t *testing.T) {
 		t.Errorf("loopback inference should add remediation context, got %q", c[0].Detail)
 	}
 	yes := true
-	s2 := readiness.Build(readiness.Request{Axes: []readiness.Axis{readiness.AxisOllamaSandbox}}, ollamaReadinessAxes(cfg, env, "pix-demo", &yes))
+	s2 := readiness.Build(readiness.Request{Axes: []readiness.Axis{readiness.AxisOllamaSandbox}}, OllamaReadinessAxes(cfg, env, "pix-demo", &yes))
 	c2, _ := s2.Checks(readiness.AxisOllamaSandbox)
 	if c2[0].Result() != readiness.VerdictReady {
 		t.Fatalf("only a positive probe produces ready, got %q", c2[0].Result())

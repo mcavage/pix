@@ -23,6 +23,7 @@ import (
 	"pix/host/secret"
 	"pix/host/service"
 	"pix/host/sys"
+	"pix/host/workflow/doctor"
 	"pix/host/workflow/onboard"
 	"pix/host/workflow/pack"
 	"pix/host/workspace"
@@ -453,7 +454,7 @@ func runRun(argv []string) {
 		}
 		fmt.Fprintf(os.Stderr, "pix run: exec sbx: %v\n", err)
 		if errors.Is(err, exec.ErrNotFound) {
-			fmt.Fprintln(os.Stderr, "install sbx with: "+sbxInstallHint)
+			fmt.Fprintln(os.Stderr, "install sbx with: "+doctor.SbxInstallHint)
 		}
 		if plan.Reattach {
 			fmt.Fprintf(os.Stderr, "pix run: re-attach failed; recreate it with: %s\n", runReplaceCommand(o.Workspace))
@@ -498,7 +499,7 @@ func applyConfiguredSessionModel(o *runOpts, cfg *config.Config) (bool, error) {
 // the poll only runs while `sbx run` itself is still alive, so a large bound
 // costs the happy path nothing.
 var (
-	sandboxAppearProbeFn = func(name string) sbxState {
+	sandboxAppearProbeFn = func(name string) doctor.SbxState {
 		return probeTaskSandbox(defaultShellEnv(), name)
 	}
 	sandboxAppearPollInterval = 500 * time.Millisecond
@@ -509,7 +510,7 @@ var (
 // is present in `sbx ls`, running or not. Absent keeps polling; unknown (a
 // failed probe) proves nothing and also keeps polling — never record a create
 // receipt on an indeterminate read.
-func sandboxAppeared(st sbxState) bool { return st == sbxRunning || st == sbxStopped }
+func sandboxAppeared(st doctor.SbxState) bool { return st == sbxRunning || st == sbxStopped }
 
 // recordCreateReceipt commits the create receipt for sandbox — called ONLY by
 // execSbxRunAndRecordCreate, once its creation-evidence poll has positively
@@ -751,26 +752,12 @@ func desiredMCPUniverse(cfg *config.Config, o runOpts) []string {
 	return mcp.AllPreloadedMCP(names)
 }
 
-// mcpLoadCommand returns the exact `pix mcp load NAME [WORKSPACE]`
-// command for name, workspace-qualified the same way runReplaceCommand is
-// (bare for ".", quoted otherwise) so the two recovery commands read
-// consistently. Both name and workspace are shell-quoted via the shared
-// sys.ShellQuote (closure finding #3) — a server name is ordinarily a plain
-// token, but quoting it too costs nothing and keeps every generated
-// copy-paste command uniformly safe.
-func mcpLoadCommand(name, ws string) string {
-	if ws == "" || ws == "." {
-		return "pix mcp load " + sys.ShellQuote(name)
-	}
-	return "pix mcp load " + sys.ShellQuote(name) + " " + sys.ShellQuote(ws)
-}
-
-// mcpLoadHints joins one mcpLoadCommand per name (mcp load only ever attaches
+// mcpLoadHints joins one doctor.McpLoadCommand per name (mcp load only ever attaches
 // one server at a time, so N missing names need N commands).
 func mcpLoadHints(names []string, ws string) string {
 	cmds := make([]string, 0, len(names))
 	for _, n := range names {
-		cmds = append(cmds, mcpLoadCommand(n, ws))
+		cmds = append(cmds, doctor.McpLoadCommand(n, ws))
 	}
 	return strings.Join(cmds, "; ")
 }
@@ -1248,4 +1235,4 @@ func toStringSlice(v any) []string {
 
 // The tri-state sandbox probe (running/stopped/absent/unknown) that drives the
 // create-vs-reattach-vs-replace decision lives in task.go as probeTaskSandbox +
-// sbxState — run.go reuses it rather than duplicating the `sbx ls` parse.
+// doctor.SbxState — run.go reuses it rather than duplicating the `sbx ls` parse.

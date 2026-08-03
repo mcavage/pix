@@ -1,4 +1,4 @@
-package main
+package doctor
 
 // doctor_gog_s07_test.go covers the S07 gog-group semantics on the S04
 // readiness axes: canonical exact-command trust (never exec an
@@ -47,7 +47,7 @@ func TestDoctorGog_ReadOnlyFlagsAsEvidence(t *testing.T) {
 		},
 		ports: map[int]bool{11434: true, 11435: true},
 	})
-	r := runDoctor(defaultCfg(), f.env())
+	r := RunDoctor(defaultCfg(), f.env())
 	ro, ok := gogCheckByLabel(t, r, "read-only")
 	if !ok {
 		t.Fatalf("expected a read-only check in the gog readiness.Group, groups=%+v", r.Groups)
@@ -81,7 +81,7 @@ func TestDoctorGog_MissingReadOnlyFlagsIsTodo(t *testing.T) {
 		},
 		ports: map[int]bool{11435: true},
 	})
-	r := runDoctor(defaultCfg(), f.env())
+	r := RunDoctor(defaultCfg(), f.env())
 	ro, ok := gogCheckByLabel(t, r, "read-only")
 	if !ok {
 		t.Fatalf("expected a read-only check, groups=%+v", r.Groups)
@@ -131,7 +131,7 @@ func TestDoctorGog_NonCanonicalRegisteredPathNeverExecuted(t *testing.T) {
 		}
 		return baseRun(name, args...)
 	}
-	r := runDoctor(defaultCfg(), env)
+	r := RunDoctor(defaultCfg(), env)
 	spawn, ok := gogCheckByLabel(t, r, "headless spawn")
 	if !ok {
 		t.Fatalf("expected a headless spawn check, groups=%+v", r.Groups)
@@ -163,7 +163,7 @@ func TestDoctorGog_ZeroToolsCleanExitIsTodo(t *testing.T) {
 	})
 	// Override the probe result: clean exit, zero tools.
 	f.output[opWrappedGog(gogOpRefs, gogAcct)+" --list-tools"] = "   \n"
-	r := runDoctor(defaultCfg(), f.env())
+	r := RunDoctor(defaultCfg(), f.env())
 	spawn, _ := gogCheckByLabel(t, r, "headless spawn")
 	if spawn.Result() != readiness.VerdictTodo {
 		t.Fatalf("a clean zero-tool list must be a verified todo, got %+v", spawn)
@@ -218,7 +218,7 @@ func TestDoctorGog_ProbeTimeoutIsUnverifiable(t *testing.T) {
 	env := registeredGogProbeEnv(func() (string, bool, error) {
 		return "", true, fmt.Errorf("context deadline exceeded")
 	})
-	r := runDoctor(defaultCfg(), env)
+	r := RunDoctor(defaultCfg(), env)
 	spawn, ok := gogCheckByLabel(t, r, "headless spawn")
 	if !ok {
 		t.Fatalf("expected a headless spawn check, groups=%+v", r.Groups)
@@ -243,7 +243,7 @@ func TestDoctorGog_ExplicitPolicyDenialIsDenied(t *testing.T) {
 		return "request rejected: access denied by your organization's policy",
 			false, fmt.Errorf("exit status 1")
 	})
-	r := runDoctor(defaultCfg(), env)
+	r := RunDoctor(defaultCfg(), env)
 	spawn, ok := gogCheckByLabel(t, r, "headless spawn")
 	if !ok {
 		t.Fatalf("expected a headless spawn check, groups=%+v", r.Groups)
@@ -263,7 +263,7 @@ func TestDoctorGog_GenericProbeErrorIsUnverifiable(t *testing.T) {
 	env := registeredGogProbeEnv(func() (string, bool, error) {
 		return "connection refused", false, fmt.Errorf("exit status 1")
 	})
-	r := runDoctor(defaultCfg(), env)
+	r := RunDoctor(defaultCfg(), env)
 	spawn, _ := gogCheckByLabel(t, r, "headless spawn")
 	if spawn.Result() != readiness.VerdictUnverifiable {
 		t.Errorf("a generic probe failure must be unverifiable, got %+v", spawn)
@@ -274,7 +274,7 @@ func TestDoctorGog_GenericProbeErrorIsUnverifiable(t *testing.T) {
 // absence: a note pointing at the guided setup, never a failure/TODO.
 func TestDoctorGog_MissingCLIIsNotConfiguredNote(t *testing.T) {
 	f := fakeEnv{present: map[string]bool{}, output: map[string]string{}, ports: map[int]bool{}}
-	r := runDoctor(defaultCfg(), f.env())
+	r := RunDoctor(defaultCfg(), f.env())
 	cli, ok := gogCheckByLabel(t, r, "dependency CLI")
 	if !ok {
 		t.Fatalf("expected a dependency CLI line, groups=%+v", r.Groups)

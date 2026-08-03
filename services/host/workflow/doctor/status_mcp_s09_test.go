@@ -1,4 +1,4 @@
-package main
+package doctor
 
 // status_mcp_s09_test.go — S09: truthful per-sandbox MCP status. The rows come
 // from the SAME shared join path doctor uses (mcpjoin.go), backed by the
@@ -75,7 +75,7 @@ func TestStatusMCPRowsAllFiveStates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	st := gatherStatus(cfg, "default", env)
+	st := GatherStatus(cfg, "default", env)
 	if len(st.MCPRows) != 8 {
 		t.Fatalf("MCPRows = %+v, want 4 servers x 2 sandboxes", st.MCPRows)
 	}
@@ -120,7 +120,7 @@ func TestStatusMCPRowsIdentityMismatch(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "mcp.json"), []byte(stolen), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	st := gatherStatus(cfg, "default", env)
+	st := GatherStatus(cfg, "default", env)
 	if len(st.MCPRows) != 1 {
 		t.Fatalf("MCPRows = %+v, want 1", st.MCPRows)
 	}
@@ -155,7 +155,7 @@ func TestStatusMCPPositiveReceiptDominatesDeregistration(t *testing.T) {
 	if err := workspace.WriteCreateReceipt(stateDir, "pix-proj", "", []string{"slack"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
-	st := gatherStatus(cfg, "default", env)
+	st := GatherStatus(cfg, "default", env)
 	r := st.MCPRows[0]
 	if r.State != mcp.McpJoinPreloaded || !strings.Contains(r.Evidence, "currently not registered") {
 		t.Errorf("row = %+v, want preloaded (receipt dominates) with the dereg reading as evidence", r)
@@ -182,7 +182,7 @@ func TestStatusMCPLoadTodoExactCommand(t *testing.T) {
 		if err := workspace.WriteCreateReceipt(stateDir, "pix-proj", "", nil, receiptClock); err != nil {
 			t.Fatal(err)
 		}
-		st := gatherStatus(cfg, "default", env)
+		st := GatherStatus(cfg, "default", env)
 		if !slices.Contains(st.Todos, "pix mcp load notion /home/u/proj") {
 			t.Errorf("want exact `pix mcp load notion /home/u/proj` TODO, got %v", st.Todos)
 		}
@@ -193,7 +193,7 @@ func TestStatusMCPLoadTodoExactCommand(t *testing.T) {
 		if err := workspace.WriteCreateReceipt(stateDir, "pix-proj", "", nil, receiptClock); err != nil {
 			t.Fatal(err)
 		}
-		st := gatherStatus(cfg, "default", env)
+		st := GatherStatus(cfg, "default", env)
 		if !slices.Contains(st.Todos, "pix mcp load notion [DIR]") {
 			t.Errorf("want `pix mcp load notion [DIR]` TODO, got %v", st.Todos)
 		}
@@ -201,7 +201,7 @@ func TestStatusMCPLoadTodoExactCommand(t *testing.T) {
 
 	t.Run("unverifiable rows never add a load TODO", func(t *testing.T) {
 		env, _ := statusMCPEnv(t, "pix-proj running /home/u/proj\n", "notion\n") // no receipt at all
-		st := gatherStatus(cfg, "default", env)
+		st := GatherStatus(cfg, "default", env)
 		for _, tdo := range st.Todos {
 			if strings.Contains(tdo, "mcp load") {
 				t.Errorf("unverifiable attachment must not surface a load TODO: %q", tdo)
@@ -229,7 +229,7 @@ func TestStatusMCPDiscoveryUnavailableNotNoSandboxes(t *testing.T) {
 		}
 		return inner(name, args...)
 	}
-	st := gatherStatus(cfg, "default", env)
+	st := GatherStatus(cfg, "default", env)
 	if len(st.Sandboxes) != 0 {
 		t.Fatalf("sandboxes = %+v, want none parsed", st.Sandboxes)
 	}
@@ -261,7 +261,7 @@ func TestStatusMCPDiscoveryUnavailableNotNoSandboxes(t *testing.T) {
 func TestStatusHostGlobalNoAttachmentClaim(t *testing.T) {
 	cfg := &config.Config{MCP: []string{config.GWServerName}}
 	env, _ := statusMCPEnv(t, "other-box running\n", "google-workspace\n") // zero pix boxes
-	st := gatherStatus(cfg, "default", env)
+	st := GatherStatus(cfg, "default", env)
 	if len(st.MCPRows) != 0 {
 		t.Fatalf("MCPRows = %+v, want none (discovery succeeded, zero pix sandboxes)", st.MCPRows)
 	}
@@ -290,7 +290,7 @@ func TestStatusMCPReceiptOnlyNameVisible(t *testing.T) {
 	if err := workspace.WriteCreateReceipt(stateDir, "pix-proj", "", []string{config.GWServerName, "notion"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
-	st := gatherStatus(cfg, "default", env)
+	st := GatherStatus(cfg, "default", env)
 	rows := rowsFor(st, "pix-proj")
 	notion, ok := rows["notion"]
 	if !ok {
@@ -331,7 +331,7 @@ func TestStatusMCPRowsJSONGolden(t *testing.T) {
 	if err := workspace.AppendLoadReceipt(stateDir, "pix-proj", "slack", receiptClock); err != nil {
 		t.Fatal(err)
 	}
-	st := gatherStatus(cfg, "default", env)
+	st := GatherStatus(cfg, "default", env)
 	got, err := json.MarshalIndent(st.MCPRows, "", "  ")
 	if err != nil {
 		t.Fatal(err)
@@ -395,7 +395,7 @@ func TestStatusNoRetiredMCPVocabulary(t *testing.T) {
 	}
 	for _, jsonOut := range []bool{false, true} {
 		var out bytes.Buffer
-		renderStatus(cfg, "default", env, &out, jsonOut)
+		RenderStatus(cfg, "default", env, &out, jsonOut)
 		lower := strings.ToLower(out.String())
 		for _, bad := range banned {
 			if strings.Contains(lower, bad) {

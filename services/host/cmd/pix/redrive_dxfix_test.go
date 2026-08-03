@@ -172,7 +172,7 @@ func TestAgentReassessModel_PointsAtLiveScorecardPath(t *testing.T) {
 
 	var ee *exec.ExitError
 	if !errors.As(runErr, &ee) {
-		t.Fatalf("expected an ExitError, got %v (output: %s)", runErr, out.String())
+		t.Fatalf("expected an ExitError, got %v (Output: %s)", runErr, out.String())
 	}
 	if ee.ExitCode() != 2 {
 		t.Errorf("exit code = %d, want 2; output:\n%s", ee.ExitCode(), out.String())
@@ -208,7 +208,7 @@ func TestRunMcpLs_AbsentSbxExitsServiceDown(t *testing.T) {
 
 	var ee *exec.ExitError
 	if !errors.As(runErr, &ee) {
-		t.Fatalf("expected an ExitError, got %v (output: %s)", runErr, out.String())
+		t.Fatalf("expected an ExitError, got %v (Output: %s)", runErr, out.String())
 	}
 	if ee.ExitCode() != rpc.ExitServiceDown {
 		t.Errorf("exit code = %d, want %d (rpc.ExitServiceDown); output:\n%s", ee.ExitCode(), rpc.ExitServiceDown, out.String())
@@ -237,7 +237,7 @@ func TestRunMcpAuth_AbsentSbxExitsServiceDown(t *testing.T) {
 
 	var ee *exec.ExitError
 	if !errors.As(runErr, &ee) {
-		t.Fatalf("expected an ExitError, got %v (output: %s)", runErr, out.String())
+		t.Fatalf("expected an ExitError, got %v (Output: %s)", runErr, out.String())
 	}
 	if ee.ExitCode() != rpc.ExitServiceDown {
 		t.Errorf("exit code = %d, want %d (rpc.ExitServiceDown); output:\n%s", ee.ExitCode(), rpc.ExitServiceDown, out.String())
@@ -266,7 +266,7 @@ func TestRunMcpBundle_AbsentSbxExitsServiceDown(t *testing.T) {
 
 	var ee *exec.ExitError
 	if !errors.As(runErr, &ee) {
-		t.Fatalf("expected an ExitError, got %v (output: %s)", runErr, out.String())
+		t.Fatalf("expected an ExitError, got %v (Output: %s)", runErr, out.String())
 	}
 	if ee.ExitCode() != rpc.ExitServiceDown {
 		t.Errorf("exit code = %d, want %d (rpc.ExitServiceDown); output:\n%s", ee.ExitCode(), rpc.ExitServiceDown, out.String())
@@ -319,7 +319,7 @@ func TestRunMcpRegister_AbsentSbxExitsServiceDownNoConfigMutation(t *testing.T) 
 
 	var ee *exec.ExitError
 	if !errors.As(runErr, &ee) {
-		t.Fatalf("expected an ExitError, got %v (output: %s)", runErr, out.String())
+		t.Fatalf("expected an ExitError, got %v (Output: %s)", runErr, out.String())
 	}
 	if ee.ExitCode() != rpc.ExitServiceDown {
 		t.Errorf("exit code = %d, want %d (rpc.ExitServiceDown); output:\n%s", ee.ExitCode(), rpc.ExitServiceDown, out.String())

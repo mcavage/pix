@@ -27,6 +27,7 @@ import (
 	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/sys/systest"
+	"pix/host/workflow/doctor"
 	"pix/host/workspace"
 	"strings"
 	"sync"
@@ -113,7 +114,7 @@ func TestCreateReceipt_MergesConcurrentLoadDropsPriorLifetime(t *testing.T) {
 
 	// The probe fires AFTER the pre-create clear and BEFORE the create commit
 	// — exactly the window a concurrent `pix mcp load` races into.
-	probe := func(string) sbxState {
+	probe := func(string) doctor.SbxState {
 		if err := workspace.AppendLoadReceipt(dir, sandbox, "fresh", receiptClock); err != nil {
 			t.Errorf("concurrent workspace.AppendLoadReceipt: %v", err)
 		}
@@ -160,7 +161,7 @@ func TestCreateReceipt_EvidenceAtExitStillRecorded(t *testing.T) {
 	dir := t.TempDir()
 	withSandboxMCPStateDirFn(t, func() (string, error) { return dir, nil })
 	var calls atomic.Int64
-	probe := func(string) sbxState {
+	probe := func(string) doctor.SbxState {
 		if calls.Add(1) == 1 {
 			return sbxAbsent
 		}

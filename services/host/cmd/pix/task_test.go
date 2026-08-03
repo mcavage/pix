@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"pix/host/hostenv"
 	"pix/host/sys/systest"
+	"pix/host/workflow/doctor"
 	"reflect"
 	"strings"
 	"sync"
@@ -1170,7 +1171,7 @@ func TestTaskNew_SourceOnlyRefChecksOutByOID(t *testing.T) {
 func TestTaskTeardownAbort(t *testing.T) {
 	cases := []struct {
 		name  string
-		final sbxState
+		final doctor.SbxState
 		force bool
 		want  bool
 	}{

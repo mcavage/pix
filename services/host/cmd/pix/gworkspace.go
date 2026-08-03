@@ -30,6 +30,7 @@ import (
 	"pix/host/readiness"
 	"pix/host/readiness/axis"
 	"pix/host/secret"
+	"pix/host/workflow/doctor"
 	"strings"
 
 	"pix/host/config"
@@ -287,7 +288,7 @@ func gworkspaceStatus(cfg *config.Config, env hostenv.Env, out io.Writer) int {
 		fmt.Fprintln(out, "Google Workspace (optional, read-only, via the host MCP gateway)")
 	}
 
-	acct := gogAccount(cfg, env)
+	acct := doctor.GogAccount(cfg, env)
 	if acct == "" && !mcp.Configured(cfg, config.GWServerName) {
 		fmt.Fprintln(out, "  · not configured — set it up: pix gworkspace setup")
 		return 0
@@ -305,8 +306,8 @@ func gworkspaceStatus(cfg *config.Config, env hostenv.Env, out io.Writer) int {
 	}
 
 	// Registration + headless proof, read from what sbx ACTUALLY registered.
-	if argv, ok := registeredGogCommand(env); ok {
-		if missing := gogMissingHardenedFlags(env, argv); len(missing) > 0 {
+	if argv, ok := doctor.RegisteredGogCommand(env); ok {
+		if missing := doctor.GogMissingHardenedFlags(env, argv); len(missing) > 0 {
 			checks = append(checks, readiness.Check{Label: "read-only", Verdict: readiness.VerdictTodo,
 				Detail:   "registered command is missing hardened read-only flags: " + strings.Join(missing, " "),
 				Evidence: "registered argv lacks " + strings.Join(missing, " "),
@@ -314,7 +315,7 @@ func gworkspaceStatus(cfg *config.Config, env hostenv.Env, out io.Writer) int {
 		} else {
 			checks = append(checks, readiness.Check{Label: "read-only", Verdict: readiness.VerdictReady,
 				Detail:   "registered command carries the hardened read-only flags",
-				Evidence: strings.Join(gogHardenedFlags, " ") + " present in the registered argv"})
+				Evidence: strings.Join(doctor.GogHardenedFlags, " ") + " present in the registered argv"})
 		}
 		trustedArgv, trusted := mcp.TrustedGogSpawn(env, argv, secret.FindOpRefs(env))
 		if !trusted {
@@ -322,7 +323,7 @@ func gworkspaceStatus(cfg *config.Config, env hostenv.Env, out io.Writer) int {
 				Detail:   "probe skipped: the registered command's executable does not match the PATH-resolved binary — never executed",
 				Evidence: "registered executable token not canonical; probe not executed"})
 		} else {
-			checks = append(checks, gogSpawnCheck(env, axis.ProbeListTools(env, trustedArgv),
+			checks = append(checks, doctor.GogSpawnCheck(env, axis.ProbeListTools(env, trustedArgv),
 				"registered command exposes tools (verified as-registered)",
 				"the registered command returns 0 tools — keyring not headless"))
 		}

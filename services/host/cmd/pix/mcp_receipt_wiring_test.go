@@ -23,6 +23,7 @@ import (
 	"pix/host/config"
 	"pix/host/mcp"
 	"pix/host/rpc"
+	"pix/host/workflow/doctor"
 	"pix/host/workflow/pack"
 	"pix/host/workspace"
 	"slices"
@@ -48,7 +49,7 @@ func falseCmd(t *testing.T) *exec.Cmd { t.Helper(); return exec.Command("false")
 // withCreatePollSeams installs a fast, deterministic creation-evidence poll
 // (probe + interval + timeout) for the duration of the test — no real `sbx
 // ls`, no real half-second sleeps.
-func withCreatePollSeams(t *testing.T, probe func(name string) sbxState, interval, timeout time.Duration) {
+func withCreatePollSeams(t *testing.T, probe func(name string) doctor.SbxState, interval, timeout time.Duration) {
 	t.Helper()
 	oldProbe, oldInt, oldTO := sandboxAppearProbeFn, sandboxAppearPollInterval, sandboxAppearPollTimeout
 	sandboxAppearProbeFn, sandboxAppearPollInterval, sandboxAppearPollTimeout = probe, interval, timeout
@@ -58,8 +59,8 @@ func withCreatePollSeams(t *testing.T, probe func(name string) sbxState, interva
 }
 
 // probeAlways is a creation-evidence probe pinned to one state.
-func probeAlways(st sbxState) func(string) sbxState {
-	return func(string) sbxState { return st }
+func probeAlways(st doctor.SbxState) func(string) doctor.SbxState {
+	return func(string) doctor.SbxState { return st }
 }
 
 // --- execSbxRunAndRecordCreate: ordering + gating ---------------------------
@@ -190,7 +191,7 @@ func TestExecSbxRunAndRecordCreate_ReceiptWriteFailureIsDistinctError(t *testing
 // always does, matching run.go's actual gate byte for byte.
 func TestCreateReceiptGate_MirrorsDefinitelyCreating(t *testing.T) {
 	cases := []struct {
-		State   sbxState
+		State   doctor.SbxState
 		replace bool
 		want    bool
 	}{
@@ -341,7 +342,7 @@ func TestRunMcpLoad_AbsentSbxExitsServiceDownWritesNoReceipt(t *testing.T) {
 
 	var ee *exec.ExitError
 	if !errors.As(runErr, &ee) {
-		t.Fatalf("expected an ExitError, got %v (output: %s)", runErr, out.String())
+		t.Fatalf("expected an ExitError, got %v (Output: %s)", runErr, out.String())
 	}
 	if ee.ExitCode() != rpc.ExitServiceDown {
 		t.Errorf("exit code = %d, want %d (rpc.ExitServiceDown); output:\n%s", ee.ExitCode(), rpc.ExitServiceDown, out.String())

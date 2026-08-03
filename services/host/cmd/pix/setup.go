@@ -33,6 +33,7 @@ import (
 	"pix/host/readiness/axis"
 	"pix/host/secret"
 	"pix/host/sys"
+	"pix/host/workflow/doctor"
 	"pix/host/workflow/onboard"
 	"pix/host/workflow/pack"
 	"slices"
@@ -315,7 +316,7 @@ func runSetupCore(env hostenv.Env, dir string, hostArgs []string, in io.Reader, 
 // exec'ing sbx (runFn is called instead of runRun directly; tests pass a stub
 // that records the call). Returns an error ONLY for the fail-closed unknown
 // state; the caller prints it and exits non-zero.
-func runSetupHandoff(dir, name string, state sbxState, replace bool, out io.Writer, runFn func([]string)) error {
+func runSetupHandoff(dir, name string, state doctor.SbxState, replace bool, out io.Writer, runFn func([]string)) error {
 	// kickoffArgs builds the runRun argv for a launch that should receive the
 	// tour: [DIR] [--replace] -- <onboardingKickoff>. DIR is forwarded only
 	// when explicit so `pix setup` from inside a repo behaves exactly
@@ -355,7 +356,7 @@ func runSetupHandoff(dir, name string, state sbxState, replace bool, out io.Writ
 		if name == "" {
 			which = fmt.Sprintf("the sandbox for %s", dir)
 		}
-		return fmt.Errorf("cannot determine the state of %s (`sbx ls` failed or sbx is unavailable). Host setup completed; install or fix sbx (`%s`) and retry with: pix setup%s", which, sbxInstallHint, retryArg)
+		return fmt.Errorf("cannot determine the state of %s (`sbx ls` failed or sbx is unavailable). Host setup completed; install or fix sbx (`%s`) and retry with: pix setup%s", which, doctor.SbxInstallHint, retryArg)
 	case sbxRunning, sbxStopped:
 		if replace {
 			fmt.Fprintln(out, "")
@@ -863,7 +864,7 @@ func runSetupInferenceStep(cfg *config.Config, env hostenv.Env, in io.Reader, ou
 	// Cloud was selected but nothing on the plan answered: that is a hard
 	// failure, because a silent "configured" for an account that can call
 	// nothing is the exact class of claim this whole path exists to delete.
-	if cloud := ollamaCloudCandidates(cfg); len(cloud) > 0 && attempted > 0 {
+	if cloud := doctor.OllamaCloudCandidates(cfg); len(cloud) > 0 && attempted > 0 {
 		return fmt.Errorf("Ollama Cloud was selected, but no cloud model answered a request: %s. Sign in with `ollama signin`, then re-run `pix setup`",
 			strings.Join(failures, "; "))
 	}
@@ -1093,7 +1094,7 @@ func requestedShortfallMessage(short []readiness.Axis, s readiness.Snapshot) str
 // to. Every builder here probes; none reads the inventory.
 func setupReadinessAxes(cfg *config.Config, env hostenv.Env, models setupModelsOutcome) map[readiness.Axis]readiness.AxisBuilder {
 	builders := map[readiness.Axis]readiness.AxisBuilder{}
-	for a, b := range ollamaReadinessAxes(cfg, env, "", nil) {
+	for a, b := range doctor.OllamaReadinessAxes(cfg, env, "", nil) {
 		builders[a] = b
 	}
 	if env.IdentityProbe != nil {

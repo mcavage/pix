@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/hostenv/hostenvtest"
 	"pix/host/launcher"
 	"pix/host/mcp"
 	"pix/host/secret"
@@ -548,28 +549,28 @@ func TestParseRunArgs_Errors(t *testing.T) {
 // exact `sbx secret set` line when none is present.
 func TestAnyModelKeyPresent(t *testing.T) {
 	t.Run("no model key", func(t *testing.T) {
-		f := fakeEnv{present: map[string]bool{"sbx": true}, output: map[string]string{"sbx secret ls": "github\n"}}
-		if anyModelKeyPresent(f.env()) {
+		f := hostenvtest.Env{Present: map[string]bool{"sbx": true}, Output: map[string]string{"sbx secret ls": "github\n"}}
+		if anyModelKeyPresent(f.Build()) {
 			t.Error("github alone is not a model key")
 		}
 	})
 	t.Run("model key present", func(t *testing.T) {
-		f := fakeEnv{present: map[string]bool{"sbx": true}, output: map[string]string{"sbx secret ls": "anthropic github\n"}}
-		if !anyModelKeyPresent(f.env()) {
+		f := hostenvtest.Env{Present: map[string]bool{"sbx": true}, Output: map[string]string{"sbx secret ls": "anthropic github\n"}}
+		if !anyModelKeyPresent(f.Build()) {
 			t.Error("anthropic present should count")
 		}
 	})
 	t.Run("sbx absent -> cannot verify (false)", func(t *testing.T) {
-		f := fakeEnv{present: map[string]bool{}, output: map[string]string{}}
-		if anyModelKeyPresent(f.env()) {
+		f := hostenvtest.Env{Present: map[string]bool{}, Output: map[string]string{}}
+		if anyModelKeyPresent(f.Build()) {
 			t.Error("sbx absent must report not-present")
 		}
 	})
 }
 
 func TestModelKeyMissingMessage(t *testing.T) {
-	f := fakeEnv{present: map[string]bool{"sbx": true}, output: map[string]string{"sbx secret ls": "github\n"}}
-	msg := secret.ModelKeyMissingMessage(f.env())
+	f := hostenvtest.Env{Present: map[string]bool{"sbx": true}, Output: map[string]string{"sbx secret ls": "github\n"}}
+	msg := secret.ModelKeyMissingMessage(f.Build())
 	for _, want := range []string{"anthropic", "openai", "google", "pix setup", "op://vault/item/field"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("guidance missing %q, got:\n%s", want, msg)

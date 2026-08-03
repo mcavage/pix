@@ -18,6 +18,7 @@ import (
 	"pix/host/mcp"
 	"pix/host/secret"
 	"pix/host/sys"
+	"pix/host/workflow/doctor"
 	"pix/host/workspace"
 	"sort"
 	"strconv"
@@ -187,7 +188,7 @@ type taskLayout struct {
 // state dir, i.e. it has a meta/ subdir. Checking meta/ (not just the dir) means
 // an unrelated sibling dir — e.g. a locks/ tree — never reads as a layout.
 func hasTaskMetaDir(dir string) bool {
-	fi, err := os.Stat(filepath.Join(taskStateRoot(), dir, "meta"))
+	fi, err := os.Stat(filepath.Join(workspace.TaskStateRoot(), dir, "meta"))
 	return err == nil && fi.IsDir()
 }
 
@@ -231,24 +232,11 @@ func findTaskLayout(mainroot, sane string) (lay taskLayout, found, ambiguous boo
 	}
 }
 
-// taskStateRoot is the base dir for all task state:
-// $XDG_STATE_HOME/pix/tasks (default ~/.local/state/pix/tasks).
-func taskStateRoot() string {
-	if x := strings.TrimSpace(os.Getenv("XDG_STATE_HOME")); x != "" {
-		return filepath.Join(x, "pix", "tasks")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = "."
-	}
-	return filepath.Join(home, ".local", "state", "pix", "tasks")
-}
-
 // taskPaths resolves the checkout dir and metadata file for a task. repoDir is
 // the per-repo state dir segment (new "<label>-<repokey>" or legacy "<repokey>")
 // and name is expected to be already sanitized by the caller.
 func taskPaths(repoDir, name string) (co, meta string) {
-	base := filepath.Join(taskStateRoot(), repoDir)
+	base := filepath.Join(workspace.TaskStateRoot(), repoDir)
 	co = filepath.Join(base, "co", name)
 	meta = filepath.Join(base, "meta", name+".json")
 	return co, meta
@@ -278,7 +266,7 @@ func reserveTaskCheckout(co string) (owned bool, err error) {
 // OUTSIDE the co/ and meta/ trees `task rm` deletes, so it is never a removed
 // artifact (tiny and harmless to leave behind).
 func taskLockPath(repokey, name string) string {
-	return filepath.Join(taskStateRoot(), repokey, "locks", sanitizeTaskName(name)+".lock")
+	return filepath.Join(workspace.TaskStateRoot(), repokey, "locks", sanitizeTaskName(name)+".lock")
 }
 
 // withTaskLock serializes EVERY lifecycle operation for a single (repokey, name)
@@ -539,11 +527,11 @@ func readTaskMeta(path string) (taskMeta, error) {
 // probes once and stores it here, so the guard and the teardown executor never
 // re-derive running-ness from independent probes (the R3-1 fail-open race).
 type taskState struct {
-	sandbox  sbxState // the task's sandbox tri-state (running/stopped/absent/unknown)
-	dirty    bool     // the clone has uncommitted changes
-	unrec    int      // commits reachable from ANY clone head/HEAD that live ONLY here: not in the main repo AND not on a clone remote (the full would-lose-work count)
-	unpushed int      // commits ahead of the task branch's upstream (display only), or unrec when there is no upstream
-	unknown  bool     // the unrec probe failed; treat as possibly-unrecoverable (fail-safe)
+	sandbox  doctor.SbxState // the task's sandbox tri-state (running/stopped/absent/unknown)
+	dirty    bool            // the clone has uncommitted changes
+	unrec    int             // commits reachable from ANY clone head/HEAD that live ONLY here: not in the main repo AND not on a clone remote (the full would-lose-work count)
+	unpushed int             // commits ahead of the task branch's upstream (display only), or unrec when there is no upstream
+	unknown  bool            // the unrec probe failed; treat as possibly-unrecoverable (fail-safe)
 }
 
 // taskRemoveGuard is the pure removal decision. It refuses (ok=false) with a
@@ -596,7 +584,7 @@ func taskForceSnapshotAbort(force bool, unrec int, unknown, snapshotFailed bool)
 // the sandbox has since come up (or sbx can no longer be reached), and reaching
 // `sbx rm -f` on it without --force would kill a live session and delete its
 // clone. Under --force the user has accepted stopping/removing, so it proceeds.
-func taskTeardownAbort(final sbxState, force bool) bool {
+func taskTeardownAbort(final doctor.SbxState, force bool) bool {
 	if force {
 		return false
 	}
@@ -830,17 +818,11 @@ func taskSandboxStatus(env hostenv.Env, name string) string {
 	return ""
 }
 
-// sbxState is the tri-state a task probe resolves a sandbox to. The whole point
-// is that an errored/unreachable `sbx` invocation is UNKNOWN, distinct from a
-// clean "not in the list" ABSENT: callers must refuse destructive action on
-// UNKNOWN rather than assume the safe-looking absent value.
-type sbxState int
-
 const (
-	sbxUnknown sbxState = iota // could not determine (sbx errored / no runner)
-	sbxAbsent                  // sbx responded and the name is not present
-	sbxRunning                 // present, status column reads running
-	sbxStopped                 // present, any other status
+	sbxUnknown doctor.SbxState = iota // could not determine (sbx errored / no runner)
+	sbxAbsent                         // sbx responded and the name is not present
+	sbxRunning                        // present, status column reads running
+	sbxStopped                        // present, any other status
 )
 
 // probeTaskSandbox classifies name from `sbx ls` via the seam into one of
@@ -848,7 +830,7 @@ const (
 // missing runner) is UNKNOWN, never absent, so a failed probe can never be read
 // as "the sandbox was never created". BOUNDED (probeRun): a hung sbx times out
 // to UNKNOWN — run/setup/task preflights degrade honestly instead of wedging.
-func probeTaskSandbox(env hostenv.Env, name string) sbxState {
+func probeTaskSandbox(env hostenv.Env, name string) doctor.SbxState {
 	out, timedOut, err := env.RunTimed("sbx", "ls")
 	if timedOut || err != nil {
 		return sbxUnknown
@@ -1331,7 +1313,7 @@ func runTaskLs(env hostenv.Env, argv []string) {
 	var rows []taskListRow
 	gcEligible := 0
 	for _, lay := range existingTaskLayouts(mainroot) {
-		metaDir := filepath.Join(taskStateRoot(), lay.dir, "meta")
+		metaDir := filepath.Join(workspace.TaskStateRoot(), lay.dir, "meta")
 		entries, _ := os.ReadDir(metaDir)
 		for _, e := range entries {
 			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
@@ -2285,7 +2267,7 @@ func runTaskGc(env hostenv.Env, argv []string) {
 	}
 	var cands []cand
 	for _, lay := range existingTaskLayouts(mainroot) {
-		entries, _ := os.ReadDir(filepath.Join(taskStateRoot(), lay.dir, "meta"))
+		entries, _ := os.ReadDir(filepath.Join(workspace.TaskStateRoot(), lay.dir, "meta"))
 		for _, e := range entries {
 			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
 				continue
@@ -2491,24 +2473,3 @@ func parseDays(v string) (int, error) {
 // ---------------------------------------------------------------------------
 // status summary (global, repo-agnostic): total task clones + artifacts size.
 // ---------------------------------------------------------------------------
-
-// taskStateSummary walks the task state + artifact roots to a global count of
-// task clones and the on-disk size of harvested artifacts, so `pix status`
-// can surface the pile without any per-repo git probing (that needs a cwd/repo).
-// Best-effort: an unreadable tree contributes 0.
-func taskStateSummary() (tasks int, artifactBytes int64) {
-	repos, _ := os.ReadDir(taskStateRoot())
-	for _, r := range repos {
-		if !r.IsDir() {
-			continue
-		}
-		metas, _ := os.ReadDir(filepath.Join(taskStateRoot(), r.Name(), "meta"))
-		for _, m := range metas {
-			if !m.IsDir() && strings.HasSuffix(m.Name(), ".json") {
-				tasks++
-			}
-		}
-	}
-	_, artifactBytes = sys.DirSize(workspace.TaskArtifactRoot())
-	return tasks, artifactBytes
-}

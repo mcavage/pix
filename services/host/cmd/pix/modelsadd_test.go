@@ -19,6 +19,7 @@ import (
 	"pix/host/readiness"
 	"pix/host/secret"
 	"pix/host/sys/systest"
+	"pix/host/workflow/doctor"
 )
 
 // reconcileEnv fakes a host where the named providers have resolvable 1Password
@@ -173,7 +174,7 @@ func TestUnwiredProviderKeysReportsOnlyTheGap(t *testing.T) {
 			{Model: "anthropic/claude-sonnet-5", Backend: "anthropic", Upstream: "anthropic/claude-sonnet-5", Available: true, Verified: true},
 		},
 	}}
-	if gaps := unwiredProviderKeys(base, env); len(gaps) != 1 || gaps[0] != "google" {
+	if gaps := doctor.UnwiredProviderKeys(base, env); len(gaps) != 1 || gaps[0] != "google" {
 		t.Fatalf("google's key is set with no bindings; want [google], got %v", gaps)
 	}
 
@@ -185,7 +186,7 @@ func TestUnwiredProviderKeysReportsOnlyTheGap(t *testing.T) {
 	}
 	bound.Inference.Models = append(append([]config.InferenceModelBinding{}, base.Inference.Models...),
 		config.InferenceModelBinding{Model: "google/gemini-3.6-flash", Backend: "google", Upstream: "google/gemini-3.6-flash", Available: true})
-	if gaps := unwiredProviderKeys(&bound, env); len(gaps) != 0 {
+	if gaps := doctor.UnwiredProviderKeys(&bound, env); len(gaps) != 0 {
 		t.Fatalf("a bound-but-unverified provider is not a wiring gap, got %v", gaps)
 	}
 
@@ -193,7 +194,7 @@ func TestUnwiredProviderKeysReportsOnlyTheGap(t *testing.T) {
 	packed := bound
 	packed.Inference = base.Inference
 	packed.Inference.ExclusiveSource = "/packs/work"
-	if gaps := unwiredProviderKeys(&packed, env); len(gaps) != 0 {
+	if gaps := doctor.UnwiredProviderKeys(&packed, env); len(gaps) != 0 {
 		t.Fatalf("no gap should be reported while a pack owns inference, got %v", gaps)
 	}
 }
@@ -210,7 +211,7 @@ func TestDoctorGapCheckIsOptionalAndActionable(t *testing.T) {
 			{Model: "anthropic/claude-sonnet-5", Backend: "anthropic", Upstream: "anthropic/claude-sonnet-5", Available: true, Verified: true},
 		},
 	}}
-	c := inferenceBindingGapCheck(cfg)
+	c := doctor.InferenceBindingGapCheck(cfg, hostenv.Env{System: &systest.Fake{}})
 	if c == nil {
 		t.Skip("no gap detectable in this environment")
 	}

@@ -117,7 +117,7 @@ func TestExistingTaskLayouts_And_FindTaskLayout(t *testing.T) {
 		t.Errorf("not-found: lay=%+v found=%v amb=%v", lay, found, amb)
 	}
 	// A bare dir with NO meta/ must not read as a layout (e.g. a locks-only dir).
-	if err := os.MkdirAll(filepath.Join(taskStateRoot(), legacy, "locks"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(workspace.TaskStateRoot(), legacy, "locks"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if got := existingTaskLayouts(mainroot); len(got) != 0 {
@@ -136,7 +136,7 @@ func TestExistingTaskLayouts_And_FindTaskLayout(t *testing.T) {
 	// name is now AMBIGUOUS and must be refused.
 	writeMeta(newDir, "fix")
 	if got := existingTaskLayouts(mainroot); len(got) != 2 {
-		t.Errorf("both present: %+v, want 2", got)
+		t.Errorf("both Present: %+v, want 2", got)
 	}
 	if _, found, amb := findTaskLayout(mainroot, "fix"); !amb || found {
 		t.Errorf("ambiguous name: found=%v amb=%v, want amb", found, amb)
@@ -410,36 +410,6 @@ func TestHumanBytes(t *testing.T) {
 	}
 }
 
-func TestTaskStateSummary(t *testing.T) {
-	state := t.TempDir()
-	data := t.TempDir()
-	t.Setenv("XDG_STATE_HOME", state)
-	t.Setenv("XDG_DATA_HOME", data)
-	// Two task metas across one repo dir.
-	metaDir := filepath.Join(taskStateRoot(), "proj-abcd1234", "meta")
-	if err := os.MkdirAll(metaDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	writeFile(t, filepath.Join(metaDir, "a.json"), "{}\n")
-	writeFile(t, filepath.Join(metaDir, "b.json"), "{}\n")
-	// An artifact file to size.
-	artDir := filepath.Join(workspace.TaskArtifactRoot(), "proj-abcd1234", "a", "ts")
-	if err := os.MkdirAll(artDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	writeFile(t, filepath.Join(artDir, "doc.md"), strings.Repeat("x", 100))
-
-	tasks, bytes := taskStateSummary()
-	if tasks != 2 {
-		t.Errorf("tasks = %d, want 2", tasks)
-	}
-	if bytes < 100 {
-		t.Errorf("artifact bytes = %d, want >= 100", bytes)
-	}
-}
-
-// --- Story 4: uninstall --purge-data ----------------------------------------
-
 func TestResetPlan_PurgeDataAddsArtifacts(t *testing.T) {
 	cfg := &config.Config{}
 	paths := reset.Paths{ConfigDir: "/c", DataRoot: "/d", MemoryDir: "/d/memory", ArtifactRoot: "/data/pix/artifacts"}
@@ -601,16 +571,6 @@ func TestBoundSandboxName_LongProfileStaysBounded(t *testing.T) {
 		t.Errorf("repokey trimmed away: %q", got)
 	}
 }
-
-func TestStatusRender_ArtifactsWithoutTasks(t *testing.T) {
-	var sb strings.Builder
-	statusReport{Version: "v", Tasks: 0, ArtifactB: 4096}.render(&sb)
-	if !strings.Contains(sb.String(), "4.0KB artifacts") {
-		t.Errorf("artifact-only status did not render the tasks line:\n%s", sb.String())
-	}
-}
-
-// --- review loop 2 hardening ------------------------------------------------
 
 func TestHarvest_IncludesModifiedTrackedDoc(t *testing.T) {
 	main := newMainRepo(t)

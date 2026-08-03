@@ -1,14 +1,12 @@
-package main
+package doctor
 
 import (
 	"bytes"
-	"errors"
-	"fmt"
-	"os"
-	"os/exec"
 	"path/filepath"
+	"pix/host/hostenv"
 	"pix/host/readiness"
 	"pix/host/readiness/axis"
+	"pix/host/sys/systest"
 	"strings"
 	"testing"
 
@@ -43,7 +41,7 @@ func TestGatewayInferenceSatisfiesCoreReadinessWithoutProviderKeys(t *testing.T)
 // TestProvidersGroup_OneKeyReady: any ONE of anthropic/openai/google present
 // makes the core "model key" check ready \u2014 core, no todo, never blocking.
 func TestProvidersGroup_OneKeyReady(t *testing.T) {
-	g := providersGroup(nil, "anthropic\ngithub\n", true)
+	g := ProvidersGroup(nil, hostenv.Env{System: &systest.Fake{}}, "anthropic\ngithub\n", true)
 	core := g.Checks[0]
 	if core.Label != "model key" {
 		t.Fatalf("expected the core check first, got %q", core.Label)
@@ -67,7 +65,7 @@ func TestProvidersGroup_OneKeyReady(t *testing.T) {
 // copy-pasteable command (the other providers are named in evidence, not the
 // command).
 func TestProvidersGroup_ZeroConfirmed_OneCopyPasteableCommand(t *testing.T) {
-	g := providersGroup(nil, "github\n", true) // github set, but no MODEL key
+	g := ProvidersGroup(nil, hostenv.Env{System: &systest.Fake{}}, "github\n", true) // github set, but no MODEL key
 	core := g.Checks[0]
 	if core.Req() != readiness.RequirementCore {
 		t.Fatalf("model key requirement = %q, want core", core.Req())
@@ -100,7 +98,7 @@ func TestProvidersGroup_ZeroConfirmed_OneCopyPasteableCommand(t *testing.T) {
 // TestProvidersGroup_SbxAbsentUnverifiable: sbx absent -> unverifiable, never
 // denied, never blocking, and carries no todo command.
 func TestProvidersGroup_SbxAbsentUnverifiable(t *testing.T) {
-	g := providersGroup(nil, "", false)
+	g := ProvidersGroup(nil, hostenv.Env{System: &systest.Fake{}}, "", false)
 	core := g.Checks[0]
 	if core.Result() != readiness.VerdictUnverifiable {
 		t.Fatalf("model key verdict = %q, want unverifiable", core.Result())
@@ -120,7 +118,7 @@ func TestProvidersGroup_SbxAbsentUnverifiable(t *testing.T) {
 // for the OTHER unverifiable cause: sbx present but `sbx secret ls` errored
 // (control plane down). Same tri-state sbxOK=false path as sbxModelKeyState.
 func TestProvidersGroup_SecretLsFailure_Unverifiable(t *testing.T) {
-	g := providersGroup(nil, "", false) // sbxOK=false covers both "absent" and "errored"
+	g := ProvidersGroup(nil, hostenv.Env{System: &systest.Fake{}}, "", false) // sbxOK=false covers both "absent" and "errored"
 	core := g.Checks[0]
 	if core.Result() != readiness.VerdictUnverifiable {
 		t.Fatalf("verdict = %q, want unverifiable", core.Result())
@@ -141,7 +139,7 @@ func TestProvidersGroup_AlternateMissingNotOutstanding(t *testing.T) {
 	// repointing run_intent, but that is a NOTE (never outstanding): a wrong
 	// session-model vendor is a config fix, not a blocking gap, and the core
 	// "at least one key" gate is satisfied.
-	g := providersGroup(nil, "anthropic\n", true)
+	g := ProvidersGroup(nil, hostenv.Env{System: &systest.Fake{}}, "anthropic\n", true)
 	r := &readiness.Report{Groups: []readiness.Group{g}}
 	if got := r.Outstanding(); got != 0 {
 		t.Errorf("outstanding = %d, want 0 (missing alternates + the run_intent advisory are informational)", got)
@@ -180,7 +178,7 @@ func TestProvidersGroup_AlternateMissingNotOutstanding(t *testing.T) {
 // not-configured/info \u2014 never outstanding \u2014 even when zero MODEL keys are
 // set (the model-key core todo is the only outstanding item).
 func TestProvidersGroup_GithubOptional_NoOutstanding(t *testing.T) {
-	g := providersGroup(nil, "", true) // sbx reachable, nothing set at all
+	g := ProvidersGroup(nil, hostenv.Env{System: &systest.Fake{}}, "", true) // sbx reachable, nothing set at all
 	r := &readiness.Report{Groups: []readiness.Group{g}}
 	if got := r.Outstanding(); got != 1 {
 		t.Errorf("outstanding = %d, want 1 (only the core model-key todo)", got)
@@ -206,7 +204,7 @@ func TestProvidersGroup_GithubOptional_NoOutstanding(t *testing.T) {
 // TestProvidersGroup_GithubProbeFailure_Unverifiable: sbx absent/errored ->
 // github's info line reads unverifiable (via detail text), not a false claim.
 func TestProvidersGroup_GithubProbeFailure_Unverifiable(t *testing.T) {
-	g := providersGroup(nil, "", false)
+	g := ProvidersGroup(nil, hostenv.Env{System: &systest.Fake{}}, "", false)
 	var github readiness.Check
 	for _, c := range g.Checks {
 		if c.Label == "github" {
@@ -224,8 +222,8 @@ func TestProvidersGroup_GithubProbeFailure_Unverifiable(t *testing.T) {
 // TestProvidersGroup_JSON: exact JSON contract for the core check and the
 // per-provider info lines.
 func TestProvidersGroup_JSON(t *testing.T) {
-	r := &readiness.Report{Groups: []readiness.Group{providersGroup(nil, "anthropic\n", true)}}
-	v := jsonView(r, "")
+	r := &readiness.Report{Groups: []readiness.Group{ProvidersGroup(nil, hostenv.Env{System: &systest.Fake{}}, "anthropic\n", true)}}
+	v := JsonView(r, "")
 	if v.Blocking {
 		t.Error("one confirmed key must not block")
 	}
@@ -253,8 +251,8 @@ func TestProvidersGroup_JSON(t *testing.T) {
 // TestProvidersGroup_JSON_ZeroConfirmed: the blocked-JSON shape when zero keys
 // are confirmed.
 func TestProvidersGroup_JSON_ZeroConfirmed(t *testing.T) {
-	r := &readiness.Report{Groups: []readiness.Group{providersGroup(nil, "", true)}}
-	v := jsonView(r, "")
+	r := &readiness.Report{Groups: []readiness.Group{ProvidersGroup(nil, hostenv.Env{System: &systest.Fake{}}, "", true)}}
+	v := JsonView(r, "")
 	if !v.Blocking || v.Verdict != "blocked" {
 		t.Errorf("zero confirmed -> (blocking=%v, verdict=%q), want (true, blocked)", v.Blocking, v.Verdict)
 	}
@@ -267,9 +265,9 @@ func TestProvidersGroup_JSON_ZeroConfirmed(t *testing.T) {
 // TestProvidersGroup_RenderConcise: concise mode collapses the ready per-key
 // notes/checks but still shows the group is all-ready when a key is present.
 func TestProvidersGroup_RenderConcise(t *testing.T) {
-	r := &readiness.Report{Groups: []readiness.Group{providersGroup(nil, "anthropic\nopenai\ngoogle\ngithub\n", true)}}
+	r := &readiness.Report{Groups: []readiness.Group{ProvidersGroup(nil, hostenv.Env{System: &systest.Fake{}}, "anthropic\nopenai\ngoogle\ngithub\n", true)}}
 	var buf bytes.Buffer
-	r.Render(&buf, false, doctorHints())
+	r.Render(&buf, false, Hints())
 	out := buf.String()
 	if !strings.Contains(out, "Inference / credentials") {
 		t.Errorf("expected the providers group title, got:\n%s", out)
@@ -282,91 +280,13 @@ func TestProvidersGroup_RenderConcise(t *testing.T) {
 // TestProvidersGroup_RenderVerbose: verbose mode shows every per-provider
 // info line, not just the collapsed core summary.
 func TestProvidersGroup_RenderVerbose(t *testing.T) {
-	r := &readiness.Report{Groups: []readiness.Group{providersGroup(nil, "anthropic\n", true)}}
+	r := &readiness.Report{Groups: []readiness.Group{ProvidersGroup(nil, hostenv.Env{System: &systest.Fake{}}, "anthropic\n", true)}}
 	var buf bytes.Buffer
-	r.Render(&buf, true, doctorHints())
+	r.Render(&buf, true, Hints())
 	out := buf.String()
 	for _, want := range []string{"anthropic", "openai", "google", "github", "model key"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("verbose render missing %q, got:\n%s", want, out)
 		}
-	}
-}
-
-// TestProvidersGroup_RenderZeroConfirmed_OneTodoLine: the concise render must
-// surface exactly the one fix command, in the TODO section.
-func TestProvidersGroup_RenderZeroConfirmed_OneTodoLine(t *testing.T) {
-	r := &readiness.Report{Groups: []readiness.Group{providersGroup(nil, "", true)}}
-	var buf bytes.Buffer
-	r.Render(&buf, false, doctorHints())
-	out := buf.String()
-	if strings.Count(out, "TODO: pix models add") != 1 {
-		t.Errorf("expected exactly one provider TODO line, got:\n%s", out)
-	}
-}
-
-// sbxSecretLsScript writes a fake `sbx` on the given dir's PATH that answers
-// ONLY `secret ls` (with the given output/exit code) and no-ops everything
-// else (0, empty), so a real subprocess run of runDoctorCmd can exercise the
-// exact tri-state sbxModelKeyState/secret.ProbeSbxSecrets share, without a real sbx
-// install.
-func sbxSecretLsScript(t *testing.T, dir, output string, exitCode int) {
-	t.Helper()
-	body := fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = \"secret\" ] && [ \"$2\" = \"ls\" ]; then\n  printf '%%s' '%s'\n  exit %d\nfi\nexit 0\n", output, exitCode)
-	if err := os.WriteFile(filepath.Join(dir, "sbx"), []byte(body), 0o755); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// TestDoctorCmd_RealExitCodes exercises runDoctorCmd's ACTUAL process exit
-// code end to end (real os.Exit, real defaultShellEnv, a real fake `sbx` on
-// PATH) \u2014 not just the in-process report/blocking() unit tests above.
-func TestDoctorCmd_RealExitCodes(t *testing.T) {
-	cases := []struct {
-		name     string
-		argv     []string
-		sbxOut   string
-		sbxExit  int
-		noSbx    bool
-		wantExit int
-	}{
-		{name: "one_key_present", sbxOut: "anthropic\n", sbxExit: 0, wantExit: 0},
-		{name: "zero_keys_confirmed", sbxOut: "", sbxExit: 0, wantExit: 1},
-		{name: "usage_error", argv: []string{"--bogus"}, wantExit: 2},
-		// A failed `sbx secret ls` leaves the CORE model-key axis
-		// unverifiable, which is exit 3 under the shared contract
-		// (AC-P0-207): doctor no longer collapses "could not check" into 0.
-		{name: "probe_failed", sbxExit: 7, wantExit: 3},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if os.Getenv("PIX_DOCTOR_HELPER") == tc.name {
-				runDoctorCmd(tc.argv)
-				return
-			}
-			dir := t.TempDir()
-			if !tc.noSbx {
-				sbxSecretLsScript(t, dir, tc.sbxOut, tc.sbxExit)
-			}
-			cmd := exec.Command(os.Args[0], "-test.run", "TestDoctorCmd_RealExitCodes/"+tc.name)
-			cmd.Env = append(os.Environ(),
-				"PIX_DOCTOR_HELPER="+tc.name,
-				"PATH="+dir,
-				"PIX_CONFIG="+filepath.Join(dir, "config.toml"), // absent file -> defaults
-				"HOME="+dir,
-			)
-			out, err := cmd.CombinedOutput()
-			exit := 0
-			var ee *exec.ExitError
-			if errors.As(err, &ee) {
-				exit = ee.ExitCode()
-			} else if err != nil {
-				t.Fatalf("unexpected run error: %v\noutput:\n%s", err, out)
-			}
-			if exit != tc.wantExit {
-				t.Errorf("%s: exit = %d, want %d\noutput:\n%s", tc.name, exit, tc.wantExit, out)
-			}
-		})
 	}
 }

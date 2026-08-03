@@ -1,4 +1,4 @@
-package main
+package doctor
 
 import (
 	"fmt"
@@ -234,11 +234,11 @@ func resolveMCPSandboxContext(env hostenv.Env) mcpSandboxContext {
 // mcpLoadTodoCommand is the exact, copy-pasteable live-attach command for a
 // VERIFIED registered-not-attached gap: the same `pix mcp load NAME DIR`
 // spelling status emits, carrying the canonical workspace when known. It
-// delegates to run.go's mcpLoadCommand (shell-quoting name and workspace via
+// delegates to run.go's McpLoadCommand (shell-quoting name and workspace via
 // sys.ShellQuote, closure finding #3) so doctor and status can never drift on
 // how the repair command is quoted.
 func mcpLoadTodoCommand(name, ws string) string {
-	return mcpLoadCommand(name, ws)
+	return McpLoadCommand(name, ws)
 }
 
 // mcpAttachCheck renders one server's sandbox-attachment evidence from the
@@ -606,4 +606,18 @@ func annotateReceiptOnlyCheck(c readiness.Check, name string) readiness.Check {
 	note := "sandbox provenance only (from this sandbox's receipt); " + name + " is not part of the current cfg.MCP/pack"
 	c.Evidence = c.EvidenceString() + "; " + note
 	return c
+}
+
+// McpLoadCommand returns the exact `pix mcp load NAME [WORKSPACE]`
+// command for name, workspace-qualified the same way runReplaceCommand is
+// (bare for ".", quoted otherwise) so the two recovery commands read
+// consistently. Both name and workspace are shell-quoted via the shared
+// sys.ShellQuote (closure finding #3) — a server name is ordinarily a plain
+// token, but quoting it too costs nothing and keeps every generated
+// copy-paste command uniformly safe.
+func McpLoadCommand(name, ws string) string {
+	if ws == "" || ws == "." {
+		return "pix mcp load " + sys.ShellQuote(name)
+	}
+	return "pix mcp load " + sys.ShellQuote(name) + " " + sys.ShellQuote(ws)
 }

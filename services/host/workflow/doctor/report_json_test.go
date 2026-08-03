@@ -1,7 +1,7 @@
-package main
+package doctor
 
 // These exercise doctor's JSON schema and the Report RENDERER. Both stayed in
-// this package -- jsonView is doctor's wire format, and the renderer takes
+// this package -- JsonView is doctor's wire format, and the renderer takes
 // doctor's own hint strings -- so the tests followed them back out of readiness.
 
 import (
@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"pix/host/hostenv/hostenvtest"
 	"pix/host/readiness"
 )
 
@@ -23,7 +24,7 @@ func TestDoctorJSONSchemaV2(t *testing.T) {
 		}}},
 		Services: []string{"memory"},
 	}
-	v := jsonView(r, "")
+	v := JsonView(r, "")
 	if v.SchemaVersion != 3 {
 		t.Fatalf("schema_version = %d, want 3", v.SchemaVersion)
 	}
@@ -78,28 +79,28 @@ func TestDoctorJSON_NonBlockingVerdicts(t *testing.T) {
 	mk := func(v readiness.Verdict) *readiness.Report {
 		return &readiness.Report{Groups: []readiness.Group{{Title: "g", Checks: []readiness.Check{{Label: "c", Verdict: v, Todo: "x"}}}}}
 	}
-	if got := jsonView(mk(readiness.VerdictTodo), ""); got.Verdict != "outstanding" || got.Blocking {
+	if got := JsonView(mk(readiness.VerdictTodo), ""); got.Verdict != "outstanding" || got.Blocking {
 		t.Errorf("optional todo -> %+v, want outstanding/non-Blocking", got)
 	}
-	if got := jsonView(mk(readiness.VerdictUnverifiable), ""); got.Verdict != "unverifiable" || got.Blocking {
+	if got := JsonView(mk(readiness.VerdictUnverifiable), ""); got.Verdict != "unverifiable" || got.Blocking {
 		t.Errorf("unverifiable -> %+v, want unverifiable/non-Blocking", got)
 	}
-	if got := jsonView(mk(readiness.VerdictReady), ""); got.Verdict != "pass" || got.Blocking {
+	if got := JsonView(mk(readiness.VerdictReady), ""); got.Verdict != "pass" || got.Blocking {
 		t.Errorf("ready -> %+v, want pass/non-Blocking", got)
 	}
 }
 
 // it) requires sbx to actually answer, which a cold run by definition cannot.
 func TestRunDoctor_NothingBlocksYet(t *testing.T) {
-	f := fakeEnv{present: map[string]bool{}, output: map[string]string{}, ports: map[int]bool{}}
-	r := runDoctor(defaultCfg(), f.env())
+	f := hostenvtest.Env{Present: map[string]bool{}, Output: map[string]string{}, Ports: map[int]bool{}}
+	r := RunDoctor(defaultCfg(), f.Build())
 	if r.Blocking() {
 		t.Error("a cold (sbx-absent) run must never block")
 	}
 	if len(r.Todos()) == 0 {
 		t.Error("a cold run should still surface Todos")
 	}
-	v := jsonView(r, "")
+	v := JsonView(r, "")
 	if v.Blocking || v.Verdict != "outstanding" {
 		t.Errorf("cold run JSON = (blocking=%v, verdict=%q), want (false, outstanding)", v.Blocking, v.Verdict)
 	}

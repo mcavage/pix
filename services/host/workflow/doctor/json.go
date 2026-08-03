@@ -1,4 +1,4 @@
-package main
+package doctor
 
 import (
 	"strings"
@@ -18,8 +18,8 @@ import (
 // process exit code. Additive only: every v1/v2 key keeps its name.
 const doctorSchemaVersion = 3
 
-// doctorJSON is the machine-readable doctor report (behind --json).
-type doctorJSON struct {
+// DoctorJSON is the machine-readable doctor report (behind --json).
+type DoctorJSON struct {
 	SchemaVersion int `json:"schema_version"`
 	// Verdict: pass | outstanding | unverifiable | blocked. v1 emitted only
 	// pass|outstanding; the two new values are additive (they appear only
@@ -110,12 +110,12 @@ type doctorCheckJSON struct {
 	Detail string `json:"detail"`
 }
 
-// jsonView renders the report into its serializable form (the same data render
+// JsonView renders the report into its serializable form (the same data render
 // prints, minus the glyph presentation).
-// jsonView is a function rather than a method now: doctorJSON is doctor's own
+// JsonView is a function rather than a method now: DoctorJSON is doctor's own
 // wire schema (v3, with its compatibility history), and readiness has no
 // business owning it. Report moved; the schema stayed.
-func jsonView(r *readiness.Report, profile string) doctorJSON {
+func JsonView(r *readiness.Report, profile string) DoctorJSON {
 	todos := r.Todos()
 	// Verdict derives from the same axes the headline uses: a verified core
 	// failure → blocked; any verified failure → outstanding; nothing verified
@@ -129,7 +129,7 @@ func jsonView(r *readiness.Report, profile string) doctorJSON {
 	case r.UnverifiableCount() > 0:
 		verdict = "unverifiable"
 	}
-	v := doctorJSON{
+	v := DoctorJSON{
 		SchemaVersion: doctorSchemaVersion,
 		Verdict:       verdict,
 		Blocking:      r.Blocking(),

@@ -29,6 +29,7 @@ import (
 	"pix/host/hostenv"
 	"pix/host/readiness"
 	"pix/host/secret"
+	"pix/host/workflow/doctor"
 	"pix/host/workflow/pack"
 	"pix/host/workspace"
 	"slices"
@@ -181,7 +182,7 @@ func buildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial f
 		return dial(p)
 	}
 	keyOK := func(name string) bool {
-		return secretCheck(name, name, sbxSecretsOut, sbxOK).State() == readiness.StateOK
+		return doctor.SecretCheck(name, name, sbxSecretsOut, sbxOK).State() == readiness.StateOK
 	}
 	if keysSource == "" {
 		keysSource = "sbx"

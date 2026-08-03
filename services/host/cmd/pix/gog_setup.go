@@ -71,6 +71,7 @@ import (
 	"pix/host/mcp"
 	"pix/host/readiness/axis"
 	"pix/host/secret"
+	"pix/host/workflow/doctor"
 	"pix/host/workflow/onboard"
 )
 
@@ -275,7 +276,7 @@ func gogSetupAccountHealthy(env hostenv.Env, acct string) bool {
 	if _, err := env.LookPath("op"); err != nil || opRefs == "" {
 		return true // headless unverifiable here; not a confirmed unhealthy state
 	}
-	return gogHeadlessOK(env, acct, opRefs)
+	return doctor.GogHeadlessOK(env, acct, opRefs)
 }
 
 // gogSetup is the hermetically-testable core of `pix gworkspace setup`. All OS
@@ -674,7 +675,7 @@ type gogRegSnapshot struct {
 //   - the listing probe fails or times out               -> gogRegUnknown
 //   - the listing succeeds and gog is NOT in it           -> gogRegAbsent
 //   - the listing succeeds, gog IS in it, but the detailed
-//     command can't be read/parsed (registeredGogCommand's
+//     command can't be read/parsed (doctor.RegisteredGogCommand's
 //     own `sbx mcp inspect google-workspace` + `sbx mcp ls -o json` probes
 //     both come up empty, quoted, or malformed)            -> gogRegUnknown
 //   - the listing succeeds, gog IS in it, and the detailed
@@ -694,7 +695,7 @@ func snapshotGogRegistration(env hostenv.Env) gogRegSnapshot {
 	if !cli.GrepWord(listOut, config.GWServerName) {
 		return gogRegSnapshot{State: gogRegAbsent}
 	}
-	if argv, ok := registeredGogCommand(env); ok {
+	if argv, ok := doctor.RegisteredGogCommand(env); ok {
 		return gogRegSnapshot{State: gogRegPresent, argv: argv}
 	}
 	return gogRegSnapshot{State: gogRegUnknown}

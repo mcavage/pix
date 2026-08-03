@@ -167,3 +167,19 @@ func RuntimeID(b routing.Binding) string {
 	}
 	return b.Backend + "/" + b.UpstreamID
 }
+
+// BoundNativeProviders is the set of providers that already had a native
+// binding. Callers capture it BEFORE configureDirectInference mutates the
+// bindings; that pre-mutation snapshot is the whole mechanism behind widening.
+func BoundNativeProviders(cfg *config.Config) map[string]bool {
+	out := map[string]bool{}
+	if cfg == nil {
+		return out
+	}
+	for _, b := range cfg.Inference.Models {
+		if cfg.Inference.Backends[b.Backend].Driver == "native" {
+			out[b.Backend] = true
+		}
+	}
+	return out
+}

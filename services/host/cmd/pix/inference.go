@@ -1,11 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -21,8 +19,6 @@ import (
 	"pix/host/routing"
 	"pix/host/secret"
 )
-
-const directInferenceProbeTimeout = 8 * time.Second
 
 // Ollama probe budgets. They are vars, not consts, for ONE reason: a hermetic
 // test has to be able to shrink them to exercise the budget branch without
@@ -70,7 +66,7 @@ func setupChooseInference(cfg *config.Config, env hostenv.Env, in io.Reader, out
 		return false, nil
 	}
 	if len(cfg.Inference.Backends) > 0 {
-		if inferenceNeedsOnePassword(cfg) {
+		if inference.InferenceNeedsOnePassword(cfg) {
 			return false, nil
 		}
 		if err := enableDeclaredInferenceBindings(cfg); err != nil {
@@ -563,65 +559,12 @@ func verifyOllamaInference(cfg *config.Config, env hostenv.Env, out io.Writer) (
 	return res, nil
 }
 
-// liveOllamaInferenceProbe posts ONE minimal generate to endpoint/api/generate.
-// endpoint is ALWAYS supplied by axis.EffectiveOllamaEndpoint; this function never
-// spells an address of its own (scripts/check-endpoint-literals.sh). No auth
-// header: the local daemon owns any cloud credential and Pix stores none.
-//
-// keep_alive:0 is load-bearing, not tidiness — it tells the daemon to unload
-// the model as soon as the response is written, so probe n+1 starts against a
-// free memory budget instead of stacking on probe n's resident weights.
-func liveOllamaInferenceProbe(endpoint, model string, numCtx int, timeout time.Duration) error {
-	options := map[string]any{"num_predict": 8}
-	if numCtx > 0 {
-		options["num_ctx"] = numCtx
-	}
-	body, err := json.Marshal(map[string]any{
-		"model": model, "prompt": "Reply OK", "stream": false, "keep_alive": 0, "options": options,
-	})
-	if err != nil {
-		return fmt.Errorf("could not build probe")
-	}
-	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(endpoint, "/")+"/api/generate", bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("could not build probe")
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := (&http.Client{Timeout: timeout}).Do(req)
-	if err != nil {
-		return fmt.Errorf("probe unavailable")
-	}
-	defer resp.Body.Close()
-	// Drained, never echoed: an Ollama error body can quote request content.
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 32<<10))
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("endpoint rejected the request (HTTP %d)", resp.StatusCode)
-	}
-	return nil
-}
-
 // configureModelRoster turns the broad set of backend bindings into the small,
 // explicit catalog-model surface agents may use. The router continues to pick
 // by intent, but it can never escape this roster. A mandatory pack is already
 // an explicit policy decision and therefore skips the personal roster prompt.
 func configureModelRoster(cfg *config.Config, in io.Reader, out io.Writer, interactive bool, requested string) error {
 	return configureModelRosterFrom(cfg, in, out, interactive, requested, nil)
-}
-
-// boundNativeProviders is the set of providers that already had a native
-// binding. Callers capture it BEFORE configureDirectInference mutates the
-// bindings; that pre-mutation snapshot is the whole mechanism behind widening.
-func boundNativeProviders(cfg *config.Config) map[string]bool {
-	out := map[string]bool{}
-	if cfg == nil {
-		return out
-	}
-	for _, b := range cfg.Inference.Models {
-		if cfg.Inference.Backends[b.Backend].Driver == "native" {
-			out[b.Backend] = true
-		}
-	}
-	return out
 }
 
 // configureModelRosterFrom is configureModelRoster with the pre-mutation
@@ -796,28 +739,9 @@ type runtimeModel struct {
 	OutputCost       float64 `json:"output_cost,omitempty"`
 }
 
-func inferenceNeedsOnePassword(cfg *config.Config) bool {
-	if cfg == nil || len(cfg.Inference.Backends) == 0 {
-		return true // default setup path is a direct API key
-	}
-	for _, binding := range cfg.Inference.Models {
-		// Availability is probe evidence, not topology. Setup must still require
-		// 1Password for an allowed direct binding before that first probe has
-		// promoted it; exclusivity alone decides whether a backend is dormant.
-		if !inference.Allowed(cfg, binding) {
-			continue
-		}
-		b, ok := cfg.Inference.Backends[binding.Backend]
-		if ok && inference.BackendAllowed(cfg, b, binding.Backend) && b.Auth == "1password" {
-			return true
-		}
-	}
-	return false
-}
-
 func configuredKeylessInference() bool {
 	cfg, err := config.Load()
-	return err == nil && len(cfg.Inference.Models) > 0 && !inferenceNeedsOnePassword(cfg)
+	return err == nil && len(cfg.Inference.Models) > 0 && !inference.InferenceNeedsOnePassword(cfg)
 }
 
 // enableDeclaredInferenceBindings promotes pack-declared bindings into the
@@ -960,50 +884,6 @@ func verifyDirectInference(cfg *config.Config, env hostenv.Env) (res probeOutcom
 	}
 	sort.Strings(res.Failures)
 	return res, nil
-}
-
-// liveDirectInferenceProbe makes a minimal generation request through the
-// provider's public API. The client has a hard wall-clock timeout and response
-// bodies are never echoed, preventing provider errors from accidentally
-// reflecting credential material into setup output.
-func liveDirectInferenceProbe(provider, model, key string) error {
-	var endpoint string
-	var body []byte
-	headers := map[string]string{"Content-Type": "application/json"}
-	switch provider {
-	case "openai":
-		endpoint = "https://api.openai.com/v1/responses"
-		body, _ = json.Marshal(map[string]any{"model": model, "input": "Reply OK", "max_output_tokens": 16})
-		headers["Authorization"] = "Bearer " + key
-	case "anthropic":
-		endpoint = "https://api.anthropic.com/v1/messages"
-		body, _ = json.Marshal(map[string]any{"model": model, "max_tokens": 8, "messages": []map[string]string{{"role": "user", "content": "Reply OK"}}})
-		headers["x-api-key"] = key
-		headers["anthropic-version"] = "2023-06-01"
-	case "google":
-		endpoint = "https://generativelanguage.googleapis.com/v1beta/models/" + url.PathEscape(model) + ":generateContent"
-		body, _ = json.Marshal(map[string]any{"contents": []map[string]any{{"parts": []map[string]string{{"text": "Reply OK"}}}}, "generationConfig": map[string]int{"maxOutputTokens": 8}})
-		headers["x-goog-api-key"] = key
-	default:
-		return fmt.Errorf("unsupported provider")
-	}
-	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("could not build probe")
-	}
-	for name, value := range headers {
-		req.Header.Set(name, value)
-	}
-	resp, err := (&http.Client{Timeout: directInferenceProbeTimeout}).Do(req)
-	if err != nil {
-		return fmt.Errorf("probe unavailable")
-	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 32<<10))
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("provider rejected model request (HTTP %d)", resp.StatusCode)
-	}
-	return nil
 }
 
 func compileInferenceRuntime(cfg *config.Config, now time.Time) (routing.CompiledRouting, runtimeInferenceManifest, error) {
@@ -1349,7 +1229,7 @@ func reconcileDirectInference(cfg *config.Config, env hostenv.Env, in io.Reader,
 	if out == nil {
 		out = io.Discard
 	}
-	prior := boundNativeProviders(cfg)
+	prior := inference.BoundNativeProviders(cfg)
 
 	providers, err := secret.HostModeProviderKeys(env)
 	if err != nil {
@@ -1493,7 +1373,7 @@ func reconcileOllamaInference(cfg *config.Config, env hostenv.Env, in io.Reader,
 		fmt.Fprintf(out, "%d candidate(s) were not probed within the time budget: %s\n", len(res.NotProbed), strings.Join(res.NotProbed, ", "))
 	}
 	if callable, _ := axis.ConfiguredInferenceSummary(cfg); callable > 0 {
-		if err := configureModelRosterFrom(cfg, in, out, interactive, "", boundNativeProviders(cfg)); err != nil {
+		if err := configureModelRosterFrom(cfg, in, out, interactive, "", inference.BoundNativeProviders(cfg)); err != nil {
 			return res, plan, fmt.Errorf("choosing models: %w", err)
 		}
 	}

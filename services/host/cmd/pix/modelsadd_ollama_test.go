@@ -37,7 +37,7 @@ func ollamaAddEnv(t *testing.T, tags []string, totalGB float64, endpoint string)
 	// is reachable — and leaving it nil is worse: verifyOllamaInference treats a
 	// nil probe seam as "nothing to do" and returns 0 verified, 0 attempted, no
 	// failures, which is indistinguishable from a clean run that found nothing.
-	env.OllamaInference = liveOllamaInferenceProbe
+	env.OllamaInference = inference.LiveOllamaInferenceProbe
 	return env
 }
 

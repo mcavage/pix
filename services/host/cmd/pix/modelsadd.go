@@ -198,35 +198,3 @@ stores a credential ref; it deliberately does not make network calls, so it
 alone leaves a key unwired.
 `
 }
-
-// unwiredProviderKeys is the gap this whole feature closes, as a fact both the
-// status screen and doctor can read: a provider whose key RESOLVES on this host
-// but which has no native binding in config, i.e. a key that is present,
-// correct, and doing nothing.
-//
-// It reports absence of wiring, never a verdict about the key's validity. A
-// binding that exists but failed its probe is NOT reported here — that is a
-// different problem with a different fix, and conflating them would send a user
-// to `models add` for a credential their provider rejected.
-//
-// Silent when a pack owns inference (its bindings are the pack's business) and
-// when the key list is unreadable, since an unreadable list is not evidence of
-// a gap.
-func unwiredProviderKeys(cfg *config.Config, env hostenv.Env) []string {
-	if cfg == nil || cfg.Inference.ExclusiveSource != "" {
-		return nil
-	}
-	names, err := secret.HostModeProviderKeys(env)
-	if err != nil || len(names) == 0 {
-		return nil
-	}
-	bound := boundNativeProviders(cfg)
-	var gaps []string
-	for _, n := range names {
-		if !bound[n] {
-			gaps = append(gaps, n)
-		}
-	}
-	sort.Strings(gaps)
-	return gaps
-}
