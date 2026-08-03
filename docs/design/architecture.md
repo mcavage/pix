@@ -89,38 +89,50 @@ violation.
 ```
 L0  sys  sys/systest  config  routing  rpc  cli  launcher
     hostenv  hostenv/hostenvtest  workspace                          done
-L1  inference  monitor  monitor/tui  okf  plugin  slackoauth
-    service  memory  knowledge  secret  mcp                          partial
-L2  readiness                                                        done
-L3  workflow/man  workflow/backup  workflow/upgrade                  open
-L4  cmd/pix                                                          draining
+L1  inference  mcp  secret  memory  knowledge  service
+    monitor  monitor/tui  okf  plugin  slackoauth                    done
+L2  readiness  readiness/axis                                        done
+L3  workflow/{setup, launch, doctor, pack, slack, gworkspace,
+             onboard, reset, upgrade, backup, man}                    done
+L4  cmd/pix                                                          done
 ```
 
-`cmd/pix` is **40,905 -> 27,836** production lines across 64 files, and the
-layering is enforced from L0 through L4.
+`cmd/pix` is **40,905 -> 3,503** production lines across 21 files: thirteen argv
+seams, the composition root, the verb table, and the two kong verbs whose
+handlers take command structs directly (`agent`, `models`) and are therefore L4
+by definition.
+
+**drainingPackages is empty.** It held one entry, `cmd/pix`, for the whole of
+this work; every package in the module now satisfies the layering with no
+exemption. `TestArchitecture_DrainingListIsShrinking` ratchets it at zero.
 
 Order to drain in is **inbound count ascending**, because inbound is the real
 blocker (an extracted package cannot import `package main`):
 
-| next | domain              | LOC   | needs back | state |
-|------|---------------------|-------|------------|-------|
-| —    | profile + workspace | 292   | 3          | done  |
-| —    | serve → `service`   | 1,961 | 11         | done  |
-| —    | readiness machinery | 786   | 2          | done  |
-| —    | knowledge           | 1,050 | 17         | done  |
-| —    | secret              | 1,770 | 19 → 0     | done  |
-| —    | man/backup/upgrade  | 982   | 1 each     | done  |
-| —    | mcp                 | 1,373 | 23 → 0     | done  |
-| 1    | onboard             | 423   | 6          |       |
-| 2    | pack                | 5,434 | 8          |       |
-| 3    | slack               | 1,893 | 9          |       |
-| 4    | reset               | 977   | 9          |       |
-| 5    | status              | 734   | 21         |       |
-| 6    | gworkspace          | 466   | 23         |       |
-| 7    | task                | 2,557 | 25         |       |
-| 8    | run + sandbox       | 1,248 | 47         |       |
-| —    | setup               | 2,546 | 58         | stays |
-| —    | doctor              | 2,535 | 34         | stays |
+| domain               | LOC   | inbound at plan | at extraction |
+|----------------------|-------|-----------------|---------------|
+| profile + workspace  | 292   | 3               | 0             |
+| serve → `service`    | 1,961 | 11              | 0             |
+| readiness model      | 786   | 17              | 2             |
+| readiness/axis       | 1,426 | —               | 2             |
+| knowledge            | 1,050 | 17              | 0             |
+| secret               | 1,770 | 19              | 0             |
+| man / backup         | 340   | 21              | 1             |
+| upgrade              | 642   | 8               | 2             |
+| mcp                  | 1,373 | 39              | 0             |
+| slack                | 1,798 | **27**          | 2             |
+| pack                 | 5,223 | 36              | 0             |
+| reset                | 1,049 | 9               | 1             |
+| onboard              | 422   | 10              | 1             |
+| gworkspace           | 1,227 | 23              | 1             |
+| doctor + status      | 2,791 | **110**         | 3             |
+| launch (run + task)  | 5,714 | 63              | 3             |
+| setup                | 4,624 | **110**         | 2             |
+
+Every count in the middle column was measured before starting; every count in
+the right column was measured immediately before the `git mv`. **The gap between
+them is the whole method.** Nothing was extracted at its planned cost, because
+the cost was never the code — it was symbols living in the wrong file.
 
 **Re-measure before starting one of these.** Every extraction so far dropped the
 next one's count, usually by more than the extraction itself was worth: nine
@@ -131,9 +143,15 @@ Three counts in that table are noise, in every domain: `main` (the sizer seeing
 `func main`), `version` (any parameter of that name), and `defaultShellEnv`.
 Subtract them before deciding an extraction is expensive.
 
-`doctor` and `setup` are last and may never move: **a high inbound count is
-what a workflow looks like**. A composition root that consumes every capability
-is correct, not tangled. Do not "fix" it.
+**`doctor` and `setup` were both declared immovable in this document, twice,
+and both moved.** "A high inbound count is what a workflow looks like" was the
+wrong inference from a true observation. Their counts were 110 each; the real
+figures were 3 and 2, and the difference was builders and helpers filed under
+whichever flow first displayed them.
+
+The rule that survives is narrower and testable: a symbol belongs to the package
+that owns the CONCEPT, not to the first caller written. If a count looks like a
+composition root, check whether it is one before believing it.
 
 When a domain's inbound count is stubborn, the cause is almost always a
 capability calling a sibling. Invert it into the workflow rather than moving
@@ -195,3 +213,64 @@ workflow resolves and passes in; the gog-wrapper test that used to write real
 op-refs.env files into a temp dir and fake two OS seams is now three struct
 literals. **The layering paid for itself in testability the same day it cost
 something in indirection.**
+
+## The guards all rotted, every one
+
+Six source-scanning guards in this repo hand-listed the files they checked, and
+every single one silently stopped checking something as packages moved:
+
+| guard | what it stopped seeing |
+|---|---|
+| `assertOnlyCalledFrom` | globbed `*.go` in its own directory; lost the mcp.go call site it exists to guard |
+| `TestRendererPurity` | named eleven renderer files; three had moved |
+| `TestPrimaryHelpAndStatusAvoidEmDashes` | read `status.go` by bare name |
+| `TestSetupReport_NeverReadsInventory` | read `setup_models.go` by bare name |
+| `tests/pi-patches.test.mjs` (Node) | read `cmd/pix/hostrun.go` and grepped for a since-renamed symbol |
+| `TestTaskLaunchUsesSharedCreateLifecycle` | read `task.go` by bare name |
+
+Not one of them failed loudly at the moment it went blind. Two failed only
+because a path stopped resolving; the rest were found by running them after a
+move and noticing they still passed when they should not have.
+
+**A guard that hand-lists its inputs has a half-life.** The fix in each case was
+to DERIVE the input set: walk the module, or select by a property that travels
+with the code (imports readiness, mentions `readiness.Group`, is a non-test .go
+file). Deriving it is also how the guard gets stronger — `assertOnlyCalledFrom`
+now covers 27 packages instead of one directory.
+
+Two failure modes to avoid when deriving:
+
+- **Too broad is a different kind of broken.** Scoping the glyph guard to
+  "imports readiness" caught 68 glyphs in setup/reset/secret step-progress
+  output, which it never guarded. In-scope is now "mentions readiness.Group /
+  Report / Snapshot", and the one file that legitimately does both carries a
+  documented, shrink-only exemption.
+- **Assert the derivation found something.** Both walks now fail if they scanned
+  implausibly few files, because a walk that silently matches nothing is exactly
+  the state these guards were already in.
+
+## On driving the compiler in a loop
+
+Most of this work was done by scripts that read a compile error, edit the
+source, and recompile — 900-iteration loops. It is the only way to move 37,000
+lines without hand-editing, and it is genuinely safe here because the compiler
+and 1,500 tests run after every single step.
+
+It is not safe in the way it feels safe. Things it did wrong, all caught:
+
+- Wrote `unexported:` as a literal field name, twice, having parsed the
+  compiler's phrase *"but does have unexported field name"* as a suggestion.
+- Renamed a package-level `version` to `launcher.Version` and hit four
+  **parameters** of the same name, so four functions silently began reading the
+  global instead of their argument. Three tests caught it; the tell was a syntax
+  error in an unrelated signature.
+- Renamed `gog`→`Gog` inside 28 strings and 42 comments, `provenance`→
+  `upgrade.Provenance` inside 23 strings and 57 comments, and turned the doctor's
+  advice `pix config set mcp <server>` into `pix config set group <server>`.
+- Exported test-only fixtures (`BareGog`, `ReceiptClock`, `DefaultCfg`,
+  `Phase2HostPack`) into packages' public APIs, because a bulk pass cannot tell
+  scaffolding from API.
+
+Every one of those was caught by the compiler, a test, or the string-and-comment
+diff — which is the argument for running all three after every step, not at the
+end.

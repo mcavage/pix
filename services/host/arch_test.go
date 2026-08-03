@@ -137,12 +137,17 @@ var l0Order = map[string]int{
 	"cli":                 4,
 }
 
-// drainingPackages may still violate the rules while they are being emptied.
-// This is the ONLY exemption, and it is a closed list on purpose: the moment it
-// becomes a place to add a package, the test stops meaning anything.
-var drainingPackages = map[string]bool{
-	"cmd/pix": true, // 37k lines still being drained; see architecture.md
-}
+// drainingPackages was the ONLY exemption, and it is now EMPTY: cmd/pix was
+// the single entry, and it satisfies the layering without help. Every package
+// in the module obeys the rule.
+//
+// The mechanism stays because it is what made the rule adoptable — the
+// alternative was enforcing nothing until the 40,905-line package was finished,
+// which is how layering rules become aspirational prose. Adding an entry is
+// legitimate for a package genuinely mid-extraction; it is not a place to put a
+// violation you do not want to fix, and TestArchitecture_DrainingListIsShrinking
+// is what keeps that true.
+var drainingPackages = map[string]bool{}
 
 func TestArchitecture_ImportsPointDown(t *testing.T) {
 	pkgs := scanPackages(t)
@@ -202,10 +207,11 @@ func TestArchitecture_ImportsPointDown(t *testing.T) {
 // of "packages allowed to break the rules" only stays honest if adding to it is
 // a deliberate, visible act.
 func TestArchitecture_DrainingListIsShrinking(t *testing.T) {
-	if len(drainingPackages) > 1 {
-		t.Errorf("drainingPackages has %d entries; it may only shrink.\n"+
-			"cmd/pix is the one package still being emptied. Anything else must satisfy the "+
-			"layering on the day it is created.", len(drainingPackages))
+	if len(drainingPackages) > 0 {
+		t.Errorf("drainingPackages has %d entries; it is empty and may only stay that way.\n"+
+			"Every package in this module satisfies the layering. A new package must do so on "+
+			"the day it is created; an entry here needs an argument, in the commit message, for "+
+			"why the extraction cannot land in one step.", len(drainingPackages))
 	}
 }
 
