@@ -133,6 +133,7 @@ The spine you'll use most:
 | `ship` | working tree to open PR: rebase, tests, lint, review, version bump, push |
 | `debug` | root-cause-first: reproduce, form a falsifiable hypothesis, verify it, then fix |
 | `code-review` | review the current diff, then get a cross-vendor second opinion |
+| `architecture-audit` | map and stress-test a whole system or major refactor with the full crew |
 | `tdd` | failing test first, watch it fail, minimal code to pass, refactor |
 | `verify` | prove a claim by running the command before you say "done" |
 | `qa` | drive a running app in the browser, report bugs with screenshots |
@@ -142,7 +143,9 @@ The spine you'll use most:
 
 Example: say "let's fix this bug" and `debug` loads on its own; you don't
 type `/skill:debug`. Say "review my diff before I push" and `code-review`
-loads and hands off to a cross-vendor subagent automatically.
+loads and hands off to a cross-vendor subagent automatically. Use
+`architecture-audit` when the question is whether the system or a major
+refactor is sound, not whether one diff has a defect.
 
 **Limits.** Skills are mechanism, not your personal config. A skill never
 hardcodes your channel names or account IDs; that data lives in memory or a
