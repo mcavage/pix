@@ -640,8 +640,8 @@ func gogSnapEnv(lsOut string, lsTimedOut bool, lsErr error, getFixtures map[stri
 func TestSnapshotGogRegistration_ConfirmedAbsent(t *testing.T) {
 	env := gogSnapEnv("slack\n", false, nil, nil, nil)
 	snap := snapshotGogRegistration(env)
-	if snap.state != gogRegAbsent {
-		t.Fatalf("expected gogRegAbsent, got state=%v argv=%v", snap.state, snap.argv)
+	if snap.State != gogRegAbsent {
+		t.Fatalf("expected gogRegAbsent, got state=%v argv=%v", snap.State, snap.argv)
 	}
 }
 
@@ -650,8 +650,8 @@ func TestSnapshotGogRegistration_ConfirmedPresent_RestorableArgv(t *testing.T) {
 		"sbx mcp get google-workspace": "name: gog\ncommand: /usr/bin/gog --account you@example.com mcp\n",
 	}, nil)
 	snap := snapshotGogRegistration(env)
-	if snap.state != gogRegPresent {
-		t.Fatalf("expected gogRegPresent, got state=%v", snap.state)
+	if snap.State != gogRegPresent {
+		t.Fatalf("expected gogRegPresent, got state=%v", snap.State)
 	}
 	want := []string{"/usr/bin/gog", "--account", "you@example.com", "mcp"}
 	if strings.Join(snap.argv, " ") != strings.Join(want, " ") {
@@ -671,8 +671,8 @@ func TestSnapshotGogRegistration_ListedButUnreadable_Unknown(t *testing.T) {
 		"sbx mcp ls -o json":           "not json at all",
 	}, nil)
 	snap := snapshotGogRegistration(env)
-	if snap.state != gogRegUnknown {
-		t.Fatalf("expected gogRegUnknown for a listed-but-unparseable registration, got state=%v argv=%v", snap.state, snap.argv)
+	if snap.State != gogRegUnknown {
+		t.Fatalf("expected gogRegUnknown for a listed-but-unparseable registration, got state=%v argv=%v", snap.State, snap.argv)
 	}
 }
 
@@ -682,8 +682,8 @@ func TestSnapshotGogRegistration_ListedButUnreadable_Unknown(t *testing.T) {
 func TestSnapshotGogRegistration_ListingProbeFails_Unknown(t *testing.T) {
 	env := gogSnapEnv("", false, fmt.Errorf("sbx: connection refused"), nil, nil)
 	snap := snapshotGogRegistration(env)
-	if snap.state != gogRegUnknown {
-		t.Fatalf("expected gogRegUnknown on a listing probe error, got state=%v", snap.state)
+	if snap.State != gogRegUnknown {
+		t.Fatalf("expected gogRegUnknown on a listing probe error, got state=%v", snap.State)
 	}
 }
 
@@ -692,8 +692,8 @@ func TestSnapshotGogRegistration_ListingProbeFails_Unknown(t *testing.T) {
 func TestSnapshotGogRegistration_ListingProbeTimesOut_Unknown(t *testing.T) {
 	env := gogSnapEnv("google-workspace\n", true, nil, nil, nil) // out would say "present", but timedOut=true wins
 	snap := snapshotGogRegistration(env)
-	if snap.state != gogRegUnknown {
-		t.Fatalf("expected gogRegUnknown on a listing probe timeout, got state=%v", snap.state)
+	if snap.State != gogRegUnknown {
+		t.Fatalf("expected gogRegUnknown on a listing probe timeout, got state=%v", snap.State)
 	}
 }
 
@@ -707,16 +707,16 @@ func TestSnapshotGogRegistration_GetAndJSONTransientErrors_Unknown(t *testing.T)
 		"sbx mcp ls -o json":           true,
 	})
 	snap := snapshotGogRegistration(env)
-	if snap.state != gogRegUnknown {
-		t.Fatalf("expected gogRegUnknown when the detailed readers both transiently error, got state=%v", snap.state)
+	if snap.State != gogRegUnknown {
+		t.Fatalf("expected gogRegUnknown when the detailed readers both transiently error, got state=%v", snap.State)
 	}
 }
 
 func TestSnapshotGogRegistration_SbxAbsent_Unknown(t *testing.T) {
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("not found") }}}
 	snap := snapshotGogRegistration(env)
-	if snap.state != gogRegUnknown {
-		t.Fatalf("expected gogRegUnknown when sbx is absent, got state=%v", snap.state)
+	if snap.State != gogRegUnknown {
+		t.Fatalf("expected gogRegUnknown when sbx is absent, got state=%v", snap.State)
 	}
 }
 

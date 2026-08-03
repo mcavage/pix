@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"pix/host/hostenv"
 	"pix/host/readiness"
+	"pix/host/readiness/axis"
 	"time"
 
 	"pix/host/config"
@@ -82,7 +83,7 @@ func memoryGroup(cfg *config.Config, env hostenv.Env) readiness.Group {
 	// dial: a port held by a foreign process renders "unidentified", not ✓.
 	s := readiness.Build(
 		readiness.Request{Axes: []readiness.Axis{readiness.AxisServiceMemory, readiness.AxisServiceKnowledge}},
-		serviceReadinessAxes(env, config.ServiceEnabled(cfg, "memory"), config.ServiceEnabled(cfg, "knowledge"), env.IdentityProbe),
+		axis.ServiceReadinessAxes(env, config.ServiceEnabled(cfg, "memory"), config.ServiceEnabled(cfg, "knowledge"), env.IdentityProbe),
 	)
 	memory.Checks = append(memory.Checks, s.All()...)
 	memUp := false

@@ -1,4 +1,4 @@
-package main
+package axis
 
 import (
 	"fmt"
@@ -22,24 +22,24 @@ import (
 // installed, configured, or callable. So it may size the local models setup
 // OFFERS, and it may explain why a rung was not offered, but it may never
 // render `ready` (safety invariant 13 — success words are earned by a probe).
-// hardwareCheck is therefore always a note and never green.
+// HardwareCheck is therefore always a note and never green.
 //
 // The reading is deliberately of TOTAL physical memory, not free/available
 // memory: free memory is a snapshot of an unrelated moment, and a machine with
 // a browser open would be offered a smaller model forever.
 
-// hostMemory is the probed physical-memory fact, the fraction of it a model
+// HostMemory is the probed physical-memory fact, the fraction of it a model
 // runtime may plan on, and where the number came from. OK=false means the
 // machine could not be sized: callers degrade to the floor rung, never up.
-type hostMemory struct {
+type HostMemory struct {
 	TotalGB  float64
 	UsableGB float64
 	Source   string // "sysctl hw.memsize" | "/proc/meminfo MemTotal" | ""
 	OK       bool
 }
 
-// bytesPerGB is 2^30 — the unit every number in the ladder is expressed in.
-const bytesPerGB = 1 << 30
+// BytesPerGB is 2^30 — the unit every number in the ladder is expressed in.
+const BytesPerGB = 1 << 30
 
 // darwinFractionTierGB is the total-RAM inflection where macOS's default GPU
 // wired-memory limit (`sysctl iogpu.wired_limit_mb`, 0 = system default) moves
@@ -47,15 +47,15 @@ const bytesPerGB = 1 << 30
 // contracted it, so it is re-grounded like a scorecard number, not derived.
 const darwinFractionTierGB = 36
 
-// usableFraction is the share of TOTAL RAM a model runtime may plan on, by OS
+// UsableFraction is the share of TOTAL RAM a model runtime may plan on, by OS
 // and (on darwin) by machine size. The darwin number is TWO-TIER because the
 // default Metal working-set ceiling is: a flat 0.75 over-promises on exactly
 // the small unified-memory machines that can least afford it, and the runtime
 // then spills to the CPU path or swaps.
 //
-// Deviation from the design's `usableFraction(goos string)` signature: the
+// Deviation from the design's `UsableFraction(goos string)` signature: the
 // two-tier darwin rule cannot be expressed without the machine's size.
-func usableFraction(goos string, totalGB float64) (float64, bool) {
+func UsableFraction(goos string, totalGB float64) (float64, bool) {
 	switch goos {
 	case "darwin":
 		if totalGB > darwinFractionTierGB {
@@ -71,48 +71,48 @@ func usableFraction(goos string, totalGB float64) (float64, bool) {
 	}
 }
 
-// probeHostMemory reads TOTAL physical memory through the hostenv.Env seams, so it
+// ProbeHostMemory reads TOTAL physical memory through the hostenv.Env seams, so it
 // is fakeable in tests and never links cgo. darwin: `sysctl -n hw.memsize`
 // (bytes). linux: /proc/meminfo MemTotal (kB). Any other GOOS: OK=false.
-func probeHostMemory(env hostenv.Env) hostMemory {
-	return probeHostMemoryFor(runtime.GOOS, env)
+func ProbeHostMemory(env hostenv.Env) HostMemory {
+	return ProbeHostMemoryFor(runtime.GOOS, env)
 }
 
-// probeHostMemoryFor is probeHostMemory with the OS injected, which is the only
+// ProbeHostMemoryFor is ProbeHostMemory with the OS injected, which is the only
 // way a hermetic test can exercise both readers on one machine.
-func probeHostMemoryFor(goos string, env hostenv.Env) hostMemory {
+func ProbeHostMemoryFor(goos string, env hostenv.Env) HostMemory {
 	var totalGB float64
 	var source string
 	switch goos {
 	case "darwin":
 		out, ok := probeMemoryCommand(env, "sysctl", "-n", "hw.memsize")
 		if !ok {
-			return hostMemory{Source: "sysctl hw.memsize"}
+			return HostMemory{Source: "sysctl hw.memsize"}
 		}
 		bytes, err := strconv.ParseFloat(strings.TrimSpace(out), 64)
 		if err != nil || bytes <= 0 {
-			return hostMemory{Source: "sysctl hw.memsize"}
+			return HostMemory{Source: "sysctl hw.memsize"}
 		}
-		totalGB, source = bytes/bytesPerGB, "sysctl hw.memsize"
+		totalGB, source = bytes/BytesPerGB, "sysctl hw.memsize"
 	case "linux":
 
 		body, err := env.ReadFile("/proc/meminfo")
 		if err != nil {
-			return hostMemory{Source: "/proc/meminfo MemTotal"}
+			return HostMemory{Source: "/proc/meminfo MemTotal"}
 		}
 		kb, ok := parseMemTotalKB(body)
 		if !ok {
-			return hostMemory{Source: "/proc/meminfo MemTotal"}
+			return HostMemory{Source: "/proc/meminfo MemTotal"}
 		}
-		totalGB, source = kb*1024/bytesPerGB, "/proc/meminfo MemTotal"
+		totalGB, source = kb*1024/BytesPerGB, "/proc/meminfo MemTotal"
 	default:
-		return hostMemory{}
+		return HostMemory{}
 	}
-	fraction, ok := usableFraction(goos, totalGB)
+	fraction, ok := UsableFraction(goos, totalGB)
 	if !ok {
-		return hostMemory{Source: source}
+		return HostMemory{Source: source}
 	}
-	return hostMemory{TotalGB: totalGB, UsableGB: totalGB * fraction, Source: source, OK: true}
+	return HostMemory{TotalGB: totalGB, UsableGB: totalGB * fraction, Source: source, OK: true}
 }
 
 // probeMemoryCommand runs a hardware probe under the bounded seam, so a wedged
@@ -143,7 +143,7 @@ func parseMemTotalKB(body string) (float64, bool) {
 	return 0, false
 }
 
-// localFloorTotalGB is the machine size below which Pix offers NO local model
+// LocalFloorTotalGB is the machine size below which Pix offers NO local model
 // and points at Ollama Cloud instead. It is a product decision, not arithmetic,
 // and it deliberately overrides the fits-in-usable-RAM rule below it.
 //
@@ -154,9 +154,9 @@ func parseMemTotalKB(body string) (float64, bool) {
 // ever has — so the user meets the thrash mid-session, when a probe can no
 // longer save them. Below this floor the honest answer is Ollama Cloud, not a
 // model small enough to fit but too small to code with.
-const localFloorTotalGB = 24
+const LocalFloorTotalGB = 24
 
-// chooseLocalRung picks the largest local rung whose min_ram_gb fits the probed
+// ChooseLocalRung picks the largest local rung whose min_ram_gb fits the probed
 // USABLE budget, on a machine big enough to be offered one at all. It is an
 // OFFER filter, never a verdict and never a download.
 //
@@ -165,9 +165,9 @@ const localFloorTotalGB = 24
 // 24 GB floor that would hand a local model to precisely the machines the floor
 // exists to protect, since an unmeasured machine is more likely small than
 // large. Unknown size means Cloud, and the offer line says why.
-func chooseLocalRung(reg *routing.Registry, mem hostMemory) (routing.Model, bool) {
+func ChooseLocalRung(reg *routing.Registry, mem HostMemory) (routing.Model, bool) {
 	rungs := routing.LocalRungs(reg) // largest first
-	if len(rungs) == 0 || !mem.OK || mem.TotalGB < localFloorTotalGB {
+	if len(rungs) == 0 || !mem.OK || mem.TotalGB < LocalFloorTotalGB {
 		return routing.Model{}, false
 	}
 	for _, m := range rungs {
@@ -178,10 +178,10 @@ func chooseLocalRung(reg *routing.Registry, mem hostMemory) (routing.Model, bool
 	return routing.Model{}, false
 }
 
-// localRungOfferLine is the one honest sentence setup prints about the machine
+// LocalRungOfferLine is the one honest sentence setup prints about the machine
 // it just measured. It never claims a model works — only what is offered, and
 // why nothing is when nothing fits.
-func localRungOfferLine(mem hostMemory, rung routing.Model, ok bool) string {
+func LocalRungOfferLine(mem HostMemory, rung routing.Model, ok bool) string {
 	switch {
 	case !mem.OK:
 		source := mem.Source
@@ -189,22 +189,22 @@ func localRungOfferLine(mem hostMemory, rung routing.Model, ok bool) string {
 			source = "unsupported platform"
 		}
 		return fmt.Sprintf("  could not size this machine (%s failed) — not offering a local model; use Ollama Cloud or an API key", source)
-	case mem.TotalGB < localFloorTotalGB:
+	case mem.TotalGB < LocalFloorTotalGB:
 		return fmt.Sprintf("  %.0f GB RAM — below the %d GB Pix needs before a local model is worth running alongside your editor and browser; use Ollama Cloud or an API key",
-			mem.TotalGB, localFloorTotalGB)
+			mem.TotalGB, LocalFloorTotalGB)
 	case !ok:
 		return fmt.Sprintf("  %.0f GB RAM (usable ~%.0f GB) does not fit the smallest local model — use Ollama Cloud or an API key instead",
 			mem.TotalGB, mem.UsableGB)
 	default:
 		return fmt.Sprintf("  %.0f GB RAM (usable ~%.0f GB, %s) — offering %s (needs ~%.0f GB usable, %.1f GB download)",
-			mem.TotalGB, mem.UsableGB, mem.Source, ollamaTagFor(rung.ID), rung.MinRAMGB, rung.DownloadGB)
+			mem.TotalGB, mem.UsableGB, mem.Source, OllamaTagFor(rung.ID), rung.MinRAMGB, rung.DownloadGB)
 	}
 }
 
-// hardwareCheck renders the doctor row. It is ALWAYS a note and NEVER ready:
+// HardwareCheck renders the doctor row. It is ALWAYS a note and NEVER ready:
 // see this file's header. There is nothing to fix, so it is never a todo
 // either — RAM is not a configuration mistake.
-func hardwareCheck(mem hostMemory) []readiness.Check {
+func HardwareCheck(mem HostMemory) []readiness.Check {
 	c := readiness.Check{Label: "hardware", Note: true, Verdict: readiness.VerdictUnverifiable}
 	if !mem.OK {
 		source := mem.Source
@@ -221,15 +221,15 @@ func hardwareCheck(mem hostMemory) []readiness.Check {
 	return []readiness.Check{c}
 }
 
-// minRAMFor recomputes a rung's gate from its own declared terms. Nothing reads
+// MinRAMFor recomputes a rung's gate from its own declared terms. Nothing reads
 // it at runtime — it exists so a test can hold the catalog to the arithmetic
 // the design fixed (weights*1.15 + declared context * KV per token + 1).
-func minRAMFor(m routing.Model) float64 {
+func MinRAMFor(m routing.Model) float64 {
 	return math.Ceil(m.DownloadGB*1.15 + float64(m.ContextWindow)*m.KVGBPerTok + 1.0)
 }
 
-// ollamaTagFor strips the catalog's provider prefix, giving the tag `ollama
+// OllamaTagFor strips the catalog's provider prefix, giving the tag `ollama
 // pull` and `ollama list` actually speak.
-func ollamaTagFor(catalogID string) string {
+func OllamaTagFor(catalogID string) string {
 	return strings.TrimPrefix(catalogID, "ollama/")
 }

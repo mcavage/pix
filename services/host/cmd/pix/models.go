@@ -26,61 +26,9 @@ import (
 	"pix/host/config"
 	"pix/host/inference"
 	"pix/host/launcher"
-	"pix/host/routing"
+	"pix/host/readiness/axis"
 	"pix/host/sys"
 )
-
-// resolveSessionModel turns a --intent into a concrete model id for the
-// interactive session, using the same router (registry + scorecard + policy)
-// the subagent crew uses. An unknown intent name is treated as an ad-hoc
-// accuracy-objective intent on that task type, matching `route pick`.
-func resolveSessionModel(intent string) (string, error) {
-	reg, err := routing.LoadRegistry()
-	if err != nil {
-		return "", err
-	}
-	sc, err := routing.LoadScorecard()
-	if err != nil {
-		return "", err
-	}
-	pol, err := routing.LoadPolicy()
-	if err != nil {
-		return "", err
-	}
-	it, ok := pol.Intent(intent)
-	if !ok {
-		// An unknown intent must NOT silently fabricate a task type and fall back to
-		// the policy default (that hid a bad --intent/run_intent behind a Sonnet
-		// launch). Error instead: run.go exits on an explicit --intent typo and
-		// degrades to pi's default on a bad config-sourced run_intent; doctor renders
-		// "does not resolve".
-		return "", fmt.Errorf("unknown intent %q (see `pix models show` for the intent list)", intent)
-	}
-	// Once backend bindings exist they are the availability authority. The
-	// shipped catalog alone never proves that a model is callable.
-	var binding *routing.Binding
-	if cfg, cerr := config.Load(); cerr == nil && len(cfg.Inference.Models) > 0 {
-		bindings := inference.Bindings(cfg)
-		reg = routing.RegistryForBindings(reg, bindings, "")
-		d := routing.Resolve(reg, sc, pol, it)
-		for _, b := range bindings {
-			if b.Available && b.Model == d.Model {
-				bb := b
-				binding = &bb
-				break
-			}
-		}
-		if binding == nil {
-			return "", fmt.Errorf("intent %q has no callable model binding", intent)
-		}
-		return inference.RuntimeID(*binding), nil
-	}
-	d := routing.Resolve(reg, sc, pol, it)
-	if d.Model == "" {
-		return "", fmt.Errorf("router returned no model")
-	}
-	return d.Model, nil
-}
 
 // execHost runs `pix-host <verb> <args...>` with inherited stdio and
 
@@ -213,7 +161,7 @@ func modelsRosterLine(cfg *config.Config) string {
 }
 
 // modelsSessionLine renders the top-level session's resolved model, matching
-// runIntentKeyCheck's own read of cfg.RunIntent (doctor_providers.go) so the
+// axis.RunIntentKeyCheck's own read of cfg.RunIntent (doctor_providers.go) so the
 // two never disagree about what the session would launch.
 func modelsSessionLine(cfg *config.Config) string {
 	intent := config.DefaultRunIntent
@@ -223,7 +171,7 @@ func modelsSessionLine(cfg *config.Config) string {
 	if strings.EqualFold(intent, "none") || strings.EqualFold(intent, "off") {
 		return fmt.Sprintf("run_intent=%s -> pi's own default model", intent)
 	}
-	model, err := resolveSessionModel(intent)
+	model, err := axis.ResolveSessionModel(intent)
 	if err != nil || model == "" {
 		return fmt.Sprintf("run_intent=%s -> does not resolve (see `pix doctor`)", intent)
 	}

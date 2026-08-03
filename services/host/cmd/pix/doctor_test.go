@@ -9,6 +9,7 @@ import (
 	"pix/host/hostenv"
 	"pix/host/mcp"
 	"pix/host/readiness"
+	"pix/host/readiness/axis"
 	"pix/host/secret"
 	"strings"
 	"testing"
@@ -37,7 +38,7 @@ type fakeEnv struct {
 	// Nil by default: a fixture that dials a service port "up" without also
 	// faking its identity gets an honest unverifiable, never a real network
 	// call and never a false ready. See identityFake / memGreen.
-	identityProbe identityProber
+	identityProbe axis.IdentityProber
 }
 
 func (f fakeEnv) env() hostenv.Env {
@@ -74,16 +75,16 @@ func (f fakeEnv) env() hostenv.Env {
 	}, IdentityProbe: f.identityProbe}
 }
 
-// identityFake builds an identityProber from a fixed port->result map: any
+// identityFake builds an axis.IdentityProber from a fixed port->result map: any
 // port not in the map answers with an error, matching a real daemon that
 // simply isn't there. Ready results default Version to "" so fixtures never
 // have to track the launcher's build-time version string.
-func identityFake(results map[int]serviceIdentityResult) identityProber {
-	return func(port int) (serviceIdentityResult, error) {
+func identityFake(results map[int]axis.ServiceIdentityResult) axis.IdentityProber {
+	return func(port int) (axis.ServiceIdentityResult, error) {
 		if r, ok := results[port]; ok {
 			return r, nil
 		}
-		return serviceIdentityResult{}, fmt.Errorf("no fake identity for port %d", port)
+		return axis.ServiceIdentityResult{}, fmt.Errorf("no fake identity for port %d", port)
 	}
 }
 
@@ -92,7 +93,7 @@ func identityFake(results map[int]serviceIdentityResult) identityProber {
 // fixture that merely opens the port renders memory unverifiable, never
 // ready (readiness_service.go never derives ready from a dial alone).
 func memGreen(f fakeEnv) fakeEnv {
-	f.identityProbe = identityFake(map[int]serviceIdentityResult{
+	f.identityProbe = identityFake(map[int]axis.ServiceIdentityResult{
 		11435: {Name: rpc.MemoryName, Ready: true},
 	})
 	return f
@@ -713,8 +714,8 @@ func TestRegisteredGogCommand_CurrentSbxPlainTable(t *testing.T) {
 		t.Fatalf("registered argv = %q, want %q", got, regCmd)
 	}
 	snap := snapshotGogRegistration(env)
-	if snap.state != gogRegPresent {
-		t.Fatalf("gog setup snapshot state = %v, want present", snap.state)
+	if snap.State != gogRegPresent {
+		t.Fatalf("gog setup snapshot state = %v, want present", snap.State)
 	}
 	if got := strings.Join(snap.argv, " "); got != regCmd {
 		t.Fatalf("snapshot argv = %q, want %q", got, regCmd)
@@ -1101,10 +1102,10 @@ func TestGrepWord(t *testing.T) {
 // TestModelPulled handles :tag suffixes.
 func TestModelPulled(t *testing.T) {
 	list := "NAME              ID\ngemma4:latest     abc\n"
-	if !modelPulled(list, "gemma4") {
+	if !axis.ModelPulled(list, "gemma4") {
 		t.Error("gemma4 should match gemma4:latest")
 	}
-	if modelPulled(list, "gemma") {
+	if axis.ModelPulled(list, "gemma") {
 		t.Error("gemma should not match gemma4")
 	}
 }

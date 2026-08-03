@@ -1,4 +1,4 @@
-package main
+package axis
 
 import (
 	"fmt"
@@ -14,7 +14,7 @@ import (
 // readiness_ollama.go owns the TWO Ollama facts, kept deliberately apart:
 //
 //   - ollama.host      — the Ollama API answers at the EFFECTIVE endpoint on
-//     this machine. One resolver (effectiveOllamaEndpoint) decides what that
+//     this machine. One resolver (EffectiveOllamaEndpoint) decides what that
 //     endpoint is, and the resolved endpoint is echoed in every evidence
 //     string, so a non-default OLLAMA_HOST can never produce a verdict about
 //     an endpoint nobody uses.
@@ -65,12 +65,12 @@ func (e ollamaEndpoint) loopbackOnly() bool {
 	return h == "127.0.0.1" || h == "localhost" || h == "::1" || h == "[::1]"
 }
 
-// effectiveOllamaEndpoint is THE resolver. Every axis builder and every
+// EffectiveOllamaEndpoint is THE resolver. Every axis builder and every
 // renderer that names an Ollama endpoint goes through it, so doctor, status,
 // setup and run can never talk about different endpoints. It mirrors the
 // daemon-side resolution in services/host/memembed.go: OLLAMA_HOST wins, with
 // a bare host, host:port, or full URL all accepted; otherwise the default.
-func effectiveOllamaEndpoint(cfg *config.Config, env hostenv.Env) ollamaEndpoint {
+func EffectiveOllamaEndpoint(cfg *config.Config, env hostenv.Env) ollamaEndpoint {
 	raw := ""
 	raw = strings.TrimSpace(env.Getenv("OLLAMA_HOST"))
 	if raw == "" {
@@ -107,16 +107,16 @@ func splitHostPort(s string) (string, int, bool) {
 	return s[:i], p, true
 }
 
-// ollamaHostAxis builds the `ollama.host` checks from ONE probe: is the binary
+// OllamaHostAxis builds the `ollama.host` checks from ONE probe: is the binary
 // on PATH, and does the API answer at the resolved endpoint. Ollama is always
 // optional here (a missing local model degrades capture/recall; it never
 // blocks) — `--pull-models` promotes the model axes through request.Requested,
 // not by hard-coding a requirement.
-func ollamaHostAxis(cfg *config.Config, env hostenv.Env, ep ollamaEndpoint, p ollamaProbe) []readiness.Check {
-	daemonUp := p.daemonUp || p.listOK
+func OllamaHostAxis(cfg *config.Config, env hostenv.Env, ep ollamaEndpoint, p OllamaProbe) []readiness.Check {
+	daemonUp := p.DaemonUp || p.ListOK
 	memoryEnabled := config.ServiceEnabled(cfg, "memory")
 	switch {
-	case p.installed && daemonUp:
+	case p.Installed && daemonUp:
 		return []readiness.Check{{
 			Label:    "ollama",
 			Verdict:  readiness.VerdictReady,
@@ -124,7 +124,7 @@ func ollamaHostAxis(cfg *config.Config, env hostenv.Env, ep ollamaEndpoint, p ol
 			Evidence: "ollama on PATH; the API answered at " + ep.URL,
 			Endpoint: ep.URL,
 		}}
-	case p.installed:
+	case p.Installed:
 		return []readiness.Check{{
 			Label:    "ollama",
 			Verdict:  readiness.VerdictTodo,
@@ -154,12 +154,12 @@ func ollamaHostAxis(cfg *config.Config, env hostenv.Env, ep ollamaEndpoint, p ol
 	}
 }
 
-// ollamaSandboxAxis answers "can a sandbox reach the host Ollama?" WITHOUT
+// OllamaSandboxAxis answers "can a sandbox reach the host Ollama?" WITHOUT
 // creating one. With no sandbox present the honest answer is `unverifiable` +
 // optional, naming the exact condition that would make it verifiable — run's
 // post-create probe. Bind-address inference only ever adds remediation
 // context; it never upgrades anything to ready.
-func ollamaSandboxAxis(env hostenv.Env, ep ollamaEndpoint, p ollamaProbe, sandbox string, reachable *bool) []readiness.Check {
+func OllamaSandboxAxis(env hostenv.Env, ep ollamaEndpoint, p OllamaProbe, sandbox string, reachable *bool) []readiness.Check {
 	c := readiness.Check{
 		Label:       "ollama in sandbox",
 		Requirement: readiness.RequirementOptional,
@@ -197,11 +197,11 @@ func ollamaSandboxAxis(env hostenv.Env, ep ollamaEndpoint, p ollamaProbe, sandbo
 	return []readiness.Check{c}
 }
 
-// ollamaModelAxes builds one axis per model ROLE — watcher, embed AND bridge.
+// OllamaModelAxes builds one axis per model ROLE — watcher, embed AND bridge.
 // The bridge model (the local model the sandbox bridge exposes, and the
 // router's local option) was previously never checked anywhere, so a
 // configured-but-unpulled bridge model was invisible until a session failed.
-func ollamaModelAxes(cfg *config.Config, ep ollamaEndpoint, probe func() ollamaProbe) map[readiness.Axis]readiness.AxisBuilder {
+func OllamaModelAxes(cfg *config.Config, ep ollamaEndpoint, probe func() OllamaProbe) map[readiness.Axis]readiness.AxisBuilder {
 	roles := []struct {
 		axis    readiness.Axis
 		role    string
@@ -216,7 +216,7 @@ func ollamaModelAxes(cfg *config.Config, ep ollamaEndpoint, probe func() ollamaP
 	for _, r := range roles {
 		r := r
 		out[r.axis] = func() []readiness.Check {
-			m := modelReadiness(r.role, r.model, r.purpose, probe(), readiness.RequirementOptional)
+			m := EvalModel(r.role, r.model, r.purpose, probe(), readiness.RequirementOptional)
 			c := modelCheck(m)
 			c.Endpoint = ep.URL
 			if c.Evidence != "" {
@@ -226,4 +226,28 @@ func ollamaModelAxes(cfg *config.Config, ep ollamaEndpoint, probe func() ollamaP
 		}
 	}
 	return out
+}
+
+// IsValidOllamaTag rejects malformed, empty, leading-dash, path-separator,
+// or shell-metacharacter model tags. Since exec.Command already prevents shell
+// injection, this guards against argv option confusion (`-f`, `--help`) and
+// nonsensical values that could confuse parsers or probes. Valid:
+// `namespace/model:tag`, letters, numbers, dots, dashes (internal), underscores.
+func IsValidOllamaTag(tag string) bool {
+	if tag == "" || tag[0] == '-' {
+		return false
+	}
+	for _, r := range tag {
+		if r <= 32 || r >= 127 {
+			return false // whitespace and control chars
+		}
+		if r == '/' || r == ':' || r == '.' || r == '-' || r == '_' {
+			continue
+		}
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
 }

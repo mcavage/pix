@@ -4,6 +4,7 @@ import (
 	"errors"
 	"pix/host/hostenv"
 	"pix/host/readiness"
+	"pix/host/readiness/axis"
 	"strings"
 	"testing"
 
@@ -53,7 +54,7 @@ func TestEffectiveOllamaEndpoint(t *testing.T) {
 		{"https://ollama.internal:443", "https://ollama.internal:443", 443, "OLLAMA_HOST"},
 	}
 	for _, tc := range cases {
-		ep := effectiveOllamaEndpoint(cfg, hostenv.Env{System: &systest.Fake{GetenvFn: func(string) string { return tc.env }}})
+		ep := axis.EffectiveOllamaEndpoint(cfg, hostenv.Env{System: &systest.Fake{GetenvFn: func(string) string { return tc.env }}})
 		if ep.URL != tc.wantURL || ep.Port != tc.wantPort || ep.Source != tc.wantSrc {
 			t.Errorf("OLLAMA_HOST=%q -> %+v, want url=%s port=%d source=%s", tc.env, ep, tc.wantURL, tc.wantPort, tc.wantSrc)
 		}

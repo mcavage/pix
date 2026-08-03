@@ -15,29 +15,30 @@ import (
 	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/readiness"
+	"pix/host/readiness/axis"
 	"pix/host/sys/systest"
 )
 
 func TestModelReadiness_Verdicts(t *testing.T) {
-	pulled := ollamaProbe{installed: true, daemonUp: true, listOK: true, listOut: "gemma4:latest\n"}
+	pulled := axis.OllamaProbe{Installed: true, DaemonUp: true, ListOK: true, ListOut: "gemma4:latest\n"}
 	cases := []struct {
 		name      string
-		p         ollamaProbe
+		p         axis.OllamaProbe
 		model     string
 		want      readiness.Verdict
-		installed bool
+		Installed bool
 	}{
 		{"pulled -> ready", pulled, "gemma4", readiness.VerdictReady, true},
 		{"clean list without tag -> verified todo", pulled, "nomic-embed-text", readiness.VerdictTodo, true},
-		{"list failed -> unverifiable", ollamaProbe{installed: true, daemonUp: false}, "gemma4", readiness.VerdictUnverifiable, true},
-		{"not installed -> not configured", ollamaProbe{}, "gemma4", readiness.Verdict(""), false},
+		{"list failed -> unverifiable", axis.OllamaProbe{Installed: true, DaemonUp: false}, "gemma4", readiness.VerdictUnverifiable, true},
+		{"not installed -> not configured", axis.OllamaProbe{}, "gemma4", readiness.Verdict(""), false},
 	}
 	for _, tc := range cases {
-		m := modelReadiness("watcher", tc.model, "fact capture", tc.p, readiness.RequirementOptional)
-		if m.Installed != tc.installed {
-			t.Errorf("%s: Installed = %v, want %v", tc.name, m.Installed, tc.installed)
+		m := axis.EvalModel("watcher", tc.model, "fact capture", tc.p, readiness.RequirementOptional)
+		if m.Installed != tc.Installed {
+			t.Errorf("%s: Installed = %v, want %v", tc.name, m.Installed, tc.Installed)
 		}
-		if tc.installed && m.Verdict != tc.want {
+		if tc.Installed && m.Verdict != tc.want {
 			t.Errorf("%s: verdict = %q, want %q", tc.name, m.Verdict, tc.want)
 		}
 		if m.PullCmd != "ollama pull "+tc.model {
@@ -51,15 +52,15 @@ func TestModelReadiness_Verdicts(t *testing.T) {
 // pulled, so unverifiable tags must never enter the missing set — they land
 // in the DISJOINT unverifiable set instead.
 func TestComputeMissingModels_UnverifiableIsNeverMissing(t *testing.T) {
-	down := ollamaProbe{installed: true, daemonUp: false} // list failed
-	rs := []ModelReadiness{
-		modelReadiness("watcher", "gemma4", "fact capture", down, readiness.RequirementOptional),
-		modelReadiness("embed", "nomic-embed-text", "semantic recall", down, readiness.RequirementOptional),
+	down := axis.OllamaProbe{Installed: true, DaemonUp: false} // list failed
+	rs := []axis.ModelReadiness{
+		axis.EvalModel("watcher", "gemma4", "fact capture", down, readiness.RequirementOptional),
+		axis.EvalModel("embed", "nomic-embed-text", "semantic recall", down, readiness.RequirementOptional),
 	}
-	if missing := computeMissingModels(rs); len(missing) != 0 {
+	if missing := axis.ComputeMissingModels(rs); len(missing) != 0 {
 		t.Fatalf("unverifiable tags must NEVER be reported as missing, got %+v", missing)
 	}
-	unv := computeUnverifiableModels(rs)
+	unv := axis.ComputeUnverifiableModels(rs)
 	if len(unv) != 2 {
 		t.Fatalf("expected both tags in the unverifiable set, got %+v", unv)
 	}
@@ -69,20 +70,20 @@ func TestComputeMissingModels_UnverifiableIsNeverMissing(t *testing.T) {
 // list` without the tags IS a confirmed gap; a tag shared by two roles is
 // named once with both roles.
 func TestComputeMissingModels_ConfirmedMissingAndRoleDedup(t *testing.T) {
-	p := ollamaProbe{installed: true, daemonUp: true, listOK: true, listOut: "other:latest\n"}
-	rs := []ModelReadiness{
-		modelReadiness("watcher", "qwen3.5:9b", "fact capture", p, readiness.RequirementOptional),
-		modelReadiness("bridge", "qwen3.5:9b", "local chat", p, readiness.RequirementOptional),
-		modelReadiness("embed", "nomic-embed-text", "semantic recall", p, readiness.RequirementOptional),
+	p := axis.OllamaProbe{Installed: true, DaemonUp: true, ListOK: true, ListOut: "other:latest\n"}
+	rs := []axis.ModelReadiness{
+		axis.EvalModel("watcher", "qwen3.5:9b", "fact capture", p, readiness.RequirementOptional),
+		axis.EvalModel("bridge", "qwen3.5:9b", "local chat", p, readiness.RequirementOptional),
+		axis.EvalModel("embed", "nomic-embed-text", "semantic recall", p, readiness.RequirementOptional),
 	}
-	missing := computeMissingModels(rs)
+	missing := axis.ComputeMissingModels(rs)
 	if len(missing) != 2 {
 		t.Fatalf("expected 2 distinct missing tags, got %+v", missing)
 	}
-	if missing[0].tag != "qwen3.5:9b" || strings.Join(missing[0].roles, ",") != "watcher,bridge" {
+	if missing[0].Tag != "qwen3.5:9b" || strings.Join(missing[0].Roles, ",") != "watcher,bridge" {
 		t.Errorf("shared tag must be named once with every dependent role, got %+v", missing[0])
 	}
-	if len(computeUnverifiableModels(rs)) != 0 {
+	if len(axis.ComputeUnverifiableModels(rs)) != 0 {
 		t.Errorf("confirmed-missing tags must not also be unverifiable")
 	}
 }
@@ -91,13 +92,13 @@ func TestComputeMissingModels_ConfirmedMissingAndRoleDedup(t *testing.T) {
 // absent nothing is claimed about any tag — not-configured entries stay out
 // of BOTH sets.
 func TestComputeModels_NotInstalledIsNeitherMissingNorUnverifiable(t *testing.T) {
-	none := ollamaProbe{}
-	rs := []ModelReadiness{
-		modelReadiness("watcher", "gemma4", "fact capture", none, readiness.RequirementOptional),
+	none := axis.OllamaProbe{}
+	rs := []axis.ModelReadiness{
+		axis.EvalModel("watcher", "gemma4", "fact capture", none, readiness.RequirementOptional),
 	}
-	if len(computeMissingModels(rs)) != 0 || len(computeUnverifiableModels(rs)) != 0 {
+	if len(axis.ComputeMissingModels(rs)) != 0 || len(axis.ComputeUnverifiableModels(rs)) != 0 {
 		t.Fatalf("not-installed must be excluded from both sets, got missing=%v unv=%v",
-			computeMissingModels(rs), computeUnverifiableModels(rs))
+			axis.ComputeMissingModels(rs), axis.ComputeUnverifiableModels(rs))
 	}
 }
 
@@ -117,8 +118,8 @@ func TestProbeOllama_Bounded(t *testing.T) {
 		t.Fatalf("ollama list must go through the bounded probe, not raw run")
 		return "", nil
 	}}}
-	p := probeOllamaAt(env, effectiveOllamaEndpoint(&config.Config{}, env))
-	if !p.installed || p.listOK {
+	p := axis.ProbeOllamaAt(env, axis.EffectiveOllamaEndpoint(&config.Config{}, env))
+	if !p.Installed || p.ListOK {
 		t.Fatalf("expected installed with an unverified list, got %+v", p)
 	}
 	if len(probed) != 1 || probed[0] != "ollama list" {
@@ -130,10 +131,10 @@ func TestProbeOllama_Bounded(t *testing.T) {
 // that answered but whose `ollama list` call itself failed — the receipt
 // diagnostic setup (S08) will print for unverifiable tags.
 func TestOllamaVerifyFailureReason(t *testing.T) {
-	if got := ollamaVerifyFailureReason(ollamaProbe{installed: true, daemonUp: false}); !strings.Contains(got, "not answering at http://127.0.0.1:11434") {
+	if got := axis.OllamaVerifyFailureReason(axis.OllamaProbe{Installed: true, DaemonUp: false}); !strings.Contains(got, "not answering at http://127.0.0.1:11434") {
 		t.Errorf("down daemon reason wrong: %q", got)
 	}
-	if got := ollamaVerifyFailureReason(ollamaProbe{installed: true, daemonUp: true}); !strings.Contains(got, "ollama list") {
+	if got := axis.OllamaVerifyFailureReason(axis.OllamaProbe{Installed: true, DaemonUp: true}); !strings.Contains(got, "ollama list") {
 		t.Errorf("list-failure reason wrong: %q", got)
 	}
 }

@@ -20,7 +20,7 @@ func TestSandboxPackMarker_NotOverwrittenOnInconclusiveProbe(t *testing.T) {
 		t.Fatal("willCreate(sbxUnknown) must fail closed")
 	}
 	cases := []struct {
-		state   sbxState
+		State   sbxState
 		replace bool
 		want    bool
 	}{
@@ -40,8 +40,8 @@ func TestSandboxPackMarker_NotOverwrittenOnInconclusiveProbe(t *testing.T) {
 	oldPack := pack.CanonicalizePackRoot(filepath.Join(t.TempDir(), "old-pack"))
 	newPack := filepath.Join(t.TempDir(), "new-pack")
 	for _, tc := range cases {
-		if got := definitelyCreating(tc.state, tc.replace); got != tc.want {
-			t.Errorf("definitelyCreating(%v, %v) = %v, want %v", tc.state, tc.replace, got, tc.want)
+		if got := definitelyCreating(tc.State, tc.replace); got != tc.want {
+			t.Errorf("definitelyCreating(%v, %v) = %v, want %v", tc.State, tc.replace, got, tc.want)
 		}
 		// Behavioral: run.go's gate over an existing marker.
 		ws := t.TempDir()
@@ -51,15 +51,15 @@ func TestSandboxPackMarker_NotOverwrittenOnInconclusiveProbe(t *testing.T) {
 		if err := os.WriteFile(sandboxPackMarkerPath(ws), []byte(oldPack+"\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if definitelyCreating(tc.state, tc.replace) { // mirrors runRun's marker gate
+		if definitelyCreating(tc.State, tc.replace) { // mirrors runRun's marker gate
 			writeSandboxPackMarker(ws, newPack)
 		}
 		got := readSandboxPackMarker(ws)
 		if tc.want && got != pack.CanonicalizePackRoot(newPack) {
-			t.Errorf("state=%v replace=%v: a definite create must write the marker, got %q", tc.state, tc.replace, got)
+			t.Errorf("state=%v replace=%v: a definite create must write the marker, got %q", tc.State, tc.replace, got)
 		}
 		if !tc.want && got != oldPack {
-			t.Errorf("state=%v replace=%v: a non-create must leave the marker untouched, got %q", tc.state, tc.replace, got)
+			t.Errorf("state=%v replace=%v: a non-create must leave the marker untouched, got %q", tc.State, tc.replace, got)
 		}
 	}
 }

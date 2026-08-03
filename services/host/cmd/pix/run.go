@@ -19,6 +19,7 @@ import (
 	"pix/host/knowledge"
 	"pix/host/launcher"
 	"pix/host/mcp"
+	"pix/host/readiness/axis"
 	"pix/host/secret"
 	"pix/host/service"
 	"pix/host/sys"
@@ -88,7 +89,7 @@ func runRun(argv []string) {
 	// already pinned one, which wins). This makes the INTERACTIVE session use the
 	// same cost/latency/accuracy routing the subagent crew uses.
 	if o.Intent != "" && o.Model == "" {
-		m, rerr := resolveSessionModel(o.Intent)
+		m, rerr := axis.ResolveSessionModel(o.Intent)
 		if rerr != nil {
 			fmt.Fprintf(os.Stderr, "pix run: --intent %q: %v\n", o.Intent, rerr)
 			exit(2)
@@ -109,12 +110,12 @@ func runRun(argv []string) {
 	// The probe result is KEPT (keyEvidence) and handed to the readiness
 	// snapshot further down, so rendering readiness costs `run` no second
 	// `sbx secret ls`.
-	var keyEvidence sbxKeyEvidence
+	var keyEvidence axis.SbxKeyEvidence
 	if _, err := defaultShellEnv().LookPath("sbx"); err == nil && !configuredKeylessInference() {
 		env := defaultShellEnv()
 		bootstrapProviderKeys(env, os.Stdin, os.Stderr, cli.IsTTY(os.Stdin))
-		keyEvidence = probeSbxKeyEvidence(env)
-		if keyEvidence.ok() && !anyModelKeyInOutput(keyEvidence.out) {
+		keyEvidence = axis.ProbeSbxKeyEvidence(env)
+		if keyEvidence.Ok() && !axis.AnyModelKeyInOutput(keyEvidence.Out) {
 			fmt.Fprint(os.Stderr, secret.ModelKeyMissingMessage(env))
 			exit(1)
 		}
@@ -337,13 +338,13 @@ func runRun(argv []string) {
 	// Readiness, rendered from the SHARED lazy snapshot (readiness_launch.go)
 	// and reusing the key evidence the launch gate above already paid for. Two
 	// rules, both deliberate:
-	//   - AT MOST launchWarningLimit rows, then a single count pointing at
+	//   - AT MOST axis.LaunchWarningLimit rows, then a single count pointing at
 	//     doctor. `run` is the daily command; a wall of readiness text here is
 	//     how a user learns to skip readiness output entirely.
 	//   - It NEVER blocks. The only launch-stopping condition is the missing
 	//     provider key handled above, because that is the only gap that makes
 	//     the session useless rather than degraded.
-	renderReadinessWarnings(os.Stderr, fastReadinessSnapshot(cfg, defaultShellEnv(), keyEvidence), launchWarningLimit)
+	axis.RenderReadinessWarnings(os.Stderr, axis.FastReadinessSnapshot(cfg, defaultShellEnv(), keyEvidence), axis.LaunchWarningLimit)
 
 	// Knowledge scope: resolve this workspace's bundle set (global config bundles
 	// + the project's .pix/knowledge pointer), lazily reindex the project
@@ -477,7 +478,7 @@ func applyConfiguredSessionModel(o *runOpts, cfg *config.Config) (bool, error) {
 	if strings.EqualFold(intent, "none") || strings.EqualFold(intent, "off") {
 		return true, nil
 	}
-	model, err := resolveSessionModel(intent)
+	model, err := axis.ResolveSessionModel(intent)
 	if err != nil {
 		return true, err
 	}

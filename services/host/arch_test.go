@@ -76,6 +76,13 @@ var pkgLayer = map[string]int{
 
 	// L2 — the shared model of "is this working".
 	"readiness": layerReadiness,
+	// readiness/axis holds the per-domain BUILDERS: given probes, produce the
+	// Checks for one axis (models, services, hardware, ollama). They are L2 with
+	// the model they build, and they were the entanglement architecture.md names
+	// -- the model was always independent, the builders were not. Extracting the
+	// model first (readiness) and the builders second (here) is why both came out
+	// at 2 inbound instead of 17.
+	"readiness/axis": layerReadiness,
 
 	// L3 — workflow. A user-facing verb's logic. Allowed to compose L1+L2;
 	// may not contain a capability.

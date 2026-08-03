@@ -7,8 +7,8 @@ package main
 
 import (
 	"io"
-	"pix/host/cli"
 	"pix/host/hostenv"
+	"pix/host/readiness/axis"
 	"pix/host/secret"
 )
 
@@ -27,21 +27,7 @@ func sbxModelKeyState(env hostenv.Env) (present, probeOK bool) {
 	if err != nil || timedOut {
 		return false, false
 	}
-	return anyModelKeyInOutput(out), true
-}
-
-// anyModelKeyInOutput reports whether out (the text of `sbx secret ls`) shows
-// any of the model provider keys set. Pure — the SINGLE definition of "what
-// counts as a present model key", shared by sbxModelKeyState (which owns the
-// live sbx probe) and doctor's providers group (which reuses an
-// already-fetched probe result) so the two can never diverge.
-func anyModelKeyInOutput(out string) bool {
-	for _, k := range secret.ModelProviders {
-		if cli.GrepWord(out, k) {
-			return true
-		}
-	}
-	return false
+	return axis.AnyModelKeyInOutput(out), true
 }
 
 // anyModelKeyPresent reports whether sbx has at least one model provider key.

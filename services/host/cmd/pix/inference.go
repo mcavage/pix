@@ -17,6 +17,7 @@ import (
 	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/inference"
+	"pix/host/readiness/axis"
 	"pix/host/routing"
 	"pix/host/secret"
 )
@@ -210,12 +211,12 @@ type ollamaSelection struct{ Local, Cloud bool }
 // binding it created is a CANDIDATE (Verified: false) until a probe says
 // otherwise.
 type ollamaPlan struct {
-	Endpoint   string     // resolved via effectiveOllamaEndpoint
-	LocalBound []string   // catalog ids bound as candidates from the listing
-	CloudBound []string   // ditto, cloud
-	WantPull   string     // the RAM-appropriate rung handed to setupLocalModels
-	SkippedRAM []string   // catalog local ids this machine cannot run
-	Memory     hostMemory // the reading that sized the offer
+	Endpoint   string          // resolved via axis.EffectiveOllamaEndpoint
+	LocalBound []string        // catalog ids bound as candidates from the listing
+	CloudBound []string        // ditto, cloud
+	WantPull   string          // the RAM-appropriate rung handed to setupLocalModels
+	SkippedRAM []string        // catalog local ids this machine cannot run
+	Memory     axis.HostMemory // the reading that sized the offer
 	// BestFit is the largest local rung this machine can run, pulled or not. It
 	// is NOT the same as WantPull: WantPull is only set when nothing local is on
 	// disk yet. Without BestFit the offer line ("offering qwen3.5:35b") is printed
@@ -231,7 +232,7 @@ type ollamaPlan struct {
 func (p ollamaPlan) LocalBoundTags() []string {
 	out := make([]string, 0, len(p.LocalBound))
 	for _, id := range p.LocalBound {
-		out = append(out, ollamaTagFor(id))
+		out = append(out, axis.OllamaTagFor(id))
 	}
 	return out
 }
@@ -299,7 +300,7 @@ func configureOllamaInference(cfg *config.Config, env hostenv.Env, sel ollamaSel
 		cfg.Inference.Backends = map[string]config.InferenceBackend{}
 	}
 	_, backendPreexisted := cfg.Inference.Backends["ollama"]
-	endpoint := strings.TrimRight(effectiveOllamaEndpoint(cfg, env).URL, "/")
+	endpoint := strings.TrimRight(axis.EffectiveOllamaEndpoint(cfg, env).URL, "/")
 	cfg.Inference.Backends["ollama"] = config.InferenceBackend{Driver: "ollama", BaseURL: endpoint + "/v1", Auth: "none"}
 
 	plan := ollamaPlan{Endpoint: endpoint}
@@ -315,26 +316,26 @@ func configureOllamaInference(cfg *config.Config, env hostenv.Env, sel ollamaSel
 		cfg.Inference.Models = append(cfg.Inference.Models, config.InferenceModelBinding{
 			// A listing is not evidence. verifyOllamaInference earns Verified with a
 			// bounded, model-specific request through the resolved endpoint.
-			Model: m.ID, Backend: "ollama", Upstream: ollamaTagFor(m.ID), Available: true,
+			Model: m.ID, Backend: "ollama", Upstream: axis.OllamaTagFor(m.ID), Available: true,
 		})
 	}
 
 	var rung, bestLocal routing.Model
 	rungOK := false
 	if sel.Local {
-		plan.Memory = probeHostMemory(env)
-		rung, rungOK = chooseLocalRung(reg, plan.Memory)
+		plan.Memory = axis.ProbeHostMemory(env)
+		rung, rungOK = axis.ChooseLocalRung(reg, plan.Memory)
 		if rungOK {
-			plan.BestFit = ollamaTagFor(rung.ID)
+			plan.BestFit = axis.OllamaTagFor(rung.ID)
 		}
-		fmt.Fprintln(out, localRungOfferLine(plan.Memory, rung, rungOK))
+		fmt.Fprintln(out, axis.LocalRungOfferLine(plan.Memory, rung, rungOK))
 	}
 
 	for _, m := range reg.Models {
 		if m.Provider != "ollama" || !m.Available {
 			continue
 		}
-		tag := ollamaTagFor(m.ID)
+		tag := axis.OllamaTagFor(m.ID)
 		switch {
 		case m.Local && sel.Local:
 			// The gate decides what to OFFER TO PULL. A rung the user ALREADY pulled
@@ -364,7 +365,7 @@ func configureOllamaInference(cfg *config.Config, env hostenv.Env, sel ollamaSel
 	if sel.Local && bestLocal.ID != "" {
 		// Something local is already on disk: the bridge and the router's local
 		// option point at the largest one that fits, and nothing needs pulling.
-		cfg.OllamaBridgeModel = ollamaTagFor(bestLocal.ID)
+		cfg.OllamaBridgeModel = axis.OllamaTagFor(bestLocal.ID)
 		return plan, nil
 	}
 	if sel.Local && rungOK {
@@ -374,9 +375,9 @@ func configureOllamaInference(cfg *config.Config, env hostenv.Env, sel ollamaSel
 		// before the step that asks about it — and naming a tag is a declared
 		// intent, not a claim (Verified stays false, the binding is not callable,
 		// and doctor's bridge row reports it missing).
-		cfg.OllamaBridgeModel = ollamaTagFor(rung.ID)
+		cfg.OllamaBridgeModel = axis.OllamaTagFor(rung.ID)
 		bind(rung)
-		plan.WantPull = ollamaTagFor(rung.ID)
+		plan.WantPull = axis.OllamaTagFor(rung.ID)
 	}
 
 	// An Ollama selection that produced NOTHING must not be persisted. Deleting
@@ -409,8 +410,8 @@ func emptyOllamaSelectionMessage(sel ollamaSelection, plan ollamaPlan) string {
 		switch {
 		case !plan.Memory.OK:
 			reasons = append(reasons, "local: could not size this machine, so no local model was offered")
-		case plan.Memory.TotalGB < localFloorTotalGB:
-			reasons = append(reasons, fmt.Sprintf("local: %.0f GB RAM is below the %d GB a local model needs here", plan.Memory.TotalGB, localFloorTotalGB))
+		case plan.Memory.TotalGB < axis.LocalFloorTotalGB:
+			reasons = append(reasons, fmt.Sprintf("local: %.0f GB RAM is below the %d GB a local model needs here", plan.Memory.TotalGB, axis.LocalFloorTotalGB))
 		default:
 			reasons = append(reasons, "local: no catalog model fits this machine's usable memory")
 		}
@@ -456,11 +457,11 @@ func verifyOllamaInference(cfg *config.Config, env hostenv.Env, out io.Writer) (
 	if err != nil {
 		return res, fmt.Errorf("verify ollama inference: %w", err)
 	}
-	endpoint := strings.TrimRight(effectiveOllamaEndpoint(cfg, env).URL, "/")
+	endpoint := strings.TrimRight(axis.EffectiveOllamaEndpoint(cfg, env).URL, "/")
 	type candidate struct {
 		index  int
 		label  string
-		tag    string
+		Tag    string
 		numCtx int
 		minRAM float64
 	}
@@ -479,7 +480,7 @@ func verifyOllamaInference(cfg *config.Config, env hostenv.Env, out io.Writer) (
 		// Demote first: a stale claim (including a pre-provenance listing-derived
 		// one) must never survive a run that could not re-earn it.
 		binding.Verified, binding.VerifiedBy, binding.VerifiedAt = false, "", ""
-		c := candidate{index: i, label: binding.Model, tag: binding.Upstream}
+		c := candidate{index: i, label: binding.Model, Tag: binding.Upstream}
 		m, found := reg.Get(binding.Model)
 		if found && m.Local {
 			// num_ctx is the rung's DECLARED context budget, so the probe allocates
@@ -509,7 +510,7 @@ func verifyOllamaInference(cfg *config.Config, env hostenv.Env, out io.Writer) (
 	for _, c := range cloud {
 		res.Attempted++
 		go func(c candidate) {
-			results <- result{index: c.index, label: c.label, err: env.OllamaInference(endpoint, c.tag, 0, ollamaCloudProbeTimeout)}
+			results <- result{index: c.index, label: c.label, err: env.OllamaInference(endpoint, c.Tag, 0, ollamaCloudProbeTimeout)}
 		}(c)
 	}
 
@@ -530,23 +531,23 @@ func verifyOllamaInference(cfg *config.Config, env hostenv.Env, out io.Writer) (
 			// would let a budget un-bind a healthy model.
 			res.NotProbed = append(res.NotProbed, c.label)
 			fmt.Fprintf(out, "    %-14s not probed — %.0fs left of the %.0fs local budget, less than one probe's %.0fs\n",
-				c.tag, remaining.Seconds(), ollamaLocalProbeBudget.Seconds(), ollamaLocalProbeTimeout.Seconds())
+				c.Tag, remaining.Seconds(), ollamaLocalProbeBudget.Seconds(), ollamaLocalProbeTimeout.Seconds())
 			continue
 		}
 		res.Attempted++
 		start := time.Now()
-		err := env.OllamaInference(endpoint, c.tag, c.numCtx, ollamaLocalProbeTimeout)
+		err := env.OllamaInference(endpoint, c.Tag, c.numCtx, ollamaLocalProbeTimeout)
 		elapsed := time.Since(start)
 		if remaining -= elapsed; remaining < 0 {
 			remaining = 0
 		}
 		if err != nil {
 			res.Failures = append(res.Failures, c.label+": "+err.Error())
-			fmt.Fprintf(out, "    %-14s failed (%.0fs): %v\n", c.tag, elapsed.Seconds(), err)
+			fmt.Fprintf(out, "    %-14s failed (%.0fs): %v\n", c.Tag, elapsed.Seconds(), err)
 			continue
 		}
 		promote(c.index)
-		fmt.Fprintf(out, "    %-14s ok (%.0fs)\n", c.tag, elapsed.Seconds())
+		fmt.Fprintf(out, "    %-14s ok (%.0fs)\n", c.Tag, elapsed.Seconds())
 	}
 
 	for range cloud {
@@ -563,7 +564,7 @@ func verifyOllamaInference(cfg *config.Config, env hostenv.Env, out io.Writer) (
 }
 
 // liveOllamaInferenceProbe posts ONE minimal generate to endpoint/api/generate.
-// endpoint is ALWAYS supplied by effectiveOllamaEndpoint; this function never
+// endpoint is ALWAYS supplied by axis.EffectiveOllamaEndpoint; this function never
 // spells an address of its own (scripts/check-endpoint-literals.sh). No auth
 // header: the local daemon owns any cloud credential and Pix stores none.
 //
@@ -1387,7 +1388,7 @@ func reconcileDirectInference(cfg *config.Config, env hostenv.Env, in io.Reader,
 		}
 		return res, fmt.Errorf("provider keys resolved, but live inference verification failed: %s", detail)
 	}
-	if callable, _ := configuredInferenceSummary(cfg); callable > 0 || strings.TrimSpace(requestedModels) != "" {
+	if callable, _ := axis.ConfiguredInferenceSummary(cfg); callable > 0 || strings.TrimSpace(requestedModels) != "" {
 		if err := configureModelRosterFrom(cfg, in, out, interactive, requestedModels, prior); err != nil {
 			return res, fmt.Errorf("choosing models: %w", err)
 		}
@@ -1491,7 +1492,7 @@ func reconcileOllamaInference(cfg *config.Config, env hostenv.Env, in io.Reader,
 	if len(res.NotProbed) > 0 {
 		fmt.Fprintf(out, "%d candidate(s) were not probed within the time budget: %s\n", len(res.NotProbed), strings.Join(res.NotProbed, ", "))
 	}
-	if callable, _ := configuredInferenceSummary(cfg); callable > 0 {
+	if callable, _ := axis.ConfiguredInferenceSummary(cfg); callable > 0 {
 		if err := configureModelRosterFrom(cfg, in, out, interactive, "", boundNativeProviders(cfg)); err != nil {
 			return res, plan, fmt.Errorf("choosing models: %w", err)
 		}

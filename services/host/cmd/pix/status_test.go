@@ -11,6 +11,7 @@ import (
 	"pix/host/hostenv"
 	"pix/host/mcp"
 	"pix/host/monitor"
+	"pix/host/readiness/axis"
 	"pix/host/rpc"
 	"pix/host/sys"
 	"pix/host/sys/systest"
@@ -31,7 +32,7 @@ func fakeStatusEnv() hostenv.Env {
 			return "google-workspace\nnotion\n", nil
 		}
 		return "", nil
-	}, DialLocalFn: func(port int) bool { return port == rpc.MemoryPortDefault }, IsFileFn: func(string) bool { return false }}, IdentityProbe: identityFake(map[int]serviceIdentityResult{
+	}, DialLocalFn: func(port int) bool { return port == rpc.MemoryPortDefault }, IsFileFn: func(string) bool { return false }}, IdentityProbe: identityFake(map[int]axis.ServiceIdentityResult{
 		rpc.MemoryPortDefault: {Name: rpc.MemoryName, Ready: true},
 	})}
 }
@@ -418,8 +419,8 @@ func TestStatusZeroModelKeysOneTodo(t *testing.T) {
 		return "", nil
 	}, DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }}}
 	st := gatherStatus(cfg, "default", env)
-	if len(st.Todos) != 1 || st.Todos[0] != modelKeyFixCmd {
-		t.Errorf("todos = %v, want exactly [%q]", st.Todos, modelKeyFixCmd)
+	if len(st.Todos) != 1 || st.Todos[0] != axis.ModelKeyFixCmd {
+		t.Errorf("todos = %v, want exactly [%q]", st.Todos, axis.ModelKeyFixCmd)
 	}
 	var out bytes.Buffer
 	renderStatus(cfg, "default", env, &out, false)
@@ -438,7 +439,7 @@ func TestStatusProbeFailureNoProviderTodo(t *testing.T) {
 	assertNoProviderTodo := func(t *testing.T, st statusReport) {
 		t.Helper()
 		for _, tdo := range st.Todos {
-			if tdo == modelKeyFixCmd || strings.HasPrefix(tdo, "sbx secret set -g ") {
+			if tdo == axis.ModelKeyFixCmd || strings.HasPrefix(tdo, "sbx secret set -g ") {
 				t.Errorf("must not invent a provider-key TODO when the probe is unavailable, got %q in %v", tdo, st.Todos)
 			}
 		}

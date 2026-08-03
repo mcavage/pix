@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"pix/host/readiness"
+	"pix/host/readiness/axis"
 	"strings"
 	"testing"
 
@@ -15,13 +16,13 @@ import (
 )
 
 func TestGatewayInferenceSatisfiesCoreReadinessWithoutProviderKeys(t *testing.T) {
-	// Isolate from the developer's real config: resolveSessionModel calls
+	// Isolate from the developer's real config: axis.ResolveSessionModel calls
 	// config.Load(), so real inference bindings on disk resolve the overlord
 	// intent against THEM. A config whose bindings carry no overlord-callable
-	// model makes resolveSessionModel return "no callable model binding" and
+	// model makes axis.ResolveSessionModel return "no callable model binding" and
 	// fails this test for a reason that has nothing to do with what it asserts.
 	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
-	runtimeModel, err := resolveSessionModel(config.DefaultRunIntent)
+	runtimeModel, err := axis.ResolveSessionModel(config.DefaultRunIntent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,11 +30,11 @@ func TestGatewayInferenceSatisfiesCoreReadinessWithoutProviderKeys(t *testing.T)
 		Backends: map[string]config.InferenceBackend{"docker-openai": {Driver: "openai-compatible", Auth: "sbx-session"}},
 		Models:   []config.InferenceModelBinding{{Model: "openai/gpt-5.6-sol", Backend: "docker-openai", Upstream: "gpt-5.6-sol", Available: true}},
 	}}
-	core := inferenceCoreCheck(cfg, "", true)
+	core := axis.InferenceCoreCheck(cfg, "", true)
 	if core.Verdict != readiness.VerdictReady || core.Label != "inference" {
 		t.Fatalf("core = %+v", core)
 	}
-	session := runIntentKeyCheck(cfg, "", true)
+	session := axis.RunIntentKeyCheck(cfg, "", true)
 	if session.Verdict != readiness.VerdictReady || !strings.Contains(session.Detail, runtimeModel) {
 		t.Fatalf("session = %+v", session)
 	}
@@ -130,8 +131,8 @@ func TestProvidersGroup_SecretLsFailure_Unverifiable(t *testing.T) {
 // confirmed present, the still-missing alternates are informational only \u2014
 // they never count as outstanding.
 func TestProvidersGroup_AlternateMissingNotOutstanding(t *testing.T) {
-	// Isolate from the developer's real config: runIntentKeyCheck calls
-	// resolveSessionModel -> config.Load(), so a real pix config with Ollama
+	// Isolate from the developer's real config: axis.RunIntentKeyCheck calls
+	// axis.ResolveSessionModel -> config.Load(), so a real pix config with Ollama
 	// bindings on disk would make overlord degrade to an Ollama model instead
 	// of the baked openai/gpt-5.6-sol fallback this test asserts.
 	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))

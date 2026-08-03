@@ -7,6 +7,7 @@ import (
 
 	"pix/host/hostenv"
 	"pix/host/readiness"
+	"pix/host/readiness/axis"
 	"pix/host/routing"
 	"pix/host/sys/systest"
 )
@@ -18,7 +19,7 @@ func hwMemEnv(t *testing.T, goos string, totalGB float64) hostenv.Env {
 	case "darwin":
 		systest.Of(env.System).RunFn = func(name string, args ...string) (string, error) {
 			if name == "sysctl" {
-				return fmt.Sprintf("%d\n", int64(totalGB*bytesPerGB)), nil
+				return fmt.Sprintf("%d\n", int64(totalGB*axis.BytesPerGB)), nil
 			}
 			return "", fmt.Errorf("unexpected command %s", name)
 		}
@@ -27,7 +28,7 @@ func hwMemEnv(t *testing.T, goos string, totalGB float64) hostenv.Env {
 			if path != "/proc/meminfo" {
 				return "", fmt.Errorf("unexpected file %s", path)
 			}
-			return fmt.Sprintf("MemFree:  1024 kB\nMemTotal:       %d kB\nSwapTotal: 0 kB\n", int64(totalGB*bytesPerGB/1024)), nil
+			return fmt.Sprintf("MemFree:  1024 kB\nMemTotal:       %d kB\nSwapTotal: 0 kB\n", int64(totalGB*axis.BytesPerGB/1024)), nil
 		}
 	}
 	return env
@@ -51,9 +52,9 @@ func TestUsableMemoryByOS(t *testing.T) {
 		{"windows", 32, 0, false},
 		{"plan9", 32, 0, false},
 	} {
-		got, ok := usableFraction(tc.goos, tc.totalGB)
+		got, ok := axis.UsableFraction(tc.goos, tc.totalGB)
 		if got != tc.want || ok != tc.ok {
-			t.Errorf("usableFraction(%q, %g) = %g, %v; want %g, %v", tc.goos, tc.totalGB, got, ok, tc.want, tc.ok)
+			t.Errorf("axis.UsableFraction(%q, %g) = %g, %v; want %g, %v", tc.goos, tc.totalGB, got, ok, tc.want, tc.ok)
 		}
 	}
 }
@@ -61,8 +62,8 @@ func TestUsableMemoryByOS(t *testing.T) {
 // TestDarwinUsableFractionIsTiered: a single 0.75 over-promises against the
 // macOS wired-memory limit on small machines, which is the S1 arithmetic bug.
 func TestDarwinUsableFractionIsTiered(t *testing.T) {
-	small, _ := usableFraction("darwin", 32)
-	large, _ := usableFraction("darwin", 48)
+	small, _ := axis.UsableFraction("darwin", 32)
+	large, _ := axis.UsableFraction("darwin", 48)
 	if small != 0.67 {
 		t.Errorf("32 GB darwin fraction = %g, want 0.67", small)
 	}
@@ -75,24 +76,24 @@ func TestDarwinUsableFractionIsTiered(t *testing.T) {
 }
 
 func TestProbeHostMemoryReadsBothPlatformSeams(t *testing.T) {
-	mac := probeHostMemoryFor("darwin", hwMemEnv(t, "darwin", 48))
+	mac := axis.ProbeHostMemoryFor("darwin", hwMemEnv(t, "darwin", 48))
 	if !mac.OK || mac.TotalGB != 48 || mac.Source != "sysctl hw.memsize" {
 		t.Fatalf("darwin memory = %+v", mac)
 	}
 	if mac.UsableGB != 36 {
 		t.Fatalf("darwin usable = %g, want 36 (48 * 0.75)", mac.UsableGB)
 	}
-	lin := probeHostMemoryFor("linux", hwMemEnv(t, "linux", 32))
+	lin := axis.ProbeHostMemoryFor("linux", hwMemEnv(t, "linux", 32))
 	if !lin.OK || lin.TotalGB != 32 || lin.Source != "/proc/meminfo MemTotal" {
 		t.Fatalf("linux memory = %+v", lin)
 	}
 	if lin.UsableGB != 32*0.60 {
 		t.Fatalf("linux usable = %g, want 19.2", lin.UsableGB)
 	}
-	if got := probeHostMemoryFor("darwin", hostenv.Env{System: &systest.Fake{}}); got.OK {
+	if got := axis.ProbeHostMemoryFor("darwin", hostenv.Env{System: &systest.Fake{}}); got.OK {
 		t.Fatalf("an unwired seam must not report a size: %+v", got)
 	}
-	if got := probeHostMemoryFor("windows", hwMemEnv(t, "linux", 32)); got.OK {
+	if got := axis.ProbeHostMemoryFor("windows", hwMemEnv(t, "linux", 32)); got.OK {
 		t.Fatalf("an unsupported GOOS must not be sized: %+v", got)
 	}
 }
@@ -110,7 +111,7 @@ func TestChooseLocalRungByRAM(t *testing.T) {
 		totalGB float64
 		want    string // "" = nothing on the ladder fits
 	}{
-		// Below localFloorTotalGB (24) NOTHING is offered, whatever the
+		// Below axis.LocalFloorTotalGB (24) NOTHING is offered, whatever the
 		// usable-budget arithmetic says. A 16 GB Mac clears the 9b's 10 GB gate on
 		// paper (16 * 0.67 = 10.72) and still should not be handed a local model:
 		// the 9b wires ~9.3 GB, and the machine also runs macOS, a browser, an
@@ -133,11 +134,11 @@ func TestChooseLocalRungByRAM(t *testing.T) {
 		{"darwin", 128, "ollama/qwen3.5:35b"},
 		{"linux", 128, "ollama/qwen3.5:35b"},
 	} {
-		mem := probeHostMemoryFor(tc.goos, hwMemEnv(t, tc.goos, tc.totalGB))
+		mem := axis.ProbeHostMemoryFor(tc.goos, hwMemEnv(t, tc.goos, tc.totalGB))
 		if !mem.OK {
 			t.Fatalf("%s %gGB: probe failed: %+v", tc.goos, tc.totalGB, mem)
 		}
-		rung, ok := chooseLocalRung(reg, mem)
+		rung, ok := axis.ChooseLocalRung(reg, mem)
 		switch {
 		case tc.want == "" && ok:
 			t.Errorf("%s %gGB (usable %.1f): offered %s, want nothing", tc.goos, tc.totalGB, mem.UsableGB, rung.ID)
@@ -159,11 +160,11 @@ func TestUnknownMemoryOffersNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rung, ok := chooseLocalRung(reg, hostMemory{Source: "sysctl hw.memsize"})
+	rung, ok := axis.ChooseLocalRung(reg, axis.HostMemory{Source: "sysctl hw.memsize"})
 	if ok {
 		t.Fatalf("an unsized machine was offered %s; unknown size must mean no local offer", rung.ID)
 	}
-	line := localRungOfferLine(hostMemory{Source: "sysctl hw.memsize"}, rung, false)
+	line := axis.LocalRungOfferLine(axis.HostMemory{Source: "sysctl hw.memsize"}, rung, false)
 	if !strings.Contains(line, "could not size this machine") {
 		t.Fatalf("the offer line must say the machine was not sized, got %q", line)
 	}
@@ -172,22 +173,22 @@ func TestUnknownMemoryOffersNothing(t *testing.T) {
 // TestHardwareCheckIsNeverReady is invariant 13 in this file's own terms: a RAM
 // reading is an inference, and an inference can never produce a verdict.
 func TestHardwareCheckIsNeverReady(t *testing.T) {
-	for _, mem := range []hostMemory{
+	for _, mem := range []axis.HostMemory{
 		{},
 		{Source: "sysctl hw.memsize"},
 		{TotalGB: 8, UsableGB: 5.4, Source: "sysctl hw.memsize", OK: true},
 		{TotalGB: 128, UsableGB: 96, Source: "sysctl hw.memsize", OK: true},
 		{TotalGB: 32, UsableGB: 19.2, Source: "/proc/meminfo MemTotal", OK: true},
 	} {
-		for _, c := range hardwareCheck(mem) {
+		for _, c := range axis.HardwareCheck(mem) {
 			if c.Verdict == readiness.VerdictReady {
-				t.Errorf("hardwareCheck(%+v) rendered ready; a hardware reading is not a probe", mem)
+				t.Errorf("axis.HardwareCheck(%+v) rendered ready; a hardware reading is not a probe", mem)
 			}
 			if !c.Note {
-				t.Errorf("hardwareCheck(%+v) is not a note; it must never block or count as outstanding", mem)
+				t.Errorf("axis.HardwareCheck(%+v) is not a note; it must never block or count as outstanding", mem)
 			}
 			if c.Todo != "" {
-				t.Errorf("hardwareCheck(%+v) offered a fix command (%q); RAM is not a configuration mistake", mem, c.Todo)
+				t.Errorf("axis.HardwareCheck(%+v) offered a fix command (%q); RAM is not a configuration mistake", mem, c.Todo)
 			}
 		}
 	}
@@ -201,7 +202,7 @@ func TestMinRAMArithmeticMatchesTheShippedCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, m := range routing.LocalRungs(reg) {
-		if got := minRAMFor(m); got != m.MinRAMGB {
+		if got := axis.MinRAMFor(m); got != m.MinRAMGB {
 			t.Errorf("%s: catalog min_ram_gb %g, recomputed %g", m.ID, m.MinRAMGB, got)
 		}
 	}

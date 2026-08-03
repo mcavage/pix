@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"pix/host/hostenv"
 	"pix/host/readiness"
+	"pix/host/readiness/axis"
 	"sort"
 	"strconv"
 	"strings"
@@ -214,7 +215,7 @@ func TestUnrequestedAxisIsAbsent(t *testing.T) {
 	if _, _, ok := s.AxisVerdict(readiness.AxisPack); ok {
 		t.Error("an absent axis must not report a readiness.Verdict")
 	}
-	if axisReady(s, readiness.AxisPack) {
+	if axis.AxisReady(s, readiness.AxisPack) {
 		t.Error("an absent axis must never read as ready")
 	}
 }
@@ -274,7 +275,7 @@ func TestEvidenceAndFixWalk_Doctor(t *testing.T) {
 func TestEvidenceAndFixWalk_Fast(t *testing.T) {
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(string, ...string) (string, error) { return "", nil }, DialLocalFn: func(int) bool { return false }}}
 	cfg := &config.Config{Services: []string{"memory", "knowledge"}}
-	walkEvidenceAndFix(t, "fast", fastReadinessSnapshot(cfg, env, probeSbxKeyEvidence(env)).All())
+	walkEvidenceAndFix(t, "fast", axis.FastReadinessSnapshot(cfg, env, axis.ProbeSbxKeyEvidence(env)).All())
 }
 
 // TestRunWarningsAreCappedAndNeverBlock (AC-P0-224): `run` prints AT MOST
@@ -289,7 +290,7 @@ func TestRunWarningsAreCappedAndNeverBlock(t *testing.T) {
 		readiness.AxisProviders: func() []readiness.Check { return rows },
 	})
 	var out bytes.Buffer
-	if total := renderReadinessWarnings(&out, s, launchWarningLimit); total != len(rows) {
+	if total := axis.RenderReadinessWarnings(&out, s, axis.LaunchWarningLimit); total != len(rows) {
 		t.Errorf("reported %d warnings, want %d", total, len(rows))
 	}
 	printed := 0
@@ -299,8 +300,8 @@ func TestRunWarningsAreCappedAndNeverBlock(t *testing.T) {
 		}
 		printed++
 	}
-	if printed != launchWarningLimit {
-		t.Errorf("printed %d warning rows, want at most %d:\n%s", printed, launchWarningLimit, out.String())
+	if printed != axis.LaunchWarningLimit {
+		t.Errorf("printed %d warning rows, want at most %d:\n%s", printed, axis.LaunchWarningLimit, out.String())
 	}
 	if !strings.Contains(out.String(), "2 more: run `pix doctor`") {
 		t.Errorf("the remainder must be a single count pointing at doctor:\n%s", out.String())
@@ -326,7 +327,7 @@ func TestFastSurfacesShareTheVocabulary(t *testing.T) {
 			readiness.AxisProviders: func() []readiness.Check { return []readiness.Check{c} },
 		})
 		var out bytes.Buffer
-		renderReadinessWarnings(&out, s, launchWarningLimit)
+		axis.RenderReadinessWarnings(&out, s, axis.LaunchWarningLimit)
 		if !strings.Contains(out.String(), tc.glyph+" axis: "+tc.word) {
 			t.Errorf("(%s, %s) rendered %q, want glyph %q + word %q", tc.req, tc.v, out.String(), tc.glyph, tc.word)
 		}

@@ -10,6 +10,7 @@ import (
 	"pix/host/mcp"
 	"pix/host/monitor/tui"
 	"pix/host/readiness"
+	"pix/host/readiness/axis"
 	"pix/host/secret"
 	"pix/host/sys"
 	"pix/host/workflow/onboard"
@@ -200,22 +201,22 @@ func gatherStatus(cfg *config.Config, profile string, env hostenv.Env) statusRep
 	// (sbxOnPath) separately from probe success (sbxOK): sbx being installed but
 	// `sbx secret ls` failing is a DIFFERENT state from sbx missing entirely,
 	// and the two warrant different guidance.
-	keyEvidence := probeSbxKeyEvidence(env)
-	sbxOut, sbxOK := keyEvidence.out, keyEvidence.ok()
-	sbxOnPath := keyEvidence.state != secret.SbxSecretsAbsent
+	keyEvidence := axis.ProbeSbxKeyEvidence(env)
+	sbxOut, sbxOK := keyEvidence.Out, keyEvidence.Ok()
+	sbxOnPath := keyEvidence.State != secret.SbxSecretsAbsent
 
 	// The SHARED lazy snapshot (readiness_launch.go): the one core launch
 	// requirement plus the two host services, identity-verified. status renders
 	// the same rows, in the same words, that doctor and run do.
-	snap := fastReadinessSnapshot(cfg, env, keyEvidence)
-	st.Memory = axisReady(snap, readiness.AxisServiceMemory)
-	st.Knowledge = axisReady(snap, readiness.AxisServiceKnowledge)
+	snap := axis.FastReadinessSnapshot(cfg, env, keyEvidence)
+	st.Memory = axis.AxisReady(snap, readiness.AxisServiceMemory)
+	st.Knowledge = axis.AxisReady(snap, readiness.AxisServiceKnowledge)
 	st.Checks = readinessChecksJSON(snap.All())
 	st.Exit = snap.ExitCodeSuppressingUnverifiable()
 	unverifiableAxes := snap.UnverifiableCount()
 	// Providers: doctor/launch parity (finding #3) — ONE core model-readiness
 	// TODO, never a per-key TODO for a missing alternate. pix only needs
-	// ONE of anthropic/openai/google to launch a model (anyModelKeyInOutput,
+	// ONE of anthropic/openai/google to launch a model (axis.AnyModelKeyInOutput,
 	// the exact same tri-state definition doctor's modelKeyCoreCheck and
 	// run's launch gate use), so:
 	//   - sbxOK and at least one present -> ready, no core TODO (a missing
@@ -229,7 +230,7 @@ func gatherStatus(cfg *config.Config, profile string, env hostenv.Env) statusRep
 	for _, key := range []string{"anthropic", "openai", "google", "github"} {
 		st.Providers[key] = sbxOK && cli.GrepWord(sbxOut, key)
 	}
-	st.InferenceModels, st.InferenceBackends = configuredInferenceSummary(cfg)
+	st.InferenceModels, st.InferenceBackends = axis.ConfiguredInferenceSummary(cfg)
 	// Every repair the snapshot's axes verified is taken FROM the snapshot, so
 	// status can never print a different fix command than doctor for the same
 	// fact. Unverifiable axes contribute no TODO by construction (a repair we

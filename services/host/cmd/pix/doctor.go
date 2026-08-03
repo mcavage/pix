@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"time"
 
 	"pix/host/cli"
 	"pix/host/config"
@@ -40,18 +39,6 @@ import (
 // The name stays because `hostenv.Env` is what this codebase calls it everywhere,
 // and renaming 250 signatures to prove a point is not a refactor. See
 // hostenv.Env for what it holds and where each field is going.
-
-// fake returns the embedded System as the test double, for fixtures that build
-// a base env and then override one seam. TEST-ONLY: it panics on a real env,
-// which is the right outcome for test-only code reached in production — the
-// alternative is a silent no-op, and silent no-ops are what this refactor
-// exists to delete.
-// probeTimeout bounds every registered-command probe so doctor can never wedge
-// on a hung MCP server; probeMaxOutput caps how much of its output we capture.
-const (
-	probeTimeout   = 5 * time.Second
-	probeMaxOutput = 64 << 10 // 64KB
-)
 
 // probeRun is gone: with a non-nullable System it was `env.RunTimed(...)` with
 // extra steps. It used to fall back to env.Run when env.probe was nil, and to

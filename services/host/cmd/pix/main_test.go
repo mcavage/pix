@@ -456,7 +456,7 @@ func TestBuildSbxArgs_NameModelPassthrough(t *testing.T) {
 }
 
 func TestApplyConfiguredSessionModel_DefaultAndOptOut(t *testing.T) {
-	// Keep resolveSessionModel off the developer's real config: with no explicit
+	// Keep axis.ResolveSessionModel off the developer's real config: with no explicit
 	// bindings it resolves the shipped catalog, whose overlord route is Sol.
 	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
 

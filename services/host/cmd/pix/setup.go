@@ -30,6 +30,7 @@ import (
 	"pix/host/cli"
 	"pix/host/hostenv"
 	"pix/host/readiness"
+	"pix/host/readiness/axis"
 	"pix/host/secret"
 	"pix/host/sys"
 	"pix/host/workflow/onboard"
@@ -791,7 +792,7 @@ func setupMutationSteps(env hostenv.Env, inv setupInventory, opts onboard.Opts, 
 		axes: []readiness.Axis{readiness.AxisModelWatcher, readiness.AxisModelEmbed, readiness.AxisModelBridge},
 		run: func() error {
 			// The riskiest step, therefore last: probe Ollama once, classify on
-			// the shared ModelReadiness axes, pull confirmed-missing tags only
+			// the shared axis.ModelReadiness axes, pull confirmed-missing tags only
 			// under explicit consent (--pull-models, or the one default-No
 			// prompt), verify once after the pulls, receipt the outcome. Never
 			// installs Ollama; never pulls a tag it could not positively verify
@@ -839,7 +840,7 @@ func runSetupInferenceStep(cfg *config.Config, env hostenv.Env, in io.Reader, ou
 		return fmt.Errorf("verifying ollama models: %w", err)
 	}
 	attempted, verified, failures, notProbed := probe.Attempted, probe.Verified, probe.Failures, probe.NotProbed
-	callable, _ := configuredInferenceSummary(cfg)
+	callable, _ := axis.ConfiguredInferenceSummary(cfg)
 	if callable > 0 {
 		// Deviation from the design: the roster prompt is NOT taken from
 		// prompts.reserve. setupMaxPrompts is 2 and both slots are already claimed
@@ -885,7 +886,7 @@ func runSetupInferenceStep(cfg *config.Config, env hostenv.Env, in io.Reader, ou
 	if attempted > 0 && !declinedPull {
 		return fmt.Errorf("ollama models are bound, but none answered a request: %s", strings.Join(failures, "; "))
 	}
-	if len(unverifiedOllamaCandidates(cfg)) == 0 {
+	if len(axis.UnverifiedOllamaCandidates(cfg)) == 0 {
 		return nil // nothing ollama-shaped here; the keys step owns this host
 	}
 	switch models.consent {
@@ -899,7 +900,7 @@ func runSetupInferenceStep(cfg *config.Config, env hostenv.Env, in io.Reader, ou
 		if len(notProbed) > 0 {
 			fmt.Fprintf(out, "  inference: %d candidate(s) not probed (the local budget ran out) — re-run: pix setup\n", len(notProbed))
 		}
-		fmt.Fprintf(out, "  inference: no model has passed a probe yet — pull one: %s\n", pullModelsFixCmd)
+		fmt.Fprintf(out, "  inference: no model has passed a probe yet — pull one: %s\n", axis.PullModelsFixCmd)
 		return nil
 	}
 }
@@ -1096,7 +1097,7 @@ func setupReadinessAxes(cfg *config.Config, env hostenv.Env, models setupModelsO
 		builders[a] = b
 	}
 	if env.IdentityProbe != nil {
-		for a, b := range serviceReadinessAxes(env, config.ServiceEnabled(cfg, "memory"), config.ServiceEnabled(cfg, "knowledge"), env.IdentityProbe) {
+		for a, b := range axis.ServiceReadinessAxes(env, config.ServiceEnabled(cfg, "memory"), config.ServiceEnabled(cfg, "knowledge"), env.IdentityProbe) {
 			builders[a] = b
 		}
 	}

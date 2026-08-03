@@ -1,4 +1,4 @@
-package main
+package axis
 
 import (
 	"errors"
@@ -7,21 +7,22 @@ import (
 	"pix/host/hostenv"
 	"pix/host/sys"
 	"strings"
+	"time"
 )
 
 // doctor_probe.go is the SHARED bounded-probe + canonical-executable-trust
 // machinery used by both the MCP truth group (doctor_mcp.go, S05) and the gog
 // group (doctor_gog.go, S07). It was consolidated here after both stories
-// independently grew the same primitives during integration: probeListTools /
+// independently grew the same primitives during integration: ProbeListTools /
 // probeStatus / classifyProbeErr (the `--list-tools` probe + its outcome
 // classification) and trustedExecPath / mcp.TrustedGogSpawn (the
 // canonical-executable trust gate). doctor_gog.go's copy had grown one extra
-// outcome — probeDeniedByPolicy, an EXPLICIT policy/permission refusal
+// outcome — ProbeDeniedByPolicy, an EXPLICIT policy/permission refusal
 // distinguished from a generic probe error — so that is the superset kept
 // here; both callers (gogSpawnCheck and mcpLocalCheck) map it to
 // readiness.VerdictDenied, and every other unclassified failure stays unverifiable.
 
-// probeStatus/probeResult are the STRUCTURED outcome of a `--list-tools`
+// probeStatus/ProbeResult are the STRUCTURED outcome of a `--list-tools`
 // probe: a clean non-empty list is healthy; a clean EMPTY list is a verified
 // zero-tools failure (the headless creds/keyring trap); a timeout or exec
 // error is unverifiable — doctor doesn't know, so it must never mislabel
@@ -30,39 +31,39 @@ import (
 type probeStatus int
 
 const (
-	probeToolsOK        probeStatus = iota // clean exit, non-empty tool list
-	probeNoTools                           // clean exit, ZERO tools — a verified failure
+	ProbeToolsOK        probeStatus = iota // clean exit, non-empty tool list
+	ProbeNoTools                           // clean exit, ZERO tools — a verified failure
 	probeTimedOut                          // hit the probe deadline — unverifiable
-	probeError                             // exec failure / non-zero exit / missing binary — unverifiable
-	probeDeniedByPolicy                    // failed with an EXPLICIT policy/permission denial
+	ProbeError                             // exec failure / non-zero exit / missing binary — unverifiable
+	ProbeDeniedByPolicy                    // failed with an EXPLICIT policy/permission denial
 )
 
-type probeResult struct {
-	status probeStatus
-	detail string // short, value-free diagnostic for timeout/error outcomes
-	tools  int    // tool-line count on a clean exit
+type ProbeResult struct {
+	Status probeStatus
+	Detail string // short, value-free diagnostic for timeout/error outcomes
+	Tools  int    // tool-line count on a clean exit
 }
 
-// probeListTools runs argv with `--list-tools` appended, BOUNDED by probeRun's
+// ProbeListTools runs argv with `--list-tools` appended, BOUNDED by probeRun's
 // timeout + output cap, and classifies the outcome. A failed probe's output is
 // run through sys.ClassifyProbeFailure so an EXPLICIT policy denial classifies as
 // sys.ProbeDenied rather than a generic error. The diagnostic is deliberately
 // generic (never raw error text), so a registered command's tokens — which may
 // carry pasted secrets — can never leak through an error message.
-func probeListTools(env hostenv.Env, argv []string) probeResult {
+func ProbeListTools(env hostenv.Env, argv []string) ProbeResult {
 	if len(argv) == 0 {
-		return probeResult{status: probeError, detail: "has no command to run"}
+		return ProbeResult{Status: ProbeError, Detail: "has no command to run"}
 	}
 	full := append(append([]string{}, argv...), "--list-tools")
 	out, timedOut, err := env.RunTimed(full[0], full[1:]...)
 	if timedOut {
-		return probeResult{status: probeTimedOut, detail: fmt.Sprintf("timed out after %s", probeTimeout)}
+		return ProbeResult{Status: probeTimedOut, Detail: fmt.Sprintf("timed out after %s", probeTimeout)}
 	}
 	if err != nil {
 		if sys.ClassifyProbeFailure(out, err) == sys.ProbeDenied {
-			return probeResult{status: probeDeniedByPolicy, detail: "positively refused by policy/permission"}
+			return ProbeResult{Status: ProbeDeniedByPolicy, Detail: "positively refused by policy/permission"}
 		}
-		return probeResult{status: probeError, detail: classifyProbeErr(err)}
+		return ProbeResult{Status: ProbeError, Detail: classifyProbeErr(err)}
 	}
 	n := 0
 	for _, ln := range strings.Split(out, "\n") {
@@ -71,9 +72,9 @@ func probeListTools(env hostenv.Env, argv []string) probeResult {
 		}
 	}
 	if n == 0 {
-		return probeResult{status: probeNoTools}
+		return ProbeResult{Status: ProbeNoTools}
 	}
-	return probeResult{status: probeToolsOK, tools: n}
+	return ProbeResult{Status: ProbeToolsOK, Tools: n}
 }
 
 // classifyProbeErr maps a probe error to a short, value-free diagnostic: it
@@ -90,3 +91,15 @@ func classifyProbeErr(err error) string {
 	}
 	return "could not be run"
 }
+
+// fake returns the embedded System as the test double, for fixtures that build
+// a base env and then override one seam. TEST-ONLY: it panics on a real env,
+// which is the right outcome for test-only code reached in production — the
+// alternative is a silent no-op, and silent no-ops are what this refactor
+// exists to delete.
+// probeTimeout bounds every registered-command probe so doctor can never wedge
+// on a hung MCP server; probeMaxOutput caps how much of its output we capture.
+const (
+	probeTimeout   = 5 * time.Second
+	probeMaxOutput = 64 << 10 // 64KB
+)

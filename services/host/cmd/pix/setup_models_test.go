@@ -32,6 +32,7 @@ import (
 	"path/filepath"
 	"pix/host/config"
 	"pix/host/hostenv"
+	"pix/host/readiness/axis"
 	"pix/host/sys/systest"
 	"pix/host/workflow/man"
 	"pix/host/workflow/onboard"
@@ -559,9 +560,9 @@ func TestWriteSetupModelsReceipt_RefusesSymlinkedDir(t *testing.T) {
 func TestWriteSetupModelsReceipt_AtomicWrite(t *testing.T) {
 	stateDir := t.TempDir()
 	rec := buildSetupModelsReceipt(setupModelsOutcome{
-		installed: true,
+		Installed: true,
 		consent:   "prompt-no",
-		missing:   []missingModel{{tag: "qwen3.5:9b", roles: []string{"watcher", "bridge"}}},
+		missing:   []axis.MissingModel{{Tag: "qwen3.5:9b", Roles: []string{"watcher", "bridge"}}},
 	}, time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC))
 	if err := writeSetupModelsReceipt(stateDir, rec); err != nil {
 		t.Fatal(err)
@@ -610,7 +611,7 @@ func TestSetupUsageAndManMentionPullModels(t *testing.T) {
 
 func TestIsValidOllamaTag(t *testing.T) {
 	tests := []struct {
-		tag  string
+		Tag  string
 		want bool
 	}{
 		{"", false},
@@ -634,8 +635,8 @@ func TestIsValidOllamaTag(t *testing.T) {
 		{"hello;world", false},
 	}
 	for _, tt := range tests {
-		if got := isValidOllamaTag(tt.tag); got != tt.want {
-			t.Errorf("isValidOllamaTag(%q) = %v, want %v", tt.tag, got, tt.want)
+		if got := axis.IsValidOllamaTag(tt.Tag); got != tt.want {
+			t.Errorf("axis.IsValidOllamaTag(%q) = %v, want %v", tt.Tag, got, tt.want)
 		}
 	}
 }

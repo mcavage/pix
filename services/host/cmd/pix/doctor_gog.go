@@ -8,6 +8,7 @@ import (
 	"pix/host/hostenv"
 	"pix/host/mcp"
 	"pix/host/readiness"
+	"pix/host/readiness/axis"
 	"pix/host/secret"
 	"regexp"
 	"strings"
@@ -47,10 +48,10 @@ func gogAccount(cfg *config.Config, env hostenv.Env) string {
 	return ""
 }
 
-// probeStatus/probeResult (the `--list-tools` probe outcome), probeListTools,
+// probeStatus/axis.ProbeResult (the `--list-tools` probe outcome), axis.ProbeListTools,
 // classifyProbeErr, trustedExecPath, and mcp.TrustedGogSpawn are SHARED with
 // doctor_mcp.go — see doctor_probe.go, which owns the single implementation
-// (this file's version was the superset kept there: probeDeniedByPolicy, an
+// (this file's version was the superset kept there: axis.ProbeDeniedByPolicy, an
 // EXPLICIT policy/permission refusal distinguished from a generic probe
 // error).
 
@@ -84,26 +85,26 @@ func gogMissingHardenedFlags(env hostenv.Env, argv []string) []string {
 // registration would produce for these inputs — mcp.GogRegisteredArgv, so the
 // probe can never drift lighter than what registration runs): op-wrapped when
 // op + op-refs resolve, bare otherwise.
-func gogHeadlessProbe(env hostenv.Env, acct, opRefs string) probeResult {
+func gogHeadlessProbe(env hostenv.Env, acct, opRefs string) axis.ProbeResult {
 	if acct == "" {
-		return probeResult{status: probeError, detail: "could not run (account unresolved)"}
+		return axis.ProbeResult{Status: axis.ProbeError, Detail: "could not run (account unresolved)"}
 	}
 
 	gogPath, err := env.LookPath("gog")
 	if err != nil {
-		return probeResult{status: probeError, detail: "could not run (gog not found)"}
+		return axis.ProbeResult{Status: axis.ProbeError, Detail: "could not run (gog not found)"}
 	}
 	opPath, opErr := env.LookPath("op")
 	if opErr != nil || opRefs == "" || !secret.OpRefFilled(env, "GOG_KEYRING_PASSWORD") {
 		opPath, opRefs = "", ""
 	}
-	return probeListTools(env, mcp.GogRegisteredArgv(gogPath, opPath, opRefs, acct))
+	return axis.ProbeListTools(env, mcp.GogRegisteredArgv(gogPath, opPath, opRefs, acct))
 }
 
 // gogHeadlessOK is gogHeadlessProbe collapsed to a bool for callers that only
 // need pass/fail (gog setup's follow-up gate).
 func gogHeadlessOK(env hostenv.Env, acct, opRefs string) bool {
-	return gogHeadlessProbe(env, acct, opRefs).status == probeToolsOK
+	return gogHeadlessProbe(env, acct, opRefs).Status == axis.ProbeToolsOK
 }
 
 // gogSetupHint is the ONE guided recovery command doctor ever points at for
@@ -113,25 +114,25 @@ const gogSetupHint = "pix gworkspace setup"
 // spawnCheck builds the "headless spawn" check from a structured probe result.
 // Shared by the honest (registered-command) path and the best-effort
 // reconstruction fallback, with per-path ready/zero-tools wording.
-func gogSpawnCheck(env hostenv.Env, res probeResult, readyDetail, noToolsDetail string) readiness.Check {
-	switch res.status {
-	case probeToolsOK:
+func gogSpawnCheck(env hostenv.Env, res axis.ProbeResult, readyDetail, noToolsDetail string) readiness.Check {
+	switch res.Status {
+	case axis.ProbeToolsOK:
 		return readiness.Check{Label: "headless spawn", Verdict: readiness.VerdictReady,
 			Detail:   readyDetail,
-			Evidence: fmt.Sprintf("--list-tools returned %s", cli.Plural(res.tools, "tool"))}
-	case probeNoTools:
+			Evidence: fmt.Sprintf("--list-tools returned %s", cli.Plural(res.Tools, "tool"))}
+	case axis.ProbeNoTools:
 		return readiness.Check{Label: "headless spawn", Verdict: readiness.VerdictTodo,
 			Detail:   noToolsDetail,
 			Evidence: "--list-tools exited cleanly with an empty tool list",
 			Todo:     "add GOG_KEYRING_BACKEND=file + GOG_KEYRING_PASSWORD + GOG_ACCOUNT + GOG_HOME to " + secret.DefaultOpRefsPath(env)}
-	case probeDeniedByPolicy:
+	case axis.ProbeDeniedByPolicy:
 		return readiness.Check{Label: "headless spawn", Verdict: readiness.VerdictDenied,
 			Detail:   "the spawn was positively refused by policy/permission — an organizational denial, not a setup gap",
 			Evidence: "probe output carried an explicit policy denial"}
-	default: // probeTimedOut / probeError — unverifiable, never a keyring claim
+	default: // probeTimedOut / axis.ProbeError — unverifiable, never a keyring claim
 		return readiness.Check{Label: "headless spawn", Verdict: readiness.VerdictUnverifiable,
-			Detail:   "probe " + res.detail + " — could not verify (inspect: sbx mcp inspect " + config.GWServerName + ")",
-			Evidence: "probe " + res.detail}
+			Detail:   "probe " + res.Detail + " — could not verify (inspect: sbx mcp inspect " + config.GWServerName + ")",
+			Evidence: "probe " + res.Detail}
 	}
 }
 
@@ -188,7 +189,7 @@ func gogGroup(cfg *config.Config, env hostenv.Env, mcpOut string, mcpOK, sbxPres
 		if !gogSpawnIsOpWrapped(argv) {
 			readyDetail = "registered command exposes tools (verified as-registered) — spawned BARE (no op-refs involved)"
 		}
-		g.Checks = append(g.Checks, gogSpawnCheck(env, probeListTools(env, trustedArgv),
+		g.Checks = append(g.Checks, gogSpawnCheck(env, axis.ProbeListTools(env, trustedArgv),
 			readyDetail,
 			"the registered command returns 0 tools — keyring not headless"))
 		g.Checks = append(g.Checks, gogRegistrationCheck(mcpOut, mcpOK, sbxPresent))
@@ -289,7 +290,7 @@ func gogGroup(cfg *config.Config, env hostenv.Env, mcpOut string, mcpOK, sbxPres
 			readiness.Check{Label: "account", Verdict: readiness.VerdictReady, Detail: acct + " authorized (interactive)"},
 			readiness.Check{Label: "headless spawn", Verdict: readiness.VerdictUnverifiable,
 				Detail: "can't verify the gateway spawn — op (1Password CLI) not found; install it so doctor can probe the real headless path"})
-	case head.status == probeToolsOK:
+	case head.Status == axis.ProbeToolsOK:
 		// Best-effort success: this account authenticates headlessly, but we could
 		// NOT confirm it is the command the sbx gateway actually registered. That
 		// is UNVERIFIABLE, not a failure: doctor genuinely does not know whether
@@ -304,7 +305,7 @@ func gogGroup(cfg *config.Config, env hostenv.Env, mcpOut string, mcpOK, sbxPres
 		g.Checks = append(g.Checks,
 			readiness.Check{Label: "account", Verdict: readiness.VerdictReady, Detail: acct + " authorized (interactive)"},
 			gogSpawnCheck(env, head,
-				"", // unreachable: probeToolsOK handled above
+				"", // unreachable: axis.ProbeToolsOK handled above
 				"auth OK in your shell but the gateway spawn gets 0 tools — keyring not headless"))
 	}
 

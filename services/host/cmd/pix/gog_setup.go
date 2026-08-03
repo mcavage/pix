@@ -69,6 +69,7 @@ import (
 	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/mcp"
+	"pix/host/readiness/axis"
 	"pix/host/secret"
 	"pix/host/workflow/onboard"
 )
@@ -429,15 +430,15 @@ func gogSetup(env hostenv.Env, opts gogSetupOpts, in io.Reader, out io.Writer, t
 	// registration is actually readable, so it can never be silently lost to a
 	// same-run rollback.
 	snap := snapshotGogRegistration(env)
-	if snap.state == gogRegUnknown {
+	if snap.State == gogRegUnknown {
 		return fmt.Errorf("could not confirm the prior " + config.GWServerName + " registration (sbx mcp ls/get did not resolve cleanly): " +
 			"refusing to authorize or overwrite it until this is readable; check the sbx daemon (sbx mcp status), " +
 			"then re-run pix gworkspace setup")
 	}
-	docsSnap := gogRegSnapshot{state: gogRegAbsent}
+	docsSnap := gogRegSnapshot{State: gogRegAbsent}
 	if createDocs {
 		docsSnap = snapshotMCPRegistration(env, config.GWDocsCreateServerName)
-		if docsSnap.state == gogRegUnknown {
+		if docsSnap.State == gogRegUnknown {
 			return fmt.Errorf("could not confirm the prior %s registration: check the sbx daemon (sbx mcp status), then re-run pix gworkspace setup", config.GWDocsCreateServerName)
 		}
 	}
@@ -489,7 +490,7 @@ func gogSetup(env hostenv.Env, opts gogSetupOpts, in io.Reader, out io.Writer, t
 	// nothing about the bare env the sbx gateway spawns gog in. When op/op-refs
 	// are unavailable this MUST NOT skip verification — reg falls back to the
 	// bare hardened invocation (minus the op wrapper), bounded by the same
-	// probeListTools machinery. A clean zero-tools result still fails, and an
+	// axis.ProbeListTools machinery. A clean zero-tools result still fails, and an
 	// exec/timeout result is unverifiable and must never be reported as
 	// success. Nothing here mutates config/registration yet — that only happens
 	// after `head` is confirmed healthy, below.
@@ -497,19 +498,19 @@ func gogSetup(env hostenv.Env, opts gogSetupOpts, in io.Reader, out io.Writer, t
 	if createDocs {
 		reg.HostBin = hostPath
 	}
-	head := probeListTools(env, reg.ExecArgv(config.GWServerName))
-	switch head.status {
-	case probeToolsOK:
+	head := axis.ProbeListTools(env, reg.ExecArgv(config.GWServerName))
+	switch head.Status {
+	case axis.ProbeToolsOK:
 		fmt.Fprintln(out, "headless tools OK (verified the same host-side path the sbx gateway/doctor use)")
-	case probeNoTools:
+	case axis.ProbeNoTools:
 		fmt.Fprintln(out, "interactive auth is healthy, but the headless path returns 0 tools.")
 		fmt.Fprintln(out, "  this is the documented trap: the gateway spawns gog in a bare, non-interactive")
 		fmt.Fprintln(out, "  env and can't unlock the keyring without help.")
 		fmt.Fprintf(out, "  add GOG_KEYRING_BACKEND=file + GOG_KEYRING_PASSWORD + GOG_ACCOUNT + GOG_HOME to %s\n", secret.DefaultOpRefsPath(env))
 		return fmt.Errorf("authorization succeeded but the headless tool listing returned 0 tools; nothing was registered (account %s)", account)
-	default: // probeTimedOut, probeError, probeDeniedByPolicy — never claimed as success
-		fmt.Fprintf(out, "headless verification could not be confirmed (%s): not registering until this is fixed\n", head.detail)
-		return fmt.Errorf("headless verification unverifiable for %s (%s): not registering until this is fixed", account, head.detail)
+	default: // probeTimedOut, axis.ProbeError, axis.ProbeDeniedByPolicy — never claimed as success
+		fmt.Fprintf(out, "headless verification could not be confirmed (%s): not registering until this is fixed\n", head.Detail)
+		return fmt.Errorf("headless verification unverifiable for %s (%s): not registering until this is fixed", account, head.Detail)
 	}
 
 	// sbx presence, config.Load(), and the prior registration snapshot were ALL
@@ -574,7 +575,7 @@ func gogSetup(env hostenv.Env, opts gogSetupOpts, in io.Reader, out io.Writer, t
 // gogSetupRollbackRegistration undoes a just-succeeded `sbx mcp add gog ...`
 // when the config.Save() that was supposed to follow it fails, so the sbx
 // gateway and pix's persisted config never drift apart:
-//   - snap.state == gogRegPresent: snap.argv is the exact command that was
+//   - snap.State == gogRegPresent: snap.argv is the exact command that was
 //     registered for gog BEFORE this run (captured by snapshotGogRegistration
 //     before it was overwritten) — re-register it verbatim via `sbx mcp add`.
 //   - otherwise (gogRegAbsent — gogRegUnknown is refused earlier by gogSetup's
@@ -586,7 +587,7 @@ func gogSetup(env hostenv.Env, opts gogSetupOpts, in io.Reader, out io.Writer, t
 // run by hand.
 func gogSetupRollbackRegistration(env hostenv.Env, snap gogRegSnapshot) error {
 
-	if snap.state == gogRegPresent {
+	if snap.State == gogRegPresent {
 		args := mcp.RawAddArgs(config.GWServerName, snap.argv)
 		if _, err := env.Run("sbx", args...); err != nil {
 			return fmt.Errorf("could not restore the prior gog registration: %w", err)
@@ -605,20 +606,20 @@ func gogSetupRollbackRegistration(env hostenv.Env, snap gogRegSnapshot) error {
 func snapshotMCPRegistration(env hostenv.Env, name string) gogRegSnapshot {
 	listOut, timedOut, err := env.RunTimed("sbx", "mcp", "ls")
 	if err != nil || timedOut {
-		return gogRegSnapshot{state: gogRegUnknown}
+		return gogRegSnapshot{State: gogRegUnknown}
 	}
 	if !cli.GrepWord(listOut, name) {
-		return gogRegSnapshot{state: gogRegAbsent}
+		return gogRegSnapshot{State: gogRegAbsent}
 	}
 	if argv, ok := mcp.RegisteredCommand(env, name); ok {
-		return gogRegSnapshot{state: gogRegPresent, argv: argv}
+		return gogRegSnapshot{State: gogRegPresent, argv: argv}
 	}
-	return gogRegSnapshot{state: gogRegUnknown}
+	return gogRegSnapshot{State: gogRegUnknown}
 }
 
 func restoreMCPRegistration(env hostenv.Env, name string, snap gogRegSnapshot) error {
 
-	if snap.state == gogRegPresent {
+	if snap.State == gogRegPresent {
 		if _, err := env.Run("sbx", mcp.RawAddArgs(name, snap.argv)...); err != nil {
 			return fmt.Errorf("restore %s: %w", name, err)
 		}
@@ -653,7 +654,7 @@ const (
 // gogRegSnapshot is the result of snapshotGogRegistration: state, plus (only
 // when state == gogRegPresent) the exact argv that was registered.
 type gogRegSnapshot struct {
-	state gogRegState
+	State gogRegState
 	argv  []string
 }
 
@@ -684,17 +685,17 @@ func snapshotGogRegistration(env hostenv.Env) gogRegSnapshot {
 		// Defensive only: gogSetup's own preflight already refuses to run past a
 		// missing sbx, so a caller reaching here with sbx absent is unexpected —
 		// report unknown rather than guessing absent.
-		return gogRegSnapshot{state: gogRegUnknown}
+		return gogRegSnapshot{State: gogRegUnknown}
 	}
 	listOut, timedOut, err := env.RunTimed("sbx", "mcp", "ls")
 	if err != nil || timedOut {
-		return gogRegSnapshot{state: gogRegUnknown}
+		return gogRegSnapshot{State: gogRegUnknown}
 	}
 	if !cli.GrepWord(listOut, config.GWServerName) {
-		return gogRegSnapshot{state: gogRegAbsent}
+		return gogRegSnapshot{State: gogRegAbsent}
 	}
 	if argv, ok := registeredGogCommand(env); ok {
-		return gogRegSnapshot{state: gogRegPresent, argv: argv}
+		return gogRegSnapshot{State: gogRegPresent, argv: argv}
 	}
-	return gogRegSnapshot{state: gogRegUnknown}
+	return gogRegSnapshot{State: gogRegUnknown}
 }

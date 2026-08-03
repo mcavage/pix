@@ -28,6 +28,7 @@ import (
 	"pix/host/hostenv"
 	"pix/host/mcp"
 	"pix/host/readiness"
+	"pix/host/readiness/axis"
 	"pix/host/secret"
 	"strings"
 
@@ -321,7 +322,7 @@ func gworkspaceStatus(cfg *config.Config, env hostenv.Env, out io.Writer) int {
 				Detail:   "probe skipped: the registered command's executable does not match the PATH-resolved binary — never executed",
 				Evidence: "registered executable token not canonical; probe not executed"})
 		} else {
-			checks = append(checks, gogSpawnCheck(env, probeListTools(env, trustedArgv),
+			checks = append(checks, gogSpawnCheck(env, axis.ProbeListTools(env, trustedArgv),
 				"registered command exposes tools (verified as-registered)",
 				"the registered command returns 0 tools — keyring not headless"))
 		}
@@ -334,7 +335,7 @@ func gworkspaceStatus(cfg *config.Config, env hostenv.Env, out io.Writer) int {
 	if cfg.GoogleWorkspaceAccess == gwAccessCreateDocs {
 		if argv, ok := mcp.RegisteredCommand(env, config.GWDocsCreateServerName); ok {
 			if trusted, ok := mcp.RecognizedArgv(env, argv, config.GWDocsCreateServerName, secret.FindOpRefs(env)); ok {
-				checks = append(checks, docsCreateSpawnCheck(probeListTools(env, trusted)))
+				checks = append(checks, docsCreateSpawnCheck(axis.ProbeListTools(env, trusted)))
 			} else {
 				checks = append(checks, readiness.Check{Label: "create Docs", Verdict: readiness.VerdictUnverifiable,
 					Detail: "registered command is not the canonical Pix host command", Todo: "pix gworkspace setup --create-docs"})
@@ -354,21 +355,21 @@ func gworkspaceStatus(cfg *config.Config, env hostenv.Env, out io.Writer) int {
 	return gworkspaceExit(checks)
 }
 
-func docsCreateSpawnCheck(res probeResult) readiness.Check {
-	switch res.status {
-	case probeToolsOK:
+func docsCreateSpawnCheck(res axis.ProbeResult) readiness.Check {
+	switch res.Status {
+	case axis.ProbeToolsOK:
 		return readiness.Check{Label: "create Docs", Verdict: readiness.VerdictReady,
 			Detail:   "create-new-Docs tool exposed (existing Docs remain immutable)",
-			Evidence: fmt.Sprintf("--list-tools returned %s", cli.Plural(res.tools, "tool"))}
-	case probeNoTools:
+			Evidence: fmt.Sprintf("--list-tools returned %s", cli.Plural(res.Tools, "tool"))}
+	case axis.ProbeNoTools:
 		return readiness.Check{Label: "create Docs", Verdict: readiness.VerdictTodo,
 			Detail: "create-new-Docs server returned 0 tools", Todo: "pix gworkspace setup --create-docs"}
-	case probeDeniedByPolicy:
+	case axis.ProbeDeniedByPolicy:
 		return readiness.Check{Label: "create Docs", Verdict: readiness.VerdictDenied,
 			Detail: "create-new-Docs spawn was refused by policy"}
 	default:
 		return readiness.Check{Label: "create Docs", Verdict: readiness.VerdictUnverifiable,
-			Detail: "probe " + res.detail + " — could not verify", Todo: "sbx mcp inspect " + config.GWDocsCreateServerName}
+			Detail: "probe " + res.Detail + " — could not verify", Todo: "sbx mcp inspect " + config.GWDocsCreateServerName}
 	}
 }
 
@@ -413,24 +414,24 @@ func gworkspaceDisable(cfg *config.Config, env hostenv.Env, out io.Writer) error
 	snap := snapshotGogRegistration(env)
 	docsSnap := snapshotMCPRegistration(env, config.GWDocsCreateServerName)
 
-	if !configured && snap.state == gogRegAbsent && docsSnap.state == gogRegAbsent {
+	if !configured && snap.State == gogRegAbsent && docsSnap.State == gogRegAbsent {
 		fmt.Fprintln(out, "Google Workspace is not configured; nothing to remove.")
 		return nil
 	}
-	if snap.state == gogRegUnknown || docsSnap.state == gogRegUnknown {
+	if snap.State == gogRegUnknown || docsSnap.State == gogRegUnknown {
 		return fmt.Errorf("could not confirm the %s registration (sbx mcp ls did not resolve cleanly): "+
 			"refusing to remove config while the gateway state is unreadable; check the sbx daemon (sbx mcp status), "+
 			"then re-run pix gworkspace disable", config.GWServerName)
 	}
 
-	if snap.state == gogRegPresent {
+	if snap.State == gogRegPresent {
 
 		if _, err := env.Run("sbx", "mcp", "rm", config.GWServerName); err != nil {
 			return fmt.Errorf("removing the %s registration: %w (remove it by hand: sbx mcp rm %s)", config.GWServerName, err, config.GWServerName)
 		}
 		fmt.Fprintln(out, "  removed registration: "+config.GWServerName)
 	}
-	if docsSnap.state == gogRegPresent {
+	if docsSnap.State == gogRegPresent {
 		if _, err := env.Run("sbx", "mcp", "rm", config.GWDocsCreateServerName); err != nil {
 			return fmt.Errorf("removing the %s registration: %w", config.GWDocsCreateServerName, err)
 		}

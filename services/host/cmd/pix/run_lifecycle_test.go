@@ -371,7 +371,7 @@ func TestWillCreate_MatchesPlanSandboxLaunchReattachDecision(t *testing.T) {
 	cfg := &config.Config{}
 	o := runOpts{Workspace: ".", Name: "pix-t"}
 	for _, tc := range []struct {
-		state   sbxState
+		State   sbxState
 		replace bool
 		want    bool
 	}{
@@ -384,13 +384,13 @@ func TestWillCreate_MatchesPlanSandboxLaunchReattachDecision(t *testing.T) {
 		{sbxAbsent, true, true},
 		{sbxUnknown, true, false},
 	} {
-		got := willCreate(tc.state, tc.replace)
+		got := willCreate(tc.State, tc.replace)
 		if got != tc.want {
-			t.Errorf("willCreate(%v, %v) = %v, want %v", tc.state, tc.replace, got, tc.want)
+			t.Errorf("willCreate(%v, %v) = %v, want %v", tc.State, tc.replace, got, tc.want)
 		}
-		plan := planSandboxLaunch(tc.state, tc.replace, cfg, o, "0.0.99")
+		plan := planSandboxLaunch(tc.State, tc.replace, cfg, o, "0.0.99")
 		if plan.Err == nil && got == plan.Reattach {
-			t.Errorf("willCreate(%v, %v) = %v must be the inverse of plan.Reattach = %v", tc.state, tc.replace, got, plan.Reattach)
+			t.Errorf("willCreate(%v, %v) = %v must be the inverse of plan.Reattach = %v", tc.State, tc.replace, got, plan.Reattach)
 		}
 	}
 }

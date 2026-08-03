@@ -26,6 +26,7 @@ import (
 
 	"pix/host/cli"
 	"pix/host/launcher"
+	"pix/host/readiness/axis"
 	"pix/host/routing"
 	"pix/host/sys"
 
@@ -553,7 +554,7 @@ func launchInteractiveAuthoring(name string) error {
 	piArgs := []string{seed}
 	// Force the authoring model (Opus via the authoring intent) so the flow that
 	// authors this agent is not run on a weak default model.
-	if m, err := resolveSessionModel("authoring"); err == nil && m != "" {
+	if m, err := axis.ResolveSessionModel("authoring"); err == nil && m != "" {
 		piArgs = append([]string{"--model", m}, piArgs...)
 	}
 	cmd := exec.Command(pi, piArgs...)

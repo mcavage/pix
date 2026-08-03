@@ -6,6 +6,7 @@ import (
 	"pix/host/hostenv"
 	"pix/host/mcp"
 	"pix/host/readiness"
+	"pix/host/readiness/axis"
 	"pix/host/secret"
 	"pix/host/sys"
 	"pix/host/workflow/pack"
@@ -374,24 +375,24 @@ func mcpLocalCheck(env hostenv.Env, name, mcpOut string) readiness.Check {
 		return readiness.Check{Label: name, Verdict: readiness.VerdictUnverifiable,
 			Detail: "registered (probe skipped: unrecognized/untrusted command, never executed; inspect: sbx mcp inspect " + name + ")"}
 	}
-	res := probeListTools(env, trusted)
-	switch res.status {
-	case probeToolsOK:
+	res := axis.ProbeListTools(env, trusted)
+	switch res.Status {
+	case axis.ProbeToolsOK:
 		return readiness.Check{Label: name, Verdict: readiness.VerdictReady,
-			Detail: fmt.Sprintf("registered, spawns %s", cli.Plural(res.tools, "tool"))}
-	case probeNoTools:
+			Detail: fmt.Sprintf("registered, spawns %s", cli.Plural(res.Tools, "tool"))}
+	case axis.ProbeNoTools:
 		return readiness.Check{Label: name, Verdict: readiness.VerdictTodo,
 			Detail: "registered but the spawned command returns 0 tools — headless creds/keyring",
 			Todo:   "review the registered command: sbx mcp inspect " + name}
-	case probeDeniedByPolicy:
+	case axis.ProbeDeniedByPolicy:
 		// An EXPLICIT policy/permission refusal is a positive denial — an org
 		// decision, not a setup gap, and never collapsed into unverifiable.
 		return readiness.Check{Label: name, Verdict: readiness.VerdictDenied,
 			Detail:   "registered, but the spawn is positively refused by policy/permission (sbx mcp inspect " + name + ")",
 			Evidence: "denied"}
-	default: // probeTimedOut / probeError
+	default: // probeTimedOut / axis.ProbeError
 		return readiness.Check{Label: name, Verdict: readiness.VerdictUnverifiable,
-			Detail: "registered but the tool probe " + res.detail + "; could not verify"}
+			Detail: "registered but the tool probe " + res.Detail + "; could not verify"}
 	}
 }
 
@@ -507,10 +508,10 @@ func unknownKeyCheck(key string) readiness.Check {
 	}
 }
 
-// trustedExecPath, mcp.TrustedGogSpawn, probeStatus/probeResult, probeListTools,
+// trustedExecPath, mcp.TrustedGogSpawn, probeStatus/axis.ProbeResult, axis.ProbeListTools,
 // and classifyProbeErr are SHARED with doctor_gog.go — see doctor_probe.go,
 // which owns the single implementation. mcpLocalCheck maps the shared
-// probeDeniedByPolicy outcome to readiness.VerdictDenied (an explicit policy refusal is
+// axis.ProbeDeniedByPolicy outcome to readiness.VerdictDenied (an explicit policy refusal is
 // a positive denial, same as the remote auth axis), and everything else
 // unclassified to unverifiable.
 

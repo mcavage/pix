@@ -1,5 +1,5 @@
 // setup_models.go — S08: `pix setup`'s local-model readiness step + the
-// completion summary, built on the SHARED ModelReadiness seam
+// completion summary, built on the SHARED axis.ModelReadiness seam
 // (modelgo) so setup and doctor can never disagree about what is
 // pulled.
 //
@@ -39,6 +39,7 @@ import (
 	"pix/host/cli"
 	"pix/host/hostenv"
 	"pix/host/readiness"
+	"pix/host/readiness/axis"
 	"pix/host/secret"
 	"slices"
 	"sort"
@@ -54,11 +55,11 @@ import (
 // disjoint tag sets on the same readiness axes doctor uses. It feeds both the
 // completion summary and the state receipt, so the two can never disagree.
 type setupModelsOutcome struct {
-	installed          bool           // ollama on PATH (false => optional, nothing claimed)
-	configured         []string       // distinct configured tags, sorted
-	ready              []missingModel // confirmed pulled BEFORE this run
-	missing            []missingModel // confirmed missing by the initial probe
-	unverifiable       []missingModel // could not be checked — never pulled
+	Installed          bool                // ollama on PATH (false => optional, nothing claimed)
+	configured         []string            // distinct configured tags, sorted
+	ready              []axis.MissingModel // confirmed pulled BEFORE this run
+	missing            []axis.MissingModel // confirmed missing by the initial probe
+	unverifiable       []axis.MissingModel // could not be checked — never pulled
 	unverifiableReason string
 	consent            string   // "none" | "--pull-models" | "prompt-yes" | "prompt-no"
 	pulled             []string // pulled AND verified by the post-pull probe
@@ -67,12 +68,12 @@ type setupModelsOutcome struct {
 }
 
 func setupMemoryModelsReady(cfg *config.Config, o setupModelsOutcome) bool {
-	if cfg == nil || !o.installed || len(o.failed) > 0 || len(o.unverifiable) > 0 || len(o.pulledUnverified) > 0 {
+	if cfg == nil || !o.Installed || len(o.failed) > 0 || len(o.unverifiable) > 0 || len(o.pulledUnverified) > 0 {
 		return false
 	}
 	have := map[string]bool{}
 	for _, m := range o.ready {
-		have[m.tag] = true
+		have[m.Tag] = true
 	}
 	for _, tag := range o.pulled {
 		have[tag] = true
@@ -80,11 +81,11 @@ func setupMemoryModelsReady(cfg *config.Config, o setupModelsOutcome) bool {
 	return have[cfg.MemoryWatcherModel] && have[cfg.MemoryEmbedModel]
 }
 
-// modelTags flattens a missingModel set to its tags.
-func modelTags(ms []missingModel) []string {
+// modelTags flattens a axis.MissingModel set to its tags.
+func modelTags(ms []axis.MissingModel) []string {
 	tags := make([]string, 0, len(ms))
 	for _, m := range ms {
-		tags = append(tags, m.tag)
+		tags = append(tags, m.Tag)
 	}
 	return tags
 }
@@ -97,17 +98,17 @@ func runOllamaPull(env hostenv.Env, tag string) error {
 }
 
 // setupLocalModels is the whole step: probe once, classify on the shared
-// ModelReadiness axes, gather consent, pull confirmed-missing tags (deduped by
-// computeMissingModels), verify once, and return the truthful outcome. It
+// axis.ModelReadiness axes, gather consent, pull confirmed-missing tags (deduped by
+// axis.ComputeMissingModels), verify once, and return the truthful outcome. It
 // never installs Ollama and never pulls without consent.
 func setupLocalModels(cfg *config.Config, env hostenv.Env, in io.Reader, out io.Writer, interactive, pullFlag bool) setupModelsOutcome {
-	p := probeOllamaAt(env, effectiveOllamaEndpoint(cfg, env))
-	rs := []ModelReadiness{
-		modelReadiness("watcher", cfg.MemoryWatcherModel, "fact capture", p, readiness.RequirementOptional),
-		modelReadiness("embed", cfg.MemoryEmbedModel, "semantic recall", p, readiness.RequirementOptional),
-		modelReadiness("bridge", cfg.OllamaBridgeModel, "sandbox ollama bridge", p, readiness.RequirementOptional),
+	p := axis.ProbeOllamaAt(env, axis.EffectiveOllamaEndpoint(cfg, env))
+	rs := []axis.ModelReadiness{
+		axis.EvalModel("watcher", cfg.MemoryWatcherModel, "fact capture", p, readiness.RequirementOptional),
+		axis.EvalModel("embed", cfg.MemoryEmbedModel, "semantic recall", p, readiness.RequirementOptional),
+		axis.EvalModel("bridge", cfg.OllamaBridgeModel, "sandbox ollama bridge", p, readiness.RequirementOptional),
 	}
-	o := setupModelsOutcome{installed: p.installed, consent: "none"}
+	o := setupModelsOutcome{Installed: p.Installed, consent: "none"}
 	seen := map[string]bool{}
 	for _, m := range rs {
 		if m.Model != "" && !seen[m.Model] {
@@ -116,25 +117,25 @@ func setupLocalModels(cfg *config.Config, env hostenv.Env, in io.Reader, out io.
 		}
 	}
 	sort.Strings(o.configured)
-	if !p.installed {
+	if !p.Installed {
 		// Not configured: optional, nothing claimed, nothing installed by us.
 		return o
 	}
-	o.ready = filterModelsByVerdict(rs, func(v readiness.Verdict) bool { return v == readiness.VerdictReady })
-	o.missing = computeMissingModels(rs)
-	o.unverifiable = computeUnverifiableModels(rs)
+	o.ready = axis.FilterModelsByVerdict(rs, func(v readiness.Verdict) bool { return v == readiness.VerdictReady })
+	o.missing = axis.ComputeMissingModels(rs)
+	o.unverifiable = axis.ComputeUnverifiableModels(rs)
 	if len(o.unverifiable) > 0 {
 		// Differentiate between invalid tags and probe failure
 		var invalidTags []string
 		for _, m := range o.unverifiable {
-			if !isValidOllamaTag(m.tag) {
-				invalidTags = append(invalidTags, m.tag)
+			if !axis.IsValidOllamaTag(m.Tag) {
+				invalidTags = append(invalidTags, m.Tag)
 			}
 		}
 		if len(invalidTags) == len(o.unverifiable) {
 			o.unverifiableReason = "invalid tag format (config TODO)"
 		} else {
-			o.unverifiableReason = ollamaVerifyFailureReason(p)
+			o.unverifiableReason = axis.OllamaVerifyFailureReason(p)
 		}
 		fmt.Fprintln(out, "")
 		fmt.Fprintf(out, "local models: could not verify %s (%s) — nothing will be pulled; an unverified tag is never treated as absent.\n",
@@ -159,12 +160,12 @@ func setupLocalModels(cfg *config.Config, env hostenv.Env, in io.Reader, out io.
 		fmt.Fprintln(out, "")
 		fmt.Fprintln(out, "Missing local Ollama models:")
 		for _, m := range o.missing {
-			roles := strings.Join(m.roles, ", ")
-			if bridgeRequired && m.tag == cfg.OllamaBridgeModel {
-				fmt.Fprintf(out, "  %-18s (%s, inference)  — REQUIRED: the only model Pix can call on this machine\n", m.tag, roles)
+			roles := strings.Join(m.Roles, ", ")
+			if bridgeRequired && m.Tag == cfg.OllamaBridgeModel {
+				fmt.Fprintf(out, "  %-18s (%s, inference)  — REQUIRED: the only model Pix can call on this machine\n", m.Tag, roles)
 				continue
 			}
-			fmt.Fprintf(out, "  %-18s (%s)  — optional\n", m.tag, roles)
+			fmt.Fprintf(out, "  %-18s (%s)  — optional\n", m.Tag, roles)
 		}
 		fmt.Fprintf(out, "Pull %s now? Each download can be several GB of network and disk. [y/N] ", cli.Plural(len(o.missing), "model"))
 		line, ok := secret.ScanYN(bufio.NewScanner(in))
@@ -187,28 +188,28 @@ func setupLocalModels(cfg *config.Config, env hostenv.Env, in io.Reader, out io.
 
 	var attempted []string
 	for _, m := range o.missing {
-		fmt.Fprintf(out, "  pulling %s (%s) ...\n", m.tag, strings.Join(m.roles, ", "))
-		if err := runOllamaPull(env, m.tag); err != nil {
-			o.failed = append(o.failed, m.tag)
-			fmt.Fprintf(out, "  ✗ ollama pull %s failed: %v\n", m.tag, err)
+		fmt.Fprintf(out, "  pulling %s (%s) ...\n", m.Tag, strings.Join(m.Roles, ", "))
+		if err := runOllamaPull(env, m.Tag); err != nil {
+			o.failed = append(o.failed, m.Tag)
+			fmt.Fprintf(out, "  ✗ ollama pull %s failed: %v\n", m.Tag, err)
 			continue
 		}
-		attempted = append(attempted, m.tag)
+		attempted = append(attempted, m.Tag)
 	}
 	if len(attempted) > 0 {
 		// Verify ONCE after all pulls, never per tag.
-		p2 := probeOllamaAt(env, effectiveOllamaEndpoint(cfg, env))
+		p2 := axis.ProbeOllamaAt(env, axis.EffectiveOllamaEndpoint(cfg, env))
 		for _, tag := range attempted {
 			switch {
-			case p2.listOK && modelPulled(p2.listOut, tag):
+			case p2.ListOK && axis.ModelPulled(p2.ListOut, tag):
 				o.pulled = append(o.pulled, tag)
 				// Success is rendered only from the post-mutation readiness report.
-			case p2.listOK:
+			case p2.ListOK:
 				o.failed = append(o.failed, tag)
 				fmt.Fprintf(out, "  ✗ %s: pull reported success but `ollama list` does not show it\n", tag)
 			default:
 				o.pulledUnverified = append(o.pulledUnverified, tag)
-				fmt.Fprintf(out, "  ⚠ %s pulled, but could not re-verify (%s)\n", tag, ollamaVerifyFailureReason(p2))
+				fmt.Fprintf(out, "  ⚠ %s pulled, but could not re-verify (%s)\n", tag, axis.OllamaVerifyFailureReason(p2))
 			}
 		}
 	}
@@ -223,11 +224,11 @@ func ollamaBridgeIsOnlyInferenceModel(cfg *config.Config) bool {
 	if cfg == nil || strings.TrimSpace(cfg.OllamaBridgeModel) == "" {
 		return false
 	}
-	if callable, _ := configuredInferenceSummary(cfg); callable > 0 {
+	if callable, _ := axis.ConfiguredInferenceSummary(cfg); callable > 0 {
 		return false
 	}
 	for _, b := range cfg.Inference.Models {
-		if b.Upstream == cfg.OllamaBridgeModel && ollamaBindingDriver(cfg, b) && b.Available {
+		if b.Upstream == cfg.OllamaBridgeModel && axis.OllamaBindingDriver(cfg, b) && b.Available {
 			return true
 		}
 	}
@@ -243,7 +244,7 @@ func (o setupModelsOutcome) summaryLine() (glyph, detail string) {
 		return strings.Join(s, ", ")
 	}
 	switch {
-	case !o.installed:
+	case !o.Installed:
 		return "·", "optional — ollama not installed (" + joined(o.configured) + "); install it yourself: https://ollama.com"
 	case len(o.unverifiable) > 0:
 		return "⚠", "could not verify (" + o.unverifiableReason + ") — nothing pulled"
@@ -258,8 +259,8 @@ func (o setupModelsOutcome) summaryLine() (glyph, detail string) {
 	case len(o.missing) > len(o.pulled):
 		var remaining []string
 		for _, m := range o.missing {
-			if !slices.Contains(o.pulled, m.tag) {
-				remaining = append(remaining, m.tag)
+			if !slices.Contains(o.pulled, m.Tag) {
+				remaining = append(remaining, m.Tag)
 			}
 		}
 		return "✗", "not pulled: " + joined(remaining) + " — pull them: pix setup --pull-models (or: ollama pull <tag>)"
@@ -288,9 +289,9 @@ type setupModelReceiptEntry struct {
 // buildSetupModelsReceipt reduces an outcome to its receipt.
 func buildSetupModelsReceipt(o setupModelsOutcome, now time.Time) setupModelsReceipt {
 	rec := setupModelsReceipt{Schema: 1, At: now.UTC().Format(time.RFC3339), Consent: o.consent}
-	add := func(ms []missingModel, status string) {
+	add := func(ms []axis.MissingModel, status string) {
 		for _, m := range ms {
-			rec.Models = append(rec.Models, setupModelReceiptEntry{Tag: m.tag, Roles: m.roles, Status: status})
+			rec.Models = append(rec.Models, setupModelReceiptEntry{Tag: m.Tag, Roles: m.Roles, Status: status})
 		}
 	}
 	add(o.ready, "ready")
@@ -298,14 +299,14 @@ func buildSetupModelsReceipt(o setupModelsOutcome, now time.Time) setupModelsRec
 	for _, m := range o.missing {
 		status := "missing"
 		switch {
-		case slices.Contains(o.pulled, m.tag):
+		case slices.Contains(o.pulled, m.Tag):
 			status = "pulled"
-		case slices.Contains(o.failed, m.tag):
+		case slices.Contains(o.failed, m.Tag):
 			status = "pull-failed"
-		case slices.Contains(o.pulledUnverified, m.tag):
+		case slices.Contains(o.pulledUnverified, m.Tag):
 			status = "pulled-unverified"
 		}
-		rec.Models = append(rec.Models, setupModelReceiptEntry{Tag: m.tag, Roles: m.roles, Status: status})
+		rec.Models = append(rec.Models, setupModelReceiptEntry{Tag: m.Tag, Roles: m.Roles, Status: status})
 	}
 	return rec
 }
@@ -339,7 +340,7 @@ func writeSetupModelsReceipt(stateDir string, rec setupModelsReceipt) error {
 // itself already happened and the summary above is the human record). Skipped
 // entirely when ollama isn't installed: there was no decision to receipt.
 func receiptSetupModels(env hostenv.Env, out io.Writer, o setupModelsOutcome) {
-	if !o.installed {
+	if !o.Installed {
 		return
 	}
 	dir, err := setupReceiptStateDir(env)
@@ -467,28 +468,4 @@ func printSetupSummary(cfg *config.Config, env hostenv.Env, out io.Writer, model
 	if len(cfg.MCP) > 0 {
 		fmt.Fprintln(out, mcpHostTrustNotice)
 	}
-}
-
-// isValidOllamaTag rejects malformed, empty, leading-dash, path-separator,
-// or shell-metacharacter model tags. Since exec.Command already prevents shell
-// injection, this guards against argv option confusion (`-f`, `--help`) and
-// nonsensical values that could confuse parsers or probes. Valid:
-// `namespace/model:tag`, letters, numbers, dots, dashes (internal), underscores.
-func isValidOllamaTag(tag string) bool {
-	if tag == "" || tag[0] == '-' {
-		return false
-	}
-	for _, r := range tag {
-		if r <= 32 || r >= 127 {
-			return false // whitespace and control chars
-		}
-		if r == '/' || r == ':' || r == '.' || r == '-' || r == '_' {
-			continue
-		}
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-			continue
-		}
-		return false
-	}
-	return true
 }

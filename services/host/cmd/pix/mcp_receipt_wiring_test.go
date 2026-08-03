@@ -190,7 +190,7 @@ func TestExecSbxRunAndRecordCreate_ReceiptWriteFailureIsDistinctError(t *testing
 // always does, matching run.go's actual gate byte for byte.
 func TestCreateReceiptGate_MirrorsDefinitelyCreating(t *testing.T) {
 	cases := []struct {
-		state   sbxState
+		State   sbxState
 		replace bool
 		want    bool
 	}{
@@ -213,9 +213,9 @@ func TestCreateReceiptGate_MirrorsDefinitelyCreating(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		writeReceipt := definitelyCreating(tc.state, tc.replace)
+		writeReceipt := definitelyCreating(tc.State, tc.replace)
 		if writeReceipt != tc.want {
-			t.Fatalf("definitelyCreating(%v,%v) = %v, want %v", tc.state, tc.replace, writeReceipt, tc.want)
+			t.Fatalf("definitelyCreating(%v,%v) = %v, want %v", tc.State, tc.replace, writeReceipt, tc.want)
 		}
 		if err := execSbxRunAndRecordCreate(trueCmd(t), writeReceipt, sandbox, "", []string{"fresh"}); err != nil {
 			t.Fatal(err)
@@ -226,11 +226,11 @@ func TestCreateReceiptGate_MirrorsDefinitelyCreating(t *testing.T) {
 		}
 		if tc.want {
 			if len(r.Preloaded) != 1 || r.Preloaded[0] != "fresh" {
-				t.Errorf("state=%v replace=%v: want the fresh preloaded set written, got %v", tc.state, tc.replace, r.Preloaded)
+				t.Errorf("state=%v replace=%v: want the fresh preloaded set written, got %v", tc.State, tc.replace, r.Preloaded)
 			}
 		} else {
 			if len(r.Preloaded) != 1 || r.Preloaded[0] != "existing" {
-				t.Errorf("state=%v replace=%v: want the existing receipt left untouched, got %v", tc.state, tc.replace, r.Preloaded)
+				t.Errorf("state=%v replace=%v: want the existing receipt left untouched, got %v", tc.State, tc.replace, r.Preloaded)
 			}
 		}
 	}

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"pix/host/hostenv"
 	"pix/host/readiness"
+	"pix/host/readiness/axis"
 	"runtime"
 	"strings"
 	"sync"
@@ -36,13 +37,13 @@ func ollamaListEnv(tags []string, _ string, totalGB float64) hostenv.Env {
 		case "ollama":
 			return rows, false, nil
 		case "sysctl":
-			return fmt.Sprintf("%d\n", int64(totalGB*bytesPerGB)), false, nil
+			return fmt.Sprintf("%d\n", int64(totalGB*axis.BytesPerGB)), false, nil
 		}
 		return "", false, fmt.Errorf("unexpected command %s", name)
 	}
 	systest.Of(env.System).ReadFileFn = func(path string) (string, error) {
 		if path == "/proc/meminfo" {
-			return fmt.Sprintf("MemTotal: %d kB\n", int64(totalGB*bytesPerGB/1024)), nil
+			return fmt.Sprintf("MemTotal: %d kB\n", int64(totalGB*axis.BytesPerGB/1024)), nil
 		}
 		return "", fmt.Errorf("unexpected file %s", path)
 	}
@@ -59,7 +60,7 @@ func ollamaCfgWith(bindings ...config.InferenceModelBinding) *config.Config {
 }
 
 func binding(model string) config.InferenceModelBinding {
-	return config.InferenceModelBinding{Model: model, Backend: "ollama", Upstream: ollamaTagFor(model), Available: true}
+	return config.InferenceModelBinding{Model: model, Backend: "ollama", Upstream: axis.OllamaTagFor(model), Available: true}
 }
 
 // TestConfigureOllamaInferenceBindsUnverifiedCandidates: a listing is not
@@ -480,7 +481,7 @@ func TestNonInteractiveModelsFlagRejectsUnprobedModel(t *testing.T) {
 	if err == nil {
 		t.Fatal("a scripted setup naming a model that cannot answer must fail loudly")
 	}
-	if !strings.Contains(err.Error(), "has not passed a probe") || !strings.Contains(err.Error(), pullModelsFixCmd) {
+	if !strings.Contains(err.Error(), "has not passed a probe") || !strings.Contains(err.Error(), axis.PullModelsFixCmd) {
 		t.Fatalf("error = %v; it must name the reason and the fix", err)
 	}
 }
@@ -492,7 +493,7 @@ func TestSynthesizeInferenceKitErrorNamesTheFix(t *testing.T) {
 	if err == nil {
 		t.Fatal("a config with no callable binding must refuse to build a kit")
 	}
-	if !strings.Contains(err.Error(), pullModelsFixCmd) {
+	if !strings.Contains(err.Error(), axis.PullModelsFixCmd) {
 		t.Fatalf("refusal = %v; it must carry the remediation", err)
 	}
 }
@@ -501,16 +502,16 @@ func TestSynthesizeInferenceKitErrorNamesTheFix(t *testing.T) {
 // fall-through to modelKeyCoreCheck told a pure-Ollama user to buy a key.
 func TestUnverifiedOllamaCandidateRemediatesWithPullNotProviderKey(t *testing.T) {
 	cfg := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
-	c := inferenceCoreCheck(cfg, "", true)
-	if c.Verdict != readiness.VerdictTodo || c.Todo != pullModelsFixCmd {
-		t.Fatalf("core check = %+v, want a todo remediated by %q", c, pullModelsFixCmd)
+	c := axis.InferenceCoreCheck(cfg, "", true)
+	if c.Verdict != readiness.VerdictTodo || c.Todo != axis.PullModelsFixCmd {
+		t.Fatalf("core check = %+v, want a todo remediated by %q", c, axis.PullModelsFixCmd)
 	}
 	if strings.Contains(c.Todo+c.Detail+c.Evidence, "ANTHROPIC_API_KEY") {
 		t.Fatalf("a not-pulled model must never be remediated with a cloud key: %+v", c)
 	}
 	// With no ollama candidates at all, the key fix is still correct.
 	empty := &config.Config{}
-	if got := inferenceCoreCheck(empty, "", true); got.Todo != modelKeyFixCmd {
+	if got := axis.InferenceCoreCheck(empty, "", true); got.Todo != axis.ModelKeyFixCmd {
 		t.Fatalf("a host with no ollama candidates still needs a key: %+v", got)
 	}
 }
@@ -519,14 +520,14 @@ func TestUnverifiedOllamaCandidateRemediatesWithPullNotProviderKey(t *testing.T)
 func TestRunIntentRowNamesThePullForUnverifiedOllamaBinding(t *testing.T) {
 	cfg := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
 	cfg.RunIntent = "breadth"
-	model, err := resolveSessionModel("breadth")
+	model, err := axis.ResolveSessionModel("breadth")
 	if err != nil {
 		t.Skipf("breadth does not resolve here: %v", err)
 	}
 	cfg.Inference.Models[0].Model = model
-	cfg.Inference.Models[0].Upstream = ollamaTagFor(model)
-	c := runIntentKeyCheck(cfg, "", true)
-	if c.Todo != pullModelsFixCmd {
+	cfg.Inference.Models[0].Upstream = axis.OllamaTagFor(model)
+	c := axis.RunIntentKeyCheck(cfg, "", true)
+	if c.Todo != axis.PullModelsFixCmd {
 		t.Fatalf("run_intent row = %+v, want the pull remediation", c)
 	}
 }
@@ -559,7 +560,7 @@ func TestLegacyVerifiedOllamaBindingFlaggedOnceThenClears(t *testing.T) {
 	if got := legacyVerifiedOllamaBindings(demoted); len(got) != 0 {
 		t.Fatalf("the row must clear on demotion too: %v", got)
 	}
-	if len(unverifiedOllamaCandidates(demoted)) != 1 {
+	if len(axis.UnverifiedOllamaCandidates(demoted)) != 1 {
 		t.Fatal("a demoted binding becomes the candidate row that names the real problem")
 	}
 }
@@ -599,10 +600,10 @@ func TestDeclinedPullLeavesNoCallableModelAndExitsZero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a declined pull must not fail setup: %v", err)
 	}
-	if !strings.Contains(out.String(), pullModelsFixCmd) {
+	if !strings.Contains(out.String(), axis.PullModelsFixCmd) {
 		t.Fatalf("the honest note must name the fix:\n%s", out.String())
 	}
-	if callable, _ := configuredInferenceSummary(cfg); callable != 0 {
+	if callable, _ := axis.ConfiguredInferenceSummary(cfg); callable != 0 {
 		t.Fatal("nothing may be callable after a declined pull")
 	}
 }
@@ -723,7 +724,7 @@ func TestEmptyOllamaSelectionPersistsNothing(t *testing.T) {
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			// runtime.GOOS, not a fixed OS: probeHostMemory dispatches on the real
+			// runtime.GOOS, not a fixed OS: axis.ProbeHostMemory dispatches on the real
 			// one, and the 24 GB floor is a TOTAL-RAM rule, so it fires identically
 			// whichever usable-fraction applies.
 			env := hwMemEnv(t, runtime.GOOS, tc.totalGB)

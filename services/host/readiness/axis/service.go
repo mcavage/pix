@@ -1,8 +1,9 @@
-package main
+package axis
 
 import (
 	"fmt"
 	"pix/host/hostenv"
+	"pix/host/launcher"
 	"pix/host/readiness"
 	"pix/host/rpc"
 	"strings"
@@ -16,7 +17,7 @@ import (
 // is a surviving daemon from an older install, or an unrelated program. A dial
 // answers "is the port held", which is not the question. So no readiness
 // verdict here derives from a dial alone: the port must answer the `identity`
-// JSON-RPC method (services/host/identity.go) with OUR name at OUR version.
+// JSON-RPC method (services/host/identity.go) with OUR name at OUR launcher.Version.
 //
 // Bounded on purpose: one attempt, one retry, ~1s each. A readiness probe that
 // can loop is a readiness probe that can hang the command it is reporting for.
@@ -30,14 +31,14 @@ const (
 )
 
 // serviceIdentity is the launcher's view of the identity payload.
-// serviceIdentityResult and identityProber alias their hostenv counterparts;
+// ServiceIdentityResult and IdentityProber alias their hostenv counterparts;
 // both moved so Env could leave package main, and both come back with the
 // readiness extraction.
-type serviceIdentityResult = hostenv.ServiceIdentity
+type ServiceIdentityResult = hostenv.ServiceIdentity
 
-// identityProber calls the identity method on a port. Injected so tests drive
+// IdentityProber calls the identity method on a port. Injected so tests drive
 // the classification without a live daemon.
-type identityProber = hostenv.IdentityProber
+type IdentityProber = hostenv.IdentityProber
 
 // The identity probe and its JSON field extractors moved to rpc.IdentityProbe: it is a JSON-RPC call, and
 // leaving it here made every package that needs an identity probe depend on
@@ -51,9 +52,9 @@ type serviceAxisSpec struct {
 	wantName  string // the exact identity.name this port must report
 	enabled   bool   // in the configured services set
 	startCmd  string
-	selfVer   string // the launcher's own version; a mismatch is reported
+	selfVer   string // the launcher's own launcher.Version; a mismatch is reported
 	dialOnly  func(port int) bool
-	probeFunc identityProber
+	probeFunc IdentityProber
 }
 
 // serviceReadinessCheck renders one service axis. The decision table:
@@ -154,9 +155,9 @@ func serviceReadinessCheck(spec serviceAxisSpec) readiness.Check {
 	return base
 }
 
-// serviceReadinessAxes builds the memory and knowledge axes. Both are lazy:
+// ServiceReadinessAxes builds the memory and knowledge axes. Both are lazy:
 // a caller that requests neither pays for no probe at all.
-func serviceReadinessAxes(env hostenv.Env, memoryEnabled, knowledgeEnabled bool, probe identityProber) map[readiness.Axis]readiness.AxisBuilder {
+func ServiceReadinessAxes(env hostenv.Env, memoryEnabled, knowledgeEnabled bool, probe IdentityProber) map[readiness.Axis]readiness.AxisBuilder {
 	dial := env.DialLocal
 	return map[readiness.Axis]readiness.AxisBuilder{
 		readiness.AxisServiceMemory: func() []readiness.Check {
@@ -164,7 +165,7 @@ func serviceReadinessAxes(env hostenv.Env, memoryEnabled, knowledgeEnabled bool,
 				Axis: readiness.AxisServiceMemory, label: "memory",
 				port: rpc.MemoryClient().Port, wantName: rpc.MemoryName,
 				enabled: memoryEnabled, startCmd: "pix serve",
-				selfVer: version, dialOnly: dial, probeFunc: probe,
+				selfVer: launcher.Version, dialOnly: dial, probeFunc: probe,
 			})}
 		},
 		readiness.AxisServiceKnowledge: func() []readiness.Check {
@@ -172,7 +173,7 @@ func serviceReadinessAxes(env hostenv.Env, memoryEnabled, knowledgeEnabled bool,
 				Axis: readiness.AxisServiceKnowledge, label: "knowledge",
 				port: rpc.KnowledgeClient().Port, wantName: rpc.KnowledgeName,
 				enabled: knowledgeEnabled, startCmd: "pix serve",
-				selfVer: version, dialOnly: dial, probeFunc: probe,
+				selfVer: launcher.Version, dialOnly: dial, probeFunc: probe,
 			})}
 		},
 	}
