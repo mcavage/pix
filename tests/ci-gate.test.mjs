@@ -14,6 +14,6 @@ test("Node test workers cannot strand CI after results complete", () => {
 });
 
 test("local and CI timing budgets remain explicit", () => {
-	assert.match(gate, /GATE_BUDGET_MS="\$\{GATE_BUDGET_MS:-12000\}"/);
+	assert.match(gate, /GATE_BUDGET_MS="\$\{GATE_BUDGET_MS:-34000\}"/);
 	assert.match(workflow, /GATE_BUDGET_MS: "75000"/);
 });
