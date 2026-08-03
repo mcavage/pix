@@ -34,6 +34,7 @@ import (
 	"pix/host/secret"
 	"pix/host/sys"
 	"pix/host/workflow/doctor"
+	"pix/host/workflow/gworkspace"
 	"pix/host/workflow/onboard"
 	"pix/host/workflow/pack"
 	"slices"
@@ -779,10 +780,10 @@ func setupMutationSteps(env hostenv.Env, inv setupInventory, opts onboard.Opts, 
 				return nil
 			}
 			ask := prompts.reserve("google ws route")
-			if err := setupGoogleWorkspaceFn(env, gogSetupOpts{
-				account:     strings.TrimSpace(opts.Account),
-				credentials: strings.TrimSpace(opts.Credentials),
-				assumeYes:   opts.AssumeYes,
+			if err := setupGoogleWorkspaceFn(env, gworkspace.GogSetupOpts{
+				Account:     strings.TrimSpace(opts.Account),
+				Credentials: strings.TrimSpace(opts.Credentials),
+				AssumeYes:   opts.AssumeYes,
 			}, in, out, ask); err != nil {
 				return fmt.Errorf("google ws: %w", err)
 			}
@@ -1209,7 +1210,7 @@ func setupGworkspaceAxis(cfg *config.Config, env hostenv.Env) []readiness.Check 
 		return []readiness.Check{{Label: "google ws", Requirement: readiness.RequirementOptional, Verdict: readiness.VerdictTodo,
 			Detail: "enabled but no account authorized", Evidence: "google_workspace_account is empty",
 			Todo: "pix gworkspace setup"}}
-	case gogSetupAccountHealthy(env, acct):
+	case gworkspace.GogSetupAccountHealthy(env, acct):
 		return []readiness.Check{{Label: "google ws", Requirement: readiness.RequirementOptional, Verdict: readiness.VerdictReady,
 			Detail: acct + " authorized (read-only)", Evidence: "authorization probe passed for " + acct}}
 	default:
@@ -1756,6 +1757,6 @@ type errUsage struct{ error }
 // setupGoogleWorkspaceFn is the seam tests stub so setup's phases can be
 // exercised without a browser or an installed dependency CLI. Production wires
 // the real façade over the unchanged transaction.
-var setupGoogleWorkspaceFn = func(env hostenv.Env, opts gogSetupOpts, in io.Reader, out io.Writer, interactive bool) error {
-	return gworkspaceSetup(env, opts, in, out, interactive)
+var setupGoogleWorkspaceFn = func(env hostenv.Env, opts gworkspace.GogSetupOpts, in io.Reader, out io.Writer, interactive bool) error {
+	return gworkspace.Setup(env, opts, in, out, interactive, mcpCredentials)
 }

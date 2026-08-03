@@ -102,10 +102,11 @@ var pkgLayer = map[string]int{
 	// nothing below L4 consumes it. The capability-shaped parts inside it
 	// (manifest parsing, the trust store, the host BoM) are candidates to split
 	// out later; being a workflow is already correct today.
-	"workflow/pack":    layerWorkflow,
-	"workflow/reset":   layerWorkflow,
-	"workflow/onboard": layerWorkflow,
-	"workflow/doctor":  layerWorkflow,
+	"workflow/pack":       layerWorkflow,
+	"workflow/reset":      layerWorkflow,
+	"workflow/onboard":    layerWorkflow,
+	"workflow/doctor":     layerWorkflow,
+	"workflow/gworkspace": layerWorkflow,
 
 	// L4 — the command layer.
 	"cmd/pix": layerCommand,

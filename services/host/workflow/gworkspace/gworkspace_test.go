@@ -8,12 +8,11 @@
 // documents: CLI noun `gworkspace`, MCP name `google-workspace` (config.GWServerName),
 // config key `google_workspace_account`, "gog" appearing only in the
 // dependency install/upgrade lines.
-package main
+package gworkspace
 
 import (
 	"bytes"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -23,80 +22,28 @@ import (
 	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/sys/systest"
-	"pix/host/workflow/onboard"
 )
 
-// --- parseGworkspaceSetupArgs -------------------------------------------
+// --- ParseGworkspaceSetupArgs -------------------------------------------
 
 func TestParseGworkspaceSetupArgs(t *testing.T) {
-	o, err := parseGworkspaceSetupArgs([]string{"--account", "a@b.com", "--credentials=/x/c.json", "--yes"})
+	o, err := ParseGworkspaceSetupArgs([]string{"--account", "a@b.com", "--credentials=/x/c.json", "--yes"})
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if o.account != "a@b.com" || o.credentials != "/x/c.json" || !o.assumeYes {
+	if o.Account != "a@b.com" || o.Credentials != "/x/c.json" || !o.AssumeYes {
 		t.Errorf("parsed = %+v", o)
 	}
-	if _, err := parseGworkspaceSetupArgs([]string{"--account"}); err == nil {
+	if _, err := ParseGworkspaceSetupArgs([]string{"--account"}); err == nil {
 		t.Error("--account without a value should error")
 	}
-	if _, err := parseGworkspaceSetupArgs([]string{"--bogus"}); err == nil {
+	if _, err := ParseGworkspaceSetupArgs([]string{"--bogus"}); err == nil {
 		t.Error("an unknown flag should error")
 	}
-	if _, err := parseGworkspaceSetupArgs([]string{"-h"}); err != cli.ErrHelpRequested {
+	if _, err := ParseGworkspaceSetupArgs([]string{"-h"}); err != cli.ErrHelpRequested {
 		t.Error("-h should return the cli.ErrHelpRequested sentinel")
 	}
 }
-
-// TestRunGworkspaceCmd_Help: the no-subcommand and -h paths print the noun
-// usage without exiting (wantsHelp is checked ONLY over argv[:1], so `setup
-// -h` must still reach the subcommand's OWN usage further down).
-func TestRunGworkspaceCmd_Help(t *testing.T) {
-	// Can't call runGworkspaceCmd(nil) directly (os.Exit(2)); -h is the
-	// in-process path.
-	// Redirect stdout via a pipe would be heavier than needed here — the
-	// individual subcommand usage constants are asserted directly below
-	// (naming-leak section), and dispatch-with-exit is covered by the
-	// subprocess test below.
-	_ = gworkspaceUsage
-}
-
-// TestRunGworkspaceCmd_UnknownSubcommandExitsNonZero and
-// TestRunGworkspaceCmd_NoArgsExitsNonZero re-exec this test binary to observe
-// os.Exit(2) without killing the real test process (same pattern as
-// TestPackUse_ChangedGogAccountRegates).
-func TestRunGworkspaceCmd_UnknownSubcommandExitsNonZero(t *testing.T) {
-	if os.Getenv("PIX_TEST_GWORKSPACE_DISPATCH") == "unknown" {
-		runGworkspaceCmd([]string{"bogus"})
-		return
-	}
-	cmd := exec.Command(os.Args[0], "-test.run", "^TestRunGworkspaceCmd_UnknownSubcommandExitsNonZero$")
-	cmd.Env = append(os.Environ(), "PIX_TEST_GWORKSPACE_DISPATCH=unknown")
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		t.Fatalf("an unknown subcommand must exit non-zero, output:\n%s", out)
-	}
-	if !strings.Contains(string(out), "unknown subcommand") {
-		t.Errorf("expected an unknown-subcommand message, got:\n%s", out)
-	}
-}
-
-func TestRunGworkspaceCmd_NoArgsExitsNonZero(t *testing.T) {
-	if os.Getenv("PIX_TEST_GWORKSPACE_DISPATCH") == "noargs" {
-		runGworkspaceCmd(nil)
-		return
-	}
-	cmd := exec.Command(os.Args[0], "-test.run", "^TestRunGworkspaceCmd_NoArgsExitsNonZero$")
-	cmd.Env = append(os.Environ(), "PIX_TEST_GWORKSPACE_DISPATCH=noargs")
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		t.Fatalf("no subcommand must exit non-zero, output:\n%s", out)
-	}
-	if !strings.Contains(string(out), "usage: pix gworkspace") {
-		t.Errorf("expected the noun usage on stderr, got:\n%s", out)
-	}
-}
-
-// --- gworkspaceSetup façade: success, zero-tools, rollback ---------------
 
 func TestGworkspaceSetup_SuccessDoesNotGuessOAuthAudience(t *testing.T) {
 	gogSetupTestCfg(t)
@@ -111,9 +58,9 @@ func TestGworkspaceSetup_SuccessDoesNotGuessOAuthAudience(t *testing.T) {
 		sbxRegisterOK: true,
 	}
 	var out bytes.Buffer
-	opts := gworkspaceSetupOpts{account: "you@example.com", credentials: cred}
-	if err := gworkspaceSetup(ge.env(), opts, strings.NewReader(""), &out, false); err != nil {
-		t.Fatalf("gworkspaceSetup: %v\n%s", err, out.String())
+	opts := gworkspaceSetupOpts{Account: "you@example.com", Credentials: cred}
+	if err := Setup(ge.env(), opts, strings.NewReader(""), &out, false, noCreds); err != nil {
+		t.Fatalf("Setup: %v\n%s", err, out.String())
 	}
 	if strings.Contains(out.String(), "Testing") || strings.Contains(out.String(), "7 days") || strings.Contains(out.String(), "publish") {
 		t.Errorf("setup must not guess whether the OAuth client is Internal or External, got:\n%s", out.String())
@@ -137,8 +84,8 @@ func TestGworkspaceSetup_ZeroToolsFailsAndSkipsNotice(t *testing.T) {
 		statFile: map[string]bool{cred: true},
 	}
 	var out bytes.Buffer
-	opts := gworkspaceSetupOpts{account: "you@example.com", credentials: cred}
-	err := gworkspaceSetup(ge.env(), opts, strings.NewReader(""), &out, false)
+	opts := gworkspaceSetupOpts{Account: "you@example.com", Credentials: cred}
+	err := Setup(ge.env(), opts, strings.NewReader(""), &out, false, noCreds)
 	if err == nil {
 		t.Fatal("expected an error when the headless probe returns zero tools")
 	}
@@ -153,8 +100,8 @@ func TestGworkspaceSetup_ZeroToolsFailsAndSkipsNotice(t *testing.T) {
 func TestGworkspaceSetup_RollbackOnSaveFailure(t *testing.T) {
 	env, cred, addCalls, rmCalls := gogR108RollbackEnv(t, true)
 	var out bytes.Buffer
-	opts := gworkspaceSetupOpts{account: "you@example.com", credentials: cred}
-	err := gworkspaceSetup(env, opts, strings.NewReader(""), &out, false)
+	opts := gworkspaceSetupOpts{Account: "you@example.com", Credentials: cred}
+	err := Setup(env, opts, strings.NewReader(""), &out, false, noCreds)
 	if err == nil {
 		t.Fatal("expected an error when config.Save() fails after a successful registration")
 	}
@@ -166,7 +113,7 @@ func TestGworkspaceSetup_RollbackOnSaveFailure(t *testing.T) {
 	}
 }
 
-// --- gworkspaceStatus ------------------------------------------------------
+// --- Status ------------------------------------------------------
 
 // TestGworkspaceStatus_NotConfigured: no account, config.GWServerName not in the MCP
 // set -> a single not-configured line and exit 0 (nothing to fail on since
@@ -175,7 +122,7 @@ func TestGworkspaceStatus_NotConfigured(t *testing.T) {
 	cfg := &config.Config{}
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", os.ErrNotExist }}}
 	var out bytes.Buffer
-	code := gworkspaceStatus(cfg, env, &out)
+	code := Status(cfg, env, &out)
 	if code != 0 {
 		t.Errorf("exit code = %d, want 0", code)
 	}
@@ -191,7 +138,7 @@ func TestGworkspaceStatus_ConfiguredNoAccount(t *testing.T) {
 	cfg := &config.Config{MCP: []string{config.GWServerName}}
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", os.ErrNotExist }}}
 	var out bytes.Buffer
-	code := gworkspaceStatus(cfg, env, &out)
+	code := Status(cfg, env, &out)
 	if code != 1 {
 		t.Errorf("exit code = %d, want 1 (verified gap)", code)
 	}
@@ -225,7 +172,7 @@ func TestGworkspaceStatus_ReadyPath(t *testing.T) {
 		return "", os.ErrNotExist
 	}}}
 	var out bytes.Buffer
-	code := gworkspaceStatus(cfg, env, &out)
+	code := Status(cfg, env, &out)
 	if code != 0 {
 		t.Errorf("exit code = %d, want 0 (publication state is informational), output:\n%s", code, out.String())
 	}
@@ -251,7 +198,7 @@ func TestGworkspaceStatus_UnreadableRegistrationIsUnverifiableExitThree(t *testi
 	cfg := &config.Config{GogAccount: "you@example.com", MCP: []string{config.GWServerName}}
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", os.ErrNotExist }}}
 	var out bytes.Buffer
-	code := gworkspaceStatus(cfg, env, &out)
+	code := Status(cfg, env, &out)
 	if code != 3 {
 		t.Errorf("exit code = %d, want 3 (unverifiable, nothing confirmed broken)", code)
 	}
@@ -260,7 +207,7 @@ func TestGworkspaceStatus_UnreadableRegistrationIsUnverifiableExitThree(t *testi
 	}
 }
 
-// --- gworkspaceDisable ------------------------------------------------------
+// --- Disable ------------------------------------------------------
 
 // TestGworkspaceDisable_NotConfiguredIsCleanNoop: nothing set, nothing
 // registered -> a no-op that touches neither config nor the gateway.
@@ -274,8 +221,8 @@ func TestGworkspaceDisable_NotConfiguredIsCleanNoop(t *testing.T) {
 		return "", os.ErrNotExist
 	}}}
 	var out bytes.Buffer
-	if err := gworkspaceDisable(cfg, env, &out); err != nil {
-		t.Fatalf("gworkspaceDisable: %v", err)
+	if err := Disable(cfg, env, &out); err != nil {
+		t.Fatalf("Disable: %v", err)
 	}
 	if !strings.Contains(out.String(), "nothing to remove") {
 		t.Errorf("expected a clean no-op message, got:\n%s", out.String())
@@ -292,7 +239,7 @@ func TestGworkspaceDisable_UnknownRegistrationRefuses(t *testing.T) {
 		return "", os.ErrNotExist // every `sbx mcp ...` call fails
 	}}}
 	var out bytes.Buffer
-	err := gworkspaceDisable(cfg, env, &out)
+	err := Disable(cfg, env, &out)
 	if err == nil {
 		t.Fatal("expected a refusal when the registration state cannot be confirmed")
 	}
@@ -306,7 +253,7 @@ func TestGworkspaceDisable_UnknownRegistrationRefuses(t *testing.T) {
 
 // TestGworkspaceDisable_PresentRemovesRegistrationAndConfig: a confirmed
 // registration is removed from the gateway FIRST, then config is cleared —
-// the ordering documented on gworkspaceDisable (a save failure after a
+// the ordering documented on Disable (a save failure after a
 // successful unregister must never leave a persisted "still registered"
 // config the gateway no longer honors).
 func TestGworkspaceDisable_PresentRemovesRegistrationAndConfig(t *testing.T) {
@@ -338,8 +285,8 @@ func TestGworkspaceDisable_PresentRemovesRegistrationAndConfig(t *testing.T) {
 		return "", os.ErrNotExist
 	}}}
 	var out bytes.Buffer
-	if err := gworkspaceDisable(cfg, env, &out); err != nil {
-		t.Fatalf("gworkspaceDisable: %v\n%s", err, out.String())
+	if err := Disable(cfg, env, &out); err != nil {
+		t.Fatalf("Disable: %v\n%s", err, out.String())
 	}
 	if len(rmCalls) != 1 || rmCalls[0][2] != config.GWServerName {
 		t.Fatalf("expected a `sbx mcp rm %s` call, got %v", config.GWServerName, rmCalls)
@@ -361,44 +308,12 @@ func TestGworkspaceDisable_PresentRemovesRegistrationAndConfig(t *testing.T) {
 
 // --- flag-gating: --account/--credentials require the opt-in --------------
 
-// TestCheckGoogleWorkspaceFlags_RequireOptIn covers AC-P0-312: --account and
-// --credentials are Google Workspace inputs and are REJECTED (before any
-// probe or mutation) unless --google-workspace is also set.
-func TestCheckGoogleWorkspaceFlags_RequireOptIn(t *testing.T) {
-	cases := []struct {
-		name    string
-		opts    onboard.Opts
-		wantErr bool
-	}{
-		{"account alone", onboard.Opts{Account: "a@b.com"}, true},
-		{"credentials alone", onboard.Opts{Credentials: "/x.json"}, true},
-		{"both alone", onboard.Opts{Account: "a@b.com", Credentials: "/x.json"}, true},
-		{"account with opt-in", onboard.Opts{Account: "a@b.com", GoogleWorkspace: true}, false},
-		{"credentials with opt-in", onboard.Opts{Credentials: "/x.json", GoogleWorkspace: true}, false},
-		{"opt-in alone", onboard.Opts{GoogleWorkspace: true}, false},
-		{"neither", onboard.Opts{}, false},
-	}
-	for _, c := range cases {
-		err := checkGoogleWorkspaceFlags(c.opts)
-		if (err != nil) != c.wantErr {
-			t.Errorf("%s: checkGoogleWorkspaceFlags(%+v) = %v, wantErr=%v", c.name, c.opts, err, c.wantErr)
-		}
-	}
-}
-
-// --- naming-leak: the façade's own strings hold the public contract -------
-
-// TestGworkspaceUsage_NamingContract pins gworkspace.go's own naming rule: the
-// CLI noun is `gworkspace`, the MCP name is config.GWServerName ("google-workspace"),
-// and the external binary's name ("gog") appears ONLY in the dependency
-// install/upgrade lines — never as a verb, a flag, or a registered/display
-// name in any of the four usage blocks.
 func TestGworkspaceUsage_NamingContract(t *testing.T) {
 	blocks := map[string]string{
-		"gworkspaceUsage":        gworkspaceUsage,
-		"gworkspaceSetupUsage":   gworkspaceSetupUsage,
-		"gworkspaceStatusUsage":  gworkspaceStatusUsage,
-		"gworkspaceDisableUsage": gworkspaceDisableUsage,
+		"Usage":        Usage,
+		"SetupUsage":   SetupUsage,
+		"StatusUsage":  StatusUsage,
+		"DisableUsage": DisableUsage,
 	}
 	// Lines legitimately allowed to name the dependency binary (the ONE
 	// exception the header documents).
@@ -440,8 +355,8 @@ func TestGworkspaceDisable_NeverPrintsLegacyGogVerb(t *testing.T) {
 		return "", os.ErrNotExist
 	}}}
 	var out bytes.Buffer
-	if err := gworkspaceDisable(cfg, env, &out); err != nil {
-		t.Fatalf("gworkspaceDisable: %v", err)
+	if err := Disable(cfg, env, &out); err != nil {
+		t.Fatalf("Disable: %v", err)
 	}
 	if strings.Contains(out.String(), "pix gog ") {
 		t.Errorf("disable output references the deleted `pix gog` verb tree, got:\n%s", out.String())

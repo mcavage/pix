@@ -16,14 +16,13 @@
 // `google_workspace_account`. The external binary is still called `gog` and
 // that name may appear ONLY in a dependency-install/upgrade fix line, in
 // troubleshooting docs, and in code that execs it. Go identifiers that name
-// the external binary (gogSetup, gogRegSnapshot, GogAccount) are internal and
+// the external binary (gogSetup, GogRegSnapshot, GogAccount) are internal and
 // are not user-facing output.
-package main
+package gworkspace
 
 import (
 	"fmt"
 	"io"
-	"os"
 	"pix/host/cli"
 	"pix/host/hostenv"
 	"pix/host/mcp"
@@ -50,7 +49,7 @@ const (
 	gwPermissionsURL = "https://myaccount.google.com/permissions"
 )
 
-const gworkspaceUsage = `usage: pix gworkspace <setup|status|disable> [args]
+const Usage = `usage: pix gworkspace <setup|status|disable> [args]
 
   setup     guided read-only Google Workspace onboarding; --create-docs adds
             new-document creation without existing-document edits or sending
@@ -62,7 +61,7 @@ Google Workspace is OPTIONAL and absent unless you set it up.
 Run 'pix gworkspace setup -h' for its flags.
 `
 
-const gworkspaceSetupUsage = `usage: pix gworkspace setup [--account <email>] [--credentials <path>] [--create-docs] [--yes]
+const SetupUsage = `usage: pix gworkspace setup [--account <email>] [--credentials <path>] [--create-docs] [--yes]
 
 Guides Google Workspace onboarding end to end:
   1. checks the dependency CLI is installed (exact install command if not),
@@ -112,7 +111,7 @@ creation. The ordinary registered server remains runtime read-only.
 No organization OAuth client is bundled or referenced here; bring your own.
 `
 
-const gworkspaceStatusUsage = `usage: pix gworkspace status
+const StatusUsage = `usage: pix gworkspace status
 
 Reports, from probes rather than config claims:
   - whether an account is configured (google_workspace_account)
@@ -123,7 +122,7 @@ Reports, from probes rather than config claims:
 exit: 0 ready · 1 needs setup · 3 could not be verified from here
 `
 
-const gworkspaceDisableUsage = `usage: pix gworkspace disable
+const DisableUsage = `usage: pix gworkspace disable
 
 Removes ONLY the Pix-owned pieces:
   - google_workspace_account and the ` + config.GWServerName + ` entry in config.toml
@@ -134,40 +133,12 @@ them yourself at ` + gwPermissionsURL + ` if you want them gone.
 A clean no-op (exit 0) when nothing is configured.
 `
 
-// runGworkspaceCmd is the `pix gworkspace` verb tree.
-//
-// The help gate is checked ONLY for the no-subcommand case, exactly as the
-// former `gog` tree did: a blanket wantsHelp over the whole argv would catch
-// `gworkspace setup -h` and print the noun-level usage instead of the
-// subcommand's own.
-func runGworkspaceCmd(argv []string) {
-	if len(argv) == 0 {
-		fmt.Fprint(os.Stderr, gworkspaceUsage)
-		os.Exit(2)
-	}
-	if cli.WantsHelp(argv[:1]) {
-		fmt.Print(gworkspaceUsage)
-		return
-	}
-	switch argv[0] {
-	case "setup":
-		runGworkspaceSetupCmd(argv[1:])
-	case "status":
-		runGworkspaceStatusCmd(argv[1:])
-	case "disable":
-		runGworkspaceDisableCmd(argv[1:])
-	default:
-		fmt.Fprintf(os.Stderr, "pix gworkspace: unknown subcommand %q (want: setup, status, disable)\n", argv[0])
-		os.Exit(2)
-	}
-}
-
 // gworkspaceSetupOpts is the parsed `gworkspace setup` flag set. It is the
 // same shape `pix setup --google-workspace` builds, so both doors reach
 // gogSetup with identical inputs.
-type gworkspaceSetupOpts = gogSetupOpts
+type gworkspaceSetupOpts = GogSetupOpts
 
-func parseGworkspaceSetupArgs(argv []string) (gworkspaceSetupOpts, error) {
+func ParseGworkspaceSetupArgs(argv []string) (gworkspaceSetupOpts, error) {
 	var o gworkspaceSetupOpts
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
@@ -184,21 +155,21 @@ func parseGworkspaceSetupArgs(argv []string) (gworkspaceSetupOpts, error) {
 			if err != nil {
 				return o, err
 			}
-			o.account = v
+			o.Account = v
 		case strings.HasPrefix(a, "--account="):
-			o.account = strings.TrimPrefix(a, "--account=")
+			o.Account = strings.TrimPrefix(a, "--account=")
 		case a == "--credentials":
 			v, err := next()
 			if err != nil {
 				return o, err
 			}
-			o.credentials = v
+			o.Credentials = v
 		case strings.HasPrefix(a, "--credentials="):
-			o.credentials = strings.TrimPrefix(a, "--credentials=")
+			o.Credentials = strings.TrimPrefix(a, "--credentials=")
 		case a == "--create-docs":
 			o.access = gwAccessCreateDocs
 		case a == "--yes", a == "-y", a == "--non-interactive":
-			o.assumeYes = true
+			o.AssumeYes = true
 		case a == "-h", a == "--help":
 			return o, cli.ErrHelpRequested
 		default:
@@ -208,32 +179,9 @@ func parseGworkspaceSetupArgs(argv []string) (gworkspaceSetupOpts, error) {
 	return o, nil
 }
 
-// runGworkspaceSetupCmd parses flags, wires the real hostenv.Env (the
-// browser-opening auth steps inherit THIS process's stdio), and runs the
-// unchanged transaction.
-func runGworkspaceSetupCmd(argv []string) {
-	opts, err := parseGworkspaceSetupArgs(argv)
-	if err != nil {
-		if err == cli.ErrHelpRequested {
-			fmt.Print(gworkspaceSetupUsage)
-			return
-		}
-		fmt.Fprintf(os.Stderr, "pix gworkspace setup: %v\n\n%s", err, gworkspaceSetupUsage)
-		os.Exit(2)
-	}
-	tty := cli.IsTTY(os.Stdin)
-	if opts.assumeYes {
-		tty = false // --yes means "never prompt", even on a real terminal
-	}
-	if err := gworkspaceSetup(defaultShellEnv(), opts, os.Stdin, os.Stdout, tty); err != nil {
-		fmt.Fprintf(os.Stderr, "pix gworkspace setup: %v\n", err)
-		os.Exit(1)
-	}
-}
-
-// gworkspaceSetup is the façade over the unchanged gog_setup.go transaction.
-func gworkspaceSetup(env hostenv.Env, opts gworkspaceSetupOpts, in io.Reader, out io.Writer, tty bool) error {
-	return gogSetup(env, opts, in, out, tty)
+// Setup is the façade over the unchanged gog_setup.go transaction.
+func Setup(env hostenv.Env, opts gworkspaceSetupOpts, in io.Reader, out io.Writer, tty bool, creds Creds) error {
+	return gogSetup(env, opts, in, out, tty, creds)
 }
 
 // ---------------------------------------------------------------------------
@@ -261,27 +209,10 @@ func gworkspaceExit(checks []readiness.Check) int {
 	return worst
 }
 
-func runGworkspaceStatusCmd(argv []string) {
-	if cli.WantsHelp(argv) {
-		fmt.Print(gworkspaceStatusUsage)
-		return
-	}
-	if len(argv) > 0 {
-		fmt.Fprintf(os.Stderr, "pix gworkspace status: unexpected argument %q\n\n%s", argv[0], gworkspaceStatusUsage)
-		os.Exit(2)
-	}
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix gworkspace status: loading config: %v\n", err)
-		os.Exit(1)
-	}
-	os.Exit(gworkspaceStatus(cfg, defaultShellEnv(), os.Stdout))
-}
-
-// gworkspaceStatus renders the Google Workspace surface and returns the
+// Status renders the Google Workspace surface and returns the
 // process exit code. Every green here comes from a probe: config membership
 // is rendered as intent, never as readiness.
-func gworkspaceStatus(cfg *config.Config, env hostenv.Env, out io.Writer) int {
+func Status(cfg *config.Config, env hostenv.Env, out io.Writer) int {
 	if cfg.GoogleWorkspaceAccess == gwAccessCreateDocs {
 		fmt.Fprintln(out, "Google Workspace (optional; read access + create-new-Docs only)")
 	} else {
@@ -378,27 +309,7 @@ func docsCreateSpawnCheck(res axis.ProbeResult) readiness.Check {
 // disable
 // ---------------------------------------------------------------------------
 
-func runGworkspaceDisableCmd(argv []string) {
-	if cli.WantsHelp(argv) {
-		fmt.Print(gworkspaceDisableUsage)
-		return
-	}
-	if len(argv) > 0 {
-		fmt.Fprintf(os.Stderr, "pix gworkspace disable: unexpected argument %q\n\n%s", argv[0], gworkspaceDisableUsage)
-		os.Exit(2)
-	}
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix gworkspace disable: loading config: %v\n", err)
-		os.Exit(1)
-	}
-	if err := gworkspaceDisable(cfg, defaultShellEnv(), os.Stdout); err != nil {
-		fmt.Fprintf(os.Stderr, "pix gworkspace disable: %v\n", err)
-		os.Exit(1)
-	}
-}
-
-// gworkspaceDisable removes ONLY the two pieces pix owns: the config
+// Disable removes ONLY the two pieces pix owns: the config
 // entries it wrote (google_workspace_account + the MCP set membership) and
 // the gateway registration it created. It never touches the user's OAuth
 // client, tokens, or the dependency CLI's home — those are the user's
@@ -410,9 +321,9 @@ func runGworkspaceDisableCmd(argv []string) {
 // gateway no longer has, which `status` reports honestly as a missing
 // registration; the reverse order would leave a persisted "disabled" config
 // while the gateway still spawns the server, which is the dangerous drift.
-func gworkspaceDisable(cfg *config.Config, env hostenv.Env, out io.Writer) error {
+func Disable(cfg *config.Config, env hostenv.Env, out io.Writer) error {
 	configured := strings.TrimSpace(cfg.GogAccount) != "" || mcp.Configured(cfg, config.GWServerName) || mcp.Configured(cfg, config.GWDocsCreateServerName)
-	snap := snapshotGogRegistration(env)
+	snap := SnapshotGogRegistration(env)
 	docsSnap := snapshotMCPRegistration(env, config.GWDocsCreateServerName)
 
 	if !configured && snap.State == gogRegAbsent && docsSnap.State == gogRegAbsent {
@@ -425,14 +336,14 @@ func gworkspaceDisable(cfg *config.Config, env hostenv.Env, out io.Writer) error
 			"then re-run pix gworkspace disable", config.GWServerName)
 	}
 
-	if snap.State == gogRegPresent {
+	if snap.State == GogRegPresent {
 
 		if _, err := env.Run("sbx", "mcp", "rm", config.GWServerName); err != nil {
 			return fmt.Errorf("removing the %s registration: %w (remove it by hand: sbx mcp rm %s)", config.GWServerName, err, config.GWServerName)
 		}
 		fmt.Fprintln(out, "  removed registration: "+config.GWServerName)
 	}
-	if docsSnap.State == gogRegPresent {
+	if docsSnap.State == GogRegPresent {
 		if _, err := env.Run("sbx", "mcp", "rm", config.GWDocsCreateServerName); err != nil {
 			return fmt.Errorf("removing the %s registration: %w", config.GWDocsCreateServerName, err)
 		}

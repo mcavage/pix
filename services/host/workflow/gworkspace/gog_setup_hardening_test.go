@@ -1,4 +1,4 @@
-package main
+package gworkspace
 
 // gog_setup_hardening_test.go ports the prior branch's review-round guards
 // for `pix gworkspace setup` onto the S07 integrated framework: read-only OAuth
@@ -56,8 +56,8 @@ func TestGogSetup_R102_EveryRouteRequestsReadonlyAtGrantTime(t *testing.T) {
 				sbxRegisterOK: true,
 			}
 			var out bytes.Buffer
-			opts := gogSetupOpts{account: "you@example.com", credentials: cred}
-			if err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false); err != nil {
+			opts := GogSetupOpts{Account: "you@example.com", Credentials: cred}
+			if err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false, noCreds); err != nil {
 				t.Fatalf("gogSetup: %v\n--- output ---\n%s", err, out.String())
 			}
 			if len(calls) != tc.nCalls {
@@ -111,8 +111,8 @@ func TestGogSetup_R102_MissingReadonlyCapability_FailsWithoutFallback(t *testing
 				interCalls: &calls,
 			}
 			var out bytes.Buffer
-			opts := gogSetupOpts{account: "you@example.com", credentials: cred}
-			err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false)
+			opts := GogSetupOpts{Account: "you@example.com", Credentials: cred}
+			err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false, noCreds)
 			if err == nil {
 				t.Fatalf("expected an error when the installed gog cannot guarantee read-only scopes for route %q", tc.route)
 			}
@@ -162,8 +162,8 @@ func TestGogSetup_R112_SelectedRouteSubcommandSyntaxChanged_FailsBeforeExec(t *t
 		interCalls: &calls,
 	}
 	var out bytes.Buffer
-	opts := gogSetupOpts{account: "you@example.com", credentials: cred}
-	err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false)
+	opts := GogSetupOpts{Account: "you@example.com", Credentials: cred}
+	err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false, noCreds)
 	if err == nil {
 		t.Fatal("expected an error when the selected route's subcommand syntax changed")
 	}
@@ -199,7 +199,7 @@ func gogR106Env(t *testing.T, probe func(name string, args ...string) (string, b
 		sbxRegisterOK: true,
 	}
 	env := ge.env()
-	// R2-03: snapshotGogRegistration's presence probe (`sbx mcp ls`) defaults
+	// R2-03: SnapshotGogRegistration's presence probe (`sbx mcp ls`) defaults
 	// to an empty (confirmed-absent) listing unless the caller's probe func
 	// itself cares to override it — none of gogR106Env's callers are testing
 	// prior-registration behavior, so they'd otherwise have to fixture this
@@ -233,8 +233,8 @@ func TestGogSetup_R106_BareProbe_ZeroTools_Fails(t *testing.T) {
 		return "", false, fmt.Errorf("no fake probe output for %q", key)
 	})
 	var out bytes.Buffer
-	opts := gogSetupOpts{account: "you@example.com", credentials: cred}
-	err := gogSetup(env, opts, strings.NewReader(""), &out, false)
+	opts := GogSetupOpts{Account: "you@example.com", Credentials: cred}
+	err := gogSetup(env, opts, strings.NewReader(""), &out, false, noCreds)
 	if err == nil {
 		t.Fatal("expected an error when the bare headless probe returns zero tools")
 	}
@@ -269,8 +269,8 @@ func TestGogSetup_R106_BareProbe_Timeout_UnverifiableNeverSuccess(t *testing.T) 
 		return "", false, fmt.Errorf("no fake probe output for %q", key)
 	})
 	var out bytes.Buffer
-	opts := gogSetupOpts{account: "you@example.com", credentials: cred}
-	err := gogSetup(env, opts, strings.NewReader(""), &out, false)
+	opts := GogSetupOpts{Account: "you@example.com", Credentials: cred}
+	err := gogSetup(env, opts, strings.NewReader(""), &out, false, noCreds)
 	if err == nil {
 		t.Fatal("expected an error when the bare headless probe times out")
 	}
@@ -309,8 +309,8 @@ func TestGogSetup_R106_BareProbe_ExecError_UnverifiableNeverSuccess(t *testing.T
 		return "", false, fmt.Errorf("no fake probe output for %q", key)
 	})
 	var out bytes.Buffer
-	opts := gogSetupOpts{account: "you@example.com", credentials: cred}
-	err := gogSetup(env, opts, strings.NewReader(""), &out, false)
+	opts := GogSetupOpts{Account: "you@example.com", Credentials: cred}
+	err := gogSetup(env, opts, strings.NewReader(""), &out, false, noCreds)
 	if err == nil {
 		t.Fatal("expected an error when the bare headless probe exec-fails")
 	}
@@ -336,8 +336,8 @@ func TestGogSetup_R106_BareProbe_Success_RegistersNormally(t *testing.T) {
 		sbxRegisterOK: true,
 	}
 	var out bytes.Buffer
-	opts := gogSetupOpts{account: "you@example.com", credentials: cred}
-	if err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false); err != nil {
+	opts := GogSetupOpts{Account: "you@example.com", Credentials: cred}
+	if err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false, noCreds); err != nil {
 		t.Fatalf("gogSetup: %v\n--- output ---\n%s", err, out.String())
 	}
 	if !strings.Contains(out.String(), "headless tools OK") {
@@ -377,8 +377,8 @@ func TestGogSetup_R108_SbxMissing_FailsAndConfigUnchanged(t *testing.T) {
 		statFile: map[string]bool{cred: true},
 	}
 	var out bytes.Buffer
-	opts := gogSetupOpts{account: "you@example.com", credentials: cred}
-	err = gogSetup(ge.env(), opts, strings.NewReader(""), &out, false)
+	opts := GogSetupOpts{Account: "you@example.com", Credentials: cred}
+	err = gogSetup(ge.env(), opts, strings.NewReader(""), &out, false, noCreds)
 	if err == nil {
 		t.Fatal("expected an error when sbx is not on PATH")
 	}
@@ -424,8 +424,8 @@ func TestGogSetup_R108_RegistrationFails_ConfigUnchanged(t *testing.T) {
 		statFile: map[string]bool{cred: true},
 	}
 	var out bytes.Buffer
-	opts := gogSetupOpts{account: "you@example.com", credentials: cred}
-	err = gogSetup(ge.env(), opts, strings.NewReader(""), &out, false)
+	opts := GogSetupOpts{Account: "you@example.com", Credentials: cred}
+	err = gogSetup(ge.env(), opts, strings.NewReader(""), &out, false, noCreds)
 	if err == nil {
 		t.Fatal("expected an error when sbx mcp add fails")
 	}
@@ -462,7 +462,7 @@ func gogR108RollbackEnv(t *testing.T, priorRegistered bool) (env hostenv.Env, cr
 	priorArgv := []string{"/usr/bin/gog", "--account", "old@example.com", "--gmail-no-send",
 		"--wrap-untrusted", "--readonly", "mcp", "--allow-tool", "read"}
 	if priorRegistered {
-		// R2-03: snapshotGogRegistration confirms presence via the bounded PLAIN
+		// R2-03: SnapshotGogRegistration confirms presence via the bounded PLAIN
 		// `sbx mcp ls` listing FIRST, independent of whether the detailed `sbx
 		// mcp get google-workspace` command parses — both must agree gog is registered.
 		fixtures["sbx mcp ls"] = "google-workspace\n"
@@ -499,8 +499,8 @@ func gogR108RollbackEnv(t *testing.T, priorRegistered bool) (env hostenv.Env, cr
 func TestGogSetup_R108_SaveFailure_RestoresPriorRegistration(t *testing.T) {
 	env, cred, addCalls, rmCalls := gogR108RollbackEnv(t, true)
 	var out bytes.Buffer
-	opts := gogSetupOpts{account: "you@example.com", credentials: cred}
-	err := gogSetup(env, opts, strings.NewReader(""), &out, false)
+	opts := GogSetupOpts{Account: "you@example.com", Credentials: cred}
+	err := gogSetup(env, opts, strings.NewReader(""), &out, false, noCreds)
 	if err == nil {
 		t.Fatal("expected an error when config.Save() fails after a successful registration")
 	}
@@ -527,8 +527,8 @@ func TestGogSetup_R108_SaveFailure_RestoresPriorRegistration(t *testing.T) {
 func TestGogSetup_R108_SaveFailure_RemovesNewRegistrationWhenNoPrior(t *testing.T) {
 	env, cred, addCalls, rmCalls := gogR108RollbackEnv(t, false)
 	var out bytes.Buffer
-	opts := gogSetupOpts{account: "you@example.com", credentials: cred}
-	err := gogSetup(env, opts, strings.NewReader(""), &out, false)
+	opts := GogSetupOpts{Account: "you@example.com", Credentials: cred}
+	err := gogSetup(env, opts, strings.NewReader(""), &out, false, noCreds)
 	if err == nil {
 		t.Fatal("expected an error when config.Save() fails after a successful registration")
 	}
@@ -598,7 +598,7 @@ func TestGogSetup_R114_CapabilityAndBareHeadlessProbesAreBounded(t *testing.T) {
 		return "", fmt.Errorf("no fake output for %q", key)
 	}, RunInteractiveFn: func(name string, args ...string) error { return nil }}}
 	var out bytes.Buffer
-	if err := gogSetup(env, gogSetupOpts{account: acct, credentials: cred}, strings.NewReader(""), &out, false); err != nil {
+	if err := gogSetup(env, GogSetupOpts{Account: acct, Credentials: cred}, strings.NewReader(""), &out, false, noCreds); err != nil {
 		t.Fatalf("gogSetup: %v\n--- output ---\n%s", err, out.String())
 	}
 	joined := strings.Join(probed, "\n")
@@ -611,7 +611,7 @@ func TestGogSetup_R114_CapabilityAndBareHeadlessProbesAreBounded(t *testing.T) {
 
 // --- R2-03: tri-state snapshot -----------------------------------------
 
-// gogSnapEnv builds a minimal hostenv.Env driving snapshotGogRegistration
+// gogSnapEnv builds a minimal hostenv.Env driving SnapshotGogRegistration
 // directly: sbx is present, and lsOut/lsTimedOut/lsErr control the bounded
 // `sbx mcp ls` listing probe; getFixtures drives the detailed `sbx mcp get
 // gog` / `sbx mcp ls -o json` readers (doctor.RegisteredGogCommand) via probeRun's
@@ -639,9 +639,9 @@ func gogSnapEnv(lsOut string, lsTimedOut bool, lsErr error, getFixtures map[stri
 
 func TestSnapshotGogRegistration_ConfirmedAbsent(t *testing.T) {
 	env := gogSnapEnv("slack\n", false, nil, nil, nil)
-	snap := snapshotGogRegistration(env)
+	snap := SnapshotGogRegistration(env)
 	if snap.State != gogRegAbsent {
-		t.Fatalf("expected gogRegAbsent, got state=%v argv=%v", snap.State, snap.argv)
+		t.Fatalf("expected gogRegAbsent, got state=%v argv=%v", snap.State, snap.Argv)
 	}
 }
 
@@ -649,13 +649,13 @@ func TestSnapshotGogRegistration_ConfirmedPresent_RestorableArgv(t *testing.T) {
 	env := gogSnapEnv("google-workspace\nslack\n", false, nil, map[string]string{
 		"sbx mcp get google-workspace": "name: gog\ncommand: /usr/bin/gog --account you@example.com mcp\n",
 	}, nil)
-	snap := snapshotGogRegistration(env)
-	if snap.State != gogRegPresent {
-		t.Fatalf("expected gogRegPresent, got state=%v", snap.State)
+	snap := SnapshotGogRegistration(env)
+	if snap.State != GogRegPresent {
+		t.Fatalf("expected GogRegPresent, got state=%v", snap.State)
 	}
 	want := []string{"/usr/bin/gog", "--account", "you@example.com", "mcp"}
-	if strings.Join(snap.argv, " ") != strings.Join(want, " ") {
-		t.Errorf("expected argv %v, got %v", want, snap.argv)
+	if strings.Join(snap.Argv, " ") != strings.Join(want, " ") {
+		t.Errorf("expected argv %v, got %v", want, snap.Argv)
 	}
 }
 
@@ -670,9 +670,9 @@ func TestSnapshotGogRegistration_ListedButUnreadable_Unknown(t *testing.T) {
 		"sbx mcp get google-workspace": `name: gog` + "\n" + `command: /usr/bin/op run --env-file="/x/op refs.env" -- gog mcp` + "\n",
 		"sbx mcp ls -o json":           "not json at all",
 	}, nil)
-	snap := snapshotGogRegistration(env)
+	snap := SnapshotGogRegistration(env)
 	if snap.State != gogRegUnknown {
-		t.Fatalf("expected gogRegUnknown for a listed-but-unparseable registration, got state=%v argv=%v", snap.State, snap.argv)
+		t.Fatalf("expected gogRegUnknown for a listed-but-unparseable registration, got state=%v argv=%v", snap.State, snap.Argv)
 	}
 }
 
@@ -681,7 +681,7 @@ func TestSnapshotGogRegistration_ListedButUnreadable_Unknown(t *testing.T) {
 // absent.
 func TestSnapshotGogRegistration_ListingProbeFails_Unknown(t *testing.T) {
 	env := gogSnapEnv("", false, fmt.Errorf("sbx: connection refused"), nil, nil)
-	snap := snapshotGogRegistration(env)
+	snap := SnapshotGogRegistration(env)
 	if snap.State != gogRegUnknown {
 		t.Fatalf("expected gogRegUnknown on a listing probe error, got state=%v", snap.State)
 	}
@@ -691,7 +691,7 @@ func TestSnapshotGogRegistration_ListingProbeFails_Unknown(t *testing.T) {
 // listing probe times out rather than erroring outright.
 func TestSnapshotGogRegistration_ListingProbeTimesOut_Unknown(t *testing.T) {
 	env := gogSnapEnv("google-workspace\n", true, nil, nil, nil) // out would say "present", but timedOut=true wins
-	snap := snapshotGogRegistration(env)
+	snap := SnapshotGogRegistration(env)
 	if snap.State != gogRegUnknown {
 		t.Fatalf("expected gogRegUnknown on a listing probe timeout, got state=%v", snap.State)
 	}
@@ -706,7 +706,7 @@ func TestSnapshotGogRegistration_GetAndJSONTransientErrors_Unknown(t *testing.T)
 		"sbx mcp get google-workspace": true,
 		"sbx mcp ls -o json":           true,
 	})
-	snap := snapshotGogRegistration(env)
+	snap := SnapshotGogRegistration(env)
 	if snap.State != gogRegUnknown {
 		t.Fatalf("expected gogRegUnknown when the detailed readers both transiently error, got state=%v", snap.State)
 	}
@@ -714,7 +714,7 @@ func TestSnapshotGogRegistration_GetAndJSONTransientErrors_Unknown(t *testing.T)
 
 func TestSnapshotGogRegistration_SbxAbsent_Unknown(t *testing.T) {
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("not found") }}}
-	snap := snapshotGogRegistration(env)
+	snap := SnapshotGogRegistration(env)
 	if snap.State != gogRegUnknown {
 		t.Fatalf("expected gogRegUnknown when sbx is absent, got state=%v", snap.State)
 	}
@@ -787,8 +787,8 @@ func TestGogSetup_R203_UnreadablePriorRegistration_AbortsBeforeOAuth(t *testing.
 	}
 
 	var out bytes.Buffer
-	opts := gogSetupOpts{account: "you@example.com", credentials: cred}
-	err = gogSetup(env, opts, strings.NewReader(""), &out, false)
+	opts := GogSetupOpts{Account: "you@example.com", Credentials: cred}
+	err = gogSetup(env, opts, strings.NewReader(""), &out, false, noCreds)
 	if err == nil {
 		t.Fatal("expected an error when the prior gog registration is listed but unreadable")
 	}
@@ -833,8 +833,8 @@ func TestGogSetup_R203_ListingProbeTransientlyUnavailable_AbortsBeforeOAuth(t *t
 		return nil
 	}
 	var out bytes.Buffer
-	opts := gogSetupOpts{account: "you@example.com", credentials: cred}
-	err = gogSetup(env, opts, strings.NewReader(""), &out, false)
+	opts := GogSetupOpts{Account: "you@example.com", Credentials: cred}
+	err = gogSetup(env, opts, strings.NewReader(""), &out, false, noCreds)
 	if err == nil {
 		t.Fatal("expected an error when the sbx mcp ls listing probe transiently fails")
 	}
@@ -859,8 +859,8 @@ func TestGogSetup_R203_ListingProbeTransientlyUnavailable_AbortsBeforeOAuth(t *t
 func TestGogSetup_R203_ConfirmedAbsentPrior_ProceedsNormally(t *testing.T) {
 	env, cred := gogR203PreflightEnv(t, "slack\n", false, "")
 	var out bytes.Buffer
-	opts := gogSetupOpts{account: "you@example.com", credentials: cred}
-	if err := gogSetup(env, opts, strings.NewReader(""), &out, false); err != nil {
+	opts := GogSetupOpts{Account: "you@example.com", Credentials: cred}
+	if err := gogSetup(env, opts, strings.NewReader(""), &out, false, noCreds); err != nil {
 		t.Fatalf("gogSetup: %v\n--- output ---\n%s", err, out.String())
 	}
 }
@@ -889,8 +889,8 @@ func TestGogSetup_R204_ConfigLoadFails_AbortsBeforeOAuth(t *testing.T) {
 	var calls [][]string
 	ge.interCalls = &calls
 	var out bytes.Buffer
-	opts := gogSetupOpts{account: "you@example.com", credentials: cred}
-	err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false)
+	opts := GogSetupOpts{Account: "you@example.com", Credentials: cred}
+	err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false, noCreds)
 	if err == nil {
 		t.Fatal("expected an error when config.toml fails to parse")
 	}
@@ -929,8 +929,8 @@ func TestGogSetup_R204_SbxMissing_ZeroInteractiveCalls(t *testing.T) {
 		interCalls: &calls,
 	}
 	var out bytes.Buffer
-	opts := gogSetupOpts{account: "you@example.com", credentials: cred}
-	err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false)
+	opts := GogSetupOpts{Account: "you@example.com", Credentials: cred}
+	err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false, noCreds)
 	if err == nil {
 		t.Fatal("expected an error when sbx is not on PATH")
 	}
@@ -944,16 +944,16 @@ func TestGogSetup_R204_SbxMissing_ZeroInteractiveCalls(t *testing.T) {
 // file implements: sbx/config/registration-snapshot preflight is named
 // explicitly, before the authorization step.
 func TestGogSetup_R204_HelpTextMatchesPreflightBehavior(t *testing.T) {
-	if !strings.Contains(gworkspaceSetupUsage, "preflights EVERY remaining predictable hard requirement BEFORE any\n     authorization happens") {
-		t.Error("gworkspaceSetupUsage must describe the preflight-before-authorization sequence")
+	if !strings.Contains(SetupUsage, "preflights EVERY remaining predictable hard requirement BEFORE any\n     authorization happens") {
+		t.Error("SetupUsage must describe the preflight-before-authorization sequence")
 	}
-	if !strings.Contains(gworkspaceSetupUsage, "sbx must be installed") {
-		t.Error("gworkspaceSetupUsage must name the sbx preflight")
+	if !strings.Contains(SetupUsage, "sbx must be installed") {
+		t.Error("SetupUsage must name the sbx preflight")
 	}
-	if !strings.Contains(gworkspaceSetupUsage, "config must load cleanly") {
-		t.Error("gworkspaceSetupUsage must name the config-load preflight")
+	if !strings.Contains(SetupUsage, "config must load cleanly") {
+		t.Error("SetupUsage must name the config-load preflight")
 	}
-	if !strings.Contains(gworkspaceSetupUsage, "CONFIRMED") {
-		t.Error("gworkspaceSetupUsage must name the tri-state registration-confirmation requirement")
+	if !strings.Contains(SetupUsage, "CONFIRMED") {
+		t.Error("SetupUsage must name the tri-state registration-confirmation requirement")
 	}
 }

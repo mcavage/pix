@@ -1,4 +1,4 @@
-package main
+package gworkspace
 
 import (
 	"bytes"
@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/mcp"
@@ -239,7 +238,7 @@ func (g gogTestEnv) env() hostenv.Env {
 			return "", nil
 		}
 		// R2-03/R2-04 default: an otherwise-unfixtured bounded `sbx mcp ls`
-		// listing (snapshotGogRegistration's presence probe) defaults to an
+		// listing (SnapshotGogRegistration's presence probe) defaults to an
 		// EMPTY listing (confirmed absent) — most gogSetup tests don't care
 		// about a prior registration, and requiring every one of them to
 		// fixture this explicitly would be pure noise. A test that DOES care
@@ -315,8 +314,8 @@ func TestGogSetup_CurrentOneShotRoute(t *testing.T) {
 		sbxRegisterOK: true,
 	}
 	var out bytes.Buffer
-	opts := gogSetupOpts{account: "you@example.com", credentials: cred}
-	if err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false); err != nil {
+	opts := GogSetupOpts{Account: "you@example.com", Credentials: cred}
+	if err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false, noCreds); err != nil {
 		t.Fatalf("gogSetup: %v\n--- output ---\n%s", err, out.String())
 	}
 	if len(calls) != 1 {
@@ -367,8 +366,8 @@ func TestGogSetup_CurrentTwoStepRoute(t *testing.T) {
 		sbxRegisterOK: true,
 	}
 	var out bytes.Buffer
-	opts := gogSetupOpts{account: "you@example.com", credentials: cred}
-	if err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false); err != nil {
+	opts := GogSetupOpts{Account: "you@example.com", Credentials: cred}
+	if err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false, noCreds); err != nil {
 		t.Fatalf("gogSetup: %v\n--- output ---\n%s", err, out.String())
 	}
 	if len(calls) != 2 {
@@ -399,8 +398,8 @@ func TestGogSetup_CreateDocsProfileIsScopedAndRegistersSeparateTool(t *testing.T
 		sbxRegisterOK: true,
 	}
 	var out bytes.Buffer
-	opts := gogSetupOpts{account: "you@example.com", credentials: cred, access: gwAccessCreateDocs}
-	if err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false); err != nil {
+	opts := GogSetupOpts{Account: "you@example.com", Credentials: cred, access: gwAccessCreateDocs}
+	if err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false, noCreds); err != nil {
 		t.Fatalf("gogSetup: %v\n%s", err, out.String())
 	}
 	if len(calls) != 2 || !containsToken(calls[1], "--gmail-scope") || !containsToken(calls[1], "readonly") || !containsToken(calls[1], "--drive-scope") || !containsToken(calls[1], "file") {
@@ -430,8 +429,8 @@ func TestGogSetup_LegacyFallbackRoute(t *testing.T) {
 		sbxRegisterOK: true,
 	}
 	var out bytes.Buffer
-	opts := gogSetupOpts{account: "you@example.com", credentials: cred}
-	if err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false); err != nil {
+	opts := GogSetupOpts{Account: "you@example.com", Credentials: cred}
+	if err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false, noCreds); err != nil {
 		t.Fatalf("gogSetup: %v\n--- output ---\n%s", err, out.String())
 	}
 	if len(calls) != 2 {
@@ -460,8 +459,8 @@ func TestGogSetup_UnsupportedCLI_NoObsoleteExec(t *testing.T) {
 		interCalls: &calls,
 	}
 	var out bytes.Buffer
-	opts := gogSetupOpts{account: "you@example.com", credentials: cred}
-	err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false)
+	opts := GogSetupOpts{Account: "you@example.com", Credentials: cred}
+	err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false, noCreds)
 	if err == nil {
 		t.Fatal("expected an error for an unsupported gog CLI surface")
 	}
@@ -481,8 +480,8 @@ func TestGogSetup_MissingGogCLI(t *testing.T) {
 	cred := gogCredFile(t)
 	ge := gogTestEnv{present: map[string]bool{}, statFile: map[string]bool{cred: true}}
 	var out bytes.Buffer
-	opts := gogSetupOpts{account: "you@example.com", credentials: cred}
-	err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false)
+	opts := GogSetupOpts{Account: "you@example.com", Credentials: cred}
+	err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false, noCreds)
 	if err == nil {
 		t.Fatal("expected an error when gog is not installed")
 	}
@@ -495,8 +494,8 @@ func TestGogSetup_MissingCredentialsFile(t *testing.T) {
 	gogSetupTestCfg(t)
 	ge := gogTestEnv{present: map[string]bool{"gog": true}, statFile: map[string]bool{}}
 	var out bytes.Buffer
-	opts := gogSetupOpts{account: "you@example.com", credentials: "/no/such/client.json"}
-	err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false)
+	opts := GogSetupOpts{Account: "you@example.com", Credentials: "/no/such/client.json"}
+	err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false, noCreds)
 	if err == nil {
 		t.Fatal("expected an error for a missing credentials file")
 	}
@@ -519,8 +518,8 @@ func TestGogSetup_AuthDoctorFails(t *testing.T) {
 		statFile: map[string]bool{cred: true},
 	}
 	var out bytes.Buffer
-	opts := gogSetupOpts{account: "you@example.com", credentials: cred}
-	err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false)
+	opts := GogSetupOpts{Account: "you@example.com", Credentials: cred}
+	err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false, noCreds)
 	if err == nil {
 		t.Fatal("expected an error when auth doctor --check fails")
 	}
@@ -563,8 +562,8 @@ func TestGogSetup_ZeroHeadlessToolsFailsWithGuidance(t *testing.T) {
 		statFile: map[string]bool{cred: true, refs: true},
 	}
 	var out bytes.Buffer
-	opts := gogSetupOpts{account: "you@example.com", credentials: cred}
-	err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false)
+	opts := GogSetupOpts{Account: "you@example.com", Credentials: cred}
+	err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false, opWrappedCreds(refs))
 	if err == nil {
 		t.Fatal("expected an error when headless returns zero tools")
 	}
@@ -610,8 +609,8 @@ func TestGogSetup_IdempotentAddMCPWhenAccountUnchanged(t *testing.T) {
 		sbxRegisterOK: true,
 	}
 	var out bytes.Buffer
-	opts := gogSetupOpts{account: "you@example.com", credentials: cred}
-	if err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false); err != nil {
+	opts := GogSetupOpts{Account: "you@example.com", Credentials: cred}
+	if err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false, noCreds); err != nil {
 		t.Fatalf("gogSetup: %v\n--- output ---\n%s", err, out.String())
 	}
 	got, err := config.Load()
@@ -644,8 +643,8 @@ func TestGogSetup_RegistrationFailureReported(t *testing.T) {
 		statFile: map[string]bool{cred: true},
 	}
 	var out bytes.Buffer
-	opts := gogSetupOpts{account: "you@example.com", credentials: cred}
-	err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false)
+	opts := GogSetupOpts{Account: "you@example.com", Credentials: cred}
+	err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false, noCreds)
 	if err == nil {
 		t.Fatal("expected an error when sbx registration fails")
 	}
@@ -670,8 +669,8 @@ func TestGogSetup_NoCredentialContentReads(t *testing.T) {
 		return "", fmt.Errorf("must not be called")
 	}
 	var out bytes.Buffer
-	opts := gogSetupOpts{account: "you@example.com", credentials: cred}
-	if err := gogSetup(env, opts, strings.NewReader(""), &out, false); err != nil {
+	opts := GogSetupOpts{Account: "you@example.com", Credentials: cred}
+	if err := gogSetup(env, opts, strings.NewReader(""), &out, false, noCreds); err != nil {
 		t.Fatalf("gogSetup: %v\n--- output ---\n%s", err, out.String())
 	}
 	if readFileCalled {
@@ -693,8 +692,8 @@ func TestGogSetup_PromptsOnTTYForMissingAccountAndCredentials(t *testing.T) {
 	}
 	var out bytes.Buffer
 	in := strings.NewReader("you@example.com\n" + cred + "\n")
-	opts := gogSetupOpts{}
-	if err := gogSetup(ge.env(), opts, in, &out, true); err != nil {
+	opts := GogSetupOpts{}
+	if err := gogSetup(ge.env(), opts, in, &out, true, noCreds); err != nil {
 		t.Fatalf("gogSetup: %v\n--- output ---\n%s", err, out.String())
 	}
 }
@@ -722,7 +721,7 @@ func TestGogSetup_ExpandsPromptedHomeCredentialsPath(t *testing.T) {
 	systest.Of(env.System).HomeDirFn = func() string { return home }
 	var out bytes.Buffer
 	in := strings.NewReader("you@example.com\n~/.config/pix/credentials/gog.json\n")
-	if err := gogSetup(env, gogSetupOpts{}, in, &out, true); err != nil {
+	if err := gogSetup(env, GogSetupOpts{}, in, &out, true, noCreds); err != nil {
 		t.Fatalf("gogSetup with ~/ credentials: %v\n--- output ---\n%s", err, out.String())
 	}
 }
@@ -767,8 +766,8 @@ func TestGogSetup_BufferedReaderDeliversBothPromptedValues(t *testing.T) {
 	// exposes the per-call-bufio.Reader bug (a second bufio.NewReader wrapping
 	// the same, now-drained, underlying reader would see EOF).
 	in := strings.NewReader("you@example.com\n" + cred + "\n")
-	opts := gogSetupOpts{} // no flags — both values MUST come from the reader
-	if err := gogSetup(ge.env(), opts, in, &out, true); err != nil {
+	opts := GogSetupOpts{} // no flags — both values MUST come from the reader
+	if err := gogSetup(ge.env(), opts, in, &out, true, noCreds); err != nil {
 		t.Fatalf("gogSetup: %v\n--- output ---\n%s", err, out.String())
 	}
 	if len(calls) == 0 {
@@ -790,8 +789,8 @@ func TestGogSetup_NonInteractiveMissingAccountFails(t *testing.T) {
 	cred := gogCredFile(t)
 	ge := gogTestEnv{present: map[string]bool{"gog": true}, statFile: map[string]bool{cred: true}}
 	var out bytes.Buffer
-	opts := gogSetupOpts{credentials: cred}
-	if err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false); err == nil {
+	opts := GogSetupOpts{Credentials: cred}
+	if err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false, noCreds); err == nil {
 		t.Fatal("expected an error when --account is missing and not a TTY")
 	}
 }
@@ -812,8 +811,8 @@ func TestGogSetup_PrintsAttachModeGuidance(t *testing.T) {
 		sbxRegisterOK: true,
 	}
 	var out bytes.Buffer
-	opts := gogSetupOpts{account: "you@example.com", credentials: cred}
-	if err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false); err != nil {
+	opts := GogSetupOpts{Account: "you@example.com", Credentials: cred}
+	if err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false, noCreds); err != nil {
 		t.Fatalf("gogSetup: %v", err)
 	}
 	if !strings.Contains(out.String(), "preloads it") {
@@ -826,30 +825,18 @@ func TestGogSetup_PrintsAttachModeGuidance(t *testing.T) {
 
 // --- CLI dispatch / help ---
 
-func TestRunGogCmd_HelpAndUnknownSubcommand(t *testing.T) {
-	if !cli.WantsHelp([]string{"-h"}) {
-		t.Fatal("sanity")
-	}
-	if _, ok := verbUsage("gworkspace"); !ok {
-		t.Error("verbUsage(gog) should be known")
-	}
-	if !knownVerbs["gworkspace"] {
-		t.Error(`knownVerbs["gworkspace"] should be true`)
-	}
-}
-
 func TestParseGogSetupArgs(t *testing.T) {
-	opts, err := parseGworkspaceSetupArgs([]string{"--account", "you@example.com", "--credentials", "/tmp/c.json", "--yes"})
+	opts, err := ParseGworkspaceSetupArgs([]string{"--account", "you@example.com", "--credentials", "/tmp/c.json", "--yes"})
 	if err != nil {
-		t.Fatalf("parseGworkspaceSetupArgs: %v", err)
+		t.Fatalf("ParseGworkspaceSetupArgs: %v", err)
 	}
-	if opts.account != "you@example.com" || opts.credentials != "/tmp/c.json" || !opts.assumeYes {
+	if opts.Account != "you@example.com" || opts.Credentials != "/tmp/c.json" || !opts.AssumeYes {
 		t.Errorf("parsed = %+v", opts)
 	}
-	if _, err := parseGworkspaceSetupArgs([]string{"--account"}); err == nil {
+	if _, err := ParseGworkspaceSetupArgs([]string{"--account"}); err == nil {
 		t.Error("expected error for --account with no value")
 	}
-	if _, err := parseGworkspaceSetupArgs([]string{"--bogus"}); err == nil {
+	if _, err := ParseGworkspaceSetupArgs([]string{"--bogus"}); err == nil {
 		t.Error("expected error for unknown flag")
 	}
 }

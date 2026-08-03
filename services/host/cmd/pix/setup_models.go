@@ -42,6 +42,7 @@ import (
 	"pix/host/readiness/axis"
 	"pix/host/secret"
 	"pix/host/workflow/doctor"
+	"pix/host/workflow/gworkspace"
 	"slices"
 	"sort"
 	"strings"
@@ -448,7 +449,7 @@ func printSetupSummary(cfg *config.Config, env hostenv.Env, out io.Writer, model
 		// absent by default: no row.
 	case acct == "":
 		line("✗", "workspace", "enabled but no account authorized — run: pix gworkspace setup")
-	case gogSetupAccountHealthy(env, acct):
+	case gworkspace.GogSetupAccountHealthy(env, acct):
 		line("✓", "workspace", acct+" authorized (read-only)")
 	default:
 		line("✗", "workspace", acct+" not verified — run: pix gworkspace setup")

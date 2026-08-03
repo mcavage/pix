@@ -8,6 +8,7 @@ import (
 
 	"pix/host/hostenv/hostenvtest"
 	"pix/host/workflow/doctor"
+	"pix/host/workflow/gworkspace"
 )
 
 func TestRegisteredGogCommand_CurrentSbxPlainTable(t *testing.T) {
@@ -29,11 +30,11 @@ func TestRegisteredGogCommand_CurrentSbxPlainTable(t *testing.T) {
 	if got := strings.Join(argv, " "); got != regCmd {
 		t.Fatalf("registered argv = %q, want %q", got, regCmd)
 	}
-	snap := snapshotGogRegistration(env)
-	if snap.State != gogRegPresent {
+	snap := gworkspace.SnapshotGogRegistration(env)
+	if snap.State != gworkspace.GogRegPresent {
 		t.Fatalf("gog setup snapshot state = %v, want present", snap.State)
 	}
-	if got := strings.Join(snap.argv, " "); got != regCmd {
+	if got := strings.Join(snap.Argv, " "); got != regCmd {
 		t.Fatalf("snapshot argv = %q, want %q", got, regCmd)
 	}
 }
