@@ -43,6 +43,7 @@ import (
 	"pix/host/secret"
 	"pix/host/workflow/doctor"
 	"pix/host/workflow/gworkspace"
+	"pix/host/workflow/launch"
 	"slices"
 	"sort"
 	"strings"
@@ -423,7 +424,7 @@ func printSetupSummary(cfg *config.Config, env hostenv.Env, out io.Writer, model
 		line("✓", "knowledge", strings.Join(cfg.KnowledgeBundles, ", "))
 	}
 
-	pack := resolveHostStatePack(cfg, "")
+	pack := launch.ResolveHostStatePack(cfg, "")
 	packReady := pack.Active && pack.Exists && (pack.Skills || pack.Knowledge)
 	switch {
 	case packReady:

@@ -9,6 +9,7 @@ import (
 	"pix/host/workflow/backup"
 	"pix/host/workflow/doctor"
 	"pix/host/workflow/gworkspace"
+	"pix/host/workflow/launch"
 	"pix/host/workflow/man"
 	"pix/host/workflow/pack"
 	"pix/host/workflow/reset"
@@ -186,9 +187,9 @@ func verbUsage(verb string) (string, bool) {
 	case "status", "st":
 		return doctor.StatusUsage, true
 	case "ls":
-		return lsUsage, true
+		return launch.LsUsage, true
 	case "rm":
-		return rmUsage, true
+		return launch.RmUsage, true
 	case "doctor":
 		return doctor.Usage, true
 	case "setup":
@@ -226,9 +227,9 @@ func verbUsage(verb string) (string, bool) {
 	case "state":
 		return stateUsage, true
 	case "task":
-		return taskUsage, true
+		return launch.TaskUsage, true
 	case "host":
-		return hostUsage, true
+		return launch.HostUsage, true
 	case "models":
 		return modelsUsage(), true
 	case "agent":

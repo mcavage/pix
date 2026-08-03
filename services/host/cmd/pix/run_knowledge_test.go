@@ -9,6 +9,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/knowledge"
+	"pix/host/workflow/launch"
 )
 
 // TestKnowledgeUseProject_LocalPath: `knowledge use --project <localpath>` writes
@@ -65,7 +66,7 @@ func TestWireKnowledgeScope_GlobalOnly(t *testing.T) {
 	ws := t.TempDir()
 
 	cfg := &config.Config{KnowledgeBundles: []string{global}}
-	wireKnowledgeScope(cfg, ws, knowledgeRPC{up: func() bool { return false }})
+	launch.WireKnowledgeScope(cfg, ws, launch.KnowledgeRPC{Up: func() bool { return false }})
 
 	lines := scopeLines(t, ws)
 	want := []string{knowledge.CanonicalizeKnowledgeBundle(global)}
@@ -82,7 +83,7 @@ func TestWireKnowledgeScope_GlobalPlusProject(t *testing.T) {
 	mustWritePointer(t, ws, project+"\n")
 
 	cfg := &config.Config{KnowledgeBundles: []string{global}}
-	wireKnowledgeScope(cfg, ws, knowledgeRPC{up: func() bool { return false }})
+	launch.WireKnowledgeScope(cfg, ws, launch.KnowledgeRPC{Up: func() bool { return false }})
 
 	lines := scopeLines(t, ws)
 	want := []string{knowledge.CanonicalizeKnowledgeBundle(global), knowledge.CanonicalizeKnowledgeBundle(project)}
@@ -100,7 +101,7 @@ func TestWireKnowledgeScope_RelativePointerResolvesToWorkspace(t *testing.T) {
 	mustWritePointer(t, ws, "kb\n")
 
 	cfg := &config.Config{}
-	wireKnowledgeScope(cfg, ws, knowledgeRPC{up: func() bool { return false }})
+	launch.WireKnowledgeScope(cfg, ws, launch.KnowledgeRPC{Up: func() bool { return false }})
 
 	lines := scopeLines(t, ws)
 	want := []string{knowledge.CanonicalizeKnowledgeBundle(filepath.Join(ws, "kb"))}
@@ -114,7 +115,7 @@ func TestWireKnowledgeScope_NoBundles(t *testing.T) {
 	ws := t.TempDir()
 
 	cfg := &config.Config{}
-	wireKnowledgeScope(cfg, ws, knowledgeRPC{up: func() bool { return false }})
+	launch.WireKnowledgeScope(cfg, ws, launch.KnowledgeRPC{Up: func() bool { return false }})
 
 	if _, err := os.Stat(filepath.Join(ws, ".pix", "knowledge.scope")); !os.IsNotExist(err) {
 		t.Errorf("expected no scope file, stat err = %v", err)
@@ -128,7 +129,7 @@ func TestWireKnowledgeScope_RemovesStaleScope(t *testing.T) {
 	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
 	ws := t.TempDir()
 	// Simulate a stale scope file left by an earlier run.
-	if err := writeKnowledgeScope(ws, []string{"/stale/bundle"}); err != nil {
+	if err := launch.WriteKnowledgeScope(ws, []string{"/stale/bundle"}); err != nil {
 		t.Fatal(err)
 	}
 	scope := filepath.Join(ws, ".pix", "knowledge.scope")
@@ -137,7 +138,7 @@ func TestWireKnowledgeScope_RemovesStaleScope(t *testing.T) {
 	}
 
 	// No global bundles + no pointer -> empty id set -> the stale file is removed.
-	wireKnowledgeScope(&config.Config{}, ws, knowledgeRPC{up: func() bool { return false }})
+	launch.WireKnowledgeScope(&config.Config{}, ws, launch.KnowledgeRPC{Up: func() bool { return false }})
 
 	if _, err := os.Stat(scope); !os.IsNotExist(err) {
 		t.Errorf("expected stale scope file removed, stat err = %v", err)
@@ -151,12 +152,12 @@ func TestWireKnowledgeScope_LazyReindexGating(t *testing.T) {
 	project := t.TempDir()
 	canon := knowledge.CanonicalizeKnowledgeBundle(project)
 
-	newCase := func(up bool, health []string) (*[]string, knowledgeRPC) {
+	newCase := func(up bool, health []string) (*[]string, launch.KnowledgeRPC) {
 		var called []string
-		return &called, knowledgeRPC{
-			up:      func() bool { return up },
-			health:  func() ([]string, error) { return health, nil },
-			reindex: func(b string) error { called = append(called, b); return nil },
+		return &called, launch.KnowledgeRPC{
+			Up:      func() bool { return up },
+			Health:  func() ([]string, error) { return health, nil },
+			Reindex: func(b string) error { called = append(called, b); return nil },
 		}
 	}
 
@@ -165,7 +166,7 @@ func TestWireKnowledgeScope_LazyReindexGating(t *testing.T) {
 		ws := t.TempDir()
 		mustWritePointer(t, ws, project+"\n")
 		called, rpc := newCase(false, nil)
-		wireKnowledgeScope(&config.Config{}, ws, rpc)
+		launch.WireKnowledgeScope(&config.Config{}, ws, rpc)
 		if len(*called) != 0 {
 			t.Errorf("daemon down: reindex called %v, want none", *called)
 		}
@@ -176,7 +177,7 @@ func TestWireKnowledgeScope_LazyReindexGating(t *testing.T) {
 		ws := t.TempDir()
 		mustWritePointer(t, ws, project+"\n")
 		called, rpc := newCase(true, []string{"/some/other/bundle"})
-		wireKnowledgeScope(&config.Config{}, ws, rpc)
+		launch.WireKnowledgeScope(&config.Config{}, ws, rpc)
 		if len(*called) != 1 || (*called)[0] != canon {
 			t.Errorf("daemon up + unknown: reindex called %v, want [%s]", *called, canon)
 		}
@@ -187,7 +188,7 @@ func TestWireKnowledgeScope_LazyReindexGating(t *testing.T) {
 		ws := t.TempDir()
 		mustWritePointer(t, ws, project+"\n")
 		called, rpc := newCase(true, []string{canon})
-		wireKnowledgeScope(&config.Config{}, ws, rpc)
+		launch.WireKnowledgeScope(&config.Config{}, ws, rpc)
 		if len(*called) != 0 {
 			t.Errorf("daemon up + known: reindex called %v, want none", *called)
 		}
@@ -196,14 +197,14 @@ func TestWireKnowledgeScope_LazyReindexGating(t *testing.T) {
 
 // TestToStringSlice: coercion tolerates []any (decoded JSON) and []string.
 func TestToStringSlice(t *testing.T) {
-	if got := toStringSlice([]any{"a", 1, "b"}); len(got) != 2 || got[0] != "a" || got[1] != "b" {
-		t.Errorf("toStringSlice([]any) = %v", got)
+	if got := launch.ToStringSlice([]any{"a", 1, "b"}); len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Errorf("launch.ToStringSlice([]any) = %v", got)
 	}
-	if got := toStringSlice([]string{"x"}); len(got) != 1 || got[0] != "x" {
-		t.Errorf("toStringSlice([]string) = %v", got)
+	if got := launch.ToStringSlice([]string{"x"}); len(got) != 1 || got[0] != "x" {
+		t.Errorf("launch.ToStringSlice([]string) = %v", got)
 	}
-	if got := toStringSlice(nil); got != nil {
-		t.Errorf("toStringSlice(nil) = %v, want nil", got)
+	if got := launch.ToStringSlice(nil); got != nil {
+		t.Errorf("launch.ToStringSlice(nil) = %v, want nil", got)
 	}
 }
 

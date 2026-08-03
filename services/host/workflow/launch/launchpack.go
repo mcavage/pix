@@ -1,12 +1,12 @@
 // launchpack.go — applying the active pack to a LAUNCH.
 //
 // These live on the launch side, not in pack.go, because that is whose
-// question they answer: they take run's runOpts, write into the workspace a
+// question they answer: they take run's RunOpts, write into the workspace a
 // sandbox is about to start in, and are called only from `pix run` and
 // `pix task new`. Filing them under pack made pack look coupled to run when
 // what was actually true is that run is coupled to pack, which is the correct
 // direction and the one the layering allows.
-package main
+package launch
 
 import (
 	"errors"
@@ -22,7 +22,7 @@ import (
 	"strings"
 )
 
-func applyPackStackToLaunch(cfg *config.Config, o *runOpts, env hostenv.Env) (string, error) {
+func ApplyPackStackToLaunch(cfg *config.Config, o *RunOpts, env hostenv.Env) (string, error) {
 	roots := pack.ActivePackRoots(cfg, o.Pack)
 	if len(roots) == 0 {
 		return "", nil
@@ -32,7 +32,7 @@ func applyPackStackToLaunch(cfg *config.Config, o *runOpts, env hostenv.Env) (st
 	var effective string
 	for _, root := range roots {
 		cfg.Pack, o.Pack = root, ""
-		applied, err := applyPackToLaunch(cfg, o, env)
+		applied, err := ApplyPackToLaunch(cfg, o, env)
 		if err != nil {
 			return "", err
 		}
@@ -53,12 +53,12 @@ func applyPackStackToLaunch(cfg *config.Config, o *runOpts, env hostenv.Env) (st
 	return effective, nil
 }
 
-// applyPackToLaunch mounts the active pack into a launch (run OR task): it
+// ApplyPackToLaunch mounts the active pack into a launch (run OR task): it
 // appends the pack's skills dir to o.Skills, applies the pack's ollama model
 // pref, synthesizes + stacks the pack's sandbox bin/ mixin kit (F2), and warns
 // about a missing integration credential. A pack's `integration.mcp` is NOT
 // warned about here (v1 behavior): F1 enables it into cfg.MCP at `pack use`
-// time, so buildSbxArgs' existing --mcp loop already attaches it on the next
+// time, so BuildSbxArgs' existing --mcp loop already attaches it on the next
 // create — nothing new needed in the arg builder, and warning here would be
 // stale noise for an already-attached pack. Knowledge is NOT handled here
 // either: a persisted active pack already has its bundles (embedded dir AND
@@ -83,9 +83,9 @@ func applyPackStackToLaunch(cfg *config.Config, o *runOpts, env hostenv.Env) (st
 // scope memory from this returned root, never from pack.ActivePackRoot(cfg.Pack,
 // o.Pack) directly — the configured path can name a pack that degraded to
 // pack-less this launch, and recording it anyway would make a later
-// stalePackReattachWarning wrongly stay silent (marker == active) even though
+// StalePackReattachWarning wrongly stay silent (marker == active) even though
 // the sandbox never got the pack's create-time facets.
-func applyPackToLaunch(cfg *config.Config, o *runOpts, env hostenv.Env) (string, error) {
+func ApplyPackToLaunch(cfg *config.Config, o *RunOpts, env hostenv.Env) (string, error) {
 	packRoot := pack.ActivePackRoot(cfg.Pack, o.Pack)
 	if packRoot == "" {
 		return "", nil // no active pack; nothing to mount (detached or never created)
@@ -158,7 +158,7 @@ func applyPackToLaunch(cfg *config.Config, o *runOpts, env hostenv.Env) (string,
 	// TRANSIENT --pack override that was never `pack use`d: fold its
 	// integration names into cfg.MCP IN MEMORY for this launch only. Never
 	// Save()d — run.go/task.go never call Save() on this cfg after
-	// applyPackToLaunch, so a --pack override never leaks into the persisted
+	// ApplyPackToLaunch, so a --pack override never leaks into the persisted
 	// config.
 	for _, n := range pack.McpNames(p) {
 		if !slices.Contains(cfg.MCP, n) {
@@ -168,9 +168,9 @@ func applyPackToLaunch(cfg *config.Config, o *runOpts, env hostenv.Env) (string,
 	return packRoot, nil
 }
 
-// writePackContextFiles writes the two per-launch, pack-scoped workspace files
+// WritePackContextFiles writes the two per-launch, pack-scoped workspace files
 // that carry the active pack's context into a sandbox: the ollama-bridge model
-// (.pix/ollama-bridge.model, via writeOllamaBridgeFile) and the memory
+// (.pix/ollama-bridge.model, via WriteOllamaBridgeFile) and the memory
 // scope (.pix/profile, via pack.WriteMemoryScope, resolved from the active
 // pack). Shared by `pix run` and `pix task new` so a task sandbox
 // gets the SAME pack context as a normal run — packs-v2 Phase 1 had `run`
@@ -178,16 +178,16 @@ func applyPackToLaunch(cfg *config.Config, o *runOpts, env hostenv.Env) (string,
 // degrades to unscoped memory rather than failing the launch (mirrors
 // pack.WriteMemoryScope's own contract).
 //
-// effectivePack is the root applyPackToLaunch actually applied (its returned
+// effectivePack is the root ApplyPackToLaunch actually applied (its returned
 // value) — NOT pack.ActivePackRoot(cfg.Pack, o.Pack) directly. This keeps memory
-// scoping honest with the sandbox.pack marker: when applyPackToLaunch
+// scoping honest with the sandbox.pack marker: when ApplyPackToLaunch
 // degraded (pack.ErrNotAPack), effectivePack is "" and memory stays unscoped, even
 // though cfg.Pack/o.Pack still name the (unavailable) configured pack.
-func writePackContextFiles(cfg *config.Config, o runOpts, effectivePack string) {
+func WritePackContextFiles(cfg *config.Config, o RunOpts, effectivePack string) {
 	if _, err := workspace.EnsureGitExclude(o.Workspace); err != nil {
 		fmt.Fprintf(os.Stderr, "pix: could not add .pix ws state to git excludes: %v\n", err)
 	}
-	writeOllamaBridgeFile(o.Workspace, cfg.OllamaBridgeModel)
+	WriteOllamaBridgeFile(o.Workspace, cfg.OllamaBridgeModel)
 	var activePack *pack.Info
 	if effectivePack != "" {
 		if lp, lerr := pack.LoadPack(effectivePack); lerr == nil {

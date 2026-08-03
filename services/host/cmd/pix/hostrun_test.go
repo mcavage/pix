@@ -10,6 +10,7 @@ import (
 
 	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/workflow/launch"
 	"pix/host/workflow/pack"
 	"pix/host/workspace"
 )
@@ -104,12 +105,12 @@ func TestConfigValue_HostKeys(t *testing.T) {
 // TestParseHostArgs_SetupIsNotADir: a bare `setup` is the provision subcommand,
 // never parsed as a workspace directory.
 func TestParseHostArgs_SetupIsNotADir(t *testing.T) {
-	sub, _, err := parseHostArgs([]string{"setup"})
+	sub, _, err := launch.ParseHostArgs([]string{"setup"})
 	if err != nil || sub != "setup" {
-		t.Fatalf("parseHostArgs(setup) = %q, %v; want subcommand setup", sub, err)
+		t.Fatalf("launch.ParseHostArgs(setup) = %q, %v; want subcommand setup", sub, err)
 	}
 	// Extra args after setup are a usage error.
-	if _, _, err := parseHostArgs([]string{"setup", "extra"}); err == nil {
+	if _, _, err := launch.ParseHostArgs([]string{"setup", "extra"}); err == nil {
 		t.Error("expected an error for `host setup extra`")
 	}
 }
@@ -118,9 +119,9 @@ func TestParseHostArgs_SetupIsNotADir(t *testing.T) {
 // workspace is "."; unknown flags and extra positionals error.
 func TestParseHostArgs_Launch(t *testing.T) {
 	dir := t.TempDir()
-	sub, o, err := parseHostArgs([]string{dir, "--model", "anthropic/claude-sonnet-5", "--", "-p", "hi"})
+	sub, o, err := launch.ParseHostArgs([]string{dir, "--model", "anthropic/claude-sonnet-5", "--", "-p", "hi"})
 	if err != nil || sub != "" {
-		t.Fatalf("parseHostArgs launch: sub=%q err=%v", sub, err)
+		t.Fatalf("launch.ParseHostArgs launch: sub=%q err=%v", sub, err)
 	}
 	if o.Workspace != dir || o.Model != "anthropic/claude-sonnet-5" {
 		t.Errorf("opts = %+v", o)
@@ -129,27 +130,27 @@ func TestParseHostArgs_Launch(t *testing.T) {
 		t.Errorf("passthrough = %v", o.Passthrough)
 	}
 
-	if _, o, err := parseHostArgs(nil); err != nil || o.Workspace != "." {
+	if _, o, err := launch.ParseHostArgs(nil); err != nil || o.Workspace != "." {
 		t.Errorf("default workspace: %+v, %v", o, err)
 	}
-	if _, _, err := parseHostArgs([]string{"--frob"}); err == nil {
+	if _, _, err := launch.ParseHostArgs([]string{"--frob"}); err == nil {
 		t.Error("expected unknown-flag error")
 	}
-	if _, _, err := parseHostArgs([]string{dir, dir}); err == nil {
+	if _, _, err := launch.ParseHostArgs([]string{dir, dir}); err == nil {
 		t.Error("expected extra-positional error")
 	}
-	if _, _, err := parseHostArgs([]string{"-h"}); err != cli.ErrHelpRequested {
+	if _, _, err := launch.ParseHostArgs([]string{"-h"}); err != cli.ErrHelpRequested {
 		t.Errorf("-h: err = %v, want cli.ErrHelpRequested", err)
 	}
-	// A nonexistent dir is rejected (shared validateRunWorkspace contract).
-	if _, _, err := parseHostArgs([]string{"no-such-dir-xyz"}); err == nil {
+	// A nonexistent dir is rejected (shared launch.ValidateRunWorkspace contract).
+	if _, _, err := launch.ParseHostArgs([]string{"no-such-dir-xyz"}); err == nil {
 		t.Error("expected an error for a nonexistent workspace")
 	}
 }
 
 // TestParseHostArgs_RefusesGuardDisablingPassthrough: the launcher appends the
 // passthrough AFTER `-e host-guard.ts`, so any flag that disables or displaces
-// extensions would launch pi UNGUARDED. parseHostArgs must refuse them — both
+// extensions would launch pi UNGUARDED. launch.ParseHostArgs must refuse them — both
 // the `--flag value` and `--flag=value` spellings — while normal pi args pass.
 func TestParseHostArgs_RefusesGuardDisablingPassthrough(t *testing.T) {
 	dir := t.TempDir()
@@ -164,17 +165,17 @@ func TestParseHostArgs_RefusesGuardDisablingPassthrough(t *testing.T) {
 		{"-p", "hi", "--no-extensions"}, // buried later in the passthrough
 	} {
 		argv := append([]string{dir, "--"}, bad...)
-		if _, _, err := parseHostArgs(argv); err == nil {
-			t.Errorf("parseHostArgs(%v) = nil, want a guard-displacement refusal", argv)
+		if _, _, err := launch.ParseHostArgs(argv); err == nil {
+			t.Errorf("launch.ParseHostArgs(%v) = nil, want a guard-displacement refusal", argv)
 		}
 	}
 	// The pure checker refuses the same set directly (the seam runHostLaunch
 	// relies on) …
-	if err := checkHostPassthrough([]string{"--no-extensions"}); err == nil {
-		t.Error("checkHostPassthrough(--no-extensions) = nil, want error")
+	if err := launch.CheckHostPassthrough([]string{"--no-extensions"}); err == nil {
+		t.Error("launch.CheckHostPassthrough(--no-extensions) = nil, want error")
 	}
 	// … and benign passthrough still parses.
-	if _, o, err := parseHostArgs([]string{dir, "--", "-p", "hi", "--thinking", "high"}); err != nil {
+	if _, o, err := launch.ParseHostArgs([]string{dir, "--", "-p", "hi", "--thinking", "high"}); err != nil {
 		t.Fatalf("benign passthrough refused: %v", err)
 	} else if strings.Join(o.Passthrough, " ") != "-p hi --thinking high" {
 		t.Errorf("passthrough = %v", o.Passthrough)
@@ -199,8 +200,8 @@ func TestValidateHostWorkspace_Refusals(t *testing.T) {
 	home := canon(t, t.TempDir())
 
 	for _, ws := range []string{"/", "/etc", "/etc/ssh", home} {
-		if err := validateHostWorkspace(ws, home); err == nil {
-			t.Errorf("validateHostWorkspace(%q) = nil, want refusal", ws)
+		if err := launch.ValidateHostWorkspace(ws, home); err == nil {
+			t.Errorf("launch.ValidateHostWorkspace(%q) = nil, want refusal", ws)
 		}
 	}
 
@@ -210,8 +211,8 @@ func TestValidateHostWorkspace_Refusals(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, ws := range []string{ssh, filepath.Join(ssh, "sub")} {
-		if err := validateHostWorkspace(ws, home); err == nil {
-			t.Errorf("validateHostWorkspace(%q) = nil, want refusal (inside secrets)", ws)
+		if err := launch.ValidateHostWorkspace(ws, home); err == nil {
+			t.Errorf("launch.ValidateHostWorkspace(%q) = nil, want refusal (inside secrets)", ws)
 		}
 	}
 
@@ -220,7 +221,7 @@ func TestValidateHostWorkspace_Refusals(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(holder, ".aws"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateHostWorkspace(holder, home); err == nil {
+	if err := launch.ValidateHostWorkspace(holder, home); err == nil {
 		t.Error("workspace containing .aws must be refused")
 	}
 
@@ -229,8 +230,8 @@ func TestValidateHostWorkspace_Refusals(t *testing.T) {
 	if err := os.MkdirAll(ok, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateHostWorkspace(ok, home); err != nil {
-		t.Errorf("validateHostWorkspace(%q) = %v, want nil", ok, err)
+	if err := launch.ValidateHostWorkspace(ok, home); err != nil {
+		t.Errorf("launch.ValidateHostWorkspace(%q) = %v, want nil", ok, err)
 	}
 }
 
@@ -244,14 +245,14 @@ func TestValidateHostWorkspace_SymlinkedSecretDir(t *testing.T) {
 	if err := os.Symlink(realSSH, filepath.Join(home, ".ssh")); err != nil {
 		t.Skipf("cannot create symlink: %v", err)
 	}
-	if err := validateHostWorkspace(realSSH, home); err == nil {
+	if err := launch.ValidateHostWorkspace(realSSH, home); err == nil {
 		t.Error("workspace at the real target of a symlinked ~/.ssh must be refused")
 	}
 	sub := filepath.Join(realSSH, "sub")
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateHostWorkspace(sub, home); err == nil {
+	if err := launch.ValidateHostWorkspace(sub, home); err == nil {
 		t.Error("workspace under the real target of a symlinked ~/.ssh must be refused")
 	}
 }
@@ -266,7 +267,7 @@ func TestValidateHostWorkspace_NestedSecretEntry(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(cfgDir, "gcloud"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateHostWorkspace(cfgDir, home); err == nil {
+	if err := launch.ValidateHostWorkspace(cfgDir, home); err == nil {
 		t.Error("workspace at $HOME/.config containing gcloud must be refused")
 	}
 	// Without any secret dir beneath it, $HOME/.config itself is acceptable.
@@ -275,7 +276,7 @@ func TestValidateHostWorkspace_NestedSecretEntry(t *testing.T) {
 	if err := os.MkdirAll(cfg2, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateHostWorkspace(cfg2, home2); err != nil {
+	if err := launch.ValidateHostWorkspace(cfg2, home2); err != nil {
 		t.Errorf("empty $HOME/.config workspace refused: %v", err)
 	}
 }
@@ -293,7 +294,7 @@ func TestResolveHostWorkspace_SymlinkCannotDefeatCheck(t *testing.T) {
 	if err := os.Symlink(home, link); err != nil {
 		t.Skipf("cannot create symlink: %v", err)
 	}
-	if _, err := resolveHostWorkspace(link); err == nil {
+	if _, err := launch.ResolveHostWorkspace(link); err == nil {
 		t.Fatal("a symlink to $HOME must not defeat the workspace refusal")
 	}
 
@@ -302,9 +303,9 @@ func TestResolveHostWorkspace_SymlinkCannotDefeatCheck(t *testing.T) {
 	if err := os.MkdirAll(proj, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	got, err := resolveHostWorkspace(proj)
+	got, err := launch.ResolveHostWorkspace(proj)
 	if err != nil {
-		t.Fatalf("resolveHostWorkspace(proj): %v", err)
+		t.Fatalf("launch.ResolveHostWorkspace(proj): %v", err)
 	}
 	if got != canon(t, proj) {
 		t.Errorf("resolved = %q, want canonical %q", got, canon(t, proj))
@@ -320,7 +321,7 @@ func TestResolveHostWorkspace_SymlinkCannotDefeatCheck(t *testing.T) {
 func TestHostChildEnv_Contract(t *testing.T) {
 	t.Setenv("MEMORY_PORT", "")
 	t.Setenv("KNOWLEDGE_PORT", "")
-	env := hostChildEnv("/state/host-agent", "")
+	env := launch.HostChildEnv("/state/host-agent", "")
 	want := []string{
 		"PI_CODING_AGENT_DIR=/state/host-agent",
 		"MEMORY_URL=http://127.0.0.1:11435",
@@ -344,17 +345,17 @@ func TestHostChildEnv_Contract(t *testing.T) {
 func TestHostChildEnv_PortOverrideAndBridgeModel(t *testing.T) {
 	t.Setenv("MEMORY_PORT", "21435")
 	t.Setenv("KNOWLEDGE_PORT", "21436")
-	env := strings.Join(hostChildEnv("/sa", "qwen3.5:9b"), "\n")
+	env := strings.Join(launch.HostChildEnv("/sa", "qwen3.5:9b"), "\n")
 	for _, want := range []string{
 		"MEMORY_URL=http://127.0.0.1:21435",
 		"KNOWLEDGE_URL=http://127.0.0.1:21436",
 		"OLLAMA_BRIDGE_MODEL=qwen3.5:9b",
 	} {
 		if !strings.Contains(env, want) {
-			t.Errorf("hostChildEnv missing %q in:\n%s", want, env)
+			t.Errorf("launch.HostChildEnv missing %q in:\n%s", want, env)
 		}
 	}
-	if strings.Contains(strings.Join(hostChildEnv("/sa", "  "), "\n"), "OLLAMA_BRIDGE_MODEL") {
+	if strings.Contains(strings.Join(launch.HostChildEnv("/sa", "  "), "\n"), "OLLAMA_BRIDGE_MODEL") {
 		t.Error("blank bridge model must not export OLLAMA_BRIDGE_MODEL")
 	}
 }
@@ -381,7 +382,7 @@ func TestProvisionHostAgentDir_HarnessFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer devnull.Close()
-	if err := provisionHostAgentDir(root, dir, devnull); err != nil {
+	if err := launch.ProvisionHostAgentDir(root, dir, devnull); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"skills", "agents", "capabilities.json", "routing.json", "keybindings.json"} {
@@ -399,7 +400,7 @@ func TestProvisionHostAgentDir_HarnessFiles(t *testing.T) {
 			t.Errorf("%s not provisioned: %v", f, err)
 		}
 	}
-	if err := provisionHostAgentDir(root, dir, devnull); err != nil {
+	if err := launch.ProvisionHostAgentDir(root, dir, devnull); err != nil {
 		t.Errorf("provision is not idempotent: %v", err)
 	}
 }
@@ -409,11 +410,11 @@ func TestProvisionHostAgentDir_HarnessFiles(t *testing.T) {
 // ARG when the checkout is reachable.
 func TestHostPinnedPiPackage_MatchesDockerfile(t *testing.T) {
 	const prefix = "@earendil-works/pi-coding-agent@"
-	if !strings.HasPrefix(hostPinnedPiPackage, prefix) {
-		t.Fatalf("hostPinnedPiPackage = %q, want %s<version>", hostPinnedPiPackage, prefix)
+	if !strings.HasPrefix(launch.HostPinnedPiPackage, prefix) {
+		t.Fatalf("launch.HostPinnedPiPackage = %q, want %s<version>", launch.HostPinnedPiPackage, prefix)
 	}
-	if v := strings.TrimPrefix(hostPinnedPiPackage, prefix); v == "" || v == "latest" {
-		t.Fatalf("hostPinnedPiPackage must pin a real version, got %q", v)
+	if v := strings.TrimPrefix(launch.HostPinnedPiPackage, prefix); v == "" || v == "latest" {
+		t.Fatalf("launch.HostPinnedPiPackage must pin a real version, got %q", v)
 	}
 	dir, err := os.Getwd()
 	if err != nil {
@@ -421,8 +422,8 @@ func TestHostPinnedPiPackage_MatchesDockerfile(t *testing.T) {
 	}
 	for {
 		if b, err := os.ReadFile(filepath.Join(dir, "Dockerfile")); err == nil {
-			if !strings.Contains(string(b), "ARG PI_PACKAGE="+hostPinnedPiPackage) {
-				t.Errorf("hostPinnedPiPackage %q drifted from the Dockerfile ARG PI_PACKAGE — bump both together", hostPinnedPiPackage)
+			if !strings.Contains(string(b), "ARG PI_PACKAGE="+launch.HostPinnedPiPackage) {
+				t.Errorf("launch.HostPinnedPiPackage %q drifted from the Dockerfile ARG PI_PACKAGE — bump both together", launch.HostPinnedPiPackage)
 			}
 			return
 		}
@@ -448,18 +449,18 @@ func TestHostProvisioned_RequiresPinnedPiVersion(t *testing.T) {
 		}
 	}
 	fakePiBin(t)
-	if hostProvisioned() {
+	if launch.HostProvisioned() {
 		t.Error("host mode must not be provisioned without the curated extension marker")
 	}
-	if err := os.WriteFile(filepath.Join(dir, hostPiExtensionsLockFile), []byte(hostPiExtensionsMarker()), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, launch.HostPiExtensionsLockFile), []byte(launch.HostPiExtensionsMarker()), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	fakePiBinVersion(t, "0.0.0")
-	if hostProvisioned() {
+	if launch.HostProvisioned() {
 		t.Error("host mode must not be provisioned with a stale pi core")
 	}
 	fakePiBin(t)
-	if !hostProvisioned() {
+	if !launch.HostProvisioned() {
 		t.Error("host mode must be provisioned when harness files, curated extensions, and pinned pi exist")
 	}
 }
@@ -468,7 +469,7 @@ func TestHostProvisioned_RequiresPinnedPiVersion(t *testing.T) {
 // argv (Phase-1 blockers), sessions live outside the checkout, and model +
 // passthrough ride along.
 func TestBuildHostArgs(t *testing.T) {
-	args := buildHostArgs("/sa", "PREAMBLE", "/personal/skills", hostOpts{Model: "m", Passthrough: []string{"-p", "hi"}})
+	args := launch.BuildHostArgs("/sa", "PREAMBLE", "/personal/skills", launch.HostOpts{Model: "m", Passthrough: []string{"-p", "hi"}})
 	j := strings.Join(args, " ")
 	for _, want := range []string{
 		"--session-dir /sa/sessions",
@@ -498,7 +499,7 @@ func TestHostAgentDir_HonorsXDGStateHome(t *testing.T) {
 // TestHostGateMessage names the exact enable command and the danger, and the
 // banner carries the required warning line.
 func TestHostGateMessage(t *testing.T) {
-	msg := hostGateMessage()
+	msg := launch.HostGateMessage()
 	for _, want := range []string{
 		"pix host setup",
 		"no sandbox",
@@ -510,14 +511,14 @@ func TestHostGateMessage(t *testing.T) {
 			t.Errorf("gate message missing %q", want)
 		}
 	}
-	b := hostBanner(false)
+	b := launch.HostBanner(false)
 	if !strings.Contains(b, "HOST MODE — commands run on YOUR machine. No sandbox, no network fence, real credentials. Ctrl-C to abort.") {
 		t.Errorf("banner text drifted: %q", b)
 	}
 	if strings.Contains(b, "\x1b[") {
 		t.Error("non-TTY banner must not carry ANSI color")
 	}
-	if !strings.Contains(hostBanner(true), "\x1b[1;31m") {
+	if !strings.Contains(launch.HostBanner(true), "\x1b[1;31m") {
 		t.Error("TTY banner should be red")
 	}
 }
@@ -539,7 +540,7 @@ func TestHostInHelpTiers(t *testing.T) {
 	}
 }
 
-// --- FIX 1: idempotent pi-extension install (installHostPiExtensions) ---
+// --- FIX 1: idempotent pi-extension install (launch.InstallHostPiExtensions) ---
 
 // fakePiBin puts an executable `pi` shim on PATH (and restores the original
 // PATH via t.Cleanup) that logs every `install npm:<pkg>` call to a file, so
@@ -547,7 +548,7 @@ func TestHostInHelpTiers(t *testing.T) {
 // package names whose install exits non-zero.
 func fakePiBin(t *testing.T, failOn ...string) (logPath string) {
 	t.Helper()
-	return fakePiBinVersion(t, strings.TrimPrefix(hostPinnedPiPackage, "@earendil-works/pi-coding-agent@"), failOn...)
+	return fakePiBinVersion(t, strings.TrimPrefix(launch.HostPinnedPiPackage, "@earendil-works/pi-coding-agent@"), failOn...)
 }
 
 func fakePiBinVersion(t *testing.T, version string, failOn ...string) (logPath string) {
@@ -573,16 +574,16 @@ func fakePiBinVersion(t *testing.T, version string, failOn ...string) (logPath s
 	return logPath
 }
 
-// A marker matching the current hostPiPackages set skips the whole install:
+// A marker matching the current launch.HostPiPackages set skips the whole install:
 // `pi` is never invoked, and the "already installed" line is printed.
 func TestInstallHostPiExtensions_SkipsWhenMarkerMatches(t *testing.T) {
 	dir := t.TempDir()
 	logPath := fakePiBin(t)
-	if err := os.WriteFile(filepath.Join(dir, hostPiExtensionsLockFile), []byte(hostPiExtensionsMarker()), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, launch.HostPiExtensionsLockFile), []byte(launch.HostPiExtensionsMarker()), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	var out strings.Builder
-	failed := installHostPiExtensions(&out, dir)
+	failed := launch.InstallHostPiExtensions(&out, dir)
 	if len(failed) != 0 {
 		t.Errorf("want no failures on a skipped install, got %v", failed)
 	}
@@ -601,12 +602,12 @@ func TestInstallHostPiExtensions_InstallsAndWritesMarker(t *testing.T) {
 	dir := t.TempDir()
 	logPath := fakePiBin(t)
 	var out strings.Builder
-	failed := installHostPiExtensions(&out, dir)
+	failed := launch.InstallHostPiExtensions(&out, dir)
 	if len(failed) != 0 {
 		t.Fatalf("want no failures, got %v", failed)
 	}
-	for i, p := range hostPiPackages {
-		want := fmt.Sprintf("installing pi extension %s (%d/%d)...", p, i+1, len(hostPiPackages))
+	for i, p := range launch.HostPiPackages {
+		want := fmt.Sprintf("installing pi extension %s (%d/%d)...", p, i+1, len(launch.HostPiPackages))
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("missing progress line %q in:\n%s", want, out.String())
 		}
@@ -615,13 +616,13 @@ func TestInstallHostPiExtensions_InstallsAndWritesMarker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range hostPiPackages {
+	for _, p := range launch.HostPiPackages {
 		if !strings.Contains(string(logged), "npm:"+p) {
 			t.Errorf("pi was never invoked for %s: log=%q", p, string(logged))
 		}
 	}
-	marker, err := os.ReadFile(filepath.Join(dir, hostPiExtensionsLockFile))
-	if err != nil || string(marker) != hostPiExtensionsMarker() {
+	marker, err := os.ReadFile(filepath.Join(dir, launch.HostPiExtensionsLockFile))
+	if err != nil || string(marker) != launch.HostPiExtensionsMarker() {
 		t.Errorf("marker not written correctly: %q (err=%v)", string(marker), err)
 	}
 }
@@ -631,11 +632,11 @@ func TestInstallHostPiExtensions_InstallsAndWritesMarker(t *testing.T) {
 func TestInstallHostPiExtensions_StaleMarkerBustsAndRefreshes(t *testing.T) {
 	dir := t.TempDir()
 	logPath := fakePiBin(t)
-	if err := os.WriteFile(filepath.Join(dir, hostPiExtensionsLockFile), []byte("pi-plan@0.0.1\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, launch.HostPiExtensionsLockFile), []byte("pi-plan@0.0.1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	var out strings.Builder
-	failed := installHostPiExtensions(&out, dir)
+	failed := launch.InstallHostPiExtensions(&out, dir)
 	if len(failed) != 0 {
 		t.Fatalf("want no failures, got %v", failed)
 	}
@@ -643,11 +644,11 @@ func TestInstallHostPiExtensions_StaleMarkerBustsAndRefreshes(t *testing.T) {
 		t.Errorf("a stale marker must NOT skip the install, got:\n%s", out.String())
 	}
 	logged, _ := os.ReadFile(logPath)
-	if !strings.Contains(string(logged), "npm:"+hostPiPackages[0]) {
+	if !strings.Contains(string(logged), "npm:"+launch.HostPiPackages[0]) {
 		t.Errorf("stale marker must trigger a real (re)install, log=%q", string(logged))
 	}
-	marker, err := os.ReadFile(filepath.Join(dir, hostPiExtensionsLockFile))
-	if err != nil || string(marker) != hostPiExtensionsMarker() {
+	marker, err := os.ReadFile(filepath.Join(dir, launch.HostPiExtensionsLockFile))
+	if err != nil || string(marker) != launch.HostPiExtensionsMarker() {
 		t.Errorf("marker not refreshed to the current set: %q (err=%v)", string(marker), err)
 	}
 }
@@ -656,17 +657,17 @@ func TestInstallHostPiExtensions_StaleMarkerBustsAndRefreshes(t *testing.T) {
 // marker is NEVER written when anything failed — so the next run retries.
 func TestInstallHostPiExtensions_FailureReportedMarkerNotWritten(t *testing.T) {
 	dir := t.TempDir()
-	failing := hostPiPackages[2] // pi-manage-todo-list@0.4.0
+	failing := launch.HostPiPackages[2] // pi-manage-todo-list@0.4.0
 	fakePiBin(t, strings.SplitN(failing, "@", 2)[0])
 	var out strings.Builder
-	failed := installHostPiExtensions(&out, dir)
+	failed := launch.InstallHostPiExtensions(&out, dir)
 	if len(failed) != 1 || failed[0] != failing {
 		t.Fatalf("want exactly %q to fail, got %v", failing, failed)
 	}
 	if !strings.Contains(out.String(), "✗ "+failing) {
 		t.Errorf("failure must be reported by name, got:\n%s", out.String())
 	}
-	if _, err := os.Stat(filepath.Join(dir, hostPiExtensionsLockFile)); err == nil {
+	if _, err := os.Stat(filepath.Join(dir, launch.HostPiExtensionsLockFile)); err == nil {
 		t.Error("marker must NOT be written when any package failed to install")
 	}
 }
@@ -675,17 +676,17 @@ func TestInstallHostPiExtensions_FailureReportedMarkerNotWritten(t *testing.T) {
 // core/extension compatibility mismatch. The error includes the exact upgrade.
 func TestInstallHostPiExtensions_RejectsStalePi(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, hostPiExtensionsLockFile), []byte(hostPiExtensionsMarker()), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, launch.HostPiExtensionsLockFile), []byte(launch.HostPiExtensionsMarker()), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	logPath := fakePiBinVersion(t, "0.0.0")
 	var out strings.Builder
-	failed := installHostPiExtensions(&out, dir)
-	if len(failed) != len(hostPiPackages) {
-		t.Fatalf("want all %d packages reported failed, got %d: %v", len(hostPiPackages), len(failed), failed)
+	failed := launch.InstallHostPiExtensions(&out, dir)
+	if len(failed) != len(launch.HostPiPackages) {
+		t.Fatalf("want all %d packages reported failed, got %d: %v", len(launch.HostPiPackages), len(failed), failed)
 	}
-	wantVersion := strings.TrimPrefix(hostPinnedPiPackage, "@earendil-works/pi-coding-agent@")
-	if !strings.Contains(out.String(), "found pi \"0.0.0\", need \""+wantVersion+"\"") || !strings.Contains(out.String(), "npm install -g "+hostPinnedPiPackage) {
+	wantVersion := strings.TrimPrefix(launch.HostPinnedPiPackage, "@earendil-works/pi-coding-agent@")
+	if !strings.Contains(out.String(), "found pi \"0.0.0\", need \""+wantVersion+"\"") || !strings.Contains(out.String(), "npm install -g "+launch.HostPinnedPiPackage) {
 		t.Errorf("must explain the stale core and exact upgrade, got:\n%s", out.String())
 	}
 	logged, err := os.ReadFile(logPath)
@@ -704,7 +705,7 @@ func TestCheckHostPiVersion_TimesOut(t *testing.T) {
 	// reported, which is observable in 50ms exactly as well as in two seconds.
 	const bound = 50 * time.Millisecond
 	started := time.Now()
-	err := checkHostPiVersionWithin(pi, bound)
+	err := launch.CheckHostPiVersionWithin(pi, bound)
 	elapsed := time.Since(started)
 	if err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("hanging pi error = %v, want bounded timeout", err)
@@ -714,8 +715,8 @@ func TestCheckHostPiVersion_TimesOut(t *testing.T) {
 	}
 	// And the production path is still bounded at all: an unbounded default
 	// would make the injection meaningless.
-	if hostPiVersionProbeTimeout <= 0 {
-		t.Fatal("hostPiVersionProbeTimeout must be a positive bound")
+	if launch.HostPiVersionProbeTimeout <= 0 {
+		t.Fatal("launch.HostPiVersionProbeTimeout must be a positive bound")
 	}
 }
 
@@ -725,9 +726,9 @@ func TestInstallHostPiExtensions_NoPiOnPath(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PATH", dir) // a PATH with nothing on it
 	var out strings.Builder
-	failed := installHostPiExtensions(&out, dir)
-	if len(failed) != len(hostPiPackages) {
-		t.Errorf("want all %d packages reported failed, got %d: %v", len(hostPiPackages), len(failed), failed)
+	failed := launch.InstallHostPiExtensions(&out, dir)
+	if len(failed) != len(launch.HostPiPackages) {
+		t.Errorf("want all %d packages reported failed, got %d: %v", len(launch.HostPiPackages), len(failed), failed)
 	}
 	if !strings.Contains(out.String(), "`pi` not found on PATH") {
 		t.Errorf("must explain the missing binary, got:\n%s", out.String())
@@ -740,17 +741,17 @@ func TestInstallHostPiExtensions_NoPiOnPath(t *testing.T) {
 func TestHostPiExtensionsMarker_SymlinkSafe(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "elsewhere")
-	if err := os.WriteFile(target, []byte(hostPiExtensionsMarker()), 0o644); err != nil {
+	if err := os.WriteFile(target, []byte(launch.HostPiExtensionsMarker()), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	link := filepath.Join(dir, hostPiExtensionsLockFile)
+	link := filepath.Join(dir, launch.HostPiExtensionsLockFile)
 	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("symlink not supported: %v", err)
 	}
-	if hostPiExtensionsInstalled(dir) {
+	if launch.HostPiExtensionsInstalled(dir) {
 		t.Error("a symlinked marker must never be trusted, even with matching content")
 	}
-	if err := writeHostPiExtensionsMarker(dir); err != nil {
+	if err := launch.WriteHostPiExtensionsMarker(dir); err != nil {
 		t.Fatal(err)
 	}
 	fi, err := os.Lstat(link)
@@ -758,7 +759,7 @@ func TestHostPiExtensionsMarker_SymlinkSafe(t *testing.T) {
 		t.Errorf("marker must be replaced with a REAL file after writing, got %v/%v", fi, err)
 	}
 	b, err := os.ReadFile(target)
-	if err != nil || string(b) != hostPiExtensionsMarker() {
+	if err != nil || string(b) != launch.HostPiExtensionsMarker() {
 		t.Errorf("symlink target must be untouched by the write: %q, err=%v", string(b), err)
 	}
 }

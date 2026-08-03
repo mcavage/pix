@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/workflow/launch"
 )
 
 // TestBuildSbxArgs_PackKits_NeverSuppressesBaseKit: PackKits must stack
@@ -12,8 +13,8 @@ import (
 // replaces it. This guards the ADR-2 deviation (see docs deviation note).
 func TestBuildSbxArgs_PackKits_NeverSuppressesBaseKit(t *testing.T) {
 	cfg := &config.Config{}
-	args := buildSbxArgs(cfg, runOpts{Workspace: ".", PackKits: []string{"/pack/kit"}}, "0.0.99")
-	if pinnedGitKit(args) == "" {
+	args := launch.BuildSbxArgs(cfg, launch.RunOpts{Workspace: ".", PackKits: []string{"/pack/kit"}}, "0.0.99")
+	if launch.PinnedGitKit(args) == "" {
 		t.Errorf("PackKits must not suppress the base git kit pin, got %v", args)
 	}
 	if !contains(args, []string{"--kit", "/pack/kit"}) {

@@ -1,4 +1,4 @@
-package main
+package launch
 
 import (
 	"fmt"
@@ -23,11 +23,11 @@ func fatalSbx(err error) {
 	os.Exit(1)
 }
 
-// overlayReceiptDirs replaces best-effort sbx display data with Pix's trusted
+// OverlayReceiptDirs replaces best-effort sbx display data with Pix's trusted
 // create receipt. The receipt records the canonical workspace passed to the
 // successful create and is therefore authoritative when packs add other host
 // paths to the sbx listing.
-func overlayReceiptDirs(boxes []workspace.SbxBox, stateDir string) {
+func OverlayReceiptDirs(boxes []workspace.SbxBox, stateDir string) {
 	for i := range boxes {
 		receipt, status, err := workspace.ReadMCPReceipt(stateDir, boxes[i].Name)
 		if err == nil && status == workspace.MCPStateOK && receipt != nil {
@@ -36,10 +36,10 @@ func overlayReceiptDirs(boxes []workspace.SbxBox, stateDir string) {
 	}
 }
 
-// runLs lists the pix sandboxes on this host.
-func runLs(argv []string) {
+// RunLs lists the pix sandboxes on this host.
+func RunLs(argv []string) {
 	if cli.WantsHelp(argv) {
-		fmt.Print(lsUsage)
+		fmt.Print(LsUsage)
 		return
 	}
 	// hasJSONFlag rather than a shared helper: `ls` is the last verb still
@@ -51,7 +51,7 @@ func runLs(argv []string) {
 			jsonOut = true
 		}
 	}
-	env := defaultShellEnv()
+	env := DefaultEnv()
 	if _, err := env.LookPath("sbx"); err != nil {
 		fatalSbx(fmt.Errorf("sbx not found on PATH; install the Docker Sandboxes CLI to list sandboxes"))
 	}
@@ -62,10 +62,10 @@ func runLs(argv []string) {
 	}
 	boxes := workspace.ParsePixBoxes(out)
 	if stateDir, err := workspace.MCPStateDirFn(); err == nil {
-		overlayReceiptDirs(boxes, stateDir)
+		OverlayReceiptDirs(boxes, stateDir)
 	}
 	if jsonOut {
-		printJSONLauncher(boxes)
+		PrintJSONLauncher(boxes)
 		return
 	}
 	if len(boxes) == 0 {
@@ -82,19 +82,19 @@ func runLs(argv []string) {
 	fmt.Println("Remove one:  pix rm <name>   (or `sbx rm -f <name>` for non-pix boxes)")
 }
 
-// runRm removes one or more pix sandboxes via `sbx rm -f`. It refuses names
+// RunRm removes one or more pix sandboxes via `sbx rm -f`. It refuses names
 // that are not pix-* (this tool manages its own boxes; use `sbx` for the
 // rest) and `--all` removes every pix-* box, with `--except <name>` to keep
 // one (e.g. the box you are in).
-func runRm(argv []string) {
+func RunRm(argv []string) {
 	if cli.WantsHelp(argv) || len(argv) == 0 {
-		fmt.Print(rmUsage)
+		fmt.Print(RmUsage)
 		if len(argv) == 0 {
 			os.Exit(2)
 		}
 		return
 	}
-	env := defaultShellEnv()
+	env := DefaultEnv()
 	if _, err := env.LookPath("sbx"); err != nil {
 		fatalSbx(fmt.Errorf("sbx not found on PATH; install the Docker Sandboxes CLI to remove sandboxes"))
 	}
@@ -113,7 +113,7 @@ func runRm(argv []string) {
 			i++
 			keep = append(keep, argv[i])
 		case strings.HasPrefix(a, "-"):
-			fatalSbx(fmt.Errorf("unknown flag %q\n\n%s", a, rmUsage))
+			fatalSbx(fmt.Errorf("unknown flag %q\n\n%s", a, RmUsage))
 		default:
 			names = append(names, a)
 		}
@@ -149,7 +149,7 @@ func runRm(argv []string) {
 			rc = 1
 			continue
 		}
-		if err := removePixSandbox(env, n); err != nil {
+		if err := RemovePixSandbox(env, n); err != nil {
 			fmt.Fprintf(os.Stderr, "failed to remove %s: %v\n", n, err)
 			rc = 1
 			continue
@@ -161,14 +161,14 @@ func runRm(argv []string) {
 	}
 }
 
-// removePixSandbox force-removes name via env and, on SUCCESS, clears the
+// RemovePixSandbox force-removes name via env and, on SUCCESS, clears the
 // launcher's per-sandbox MCP receipt — a removed sandbox's receipt describes
 // a dead lifetime. A failed rm returns the error and RETAINS the receipt: an
 // unknown removal outcome must keep the evidence, never discard it on a
 // guess. The receipt clear itself is best-effort (warn, don't fail the rm —
 // the removal DID succeed, and the next launcher create's pre-create clear is
 // the correctness backstop).
-func removePixSandbox(env hostenv.Env, name string) error {
+func RemovePixSandbox(env hostenv.Env, name string) error {
 	if _, err := env.Run("sbx", "rm", "-f", name); err != nil {
 		return err
 	}
@@ -178,14 +178,14 @@ func removePixSandbox(env hostenv.Env, name string) error {
 	return nil
 }
 
-const lsUsage = `usage: pix ls [--json]
+const LsUsage = `usage: pix ls [--json]
 
 List the pix sandboxes on this host (name, state, ws dir). These are
 the boxes ` + "`pix run`" + ` and ` + "`pix task`" + ` create. For every sbx sandbox
 (not just pix's), use ` + "`sbx ls`" + `.
 `
 
-const rmUsage = `usage: pix rm <name>... [--all] [--except <name>]
+const RmUsage = `usage: pix rm <name>... [--all] [--except <name>]
 
 Remove pix sandboxes (via ` + "`sbx rm -f`" + `). Scoped to pix-* names; use
 ` + "`sbx rm`" + ` for other boxes.

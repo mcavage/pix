@@ -14,6 +14,7 @@ import (
 	"pix/host/hostenv"
 	"pix/host/rpc"
 	"pix/host/sys/systest"
+	"pix/host/workflow/launch"
 )
 
 func TestBuildHostState(t *testing.T) {
@@ -29,7 +30,7 @@ func TestBuildHostState(t *testing.T) {
 	sbxOut := "anthropic\ngithub\n"
 	up := func(int) bool { return true }
 
-	hs := buildHostState(cfg, sbxOut, true, up, "1password", hostStatePack{Active: true, Path: "/kb/acme", GitInitialized: true, Skills: true})
+	hs := launch.BuildHostState(cfg, sbxOut, true, up, "1password", launch.HostStatePack{Active: true, Path: "/kb/acme", GitInitialized: true, Skills: true})
 	if !hs.Pack.Active || !hs.Pack.GitInitialized {
 		t.Errorf("pack facts not carried: %+v", hs.Pack)
 	}
@@ -58,7 +59,7 @@ func TestBuildHostState(t *testing.T) {
 	// future field re-added to the struct without updating this test still
 	// gets caught by the JSON-content check below.
 	if b, err := json.Marshal(hs); err != nil {
-		t.Fatalf("marshal hostState: %v", err)
+		t.Fatalf("marshal launch.HostState: %v", err)
 	} else if strings.Contains(string(b), "me@acme.com") {
 		t.Errorf("host-state JSON must never contain the configured gog account email, got: %s", b)
 	}
@@ -75,7 +76,7 @@ func TestBuildHostState(t *testing.T) {
 
 func TestBuildHostState_NotProvisioned(t *testing.T) {
 	cfg := &config.Config{MemoryWatcherModel: "x", MemoryEmbedModel: "y"}
-	hs := buildHostState(cfg, "", false, func(int) bool { return false }, "", hostStatePack{})
+	hs := launch.BuildHostState(cfg, "", false, func(int) bool { return false }, "", launch.HostStatePack{})
 	if hs.Keys.Source != "sbx" {
 		t.Errorf("default keys source = %q, want sbx", hs.Keys.Source)
 	}
@@ -99,7 +100,7 @@ func TestBuildHostState_KeylessGatewayCountsAsResolvedInference(t *testing.T) {
 		Backends: map[string]config.InferenceBackend{"gateway": {Driver: "openai-compatible", Auth: "sbx-session", BaseURL: "https://models.example.test/v1"}},
 		Models:   []config.InferenceModelBinding{{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "reasoner", Available: true}},
 	}}
-	hs := buildHostState(cfg, "", true, func(int) bool { return false }, "sbx", hostStatePack{})
+	hs := launch.BuildHostState(cfg, "", true, func(int) bool { return false }, "sbx", launch.HostStatePack{})
 	if !hs.Keys.Resolved || hs.Keys.OpenAI || hs.Keys.Anthropic || hs.Keys.Google {
 		t.Fatalf("gateway inference should resolve without pretending direct keys exist: %+v", hs.Keys)
 	}
@@ -107,7 +108,7 @@ func TestBuildHostState_KeylessGatewayCountsAsResolvedInference(t *testing.T) {
 		t.Fatal("memory must not be reported enabled merely because its port is part of Pix")
 	}
 	cfg.Services = []string{"memory"}
-	hs = buildHostState(cfg, "", true, func(int) bool { return false }, "sbx", hostStatePack{})
+	hs = launch.BuildHostState(cfg, "", true, func(int) bool { return false }, "sbx", launch.HostStatePack{})
 	if !hs.Memory.Enabled || hs.Memory.Up {
 		t.Fatalf("enabled-but-stopped memory state is wrong: %+v", hs.Memory)
 	}
@@ -124,7 +125,7 @@ func TestReadGitIdentity(t *testing.T) {
 				}
 			}
 			if !hasGlobal {
-				t.Errorf("readGitIdentity must use --global, got args %v", args)
+				t.Errorf("launch.ReadGitIdentity must use --global, got args %v", args)
 			}
 		}
 		last := args[len(args)-1]
@@ -136,7 +137,7 @@ func TestReadGitIdentity(t *testing.T) {
 		}
 		return "", nil
 	}}}
-	id := readGitIdentity(env)
+	id := launch.ReadGitIdentity(env)
 	// First name only, no email: "Mark C" -> "Mark", email deliberately not read.
 	if id.Name != "Mark" {
 		t.Errorf("git identity not read as first name: %+v", id)
@@ -148,11 +149,11 @@ func TestReadGitIdentity(t *testing.T) {
 		}
 		return "", nil
 	}}}
-	if got := readGitIdentity(dirty).Name; got != "Bad[31m" {
+	if got := launch.ReadGitIdentity(dirty).Name; got != "Bad[31m" {
 		t.Errorf("identity not sanitized: %q", got)
 	}
 	// No git / nil run -> empty, no panic.
-	if got := readGitIdentity(hostenv.Env{System: &systest.Fake{}}); got.Name != "" {
+	if got := launch.ReadGitIdentity(hostenv.Env{System: &systest.Fake{}}); got.Name != "" {
 		t.Errorf("expected empty identity with no run, got %+v", got)
 	}
 }
@@ -169,13 +170,13 @@ func TestSanitizeIdentity(t *testing.T) {
 		{"line\u2028sep", "linesep"},           // Zl line separator dropped
 	}
 	for _, c := range cases {
-		if got := sanitizeIdentity(c.in); got != c.want {
-			t.Errorf("sanitizeIdentity(%q) = %q, want %q", c.in, got, c.want)
+		if got := launch.SanitizeIdentity(c.in); got != c.want {
+			t.Errorf("launch.SanitizeIdentity(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
 	// Rune cap: a long multibyte name is capped without splitting a rune.
 	long := strings.Repeat("\u00e9", 200) // é
-	got := sanitizeIdentity(long)
+	got := launch.SanitizeIdentity(long)
 	if n := len([]rune(got)); n != 60 {
 		t.Errorf("rune cap: got %d runes, want 60", n)
 	}
@@ -184,52 +185,52 @@ func TestSanitizeIdentity(t *testing.T) {
 func TestSbxModelKeyState(t *testing.T) {
 	// present
 	p := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunFn: func(string, ...string) (string, error) { return "anthropic\ngithub\n", nil }}}
-	if present, ok := sbxModelKeyState(p); !present || !ok {
+	if present, ok := launch.SbxModelKeyState(p); !present || !ok {
 		t.Errorf("present key: got present=%v ok=%v", present, ok)
 	}
 	// no key but probeOK
 	nk := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunFn: func(string, ...string) (string, error) { return "github\n", nil }}}
-	if present, ok := sbxModelKeyState(nk); present || !ok {
+	if present, ok := launch.SbxModelKeyState(nk); present || !ok {
 		t.Errorf("no key: got present=%v ok=%v (want false,true)", present, ok)
 	}
 	// transient ls failure -> probeOK false (must NOT be read as "no key")
 	fail := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunFn: func(string, ...string) (string, error) { return "", fmt.Errorf("control plane down") }}}
-	if present, ok := sbxModelKeyState(fail); present || ok {
+	if present, ok := launch.SbxModelKeyState(fail); present || ok {
 		t.Errorf("ls failure: got present=%v ok=%v (want false,false)", present, ok)
 	}
 }
 
-// --- injectTrustedHostState: prompt-only injection, no workspace file ------
+// --- launch.InjectTrustedHostState: prompt-only injection, no workspace file ------
 
 func trustedHostStateTestCfg() *config.Config {
 	return &config.Config{MemoryWatcherModel: "x", MemoryEmbedModel: "y"}
 }
 
-// The launcher-generated prompt (the arg carrying generatedInputMarker) gets
+// The launcher-generated prompt (the arg carrying launch.GeneratedInputMarker) gets
 // the trusted JSON appended, clearly delimited, and nothing else.
 func TestInjectTrustedHostState_GeneratedPromptGetsJSON(t *testing.T) {
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("no sbx") }}}
-	args := []string{"run", "pix", ".", "--", generatedInputMarker + "hello there"}
-	out, err := injectTrustedHostState(args, trustedHostStateTestCfg(), env, "")
+	args := []string{"run", "pix", ".", "--", launch.GeneratedInputMarker + "hello there"}
+	out, err := launch.InjectTrustedHostState(args, trustedHostStateTestCfg(), env, "")
 	if err != nil {
-		t.Fatalf("injectTrustedHostState: %v", err)
+		t.Fatalf("launch.InjectTrustedHostState: %v", err)
 	}
 	if len(out) != len(args) {
 		t.Fatalf("arg count changed: got %d, want %d", len(out), len(args))
 	}
 	got := out[4]
-	if !strings.HasPrefix(got, generatedInputMarker+"hello there") {
+	if !strings.HasPrefix(got, launch.GeneratedInputMarker+"hello there") {
 		t.Errorf("generated prompt prefix must survive untouched, got %q", got)
 	}
-	if !strings.Contains(got, trustedHostStateBegin) || !strings.Contains(got, trustedHostStateEnd) {
+	if !strings.Contains(got, launch.TrustedHostStateBegin) || !strings.Contains(got, launch.TrustedHostStateEnd) {
 		t.Errorf("generated prompt must carry the delimited block, got %q", got)
 	}
-	begin := strings.Index(got, trustedHostStateBegin) + len(trustedHostStateBegin)
-	end := strings.Index(got, trustedHostStateEnd)
+	begin := strings.Index(got, launch.TrustedHostStateBegin) + len(launch.TrustedHostStateBegin)
+	end := strings.Index(got, launch.TrustedHostStateEnd)
 	if begin < 0 || end < 0 || end < begin {
 		t.Fatalf("malformed delimiters in %q", got)
 	}
-	var hs hostState
+	var hs launch.HostState
 	if err := json.Unmarshal([]byte(got[begin:end]), &hs); err != nil {
 		t.Fatalf("payload is not valid JSON: %v\npayload: %s", err, got[begin:end])
 	}
@@ -241,14 +242,14 @@ func TestInjectTrustedHostState_GeneratedPromptGetsJSON(t *testing.T) {
 	}
 }
 
-// An arbitrary user-typed prompt (no generatedInputMarker prefix) must NEVER
+// An arbitrary user-typed prompt (no launch.GeneratedInputMarker prefix) must NEVER
 // be touched — injection targets only the launcher's own generated arg.
 func TestInjectTrustedHostState_UserPromptUntouched(t *testing.T) {
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("no sbx") }}}
 	args := []string{"run", "pix", ".", "--", "fix the flaky test please"}
-	out, err := injectTrustedHostState(args, trustedHostStateTestCfg(), env, "")
+	out, err := launch.InjectTrustedHostState(args, trustedHostStateTestCfg(), env, "")
 	if err != nil {
-		t.Fatalf("injectTrustedHostState: %v", err)
+		t.Fatalf("launch.InjectTrustedHostState: %v", err)
 	}
 	if !reflect.DeepEqual(out, args) {
 		t.Errorf("a plain user prompt with no generated marker must be returned unchanged, got %v, want %v", out, args)
@@ -262,9 +263,9 @@ func TestInjectTrustedHostState_NoGeneratedArg_NoProbe(t *testing.T) {
 	probed := false
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { probed = true; return "", fmt.Errorf("no sbx") }, RunFn: func(string, ...string) (string, error) { probed = true; return "", nil }}}
 	args := []string{"run", "pix", "."}
-	out, err := injectTrustedHostState(args, trustedHostStateTestCfg(), env, "")
+	out, err := launch.InjectTrustedHostState(args, trustedHostStateTestCfg(), env, "")
 	if err != nil {
-		t.Fatalf("injectTrustedHostState: %v", err)
+		t.Fatalf("launch.InjectTrustedHostState: %v", err)
 	}
 	if !reflect.DeepEqual(out, args) {
 		t.Errorf("args must be unchanged, got %v, want %v", out, args)
@@ -278,11 +279,11 @@ func TestInjectTrustedHostState_NoGeneratedArg_NoProbe(t *testing.T) {
 // original plan.Args backing array.
 func TestInjectTrustedHostState_ReturnsCopy(t *testing.T) {
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("no sbx") }}}
-	args := []string{"run", "pix", ".", "--", generatedInputMarker + "hi"}
+	args := []string{"run", "pix", ".", "--", launch.GeneratedInputMarker + "hi"}
 	orig := append([]string(nil), args...)
-	out, err := injectTrustedHostState(args, trustedHostStateTestCfg(), env, "")
+	out, err := launch.InjectTrustedHostState(args, trustedHostStateTestCfg(), env, "")
 	if err != nil {
-		t.Fatalf("injectTrustedHostState: %v", err)
+		t.Fatalf("launch.InjectTrustedHostState: %v", err)
 	}
 	out[4] = "mutated"
 	if !reflect.DeepEqual(args, orig) {
@@ -290,43 +291,43 @@ func TestInjectTrustedHostState_ReturnsCopy(t *testing.T) {
 	}
 }
 
-// A malformed hostState that cannot be JSON-encoded (a NaN float, which
+// A malformed launch.HostState that cannot be JSON-encoded (a NaN float, which
 // encoding/json refuses) must surface as an error — the seam run.go checks to
 // abort BEFORE exec'ing sbx rather than hand the agent a generated prompt
 // with a missing/silently-truncated trusted payload.
 func TestEncodeTrustedHostState_EncodingFailureReturnsError(t *testing.T) {
-	hs := hostState{}
-	// hostState itself only has bool/string/[]string fields today (nothing that
+	hs := launch.HostState{}
+	// launch.HostState itself only has bool/string/[]string fields today (nothing that
 	// can fail to encode), so exercise the seam directly with a value that
-	// json.Marshal is guaranteed to refuse, proving encodeTrustedHostState
+	// json.Marshal is guaranteed to refuse, proving launch.EncodeTrustedHostState
 	// surfaces the error rather than swallowing it.
 	if _, err := json.Marshal(math.NaN()); err == nil {
 		t.Fatal("test precondition broken: json.Marshal(NaN) unexpectedly succeeded")
 	}
-	// encodeTrustedHostState itself, on the normal zero-value hostState, must
+	// launch.EncodeTrustedHostState itself, on the normal zero-value launch.HostState, must
 	// succeed — this is the control half of the seam test.
-	if _, err := encodeTrustedHostState(hs); err != nil {
-		t.Fatalf("encodeTrustedHostState(zero value) must succeed, got %v", err)
+	if _, err := launch.EncodeTrustedHostState(hs); err != nil {
+		t.Fatalf("launch.EncodeTrustedHostState(zero value) must succeed, got %v", err)
 	}
 }
 
-// buildTrustedHostState is the same in-memory gathering writeHostStateFile
+// launch.BuildTrustedHostState is the same in-memory gathering writeHostStateFile
 // used to run before it wrote a file — same probes, same shape, just never
 // touching disk. This exercises it directly (rather than only through
-// injectTrustedHostState) so the seam has its own focused coverage.
+// launch.InjectTrustedHostState) so the seam has its own focused coverage.
 func TestBuildTrustedHostState_MatchesBuildHostStateShape(t *testing.T) {
 	cfg := &config.Config{MemoryWatcherModel: "x", MemoryEmbedModel: "y", MCP: []string{config.GWServerName}, GogAccount: "me@acme.com"}
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("no sbx") }, DialLocalFn: func(int) bool { return true }}}
-	hs := buildTrustedHostState(cfg, env, "")
+	hs := launch.BuildTrustedHostState(cfg, env, "")
 	if !hs.Memory.Up {
-		t.Error("dial stub says up; buildTrustedHostState must reflect it")
+		t.Error("dial stub says up; launch.BuildTrustedHostState must reflect it")
 	}
 	if !hs.Gog.Enabled {
 		t.Errorf("gog config must carry through: %+v", hs.Gog)
 	}
-	b, err := encodeTrustedHostState(hs)
+	b, err := launch.EncodeTrustedHostState(hs)
 	if err != nil {
-		t.Fatalf("encodeTrustedHostState: %v", err)
+		t.Fatalf("launch.EncodeTrustedHostState: %v", err)
 	}
 	if strings.Contains(string(b), "me@acme.com") {
 		t.Errorf("trusted host-state JSON must never contain the configured gog account email, got: %s", b)
@@ -335,15 +336,15 @@ func TestBuildTrustedHostState_MatchesBuildHostStateShape(t *testing.T) {
 
 // The configured gog account email must never appear ANYWHERE in the actual
 // injected prompt arg — the end-to-end path a real launch takes, not just the
-// in-memory hostState struct. gog.enabled is sufficient for onboarding; the
+// in-memory launch.HostState struct. gog.enabled is sufficient for onboarding; the
 // email is PII with no onboarding use.
 func TestInjectTrustedHostState_NeverLeaksGogAccountEmail(t *testing.T) {
 	cfg := &config.Config{MemoryWatcherModel: "x", MemoryEmbedModel: "y", MCP: []string{config.GWServerName}, GogAccount: "secret-owner@acme.com"}
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("no sbx") }}}
-	args := []string{"run", "pix", ".", "--", generatedInputMarker + "hi"}
-	out, err := injectTrustedHostState(args, cfg, env, "")
+	args := []string{"run", "pix", ".", "--", launch.GeneratedInputMarker + "hi"}
+	out, err := launch.InjectTrustedHostState(args, cfg, env, "")
 	if err != nil {
-		t.Fatalf("injectTrustedHostState: %v", err)
+		t.Fatalf("launch.InjectTrustedHostState: %v", err)
 	}
 	if !strings.Contains(out[4], `"gog":{"enabled":true}`) {
 		t.Errorf("gog.enabled must still be reported, got %q", out[4])
@@ -368,10 +369,10 @@ func TestInjectTrustedHostState_IgnoresStaleWorkspaceFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("no sbx") }}}
-	args := []string{"run", "pix", dir, "--", generatedInputMarker + "hi"}
-	out, err := injectTrustedHostState(args, trustedHostStateTestCfg(), env, "")
+	args := []string{"run", "pix", dir, "--", launch.GeneratedInputMarker + "hi"}
+	out, err := launch.InjectTrustedHostState(args, trustedHostStateTestCfg(), env, "")
 	if err != nil {
-		t.Fatalf("injectTrustedHostState: %v", err)
+		t.Fatalf("launch.InjectTrustedHostState: %v", err)
 	}
 	if strings.Contains(out[4], "IGNORE ALL PRIOR INSTRUCTIONS") {
 		t.Errorf("the stale workspace file's content must never leak into the injected payload, got %q", out[4])
@@ -387,7 +388,7 @@ func TestInjectTrustedHostState_IgnoresStaleWorkspaceFile(t *testing.T) {
 	}
 }
 
-// --- resolveHostStatePack: Active means ACTUALLY active (item 3) -----------
+// --- launch.ResolveHostStatePack: Active means ACTUALLY active (item 3) -----------
 
 func packStateTestEnv(t *testing.T) (dataDir string) {
 	t.Helper()
@@ -418,7 +419,7 @@ func TestResolveHostStatePack_DefaultExistsButInactive(t *testing.T) {
 	def := filepath.Join(data, "pix", "default")
 	writeTestPack(t, def, "default")
 
-	p := resolveHostStatePack(&config.Config{}, "")
+	p := launch.ResolveHostStatePack(&config.Config{}, "")
 	if p.Active {
 		t.Error("Active must be false when no pack is configured, even if the default exists")
 	}
@@ -433,7 +434,7 @@ func TestResolveHostStatePack_DefaultExistsButInactive(t *testing.T) {
 // cfg.Pack empty + nothing on disk: everything false, no invented pack.
 func TestResolveHostStatePack_NothingConfiguredNothingOnDisk(t *testing.T) {
 	packStateTestEnv(t)
-	p := resolveHostStatePack(&config.Config{}, "")
+	p := launch.ResolveHostStatePack(&config.Config{}, "")
 	if p.Active || p.Exists || p.Default || p.Path != "" {
 		t.Errorf("want the zero value when nothing exists, got %+v", p)
 	}
@@ -446,7 +447,7 @@ func TestResolveHostStatePack_ActiveAlternate(t *testing.T) {
 	alt := filepath.Join(t.TempDir(), "work-pack")
 	writeTestPack(t, alt, "work")
 
-	p := resolveHostStatePack(&config.Config{Pack: alt}, "")
+	p := launch.ResolveHostStatePack(&config.Config{Pack: alt}, "")
 	if !p.Active || !p.Exists {
 		t.Errorf("an alternate configured pack must be Active+Exists, got %+v", p)
 	}
@@ -464,7 +465,7 @@ func TestResolveHostStatePack_ActiveDefault(t *testing.T) {
 	def := filepath.Join(data, "pix", "default")
 	writeTestPack(t, def, "default")
 
-	p := resolveHostStatePack(&config.Config{Pack: def}, "")
+	p := launch.ResolveHostStatePack(&config.Config{Pack: def}, "")
 	if !p.Active || !p.Exists || !p.Default {
 		t.Errorf("the configured default pack must be Active+Exists+Default, got %+v", p)
 	}

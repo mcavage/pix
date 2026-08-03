@@ -32,6 +32,7 @@ import (
 	"pix/host/routing"
 	"pix/host/service"
 	"pix/host/workflow/backup"
+	"pix/host/workflow/launch"
 	"pix/host/workflow/man"
 	"pix/host/workflow/upgrade"
 )
@@ -76,9 +77,9 @@ func main() {
 	case "status", "st":
 		runStatusCmd(args[1:])
 	case "ls":
-		runLs(args[1:])
+		launch.RunLs(args[1:])
 	case "rm":
-		runRm(args[1:])
+		launch.RunRm(args[1:])
 	case "version", "--version", "-v":
 		if len(args) > 1 {
 			if args[1] == "-h" || args[1] == "--help" {
@@ -157,11 +158,11 @@ func main() {
 	case "state":
 		runState(args[1:])
 	case "task":
-		runTask(args[1:])
+		launch.RunTask(args[1:])
 	case "host":
 		// The unsandboxed escape hatch (expert tier, gated off by default): execs
 		// the host-installed pi directly. See hostrun.go + docs/design/host-mode.md.
-		runHost(args[1:])
+		launch.RunHost(args[1:])
 	case "help", "-h", "--help":
 		if len(args) > 1 {
 			if args[1] == "--all" {

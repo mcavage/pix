@@ -35,6 +35,7 @@ import (
 	"pix/host/sys"
 	"pix/host/workflow/doctor"
 	"pix/host/workflow/gworkspace"
+	"pix/host/workflow/launch"
 	"pix/host/workflow/onboard"
 	"pix/host/workflow/pack"
 	"slices"
@@ -46,29 +47,15 @@ import (
 	"pix/host/workspace"
 )
 
-// generatedInputMarker prefixes any user-role message that `pix` itself
-// synthesizes and hands to the agent as if typed by the user (currently just
-// onboardingKickoff). It is NOT the user talking, so extensions that observe
-// user turns (memory-capture.ts) must recognize it and skip capture — without
-// this, the watcher model treats the kickoff line as a real user statement and
-// invents facts/events from it (the bug this constant fixes). Keep this string
-// and extensions/memory-capture.ts's prefix check in sync.
-//
-// The marker is NOT user-visible: the kickoff travels as pi's initial CLI
-// prompt argument, and observed session transcripts do not render that
-// initial prompt as a chat message, so the bracketed prefix never shows up
-// in the UI. No stripping/beautifying is needed for display.
-const generatedInputMarker = "[pix-generated:onboarding] "
-
 // onboardingKickoff is the first message `setup` hands the agent. It is
 // DELIBERATELY short and human — it reads like something the user would type,
 // not a machine directive wall. The rewritten `onboarding` skill owns the actual
 // flow (guided teach, read host-state, land a task); the word "guided" is all it
 // needs to pick GUIDED mode. (Making this fully invisible — agent greets with no
 // visible prompt at all — needs a session-start extension + an image rebuild;
-// tracked as a follow-up.) It carries generatedInputMarker so memory-capture.ts
+// tracked as a follow-up.) It carries launch.GeneratedInputMarker so memory-capture.ts
 // can tell this was machine-generated, not typed by the user.
-const onboardingKickoff = generatedInputMarker + "I just ran pix setup. Give me the upfront guide and help me get started."
+const onboardingKickoff = launch.GeneratedInputMarker + "I just ran pix setup. Give me the upfront guide and help me get started."
 
 // runSetupCmd is the `pix setup` entry. It accepts the same host-config
 // flags as `onboard` plus an optional DIR (default "."), runs the host phase,
@@ -153,7 +140,7 @@ func runSetupCmd(argv []string) {
 	// than provisioning a host — so it validates DIR, reconciles, and returns
 	// without touching keys, packs, or the sandbox.
 	if slices.Contains(hostArgs, "--apply") {
-		if err := validateRunWorkspace(dir); err != nil {
+		if err := launch.ValidateRunWorkspace(dir); err != nil {
 			fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
 			os.Exit(2)
 		}
@@ -165,7 +152,7 @@ func runSetupCmd(argv []string) {
 		onboard.ReconcileOnboarding(dir, env, os.Stdin, os.Stdout, opts.AssumeYes, cli.IsTTY(os.Stdin), onboardDeps())
 		return
 	}
-	if err := validateRunWorkspace(dir); err != nil {
+	if err := launch.ValidateRunWorkspace(dir); err != nil {
 		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
 		os.Exit(2)
 	}
@@ -192,7 +179,7 @@ func runSetupCmd(argv []string) {
 	// the installed sbx parser before pack OAuth/setup or any other mutation;
 	// nightly schema skew must fail once, early, without opening browsers and
 	// only later dumping YAML from `sbx run`.
-	if err := validateSetupKit(version, resolveRepoRoot, validateSbxKit); err != nil {
+	if err := launch.ValidateSetupKit(version, launch.ResolveRepoRoot, launch.ValidateSbxKit); err != nil {
 		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
 		os.Exit(1)
 	}
@@ -282,13 +269,13 @@ func runSetupCmd(argv []string) {
 	// session (the fenced agent inside it may be mid-task). Existing WITH
 	// --replace relaunches through `run --replace` carrying the kickoff, so
 	// the recreated sandbox actually receives the tour. Only a POSITIVE
-	// sbxAbsent gets the normal first handoff; an unprobeable sbx (sbxUnknown,
+	// launch.SbxAbsent gets the normal first handoff; an unprobeable sbx (launch.SbxUnknown,
 	// or an unresolvable name) FAILS CLOSED — launching blind could replay the
 	// kickoff into a live session we simply couldn't see.
 	name, nameOK := setupSandboxName(dir)
-	state := sbxUnknown
+	state := launch.SbxUnknown
 	if nameOK && name != "" {
-		state = probeTaskSandbox(env, name)
+		state = launch.ProbeTaskSandbox(env, name)
 	}
 	if err := runSetupHandoff(dir, name, state, replace, os.Stdout, runRun); err != nil {
 		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
@@ -296,7 +283,7 @@ func runSetupCmd(argv []string) {
 	}
 }
 
-// runSetupCore validates DIR (reusing validateRunWorkspace's exists-and-is-a-
+// runSetupCore validates DIR (reusing launch.ValidateRunWorkspace's exists-and-is-a-
 // directory check — the same rule `pix run` enforces, so setup and run
 // never disagree about what counts as a launchable DIR) and, ONLY if that
 // passes, invokes hostPhase. Extracted as its own tiny function — rather than
@@ -306,7 +293,7 @@ func runSetupCmd(argv []string) {
 // stub that fails the test if called, and assert on the returned error alone,
 // without needing to exercise runSetupCmd's os.Exit calls.
 func runSetupCore(env hostenv.Env, dir string, hostArgs []string, in io.Reader, out io.Writer, tty bool, hostPhase func(hostenv.Env, []string, io.Reader, io.Writer, bool) error) error {
-	if err := validateRunWorkspace(dir); err != nil {
+	if err := launch.ValidateRunWorkspace(dir); err != nil {
 		return err
 	}
 	return hostPhase(env, hostArgs, in, out, tty)
@@ -348,7 +335,7 @@ func runSetupHandoff(dir, name string, state doctor.SbxState, replace bool, out 
 	}
 
 	switch state {
-	case sbxUnknown:
+	case launch.SbxUnknown:
 		// FAIL CLOSED: we could not determine whether a sandbox exists (sbx
 		// errored/missing, or the name could not be resolved). Never launch:
 		// runRun would re-attach a live session and replay the kickoff into it.
@@ -358,7 +345,7 @@ func runSetupHandoff(dir, name string, state doctor.SbxState, replace bool, out 
 			which = fmt.Sprintf("the sandbox for %s", dir)
 		}
 		return fmt.Errorf("cannot determine the state of %s (`sbx ls` failed or sbx is unavailable). Host setup completed; install or fix sbx (`%s`) and retry with: pix setup%s", which, doctor.SbxInstallHint, retryArg)
-	case sbxRunning, sbxStopped:
+	case launch.SbxRunning, launch.SbxStopped:
 		if replace {
 			fmt.Fprintln(out, "")
 			fmt.Fprintf(out, "Recreating sandbox %q (--replace): it'll come back with your current\n", name)
@@ -376,7 +363,7 @@ func runSetupHandoff(dir, name string, state doctor.SbxState, replace bool, out 
 		return nil
 	}
 
-	// sbxAbsent (positively confirmed): normal first launch — hand off to the
+	// launch.SbxAbsent (positively confirmed): normal first launch — hand off to the
 	// in-VM onboarding agent via an initial message. A --replace here is
 	// harmless (the create path ignores it).
 	fmt.Fprintln(out, "")
@@ -1186,7 +1173,7 @@ func setupSelectRunnableIntent(cfg *config.Config, env hostenv.Env) bool {
 // setupPackAxis is the post-mutation pack fact: an ACTIVE but EMPTY pack is a
 // TODO, never green.
 func setupPackAxis(cfg *config.Config) []readiness.Check {
-	p := resolveHostStatePack(cfg, "")
+	p := launch.ResolveHostStatePack(cfg, "")
 	switch {
 	case p.Active && p.Exists && (p.Skills || p.Knowledge):
 		return []readiness.Check{{Label: "pack", Requirement: readiness.RequirementCore, Verdict: readiness.VerdictReady,
@@ -1569,19 +1556,19 @@ func rememberPersistedID(res map[string]any) string {
 // seedIdentity greets the user by name (from git config) and stores durable
 // identity facts in memory (best-effort, only if the daemon is up), so their
 // first session isn't anonymous. The trusted host-state payload injected into
-// the onboarding kickoff prompt (see hoststate.go's injectTrustedHostState)
+// the onboarding kickoff prompt (see hoststate.go's launch.InjectTrustedHostState)
 // also carries identity, built fresh at every launch, so "available to
 // sessions via host state" is true regardless of the memory outcome. Each
 // remember RPC is tracked individually: the output claims a memory save ONLY
 // for writes that actually succeeded, is honest about a partial or failed
 // batch, and never promises recall it can't guarantee.
 func seedIdentity(env hostenv.Env, out io.Writer) {
-	id := readGitIdentity(env)
+	id := launch.ReadGitIdentity(env)
 	if id.Name == "" {
 		return
 	}
 	who := id.Name
-	// Store ONLY the first name (readGitIdentity already reduces to it). No
+	// Store ONLY the first name (launch.ReadGitIdentity already reduces to it). No
 	// surname, no email: this fact is recalled into every session's context, so
 	// it carries the minimum needed to greet, not a pile of PII. The warm
 	// greeting itself belongs to the in-session agent, not this log.

@@ -1,4 +1,4 @@
-package main
+package launch
 
 // kitref.go — which release does `pix run` actually run?
 //
@@ -17,32 +17,32 @@ import (
 	"strings"
 )
 
-// kitRefSource explains which rule produced the ref, for the one-line notice
+// KitRefSource explains which rule produced the ref, for the one-line notice
 // `pix run` prints when it is NOT simply using this build's own version.
-type kitRefSource int
+type KitRefSource int
 
 const (
-	kitRefStamped    kitRefSource = iota // this binary's own version (default / every fallback)
-	kitRefFlag                           // --kit-ref
-	kitRefConfigPin                      // version_pin in config.toml
-	kitRefUnreleased                     // dev/local build: main or a local checkout
+	KitRefStamped    KitRefSource = iota // this binary's own version (default / every fallback)
+	KitRefFlag                           // --kit-ref
+	KitRefConfigPin                      // version_pin in config.toml
+	KitRefUnreleased                     // dev/local build: main or a local checkout
 )
 
-// resolveKitRef applies the precedence chain and reports which rule won.
+// ResolveKitRef applies the precedence chain and reports which rule won.
 //
 // flagRef and pinRef are taken as given (a user who names a ref means it, so
 // they are not validated against isReleased, which preserves the escape hatch
 // for a branch or unpublished tag.
-func resolveKitRef(version, flagRef, pinRef string) (ref string, src kitRefSource) {
+func ResolveKitRef(version, flagRef, pinRef string) (ref string, src KitRefSource) {
 	switch {
 	case flagRef != "":
-		return flagRef, kitRefFlag
+		return flagRef, KitRefFlag
 	case pinRef != "":
-		return normalizeKitRef(pinRef), kitRefConfigPin
+		return normalizeKitRef(pinRef), KitRefConfigPin
 	case !launcher.IsReleased(version):
-		return "", kitRefUnreleased
+		return "", KitRefUnreleased
 	default:
-		return "", kitRefStamped
+		return "", KitRefStamped
 	}
 }
 
@@ -57,12 +57,12 @@ func normalizeKitRef(pin string) string {
 	return pin
 }
 
-// kitRefNotice is the one line `pix run` prints when the kit is NOT this
+// KitRefNotice is the one line `pix run` prints when the kit is NOT this
 // build's own version, so the resolution is never invisible. Returns "" when
 // there is nothing worth saying.
-func kitRefNotice(version, ref string, src kitRefSource) string {
+func KitRefNotice(version, ref string, src KitRefSource) string {
 	switch src {
-	case kitRefConfigPin:
+	case KitRefConfigPin:
 		return fmt.Sprintf("pix: kit %s (pinned by version_pin in config.toml)", ref)
 	default:
 		// --kit-ref is the user's own explicit argument; echoing it back is noise.

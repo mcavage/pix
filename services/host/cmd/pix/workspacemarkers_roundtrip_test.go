@@ -22,16 +22,16 @@
 //	.pix/profile               — Go writes (pack.go pack.WriteMemoryScope),
 //	                                   TS reads (memory-recall.ts,
 //	                                   memory-capture.ts)
-//	.pix/knowledge.scope        — Go writes (run.go writeKnowledgeScope),
+//	.pix/knowledge.scope        — Go writes (run.go launch.WriteKnowledgeScope),
 //	                                   TS reads (knowledge-recall.ts)
-//	.pix/ollama-bridge.model    — Go writes (run.go writeOllamaBridgeFile),
+//	.pix/ollama-bridge.model    — Go writes (run.go launch.WriteOllamaBridgeFile),
 //	                                   TS reads (ollama-bridge.ts)
 //	.pix/sandbox.pack           — Go writes AND reads
-//	                                   (writeSandboxPackMarker /
-//	                                   readSandboxPackMarker); no TS reader
+//	                                   (launch.WriteSandboxPackMarker /
+//	                                   launch.ReadSandboxPackMarker); no TS reader
 //	.pix/knowledge               — Go writes AND reads
 //	                                   (knowledge.KnowledgeUseProject / knowledge.ReadProjectPointer
-//	                                   / projectBundle); no TS reader
+//	                                   / launch.ProjectBundle); no TS reader
 //	.pix/onboarding.json         — the IN-SANDBOX AGENT writes it (not Go);
 //	                                   Go reads + removes it (onboard.ReconcileOnboarding)
 //	.pix/host-state.json         — NEVER a file on EITHER side, by design
@@ -63,6 +63,7 @@ import (
 	"pix/host/hostenv/hostenvtest"
 	"pix/host/knowledge"
 	"pix/host/routing"
+	"pix/host/workflow/launch"
 	"pix/host/workflow/onboard"
 	"pix/host/workflow/pack"
 	"pix/host/workspace"
@@ -124,8 +125,8 @@ func TestMarkerRoundTrip_Profile(t *testing.T) {
 
 func TestMarkerRoundTrip_KnowledgeScope(t *testing.T) {
 	ws := t.TempDir()
-	if err := writeKnowledgeScope(ws, []string{"/global/bundle", "/project/bundle"}); err != nil {
-		t.Fatalf("writeKnowledgeScope: %v", err)
+	if err := launch.WriteKnowledgeScope(ws, []string{"/global/bundle", "/project/bundle"}); err != nil {
+		t.Fatalf("launch.WriteKnowledgeScope: %v", err)
 	}
 	got := readFile(t, filepath.Join(ws, ".pix", "knowledge.scope"))
 	want := "/global/bundle\n/project/bundle\n"
@@ -138,7 +139,7 @@ func TestMarkerRoundTrip_KnowledgeScope(t *testing.T) {
 
 func TestMarkerRoundTrip_OllamaBridgeModel(t *testing.T) {
 	ws := t.TempDir()
-	writeOllamaBridgeFile(ws, "qwen3.5:9b")
+	launch.WriteOllamaBridgeFile(ws, "qwen3.5:9b")
 	got := readFile(t, filepath.Join(ws, ".pix", "ollama-bridge.model"))
 	if got != "qwen3.5:9b\n" {
 		t.Errorf("ollama-bridge.model = %q, want %q (ollama-bridge.ts .trim()s this)", got, "qwen3.5:9b\n")
@@ -148,7 +149,7 @@ func TestMarkerRoundTrip_OllamaBridgeModel(t *testing.T) {
 	// ollama-bridge.ts treats an empty trimmed read as "absent" and uses its
 	// own "qwen3.5:9b" default, so the two defaults must actually agree.
 	ws2 := t.TempDir()
-	writeOllamaBridgeFile(ws2, "  ")
+	launch.WriteOllamaBridgeFile(ws2, "  ")
 	got2 := readFile(t, filepath.Join(ws2, ".pix", "ollama-bridge.model"))
 	if strings.TrimSpace(got2) != "qwen3.5:9b" {
 		t.Errorf("blank model wrote %q, want the default qwen3.5:9b (must match ollama-bridge.ts's own hardcoded default)", got2)
@@ -163,22 +164,22 @@ func TestMarkerRoundTrip_SandboxPack(t *testing.T) {
 	if err := os.MkdirAll(packRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeSandboxPackMarker(ws, packRoot)
+	launch.WriteSandboxPackMarker(ws, packRoot)
 
 	want := pack.CanonicalizePackRoot(packRoot)
-	got := readSandboxPackMarker(ws)
+	got := launch.ReadSandboxPackMarker(ws)
 	if got != want {
-		t.Errorf("readSandboxPackMarker = %q, want %q", got, want)
+		t.Errorf("launch.ReadSandboxPackMarker = %q, want %q", got, want)
 	}
-	raw := readFile(t, sandboxPackMarkerPath(ws))
+	raw := readFile(t, launch.SandboxPackMarkerPath(ws))
 	if raw != want+"\n" {
 		t.Errorf("sandbox.pack file = %q, want %q", raw, want+"\n")
 	}
 
 	// Pack-less creation removes any prior marker.
-	writeSandboxPackMarker(ws, "")
-	if got := readSandboxPackMarker(ws); got != "" {
-		t.Errorf("readSandboxPackMarker after pack-less write = %q, want empty", got)
+	launch.WriteSandboxPackMarker(ws, "")
+	if got := launch.ReadSandboxPackMarker(ws); got != "" {
+		t.Errorf("launch.ReadSandboxPackMarker after pack-less write = %q, want empty", got)
 	}
 }
 
@@ -198,13 +199,13 @@ func TestMarkerRoundTrip_KnowledgeProjectPointer(t *testing.T) {
 	if pointer == "" {
 		t.Fatal("knowledge.ReadProjectPointer returned empty after knowledge.KnowledgeUseProject wrote the pointer")
 	}
-	// ...and projectBundle re-resolves that ref back to the SAME canonical id
+	// ...and launch.ProjectBundle re-resolves that ref back to the SAME canonical id
 	// the store keys its `bundle` column on — the round trip
-	// wireKnowledgeScope actually depends on every real run.
+	// launch.WireKnowledgeScope actually depends on every real run.
 	want := knowledge.CanonicalizeKnowledgeBundle(bundle)
-	got := projectBundle(repo)
+	got := launch.ProjectBundle(repo)
 	if got != want {
-		t.Errorf("projectBundle round-trip = %q, want %q (pointer was %q)", got, want, pointer)
+		t.Errorf("launch.ProjectBundle round-trip = %q, want %q (pointer was %q)", got, want, pointer)
 	}
 }
 
@@ -263,11 +264,11 @@ func TestMarkerRoundTrip_HostStateNeverBecomesAWorkspaceFile(t *testing.T) {
 
 	// Write every OTHER real marker into the same workspace...
 	pack.WriteMemoryScope(ws, &pack.Info{Manifest: pack.Manifest{MemoryScope: "work"}})
-	if err := writeKnowledgeScope(ws, []string{"/a"}); err != nil {
+	if err := launch.WriteKnowledgeScope(ws, []string{"/a"}); err != nil {
 		t.Fatal(err)
 	}
-	writeOllamaBridgeFile(ws, "qwen3.5:9b")
-	writeSandboxPackMarker(ws, filepath.Join(ws, "pack"))
+	launch.WriteOllamaBridgeFile(ws, "qwen3.5:9b")
+	launch.WriteSandboxPackMarker(ws, filepath.Join(ws, "pack"))
 	var out bytes.Buffer
 	_ = knowledge.KnowledgeUseProject(t.TempDir(), ws, &out)
 	if err := os.WriteFile(filepath.Join(ws, ".pix", onboard.FileName), []byte(`{"version":1}`), 0o644); err != nil {

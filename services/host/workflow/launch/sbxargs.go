@@ -1,4 +1,4 @@
-package main
+package launch
 
 import (
 	"fmt"
@@ -16,16 +16,16 @@ import (
 // that was published for this launcher build.
 const kitRepo = "git+https://github.com/mcavage/pix.git"
 
-// dockerImageRepo is the published image repo. A local build pins a locally
+// DockerImageRepo is the published image repo. A local build pins a locally
 // loaded tag from <repo>/out/.local-image-tag via --template, mirroring the
 // `make run` target.
-const dockerImageRepo = "docker.io/mcavage/pix"
+const DockerImageRepo = "docker.io/mcavage/pix"
 
-// runOpts carries everything the arg builder needs, resolved by the caller. It
+// RunOpts carries everything the arg builder needs, resolved by the caller. It
 // is deliberately side-effect-free (no filesystem probing, no token minting) so
-// buildSbxArgs stays a pure function that the tests can drive without sbx or a
+// BuildSbxArgs stays a pure function that the tests can drive without sbx or a
 // real config on disk.
-type runOpts struct {
+type RunOpts struct {
 	Workspace     string   // positional DIR (default ".")
 	Dev           bool     // --dev: Mode B, skills load live from a repo checkout
 	DevRoot       string   // resolved repo root when Dev is set (caller resolves)
@@ -35,7 +35,7 @@ type runOpts struct {
 	Skills        []string // --skills DIR: extra live skill trees
 	Kits          []string // --kit K: escape-hatch kit(s). When present they REPLACE the auto git/local pin (a user override), then config stack applies.
 	// KitRef overrides the git ref the auto-pinned kit resolves (e.g. "v0.1.2",
-	// "main"). Resolved by the caller via resolveKitRef — see kitref.go for the
+	// "main"). Resolved by the caller via ResolveKitRef — see kitref.go for the
 	// precedence chain. Empty means "use this build's stamped version", the
 	// original lockstep behaviour. Distinct from Kits: this steers the AUTO pin
 	// rather than replacing it, so --dev / local-checkout selection still wins.
@@ -51,7 +51,7 @@ type runOpts struct {
 	// PackKits are ephemeral mixin kit dir(s) synthesized from the active pack's
 	// bin/ wrappers (F2, see pack.SynthesizePackKit). Deliberately SEPARATE from Kits:
 	// Kits non-empty is the --kit ESCAPE HATCH that replaces the auto git/local
-	// pin (see kitOverride in buildSbxArgs); a pack-synthesized kit must stack
+	// pin (see kitOverride in BuildSbxArgs); a pack-synthesized kit must stack
 	// alongside the base kit, never suppress it, so it gets its own field and its
 	// own unconditional --kit loop.
 	PackKits    []string
@@ -92,13 +92,13 @@ func refOrStamped(ref, version string) string {
 
 // localImageRef is the --template ref for a locally loaded image tag.
 func localImageRef(tag string) string {
-	return dockerImageRepo + ":" + tag
+	return DockerImageRepo + ":" + tag
 }
 
-// templateTag returns the tag portion of a --template image ref (everything after
+// TemplateTag returns the tag portion of a --template image ref (everything after
 // the final ':'), or "" if the ref carries no tag. It splits on the LAST colon so
 // a registry port (e.g. localhost:5000/foo:tag) doesn't confuse it.
-func templateTag(ref string) string {
+func TemplateTag(ref string) string {
 	i := strings.LastIndexByte(ref, ':')
 	if i < 0 || strings.IndexByte(ref[i:], '/') >= 0 {
 		return ""
@@ -106,11 +106,11 @@ func templateTag(ref string) string {
 	return ref[i+1:]
 }
 
-// buildSbxArgs composes the full argv for `sbx <args...>` (i.e. it returns
+// BuildSbxArgs composes the full argv for `sbx <args...>` (i.e. it returns
 // everything AFTER the "sbx" program name, starting with "run"). It is pure: no
 // exec, no filesystem, no token minting — the caller does all of that and feeds
 // the results in via cfg + o. This is the function the tests exercise.
-func buildSbxArgs(cfg *config.Config, o runOpts, version string) []string {
+func BuildSbxArgs(cfg *config.Config, o RunOpts, version string) []string {
 	args := []string{"run", "pix"}
 
 	if o.Name != "" {
@@ -212,34 +212,34 @@ func buildSbxArgs(cfg *config.Config, o runOpts, version string) []string {
 	return args
 }
 
-// runLaunchPlan is the OUTCOME of the create-vs-reattach-vs-replace decision:
+// RunLaunchPlan is the OUTCOME of the create-vs-reattach-vs-replace decision:
 // the sbx argv to exec, whether it must be preceded by `sbx rm -f <name>` first,
 // and whether Args is the thin re-attach form (vs. a full create) — the caller
 // uses Reattach to pick its stderr message and to print the re-attach-failed
 // hint if the exec fails.
-type runLaunchPlan struct {
+type RunLaunchPlan struct {
 	RmFirst  bool     // run `sbx rm -f <name>` before Args
 	Args     []string // sbx argv (after "sbx")
 	Reattach bool     // true => Args is the thin re-attach form, not a full create
 	// Err is set ONLY for the fail-closed --replace-on-unknown-state case (see
-	// planSandboxLaunch below). A non-nil Err means Args/RmFirst/Reattach are
+	// PlanSandboxLaunch below). A non-nil Err means Args/RmFirst/Reattach are
 	// meaningless zero values — the caller MUST check Err first and abort
 	// before printing anything that claims a replace/create/reattach is
 	// happening, and before running RmFirst or exec'ing sbx at all.
 	Err error
 }
 
-// planSandboxLaunch is the pure decision at the heart of `pix run`'s
+// PlanSandboxLaunch is the pure decision at the heart of `pix run`'s
 // lifecycle, matching sbx's own re-attach model: a create-only flag
 // (--kit/--template/--mcp) only makes sense when the sandbox does not already
-// exist. It mirrors buildSbxArgs — no exec, no filesystem — so every branch is
+// exist. It mirrors BuildSbxArgs — no exec, no filesystem — so every branch is
 // unit-testable without sbx installed.
 //
-//   - absent -> CREATE: the full buildSbxArgs, unchanged.
+//   - absent -> CREATE: the full BuildSbxArgs, unchanged.
 //   - unknown -> FAIL CLOSED: never guess create vs reattach.
 //   - running or stopped, no --replace -> RE-ATTACH: sbx reads the agent from
 //     the existing sandbox's spec, so none of the create-only flags apply; see
-//     buildReattachArgs.
+//     BuildReattachArgs.
 //   - any state, --replace -> REPLACE: `sbx rm -f <name>` (skipped when the
 //     sandbox is already absent) then a full create, so changed kit/mcp/
 //     create-only flags take effect. This is today's implicit recreate, now
@@ -247,68 +247,68 @@ type runLaunchPlan struct {
 //
 // Unknown always fails closed, with or without --replace. `sbx run` may
 // reattach an existing sandbox, so guessing "absent" could replay runtime
-// arguments into a live session. The caller also uses willCreate before this
+// arguments into a live session. The caller also uses WillCreate before this
 // planner to gate create-only preparation; that predicate must return false
 // for unknown so a refused launch has no generated-kit or pack side effects.
-func planSandboxLaunch(state doctor.SbxState, replace bool, cfg *config.Config, o runOpts, version string) runLaunchPlan {
-	if state == sbxUnknown {
-		return runLaunchPlan{Err: fmt.Errorf("could not determine whether sandbox %q exists (`sbx ls` failed or sbx is unavailable); refusing to create or reattach blind — fix sbx and retry", o.Name)}
+func PlanSandboxLaunch(state doctor.SbxState, replace bool, cfg *config.Config, o RunOpts, version string) RunLaunchPlan {
+	if state == SbxUnknown {
+		return RunLaunchPlan{Err: fmt.Errorf("could not determine whether sandbox %q exists (`sbx ls` failed or sbx is unavailable); refusing to create or reattach blind — fix sbx and retry", o.Name)}
 	}
-	if !willCreate(state, replace) {
-		return runLaunchPlan{Args: buildReattachArgs(o), Reattach: true}
+	if !WillCreate(state, replace) {
+		return RunLaunchPlan{Args: BuildReattachArgs(o), Reattach: true}
 	}
-	return runLaunchPlan{
-		RmFirst: replace && (state == sbxRunning || state == sbxStopped),
-		Args:    buildSbxArgs(cfg, o, version),
+	return RunLaunchPlan{
+		RmFirst: replace && (state == SbxRunning || state == SbxStopped),
+		Args:    BuildSbxArgs(cfg, o, version),
 	}
 }
 
-// willCreate reports whether planSandboxLaunch(state, replace, ...) will
+// WillCreate reports whether PlanSandboxLaunch(state, replace, ...) will
 // create (or replace) rather than plainly re-attach — i.e. whether the
 // create-only inputs (repo checkout / --dev / kit resolution) are even needed.
 // Kept as the single source of truth for that branching so run.go can decide
 // to SKIP resolving those create-only inputs before a plain re-attach (which
 // must never fail on a --dev/checkout problem it doesn't need) without
-// duplicating — and risking drifting from — planSandboxLaunch's own logic.
-func willCreate(state doctor.SbxState, replace bool) bool {
-	if state == sbxUnknown {
+// duplicating — and risking drifting from — PlanSandboxLaunch's own logic.
+func WillCreate(state doctor.SbxState, replace bool) bool {
+	if state == SbxUnknown {
 		return false
 	}
 	if replace {
 		return true
 	}
 	switch state {
-	case sbxRunning, sbxStopped:
+	case SbxRunning, SbxStopped:
 		return false
-	case sbxAbsent:
+	case SbxAbsent:
 		return true
 	default:
 		return false
 	}
 }
 
-// definitelyCreating reports whether the launch is CERTAIN to create a fresh
+// DefinitelyCreating reports whether the launch is CERTAIN to create a fresh
 // sandbox: a POSITIVE "not present" probe, or --replace when removal actually
-// happens (planSandboxLaunch only runs `sbx rm -f` for a POSITIVELY known
-// running/stopped sandbox). Unknown is false here just as it is in willCreate;
+// happens (PlanSandboxLaunch only runs `sbx rm -f` for a POSITIVELY known
+// running/stopped sandbox). Unknown is false here just as it is in WillCreate;
 // keep this stricter predicate for persisted create-time state because it also
 // documents that only positive creation evidence may update that state.
-func definitelyCreating(state doctor.SbxState, replace bool) bool {
-	return state == sbxAbsent || (replace && state != sbxUnknown)
+func DefinitelyCreating(state doctor.SbxState, replace bool) bool {
+	return state == SbxAbsent || (replace && state != SbxUnknown)
 }
 
-// buildReattachArgs composes the argv for RE-ATTACHING to an existing sandbox:
+// BuildReattachArgs composes the argv for RE-ATTACHING to an existing sandbox:
 // `run --name <name>`, deliberately WITHOUT any create-only flag
 // (--kit/--template/--mcp, the config-stacked kits, or the --dev/--skills live
 // trees) — sbx reads the agent from the existing sandbox's own spec, so
 // reapplying them would be a no-op at best and a lie about what's running at
 // worst. --model/--intent are NOT create-only, though: they are pi RUNTIME args
-// (forwarded after `--`, same as buildSbxArgs), so a resolved o.Model (whether
+// (forwarded after `--`, same as BuildSbxArgs), so a resolved o.Model (whether
 // the user passed --model directly or run.go resolved it from --intent) still
 // needs to reach the pi session on a re-attach, exactly like a fresh create.
 // The user's own pi passthrough (o.Passthrough) forwards after it, mirroring
-// buildSbxArgs' own passthrough handling.
-func buildReattachArgs(o runOpts) []string {
+// BuildSbxArgs' own passthrough handling.
+func BuildReattachArgs(o RunOpts) []string {
 	args := []string{"run", "--name", o.Name}
 	var piArgs []string
 	if o.Model != "" {
@@ -322,10 +322,10 @@ func buildReattachArgs(o runOpts) []string {
 	return args
 }
 
-// pinnedGitKit returns the launcher's own pinned git kit URL if it appears in
+// PinnedGitKit returns the launcher's own pinned git kit URL if it appears in
 // the composed args, else "". Used to key the graceful post-exec failure
 // message on whether we pinned a git #ref (vs. a local checkout kit).
-func pinnedGitKit(args []string) string {
+func PinnedGitKit(args []string) string {
 	for _, a := range args {
 		if strings.HasPrefix(a, kitRepo) && strings.Contains(a, "#ref=") {
 			return a
@@ -334,11 +334,11 @@ func pinnedGitKit(args []string) string {
 	return ""
 }
 
-// kitResolveFailureMsg formats an actionable error for when `sbx run` fails and
+// KitResolveFailureMsg formats an actionable error for when `sbx run` fails and
 // the composed kit used a git #ref (a version tag that may not be published, or
 // a fallback to main). Returns "" when no git-ref kit was pinned (so the caller
 // leaks nothing extra on unrelated failures). Pure + testable.
-func kitResolveFailureMsg(pinnedKit string) string {
+func KitResolveFailureMsg(pinnedKit string) string {
 	if pinnedKit == "" {
 		return ""
 	}

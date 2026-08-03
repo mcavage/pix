@@ -11,6 +11,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/monitor/tui"
+	"pix/host/workflow/launch"
 	"pix/host/workflow/reset"
 	"pix/host/workspace"
 )
@@ -24,7 +25,7 @@ func TestTaskRepoLabel(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if got := taskRepoLabel(filepath.Join(repo, ".git")); got != "my-api" {
+	if got := launch.TaskRepoLabel(filepath.Join(repo, ".git")); got != "my-api" {
 		t.Errorf("normal repo label = %q, want my-api", got)
 	}
 	// A bare repo dir ending .git keeps its base minus the suffix.
@@ -32,7 +33,7 @@ func TestTaskRepoLabel(t *testing.T) {
 	if err := os.MkdirAll(bare, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if got := taskRepoLabel(bare); got != "svc" {
+	if got := launch.TaskRepoLabel(bare); got != "svc" {
 		t.Errorf("bare repo label = %q, want svc", got)
 	}
 }
@@ -44,9 +45,9 @@ func TestTaskRepoLabel_SanitizeCapEmpty(t *testing.T) {
 	if err := os.MkdirAll(long, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	got := taskRepoLabel(long)
-	if len(got) > maxRepoLabelLen {
-		t.Errorf("label %q len %d > cap %d", got, len(got), maxRepoLabelLen)
+	got := launch.TaskRepoLabel(long)
+	if len(got) > launch.MaxRepoLabelLen {
+		t.Errorf("label %q len %d > cap %d", got, len(got), launch.MaxRepoLabelLen)
 	}
 	// Only safe runes survive.
 	for _, r := range got {
@@ -59,14 +60,14 @@ func TestTaskRepoLabel_SanitizeCapEmpty(t *testing.T) {
 
 func TestBoundSandboxName_TrimsNameThenLabel(t *testing.T) {
 	// Short inputs: composed verbatim.
-	if got := boundSandboxName("api", "abcd1234", "fix", "work"); got != "pix-t-api-abcd1234-fix-work" {
+	if got := launch.BoundSandboxName("api", "abcd1234", "fix", "work"); got != "pix-t-api-abcd1234-fix-work" {
 		t.Errorf("short: %q", got)
 	}
 	// A long name is trimmed (hash-tagged) but the repokey is always intact and
 	// the whole name stays within the bound.
 	longName := strings.Repeat("z", 90)
-	got := boundSandboxName("api", "abcd1234", longName, "")
-	if len(got) > maxSandboxNameLen {
+	got := launch.BoundSandboxName("api", "abcd1234", longName, "")
+	if len(got) > launch.MaxSandboxNameLen {
 		t.Errorf("bounded name too long: %d (%q)", len(got), got)
 	}
 	if !strings.Contains(got, "-abcd1234-") {
@@ -76,14 +77,14 @@ func TestBoundSandboxName_TrimsNameThenLabel(t *testing.T) {
 		t.Errorf("label/prefix mangled: %q", got)
 	}
 	// Two different long names must not collide (hash tag distinguishes them).
-	other := boundSandboxName("api", "abcd1234", strings.Repeat("z", 89)+"y", "")
+	other := launch.BoundSandboxName("api", "abcd1234", strings.Repeat("z", 89)+"y", "")
 	if got == other {
 		t.Errorf("distinct long names collided: %q", got)
 	}
 	// A huge label is trimmed AFTER the name floor, repokey still intact + bound ok.
 	hugeLabel := strings.Repeat("L", 60)
-	g2 := boundSandboxName(hugeLabel, "abcd1234", longName, "")
-	if len(g2) > maxSandboxNameLen {
+	g2 := launch.BoundSandboxName(hugeLabel, "abcd1234", longName, "")
+	if len(g2) > launch.MaxSandboxNameLen {
 		t.Errorf("huge-label case too long: %d (%q)", len(g2), g2)
 	}
 	if !strings.Contains(g2, "-abcd1234-") {
@@ -99,65 +100,65 @@ func TestExistingTaskLayouts_And_FindTaskLayout(t *testing.T) {
 		t.Fatal(err)
 	}
 	mainroot := filepath.Join(repo, ".git")
-	newDir := taskRepoDir(mainroot)
-	legacy := taskRepoKey(mainroot)
+	newDir := launch.TaskRepoDir(mainroot)
+	legacy := launch.TaskRepoKey(mainroot)
 	writeMeta := func(dir, name string) {
-		_, mp := taskPaths(dir, name)
+		_, mp := launch.TaskPaths(dir, name)
 		if err := os.MkdirAll(filepath.Dir(mp), 0o700); err != nil {
 			t.Fatal(err)
 		}
 		writeFile(t, mp, "{}\n")
 	}
 
-	// Nothing -> no layouts, findTaskLayout returns not-found (default new dir).
-	if got := existingTaskLayouts(mainroot); len(got) != 0 {
+	// Nothing -> no layouts, launch.FindTaskLayout returns not-found (default new dir).
+	if got := launch.ExistingTaskLayouts(mainroot); len(got) != 0 {
 		t.Errorf("no dirs: layouts %+v, want none", got)
 	}
-	if lay, found, amb := findTaskLayout(mainroot, "x"); found || amb || lay.dir != newDir {
+	if lay, found, amb := launch.FindTaskLayout(mainroot, "x"); found || amb || lay.Dir != newDir {
 		t.Errorf("not-found: lay=%+v found=%v amb=%v", lay, found, amb)
 	}
 	// A bare dir with NO meta/ must not read as a layout (e.g. a locks-only dir).
 	if err := os.MkdirAll(filepath.Join(workspace.TaskStateRoot(), legacy, "locks"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if got := existingTaskLayouts(mainroot); len(got) != 0 {
+	if got := launch.ExistingTaskLayouts(mainroot); len(got) != 0 {
 		t.Errorf("meta-less dir counted as layout: %+v", got)
 	}
-	// Legacy task present -> one legacy layout; findTaskLayout marks it legacy.
+	// Legacy task present -> one legacy layout; launch.FindTaskLayout marks it legacy.
 	writeMeta(legacy, "fix")
-	lays := existingTaskLayouts(mainroot)
-	if len(lays) != 1 || lays[0].dir != legacy || !lays[0].legacy {
+	lays := launch.ExistingTaskLayouts(mainroot)
+	if len(lays) != 1 || lays[0].Dir != legacy || !lays[0].Legacy {
 		t.Errorf("legacy only: %+v", lays)
 	}
-	if lay, found, _ := findTaskLayout(mainroot, "fix"); !found || !lay.legacy {
+	if lay, found, _ := launch.FindTaskLayout(mainroot, "fix"); !found || !lay.Legacy {
 		t.Errorf("find legacy: lay=%+v found=%v", lay, found)
 	}
 	// Add a NEW-layout task of the same name -> both layouts present; the same
 	// name is now AMBIGUOUS and must be refused.
 	writeMeta(newDir, "fix")
-	if got := existingTaskLayouts(mainroot); len(got) != 2 {
+	if got := launch.ExistingTaskLayouts(mainroot); len(got) != 2 {
 		t.Errorf("both Present: %+v, want 2", got)
 	}
-	if _, found, amb := findTaskLayout(mainroot, "fix"); !amb || found {
+	if _, found, amb := launch.FindTaskLayout(mainroot, "fix"); !amb || found {
 		t.Errorf("ambiguous name: found=%v amb=%v, want amb", found, amb)
 	}
 	// A name only in the new layout resolves unambiguously to new.
 	writeMeta(newDir, "only-new")
-	if lay, found, amb := findTaskLayout(mainroot, "only-new"); !found || amb || lay.legacy {
+	if lay, found, amb := launch.FindTaskLayout(mainroot, "only-new"); !found || amb || lay.Legacy {
 		t.Errorf("new only: lay=%+v found=%v amb=%v", lay, found, amb)
 	}
 }
 
 func TestLegacyTaskSandboxName(t *testing.T) {
 	// Legacy tasks own the pre-label sandbox name (no repo label segment).
-	if got := legacyTaskSandboxName("abcd1234", "fix", "default"); got != "pix-t-abcd1234-fix" {
+	if got := launch.LegacyTaskSandboxName("abcd1234", "fix", "default"); got != "pix-t-abcd1234-fix" {
 		t.Errorf("legacy default: %q", got)
 	}
-	if got := legacyTaskSandboxName("abcd1234", "fix", "work"); got != "pix-t-abcd1234-fix" {
+	if got := launch.LegacyTaskSandboxName("abcd1234", "fix", "work"); got != "pix-t-abcd1234-fix" {
 		t.Errorf("legacy work: %q", got)
 	}
-	// hardenTaskMeta with legacy=true must derive the legacy name, not the labeled one.
-	m, err := hardenTaskMeta(taskMeta{Name: "fix", Profile: "default"}, "/main", "abcd1234", true, "fix")
+	// launch.HardenTaskMeta with legacy=true must derive the legacy name, not the labeled one.
+	m, err := launch.HardenTaskMeta(launch.TaskMeta{Name: "fix", Profile: "default"}, "/main", "abcd1234", true, "fix")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,13 +173,13 @@ func TestIsArtifactPath(t *testing.T) {
 	yes := []string{"README.md", "docs/design.md", "notes/scratch", "spec.prd", ".pix/artifacts/x", "deep/thing.txt"}
 	no := []string{"main.go", "node_modules/pkg/readme.md", ".git/config", "vendor/x/doc.md", "image.png"}
 	for _, p := range yes {
-		if !isArtifactPath(p) {
-			t.Errorf("isArtifactPath(%q) = false, want true", p)
+		if !launch.IsArtifactPath(p) {
+			t.Errorf("launch.IsArtifactPath(%q) = false, want true", p)
 		}
 	}
 	for _, p := range no {
-		if isArtifactPath(p) {
-			t.Errorf("isArtifactPath(%q) = true, want false", p)
+		if launch.IsArtifactPath(p) {
+			t.Errorf("launch.IsArtifactPath(%q) = true, want false", p)
 		}
 	}
 }
@@ -206,8 +207,8 @@ func TestHarvestArtifacts_CopiesUncommittedDocsAndManifest(t *testing.T) {
 	tgit(t, co, "commit", "-q", "-m", "doc")
 
 	env := gitEnv(t, "", nil)
-	meta := taskMeta{Name: "h", Repo: "main", Mainroot: main, Branch: "pix/h", Profile: "default"}
-	dest, err := harvestArtifacts(env, io.Discard, meta, "main-abcd1234", co, "h")
+	meta := launch.TaskMeta{Name: "h", Repo: "main", Mainroot: main, Branch: "pix/h", Profile: "default"}
+	dest, err := launch.HarvestArtifacts(env, io.Discard, meta, "main-abcd1234", co, "h")
 	if err != nil {
 		t.Fatalf("harvest: %v", err)
 	}
@@ -231,7 +232,7 @@ func TestHarvestArtifacts_CopiesUncommittedDocsAndManifest(t *testing.T) {
 		t.Errorf("dest %q not under DATA_HOME artifacts", dest)
 	}
 	// Manifest names the task + repo + at least the harvested files.
-	var man harvestManifest
+	var man launch.HarvestManifest
 	b, _ := os.ReadFile(filepath.Join(dest, "manifest.json"))
 	if err := json.Unmarshal(b, &man); err != nil {
 		t.Fatalf("manifest parse: %v", err)
@@ -249,8 +250,8 @@ func TestHarvestArtifacts_NothingToHarvest(t *testing.T) {
 	co := filepath.Join(t.TempDir(), "co")
 	makeTaskClone(t, main, co, "pix/e", "HEAD")
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
-	meta := taskMeta{Name: "e", Mainroot: main, Branch: "pix/e", Profile: "default"}
-	dest, err := harvestArtifacts(gitEnv(t, "", nil), io.Discard, meta, "r", co, "e")
+	meta := launch.TaskMeta{Name: "e", Mainroot: main, Branch: "pix/e", Profile: "default"}
+	dest, err := launch.HarvestArtifacts(gitEnv(t, "", nil), io.Discard, meta, "r", co, "e")
 	if err != nil {
 		t.Fatalf("harvest: %v", err)
 	}
@@ -266,35 +267,35 @@ func TestTaskAge_MaxOfCreatedAndMtime(t *testing.T) {
 	old := time.Now().Add(-30 * 24 * time.Hour).UTC().Format(time.RFC3339)
 	// Created is old but the checkout was just touched: age tracks the recent
 	// activity, not the stale created stamp.
-	if age := taskAge(taskMeta{Created: old}, co); age > 24*time.Hour {
+	if age := launch.TaskAge(launch.TaskMeta{Created: old}, co); age > 24*time.Hour {
 		t.Errorf("age = %v, want small (mtime recent)", age)
 	}
 	// No co dir + old created -> age reflects created.
-	if age := taskAge(taskMeta{Created: old}, filepath.Join(co, "gone")); age < 20*24*time.Hour {
+	if age := launch.TaskAge(launch.TaskMeta{Created: old}, filepath.Join(co, "gone")); age < 20*24*time.Hour {
 		t.Errorf("age = %v, want ~30d from created", age)
 	}
 	// Neither -> 0 (never over-age).
-	if age := taskAge(taskMeta{}, filepath.Join(co, "gone")); age != 0 {
+	if age := launch.TaskAge(launch.TaskMeta{}, filepath.Join(co, "gone")); age != 0 {
 		t.Errorf("no timestamps: age = %v, want 0", age)
 	}
 }
 
 func TestParseTaskGcArgs(t *testing.T) {
-	o, err := parseTaskGcArgs(nil)
-	if err != nil || o.days != taskGCDefaultDays || o.artifactDays != taskArtifactDefaultDays || o.dryRun || o.noHarvest {
+	o, err := launch.ParseTaskGcArgs(nil)
+	if err != nil || o.Days != launch.TaskGCDefaultDays || o.ArtifactDays != launch.TaskArtifactDefaultDays || o.DryRun || o.NoHarvest {
 		t.Fatalf("defaults wrong: %+v err=%v", o, err)
 	}
-	o, err = parseTaskGcArgs([]string{"--days", "14", "--dry-run", "--no-harvest", "--artifact-days=90"})
-	if err != nil || o.days != 14 || o.artifactDays != 90 || !o.dryRun || !o.noHarvest {
+	o, err = launch.ParseTaskGcArgs([]string{"--days", "14", "--dry-run", "--no-harvest", "--artifact-days=90"})
+	if err != nil || o.Days != 14 || o.ArtifactDays != 90 || !o.DryRun || !o.NoHarvest {
 		t.Fatalf("flags wrong: %+v err=%v", o, err)
 	}
-	if _, err := parseTaskGcArgs([]string{"--days", "-3"}); err == nil {
+	if _, err := launch.ParseTaskGcArgs([]string{"--days", "-3"}); err == nil {
 		t.Error("negative --days should error")
 	}
-	if _, err := parseTaskGcArgs([]string{"--bogus"}); err == nil {
+	if _, err := launch.ParseTaskGcArgs([]string{"--bogus"}); err == nil {
 		t.Error("unknown flag should error")
 	}
-	if _, err := parseTaskGcArgs([]string{"--days"}); err == nil {
+	if _, err := launch.ParseTaskGcArgs([]string{"--days"}); err == nil {
 		t.Error("missing value should error")
 	}
 }
@@ -320,14 +321,14 @@ func TestPruneArtifacts(t *testing.T) {
 	}
 
 	// Dry run counts but deletes nothing.
-	if n := pruneArtifacts(repoDir, 30, true); n != 1 {
+	if n := launch.PruneArtifacts(repoDir, 30, true); n != 1 {
 		t.Errorf("dry-run pruned count = %d, want 1", n)
 	}
 	if _, err := os.Stat(oldSnap); err != nil {
 		t.Error("dry-run must not delete")
 	}
 	// Real run deletes only the over-age snapshot.
-	if n := pruneArtifacts(repoDir, 30, false); n != 1 {
+	if n := launch.PruneArtifacts(repoDir, 30, false); n != 1 {
 		t.Errorf("pruned count = %d, want 1", n)
 	}
 	if _, err := os.Stat(oldSnap); err == nil {
@@ -337,7 +338,7 @@ func TestPruneArtifacts(t *testing.T) {
 		t.Error("fresh snapshot should survive")
 	}
 	// days<=0 disables pruning.
-	if n := pruneArtifacts(repoDir, 0, false); n != 0 {
+	if n := launch.PruneArtifacts(repoDir, 0, false); n != 0 {
 		t.Errorf("days=0 should prune nothing, got %d", n)
 	}
 }
@@ -352,21 +353,21 @@ func TestRunTaskGc_RemovesCleanSkipsDirty(t *testing.T) {
 	t.Setenv("PIX_PROFILE", "")
 
 	env := gitEnv(t, "", nil) // sbx ls empty -> sandboxes absent -> guard passes on clean
-	mainroot, err := resolveMainroot(env, main)
+	mainroot, err := launch.ResolveMainroot(env, main)
 	if err != nil {
 		t.Fatal(err)
 	}
-	repoDir := taskRepoDir(mainroot)
+	repoDir := launch.TaskRepoDir(mainroot)
 
 	// Two tasks: "clean" (no changes) and "dirty" (uncommitted change). Both aged
 	// past the threshold via an old Created and a backdated co mtime.
 	mk := func(name string, dirty bool) {
-		co, metaPath := taskPaths(repoDir, name)
+		co, metaPath := launch.TaskPaths(repoDir, name)
 		makeTaskClone(t, main, co, "pix/"+name, "HEAD")
 		if dirty {
 			writeFile(t, filepath.Join(co, "f"), "changed\n")
 		}
-		if err := writeTaskMeta(metaPath, taskMeta{
+		if err := launch.WriteTaskMeta(metaPath, launch.TaskMeta{
 			Name: name, Mode: "localclone", Mainroot: mainroot,
 			Branch: "pix/" + name, Profile: "default",
 			Created: time.Now().Add(-30 * 24 * time.Hour).UTC().Format(time.RFC3339),
@@ -388,13 +389,13 @@ func TestRunTaskGc_RemovesCleanSkipsDirty(t *testing.T) {
 	mk("dirty", true)
 
 	t.Chdir(main)
-	runTaskGc(env, nil)
+	launch.RunTaskGc(env, nil)
 
 	// clean gone, dirty kept.
-	if _, mp := taskPaths(repoDir, "clean"); exists(mp) {
+	if _, mp := launch.TaskPaths(repoDir, "clean"); exists(mp) {
 		t.Error("clean task meta should be removed by gc")
 	}
-	if _, mp := taskPaths(repoDir, "dirty"); !exists(mp) {
+	if _, mp := launch.TaskPaths(repoDir, "dirty"); !exists(mp) {
 		t.Error("dirty task meta must survive gc (guard skip)")
 	}
 }
@@ -439,13 +440,13 @@ func TestSafeRelPath(t *testing.T) {
 	ok := []string{"a.md", "docs/x.md", "a/b/c.txt"}
 	bad := []string{"", "/etc/passwd", "../escape.md", "a/../../b.md"}
 	for _, p := range ok {
-		if !safeRelPath(p) {
-			t.Errorf("safeRelPath(%q) = false, want true", p)
+		if !launch.SafeRelPath(p) {
+			t.Errorf("launch.SafeRelPath(%q) = false, want true", p)
 		}
 	}
 	for _, p := range bad {
-		if safeRelPath(p) {
-			t.Errorf("safeRelPath(%q) = true, want false", p)
+		if launch.SafeRelPath(p) {
+			t.Errorf("launch.SafeRelPath(%q) = true, want false", p)
 		}
 	}
 }
@@ -463,8 +464,8 @@ func TestHarvest_SpacesAndSymlink(t *testing.T) {
 		t.Skip("symlink unsupported")
 	}
 	env := gitEnv(t, "", nil)
-	meta := taskMeta{Name: "s", Mainroot: main, Branch: "pix/s", Profile: "default"}
-	dest, err := harvestArtifacts(env, io.Discard, meta, "r", co, "s")
+	meta := launch.TaskMeta{Name: "s", Mainroot: main, Branch: "pix/s", Profile: "default"}
+	dest, err := launch.HarvestArtifacts(env, io.Discard, meta, "r", co, "s")
 	if err != nil {
 		t.Fatalf("harvest: %v", err)
 	}
@@ -472,7 +473,7 @@ func TestHarvest_SpacesAndSymlink(t *testing.T) {
 		t.Errorf("spaced filename not harvested: %v", err)
 	}
 	// The symlink must not appear in the manifest's copied list.
-	var man harvestManifest
+	var man launch.HarvestManifest
 	b, _ := os.ReadFile(filepath.Join(dest, "manifest.json"))
 	_ = json.Unmarshal(b, &man)
 	for _, f := range man.Files {
@@ -484,11 +485,11 @@ func TestHarvest_SpacesAndSymlink(t *testing.T) {
 
 func TestFreshSnapshotDir_UniquePerCall(t *testing.T) {
 	parent := t.TempDir()
-	a, err := freshSnapshotDir(parent)
+	a, err := launch.FreshSnapshotDir(parent)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := freshSnapshotDir(parent)
+	b, err := launch.FreshSnapshotDir(parent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -504,12 +505,12 @@ func TestHarvestToDir_RejectsCheckoutItself(t *testing.T) {
 	writeFile(t, filepath.Join(co, "keep.md"), "precious\n")
 	env := gitEnv(t, "", nil)
 	// --to == the checkout must be refused (would O_TRUNC the source onto itself).
-	if rc := harvestToDir(env, co, co, "x"); rc == 0 {
-		t.Error("harvestToDir into the checkout should fail")
+	if rc := launch.HarvestToDir(env, co, co, "x"); rc == 0 {
+		t.Error("launch.HarvestToDir into the checkout should fail")
 	}
 	// A nested dir under the checkout is also refused.
-	if rc := harvestToDir(env, co, filepath.Join(co, "sub"), "x"); rc == 0 {
-		t.Error("harvestToDir into a nested checkout dir should fail")
+	if rc := launch.HarvestToDir(env, co, filepath.Join(co, "sub"), "x"); rc == 0 {
+		t.Error("launch.HarvestToDir into a nested checkout dir should fail")
 	}
 	// The source doc is untouched.
 	if b, _ := os.ReadFile(filepath.Join(co, "keep.md")); string(b) != "precious\n" {
@@ -517,8 +518,8 @@ func TestHarvestToDir_RejectsCheckoutItself(t *testing.T) {
 	}
 	// A dir OUTSIDE the checkout works.
 	out := filepath.Join(t.TempDir(), "out")
-	if rc := harvestToDir(env, co, out, "x"); rc != 0 {
-		t.Errorf("harvestToDir to an external dir should succeed, rc=%d", rc)
+	if rc := launch.HarvestToDir(env, co, out, "x"); rc != 0 {
+		t.Errorf("launch.HarvestToDir to an external dir should succeed, rc=%d", rc)
 	}
 	if _, err := os.Stat(filepath.Join(out, "keep.md")); err != nil {
 		t.Errorf("external harvest missing keep.md: %v", err)
@@ -528,7 +529,7 @@ func TestHarvestToDir_RejectsCheckoutItself(t *testing.T) {
 // TestHarvestToDir_RejectsNestedDirUnderSymlinkedAncestor: the nesting guard
 // must hold when the checkout is reached through a SYMLINKED ANCESTOR.
 //
-// harvestToDir EvalSymlinks's the checkout but --to may not exist yet, and
+// launch.HarvestToDir EvalSymlinks's the checkout but --to may not exist yet, and
 // EvalSymlinks fails outright on a missing path — so a merely Abs+Clean'd dest
 // compared /real/link/co/sub against /real/target/co and concluded "not nested",
 // copying straight into the checkout it was supposed to refuse.
@@ -551,8 +552,8 @@ func TestHarvestToDir_RejectsNestedDirUnderSymlinkedAncestor(t *testing.T) {
 	env := gitEnv(t, "", nil)
 
 	nested := filepath.Join(co, "sub") // does not exist yet
-	if rc := harvestToDir(env, co, nested, "x"); rc == 0 {
-		t.Error("harvestToDir into a nested dir reached through a symlinked ancestor should fail")
+	if rc := launch.HarvestToDir(env, co, nested, "x"); rc == 0 {
+		t.Error("launch.HarvestToDir into a nested dir reached through a symlinked ancestor should fail")
 	}
 	if _, err := os.Stat(nested); err == nil {
 		t.Error("the refused harvest still created the nested dir inside the checkout")
@@ -563,9 +564,9 @@ func TestHarvestToDir_RejectsNestedDirUnderSymlinkedAncestor(t *testing.T) {
 }
 
 func TestBoundSandboxName_LongProfileStaysBounded(t *testing.T) {
-	got := boundSandboxName("api", "abcd1234", strings.Repeat("z", 50), strings.Repeat("p", 50))
-	if len(got) > maxSandboxNameLen {
-		t.Errorf("long profile: len %d > %d (%q)", len(got), maxSandboxNameLen, got)
+	got := launch.BoundSandboxName("api", "abcd1234", strings.Repeat("z", 50), strings.Repeat("p", 50))
+	if len(got) > launch.MaxSandboxNameLen {
+		t.Errorf("long profile: len %d > %d (%q)", len(got), launch.MaxSandboxNameLen, got)
 	}
 	if !strings.Contains(got, "abcd1234") {
 		t.Errorf("repokey trimmed away: %q", got)
@@ -584,8 +585,8 @@ func TestHarvest_IncludesModifiedTrackedDoc(t *testing.T) {
 	writeFile(t, filepath.Join(co, "spec.md"), "v2 uncommitted\n")
 
 	env := gitEnv(t, "", nil)
-	meta := taskMeta{Name: "m", Mainroot: main, Branch: "pix/m", Profile: "default"}
-	dest, err := harvestArtifacts(env, io.Discard, meta, "r", co, "m")
+	meta := launch.TaskMeta{Name: "m", Mainroot: main, Branch: "pix/m", Profile: "default"}
+	dest, err := launch.HarvestArtifacts(env, io.Discard, meta, "r", co, "m")
 	if err != nil {
 		t.Fatalf("harvest: %v", err)
 	}
@@ -596,10 +597,10 @@ func TestHarvest_IncludesModifiedTrackedDoc(t *testing.T) {
 }
 
 func TestParseTaskGcArgs_OverflowRejected(t *testing.T) {
-	if _, err := parseTaskGcArgs([]string{"--days", "999999999999"}); err == nil {
+	if _, err := launch.ParseTaskGcArgs([]string{"--days", "999999999999"}); err == nil {
 		t.Error("absurd --days should be rejected (overflow guard)")
 	}
-	if _, err := parseTaskGcArgs([]string{"--artifact-days", "999999999999"}); err == nil {
+	if _, err := launch.ParseTaskGcArgs([]string{"--artifact-days", "999999999999"}); err == nil {
 		t.Error("absurd --artifact-days should be rejected (overflow guard)")
 	}
 }
@@ -619,10 +620,10 @@ func TestHarvestToDir_DescendantSymlinkAliasRefused(t *testing.T) {
 	}
 	env := gitEnv(t, "", nil)
 	// The root check passes (out != co), but copying docs/plan.md must NOT truncate
-	// the source through the descendant symlink: copyFilePreserve's SameFile guard
-	// makes it an error, so harvestToDir returns non-zero.
-	if rc := harvestToDir(env, co, out, "a"); rc == 0 {
-		t.Error("descendant-symlink alias should fail harvestToDir")
+	// the source through the descendant symlink: launch.CopyFilePreserve's SameFile guard
+	// makes it an error, so launch.HarvestToDir returns non-zero.
+	if rc := launch.HarvestToDir(env, co, out, "a"); rc == 0 {
+		t.Error("descendant-symlink alias should fail launch.HarvestToDir")
 	}
 	if b, _ := os.ReadFile(filepath.Join(co, "docs", "plan.md")); string(b) != "precious\n" {
 		t.Errorf("source doc was clobbered through the symlink: %q", string(b))
@@ -646,8 +647,8 @@ func TestHarvestArtifacts_FailsClosedOnUnwritableDest(t *testing.T) {
 	}
 	defer os.Chmod(root, 0o700)
 	env := gitEnv(t, "", nil)
-	meta := taskMeta{Name: "f", Mainroot: main, Branch: "pix/f", Profile: "default"}
-	if _, err := harvestArtifacts(env, io.Discard, meta, "r", co, "f"); err == nil {
+	meta := launch.TaskMeta{Name: "f", Mainroot: main, Branch: "pix/f", Profile: "default"}
+	if _, err := launch.HarvestArtifacts(env, io.Discard, meta, "r", co, "f"); err == nil {
 		t.Error("harvest must return an error when the dest cannot be created (callers fail closed)")
 	}
 }
@@ -659,11 +660,11 @@ func TestCopyFilePreserve_AtomicReplaceNoTempLeak(t *testing.T) {
 	writeFile(t, src1, "first\n")
 	writeFile(t, src2, "second\n")
 	dst := filepath.Join(dir, "out", "d.md")
-	if ok, err := copyFilePreserve(src1, dst); !ok || err != nil {
+	if ok, err := launch.CopyFilePreserve(src1, dst); !ok || err != nil {
 		t.Fatalf("first copy: ok=%v err=%v", ok, err)
 	}
 	// Re-copy a different source over the same dst: replaces content, no leftovers.
-	if ok, err := copyFilePreserve(src2, dst); !ok || err != nil {
+	if ok, err := launch.CopyFilePreserve(src2, dst); !ok || err != nil {
 		t.Fatalf("second copy: ok=%v err=%v", ok, err)
 	}
 	if b, _ := os.ReadFile(dst); string(b) != "second\n" {

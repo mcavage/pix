@@ -27,6 +27,7 @@ import (
 	"pix/host/mcp"
 	"pix/host/secret"
 	"pix/host/sys/systest"
+	"pix/host/workflow/launch"
 	"reflect"
 	"strings"
 	"testing"
@@ -45,25 +46,25 @@ func sbxOnlyLookPath(name string) (string, error) {
 
 // TestProbeTaskSandbox_HangingSbxIsUnknownBounded pins the run-preflight and
 // task/setup state probe (`pix run`'s create-vs-reattach decision, setup's
-// agent-phase gate, task rm/gc guards all route through probeTaskSandbox):
-// a wedged `sbx ls` must classify sbxUnknown under the bounded seam, quickly.
+// agent-phase gate, task rm/gc guards all route through launch.ProbeTaskSandbox):
+// a wedged `sbx ls` must classify launch.SbxUnknown under the bounded seam, quickly.
 func TestProbeTaskSandbox_HangingSbxIsUnknownBounded(t *testing.T) {
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: sbxOnlyLookPath, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
 	start := time.Now()
-	if st := probeTaskSandbox(env, "pix-x"); st != sbxUnknown {
-		t.Errorf("hanging `sbx ls` must classify sbxUnknown, got %v", st)
+	if st := launch.ProbeTaskSandbox(env, "pix-x"); st != launch.SbxUnknown {
+		t.Errorf("hanging `sbx ls` must classify launch.SbxUnknown, got %v", st)
 	}
 	if el := time.Since(start); el > 10*time.Second {
-		t.Fatalf("probeTaskSandbox took %s — unbounded", el)
+		t.Fatalf("launch.ProbeTaskSandbox took %s — unbounded", el)
 	}
 }
 
 // TestProbeTaskSandbox_UsesBoundedSeam: when the bounded probe seam is wired
-// (defaultShellEnv always wires it), probeTaskSandbox must route through it,
+// (defaultShellEnv always wires it), launch.ProbeTaskSandbox must route through it,
 // never the unbounded env.Run.
 func TestProbeTaskSandbox_UsesBoundedSeam(t *testing.T) {
 	env := hostenv.Env{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
-		t.Fatalf("probeTaskSandbox must use the bounded probe seam, not env.run: %s %v", name, args)
+		t.Fatalf("launch.ProbeTaskSandbox must use the bounded probe seam, not env.run: %s %v", name, args)
 		return "", nil
 	}, RunTimedFn: func(name string, args ...string) (string, bool, error) {
 		if name != "sbx" || len(args) != 1 || args[0] != "ls" {
@@ -71,8 +72,8 @@ func TestProbeTaskSandbox_UsesBoundedSeam(t *testing.T) {
 		}
 		return "pix-x  abc123  running\n", false, nil
 	}}}
-	if st := probeTaskSandbox(env, "pix-x"); st != sbxRunning {
-		t.Errorf("probe-seam `sbx ls` = %v, want sbxRunning", st)
+	if st := launch.ProbeTaskSandbox(env, "pix-x"); st != launch.SbxRunning {
+		t.Errorf("probe-seam `sbx ls` = %v, want launch.SbxRunning", st)
 	}
 	// This used to assert `defaultShellEnv().probe != nil`, guarding against an
 	// unbounded production probe. A nullable seam made that a runtime question;
@@ -87,23 +88,23 @@ func TestProbeTaskSandbox_UsesBoundedSeam(t *testing.T) {
 func TestTaskSandboxStatus_HangingSbxIsEmptyBounded(t *testing.T) {
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: sbxOnlyLookPath, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
 	start := time.Now()
-	if s := taskSandboxStatus(env, "pix-x"); s != "" {
+	if s := launch.TaskSandboxStatus(env, "pix-x"); s != "" {
 		t.Errorf("hanging `sbx ls` must yield an empty display status, got %q", s)
 	}
 	if el := time.Since(start); el > 10*time.Second {
-		t.Fatalf("taskSandboxStatus took %s — unbounded", el)
+		t.Fatalf("launch.TaskSandboxStatus took %s — unbounded", el)
 	}
 }
 
 // TestSetupHandoff_HangingSbxFailsClosed: setup's agent phase probes the
-// sandbox state before any handoff; a hanging sbx is sbxUnknown, which must
+// sandbox state before any handoff; a hanging sbx is launch.SbxUnknown, which must
 // FAIL CLOSED (never launch) and must not hang.
 func TestSetupHandoff_HangingSbxFailsClosed(t *testing.T) {
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: sbxOnlyLookPath, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
 	start := time.Now()
-	state := probeTaskSandbox(env, "pix-ws")
-	if state != sbxUnknown {
-		t.Fatalf("hanging probe must be sbxUnknown, got %v", state)
+	state := launch.ProbeTaskSandbox(env, "pix-ws")
+	if state != launch.SbxUnknown {
+		t.Fatalf("hanging probe must be launch.SbxUnknown, got %v", state)
 	}
 	var out bytes.Buffer
 	err := runSetupHandoff(".", "pix-ws", state, false, &out, func([]string) {
@@ -123,15 +124,15 @@ func TestSetupHandoff_HangingSbxFailsClosed(t *testing.T) {
 // through the unbounded env.Run.
 func TestLocalImageLoaded_HangingSbxBounded(t *testing.T) {
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: sbxOnlyLookPath, RunFn: func(name string, args ...string) (string, error) {
-		t.Fatalf("localImageLoaded must use the bounded probe seam, not env.run: %s %v", name, args)
+		t.Fatalf("launch.LocalImageLoaded must use the bounded probe seam, not env.run: %s %v", name, args)
 		return "", nil
 	}, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
 	start := time.Now()
-	if !localImageLoaded(env, "local-12345") {
+	if !launch.LocalImageLoaded(env, "local-12345") {
 		t.Error("a timed-out `sbx template ls` is no signal — must fail open (true), never block the launch")
 	}
 	if el := time.Since(start); el > 10*time.Second {
-		t.Fatalf("localImageLoaded took %s — unbounded", el)
+		t.Fatalf("launch.LocalImageLoaded took %s — unbounded", el)
 	}
 }
 
@@ -167,9 +168,9 @@ func TestBuildTrustedHostState_HangingSbxBounded(t *testing.T) {
 		return "", fmt.Errorf("no fake output")
 	}, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
 	start := time.Now()
-	hs := buildTrustedHostState(defaultCfg(), env, "")
+	hs := launch.BuildTrustedHostState(defaultCfg(), env, "")
 	if el := time.Since(start); el > 10*time.Second {
-		t.Fatalf("buildTrustedHostState took %s — unbounded", el)
+		t.Fatalf("launch.BuildTrustedHostState took %s — unbounded", el)
 	}
 	if hs.Keys.Anthropic || hs.Keys.OpenAI || hs.Keys.Google {
 		t.Errorf("a hung `sbx secret ls` must never claim a provider key is Present: %+v", hs.Keys)

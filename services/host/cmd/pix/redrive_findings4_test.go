@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"pix/host/mcp"
+	"pix/host/workflow/launch"
 	"pix/host/workspace"
 )
 
@@ -181,11 +182,11 @@ func jsonStr(s string) string {
 func TestCreateReceiptRecordsWorkspace(t *testing.T) {
 	stateDir := t.TempDir()
 	withSandboxMCPStateDirFn(t, func() (string, error) { return stateDir, nil })
-	withCreatePollSeams(t, probeAlways(sbxRunning), time.Millisecond, time.Second)
+	withCreatePollSeams(t, probeAlways(launch.SbxRunning), time.Millisecond, time.Second)
 
 	ws := t.TempDir()
 	canon := workspace.CanonicalPath(ws)
-	if err := execSbxRunAndRecordCreate(trueCmd(t), true, "pix-demo", canon, []string{"slack"}); err != nil {
+	if err := launch.ExecSbxRunAndRecordCreate(trueCmd(t), true, "pix-demo", canon, []string{"slack"}); err != nil {
 		t.Fatal(err)
 	}
 	r, status, err := workspace.ReadMCPReceipt(stateDir, "pix-demo")

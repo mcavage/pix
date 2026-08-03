@@ -7,7 +7,7 @@ package main
 //      readiness.VerdictDenied, and gog registration uses the shared tri-state;
 //  10: every primary readiness probe (doctor/status/run-preflight sbx calls)
 //      is bounded — a hanging sbx can never wedge a verb;
-//  11: doctor's sbxAbsent means POSITIVELY absent, never a generic probe error;
+//  11: doctor's launch.SbxAbsent means POSITIVELY absent, never a generic probe error;
 //  13: `pix mcp load` validates NAME [DIR] strictly before deriving
 //      anything.
 
@@ -31,6 +31,7 @@ import (
 	"pix/host/sys"
 	"pix/host/sys/systest"
 	"pix/host/workflow/doctor"
+	"pix/host/workflow/launch"
 	"pix/host/workflow/onboard"
 	"pix/host/workspace"
 )
@@ -275,7 +276,7 @@ func TestProbeSbxSecrets_HangingSbxIsErrorNotAbsent(t *testing.T) {
 // rule PROCEEDS — only a POSITIVELY confirmed missing key blocks a launch.
 func TestSbxModelKeyState_HangingProbeUnknownProceeds(t *testing.T) {
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
-	present, probeOK := sbxModelKeyState(env)
+	present, probeOK := launch.SbxModelKeyState(env)
 	if present || probeOK {
 		t.Errorf("hanging preflight must be (present=false, probeOK=false) so run proceeds, got (%v,%v)", present, probeOK)
 	}
@@ -320,7 +321,7 @@ func TestDoctor_SecretLsFailure_IsNotSbxAbsent(t *testing.T) {
 	}
 	r := doctor.RunDoctor(cfg, f.Build())
 	if r.SbxAbsent {
-		t.Fatal("sbx IS on PATH — a failing `sbx secret ls` must not set sbxAbsent")
+		t.Fatal("sbx IS on PATH — a failing `sbx secret ls` must not set launch.SbxAbsent")
 	}
 	// Human rendering: the in-sandbox note must NOT appear.
 	var buf bytes.Buffer
@@ -333,10 +334,10 @@ func TestDoctor_SecretLsFailure_IsNotSbxAbsent(t *testing.T) {
 		t.Error("JSON sbx_absent must be false when sbx is present but the probe failed")
 	}
 
-	// Converse: sbx genuinely off PATH -> sbxAbsent true, note rendered.
+	// Converse: sbx genuinely off PATH -> launch.SbxAbsent true, note rendered.
 	absent := doctor.RunDoctor(cfg, hostenvtest.Env{Present: map[string]bool{}}.Build())
 	if !absent.SbxAbsent || !doctor.JsonView(absent, "").SbxAbsent {
-		t.Error("sbx off PATH must set sbxAbsent (human + JSON)")
+		t.Error("sbx off PATH must set launch.SbxAbsent (human + JSON)")
 	}
 	buf.Reset()
 	absent.Render(&buf, false, doctor.Hints())

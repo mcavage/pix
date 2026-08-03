@@ -107,6 +107,7 @@ var pkgLayer = map[string]int{
 	"workflow/onboard":    layerWorkflow,
 	"workflow/doctor":     layerWorkflow,
 	"workflow/gworkspace": layerWorkflow,
+	"workflow/launch":     layerWorkflow,
 
 	// L4 — the command layer.
 	"cmd/pix": layerCommand,

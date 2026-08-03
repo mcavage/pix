@@ -28,6 +28,7 @@ import (
 	"pix/host/hostenv"
 	"pix/host/sys/systest"
 	"pix/host/workflow/doctor"
+	"pix/host/workflow/launch"
 	"pix/host/workspace"
 	"strings"
 	"sync"
@@ -55,11 +56,11 @@ func blockingCmd(t *testing.T) (*exec.Cmd, func()) {
 func TestCreateReceipt_RecordedWhileSessionAlive(t *testing.T) {
 	dir := t.TempDir()
 	withSandboxMCPStateDirFn(t, func() (string, error) { return dir, nil })
-	withCreatePollSeams(t, probeAlways(sbxRunning), time.Millisecond, 5*time.Second)
+	withCreatePollSeams(t, probeAlways(launch.SbxRunning), time.Millisecond, 5*time.Second)
 
 	cmd, release := blockingCmd(t)
 	done := make(chan error, 1)
-	go func() { done <- execSbxRunAndRecordCreate(cmd, true, "pix-live", "", []string{"slack"}) }()
+	go func() { done <- launch.ExecSbxRunAndRecordCreate(cmd, true, "pix-live", "", []string{"slack"}) }()
 
 	// The receipt must become readable while the session is still running.
 	deadline := time.Now().Add(5 * time.Second)
@@ -69,7 +70,7 @@ func TestCreateReceipt_RecordedWhileSessionAlive(t *testing.T) {
 		}
 		select {
 		case err := <-done:
-			t.Fatalf("execSbxRunAndRecordCreate returned before the receipt was observed: %v", err)
+			t.Fatalf("launch.ExecSbxRunAndRecordCreate returned before the receipt was observed: %v", err)
 		default:
 		}
 		if time.Now().After(deadline) {
@@ -93,7 +94,7 @@ func TestCreateReceipt_RecordedWhileSessionAlive(t *testing.T) {
 			t.Fatalf("clean session exit after a recorded create must be nil, got %v", err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("execSbxRunAndRecordCreate never returned after the session ended")
+		t.Fatal("launch.ExecSbxRunAndRecordCreate never returned after the session ended")
 	}
 }
 
@@ -118,11 +119,11 @@ func TestCreateReceipt_MergesConcurrentLoadDropsPriorLifetime(t *testing.T) {
 		if err := workspace.AppendLoadReceipt(dir, sandbox, "fresh", receiptClock); err != nil {
 			t.Errorf("concurrent workspace.AppendLoadReceipt: %v", err)
 		}
-		return sbxRunning
+		return launch.SbxRunning
 	}
 	withCreatePollSeams(t, probe, time.Millisecond, 5*time.Second)
 
-	if err := execSbxRunAndRecordCreate(trueCmd(t), true, sandbox, "", []string{config.GWServerName}); err != nil {
+	if err := launch.ExecSbxRunAndRecordCreate(trueCmd(t), true, sandbox, "", []string{config.GWServerName}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -145,9 +146,9 @@ func TestCreateReceipt_MergesConcurrentLoadDropsPriorLifetime(t *testing.T) {
 func TestCreateReceipt_CleanExitWithoutEvidenceWritesNothing(t *testing.T) {
 	dir := t.TempDir()
 	withSandboxMCPStateDirFn(t, func() (string, error) { return dir, nil })
-	withCreatePollSeams(t, probeAlways(sbxAbsent), time.Millisecond, 5*time.Second)
+	withCreatePollSeams(t, probeAlways(launch.SbxAbsent), time.Millisecond, 5*time.Second)
 
-	if err := execSbxRunAndRecordCreate(trueCmd(t), true, "pix-noev", "", []string{"slack"}); err != nil {
+	if err := launch.ExecSbxRunAndRecordCreate(trueCmd(t), true, "pix-noev", "", []string{"slack"}); err != nil {
 		t.Fatalf("clean exit must surface the process's own nil result, got %v", err)
 	}
 	if _, status, _ := workspace.ReadMCPReceipt(dir, "pix-noev"); status != workspace.MCPStateAbsent {
@@ -163,13 +164,13 @@ func TestCreateReceipt_EvidenceAtExitStillRecorded(t *testing.T) {
 	var calls atomic.Int64
 	probe := func(string) doctor.SbxState {
 		if calls.Add(1) == 1 {
-			return sbxAbsent
+			return launch.SbxAbsent
 		}
-		return sbxRunning
+		return launch.SbxRunning
 	}
 	withCreatePollSeams(t, probe, time.Millisecond, 5*time.Second)
 
-	if err := execSbxRunAndRecordCreate(trueCmd(t), true, "pix-lateev", "", []string{"slack"}); err != nil {
+	if err := launch.ExecSbxRunAndRecordCreate(trueCmd(t), true, "pix-lateev", "", []string{"slack"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if _, status, _ := workspace.ReadMCPReceipt(dir, "pix-lateev"); status != workspace.MCPStateOK {
@@ -186,10 +187,10 @@ func TestCreateReceipt_EvidenceAtExitStillRecorded(t *testing.T) {
 func TestCreateReceipt_PollTimeoutReportsUnrecorded(t *testing.T) {
 	dir := t.TempDir()
 	withSandboxMCPStateDirFn(t, func() (string, error) { return dir, nil })
-	withCreatePollSeams(t, probeAlways(sbxAbsent), time.Millisecond, 30*time.Millisecond)
+	withCreatePollSeams(t, probeAlways(launch.SbxAbsent), time.Millisecond, 30*time.Millisecond)
 
 	start := time.Now()
-	err := execSbxRunAndRecordCreate(exec.Command("sleep", "0.4"), true, "pix-timeout", "", []string{"slack"})
+	err := launch.ExecSbxRunAndRecordCreate(exec.Command("sleep", "0.4"), true, "pix-timeout", "", []string{"slack"})
 	var rerr *workspace.ReceiptRecordError
 	if !errors.As(err, &rerr) {
 		t.Fatalf("want a *workspace.ReceiptRecordError on poll timeout, got %T: %v", err, err)
@@ -211,14 +212,14 @@ func TestApplyReplaceRm_ClearsReceiptOnSuccessRetainsOnFailure(t *testing.T) {
 	dir := t.TempDir()
 	withSandboxMCPStateDirFn(t, func() (string, error) { return dir, nil })
 	sandbox := "pix-replaceclear"
-	plan := runLaunchPlan{RmFirst: true}
+	plan := launch.RunLaunchPlan{RmFirst: true}
 
 	if err := workspace.WriteCreateReceipt(dir, sandbox, "", []string{"slack"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	ok := hostenv.Env{System: &systest.Fake{RunFn: func(string, ...string) (string, error) { return "", nil }}}
-	if err := applyReplaceRm(ok, plan, sandbox); err != nil {
-		t.Fatalf("applyReplaceRm: %v", err)
+	if err := launch.ApplyReplaceRm(ok, plan, sandbox); err != nil {
+		t.Fatalf("launch.ApplyReplaceRm: %v", err)
 	}
 	if _, status, _ := workspace.ReadMCPReceipt(dir, sandbox); status != workspace.MCPStateAbsent {
 		t.Fatalf("status = %v, want absent after a successful replace pre-remove", status)
@@ -228,7 +229,7 @@ func TestApplyReplaceRm_ClearsReceiptOnSuccessRetainsOnFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	bad := hostenv.Env{System: &systest.Fake{RunFn: func(string, ...string) (string, error) { return "", errors.New("rm failed") }}}
-	if err := applyReplaceRm(bad, plan, sandbox); err == nil {
+	if err := launch.ApplyReplaceRm(bad, plan, sandbox); err == nil {
 		t.Fatal("want the rm failure surfaced")
 	}
 	if _, status, _ := workspace.ReadMCPReceipt(dir, sandbox); status != workspace.MCPStateOK {
@@ -245,8 +246,8 @@ func TestRemovePixSandbox_ClearsReceiptOnSuccessRetainsOnFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	ok := hostenv.Env{System: &systest.Fake{RunFn: func(string, ...string) (string, error) { return "", nil }}}
-	if err := removePixSandbox(ok, sandbox); err != nil {
-		t.Fatalf("removePixSandbox: %v", err)
+	if err := launch.RemovePixSandbox(ok, sandbox); err != nil {
+		t.Fatalf("launch.RemovePixSandbox: %v", err)
 	}
 	if _, status, _ := workspace.ReadMCPReceipt(dir, sandbox); status != workspace.MCPStateAbsent {
 		t.Fatalf("status = %v, want absent after `pix rm` succeeded", status)
@@ -256,7 +257,7 @@ func TestRemovePixSandbox_ClearsReceiptOnSuccessRetainsOnFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	bad := hostenv.Env{System: &systest.Fake{RunFn: func(string, ...string) (string, error) { return "", errors.New("rm failed") }}}
-	if err := removePixSandbox(bad, sandbox); err == nil {
+	if err := launch.RemovePixSandbox(bad, sandbox); err == nil {
 		t.Fatal("want the rm failure surfaced")
 	}
 	if _, status, _ := workspace.ReadMCPReceipt(dir, sandbox); status != workspace.MCPStateOK {
@@ -270,7 +271,7 @@ func TestExecuteTaskTeardown_ClearsReceiptOnRemovalRetainsOnAbort(t *testing.T) 
 	dir := t.TempDir()
 	withSandboxMCPStateDirFn(t, func() (string, error) { return dir, nil })
 	sandbox := "pix-t-x-work"
-	m := taskMeta{Name: "work", Sandbox: sandbox, Mainroot: t.TempDir(), Branch: "pix/work"}
+	m := launch.TaskMeta{Name: "work", Sandbox: sandbox, Mainroot: t.TempDir(), Branch: "pix/work"}
 
 	// Success: git snapshot ok, `sbx ls` reads absent, `sbx rm -f` succeeds.
 	if err := workspace.WriteCreateReceipt(dir, sandbox, "", []string{"slack"}, receiptClock); err != nil {
@@ -278,7 +279,7 @@ func TestExecuteTaskTeardown_ClearsReceiptOnRemovalRetainsOnAbort(t *testing.T) 
 	}
 	ok := hostenv.Env{System: &systest.Fake{RunFn: func(string, ...string) (string, error) { return "", nil }}}
 	var out bytes.Buffer
-	if rc := executeTaskTeardown(ok, &out, m, t.TempDir(), "work", "refs/pix/recovered/work", true, taskState{}); rc != 0 {
+	if rc := launch.ExecuteTaskTeardown(ok, &out, m, t.TempDir(), "work", "refs/pix/recovered/work", true, launch.TaskState{}); rc != 0 {
 		t.Fatalf("rc = %d, want 0, out:\n%s", rc, out.String())
 	}
 	if _, status, _ := workspace.ReadMCPReceipt(dir, sandbox); status != workspace.MCPStateAbsent {
@@ -297,7 +298,7 @@ func TestExecuteTaskTeardown_ClearsReceiptOnRemovalRetainsOnAbort(t *testing.T) 
 		return "", nil
 	}}}
 	out.Reset()
-	if rc := executeTaskTeardown(running, &out, m, t.TempDir(), "work", "refs/pix/recovered/work", false, taskState{}); rc == 0 {
+	if rc := launch.ExecuteTaskTeardown(running, &out, m, t.TempDir(), "work", "refs/pix/recovered/work", false, launch.TaskState{}); rc == 0 {
 		t.Fatalf("rc = 0, want non-zero (running sandbox, non-force), out:\n%s", out.String())
 	}
 	if _, status, _ := workspace.ReadMCPReceipt(dir, sandbox); status != workspace.MCPStateOK {

@@ -3,7 +3,7 @@
 // models, pack/provisioned) ENTIRELY IN MEMORY — it is never written to a
 // workspace file. run.go injects the resulting JSON directly into the
 // launcher-generated initial prompt (the one message carrying
-// generatedInputMarker), so the onboarding skill reads trusted facts from that
+// GeneratedInputMarker), so the onboarding skill reads trusted facts from that
 // prompt instead of guessing, and instead of reading anything from the
 // (attacker-influenced) workspace.
 //
@@ -14,11 +14,11 @@
 // instead of — or before — a fresh write) and is plain file content the agent
 // would read like any other untrusted workspace file. Trusted facts must
 // travel only inside the launcher-generated prompt, which the agent already
-// treats specially (see generatedInputMarker in setup.go), never through a
+// treats specially (see GeneratedInputMarker in setup.go), never through a
 // path a hostile clone can also write to.
 //
 // Nothing secret goes in it: booleans and names only, never a key value.
-package main
+package launch
 
 import (
 	"encoding/json"
@@ -89,7 +89,7 @@ type hostStateHost struct {
 	Ready       bool `json:"ready"`       // enabled AND provisioned (safe to claim)
 }
 
-type hostStatePack struct {
+type HostStatePack struct {
 	Active         bool   `json:"active"`          // a pack is ACTUALLY active (config `pack` or a --pack override)
 	Exists         bool   `json:"exists"`          // a loadable pack exists at Path
 	Default        bool   `json:"default"`         // Path IS the default pack root
@@ -99,7 +99,7 @@ type hostStatePack struct {
 	Knowledge      bool   `json:"knowledge"`       // has knowledge/
 }
 
-type hostState struct {
+type HostState struct {
 	Provisioned bool               `json:"provisioned"`
 	Keys        hostStateKeys      `json:"keys"`
 	Memory      hostStateSvc       `json:"memory"`
@@ -107,7 +107,7 @@ type hostState struct {
 	Gog         hostStateGog       `json:"gog"`
 	MCP         hostStateMCP       `json:"mcp"`
 	Models      hostStateModels    `json:"models"`
-	Pack        hostStatePack      `json:"pack"`
+	Pack        HostStatePack      `json:"pack"`
 	Host        hostStateHost      `json:"host"`
 	Identity    hostStateIdentity  `json:"identity"`
 }
@@ -129,31 +129,31 @@ func firstName(full string) string {
 	return ""
 }
 
-// readGitIdentity reads the user's FIRST name from git's GLOBAL config.
+// ReadGitIdentity reads the user's FIRST name from git's GLOBAL config.
 // --global (not repo-local) on purpose: a freshly cloned hostile repo can set a
 // repo-local user.name to an injection payload, and it's cwd-independent so
 // `pix setup /other/dir` still reads the right person. The value is
-// UNTRUSTED display text — sanitizeIdentity reduces the injection surface (strips
+// UNTRUSTED display text — SanitizeIdentity reduces the injection surface (strips
 // terminal-control/format chars, caps length), then firstName takes only the
 // leading token. Email is deliberately NOT read (unused, and it's PII we won't
 // inject). Best-effort: empty when git is absent or unset.
-func readGitIdentity(env hostenv.Env) hostStateIdentity {
+func ReadGitIdentity(env hostenv.Env) hostStateIdentity {
 	id := hostStateIdentity{}
 
 	if out, err := env.Run("git", "config", "--global", "--get", "user.name"); err == nil {
-		id.Name = firstName(sanitizeIdentity(out))
+		id.Name = firstName(SanitizeIdentity(out))
 	}
 	return id
 }
 
-// sanitizeIdentity reduces an untrusted git-config value to a single short line
+// SanitizeIdentity reduces an untrusted git-config value to a single short line
 // of GRAPHIC characters only: first line taken BEFORE trimming (so a leading
 // blank line can't promote line 2), then everything that isn't unicode.IsGraphic
 // is dropped — that excludes C0/C1 controls, DEL, Cf format chars (ANSI ESC, C1
 // CSI U+009B, bidi overrides U+202E), and Zl/Zp line/paragraph separators
 // (U+2028/U+2029). Capped by RUNE count (not bytes) so multibyte names aren't
 // truncated mid-rune or under-counted.
-func sanitizeIdentity(s string) string {
+func SanitizeIdentity(s string) string {
 	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
 		s = s[:i]
 	}
@@ -171,10 +171,10 @@ func sanitizeIdentity(s string) string {
 	return strings.TrimSpace(b.String())
 }
 
-// buildHostState gathers the host-visible facts. Pure w.r.t. its inputs so it is
+// BuildHostState gathers the host-visible facts. Pure w.r.t. its inputs so it is
 // unit-testable: sbxSecretsOut is the raw `sbx secret ls` output (sbxOK false
 // when sbx couldn't be run), dial probes a local port.
-func buildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial func(int) bool, keysSource string, pack hostStatePack) hostState {
+func BuildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial func(int) bool, keysSource string, pack HostStatePack) HostState {
 	dialer := func(p int) bool {
 		if dial == nil {
 			return false
@@ -210,7 +210,7 @@ func buildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial f
 		}
 	}
 
-	hs := hostState{
+	hs := HostState{
 		Keys:      keys,
 		Memory:    hostStateSvc{Enabled: slices.Contains(cfg.Services, "memory"), Up: dialer(rpc.MemoryPortDefault), Port: rpc.MemoryPortDefault},
 		Knowledge: hostStateKnowledge{Bundles: bundles, Seeded: len(bundles) > 0, ServiceUp: dialer(rpc.KnowledgePortDefault)},
@@ -243,18 +243,18 @@ func hasConfiguredKeylessModel(cfg *config.Config) bool {
 	return false
 }
 
-// buildHostStateHost builds the host slice with a SINGLE hostProvisioned() probe so
+// buildHostStateHost builds the host slice with a SINGLE HostProvisioned() probe so
 // Ready can never disagree with Provisioned within one snapshot.
 func buildHostStateHost(cfg *config.Config) hostStateHost {
-	prov := hostProvisioned()
+	prov := HostProvisioned()
 	return hostStateHost{Enabled: cfg.Host.Enabled, Provisioned: prov, Ready: cfg.Host.Enabled && prov}
 }
 
-// hostProvisioned reports whether host mode is actually installed: harness
+// HostProvisioned reports whether host mode is actually installed: harness
 // files, the exact pinned pi core, and the matching curated-extension marker.
 // It mirrors runHostLaunch's preconditions so host-state never claims "ready"
 // for a bare host.enabled flag or a partially upgraded installation.
-func hostProvisioned() bool {
+func HostProvisioned() bool {
 	dir := workspace.HostAgentDir()
 	if _, err := os.Stat(filepath.Join(dir, "settings.json")); err != nil {
 		return false
@@ -268,10 +268,10 @@ func hostProvisioned() bool {
 	if err != nil || checkHostPiVersion(piBin) != nil {
 		return false
 	}
-	return hostPiExtensionsInstalled(dir)
+	return HostPiExtensionsInstalled(dir)
 }
 
-// resolveHostStatePack reports pack truth for the in-VM onboarding agent, so
+// ResolveHostStatePack reports pack truth for the in-VM onboarding agent, so
 // it states facts instead of guessing. `Active` means ACTUALLY active: config
 // `pack` (or a create-time --pack override) names a loadable pack. When
 // neither is set, the DEFAULT pack's existence and facts are still reported
@@ -279,7 +279,7 @@ func hostProvisioned() bool {
 // default pack active merely because it existed on disk, which made the
 // onboarding copy unconditionally claim "a pack is active" on hosts where
 // nothing was.
-func resolveHostStatePack(cfg *config.Config, override string) hostStatePack {
+func ResolveHostStatePack(cfg *config.Config, override string) HostStatePack {
 	root := pack.ActivePackRoot(cfg.Pack, override)
 	active := root != ""
 	if root == "" {
@@ -287,13 +287,13 @@ func resolveHostStatePack(cfg *config.Config, override string) hostStatePack {
 	}
 	p, err := pack.LoadPack(root)
 	if err != nil {
-		return hostStatePack{}
+		return HostStatePack{}
 	}
 	gitInit := false
 	if _, e := os.Stat(filepath.Join(root, ".git")); e == nil {
 		gitInit = true
 	}
-	return hostStatePack{
+	return HostStatePack{
 		Active:         active,
 		Exists:         true,
 		Default:        pack.CanonicalizePackRoot(p.Root) == pack.CanonicalizePackRoot(pack.DefaultPackRoot()),
@@ -304,12 +304,12 @@ func resolveHostStatePack(cfg *config.Config, override string) hostStatePack {
 	}
 }
 
-// buildTrustedHostState gathers the host-visible facts, entirely in memory —
+// BuildTrustedHostState gathers the host-visible facts, entirely in memory —
 // reusing the exact same probes (sbx secret ls, port dial, key-ref source,
 // pack resolution, git identity) writeHostStateFile used to run before it
 // wrote them to a file. Pure w.r.t. env/cfg (all I/O goes through the hostenv.Env
 // seam), so it is unit-testable without touching disk.
-func buildTrustedHostState(cfg *config.Config, env hostenv.Env, packOverride string) hostState {
+func BuildTrustedHostState(cfg *config.Config, env hostenv.Env, packOverride string) HostState {
 	sbxOut, sbxOK := "", false
 	if _, err := env.LookPath("sbx"); err == nil {
 		// BOUNDED (probeRun): a hung `sbx secret ls` leaves sbxOK=false —
@@ -323,18 +323,18 @@ func buildTrustedHostState(cfg *config.Config, env hostenv.Env, packOverride str
 	if secret.ProviderKeyRefsPresent(env) {
 		source = "1password"
 	}
-	hs := buildHostState(cfg, sbxOut, sbxOK, dial, source, resolveHostStatePack(cfg, packOverride))
-	hs.Identity = readGitIdentity(env)
+	hs := BuildHostState(cfg, sbxOut, sbxOK, dial, source, ResolveHostStatePack(cfg, packOverride))
+	hs.Identity = ReadGitIdentity(env)
 	return hs
 }
 
-// encodeTrustedHostState JSON-encodes hs for injection into the
+// EncodeTrustedHostState JSON-encodes hs for injection into the
 // launcher-generated initial prompt. A separate function (rather than
 // inlining json.Marshal at the call site) so the encode step has its own
-// explicit error seam: the caller (injectTrustedHostState) must abort the
+// explicit error seam: the caller (InjectTrustedHostState) must abort the
 // launch BEFORE exec'ing sbx on a non-nil error, never proceed with a
 // half-built or silently-omitted trusted payload.
-func encodeTrustedHostState(hs hostState) ([]byte, error) {
+func EncodeTrustedHostState(hs HostState) ([]byte, error) {
 	b, err := json.Marshal(hs)
 	if err != nil {
 		return nil, fmt.Errorf("encoding trusted host state: %w", err)
@@ -342,25 +342,25 @@ func encodeTrustedHostState(hs hostState) ([]byte, error) {
 	return b, nil
 }
 
-// trustedHostStateBegin/End clearly delimit the trusted host-state JSON block
+// TrustedHostStateBegin/End clearly delimit the trusted host-state JSON block
 // appended to the launcher-generated prompt, so the onboarding skill (and a
 // human glancing at the transcript) can tell exactly where machine-generated
 // data starts and ends inside that one message. Keep this pair in sync with
 // skills/onboarding/SKILL.md's parsing instructions.
 const (
-	trustedHostStateBegin = "\n\n[pix-trusted-host-state]\n"
-	trustedHostStateEnd   = "\n[/pix-trusted-host-state]"
+	TrustedHostStateBegin = "\n\n[pix-trusted-host-state]\n"
+	TrustedHostStateEnd   = "\n[/pix-trusted-host-state]"
 )
 
-// injectTrustedHostState appends the trusted host-state JSON payload to the
+// InjectTrustedHostState appends the trusted host-state JSON payload to the
 // ONE pi passthrough arg that is the launcher's own generated prompt (the arg
-// with generatedInputMarker as a prefix — see setup.go), and ONLY that arg.
+// with GeneratedInputMarker as a prefix — see setup.go), and ONLY that arg.
 // It returns a COPY of args; the input slice is never mutated.
 //
 // This is the ENTIRE mechanism by which trusted host facts reach the fenced
 // in-VM agent: no file is written to the workspace for this purpose. An
-// ordinary user-typed prompt never carries generatedInputMarker, so it is
-// never a target here — injectTrustedHostState must not, and does not, touch
+// ordinary user-typed prompt never carries GeneratedInputMarker, so it is
+// never a target here — InjectTrustedHostState must not, and does not, touch
 // any arg the user actually typed.
 //
 // When no generated-marker arg is present (a normal `pix run` with no
@@ -374,10 +374,10 @@ const (
 // must abort BEFORE exec'ing sbx (the caller in run.go checks the returned
 // error) rather than hand the onboarding agent a generated prompt with no
 // trusted facts, or — worse — let it fall back to reading something else.
-func injectTrustedHostState(args []string, cfg *config.Config, env hostenv.Env, packOverride string) ([]string, error) {
+func InjectTrustedHostState(args []string, cfg *config.Config, env hostenv.Env, packOverride string) ([]string, error) {
 	idx := -1
 	for i, a := range args {
-		if strings.HasPrefix(a, generatedInputMarker) {
+		if strings.HasPrefix(a, GeneratedInputMarker) {
 			idx = i
 			break
 		}
@@ -386,11 +386,11 @@ func injectTrustedHostState(args []string, cfg *config.Config, env hostenv.Env, 
 	if idx < 0 {
 		return out, nil
 	}
-	hs := buildTrustedHostState(cfg, env, packOverride)
-	b, err := encodeTrustedHostState(hs)
+	hs := BuildTrustedHostState(cfg, env, packOverride)
+	b, err := EncodeTrustedHostState(hs)
 	if err != nil {
 		return nil, err
 	}
-	out[idx] = out[idx] + trustedHostStateBegin + string(b) + trustedHostStateEnd
+	out[idx] = out[idx] + TrustedHostStateBegin + string(b) + TrustedHostStateEnd
 	return out, nil
 }

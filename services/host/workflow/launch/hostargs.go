@@ -1,4 +1,4 @@
-package main
+package launch
 
 import (
 	"fmt"
@@ -6,29 +6,29 @@ import (
 	"strings"
 )
 
-// hostOpts carries the resolved `pix host [DIR]` launch options. Like
-// runOpts it is side-effect-free: parseHostArgs never touches the filesystem
+// HostOpts carries the resolved `pix host [DIR]` launch options. Like
+// RunOpts it is side-effect-free: ParseHostArgs never touches the filesystem
 // beyond the workspace existence check, and never reads config.
-type hostOpts struct {
+type HostOpts struct {
 	Workspace   string   // positional DIR (default ".")
 	Model       string   // --model M: active pi model (passed through to pi)
 	Passthrough []string // args after `--`, handed straight to pi
 }
 
 // hostSubcommands are the words `pix host` treats as subcommands, NOT as a
-// workspace DIR. `host` has its OWN parser (separate from parseRunArgs) exactly
+// workspace DIR. `host` has its OWN parser (separate from ParseRunArgs) exactly
 // so a bare `setup` is never misread as a directory: `pix host setup`
 // provisions, `pix host ./setup` launches in a dir literally named setup.
 var hostSubcommands = map[string]bool{"setup": true}
 
-// parseHostArgs parses the `host` verb's argv. It returns the subcommand name
+// ParseHostArgs parses the `host` verb's argv. It returns the subcommand name
 // ("" = launch, "setup" = provision) plus the launch options. A leading
 // -h/--help returns cli.ErrHelpRequested (usage to stdout, exit 0).
-func parseHostArgs(argv []string) (sub string, o hostOpts, err error) {
+func ParseHostArgs(argv []string) (sub string, o HostOpts, err error) {
 	if cli.WantsHelp(argv) {
-		return "", hostOpts{}, cli.ErrHelpRequested
+		return "", HostOpts{}, cli.ErrHelpRequested
 	}
-	o = hostOpts{Workspace: "."}
+	o = HostOpts{Workspace: "."}
 
 	// Subcommand: only recognized as the FIRST token, so a later positional
 	// named "setup" is still a (rejected, non-directory) workspace, not a verb.
@@ -40,7 +40,7 @@ func parseHostArgs(argv []string) (sub string, o hostOpts, err error) {
 		return sub, o, nil
 	}
 
-	// Split off the `--` passthrough first (mirrors parseRunArgs).
+	// Split off the `--` passthrough first (mirrors ParseRunArgs).
 	pre := argv
 	for i, a := range argv {
 		if a == "--" {
@@ -49,7 +49,7 @@ func parseHostArgs(argv []string) (sub string, o hostOpts, err error) {
 			break
 		}
 	}
-	if perr := checkHostPassthrough(o.Passthrough); perr != nil {
+	if perr := CheckHostPassthrough(o.Passthrough); perr != nil {
 		return "", o, perr
 	}
 
@@ -88,19 +88,19 @@ func parseHostArgs(argv []string) (sub string, o hostOpts, err error) {
 			wsSet = true
 		}
 	}
-	if err := validateRunWorkspace(o.Workspace); err != nil {
+	if err := ValidateRunWorkspace(o.Workspace); err != nil {
 		return "", o, err
 	}
 	return "", o, nil
 }
 
-// checkHostPassthrough refuses passthrough flags that would displace the
+// CheckHostPassthrough refuses passthrough flags that would displace the
 // host-guard extension. The launcher appends o.Passthrough to pi's argv AFTER
 // `-e <host-guard.ts>`, so `pix host -- --no-extensions` (or an
 // --extensions/-e override) would launch pi UNGUARDED — the exact thing host
 // mode promises never happens. Both `--flag value` and `--flag=value`
 // spellings are matched. Phase-1 security blocker: fail the parse, never warn.
-func checkHostPassthrough(args []string) error {
+func CheckHostPassthrough(args []string) error {
 	for _, a := range args {
 		name := a
 		if eq := strings.IndexByte(a, '='); eq >= 0 {
@@ -114,7 +114,7 @@ func checkHostPassthrough(args []string) error {
 	return nil
 }
 
-const hostUsage = `usage: pix host [DIR] [--model M] [-- pi-args...]
+const HostUsage = `usage: pix host [DIR] [--model M] [-- pi-args...]
        pix host setup
 
 Run pi DIRECTLY ON THIS MACHINE — no sandbox, no network fence, real

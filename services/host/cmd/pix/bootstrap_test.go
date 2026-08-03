@@ -6,6 +6,7 @@ import (
 	"pix/host/hostenv"
 	"pix/host/secret"
 	"pix/host/sys/systest"
+	"pix/host/workflow/launch"
 	"strings"
 	"testing"
 )
@@ -24,7 +25,7 @@ func TestBootstrapProviderKeys_PresentNoOp(t *testing.T) {
 		return "", nil
 	}}}
 	var out bytes.Buffer
-	if !bootstrapProviderKeys(env, strings.NewReader(""), &out, false) {
+	if !launch.BootstrapProviderKeys(env, strings.NewReader(""), &out, false) {
 		t.Fatal("present key should bootstrap true")
 	}
 	if opCalled {
@@ -41,7 +42,7 @@ func TestBootstrapProviderKeys_MissingNoTTY(t *testing.T) {
 		return "", nil
 	}}}
 	var out bytes.Buffer
-	if bootstrapProviderKeys(env, strings.NewReader("y\n"), &out, false) {
+	if launch.BootstrapProviderKeys(env, strings.NewReader("y\n"), &out, false) {
 		t.Error("no key + no TTY must return false")
 	}
 }

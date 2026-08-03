@@ -18,6 +18,7 @@ import (
 	"pix/host/sys"
 	"pix/host/sys/systest"
 	"pix/host/workflow/doctor"
+	"pix/host/workflow/launch"
 	"pix/host/workflow/onboard"
 	"pix/host/workflow/pack"
 )
@@ -248,7 +249,7 @@ func TestRunSetupCmd_SemanticErrorPrecedesPackAdoption(t *testing.T) {
 // double-prompt + false "ready".
 func TestSetupHostPhase_NoKeyAborts(t *testing.T) {
 	// Isolate from the developer's real config: setupHostPhase consults
-	// configuredKeylessInference -> config.Load(), so a real pix config with
+	// inference.ConfiguredKeylessInference -> config.Load(), so a real pix config with
 	// keyless Ollama bindings on disk would make setup proceed without a model
 	// key, defeating the "must abort" assertion.
 	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
@@ -315,7 +316,7 @@ func TestSetupHostPhase_InvalidFlags_NeverInvokesProviderKeyFlow(t *testing.T) {
 func TestHostStateHostReadiness(t *testing.T) {
 	cfg := &config.Config{MemoryWatcherModel: "x", MemoryEmbedModel: "y"}
 	cfg.Host.Enabled = true
-	hs := buildHostState(cfg, "", false, func(int) bool { return false }, "", hostStatePack{})
+	hs := launch.BuildHostState(cfg, "", false, func(int) bool { return false }, "", launch.HostStatePack{})
 	if !hs.Host.Enabled {
 		t.Error("host.enabled should reflect config")
 	}
@@ -431,16 +432,16 @@ func TestHostModeProviderKeys_SymlinkLoopIsError(t *testing.T) {
 
 // TestOnboardingKickoffCarriesGeneratedMarker: onboardingKickoff is a
 // synthesized user-role message, not something the user typed. It must carry
-// generatedInputMarker so extensions/memory-capture.ts's shouldCaptureUserText
+// launch.GeneratedInputMarker so extensions/memory-capture.ts's shouldCaptureUserText
 // recognizes it and skips capture — the fix for the watcher inventing
-// pix facts/events from the kickoff line (see generatedInputMarker's doc
+// pix facts/events from the kickoff line (see launch.GeneratedInputMarker's doc
 // comment in setup.go).
 func TestOnboardingKickoffCarriesGeneratedMarker(t *testing.T) {
-	if !strings.HasPrefix(onboardingKickoff, generatedInputMarker) {
-		t.Fatalf("onboardingKickoff must start with generatedInputMarker %q, got %q", generatedInputMarker, onboardingKickoff)
+	if !strings.HasPrefix(onboardingKickoff, launch.GeneratedInputMarker) {
+		t.Fatalf("onboardingKickoff must start with launch.GeneratedInputMarker %q, got %q", launch.GeneratedInputMarker, onboardingKickoff)
 	}
-	if !strings.HasPrefix(generatedInputMarker, "[pix-generated:") {
-		t.Fatalf("generatedInputMarker must start with the [pix-generated: contract prefix, got %q", generatedInputMarker)
+	if !strings.HasPrefix(launch.GeneratedInputMarker, "[pix-generated:") {
+		t.Fatalf("launch.GeneratedInputMarker must start with the [pix-generated: contract prefix, got %q", launch.GeneratedInputMarker)
 	}
 }
 
@@ -450,7 +451,7 @@ func TestOnboardingKickoffCarriesGeneratedMarker(t *testing.T) {
 // ("reconciled", not "current"), prints the exact choices, and never calls
 // runFn (never replays the onboarding kickoff into a live session).
 func TestRunSetupHandoff_ExistingSandbox_LeftAloneNoRunFn(t *testing.T) {
-	for _, state := range []doctor.SbxState{sbxRunning, sbxStopped} {
+	for _, state := range []doctor.SbxState{launch.SbxRunning, launch.SbxStopped} {
 		var out bytes.Buffer
 		called := false
 		if err := runSetupHandoff(".", "pix-demo", state, false, &out, func([]string) { called = true }); err != nil {
@@ -483,7 +484,7 @@ func TestRunSetupHandoff_ExistingSandbox_LeftAloneNoRunFn(t *testing.T) {
 func TestRunSetupHandoff_ExistingSandbox_ReplaceRecreatesWithKickoff(t *testing.T) {
 	var out bytes.Buffer
 	var gotArgs []string
-	if err := runSetupHandoff("/some/repo", "pix-repo", sbxRunning, true, &out, func(args []string) { gotArgs = args }); err != nil {
+	if err := runSetupHandoff("/some/repo", "pix-repo", launch.SbxRunning, true, &out, func(args []string) { gotArgs = args }); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	want := []string{"/some/repo", "--replace", "--", onboardingKickoff}
@@ -497,14 +498,14 @@ func TestRunSetupHandoff_ExistingSandbox_ReplaceRecreatesWithKickoff(t *testing.
 	}
 }
 
-// sbxUnknown FAILS CLOSED: no launch, no leave-alone success message — an
+// launch.SbxUnknown FAILS CLOSED: no launch, no leave-alone success message — an
 // error telling the user to retry, because launching blind could replay the
 // kickoff into a live session the probe couldn't see.
 func TestRunSetupHandoff_UnknownState_FailsClosed(t *testing.T) {
 	for _, replace := range []bool{false, true} {
 		var out bytes.Buffer
 		called := false
-		err := runSetupHandoff(".", "pix-demo", sbxUnknown, replace, &out, func([]string) { called = true })
+		err := runSetupHandoff(".", "pix-demo", launch.SbxUnknown, replace, &out, func([]string) { called = true })
 		if err == nil {
 			t.Fatalf("replace=%v: unknown state must return an error", replace)
 		}
@@ -520,7 +521,7 @@ func TestRunSetupHandoff_UnknownState_FailsClosed(t *testing.T) {
 	}
 }
 
-// sbxUnknown's retry command must preserve an EXPLICIT DIR and a requested
+// launch.SbxUnknown's retry command must preserve an EXPLICIT DIR and a requested
 // --replace, both shell-quoted correctly, so copy-pasting the printed retry
 // command reproduces exactly what the user originally asked for (dropping
 // --replace here would silently downgrade a requested recreate into a plain
@@ -528,7 +529,7 @@ func TestRunSetupHandoff_UnknownState_FailsClosed(t *testing.T) {
 func TestRunSetupHandoff_UnknownState_RetryCommandPreservesDirAndReplace(t *testing.T) {
 	var out bytes.Buffer
 	called := false
-	err := runSetupHandoff("/some/repo", "pix-repo", sbxUnknown, true, &out, func([]string) { called = true })
+	err := runSetupHandoff("/some/repo", "pix-repo", launch.SbxUnknown, true, &out, func([]string) { called = true })
 	if err == nil {
 		t.Fatal("unknown state must return an error")
 	}
@@ -542,7 +543,7 @@ func TestRunSetupHandoff_UnknownState_RetryCommandPreservesDirAndReplace(t *test
 
 	// A DIR needing shell quoting must still round-trip, with --replace after it.
 	var out2 bytes.Buffer
-	err2 := runSetupHandoff("/some/repo's dir", "pix-repo", sbxUnknown, true, &out2, func([]string) {})
+	err2 := runSetupHandoff("/some/repo's dir", "pix-repo", launch.SbxUnknown, true, &out2, func([]string) {})
 	if err2 == nil {
 		t.Fatal("unknown state must return an error")
 	}
@@ -557,7 +558,7 @@ func TestRunSetupHandoff_UnknownState_RetryCommandPreservesDirAndReplace(t *test
 func TestRunSetupHandoff_AbsentSandbox_LaunchesWithKickoff(t *testing.T) {
 	var out bytes.Buffer
 	var gotArgs []string
-	if err := runSetupHandoff(".", "pix-demo", sbxAbsent, false, &out, func(args []string) { gotArgs = args }); err != nil {
+	if err := runSetupHandoff(".", "pix-demo", launch.SbxAbsent, false, &out, func(args []string) { gotArgs = args }); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if gotArgs == nil {
@@ -575,7 +576,7 @@ func TestRunSetupHandoff_AbsentSandbox_LaunchesWithKickoff(t *testing.T) {
 func TestRunSetupHandoff_AbsentSandbox_PassesDir(t *testing.T) {
 	var out bytes.Buffer
 	var gotArgs []string
-	if err := runSetupHandoff("/some/repo", "pix-repo", sbxAbsent, false, &out, func(args []string) { gotArgs = args }); err != nil {
+	if err := runSetupHandoff("/some/repo", "pix-repo", launch.SbxAbsent, false, &out, func(args []string) { gotArgs = args }); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(gotArgs) < 3 || gotArgs[0] != "/some/repo" {
@@ -588,7 +589,7 @@ func TestRunSetupHandoff_AbsentSandbox_PassesDir(t *testing.T) {
 func TestRunSetupHandoff_AbsentSandbox_ReplaceHarmless(t *testing.T) {
 	var out bytes.Buffer
 	var gotArgs []string
-	if err := runSetupHandoff(".", "pix-demo", sbxAbsent, true, &out, func(args []string) { gotArgs = args }); err != nil {
+	if err := runSetupHandoff(".", "pix-demo", launch.SbxAbsent, true, &out, func(args []string) { gotArgs = args }); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	want := []string{"--replace", "--", onboardingKickoff}
@@ -608,7 +609,7 @@ func TestRunSetupHandoff_AbsentSandbox_ReplaceHarmless(t *testing.T) {
 func TestRunSetupHandoff_ExistingSandbox_QuotesExplicitDir(t *testing.T) {
 	dir := "/tmp/my repo's checkout"
 	var out bytes.Buffer
-	if err := runSetupHandoff(dir, "pix-checkout", sbxStopped, false, &out, func([]string) {
+	if err := runSetupHandoff(dir, "pix-checkout", launch.SbxStopped, false, &out, func([]string) {
 		t.Fatal("must not launch")
 	}); err != nil {
 		t.Fatalf("unexpected error: %v", err)

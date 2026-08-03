@@ -213,7 +213,7 @@ func TestInferenceManifestCarriesOllamaModels(t *testing.T) {
 			probed("ollama/qwen3.5:9b", "qwen3.5:9b"),
 		},
 	}}
-	_, manifest, err := compileInferenceRuntime(cfg, time.Time{})
+	_, manifest, err := inference.CompileInferenceRuntime(cfg, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +228,7 @@ func TestInferenceManifestCarriesOllamaModels(t *testing.T) {
 	}
 	// The ids must be exactly what `pix run` puts in --models, or the cycle
 	// warns on every one of them at session start.
-	cycle, err := callableRuntimeModels(cfg)
+	cycle, err := inference.CallableRuntimeModels(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

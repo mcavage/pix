@@ -17,6 +17,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/workflow/doctor"
+	"pix/host/workflow/launch"
 	"pix/host/workspace"
 )
 
@@ -31,8 +32,8 @@ func TestMcpReattachWarning_CfgChangeWarns(t *testing.T) {
 	}
 
 	cfg := &config.Config{MCP: []string{"slack", "notion"}} // notion added since create
-	o := runOpts{Workspace: "/repo", Name: "pix-t"}
-	msg := mcpReattachWarning(cfg, o, true)
+	o := launch.RunOpts{Workspace: "/repo", Name: "pix-t"}
+	msg := launch.McpReattachWarning(cfg, o, true)
 	if msg == "" {
 		t.Fatal("expected a warning when a configured server is not in the receipt")
 	}
@@ -67,8 +68,8 @@ func TestMcpReattachWarning_PackChangeWarns(t *testing.T) {
 	}
 
 	cfg := &config.Config{MCP: []string{"slack"}, Pack: packRoot}
-	o := runOpts{Workspace: "/repo", Name: "pix-t"}
-	msg := mcpReattachWarning(cfg, o, true)
+	o := launch.RunOpts{Workspace: "/repo", Name: "pix-t"}
+	msg := launch.McpReattachWarning(cfg, o, true)
 	if msg == "" {
 		t.Fatal("expected a warning when the active pack's integration server is not in the receipt")
 	}
@@ -87,8 +88,8 @@ func TestMcpReattachWarning_ExplicitMCPWarns(t *testing.T) {
 	}
 
 	cfg := &config.Config{}
-	o := runOpts{Workspace: "/repo", Name: "pix-t", MCP: []string{"extra"}}
-	msg := mcpReattachWarning(cfg, o, true)
+	o := launch.RunOpts{Workspace: "/repo", Name: "pix-t", MCP: []string{"extra"}}
+	msg := launch.McpReattachWarning(cfg, o, true)
 	if msg == "" || !strings.Contains(msg, "extra") {
 		t.Errorf("expected a warning naming the explicit --mcp server, got: %q", msg)
 	}
@@ -107,8 +108,8 @@ func TestMcpReattachWarning_AllAttachedSilent(t *testing.T) {
 	}
 
 	cfg := &config.Config{MCP: []string{"slack", config.GWServerName}}
-	o := runOpts{Workspace: "/repo", Name: "pix-t"}
-	if msg := mcpReattachWarning(cfg, o, true); msg != "" {
+	o := launch.RunOpts{Workspace: "/repo", Name: "pix-t"}
+	if msg := launch.McpReattachWarning(cfg, o, true); msg != "" {
 		t.Errorf("expected silence when every desired server is receipted, got: %q", msg)
 	}
 }
@@ -124,8 +125,8 @@ func TestMcpReattachWarning_ReceiptOnlyHistoricalNameSilent(t *testing.T) {
 	}
 
 	cfg := &config.Config{MCP: []string{"slack"}} // old-server no longer configured
-	o := runOpts{Workspace: "/repo", Name: "pix-t"}
-	if msg := mcpReattachWarning(cfg, o, true); msg != "" {
+	o := launch.RunOpts{Workspace: "/repo", Name: "pix-t"}
+	if msg := launch.McpReattachWarning(cfg, o, true); msg != "" {
 		t.Errorf("a receipt-only historical name must never trigger or appear in a warning, got: %q", msg)
 	}
 }
@@ -138,8 +139,8 @@ func TestMcpReattachWarning_AbsentReceipt(t *testing.T) {
 	withSandboxMCPStateDirFn(t, func() (string, error) { return sd, nil })
 
 	cfg := &config.Config{MCP: []string{config.GWServerName}}
-	o := runOpts{Workspace: "/repo", Name: "pix-t"}
-	msg := mcpReattachWarning(cfg, o, true)
+	o := launch.RunOpts{Workspace: "/repo", Name: "pix-t"}
+	msg := launch.McpReattachWarning(cfg, o, true)
 	if msg == "" {
 		t.Fatal("expected a warning with no receipt at all")
 	}
@@ -169,8 +170,8 @@ func TestMcpReattachWarning_CorruptReceipt(t *testing.T) {
 	}
 
 	cfg := &config.Config{MCP: []string{config.GWServerName}}
-	o := runOpts{Workspace: "/repo", Name: "pix-t"}
-	msg := mcpReattachWarning(cfg, o, true)
+	o := launch.RunOpts{Workspace: "/repo", Name: "pix-t"}
+	msg := launch.McpReattachWarning(cfg, o, true)
 	if msg == "" || !strings.Contains(msg, "cannot be verified") {
 		t.Errorf("expected a cannot-be-verified warning for a corrupt receipt, got: %q", msg)
 	}
@@ -186,13 +187,13 @@ func TestMcpReattachWarning_SilentOnCreateOrReplace(t *testing.T) {
 	sd := t.TempDir()
 	withSandboxMCPStateDirFn(t, func() (string, error) { return sd, nil })
 	cfg := &config.Config{MCP: []string{config.GWServerName}}
-	o := runOpts{Workspace: "/repo", Name: "pix-t"}
+	o := launch.RunOpts{Workspace: "/repo", Name: "pix-t"}
 
-	if msg := mcpReattachWarning(cfg, o, false); msg != "" {
+	if msg := launch.McpReattachWarning(cfg, o, false); msg != "" {
 		t.Errorf("must not warn on a fresh create, got: %q", msg)
 	}
 	o.Replace = true
-	if msg := mcpReattachWarning(cfg, o, true); msg != "" {
+	if msg := launch.McpReattachWarning(cfg, o, true); msg != "" {
 		t.Errorf("must not warn on --replace, got: %q", msg)
 	}
 }
@@ -203,14 +204,14 @@ func TestMcpReattachWarning_NoDesiredServersSilent(t *testing.T) {
 	sd := t.TempDir()
 	withSandboxMCPStateDirFn(t, func() (string, error) { return sd, nil })
 	cfg := &config.Config{}
-	o := runOpts{Workspace: "/repo", Name: "pix-t"}
-	if msg := mcpReattachWarning(cfg, o, true); msg != "" {
+	o := launch.RunOpts{Workspace: "/repo", Name: "pix-t"}
+	if msg := launch.McpReattachWarning(cfg, o, true); msg != "" {
 		t.Errorf("no desired MCP servers should never warn, got: %q", msg)
 	}
 }
 
 // TestMcpReattachWarning_FiresOnBothRunningAndStopped: the warning is keyed
-// on `reattaching` (the same signal planSandboxLaunch resolves for BOTH a
+// on `reattaching` (the same signal launch.PlanSandboxLaunch resolves for BOTH a
 // running and a stopped sandbox; see TestPlanSandboxLaunch_RunningReattaches
 // / _StoppedReattaches), so it must fire identically whichever state
 // produced that reattach decision.
@@ -221,20 +222,20 @@ func TestMcpReattachWarning_FiresOnBothRunningAndStopped(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := &config.Config{MCP: []string{config.GWServerName}}
-	o := runOpts{Workspace: "/repo", Name: "pix-t"}
+	o := launch.RunOpts{Workspace: "/repo", Name: "pix-t"}
 
-	for _, state := range []doctor.SbxState{sbxRunning, sbxStopped} {
-		plan := planSandboxLaunch(state, false, cfg, o, "0.0.99")
+	for _, state := range []doctor.SbxState{launch.SbxRunning, launch.SbxStopped} {
+		plan := launch.PlanSandboxLaunch(state, false, cfg, o, "0.0.99")
 		if !plan.Reattach {
 			t.Fatalf("expected %v to reattach", state)
 		}
-		if msg := mcpReattachWarning(cfg, o, plan.Reattach); msg == "" {
+		if msg := launch.McpReattachWarning(cfg, o, plan.Reattach); msg == "" {
 			t.Errorf("expected a warning reattaching from state %v", state)
 		}
 	}
 }
 
-// TestMcpReattachWarning_NeverAutoLoads: calling mcpReattachWarning must never
+// TestMcpReattachWarning_NeverAutoLoads: calling launch.McpReattachWarning must never
 // itself execute `pix mcp load` or write a load receipt; it is
 // read-only reporting. Proven by asserting the receipt is byte-for-byte
 // unchanged after the call.
@@ -250,14 +251,14 @@ func TestMcpReattachWarning_NeverAutoLoads(t *testing.T) {
 	}
 
 	cfg := &config.Config{MCP: []string{"slack", "notion"}}
-	o := runOpts{Workspace: "/repo", Name: "pix-t"}
-	_ = mcpReattachWarning(cfg, o, true)
+	o := launch.RunOpts{Workspace: "/repo", Name: "pix-t"}
+	_ = launch.McpReattachWarning(cfg, o, true)
 
 	after, err := os.ReadFile(filepath.Join(sd, "sandboxes", "pix-t", "mcp.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(before) != string(after) {
-		t.Errorf("mcpReattachWarning must never mutate the receipt (no auto-load); before=%q after=%q", before, after)
+		t.Errorf("launch.McpReattachWarning must never mutate the receipt (no auto-load); before=%q after=%q", before, after)
 	}
 }

@@ -12,14 +12,15 @@ import (
 	"pix/host/sys"
 	"pix/host/sys/systest"
 	"pix/host/workflow/doctor"
+	"pix/host/workflow/launch"
 )
 
 // TestPlanSandboxLaunch_AbsentCreates (a): no sandbox by that name -> a full
 // create, argv carries --kit like any other fresh launch.
 func TestPlanSandboxLaunch_AbsentCreates(t *testing.T) {
 	cfg := &config.Config{}
-	o := runOpts{Workspace: ".", Name: "pix-t"}
-	plan := planSandboxLaunch(sbxAbsent, false, cfg, o, "0.0.99")
+	o := launch.RunOpts{Workspace: ".", Name: "pix-t"}
+	plan := launch.PlanSandboxLaunch(launch.SbxAbsent, false, cfg, o, "0.0.99")
 
 	if plan.Reattach {
 		t.Error("absent sandbox must not reattach")
@@ -38,13 +39,13 @@ func TestPlanSandboxLaunch_AbsentCreates(t *testing.T) {
 func TestPlanSandboxLaunch_RunningReattaches(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.MCP = []string{"slack"}
-	o := runOpts{
+	o := launch.RunOpts{
 		Workspace:   ".",
 		Name:        "pix-t",
 		Kits:        []string{"/flag/kit"},
 		Passthrough: []string{"--resume"},
 	}
-	plan := planSandboxLaunch(sbxRunning, false, cfg, o, "0.0.99")
+	plan := launch.PlanSandboxLaunch(launch.SbxRunning, false, cfg, o, "0.0.99")
 
 	if !plan.Reattach {
 		t.Error("running sandbox with no --replace should reattach")
@@ -72,8 +73,8 @@ func TestPlanSandboxLaunch_RunningReattaches(t *testing.T) {
 // --replace reattaches with the same shape as a running one.
 func TestPlanSandboxLaunch_StoppedReattaches(t *testing.T) {
 	cfg := &config.Config{}
-	o := runOpts{Workspace: ".", Name: "pix-t"}
-	plan := planSandboxLaunch(sbxStopped, false, cfg, o, "0.0.99")
+	o := launch.RunOpts{Workspace: ".", Name: "pix-t"}
+	plan := launch.PlanSandboxLaunch(launch.SbxStopped, false, cfg, o, "0.0.99")
 
 	if !plan.Reattach {
 		t.Error("stopped sandbox with no --replace should reattach")
@@ -96,10 +97,10 @@ func TestPlanSandboxLaunch_StoppedReattaches(t *testing.T) {
 // regardless of the probed state, for both running and stopped.
 func TestPlanSandboxLaunch_ReplaceRecreates(t *testing.T) {
 	cfg := &config.Config{}
-	o := runOpts{Workspace: ".", Name: "pix-t", Replace: true}
+	o := launch.RunOpts{Workspace: ".", Name: "pix-t", Replace: true}
 
-	for _, state := range []doctor.SbxState{sbxRunning, sbxStopped} {
-		plan := planSandboxLaunch(state, true, cfg, o, "0.0.99")
+	for _, state := range []doctor.SbxState{launch.SbxRunning, launch.SbxStopped} {
+		plan := launch.PlanSandboxLaunch(state, true, cfg, o, "0.0.99")
 		if plan.Reattach {
 			t.Errorf("state=%v --replace must not reattach", state)
 		}
@@ -116,8 +117,8 @@ func TestPlanSandboxLaunch_ReplaceRecreates(t *testing.T) {
 // harmless — no rm is strictly needed, but it must still create.
 func TestPlanSandboxLaunch_ReplaceOnAbsent(t *testing.T) {
 	cfg := &config.Config{}
-	o := runOpts{Workspace: ".", Name: "pix-t", Replace: true}
-	plan := planSandboxLaunch(sbxAbsent, true, cfg, o, "0.0.99")
+	o := launch.RunOpts{Workspace: ".", Name: "pix-t", Replace: true}
+	plan := launch.PlanSandboxLaunch(launch.SbxAbsent, true, cfg, o, "0.0.99")
 
 	if plan.Reattach {
 		t.Error("--replace on an absent sandbox must not reattach")
@@ -135,8 +136,8 @@ func TestPlanSandboxLaunch_ReplaceOnAbsent(t *testing.T) {
 // into an existing sandbox.
 func TestPlanSandboxLaunch_UnknownFailsClosed(t *testing.T) {
 	cfg := &config.Config{}
-	o := runOpts{Workspace: ".", Name: "pix-t"}
-	plan := planSandboxLaunch(sbxUnknown, false, cfg, o, "0.0.99")
+	o := launch.RunOpts{Workspace: ".", Name: "pix-t"}
+	plan := launch.PlanSandboxLaunch(launch.SbxUnknown, false, cfg, o, "0.0.99")
 	if plan.Err == nil || plan.Reattach || plan.RmFirst || len(plan.Args) != 0 {
 		t.Fatalf("unknown state must fail closed with no action: %+v", plan)
 	}
@@ -146,8 +147,8 @@ func TestPlanSandboxLaunch_UnknownFailsClosed(t *testing.T) {
 // carries no action in its plan.
 func TestPlanSandboxLaunch_ReplaceOnUnknown_FailsClosed(t *testing.T) {
 	cfg := &config.Config{}
-	o := runOpts{Workspace: ".", Name: "pix-t", Replace: true}
-	plan := planSandboxLaunch(sbxUnknown, true, cfg, o, "0.0.99")
+	o := launch.RunOpts{Workspace: ".", Name: "pix-t", Replace: true}
+	plan := launch.PlanSandboxLaunch(launch.SbxUnknown, true, cfg, o, "0.0.99")
 	if plan.Err == nil {
 		t.Fatal("--replace on an indeterminate (unknown) sandbox state must fail closed with an error")
 	}
@@ -171,15 +172,15 @@ func TestPlanSandboxLaunch_ReplaceOnUnknown_FailsClosed(t *testing.T) {
 
 func TestRunReplaceCommand_BareForCwdDefault(t *testing.T) {
 	for _, ws := range []string{".", ""} {
-		if got := runReplaceCommand(ws); got != "pix run --replace" {
-			t.Errorf("runReplaceCommand(%q) = %q, want bare %q", ws, got, "pix run --replace")
+		if got := launch.RunReplaceCommand(ws); got != "pix run --replace" {
+			t.Errorf("launch.RunReplaceCommand(%q) = %q, want bare %q", ws, got, "pix run --replace")
 		}
 	}
 }
 
 func TestRunReplaceCommand_PreservesExplicitWorkspace(t *testing.T) {
-	if got := runReplaceCommand("/home/mark/myproject"); got != "pix run /home/mark/myproject --replace" {
-		t.Errorf("runReplaceCommand(explicit) = %q, want the explicit path preserved", got)
+	if got := launch.RunReplaceCommand("/home/mark/myproject"); got != "pix run /home/mark/myproject --replace" {
+		t.Errorf("launch.RunReplaceCommand(explicit) = %q, want the explicit path preserved", got)
 	}
 }
 
@@ -188,10 +189,10 @@ func TestRunReplaceCommand_PreservesExplicitWorkspace(t *testing.T) {
 // paste-and-break, or worse, silently split into multiple shell words).
 func TestRunReplaceCommand_QuotesUnsafeWorkspace(t *testing.T) {
 	ws := "/home/mark/my repo's"
-	got := runReplaceCommand(ws)
+	got := launch.RunReplaceCommand(ws)
 	want := "pix run " + sys.ShellQuote(ws) + " --replace"
 	if got != want {
-		t.Errorf("runReplaceCommand(%q) = %q, want %q", ws, got, want)
+		t.Errorf("launch.RunReplaceCommand(%q) = %q, want %q", ws, got, want)
 	}
 }
 
@@ -217,7 +218,7 @@ func TestMcpLoadCommand_QuotesWorkspaceAndName(t *testing.T) {
 	}
 }
 
-// stalePackReattachWarning must embed the SAME explicit-workspace-preserving
+// launch.StalePackReattachWarning must embed the SAME explicit-workspace-preserving
 // recovery command, not a bare --replace that would target the wrong sandbox
 // if cwd differs from the workspace that triggered the warning.
 func TestStalePackReattachWarning_PreservesExplicitWorkspaceInFix(t *testing.T) {
@@ -226,11 +227,11 @@ func TestStalePackReattachWarning_PreservesExplicitWorkspaceInFix(t *testing.T) 
 		t.Fatal(err)
 	}
 	oldRoot := filepath.Join(t.TempDir(), "old-pack")
-	writeSandboxPackMarker(ws, oldRoot)
+	launch.WriteSandboxPackMarker(ws, oldRoot)
 	cfg := &config.Config{Pack: filepath.Join(t.TempDir(), "new-pack")}
 
-	msg := stalePackReattachWarning(cfg, runOpts{Workspace: ws}, true)
-	want := runReplaceCommand(ws)
+	msg := launch.StalePackReattachWarning(cfg, launch.RunOpts{Workspace: ws}, true)
+	want := launch.RunReplaceCommand(ws)
 	if !strings.Contains(msg, want) {
 		t.Errorf("warning must embed the explicit-workspace recovery command %q, got: %q", want, msg)
 	}
@@ -239,10 +240,10 @@ func TestStalePackReattachWarning_PreservesExplicitWorkspaceInFix(t *testing.T) 
 // TestBuildReattachArgs_NoPassthrough: with no passthrough there is no trailing
 // `--`.
 func TestBuildReattachArgs_NoPassthrough(t *testing.T) {
-	args := buildReattachArgs(runOpts{Name: "pix-t"})
+	args := launch.BuildReattachArgs(launch.RunOpts{Name: "pix-t"})
 	want := "run --name pix-t"
 	if strings.Join(args, " ") != want {
-		t.Errorf("buildReattachArgs = %v, want %q", args, want)
+		t.Errorf("launch.BuildReattachArgs = %v, want %q", args, want)
 	}
 }
 
@@ -251,29 +252,29 @@ func TestBuildReattachArgs_NoPassthrough(t *testing.T) {
 // run.go) MUST reach pi on a re-attach exactly like it does on create —
 // --model is a pi RUNTIME arg, not a create-only sbx flag.
 func TestBuildReattachArgs_ForwardsModel(t *testing.T) {
-	args := buildReattachArgs(runOpts{Name: "pix-t", Model: "openai/gpt-5.6-sol"})
+	args := launch.BuildReattachArgs(launch.RunOpts{Name: "pix-t", Model: "openai/gpt-5.6-sol"})
 	want := []string{"run", "--name", "pix-t", "--", "--model", "openai/gpt-5.6-sol"}
 	if len(args) != len(want) {
-		t.Fatalf("buildReattachArgs = %v, want %v", args, want)
+		t.Fatalf("launch.BuildReattachArgs = %v, want %v", args, want)
 	}
 	for i := range want {
 		if args[i] != want[i] {
-			t.Fatalf("buildReattachArgs = %v, want %v", args, want)
+			t.Fatalf("launch.BuildReattachArgs = %v, want %v", args, want)
 		}
 	}
 }
 
 // TestBuildReattachArgs_ModelAndPassthrough: --model precedes the user's own
-// passthrough after `--`, mirroring buildSbxArgs' own ordering.
+// passthrough after `--`, mirroring launch.BuildSbxArgs' own ordering.
 func TestBuildReattachArgs_ModelAndPassthrough(t *testing.T) {
-	args := buildReattachArgs(runOpts{Name: "pix-t", Model: "anthropic/claude-sonnet-5", Passthrough: []string{"--resume"}})
+	args := launch.BuildReattachArgs(launch.RunOpts{Name: "pix-t", Model: "anthropic/claude-sonnet-5", Passthrough: []string{"--resume"}})
 	want := []string{"run", "--name", "pix-t", "--", "--model", "anthropic/claude-sonnet-5", "--resume"}
 	if len(args) != len(want) {
-		t.Fatalf("buildReattachArgs = %v, want %v", args, want)
+		t.Fatalf("launch.BuildReattachArgs = %v, want %v", args, want)
 	}
 	for i := range want {
 		if args[i] != want[i] {
-			t.Fatalf("buildReattachArgs = %v, want %v", args, want)
+			t.Fatalf("launch.BuildReattachArgs = %v, want %v", args, want)
 		}
 	}
 }
@@ -281,14 +282,14 @@ func TestBuildReattachArgs_ModelAndPassthrough(t *testing.T) {
 // TestBuildReattachArgs_PassthroughOnly_NoModel: with o.Model empty, only the
 // passthrough forwards — no stray --model.
 func TestBuildReattachArgs_PassthroughOnly_NoModel(t *testing.T) {
-	args := buildReattachArgs(runOpts{Name: "pix-t", Passthrough: []string{"--resume"}})
+	args := launch.BuildReattachArgs(launch.RunOpts{Name: "pix-t", Passthrough: []string{"--resume"}})
 	want := []string{"run", "--name", "pix-t", "--", "--resume"}
 	if len(args) != len(want) {
-		t.Fatalf("buildReattachArgs = %v, want %v", args, want)
+		t.Fatalf("launch.BuildReattachArgs = %v, want %v", args, want)
 	}
 	for i := range want {
 		if args[i] != want[i] {
-			t.Fatalf("buildReattachArgs = %v, want %v", args, want)
+			t.Fatalf("launch.BuildReattachArgs = %v, want %v", args, want)
 		}
 	}
 	if contains(args, []string{"--model"}) {
@@ -300,14 +301,14 @@ func TestBuildReattachArgs_PassthroughOnly_NoModel(t *testing.T) {
 // no trailing `--` at all (matches TestBuildReattachArgs_NoPassthrough, kept
 // explicit here since it's the third case review finding 1 calls out).
 func TestBuildReattachArgs_NeitherModelNorPassthrough(t *testing.T) {
-	args := buildReattachArgs(runOpts{Name: "pix-t"})
+	args := launch.BuildReattachArgs(launch.RunOpts{Name: "pix-t"})
 	if contains(args, []string{"--"}) {
 		t.Errorf("no trailing -- expected with neither model nor passthrough, got %v", args)
 	}
 }
 
 // TestApplyReplaceRm_FailurePropagatesAndBlocksCreate (review finding 2,
-// MEDIUM): when `sbx rm -f` fails, applyReplaceRm must return a non-nil error
+// MEDIUM): when `sbx rm -f` fails, launch.ApplyReplaceRm must return a non-nil error
 // naming the sandbox — run.go's caller then os.Exit(1)s WITHOUT ever building
 // or execing the create argv. We mirror that control flow here (a `created`
 // flag that only flips on err==nil) to prove the failure blocks the create
@@ -318,9 +319,9 @@ func TestApplyReplaceRm_FailurePropagatesAndBlocksCreate(t *testing.T) {
 		recorded = append(recorded, append([]string{cmd}, args...))
 		return "Error: cannot remove sandbox", fmt.Errorf("exit status 1")
 	}}}
-	plan := runLaunchPlan{RmFirst: true, Args: []string{"run", "pix", "."}}
+	plan := launch.RunLaunchPlan{RmFirst: true, Args: []string{"run", "pix", "."}}
 
-	err := applyReplaceRm(env, plan, "pix-t")
+	err := launch.ApplyReplaceRm(env, plan, "pix-t")
 	if err == nil {
 		t.Fatal("expected an error when `sbx rm -f` fails")
 	}
@@ -329,7 +330,7 @@ func TestApplyReplaceRm_FailurePropagatesAndBlocksCreate(t *testing.T) {
 	}
 
 	// Mirror run.go's control flow: it only proceeds to exec the create argv when
-	// applyReplaceRm returns nil.
+	// launch.ApplyReplaceRm returns nil.
 	created := err == nil
 	if created {
 		t.Error("create must NOT be attempted when rm -f fails")
@@ -343,8 +344,8 @@ func TestApplyReplaceRm_FailurePropagatesAndBlocksCreate(t *testing.T) {
 // rm returns nil, so run.go's caller proceeds to create.
 func TestApplyReplaceRm_SuccessAllowsCreate(t *testing.T) {
 	env := hostenv.Env{System: &systest.Fake{RunFn: func(cmd string, args ...string) (string, error) { return "", nil }}}
-	plan := runLaunchPlan{RmFirst: true}
-	if err := applyReplaceRm(env, plan, "pix-t"); err != nil {
+	plan := launch.RunLaunchPlan{RmFirst: true}
+	if err := launch.ApplyReplaceRm(env, plan, "pix-t"); err != nil {
 		t.Errorf("expected nil error on a successful rm, got %v", err)
 	}
 }
@@ -354,44 +355,44 @@ func TestApplyReplaceRm_SuccessAllowsCreate(t *testing.T) {
 func TestApplyReplaceRm_NoOpWhenNotNeeded(t *testing.T) {
 	called := false
 	env := hostenv.Env{System: &systest.Fake{RunFn: func(cmd string, args ...string) (string, error) { called = true; return "", nil }}}
-	if err := applyReplaceRm(env, runLaunchPlan{RmFirst: false}, "pix-t"); err != nil {
+	if err := launch.ApplyReplaceRm(env, launch.RunLaunchPlan{RmFirst: false}, "pix-t"); err != nil {
 		t.Errorf("expected nil error, got %v", err)
 	}
 	if called {
-		t.Error("applyReplaceRm must not call env.Run when RmFirst is false")
+		t.Error("launch.ApplyReplaceRm must not call env.Run when RmFirst is false")
 	}
 }
 
 // TestWillCreate_MatchesPlanSandboxLaunchReattachDecision (review finding 3,
-// MEDIUM): willCreate is the single source of truth run.go uses to decide
+// MEDIUM): launch.WillCreate is the single source of truth run.go uses to decide
 // whether to resolve create-only inputs (checkout/--dev/kit) BEFORE the
 // state probe's create-vs-reattach-vs-replace decision is even known. It must
-// stay in lockstep with planSandboxLaunch's own branching: false exactly when
-// planSandboxLaunch would produce a plain re-attach.
+// stay in lockstep with launch.PlanSandboxLaunch's own branching: false exactly when
+// launch.PlanSandboxLaunch would produce a plain re-attach.
 func TestWillCreate_MatchesPlanSandboxLaunchReattachDecision(t *testing.T) {
 	cfg := &config.Config{}
-	o := runOpts{Workspace: ".", Name: "pix-t"}
+	o := launch.RunOpts{Workspace: ".", Name: "pix-t"}
 	for _, tc := range []struct {
 		State   doctor.SbxState
 		replace bool
 		want    bool
 	}{
-		{sbxAbsent, false, true},
-		{sbxUnknown, false, false},
-		{sbxRunning, false, false},
-		{sbxStopped, false, false},
-		{sbxRunning, true, true},
-		{sbxStopped, true, true},
-		{sbxAbsent, true, true},
-		{sbxUnknown, true, false},
+		{launch.SbxAbsent, false, true},
+		{launch.SbxUnknown, false, false},
+		{launch.SbxRunning, false, false},
+		{launch.SbxStopped, false, false},
+		{launch.SbxRunning, true, true},
+		{launch.SbxStopped, true, true},
+		{launch.SbxAbsent, true, true},
+		{launch.SbxUnknown, true, false},
 	} {
-		got := willCreate(tc.State, tc.replace)
+		got := launch.WillCreate(tc.State, tc.replace)
 		if got != tc.want {
-			t.Errorf("willCreate(%v, %v) = %v, want %v", tc.State, tc.replace, got, tc.want)
+			t.Errorf("launch.WillCreate(%v, %v) = %v, want %v", tc.State, tc.replace, got, tc.want)
 		}
-		plan := planSandboxLaunch(tc.State, tc.replace, cfg, o, "0.0.99")
+		plan := launch.PlanSandboxLaunch(tc.State, tc.replace, cfg, o, "0.0.99")
 		if plan.Err == nil && got == plan.Reattach {
-			t.Errorf("willCreate(%v, %v) = %v must be the inverse of plan.Reattach = %v", tc.State, tc.replace, got, plan.Reattach)
+			t.Errorf("launch.WillCreate(%v, %v) = %v must be the inverse of plan.Reattach = %v", tc.State, tc.replace, got, plan.Reattach)
 		}
 	}
 }
@@ -401,80 +402,80 @@ func TestWillCreate_MatchesPlanSandboxLaunchReattachDecision(t *testing.T) {
 // `pix run --name existing --dev` with no resolvable checkout would exit
 // on the checkout error instead of re-attaching (--dev is create/replace-only).
 // This test exercises the actual decision predicate run.go now gates the
-// resolveRepoRoot() call behind: for a state that reattaches, willCreate must
-// be false so run.go's `if willCreate(state, o.Replace) { ...resolveRepoRoot...
+// launch.ResolveRepoRoot() call behind: for a state that reattaches, launch.WillCreate must
+// be false so run.go's `if launch.WillCreate(state, o.Replace) { ...resolveRepoRoot...
 // }` branch is skipped entirely — a missing checkout is never even asked
 // about, let alone allowed to fail the launch.
 func TestRunDevResolution_SkippedOnReattach(t *testing.T) {
-	for _, state := range []doctor.SbxState{sbxRunning, sbxStopped} {
-		if willCreate(state, false) {
-			t.Fatalf("state=%v: willCreate must be false so --dev/checkout resolution (which needs a real repo"+
+	for _, state := range []doctor.SbxState{launch.SbxRunning, launch.SbxStopped} {
+		if launch.WillCreate(state, false) {
+			t.Fatalf("state=%v: launch.WillCreate must be false so --dev/checkout resolution (which needs a real repo"+
 				" checkout) is skipped on a plain re-attach", state)
 		}
 	}
 	// And the create/replace paths DO need it resolved.
-	for _, state := range []doctor.SbxState{sbxAbsent} {
-		if !willCreate(state, false) {
-			t.Fatalf("state=%v: willCreate must be true so --dev/checkout resolution runs for a fresh create", state)
+	for _, state := range []doctor.SbxState{launch.SbxAbsent} {
+		if !launch.WillCreate(state, false) {
+			t.Fatalf("state=%v: launch.WillCreate must be true so --dev/checkout resolution runs for a fresh create", state)
 		}
 	}
-	if willCreate(sbxUnknown, false) {
+	if launch.WillCreate(launch.SbxUnknown, false) {
 		t.Fatal("unknown state must fail closed before resolving create-only inputs")
 	}
-	if !willCreate(sbxRunning, true) {
+	if !launch.WillCreate(launch.SbxRunning, true) {
 		t.Fatal("--replace on a running sandbox must still resolve --dev/checkout (it recreates)")
 	}
 }
 
 // TestParseRunArgs_Replace: --replace parses as a bare boolean flag.
 func TestParseRunArgs_Replace(t *testing.T) {
-	o, err := parseRunArgs([]string{"--replace"})
+	o, err := launch.ParseRunArgs([]string{"--replace"})
 	if err != nil {
-		t.Fatalf("parseRunArgs(--replace) error: %v", err)
+		t.Fatalf("launch.ParseRunArgs(--replace) error: %v", err)
 	}
 	if !o.Replace {
 		t.Error("expected Replace=true")
 	}
 }
 
-// localImageLoaded: present tag -> true; absent tag -> false; fails OPEN when it
+// launch.LocalImageLoaded: present tag -> true; absent tag -> false; fails OPEN when it
 // can't check (no sbx / ls error) so it never falsely refuses a launch.
 func TestLocalImageLoaded(t *testing.T) {
-	lsOut := dockerImageRepo + "  local-111  abc123\n" +
-		dockerImageRepo + "  local-222  def456\n"
+	lsOut := launch.DockerImageRepo + "  local-111  abc123\n" +
+		launch.DockerImageRepo + "  local-222  def456\n"
 	present := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunFn: func(string, ...string) (string, error) { return lsOut, nil }}}
-	if !localImageLoaded(present, "local-222") {
+	if !launch.LocalImageLoaded(present, "local-222") {
 		t.Error("a loaded tag must be reported present")
 	}
-	if localImageLoaded(present, "local-999") {
+	if launch.LocalImageLoaded(present, "local-999") {
 		t.Error("an unloaded tag must be reported absent")
 	}
 	// Combined `repo:tag id` column form (the round-2 regression) must match too.
-	combined := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunFn: func(string, ...string) (string, error) { return dockerImageRepo + ":local-333  ghi789\n", nil }}}
-	if !localImageLoaded(combined, "local-333") {
+	combined := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunFn: func(string, ...string) (string, error) { return launch.DockerImageRepo + ":local-333  ghi789\n", nil }}}
+	if !launch.LocalImageLoaded(combined, "local-333") {
 		t.Error("combined repo:tag column must be recognized as present")
 	}
-	if localImageLoaded(combined, "local-999") {
+	if launch.LocalImageLoaded(combined, "local-999") {
 		t.Error("combined form: an unloaded tag must be absent")
 	}
 	// No sbx on PATH -> fail OPEN (true).
 	noSbx := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("not found") }, RunFn: func(string, ...string) (string, error) { return "", nil }}}
-	if !localImageLoaded(noSbx, "local-222") {
+	if !launch.LocalImageLoaded(noSbx, "local-222") {
 		t.Error("must fail open (true) when sbx is unavailable")
 	}
 	// ls error -> fail OPEN (true).
 	lsErr := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunFn: func(string, ...string) (string, error) { return "", fmt.Errorf("boom") }}}
-	if !localImageLoaded(lsErr, "local-222") {
+	if !launch.LocalImageLoaded(lsErr, "local-222") {
 		t.Error("must fail open (true) when `sbx template ls` errors")
 	}
 	// Empty ls output -> no signal -> fail OPEN (true).
 	empty := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunFn: func(string, ...string) (string, error) { return "   \n", nil }}}
-	if !localImageLoaded(empty, "local-222") {
+	if !launch.LocalImageLoaded(empty, "local-222") {
 		t.Error("must fail open (true) when ls output is empty")
 	}
 	// Store fully pruned (non-empty ls, tag absent) -> REFUSE (would otherwise pull).
 	pruned := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunFn: func(string, ...string) (string, error) { return "REPOSITORY TAG ID\nother/img latest xyz\n", nil }}}
-	if localImageLoaded(pruned, "local-222") {
+	if launch.LocalImageLoaded(pruned, "local-222") {
 		t.Error("must refuse when the tag is absent from a non-empty store (pruned)")
 	}
 }

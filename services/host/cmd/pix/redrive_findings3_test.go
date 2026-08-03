@@ -48,7 +48,7 @@ func TestRunDoctor_SecretFailureMcpSuccess(t *testing.T) {
 	r := doctor.RunDoctor(cfg, f.Build())
 
 	if r.SbxAbsent {
-		t.Fatal("sbx IS on PATH — a failing `sbx secret ls` must not set sbxAbsent")
+		t.Fatal("sbx IS on PATH — a failing `sbx secret ls` must not set launch.SbxAbsent")
 	}
 
 	var modelKey readiness.Check
@@ -97,7 +97,7 @@ func TestRunDoctor_SecretAndPathBothAbsent(t *testing.T) {
 	f := hostenvtest.Env{Present: map[string]bool{}}
 	r := doctor.RunDoctor(cfg, f.Build())
 	if !r.SbxAbsent {
-		t.Fatal("sbx off PATH must set sbxAbsent")
+		t.Fatal("sbx off PATH must set launch.SbxAbsent")
 	}
 	for _, g := range r.Groups {
 		for _, c := range g.Checks {

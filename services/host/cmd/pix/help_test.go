@@ -12,6 +12,7 @@ import (
 	"pix/host/memory"
 	"pix/host/rpc"
 	"pix/host/workflow/doctor"
+	"pix/host/workflow/launch"
 	"pix/host/workflow/onboard"
 	"strings"
 	"testing"
@@ -42,41 +43,41 @@ func TestWantsHelp(t *testing.T) {
 
 func TestParseRunArgs_NonDirWorkspaceRejected(t *testing.T) {
 	// A known verb typo suggests the verb (and never launches).
-	o, err := parseRunArgs([]string{"help"})
+	o, err := launch.ParseRunArgs([]string{"help"})
 	if err == nil {
-		t.Fatalf("parseRunArgs([help]) succeeded (workspace=%q) — should reject a non-dir", o.Workspace)
+		t.Fatalf("launch.ParseRunArgs([help]) succeeded (workspace=%q) — should reject a non-dir", o.Workspace)
 	}
 	if !strings.Contains(err.Error(), "not a directory") || !strings.Contains(err.Error(), "pix help") {
 		t.Errorf("error = %q, want a not-a-directory + `pix help` hint", err)
 	}
 
 	// A non-verb typo just reports not-a-directory.
-	if _, err := parseRunArgs([]string{"nonexistent-xyz-123"}); err == nil {
-		t.Error("parseRunArgs([nonexistent]) succeeded — should reject a non-dir")
+	if _, err := launch.ParseRunArgs([]string{"nonexistent-xyz-123"}); err == nil {
+		t.Error("launch.ParseRunArgs([nonexistent]) succeeded — should reject a non-dir")
 	}
 }
 
 func TestParseRunArgs_ExistingDirOK(t *testing.T) {
 	dir := t.TempDir()
-	o, err := parseRunArgs([]string{dir})
+	o, err := launch.ParseRunArgs([]string{dir})
 	if err != nil {
-		t.Fatalf("parseRunArgs(%q) error: %v", dir, err)
+		t.Fatalf("launch.ParseRunArgs(%q) error: %v", dir, err)
 	}
 	if o.Workspace != dir {
 		t.Errorf("workspace = %q, want %q", o.Workspace, dir)
 	}
 	// The cwd default is always launchable.
-	if _, err := parseRunArgs(nil); err != nil {
-		t.Errorf("parseRunArgs(nil) error: %v", err)
+	if _, err := launch.ParseRunArgs(nil); err != nil {
+		t.Errorf("launch.ParseRunArgs(nil) error: %v", err)
 	}
 }
 
 func TestValidateRunWorkspace(t *testing.T) {
-	if err := validateRunWorkspace("."); err != nil {
+	if err := launch.ValidateRunWorkspace("."); err != nil {
 		t.Errorf("cwd default should validate: %v", err)
 	}
 	dir := t.TempDir()
-	if err := validateRunWorkspace(dir); err != nil {
+	if err := launch.ValidateRunWorkspace(dir); err != nil {
 		t.Errorf("existing dir should validate: %v", err)
 	}
 	// A regular file is not a directory.
@@ -84,7 +85,7 @@ func TestValidateRunWorkspace(t *testing.T) {
 	if err := os.WriteFile(f, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateRunWorkspace(f); err == nil {
+	if err := launch.ValidateRunWorkspace(f); err == nil {
 		t.Error("a regular file should not validate as a workspace")
 	}
 }
@@ -93,8 +94,8 @@ func TestValidateRunWorkspace(t *testing.T) {
 
 func TestParseRunArgs_HelpSentinel(t *testing.T) {
 	for _, argv := range [][]string{{"--help"}, {"-h"}, {"--help", "extra"}} {
-		if _, err := parseRunArgs(argv); err != cli.ErrHelpRequested {
-			t.Errorf("parseRunArgs(%v) err = %v, want cli.ErrHelpRequested", argv, err)
+		if _, err := launch.ParseRunArgs(argv); err != cli.ErrHelpRequested {
+			t.Errorf("launch.ParseRunArgs(%v) err = %v, want cli.ErrHelpRequested", argv, err)
 		}
 	}
 }

@@ -86,11 +86,11 @@ test("Dockerfile and host pin the same pi + curated packages", () => {
 	assert.ok(todoPackage, "Dockerfile must pin pi-manage-todo-list");
 
 	const hostRun = fs.readFileSync(
-		path.join(repoRoot, "services/host/cmd/pix/hostrun.go"),
+		path.join(repoRoot, "services/host/workflow/launch/hostrun.go"),
 		"utf8",
 	);
-	const hostPackagesBlock = hostRun.match(/var hostPiPackages = \[\]string\{([\s\S]*?)\n\}/)?.[1];
-	assert.ok(hostPackagesBlock, "hostrun.go must declare hostPiPackages");
+	const hostPackagesBlock = hostRun.match(/var HostPiPackages = \[\]string\{([\s\S]*?)\n\}/)?.[1];
+	assert.ok(hostPackagesBlock, "hostrun.go must declare HostPiPackages");
 	const hostPackages = [...hostPackagesBlock.matchAll(/"([^"]+)"/g)].map((match) => match[1]);
 	assert.deepEqual(hostPackages, dockerPackages, "host and Docker curated package pins must match");
 });

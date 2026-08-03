@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"pix/host/hostenv"
+	"pix/host/workflow/launch"
 	"pix/host/workflow/onboard"
 	"regexp"
 	"strings"
@@ -42,7 +43,7 @@ func tmpRootPatterns() []string {
 	var pats []string
 	for _, root := range []string{os.TempDir(), "/tmp"} {
 		root = strings.TrimSuffix(filepath.Clean(root), string(os.PathSeparator))
-		for _, r := range []string{root, resolveThroughMissing(root)} {
+		for _, r := range []string{root, launch.ResolveThroughMissing(root)} {
 			if r == "" || seen[r] {
 				continue
 			}

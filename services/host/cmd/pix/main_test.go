@@ -12,6 +12,7 @@ import (
 	"pix/host/launcher"
 	"pix/host/mcp"
 	"pix/host/secret"
+	"pix/host/workflow/launch"
 	"pix/host/workflow/pack"
 )
 
@@ -80,7 +81,7 @@ func TestIsReleased(t *testing.T) {
 func TestBuildSbxArgs_UnreleasedWithCheckout(t *testing.T) {
 	cfg := &config.Config{}
 	// Caller resolved a local checkout + image tag for an unreleased build.
-	args := buildSbxArgs(cfg, runOpts{
+	args := launch.BuildSbxArgs(cfg, launch.RunOpts{
 		Workspace:     ".",
 		LocalKit:      "/repo/pi-kit",
 		LocalImageTag: "local-123",
@@ -101,7 +102,7 @@ func TestBuildSbxArgs_UnreleasedWithCheckout(t *testing.T) {
 
 func TestBuildSbxArgs_UnreleasedWithCheckoutNoImageTag(t *testing.T) {
 	cfg := &config.Config{}
-	args := buildSbxArgs(cfg, runOpts{Workspace: ".", LocalKit: "/repo/pi-kit"}, "0.0.16+local")
+	args := launch.BuildSbxArgs(cfg, launch.RunOpts{Workspace: ".", LocalKit: "/repo/pi-kit"}, "0.0.16+local")
 	if !contains(args, []string{"--kit", "/repo/pi-kit"}) {
 		t.Errorf("should use local kit, got %v", args)
 	}
@@ -113,7 +114,7 @@ func TestBuildSbxArgs_UnreleasedWithCheckoutNoImageTag(t *testing.T) {
 func TestBuildSbxArgs_UnreleasedNoCheckoutTracksMain(t *testing.T) {
 	cfg := &config.Config{}
 	// No LocalKit resolved (no checkout): fall back to #ref=main, never v<ver>.
-	args := buildSbxArgs(cfg, runOpts{Workspace: "."}, "0.0.16+local")
+	args := launch.BuildSbxArgs(cfg, launch.RunOpts{Workspace: "."}, "0.0.16+local")
 	want := "git+https://github.com/mcavage/pix.git#ref=main&dir=pi-kit"
 	if !contains(args, []string{"--kit", want}) {
 		t.Errorf("unreleased+no-checkout should track #ref=main, got %v", args)
@@ -128,7 +129,7 @@ func TestBuildSbxArgs_UnreleasedNoCheckoutTracksMain(t *testing.T) {
 func TestBuildSbxArgs_KitOverrideWins(t *testing.T) {
 	cfg := &config.Config{}
 	// --kit is an escape hatch even for an unreleased build with a checkout.
-	args := buildSbxArgs(cfg, runOpts{
+	args := launch.BuildSbxArgs(cfg, launch.RunOpts{
 		Workspace:     ".",
 		Kits:          []string{"/my/kit"},
 		LocalKit:      "/repo/pi-kit",
@@ -156,7 +157,7 @@ func TestBuildSbxArgs_ExplicitTemplate(t *testing.T) {
 	ref := "docker.io/mcavage/pix:local-999"
 	// Explicit --template with NO checkout context (the from-anywhere case): still
 	// pins the image, and the kit falls back to the git pin as usual.
-	args := buildSbxArgs(cfg, runOpts{Workspace: ".", Template: ref}, "0.0.16+local")
+	args := launch.BuildSbxArgs(cfg, launch.RunOpts{Workspace: ".", Template: ref}, "0.0.16+local")
 	if !contains(args, []string{"--template", ref}) {
 		t.Errorf("explicit --template should be pinned, got %v", args)
 	}
@@ -169,7 +170,7 @@ func TestBuildSbxArgs_ExplicitTemplateBeatsLocalImageTag(t *testing.T) {
 	cfg := &config.Config{}
 	ref := "docker.io/mcavage/pix:local-999"
 	// From a checkout that would auto-pin local-123, an explicit --template wins.
-	args := buildSbxArgs(cfg, runOpts{
+	args := launch.BuildSbxArgs(cfg, launch.RunOpts{
 		Workspace:     ".",
 		LocalKit:      "/repo/pi-kit",
 		LocalImageTag: "local-123",
@@ -190,7 +191,7 @@ func TestBuildSbxArgs_TemplateOrthogonalToKit(t *testing.T) {
 	cfg := &config.Config{}
 	ref := "docker.io/mcavage/pix:local-999"
 	// --kit replaces the SPEC, --template replaces the IMAGE: both apply together.
-	args := buildSbxArgs(cfg, runOpts{
+	args := launch.BuildSbxArgs(cfg, launch.RunOpts{
 		Workspace: ".",
 		Kits:      []string{"/my/kit"},
 		Template:  ref,
@@ -205,7 +206,7 @@ func TestBuildSbxArgs_TemplateOrthogonalToKit(t *testing.T) {
 
 func TestParseRunArgs_Template(t *testing.T) {
 	ref := "docker.io/mcavage/pix:local-999"
-	o, err := parseRunArgs([]string{"--template", ref, "--replace"})
+	o, err := launch.ParseRunArgs([]string{"--template", ref, "--replace"})
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -216,7 +217,7 @@ func TestParseRunArgs_Template(t *testing.T) {
 		t.Errorf("Replace should be set")
 	}
 	// --template=REF form too.
-	o2, err := parseRunArgs([]string{"--template=" + ref})
+	o2, err := launch.ParseRunArgs([]string{"--template=" + ref})
 	if err != nil {
 		t.Fatalf("parse (=form): %v", err)
 	}
@@ -234,36 +235,36 @@ func TestTemplateTag(t *testing.T) {
 		"localhost:5000/foo":              "",        // port only, no tag
 	}
 	for ref, want := range cases {
-		if got := templateTag(ref); got != want {
-			t.Errorf("templateTag(%q) = %q, want %q", ref, got, want)
+		if got := launch.TemplateTag(ref); got != want {
+			t.Errorf("launch.TemplateTag(%q) = %q, want %q", ref, got, want)
 		}
 	}
 }
 
 func TestKitResolveFailureMsg(t *testing.T) {
 	// No git-ref kit -> no message (unrelated failure).
-	if msg := kitResolveFailureMsg(""); msg != "" {
+	if msg := launch.KitResolveFailureMsg(""); msg != "" {
 		t.Errorf("expected empty message for no pinned kit, got %q", msg)
 	}
-	if msg := kitResolveFailureMsg(pinnedGitKit([]string{"--kit", "/repo/pi-kit"})); msg != "" {
+	if msg := launch.KitResolveFailureMsg(launch.PinnedGitKit([]string{"--kit", "/repo/pi-kit"})); msg != "" {
 		t.Errorf("local kit should not trigger the message, got %q", msg)
 	}
 	// A v-tag pin mentions the release.
 	vtag := "git+https://github.com/mcavage/pix.git#ref=v0.0.16&dir=pi-kit"
-	msg := kitResolveFailureMsg(pinnedGitKit([]string{"--kit", vtag}))
+	msg := launch.KitResolveFailureMsg(launch.PinnedGitKit([]string{"--kit", vtag}))
 	if !strings.Contains(msg, "v0.0.16") || !strings.Contains(msg, "--dev") || !strings.Contains(msg, "--kit") {
 		t.Errorf("v-tag failure message missing key hints: %q", msg)
 	}
 	// A main pin still explains.
 	mainRef := "git+https://github.com/mcavage/pix.git#ref=main&dir=pi-kit"
-	if msg := kitResolveFailureMsg(pinnedGitKit([]string{"--kit", mainRef})); !strings.Contains(msg, "main") {
+	if msg := launch.KitResolveFailureMsg(launch.PinnedGitKit([]string{"--kit", mainRef})); !strings.Contains(msg, "main") {
 		t.Errorf("main failure message should mention the ref, got %q", msg)
 	}
 }
 
 func TestBuildSbxArgs_VersionPin(t *testing.T) {
 	cfg := &config.Config{}
-	args := buildSbxArgs(cfg, runOpts{Workspace: "."}, "0.0.99")
+	args := launch.BuildSbxArgs(cfg, launch.RunOpts{Workspace: "."}, "0.0.99")
 
 	if args[0] != "run" || args[1] != "pix" {
 		t.Fatalf("args should start with `run pix`, got %v", args[:2])
@@ -276,7 +277,7 @@ func TestBuildSbxArgs_VersionPin(t *testing.T) {
 
 func TestBuildSbxArgs_DevVersionTracksMain(t *testing.T) {
 	cfg := &config.Config{}
-	args := buildSbxArgs(cfg, runOpts{Workspace: "."}, "dev")
+	args := launch.BuildSbxArgs(cfg, launch.RunOpts{Workspace: "."}, "dev")
 
 	want := "git+https://github.com/mcavage/pix.git#ref=main&dir=pi-kit"
 	if !contains(args, []string{"--kit", want}) {
@@ -293,7 +294,7 @@ func TestBuildSbxArgs_DevVersionTracksMain(t *testing.T) {
 func TestBuildSbxArgs_KitStacking(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Kits.Stack = []string{"/mixin/kit", "git+https://example.com/other#dir=kit"}
-	args := buildSbxArgs(cfg, runOpts{Workspace: ".", Kits: []string{"/flag/kit"}}, "0.0.99")
+	args := launch.BuildSbxArgs(cfg, launch.RunOpts{Workspace: ".", Kits: []string{"/flag/kit"}}, "0.0.99")
 
 	// --kit override (1 flag kit, base) + 2 config stack = 3 --kit total. The
 	// override suppresses the auto git pin.
@@ -307,7 +308,7 @@ func TestBuildSbxArgs_KitStacking(t *testing.T) {
 		t.Errorf("flag kit missing from %v", args)
 	}
 	// The escape-hatch override suppresses the launcher's git pin.
-	if pinnedGitKit(args) != "" {
+	if launch.PinnedGitKit(args) != "" {
 		t.Errorf("--kit override should suppress the git pin, got %v", args)
 	}
 }
@@ -315,22 +316,22 @@ func TestBuildSbxArgs_KitStacking(t *testing.T) {
 func TestBuildSbxArgs_StackWithoutOverride(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Kits.Stack = []string{"/mixin/kit"}
-	args := buildSbxArgs(cfg, runOpts{Workspace: "."}, "0.0.99")
+	args := launch.BuildSbxArgs(cfg, launch.RunOpts{Workspace: "."}, "0.0.99")
 	// Released base git kit + 1 config stack = 2.
 	if got := countFlag(args, "--kit"); got != 2 {
 		t.Errorf("expected 2 --kit flags, got %d in %v", got, args)
 	}
-	if pinnedGitKit(args) == "" {
+	if launch.PinnedGitKit(args) == "" {
 		t.Errorf("released build with no override should pin the git kit, got %v", args)
 	}
 }
 
 func TestBuildSbxArgs_MCPExpansion(t *testing.T) {
 	cfg := &config.Config{}
-	// buildSbxArgs emits --static-mcp for the PRELOADED set (o.StaticMCP); the
+	// launch.BuildSbxArgs emits --static-mcp for the PRELOADED set (o.StaticMCP); the
 	// caller computes it via mcp.AllPreloadedMCP. The sbx local gateway serves them,
 	// no SBX_MCP_URL.
-	args := buildSbxArgs(cfg, runOpts{Workspace: ".", StaticMCP: []string{"slack", "notion", "linear"}}, "0.0.99")
+	args := launch.BuildSbxArgs(cfg, launch.RunOpts{Workspace: ".", StaticMCP: []string{"slack", "notion", "linear"}}, "0.0.99")
 
 	if got := countFlag(args, "--static-mcp"); got != 3 {
 		t.Errorf("expected 3 --static-mcp flags, got %d in %v", got, args)
@@ -387,9 +388,9 @@ func TestApplyPackToLaunch_IntegrationMCPAlwaysPreloaded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	o := runOpts{Pack: root}
-	if _, err := applyPackToLaunch(cfg, &o, fakeGitEnv(nil)); err != nil {
-		t.Fatalf("applyPackToLaunch: %v", err)
+	o := launch.RunOpts{Pack: root}
+	if _, err := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil)); err != nil {
+		t.Fatalf("launch.ApplyPackToLaunch: %v", err)
 	}
 	if !slices.Contains(cfg.MCP, "fastmail") || !slices.Contains(cfg.MCP, "notion") {
 		t.Errorf("cfg.MCP = %v, want it to contain both integration servers (every pack integration preloads)", cfg.MCP)
@@ -398,7 +399,7 @@ func TestApplyPackToLaunch_IntegrationMCPAlwaysPreloaded(t *testing.T) {
 		t.Errorf("every entry in cfg.MCP should be in the preload set, got %v vs %v", got, cfg.MCP)
 	}
 
-	// Never persisted: applyPackToLaunch must not itself write config.toml —
+	// Never persisted: launch.ApplyPackToLaunch must not itself write config.toml —
 	// run.go/task.go never call cfg.Save() after it, so a --pack override's
 	// integration names must not have reached disk.
 	onDisk, err := os.ReadFile(cfgPath)
@@ -406,13 +407,13 @@ func TestApplyPackToLaunch_IntegrationMCPAlwaysPreloaded(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(onDisk) != before {
-		t.Errorf("config.toml changed on disk after applyPackToLaunch, want unchanged %q, got %q", before, onDisk)
+		t.Errorf("config.toml changed on disk after launch.ApplyPackToLaunch, want unchanged %q, got %q", before, onDisk)
 	}
 }
 
 func TestBuildSbxArgs_DevBranch(t *testing.T) {
 	cfg := &config.Config{}
-	args := buildSbxArgs(cfg, runOpts{Workspace: ".", Dev: true, DevRoot: "/repo", LocalKit: "/repo/pi-kit"}, "0.0.99")
+	args := launch.BuildSbxArgs(cfg, launch.RunOpts{Workspace: ".", Dev: true, DevRoot: "/repo", LocalKit: "/repo/pi-kit"}, "0.0.99")
 
 	// Dev mode uses the local kit, NOT the git kit.
 	if !contains(args, []string{"--kit", "/repo/pi-kit"}) {
@@ -435,7 +436,7 @@ func TestBuildSbxArgs_DevBranch(t *testing.T) {
 
 func TestBuildSbxArgs_NameModelPassthrough(t *testing.T) {
 	cfg := &config.Config{}
-	args := buildSbxArgs(cfg, runOpts{
+	args := launch.BuildSbxArgs(cfg, launch.RunOpts{
 		Workspace:   "/work",
 		Name:        "t",
 		Model:       "openai/gpt-5.6-sol",
@@ -461,8 +462,8 @@ func TestApplyConfiguredSessionModel_DefaultAndOptOut(t *testing.T) {
 	// bindings it resolves the shipped catalog, whose overlord route is Sol.
 	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
 
-	o := runOpts{}
-	applied, err := applyConfiguredSessionModel(&o, &config.Config{RunIntent: config.DefaultRunIntent})
+	o := launch.RunOpts{}
+	applied, err := launch.ApplyConfiguredSessionModel(&o, &config.Config{RunIntent: config.DefaultRunIntent})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -470,14 +471,14 @@ func TestApplyConfiguredSessionModel_DefaultAndOptOut(t *testing.T) {
 		t.Fatalf("configured session route = applied:%v intent:%q model:%q, want overlord -> openai/gpt-5.6-sol", applied, o.Intent, o.Model)
 	}
 
-	o = runOpts{}
-	applied, err = applyConfiguredSessionModel(&o, &config.Config{RunIntent: "none"})
+	o = launch.RunOpts{}
+	applied, err = launch.ApplyConfiguredSessionModel(&o, &config.Config{RunIntent: "none"})
 	if err != nil || !applied || o.Model != "" || o.Intent != "" {
 		t.Fatalf("none opt-out = applied:%v intent:%q model:%q err:%v", applied, o.Intent, o.Model, err)
 	}
 
-	o = runOpts{Model: "google/pinned"}
-	applied, err = applyConfiguredSessionModel(&o, &config.Config{RunIntent: config.DefaultRunIntent})
+	o = launch.RunOpts{Model: "google/pinned"}
+	applied, err = launch.ApplyConfiguredSessionModel(&o, &config.Config{RunIntent: config.DefaultRunIntent})
 	if err != nil || applied || o.Model != "google/pinned" {
 		t.Fatalf("explicit model must win = applied:%v model:%q err:%v", applied, o.Model, err)
 	}
@@ -486,7 +487,7 @@ func TestApplyConfiguredSessionModel_DefaultAndOptOut(t *testing.T) {
 func TestBuildSbxArgs_LiveSkillsMountedAndLoaded(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Skills.Paths = []string{"/cfg/skills"}
-	args := buildSbxArgs(cfg, runOpts{Workspace: ".", Skills: []string{"/flag/skills"}}, "0.0.99")
+	args := launch.BuildSbxArgs(cfg, launch.RunOpts{Workspace: ".", Skills: []string{"/flag/skills"}}, "0.0.99")
 
 	for _, s := range []string{"/cfg/skills", "/flag/skills"} {
 		// Mounted as workspace (bare arg) and loaded via --skill.
@@ -503,43 +504,43 @@ func TestParseRunArgs(t *testing.T) {
 	tests := []struct {
 		name string
 		argv []string
-		want runOpts
+		want launch.RunOpts
 	}{
-		{"defaults", nil, runOpts{Workspace: "."}},
-		{"dir first", []string{"/tmp"}, runOpts{Workspace: "/tmp"}},
-		{"flags then dir", []string{"--name", "t", "/tmp"}, runOpts{Workspace: "/tmp", Name: "t"}},
-		{"dir then flags", []string{"/tmp", "--name", "t"}, runOpts{Workspace: "/tmp", Name: "t"}},
-		{"eq form", []string{"--name=t", "--model=m"}, runOpts{Workspace: ".", Name: "t", Model: "m"}},
-		{"dev", []string{"--dev"}, runOpts{Workspace: ".", Dev: true}},
-		{"repeatable", []string{"--mcp", "a", "--mcp", "b", "--kit", "k"}, runOpts{Workspace: ".", MCP: []string{"a", "b"}, Kits: []string{"k"}}},
-		{"passthrough", []string{"/tmp", "--", "--model", "x"}, runOpts{Workspace: "/tmp", Passthrough: []string{"--model", "x"}}},
+		{"defaults", nil, launch.RunOpts{Workspace: "."}},
+		{"dir first", []string{"/tmp"}, launch.RunOpts{Workspace: "/tmp"}},
+		{"flags then dir", []string{"--name", "t", "/tmp"}, launch.RunOpts{Workspace: "/tmp", Name: "t"}},
+		{"dir then flags", []string{"/tmp", "--name", "t"}, launch.RunOpts{Workspace: "/tmp", Name: "t"}},
+		{"eq form", []string{"--name=t", "--model=m"}, launch.RunOpts{Workspace: ".", Name: "t", Model: "m"}},
+		{"dev", []string{"--dev"}, launch.RunOpts{Workspace: ".", Dev: true}},
+		{"repeatable", []string{"--mcp", "a", "--mcp", "b", "--kit", "k"}, launch.RunOpts{Workspace: ".", MCP: []string{"a", "b"}, Kits: []string{"k"}}},
+		{"passthrough", []string{"/tmp", "--", "--model", "x"}, launch.RunOpts{Workspace: "/tmp", Passthrough: []string{"--model", "x"}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseRunArgs(tt.argv)
+			got, err := launch.ParseRunArgs(tt.argv)
 			if err != nil {
-				t.Fatalf("parseRunArgs(%v) error: %v", tt.argv, err)
+				t.Fatalf("launch.ParseRunArgs(%v) error: %v", tt.argv, err)
 			}
 			if got.Workspace != tt.want.Workspace || got.Name != tt.want.Name ||
 				got.Model != tt.want.Model || got.Dev != tt.want.Dev {
-				t.Errorf("parseRunArgs(%v) = %+v, want %+v", tt.argv, got, tt.want)
+				t.Errorf("launch.ParseRunArgs(%v) = %+v, want %+v", tt.argv, got, tt.want)
 			}
 			if !equalSlice(got.MCP, tt.want.MCP) || !equalSlice(got.Kits, tt.want.Kits) ||
 				!equalSlice(got.Passthrough, tt.want.Passthrough) {
-				t.Errorf("parseRunArgs(%v) slices = %+v, want %+v", tt.argv, got, tt.want)
+				t.Errorf("launch.ParseRunArgs(%v) slices = %+v, want %+v", tt.argv, got, tt.want)
 			}
 		})
 	}
 }
 
 func TestParseRunArgs_Errors(t *testing.T) {
-	if _, err := parseRunArgs([]string{"--bogus"}); err == nil {
+	if _, err := launch.ParseRunArgs([]string{"--bogus"}); err == nil {
 		t.Error("expected error for unknown flag")
 	}
-	if _, err := parseRunArgs([]string{"/a", "/b"}); err == nil {
+	if _, err := launch.ParseRunArgs([]string{"/a", "/b"}); err == nil {
 		t.Error("expected error for two positional dirs")
 	}
-	if _, err := parseRunArgs([]string{"--name"}); err == nil {
+	if _, err := launch.ParseRunArgs([]string{"--name"}); err == nil {
 		t.Error("expected error for flag missing value")
 	}
 }
@@ -550,19 +551,19 @@ func TestParseRunArgs_Errors(t *testing.T) {
 func TestAnyModelKeyPresent(t *testing.T) {
 	t.Run("no model key", func(t *testing.T) {
 		f := hostenvtest.Env{Present: map[string]bool{"sbx": true}, Output: map[string]string{"sbx secret ls": "github\n"}}
-		if anyModelKeyPresent(f.Build()) {
+		if launch.AnyModelKeyPresent(f.Build()) {
 			t.Error("github alone is not a model key")
 		}
 	})
 	t.Run("model key present", func(t *testing.T) {
 		f := hostenvtest.Env{Present: map[string]bool{"sbx": true}, Output: map[string]string{"sbx secret ls": "anthropic github\n"}}
-		if !anyModelKeyPresent(f.Build()) {
+		if !launch.AnyModelKeyPresent(f.Build()) {
 			t.Error("anthropic present should count")
 		}
 	})
 	t.Run("sbx absent -> cannot verify (false)", func(t *testing.T) {
 		f := hostenvtest.Env{Present: map[string]bool{}, Output: map[string]string{}}
-		if anyModelKeyPresent(f.Build()) {
+		if launch.AnyModelKeyPresent(f.Build()) {
 			t.Error("sbx absent must report not-present")
 		}
 	})

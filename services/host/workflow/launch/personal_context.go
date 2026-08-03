@@ -1,4 +1,4 @@
-package main
+package launch
 
 import (
 	"fmt"
@@ -10,11 +10,11 @@ import (
 	"pix/host/sys"
 )
 
-// synthesizePersonalContextKit turns the user's durable AGENTS.md into the sbx
+// SynthesizePersonalContextKit turns the user's durable AGENTS.md into the sbx
 // agentInstructions layer. It is appended after pack kits, so personal instructions
 // compose above organizational context while workspace AGENTS.md remains the
-// most specific layer. Skills are mounted live separately by buildSbxArgs.
-func synthesizePersonalContextKit() (string, error) {
+// most specific layer. Skills are mounted live separately by BuildSbxArgs.
+func SynthesizePersonalContextKit() (string, error) {
 	source := filepath.Join(config.ContextDir(), "AGENTS.md")
 	b, err := os.ReadFile(source)
 	if os.IsNotExist(err) {

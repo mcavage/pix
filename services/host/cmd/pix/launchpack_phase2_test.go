@@ -1,5 +1,5 @@
 // Moved from pack/pack_v2_phase2_test.go: the subject is applying a pack to a LAUNCH
-// (runOpts, applyPackToLaunch, writePackContextFiles), which lives in
+// (launch.RunOpts, launch.ApplyPackToLaunch, launch.WritePackContextFiles), which lives in
 // launchpack.go on this side of the boundary.
 package main
 
@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/workflow/launch"
 	"pix/host/workflow/pack"
 )
 
@@ -39,21 +40,21 @@ func TestRefreshHostPackWrappers_Tier0AndMissingPackNoOp(t *testing.T) {
 	}
 }
 
-// TestHostPackBinDir_OnHostPathOnly (fitness #1): hostChildEnv prepends the
+// TestHostPackBinDir_OnHostPathOnly (fitness #1): launch.HostChildEnv prepends the
 // pack host-bin dir to PATH for the `pix host` child ONLY. The sandbox
 // side is pinned separately: TestSynthesizePackKit_SandboxOnly proves a
 // host=true wrapper never enters the sandbox kit, and nothing in
-// buildSbxArgs/applyPackToLaunch references pack.HostPackBinDir.
+// launch.BuildSbxArgs/launch.ApplyPackToLaunch references pack.HostPackBinDir.
 
-// TestHostPackBinDir_OnHostPathOnly (fitness #1): hostChildEnv prepends the
+// TestHostPackBinDir_OnHostPathOnly (fitness #1): launch.HostChildEnv prepends the
 // pack host-bin dir to PATH for the `pix host` child ONLY. The sandbox
 // side is pinned separately: TestSynthesizePackKit_SandboxOnly proves a
 // host=true wrapper never enters the sandbox kit, and nothing in
-// buildSbxArgs/applyPackToLaunch references pack.HostPackBinDir.
+// launch.BuildSbxArgs/launch.ApplyPackToLaunch references pack.HostPackBinDir.
 func TestHostPackBinDir_OnHostPathOnly(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
-	env := hostChildEnv("/sa", "")
+	env := launch.HostChildEnv("/sa", "")
 	wantPrefix := "PATH=" + pack.HostPackBinDir() + string(os.PathListSeparator)
 	found := false
 	for _, kv := range env {
@@ -62,16 +63,16 @@ func TestHostPackBinDir_OnHostPathOnly(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("hostChildEnv must prepend %s to PATH, got %v", pack.HostPackBinDir(), env)
+		t.Errorf("launch.HostChildEnv must prepend %s to PATH, got %v", pack.HostPackBinDir(), env)
 	}
 	// The sandbox launch path must not touch the host bin dir at all: applying
 	// a pack with a HOST wrapper to a sandbox launch installs nothing there.
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 	root := phase2HostPack(t, dir, "work", "platformio")
 	cfg := &config.Config{Pack: root}
-	o := runOpts{}
-	if _, err := applyPackToLaunch(cfg, &o, fakeGitEnv(nil)); err != nil {
-		t.Fatalf("applyPackToLaunch: %v", err)
+	o := launch.RunOpts{}
+	if _, err := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil)); err != nil {
+		t.Fatalf("launch.ApplyPackToLaunch: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(pack.HostPackBinDir(), "platformio")); err == nil {
 		t.Error("a sandbox launch must never install host wrappers")

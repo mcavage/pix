@@ -2,15 +2,15 @@
 // (and the memory-scope context write) must record the pack that ACTUALLY
 // loaded and applied, not the merely CONFIGURED cfg.Pack/o.Pack path.
 //
-// Before this fix, applyPackToLaunch returned only an error, so run.go and
+// Before this fix, launch.ApplyPackToLaunch returned only an error, so run.go and
 // task.go wrote the marker from pack.ActivePackRoot(cfg.Pack, o.Pack) even when
-// applyPackToLaunch degraded to pack-less via pack.ErrNotAPack (active pack dir
+// launch.ApplyPackToLaunch degraded to pack-less via pack.ErrNotAPack (active pack dir
 // genuinely missing -> warn + proceed without the pack). The marker then
 // recorded a pack that was NOT attached; once the dir came back and the user
-// reattached, stalePackReattachWarning compared marker == active and stayed
+// reattached, launch.StalePackReattachWarning compared marker == active and stayed
 // silent even though the sandbox never got the pack's create-time facets.
 //
-// applyPackToLaunch now returns (effectiveRoot string, err error):
+// launch.ApplyPackToLaunch now returns (effectiveRoot string, err error):
 // effectiveRoot is "" both when there is no active pack AND when it degraded
 // via pack.ErrNotAPack, and the real pack root when the pack loaded and applied.
 // Callers must write the marker (and scope memory) from that return value.
@@ -22,20 +22,21 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/workflow/launch"
 	"pix/host/workflow/pack"
 )
 
 // TestApplyPackToLaunch_DegradedMissingPack_EffectiveRootEmpty: a cfg.Pack
 // pointing at a dir that does not exist (or has no pack.toml) is the
-// pack.ErrNotAPack degrade path — applyPackToLaunch must warn-and-proceed (nil
+// pack.ErrNotAPack degrade path — launch.ApplyPackToLaunch must warn-and-proceed (nil
 // error) but report "" as the effective root, since nothing was actually
 // mounted onto o/cfg.
 func TestApplyPackToLaunch_DegradedMissingPack_EffectiveRootEmpty(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &config.Config{Pack: filepath.Join(dir, "gone")}
-	o := runOpts{}
+	o := launch.RunOpts{}
 
-	root, err := applyPackToLaunch(cfg, &o, fakeGitEnv(nil))
+	root, err := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil))
 	if err != nil {
 		t.Fatalf("a genuinely absent active pack must degrade, not fail: %v", err)
 	}
@@ -54,9 +55,9 @@ func TestApplyPackToLaunch_ValidPack_EffectiveRootIsRealRoot(t *testing.T) {
 	mustWritePack(t, packRoot, pack.Manifest{Name: "work", Schema: 1})
 
 	cfg := &config.Config{Pack: packRoot}
-	o := runOpts{}
+	o := launch.RunOpts{}
 
-	root, err := applyPackToLaunch(cfg, &o, fakeGitEnv(nil))
+	root, err := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil))
 	if err != nil {
 		t.Fatalf("a valid active pack must load cleanly: %v", err)
 	}
@@ -67,7 +68,7 @@ func TestApplyPackToLaunch_ValidPack_EffectiveRootIsRealRoot(t *testing.T) {
 
 // TestSandboxPackMarker_HonestAboutDegradedLaunch is the end-to-end
 // regression: it drives the exact sequence run.go/task.go run (call
-// applyPackToLaunch, then write the marker from its returned effective root,
+// launch.ApplyPackToLaunch, then write the marker from its returned effective root,
 // never from pack.ActivePackRoot(cfg.Pack, o.Pack) directly) and asserts the
 // marker agrees with what actually loaded in both directions.
 func TestSandboxPackMarker_HonestAboutDegradedLaunch(t *testing.T) {
@@ -79,20 +80,20 @@ func TestSandboxPackMarker_HonestAboutDegradedLaunch(t *testing.T) {
 		if err := os.MkdirAll(filepath.Join(ws, ".pix"), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(sandboxPackMarkerPath(ws), []byte("/some/stale/pack\n"), 0o644); err != nil {
+		if err := os.WriteFile(launch.SandboxPackMarkerPath(ws), []byte("/some/stale/pack\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 
 		cfg := &config.Config{Pack: filepath.Join(dir, "gone")}
-		o := runOpts{Workspace: ws}
+		o := launch.RunOpts{Workspace: ws}
 
-		effectiveRoot, err := applyPackToLaunch(cfg, &o, fakeGitEnv(nil))
+		effectiveRoot, err := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil))
 		if err != nil {
 			t.Fatalf("degrade path must not error: %v", err)
 		}
-		writeSandboxPackMarker(o.Workspace, effectiveRoot)
+		launch.WriteSandboxPackMarker(o.Workspace, effectiveRoot)
 
-		if got := readSandboxPackMarker(ws); got != "" {
+		if got := launch.ReadSandboxPackMarker(ws); got != "" {
 			t.Errorf("marker after a degraded launch = %q, want \"\" (removed, not the unavailable configured pack)", got)
 		}
 	})
@@ -103,21 +104,21 @@ func TestSandboxPackMarker_HonestAboutDegradedLaunch(t *testing.T) {
 		ws := t.TempDir()
 
 		cfg := &config.Config{Pack: packRoot}
-		o := runOpts{Workspace: ws}
+		o := launch.RunOpts{Workspace: ws}
 
-		effectiveRoot, err := applyPackToLaunch(cfg, &o, fakeGitEnv(nil))
+		effectiveRoot, err := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil))
 		if err != nil {
 			t.Fatalf("a valid active pack must load cleanly: %v", err)
 		}
-		writeSandboxPackMarker(o.Workspace, effectiveRoot)
+		launch.WriteSandboxPackMarker(o.Workspace, effectiveRoot)
 
-		if got := readSandboxPackMarker(ws); got != pack.CanonicalizePackRoot(packRoot) {
+		if got := launch.ReadSandboxPackMarker(ws); got != pack.CanonicalizePackRoot(packRoot) {
 			t.Errorf("marker = %q, want the real pack root %q", got, pack.CanonicalizePackRoot(packRoot))
 		}
 	})
 }
 
-// TestWritePackContextFiles_AgreesWithDegradedMarker: writePackContextFiles
+// TestWritePackContextFiles_AgreesWithDegradedMarker: launch.WritePackContextFiles
 // takes the SAME effective-root argument the marker is written from, so a
 // degraded launch leaves memory unscoped exactly when the marker is removed —
 // the two writes can never disagree about what actually loaded.
@@ -125,19 +126,19 @@ func TestWritePackContextFiles_AgreesWithDegradedMarker(t *testing.T) {
 	dir := t.TempDir()
 	ws := t.TempDir()
 	cfg := &config.Config{Pack: filepath.Join(dir, "gone")}
-	o := runOpts{Workspace: ws}
+	o := launch.RunOpts{Workspace: ws}
 
-	effectiveRoot, err := applyPackToLaunch(cfg, &o, fakeGitEnv(nil))
+	effectiveRoot, err := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil))
 	if err != nil {
 		t.Fatalf("degrade path must not error: %v", err)
 	}
-	writePackContextFiles(cfg, o, effectiveRoot)
-	writeSandboxPackMarker(o.Workspace, effectiveRoot)
+	launch.WritePackContextFiles(cfg, o, effectiveRoot)
+	launch.WriteSandboxPackMarker(o.Workspace, effectiveRoot)
 
 	if _, err := os.Stat(filepath.Join(ws, ".pix", "profile")); err == nil {
 		t.Error("a degraded launch must leave memory unscoped (no profile file)")
 	}
-	if got := readSandboxPackMarker(ws); got != "" {
+	if got := launch.ReadSandboxPackMarker(ws); got != "" {
 		t.Errorf("marker = %q, want \"\" to agree with the unscoped memory write", got)
 	}
 }

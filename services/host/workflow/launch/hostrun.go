@@ -1,4 +1,4 @@
-package main
+package launch
 
 import (
 	"bytes"
@@ -19,7 +19,7 @@ import (
 	"pix/host/workspace"
 )
 
-// runHost implements `pix host` — the UNSANDBOXED escape hatch that execs
+// RunHost implements `pix host` — the UNSANDBOXED escape hatch that execs
 // the host-installed `pi` directly (no sbx, no VM). It exists for exactly one
 // narrow case: working on pix itself, which needs the host's Docker/sbx/
 // make. It is gated OFF by default (`host.enabled`), loudly signposted, and its
@@ -51,15 +51,15 @@ import (
 //
 // All of it goes through the child's cmd.Env — never exported to the shell,
 // never persisted, gone when pi exits.
-func runHost(argv []string) {
-	sub, o, err := parseHostArgs(argv)
+func RunHost(argv []string) {
+	sub, o, err := ParseHostArgs(argv)
 	if err != nil {
 		if err == cli.ErrHelpRequested {
-			fmt.Print(hostUsage)
+			fmt.Print(HostUsage)
 			return
 		}
 		fmt.Fprintf(os.Stderr, "pix host: %v\n\n", err)
-		fmt.Fprint(os.Stderr, hostUsage)
+		fmt.Fprint(os.Stderr, HostUsage)
 		os.Exit(2)
 	}
 
@@ -77,13 +77,13 @@ func runHost(argv []string) {
 		// true` step. It must NOT be gated behind host.enabled itself (that would
 		// be chicken-and-egg); the gate only guards LAUNCH. The provision-before-
 		// enable invariant holds: runHostSetup is lenient (returns nil even when
-		// `pi` is missing), so we verify with hostProvisioned() and never flip the
+		// `pi` is missing), so we verify with HostProvisioned() and never flip the
 		// gate on with nothing behind it.
 		if err := runHostSetup(os.Stderr); err != nil {
 			fmt.Fprintf(os.Stderr, "pix host setup: %v\n", err)
 			os.Exit(1)
 		}
-		if !hostProvisioned() {
+		if !HostProvisioned() {
 			fmt.Fprintln(os.Stderr, "pix host setup: not fully provisioned (usually a missing `pi`) — left DISABLED.")
 			fmt.Fprintln(os.Stderr, "Install the pinned `pi` (see above), then re-run: pix host setup")
 			os.Exit(1)
@@ -98,16 +98,16 @@ func runHost(argv []string) {
 		fmt.Fprintln(os.Stderr, "pix host setup: host mode enabled (UNSANDBOXED). Launch: pix host")
 	default:
 		if !cfg.Host.Enabled {
-			fmt.Fprint(os.Stderr, hostGateMessage())
+			fmt.Fprint(os.Stderr, HostGateMessage())
 			os.Exit(1)
 		}
 		runHostLaunch(o)
 	}
 }
 
-// hostGateMessage is the default-off refusal. The friction is intentional: the
+// HostGateMessage is the default-off refusal. The friction is intentional: the
 // user must understand what they are turning off before host mode will run.
-func hostGateMessage() string {
+func HostGateMessage() string {
 	return `pix host is DISABLED (host.enabled = false, the default).
 
 This command runs the agent directly on YOUR machine, and that deletes all
@@ -142,23 +142,23 @@ then launch with ` + "`pix host`" + `.
 // scripts/check-recall-transport.sh (R4) enforces the pairing on both paths.
 var hostHarnessDirs = []string{"skills", "agents", "extensions", "lib", "prompts", "themes"}
 
-// hostPinnedPiPackage mirrors the Dockerfile's `ARG PI_PACKAGE` pin. The
+// HostPinnedPiPackage mirrors the Dockerfile's `ARG PI_PACKAGE` pin. The
 // "install pi" hints tell the user to match the image's version, so they must
 // name the ACTUAL pinned version, not an unversioned latest. When you bump the
 // Dockerfile ARG, bump this in the same commit (a test cross-checks the two).
-const hostPinnedPiPackage = "@earendil-works/pi-coding-agent@0.83.0"
-const hostPiVersionProbeTimeout = 2 * time.Second
+const HostPinnedPiPackage = "@earendil-works/pi-coding-agent@0.83.0"
+const HostPiVersionProbeTimeout = 2 * time.Second
 
 func checkHostPiVersion(piBin string) error {
-	return checkHostPiVersionWithin(piBin, hostPiVersionProbeTimeout)
+	return CheckHostPiVersionWithin(piBin, HostPiVersionProbeTimeout)
 }
 
-// checkHostPiVersionWithin is checkHostPiVersion with the bound injected. The
+// CheckHostPiVersionWithin is checkHostPiVersion with the bound injected. The
 // test for "a hanging pi is bounded" proves the DEADLINE fires, which does not
 // require waiting the production two seconds to observe -- it used to, and two
 // seconds of sleeping was the single slowest test in the suite.
-func checkHostPiVersionWithin(piBin string, timeout time.Duration) error {
-	want := strings.TrimPrefix(hostPinnedPiPackage, "@earendil-works/pi-coding-agent@")
+func CheckHostPiVersionWithin(piBin string, timeout time.Duration) error {
+	want := strings.TrimPrefix(HostPinnedPiPackage, "@earendil-works/pi-coding-agent@")
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, piBin, "--version")
@@ -177,10 +177,10 @@ func checkHostPiVersionWithin(piBin string, timeout time.Duration) error {
 	return nil
 }
 
-// hostPiPackages mirrors the Dockerfile's curated `pi install` loop (the PINNED
+// HostPiPackages mirrors the Dockerfile's curated `pi install` loop (the PINNED
 // set — see the Dockerfile comment on why these must be version-locked to the
 // PI_PACKAGE release). When you re-pin the Dockerfile list, re-pin this one.
-var hostPiPackages = []string{
+var HostPiPackages = []string{
 	"pi-plan@0.1.1",
 	"pi-mcp-adapter@2.13.0",
 	"pi-manage-todo-list@0.4.0",
@@ -190,26 +190,26 @@ var hostPiPackages = []string{
 	"pi-usage@0.3.0",
 }
 
-// hostPiExtensionsLockFile records the EXACT hostPiPackages set successfully
+// HostPiExtensionsLockFile records the EXACT HostPiPackages set successfully
 // installed into a host agent dir, so a re-run of `pix setup` skips the
 // (slow, silent-looking) reinstall unless the package list actually changed
 // (a version bump busts it). Lives in the host agent dir itself — host-owned,
 // so a plain read/write is fine, but the marker is never FOLLOWED if it's a
-// symlink (hostPiExtensionsInstalled/writeHostPiExtensionsMarker both Lstat).
-const hostPiExtensionsLockFile = ".pi-extensions.lock"
+// symlink (HostPiExtensionsInstalled/WriteHostPiExtensionsMarker both Lstat).
+const HostPiExtensionsLockFile = ".pi-extensions.lock"
 
-// hostPiExtensionsMarker is the marker's canonical content: the exact
-// hostPiPackages set, one per line.
-func hostPiExtensionsMarker() string {
-	return strings.Join(hostPiPackages, "\n") + "\n"
+// HostPiExtensionsMarker is the marker's canonical content: the exact
+// HostPiPackages set, one per line.
+func HostPiExtensionsMarker() string {
+	return strings.Join(HostPiPackages, "\n") + "\n"
 }
 
-// hostPiExtensionsInstalled reports whether dir's marker exists and matches
-// the CURRENT hostPiPackages set exactly. A symlinked marker is never
+// HostPiExtensionsInstalled reports whether dir's marker exists and matches
+// the CURRENT HostPiPackages set exactly. A symlinked marker is never
 // followed — treated as absent (untrusted), so it always falls through to a
 // real (re)install rather than trusting a link it didn't write.
-func hostPiExtensionsInstalled(dir string) bool {
-	path := filepath.Join(dir, hostPiExtensionsLockFile)
+func HostPiExtensionsInstalled(dir string) bool {
+	path := filepath.Join(dir, HostPiExtensionsLockFile)
 	fi, err := os.Lstat(path)
 	if err != nil || fi.Mode()&os.ModeSymlink != 0 {
 		return false
@@ -218,51 +218,51 @@ func hostPiExtensionsInstalled(dir string) bool {
 	if err != nil {
 		return false
 	}
-	return string(b) == hostPiExtensionsMarker()
+	return string(b) == HostPiExtensionsMarker()
 }
 
-// writeHostPiExtensionsMarker refreshes the marker AFTER every package in
-// hostPiPackages installs successfully. Symlink-safe: a pre-existing symlink
+// WriteHostPiExtensionsMarker refreshes the marker AFTER every package in
+// HostPiPackages installs successfully. Symlink-safe: a pre-existing symlink
 // at the marker path is removed (never written through) before the real file
 // is written.
-func writeHostPiExtensionsMarker(dir string) error {
-	path := filepath.Join(dir, hostPiExtensionsLockFile)
+func WriteHostPiExtensionsMarker(dir string) error {
+	path := filepath.Join(dir, HostPiExtensionsLockFile)
 	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 		if rerr := os.Remove(path); rerr != nil {
 			return rerr
 		}
 	}
-	return os.WriteFile(path, []byte(hostPiExtensionsMarker()), 0o644)
+	return os.WriteFile(path, []byte(HostPiExtensionsMarker()), 0o644)
 }
 
-// installHostPiExtensions installs the curated pi extension packages into dir
+// InstallHostPiExtensions installs the curated pi extension packages into dir
 // (PI_CODING_AGENT_DIR), mirroring the Dockerfile's curated `pi install` loop.
 // Returns the packages that failed to install (empty on full success, or the
 // whole set when `pi` isn't on PATH). Split out of runHostSetup so tests can
 // drive it directly against a fake `pi` on PATH.
-func installHostPiExtensions(errw io.Writer, dir string) []string {
+func InstallHostPiExtensions(errw io.Writer, dir string) []string {
 	piBin, lookErr := exec.LookPath("pi")
 	if lookErr != nil {
 		fmt.Fprintln(errw, "pix host setup: `pi` not found on PATH — install the image's pinned version:")
-		fmt.Fprintln(errw, "  npm install -g "+hostPinnedPiPackage)
-		return hostPiPackages
+		fmt.Fprintln(errw, "  npm install -g "+HostPinnedPiPackage)
+		return HostPiPackages
 	}
 	if err := checkHostPiVersion(piBin); err != nil {
 		fmt.Fprintf(errw, "pix host setup: incompatible `pi`: %v\n", err)
-		fmt.Fprintln(errw, "  npm install -g "+hostPinnedPiPackage)
-		return hostPiPackages
+		fmt.Fprintln(errw, "  npm install -g "+HostPinnedPiPackage)
+		return HostPiPackages
 	}
-	if hostPiExtensionsInstalled(dir) {
-		fmt.Fprintf(errw, "pix host setup: pi extensions: already installed (%d), skipping\n", len(hostPiPackages))
+	if HostPiExtensionsInstalled(dir) {
+		fmt.Fprintf(errw, "pix host setup: pi extensions: already installed (%d), skipping\n", len(HostPiPackages))
 		return nil
 	}
-	fmt.Fprintf(errw, "pix host setup: installing %d pi extensions...\n", len(hostPiPackages))
+	fmt.Fprintf(errw, "pix host setup: installing %d pi extensions...\n", len(HostPiPackages))
 	var failed []string
-	for i, p := range hostPiPackages {
+	for i, p := range HostPiPackages {
 		// A progress line BEFORE the install so a slow/noisy npm install is never a
 		// silent multi-minute hang — the noisy output itself stays captured and
 		// only surfaces on failure.
-		fmt.Fprintf(errw, "  installing pi extension %s (%d/%d)...\n", p, i+1, len(hostPiPackages))
+		fmt.Fprintf(errw, "  installing pi extension %s (%d/%d)...\n", p, i+1, len(HostPiPackages))
 		cmd := exec.Command(piBin, "install", "npm:"+p)
 		cmd.Env = append(os.Environ(), "PI_CODING_AGENT_DIR="+dir)
 		// Capture the (very noisy) npm output; only surface it if the install
@@ -278,7 +278,7 @@ func installHostPiExtensions(errw io.Writer, dir string) []string {
 	if len(failed) == 0 {
 		// Write/refresh the marker ONLY after every package installs
 		// successfully — a partial failure must keep re-attempting next run.
-		if merr := writeHostPiExtensionsMarker(dir); merr != nil {
+		if merr := WriteHostPiExtensionsMarker(dir); merr != nil {
 			fmt.Fprintf(errw, "pix host setup: could not write extensions marker: %v\n", merr)
 		}
 	}
@@ -333,12 +333,12 @@ in the tree, and nothing else.
 // missing or an install fails, it prints the exact commands to run instead of
 // silently producing a broken dir). Idempotent.
 func runHostSetup(errw *os.File) error {
-	root, err := resolveRepoRoot()
+	root, err := ResolveRepoRoot()
 	if err != nil {
 		return fmt.Errorf("host setup needs a pix checkout to symlink the harness from: %w", err)
 	}
 	dir := workspace.HostAgentDir()
-	if err := provisionHostAgentDir(root, dir, errw); err != nil {
+	if err := ProvisionHostAgentDir(root, dir, errw); err != nil {
 		return err
 	}
 
@@ -356,10 +356,10 @@ func runHostSetup(errw *os.File) error {
 
 	// Curated pi extension packages, mirroring the Dockerfile install loop. `pi
 	// install` writes into the config dir's npm/node_modules, so point it at the
-	// host agent dir via PI_CODING_AGENT_DIR. IDEMPOTENT (installHostPiExtensions):
-	// skips the whole install when the marker matches the current hostPiPackages
+	// host agent dir via PI_CODING_AGENT_DIR. IDEMPOTENT (InstallHostPiExtensions):
+	// skips the whole install when the marker matches the current HostPiPackages
 	// set, so a re-run of `pix setup` isn't a silent multi-minute reinstall.
-	failed := installHostPiExtensions(errw, dir)
+	failed := InstallHostPiExtensions(errw, dir)
 	if len(failed) > 0 {
 		fmt.Fprintln(errw, "pix host setup: TODO — these pi extension packages did not install;")
 		fmt.Fprintln(errw, "run the following once `pi` works (they land in "+dir+"):")
@@ -372,7 +372,7 @@ func runHostSetup(errw *os.File) error {
 	// Host mode reaches cloud models only through hostmode.env refs. A user may
 	// deliberately trust existing sbx keys during setup, leaving host mode local.
 	// Report the actual state without treating that choice as a setup failure.
-	env := defaultShellEnv()
+	env := DefaultEnv()
 	// "configured", not "wired": this only checks that hostmode.env carries a
 	// syntactically filled op:// ref per provider name — it does NOT run `op
 	// read` here, so it proves nothing about whether the ref actually resolves.
@@ -404,10 +404,10 @@ func runHostSetup(errw *os.File) error {
 // just fail to connect every session.
 var hostHarnessFiles = []string{"capabilities.json", "routing.json", "keybindings.json"}
 
-// provisionHostAgentDir does the filesystem half of `host setup` (symlinks,
+// ProvisionHostAgentDir does the filesystem half of `host setup` (symlinks,
 // settings.json, host-context.md, sessions/). Split from runHostSetup so tests
 // can drive it against a temp root/dir without exec'ing `pi install`.
-func provisionHostAgentDir(root, dir string, errw *os.File) error {
+func ProvisionHostAgentDir(root, dir string, errw *os.File) error {
 	if err := os.MkdirAll(filepath.Join(dir, "sessions"), 0o755); err != nil {
 		return err
 	}
@@ -467,10 +467,10 @@ var hostSecretDirs = []string{
 	filepath.Join(".config", "gh"),
 }
 
-// resolveHostWorkspace canonicalizes workspace (Abs + EvalSymlinks — a
+// ResolveHostWorkspace canonicalizes workspace (Abs + EvalSymlinks — a
 // /tmp/link-to-home symlink must NOT defeat the check) and validates it against
 // the host-mode refusal list. It returns the resolved real path.
-func resolveHostWorkspace(ws string) (string, error) {
+func ResolveHostWorkspace(ws string) (string, error) {
 	abs, err := filepath.Abs(ws)
 	if err != nil {
 		return "", err
@@ -483,18 +483,18 @@ func resolveHostWorkspace(ws string) (string, error) {
 	if err != nil {
 		home = ""
 	}
-	if err := validateHostWorkspace(real, home); err != nil {
+	if err := ValidateHostWorkspace(real, home); err != nil {
 		return "", err
 	}
 	return real, nil
 }
 
-// validateHostWorkspace is the stronger host-mode sibling of
-// validateRunWorkspace: it takes an already-CANONICALIZED real path (the caller
+// ValidateHostWorkspace is the stronger host-mode sibling of
+// ValidateRunWorkspace: it takes an already-CANONICALIZED real path (the caller
 // EvalSymlinks'd it) and refuses $HOME, /, /etc (and anything under /etc), any
 // workspace inside a secret dir, and any workspace that directly contains one.
 // Pure given (real, home) so tests can drive it hermetically.
-func validateHostWorkspace(real, home string) error {
+func ValidateHostWorkspace(real, home string) error {
 	if real == "/" {
 		return fmt.Errorf("refusing to run host mode with the ws at / — pick a project directory")
 	}
@@ -543,14 +543,14 @@ func validateHostWorkspace(real, home string) error {
 	return nil
 }
 
-// hostChildEnv returns the host-mode env contract (see the runHost comment),
+// HostChildEnv returns the host-mode env contract (see the RunHost comment),
 // appended to os.Environ() for the child only — never exported, never persisted.
 // MEMORY_URL/KNOWLEDGE_URL honor the same MEMORY_PORT/KNOWLEDGE_PORT overrides
 // the services themselves honor (serve.go), so a non-default `pix serve`
 // and the host session agree on where the daemons live. ollamaModel (config
 // ollama_bridge_model) rides along as OLLAMA_BRIDGE_MODEL — the env-var half of
 // what run.go does with the workspace file, and the bridge's strongest override.
-func hostChildEnv(agentDir, ollamaModel string) []string {
+func HostChildEnv(agentDir, ollamaModel string) []string {
 	env := []string{
 		"PI_CODING_AGENT_DIR=" + agentDir,
 		fmt.Sprintf("MEMORY_URL=http://127.0.0.1:%d", rpc.PortFromEnv("MEMORY_PORT", rpc.MemoryPortDefault)),
@@ -572,10 +572,10 @@ func hostChildEnv(agentDir, ollamaModel string) []string {
 	return env
 }
 
-// buildHostArgs composes pi's argv (after the binary name). Pure + testable.
+// BuildHostArgs composes pi's argv (after the binary name). Pure + testable.
 // The guard extension and the host preamble are Phase-1 security blockers, so
 // they are always present — the caller refuses to launch when either is missing.
-func buildHostArgs(agentDir, preamble, personalSkills string, o hostOpts) []string {
+func BuildHostArgs(agentDir, preamble, personalSkills string, o HostOpts) []string {
 	args := []string{
 		"--session-dir", filepath.Join(agentDir, "sessions"),
 		"-e", filepath.Join(agentDir, "extensions", "host-guard.ts"),
@@ -591,10 +591,10 @@ func buildHostArgs(agentDir, preamble, personalSkills string, o hostOpts) []stri
 	return args
 }
 
-// hostBanner is the per-launch stderr warning (red when stderr is a TTY). A
+// HostBanner is the per-launch stderr warning (red when stderr is a TTY). A
 // banner scrolls away — the persistent in-session HOST badge is the TS side's
 // job (status.ts) — but leaving the boundary must be loud at the threshold too.
-func hostBanner(tty bool) string {
+func HostBanner(tty bool) string {
 	b := "⚠ HOST MODE — commands run on YOUR machine. No sandbox, no network fence, real credentials. Ctrl-C to abort."
 	if tty {
 		return "\x1b[1;31m" + b + "\x1b[0m\n"
@@ -613,8 +613,8 @@ Dockerfile / pi-kit / baked-file edits need ` + "`make load`" + ` + a fresh sand
 // knowledge scope, memory scope), and execs the host-installed pi — via
 // `op run --env-file` when the host refs file exists (keys resolved
 // just-in-time, never persisted), else keyless (Ollama-only).
-func runHostLaunch(o hostOpts) {
-	ws, err := resolveHostWorkspace(o.Workspace)
+func runHostLaunch(o HostOpts) {
+	ws, err := ResolveHostWorkspace(o.Workspace)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix host: %v\n", err)
 		os.Exit(1)
@@ -638,15 +638,15 @@ func runHostLaunch(o hostOpts) {
 	piBin, err := exec.LookPath("pi")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "pix host: `pi` not found on PATH. Install the same version the image pins:")
-		fmt.Fprintln(os.Stderr, "  npm install -g "+hostPinnedPiPackage)
+		fmt.Fprintln(os.Stderr, "  npm install -g "+HostPinnedPiPackage)
 		os.Exit(1)
 	}
 	if err := checkHostPiVersion(piBin); err != nil {
 		fmt.Fprintf(os.Stderr, "pix host: incompatible `pi`: %v\n", err)
-		fmt.Fprintln(os.Stderr, "  npm install -g "+hostPinnedPiPackage)
+		fmt.Fprintln(os.Stderr, "  npm install -g "+HostPinnedPiPackage)
 		os.Exit(1)
 	}
-	if !hostPiExtensionsInstalled(agentDir) {
+	if !HostPiExtensionsInstalled(agentDir) {
 		fmt.Fprintln(os.Stderr, "pix host: curated pi extensions are missing or stale.")
 		fmt.Fprintln(os.Stderr, "  pix host setup")
 		os.Exit(1)
@@ -676,13 +676,13 @@ func runHostLaunch(o hostOpts) {
 		fmt.Fprintf(os.Stderr, "pix host: %v\n", err)
 		os.Exit(1)
 	}
-	wireKnowledgeScope(cfg, ws, defaultKnowledgeRPC())
+	WireKnowledgeScope(cfg, ws, DefaultKnowledgeRPC())
 
 	// F3: refresh the active pack's host wrappers so a `pack use` since the
 	// last `host setup` takes effect, re-hashing every ACCEPTED [[bin]] against
 	// its pinned sha — a tampered external binary REFUSES the launch (fail
 	// closed; packs.md §9 safeguard 2). The wrappers land in pack.HostPackBinDir(),
-	// which hostChildEnv prepends to the child PATH — this launch path is the
+	// which HostChildEnv prepends to the child PATH — this launch path is the
 	// ONLY thing that ever puts them on a PATH.
 	activePack, perr := pack.RefreshHostPackWrappers(os.Stderr, cfg, true)
 	if perr != nil {
@@ -718,7 +718,7 @@ func runHostLaunch(o hostOpts) {
 	if personal != "" {
 		combinedPreamble += "\n\n# Personal instructions\n\n" + personal + "\n"
 	}
-	piArgs := buildHostArgs(agentDir, combinedPreamble, personalSkillsDir(), o)
+	piArgs := BuildHostArgs(agentDir, combinedPreamble, personalSkillsDir(), o)
 	var cmd *exec.Cmd
 	if useOp {
 		// --no-masking is REQUIRED for an interactive launch: op's default output
@@ -738,9 +738,9 @@ func runHostLaunch(o hostOpts) {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Env = append(os.Environ(), hostChildEnv(agentDir, cfg.OllamaBridgeModel)...)
+	cmd.Env = append(os.Environ(), HostChildEnv(agentDir, cfg.OllamaBridgeModel)...)
 
-	fmt.Fprint(os.Stderr, hostBanner(cli.IsTTY(os.Stderr)))
+	fmt.Fprint(os.Stderr, HostBanner(cli.IsTTY(os.Stderr)))
 	if isRepoRoot(ws) {
 		fmt.Fprint(os.Stderr, hostSelfDevFooter)
 	}

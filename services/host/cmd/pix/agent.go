@@ -29,6 +29,7 @@ import (
 	"pix/host/readiness/axis"
 	"pix/host/routing"
 	"pix/host/sys"
+	"pix/host/workflow/launch"
 
 	"gopkg.in/yaml.v3"
 )
@@ -68,11 +69,6 @@ func fatalLauncher(err error) {
 var valueFlags = map[string]bool{
 	"--intent": true, "--description": true, "--tools": true,
 	"--budget": true, "--model": true,
-}
-
-func printJSONLauncher(v any) {
-	b, _ := json.MarshalIndent(v, "", "  ")
-	fmt.Println(string(b))
 }
 
 func runAgent(argv []string) {
@@ -271,7 +267,7 @@ func agentLs(d *cli.Deps, jsonOut bool) error {
 			model, why := resolveAgentModel(m, reg, sc, pol)
 			rows = append(rows, row{n, model, why, m.Intent, m.Tools, m.BudgetUSD})
 		}
-		printJSONLauncher(rows)
+		launch.PrintJSONLauncher(rows)
 		return nil
 	}
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)

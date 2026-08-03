@@ -1,13 +1,14 @@
 package main
 
 // These two moved BACK from the workspace package. They exercise pack and run
-// behaviour (pack.WriteMemoryScope, wireKnowledgeScope) that happens to write a
+// behaviour (pack.WriteMemoryScope, launch.WireKnowledgeScope) that happens to write a
 // workspace state file — the subject is the caller, not the writer, so they
 // belong with the caller.
 
 import (
 	"os"
 	"path/filepath"
+	"pix/host/workflow/launch"
 	"pix/host/workflow/pack"
 	"runtime"
 	"testing"
@@ -50,13 +51,13 @@ func TestWriteMemoryScopeSymlinkSafe(t *testing.T) {
 	}
 }
 
-// End-to-end through an error-returning caller: writeKnowledgeScope refuses a
+// End-to-end through an error-returning caller: launch.WriteKnowledgeScope refuses a
 // symlinked .pix dir instead of writing through it.
 func TestWriteKnowledgeScopeSymlinkedDirRefused(t *testing.T) {
 	ws := t.TempDir()
 	requireSymlink(t, t.TempDir(), filepath.Join(ws, ".pix"))
-	if err := writeKnowledgeScope(ws, []string{"/some/bundle"}); err == nil {
-		t.Fatal("writeKnowledgeScope through a symlinked .pix dir: want error, got nil")
+	if err := launch.WriteKnowledgeScope(ws, []string{"/some/bundle"}); err == nil {
+		t.Fatal("launch.WriteKnowledgeScope through a symlinked .pix dir: want error, got nil")
 	}
 }
 

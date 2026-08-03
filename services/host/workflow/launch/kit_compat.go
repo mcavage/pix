@@ -1,4 +1,4 @@
-package main
+package launch
 
 import (
 	"fmt"
@@ -8,16 +8,16 @@ import (
 	"strings"
 )
 
-// validateCreateKits asks the installed sbx parser to validate local kits
+// ValidateCreateKits asks the installed sbx parser to validate local kits
 // before `sbx run` performs any interactive/global setup. This catches
 // nightly schema skew without opening a policy wizard and ending in a raw
 // YAML decoder dump. Remote kits remain sbx's responsibility because
 // validating them here would add an eager network fetch.
-func validateCreateKits(args []string, validate func(string) (string, error)) error {
+func ValidateCreateKits(args []string, validate func(string) (string, error)) error {
 	if validate == nil {
 		return nil
 	}
-	for _, ref := range localKitArgs(args) {
+	for _, ref := range LocalKitArgs(args) {
 		out, err := validate(ref)
 		if err == nil {
 			continue
@@ -31,7 +31,7 @@ func validateCreateKits(args []string, validate func(string) (string, error)) er
 	return nil
 }
 
-func localKitArgs(args []string) []string {
+func LocalKitArgs(args []string) []string {
 	var refs []string
 	for i := 0; i+1 < len(args); i++ {
 		if args[i] != "--kit" {
@@ -55,12 +55,12 @@ func firstOutputLine(out string) string {
 	return ""
 }
 
-func validateSbxKit(ref string) (string, error) {
+func ValidateSbxKit(ref string) (string, error) {
 	b, err := exec.Command("sbx", "kit", "validate", ref).CombinedOutput()
 	return string(b), err
 }
 
-func validateSetupKit(version string, repoRoot func() (string, error), validate func(string) (string, error)) error {
+func ValidateSetupKit(version string, repoRoot func() (string, error), validate func(string) (string, error)) error {
 	if launcher.IsReleased(version) || repoRoot == nil {
 		return nil
 	}
@@ -68,5 +68,5 @@ func validateSetupKit(version string, repoRoot func() (string, error), validate 
 	if err != nil {
 		return nil // run will use the remote main kit
 	}
-	return validateCreateKits([]string{"--kit", filepath.Join(root, "pi-kit")}, validate)
+	return ValidateCreateKits([]string{"--kit", filepath.Join(root, "pi-kit")}, validate)
 }

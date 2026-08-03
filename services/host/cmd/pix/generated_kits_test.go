@@ -8,12 +8,14 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/inference"
+	"pix/host/workflow/launch"
 )
 
 func TestPreflightBeforeReplaceFailureLeavesOldSandboxAlone(t *testing.T) {
 	want := errors.New("trusted state unavailable")
 	replaced := false
-	err := preflightBeforeReplace(func() error { return want }, func() error {
+	err := launch.PreflightBeforeReplace(func() error { return want }, func() error {
 		replaced = true
 		return nil
 	})
@@ -27,7 +29,7 @@ func TestPreflightBeforeReplaceFailureLeavesOldSandboxAlone(t *testing.T) {
 
 func TestPreflightBeforeReplaceRunsReplacementLast(t *testing.T) {
 	var order []string
-	err := preflightBeforeReplace(func() error {
+	err := launch.PreflightBeforeReplace(func() error {
 		order = append(order, "preflight")
 		return nil
 	}, func() error {
@@ -54,7 +56,7 @@ func TestCleanupGeneratedKitDirsRemovesSynthesizedKitsOnly(t *testing.T) {
 			{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "reasoner", Available: true},
 		},
 	}}
-	inferenceKit, err := synthesizeInferenceKit(cfg)
+	inferenceKit, err := inference.SynthesizeInferenceKit(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,13 +67,13 @@ func TestCleanupGeneratedKitDirsRemovesSynthesizedKitsOnly(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(contextRoot, "AGENTS.md"), []byte("personal instructions\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	contextKit, err := synthesizePersonalContextKit()
+	contextKit, err := launch.SynthesizePersonalContextKit()
 	if err != nil {
 		t.Fatal(err)
 	}
 	packKit := t.TempDir()
 
-	if err := cleanupGeneratedKitDirs([]string{inferenceKit, contextKit, inferenceKit}); err != nil {
+	if err := launch.CleanupGeneratedKitDirs([]string{inferenceKit, contextKit, inferenceKit}); err != nil {
 		t.Fatal(err)
 	}
 	for _, path := range []string{inferenceKit, contextKit} {

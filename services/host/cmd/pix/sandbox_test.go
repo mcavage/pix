@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"pix/host/workflow/launch"
 	"pix/host/workspace"
 	"testing"
 	"time"
@@ -54,7 +55,7 @@ func TestOverlayReceiptDirs_PrefersCanonicalCreatedWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	boxes := []workspace.SbxBox{{Name: "pix-demo", State: "running", Dir: "/wrong/pack/skills"}}
-	overlayReceiptDirs(boxes, stateDir)
+	launch.OverlayReceiptDirs(boxes, stateDir)
 	if boxes[0].Dir != ws {
 		t.Fatalf("dir = %q, want receipt ws %q", boxes[0].Dir, ws)
 	}

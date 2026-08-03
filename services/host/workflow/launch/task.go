@@ -1,4 +1,4 @@
-package main
+package launch
 
 import (
 	"crypto/sha256"
@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"pix/host/cli"
 	"pix/host/hostenv"
+	"pix/host/inference"
 	"pix/host/launcher"
 	"pix/host/mcp"
 	"pix/host/secret"
@@ -26,7 +27,7 @@ import (
 	"time"
 )
 
-const taskUsage = `usage: pix task <new|ls|path|rm|gc|harvest> [args]
+const TaskUsage = `usage: pix task <new|ls|path|rm|gc|harvest> [args]
 
 Run parallel tasks on one repo. Each task is a local clone with its own branch
 and sandbox, so tasks never collide. Commits land in the task's clone on this
@@ -46,41 +47,41 @@ Harvested docs live under $XDG_DATA_HOME/pix/artifacts, so they survive a
 ` + "`pix state reset`" + `.
 `
 
-// taskLaunch is the seam `task new` uses to hand a resolved clone to the run
+// TaskLaunch is the seam `task new` uses to hand a resolved clone to the run
 // path. It is a package var so tests can stub the launch (a real launch needs
 // sbx + Docker). The default reuses run.go's helpers without touching run.go.
-var taskLaunch = launchTask
+var TaskLaunch = launchTask
 
-// runTask is the verbatim dispatcher for the `task` grouping noun (mirrors
+// RunTask is the verbatim dispatcher for the `task` grouping noun (mirrors
 // runState). A bare noun and -h/--help print the group usage and exit 0; an
 // unknown subcommand is a usage error (exit 2).
-func runTask(argv []string) {
+func RunTask(argv []string) {
 	if len(argv) == 0 || argv[0] == "-h" || argv[0] == "--help" {
-		fmt.Print(taskUsage)
+		fmt.Print(TaskUsage)
 		return
 	}
 	switch argv[0] {
 	case "new":
-		runTaskNew(defaultShellEnv(), argv[1:])
+		RunTaskNew(DefaultEnv(), argv[1:])
 	case "ls", "list":
-		runTaskLs(defaultShellEnv(), argv[1:])
+		RunTaskLs(DefaultEnv(), argv[1:])
 	case "path":
-		runTaskPath(defaultShellEnv(), argv[1:])
+		runTaskPath(DefaultEnv(), argv[1:])
 	case "rm", "remove":
-		runTaskRm(defaultShellEnv(), argv[1:])
+		RunTaskRm(DefaultEnv(), argv[1:])
 	case "gc":
-		runTaskGc(defaultShellEnv(), argv[1:])
+		RunTaskGc(DefaultEnv(), argv[1:])
 	case "harvest":
-		runTaskHarvest(defaultShellEnv(), argv[1:])
+		runTaskHarvest(DefaultEnv(), argv[1:])
 	default:
 		// Support the `pix task <name> path` grammar (name-then-verb) the
 		// user reaches for, so `cd "$(pix task foo path)"` reads naturally.
 		// The canonical form is `task path <name>`; this is a convenience alias.
 		if len(argv) == 2 && argv[1] == "path" {
-			runTaskPath(defaultShellEnv(), argv[:1])
+			runTaskPath(DefaultEnv(), argv[:1])
 			return
 		}
-		fmt.Fprintf(os.Stderr, "pix task: unknown subcommand %q\n\n%s", argv[0], taskUsage)
+		fmt.Fprintf(os.Stderr, "pix task: unknown subcommand %q\n\n%s", argv[0], TaskUsage)
 		os.Exit(2)
 	}
 }
@@ -89,29 +90,29 @@ func runTask(argv []string) {
 // Pure helpers (name / path / key). No filesystem writes, no exec.
 // ---------------------------------------------------------------------------
 
-// maxTaskNameLen caps the sanitized <name> segment before it is composed into
+// MaxTaskNameLen caps the sanitized <name> segment before it is composed into
 // the full sandbox name. An overflow is truncated and tagged with a short hash
 // of the full name so it stays unique. The COMPOSITE name is bounded separately
-// by boundSandboxName against maxSandboxNameLen; this per-segment cap only keeps
+// by BoundSandboxName against MaxSandboxNameLen; this per-segment cap only keeps
 // a single pathological name from dominating the whole budget.
-const maxTaskNameLen = 40
+const MaxTaskNameLen = 40
 
-// maxSandboxNameLen is the hard cap on the composed sandbox name
+// MaxSandboxNameLen is the hard cap on the composed sandbox name
 // (pix-t-<label>-<repokey>-<name>[-<profile>]). 63 is the strictest common
 // limit (RFC1123 label); sbx never enforced a total, so this is the safe
-// conservative bound. boundSandboxName trims to fit: name first, then label,
+// conservative bound. BoundSandboxName trims to fit: name first, then label,
 // NEVER the repokey (the uniqueness guarantee).
-const maxSandboxNameLen = 63
+const MaxSandboxNameLen = 63
 
-// maxRepoLabelLen caps the human repo label. The label is a legibility hint, not
+// MaxRepoLabelLen caps the human repo label. The label is a legibility hint, not
 // an identifier (the repokey guarantees uniqueness), so an overflow is a plain
 // truncation with no hash tag.
-const maxRepoLabelLen = 12
+const MaxRepoLabelLen = 12
 
-// taskRepoKey is the stable per-repo key: the first 8 hex of sha256 of the
+// TaskRepoKey is the stable per-repo key: the first 8 hex of sha256 of the
 // canonical absolute path of the main worktree. Repo-qualifying the sandbox
 // name this way means two repos with a task called "fix" never collide.
-func taskRepoKey(mainroot string) string {
+func TaskRepoKey(mainroot string) string {
 	p := mainroot
 	if abs, err := filepath.Abs(mainroot); err == nil {
 		p = abs
@@ -123,14 +124,14 @@ func taskRepoKey(mainroot string) string {
 	return hex.EncodeToString(sum[:])[:8]
 }
 
-// taskRepoLabel is the human-readable repo hint stamped into the sandbox name
+// TaskRepoLabel is the human-readable repo hint stamped into the sandbox name
 // and the on-disk path so `task ls`, `sbx ls`, and a browse of the state dir are
 // legible without the user having to prefix every task name with the repo. It is
 // the sanitized basename of the repo (the git-common-dir's parent for a normal
-// repo, or the dir itself for a bare repo), capped at maxRepoLabelLen. It is a
+// repo, or the dir itself for a bare repo), capped at MaxRepoLabelLen. It is a
 // hint only: two repos that both basename to "api" still differ by their
 // repokey, so the label never has to be unique and overflow is a plain truncate.
-func taskRepoLabel(mainroot string) string {
+func TaskRepoLabel(mainroot string) string {
 	p := mainroot
 	if abs, err := filepath.Abs(mainroot); err == nil {
 		p = abs
@@ -160,8 +161,8 @@ func taskRepoLabel(mainroot string) string {
 	if out == "" {
 		out = "repo"
 	}
-	if len(out) > maxRepoLabelLen {
-		out = strings.TrimRight(out[:maxRepoLabelLen], "-")
+	if len(out) > MaxRepoLabelLen {
+		out = strings.TrimRight(out[:MaxRepoLabelLen], "-")
 		if out == "" {
 			out = "repo"
 		}
@@ -169,19 +170,19 @@ func taskRepoLabel(mainroot string) string {
 	return out
 }
 
-// taskRepoDir is the per-repo state dir segment: "<label>-<repokey>". Browsing
+// TaskRepoDir is the per-repo state dir segment: "<label>-<repokey>". Browsing
 // $STATE/pix/tasks/ is then readable (e.g. "pix-a1b2c3d4") while the
 // repokey still guarantees two same-named repos never collide.
-func taskRepoDir(mainroot string) string {
-	return taskRepoLabel(mainroot) + "-" + taskRepoKey(mainroot)
+func TaskRepoDir(mainroot string) string {
+	return TaskRepoLabel(mainroot) + "-" + TaskRepoKey(mainroot)
 }
 
-// taskLayout names a per-repo state dir and whether it is the legacy
+// TaskLayout names a per-repo state dir and whether it is the legacy
 // (pre-label) shape. legacy drives which sandbox-name formula a task's metadata
 // hardens to, so rm/gc/ls target the sandbox the task ACTUALLY owns.
-type taskLayout struct {
-	dir    string
-	legacy bool
+type TaskLayout struct {
+	Dir    string
+	Legacy bool
 }
 
 // hasTaskMetaDir reports whether dir (under the state root) is a populated repo
@@ -192,63 +193,63 @@ func hasTaskMetaDir(dir string) bool {
 	return err == nil && fi.IsDir()
 }
 
-// existingTaskLayouts returns every populated state layout for a repo: the new
+// ExistingTaskLayouts returns every populated state layout for a repo: the new
 // "<label>-<repokey>" dir and/or the legacy bare "<repokey>" dir. ls/gc iterate
 // this UNION so a legacy task never becomes invisible once a new-layout task is
 // created (the pre-label-migration bug).
-func existingTaskLayouts(mainroot string) []taskLayout {
-	newer := taskRepoDir(mainroot)
-	legacy := taskRepoKey(mainroot)
-	var out []taskLayout
+func ExistingTaskLayouts(mainroot string) []TaskLayout {
+	newer := TaskRepoDir(mainroot)
+	legacy := TaskRepoKey(mainroot)
+	var out []TaskLayout
 	if hasTaskMetaDir(newer) {
-		out = append(out, taskLayout{newer, false})
+		out = append(out, TaskLayout{newer, false})
 	}
 	if legacy != newer && hasTaskMetaDir(legacy) {
-		out = append(out, taskLayout{legacy, true})
+		out = append(out, TaskLayout{legacy, true})
 	}
 	return out
 }
 
-// findTaskLayout locates the layout holding task `sane` for the current repo,
+// FindTaskLayout locates the layout holding task `sane` for the current repo,
 // preferring the new labeled layout. found=false means no such task. A task that
 // exists in BOTH layouts is ambiguous (two distinct sandboxes) and callers must
 // refuse rather than guess which one to act on.
-func findTaskLayout(mainroot, sane string) (lay taskLayout, found, ambiguous bool) {
-	newer := taskRepoDir(mainroot)
-	legacy := taskRepoKey(mainroot)
-	_, newMeta := taskPaths(newer, sane)
-	_, legMeta := taskPaths(legacy, sane)
+func FindTaskLayout(mainroot, sane string) (lay TaskLayout, found, ambiguous bool) {
+	newer := TaskRepoDir(mainroot)
+	legacy := TaskRepoKey(mainroot)
+	_, newMeta := TaskPaths(newer, sane)
+	_, legMeta := TaskPaths(legacy, sane)
 	newOK := sys.PathExists(newMeta)
 	legOK := legacy != newer && sys.PathExists(legMeta)
 	switch {
 	case newOK && legOK:
-		return taskLayout{}, false, true
+		return TaskLayout{}, false, true
 	case newOK:
-		return taskLayout{newer, false}, true, false
+		return TaskLayout{newer, false}, true, false
 	case legOK:
-		return taskLayout{legacy, true}, true, false
+		return TaskLayout{legacy, true}, true, false
 	default:
-		return taskLayout{newer, false}, false, false
+		return TaskLayout{newer, false}, false, false
 	}
 }
 
-// taskPaths resolves the checkout dir and metadata file for a task. repoDir is
+// TaskPaths resolves the checkout dir and metadata file for a task. repoDir is
 // the per-repo state dir segment (new "<label>-<repokey>" or legacy "<repokey>")
 // and name is expected to be already sanitized by the caller.
-func taskPaths(repoDir, name string) (co, meta string) {
+func TaskPaths(repoDir, name string) (co, meta string) {
 	base := filepath.Join(workspace.TaskStateRoot(), repoDir)
 	co = filepath.Join(base, "co", name)
 	meta = filepath.Join(base, "meta", name+".json")
 	return co, meta
 }
 
-// reserveTaskCheckout atomically claims the checkout dir co. It creates co's
+// ReserveTaskCheckout atomically claims the checkout dir co. It creates co's
 // parent tree, then os.Mkdir(co): mkdir fails with fs.ErrExist when co already
 // exists, which is the atomic "task exists" signal (no check-then-create race
 // between concurrent `task new` for the same name). It returns owned=true only
 // when THIS call created co, so callers can gate rollback (os.RemoveAll) on
 // ownership and never delete a directory a sibling invocation is using.
-func reserveTaskCheckout(co string) (owned bool, err error) {
+func ReserveTaskCheckout(co string) (owned bool, err error) {
 	if err := os.MkdirAll(filepath.Dir(co), 0o700); err != nil {
 		return false, err
 	}
@@ -258,18 +259,18 @@ func reserveTaskCheckout(co string) (owned bool, err error) {
 	return true, nil
 }
 
-// taskLockPath is the per-task advisory lock file, keyed by the CANONICAL repokey
+// TaskLockPath is the per-task advisory lock file, keyed by the CANONICAL repokey
 // (NOT the layout dir): $STATE/pix/tasks/<repokey>/locks/<name>.lock. Keying
 // by repokey makes a legacy task and a new-layout task of the same name mutually
 // exclusive (a `task new` cannot race a legacy `task rm`). The dir has no meta/
 // subdir, so hasTaskMetaDir never mistakes it for a legacy layout. It sits
 // OUTSIDE the co/ and meta/ trees `task rm` deletes, so it is never a removed
 // artifact (tiny and harmless to leave behind).
-func taskLockPath(repokey, name string) string {
-	return filepath.Join(workspace.TaskStateRoot(), repokey, "locks", sanitizeTaskName(name)+".lock")
+func TaskLockPath(repokey, name string) string {
+	return filepath.Join(workspace.TaskStateRoot(), repokey, "locks", SanitizeTaskName(name)+".lock")
 }
 
-// withTaskLock serializes EVERY lifecycle operation for a single (repokey, name)
+// WithTaskLock serializes EVERY lifecycle operation for a single (repokey, name)
 // behind an exclusive advisory file lock, so `task new` and `task rm` on the
 // same name are mutually exclusive (new-vs-new, rm-vs-rm, and new-vs-rm). This
 // is what closes the same-name concurrency class: instead of plugging each
@@ -283,17 +284,17 @@ func taskLockPath(repokey, name string) string {
 //
 // Callers must NOT call os.Exit inside fn — os.Exit skips defers, so the lock
 // would never release. The pattern is to return an exit code out through a
-// captured variable and os.Exit only AFTER withTaskLock returns.
-func withTaskLock(repokey, name string, fn func() error) error {
+// captured variable and os.Exit only AFTER WithTaskLock returns.
+func WithTaskLock(repokey, name string, fn func() error) error {
 	// Shared flock helper (serve_start.go) — the same dance the serve spawn lock
 	// uses, factored so it is written once.
-	return sys.Lock(taskLockPath(repokey, name), fn)
+	return sys.Lock(TaskLockPath(repokey, name), fn)
 }
 
-// sanitizeTaskName keeps a task name safe as a path + sandbox-name segment
+// SanitizeTaskName keeps a task name safe as a path + sandbox-name segment
 // (reuses the profile sanitizer's shape) and caps its length, hashing the tail
 // when it would overflow.
-func sanitizeTaskName(name string) string {
+func SanitizeTaskName(name string) string {
 	var b strings.Builder
 	for _, r := range name {
 		switch {
@@ -307,40 +308,40 @@ func sanitizeTaskName(name string) string {
 	if out == "" {
 		out = "task"
 	}
-	if len(out) > maxTaskNameLen {
+	if len(out) > MaxTaskNameLen {
 		sum := sha256.Sum256([]byte(out))
-		out = out[:maxTaskNameLen-7] + "-" + hex.EncodeToString(sum[:])[:6]
+		out = out[:MaxTaskNameLen-7] + "-" + hex.EncodeToString(sum[:])[:6]
 	}
 	return out
 }
 
-// taskSandboxName is the collision-proof sandbox name for a task:
+// TaskSandboxName is the collision-proof sandbox name for a task:
 // "pix-t-" + label + "-" + repokey + "-" + sanitize(name) [+ "-" + profile].
 // The label is a human hint; the repokey is the uniqueness guarantee. The
 // profile suffix is added only for a NAMED (non-default) profile, mirroring
-// run.go. The composed name is bounded by boundSandboxName so it always stays
-// within maxSandboxNameLen.
-func taskSandboxName(label, repokey, name, profile string) string {
+// run.go. The composed name is bounded by BoundSandboxName so it always stays
+// within MaxSandboxNameLen.
+func TaskSandboxName(label, repokey, name, profile string) string {
 	_ = profile // profiles removed; the parameter is retained for call-site stability
-	return boundSandboxName(label, repokey, sanitizeTaskName(name), "")
+	return BoundSandboxName(label, repokey, SanitizeTaskName(name), "")
 }
 
-// legacyTaskSandboxName is the PRE-LABEL sandbox-name formula
+// LegacyTaskSandboxName is the PRE-LABEL sandbox-name formula
 // ("pix-t-<repokey>-<name>[-<profile>]"). Tasks created before the repo
 // label was introduced live in the bare-<repokey> state dir and own a sandbox
 // with THIS name, so rm/gc/ls must derive it (not the new labeled name) or they
 // would delete a clone while leaving its real sandbox running.
-func legacyTaskSandboxName(repokey, name, profile string) string {
+func LegacyTaskSandboxName(repokey, name, profile string) string {
 	_ = profile // profiles removed; retained for call-site stability
-	return "pix-t-" + repokey + "-" + sanitizeTaskName(name)
+	return "pix-t-" + repokey + "-" + SanitizeTaskName(name)
 }
 
-// boundSandboxName composes "pix-t-<label>-<repokey>-<name>[-<prof>]" and,
-// if it exceeds maxSandboxNameLen, trims to fit in priority order: the name
+// BoundSandboxName composes "pix-t-<label>-<repokey>-<name>[-<prof>]" and,
+// if it exceeds MaxSandboxNameLen, trims to fit in priority order: the name
 // first (hash-tagged so it stays unique), then the label (a cosmetic hint),
 // NEVER the repokey (correctness). prof is already sanitized and may be empty.
 // name and label are already sanitized by the caller.
-func boundSandboxName(label, repokey, name, prof string) string {
+func BoundSandboxName(label, repokey, name, prof string) string {
 	compose := func(l, n, p string) string {
 		s := "pix-t-" + l + "-" + repokey + "-" + n
 		if p != "" {
@@ -348,70 +349,70 @@ func boundSandboxName(label, repokey, name, prof string) string {
 		}
 		return s
 	}
-	if len(compose(label, name, prof)) <= maxSandboxNameLen {
+	if len(compose(label, name, prof)) <= MaxSandboxNameLen {
 		return compose(label, name, prof)
 	}
 	// 1. Trim the name (hash-tag it so a truncated name is still unique), keeping
 	// the full label + profile, down to a floor so a huge label can't erase the name.
-	for n := len(name); n >= nameTrimFloor; n-- {
+	for n := len(name); n >= NameTrimFloor; n-- {
 		cand := hashTagTrim(name, n)
-		if len(compose(label, cand, prof)) <= maxSandboxNameLen {
+		if len(compose(label, cand, prof)) <= MaxSandboxNameLen {
 			return compose(label, cand, prof)
 		}
 	}
 	// 2. Name is at its floor; now trim the label (a plain cosmetic truncation).
-	nameFloor := hashTagTrim(name, nameTrimFloor)
+	nameFloor := hashTagTrim(name, NameTrimFloor)
 	for l := len(label); l >= 1; l-- {
 		cand := strings.TrimRight(label[:l], "-")
 		if cand == "" {
 			continue
 		}
-		if len(compose(cand, nameFloor, prof)) <= maxSandboxNameLen {
+		if len(compose(cand, nameFloor, prof)) <= MaxSandboxNameLen {
 			return compose(cand, nameFloor, prof)
 		}
 	}
 	// 3. Drop the label entirely (repokey still guarantees uniqueness), then, if an
 	// absurdly long profile STILL overflows, hash-tag-trim the profile too. The
 	// repokey is never touched, so distinct tasks never collide.
-	if len(compose("repo", nameFloor, prof)) <= maxSandboxNameLen {
+	if len(compose("repo", nameFloor, prof)) <= MaxSandboxNameLen {
 		return compose("repo", nameFloor, prof)
 	}
 	for p := len(prof); p >= 0; p-- {
 		var cand string
 		if p > 0 {
-			cand = hashTagTrim(prof, max(p, nameTrimFloor))
-			if len(cand) > p && p < nameTrimFloor {
+			cand = hashTagTrim(prof, max(p, NameTrimFloor))
+			if len(cand) > p && p < NameTrimFloor {
 				continue
 			}
 		}
-		if len(compose("repo", nameFloor, cand)) <= maxSandboxNameLen {
+		if len(compose("repo", nameFloor, cand)) <= MaxSandboxNameLen {
 			return compose("repo", nameFloor, cand)
 		}
 	}
 	// Unreachable given the fixed-width prefix + repokey fit within 63, but never
 	// return an over-bound name: hard-truncate as the absolute last resort.
 	s := compose("repo", nameFloor, "")
-	if len(s) > maxSandboxNameLen {
-		s = s[:maxSandboxNameLen]
+	if len(s) > MaxSandboxNameLen {
+		s = s[:MaxSandboxNameLen]
 	}
 	return s
 }
 
-// nameTrimFloor is the minimum trimmed-name length: hashTagTrim needs the 10-hex
+// NameTrimFloor is the minimum trimmed-name length: hashTagTrim needs the 10-hex
 // tag + dash (11) plus at least 1 prefix rune.
-const nameTrimFloor = 12
+const NameTrimFloor = 12
 
 // hashTagTrim truncates s to n runes, appending a 10-hex tag of the ORIGINAL s
 // so two different names that truncate to the same prefix stay distinct (a
 // 40-bit tag makes a birthday collision astronomically unlikely across the
-// handful of tasks a repo ever has). n must be >= nameTrimFloor. A string
+// handful of tasks a repo ever has). n must be >= NameTrimFloor. A string
 // already <= n is returned unchanged.
 func hashTagTrim(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	if n < nameTrimFloor {
-		n = nameTrimFloor
+	if n < NameTrimFloor {
+		n = NameTrimFloor
 	}
 	sum := sha256.Sum256([]byte(s))
 	return s[:n-11] + "-" + hex.EncodeToString(sum[:])[:10]
@@ -428,7 +429,7 @@ func max(a, b int) int {
 // Metadata (§3): the single source of truth ls/rm read.
 // ---------------------------------------------------------------------------
 
-type taskMeta struct {
+type TaskMeta struct {
 	Name     string `json:"name"`
 	Mode     string `json:"mode"`
 	Sandbox  string `json:"sandbox"`
@@ -439,12 +440,12 @@ type taskMeta struct {
 	Profile  string `json:"profile"`
 	Created  string `json:"created"`
 	// Repo is the human repo label. Display/path only and re-derived from mainroot
-	// in hardenTaskMeta (never trusted from disk), so an old meta without it just
+	// in HardenTaskMeta (never trusted from disk), so an old meta without it just
 	// works and a tampered value can never steer a path or argv.
 	Repo string `json:"repo,omitempty"`
 }
 
-func writeTaskMeta(path string, m taskMeta) error {
+func WriteTaskMeta(path string, m TaskMeta) error {
 	// 0700 dir + 0600 file: meta.json can carry a tokenized origin URL, so it
 	// must never be world-readable.
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -452,7 +453,7 @@ func writeTaskMeta(path string, m taskMeta) error {
 	}
 	// Strip any embedded credentials (user:pass@) from the origin before it hits
 	// disk; the live remote URL used for `git push` keeps them, this copy does not.
-	m.Origin = stripURLUserinfo(m.Origin)
+	m.Origin = StripURLUserinfo(m.Origin)
 	b, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return err
@@ -460,11 +461,11 @@ func writeTaskMeta(path string, m taskMeta) error {
 	return os.WriteFile(path, append(b, '\n'), 0o600)
 }
 
-// stripURLUserinfo removes any user:pass@ userinfo from a URL, keeping only
+// StripURLUserinfo removes any user:pass@ userinfo from a URL, keeping only
 // scheme, host, and path. A value that does not parse as a scheme+host URL
 // (e.g. an scp-style `git@host:path` remote, which carries no inline token) is
 // returned unchanged.
-func stripURLUserinfo(raw string) string {
+func StripURLUserinfo(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return raw
@@ -472,14 +473,14 @@ func stripURLUserinfo(raw string) string {
 	return (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path}).String()
 }
 
-// hardenTaskMeta re-derives the security-sensitive fields (mainroot, branch,
+// HardenTaskMeta re-derives the security-sensitive fields (mainroot, branch,
 // sandbox) from the validated task name so a tampered meta.json can never steer
 // a git refspec or `sbx rm` argv against the main repo. fileBase is the file's
 // name without the .json suffix; the stored name MUST sanitize back to it,
 // otherwise the file was renamed or hand-edited and we refuse to trust it.
 //
 // The Profile field is a HOLDOVER from when profiles namespaced the sandbox
-// name (see taskSandboxName/legacyTaskSandboxName, which now ignore it — the
+// name (see TaskSandboxName/LegacyTaskSandboxName, which now ignore it — the
 // active PACK is the unit of context, see docs/design/packs.md). Every task
 // written by the current `task new` stores it as "" (workspace.LoadResolvedConfig always
 // returns "" now), and an OLDER meta may carry a real profile name like
@@ -487,12 +488,12 @@ func stripURLUserinfo(raw string) string {
 // Profile was the actual bug (AC-P0-008): it hid EVERY task the current writer
 // creates, because the writer and this guard disagreed about what "no profile"
 // means.
-func hardenTaskMeta(m taskMeta, mainroot, repokey string, legacy bool, fileBase string) (taskMeta, error) {
-	sane := sanitizeTaskName(m.Name)
+func HardenTaskMeta(m TaskMeta, mainroot, repokey string, legacy bool, fileBase string) (TaskMeta, error) {
+	sane := SanitizeTaskName(m.Name)
 	if sane != fileBase {
 		return m, fmt.Errorf("metadata name %q does not match its file %q.json", m.Name, fileBase)
 	}
-	label := taskRepoLabel(mainroot)
+	label := TaskRepoLabel(mainroot)
 	m.Mainroot = mainroot
 	m.Repo = label
 	m.Branch = "pix/" + sane
@@ -501,15 +502,15 @@ func hardenTaskMeta(m taskMeta, mainroot, repokey string, legacy bool, fileBase 
 	// pre-label sandbox name; a new-layout task owns the labeled name. Deriving the
 	// wrong one would let rm/gc delete a clone while its real sandbox lives on.
 	if legacy {
-		m.Sandbox = legacyTaskSandboxName(repokey, m.Name, m.Profile)
+		m.Sandbox = LegacyTaskSandboxName(repokey, m.Name, m.Profile)
 	} else {
-		m.Sandbox = taskSandboxName(label, repokey, m.Name, m.Profile)
+		m.Sandbox = TaskSandboxName(label, repokey, m.Name, m.Profile)
 	}
 	return m, nil
 }
 
-func readTaskMeta(path string) (taskMeta, error) {
-	var m taskMeta
+func ReadTaskMeta(path string) (TaskMeta, error) {
+	var m TaskMeta
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return m, err
@@ -522,19 +523,19 @@ func readTaskMeta(path string) (taskMeta, error) {
 // Teardown guard (§4): pure decision, gathered facts feed it.
 // ---------------------------------------------------------------------------
 
-// taskState carries the facts the removal guard decides on. The sandbox tri-state
-// is the SINGLE source of truth for the sandbox's liveness — gatherTaskState
+// TaskState carries the facts the removal guard decides on. The sandbox tri-state
+// is the SINGLE source of truth for the sandbox's liveness — GatherTaskState
 // probes once and stores it here, so the guard and the teardown executor never
 // re-derive running-ness from independent probes (the R3-1 fail-open race).
-type taskState struct {
-	sandbox  doctor.SbxState // the task's sandbox tri-state (running/stopped/absent/unknown)
-	dirty    bool            // the clone has uncommitted changes
-	unrec    int             // commits reachable from ANY clone head/HEAD that live ONLY here: not in the main repo AND not on a clone remote (the full would-lose-work count)
-	unpushed int             // commits ahead of the task branch's upstream (display only), or unrec when there is no upstream
-	unknown  bool            // the unrec probe failed; treat as possibly-unrecoverable (fail-safe)
+type TaskState struct {
+	Sandbox  doctor.SbxState // the task's sandbox tri-state (running/stopped/absent/unknown)
+	Dirty    bool            // the clone has uncommitted changes
+	Unrec    int             // commits reachable from ANY clone head/HEAD that live ONLY here: not in the main repo AND not on a clone remote (the full would-lose-work count)
+	Unpushed int             // commits ahead of the task branch's upstream (display only), or unrec when there is no upstream
+	Unknown  bool            // the unrec probe failed; treat as possibly-unrecoverable (fail-safe)
 }
 
-// taskRemoveGuard is the pure removal decision. It refuses (ok=false) with a
+// TaskRemoveGuard is the pure removal decision. It refuses (ok=false) with a
 // teachable reason when the sandbox is still running OR its state cannot be
 // determined (fail-safe on the tri-state probe), the clone is dirty, or it
 // holds ANY commit that lives ONLY here and is not on a remote — the precise
@@ -542,25 +543,25 @@ type taskState struct {
 // head + HEAD (scratch branches and a detached HEAD included), not just the
 // task branch. force overrides every refusal. The caller adds the exact
 // recovery commands (which need paths the guard does not carry).
-func taskRemoveGuard(state taskState, force bool) (blockMsg string, ok bool) {
+func TaskRemoveGuard(state TaskState, force bool) (blockMsg string, ok bool) {
 	if force {
 		return "", true
 	}
 	var reasons []string
-	switch state.sandbox {
-	case sbxRunning:
+	switch state.Sandbox {
+	case SbxRunning:
 		reasons = append(reasons, "the sandbox is still running; stop the session first (sbx stop <name>)")
-	case sbxUnknown:
+	case SbxUnknown:
 		reasons = append(reasons, "cannot determine sandbox state (sbx ls failed); resolve, then retry")
 	}
-	if state.dirty {
+	if state.Dirty {
 		reasons = append(reasons, "the clone has uncommitted changes")
 	}
-	if state.unknown {
+	if state.Unknown {
 		reasons = append(reasons, "could not determine whether this clone holds unrecovered commits (git probe failed)")
 	}
-	if state.unrec > 0 {
-		reasons = append(reasons, fmt.Sprintf("%d commit(s) exist only in this clone and are not pushed", state.unrec))
+	if state.Unrec > 0 {
+		reasons = append(reasons, fmt.Sprintf("%d commit(s) exist only in this clone and are not pushed", state.Unrec))
 	}
 	if len(reasons) == 0 {
 		return "", true
@@ -568,30 +569,30 @@ func taskRemoveGuard(state taskState, force bool) (blockMsg string, ok bool) {
 	return strings.Join(reasons, "; "), false
 }
 
-// taskForceSnapshotAbort is the pure L1 decision: even a --force removal must
+// TaskForceSnapshotAbort is the pure L1 decision: even a --force removal must
 // abort (leaving the clone intact) when the recovery snapshot failed AND the
 // work might be unrecoverable. Fail-safe: "might be" covers both a known count
 // of clone-only commits (unrec > 0) AND an UNKNOWN state (the unrec probe
 // failed), so a probe we could not run never green-lights a destructive drop.
-func taskForceSnapshotAbort(force bool, unrec int, unknown, snapshotFailed bool) bool {
+func TaskForceSnapshotAbort(force bool, unrec int, unknown, snapshotFailed bool) bool {
 	return force && snapshotFailed && (unrec > 0 || unknown)
 }
 
-// taskTeardownAbort is the fresh-probe fail-safe decision, made AFTER the guard
+// TaskTeardownAbort is the fresh-probe fail-safe decision, made AFTER the guard
 // passed but BEFORE any `sbx rm -f`. A final sandbox probe that reads running or
 // unknown must still refuse to proceed unless --force is set. This closes the
 // teardown race (R3-1): the gather-time state may have said stopped/absent, but
 // the sandbox has since come up (or sbx can no longer be reached), and reaching
 // `sbx rm -f` on it without --force would kill a live session and delete its
 // clone. Under --force the user has accepted stopping/removing, so it proceeds.
-func taskTeardownAbort(final doctor.SbxState, force bool) bool {
+func TaskTeardownAbort(final doctor.SbxState, force bool) bool {
 	if force {
 		return false
 	}
-	return final == sbxRunning || final == sbxUnknown
+	return final == SbxRunning || final == SbxUnknown
 }
 
-// executeTaskTeardown runs the guarded teardown AFTER taskRemoveGuard has passed,
+// ExecuteTaskTeardown runs the guarded teardown AFTER TaskRemoveGuard has passed,
 // using the SAME injectable hostenv.Env the guard's facts came from. Order: snapshot
 // the branch to refs/pix/recovered/<name>, re-probe the sandbox for a friendly
 // early message, then ALWAYS attempt the atomic `sbx rm`. The removal is where
@@ -607,7 +608,7 @@ func taskTeardownAbort(final doctor.SbxState, force bool) bool {
 // snapshot-abort needs. This is the single choke point that guarantees a live or
 // indeterminate sandbox is never dropped, and the clone is never deleted without
 // first attempting the atomic rm.
-func executeTaskTeardown(env hostenv.Env, w io.Writer, meta taskMeta, co, name, recovered string, force bool, st taskState) int {
+func ExecuteTaskTeardown(env hostenv.Env, w io.Writer, meta TaskMeta, co, name, recovered string, force bool, st TaskState) int {
 	// a. ALWAYS snapshot ALL of the clone's local heads + HEAD to a durable
 	// namespace in the main repo, so even a --force teardown is fully recoverable:
 	// work on scratch branches and a detached HEAD is captured, not just the task
@@ -620,11 +621,11 @@ func executeTaskTeardown(env hostenv.Env, w io.Writer, meta taskMeta, co, name, 
 		// --force still must not silently drop unrecoverable work: if the snapshot
 		// failed AND the work might be unrecoverable (clone-only commits, or an
 		// UNKNOWN unrec state), abort and leave the clone intact.
-		if taskForceSnapshotAbort(force, st.unrec, st.unknown, true) {
-			if st.unknown {
+		if TaskForceSnapshotAbort(force, st.Unrec, st.Unknown, true) {
+			if st.Unknown {
 				fmt.Fprintf(w, "pix task rm: refusing to remove %q: the recovery snapshot failed and this clone's unrecovered-commit state is unknown (git probe failed).\n", name)
 			} else {
-				fmt.Fprintf(w, "pix task rm: refusing to remove %q: the recovery snapshot failed and %d commit(s) live only in this clone.\n", name, st.unrec)
+				fmt.Fprintf(w, "pix task rm: refusing to remove %q: the recovery snapshot failed and %d commit(s) live only in this clone.\n", name, st.Unrec)
 			}
 			fmt.Fprintln(w, "Fetch or push that work manually before removing:")
 			fmt.Fprintf(w, "  git -C %s fetch %s %s\n", meta.Mainroot, co, meta.Branch)
@@ -638,9 +639,9 @@ func executeTaskTeardown(env hostenv.Env, w io.Writer, meta taskMeta, co, name, 
 	// b. Re-probe for TOCTOU freshness and RE-APPLY the guard's refusal on the
 	// FRESH state. This is the fail-safe: a running/unknown sandbox never reaches
 	// `sbx rm -f` without --force.
-	final := probeTaskSandbox(env, meta.Sandbox)
-	if taskTeardownAbort(final, force) {
-		if final == sbxRunning {
+	final := ProbeTaskSandbox(env, meta.Sandbox)
+	if TaskTeardownAbort(final, force) {
+		if final == SbxRunning {
 			fmt.Fprintf(w, "pix task rm: refusing to remove %q: the sandbox is now running; stop the session first (sbx stop %s).\n", name, meta.Sandbox)
 		} else {
 			fmt.Fprintf(w, "pix task rm: refusing to remove %q: cannot determine the state of sandbox %q (sbx ls failed); leaving clone intact at %s.\n", name, meta.Sandbox, co)
@@ -662,7 +663,7 @@ func executeTaskTeardown(env hostenv.Env, w io.Writer, meta taskMeta, co, name, 
 		// A not-found failure (the sandbox is already gone) is success; any other
 		// failure aborts BEFORE deleting the checkout.
 		if out, err := env.Run("sbx", "rm", "-f", meta.Sandbox); err != nil {
-			if probeTaskSandbox(env, meta.Sandbox) == sbxAbsent {
+			if ProbeTaskSandbox(env, meta.Sandbox) == SbxAbsent {
 				// rm -f failed only because there was nothing to remove — the
 				// lifetime is positively over, so the receipt goes too.
 				clearTaskSandboxReceipt(w, meta.Sandbox)
@@ -684,17 +685,17 @@ func executeTaskTeardown(env hostenv.Env, w io.Writer, meta taskMeta, co, name, 
 	//   - stopped => the sandbox is still present but rm failed; ABORT.
 	//   - unknown => sbx can no longer be reached; ABORT (fail-safe).
 	if out, err := env.Run("sbx", "rm", meta.Sandbox); err != nil {
-		switch probeTaskSandbox(env, meta.Sandbox) {
-		case sbxAbsent:
+		switch ProbeTaskSandbox(env, meta.Sandbox) {
+		case SbxAbsent:
 			// The rm failed because the sandbox was not present; nothing was
 			// removed and nothing live can be relying on the clone. Proceed.
-		case sbxUnknown:
+		case SbxUnknown:
 			// NOTE: every ABORT path below (unknown/running/stopped) RETAINS the
 			// MCP receipt — the sandbox was not positively removed.
 			fmt.Fprintf(w, "pix task rm: `sbx rm %s` failed and the sandbox state can no longer be determined (sbx ls failed); leaving clone intact at %s: %v\n%s", meta.Sandbox, co, err, out)
 			fmt.Fprintln(w, "Resolve (check `sbx ls`), then retry.")
 			return 1
-		default: // sbxRunning or sbxStopped: the sandbox is still present.
+		default: // SbxRunning or SbxStopped: the sandbox is still present.
 			fmt.Fprintf(w, "pix task rm: `sbx rm %s` failed; the sandbox is likely still running. Leaving clone intact at %s: %v\n%s", meta.Sandbox, co, err, out)
 			fmt.Fprintf(w, "Stop it first (sbx stop %s), or re-run with --force to kill it.\n", meta.Sandbox)
 			return 1
@@ -716,20 +717,20 @@ func clearTaskSandboxReceipt(w io.Writer, sandbox string) {
 	}
 }
 
-// gatherTaskState collects the four guard facts via the hostenv.Env seam (real git
+// GatherTaskState collects the four guard facts via the hostenv.Env seam (real git
 // in production and integration tests, a fake sbx in tests).
-func gatherTaskState(env hostenv.Env, m taskMeta, co string) taskState {
-	st := taskState{}
+func GatherTaskState(env hostenv.Env, m TaskMeta, co string) TaskState {
+	st := TaskState{}
 	// Probe the sandbox ONCE and carry the tri-state; the guard and the teardown
 	// executor both decide on this single value.
-	st.sandbox = probeTaskSandbox(env, m.Sandbox)
+	st.Sandbox = ProbeTaskSandbox(env, m.Sandbox)
 
 	if out, err := env.Run("git", "-C", co, "status", "--porcelain"); err == nil {
-		st.dirty = strings.TrimSpace(out) != ""
+		st.Dirty = strings.TrimSpace(out) != ""
 	} else {
 		// A failed status probe means the clean/dirty state is UNKNOWN, not clean.
 		// Fail-safe: the guard refuses teardown without --force.
-		st.unknown = true
+		st.Unknown = true
 	}
 
 	// unrec: fetch ALL of the clone's local heads + HEAD (and its remote-tracking
@@ -758,9 +759,9 @@ func gatherTaskState(env hostenv.Env, m taskMeta, co string) taskState {
 			"--glob="+chk+"/heads", chk+"/HEAD",
 			"--not", "--exclude=refs/pix/*", "--all",
 			"--glob="+chk+"/remotes"); err == nil {
-			st.unrec = parseCount(out)
+			st.Unrec = parseCount(out)
 		} else {
-			st.unknown = true
+			st.Unknown = true
 		}
 		// Delete the whole throwaway namespace (multiple refs now).
 		if refs, err := env.Run("git", "-C", m.Mainroot, "for-each-ref", "--format=%(refname)", chk); err == nil {
@@ -771,21 +772,21 @@ func gatherTaskState(env hostenv.Env, m taskMeta, co string) taskState {
 	} else {
 		// A failed/blocked probe means unrec is UNKNOWN, not 0. Fail-safe: the
 		// guard refuses teardown without --force.
-		st.unknown = true
+		st.Unknown = true
 	}
 
 	// unpushed: commits ahead of the upstream when one exists, else fall back to
 	// unrec (defined for the no-upstream and no-remote cases).
 	if out, err := env.Run("git", "-C", co, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"); err == nil && strings.TrimSpace(out) != "" {
 		if c, err := env.Run("git", "-C", co, "rev-list", "--count", "@{u}..HEAD"); err == nil {
-			st.unpushed = parseCount(c)
+			st.Unpushed = parseCount(c)
 		} else {
 			// An upstream exists but counting ahead-commits failed: the unpushed
 			// state is UNKNOWN, not 0. Fail-safe as above.
-			st.unknown = true
+			st.Unknown = true
 		}
 	} else {
-		st.unpushed = st.unrec
+		st.Unpushed = st.Unrec
 	}
 	return st
 }
@@ -795,11 +796,11 @@ func parseCount(s string) int {
 	return n
 }
 
-// taskSandboxStatus returns the status column for name from `sbx ls` via the
+// TaskSandboxStatus returns the status column for name from `sbx ls` via the
 // seam (mirrors sandboxStatus but hermetic-testable), or "" when absent. This
 // is the DISPLAY-only accessor used by `task ls`; destructive decisions use the
-// tri-state probeTaskSandbox instead, which never conflates errored with absent.
-func taskSandboxStatus(env hostenv.Env, name string) string {
+// tri-state ProbeTaskSandbox instead, which never conflates errored with absent.
+func TaskSandboxStatus(env hostenv.Env, name string) string {
 	// BOUNDED (probeRun): a hung `sbx ls` yields "" (no display status), it
 	// never wedges `task ls`.
 	out, timedOut, err := env.RunTimed("sbx", "ls")
@@ -819,35 +820,35 @@ func taskSandboxStatus(env hostenv.Env, name string) string {
 }
 
 const (
-	sbxUnknown doctor.SbxState = iota // could not determine (sbx errored / no runner)
-	sbxAbsent                         // sbx responded and the name is not present
-	sbxRunning                        // present, status column reads running
-	sbxStopped                        // present, any other status
+	SbxUnknown doctor.SbxState = iota // could not determine (sbx errored / no runner)
+	SbxAbsent                         // sbx responded and the name is not present
+	SbxRunning                        // present, status column reads running
+	SbxStopped                        // present, any other status
 )
 
-// probeTaskSandbox classifies name from `sbx ls` via the seam into one of
+// ProbeTaskSandbox classifies name from `sbx ls` via the seam into one of
 // {running, stopped, absent, unknown}. A non-zero/errored sbx invocation (or a
 // missing runner) is UNKNOWN, never absent, so a failed probe can never be read
 // as "the sandbox was never created". BOUNDED (probeRun): a hung sbx times out
 // to UNKNOWN — run/setup/task preflights degrade honestly instead of wedging.
-func probeTaskSandbox(env hostenv.Env, name string) doctor.SbxState {
+func ProbeTaskSandbox(env hostenv.Env, name string) doctor.SbxState {
 	out, timedOut, err := env.RunTimed("sbx", "ls")
 	if timedOut || err != nil {
-		return sbxUnknown
+		return SbxUnknown
 	}
 	for _, line := range strings.Split(out, "\n") {
 		f := strings.Fields(line)
 		if len(f) >= 1 && f[0] == name {
 			if len(f) >= 3 && f[2] == "running" {
-				return sbxRunning
+				return SbxRunning
 			}
-			return sbxStopped
+			return SbxStopped
 		}
 	}
-	return sbxAbsent
+	return SbxAbsent
 }
 
-// resolveMainroot returns the repository's git-common-dir as an absolute path
+// ResolveMainroot returns the repository's git-common-dir as an absolute path
 // via `git -C <cwd> rev-parse --path-format=absolute --git-common-dir`. This is
 // the shared object/ref store for the repo and is stable across a linked
 // worktree (all worktrees report the same common dir), a normal repo (its
@@ -856,7 +857,7 @@ func probeTaskSandbox(env hostenv.Env, name string) doctor.SbxState {
 // against the main repo, so the two never disagree about which store they mean.
 // The field is still called "mainroot" for continuity, but it now holds the
 // git-common-dir, not the worktree root.
-func resolveMainroot(env hostenv.Env, cwd string) (string, error) {
+func ResolveMainroot(env hostenv.Env, cwd string) (string, error) {
 	out, err := env.Run("git", "-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	if err != nil {
 		return "", fmt.Errorf("%s", strings.TrimSpace(out))
@@ -872,19 +873,19 @@ func resolveMainroot(env hostenv.Env, cwd string) (string, error) {
 // task new
 // ---------------------------------------------------------------------------
 
-func runTaskNew(env hostenv.Env, argv []string) {
+func RunTaskNew(env hostenv.Env, argv []string) {
 	if cli.WantsHelp(argv) {
-		fmt.Print(taskUsage)
+		fmt.Print(TaskUsage)
 		return
 	}
-	name, from, passthrough, err := parseTaskNewArgs(argv)
+	name, from, passthrough, err := ParseTaskNewArgs(argv)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix task new: %v\n\n%s", err, taskUsage)
+		fmt.Fprintf(os.Stderr, "pix task new: %v\n\n%s", err, TaskUsage)
 		os.Exit(2)
 	}
 
 	cwd, _ := os.Getwd()
-	mainroot, err := resolveMainroot(env, cwd)
+	mainroot, err := ResolveMainroot(env, cwd)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix task new: not a git repository: %v\n", err)
 		os.Exit(1)
@@ -915,12 +916,12 @@ func runTaskNew(env hostenv.Env, argv []string) {
 
 	// The active profile namespaces the sandbox name (so contexts never collide).
 	_, profile, _ := workspace.LoadResolvedConfig()
-	repokey := taskRepoKey(mainroot)
-	label := taskRepoLabel(mainroot)
-	repoDir := taskRepoDir(mainroot) // `new` always writes the new <label>-<key> layout
-	sane := sanitizeTaskName(name)
-	co, metaPath := taskPaths(repoDir, sane)
-	sbxname := taskSandboxName(label, repokey, name, profile)
+	repokey := TaskRepoKey(mainroot)
+	label := TaskRepoLabel(mainroot)
+	repoDir := TaskRepoDir(mainroot) // `new` always writes the new <label>-<key> layout
+	sane := SanitizeTaskName(name)
+	co, metaPath := TaskPaths(repoDir, sane)
+	sbxname := TaskSandboxName(label, repokey, name, profile)
 	branch := "pix/" + sane
 
 	// Serialize the whole reserve -> clone -> checkout -> write-meta -> launch ->
@@ -928,19 +929,19 @@ func runTaskNew(env hostenv.Env, argv []string) {
 	// concurrent `task new` or `task rm` on the same name is mutually exclusive
 	// (closes R7-1 double-create and the R9-1 meta race). os.Exit skips defers, so
 	// the locked fn NEVER calls os.Exit: it returns an exit code through exitCode
-	// and we exit only after withTaskLock has released the lock.
+	// and we exit only after WithTaskLock has released the lock.
 	exitCode := 0
-	lockErr := withTaskLock(repokey, sane, func() error {
+	lockErr := WithTaskLock(repokey, sane, func() error {
 		// Refuse if a task of this name already exists in EITHER layout (a legacy
 		// bare-<key> task or a leftover new-layout one), so `new` never shadows a
 		// legacy task or races its removal. The new-layout dir collision is also
-		// caught atomically by reserveTaskCheckout below; this catches the legacy case.
-		if lay, found, ambiguous := findTaskLayout(mainroot, sane); found || ambiguous {
+		// caught atomically by ReserveTaskCheckout below; this catches the legacy case.
+		if lay, found, ambiguous := FindTaskLayout(mainroot, sane); found || ambiguous {
 			where := "this repo"
 			switch {
 			case ambiguous:
 				where = "BOTH the new and legacy task layout for this repo"
-			case lay.legacy:
+			case lay.Legacy:
 				where = "the legacy task layout for this repo"
 			}
 			fmt.Fprintf(os.Stderr, "pix task new: task %q already exists in %s; `pix run` its clone to reattach, or `pix task rm %s` first\n", name, where, name)
@@ -952,7 +953,7 @@ func runTaskNew(env hostenv.Env, argv []string) {
 		// the mkdir owns the directory, and a losing concurrent `task new` for the same
 		// name never deletes the winner's live checkout. Only THIS invocation, when it
 		// created co (owned), is ever allowed to roll it back.
-		owned, err := reserveTaskCheckout(co)
+		owned, err := ReserveTaskCheckout(co)
 		if err != nil {
 			if errors.Is(err, fs.ErrExist) {
 				fmt.Fprintf(os.Stderr, "pix task new: task %q already exists; `pix run %s` to reattach\n", name, co)
@@ -990,7 +991,7 @@ func runTaskNew(env hostenv.Env, argv []string) {
 				"Run `git submodule update --init` in the sandbox and add submodule remotes to the network allowlist.")
 		}
 
-		meta := taskMeta{
+		meta := TaskMeta{
 			Name:     name,
 			Mode:     "localclone",
 			Sandbox:  sbxname,
@@ -1002,7 +1003,7 @@ func runTaskNew(env hostenv.Env, argv []string) {
 			Created:  time.Now().UTC().Format(time.RFC3339),
 			Repo:     label,
 		}
-		if err := writeTaskMeta(metaPath, meta); err != nil {
+		if err := WriteTaskMeta(metaPath, meta); err != nil {
 			rollback()
 			fmt.Fprintf(os.Stderr, "pix task new: write metadata: %v\n", err)
 			exitCode = 1
@@ -1011,16 +1012,16 @@ func runTaskNew(env hostenv.Env, argv []string) {
 
 		fmt.Fprintf(os.Stderr, "pix: task %q ready at %s (branch %s, sandbox %s)\n", name, co, branch, sbxname)
 
-		o := runOpts{Workspace: co, Name: sbxname, Passthrough: passthrough}
-		if err := taskLaunch(o); err != nil {
-			switch probeTaskSandbox(env, sbxname) {
-			case sbxAbsent:
+		o := RunOpts{Workspace: co, Name: sbxname, Passthrough: passthrough}
+		if err := TaskLaunch(o); err != nil {
+			switch ProbeTaskSandbox(env, sbxname) {
+			case SbxAbsent:
 				// CERTAIN the sandbox was never created: the clone holds no in-sandbox
 				// work to lose, so roll it back cleanly (only if we created it).
 				rollback()
 				_ = os.Remove(metaPath)
 				fmt.Fprintf(os.Stderr, "pix task new: launch failed, rolled back clone: %v\n", err)
-			case sbxUnknown:
+			case SbxUnknown:
 				// Could NOT determine whether a sandbox exists: do not delete the clone,
 				// or we might strand a live sandbox and drop its work. Leave everything
 				// and hand the user the manual check.
@@ -1045,8 +1046,8 @@ func runTaskNew(env hostenv.Env, argv []string) {
 	}
 }
 
-// parseTaskNewArgs parses `new <name> [--from REF] [-- pi-args]`.
-func parseTaskNewArgs(argv []string) (name, from string, passthrough []string, err error) {
+// ParseTaskNewArgs parses `new <name> [--from REF] [-- pi-args]`.
+func ParseTaskNewArgs(argv []string) (name, from string, passthrough []string, err error) {
 	pre := argv
 	for i, a := range argv {
 		if a == "--" {
@@ -1095,8 +1096,8 @@ func parseTaskNewArgs(argv []string) (name, from string, passthrough []string, e
 	return name, from, passthrough, nil
 }
 
-// prepareTaskLaunchSandbox resolves any pre-existing sandbox of the derived name
-// before `task new` launches into it, mirroring executeTaskTeardown's atomicity
+// PrepareTaskLaunchSandbox resolves any pre-existing sandbox of the derived name
+// before `task new` launches into it, mirroring ExecuteTaskTeardown's atomicity
 // (R5-1). It probes ONCE via the tri-state and:
 //   - absent  -> nil: nothing in the way, proceed to a fresh create.
 //   - running -> refuse: a live session owns this name; silently killing it (no
@@ -1107,15 +1108,15 @@ func parseTaskNewArgs(argv []string) (name, from string, passthrough []string, e
 //     sandbox there, so a sandbox that started between the probe and the rm is
 //     left alone (the rm fails) rather than force-killed. A failed rm ABORTS the
 //     launch with a teachable message; we never fall back to -f.
-func prepareTaskLaunchSandbox(env hostenv.Env, name string) error {
-	switch probeTaskSandbox(env, name) {
-	case sbxAbsent:
+func PrepareTaskLaunchSandbox(env hostenv.Env, name string) error {
+	switch ProbeTaskSandbox(env, name) {
+	case SbxAbsent:
 		return nil
-	case sbxRunning:
+	case SbxRunning:
 		return fmt.Errorf("sandbox %q is already running; stop the session first (sbx stop %s), then retry", name, name)
-	case sbxUnknown:
+	case SbxUnknown:
 		return fmt.Errorf("cannot determine the state of sandbox %q (sbx ls failed); resolve (check `sbx ls`), then retry", name)
-	default: // sbxStopped: recreate, but only via a non-force rm.
+	default: // SbxStopped: recreate, but only via a non-force rm.
 		if out, err := env.Run("sbx", "rm", name); err != nil {
 			return fmt.Errorf("could not remove the stopped sandbox %q; it may be running. "+
 				"Stop it (sbx stop %s) or remove it, then retry: %v\n%s", name, name, err, strings.TrimRight(out, "\n"))
@@ -1129,17 +1130,17 @@ func prepareTaskLaunchSandbox(env hostenv.Env, name string) error {
 
 // launchTask is the error-returning launch helper `task new` uses so a failed
 // create can be rolled back. It reuses run.go's package helpers (config resolve,
-// preflight, kit resolution, knowledge/profile wiring, buildSbxArgs) WITHOUT
+// preflight, kit resolution, knowledge/profile wiring, BuildSbxArgs) WITHOUT
 // modifying run.go, and bypasses workspace.DeriveSandboxName because o.Name is set.
-func launchTask(o runOpts) error {
-	env := defaultShellEnv()
-	if _, err := env.LookPath("sbx"); err == nil && !configuredKeylessInference() {
+func launchTask(o RunOpts) error {
+	env := DefaultEnv()
+	if _, err := env.LookPath("sbx"); err == nil && !inference.ConfiguredKeylessInference() {
 		// Resolve any 1Password key refs into sbx first (same no-ritual path as run),
 		// so a task on a fresh machine isn't rejected for a key it can auto-provision.
 		secret.EnsureProviderKeysFromRefs(env, os.Stderr)
 		// Tri-state (same as run): refuse ONLY when we can POSITIVELY confirm no key.
 		// A transient `sbx secret ls` failure (probeOK=false) must not abort a task.
-		if present, probeOK := sbxModelKeyState(env); probeOK && !present {
+		if present, probeOK := SbxModelKeyState(env); probeOK && !present {
 			return fmt.Errorf("%s", strings.TrimRight(secret.ModelKeyMissingMessage(env), "\n"))
 		}
 	}
@@ -1147,12 +1148,12 @@ func launchTask(o runOpts) error {
 	if err != nil {
 		return err
 	}
-	if applied, rerr := applyConfiguredSessionModel(&o, cfg); rerr != nil {
+	if applied, rerr := ApplyConfiguredSessionModel(&o, cfg); rerr != nil {
 		fmt.Fprintf(os.Stderr, "pix: run_intent %q did not resolve (%v); using pi's default model. Fix with `pix config set run_intent <intent>`.\n", strings.TrimSpace(cfg.RunIntent), rerr)
 	} else if applied && o.Model != "" {
 		fmt.Fprintf(os.Stderr, "pix: intent %q -> model %s\n", o.Intent, o.Model)
 	}
-	if !inferenceAllowsModel(cfg, o.Model) {
+	if !inference.AllowsModel(cfg, o.Model) {
 		return fmt.Errorf("model %q is not available through the configured inference backends", o.Model)
 	}
 
@@ -1160,88 +1161,88 @@ func launchTask(o runOpts) error {
 	// gets the same authored context a normal `pix run` does. Fatal on error
 	// (round-4 F2): a declared-but-unbuildable pack wrapper refuses the launch.
 	// effectivePack is what actually loaded/applied — "" when there is no active
-	// pack OR applyPackToLaunch degraded via pack.ErrNotAPack — and is what the
+	// pack OR ApplyPackToLaunch degraded via pack.ErrNotAPack — and is what the
 	// sandbox.pack marker + memory scope below must agree on (never the merely
 	// CONFIGURED pack.ActivePackRoot(cfg.Pack, o.Pack)).
-	effectivePack, err := applyPackStackToLaunch(cfg, &o, defaultShellEnv())
+	effectivePack, err := ApplyPackStackToLaunch(cfg, &o, DefaultEnv())
 	if err != nil {
 		return err
 	}
 	var generatedKitDirs []string
 	defer func() {
-		if err := cleanupGeneratedKitDirs(generatedKitDirs); err != nil {
+		if err := CleanupGeneratedKitDirs(generatedKitDirs); err != nil {
 			fmt.Fprintf(os.Stderr, "pix: warning: %v\n", err)
 		}
 	}()
-	if kit, ierr := synthesizeInferenceKit(cfg); ierr != nil {
+	if kit, ierr := inference.SynthesizeInferenceKit(cfg); ierr != nil {
 		return fmt.Errorf("inference: %w", ierr)
 	} else if kit != "" {
 		o.PackKits = append(o.PackKits, kit)
 		generatedKitDirs = append(generatedKitDirs, kit)
 	}
-	if o.Models, err = callableRuntimeModels(cfg); err != nil {
+	if o.Models, err = inference.CallableRuntimeModels(cfg); err != nil {
 		return fmt.Errorf("inference models: %w", err)
 	}
-	if kit, cerr := synthesizePersonalContextKit(); cerr != nil {
+	if kit, cerr := SynthesizePersonalContextKit(); cerr != nil {
 		return fmt.Errorf("personal context: %w", cerr)
 	} else if kit != "" {
 		o.PackKits = append(o.PackKits, kit)
 		generatedKitDirs = append(generatedKitDirs, kit)
 	}
 
-	released := launcher.IsReleased(version)
+	released := launcher.IsReleased(launcher.Version)
 	kitOverride := len(o.Kits) > 0
 	if o.Dev {
-		root, err := resolveRepoRoot()
+		root, err := ResolveRepoRoot()
 		if err != nil {
 			return fmt.Errorf("--dev: %w", err)
 		}
 		o.DevRoot = root
 		o.LocalKit = filepath.Join(root, "pi-kit")
-		o.LocalImageTag = readLocalImageTag(root)
+		o.LocalImageTag = ReadLocalImageTag(root)
 	} else if !released && !kitOverride {
-		if root, err := resolveRepoRoot(); err == nil {
+		if root, err := ResolveRepoRoot(); err == nil {
 			o.LocalKit = filepath.Join(root, "pi-kit")
-			o.LocalImageTag = readLocalImageTag(root)
+			o.LocalImageTag = ReadLocalImageTag(root)
 		}
 	}
 	// Same local-image preflight as `pix run`: a task pins --template to the
 	// local-<ts> tag, so a stale tag (pruned template) would make sbx pull a
 	// never-published image and stall on a prompt. Refuse fast with `make load`.
 	if o.LocalImageTag != "" && len(o.Kits) == 0 && o.LocalKit != "" {
-		if !localImageLoaded(defaultShellEnv(), o.LocalImageTag) {
+		if !LocalImageLoaded(DefaultEnv(), o.LocalImageTag) {
 			return fmt.Errorf("local image %s:%s is not loaded in sbx (it's a local build, never published).\n"+
-				"Load this build first, from your pix checkout:  make load", dockerImageRepo, o.LocalImageTag)
+				"Load this build first, from your pix checkout:  make load", DockerImageRepo, o.LocalImageTag)
 		}
 	}
 
 	// Resolve any pre-existing sandbox of the derived name atomically before
 	// launching into it (R5-1): a stopped one is removed with `sbx rm` (no -f),
 	// a running or indeterminate one is refused. Never force-kill without --force.
-	if err := prepareTaskLaunchSandbox(defaultShellEnv(), o.Name); err != nil {
+	if err := PrepareTaskLaunchSandbox(DefaultEnv(), o.Name); err != nil {
 		return err
 	}
 
-	wireKnowledgeScope(cfg, o.Workspace, defaultKnowledgeRPC())
+	WireKnowledgeScope(cfg, o.Workspace, DefaultKnowledgeRPC())
 
-	// Mirror run.go's pack-context writes (packs-v2 Phase 1 gap): applyPackToLaunch
+	// Mirror run.go's pack-context writes (packs-v2 Phase 1 gap): ApplyPackToLaunch
 	// above only updates cfg/o with the pack's overrides, it does not write the
 	// per-launch workspace files that carry that context INTO the sandbox. Without
 	// these a task sandbox silently loses the active pack's memory scope, its
 	// ollama-bridge model, and the stale-pack marker run.go relies on. A task is
-	// always a fresh create, so pack.WriteMemoryScope and writeSandboxPackMarker run
-	// unconditionally (no willCreate/definitelyCreating gating needed — that only
+	// always a fresh create, so pack.WriteMemoryScope and WriteSandboxPackMarker run
+	// unconditionally (no WillCreate/DefinitelyCreating gating needed — that only
 	// exists in run.go to distinguish create from re-attach, and a task never
 	// re-attaches).
-	writePackContextFiles(cfg, o, effectivePack)
-	writeSandboxPackMarker(o.Workspace, effectivePack)
+	WritePackContextFiles(cfg, o, effectivePack)
+	WriteSandboxPackMarker(o.Workspace, effectivePack)
 
 	// Resolve every configured MCP server to attach at create (--static-mcp).
 	// S01: all of them preload. A task is always a fresh create, so it's always
 	// needed.
 	o.StaticMCP = mcp.AllPreloadedMCP(append(append([]string(nil), cfg.MCP...), o.MCP...))
 
-	args := buildSbxArgs(cfg, o, version)
+	args := BuildSbxArgs(cfg, o, launcher.Version)
 	if os.Getenv("PIX_DEBUG") != "" {
 		fmt.Fprintln(os.Stderr, "+ sbx "+strings.Join(args, " "))
 	}
@@ -1256,7 +1257,7 @@ func launchTask(o runOpts) error {
 	// A *workspace.ReceiptRecordError here reaches `task new`'s error report as-is — the
 	// sandbox probe there reads running/stopped, so the clone is kept and the
 	// honest "created but unrecorded" message is printed, never a rollback.
-	return execSbxRunAndRecordCreate(cmd, true, o.Name, workspace.CanonicalPath(o.Workspace), o.StaticMCP)
+	return ExecSbxRunAndRecordCreate(cmd, true, o.Name, workspace.CanonicalPath(o.Workspace), o.StaticMCP)
 }
 
 // ---------------------------------------------------------------------------
@@ -1280,15 +1281,15 @@ type taskListRow struct {
 	Unreadable bool `json:"unreadable,omitempty"`
 }
 
-// taskMetaUnreadableStatus is the fixed marker rendered in place of a normal
+// TaskMetaUnreadableStatus is the fixed marker rendered in place of a normal
 // status/git line when a task's meta.json could not be read or trusted. It is
 // asserted verbatim by tests, so keep it a literal constant rather than a
 // format string that could drift.
-const taskMetaUnreadableStatus = "\u2298 unreadable metadata"
+const TaskMetaUnreadableStatus = "\u2298 unreadable metadata"
 
-func runTaskLs(env hostenv.Env, argv []string) {
+func RunTaskLs(env hostenv.Env, argv []string) {
 	if cli.WantsHelp(argv) {
-		fmt.Print(taskUsage)
+		fmt.Print(TaskUsage)
 		return
 	}
 	jsonOut := false
@@ -1297,34 +1298,34 @@ func runTaskLs(env hostenv.Env, argv []string) {
 		case "--json":
 			jsonOut = true
 		default:
-			fmt.Fprintf(os.Stderr, "pix task ls: unknown argument %q\n\n%s", a, taskUsage)
+			fmt.Fprintf(os.Stderr, "pix task ls: unknown argument %q\n\n%s", a, TaskUsage)
 			os.Exit(2)
 		}
 	}
 
 	cwd, _ := os.Getwd()
-	mainroot, err := resolveMainroot(env, cwd)
+	mainroot, err := ResolveMainroot(env, cwd)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix task ls: not a git repository: %v\n", err)
 		os.Exit(1)
 	}
-	repokey := taskRepoKey(mainroot)
+	repokey := TaskRepoKey(mainroot)
 
 	var rows []taskListRow
 	gcEligible := 0
-	for _, lay := range existingTaskLayouts(mainroot) {
-		metaDir := filepath.Join(workspace.TaskStateRoot(), lay.dir, "meta")
+	for _, lay := range ExistingTaskLayouts(mainroot) {
+		metaDir := filepath.Join(workspace.TaskStateRoot(), lay.Dir, "meta")
 		entries, _ := os.ReadDir(metaDir)
 		for _, e := range entries {
 			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
 				continue
 			}
 			fileBase := strings.TrimSuffix(e.Name(), ".json")
-			m, err := readTaskMeta(filepath.Join(metaDir, e.Name()))
+			m, err := ReadTaskMeta(filepath.Join(metaDir, e.Name()))
 			if err == nil {
 				// Never trust stored branch/sandbox/mainroot for building refs or argv;
 				// re-derive them from the validated name + trusted layout.
-				m, err = hardenTaskMeta(m, mainroot, repokey, lay.legacy, fileBase)
+				m, err = HardenTaskMeta(m, mainroot, repokey, lay.Legacy, fileBase)
 			}
 			if err != nil {
 				// AC-P0-009: never hide a row. Genuinely unreadable or untrustworthy
@@ -1338,25 +1339,25 @@ func runTaskLs(env hostenv.Env, argv []string) {
 				}
 				rows = append(rows, taskListRow{
 					Name:       fileBase,
-					Status:     taskMetaUnreadableStatus,
+					Status:     TaskMetaUnreadableStatus,
 					Unreadable: true,
 				})
 				continue
 			}
-			co, _ := taskPaths(lay.dir, sanitizeTaskName(m.Name))
-			st := gatherTaskState(env, m, co)
-			if st.sandbox != sbxRunning && !st.dirty && !st.unknown && st.unrec == 0 &&
-				taskAge(m, co) >= taskGCDefaultDays*24*time.Hour {
+			co, _ := TaskPaths(lay.Dir, SanitizeTaskName(m.Name))
+			st := GatherTaskState(env, m, co)
+			if st.Sandbox != SbxRunning && !st.Dirty && !st.Unknown && st.Unrec == 0 &&
+				TaskAge(m, co) >= TaskGCDefaultDays*24*time.Hour {
 				gcEligible++
 			}
 			rows = append(rows, taskListRow{
 				Name:     m.Name,
 				Branch:   m.Branch,
 				Sandbox:  m.Sandbox,
-				Status:   taskSandboxStatus(env, m.Sandbox),
-				Dirty:    st.dirty,
-				Unpushed: st.unpushed,
-				Unknown:  st.unknown,
+				Status:   TaskSandboxStatus(env, m.Sandbox),
+				Dirty:    st.Dirty,
+				Unpushed: st.Unpushed,
+				Unknown:  st.Unknown,
 				Clone:    co,
 			})
 		}
@@ -1377,11 +1378,11 @@ func runTaskLs(env hostenv.Env, argv []string) {
 		fmt.Println("Next: `pix task new <name>` to start one.")
 		return
 	}
-	fmt.Printf("Tasks for %s (%s):\n", taskRepoLabel(mainroot), mainroot)
+	fmt.Printf("Tasks for %s (%s):\n", TaskRepoLabel(mainroot), mainroot)
 	fmt.Printf("%-20s %-24s %-10s %s\n", "NAME", "BRANCH", "SANDBOX", "GIT")
 	for _, r := range rows {
 		if r.Unreadable {
-			fmt.Printf("%-20s %-24s %-10s %s\n", r.Name, "-", "-", taskMetaUnreadableStatus)
+			fmt.Printf("%-20s %-24s %-10s %s\n", r.Name, "-", "-", TaskMetaUnreadableStatus)
 			continue
 		}
 		status := r.Status
@@ -1408,7 +1409,7 @@ func runTaskLs(env hostenv.Env, argv []string) {
 	}
 	if gcEligible > 0 {
 		fmt.Printf("%s clean and older than %dd; `pix task gc` to prune.\n",
-			cli.Plural(gcEligible, "task"), taskGCDefaultDays)
+			cli.Plural(gcEligible, "task"), TaskGCDefaultDays)
 	}
 	fmt.Println("Next: `pix task rm <name>` to tear one down (guarded).")
 }
@@ -1423,23 +1424,23 @@ func runTaskLs(env hostenv.Env, argv []string) {
 // read-only: no lock, no meta hardening beyond confirming the task exists.
 func runTaskPath(env hostenv.Env, argv []string) {
 	if cli.WantsHelp(argv) {
-		fmt.Print(taskUsage)
+		fmt.Print(TaskUsage)
 		return
 	}
 	if len(argv) != 1 || strings.HasPrefix(argv[0], "-") {
-		fmt.Fprintf(os.Stderr, "pix task path: expected exactly one task name\n\n%s", taskUsage)
+		fmt.Fprintf(os.Stderr, "pix task path: expected exactly one task name\n\n%s", TaskUsage)
 		os.Exit(2)
 	}
 	name := argv[0]
 
 	cwd, _ := os.Getwd()
-	mainroot, err := resolveMainroot(env, cwd)
+	mainroot, err := ResolveMainroot(env, cwd)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix task path: not a git repository: %v\n", err)
 		os.Exit(1)
 	}
-	sane := sanitizeTaskName(name)
-	lay, found, ambiguous := findTaskLayout(mainroot, sane)
+	sane := SanitizeTaskName(name)
+	lay, found, ambiguous := FindTaskLayout(mainroot, sane)
 	if ambiguous {
 		fmt.Fprintf(os.Stderr, "pix task path: %q exists in BOTH the new and legacy task layout for this repo; refusing to guess.\n", name)
 		os.Exit(1)
@@ -1448,7 +1449,7 @@ func runTaskPath(env hostenv.Env, argv []string) {
 		fmt.Fprintf(os.Stderr, "pix task path: no such task %q for this repo\n", name)
 		os.Exit(1)
 	}
-	co, _ := taskPaths(lay.dir, sane)
+	co, _ := TaskPaths(lay.Dir, sane)
 	fmt.Println(co)
 }
 
@@ -1456,35 +1457,35 @@ func runTaskPath(env hostenv.Env, argv []string) {
 // task rm
 // ---------------------------------------------------------------------------
 
-func runTaskRm(env hostenv.Env, argv []string) {
+func RunTaskRm(env hostenv.Env, argv []string) {
 	if cli.WantsHelp(argv) {
-		fmt.Print(taskUsage)
+		fmt.Print(TaskUsage)
 		return
 	}
 	name, force, err := parseTaskRmArgs(argv)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix task rm: %v\n\n%s", err, taskUsage)
+		fmt.Fprintf(os.Stderr, "pix task rm: %v\n\n%s", err, TaskUsage)
 		os.Exit(2)
 	}
 
 	cwd, _ := os.Getwd()
-	mainroot, err := resolveMainroot(env, cwd)
+	mainroot, err := ResolveMainroot(env, cwd)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix task rm: not a git repository: %v\n", err)
 		os.Exit(1)
 	}
-	repokey := taskRepoKey(mainroot)
-	sane := sanitizeTaskName(name)
-	lay, found, ambiguous := findTaskLayout(mainroot, sane)
+	repokey := TaskRepoKey(mainroot)
+	sane := SanitizeTaskName(name)
+	lay, found, ambiguous := FindTaskLayout(mainroot, sane)
 	if ambiguous {
 		fmt.Fprintf(os.Stderr, "pix task rm: %q exists in BOTH the new and legacy task layout for this repo; refusing to guess.\n", name)
 		fmt.Fprintf(os.Stderr, "Inspect %s and %s under the tasks state dir and remove one by hand.\n",
-			taskRepoDir(mainroot), taskRepoKey(mainroot))
+			TaskRepoDir(mainroot), TaskRepoKey(mainroot))
 		os.Exit(1)
 	}
-	_ = found // a not-found task falls through to the readTaskMeta "no such task" path
-	repoDir := lay.dir
-	co, metaPath := taskPaths(repoDir, sane)
+	_ = found // a not-found task falls through to the ReadTaskMeta "no such task" path
+	repoDir := lay.Dir
+	co, metaPath := TaskPaths(repoDir, sane)
 
 	// Serialize read-meta/harden -> gather -> guard -> snapshot -> sbx rm ->
 	// delete-artifacts for this (repokey, sane) behind the per-task lock, so a
@@ -1493,8 +1494,8 @@ func runTaskRm(env hostenv.Env, argv []string) {
 	// R9-1). os.Exit skips defers, so the locked fn NEVER exits: it returns an exit
 	// code through exitCode and we exit only after the lock has been released.
 	exitCode := 0
-	lockErr := withTaskLock(repokey, sane, func() error {
-		meta, err := readTaskMeta(metaPath)
+	lockErr := WithTaskLock(repokey, sane, func() error {
+		meta, err := ReadTaskMeta(metaPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "pix task rm: no such task %q for this repo\n", name)
 			exitCode = 1
@@ -1503,7 +1504,7 @@ func runTaskRm(env hostenv.Env, argv []string) {
 		// Never trust stored branch/sandbox/mainroot for building refs or the
 		// `sbx rm` argv; re-derive them from the validated name. A meta that fails
 		// validation is tampered or corrupt, so refuse rather than act on it.
-		meta, err = hardenTaskMeta(meta, mainroot, repokey, lay.legacy, sane)
+		meta, err = HardenTaskMeta(meta, mainroot, repokey, lay.Legacy, sane)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "pix task rm: refusing to remove %q: %v\n", name, err)
 			fmt.Fprintln(os.Stderr, "The task metadata looks tampered or corrupt; inspect it under the tasks state dir before retrying.")
@@ -1511,8 +1512,8 @@ func runTaskRm(env hostenv.Env, argv []string) {
 			return nil
 		}
 
-		st := gatherTaskState(env, meta, co)
-		if msg, ok := taskRemoveGuard(st, force); !ok {
+		st := GatherTaskState(env, meta, co)
+		if msg, ok := TaskRemoveGuard(st, force); !ok {
 			fmt.Fprintf(os.Stderr, "pix task rm: refusing to remove %q: %s.\n", name, msg)
 			fmt.Fprintln(os.Stderr, "Recover first, or pass --force:")
 			fmt.Fprintf(os.Stderr, "  git -C %s fetch %s %s\n", meta.Mainroot, co, meta.Branch)
@@ -1525,13 +1526,13 @@ func runTaskRm(env hostenv.Env, argv []string) {
 			return nil
 		}
 
-		// Teardown (never lose data, even with --force). executeTaskTeardown owns the
+		// Teardown (never lose data, even with --force). ExecuteTaskTeardown owns the
 		// full order: snapshot -> fresh-probe message -> atomic rm (`sbx rm` no -f for
 		// non-force, `sbx rm -f` for --force), deciding on the SAME hostenv.Env the guard's
 		// facts came from. A non-zero return means it aborted with everything intact;
 		// do NOT touch the checkout.
 		recovered := "refs/pix/recovered/" + sane
-		if rc := executeTaskTeardown(env, os.Stderr, meta, co, name, recovered, force, st); rc != 0 {
+		if rc := ExecuteTaskTeardown(env, os.Stderr, meta, co, name, recovered, force, st); rc != 0 {
 			exitCode = rc
 			return nil
 		}
@@ -1541,7 +1542,7 @@ func runTaskRm(env hostenv.Env, argv []string) {
 		// abort rather than delete the only copy of un-git'd docs. This mirrors the ref
 		// snapshot (committed work); harvest rescues the uncommitted file half, which
 		// --force would otherwise destroy.
-		if _, herr := harvestArtifacts(env, os.Stderr, meta, repoDir, co, name); herr != nil {
+		if _, herr := HarvestArtifacts(env, os.Stderr, meta, repoDir, co, name); herr != nil {
 			fmt.Fprintf(os.Stderr, "pix task rm: sandbox %s was removed, but the uncommitted docs could not be safely harvested: %v\n", meta.Sandbox, herr)
 			fmt.Fprintf(os.Stderr, "Leaving the clone intact at %s so nothing is lost. Copy the docs out, then re-run `pix task rm %s` (the sandbox is already gone).\n", co, name)
 			exitCode = 1
@@ -1550,7 +1551,7 @@ func runTaskRm(env hostenv.Env, argv []string) {
 		// c. remove checkout + metadata. The main repo's branches are never touched.
 		// If either removal fails, name what remains and exit non-zero rather than
 		// print a false "Removed" claim.
-		if err := removeTaskArtifacts(co, metaPath, os.RemoveAll, os.Remove); err != nil {
+		if err := RemoveTaskArtifacts(co, metaPath, os.RemoveAll, os.Remove); err != nil {
 			fmt.Fprintf(os.Stderr, "pix task rm: sandbox %s was torn down but %v\n", meta.Sandbox, err)
 			fmt.Fprintln(os.Stderr, "Remove the leftover state by hand before reusing this task name.")
 			exitCode = 1
@@ -1570,11 +1571,11 @@ func runTaskRm(env hostenv.Env, argv []string) {
 	}
 }
 
-// removeTaskArtifacts deletes the task's clone dir and metadata file, returning
+// RemoveTaskArtifacts deletes the task's clone dir and metadata file, returning
 // an error naming whatever remains when either delete fails. The remove funcs
 // are seams so a test can inject a failure without simulating FS permissions. A
 // path that is already gone (IsNotExist) is treated as success.
-func removeTaskArtifacts(co, metaPath string, removeAll func(string) error, remove func(string) error) error {
+func RemoveTaskArtifacts(co, metaPath string, removeAll func(string) error, remove func(string) error) error {
 	var stuck []string
 	if err := removeAll(co); err != nil && !os.IsNotExist(err) {
 		stuck = append(stuck, fmt.Sprintf("the clone remains at %s (%v)", co, err))
@@ -1612,10 +1613,10 @@ var artifactSkipSegments = map[string]bool{
 	"dist": true, "build": true, "target": true, ".venv": true,
 }
 
-// isArtifactPath decides whether a repo-relative path is a doc artifact worth
+// IsArtifactPath decides whether a repo-relative path is a doc artifact worth
 // rescuing: not inside a skip segment, and either under a known doc dir or
 // carrying a doc extension.
-func isArtifactPath(rel string) bool {
+func IsArtifactPath(rel string) bool {
 	rel = filepath.ToSlash(rel)
 	for _, seg := range strings.Split(rel, "/") {
 		if artifactSkipSegments[seg] {
@@ -1660,7 +1661,7 @@ type harvestFile struct {
 	Status string `json:"status"` // git porcelain code: "??" untracked, "!!" ignored
 }
 
-type harvestManifest struct {
+type HarvestManifest struct {
 	Task        string        `json:"task"`
 	Repo        string        `json:"repo"`
 	Mainroot    string        `json:"mainroot"`
@@ -1673,7 +1674,7 @@ type harvestManifest struct {
 }
 
 // listHarvestCandidates returns the untracked + ignored files in co that pass
-// isArtifactPath, via `git status --porcelain=v1 -z` (NUL-delimited). The -z
+// IsArtifactPath, via `git status --porcelain=v1 -z` (NUL-delimited). The -z
 // form is the ONLY reliable way to read pathnames: default porcelain C-quotes
 // paths containing spaces, tabs, newlines, quotes, or non-ASCII, and
 // core.quotePath=false does NOT disable all of that. NUL records carry raw
@@ -1706,7 +1707,7 @@ func listHarvestCandidates(env hostenv.Env, co string) ([]harvestFile, error) {
 			continue
 		}
 		rel := rec[3:]
-		if !safeRelPath(rel) {
+		if !SafeRelPath(rel) {
 			continue // never let a ".."/absolute path escape the dest tree
 		}
 		// git reports an untracked/ignored DIR as a single entry with a trailing
@@ -1721,7 +1722,7 @@ func listHarvestCandidates(env hostenv.Env, co string) ([]harvestFile, error) {
 			}
 			continue
 		}
-		if isArtifactPath(rel) {
+		if IsArtifactPath(rel) {
 			add(rel, code)
 		}
 	}
@@ -1736,7 +1737,7 @@ func listHarvestCandidates(env hostenv.Env, co string) ([]harvestFile, error) {
 		return nil, fmt.Errorf("%s", strings.TrimSpace(dout))
 	}
 	for _, rel := range strings.Split(dout, "\x00") {
-		if rel == "" || !safeRelPath(rel) || !isArtifactPath(rel) {
+		if rel == "" || !SafeRelPath(rel) || !IsArtifactPath(rel) {
 			continue
 		}
 		fi, err := os.Lstat(filepath.Join(co, filepath.FromSlash(rel)))
@@ -1753,11 +1754,11 @@ func listHarvestCandidates(env hostenv.Env, co string) ([]harvestFile, error) {
 	return files, nil
 }
 
-// safeRelPath reports whether a git-reported path is a plain repo-relative path
+// SafeRelPath reports whether a git-reported path is a plain repo-relative path
 // that cannot escape a destination tree: not absolute, no ".." segment. Defense
 // in depth — git never emits such paths, but harvest writes them under a dest
 // dir, so a malformed one must never traverse out.
-func safeRelPath(rel string) bool {
+func SafeRelPath(rel string) bool {
 	if rel == "" || filepath.IsAbs(rel) {
 		return false
 	}
@@ -1770,7 +1771,7 @@ func safeRelPath(rel string) bool {
 }
 
 // expandHarvestDir walks a reported untracked/ignored directory (rel ends in
-// "/") and returns its files that pass isArtifactPath. A skip segment anywhere in
+// "/") and returns its files that pass IsArtifactPath. A skip segment anywhere in
 // the dir prunes the walk cheaply. It PROPAGATES a real walk/Rel error (returns
 // it) so the caller fails closed: an unreadable ignored dir must never silently
 // read as "no docs here" and green-light teardown.
@@ -1797,7 +1798,7 @@ func expandHarvestDir(co, rel, code string) ([]harvestFile, error) {
 			return err
 		}
 		r = filepath.ToSlash(r)
-		if isArtifactPath(r) {
+		if IsArtifactPath(r) {
 			files = append(files, harvestFile{Path: r, Status: code})
 		}
 		return nil
@@ -1808,14 +1809,14 @@ func expandHarvestDir(co, rel, code string) ([]harvestFile, error) {
 	return files, nil
 }
 
-// harvestArtifacts copies the matching untracked/ignored/modified docs from co
+// HarvestArtifacts copies the matching untracked/ignored/modified docs from co
 // into a fresh timestamped dir under workspace.TaskArtifactRoot()/<repoDir>/<name>/<ts>/,
 // writes a manifest.json beside them, and returns the destination dir ("" when
 // nothing matched). It is idempotent: each call writes a NEW timestamped dir, so
 // re-running never clobbers a prior capture. It returns a NON-NIL error when
 // enumeration, any copy, or the manifest write fails, so rm/gc callers fail
 // CLOSED (keep the clone) rather than delete the only copy of un-git'd docs.
-func harvestArtifacts(env hostenv.Env, w io.Writer, meta taskMeta, repoDir, co, name string) (string, error) {
+func HarvestArtifacts(env hostenv.Env, w io.Writer, meta TaskMeta, repoDir, co, name string) (string, error) {
 	files, err := listHarvestCandidates(env, co)
 	if err != nil {
 		return "", err
@@ -1824,9 +1825,9 @@ func harvestArtifacts(env hostenv.Env, w io.Writer, meta taskMeta, repoDir, co, 
 		return "", nil
 	}
 	// repoDir is already path-safe (label+repokey); name is raw user input, so it
-	// is sanitized. pruneArtifacts walks the same workspace.TaskArtifactRoot()/<repoDir> tree.
-	parent := filepath.Join(workspace.TaskArtifactRoot(), repoDir, sanitizeTaskName(name))
-	dest, err := freshSnapshotDir(parent)
+	// is sanitized. PruneArtifacts walks the same workspace.TaskArtifactRoot()/<repoDir> tree.
+	parent := filepath.Join(workspace.TaskArtifactRoot(), repoDir, SanitizeTaskName(name))
+	dest, err := FreshSnapshotDir(parent)
 	if err != nil {
 		return "", fmt.Errorf("create artifacts dir: %w", err)
 	}
@@ -1835,7 +1836,7 @@ func harvestArtifacts(env hostenv.Env, w io.Writer, meta taskMeta, repoDir, co, 
 	for _, f := range files {
 		src := filepath.Join(co, filepath.FromSlash(f.Path))
 		dst := filepath.Join(dest, filepath.FromSlash(f.Path))
-		ok, err := copyFilePreserve(src, dst)
+		ok, err := CopyFilePreserve(src, dst)
 		if err != nil {
 			copyErrs = append(copyErrs, fmt.Sprintf("%s: %v", f.Path, err))
 			continue
@@ -1844,9 +1845,9 @@ func harvestArtifacts(env hostenv.Env, w io.Writer, meta taskMeta, repoDir, co, 
 			copied = append(copied, f) // only count files actually written
 		}
 	}
-	man := harvestManifest{
+	man := HarvestManifest{
 		Task: name, Repo: meta.Repo, Mainroot: meta.Mainroot, Branch: meta.Branch,
-		Base: meta.Base, Profile: meta.Profile, Origin: stripURLUserinfo(meta.Origin),
+		Base: meta.Base, Profile: meta.Profile, Origin: StripURLUserinfo(meta.Origin),
 		HarvestedAt: time.Now().UTC().Format(time.RFC3339), Files: copied,
 	}
 	if b, err := json.MarshalIndent(man, "", "  "); err == nil {
@@ -1865,12 +1866,12 @@ func harvestArtifacts(env hostenv.Env, w io.Writer, meta taskMeta, repoDir, co, 
 	return dest, nil
 }
 
-// freshSnapshotDir creates a NEW timestamped snapshot dir under parent, never
+// FreshSnapshotDir creates a NEW timestamped snapshot dir under parent, never
 // reusing an existing one (the fresh-capture guarantee). The base timestamp has
 // 1s precision, so it retries with a -<n> suffix on collision using O_EXCL-style
 // Mkdir (fails on an existing dir), guaranteeing two harvests in the same second
 // get distinct dirs.
-func freshSnapshotDir(parent string) (string, error) {
+func FreshSnapshotDir(parent string) (string, error) {
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return "", err
 	}
@@ -1892,11 +1893,11 @@ func freshSnapshotDir(parent string) (string, error) {
 	return "", fmt.Errorf("could not allocate a fresh snapshot dir under %s", parent)
 }
 
-// copyFilePreserve copies src to dst (creating parent dirs), preserving the file
+// CopyFilePreserve copies src to dst (creating parent dirs), preserving the file
 // mode. It returns copied=false (no error) for a non-regular source (symlink or
 // special) so the caller does not record it as harvested when nothing was
 // written. A real IO error is returned so the caller can fail closed.
-func copyFilePreserve(src, dst string) (copied bool, err error) {
+func CopyFilePreserve(src, dst string) (copied bool, err error) {
 	fi, err := os.Lstat(src)
 	if err != nil {
 		return false, err
@@ -1956,51 +1957,51 @@ func copyFilePreserve(src, dst string) (copied bool, err error) {
 // run mid-task, repeatedly.
 func runTaskHarvest(env hostenv.Env, argv []string) {
 	if cli.WantsHelp(argv) {
-		fmt.Print(taskUsage)
+		fmt.Print(TaskUsage)
 		return
 	}
 	name, to, err := parseTaskHarvestArgs(argv)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix task harvest: %v\n\n%s", err, taskUsage)
+		fmt.Fprintf(os.Stderr, "pix task harvest: %v\n\n%s", err, TaskUsage)
 		os.Exit(2)
 	}
 	cwd, _ := os.Getwd()
-	mainroot, err := resolveMainroot(env, cwd)
+	mainroot, err := ResolveMainroot(env, cwd)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix task harvest: not a git repository: %v\n", err)
 		os.Exit(1)
 	}
-	repokey := taskRepoKey(mainroot)
-	sane := sanitizeTaskName(name)
-	lay, _, ambiguous := findTaskLayout(mainroot, sane)
+	repokey := TaskRepoKey(mainroot)
+	sane := SanitizeTaskName(name)
+	lay, _, ambiguous := FindTaskLayout(mainroot, sane)
 	if ambiguous {
 		fmt.Fprintf(os.Stderr, "pix task harvest: %q exists in both the new and legacy layout; refusing to guess.\n", name)
 		os.Exit(1)
 	}
-	repoDir := lay.dir
-	co, metaPath := taskPaths(repoDir, sane)
+	repoDir := lay.Dir
+	co, metaPath := TaskPaths(repoDir, sane)
 
 	// Under the per-task lock so a concurrent rm/new cannot delete or recreate the
 	// checkout mid-copy (a partial or cross-generation capture).
 	exitCode := 0
-	lockErr := withTaskLock(repokey, sane, func() error {
-		meta, err := readTaskMeta(metaPath)
+	lockErr := WithTaskLock(repokey, sane, func() error {
+		meta, err := ReadTaskMeta(metaPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "pix task harvest: no such task %q for this repo\n", name)
 			exitCode = 1
 			return nil
 		}
-		meta, err = hardenTaskMeta(meta, mainroot, repokey, lay.legacy, sane)
+		meta, err = HardenTaskMeta(meta, mainroot, repokey, lay.Legacy, sane)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "pix task harvest: refusing %q: %v\n", name, err)
 			exitCode = 1
 			return nil
 		}
 		if to != "" {
-			exitCode = harvestToDir(env, co, to, name)
+			exitCode = HarvestToDir(env, co, to, name)
 			return nil
 		}
-		dest, herr := harvestArtifacts(env, os.Stdout, meta, repoDir, co, name)
+		dest, herr := HarvestArtifacts(env, os.Stdout, meta, repoDir, co, name)
 		if herr != nil {
 			fmt.Fprintf(os.Stderr, "pix task harvest: %v\n", herr)
 			exitCode = 1
@@ -2020,12 +2021,12 @@ func runTaskHarvest(env hostenv.Env, argv []string) {
 	}
 }
 
-// harvestToDir copies the harvest candidates to an explicit user-chosen dir. It
+// HarvestToDir copies the harvest candidates to an explicit user-chosen dir. It
 // REFUSES a destination equal to or nested under the checkout (source ==
 // destination would open a file O_TRUNC on itself, destroying the original), and
 // it accumulates copy failures and reports a non-zero exit code rather than a
 // false success. Returns the exit code (0 ok, 1 error).
-func harvestToDir(env hostenv.Env, co, to, name string) int {
+func HarvestToDir(env hostenv.Env, co, to, name string) int {
 	coAbs, err := absResolve(co)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix task harvest: %v\n", err)
@@ -2043,7 +2044,7 @@ func harvestToDir(env hostenv.Env, co, to, name string) int {
 	// harvest then copies into the checkout it was meant to refuse. Any symlinked
 	// ancestor does this (macOS /var, a symlinked $HOME, /home -> /mnt/home), not
 	// just the dest itself.
-	toAbs = resolveThroughMissing(toAbs)
+	toAbs = ResolveThroughMissing(toAbs)
 	if toAbs == coAbs || strings.HasPrefix(toAbs+string(os.PathSeparator), coAbs+string(os.PathSeparator)) {
 		fmt.Fprintf(os.Stderr, "pix task harvest: --to %q is the checkout itself (or nested inside it); choose a dir outside the clone.\n", to)
 		return 1
@@ -2060,7 +2061,7 @@ func harvestToDir(env hostenv.Env, co, to, name string) int {
 	var errs []string
 	copied := 0
 	for _, f := range files {
-		ok, err := copyFilePreserve(filepath.Join(co, filepath.FromSlash(f.Path)), filepath.Join(toAbs, filepath.FromSlash(f.Path)))
+		ok, err := CopyFilePreserve(filepath.Join(co, filepath.FromSlash(f.Path)), filepath.Join(toAbs, filepath.FromSlash(f.Path)))
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", f.Path, err))
 			continue
@@ -2077,12 +2078,12 @@ func harvestToDir(env hostenv.Env, co, to, name string) int {
 	return 0
 }
 
-// resolveThroughMissing canonicalizes a path that may not exist yet, so it is
+// ResolveThroughMissing canonicalizes a path that may not exist yet, so it is
 // comparable byte-for-byte with an absResolve'd sibling. EvalSymlinks fails
 // outright on a missing path, so walk up to the deepest ancestor that DOES
 // exist, resolve that, and re-append the segments below it. A path with no
 // resolvable ancestor at all falls back to its cleaned absolute form.
-func resolveThroughMissing(abs string) string {
+func ResolveThroughMissing(abs string) string {
 	cur := filepath.Clean(abs)
 	rest := ""
 	for {
@@ -2173,27 +2174,27 @@ func parseTaskRmArgs(argv []string) (name string, force bool, err error) {
 // ---------------------------------------------------------------------------
 
 const (
-	// taskGCDefaultDays is the default age (in days) a task must exceed before gc
+	// TaskGCDefaultDays is the default age (in days) a task must exceed before gc
 	// will prune it. Age = now - max(meta.Created, mtime(co)).
-	taskGCDefaultDays = 7
-	// taskArtifactDefaultDays is the default retention for harvested artifact
+	TaskGCDefaultDays = 7
+	// TaskArtifactDefaultDays is the default retention for harvested artifact
 	// snapshots. Pruning these is pure age-gated deletion (the rescue copy has
 	// already served its purpose), never gated by the clone guard.
-	taskArtifactDefaultDays = 30
+	TaskArtifactDefaultDays = 30
 )
 
-type taskGcOpts struct {
-	days         int
-	artifactDays int
-	dryRun       bool
-	noHarvest    bool
+type TaskGcOpts struct {
+	Days         int
+	ArtifactDays int
+	DryRun       bool
+	NoHarvest    bool
 }
 
-// taskAge is a task's age for gc: now - max(meta.Created, mtime(co)). Created
+// TaskAge is a task's age for gc: now - max(meta.Created, mtime(co)). Created
 // alone is a bad proxy (a weeks-old task you use daily looks stale); the checkout
 // mtime reflects real activity. A task with neither timestamp available returns 0
 // (never over-age), so a broken meta is never auto-pruned.
-func taskAge(meta taskMeta, co string) time.Duration {
+func TaskAge(meta TaskMeta, co string) time.Duration {
 	var newest time.Time
 	bump := func(t time.Time) {
 		if t.After(newest) {
@@ -2225,31 +2226,31 @@ func taskAge(meta taskMeta, co string) time.Duration {
 	return time.Since(newest)
 }
 
-// runTaskGc prunes clean, over-age tasks for the current repo. It reuses the
-// EXACT rm machinery per candidate (gatherTaskState + taskRemoveGuard +
-// harvest + executeTaskTeardown + removeTaskArtifacts) under the per-task lock,
+// RunTaskGc prunes clean, over-age tasks for the current repo. It reuses the
+// EXACT rm machinery per candidate (GatherTaskState + TaskRemoveGuard +
+// harvest + ExecuteTaskTeardown + RemoveTaskArtifacts) under the per-task lock,
 // so a task with uncommitted/unpushed work is skipped and reported, never
 // force-dropped (there is no --force on gc, by design). After the task sweep it
 // prunes harvested artifact snapshots older than --artifact-days.
-func runTaskGc(env hostenv.Env, argv []string) {
+func RunTaskGc(env hostenv.Env, argv []string) {
 	if cli.WantsHelp(argv) {
-		fmt.Print(taskUsage)
+		fmt.Print(TaskUsage)
 		return
 	}
-	opts, err := parseTaskGcArgs(argv)
+	opts, err := ParseTaskGcArgs(argv)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix task gc: %v\n\n%s", err, taskUsage)
+		fmt.Fprintf(os.Stderr, "pix task gc: %v\n\n%s", err, TaskUsage)
 		os.Exit(2)
 	}
 
 	cwd, _ := os.Getwd()
-	mainroot, err := resolveMainroot(env, cwd)
+	mainroot, err := ResolveMainroot(env, cwd)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix task gc: not a git repository: %v\n", err)
 		os.Exit(1)
 	}
-	repokey := taskRepoKey(mainroot)
-	maxAge := time.Duration(opts.days) * 24 * time.Hour
+	repokey := TaskRepoKey(mainroot)
+	maxAge := time.Duration(opts.Days) * 24 * time.Hour
 	// skipped = normal guard refusals (dirty/unpushed/running) — expected, exit 0.
 	// failed  = OPERATIONAL failures (corrupt meta, harvest/teardown/remove error)
 	// — a safety operation did not complete, so gc must exit non-zero so automation
@@ -2262,12 +2263,12 @@ func runTaskGc(env hostenv.Env, argv []string) {
 	// removed and recreated while gc waited for the lock is never torn down on a
 	// stale decision (the pre-lock TOCTOU).
 	type cand struct {
-		lay      taskLayout
+		lay      TaskLayout
 		fileBase string
 	}
 	var cands []cand
-	for _, lay := range existingTaskLayouts(mainroot) {
-		entries, _ := os.ReadDir(filepath.Join(workspace.TaskStateRoot(), lay.dir, "meta"))
+	for _, lay := range ExistingTaskLayouts(mainroot) {
+		entries, _ := os.ReadDir(filepath.Join(workspace.TaskStateRoot(), lay.Dir, "meta"))
 		for _, e := range entries {
 			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
 				continue
@@ -2278,40 +2279,40 @@ func runTaskGc(env hostenv.Env, argv []string) {
 	sort.Slice(cands, func(i, j int) bool { return cands[i].fileBase < cands[j].fileBase })
 
 	for _, c := range cands {
-		repoDir := c.lay.dir
+		repoDir := c.lay.Dir
 		fileBase := c.fileBase
-		co, metaPath := taskPaths(repoDir, fileBase)
-		lockErr := withTaskLock(repokey, fileBase, func() error {
+		co, metaPath := TaskPaths(repoDir, fileBase)
+		lockErr := WithTaskLock(repokey, fileBase, func() error {
 			// Re-read + re-harden + re-age UNDER the lock: the file may have been
 			// removed/recreated since discovery.
-			m, err := readTaskMeta(metaPath)
+			m, err := ReadTaskMeta(metaPath)
 			if err != nil {
 				return nil // gone since discovery; nothing to do
 			}
-			m, err = hardenTaskMeta(m, mainroot, repokey, c.lay.legacy, fileBase)
+			m, err = HardenTaskMeta(m, mainroot, repokey, c.lay.Legacy, fileBase)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "gc: skipping %s: %v\n", fileBase, err)
 				failed++
 				return nil
 			}
-			age := taskAge(m, co)
+			age := TaskAge(m, co)
 			if age < maxAge {
 				return nil // not a candidate under the lock either
 			}
 			name := m.Name
-			st := gatherTaskState(env, m, co)
-			if msg, ok := taskRemoveGuard(st, false); !ok {
+			st := GatherTaskState(env, m, co)
+			if msg, ok := TaskRemoveGuard(st, false); !ok {
 				fmt.Printf("skip %-20s %s\n", name, msg)
 				skipped++
 				return nil
 			}
-			if opts.dryRun {
+			if opts.DryRun {
 				fmt.Printf("would remove %-20s (age %dd)\n", name, int(age.Hours()/24))
 				wouldRemove++
 				return nil
 			}
 			recovered := "refs/pix/recovered/" + fileBase
-			if rc := executeTaskTeardown(env, os.Stderr, m, co, name, recovered, false, st); rc != 0 {
+			if rc := ExecuteTaskTeardown(env, os.Stderr, m, co, name, recovered, false, st); rc != 0 {
 				failed++
 				return nil
 			}
@@ -2319,14 +2320,14 @@ func runTaskGc(env hostenv.Env, argv []string) {
 			// a harvest error keeps the clone + metadata rather than deleting un-git'd
 			// docs. gc only reaches here on a guard-clean task, so there is normally
 			// nothing to harvest; this is the belt-and-braces path.
-			if !opts.noHarvest {
-				if _, herr := harvestArtifacts(env, os.Stdout, m, repoDir, co, name); herr != nil {
+			if !opts.NoHarvest {
+				if _, herr := HarvestArtifacts(env, os.Stdout, m, repoDir, co, name); herr != nil {
 					fmt.Fprintf(os.Stderr, "gc: %-20s sandbox removed but harvest failed; keeping clone at %s: %v\n", name, co, herr)
 					failed++
 					return nil
 				}
 			}
-			if err := removeTaskArtifacts(co, metaPath, os.RemoveAll, os.Remove); err != nil {
+			if err := RemoveTaskArtifacts(co, metaPath, os.RemoveAll, os.Remove); err != nil {
 				fmt.Fprintf(os.Stderr, "gc: %v\n", err)
 				failed++
 				return nil
@@ -2341,10 +2342,10 @@ func runTaskGc(env hostenv.Env, argv []string) {
 		}
 	}
 
-	prunedArtifacts := pruneArtifacts(taskRepoDir(mainroot), opts.artifactDays, opts.dryRun) +
-		pruneArtifacts(taskRepoKey(mainroot), opts.artifactDays, opts.dryRun)
+	prunedArtifacts := PruneArtifacts(TaskRepoDir(mainroot), opts.ArtifactDays, opts.DryRun) +
+		PruneArtifacts(TaskRepoKey(mainroot), opts.ArtifactDays, opts.DryRun)
 
-	if opts.dryRun {
+	if opts.DryRun {
 		fmt.Printf("gc (dry run): %d would be removed, %d skipped, %d failed, %s would be pruned.\n",
 			wouldRemove, skipped, failed, cli.Plural(prunedArtifacts, "artifact snapshot"))
 	} else {
@@ -2358,11 +2359,11 @@ func runTaskGc(env hostenv.Env, argv []string) {
 	}
 }
 
-// pruneArtifacts deletes harvested artifact snapshot dirs older than days under
+// PruneArtifacts deletes harvested artifact snapshot dirs older than days under
 // workspace.TaskArtifactRoot()/<repoDir>/<task>/<ts>/, by the snapshot dir's mtime. Pure
 // age-gated deletion (the snapshot was already the rescue copy). Returns the
 // count pruned (or that WOULD be pruned under dryRun). days <= 0 disables it.
-func pruneArtifacts(repoDir string, days int, dryRun bool) int {
+func PruneArtifacts(repoDir string, days int, dryRun bool) int {
 	if days <= 0 {
 		return 0
 	}
@@ -2403,9 +2404,9 @@ func pruneArtifacts(repoDir string, days int, dryRun bool) int {
 	return pruned
 }
 
-// parseTaskGcArgs parses `gc [--days N] [--dry-run] [--no-harvest] [--artifact-days N]`.
-func parseTaskGcArgs(argv []string) (taskGcOpts, error) {
-	o := taskGcOpts{days: taskGCDefaultDays, artifactDays: taskArtifactDefaultDays}
+// ParseTaskGcArgs parses `gc [--days N] [--dry-run] [--no-harvest] [--artifact-days N]`.
+func ParseTaskGcArgs(argv []string) (TaskGcOpts, error) {
+	o := TaskGcOpts{Days: TaskGCDefaultDays, ArtifactDays: TaskArtifactDefaultDays}
 	intVal := func(a string, i *int) (string, error) {
 		if eq := strings.IndexByte(a, '='); eq >= 0 {
 			return a[eq+1:], nil
@@ -2432,7 +2433,7 @@ func parseTaskGcArgs(argv []string) (taskGcOpts, error) {
 			if err != nil {
 				return o, fmt.Errorf("--days %v", err)
 			}
-			o.days = d
+			o.Days = d
 		case "--artifact-days":
 			v, err := intVal(a, &i)
 			if err != nil {
@@ -2442,11 +2443,11 @@ func parseTaskGcArgs(argv []string) (taskGcOpts, error) {
 			if err != nil {
 				return o, fmt.Errorf("--artifact-days %v", err)
 			}
-			o.artifactDays = d
+			o.ArtifactDays = d
 		case "--dry-run":
-			o.dryRun = true
+			o.DryRun = true
 		case "--no-harvest":
-			o.noHarvest = true
+			o.NoHarvest = true
 		default:
 			return o, fmt.Errorf("unknown flag %q", a)
 		}

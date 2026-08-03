@@ -1,6 +1,7 @@
 package main
 
 import (
+	"pix/host/workflow/launch"
 	"strings"
 	"testing"
 )
@@ -8,7 +9,7 @@ import (
 // U-W3.06 (AC-P0-406). This file pins the CURRENT sandbox-name composition
 // and truncation behavior BEFORE the rename changes the prefix that drives
 // it: "pi-stack-t-" (11 chars) became "pix-t-" (6 chars) in U-W3.09. Five
-// more characters of budget now survive maxSandboxNameLen (63) truncation,
+// more characters of budget now survive launch.MaxSandboxNameLen (63) truncation,
 // which moved every threshold this file pins.
 //
 // THIS FILE IS UPDATED DELIBERATELY IN U-W3.09, NEVER BY THE RENAME DRIVER
@@ -24,24 +25,24 @@ import (
 // U-W3.09 diff a deliberate act, not an accident nobody reviewed.
 //
 // Every expected string below is the VERIFIED CURRENT OUTPUT of
-// boundSandboxName, captured by actually calling it (not hand-derived sha256
+// launch.BoundSandboxName, captured by actually calling it (not hand-derived sha256
 // arithmetic) -- see the commit body for the capture method.
 
 func TestSandboxNameConstants_Pinned(t *testing.T) {
 	// These are the numbers every threshold in this file is computed FROM.
 	// If one of these changes, every other test in this file needs re-deriving
 	// (that is the point: a silent drift here is a silent drift everywhere).
-	if maxSandboxNameLen != 63 {
-		t.Fatalf("maxSandboxNameLen = %d, want 63 (strictest common DNS-label limit, RFC1123)", maxSandboxNameLen)
+	if launch.MaxSandboxNameLen != 63 {
+		t.Fatalf("launch.MaxSandboxNameLen = %d, want 63 (strictest common DNS-label limit, RFC1123)", launch.MaxSandboxNameLen)
 	}
-	if nameTrimFloor != 12 {
-		t.Fatalf("nameTrimFloor = %d, want 12 (10-hex tag + dash + >=1 prefix rune)", nameTrimFloor)
+	if launch.NameTrimFloor != 12 {
+		t.Fatalf("launch.NameTrimFloor = %d, want 12 (10-hex tag + dash + >=1 prefix rune)", launch.NameTrimFloor)
 	}
-	if maxRepoLabelLen != 12 {
-		t.Fatalf("maxRepoLabelLen = %d, want 12", maxRepoLabelLen)
+	if launch.MaxRepoLabelLen != 12 {
+		t.Fatalf("launch.MaxRepoLabelLen = %d, want 12", launch.MaxRepoLabelLen)
 	}
-	if maxTaskNameLen != 40 {
-		t.Fatalf("maxTaskNameLen = %d, want 40", maxTaskNameLen)
+	if launch.MaxTaskNameLen != 40 {
+		t.Fatalf("launch.MaxTaskNameLen = %d, want 40", launch.MaxTaskNameLen)
 	}
 }
 
@@ -58,7 +59,7 @@ func TestBoundSandboxName_ExactFitBoundary(t *testing.T) {
 	// name length 35: compose is EXACTLY 63 -- fits with zero trimming.
 	name35 := strings.Repeat("a", 35)
 	want35 := "pix-t-repolabel12x-abcd1234-" + name35
-	if got := boundSandboxName(label, repokey, name35, ""); got != want35 {
+	if got := launch.BoundSandboxName(label, repokey, name35, ""); got != want35 {
 		t.Errorf("name len 35 (exact fit): got %q, want %q", got, want35)
 	}
 	if len(want35) != 63 {
@@ -68,11 +69,11 @@ func TestBoundSandboxName_ExactFitBoundary(t *testing.T) {
 	// name length 36: ONE character over -- this is the pinned threshold.
 	name36 := strings.Repeat("a", 36)
 	want36 := "pix-t-repolabel12x-abcd1234-aaaaaaaaaaaaaaaaaaaaaaaa-22c1d24bcd"
-	if got := boundSandboxName(label, repokey, name36, ""); got != want36 {
+	if got := launch.BoundSandboxName(label, repokey, name36, ""); got != want36 {
 		t.Errorf("name len 36 (one over the exact-fit boundary): got %q, want %q", got, want36)
 	}
 	if len(want36) != 63 {
-		t.Errorf("trimmed composite is %d chars, want exactly maxSandboxNameLen (63)", len(want36))
+		t.Errorf("trimmed composite is %d chars, want exactly launch.MaxSandboxNameLen (63)", len(want36))
 	}
 }
 
@@ -86,7 +87,7 @@ func TestBoundSandboxName_NameOverflowStaysAtTheSameTrimWindow(t *testing.T) {
 	label := "repolabel12x"
 	name60 := strings.Repeat("a", 60)
 	want := "pix-t-repolabel12x-abcd1234-aaaaaaaaaaaaaaaaaaaaaaaa-11ee391211"
-	if got := boundSandboxName(label, "abcd1234", name60, ""); got != want {
+	if got := launch.BoundSandboxName(label, "abcd1234", name60, ""); got != want {
 		t.Errorf("name len 60: got %q, want %q", got, want)
 	}
 	if len(want) != 63 {
@@ -95,7 +96,7 @@ func TestBoundSandboxName_NameOverflowStaysAtTheSameTrimWindow(t *testing.T) {
 }
 
 func TestBoundSandboxName_LabelUntouchedWhenNameIsSmall(t *testing.T) {
-	// A label that alone would overflow maxSandboxNameLen is left FULLY
+	// A label that alone would overflow launch.MaxSandboxNameLen is left FULLY
 	// intact when the rest of the composite (a 1-char name, no profile)
 	// leaves enough room. Trimming only ever engages once the FULL composite
 	// actually overflows -- it does not pre-emptively shorten a long label.
@@ -104,7 +105,7 @@ func TestBoundSandboxName_LabelUntouchedWhenNameIsSmall(t *testing.T) {
 		t.Fatalf("fixture label is %d chars, want 33", len(longLabel))
 	}
 	want := "pix-t-reallylonglabelthatoverflows12345-abcd1234-n"
-	if got := boundSandboxName(longLabel, "abcd1234", "n", ""); got != want {
+	if got := launch.BoundSandboxName(longLabel, "abcd1234", "n", ""); got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
 	if len(want) != 50 {
@@ -114,7 +115,7 @@ func TestBoundSandboxName_LabelUntouchedWhenNameIsSmall(t *testing.T) {
 
 func TestBoundSandboxName_NameHitsFloorThenLabelTrims(t *testing.T) {
 	// Both the label (33 chars) AND the name (60 chars) overflow. Per the
-	// documented priority (name first, down to nameTrimFloor; THEN the
+	// documented priority (name first, down to launch.NameTrimFloor; THEN the
 	// label; the repokey NEVER): the name is hash-tag-trimmed all the way to
 	// its floor (12 chars: "a-" + 10 hex), and only then does the label get
 	// trimmed (a plain truncation, no hash tag -- it is a cosmetic hint, not
@@ -122,7 +123,7 @@ func TestBoundSandboxName_NameHitsFloorThenLabelTrims(t *testing.T) {
 	longLabel := "reallylonglabelthatoverflows12345"
 	name60 := strings.Repeat("a", 60)
 	want := "pix-t-reallylonglabelthatoverflows12345-abcd1234-aaa-11ee391211"
-	got := boundSandboxName(longLabel, "abcd1234", name60, "")
+	got := launch.BoundSandboxName(longLabel, "abcd1234", name60, "")
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -146,7 +147,7 @@ func TestBoundSandboxName_LabelDroppedToRepoThenProfileTrims(t *testing.T) {
 	// touched), then finally the profile itself is hash-tag-trimmed.
 	prof60 := strings.Repeat("a", 60)
 	want := "pix-t-repo-abcd1234-n-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-11ee391211"
-	got := boundSandboxName("x", "abcd1234", "n", prof60)
+	got := launch.BoundSandboxName("x", "abcd1234", "n", prof60)
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -160,7 +161,7 @@ func TestBoundSandboxName_LabelDroppedToRepoThenProfileTrims(t *testing.T) {
 
 func TestBoundSandboxName_NeverExceedsTheCapAcrossAWideInputRange(t *testing.T) {
 	// A property check alongside the exact pins above: whatever the inputs,
-	// the composed name never exceeds maxSandboxNameLen. This is the
+	// the composed name never exceeds launch.MaxSandboxNameLen. This is the
 	// invariant U-W3.09 must preserve even though the exact trimmed STRINGS
 	// above are expected to change with the new prefix.
 	repokey := "abcd1234"
@@ -173,10 +174,10 @@ func TestBoundSandboxName_NeverExceedsTheCapAcrossAWideInputRange(t *testing.T) 
 			if pln > 0 {
 				prof = strings.Repeat("p", pln)
 			}
-			got := boundSandboxName(label, repokey, name, prof)
-			if len(got) > maxSandboxNameLen {
-				t.Errorf("label len=%d name len=%d prof len=%d: composite is %d chars, exceeds maxSandboxNameLen (%d): %q",
-					ln, ln+1, pln, len(got), maxSandboxNameLen, got)
+			got := launch.BoundSandboxName(label, repokey, name, prof)
+			if len(got) > launch.MaxSandboxNameLen {
+				t.Errorf("label len=%d name len=%d prof len=%d: composite is %d chars, exceeds launch.MaxSandboxNameLen (%d): %q",
+					ln, ln+1, pln, len(got), launch.MaxSandboxNameLen, got)
 			}
 			if !strings.Contains(got, repokey) {
 				t.Errorf("label len=%d name len=%d prof len=%d: repokey %q missing from composite (repokey must NEVER be trimmed): %q",

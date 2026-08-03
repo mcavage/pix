@@ -12,6 +12,7 @@ import (
 	"pix/host/hostenv"
 	"pix/host/sys/systest"
 	"pix/host/workflow/doctor"
+	"pix/host/workflow/launch"
 	"reflect"
 	"strings"
 	"sync"
@@ -23,19 +24,19 @@ import (
 
 func TestTaskRepoKey_StableHexPrefix(t *testing.T) {
 	dir := t.TempDir()
-	k1 := taskRepoKey(dir)
-	k2 := taskRepoKey(dir)
+	k1 := launch.TaskRepoKey(dir)
+	k2 := launch.TaskRepoKey(dir)
 	if k1 != k2 {
-		t.Errorf("taskRepoKey not stable: %q vs %q", k1, k2)
+		t.Errorf("launch.TaskRepoKey not stable: %q vs %q", k1, k2)
 	}
 	if len(k1) != 8 {
-		t.Errorf("taskRepoKey len = %d, want 8 (%q)", len(k1), k1)
+		t.Errorf("launch.TaskRepoKey len = %d, want 8 (%q)", len(k1), k1)
 	}
 	if _, err := hex.DecodeString(k1); err != nil {
-		t.Errorf("taskRepoKey %q is not hex: %v", k1, err)
+		t.Errorf("launch.TaskRepoKey %q is not hex: %v", k1, err)
 	}
 	// Distinct paths yield distinct keys.
-	if other := taskRepoKey(filepath.Join(dir, "sub")); other == k1 {
+	if other := launch.TaskRepoKey(filepath.Join(dir, "sub")); other == k1 {
 		t.Errorf("distinct paths collided on key %q", k1)
 	}
 }
@@ -43,7 +44,7 @@ func TestTaskRepoKey_StableHexPrefix(t *testing.T) {
 func TestTaskPaths_UnderStateHome(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", tmp)
-	co, meta := taskPaths("abcd1234", "fix-login")
+	co, meta := launch.TaskPaths("abcd1234", "fix-login")
 	wantCo := filepath.Join(tmp, "pix", "tasks", "abcd1234", "co", "fix-login")
 	wantMeta := filepath.Join(tmp, "pix", "tasks", "abcd1234", "meta", "fix-login.json")
 	if co != wantCo {
@@ -63,34 +64,34 @@ func TestSanitizeTaskName(t *testing.T) {
 		"":            "task",
 	}
 	for in, want := range cases {
-		if got := sanitizeTaskName(in); got != want {
-			t.Errorf("sanitizeTaskName(%q) = %q, want %q", in, got, want)
+		if got := launch.SanitizeTaskName(in); got != want {
+			t.Errorf("launch.SanitizeTaskName(%q) = %q, want %q", in, got, want)
 		}
 	}
 	// Overflow is capped and stays within the bound.
 	long := strings.Repeat("x", 80)
-	got := sanitizeTaskName(long)
-	if len(got) > maxTaskNameLen {
-		t.Errorf("sanitizeTaskName(long) len = %d, want <= %d", len(got), maxTaskNameLen)
+	got := launch.SanitizeTaskName(long)
+	if len(got) > launch.MaxTaskNameLen {
+		t.Errorf("launch.SanitizeTaskName(long) len = %d, want <= %d", len(got), launch.MaxTaskNameLen)
 	}
 	// Only safe characters survive.
 	for _, r := range got {
 		ok := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_'
 		if !ok {
-			t.Fatalf("sanitizeTaskName produced unsafe rune %q in %q", r, got)
+			t.Fatalf("launch.SanitizeTaskName produced unsafe rune %q in %q", r, got)
 		}
 	}
 }
 
 func TestTaskSandboxName(t *testing.T) {
-	if got := taskSandboxName("myrepo", "abcd1234", "fix-login", "default"); got != "pix-t-myrepo-abcd1234-fix-login" {
+	if got := launch.TaskSandboxName("myrepo", "abcd1234", "fix-login", "default"); got != "pix-t-myrepo-abcd1234-fix-login" {
 		t.Errorf("default profile: got %q", got)
 	}
-	if got := taskSandboxName("myrepo", "abcd1234", "fix-login", ""); got != "pix-t-myrepo-abcd1234-fix-login" {
+	if got := launch.TaskSandboxName("myrepo", "abcd1234", "fix-login", ""); got != "pix-t-myrepo-abcd1234-fix-login" {
 		t.Errorf("empty profile: got %q", got)
 	}
 	// Profiles were removed: the profile arg is ignored, never a name suffix.
-	if got := taskSandboxName("myrepo", "abcd1234", "fix login", "work"); got != "pix-t-myrepo-abcd1234-fix-login" {
+	if got := launch.TaskSandboxName("myrepo", "abcd1234", "fix login", "work"); got != "pix-t-myrepo-abcd1234-fix-login" {
 		t.Errorf("profile arg must be ignored: got %q", got)
 	}
 }
@@ -99,18 +100,18 @@ func TestTaskSandboxName(t *testing.T) {
 // the current one above, before the rename changes the "pix-t-"
 // prefix both derive from (see sandboxname_test.go's header for why exact
 // pins, not just "it still composes something", matter here). This formula
-// is deleted outright in U-W3.09 (not renamed -- legacyTaskSandboxName
+// is deleted outright in U-W3.09 (not renamed -- launch.LegacyTaskSandboxName
 // reconstructs a namespace that never had legacy tasks under the new name),
 // so this pin is also the record of exactly what gets deleted.
 func TestLegacyTaskSandboxName_ExactComposition(t *testing.T) {
-	if got := legacyTaskSandboxName("abcd1234", "fix-login", "default"); got != "pix-t-abcd1234-fix-login" {
+	if got := launch.LegacyTaskSandboxName("abcd1234", "fix-login", "default"); got != "pix-t-abcd1234-fix-login" {
 		t.Errorf("got %q, want %q", got, "pix-t-abcd1234-fix-login")
 	}
 	// No label segment at all (the pre-label formula never had one) -- this is
-	// the exact structural difference from taskSandboxName's output for the
+	// the exact structural difference from launch.TaskSandboxName's output for the
 	// SAME (repokey, name): one fewer "-<label>" segment.
-	newer := taskSandboxName("myrepo", "abcd1234", "fix-login", "")
-	legacy := legacyTaskSandboxName("abcd1234", "fix-login", "")
+	newer := launch.TaskSandboxName("myrepo", "abcd1234", "fix-login", "")
+	legacy := launch.LegacyTaskSandboxName("abcd1234", "fix-login", "")
 	if newer == legacy {
 		t.Errorf("new-layout and legacy formulas produced the SAME name (%q); they must differ by the label segment", newer)
 	}
@@ -118,7 +119,7 @@ func TestLegacyTaskSandboxName_ExactComposition(t *testing.T) {
 		t.Errorf("legacy formula got %q, want %q", legacy, "pix-t-abcd1234-fix-login")
 	}
 	// Profile arg is ignored here too (retained for call-site stability only).
-	if got := legacyTaskSandboxName("abcd1234", "fix-login", "work"); got != legacy {
+	if got := launch.LegacyTaskSandboxName("abcd1234", "fix-login", "work"); got != legacy {
 		t.Errorf("profile arg must be ignored: got %q, want %q", got, legacy)
 	}
 }
@@ -129,15 +130,15 @@ func TestLegacyTaskSandboxName_ExactComposition(t *testing.T) {
 // with no "pix-t-" prefix at all, which is easy to conflate.
 func TestTaskRepoDir_ExactComposition(t *testing.T) {
 	dir := t.TempDir()
-	got := taskRepoDir(dir)
-	label := taskRepoLabel(dir)
-	key := taskRepoKey(dir)
+	got := launch.TaskRepoDir(dir)
+	label := launch.TaskRepoLabel(dir)
+	key := launch.TaskRepoKey(dir)
 	want := label + "-" + key
 	if got != want {
-		t.Errorf("taskRepoDir(%q) = %q, want %q (label-then-repokey, no prefix)", dir, got, want)
+		t.Errorf("launch.TaskRepoDir(%q) = %q, want %q (label-then-repokey, no prefix)", dir, got, want)
 	}
 	if strings.HasPrefix(got, "pix") {
-		t.Errorf("taskRepoDir must never carry the sandbox-name prefix (it names a DIRECTORY, not a sandbox): got %q", got)
+		t.Errorf("launch.TaskRepoDir must never carry the sandbox-name prefix (it names a DIRECTORY, not a sandbox): got %q", got)
 	}
 }
 
@@ -146,28 +147,28 @@ func TestTaskRepoDir_ExactComposition(t *testing.T) {
 func TestTaskRemoveGuard(t *testing.T) {
 	cases := []struct {
 		name      string
-		st        taskState
+		st        launch.TaskState
 		force     bool
 		wantOK    bool
 		wantInMsg string
 	}{
-		{"clean", taskState{sandbox: sbxAbsent}, false, true, ""},
-		{"running blocks", taskState{sandbox: sbxRunning}, false, false, "still running"},
-		{"unknown sandbox blocks", taskState{sandbox: sbxUnknown}, false, false, "cannot determine sandbox state"},
-		{"stopped sandbox is safe", taskState{sandbox: sbxStopped}, false, true, ""},
-		{"dirty blocks", taskState{sandbox: sbxAbsent, dirty: true}, false, false, "uncommitted"},
-		{"pushed/reachable work (unrec 0) is safe", taskState{sandbox: sbxAbsent, unrec: 0, unpushed: 2}, false, true, ""},
-		{"any clone-only commit blocks", taskState{sandbox: sbxAbsent, unrec: 2, unpushed: 2}, false, false, "only in this clone"},
-		{"clone-only commit blocks even when unpushed reads 0", taskState{sandbox: sbxAbsent, unrec: 2, unpushed: 0}, false, false, "only in this clone"},
-		{"force overrides running", taskState{sandbox: sbxRunning}, true, true, ""},
-		{"force overrides unknown sandbox", taskState{sandbox: sbxUnknown}, true, true, ""},
-		{"force overrides dirty", taskState{sandbox: sbxAbsent, dirty: true}, true, true, ""},
-		{"force overrides would-lose-work", taskState{sandbox: sbxAbsent, unrec: 2, unpushed: 2}, true, true, ""},
-		{"multiple reasons joined", taskState{sandbox: sbxRunning, dirty: true}, false, false, ";"},
+		{"clean", launch.TaskState{Sandbox: launch.SbxAbsent}, false, true, ""},
+		{"running blocks", launch.TaskState{Sandbox: launch.SbxRunning}, false, false, "still running"},
+		{"unknown sandbox blocks", launch.TaskState{Sandbox: launch.SbxUnknown}, false, false, "cannot determine sandbox state"},
+		{"stopped sandbox is safe", launch.TaskState{Sandbox: launch.SbxStopped}, false, true, ""},
+		{"dirty blocks", launch.TaskState{Sandbox: launch.SbxAbsent, Dirty: true}, false, false, "uncommitted"},
+		{"pushed/reachable work (unrec 0) is safe", launch.TaskState{Sandbox: launch.SbxAbsent, Unrec: 0, Unpushed: 2}, false, true, ""},
+		{"any clone-only commit blocks", launch.TaskState{Sandbox: launch.SbxAbsent, Unrec: 2, Unpushed: 2}, false, false, "only in this clone"},
+		{"clone-only commit blocks even when unpushed reads 0", launch.TaskState{Sandbox: launch.SbxAbsent, Unrec: 2, Unpushed: 0}, false, false, "only in this clone"},
+		{"force overrides running", launch.TaskState{Sandbox: launch.SbxRunning}, true, true, ""},
+		{"force overrides unknown sandbox", launch.TaskState{Sandbox: launch.SbxUnknown}, true, true, ""},
+		{"force overrides dirty", launch.TaskState{Sandbox: launch.SbxAbsent, Dirty: true}, true, true, ""},
+		{"force overrides would-lose-work", launch.TaskState{Sandbox: launch.SbxAbsent, Unrec: 2, Unpushed: 2}, true, true, ""},
+		{"multiple reasons joined", launch.TaskState{Sandbox: launch.SbxRunning, Dirty: true}, false, false, ";"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			msg, ok := taskRemoveGuard(c.st, c.force)
+			msg, ok := launch.TaskRemoveGuard(c.st, c.force)
 			if ok != c.wantOK {
 				t.Errorf("ok = %v, want %v (msg %q)", ok, c.wantOK, msg)
 			}
@@ -191,14 +192,14 @@ func TestRunTaskPath_PrintsCheckoutDir(t *testing.T) {
 	t.Setenv("PIX_PROFILE", "")
 
 	env := gitEnv(t, "", nil)
-	mainroot, err := resolveMainroot(env, main)
+	mainroot, err := launch.ResolveMainroot(env, main)
 	if err != nil {
 		t.Fatal(err)
 	}
-	repoDir := taskRepoDir(mainroot)
-	co, metaPath := taskPaths(repoDir, "fix-login")
+	repoDir := launch.TaskRepoDir(mainroot)
+	co, metaPath := launch.TaskPaths(repoDir, "fix-login")
 	makeTaskClone(t, main, co, "pix/fix-login", "HEAD")
-	if err := writeTaskMeta(metaPath, taskMeta{
+	if err := launch.WriteTaskMeta(metaPath, launch.TaskMeta{
 		Name: "fix-login", Mode: "localclone", Mainroot: mainroot,
 		Branch: "pix/fix-login", Profile: "default",
 	}); err != nil {
@@ -208,18 +209,18 @@ func TestRunTaskPath_PrintsCheckoutDir(t *testing.T) {
 	t.Chdir(main)
 	// Both grammars: `task path fix-login` and `task fix-login path`.
 	for _, argv := range [][]string{{"path", "fix-login"}, {"fix-login", "path"}} {
-		out := strings.TrimSpace(captureStdout(t, func() { runTask(argv) }))
+		out := strings.TrimSpace(captureStdout(t, func() { launch.RunTask(argv) }))
 		if out != co {
-			t.Errorf("runTask(%v) = %q, want %q", argv, out, co)
+			t.Errorf("launch.RunTask(%v) = %q, want %q", argv, out, co)
 		}
 	}
 }
 
 func TestRunTask_BareAndHelpPrintUsage(t *testing.T) {
 	for _, argv := range [][]string{nil, {"-h"}, {"--help"}} {
-		out := captureStdout(t, func() { runTask(argv) })
+		out := captureStdout(t, func() { launch.RunTask(argv) })
 		if !strings.Contains(out, "usage: pix task") {
-			t.Errorf("runTask(%v) = %q, want usage", argv, out)
+			t.Errorf("launch.RunTask(%v) = %q, want usage", argv, out)
 		}
 	}
 }
@@ -297,12 +298,12 @@ func TestGatherTaskState_Clean(t *testing.T) {
 	co := filepath.Join(t.TempDir(), "co")
 	makeTaskClone(t, main, co, "pix/clean", "HEAD")
 	env := gitEnv(t, "", nil)
-	m := taskMeta{Name: "clean", Sandbox: "pix-t-x-clean", Mainroot: main, Branch: "pix/clean"}
-	st := gatherTaskState(env, m, co)
-	if st.sandbox != sbxAbsent || st.dirty || st.unrec != 0 || st.unpushed != 0 {
+	m := launch.TaskMeta{Name: "clean", Sandbox: "pix-t-x-clean", Mainroot: main, Branch: "pix/clean"}
+	st := launch.GatherTaskState(env, m, co)
+	if st.Sandbox != launch.SbxAbsent || st.Dirty || st.Unrec != 0 || st.Unpushed != 0 {
 		t.Errorf("clean case: %+v, want sandbox=absent and all zero/false", st)
 	}
-	if msg, ok := taskRemoveGuard(st, false); !ok {
+	if msg, ok := launch.TaskRemoveGuard(st, false); !ok {
 		t.Errorf("clean should allow, got refuse %q", msg)
 	}
 }
@@ -315,12 +316,12 @@ func TestGatherTaskState_Dirty(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := gitEnv(t, "", nil)
-	m := taskMeta{Name: "dirty", Sandbox: "pix-t-x-dirty", Mainroot: main, Branch: "pix/dirty"}
-	st := gatherTaskState(env, m, co)
-	if !st.dirty {
+	m := launch.TaskMeta{Name: "dirty", Sandbox: "pix-t-x-dirty", Mainroot: main, Branch: "pix/dirty"}
+	st := launch.GatherTaskState(env, m, co)
+	if !st.Dirty {
 		t.Errorf("expected dirty, got %+v", st)
 	}
-	if _, ok := taskRemoveGuard(st, false); ok {
+	if _, ok := launch.TaskRemoveGuard(st, false); ok {
 		t.Error("dirty should refuse without --force")
 	}
 }
@@ -338,18 +339,18 @@ func TestGatherTaskState_CommittedUnpushedNoRemote(t *testing.T) {
 	// No upstream, and the local clone's `origin` is the main repo, but there is
 	// no push relationship: unpushed falls back to unrec.
 	env := gitEnv(t, "", nil)
-	m := taskMeta{Name: "work", Sandbox: "pix-t-x-work", Mainroot: main, Branch: "pix/work"}
-	st := gatherTaskState(env, m, co)
-	if st.unrec != 1 {
-		t.Errorf("unrec = %d, want 1", st.unrec)
+	m := launch.TaskMeta{Name: "work", Sandbox: "pix-t-x-work", Mainroot: main, Branch: "pix/work"}
+	st := launch.GatherTaskState(env, m, co)
+	if st.Unrec != 1 {
+		t.Errorf("unrec = %d, want 1", st.Unrec)
 	}
-	if st.unpushed != 1 {
-		t.Errorf("unpushed = %d, want 1 (fallback to unrec)", st.unpushed)
+	if st.Unpushed != 1 {
+		t.Errorf("unpushed = %d, want 1 (fallback to unrec)", st.Unpushed)
 	}
-	if _, ok := taskRemoveGuard(st, false); ok {
+	if _, ok := launch.TaskRemoveGuard(st, false); ok {
 		t.Error("committed-unpushed should refuse without --force")
 	}
-	if _, ok := taskRemoveGuard(st, true); !ok {
+	if _, ok := launch.TaskRemoveGuard(st, true); !ok {
 		t.Error("--force should override")
 	}
 }
@@ -366,12 +367,12 @@ func TestGatherTaskState_CommittedButInMain(t *testing.T) {
 	co := filepath.Join(t.TempDir(), "co")
 	makeTaskClone(t, main, co, "pix/inmain", "HEAD")
 	env := gitEnv(t, "", nil)
-	m := taskMeta{Name: "inmain", Sandbox: "pix-t-x-inmain", Mainroot: main, Branch: "pix/inmain"}
-	st := gatherTaskState(env, m, co)
-	if st.unrec != 0 {
-		t.Errorf("unrec = %d, want 0 (tip is reachable from main)", st.unrec)
+	m := launch.TaskMeta{Name: "inmain", Sandbox: "pix-t-x-inmain", Mainroot: main, Branch: "pix/inmain"}
+	st := launch.GatherTaskState(env, m, co)
+	if st.Unrec != 0 {
+		t.Errorf("unrec = %d, want 0 (tip is reachable from main)", st.Unrec)
 	}
-	if _, ok := taskRemoveGuard(st, false); !ok {
+	if _, ok := launch.TaskRemoveGuard(st, false); !ok {
 		t.Error("committed-but-in-main should allow (nothing to lose)")
 	}
 }
@@ -401,15 +402,15 @@ func TestGatherTaskState_ScratchBranchCommit(t *testing.T) {
 	}
 
 	env := gitEnv(t, "", nil)
-	m := taskMeta{Name: "work", Sandbox: "x", Mainroot: main, Branch: "pix/work"}
-	st := gatherTaskState(env, m, co)
-	if st.unrec != 1 {
-		t.Errorf("unrec = %d, want 1 (scratch-branch commit is clone-only)", st.unrec)
+	m := launch.TaskMeta{Name: "work", Sandbox: "x", Mainroot: main, Branch: "pix/work"}
+	st := launch.GatherTaskState(env, m, co)
+	if st.Unrec != 1 {
+		t.Errorf("unrec = %d, want 1 (scratch-branch commit is clone-only)", st.Unrec)
 	}
-	if _, ok := taskRemoveGuard(st, false); ok {
+	if _, ok := launch.TaskRemoveGuard(st, false); ok {
 		t.Error("a clone-only scratch-branch commit must refuse teardown without --force")
 	}
-	if _, ok := taskRemoveGuard(st, true); !ok {
+	if _, ok := launch.TaskRemoveGuard(st, true); !ok {
 		t.Error("--force should override")
 	}
 }
@@ -436,12 +437,12 @@ func TestGatherTaskState_DetachedHeadCommit(t *testing.T) {
 	}
 
 	env := gitEnv(t, "", nil)
-	m := taskMeta{Name: "work", Sandbox: "x", Mainroot: main, Branch: "pix/work"}
-	st := gatherTaskState(env, m, co)
-	if st.unrec != 1 {
-		t.Errorf("unrec = %d, want 1 (detached-HEAD commit is clone-only)", st.unrec)
+	m := launch.TaskMeta{Name: "work", Sandbox: "x", Mainroot: main, Branch: "pix/work"}
+	st := launch.GatherTaskState(env, m, co)
+	if st.Unrec != 1 {
+		t.Errorf("unrec = %d, want 1 (detached-HEAD commit is clone-only)", st.Unrec)
 	}
-	if _, ok := taskRemoveGuard(st, false); ok {
+	if _, ok := launch.TaskRemoveGuard(st, false); ok {
 		t.Error("a clone-only detached-HEAD commit must refuse teardown without --force")
 	}
 }
@@ -472,12 +473,12 @@ func TestGatherTaskState_PushedWorkNotCounted(t *testing.T) {
 	tgit(t, co, "fetch", "-q", "rem")
 
 	env := gitEnv(t, "", nil)
-	m := taskMeta{Name: "work", Sandbox: "x", Mainroot: main, Branch: "pix/work"}
-	st := gatherTaskState(env, m, co)
-	if st.unrec != 0 {
-		t.Errorf("unrec = %d, want 0 (work is reachable from the clone's remote-tracking refs)", st.unrec)
+	m := launch.TaskMeta{Name: "work", Sandbox: "x", Mainroot: main, Branch: "pix/work"}
+	st := launch.GatherTaskState(env, m, co)
+	if st.Unrec != 0 {
+		t.Errorf("unrec = %d, want 0 (work is reachable from the clone's remote-tracking refs)", st.Unrec)
 	}
-	if _, ok := taskRemoveGuard(st, false); !ok {
+	if _, ok := launch.TaskRemoveGuard(st, false); !ok {
 		t.Error("pushed work must not block teardown (nothing would be lost)")
 	}
 }
@@ -500,12 +501,12 @@ func TestExecuteTaskTeardown_SnapshotCapturesScratchCommit(t *testing.T) {
 
 	sbxname := "pix-t-x-work"
 	env := gitEnv(t, "", nil) // sbx reads absent; `sbx rm -f` succeeds.
-	m := taskMeta{Name: "work", Sandbox: sbxname, Mainroot: main, Branch: "pix/work"}
-	st := gatherTaskState(env, m, co)
+	m := launch.TaskMeta{Name: "work", Sandbox: sbxname, Mainroot: main, Branch: "pix/work"}
+	st := launch.GatherTaskState(env, m, co)
 
 	var out bytes.Buffer
 	recovered := "refs/pix/recovered/work"
-	rc := executeTaskTeardown(env, &out, m, co, "work", recovered, true, st)
+	rc := launch.ExecuteTaskTeardown(env, &out, m, co, "work", recovered, true, st)
 	if rc != 0 {
 		t.Fatalf("rc = %d, want 0 (--force teardown proceeds), out:\n%s", rc, out.String())
 	}
@@ -528,17 +529,17 @@ func TestExecuteTaskTeardown_SnapshotCapturesScratchCommit(t *testing.T) {
 func TestResolveMainroot_RealRepo(t *testing.T) {
 	main := newMainRepo(t)
 	env := gitEnv(t, "", nil)
-	got, err := resolveMainroot(env, main)
+	got, err := launch.ResolveMainroot(env, main)
 	if err != nil {
-		t.Fatalf("resolveMainroot: %v", err)
+		t.Fatalf("launch.ResolveMainroot: %v", err)
 	}
-	// resolveMainroot now returns the git-common-dir (the repo's `.git` dir for a
+	// launch.ResolveMainroot now returns the git-common-dir (the repo's `.git` dir for a
 	// normal repo), not the worktree root.
 	want := filepath.Join(main, ".git")
 	wantResolved, _ := filepath.EvalSymlinks(want)
 	gotResolved, _ := filepath.EvalSymlinks(got)
 	if gotResolved != wantResolved {
-		t.Errorf("resolveMainroot = %q, want %q", got, want)
+		t.Errorf("launch.ResolveMainroot = %q, want %q", got, want)
 	}
 }
 
@@ -552,14 +553,14 @@ func TestResolveMainroot_BareRepo(t *testing.T) {
 		t.Fatalf("clone --bare: %v\n%s", err, out)
 	}
 	env := gitEnv(t, "", nil)
-	got, err := resolveMainroot(env, bare)
+	got, err := launch.ResolveMainroot(env, bare)
 	if err != nil {
-		t.Fatalf("resolveMainroot(bare): %v", err)
+		t.Fatalf("launch.ResolveMainroot(bare): %v", err)
 	}
 	wantResolved, _ := filepath.EvalSymlinks(bare)
 	gotResolved, _ := filepath.EvalSymlinks(got)
 	if gotResolved != wantResolved {
-		t.Errorf("resolveMainroot(bare) = %q, want %q", got, bare)
+		t.Errorf("launch.ResolveMainroot(bare) = %q, want %q", got, bare)
 	}
 	// The resolved git-common-dir must be directly cloneable (what `task new` does).
 	clone := filepath.Join(t.TempDir(), "clone")
@@ -579,13 +580,13 @@ func TestResolveMainroot_LinkedWorktree(t *testing.T) {
 	wt := filepath.Join(t.TempDir(), "wt")
 	tgit(t, main, "worktree", "add", "-q", wt, "-b", "wtbranch")
 	env := gitEnv(t, "", nil)
-	fromMain, err := resolveMainroot(env, main)
+	fromMain, err := launch.ResolveMainroot(env, main)
 	if err != nil {
-		t.Fatalf("resolveMainroot(main): %v", err)
+		t.Fatalf("launch.ResolveMainroot(main): %v", err)
 	}
-	fromWt, err := resolveMainroot(env, wt)
+	fromWt, err := launch.ResolveMainroot(env, wt)
 	if err != nil {
-		t.Fatalf("resolveMainroot(worktree): %v", err)
+		t.Fatalf("launch.ResolveMainroot(worktree): %v", err)
 	}
 	if fromMain != fromWt {
 		t.Errorf("worktree common-dir %q != main common-dir %q", fromWt, fromMain)
@@ -600,15 +601,15 @@ func TestParseTaskNewArgs_RejectsDashFrom(t *testing.T) {
 		{"work", "--from", "-x"},
 		{"work", "--from=-rf"},
 	} {
-		if _, _, _, err := parseTaskNewArgs(argv); err == nil {
-			t.Errorf("parseTaskNewArgs(%v) = nil error, want rejection", argv)
+		if _, _, _, err := launch.ParseTaskNewArgs(argv); err == nil {
+			t.Errorf("launch.ParseTaskNewArgs(%v) = nil error, want rejection", argv)
 		} else if !strings.Contains(err.Error(), "must not begin with '-'") {
-			t.Errorf("parseTaskNewArgs(%v) error = %q, want dash rejection", argv, err)
+			t.Errorf("launch.ParseTaskNewArgs(%v) error = %q, want dash rejection", argv, err)
 		}
 	}
 	// A normal ref is still accepted.
-	if _, from, _, err := parseTaskNewArgs([]string{"work", "--from", "main"}); err != nil || from != "main" {
-		t.Errorf("parseTaskNewArgs good --from: from=%q err=%v", from, err)
+	if _, from, _, err := launch.ParseTaskNewArgs([]string{"work", "--from", "main"}); err != nil || from != "main" {
+		t.Errorf("launch.ParseTaskNewArgs good --from: from=%q err=%v", from, err)
 	}
 }
 
@@ -617,17 +618,17 @@ func TestParseTaskNewArgs_RejectsDashFrom(t *testing.T) {
 func TestHardenTaskMeta_RejectsMismatchedName(t *testing.T) {
 	// The stored name must sanitize back to the file base, else the file was
 	// renamed or hand-edited.
-	if _, err := hardenTaskMeta(taskMeta{Name: "evil", Profile: "default"}, "/main", "abcd1234", false, "work"); err == nil {
+	if _, err := launch.HardenTaskMeta(launch.TaskMeta{Name: "evil", Profile: "default"}, "/main", "abcd1234", false, "work"); err == nil {
 		t.Error("mismatched name should be rejected")
 	}
-	m, err := hardenTaskMeta(taskMeta{Name: "work", Profile: "default", Branch: "pix/../../heads/main", Sandbox: "sneaky"}, "/main", "abcd1234", false, "work")
+	m, err := launch.HardenTaskMeta(launch.TaskMeta{Name: "work", Profile: "default", Branch: "pix/../../heads/main", Sandbox: "sneaky"}, "/main", "abcd1234", false, "work")
 	if err != nil {
 		t.Fatalf("valid name should pass: %v", err)
 	}
 	if m.Branch != "pix/work" {
 		t.Errorf("branch = %q, want re-derived pix/work", m.Branch)
 	}
-	if m.Sandbox != taskSandboxName("main", "abcd1234", "work", "default") {
+	if m.Sandbox != launch.TaskSandboxName("main", "abcd1234", "work", "default") {
 		t.Errorf("sandbox = %q, want re-derived", m.Sandbox)
 	}
 	if m.Mainroot != "/main" {
@@ -660,16 +661,16 @@ func TestTaskMeta_TamperedBranchNeverTargetsMainRef(t *testing.T) {
 	}}}
 
 	// A tampered branch that, un-hardened, would resolve a fetch onto refs/heads/main.
-	tampered := taskMeta{Name: "work", Profile: "default", Branch: "pix/../../heads/main", Sandbox: "x", Mainroot: main}
+	tampered := launch.TaskMeta{Name: "work", Profile: "default", Branch: "pix/../../heads/main", Sandbox: "x", Mainroot: main}
 	before := strings.TrimSpace(tgit(t, main, "rev-parse", "refs/heads/main"))
 
-	hardened, err := hardenTaskMeta(tampered, main, taskRepoKey(main), false, "work")
+	hardened, err := launch.HardenTaskMeta(tampered, main, launch.TaskRepoKey(main), false, "work")
 	if err != nil {
 		t.Fatalf("harden: %v", err)
 	}
-	st := gatherTaskState(env, hardened, co)
-	if st.unrec != 1 {
-		t.Errorf("unrec = %d, want 1", st.unrec)
+	st := launch.GatherTaskState(env, hardened, co)
+	if st.Unrec != 1 {
+		t.Errorf("unrec = %d, want 1", st.Unrec)
 	}
 
 	after := strings.TrimSpace(tgit(t, main, "rev-parse", "refs/heads/main"))
@@ -700,8 +701,8 @@ func TestStripURLUserinfo(t *testing.T) {
 		"":                                     "",
 	}
 	for in, want := range cases {
-		if got := stripURLUserinfo(in); got != want {
-			t.Errorf("stripURLUserinfo(%q) = %q, want %q", in, got, want)
+		if got := launch.StripURLUserinfo(in); got != want {
+			t.Errorf("launch.StripURLUserinfo(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -709,9 +710,9 @@ func TestStripURLUserinfo(t *testing.T) {
 func TestWriteTaskMeta_StripsUserinfoAndMode(t *testing.T) {
 	dir := t.TempDir()
 	metaPath := filepath.Join(dir, "meta", "work.json")
-	m := taskMeta{Name: "work", Origin: "https://user:token@host/org/repo.git"}
-	if err := writeTaskMeta(metaPath, m); err != nil {
-		t.Fatalf("writeTaskMeta: %v", err)
+	m := launch.TaskMeta{Name: "work", Origin: "https://user:token@host/org/repo.git"}
+	if err := launch.WriteTaskMeta(metaPath, m); err != nil {
+		t.Fatalf("launch.WriteTaskMeta: %v", err)
 	}
 	fi, err := os.Stat(metaPath)
 	if err != nil {
@@ -734,7 +735,7 @@ func TestWriteTaskMeta_StripsUserinfoAndMode(t *testing.T) {
 	if strings.Contains(string(b), "user:token") || strings.Contains(string(b), "token@") {
 		t.Errorf("stored origin leaked userinfo:\n%s", b)
 	}
-	got, err := readTaskMeta(metaPath)
+	got, err := launch.ReadTaskMeta(metaPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -764,8 +765,8 @@ func TestTaskForceSnapshotAbort(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := taskForceSnapshotAbort(c.force, c.unrec, c.unknown, c.snapshotFailed); got != c.want {
-				t.Errorf("taskForceSnapshotAbort(%v,%d,%v,%v) = %v, want %v", c.force, c.unrec, c.unknown, c.snapshotFailed, got, c.want)
+			if got := launch.TaskForceSnapshotAbort(c.force, c.unrec, c.unknown, c.snapshotFailed); got != c.want {
+				t.Errorf("launch.TaskForceSnapshotAbort(%v,%d,%v,%v) = %v, want %v", c.force, c.unrec, c.unknown, c.snapshotFailed, got, c.want)
 			}
 		})
 	}
@@ -781,17 +782,17 @@ func TestGatherTaskState_ProbeFailIsUnknown(t *testing.T) {
 	// fails; unrec must read as UNKNOWN, and the guard must refuse without --force.
 	badmain := t.TempDir()
 	env := gitEnv(t, "", nil)
-	m := taskMeta{Name: "work", Sandbox: "x", Mainroot: badmain, Branch: "pix/work"}
-	st := gatherTaskState(env, m, co)
-	if !st.unknown {
+	m := launch.TaskMeta{Name: "work", Sandbox: "x", Mainroot: badmain, Branch: "pix/work"}
+	st := launch.GatherTaskState(env, m, co)
+	if !st.Unknown {
 		t.Errorf("expected unknown=true on failed probe, got %+v", st)
 	}
-	if msg, ok := taskRemoveGuard(st, false); ok {
+	if msg, ok := launch.TaskRemoveGuard(st, false); ok {
 		t.Error("unknown unrec should refuse teardown without --force")
 	} else if !strings.Contains(msg, "could not determine") {
 		t.Errorf("guard msg = %q, want unknown-probe reason", msg)
 	}
-	if _, ok := taskRemoveGuard(st, true); !ok {
+	if _, ok := launch.TaskRemoveGuard(st, true); !ok {
 		t.Error("--force should still override an unknown probe")
 	}
 }
@@ -802,29 +803,29 @@ func TestProbeTaskSandbox_TriState(t *testing.T) {
 	name := "pix-t-x-work"
 	// running: present with a running status column.
 	env := gitEnv(t, name+"  img  running\n", nil)
-	if got := probeTaskSandbox(env, name); got != sbxRunning {
-		t.Errorf("running: got %v, want sbxRunning", got)
+	if got := launch.ProbeTaskSandbox(env, name); got != launch.SbxRunning {
+		t.Errorf("running: got %v, want launch.SbxRunning", got)
 	}
 	// stopped: present with any other status.
 	env = gitEnv(t, name+"  img  stopped\n", nil)
-	if got := probeTaskSandbox(env, name); got != sbxStopped {
-		t.Errorf("stopped: got %v, want sbxStopped", got)
+	if got := launch.ProbeTaskSandbox(env, name); got != launch.SbxStopped {
+		t.Errorf("stopped: got %v, want launch.SbxStopped", got)
 	}
 	// absent: sbx responded but the name is not listed.
 	env = gitEnv(t, "some-other  img  running\n", nil)
-	if got := probeTaskSandbox(env, name); got != sbxAbsent {
-		t.Errorf("absent: got %v, want sbxAbsent", got)
+	if got := launch.ProbeTaskSandbox(env, name); got != launch.SbxAbsent {
+		t.Errorf("absent: got %v, want launch.SbxAbsent", got)
 	}
 	// unknown: sbx invocation errors. Must NOT read as absent.
 	errEnv := hostenv.Env{System: &systest.Fake{RunFn: func(n string, a ...string) (string, error) {
 		return "boom", fmt.Errorf("sbx exploded")
 	}}}
-	if got := probeTaskSandbox(errEnv, name); got != sbxUnknown {
-		t.Errorf("errored sbx: got %v, want sbxUnknown", got)
+	if got := launch.ProbeTaskSandbox(errEnv, name); got != launch.SbxUnknown {
+		t.Errorf("errored sbx: got %v, want launch.SbxUnknown", got)
 	}
 	// unknown: no runner wired.
-	if got := probeTaskSandbox(hostenv.Env{System: &systest.Fake{}}, name); got != sbxUnknown {
-		t.Errorf("nil runner: got %v, want sbxUnknown", got)
+	if got := launch.ProbeTaskSandbox(hostenv.Env{System: &systest.Fake{}}, name); got != launch.SbxUnknown {
+		t.Errorf("nil runner: got %v, want launch.SbxUnknown", got)
 	}
 }
 
@@ -846,18 +847,18 @@ func TestGatherTaskState_StatusFailIsUnknown(t *testing.T) {
 		out, err := exec.Command(name, args...).CombinedOutput()
 		return string(out), err
 	}}}
-	m := taskMeta{Name: "work", Sandbox: "x", Mainroot: main, Branch: "pix/work"}
-	st := gatherTaskState(env, m, co)
-	if !st.unknown {
+	m := launch.TaskMeta{Name: "work", Sandbox: "x", Mainroot: main, Branch: "pix/work"}
+	st := launch.GatherTaskState(env, m, co)
+	if !st.Unknown {
 		t.Errorf("expected unknown=true on failed status probe, got %+v", st)
 	}
-	if st.dirty {
+	if st.Dirty {
 		t.Error("a failed status probe must not report dirty")
 	}
-	if _, ok := taskRemoveGuard(st, false); ok {
+	if _, ok := launch.TaskRemoveGuard(st, false); ok {
 		t.Error("unknown status should refuse teardown without --force")
 	}
-	if _, ok := taskRemoveGuard(st, true); !ok {
+	if _, ok := launch.TaskRemoveGuard(st, true); !ok {
 		t.Error("--force should still override an unknown status")
 	}
 }
@@ -867,14 +868,14 @@ func TestGatherTaskState_StatusFailIsUnknown(t *testing.T) {
 
 func TestHardenTaskMeta_UsesStoredProfileNotCurrent(t *testing.T) {
 	// A task created under an old, named profile "work" must still harden cleanly
-	// (an OLDER meta may carry a real profile name); hardenTaskMeta never reads it
+	// (an OLDER meta may carry a real profile name); launch.HardenTaskMeta never reads it
 	// back off the current environment.
-	m := taskMeta{Name: "work", Profile: "work"}
-	hardened, err := hardenTaskMeta(m, "/main", "abcd1234", false, "work")
+	m := launch.TaskMeta{Name: "work", Profile: "work"}
+	hardened, err := launch.HardenTaskMeta(m, "/main", "abcd1234", false, "work")
 	if err != nil {
 		t.Fatalf("harden: %v", err)
 	}
-	want := taskSandboxName("main", "abcd1234", "work", "work")
+	want := launch.TaskSandboxName("main", "abcd1234", "work", "work")
 	if hardened.Sandbox != want {
 		t.Errorf("sandbox = %q, want %q (stored profile must win)", hardened.Sandbox, want)
 	}
@@ -885,8 +886,8 @@ func TestHardenTaskMeta_UsesStoredProfileNotCurrent(t *testing.T) {
 	// produces, since profiles were removed) must harden cleanly too, not be
 	// rejected as invalid — that rejection was the actual bug, hiding every task
 	// the real writer creates.
-	current := taskMeta{Name: "work"}
-	hardened, err = hardenTaskMeta(current, "/main", "abcd1234", false, "work")
+	current := launch.TaskMeta{Name: "work"}
+	hardened, err = launch.HardenTaskMeta(current, "/main", "abcd1234", false, "work")
 	if err != nil {
 		t.Fatalf("harden of an empty-profile meta must succeed, got: %v", err)
 	}
@@ -905,7 +906,7 @@ func TestRunTaskLs_UnknownStateSurfaced(t *testing.T) {
 	t.Chdir(main)
 
 	// Delegate every command to real git EXCEPT `git status --porcelain`, which
-	// fails; that makes the clean/dirty state UNKNOWN in gatherTaskState.
+	// fails; that makes the clean/dirty state UNKNOWN in launch.GatherTaskState.
 	env := hostenv.Env{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
 		if name == "sbx" {
 			return "", nil
@@ -918,20 +919,20 @@ func TestRunTaskLs_UnknownStateSurfaced(t *testing.T) {
 	}}}
 
 	// Lay down a clone + meta the way `task new` would, keyed the way ls resolves.
-	mainroot, err := resolveMainroot(env, main)
+	mainroot, err := launch.ResolveMainroot(env, main)
 	if err != nil {
-		t.Fatalf("resolveMainroot: %v", err)
+		t.Fatalf("launch.ResolveMainroot: %v", err)
 	}
-	repokey := taskRepoKey(mainroot)
-	co, metaPath := taskPaths(repokey, "work")
+	repokey := launch.TaskRepoKey(mainroot)
+	co, metaPath := launch.TaskPaths(repokey, "work")
 	makeTaskClone(t, main, co, "pix/work", "HEAD")
-	if err := writeTaskMeta(metaPath, taskMeta{
+	if err := launch.WriteTaskMeta(metaPath, launch.TaskMeta{
 		Name: "work", Mode: "localclone", Profile: "default", Branch: "pix/work",
 	}); err != nil {
-		t.Fatalf("writeTaskMeta: %v", err)
+		t.Fatalf("launch.WriteTaskMeta: %v", err)
 	}
 
-	human := captureStdout(t, func() { runTaskLs(env, nil) })
+	human := captureStdout(t, func() { launch.RunTaskLs(env, nil) })
 	if !strings.Contains(human, "unknown") {
 		t.Errorf("human ls did not surface the unknown state:\n%s", human)
 	}
@@ -939,7 +940,7 @@ func TestRunTaskLs_UnknownStateSurfaced(t *testing.T) {
 		t.Errorf("human ls reported an unknown task as clean:\n%s", human)
 	}
 
-	js := captureStdout(t, func() { runTaskLs(env, []string{"--json"}) })
+	js := captureStdout(t, func() { launch.RunTaskLs(env, []string{"--json"}) })
 	if !strings.Contains(js, "\"unknown\": true") {
 		t.Errorf("json ls did not serialize unknown:true:\n%s", js)
 	}
@@ -966,10 +967,10 @@ func captureStderr(t *testing.T, fn func()) string {
 // --- AC-P0-008/009: `task ls` must never hide a row because the real writer's
 // own metadata disagrees with what the harden guard expects. Profiles were
 // removed (workspace.LoadResolvedConfig always returns "" now, see profile.go), so every
-// task the CURRENT `task new` writes stores an empty profile; hardenTaskMeta
+// task the CURRENT `task new` writes stores an empty profile; launch.HardenTaskMeta
 // used to reject exactly that, which meant `task ls` hid every task on a fresh
 // checkout. This test drives the real writer end to end — a hand-built
-// taskMeta fixture would not have caught the bug, because the fixture and the
+// launch.TaskMeta fixture would not have caught the bug, because the fixture and the
 // writer could quietly drift apart (which is exactly what happened). ---------
 
 func TestTaskNewLs_RoundTrip_EmptyProfileMetadataListed(t *testing.T) {
@@ -979,20 +980,20 @@ func TestTaskNewLs_RoundTrip_EmptyProfileMetadataListed(t *testing.T) {
 	t.Setenv("PIX_PROFILE", "")
 	t.Chdir(main)
 
-	orig := taskLaunch
-	taskLaunch = func(o runOpts) error { return nil }
-	t.Cleanup(func() { taskLaunch = orig })
+	orig := launch.TaskLaunch
+	launch.TaskLaunch = func(o launch.RunOpts) error { return nil }
+	t.Cleanup(func() { launch.TaskLaunch = orig })
 
 	env := gitEnv(t, "", nil)
-	runTaskNew(env, []string{"roundtrip"})
+	launch.RunTaskNew(env, []string{"roundtrip"})
 
 	// Confirm this reproduces the actual bug: the real writer stores an empty
 	// profile today, on disk, not a value this test invented.
-	mainroot, err := resolveMainroot(env, main)
+	mainroot, err := launch.ResolveMainroot(env, main)
 	if err != nil {
-		t.Fatalf("resolveMainroot: %v", err)
+		t.Fatalf("launch.ResolveMainroot: %v", err)
 	}
-	_, metaPath := taskPaths(taskRepoDir(mainroot), "roundtrip")
+	_, metaPath := launch.TaskPaths(launch.TaskRepoDir(mainroot), "roundtrip")
 	metaBytes, err := os.ReadFile(metaPath)
 	if err != nil {
 		t.Fatalf("reading the written meta.json: %v", err)
@@ -1007,7 +1008,7 @@ func TestTaskNewLs_RoundTrip_EmptyProfileMetadataListed(t *testing.T) {
 
 	var stderr string
 	stdout := captureStdout(t, func() {
-		stderr = captureStderr(t, func() { runTaskLs(env, nil) })
+		stderr = captureStderr(t, func() { launch.RunTaskLs(env, nil) })
 	})
 
 	if !strings.Contains(stdout, "roundtrip") {
@@ -1016,12 +1017,12 @@ func TestTaskNewLs_RoundTrip_EmptyProfileMetadataListed(t *testing.T) {
 	if strings.Contains(stderr, "skipping") {
 		t.Errorf("task ls emitted a skipping warning for the writer's own metadata:\n%s", stderr)
 	}
-	if strings.Contains(stdout, taskMetaUnreadableStatus) {
+	if strings.Contains(stdout, launch.TaskMetaUnreadableStatus) {
 		t.Errorf("a valid empty-profile task must not render as unreadable:\n%s", stdout)
 	}
 
 	// --json must not hide it either.
-	jsonOut := captureStdout(t, func() { runTaskLs(env, []string{"--json"}) })
+	jsonOut := captureStdout(t, func() { launch.RunTaskLs(env, []string{"--json"}) })
 	if !strings.Contains(jsonOut, `"name": "roundtrip"`) {
 		t.Errorf("json ls did not list the task:\n%s", jsonOut)
 	}
@@ -1035,30 +1036,30 @@ func TestRunTaskLs_UnreadableMetadataStillAppearsAsADegradedRow(t *testing.T) {
 	t.Chdir(main)
 
 	env := gitEnv(t, "", nil)
-	mainroot, err := resolveMainroot(env, main)
+	mainroot, err := launch.ResolveMainroot(env, main)
 	if err != nil {
-		t.Fatalf("resolveMainroot: %v", err)
+		t.Fatalf("launch.ResolveMainroot: %v", err)
 	}
-	_, metaPath := taskPaths(taskRepoDir(mainroot), "broken")
+	_, metaPath := launch.TaskPaths(launch.TaskRepoDir(mainroot), "broken")
 	if err := os.MkdirAll(filepath.Dir(metaPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	// Genuinely corrupt on-disk bytes — not a hand-built taskMeta value. This is
+	// Genuinely corrupt on-disk bytes — not a hand-built launch.TaskMeta value. This is
 	// what "unreadable" means: a torn write, a hand edit, or disk corruption, none
 	// of which json.Unmarshal can parse.
 	if err := os.WriteFile(metaPath, []byte("{ not valid json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	human := captureStdout(t, func() { runTaskLs(env, nil) })
+	human := captureStdout(t, func() { launch.RunTaskLs(env, nil) })
 	if !strings.Contains(human, "broken") {
 		t.Errorf("unreadable metadata omitted the task entirely from human output:\n%s", human)
 	}
-	if !strings.Contains(human, taskMetaUnreadableStatus) {
+	if !strings.Contains(human, launch.TaskMetaUnreadableStatus) {
 		t.Errorf("unreadable metadata did not render the degraded marker:\n%s", human)
 	}
 
-	js := captureStdout(t, func() { runTaskLs(env, []string{"--json"}) })
+	js := captureStdout(t, func() { launch.RunTaskLs(env, []string{"--json"}) })
 	if !strings.Contains(js, `"unreadable": true`) {
 		t.Errorf("json ls did not mark the row unreadable:\n%s", js)
 	}
@@ -1074,21 +1075,21 @@ func TestRemoveTaskArtifacts_FailureNamesLeftovers(t *testing.T) {
 	metaPath := "/state/meta/work.json"
 
 	// Both removals succeed: no error.
-	if err := removeTaskArtifacts(co, metaPath,
+	if err := launch.RemoveTaskArtifacts(co, metaPath,
 		func(string) error { return nil },
 		func(string) error { return nil }); err != nil {
 		t.Errorf("clean removal returned error: %v", err)
 	}
 
 	// An already-gone path (IsNotExist) is treated as success.
-	if err := removeTaskArtifacts(co, metaPath,
+	if err := launch.RemoveTaskArtifacts(co, metaPath,
 		func(string) error { return os.ErrNotExist },
 		func(string) error { return os.ErrNotExist }); err != nil {
 		t.Errorf("already-gone paths should be success, got %v", err)
 	}
 
 	// A real clone-removal failure must surface, naming the clone that remains.
-	err := removeTaskArtifacts(co, metaPath,
+	err := launch.RemoveTaskArtifacts(co, metaPath,
 		func(string) error { return fmt.Errorf("device busy") },
 		func(string) error { return nil })
 	if err == nil {
@@ -1099,7 +1100,7 @@ func TestRemoveTaskArtifacts_FailureNamesLeftovers(t *testing.T) {
 	}
 
 	// A meta-removal failure must surface too, naming the meta file.
-	err = removeTaskArtifacts(co, metaPath,
+	err = launch.RemoveTaskArtifacts(co, metaPath,
 		func(string) error { return nil },
 		func(string) error { return fmt.Errorf("read-only fs") })
 	if err == nil {
@@ -1136,17 +1137,17 @@ func TestTaskNew_SourceOnlyRefChecksOutByOID(t *testing.T) {
 	t.Setenv("PIX_PROFILE", "")
 	t.Chdir(main)
 
-	orig := taskLaunch
-	var launched runOpts
+	orig := launch.TaskLaunch
+	var launched launch.RunOpts
 	launched.Name = ""
-	taskLaunch = func(o runOpts) error { launched = o; return nil }
-	t.Cleanup(func() { taskLaunch = orig })
+	launch.TaskLaunch = func(o launch.RunOpts) error { launched = o; return nil }
+	t.Cleanup(func() { launch.TaskLaunch = orig })
 
 	env := gitEnv(t, "", nil)
-	runTaskNew(env, []string{"remote-oid", "--from", "refs/remotes/origin/feat"})
+	launch.RunTaskNew(env, []string{"remote-oid", "--from", "refs/remotes/origin/feat"})
 
 	if launched.Workspace == "" {
-		t.Fatal("taskLaunch was not invoked")
+		t.Fatal("launch.TaskLaunch was not invoked")
 	}
 	co := launched.Workspace
 	// The clone must be on the task branch, at the source-only commit's OID.
@@ -1175,19 +1176,19 @@ func TestTaskTeardownAbort(t *testing.T) {
 		force bool
 		want  bool
 	}{
-		{"running without force aborts", sbxRunning, false, true},
-		{"unknown without force aborts", sbxUnknown, false, true},
-		{"stopped without force proceeds", sbxStopped, false, false},
-		{"absent without force proceeds", sbxAbsent, false, false},
-		{"force overrides running", sbxRunning, true, false},
-		{"force overrides unknown", sbxUnknown, true, false},
-		{"force stopped proceeds", sbxStopped, true, false},
-		{"force absent proceeds", sbxAbsent, true, false},
+		{"running without force aborts", launch.SbxRunning, false, true},
+		{"unknown without force aborts", launch.SbxUnknown, false, true},
+		{"stopped without force proceeds", launch.SbxStopped, false, false},
+		{"absent without force proceeds", launch.SbxAbsent, false, false},
+		{"force overrides running", launch.SbxRunning, true, false},
+		{"force overrides unknown", launch.SbxUnknown, true, false},
+		{"force stopped proceeds", launch.SbxStopped, true, false},
+		{"force absent proceeds", launch.SbxAbsent, true, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := taskTeardownAbort(c.final, c.force); got != c.want {
-				t.Errorf("taskTeardownAbort(%v,%v) = %v, want %v", c.final, c.force, got, c.want)
+			if got := launch.TaskTeardownAbort(c.final, c.force); got != c.want {
+				t.Errorf("launch.TaskTeardownAbort(%v,%v) = %v, want %v", c.final, c.force, got, c.want)
 			}
 		})
 	}
@@ -1236,17 +1237,17 @@ func TestExecuteTaskTeardown_FreshRunningRefuses(t *testing.T) {
 	// Call 1 (gather) => stopped, call 2 (final probe) => running.
 	env := countingSbxEnv(sbxname, []string{sbxname + "  img  stopped\n", sbxname + "  img  running\n"}, &recorded)
 
-	m := taskMeta{Name: "work", Sandbox: sbxname, Mainroot: main, Branch: "pix/work"}
-	st := gatherTaskState(env, m, co)
-	if st.sandbox != sbxStopped {
-		t.Fatalf("gather sandbox = %v, want sbxStopped", st.sandbox)
+	m := launch.TaskMeta{Name: "work", Sandbox: sbxname, Mainroot: main, Branch: "pix/work"}
+	st := launch.GatherTaskState(env, m, co)
+	if st.Sandbox != launch.SbxStopped {
+		t.Fatalf("gather sandbox = %v, want launch.SbxStopped", st.Sandbox)
 	}
-	if _, ok := taskRemoveGuard(st, false); !ok {
+	if _, ok := launch.TaskRemoveGuard(st, false); !ok {
 		t.Fatal("guard should pass on the gather-time (stopped) state")
 	}
 
 	var out bytes.Buffer
-	rc := executeTaskTeardown(env, &out, m, co, "work", "refs/pix/recovered/work", false, st)
+	rc := launch.ExecuteTaskTeardown(env, &out, m, co, "work", "refs/pix/recovered/work", false, st)
 	if rc != 1 {
 		t.Fatalf("rc = %d, want 1 (fresh running must refuse)", rc)
 	}
@@ -1272,14 +1273,14 @@ func TestExecuteTaskTeardown_FreshUnknownRefuses(t *testing.T) {
 	// Call 1 (gather) => absent, call 2 (final probe) => sbx ls errors (unknown).
 	env := countingSbxEnv(sbxname, []string{"", "ERR"}, &recorded)
 
-	m := taskMeta{Name: "work", Sandbox: sbxname, Mainroot: main, Branch: "pix/work"}
-	st := gatherTaskState(env, m, co)
-	if st.sandbox != sbxAbsent {
-		t.Fatalf("gather sandbox = %v, want sbxAbsent", st.sandbox)
+	m := launch.TaskMeta{Name: "work", Sandbox: sbxname, Mainroot: main, Branch: "pix/work"}
+	st := launch.GatherTaskState(env, m, co)
+	if st.Sandbox != launch.SbxAbsent {
+		t.Fatalf("gather sandbox = %v, want launch.SbxAbsent", st.Sandbox)
 	}
 
 	var out bytes.Buffer
-	rc := executeTaskTeardown(env, &out, m, co, "work", "refs/pix/recovered/work", false, st)
+	rc := launch.ExecuteTaskTeardown(env, &out, m, co, "work", "refs/pix/recovered/work", false, st)
 	if rc != 1 {
 		t.Fatalf("rc = %d, want 1 (fresh unknown must refuse)", rc)
 	}
@@ -1304,11 +1305,11 @@ func TestExecuteTaskTeardown_ForceOverridesRunning(t *testing.T) {
 	var recorded [][]string
 	env := countingSbxEnv(sbxname, []string{sbxname + "  img  running\n"}, &recorded)
 
-	m := taskMeta{Name: "work", Sandbox: sbxname, Mainroot: main, Branch: "pix/work"}
-	st := gatherTaskState(env, m, co)
+	m := launch.TaskMeta{Name: "work", Sandbox: sbxname, Mainroot: main, Branch: "pix/work"}
+	st := launch.GatherTaskState(env, m, co)
 
 	var out bytes.Buffer
-	rc := executeTaskTeardown(env, &out, m, co, "work", "refs/pix/recovered/work", true, st)
+	rc := launch.ExecuteTaskTeardown(env, &out, m, co, "work", "refs/pix/recovered/work", true, st)
 	if rc != 0 {
 		t.Fatalf("rc = %d, want 0 (--force must proceed), out:\n%s", rc, out.String())
 	}
@@ -1338,11 +1339,11 @@ func TestExecuteTaskTeardown_NonForceIssuesRmWithoutF(t *testing.T) {
 	// Both probes read stopped: guard passes and the fresh probe stays friendly.
 	env := countingSbxEnv(sbxname, []string{sbxname + "  img  stopped\n"}, &recorded)
 
-	m := taskMeta{Name: "work", Sandbox: sbxname, Mainroot: main, Branch: "pix/work"}
-	st := gatherTaskState(env, m, co)
+	m := launch.TaskMeta{Name: "work", Sandbox: sbxname, Mainroot: main, Branch: "pix/work"}
+	st := launch.GatherTaskState(env, m, co)
 
 	var out bytes.Buffer
-	rc := executeTaskTeardown(env, &out, m, co, "work", "refs/pix/recovered/work", false, st)
+	rc := launch.ExecuteTaskTeardown(env, &out, m, co, "work", "refs/pix/recovered/work", false, st)
 	if rc != 0 {
 		t.Fatalf("rc = %d, want 0 (non-force stopped proceeds), out:\n%s", rc, out.String())
 	}
@@ -1361,7 +1362,7 @@ func TestExecuteTaskTeardown_NonForceIssuesRmWithoutF(t *testing.T) {
 // TestExecuteTaskTeardown_NonForceRmFailureAborts proves that when `sbx rm` (no
 // -f) FAILS — which is how sbx signals "that sandbox is running, refusing" — the
 // executor aborts (rc 1), does NOT fall back to `sbx rm -f`, and leaves the clone
-// intact (runTaskRm skips removeTaskArtifacts on any non-zero return).
+// intact (launch.RunTaskRm skips launch.RemoveTaskArtifacts on any non-zero return).
 func TestExecuteTaskTeardown_NonForceRmFailureAborts(t *testing.T) {
 	main := newMainRepo(t)
 	co := filepath.Join(t.TempDir(), "co")
@@ -1386,11 +1387,11 @@ func TestExecuteTaskTeardown_NonForceRmFailureAborts(t *testing.T) {
 		return string(out), err
 	}}}
 
-	m := taskMeta{Name: "work", Sandbox: sbxname, Mainroot: main, Branch: "pix/work"}
-	st := gatherTaskState(env, m, co)
+	m := launch.TaskMeta{Name: "work", Sandbox: sbxname, Mainroot: main, Branch: "pix/work"}
+	st := launch.GatherTaskState(env, m, co)
 
 	var out bytes.Buffer
-	rc := executeTaskTeardown(env, &out, m, co, "work", "refs/pix/recovered/work", false, st)
+	rc := launch.ExecuteTaskTeardown(env, &out, m, co, "work", "refs/pix/recovered/work", false, st)
 	if rc != 1 {
 		t.Fatalf("rc = %d, want 1 (`sbx rm` failure must abort)", rc)
 	}
@@ -1400,8 +1401,8 @@ func TestExecuteTaskTeardown_NonForceRmFailureAborts(t *testing.T) {
 			t.Errorf("non-force path fell back to `sbx rm -f`: %v", c)
 		}
 	}
-	// The clone must still be on disk — executeTaskTeardown never removes it, and its
-	// rc 1 makes runTaskRm skip removeTaskArtifacts entirely.
+	// The clone must still be on disk — launch.ExecuteTaskTeardown never removes it, and its
+	// rc 1 makes launch.RunTaskRm skip launch.RemoveTaskArtifacts entirely.
 	if _, err := os.Stat(co); err != nil {
 		t.Errorf("clone should be intact after abort, but stat(%s) failed: %v", co, err)
 	}
@@ -1418,7 +1419,7 @@ func TestPrepareTaskLaunchSandbox_AbsentCreatesCleanly(t *testing.T) {
 	name := "pix-t-x-work"
 	var recorded [][]string
 	env := gitEnv(t, "", &recorded)
-	if err := prepareTaskLaunchSandbox(env, name); err != nil {
+	if err := launch.PrepareTaskLaunchSandbox(env, name); err != nil {
 		t.Fatalf("absent should proceed, got %v", err)
 	}
 	for _, c := range recorded {
@@ -1436,7 +1437,7 @@ func TestPrepareTaskLaunchSandbox_StoppedIssuesRmWithoutF(t *testing.T) {
 	name := "pix-t-x-work"
 	var recorded [][]string
 	env := gitEnv(t, name+"  img  stopped\n", &recorded)
-	if err := prepareTaskLaunchSandbox(env, name); err != nil {
+	if err := launch.PrepareTaskLaunchSandbox(env, name); err != nil {
 		t.Fatalf("stopped should recreate, got %v", err)
 	}
 	var rm []string
@@ -1457,7 +1458,7 @@ func TestPrepareTaskLaunchSandbox_RunningRefuses(t *testing.T) {
 	name := "pix-t-x-work"
 	var recorded [][]string
 	env := gitEnv(t, name+"  img  running\n", &recorded)
-	err := prepareTaskLaunchSandbox(env, name)
+	err := launch.PrepareTaskLaunchSandbox(env, name)
 	if err == nil {
 		t.Fatal("running sandbox must be refused")
 	}
@@ -1483,7 +1484,7 @@ func TestPrepareTaskLaunchSandbox_UnknownAborts(t *testing.T) {
 		}
 		return "", nil
 	}}}
-	err := prepareTaskLaunchSandbox(env, name)
+	err := launch.PrepareTaskLaunchSandbox(env, name)
 	if err == nil {
 		t.Fatal("unknown probe must abort the launch")
 	}
@@ -1515,7 +1516,7 @@ func TestPrepareTaskLaunchSandbox_StoppedRmFailureAborts(t *testing.T) {
 		}
 		return "", nil
 	}}}
-	err := prepareTaskLaunchSandbox(env, name)
+	err := launch.PrepareTaskLaunchSandbox(env, name)
 	if err == nil {
 		t.Fatal("a failed non-force `sbx rm` must abort the launch")
 	}
@@ -1590,14 +1591,14 @@ func TestExecuteTaskTeardown_AbsentStillIssuesRm(t *testing.T) {
 	// succeeds.
 	env := countingSbxEnv(sbxname, []string{""}, &recorded)
 
-	m := taskMeta{Name: "work", Sandbox: sbxname, Mainroot: main, Branch: "pix/work"}
-	st := gatherTaskState(env, m, co)
-	if st.sandbox != sbxAbsent {
-		t.Fatalf("gather sandbox = %v, want sbxAbsent", st.sandbox)
+	m := launch.TaskMeta{Name: "work", Sandbox: sbxname, Mainroot: main, Branch: "pix/work"}
+	st := launch.GatherTaskState(env, m, co)
+	if st.Sandbox != launch.SbxAbsent {
+		t.Fatalf("gather sandbox = %v, want launch.SbxAbsent", st.Sandbox)
 	}
 
 	var out bytes.Buffer
-	rc := executeTaskTeardown(env, &out, m, co, "work", "refs/pix/recovered/work", false, st)
+	rc := launch.ExecuteTaskTeardown(env, &out, m, co, "work", "refs/pix/recovered/work", false, st)
 	if rc != 0 {
 		t.Fatalf("rc = %d, want 0 (rm succeeded, proceed), out:\n%s", rc, out.String())
 	}
@@ -1621,11 +1622,11 @@ func TestExecuteTaskTeardown_NonForceRmFailsReprobeAbsentProceeds(t *testing.T) 
 	// gather => absent, fresh probe => absent, re-probe after rm-failure => absent.
 	env := countingSbxEnvRmErr(sbxname, []string{"", "", ""}, &recorded)
 
-	m := taskMeta{Name: "work", Sandbox: sbxname, Mainroot: main, Branch: "pix/work"}
-	st := gatherTaskState(env, m, co)
+	m := launch.TaskMeta{Name: "work", Sandbox: sbxname, Mainroot: main, Branch: "pix/work"}
+	st := launch.GatherTaskState(env, m, co)
 
 	var out bytes.Buffer
-	rc := executeTaskTeardown(env, &out, m, co, "work", "refs/pix/recovered/work", false, st)
+	rc := launch.ExecuteTaskTeardown(env, &out, m, co, "work", "refs/pix/recovered/work", false, st)
 	if rc != 0 {
 		t.Fatalf("rc = %d, want 0 (rm failed but sandbox gone, proceed), out:\n%s", rc, out.String())
 	}
@@ -1650,11 +1651,11 @@ func TestExecuteTaskTeardown_NonForceRmFailsReprobeRunningAborts(t *testing.T) {
 	// `sbx rm` fails and the re-probe shows the sandbox is now running.
 	env := countingSbxEnvRmErr(sbxname, []string{sbxname + "  img  stopped\n", sbxname + "  img  stopped\n", sbxname + "  img  running\n"}, &recorded)
 
-	m := taskMeta{Name: "work", Sandbox: sbxname, Mainroot: main, Branch: "pix/work"}
-	st := gatherTaskState(env, m, co)
+	m := launch.TaskMeta{Name: "work", Sandbox: sbxname, Mainroot: main, Branch: "pix/work"}
+	st := launch.GatherTaskState(env, m, co)
 
 	var out bytes.Buffer
-	rc := executeTaskTeardown(env, &out, m, co, "work", "refs/pix/recovered/work", false, st)
+	rc := launch.ExecuteTaskTeardown(env, &out, m, co, "work", "refs/pix/recovered/work", false, st)
 	if rc != 1 {
 		t.Fatalf("rc = %d, want 1 (re-probe running must abort)", rc)
 	}
@@ -1684,11 +1685,11 @@ func TestExecuteTaskTeardown_NonForceRmFailsReprobeUnknownAborts(t *testing.T) {
 	// re-probe errors (unknown).
 	env := countingSbxEnvRmErr(sbxname, []string{sbxname + "  img  stopped\n", sbxname + "  img  stopped\n", "ERR"}, &recorded)
 
-	m := taskMeta{Name: "work", Sandbox: sbxname, Mainroot: main, Branch: "pix/work"}
-	st := gatherTaskState(env, m, co)
+	m := launch.TaskMeta{Name: "work", Sandbox: sbxname, Mainroot: main, Branch: "pix/work"}
+	st := launch.GatherTaskState(env, m, co)
 
 	var out bytes.Buffer
-	rc := executeTaskTeardown(env, &out, m, co, "work", "refs/pix/recovered/work", false, st)
+	rc := launch.ExecuteTaskTeardown(env, &out, m, co, "work", "refs/pix/recovered/work", false, st)
 	if rc != 1 {
 		t.Fatalf("rc = %d, want 1 (re-probe unknown must abort)", rc)
 	}
@@ -1710,7 +1711,7 @@ func TestExecuteTaskTeardown_NonForceRmFailsReprobeUnknownAborts(t *testing.T) {
 func TestReserveTaskCheckout_AtomicOwnership(t *testing.T) {
 	co := filepath.Join(t.TempDir(), "sub", "co")
 
-	owned, err := reserveTaskCheckout(co)
+	owned, err := launch.ReserveTaskCheckout(co)
 	if err != nil {
 		t.Fatalf("first reserve failed: %v", err)
 	}
@@ -1728,7 +1729,7 @@ func TestReserveTaskCheckout_AtomicOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	owned2, err := reserveTaskCheckout(co)
+	owned2, err := launch.ReserveTaskCheckout(co)
 	if !errors.Is(err, fs.ErrExist) {
 		t.Fatalf("second reserve error = %v, want fs.ErrExist", err)
 	}
@@ -1740,10 +1741,10 @@ func TestReserveTaskCheckout_AtomicOwnership(t *testing.T) {
 	}
 }
 
-// TestTaskNew_ExistingCheckoutNotDeleted drives the full runTaskNew against a
+// TestTaskNew_ExistingCheckoutNotDeleted drives the full launch.RunTaskNew against a
 // checkout dir that already exists (the concurrent-loser case): it must report
 // `task ... already exists`, exit 1, and NEVER delete the pre-existing dir (we
-// did not create it). runTaskNew calls os.Exit, so it runs in a subprocess.
+// did not create it). launch.RunTaskNew calls os.Exit, so it runs in a subprocess.
 func TestTaskNew_ExistingCheckoutNotDeleted(t *testing.T) {
 	// Subprocess branch first: it inherits MAIN + XDG_STATE_HOME from the parent
 	// (do NOT create fresh temp dirs here, or co would resolve to a different path).
@@ -1751,19 +1752,19 @@ func TestTaskNew_ExistingCheckoutNotDeleted(t *testing.T) {
 		if err := os.Chdir(os.Getenv("PIX_TASKNEW_MAIN")); err != nil {
 			t.Fatal(err)
 		}
-		runTaskNew(gitEnv(t, "", nil), []string{"busy"})
-		return // unreachable: runTaskNew exits
+		launch.RunTaskNew(gitEnv(t, "", nil), []string{"busy"})
+		return // unreachable: launch.RunTaskNew exits
 	}
 
 	main := newMainRepo(t)
 	state := t.TempDir()
 	cfg := filepath.Join(t.TempDir(), "config.toml")
 	t.Setenv("XDG_STATE_HOME", state)
-	mainroot, err := resolveMainroot(gitEnv(t, "", nil), main)
+	mainroot, err := launch.ResolveMainroot(gitEnv(t, "", nil), main)
 	if err != nil {
 		t.Fatal(err)
 	}
-	co, _ := taskPaths(taskRepoDir(mainroot), sanitizeTaskName("busy"))
+	co, _ := launch.TaskPaths(launch.TaskRepoDir(mainroot), launch.SanitizeTaskName("busy"))
 
 	// Fabricate a pre-existing checkout with a sentinel standing in for a
 	// sibling invocation's live work.
@@ -1801,29 +1802,29 @@ func TestTaskNew_ExistingCheckoutNotDeleted(t *testing.T) {
 // TestTaskNew_OwnedRollbackOnLaunchFailure proves the other half of the
 // ownership gate: a FRESH reservation that this invocation created (owned) and
 // that then fails at launch with a CERTAIN-absent sandbox rolls the clone back.
-// runTaskNew calls os.Exit, so it runs in a subprocess.
+// launch.RunTaskNew calls os.Exit, so it runs in a subprocess.
 func TestTaskNew_OwnedRollbackOnLaunchFailure(t *testing.T) {
 	// Subprocess branch first: inherit MAIN + XDG_STATE_HOME from the parent.
 	if os.Getenv("PIX_TASKNEW_BOOM") == "1" {
 		if err := os.Chdir(os.Getenv("PIX_TASKNEW_MAIN")); err != nil {
 			t.Fatal(err)
 		}
-		// Stub the launch to fail; `sbx ls` returns empty => sbxAbsent, the only
-		// state under which runTaskNew rolls back the clone it created.
-		taskLaunch = func(runOpts) error { return fmt.Errorf("launch exploded") }
-		runTaskNew(gitEnv(t, "", nil), []string{"boom"})
-		return // unreachable: runTaskNew exits
+		// Stub the launch to fail; `sbx ls` returns empty => launch.SbxAbsent, the only
+		// state under which launch.RunTaskNew rolls back the clone it created.
+		launch.TaskLaunch = func(launch.RunOpts) error { return fmt.Errorf("launch exploded") }
+		launch.RunTaskNew(gitEnv(t, "", nil), []string{"boom"})
+		return // unreachable: launch.RunTaskNew exits
 	}
 
 	main := newMainRepo(t)
 	state := t.TempDir()
 	cfg := filepath.Join(t.TempDir(), "config.toml")
 	t.Setenv("XDG_STATE_HOME", state)
-	mainroot, err := resolveMainroot(gitEnv(t, "", nil), main)
+	mainroot, err := launch.ResolveMainroot(gitEnv(t, "", nil), main)
 	if err != nil {
 		t.Fatal(err)
 	}
-	co, metaPath := taskPaths(taskRepoKey(mainroot), sanitizeTaskName("boom"))
+	co, metaPath := launch.TaskPaths(launch.TaskRepoKey(mainroot), launch.SanitizeTaskName("boom"))
 
 	cmd := exec.Command(os.Args[0], "-test.run", "TestTaskNew_OwnedRollbackOnLaunchFailure")
 	cmd.Env = append(os.Environ(),
@@ -1884,8 +1885,8 @@ func TestWithTaskLock_MutualExclusion(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := withTaskLock(repokey, name, work); err != nil {
-				t.Errorf("withTaskLock: %v", err)
+			if err := launch.WithTaskLock(repokey, name, work); err != nil {
+				t.Errorf("launch.WithTaskLock: %v", err)
 			}
 		}()
 	}
@@ -1894,8 +1895,8 @@ func TestWithTaskLock_MutualExclusion(t *testing.T) {
 		t.Errorf("peak concurrency = %d, want 1 (same-name ops must be serialized)", maxConcurrent)
 	}
 	// The lock file was created and left behind (it is not a task artifact).
-	if _, err := os.Stat(taskLockPath(repokey, name)); err != nil {
-		t.Errorf("lock file missing after withTaskLock: %v", err)
+	if _, err := os.Stat(launch.TaskLockPath(repokey, name)); err != nil {
+		t.Errorf("lock file missing after launch.WithTaskLock: %v", err)
 	}
 }
 
@@ -1918,7 +1919,7 @@ func TestWithTaskLock_DistinctTasksConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func(repokey, name string) {
 			defer wg.Done()
-			_ = withTaskLock(repokey, name, func() error {
+			_ = launch.WithTaskLock(repokey, name, func() error {
 				entered <- struct{}{}
 				<-release
 				return nil
@@ -1940,25 +1941,25 @@ func TestWithTaskLock_DistinctTasksConcurrent(t *testing.T) {
 
 // TestTaskRm_AcquiresLock is the smoke test that `task rm` runs its critical
 // section under the per-task lock: even a `no such task` rm creates (and
-// releases) the lock file for the name before it looks for metadata. runTaskRm
+// releases) the lock file for the name before it looks for metadata. launch.RunTaskRm
 // calls os.Exit, so it runs in a subprocess.
 func TestTaskRm_AcquiresLock(t *testing.T) {
 	if os.Getenv("PIX_TASKRM_LOCK") == "1" {
 		if err := os.Chdir(os.Getenv("PIX_TASKRM_MAIN")); err != nil {
 			t.Fatal(err)
 		}
-		runTaskRm(gitEnv(t, "", nil), []string{"ghost"})
-		return // unreachable: runTaskRm exits
+		launch.RunTaskRm(gitEnv(t, "", nil), []string{"ghost"})
+		return // unreachable: launch.RunTaskRm exits
 	}
 
 	main := newMainRepo(t)
 	state := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", state)
-	mainroot, err := resolveMainroot(gitEnv(t, "", nil), main)
+	mainroot, err := launch.ResolveMainroot(gitEnv(t, "", nil), main)
 	if err != nil {
 		t.Fatal(err)
 	}
-	lockPath := taskLockPath(taskRepoKey(mainroot), sanitizeTaskName("ghost"))
+	lockPath := launch.TaskLockPath(launch.TaskRepoKey(mainroot), launch.SanitizeTaskName("ghost"))
 
 	cmd := exec.Command(os.Args[0], "-test.run", "TestTaskRm_AcquiresLock")
 	cmd.Env = append(os.Environ(),

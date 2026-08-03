@@ -24,6 +24,7 @@ import (
 	"pix/host/mcp"
 	"pix/host/rpc"
 	"pix/host/workflow/doctor"
+	"pix/host/workflow/launch"
 	"pix/host/workflow/pack"
 	"pix/host/workspace"
 	"slices"
@@ -40,7 +41,7 @@ func withSandboxMCPStateDirFn(t *testing.T, fn func() (string, error)) {
 	t.Cleanup(func() { workspace.MCPStateDirFn = old })
 }
 
-// trueCmd / falseCmd give execSbxRunAndRecordCreate / mcp.ExecSbxMcpLoadAndRecord a
+// trueCmd / falseCmd give launch.ExecSbxRunAndRecordCreate / mcp.ExecSbxMcpLoadAndRecord a
 // real, fast, portable *exec.Cmd standing in for `sbx ...` without needing sbx
 // on PATH at all — only its exit status matters to these wrappers.
 func trueCmd(t *testing.T) *exec.Cmd  { t.Helper(); return exec.Command("true") }
@@ -51,10 +52,10 @@ func falseCmd(t *testing.T) *exec.Cmd { t.Helper(); return exec.Command("false")
 // ls`, no real half-second sleeps.
 func withCreatePollSeams(t *testing.T, probe func(name string) doctor.SbxState, interval, timeout time.Duration) {
 	t.Helper()
-	oldProbe, oldInt, oldTO := sandboxAppearProbeFn, sandboxAppearPollInterval, sandboxAppearPollTimeout
-	sandboxAppearProbeFn, sandboxAppearPollInterval, sandboxAppearPollTimeout = probe, interval, timeout
+	oldProbe, oldInt, oldTO := launch.SandboxAppearProbeFn, launch.SandboxAppearPollInterval, launch.SandboxAppearPollTimeout
+	launch.SandboxAppearProbeFn, launch.SandboxAppearPollInterval, launch.SandboxAppearPollTimeout = probe, interval, timeout
 	t.Cleanup(func() {
-		sandboxAppearProbeFn, sandboxAppearPollInterval, sandboxAppearPollTimeout = oldProbe, oldInt, oldTO
+		launch.SandboxAppearProbeFn, launch.SandboxAppearPollInterval, launch.SandboxAppearPollTimeout = oldProbe, oldInt, oldTO
 	})
 }
 
@@ -63,16 +64,16 @@ func probeAlways(st doctor.SbxState) func(string) doctor.SbxState {
 	return func(string) doctor.SbxState { return st }
 }
 
-// --- execSbxRunAndRecordCreate: ordering + gating ---------------------------
+// --- launch.ExecSbxRunAndRecordCreate: ordering + gating ---------------------------
 
 // A failed exec with no creation evidence must never write a receipt,
 // regardless of writeReceipt.
 func TestExecSbxRunAndRecordCreate_FailedExecWritesNoReceipt(t *testing.T) {
 	dir := t.TempDir()
 	withSandboxMCPStateDirFn(t, func() (string, error) { return dir, nil })
-	withCreatePollSeams(t, probeAlways(sbxAbsent), time.Millisecond, 5*time.Second)
+	withCreatePollSeams(t, probeAlways(launch.SbxAbsent), time.Millisecond, 5*time.Second)
 
-	err := execSbxRunAndRecordCreate(falseCmd(t), true, "pix-fail", "", []string{"slack"})
+	err := launch.ExecSbxRunAndRecordCreate(falseCmd(t), true, "pix-fail", "", []string{"slack"})
 	if err == nil {
 		t.Fatal("want an error propagated from the failed exec")
 	}
@@ -91,7 +92,7 @@ func TestExecSbxRunAndRecordCreate_ReattachWritesNothing(t *testing.T) {
 	dir := t.TempDir()
 	withSandboxMCPStateDirFn(t, func() (string, error) { return dir, nil })
 
-	if err := execSbxRunAndRecordCreate(trueCmd(t), false, "pix-reattach", "", []string{"slack"}); err != nil {
+	if err := launch.ExecSbxRunAndRecordCreate(trueCmd(t), false, "pix-reattach", "", []string{"slack"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if _, status, _ := workspace.ReadMCPReceipt(dir, "pix-reattach"); status != workspace.MCPStateAbsent {
@@ -104,10 +105,10 @@ func TestExecSbxRunAndRecordCreate_ReattachWritesNothing(t *testing.T) {
 func TestExecSbxRunAndRecordCreate_CreateWritesExactPreloadedSet(t *testing.T) {
 	dir := t.TempDir()
 	withSandboxMCPStateDirFn(t, func() (string, error) { return dir, nil })
-	withCreatePollSeams(t, probeAlways(sbxRunning), time.Millisecond, 5*time.Second)
+	withCreatePollSeams(t, probeAlways(launch.SbxRunning), time.Millisecond, 5*time.Second)
 
 	preloaded := []string{"slack", "gog", "notion"}
-	if err := execSbxRunAndRecordCreate(trueCmd(t), true, "pix-create", "", preloaded); err != nil {
+	if err := launch.ExecSbxRunAndRecordCreate(trueCmd(t), true, "pix-create", "", preloaded); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	r, status, err := workspace.ReadMCPReceipt(dir, "pix-create")
@@ -134,18 +135,18 @@ func TestExecSbxRunAndRecordCreate_CreateWritesExactPreloadedSet(t *testing.T) {
 func TestExecSbxRunAndRecordCreate_ReplaceRewritesAndClearsLoads(t *testing.T) {
 	dir := t.TempDir()
 	withSandboxMCPStateDirFn(t, func() (string, error) { return dir, nil })
-	withCreatePollSeams(t, probeAlways(sbxRunning), time.Millisecond, 5*time.Second)
+	withCreatePollSeams(t, probeAlways(launch.SbxRunning), time.Millisecond, 5*time.Second)
 
 	sandbox := "pix-replace-wire"
-	if err := execSbxRunAndRecordCreate(trueCmd(t), true, sandbox, "", []string{"slack"}); err != nil {
+	if err := launch.ExecSbxRunAndRecordCreate(trueCmd(t), true, sandbox, "", []string{"slack"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := workspace.AppendLoadReceipt(dir, sandbox, "notion", nil); err != nil {
 		t.Fatal(err)
 	}
-	// A --replace re-run: definitelyCreating is true again (state doesn't
+	// A --replace re-run: launch.DefinitelyCreating is true again (state doesn't
 	// matter to the wrapper — the caller already decided), new preloaded set.
-	if err := execSbxRunAndRecordCreate(trueCmd(t), true, sandbox, "", []string{config.GWServerName}); err != nil {
+	if err := launch.ExecSbxRunAndRecordCreate(trueCmd(t), true, sandbox, "", []string{config.GWServerName}); err != nil {
 		t.Fatal(err)
 	}
 	r, status, err := workspace.ReadMCPReceipt(dir, sandbox)
@@ -165,9 +166,9 @@ func TestExecSbxRunAndRecordCreate_ReplaceRewritesAndClearsLoads(t *testing.T) {
 // silent success.
 func TestExecSbxRunAndRecordCreate_ReceiptWriteFailureIsDistinctError(t *testing.T) {
 	withSandboxMCPStateDirFn(t, func() (string, error) { return "", errors.New("boom: state dir unresolvable") })
-	withCreatePollSeams(t, probeAlways(sbxRunning), time.Millisecond, 5*time.Second)
+	withCreatePollSeams(t, probeAlways(launch.SbxRunning), time.Millisecond, 5*time.Second)
 
-	err := execSbxRunAndRecordCreate(trueCmd(t), true, "pix-recerr", "", []string{"slack"})
+	err := launch.ExecSbxRunAndRecordCreate(trueCmd(t), true, "pix-recerr", "", []string{"slack"})
 	if err == nil {
 		t.Fatal("want an error when the receipt write fails")
 	}
@@ -183,11 +184,11 @@ func TestExecSbxRunAndRecordCreate_ReceiptWriteFailureIsDistinctError(t *testing
 	}
 }
 
-// Decision-table mirror of definitelyCreating (mirrors
+// Decision-table mirror of launch.DefinitelyCreating (mirrors
 // TestSandboxPackMarker_NotOverwrittenOnInconclusiveProbe's pattern, applied
 // to the create-receipt gate this time): the caller (run.go) computes
-// writeReceipt := definitelyCreating(state, replace) — an inconclusive
-// sbxUnknown probe never writes, a positive absent/replace-on-known-state
+// writeReceipt := launch.DefinitelyCreating(state, replace) — an inconclusive
+// launch.SbxUnknown probe never writes, a positive absent/replace-on-known-state
 // always does, matching run.go's actual gate byte for byte.
 func TestCreateReceiptGate_MirrorsDefinitelyCreating(t *testing.T) {
 	cases := []struct {
@@ -195,16 +196,16 @@ func TestCreateReceiptGate_MirrorsDefinitelyCreating(t *testing.T) {
 		replace bool
 		want    bool
 	}{
-		{sbxAbsent, false, true},
-		{sbxUnknown, false, false},
-		{sbxRunning, false, false},
-		{sbxStopped, false, false},
-		{sbxUnknown, true, false},
-		{sbxAbsent, true, true},
-		{sbxRunning, true, true},
-		{sbxStopped, true, true},
+		{launch.SbxAbsent, false, true},
+		{launch.SbxUnknown, false, false},
+		{launch.SbxRunning, false, false},
+		{launch.SbxStopped, false, false},
+		{launch.SbxUnknown, true, false},
+		{launch.SbxAbsent, true, true},
+		{launch.SbxRunning, true, true},
+		{launch.SbxStopped, true, true},
 	}
-	withCreatePollSeams(t, probeAlways(sbxRunning), time.Millisecond, 5*time.Second)
+	withCreatePollSeams(t, probeAlways(launch.SbxRunning), time.Millisecond, 5*time.Second)
 	for _, tc := range cases {
 		dir := t.TempDir()
 		withSandboxMCPStateDirFn(t, func() (string, error) { return dir, nil })
@@ -214,11 +215,11 @@ func TestCreateReceiptGate_MirrorsDefinitelyCreating(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		writeReceipt := definitelyCreating(tc.State, tc.replace)
+		writeReceipt := launch.DefinitelyCreating(tc.State, tc.replace)
 		if writeReceipt != tc.want {
-			t.Fatalf("definitelyCreating(%v,%v) = %v, want %v", tc.State, tc.replace, writeReceipt, tc.want)
+			t.Fatalf("launch.DefinitelyCreating(%v,%v) = %v, want %v", tc.State, tc.replace, writeReceipt, tc.want)
 		}
-		if err := execSbxRunAndRecordCreate(trueCmd(t), writeReceipt, sandbox, "", []string{"fresh"}); err != nil {
+		if err := launch.ExecSbxRunAndRecordCreate(trueCmd(t), writeReceipt, sandbox, "", []string{"fresh"}); err != nil {
 			t.Fatal(err)
 		}
 		r, _, err := workspace.ReadMCPReceipt(dir, sandbox)
@@ -239,7 +240,7 @@ func TestCreateReceiptGate_MirrorsDefinitelyCreating(t *testing.T) {
 
 // --- exact state-dir path (no doubled "pix") ---------------------------
 
-// recordCreateReceipt (the real production seam, workspace.MCPStateDirFn at its
+// launch.RecordCreateReceipt (the real production seam, workspace.MCPStateDirFn at its
 // default) must land at exactly
 // <XDG_STATE_HOME>/pix/sandboxes/<sandbox>/mcp.json — config.StateDir()
 // already returns .../pix, so workspace.MCPStateRoot must NOT prepend
@@ -248,8 +249,8 @@ func TestRecordCreateReceipt_ExactStateDirPath(t *testing.T) {
 	xdg := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", xdg)
 
-	if err := recordCreateReceipt("pix-pathcheck", "", []string{"slack"}, true); err != nil {
-		t.Fatalf("recordCreateReceipt: %v", err)
+	if err := launch.RecordCreateReceipt("pix-pathcheck", "", []string{"slack"}, true); err != nil {
+		t.Fatalf("launch.RecordCreateReceipt: %v", err)
 	}
 	want := filepath.Join(xdg, "pix", "sandboxes", "pix-pathcheck", "mcp.json")
 	if _, err := os.Stat(want); err != nil {
@@ -413,9 +414,9 @@ func TestRecordMcpLoadReceipt_ExactSandboxDerivation(t *testing.T) {
 // --- pack integrations fold into the emitted static set AND the receipt ----
 
 // S03 item 4: an active pack's integration MCP servers already fold into
-// cfg.MCP via applyPackToLaunch (S01); this pins that the run.go COMPUTATION
+// cfg.MCP via launch.ApplyPackToLaunch (S01); this pins that the run.go COMPUTATION
 // run.go actually performs (mcp.AllPreloadedMCP(cfg.MCP+o.MCP) -> o.StaticMCP,
-// emitted as --static-mcp by buildSbxArgs) and the CREATE RECEIPT agree
+// emitted as --static-mcp by launch.BuildSbxArgs) and the CREATE RECEIPT agree
 // exactly on that same set, for both a persisted (`pack use`d) integration and
 // a transient --pack override never persisted to cfg.MCP.
 func TestPackIntegrations_FoldIntoStaticSetAndReceipt(t *testing.T) {
@@ -428,9 +429,9 @@ func TestPackIntegrations_FoldIntoStaticSetAndReceipt(t *testing.T) {
 
 	cfg := defaultCfg()
 	cfg.MCP = []string{"slack"} // an already-persisted, non-pack server
-	o := runOpts{Pack: root}
-	if _, err := applyPackToLaunch(cfg, &o, fakeGitEnv(nil)); err != nil {
-		t.Fatalf("applyPackToLaunch: %v", err)
+	o := launch.RunOpts{Pack: root}
+	if _, err := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil)); err != nil {
+		t.Fatalf("launch.ApplyPackToLaunch: %v", err)
 	}
 
 	// The exact computation run.go performs before building sbx args / writing
@@ -444,17 +445,17 @@ func TestPackIntegrations_FoldIntoStaticSetAndReceipt(t *testing.T) {
 	}
 
 	// Emitted --static-mcp flags mirror o.StaticMCP exactly.
-	args := buildSbxArgs(cfg, o, "0.0.99")
+	args := launch.BuildSbxArgs(cfg, o, "0.0.99")
 	for _, want := range o.StaticMCP {
 		if !contains(args, []string{"--static-mcp", want}) {
-			t.Errorf("buildSbxArgs args %v missing --static-mcp %s", args, want)
+			t.Errorf("launch.BuildSbxArgs args %v missing --static-mcp %s", args, want)
 		}
 	}
 
 	// The receipt, once written, carries the SAME set byte-for-byte.
 	stateDir := t.TempDir()
 	withSandboxMCPStateDirFn(t, func() (string, error) { return stateDir, nil })
-	if err := recordCreateReceipt("pix-packfold", "", o.StaticMCP, true); err != nil {
+	if err := launch.RecordCreateReceipt("pix-packfold", "", o.StaticMCP, true); err != nil {
 		t.Fatal(err)
 	}
 	r, status, err := workspace.ReadMCPReceipt(stateDir, "pix-packfold")
@@ -481,31 +482,34 @@ func TestPackIntegrations_FoldIntoStaticSetAndReceipt(t *testing.T) {
 // (an "automatic load" on session start, a background watcher, ...) fails this
 // test rather than being discovered later via a wrong doctor/status report.
 func TestMCPReceiptCallSitesAreGuarded(t *testing.T) {
-	assertOnlyCalledFrom(t, "workspace.WriteCreateReceipt(", []string{"cmd/pix/run.go"})
-	assertOnlyCalledFrom(t, "workspace.CommitCreateReceipt(", []string{"cmd/pix/run.go"})
+	assertOnlyCalledFrom(t, "workspace.WriteCreateReceipt(", []string{"workflow/launch/run.go"})
+	assertOnlyCalledFrom(t, "workspace.CommitCreateReceipt(", []string{"workflow/launch/run.go"})
 	assertOnlyCalledFrom(t, "workspace.AppendLoadReceipt(", []string{"mcp/mcp.go"})
 	// The create LIFECYCLE (pre-clear + start + evidence poll + commit + wait)
 	// has exactly two owners: run.go (pix run) and task.go (task new) —
 	// both launch paths MUST share the corrected lifecycle, and nothing else
 	// may fabricate one.
-	assertOnlyCalledFrom(t, "execSbxRunAndRecordCreate(", []string{"cmd/pix/run.go", "cmd/pix/task.go"})
-	assertOnlyCalledFrom(t, "workspace.ClearMCPReceipt(", []string{"cmd/pix/run.go"})
+	// Three sites: the definition, task's launch, and `pix run`'s argv seam --
+	// runRun performs the launch itself, so it is a legitimate caller.
+	assertOnlyCalledFrom(t, "ExecSbxRunAndRecordCreate(", []string{
+		"workflow/launch/run.go", "workflow/launch/task.go", "cmd/pix/run_cmd.go"})
+	assertOnlyCalledFrom(t, "workspace.ClearMCPReceipt(", []string{"workflow/launch/run.go"})
 	// Receipt removal is tied to LAUNCHER sandbox removal only: pix rm
 	// (sandbox.go), replace pre-remove (run.go), task teardown/prepare
 	// (task.go), and `pix reset --sbx`'s positive per-sandbox removals
 	// (reset.go).
-	assertOnlyCalledFrom(t, "workspace.ClearRemovedReceipt(", []string{"run.go", "sandbox.go", "task.go", "reset.go", "sandboxmcpstate.go"})
+	assertOnlyCalledFrom(t, "workspace.ClearRemovedReceipt(", []string{"workflow/launch/run.go", "workflow/launch/sandbox.go", "workflow/launch/task.go", "workflow/reset/reset.go"})
 }
 
 // C: task.go must actually route its create through the shared lifecycle (not
 // merely be allowed to) — a task-created sandbox records the same receipt.
 func TestTaskLaunchUsesSharedCreateLifecycle(t *testing.T) {
-	b, err := os.ReadFile("task.go")
+	b, err := os.ReadFile(filepath.Join("..", "..", "workflow", "launch", "task.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(b), "execSbxRunAndRecordCreate(cmd, true, o.Name, workspace.CanonicalPath(o.Workspace), o.StaticMCP)") {
-		t.Fatal("launchTask (task.go) must launch via execSbxRunAndRecordCreate(cmd, true, o.Name, workspace.CanonicalPath(o.Workspace), o.StaticMCP) so task sandboxes get the same create-receipt lifecycle as `pix run`")
+	if !strings.Contains(string(b), "ExecSbxRunAndRecordCreate(cmd, true, o.Name, workspace.CanonicalPath(o.Workspace), o.StaticMCP)") {
+		t.Fatal("launchTask (workflow/launch/task.go) must launch via ExecSbxRunAndRecordCreate(cmd, true, o.Name, workspace.CanonicalPath(o.Workspace), o.StaticMCP) so task sandboxes get the same create-receipt lifecycle as `pix run`")
 	}
 }
 

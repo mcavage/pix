@@ -1,5 +1,5 @@
 // Moved from pack/pack_v2_phase1_fixups_test.go: the subject is applying a pack to a LAUNCH
-// (runOpts, applyPackToLaunch, writePackContextFiles), which lives in
+// (launch.RunOpts, launch.ApplyPackToLaunch, launch.WritePackContextFiles), which lives in
 // launchpack.go on this side of the boundary.
 package main
 
@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/workflow/launch"
 	"pix/host/workflow/pack"
 )
 
@@ -42,8 +43,8 @@ func TestApplyPackToLaunch_BrokenActivePackFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.Pack = tampered
-	o := runOpts{}
-	_, lerr := applyPackToLaunch(cfg, &o, fakeGitEnv(nil))
+	o := launch.RunOpts{}
+	_, lerr := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil))
 	if lerr == nil {
 		t.Fatal("FIX B: a broken/tampered ACTIVE pack must refuse the launch, not proceed without its context")
 	}
@@ -56,8 +57,8 @@ func TestApplyPackToLaunch_BrokenActivePackFailsClosed(t *testing.T) {
 
 	// 2) Genuinely absent active pack (deleted dir): warn + proceed.
 	cfg.Pack = filepath.Join(dir, "gone")
-	o = runOpts{}
-	if _, lerr := applyPackToLaunch(cfg, &o, fakeGitEnv(nil)); lerr != nil {
+	o = launch.RunOpts{}
+	if _, lerr := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil)); lerr != nil {
 		t.Fatalf("a deleted active-pack dir must degrade to no-pack, got: %v", lerr)
 	}
 	if len(o.Skills) != 0 || len(o.PackKits) != 0 {
@@ -70,19 +71,19 @@ func TestApplyPackToLaunch_BrokenActivePackFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.Pack = notAPack
-	o = runOpts{}
-	if _, lerr := applyPackToLaunch(cfg, &o, fakeGitEnv(nil)); lerr != nil {
+	o = launch.RunOpts{}
+	if _, lerr := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil)); lerr != nil {
 		t.Fatalf("a dir without pack.toml must degrade to no-pack, got: %v", lerr)
 	}
 
 	// 3) Explicit --pack keeps failing closed, even for the absent class.
 	cfg.Pack = ""
-	o = runOpts{Pack: filepath.Join(dir, "gone")}
-	if _, lerr := applyPackToLaunch(cfg, &o, fakeGitEnv(nil)); lerr == nil {
+	o = launch.RunOpts{Pack: filepath.Join(dir, "gone")}
+	if _, lerr := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil)); lerr == nil {
 		t.Fatal("an explicit --pack that does not load must stay fatal")
 	}
-	o = runOpts{Pack: tampered}
-	if _, lerr := applyPackToLaunch(cfg, &o, fakeGitEnv(nil)); lerr == nil {
+	o = launch.RunOpts{Pack: tampered}
+	if _, lerr := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil)); lerr == nil {
 		t.Fatal("an explicit --pack with a tampered bin/ must stay fatal")
 	}
 }

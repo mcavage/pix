@@ -9,6 +9,7 @@ import (
 	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/sys/systest"
+	"pix/host/workflow/launch"
 	"pix/host/workflow/pack"
 )
 
@@ -145,7 +146,7 @@ func TestPackInferenceCredentialRoutingIsReverifiedAtLaunch(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := &config.Config{Inference: config.InferenceConfig{Backends: map[string]config.InferenceBackend{}}}
-	if _, err := applyPackToLaunch(cfg, &runOpts{Pack: root}, hostenv.Env{System: &systest.Fake{}}); err != nil {
+	if _, err := launch.ApplyPackToLaunch(cfg, &launch.RunOpts{Pack: root}, hostenv.Env{System: &systest.Fake{}}); err != nil {
 		t.Fatalf("accepted inference launch rejected: %v", err)
 	}
 
@@ -155,7 +156,7 @@ func TestPackInferenceCredentialRoutingIsReverifiedAtLaunch(t *testing.T) {
 	if err := pack.WriteManifest(root, manifest); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := applyPackToLaunch(cfg, &runOpts{Pack: root}, hostenv.Env{System: &systest.Fake{}}); err == nil || !strings.Contains(err.Error(), "changed since acceptance") {
+	if _, err := launch.ApplyPackToLaunch(cfg, &launch.RunOpts{Pack: root}, hostenv.Env{System: &systest.Fake{}}); err == nil || !strings.Contains(err.Error(), "changed since acceptance") {
 		t.Fatalf("mutated credential endpoint was not rejected: %v", err)
 	}
 }

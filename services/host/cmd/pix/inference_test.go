@@ -12,6 +12,7 @@ import (
 	"pix/host/inference"
 	"pix/host/readiness"
 	"pix/host/sys/systest"
+	"pix/host/workflow/launch"
 	"pix/host/workflow/onboard"
 )
 
@@ -27,7 +28,7 @@ func TestCompileInferenceRuntimeNoModelAndExclusiveFiltering(t *testing.T) {
 			{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "reasoner", Available: true},
 		},
 	}}
-	routes, manifest, err := compileInferenceRuntime(cfg, time.Unix(1, 0))
+	routes, manifest, err := inference.CompileInferenceRuntime(cfg, time.Unix(1, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +60,7 @@ func TestCompileInferenceRuntimeCarriesAdaptiveThinkingFromCatalog(t *testing.T)
 			{Model: "anthropic/claude-opus-5", Backend: "gateway", Upstream: "claude-opus-5", Available: true},
 		},
 	}}
-	_, manifest, err := compileInferenceRuntime(cfg, time.Unix(1, 0))
+	_, manifest, err := inference.CompileInferenceRuntime(cfg, time.Unix(1, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +104,7 @@ func TestConfigureModelRosterRestrictsRuntimeAndRoutes(t *testing.T) {
 	if got := strings.Join(cfg.Inference.AllowedModels, ","); got != "openai/gpt-5.6-sol" {
 		t.Fatalf("allowed models = %q", got)
 	}
-	routes, manifest, err := compileInferenceRuntime(cfg, time.Unix(1, 0))
+	routes, manifest, err := inference.CompileInferenceRuntime(cfg, time.Unix(1, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +179,7 @@ func TestDirectInferenceProbeDoesNotVerifyRejectedOrUnavailableKey(t *testing.T)
 					t.Fatalf("unverified binding became callable: %+v", binding)
 				}
 			}
-			models, err := callableRuntimeModels(cfg)
+			models, err := inference.CallableRuntimeModels(cfg)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -203,7 +204,7 @@ func TestDirectInferenceProbeVerifiesOnlySuccessfulModel(t *testing.T) {
 	if attempted != len(cfg.Inference.Models) || verified != attempted || len(failures) != 0 {
 		t.Fatalf("attempted=%d verified=%d failures=%v", attempted, verified, failures)
 	}
-	models, err := callableRuntimeModels(cfg)
+	models, err := inference.CallableRuntimeModels(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,7 +369,7 @@ func TestActiveUnverifiedOnePasswordBindingStillNeedsOnePassword(t *testing.T) {
 }
 
 func TestBuildSbxArgsConstrainsModelCycleToCallableBindings(t *testing.T) {
-	args := buildSbxArgs(&config.Config{}, runOpts{
+	args := launch.BuildSbxArgs(&config.Config{}, launch.RunOpts{
 		Workspace: ".",
 		Model:     "gateway/reasoner",
 		Models:    []string{"gateway/fast", "gateway/reasoner"},
@@ -384,10 +385,10 @@ func TestInferenceAllowsOnlyMaterializedRuntimeID(t *testing.T) {
 		Backends: map[string]config.InferenceBackend{"gateway": {Driver: "openai-compatible", Auth: "none", BaseURL: "http://127.0.0.1:9000/v1"}},
 		Models:   []config.InferenceModelBinding{{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "reasoner", Available: true}},
 	}}
-	if !inferenceAllowsModel(cfg, "gateway/reasoner") {
+	if !inference.AllowsModel(cfg, "gateway/reasoner") {
 		t.Fatal("materialized id should be allowed")
 	}
-	if inferenceAllowsModel(cfg, "openai/gpt-5.6-sol") {
+	if inference.AllowsModel(cfg, "openai/gpt-5.6-sol") {
 		t.Fatal("canonical catalog id must not bypass its configured backend")
 	}
 }
@@ -414,7 +415,7 @@ func TestInferenceKitSpecGeneratesSessionCredentialAndEgress(t *testing.T) {
 		Models:          []config.InferenceModelBinding{{Model: "openai/gpt-5.6-sol", Backend: "work-openai", Upstream: "reasoner", Available: true, Source: "/packs/work"}},
 		ExclusiveSource: "/packs/work",
 	}}
-	spec, err := inferenceKitSpec(cfg)
+	spec, err := inference.InferenceKitSpec(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,7 +437,7 @@ func TestInferenceKitSpecPreservesAPIKeyHeaderWithoutBearerPrefix(t *testing.T) 
 		},
 		Models: []config.InferenceModelBinding{{Model: "openai/gpt-5.6-sol", Backend: "work", Upstream: "reasoner", Available: true}},
 	}}
-	spec, err := inferenceKitSpec(cfg)
+	spec, err := inference.InferenceKitSpec(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -461,7 +462,7 @@ func TestInferenceKitSpecUsesAmbientDockerSessionContract(t *testing.T) {
 		},
 		Models: []config.InferenceModelBinding{{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "reasoner", Available: true}},
 	}}
-	spec, err := inferenceKitSpec(cfg)
+	spec, err := inference.InferenceKitSpec(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
