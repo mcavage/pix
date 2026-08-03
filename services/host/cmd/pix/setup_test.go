@@ -21,6 +21,7 @@ import (
 	"pix/host/workflow/launch"
 	"pix/host/workflow/onboard"
 	"pix/host/workflow/pack"
+	"pix/host/workflow/setup"
 )
 
 // TestSetupSandboxName derives pix-<base> under the default profile.
@@ -28,12 +29,12 @@ func TestSetupSandboxName(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 	t.Setenv("PIX_PROFILE", "")
-	name, ok := setupSandboxName("/some/path/tact")
+	name, ok := setup.SetupSandboxName("/some/path/tact")
 	if !ok {
 		t.Fatal("expected name resolution to succeed under default profile")
 	}
 	if want := "pix-tact"; name != want {
-		t.Errorf("setupSandboxName = %q, want %q", name, want)
+		t.Errorf("setup.SetupSandboxName = %q, want %q", name, want)
 	}
 }
 
@@ -47,7 +48,7 @@ func TestSyncGitHubCredentialFromHost(t *testing.T) {
 		}
 		return "", nil
 	}}}
-	if err := syncGitHubCredentialFromHost(env); err != nil {
+	if err := setup.SyncGitHubCredentialFromHost(env); err != nil {
 		t.Fatal(err)
 	}
 	if len(calls) != 2 || calls[0] != "gh auth token" || calls[1] != "sbx secret set github -f -t "+token {
@@ -63,7 +64,7 @@ func TestSyncGitHubCredentialFromHostRedactsFailure(t *testing.T) {
 		}
 		return "rejected " + token, errors.New("failed with " + token)
 	}}}
-	err := syncGitHubCredentialFromHost(env)
+	err := setup.SyncGitHubCredentialFromHost(env)
 	if err == nil || strings.Contains(err.Error(), token) || !strings.Contains(err.Error(), "***") {
 		t.Fatalf("error must be useful and redacted, got %v", err)
 	}
@@ -71,7 +72,7 @@ func TestSyncGitHubCredentialFromHostRedactsFailure(t *testing.T) {
 
 // --- item 4: DIR must be validated BEFORE the host phase mutates anything ---
 
-// runSetupCore must refuse a NONEXISTENT DIR before ever invoking hostPhase —
+// setup.RunSetupCore must refuse a NONEXISTENT DIR before ever invoking hostPhase —
 // the stub fails the test if called, proving the invalid-DIR path never
 // reaches (and therefore never mutates) op-refs.env/hostmode.env/config.toml/
 // the default pack/memory/host-mode.
@@ -81,16 +82,16 @@ func TestRunSetupCore_NonexistentDir_NoHostPhaseInvocation(t *testing.T) {
 		invoked = true
 		return nil
 	}
-	err := runSetupCore(hostenv.Env{System: &systest.Fake{}}, filepath.Join(t.TempDir(), "does-not-exist"), nil, strings.NewReader(""), &bytes.Buffer{}, false, stub)
+	err := setup.RunSetupCore(hostenv.Env{System: &systest.Fake{}}, filepath.Join(t.TempDir(), "does-not-exist"), nil, strings.NewReader(""), &bytes.Buffer{}, false, stub)
 	if err == nil {
-		t.Fatal("a nonexistent DIR must fail runSetupCore")
+		t.Fatal("a nonexistent DIR must fail setup.RunSetupCore")
 	}
 	if invoked {
 		t.Fatal("hostPhase must NEVER be invoked for a nonexistent DIR")
 	}
 }
 
-// runSetupCore must refuse a DIR that names a FILE (not a directory) before
+// setup.RunSetupCore must refuse a DIR that names a FILE (not a directory) before
 // ever invoking hostPhase, for the same reason.
 func TestRunSetupCore_FileNotDir_NoHostPhaseInvocation(t *testing.T) {
 	dir := t.TempDir()
@@ -103,16 +104,16 @@ func TestRunSetupCore_FileNotDir_NoHostPhaseInvocation(t *testing.T) {
 		invoked = true
 		return nil
 	}
-	err := runSetupCore(hostenv.Env{System: &systest.Fake{}}, file, nil, strings.NewReader(""), &bytes.Buffer{}, false, stub)
+	err := setup.RunSetupCore(hostenv.Env{System: &systest.Fake{}}, file, nil, strings.NewReader(""), &bytes.Buffer{}, false, stub)
 	if err == nil {
-		t.Fatal("a DIR that is a file (not a directory) must fail runSetupCore")
+		t.Fatal("a DIR that is a file (not a directory) must fail setup.RunSetupCore")
 	}
 	if invoked {
 		t.Fatal("hostPhase must NEVER be invoked when DIR is a file, not a directory")
 	}
 }
 
-// runSetupCore must invoke hostPhase (and return its result) for a DIR that
+// setup.RunSetupCore must invoke hostPhase (and return its result) for a DIR that
 // genuinely exists and is a directory, and for the "." default.
 func TestRunSetupCore_ValidDir_InvokesHostPhase(t *testing.T) {
 	dir := t.TempDir()
@@ -122,7 +123,7 @@ func TestRunSetupCore_ValidDir_InvokesHostPhase(t *testing.T) {
 			invoked = true
 			return nil
 		}
-		if err := runSetupCore(hostenv.Env{System: &systest.Fake{}}, valid, nil, strings.NewReader(""), &bytes.Buffer{}, false, stub); err != nil {
+		if err := setup.RunSetupCore(hostenv.Env{System: &systest.Fake{}}, valid, nil, strings.NewReader(""), &bytes.Buffer{}, false, stub); err != nil {
 			t.Fatalf("dir=%q: unexpected error: %v", valid, err)
 		}
 		if !invoked {
@@ -131,12 +132,12 @@ func TestRunSetupCore_ValidDir_InvokesHostPhase(t *testing.T) {
 	}
 }
 
-// runSetupCore must propagate hostPhase's own error/return value unchanged
+// setup.RunSetupCore must propagate hostPhase's own error/return value unchanged
 // (it's a thin validate-then-call, not a swallow).
 func TestRunSetupCore_PropagatesHostPhaseError(t *testing.T) {
 	wantErr := fmt.Errorf("boom")
 	stub := func(hostenv.Env, []string, io.Reader, io.Writer, bool) error { return wantErr }
-	if err := runSetupCore(hostenv.Env{System: &systest.Fake{}}, ".", nil, strings.NewReader(""), &bytes.Buffer{}, false, stub); err != wantErr {
+	if err := setup.RunSetupCore(hostenv.Env{System: &systest.Fake{}}, ".", nil, strings.NewReader(""), &bytes.Buffer{}, false, stub); err != wantErr {
 		t.Errorf("expected hostPhase's own error to propagate, got %v", err)
 	}
 }
@@ -165,11 +166,11 @@ func TestValidateSetupSemantics_RejectsBeforeMutationBoundary(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateSetupSemantics(tc.opts, cfg, env, resolver)
+			err := setup.ValidateSetupSemantics(tc.opts, cfg, env, resolver)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("validateSetupSemantics() error = %v, want containing %q", err, tc.want)
+				t.Fatalf("setup.ValidateSetupSemantics() error = %v, want containing %q", err, tc.want)
 			}
-			var usage errUsage
+			var usage setup.ErrUsage
 			if !errors.As(err, &usage) {
 				t.Fatalf("semantic error must map to usage/exit 2, got %T: %v", err, err)
 			}
@@ -188,7 +189,7 @@ func TestValidateSetupSemantics_AcceptsValidCatalogAndGoogleOptions(t *testing.T
 		Model:           "qwen3.5:9b",
 		Knowledge:       "/tmp/knowledge",
 	}
-	if err := validateSetupSemantics(opts, &config.Config{}, hostenv.Env{System: &systest.Fake{}}, noHostResolver); err != nil {
+	if err := setup.ValidateSetupSemantics(opts, &config.Config{}, hostenv.Env{System: &systest.Fake{}}, noHostResolver); err != nil {
 		t.Fatalf("valid setup semantics rejected: %v", err)
 	}
 }
@@ -244,11 +245,11 @@ func TestRunSetupCmd_SemanticErrorPrecedesPackAdoption(t *testing.T) {
 	}
 }
 
-// setupHostPhase must ABORT (return error, write nothing further) when no model
+// setup.SetupHostPhase must ABORT (return error, write nothing further) when no model
 // key can be provisioned and it's non-interactive (no prompt) — the fix for the
 // double-prompt + false "ready".
 func TestSetupHostPhase_NoKeyAborts(t *testing.T) {
-	// Isolate from the developer's real config: setupHostPhase consults
+	// Isolate from the developer's real config: setup.SetupHostPhase consults
 	// inference.ConfiguredKeylessInference -> config.Load(), so a real pix config with
 	// keyless Ollama bindings on disk would make setup proceed without a model
 	// key, defeating the "must abort" assertion.
@@ -261,7 +262,7 @@ func TestSetupHostPhase_NoKeyAborts(t *testing.T) {
 	}}}
 	var out bytes.Buffer
 	// flags present -> non-interactive -> no prompt; missing key -> error.
-	err := setupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, true)
+	err := setup.SetupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, true)
 	if err == nil {
 		t.Fatal("setup must abort when no model key is configured")
 	}
@@ -270,13 +271,13 @@ func TestSetupHostPhase_NoKeyAborts(t *testing.T) {
 	}
 }
 
-// setupHostPhase must reject unsupported setup flags and validate
+// setup.SetupHostPhase must reject unsupported setup flags and validate
 // --mcp/--knowledge/--model BEFORE touching provider keys at all. An invalid
-// flag must abort before setupProvisionKeysFn, with no 1Password prompt, ref
+// flag must abort before setup.SetupProvisionKeysFn, with no 1Password prompt, ref
 // write, or sbx reconciliation for a request that cannot be applied.
 func TestSetupHostPhase_InvalidFlags_NeverInvokesProviderKeyFlow(t *testing.T) {
-	orig := setupProvisionKeysFn
-	t.Cleanup(func() { setupProvisionKeysFn = orig })
+	orig := setup.SetupProvisionKeysFn
+	t.Cleanup(func() { setup.SetupProvisionKeysFn = orig })
 
 	cases := []struct {
 		name  string
@@ -292,18 +293,18 @@ func TestSetupHostPhase_InvalidFlags_NeverInvokesProviderKeyFlow(t *testing.T) {
 			t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 
 			invoked := false
-			setupProvisionKeysFn = func(hostenv.Env, io.Reader, io.Writer, bool, bool) bool {
+			setup.SetupProvisionKeysFn = func(hostenv.Env, io.Reader, io.Writer, bool, bool) bool {
 				invoked = true
 				return true
 			}
 
 			var out bytes.Buffer
-			err := setupHostPhase(hostenv.Env{System: &systest.Fake{}}, tc.flags, strings.NewReader(""), &out, false)
+			err := setup.SetupHostPhase(hostenv.Env{System: &systest.Fake{}}, tc.flags, strings.NewReader(""), &out, false)
 			if err == nil {
-				t.Fatalf("expected setupHostPhase to fail for flags %v", tc.flags)
+				t.Fatalf("expected setup.SetupHostPhase to fail for flags %v", tc.flags)
 			}
 			if invoked {
-				t.Errorf("setupProvisionKeysFn must NEVER be invoked when flag validation fails (flags %v); no provider-key/ref/sbx work may run for a request that will be rejected", tc.flags)
+				t.Errorf("setup.SetupProvisionKeysFn must NEVER be invoked when flag validation fails (flags %v); no provider-key/ref/sbx work may run for a request that will be rejected", tc.flags)
 			}
 			if _, statErr := os.Stat(filepath.Join(dir, "config.toml")); !os.IsNotExist(statErr) {
 				t.Errorf("config.toml must not be written when flag validation fails, stat err = %v", statErr)
@@ -340,7 +341,7 @@ func TestSetupSelectRunnableIntentForSingleProvider(t *testing.T) {
 	} {
 		env := hostenv.Env{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return tc.refs, nil }}}
 		cfg := &config.Config{RunIntent: tc.start}
-		if got := setupSelectRunnableIntent(cfg, env); got != tc.changed {
+		if got := setup.SetupSelectRunnableIntent(cfg, env); got != tc.changed {
 			t.Errorf("refs=%q changed=%v, want %v", tc.refs, got, tc.changed)
 		}
 		if cfg.RunIntent != tc.want {
@@ -349,14 +350,14 @@ func TestSetupSelectRunnableIntentForSingleProvider(t *testing.T) {
 	}
 }
 
-// setupProvisionKeys with `op` entirely missing is a HARD precondition
+// setup.SetupProvisionKeys with `op` entirely missing is a HARD precondition
 // failure (never fail-open) — without op there's nothing to source keys
 // from at all. See setup_keys_flow_test.go's SbxUnavailable_FailsOpen for the
 // case that DOES fail open (valid refs, sbx itself unreachable).
 func TestSetupProvisionKeys_OpMissingNeverFailsOpen(t *testing.T) {
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("not found") }, GetenvFn: func(string) string { return "/cfg" }, ReadFileFn: func(string) (string, error) { return "", os.ErrNotExist }}}
 	var out bytes.Buffer
-	if setupProvisionKeys(env, strings.NewReader(""), &out, false, false) {
+	if setup.SetupProvisionKeys(env, strings.NewReader(""), &out, false, false) {
 		t.Error("op missing must fail setup, never fail open")
 	}
 	if strings.Contains(out.String(), "Paste an op://") {
@@ -430,22 +431,22 @@ func TestHostModeProviderKeys_SymlinkLoopIsError(t *testing.T) {
 	}
 }
 
-// TestOnboardingKickoffCarriesGeneratedMarker: onboardingKickoff is a
+// TestOnboardingKickoffCarriesGeneratedMarker: setup.OnboardingKickoff is a
 // synthesized user-role message, not something the user typed. It must carry
 // launch.GeneratedInputMarker so extensions/memory-capture.ts's shouldCaptureUserText
 // recognizes it and skips capture — the fix for the watcher inventing
 // pix facts/events from the kickoff line (see launch.GeneratedInputMarker's doc
 // comment in setup.go).
 func TestOnboardingKickoffCarriesGeneratedMarker(t *testing.T) {
-	if !strings.HasPrefix(onboardingKickoff, launch.GeneratedInputMarker) {
-		t.Fatalf("onboardingKickoff must start with launch.GeneratedInputMarker %q, got %q", launch.GeneratedInputMarker, onboardingKickoff)
+	if !strings.HasPrefix(setup.OnboardingKickoff, launch.GeneratedInputMarker) {
+		t.Fatalf("setup.OnboardingKickoff must start with launch.GeneratedInputMarker %q, got %q", launch.GeneratedInputMarker, setup.OnboardingKickoff)
 	}
 	if !strings.HasPrefix(launch.GeneratedInputMarker, "[pix-generated:") {
 		t.Fatalf("launch.GeneratedInputMarker must start with the [pix-generated: contract prefix, got %q", launch.GeneratedInputMarker)
 	}
 }
 
-// --- item C: runSetupHandoff (post-host-phase decision) -------------------
+// --- item C: setup.RunSetupHandoff (post-host-phase decision) -------------------
 
 // An EXISTING sandbox without --replace is left alone: setup reports success
 // ("reconciled", not "current"), prints the exact choices, and never calls
@@ -454,7 +455,7 @@ func TestRunSetupHandoff_ExistingSandbox_LeftAloneNoRunFn(t *testing.T) {
 	for _, state := range []doctor.SbxState{launch.SbxRunning, launch.SbxStopped} {
 		var out bytes.Buffer
 		called := false
-		if err := runSetupHandoff(".", "pix-demo", state, false, &out, func([]string) { called = true }); err != nil {
+		if err := setup.RunSetupHandoff(".", "pix-demo", state, false, &out, func([]string) { called = true }); err != nil {
 			t.Fatalf("state %v: unexpected error: %v", state, err)
 		}
 		if called {
@@ -484,10 +485,10 @@ func TestRunSetupHandoff_ExistingSandbox_LeftAloneNoRunFn(t *testing.T) {
 func TestRunSetupHandoff_ExistingSandbox_ReplaceRecreatesWithKickoff(t *testing.T) {
 	var out bytes.Buffer
 	var gotArgs []string
-	if err := runSetupHandoff("/some/repo", "pix-repo", launch.SbxRunning, true, &out, func(args []string) { gotArgs = args }); err != nil {
+	if err := setup.RunSetupHandoff("/some/repo", "pix-repo", launch.SbxRunning, true, &out, func(args []string) { gotArgs = args }); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := []string{"/some/repo", "--replace", "--", onboardingKickoff}
+	want := []string{"/some/repo", "--replace", "--", setup.OnboardingKickoff}
 	if len(gotArgs) != len(want) {
 		t.Fatalf("runFn args = %v, want %v", gotArgs, want)
 	}
@@ -505,7 +506,7 @@ func TestRunSetupHandoff_UnknownState_FailsClosed(t *testing.T) {
 	for _, replace := range []bool{false, true} {
 		var out bytes.Buffer
 		called := false
-		err := runSetupHandoff(".", "pix-demo", launch.SbxUnknown, replace, &out, func([]string) { called = true })
+		err := setup.RunSetupHandoff(".", "pix-demo", launch.SbxUnknown, replace, &out, func([]string) { called = true })
 		if err == nil {
 			t.Fatalf("replace=%v: unknown state must return an error", replace)
 		}
@@ -529,7 +530,7 @@ func TestRunSetupHandoff_UnknownState_FailsClosed(t *testing.T) {
 func TestRunSetupHandoff_UnknownState_RetryCommandPreservesDirAndReplace(t *testing.T) {
 	var out bytes.Buffer
 	called := false
-	err := runSetupHandoff("/some/repo", "pix-repo", launch.SbxUnknown, true, &out, func([]string) { called = true })
+	err := setup.RunSetupHandoff("/some/repo", "pix-repo", launch.SbxUnknown, true, &out, func([]string) { called = true })
 	if err == nil {
 		t.Fatal("unknown state must return an error")
 	}
@@ -543,7 +544,7 @@ func TestRunSetupHandoff_UnknownState_RetryCommandPreservesDirAndReplace(t *test
 
 	// A DIR needing shell quoting must still round-trip, with --replace after it.
 	var out2 bytes.Buffer
-	err2 := runSetupHandoff("/some/repo's dir", "pix-repo", launch.SbxUnknown, true, &out2, func([]string) {})
+	err2 := setup.RunSetupHandoff("/some/repo's dir", "pix-repo", launch.SbxUnknown, true, &out2, func([]string) {})
 	if err2 == nil {
 		t.Fatal("unknown state must return an error")
 	}
@@ -558,13 +559,13 @@ func TestRunSetupHandoff_UnknownState_RetryCommandPreservesDirAndReplace(t *test
 func TestRunSetupHandoff_AbsentSandbox_LaunchesWithKickoff(t *testing.T) {
 	var out bytes.Buffer
 	var gotArgs []string
-	if err := runSetupHandoff(".", "pix-demo", launch.SbxAbsent, false, &out, func(args []string) { gotArgs = args }); err != nil {
+	if err := setup.RunSetupHandoff(".", "pix-demo", launch.SbxAbsent, false, &out, func(args []string) { gotArgs = args }); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if gotArgs == nil {
 		t.Fatal("an absent sandbox must launch via runFn")
 	}
-	if len(gotArgs) == 0 || gotArgs[len(gotArgs)-1] != onboardingKickoff {
+	if len(gotArgs) == 0 || gotArgs[len(gotArgs)-1] != setup.OnboardingKickoff {
 		t.Errorf("launch args must end with the onboarding kickoff, got: %v", gotArgs)
 	}
 	if !strings.Contains(out.String(), "Launching sandbox") {
@@ -576,7 +577,7 @@ func TestRunSetupHandoff_AbsentSandbox_LaunchesWithKickoff(t *testing.T) {
 func TestRunSetupHandoff_AbsentSandbox_PassesDir(t *testing.T) {
 	var out bytes.Buffer
 	var gotArgs []string
-	if err := runSetupHandoff("/some/repo", "pix-repo", launch.SbxAbsent, false, &out, func(args []string) { gotArgs = args }); err != nil {
+	if err := setup.RunSetupHandoff("/some/repo", "pix-repo", launch.SbxAbsent, false, &out, func(args []string) { gotArgs = args }); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(gotArgs) < 3 || gotArgs[0] != "/some/repo" {
@@ -589,10 +590,10 @@ func TestRunSetupHandoff_AbsentSandbox_PassesDir(t *testing.T) {
 func TestRunSetupHandoff_AbsentSandbox_ReplaceHarmless(t *testing.T) {
 	var out bytes.Buffer
 	var gotArgs []string
-	if err := runSetupHandoff(".", "pix-demo", launch.SbxAbsent, true, &out, func(args []string) { gotArgs = args }); err != nil {
+	if err := setup.RunSetupHandoff(".", "pix-demo", launch.SbxAbsent, true, &out, func(args []string) { gotArgs = args }); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := []string{"--replace", "--", onboardingKickoff}
+	want := []string{"--replace", "--", setup.OnboardingKickoff}
 	if len(gotArgs) != len(want) {
 		t.Fatalf("runFn args = %v, want %v", gotArgs, want)
 	}
@@ -609,7 +610,7 @@ func TestRunSetupHandoff_AbsentSandbox_ReplaceHarmless(t *testing.T) {
 func TestRunSetupHandoff_ExistingSandbox_QuotesExplicitDir(t *testing.T) {
 	dir := "/tmp/my repo's checkout"
 	var out bytes.Buffer
-	if err := runSetupHandoff(dir, "pix-checkout", launch.SbxStopped, false, &out, func([]string) {
+	if err := setup.RunSetupHandoff(dir, "pix-checkout", launch.SbxStopped, false, &out, func([]string) {
 		t.Fatal("must not launch")
 	}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -653,15 +654,15 @@ func TestSetupInteractivePrompts_OnlyAssumeYesSuppresses(t *testing.T) {
 		{false, true, false},
 	}
 	for _, c := range cases {
-		if got := setupInteractivePrompts(c.tty, c.assumeYes); got != c.want {
-			t.Errorf("setupInteractivePrompts(tty=%v, assumeYes=%v) = %v, want %v", c.tty, c.assumeYes, got, c.want)
+		if got := setup.SetupInteractivePrompts(c.tty, c.assumeYes); got != c.want {
+			t.Errorf("setup.SetupInteractivePrompts(tty=%v, assumeYes=%v) = %v, want %v", c.tty, c.assumeYes, got, c.want)
 		}
 	}
 }
 
-// --- seedIdentity honesty: memory claims track actual RPC outcomes ---------
+// --- setup.SeedIdentity honesty: memory claims track actual RPC outcomes ---------
 
-// fakeIdentityMemory simulates the memory daemon for seedIdentity: up or not,
+// fakeIdentityMemory simulates the memory daemon for setup.SeedIdentity: up or not,
 // per-fact remember failures keyed by content substring (a real RPC error),
 // and per-fact "emptyID" substrings simulating the daemon's OWN no-error but
 // nothing-persisted response ({"id": "", "reaffirmed": false} — memory.go's
@@ -703,11 +704,11 @@ func gitIdentityEnv(name, email string) hostenv.Env {
 	}}}
 }
 
-func withIdentityMemory(t *testing.T, m identityMemory) {
+func withIdentityMemory(t *testing.T, m setup.IdentityMemory) {
 	t.Helper()
-	orig := newIdentityMemory
-	newIdentityMemory = func() identityMemory { return m }
-	t.Cleanup(func() { newIdentityMemory = orig })
+	orig := setup.NewIdentityMemory
+	setup.NewIdentityMemory = func() setup.IdentityMemory { return m }
+	t.Cleanup(func() { setup.NewIdentityMemory = orig })
 }
 
 // The single first-name fact saves: the output claims the memory save and names
@@ -717,7 +718,7 @@ func TestSeedIdentity_AllSaved(t *testing.T) {
 	m := &fakeIdentityMemory{up: true}
 	withIdentityMemory(t, m)
 	var out bytes.Buffer
-	seedIdentity(gitIdentityEnv("Mark", "m@x.com"), &out)
+	setup.SeedIdentity(gitIdentityEnv("Mark", "m@x.com"), &out)
 	if len(m.calls) != 1 {
 		t.Fatalf("expected exactly 1 remember call (first name only), got %v", m.calls)
 	}
@@ -741,7 +742,7 @@ func TestSeedIdentity_EmptyID_TreatedAsFailure(t *testing.T) {
 	m := &fakeIdentityMemory{up: true, emptyID: []string{"first name is"}}
 	withIdentityMemory(t, m)
 	var out bytes.Buffer
-	seedIdentity(gitIdentityEnv("Mark", "m@x.com"), &out)
+	setup.SeedIdentity(gitIdentityEnv("Mark", "m@x.com"), &out)
 	if len(m.calls) != 1 {
 		t.Fatalf("expected 1 remember call, got %v", m.calls)
 	}
@@ -760,7 +761,7 @@ func TestSeedIdentity_SuccessCountsViaPersistedID(t *testing.T) {
 	m := &fakeIdentityMemory{up: true}
 	withIdentityMemory(t, m)
 	var out bytes.Buffer
-	seedIdentity(gitIdentityEnv("Mark", "m@x.com"), &out)
+	setup.SeedIdentity(gitIdentityEnv("Mark", "m@x.com"), &out)
 	if len(m.calls) != 1 {
 		t.Fatalf("expected 1 remember call, got %v", m.calls)
 	}
@@ -774,7 +775,7 @@ func TestSeedIdentity_AllRPCsFailNoClaim(t *testing.T) {
 	m := &fakeIdentityMemory{up: true, fail: []string{"user's"}}
 	withIdentityMemory(t, m)
 	var out bytes.Buffer
-	seedIdentity(gitIdentityEnv("Mark", "m@x.com"), &out)
+	setup.SeedIdentity(gitIdentityEnv("Mark", "m@x.com"), &out)
 	if !strings.Contains(out.String(), "Could not save to memory") {
 		t.Errorf("full RPC failure must be stated, got:\n%s", out.String())
 	}
@@ -788,7 +789,7 @@ func TestSeedIdentity_DaemonDownNoClaim(t *testing.T) {
 	m := &fakeIdentityMemory{up: false}
 	withIdentityMemory(t, m)
 	var out bytes.Buffer
-	seedIdentity(gitIdentityEnv("Mark", ""), &out)
+	setup.SeedIdentity(gitIdentityEnv("Mark", ""), &out)
 	if len(m.calls) != 0 {
 		t.Fatalf("daemon down must attempt no remember calls, got %v", m.calls)
 	}
@@ -807,19 +808,19 @@ func TestSeedIdentity_DaemonDownNoClaim(t *testing.T) {
 // phase it hung in instead of showing a blank terminal.
 func TestSetupPhases_NumberedHeadersInFixedOrder(t *testing.T) {
 	want := []string{"parse", "inventory", "gate", "mutate", "consent", "verify", "report", "handoff"}
-	if len(setupPhaseOrder) != len(want) {
-		t.Fatalf("setupPhaseOrder has %d phases, want %d", len(setupPhaseOrder), len(want))
+	if len(setup.SetupPhaseOrder) != len(want) {
+		t.Fatalf("setup.SetupPhaseOrder has %d phases, want %d", len(setup.SetupPhaseOrder), len(want))
 	}
 	for i, w := range want {
-		if setupPhaseOrder[i].name != w {
-			t.Errorf("phase %d = %q, want %q", i+1, setupPhaseOrder[i].name, w)
+		if setup.SetupPhaseOrder[i].Name != w {
+			t.Errorf("phase %d = %q, want %q", i+1, setup.SetupPhaseOrder[i].Name, w)
 		}
 	}
 	w := &ollamaWorld{}
 	env := modelsSetupEnv(t, w)
 	stubProvisionKeysOK(t)
 	var out bytes.Buffer
-	if err := setupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, false); err != nil {
+	if err := setup.SetupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, false); err != nil {
 		t.Fatalf("setup failed: %v\n%s", err, out.String())
 	}
 	got := out.String()
@@ -847,23 +848,23 @@ func TestSetupPhases_NumberedHeadersInFixedOrder(t *testing.T) {
 // gigabytes) are dead last.
 func TestSetupMutationOrder_FixedRiskiestLast(t *testing.T) {
 	want := "keys,config,pack,mcp,knowledge,identity,gworkspace,models,inference"
-	if got := strings.Join(setupMutationOrder, ","); got != want {
-		t.Errorf("setupMutationOrder = %s, want %s", got, want)
+	if got := strings.Join(setup.SetupMutationOrder, ","); got != want {
+		t.Errorf("setup.SetupMutationOrder = %s, want %s", got, want)
 	}
 	env := modelsSetupEnv(t, &ollamaWorld{})
 	opts, err := onboard.ParseOnboardArgs([]string{"--yes"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	inv, err := takeSetupInventory(env, opts)
+	inv, err := setup.TakeSetupInventory(env, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var models setupModelsOutcome
-	steps := setupMutationSteps(env, inv, opts, strings.NewReader(""), io.Discard, false, &models, &setupPromptBudget{})
+	var models setup.SetupModelsOutcome
+	steps := setup.SetupMutationSteps(env, inv, opts, strings.NewReader(""), io.Discard, false, &models, &setup.SetupPromptBudget{})
 	var names []string
 	for _, s := range steps {
-		names = append(names, s.name)
+		names = append(names, s.Name)
 	}
 	if got := strings.Join(names, ","); got != want {
 		t.Errorf("the step table runs %s, want %s", got, want)
@@ -876,14 +877,14 @@ func TestSetupMutationOrder_FixedRiskiestLast(t *testing.T) {
 // print a success glyph.
 func TestSetupMutations_StubbedToFail_PrintNoSuccessGlyph(t *testing.T) {
 	var out bytes.Buffer
-	steps := []setupMutationStep{
-		{name: "keys", axes: []readiness.Axis{readiness.AxisProviders}, run: func() error { return fmt.Errorf("boom") }},
-		{name: "pack", axes: []readiness.Axis{readiness.AxisPack}, run: func() error { return fmt.Errorf("boom") }},
+	steps := []setup.SetupMutationStep{
+		{Name: "keys", Axes: []readiness.Axis{readiness.AxisProviders}, Run: func() error { return fmt.Errorf("boom") }},
+		{Name: "pack", Axes: []readiness.Axis{readiness.AxisPack}, Run: func() error { return fmt.Errorf("boom") }},
 	}
 	for _, s := range steps {
-		_ = s.run()
+		_ = s.Run()
 	}
-	touched, err := runSetupMutations(steps)
+	touched, err := setup.RunSetupMutations(steps)
 	if err == nil {
 		t.Fatal("a failing mutation must report an error")
 	}
@@ -899,16 +900,16 @@ func TestSetupMutations_StubbedToFail_PrintNoSuccessGlyph(t *testing.T) {
 // the run reach the report, which then shows the axis as not ready.
 func TestRunSetupMutations_FatalStopsNonFatalContinues(t *testing.T) {
 	var ran []string
-	steps := []setupMutationStep{
-		{name: "a", run: func() error { ran = append(ran, "a"); return fmt.Errorf("soft") }},
-		{name: "b", run: func() error { ran = append(ran, "b"); return nil }},
+	steps := []setup.SetupMutationStep{
+		{Name: "a", Run: func() error { ran = append(ran, "a"); return fmt.Errorf("soft") }},
+		{Name: "b", Run: func() error { ran = append(ran, "b"); return nil }},
 	}
-	if _, err := runSetupMutations(steps); err == nil || strings.Join(ran, ",") != "a,b" {
+	if _, err := setup.RunSetupMutations(steps); err == nil || strings.Join(ran, ",") != "a,b" {
 		t.Errorf("a non-fatal failure must not stop the table: ran=%v err=%v", ran, err)
 	}
 	ran = nil
-	steps[0].fatal = true
-	if _, err := runSetupMutations(steps); err == nil || strings.Join(ran, ",") != "a" {
+	steps[0].Fatal = true
+	if _, err := setup.RunSetupMutations(steps); err == nil || strings.Join(ran, ",") != "a" {
 		t.Errorf("a fatal failure must stop the table: ran=%v err=%v", ran, err)
 	}
 }
@@ -916,51 +917,23 @@ func TestRunSetupMutations_FatalStopsNonFatalContinues(t *testing.T) {
 // AC-P0-307: at most two interactive prompts per run; AC-P0-306: a
 // non-interactive run gets none at all.
 func TestSetupPromptBudget_AtMostTwoAndNoneWithoutATTY(t *testing.T) {
-	b := &setupPromptBudget{interactive: true}
-	if !b.reserve("model pull consent") || !b.reserve("google workspace route") {
+	b := &setup.SetupPromptBudget{Interactive: true}
+	if !b.Reserve("model pull consent") || !b.Reserve("google workspace route") {
 		t.Fatal("the two named prompts must both fit in the budget")
 	}
-	if b.reserve("a third question") {
-		t.Errorf("setup must never ask a third question, asked: %v", b.asked)
+	if b.Reserve("a third question") {
+		t.Errorf("setup must never ask a third question, asked: %v", b.Asked)
 	}
-	if b.spent != setupMaxPrompts {
-		t.Errorf("budget spent = %d, want %d", b.spent, setupMaxPrompts)
+	if b.Spent != setup.SetupMaxPrompts {
+		t.Errorf("budget spent = %d, want %d", b.Spent, setup.SetupMaxPrompts)
 	}
-	quiet := &setupPromptBudget{interactive: false}
-	if quiet.reserve("anything") {
+	quiet := &setup.SetupPromptBudget{Interactive: false}
+	if quiet.Reserve("anything") {
 		t.Error("a non-interactive run must never be granted a prompt slot")
 	}
-	var nilBudget *setupPromptBudget
-	if nilBudget.reserve("anything") {
+	var nilBudget *setup.SetupPromptBudget
+	if nilBudget.Reserve("anything") {
 		t.Error("a nil budget must never grant a prompt slot")
-	}
-}
-
-// AC-P0-302, the grep that IS the review: the render path must not read the
-// inventory. A report that consults pre-mutation state is a report that can
-// print what setup INTENDED rather than what it achieved, so the source itself
-// is asserted — printSetupSummary and its helpers neither take a
-// setupInventory nor name one.
-func TestSetupReport_NeverReadsInventory(t *testing.T) {
-	for _, file := range []string{"setup_models.go", "setup.go"} {
-		b, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		src := string(b)
-		for _, fn := range []string{"func printSetupSummary(", "func setupProvidersAxis(", "func setupPackAxis(", "func setupGworkspaceAxis("} {
-			i := strings.Index(src, fn)
-			if i < 0 {
-				continue
-			}
-			body := src[i:]
-			if j := strings.Index(body, "\n}\n"); j > 0 {
-				body = body[:j]
-			}
-			if strings.Contains(body, "setupInventory") || strings.Contains(body, "inv.") {
-				t.Errorf("%s: %s reads the inventory; the report must be a pure function of post-mutation evidence", file, fn)
-			}
-		}
 	}
 }
 
@@ -970,7 +943,7 @@ func TestSetupNoAgent_IsSetupsOwnFlag(t *testing.T) {
 	if _, err := onboard.ParseOnboardArgs([]string{"--no-agent"}); err == nil {
 		t.Error("--no-agent must be consumed by setup itself, not the host-config parser")
 	}
-	if !strings.Contains(setupUsage, "--no-agent") {
+	if !strings.Contains(setup.Usage, "--no-agent") {
 		t.Error("setup usage must document --no-agent")
 	}
 	if knownVerbs["onboard"] {

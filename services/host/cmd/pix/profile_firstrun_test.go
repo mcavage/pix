@@ -2,16 +2,17 @@ package main
 
 import (
 	"bytes"
+	"pix/host/workflow/setup"
 	"strings"
 	"testing"
 )
 
-// firstRunFlow now only PRINTS a nudge (setup is explicit); it never handles the
+// setup.FirstRunFlow now only PRINTS a nudge (setup is explicit); it never handles the
 // invocation and never launches anything, on any TTY state.
 func TestFirstRunFlowNudgesNeverHandles(t *testing.T) {
 	for _, tty := range []bool{false, true} {
 		var out bytes.Buffer
-		if handled := firstRunFlow(strings.NewReader(""), &out, tty); handled {
+		if handled := setup.FirstRunFlow(strings.NewReader(""), &out, tty); handled {
 			t.Errorf("tty=%v: first run must never handle the invocation", tty)
 		}
 		s := out.String()

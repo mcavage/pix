@@ -20,6 +20,7 @@ import (
 	"pix/host/readiness"
 	"pix/host/workflow/man"
 	"pix/host/workflow/onboard"
+	"pix/host/workflow/setup"
 	"strings"
 	"testing"
 
@@ -44,11 +45,11 @@ func TestSetupRequested_PullModelsWithOllamaDown_Fails(t *testing.T) {
 	env := modelsSetupEnv(t, w)
 	stubProvisionKeysOK(t)
 	var out bytes.Buffer
-	err := setupHostPhase(env, []string{"--yes", "--pull-models"}, strings.NewReader(""), &out, false)
+	err := setup.SetupHostPhase(env, []string{"--yes", "--pull-models"}, strings.NewReader(""), &out, false)
 	if err == nil {
 		t.Fatalf("--pull-models with Ollama down must fail (exit 1), got success:\n%s", out.String())
 	}
-	var usage errUsage
+	var usage setup.ErrUsage
 	if errors.As(err, &usage) {
 		t.Errorf("a failed request is exit 1, not a usage error (exit 2), got: %v", err)
 	}
@@ -67,7 +68,7 @@ func TestSetupRequested_NoFlagWithOllamaDown_SucceedsWithOptionalWarnRow(t *test
 	env := modelsSetupEnv(t, w)
 	stubProvisionKeysOK(t)
 	var out bytes.Buffer
-	if err := setupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, false); err != nil {
+	if err := setup.SetupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, false); err != nil {
 		t.Fatalf("an unrequested optional axis must never block setup, got: %v\n%s", err, out.String())
 	}
 	if !strings.Contains(out.String(), "⚠ local models") {
@@ -91,7 +92,7 @@ func TestSetupRequested_StaleOptionalConfigNeverBlocks(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if err := setupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, false); err != nil {
+	if err := setup.SetupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, false); err != nil {
 		t.Fatalf("stale optional config must not block an unrelated repair, got: %v\n%s", err, out.String())
 	}
 	if !strings.Contains(out.String(), "stale@example.com") {
@@ -102,13 +103,13 @@ func TestSetupRequested_StaleOptionalConfigNeverBlocks(t *testing.T) {
 // The flag→axis mapping is the ONLY thing setup owns; the promotion rule
 // itself lives in the readiness type.
 func TestSetupRequestedAxes_FlagMapping(t *testing.T) {
-	if got := setupRequestedAxes(onboard.Opts{}); len(got) != 0 {
+	if got := setup.SetupRequestedAxes(onboard.Opts{}); len(got) != 0 {
 		t.Errorf("no flags must promote nothing, got %v", got)
 	}
-	got := readiness.AxisNames(setupRequestedAxes(onboard.Opts{PullModels: true, GoogleWorkspace: true, Mcp: []string{"slack"}}))
+	got := readiness.AxisNames(setup.SetupRequestedAxes(onboard.Opts{PullModels: true, GoogleWorkspace: true, Mcp: []string{"slack"}}))
 	want := []string{"gworkspace", "mcp:slack", "model.bridge", "model.embed", "model.watcher", "ollama.host"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Errorf("setupRequestedAxes = %v, want %v", got, want)
+		t.Errorf("setup.SetupRequestedAxes = %v, want %v", got, want)
 	}
 }
 
@@ -139,7 +140,7 @@ func TestRequestedShortfall_OnlyPromotedAndPresentAxes(t *testing.T) {
 // The contract sentence is user-facing copy, so it is pinned in both places a
 // user reads it.
 func TestRequestedExitContract_InHelpAndMan(t *testing.T) {
-	if !strings.Contains(normalizeCopy(setupUsage), requestedExitContract) {
+	if !strings.Contains(normalizeCopy(setup.Usage), requestedExitContract) {
 		t.Errorf("`pix help setup` must state the exit contract verbatim:\n%s", requestedExitContract)
 	}
 	b, err := man.Source(), error(nil)

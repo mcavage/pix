@@ -1,6 +1,6 @@
 // setup_keys_lock_test.go — the strict setup flow's provider-refs lock
 // behaviour. These live here, not in secret/, because their subject is
-// setupProvisionKeys (a cmd/pix workflow); the lock they observe belongs to
+// setup.SetupProvisionKeys (a cmd/pix workflow); the lock they observe belongs to
 // secret, but the sequencing under test is the workflow's.
 package main
 
@@ -14,6 +14,7 @@ import (
 
 	"pix/host/secret"
 	"pix/host/sys/systest"
+	"pix/host/workflow/setup"
 )
 
 // lockWindow returns the index of the first acquire and last release of
@@ -50,8 +51,8 @@ func TestStrictFlowHoldsLockThroughReconcile(t *testing.T) {
 	systest.Of(env.System).LockFn = systest.NewLockRecorder(t.Fatalf, &events).Lock
 
 	var out bytes.Buffer
-	if !setupProvisionKeys(env, strings.NewReader(""), &out, false, true) {
-		t.Fatalf("setupProvisionKeys strict flow failed: %s", out.String())
+	if !setup.SetupProvisionKeys(env, strings.NewReader(""), &out, false, true) {
+		t.Fatalf("setup.SetupProvisionKeys strict flow failed: %s", out.String())
 	}
 
 	lockPath := secret.ProviderRefsLockPath(env)
@@ -92,7 +93,7 @@ func TestLockAcquisitionErrorFailsStrictSetup(t *testing.T) {
 	env, _ := stepEnv(t, allRefs("", "", ""), "", "tok-value")
 	systest.Of(env.System).LockFn = func(string, func() error) error { return errors.New("lock dir unwritable") }
 	var out bytes.Buffer
-	if setupProvisionKeys(env, strings.NewReader(""), &out, false, true) {
+	if setup.SetupProvisionKeys(env, strings.NewReader(""), &out, false, true) {
 		t.Fatal("strict setup must fail when the provider-refs lock cannot be acquired")
 	}
 	if !strings.Contains(out.String(), "could not lock provider refs") {

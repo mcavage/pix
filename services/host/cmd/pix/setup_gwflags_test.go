@@ -1,4 +1,4 @@
-// setup_gwflags_test.go — checkGoogleWorkspaceFlags is setup's flag
+// setup_gwflags_test.go — setup.CheckGoogleWorkspaceFlags is setup's flag
 // validation, so its test lives with it.
 package main
 
@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"pix/host/workflow/onboard"
+	"pix/host/workflow/setup"
 )
 
 // TestCheckGoogleWorkspaceFlags_RequireOptIn covers AC-P0-312: --account and
@@ -26,9 +27,9 @@ func TestCheckGoogleWorkspaceFlags_RequireOptIn(t *testing.T) {
 		{"neither", onboard.Opts{}, false},
 	}
 	for _, c := range cases {
-		err := checkGoogleWorkspaceFlags(c.opts)
+		err := setup.CheckGoogleWorkspaceFlags(c.opts)
 		if (err != nil) != c.wantErr {
-			t.Errorf("%s: checkGoogleWorkspaceFlags(%+v) = %v, wantErr=%v", c.name, c.opts, err, c.wantErr)
+			t.Errorf("%s: setup.CheckGoogleWorkspaceFlags(%+v) = %v, wantErr=%v", c.name, c.opts, err, c.wantErr)
 		}
 	}
 }

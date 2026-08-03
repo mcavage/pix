@@ -34,6 +34,7 @@ import (
 	"pix/host/workflow/backup"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/man"
+	"pix/host/workflow/setup"
 	"pix/host/workflow/upgrade"
 )
 
@@ -64,7 +65,7 @@ func main() {
 	if len(args) == 0 {
 		// Bare `pix` shows STATUS — never launches a sandbox (launching is
 		// explicit behind `run`). On a fresh host with no config, offer onboarding.
-		if maybeFirstRun() {
+		if setup.MaybeFirstRun() {
 			return
 		}
 		runStatusCmd(nil)
@@ -91,7 +92,7 @@ func main() {
 		}
 		fmt.Println(version)
 	case "config":
-		runConfig(args[1:])
+		setup.RunConfig(args[1:])
 	case "serve":
 		runServe(args[1:])
 	case "doctor":

@@ -1,4 +1,4 @@
-package main
+package setup
 
 import (
 	"fmt"
@@ -23,13 +23,13 @@ var (
 	// ollamaCloudProbeTimeout bounds a cloud probe: a pure network round trip
 	// that holds no local resource.
 	ollamaCloudProbeTimeout = 20 * time.Second
-	// ollamaLocalProbeTimeout bounds ONE cold local load, with nothing queued
+	// OllamaLocalProbeTimeout bounds ONE cold local load, with nothing queued
 	// ahead of it because the local set is serialized.
-	ollamaLocalProbeTimeout = 90 * time.Second
-	// ollamaLocalProbeBudget is the TOTAL wall clock the serialized local set may
+	OllamaLocalProbeTimeout = 90 * time.Second
+	// OllamaLocalProbeBudget is the TOTAL wall clock the serialized local set may
 	// spend. Four pulled rungs at 90s each is a pathological box, not a setup a
 	// user should sit through.
-	ollamaLocalProbeBudget = 300 * time.Second
+	OllamaLocalProbeBudget = 300 * time.Second
 )
 
 // readSetupLine consumes exactly one line without a buffered reader that could
@@ -52,86 +52,6 @@ func readSetupLine(in io.Reader) (string, bool) {
 			return strings.TrimSpace(b.String()), true
 		}
 	}
-}
-
-// setupChooseInference owns the single ordinary-user inference question. It
-// is skipped when a pack or prior setup already supplied a backend. Ollama is
-// shown only after both binary and daemon probes succeed.
-func setupChooseInference(cfg *config.Config, env hostenv.Env, in io.Reader, out io.Writer, interactive bool) (bool, error) {
-	if cfg == nil {
-		return false, nil
-	}
-	if len(cfg.Inference.Backends) > 0 {
-		if inference.InferenceNeedsOnePassword(cfg) {
-			return false, nil
-		}
-		if err := enableDeclaredInferenceBindings(cfg); err != nil {
-			return false, err
-		}
-		return true, nil
-	}
-	if !interactive {
-		return false, nil
-	}
-	ollamaReady := false
-	if _, err := env.LookPath("ollama"); err == nil {
-		_, timedOut, runErr := env.RunTimed("ollama", "list")
-		ollamaReady = runErr == nil && !timedOut
-	}
-	fmt.Fprintln(out, "How should Pix run models? (choose one or more, comma-separated)")
-	fmt.Fprintln(out, "  1. API key (default)     Anthropic / OpenAI / Google keys, resolved from 1Password")
-	if ollamaReady {
-		fmt.Fprintln(out, "  2. Ollama local          models that run on this machine")
-	}
-	fmt.Fprintln(out, "  3. Custom gateway        an OpenAI-compatible endpoint you host")
-	if ollamaReady {
-		fmt.Fprintln(out, "  4. Ollama Cloud          large models on your ollama.com subscription")
-		// A HINT, not entitlement. A `:cloud` row in the listing appears on every
-		// signed-in machine and proves nothing about what the plan may call — that
-		// inference is exactly how a gated model got bound and 401'd at call time.
-		if n := listedCloudTagCount(env); n > 0 {
-			fmt.Fprintf(out, "  (this machine lists %d cloud model(s); Pix proves which ones your plan can call)\n", n)
-		}
-	}
-	fmt.Fprint(out, "Choose [1]: ")
-	choice, ok := readSetupLine(in)
-	if !ok {
-		return false, fmt.Errorf("no inference choice; setup cannot continue")
-	}
-	if strings.TrimSpace(choice) == "" {
-		return false, nil
-	}
-	selected := map[string]bool{}
-	for _, raw := range strings.FieldsFunc(strings.ToLower(choice), func(r rune) bool { return r == ',' || r == ' ' }) {
-		switch raw {
-		case "1", "api":
-			selected["api"] = true
-		case "2", "ollama", "ollama-local", "local":
-			selected["ollama"] = true
-		case "3", "gateway":
-			selected["gateway"] = true
-		case "4", "ollama-cloud", "cloud":
-			selected["ollama-cloud"] = true
-		default:
-			return false, fmt.Errorf("unknown inference choice %q", raw)
-		}
-	}
-	if selected["ollama"] || selected["ollama-cloud"] {
-		if !ollamaReady {
-			return false, fmt.Errorf("Ollama is not installed and healthy, so it is not an available inference choice")
-		}
-		sel := ollamaSelection{Local: selected["ollama"], Cloud: selected["ollama-cloud"]}
-		if _, err := configureOllamaInference(cfg, env, sel, out); err != nil {
-			return false, err
-		}
-	}
-	if selected["gateway"] {
-		if _, err := configureCustomGateway(cfg, in, out); err != nil {
-			return false, err
-		}
-	}
-	// false means the caller must continue through the direct-key transaction.
-	return !selected["api"], nil
 }
 
 func configureCustomGateway(cfg *config.Config, in io.Reader, out io.Writer) (bool, error) {
@@ -191,14 +111,14 @@ func configureCustomGateway(cfg *config.Config, in io.Reader, out io.Writer) (bo
 	return true, nil
 }
 
-// ollamaSelection is what the user chose in the inference prompt. Local and
+// OllamaSelection is what the user chose in the inference prompt. Local and
 // Cloud are separate answers because they are separate products: a `:cloud`
 // row in `ollama list` shows up on every signed-in machine and says nothing
 // about what this machine can RUN, and a local model says nothing about what
 // the subscription may CALL.
-type ollamaSelection struct{ Local, Cloud bool }
+type OllamaSelection struct{ Local, Cloud bool }
 
-// ollamaPlan is what configureOllamaInference decided, for the caller to render
+// ollamaPlan is what ConfigureOllamaInference decided, for the caller to render
 // and for the models step to act on. It contains no success claims: every
 // binding it created is a CANDIDATE (Verified: false) until a probe says
 // otherwise.
@@ -206,7 +126,7 @@ type ollamaPlan struct {
 	Endpoint   string          // resolved via axis.EffectiveOllamaEndpoint
 	LocalBound []string        // catalog ids bound as candidates from the listing
 	CloudBound []string        // ditto, cloud
-	WantPull   string          // the RAM-appropriate rung handed to setupLocalModels
+	WantPull   string          // the RAM-appropriate rung handed to SetupLocalModels
 	SkippedRAM []string        // catalog local ids this machine cannot run
 	Memory     axis.HostMemory // the reading that sized the offer
 	// BestFit is the largest local rung this machine can run, pulled or not. It
@@ -266,7 +186,7 @@ func listedCloudTagCount(env hostenv.Env) int {
 	return n
 }
 
-// configureOllamaInference binds CANDIDATES, never verified models. It splits
+// ConfigureOllamaInference binds CANDIDATES, never verified models. It splits
 // the catalog on Model.Local so "Ollama local" and "Ollama Cloud" are the two
 // separate answers they are, gates local rungs on the memory this machine
 // actually has, and — crucially — NEVER hard-fails a user who has not pulled
@@ -276,7 +196,7 @@ func listedCloudTagCount(env hostenv.Env) int {
 // replacement writes the RAM-appropriate rung to cfg.OllamaBridgeModel and lets
 // it flow through the models step's EXISTING consent — there is no second
 // consent mechanism, and a bare --yes still downloads nothing.
-func configureOllamaInference(cfg *config.Config, env hostenv.Env, sel ollamaSelection, out io.Writer) (ollamaPlan, error) {
+func ConfigureOllamaInference(cfg *config.Config, env hostenv.Env, sel OllamaSelection, out io.Writer) (ollamaPlan, error) {
 	if out == nil {
 		out = io.Discard
 	}
@@ -306,7 +226,7 @@ func configureOllamaInference(cfg *config.Config, env hostenv.Env, sel ollamaSel
 		}
 		bound[m.ID] = true
 		cfg.Inference.Models = append(cfg.Inference.Models, config.InferenceModelBinding{
-			// A listing is not evidence. verifyOllamaInference earns Verified with a
+			// A listing is not evidence. VerifyOllamaInference earns Verified with a
 			// bounded, model-specific request through the resolved endpoint.
 			Model: m.ID, Backend: "ollama", Upstream: axis.OllamaTagFor(m.ID), Available: true,
 		})
@@ -362,7 +282,7 @@ func configureOllamaInference(cfg *config.Config, env hostenv.Env, sel ollamaSel
 	}
 	if sel.Local && rungOK {
 		// The rung is the local model Pix will call and the tag the bridge exposes.
-		// Writing it BEFORE consent is deliberate and safe: setupLocalModels reads
+		// Writing it BEFORE consent is deliberate and safe: SetupLocalModels reads
 		// this key to build its readiness axes, so the tag must exist in config
 		// before the step that asks about it — and naming a tag is a declared
 		// intent, not a claim (Verified stays false, the binding is not callable,
@@ -375,7 +295,7 @@ func configureOllamaInference(cfg *config.Config, env hostenv.Env, sel ollamaSel
 	// An Ollama selection that produced NOTHING must not be persisted. Deleting
 	// the old hard error left this function returning nil with an empty plan, so
 	// the keys step reached cfg.Save() and wrote a backend with no models — and
-	// the NEXT `pix setup` early-returns into enableDeclaredInferenceBindings
+	// the NEXT `pix setup` early-returns into EnableDeclaredInferenceBindings
 	// ("configured but declares no models"), which is fatal. That bricks setup
 	// until `pix state reset`, with config.toml hand-editing forbidden. Reachable
 	// two ways: picking Ollama Cloud while signed out (no :cloud rows listed), and
@@ -396,7 +316,7 @@ func configureOllamaInference(cfg *config.Config, env hostenv.Env, sel ollamaSel
 // emptyOllamaSelectionMessage names the ONE thing that would change the answer,
 // per selected flow, instead of a generic "nothing matched". Nothing has been
 // persisted by the time this is rendered.
-func emptyOllamaSelectionMessage(sel ollamaSelection, plan ollamaPlan) string {
+func emptyOllamaSelectionMessage(sel OllamaSelection, plan ollamaPlan) string {
 	var reasons []string
 	if sel.Local {
 		switch {
@@ -414,156 +334,7 @@ func emptyOllamaSelectionMessage(sel ollamaSelection, plan ollamaPlan) string {
 	return "Ollama was selected but nothing is callable through it (" + strings.Join(reasons, "; ") + "). Nothing was saved; re-run `pix setup` and choose Ollama Cloud or an API key."
 }
 
-// verifyOllamaInference earns Verified for ollama bindings with an actual
-// model-specific request through the RESOLVED endpoint. Every binding is
-// checked independently. CLOUD probes run concurrently (they are network round
-// trips and hold no local resource). LOCAL probes are SERIALIZED and unload
-// after themselves: two concurrent generates make Ollama co-load two sets of
-// weights, which either exhausts the memory budget readiness_hardware.go just
-// computed or serializes the loads anyway behind timers that started at
-// dispatch — so the second reports a timeout it never got a turn to spend, and
-// un-binds a model that works. Mirrors verifyDirectInference in structure, not
-// in concurrency.
-//
-// The local set runs LARGEST RUNG FIRST under its own wall budget, and a probe
-// is never STARTED unless its full timeout fits what remains: the budget can
-// therefore never manufacture a timeout. A candidate the budget never reached
-// is `not probed` — a THIRD state that is neither verified nor failed, excluded
-// from attempted, and never rendered as a rejection.
-//
-// Deviation from the design's signature: it takes an io.Writer (the design's
-// own output spec prints a live line per local probe, which cannot be done
-// without one) and returns the notProbed set (the third state has to be
-// observable to be assertable).
-func verifyOllamaInference(cfg *config.Config, env hostenv.Env, out io.Writer) (res probeOutcome, err error) {
-	if cfg == nil {
-		return res, fmt.Errorf("verify ollama inference: no config")
-	}
-	if env.OllamaInference == nil {
-		return res, errNoProbeSeam
-	}
-	if out == nil {
-		out = io.Discard
-	}
-	reg, err := routing.LoadRegistry()
-	if err != nil {
-		return res, fmt.Errorf("verify ollama inference: %w", err)
-	}
-	endpoint := strings.TrimRight(axis.EffectiveOllamaEndpoint(cfg, env).URL, "/")
-	type candidate struct {
-		index  int
-		label  string
-		Tag    string
-		numCtx int
-		minRAM float64
-	}
-	var local, cloud []candidate
-	for i := range cfg.Inference.Models {
-		binding := &cfg.Inference.Models[i]
-		backend, ok := cfg.Inference.Backends[binding.Backend]
-		if !ok || backend.Driver != "ollama" || !binding.Available || !inference.Allowed(cfg, *binding) {
-			continue
-		}
-		if binding.Source != "" {
-			// A pack's authority is the sandbox smoke test; a host probe must not
-			// demote what it cannot faithfully replay.
-			continue
-		}
-		// Demote first: a stale claim (including a pre-provenance listing-derived
-		// one) must never survive a run that could not re-earn it.
-		binding.Verified, binding.VerifiedBy, binding.VerifiedAt = false, "", ""
-		c := candidate{index: i, label: binding.Model, Tag: binding.Upstream}
-		m, found := reg.Get(binding.Model)
-		if found && m.Local {
-			// num_ctx is the rung's DECLARED context budget, so the probe allocates
-			// the same KV cache the RAM gate priced. A rung that cannot hold its own
-			// declared context fails here, which is exactly when we want to find out.
-			c.numCtx, c.minRAM = m.ContextWindow, m.MinRAMGB
-			local = append(local, c)
-			continue
-		}
-		cloud = append(cloud, c)
-	}
-
-	promote := func(index int) {
-		cfg.Inference.Models[index].Verified = true
-		cfg.Inference.Models[index].VerifiedBy = config.VerifiedByProbe
-		cfg.Inference.Models[index].VerifiedAt = time.Now().UTC().Format(time.RFC3339)
-		res.Verified++
-	}
-
-	// Cloud: concurrent. Nothing local is held, so N probes cost one timeout.
-	type result struct {
-		index int
-		label string
-		err   error
-	}
-	results := make(chan result, len(cloud))
-	for _, c := range cloud {
-		res.Attempted++
-		go func(c candidate) {
-			results <- result{index: c.index, label: c.label, err: env.OllamaInference(endpoint, c.Tag, 0, ollamaCloudProbeTimeout)}
-		}(c)
-	}
-
-	// Local: strictly serial, largest rung first, each unloading after itself.
-	sort.Slice(local, func(i, j int) bool {
-		if local[i].minRAM != local[j].minRAM {
-			return local[i].minRAM > local[j].minRAM
-		}
-		return local[i].label < local[j].label
-	})
-	if len(local) > 0 {
-		fmt.Fprintf(out, "  verifying %d local ollama model(s), one at a time (each is loaded and unloaded) ...\n", len(local))
-	}
-	remaining := ollamaLocalProbeBudget
-	for _, c := range local {
-		if remaining < ollamaLocalProbeTimeout {
-			// NOT a failure: this candidate never got a turn. Reporting it as broken
-			// would let a budget un-bind a healthy model.
-			res.NotProbed = append(res.NotProbed, c.label)
-			fmt.Fprintf(out, "    %-14s not probed — %.0fs left of the %.0fs local budget, less than one probe's %.0fs\n",
-				c.Tag, remaining.Seconds(), ollamaLocalProbeBudget.Seconds(), ollamaLocalProbeTimeout.Seconds())
-			continue
-		}
-		res.Attempted++
-		start := time.Now()
-		err := env.OllamaInference(endpoint, c.Tag, c.numCtx, ollamaLocalProbeTimeout)
-		elapsed := time.Since(start)
-		if remaining -= elapsed; remaining < 0 {
-			remaining = 0
-		}
-		if err != nil {
-			res.Failures = append(res.Failures, c.label+": "+err.Error())
-			fmt.Fprintf(out, "    %-14s failed (%.0fs): %v\n", c.Tag, elapsed.Seconds(), err)
-			continue
-		}
-		promote(c.index)
-		fmt.Fprintf(out, "    %-14s ok (%.0fs)\n", c.Tag, elapsed.Seconds())
-	}
-
-	for range cloud {
-		r := <-results
-		if r.err != nil {
-			res.Failures = append(res.Failures, r.label+": "+r.err.Error())
-			continue
-		}
-		promote(r.index)
-	}
-	sort.Strings(res.Failures)
-	sort.Strings(res.NotProbed)
-	return res, nil
-}
-
-// configureModelRoster turns the broad set of backend bindings into the small,
-// explicit catalog-model surface agents may use. The router continues to pick
-// by intent, but it can never escape this roster. A mandatory pack is already
-// an explicit policy decision and therefore skips the personal roster prompt.
-func configureModelRoster(cfg *config.Config, in io.Reader, out io.Writer, interactive bool, requested string) error {
-	return configureModelRosterFrom(cfg, in, out, interactive, requested, nil)
-}
-
-// configureModelRosterFrom is configureModelRoster with the pre-mutation
+// configureModelRosterFrom is ConfigureModelRoster with the pre-mutation
 // provider set injected, which is what makes "a provider the user has not been
 // offered yet" answerable at all.
 //
@@ -659,7 +430,7 @@ func configureModelRosterFrom(cfg *config.Config, in io.Reader, out io.Writer, i
 	// this whole path exists to close.
 	//
 	// The widening itself happens in widenRosterForNewProviders, BEFORE the probe
-	// (see reconcileDirectInference): verifyDirectInference only probes bindings
+	// (see ReconcileDirectInference): VerifyDirectInference only probes bindings
 	// the roster already allows, so a roster widened after verification would
 	// name models that were never probed, and therefore are not callable, and so
 	// get pruned right back out here. Roster and probe are mutually gating; the
@@ -708,11 +479,11 @@ func configureModelRosterFrom(cfg *config.Config, in io.Reader, out io.Writer, i
 	return nil
 }
 
-// enableDeclaredInferenceBindings promotes pack-declared bindings into the
+// EnableDeclaredInferenceBindings promotes pack-declared bindings into the
 // create-time candidate set. The final sandbox smoke test remains the success
 // authority because sbx-session authentication exists only on the sandbox data
 // plane and cannot be faithfully replayed by a host HTTP probe.
-func enableDeclaredInferenceBindings(cfg *config.Config) error {
+func EnableDeclaredInferenceBindings(cfg *config.Config) error {
 	if cfg == nil || len(cfg.Inference.Backends) == 0 || len(cfg.Inference.Models) == 0 {
 		return fmt.Errorf("inference backend is configured but declares no models")
 	}
@@ -729,11 +500,11 @@ func enableDeclaredInferenceBindings(cfg *config.Config) error {
 	return nil
 }
 
-// configureDirectInference derives native backend bindings from the provider
+// ConfigureDirectInference derives native backend bindings from the provider
 // refs setup just validated and reconciled. The model catalog remains the one
 // source of model metadata; adding a key never copies a second model list into
 // setup code.
-func configureDirectInference(cfg *config.Config, providers []string) error {
+func ConfigureDirectInference(cfg *config.Config, providers []string) error {
 	reg, err := routing.LoadRegistry()
 	if err != nil {
 		return err
@@ -763,7 +534,7 @@ func configureDirectInference(cfg *config.Config, providers []string) error {
 			cfg.Inference.Models = append(cfg.Inference.Models, config.InferenceModelBinding{
 				// A present credential makes this binding a candidate; it does not
 				// prove that the account is entitled to this particular model.
-				// verifyDirectInference earns Verified with a bounded live request.
+				// VerifyDirectInference earns Verified with a bounded live request.
 				Model: m.ID, Backend: m.Provider, Upstream: m.ID, Available: true,
 			})
 		}
@@ -771,16 +542,16 @@ func configureDirectInference(cfg *config.Config, providers []string) error {
 	return nil
 }
 
-// verifyDirectInference earns Verified with an actual model-specific inference
+// VerifyDirectInference earns Verified with an actual model-specific inference
 // request. Every binding is independently checked; probes run concurrently so
 // the wall-clock bound is one probe timeout rather than N timeouts. Resolved
 // key bytes stay in process memory and are never included in errors or persisted.
-func verifyDirectInference(cfg *config.Config, env hostenv.Env) (res probeOutcome, err error) {
+func VerifyDirectInference(cfg *config.Config, env hostenv.Env) (res probeOutcome, err error) {
 	if cfg == nil {
 		return res, fmt.Errorf("verify direct inference: no config")
 	}
 	if env.DirectInference == nil {
-		return res, errNoProbeSeam
+		return res, ErrNoProbeSeam
 	}
 	type candidate struct {
 		index           int
@@ -915,7 +686,7 @@ func recordRosterProviders(cfg *config.Config, candidates []routing.Model) {
 	cfg.Inference.RosterProviders = out
 }
 
-func containsString(haystack []string, needle string) bool {
+func ContainsString(haystack []string, needle string) bool {
 	for _, s := range haystack {
 		if s == needle {
 			return true
@@ -924,11 +695,11 @@ func containsString(haystack []string, needle string) bool {
 	return false
 }
 
-// errInferenceExclusive is returned when a mandatory pack owns the whole
+// ErrInferenceExclusive is returned when a mandatory pack owns the whole
 // inference surface. It is a REFUSAL, not a failure: adding a key would write
 // bindings that the topology filter then silently drops, so reporting success
 // would be a success word with nothing behind it.
-var errInferenceExclusive = fmt.Errorf("a mandatory pack owns inference on this host")
+var ErrInferenceExclusive = fmt.Errorf("a mandatory pack owns inference on this host")
 
 // probeOutcome is what a verification pass ESTABLISHED, as one value instead of
 // four positional returns. Attempted/Verified/Failures were already a tuple
@@ -946,17 +717,17 @@ type probeOutcome struct {
 	NotProbed []string
 }
 
-// errNoProbeSeam is returned when a verify function is handed a hostenv.Env with no
+// ErrNoProbeSeam is returned when a verify function is handed a hostenv.Env with no
 // probe function. That is a PROGRAMMING error, not a runtime condition, and it
 // used to be returned as `0 attempted, 0 verified, no failures` — a value
 // indistinguishable from a clean pass that found nothing to do. A caller then
 // printed "0 model(s) answered a live request" and exited zero.
 //
 // It cost a real debugging cycle, and worse: it made the hard-error branch in
-// runSetupInferenceStep unreachable from its own test, hiding a bug where
+// RunSetupInferenceStep unreachable from its own test, hiding a bug where
 // declining a model download exited non-zero. Absence rendered as a benign
 // value is the same shape as the availability bug this package spent a week on.
-var errNoProbeSeam = fmt.Errorf("no inference probe is configured on this hostenv.Env (use defaultShellEnv, or inject a probe in tests)")
+var ErrNoProbeSeam = fmt.Errorf("no inference probe is configured on this hostenv.Env (use defaultShellEnv, or inject a probe in tests)")
 
 // reconcileResult is what a reconcile actually did and proved.
 type reconcileResult struct {
@@ -965,86 +736,7 @@ type reconcileResult struct {
 	probeOutcome
 }
 
-// reconcileDirectInference turns the provider keys that exist on this host into
-// callable model bindings. It is the sequence that used to live only inside
-// setup's keys step, which is why adding a key any other way left it inert:
-// `pix secret set` wrote the ref, and nothing ever rebuilt the bindings, probed
-// them, or widened the roster.
-//
-// Order is load-bearing and matches the step it was extracted from:
-//
-//		capture prior providers -> bind -> verify -> save -> judge -> roster
-//
-//	  - The prior set is captured BEFORE binding, or widening cannot see what is
-//	    new (see rosterSeenProviders).
-//	  - cfg.Save() happens BEFORE the verified==0 verdict, so a partial success is
-//	    never thrown away by the error path.
-//	  - verified == 0 with something attempted is a hard error; verified > 0 with
-//	    some failures is not.
-//
-// requestedProvider is the provider the USER named on the command line
-// (`pix models add google`), or "" for setup's own reconcile. It is the only
-// thing that can override the roster's already-offered stamp — see
-// widenRosterForProvider.
-func reconcileDirectInference(cfg *config.Config, env hostenv.Env, in io.Reader, out io.Writer, interactive bool, requestedModels, requestedProvider string) (reconcileResult, error) {
-	var res reconcileResult
-	if cfg == nil {
-		return res, fmt.Errorf("no config")
-	}
-	if cfg.Inference.ExclusiveSource != "" {
-		return res, errInferenceExclusive
-	}
-	if out == nil {
-		out = io.Discard
-	}
-	prior := inference.BoundNativeProviders(cfg)
-
-	providers, err := secret.HostModeProviderKeys(env)
-	if err != nil {
-		return res, fmt.Errorf("reading configured providers: %w", err)
-	}
-	res.Providers = providers
-	for _, p := range providers {
-		if !prior[p] {
-			res.Added = append(res.Added, p)
-		}
-	}
-	sort.Strings(res.Added)
-
-	if err := configureDirectInference(cfg, providers); err != nil {
-		return res, fmt.Errorf("configuring direct inference: %w", err)
-	}
-	// Widen BEFORE probing. verifyDirectInference only probes bindings the roster
-	// allows (inferenceBindingAllowed), so on a config with a non-empty roster
-	// the newly added provider would otherwise never be probed, never become
-	// callable, and be pruned straight back out of the roster for not being
-	// callable — the key stays inert and the command still reports success.
-	widenRosterForNewProviders(cfg, prior)
-	widenRosterForProvider(cfg, requestedProvider)
-	outcome, verr := verifyDirectInference(cfg, env)
-	if verr != nil {
-		return res, fmt.Errorf("verifying provider keys: %w", verr)
-	}
-	res.probeOutcome = outcome
-	if err := cfg.Save(); err != nil {
-		return res, err
-	}
-	if res.Verified == 0 && (res.Attempted > 0 || len(res.Failures) > 0) {
-		detail := strings.Join(res.Failures, "; ")
-		if detail == "" {
-			detail = "no provider accepted a model-specific request"
-		}
-		return res, fmt.Errorf("provider keys resolved, but live inference verification failed: %s", detail)
-	}
-	if callable, _ := axis.ConfiguredInferenceSummary(cfg); callable > 0 || strings.TrimSpace(requestedModels) != "" {
-		if err := configureModelRosterFrom(cfg, in, out, interactive, requestedModels, prior); err != nil {
-			return res, fmt.Errorf("choosing models: %w", err)
-		}
-	}
-	return res, cfg.Save()
-}
-
-// widenRosterForProvider adds every bound catalog model of ONE provider to the
+// WidenRosterForProvider adds every bound catalog model of ONE provider to the
 // roster, whether or not the roster has been offered that provider before.
 //
 // This is what makes `pix models add <provider>` mean what it says.
@@ -1058,7 +750,7 @@ func reconcileDirectInference(cfg *config.Config, env hostenv.Env, in io.Reader,
 //
 // Matching is on the CATALOG model's provider, not the backend key, because
 // those need not be the same word (a gateway backend can serve anthropic models).
-func widenRosterForProvider(cfg *config.Config, provider string) {
+func WidenRosterForProvider(cfg *config.Config, provider string) {
 	if cfg == nil || provider == "" || cfg.Inference.ExclusiveSource != "" || len(cfg.Inference.AllowedModels) == 0 {
 		return // no explicit request, or an empty roster (already "no restriction")
 	}
@@ -1067,7 +759,7 @@ func widenRosterForProvider(cfg *config.Config, provider string) {
 		return
 	}
 	for _, b := range cfg.Inference.Models {
-		if !b.Available || containsString(cfg.Inference.AllowedModels, b.Model) {
+		if !b.Available || ContainsString(cfg.Inference.AllowedModels, b.Model) {
 			continue
 		}
 		if m, ok := reg.Get(b.Model); ok && m.Available && m.Provider == provider {
@@ -1076,7 +768,7 @@ func widenRosterForProvider(cfg *config.Config, provider string) {
 	}
 }
 
-// reconcileOllamaInference is reconcileDirectInference's counterpart for the one
+// ReconcileOllamaInference is ReconcileDirectInference's counterpart for the one
 // backend that has no key to store: Ollama. Same shape, same order, same
 // honesty rules — bind candidates, widen, probe, save, judge — but the evidence
 // comes from `ollama list` plus a model-specific generate through the resolved
@@ -1088,21 +780,21 @@ func widenRosterForProvider(cfg *config.Config, provider string) {
 // pulling a new local model or gaining a cloud entitlement left you re-running
 // `pix setup` to make Pix notice.
 //
-// Downloads nothing. configureOllamaInference may name a rung worth pulling; we
+// Downloads nothing. ConfigureOllamaInference may name a rung worth pulling; we
 // report that tag and let the user decide, because `models add` is a wiring
 // command and a multi-gigabyte download is not something to infer from it.
-func reconcileOllamaInference(cfg *config.Config, env hostenv.Env, in io.Reader, out io.Writer, interactive bool, sel ollamaSelection) (reconcileResult, ollamaPlan, error) {
+func ReconcileOllamaInference(cfg *config.Config, env hostenv.Env, in io.Reader, out io.Writer, interactive bool, sel OllamaSelection) (reconcileResult, ollamaPlan, error) {
 	var res reconcileResult
 	if cfg == nil {
 		return res, ollamaPlan{}, fmt.Errorf("no config")
 	}
 	if cfg.Inference.ExclusiveSource != "" {
-		return res, ollamaPlan{}, errInferenceExclusive
+		return res, ollamaPlan{}, ErrInferenceExclusive
 	}
 	if out == nil {
 		out = io.Discard
 	}
-	if err := requireOllamaReady(env); err != nil {
+	if err := RequireOllamaReady(env); err != nil {
 		return res, ollamaPlan{}, err
 	}
 	res.Providers = []string{"ollama"}
@@ -1110,7 +802,7 @@ func reconcileOllamaInference(cfg *config.Config, env hostenv.Env, in io.Reader,
 		res.Added = []string{"ollama"}
 	}
 
-	plan, err := configureOllamaInference(cfg, env, sel, out)
+	plan, err := ConfigureOllamaInference(cfg, env, sel, out)
 	if err != nil {
 		return res, plan, err
 	}
@@ -1118,9 +810,9 @@ func reconcileOllamaInference(cfg *config.Config, env hostenv.Env, in io.Reader,
 	// run on bindings the roster admits, so a newly bound model outside the roster
 	// would never be probed, never become callable, and be pruned right back out
 	// for not being callable.
-	widenRosterForProvider(cfg, "ollama")
+	WidenRosterForProvider(cfg, "ollama")
 
-	outcome, verr := verifyOllamaInference(cfg, env, out)
+	outcome, verr := VerifyOllamaInference(cfg, env, out)
 	if verr != nil {
 		return res, plan, fmt.Errorf("verifying ollama models: %w", verr)
 	}
@@ -1148,12 +840,12 @@ func reconcileOllamaInference(cfg *config.Config, env hostenv.Env, in io.Reader,
 	return res, plan, cfg.Save()
 }
 
-// requireOllamaReady refuses early with the ONE thing that would change the
+// RequireOllamaReady refuses early with the ONE thing that would change the
 // answer. Both probes matter and they fail differently: no binary means Ollama
 // is not installed, while a binary whose `list` hangs or errors means the daemon
 // is not running — and telling a user to install software they already have is
 // its own kind of wrong.
-func requireOllamaReady(env hostenv.Env) error {
+func RequireOllamaReady(env hostenv.Env) error {
 
 	if _, err := env.LookPath("ollama"); err != nil {
 		return fmt.Errorf("ollama is not installed or not on PATH — see https://ollama.com, then re-run")
@@ -1182,7 +874,7 @@ func widenRosterForNewProviders(cfg *config.Config, prior map[string]bool) {
 		return
 	}
 	for _, b := range cfg.Inference.Models {
-		if seen[b.Backend] || !b.Available || containsString(cfg.Inference.AllowedModels, b.Model) {
+		if seen[b.Backend] || !b.Available || ContainsString(cfg.Inference.AllowedModels, b.Model) {
 			continue
 		}
 		if m, ok := reg.Get(b.Model); ok && m.Available {

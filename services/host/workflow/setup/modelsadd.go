@@ -1,4 +1,4 @@
-package main
+package setup
 
 // modelsadd.go implements `pix models add <provider>`: the answer to "setup
 // told me I could add the others later, but I could not find where."
@@ -22,17 +22,17 @@ import (
 	"pix/host/secret"
 )
 
-// addKeyedProvider and addOllamaProvider are the two shapes a provider comes
+// AddKeyedProvider and AddOllamaProvider are the two shapes a provider comes
 // in. They RETURN errors: the command contract owns the exit code, so neither
 // calls os.Exit, and both are testable against a bytes.Buffer.
 //
 // They replaced runModelsAdd, which hand-parsed argv, validated the provider
-// name against a list it maintained separately from providerNames(), and exited
+// name against a list it maintained separately from ProviderNames(), and exited
 // the process from nine places.
-func addKeyedProvider(d *cli.Deps, cfg *config.Config, env hostenv.Env, provider string) error {
-	p, ok := providerByName(provider)
+func AddKeyedProvider(d *cli.Deps, cfg *config.Config, env hostenv.Env, provider string) error {
+	p, ok := ProviderByName(provider)
 	if !ok {
-		return cli.Usagef("unknown provider %q (want one of: %s)", provider, strings.Join(providerNames(), ", "))
+		return cli.Usagef("unknown provider %q (want one of: %s)", provider, strings.Join(ProviderNames(), ", "))
 	}
 	// Refuse under a mandatory pack BEFORE touching anything. configureDirect-
 	// Inference would happily write bindings that the topology filter then drops
@@ -48,7 +48,7 @@ func addKeyedProvider(d *cli.Deps, cfg *config.Config, env hostenv.Env, provider
 			return fmt.Errorf("no 1Password ref for %s yet, and there is no terminal to ask on.\n"+
 				"  pix secret set %s op://vault/item/field && pix models add %s", p.Name, p.EnvVar, p.Name)
 		}
-		if err := ensureSetupPrereqsFor(env, d.In, d.Out, d.Interactive, true); err != nil {
+		if err := EnsureSetupPrereqsFor(env, d.In, d.Out, d.Interactive, true); err != nil {
 			return err
 		}
 		ref, _, ok := promptProviderRef(env, bufio.NewScanner(d.In), d.Out, p)
@@ -59,7 +59,7 @@ func addKeyedProvider(d *cli.Deps, cfg *config.Config, env hostenv.Env, provider
 			return cli.SilentError{Code: 1}
 		}
 	}
-	res, err := reconcileDirectInference(cfg, env, d.In, d.Out, d.Interactive, "", p.Name)
+	res, err := ReconcileDirectInference(cfg, env, d.In, d.Out, d.Interactive, "", p.Name)
 	if err != nil {
 		return err
 	}
@@ -70,7 +70,7 @@ func addKeyedProvider(d *cli.Deps, cfg *config.Config, env hostenv.Env, provider
 	return nil
 }
 
-// addOllamaProvider is the keyless half. Ollama needs no credential, so there
+// AddOllamaProvider is the keyless half. Ollama needs no credential, so there
 // is no ref to prompt for and nothing to sync into sbx — the whole job is: is
 // the daemon up, what does it list, which of those can this machine/plan
 // actually run, and put the survivors in the roster.
@@ -80,16 +80,16 @@ func addKeyedProvider(d *cli.Deps, cfg *config.Config, env hostenv.Env, provider
 // this box can run), but a user typing `pix models add ollama` means "take
 // everything you can prove", and making them guess which flag they needed would
 // be the discoverability failure this command was written to end.
-func addOllamaProvider(d *cli.Deps, cfg *config.Config, env hostenv.Env, sel ollamaSelection) error {
+func AddOllamaProvider(d *cli.Deps, cfg *config.Config, env hostenv.Env, sel OllamaSelection) error {
 	if !sel.Local && !sel.Cloud {
-		sel = ollamaSelection{Local: true, Cloud: true}
+		sel = OllamaSelection{Local: true, Cloud: true}
 	}
 	if cfg.Inference.ExclusiveSource != "" {
 		return fmt.Errorf("the active pack (%s) owns inference on this host, so Ollama cannot be wired in.\n"+
 			"  It gets wired the moment the pack stops being the exclusive source (`pix pack rm`, or a pack that does not claim inference).",
 			cfg.Inference.ExclusiveSource)
 	}
-	res, plan, err := reconcileOllamaInference(cfg, env, d.In, d.Out, d.Interactive, sel)
+	res, plan, err := ReconcileOllamaInference(cfg, env, d.In, d.Out, d.Interactive, sel)
 	if err != nil {
 		return err
 	}
@@ -115,7 +115,7 @@ func renderModelsAddOllama(out io.Writer, res reconcileResult, plan ollamaPlan) 
 	case plan.WantPull != "":
 		fmt.Fprintf(out, "\nNot downloaded: %s is the largest local model that fits this machine, but it is not pulled.\n", plan.WantPull)
 		fmt.Fprintf(out, "  ollama pull %s && pix models add ollama --local\n", plan.WantPull)
-	case plan.BestFit != "" && !containsString(plan.LocalBoundTags(), plan.BestFit):
+	case plan.BestFit != "" && !ContainsString(plan.LocalBoundTags(), plan.BestFit):
 		fmt.Fprintf(out, "\nA larger local model fits this machine but is not pulled: %s\n", plan.BestFit)
 		fmt.Fprintf(out, "  ollama pull %s && pix models add ollama --local\n", plan.BestFit)
 	}
@@ -127,7 +127,7 @@ func renderModelsAddOllama(out io.Writer, res reconcileResult, plan ollamaPlan) 
 }
 
 // renderModelsAdd reports what was PROVEN, never what was merely written. The
-// verified count comes from verifyDirectInference's live per-model requests, so
+// verified count comes from VerifyDirectInference's live per-model requests, so
 // "callable" here is probe-backed; a provider whose models all failed their
 // probe is reported as a shortfall even though its key resolved fine.
 func renderModelsAdd(out io.Writer, provider string, res reconcileResult) {
@@ -142,11 +142,11 @@ func renderModelsAdd(out io.Writer, provider string, res reconcileResult) {
 	fmt.Fprintln(out, "      pix models route  (re-resolve intents onto it)")
 }
 
-// providerNames is what `models add` accepts, which is NOT the same list as
+// ProviderNames is what `models add` accepts, which is NOT the same list as
 // secret.ProviderKeyRefOrder: ollama is a provider you can add and has no key ref, and
 // leaving it out of the error message is how a user concludes it cannot be
 // added at all.
-func providerNames() []string {
+func ProviderNames() []string {
 	names := make([]string, 0, len(secret.ProviderKeyRefOrder)+1)
 	for _, p := range secret.ProviderKeyRefOrder {
 		names = append(names, p.Name)
@@ -156,10 +156,10 @@ func providerNames() []string {
 	return names
 }
 
-// providerByName accepts the provider name, its env var, and the obvious alias
+// ProviderByName accepts the provider name, its env var, and the obvious alias
 // (gemini for google), so a user who read the key name in a doc is not told
 // their own credential's name is wrong.
-func providerByName(raw string) (secret.ProviderKeyRef, bool) {
+func ProviderByName(raw string) (secret.ProviderKeyRef, bool) {
 	want := strings.ToLower(strings.TrimSpace(raw))
 	if want == "gemini" {
 		want = "google"
@@ -179,7 +179,7 @@ Wire a provider into callable models, end to end: rebuild the model bindings,
 prove each one with a live request, widen the roster to include it, and leave
 nothing claimed that was not proven.
 
-providers: ` + strings.Join(providerNames(), ", ") + `
+providers: ` + strings.Join(ProviderNames(), ", ") + `
 
   anthropic | openai | google    keyed. Stores the provider's 1Password ref if
                                  it has none yet (prompts on a terminal), then

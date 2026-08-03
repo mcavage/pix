@@ -1,4 +1,4 @@
-package main
+package setup
 
 import (
 	"encoding/json"
@@ -11,25 +11,25 @@ import (
 	"strings"
 )
 
-var setupHostOS = runtime.GOOS
+var SetupHostOS = runtime.GOOS
 
 const (
 	setupKitAllowedSource = "github.com/mcavage/"
 	setupKitSourcesKey    = "kit.allowedSources"
 )
 
-// ensureSetupPrereqs installs only Pix's two core host tools on macOS. Optional
+// EnsureSetupPrereqs installs only Pix's two core host tools on macOS. Optional
 // capabilities such as Ollama, gh, and gog are intentionally absent here.
 // Interactive setup asks once for the package category; unattended setup never
 // installs and returns exact commands instead.
-func ensureSetupPrereqs(env hostenv.Env, in io.Reader, out io.Writer, interactive bool) error {
-	return ensureSetupPrereqsFor(env, in, out, interactive, true)
+func EnsureSetupPrereqs(env hostenv.Env, in io.Reader, out io.Writer, interactive bool) error {
+	return EnsureSetupPrereqsFor(env, in, out, interactive, true)
 }
 
-// ensureSetupPrereqsFor lets setup defer installing 1Password until after
+// EnsureSetupPrereqsFor lets setup defer installing 1Password until after
 // explicit packs have contributed inference. A pack using sbx-session auth
 // must not make a keyless user install or sign into op.
-func ensureSetupPrereqsFor(env hostenv.Env, in io.Reader, out io.Writer, interactive, requireOp bool) error {
+func EnsureSetupPrereqsFor(env hostenv.Env, in io.Reader, out io.Writer, interactive, requireOp bool) error {
 	var missing []string
 	names := []string{"sbx"}
 	if requireOp {
@@ -55,7 +55,7 @@ func ensureSetupPrereqsFor(env hostenv.Env, in io.Reader, out io.Writer, interac
 		}
 		return strings.Join(lines, "\n")
 	}
-	if setupHostOS != "darwin" {
+	if SetupHostOS != "darwin" {
 		return fmt.Errorf("missing required host tool(s): %s\n%s", strings.Join(missing, ", "), fix())
 	}
 	if _, err := env.LookPath("brew"); err != nil {
@@ -89,9 +89,9 @@ func ensureSetupPrereqsFor(env hostenv.Env, in io.Reader, out io.Writer, interac
 	return nil
 }
 
-// ensureSetupSbxSession drives Docker's own login flow when the sbx control
+// EnsureSetupSbxSession drives Docker's own login flow when the sbx control
 // plane is not usable. It creates no Pix account and stores no Docker token.
-func ensureSetupSbxSession(env hostenv.Env, out io.Writer, interactive bool) error {
+func EnsureSetupSbxSession(env hostenv.Env, out io.Writer, interactive bool) error {
 	if _, timedOut, err := env.RunTimed("sbx", "ls"); err == nil && !timedOut {
 		return nil
 	}
@@ -108,17 +108,17 @@ func ensureSetupSbxSession(env hostenv.Env, out io.Writer, interactive bool) err
 	return nil
 }
 
-// ensureSetupSbxDefaults owns the two one-time sbx settings Pix needs before
+// EnsureSetupSbxDefaults owns the two one-time sbx settings Pix needs before
 // its first sandbox can be created. It preserves an existing network policy and
 // every existing kit publisher; setup only fills missing first-run state.
-func ensureSetupSbxDefaults(env hostenv.Env) error {
-	if err := ensureSetupKitAllowedSource(env); err != nil {
+func EnsureSetupSbxDefaults(env hostenv.Env) error {
+	if err := EnsureSetupKitAllowedSource(env); err != nil {
 		return err
 	}
-	return ensureSetupOpenNetworkPolicy(env)
+	return EnsureSetupOpenNetworkPolicy(env)
 }
 
-func ensureSetupKitAllowedSource(env hostenv.Env) error {
+func EnsureSetupKitAllowedSource(env hostenv.Env) error {
 	out, timedOut, err := env.RunTimed("sbx", "settings", "get", setupKitSourcesKey)
 	if err != nil || timedOut {
 		return fmt.Errorf("reading Docker Sandboxes kit allowlist: %w", setupProbeError(err, timedOut))
@@ -157,8 +157,8 @@ func ensureSetupKitAllowedSource(env hostenv.Env) error {
 	return fmt.Errorf("Docker Sandboxes did not retain Pix's kit publisher; run: sbx settings set %s '[\"docker.io/\",\"%s\"]'", setupKitSourcesKey, setupKitAllowedSource)
 }
 
-func ensureSetupOpenNetworkPolicy(env hostenv.Env) error {
-	initialized, inspectErr := setupSbxNetworkPolicyInitialized(env)
+func EnsureSetupOpenNetworkPolicy(env hostenv.Env) error {
+	initialized, inspectErr := SetupSbxNetworkPolicyInitialized(env)
 	if initialized {
 		return nil
 	}
@@ -166,7 +166,7 @@ func ensureSetupOpenNetworkPolicy(env hostenv.Env) error {
 		// Some sbx versions report uninitialized policy state as an error, while
 		// an already-initialized daemon rejects a second init. Re-probe after a
 		// rejected init so setup preserves an existing policy across both forms.
-		if after, afterErr := setupSbxNetworkPolicyInitialized(env); afterErr == nil && after {
+		if after, afterErr := SetupSbxNetworkPolicyInitialized(env); afterErr == nil && after {
 			return nil
 		}
 		if inspectErr != nil {
@@ -174,7 +174,7 @@ func ensureSetupOpenNetworkPolicy(env hostenv.Env) error {
 		}
 		return fmt.Errorf("initializing Docker Sandboxes network policy: %w", err)
 	}
-	initialized, err := setupSbxNetworkPolicyInitialized(env)
+	initialized, err := SetupSbxNetworkPolicyInitialized(env)
 	if err != nil {
 		return err
 	}
@@ -184,7 +184,7 @@ func ensureSetupOpenNetworkPolicy(env hostenv.Env) error {
 	return nil
 }
 
-func setupSbxNetworkPolicyInitialized(env hostenv.Env) (bool, error) {
+func SetupSbxNetworkPolicyInitialized(env hostenv.Env) (bool, error) {
 	out, timedOut, err := env.RunTimed("sbx", "policy", "ls", "--source", "local", "--type", "network", "--json")
 	if err != nil || timedOut {
 		return false, fmt.Errorf("reading Docker Sandboxes network policy: %w", setupProbeError(err, timedOut))

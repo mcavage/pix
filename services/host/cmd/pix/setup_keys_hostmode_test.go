@@ -1,4 +1,4 @@
-// setup_keys_hostmode_test.go — subject is setupProvisionKeys, a cmd/pix
+// setup_keys_hostmode_test.go — subject is setup.SetupProvisionKeys, a cmd/pix
 // workflow, so the test lives here even though the state it inspects belongs
 // to the secret capability.
 package main
@@ -12,10 +12,11 @@ import (
 
 	"pix/host/hostenv"
 	"pix/host/sys/systest"
+	"pix/host/workflow/setup"
 )
 
 // A ref found ONLY in hostmode.env (secret.CurrentOpRef's cross-file lookup) must be
-// backfilled into op-refs.env by setupProvisionKeys itself; if that write
+// backfilled into op-refs.env by setup.SetupProvisionKeys itself; if that write
 // fails, setup fails outright — even when sbx can't be probed at all (the old
 // bug: the ignored backfill let a fail-open final probe mask a real write
 // failure).
@@ -63,7 +64,7 @@ func TestSetupProvisionKeys_HasRefOnlyInHostMode_UnwritableOpRefsFailsEvenSbxUna
 		return "", nil
 	}}}
 	var out bytes.Buffer
-	if setupProvisionKeys(env, strings.NewReader(""), &out, true, false) {
+	if setup.SetupProvisionKeys(env, strings.NewReader(""), &out, true, false) {
 		t.Fatal("an unwritable op-refs.env must fail setup even when sbx can't be probed at all")
 	}
 	if !strings.Contains(out.String(), "op-refs.env") {

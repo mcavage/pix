@@ -1,4 +1,4 @@
-package main
+package setup
 
 import (
 	"fmt"
@@ -23,14 +23,14 @@ import (
 // grant. Local stdio servers (gog/slack/…) are untouched: they keep the
 // mcp.RegisterServers path.
 
-// verifyCatalogMCPReady is the gate itself: every shipped-catalog name in
+// VerifyCatalogMCPReady is the gate itself: every shipped-catalog name in
 // names (derived from mcp.McpCatalogNames — non-catalog names are never probed
 // here) must classify mcp.CatalogMCPReady, or the whole operation fails with the
 // exact repair command before the host phase saves its proposal or launches a
 // sandbox. Pack adoption may already have committed launcher-owned pack state,
 // so errors deliberately make no global "nothing was saved" claim. One
 // bounded `sbx mcp ls` is shared across all names.
-func verifyCatalogMCPReady(env hostenv.Env, names []string) error {
+func VerifyCatalogMCPReady(env hostenv.Env, names []string) error {
 	var catalog []string
 	seen := map[string]bool{}
 	for _, n := range names {

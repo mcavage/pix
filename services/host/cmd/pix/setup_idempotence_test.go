@@ -14,6 +14,7 @@ package main
 
 import (
 	"bytes"
+	"pix/host/workflow/setup"
 	"strings"
 	"testing"
 )
@@ -40,7 +41,7 @@ func TestSetup_TwoRuns_ByteIdenticalVerdicts_SecondIsNoOp(t *testing.T) {
 	stubProvisionKeysOK(t)
 
 	var first bytes.Buffer
-	if err := setupHostPhase(env, []string{"--yes", "--pull-models"}, strings.NewReader(""), &first, false); err != nil {
+	if err := setup.SetupHostPhase(env, []string{"--yes", "--pull-models"}, strings.NewReader(""), &first, false); err != nil {
 		t.Fatalf("first run failed: %v\n%s", err, first.String())
 	}
 	firstPulls := w.count("ollama pull")
@@ -50,7 +51,7 @@ func TestSetup_TwoRuns_ByteIdenticalVerdicts_SecondIsNoOp(t *testing.T) {
 	firstInits := w.count("git -C")
 
 	var second bytes.Buffer
-	if err := setupHostPhase(env, []string{"--yes", "--pull-models"}, strings.NewReader(""), &second, false); err != nil {
+	if err := setup.SetupHostPhase(env, []string{"--yes", "--pull-models"}, strings.NewReader(""), &second, false); err != nil {
 		t.Fatalf("second run failed: %v\n%s", err, second.String())
 	}
 
@@ -74,10 +75,10 @@ func TestSetup_AlreadyReady_RunsAreIdentical(t *testing.T) {
 	stubProvisionKeysOK(t)
 
 	var a, b bytes.Buffer
-	if err := setupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &a, false); err != nil {
+	if err := setup.SetupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &a, false); err != nil {
 		t.Fatalf("first run failed: %v\n%s", err, a.String())
 	}
-	if err := setupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &b, false); err != nil {
+	if err := setup.SetupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &b, false); err != nil {
 		t.Fatalf("second run failed: %v\n%s", err, b.String())
 	}
 	if renderedVerdicts(t, a.String()) != renderedVerdicts(t, b.String()) {

@@ -6,6 +6,7 @@ package main
 import (
 	"pix/host/service"
 	"pix/host/workflow/man"
+	"pix/host/workflow/setup"
 	"regexp"
 	"sort"
 	"strings"
@@ -103,7 +104,7 @@ func documentedManVerbs(t *testing.T) map[string]bool {
 }
 
 // configKeysFromHelp parses the canonical settable key names out of the CLI's own
-// configKeysHelp constant (the single source of truth the `config set/get/unset`
+// setup.ConfigKeysHelp constant (the single source of truth the `config set/get/unset`
 // help prints). Key lines are indented exactly two spaces followed by the key
 // token; wrapped description lines are indented further, so they are ignored.
 func configKeysFromHelp(t *testing.T) []string {
@@ -111,14 +112,14 @@ func configKeysFromHelp(t *testing.T) []string {
 	re := regexp.MustCompile(`(?m)^  ([a-z][a-z_.]+) `)
 	seen := map[string]bool{}
 	var keys []string
-	for _, m := range re.FindAllStringSubmatch(configKeysHelp, -1) {
+	for _, m := range re.FindAllStringSubmatch(setup.ConfigKeysHelp, -1) {
 		if !seen[m[1]] {
 			seen[m[1]] = true
 			keys = append(keys, m[1])
 		}
 	}
 	if len(keys) == 0 {
-		t.Fatal("no keys parsed from configKeysHelp")
+		t.Fatal("no keys parsed from setup.ConfigKeysHelp")
 	}
 	return keys
 }

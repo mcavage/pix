@@ -1,4 +1,4 @@
-package main
+package setup
 
 import (
 	"fmt"
@@ -15,17 +15,17 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// runConfig implements the `config` verb tree: `show`, `path`, `get`, `set`,
+// RunConfig implements the `config` verb tree: `show`, `path`, `get`, `set`,
 // `unset`. `set`/`unset` are THE answer to "why do I hand-edit the toml" — you
 // don't, you run `pix config set <key> <value>` and it loads, mutates, and
 // Save()s the machine-managed config for you. `get` is the machine-readable
 // read half: one resolved value, no decoration, so scripts (and the Makefile's
 // operational targets) source runtime config from config.toml instead of
 // keeping a second config file.
-func runConfig(argv []string) {
+func RunConfig(argv []string) {
 	// A leading -h/--help (with or without a subcommand) prints config usage.
 	if cli.WantsHelp(argv) {
-		fmt.Print(configUsage)
+		fmt.Print(ConfigUsage)
 		return
 	}
 	sub := "show"
@@ -82,11 +82,11 @@ func runConfig(argv []string) {
 // silent empty value.
 func runConfigGet(argv []string) {
 	if cli.WantsHelp(argv) {
-		fmt.Print(configUsage)
+		fmt.Print(ConfigUsage)
 		return
 	}
 	if len(argv) != 1 {
-		fmt.Fprintf(os.Stderr, "usage: pix config get <key>\n%s", configKeysHelp)
+		fmt.Fprintf(os.Stderr, "usage: pix config get <key>\n%s", ConfigKeysHelp)
 		os.Exit(2)
 	}
 	cfg, _, err := workspace.LoadResolvedConfig()
@@ -94,7 +94,7 @@ func runConfigGet(argv []string) {
 		fmt.Fprintf(os.Stderr, "pix config get: %v\n", err)
 		os.Exit(1)
 	}
-	val, err := configValue(cfg, argv[0])
+	val, err := ConfigValue(cfg, argv[0])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix config get: %v\n", err)
 		os.Exit(2)
@@ -102,10 +102,10 @@ func runConfigGet(argv []string) {
 	fmt.Println(val)
 }
 
-// configValue resolves one key against the loaded config and renders it for
+// ConfigValue resolves one key against the loaded config and renders it for
 // machine consumption: scalars verbatim, lists space-separated. Pure +
-// testable; the key set mirrors configKeysHelp exactly.
-func configValue(cfg *config.Config, key string) (string, error) {
+// testable; the key set mirrors ConfigKeysHelp exactly.
+func ConfigValue(cfg *config.Config, key string) (string, error) {
 	switch key {
 	case "google_workspace_account":
 		return cfg.GogAccount, nil
@@ -147,7 +147,7 @@ func configValue(cfg *config.Config, key string) (string, error) {
 		}
 		return cfg.Slack.OAuthGrantExpiresAt.Format(time.RFC3339), nil
 	default:
-		return "", fmt.Errorf("unknown key %q\n%s", key, configKeysHelp)
+		return "", fmt.Errorf("unknown key %q\n%s", key, ConfigKeysHelp)
 	}
 }
 
@@ -162,11 +162,11 @@ func runConfigWrite(unset bool, argv []string) {
 		verb = "unset"
 	}
 	if cli.WantsHelp(argv) {
-		fmt.Print(configUsage)
+		fmt.Print(ConfigUsage)
 		return
 	}
 	if len(argv) == 0 {
-		fmt.Fprintf(os.Stderr, "usage: pix config %s <key> [value]\n%s", verb, configKeysHelp)
+		fmt.Fprintf(os.Stderr, "usage: pix config %s <key> [value]\n%s", verb, ConfigKeysHelp)
 		os.Exit(2)
 	}
 	cfg, err := config.Load()
@@ -174,7 +174,7 @@ func runConfigWrite(unset bool, argv []string) {
 		fmt.Fprintf(os.Stderr, "pix config %s: loading config: %v\n", verb, err)
 		os.Exit(1)
 	}
-	summary, err := applyConfigChange(cfg, unset, argv[0], argv[1:])
+	summary, err := ApplyConfigChange(cfg, unset, argv[0], argv[1:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix config %s: %v\n", verb, err)
 		os.Exit(2)
@@ -194,8 +194,8 @@ func runConfigWrite(unset bool, argv []string) {
 	}
 }
 
-// configKeysHelp lists the supported keys for set/unset.
-const configKeysHelp = `keys:
+// ConfigKeysHelp lists the supported keys for set/unset.
+const ConfigKeysHelp = `keys:
   google_workspace_account <email>
                            Google Workspace account for the google-workspace MCP server
   google_workspace_access  get-only permission profile written by
@@ -238,11 +238,11 @@ const configKeysHelp = `keys:
                             written by 'pix slack setup')
 `
 
-// applyConfigChange applies a set (unset=false) or unset to cfg and returns a
+// ApplyConfigChange applies a set (unset=false) or unset to cfg and returns a
 // one-line summary of the new value. Pure + testable: it mutates cfg but does
 // NOT save. List keys (mcp, services) take a single value to add/remove; scalar
 // keys take a single value on set and reset/clear on unset.
-func applyConfigChange(cfg *config.Config, unset bool, key string, args []string) (string, error) {
+func ApplyConfigChange(cfg *config.Config, unset bool, key string, args []string) (string, error) {
 	verb := "set"
 	if unset {
 		verb = "unset"
@@ -447,6 +447,18 @@ func applyConfigChange(cfg *config.Config, unset bool, key string, args []string
 			"run `pix slack setup` to (re)authorize, or `pix config unset slack.client_id` to clear it", key)
 
 	default:
-		return "", fmt.Errorf("unknown key %q\n%s", key, configKeysHelp)
+		return "", fmt.Errorf("unknown key %q\n%s", key, ConfigKeysHelp)
 	}
 }
+
+const ConfigUsage = `usage: pix config <show|path|get|set|unset> [args]
+
+  show                     print the resolved config path + contents
+  path [op-refs]           print the config file path (or the op-refs.env path)
+  get K                    print ONE resolved value, no decoration (lists are
+                            space-separated); for scripts/make to source
+  set K V                   set a config key (never hand-edit the toml)
+  unset K [V]               reset/clear a scalar key, or remove value V from a
+                            list key (mcp/services/knowledge_bundles)
+
+` + ConfigKeysHelp

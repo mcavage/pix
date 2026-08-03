@@ -4,7 +4,10 @@
 // they are supplied rather than called.
 package main
 
-import "pix/host/workflow/onboard"
+import (
+	"pix/host/workflow/onboard"
+	"pix/host/workflow/setup"
+)
 
 // onboardDeps is the real wiring, in one place so the two launch paths that
 // reconcile onboarding (pix run, pix setup) cannot drift apart.
@@ -12,6 +15,6 @@ func onboardDeps() onboard.Deps {
 	return onboard.Deps{
 		HostBinary:    hostBinaryResolver,
 		Register:      registerServers,
-		VerifyCatalog: verifyCatalogMCPReady,
+		VerifyCatalog: setup.VerifyCatalogMCPReady,
 	}
 }

@@ -20,6 +20,7 @@ import (
 	"pix/host/hostenv/hostenvtest"
 	"pix/host/sys/systest"
 	"pix/host/workflow/doctor"
+	"pix/host/workflow/setup"
 )
 
 // mcpHostTrustNoticeFacts are the exact facts the disclosure must state,
@@ -72,7 +73,7 @@ func TestDoctorRender_NoDisclosure_WhenNoMCPConfigured(t *testing.T) {
 }
 
 // hostTrustSummaryEnv is a minimal hostenv.Env sufficient for
-// printSetupSummary's own reads (secret.HostModeProviderKeys, gworkspace.GogSetupAccountHealthy)
+// setup.PrintSetupSummary's own reads (secret.HostModeProviderKeys, gworkspace.GogSetupAccountHealthy)
 // without touching the real filesystem.
 func hostTrustSummaryEnv(t *testing.T) hostenv.Env {
 	t.Helper()
@@ -90,7 +91,7 @@ func TestPrintSetupSummary_DisclosesHostMCPTrust_WhenMCPConfigured(t *testing.T)
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	printSetupSummary(cfg, hostTrustSummaryEnv(t), &out, setupModelsOutcome{})
+	setup.PrintSetupSummary(cfg, hostTrustSummaryEnv(t), &out, setup.SetupModelsOutcome{})
 	got := out.String()
 	for _, want := range mcpHostTrustNoticeFacts {
 		if !strings.Contains(got, want) {
@@ -109,7 +110,7 @@ func TestPrintSetupSummary_NoDisclosure_WhenNoMCPConfigured(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	printSetupSummary(cfg, hostTrustSummaryEnv(t), &out, setupModelsOutcome{})
+	setup.PrintSetupSummary(cfg, hostTrustSummaryEnv(t), &out, setup.SetupModelsOutcome{})
 	if strings.Contains(out.String(), doctor.McpHostTrustNotice) {
 		t.Errorf("setup summary must not print the MCP host-trust notice with no MCP configured, got:\n%s", out.String())
 	}

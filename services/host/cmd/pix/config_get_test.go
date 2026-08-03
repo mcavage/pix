@@ -1,6 +1,7 @@
 package main
 
 import (
+	"pix/host/workflow/setup"
 	"strings"
 	"testing"
 	"time"
@@ -48,18 +49,18 @@ func TestConfigValue(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.key, func(t *testing.T) {
-			got, err := configValue(cfg, tt.key)
+			got, err := setup.ConfigValue(cfg, tt.key)
 			if tt.wantErr {
 				if err == nil || !strings.Contains(err.Error(), "unknown key") {
-					t.Errorf("configValue(%q): expected unknown-key error, got %v", tt.key, err)
+					t.Errorf("setup.ConfigValue(%q): expected unknown-key error, got %v", tt.key, err)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("configValue(%q): %v", tt.key, err)
+				t.Fatalf("setup.ConfigValue(%q): %v", tt.key, err)
 			}
 			if got != tt.want {
-				t.Errorf("configValue(%q) = %q, want %q", tt.key, got, tt.want)
+				t.Errorf("setup.ConfigValue(%q) = %q, want %q", tt.key, got, tt.want)
 			}
 		})
 	}
@@ -71,9 +72,9 @@ func TestConfigValue(t *testing.T) {
 func TestConfigValue_EmptyList(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.MCP = nil
-	got, err := configValue(cfg, "mcp")
+	got, err := setup.ConfigValue(cfg, "mcp")
 	if err != nil || got != "" {
-		t.Errorf("configValue(mcp) on empty list = %q, %v; want \"\", nil", got, err)
+		t.Errorf("setup.ConfigValue(mcp) on empty list = %q, %v; want \"\", nil", got, err)
 	}
 }
 
@@ -82,8 +83,8 @@ func TestConfigValue_EmptyList(t *testing.T) {
 // like "not set" rather than a bogus date.
 func TestConfigValue_SlackGrantExpiresAtZero(t *testing.T) {
 	cfg := defaultCfg()
-	got, err := configValue(cfg, "slack.oauth_grant_expires_at")
+	got, err := setup.ConfigValue(cfg, "slack.oauth_grant_expires_at")
 	if err != nil || got != "" {
-		t.Errorf("configValue(slack.oauth_grant_expires_at) on zero time = %q, %v; want \"\", nil", got, err)
+		t.Errorf("setup.ConfigValue(slack.oauth_grant_expires_at) on zero time = %q, %v; want \"\", nil", got, err)
 	}
 }

@@ -5,19 +5,20 @@ package main
 
 import (
 	"bytes"
+	"pix/host/workflow/setup"
 	"strings"
 	"testing"
 )
 
-// The generic setupHostPhase error must point at "the fix printed above",
+// The generic setup.SetupHostPhase error must point at "the fix printed above",
 // never claim the same setup command always fixes it (sometimes the fix is a
 // different command, e.g. `pix secret set` for a missing ref).
 func TestSetupHostPhase_GenericKeyFailure_PointsAtFixAbove(t *testing.T) {
 	env, _ := stepEnv(t, "", "anthropic openai", "sk-val") // no refs configured, mode unset
 	var out bytes.Buffer
-	err := setupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, false)
+	err := setup.SetupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, false)
 	if err == nil {
-		t.Fatal("expected setupHostPhase to fail")
+		t.Fatal("expected setup.SetupHostPhase to fail")
 	}
 	if !strings.Contains(err.Error(), "follow the fix printed above") {
 		t.Errorf("error must point at the fix printed above, got: %v", err)

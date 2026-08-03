@@ -79,7 +79,7 @@ func TestModelsAdd_RejectsOllamaFlagsOnAKeyedProvider(t *testing.T) {
 
 // TestModelsAdd_ValidatesProviderFromOneList is the regression guard for the
 // reported bug. The hand-rolled version validated the provider against a list
-// it maintained by hand, separately from providerNames(), and ollama was
+// it maintained by hand, separately from setup.ProviderNames(), and ollama was
 // missing from it — `pix models add ollama` answered "unknown provider". The
 // enum tag makes the accepted set and the help text the same declaration.
 func TestModelsAdd_ValidatesProviderFromOneList(t *testing.T) {

@@ -9,7 +9,7 @@
 // that says "keys: done" is worth nothing after someone rotated a vault item.
 //
 // An interrupt is modelled here as running a PREFIX of the fixed mutation step
-// table (setupMutationOrder) and then starting over, which is exactly what a
+// table (setup.SetupMutationOrder) and then starting over, which is exactly what a
 // SIGINT between two phases does: the steps that ran, ran; the rest never did.
 // Every cut point between each pair of steps is exercised.
 package main
@@ -22,6 +22,7 @@ import (
 	"pix/host/hostenv"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/onboard"
+	"pix/host/workflow/setup"
 	"regexp"
 	"strings"
 	"testing"
@@ -64,16 +65,16 @@ func runMutationPrefix(t *testing.T, env hostenv.Env, n int) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	inv, err := takeSetupInventory(env, opts)
+	inv, err := setup.TakeSetupInventory(env, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var models setupModelsOutcome
-	steps := setupMutationSteps(env, inv, opts, strings.NewReader(""), &bytes.Buffer{}, false, &models, &setupPromptBudget{})
+	var models setup.SetupModelsOutcome
+	steps := setup.SetupMutationSteps(env, inv, opts, strings.NewReader(""), &bytes.Buffer{}, false, &models, &setup.SetupPromptBudget{})
 	if n > len(steps) {
 		t.Fatalf("cut point %d exceeds the %d-step table", n, len(steps))
 	}
-	if _, err := runSetupMutations(steps[:n]); err != nil {
+	if _, err := setup.RunSetupMutations(steps[:n]); err != nil {
 		t.Fatalf("prefix of %d steps failed: %v", n, err)
 	}
 }
@@ -86,15 +87,15 @@ func TestSetup_InterruptedAtEveryPhase_NextRunCompletesIdentically(t *testing.T)
 	baseEnv := modelsSetupEnv(t, &ollamaWorld{})
 	stubProvisionKeysOK(t)
 	var base bytes.Buffer
-	if err := setupHostPhase(baseEnv, []string{"--yes", "--pull-models"}, strings.NewReader(""), &base, false); err != nil {
+	if err := setup.SetupHostPhase(baseEnv, []string{"--yes", "--pull-models"}, strings.NewReader(""), &base, false); err != nil {
 		t.Fatalf("baseline run failed: %v\n%s", err, base.String())
 	}
 	want := scrubbed(renderedVerdicts(t, base.String()))
 
-	for cut := 0; cut <= len(setupMutationOrder); cut++ {
+	for cut := 0; cut <= len(setup.SetupMutationOrder); cut++ {
 		name := "after-none"
 		if cut > 0 {
-			name = "after-" + setupMutationOrder[cut-1]
+			name = "after-" + setup.SetupMutationOrder[cut-1]
 		}
 		t.Run(name, func(t *testing.T) {
 			w := &ollamaWorld{}
@@ -103,7 +104,7 @@ func TestSetup_InterruptedAtEveryPhase_NextRunCompletesIdentically(t *testing.T)
 			runMutationPrefix(t, env, cut)
 
 			var out bytes.Buffer
-			if err := setupHostPhase(env, []string{"--yes", "--pull-models"}, strings.NewReader(""), &out, false); err != nil {
+			if err := setup.SetupHostPhase(env, []string{"--yes", "--pull-models"}, strings.NewReader(""), &out, false); err != nil {
 				t.Fatalf("resume after %s failed: %v\n%s", name, err, out.String())
 			}
 			if got := scrubbed(renderedVerdicts(t, out.String())); got != want {
@@ -130,14 +131,14 @@ func TestSetup_StaleReceiptIsNeverTrustedOverProbes(t *testing.T) {
 	stubProvisionKeysOK(t)
 
 	// Forge the optimistic journal an interrupted run could have left.
-	stateDir, err := setupReceiptStateDir(env)
+	stateDir, err := setup.SetupReceiptStateDir(env)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(stateDir, "setup"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	forged := setupModelsReceipt{Schema: 1, Consent: "--pull-models", Models: []setupModelReceiptEntry{
+	forged := setup.SetupModelsReceipt{Schema: 1, Consent: "--pull-models", Models: []setup.SetupModelReceiptEntry{
 		{Tag: "qwen3.5:9b", Status: "ready"}, {Tag: "nomic-embed-text", Status: "ready"},
 	}}
 	b, _ := json.Marshal(forged)
@@ -146,7 +147,7 @@ func TestSetup_StaleReceiptIsNeverTrustedOverProbes(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := setupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, false); err != nil {
+	if err := setup.SetupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, false); err != nil {
 		t.Fatalf("setup failed: %v\n%s", err, out.String())
 	}
 	s := out.String()

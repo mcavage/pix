@@ -368,7 +368,7 @@ func runRun(argv []string) {
 	// Trusted host state: the host-visible facts the fenced agent can't see for
 	// itself (keys/services/knowledge/gog/mcp/models/pack/identity). This
 	// travels ONLY inside the launcher-generated initial prompt (the pi
-	// passthrough arg carrying launch.GeneratedInputMarker, e.g. onboardingKickoff) —
+	// passthrough arg carrying launch.GeneratedInputMarker, e.g. setup.OnboardingKickoff) —
 	// never as a workspace file, which a cloned repo could plant or leave stale.
 	// launch.InjectTrustedHostState is a no-op (and probes nothing) when no such arg is
 	// present, so a normal run never pays for or produces onboarding truth.

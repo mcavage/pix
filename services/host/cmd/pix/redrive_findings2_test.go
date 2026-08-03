@@ -33,6 +33,7 @@ import (
 	"pix/host/workflow/doctor"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/onboard"
+	"pix/host/workflow/setup"
 	"pix/host/workspace"
 )
 
@@ -65,7 +66,7 @@ func TestVerifyCatalogMCPReady_Ready(t *testing.T) {
 		"sbx mcp ls":                 "notion\natlassian\n",
 		"sbx mcp auth status notion": "notion: authorized\n",
 	})
-	if err := verifyCatalogMCPReady(env, []string{"notion"}); err != nil {
+	if err := setup.VerifyCatalogMCPReady(env, []string{"notion"}); err != nil {
 		t.Fatalf("registered+authorized catalog server must pass the gate: %v", err)
 	}
 }
@@ -74,7 +75,7 @@ func TestVerifyCatalogMCPReady_UnregisteredNamesBundleAndAuth(t *testing.T) {
 	env := catalogGateEnv(t, map[string]string{
 		"sbx mcp ls": "atlassian\n", // notion positively missing
 	})
-	err := verifyCatalogMCPReady(env, []string{"notion"})
+	err := setup.VerifyCatalogMCPReady(env, []string{"notion"})
 	if err == nil {
 		t.Fatal("an unregistered catalog server must fail the gate")
 	}
@@ -88,7 +89,7 @@ func TestVerifyCatalogMCPReady_UnauthorizedNamesAuthCommand(t *testing.T) {
 		"sbx mcp ls":                 "notion\n",
 		"sbx mcp auth status notion": "notion: not authenticated\n",
 	})
-	err := verifyCatalogMCPReady(env, []string{"notion"})
+	err := setup.VerifyCatalogMCPReady(env, []string{"notion"})
 	if err == nil {
 		t.Fatal("an unauthorized catalog server must fail the gate")
 	}
@@ -102,7 +103,7 @@ func TestVerifyCatalogMCPReady_ExplicitPolicyDenial(t *testing.T) {
 		"sbx mcp ls":                 "notion\n",
 		"sbx mcp auth status notion": "access denied by org policy\n",
 	})
-	err := verifyCatalogMCPReady(env, []string{"notion"})
+	err := setup.VerifyCatalogMCPReady(env, []string{"notion"})
 	if err == nil || !strings.Contains(err.Error(), "denied by policy") {
 		t.Errorf("an explicit policy denial must fail as DENIED (not a setup todo), got: %v", err)
 	}
@@ -114,14 +115,14 @@ func TestVerifyCatalogMCPReady_ExplicitPolicyDenial(t *testing.T) {
 func TestVerifyCatalogMCPReady_ProbeFailureIsUnverifiableRetry(t *testing.T) {
 	// Listing succeeds but the auth probe errors with nothing classifiable.
 	env := catalogGateEnv(t, map[string]string{"sbx mcp ls": "notion\n"})
-	err := verifyCatalogMCPReady(env, []string{"notion"})
+	err := setup.VerifyCatalogMCPReady(env, []string{"notion"})
 	if err == nil || !strings.Contains(err.Error(), "could not verify") {
 		t.Errorf("an unclassifiable probe failure must fail as unverifiable/retry, got: %v", err)
 	}
 	// Listing itself unavailable (sbx absent) — also unverifiable, fail closed.
 	absent := catalogGateEnv(t, nil)
 	systest.Of(absent.System).LookPathFn = func(string) (string, error) { return "", fmt.Errorf("not found") }
-	if err := verifyCatalogMCPReady(absent, []string{"notion"}); err == nil || !strings.Contains(err.Error(), "could not verify") {
+	if err := setup.VerifyCatalogMCPReady(absent, []string{"notion"}); err == nil || !strings.Contains(err.Error(), "could not verify") {
 		t.Errorf("sbx-absent must fail closed as unverifiable, got: %v", err)
 	}
 }
@@ -132,7 +133,7 @@ func TestVerifyCatalogMCPReady_NonCatalogNamesNeverProbed(t *testing.T) {
 		t.Fatalf("non-catalog names must never be probed by the gate: %s %v", name, args)
 		return "", nil
 	}
-	if err := verifyCatalogMCPReady(env, []string{"gog", "slack", ""}); err != nil {
+	if err := setup.VerifyCatalogMCPReady(env, []string{"gog", "slack", ""}); err != nil {
 		t.Fatalf("gog/local/blank names are not the gate's business: %v", err)
 	}
 }
@@ -144,10 +145,10 @@ func TestSetupHostPhase_CatalogGate_NoSaveNoKeysOnGap(t *testing.T) {
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	t.Setenv("PIX_CONFIG", cfgPath)
 
-	orig := setupProvisionKeysFn
-	t.Cleanup(func() { setupProvisionKeysFn = orig })
+	orig := setup.SetupProvisionKeysFn
+	t.Cleanup(func() { setup.SetupProvisionKeysFn = orig })
 	invoked := false
-	setupProvisionKeysFn = func(env hostenv.Env, in io.Reader, out io.Writer, interactive, assumeYes bool) bool {
+	setup.SetupProvisionKeysFn = func(env hostenv.Env, in io.Reader, out io.Writer, interactive, assumeYes bool) bool {
 		invoked = true
 		return true
 	}
@@ -156,7 +157,7 @@ func TestSetupHostPhase_CatalogGate_NoSaveNoKeysOnGap(t *testing.T) {
 		"sbx mcp ls": "atlassian\n", // notion positively missing
 	})
 	var out bytes.Buffer
-	err := setupHostPhase(env, []string{"--yes", "--mcp", "notion"}, strings.NewReader(""), &out, false)
+	err := setup.SetupHostPhase(env, []string{"--yes", "--mcp", "notion"}, strings.NewReader(""), &out, false)
 	if err == nil {
 		t.Fatal("setup must fail when a proposed catalog server is not registered")
 	}
@@ -164,7 +165,7 @@ func TestSetupHostPhase_CatalogGate_NoSaveNoKeysOnGap(t *testing.T) {
 		t.Errorf("setup's failure must name the exact registration command, got: %v", err)
 	}
 	if invoked {
-		t.Error("setupProvisionKeysFn must never run for a proposal the catalog gate rejects")
+		t.Error("setup.SetupProvisionKeysFn must never run for a proposal the catalog gate rejects")
 	}
 	if _, statErr := os.Stat(cfgPath); !os.IsNotExist(statErr) {
 		t.Errorf("config.toml must NOT be written on a catalog gate failure (stat err=%v)", statErr)

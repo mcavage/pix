@@ -13,6 +13,7 @@ import (
 	"pix/host/workflow/man"
 	"pix/host/workflow/pack"
 	"pix/host/workflow/reset"
+	"pix/host/workflow/setup"
 	"pix/host/workflow/slack"
 	"pix/host/workflow/upgrade"
 )
@@ -193,9 +194,9 @@ func verbUsage(verb string) (string, bool) {
 	case "doctor":
 		return doctor.Usage, true
 	case "setup":
-		return setupUsage, true
+		return setup.Usage, true
 	case "config":
-		return configUsage, true
+		return setup.ConfigUsage, true
 	case "mcp":
 		return mcp.McpUsage, true
 	case "gworkspace":
@@ -239,18 +240,6 @@ func verbUsage(verb string) (string, bool) {
 }
 
 // service.Usage moved to service.Usage, with the capability that owns the verb.
-
-const configUsage = `usage: pix config <show|path|get|set|unset> [args]
-
-  show                     print the resolved config path + contents
-  path [op-refs]           print the config file path (or the op-refs.env path)
-  get K                    print ONE resolved value, no decoration (lists are
-                            space-separated); for scripts/make to source
-  set K V                   set a config key (never hand-edit the toml)
-  unset K [V]               reset/clear a scalar key, or remove value V from a
-                            list key (mcp/services/knowledge_bundles)
-
-` + configKeysHelp
 
 // secretHelpBody is the mental model reused verbatim from config so the concept
 // reads identically in setup, doctor, the template header, and `secret -h`.

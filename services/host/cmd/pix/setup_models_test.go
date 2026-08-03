@@ -37,6 +37,7 @@ import (
 	"pix/host/workflow/man"
 	"pix/host/workflow/onboard"
 	"pix/host/workflow/pack"
+	"pix/host/workflow/setup"
 	"strings"
 	"testing"
 	"time"
@@ -65,7 +66,7 @@ func (w *ollamaWorld) count(prefix string) int {
 }
 
 // modelsSetupEnv builds a hermetic hostenv.Env + temp config/state/data homes for
-// driving setupHostPhase end to end with a stubbed provider-key flow.
+// driving setup.SetupHostPhase end to end with a stubbed provider-key flow.
 func modelsSetupEnv(t *testing.T, w *ollamaWorld) hostenv.Env {
 	t.Helper()
 	dir := t.TempDir()
@@ -100,7 +101,7 @@ func modelsSetupEnv(t *testing.T, w *ollamaWorld) hostenv.Env {
 			},
 		},
 		// The fixture's premise is that keys ARE provisioned (three op:// refs in
-		// hostmode.env, setupProvisionKeysFn stubbed to succeed), so the credential
+		// hostmode.env, setup.SetupProvisionKeysFn stubbed to succeed), so the credential
 		// resolves and the probe answers.
 		DirectInference: func(string, string, string) error { return nil },
 		// Answers iff the fake daemon actually has the tag, which is what keeps the
@@ -166,9 +167,9 @@ func stubLiveInferenceOK(env *hostenv.Env) {
 // flow so these tests exercise only the S08 model/summary machinery.
 func stubProvisionKeysOK(t *testing.T) {
 	t.Helper()
-	orig := setupProvisionKeysFn
-	setupProvisionKeysFn = func(hostenv.Env, io.Reader, io.Writer, bool, bool) bool { return true }
-	t.Cleanup(func() { setupProvisionKeysFn = orig })
+	orig := setup.SetupProvisionKeysFn
+	setup.SetupProvisionKeysFn = func(hostenv.Env, io.Reader, io.Writer, bool, bool) bool { return true }
+	t.Cleanup(func() { setup.SetupProvisionKeysFn = orig })
 }
 
 // --- requirement 1: consent -------------------------------------------------
@@ -181,7 +182,7 @@ func TestSetupModels_NoninteractiveNeverPulls(t *testing.T) {
 	env := modelsSetupEnv(t, w)
 	stubProvisionKeysOK(t)
 	var out bytes.Buffer
-	if err := setupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, true); err != nil {
+	if err := setup.SetupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, true); err != nil {
 		t.Fatalf("unexpected error: %v\n%s", err, out.String())
 	}
 	if n := w.count("ollama pull"); n != 0 {
@@ -204,7 +205,7 @@ func TestSetupModels_ExplicitPullModels_PullsDeduped(t *testing.T) {
 	env := modelsSetupEnv(t, w)
 	stubProvisionKeysOK(t)
 	var out bytes.Buffer
-	if err := setupHostPhase(env, []string{"--yes", "--pull-models"}, strings.NewReader(""), &out, false); err != nil {
+	if err := setup.SetupHostPhase(env, []string{"--yes", "--pull-models"}, strings.NewReader(""), &out, false); err != nil {
 		t.Fatalf("unexpected error: %v\n%s", err, out.String())
 	}
 	for _, tag := range []string{"qwen3.5:9b", "nomic-embed-text"} {
@@ -215,7 +216,7 @@ func TestSetupModels_ExplicitPullModels_PullsDeduped(t *testing.T) {
 	if n := w.count("ollama pull"); n != 2 {
 		t.Errorf("total pulls = %d, want 2 distinct tags:\n%v", n, w.calls)
 	}
-	// Three: setupLocalModels probes once up front and verifies once after the
+	// Three: setup.SetupLocalModels probes once up front and verifies once after the
 	// pulls, and setup's VERIFY phase then re-probes from scratch because the
 	// report is a pure function of post-mutation evidence (AC-P0-302) and may
 	// not read back what the mutation believed it did.
@@ -243,7 +244,7 @@ func TestSetupModels_InteractiveDefaultNo(t *testing.T) {
 			stubProvisionKeysOK(t)
 			var out bytes.Buffer
 			// inference default, model-roster default, then this case's memory answer
-			if err := setupHostPhase(env, nil, strings.NewReader("\n\n"+tc.input), &out, true); err != nil {
+			if err := setup.SetupHostPhase(env, nil, strings.NewReader("\n\n"+tc.input), &out, true); err != nil {
 				t.Fatalf("unexpected error: %v\n%s", err, out.String())
 			}
 			if n := w.count("ollama pull"); n != 0 {
@@ -274,7 +275,7 @@ func TestSetupModels_InteractiveYesPulls(t *testing.T) {
 	// this fixture left both probe seams nil, so verification silently did
 	// nothing, nothing became callable, and the roster step was skipped. The
 	// prompt was always supposed to be here.
-	if err := setupHostPhase(env, nil, strings.NewReader("\n\ny\n"), &out, true); err != nil {
+	if err := setup.SetupHostPhase(env, nil, strings.NewReader("\n\ny\n"), &out, true); err != nil {
 		t.Fatalf("unexpected error: %v\n%s", err, out.String())
 	}
 	if n := w.count("ollama pull"); n != 2 {
@@ -299,7 +300,7 @@ func TestSetupModels_UnverifiableNeverPulled(t *testing.T) {
 	// cannot verify them has positively failed that request: exit 1
 	// (AC-P0-210). The unverifiable tags are still never pulled, and nothing
 	// is ever called "missing".
-	err := setupHostPhase(env, []string{"--yes", "--pull-models"}, strings.NewReader(""), &out, false)
+	err := setup.SetupHostPhase(env, []string{"--yes", "--pull-models"}, strings.NewReader(""), &out, false)
 	if err == nil {
 		t.Fatalf("--pull-models with Ollama down must fail setup:\n%s", out.String())
 	}
@@ -328,7 +329,7 @@ func TestSetupModels_PartialPullFailureFailsSetup(t *testing.T) {
 	env := modelsSetupEnv(t, w)
 	stubProvisionKeysOK(t)
 	var out bytes.Buffer
-	err := setupHostPhase(env, []string{"--yes", "--pull-models"}, strings.NewReader(""), &out, false)
+	err := setup.SetupHostPhase(env, []string{"--yes", "--pull-models"}, strings.NewReader(""), &out, false)
 	if err == nil {
 		t.Fatalf("a partial pull failure must fail setup, got success:\n%s", out.String())
 	}
@@ -351,7 +352,7 @@ func TestSetupModels_PullLiesCaughtByVerification(t *testing.T) {
 	env := modelsSetupEnv(t, w)
 	stubProvisionKeysOK(t)
 	var out bytes.Buffer
-	err := setupHostPhase(env, []string{"--yes", "--pull-models"}, strings.NewReader(""), &out, false)
+	err := setup.SetupHostPhase(env, []string{"--yes", "--pull-models"}, strings.NewReader(""), &out, false)
 	if err == nil {
 		t.Fatalf("an unverified pull must fail setup, got success:\n%s", out.String())
 	}
@@ -374,7 +375,7 @@ func TestSetup_RetiredKeysDroppedWithOneNotice(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if err := setupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, false); err != nil {
+	if err := setup.SetupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, false); err != nil {
 		t.Fatalf("unexpected error: %v\n%s", err, out.String())
 	}
 	s := out.String()
@@ -407,7 +408,7 @@ func TestSetup_UnknownKeysNotCalledRetired(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if err := setupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, false); err != nil {
+	if err := setup.SetupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, false); err != nil {
 		t.Fatalf("unexpected error: %v\n%s", err, out.String())
 	}
 	if strings.Contains(out.String(), "retired") {
@@ -425,7 +426,7 @@ func TestSetupModels_ExactSummary(t *testing.T) {
 	stubLiveInferenceOK(&env)
 	stubProvisionKeysOK(t)
 	var out bytes.Buffer
-	if err := setupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, false); err != nil {
+	if err := setup.SetupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, false); err != nil {
 		t.Fatalf("unexpected error: %v\n%s", err, out.String())
 	}
 	// Google Workspace is OPTIONAL and ABSENT from the default path
@@ -471,7 +472,7 @@ func TestSetupModels_SummaryProvisionedWhenCoreReady(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := setupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, false); err != nil {
+	if err := setup.SetupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, false); err != nil {
 		t.Fatalf("unexpected error: %v\n%s", err, out.String())
 	}
 	s := out.String()
@@ -497,7 +498,7 @@ func TestSetupModels_GogGuidanceIsGogSetupOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if err := setupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, false); err != nil {
+	if err := setup.SetupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, false); err != nil {
 		t.Fatalf("unexpected error: %v\n%s", err, out.String())
 	}
 	s := out.String()
@@ -516,7 +517,7 @@ func TestSetupModels_ReceiptWritten(t *testing.T) {
 	env := modelsSetupEnv(t, w)
 	stubProvisionKeysOK(t)
 	var out bytes.Buffer
-	if err := setupHostPhase(env, []string{"--yes", "--pull-models"}, strings.NewReader(""), &out, false); err != nil {
+	if err := setup.SetupHostPhase(env, []string{"--yes", "--pull-models"}, strings.NewReader(""), &out, false); err != nil {
 		t.Fatalf("unexpected error: %v\n%s", err, out.String())
 	}
 	path := filepath.Join(os.Getenv("XDG_STATE_HOME"), "pix", "setup", "models.json")
@@ -524,7 +525,7 @@ func TestSetupModels_ReceiptWritten(t *testing.T) {
 	if err != nil {
 		t.Fatalf("receipt not written: %v", err)
 	}
-	var rec setupModelsReceipt
+	var rec setup.SetupModelsReceipt
 	if err := json.Unmarshal(b, &rec); err != nil {
 		t.Fatalf("receipt is not valid JSON: %v\n%s", err, b)
 	}
@@ -548,7 +549,7 @@ func TestWriteSetupModelsReceipt_RefusesSymlinkedDir(t *testing.T) {
 	if err := os.Symlink(target, filepath.Join(stateDir, "setup")); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	err := writeSetupModelsReceipt(stateDir, setupModelsReceipt{Schema: 1, Consent: "none"})
+	err := setup.WriteSetupModelsReceipt(stateDir, setup.SetupModelsReceipt{Schema: 1, Consent: "none"})
 	if err == nil || !strings.Contains(err.Error(), "symlink") {
 		t.Errorf("a symlinked setup state dir must be refused, got err=%v", err)
 	}
@@ -559,19 +560,19 @@ func TestWriteSetupModelsReceipt_RefusesSymlinkedDir(t *testing.T) {
 
 func TestWriteSetupModelsReceipt_AtomicWrite(t *testing.T) {
 	stateDir := t.TempDir()
-	rec := buildSetupModelsReceipt(setupModelsOutcome{
+	rec := setup.BuildSetupModelsReceipt(setup.SetupModelsOutcome{
 		Installed: true,
-		consent:   "prompt-no",
-		missing:   []axis.MissingModel{{Tag: "qwen3.5:9b", Roles: []string{"watcher", "bridge"}}},
+		Consent:   "prompt-no",
+		Missing:   []axis.MissingModel{{Tag: "qwen3.5:9b", Roles: []string{"watcher", "bridge"}}},
 	}, time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC))
-	if err := writeSetupModelsReceipt(stateDir, rec); err != nil {
+	if err := setup.WriteSetupModelsReceipt(stateDir, rec); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(filepath.Join(stateDir, "setup", "models.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got setupModelsReceipt
+	var got setup.SetupModelsReceipt
 	if err := json.Unmarshal(b, &got); err != nil {
 		t.Fatal(err)
 	}
@@ -593,7 +594,7 @@ func TestParseOnboardArgs_PullModels(t *testing.T) {
 }
 
 func TestSetupUsageAndManMentionPullModels(t *testing.T) {
-	if !strings.Contains(setupUsage, "--pull-models") {
+	if !strings.Contains(setup.Usage, "--pull-models") {
 		t.Error("setup usage must document --pull-models")
 	}
 	b, err := man.Source(), error(nil)

@@ -14,6 +14,7 @@ import (
 	"pix/host/sys/systest"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/onboard"
+	"pix/host/workflow/setup"
 )
 
 func TestCompileInferenceRuntimeNoModelAndExclusiveFiltering(t *testing.T) {
@@ -71,7 +72,7 @@ func TestCompileInferenceRuntimeCarriesAdaptiveThinkingFromCatalog(t *testing.T)
 
 func TestConfigureDirectInferenceUsesCatalog(t *testing.T) {
 	cfg := &config.Config{}
-	if err := configureDirectInference(cfg, []string{"anthropic"}); err != nil {
+	if err := setup.ConfigureDirectInference(cfg, []string{"anthropic"}); err != nil {
 		t.Fatal(err)
 	}
 	if cfg.Inference.Backends["anthropic"].KeyEnv != "ANTHROPIC_API_KEY" {
@@ -89,7 +90,7 @@ func TestConfigureDirectInferenceUsesCatalog(t *testing.T) {
 
 func TestConfigureModelRosterRestrictsRuntimeAndRoutes(t *testing.T) {
 	cfg := &config.Config{}
-	if err := configureDirectInference(cfg, []string{"anthropic", "openai"}); err != nil {
+	if err := setup.ConfigureDirectInference(cfg, []string{"anthropic", "openai"}); err != nil {
 		t.Fatal(err)
 	}
 	// The roster runs AFTER verification now, and only offers what answered a
@@ -98,7 +99,7 @@ func TestConfigureModelRosterRestrictsRuntimeAndRoutes(t *testing.T) {
 		cfg.Inference.Models[i].Verified = true
 		cfg.Inference.Models[i].VerifiedBy = config.VerifiedByProbe
 	}
-	if err := configureModelRoster(cfg, strings.NewReader(""), &bytes.Buffer{}, false, "openai/gpt-5.6-sol"); err != nil {
+	if err := setup.ConfigureModelRoster(cfg, strings.NewReader(""), &bytes.Buffer{}, false, "openai/gpt-5.6-sol"); err != nil {
 		t.Fatal(err)
 	}
 	if got := strings.Join(cfg.Inference.AllowedModels, ","); got != "openai/gpt-5.6-sol" {
@@ -123,7 +124,7 @@ func TestConfigureModelRosterPreservesPersonalChoiceUnderExclusivePack(t *testin
 		AllowedModels:   []string{"ollama/kimi-k3:cloud"},
 		ExclusiveSource: "/packs/work",
 	}}
-	if err := configureModelRoster(cfg, strings.NewReader(""), &bytes.Buffer{}, true, ""); err != nil {
+	if err := setup.ConfigureModelRoster(cfg, strings.NewReader(""), &bytes.Buffer{}, true, ""); err != nil {
 		t.Fatal(err)
 	}
 	if got := strings.Join(cfg.Inference.AllowedModels, ","); got != "ollama/kimi-k3:cloud" {
@@ -133,14 +134,14 @@ func TestConfigureModelRosterPreservesPersonalChoiceUnderExclusivePack(t *testin
 
 func TestConfigureModelRosterRejectsUnavailableChoice(t *testing.T) {
 	cfg := &config.Config{}
-	if err := configureDirectInference(cfg, []string{"openai"}); err != nil {
+	if err := setup.ConfigureDirectInference(cfg, []string{"openai"}); err != nil {
 		t.Fatal(err)
 	}
 	for i := range cfg.Inference.Models {
 		cfg.Inference.Models[i].Verified = true
 		cfg.Inference.Models[i].VerifiedBy = config.VerifiedByProbe
 	}
-	err := configureModelRoster(cfg, strings.NewReader(""), &bytes.Buffer{}, false, "ollama/kimi-k3:cloud")
+	err := setup.ConfigureModelRoster(cfg, strings.NewReader(""), &bytes.Buffer{}, false, "ollama/kimi-k3:cloud")
 	if err == nil || !strings.Contains(err.Error(), "not available") {
 		t.Fatalf("error = %v", err)
 	}
@@ -151,7 +152,7 @@ func TestDirectInferenceProbeDoesNotVerifyRejectedOrUnavailableKey(t *testing.T)
 	for _, probeFailure := range []string{"provider rejected model request (HTTP 401)", "probe unavailable"} {
 		t.Run(probeFailure, func(t *testing.T) {
 			cfg := &config.Config{}
-			if err := configureDirectInference(cfg, []string{"openai"}); err != nil {
+			if err := setup.ConfigureDirectInference(cfg, []string{"openai"}); err != nil {
 				t.Fatal(err)
 			}
 			env := hostenv.Env{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "OPENAI_API_KEY=op://vault/openai/key\n", nil }, RunFn: func(name string, args ...string) (string, error) {
@@ -165,7 +166,7 @@ func TestDirectInferenceProbeDoesNotVerifyRejectedOrUnavailableKey(t *testing.T)
 				}
 				return fmt.Errorf("%s", probeFailure)
 			}}
-			probe, probeErr := verifyDirectInference(cfg, env)
+			probe, probeErr := setup.VerifyDirectInference(cfg, env)
 			mustNoProbeErr(t, probeErr)
 			attempted, verified, failures := probe.Attempted, probe.Verified, probe.Failures
 			if attempted != len(cfg.Inference.Models) || verified != 0 || len(failures) != attempted {
@@ -192,13 +193,13 @@ func TestDirectInferenceProbeDoesNotVerifyRejectedOrUnavailableKey(t *testing.T)
 
 func TestDirectInferenceProbeVerifiesOnlySuccessfulModel(t *testing.T) {
 	cfg := &config.Config{}
-	if err := configureDirectInference(cfg, []string{"openai"}); err != nil {
+	if err := setup.ConfigureDirectInference(cfg, []string{"openai"}); err != nil {
 		t.Fatal(err)
 	}
 	env := hostenv.Env{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "OPENAI_API_KEY=op://vault/openai/key\n", nil }, RunFn: func(string, ...string) (string, error) { return "secret\n", nil }}, DirectInference: func(provider, model, key string) error {
 		return nil
 	}}
-	probe, probeErr := verifyDirectInference(cfg, env)
+	probe, probeErr := setup.VerifyDirectInference(cfg, env)
 	mustNoProbeErr(t, probeErr)
 	attempted, verified, failures := probe.Attempted, probe.Verified, probe.Failures
 	if attempted != len(cfg.Inference.Models) || verified != attempted || len(failures) != 0 {
@@ -215,7 +216,7 @@ func TestDirectInferenceProbeVerifiesOnlySuccessfulModel(t *testing.T) {
 
 func TestDirectInferenceProbePromotesBindingsIndependently(t *testing.T) {
 	cfg := &config.Config{}
-	if err := configureDirectInference(cfg, []string{"openai"}); err != nil {
+	if err := setup.ConfigureDirectInference(cfg, []string{"openai"}); err != nil {
 		t.Fatal(err)
 	}
 	env := hostenv.Env{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "OPENAI_API_KEY=op://vault/openai/key\n", nil }, RunFn: func(string, ...string) (string, error) { return "secret\n", nil }}, DirectInference: func(provider, model, key string) error {
@@ -224,7 +225,7 @@ func TestDirectInferenceProbePromotesBindingsIndependently(t *testing.T) {
 		}
 		return nil
 	}}
-	probe, probeErr := verifyDirectInference(cfg, env)
+	probe, probeErr := setup.VerifyDirectInference(cfg, env)
 	mustNoProbeErr(t, probeErr)
 	attempted, verified, failures := probe.Attempted, probe.Verified, probe.Failures
 	if attempted != len(cfg.Inference.Models) || verified != attempted-1 || len(failures) != 1 {
@@ -236,7 +237,7 @@ func TestDirectInferenceProbePromotesBindingsIndependently(t *testing.T) {
 			t.Fatalf("binding verification was not independent: %+v want-callable=%v", binding, want)
 		}
 	}
-	checks := setupProvidersAxis(cfg, hostenv.Env{System: &systest.Fake{}})
+	checks := setup.SetupProvidersAxis(cfg, hostenv.Env{System: &systest.Fake{}})
 	if len(checks) != 1 || checks[0].Verdict != readiness.VerdictReady || !strings.Contains(checks[0].Detail, "did not pass live verification") {
 		t.Fatalf("partial verification summary = %+v", checks)
 	}
@@ -270,7 +271,7 @@ func TestSetupChooseInferenceOffersDetectedOllamaAndNeedsNoOnePassword(t *testin
 	var out bytes.Buffer
 	// "2,4" is local AND cloud. Token 2 alone now means Ollama LOCAL only: the
 	// un-asked-for cloud binding was the gated-model delivery mechanism.
-	selected, err := setupChooseInference(cfg, env, strings.NewReader("2,4\n"), &out, true)
+	selected, err := setup.SetupChooseInference(cfg, env, strings.NewReader("2,4\n"), &out, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +287,7 @@ func TestSetupChooseInferenceOffersDetectedOllamaAndNeedsNoOnePassword(t *testin
 	}
 	// kimi-k3:cloud is still listed by `ollama list` above, but the catalog
 	// retires it (available=false: "extra usage only", 401s on default plans),
-	// so configureOllamaInference must skip it and bind only the callable six.
+	// so setup.ConfigureOllamaInference must skip it and bind only the callable six.
 	for _, want := range []string{
 		"ollama/qwen3.5:9b",
 		"ollama/glm-5.2:cloud",
@@ -308,7 +309,7 @@ func TestSetupChooseInferenceConfiguresKeylessGateway(t *testing.T) {
 	cfg := &config.Config{}
 	var out bytes.Buffer
 	input := "3\nhttps://models.example.test/v1\n\nanthropic/claude-sonnet-5=sonnet-prod\n"
-	selected, err := setupChooseInference(cfg, hostenv.Env{System: &systest.Fake{}}, strings.NewReader(input), &out, true)
+	selected, err := setup.SetupChooseInference(cfg, hostenv.Env{System: &systest.Fake{}}, strings.NewReader(input), &out, true)
 	if err != nil {
 		t.Fatal(err)
 	}

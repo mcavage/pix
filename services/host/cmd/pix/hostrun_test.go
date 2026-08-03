@@ -12,6 +12,7 @@ import (
 	"pix/host/config"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/pack"
+	"pix/host/workflow/setup"
 	"pix/host/workspace"
 )
 
@@ -29,7 +30,7 @@ func TestApplyConfigChange_HostEnabled(t *testing.T) {
 		t.Fatal("host.enabled must default to FALSE (the gate is non-negotiable)")
 	}
 
-	sum, err := applyConfigChange(cfg, false, "host.enabled", []string{"true"})
+	sum, err := setup.ApplyConfigChange(cfg, false, "host.enabled", []string{"true"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,15 +51,15 @@ func TestApplyConfigChange_HostEnabled(t *testing.T) {
 	}
 
 	// A non-boolean is rejected, never inferred.
-	if _, err := applyConfigChange(cfg, false, "host.enabled", []string{"yes-please"}); err == nil {
+	if _, err := setup.ApplyConfigChange(cfg, false, "host.enabled", []string{"yes-please"}); err == nil {
 		t.Error("expected an error for a non-boolean host.enabled value")
 	}
-	if _, err := applyConfigChange(cfg, false, "host.enabled", nil); err == nil {
+	if _, err := setup.ApplyConfigChange(cfg, false, "host.enabled", nil); err == nil {
 		t.Error("expected an arity error for set host.enabled with no value")
 	}
 
 	// unset resets the gate to off.
-	if _, err := applyConfigChange(cfg, true, "host.enabled", nil); err != nil {
+	if _, err := setup.ApplyConfigChange(cfg, true, "host.enabled", nil); err != nil {
 		t.Fatal(err)
 	}
 	if cfg.Host.Enabled {
@@ -69,14 +70,14 @@ func TestApplyConfigChange_HostEnabled(t *testing.T) {
 // TestApplyConfigChange_HostAutonomy: reserved key stores + clears a string.
 func TestApplyConfigChange_HostAutonomy(t *testing.T) {
 	cfg := defaultCfg()
-	sum, err := applyConfigChange(cfg, false, "host.autonomy", []string{"strict"})
+	sum, err := setup.ApplyConfigChange(cfg, false, "host.autonomy", []string{"strict"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.Host.Autonomy != "strict" || !strings.Contains(sum, "strict") {
 		t.Errorf("set host.autonomy: cfg=%q summary=%q", cfg.Host.Autonomy, sum)
 	}
-	if _, err := applyConfigChange(cfg, true, "host.autonomy", nil); err != nil {
+	if _, err := setup.ApplyConfigChange(cfg, true, "host.autonomy", nil); err != nil {
 		t.Fatal(err)
 	}
 	if cfg.Host.Autonomy != "" {
@@ -87,15 +88,15 @@ func TestApplyConfigChange_HostAutonomy(t *testing.T) {
 // TestConfigValue_HostKeys: `config get` renders both host keys.
 func TestConfigValue_HostKeys(t *testing.T) {
 	cfg := defaultCfg()
-	if v, err := configValue(cfg, "host.enabled"); err != nil || v != "false" {
+	if v, err := setup.ConfigValue(cfg, "host.enabled"); err != nil || v != "false" {
 		t.Errorf("get host.enabled = %q,%v, want false,nil", v, err)
 	}
 	cfg.Host.Enabled = true
 	cfg.Host.Autonomy = "strict"
-	if v, _ := configValue(cfg, "host.enabled"); v != "true" {
+	if v, _ := setup.ConfigValue(cfg, "host.enabled"); v != "true" {
 		t.Errorf("get host.enabled = %q, want true", v)
 	}
-	if v, _ := configValue(cfg, "host.autonomy"); v != "strict" {
+	if v, _ := setup.ConfigValue(cfg, "host.autonomy"); v != "strict" {
 		t.Errorf("get host.autonomy = %q, want strict", v)
 	}
 }

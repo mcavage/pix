@@ -1,4 +1,4 @@
-// setup_pack_activation_test.go — setupHostPhase activating an existing
+// setup_pack_activation_test.go — setup.SetupHostPhase activating an existing
 // migrated default pack. The subject is the setup workflow, so it lives here;
 // it moved out of pack/ with the rest and moved back when it turned out to need
 // setup's own stepEnv fixture.
@@ -14,9 +14,10 @@ import (
 	"pix/host/config"
 	"pix/host/secret"
 	"pix/host/workflow/pack"
+	"pix/host/workflow/setup"
 )
 
-// setupHostPhase must activate an ALREADY-EXISTING default pack (e.g. one
+// setup.SetupHostPhase must activate an ALREADY-EXISTING default pack (e.g. one
 // landed by the legacy migration, or discovered from a prior run) when
 // cfg.Pack is empty — not only a brand-new one created via pack.RunPackNew.
 func TestSetupHostPhase_ActivatesExistingMigratedDefaultPack_WhenCfgPackEmpty(t *testing.T) {
@@ -55,7 +56,7 @@ func TestSetupHostPhase_ActivatesExistingMigratedDefaultPack_WhenCfgPackEmpty(t 
 		}
 	}
 	var out bytes.Buffer
-	if err := setupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, false); err != nil {
+	if err := setup.SetupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, false); err != nil {
 		t.Fatalf("unexpected error: %v\n%s", err, out.String())
 	}
 	cfg, err := config.Load()
@@ -67,7 +68,7 @@ func TestSetupHostPhase_ActivatesExistingMigratedDefaultPack_WhenCfgPackEmpty(t 
 	}
 }
 
-// setupHostPhase must FAIL (propagate the error) when activating the default
+// setup.SetupHostPhase must FAIL (propagate the error) when activating the default
 // pack fails (cfg.Save error) — it must never report success while cfg.Pack
 // still points nowhere.
 func TestSetupHostPhase_PackActivationFailure_FailsSetup(t *testing.T) {
@@ -93,7 +94,7 @@ func TestSetupHostPhase_PackActivationFailure_FailsSetup(t *testing.T) {
 	// stepEnv points PIX_CONFIG/XDG_STATE_HOME/XDG_DATA_HOME at ITS OWN
 	// temp dirs (overriding what we set above); redirect them back to cfgDir /
 	// data so we chmod the SAME directory config.Save() actually writes into
-	// and the pre-created pack above is the one setupHostPhase resolves.
+	// and the pre-created pack above is the one setup.SetupHostPhase resolves.
 	t.Setenv("PIX_CONFIG", filepath.Join(cfgDir, "config.toml"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(cfgDir, "state"))
 	t.Setenv("XDG_DATA_HOME", data)
@@ -106,7 +107,7 @@ func TestSetupHostPhase_PackActivationFailure_FailsSetup(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Config must exist on disk before it becomes unwritable, so setupHostPhase's
+	// Config must exist on disk before it becomes unwritable, so setup.SetupHostPhase's
 	// own earlier config.Load()/writes have already succeeded and only the pack
 	// activation's cfg.Save is what fails.
 	if cfg, err := config.Load(); err != nil {
@@ -120,7 +121,7 @@ func TestSetupHostPhase_PackActivationFailure_FailsSetup(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(cfgDir, 0o755) })
 
 	var out bytes.Buffer
-	err := setupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, false)
+	err := setup.SetupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, false)
 	_ = os.Chmod(cfgDir, 0o755) // restore before any later cleanup/log reads
 	if err == nil {
 		t.Fatal("setup must fail when default-pack activation fails")

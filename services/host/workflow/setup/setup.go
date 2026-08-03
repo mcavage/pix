@@ -18,19 +18,20 @@
 //
 // `pix run` on its own NEVER onboards. `pix setup --no-agent` is the host-only,
 // no-handoff path for CI.
-package main
+package setup
 
 import (
 	"bufio"
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
-	"os"
 	"pix/host/cli"
 	"pix/host/hostenv"
+	"pix/host/launcher"
+	"pix/host/mcp"
 	"pix/host/readiness"
 	"pix/host/readiness/axis"
+	"pix/host/routing"
 	"pix/host/secret"
 	"pix/host/sys"
 	"pix/host/workflow/doctor"
@@ -39,7 +40,9 @@ import (
 	"pix/host/workflow/onboard"
 	"pix/host/workflow/pack"
 	"slices"
+	"sort"
 	"strings"
+	"time"
 
 	"pix/host/config"
 	"pix/host/inference"
@@ -47,7 +50,7 @@ import (
 	"pix/host/workspace"
 )
 
-// onboardingKickoff is the first message `setup` hands the agent. It is
+// OnboardingKickoff is the first message `setup` hands the agent. It is
 // DELIBERATELY short and human — it reads like something the user would type,
 // not a machine directive wall. The rewritten `onboarding` skill owns the actual
 // flow (guided teach, read host-state, land a task); the word "guided" is all it
@@ -55,235 +58,9 @@ import (
 // visible prompt at all — needs a session-start extension + an image rebuild;
 // tracked as a follow-up.) It carries launch.GeneratedInputMarker so memory-capture.ts
 // can tell this was machine-generated, not typed by the user.
-const onboardingKickoff = launch.GeneratedInputMarker + "I just ran pix setup. Give me the upfront guide and help me get started."
+const OnboardingKickoff = launch.GeneratedInputMarker + "I just ran pix setup. Give me the upfront guide and help me get started."
 
-// runSetupCmd is the `pix setup` entry. It accepts the same host-config
-// flags as `onboard` plus an optional DIR (default "."), runs the host phase,
-// prints the handoff, then execs the run with the onboarding kickoff message.
-func runSetupCmd(argv []string) {
-	if cli.WantsHelp(argv) {
-		fmt.Print(setupUsage)
-		return
-	}
-
-	// Split an optional positional DIR from the onboard-style flags. DIR is the
-	// single non-flag token; everything else is forwarded to the host phase.
-	// --replace is SETUP'S OWN flag (recreate an existing sandbox and hand it
-	// the tour): consumed here, never forwarded to onboard.ParseOnboardArgs — it is not
-	// host config.
-	dir := "."
-	dirSet := false
-	replace := false
-	noAgent := false
-	verbose := false
-	var hostArgs []string
-	for i := 0; i < len(argv); i++ {
-		a := argv[i]
-		if a == "--replace" {
-			replace = true
-			continue
-		}
-		if a == "--verbose" {
-			verbose = true
-			continue
-		}
-		// --no-agent is SETUP'S OWN flag (AC-P0-308): run the host phase and
-		// stop there — no sandbox, no handoff. It replaces the deleted
-		// `pix onboard` verb, so it is consumed here and never forwarded
-		// to the host-config parser.
-		if a == "--no-agent" {
-			noAgent = true
-			continue
-		}
-		if len(a) > 0 && a[0] != '-' {
-			if dirSet {
-				fmt.Fprintf(os.Stderr, "pix setup: too many directories (%q and %q); pass at most one DIR\n", dir, a)
-				os.Exit(2)
-			}
-			dir, dirSet = a, true
-			continue
-		}
-		hostArgs = append(hostArgs, a)
-		if flagTakesValue(a) && i+1 < len(argv) {
-			i++
-			hostArgs = append(hostArgs, argv[i])
-		}
-	}
-
-	env := defaultShellEnv()
-	env.Quiet = !verbose
-	if verbose {
-		_ = os.Setenv("PIX_SETUP_VERBOSE", "1")
-	}
-	parsed, parseErr := onboard.ParseOnboardArgs(hostArgs)
-	if parseErr != nil {
-		fmt.Fprintf(os.Stderr, "pix setup: %v\n\n%s", parseErr, setupUsage)
-		os.Exit(2)
-	}
-	// Load + validate every built-in semantic flag/value before prerequisites,
-	// pack adoption, setup hooks, or browser-capable authorization. The later
-	// host phase repeats the same pure validator for direct/test callers.
-	preflightCfg, cfgErr := config.Load()
-	if cfgErr != nil {
-		fmt.Fprintf(os.Stderr, "pix setup: loading config: %v\n", cfgErr)
-		os.Exit(1)
-	}
-	if err := validateSetupSemantics(parsed, preflightCfg, env, hostBinaryResolver); err != nil {
-		fmt.Fprintf(os.Stderr, "pix setup: %v\n\n%s", err, setupUsage)
-		os.Exit(2)
-	}
-
-	// `--apply` is the surviving half of the deleted `pix onboard`: reconcile
-	// a pending <DIR>/.pix/onboarding.json (the control-plane proposal an
-	// in-sandbox onboarding agent wrote) and stop. It is deliberately NOT part of
-	// the phase machine — it applies a proposal the user already reviewed rather
-	// than provisioning a host — so it validates DIR, reconciles, and returns
-	// without touching keys, packs, or the sandbox.
-	if slices.Contains(hostArgs, "--apply") {
-		if err := launch.ValidateRunWorkspace(dir); err != nil {
-			fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
-			os.Exit(2)
-		}
-		opts, perr := onboard.ParseOnboardArgs(hostArgs)
-		if perr != nil {
-			fmt.Fprintf(os.Stderr, "pix setup: %v\n\n%s", perr, setupUsage)
-			os.Exit(2)
-		}
-		onboard.ReconcileOnboarding(dir, env, os.Stdin, os.Stdout, opts.AssumeYes, cli.IsTTY(os.Stdin), onboardDeps())
-		return
-	}
-	if err := launch.ValidateRunWorkspace(dir); err != nil {
-		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
-		os.Exit(2)
-	}
-	// sbx is universally required. 1Password is conditional and is decided only
-	// AFTER explicit packs have contributed inference; a keyless work gateway
-	// must never trigger an irrelevant op installation/login flow.
-	if err := ensureSetupPrereqsFor(env, os.Stdin, os.Stdout, cli.IsTTY(os.Stdin) && !parsed.AssumeYes, false); err != nil {
-		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
-		os.Exit(1)
-	}
-	if err := ensureSetupSbxSession(env, os.Stdout, cli.IsTTY(os.Stdin) && !parsed.AssumeYes); err != nil {
-		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
-		os.Exit(1)
-	}
-	// Pix's published base kit comes from GitHub, while a fresh sbx install only
-	// trusts docker.io kit sources. Fill that one publisher allowlist entry and
-	// initialize the one-time global network policy before the first handoff.
-	// Existing publishers and an existing (possibly tightened) policy are kept.
-	if err := ensureSetupSbxDefaults(env); err != nil {
-		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
-		os.Exit(1)
-	}
-	// An unreleased launcher uses its local checkout kit. Validate that kit with
-	// the installed sbx parser before pack OAuth/setup or any other mutation;
-	// nightly schema skew must fail once, early, without opening browsers and
-	// only later dumping YAML from `sbx run`.
-	if err := launch.ValidateSetupKit(version, launch.ResolveRepoRoot, launch.ValidateSbxKit); err != nil {
-		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
-		os.Exit(1)
-	}
-
-	// A requested pack is adopted through the existing pack trust transaction
-	// before host setup. This gives `pix setup --pack owner/repo` one setup
-	// engine while preserving the exact same BoM review, fingerprint, and
-	// rollback behavior as `pix pack use`.
-	var activatedPacks []string
-	if len(parsed.Packs) > 0 && env.Quiet {
-		fmt.Fprintln(os.Stdout, "Configuring pack integrations…")
-	}
-	for _, requestedPack := range parsed.Packs {
-		packArg := normalizeSetupPackArg(requestedPack)
-		useArgs := []string{packArg}
-		if parsed.AssumeYes {
-			useArgs = append([]string{"--yes"}, useArgs...)
-		}
-		pack.RunPackUse(env, os.Stdout, useArgs, registerServers)
-		if cfg, err := config.Load(); err == nil && strings.TrimSpace(cfg.Pack) != "" {
-			activatedPacks = append(activatedPacks, cfg.Pack)
-		}
-	}
-	activatedPacks = pack.UniquePackRoots(activatedPacks)
-	if len(activatedPacks) > 0 {
-		if err := pack.PersistPackStack(activatedPacks); err != nil {
-			fmt.Fprintf(os.Stderr, "pix setup: composing packs: %v\n", err)
-			os.Exit(1)
-		}
-	}
-	// A pack's required setup owns its interactive authorization flows. Run it
-	// before the ordinary host gate: that gate verifies configured MCP servers,
-	// so placing hooks afterward made it impossible for a fresh pack to satisfy
-	// the very prerequisites the gate checked (and skipped integration
-	// entirely on the first missing remote registration).
-	setupRequests, err := pack.PlanPackSetupRequests(activatedPacks, parsed.WithSetup)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
-		os.Exit(1)
-	}
-	for _, root := range activatedPacks {
-		if err := pack.RunPackSetup(env, os.Stdout, root, setupRequests[root], cli.IsTTY(os.Stdin) && !parsed.AssumeYes); err != nil {
-			fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
-			os.Exit(1)
-		}
-	}
-
-	// Phase 1: host config — source keys from 1Password, ensure memory, create the
-	// pack, seed identity, provision+enable host mode (see setupHostPhase). This
-	// ALWAYS runs first, regardless of whether a sandbox already exists for dir —
-	// `pix setup` run a second time must still reconcile host keys/config
-	// (a changed/rotated 1Password ref, a newly-added --mcp, etc), not skip
-	// straight past it because a sandbox happens to be there.
-	//
-	// DIR must be validated (exists AND is a directory) BEFORE any of that runs —
-	// setupHostPhase mutates real host state (op-refs.env/hostmode.env, config.toml,
-	// the default pack, memory, host-mode enablement). A typo'd or nonexistent DIR
-	// must fail immediately, with nothing touched, not be caught only later when the
-	// (already-mutated) phase 2 sandbox probe/handoff can't resolve it. runSetupCore
-	// is the seam: it does the validation-then-hostPhase-call as one pure step so a
-	// test can assert hostPhase is never invoked for a bad DIR without exercising
-	// os.Exit.
-	if env.Quiet {
-		fmt.Fprintln(os.Stdout, "Setting up inference and host services…")
-	}
-	if err := runSetupCore(env, dir, hostArgs, os.Stdin, os.Stdout, cli.IsTTY(os.Stdin), setupHostPhase); err != nil {
-		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
-		var usage errUsage
-		if errors.As(err, &usage) {
-			os.Exit(2) // an argument mistake, caught before any probe or mutation
-		}
-		os.Exit(1)
-	}
-	// --no-agent stops here: the host phase is the whole command. The phase
-	// header is still printed so the transcript is complete and a reader can
-	// see that the handoff was skipped by request, not silently dropped.
-	if noAgent {
-		setupPhaseHeader(os.Stdout, setupPhaseHandoff, "skipped (--no-agent): host phase only, no sandbox")
-		return
-	}
-
-	setupPhaseHeader(os.Stdout, setupPhaseHandoff, "")
-
-	// Phase 2 decision: probe the sandbox for dir and branch on the POSITIVE
-	// state. Existing without --replace is left alone — setup never
-	// force-removes it and never replays the onboarding kickoff into a live
-	// session (the fenced agent inside it may be mid-task). Existing WITH
-	// --replace relaunches through `run --replace` carrying the kickoff, so
-	// the recreated sandbox actually receives the tour. Only a POSITIVE
-	// launch.SbxAbsent gets the normal first handoff; an unprobeable sbx (launch.SbxUnknown,
-	// or an unresolvable name) FAILS CLOSED — launching blind could replay the
-	// kickoff into a live session we simply couldn't see.
-	name, nameOK := setupSandboxName(dir)
-	state := launch.SbxUnknown
-	if nameOK && name != "" {
-		state = launch.ProbeTaskSandbox(env, name)
-	}
-	if err := runSetupHandoff(dir, name, state, replace, os.Stdout, runRun); err != nil {
-		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
-		os.Exit(1)
-	}
-}
-
-// runSetupCore validates DIR (reusing launch.ValidateRunWorkspace's exists-and-is-a-
+// RunSetupCore validates DIR (reusing launch.ValidateRunWorkspace's exists-and-is-a-
 // directory check — the same rule `pix run` enforces, so setup and run
 // never disagree about what counts as a launchable DIR) and, ONLY if that
 // passes, invokes hostPhase. Extracted as its own tiny function — rather than
@@ -292,21 +69,21 @@ func runSetupCmd(argv []string) {
 // the default pack/memory/host-mode) ever runs: a test can pass a hostPhase
 // stub that fails the test if called, and assert on the returned error alone,
 // without needing to exercise runSetupCmd's os.Exit calls.
-func runSetupCore(env hostenv.Env, dir string, hostArgs []string, in io.Reader, out io.Writer, tty bool, hostPhase func(hostenv.Env, []string, io.Reader, io.Writer, bool) error) error {
+func RunSetupCore(env hostenv.Env, dir string, hostArgs []string, in io.Reader, out io.Writer, tty bool, hostPhase func(hostenv.Env, []string, io.Reader, io.Writer, bool) error) error {
 	if err := launch.ValidateRunWorkspace(dir); err != nil {
 		return err
 	}
 	return hostPhase(env, hostArgs, in, out, tty)
 }
 
-// runSetupHandoff is the pure post-host-phase decision + action, extracted so
+// RunSetupHandoff is the pure post-host-phase decision + action, extracted so
 // the state/replace matrix is testable without exercising os.Exit or actually
 // exec'ing sbx (runFn is called instead of runRun directly; tests pass a stub
 // that records the call). Returns an error ONLY for the fail-closed unknown
 // state; the caller prints it and exits non-zero.
-func runSetupHandoff(dir, name string, state doctor.SbxState, replace bool, out io.Writer, runFn func([]string)) error {
+func RunSetupHandoff(dir, name string, state doctor.SbxState, replace bool, out io.Writer, runFn func([]string)) error {
 	// kickoffArgs builds the runRun argv for a launch that should receive the
-	// tour: [DIR] [--replace] -- <onboardingKickoff>. DIR is forwarded only
+	// tour: [DIR] [--replace] -- <OnboardingKickoff>. DIR is forwarded only
 	// when explicit so `pix setup` from inside a repo behaves exactly
 	// like `pix run` there. --replace is harmless on an absent sandbox
 	// (create path) and forces the recreate on an existing one.
@@ -318,7 +95,7 @@ func runSetupHandoff(dir, name string, state doctor.SbxState, replace bool, out 
 		if replace {
 			args = append(args, "--replace")
 		}
-		return append(args, "--", onboardingKickoff)
+		return append(args, "--", OnboardingKickoff)
 	}
 	dirArg := ""
 	if dir != "." {
@@ -377,19 +154,19 @@ func runSetupHandoff(dir, name string, state doctor.SbxState, replace bool, out 
 	return nil
 }
 
-// setupHostPhase does the deterministic host configuration and reports what is
+// SetupHostPhase does the deterministic host configuration and reports what is
 // (and is not) ready. The only interactive step is pasting op:// refs for
 // providers missing one (TTY + op installed); with flags OR no TTY it is fully
 // non-interactive (the CI path).
-// setupInteractivePrompts decides whether setup's key-collection/overwrite
+// SetupInteractivePrompts decides whether setup's key-collection/overwrite
 // prompts fire: a real TTY, unless the caller explicitly opted out with
 // --yes/-y/--non-interactive. Deliberately does NOT take the parsed flag list
 // — ordinary value flags (--account/--knowledge/--mcp/--model) configure host
 // settings and must never silently suppress the mandatory key prompts; only
 // assumeYes (the explicit opt-out) does. Extracted as its own tiny function so
 // this exact invariant has a direct regression test, not just end-to-end
-// coverage through setupProvisionKeys.
-func setupInteractivePrompts(tty, assumeYes bool) bool {
+// coverage through SetupProvisionKeys.
+func SetupInteractivePrompts(tty, assumeYes bool) bool {
 	return tty && !assumeYes
 }
 
@@ -433,12 +210,17 @@ const (
 	setupPhaseConsent   = "consent"
 	setupPhaseVerify    = "verify"
 	setupPhaseReport    = "report"
-	setupPhaseHandoff   = "handoff"
+	SetupPhaseHandoff   = "handoff"
 )
 
-// setupPhaseOrder is the transcript, in order. The index in this slice is the
+// SetupPhaseOrder is the transcript, in order. The index in this slice is the
 // number the header prints, so the phases can never be renumbered by accident.
-var setupPhaseOrder = []struct{ name, what string }{
+// SetupPhase pairs a phase's identifier with what it does. Named rather than
+// anonymous because cmd/pix's transcript test reads both fields, and an
+// anonymous struct cannot expose them across a package boundary.
+type SetupPhase struct{ Name, What string }
+
+var SetupPhaseOrder = []SetupPhase{
 	{setupPhaseParse, "reading flags"},
 	{setupPhaseInventory, "reading the current host state (nothing is written yet)"},
 	{setupPhaseGate, "checking preconditions before anything is written"},
@@ -446,60 +228,60 @@ var setupPhaseOrder = []struct{ name, what string }{
 	{setupPhaseConsent, "the things that cost you something"},
 	{setupPhaseVerify, "re-probing what changed"},
 	{setupPhaseReport, "what is actually ready"},
-	{setupPhaseHandoff, "launching the sandbox"},
+	{SetupPhaseHandoff, "launching the sandbox"},
 }
 
-// setupPhaseHeader prints `[n/8] <phase> — <what>` BEFORE the phase runs.
+// SetupPhaseHeader prints `[n/8] <phase> — <what>` BEFORE the phase runs.
 // Pass a non-empty override to say something more specific than the default
 // (e.g. that the handoff was skipped on purpose).
-func setupPhaseHeader(out io.Writer, name, override string) {
+func SetupPhaseHeader(out io.Writer, name, override string) {
 	if !setupTranscriptVerbose {
 		return
 	}
-	for i, p := range setupPhaseOrder {
-		if p.name != name {
+	for i, p := range SetupPhaseOrder {
+		if p.Name != name {
 			continue
 		}
-		what := p.what
+		what := p.What
 		if override != "" {
 			what = override
 		}
-		fmt.Fprintf(out, "\n[%d/%d] %s — %s\n", i+1, len(setupPhaseOrder), p.name, what)
+		fmt.Fprintf(out, "\n[%d/%d] %s — %s\n", i+1, len(SetupPhaseOrder), p.Name, what)
 		return
 	}
 }
 
 var setupTranscriptVerbose bool
 
-// setupMaxPrompts is the hard cap on interactive questions ONE setup run may
+// SetupMaxPrompts is the hard cap on interactive questions ONE setup run may
 // ask (AC-P0-307). There are exactly two: model-pull consent and the Google
 // Workspace route. Pasting a 1Password ref in the keys step is not counted —
 // it is not a question with a default, it is the mandatory input to a hard
 // precondition, and a run that reaches it has already failed closed without it.
-const setupMaxPrompts = 2
+const SetupMaxPrompts = 2
 
-// setupPromptBudget enforces the cap. Every setup-owned prompt site must take
+// SetupPromptBudget enforces the cap. Every setup-owned prompt site must take
 // its slot from here BEFORE prompting; a site that cannot get one falls back to
 // its non-interactive behavior (which is always the safe default: don't pull,
 // don't authorize). Non-interactive runs hand out no slots at all, which is how
 // "non-TTY never prompts" (AC-P0-306) is enforced in one place instead of at
 // each call site.
-type setupPromptBudget struct {
-	interactive bool
-	spent       int
-	asked       []string
+type SetupPromptBudget struct {
+	Interactive bool
+	Spent       int
+	Asked       []string
 }
 
 // reserve claims one prompt slot for what, reporting whether the caller may
 // prompt. It is deliberately EAGER (claimed when the site is reached, not when
 // the question is finally printed) so the budget is a static property of the
 // run rather than something that depends on probe results.
-func (b *setupPromptBudget) reserve(what string) bool {
-	if b == nil || !b.interactive || b.spent >= setupMaxPrompts {
+func (b *SetupPromptBudget) Reserve(what string) bool {
+	if b == nil || !b.Interactive || b.Spent >= SetupMaxPrompts {
 		return false
 	}
-	b.spent++
-	b.asked = append(b.asked, what)
+	b.Spent++
+	b.Asked = append(b.Asked, what)
 	return true
 }
 
@@ -513,9 +295,9 @@ type setupInventory struct {
 	retired  []string
 }
 
-// takeSetupInventory reads current state. It writes NOTHING: every call in
+// TakeSetupInventory reads current state. It writes NOTHING: every call in
 // here is a load, a parse, or a bounded probe.
-func takeSetupInventory(env hostenv.Env, opts onboard.Opts) (setupInventory, error) {
+func TakeSetupInventory(env hostenv.Env, opts onboard.Opts) (setupInventory, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return setupInventory{}, fmt.Errorf("loading config: %w", err)
@@ -544,19 +326,41 @@ func setupProposal(opts onboard.Opts) *onboard.OnboardingResult {
 	return p
 }
 
-// validateSetupSemantics checks only built-in argument meaning. It performs no
+// ValidateSetupSemantics checks only built-in argument meaning. It performs no
 // writes and opens no authorization flow, so runSetupCmd can call it before the
 // first pack is adopted. External readiness (catalog OAuth, provider reachability,
 // model pulls) remains in the later gate/verify phases.
-func validateSetupSemantics(opts onboard.Opts, cfg *config.Config, env hostenv.Env, hostResolver func() (string, error)) error {
-	if len(opts.WithSetup) > 0 && len(opts.Packs) == 0 {
-		return errUsage{fmt.Errorf("--with requires --pack")}
+// DefaultEnv, HostBinary, Register and Credentials are the composition setup
+// cannot perform: building a real env, resolving the paired pix-host, and
+// registering MCP servers with credentials resolved over secret. setup
+// sequences nearly every other workflow, so it needs the widest set of these in
+// the tree — which is what a top-level guided flow looks like, not a smell.
+//
+// The env default PANICS rather than returning a half-wired one, for the same
+// reason launch.DefaultEnv does: a setup that silently probes nothing is the
+// failure mode this refactor exists to delete.
+var (
+	DefaultEnv = func() hostenv.Env {
+		panic("setup: DefaultEnv not wired — the composition root must set it")
 	}
-	if err := checkGoogleWorkspaceFlags(opts); err != nil {
+	HostBinary  = launcher.FindHostBinary
+	Register    RegisterFn
+	Credentials func(hostenv.Env) mcp.Credentials
+)
+
+// RegisterFn registers the named servers with the sbx gateway.
+type RegisterFn func(cfg *config.Config, env hostenv.Env, out io.Writer, names []string,
+	hostResolver func() (string, error), containers map[string]config.MCPContainer) error
+
+func ValidateSetupSemantics(opts onboard.Opts, cfg *config.Config, env hostenv.Env, hostResolver func() (string, error)) error {
+	if len(opts.WithSetup) > 0 && len(opts.Packs) == 0 {
+		return ErrUsage{fmt.Errorf("--with requires --pack")}
+	}
+	if err := CheckGoogleWorkspaceFlags(opts); err != nil {
 		return err
 	}
 	if err := onboard.ValidateOnboardingResult(setupProposal(opts), cfg, env, hostResolver); err != nil {
-		return errUsage{err}
+		return ErrUsage{err}
 	}
 	return nil
 }
@@ -584,69 +388,69 @@ func setupGate(env hostenv.Env, inv setupInventory, out io.Writer, interactive b
 	// in cfg.MCP (the handoff would preload it too). It probes with bounded
 	// native checks only and never opens an OAuth flow, so a non-interactive
 	// setup can't trigger a browser grant.
-	if err := verifyCatalogMCPReady(env, append(append([]string{}, inv.proposal.MCP...), inv.cfg.MCP...)); err != nil {
+	if err := VerifyCatalogMCPReady(env, append(append([]string{}, inv.proposal.MCP...), inv.cfg.MCP...)); err != nil {
 		return err
 	}
 	return nil
 }
 
-// setupMutationStep is one idempotent write, named for the transcript and
+// SetupMutationStep is one idempotent write, named for the transcript and
 // tagged with the readiness axes it touches. run() returns an error or nil and
 // writes NO success prose (see setupMutationOut).
-type setupMutationStep struct {
-	name string
-	axes []readiness.Axis
+type SetupMutationStep struct {
+	Name string
+	Axes []readiness.Axis
 	// fatal marks a step whose failure aborts setup. A non-fatal step reports
 	// its own failure and lets the run continue to the report, which will show
 	// the axis as not ready — the failure is never swallowed, it just is not
 	// worth throwing away the rest of a working host over.
-	fatal bool
-	run   func() error
+	Fatal bool
+	Run   func() error
 }
 
-// setupMutationOrder is the FIXED order (AC-P0-303), riskiest last, named
+// SetupMutationOrder is the FIXED order (AC-P0-303), riskiest last, named
 // here so the order is a value a test can assert on rather than a property of
 // the control flow. gworkspace, models and inference sit at the end because
 // they are the only steps that talk to the user; models is second-to-last
 // because it is the only step that can cost gigabytes, and inference is last
 // because it can only judge what models left behind.
-var setupMutationOrder = []string{"keys", "config", "pack", "mcp", "knowledge", "identity", "gworkspace", "models", "inference"}
+var SetupMutationOrder = []string{"keys", "config", "pack", "mcp", "knowledge", "identity", "gworkspace", "models", "inference"}
 
-// runSetupMutations executes steps in order and returns the axes it touched.
+// RunSetupMutations executes steps in order and returns the axes it touched.
 // It returns NO user-facing strings (AC-P0-302): the report is rendered from
 // post-mutation probes, so a stubbed-to-fail mutation cannot print a ✓ for its
 // axis. Steps that must talk to the user (the keys step's ref prompt, a
 // non-fatal step's failure line) write diagnostics, never success claims.
-func runSetupMutations(steps []setupMutationStep) (touched []readiness.Axis, err error) {
+func RunSetupMutations(steps []SetupMutationStep) (touched []readiness.Axis, err error) {
 	for _, s := range steps {
-		if e := s.run(); e != nil {
-			if s.fatal {
+		if e := s.Run(); e != nil {
+			if s.Fatal {
 				return touched, e
 			}
 			err = e
 		}
-		touched = append(touched, s.axes...)
+		touched = append(touched, s.Axes...)
 	}
 	return touched, err
 }
 
-// setupMutationSteps builds the ordered step table. Every closure here writes
+// SetupMutationSteps builds the ordered step table. Every closure here writes
 // to io.Discard unless it is reporting a failure or collecting mandatory input.
-func setupMutationSteps(env hostenv.Env, inv setupInventory, opts onboard.Opts, in io.Reader, out io.Writer, interactive bool, models *setupModelsOutcome, prompts *setupPromptBudget) []setupMutationStep {
+func SetupMutationSteps(env hostenv.Env, inv setupInventory, opts onboard.Opts, in io.Reader, out io.Writer, interactive bool, models *SetupModelsOutcome, prompts *SetupPromptBudget) []SetupMutationStep {
 	cfg := inv.cfg
-	return []setupMutationStep{{
-		name:  "keys",
-		axes:  []readiness.Axis{readiness.AxisProviders, readiness.AxisSecrets},
-		fatal: true,
-		run: func() error {
-			selected, err := setupChooseInference(cfg, env, in, out, interactive)
+	return []SetupMutationStep{{
+		Name:  "keys",
+		Axes:  []readiness.Axis{readiness.AxisProviders, readiness.AxisSecrets},
+		Fatal: true,
+		Run: func() error {
+			selected, err := SetupChooseInference(cfg, env, in, out, interactive)
 			if err != nil {
 				return err
 			}
 			// GitHub is not an inference provider, but gh is a core sandbox CLI.
 			// Reuse an existing host login without another prompt/browser flow.
 			// It remains optional: an unauthenticated host does not block setup.
-			if err := syncGitHubCredentialFromHost(env); err != nil {
+			if err := SyncGitHubCredentialFromHost(env); err != nil {
 				fmt.Fprintf(out, "  github: host credential was not synced (%v)\n", err)
 			}
 			if selected {
@@ -656,21 +460,21 @@ func setupMutationSteps(env hostenv.Env, inv setupInventory, opts onboard.Opts, 
 				// hard-fail a user whose first setup has not downloaded anything yet.
 				return cfg.Save()
 			}
-			if err := ensureSetupPrereqsFor(env, in, out, interactive, true); err != nil {
+			if err := EnsureSetupPrereqsFor(env, in, out, interactive, true); err != nil {
 				return err
 			}
 			// The ONLY mutation that may write to the real terminal: on a TTY
 			// it collects the mandatory op:// refs, and on failure it prints
 			// exactly what is wrong. It prints no ✓ — the keys row in the
 			// report comes from secret.HostModeProviderKeys AFTER this ran.
-			if !setupProvisionKeysFn(env, in, out, interactive, opts.AssumeYes) {
+			if !SetupProvisionKeysFn(env, in, out, interactive, opts.AssumeYes) {
 				return fmt.Errorf("provider keys not fully configured — follow the fix printed above")
 			}
 			// Bind -> verify -> save -> judge -> roster, all of it in
-			// reconcileDirectInference so `pix models add` runs the IDENTICAL
+			// ReconcileDirectInference so `pix models add` runs the IDENTICAL
 			// sequence. It living only here is why a key added any other way stayed
 			// inert: the ref was written and nothing ever rebuilt the bindings.
-			res, err := reconcileDirectInference(cfg, env, in, out, interactive, opts.Models, "")
+			res, err := ReconcileDirectInference(cfg, env, in, out, interactive, opts.Models, "")
 			if err != nil {
 				return err
 			}
@@ -681,9 +485,9 @@ func setupMutationSteps(env hostenv.Env, inv setupInventory, opts onboard.Opts, 
 			return nil
 		},
 	}, {
-		name:  "config",
-		fatal: true,
-		run: func() error {
+		Name:  "config",
+		Fatal: true,
+		Run: func() error {
 			// Retired config keys (mcp_static/mcp_dynamic) are dropped by the
 			// sparse encode whenever the config is saved; do it here so the
 			// migration is deterministic even if a later step fails.
@@ -701,40 +505,40 @@ func setupMutationSteps(env hostenv.Env, inv setupInventory, opts onboard.Opts, 
 			if err != nil {
 				return err
 			}
-			if setupSelectRunnableIntent(cfg, env) {
+			if SetupSelectRunnableIntent(cfg, env) {
 				return cfg.Save()
 			}
 			return nil
 		},
 	}, {
-		name:  "pack",
-		axes:  nil,
-		fatal: true,
-		run: func() error {
+		Name:  "pack",
+		Axes:  nil,
+		Fatal: true,
+		Run: func() error {
 			// Packs are explicit (`pix setup --pack ...`). Personal AGENTS.md and
 			// skills live in XDG_DATA_HOME/pix/context, so default setup must not
 			// manufacture a git repo or introduce the pack concept.
 			return nil
 		},
 	}, {
-		name: "mcp",
-		axes: mcpAxes(cfg.MCP),
-		run: func() error {
+		Name: "mcp",
+		Axes: mcpAxes(cfg.MCP),
+		Run: func() error {
 			if len(cfg.MCP) == 0 {
 				return nil
 			}
 			var buf bytes.Buffer
-			if err := registerServers(cfg, env, &buf, nil, hostBinaryResolver, pack.ActiveContainerMCP(cfg)); err != nil {
+			if err := Register(cfg, env, &buf, nil, HostBinary, pack.ActiveContainerMCP(cfg)); err != nil {
 				fmt.Fprintf(out, "  mcp register skipped: %v (finish later: pix mcp register)\n", err)
 				return err
 			}
 			return nil
 		},
 	}, {
-		name:  "knowledge",
-		axes:  []readiness.Axis{readiness.AxisServiceKnowledge},
-		fatal: true,
-		run: func() error {
+		Name:  "knowledge",
+		Axes:  []readiness.Axis{readiness.AxisServiceKnowledge},
+		Fatal: true,
+		Run: func() error {
 			if inv.proposal.Knowledge == nil {
 				return nil
 			}
@@ -743,20 +547,20 @@ func setupMutationSteps(env hostenv.Env, inv setupInventory, opts onboard.Opts, 
 			return err
 		},
 	}, {
-		name: "identity",
-		run: func() error {
+		Name: "identity",
+		Run: func() error {
 			// Read the user's first name from the HOST's git config (the
 			// sandbox cannot see ~/.gitconfig) and seed it into memory so
 			// onboarding can greet by name. Best-effort and SILENT: the report
 			// re-reads git config itself, so nothing here needs to claim
 			// anything.
-			seedIdentity(env, io.Discard)
+			SeedIdentity(env, io.Discard)
 			return nil
 		},
 	}, {
-		name: "gworkspace",
-		axes: []readiness.Axis{readiness.AxisGworkspace},
-		run: func() error {
+		Name: "gworkspace",
+		Axes: []readiness.Axis{readiness.AxisGworkspace},
+		Run: func() error {
 			// Google Workspace is OFF unless --google-workspace. It runs the
 			// SAME transaction `pix gworkspace setup` runs, through the
 			// same façade, so there is exactly one writer. It returns no
@@ -766,7 +570,7 @@ func setupMutationSteps(env hostenv.Env, inv setupInventory, opts onboard.Opts, 
 			if !opts.GoogleWorkspace {
 				return nil
 			}
-			ask := prompts.reserve("google ws route")
+			ask := prompts.Reserve("google ws route")
 			if err := setupGoogleWorkspaceFn(env, gworkspace.GogSetupOpts{
 				Account:     strings.TrimSpace(opts.Account),
 				Credentials: strings.TrimSpace(opts.Credentials),
@@ -777,9 +581,9 @@ func setupMutationSteps(env hostenv.Env, inv setupInventory, opts onboard.Opts, 
 			return nil
 		},
 	}, {
-		name: "models",
-		axes: []readiness.Axis{readiness.AxisModelWatcher, readiness.AxisModelEmbed, readiness.AxisModelBridge},
-		run: func() error {
+		Name: "models",
+		Axes: []readiness.Axis{readiness.AxisModelWatcher, readiness.AxisModelEmbed, readiness.AxisModelBridge},
+		Run: func() error {
 			// The riskiest step, therefore last: probe Ollama once, classify on
 			// the shared axis.ModelReadiness axes, pull confirmed-missing tags only
 			// under explicit consent (--pull-models, or the one default-No
@@ -789,8 +593,8 @@ func setupMutationSteps(env hostenv.Env, inv setupInventory, opts onboard.Opts, 
 			// Local models are progressive enhancement. When Ollama is already
 			// healthy, interactive setup may offer a default-No pull for positively
 			// missing memory models; unattended setup requires --pull-models.
-			ask := prompts.reserve("enable local memory")
-			*models = setupLocalModels(cfg, env, in, out, ask, opts.PullModels)
+			ask := prompts.Reserve("enable local memory")
+			*models = SetupLocalModels(cfg, env, in, out, ask, opts.PullModels)
 			if setupMemoryModelsReady(cfg, *models) {
 				cfg.AddService("memory")
 				if err := cfg.Save(); err != nil {
@@ -801,20 +605,20 @@ func setupMutationSteps(env hostenv.Env, inv setupInventory, opts onboard.Opts, 
 			return nil
 		},
 	}, {
-		name:  "inference",
-		axes:  []readiness.Axis{readiness.AxisProviders},
-		fatal: false,
-		run: func() error {
+		Name:  "inference",
+		Axes:  []readiness.Axis{readiness.AxisProviders},
+		Fatal: false,
+		Run: func() error {
 			// LAST, and non-fatal: it can only judge what the models step left
 			// behind, and a probe failure must not stop the report from rendering
 			// the axes the run did touch. It prints no routine success line —
 			// success words come from the post-mutation probe (AC-P0-302).
-			return runSetupInferenceStep(cfg, env, in, out, interactive, *models)
+			return RunSetupInferenceStep(cfg, env, in, out, interactive, *models)
 		},
 	}}
 }
 
-// runSetupInferenceStep verifies ollama bindings with real requests, picks the
+// RunSetupInferenceStep verifies ollama bindings with real requests, picks the
 // roster from what actually answered, and then branches on the ONE question
 // that matters: is there anything callable, and if not, whose decision was it.
 //
@@ -823,8 +627,8 @@ func setupMutationSteps(env hostenv.Env, inv setupInventory, opts onboard.Opts, 
 // stays reserved for probes that were dispatched and refused, and for a pull
 // that was consented to and then failed (which the models step already reports
 // — a second error would double-report one cause).
-func runSetupInferenceStep(cfg *config.Config, env hostenv.Env, in io.Reader, out io.Writer, interactive bool, models setupModelsOutcome) error {
-	probe, err := verifyOllamaInference(cfg, env, out)
+func RunSetupInferenceStep(cfg *config.Config, env hostenv.Env, in io.Reader, out io.Writer, interactive bool, models SetupModelsOutcome) error {
+	probe, err := VerifyOllamaInference(cfg, env, out)
 	if err != nil {
 		return fmt.Errorf("verifying ollama models: %w", err)
 	}
@@ -832,10 +636,10 @@ func runSetupInferenceStep(cfg *config.Config, env hostenv.Env, in io.Reader, ou
 	callable, _ := axis.ConfiguredInferenceSummary(cfg)
 	if callable > 0 {
 		// Deviation from the design: the roster prompt is NOT taken from
-		// prompts.reserve. setupMaxPrompts is 2 and both slots are already claimed
+		// prompts.reserve. SetupMaxPrompts is 2 and both slots are already claimed
 		// (gworkspace, models), so reserving here would deny the prompt and
 		// silently auto-select every candidate — a regression, not a budget fix.
-		if err := configureModelRoster(cfg, in, out, interactive, ""); err != nil {
+		if err := ConfigureModelRoster(cfg, in, out, interactive, ""); err != nil {
 			return fmt.Errorf("choosing models: %w", err)
 		}
 	}
@@ -871,14 +675,14 @@ func runSetupInferenceStep(cfg *config.Config, env hostenv.Env, in io.Reader, ou
 	//
 	// Cloud is deliberately excluded (handled above): an entitlement refusal is
 	// not explained by a download nobody started.
-	declinedPull := models.consent == "none" || models.consent == "prompt-no"
+	declinedPull := models.Consent == "none" || models.Consent == "prompt-no"
 	if attempted > 0 && !declinedPull {
 		return fmt.Errorf("ollama models are bound, but none answered a request: %s", strings.Join(failures, "; "))
 	}
 	if len(axis.UnverifiedOllamaCandidates(cfg)) == 0 {
 		return nil // nothing ollama-shaped here; the keys step owns this host
 	}
-	switch models.consent {
+	switch models.Consent {
 	case "--pull-models", "prompt-yes":
 		// The pull was consented to and did not produce a callable model. The
 		// models step already failed with the exact retry command and owns the
@@ -894,11 +698,11 @@ func runSetupInferenceStep(cfg *config.Config, env hostenv.Env, in io.Reader, ou
 	}
 }
 
-// syncGitHubCredentialFromHost mirrors the current host gh login into sbx's
+// SyncGitHubCredentialFromHost mirrors the current host gh login into sbx's
 // global github service. The token exists only in process memory and the child
 // argv accepted by sbx (the same unavoidable boundary used by provider-key
 // sync); output/errors are redacted before they can reach a transcript.
-func syncGitHubCredentialFromHost(env hostenv.Env) error {
+func SyncGitHubCredentialFromHost(env hostenv.Env) error {
 
 	if _, err := env.LookPath("gh"); err != nil {
 		return nil
@@ -934,12 +738,12 @@ func mcpAxes(servers []string) []readiness.Axis {
 	return out
 }
 
-// setupHostPhase runs the host half of `pix setup` as the eight-phase
+// SetupHostPhase runs the host half of `pix setup` as the eight-phase
 // transcript documented above. The only interactive steps are the mandatory
 // op:// ref collection (TTY + op installed) and bounded consent questions;
 // with --yes/--non-interactive or no TTY it is fully
 // non-interactive (the CI path).
-func setupHostPhase(env hostenv.Env, flags []string, in io.Reader, out io.Writer, tty bool) error {
+func SetupHostPhase(env hostenv.Env, flags []string, in io.Reader, out io.Writer, tty bool) error {
 	setupTranscriptVerbose = !env.Quiet
 	if !env.Quiet {
 		fmt.Fprintln(out, "pix setup — configuring the host")
@@ -947,16 +751,16 @@ func setupHostPhase(env hostenv.Env, flags []string, in io.Reader, out io.Writer
 
 	// PHASE 1 — parse. Argument mistakes are caught here, before any probe or
 	// mutation, and map to exit 2 at the call site.
-	setupPhaseHeader(out, setupPhaseParse, "")
+	SetupPhaseHeader(out, setupPhaseParse, "")
 	opts, perr := onboard.ParseOnboardArgs(flags)
 	if perr != nil {
-		return errUsage{perr}
+		return ErrUsage{perr}
 	}
 	if opts.Apply {
 		// --apply is intercepted by runSetupCmd (it reconciles a pending
 		// onboarding.json and stops). Reaching the host phase with it set means
 		// a caller bypassed that route, which would silently ignore the flag.
-		return errUsage{fmt.Errorf("--apply is handled before the host phase; run `pix setup [DIR] --apply`")}
+		return ErrUsage{fmt.Errorf("--apply is handled before the host phase; run `pix setup [DIR] --apply`")}
 	}
 	// Interactive prompts fire on any real TTY unless the caller explicitly opted
 	// out with --yes/-y/--non-interactive (opts.AssumeYes). Ordinary VALUE flags
@@ -964,16 +768,16 @@ func setupHostPhase(env hostenv.Env, flags []string, in io.Reader, out io.Writer
 	// nothing about whether pasting a 1Password ref should still prompt, so their
 	// mere presence must NOT silently suppress the key-collection/overwrite
 	// prompts — only an explicit non-interactive opt-out does.
-	interactive := setupInteractivePrompts(tty, opts.AssumeYes)
-	prompts := &setupPromptBudget{interactive: interactive}
+	interactive := SetupInteractivePrompts(tty, opts.AssumeYes)
+	prompts := &SetupPromptBudget{Interactive: interactive}
 
 	// PHASE 2 — inventory. Reads only.
-	setupPhaseHeader(out, setupPhaseInventory, "")
-	inv, err := takeSetupInventory(env, opts)
+	SetupPhaseHeader(out, setupPhaseInventory, "")
+	inv, err := TakeSetupInventory(env, opts)
 	if err != nil {
 		return err
 	}
-	if err := validateSetupSemantics(opts, inv.cfg, env, hostBinaryResolver); err != nil {
+	if err := ValidateSetupSemantics(opts, inv.cfg, env, HostBinary); err != nil {
 		return err
 	}
 	if len(inv.retired) > 0 {
@@ -982,41 +786,41 @@ func setupHostPhase(env hostenv.Env, flags []string, in io.Reader, out io.Writer
 
 	// PHASE 3 — gate. Nothing has been written yet; a failure here leaves the
 	// host exactly as it was found.
-	setupPhaseHeader(out, setupPhaseGate, "")
+	SetupPhaseHeader(out, setupPhaseGate, "")
 	if err := setupGate(env, inv, out, interactive); err != nil {
 		return err
 	}
 
 	// PHASE 4 — mutate, and PHASE 5 — consent. One ordered step table
-	// (setupMutationOrder), split at the point where the steps start asking
+	// (SetupMutationOrder), split at the point where the steps start asking
 	// permission: the first six are unattended, the last three (gworkspace,
 	// models, inference) are the consented, riskiest-last group.
-	var models setupModelsOutcome
-	steps := setupMutationSteps(env, inv, opts, in, out, interactive, &models, prompts)
+	var models SetupModelsOutcome
+	steps := SetupMutationSteps(env, inv, opts, in, out, interactive, &models, prompts)
 	split := len(steps) - 3
-	setupPhaseHeader(out, setupPhaseMutate, "")
-	if _, err := runSetupMutations(steps[:split]); err != nil {
+	SetupPhaseHeader(out, setupPhaseMutate, "")
+	if _, err := RunSetupMutations(steps[:split]); err != nil {
 		return err
 	}
-	setupPhaseHeader(out, setupPhaseConsent, "")
-	if _, err := runSetupMutations(steps[split:]); err != nil {
+	SetupPhaseHeader(out, setupPhaseConsent, "")
+	if _, err := RunSetupMutations(steps[split:]); err != nil {
 		return err
 	}
 
 	// PHASE 6 — verify. Re-probe, from scratch, everything the mutations
 	// touched. Nothing recorded by the mutate phase is trusted here.
-	setupPhaseHeader(out, setupPhaseVerify, "")
+	SetupPhaseHeader(out, setupPhaseVerify, "")
 	postCfg, cerr := config.Load()
 	if cerr != nil {
 		postCfg = inv.cfg
 	}
-	req := readiness.RequestAll(postCfg.MCP, setupRequestedAxes(opts)...)
+	req := readiness.RequestAll(postCfg.MCP, SetupRequestedAxes(opts)...)
 	snap := readiness.Build(req, setupReadinessAxes(postCfg, env, models))
 
 	// PHASE 7 — report. A pure function of the post-mutation snapshot: it
 	// takes no inventory, no mutation log, and no "what we meant to do".
-	setupPhaseHeader(out, setupPhaseReport, "")
-	printSetupSummary(postCfg, env, out, models)
+	SetupPhaseHeader(out, setupPhaseReport, "")
+	PrintSetupSummary(postCfg, env, out, models)
 
 	if !env.Quiet {
 		fmt.Fprintln(out, "")
@@ -1041,15 +845,15 @@ func setupHostPhase(env hostenv.Env, flags []string, in io.Reader, out io.Writer
 	return nil
 }
 
-// setupRequestedAxes maps THIS invocation's flags to the axes they promote from
+// SetupRequestedAxes maps THIS invocation's flags to the axes they promote from
 // optional to blocking (AC-P0-209). Promotion itself lives in the readiness
 // type (build); this is only the flag→axis mapping, so no command
 // re-implements the rule.
 //
 // `--mcp X` promotes `mcp:X`, which setup additionally enforces in the gate
-// (verifyCatalogMCPReady) — a requested server that cannot come up fails before
+// (VerifyCatalogMCPReady) — a requested server that cannot come up fails before
 // anything is written, which is strictly earlier than an exit code.
-func setupRequestedAxes(opts onboard.Opts) []readiness.Axis {
+func SetupRequestedAxes(opts onboard.Opts) []readiness.Axis {
 	var out []readiness.Axis
 	if opts.PullModels {
 		out = append(out, readiness.AxisOllamaHost, readiness.AxisModelWatcher, readiness.AxisModelEmbed, readiness.AxisModelBridge)
@@ -1080,7 +884,7 @@ func requestedShortfallMessage(short []readiness.Axis, s readiness.Snapshot) str
 // Ollama/model and service builders doctor uses (so setup and doctor can never
 // disagree), plus the three axes only setup's own post-mutation reads can speak
 // to. Every builder here probes; none reads the inventory.
-func setupReadinessAxes(cfg *config.Config, env hostenv.Env, models setupModelsOutcome) map[readiness.Axis]readiness.AxisBuilder {
+func setupReadinessAxes(cfg *config.Config, env hostenv.Env, models SetupModelsOutcome) map[readiness.Axis]readiness.AxisBuilder {
 	builders := map[readiness.Axis]readiness.AxisBuilder{}
 	for a, b := range doctor.OllamaReadinessAxes(cfg, env, "", nil) {
 		builders[a] = b
@@ -1090,7 +894,7 @@ func setupReadinessAxes(cfg *config.Config, env hostenv.Env, models setupModelsO
 			builders[a] = b
 		}
 	}
-	builders[readiness.AxisProviders] = func() []readiness.Check { return setupProvidersAxis(cfg, env) }
+	builders[readiness.AxisProviders] = func() []readiness.Check { return SetupProvidersAxis(cfg, env) }
 	if strings.TrimSpace(cfg.Pack) != "" {
 		builders[readiness.AxisPack] = func() []readiness.Check { return setupPackAxis(cfg) }
 	}
@@ -1102,9 +906,9 @@ func setupReadinessAxes(cfg *config.Config, env hostenv.Env, models setupModelsO
 	return builders
 }
 
-// setupProvidersAxis is the post-mutation provider-key fact: ready when at
+// SetupProvidersAxis is the post-mutation provider-key fact: ready when at
 // least one model-provider ref resolves (any one key launches a sandbox).
-func setupProvidersAxis(cfg *config.Config, env hostenv.Env) []readiness.Check {
+func SetupProvidersAxis(cfg *config.Config, env hostenv.Env) []readiness.Check {
 	if cfg != nil && len(cfg.Inference.Models) > 0 {
 		callable := 0
 		candidates := 0
@@ -1146,11 +950,11 @@ func setupProvidersAxis(cfg *config.Config, env hostenv.Env) []readiness.Check {
 	}
 }
 
-// setupSelectRunnableIntent prevents a successful one-provider setup from
+// SetupSelectRunnableIntent prevents a successful one-provider setup from
 // immediately selecting a model whose provider has no key. It changes only
 // the shipped OpenAI-specific default. Explicit non-default user choices and
 // multi-provider installations are left untouched.
-func setupSelectRunnableIntent(cfg *config.Config, env hostenv.Env) bool {
+func SetupSelectRunnableIntent(cfg *config.Config, env hostenv.Env) bool {
 	if cfg == nil || cfg.RunIntent != config.DefaultRunIntent {
 		return false
 	}
@@ -1207,13 +1011,13 @@ func setupGworkspaceAxis(cfg *config.Config, env hostenv.Env) []readiness.Check 
 	}
 }
 
-// providerKeyPromptAttempts caps how many times setupProvisionKeys reprompts
+// providerKeyPromptAttempts caps how many times SetupProvisionKeys reprompts
 // for a single provider's ref before giving up, since a human who keeps
 // mistyping (or an unattended TTY feeding garbage) must not hang setup
 // forever.
 const providerKeyPromptAttempts = 3
 
-// setupProvisionKeys sources one or more model provider keys from 1Password
+// SetupProvisionKeys sources one or more model provider keys from 1Password
 // and reconciles them into the sbx secret store. This is the ONLY
 // provider-key path: op is required, and the removed --use-sbx-keys flag,
 // persisted provider_key_mode, and the "already in sbx?" convenience prompt are
@@ -1249,18 +1053,18 @@ const providerKeyPromptAttempts = 3
 // `pix secret set`/`secret rm` cannot interleave. Never persists or prints
 // a resolved secret value.
 //
-// setupProvisionKeysFn is the seam setupHostPhase calls through (a package var
+// SetupProvisionKeysFn is the seam SetupHostPhase calls through (a package var
 // so a test can replace it with a stub).
-var setupProvisionKeysFn = setupProvisionKeys
+var SetupProvisionKeysFn = SetupProvisionKeys
 
-// setupProvisionKeys resolves provider keys from 1Password (the strict, and now
+// SetupProvisionKeys resolves provider keys from 1Password (the strict, and now
 // only, flow) and returns whether it succeeded.
-func setupProvisionKeys(env hostenv.Env, in io.Reader, out io.Writer, interactive, assumeYes bool) bool {
+func SetupProvisionKeys(env hostenv.Env, in io.Reader, out io.Writer, interactive, assumeYes bool) bool {
 	return runStrictProviderKeyFlow(env, bufio.NewScanner(in), out, interactive, assumeYes)
 }
 
 // runStrictProviderKeyFlow resolves the configured provider keys from 1Password and
-// reconciles it into sbx (Steps 0-4 documented on setupProvisionKeys). It is the
+// reconciles it into sbx (Steps 0-4 documented on SetupProvisionKeys). It is the
 // only provider-key path now that the sbx-keys shortcut is gone.
 func runStrictProviderKeyFlow(env hostenv.Env, sc *bufio.Scanner, out io.Writer, interactive, assumeYes bool) bool {
 	fmt.Fprintln(out, "")
@@ -1530,30 +1334,30 @@ func validOpRefSyntax(ref string) bool {
 	return true
 }
 
-// identityMemory is the slice of the memory client seedIdentity needs,
-// injectable via newIdentityMemory so tests can simulate per-call RPC
+// IdentityMemory is the slice of the memory client SeedIdentity needs,
+// injectable via NewIdentityMemory so tests can simulate per-call RPC
 // failures without a live daemon.
-type identityMemory interface {
+type IdentityMemory interface {
 	Up() bool
 	Call(method string, params map[string]any) (map[string]any, error)
 }
 
-// newIdentityMemory is seedIdentity's seam to the memory daemon.
-var newIdentityMemory = func() identityMemory { return rpc.MemoryClient() }
+// NewIdentityMemory is SeedIdentity's seam to the memory daemon.
+var NewIdentityMemory = func() IdentityMemory { return rpc.MemoryClient() }
 
 // rememberPersistedID extracts the "id" field from a remember RPC result,
 // returning "" for anything that does not prove a durable write actually
 // happened: a nil/empty result map, a missing "id" key, an "id" of the wrong
 // type, or the daemon's own no-error-but-nothing-persisted response for empty
 // content ({"id": "", "reaffirmed": false} — memory.go's remember handler).
-// seedIdentity must count a save only when this returns non-empty; err == nil
+// SeedIdentity must count a save only when this returns non-empty; err == nil
 // alone is not proof anything landed.
 func rememberPersistedID(res map[string]any) string {
 	id, _ := res["id"].(string)
 	return id
 }
 
-// seedIdentity greets the user by name (from git config) and stores durable
+// SeedIdentity greets the user by name (from git config) and stores durable
 // identity facts in memory (best-effort, only if the daemon is up), so their
 // first session isn't anonymous. The trusted host-state payload injected into
 // the onboarding kickoff prompt (see hoststate.go's launch.InjectTrustedHostState)
@@ -1562,7 +1366,7 @@ func rememberPersistedID(res map[string]any) string {
 // remember RPC is tracked individually: the output claims a memory save ONLY
 // for writes that actually succeeded, is honest about a partial or failed
 // batch, and never promises recall it can't guarantee.
-func seedIdentity(env hostenv.Env, out io.Writer) {
+func SeedIdentity(env hostenv.Env, out io.Writer) {
 	id := launch.ReadGitIdentity(env)
 	if id.Name == "" {
 		return
@@ -1574,7 +1378,7 @@ func seedIdentity(env hostenv.Env, out io.Writer) {
 	// greeting itself belongs to the in-session agent, not this log.
 	facts := []string{"The user's first name is " + id.Name + "."}
 	attempted, saved := 0, 0
-	if c := newIdentityMemory(); c.Up() {
+	if c := NewIdentityMemory(); c.Up() {
 		for _, f := range facts {
 			attempted++
 			res, err := c.Call("remember", map[string]any{"content": f, "source": "setup", "profile": "default"})
@@ -1602,21 +1406,21 @@ func seedIdentity(env hostenv.Env, out io.Writer) {
 	}
 }
 
-// setupSandboxName derives the sandbox name `pix run` would use for dir
+// SetupSandboxName derives the sandbox name `pix run` would use for dir
 // (base name + active-profile suffix), so setup's guard can probe the SAME
 // sandbox run would attach to. ok=false when the name can't be resolved (e.g. a
 // unresolvable config) — the caller then skips the guard rather than blocking
 // setup.
-func setupSandboxName(dir string) (string, bool) {
+func SetupSandboxName(dir string) (string, bool) {
 	if _, err := config.Load(); err != nil {
 		return "", false
 	}
 	return workspace.DeriveSandboxName(dir), true
 }
 
-// flagTakesValue reports whether an onboard flag consumes a following token
+// FlagTakesValue reports whether an onboard flag consumes a following token
 // (only the space-separated form; `--flag=value` is self-contained).
-func flagTakesValue(a string) bool {
+func FlagTakesValue(a string) bool {
 	switch a {
 	case "--account", "--credentials", "--knowledge", "--mcp", "--model", "--models", "--pack", "--with":
 		return true
@@ -1624,7 +1428,7 @@ func flagTakesValue(a string) bool {
 	return false
 }
 
-func normalizeSetupPackArg(arg string) string {
+func NormalizeSetupPackArg(arg string) string {
 	arg = strings.TrimSpace(arg)
 	if strings.Count(arg, "/") == 1 && !strings.Contains(arg, ":") && !strings.HasPrefix(arg, ".") && !strings.HasPrefix(arg, "~") {
 		return "https://github.com/" + arg + ".git"
@@ -1632,7 +1436,7 @@ func normalizeSetupPackArg(arg string) string {
 	return arg
 }
 
-const setupUsage = `usage: pix setup [DIR] [host-config flags]
+const Usage = `usage: pix setup [DIR] [host-config flags]
 
 Sets up callable inference, then starts Pix. Ordinary setup begins with one
 model-runtime choice. The selected path may then ask only for the credentials
@@ -1720,30 +1524,338 @@ resumed by re-running the same command: setup re-probes what is actually there
 rather than reading back a journal of what it once intended.
 `
 
-// checkGoogleWorkspaceFlags enforces AC-P0-312: --account and --credentials are
+// CheckGoogleWorkspaceFlags enforces AC-P0-312: --account and --credentials are
 // Google Workspace inputs, valid ONLY alongside --google-workspace. The error
 // is deliberately in the standard grammar (invoked path, lowercase, no trailing
 // period) and maps to exit 2 at the call site, because it is an argument
 // mistake, not a failed probe.
-func checkGoogleWorkspaceFlags(opts onboard.Opts) error {
+func CheckGoogleWorkspaceFlags(opts onboard.Opts) error {
 	if opts.GoogleWorkspace {
 		return nil
 	}
 	if strings.TrimSpace(opts.Account) != "" {
-		return errUsage{fmt.Errorf("--account requires --google-workspace")}
+		return ErrUsage{fmt.Errorf("--account requires --google-workspace")}
 	}
 	if strings.TrimSpace(opts.Credentials) != "" {
-		return errUsage{fmt.Errorf("--credentials requires --google-workspace")}
+		return ErrUsage{fmt.Errorf("--credentials requires --google-workspace")}
 	}
 	return nil
 }
 
-// errUsage marks an argument error, which exits 2 rather than 1.
-type errUsage struct{ error }
+// ErrUsage marks an argument error, which exits 2 rather than 1.
+type ErrUsage struct{ error }
 
 // setupGoogleWorkspaceFn is the seam tests stub so setup's phases can be
 // exercised without a browser or an installed dependency CLI. Production wires
 // the real façade over the unchanged transaction.
 var setupGoogleWorkspaceFn = func(env hostenv.Env, opts gworkspace.GogSetupOpts, in io.Reader, out io.Writer, interactive bool) error {
-	return gworkspace.Setup(env, opts, in, out, interactive, mcpCredentials)
+	return gworkspace.Setup(env, opts, in, out, interactive, Credentials)
+}
+
+// SetupChooseInference owns the single ordinary-user inference question. It
+// is skipped when a pack or prior setup already supplied a backend. Ollama is
+// shown only after both binary and daemon probes succeed.
+func SetupChooseInference(cfg *config.Config, env hostenv.Env, in io.Reader, out io.Writer, interactive bool) (bool, error) {
+	if cfg == nil {
+		return false, nil
+	}
+	if len(cfg.Inference.Backends) > 0 {
+		if inference.InferenceNeedsOnePassword(cfg) {
+			return false, nil
+		}
+		if err := EnableDeclaredInferenceBindings(cfg); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	if !interactive {
+		return false, nil
+	}
+	ollamaReady := false
+	if _, err := env.LookPath("ollama"); err == nil {
+		_, timedOut, runErr := env.RunTimed("ollama", "list")
+		ollamaReady = runErr == nil && !timedOut
+	}
+	fmt.Fprintln(out, "How should Pix run models? (choose one or more, comma-separated)")
+	fmt.Fprintln(out, "  1. API key (default)     Anthropic / OpenAI / Google keys, resolved from 1Password")
+	if ollamaReady {
+		fmt.Fprintln(out, "  2. Ollama local          models that run on this machine")
+	}
+	fmt.Fprintln(out, "  3. Custom gateway        an OpenAI-compatible endpoint you host")
+	if ollamaReady {
+		fmt.Fprintln(out, "  4. Ollama Cloud          large models on your ollama.com subscription")
+		// A HINT, not entitlement. A `:cloud` row in the listing appears on every
+		// signed-in machine and proves nothing about what the plan may call — that
+		// inference is exactly how a gated model got bound and 401'd at call time.
+		if n := listedCloudTagCount(env); n > 0 {
+			fmt.Fprintf(out, "  (this machine lists %d cloud model(s); Pix proves which ones your plan can call)\n", n)
+		}
+	}
+	fmt.Fprint(out, "Choose [1]: ")
+	choice, ok := readSetupLine(in)
+	if !ok {
+		return false, fmt.Errorf("no inference choice; setup cannot continue")
+	}
+	if strings.TrimSpace(choice) == "" {
+		return false, nil
+	}
+	selected := map[string]bool{}
+	for _, raw := range strings.FieldsFunc(strings.ToLower(choice), func(r rune) bool { return r == ',' || r == ' ' }) {
+		switch raw {
+		case "1", "api":
+			selected["api"] = true
+		case "2", "ollama", "ollama-local", "local":
+			selected["ollama"] = true
+		case "3", "gateway":
+			selected["gateway"] = true
+		case "4", "ollama-cloud", "cloud":
+			selected["ollama-cloud"] = true
+		default:
+			return false, fmt.Errorf("unknown inference choice %q", raw)
+		}
+	}
+	if selected["ollama"] || selected["ollama-cloud"] {
+		if !ollamaReady {
+			return false, fmt.Errorf("Ollama is not installed and healthy, so it is not an available inference choice")
+		}
+		sel := OllamaSelection{Local: selected["ollama"], Cloud: selected["ollama-cloud"]}
+		if _, err := ConfigureOllamaInference(cfg, env, sel, out); err != nil {
+			return false, err
+		}
+	}
+	if selected["gateway"] {
+		if _, err := configureCustomGateway(cfg, in, out); err != nil {
+			return false, err
+		}
+	}
+	// false means the caller must continue through the direct-key transaction.
+	return !selected["api"], nil
+}
+
+// VerifyOllamaInference earns Verified for ollama bindings with an actual
+// model-specific request through the RESOLVED endpoint. Every binding is
+// checked independently. CLOUD probes run concurrently (they are network round
+// trips and hold no local resource). LOCAL probes are SERIALIZED and unload
+// after themselves: two concurrent generates make Ollama co-load two sets of
+// weights, which either exhausts the memory budget readiness_hardware.go just
+// computed or serializes the loads anyway behind timers that started at
+// dispatch — so the second reports a timeout it never got a turn to spend, and
+// un-binds a model that works. Mirrors VerifyDirectInference in structure, not
+// in concurrency.
+//
+// The local set runs LARGEST RUNG FIRST under its own wall budget, and a probe
+// is never STARTED unless its full timeout fits what remains: the budget can
+// therefore never manufacture a timeout. A candidate the budget never reached
+// is `not probed` — a THIRD state that is neither verified nor failed, excluded
+// from attempted, and never rendered as a rejection.
+//
+// Deviation from the design's signature: it takes an io.Writer (the design's
+// own output spec prints a live line per local probe, which cannot be done
+// without one) and returns the notProbed set (the third state has to be
+// observable to be assertable).
+func VerifyOllamaInference(cfg *config.Config, env hostenv.Env, out io.Writer) (res probeOutcome, err error) {
+	if cfg == nil {
+		return res, fmt.Errorf("verify ollama inference: no config")
+	}
+	if env.OllamaInference == nil {
+		return res, ErrNoProbeSeam
+	}
+	if out == nil {
+		out = io.Discard
+	}
+	reg, err := routing.LoadRegistry()
+	if err != nil {
+		return res, fmt.Errorf("verify ollama inference: %w", err)
+	}
+	endpoint := strings.TrimRight(axis.EffectiveOllamaEndpoint(cfg, env).URL, "/")
+	type candidate struct {
+		index  int
+		label  string
+		Tag    string
+		numCtx int
+		minRAM float64
+	}
+	var local, cloud []candidate
+	for i := range cfg.Inference.Models {
+		binding := &cfg.Inference.Models[i]
+		backend, ok := cfg.Inference.Backends[binding.Backend]
+		if !ok || backend.Driver != "ollama" || !binding.Available || !inference.Allowed(cfg, *binding) {
+			continue
+		}
+		if binding.Source != "" {
+			// A pack's authority is the sandbox smoke test; a host probe must not
+			// demote what it cannot faithfully replay.
+			continue
+		}
+		// Demote first: a stale claim (including a pre-provenance listing-derived
+		// one) must never survive a run that could not re-earn it.
+		binding.Verified, binding.VerifiedBy, binding.VerifiedAt = false, "", ""
+		c := candidate{index: i, label: binding.Model, Tag: binding.Upstream}
+		m, found := reg.Get(binding.Model)
+		if found && m.Local {
+			// num_ctx is the rung's DECLARED context budget, so the probe allocates
+			// the same KV cache the RAM gate priced. A rung that cannot hold its own
+			// declared context fails here, which is exactly when we want to find out.
+			c.numCtx, c.minRAM = m.ContextWindow, m.MinRAMGB
+			local = append(local, c)
+			continue
+		}
+		cloud = append(cloud, c)
+	}
+
+	promote := func(index int) {
+		cfg.Inference.Models[index].Verified = true
+		cfg.Inference.Models[index].VerifiedBy = config.VerifiedByProbe
+		cfg.Inference.Models[index].VerifiedAt = time.Now().UTC().Format(time.RFC3339)
+		res.Verified++
+	}
+
+	// Cloud: concurrent. Nothing local is held, so N probes cost one timeout.
+	type result struct {
+		index int
+		label string
+		err   error
+	}
+	results := make(chan result, len(cloud))
+	for _, c := range cloud {
+		res.Attempted++
+		go func(c candidate) {
+			results <- result{index: c.index, label: c.label, err: env.OllamaInference(endpoint, c.Tag, 0, ollamaCloudProbeTimeout)}
+		}(c)
+	}
+
+	// Local: strictly serial, largest rung first, each unloading after itself.
+	sort.Slice(local, func(i, j int) bool {
+		if local[i].minRAM != local[j].minRAM {
+			return local[i].minRAM > local[j].minRAM
+		}
+		return local[i].label < local[j].label
+	})
+	if len(local) > 0 {
+		fmt.Fprintf(out, "  verifying %d local ollama model(s), one at a time (each is loaded and unloaded) ...\n", len(local))
+	}
+	remaining := OllamaLocalProbeBudget
+	for _, c := range local {
+		if remaining < OllamaLocalProbeTimeout {
+			// NOT a failure: this candidate never got a turn. Reporting it as broken
+			// would let a budget un-bind a healthy model.
+			res.NotProbed = append(res.NotProbed, c.label)
+			fmt.Fprintf(out, "    %-14s not probed — %.0fs left of the %.0fs local budget, less than one probe's %.0fs\n",
+				c.Tag, remaining.Seconds(), OllamaLocalProbeBudget.Seconds(), OllamaLocalProbeTimeout.Seconds())
+			continue
+		}
+		res.Attempted++
+		start := time.Now()
+		err := env.OllamaInference(endpoint, c.Tag, c.numCtx, OllamaLocalProbeTimeout)
+		elapsed := time.Since(start)
+		if remaining -= elapsed; remaining < 0 {
+			remaining = 0
+		}
+		if err != nil {
+			res.Failures = append(res.Failures, c.label+": "+err.Error())
+			fmt.Fprintf(out, "    %-14s failed (%.0fs): %v\n", c.Tag, elapsed.Seconds(), err)
+			continue
+		}
+		promote(c.index)
+		fmt.Fprintf(out, "    %-14s ok (%.0fs)\n", c.Tag, elapsed.Seconds())
+	}
+
+	for range cloud {
+		r := <-results
+		if r.err != nil {
+			res.Failures = append(res.Failures, r.label+": "+r.err.Error())
+			continue
+		}
+		promote(r.index)
+	}
+	sort.Strings(res.Failures)
+	sort.Strings(res.NotProbed)
+	return res, nil
+}
+
+// ConfigureModelRoster turns the broad set of backend bindings into the small,
+// explicit catalog-model surface agents may use. The router continues to pick
+// by intent, but it can never escape this roster. A mandatory pack is already
+// an explicit policy decision and therefore skips the personal roster prompt.
+func ConfigureModelRoster(cfg *config.Config, in io.Reader, out io.Writer, interactive bool, requested string) error {
+	return configureModelRosterFrom(cfg, in, out, interactive, requested, nil)
+}
+
+// ReconcileDirectInference turns the provider keys that exist on this host into
+// callable model bindings. It is the sequence that used to live only inside
+// setup's keys step, which is why adding a key any other way left it inert:
+// `pix secret set` wrote the ref, and nothing ever rebuilt the bindings, probed
+// them, or widened the roster.
+//
+// Order is load-bearing and matches the step it was extracted from:
+//
+//		capture prior providers -> bind -> verify -> save -> judge -> roster
+//
+//	  - The prior set is captured BEFORE binding, or widening cannot see what is
+//	    new (see rosterSeenProviders).
+//	  - cfg.Save() happens BEFORE the verified==0 verdict, so a partial success is
+//	    never thrown away by the error path.
+//	  - verified == 0 with something attempted is a hard error; verified > 0 with
+//	    some failures is not.
+//
+// requestedProvider is the provider the USER named on the command line
+// (`pix models add google`), or "" for setup's own reconcile. It is the only
+// thing that can override the roster's already-offered stamp — see
+// WidenRosterForProvider.
+func ReconcileDirectInference(cfg *config.Config, env hostenv.Env, in io.Reader, out io.Writer, interactive bool, requestedModels, requestedProvider string) (reconcileResult, error) {
+	var res reconcileResult
+	if cfg == nil {
+		return res, fmt.Errorf("no config")
+	}
+	if cfg.Inference.ExclusiveSource != "" {
+		return res, ErrInferenceExclusive
+	}
+	if out == nil {
+		out = io.Discard
+	}
+	prior := inference.BoundNativeProviders(cfg)
+
+	providers, err := secret.HostModeProviderKeys(env)
+	if err != nil {
+		return res, fmt.Errorf("reading configured providers: %w", err)
+	}
+	res.Providers = providers
+	for _, p := range providers {
+		if !prior[p] {
+			res.Added = append(res.Added, p)
+		}
+	}
+	sort.Strings(res.Added)
+
+	if err := ConfigureDirectInference(cfg, providers); err != nil {
+		return res, fmt.Errorf("configuring direct inference: %w", err)
+	}
+	// Widen BEFORE probing. VerifyDirectInference only probes bindings the roster
+	// allows (inferenceBindingAllowed), so on a config with a non-empty roster
+	// the newly added provider would otherwise never be probed, never become
+	// callable, and be pruned straight back out of the roster for not being
+	// callable — the key stays inert and the command still reports success.
+	widenRosterForNewProviders(cfg, prior)
+	WidenRosterForProvider(cfg, requestedProvider)
+	outcome, verr := VerifyDirectInference(cfg, env)
+	if verr != nil {
+		return res, fmt.Errorf("verifying provider keys: %w", verr)
+	}
+	res.probeOutcome = outcome
+	if err := cfg.Save(); err != nil {
+		return res, err
+	}
+	if res.Verified == 0 && (res.Attempted > 0 || len(res.Failures) > 0) {
+		detail := strings.Join(res.Failures, "; ")
+		if detail == "" {
+			detail = "no provider accepted a model-specific request"
+		}
+		return res, fmt.Errorf("provider keys resolved, but live inference verification failed: %s", detail)
+	}
+	if callable, _ := axis.ConfiguredInferenceSummary(cfg); callable > 0 || strings.TrimSpace(requestedModels) != "" {
+		if err := configureModelRosterFrom(cfg, in, out, interactive, requestedModels, prior); err != nil {
+			return res, fmt.Errorf("choosing models: %w", err)
+		}
+	}
+	return res, cfg.Save()
 }

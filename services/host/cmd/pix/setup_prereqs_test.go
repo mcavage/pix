@@ -7,14 +7,15 @@ import (
 	"pix/host/hostenv"
 	"pix/host/sys/systest"
 	"pix/host/workflow/doctor"
+	"pix/host/workflow/setup"
 	"strings"
 	"testing"
 )
 
 func TestEnsureSetupPrereqsInstallsCoreToolsOnce(t *testing.T) {
-	old := setupHostOS
-	setupHostOS = "darwin"
-	t.Cleanup(func() { setupHostOS = old })
+	old := setup.SetupHostOS
+	setup.SetupHostOS = "darwin"
+	t.Cleanup(func() { setup.SetupHostOS = old })
 	installed := map[string]bool{"brew": true}
 	runs := 0
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
@@ -31,7 +32,7 @@ func TestEnsureSetupPrereqsInstallsCoreToolsOnce(t *testing.T) {
 		return nil
 	}}}
 	var out bytes.Buffer
-	if err := ensureSetupPrereqs(env, strings.NewReader("\n"), &out, true); err != nil {
+	if err := setup.EnsureSetupPrereqs(env, strings.NewReader("\n"), &out, true); err != nil {
 		t.Fatal(err)
 	}
 	if runs != 1 || !strings.Contains(out.String(), "[Y/n]") {
@@ -40,16 +41,16 @@ func TestEnsureSetupPrereqsInstallsCoreToolsOnce(t *testing.T) {
 }
 
 func TestEnsureSetupPrereqsNonInteractivePrintsExactFixes(t *testing.T) {
-	old := setupHostOS
-	setupHostOS = "darwin"
-	t.Cleanup(func() { setupHostOS = old })
+	old := setup.SetupHostOS
+	setup.SetupHostOS = "darwin"
+	t.Cleanup(func() { setup.SetupHostOS = old })
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
 		if name == "brew" {
 			return "/opt/homebrew/bin/brew", nil
 		}
 		return "", fmt.Errorf("missing")
 	}}}
-	err := ensureSetupPrereqs(env, nil, &bytes.Buffer{}, false)
+	err := setup.EnsureSetupPrereqs(env, nil, &bytes.Buffer{}, false)
 	if err == nil || !strings.Contains(err.Error(), doctor.SbxInstallHint) || !strings.Contains(err.Error(), "brew install 1password-cli") {
 		t.Fatalf("got %v", err)
 	}
@@ -62,7 +63,7 @@ func TestEnsureSetupPrereqsIgnoresOptionalTools(t *testing.T) {
 		}
 		return "", fmt.Errorf("missing")
 	}}}
-	if err := ensureSetupPrereqs(env, nil, &bytes.Buffer{}, false); err != nil {
+	if err := setup.EnsureSetupPrereqs(env, nil, &bytes.Buffer{}, false); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -82,7 +83,7 @@ func TestEnsureSetupSbxSessionRunsOfficialLoginAndVerifies(t *testing.T) {
 		return nil
 	}}}
 	var out bytes.Buffer
-	if err := ensureSetupSbxSession(env, &out, true); err != nil {
+	if err := setup.EnsureSetupSbxSession(env, &out, true); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "official `sbx login` flow") {
@@ -94,7 +95,7 @@ func TestEnsureSetupSbxSessionNonInteractivePrintsFix(t *testing.T) {
 	env := hostenv.Env{System: &systest.Fake{RunTimedFn: func(string, ...string) (string, bool, error) {
 		return "", false, fmt.Errorf("not signed in")
 	}}}
-	if err := ensureSetupSbxSession(env, &bytes.Buffer{}, false); err == nil || !strings.Contains(err.Error(), "sbx login") {
+	if err := setup.EnsureSetupSbxSession(env, &bytes.Buffer{}, false); err == nil || !strings.Contains(err.Error(), "sbx login") {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -130,7 +131,7 @@ func TestEnsureSetupSbxDefaultsAddsPublisherAndInitializesOpenPolicy(t *testing.
 			return fmt.Errorf("unexpected mutation: %s", got)
 		}
 	}}}
-	if err := ensureSetupSbxDefaults(env); err != nil {
+	if err := setup.EnsureSetupSbxDefaults(env); err != nil {
 		t.Fatal(err)
 	}
 	if got := strings.Join(sources, ","); got != "docker.io/,github.com/example/,github.com/mcavage/" {
@@ -159,7 +160,7 @@ func TestEnsureSetupSbxDefaultsPreservesWildcardAndExistingPolicy(t *testing.T) 
 		mutations++
 		return nil
 	}}}
-	if err := ensureSetupSbxDefaults(env); err != nil {
+	if err := setup.EnsureSetupSbxDefaults(env); err != nil {
 		t.Fatal(err)
 	}
 	if mutations != 0 {
@@ -171,7 +172,7 @@ func TestSetupSbxNetworkPolicyInitializedAcceptsLegacyArray(t *testing.T) {
 	env := hostenv.Env{System: &systest.Fake{RunTimedFn: func(string, ...string) (string, bool, error) {
 		return `[{"decision":"allow"}]`, false, nil
 	}}}
-	initialized, err := setupSbxNetworkPolicyInitialized(env)
+	initialized, err := setup.SetupSbxNetworkPolicyInitialized(env)
 	if err != nil || !initialized {
 		t.Fatalf("initialized=%v err=%v", initialized, err)
 	}
@@ -181,7 +182,7 @@ func TestSetupSbxNetworkPolicyInitializedAcceptsEmptyRulesObject(t *testing.T) {
 	env := hostenv.Env{System: &systest.Fake{RunTimedFn: func(string, ...string) (string, bool, error) {
 		return `{"rules":[]}`, false, nil
 	}}}
-	initialized, err := setupSbxNetworkPolicyInitialized(env)
+	initialized, err := setup.SetupSbxNetworkPolicyInitialized(env)
 	if err != nil || initialized {
 		t.Fatalf("initialized=%v err=%v", initialized, err)
 	}
@@ -201,7 +202,7 @@ func TestEnsureSetupOpenNetworkPolicyHandlesUninitializedListError(t *testing.T)
 		initialized = true
 		return nil
 	}}}
-	if err := ensureSetupOpenNetworkPolicy(env); err != nil {
+	if err := setup.EnsureSetupOpenNetworkPolicy(env); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -212,7 +213,7 @@ func TestEnsureSetupKitAllowedSourceRequiresVerifiedPersistence(t *testing.T) {
 		reads++
 		return `["docker.io/"]`, false, nil
 	}, RunInteractiveQuietFn: func(string, ...string) error { return nil }}}
-	err := ensureSetupKitAllowedSource(env)
+	err := setup.EnsureSetupKitAllowedSource(env)
 	if err == nil || !strings.Contains(err.Error(), "did not retain") || reads != 2 {
 		t.Fatalf("err=%v reads=%d", err, reads)
 	}

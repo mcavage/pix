@@ -46,7 +46,7 @@ const glyphOwner = "readiness/render.go"
 // The list may only SHRINK, like drainingPackages in arch_test.go. Routing
 // those progress lines through the shared vocabulary would be a real
 // improvement; adding a second entry should require arguing for it.
-var glyphExempt = map[string]bool{"cmd/pix/setup.go": true}
+var glyphExempt = map[string]bool{"workflow/setup/setup.go": true}
 
 // verdictGlyphs is the closed set of markers the vocabulary owns.
 var verdictGlyphs = []string{"✓", "✗", "⚠", "⊘"}
