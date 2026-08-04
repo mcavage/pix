@@ -140,6 +140,7 @@ RULES=(
 	$'^CHANGELOG\\.md$\tkeep-historical\treleased history: entries describe versions published under the old name, including their asset URLs'
 	$'^docs/design/pix-migration\\.md$\tkeep-historical\tthe pre-cutover audited plan records the original and target names as historical evidence'
 	$'^docs/upstream/\tkeep-historical\tupstream bug reports as filed: the text was sent to another project under the old name'
+	$'^scripts/legal/secret-scan-allowlist\.txt$\tkeep-historical\tfingerprints a full-history secret scan (git rev-list --objects --all); the reviewed-comment paths quote the ACTUAL historical blob path from pre-rename commits (e.g. services/host/cmd/pi-stack/...) -- rewriting the annotation to a path that never existed at that commit would misrepresent the evidence the fingerprint documents'
 
 	# --- manual: computed runtime identity, read line by line in U-W3.09 -----
 	$'^services/host/cmd/pi-stack/task\\.go$\tmanual\tidentity: task sandbox name (pi-stack-t-), branch prefix (pi-stack/), per-repo state dirs (AC-P0-406/407/408)'
