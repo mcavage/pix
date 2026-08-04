@@ -592,8 +592,8 @@ var restartServeForReset = func(out io.Writer) error {
 
 // stopServeForReset is the serve-stop the reset executor uses, indirected through
 // a package var so a test can stub it (and so the real path never signals a live
-// serve during unit tests). It is MODE-AWARE: a managed service (launchd/systemd)
-// is stopped via its supervisor so KeepAlive/Restart= cannot respawn it mid-reset
+// serve during unit tests). It is MODE-AWARE: a managed service (launchd)
+// is stopped via its supervisor so KeepAlive cannot respawn it mid-reset
 // (which would trip the data-move guard); otherwise it falls through to the
 // pidfile-based service.Stop (with its discovery fallback for an orphaned daemon).
 var stopServeForReset = func(out io.Writer) (bool, error) {

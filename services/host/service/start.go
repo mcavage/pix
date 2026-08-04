@@ -13,8 +13,9 @@
 //
 // Every OS boundary (spawn, dial, flock, clock) is injected via serveStarter so
 // the whole flow is unit-testable with NO real process spawn. The real
-// detached-spawn + flock shims live in serve_start_unix.go (//go:build unix);
-// serve_start_windows.go degrades gracefully on everything else.
+// detached-spawn + flock shims live in serve_start_unix.go (//go:build unix) —
+// pix's host lifecycle is unix-only (macOS host, plus Linux for sandbox dev
+// builds); there is no Windows degrade to maintain.
 
 package service
 
@@ -373,7 +374,7 @@ func readServeLazyMarkerPid() (pid int, ok bool) {
 // REFUSES to read through a symlink (H1). Round 2 (H8) closes a TOCTOU: the
 // original Lstat-then-ReadFile left a window where swapping the log for a
 // symlink AFTER the Lstat made it read+echo an arbitrary file. ReadFileNoSymlink
-// (serve_start_unix.go / serve_start_windows.go) opens with O_NOFOLLOW so the
+// (serve_start_unix.go) opens with O_NOFOLLOW so the
 // open itself atomically refuses a symlink — there is no separate check to race.
 func tailFileLines(path string, n int) string {
 	b, err := ReadFileNoSymlink(path)

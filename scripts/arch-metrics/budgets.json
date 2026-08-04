@@ -2,9 +2,9 @@
   "schema": 1,
   "packages": {
     "pix/host": {
-      "prod_loc": 6654,
+      "prod_loc": 6608,
       "exports": 0,
-      "globals": 64,
+      "globals": 63,
       "edges": 6,
       "exits": 28
     },
@@ -30,7 +30,7 @@
       "exits": 0
     },
     "pix/host/config": {
-      "prod_loc": 1401,
+      "prod_loc": 1400,
       "exports": 47,
       "globals": 17,
       "edges": 0,
@@ -72,7 +72,7 @@
       "exits": 0
     },
     "pix/host/lease": {
-      "prod_loc": 617,
+      "prod_loc": 618,
       "exports": 12,
       "globals": 8,
       "edges": 0,
@@ -142,16 +142,16 @@
       "exits": 9
     },
     "pix/host/service": {
-      "prod_loc": 1992,
-      "exports": 21,
-      "globals": 18,
+      "prod_loc": 1758,
+      "exports": 22,
+      "globals": 16,
       "edges": 6,
       "exits": 8
     },
     "pix/host/slackoauth": {
-      "prod_loc": 1128,
+      "prod_loc": 1031,
       "exports": 26,
-      "globals": 16,
+      "globals": 14,
       "edges": 0,
       "exits": 0
     },
@@ -163,7 +163,7 @@
       "exits": 0
     },
     "pix/host/sys": {
-      "prod_loc": 557,
+      "prod_loc": 549,
       "exports": 24,
       "globals": 11,
       "edges": 1,
@@ -176,13 +176,6 @@
       "edges": 1,
       "exits": 0
     },
-    "pix/host/workflow/backup": {
-      "prod_loc": 125,
-      "exports": 4,
-      "globals": 2,
-      "edges": 2,
-      "exits": 0
-    },
     "pix/host/workflow/doctor": {
       "prod_loc": 2382,
       "exports": 27,
@@ -191,7 +184,7 @@
       "exits": 0
     },
     "pix/host/workflow/gworkspace": {
-      "prod_loc": 1227,
+      "prod_loc": 1154,
       "exports": 14,
       "globals": 11,
       "edges": 10,
@@ -203,13 +196,6 @@
       "globals": 20,
       "edges": 14,
       "exits": 3
-    },
-    "pix/host/workflow/man": {
-      "prod_loc": 221,
-      "exports": 4,
-      "globals": 2,
-      "edges": 1,
-      "exits": 0
     },
     "pix/host/workflow/onboard": {
       "prod_loc": 370,
@@ -252,13 +238,6 @@
       "globals": 10,
       "edges": 0,
       "exits": 0
-    },
-    "pix/host/workflow/upgrade": {
-      "prod_loc": 642,
-      "exports": 9,
-      "globals": 8,
-      "edges": 4,
-      "exits": 4
     },
     "pix/host/workspace": {
       "prod_loc": 1061,

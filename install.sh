@@ -14,7 +14,8 @@
 #   https://github.com/mcavage/pix/blob/main/install.sh
 #
 # What it does:
-#   - detects your OS (darwin/linux) + arch (amd64/arm64)
+#   - detects your OS (darwin only — pix's host lifecycle is macOS-only) +
+#     arch (amd64/arm64)
 #   - resolves the latest release (or PIX_VERSION if you set one)
 #   - downloads pix-<os>-<arch>, pix-host-<os>-<arch>, and SHA256SUMS
 #   - verifies each binary's sha256 against SHA256SUMS (aborts on mismatch)
@@ -45,15 +46,17 @@ err()  { printf 'install.sh: %s\n' "$*" >&2; }
 die()  { err "$*"; exit 1; }
 
 # --- OS/arch detection ------------------------------------------------------
-# Emits "<os> <arch>" using the Go convention (darwin/linux, amd64/arm64).
+# Emits "<os> <arch>" using the Go convention (darwin, amd64/arm64). pix's
+# host lifecycle (launchd-managed serve, the pix/pix-host binaries) is
+# macOS-only — there is no linux release asset to fetch any more.
 detect_platform() {
 	os_raw="$(uname -s)"
 	arch_raw="$(uname -m)"
 
 	case "$os_raw" in
 		Darwin) os="darwin" ;;
-		Linux)  os="linux" ;;
-		*) die "unsupported OS '$os_raw' (need Darwin or Linux)" ;;
+		Linux)  die "pix's host is macOS-only; there is no Linux release of pix/pix-host. Run pix inside a Linux sandbox instead of installing the host binaries there." ;;
+		*) die "unsupported OS '$os_raw' (need Darwin)" ;;
 	esac
 
 	case "$arch_raw" in
