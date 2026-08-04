@@ -3,8 +3,6 @@ package doctor
 import (
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"pix/host/cli"
 	"pix/host/hostenv"
 	"pix/host/launcher"
@@ -14,10 +12,7 @@ import (
 	"pix/host/readiness/axis"
 	"pix/host/secret"
 	"pix/host/sys"
-	"pix/host/workflow/onboard"
 	"pix/host/workflow/pack"
-	"pix/host/workflow/upgrade"
-	"slices"
 	"strings"
 
 	"pix/host/config"
@@ -61,13 +56,11 @@ type statusReport struct {
 	ConfigPath        string                  `json:"config_path"`
 	Profile           string                  `json:"profile"`
 	Memory            bool                    `json:"memory_up"`
-	Knowledge         bool                    `json:"knowledge_up"`
 	Monitor           bool                    `json:"monitor_up"`
 	EnabledServices   []string                `json:"enabled_services,omitempty"`
 	Providers         map[string]bool         `json:"providers"`
 	InferenceModels   int                     `json:"inference_models,omitempty"`
 	InferenceBackends []string                `json:"inference_backends,omitempty"`
-	Bundles           []bundleStatus          `json:"knowledge_bundles"`
 	MCP               []string                `json:"mcp"`
 	MCPServers        []mcpStatusLine         `json:"mcp_servers"`
 	MCPRows           []mcpSandboxRow         `json:"mcp_sandbox_rows,omitempty"`
@@ -75,9 +68,6 @@ type statusReport struct {
 	Tasks             int                     `json:"tasks"`
 	ArtifactB         int64                   `json:"artifact_bytes"`
 	Todos             []string                `json:"todos"`
-	GogAccount        string                  `json:"gog_account,omitempty"`
-	GogAuthed         bool                    `json:"gog_authed,omitempty"`
-	InstallWarnings   []string                `json:"install_warnings,omitempty"`
 	// Checks is the shared, flat readiness array (the SAME row type doctor
 	// --json emits: axis/requirement/verdict/evidence/fix/duration_ms/
 	// endpoint), and Exit is the process exit code this same data produced.
@@ -122,11 +112,6 @@ type mcpSandboxRow struct {
 	Evidence   string `json:"evidence"`
 }
 
-type bundleStatus struct {
-	Path string `json:"path"`
-	Git  string `json:"git"` // e.g. "clean", "3 ahead", "dirty", "no remote", ""
-}
-
 func GatherStatus(cfg *config.Config, profile string, env hostenv.Env) statusReport {
 	// currentIntent is the "current config/pack" universe — cfg.MCP plus any
 	// active-pack integration name not already there — the host-global
@@ -143,26 +128,12 @@ func GatherStatus(cfg *config.Config, profile string, env hostenv.Env) statusRep
 		MCP:             currentIntent,
 		EnabledServices: append([]string(nil), cfg.Services...),
 	}
-	self, err := env.Executable()
-	if err == nil {
-		if warning := upgrade.PathShadowIssue("pix", self, env.Getenv); warning != "" {
-			st.InstallWarnings = append(st.InstallWarnings, warning)
-		}
-		if env.HostBinary != nil {
-			host, err := env.HostBinary()
-			if err == nil {
-				if warning := upgrade.PathShadowIssue("pix-host", host, env.Getenv); warning != "" {
-					st.InstallWarnings = append(st.InstallWarnings, warning)
-				}
-			}
-		}
-	}
 	// monitor is an on-demand tool (`pix monitor`), not a background
 	// serve service, so its up/down state is reported but never feeds the
 	// "serve: up/down" label or an outstanding-item TODO below. It is the
-	// only remaining bare dial here: memory and knowledge come from the
-	// identity-verified readiness axes below, because a held port is not
-	// proof that the process holding it is ours.
+	// only remaining bare dial here: memory comes from the identity-verified
+	// readiness axis below, because a held port is not proof that the process
+	// holding it is ours.
 	st.Monitor = env.DialLocal(monitor.DefaultPort)
 
 	// Providers: probe `sbx secret ls` ONCE (proxy-injected keys; never in VM)
@@ -180,7 +151,6 @@ func GatherStatus(cfg *config.Config, profile string, env hostenv.Env) statusRep
 	// the same rows, in the same words, that doctor and run do.
 	snap := axis.FastReadinessSnapshot(cfg, env, keyEvidence)
 	st.Memory = axis.AxisReady(snap, readiness.AxisServiceMemory)
-	st.Knowledge = axis.AxisReady(snap, readiness.AxisServiceKnowledge)
 	st.Checks = readinessChecksJSON(snap.All())
 	st.Exit = snap.ExitCodeSuppressingUnverifiable()
 	unverifiableAxes := snap.UnverifiableCount()
@@ -224,11 +194,6 @@ func GatherStatus(cfg *config.Config, profile string, env hostenv.Env) statusRep
 		st.Todos = append(st.Todos, "install the Docker Sandboxes CLI (sbx) to verify provider keys")
 	case !sbxOK:
 		st.Todos = append(st.Todos, "could not verify provider keys (sbx secret ls failed); check sbx")
-	}
-
-	// Knowledge bundles + git drift.
-	for _, b := range cfg.KnowledgeBundles {
-		st.Bundles = append(st.Bundles, bundleStatus{Path: b, Git: bundleGitStatus(env, b)})
 	}
 
 	// MCP registration evidence: ONE bounded `sbx mcp ls`, best-effort. The
@@ -279,18 +244,6 @@ func GatherStatus(cfg *config.Config, profile string, env hostenv.Env) statusRep
 		// path (TestGatherStatusMCPSbxAbsent).
 		for _, m := range currentIntent {
 			st.MCPServers = append(st.MCPServers, mcpStatusLine{Name: m, Unverifiable: true})
-		}
-	}
-
-	// Integrations: Google Workspace is "account set, needs auth" until a real auth
-	// probe passes (an email alone is not completed OAuth). Best-effort.
-	st.GogAccount = cfg.GogAccount
-	if cfg.GogAccount != "" {
-		st.GogAuthed = onboard.GogAuthed(env, cfg.GogAccount)
-		// An account set but not authed is an outstanding item: setting an email is
-		// not completed OAuth, so the verdict must not read "all systems go".
-		if !st.GogAuthed {
-			st.Todos = append(st.Todos, gogSetupHint)
 		}
 	}
 
@@ -380,11 +333,6 @@ func GatherStatus(cfg *config.Config, profile string, env hostenv.Env) statusRep
 }
 
 func (st statusReport) render(out io.Writer) {
-	for _, warning := range st.InstallWarnings {
-		fmt.Fprintf(out, "  %s install     %s\n",
-			readiness.VerdictGlyph(readiness.RequirementOptional, readiness.VerdictTodo, false),
-			strings.ReplaceAll(warning, "\n", "\n                "))
-	}
 	fmt.Fprintf(out, "pix %s\n\n", st.Version)
 
 	// The landing screen reports only services the user enabled. Disabled
@@ -395,8 +343,6 @@ func (st statusReport) render(out io.Writer) {
 		switch name {
 		case "memory":
 			services = append(services, compactReady("memory", st.Memory))
-		case "knowledge":
-			services = append(services, compactReady("knowledge", st.Knowledge))
 		default:
 			services = append(services, name)
 		}
@@ -418,23 +364,7 @@ func (st statusReport) render(out io.Writer) {
 		fmt.Fprintf(out, "  providers    %s\n", strings.Join(prov, "  "))
 	}
 
-	if len(st.Bundles) > 0 {
-		fmt.Fprintf(out, "  knowledge    %s\n", cli.Plural(len(st.Bundles), "bundle"))
-	}
-
 	st.renderIntegrations(out)
-
-	if st.GogAccount != "" {
-		label := "account set, needs auth (run " + gogSetupHint + ")"
-		if st.GogAuthed {
-			label = "authed"
-		}
-		// A configured Workspace account is already included in the MCP summary.
-		// Only render it separately when it needs action or is not an MCP.
-		if !st.GogAuthed || !slices.Contains(st.MCP, config.GWServerName) {
-			fmt.Fprintf(out, "  ws    %s\n", label)
-		}
-	}
 
 	if len(st.Sandboxes) > 0 {
 		states := map[string]int{}
@@ -648,39 +578,4 @@ func okGlyph(ok bool) string {
 	return readiness.VerdictGlyph(readiness.RequirementCore, readiness.VerdictTodo, false)
 }
 
-// bundleGitStatus returns a short git-drift summary for a bundle dir: "clean",
-// "dirty", "N ahead", "no remote", or "" when it isn't a git repo / git is
-// absent. Best-effort and short — never blocks status.
-func bundleGitStatus(env hostenv.Env, dir string) string {
 
-	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
-		return ""
-	}
-	dirty := false
-	if o, err := env.Run("git", "-C", dir, "status", "--porcelain"); err == nil {
-		dirty = strings.TrimSpace(o) != ""
-	}
-	remote, rerr := env.Run("git", "-C", dir, "remote")
-	if rerr != nil || strings.TrimSpace(remote) == "" {
-		if dirty {
-			return "dirty, no remote"
-		}
-		return "no remote"
-	}
-	ahead := ""
-	if o, err := env.Run("git", "-C", dir, "rev-list", "--count", "@{upstream}..HEAD"); err == nil {
-		if n := strings.TrimSpace(o); n != "" && n != "0" {
-			ahead = n + " ahead"
-		}
-	}
-	switch {
-	case dirty && ahead != "":
-		return "dirty, " + ahead
-	case dirty:
-		return "dirty"
-	case ahead != "":
-		return ahead
-	default:
-		return "clean"
-	}
-}

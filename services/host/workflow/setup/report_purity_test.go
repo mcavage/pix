@@ -21,7 +21,7 @@ func TestSetupReport_NeverReadsInventory(t *testing.T) {
 			t.Fatal(err)
 		}
 		src := string(b)
-		for _, fn := range []string{"func PrintSetupSummary(", "func SetupProvidersAxis(", "func setupPackAxis(", "func setupGworkspaceAxis("} {
+		for _, fn := range []string{"func PrintSetupSummary(", "func SetupProvidersAxis(", "func setupPackAxis("} {
 			i := strings.Index(src, fn)
 			if i < 0 {
 				continue

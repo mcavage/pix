@@ -16,9 +16,8 @@
 //     command, and the completion summary stays truthful;
 //   - retired config keys (mcp_static/mcp_dynamic) are dropped on save with
 //     ONE concise notice; unknown keys are never called retired;
-//   - the completion summary reports keys / knowledge / pack / local models /
-//     gog on separate readiness axes (empty pack is TODO, never green; gog
-//     guidance is `pix gworkspace setup` only, never a raw gog auth command);
+//   - the completion summary reports keys / pack / local models on separate
+//     readiness axes (empty pack is TODO, never green);
 //   - the consent/pull outcome is receipted into launcher state via a
 //     symlink-safe atomic write.
 package main
@@ -30,7 +29,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/readiness/axis"
 	"pix/host/sys/systest"
@@ -449,8 +447,7 @@ func TestSetupModels_SummaryProvisionedWhenCoreReady(t *testing.T) {
 	stubLiveInferenceOK(&env)
 	stubProvisionKeysOK(t)
 
-	// Pre-create a non-empty default pack and activate it in config, plus a
-	// knowledge bundle path.
+	// Pre-create a non-empty default pack and activate it in config.
 	root := pack.DefaultPackRoot()
 	if err := os.MkdirAll(filepath.Join(root, "skills", "demo"), 0o755); err != nil {
 		t.Fatal(err)
@@ -461,12 +458,11 @@ func TestSetupModels_SummaryProvisionedWhenCoreReady(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "skills", "demo", "SKILL.md"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	kb := t.TempDir()
 	cfgPath := os.Getenv("PIX_CONFIG")
 	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	content := "pack = " + fmt.Sprintf("%q", root) + "\nknowledge_bundles = [" + fmt.Sprintf("%q", kb) + "]\n"
+	content := "pack = " + fmt.Sprintf("%q", root) + "\n"
 	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -476,37 +472,11 @@ func TestSetupModels_SummaryProvisionedWhenCoreReady(t *testing.T) {
 		t.Fatalf("unexpected error: %v\n%s", err, out.String())
 	}
 	s := out.String()
-	if !strings.Contains(s, "✓ knowledge") || !strings.Contains(s, "✓ pack") {
-		t.Errorf("knowledge + non-empty pack must be green, got:\n%s", s)
+	if !strings.Contains(s, "✓ pack") {
+		t.Errorf("non-empty pack must be green, got:\n%s", s)
 	}
 	if !strings.Contains(s, "Core ready: verified inference is configured.") {
 		t.Errorf("core must be provisioned, got:\n%s", s)
-	}
-}
-
-// --- requirement 6: gog guidance is `pix gworkspace setup` only ----------------
-
-func TestSetupModels_GogGuidanceIsGogSetupOnly(t *testing.T) {
-	w := &ollamaWorld{have: map[string]bool{"qwen3.5:9b": true, "nomic-embed-text": true}, gogAuthErr: true}
-	env := modelsSetupEnv(t, w)
-	stubProvisionKeysOK(t)
-	cfgPath := os.Getenv("PIX_CONFIG")
-	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(cfgPath, []byte("google_workspace_account = \"me@example.com\"\nmcp = [\""+config.GWServerName+"\"]\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	var out bytes.Buffer
-	if err := setup.SetupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, false); err != nil {
-		t.Fatalf("unexpected error: %v\n%s", err, out.String())
-	}
-	s := out.String()
-	if !strings.Contains(s, "✗ workspace") || !strings.Contains(s, "pix gworkspace setup") {
-		t.Errorf("an unhealthy configured gog must point at `pix gworkspace setup`, got:\n%s", s)
-	}
-	if strings.Contains(s, "gog auth login") || strings.Contains(s, "sbx mcp auth") {
-		t.Errorf("gog is a LOCAL stdio MCP: setup must never print a raw gog auth command or native sbx mcp auth for it, got:\n%s", s)
 	}
 }
 

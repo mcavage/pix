@@ -17,14 +17,14 @@ package main
 import (
 	"bytes"
 	"errors"
+	"os"
+	"path/filepath"
 	"pix/host/readiness"
 	"pix/host/workflow/man"
 	"pix/host/workflow/onboard"
 	"pix/host/workflow/setup"
 	"strings"
 	"testing"
-
-	"pix/host/config"
 )
 
 // normalizeCopy collapses runs of whitespace so a sentence can be asserted
@@ -80,23 +80,25 @@ func TestSetupRequested_NoFlagWithOllamaDown_SucceedsWithOptionalWarnRow(t *test
 // account configured long ago whose authorization no longer probes healthy is
 // a ⚠/✗ row, not a reason to fail a run that asked for nothing.
 func TestSetupRequested_StaleOptionalConfigNeverBlocks(t *testing.T) {
-	w := &ollamaWorld{gogAuthErr: true}
+	w := &ollamaWorld{}
 	env := modelsSetupEnv(t, w)
 	stubProvisionKeysOK(t)
-	cfg, err := config.Load()
-	if err != nil {
+	// A retired config key (mcp_static, the removed eager/lazy split) is stale
+	// optional config nobody asked THIS invocation to fix — it must be dropped
+	// on save with a notice, never block setup.
+	cfgPath := os.Getenv("PIX_CONFIG")
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cfg.GogAccount = "stale@example.com"
-	if err := cfg.Save(); err != nil {
+	if err := os.WriteFile(cfgPath, []byte("mcp_static = [\"slack\"]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
 	if err := setup.SetupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, false); err != nil {
 		t.Fatalf("stale optional config must not block an unrelated repair, got: %v\n%s", err, out.String())
 	}
-	if !strings.Contains(out.String(), "stale@example.com") {
-		t.Errorf("the stale account must still be reported, got:\n%s", out.String())
+	if !strings.Contains(out.String(), "mcp_static") {
+		t.Errorf("the retired key must still be reported dropped, got:\n%s", out.String())
 	}
 }
 
@@ -106,8 +108,8 @@ func TestSetupRequestedAxes_FlagMapping(t *testing.T) {
 	if got := setup.SetupRequestedAxes(onboard.Opts{}); len(got) != 0 {
 		t.Errorf("no flags must promote nothing, got %v", got)
 	}
-	got := readiness.AxisNames(setup.SetupRequestedAxes(onboard.Opts{PullModels: true, GoogleWorkspace: true, Mcp: []string{"slack"}}))
-	want := []string{"gworkspace", "mcp:slack", "model.bridge", "model.embed", "model.watcher", "ollama.host"}
+	got := readiness.AxisNames(setup.SetupRequestedAxes(onboard.Opts{PullModels: true, Mcp: []string{"slack"}}))
+	want := []string{"mcp:slack", "model.bridge", "model.embed", "model.watcher", "ollama.host"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("setup.SetupRequestedAxes = %v, want %v", got, want)
 	}
