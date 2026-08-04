@@ -1,17 +1,28 @@
 // `serve` is the plugin supervisor. It runs the long-running HTTP host services
-// (memory :11435), resolving each
+// (memory :11435, monitor ingest :11437), resolving each
 // capability slot from config: a "builtin" impl runs IN-PROCESS exactly as
 // before (memoryMux()); a non-builtin impl is launched ONCE at
 // startup as a go-plugin subprocess and the HTTP shim proxies to it. Plugins
 // never bind ports — the supervisor owns the listeners and the stable host
 // surface every sandbox already depends on. The MCP servers (e.g. slack) are
 // stdio and spawned on demand by the sbx gateway (`mcp <name>`), not here.
-
+//
+// monitor ingest is composed directly (no go-plugin subprocess: it is a
+// single loopback HTTP listener over a file-backed store, not a capability
+// worth the supervision-tree machinery). It owns its own net.Listener
+// (monitor.NewIngestServer binds eagerly, so a port conflict is a startup
+// error here rather than a silent later failure) and its own context-based
+// Serve/shutdown, so it is NOT one of the mux-based hostServices below —
+// `ctx` is threaded through specifically so cancelling it on shutdown drains
+// monitor's listener the same way SIGINT/a fatal service error do for
+// everything else. See docs/design/monitor.md.
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -22,7 +33,9 @@ import (
 	"syscall"
 	"time"
 
+	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/monitor"
 )
 
 type hostService struct {
@@ -32,30 +45,65 @@ type hostService struct {
 	check func() error // optional serve-preflight; if non-nil it MUST pass or `serve` barfs
 }
 
-// runServe starts the long-running HTTP host services. `enabled` is the list
-// from `services` in config.toml (config-friendly alias: memory); empty means
-// "all". The MCP servers (e.g. slack) are stdio commands run by the sbx gateway
-// via `sbx mcp add`, not HTTP daemons.
+// serveUsage documents the flags runServe itself parses (--bind/--port,
+// monitor-only — memory's bind/port stay env-only via MEMORY_BIND/
+// MEMORY_PORT, unchanged) plus the enabled-service positionals. `pix serve`
+// (the launcher) intercepts -h/--help before ever exec'ing this binary and
+// prints service.Usage instead; this text is for a direct `pix-host serve
+// -h` invocation (as `make serve` does).
+const serveUsage = `usage: pix-host serve [service...] [--bind ADDR] [--port N]
+
+  Run the long-running host services: memory (:11435), monitor ingest
+  (:11437). No service names given: run every service in ` + "`services`" + `
+  (config.toml), or all of them if that is also unset.
+
+  --bind ADDR   monitor ingest listen address (default 127.0.0.1,
+                loopback-only). A non-loopback bind exposes the ingest
+                endpoint — no auth, full agent context and tool output — to
+                your local network; the process WARNS loudly when it does.
+  --port N      monitor ingest port (default 11437)
+`
+
+// runServe starts the long-running HTTP host services. Positional args are
+// the list from `services` in config.toml (config-friendly alias: memory,
+// monitor); empty means "all". The MCP servers (e.g. slack) are stdio
+// commands run by the sbx gateway via `sbx mcp add`, not HTTP daemons.
 // serveServiceAliases is the config name -> internal service name table: the
 // WHOLE set of capabilities `serve` composes. A retired capability leaves here,
 // which is what makes `serve <retired>` a usage error, not a started daemon.
 func serveServiceAliases() map[string]string {
-	return map[string]string{"memory": "memory"}
+	return map[string]string{"memory": "memory", "monitor": "monitor"}
 }
 
-func runServe(enabled []string) {
+func runServe(argv []string) {
+	fs := cli.NewFlagSet()
+	monitorPort := fs.Int("port", monitor.DefaultPort)
+	monitorBind := fs.Str("bind", monitor.DefaultBindAddr)
+	enabled, ferr := fs.Parse(argv)
+	if ferr != nil {
+		fmt.Fprintf(os.Stderr, "pix-host serve: %v\n\n%s", ferr, serveUsage)
+		os.Exit(2)
+	}
+	if fs.Help {
+		fmt.Print(serveUsage)
+		return
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("serve: load config: %v", err)
 	}
 
 	sup := &supervisor{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	// fatalf routes every fatal exit through plugin cleanup (F4). A plain
 	// log.Fatalf calls os.Exit and skips the signal-handler shutdown, orphaning
 	// any launched plugin subprocess; sup.shutdown() is a no-op with none running,
 	// so this is always safe. Use it for every fatal after `sup` exists.
 	fatalf := func(format string, a ...any) {
 		log.Printf("serve: "+format, a...)
+		cancel()
 		sup.shutdown()
 		os.Exit(1)
 	}
@@ -113,8 +161,31 @@ func runServe(enabled []string) {
 		all = append(all, memSvc)
 	}
 
-	if len(all) == 0 {
-		fatalf("no services enabled (run: pix config set services memory)")
+	// monitor ingest: a loopback HTTP listener over a bounded, file-backed
+	// store (services/host/monitor), receiving NDJSON events + blob bodies
+	// from the in-sandbox tap. It composes directly rather than through a
+	// mux-based hostService because NewIngestServer already owns its own
+	// listener AND its own Serve(ctx)/shutdown — duplicating that behind a
+	// second http.Server here would just be two owners of one socket.
+	var monitorSrv *monitor.IngestServer
+	if enabledSvc("monitor") {
+		root, rerr := config.MonitorStoreRoot()
+		if rerr != nil {
+			fatalf("resolve monitor store root: %v", rerr)
+		}
+		if !isLoopbackAddr(*monitorBind) {
+			log.Printf("WARNING: monitor ingest is bound to %s, exposed on your local network with NO AUTHENTICATION — anyone on the network can send this sandbox's full agent context and tool output into the store. Use a firewall, or bind loopback (drop --bind) unless you specifically need this.", *monitorBind)
+		}
+		srv, merr := buildMonitorIngest(*monitorBind, *monitorPort, root)
+		if merr != nil {
+			fatalf("launch monitor ingest: %v", merr)
+		}
+		monitorSrv = srv
+		log.Printf("starting monitor on http://%s (store %s)", srv.Addr(), root)
+	}
+
+	if len(all) == 0 && monitorSrv == nil {
+		fatalf("no services enabled (run: pix config set services %s)", strings.Join(valid, ","))
 	}
 
 	// Preflight: every enabled service validates its host dependency UP FRONT, and
@@ -148,7 +219,7 @@ func runServe(enabled []string) {
 	// fatalCh carries service-goroutine errors (e.g. port already in use) back to
 	// the main goroutine so deferred cleanup (pidfile, lazy marker) runs before
 	// exit rather than being skipped by a direct os.Exit in a side goroutine (M-4).
-	fatalCh := make(chan error, len(all)+1)
+	fatalCh := make(chan error, len(all)+2)
 
 	// sigCh receives SIGINT/SIGTERM for graceful shutdown. Handling it in the main
 	// goroutine's select (instead of a side goroutine calling os.Exit) ensures the
@@ -175,15 +246,28 @@ func runServe(enabled []string) {
 		}()
 	}
 
+	// monitor ingest runs its own Serve(ctx): cancelling ctx (below, on
+	// either shutdown path) is what stops it — there is no separate
+	// http.Server to close here, unlike the mux-based services above.
+	if monitorSrv != nil {
+		go func() {
+			if err := monitorSrv.Serve(ctx); err != nil {
+				fatalCh <- fmt.Errorf("monitor: %v", err)
+			}
+		}()
+	}
+
 	// Block until a signal or a service failure. The select here (vs the former
 	// goroutine calling os.Exit directly) lets deferred cleanup run for both paths.
 	select {
 	case sig := <-sigCh:
 		log.Printf("serve: received %v; shutting down", sig)
+		cancel()
 		sup.shutdown()
 		// defers (removeServePidFile, removeServeLazyMarker) run on return
 	case err := <-fatalCh:
 		log.Printf("serve: fatal: %v", err)
+		cancel()
 		sup.shutdown()
 		// Explicitly run deferred cleanup before os.Exit since defers don't run
 		// when Exit is called (defers only run on return from runServe).
@@ -191,6 +275,34 @@ func runServe(enabled []string) {
 		removeServeLazyMarker()
 		os.Exit(1)
 	}
+}
+
+// buildMonitorIngest constructs the monitor store + ingest server for
+// `serve` composition. Split out from runServe so a test can build one
+// against a t.TempDir() root without the signal handling / pidfile / plugin
+// supervision machinery around it.
+func buildMonitorIngest(bind string, port int, root string) (*monitor.IngestServer, error) {
+	store, err := monitor.NewStore(monitor.StoreConfig{Root: root})
+	if err != nil {
+		return nil, fmt.Errorf("monitor store: %w", err)
+	}
+	srv, err := monitor.NewIngestServer(monitor.IngestConfig{Port: port, BindAddr: bind, Store: store})
+	if err != nil {
+		return nil, fmt.Errorf("monitor ingest: %w", err)
+	}
+	return srv, nil
+}
+
+// isLoopbackAddr reports whether host (no port) is the loopback interface —
+// the same warn-on-LAN-bind classification `pix monitor` used before ingest
+// moved under serve (docs/design/monitor.md).
+func isLoopbackAddr(host string) bool {
+	switch host {
+	case "", "localhost":
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // writeServePidFile records the current pid at config.ServePidPath() (0600, dir

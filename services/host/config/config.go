@@ -429,6 +429,21 @@ func ServeLazyMarkerPath() string {
 	return filepath.Join(dir, "serve.lazy")
 }
 
+// MonitorStoreRoot is <state-dir>/monitor: the on-disk root the monitor
+// ingest server (now composed inside `pix-host serve`, see serve.go) writes
+// under and `pix monitor` (a pure offline reader with no listener of its
+// own) tails. Both call this so the writer and the reader always agree on
+// the location — the same pattern as ServePidPath/ServeLogPath. A capture is
+// bounded, rotated debug scratch (the monitor package trims by count and
+// bytes), the same ephemeral-data family as serve.log, not durable data.
+func MonitorStoreRoot() (string, error) {
+	dir, err := StateDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "monitor"), nil
+}
+
 // StateDir resolves the per-user state dir: $XDG_STATE_HOME/pix, else
 // ~/.local/state/pix. Used for logs (NOT config): serve.log lives here, and
 // every launch mode writes to it — the lazy auto-start and the managed

@@ -127,9 +127,12 @@ func GatherStatus(cfg *config.Config, profile string, env hostenv.Env) statusRep
 		MCP:             currentIntent,
 		EnabledServices: append([]string(nil), cfg.Services...),
 	}
-	// monitor is an on-demand tool (`pix monitor`), not a background
-	// serve service, so its up/down state is reported but never feeds the
-	// "serve: up/down" label or an outstanding-item TODO below. It is the
+	// monitor ingest is OPTIONAL and off by default (like memory) — `pix
+	// config set services monitor` or a bare "all" default enables it inside
+	// `pix-host serve` (U05b: `pix monitor` itself no longer listens at all,
+	// it is a pure reader). Its up/down state is reported but never feeds the
+	// "serve: up/down" label or an outstanding-item TODO below, so a host
+	// that never enabled it is never nagged about it being down. It is the
 	// only remaining bare dial here: memory comes from the identity-verified
 	// readiness axis below, because a held port is not proof that the process
 	// holding it is ours.

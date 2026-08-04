@@ -72,7 +72,7 @@ These are the properties that cost real incidents to discover. They are load-bea
 8. **Pack trust is two gates in series with `host.enabled`.** Adopting a pack that runs host code (local MCP command, host wrapper, external `[[bin]]`) hits a Tier-1 bill-of-materials gate (`[y/N]`; non-TTY fails closed without `--yes`). Acceptance lives in a launcher-owned host-state store, NEVER in the pack payload. A canonical host-exec fingerprint re-gates on any change. Unknown local-vs-remote MCP classification fails CLOSED. Credentials are `op://` refs only.
 9. **Host mode (`pix host`) is the unsandboxed escape hatch and is OFF by default** behind `host.enabled`. `pix setup` never enables it; only `pix host setup` does, and only if provisioning succeeded (exact pinned pi version + curated-extension lock marker).
 10. **`pix secret` never writes a secret value to disk** — it only seeds, opens, and validates the `op://` refs file. Values stay in 1Password.
-11. **`pix monitor` binds loopback by default.** `--bind 0.0.0.0` is an explicit LAN opt-in with a loud warning (no auth token).
+11. **Monitor ingest binds loopback by default** (in `pix-host serve`, not `pix monitor`). `--bind 0.0.0.0` is an explicit LAN opt-in with a loud warning (no auth token).
 12. **`pix rm` is scoped to `pix-*` sandboxes only.** It can never reach a sandbox it did not create.
 13. **Success words are earned by a probe.** `ready`/`verified` only after a post-mutation check; never print `configured`/`enabled` as a success verdict.
 

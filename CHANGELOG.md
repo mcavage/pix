@@ -8,6 +8,27 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## Unreleased
 
+### Changed
+
+- **U05b: monitor ingest ownership moved under `pix-host serve`; `pix
+  monitor` is now a pure offline reader.** The loopback ingest listener that
+  receives NDJSON events from the in-VM monitor tap (`services/host/monitor`,
+  `:11437`) used to be started only by `pix monitor` itself. It now composes
+  directly inside `runServe` (`services/host/serve.go`), alongside memory,
+  gated by the same `services` config/CLI mechanism (`serveServiceAliases`
+  gained a `monitor` entry) — `pix config set services monitor`, or the
+  existing "empty config means all" default, enables it. `--bind`/`--port`
+  moved down with it: they are `pix serve`/`pix-host serve` flags now, not
+  `pix monitor` flags. `pix monitor` (`services/host/cmd/pix/monitor.go`)
+  lost its listener entirely — `[name] [--path DIR] [--json]` only — and
+  tails the new `config.MonitorStoreRoot()` (`<state-dir>/monitor`), the same
+  root `serve` writes to, so a reader works whether or not serve is running
+  right now. `pix status`/`doctor` still see ingest via the existing
+  `monitor.DefaultPort` dial, unchanged by who started it. The wire schema,
+  the `:11437` loopback-only bind default, and the kit's `PIX_MONITOR`/
+  `PIX_MONITOR_URL` env contract and network allowlist entries are untouched.
+  See `docs/design/monitor.md`.
+
 ### Removed
 
 - **pix's host is macOS-only now.** Deleted the `systemd --user` managed-

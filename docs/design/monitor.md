@@ -1,6 +1,23 @@
 # pix monitor — live wiretap of the agent's back-and-forth
 
-Status: shipped (MVP), REPLACED by Story05. Owner: Mark.
+Status: shipped (MVP), REPLACED by Story05, ingest ownership moved by U05b.
+Owner: Mark.
+
+**U05b update — ingest ownership moved under `pix-host serve`.** The
+"unchanged on purpose" bullet below (from Story05) predicted exactly this
+move; it has now happened. `services/host/serve.go`'s `runServe` composes a
+`monitor.NewIngestServer` directly (constructed via `buildMonitorIngest`,
+alongside memory, gated by the same `services` config/`serveServiceAliases`
+mechanism — `pix config set services monitor` or a bare `services=[]`
+"all" default enables it). `--bind`/`--port` moved down with it: they are now
+`pix serve` flags (`pix-host serve --bind ADDR --port N`), not `pix monitor`
+flags. `pix monitor` (`cmd/pix/monitor.go`) is now a PURE offline reader —
+`[name] [--path DIR] [--json]` only, no listener, ever — that tails
+`config.MonitorStoreRoot()` (`<state-dir>/monitor`, the same root `serve`
+writes to) or an explicit `--path DIR`. The wire schema, the `:11437`
+loopback-only bind default, and the eager-bind-at-construction-time
+`NewIngestServer` contract are all unchanged, exactly as predicted — this
+was a wiring move, not a domain change.
 
 **Story05 update — what the host side actually is now.** The bubbletea TUI
 (`services/host/monitor/tui`, 3,150 LOC), the in-memory ring buffer, the
@@ -32,14 +49,14 @@ deliberately small:
 * **The reader is a poll loop, not a bus.** `monitor.Follow` tails the files
   and prints one concise line per event (`--json` prints the raw stored
   event). Writer and reader share nothing but the filesystem, which is what
-  makes `pix monitor --path DIR` work with no listener running at all.
-  `cmd/pix/monitor.go` is argv parsing plus wiring, ~145 lines.
-* **Unchanged on purpose:** the event wire schema (Section 2 below), the
-  `:11437` loopback-only bind default, and "monitor IS the service, not wired
-  into `pix-host serve`". Story07 can move the ingest constructor under
-  `serve` without changing either. `NewIngestServer` now BINDS eagerly, so a
-  port conflict is a constructor error instead of an asynchronous one every
-  caller had to poll for.
+  makes `pix monitor` (with no serve running, or pointed at an explicit
+  `--path DIR`) work with no listener of its own. `cmd/pix/monitor.go` is
+  argv parsing plus wiring, ~100 lines.
+* **Unchanged on purpose (as of U05b):** the event wire schema (Section 2
+  below) and the `:11437` loopback-only bind default. `NewIngestServer` BINDS
+  eagerly, so a port conflict is a constructor error instead of an
+  asynchronous one every caller had to poll for — true whether the caller is
+  `pix-host serve` (now) or the old standalone `pix monitor` (before).
 
 The rest of this document (problem statement, event model, wire protocol) is
 still accurate; the "Resolved decisions" and "TUI (live follow + toggles)"
