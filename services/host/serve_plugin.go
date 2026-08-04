@@ -158,20 +158,14 @@ var pluginEnvAllowlist = map[string]bool{
 	"MEMORY_EMBED_TIMEOUT_MS":   true,
 	"MEMORY_WATCHER_TIMEOUT_MS": true,
 	"MEMORY_SYNTH_MS":           true,
-	// Knowledge service configuration
-	"KNOWLEDGE_PORT":    true,
-	"KNOWLEDGE_BIND":    true,
-	"KNOWLEDGE_DB":      true,
-	"KNOWLEDGE_BUNDLES": true,
 	// Shared Ollama endpoint
 	"OLLAMA_HOST": true,
 	// Dynamic linker paths for CGO-built external plugins that link shared libraries.
 	"LD_LIBRARY_PATH":   true, // Linux
 	"DYLD_LIBRARY_PATH": true, // macOS
 	// Port vars the supervisor communicates to plugins
-	"PIX_MEMORY_PORT":    true,
-	"PIX_KNOWLEDGE_PORT": true,
-	"PIX_BROKER_PORT":    true,
+	"PIX_MEMORY_PORT": true,
+	"PIX_BROKER_PORT": true,
 }
 
 // pluginEnvAllowNames is the allowlist as a slice, the shape a UnitSpec carries
@@ -333,89 +327,6 @@ func memoryProxyMux(h *pluginHolder) http.Handler {
 			return out, nil
 		}),
 	})
-}
-
-// --- knowledge shims --------------------------------------------------------
-
-// knowledgeMethods is the JSON-RPC method table for the knowledge service,
-// shared by the in-process (knowledgeMux) and plugin (knowledgeProxyMux) paths
-// so both surfaces are byte-identical. It exposes query / reindex / health and
-// resolves the backing KnowledgeStore per call (a restart is transparent).
-func knowledgeMethods(store func() (plugin.KnowledgeStore, error)) map[string]func(jsonObj) (any, error) {
-	with := func(fn func(plugin.KnowledgeStore, jsonObj) (any, error)) func(jsonObj) (any, error) {
-		return func(p jsonObj) (any, error) {
-			s, err := store()
-			if err != nil {
-				return nil, err
-			}
-			return fn(s, p)
-		}
-	}
-	return map[string]func(jsonObj) (any, error){
-		"query": with(func(s plugin.KnowledgeStore, p jsonObj) (any, error) {
-			// bundles is a SET filter. Prefer the `bundles` array; tolerate a
-			// single legacy `bundle` string by wrapping it into a 1-elem set.
-			bundles := strSliceParam(p, "bundles")
-			if len(bundles) == 0 {
-				if single := getStr(p, "bundle"); single != "" {
-					bundles = []string{single}
-				}
-			}
-			r, err := s.Query(plugin.QueryArgs{
-				Query: getStr(p, "query"), Bundles: bundles, Limit: clampInt(p["limit"], 0, 0, 1000),
-			})
-			if err != nil {
-				return nil, err
-			}
-			list := []jsonObj{}
-			for _, c := range r.Concepts {
-				list = append(list, jsonObj{
-					"id": c.ID, "type": c.Type, "title": c.Title, "description": c.Description,
-					"path": c.Path, "snippet": c.Snippet, "score": c.Score,
-					"citations": strSliceOrEmpty(c.Citations), "bundle": c.Bundle,
-				})
-			}
-			return jsonObj{"concepts": list}, nil
-		}),
-		"reindex": with(func(s plugin.KnowledgeStore, p jsonObj) (any, error) {
-			r, err := s.Reindex(plugin.ReindexArgs{BundlePaths: strSliceParam(p, "bundle_paths")})
-			if err != nil {
-				return nil, err
-			}
-			return jsonObj{"indexed": r.Indexed, "bundles": strSliceOrEmpty(r.Bundles)}, nil
-		}),
-		"identity": with(func(plugin.KnowledgeStore, jsonObj) (any, error) {
-			return knowledgeIdentity().obj(), nil
-		}),
-		"health": with(func(s plugin.KnowledgeStore, _ jsonObj) (any, error) {
-			r, err := s.Health()
-			if err != nil {
-				return nil, err
-			}
-			return jsonObj{"ok": r.OK, "vector": r.Vector, "bundles": strSliceOrEmpty(r.Bundles), "concepts": r.Concepts}, nil
-		}),
-	}
-}
-
-// knowledgeMux serves the knowledge JSON-RPC surface directly over the
-// in-process built-in store (the fast path — no subprocess), mirroring memoryMux()
-// for memory. The store is wrapped in the same adapter the plugin path dispenses.
-func knowledgeMux(store *knowledgeStore) http.Handler {
-	adapter := newKnowledgeStoreAdapter(store)
-	return jsonrpcMux(knowledgeMethods(func() (plugin.KnowledgeStore, error) { return adapter, nil }))
-}
-
-// knowledgeProxyMux serves the same surface but delegates to the dispensed
-// KnowledgeStore plugin client (mirrors memoryProxyMux). Shapes are identical to
-// the in-process path so the sandbox is unaffected by which impl backs :11436.
-func knowledgeProxyMux(h *pluginHolder) http.Handler {
-	return jsonrpcMux(knowledgeMethods(func() (plugin.KnowledgeStore, error) {
-		s, _ := h.Get().(plugin.KnowledgeStore)
-		if s == nil {
-			return nil, errors.New("knowledge plugin unavailable")
-		}
-		return s, nil
-	}))
 }
 
 // strSliceOrEmpty normalizes a nil string slice to a non-nil empty one so the

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,10 +13,8 @@ import (
 	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/hostenv"
-	"pix/host/knowledge"
 	"pix/host/mcp"
 	"pix/host/readiness/axis"
-	"pix/host/rpc"
 	"pix/host/sys"
 	"pix/host/workflow/doctor"
 	"pix/host/workflow/pack"
@@ -628,98 +625,6 @@ func isRepoRoot(dir string) bool {
 	return err == nil
 }
 
-// KnowledgeRPC is the tiny seam the run wiring uses to talk to the knowledge
-// daemon (:11436). It is injected so tests stay hermetic — no real dial, no real
-// POST. DefaultKnowledgeRPC() wires the real HTTP JSON-RPC client.
-type KnowledgeRPC struct {
-	Up      func() bool               // is the daemon reachable? (short-timeout dial)
-	Health  func() ([]string, error)  // health.bundles: the ids already indexed
-	Reindex func(bundle string) error // reindex one bundle path (lazy add)
-}
-
-// WireKnowledgeScope resolves the workspace's knowledge scope and writes it out.
-// The scope is the ordered, de-duplicated set of canonical bundle ids: the
-// global bundles from config, then the project bundle declared by
-// <workspace>/.pix/knowledge (if any). All ids are canonicalized the SAME
-// way the store keys its `bundle` column so `WHERE bundle IN (…)` matches.
-//
-//   - Lazy reindex: when the daemon is up and the project bundle is NOT already
-//     in health.bundles, fire one reindex for it. Skipped entirely when the
-//     daemon is down (serve not running) or the bundle is already indexed.
-//   - Scope file: write <workspace>/.pix/knowledge.scope, one canonical id
-//     per line, so the in-VM recall (U6) forwards it as the `bundles` filter.
-//     With no bundles at all, any stale scope file is removed (recall = all/none).
-func WireKnowledgeScope(cfg *config.Config, ws string, rpc KnowledgeRPC) {
-	project := ProjectBundle(ws) // canonical id, or ""
-
-	var ids []string
-	seen := map[string]bool{}
-	add := func(p string) {
-		c := knowledge.CanonicalizeKnowledgeBundle(p)
-		if c == "" || seen[c] {
-			return
-		}
-		seen[c] = true
-		ids = append(ids, c)
-	}
-	for _, b := range cfg.KnowledgeBundles {
-		add(b)
-	}
-	if project != "" {
-		add(project)
-	}
-
-	// Lazy reindex the project bundle when the daemon is up and doesn't have it.
-	if project != "" && rpc.Up != nil && rpc.Up() {
-		known := map[string]bool{}
-		if rpc.Health != nil {
-			if hb, err := rpc.Health(); err == nil {
-				for _, b := range hb {
-					known[b] = true
-				}
-			}
-		}
-		if !known[project] && rpc.Reindex != nil {
-			_ = rpc.Reindex(project) // best-effort; a cold first turn is acceptable
-		}
-	}
-
-	// No bundles at all → leave the workspace un-scoped (recall queries all/none).
-	// Remove any stale scope file from a previous run (when bundles were wired)
-	// so the in-VM recall stops forwarding dead bundle ids. Best-effort.
-	if len(ids) == 0 {
-		_ = workspace.RemoveStateFile(ws, "knowledge.scope")
-		return
-	}
-	_ = WriteKnowledgeScope(ws, ids)
-}
-
-// ProjectBundle reads <workspace>/.pix/knowledge and resolves it to a
-// canonical bundle id: a git URL is cloned/pulled into the cache (same resolver
-// as `use`), an absolute path is used as-is, and a relative path is taken
-// relative to the workspace. Returns "" when there is no pointer or it can't be
-// resolved (non-fatal: the workspace just has no project bundle this run).
-func ProjectBundle(ws string) string {
-	line := knowledge.ReadProjectPointer(ws)
-	if line == "" {
-		return ""
-	}
-	var local string
-	switch {
-	case knowledge.IsGitURL(line):
-		r, err := knowledge.ResolveBundleRef(line, knowledge.KnowledgeCacheDir(), io.Discard)
-		if err != nil {
-			return ""
-		}
-		local = r
-	case filepath.IsAbs(line):
-		local = line
-	default:
-		local = filepath.Join(ws, line)
-	}
-	return knowledge.CanonicalizeKnowledgeBundle(local)
-}
-
 // WriteOllamaBridgeFile writes <workspace>/.pix/ollama-bridge.model: the
 // local model tag the in-VM ollama-bridge should expose (interactive cycle + the
 // router's local option). Configured on the host with `pix config set
@@ -732,45 +637,6 @@ func WriteOllamaBridgeFile(ws, model string) {
 		model = config.DefaultOllamaBridgeModel
 	}
 	_ = workspace.WriteStateFile(ws, "ollama-bridge.model", []byte(model+"\n"), 0o644)
-}
-
-// WriteKnowledgeScope writes <workspace>/.pix/knowledge.scope: one canonical
-// bundle id per line, trailing newline. This is the launcher-generated,
-// per-run, gitignored file the recall extension reads (the committed pointer is
-// .pix/knowledge). Symlink-safe via workspace.WriteStateFile.
-func WriteKnowledgeScope(ws string, ids []string) error {
-	content := strings.Join(ids, "\n") + "\n"
-	return workspace.WriteStateFile(ws, "knowledge.scope", []byte(content), 0o644)
-}
-
-// DefaultKnowledgeRPC wires the real knowledge-daemon client from the shared
-// pix/host/rpc package (the same JSON-RPC transport reset.go and the CLI's
-// memory/knowledge verbs already use), rather than hand-rolling a second HTTP
-// client with its own hardcoded port. Using rpc.KnowledgeClient() also means
-// this now honors a KNOWLEDGE_PORT override, which the old bespoke transport
-// (a bare `const port = 11436`) silently ignored.
-func DefaultKnowledgeRPC() KnowledgeRPC {
-	client := rpc.KnowledgeClient()
-	return KnowledgeRPC{
-		Up:      client.Up,
-		Health:  func() ([]string, error) { return knowledgeHealthBundles(client) },
-		Reindex: func(bundle string) error { return knowledgeReindex(client, bundle) },
-	}
-}
-
-// knowledgeHealthBundles returns the bundle ids the daemon reports as indexed.
-func knowledgeHealthBundles(client rpc.Client) ([]string, error) {
-	result, err := client.Call("health", nil)
-	if err != nil {
-		return nil, err
-	}
-	return ToStringSlice(result["bundles"]), nil
-}
-
-// knowledgeReindex fires a reindex for a single bundle path (idempotent add).
-func knowledgeReindex(client rpc.Client, bundle string) error {
-	_, err := client.Call("reindex", map[string]any{"bundle_paths": []string{bundle}})
-	return err
 }
 
 // ToStringSlice coerces a decoded JSON array (any of []any / []string) to

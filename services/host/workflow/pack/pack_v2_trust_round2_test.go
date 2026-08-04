@@ -34,7 +34,6 @@ import (
 
 	"pix/host/config"
 	"pix/host/hostenv"
-	"pix/host/knowledge"
 	"pix/host/sys/systest"
 )
 
@@ -74,30 +73,25 @@ func pinLocalMCP(t *testing.T, names ...string) {
 // TestPackUse_SamePackLockForgeryCannotDeleteUserConfig (CRITICAL): a local
 // `git pull` (or zip update) rewriting pack.lock under the ALREADY-ACTIVE
 // pack — the one case the old scrub skipped (prevRoot == root) — must not be
-// able to claim the user's own MCP/knowledge entries as the pack's
-// contribution: reversibility reads come from the host-state activation
-// record only, so both a same-pack reactivation and a later switch-away leave
-// the user's entries untouched.
+// able to claim the user's own MCP entries as the pack's contribution:
+// reversibility reads come from the host-state activation record only, so
+// both a same-pack reactivation and a later switch-away leave the user's
+// entries untouched. (This test also covered a forged `knowledge` lock
+// claim before the [[knowledge]] facet was retired, W2 U03A.)
 func TestPackUse_SamePackLockForgeryCannotDeleteUserConfig(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 
-	// The user's OWN entries, added independently of any pack.
-	userBundle := filepath.Join(dir, "user-bundle")
-	if err := os.MkdirAll(userBundle, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	// The user's OWN entry, added independently of any pack.
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
 	cfg.AddMCP(config.GWServerName)
-	cfg.AddKnowledgeBundle(userBundle)
 	if err := cfg.Save(); err != nil {
 		t.Fatal(err)
 	}
-	userBundleID := knowledge.CanonicalizeKnowledgeBundle(userBundle)
 
 	root := filepath.Join(dir, "pack")
 	mustWritePack(t, root, Manifest{Name: "p", Schema: 1}) // Tier-0
@@ -108,8 +102,8 @@ func TestPackUse_SamePackLockForgeryCannotDeleteUserConfig(t *testing.T) {
 	RunPackUse(fakeGitEnv(nil), &out, []string{root}, registerOK) // activate (legit)
 
 	// Simulate the pull-forgery: the ACTIVE pack's lock now claims the user's
-	// own entries as this pack's contribution.
-	forged := "mcp = [\"gog\"]\nknowledge = [\"" + userBundleID + "\"]\n"
+	// own entry as this pack's contribution.
+	forged := "mcp = [\"gog\"]\n"
 	if err := os.WriteFile(PackLockPath(root), []byte(forged), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -121,8 +115,8 @@ func TestPackUse_SamePackLockForgeryCannotDeleteUserConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(cfg2.MCP, config.GWServerName) || !slices.Contains(cfg2.KnowledgeBundles, userBundleID) {
-		t.Fatalf("CRITICAL: same-pack reactivation honored a forged pack.lock; mcp=%v knowledge=%v", cfg2.MCP, cfg2.KnowledgeBundles)
+	if !slices.Contains(cfg2.MCP, config.GWServerName) {
+		t.Fatalf("CRITICAL: same-pack reactivation honored a forged pack.lock; mcp=%v", cfg2.MCP)
 	}
 
 	// Forge again and SWITCH AWAY — the other trusted-lock read path.
@@ -135,8 +129,8 @@ func TestPackUse_SamePackLockForgeryCannotDeleteUserConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(cfg3.MCP, config.GWServerName) || !slices.Contains(cfg3.KnowledgeBundles, userBundleID) {
-		t.Fatalf("CRITICAL: switch-away honored a forged pack.lock; mcp=%v knowledge=%v", cfg3.MCP, cfg3.KnowledgeBundles)
+	if !slices.Contains(cfg3.MCP, config.GWServerName) {
+		t.Fatalf("CRITICAL: switch-away honored a forged pack.lock; mcp=%v", cfg3.MCP)
 	}
 }
 

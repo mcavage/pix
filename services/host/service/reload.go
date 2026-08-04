@@ -2,7 +2,7 @@
 // §3): after `pix config set/unset` writes a DAEMON-AFFECTING key, the
 // running `pix-host serve` is restarted per its lifecycle mode so the
 // change takes effect with no manual step. The daemon reads services /
-// memory_*_model / knowledge_bundles at startup only, never live.
+// memory_*_model at startup only, never live.
 //
 // Everything OS-shaped (launchctl/systemctl query + restart, stop, re-spawn) is
 // injected via serveReloader so every mode routes are unit-tested with no real
@@ -25,13 +25,10 @@ var daemonAffectingKeys = map[string]bool{
 	"services":             true,
 	"memory_watcher_model": true,
 	"memory_embed_model":   true,
-	"knowledge_bundles":    true,
 }
 
 // IsDaemonAffecting reports whether a config key change requires a serve
-// restart. knowledge_bundles is included because serve indexes it at startup
-// via AllKnowledgeBundles (now just the single deduped list; profiles, which
-// it used to union across, were removed).
+// restart.
 func IsDaemonAffecting(key string) bool { return daemonAffectingKeys[key] }
 
 // serveMode is the detected lifecycle mode of the running (or not) daemon.

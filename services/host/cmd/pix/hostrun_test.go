@@ -321,12 +321,10 @@ func TestResolveHostWorkspace_SymlinkCannotDefeatCheck(t *testing.T) {
 // extensions in the same commit.
 func TestHostChildEnv_Contract(t *testing.T) {
 	t.Setenv("MEMORY_PORT", "")
-	t.Setenv("KNOWLEDGE_PORT", "")
 	env := launch.HostChildEnv("/state/host-agent", "")
 	want := []string{
 		"PI_CODING_AGENT_DIR=/state/host-agent",
 		"MEMORY_URL=http://127.0.0.1:11435",
-		"KNOWLEDGE_URL=http://127.0.0.1:11436",
 		"OLLAMA_HOSTMODE=1",
 		"OLLAMA_URL=http://127.0.0.1:11434/v1",
 		"PI_SUBAGENT_DISABLED=1",
@@ -339,17 +337,15 @@ func TestHostChildEnv_Contract(t *testing.T) {
 	}
 }
 
-// TestHostChildEnv_PortOverrideAndBridgeModel: MEMORY_URL/KNOWLEDGE_URL honor
-// the same MEMORY_PORT/KNOWLEDGE_PORT overrides the services honor, and the
-// configured ollama_bridge_model rides along as OLLAMA_BRIDGE_MODEL (absent
-// when unset — the bridge then uses its own default).
+// TestHostChildEnv_PortOverrideAndBridgeModel: MEMORY_URL honors the same
+// MEMORY_PORT override the services honor, and the configured
+// ollama_bridge_model rides along as OLLAMA_BRIDGE_MODEL (absent when unset
+// — the bridge then uses its own default).
 func TestHostChildEnv_PortOverrideAndBridgeModel(t *testing.T) {
 	t.Setenv("MEMORY_PORT", "21435")
-	t.Setenv("KNOWLEDGE_PORT", "21436")
 	env := strings.Join(launch.HostChildEnv("/sa", "qwen3.5:9b"), "\n")
 	for _, want := range []string{
 		"MEMORY_URL=http://127.0.0.1:21435",
-		"KNOWLEDGE_URL=http://127.0.0.1:21436",
 		"OLLAMA_BRIDGE_MODEL=qwen3.5:9b",
 	} {
 		if !strings.Contains(env, want) {

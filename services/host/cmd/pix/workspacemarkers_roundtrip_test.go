@@ -5,16 +5,17 @@
 //
 // Every OTHER *_test.go file in this package already unit-tests one marker's
 // writer or reader in isolation (pack_v2_test.go for profile,
-// run_knowledge_test.go for knowledge/knowledge.scope, workspacestate_test.go
-// for the symlink-safety seam, onboard_test.go for onboarding.json,
-// hoststate_test.go for host-state.json's absence). What none of them do is
-// enumerate the FULL current marker set in one place and pin the EXACT bytes
-// each production writer emits — the contract the TS-side readers
+// workspacestate_test.go for the symlink-safety seam, onboard_test.go for
+// onboarding.json, hoststate_test.go for host-state.json's absence). What none
+// of them do is enumerate the FULL current marker set in one place and pin the
+// EXACT bytes each production writer emits — the contract the TS-side readers
 // (extensions/memory-recall.ts, extensions/memory-capture.ts,
-// extensions/knowledge-recall.ts, extensions/ollama-bridge.ts, exercised from
-// tests/workspace-markers.test.mjs) depend on byte-for-byte. This file is that
-// single inventory, so a change to trailing-newline/whitespace/format on
-// either side of the boundary is caught here instead of silently drifting.
+// extensions/ollama-bridge.ts, exercised from tests/workspace-markers.test.mjs)
+// depend on byte-for-byte. This file is that single inventory, so a change to
+// trailing-newline/whitespace/format on either side of the boundary is caught
+// here instead of silently drifting. (.pix/knowledge.scope and .pix/knowledge,
+// and their writers/readers, were retired along with the built-in OKF
+// knowledge service, W2 U03A.)
 //
 // THE MEASURED SET (shards.md U-W0b.05's row), and where each one actually
 // lives:
@@ -22,16 +23,11 @@
 //	.pix/profile               — Go writes (pack.go pack.WriteMemoryScope),
 //	                                   TS reads (memory-recall.ts,
 //	                                   memory-capture.ts)
-//	.pix/knowledge.scope        — Go writes (run.go launch.WriteKnowledgeScope),
-//	                                   TS reads (knowledge-recall.ts)
 //	.pix/ollama-bridge.model    — Go writes (run.go launch.WriteOllamaBridgeFile),
 //	                                   TS reads (ollama-bridge.ts)
 //	.pix/sandbox.pack           — Go writes AND reads
 //	                                   (launch.WriteSandboxPackMarker /
 //	                                   launch.ReadSandboxPackMarker); no TS reader
-//	.pix/knowledge               — Go writes AND reads
-//	                                   (knowledge.KnowledgeUseProject / knowledge.ReadProjectPointer
-//	                                   / launch.ProjectBundle); no TS reader
 //	.pix/onboarding.json         — the IN-SANDBOX AGENT writes it (not Go);
 //	                                   Go reads + removes it (onboard.ReconcileOnboarding)
 //	.pix/host-state.json         — NEVER a file on EITHER side, by design
@@ -61,7 +57,6 @@ import (
 
 	"pix/host/config"
 	"pix/host/hostenv/hostenvtest"
-	"pix/host/knowledge"
 	"pix/host/routing"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/onboard"
@@ -75,20 +70,16 @@ import (
 // stale — that is the whole point of a named list instead of a comment.
 var workspaceMarkerFiles = []string{
 	"profile",
-	"knowledge.scope",
 	"ollama-bridge.model",
 	"sandbox.pack",
-	"knowledge",
 	"onboarding.json",
 }
 
 func TestWorkspaceMarkerInventory_MatchesEnumeratedSet(t *testing.T) {
 	want := map[string]bool{
 		"profile":             true,
-		"knowledge.scope":     true,
 		"ollama-bridge.model": true,
 		"sandbox.pack":        true,
-		"knowledge":           true,
 		"onboarding.json":     true,
 	}
 	if len(workspaceMarkerFiles) != len(want) {
@@ -118,20 +109,6 @@ func TestMarkerRoundTrip_Profile(t *testing.T) {
 	pack.WriteMemoryScope(ws, nil)
 	if _, err := os.Stat(filepath.Join(ws, ".pix", "profile")); !os.IsNotExist(err) {
 		t.Errorf("profile marker should be removed for a nil pack, stat err=%v", err)
-	}
-}
-
-// ── knowledge.scope ──────────────────────────────────────────────────────
-
-func TestMarkerRoundTrip_KnowledgeScope(t *testing.T) {
-	ws := t.TempDir()
-	if err := launch.WriteKnowledgeScope(ws, []string{"/global/bundle", "/project/bundle"}); err != nil {
-		t.Fatalf("launch.WriteKnowledgeScope: %v", err)
-	}
-	got := readFile(t, filepath.Join(ws, ".pix", "knowledge.scope"))
-	want := "/global/bundle\n/project/bundle\n"
-	if got != want {
-		t.Errorf("knowledge.scope = %q, want %q (knowledge-recall.ts splits on [\\n,] and trims each line)", got, want)
 	}
 }
 
@@ -180,32 +157,6 @@ func TestMarkerRoundTrip_SandboxPack(t *testing.T) {
 	launch.WriteSandboxPackMarker(ws, "")
 	if got := launch.ReadSandboxPackMarker(ws); got != "" {
 		t.Errorf("launch.ReadSandboxPackMarker after pack-less write = %q, want empty", got)
-	}
-}
-
-// ── knowledge (project pointer) ──────────────────────────────────────────
-
-func TestMarkerRoundTrip_KnowledgeProjectPointer(t *testing.T) {
-	repo := t.TempDir()
-	bundle := t.TempDir()
-
-	var out bytes.Buffer
-	if err := knowledge.KnowledgeUseProject(bundle, repo, &out); err != nil {
-		t.Fatalf("knowledge.KnowledgeUseProject: %v", err)
-	}
-
-	// knowledge.ReadProjectPointer sees the portable (repo-relative-or-absolute) ref...
-	pointer := knowledge.ReadProjectPointer(repo)
-	if pointer == "" {
-		t.Fatal("knowledge.ReadProjectPointer returned empty after knowledge.KnowledgeUseProject wrote the pointer")
-	}
-	// ...and launch.ProjectBundle re-resolves that ref back to the SAME canonical id
-	// the store keys its `bundle` column on — the round trip
-	// launch.WireKnowledgeScope actually depends on every real run.
-	want := knowledge.CanonicalizeKnowledgeBundle(bundle)
-	got := launch.ProjectBundle(repo)
-	if got != want {
-		t.Errorf("launch.ProjectBundle round-trip = %q, want %q (pointer was %q)", got, want, pointer)
 	}
 }
 
@@ -264,13 +215,9 @@ func TestMarkerRoundTrip_HostStateNeverBecomesAWorkspaceFile(t *testing.T) {
 
 	// Write every OTHER real marker into the same workspace...
 	pack.WriteMemoryScope(ws, &pack.Info{Manifest: pack.Manifest{MemoryScope: "work"}})
-	if err := launch.WriteKnowledgeScope(ws, []string{"/a"}); err != nil {
-		t.Fatal(err)
-	}
 	launch.WriteOllamaBridgeFile(ws, "qwen3.5:9b")
 	launch.WriteSandboxPackMarker(ws, filepath.Join(ws, "pack"))
 	var out bytes.Buffer
-	_ = knowledge.KnowledgeUseProject(t.TempDir(), ws, &out)
 	if err := os.WriteFile(filepath.Join(ws, ".pix", onboard.FileName), []byte(`{"version":1}`), 0o644); err != nil {
 		t.Fatal(err)
 	}

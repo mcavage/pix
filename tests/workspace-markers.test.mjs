@@ -10,16 +10,17 @@
 // either language having to shell out to the other.
 //
 // Covers every marker a TS extension actually reads today: .pix/profile
-// (memory-recall.ts, memory-capture.ts), .pix/knowledge.scope
-// (knowledge-recall.ts), .pix/ollama-bridge.model (ollama-bridge.ts).
-// .pix/sandbox.pack, .pix/knowledge, and .pix/onboarding.json
-// have no TS reader (Go writes+reads sandbox.pack/knowledge; the in-sandbox
-// AGENT — not a TS extension — writes onboarding.json), so they are only
-// covered on the Go side. .pix/host-state.json is never a file on either
-// side (see the Go test's negative control); routing/artifacts/
-// custom-memory.db are host data-root paths, never workspace markers at all
-// (see the Go test's boundary check). See workspacemarkers_roundtrip_test.go's
-// package comment for the full inventory.
+// (memory-recall.ts, memory-capture.ts), .pix/ollama-bridge.model
+// (ollama-bridge.ts). .pix/sandbox.pack and .pix/onboarding.json have no TS
+// reader (Go writes+reads sandbox.pack; the in-sandbox AGENT — not a TS
+// extension — writes onboarding.json), so they are only covered on the Go
+// side. .pix/knowledge.scope and .pix/knowledge, and their TS reader
+// (knowledge-recall.ts), were retired along with the built-in OKF knowledge
+// service (W2 U03A). .pix/host-state.json is never a file on either side
+// (see the Go test's negative control); routing/artifacts/custom-memory.db
+// are host data-root paths, never workspace markers at all (see the Go
+// test's boundary check). See workspacemarkers_roundtrip_test.go's package
+// comment for the full inventory.
 import assert from "node:assert";
 import * as http from "node:http";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
@@ -196,34 +197,9 @@ test("memory-capture.ts stamps captured exchanges with the SAME .pix/profile mar
 	assert.equal(requests[0].params.profile, "work", "capture must stamp the same profile recall queries, or the two silently diverge");
 });
 
-// ── .pix/knowledge.scope → knowledge-recall.ts (matches run.go's
-// writeKnowledgeScope output: one canonical id per line + trailing newline,
-// see TestMarkerRoundTrip_KnowledgeScope) ───────────────────────────────────
-
-test("knowledge-recall.ts resolves bundle scope from the exact .pix/knowledge.scope bytes writeKnowledgeScope produces", async (t) => {
-	const workspace = makeWorkspace("knowledge.scope", "/global/bundle\n/project/bundle\n");
-	const { server, requests } = makeFakeDaemon(() => ({ concepts: [] }));
-	t.after(() => server.close());
-	const KNOWLEDGE_URL = await listen(server);
-
-	const mod = await importFromWorkspace("../extensions/knowledge-recall.ts", workspace, { KNOWLEDGE_URL });
-	await withCwd(workspace, () => mod.buildKnowledgeBlock("some prompt"));
-
-	assert.equal(requests.length, 1);
-	assert.deepEqual(requests[0].params.bundles, ["/global/bundle", "/project/bundle"], "must forward BOTH lines, trimmed, in order, as the bundles filter");
-});
-
-test("knowledge-recall.ts sends no bundles filter when .pix/knowledge.scope is absent (query-all back-compat)", async (t) => {
-	const workspace = makeWorkspace(null, "");
-	const { server, requests } = makeFakeDaemon(() => ({ concepts: [] }));
-	t.after(() => server.close());
-	const KNOWLEDGE_URL = await listen(server);
-
-	const mod = await importFromWorkspace("../extensions/knowledge-recall.ts", workspace, { KNOWLEDGE_URL });
-	await withCwd(workspace, () => mod.buildKnowledgeBlock("some prompt"));
-
-	assert.equal(requests[0].params.bundles, undefined, "absent scope file must omit `bundles` entirely, not send an empty array");
-});
+// .pix/knowledge.scope → knowledge-recall.ts coverage (bundle-scope
+// forwarding, query-all back-compat) was retired along with the extension
+// itself when the built-in OKF knowledge service was removed (W2 U03A).
 
 // ── .pix/ollama-bridge.model → ollama-bridge.ts (matches run.go's
 // writeOllamaBridgeFile output: "<model>\n", see

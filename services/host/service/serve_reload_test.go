@@ -16,13 +16,13 @@ import (
 // TestIsDaemonAffecting pins the affecting-key set: exactly the keys serve
 // reads at startup trigger propagation; launcher/gateway keys never do.
 func TestIsDaemonAffecting(t *testing.T) {
-	affecting := []string{"services", "memory_watcher_model", "memory_embed_model", "knowledge_bundles"}
+	affecting := []string{"services", "memory_watcher_model", "memory_embed_model"}
 	for _, k := range affecting {
 		if !IsDaemonAffecting(k) {
 			t.Errorf("IsDaemonAffecting(%q) = false, want true", k)
 		}
 	}
-	notAffecting := []string{"google_workspace_account", "ollama_bridge_model", "mcp", "pack", "host.enabled", "host.autonomy", "host.autoserve"}
+	notAffecting := []string{"google_workspace_account", "ollama_bridge_model", "mcp", "pack", "host.enabled", "host.autonomy", "host.autoserve", "knowledge_bundles"}
 	for _, k := range notAffecting {
 		if IsDaemonAffecting(k) {
 			t.Errorf("IsDaemonAffecting(%q) = true, want false (must trigger NOTHING)", k)

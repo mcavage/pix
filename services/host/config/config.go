@@ -183,11 +183,6 @@ type Config struct {
 	// keeping the ordinary Workspace MCP surface read-only.
 	GoogleWorkspaceAccess string `toml:"google_workspace_access,omitempty"`
 
-	// KnowledgeBundles are the git-mounted OKF bundle directory path(s) the
-	// knowledge service (:11436) indexes at startup. Empty (the default) means no
-	// bundles — the index is served empty and the service degrades cleanly.
-	KnowledgeBundles []string `toml:"knowledge_bundles,omitempty"`
-
 	Kits struct {
 		Stack []string `toml:"stack"`
 	} `toml:"kits"`
@@ -301,6 +296,12 @@ const VerifiedByProbe = "probe"
 var retiredConfigKeys = map[string]bool{
 	"mcp_static":  true,
 	"mcp_dynamic": true,
+	// knowledge_bundles: the built-in OKF knowledge service (:11436) was retired
+	// (W2 U03A) along with config.KnowledgeBundles/AddKnowledgeBundle/
+	// AllKnowledgeBundles — a still-present key from an older config.toml is
+	// tolerated (never a hard Load error) and reported here, never silently
+	// re-adopted.
+	"knowledge_bundles": true,
 }
 
 // RetiredKeys returns the retired top-level config keys (see retiredConfigKeys)
@@ -515,16 +516,6 @@ func MemoryDBPath() string {
 	return filepath.Join(dataDirOr(), "memory", "memory.db")
 }
 
-// KnowledgeDBPath resolves the knowledge index sqlite path: $KNOWLEDGE_DB if
-// set, else <data-dir>/knowledge/knowledge.db. The index is rebuildable from the
-// OKF bundle; it lives beside the memory store under the data root.
-func KnowledgeDBPath() string {
-	if p := strings.TrimSpace(os.Getenv("KNOWLEDGE_DB")); p != "" {
-		return p
-	}
-	return filepath.Join(dataDirOr(), "knowledge", "knowledge.db")
-}
-
 // BackupsDir is <data-dir>/backups — the default destination for
 // `pix state backup` archives.
 func BackupsDir() string {
@@ -635,21 +626,6 @@ func LoadFrom(path string) (*Config, error) {
 	return c, nil
 }
 
-// AllKnowledgeBundles returns the de-duplicated knowledge bundles. (Formerly a
-// union across profiles; profiles were removed, so it is now just the base list,
-// deduped. Kept as a method so `serve`/backup callers are unchanged.)
-func (c *Config) AllKnowledgeBundles() []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, b := range c.KnowledgeBundles {
-		if b != "" && !seen[b] {
-			seen[b] = true
-			out = append(out, b)
-		}
-	}
-	return out
-}
-
 // Plugin returns the configured spec for slot, or a builtin default if unset.
 func (c *Config) Plugin(slot string) PluginSpec {
 	if spec, ok := c.Plugins[slot]; ok {
@@ -687,11 +663,6 @@ ollama_bridge_model = "qwen3.5:9b"
 # GOG_ACCOUNT env var.
 google_workspace_account = ""
 google_workspace_access = ""
-
-# OKF knowledge bundle directories the knowledge service (:11436) indexes.
-# Empty = no bundles (index served empty). The knowledge service is opt-in:
-# add "knowledge" to the services list above to run it.
-knowledge_bundles = []
 
 # Kits stacked onto the sandbox (mixin kits, etc).
 [kits]
@@ -929,45 +900,6 @@ func (c *Config) AddService(name string) bool { return addUnique(&c.Services, na
 // RemoveService removes name from the Services set, returning true when it
 // changed.
 func (c *Config) RemoveService(name string) bool { return removeValue(&c.Services, name) }
-
-// AddKnowledgeBundle adds an OKF bundle directory to the KnowledgeBundles set if
-// absent, returning true when it changed. The path is canonicalized to an
-// absolute path (best-effort — a path that can't be resolved is trimmed and
-// used as-is) so the same bundle referenced two ways doesn't get indexed twice.
-func (c *Config) AddKnowledgeBundle(path string) bool {
-	return addUnique(&c.KnowledgeBundles, canonicalizeBundlePath(path))
-}
-
-// RemoveKnowledgeBundle removes an OKF bundle directory from the
-// KnowledgeBundles set, returning true when it changed. The path is
-// canonicalized the same way AddKnowledgeBundle canonicalizes so a bundle added
-// by a relative path can be removed by that same relative path.
-func (c *Config) RemoveKnowledgeBundle(path string) bool {
-	return removeValue(&c.KnowledgeBundles, canonicalizeBundlePath(path))
-}
-
-// canonicalizeBundlePath normalizes a bundle path to the SAME canonical id every
-// other writer produces. It MUST match the knowledge store's canonicalizeBundle
-// (services/host/knowledge.go) and the launcher's canonicalizeKnowledgeBundle
-// (cmd/pix/knowledge.go) byte-for-byte in behavior — otherwise a symlink
-// spelling vs the real path yields two config entries and remove-by-real-path
-// can't drop a symlink entry (F6). The algorithm: trim, then abs ->
-// EvalSymlinks -> Clean, with a cleaned-abs fallback when the path doesn't exist
-// (so EvalSymlinks fails). An empty (or whitespace-only) path stays empty.
-func canonicalizeBundlePath(path string) string {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return ""
-	}
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		abs = path
-	}
-	if resolved, rerr := filepath.EvalSymlinks(abs); rerr == nil {
-		return resolved
-	}
-	return filepath.Clean(abs)
-}
 
 // addUnique appends value to *list if it is not already present, returning true
 // when the list changed.

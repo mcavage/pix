@@ -9,13 +9,15 @@
 export default [
 	{
 		id: "config-keys.top-level.surface",
-		description: "Config's top-level toml tags, from the Services field through KnowledgeBundles, still name exactly this key set.",
+		description: "Config's top-level toml tags, from the Services field through GoogleWorkspaceAccess, still name exactly this key set.",
 		checks: [
 			{
 				file: "services/host/config/config.go",
 				kind: "set",
 				// Bounded to the AGENTS.md-documented user surface: Services through
-				// KnowledgeBundles. Kits/Skills/Packs/Plugins/Host/Slack (further down
+				// GoogleWorkspaceAccess (KnowledgeBundles was retired, W2 U03A, along
+				// with the built-in knowledge service — it no longer has a live
+				// on-disk key). Kits/Skills/Packs/Plugins/Host/Slack (further down
 				// the same struct) are real keys too but are out of scope for this W0
 				// pin — Story-scoped follow-up, not this guard's job to enumerate the
 				// entire struct.
@@ -35,7 +37,6 @@ export default [
 					"inference",
 					"google_workspace_account",
 					"google_workspace_access",
-					"knowledge_bundles",
 				],
 			},
 		],

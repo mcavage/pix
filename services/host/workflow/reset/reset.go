@@ -393,17 +393,13 @@ func underDir(path, dir string) bool {
 	return rel == "." || (!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".." && !filepath.IsAbs(rel))
 }
 
-// serveStillUp probes whether `pix-host serve` is still answering on EITHER
-// service port (memory AND knowledge, env-aware), so the executor can refuse the
-// dangerous data move after a best-effort stop failed to bring it down. A
-// knowledge-only serve still holds a live sqlite writer under the data root, so
-// checking only the memory port would let its db be split mid-move.
+// serveStillUp probes whether `pix-host serve` is still answering on the
+// memory service port (env-aware), so the executor can refuse the dangerous
+// data move after a best-effort stop failed to bring it down — a still-live
+// serve holds a live sqlite writer under the data root, so the move must not
+// proceed underneath it.
 func serveStillUp(env hostenv.Env) bool {
-
-	if env.DialLocal(service.Port(env, "MEMORY_PORT", rpc.MemoryPortDefault)) {
-		return true
-	}
-	return env.DialLocal(service.Port(env, "KNOWLEDGE_PORT", rpc.KnowledgePortDefault))
+	return env.DialLocal(service.Port(env, "MEMORY_PORT", rpc.MemoryPortDefault))
 }
 
 // executeReset performs the plan: stop services (best-effort), move each backup

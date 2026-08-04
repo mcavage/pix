@@ -341,12 +341,12 @@ func runRun(argv []string) {
 	if msg := launch.McpReattachWarning(cfg, o, plan.Reattach); msg != "" {
 		fmt.Fprintln(os.Stderr, msg)
 	}
-	// Lazy auto-start: make the configured host services (memory/knowledge)
-	// reachable before the sandbox tries them, with a SHORT budget — the launch
-	// waits AT MOST service.EnsureRunTimeout (8s), covering spawn-lock acquisition
-	// AND the health poll under one deadline (M2), then proceeds regardless
-	// (recall/knowledge degrade in-VM exactly as before). service.Ensure prints its
-	// own progress/failure lines.
+	// Lazy auto-start: make the configured host services (memory) reachable
+	// before the sandbox tries them, with a SHORT budget — the launch waits AT
+	// MOST service.EnsureRunTimeout (8s), covering spawn-lock acquisition AND
+	// the health poll under one deadline (M2), then proceeds regardless (recall
+	// degrades in-VM exactly as before). service.Ensure prints its own
+	// progress/failure lines.
 	service.EnsureUp(nil, service.EnsureRunTimeout)
 
 	// Readiness, rendered from the SHARED lazy snapshot (readiness_launch.go)
@@ -359,13 +359,6 @@ func runRun(argv []string) {
 	//     provider key handled above, because that is the only gap that makes
 	//     the session useless rather than degraded.
 	axis.RenderReadinessWarnings(os.Stderr, axis.FastReadinessSnapshot(cfg, defaultShellEnv(), keyEvidence), axis.LaunchWarningLimit)
-
-	// Knowledge scope: resolve this workspace's bundle set (global config bundles
-	// + the project's .pix/knowledge pointer), lazily reindex the project
-	// bundle when the daemon is up and doesn't know it yet, and write the scope
-	// file the in-VM recall extension reads. Entirely best-effort: it never blocks
-	// or fails the launch (recall just misses a bundle this run).
-	launch.WireKnowledgeScope(cfg, o.Workspace, launch.DefaultKnowledgeRPC())
 
 	// Local model + memory scope: hand the configured ollama_bridge_model to the
 	// in-VM ollama-bridge, and the active pack's memory_scope (default: the pack

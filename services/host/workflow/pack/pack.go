@@ -27,7 +27,6 @@ import (
 	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/hostenv"
-	"pix/host/knowledge"
 	"pix/host/launcher"
 	"pix/host/routing"
 	"pix/host/secret"
@@ -41,9 +40,11 @@ import (
 // Manifest is pack.toml. Identity + model prefs (v1), plus the v2 facets:
 // F1 integrations attach (unchanged shape, now enabling), F2/F3 proxy wrappers,
 // the (struct-only, P2) external-binary facet, F4 config layering (gog_account/
-// memory_scope/routing), and F6 knowledge references. Skills and embedded
-// knowledge are still discovered by convention (skills/, knowledge/), so a pack
-// does not have to enumerate them.
+// memory_scope/routing). Skills and embedded knowledge are still discovered by
+// convention (skills/, knowledge/), so a pack does not have to enumerate them.
+// The knowledge/ dir is INERT: it is mounted like skills/ but nothing indexes
+// it (the built-in OKF knowledge service was retired, W2 U03A) — it is a
+// future seam for a files/http/MCP knowledge capability provider.
 type Manifest struct {
 	Name              string `toml:"name"`
 	Schema            int    `toml:"schema"`
@@ -69,9 +70,6 @@ type Manifest struct {
 	// in Phase 1: LoadPack validates the shape (fail-closed on a missing sha) but
 	// nothing executes one — that is the P2 trust-gated host-exec path.
 	Bins []packBin `toml:"bin,omitempty"`
-	// Knowledge are [[knowledge]] references (F6): shared=true travels (a git
-	// URL an adopter pulls), shared=false does not (a local path, standalone).
-	Knowledge []packKnowledge `toml:"knowledge,omitempty"`
 	// Setup steps let a pack contribute resumable host onboarding to `pix
 	// setup --pack`. Each step is a repo-relative executable with a read-only
 	// probe and an idempotent apply action. The script bytes and argv are part of
@@ -242,17 +240,6 @@ type packBin struct {
 	Path string `toml:"path"`
 	SHA  string `toml:"sha"`
 	Host bool   `toml:"host,omitempty"`
-}
-
-// packKnowledge is one [[knowledge]] entry (F6): a reference to a bundle beyond
-// the pack's own embedded knowledge/ dir. Shared=true travels with the pack (a
-// git URL adopters pull); Shared=false does not (a local path, standalone —
-// deliberately NOT repo-root-scoped, since pointing outside the pack is the
-// entire point of a private reference).
-type packKnowledge struct {
-	Name   string `toml:"name"`
-	Source string `toml:"source"`
-	Shared bool   `toml:"shared,omitempty"`
 }
 
 // Integration is a REFERENCE-ONLY integration (v1): the pack says "I use
@@ -529,27 +516,6 @@ func validatePackFacets(root string, m *Manifest) error {
 			return fmt.Errorf("pack %s: [[bin]] %q: %w", root, b.Name, err)
 		}
 	}
-	for _, k := range m.Knowledge {
-		if !safeArtifactName(k.Name) {
-			return fmt.Errorf("pack %s: [[knowledge]] name %q is invalid (letters, digits, -, _, . only; no path separators)", root, k.Name)
-		}
-		if strings.TrimSpace(k.Source) == "" {
-			return fmt.Errorf("pack %s: [[knowledge]] %q has no source", root, k.Name)
-		}
-		// CRITICAL (finding A): the shared flag MUST match the source's CLASS.
-		// shared=true ("travels") REQUIRES a git URL — resolved through the
-		// safeGitURL-gated clone path; shared=false ("private") REQUIRES a
-		// local path. Without this, an adopted pack could declare shared=true
-		// with a LOCAL path (e.g. "/etc" or ~/.ssh) and bypass the adopted-pack
-		// guard in resolvePackKnowledgeRef, which the flag alone used to key —
-		// host-file disclosure via the knowledge index. Fail closed at load.
-		if k.Shared && !knowledgeSourceIsGitURL(k.Source) {
-			return fmt.Errorf("pack %s: [[knowledge]] %q: shared=true requires a git URL source (got local path %q); use shared=false for a local path", root, k.Name, k.Source)
-		}
-		if !k.Shared && knowledgeSourceIsGitURL(k.Source) {
-			return fmt.Errorf("pack %s: [[knowledge]] %q: shared=false (private) requires a local path source (got URL %q); use shared=true for a git URL", root, k.Name, k.Source)
-		}
-	}
 	seenSetup := map[string]bool{}
 	for _, s := range m.Setup {
 		if !safeArtifactName(s.ID) {
@@ -605,16 +571,6 @@ func validateNoSymlinkComponents(root, rel string) error {
 		}
 	}
 	return nil
-}
-
-// knowledgeSourceIsGitURL classifies a [[knowledge]].Source as git-URL-shaped
-// (cloneable — including transport-helper strings like ext::/fd:: that must
-// route through the safeGitURL rejection rather than be mistaken for a local
-// path) vs a local path. The finding-A security guards key on this CLASS,
-// never on the manifest's shared flag, which an attacker controls.
-func knowledgeSourceIsGitURL(source string) bool {
-	source = strings.TrimSpace(source)
-	return knowledge.IsGitURL(source) || strings.Contains(source, "::")
 }
 
 // validateRepoRelativePath rejects a [[bin]].Path that is empty, absolute, that
@@ -763,32 +719,10 @@ func composePackStack(cfg *config.Config, store *PackTrustStore, roots []string)
 				lock.MCP = append(lock.MCP, name)
 			}
 		}
-		if p.KnowledgeDir != "" {
-			if cfg.AddKnowledgeBundle(p.KnowledgeDir) {
-				lock.Knowledge = append(lock.Knowledge, knowledge.CanonicalizeKnowledgeBundle(p.KnowledgeDir))
-			}
-			cfg.AddService("knowledge")
-		}
-		adopted := isAdoptedPack(root)
-		if store != nil {
-			_, adopted = store.Adopted[CanonicalizePackRoot(root)]
-			adopted = adopted || isAdoptedPack(root)
-		}
-		for _, k := range p.Manifest.Knowledge {
-			resolved, rerr := resolvePackKnowledgeRef(io.Discard, root, adopted, k)
-			if rerr != nil {
-				if errors.Is(rerr, errPrivateRefSkippedAdopted) {
-					continue
-				}
-				// Match ordinary pack activation: one bad optional ref does not
-				// discard the rest of an otherwise usable pack.
-				continue
-			}
-			if cfg.AddKnowledgeBundle(resolved) {
-				lock.Knowledge = append(lock.Knowledge, knowledge.CanonicalizeKnowledgeBundle(resolved))
-			}
-			cfg.AddService("knowledge")
-		}
+		// p.KnowledgeDir (the pack's embedded knowledge/ dir) is INERT: it is
+		// mounted like skills/ but no config/service wiring reads it (the
+		// built-in OKF knowledge daemon was retired, W2 U03A). It is a future
+		// seam for a files/http/MCP knowledge capability provider.
 		if v := strings.TrimSpace(p.Manifest.GogAccount); v != "" {
 			lock.PriorGogAccount = cfg.GogAccount
 			lock.GogAccount = v
@@ -1164,8 +1098,7 @@ func proxyShimTemplate(name string) string {
 // as a FAIL-SAFE adoption marker (a forged marker only RESTRICTS what a pack
 // may do — isAdoptedPack).
 type packLock struct {
-	MCP       []string `toml:"mcp,omitempty"`
-	Knowledge []string `toml:"knowledge,omitempty"`
+	MCP []string `toml:"mcp,omitempty"`
 	// Remote/Commit are set ONLY when this pack was adopted via `pack use
 	// <git-url>` (clonePack) — a non-empty Remote is the provenance marker
 	// isAdoptedPack reads (finding #1, CRITICAL). Once set they are preserved
@@ -1362,7 +1295,7 @@ func migratePhase1Activation(store *PackTrustStore, root string) {
 		return // adopted payload lock: never trusted (revert nothing)
 	}
 	hint := readPackLock(root)
-	if len(hint.MCP) == 0 && len(hint.Knowledge) == 0 && hint.GogAccount == "" && hint.OllamaBridgeModel == "" {
+	if len(hint.MCP) == 0 && hint.GogAccount == "" && hint.OllamaBridgeModel == "" {
 		return // no Phase-1 attribution to migrate
 	}
 	store.setActivation(root, hint)
@@ -1439,31 +1372,18 @@ func scrubUntrustedPackLock(root string) error {
 	return nil
 }
 
-// errPrivateRefSkippedAdopted is the sentinel resolvePackKnowledgeRef returns
-// when it refuses to honor a shared=false local-path reference because the
-// pack is adopted (finding #1). Callers use errors.Is to distinguish this from
-// an ordinary resolution failure so they can batch it into one aggregate
-// notice instead of per-ref noise.
-var errPrivateRefSkippedAdopted = errors.New("private knowledge ref skipped: pack is adopted from a remote")
-
 // revertPackPriorContribution undoes a previous activation's contribution
-// (F4/finding #5): removes exactly the MCP + knowledge entries prevLock
-// attributes to that pack (never a value the lock doesn't mention — the
-// finding #3 reversibility guarantee), and restores gog_account /
-// ollama_bridge_model to whatever cfg held immediately before that pack
-// overwrote them (or empty, if there was none). Shared by RunPackUse
-// (switching to a different pack, or re-activating the SAME pack — finding D)
-// and RunPackRm (detaching), so all are equally honest about what
-// "detached"/"switched away" means.
-func revertPackPriorContribution(cfg *config.Config, prevLock packLock) (removedMCP, removedKnowledge []string) {
+// (F4/finding #5): removes exactly the MCP entries prevLock attributes to that
+// pack (never a value the lock doesn't mention — the finding #3 reversibility
+// guarantee), and restores gog_account / ollama_bridge_model to whatever cfg
+// held immediately before that pack overwrote them (or empty, if there was
+// none). Shared by RunPackUse (switching to a different pack, or
+// re-activating the SAME pack — finding D) and RunPackRm (detaching), so all
+// are equally honest about what "detached"/"switched away" means.
+func revertPackPriorContribution(cfg *config.Config, prevLock packLock) (removedMCP []string) {
 	for _, m := range prevLock.MCP {
 		if cfg.RemoveMCP(m) {
 			removedMCP = append(removedMCP, m)
-		}
-	}
-	for _, id := range prevPackKnowledgeIDs(prevLock) {
-		if cfg.RemoveKnowledgeBundle(id) {
-			removedKnowledge = append(removedKnowledge, id)
 		}
 	}
 	// Only revert if cfg still holds exactly what THIS pack set — never clobber
@@ -1474,7 +1394,7 @@ func revertPackPriorContribution(cfg *config.Config, prevLock packLock) (removed
 	if prevLock.OllamaBridgeModel != "" && cfg.OllamaBridgeModel == prevLock.OllamaBridgeModel {
 		cfg.OllamaBridgeModel = prevLock.PriorOllamaBridgeModel
 	}
-	return removedMCP, removedKnowledge
+	return removedMCP
 }
 
 // CanonicalizePackRoot normalizes a pack root path for identity comparison
@@ -1492,104 +1412,6 @@ func CanonicalizePackRoot(p string) string {
 		return filepath.Clean(abs)
 	}
 	return filepath.Clean(p)
-}
-
-// prevPackKnowledgeIDs computes the canonical bundle ids the PREVIOUS active
-// pack contributed, for removal on switch (F4). STRICTLY lock-attributed
-// (finding C): only entries pack.lock records as that activation's own
-// contribution are ever removed. An empty/missing/corrupt lock removes
-// NOTHING — possible stale-bundle accumulation is accepted over the
-// alternative of guessing from the manifest, which could delete a bundle the
-// USER added independently (the old embedded-knowledge/ fallback did exactly
-// that when the lock was lost).
-func prevPackKnowledgeIDs(lock packLock) []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, id := range lock.Knowledge {
-		id = knowledge.CanonicalizeKnowledgeBundle(id)
-		if id == "" || seen[id] {
-			continue
-		}
-		seen[id] = true
-		out = append(out, id)
-	}
-	return out
-}
-
-// resolvePackKnowledgeRef resolves one [[knowledge]] entry to an absolute local
-// bundle path (F6). The guards here key on the source's CLASS (git URL vs
-// local path — knowledgeSourceIsGitURL), NEVER on the manifest's shared flag,
-// which an attacker authors (finding A, CRITICAL): keying the skip-guard on
-// shared=false alone let an adopted pack declare shared=true with a LOCAL path
-// and walk straight past it into AddKnowledgeBundle. LoadPack additionally
-// enforces shared↔class agreement (shared=true ⇔ git URL), so a mismatched
-// entry never even loads; the class check here keeps this function safe for
-// any caller regardless.
-//
-// A git URL TRAVELS: resolved via knowledge.ResolveBundleRef, which clones/pulls it into
-// the shared knowledge cache through the safeGitURL gate (no ext::/fd::/file::
-// transports, no local-as-remote) — an adopter who shares the pack pulls the
-// SAME team bundle.
-//
-// A LOCAL path is AUTHORED-ONLY: it is deliberately NOT root-scoped (pointing
-// outside the pack at the owner's own machine is the entire point of a private
-// reference), but pack.toml for an ADOPTED pack (cloned from a remote,
-// adopted==true) is attacker-controlled input, so a local path there is NEVER
-// honored — whatever the shared flag claims — or `pack use <attacker-git-url>`
-// could point AddKnowledgeBundle at an arbitrary host directory (e.g. ~/.ssh)
-// that the knowledge service then indexes and the sandbox can read. The caller
-// aggregates these into one notice (see errPrivateRefSkippedAdopted).
-//
-// For a pack the user authored locally (adopted==false), two more guards apply
-// before AddKnowledgeBundle ever sees the path: (a) it must resolve to an
-// existing, readable directory — a typo'd/nonexistent path is skipped rather
-// than indexed, so the knowledge service is never pointed at a dangling entry
-// (no knowledge-service poisoning); (b) it must resolve OUTSIDE the pack's own
-// tree — a private reference that actually lives inside root should be embedded
-// under knowledge/ instead (that travels honestly), not declared "private" while
-// silently living in the repo.
-func resolvePackKnowledgeRef(out io.Writer, root string, adopted bool, k packKnowledge) (string, error) {
-	source := strings.TrimSpace(k.Source)
-	if source == "" {
-		return "", fmt.Errorf("[[knowledge]] %q has no source", k.Name)
-	}
-	if knowledgeSourceIsGitURL(source) {
-		return knowledge.ResolveBundleRef(source, knowledge.KnowledgeCacheDir(), out)
-	}
-	// LOCAL path: authored-only, regardless of the shared flag (finding A).
-	if adopted {
-		return "", errPrivateRefSkippedAdopted
-	}
-	abs, err := filepath.Abs(expandUser(source))
-	if err != nil {
-		return "", fmt.Errorf("resolving private knowledge %q: %w", k.Name, err)
-	}
-	resolved := filepath.Clean(abs)
-	if r, rerr := filepath.EvalSymlinks(abs); rerr == nil {
-		resolved = r
-	}
-	// (b) reject a source resolving inside the pack tree.
-	rootResolved := filepath.Clean(root)
-	if r, rerr := filepath.EvalSymlinks(root); rerr == nil {
-		rootResolved = r
-	}
-	if resolved == rootResolved || strings.HasPrefix(resolved, rootResolved+string(filepath.Separator)) {
-		return "", fmt.Errorf("private knowledge %q (%s) resolves INSIDE the pack tree; embed it under knowledge/ instead of referencing it as private", k.Name, source)
-	}
-	// (a) validate it exists and is a readable directory before AddKnowledgeBundle.
-	fi, statErr := os.Stat(resolved)
-	if statErr != nil {
-		return "", fmt.Errorf("private knowledge %q: %s: %w", k.Name, resolved, statErr)
-	}
-	if !fi.IsDir() {
-		return "", fmt.Errorf("private knowledge %q: %s is not a directory", k.Name, resolved)
-	}
-	f, openErr := os.Open(resolved)
-	if openErr != nil {
-		return "", fmt.Errorf("private knowledge %q: %s is not readable: %w", k.Name, resolved, openErr)
-	}
-	f.Close()
-	return resolved, nil
 }
 
 // WriteMemoryScope writes (or removes) <workspace>/.pix/profile: the
@@ -1773,11 +1595,11 @@ func RunPackAdd(env hostenv.Env, out io.Writer, rest []string, register Register
 		fmt.Fprintf(os.Stderr, "pix pack add: invalid name %q (letters, digits, -, _, . only; no path separators)\n", name)
 		os.Exit(2)
 	}
-	// Parse the tail: flags (--host, --private, --ref VALUE, --env VALUE) plus an
-	// optional trailing PACK positional. Flags are shared across kinds; each kind
-	// below reads only the ones it understands.
-	var host, private, yes bool
-	var ref, envVar string
+	// Parse the tail: flags (--host, --env VALUE) plus an optional trailing PACK
+	// positional. Flags are shared across kinds; each kind below reads only the
+	// ones it understands.
+	var host, yes bool
+	var envVar string
 	var positionals []string
 	tail := rest[2:]
 	for i := 0; i < len(tail); i++ {
@@ -1785,19 +1607,8 @@ func RunPackAdd(env hostenv.Env, out io.Writer, rest []string, register Register
 		switch {
 		case a == "--host":
 			host = true
-		case a == "--private":
-			private = true
 		case a == "--yes" || a == "-y":
 			yes = true
-		case a == "--ref":
-			if i+1 >= len(tail) {
-				fmt.Fprintln(os.Stderr, "pix pack add: --ref needs a value")
-				os.Exit(2)
-			}
-			i++
-			ref = tail[i]
-		case strings.HasPrefix(a, "--ref="):
-			ref = strings.TrimPrefix(a, "--ref=")
 		case a == "--env":
 			if i+1 >= len(tail) {
 				fmt.Fprintln(os.Stderr, "pix pack add: --env needs a value")
@@ -1850,55 +1661,25 @@ func RunPackAdd(env hostenv.Env, out io.Writer, rest []string, register Register
 		fmt.Fprintf(out, "added skill %q: %s\n", name, f)
 		fmt.Fprintln(out, "edit it, then commit it to your pack's git repo.")
 	case "knowledge":
-		if strings.TrimSpace(ref) == "" {
-			// Embed (v1 behavior): a literal knowledge/ doc, discovered by convention.
-			dir := filepath.Join(root, "knowledge")
-			if err := os.MkdirAll(dir, 0o755); err != nil {
-				fmt.Fprintf(out, "pix pack add: %v\n", err)
-				os.Exit(1)
-			}
-			f := filepath.Join(dir, name+".md")
-			if _, err := os.Stat(f); err == nil {
-				fmt.Fprintf(out, "knowledge doc already exists: %s\n", f)
-				return
-			}
-			if err := os.WriteFile(f, []byte(knowledgeTemplate(name)), 0o644); err != nil {
-				fmt.Fprintf(out, "pix pack add: %v\n", err)
-				os.Exit(1)
-			}
-			fmt.Fprintf(out, "added knowledge doc %q: %s\n", name, f)
+		// Embed only: a literal knowledge/ doc, discovered by convention. It is
+		// INERT (mounted like skills/, but nothing indexes it — the built-in OKF
+		// knowledge daemon was retired, W2 U03A; this is a future seam for a
+		// files/http/MCP knowledge capability provider).
+		dir := filepath.Join(root, "knowledge")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			fmt.Fprintf(out, "pix pack add: %v\n", err)
+			os.Exit(1)
+		}
+		f := filepath.Join(dir, name+".md")
+		if _, err := os.Stat(f); err == nil {
+			fmt.Fprintf(out, "knowledge doc already exists: %s\n", f)
 			return
 		}
-		// F6 reference: [[knowledge]] name/source/shared. --private (shared=false)
-		// does NOT travel with the pack — the source is a local path that stays on
-		// this machine; the default (shared=true) is meant for a git URL an adopter
-		// pulls.
-		p, err := LoadPack(root)
-		if err != nil {
+		if err := os.WriteFile(f, []byte(knowledgeTemplate(name)), 0o644); err != nil {
 			fmt.Fprintf(out, "pix pack add: %v\n", err)
 			os.Exit(1)
 		}
-		entry := packKnowledge{Name: name, Source: ref, Shared: !private}
-		replaced := false
-		for i, k := range p.Manifest.Knowledge {
-			if k.Name == name {
-				p.Manifest.Knowledge[i] = entry
-				replaced = true
-				break
-			}
-		}
-		if !replaced {
-			p.Manifest.Knowledge = append(p.Manifest.Knowledge, entry)
-		}
-		if err := WriteManifest(root, p.Manifest); err != nil {
-			fmt.Fprintf(out, "pix pack add: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Fprintf(out, "added knowledge reference %q (shared=%v) to pack.toml\n", name, entry.Shared)
-		if private {
-			fmt.Fprintln(out, "private: this reference will NOT travel if you share the pack.")
-		}
-		fmt.Fprintln(out, "run `pix pack use` on this pack to index it.")
+		fmt.Fprintf(out, "added knowledge doc %q: %s\n", name, f)
 	case "proxy":
 		binDir := filepath.Join(root, "bin")
 		if err := os.MkdirAll(binDir, 0o755); err != nil {
@@ -2112,7 +1893,7 @@ func RunPackShow(env hostenv.Env, out io.Writer, rest []string) {
 	fmt.Fprintf(out, "pack:      %s\n", p.Manifest.Name)
 	fmt.Fprintf(out, "root:      %s\n", p.Root)
 	fmt.Fprintf(out, "skills:    %s\n", present(p.SkillsDir))
-	fmt.Fprintf(out, "knowledge: %s\n", present(p.KnowledgeDir))
+	fmt.Fprintf(out, "knowledge: %s (inert; not indexed by any service)\n", present(p.KnowledgeDir))
 	if p.CapabilitiesFile != "" {
 		fmt.Fprintln(out, "capabilities: yes (mounts to ~/.pi/agent/capabilities.json)")
 	}
@@ -2146,16 +1927,6 @@ func RunPackShow(env hostenv.Env, out io.Writer, rest []string) {
 				kind = "HOST (Phase 2)"
 			}
 			fmt.Fprintf(out, "  - %s (%s)\n", pr.Name, kind)
-		}
-	}
-	if len(p.Manifest.Knowledge) > 0 {
-		fmt.Fprintln(out, "knowledge refs:")
-		for _, k := range p.Manifest.Knowledge {
-			shared := "private (does not travel)"
-			if k.Shared {
-				shared = "shared (travels)"
-			}
-			fmt.Fprintf(out, "  - %s -> %s [%s]\n", k.Name, k.Source, shared)
 		}
 	}
 	if len(p.Manifest.Integrations) > 0 {
@@ -2342,14 +2113,6 @@ func RunPackUse(env hostenv.Env, out io.Writer, rest []string, register Register
 		}
 	}
 
-	// Adoption provenance (finding #1, CRITICAL): a pack cloned via a git URL
-	// THIS activation, one whose lock carried a Remote marker (fail-safe: a
-	// forged marker only RESTRICTS), or one host state / its location under
-	// PacksDir proves was cloned (isAdoptedPack), is "adopted" — pack.toml
-	// there is attacker-controlled, so shared=false local knowledge refs are
-	// never honored (enforced inside resolvePackKnowledgeRef below).
-	adopted := remoteURL != "" || hintRemote != "" || isAdoptedPack(root)
-
 	// F5: the Tier-1 trust gate — against TRUSTED HOST STATE (packtruststore.go),
 	// never anything the pack ships. Tier-0 (no host-exec facet) adopts
 	// silently, exactly as Phase 1 did. Tier-1 halts at the BoM screen unless
@@ -2399,16 +2162,15 @@ func RunPackUse(env hostenv.Env, out io.Writer, rest []string, register Register
 	// pack merely re-declares — finding #2), then add what the NEW pack
 	// declares. Reversible: pack-use(A) -> pack-use(B) -> pack-use(A) restores
 	// cfg.MCP to what it was after the first pack-use(A).
-	var removedMCP, removedKnowledge []string
+	var removedMCP []string
 	switch {
 	case switching:
 		// A composed stack unwinds in reverse command order so each scalar
 		// restoration sees the value its predecessor set. Collections remain
 		// scoped to the exact per-pack ownership records.
 		for i := len(prevRoots) - 1; i >= 0; i-- {
-			mcp, knowledge := revertPackPriorContribution(cfg, trustStore.activationFor(prevRoots[i]))
+			mcp := revertPackPriorContribution(cfg, trustStore.activationFor(prevRoots[i]))
 			removedMCP = append(removedMCP, mcp...)
-			removedKnowledge = append(removedKnowledge, knowledge...)
 		}
 	case prevRoot == root:
 		// SAME-pack reactivation (finding D): revert THIS pack's own prior
@@ -2417,52 +2179,18 @@ func RunPackUse(env hostenv.Env, out io.Writer, rest []string, register Register
 		// the new lock overwrites the attribution with EMPTY slices — so a
 		// later switch/rm could never remove this pack's contributions — and a
 		// field REMOVED from the manifest since the last activation
-		// (gog_account, ollama_bridge_model, an mcp, a knowledge ref) would
-		// stay live forever. Revert-then-reapply reconciles both: facets still
-		// declared re-add just below (regaining attribution), dropped ones
-		// stay reverted. The removal set comes from HOST state (round-2 A),
-		// never the pack-payload lock — a same-pack `git pull` forgery buys
-		// nothing.
-		removedMCP, removedKnowledge = revertPackPriorContribution(cfg, trustStore.activationFor(root))
+		// (gog_account, ollama_bridge_model, an mcp) would stay live forever.
+		// Revert-then-reapply reconciles both: facets still declared re-add just
+		// below (regaining attribution), dropped ones stay reverted. The removal
+		// set comes from HOST state (round-2 A), never the pack-payload lock — a
+		// same-pack `git pull` forgery buys nothing.
+		removedMCP = revertPackPriorContribution(cfg, trustStore.activationFor(root))
 	}
 	var addedMCP []string
 	for _, m := range McpNames(p) {
 		if cfg.AddMCP(m) {
 			addedMCP = append(addedMCP, m)
 		}
-	}
-
-	// Knowledge (F4 + F6): add the NEW pack's embedded dir + resolved
-	// [[knowledge]] refs (shared travels via knowledge.ResolveBundleRef; private resolves
-	// to a local path that never entered the pack's git tree — and is skipped
-	// entirely for an adopted pack, finding #1). Only what cfg.AddKnowledgeBundle
-	// ACTUALLY ADDED is recorded for the next switch's removal set (finding #2):
-	// a bundle already present (added by the user, or by another mechanism) is
-	// never claimed as this pack's own contribution.
-	var addedKnowledge, newKnowledgeIDs []string
-	if p.KnowledgeDir != "" {
-		if cfg.AddKnowledgeBundle(p.KnowledgeDir) {
-			addedKnowledge = append(addedKnowledge, p.KnowledgeDir)
-			newKnowledgeIDs = append(newKnowledgeIDs, knowledge.CanonicalizeKnowledgeBundle(p.KnowledgeDir))
-		}
-		cfg.AddService("knowledge")
-	}
-	var skippedPrivate int
-	for _, k := range p.Manifest.Knowledge {
-		resolved, rerr := resolvePackKnowledgeRef(out, root, adopted, k)
-		if rerr != nil {
-			if errors.Is(rerr, errPrivateRefSkippedAdopted) {
-				skippedPrivate++
-				continue
-			}
-			fmt.Fprintf(out, "note: knowledge %q: %v (skipping)\n", k.Name, rerr)
-			continue
-		}
-		if cfg.AddKnowledgeBundle(resolved) {
-			addedKnowledge = append(addedKnowledge, resolved)
-			newKnowledgeIDs = append(newKnowledgeIDs, knowledge.CanonicalizeKnowledgeBundle(resolved))
-		}
-		cfg.AddService("knowledge")
 	}
 
 	// Config layering (F4/finding #5): a value the pack declares overwrites, but
@@ -2525,7 +2253,6 @@ func RunPackUse(env hostenv.Env, out io.Writer, rest []string, register Register
 	// one); do NOT "fix" it with manifest-driven removal.
 	lock := packLock{
 		MCP:                    addedMCP,
-		Knowledge:              newKnowledgeIDs,
 		Remote:                 remoteURL,
 		Commit:                 remoteCommit,
 		GogAccount:             lockGogAccount,
@@ -2592,17 +2319,12 @@ func RunPackUse(env hostenv.Env, out io.Writer, rest []string, register Register
 	// On a same-pack reactivation the revert-then-reapply (finding D) removes
 	// and immediately re-adds every still-declared entry; report as detached
 	// only what actually STAYED out (a facet dropped from the manifest).
-	detachedMCP, detachedKnowledge := removedMCP, removedKnowledge
+	detachedMCP := removedMCP
 	if !switching {
-		detachedMCP, detachedKnowledge = nil, nil
+		detachedMCP = nil
 		for _, m := range removedMCP {
 			if !slices.Contains(cfg.MCP, m) {
 				detachedMCP = append(detachedMCP, m)
-			}
-		}
-		for _, id := range removedKnowledge {
-			if !slices.Contains(cfg.KnowledgeBundles, id) {
-				detachedKnowledge = append(detachedKnowledge, id)
 			}
 		}
 	}
@@ -2621,17 +2343,6 @@ func RunPackUse(env hostenv.Env, out io.Writer, rest []string, register Register
 		if err := register(cfg, env, out, all, launcher.FindHostBinary, packContainerMCP(p)); err != nil {
 			fmt.Fprintf(out, "note: mcp registration: %v\n", err)
 		}
-	}
-	if !env.Quiet {
-		for _, id := range detachedKnowledge {
-			fmt.Fprintf(out, "knowledge bundle detached (previous activation): %s\n", id)
-		}
-		for _, id := range addedKnowledge {
-			fmt.Fprintf(out, "knowledge bundle registered: %s\n", id)
-		}
-	}
-	if skippedPrivate > 0 && !env.Quiet {
-		fmt.Fprintf(out, "skipped %d private knowledge ref(s) from an adopted pack (shared=false local paths are never honored for a pack cloned from a remote)\n", skippedPrivate)
 	}
 
 	// F3: swap the host-mode wrappers NOW (live for the next `pix host`):
@@ -2688,11 +2399,10 @@ func RunPackRm(out io.Writer, rest []string) {
 	// the locked fn (withFlock contract); failures return and exit after the
 	// lock is released.
 	var (
-		noActive         bool
-		old              string
-		removedWrappers  []string
-		removedMCP       []string
-		removedKnowledge []string
+		noActive        bool
+		old             string
+		removedWrappers []string
+		removedMCP      []string
 	)
 	rmErr := withPackTrustLock(func() error {
 		cfg, err := config.Load()
@@ -2734,9 +2444,8 @@ func RunPackRm(out io.Writer, rest []string) {
 		}
 		roots := ActivePackRoots(cfg, "")
 		for i := len(roots) - 1; i >= 0; i-- {
-			mcp, knowledge := revertPackPriorContribution(cfg, store.activationFor(roots[i]))
+			mcp := revertPackPriorContribution(cfg, store.activationFor(roots[i]))
 			removedMCP = append(removedMCP, mcp...)
-			removedKnowledge = append(removedKnowledge, knowledge...)
 		}
 		ClearPackInference(cfg, "")
 		cfg.Pack = ""
@@ -2773,22 +2482,14 @@ func RunPackRm(out io.Writer, rest []string) {
 	}
 	if len(removedMCP) > 0 {
 		fmt.Fprintf(out, "detached mcp: %s\n", strings.Join(removedMCP, ", "))
-	}
-	for _, id := range removedKnowledge {
-		fmt.Fprintf(out, "knowledge bundle detached: %s\n", id)
-	}
-	if len(removedKnowledge) > 0 {
-		service.PropagateConfig(service.DefaultReloader(), out)
-	}
-	if len(removedMCP) > 0 {
 		printPackRecreateLine(out)
 	}
 }
 
 // --- git-URL adoption -------------------------------------------------------
 
-// isPackGitURL reuses knowledge.go's knowledge.IsGitURL and additionally accepts the
-// "git+" scheme prefix used by kit URLs.
+// isPackGitURL classifies s as a git URL (cloneable) and additionally accepts
+// the "git+" scheme prefix used by kit URLs.
 func isPackGitURL(s string) bool {
 	s = strings.TrimSpace(s)
 	// A git transport-helper string (ext::, fd::, ...) is URL-SHAPED, not a local
@@ -2797,7 +2498,18 @@ func isPackGitURL(s string) bool {
 	if strings.Contains(s, "::") {
 		return true
 	}
-	return strings.HasPrefix(s, "git+") || knowledge.IsGitURL(s)
+	switch {
+	case strings.HasPrefix(s, "git+"),
+		strings.HasPrefix(s, "http://"),
+		strings.HasPrefix(s, "https://"),
+		strings.HasPrefix(s, "git://"),
+		strings.HasPrefix(s, "ssh://"),
+		strings.HasPrefix(s, "git@"):
+		return true
+	case strings.HasSuffix(s, ".git"):
+		return true
+	}
+	return false
 }
 
 // parsePackURL splits an optional "#ref=<ref>" (or bare "#<ref>") pin off a git

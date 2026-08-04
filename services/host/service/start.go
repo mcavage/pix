@@ -1,6 +1,6 @@
 // serve_start.go implements LAZY AUTO-START of the host services daemon
 // (docs/design/serve-lifecycle.md §1): the first `pix run` / `pix
-// memory …` / `pix knowledge query` spins up a detached `pix-host
+// memory …` spins up a detached `pix-host
 // serve` if the configured service ports are down — the Ollama-CLI model
 // (`ollama run` starts `ollama serve`), so nobody babysits a foreground serve.
 //
@@ -39,9 +39,9 @@ import (
 const autoserveEnvVar = "PIX_NO_AUTOSERVE"
 
 // EnsureTimeout is the default health-wait budget: memory opens a sqlite
-// store under an advisory flock and knowledge reindexes bundles at startup, so
-// a cold start can take a few seconds; 15s avoids false failures while a truly
-// broken start (port permanently in use) still fails fast.
+// store under an advisory flock at startup, so a cold start can take a few
+// seconds; 15s avoids false failures while a truly broken start (port
+// permanently in use) still fails fast.
 const EnsureTimeout = 15 * time.Second
 
 // EnsureRunTimeout is the SHORTER budget `pix run` uses: a sandbox
@@ -132,8 +132,7 @@ func DefaultStarter() serveStarter {
 // serveStarter.recordPid). It RETURNS an error (round 2, H8): a swallowed
 // MkdirAll/WriteFile failure used to let Ensure's spawn lock release as
 // if the pid had been recorded, reopening the H3 double-spawn window with no
-// backstop for knowledge-only configs (the memory store's own flock does not
-// exist when memory is disabled).
+// backstop when memory is disabled (its own flock does not exist then).
 func recordSpawnedServePid(pid int) error {
 	path := config.ServePidPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -168,7 +167,7 @@ var errAutoserveDisabled = fmt.Errorf(
 func Ensure(st serveStarter, cfg *config.Config, opts EnsureOpts) error {
 	ports := requiredServePorts(st, cfg, opts.Services)
 	if len(ports) == 0 {
-		return nil // nothing required (e.g. knowledge asked for but not enabled)
+		return nil // nothing required (e.g. memory asked for but not enabled)
 	}
 	allUp := func() bool {
 		for _, p := range ports {
@@ -297,7 +296,7 @@ type servePortSpec struct {
 // requiredServePorts resolves which service ports Ensure must see up:
 // the caller's requested subset (or the whole config set), intersected with the
 // ENABLED services — a disabled service is never required — mapped to ports via
-// the same MEMORY_PORT/KNOWLEDGE_PORT-aware resolution serve_ctl uses.
+// the same MEMORY_PORT-aware resolution serve_ctl uses.
 func requiredServePorts(st serveStarter, cfg *config.Config, requested []string) []servePortSpec {
 	enabled := map[string]bool{}
 	for _, s := range cfg.Services {
@@ -314,17 +313,14 @@ func requiredServePorts(st serveStarter, cfg *config.Config, requested []string)
 			continue
 		}
 		seen[s] = true
-		switch s {
-		case "memory":
+		if s == "memory" {
 			out = append(out, servePortSpec{"memory", Port(env, "MEMORY_PORT", rpc.MemoryPortDefault)})
-		case "knowledge":
-			out = append(out, servePortSpec{"knowledge", Port(env, "KNOWLEDGE_PORT", rpc.KnowledgePortDefault)})
 		}
 	}
-	return out // requested order preserved ("memory:11435, knowledge:11436")
+	return out // requested order preserved ("memory:11435")
 }
 
-// describeServePorts renders "memory:11435, knowledge:11436" for messages.
+// describeServePorts renders "memory:11435" for messages.
 func describeServePorts(ports []servePortSpec) string {
 	parts := make([]string, 0, len(ports))
 	for _, p := range ports {
@@ -391,10 +387,10 @@ func tailFileLines(path string, n int) string {
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
-// EnsureUp is the best-effort call-site helper `run`, `memory`, and
-// `knowledge` use: load the base config, run Ensure with the real ops, and
-// swallow the error (Ensure already told the user why on stderr) so the
-// primary action proceeds and degrades exactly as it did before lazy start.
+// EnsureUp is the best-effort call-site helper `run` and `memory` use: load
+// the base config, run Ensure with the real ops, and swallow the error
+// (Ensure already told the user why on stderr) so the primary action proceeds
+// and degrades exactly as it did before lazy start.
 func EnsureUp(services []string, timeout time.Duration) {
 	cfg, err := config.Load()
 	if err != nil {
@@ -419,9 +415,6 @@ func staleServeVersion(cfg *config.Config, env hostenv.Env, requested []string, 
 		}
 		id, err := probe(p.port)
 		want := rpc.MemoryName
-		if p.name == "knowledge" {
-			want = rpc.KnowledgeName
-		}
 		if err == nil && id.Name == want && id.Version != "" && id.Version != launcher.Version {
 			return id.Version, true
 		}

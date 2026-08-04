@@ -61,10 +61,10 @@ func ApplyPackStackToLaunch(cfg *config.Config, o *RunOpts, env hostenv.Env) (st
 // time, so BuildSbxArgs' existing --mcp loop already attaches it on the next
 // create — nothing new needed in the arg builder, and warning here would be
 // stale noise for an already-attached pack. Knowledge is NOT handled here
-// either: a persisted active pack already has its bundles (embedded dir AND
-// [[knowledge]] refs) in cfg.KnowledgeBundles (added at `pack use` time,
-// indexed by the daemon), and a transient --pack override's knowledge is
-// deliberately not scoped (the daemon wouldn't have indexed it). An EXPLICIT
+// either: a pack's embedded knowledge/ dir (p.KnowledgeDir) is INERT —
+// mounted like skills/, but nothing indexes it (the built-in OKF knowledge
+// service was retired, W2 U03A) — so there is no bundle state to scope for a
+// transient --pack override. An EXPLICIT
 // --pack that fails to load is fatal (a non-nil return the caller must treat
 // as launch-aborting). The CONFIGURED active pack (cfg.Pack, or the default
 // pack fallback) fails CLOSED too when it exists but won't load — a symlink

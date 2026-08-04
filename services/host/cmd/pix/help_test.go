@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"pix/host/cli"
 	"pix/host/hostenv/hostenvtest"
-	"pix/host/knowledge"
 	"pix/host/mcp"
 	"pix/host/memory"
 	"pix/host/rpc"
@@ -100,64 +99,6 @@ func TestParseRunArgs_HelpSentinel(t *testing.T) {
 	}
 }
 
-// --- B2: `knowledge init <flag>` must not scaffold a junk bundle ---
-
-func TestResolveKnowledgeInitArgs(t *testing.T) {
-	// --help -> help sentinel, no dir.
-	if dir, help, err := knowledge.ResolveInitArgs([]string{"--help"}); !help || err != nil || dir != "" {
-		t.Errorf("knowledge.ResolveInitArgs([--help]) = (%q,%v,%v), want ('',true,nil)", dir, help, err)
-	}
-	// A flag typo -> error, no dir, no side effect.
-	if dir, help, err := knowledge.ResolveInitArgs([]string{"--nope"}); err == nil || help || dir != "" {
-		t.Errorf("knowledge.ResolveInitArgs([--nope]) = (%q,%v,%v), want ('',false,error)", dir, help, err)
-	}
-	// A real DIR resolves to its absolute form.
-	tmp := t.TempDir()
-	sub := filepath.Join(tmp, "kb")
-	dir, help, err := knowledge.ResolveInitArgs([]string{sub})
-	if help || err != nil || dir != sub {
-		t.Errorf("knowledge.ResolveInitArgs([%q]) = (%q,%v,%v), want (%q,false,nil)", sub, dir, help, err, sub)
-	}
-}
-
-// TestKnowledgeInitHelp_NoSideEffects: `knowledge init --help` must not create a
-// bundle dir, a `--help` directory, or touch config.
-func TestKnowledgeInitHelp_NoSideEffects(t *testing.T) {
-	tmp := t.TempDir()
-	cfgFile := filepath.Join(tmp, "config.toml")
-	t.Setenv("PIX_CONFIG", cfgFile)
-
-	// Run from a temp cwd so a stray filepath.Abs("--help") would land here.
-	cwd, _ := os.Getwd()
-	if err := os.Chdir(tmp); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(cwd) })
-
-	// Capture stdout so the printed usage doesn't pollute test output, and so we
-	// can assert usage was printed.
-	old := os.Stdout
-	rp, wp, _ := os.Pipe()
-	os.Stdout = wp
-	knowledge.RunKnowledgeInit([]string{"--help"})
-	_ = wp.Close()
-	os.Stdout = old
-	var buf bytes.Buffer
-	_, _ = buf.ReadFrom(rp)
-
-	if !strings.Contains(buf.String(), "knowledge init") {
-		t.Errorf("expected usage on stdout, got %q", buf.String())
-	}
-	if _, err := os.Stat(filepath.Join(tmp, "--help")); err == nil {
-		t.Error("`knowledge init --help` created a `--help` directory")
-	}
-	if _, err := os.Stat(cfgFile); err == nil {
-		t.Error("`knowledge init --help` wrote config — expected no side effects")
-	}
-	if _, err := os.Stat(knowledge.DefaultKnowledgeDir()); err == nil {
-		t.Error("`knowledge init --help` scaffolded the default bundle dir")
-	}
-}
 
 // --- S1: cli.FlagSet help bool + dispatch help routing ---
 

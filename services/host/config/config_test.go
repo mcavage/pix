@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -572,111 +573,27 @@ func TestSaveAndMutators(t *testing.T) {
 	}
 }
 
-// TestKnowledgeBundleMutators covers add/remove: idempotent, deduped,
-// canonicalized to an absolute path, and preserved across a Save/Load round-trip.
-func TestKnowledgeBundleMutators(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "sub", "config.toml")
+// TestKnowledgeBundlesKeyIsRetired: an older config.toml carrying
+// knowledge_bundles (the built-in OKF knowledge service, retired W2 U03A)
+// must still Load cleanly — tolerated, never a hard error — and be reported
+// through RetiredKeys() so a caller (`config show`, `doctor`) can tell the
+// user the key no longer does anything.
+func TestKnowledgeBundlesKeyIsRetired(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("knowledge_bundles = [\"/kb/acme\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("PIX_CONFIG", path)
 
-	c, err := Load()
+	c, err := LoadFrom(path)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Load must tolerate a retired knowledge_bundles key, got: %v", err)
 	}
-
-	// A relative path is canonicalized to an absolute one.
-	if !c.AddKnowledgeBundle("bundles/okf") {
-		t.Error("AddKnowledgeBundle: want changed=true")
+	if !slices.Contains(c.RetiredKeys(), "knowledge_bundles") {
+		t.Errorf("RetiredKeys() = %v, want knowledge_bundles reported", c.RetiredKeys())
 	}
-	if len(c.KnowledgeBundles) != 1 || !filepath.IsAbs(c.KnowledgeBundles[0]) {
-		t.Errorf("KnowledgeBundles = %v, want a single abs path", c.KnowledgeBundles)
-	}
-	abs, _ := filepath.Abs("bundles/okf")
-	if c.KnowledgeBundles[0] != abs {
-		t.Errorf("KnowledgeBundles[0] = %q, want %q", c.KnowledgeBundles[0], abs)
-	}
-
-	// Adding the same bundle (relative or with surrounding space) is a no-op.
-	if c.AddKnowledgeBundle("bundles/okf") {
-		t.Error("AddKnowledgeBundle twice: want changed=false (dedupe)")
-	}
-	if c.AddKnowledgeBundle("  bundles/okf  ") {
-		t.Error("AddKnowledgeBundle trimmed dup: want changed=false")
-	}
-	if c.AddKnowledgeBundle("") {
-		t.Error("AddKnowledgeBundle empty: want changed=false")
-	}
-	if len(c.KnowledgeBundles) != 1 {
-		t.Errorf("KnowledgeBundles = %v, want exactly one entry", c.KnowledgeBundles)
-	}
-
-	if err := c.Save(); err != nil {
-		t.Fatalf("Save(): %v", err)
-	}
-	got, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got.KnowledgeBundles) != 1 || got.KnowledgeBundles[0] != abs {
-		t.Errorf("round-trip KnowledgeBundles = %v, want [%q]", got.KnowledgeBundles, abs)
-	}
-
-	// Remove by the same relative path the bundle was added with.
-	if !got.RemoveKnowledgeBundle("bundles/okf") {
-		t.Error("RemoveKnowledgeBundle: want changed=true")
-	}
-	if got.RemoveKnowledgeBundle("bundles/okf") {
-		t.Error("RemoveKnowledgeBundle twice: want changed=false")
-	}
-	if len(got.KnowledgeBundles) != 0 {
-		t.Errorf("KnowledgeBundles = %v, want empty after remove", got.KnowledgeBundles)
-	}
-}
-
-// TestKnowledgeBundleCanonicalizationMatchesStore is the F6 guard: config's
-// canonicalizeBundlePath must resolve a symlinked spelling to the SAME id as the
-// real path (abs -> EvalSymlinks -> Clean), so a bundle added via a symlink
-// dedupes against the real path and can be removed by either spelling.
-func TestKnowledgeBundleCanonicalizationMatchesStore(t *testing.T) {
-	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
-
-	real := t.TempDir()
-	link := filepath.Join(t.TempDir(), "link-to-bundle")
-	if err := os.Symlink(real, link); err != nil {
-		t.Skipf("symlink unsupported: %v", err)
-	}
-
-	// The real path and the symlinked spelling must canonicalize identically.
-	resolved, err := filepath.EvalSymlinks(real)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := canonicalizeBundlePath(link); got != resolved {
-		t.Fatalf("canonicalizeBundlePath(symlink) = %q, want %q (real path)", got, resolved)
-	}
-	if got := canonicalizeBundlePath(real); got != resolved {
-		t.Fatalf("canonicalizeBundlePath(real) = %q, want %q", got, resolved)
-	}
-
-	c, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Add via the real path, then adding via the symlink must dedupe (same id).
-	if !c.AddKnowledgeBundle(real) {
-		t.Fatal("AddKnowledgeBundle(real): want changed=true")
-	}
-	if c.AddKnowledgeBundle(link) {
-		t.Fatal("AddKnowledgeBundle(symlink): want changed=false (dedupe against real path)")
-	}
-	if len(c.KnowledgeBundles) != 1 || c.KnowledgeBundles[0] != resolved {
-		t.Fatalf("KnowledgeBundles = %v, want [%q]", c.KnowledgeBundles, resolved)
-	}
-	// Remove by the OTHER spelling (symlink) still removes the entry.
-	if !c.RemoveKnowledgeBundle(link) {
-		t.Fatal("RemoveKnowledgeBundle(symlink): want changed=true (remove by either spelling)")
-	}
-	if len(c.KnowledgeBundles) != 0 {
-		t.Fatalf("KnowledgeBundles = %v, want empty after remove", c.KnowledgeBundles)
+	if slices.Contains(c.UnknownKeys(), "knowledge_bundles") {
+		t.Errorf("UnknownKeys() = %v, knowledge_bundles must be classified retired, not unknown", c.UnknownKeys())
 	}
 }
 
@@ -810,7 +727,6 @@ func TestDataDirLayout(t *testing.T) {
 	xdg := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", xdg)
 	t.Setenv("MEMORY_DB", "")
-	t.Setenv("KNOWLEDGE_DB", "")
 
 	d, err := DataDir()
 	if err != nil {
@@ -821,9 +737,6 @@ func TestDataDirLayout(t *testing.T) {
 	}
 	if got, want := MemoryDBPath(), filepath.Join(xdg, "pix", "memory", "memory.db"); got != want {
 		t.Errorf("MemoryDBPath = %q, want %q", got, want)
-	}
-	if got, want := KnowledgeDBPath(), filepath.Join(xdg, "pix", "knowledge", "knowledge.db"); got != want {
-		t.Errorf("KnowledgeDBPath = %q, want %q", got, want)
 	}
 	if got, want := BackupsDir(), filepath.Join(xdg, "pix", "backups"); got != want {
 		t.Errorf("BackupsDir = %q, want %q", got, want)

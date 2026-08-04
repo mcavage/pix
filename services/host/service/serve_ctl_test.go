@@ -254,14 +254,14 @@ func TestResolveServeStatus_Running(t *testing.T) {
 	removed := false
 	proc := &fakeProc{pid: 321, alive: true}
 	ctl := ctlFor("321", nil, proc, &removed, func(int) (bool, bool) { return true, true })
-	env := fakeEnv{ports: map[int]bool{rpc.MemoryPortDefault: true, rpc.KnowledgePortDefault: false}}.env()
+	env := fakeEnv{ports: map[int]bool{rpc.MemoryPortDefault: true}}.env()
 
 	st := resolveServeStatus(ctl, env)
 	if !st.Running || st.PID != 321 {
 		t.Fatalf("want running pid 321, got %+v", st)
 	}
-	if !st.Memory || st.Knowledge {
-		t.Errorf("want memory up, knowledge down, got %+v", st)
+	if !st.Memory {
+		t.Errorf("want memory up, got %+v", st)
 	}
 
 	var buf bytes.Buffer

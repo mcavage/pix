@@ -29,7 +29,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -604,15 +603,8 @@ func resolveBackupParams(outPath string, keep int, now time.Time) backupParams {
 		embedModel = "nomic-embed-text"
 	}
 
-	var profiles []string // profiles were removed; field kept for old-archive compat
-	var knowledge []knowledgeNote
-	if cfg, err := config.Load(); err == nil && cfg != nil {
-		for _, b := range cfg.AllKnowledgeBundles() {
-			// Redact any userinfo/token in the recorded remote so a manifest note
-			// (later PRINTED at restore) never leaks a credential embedded in the URL.
-			knowledge = append(knowledge, knowledgeNote{Path: b, Remote: config.RedactURL(bundleGitRemote(b))})
-		}
-	}
+	var profiles []string         // profiles were removed; field kept for old-archive compat
+	var knowledge []knowledgeNote // knowledge_bundles config was retired (W2 U03A); field kept for old-archive compat
 
 	return backupParams{
 		DBPath:     dbPath,
@@ -660,21 +652,6 @@ func opRefsHasPastedSecret(path string) bool {
 		}
 	}
 	return false
-}
-
-// bundleGitRemote best-effort reports a knowledge bundle's `origin` git remote
-// URL for the manifest note. Any error (not a git repo, no git binary, no
-// origin) yields "" — this is provenance-only and must never fail a backup.
-func bundleGitRemote(path string) string {
-	if path == "" {
-		return ""
-	}
-	cmd := exec.Command("git", "-C", path, "remote", "get-url", "origin")
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
 }
 
 func humanSize(n int64) string {

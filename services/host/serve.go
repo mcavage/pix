@@ -1,5 +1,5 @@
 // `serve` is the plugin supervisor. It runs the long-running HTTP host services
-// (memory :11435, knowledge :11436, plus the dormant broker slot), resolving each
+// (memory :11435, plus the dormant broker slot), resolving each
 // capability slot from config: a "builtin" impl runs IN-PROCESS exactly as
 // before (memoryMux()); a non-builtin impl is launched ONCE at
 // startup as a go-plugin subprocess and the HTTP shim proxies to it. Plugins
@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"pix/host/config"
-	"pix/host/plugin"
 )
 
 type hostService struct {
@@ -34,9 +33,9 @@ type hostService struct {
 }
 
 // runServe starts the long-running HTTP host services. `enabled` is the list
-// from `services` in config.toml (config-friendly aliases: memory, knowledge,
-// broker); empty means "all". The MCP servers (e.g. slack) are stdio commands
-// run by the sbx gateway via `sbx mcp add`, not HTTP daemons.
+// from `services` in config.toml (config-friendly aliases: memory, broker);
+// empty means "all". The MCP servers (e.g. slack) are stdio commands run by
+// the sbx gateway via `sbx mcp add`, not HTTP daemons.
 // serveServiceAliases is the config name -> internal service name table: the
 // WHOLE set of capabilities `serve` composes. A retired capability leaves here,
 // which is what makes `serve <retired>` a usage error, not a started daemon.
@@ -62,7 +61,7 @@ func runServe(enabled []string) {
 	}
 
 	// The default path has NO built-in credential broker and mints NO bearer
-	// (memory/knowledge need no auth). The generic broker seam is dormant: a
+	// (memory needs no auth). The generic broker seam is dormant: a
 	// broker materializes only when an operator configures an external
 	// [plugins.broker] binary, which owns its own bearer through the retained
 	// plugin path — never the process-global env (see pluginEnv, F2).
@@ -73,7 +72,7 @@ func runServe(enabled []string) {
 
 	// Resolve the enabled set FIRST (F1): CLI args win; else config's `services`;
 	// else empty == "all". Only enabled services are constructed, launched, and
-	// preflighted below — so `serve memory` never launches or preflights knowledge.
+	// preflighted below — so `serve memory` never launches or preflights broker.
 	effective := resolveServices(enabled, cfg.Services)
 	// config-friendly aliases -> internal service name.
 	alias := serveServiceAliases()
@@ -119,15 +118,13 @@ func runServe(enabled []string) {
 		all = append(all, memSvc)
 	}
 
-	// knowledge: RETIRED (W1 U01a); a stale services entry is dropped on load.
-
 	// broker: the DORMANT credential-broker slot. There is NO built-in broker, so
 	// with the default builtin impl this starts NOTHING (brokerService returns
 	// nil). It only materializes when an operator configures an external broker
 	// ([plugins.broker] with impl != builtin): then it is launched ONCE through the
 	// shared supervisor (sha-verified + env-isolated, F2), the dispensed
 	// CredentialBroker backs the stable /token shim, and it participates in
-	// shutdown — mirroring the memory/knowledge non-builtin path.
+	// shutdown — mirroring the memory non-builtin path.
 	if enabledSvc("broker") {
 		brSvc, berr := brokerService(cfg, sup, selfPath)
 		if berr != nil {
@@ -317,52 +314,4 @@ func applyMemoryModelEnv(cfg *config.Config) {
 	if os.Getenv("MEMORY_EMBED_MODEL") == "" && cfg.MemoryEmbedModel != "" {
 		os.Setenv("MEMORY_EMBED_MODEL", cfg.MemoryEmbedModel)
 	}
-}
-
-// reindexKnowledgePlugin indexes the configured bundles into a freshly launched
-// EXTERNAL knowledge plugin (F2). Without this the plugin path only installs the
-// proxy shim and never calls Reindex, so the external/self-exec plugin serves an
-// EMPTY index. It mirrors the built-in branch's logging + degrade behavior: no
-// bundles logs an empty-index notice, a reindex failure is logged loudly (a bad
-// OPTIONAL bundle must NOT crash serve), and success reports the counts. Factored
-// out of runServe so it is unit-testable with an injected/stubbed store.
-func reindexKnowledgePlugin(store plugin.KnowledgeStore, bundles []string) {
-	if store == nil {
-		log.Print("knowledge: plugin unavailable at startup — skipping reindex (will index on demand)")
-		return
-	}
-	if len(bundles) == 0 {
-		log.Print("knowledge: no bundles configured (set knowledge_bundles in config or KNOWLEDGE_BUNDLES); serving an empty index")
-		return
-	}
-	if res, err := store.Reindex(plugin.ReindexArgs{BundlePaths: bundles}); err != nil {
-		log.Printf("knowledge: reindex failed (serving whatever was already indexed): %v", err)
-	} else {
-		log.Printf("knowledge: indexed %d concept(s) from %d bundle(s)", res.Indexed, len(res.Bundles))
-	}
-}
-
-// knowledgeBundles resolves the OKF bundle paths to index at startup: the
-// configured knowledge_bundles win; otherwise the KNOWLEDGE_BUNDLES env is
-// split on the OS path-list separator or a comma (a convenience for `serve
-// knowledge` smoke runs without a config file). Empty means no bundles.
-func knowledgeBundles(cfg *config.Config) []string {
-	// Index the UNION across the base config and every profile so a `serve`
-	// started under one context still serves the bundles another profile scopes
-	// to (per-profile scoping happens at query time, not at index time).
-	if all := cfg.AllKnowledgeBundles(); len(all) > 0 {
-		return all
-	}
-	raw := strings.TrimSpace(os.Getenv("KNOWLEDGE_BUNDLES"))
-	if raw == "" {
-		return nil
-	}
-	split := func(r rune) bool { return r == os.PathListSeparator || r == ',' }
-	var out []string
-	for _, p := range strings.FieldsFunc(raw, split) {
-		if p = strings.TrimSpace(p); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
 }

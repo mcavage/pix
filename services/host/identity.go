@@ -11,22 +11,19 @@ import (
 //
 // A TCP dial proves that something holds a port. It does not prove that the
 // thing holding it is ours, that it is the version we shipped, or that it can
-// answer a request. Every readiness verdict about memory (:11435) or knowledge
-// (:11436) goes through this RPC instead, so a foreign listener — most
-// realistically a surviving daemon from an older install — renders as
-// "port held by an unidentified process", never as ready.
+// answer a request. Every readiness verdict about memory (:11435) goes
+// through this RPC instead, so a foreign listener — most realistically a
+// surviving daemon from an older install — renders as "port held by an
+// unidentified process", never as ready.
 //
 // The shape is fixed: {name, version, port, db_path, ready, degraded_reason}.
 // The launcher's probe (readiness_service.go) matches on name and version.
 
-const (
-	// identityMemory / identityKnowledge are the wire names. They are matched
-	// EXACTLY by the launcher, so they are part of the compatibility surface:
-	// change one and every readiness verdict for that service turns into
-	// "unidentified process" until both sides ship together.
-	identityMemory    = "pix-memory"
-	identityKnowledge = "pix-knowledge"
-)
+// identityMemory is the wire name. It is matched EXACTLY by the launcher, so
+// it is part of the compatibility surface: change it and every readiness
+// verdict for memory turns into "unidentified process" until both sides ship
+// together.
+const identityMemory = "pix-memory"
 
 // serviceIdentity is the payload of the `identity` JSON-RPC method.
 type serviceIdentity struct {
@@ -79,15 +76,4 @@ func memoryIdentity(hasEmbeddings bool) serviceIdentity {
 		id.DegradedReason = "no embedder: recall is keyword-only"
 	}
 	return id
-}
-
-// knowledgeIdentity answers "who holds :11436".
-func knowledgeIdentity() serviceIdentity {
-	return serviceIdentity{
-		Name:    identityKnowledge,
-		Version: version,
-		Port:    servicePort("KNOWLEDGE_PORT", 11436),
-		DBPath:  config.KnowledgeDBPath(),
-		Ready:   true,
-	}
 }

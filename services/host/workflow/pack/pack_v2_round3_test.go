@@ -80,18 +80,15 @@ func TestWritePackLock_AtomicRoundTripNoDebris(t *testing.T) {
 
 // TestClonePack_ScrubsSymlinkPackLock: the S1 end-to-end. A malicious remote
 // pack commits pack.lock as a SYMLINK (-> a host file). clonePack must scrub it
-// BEFORE markPackAdopted, so (a) the host file is never written through, (b) a
-// fresh REAL lock carrying the adoption marker lands on disk (the clone stays
-// ADOPTED), and (c) its private local knowledge ref is therefore still skipped.
+// BEFORE markPackAdopted, so (a) the host file is never written through, and
+// (b) a fresh REAL lock carrying the adoption marker lands on disk (the clone
+// stays ADOPTED). (The private-local-knowledge-ref half of this end-to-end
+// case was retired with the [[knowledge]] facet, W2 U03A.)
 func TestClonePack_ScrubsSymlinkPackLock(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", filepath.Join(dir, "data"))
 	victim := filepath.Join(dir, "victim")
 	if err := os.WriteFile(victim, []byte("host secret\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	privateDir := filepath.Join(dir, "private-notes")
-	if err := os.MkdirAll(privateDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -102,12 +99,9 @@ func TestClonePack_ScrubsSymlinkPackLock(t *testing.T) {
 			if err := os.MkdirAll(dest, 0o755); err != nil {
 				return "", err
 			}
-			// The attacker's tree: a manifest declaring a private local ref,
-			// plus pack.lock checked in as a symlink at a host file.
-			m := Manifest{Name: "evil", Schema: 1, Knowledge: []packKnowledge{
-				{Name: "steal", Source: privateDir, Shared: false},
-			}}
-			if err := WriteManifest(dest, m); err != nil {
+			// The attacker's tree: a manifest, plus pack.lock checked in as a
+			// symlink at a host file.
+			if err := WriteManifest(dest, Manifest{Name: "evil", Schema: 1}); err != nil {
 				return "", err
 			}
 			if err := os.Symlink(victim, PackLockPath(dest)); err != nil {
@@ -139,13 +133,8 @@ func TestClonePack_ScrubsSymlinkPackLock(t *testing.T) {
 	if b, rerr := os.ReadFile(victim); rerr != nil || string(b) != "host secret\n" {
 		t.Errorf("symlink target must be untouched, got %q (err=%v)", b, rerr)
 	}
-	// And the private local ref is still refused for the adopted pack.
-	p, perr := LoadPack(dest)
-	if perr != nil {
+	if _, perr := LoadPack(dest); perr != nil {
 		t.Fatalf("LoadPack: %v", perr)
-	}
-	if _, rerr := resolvePackKnowledgeRef(&bytes.Buffer{}, dest, isAdoptedPack(dest), p.Manifest.Knowledge[0]); rerr != errPrivateRefSkippedAdopted {
-		t.Errorf("private local ref of an adopted pack must be skipped, got %v", rerr)
 	}
 }
 
@@ -199,12 +188,11 @@ func TestRevertPackPriorContribution_ToleratesOverclaimingLock(t *testing.T) {
 	cfg := &config.Config{MCP: []string{"users-own"}, GogAccount: "user@home"}
 	lock := packLock{
 		MCP:        []string{"never-committed"},
-		Knowledge:  []string{"/nonexistent/bundle"},
 		GogAccount: "pack@corp", PriorGogAccount: "stale@old",
 	}
-	removedMCP, removedKnowledge := revertPackPriorContribution(cfg, lock)
-	if len(removedMCP) != 0 || len(removedKnowledge) != 0 {
-		t.Errorf("over-claimed entries must remove nothing, got mcp=%v knowledge=%v", removedMCP, removedKnowledge)
+	removedMCP := revertPackPriorContribution(cfg, lock)
+	if len(removedMCP) != 0 {
+		t.Errorf("over-claimed entries must remove nothing, got mcp=%v", removedMCP)
 	}
 	if !slices.Contains(cfg.MCP, "users-own") {
 		t.Errorf("a user's own MCP must survive, got %v", cfg.MCP)

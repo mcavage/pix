@@ -11,11 +11,11 @@ const Usage = `usage: pix serve [args...]
        pix serve uninstall
 
 Run the long-running host services (execs the sibling pix-host serve):
-memory (:11435) and knowledge (:11436, when enabled). Any args are passed
-through to pix-host serve unchanged.
+memory (:11435, when enabled). Any args are passed through to pix-host
+serve unchanged.
 
-You usually do NOT need to run this yourself: pix run / memory /
-knowledge query auto-start a detached serve when its ports are down (lazy
+You usually do NOT need to run this yourself: pix run / memory
+auto-start a detached serve when its ports are down (lazy
 auto-start; logs in ~/.local/state/pix/serve.log). Opt out with
 PIX_NO_AUTOSERVE=1 or 'pix config set host.autoserve false'.
 
@@ -27,8 +27,8 @@ subcommands:
                     can't respawn it; if the pidfile is missing it falls back to
                     discovering a verified 'pix-host serve' (e.g. an orphan
                     left after 'pix reset' moved the config dir).
-  status [--json]   report whether serve is running (pid) and which service
-                    ports (:11435 / :11436) are up
+  status [--json]   report whether serve is running (pid) and whether the
+                    memory service port (:11435) is up
   start             alias for 'install'; (re)start the managed service, picking
                     up a freshly-rebuilt binary. The partner to 'stop'.
   install           install serve as a managed login service (launchd on macOS,
@@ -36,7 +36,7 @@ subcommands:
                     stops a lazily-started daemon first; refuses over a
                     foreground serve. captures install-time env into the unit
                     (PIX_CONFIG always; XDG_CONFIG_HOME, MEMORY_DB,
-                    MEMORY_PORT, KNOWLEDGE_PORT, OLLAMA_HOST when set) and
+                    MEMORY_PORT, OLLAMA_HOST when set) and
                     verifies the service came up.
                     logs: ~/.local/state/pix/serve.log (same file the
                     lazy auto-start uses, on both macOS and Linux)

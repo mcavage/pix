@@ -28,11 +28,10 @@ type ServiceIdentity struct {
 type IdentityProber func(port int) (ServiceIdentity, error)
 
 const (
-	// MemoryName and KnowledgeName are the names each service reports. A
-	// service answering with the wrong name means the port is held by something
-	// else, which is a different failure from "nothing is listening".
-	MemoryName    = "pix-memory"
-	KnowledgeName = "pix-knowledge"
+	// MemoryName is the name the memory service reports. A service answering
+	// with the wrong name means the port is held by something else, which is a
+	// different failure from "nothing is listening".
+	MemoryName = "pix-memory"
 
 	identityTimeout = 900 * time.Millisecond
 	identityRetries = 1

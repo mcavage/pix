@@ -7,12 +7,12 @@
 export default [
 	{
 		id: "ports.reserved.identity",
-		description: "identity.go's application-level readiness probes are pinned to :11435 (memory) and :11436 (knowledge).",
+		description: "identity.go's application-level readiness probe is pinned to :11435 (memory). The :11436 (knowledge) probe was retired with the built-in knowledge service, W2 U03A.",
 		checks: [
 			{
 				file: "services/host/identity.go",
 				kind: "contains",
-				values: ['servicePort("MEMORY_PORT", 11435)', 'servicePort("KNOWLEDGE_PORT", 11436)'],
+				values: ['servicePort("MEMORY_PORT", 11435)'],
 			},
 		],
 	},
@@ -40,13 +40,13 @@ export default [
 	},
 	{
 		id: "ports.reserved.plugin-env-allowlist",
-		description: "serve_plugin.go's pluginEnvAllowlist (the ONLY env an external plugin subprocess inherits, F2) still carries every port-related variable a plugin needs to bind/discover the reserved ports.",
+		description: "serve_plugin.go's pluginEnvAllowlist (the ONLY env an external plugin subprocess inherits, F2) still carries every port-related variable a plugin needs to bind/discover the reserved ports (KNOWLEDGE_PORT/PIX_KNOWLEDGE_PORT were retired with the built-in knowledge service, W2 U03A).",
 		checks: [
 			{
 				file: "services/host/serve_plugin.go",
 				kind: "contains",
 				region: { start: "var pluginEnvAllowlist = map[string]bool{", end: "\n}\n" },
-				values: ['"MEMORY_PORT":', '"KNOWLEDGE_PORT":', '"PIX_MEMORY_PORT":', '"PIX_KNOWLEDGE_PORT":', '"PIX_BROKER_PORT":'],
+				values: ['"MEMORY_PORT":', '"PIX_MEMORY_PORT":', '"PIX_BROKER_PORT":'],
 			},
 		],
 	},

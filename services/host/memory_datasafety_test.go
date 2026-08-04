@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -93,14 +92,15 @@ func TestResolveBackupParamsUsesCanonicalPaths(t *testing.T) {
 }
 
 // TestResolveBackupParamsDerivesManifestNotes strengthens the (previously
-// tautological) manifest test: resolveBackupParams must DERIVE the profiles list
-// AND the knowledge note from a SEEDED config, not from hand-passed fields.
+// tautological) manifest test: resolveBackupParams must DERIVE the profiles
+// list from a SEEDED config, not from hand-passed fields. (Its knowledge-note
+// half, and TestResolveBackupParamsRedactsRemote's B6 redaction gate, were
+// retired along with config.KnowledgeBundles, W2 U03A — knowledge is no
+// longer a config-derived manifest note.)
 func TestResolveBackupParamsDerivesManifestNotes(t *testing.T) {
 	cfgDir := t.TempDir()
 	cfgPath := filepath.Join(cfgDir, "config.toml")
-	kb := filepath.Join(t.TempDir(), "bundle")
-	cfg := "gog_account = \"x\"\n" +
-		"knowledge_bundles = [\"" + kb + "\"]\n"
+	cfg := "gog_account = \"x\"\n"
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -112,52 +112,8 @@ func TestResolveBackupParamsDerivesManifestNotes(t *testing.T) {
 	if len(bp.Profiles) != 0 {
 		t.Errorf("derived Profiles = %v, want none", bp.Profiles)
 	}
-	found := false
-	for _, k := range bp.Knowledge {
-		if k.Path == kb {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("derived Knowledge = %+v, want a note for %q", bp.Knowledge, kb)
-	}
-}
-
-// TestResolveBackupParamsRedactsRemote is the B6 gate: a knowledge bundle whose
-// git origin embeds userinfo/token is recorded in the manifest note REDACTED, so
-// the credential never reaches disk (or the printed restore report).
-func TestResolveBackupParamsRedactsRemote(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not available")
-	}
-	kb := t.TempDir()
-	for _, args := range [][]string{
-		{"init", "-q"},
-		{"remote", "add", "origin", "https://user:tok@github.com/me/kb.git"},
-	} {
-		cmd := exec.Command("git", append([]string{"-C", kb}, args...)...)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v (%s)", args, err, out)
-		}
-	}
-	cfgDir := t.TempDir()
-	cfgPath := filepath.Join(cfgDir, "config.toml")
-	cfg := "knowledge_bundles = [\"" + kb + "\"]\n"
-	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PIX_CONFIG", cfgPath)
-	t.Setenv("HOME", t.TempDir())
-
-	bp := resolveBackupParams("", 7, time.Now())
-	var remote string
-	for _, k := range bp.Knowledge {
-		if k.Path == kb {
-			remote = k.Remote
-		}
-	}
-	if want := "https://***@github.com/me/kb.git"; remote != want {
-		t.Errorf("recorded remote = %q, want %q (userinfo must be redacted)", remote, want)
+	if len(bp.Knowledge) != 0 {
+		t.Errorf("derived Knowledge = %+v, want none (knowledge_bundles config was retired)", bp.Knowledge)
 	}
 }
 

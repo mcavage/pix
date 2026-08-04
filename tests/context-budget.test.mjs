@@ -138,10 +138,11 @@ test("an unmeasured ancestor AGENTS.md reports as unmeasured, not as zero", () =
 	assert.equal(a.gated, false, "an ancestor AGENTS.md is host-owned; this repo cannot rewrite it");
 });
 
-test("recall net-new is the enforced ceiling, both channels", () => {
+test("recall net-new is the enforced ceiling, the one remaining channel", () => {
 	const recall = segment("recall-net-new");
-	assert.equal(recall.bytes, 2 * KB, "two channels x the 1 KB per-turn cap in lib/recall-message.ts");
-	assert.match(recall.label, /2 channels x 1024 B/);
+	// The knowledge-recall channel was retired (W2 U03A); memory is the only one left.
+	assert.equal(recall.bytes, 1 * KB, "one channel x the 1 KB per-turn cap in lib/recall-message.ts");
+	assert.match(recall.label, /1 channels x 1024 B/);
 });
 
 test("the measurement is deterministic", () => {

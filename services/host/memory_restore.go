@@ -912,9 +912,9 @@ func printRestoreReport(w io.Writer, res restoreResult) {
 	}
 	for _, k := range res.Knowledge {
 		if k.Remote != "" {
-			fmt.Fprintf(w, "your knowledge bundle lives at %s (git remote %s) — restore it with git clone / pix knowledge use\n", k.Path, k.Remote)
+			fmt.Fprintf(w, "your (legacy) knowledge bundle lived at %s (git remote %s) — restore it with git clone\n", k.Path, k.Remote)
 		} else {
-			fmt.Fprintf(w, "your knowledge bundle lives at %s — restore it with git clone / pix knowledge use\n", k.Path)
+			fmt.Fprintf(w, "your (legacy) knowledge bundle lived at %s — restore it with git clone\n", k.Path)
 		}
 	}
 	fmt.Fprintln(w, "start it: pix serve")

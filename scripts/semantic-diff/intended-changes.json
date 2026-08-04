@@ -11,5 +11,44 @@
 				"to": ["env(\"MEMORY_PORT\", \"11435\")", "env(\"BROKER_PORT\", \"11437\")"]
 			}
 		]
+	},
+	{
+		"id": "config-keys.top-level.surface",
+		"rationale": "W2 U03A finishes the knowledge-service retirement: config.KnowledgeBundles (the built-in OKF knowledge service's bundle-path list) is deleted from the Config struct — an older config.toml's knowledge_bundles key is now tolerated as a retired key (config.RetiredKeys/config show/doctor), never a live field. The pin narrows to the surface that remains.",
+		"evidence": "services/host/config/config.go retiredConfigKeys[\"knowledge_bundles\"]; services/host/workflow/setup/config.go's `config set/get knowledge_bundles` refusal",
+		"changes": [
+			{
+				"file": "services/host/config/config.go",
+				"kind": "set",
+				"from": ["services", "mcp", "memory_watcher_model", "memory_embed_model", "ollama_bridge_model", "run_intent", "inference", "google_workspace_account", "google_workspace_access", "knowledge_bundles"],
+				"to": ["services", "mcp", "memory_watcher_model", "memory_embed_model", "ollama_bridge_model", "run_intent", "inference", "google_workspace_account", "google_workspace_access"]
+			}
+		]
+	},
+	{
+		"id": "ports.reserved.identity",
+		"rationale": "W2 U03A finishes the knowledge-service retirement: identity.go no longer probes a :11436 knowledge service identity (there is nothing left to probe — the service, its RPC client, and its default port constant are all deleted).",
+		"evidence": "services/host/identity.go; services/host/rpc/rpc.go (KnowledgePortDefault/KnowledgeClient removed)",
+		"changes": [
+			{
+				"file": "services/host/identity.go",
+				"kind": "contains",
+				"from": ["servicePort(\"MEMORY_PORT\", 11435)", "servicePort(\"KNOWLEDGE_PORT\", 11436)"],
+				"to": ["servicePort(\"MEMORY_PORT\", 11435)"]
+			}
+		]
+	},
+	{
+		"id": "ports.reserved.plugin-env-allowlist",
+		"rationale": "W2 U03A finishes the knowledge-service retirement: no plugin subprocess needs to bind/discover a knowledge port anymore, so KNOWLEDGE_PORT/PIX_KNOWLEDGE_PORT are dropped from the allowlist alongside rpc.KnowledgePortDefault's removal.",
+		"evidence": "services/host/serve_plugin.go pluginEnvAllowlist; services/host/rpc/rpc.go (KnowledgePortDefault/KnowledgeClient removed)",
+		"changes": [
+			{
+				"file": "services/host/serve_plugin.go",
+				"kind": "contains",
+				"from": ["\"MEMORY_PORT\":", "\"KNOWLEDGE_PORT\":", "\"PIX_MEMORY_PORT\":", "\"PIX_KNOWLEDGE_PORT\":", "\"PIX_BROKER_PORT\":"],
+				"to": ["\"MEMORY_PORT\":", "\"PIX_MEMORY_PORT\":", "\"PIX_BROKER_PORT\":"]
+			}
+		]
 	}
 ]

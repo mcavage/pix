@@ -2,10 +2,10 @@
   "schema": 1,
   "packages": {
     "pix/host": {
-      "prod_loc": 7515,
+      "prod_loc": 6788,
       "exports": 0,
-      "globals": 68,
-      "edges": 7,
+      "globals": 64,
+      "edges": 6,
       "exits": 29
     },
     "pix/host/cli": {
@@ -16,7 +16,7 @@
       "exits": 4
     },
     "pix/host/cmd/pix": {
-      "prod_loc": 3701,
+      "prod_loc": 3694,
       "exports": 19,
       "globals": 15,
       "edges": 24,
@@ -30,8 +30,8 @@
       "exits": 0
     },
     "pix/host/config": {
-      "prod_loc": 1455,
-      "exports": 49,
+      "prod_loc": 1387,
+      "exports": 48,
       "globals": 17,
       "edges": 0,
       "exits": 0
@@ -71,13 +71,6 @@
       "edges": 2,
       "exits": 0
     },
-    "pix/host/knowledge": {
-      "prod_loc": 1093,
-      "exports": 17,
-      "globals": 8,
-      "edges": 6,
-      "exits": 23
-    },
     "pix/host/launcher": {
       "prod_loc": 75,
       "exports": 4,
@@ -113,17 +106,10 @@
       "edges": 0,
       "exits": 0
     },
-    "pix/host/okf": {
-      "prod_loc": 355,
-      "exports": 4,
-      "globals": 6,
-      "edges": 0,
-      "exits": 0
-    },
     "pix/host/plugin": {
-      "prod_loc": 706,
-      "exports": 41,
-      "globals": 11,
+      "prod_loc": 583,
+      "exports": 33,
+      "globals": 9,
       "edges": 0,
       "exits": 0
     },
@@ -149,9 +135,9 @@
       "exits": 0
     },
     "pix/host/rpc": {
-      "prod_loc": 218,
-      "exports": 15,
-      "globals": 8,
+      "prod_loc": 212,
+      "exports": 12,
+      "globals": 6,
       "edges": 0,
       "exits": 0
     },
@@ -163,7 +149,7 @@
       "exits": 9
     },
     "pix/host/service": {
-      "prod_loc": 2011,
+      "prod_loc": 1992,
       "exports": 21,
       "globals": 18,
       "edges": 6,
@@ -219,10 +205,10 @@
       "exits": 0
     },
     "pix/host/workflow/launch": {
-      "prod_loc": 3325,
-      "exports": 106,
+      "prod_loc": 3177,
+      "exports": 101,
       "globals": 32,
-      "edges": 15,
+      "edges": 14,
       "exits": 22
     },
     "pix/host/workflow/man": {
@@ -233,28 +219,28 @@
       "exits": 0
     },
     "pix/host/workflow/onboard": {
-      "prod_loc": 422,
-      "exports": 11,
+      "prod_loc": 370,
+      "exports": 10,
       "globals": 3,
-      "edges": 8,
+      "edges": 7,
       "exits": 0
     },
     "pix/host/workflow/pack": {
-      "prod_loc": 5122,
+      "prod_loc": 4831,
       "exports": 44,
-      "globals": 10,
-      "edges": 11,
-      "exits": 42
+      "globals": 9,
+      "edges": 10,
+      "exits": 39
     },
     "pix/host/workflow/reset": {
-      "prod_loc": 799,
+      "prod_loc": 795,
       "exports": 11,
       "globals": 6,
       "edges": 6,
       "exits": 0
     },
     "pix/host/workflow/setup": {
-      "prod_loc": 4081,
+      "prod_loc": 4068,
       "exports": 82,
       "globals": 31,
       "edges": 18,

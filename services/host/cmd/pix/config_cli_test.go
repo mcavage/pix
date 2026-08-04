@@ -1,7 +1,6 @@
 package main
 
 import (
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -75,68 +74,17 @@ func TestApplyConfigChange_Services(t *testing.T) {
 	}
 }
 
-// TestApplyConfigChange_KnowledgeBundles: set adds the abs bundle path AND
-// enables the knowledge service; unset removes the bundle. Adds are deduped and
-// canonicalized; the value round-trips through Save/Load into config.toml.
-func TestApplyConfigChange_KnowledgeBundles(t *testing.T) {
-	t.Setenv("PIX_CONFIG", t.TempDir()+"/config.toml")
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatal(err)
+// TestApplyConfigChange_KnowledgeBundlesRetired: knowledge_bundles (the
+// built-in OKF knowledge service, retired W2 U03A) must REFUSE both set and
+// unset — there is no replacement config field, so a caller must be told
+// plainly rather than silently no-op'd.
+func TestApplyConfigChange_KnowledgeBundlesRetired(t *testing.T) {
+	cfg := defaultCfg()
+	if _, err := setup.ApplyConfigChange(cfg, false, "knowledge_bundles", []string{"bundles/okf"}); err == nil {
+		t.Error("expected config set knowledge_bundles to refuse (retired key)")
 	}
-
-	abs, _ := filepath.Abs("bundles/okf")
-	sum, err := setup.ApplyConfigChange(cfg, false, "knowledge_bundles", []string{"bundles/okf"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Contains(cfg.KnowledgeBundles, abs) {
-		t.Errorf("KnowledgeBundles = %v, want abs path %q added", cfg.KnowledgeBundles, abs)
-	}
-	// Setting a bundle must also ensure the knowledge service is enabled.
-	if !slices.Contains(cfg.Services, "knowledge") {
-		t.Errorf("Services = %v, want knowledge enabled", cfg.Services)
-	}
-	if !strings.Contains(sum, "knowledge") {
-		t.Errorf("summary = %q, want it to mention knowledge", sum)
-	}
-
-	// Adding again is a no-op (dedupe on the canonical path).
-	_, _ = setup.ApplyConfigChange(cfg, false, "knowledge_bundles", []string{"bundles/okf"})
-	if n := countStr(cfg.KnowledgeBundles, abs); n != 1 {
-		t.Errorf("KnowledgeBundles should contain %q once, got %d in %v", abs, n, cfg.KnowledgeBundles)
-	}
-
-	// Save + reload: the config.toml carries the abs path and the service.
-	if err := cfg.Save(); err != nil {
-		t.Fatal(err)
-	}
-	got, err := config.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Contains(got.KnowledgeBundles, abs) {
-		t.Errorf("round-trip lost the bundle path: bundles=%v", got.KnowledgeBundles)
-	}
-	// The knowledge SERVICE is retired (W1 U01a): setup still records the bundle
-	// list verbatim, but a reload drops the dead service name rather than
-	// carrying it forward (config.removedServices).
-	if slices.Contains(got.Services, "knowledge") {
-		t.Errorf("reload kept the retired knowledge service: services=%v", got.Services)
-	}
-
-	// Unset removes the bundle (the knowledge service stays; unset targets the
-	// bundle path only).
-	if _, err := setup.ApplyConfigChange(got, true, "knowledge_bundles", []string{"bundles/okf"}); err != nil {
-		t.Fatal(err)
-	}
-	if slices.Contains(got.KnowledgeBundles, abs) {
-		t.Errorf("KnowledgeBundles = %v, want bundle removed", got.KnowledgeBundles)
-	}
-
-	// Arity error: no path.
-	if _, err := setup.ApplyConfigChange(got, false, "knowledge_bundles", nil); err == nil {
-		t.Error("expected an arity error for knowledge_bundles with no value")
+	if _, err := setup.ApplyConfigChange(cfg, true, "knowledge_bundles", []string{"bundles/okf"}); err == nil {
+		t.Error("expected config unset knowledge_bundles to refuse (retired key)")
 	}
 }
 
