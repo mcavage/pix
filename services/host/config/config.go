@@ -604,31 +604,31 @@ func (c *Config) applyDefaults() {
 	if c.Plugins == nil {
 		c.Plugins = map[string]PluginSpec{}
 	}
-	// The "broker" plugin slot is RETIRED (the dormant CredentialBroker seam was
-	// deleted along with it): a [plugins.broker] entry decodes fine as an
-	// ordinary map value (BurntSushi never sees it as undecoded, so
-	// partitionUndecoded can't catch it), so it is pulled out here and reported
-	// through the SAME retiredKeys surface as every other stale key — inert,
-	// never launched (nothing in serve/main consults slot "broker" any more).
-	if _, ok := c.Plugins["broker"]; ok {
-		delete(c.Plugins, "broker")
-		seen := false
+	// The ENTIRE [plugins.*] table is RETIRED (U07d; it subsumes the earlier
+	// plugins.broker-only retirement): a config file can no longer name an
+	// executable for the supervisor to run. External units are
+	// pack-trust-admitted [[services]] declarations ONLY (AC-SUP-05) —
+	// consented at the Tier-1 bill-of-materials gate, fingerprint-pinned in
+	// the launcher-owned trust store, and exported to the supervisor through
+	// pack.AcceptedGoPluginServices. A [plugins.<slot>] entry decodes fine as
+	// an ordinary map value (BurntSushi never reports it undecoded, so
+	// partitionUndecoded can't catch it), so every declared slot is pulled
+	// out here and reported through the SAME retiredKeys surface as every
+	// other stale key — inert, never launched. Plugin() consequently always
+	// answers builtin.
+	if len(c.Plugins) > 0 {
+		seen := map[string]bool{}
 		for _, k := range c.retiredKeys {
-			if k == "plugins.broker" {
-				seen = true
-				break
+			seen[k] = true
+		}
+		for slot := range c.Plugins {
+			if key := "plugins." + slot; !seen[key] {
+				c.retiredKeys = append(c.retiredKeys, key)
+				seen[key] = true
 			}
 		}
-		if !seen {
-			c.retiredKeys = append(c.retiredKeys, "plugins.broker")
-			sort.Strings(c.retiredKeys)
-		}
-	}
-	for slot, spec := range c.Plugins {
-		if spec.Impl == "" {
-			spec.Impl = BuiltinImpl
-			c.Plugins[slot] = spec
-		}
+		c.Plugins = map[string]PluginSpec{}
+		sort.Strings(c.retiredKeys)
 	}
 	// The redirect uri only ever defaults once a client id is configured — an
 	// install with no OAuth app has neither (see DefaultSlackOAuthRedirectURI).
@@ -667,7 +667,10 @@ func LoadFrom(path string) (*Config, error) {
 	return c, nil
 }
 
-// Plugin returns the configured spec for slot, or a builtin default if unset.
+// Plugin returns the spec for slot. With the [plugins.*] declaration retired
+// (U07d; applyDefaults sweeps every declared slot into retiredKeys and empties
+// the map), a loaded config always answers builtin here — an external unit can
+// only enter the supervisor through a pack-trust-admitted [[services]] entry.
 func (c *Config) Plugin(slot string) PluginSpec {
 	if spec, ok := c.Plugins[slot]; ok {
 		if spec.Impl == "" {
@@ -717,13 +720,10 @@ stack = []
 [skills]
 paths = []
 
-# Plugin slots. impl = "builtin" (default) compiles into the host binary;
-# an external impl names a path + sha + port.
-# [plugins.example]
-# impl = "builtin"
-# path = ""
-# sha  = ""
-# port = 0
+# [plugins.*] is RETIRED (U07d) and inert if declared: a config file can no
+# longer name an executable for the supervisor to run. External service units
+# are declared by a trusted pack's [[services]] entries only, consented at the
+# Tier-1 gate (pix pack use).
 
 # Generic Slack rotating-PKCE OAuth app wiring (public fields only — the
 # credential blob itself lives in 1Password, never here). No client_id ships

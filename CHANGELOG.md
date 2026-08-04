@@ -80,6 +80,21 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Trusted pack `[[services]]` now wire into the supervisor (U07d).** The
+  pack side exports exactly one seam, `pack.AcceptedGoPluginServices`: the
+  minimal normalized view (name, activation, absolute path, sha pin, argv,
+  env reference names, loopback front door) of a pack's go-plugin services —
+  and ONLY after the pack's current host-exec surface matches the fingerprint
+  accepted at the Tier-1 gate, so consent strictly precedes any staging or
+  start. The supervisor side (`pack_units.go`) is the integrator hook:
+  `packUnitSpec` (view → `supervise.NewExternalUnit`, dispense kinds limited
+  to the closed `plugin.PluginMap` set) and `supervisor.reconcilePackUnits`
+  (add-only, collision-safe; never replaces a running unit). Root `serve`
+  composition is untouched — nothing calls the hook yet. Reserved-port,
+  reserved-name, loopback-only, and env-names-only rules are re-validated at
+  export, and the staged binary is re-hashed against the consented pin on
+  every start, so a binary swapped after acceptance is refused at launch.
+
 - **`pix models add ollama`** — the keyless half of `models add`. `models add`
   derived its provider list from `providerKeyRefOrder`
   (anthropic/openai/google), so the one backend that needs no credential had no
@@ -97,6 +112,16 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   but `extensions/ollama-bridge.ts` registered exactly one hardcoded model. It
   now registers what the host's generated `inference.json` declares, with the
   configured bridge tag guaranteed present.
+
+### Retired
+
+- **The direct `[plugins.*]` config declaration is retired and inert (U07d).**
+  A config.toml can no longer name an executable for `pix-host` to launch:
+  every declared `plugins.<slot>` is swept at load into the same
+  `RetiredKeys` notice surface as other stale keys (shown by `doctor`/
+  `config show`), `Config.Plugin()` always answers builtin, and the
+  `[plugins.mcp]` MCP-bridge override path is gone. External service units
+  are pack-trust-admitted `[[services]]` declarations only (AC-SUP-05).
 
 ### Changed
 

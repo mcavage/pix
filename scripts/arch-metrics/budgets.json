@@ -2,10 +2,10 @@
   "schema": 1,
   "packages": {
     "pix/host": {
-      "prod_loc": 6720,
+      "prod_loc": 6790,
       "exports": 0,
       "globals": 64,
-      "edges": 8,
+      "edges": 9,
       "exits": 29
     },
     "pix/host/cli": {
@@ -219,8 +219,8 @@
       "exits": 0
     },
     "pix/host/workflow/pack": {
-      "prod_loc": 4833,
-      "exports": 44,
+      "prod_loc": 4949,
+      "exports": 46,
       "globals": 9,
       "edges": 10,
       "exits": 39

@@ -15,8 +15,8 @@ import (
 )
 
 // buildExampleMcp compiles examples/mcp-example to a temp binary and returns its
-// path + sha256 — the artifact an operator would ship and pin in
-// config.toml's [plugins.mcp].
+// path + sha256 — the artifact a pack would ship and pin in a [[services]]
+// entry (the [plugins.mcp] config declaration is retired and inert, U07d).
 func buildExampleMcp(t *testing.T) (bin, sha string) {
 	t.Helper()
 	bin = filepath.Join(t.TempDir(), "mcp-example")
@@ -32,16 +32,16 @@ func buildExampleMcp(t *testing.T) (bin, sha string) {
 	return bin, hex.EncodeToString(sum[:])
 }
 
-// TestExternalMcpOverrideEndToEnd proves the [plugins.mcp] OVERRIDE mechanism: an
+// TestExternalMcpOverrideEndToEnd proves the external-MCP-unit MECHANISM (the
+// machinery a pack-admitted [[services]] unit of kind "mcp" runs on): an
 // external MCP binary is sha-verified, launched by the supervisor as a real
 // out-of-process go-plugin subprocess with the "mcp" capability, dispensed over
 // net/rpc, and its Info / ListTools / CallTool round-trip. Then pluginMcpServer
-// (the wrapper mcpServerFor returns for an override) is shown to proxy to that
+// (the adapter for a dispensed external unit) is shown to proxy to that
 // same dispensed client — exactly what runMcpBridge serves over stdio.
 func TestExternalMcpOverrideEndToEnd(t *testing.T) {
 	bin, sha := buildExampleMcp(t)
 
-	// A config a user would write to override the built-in MCP bridge.
 	spec := config.PluginSpec{Impl: "example", Path: bin, SHA: sha}
 
 	sup := &supervisor{}
@@ -99,44 +99,51 @@ func TestExternalMcpOverrideEndToEnd(t *testing.T) {
 	}
 }
 
-// TestMcpServerForUsesOverrideEvenForSlack proves F-A: [plugins.mcp] is consulted
-// FIRST, so a non-builtin impl overrides EVERY name — including "slack", the only
-// registered public MCP. Previously mcpServerFor hard-coded name=="slack" to the
-// built-in adapter before ever looking at config, silently bypassing the
-// operator override. Now mcpServerFor("slack") must return the external
-// pluginMcpServer (a real launched subprocess), not the in-process slackMcpAdapter.
-func TestMcpServerForUsesOverrideEvenForSlack(t *testing.T) {
+// TestMcpServerForConfigPluginsInert proves U07d: the [plugins.mcp] config
+// override is RETIRED. A config.toml that names an external binary (pinned and
+// otherwise launchable) is INERT — the slot loads as builtin with no path/sha,
+// the declared key surfaces through RetiredKeys (the operator-facing notice),
+// and mcpServerFor("slack") returns the in-process built-in adapter. No
+// subprocess is ever launched from a config declaration; the only admission
+// path for an external unit is a pack-trust-admitted [[services]] entry.
+func TestMcpServerForConfigPluginsInert(t *testing.T) {
 	bin, sha := buildExampleMcp(t)
 
-	// Point [plugins.mcp] at the external example binary via a temp config the
-	// loader picks up through PIX_CONFIG.
+	// The exact config an operator used to write to override the MCP bridge.
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	cfg := "[plugins.mcp]\nimpl = \"example\"\npath = \"" + bin + "\"\nsha = \"" + sha + "\"\n"
-	if err := os.WriteFile(cfgPath, []byte(cfg), 0o644); err != nil {
+	raw := "[plugins.mcp]\nimpl = \"example\"\npath = \"" + bin + "\"\nsha = \"" + sha + "\"\n"
+	if err := os.WriteFile(cfgPath, []byte(raw), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PIX_CONFIG", cfgPath)
 
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec := cfg.Plugin("mcp"); spec.Impl != config.BuiltinImpl || spec.Path != "" {
+		t.Fatalf("Plugin(mcp) = %+v, want inert builtin (plugins.* is retired)", spec)
+	}
+	found := false
+	for _, k := range cfg.RetiredKeys() {
+		if k == "plugins.mcp" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("RetiredKeys() = %v, want it to include plugins.mcp (the inert notice)", cfg.RetiredKeys())
+	}
+
 	srv, cleanup, err := mcpServerFor("slack")
 	if err != nil {
-		t.Fatalf("mcpServerFor(slack) with an override = %v", err)
+		t.Fatalf("mcpServerFor(slack) = %v", err)
 	}
 	defer cleanup()
-
-	if _, ok := srv.(slackMcpAdapter); ok {
-		t.Fatal("mcpServerFor(slack) returned the built-in adapter; the [plugins.mcp] override was bypassed")
+	if _, ok := srv.(*pluginMcpServer); ok {
+		t.Fatal("mcpServerFor(slack) launched an external plugin from config; [plugins.mcp] must be inert")
 	}
-	ps, ok := srv.(*pluginMcpServer)
-	if !ok {
-		t.Fatalf("mcpServerFor(slack) returned %T, want the external *pluginMcpServer", srv)
-	}
-	// Prove it really is the launched external plugin, not a stub.
-	info, err := ps.Info()
-	if err != nil {
-		t.Fatalf("Info over the override plugin: %v", err)
-	}
-	if info.Name != "example-mcp" {
-		t.Errorf("override Info().Name = %q, want example-mcp", info.Name)
+	if _, ok := srv.(slackMcpAdapter); !ok {
+		t.Fatalf("mcpServerFor(slack) returned %T, want the built-in slackMcpAdapter", srv)
 	}
 }
 
