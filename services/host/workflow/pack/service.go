@@ -55,9 +55,9 @@ const serviceRuntimeContainer = "container"
 //   - activations: start with serve ("always") or on first use ("on-demand").
 //   - reservedPorts are pix-host's own front doors: a pack service that
 //     "collides" with one would either fail to bind or — worse — win the race
-//     and impersonate a built-in unit to every sandbox client. (11436/knowledge
-//     is currently also built-in but is expected to migrate to a pack service;
-//     only the permanently-reserved ports are pinned here.)
+//     and impersonate a built-in unit to every sandbox client. (The built-in
+//     knowledge service, once :11436, was retired — W2 U03A — its slot NAME
+//     stays reserved below for a future pack service, but its port is not.)
 //   - reservedNames are the built-in supervisor slots. A pack service shadowing
 //     one would make `serve status` and the consent screen ambiguous about
 //     WHOSE code runs under that name.

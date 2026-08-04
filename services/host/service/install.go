@@ -64,7 +64,6 @@ var capturedServeEnvVars = []string{
 	"XDG_CONFIG_HOME",
 	"MEMORY_DB",
 	"MEMORY_PORT",
-	"KNOWLEDGE_PORT",
 	"OLLAMA_HOST",
 }
 

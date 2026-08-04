@@ -5,16 +5,17 @@
 //
 // Every OTHER *_test.go file in this package already unit-tests one marker's
 // writer or reader in isolation (pack_v2_test.go for profile,
-// run_knowledge_test.go for knowledge/knowledge.scope, workspacestate_test.go
-// for the symlink-safety seam, onboard_test.go for onboarding.json,
-// hoststate_test.go for host-state.json's absence). What none of them do is
-// enumerate the FULL current marker set in one place and pin the EXACT bytes
-// each production writer emits — the contract the TS-side readers
+// workspacestate_test.go for the symlink-safety seam, onboard_test.go for
+// onboarding.json, hoststate_test.go for host-state.json's absence). What none
+// of them do is enumerate the FULL current marker set in one place and pin the
+// EXACT bytes each production writer emits — the contract the TS-side readers
 // (extensions/memory-recall.ts, extensions/memory-capture.ts,
-// extensions/knowledge-recall.ts, extensions/ollama-bridge.ts, exercised from
-// tests/workspace-markers.test.mjs) depend on byte-for-byte. This file is that
-// single inventory, so a change to trailing-newline/whitespace/format on
-// either side of the boundary is caught here instead of silently drifting.
+// extensions/ollama-bridge.ts, exercised from tests/workspace-markers.test.mjs)
+// depend on byte-for-byte. This file is that single inventory, so a change to
+// trailing-newline/whitespace/format on either side of the boundary is caught
+// here instead of silently drifting. (.pix/knowledge.scope and .pix/knowledge,
+// and their writers/readers, were retired along with the built-in OKF
+// knowledge service, W2 U03A.)
 //
 // THE MEASURED SET (shards.md U-W0b.05's row), and where each one actually
 // lives:
@@ -22,16 +23,11 @@
 //	.pix/profile               — Go writes (pack.go pack.WriteMemoryScope),
 //	                                   TS reads (memory-recall.ts,
 //	                                   memory-capture.ts)
-//	.pix/knowledge.scope        — Go writes (run.go launch.WriteKnowledgeScope),
-//	                                   TS reads (knowledge-recall.ts)
 //	.pix/ollama-bridge.model    — Go writes (run.go launch.WriteOllamaBridgeFile),
 //	                                   TS reads (ollama-bridge.ts)
 //	.pix/sandbox.pack           — Go writes AND reads
 //	                                   (launch.WriteSandboxPackMarker /
 //	                                   launch.ReadSandboxPackMarker); no TS reader
-//	.pix/knowledge               — Go writes AND reads
-//	                                   (knowledge.KnowledgeUseProject / knowledge.ReadProjectPointer
-//	                                   / launch.ProjectBundle); no TS reader
 //	.pix/onboarding.json         — the IN-SANDBOX AGENT writes it (not Go);
 //	                                   Go reads + removes it (onboard.ReconcileOnboarding)
 //	.pix/host-state.json         — NEVER a file on EITHER side, by design

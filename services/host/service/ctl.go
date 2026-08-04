@@ -339,18 +339,16 @@ func serveProcGone(ctl serveCtl, pid int, timeout time.Duration) bool {
 // serveState is the resolved `serve status` snapshot: is the supervisor running
 // (pidfile present + alive + ours), and which service ports answer.
 type serveState struct {
-	Running       bool   `json:"running"`
-	PID           int    `json:"pid,omitempty"`
-	Detail        string `json:"detail,omitempty"`
-	Memory        bool   `json:"memory"`
-	Knowledge     bool   `json:"knowledge"`
-	MemoryPort    int    `json:"memory_port"`
-	KnowledgePort int    `json:"knowledge_port"`
+	Running    bool   `json:"running"`
+	PID        int    `json:"pid,omitempty"`
+	Detail     string `json:"detail,omitempty"`
+	Memory     bool   `json:"memory"`
+	MemoryPort int    `json:"memory_port"`
 }
 
-// Port resolves a service port honoring the MEMORY_PORT / KNOWLEDGE_PORT env
-// overrides `serve` itself reads, preferring the injected env.Getenv (so tests
-// stay hermetic) and falling back to the process environment.
+// Port resolves a service port honoring the MEMORY_PORT env override `serve`
+// itself reads, preferring the injected env.Getenv (so tests stay hermetic)
+// and falling back to the process environment.
 // Port takes sys.Getenver, not the whole world: it reads one variable.
 // The signature is now the documentation.
 func Port(env sys.Getenver, name string, def int) int {
@@ -387,9 +385,7 @@ func resolveServeStatus(ctl serveCtl, env hostenv.Env) serveState {
 		st.Detail = "could not read pidfile: " + err.Error()
 	}
 	st.MemoryPort = Port(env, "MEMORY_PORT", rpc.MemoryPortDefault)
-	st.KnowledgePort = Port(env, "KNOWLEDGE_PORT", rpc.KnowledgePortDefault)
 	st.Memory = env.DialLocal(st.MemoryPort)
-	st.Knowledge = env.DialLocal(st.KnowledgePort)
 	return st
 }
 
@@ -407,15 +403,11 @@ func printServeStatus(st serveState, out io.Writer, jsonOut bool) {
 	} else {
 		fmt.Fprintln(out, "serve: not running")
 	}
-	memPort, kbPort := st.MemoryPort, st.KnowledgePort
+	memPort := st.MemoryPort
 	if memPort == 0 {
 		memPort = rpc.MemoryPortDefault
 	}
-	if kbPort == 0 {
-		kbPort = rpc.KnowledgePortDefault
-	}
-	fmt.Fprintf(out, "  memory    (:%d): %s\n", memPort, cli.UpDown(st.Memory))
-	fmt.Fprintf(out, "  knowledge (:%d): %s\n", kbPort, cli.UpDown(st.Knowledge))
+	fmt.Fprintf(out, "  memory (:%d): %s\n", memPort, cli.UpDown(st.Memory))
 }
 
 // StopAnyMode stops the serve daemon in whatever lifecycle mode it is in.

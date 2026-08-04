@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -446,67 +445,5 @@ func TestFullRestoreRollsBackConfigOnMemoryMoveFailure(t *testing.T) {
 	}
 	if m, _ := filepath.Glob(destOp + ".bak-*"); len(m) != 0 {
 		t.Errorf("rollback left an op-refs .bak: %v", m)
-	}
-}
-
-// TestFullBackupManifestRedactsRemoteToken is the B6 gate, end-to-end: a
-// knowledge bundle whose git origin embeds userinfo (https://user:tok@host/repo)
-// must be recorded in the ACTUAL manifest bytes REDACTED (https://***@host/repo),
-// so the token never reaches disk. Revert config.RedactURL in resolveBackupParams
-// and the raw token would appear in manifest.json, failing this test.
-func TestFullBackupManifestRedactsRemoteToken(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not available")
-	}
-	const token = "tok3n-SECRET-DEADBEEF12345"
-	remote := "https://user:" + token + "@github.com/me/kb.git"
-
-	// A real git repo whose origin carries the token — bundleGitRemote reads this.
-	kb := t.TempDir()
-	for _, args := range [][]string{
-		{"init", "-q"},
-		{"remote", "add", "origin", remote},
-	} {
-		cmd := exec.Command("git", append([]string{"-C", kb}, args...)...)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v (%s)", args, err, out)
-		}
-	}
-
-	// A config referencing the bundle, resolved through the canonical path.
-	cfgDir := t.TempDir()
-	cfgPath := filepath.Join(cfgDir, "config.toml")
-	if err := os.WriteFile(cfgPath, []byte("knowledge_bundles = [\""+kb+"\"]\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PIX_CONFIG", cfgPath)
-	t.Setenv("HOME", t.TempDir())
-
-	// Seed a live db and point MEMORY_DB at it so resolveBackupParams finds it.
-	st, dbPath := seedMemDB(t, 1)
-	st.db.Close()
-	t.Setenv("MEMORY_DB", dbPath)
-
-	// Resolve params (this is where RedactURL is applied) then actually WRITE the
-	// archive so we can inspect the real manifest.json bytes.
-	bp := resolveBackupParams("", 7, time.Now())
-	bp.OutPath = filepath.Join(t.TempDir(), "pix-backup-20260715-120000.tar.gz")
-	if _, err := memoryBackup(bp); err != nil {
-		t.Fatalf("memoryBackup: %v", err)
-	}
-
-	entries := extractTar(t, bp.OutPath)
-	manifestBytes, ok := entries["manifest.json"]
-	if !ok {
-		t.Fatal("archive missing manifest.json")
-	}
-	if bytes.Contains(manifestBytes, []byte(token)) {
-		t.Errorf("manifest.json contains the raw token; userinfo was NOT redacted:\n%s", manifestBytes)
-	}
-	if bytes.Contains(manifestBytes, []byte("user:")) {
-		t.Errorf("manifest.json still contains userinfo (user:...):\n%s", manifestBytes)
-	}
-	if want := "https://***@github.com/me/kb.git"; !bytes.Contains(manifestBytes, []byte(want)) {
-		t.Errorf("manifest.json missing the redacted remote %q:\n%s", want, manifestBytes)
 	}
 }

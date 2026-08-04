@@ -116,7 +116,7 @@ func ConfigValue(cfg *config.Config, key string) (string, error) {
 	case "services":
 		return strings.Join(cfg.Services, " "), nil
 	case "knowledge_bundles":
-		return strings.Join(cfg.KnowledgeBundles, " "), nil
+		return "", fmt.Errorf("knowledge_bundles was retired (W2 U03A removed the built-in knowledge service); no replacement key")
 	case "memory_watcher_model":
 		return cfg.MemoryWatcherModel, nil
 	case "memory_embed_model":
@@ -203,8 +203,6 @@ const ConfigKeysHelp = `keys:
   mcp <server>              add/remove an MCP server in the mcp list; every
                             configured server preloads at sandbox create
   services <name>           add/remove a host service in the services list
-  knowledge_bundles <dir>   add/remove an OKF knowledge bundle dir (set also
-                            enables the knowledge service)
   memory_watcher_model <m>  ollama model for fact capture (host, resident)
   memory_embed_model <m>    ollama model for semantic recall (host)
   ollama_bridge_model <m>   local model the sandbox exposes to pi + the router
@@ -282,18 +280,7 @@ func ApplyConfigChange(cfg *config.Config, unset bool, key string, args []string
 		return fmt.Sprintf("services = %v", cfg.Services), nil
 
 	case "knowledge_bundles":
-		if len(args) != 1 {
-			return "", fmt.Errorf("config %s knowledge_bundles <dir>: needs a bundle directory path", verb)
-		}
-		if unset {
-			cfg.RemoveKnowledgeBundle(args[0])
-		} else {
-			// Setting a bundle implies wanting the knowledge service that
-			// indexes it, so ensure it's in the services list too.
-			cfg.AddKnowledgeBundle(args[0])
-			cfg.AddService("knowledge")
-		}
-		return fmt.Sprintf("knowledge_bundles = %v, services = %v", cfg.KnowledgeBundles, cfg.Services), nil
+		return "", fmt.Errorf("config %s knowledge_bundles: retired (W2 U03A removed the built-in knowledge service); no replacement key", verb)
 
 	case "memory_watcher_model":
 		if unset {

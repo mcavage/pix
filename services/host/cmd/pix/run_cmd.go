@@ -341,12 +341,12 @@ func runRun(argv []string) {
 	if msg := launch.McpReattachWarning(cfg, o, plan.Reattach); msg != "" {
 		fmt.Fprintln(os.Stderr, msg)
 	}
-	// Lazy auto-start: make the configured host services (memory/knowledge)
-	// reachable before the sandbox tries them, with a SHORT budget — the launch
-	// waits AT MOST service.EnsureRunTimeout (8s), covering spawn-lock acquisition
-	// AND the health poll under one deadline (M2), then proceeds regardless
-	// (recall/knowledge degrade in-VM exactly as before). service.Ensure prints its
-	// own progress/failure lines.
+	// Lazy auto-start: make the configured host services (memory) reachable
+	// before the sandbox tries them, with a SHORT budget — the launch waits AT
+	// MOST service.EnsureRunTimeout (8s), covering spawn-lock acquisition AND
+	// the health poll under one deadline (M2), then proceeds regardless (recall
+	// degrades in-VM exactly as before). service.Ensure prints its own
+	// progress/failure lines.
 	service.EnsureUp(nil, service.EnsureRunTimeout)
 
 	// Readiness, rendered from the SHARED lazy snapshot (readiness_launch.go)

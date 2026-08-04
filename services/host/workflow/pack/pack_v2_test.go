@@ -10,7 +10,6 @@ import (
 
 	"pix/host/config"
 	"pix/host/hostenv"
-	"pix/host/knowledge"
 	"pix/host/sys"
 	"pix/host/sys/systest"
 )
@@ -47,16 +46,6 @@ name = "fastmail-mcp"
 path = "bin/fastmail-mcp"
 sha  = "9f2c"
 host = true
-
-[[knowledge]]
-name = "team-runbooks"
-source = "https://github.com/acme/runbooks.git"
-shared = true
-
-[[knowledge]]
-name = "my-notes"
-source = "~/notes/okf"
-shared = false
 `
 	if err := os.WriteFile(filepath.Join(root, "pack.toml"), []byte(toml), 0o644); err != nil {
 		t.Fatal(err)
@@ -88,9 +77,6 @@ shared = false
 	}
 	if len(m.Bins) != 1 || m.Bins[0].SHA != "9f2c" || m.Bins[0].Path != "bin/fastmail-mcp" {
 		t.Errorf("bin not parsed: %+v", m.Bins)
-	}
-	if len(m.Knowledge) != 2 || !m.Knowledge[0].Shared || m.Knowledge[1].Shared {
-		t.Errorf("knowledge refs not parsed: %+v", m.Knowledge)
 	}
 }
 
@@ -394,133 +380,10 @@ func stringSlicesEqualUnordered(a, b []string) bool {
 	return true
 }
 
-// TestPackUse_KnowledgeReversible: switching packs swaps knowledge_bundles the
-// same way MCP swaps — the previous pack's embedded bundle is removed, the new
-// pack's is added, and switching back restores the original set.
-func TestPackUse_KnowledgeReversible(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
-
-	rootA := filepath.Join(dir, "a")
-	rootB := filepath.Join(dir, "b")
-	if err := os.MkdirAll(filepath.Join(rootA, "knowledge"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(rootA, "knowledge", "x.md"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(rootB, "knowledge"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(rootB, "knowledge", "y.md"), []byte("y"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	mustWritePack(t, rootA, Manifest{Name: "a", Schema: 1})
-	mustWritePack(t, rootB, Manifest{Name: "b", Schema: 1})
-	// re-adding knowledge/ dirs after WriteManifest overwrote nothing (manifest
-	// write doesn't touch knowledge/), but ensure they still exist for LoadPack.
-
-	env := fakeGitEnv(nil)
-	var out bytes.Buffer
-	RunPackUse(env, &out, []string{rootA}, registerOK)
-	cfgA, _ := config.Load()
-	wantA := append([]string(nil), cfgA.KnowledgeBundles...)
-
-	out.Reset()
-	RunPackUse(env, &out, []string{rootB}, registerOK)
-	cfgB, _ := config.Load()
-	aID := knowledge.CanonicalizeKnowledgeBundle(filepath.Join(rootA, "knowledge"))
-	bID := knowledge.CanonicalizeKnowledgeBundle(filepath.Join(rootB, "knowledge"))
-	if slices.Contains(cfgB.KnowledgeBundles, aID) {
-		t.Errorf("switching away from A should remove its bundle, got %v", cfgB.KnowledgeBundles)
-	}
-	if !slices.Contains(cfgB.KnowledgeBundles, bID) {
-		t.Errorf("switching to B should add its bundle, got %v", cfgB.KnowledgeBundles)
-	}
-
-	out.Reset()
-	RunPackUse(env, &out, []string{rootA}, registerOK)
-	cfgA2, _ := config.Load()
-	if !stringSlicesEqualUnordered(cfgA2.KnowledgeBundles, wantA) {
-		t.Errorf("reversible switch: knowledge_bundles after A->B->A = %v, want %v", cfgA2.KnowledgeBundles, wantA)
-	}
-}
-
-// --- F6: knowledge shared vs private -------------------------------------------
-
-// TestPackUse_PrivateKnowledgeNeverTravels: a shared=false [[knowledge]] entry
-// resolves to a path OUTSIDE the pack root — it is never copied into the pack's
-// own tree, so sharing the pack repo can never leak it (§7 fitness function #2,
-// scoped down to a pure assertion: the resolved bundle path is not inside root).
-func TestPackUse_PrivateKnowledgeNeverTravels(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
-
-	root := filepath.Join(dir, "work")
-	privateDir := filepath.Join(dir, "owner-private-notes")
-	if err := os.MkdirAll(privateDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(privateDir, "secret-plan.md"), []byte("do not share"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	mustWritePack(t, root, Manifest{Name: "work", Schema: 1, Knowledge: []packKnowledge{
-		{Name: "my-notes", Source: privateDir, Shared: false},
-	}})
-
-	var out bytes.Buffer
-	RunPackUse(fakeGitEnv(nil), &out, []string{root}, registerOK)
-
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantID := knowledge.CanonicalizeKnowledgeBundle(privateDir)
-	if !slices.Contains(cfg.KnowledgeBundles, wantID) {
-		t.Errorf("private bundle should still be indexed locally, got %v", cfg.KnowledgeBundles)
-	}
-	// The resolved bundle must NOT live inside the pack's own tree — i.e. it
-	// travels with the pack repo only if it is UNDER root, which it must not be.
-	if strings.HasPrefix(wantID, knowledge.CanonicalizeKnowledgeBundle(root)+string(filepath.Separator)) {
-		t.Errorf("private knowledge %q must not live inside the pack root %q", wantID, root)
-	}
-	// And the pack.toml reference line is a LOCAL PATH (inert for an adopter who
-	// doesn't have that path), never the bundle's content.
-	raw, err := os.ReadFile(filepath.Join(root, "pack.toml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(raw), "do not share") {
-		t.Error("pack.toml must never contain private bundle content")
-	}
-}
-
-// TestPackAddKnowledge_RefAndPrivateFlags exercises `pack add knowledge --ref
-// --private`.
-func TestPackAddKnowledge_RefAndPrivateFlags(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	root := filepath.Join(dir, "pack")
-	var out bytes.Buffer
-	RunPackAdd(fakeGitEnv(nil), &out, []string{"knowledge", "my-notes", root, "--ref", "/tmp/notes", "--private"}, registerOK)
-
-	p, err := LoadPack(root)
-	if err != nil {
-		t.Fatalf("LoadPack: %v", err)
-	}
-	if len(p.Manifest.Knowledge) != 1 {
-		t.Fatalf("expected one knowledge ref, got %+v", p.Manifest.Knowledge)
-	}
-	k := p.Manifest.Knowledge[0]
-	if k.Source != "/tmp/notes" || k.Shared {
-		t.Errorf("knowledge ref = %+v, want source=/tmp/notes shared=false", k)
-	}
-	if !strings.Contains(out.String(), "NOT travel") {
-		t.Errorf("expected a private-does-not-travel note, got:\n%s", out.String())
-	}
-}
+// The [[knowledge]] ref facet's reversible-swap, private-never-travels, and
+// `pack add knowledge --ref --private` coverage was retired along with the
+// facet itself (W2 U03A). The embedded knowledge/ dir stays (LoadPack's
+// KnowledgeDir, `pack add knowledge` embed-only), just inert.
 
 // --- F1/ADR-3: recreate line -----------------------------------------------
 

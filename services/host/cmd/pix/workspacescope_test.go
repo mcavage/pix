@@ -1,14 +1,14 @@
 package main
 
-// These two moved BACK from the workspace package. They exercise pack and run
-// behaviour (pack.WriteMemoryScope, launch.WireKnowledgeScope) that happens to write a
-// workspace state file — the subject is the caller, not the writer, so they
-// belong with the caller.
+// This moved BACK from the workspace package. It exercises pack behaviour
+// (pack.WriteMemoryScope) that happens to write a workspace state file — the
+// subject is the caller, not the writer, so it belongs with the caller.
+// (Its launch.WriteKnowledgeScope sibling, TestWriteKnowledgeScopeSymlinkedDirRefused,
+// was retired along with the knowledge scope pointer itself, W2 U03A.)
 
 import (
 	"os"
 	"path/filepath"
-	"pix/host/workflow/launch"
 	"pix/host/workflow/pack"
 	"runtime"
 	"testing"
@@ -48,16 +48,6 @@ func TestWriteMemoryScopeSymlinkSafe(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(filepath.Join(stateDir, "profile")); string(b) != "acme\n" {
 		t.Fatalf("profile = %q, want %q", b, "acme\n")
-	}
-}
-
-// End-to-end through an error-returning caller: launch.WriteKnowledgeScope refuses a
-// symlinked .pix dir instead of writing through it.
-func TestWriteKnowledgeScopeSymlinkedDirRefused(t *testing.T) {
-	ws := t.TempDir()
-	requireSymlink(t, t.TempDir(), filepath.Join(ws, ".pix"))
-	if err := launch.WriteKnowledgeScope(ws, []string{"/some/bundle"}); err == nil {
-		t.Fatal("launch.WriteKnowledgeScope through a symlinked .pix dir: want error, got nil")
 	}
 }
 

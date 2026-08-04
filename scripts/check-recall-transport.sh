@@ -38,7 +38,7 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-RECALL_EXTENSIONS=(extensions/memory-recall.ts extensions/knowledge-recall.ts)
+RECALL_EXTENSIONS=(extensions/memory-recall.ts)
 HELPER=lib/recall-message.ts
 CUSTOM_TYPE="pix-recalled-context"
 AGENT_DIR="/home/agent/.pi/agent"
@@ -179,10 +179,6 @@ self_test() {
 	plant
 	printf '\nconst leak = { systemPrompt: "x" };\n' >>"$tmp/tree/extensions/memory-recall.ts"
 	expect "systemPrompt back in memory-recall.ts is caught" 1
-
-	plant
-	printf '\nconst leak = { systemPrompt: "x" };\n' >>"$tmp/tree/extensions/knowledge-recall.ts"
-	expect "systemPrompt back in knowledge-recall.ts is caught" 1
 
 	plant
 	cp "$tmp/tree/$HELPER" "$tmp/tree/extensions/recall-message.ts"

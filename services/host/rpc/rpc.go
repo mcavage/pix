@@ -1,11 +1,11 @@
 // Package rpc is the JSON-RPC client the launcher uses to talk to the host
-// services (memory :11435, knowledge :11436).
+// services (memory :11435).
 //
 // First extraction taken on the revised Phase 3 approach: pull the SHARED
 // KERNEL out until the domains fall apart on their own, rather than picking a
 // domain and fighting its inbound dependencies. rpc had an inbound count of
-// zero (scripts/extract-pkg), and it is what `memory` and `knowledge` mostly
-// need back from package main -- so moving it is a precondition for both.
+// zero (scripts/extract-pkg), and it is what `memory` mostly needed back from
+// package main -- so moving it is a precondition for that.
 package rpc
 
 import (
@@ -20,17 +20,15 @@ import (
 )
 
 // This is the shared host-side JSON-RPC client the launcher uses to drive the
-// memory (:11435) and knowledge (:11436) daemons from the CLI, so a user can
-// inspect and repair the agent's brain WITHOUT launching a sandbox. It is
-// deliberately tiny (stdlib only) and short-timeout so a down daemon never hangs
-// a command.
+// memory (:11435) daemon from the CLI, so a user can inspect and repair the
+// agent's brain WITHOUT launching a sandbox. It is deliberately tiny (stdlib
+// only) and short-timeout so a down daemon never hangs a command.
 //
-// Ports honor the same env overrides `serve` uses (MEMORY_PORT / KNOWLEDGE_PORT)
-// so a non-default bind stays reachable from the CLI.
+// Ports honor the same env override `serve` uses (MEMORY_PORT) so a
+// non-default bind stays reachable from the CLI.
 
 const (
-	MemoryPortDefault    = 11435
-	KnowledgePortDefault = 11436
+	MemoryPortDefault = 11435
 
 	// ExitServiceDown is the distinct exit code CLI verbs return when the target
 	// daemon is unreachable, so scripts can tell "service down" (3) apart from a
@@ -44,13 +42,10 @@ type Client struct {
 	Timeout time.Duration
 }
 
-// MemoryClient / KnowledgeClient return clients pointed at the right port,
-// honoring the MEMORY_PORT / KNOWLEDGE_PORT env overrides.
+// MemoryClient returns a client pointed at the right port, honoring the
+// MEMORY_PORT env override.
 func MemoryClient() Client {
 	return Client{Port: PortFromEnv("MEMORY_PORT", MemoryPortDefault), Timeout: 3 * time.Second}
-}
-func KnowledgeClient() Client {
-	return Client{Port: PortFromEnv("KNOWLEDGE_PORT", KnowledgePortDefault), Timeout: 3 * time.Second}
 }
 
 // PortFromEnv reads a port from an env var, falling back to def when unset or

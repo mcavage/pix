@@ -4,6 +4,10 @@ package pack
 // (docs/design/packs-v2-impl.md). One (or more) test per numbered finding in
 // the review; see the fix comments in pack.go/run.go/config/config.go for the
 // finding each test guards.
+//
+// finding #1 [CRITICAL SECURITY] (the adopted-pack private [[knowledge]] ref
+// guard) was retired along with the [[knowledge]] facet itself (W2 U03A) — its
+// coverage went with it.
 
 import (
 	"bytes"
@@ -14,137 +18,7 @@ import (
 	"testing"
 
 	"pix/host/config"
-	"pix/host/knowledge"
 )
-
-// --- finding #1 [CRITICAL SECURITY]: adopted-pack private knowledge refs must
-// never read host files -----------------------------------------------------
-
-// TestResolvePackKnowledgeRef_RejectsAdoptedPrivate: a shared=false local-path
-// reference is NEVER honored when the pack is adopted (cloned from a remote) —
-// pack.toml there is attacker-controlled, so this is the CRITICAL guard against
-// AddKnowledgeBundle indexing an arbitrary host directory (e.g. ~/.ssh).
-func TestResolvePackKnowledgeRef_RejectsAdoptedPrivate(t *testing.T) {
-	root := t.TempDir()
-	target := t.TempDir() // stands in for e.g. ~/.ssh
-	if err := os.WriteFile(filepath.Join(target, "id_rsa"), []byte("secret"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	k := packKnowledge{Name: "attacker-ref", Source: target, Shared: false}
-	_, err := resolvePackKnowledgeRef(&bytes.Buffer{}, root, true /* adopted */, k)
-	if err == nil {
-		t.Fatal("expected an error resolving a private ref on an adopted pack")
-	}
-	if err != errPrivateRefSkippedAdopted {
-		t.Errorf("expected errPrivateRefSkippedAdopted, got %v", err)
-	}
-}
-
-// TestResolvePackKnowledgeRef_AllowsAuthoredPrivate: the SAME reference is fine
-// for a pack the user authored locally (adopted=false) — the whole point of a
-// private reference.
-func TestResolvePackKnowledgeRef_AllowsAuthoredPrivate(t *testing.T) {
-	root := t.TempDir()
-	target := t.TempDir()
-	k := packKnowledge{Name: "my-notes", Source: target, Shared: false}
-	resolved, err := resolvePackKnowledgeRef(&bytes.Buffer{}, root, false, k)
-	if err != nil {
-		t.Fatalf("resolvePackKnowledgeRef: %v", err)
-	}
-	want := knowledge.CanonicalizeKnowledgeBundle(target)
-	if resolved != want {
-		t.Errorf("resolved = %q, want %q", resolved, want)
-	}
-}
-
-// TestResolvePackKnowledgeRef_RejectsPathInsidePackTree (finding #1, sub (b)):
-// a private reference that resolves INSIDE the pack's own tree must be
-// rejected — the author should embed it under knowledge/ instead.
-func TestResolvePackKnowledgeRef_RejectsPathInsidePackTree(t *testing.T) {
-	root := t.TempDir()
-	inside := filepath.Join(root, "private-notes")
-	if err := os.MkdirAll(inside, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	k := packKnowledge{Name: "oops", Source: inside, Shared: false}
-	_, err := resolvePackKnowledgeRef(&bytes.Buffer{}, root, false, k)
-	if err == nil {
-		t.Fatal("expected an error for a private ref resolving inside the pack root")
-	}
-	if !strings.Contains(err.Error(), "embed") {
-		t.Errorf("expected the error to suggest embedding, got: %v", err)
-	}
-}
-
-// TestResolvePackKnowledgeRef_SkipsNonexistentLocalDir (finding #1, sub (a)):
-// a private reference to a path that doesn't exist (or isn't a directory) must
-// be refused, never handed to AddKnowledgeBundle (no knowledge-service
-// poisoning with a dangling entry).
-func TestResolvePackKnowledgeRef_SkipsNonexistentLocalDir(t *testing.T) {
-	root := t.TempDir()
-	k := packKnowledge{Name: "typo", Source: filepath.Join(root, "..", "does-not-exist-xyz"), Shared: false}
-	if _, err := resolvePackKnowledgeRef(&bytes.Buffer{}, root, false, k); err == nil {
-		t.Fatal("expected an error for a nonexistent private knowledge dir")
-	}
-
-	// A file (not a directory) is also refused.
-	notADir := filepath.Join(t.TempDir(), "file.txt")
-	if err := os.WriteFile(notADir, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	k2 := packKnowledge{Name: "file-not-dir", Source: notADir, Shared: false}
-	if _, err := resolvePackKnowledgeRef(&bytes.Buffer{}, root, false, k2); err == nil {
-		t.Fatal("expected an error for a private knowledge ref that is a file, not a dir")
-	}
-}
-
-// TestPackUse_AdoptedPackSkipsPrivateKnowledgeRef is the CRITICAL end-to-end
-// regression test: `pack use` of an adopted pack (pack.lock already carries a
-// Remote from a prior clone — the same state a real `pack use <git-url>`
-// leaves behind) with a shared=false [[knowledge]] entry pointing at a
-// sensitive host directory must NOT index it, and must tell the user it
-// skipped it.
-func TestPackUse_AdoptedPackSkipsPrivateKnowledgeRef(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
-
-	root := filepath.Join(dir, "adopted-pack")
-	sensitive := filepath.Join(dir, "ssh-stand-in")
-	if err := os.MkdirAll(sensitive, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sensitive, "id_rsa"), []byte("PRIVATE KEY"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	mustWritePack(t, root, Manifest{Name: "adopted", Schema: 1, Knowledge: []packKnowledge{
-		{Name: "attacker-ref", Source: sensitive, Shared: false},
-	}})
-	// Simulate this pack having been cloned via `pack use <git-url>` at some
-	// earlier point: its pack.lock already carries adoption provenance.
-	if err := writePackLock(root, packLock{Remote: "https://example.com/attacker/pack.git"}); err != nil {
-		t.Fatal(err)
-	}
-
-	var out bytes.Buffer
-	RunPackUse(fakeGitEnv(nil), &out, []string{root}, registerOK)
-
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	sensitiveID := knowledge.CanonicalizeKnowledgeBundle(sensitive)
-	if slices.Contains(cfg.KnowledgeBundles, sensitiveID) {
-		t.Fatalf("CRITICAL: adopted pack's private knowledge ref was indexed! cfg.KnowledgeBundles = %v", cfg.KnowledgeBundles)
-	}
-	if !strings.Contains(out.String(), "skipped 1 private knowledge ref") {
-		t.Errorf("expected a skip notice, got:\n%s", out.String())
-	}
-	// Adoption marker must survive the rewrite.
-	if !isAdoptedPack(root) {
-		t.Error("pack.lock should still carry the adoption marker after `pack use`")
-	}
-}
 
 // --- finding #2 [BLOCK]: pack.lock must record only what THIS activation
 // actually added -------------------------------------------------------------
@@ -209,7 +83,7 @@ func TestReadPackLock_CorruptFileReturnsSafeDefault(t *testing.T) {
 	}
 	got := readPackLock(root)
 	want := packLock{}
-	if len(got.MCP) != 0 || len(got.Knowledge) != 0 || got.Remote != "" {
+	if len(got.MCP) != 0 || got.Remote != "" {
 		t.Errorf("readPackLock(corrupt) = %+v, want the zero value %+v", got, want)
 	}
 }

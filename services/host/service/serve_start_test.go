@@ -96,7 +96,7 @@ func (rec *starterRec) starter() serveStarter {
 }
 
 func starterCfg() *config.Config {
-	return &config.Config{Services: []string{"memory", "knowledge"}}
+	return &config.Config{Services: []string{"memory"}}
 }
 
 // Fast path: everything already up -> nil, no spawn, SILENT.
@@ -129,7 +129,7 @@ func TestEnsureServeSpawnsAndBecomesReady(t *testing.T) {
 		t.Errorf("marker pid = %d, want the spawned pid 4242 (H4)", rec.markedPid)
 	}
 	out := rec.buf.String()
-	if !strings.Contains(out, "starting pix services (memory:11435, knowledge:11436)") {
+	if !strings.Contains(out, "starting pix services (memory:11435)") {
 		t.Errorf("missing starting message, got %q", out)
 	}
 	if !strings.Contains(out, "pix services ready") {
@@ -478,13 +478,12 @@ func TestRequiredServePorts(t *testing.T) {
 	st := rec.starter()
 
 	memOnly := &config.Config{Services: []string{"memory"}}
-	if got := requiredServePorts(st, memOnly, []string{"knowledge"}); len(got) != 0 {
-		t.Errorf("disabled service required: %v", got)
+	if got := requiredServePorts(st, memOnly, []string{"bogus"}); len(got) != 0 {
+		t.Errorf("disabled/unknown service required: %v", got)
 	}
 	both := starterCfg()
 	got := requiredServePorts(st, both, nil)
-	if len(got) != 2 || got[0].name != "memory" || got[0].port != rpc.MemoryPortDefault ||
-		got[1].name != "knowledge" || got[1].port != rpc.KnowledgePortDefault {
+	if len(got) != 1 || got[0].name != "memory" || got[0].port != rpc.MemoryPortDefault {
 		t.Errorf("full set = %v", got)
 	}
 	if got := requiredServePorts(st, both, []string{"memory", "memory", "bogus"}); len(got) != 1 || got[0].name != "memory" {

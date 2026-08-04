@@ -16,7 +16,6 @@ func TestConfigValue(t *testing.T) {
 	cfg.GogAccount = "me@x.com"
 	cfg.MCP = []string{"gog", "slack"}
 	cfg.Services = []string{"memory", "knowledge"}
-	cfg.KnowledgeBundles = []string{"/kb/a", "/kb/b"}
 	cfg.MemoryWatcherModel = "qwen3.5:9b"
 	cfg.MemoryEmbedModel = "nomic-embed-text"
 	cfg.OllamaBridgeModel = "qwen3.5:9b"
@@ -35,7 +34,6 @@ func TestConfigValue(t *testing.T) {
 		{key: "google_workspace_account", want: "me@x.com"},
 		{key: "mcp", want: "gog slack"},
 		{key: "services", want: "memory knowledge"},
-		{key: "knowledge_bundles", want: "/kb/a /kb/b"},
 		{key: "memory_watcher_model", want: "qwen3.5:9b"},
 		{key: "memory_embed_model", want: "nomic-embed-text"},
 		{key: "ollama_bridge_model", want: "qwen3.5:9b"},
@@ -63,6 +61,17 @@ func TestConfigValue(t *testing.T) {
 				t.Errorf("setup.ConfigValue(%q) = %q, want %q", tt.key, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestConfigValue_KnowledgeBundlesRetired: knowledge_bundles (the built-in OKF
+// knowledge service, retired W2 U03A) is a distinct refusal, not a plain
+// "unknown key" — the caller should be told it once did something, not that
+// it's a typo.
+func TestConfigValue_KnowledgeBundlesRetired(t *testing.T) {
+	cfg := defaultCfg()
+	if _, err := setup.ConfigValue(cfg, "knowledge_bundles"); err == nil {
+		t.Error("expected config get knowledge_bundles to refuse (retired key)")
 	}
 }
 

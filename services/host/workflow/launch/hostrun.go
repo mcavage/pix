@@ -32,8 +32,6 @@ import (
 //	PI_CODING_AGENT_DIR   = <state>/pix/host-agent  (pi's config dir)
 //	MEMORY_URL            = http://127.0.0.1:11435       (memory-recall/capture;
 //	                             port honors MEMORY_PORT, like serve.go)
-//	KNOWLEDGE_URL         = http://127.0.0.1:11436       (knowledge-recall;
-//	                             port honors KNOWLEDGE_PORT)
 //	OLLAMA_BRIDGE_MODEL   = <config ollama_bridge_model> (when set — the local
 //	                             model the bridge exposes; env half of run.go's
 //	                             workspace file)

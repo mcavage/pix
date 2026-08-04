@@ -657,31 +657,6 @@ func TestExecuteReset_KeepMemoryCustomKnowledgeDBOutsideRoot(t *testing.T) {
 	}
 }
 
-// TestExecuteReset_KnowledgePortUpAbortsDataMove: a knowledge-only serve still
-// running (knowledge port up, memory port down) must ALSO block the data move.
-func TestExecuteReset_KnowledgePortUpAbortsDataMove(t *testing.T) {
-	stubStopServe(t)
-	root := t.TempDir()
-	p := tempPaths(t, root)
-	a := Plan(resetCfg(), p, Opts{})
-
-	env := hostenvtest.Env{Present: map[string]bool{}, Ports: map[int]bool{rpc.KnowledgePortDefault: true}}.Build()
-	var buf bytes.Buffer
-	_, err := executeReset(a, DefaultResetFS(), env, &buf, fixedNow)
-	if err == nil {
-		t.Fatal("a knowledge-only serve still up must block the data move")
-	}
-	if exists(p.DataRoot + ".bak-" + fixedTS) {
-		t.Error("the data dir must NOT move while the knowledge port is up")
-	}
-	if !exists(p.DataRoot) {
-		t.Error("the data dir must be left in place when the move is blocked")
-	}
-	if exists(p.ConfigDir) {
-		t.Error("the config dir (safe) should still be backed up")
-	}
-}
-
 // TestExecuteReset_KeepMemoryReadDirErrorSurfaces: a readDir failure during the
 // keep-memory sweep must surface as a returned error, not be swallowed as
 // success (never report preservation over a dir we could not even scan).

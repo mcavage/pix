@@ -33,9 +33,9 @@ type hostService struct {
 }
 
 // runServe starts the long-running HTTP host services. `enabled` is the list
-// from `services` in config.toml (config-friendly aliases: memory, knowledge,
-// broker); empty means "all". The MCP servers (e.g. slack) are stdio commands
-// run by the sbx gateway via `sbx mcp add`, not HTTP daemons.
+// from `services` in config.toml (config-friendly aliases: memory, broker);
+// empty means "all". The MCP servers (e.g. slack) are stdio commands run by
+// the sbx gateway via `sbx mcp add`, not HTTP daemons.
 // serveServiceAliases is the config name -> internal service name table: the
 // WHOLE set of capabilities `serve` composes. A retired capability leaves here,
 // which is what makes `serve <retired>` a usage error, not a started daemon.
@@ -61,7 +61,7 @@ func runServe(enabled []string) {
 	}
 
 	// The default path has NO built-in credential broker and mints NO bearer
-	// (memory/knowledge need no auth). The generic broker seam is dormant: a
+	// (memory needs no auth). The generic broker seam is dormant: a
 	// broker materializes only when an operator configures an external
 	// [plugins.broker] binary, which owns its own bearer through the retained
 	// plugin path — never the process-global env (see pluginEnv, F2).
@@ -72,7 +72,7 @@ func runServe(enabled []string) {
 
 	// Resolve the enabled set FIRST (F1): CLI args win; else config's `services`;
 	// else empty == "all". Only enabled services are constructed, launched, and
-	// preflighted below — so `serve memory` never launches or preflights knowledge.
+	// preflighted below — so `serve memory` never launches or preflights broker.
 	effective := resolveServices(enabled, cfg.Services)
 	// config-friendly aliases -> internal service name.
 	alias := serveServiceAliases()
@@ -124,7 +124,7 @@ func runServe(enabled []string) {
 	// ([plugins.broker] with impl != builtin): then it is launched ONCE through the
 	// shared supervisor (sha-verified + env-isolated, F2), the dispensed
 	// CredentialBroker backs the stable /token shim, and it participates in
-	// shutdown — mirroring the memory/knowledge non-builtin path.
+	// shutdown — mirroring the memory non-builtin path.
 	if enabledSvc("broker") {
 		brSvc, berr := brokerService(cfg, sup, selfPath)
 		if berr != nil {
@@ -315,4 +315,3 @@ func applyMemoryModelEnv(cfg *config.Config) {
 		os.Setenv("MEMORY_EMBED_MODEL", cfg.MemoryEmbedModel)
 	}
 }
-

@@ -1,6 +1,6 @@
 // hoststate.go builds the host-visible facts the fenced in-VM agent CANNOT see
-// for itself (keys resolved, services up, knowledge bundles, gog/mcp state,
-// models, pack/provisioned) ENTIRELY IN MEMORY — it is never written to a
+// for itself (keys resolved, services up, gog/mcp state, models,
+// pack/provisioned) ENTIRELY IN MEMORY — it is never written to a
 // workspace file. run.go injects the resulting JSON directly into the
 // launcher-generated initial prompt (the one message carrying
 // GeneratedInputMarker), so the onboarding skill reads trusted facts from that
@@ -56,12 +56,6 @@ type hostStateSvc struct {
 	Port    int  `json:"port"`
 }
 
-type hostStateKnowledge struct {
-	Bundles   []string `json:"bundles"`
-	Seeded    bool     `json:"seeded"`
-	ServiceUp bool     `json:"service_up"`
-}
-
 // hostStateGog carries ONLY whether gog is wired, never the configured
 // account email. `enabled` is sufficient for onboarding to say "Gmail/Drive
 // isn't set up yet" or "it's on" — the email address is real PII with no
@@ -100,16 +94,15 @@ type HostStatePack struct {
 }
 
 type HostState struct {
-	Provisioned bool               `json:"provisioned"`
-	Keys        hostStateKeys      `json:"keys"`
-	Memory      hostStateSvc       `json:"memory"`
-	Knowledge   hostStateKnowledge `json:"knowledge"`
-	Gog         hostStateGog       `json:"gog"`
-	MCP         hostStateMCP       `json:"mcp"`
-	Models      hostStateModels    `json:"models"`
-	Pack        HostStatePack      `json:"pack"`
-	Host        hostStateHost      `json:"host"`
-	Identity    hostStateIdentity  `json:"identity"`
+	Provisioned bool              `json:"provisioned"`
+	Keys        hostStateKeys     `json:"keys"`
+	Memory      hostStateSvc      `json:"memory"`
+	Gog         hostStateGog      `json:"gog"`
+	MCP         hostStateMCP      `json:"mcp"`
+	Models      hostStateModels   `json:"models"`
+	Pack        HostStatePack     `json:"pack"`
+	Host        hostStateHost     `json:"host"`
+	Identity    hostStateIdentity `json:"identity"`
 }
 
 // hostStateIdentity is who the user is, read from the HOST's git config (the
@@ -200,8 +193,6 @@ func BuildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial f
 		keys.Source = "configured inference"
 	}
 
-	bundles := append([]string(nil), cfg.KnowledgeBundles...)
-
 	mcpServers := append([]string(nil), cfg.MCP...)
 	gogEnabled := false
 	for _, m := range mcpServers {
@@ -211,19 +202,18 @@ func BuildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial f
 	}
 
 	hs := HostState{
-		Keys:      keys,
-		Memory:    hostStateSvc{Enabled: slices.Contains(cfg.Services, "memory"), Up: dialer(rpc.MemoryPortDefault), Port: rpc.MemoryPortDefault},
-		Knowledge: hostStateKnowledge{Bundles: bundles, Seeded: len(bundles) > 0, ServiceUp: dialer(rpc.KnowledgePortDefault)},
-		Gog:       hostStateGog{Enabled: gogEnabled},
-		MCP:       hostStateMCP{Enabled: len(mcpServers) > 0, Servers: mcpServers},
-		Models:    hostStateModels{Watcher: cfg.MemoryWatcherModel, Embed: cfg.MemoryEmbedModel},
-		Pack:      pack,
-		Host:      buildHostStateHost(cfg),
+		Keys:   keys,
+		Memory: hostStateSvc{Enabled: slices.Contains(cfg.Services, "memory"), Up: dialer(rpc.MemoryPortDefault), Port: rpc.MemoryPortDefault},
+		Gog:    hostStateGog{Enabled: gogEnabled},
+		MCP:    hostStateMCP{Enabled: len(mcpServers) > 0, Servers: mcpServers},
+		Models: hostStateModels{Watcher: cfg.MemoryWatcherModel, Embed: cfg.MemoryEmbedModel},
+		Pack:   pack,
+		Host:   buildHostStateHost(cfg),
 	}
 	// Provisioned: an inherited, fully set-up environment that must NOT be
-	// re-onboarded — keys resolved AND a knowledge bundle already seeded AND a
-	// pack actually active. Onboarding short-circuits to "you're set up" on true.
-	hs.Provisioned = keys.Resolved && hs.Knowledge.Seeded && hs.Pack.Active
+	// re-onboarded — keys resolved AND a pack actually active. Onboarding
+	// short-circuits to "you're set up" on true.
+	hs.Provisioned = keys.Resolved && hs.Pack.Active
 	return hs
 }
 

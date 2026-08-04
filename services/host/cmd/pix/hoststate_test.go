@@ -21,7 +21,6 @@ func TestBuildHostState(t *testing.T) {
 	cfg := &config.Config{
 		GogAccount:         "me@acme.com",
 		MCP:                []string{config.GWServerName},
-		KnowledgeBundles:   []string{"/kb/acme"},
 		MemoryWatcherModel: "gemma4:e4b-mlx",
 		MemoryEmbedModel:   "nomic-embed-text",
 	}
@@ -47,9 +46,6 @@ func TestBuildHostState(t *testing.T) {
 	if !hs.Memory.Up || hs.Memory.Port != rpc.MemoryPortDefault {
 		t.Errorf("memory up/port wrong: %+v", hs.Memory)
 	}
-	if !hs.Knowledge.Seeded || len(hs.Knowledge.Bundles) != 1 {
-		t.Errorf("knowledge should be seeded: %+v", hs.Knowledge)
-	}
 	if !hs.Gog.Enabled {
 		t.Errorf("gog wrong: %+v", hs.Gog)
 	}
@@ -67,7 +63,7 @@ func TestBuildHostState(t *testing.T) {
 		t.Errorf("mcp wrong: %+v", hs.MCP)
 	}
 	if !hs.Provisioned {
-		t.Error("keys+knowledge+active pack present => provisioned")
+		t.Error("keys resolved + active pack present => provisioned")
 	}
 	if hs.Models.Watcher != "gemma4:e4b-mlx" {
 		t.Errorf("watcher model wrong: %q", hs.Models.Watcher)
