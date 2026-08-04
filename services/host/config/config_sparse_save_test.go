@@ -84,7 +84,7 @@ func TestSaveExplicitNonDefaultRoundTrips(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.MemoryWatcherModel = "my-custom-watcher"
-	cfg.Services = []string{"memory", "knowledge"}
+	cfg.Services = []string{"memory", "broker"}
 	if err := cfg.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestSaveExplicitNonDefaultRoundTrips(t *testing.T) {
 	if !strings.Contains(raw, `memory_watcher_model = "my-custom-watcher"`) {
 		t.Errorf("raw file missing the explicit memory_watcher_model:\n%s", raw)
 	}
-	if !strings.Contains(raw, `services = ["memory", "knowledge"]`) {
+	if !strings.Contains(raw, `services = ["memory", "broker"]`) {
 		t.Errorf("raw file missing the explicit services list:\n%s", raw)
 	}
 
@@ -104,8 +104,8 @@ func TestSaveExplicitNonDefaultRoundTrips(t *testing.T) {
 	if got.MemoryWatcherModel != "my-custom-watcher" {
 		t.Errorf("MemoryWatcherModel = %q, want my-custom-watcher", got.MemoryWatcherModel)
 	}
-	if len(got.Services) != 2 || got.Services[1] != "knowledge" {
-		t.Errorf("Services = %v, want [memory knowledge]", got.Services)
+	if len(got.Services) != 2 || got.Services[1] != "broker" {
+		t.Errorf("Services = %v, want [memory broker]", got.Services)
 	}
 }
 

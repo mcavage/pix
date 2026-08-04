@@ -222,16 +222,13 @@ func TestMemoryHelp_NoRPC(t *testing.T) {
 }
 
 func TestVerbUsage_Routing(t *testing.T) {
-	for _, verb := range []string{"run", "memory", "knowledge", "config", "status", "pack", "doctor", "mcp", "serve", "setup", "version", "reset"} {
+	for _, verb := range []string{"run", "memory", "config", "status", "pack", "doctor", "mcp", "serve", "setup", "version", "reset"} {
 		u, ok := verbUsage(verb)
 		if !ok || strings.TrimSpace(u) == "" {
 			t.Errorf("verbUsage(%q) = (%q,%v), want non-empty usage", verb, u, ok)
 		}
 	}
 	// Aliases route too.
-	if _, ok := verbUsage("kb"); !ok {
-		t.Error("verbUsage(kb) should route to knowledge usage")
-	}
 	if _, ok := verbUsage("mem"); !ok {
 		t.Error("verbUsage(mem) should route to memory usage")
 	}
@@ -244,7 +241,7 @@ func TestVerbUsage_Routing(t *testing.T) {
 // TestHelpAll_ListsExpertVerbs: `help --all` must name the rare/expert verbs the
 // curated Core listing hides.
 func TestHelpAll_ListsExpertVerbs(t *testing.T) {
-	for _, v := range []string{"mcp", "secret", "restore", "reset", "man", "version"} {
+	for _, v := range []string{"mcp", "secret", "state", "reset", "task", "version"} {
 		if !strings.Contains(helpAllText, v) {
 			t.Errorf("help --all missing %q", v)
 		}
@@ -262,28 +259,6 @@ func TestSuggestVerb(t *testing.T) {
 	}
 	if s, ok := suggestVerb("zzzzzzzz"); ok {
 		t.Errorf("suggestVerb(zzzzzzzz) = %q,%v, want no suggestion", s, ok)
-	}
-}
-
-// TestSuggestVerb_RetiredGog: the DELETED `gog` verb tree (6b39a69) must
-// yield a did-you-mean pointing at its replacement, `gworkspace` — never a
-// silent alias, and never "no suggestion" (edit distance between "gog" and
-// "gworkspace" is far larger than suggestVerb's levenshtein-2 window, so this
-// only works because retiredVerbs carries it explicitly).
-func TestSuggestVerb_RetiredGog(t *testing.T) {
-	if knownVerbs["gog"] {
-		t.Error("the `gog` verb is deleted with no alias; it must not be a known verb")
-	}
-	if _, ok := verbUsage("gog"); ok {
-		t.Error("`pix help gog` must not resolve to a usage page for a deleted verb")
-	}
-	s, ok := suggestVerb("gog")
-	if !ok || s != "gworkspace" {
-		t.Errorf("suggestVerb(gog) = %q,%v, want gworkspace,true", s, ok)
-	}
-	msg, launch := classifyBareArg("gog")
-	if launch || !strings.Contains(msg, `Did you mean "gworkspace"?`) {
-		t.Errorf("`pix gog ...` must print a did-you-mean and exit 2, got %q (launch=%v)", msg, launch)
 	}
 }
 

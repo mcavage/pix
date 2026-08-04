@@ -2,20 +2,14 @@ package main
 
 import (
 	"pix/host/cli"
-	"pix/host/knowledge"
 	"pix/host/mcp"
 	"pix/host/memory"
 	"pix/host/service"
-	"pix/host/workflow/backup"
 	"pix/host/workflow/doctor"
-	"pix/host/workflow/gworkspace"
 	"pix/host/workflow/launch"
-	"pix/host/workflow/man"
 	"pix/host/workflow/pack"
 	"pix/host/workflow/reset"
 	"pix/host/workflow/setup"
-	"pix/host/workflow/slack"
-	"pix/host/workflow/upgrade"
 )
 
 // cli.ErrHelpRequested is the shared sentinel a parser returns when the argv asks
@@ -24,43 +18,19 @@ import (
 var knownVerbs = map[string]bool{
 	"help": true, "serve": true, "doctor": true, "setup": true, "status": true,
 	"ls": true, "rm": true,
-	"config": true, "mcp": true, "gworkspace": true, "slack": true, "memory": true, "monitor": true, "knowledge": true,
+	"config": true, "mcp": true, "memory": true, "monitor": true,
 	"pack": true, "version": true, "run": true, "secret": true,
-	"reset": true, "man": true,
-	"backup": true, "restore": true, "state": true,
-	"task": true, "models": true, "agent": true,
-	"host": true,
+	"reset": true,
+	"state": true,
+	"task":  true, "models": true, "agent": true,
 }
 
-// retiredVerbs maps a DELETED verb to the command that replaced it. Edit
-// distance cannot find these — `onboard` is nowhere near `setup` — but a user
-// (or a shell history, or a CI script) who types the old name deserves the new
-// one rather than a bare "no command named". The verb itself stays deleted:
-// this is a suggestion on the standard unknown-verb path (exit 2), NOT an
-// alias that keeps the old door open.
-var retiredVerbs = map[string]string{
-	// AC-P0-308: `pix onboard` became `pix setup --no-agent`.
-	"onboard": "setup --no-agent",
-	// The `gog` verb tree is DELETED, not renamed (6b39a69): the public surface
-	// is `pix gworkspace setup|status|disable`. `gog` and `gworkspace` are not
-	// within edit distance 2, so this is a retired-verb entry, not something
-	// suggestVerb's levenshtein search would ever find on its own.
-	"gog": "gworkspace",
-	// `route` -> `models` (docs/design/models-cli.md): the noun the owner asked
-	// for. `route` and `models` are also outside edit distance 2, and this
-	// entry stays permanently even after the one-release `case "route"` alias
-	// in main.go is deleted — it is the only remaining recovery path at that
-	// point.
-	"route": "models",
-}
-
-// suggestVerb returns the replacement for a retired verb, or else the closest
-// known verb to input within edit distance 2 — the did-you-mean hint on an
-// unknown command.
+// suggestVerb returns the closest known verb to input within edit distance 2 —
+// the did-you-mean hint on an unknown command. It no longer carries the retired
+// names: a retired surface is DISPATCHED (retired.go) and answers with its own
+// replacement before this is ever reached, which is strictly more useful than a
+// hint on an error path.
 func suggestVerb(input string) (string, bool) {
-	if r, ok := retiredVerbs[input]; ok {
-		return r, true
-	}
 	best, bestD := "", 3
 	for v := range knownVerbs {
 		if d := levenshtein(input, v); d < bestD {
@@ -124,13 +94,9 @@ Setup & health
   setup               guided onboarding: host config, then agent handoff for a guided tour
   setup --no-agent    host-side config only (flags/CI); no sandbox, no handoff
   doctor              diagnose host + sandbox health, print the fix commands
-  upgrade [flags]     replace the pix + pix-host binaries with a published
-                      release (sha256-verified). run already tracks the latest
-                      kit/image itself.            [--check --version X.Y.Z --force]
 
 Data
   memory <cmd>        recall | remember | forget | learnings | stats   (:11435)
-  knowledge <cmd>     init | use | ls | query | sync | remote          (:11436)
   pack <cmd>          new | add | ls | show | use | rm (git-backed context bundle)
 
 Observability
@@ -148,29 +114,18 @@ Config & context
   config set|unset    change config without hand-editing the toml
 
 Parallel work
-  task <cmd>          new | ls | path | rm | gc | harvest: parallel task clones of one repo
+  task <cmd>          new | ls | path | rm: parallel task clones of one repo
 
 Integrations & credentials
-  gworkspace <cmd>    setup | status | disable: Google Workspace access
-  slack <cmd>         setup | auth | status | disable: Slack OAuth and access
   mcp <cmd>           register|ls|load|auth|bundle MCP servers (sbx gateway)
   secret <cmd>        ls|set|rm|readiness.Check the 1Password op-refs (host MCP creds)
 
 State (on-disk lifecycle)
-  state <cmd>         backup|restore|reset (grouped aliases)
-  backup [--out P]    hot FULL backup (memory + config + op-refs) -> tar.gz
-  restore <archive>   restore a FULL backup (safe swap)   [--force]
+  state <cmd>         reset (grouped alias)
   reset [flags]       move Pix's XDG state aside (reversible) [--keep-memory --sbx --yes]
-
-Expert (dangerous; read the man page first)
-  host [DIR]          run pi DIRECTLY on this machine: no sandbox, no network
-                      fence, real credentials. Gated off by default; enable with
-                      'host setup' (provisions AND enables it in one step).
-                      Guardrails, not a security boundary.
 
 Meta
   version             print the launcher version
-  man                 render the embedded man page (no MANPATH needed; also --man)
   help [verb]         print this help (or a verb's usage)
 
 run flags:    --dev --skills DIR --kit K --template REF --mcp M --name N --model M -- pi-args...
@@ -199,38 +154,22 @@ func verbUsage(verb string) (string, bool) {
 		return setup.ConfigUsage, true
 	case "mcp":
 		return mcp.McpUsage, true
-	case "gworkspace":
-		return gworkspace.Usage, true
-	case "slack":
-		return slack.Usage, true
 	case "pack":
 		return pack.Usage, true
 	case "memory", "mem":
 		return memory.Usage + "\n", true
 	case "monitor":
 		return monitorUsage, true
-	case "backup":
-		return backup.BackupUsage, true
-	case "restore":
-		return backup.RestoreUsage, true
-	case "knowledge", "kb":
-		return knowledge.Usage, true
 	case "secret":
 		return secretUsage(), true
 	case "version":
 		return versionUsage, true
-	case "upgrade":
-		return upgrade.UpgradeUsage, true
-	case "man":
-		return man.ManUsage, true
 	case "reset":
 		return reset.Usage, true
 	case "state":
 		return stateUsage, true
 	case "task":
 		return launch.TaskUsage, true
-	case "host":
-		return launch.HostUsage, true
 	case "models":
 		return modelsUsage(), true
 	case "agent":

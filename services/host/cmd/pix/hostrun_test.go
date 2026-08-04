@@ -524,23 +524,6 @@ func TestHostGateMessage(t *testing.T) {
 	}
 }
 
-// TestHostInHelpTiers: `host` is a known verb with usage, listed in the EXPERT
-// tier (--all) but NEVER in the Core helpText (keeping it off the easy path).
-func TestHostInHelpTiers(t *testing.T) {
-	if !knownVerbs["host"] {
-		t.Error("host missing from knownVerbs")
-	}
-	if _, ok := verbUsage("host"); !ok {
-		t.Error("verbUsage(host) should exist")
-	}
-	if !strings.Contains(helpAllText, "host [DIR]") {
-		t.Error("help --all must list host")
-	}
-	if strings.Contains(helpText, "host [DIR]") {
-		t.Error("Core helpText must NOT list host (expert tier only)")
-	}
-}
-
 // --- FIX 1: idempotent pi-extension install (launch.InstallHostPiExtensions) ---
 
 // fakePiBin puts an executable `pi` shim on PATH (and restores the original

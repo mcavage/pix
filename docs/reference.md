@@ -7,7 +7,7 @@ This doc does. Read the section you need, run the command, move on.
 ## 0. Command map
 
 The authoritative verb/flag list is `pix help --all` (and `pix help
-<verb>`, `pix help --man`) — it is generated from the dispatch tree, so it
+<verb>`) — it is generated from the dispatch tree, so it
 cannot drift. This table says what each verb is FOR and where the reasoning
 lives. It is the pointer target for `AGENTS.md`, which deliberately carries no
 CLI reference of its own.
@@ -18,22 +18,24 @@ CLI reference of its own.
 | `status` / `ls` / `rm` | read-only control panel; list and remove `pix-*` sandboxes | §9 |
 | `doctor` | probe host + sandbox health and print exact fixes | §9 |
 | `setup` | the guided host+agent setup path (keys, memory, pack, identity) | `docs/design/onboarding.md` |
-| `serve` | the long-running host services (memory :11435, knowledge :11436) | `docs/design/serve-lifecycle.md` |
+| `serve` | the long-running host services (memory :11435) | `docs/design/serve-lifecycle.md` |
 | `memory` (`mem`) | recall/remember/forget/learnings/stats from the host | §2, `docs/memory.md` |
-| `knowledge` (`kb`) | OKF bundles: init/use/ls/query/sync/remote | §6 |
 | `pack` | the portable capability context: new/add/ls/show/use/rm | §5, `docs/design/packs-v2.md` |
-| `mcp` | register/list/load MCP servers through the sbx gateway | §8, `docs/design/slack-setup.md` (Slack credential model) |
-| `gworkspace` | Google Workspace (Gmail/Drive/Docs/Sheets/Calendar) | `docs/gworkspace.md` |
-| `slack` | Slack (search/read messages, channels, users) via a personal `xoxp-` token | `docs/design/slack-setup.md` |
+| `mcp` | register/list/load MCP servers through the sbx gateway — the one door integrations come through | §8 |
 | `secret` | manage the 1Password `op://` refs (never the values) | §8 |
 | `config` | `show`/`path`/`get`/`set`/`unset` the single runtime config | §1 |
-| `host` | the unsandboxed escape hatch, off by default | §7, `docs/design/host-mode.md` |
 | `task` | isolated parallel-work clones + sandboxes | `docs/design/worktree-tasks.md` |
 | `monitor` | live-follow a sandbox's out-of-sandbox traffic | `docs/design/monitor.md` |
 | `models` | which models pix can use, and the model router: ls/show/pick/route | `docs/design/routing.md`, `docs/design/models-cli.md` |
 | `agent` | the subagent roster: ls/new/edit/rm/reassess | §4 |
-| `state` | backup/restore/reset/uninstall on-disk state | §9 |
+| `state` | `reset` the on-disk state (reversible) | §9 |
 | `version`, `help` | stamped version; tiered help | — |
+
+Retired verbs (`slack`, `gworkspace`, `knowledge`, `host`, `upgrade`, `man`,
+`backup`, `restore`, `state backup|restore`, `task harvest|gc`, `route`,
+`onboard`, `evals`) answer with a `PIX_RETIRED` line naming the replacement and
+exit 2, doing nothing else. Every one is recorded, with its reason and
+replacement, in `services/host/cmd/pix/corpus/retirement.jsonl`.
 
 ## 1. What pix is
 
@@ -225,7 +227,8 @@ pix run --replace     # recreate the sandbox to pick up the new MCP/bin set
 **Host-mode wrappers** (`pack add proxy platformio --host`) are for tools that
 need something the sandbox structurally can't reach, a `/dev/tty*` serial
 device is the canonical case. They install to the host, not the sandbox, and
-only run under `pix host` (§7), never inside the VM.
+run on the host, not in the sandbox (§7), so a sandboxed session cannot use
+them at all.
 
 **Sharing a pack:** push the git repo, a teammate runs `pix pack use
 <url>` and supplies their own `op://` credential refs at adoption. Credentials
@@ -260,16 +263,10 @@ MCP or knowledge bundle you added by hand outside any pack.
 
 ## 6. Knowledge
 
-A knowledge bundle is an OKF (Open Knowledge Format) directory of domain
-facts: markdown, indexed with SQLite FTS5 and embeddings, searchable
-independent of any pack.
-
-```
-pix knowledge init [DIR]      # scaffold a bundle
-pix knowledge use <path|url>  # point at one
-pix knowledge query <text>    # search it (from the host, no sandbox needed)
-pix knowledge sync            # commit + push, opens a PR branch by default
-```
+Knowledge is pack-delivered context: an OKF (Open Knowledge Format) directory
+of domain facts a pack points at. There is no launcher verb for it and no
+corpus shipped in the public stack — the `knowledge` capability resolves to
+`none` until a pack wires one, and `pix pack use <path|url>` is how it arrives.
 
 A pack references bundles rather than only embedding them, and the reference
 carries a `shared` flag:
@@ -277,82 +274,27 @@ carries a `shared` flag:
 - `shared = true`, a git URL: the reference travels with the pack. An
   adopter pulls the same bundle.
 - `shared = false`, a local path: it does not travel. When you share the
-  pack, your private knowledge is simply absent from what the teammate gets,
-  and it still works for you because the bundle is standalone.
+  pack, your private knowledge is simply absent from what the teammate gets.
 
-Example: your `work` pack references `shared=true`
-`https://github.com/acme/runbooks.git` (the team bundle everyone gets) and
-`shared=false ~/notes/okf` (your own scratch notes, which stay yours even if
-you hand the pack to a teammate).
+A bundle is markdown, not executable, so it never triggers the pack trust gate
+(§5), even when it's part of a pack that does.
 
-**Limits.** `knowledge` resolves to `none` in the public stack by default;
-there's no corpus shipped. It only has content once you `init` or `use` one.
-A bundle is markdown, not executable, so it never triggers the pack trust
-gate (§5), even when it's part of a pack that does.
+## 7. Leaving the sandbox
 
-## 7. Host mode
-
-`pix host` execs pi directly on your host machine, no sandbox, no
-network fence. It exists for the two things a Docker sandbox structurally
-cannot do: reach a real device (`/dev/tty*` for platformio) and rebuild the
-pix image itself (you can't `make load` from inside the VM you're
-building).
-
-```
-pix host setup   # provisions the host agent dir AND enables the gate (off by default)
-pix host [DIR]   # launch; disable again with: pix config set host.enabled false
-```
-
-Setup and launch require the same pinned pi version as the sandbox image, and
-launch requires the matching curated extensions installed by `host setup`. A
-missing or stale core is rejected with the exact `npm install -g` command;
-stale extensions point back to `pix host setup`.
-
-**Say this plainly: host mode is not a security boundary.** pi has no
-built-in sandbox or permission prompts of its own; the sandbox *is* pix's
-safety model, and host mode steps outside it. What you get instead is a set
-of guardrails against accidents, not against a compromised session:
-subagents are disabled entirely (no headless child can run unsandboxed),
-credentials are sourced just-in-time via 1Password and never persisted to
-disk, and the session prints a visible red banner so you can't mistake it for
-a normal run. Use it narrowly, for the two cases above, not as a default
-runtime.
-
-`pix setup` sources direct cloud API keys from 1Password. The `op` CLI must be
-installed and signed in only for that path; a keyless gateway or verified
-Ollama-only setup does not invoke it. The old `--use-sbx-keys` /
-`--use-1password` flags and the persisted `provider_key_mode` are gone (both
-flags now error). setup validates one `op://` ref per provider, mirrors them
-into `hostmode.env`, and reconciles them into `sbx`. `pix setup --no-agent` never
-provisions provider keys.
-
-Host mode reaches cloud models through the same `op://` refs in `hostmode.env`
-that setup writes; real validation happens again at every `pix host`
-launch via `op run --env-file`. Cloud keys are reported "validated this run"
-because setup just resolved them via `op read`.
-
-**Limits.** No sandbox means no network fence, no throwaway teardown, and no
-subagent fan-out. If you find yourself reaching for `pix host` as your
-everyday driver, that's the failure mode the design explicitly warns against.
+There is no unsandboxed run mode. The sandbox is the boundary the whole design
+rests on, so the two things it structurally cannot do — reach a real device and
+rebuild the pix image itself — are done from your own shell, not through pix.
 
 ## 8. MCP and capabilities
 
 External tools and data (Slack, GitHub, Google Workspace, a company wiki) wire
 in as MCP servers, run through the sbx gateway.
 
-**Slack's `SLACK_TOKEN` is always a single named person's `xoxp-` user
-token** — never a shared "employee"/team/bot token, and never handed to a
-second person to reuse. Every call the `slack` server makes runs AS that
-token's owner. `pix slack setup` supports a local PKCE OAuth flow (`pix config
-set slack.client_id <id>`, public client with no client secret) as well as a
-static `--token-ref` fallback. The PKCE flow stores the rotating credential
-document in 1Password (`Private` vault by default), refreshes rotating 12-hour
-access tokens automatically without an interactive command. The roughly
-monthly browser grant is renewed with `pix slack auth` before it expires.
-`pix slack status` verifies live access/identity through
-`auth.test` and checks gateway registration. `pix slack disable` revokes the
-token at Slack, archives the 1Password document, and clears registration.
-See `docs/design/slack-setup.md`.
+A credential an MCP server needs is a 1Password `op://` reference resolved at
+spawn (§8 below, `pix secret`), never a value on disk and never baked into the
+gateway registration. Where a server needs a user identity — a Slack `xoxp-`
+user token is the canonical case — that identity is one named person's, never a
+shared team token and never handed to a second person to reuse.
 
 ```
 pix config set mcp <name>     # add a local stdio server to the launch set

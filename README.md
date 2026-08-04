@@ -51,46 +51,19 @@ the named optional hook is skipped. Repeat `--with` to select more than one.
 
 <!-- PIX_PRIMARY_PATH_END -->
 
-## Optional: Google Workspace
+## Retired surfaces
 
-Google Workspace is not part of default setup. After Pix works normally, install
-the implementation dependency and opt in:
-
-```bash
-brew install openclaw/tap/gogcli
-pix gworkspace setup --account you@example.com
-pix gworkspace status
-```
-
-By default this is read-only. A trusted pack may opt into the narrower
-`--create-docs` profile: agents can create new Docs, but cannot edit existing
-Docs or send Gmail/Slack messages.
-
-Setup guides Google Cloud project/API/OAuth configuration, proves the exact
-headless read-only MCP process can authenticate and list tools, and only then
-saves the Pix configuration. Remove only Pix-owned registration and config with:
+The Google Workspace and Slack launcher verbs are retired. Those integrations
+are MCP servers the sbx gateway runs, registered like any other one:
 
 ```bash
-pix gworkspace disable
+pix mcp register
 ```
 
-Your Google OAuth credentials are left untouched.
-
-## Optional: Slack
-
-Slack integration is optional and absent by default. Configure your Slack App's Client ID with:
-
-```bash
-pix config set slack.client_id <client_id>
-```
-
-Then run guided setup to authorize access via local PKCE OAuth (public client, no client secret required):
-
-```bash
-pix slack setup
-```
-
-This opens the OAuth grant in your browser, verifies your identity, and stores the rotating credential in a 1Password document (`Private` vault by default). Twelve-hour access tokens refresh automatically on use; you do not authorize every 12 hours. Renew the roughly monthly interactive grant with `pix slack auth`. Verify health with `pix slack status` and revoke access with `pix slack disable`. A static fallback (`pix slack setup --token-ref op://...`) is also available for pre-issued tokens.
+Typing a retired command prints a `PIX_RETIRED` line naming the replacement and
+exits 2 — it never half-runs the old behavior. The full list of retired verbs
+and flags, with the replacement for each, is
+`services/host/cmd/pix/corpus/retirement.jsonl`.
 
 ## Daily use
 
@@ -100,7 +73,7 @@ pix run [DIR]               # create or reattach a sandbox
 pix doctor                  # full readiness evidence
 pix task new <name>         # isolated parallel task sandbox
 pix task ls                 # list parallel tasks
-pix task harvest <name>     # collect a task's artifacts
+pix task path <name>        # where a task's clone lives (git does the rest)
 pix help --all              # complete command map
 ```
 

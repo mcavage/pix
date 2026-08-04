@@ -15,7 +15,7 @@
 //	pix version                   print the stamped version (full)
 //	pix config show|path          show config path + contents (full)
 //	pix serve [args…]             exec the sibling pix-host serve (full)
-//	pix status|doctor|setup|mcp|memory|knowledge|pack   (all implemented)
+//	pix status|doctor|setup|mcp|memory|pack   (all implemented)
 //	pix reset                     (destructive, reversible: state moved aside)
 //	pix help [verb]               print the verb tree (or one verb's usage)
 package main
@@ -27,15 +27,10 @@ import (
 	"strings"
 
 	"pix/host/cli"
-	"pix/host/knowledge"
 	"pix/host/launcher"
-	"pix/host/routing"
 	"pix/host/service"
-	"pix/host/workflow/backup"
 	"pix/host/workflow/launch"
-	"pix/host/workflow/man"
 	"pix/host/workflow/setup"
-	"pix/host/workflow/upgrade"
 )
 
 // version is stamped at build time via -ldflags "-X main.version=0.0.x". An
@@ -54,12 +49,12 @@ func init() { launcher.Version = version }
 func main() {
 	args := os.Args[1:]
 
-	// A global `--man` may appear anywhere on the command line (before a `--`
-	// terminator): render the embedded man page and exit. It is DISTINCT from the
-	// -h/--help contract — `--help` prints usage, `--man` opens the full page.
-	if rest, ok := man.ExtractManFlag(args); ok {
-		man.RunMan(rest)
-		return
+	// The global `--man` flag is retired along with the `man` verb: the embedded
+	// page was a third rendering of the verb table, and `pix help --all` is the
+	// one that stays. Checked first, before any dispatch, so `pix run --man`
+	// answers with the notice instead of launching.
+	if hasGlobalManFlag(args) {
+		retiredExit(retiredKey("pix", "--man"))
 	}
 
 	if len(args) == 0 {
@@ -71,6 +66,10 @@ func main() {
 		runStatusCmd(nil)
 		return
 	}
+
+	// A retired surface answers before anything else can happen: no config read,
+	// no probe, no side effect. See retired.go.
+	retiredIfRetired(args[0], "")
 
 	switch args[0] {
 	case "run":
@@ -104,10 +103,6 @@ func main() {
 		// verb it replaced is deleted, with no alias: an `onboard` argv takes
 		// the standard unknown-verb path, which suggests `setup` and exits 2.)
 		runSetupCmd(args[1:])
-	case "gworkspace":
-		runGworkspaceCmd(args[1:])
-	case "slack":
-		runSlackCmd(args[1:])
 	case "mcp":
 		runMcpCmd(args[1:])
 	case "pack":
@@ -118,52 +113,16 @@ func main() {
 		runMemory(args[1:])
 	case "monitor":
 		runMonitor(args[1:])
-	case "backup":
-		backup.RunBackup(args[1:])
-	case "restore":
-		backup.RunRestore(args[1:])
-	case "knowledge", "kb":
-		knowledge.Run(args[1:])
 	case "models":
 		runModels(args[1:])
-	case "route":
-		// Deprecated alias, one release only (docs/design/models-cli.md,
-		// Deprecation): stderr-only so --json/piped stdout is unaffected.
-		// retiredVerbs["route"] = "models" (help.go) survives after this case is
-		// deleted; that is the permanent recovery path.
-		//
-		// It forwards RAW to the host tree rather than through runModels, so the
-		// alias is bug-for-bug the command it replaces. Routing it through the new
-		// verb silently broke `pix route models` (the old spelling of the registry
-		// list): runModels has no `models` subcommand, so a script piping
-		// `pix route models --json` got usage prose on stdout and exit 2 — the
-		// exact compatibility this alias exists to promise.
-		fmt.Fprintln(os.Stderr, "pix route is now pix models (pix models route compiles the intent map).")
-		runRouteAlias(args[1:])
-	case "evals":
-		// Catch this explicitly (also shadowing the bare-arg-is-a-dir behavior when
-		// an evals/ dir is present) so a bare `evals` gets a clear message instead
-		// of a confusing "no such directory".
-		fmt.Fprintln(os.Stderr, "pix: evals were removed. Model scores are hand-maintained in")
-		fmt.Fprintf(os.Stderr, "  %s; run `pix models route`\n", routing.ScorecardPath())
-		fmt.Fprintln(os.Stderr, "  after editing.")
-		os.Exit(2)
 	case "agent":
 		runAgent(args[1:])
-	case "man":
-		man.RunMan(args[1:])
 	case "reset":
 		runReset(args[1:])
-	case "upgrade":
-		upgrade.RunUpgrade(args[1:])
 	case "state":
 		runState(args[1:])
 	case "task":
-		launch.RunTask(args[1:])
-	case "host":
-		// The unsandboxed escape hatch (expert tier, gated off by default): execs
-		// the host-installed pi directly. See hostrun.go + docs/design/host-mode.md.
-		launch.RunHost(args[1:])
+		runTaskCmd(args[1:])
 	case "help", "-h", "--help":
 		if len(args) > 1 {
 			if args[1] == "--all" {
@@ -373,22 +332,19 @@ Workflow
   status           what is up, what is down, what is next   (also the bare command)
 
 Setup & health
-  setup            guided setup: keys, memory, pack (knowledge/integrations optional)
+  setup            guided setup: keys, memory, pack (integrations optional)
   doctor           diagnose problems and print the exact fix commands
-  upgrade          update the pix binaries (` + "`--check`" + ` just reports; run tracks the
-                   latest kit/image on its own)
   monitor [name]   live-follow a sandbox's out-of-sandbox traffic (:11437)
 
 Data
   memory           recall | remember | forget | learnings | stats
-  knowledge        init | use | ls | query | sync | remote
 
 Models & agents
   models           which models pix can use, and which are wired up
   agent            manage subagents: ls | new | edit | rm | reassess
 
 More
-  config, mcp, state, version, man     (see ` + "`pix help --all`" + `)
+  config, mcp, state, version           (see ` + "`pix help --all`" + `)
 
 Learn a command:  pix help run     ·     pix <command> -h
 `
