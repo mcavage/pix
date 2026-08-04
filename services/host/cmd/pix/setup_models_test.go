@@ -32,7 +32,6 @@ import (
 	"pix/host/hostenv"
 	"pix/host/readiness/axis"
 	"pix/host/sys/systest"
-	"pix/host/workflow/man"
 	"pix/host/workflow/onboard"
 	"pix/host/workflow/pack"
 	"pix/host/workflow/setup"
@@ -563,20 +562,9 @@ func TestParseOnboardArgs_PullModels(t *testing.T) {
 	}
 }
 
-func TestSetupUsageAndManMentionPullModels(t *testing.T) {
+func TestSetupUsageMentionsPullModels(t *testing.T) {
 	if !strings.Contains(setup.Usage, "--pull-models") {
 		t.Error("setup usage must document --pull-models")
-	}
-	b, err := man.Source(), error(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	man := string(b)
-	if !strings.Contains(man, "pull\\-models") {
-		t.Error("man page setup synopsis must mention --pull-models")
-	}
-	if strings.Contains(man, "use\\-sbx\\-keys") {
-		t.Error("man page must not still advertise the removed --use-sbx-keys flag")
 	}
 }
 

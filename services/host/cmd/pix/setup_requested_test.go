@@ -20,7 +20,6 @@ import (
 	"os"
 	"path/filepath"
 	"pix/host/readiness"
-	"pix/host/workflow/man"
 	"pix/host/workflow/onboard"
 	"pix/host/workflow/setup"
 	"strings"
@@ -139,20 +138,11 @@ func TestRequestedShortfall_OnlyPromotedAndPresentAxes(t *testing.T) {
 	}
 }
 
-// The contract sentence is user-facing copy, so it is pinned in both places a
-// user reads it.
-func TestRequestedExitContract_InHelpAndMan(t *testing.T) {
+// The contract sentence is user-facing copy, so it is pinned in the one place
+// left that documents it (the man page's mirror of this sentence was retired
+// along with `pix man`/`--man`).
+func TestRequestedExitContract_InHelp(t *testing.T) {
 	if !strings.Contains(normalizeCopy(setup.Usage), requestedExitContract) {
 		t.Errorf("`pix help setup` must state the exit contract verbatim:\n%s", requestedExitContract)
-	}
-	b, err := man.Source(), error(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The man source escapes dashes and marks up commands; unescape those two
-	// mechanical transforms before comparing the sentence.
-	man := normalizeCopy(strings.NewReplacer(`\-`, "-", `.B `, "", `.BR `, "", `"`, "", "\n", " ").Replace(string(b)))
-	if !strings.Contains(man, normalizeCopy(requestedExitContract)) {
-		t.Errorf("the man page must state the exit contract verbatim:\n%s", requestedExitContract)
 	}
 }
