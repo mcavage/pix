@@ -3,7 +3,8 @@
 # in one shot with per-segment timings and an ABSOLUTE wall-clock budget.
 #
 #   build -> go vet -> go test (NON-race) -> node --test -> tsc --noEmit
-#         -> open-core boundary -> recall transport -> rename guard (once it exists)
+#         -> open-core boundary -> recall transport -> arch-metrics budget
+#         -> rename guard (once it exists)
 #
 # WHICH BUDGET APPLIES TO WHAT (this is the whole point of the split):
 #   * THIS script is the timed one. It runs the NON-race Go suite and is
@@ -207,6 +208,17 @@ open_core() { bash scripts/check-open-core.sh; }
 # guard rather than a comment.
 recall_transport() { bash scripts/check-recall-transport.sh; }
 
+# AC-GATE-03/04: the shrink-only per-package budget ratchet (LOC, exports,
+# globals, edges, os.Exit calls — see scripts/arch-metrics). This is the CHEAP
+# half: go/parser only, no `go test`, no coverage. The full corpus + coverage +
+# LOC report is deliberately NOT here — it lives in the untimed `metrics` CI
+# job (.github/workflows/test.yml) so it can never blow this budget.
+ARCH_METRICS_BIN="$GATE_OUT_DIR/arch-metrics"
+arch_metrics() {
+	(cd scripts/arch-metrics && go build -o "$ARCH_METRICS_BIN" . && go test ./...) &&
+		"$ARCH_METRICS_BIN" -root services/host -budgets scripts/arch-metrics/budgets.json
+}
+
 run_segment "go-build" "go-build" go_build
 run_segment "go-vet" "go-vet" go_vet
 run_segment "go-test" "go-test" go_test
@@ -214,6 +226,7 @@ run_segment "node-test" "node-test" node_test
 run_segment "typecheck" "typecheck" typecheck
 run_segment "open-core" "open-core" open_core
 run_segment "recall-xport" "recall-xport" recall_transport
+run_segment "arch-metrics" "arch-metrics" arch_metrics
 
 # The rename guard lands with the W3 cutover (U-W3.04). Wiring it in
 # CONDITIONALLY means this gate ships now and picks the guard up the moment the
