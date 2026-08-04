@@ -101,6 +101,13 @@ var pkgLayer = map[string]int{
 	// model first (readiness) and the builders second (here) is why both came out
 	// at 2 inbound instead of 17.
 	"readiness/axis": layerReadiness,
+	// health is the readiness model's replacement: Probe -> Result -> Snapshot,
+	// plus the concrete probes. Same layer for the same reason — it turns L1
+	// facts into one snapshot every command renders — but it holds the probes
+	// itself rather than splitting model and builders across two packages,
+	// which is what made readiness/axis a pair nobody could reason about
+	// separately.
+	"health": layerReadiness,
 
 	// L3 — workflow. A user-facing verb's logic. Allowed to compose L1+L2;
 	// may not contain a capability.
@@ -132,6 +139,10 @@ var pkgLayer = map[string]int{
 	"workflow/gworkspace": layerWorkflow,
 	"workflow/launch":     layerWorkflow,
 	"workflow/setup":      layerWorkflow,
+	// provision is the setup loop as a workflow: check, apply, check again. It
+	// composes health (L2) and whatever applies the caller passes in, and owns
+	// no domain knowledge of its own.
+	"workflow/provision": layerWorkflow,
 
 	// L4 — the command layer.
 	"cmd/pix": layerCommand,

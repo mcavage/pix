@@ -43,6 +43,13 @@
       "edges": 1,
       "exits": 0
     },
+    "pix/host/health": {
+      "prod_loc": 809,
+      "exports": 31,
+      "globals": 19,
+      "edges": 2,
+      "exits": 0
+    },
     "pix/host/hostenv": {
       "prod_loc": 67,
       "exports": 4,
@@ -210,6 +217,13 @@
       "globals": 9,
       "edges": 10,
       "exits": 39
+    },
+    "pix/host/workflow/provision": {
+      "prod_loc": 197,
+      "exports": 7,
+      "globals": 0,
+      "edges": 1,
+      "exits": 0
     },
     "pix/host/workflow/reset": {
       "prod_loc": 795,
