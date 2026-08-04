@@ -13,11 +13,8 @@ import (
 	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/hostenv"
-	"pix/host/monitor/tui"
 	"pix/host/rpc"
 	"pix/host/service"
-	"pix/host/sys"
-	"pix/host/workflow/upgrade"
 	"pix/host/workspace"
 )
 
@@ -43,7 +40,6 @@ type Opts struct {
 	sbx        bool // --sbx: also remove pix-* sandboxes + unregister MCP
 	assumeYes  bool // --yes: don't prompt (required on a non-TTY)
 	force      bool // --force: move the data dir even if serve appears still up
-	PurgeData  bool // --purge-data: ALSO move aside harvested task artifacts
 	Help       bool // -h/--help
 }
 
@@ -57,7 +53,6 @@ type Paths struct {
 	knowledgeDir string // <dataRoot>/knowledge or dir(KNOWLEDGE_DB): the rebuildable index
 	memoryDB     string // the custom MEMORY_DB file path (set ONLY when MEMORY_DB is given); "" for the default
 	knowledgeDB  string // the custom KNOWLEDGE_DB file path (set ONLY when KNOWLEDGE_DB is given); "" for the default
-	ArtifactRoot string // workspace.TaskArtifactRoot(): harvested task docs. Touched only by reset --purge-data.
 }
 
 // backupTarget is one path the reset moves aside, with a human label. Dangerous
@@ -185,7 +180,6 @@ func ResolveResetPaths(env hostenv.Env) Paths {
 		knowledgeDir: knowledgeDir,
 		memoryDB:     memoryDB,
 		knowledgeDB:  knowledgeDB,
-		ArtifactRoot: workspace.TaskArtifactRoot(),
 	}
 }
 
@@ -244,13 +238,6 @@ func Plan(cfg *config.Config, paths Paths, opts Opts) Actions {
 		config.ServePidPath(),
 		config.ServeLazyMarkerPath(),
 		config.ServeSpawnLockPath(),
-	}
-	// --purge-data moves harvested task artifacts aside too. They
-	// live under XDG_DATA_HOME, OUTSIDE every tree reset normally touches, so they
-	// survive a plain reset by design — this is the deliberate opt-in to
-	// sweep them. Move-aside (.bak), never hard-delete, like every other data path.
-	if opts.PurgeData && paths.ArtifactRoot != "" {
-		a.Backups = append(a.Backups, backupTarget{Path: paths.ArtifactRoot, Label: "harvested task artifacts"})
 	}
 	return a
 }
@@ -746,12 +733,6 @@ func RunCore(cfg *config.Config, paths Paths, opts Opts,
 
 	a := Plan(cfg, paths, opts)
 	printResetPlan(a, rio.Out)
-	if !opts.PurgeData && paths.ArtifactRoot != "" {
-		if _, size := sys.DirSize(paths.ArtifactRoot); size > 0 {
-			fmt.Fprintf(rio.Out, "Keeping harvested task artifacts (%s) at %s — pass --purge-data to move them aside too.\n\n",
-				tui.HumanBytes(size), paths.ArtifactRoot)
-		}
-	}
 
 	if !opts.assumeYes {
 		if !rio.IsTTY {
@@ -770,7 +751,7 @@ func RunCore(cfg *config.Config, paths Paths, opts Opts,
 }
 
 // ParseArgs parses the reset flag set.
-func ParseArgs(argv []string, allowSbx, allowPurge bool) (Opts, error) {
+func ParseArgs(argv []string, allowSbx bool) (Opts, error) {
 	var o Opts
 	for _, a := range argv {
 		switch a {
@@ -788,11 +769,6 @@ func ParseArgs(argv []string, allowSbx, allowPurge bool) (Opts, error) {
 				return o, fmt.Errorf("unknown flag %q", a)
 			}
 			o.sbx = true
-		case "--purge-data":
-			if !allowPurge {
-				return o, fmt.Errorf("unknown flag %q", a)
-			}
-			o.PurgeData = true
 		default:
 			return o, fmt.Errorf("unknown flag %q", a)
 		}
@@ -800,156 +776,7 @@ func ParseArgs(argv []string, allowSbx, allowPurge bool) (Opts, error) {
 	return o, nil
 }
 
-// resolveBinPaths returns the installed launcher symlinks (~/.local/bin/pix
-// + pix-host) from the injected env's home dir.
-func resolveBinPaths(env hostenv.Env) []string {
-	home := ""
-	home = env.HomeDir()
-	bin := filepath.Join(home, ".local", "bin")
-	return []string{
-		filepath.Join(bin, "pix"),
-		filepath.Join(bin, "pix-host"),
-	}
-}
-
-// removeBinSymlinks removes the launcher bin entries, but ONLY when they are
-// symlinks (what `make install` / install.sh create). A real regular file there
-// is left untouched + reported, so we never nuke something we didn't install.
-func removeBinSymlinks(bins []string, fsys resetFS, out io.Writer) {
-	fmt.Fprintln(out, "Removing installed binaries:")
-	for _, p := range bins {
-		fi, err := fsys.lstat(p)
-		if err != nil {
-			if os.IsNotExist(err) {
-				fmt.Fprintf(out, "  · %s — not installed\n", p)
-			} else {
-				fmt.Fprintf(out, "  ✗ %s — %v\n", p, err)
-			}
-			continue
-		}
-		if fi.Mode()&os.ModeSymlink == 0 {
-			fmt.Fprintf(out, "  · %s — not a symlink (not ours), left in place\n", p)
-			continue
-		}
-		// Only remove a symlink that actually points at OUR binary — an unrelated
-		// symlink that happens to sit in a bin slot is left alone + reported.
-		target, lerr := fsys.readlink(p)
-		if lerr != nil {
-			fmt.Fprintf(out, "  ✗ %s — could not read symlink target: %v\n", p, lerr)
-			continue
-		}
-		if !isOurBinTarget(target) {
-			fmt.Fprintf(out, "  · %s -> %s — not a pix binary, left in place\n", p, target)
-			continue
-		}
-		if err := fsys.remove(p); err != nil {
-			fmt.Fprintf(out, "  ✗ %s — could not remove: %v\n", p, err)
-		} else {
-			fmt.Fprintf(out, "  ✓ removed symlink %s\n", p)
-		}
-	}
-}
-
-// isOurBinTarget reports whether a bin-slot symlink's target is one of our
-// launcher binaries. The match is on the target's BASENAME being EXACTLY
-// `pix` or `pix-host` — NOT a substring of the path. A deceptive
-// target like /opt/pix-ish-wrapper or /repo/pix/bin/other-tool merely
-// CONTAINS "pix" and must NOT be treated as ours (we'd delete an unrelated
-// binary). A real repo checkout's launcher is out/pix, whose basename is
-// exactly `pix`, so it still matches.
-func isOurBinTarget(target string) bool {
-	base := filepath.Base(target)
-	return base == "pix" || base == "pix-host"
-}
-
-// runUninstallCore runs the full reset, then removes the bin symlinks. Split for
-// testability (temp HOME, injected bins/fs/env). It returns RunCore's error
-// (notably ErrResetNeedsYes) unchanged so the CLI maps it to the same exit code.
-func runUninstallCore(cfg *config.Config, paths Paths, bins []string, opts Opts, prov upgrade.Provenance,
-	fsys resetFS, env hostenv.Env, rio cli.IO, now func() time.Time) error {
-
-	a := Plan(cfg, paths, opts)
-	printResetPlan(a, rio.Out)
-	if prov.Channel == upgrade.ChannelHomebrew {
-		fmt.Fprintln(rio.Out, "Homebrew owns the binaries and man page; pix will not remove them directly.")
-	} else {
-		fmt.Fprintln(rio.Out, "Will also remove the installed pix + pix-host bin symlinks.")
-	}
-	// Harvested task artifacts are user work product and are NOT removed by
-	// default (they live under XDG_DATA_HOME, outside the reset trees). Print where
-	// they are + how big so they stay findable; --purge-data is the deliberate
-	// opt-in that moves them aside too (added to the plan above).
-	if !opts.PurgeData && paths.ArtifactRoot != "" {
-		if _, size := sys.DirSize(paths.ArtifactRoot); size > 0 {
-			fmt.Fprintf(rio.Out, "Keeping harvested task artifacts (%s) at %s — pass --purge-data to remove them too.\n",
-				tui.HumanBytes(size), paths.ArtifactRoot)
-		}
-	}
-	fmt.Fprintln(rio.Out)
-
-	if !opts.assumeYes {
-		if !rio.IsTTY {
-			return ErrResetNeedsYes
-		}
-		ans := strings.ToLower(cli.PromptLine(rio, "Proceed? [y/N]: "))
-		if ans != "y" && ans != "yes" {
-			fmt.Fprintln(rio.Out, "Aborted — nothing changed.")
-			return nil
-		}
-	}
-
-	created, execErr := executeReset(a, fsys, env, rio.Out, now)
-	if execErr != nil {
-		// The state backup failed (or was blocked) — do NOT remove the bin symlinks.
-		// Stranding the user with no binaries after a failed backup is the worst
-		// outcome; leave the working install in place so they can retry.
-		fmt.Fprintln(rio.Out, "Reset backup failed — leaving the pix + pix-host bin symlinks in place (not uninstalling).")
-		printResetSummary(created, rio.Out)
-		return execErr
-	}
-	if prov.Channel == upgrade.ChannelHomebrew {
-		fmt.Fprintln(rio.Out, "Binaries and man page are owned by Homebrew, not pix.")
-		fmt.Fprintln(rio.Out, "state and managed services were removed first. Finish with:")
-		fmt.Fprintln(rio.Out, "  brew uninstall mcavage/tap/pix")
-		fmt.Fprintln(rio.Out, "Removing the formula first leaves launchd configured with a Cellar path that fails on its next launch.")
-		if rio.IsTTY {
-			ans := strings.ToLower(cli.PromptLine(rio, "Run brew uninstall now? [y/N]: "))
-			if ans == "y" || ans == "yes" {
-				if err := env.RunInteractive("brew", "uninstall", "mcavage/tap/pix"); err != nil {
-					return fmt.Errorf("brew uninstall failed: %w", err)
-				}
-			}
-		}
-	} else {
-		removeBinSymlinks(bins, fsys, rio.Out)
-		removeInstalledManPage(env, fsys, rio.Out)
-	}
-	printResetSummary(created, rio.Out)
-	return nil
-}
-
-// removeInstalledManPage removes the man page `make install` drops on the user
-// manpath (~/.local/share/man/man1/pix.1) — and ONLY that file. The embed
-// in the binary remains the guarantee, so this is best-effort cleanup: a missing
-// file is fine and never fails the uninstall.
-func removeInstalledManPage(env hostenv.Env, fsys resetFS, out io.Writer) {
-	home := ""
-	home = env.HomeDir()
-	p := filepath.Join(home, ".local", "share", "man", "man1", "pix.1")
-	if _, err := fsys.lstat(p); err != nil {
-		if !os.IsNotExist(err) {
-			fmt.Fprintf(out, "  ✗ %s — %v\n", p, err)
-		}
-		return
-	}
-	if err := fsys.remove(p); err != nil {
-		fmt.Fprintf(out, "  ✗ %s — could not remove: %v\n", p, err)
-		return
-	}
-	fmt.Fprintf(out, "  ✓ removed man page %s\n", p)
-}
-
-const Usage = `usage: pix reset [--keep-memory] [--purge-data] [--sbx] [--yes] [--force]
+const Usage = `usage: pix reset [--keep-memory] [--sbx] [--yes] [--force]
 
 Reset the stack to a clean slate (REVERSIBLE). Nothing is hard-deleted: state is
 moved aside to a timestamped <path>.bak-<unixts> sibling you can rename back.
@@ -960,7 +787,6 @@ captured memory + the knowledge index). Best-effort stops a running
 
 flags:
   --keep-memory   preserve ~/.local/share/pix/memory (your captured facts); reset the rest
-  --purge-data    also move aside harvested task artifacts (kept by default)
   --sbx           also remove every pix-* sandbox and unregister the
                   configured local MCP servers (provider secrets are left alone)
   --force         move the data dir even if 'pix-host serve' still appears

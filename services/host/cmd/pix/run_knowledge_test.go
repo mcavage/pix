@@ -2,6 +2,10 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -192,6 +196,57 @@ func TestWireKnowledgeScope_LazyReindexGating(t *testing.T) {
 		if len(*called) != 0 {
 			t.Errorf("daemon up + known: reindex called %v, want none", *called)
 		}
+	}
+}
+
+// TestDefaultKnowledgeRPC_UsesSharedRPCClient: run.go's DefaultKnowledgeRPC used
+// to hand-roll its own JSON-RPC/HTTP transport with a hardcoded port (ignoring
+// KNOWLEDGE_PORT). W1 U01c re-wires it onto the shared pix/host/rpc client (the
+// same one reset.go and the CLI's knowledge/memory verbs already use), so this
+// proves it (a) honors KNOWLEDGE_PORT and (b) still speaks the identical
+// health/reindex JSON-RPC contract WireKnowledgeScope depends on.
+func TestDefaultKnowledgeRPC_UsesSharedRPCClient(t *testing.T) {
+	var gotMethod string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		gotMethod, _ = req["method"].(string)
+		w.Header().Set("Content-Type", "application/json")
+		switch gotMethod {
+		case "health":
+			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "result": map[string]any{"bundles": []string{"a", "b"}}})
+		case "reindex":
+			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "result": map[string]any{}})
+		default:
+			t.Errorf("unexpected method %q", gotMethod)
+		}
+	}))
+	defer srv.Close()
+
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KNOWLEDGE_PORT", u.Port())
+
+	rpcClient := launch.DefaultKnowledgeRPC()
+	if rpcClient.Up == nil || !rpcClient.Up() {
+		t.Fatal("Up() must reach the stub knowledge daemon on the KNOWLEDGE_PORT override")
+	}
+	bundles, err := rpcClient.Health()
+	if err != nil {
+		t.Fatalf("Health: %v", err)
+	}
+	if len(bundles) != 2 || bundles[0] != "a" || bundles[1] != "b" {
+		t.Errorf("Health() = %v, want [a b]", bundles)
+	}
+	if err := rpcClient.Reindex("some/bundle"); err != nil {
+		t.Fatalf("Reindex: %v", err)
+	}
+	if gotMethod != "reindex" {
+		t.Errorf("last method = %q, want reindex", gotMethod)
 	}
 }
 

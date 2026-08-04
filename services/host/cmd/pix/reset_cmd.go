@@ -13,7 +13,7 @@ import (
 
 // runReset is the `reset` verb entry point.
 func runReset(argv []string) {
-	opts, err := reset.ParseArgs(argv, true, true)
+	opts, err := reset.ParseArgs(argv, true)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix reset: %v\n\n%s", err, reset.Usage)
 		os.Exit(2)

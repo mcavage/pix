@@ -9,10 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"pix/host/config"
 	"pix/host/monitor/tui"
 	"pix/host/workflow/launch"
-	"pix/host/workflow/reset"
 	"pix/host/workspace"
 )
 
@@ -411,26 +409,9 @@ func TestHumanBytes(t *testing.T) {
 	}
 }
 
-func TestResetPlan_PurgeDataAddsArtifacts(t *testing.T) {
-	cfg := &config.Config{}
-	paths := reset.Paths{ConfigDir: "/c", DataRoot: "/d", MemoryDir: "/d/memory", ArtifactRoot: "/data/pix/artifacts"}
-	hasArtifacts := func(a reset.Actions) bool {
-		for _, b := range a.Backups {
-			if b.Path == "/data/pix/artifacts" {
-				return true
-			}
-		}
-		return false
-	}
-	// Without --purge-data the artifacts dir is never in the plan (survives).
-	if hasArtifacts(reset.Plan(cfg, paths, reset.Opts{})) {
-		t.Error("artifacts must NOT be backed up without --purge-data")
-	}
-	// With --purge-data it is moved aside like any other data path.
-	if !hasArtifacts(reset.Plan(cfg, paths, reset.Opts{PurgeData: true})) {
-		t.Error("--purge-data must add the artifacts dir to the backup plan")
-	}
-}
+// reset's --purge-data / harvested-task-artifact coupling was retired (W1
+// U01c: reset no longer touches workspace.TaskArtifactRoot at all — harvested
+// task artifacts are exclusively a `task` concern now).
 
 // (writeFile + exists are shared test helpers defined in reset_test.go)
 
