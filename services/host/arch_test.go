@@ -79,6 +79,13 @@ var pkgLayer = map[string]int{
 	"secret":      layerCapability,
 	"mcp":         layerCapability,
 
+	// supervise sits ABOVE the capabilities on purpose: it is the process
+	// lifecycle that RUNS one (plugin), not a domain of its own. Filing it at L1
+	// would make its plugin import a sideways call; filing it at L2 states the
+	// truth — it composes the plugin capability into supervised units, and only
+	// the daemon entry point (package main) consumes it.
+	"supervise": layerReadiness,
+
 	// L2 — the shared model of "is this working".
 	"readiness": layerReadiness,
 	// readiness/axis holds the per-domain BUILDERS: given probes, produce the

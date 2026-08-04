@@ -22,7 +22,7 @@ type MemoryStore interface {
 	Synthesize(SynthesizeReq) (SynthesizeResp, error)
 	Promotable(PromotableReq) (PromotableResp, error)
 	Observe(ObserveReq) (ObserveResp, error)
-	Stats() (Stats, error)
+	Stats(StatsReq) (Stats, error)
 	Health() (Health, error)
 }
 
@@ -67,6 +67,10 @@ type Hit struct {
 	Kind       string
 	Durability string
 	Project    string
+	// CreatedAt is the row's RFC3339 timestamp. The JSON-RPC surface has always
+	// returned it (the recall extension renders it), so the typed surface must
+	// carry it too — memory is always plugin-backed now.
+	CreatedAt string
 }
 
 // RecallResp wraps the hit list ({"hits": [...]}).
@@ -124,6 +128,13 @@ type ObserveResp struct {
 	Reason   string
 }
 
+// StatsReq scopes stats() to a memory profile, exactly like the JSON-RPC
+// `stats` method's `profile` param the recall extension sends. Empty = the
+// shared default bucket.
+type StatsReq struct {
+	Profile string
+}
+
 // Stats mirrors stats().
 type Stats struct {
 	Active     int
@@ -140,6 +151,8 @@ type Health struct {
 	Vector       bool
 	Capture      bool
 	WatcherModel string
+	// CaptureReason explains a false Capture (the JSON-RPC `captureReason`).
+	CaptureReason string
 }
 
 // --- KnowledgeStore ----------------------------------------------------------

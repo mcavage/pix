@@ -51,9 +51,9 @@ func TestExternalMcpOverrideEndToEnd(t *testing.T) {
 		t.Fatalf("launch external mcp plugin: %v", err)
 	}
 
-	srv, ok := h.get().(plugin.McpServer)
+	srv, ok := h.Get().(plugin.McpServer)
 	if !ok || srv == nil {
-		t.Fatalf("dispensed impl is not an McpServer: %T", h.get())
+		t.Fatalf("dispensed impl is not an McpServer: %T", h.Get())
 	}
 
 	// Wrap it exactly as mcpServerFor does for an override, and drive the bridge

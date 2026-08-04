@@ -9,7 +9,7 @@
 #      against the ledger + scripts/legal/notices-policy.json — an
 #      undeclared dependency, or a disallowed license class, fails closed.
 #   3. required attributions are present in the generated text: MPL-2.0 for
-#      go-plugin/yamux, the Suture "planned" entry, and the patched pi-tui.
+#      go-plugin/yamux, Suture, and the patched pi-tui.
 #   4. inclusion: the Dockerfile COPYs THIRD_PARTY_NOTICES.md into the image,
 #      and the release workflow bundles it into the Homebrew darwin tarball.
 set -uo pipefail
@@ -76,8 +76,14 @@ require_text 'sharkdp/fd' "fd (baked tool) attribution"
 require_text 'go\.dev/dl' "Go toolchain (baked tool) attribution"
 require_text 'hashicorp/go-plugin.*MPL-2\.0|MPL-2\.0.*go-plugin' "go-plugin MPL-2.0"
 require_text 'hashicorp/yamux.*MPL-2\.0|MPL-2\.0.*yamux' "yamux MPL-2.0"
-require_text 'thejerf/suture' "Suture planned entry"
-require_text 'planned' "planned-dependency marker"
+require_text 'thejerf/suture' "Suture attribution"
+# The planned-dependency marker is only required while the ledger actually
+# carries a planned entry (Suture was the last one; it is live as of U07).
+if [ "$(node -e 'process.stdout.write(String((require("./scripts/legal/dependencies.json").goModulesPlanned||[]).length))')" != "0" ]; then
+	require_text 'planned' "planned-dependency marker"
+else
+	ok "no planned dependencies in the ledger (nothing to disclose)"
+fi
 require_text '@earendil-works/pi-tui' "patched pi-tui attribution"
 require_text 'PATCH' "patched-component marker"
 

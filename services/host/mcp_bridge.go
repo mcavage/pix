@@ -136,7 +136,7 @@ func mcpServerFor(name string) (plugin.McpServer, func(), error) {
 type pluginMcpServer struct{ h *pluginHolder }
 
 func (p *pluginMcpServer) srv() (plugin.McpServer, error) {
-	s, _ := p.h.get().(plugin.McpServer)
+	s, _ := p.h.Get().(plugin.McpServer)
 	if s == nil {
 		return nil, errors.New("mcp plugin unavailable")
 	}

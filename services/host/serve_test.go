@@ -271,7 +271,7 @@ func (stubStore) Promotable(plugin.PromotableReq) (plugin.PromotableResp, error)
 func (stubStore) Observe(plugin.ObserveReq) (plugin.ObserveResp, error) {
 	return plugin.ObserveResp{Accepted: true}, nil
 }
-func (stubStore) Stats() (plugin.Stats, error) {
+func (stubStore) Stats(plugin.StatsReq) (plugin.Stats, error) {
 	return plugin.Stats{Active: 3, Durable: 2, Perishable: 1}, nil
 }
 func (stubStore) Health() (plugin.Health, error) {
@@ -295,7 +295,7 @@ func rpcCall(t *testing.T, srv *httptest.Server, method string) map[string]any {
 
 func TestMemoryProxyMuxContract(t *testing.T) {
 	h := &pluginHolder{}
-	h.set(stubStore{}, nil)
+	h.Set(stubStore{}, nil)
 	srv := httptest.NewServer(memoryProxyMux(h))
 	defer srv.Close()
 
@@ -347,7 +347,7 @@ func (stubBroker) Describe() (plugin.BrokerInfo, error) {
 
 func TestBrokerProxyMuxAuth(t *testing.T) {
 	h := &pluginHolder{}
-	h.set(stubBroker{}, nil)
+	h.Set(stubBroker{}, nil)
 	srv := httptest.NewServer(brokerProxyMux(h, "the-secret"))
 	defer srv.Close()
 

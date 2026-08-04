@@ -2,10 +2,10 @@
   "schema": 1,
   "packages": {
     "pix/host": {
-      "prod_loc": 7640,
+      "prod_loc": 7598,
       "exports": 0,
       "globals": 68,
-      "edges": 6,
+      "edges": 7,
       "exits": 29
     },
     "pix/host/cli": {
@@ -16,11 +16,11 @@
       "exits": 4
     },
     "pix/host/cmd/pix": {
-      "prod_loc": 3503,
+      "prod_loc": 3342,
       "exports": 19,
       "globals": 15,
-      "edges": 29,
-      "exits": 80
+      "edges": 24,
+      "exits": 58
     },
     "pix/host/cmd/pix/corpus": {
       "prod_loc": 573,
@@ -128,8 +128,8 @@
       "exits": 0
     },
     "pix/host/plugin": {
-      "prod_loc": 706,
-      "exports": 41,
+      "prod_loc": 722,
+      "exports": 42,
       "globals": 11,
       "edges": 0,
       "exits": 0
@@ -180,6 +180,13 @@
       "prod_loc": 1128,
       "exports": 26,
       "globals": 16,
+      "edges": 0,
+      "exits": 0
+    },
+    "pix/host/supervise": {
+      "prod_loc": 1076,
+      "exports": 37,
+      "globals": 21,
       "edges": 0,
       "exits": 0
     },

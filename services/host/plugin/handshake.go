@@ -23,7 +23,10 @@ import goplugin "github.com/hashicorp/go-plugin"
 // ProtocolVersion gates host <-> plugin compatibility. Bump it on ANY breaking
 // change to an interface below; go-plugin then refuses a skewed plugin at launch
 // with a clear error instead of failing mysteriously at call time.
-const ProtocolVersion = 1
+// v2 (U07): MemoryStore.Stats takes a StatsReq (profile scoping), Hit carries
+// CreatedAt and Health carries CaptureReason — the fields the :11435 JSON-RPC
+// surface has always returned, now that memory ALWAYS runs as a plugin.
+const ProtocolVersion = 2
 
 // Handshake is the single shared handshake for every pix plugin kind.
 //

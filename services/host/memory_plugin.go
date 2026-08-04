@@ -75,6 +75,7 @@ func (a *memoryStoreAdapter) Recall(req plugin.RecallReq) (plugin.RecallResp, er
 			project = h.project.String
 		}
 		out = append(out, plugin.Hit{
+			CreatedAt:  h.createdAt,
 			ID:         h.id,
 			Content:    h.content,
 			Score:      h.score,
@@ -123,24 +124,30 @@ func (a *memoryStoreAdapter) Observe(req plugin.ObserveReq) (plugin.ObserveResp,
 	if strings.TrimSpace(user) == "" {
 		return plugin.ObserveResp{Accepted: false}, nil
 	}
-	if watcherUnavailable.Load() {
-		return plugin.ObserveResp{
-			Accepted: false,
-			Reason:   "watcher model unavailable — run `ollama pull " + memWatcherModel() + "` (or set MEMORY_WATCHER_MODEL); recall still works",
-		}, nil
+	// Mirror memoryMux()'s observe branch exactly — this IS the live path now:
+	// re-probe (so capture recovers after an `ollama pull` without a restart)
+	// and apply the same bounded-concurrency backpressure.
+	if !watcherCaptureAvailable() {
+		reason := getWatcherReason()
+		if reason == "" {
+			reason = "watcher model unavailable, run `ollama pull " + memWatcherModel() + "` (or set MEMORY_WATCHER_MODEL)"
+		}
+		return plugin.ObserveResp{Accepted: false, Reason: reason + "; recall still works"}, nil
 	}
-	go memCapture(a.store, user, req.Project, req.HasProject, req.Profile)
-	return plugin.ObserveResp{Accepted: true}, nil
+	select {
+	case memCaptureSem <- struct{}{}:
+		go memCapture(a.store, user, req.Project, req.HasProject, req.Profile)
+		return plugin.ObserveResp{Accepted: true}, nil
+	default:
+		return plugin.ObserveResp{Accepted: false, Reason: "capture busy (too many in flight); retry shortly, recall still works"}, nil
+	}
 }
 
-// Stats reports the default bucket's counts. The typed plugin surface takes no
-// profile arg (its interface predates profile-scoping), so it reports the shared
-// default view; for a deployment without profiles that is every row, unchanged.
-// Documented limitation: builtin (in-process) stats IS profile-scoped, but
-// plugin-backed stats is not (the interface is left unchanged to avoid breaking
-// the external plugin contract).
-func (a *memoryStoreAdapter) Stats() (plugin.Stats, error) {
-	s := a.store.stats("")
+// Stats reports the requested profile's counts (plugin protocol v2), so the
+// plugin-backed :11435 answers `stats {profile}` exactly like the in-process
+// path did.
+func (a *memoryStoreAdapter) Stats(req plugin.StatsReq) (plugin.Stats, error) {
+	s := a.store.stats(req.Profile)
 	get := func(k string) int { n, _ := s[k].(int); return n }
 	return plugin.Stats{
 		Active:     get("active"),
@@ -152,13 +159,19 @@ func (a *memoryStoreAdapter) Stats() (plugin.Stats, error) {
 	}, nil
 }
 
-// Health mirrors the health method in memoryMux().
+// Health mirrors the health method in memoryMux(), re-probe and reason included.
 func (a *memoryStoreAdapter) Health() (plugin.Health, error) {
+	capture := watcherCaptureAvailable()
+	reason := ""
+	if !capture {
+		reason = getWatcherReason()
+	}
 	return plugin.Health{
-		OK:           true,
-		Vector:       a.hasVector,
-		Capture:      !watcherUnavailable.Load(),
-		WatcherModel: memWatcherModel(),
+		OK:            true,
+		Vector:        a.hasVector,
+		Capture:       capture,
+		WatcherModel:  memWatcherModel(),
+		CaptureReason: reason,
 	}, nil
 }
 

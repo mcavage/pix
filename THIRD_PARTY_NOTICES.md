@@ -67,6 +67,7 @@ from the source of truth.
 | github.com/oklog/run | v1.1.0 | Apache-2.0 |
 | github.com/remyoudompheng/bigfft | v0.0.0-20230129092748-24d4a6f8daec | BSD-3-Clause |
 | github.com/rivo/uniseg | v0.4.7 | MIT |
+| github.com/thejerf/suture/v4 | v4.0.6 | MIT |
 | github.com/xo/terminfo | v0.0.0-20220910002029-abceb7e1c41e | MIT |
 | github.com/yuin/goldmark | v1.7.13 | MIT |
 | github.com/yuin/goldmark-emoji | v1.0.6 | MIT |
@@ -87,12 +88,6 @@ from the source of truth.
 
 - **github.com/hashicorp/go-plugin@v1.8.0** — MPL-2.0. File-level weak copyleft. Used as-is/unmodified via Go module import; no source files of go-plugin itself are modified. Notice + license text reproduced below satisfies MPL-2.0 s3.3 (attribution). See docs/legal/FINDINGS.md for the one open item (counsel sign-off, not blocking on evidence).
 - **github.com/hashicorp/yamux@v0.1.2** — MPL-2.0. Same MPL-2.0 posture as go-plugin (yamux is go-plugin's multiplexed-stream transport); unmodified import.
-
-## Planned Go modules (not yet vendored)
-
-These are named here ahead of adoption so the license posture is on record before the dependency lands, not after.
-
-- **github.com/thejerf/suture** — status: planned. License: MIT (https://raw.githubusercontent.com/thejerf/suture/master/LICENSE (fetched 2026; copyright Barracuda Networks, Inc., standard MIT text)). Re-verify the LICENSE file at the exact version actually vendored when it lands in go.sum — this entry is a planning placeholder, not a build-time-verified fact. scripts/check-third-party-notices.sh does NOT fail the gate on this entry; it only fails on an UNDECLARED live dependency.
 
 ## npm packages baked into the image (Dockerfile `npm install -g` / `pi install`)
 
