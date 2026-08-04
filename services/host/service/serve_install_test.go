@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -95,24 +94,6 @@ func TestRenderPlist(t *testing.T) {
 	}
 	if strings.Contains(got, "Library/Logs") {
 		t.Errorf("plist still references ~/Library/Logs:\n%s", got)
-	}
-}
-
-func TestRenderUnit(t *testing.T) {
-	logPath := config.ServeLogPath()
-	got, err := renderUnit(unitData{HostBin: "/usr/local/bin/pix-host", LogPath: logPath})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(got, "ExecStart=\"/usr/local/bin/pix-host\" serve") {
-		t.Errorf("unit missing ExecStart:\n%s", got)
-	}
-	if !strings.Contains(got, "Restart=always") || !strings.Contains(got, "WantedBy=default.target") {
-		t.Errorf("unit missing restart/install directives:\n%s", got)
-	}
-	// Logging goes to the SAME unified file, not journald.
-	if !strings.Contains(got, "StandardOutput=append:"+logPath) || !strings.Contains(got, "StandardError=append:"+logPath) {
-		t.Errorf("unit missing StandardOutput/StandardError=append:%s:\n%s", logPath, got)
 	}
 }
 
@@ -208,74 +189,6 @@ func TestLaunchdActiveAndRestart(t *testing.T) {
 	}
 }
 
-// TestSystemdInstall: unit written and systemctl sequence issued.
-func TestSystemdInstall(t *testing.T) {
-	r := &recRunner{}
-	f := newRecFS()
-	var out bytes.Buffer
-	if err := systemdInstall(r.run, f.fs(), "/home/u", "/usr/bin/pix-host", nil, &out); err != nil {
-		t.Fatal(err)
-	}
-	unitPath := filepath.Join("/home/u", ".config", "systemd", "user", "pix-serve.service")
-	if _, ok := f.written[unitPath]; !ok {
-		t.Fatalf("unit not written to %s", unitPath)
-	}
-	joined := strings.Join(r.calls, "\n")
-	for _, want := range []string{
-		"systemctl --user --launcher.Version",
-		"systemctl --user daemon-reload",
-		"systemctl --user enable --now pix-serve.service",
-	} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("missing %q in %v", want, r.calls)
-		}
-	}
-	if !strings.Contains(out.String(), "logs: "+config.ServeLogPath()) {
-		t.Errorf("install message must point at the unified serve log: %q", out.String())
-	}
-}
-
-// Non-systemd distro degrades to the explicit message, writing nothing.
-func TestSystemdInstallNoSystemd(t *testing.T) {
-	r := &recRunner{fail: map[string]error{"systemctl": fmt.Errorf("exec: not found")}}
-	f := newRecFS()
-	err := systemdInstall(r.run, f.fs(), "/home/u", "/usr/bin/pix-host", nil, &bytes.Buffer{})
-	if err != errNoSystemd {
-		t.Fatalf("err = %v, want errNoSystemd", err)
-	}
-	if len(f.written) != 0 {
-		t.Errorf("unit written despite missing systemd: %v", f.written)
-	}
-}
-
-func TestSystemdUninstall(t *testing.T) {
-	r := &recRunner{}
-	f := newRecFS()
-	var out bytes.Buffer
-	if err := systemdUninstall(r.run, f.fs(), "/home/u", &out); err != nil {
-		t.Fatal(err)
-	}
-	joined := strings.Join(r.calls, "\n")
-	if !strings.Contains(joined, "systemctl --user disable --now pix-serve.service") ||
-		!strings.Contains(joined, "systemctl --user daemon-reload") {
-		t.Errorf("uninstall argv = %v", r.calls)
-	}
-	if len(f.removed) != 1 {
-		t.Errorf("removed = %v", f.removed)
-	}
-}
-
-func TestSystemdActive(t *testing.T) {
-	r := &recRunner{out: map[string]string{"systemctl --user is-active": "active\n"}}
-	if !systemdActive(r.run) {
-		t.Error("active output should mean active")
-	}
-	r2 := &recRunner{out: map[string]string{"systemctl --user is-active": "inactive\n"}}
-	if systemdActive(r2.run) {
-		t.Error("inactive output should mean inactive")
-	}
-}
-
 // --- H7: template injection --------------------------------------------------
 
 // A hostile HostBin/Home containing plist structure must be XML-escaped, not
@@ -309,28 +222,6 @@ func TestRenderPlistRejectsControlChars(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("newline in HostBin accepted")
-	}
-}
-
-// A HostBin with a space (and a quote) must stay ONE systemd argv element:
-// quoted ExecStart, embedded quotes escaped.
-func TestRenderUnitQuotesHostileExecStart(t *testing.T) {
-	got, err := renderUnit(unitData{HostBin: `/Users/My Name/bin/pi"stack-host`})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := `ExecStart="/Users/My Name/bin/pi\"stack-host" serve`
-	if !strings.Contains(got, want) {
-		t.Errorf("unit ExecStart not safely quoted, want %q in:\n%s", want, got)
-	}
-}
-
-func TestRenderUnitRejectsControlChars(t *testing.T) {
-	if _, err := renderUnit(unitData{HostBin: "/bin/x\nExecStartPre=/bin/evil"}); err == nil {
-		t.Fatal("newline in HostBin accepted (systemd directive injection)")
-	}
-	if _, err := renderUnit(unitData{HostBin: "/bin/x", Env: []envKV{{Key: "MEMORY_DB", Value: "a\nEnvironment=EVIL=1"}}}); err == nil {
-		t.Fatal("newline in env value accepted")
 	}
 }
 
@@ -383,29 +274,6 @@ func TestRenderPlistCarriesCapturedEnv(t *testing.T) {
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("plist missing env line %q:\n%s", want, got)
-		}
-	}
-}
-
-// …and in the rendered systemd unit.
-func TestRenderUnitCarriesCapturedEnv(t *testing.T) {
-	got, err := renderUnit(unitData{
-		HostBin: "/usr/bin/pix-host",
-		LogPath: "/l/serve.log",
-		Env: []envKV{
-			{Key: "PIX_CONFIG", Value: "/custom/config.toml"},
-			{Key: "KNOWLEDGE_PORT", Value: "21436"},
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{
-		`Environment="PIX_CONFIG=/custom/config.toml"`,
-		`Environment="KNOWLEDGE_PORT=21436"`,
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("unit missing %q:\n%s", want, got)
 		}
 	}
 }
@@ -550,29 +418,7 @@ func TestVerifyManagedInstallHealthConfigLoadSuccess(t *testing.T) {
 	}
 }
 
-// --- round 2 (H8): systemd `%`/`$` expansion + plist XML-comment hazard ------
-
-func TestSystemdQuoteEscapesPercentAndDollar(t *testing.T) {
-	got := systemdQuote("/home/user%id/$HOME/pix-host")
-	want := `"/home/user%%id/$$HOME/pix-host"`
-	if got != want {
-		t.Errorf("systemdQuote = %q, want %q", got, want)
-	}
-}
-
-// A literal `%` in the rendered ExecStart must render `%%` — systemd expands
-// unescaped `%` as a unit specifier, so a real path like /home/user%id would
-// otherwise be silently mangled at daemon-reload time.
-func TestRenderUnitEscapesPercentInHostBin(t *testing.T) {
-	got, err := renderUnit(unitData{HostBin: "/home/user%id/pix-host"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := `ExecStart="/home/user%%id/pix-host" serve`
-	if !strings.Contains(got, want) {
-		t.Errorf("unit ExecStart missing escaped %%, want %q in:\n%s", want, got)
-	}
-}
+// --- round 2 (H8): plist XML-comment hazard ----------------------------------
 
 // A home directory containing `--` must still produce a VALID plist: XML
 // text-escaping does not make `--` legal inside a `<!-- -->` comment, so the

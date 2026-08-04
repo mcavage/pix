@@ -12,10 +12,11 @@
 // only — see arch_test.go's pkgLayer map: "lease": layerFoundation), folded
 // into the pix/host module: zero non-stdlib dependencies, no separate
 // go.mod. Every file here carries //go:build unix — the product compiles on
-// a macOS host and a Linux dev/CI box, and Windows support is intentionally
-// dropped, so there is no non-unix degrade variant to maintain (contrast
-// services/host/lock.go + lock_windows.go, which DOES need one because that
-// primitive is reachable on every platform pix-host ships).
+// a macOS host and a Linux dev/CI box (the latter needed for Linux sandbox
+// dev builds, not as a shipped host platform), and Windows support is
+// dropped entirely — pix's host lifecycle is macOS-only, so there is no
+// Windows degrade variant left anywhere in the module (including
+// services/host/lock.go) to contrast against any more.
 //
 // # What is NOT here (by design — no behavior wiring yet)
 //

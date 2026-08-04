@@ -1,13 +1,13 @@
 // serve_install.go implements the MANAGED LOGIN SERVICE (docs/design/
 // serve-lifecycle.md §2): `pix serve install` / `serve uninstall` register
-// `pix-host serve` as a launchd LaunchAgent (macOS) or a systemd --user
-// unit (Linux), so the services start at login and auto-restart — the Docker
-// Desktop model, opt-in beside the default lazy auto-start.
+// `pix-host serve` as a launchd LaunchAgent — pix's host lifecycle is macOS
+// only, the Docker Desktop model, opt-in beside the default lazy auto-start.
 //
-// This file is CROSS-PLATFORM: the rendering, install/uninstall step sequences,
-// and message formatting are all pure functions over an injected command runner
-// + fs ops, unit-tested on any OS. Only the tiny real-exec dispatch lives in
-// the build-tagged serve_install_{darwin,linux,other}.go files.
+// This file is testable on any OS (the rendering, install/uninstall step
+// sequences, and message formatting are pure functions over an injected
+// command runner + fs ops), but only actually WIRED on darwin. The tiny
+// real-exec dispatch lives in serve_install_darwin.go; every other GOOS gets
+// the single ErrUnsupportedHost stub in serve_install_other.go.
 
 package service
 
@@ -20,7 +20,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"text/template"
 	"time"
 
@@ -32,19 +31,13 @@ import (
 // serveLaunchdLabel is the LaunchAgent label (and plist basename).
 const serveLaunchdLabel = "com.pix.serve"
 
-// serveSystemdUnit is the systemd --user unit name.
-const serveSystemdUnit = "pix-serve.service"
-
-// The embedded templates are the SINGLE SOURCE OF TRUTH for the generated
-// unit files (the old scripts/macos CHANGEME plist is superseded — go:embed
+// The embedded template is the SINGLE SOURCE OF TRUTH for the generated
+// plist (the old scripts/macos CHANGEME plist is superseded — go:embed
 // cannot reach outside the module, so the template lives here and the script
 // now delegates to `pix serve install`).
 //
 //go:embed templates/com.pix.serve.plist.tmpl
 var plistTemplate string
-
-//go:embed templates/pix-serve.service.tmpl
-var unitTemplate string
 
 // envKV is one install-time environment override rendered into the generated
 // unit (H6). Order is preserved so the rendered files are deterministic.
@@ -90,21 +83,14 @@ func capturedServeEnv(getenv func(string) string) []envKV {
 type plistData struct {
 	HostBin string  // absolute, symlink-resolved path to pix-host
 	Home    string  // os.UserHomeDir()
-	LogPath string  // config.ServeLogPath() — StandardOutPath AND StandardErrorPath both point here (one unified serve log across lazy + managed launchd/systemd)
+	LogPath string  // config.ServeLogPath() — StandardOutPath AND StandardErrorPath both point here (one unified serve log across lazy + managed launchd)
 	Label   string  // com.pix.serve
 	Env     []envKV // install-time env overrides (H6)
 }
 
-// unitData fills the systemd template.
-type unitData struct {
-	HostBin string
-	LogPath string  // config.ServeLogPath() — StandardOutput/StandardError append: target (same unified serve log)
-	Env     []envKV // install-time env overrides (H6)
-}
-
-// validateUnitValue rejects values no generated unit can carry safely:
-// newlines/control chars would inject fresh plist elements or systemd
-// directives no quoting can contain (H7). Loud error beats silent mangling.
+// validateUnitValue rejects values no generated plist can carry safely:
+// newlines/control chars would inject fresh plist elements no quoting can
+// contain (H7). Loud error beats silent mangling.
 func validateUnitValue(what, v string) error {
 	for _, r := range v {
 		if r == '\n' || r == '\r' || (r < 0x20 && r != '\t') {
@@ -150,50 +136,6 @@ func renderPlist(d plistData) (string, error) {
 	return renderTemplate("plist", plistTemplate, esc)
 }
 
-// systemdQuote renders a value as one systemd-quoted string: double-quoted with
-// backslash and double-quote escaped, so an ExecStart binary path containing
-// spaces stays ONE argv element instead of splitting (H7). Round 2 (H8) also
-// escapes the two characters systemd itself expands AFTER unit parsing: `%`
-// (specifier expansion — a literal path like /home/user%id must render `%%`)
-// and `$` (variable expansion in ExecStart=/Environment=, so a literal `$` must
-// render `$$` or it could be read as the start of a reference). Neither
-// introduces a character the OTHER escape steps below would need to re-quote.
-func systemdQuote(v string) string {
-	v = strings.ReplaceAll(v, "%", "%%")
-	v = strings.ReplaceAll(v, "$", "$$")
-	v = strings.ReplaceAll(v, `\`, `\\`)
-	v = strings.ReplaceAll(v, `"`, `\"`)
-	return `"` + v + `"`
-}
-
-// systemdEscapePercent escapes `%` for a value used OUTSIDE ExecStart/
-// Environment (StandardOutput=append:<path> is not quoted/word-split the way
-// ExecStart is, so systemdQuote's quote-wrapping does not apply — but `%` is
-// still expanded as a unit specifier wherever it appears in a unit value).
-func systemdEscapePercent(v string) string {
-	return strings.ReplaceAll(v, "%", "%%")
-}
-
-// renderUnit renders the systemd unit from the embedded template, validating
-// values and quoting the ExecStart path + Environment entries (H7).
-func renderUnit(d unitData) (string, error) {
-	if err := validateUnitValue("host binary path", d.HostBin); err != nil {
-		return "", err
-	}
-	if err := validateUnitValue("log path", d.LogPath); err != nil {
-		return "", err
-	}
-	esc := unitData{HostBin: systemdQuote(d.HostBin), LogPath: systemdEscapePercent(d.LogPath)}
-	for _, kv := range d.Env {
-		if err := validateUnitValue("env "+kv.Key, kv.Value); err != nil {
-			return "", err
-		}
-		// One quoted KEY=value token per systemd Environment= assignment.
-		esc.Env = append(esc.Env, envKV{Key: kv.Key, Value: systemdQuote(kv.Key + "=" + kv.Value)})
-	}
-	return renderTemplate("unit", unitTemplate, esc)
-}
-
 func renderTemplate(name, tmpl string, data any) (string, error) {
 	t, err := template.New(name).Parse(tmpl)
 	if err != nil {
@@ -224,8 +166,8 @@ func realInstallFS() installFS {
 // --- launchd (macOS) ---------------------------------------------------------
 
 // launchdPaths derives the launchd plist path from $HOME. The serve log
-// itself is config.ServeLogPath() — unified across lazy auto-start and both
-// managed forms (launchd, systemd) — so it no longer derives from $HOME here.
+// itself is config.ServeLogPath() — unified across lazy auto-start and the
+// managed launchd form — so it no longer derives from $HOME here.
 func launchdPaths(home string) string {
 	return filepath.Join(home, "Library", "LaunchAgents", serveLaunchdLabel+".plist")
 }
@@ -309,84 +251,9 @@ func launchdStop(run cmdRunner, uid int, out io.Writer) error {
 	return nil
 }
 
-// --- systemd --user (Linux) --------------------------------------------------
-
-// systemdUnitPath is ~/.config/systemd/user/pix-serve.service.
-func systemdUnitPath(home string) string {
-	return filepath.Join(home, ".config", "systemd", "user", serveSystemdUnit)
-}
-
-// errNoSystemd is the clean degrade on non-systemd distros.
-var errNoSystemd = fmt.Errorf("no systemd --user found; use lazy auto-start (default) or run `pix serve` yourself")
-
-// systemdInstall writes the unit and enables it now.
-func systemdInstall(run cmdRunner, fs installFS, home, hostBin string, env []envKV, out io.Writer) error {
-	if _, err := run("systemctl", "--user", "--launcher.Version"); err != nil {
-		return errNoSystemd
-	}
-	logPath := config.ServeLogPath()
-	rendered, err := renderUnit(unitData{HostBin: hostBin, LogPath: logPath, Env: env})
-	if err != nil {
-		return err
-	}
-	unitPath := systemdUnitPath(home)
-	if err := fs.mkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
-		return err
-	}
-	if err := fs.mkdirAll(filepath.Dir(logPath), 0o700); err != nil {
-		return err
-	}
-	if err := fs.writeFile(unitPath, []byte(rendered), 0o644); err != nil {
-		return err
-	}
-	if _, err := run("systemctl", "--user", "daemon-reload"); err != nil {
-		return err
-	}
-	if _, err := run("systemctl", "--user", "enable", "--now", serveSystemdUnit); err != nil {
-		return err
-	}
-	fmt.Fprintf(out, "installed managed service %s (starts at login, auto-restarts). logs: %s\n", serveSystemdUnit, logPath)
-	return nil
-}
-
-// systemdUninstall disables the unit and removes it.
-func systemdUninstall(run cmdRunner, fs installFS, home string, out io.Writer) error {
-	_, _ = run("systemctl", "--user", "disable", "--now", serveSystemdUnit)
-	if err := fs.remove(systemdUnitPath(home)); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	_, _ = run("systemctl", "--user", "daemon-reload")
-	fmt.Fprintln(out, "removed managed service. run `pix serve install` to re-enable, or `pix serve` for foreground.")
-	return nil
-}
-
-// systemdActive reports whether the unit is active.
-// systemdStop stops the running unit WITHOUT disabling it (unlike
-// systemdUninstall), so it stays enabled and returns at next login; a bare
-// SIGTERM to the pid is otherwise undone by Restart=. Re-run now with
-// `systemctl --user start` or `pix serve install`.
-func systemdStop(run cmdRunner, out io.Writer) error {
-	if _, err := run("systemctl", "--user", "stop", serveSystemdUnit); err != nil {
-		return err
-	}
-	fmt.Fprintf(out, "stopped the managed pix service (%s). It stays installed and returns at next login; start it now with `pix serve install`, or remove it with `pix serve uninstall`.\n", serveSystemdUnit)
-	return nil
-}
-
-func systemdActive(run cmdRunner) bool {
-	got, err := run("systemctl", "--user", "is-active", serveSystemdUnit)
-	return err == nil && strings.TrimSpace(got) == "active"
-}
-
-// systemdRestart restarts the unit.
-func systemdRestart(run cmdRunner) error {
-	_, err := run("systemctl", "--user", "restart", serveSystemdUnit)
-	return err
-}
-
 // --- shared entry points ------------------------------------------------------
 
-// resolvedHostBinary is launcher.FindHostBinary + EvalSymlinks: launchd/systemd need the
+// resolvedHostBinary is launcher.FindHostBinary + EvalSymlinks: launchd needs the
 // REAL absolute path (a ~/.local/bin symlink into a repo's out/ dir would break
 // when the repo moves, and launchd has a minimal PATH).
 func resolvedHostBinary() (string, error) {

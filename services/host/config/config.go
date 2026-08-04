@@ -422,12 +422,11 @@ func ServeLazyMarkerPath() string {
 }
 
 // StateDir resolves the per-user state dir: $XDG_STATE_HOME/pix, else
-// ~/.local/state/pix. Used for logs (NOT config): serve.log lives here on
-// BOTH macOS and Linux, and every launch mode writes to it — the lazy
-// auto-start, the managed launchd LaunchAgent (StandardOutPath/
-// StandardErrorPath), and the managed systemd --user unit (StandardOutput=/
-// StandardError=append:) all point at the SAME file (ServeLogPath()), so
-// there is exactly one place to look regardless of how serve was started.
+// ~/.local/state/pix. Used for logs (NOT config): serve.log lives here, and
+// every launch mode writes to it — the lazy auto-start and the managed
+// launchd LaunchAgent (StandardOutPath/StandardErrorPath) both point at the
+// SAME file (ServeLogPath()), so there is exactly one place to look
+// regardless of how serve was started.
 // Only a FOREGROUND `pix serve` is different — that one is interactive
 // and goes to its own terminal, not this file.
 func StateDir() (string, error) {

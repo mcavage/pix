@@ -5,10 +5,18 @@ Homebrew, no Gatekeeper access. Every macOS-specific claim below is reasoning
 from source, not observation - the prototype steps exist to kill that risk
 before the real stories are built on top of it.
 
+> **W2 U03D update (macOS-only host):** pix's host is now macOS-only end to
+> end — the "Linux build stays in CI" line below is SUPERSEDED. The
+> release-binaries cross-compile matrix and `install.sh` no longer target
+> `linux/{amd64,arm64}`; only `darwin/{amd64,arm64}` ship. The Linux sandbox
+> IMAGE build (the Docker container `pi` runs inside) is unaffected — that
+> stays cross-platform and is a completely different artifact from these two
+> host binaries.
+
 Decisions below are CLOSED. Do not relitigate them.
 
-- macOS only. Linux build stays in CI (it's free) but the formula, docs, and
-  new tests are darwin-only.
+- macOS only. The formula, docs, and new tests are darwin-only, and (per the
+  update above) the release binaries themselves are darwin-only now too.
 - New repo `mcavage/homebrew-tap` → `brew install mcavage/tap/pix`.
 - A FORMULA installing prebuilt binaries from the GitHub release. Not
   build-from-source, not a cask.

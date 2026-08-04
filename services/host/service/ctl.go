@@ -49,11 +49,11 @@ func DefaultCtl() serveCtl {
 		pidPath:    config.ServePidPath,
 		readPid:    func(path string) (string, error) { b, err := os.ReadFile(path); return string(b), err },
 		removePid:  os.Remove,
-		kill:       killProcess, // platform shim (serve_ctl_unix/windows.go)
+		kill:       killProcess, // platform shim (serve_ctl_unix.go)
 		verify:     verifyServeProc,
 		sleep:      time.Sleep,
 		removeLazy: func() { _ = os.Remove(config.ServeLazyMarkerPath()) },
-		discover:   discoverServeProcs, // platform shim (serve_ctl_unix/windows.go)
+		discover:   discoverServeProcs, // platform shim (serve_ctl_unix.go)
 	}
 }
 
@@ -419,7 +419,7 @@ func printServeStatus(st serveState, out io.Writer, jsonOut bool) {
 }
 
 // StopAnyMode stops the serve daemon in whatever lifecycle mode it is in.
-// A MANAGED service (launchd KeepAlive / systemd Restart=) MUST be stopped via
+// A MANAGED service (launchd KeepAlive) MUST be stopped via
 // its supervisor — a bare SIGTERM to the pid is respawned within a second — so
 // managed is handled FIRST via StopManaged. Lazy/foreground/down all fall
 // through to the pidfile-based (and discovery-fallback) Stop. Injectable

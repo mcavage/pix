@@ -8,6 +8,23 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## Unreleased
 
+### Removed
+
+- **pix's host is macOS-only now.** Deleted the `systemd --user` managed-
+  service implementation (`serve_install_linux.go`, the `pix-serve.service`
+  unit generator + template + tests), the Windows lock/process/service/
+  credential shims (`lock_windows.go`, `service/ctl_windows.go`,
+  `service/start_windows.go`, `slackoauth/*_windows.go`, `sys/lock_windows.go`,
+  `workflow/gworkspace/gog_credentials_snapshot_windows.go`), and every
+  install/upgrade/release path that shipped a Linux `pix`/`pix-host` binary
+  (`install.sh`, the `publish.yml` release-binaries matrix). launchd-managed
+  `pix serve install`/`stop`/PID ownership/spawn-lock/plist validation are
+  unchanged. `services/host` still `go build`/`go test`s under `GOOS=linux` —
+  the pix sandbox IMAGE stays a Linux container and devs hack on this repo
+  from inside one — via a single non-darwin compile stub
+  (`service.ErrUnsupportedHost`) with no lifecycle behavior. See
+  `docs/design/serve-lifecycle.md`.
+
 ### Fixed
 
 - **The model router described the shipped catalog, not your host.** `pix

@@ -436,15 +436,11 @@ provided as the natural counterpart to
 .TP
 .B "pix serve install"
 Install the services as a MANAGED login service: a launchd LaunchAgent
-.RB ( com.pix.serve )
-on macOS, a systemd \-\-user unit
-.RB ( pix-serve.service )
-on Linux.  Starts at login, auto-restarts, and starts immediately.  Logs go to
+.RB ( com.pix.serve ),
+macOS only.  Starts at login, auto-restarts, and starts immediately.  Logs go to
 .I ~/.local/state/pix/serve.log
-on both macOS and Linux \(em the SAME file the lazy auto-start uses, so there
-is one place to look regardless of how serve was started (on Linux,
-.RI ( "journalctl \-\-user \-u pix-serve" )
-also works as a secondary view).  Idempotent; re-running reinstalls with the current binary path.
+\(em the SAME file the lazy auto-start uses, so there
+is one place to look regardless of how serve was started.  Idempotent; re-running reinstalls with the current binary path.
 Before installing, a lazily-started background daemon is stopped first and a
 FOREGROUND
 .B pix serve

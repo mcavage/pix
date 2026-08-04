@@ -37,7 +37,7 @@ type Budgets struct {
 }
 
 // DefaultBudgets are the production values, PINNED in code and not config so
-// nobody widens the stop budget past what launchd/systemd will wait for.
+// nobody widens the stop budget past what launchd will wait for.
 func DefaultBudgets() Budgets {
 	return Budgets{
 		Handshake:        30 * time.Second,

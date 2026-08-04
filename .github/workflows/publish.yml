@@ -309,7 +309,12 @@ jobs:
 
       # -X main.version stamps both package-main binaries: the launcher and
       # pix-host each define the same symbol. Output names match install.sh's
-      # existing loose-asset URL pattern.
+      # existing loose-asset URL pattern. darwin ONLY: pix's host lifecycle
+      # (launchd-managed serve, the pix/pix-host binaries themselves) is
+      # macOS-only, so there is no consumer for a linux pix/pix-host release
+      # asset any more. This is unrelated to the pix SANDBOX image (built by
+      # the `build`/`patch-smoke` jobs above), which stays linux/amd64 +
+      # linux/arm64 — that is a container, not a host binary.
       - name: Cross-compile both binaries
         working-directory: services/host
         env:
@@ -317,7 +322,7 @@ jobs:
         run: |
           set -eu
           mkdir -p "$GITHUB_WORKSPACE/dist"
-          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+          for target in darwin/amd64 darwin/arm64; do
             os="${target%/*}"; arch="${target#*/}"
             echo "building $os/$arch"
             GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 \

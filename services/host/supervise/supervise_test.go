@@ -165,7 +165,7 @@ func startOrphan(t *testing.T, bin string, spec UnitSpec) *goplugin.Client {
 }
 
 // PINNED, not config: a regression that widens the stop budget past the
-// launchd/systemd stop grace, or makes a probe slower than the interval.
+// launchd stop grace, or makes a probe slower than the interval.
 func TestDefaultBudgetsPinned(t *testing.T) {
 	b := DefaultBudgets()
 	for name, c := range map[string][2]time.Duration{

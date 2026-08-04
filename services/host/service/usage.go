@@ -22,23 +22,23 @@ PIX_NO_AUTOSERVE=1 or 'pix config set host.autoserve false'.
 subcommands:
   stop              stop a running 'pix-host serve' (safe: verifies the
                     process is ours before signalling; SIGTERM then SIGKILL if
-                    it doesn't exit). Mode-aware: a MANAGED service (launchd/
-                    systemd) is stopped via its supervisor so KeepAlive/Restart=
-                    can't respawn it; if the pidfile is missing it falls back to
+                    it doesn't exit). Mode-aware: a MANAGED service (launchd)
+                    is stopped via its supervisor so KeepAlive can't respawn
+                    it; if the pidfile is missing it falls back to
                     discovering a verified 'pix-host serve' (e.g. an orphan
                     left after 'pix reset' moved the config dir).
   status [--json]   report whether serve is running (pid) and which service
                     ports (:11435 / :11436) are up
   start             alias for 'install'; (re)start the managed service, picking
                     up a freshly-rebuilt binary. The partner to 'stop'.
-  install           install serve as a managed login service (launchd on macOS,
-                    systemd --user on Linux): starts at login, auto-restarts.
+  install           install serve as a managed login service (launchd
+                    LaunchAgent, macOS only): starts at login, auto-restarts.
                     stops a lazily-started daemon first; refuses over a
                     foreground serve. captures install-time env into the unit
                     (PIX_CONFIG always; XDG_CONFIG_HOME, MEMORY_DB,
                     MEMORY_PORT, KNOWLEDGE_PORT, OLLAMA_HOST when set) and
                     verifies the service came up.
                     logs: ~/.local/state/pix/serve.log (same file the
-                    lazy auto-start uses, on both macOS and Linux)
+                    lazy auto-start uses)
   uninstall         remove the managed login service
 `
