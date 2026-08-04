@@ -2,237 +2,244 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"io"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"pix/host/cli"
 	"pix/host/monitor"
-	"pix/host/monitor/tui"
 )
 
-// TestMonitorHelp is the help gate: `-h`/`--help` prints monitorUsage and
-// never constructs a hub or runs the TUI — proven by fakes that panic if
-// called, mirroring memory_test.go's TestRunMemoryCore_HelpIgnoresBrokenConfig
-// pattern.
-func TestMonitorHelp(t *testing.T) {
-	panicNewHub := func(monitor.HubConfig) *monitor.Hub {
-		panic("runMonitorCore must not construct a hub on --help")
-	}
-	panicRunTUI := func(tui.TUIConfig) error {
-		panic("runMonitorCore must not run the TUI on --help")
-	}
+// syncBuffer is a bytes.Buffer safe for the test goroutine to read while a
+// backgrounded monitor run writes to it.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
 
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// panicIngestServer proves a --help / usage-error / --path run never
+// constructs an ingest server.
+func panicIngestServer(monitor.IngestConfig) (*monitor.IngestServer, error) {
+	panic("runMonitorCore must not construct an ingest server here")
+}
+
+func TestMonitorHelpAndUsageErrors(t *testing.T) {
 	for _, argv := range [][]string{{"-h"}, {"--help"}, {"--help", "mybox"}} {
 		var out bytes.Buffer
-		if err := runMonitorCore(argv, panicNewHub, panicRunTUI, &out, io.Discard); err != nil {
+		if err := runMonitorCore(context.Background(), argv, panicIngestServer, &out, io.Discard, t.TempDir(), false); err != nil {
 			t.Fatalf("runMonitorCore(%v): %v", argv, err)
 		}
-		if !strings.Contains(out.String(), "usage: pix monitor") {
-			t.Errorf("runMonitorCore(%v) = %q, want monitor usage", argv, out.String())
+		// The usage text is the only place these operational facts are
+		// discoverable, so pin them rather than just "usage:".
+		for _, want := range []string{"usage: pix monitor", "make load", "PIX_MONITOR=0", "PIX_MONITOR_URL", "CASE-SENSITIVE", "--path DIR", "--json", "loopback-only"} {
+			if !strings.Contains(out.String(), want) {
+				t.Errorf("monitor usage missing %q", want)
+			}
+		}
+	}
+	for _, argv := range [][]string{{"--nope"}, {"one", "two"}} {
+		err := runMonitorCore(context.Background(), argv, panicIngestServer, io.Discard, io.Discard, t.TempDir(), false)
+		if err == nil {
+			t.Fatalf("runMonitorCore(%v) = nil error, want a usage error", argv)
+		}
+		var usage cli.UsageError2
+		if !errors.As(err, &usage) {
+			t.Errorf("runMonitorCore(%v) error = %v (%T), want a usage error (exit 2)", argv, err, err)
 		}
 	}
 }
 
-// TestMonitorFlagParse proves --port and the optional positional name reach
-// HubConfig unchanged, and that the same name is forwarded to the TUI's
-// Filter. The fake newHub captures the config it was given but hands back a
-// REAL Hub bound to an ephemeral port (Port:0) so the test never touches the
-// literal port 9999 or a real terminal.
-func TestMonitorFlagParse(t *testing.T) {
-	var gotCfg monitor.HubConfig
-	fakeNewHub := func(cfg monitor.HubConfig) *monitor.Hub {
-		gotCfg = cfg
-		return monitor.NewHub(monitor.HubConfig{Port: 0})
+// storeFixture writes one captured stream into dir the way the store does,
+// so --path mode has something real to read.
+func storeFixture(t *testing.T, dir, sandboxID, sessionID string, events ...string) {
+	t.Helper()
+	streamDir := filepath.Join(dir, sandboxID+"="+sessionID)
+	if err := os.MkdirAll(streamDir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
 	}
-	var gotTUICfg tui.TUIConfig
-	fakeRunTUI := func(cfg tui.TUIConfig) error {
-		gotTUICfg = cfg
-		return nil
-	}
-
-	var out bytes.Buffer
-	if err := runMonitorCore([]string{"--port", "9999", "mybox"}, fakeNewHub, fakeRunTUI, &out, io.Discard); err != nil {
-		t.Fatalf("runMonitorCore: %v", err)
-	}
-	if gotCfg.Port != 9999 {
-		t.Errorf("HubConfig.Port = %d, want 9999", gotCfg.Port)
-	}
-	if gotCfg.Filter != "mybox" {
-		t.Errorf("HubConfig.Filter = %q, want %q", gotCfg.Filter, "mybox")
-	}
-	if gotCfg.BindAddr != monitor.DefaultBindAddr {
-		t.Errorf("HubConfig.BindAddr = %q, want default %q", gotCfg.BindAddr, monitor.DefaultBindAddr)
-	}
-	if gotTUICfg.Filter != "mybox" {
-		t.Errorf("tui.TUIConfig.Filter = %q, want %q", gotTUICfg.Filter, "mybox")
-	}
-	if gotTUICfg.Events == nil {
-		t.Error("tui.TUIConfig.Events is nil, want the hub's subscriber channel")
-	}
-	if gotTUICfg.Blob == nil {
-		t.Error("tui.TUIConfig.Blob is nil, want the hub's blob lookup")
-	}
-	if gotTUICfg.Port != 9999 {
-		t.Errorf("tui.TUIConfig.Port = %d, want the resolved --port %d (DX-2b: empty-state hint needs it)", gotTUICfg.Port, 9999)
+	body := strings.Join(events, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(streamDir, "events.ndjson"), []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
 	}
 }
 
-// TestMonitorUsageDocumentsStaleImageAndEnvAndCaseSensitivity (DX-2a, DX-3,
-// DX-6): monitorUsage must surface the real limitation (events only flow
-// from a monitor-enabled image; make load to rebuild), the env gates the
-// in-VM extension reads, and that [name] is a case-sensitive substring
-// match.
-func TestMonitorUsageDocumentsStaleImageAndEnvAndCaseSensitivity(t *testing.T) {
-	for _, want := range []string{
-		"make load",
-		"PIX_MONITOR=0",
-		"PIX_MONITOR_URL",
-		"host.docker.internal:11437",
-		"CASE-SENSITIVE",
-	} {
-		if !strings.Contains(monitorUsage, want) {
-			t.Errorf("monitorUsage missing %q:\n%s", want, monitorUsage)
+func toolEndLine(sandboxID, sessionID, toolID string) string {
+	return `{"kind":"tool_end","sandboxId":"` + sandboxID + `","sessionId":"` + sessionID +
+		`","turnId":"t1","seq":1,"ts":1700000000000,"toolId":"` + toolID + `","ok":true,"resultBytes":7,"durationMs":3}`
+}
+
+// runMonitorUntil runs runMonitorCore in the background until out contains
+// want, then cancels — the reader polls, so a test waits rather than calling
+// it once.
+func runMonitorUntil(t *testing.T, argv []string, newSrv newIngestServerFunc, want string) (string, string) {
+	t.Helper()
+	var out, errOut syncBuffer
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- runMonitorCore(ctx, argv, newSrv, &out, &errOut, t.TempDir(), false) }()
+	deadline := time.Now().Add(3 * time.Second)
+	for !strings.Contains(out.String()+errOut.String(), want) && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("runMonitorCore: %v", err)
+	}
+	return out.String(), errOut.String()
+}
+
+// --path is a pure OFFLINE reader: no listener, ever.
+func TestMonitorPathModeReadsWithoutAListener(t *testing.T) {
+	dir := t.TempDir()
+	storeFixture(t, dir, "sbx", "sess", toolEndLine("sbx", "sess", "tool-1"))
+	out, _ := runMonitorUntil(t, []string{"--path", dir}, panicIngestServer, "tool_end")
+	if !strings.Contains(out, "sbx/sess") || !strings.Contains(out, "tool_end") {
+		t.Fatalf("output = %q, want a concise tool_end line", out)
+	}
+}
+
+func TestMonitorPathModeJSONAndFilter(t *testing.T) {
+	dir := t.TempDir()
+	storeFixture(t, dir, "keep-me", "sess", toolEndLine("keep-me", "sess", "kept"))
+	storeFixture(t, dir, "other", "sess", toolEndLine("other", "sess", "dropped"))
+
+	out, _ := runMonitorUntil(t, []string{"keep", "--path", dir, "--json"}, panicIngestServer, "kept")
+	if strings.Contains(out, "dropped") {
+		t.Errorf("filtered output %q includes a non-matching stream", out)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("--json emitted a non-JSON line %q: %v", line, err)
+		}
+		if m["kind"] != "tool_end" {
+			t.Errorf("--json line kind = %v, want tool_end", m["kind"])
 		}
 	}
 }
 
-// TestMonitorNoArgs proves the default port (monitor.DefaultPort) and an
-// empty filter ("" = all sandboxes) are used when no flags/positional are
-// given.
-func TestMonitorNoArgs(t *testing.T) {
-	var gotCfg monitor.HubConfig
-	fakeNewHub := func(cfg monitor.HubConfig) *monitor.Hub {
-		gotCfg = cfg
-		return monitor.NewHub(monitor.HubConfig{Port: 0})
-	}
-	fakeRunTUI := func(tui.TUIConfig) error { return nil }
-
-	var out bytes.Buffer
-	if err := runMonitorCore(nil, fakeNewHub, fakeRunTUI, &out, io.Discard); err != nil {
-		t.Fatalf("runMonitorCore: %v", err)
-	}
-	if gotCfg.Port != monitor.DefaultPort {
-		t.Errorf("HubConfig.Port = %d, want default %d", gotCfg.Port, monitor.DefaultPort)
-	}
-	if gotCfg.Filter != "" {
-		t.Errorf("HubConfig.Filter = %q, want empty (all sandboxes)", gotCfg.Filter)
-	}
-	if gotCfg.BindAddr != monitor.DefaultBindAddr {
-		t.Errorf("HubConfig.BindAddr = %q, want default %q (SEC-1: secure-by-default)", gotCfg.BindAddr, monitor.DefaultBindAddr)
-	}
-}
-
-// TestMonitorBindDefaultIsLoopbackNoWarning proves that with no --bind flag,
-// runMonitorCore does not print the non-loopback exposure warning.
-func TestMonitorBindDefaultIsLoopbackNoWarning(t *testing.T) {
-	fakeNewHub := func(cfg monitor.HubConfig) *monitor.Hub {
-		return monitor.NewHub(monitor.HubConfig{Port: 0})
-	}
-	fakeRunTUI := func(tui.TUIConfig) error { return nil }
-
-	var out, errOut bytes.Buffer
-	if err := runMonitorCore(nil, fakeNewHub, fakeRunTUI, &out, &errOut); err != nil {
-		t.Fatalf("runMonitorCore: %v", err)
-	}
-	if errOut.Len() != 0 {
-		t.Errorf("stderr = %q, want no warning for the default loopback bind", errOut.String())
-	}
-}
-
-// TestMonitorBindNonLoopbackWarns proves --bind 0.0.0.0 parses through to
-// HubConfig.BindAddr AND prints a loud warning to stderr (SEC-1: opt-in to a
-// wider bind is allowed, but never silent).
-func TestMonitorBindNonLoopbackWarns(t *testing.T) {
-	var gotCfg monitor.HubConfig
-	fakeNewHub := func(cfg monitor.HubConfig) *monitor.Hub {
-		gotCfg = cfg
-		return monitor.NewHub(monitor.HubConfig{Port: 0})
-	}
-	fakeRunTUI := func(tui.TUIConfig) error { return nil }
-
-	var out, errOut bytes.Buffer
-	if err := runMonitorCore([]string{"--bind", "0.0.0.0"}, fakeNewHub, fakeRunTUI, &out, &errOut); err != nil {
-		t.Fatalf("runMonitorCore: %v", err)
-	}
-	if gotCfg.BindAddr != "0.0.0.0" {
-		t.Errorf("HubConfig.BindAddr = %q, want %q", gotCfg.BindAddr, "0.0.0.0")
-	}
-	if !strings.Contains(errOut.String(), "WARNING") {
-		t.Errorf("stderr = %q, want a WARNING about the exposed bind", errOut.String())
-	}
-	if !strings.Contains(errOut.String(), "0.0.0.0") {
-		t.Errorf("stderr = %q, want it to name the bind address", errOut.String())
-	}
-}
-
-// TestMonitorBindLoopbackVariantsNoWarning proves every recognized loopback
-// spelling (explicit --bind, not just the default) is silent.
-func TestMonitorBindLoopbackVariantsNoWarning(t *testing.T) {
-	for _, addr := range []string{"127.0.0.1", "::1", "localhost"} {
-		fakeNewHub := func(monitor.HubConfig) *monitor.Hub { return monitor.NewHub(monitor.HubConfig{Port: 0}) }
-		fakeRunTUI := func(tui.TUIConfig) error { return nil }
-		var out, errOut bytes.Buffer
-		if err := runMonitorCore([]string{"--bind", addr}, fakeNewHub, fakeRunTUI, &out, &errOut); err != nil {
-			t.Fatalf("runMonitorCore(--bind %s): %v", addr, err)
+// Live mode is the real thing end to end: a bound loopback listener, a real
+// POST from a "sandbox", and the reader printing what was persisted.
+func TestMonitorLiveModeIngestsAndPrints(t *testing.T) {
+	// The constructor runs on the run goroutine, so hand its address back
+	// over a channel rather than a shared variable.
+	addrCh := make(chan string, 1)
+	capture := func(cfg monitor.IngestConfig) (*monitor.IngestServer, error) {
+		if cfg.Port != 0 {
+			t.Errorf("test asked for an ephemeral port but got %d", cfg.Port)
 		}
-		if errOut.Len() != 0 {
-			t.Errorf("--bind %s: stderr = %q, want no warning", addr, errOut.String())
+		srv, err := monitor.NewIngestServer(cfg)
+		if err == nil {
+			addrCh <- srv.Addr()
 		}
+		return srv, err
+	}
+	var out, errOut syncBuffer
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	root := t.TempDir()
+	go func() {
+		done <- runMonitorCore(ctx, []string{"--port", "0"}, capture, &out, &errOut, root, false)
+	}()
+	deadline := time.Now().Add(3 * time.Second)
+	var srvAddr string
+	select {
+	case srvAddr = <-addrCh:
+	case <-time.After(3 * time.Second):
+		cancel()
+		<-done
+		t.Fatal("ingest server never bound")
+	}
+	resp, err := http.Post("http://"+srvAddr+"/ingest", "application/x-ndjson",
+		strings.NewReader(toolEndLine("sbx", "sess", "live-tool")+"\n"))
+	if err != nil {
+		cancel()
+		<-done
+		t.Fatalf("POST /ingest: %v", err)
+	}
+	resp.Body.Close()
+
+	text := "assistant said this"
+	sum := sha256.Sum256([]byte(text))
+	blobResp, err := http.Post("http://"+srvAddr+"/blob", "application/json",
+		strings.NewReader(`{"hash":"`+hex.EncodeToString(sum[:])+`","bytes":19,"text":"`+text+`"}`))
+	if err != nil {
+		cancel()
+		<-done
+		t.Fatalf("POST /blob: %v", err)
+	}
+	blobResp.Body.Close()
+
+	for !strings.Contains(out.String(), "tool_end") && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("runMonitorCore: %v", err)
+	}
+	if !strings.Contains(out.String(), "sbx/sess") {
+		t.Fatalf("output = %q, want the ingested event printed", out.String())
+	}
+	if !strings.Contains(errOut.String(), "monitor: listening on") {
+		t.Errorf("stderr = %q, want the listening banner", errOut.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "sbx=sess", "events.ndjson")); err != nil {
+		t.Errorf("event was not persisted under the store root: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "blobs.ndjson")); err != nil {
+		t.Errorf("blob was not persisted under the store root: %v", err)
 	}
 }
 
-// TestMonitorUnknownFlag proves an unrecognized flag is a usage error and
-// that the hub is never constructed (usage errors from flag parsing must
-// short-circuit before any wiring).
-func TestMonitorUnknownFlag(t *testing.T) {
-	panicNewHub := func(monitor.HubConfig) *monitor.Hub {
-		panic("runMonitorCore must not construct a hub on a flag-parse error")
+// A non-loopback bind exposes full agent context with no auth, so it must
+// warn loudly — and only then.
+func TestMonitorNonLoopbackBindWarns(t *testing.T) {
+	cfgCh := make(chan monitor.IngestConfig, 2)
+	stub := func(cfg monitor.IngestConfig) (*monitor.IngestServer, error) {
+		cfgCh <- cfg
+		cfg.Port, cfg.BindAddr = 0, "127.0.0.1"
+		return monitor.NewIngestServer(cfg)
 	}
-	panicRunTUI := func(tui.TUIConfig) error {
-		panic("runMonitorCore must not run the TUI on a flag-parse error")
+	_, errOut := runMonitorUntil(t, []string{"--bind", "0.0.0.0", "--port", "0"}, stub, "WARNING")
+	if !strings.Contains(errOut, "NO AUTHENTICATION") {
+		t.Errorf("stderr = %q, want the no-auth warning", errOut)
 	}
-	err := runMonitorCore([]string{"--bogus"}, panicNewHub, panicRunTUI, &bytes.Buffer{}, io.Discard)
-	if !cli.IsUsage(err) {
-		t.Errorf("runMonitorCore(--bogus): err = %v, want cli.UsageError2", err)
+	if got := <-cfgCh; got.BindAddr != "0.0.0.0" {
+		t.Errorf("bind addr passed through = %q, want 0.0.0.0", got.BindAddr)
 	}
-}
-
-// TestMonitorTooManyPositional proves a second positional (only one [name]
-// filter is accepted) is a usage error.
-func TestMonitorTooManyPositional(t *testing.T) {
-	panicNewHub := func(monitor.HubConfig) *monitor.Hub {
-		panic("runMonitorCore must not construct a hub on a usage error")
+	_, quiet := runMonitorUntil(t, []string{"--port", "0"}, stub, "monitor: listening on")
+	if strings.Contains(quiet, "WARNING") {
+		t.Errorf("loopback bind warned anyway: %q", quiet)
 	}
-	panicRunTUI := func(tui.TUIConfig) error {
-		panic("runMonitorCore must not run the TUI on a usage error")
-	}
-	err := runMonitorCore([]string{"box1", "box2"}, panicNewHub, panicRunTUI, &bytes.Buffer{}, io.Discard)
-	if !cli.IsUsage(err) {
-		t.Errorf("runMonitorCore(box1 box2): err = %v, want cli.UsageError2", err)
+	if got := <-cfgCh; got.BindAddr != monitor.DefaultBindAddr {
+		t.Errorf("default bind = %q, want %q", got.BindAddr, monitor.DefaultBindAddr)
 	}
 }
 
-// TestMonitorUsage proves verbUsage("monitor") is wired into help.go and
-// matches the frozen monitorUsage contract text.
-func TestMonitorUsage(t *testing.T) {
-	u, ok := verbUsage("monitor")
-	if !ok {
-		t.Fatal(`verbUsage("monitor") ok = false, want true`)
-	}
-	if u == "" {
-		t.Error(`verbUsage("monitor") is empty`)
-	}
-	if !strings.HasPrefix(u, "usage: pix monitor") {
-		t.Errorf("verbUsage(monitor) = %q, want prefix %q", u, "usage: pix monitor")
-	}
-}
-
-// TestMonitorKnownVerb proves "monitor" is registered in knownVerbs (so a
-// mistyped verb near it gets a did-you-mean hint, and it's recognized as a
-// real command by classifyBareArg).
-func TestMonitorKnownVerb(t *testing.T) {
+func TestMonitorIsAKnownVerb(t *testing.T) {
 	if !knownVerbs["monitor"] {
-		t.Error(`knownVerbs["monitor"] = false, want true`)
+		t.Fatal(`knownVerbs["monitor"] = false, want true`)
 	}
 }

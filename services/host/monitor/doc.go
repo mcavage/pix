@@ -1,20 +1,14 @@
-// Package monitor is the host-side half of `pix monitor`: a live wiretap
-// of a running sandbox's out-of-sandbox traffic (model requests/responses,
-// tool + MCP calls, context/control events).
+// Package monitor is the host-side half of `pix monitor`: a debug wiretap
+// that records a running sandbox's out-of-sandbox traffic (model
+// requests/responses, tool + MCP calls, context/control events) to bounded,
+// redacted, file-backed storage and reads it back out.
 //
-// It is pure library + net/http — no bubbletea, no cmd/pix import — so it
-// can be built and tested (`go test ./monitor/...`) on its own. The wire
-// protocol (event kinds, JSON field names) is frozen by
-// .pi-agent/deliver/monitor/architecture.md Section 2 and MUST match the
-// in-VM emitter (extensions/monitor.ts) field-for-field.
-//
-// Shape:
-//
-//   - event.go: the Kind discriminator, Envelope + concrete event structs,
-//     Encode/Decode helpers for the NDJSON wire format.
-//   - ring.go: a bounded, thread-safe ring buffer of decoded events.
-//   - blobcache.go: a bounded, thread-safe content-addressed blob cache.
-//   - hub.go: the HTTP server (POST /ingest, POST /blob, GET /blob/{hash},
-//     GET /stream, GET /healthz) plus the in-process Subscribe() seam used by
-//     the TUI (Unit B) — no HTTP round-trip needed in the same binary.
+// Four files, one each: event.go is the wire contract with the in-VM tap
+// (extensions/monitor.ts) — it MUST match field-for-field, and an
+// unrecognized kind decodes to UnknownEvent rather than erroring. redact.go
+// scrubs secret shapes from everything before it is written. store.go is the
+// bounded NDJSON store plus its filesystem safety layer. ingest.go is the
+// loopback-only HTTP server, and follow.go the reader; they share no state,
+// only files. Nothing here imports cmd/pix or a TUI, so the whole package
+// tests with real sockets and real files and no mocks.
 package monitor

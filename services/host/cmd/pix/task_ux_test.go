@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"pix/host/monitor/tui"
+	"pix/host/monitor"
 	"pix/host/workflow/launch"
 	"pix/host/workspace"
 )
@@ -403,8 +403,8 @@ func TestRunTaskGc_RemovesCleanSkipsDirty(t *testing.T) {
 func TestHumanBytes(t *testing.T) {
 	cases := map[int64]string{0: "0B", 512: "512B", 1024: "1.0KB", 1536: "1.5KB", 1048576: "1.0MB"}
 	for in, want := range cases {
-		if got := tui.HumanBytes(in); got != want {
-			t.Errorf("tui.HumanBytes(%d) = %q, want %q", in, got, want)
+		if got := monitor.HumanBytes(in); got != want {
+			t.Errorf("monitor.HumanBytes(%d) = %q, want %q", in, got, want)
 		}
 	}
 }

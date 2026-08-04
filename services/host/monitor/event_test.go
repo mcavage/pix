@@ -2,641 +2,302 @@ package monitor
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 	"testing"
 )
 
 func sampleEnvelope(kind Kind) env {
-	return env{
-		Kind:      kind,
-		SandboxID: "sbx-1",
-		SessionID: "sess-1",
-		TurnID:    "turn-1",
-		Seq:       7,
-		TS:        1700000000000,
-	}
+	return env{Kind: kind, SandboxID: "sbx-1", SessionID: "sess-1", TurnID: "turn-1", Seq: 7, TS: 1700000000000}
 }
 
-// TestEventEncodeDecodeRoundTrip covers every concrete kind: Encode then
-// Decode must reproduce an equal value, and Envelope()/Kind() must agree with
-// the envelope embedded at construction.
-func TestEventEncodeDecodeRoundTrip(t *testing.T) {
-	cases := []Event{
-		TurnStart{
-			env:     sampleEnvelope(KindTurnStart),
-			Model:   "claude-opus-4-8",
-			Trigger: "user",
-		},
+func sampleEvents() []Event {
+	return []Event{
+		TurnStart{env: sampleEnvelope(KindTurnStart), Model: "claude-opus-5", Trigger: "user"},
 		ProviderRequest{
 			env:   sampleEnvelope(KindProviderRequest),
-			Model: "claude-opus-4-8",
+			Model: "claude-opus-5",
 			Summary: RequestSummary{
-				SystemPromptHash:  "hash-sys",
-				SystemPromptBytes: 41000,
-				MessageCount:      12,
-				NewMessages: []MessageSummary{
-					{Role: "user", Bytes: 42, Hash: "hash-m1", Preview: "hello"},
-				},
-				ToolCount:      14,
+				SystemPromptHash: "h1", SystemPromptBytes: 12, MessageCount: 2,
+				NewMessages:    []MessageSummary{{Role: "user", Bytes: 3, Hash: "h2", Preview: "hi"}},
+				ToolCount:      2,
 				ToolNames:      []string{"bash", "read"},
 				McpToolNames:   []string{"slack_post"},
-				ToolSchemaHash: "hash-schema",
-				EstTokens:      38000,
+				ToolSchemaHash: "h3", EstTokens: 99,
 			},
-			ChangedBlobs: []string{"hash-sys"},
+			ChangedBlobs: []string{"h1", "h2"},
 			Trigger:      "user",
 		},
 		ProviderResponse{
-			env:         sampleEnvelope(KindProviderResponse),
-			Status:      200,
-			StopReason:  "tool_use",
-			Usage:       &UsageSummary{InputTokens: 37900, OutputTokens: 512, TotalTokens: 38412},
-			TextBytes:   11,
-			TextPreview: "hello world",
-			TextHash:    "hash-text",
-			ToolCalls:   []string{"bash", "read"},
-		},
-		ProviderResponse{
-			env:        sampleEnvelope(KindProviderResponse),
-			Status:     200,
-			StopReason: "",
-			Usage:      nil,
+			env: sampleEnvelope(KindProviderResponse), Status: 200, StopReason: "end_turn",
+			Usage:     &UsageSummary{InputTokens: 10, OutputTokens: 20, TotalTokens: 30},
+			TextBytes: 5, TextPreview: "hello", TextHash: "h4", ToolCalls: []string{"bash"},
 		},
 		ToolStart{
-			env:         sampleEnvelope(KindToolStart),
-			ToolID:      "t1",
-			Source:      "builtin",
-			Name:        "bash",
-			ArgsSummary: "go test ./...",
-			ArgsHash:    "hash-args",
-			InvokesPi:   false,
-		},
-		ToolStart{
-			env:         sampleEnvelope(KindToolStart),
-			ToolID:      "t2",
-			Source:      "builtin",
-			Name:        "bash",
-			ArgsSummary: "pi --print --model foo",
-			ArgsHash:    "hash-args-2",
-			InvokesPi:   true,
+			env: sampleEnvelope(KindToolStart), ToolID: "t1", Source: "builtin", Name: "bash",
+			ArgsSummary: "ls -l", ArgsHash: "h5", InvokesPi: true,
 		},
 		ToolEnd{
-			env:           sampleEnvelope(KindToolEnd),
-			ToolID:        "t1",
-			OK:            true,
-			ResultBytes:   2100,
-			ResultSummary: "ok",
-			ResultHash:    "hash-result",
-			DurationMs:    4300,
+			env: sampleEnvelope(KindToolEnd), ToolID: "t1", OK: true,
+			ResultBytes: 42, ResultSummary: "done", ResultHash: "h6", DurationMs: 17,
 		},
-		ContextEvent{
-			env:     sampleEnvelope(KindContextEvent),
-			CtxKind: "model_change",
-			Detail:  "switched to opus",
-		},
+		ContextEvent{env: sampleEnvelope(KindContextEvent), CtxKind: "compaction", Detail: "threshold"},
 	}
+}
 
-	for _, want := range cases {
-		t.Run(string(want.Kind()), func(t *testing.T) {
+// TestEncodeDecodeRoundTrip covers every concrete kind: Encode then Decode
+// must reproduce an equal value carrying the same envelope.
+func TestEncodeDecodeRoundTrip(t *testing.T) {
+	for _, want := range sampleEvents() {
+		kind := want.Envelope().Kind
+		t.Run(string(kind), func(t *testing.T) {
 			line, err := Encode(want)
 			if err != nil {
-				t.Fatalf("Encode() error: %v", err)
+				t.Fatalf("Encode: %v", err)
 			}
 			got, err := Decode(line)
 			if err != nil {
-				t.Fatalf("Decode() error: %v", err)
-			}
-			gotLine, err := Encode(got)
-			if err != nil {
-				t.Fatalf("re-Encode() error: %v", err)
-			}
-			if string(gotLine) != string(line) {
-				t.Fatalf("round-trip mismatch:\n  want %s\n  got  %s", line, gotLine)
+				t.Fatalf("Decode: %v", err)
 			}
 			if got.Envelope() != want.Envelope() {
-				t.Fatalf("Envelope() = %+v, want %+v", got.Envelope(), want.Envelope())
+				t.Fatalf("envelope = %+v, want %+v", got.Envelope(), want.Envelope())
 			}
-			if got.Kind() != want.Kind() {
-				t.Fatalf("Kind() = %q, want %q", got.Kind(), want.Kind())
+			regot, err := Encode(got)
+			if err != nil {
+				t.Fatalf("re-Encode: %v", err)
+			}
+			if string(regot) != string(line) {
+				t.Fatalf("round-trip changed the wire form:\n got %s\nwant %s", regot, line)
 			}
 		})
 	}
 }
 
-func TestDecodeUnknownKindErrors(t *testing.T) {
-	_, err := Decode([]byte(`{"kind":"nope","sandboxId":"x"}`))
-	if err == nil {
-		t.Fatalf("Decode() with unknown kind: got nil error, want an error")
-	}
-	if !strings.Contains(err.Error(), "nope") {
-		t.Fatalf("Decode() error = %q, want it to mention the unknown kind", err.Error())
-	}
-}
-
-func TestDecodeBlobKindErrors(t *testing.T) {
-	// blob is data-only (POST /blob), never a decodable Event on the stream.
-	_, err := Decode([]byte(`{"kind":"blob"}`))
-	if err == nil {
-		t.Fatalf("Decode() with kind=blob: got nil error, want an error (blob is not an Event)")
-	}
-}
-
-func TestDecodeMalformedJSONErrors(t *testing.T) {
-	_, err := Decode([]byte(`not json`))
-	if err == nil {
-		t.Fatalf("Decode() with malformed JSON: got nil error, want an error")
-	}
-}
-
-// TestEventJSONTagsGolden pins the exact wire field names (architecture.md
-// Section 2.3) so Unit D's TypeScript emitter can be checked against the same
-// shape by eye. Any change here is a wire-protocol change.
-func TestEventJSONTagsGolden(t *testing.T) {
-	ts := TurnStart{
-		env:     env{Kind: KindTurnStart, SandboxID: "sbx", SessionID: "sess", TurnID: "t1", Seq: 3, TS: 1234},
-		Model:   "opus",
-		Trigger: "user",
-	}
-	line, err := Encode(ts)
+// TestWireSchemaGolden pins the exact JSON the tap must produce and this
+// package must accept. A renamed or dropped key here is a wire break with
+// extensions/monitor.ts, which is why the field names are asserted literally
+// rather than by round-tripping our own structs.
+func TestWireSchemaGolden(t *testing.T) {
+	line, err := Encode(TurnStart{
+		env:   env{Kind: KindTurnStart, SandboxID: "sbx", SessionID: "sess", TurnID: "t1", Seq: 3, TS: 1234},
+		Model: "opus", Trigger: "user",
+	})
 	if err != nil {
-		t.Fatalf("Encode() error: %v", err)
+		t.Fatalf("Encode: %v", err)
 	}
 	want := `{"kind":"turn_start","sandboxId":"sbx","sessionId":"sess","turnId":"t1","seq":3,"ts":1234,"model":"opus","trigger":"user"}`
 	if string(line) != want {
 		t.Fatalf("turn_start JSON =\n  %s\nwant\n  %s", line, want)
 	}
 
-	pr := ProviderRequest{
-		env:   env{Kind: KindProviderRequest, Seq: 1},
-		Model: "opus",
-		Summary: RequestSummary{
-			SystemPromptHash:  "h",
-			SystemPromptBytes: 1,
-			MessageCount:      1,
-			NewMessages:       []MessageSummary{{Role: "user", Bytes: 1, Hash: "h2", Preview: "p"}},
-			ToolCount:         1,
-			ToolNames:         []string{"bash"},
-			McpToolNames:      []string{"slack_post"},
-			ToolSchemaHash:    "hash-schema",
-			EstTokens:         10,
-		},
-		ChangedBlobs: []string{"h"},
-		Trigger:      "user",
+	keys := map[Kind][]string{
+		KindProviderRequest:  {"kind", "sandboxId", "sessionId", "turnId", "seq", "ts", "model", "summary", "changedBlobs", "trigger"},
+		KindProviderResponse: {"kind", "status", "stopReason", "usage", "textBytes", "textPreview", "textHash", "toolCalls"},
+		KindToolStart:        {"toolId", "source", "name", "argsSummary", "argsHash", "invokesPi"},
+		KindToolEnd:          {"toolId", "ok", "resultBytes", "resultSummary", "resultHash", "durationMs"},
+		KindContextEvent:     {"ctxKind", "detail"},
 	}
-	var m map[string]json.RawMessage
-	line, err = Encode(pr)
-	if err != nil {
-		t.Fatalf("Encode() error: %v", err)
-	}
-	if err := json.Unmarshal(line, &m); err != nil {
-		t.Fatalf("Unmarshal() error: %v", err)
-	}
-	for _, key := range []string{"kind", "sandboxId", "sessionId", "turnId", "seq", "ts", "model", "summary", "changedBlobs", "trigger"} {
-		if _, ok := m[key]; !ok {
-			t.Fatalf("provider_request JSON missing key %q; got keys %v", key, m)
+	for _, e := range sampleEvents() {
+		kind := e.Envelope().Kind
+		want, ok := keys[kind]
+		if !ok {
+			continue
 		}
-	}
-	var summary map[string]json.RawMessage
-	if err := json.Unmarshal(m["summary"], &summary); err != nil {
-		t.Fatalf("Unmarshal(summary) error: %v", err)
-	}
-	for _, key := range []string{"systemPromptHash", "systemPromptBytes", "messageCount", "newMessages", "toolCount", "toolNames", "mcpToolNames", "toolSchemaHash", "estTokens"} {
-		if _, ok := summary[key]; !ok {
-			t.Fatalf("summary JSON missing key %q; got keys %v", key, summary)
+		line, err := Encode(e)
+		if err != nil {
+			t.Fatalf("Encode %s: %v", kind, err)
 		}
-	}
-
-	presp := ProviderResponse{
-		env:         env{Kind: KindProviderResponse, Seq: 2},
-		Status:      200,
-		StopReason:  "stop",
-		TextBytes:   5,
-		TextPreview: "hello",
-		TextHash:    "hash-text",
-		ToolCalls:   []string{"bash"},
-	}
-	line, err = Encode(presp)
-	if err != nil {
-		t.Fatalf("Encode() error: %v", err)
-	}
-	var prespMap map[string]json.RawMessage
-	if err := json.Unmarshal(line, &prespMap); err != nil {
-		t.Fatalf("Unmarshal() error: %v", err)
-	}
-	for _, key := range []string{"kind", "status", "stopReason", "usage", "textBytes", "textPreview", "textHash", "toolCalls"} {
-		if _, ok := prespMap[key]; !ok {
-			t.Fatalf("provider_response JSON missing key %q; got keys %v", key, prespMap)
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(line, &m); err != nil {
+			t.Fatalf("Unmarshal %s: %v", kind, err)
 		}
-	}
-
-	ctx := ContextEvent{env: env{Kind: KindContextEvent}, CtxKind: "compaction", Detail: "d"}
-	line, err = Encode(ctx)
-	if err != nil {
-		t.Fatalf("Encode() error: %v", err)
-	}
-	if !strings.Contains(string(line), `"ctxKind":"compaction"`) {
-		t.Fatalf("context_event JSON = %s, want ctxKind key", line)
-	}
-
-	// tool_start.invokesPi (added alongside the extension's commandInvokesPi
-	// fix): pin both that the key exists and that it round-trips true/false,
-	// since it's a plain bool with no capping to exercise elsewhere.
-	ts2 := ToolStart{env: env{Kind: KindToolStart}, Name: "bash", InvokesPi: true}
-	line, err = Encode(ts2)
-	if err != nil {
-		t.Fatalf("Encode() error: %v", err)
-	}
-	if !strings.Contains(string(line), `"invokesPi":true`) {
-		t.Fatalf("tool_start JSON = %s, want invokesPi key", line)
-	}
-
-	b, err := json.Marshal(Blob{Hash: "h", Bytes: 3, Text: "abc"})
-	if err != nil {
-		t.Fatalf("Marshal(Blob) error: %v", err)
-	}
-	wantBlob := `{"hash":"h","bytes":3,"text":"abc"}`
-	if string(b) != wantBlob {
-		t.Fatalf("Blob JSON = %s, want %s", b, wantBlob)
-	}
-}
-
-// TestDecodeCapsOversizedFreeTextFields is R3-2a: EVERY decoded string and
-// string slice must be bounded by a purpose-appropriate cap, not just the
-// four fields (Detail/ArgsSummary/ResultSummary/Preview) capped for R2-7.
-// This exercises an oversized envelope id, a top-level free-text field, a
-// hash field, and an oversized ToolNames array all on one event.
-func TestDecodeCapsOversizedFreeTextFields(t *testing.T) {
-	hugeModel := strings.Repeat("m", 10_000)
-	hugeSandboxID := strings.Repeat("s", 10_000)
-	hugeHash := strings.Repeat("a", 10_000)
-	toolNames := make([]string, 1000)
-	for i := range toolNames {
-		toolNames[i] = fmt.Sprintf("tool-%d-%s", i, strings.Repeat("z", 2000))
-	}
-
-	line, err := Encode(ProviderRequest{
-		env:   env{Kind: KindProviderRequest, SandboxID: hugeSandboxID},
-		Model: hugeModel,
-		Summary: RequestSummary{
-			SystemPromptHash: hugeHash,
-			ToolNames:        toolNames,
-		},
-	})
-	if err != nil {
-		t.Fatalf("Encode() error: %v", err)
-	}
-
-	got, err := Decode(line)
-	if err != nil {
-		t.Fatalf("Decode() error: %v", err)
-	}
-	pr, ok := got.(ProviderRequest)
-	if !ok {
-		t.Fatalf("Decode() returned %T, want ProviderRequest", got)
-	}
-
-	if got := len(pr.Model); got > maxIdBytes {
-		t.Fatalf("Model len = %d, want <= maxIdBytes (%d)", got, maxIdBytes)
-	}
-	if got := len(pr.Envelope().SandboxID); got > maxIdBytes {
-		t.Fatalf("SandboxID len = %d, want <= maxIdBytes (%d)", got, maxIdBytes)
-	}
-	if got := len(pr.Summary.SystemPromptHash); got > maxHashBytes {
-		t.Fatalf("SystemPromptHash len = %d, want <= maxHashBytes (%d)", got, maxHashBytes)
-	}
-	if got := len(pr.Summary.ToolNames); got > maxListEntries {
-		t.Fatalf("ToolNames len = %d, want <= maxListEntries (%d)", got, maxListEntries)
-	}
-	for i, name := range pr.Summary.ToolNames {
-		if got := len(name); got > maxIdBytes {
-			t.Fatalf("ToolNames[%d] len = %d, want <= maxIdBytes (%d)", i, got, maxIdBytes)
+		for _, k := range want {
+			if _, ok := m[k]; !ok {
+				t.Errorf("%s JSON missing key %q: %s", kind, k, line)
+			}
 		}
-	}
-}
-
-// TestDecodeCapsOversizedFieldMultibyteUTF8 confirms capping an oversized
-// free-text field that lands mid multi-byte UTF-8 rune does not panic —
-// capField/capID truncate by BYTE length (not rune-aware), a deliberate,
-// documented tradeoff; it must never panic even when the cap boundary
-// splits a multi-byte character.
-func TestDecodeCapsOversizedFieldMultibyteUTF8(t *testing.T) {
-	// "世" is 3 bytes in UTF-8. Repeating it maxIdBytes times yields a string
-	// whose byte length (3*maxIdBytes) is not a multiple of 1 in a way that
-	// lets the maxIdBytes-th byte land inside a rune, forcing the split case.
-	hugeName := strings.Repeat("世", maxIdBytes)
-	hugeDetail := strings.Repeat("界", maxFieldBytes)
-
-	line, err := Encode(ToolStart{
-		env:  env{Kind: KindToolStart},
-		Name: hugeName,
-	})
-	if err != nil {
-		t.Fatalf("Encode(ToolStart) error: %v", err)
-	}
-	got, err := Decode(line)
-	if err != nil {
-		t.Fatalf("Decode(ToolStart) error: %v", err)
-	}
-	ts := got.(ToolStart)
-	if n := len(ts.Name); n != maxIdBytes {
-		t.Fatalf("Name len = %d, want exactly %d", n, maxIdBytes)
-	}
-
-	line, err = Encode(ContextEvent{
-		env:    env{Kind: KindContextEvent},
-		Detail: hugeDetail,
-	})
-	if err != nil {
-		t.Fatalf("Encode(ContextEvent) error: %v", err)
-	}
-	got, err = Decode(line)
-	if err != nil {
-		t.Fatalf("Decode(ContextEvent) error: %v", err)
-	}
-	ce := got.(ContextEvent)
-	if n := len(ce.Detail); n != maxFieldBytes {
-		t.Fatalf("Detail len = %d, want exactly %d", n, maxFieldBytes)
-	}
-}
-
-// TestDecodeCapsToolID is R4-1: ToolStart/ToolEnd.ToolID was never capped
-// (an oversized toolId passes the ingest-line limit and lands in TUI row
-// keys).
-func TestDecodeCapsToolID(t *testing.T) {
-	hugeID := strings.Repeat("t", 10_000)
-
-	line, err := Encode(ToolStart{env: env{Kind: KindToolStart}, ToolID: hugeID, Name: "bash"})
-	if err != nil {
-		t.Fatalf("Encode(ToolStart) error: %v", err)
-	}
-	got, err := Decode(line)
-	if err != nil {
-		t.Fatalf("Decode(ToolStart) error: %v", err)
-	}
-	ts := got.(ToolStart)
-	if n := len(ts.ToolID); n > maxIdBytes {
-		t.Fatalf("ToolStart.ToolID len = %d, want <= maxIdBytes (%d)", n, maxIdBytes)
-	}
-
-	line, err = Encode(ToolEnd{env: env{Kind: KindToolEnd}, ToolID: hugeID})
-	if err != nil {
-		t.Fatalf("Encode(ToolEnd) error: %v", err)
-	}
-	got, err = Decode(line)
-	if err != nil {
-		t.Fatalf("Decode(ToolEnd) error: %v", err)
-	}
-	te := got.(ToolEnd)
-	if n := len(te.ToolID); n > maxIdBytes {
-		t.Fatalf("ToolEnd.ToolID len = %d, want <= maxIdBytes (%d)", n, maxIdBytes)
-	}
-}
-
-// TestDecodeCapsEveryStringBearingField is table-driven coverage (R4-1,
-// closed out further by R5-1) asserting that Decode caps every
-// string-bearing field across every event kind, given a maximally oversized
-// input for that field. Each case builds one event with a single field blown
-// out far past its cap, decodes it, and checks the resulting field never
-// exceeds its documented cap. This includes the NESTED ProviderRequest.Summary
-// scalar fields (SystemPromptHash, ToolSchemaHash, and one NewMessages
-// entry's Role/Hash/Preview) that R4-1's table missed (R5-1). The
-// length-bounded SLICE fields nested under Summary (ToolNames, McpToolNames,
-// NewMessages) and ChangedBlobs get their own companion tables below —
-// TestDecodeCapsProviderRequestStringSlices and
-// TestDecodeCapsProviderRequestNewMessages — since capping a slice needs
-// both an oversized entry AND an over-length slice, which doesn't fit this
-// table's one-field-per-case shape.
-func TestDecodeCapsEveryStringBearingField(t *testing.T) {
-	hugeID := strings.Repeat("i", 10_000)
-	hugeField := strings.Repeat("f", 10_000)
-	hugeHash := strings.Repeat("h", 10_000)
-
-	cases := []struct {
-		name string
-		line func() ([]byte, error)
-		max  int
-		get  func(Event) string
-	}{
-		{"TurnStart.Model", func() ([]byte, error) { return Encode(TurnStart{env: env{Kind: KindTurnStart}, Model: hugeID}) }, maxIdBytes, func(e Event) string { return e.(TurnStart).Model }},
-		{"TurnStart.Trigger", func() ([]byte, error) { return Encode(TurnStart{env: env{Kind: KindTurnStart}, Trigger: hugeID}) }, maxIdBytes, func(e Event) string { return e.(TurnStart).Trigger }},
-		{"ProviderRequest.Model", func() ([]byte, error) {
-			return Encode(ProviderRequest{env: env{Kind: KindProviderRequest}, Model: hugeID})
-		}, maxIdBytes, func(e Event) string { return e.(ProviderRequest).Model }},
-		{"ProviderRequest.Trigger", func() ([]byte, error) {
-			return Encode(ProviderRequest{env: env{Kind: KindProviderRequest}, Trigger: hugeID})
-		}, maxIdBytes, func(e Event) string { return e.(ProviderRequest).Trigger }},
-		{"ProviderResponse.StopReason", func() ([]byte, error) {
-			return Encode(ProviderResponse{env: env{Kind: KindProviderResponse}, StopReason: hugeID})
-		}, maxIdBytes, func(e Event) string { return e.(ProviderResponse).StopReason }},
-		{"ProviderResponse.TextPreview", func() ([]byte, error) {
-			return Encode(ProviderResponse{env: env{Kind: KindProviderResponse}, TextPreview: hugeField})
-		}, maxFieldBytes, func(e Event) string { return e.(ProviderResponse).TextPreview }},
-		{"ProviderResponse.TextHash", func() ([]byte, error) {
-			return Encode(ProviderResponse{env: env{Kind: KindProviderResponse}, TextHash: hugeHash})
-		}, maxHashBytes, func(e Event) string { return e.(ProviderResponse).TextHash }},
-		{"ToolStart.ToolID", func() ([]byte, error) { return Encode(ToolStart{env: env{Kind: KindToolStart}, ToolID: hugeID}) }, maxIdBytes, func(e Event) string { return e.(ToolStart).ToolID }},
-		{"ToolStart.Source", func() ([]byte, error) { return Encode(ToolStart{env: env{Kind: KindToolStart}, Source: hugeID}) }, maxIdBytes, func(e Event) string { return e.(ToolStart).Source }},
-		{"ToolStart.Name", func() ([]byte, error) { return Encode(ToolStart{env: env{Kind: KindToolStart}, Name: hugeID}) }, maxIdBytes, func(e Event) string { return e.(ToolStart).Name }},
-		{"ToolStart.ArgsSummary", func() ([]byte, error) {
-			return Encode(ToolStart{env: env{Kind: KindToolStart}, ArgsSummary: hugeField})
-		}, maxFieldBytes, func(e Event) string { return e.(ToolStart).ArgsSummary }},
-		{"ToolStart.ArgsHash", func() ([]byte, error) { return Encode(ToolStart{env: env{Kind: KindToolStart}, ArgsHash: hugeHash}) }, maxHashBytes, func(e Event) string { return e.(ToolStart).ArgsHash }},
-		{"ToolEnd.ToolID", func() ([]byte, error) { return Encode(ToolEnd{env: env{Kind: KindToolEnd}, ToolID: hugeID}) }, maxIdBytes, func(e Event) string { return e.(ToolEnd).ToolID }},
-		{"ToolEnd.ResultSummary", func() ([]byte, error) { return Encode(ToolEnd{env: env{Kind: KindToolEnd}, ResultSummary: hugeField}) }, maxFieldBytes, func(e Event) string { return e.(ToolEnd).ResultSummary }},
-		{"ToolEnd.ResultHash", func() ([]byte, error) { return Encode(ToolEnd{env: env{Kind: KindToolEnd}, ResultHash: hugeHash}) }, maxHashBytes, func(e Event) string { return e.(ToolEnd).ResultHash }},
-		{"ContextEvent.CtxKind", func() ([]byte, error) { return Encode(ContextEvent{env: env{Kind: KindContextEvent}, CtxKind: hugeID}) }, maxIdBytes, func(e Event) string { return e.(ContextEvent).CtxKind }},
-		{"ContextEvent.Detail", func() ([]byte, error) {
-			return Encode(ContextEvent{env: env{Kind: KindContextEvent}, Detail: hugeField})
-		}, maxFieldBytes, func(e Event) string { return e.(ContextEvent).Detail }},
-		{"Envelope.SandboxID", func() ([]byte, error) { return Encode(TurnStart{env: env{Kind: KindTurnStart, SandboxID: hugeID}}) }, maxIdBytes, func(e Event) string { return e.Envelope().SandboxID }},
-		{"Envelope.SessionID", func() ([]byte, error) { return Encode(TurnStart{env: env{Kind: KindTurnStart, SessionID: hugeID}}) }, maxIdBytes, func(e Event) string { return e.Envelope().SessionID }},
-		{"Envelope.TurnID", func() ([]byte, error) { return Encode(TurnStart{env: env{Kind: KindTurnStart, TurnID: hugeID}}) }, maxIdBytes, func(e Event) string { return e.Envelope().TurnID }},
-		{"ProviderRequest.Summary.SystemPromptHash", func() ([]byte, error) {
-			return Encode(ProviderRequest{env: env{Kind: KindProviderRequest}, Summary: RequestSummary{SystemPromptHash: hugeHash}})
-		}, maxHashBytes, func(e Event) string { return e.(ProviderRequest).Summary.SystemPromptHash }},
-		{"ProviderRequest.Summary.ToolSchemaHash", func() ([]byte, error) {
-			return Encode(ProviderRequest{env: env{Kind: KindProviderRequest}, Summary: RequestSummary{ToolSchemaHash: hugeHash}})
-		}, maxHashBytes, func(e Event) string { return e.(ProviderRequest).Summary.ToolSchemaHash }},
-		{"ProviderRequest.Summary.NewMessages[0].Role", func() ([]byte, error) {
-			return Encode(ProviderRequest{env: env{Kind: KindProviderRequest}, Summary: RequestSummary{NewMessages: []MessageSummary{{Role: hugeID}}}})
-		}, maxIdBytes, func(e Event) string { return e.(ProviderRequest).Summary.NewMessages[0].Role }},
-		{"ProviderRequest.Summary.NewMessages[0].Hash", func() ([]byte, error) {
-			return Encode(ProviderRequest{env: env{Kind: KindProviderRequest}, Summary: RequestSummary{NewMessages: []MessageSummary{{Hash: hugeHash}}}})
-		}, maxHashBytes, func(e Event) string { return e.(ProviderRequest).Summary.NewMessages[0].Hash }},
-		{"ProviderRequest.Summary.NewMessages[0].Preview", func() ([]byte, error) {
-			return Encode(ProviderRequest{env: env{Kind: KindProviderRequest}, Summary: RequestSummary{NewMessages: []MessageSummary{{Preview: hugeField}}}})
-		}, maxFieldBytes, func(e Event) string { return e.(ProviderRequest).Summary.NewMessages[0].Preview }},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			line, err := tc.line()
-			if err != nil {
-				t.Fatalf("Encode() error: %v", err)
+		if kind == KindProviderRequest {
+			var summary map[string]json.RawMessage
+			if err := json.Unmarshal(m["summary"], &summary); err != nil {
+				t.Fatalf("Unmarshal summary: %v", err)
 			}
-			got, err := Decode(line)
-			if err != nil {
-				t.Fatalf("Decode() error: %v", err)
-			}
-			if n := len(tc.get(got)); n > tc.max {
-				t.Fatalf("%s len = %d, want <= %d", tc.name, n, tc.max)
-			}
-		})
-	}
-}
-
-// TestDecodeCapsProviderRequestStringSlices is R5-1 companion coverage for
-// the three plain string slices Decode length-caps to maxListEntries and
-// per-entry-caps: ProviderRequest.Summary.ToolNames (capID),
-// Summary.McpToolNames (capID), and ProviderRequest.ChangedBlobs (capHash).
-// Each case builds a slice with more than maxListEntries entries, every
-// entry ALSO individually oversized past its per-entry cap, so a single
-// decode exercises both caps at once (an over-length slice of otherwise-tiny
-// strings would never catch a missing per-entry capFn call, and vice versa).
-func TestDecodeCapsProviderRequestStringSlices(t *testing.T) {
-	overLen := maxListEntries + 50
-	hugeID := strings.Repeat("i", maxIdBytes+1)
-	hugeHash := strings.Repeat("h", maxHashBytes+1)
-
-	oversizedSlice := func(n int, val string) []string {
-		out := make([]string, n)
-		for i := range out {
-			out[i] = val
-		}
-		return out
-	}
-
-	cases := []struct {
-		name     string
-		line     func() ([]byte, error)
-		entryMax int
-		get      func(ProviderRequest) []string
-	}{
-		{"Summary.ToolNames", func() ([]byte, error) {
-			return Encode(ProviderRequest{env: env{Kind: KindProviderRequest}, Summary: RequestSummary{ToolNames: oversizedSlice(overLen, hugeID)}})
-		}, maxIdBytes, func(pr ProviderRequest) []string { return pr.Summary.ToolNames }},
-		{"Summary.McpToolNames", func() ([]byte, error) {
-			return Encode(ProviderRequest{env: env{Kind: KindProviderRequest}, Summary: RequestSummary{McpToolNames: oversizedSlice(overLen, hugeID)}})
-		}, maxIdBytes, func(pr ProviderRequest) []string { return pr.Summary.McpToolNames }},
-		{"ChangedBlobs", func() ([]byte, error) {
-			return Encode(ProviderRequest{env: env{Kind: KindProviderRequest}, ChangedBlobs: oversizedSlice(overLen, hugeHash)})
-		}, maxHashBytes, func(pr ProviderRequest) []string { return pr.ChangedBlobs }},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			line, err := tc.line()
-			if err != nil {
-				t.Fatalf("Encode() error: %v", err)
-			}
-			got, err := Decode(line)
-			if err != nil {
-				t.Fatalf("Decode() error: %v", err)
-			}
-			pr, ok := got.(ProviderRequest)
-			if !ok {
-				t.Fatalf("Decode() returned %T, want ProviderRequest", got)
-			}
-			list := tc.get(pr)
-			if n := len(list); n > maxListEntries {
-				t.Fatalf("%s len = %d, want <= maxListEntries (%d)", tc.name, n, maxListEntries)
-			}
-			for i, v := range list {
-				if n := len(v); n > tc.entryMax {
-					t.Fatalf("%s[%d] len = %d, want <= %d", tc.name, i, n, tc.entryMax)
+			for _, k := range []string{"systemPromptHash", "systemPromptBytes", "messageCount", "newMessages", "toolCount", "toolNames", "mcpToolNames", "toolSchemaHash", "estTokens"} {
+				if _, ok := summary[k]; !ok {
+					t.Errorf("summary missing key %q: %s", k, m["summary"])
 				}
 			}
-		})
-	}
-}
-
-// TestDecodeCapsProviderResponseToolCalls is R6-1 companion coverage for
-// ProviderResponse.ToolCalls: Decode must length-cap the slice to
-// maxListEntries AND per-entry-cap every surviving name (capID), the same
-// pattern TestDecodeCapsProviderRequestStringSlices exercises for
-// ProviderRequest's plain string-slice fields. The input has more than
-// maxListEntries entries, each ALSO individually oversized past capID's
-// bound, so length-capping and per-entry-capping are both exercised in one
-// decode.
-func TestDecodeCapsProviderResponseToolCalls(t *testing.T) {
-	overLen := maxListEntries + 50
-	hugeName := strings.Repeat("n", maxIdBytes+1)
-	toolCalls := make([]string, overLen)
-	for i := range toolCalls {
-		toolCalls[i] = hugeName
-	}
-
-	line, err := Encode(ProviderResponse{env: env{Kind: KindProviderResponse}, ToolCalls: toolCalls})
-	if err != nil {
-		t.Fatalf("Encode() error: %v", err)
-	}
-	got, err := Decode(line)
-	if err != nil {
-		t.Fatalf("Decode() error: %v", err)
-	}
-	pr, ok := got.(ProviderResponse)
-	if !ok {
-		t.Fatalf("Decode() returned %T, want ProviderResponse", got)
-	}
-	if n := len(pr.ToolCalls); n > maxListEntries {
-		t.Fatalf("ToolCalls len = %d, want <= maxListEntries (%d)", n, maxListEntries)
-	}
-	for i, name := range pr.ToolCalls {
-		if n := len(name); n > maxIdBytes {
-			t.Fatalf("ToolCalls[%d] len = %d, want <= maxIdBytes (%d)", i, n, maxIdBytes)
 		}
 	}
 }
 
-// TestDecodeCapsProviderRequestNewMessages is R5-1 companion coverage for
-// ProviderRequest.Summary.NewMessages: Decode must length-cap the slice to
-// maxListEntries AND per-field-cap every surviving entry's Role (capID),
-// Hash (capHash), and Preview (capField). NewMessages is a []MessageSummary,
-// not a []string, so it doesn't fit the shared capStringSlice helper used
-// above and gets its own dedicated (not table-driven) test. The input has
-// more than maxListEntries entries, each with all three string fields
-// individually oversized, so length-capping and per-field-capping are both
-// exercised in one decode.
-func TestDecodeCapsProviderRequestNewMessages(t *testing.T) {
-	overLen := maxListEntries + 50
-	hugeRole := strings.Repeat("r", maxIdBytes+1)
-	hugeHash := strings.Repeat("h", maxHashBytes+1)
-	hugePreview := strings.Repeat("p", maxFieldBytes+1)
+func TestDecodeRejectsMalformedAndDataOnlyLines(t *testing.T) {
+	cases := map[string]string{
+		"malformed json": `{"kind":`,
+		"missing kind":   `{"sandboxId":"s"}`,
+		"empty kind":     `{"kind":"","sandboxId":"s"}`,
+		"blob is data-only, never on the event stream": `{"kind":"blob","hash":"h","text":"t"}`,
+	}
+	for name, line := range cases {
+		if _, err := Decode([]byte(line)); err == nil {
+			t.Errorf("Decode(%s) = nil error, want an error", name)
+		}
+	}
+}
 
-	msgs := make([]MessageSummary, overLen)
-	for i := range msgs {
-		msgs[i] = MessageSummary{Role: hugeRole, Hash: hugeHash, Preview: hugePreview}
-	}
-
-	line, err := Encode(ProviderRequest{
-		env:     env{Kind: KindProviderRequest},
-		Summary: RequestSummary{NewMessages: msgs},
-	})
+// TestDecodeUnknownKindIsForwardCompatible: a NEWER tap's unrecognized kind
+// must survive as an UnknownEvent carrying the whole original line, not be
+// rejected.
+func TestDecodeUnknownKindIsForwardCompatible(t *testing.T) {
+	line := `{"kind":"future_kind","sandboxId":"sbx","sessionId":"sess","turnId":"t","seq":9,"ts":5,"extra":{"a":1}}`
+	ev, err := Decode([]byte(line))
 	if err != nil {
-		t.Fatalf("Encode() error: %v", err)
+		t.Fatalf("Decode: %v", err)
 	}
-	got, err := Decode(line)
-	if err != nil {
-		t.Fatalf("Decode() error: %v", err)
-	}
-	pr, ok := got.(ProviderRequest)
+	unknown, ok := ev.(UnknownEvent)
 	if !ok {
-		t.Fatalf("Decode() returned %T, want ProviderRequest", got)
+		t.Fatalf("Decode returned %T, want UnknownEvent", ev)
+	}
+	if got := unknown.Envelope(); got.Kind != "future_kind" || got.SandboxID != "sbx" || got.Seq != 9 {
+		t.Fatalf("envelope = %+v, want the decoded fields", got)
+	}
+	back, err := Encode(unknown)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if string(back) != line {
+		t.Fatalf("Encode(UnknownEvent) = %s, want the original line verbatim", back)
+	}
+}
+
+// TestDecodeCapsEveryStringBearingField is the retained-memory bound: no
+// decoded string, and no decoded slice, may exceed its cap, whatever the tap
+// sends. One oversized value per field, checked on one event per kind.
+func TestDecodeCapsEveryStringBearingField(t *testing.T) {
+	huge := strings.Repeat("x", maxFieldBytes*2)
+	// List entries only need to exceed maxIDBytes; repeating the 128KB
+	// string 562 times per list would make this test cost hundreds of MB of
+	// JSON for no extra coverage.
+	long := strings.Repeat("x", maxIDBytes*2)
+	hugeList := make([]string, maxListEntries+50)
+	for i := range hugeList {
+		hugeList[i] = long
+	}
+	envJSON := func(kind Kind, extra map[string]any) []byte {
+		obj := map[string]any{"kind": kind, "sandboxId": huge, "sessionId": huge, "turnId": huge, "seq": 1, "ts": 2}
+		for k, v := range extra {
+			obj[k] = v
+		}
+		line, err := json.Marshal(obj)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		return line
+	}
+	check := func(what, s string, limit int) {
+		if len(s) > limit {
+			t.Errorf("%s is %d bytes, want <= %d", what, len(s), limit)
+		}
+	}
+	checkList := func(what string, list []string, limit int) {
+		if len(list) > maxListEntries {
+			t.Errorf("%s has %d entries, want <= %d", what, len(list), maxListEntries)
+		}
+		for _, s := range list {
+			check(what+" entry", s, limit)
+		}
+	}
+	checkEnvelope := func(e Envelope) {
+		check("sandboxId", e.SandboxID, maxIDBytes)
+		check("sessionId", e.SessionID, maxIDBytes)
+		check("turnId", e.TurnID, maxIDBytes)
 	}
 
-	if n := len(pr.Summary.NewMessages); n > maxListEntries {
-		t.Fatalf("NewMessages len = %d, want <= maxListEntries (%d)", n, maxListEntries)
+	decode := func(kind Kind, extra map[string]any) Event {
+		ev, err := Decode(envJSON(kind, extra))
+		if err != nil {
+			t.Fatalf("Decode %s: %v", kind, err)
+		}
+		checkEnvelope(ev.Envelope())
+		return ev
 	}
-	for i, m := range pr.Summary.NewMessages {
-		if n := len(m.Role); n > maxIdBytes {
-			t.Fatalf("NewMessages[%d].Role len = %d, want <= maxIdBytes (%d)", i, n, maxIdBytes)
-		}
-		if n := len(m.Hash); n > maxHashBytes {
-			t.Fatalf("NewMessages[%d].Hash len = %d, want <= maxHashBytes (%d)", i, n, maxHashBytes)
-		}
-		if n := len(m.Preview); n > maxFieldBytes {
-			t.Fatalf("NewMessages[%d].Preview len = %d, want <= maxFieldBytes (%d)", i, n, maxFieldBytes)
-		}
+
+	ts := decode(KindTurnStart, map[string]any{"model": huge, "trigger": huge}).(TurnStart)
+	check("turn_start.model", ts.Model, maxIDBytes)
+	check("turn_start.trigger", ts.Trigger, maxIDBytes)
+
+	pr := decode(KindProviderRequest, map[string]any{
+		"model": huge, "trigger": huge, "changedBlobs": hugeList,
+		"summary": map[string]any{
+			"systemPromptHash": huge, "toolSchemaHash": huge,
+			"toolNames": hugeList, "mcpToolNames": hugeList,
+			"newMessages": func() []any {
+				var out []any
+				for i := 0; i < maxListEntries+50; i++ {
+					out = append(out, map[string]any{"role": long, "hash": long, "preview": long})
+				}
+				return out
+			}(),
+		},
+	}).(ProviderRequest)
+	check("provider_request.model", pr.Model, maxIDBytes)
+	check("summary.systemPromptHash", pr.Summary.SystemPromptHash, maxIDBytes)
+	check("summary.toolSchemaHash", pr.Summary.ToolSchemaHash, maxIDBytes)
+	checkList("summary.toolNames", pr.Summary.ToolNames, maxIDBytes)
+	checkList("summary.mcpToolNames", pr.Summary.McpToolNames, maxIDBytes)
+	checkList("changedBlobs", pr.ChangedBlobs, maxIDBytes)
+	if len(pr.Summary.NewMessages) > maxListEntries {
+		t.Errorf("summary.newMessages has %d entries, want <= %d", len(pr.Summary.NewMessages), maxListEntries)
+	}
+	for _, m := range pr.Summary.NewMessages {
+		check("newMessages.role", m.Role, maxIDBytes)
+		check("newMessages.hash", m.Hash, maxIDBytes)
+		check("newMessages.preview", m.Preview, maxFieldBytes)
+	}
+
+	presp := decode(KindProviderResponse, map[string]any{
+		"stopReason": huge, "textPreview": huge, "textHash": huge, "toolCalls": hugeList,
+	}).(ProviderResponse)
+	check("provider_response.stopReason", presp.StopReason, maxIDBytes)
+	check("provider_response.textPreview", presp.TextPreview, maxFieldBytes)
+	check("provider_response.textHash", presp.TextHash, maxIDBytes)
+	checkList("provider_response.toolCalls", presp.ToolCalls, maxIDBytes)
+
+	tstart := decode(KindToolStart, map[string]any{
+		"toolId": huge, "source": huge, "name": huge, "argsSummary": huge, "argsHash": huge,
+	}).(ToolStart)
+	check("tool_start.toolId", tstart.ToolID, maxIDBytes)
+	check("tool_start.source", tstart.Source, maxIDBytes)
+	check("tool_start.name", tstart.Name, maxIDBytes)
+	check("tool_start.argsSummary", tstart.ArgsSummary, maxFieldBytes)
+	check("tool_start.argsHash", tstart.ArgsHash, maxIDBytes)
+
+	tend := decode(KindToolEnd, map[string]any{"toolId": huge, "resultSummary": huge, "resultHash": huge}).(ToolEnd)
+	check("tool_end.toolId", tend.ToolID, maxIDBytes)
+	check("tool_end.resultSummary", tend.ResultSummary, maxFieldBytes)
+	check("tool_end.resultHash", tend.ResultHash, maxIDBytes)
+
+	ctx := decode(KindContextEvent, map[string]any{"ctxKind": huge, "detail": huge}).(ContextEvent)
+	check("context_event.ctxKind", ctx.CtxKind, maxIDBytes)
+	check("context_event.detail", ctx.Detail, maxFieldBytes)
+
+	unknown := decode("some_future_kind", map[string]any{"detail": huge}).(UnknownEvent)
+	if len(unknown.Raw) > maxFieldBytes*4 {
+		t.Errorf("UnknownEvent.Raw is %d bytes, want <= %d", len(unknown.Raw), maxFieldBytes*4)
+	}
+}
+
+// TestCapTruncationNeverPanicsOnMultibyteUTF8: capping is a byte slice, so a
+// multi-byte rune can be cut in half. That must stay a harmless truncation.
+func TestCapTruncationNeverPanicsOnMultibyteUTF8(t *testing.T) {
+	detail := strings.Repeat("é", maxFieldBytes) // 2 bytes per rune
+	line, err := json.Marshal(map[string]any{"kind": KindContextEvent, "ctxKind": "x", "detail": detail})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	ev, err := Decode(line)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if got := len(ev.(ContextEvent).Detail); got > maxFieldBytes {
+		t.Fatalf("detail is %d bytes, want <= %d", got, maxFieldBytes)
 	}
 }
