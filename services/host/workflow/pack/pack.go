@@ -81,6 +81,11 @@ type Manifest struct {
 	// prompt. A private pack can provide an authenticated gateway and make it
 	// exclusive without adding its endpoint or aliases to public Pix.
 	Inference *Inference `toml:"inference,omitempty"`
+	// Services are [[services]] entries (U08a, AC-PACK-02/AC-SUP-05): the SOLE
+	// declaration of a long-running external service unit. Declaration-only in
+	// this build — validated fail-closed at load, Tier-1 gated and fully
+	// fingerprinted, consumed by no supervisor yet. See service.go.
+	Services []PackService `toml:"services,omitempty"`
 }
 
 // ApplyPackInference projects a pack's declarative inference contract into
@@ -577,6 +582,9 @@ func validatePackFacets(root string, m *Manifest) error {
 		if ig.Setup != "" && !seenSetup[ig.Setup] {
 			return fmt.Errorf("pack %s: integration %q references unknown setup hook %q", root, ig.Name, ig.Setup)
 		}
+	}
+	if err := validatePackServices(root, m); err != nil {
+		return err
 	}
 	return nil
 }

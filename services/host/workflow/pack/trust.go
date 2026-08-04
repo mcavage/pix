@@ -60,6 +60,7 @@ type hostBoM struct {
 	Prerequisites  []string           // pack-authored external state the user must bring
 	Setup          []packSetupStep    // pack setup executables, probes, and apply argv
 	Inference      []hostBoMInference // model endpoints plus credential-routing policy
+	Services       []PackService      // [[services]] long-running units (normalized; U08a, declaration-only)
 }
 
 // hostBoMMCP is one host-spawned MCP server: its name plus the exact argv the
@@ -101,7 +102,7 @@ type hostBoMInference struct {
 // MCP endpoint does raise the tier: adopting it sends conversation context to
 // a pack-selected third party and may launch OAuth, so it requires consent.
 func (b hostBoM) Tier1() bool {
-	return len(b.MCP) > 0 || len(b.Containers) > 0 || len(b.RemoteMCP) > 0 || len(b.Proxies) > 0 || len(b.Bins) > 0 || len(b.Setup) > 0 || len(b.Inference) > 0
+	return len(b.MCP) > 0 || len(b.Containers) > 0 || len(b.RemoteMCP) > 0 || len(b.Proxies) > 0 || len(b.Bins) > 0 || len(b.Setup) > 0 || len(b.Inference) > 0 || len(b.Services) > 0
 }
 
 // VerifyPackInferenceTrust closes the adoption-to-launch gap for credential-
@@ -247,6 +248,11 @@ func ComputeHostBoM(p *Info, cfgGogAccount string, isLocalMCP func(string) bool)
 		}
 	}
 	b.Setup = append(b.Setup, p.Manifest.Setup...)
+	for _, svc := range p.Manifest.Services {
+		// Normalized: the shape the user reviews IS the shape the fingerprint
+		// pins and a future supervisor consumes.
+		b.Services = append(b.Services, svc.normalized())
+	}
 	if p.Manifest.Inference != nil {
 		for name, backend := range p.Manifest.Inference.Backends {
 			b.Inference = append(b.Inference, hostBoMInference{
@@ -345,6 +351,30 @@ func computeHostExecFingerprintWithSetup(root string, b hostBoM, setupBytes map[
 		Header  string `json:"header"`
 		Format  string `json:"format"`
 	}
+	type fpServiceResources struct {
+		MemoryMB   int `json:"memory_mb"`
+		CPUPercent int `json:"cpu_percent"`
+	}
+	// fpService pins EVERY [[services]] field (AC-PACK-02): any change to any
+	// of them is a different host-exec surface and re-gates.
+	type fpService struct {
+		Name       string              `json:"name"`
+		Runtime    string              `json:"runtime"`
+		Activation string              `json:"activation"`
+		Path       string              `json:"path,omitempty"`
+		SHA        string              `json:"sha,omitempty"`
+		Image      string              `json:"image,omitempty"`
+		Argv       []string            `json:"argv,omitempty"`
+		Env        []string            `json:"env,omitempty"`
+		Port       int                 `json:"port,omitempty"`
+		Listen     string              `json:"listen,omitempty"`
+		Health     string              `json:"health,omitempty"`
+		Mounts     []string            `json:"mounts,omitempty"`
+		Network    []string            `json:"network,omitempty"`
+		Resources  *fpServiceResources `json:"resources,omitempty"`
+		License    string              `json:"license"`
+		Source     string              `json:"source"`
+	}
 	type fpDoc struct {
 		V             int           `json:"v"`
 		MCP           []fpMCP       `json:"mcp"`
@@ -357,6 +387,11 @@ func computeHostExecFingerprintWithSetup(root string, b hostBoM, setupBytes map[
 		Prerequisites []string      `json:"prerequisites"`
 		Setup         []fpSetup     `json:"setup"`
 		Inference     []fpInference `json:"inference"`
+		// Services is ADDITIVE with omitempty on purpose: a pack with no
+		// [[services]] keeps its exact pre-U08a byte encoding, so every
+		// already-accepted fingerprint stays valid (no upgrade re-gate storm).
+		// Injectivity holds: the key is present iff a service is declared.
+		Services []fpService `json:"services,omitempty"`
 	}
 	doc := fpDoc{V: 6}
 	proxySHA := map[string]string{}
@@ -434,6 +469,29 @@ func computeHostExecFingerprintWithSetup(root string, b hostBoM, setupBytes map[
 			Name: inf.Name, URL: inf.URL, Auth: inf.Auth, Service: inf.Service, Header: inf.Header, Format: inf.Format,
 		})
 	}
+	for _, svc := range b.Services {
+		fp := fpService{
+			Name: svc.Name, Runtime: svc.Runtime, Activation: svc.Activation,
+			Path: svc.Path, SHA: strings.ToLower(strings.TrimSpace(svc.SHA)), Image: svc.Image,
+			Argv: append([]string(nil), svc.Argv...),
+			Env:  append([]string(nil), svc.Env...),
+			Port: svc.Port, Listen: svc.Listen, Health: svc.Health,
+			Mounts:  append([]string(nil), svc.Mounts...),
+			Network: append([]string(nil), svc.Network...),
+			License: svc.License, Source: svc.Source,
+		}
+		// Argv order is semantic (kept); env/mounts/network are sets — sorted
+		// so a pure list reorder never re-gates.
+		sort.Strings(fp.Env)
+		sort.Strings(fp.Mounts)
+		sort.Strings(fp.Network)
+		if svc.Resources != nil {
+			fp.Resources = &fpServiceResources{MemoryMB: svc.Resources.MemoryMB, CPUPercent: svc.Resources.CPUPercent}
+		}
+		doc.Services = append(doc.Services, fp)
+	}
+	// Names are unique (validatePackServices), so name order is total.
+	sort.Slice(doc.Services, func(i, j int) bool { return doc.Services[i].Name < doc.Services[j].Name })
 	enc, err := json.Marshal(doc)
 	if err != nil {
 		return "", nil, fmt.Errorf("encoding host-exec surface: %v", err)
@@ -494,6 +552,44 @@ func renderHostBoM(out io.Writer, b hostBoM) {
 	}
 	for _, bn := range b.Bins {
 		fmt.Fprintf(out, "  External binary:     %s  sha256:%s  [re-hashed before every launch]\n", bn.Name, strings.ToLower(strings.TrimSpace(bn.SHA)))
+	}
+	for _, svc := range b.Services {
+		fmt.Fprintf(out, "  Host service:        %s (%s, activation %s)\n", svc.Name, svc.Runtime, svc.Activation)
+		switch svc.Runtime {
+		case ServiceRuntimeContainer:
+			fmt.Fprintf(out, "                       Runs a container on this Mac: %s\n", svc.Image)
+		default:
+			line := svc.Path
+			if len(svc.Argv) > 0 {
+				line += " " + strings.Join(svc.Argv, " ")
+			}
+			fmt.Fprintf(out, "                       Runs on this Mac: %s\n", line)
+			fmt.Fprintf(out, "                       sha256:%s  [verified before every launch]\n", svc.SHA)
+		}
+		if svc.Port != 0 {
+			listen := svc.Listen
+			if listen == "" {
+				listen = "127.0.0.1"
+			}
+			health := svc.Health
+			if health == "" {
+				health = "none declared"
+			}
+			fmt.Fprintf(out, "                       Listens: %s:%d (loopback only; health %s)\n", listen, svc.Port, health)
+		}
+		if len(svc.Env) > 0 {
+			fmt.Fprintf(out, "                       Env (names only, values stay in 1Password): %s\n", strings.Join(svc.Env, ", "))
+		}
+		if len(svc.Mounts) > 0 {
+			fmt.Fprintf(out, "                       Mounts (pack-relative): %s\n", strings.Join(svc.Mounts, ", "))
+		}
+		if len(svc.Network) > 0 {
+			fmt.Fprintf(out, "                       Network access: %s\n", strings.Join(svc.Network, ", "))
+		}
+		if r := svc.Resources; r != nil {
+			fmt.Fprintf(out, "                       Resources: %d MB memory, %d%% CPU\n", r.MemoryMB, r.CPUPercent)
+		}
+		fmt.Fprintf(out, "                       License: %s   Source: %s\n", svc.License, svc.Source)
 	}
 	for _, s := range b.Setup {
 		kind := "Optional:"
