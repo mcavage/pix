@@ -1,0 +1,29 @@
+{
+  "verb": "knowledge",
+  "cases": [
+    {
+      "name": "help",
+      "args": [
+        "knowledge",
+        "--help"
+      ],
+      "exitCode": 0,
+      "stream": "stdout",
+      "contains": [
+        "usage: pix knowledge"
+      ]
+    },
+    {
+      "name": "bad-invocation",
+      "args": [
+        "knowledge",
+        "--this-is-not-a-real-flag-9x7z"
+      ],
+      "exitCode": 2,
+      "stream": "stderr",
+      "contains": [
+        "unknown subcommand"
+      ]
+    }
+  ]
+}

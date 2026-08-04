@@ -1,0 +1,28 @@
+{
+  "verb": "rm",
+  "cases": [
+    {
+      "name": "help",
+      "args": [
+        "rm",
+        "--help"
+      ],
+      "exitCode": 0,
+      "stream": "stdout",
+      "contains": [
+        "usage: pix rm"
+      ]
+    },
+    {
+      "name": "bad-invocation",
+      "args": [
+        "rm"
+      ],
+      "exitCode": 2,
+      "stream": "stdout",
+      "contains": [
+        "usage: pix rm"
+      ]
+    }
+  ]
+}

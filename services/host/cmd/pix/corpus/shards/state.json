@@ -1,0 +1,29 @@
+{
+  "verb": "state",
+  "cases": [
+    {
+      "name": "help",
+      "args": [
+        "state",
+        "--help"
+      ],
+      "exitCode": 0,
+      "stream": "stdout",
+      "contains": [
+        "usage: pix state"
+      ]
+    },
+    {
+      "name": "bad-invocation",
+      "args": [
+        "state",
+        "--this-is-not-a-real-flag-9x7z"
+      ],
+      "exitCode": 2,
+      "stream": "stderr",
+      "contains": [
+        "unknown subcommand"
+      ]
+    }
+  ]
+}

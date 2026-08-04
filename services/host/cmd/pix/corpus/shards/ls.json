@@ -1,0 +1,17 @@
+{
+  "verb": "ls",
+  "cases": [
+    {
+      "name": "help",
+      "args": [
+        "ls",
+        "--help"
+      ],
+      "exitCode": 0,
+      "stream": "stdout",
+      "contains": [
+        "usage: pix ls"
+      ]
+    }
+  ]
+}

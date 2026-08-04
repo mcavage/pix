@@ -1,0 +1,29 @@
+{
+  "verb": "gworkspace",
+  "cases": [
+    {
+      "name": "help",
+      "args": [
+        "gworkspace",
+        "--help"
+      ],
+      "exitCode": 0,
+      "stream": "stdout",
+      "contains": [
+        "usage: pix gworkspace"
+      ]
+    },
+    {
+      "name": "bad-invocation",
+      "args": [
+        "gworkspace",
+        "--this-is-not-a-real-flag-9x7z"
+      ],
+      "exitCode": 2,
+      "stream": "stderr",
+      "contains": [
+        "unknown subcommand"
+      ]
+    }
+  ]
+}

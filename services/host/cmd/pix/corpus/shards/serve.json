@@ -1,0 +1,29 @@
+{
+  "verb": "serve",
+  "cases": [
+    {
+      "name": "help",
+      "args": [
+        "serve",
+        "--help"
+      ],
+      "exitCode": 0,
+      "stream": "stdout",
+      "contains": [
+        "usage: pix serve"
+      ]
+    },
+    {
+      "name": "bad-invocation",
+      "args": [
+        "serve",
+        "--this-is-not-a-real-flag-9x7z"
+      ],
+      "exitCode": 1,
+      "stream": "stderr",
+      "contains": [
+        "pix serve:"
+      ]
+    }
+  ]
+}
