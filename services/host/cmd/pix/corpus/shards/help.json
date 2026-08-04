@@ -1,0 +1,42 @@
+{
+  "verb": "help",
+  "cases": [
+    {
+      "name": "help",
+      "args": [
+        "help",
+        "--help"
+      ],
+      "exitCode": 0,
+      "stream": "stdout",
+      "contains": [
+        "Usage:  pix <command> [args]"
+      ]
+    },
+    {
+      "name": "bad-invocation",
+      "args": [
+        "help",
+        "--this-is-not-a-real-flag-9x7z"
+      ],
+      "exitCode": 0,
+      "stream": "stdout",
+      "contains": [
+        "Usage:  pix <command> [args]"
+      ]
+    },
+    {
+      "name": "help-all-safe-read-only-shape",
+      "args": [
+        "help",
+        "--all"
+      ],
+      "exitCode": 0,
+      "stream": "stdout",
+      "contains": [
+        "pix: a personal, multi-model pi coding agent in a Docker sandbox.",
+        "Usage:  pix <command> [args]"
+      ]
+    }
+  ]
+}

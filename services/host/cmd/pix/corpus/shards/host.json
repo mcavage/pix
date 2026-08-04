@@ -1,0 +1,29 @@
+{
+  "verb": "host",
+  "cases": [
+    {
+      "name": "help",
+      "args": [
+        "host",
+        "--help"
+      ],
+      "exitCode": 0,
+      "stream": "stdout",
+      "contains": [
+        "usage: pix host"
+      ]
+    },
+    {
+      "name": "bad-invocation",
+      "args": [
+        "host",
+        "--this-is-not-a-real-flag-9x7z"
+      ],
+      "exitCode": 2,
+      "stream": "stderr",
+      "contains": [
+        "unknown flag"
+      ]
+    }
+  ]
+}

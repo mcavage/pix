@@ -1,0 +1,29 @@
+{
+  "verb": "reset",
+  "cases": [
+    {
+      "name": "help",
+      "args": [
+        "reset",
+        "--help"
+      ],
+      "exitCode": 0,
+      "stream": "stdout",
+      "contains": [
+        "usage: pix reset"
+      ]
+    },
+    {
+      "name": "bad-invocation",
+      "args": [
+        "reset",
+        "--this-is-not-a-real-flag-9x7z"
+      ],
+      "exitCode": 2,
+      "stream": "stderr",
+      "contains": [
+        "unknown flag"
+      ]
+    }
+  ]
+}

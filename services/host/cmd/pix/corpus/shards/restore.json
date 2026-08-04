@@ -1,0 +1,29 @@
+{
+  "verb": "restore",
+  "cases": [
+    {
+      "name": "help",
+      "args": [
+        "restore",
+        "--help"
+      ],
+      "exitCode": 0,
+      "stream": "stdout",
+      "contains": [
+        "usage: pix restore"
+      ]
+    },
+    {
+      "name": "bad-invocation",
+      "args": [
+        "restore",
+        "--this-is-not-a-real-flag-9x7z"
+      ],
+      "exitCode": 2,
+      "stream": "stderr",
+      "contains": [
+        "unknown flag"
+      ]
+    }
+  ]
+}

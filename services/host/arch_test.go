@@ -112,6 +112,11 @@ var pkgLayer = map[string]int{
 
 	// L4 — the command layer.
 	"cmd/pix": layerCommand,
+	// cmd/pix/corpus is the golden CLI corpus + retirement-manifest harness
+	// (W0 U00b): it imports nothing below it (stdlib + os/exec only) and
+	// drives the compiled cmd/pix binary as a real subprocess rather than
+	// importing it, so it belongs beside the command it exercises.
+	"cmd/pix/corpus": layerCommand,
 
 	// Not part of the launcher's layering: the host daemon binary and its
 	// examples, which are separate programs.

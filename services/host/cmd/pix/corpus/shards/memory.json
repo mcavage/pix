@@ -1,0 +1,29 @@
+{
+  "verb": "memory",
+  "cases": [
+    {
+      "name": "help",
+      "args": [
+        "memory",
+        "--help"
+      ],
+      "exitCode": 0,
+      "stream": "stdout",
+      "contains": [
+        "usage: pix memory"
+      ]
+    },
+    {
+      "name": "bad-invocation",
+      "args": [
+        "memory",
+        "--this-is-not-a-real-flag-9x7z"
+      ],
+      "exitCode": 2,
+      "stream": "stderr",
+      "contains": [
+        "unknown subcommand"
+      ]
+    }
+  ]
+}
