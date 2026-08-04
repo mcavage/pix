@@ -334,6 +334,29 @@ test("every real W0 pin holds against THIS repository right now (no manifest wai
 	}
 });
 
+// U03B regression sentinel: BROKER_PORT/PIX_BROKER_PORT were pinned here
+// while the broker was still dormant infrastructure; W2/U03B (commit
+// cfd4522) deleted the CredentialBroker plugin seam entirely (see
+// services/host/cmd/pix/hostmode_gone_test.go's Go-side sentinel for the
+// execution-symbol half of this same deletion). A pin that still expected a
+// deleted literal was exactly the U03B gate failure this task fixed — assert
+// the ports domain never re-pins the retired broker port so a future patch
+// can't silently resurrect the requirement without this test noticing.
+test("the ports domain no longer pins the retired broker port (W2/U03B deleted it)", async () => {
+	const pins = await loadRules(REAL_RULES_DIR);
+	const portsPins = pins.filter((p) => p.domain === "ports");
+	assert.ok(portsPins.length > 0, "ports domain must still ship pins");
+	for (const pin of portsPins) {
+		for (const check of pin.checks) {
+			const values = check.values ?? check.expected ?? [];
+			const flat = Array.isArray(values) ? values : [values];
+			for (const v of flat) {
+				assert.ok(!String(v).includes("BROKER_PORT"), `${pin.id} (${check.file}) still pins a broker port literal: ${v}`);
+			}
+		}
+	}
+});
+
 test("the CLI exits 0 against the real repo and exits 1 against a fixture with a planted corruption", () => {
 	const cliOut = execFileSync("node", [CLI, "--root", REPO_ROOT], { encoding: "utf8" });
 	assert.match(cliOut, /semantic-diff: PASS/);

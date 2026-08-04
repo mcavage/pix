@@ -1,14 +1,28 @@
 [
 	{
 		"id": "ports.reserved.serve",
-		"rationale": "W1 U01a retires the knowledge surface: `serve` no longer composes the OKF index, so serve.go no longer binds :11436. The memory and broker pins are unchanged — this waiver narrows the pin to the two ports the supervisor still binds, it does not relax it.",
-		"evidence": "services/host/cmd/pix/corpus/retirement.jsonl (approved entries for `knowledge`/`kb` and `pix-host serve knowledge`); services/host/retired.go; services/host/serve.go serveServiceAliases()",
+		"rationale": "W2/U03B deletes host mode and the dormant broker: `serve` never launched it as a real service (BROKER_PORT was reserved but unbound in practice), and the whole slot is gone now, not just dormant. Knowledge was already retired in W1 U01a. serve.go binds only :11435 (memory) today, so the pin narrows from the historical three-port set down to the one port the supervisor actually still binds.",
+		"evidence": "commit cfd4522 (refactor(W2/U03B): delete host mode + dormant broker, retain generic plugin runtime); services/host/serve.go serveServiceAliases() (`{\"memory\": \"memory\"}` only) and the `// knowledge: RETIRED (W1 U01a)` comment where the knowledge branch used to be",
 		"changes": [
 			{
 				"file": "services/host/serve.go",
 				"kind": "contains",
 				"from": ["env(\"MEMORY_PORT\", \"11435\")", "env(\"KNOWLEDGE_PORT\", \"11436\")", "env(\"BROKER_PORT\", \"11437\")"],
-				"to": ["env(\"MEMORY_PORT\", \"11435\")", "env(\"BROKER_PORT\", \"11437\")"]
+				"to": ["env(\"MEMORY_PORT\", \"11435\")"]
+			}
+		]
+	},
+	{
+		"id": "ports.reserved.plugin-env-allowlist",
+		"rationale": "W2/U03B deletes host mode and the dormant broker. PIX_BROKER_PORT was the port var the supervisor communicated to a broker plugin subprocess; with no broker slot left to launch, there is nothing left to allowlist it for. The allowlist narrows to the memory and (still-present, if unused-by-serve) knowledge port vars.",
+		"evidence": "commit cfd4522 (refactor(W2/U03B): delete host mode + dormant broker, retain generic plugin runtime); services/host/serve_plugin.go pluginEnvAllowlist (no PIX_BROKER_PORT entry)",
+		"changes": [
+			{
+				"file": "services/host/serve_plugin.go",
+				"kind": "contains",
+				"region": { "start": "var pluginEnvAllowlist = map[string]bool{", "end": "\n}\n" },
+				"from": ["\"MEMORY_PORT\":", "\"KNOWLEDGE_PORT\":", "\"PIX_MEMORY_PORT\":", "\"PIX_KNOWLEDGE_PORT\":", "\"PIX_BROKER_PORT\":"],
+				"to": ["\"MEMORY_PORT\":", "\"KNOWLEDGE_PORT\":", "\"PIX_MEMORY_PORT\":", "\"PIX_KNOWLEDGE_PORT\":"]
 			}
 		]
 	}

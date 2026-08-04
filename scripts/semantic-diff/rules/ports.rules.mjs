@@ -1,9 +1,12 @@
-// W0 pins: reserved host-service ports. These three ports are load-bearing
-// across memory, knowledge, the dormant broker slot, the plugin subprocess
-// env allowlist, and every extension that reaches host.docker.internal — a
-// silent renumber in only one of these places is exactly the kind of drift a
-// normal build/test pass would not catch (nothing round-trips a port number
-// through a type system).
+// W0 pins: reserved host-service ports. These ports are load-bearing across
+// memory, the plugin subprocess env allowlist, and every extension that
+// reaches host.docker.internal — a silent renumber in only one of these
+// places is exactly the kind of drift a normal build/test pass would not
+// catch (nothing round-trips a port number through a type system). The
+// broker slot (BROKER_PORT / PIX_BROKER_PORT) was retired along with the
+// rest of dormant host-mode broker (W2/U03B) and is deliberately no longer
+// pinned here — see intended-changes.json for the waiver that landed with
+// that removal.
 export default [
 	{
 		id: "ports.reserved.identity",
@@ -18,12 +21,12 @@ export default [
 	},
 	{
 		id: "ports.reserved.serve",
-		description: "serve.go's supervisor binds memory/knowledge/broker to their reserved default ports.",
+		description: "serve.go's supervisor binds memory to its reserved default port (knowledge and broker are both retired capabilities that no longer bind).",
 		checks: [
 			{
 				file: "services/host/serve.go",
 				kind: "contains",
-				values: ['env("MEMORY_PORT", "11435")', 'env("KNOWLEDGE_PORT", "11436")', 'env("BROKER_PORT", "11437")'],
+				values: ['env("MEMORY_PORT", "11435")'],
 			},
 		],
 	},
@@ -46,7 +49,7 @@ export default [
 				file: "services/host/serve_plugin.go",
 				kind: "contains",
 				region: { start: "var pluginEnvAllowlist = map[string]bool{", end: "\n}\n" },
-				values: ['"MEMORY_PORT":', '"KNOWLEDGE_PORT":', '"PIX_MEMORY_PORT":', '"PIX_KNOWLEDGE_PORT":', '"PIX_BROKER_PORT":'],
+				values: ['"MEMORY_PORT":', '"KNOWLEDGE_PORT":', '"PIX_MEMORY_PORT":', '"PIX_KNOWLEDGE_PORT":'],
 			},
 		],
 	},
