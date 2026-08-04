@@ -303,7 +303,17 @@ func runTaskLs(argv []string) {
 		os.Exit(1)
 	}
 	stateRoot := workspace.TaskStateRoot()
-	entries, err := task.List(stateRoot, mainroot, taskProbe())
+	names, err := task.SandboxNames(stateRoot, mainroot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pix task ls: %v\n", err)
+		os.Exit(1)
+	}
+	probe := taskProbe()
+	dispositions := make(map[string]task.SandboxDisposition, len(names))
+	for _, n := range names {
+		dispositions[n] = probe(n)
+	}
+	entries, err := task.List(stateRoot, mainroot, dispositions)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix task ls: %v\n", err)
 		os.Exit(1)

@@ -200,9 +200,23 @@ func GatherGitState(mechanism Mechanism, mainroot, co string) GitState {
 		st.Unknown = true
 		return st
 	}
+	// The positive side is the checkout's own local branches + HEAD (ns/heads,
+	// ns/HEAD). The negative (subtracted) side is mainroot's own normal refs
+	// -- --branches/--tags/--remotes, NOT --all -- plus the checkout's own
+	// remote-tracking view (ns/remotes, proof of an already-pushed commit).
+	// --branches/--tags/--remotes can never match anything under the
+	// refs/pix/* probe namespace ns lives in, so there is no --exclude
+	// needed and thus no include/exclude ORDER for a future edit to get
+	// wrong: an --all-based query needed --exclude=refs/pix/* to land on
+	// the *exact* --all (or --glob) call it decorates (git's rev-list
+	// scopes --exclude to only the next such flag) -- move --glob=ns/remotes
+	// ahead of --all by mistake and --exclude silently binds to it instead,
+	// self-cancelling the checkout's remote-tracking evidence and collapsing
+	// Unrecoverable to 0 for every checkout, pushed or not. See
+	// TestGatherGitState_BareOrigin_PushedAllowsRemoval_CloneOnlyBlocks.
 	if out, err := runIn(mainroot, "rev-list", "--count",
 		"--glob="+ns+"/heads", ns+"/HEAD",
-		"--not", "--exclude=refs/pix/*", "--all", "--glob="+ns+"/remotes"); err == nil {
+		"--not", "--branches", "--tags", "--remotes", "--glob="+ns+"/remotes"); err == nil {
 		st.Unrecoverable = parseCount(out)
 	} else {
 		st.Unknown = true

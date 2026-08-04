@@ -239,7 +239,15 @@ func TestList_PredictsRemoval(t *testing.T) {
 	dirtyCo, _ := Path(state, mainroot, "dirty")
 	os.WriteFile(filepath.Join(dirtyCo, "f.txt"), []byte("changed\n"), 0o644)
 
-	entries, err := List(state, mainroot, func(string) SandboxDisposition { return SandboxAbsent })
+	names, err := SandboxNames(state, mainroot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispositions := make(map[string]SandboxDisposition, len(names))
+	for _, n := range names {
+		dispositions[n] = SandboxAbsent
+	}
+	entries, err := List(state, mainroot, dispositions)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,6 +277,49 @@ func TestList_NoProbeMeansUnknownPredictsRefuse(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !entries[0].WouldRefuse {
-		t.Error("a nil probe must fail safe: unknown sandbox disposition always predicts refuse")
+		t.Error("a nil dispositions map must fail safe: unknown sandbox disposition always predicts refuse")
+	}
+}
+
+// TestGatherGitState_BareOrigin_PushedAllowsRemoval_CloneOnlyBlocks is the
+// U06 review-defect regression: it drives a REAL bare "origin" (not
+// mainroot's own local clone path) so a pushed commit's only proof of
+// survival is the checkout's OWN remote-tracking ref, fetched into the temp
+// probe namespace -- exactly the ref set the include/exclude ordering in
+// GatherGitState's rev-list must actually subtract. One task pushes then
+// asks to be removed (must be ALLOWED); a second stays clone-only (must be
+// REFUSED). A mis-ordered rev-list (--glob=<probe>/remotes sharing the
+// --exclude that --all consumes, instead of --all on its own) silently
+// collapses Unrecoverable to 0 for BOTH tasks -- this test catches that.
+func TestGatherGitState_BareOrigin_PushedAllowsRemoval_CloneOnlyBlocks(t *testing.T) {
+	_, mainroot := newMainroot(t)
+	withBareOrigin(t, mainroot)
+
+	// Task "pushed": the work lands on the bare origin before rm is
+	// attempted. mainroot itself never fetches it back -- the checkout's own
+	// remote-tracking ref (captured into the temp probe namespace) is the
+	// ONLY evidence it survives elsewhere.
+	coPushed, mPushed := newTask(t, mainroot, "pushed", Clone)
+	mustRun(t, coPushed, "commit", "-q", "--allow-empty", "-m", "pushed work")
+	mustRun(t, coPushed, "push", "-q", "--set-upstream", "origin", mPushed.Branch)
+	stPushed := GatherGitState(Clone, mainroot, coPushed)
+	if stPushed.Unrecoverable != 0 {
+		t.Errorf("pushed task: Unrecoverable = %d, want 0 (already on the bare origin)", stPushed.Unrecoverable)
+	}
+	if _, ok := RemoveGuard(stPushed, SandboxAbsent, false); !ok {
+		t.Error("pushed task: RemoveGuard should ALLOW removal; the work survives on origin")
+	}
+
+	// Task "clone-only": never pushed anywhere, even though mainroot HAS a
+	// real bare origin configured (so this isn't the simpler no-upstream-at-
+	// all case already covered elsewhere).
+	coCloneOnly, _ := newTask(t, mainroot, "clone-only", Clone)
+	mustRun(t, coCloneOnly, "commit", "-q", "--allow-empty", "-m", "clone-only work")
+	stCloneOnly := GatherGitState(Clone, mainroot, coCloneOnly)
+	if stCloneOnly.Unrecoverable == 0 {
+		t.Fatal("clone-only task: want Unrecoverable > 0; this commit lives only in the clone")
+	}
+	if _, ok := RemoveGuard(stCloneOnly, SandboxAbsent, false); ok {
+		t.Error("clone-only task: RemoveGuard should REFUSE removal; the work would be lost")
 	}
 }

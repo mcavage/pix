@@ -25,46 +25,79 @@ type Entry struct {
 	Unreadable string
 }
 
-// List returns every task recorded for mainroot under stateRoot, sorted by
-// name. probe (nilable) resolves a sandbox name to its live disposition; List
-// itself never shells out to a sandbox runner. A nil probe leaves every
-// entry's Sandbox at SandboxUnknown, which — by RemoveGuard's fail-safe rule
-// — always predicts WouldRefuse=true; callers that want an accurate
-// prediction must supply a real probe.
-func List(stateRoot, mainroot string, probe func(sandboxName string) SandboxDisposition) ([]Entry, error) {
+// readMetas reads every persisted task's metadata under stateRoot for
+// mainroot. metas holds every task whose metadata parsed and hardened
+// cleanly (Meta.Sandbox populated, ready for a caller to probe); unreadable
+// holds a stub Entry for every task whose meta.json couldn't be trusted or
+// parsed at all.
+func readMetas(stateRoot, mainroot string) (metas []Meta, unreadable []Entry, err error) {
 	repoDir := RepoDir(mainroot)
 	repokey := RepoKey(mainroot)
 	metaDir := filepath.Join(stateRoot, repoDir, "meta")
 	des, err := os.ReadDir(metaDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return nil, err
+		return nil, nil, err
 	}
-	var out []Entry
 	for _, de := range des {
 		if de.IsDir() || !strings.HasSuffix(de.Name(), ".json") {
 			continue
 		}
 		name := strings.TrimSuffix(de.Name(), ".json")
 		_, metaPath := Paths(stateRoot, repoDir, name)
-		m, err := ReadMeta(metaPath)
-		if err != nil {
-			out = append(out, Entry{Meta: Meta{Name: name}, Unreadable: fmt.Sprintf("unreadable metadata: %v", err)})
+		m, rerr := ReadMeta(metaPath)
+		if rerr != nil {
+			unreadable = append(unreadable, Entry{Meta: Meta{Name: name}, Unreadable: fmt.Sprintf("unreadable metadata: %v", rerr)})
 			continue
 		}
 		m, herr := HardenMeta(m, mainroot, repokey, name)
 		if herr != nil {
-			out = append(out, Entry{Meta: m, Unreadable: herr.Error()})
+			unreadable = append(unreadable, Entry{Meta: m, Unreadable: herr.Error()})
 			continue
 		}
-		co, _ := Paths(stateRoot, repoDir, name)
+		metas = append(metas, m)
+	}
+	return metas, unreadable, nil
+}
+
+// SandboxNames returns the sandbox name every currently-valid task recorded
+// for mainroot would resolve to (skipping tasks whose metadata is unreadable
+// or fails hardening — List surfaces those separately as Unreadable
+// entries). It probes nothing itself: a caller uses it to learn which
+// sandbox names to probe, THEN builds the plain SandboxDisposition map List
+// takes, rather than handing List a callback to invoke on its own schedule.
+func SandboxNames(stateRoot, mainroot string) ([]string, error) {
+	metas, _, err := readMetas(stateRoot, mainroot)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(metas))
+	for _, m := range metas {
+		names = append(names, m.Sandbox)
+	}
+	return names, nil
+}
+
+// List returns every task recorded for mainroot under stateRoot, sorted by
+// name. dispositions is the caller-resolved sandbox liveness for every name
+// SandboxNames returned (typically probed just before this call); List
+// itself never shells out to a sandbox runner. A task's sandbox name missing
+// from dispositions (including a nil map) reads as the zero value,
+// SandboxUnknown, which — by RemoveGuard's fail-safe rule — always predicts
+// WouldRefuse=true; callers that want an accurate prediction must populate
+// every name SandboxNames reported.
+func List(stateRoot, mainroot string, dispositions map[string]SandboxDisposition) ([]Entry, error) {
+	metas, out, err := readMetas(stateRoot, mainroot)
+	if err != nil {
+		return nil, err
+	}
+	repoDir := RepoDir(mainroot)
+	for _, m := range metas {
+		co, _ := Paths(stateRoot, repoDir, SanitizeName(m.Name))
 		git := GatherGitState(m.Mechanism, mainroot, co)
-		disp := SandboxUnknown
-		if probe != nil {
-			disp = probe(m.Sandbox)
-		}
+		disp := dispositions[m.Sandbox]
 		reasons, ok := RemoveGuard(git, disp, false)
 		out = append(out, Entry{Meta: m, Sandbox: disp, Git: git, WouldRefuse: !ok, Reasons: reasons})
 	}

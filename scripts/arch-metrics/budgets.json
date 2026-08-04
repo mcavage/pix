@@ -16,11 +16,11 @@
       "exits": 4
     },
     "pix/host/cmd/pix": {
-      "prod_loc": 3503,
+      "prod_loc": 3811,
       "exports": 19,
-      "globals": 15,
-      "edges": 29,
-      "exits": 80
+      "globals": 16,
+      "edges": 25,
+      "exits": 79
     },
     "pix/host/cmd/pix/corpus": {
       "prod_loc": 573,
@@ -265,6 +265,13 @@
       "exports": 12,
       "globals": 18,
       "edges": 7,
+      "exits": 0
+    },
+    "pix/host/workflow/task": {
+      "prod_loc": 833,
+      "exports": 42,
+      "globals": 10,
+      "edges": 0,
       "exits": 0
     },
     "pix/host/workflow/upgrade": {
