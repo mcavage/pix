@@ -36,7 +36,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 /** @typedef {{file: string, kind: "contains"|"notContains"|"set"|"equals", region?: {start: string, end?: string}, pattern?: string, patterns?: string[], values?: string[], expected?: string|string[]}} Check */
-/** @typedef {{id: string, domain?: string, description?: string, checks: Check[]}} Pin */
+/** @typedef {{id: string, domain?: string, description?: string, checks: Check[], activation?: string}} Pin */
 
 // --- region + regex extraction -----------------------------------------------
 
@@ -156,6 +156,46 @@ export function loadManifest(manifestPath) {
 	return parsed;
 }
 
+// --- activation (Story04 staged-pin schema) -----------------------------------
+//
+// A pin may carry `activation: "<key>"` (see rules/lifecycle.rules.mjs) to mark
+// it as STAGED: it describes a contract for behavior that does not exist in
+// production yet (a future story), so evaluating it for real today would
+// permanently redden the gate for work nobody has landed. A staged pin is
+// skipped entirely (no file I/O, no fs.existsSync, not counted toward
+// report.ok, never consumes a manifest waiver) UNLESS its `activation` key is
+// present in the loaded activation set — same shape and same discipline as
+// the intended-change manifest: an explicit, rationale-bearing entry that
+// must be added in the SAME commit that wires the real behavior, never
+// silently. It is reported in the pin list with `pending: true` so its
+// existence stays legible in `--json`/CLI output instead of vanishing.
+
+/**
+ * Loads the activation manifest: which staged-pin `activation` keys are
+ * turned ON. Missing file = empty (nothing activated — the W0/interim
+ * default). Malformed JSON, a non-array, or an entry missing a non-empty
+ * `key`/`rationale`/`evidence` is a hard error, mirroring loadManifest: a
+ * broken activation file must not silently fail to activate (or
+ * silently fail to enforce) anything.
+ */
+export function loadActivation(activationPath) {
+	if (!fs.existsSync(activationPath)) return [];
+	const raw = fs.readFileSync(activationPath, "utf8");
+	const parsed = JSON.parse(raw);
+	if (!Array.isArray(parsed)) throw new Error(`activation manifest must be a JSON array: ${activationPath}`);
+	for (const entry of parsed) {
+		if (!entry.key || typeof entry.key !== "string") throw new Error(`activation entry missing string "key": ${JSON.stringify(entry)}`);
+		if (!entry.rationale || !String(entry.rationale).trim()) throw new Error(`activation entry ${entry.key} missing non-empty "rationale"`);
+		if (!entry.evidence || !String(entry.evidence).trim()) throw new Error(`activation entry ${entry.key} missing non-empty "evidence"`);
+	}
+	return parsed;
+}
+
+/** Turns a loaded activation manifest (array of {key,...}) into the Set evaluatePins expects. */
+export function activationKeySet(activation) {
+	return new Set(activation.map((e) => e.key));
+}
+
 // Builds a check identical to `check` except its expected-value field(s) are
 // swapped for the manifest's declared `to`, so we can ask "does the CURRENT
 // file content actually satisfy THIS declared destination value" — the same
@@ -224,12 +264,19 @@ export async function loadRules(rulesDir) {
 // --- full run --------------------------------------------------------------
 
 /**
- * Runs every pin against `root`, applying manifest waivers. Returns a report:
- * { ok, pins: [{id, domain, ok, checks: [{file, kind, ok, waived, actual, expected, entry?}]}], unusedManifestEntries }
+ * Runs every pin against `root`, applying manifest waivers. A pin carrying
+ * `activation: "<key>"` whose key is not present in `activeKeys` is STAGED:
+ * skipped entirely (no fs access, ok:true, pending:true) rather than
+ * evaluated — see the "activation (Story04 staged-pin schema)" section above
+ * loadActivation. Returns a report:
+ * { ok, pins: [{id, domain, ok, pending?, checks: [{file, kind, ok, waived, actual, expected, entry?}]}], unusedManifestEntries }
  */
-export function evaluatePins(pins, root, manifest = []) {
+export function evaluatePins(pins, root, manifest = [], activeKeys = new Set()) {
 	const usedManifestIds = new Set();
 	const results = pins.map((pin) => {
+		if (pin.activation && !activeKeys.has(pin.activation)) {
+			return { id: pin.id, domain: pin.domain, description: pin.description, ok: true, pending: true, activation: pin.activation, checks: [] };
+		}
 		const checks = pin.checks.map((check) => {
 			const abs = path.join(root, check.file);
 			if (!fs.existsSync(abs)) {
@@ -274,9 +321,10 @@ function gitShow(root, ref, relFile) {
 
 /** The parts of a pin that matter for drift detection — id + the checkable content, never free-text description. */
 function pinFingerprint(pin) {
-	return JSON.stringify(
-		pin.checks.map((c) => ({ file: c.file, kind: c.kind, region: c.region ?? null, pattern: c.pattern ?? null, patterns: c.patterns ?? null, values: c.values ?? null, expected: c.expected ?? null })),
-	);
+	return JSON.stringify({
+		activation: pin.activation ?? null,
+		checks: pin.checks.map((c) => ({ file: c.file, kind: c.kind, region: c.region ?? null, pattern: c.pattern ?? null, patterns: c.patterns ?? null, values: c.values ?? null, expected: c.expected ?? null })),
+	});
 }
 
 /**

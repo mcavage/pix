@@ -1,6 +1,6 @@
-// Self-test for the U00c (W0) semantic-diff guard.
+// Self-test for the U00c (W0) semantic-diff guard, extended by U04g.
 //
-// Three tiers:
+// Tiers:
 //   1. Unit tests of the pure engine (scripts/semantic-diff/lib/engine.mjs)
 //      against small in-memory/tmp-dir fixtures — fast, no real repo needed.
 //   2. A PLANTED CORRUPTION self-test: a fixture that mimics the exact failure
@@ -8,8 +8,17 @@
 //      "consumer" witness get renamed together in one commit (lockstep
 //      corruption) — and proves the guard still fails because the pin's
 //      `expected` is a third, independently fixed literal.
-//   3. An integration run against the REAL repository with the REAL W0 rules,
-//      proving every pin this task ships is actually true today.
+//   2b. (U04g) An ACTIVATION self-test: a staged pin (`activation: "<key>"`)
+//      is skipped (pending, gate-green) when its key is not active, and
+//      evaluated for real — passing or failing on the fixture's actual
+//      content — once activated. Proves the Story04 staged-pin schema
+//      genuinely turns behavior checks on rather than only decorating them.
+//   3. An integration run against the REAL repository with the REAL rules,
+//      proving every ACTIVE pin holds today, every STAGED (Story04) pin is
+//      pending under the shipped (empty) activation.json, and every STAGED
+//      pin genuinely fails right now if forcibly activated — i.e. each is a
+//      real, currently-true "not yet implemented" TODO, never a vacuous
+//      placeholder that would silently rot into a no-op.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -18,7 +27,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
-import { checkRuleDrift, evaluateCheck, evaluatePins, extractRegion, extractSet, loadManifest, loadRules } from "../scripts/semantic-diff/lib/engine.mjs";
+import { activationKeySet, checkRuleDrift, evaluateCheck, evaluatePins, extractRegion, extractSet, loadActivation, loadManifest, loadRules } from "../scripts/semantic-diff/lib/engine.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
@@ -90,6 +99,37 @@ test("loadManifest requires non-empty id/rationale/evidence/changes on every ent
 
 test("loadManifest tolerates a missing file (empty manifest, the W0 default)", () => {
 	assert.deepEqual(loadManifest(path.join(mkTmpDir(), "does-not-exist.json")), []);
+});
+
+// --- activation (U04g staged-pin schema): loadActivation/activationKeySet ---
+
+test("loadActivation tolerates a missing file (empty activation set, nothing turned on)", () => {
+	assert.deepEqual(loadActivation(path.join(mkTmpDir(), "does-not-exist.json")), []);
+});
+
+test("loadActivation requires non-empty key/rationale/evidence on every entry", () => {
+	const dir = mkTmpDir();
+	const p = path.join(dir, "activation.json");
+	fs.writeFileSync(p, JSON.stringify([{ key: "story04" }]));
+	assert.throws(() => loadActivation(p), /rationale/);
+});
+
+test("loadActivation rejects a non-array root", () => {
+	const dir = mkTmpDir();
+	const p = path.join(dir, "activation.json");
+	fs.writeFileSync(p, JSON.stringify({ story04: true }));
+	assert.throws(() => loadActivation(p), /must be a JSON array/);
+});
+
+test("activationKeySet turns a loaded activation array into a Set of its keys", () => {
+	const activation = [
+		{ key: "story04", rationale: "landed the reaper", evidence: "PR #1" },
+		{ key: "other", rationale: "landed X", evidence: "PR #2" },
+	];
+	const set = activationKeySet(activation);
+	assert.equal(set.has("story04"), true);
+	assert.equal(set.has("other"), true);
+	assert.equal(set.has("never-activated"), false);
 });
 
 // --- tier 2: planted corruption self-test ------------------------------------
@@ -195,6 +235,75 @@ test("a manifest entry whose `to` does not match reality does not waive anything
 	];
 	const report = evaluatePins([CORRUPTION_PIN], root, manifest);
 	assert.equal(report.ok, false, "client.ts matches neither the original expected value nor the manifest's declared destination; that is a real, unresolved break");
+});
+
+// --- tier 2b: activation (Story04 staged-pin) self-test ---------------------
+
+// A staged pin whose fixture does NOT yet satisfy it — modeling a Story04
+// contract (e.g. the orphan reaper) that has no production code yet.
+const STAGED_PIN = {
+	id: "fixture.staged-thing",
+	domain: "fixture",
+	activation: "story04",
+	checks: [{ file: "future.go", kind: "contains", values: ["notYetWritten()"] }],
+};
+
+test("a staged pin is PENDING (not evaluated, not failed) when its activation key is not active", () => {
+	const root = mkTmpDir(); // future.go deliberately does not exist here
+	const report = evaluatePins([STAGED_PIN], root, [], new Set());
+	assert.equal(report.ok, true, "a staged pin must never fail the gate while its key is inactive");
+	const pin = report.pins.find((p) => p.id === "fixture.staged-thing");
+	assert.equal(pin.pending, true);
+	assert.equal(pin.activation, "story04");
+	assert.deepEqual(pin.checks, [], "a pending pin must not touch the filesystem or report check detail");
+});
+
+test("the SAME staged pin, activated, is evaluated for real and FAILS against the unimplemented fixture", () => {
+	const root = mkTmpDir(); // still no future.go
+	const report = evaluatePins([STAGED_PIN], root, [], new Set(["story04"]));
+	assert.equal(report.ok, false, "activating a pin describing not-yet-built behavior must surface as a real failure, proving it isn't a vacuous placeholder");
+	const pin = report.pins.find((p) => p.id === "fixture.staged-thing");
+	assert.equal(pin.pending, undefined);
+	assert.equal(pin.checks[0].actual, "FILE MISSING");
+});
+
+test("the SAME staged pin, activated, PASSES once the fixture actually implements the behavior", () => {
+	const root = mkTmpDir();
+	writeFixture(root, { "future.go": "func notYetWritten() {}" });
+	const report = evaluatePins([STAGED_PIN], root, [], new Set(["story04"]));
+	assert.equal(report.ok, true, "once Story04 lands the behavior, activating the pin must pass");
+});
+
+test("activation only turns on pins naming that exact key — an unrelated activated key leaves it pending", () => {
+	const root = mkTmpDir();
+	const report = evaluatePins([STAGED_PIN], root, [], new Set(["some-other-story"]));
+	const pin = report.pins.find((p) => p.id === "fixture.staged-thing");
+	assert.equal(pin.pending, true);
+});
+
+test("an unstaged pin (no `activation` field) is always evaluated regardless of the active key set", () => {
+	const root = mkTmpDir();
+	writeFixture(root, { "server.go": 'methods["remember"] = rememberHandler', "client.ts": 'await rpc("remember", {content})' });
+	const report = evaluatePins([CORRUPTION_PIN], root, [], new Set());
+	assert.equal(report.ok, true);
+	assert.equal(report.pins[0].pending, undefined);
+});
+
+test("checkRuleDrift treats flipping a pin's `activation` field alone (no check change) as drift requiring a manifest entry", async () => {
+	const root = makeScratchRepo();
+	const before = `export default [\n  { id: "fixture.pin", checks: [{ file: "a.txt", kind: "contains", values: ["v1"] }] },\n];\n`;
+	const after = `export default [\n  { id: "fixture.pin", activation: "story04", checks: [{ file: "a.txt", kind: "contains", values: ["v1"] }] },\n];\n`;
+	writeFixture(root, { "rules/fixture.rules.mjs": before });
+	git(root, "add", "-A");
+	git(root, "commit", "-q", "-m", "v1, unstaged");
+
+	writeFixture(root, { "rules/fixture.rules.mjs": after });
+	const noWaiver = await checkRuleDrift(path.join(root, "rules"), root, "HEAD", []);
+	assert.equal(noWaiver.ok, false, "staging a previously-active pin with no manifest entry must be treated as drift, same as any other checkable-content change");
+
+	const waiver = [{ id: "fixture.pin", rationale: "staged behind story04 pending the reaper landing", evidence: "PR #2", changes: [{ file: "a.txt", kind: "contains", from: ["v1"], to: ["v1"] }] }];
+	const withWaiver = await checkRuleDrift(path.join(root, "rules"), root, "HEAD", waiver);
+	assert.equal(withWaiver.ok, true, "the same staging move, documented with a matching manifest entry, must pass");
 });
 
 // --- rule-drift-vs-git -------------------------------------------------------
@@ -309,28 +418,49 @@ test("checkRuleDrift ignores an unrelated (non-checkable) description-only edit"
 
 // --- tier 3: the real repo, the real W0 rules --------------------------------
 
-test("the shipped rules/lifecycle.rules.mjs is present and empty (Story04's reserved, untouched extension point)", async () => {
+test("the shipped rules/lifecycle.rules.mjs (U04g) ships both ACTIVE and STAGED pins", async () => {
 	const mod = await import(path.join(REAL_RULES_DIR, "lifecycle.rules.mjs"));
-	assert.deepEqual(mod.default, []);
+	const pins = mod.default;
+	assert.ok(pins.length >= 5, "lifecycle must ship the U04g pin set, not the W0 empty placeholder");
+	const active = pins.filter((p) => !p.activation);
+	const staged = pins.filter((p) => p.activation);
+	assert.ok(active.length >= 3, "at least the currently-true force/scope/instance-id/lease-foundation contracts must be active pins");
+	assert.ok(staged.length >= 3, "at least the not-yet-built reaper/non-TTY-refusal/-k-flag contracts must be staged pins");
+	for (const pin of staged) {
+		assert.equal(typeof pin.activation, "string");
+		assert.ok(pin.activation.length > 0);
+	}
 });
 
-test("every real W0 pin holds against THIS repository right now (no manifest waivers needed)", async () => {
+test("every real ACTIVE pin holds against THIS repository right now, and every STAGED pin is pending under the shipped activation.json (no manifest waivers needed)", async () => {
 	const pins = await loadRules(REAL_RULES_DIR);
-	assert.ok(pins.length >= 15, "W0 should ship a meaningful pin set across all documented domains");
+	assert.ok(pins.length >= 15, "should ship a meaningful pin set across all documented domains");
 	const domains = new Set(pins.map((p) => p.domain));
-	for (const expected of ["memory-rpc", "ports", "sandbox-scope", "permissions", "stdio", "subprocess-argv", "config-keys"]) {
+	for (const expected of ["memory-rpc", "ports", "sandbox-scope", "permissions", "stdio", "subprocess-argv", "config-keys", "lifecycle"]) {
 		assert.ok(domains.has(expected), `missing domain shard: ${expected}`);
 	}
-	// lifecycle ships zero pins at W0 (Story04's reserved extension point), so it
-	// never appears in a pin-derived domain set — assert the shard FILE exists
-	// instead of asking pins (there are none) to name it.
-	assert.ok(fs.existsSync(path.join(REAL_RULES_DIR, "lifecycle.rules.mjs")), "lifecycle.rules.mjs shard must exist for Story04");
 
 	const manifest = loadManifest(path.join(REPO_ROOT, "scripts", "semantic-diff", "intended-changes.json"));
-	const report = evaluatePins(pins, REPO_ROOT, manifest);
+	const activation = loadActivation(path.join(REPO_ROOT, "scripts", "semantic-diff", "activation.json"));
+	assert.deepEqual(activation, [], "activation.json ships empty until Story04 lands and turns a key on");
+	const report = evaluatePins(pins, REPO_ROOT, manifest, activationKeySet(activation));
 	if (!report.ok) {
 		const failures = report.pins.filter((p) => !p.ok).map((p) => `${p.id}: ${JSON.stringify(p.checks.filter((c) => !c.ok))}`);
-		assert.fail(`real W0 pins do not hold:\n${failures.join("\n")}`);
+		assert.fail(`real pins do not hold:\n${failures.join("\n")}`);
+	}
+	const lifecyclePins = report.pins.filter((p) => p.domain === "lifecycle");
+	const pending = lifecyclePins.filter((p) => p.pending);
+	assert.ok(pending.length >= 3, "the Story04 staged lifecycle pins must show up as pending, not silently absent");
+});
+
+test("every STAGED (Story04) lifecycle pin genuinely fails right now if forcibly activated — a real TODO, never a vacuous placeholder", async () => {
+	const pins = await loadRules(REAL_RULES_DIR);
+	const staged = pins.filter((p) => p.domain === "lifecycle" && p.activation);
+	assert.ok(staged.length >= 3, "lifecycle must ship at least 3 staged Story04 pins");
+	const manifest = loadManifest(path.join(REPO_ROOT, "scripts", "semantic-diff", "intended-changes.json"));
+	for (const pin of staged) {
+		const report = evaluatePins([pin], REPO_ROOT, manifest, new Set([pin.activation]));
+		assert.equal(report.ok, false, `${pin.id}: forcibly activating a staged pin must fail against this repo today — its behavior genuinely does not exist yet`);
 	}
 });
 
@@ -381,4 +511,21 @@ test("the CLI exits 0 against the real repo and exits 1 against a fixture with a
 		assert.match(err.stdout, /semantic-diff: FAIL/);
 	}
 	assert.equal(failed, true, "CLI must exit non-zero on a planted corruption");
+});
+
+test("the CLI's --activate flag turns on a staged pin and fails it against the real repo (Story04 not landed yet)", () => {
+	let failed = false;
+	try {
+		execFileSync("node", [CLI, "--root", REPO_ROOT, "--no-git", "--activate", "story04"], { encoding: "utf8" });
+	} catch (err) {
+		failed = true;
+		assert.match(err.stdout, /FAIL {2}lifecycle\./);
+		assert.match(err.stdout, /semantic-diff: FAIL/);
+	}
+	assert.equal(failed, true, "activating story04 must fail the CLI: the lifecycle behavior it stages does not exist yet");
+
+	// Without --activate, the same run is clean: staged pins are pending, not failing.
+	const plainOut = execFileSync("node", [CLI, "--root", REPO_ROOT, "--no-git"], { encoding: "utf8" });
+	assert.match(plainOut, /semantic-diff: PASS/);
+	assert.match(plainOut, /PEND {2}lifecycle\./);
 });

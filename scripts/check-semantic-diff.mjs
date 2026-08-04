@@ -9,30 +9,39 @@
 // motivating idea.
 //
 // Usage:
-//   node scripts/check-semantic-diff.mjs [--root DIR] [--base REF] [--json] [--no-git]
+//   node scripts/check-semantic-diff.mjs [--root DIR] [--base REF] [--json] [--no-git] [--activate KEY]...
 //
 // Exit 0 = every pin holds (directly or via a documented intended-change
 // manifest waiver) and no rule drifted without one. Exit 1 = a real
 // violation. This script is deliberately NOT wired into scripts/gate.sh at
 // W0 — see tests/check-semantic-diff.test.mjs, which runs it directly.
+//
+// A pin may be STAGED (carries `activation: "<key>"`, see
+// scripts/semantic-diff/rules/lifecycle.rules.mjs) for a contract that
+// describes future behavior — it is skipped (reported PEND, never fails)
+// unless its key is listed in scripts/semantic-diff/activation.json or
+// passed via --activate. --activate lets a developer preview what a staged
+// pin would check without editing activation.json.
 
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { checkRuleDrift, evaluatePins, loadManifest, loadRules } from "./semantic-diff/lib/engine.mjs";
+import { activationKeySet, checkRuleDrift, evaluatePins, loadActivation, loadManifest, loadRules } from "./semantic-diff/lib/engine.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
 const RULES_DIR = path.join(__dirname, "semantic-diff", "rules");
 const MANIFEST_PATH = path.join(__dirname, "semantic-diff", "intended-changes.json");
+const ACTIVATION_PATH = path.join(__dirname, "semantic-diff", "activation.json");
 
 function parseArgs(argv) {
-	const opts = { root: REPO_ROOT, base: "HEAD", json: false, git: true };
+	const opts = { root: REPO_ROOT, base: "HEAD", json: false, git: true, activate: [] };
 	for (let i = 0; i < argv.length; i++) {
 		const a = argv[i];
 		if (a === "--root") opts.root = path.resolve(argv[++i]);
 		else if (a === "--base") opts.base = argv[++i];
 		else if (a === "--json") opts.json = true;
 		else if (a === "--no-git") opts.git = false;
+		else if (a === "--activate") opts.activate.push(argv[++i]);
 		else if (a === "--help" || a === "-h") opts.help = true;
 		else throw new Error(`unknown argument: ${a}`);
 	}
@@ -55,8 +64,8 @@ function printReport(report, drift, opts) {
 	for (const [domain, pins] of [...byDomain.entries()].sort()) {
 		console.log(`[${domain}]`);
 		for (const pin of pins) {
-			const glyph = pin.ok ? "PASS" : "FAIL";
-			console.log(`  ${glyph}  ${pin.id}`);
+			const glyph = pin.pending ? "PEND" : pin.ok ? "PASS" : "FAIL";
+			console.log(`  ${glyph}  ${pin.id}${pin.pending ? ` (activation: ${pin.activation})` : ""}`);
 			for (const check of pin.checks) {
 				if (check.ok && !check.waived) continue; // quiet on the ordinary passing case
 				if (check.waived) {
@@ -90,13 +99,16 @@ function printReport(report, drift, opts) {
 async function main() {
 	const opts = parseArgs(process.argv.slice(2));
 	if (opts.help) {
-		console.log("Usage: node scripts/check-semantic-diff.mjs [--root DIR] [--base REF] [--json] [--no-git]");
+		console.log("Usage: node scripts/check-semantic-diff.mjs [--root DIR] [--base REF] [--json] [--no-git] [--activate KEY]...");
 		return;
 	}
 
 	const pins = await loadRules(RULES_DIR);
 	const manifest = loadManifest(MANIFEST_PATH);
-	const report = evaluatePins(pins, opts.root, manifest);
+	const activation = loadActivation(ACTIVATION_PATH);
+	const activeKeys = activationKeySet(activation);
+	for (const key of opts.activate) activeKeys.add(key);
+	const report = evaluatePins(pins, opts.root, manifest, activeKeys);
 	const drift = opts.git ? await checkRuleDrift(RULES_DIR, opts.root, opts.base, manifest) : { ok: true, skipped: true, drifted: [] };
 
 	printReport(report, drift, opts);
