@@ -108,6 +108,30 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   second provider key later" — land in a follow-up change; this rename only
   builds the verb tree and leaves the extension point.
 
+### Removed
+
+- **The pre-public pack-directory migration is gone** (`~/.local/share/pix/pack`
+  / `.../personal` -> `.../default`, its manifest `name` rewrite, its
+  trust-path migration, and the stale-state repair pass that cleaned up after
+  an older non-transactional version of itself). Those two directory names were
+  only ever written by pre-0.1.0 builds under the OLD product name, and 0.1.0
+  was a clean pre-launch cutover with no legacy-path discovery — so on every
+  released build the migration probed for directories no pix build creates,
+  and `DefaultPackRoot()` did a stat, a flock, a config load and a trust-store
+  load to decide "nothing to do". It now returns the path. What is kept, and
+  tested: the bare `pix pack use personal` token remains a deprecated alias for
+  the default pack (a CLI spelling, not a path probe), and a directory that
+  happens to be named `personal` or `pack` is now left strictly alone —
+  never renamed, never rewritten, never repointed. -525 lines of production
+  code, and the pack package is back under its pre-`[[services]]` budget.
+- The `[[services]] UnitSpec` vocabulary (runtime/activation constants, the
+  reserved name+port sets, and the value-shape patterns) is one internal value
+  instead of ten package-level names, and `packService`/`packServiceResources`
+  are unexported: no supervisor consumes a service declaration yet, so the
+  exported surface it will need is the supervisor story's to earn. Manifest
+  syntax, every rejection, the consent screen, and the fingerprint are
+  unchanged.
+
 ## 0.1.0 - 2026-07-25
 
 ### Breaking
