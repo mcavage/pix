@@ -77,6 +77,13 @@ var pkgLayer = map[string]int{
 	"knowledge":  layerCapability,
 	"secret":     layerCapability,
 	"mcp":        layerCapability,
+	// workflow/task is Story06's L1 task-checkout capability: naming, metadata,
+	// the clone/worktree mechanism, and the git-hygiene removal guard, with NO
+	// import of workflow/launch, any sandbox runner, or lease (see its doc
+	// comment). It lives under workflow/ for discoverability next to the CLI
+	// surface it backs, but it is a leaf capability, not a workflow: it composes
+	// nothing below it and orchestrates no other capability.
+	"workflow/task": layerCapability,
 
 	// L2 — the shared model of "is this working".
 	"readiness": layerReadiness,

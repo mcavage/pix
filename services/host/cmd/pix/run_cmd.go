@@ -38,6 +38,18 @@ func init() {
 // Workspace now rides the sbx gateway as the host-side `gog` MCP server (the
 // `slack` pattern), authed entirely on the host — there is nothing to inject.
 func runRun(argv []string) {
+	// `--task NAME` shorthand: equivalent to `pix task run NAME`, expanded
+	// BEFORE ParseRunArgs sees it — task.Path/Resolve (L1) do the resolution;
+	// this file only rewrites argv into the ordinary DIR + --name shape `run`
+	// already understands, so no sandbox-lifecycle code is duplicated here.
+	if expanded, matched, terr := expandTaskFlag(argv); matched {
+		if terr != nil {
+			fmt.Fprintf(os.Stderr, "pix run --task: %v\n", terr)
+			os.Exit(1)
+		}
+		argv = expanded
+	}
+
 	var generatedKitDirs []string
 	cleanupGeneratedKits := func() {
 		if err := launch.CleanupGeneratedKitDirs(generatedKitDirs); err != nil {

@@ -16,11 +16,11 @@
       "exits": 4
     },
     "pix/host/cmd/pix": {
-      "prod_loc": 3336,
+      "prod_loc": 3805,
       "exports": 19,
-      "globals": 14,
-      "edges": 23,
-      "exits": 58
+      "globals": 15,
+      "edges": 24,
+      "exits": 79
     },
     "pix/host/cmd/pix/corpus": {
       "prod_loc": 573,
@@ -135,7 +135,7 @@
       "exits": 0
     },
     "pix/host/readiness/axis": {
-      "prod_loc": 1427,
+      "prod_loc": 1419,
       "exports": 50,
       "globals": 19,
       "edges": 10,
@@ -198,10 +198,10 @@
       "exits": 0
     },
     "pix/host/workflow/doctor": {
-      "prod_loc": 2711,
+      "prod_loc": 2382,
       "exports": 27,
-      "globals": 18,
-      "edges": 16,
+      "globals": 17,
+      "edges": 14,
       "exits": 0
     },
     "pix/host/workflow/gworkspace": {
@@ -212,11 +212,11 @@
       "exits": 0
     },
     "pix/host/workflow/launch": {
-      "prod_loc": 5714,
-      "exports": 160,
-      "globals": 45,
+      "prod_loc": 3325,
+      "exports": 106,
+      "globals": 32,
       "edges": 15,
-      "exits": 48
+      "exits": 22
     },
     "pix/host/workflow/man": {
       "prod_loc": 221,
@@ -240,17 +240,17 @@
       "exits": 42
     },
     "pix/host/workflow/reset": {
-      "prod_loc": 973,
+      "prod_loc": 799,
       "exports": 11,
       "globals": 6,
-      "edges": 9,
+      "edges": 6,
       "exits": 0
     },
     "pix/host/workflow/setup": {
-      "prod_loc": 4225,
-      "exports": 83,
-      "globals": 32,
-      "edges": 19,
+      "prod_loc": 4081,
+      "exports": 82,
+      "globals": 31,
+      "edges": 18,
       "exits": 12
     },
     "pix/host/workflow/slack": {
@@ -258,6 +258,13 @@
       "exports": 12,
       "globals": 18,
       "edges": 7,
+      "exits": 0
+    },
+    "pix/host/workflow/task": {
+      "prod_loc": 833,
+      "exports": 42,
+      "globals": 10,
+      "edges": 0,
       "exits": 0
     },
     "pix/host/workflow/upgrade": {
