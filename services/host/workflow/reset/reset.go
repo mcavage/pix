@@ -13,7 +13,7 @@ import (
 	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/hostenv"
-	"pix/host/monitor/tui"
+	"pix/host/monitor"
 	"pix/host/rpc"
 	"pix/host/service"
 	"pix/host/sys"
@@ -749,7 +749,7 @@ func RunCore(cfg *config.Config, paths Paths, opts Opts,
 	if !opts.PurgeData && paths.ArtifactRoot != "" {
 		if _, size := sys.DirSize(paths.ArtifactRoot); size > 0 {
 			fmt.Fprintf(rio.Out, "Keeping harvested task artifacts (%s) at %s — pass --purge-data to move them aside too.\n\n",
-				tui.HumanBytes(size), paths.ArtifactRoot)
+				monitor.HumanBytes(size), paths.ArtifactRoot)
 		}
 	}
 
@@ -882,7 +882,7 @@ func runUninstallCore(cfg *config.Config, paths Paths, bins []string, opts Opts,
 	if !opts.PurgeData && paths.ArtifactRoot != "" {
 		if _, size := sys.DirSize(paths.ArtifactRoot); size > 0 {
 			fmt.Fprintf(rio.Out, "Keeping harvested task artifacts (%s) at %s — pass --purge-data to remove them too.\n",
-				tui.HumanBytes(size), paths.ArtifactRoot)
+				monitor.HumanBytes(size), paths.ArtifactRoot)
 		}
 	}
 	fmt.Fprintln(rio.Out)

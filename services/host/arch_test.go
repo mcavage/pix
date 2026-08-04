@@ -67,17 +67,16 @@ var pkgLayer = map[string]int{
 	"workspace": layerFoundation,
 
 	// L1 — capability. One domain each, siblings invisible to each other.
-	"inference":   layerCapability,
-	"monitor":     layerCapability,
-	"monitor/tui": layerCapability,
-	"okf":         layerCapability,
-	"plugin":      layerCapability,
-	"slackoauth":  layerCapability,
-	"service":     layerCapability,
-	"memory":      layerCapability,
-	"knowledge":   layerCapability,
-	"secret":      layerCapability,
-	"mcp":         layerCapability,
+	"inference":  layerCapability,
+	"monitor":    layerCapability,
+	"okf":        layerCapability,
+	"plugin":     layerCapability,
+	"slackoauth": layerCapability,
+	"service":    layerCapability,
+	"memory":     layerCapability,
+	"knowledge":  layerCapability,
+	"secret":     layerCapability,
+	"mcp":        layerCapability,
 
 	// L2 — the shared model of "is this working".
 	"readiness": layerReadiness,

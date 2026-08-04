@@ -16,11 +16,11 @@
       "exits": 4
     },
     "pix/host/cmd/pix": {
-      "prod_loc": 3503,
+      "prod_loc": 3536,
       "exports": 19,
-      "globals": 15,
-      "edges": 29,
-      "exits": 80
+      "globals": 16,
+      "edges": 23,
+      "exits": 58
     },
     "pix/host/cmd/pix/corpus": {
       "prod_loc": 573,
@@ -107,17 +107,10 @@
       "exits": 0
     },
     "pix/host/monitor": {
-      "prod_loc": 1197,
-      "exports": 35,
-      "globals": 21,
+      "prod_loc": 1616,
+      "exports": 44,
+      "globals": 27,
       "edges": 0,
-      "exits": 0
-    },
-    "pix/host/monitor/tui": {
-      "prod_loc": 3150,
-      "exports": 5,
-      "globals": 14,
-      "edges": 1,
       "exits": 0
     },
     "pix/host/okf": {
@@ -205,10 +198,10 @@
       "exits": 0
     },
     "pix/host/workflow/doctor": {
-      "prod_loc": 2712,
+      "prod_loc": 2711,
       "exports": 27,
       "globals": 18,
-      "edges": 17,
+      "edges": 16,
       "exits": 0
     },
     "pix/host/workflow/gworkspace": {

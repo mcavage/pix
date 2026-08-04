@@ -1,6 +1,21 @@
 # pix monitor — live wiretap of the agent's back-and-forth
 
-Status: shipped (MVP). Owner: Mark.
+Status: shipped (MVP), REPLACED by Story05. Owner: Mark.
+
+**Story05 update:** the bubbletea TUI (`services/host/monitor/tui`), the
+in-memory ring buffer, the content-addressed in-memory blob cache, and the
+SSE `/stream` + `/blob/{hash}` endpoints described below are DELETED. They
+are replaced by a small, file-backed domain (`services/host/monitor`:
+`Store`/`BlobStore` — bounded, redacted, 0700/0600/symlink-safe on-disk
+NDJSON — plus a loopback-only `IngestServer`) and a concise line reader in
+`cmd/pix/monitor.go` (`--path`/`--json`, TTY/non-TTY). The event wire
+schema (Section 2 below), the `:11437` loopback bind default, and "monitor
+IS the service, not wired into `pix-host serve`" are UNCHANGED — Story07 is
+expected to move the ingest constructor under `serve` without changing
+either. The rest of this document (problem statement, event model, wire
+protocol) is still accurate; the "Resolved decisions" and "TUI (live
+follow + toggles)" sections below describe the DELETED design and are kept
+for history, not as the current contract.
 
 ## Problem
 

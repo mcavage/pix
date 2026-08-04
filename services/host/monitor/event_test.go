@@ -124,13 +124,43 @@ func TestEventEncodeDecodeRoundTrip(t *testing.T) {
 	}
 }
 
-func TestDecodeUnknownKindErrors(t *testing.T) {
-	_, err := Decode([]byte(`{"kind":"nope","sandboxId":"x"}`))
-	if err == nil {
-		t.Fatalf("Decode() with unknown kind: got nil error, want an error")
+// TestDecodeUnknownKindBecomesUnknownEvent is the forward-compatibility
+// contract: a well-formed event whose kind this build doesn't recognize is
+// NOT dropped/errored. It decodes to an UnknownEvent that still carries the
+// (capped) envelope and the original raw line, and re-Encoding it reproduces
+// that raw line verbatim.
+func TestDecodeUnknownKindBecomesUnknownEvent(t *testing.T) {
+	line := []byte(`{"kind":"future_kind_xyz","sandboxId":"sbx-1","sessionId":"sess-1","turnId":"turn-1","seq":9,"ts":123,"someNewField":"value"}`)
+	ev, err := Decode(line)
+	if err != nil {
+		t.Fatalf("Decode(unknown kind): unexpected error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "nope") {
-		t.Fatalf("Decode() error = %q, want it to mention the unknown kind", err.Error())
+	unk, ok := ev.(UnknownEvent)
+	if !ok {
+		t.Fatalf("Decode(unknown kind) = %T, want UnknownEvent", ev)
+	}
+	if unk.Kind() != "future_kind_xyz" {
+		t.Errorf("Kind() = %q, want %q", unk.Kind(), "future_kind_xyz")
+	}
+	if unk.Envelope().SandboxID != "sbx-1" || unk.Envelope().SessionID != "sess-1" {
+		t.Errorf("Envelope() = %+v, want the decoded envelope fields", unk.Envelope())
+	}
+	encoded, err := Encode(unk)
+	if err != nil {
+		t.Fatalf("Encode(UnknownEvent): %v", err)
+	}
+	if string(encoded) != string(line) {
+		t.Errorf("Encode(UnknownEvent) = %s, want the original raw line %s", encoded, line)
+	}
+}
+
+// TestDecodeMissingKindErrors proves an empty/absent "kind" is still a hard
+// error (distinct from an unrecognized-but-present kind, which is forward
+// compatibility, not a broken record).
+func TestDecodeMissingKindErrors(t *testing.T) {
+	_, err := Decode([]byte(`{"sandboxId":"x"}`))
+	if err == nil {
+		t.Fatalf("Decode() with no kind field: got nil error, want an error")
 	}
 }
 

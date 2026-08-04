@@ -9,7 +9,6 @@ import (
 	"pix/host/hostenv"
 	"pix/host/launcher"
 	"pix/host/mcp"
-	"pix/host/monitor/tui"
 	"pix/host/readiness"
 	"pix/host/readiness/axis"
 	"pix/host/secret"
@@ -455,7 +454,7 @@ func (st statusReport) render(out io.Writer) {
 	if st.Tasks > 0 || st.ArtifactB > 0 {
 		taskText := cli.Plural(st.Tasks, "task")
 		if st.ArtifactB > 0 {
-			taskText += " · " + tui.HumanBytes(st.ArtifactB) + " artifacts"
+			taskText += " · " + monitor.HumanBytes(st.ArtifactB) + " artifacts"
 		}
 		fmt.Fprintf(out, "  tasks        %s · `pix task ls` for details\n", taskText)
 	}

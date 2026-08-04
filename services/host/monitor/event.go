@@ -300,24 +300,30 @@ func eventSize(e Event) int {
 }
 
 // Decode parses one NDJSON line into its concrete Event type, reading "kind"
-// first to pick the target struct. It returns an error for malformed JSON or
-// an unrecognized kind (including "blob", which is data-only and never
-// appears on the event stream). Every decoded field is capped after
-// unmarshal (R2-7, extended by R3-2a): long free-form fields (detail,
-// previews, summaries) to maxFieldBytes, short id/label fields (model,
-// trigger, stopReason, source, name, role, ctxKind, and every envelope id)
-// to maxIdBytes, hash fields defensively to maxHashBytes, and string-slice
-// fields (tool-name lists, new-message lists, changed-blob-hash lists) to
-// maxListEntries. The line itself is already bounded by hub.go's
-// maxIngestLine, but capping every field individually bounds what actually
-// stays resident once the event lands in the ring — without this, any
-// field NOT explicitly capped was bounded only by the 1MB line limit.
+// first to pick the target struct. It returns an error for malformed JSON,
+// a missing/empty "kind", or "blob" (which is data-only and never appears
+// on the event stream — see Blob). A well-formed line whose kind this build
+// simply doesn't recognize is NOT an error (forward compatibility): it
+// decodes to an UnknownEvent (see its doc comment) instead. Every decoded
+// field on a KNOWN kind is capped after unmarshal (R2-7, extended by
+// R3-2a): long free-form fields (detail, previews, summaries) to
+// maxFieldBytes, short id/label fields (model, trigger, stopReason, source,
+// name, role, ctxKind, and every envelope id) to maxIdBytes, hash fields
+// defensively to maxHashBytes, and string-slice fields (tool-name lists,
+// new-message lists, changed-blob-hash lists) to maxListEntries. The line
+// itself is bounded upstream by the ingest server's own line-length limit,
+// but capping every field individually bounds what actually stays resident
+// once the event is retained — without this, any field NOT explicitly
+// capped was bounded only by that outer line limit.
 func Decode(line []byte) (Event, error) {
 	var probe struct {
 		Kind Kind `json:"kind"`
 	}
 	if err := json.Unmarshal(line, &probe); err != nil {
 		return nil, fmt.Errorf("monitor: decode envelope: %w", err)
+	}
+	if probe.Kind == "" {
+		return nil, fmt.Errorf("monitor: missing event kind")
 	}
 	switch probe.Kind {
 	case KindTurnStart:
@@ -393,9 +399,64 @@ func Decode(line []byte) (Event, error) {
 		e.CtxKind = capID(e.CtxKind)
 		e.Detail = capField(e.Detail)
 		return e, nil
+	case KindBlob:
+		return nil, fmt.Errorf("monitor: %q is data-only and never appears on the event stream", probe.Kind)
 	default:
-		return nil, fmt.Errorf("monitor: unknown event kind %q", probe.Kind)
+		return decodeUnknown(line, probe.Kind)
 	}
+}
+
+// maxUnknownRawBytes bounds the raw line an UnknownEvent retains, same
+// spirit as maxFieldBytes but sized for a whole line rather than one field
+// (an unknown-kind event's entire body is "free text" from this build's
+// point of view).
+const maxUnknownRawBytes = maxFieldBytes * 4
+
+// UnknownEvent is what Decode returns for a well-formed event whose "kind"
+// this build does not recognize — a NEWER producer (a later extensions/
+// monitor.ts, or a future event kind) talking to an OLDER host binary.
+// Forward compatibility means the event is retained (Store.Append does not
+// discard it) rather than dropped on the floor: the envelope fields decode
+// normally (capped like every other event), and Raw carries the entire
+// original line so a later tool (or a human reading the file) can still see
+// what it was. MarshalJSON returns Raw verbatim (after Redact — see
+// redact.go — has had a chance to scrub it), so Encode(UnknownEvent{...})
+// round-trips the original wire shape instead of collapsing it down to just
+// the envelope.
+type UnknownEvent struct {
+	env
+	Raw []byte
+}
+
+func (e UnknownEvent) Envelope() Envelope { return e.env }
+func (e UnknownEvent) Kind() Kind         { return e.env.Kind }
+
+// MarshalJSON returns e.Raw verbatim, or (only if Raw is empty, which never
+// happens via decodeUnknown but guards a hand-built zero-value UnknownEvent)
+// falls back to marshaling just the envelope.
+func (e UnknownEvent) MarshalJSON() ([]byte, error) {
+	if len(e.Raw) == 0 {
+		return json.Marshal(e.env)
+	}
+	return e.Raw, nil
+}
+
+// decodeUnknown builds an UnknownEvent from a line whose kind fell through
+// Decode's switch. Envelope fields are decoded best-effort (a malformed
+// envelope simply comes back zero-valued rather than failing the whole
+// event — an unrecognized kind may carry an unrecognized envelope shape
+// too, and this path exists precisely to tolerate that) and capped exactly
+// like every known kind.
+func decodeUnknown(line []byte, kind Kind) (Event, error) {
+	var e Envelope
+	_ = json.Unmarshal(line, &e)
+	e.Kind = kind
+	capEnvelopeIDs(&e)
+	raw := append([]byte(nil), line...)
+	if len(raw) > maxUnknownRawBytes {
+		raw = raw[:maxUnknownRawBytes]
+	}
+	return UnknownEvent{env: e, Raw: raw}, nil
 }
 
 // Encode marshals an Event back to its flat NDJSON-line wire form (no
