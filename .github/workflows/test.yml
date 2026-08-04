@@ -16,8 +16,28 @@
 #           would either make the 12 s number meaningless or make the job
 #           flaky. It is a correctness job; it takes as long as it takes.
 #
+#   metrics — the FULL corpus/coverage/LOC report (AC-GATE-03/04): `go test
+#           -cover ./...` merged into scripts/arch-metrics' derived-metrics
+#           report. This is deliberately the expensive half — running the
+#           whole suite with coverage — kept OUT of the timed `gate` job so it
+#           can never blow the 34 s/75 s budget. The CHEAP half (per-package
+#           LOC/exports/globals/edges/exits, shrink-only ratchet against the
+#           committed budgets.json) runs inside `gate` itself. Non-blocking:
+#           it uploads the report as a build artifact rather than failing the
+#           build, since a coverage percentage is a floor to watch, not yet a
+#           gated ratchet.
+#
+#   macos — a REQUIRED build+test job on macos-latest. Every other job here
+#           runs on ubuntu-latest; this is the only CI signal for macOS before
+#           the host's launchd-based service management (scripts/macos/,
+#           `pix serve install`) can be deleted in favor of whatever replaces
+#           it — deleting the only macOS-specific code path with zero macOS CI
+#           coverage would be flying blind. Mark it required in branch
+#           protection alongside `gate` and `race`.
+#
 # So: if CI is red on "budget", the fast gate got slower and that is the
-# finding. If CI is red on `race`, something is actually broken.
+# finding. If CI is red on `race`, something is actually broken. If CI is red
+# on `macos`, the host build/test broke on the one platform launchd targets.
 name: test
 
 on:
@@ -84,3 +104,48 @@ jobs:
       - name: test (race detector — no timing budget)
         working-directory: services/host
         run: go test -race ./...
+
+  # Untimed on purpose (see the header comment): full corpus `go test -cover`
+  # plus the derived architecture-metrics report, including per-package
+  # coverage. Never blocks on a metric value; it is diagnostic + an artifact.
+  metrics:
+    name: full corpus + coverage + LOC (untimed)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.26"
+          cache-dependency-path: services/host/go.sum
+      - name: full corpus with coverage (untimed — this is the point of the split)
+        run: |
+          mkdir -p out/metrics
+          (cd services/host && go test -cover ./...) | tee out/metrics/coverage.log
+      - name: derived architecture-metrics report (LOC, exports, globals, edges, exits, coverage)
+        run: |
+          (cd scripts/arch-metrics && go build -o /tmp/arch-metrics .)
+          /tmp/arch-metrics -root services/host -coverage out/metrics/coverage.log -out out/metrics/full.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: arch-metrics-full
+          path: out/metrics/
+          if-no-files-found: error
+          retention-days: 30
+
+  # REQUIRED. See the header comment: this is the only macOS CI signal, and it
+  # gates any future deletion of the launchd-based service management.
+  macos:
+    name: macOS build + test (required)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.26"
+          cache-dependency-path: services/host/go.sum
+      - name: build
+        working-directory: services/host
+        run: go build ./...
+      - name: test
+        working-directory: services/host
+        run: go test ./...
