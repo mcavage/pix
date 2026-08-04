@@ -2,11 +2,11 @@
   "schema": 1,
   "packages": {
     "pix/host": {
-      "prod_loc": 6608,
+      "prod_loc": 6720,
       "exports": 0,
-      "globals": 63,
-      "edges": 6,
-      "exits": 28
+      "globals": 64,
+      "edges": 8,
+      "exits": 29
     },
     "pix/host/cli": {
       "prod_loc": 543,
@@ -30,8 +30,8 @@
       "exits": 0
     },
     "pix/host/config": {
-      "prod_loc": 1400,
-      "exports": 47,
+      "prod_loc": 1415,
+      "exports": 48,
       "globals": 17,
       "edges": 0,
       "exits": 0
@@ -142,7 +142,7 @@
       "exits": 9
     },
     "pix/host/service": {
-      "prod_loc": 1758,
+      "prod_loc": 1766,
       "exports": 22,
       "globals": 16,
       "edges": 6,
@@ -177,7 +177,7 @@
       "exits": 0
     },
     "pix/host/workflow/doctor": {
-      "prod_loc": 2382,
+      "prod_loc": 2385,
       "exports": 27,
       "globals": 17,
       "edges": 14,

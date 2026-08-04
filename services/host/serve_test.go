@@ -29,6 +29,7 @@ func TestResolveServices(t *testing.T) {
 		{"cli of empty strings falls back", []string{"", " "}, []string{"memory"}, []string{"memory"}},
 		{"cli overrides config", []string{"knowledge"}, []string{"memory"}, []string{"knowledge"}},
 		{"both empty means all (nil)", nil, nil, nil},
+		{"cli monitor overrides a memory-only config", []string{"monitor"}, []string{"memory"}, []string{"monitor"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

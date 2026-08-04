@@ -3,7 +3,7 @@ package service
 // Usage is the `pix serve` help text. It lives with the capability rather than
 // in a central help file, so a change to what serve does and a change to what
 // serve says are the same edit.
-const Usage = `usage: pix serve [args...]
+const Usage = `usage: pix serve [args...] [--bind ADDR] [--port N]
        pix serve start   (alias: install)
        pix serve stop
        pix serve status [--json]
@@ -11,8 +11,16 @@ const Usage = `usage: pix serve [args...]
        pix serve uninstall
 
 Run the long-running host services (execs the sibling pix-host serve):
-memory (:11435, when enabled). Any args are passed through to pix-host
-serve unchanged.
+memory (:11435, when enabled) and the monitor ingest listener (:11437,
+when enabled) that the in-VM monitor tap POSTs to — 'pix monitor' itself
+is now a pure offline reader with no listener of its own. Any args are
+passed through to pix-host serve unchanged.
+
+  --bind ADDR   monitor ingest listen address (default 127.0.0.1,
+                loopback-only). A non-loopback bind exposes the ingest
+                endpoint — no auth, full agent context and tool output — to
+                your local network, and serve WARNS loudly when it does.
+  --port N      monitor ingest port (default 11437)
 
 You usually do NOT need to run this yourself: pix run / memory
 auto-start a detached serve when its ports are down (lazy

@@ -4,10 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 
 	"golang.org/x/term"
@@ -17,12 +15,15 @@ import (
 	"pix/host/monitor"
 )
 
-// runMonitor is the `monitor` verb: a host-side debug wiretap. With no
-// --path it binds a loopback ingest listener (:11437 by default) and appends
-// incoming events to the on-disk store while printing each as it arrives;
-// with --path DIR it is a pure offline reader over an already-captured
-// directory and starts no listener at all. There is no TUI and no
-// "serviceDown" degrade path — monitor IS the service.
+// runMonitor is the `monitor` verb: a PURE OFFLINE READER over the on-disk
+// event store. It never binds a port and never starts a listener — the
+// ingest listener now lives inside `pix-host serve` (services/host/serve.go),
+// composed alongside memory. With no --path it tails the SAME root serve
+// writes to (config.MonitorStoreRoot, <state-dir>/monitor); with --path DIR
+// it reads an arbitrary (possibly still being written) store directory
+// instead. Either way this is `monitor.Follow` over the filesystem: reader
+// and writer share nothing else, so `pix monitor` works whether or not serve
+// is running right now (it just prints nothing new until it is).
 func runMonitor(argv []string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -30,42 +31,33 @@ func runMonitor(argv []string) {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() { <-sigCh; cancel() }()
 
-	// <state-dir>/monitor: a capture is bounded, rotated debug scratch, the
-	// same ephemeral-data family as serve.log, not durable data.
-	stateDir, err := config.StateDir()
+	defaultRoot, err := config.MonitorStoreRoot()
 	if err != nil {
-		cli.ExitFromErr("monitor", fmt.Errorf("resolve state dir: %w", err))
+		cli.ExitFromErr("monitor", fmt.Errorf("resolve monitor store root: %w", err))
 		return
 	}
-	defaultRoot := filepath.Join(stateDir, "monitor")
 	tty := term.IsTerminal(int(os.Stdout.Fd()))
-	if err := runMonitorCore(ctx, argv, monitor.NewIngestServer, os.Stdout, os.Stderr, defaultRoot, tty); err != nil {
+	if err := runMonitorCore(ctx, argv, os.Stdout, defaultRoot, tty); err != nil {
 		cli.ExitFromErr("monitor", err)
 	}
 }
 
-const monitorUsage = `usage: pix monitor [name] [--port N] [--bind ADDR] [--path DIR] [--json]
+const monitorUsage = `usage: pix monitor [name] [--path DIR] [--json]
 
-  Record and concisely follow a running sandbox's out-of-sandbox traffic
-  (model requests, responses, tool + MCP calls, context/control events).
+  Concisely follow a sandbox's out-of-sandbox traffic (model requests,
+  responses, tool + MCP calls, context/control events), as captured on disk.
 
-  With no --path: binds :11437 (loopback-only), appends events to the store
-  under <state-dir>/monitor, and prints each as it arrives, one line per
-  event. Ctrl-C stops both the listener and the reader.
-
-  With --path DIR: an OFFLINE reader over an existing (possibly still being
-  written) store directory. No listener is started.
+  This is a PURE READER: it never binds a port or starts a listener. The
+  ingest listener that receives events from the in-VM tap runs inside
+  ` + "`pix serve`" + ` (:11437, loopback-only by default — see ` + "`pix serve --help`" + `
+  for its --bind/--port flags). With no --path, monitor tails the same store
+  root serve writes to; run ` + "`pix serve`" + ` first (or already have it
+  running) for there to be anything to follow.
 
   [name]        filter to one sandbox/session by id substring, CASE-SENSITIVE.
-  --port N      ingest port (default 11437). Ignored with --path.
-  --bind ADDR   listen address (default 127.0.0.1, loopback-only). Ignored
-                with --path. Linux users watching a real sandbox may need
-                --bind 0.0.0.0, since host.docker.internal maps to the bridge
-                gateway there rather than to loopback (unlike Docker Desktop
-                on macOS/Windows). A non-loopback bind exposes the ingest
-                endpoint — no auth, full agent context and tool output — to
-                your local network.
-  --path DIR    read an existing store directory instead of listening.
+  --path DIR    read an existing store directory instead of the default
+                (<state-dir>/monitor) — e.g. a capture copied off another
+                host, or one you're pointing serve at explicitly.
   --json        print the raw (redacted, capped) stored event JSON instead of
                 the concise line — one object per line, safe to pipe to jq.
 
@@ -80,17 +72,12 @@ ENV (read by the in-VM extension, documented here for discoverability):
                             (default http://host.docker.internal:11437)
 `
 
-// newIngestServerFunc matches monitor.NewIngestServer; injected so
-// monitor_test.go can prove flag parsing and dispatch without a bound port.
-type newIngestServerFunc func(monitor.IngestConfig) (*monitor.IngestServer, error)
-
-// runMonitorCore is the testable core: ctx governs the whole run (listener
-// and reader alike) so a test cancels deterministically instead of signaling.
-func runMonitorCore(ctx context.Context, argv []string, newIngestServer newIngestServerFunc, out, errOut io.Writer, defaultRoot string, tty bool) error {
+// runMonitorCore is the testable core: ctx governs the run so a test cancels
+// deterministically instead of signaling. There is no listener to inject —
+// monitor is argv parsing plus a Follow loop over the store.
+func runMonitorCore(ctx context.Context, argv []string, out io.Writer, defaultRoot string, tty bool) error {
 	fs := cli.NewFlagSet()
 	fs.EnableJSON()
-	port := fs.Int("port", monitor.DefaultPort)
-	bind := fs.Str("bind", monitor.DefaultBindAddr)
 	path := fs.Str("path", "")
 	positional, err := fs.Parse(argv)
 	if err != nil {
@@ -101,7 +88,7 @@ func runMonitorCore(ctx context.Context, argv []string, newIngestServer newInges
 		return nil
 	}
 	if len(positional) > 1 {
-		return cli.UsageErr("usage: pix monitor [name] [--port N] [--bind ADDR] [--path DIR] [--json]")
+		return cli.UsageErr("usage: pix monitor [name] [--path DIR] [--json]")
 	}
 	name := ""
 	if len(positional) == 1 {
@@ -116,31 +103,6 @@ func runMonitorCore(ctx context.Context, argv []string, newIngestServer newInges
 		return err
 	}
 	follow := monitor.FollowConfig{Filter: name, JSON: fs.Json, TTY: tty, Out: out}
-
-	if *path != "" { // offline: no listener at all
-		monitor.Follow(ctx, store, follow)
-		return nil
-	}
-	if !isLoopbackAddr(*bind) {
-		fmt.Fprintf(errOut, "WARNING: monitor ingest is bound to %s, exposed on your local network with NO AUTHENTICATION — anyone on the network can send this sandbox's full agent context and tool output into the store. Use a firewall, or bind loopback (drop --bind) unless you specifically need this.\n", *bind)
-	}
-	srv, err := newIngestServer(monitor.IngestConfig{Port: *port, BindAddr: *bind, Store: store, Filter: name})
-	if err != nil {
-		return err
-	}
-	fmt.Fprintf(errOut, "monitor: listening on %s, storing under %s\n", srv.Addr(), root)
-	served := make(chan error, 1)
-	go func() { served <- srv.Serve(ctx) }()
 	monitor.Follow(ctx, store, follow)
-	return <-served
-}
-
-// isLoopbackAddr reports whether host (no port) is the loopback interface.
-func isLoopbackAddr(host string) bool {
-	switch host {
-	case "", "localhost":
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	return nil
 }
