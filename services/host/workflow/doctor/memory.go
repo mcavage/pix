@@ -82,8 +82,8 @@ func memoryGroup(cfg *config.Config, env hostenv.Env) readiness.Group {
 	// Readiness comes from the APPLICATION-LEVEL identity probe, never from a
 	// dial: a port held by a foreign process renders "unidentified", not ✓.
 	s := readiness.Build(
-		readiness.Request{Axes: []readiness.Axis{readiness.AxisServiceMemory, readiness.AxisServiceKnowledge}},
-		axis.ServiceReadinessAxes(env, config.ServiceEnabled(cfg, "memory"), config.ServiceEnabled(cfg, "knowledge"), env.IdentityProbe),
+		readiness.Request{Axes: []readiness.Axis{readiness.AxisServiceMemory}},
+		axis.ServiceReadinessAxes(env, config.ServiceEnabled(cfg, "memory"), env.IdentityProbe),
 	)
 	memory.Checks = append(memory.Checks, s.All()...)
 	memUp := false

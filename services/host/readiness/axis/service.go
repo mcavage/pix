@@ -155,9 +155,9 @@ func serviceReadinessCheck(spec serviceAxisSpec) readiness.Check {
 	return base
 }
 
-// ServiceReadinessAxes builds the memory and knowledge axes. Both are lazy:
-// a caller that requests neither pays for no probe at all.
-func ServiceReadinessAxes(env hostenv.Env, memoryEnabled, knowledgeEnabled bool, probe IdentityProber) map[readiness.Axis]readiness.AxisBuilder {
+// ServiceReadinessAxes builds the memory axis. It is lazy: a caller that does
+// not request it pays for no probe at all.
+func ServiceReadinessAxes(env hostenv.Env, memoryEnabled bool, probe IdentityProber) map[readiness.Axis]readiness.AxisBuilder {
 	dial := env.DialLocal
 	return map[readiness.Axis]readiness.AxisBuilder{
 		readiness.AxisServiceMemory: func() []readiness.Check {
@@ -168,20 +168,12 @@ func ServiceReadinessAxes(env hostenv.Env, memoryEnabled, knowledgeEnabled bool,
 				selfVer: launcher.Version, dialOnly: dial, probeFunc: probe,
 			})}
 		},
-		readiness.AxisServiceKnowledge: func() []readiness.Check {
-			return []readiness.Check{serviceReadinessCheck(serviceAxisSpec{
-				Axis: readiness.AxisServiceKnowledge, label: "knowledge",
-				port: rpc.KnowledgeClient().Port, wantName: rpc.KnowledgeName,
-				enabled: knowledgeEnabled, startCmd: "pix serve",
-				selfVer: launcher.Version, dialOnly: dial, probeFunc: probe,
-			})}
-		},
 	}
 }
 
-// The identity names the daemons report now live beside the probe that checks
-// them, as rpc.MemoryName / rpc.KnowledgeName. They remain deliberately
-// DUPLICATED from services/host/identity.go: those are separate binaries, and
-// the launcher must state the name it EXPECTS rather than importing whatever
-// the local build happens to say. A mismatch is exactly the "unidentified
-// process" case the probe exists to report.
+// The identity name the daemon reports lives beside the probe that checks it,
+// as rpc.MemoryName. It remains deliberately DUPLICATED from
+// services/host/identity.go: that is a separate binary, and the launcher must
+// state the name it EXPECTS rather than importing whatever the local build
+// happens to say. A mismatch is exactly the "unidentified process" case the
+// probe exists to report.

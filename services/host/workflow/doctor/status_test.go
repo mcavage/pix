@@ -38,14 +38,11 @@ func fakeStatusEnv() hostenv.Env {
 }
 
 func TestGatherStatus(t *testing.T) {
-	cfg := &config.Config{MCP: []string{config.GWServerName}, KnowledgeBundles: []string{"/kb"}}
+	cfg := &config.Config{MCP: []string{config.GWServerName}}
 	st := GatherStatus(cfg, "default", fakeStatusEnv())
 
 	if !st.Memory {
 		t.Error("memory should be up")
-	}
-	if st.Knowledge {
-		t.Error("knowledge should be down")
 	}
 	if !st.Providers["anthropic"] || !st.Providers["openai"] {
 		t.Errorf("providers = %v, want anthropic+openai set", st.Providers)
@@ -71,7 +68,7 @@ func TestGatherStatus(t *testing.T) {
 }
 
 func TestRenderStatusHuman(t *testing.T) {
-	cfg := &config.Config{MCP: []string{config.GWServerName}, KnowledgeBundles: []string{"/kb"}}
+	cfg := &config.Config{MCP: []string{config.GWServerName}}
 	var out bytes.Buffer
 	RenderStatus(cfg, "default", fakeStatusEnv(), &out, false)
 	s := out.String()
@@ -83,7 +80,7 @@ func TestRenderStatusHuman(t *testing.T) {
 	if strings.Contains(s, "all systems go") {
 		t.Errorf("unverifiable mcp rows must prevent the all-systems-go headline:\n%s", s)
 	}
-	for _, want := range []string{"pix", "knowledge", "1 bundle", "integrations", "nothing outstanding, but", "unverifiable (not failed"} {
+	for _, want := range []string{"pix", "integrations", "nothing outstanding, but", "unverifiable (not failed"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("status output missing %q:\n%s", want, s)
 		}
@@ -300,38 +297,6 @@ func TestStatusSbxAbsentNotAllGreen(t *testing.T) {
 	}
 }
 
-// TestStatusGogNeedsAuthTodoNotAllGreen: a configured gog account that is NOT
-// authenticated is an outstanding item — status appends a `pix gworkspace setup`
-// TODO and the verdict must not be falsely "all systems go", even when every
-// provider key is set.
-func TestStatusGogNeedsAuthTodoNotAllGreen(t *testing.T) {
-	cfg := &config.Config{GogAccount: "me@x.com"}
-	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
-		if name == "gog" {
-			return "", fmt.Errorf("not authed")
-		}
-		if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
-			return "anthropic\nopenai\ngoogle\ngithub\n", nil
-		}
-		return "", nil
-	}, DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }}}
-	st := GatherStatus(cfg, "default", env)
-	var gogTodo bool
-	for _, tdo := range st.Todos {
-		if tdo == gogSetupHint {
-			gogTodo = true
-		}
-	}
-	if !gogTodo {
-		t.Errorf("expected a `%s` TODO for an unauthed account, got %v", gogSetupHint, st.Todos)
-	}
-	var out bytes.Buffer
-	RenderStatus(cfg, "default", env, &out, false)
-	if strings.Contains(out.String(), "all systems go") {
-		t.Errorf("verdict must not be green when gog is unauthed, got:\n%s", out.String())
-	}
-}
-
 // TestStatusSbxProbeFailedTodo: sbx IS on PATH but `sbx secret ls` fails. Status
 // must emit the "could not verify" TODO (distinct from the install TODO), never
 // the install-sbx guidance, and never claim "all systems go".
@@ -366,26 +331,6 @@ func TestStatusSbxProbeFailedTodo(t *testing.T) {
 	}
 }
 
-// TestStatusGogNeedsAuth: with a gog account set but no usable auth, the human
-// render shows the "needs auth (run pix gworkspace setup)" integrations line.
-func TestStatusGogNeedsAuth(t *testing.T) {
-	cfg := &config.Config{GogAccount: "me@x.com"}
-	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
-		if name == "gog" {
-			return "", fmt.Errorf("not authed")
-		}
-		return "", nil
-	}, DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }}}
-	var out bytes.Buffer
-	RenderStatus(cfg, "default", env, &out, false)
-	s := out.String()
-	if !strings.Contains(s, "workspace") || !strings.Contains(s, "needs auth (run "+gogSetupHint+")") {
-		t.Errorf("expected gog needs-auth integrations line, got:\n%s", s)
-	}
-}
-
-// TestStatusOpenAIOnlyAllSystemsGo pins finding #3: with ONLY openai present
-// (anthropic/google unset), status must still read all-systems-go — core
 // model readiness needs just one of the three, and the missing alternates
 // (plus an absent github) are informational, never outstanding.
 func TestStatusOpenAIOnlyAllSystemsGo(t *testing.T) {

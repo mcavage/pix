@@ -159,8 +159,6 @@ func TestValidateSetupSemantics_RejectsBeforeMutationBoundary(t *testing.T) {
 		want string
 	}{
 		{"with without pack", onboard.Opts{WithSetup: []string{"oauth"}}, "--with requires --pack"},
-		{"account without opt-in", onboard.Opts{Account: "me@example.com"}, "--account requires --google-workspace"},
-		{"credentials without opt-in", onboard.Opts{Credentials: "/tmp/client.json"}, "--credentials requires --google-workspace"},
 		{"unknown mcp", onboard.Opts{Mcp: []string{"not-a-real-server"}}, "not an allowlisted server"},
 		{"model whitespace", onboard.Opts{Model: "bad model"}, "must not contain whitespace"},
 	}
@@ -847,7 +845,7 @@ func TestSetupPhases_NumberedHeadersInFixedOrder(t *testing.T) {
 // consenting steps are last, and model pulls (the only step that can cost
 // gigabytes) are dead last.
 func TestSetupMutationOrder_FixedRiskiestLast(t *testing.T) {
-	want := "keys,config,pack,mcp,knowledge,identity,gworkspace,models,inference"
+	want := "keys,config,pack,mcp,identity,models,inference"
 	if got := strings.Join(setup.SetupMutationOrder, ","); got != want {
 		t.Errorf("setup.SetupMutationOrder = %s, want %s", got, want)
 	}

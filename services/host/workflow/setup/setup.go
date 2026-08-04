@@ -7,8 +7,7 @@
 //     direct 1Password-backed APIs, a gateway, Ollama, or pack-provided
 //     bindings; enable memory only when its local models are verified; and
 //     seed first-name identity.
-//     Host mode is NOT set up here — it's opt-in via `pix host setup`.
-//     Host-config (gog/knowledge/mcp) comes from FLAGS, not interactive prompts;
+//     Host-config (mcp/model roster) comes from FLAGS, not interactive prompts;
 //     Flag/non-TTY operation is CI-safe.
 //  2. AGENT phase (handoff): launch a normal `pix run` whose FIRST pi
 //     message kicks off the `onboarding` skill, so the agent PROACTIVELY starts
@@ -35,11 +34,9 @@ import (
 	"pix/host/secret"
 	"pix/host/sys"
 	"pix/host/workflow/doctor"
-	"pix/host/workflow/gworkspace"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/onboard"
 	"pix/host/workflow/pack"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -320,9 +317,6 @@ func setupProposal(opts onboard.Opts) *onboard.OnboardingResult {
 		MCP:               append([]string(nil), opts.Mcp...),
 		OllamaBridgeModel: strings.TrimSpace(opts.Model),
 	}
-	if k := strings.TrimSpace(opts.Knowledge); k != "" {
-		p.Knowledge = &onboard.Knowledge{Action: "use", Source: k}
-	}
 	return p
 }
 
@@ -355,9 +349,6 @@ type RegisterFn func(cfg *config.Config, env hostenv.Env, out io.Writer, names [
 func ValidateSetupSemantics(opts onboard.Opts, cfg *config.Config, env hostenv.Env, hostResolver func() (string, error)) error {
 	if len(opts.WithSetup) > 0 && len(opts.Packs) == 0 {
 		return ErrUsage{fmt.Errorf("--with requires --pack")}
-	}
-	if err := CheckGoogleWorkspaceFlags(opts); err != nil {
-		return err
 	}
 	if err := onboard.ValidateOnboardingResult(setupProposal(opts), cfg, env, hostResolver); err != nil {
 		return ErrUsage{err}
@@ -410,11 +401,11 @@ type SetupMutationStep struct {
 
 // SetupMutationOrder is the FIXED order (AC-P0-303), riskiest last, named
 // here so the order is a value a test can assert on rather than a property of
-// the control flow. gworkspace, models and inference sit at the end because
-// they are the only steps that talk to the user; models is second-to-last
-// because it is the only step that can cost gigabytes, and inference is last
-// because it can only judge what models left behind.
-var SetupMutationOrder = []string{"keys", "config", "pack", "mcp", "knowledge", "identity", "gworkspace", "models", "inference"}
+// the control flow. models and inference sit at the end because they are the
+// only steps that talk to the user; models is second-to-last because it is
+// the only step that can cost gigabytes, and inference is last because it can
+// only judge what models left behind.
+var SetupMutationOrder = []string{"keys", "config", "pack", "mcp", "identity", "models", "inference"}
 
 // RunSetupMutations executes steps in order and returns the axes it touched.
 // It returns NO user-facing strings (AC-P0-302): the report is rendered from
@@ -496,12 +487,7 @@ func SetupMutationSteps(env hostenv.Env, inv setupInventory, opts onboard.Opts, 
 					return fmt.Errorf("dropping retired config keys: %w", err)
 				}
 			}
-			// Config only: the knowledge half of the proposal is its own,
-			// later step so the fixed order is real and not an illusion of one
-			// combined call.
-			cfgOnly := *inv.proposal
-			cfgOnly.Knowledge = nil
-			_, err := onboard.ApplyOnboardingResult(&cfgOnly, cfg, env, io.Discard, func(c *config.Config) error { return c.Save() })
+			_, err := onboard.ApplyOnboardingResult(inv.proposal, cfg, env, io.Discard, func(c *config.Config) error { return c.Save() })
 			if err != nil {
 				return err
 			}
@@ -535,18 +521,6 @@ func SetupMutationSteps(env hostenv.Env, inv setupInventory, opts onboard.Opts, 
 			return nil
 		},
 	}, {
-		Name:  "knowledge",
-		Axes:  []readiness.Axis{readiness.AxisServiceKnowledge},
-		Fatal: true,
-		Run: func() error {
-			if inv.proposal.Knowledge == nil {
-				return nil
-			}
-			only := &onboard.OnboardingResult{Version: 1, Knowledge: inv.proposal.Knowledge}
-			_, err := onboard.ApplyOnboardingResult(only, cfg, env, io.Discard, func(c *config.Config) error { return c.Save() })
-			return err
-		},
-	}, {
 		Name: "identity",
 		Run: func() error {
 			// Read the user's first name from the HOST's git config (the
@@ -555,29 +529,6 @@ func SetupMutationSteps(env hostenv.Env, inv setupInventory, opts onboard.Opts, 
 			// re-reads git config itself, so nothing here needs to claim
 			// anything.
 			SeedIdentity(env, io.Discard)
-			return nil
-		},
-	}, {
-		Name: "gworkspace",
-		Axes: []readiness.Axis{readiness.AxisGworkspace},
-		Run: func() error {
-			// Google Workspace is OFF unless --google-workspace. It runs the
-			// SAME transaction `pix gworkspace setup` runs, through the
-			// same façade, so there is exactly one writer. It returns no
-			// success text: the row in the report is rendered from a
-			// post-mutation probe, so a half-finished authorization can never
-			// print a ✓.
-			if !opts.GoogleWorkspace {
-				return nil
-			}
-			ask := prompts.Reserve("google ws route")
-			if err := setupGoogleWorkspaceFn(env, gworkspace.GogSetupOpts{
-				Account:     strings.TrimSpace(opts.Account),
-				Credentials: strings.TrimSpace(opts.Credentials),
-				AssumeYes:   opts.AssumeYes,
-			}, in, out, ask); err != nil {
-				return fmt.Errorf("google ws: %w", err)
-			}
 			return nil
 		},
 	}, {
@@ -793,11 +744,11 @@ func SetupHostPhase(env hostenv.Env, flags []string, in io.Reader, out io.Writer
 
 	// PHASE 4 — mutate, and PHASE 5 — consent. One ordered step table
 	// (SetupMutationOrder), split at the point where the steps start asking
-	// permission: the first six are unattended, the last three (gworkspace,
-	// models, inference) are the consented, riskiest-last group.
+	// permission: the first five are unattended, the last two (models,
+	// inference) are the consented, riskiest-last group.
 	var models SetupModelsOutcome
 	steps := SetupMutationSteps(env, inv, opts, in, out, interactive, &models, prompts)
-	split := len(steps) - 3
+	split := len(steps) - 2
 	SetupPhaseHeader(out, setupPhaseMutate, "")
 	if _, err := RunSetupMutations(steps[:split]); err != nil {
 		return err
@@ -821,12 +772,6 @@ func SetupHostPhase(env hostenv.Env, flags []string, in io.Reader, out io.Writer
 	// takes no inventory, no mutation log, and no "what we meant to do".
 	SetupPhaseHeader(out, setupPhaseReport, "")
 	PrintSetupSummary(postCfg, env, out, models)
-
-	if !env.Quiet {
-		fmt.Fprintln(out, "")
-		fmt.Fprintln(out, "host mode (optional, UNSANDBOXED: runs `pi` directly on the host): not enabled.")
-		fmt.Fprintln(out, "  set it up only if you need it:  pix host setup")
-	}
 
 	// A partial pull failure is a real, verified gap the user consented to
 	// closing: fail setup (non-zero) with the exact retry commands. The summary
@@ -858,9 +803,6 @@ func SetupRequestedAxes(opts onboard.Opts) []readiness.Axis {
 	if opts.PullModels {
 		out = append(out, readiness.AxisOllamaHost, readiness.AxisModelWatcher, readiness.AxisModelEmbed, readiness.AxisModelBridge)
 	}
-	if opts.GoogleWorkspace {
-		out = append(out, readiness.AxisGworkspace)
-	}
 	out = append(out, mcpAxes(opts.Mcp)...)
 	return out
 }
@@ -882,26 +824,21 @@ func requestedShortfallMessage(short []readiness.Axis, s readiness.Snapshot) str
 
 // setupReadinessAxes is the builder set for setup's VERIFY phase: the shared
 // Ollama/model and service builders doctor uses (so setup and doctor can never
-// disagree), plus the three axes only setup's own post-mutation reads can speak
-// to. Every builder here probes; none reads the inventory.
+// disagree), plus the axes only setup's own post-mutation reads can speak to.
+// Every builder here probes; none reads the inventory.
 func setupReadinessAxes(cfg *config.Config, env hostenv.Env, models SetupModelsOutcome) map[readiness.Axis]readiness.AxisBuilder {
 	builders := map[readiness.Axis]readiness.AxisBuilder{}
 	for a, b := range doctor.OllamaReadinessAxes(cfg, env, "", nil) {
 		builders[a] = b
 	}
 	if env.IdentityProbe != nil {
-		for a, b := range axis.ServiceReadinessAxes(env, config.ServiceEnabled(cfg, "memory"), config.ServiceEnabled(cfg, "knowledge"), env.IdentityProbe) {
+		for a, b := range axis.ServiceReadinessAxes(env, config.ServiceEnabled(cfg, "memory"), env.IdentityProbe) {
 			builders[a] = b
 		}
 	}
 	builders[readiness.AxisProviders] = func() []readiness.Check { return SetupProvidersAxis(cfg, env) }
 	if strings.TrimSpace(cfg.Pack) != "" {
 		builders[readiness.AxisPack] = func() []readiness.Check { return setupPackAxis(cfg) }
-	}
-	if strings.TrimSpace(cfg.GogAccount) != "" || slices.Contains(cfg.MCP, config.GWServerName) {
-		// Absent by default (AC-P0-319): with no opt-in there is no axis at
-		// all, so the report says nothing about Google Workspace.
-		builders[readiness.AxisGworkspace] = func() []readiness.Check { return setupGworkspaceAxis(cfg, env) }
 	}
 	return builders
 }
@@ -989,25 +926,6 @@ func setupPackAxis(cfg *config.Config) []readiness.Check {
 	default:
 		return []readiness.Check{{Label: "pack", Requirement: readiness.RequirementCore, Verdict: readiness.VerdictTodo,
 			Detail: "no active pack", Evidence: "no pack is active", Todo: "pix pack new"}}
-	}
-}
-
-// setupGworkspaceAxis is the post-mutation Google Workspace fact, probed the
-// same way `pix gworkspace status` probes it.
-func setupGworkspaceAxis(cfg *config.Config, env hostenv.Env) []readiness.Check {
-	acct := strings.TrimSpace(cfg.GogAccount)
-	switch {
-	case acct == "":
-		return []readiness.Check{{Label: "google ws", Requirement: readiness.RequirementOptional, Verdict: readiness.VerdictTodo,
-			Detail: "enabled but no account authorized", Evidence: "google_workspace_account is empty",
-			Todo: "pix gworkspace setup"}}
-	case gworkspace.GogSetupAccountHealthy(env, acct):
-		return []readiness.Check{{Label: "google ws", Requirement: readiness.RequirementOptional, Verdict: readiness.VerdictReady,
-			Detail: acct + " authorized (read-only)", Evidence: "authorization probe passed for " + acct}}
-	default:
-		return []readiness.Check{{Label: "google ws", Requirement: readiness.RequirementOptional, Verdict: readiness.VerdictTodo,
-			Detail: acct + " not verified", Evidence: "authorization probe failed for " + acct,
-			Todo: "pix gworkspace setup"}}
 	}
 }
 
@@ -1447,8 +1365,7 @@ automatically.
 
 Memory is progressive enhancement: it is enabled only when Ollama is healthy
 and its watcher and embedding models are verified. Without Ollama, Pix still
-runs normally with memory off. Host mode is separate and opt-in via
-'pix host setup'.
+runs normally with memory off.
 
 DIR defaults to the current directory (like ` + "`pix run`" + `). Repeat semantics:
 the host phase ALWAYS reconciles again, even when a sandbox
@@ -1494,15 +1411,6 @@ Host-config flags (all optional):
                            union; later scalar declarations win)
   --with <setup-id>        also run a named optional setup hook from --pack;
                            repeatable, and invalid without --pack
-  --google-workspace       opt in to Google Workspace (absent otherwise): runs
-                           the same transaction as 'pix gworkspace setup'
-                           (may open a browser). Requires --account, and
-                           --credentials unless the client was already imported
-  --account <email>        the Google Workspace account to authorize; valid
-                           ONLY with --google-workspace
-  --credentials <path>     your Desktop OAuth client JSON; valid ONLY with
-                           --google-workspace
-  --knowledge <path|url>   scaffold/point the global knowledge base
   --mcp <name>             enable an MCP server (repeatable; allowlisted)
   --model <ollama-model>   set the ollama-bridge model
   --models <id,id,...>     restrict agents to these canonical catalog models;
@@ -1518,39 +1426,14 @@ underlying eight phases — parse, inventory, gate, mutate, consent, verify,
 report, handoff — and the commands they run for diagnosis. Setup sequences
 prompts one at a time and never prompts at all without a TTY.
 Mutations run in a fixed order with the
-riskiest last (keys, config, pack, MCP, knowledge, identity, Google Workspace,
-model pulls) and each one is individually idempotent, so an interrupted run is
-resumed by re-running the same command: setup re-probes what is actually there
-rather than reading back a journal of what it once intended.
+riskiest last (keys, config, pack, MCP, identity, model pulls) and each one is
+individually idempotent, so an interrupted run is resumed by re-running the
+same command: setup re-probes what is actually there rather than reading back
+a journal of what it once intended.
 `
-
-// CheckGoogleWorkspaceFlags enforces AC-P0-312: --account and --credentials are
-// Google Workspace inputs, valid ONLY alongside --google-workspace. The error
-// is deliberately in the standard grammar (invoked path, lowercase, no trailing
-// period) and maps to exit 2 at the call site, because it is an argument
-// mistake, not a failed probe.
-func CheckGoogleWorkspaceFlags(opts onboard.Opts) error {
-	if opts.GoogleWorkspace {
-		return nil
-	}
-	if strings.TrimSpace(opts.Account) != "" {
-		return ErrUsage{fmt.Errorf("--account requires --google-workspace")}
-	}
-	if strings.TrimSpace(opts.Credentials) != "" {
-		return ErrUsage{fmt.Errorf("--credentials requires --google-workspace")}
-	}
-	return nil
-}
 
 // ErrUsage marks an argument error, which exits 2 rather than 1.
 type ErrUsage struct{ error }
-
-// setupGoogleWorkspaceFn is the seam tests stub so setup's phases can be
-// exercised without a browser or an installed dependency CLI. Production wires
-// the real façade over the unchanged transaction.
-var setupGoogleWorkspaceFn = func(env hostenv.Env, opts gworkspace.GogSetupOpts, in io.Reader, out io.Writer, interactive bool) error {
-	return gworkspace.Setup(env, opts, in, out, interactive, Credentials)
-}
 
 // SetupChooseInference owns the single ordinary-user inference question. It
 // is skipped when a pack or prior setup already supplied a backend. Ollama is

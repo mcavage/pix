@@ -42,7 +42,6 @@ import (
 	"pix/host/readiness/axis"
 	"pix/host/secret"
 	"pix/host/workflow/doctor"
-	"pix/host/workflow/gworkspace"
 	"pix/host/workflow/launch"
 	"slices"
 	"sort"
@@ -361,25 +360,19 @@ func SetupReceiptStateDir(env hostenv.Env) (string, error) {
 	return env.StateDir()
 }
 
-// PrintSetupSummary renders the completion summary: keys, knowledge, pack,
-// local models, and gog as SEPARATE readiness axes (doctor's glyph
-// vocabulary), then the core-provisioned line. Core stays keys+knowledge+pack
-// — local models and gog are optional integrations unless configured, and
-// never gate provisioning. One provider key makes keys ready (any one model
-// key launches a sandbox); an ACTIVE but EMPTY pack is a TODO, never green.
-//
-// gog is a LOCAL stdio MCP server: its Google grant runs through the
-// installed gog CLI via `pix gworkspace setup` — the ONLY guidance ever printed
-// here. Native `sbx mcp auth` is for remote catalog servers and raw `gog auth
-// ...` commands are the guided command's internals; neither belongs in this
-// summary.
+// PrintSetupSummary renders the completion summary: keys, pack, and local
+// models as SEPARATE readiness axes (doctor's glyph vocabulary), then the
+// core-provisioned line. Core stays keys+pack — local models are an optional
+// integration unless configured, and never gate provisioning. One provider
+// key makes keys ready (any one model key launches a sandbox); an ACTIVE but
+// EMPTY pack is a TODO, never green.
 func PrintSetupSummary(cfg *config.Config, env hostenv.Env, out io.Writer, models SetupModelsOutcome) {
 	if env.Quiet {
 		return
 	}
-	// The pack/knowledge state may have been persisted by helpers that load
-	// their own config (activateDefaultPack, setupKnowledge); reload so the
-	// summary reports the SAVED truth, not a stale in-memory copy.
+	// The pack state may have been persisted by a helper that loads its own
+	// config (activateDefaultPack); reload so the summary reports the SAVED
+	// truth, not a stale in-memory copy.
 	if fresh, err := config.Load(); err == nil {
 		cfg = fresh
 	}
@@ -420,10 +413,6 @@ func PrintSetupSummary(cfg *config.Config, env hostenv.Env, out io.Writer, model
 		line("✓", "inference", detail)
 	}
 
-	if len(cfg.KnowledgeBundles) > 0 {
-		line("✓", "knowledge", strings.Join(cfg.KnowledgeBundles, ", "))
-	}
-
 	pack := launch.ResolveHostStatePack(cfg, "")
 	packReady := pack.Active && pack.Exists && (pack.Skills || pack.Knowledge)
 	switch {
@@ -438,22 +427,6 @@ func PrintSetupSummary(cfg *config.Config, env hostenv.Env, out io.Writer, model
 	if config.ServiceEnabled(cfg, "memory") || cfg.Inference.Backends["ollama"].Driver == "ollama" {
 		mg, md := models.summaryLine()
 		line(mg, "local models", md)
-	}
-
-	// Google Workspace is OPTIONAL and ABSENT from the default path
-	// (AC-P0-319): when it was never asked for, this summary says nothing at
-	// all about it. A row appears only once the user opted in, and then only
-	// from a probe.
-	acct := strings.TrimSpace(cfg.GogAccount)
-	switch {
-	case acct == "" && !slices.Contains(cfg.MCP, config.GWServerName):
-		// absent by default: no row.
-	case acct == "":
-		line("✗", "workspace", "enabled but no account authorized — run: pix gworkspace setup")
-	case gworkspace.GogSetupAccountHealthy(env, acct):
-		line("✓", "workspace", acct+" authorized (read-only)")
-	default:
-		line("✗", "workspace", acct+" not verified — run: pix gworkspace setup")
 	}
 
 	if callable > 0 {

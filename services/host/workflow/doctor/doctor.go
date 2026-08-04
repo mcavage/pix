@@ -14,7 +14,6 @@ import (
 	"pix/host/readiness"
 	"pix/host/secret"
 	"pix/host/sys"
-	"pix/host/workflow/upgrade"
 	"pix/host/workspace"
 )
 
@@ -55,9 +54,6 @@ import (
 // stories can rework one group without touching the others.
 func RunDoctor(cfg *config.Config, env hostenv.Env) *readiness.Report {
 	r := &readiness.Report{}
-	if g := upgrade.InstallDuplicatesGroup(env); len(g.Checks) > 0 {
-		r.Groups = append(r.Groups, g)
-	}
 
 	// sbx presence gates the provider + mcp checks (they read `sbx secret ls` /
 	// `sbx mcp ls`). Inside the sandbox sbx is absent — say so, don't crash.

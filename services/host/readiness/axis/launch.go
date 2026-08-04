@@ -67,19 +67,19 @@ func providersReadinessAxes(cfg *config.Config, ev SbxKeyEvidence) map[readiness
 }
 
 // fastReadinessAxes is the axis subset the fast surfaces request: the ONE core
-// launch requirement (a model provider key) plus the two host services whose
-// absence silently degrades a session (recall, knowledge). Everything else —
-// ollama, models, pack, gworkspace, per-server MCP — belongs to `pix
-// doctor`, which is the command whose job is to be thorough.
-var fastReadinessAxes = []readiness.Axis{readiness.AxisProviders, readiness.AxisServiceMemory, readiness.AxisServiceKnowledge}
+// launch requirement (a model provider key) plus the one host service whose
+// absence silently degrades a session (recall). Everything else — ollama,
+// models, pack, gworkspace, per-server MCP — belongs to `pix doctor`, which
+// is the command whose job is to be thorough.
+var fastReadinessAxes = []readiness.Axis{readiness.AxisProviders, readiness.AxisServiceMemory}
 
 // FastReadinessSnapshot builds the shared fast snapshot from evidence the
-// caller already has. The service axes are identity-verified (never a bare
-// dial), and both are lazy: a disabled service costs one dial, an enabled and
-// running one costs a local JSON-RPC round trip.
+// caller already has. The service axis is identity-verified (never a bare
+// dial), and lazy: a disabled service costs one dial, an enabled and running
+// one costs a local JSON-RPC round trip.
 func FastReadinessSnapshot(cfg *config.Config, env hostenv.Env, ev SbxKeyEvidence) readiness.Snapshot {
 	builders := providersReadinessAxes(cfg, ev)
-	for a, b := range ServiceReadinessAxes(env, config.ServiceEnabled(cfg, "memory"), config.ServiceEnabled(cfg, "knowledge"), env.IdentityProbe) {
+	for a, b := range ServiceReadinessAxes(env, config.ServiceEnabled(cfg, "memory"), env.IdentityProbe) {
 		builders[a] = b
 	}
 	return readiness.Build(readiness.Request{Axes: fastReadinessAxes}, builders)
