@@ -1,0 +1,19 @@
+{
+  "_comment": "AC-REL-04: pinned SBOM tooling for the published image + host binaries. Config only — CI wires it in .github/workflows/legal.yml (job sbom, non-blocking: it uploads an artifact, it does not (yet) gate the release, since no SBOM-diff policy has been reviewed by a human — see docs/legal/FINDINGS.md).",
+  "tool": "anchore/syft",
+  "action": "anchore/sbom-action",
+  "actionRef": "anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610",
+  "actionRefVersion": "v0.24.0",
+  "actionRefVerifiedVia": "github.com/anchore/sbom-action/commit/v0 (the `v0` moving tag's current commit, resolved 2026 via web lookup — not a live registry pull from inside this environment). Re-verify before your first real run; a moving major-version tag like `v0` can point to a newer commit by the time you build.",
+  "targets": [
+    { "type": "oci-image", "ref": "docker.io/mcavage/pix:<version>", "format": "spdx-json" },
+    { "type": "go-binary", "ref": "services/host/cmd/pix", "format": "spdx-json" },
+    { "type": "go-binary", "ref": "services/host (pix-host)", "format": "spdx-json" }
+  ],
+  "licensePolicyReuse": "scripts/legal/notices-policy.json — the SAME fail-closed allowedClasses/weakCopyleftAllowlist gate applies to whatever syft reports; no separate, drifting policy.",
+  "provenance": {
+    "recordedBy": "scripts/release/verify-provenance.sh",
+    "recordPath": "out/provenance/<version>.json",
+    "invariant": "a published version's image digest is immutable once recorded — verify-provenance.sh fails closed on any attempt to re-record a DIFFERENT digest for the same version, run AFTER .github/workflows/publish.yml's `merge` job assembles the multi-arch manifest and captures its digest via `docker buildx imagetools inspect`."
+  }
+}

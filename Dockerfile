@@ -17,7 +17,26 @@ ARG PI_PACKAGE=@earendil-works/pi-coding-agent@0.83.0
 # Hardened Node, maintained by Docker (DHI). Debian/glibc, so our entire apt
 # toolchain (clangd, chromium, gh, ruff, build-essential) keeps working — we just
 # stop hand-pinning a Node tarball and let Docker harden + update Node for us.
-FROM dhi.io/node:25-debian13-dev
+#
+# AC-REL-03 (explicit digest/build-arg path): BASE_IMAGE is a build ARG, not a
+# hardcoded FROM. The default below is the same DHI tag this image has always
+# used (a `make load`/CI build is unaffected). To pin an IMMUTABLE base:
+#   docker build --build-arg BASE_IMAGE=dhi.io/node:25-debian13-dev@sha256:<digest> .
+# Resolve <digest> yourself against your own DHI-entitled registry session —
+# see scripts/release/resolve-base-digest.sh, which shells out to
+# `docker buildx imagetools inspect` and refuses to guess or fabricate one.
+# This repo does not, and cannot, assert a digest it has not itself resolved
+# against a live, credentialed registry pull; see docs/legal/FINDINGS.md.
+#
+# Public fallback (no DHI entitlement): pass a public Debian-based Node image,
+# e.g. --build-arg BASE_IMAGE=docker.io/library/node:25-bookworm. This is
+# documented ONLY as a substitution path so a non-entitled contributor can
+# still build *something* runnable — it is NOT a claim that a public image is
+# a validated, hardening-equivalent substitute for DHI, and this repo does not
+# assert any right (unresolved or otherwise) to DHI beyond what the operator
+# building the image has separately obtained from Docker, Inc.
+ARG BASE_IMAGE=dhi.io/node:25-debian13-dev
+FROM ${BASE_IMAGE}
 
 ARG PI_PACKAGE
 USER root
@@ -190,6 +209,11 @@ COPY --chown=agent:agent extensions/   /home/agent/.pi/agent/extensions/
 COPY --chown=agent:agent lib/          /home/agent/.pi/agent/lib/
 COPY --chown=agent:agent agents/       /home/agent/.pi/agent/agents/
 COPY --chown=agent:agent themes/       /home/agent/.pi/agent/themes/
+# AC-REL-01/02: ship the generated notices + affiliation disclaimer inside the
+# image itself (scripts/check-third-party-notices.sh asserts this COPY line
+# exists, so the two can't silently drift apart).
+COPY --chown=agent:agent THIRD_PARTY_NOTICES.md /home/agent/.pi/agent/THIRD_PARTY_NOTICES.md
+COPY --chown=agent:agent NOTICE.md              /home/agent/.pi/agent/NOTICE.md
 # Note: company tooling (e.g. a `snow` wrapper) is NOT in the public image. Such
 # in-sandbox wrappers are delivered by a pack's `[[proxy]]` bin/ at run time; see
 # docs/design/packs.md.
