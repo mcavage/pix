@@ -339,8 +339,13 @@ jobs:
             cp "pix-darwin-$arch" "$stage/pix"
             cp "pix-host-darwin-$arch" "$stage/pix-host"
             cp "$GITHUB_WORKSPACE/services/host/cmd/pix/pix.1" "$stage/pix.1"
+            # AC-REL-01/02: the Homebrew tarball is a real distribution artifact
+            # of the third-party components baked into these binaries (incl.
+            # the MPL-2.0 go-plugin/yamux notice) — ship the notices alongside it.
+            cp "$GITHUB_WORKSPACE/THIRD_PARTY_NOTICES.md" "$stage/THIRD_PARTY_NOTICES.md"
+            cp "$GITHUB_WORKSPACE/NOTICE.md" "$stage/NOTICE.md"
             chmod 0755 "$stage/pix" "$stage/pix-host"
-            tar -C "$stage" -czf "pix_${V}_darwin_${arch}.tar.gz" pix pix-host pix.1
+            tar -C "$stage" -czf "pix_${V}_darwin_${arch}.tar.gz" pix pix-host pix.1 THIRD_PARTY_NOTICES.md NOTICE.md
             rm -rf "$stage"
           done
           ls -la pix_*.tar.gz

@@ -14,8 +14,8 @@
 #
 # columns: path  disposition  occurrences  frozen  pathmv  note
 #
-# totals: 13 files, 176 occurrences
-#   rename 0 | manual 1 | keep 6 | keep-historical 6 | unclassified 0
+# totals: 14 files, 226 occurrences
+#   rename 0 | manual 1 | keep 6 | keep-historical 7 | unclassified 0
 CHANGELOG.md	keep-historical	48	0	no	released history: entries describe versions published under the old name, including their asset URLs
 docs/design/pix-migration.md	keep-historical	14	1	no	the pre-cutover audited plan records the original and target names as historical evidence
 docs/upstream/pi-subagents-hang-pi-0.80.md	keep-historical	2	0	no	upstream bug reports as filed: the text was sent to another project under the old name
@@ -24,8 +24,9 @@ docs/upstream/sbx-version-box.md	keep-historical	1	0	no	upstream bug reports as 
 docs/upstream/tui-bottom-pin.md	keep-historical	1	0	no	upstream bug reports as filed: the text was sent to another project under the old name
 extensions/compaction-continuation.ts	keep	2	2	no	every occurrence is a frozen literal (see the FROZEN table): nothing here is rewritable
 scripts/check-rename.sh	keep	1	0	no	rename guard: names the legacy identifier by definition
+scripts/legal/secret-scan-allowlist.txt	keep-historical	49	0	no	fingerprints a full-history secret scan (git rev-list --objects --all); the reviewed-comment paths quote the ACTUAL historical blob path from pre-rename commits (e.g. services/host/cmd/pi-stack/...) -- rewriting the annotation to a path that never existed at that commit would misrepresent the evidence the fingerprint documents
 scripts/rename/apply.sh	keep	40	0	no	rename tooling: the token table and the inventory name the legacy identifier by definition
-scripts/rename/build-inventory.sh	keep	56	2	no	rename tooling: the token table and the inventory name the legacy identifier by definition
+scripts/rename/build-inventory.sh	keep	57	2	no	rename tooling: the token table and the inventory name the legacy identifier by definition
 services/host/cmd/pix/sandboxname_test.go	manual	1	0	no	identity: composes the task sandbox name (AC-P0-406)
 tests/compaction-continuation.test.mjs	keep	2	2	no	every occurrence is a frozen literal (see the FROZEN table): nothing here is rewritable
 tests/recall-context-hook.test.mjs	keep	4	4	no	every occurrence is a frozen literal (see the FROZEN table): nothing here is rewritable
