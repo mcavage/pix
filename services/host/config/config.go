@@ -74,15 +74,14 @@ type PluginSpec struct {
 	ExtraEnv []string `toml:"extra_env"` // additional env vars granted to this plugin subprocess
 }
 
-// HostMode gates `pix host` — running pi DIRECTLY on this machine with
-// no sandbox, no network fence, and real credentials. Enabled is default-OFF
-// on purpose: the friction of `pix config set host.enabled true` is the
-// deliberate opt-in (see docs/design/host-mode.md). Autonomy is RESERVED for a
-// future knob on the host-guard extension's strictness; Phase 1 stores it but
-// nothing reads it yet.
+// HostMode configures the `[host]` table. The unsandboxed escape hatch it used
+// to gate (`pix host` / host.enabled / host.autonomy) was RETIRED and deleted —
+// the sandbox is the only supported execution boundary now; see
+// retiredConfigKeys ("host.enabled", "host.autonomy" are tolerated-and-inert on
+// an old config.toml, surfaced via RetiredKeys). Autoserve is UNRELATED to that
+// retired escape hatch — it is the live serve-lifecycle lazy-autostart knob —
+// and is the only field this struct still carries.
 type HostMode struct {
-	Enabled  bool   `toml:"enabled"`
-	Autonomy string `toml:"autonomy,omitempty"`
 	// Autoserve gates the launcher's LAZY AUTO-START of `pix-host serve`
 	// (docs/design/serve-lifecycle.md §1). nil = default TRUE (auto-start on).
 	// A pointer so "unset" (inherit the default, follow future default changes)
@@ -291,16 +290,22 @@ type InferenceModelBinding struct {
 // provenance can never outlive the claim it describes.
 const VerifiedByProbe = "probe"
 
-// retiredConfigKeys is the allowlist of top-level config keys that once had
-// meaning but were retired: mcp_static / mcp_dynamic, the per-server eager/lazy
-// attach override S01 removed when every configured/pack MCP server started
-// preloading at sandbox CREATE unconditionally. Load tolerates them (no error);
-// RetiredKeys reports them so a caller (`config show`, `doctor`) can tell the
-// user "this key no longer does anything" instead of "you made a typo" (which
-// is what an unrecognized key normally means — see UnknownKeys).
+// retiredConfigKeys is the allowlist of top-level (or dotted-nested) config
+// keys that once had meaning but were retired: mcp_static / mcp_dynamic, the
+// per-server eager/lazy attach override S01 removed when every configured/pack
+// MCP server started preloading at sandbox CREATE unconditionally; host.enabled
+// / host.autonomy, the unsandboxed `pix host` escape hatch's gate + reserved
+// autonomy knob, deleted along with hostrun.go/hostargs.go/hoststate.go's host
+// slice (the sandbox is the only supported execution boundary now — see
+// HostMode's doc comment). Load tolerates them (no error); RetiredKeys reports
+// them so a caller (`config show`, `doctor`) can tell the user "this key no
+// longer does anything" instead of "you made a typo" (which is what an
+// unrecognized key normally means — see UnknownKeys).
 var retiredConfigKeys = map[string]bool{
-	"mcp_static":  true,
-	"mcp_dynamic": true,
+	"mcp_static":    true,
+	"mcp_dynamic":   true,
+	"host.enabled":  true,
+	"host.autonomy": true,
 }
 
 // RetiredKeys returns the retired top-level config keys (see retiredConfigKeys)
@@ -591,6 +596,26 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Plugins == nil {
 		c.Plugins = map[string]PluginSpec{}
+	}
+	// The "broker" plugin slot is RETIRED (the dormant CredentialBroker seam was
+	// deleted along with it): a [plugins.broker] entry decodes fine as an
+	// ordinary map value (BurntSushi never sees it as undecoded, so
+	// partitionUndecoded can't catch it), so it is pulled out here and reported
+	// through the SAME retiredKeys surface as every other stale key — inert,
+	// never launched (nothing in serve/main consults slot "broker" any more).
+	if _, ok := c.Plugins["broker"]; ok {
+		delete(c.Plugins, "broker")
+		seen := false
+		for _, k := range c.retiredKeys {
+			if k == "plugins.broker" {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			c.retiredKeys = append(c.retiredKeys, "plugins.broker")
+			sort.Strings(c.retiredKeys)
+		}
 	}
 	for slot, spec := range c.Plugins {
 		if spec.Impl == "" {
@@ -1012,19 +1037,6 @@ func OpRefsPath() string {
 		return "op-refs.env"
 	}
 	return filepath.Join(dir, "op-refs.env")
-}
-
-// HostRefsPath resolves the absolute XDG path of hostmode.env — the OPTIONAL
-// 1Password refs file `pix host` resolves via `op run --env-file` for
-// host-mode provider keys (e.g. ANTHROPIC_API_KEY=op://vault/item/field). Same
-// mental model as op-refs.env: refs only, never a value on disk. Absent file =
-// Ollama-only host mode (valid, no cloud key).
-func HostRefsPath() string {
-	dir, err := configDir()
-	if err != nil {
-		return "hostmode.env"
-	}
-	return filepath.Join(dir, "hostmode.env")
 }
 
 // GWServerName is the google-workspace MCP server's registration + display

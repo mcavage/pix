@@ -200,35 +200,6 @@ type KnowledgeHealth struct {
 	Concepts int
 }
 
-// --- CredentialBroker --------------------------------------------------------
-//
-// The "keep the long-lived credential on the host, mint a short-lived one, run
-// the real CLI in the VM" pattern as one interface any provider can implement.
-// The public tree ships no built-in broker (the seam is dormant); an external
-// warehouse/CRM broker plugin would honour Audience and scopes.
-
-type CredentialBroker interface {
-	Mint(audience string, scopes []string) (Token, error)
-	Check() error
-	Describe() (BrokerInfo, error)
-}
-
-// Token is a short-lived bearer a broker mints (access token + type + TTL).
-type Token struct {
-	AccessToken string
-	TokenType   string
-	ExpiresIn   int
-}
-
-// BrokerInfo describes a broker to the supervisor (port, auth header shape,
-// whether it shells out to a host CLI).
-type BrokerInfo struct {
-	Name            string
-	DefaultPort     int
-	AuthHeader      string
-	RequiresHostCLI bool
-}
-
 // --- McpServer ---------------------------------------------------------------
 //
 // Mirrors ../slack.go + the MCP scaffolding in ../util.go (mcpDispatcher:

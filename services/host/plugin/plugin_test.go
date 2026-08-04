@@ -32,12 +32,6 @@ func (noopKnowledge) Query(QueryArgs) (QueryResult, error)       { return QueryR
 func (noopKnowledge) Reindex(ReindexArgs) (ReindexResult, error) { return ReindexResult{}, nil }
 func (noopKnowledge) Health() (KnowledgeHealth, error)           { return KnowledgeHealth{}, nil }
 
-type noopBroker struct{}
-
-func (noopBroker) Mint(string, []string) (Token, error) { return Token{}, nil }
-func (noopBroker) Check() error                         { return nil }
-func (noopBroker) Describe() (BrokerInfo, error)        { return BrokerInfo{}, nil }
-
 type noopMcp struct{}
 
 func (noopMcp) Info() (ServerInfo, error)      { return ServerInfo{}, nil }
@@ -48,10 +42,9 @@ func (noopMcp) CallTool(string, json.RawMessage) (json.RawMessage, error) {
 
 // Compile-time proof the trivial impls satisfy the interfaces.
 var (
-	_ MemoryStore      = noopMemory{}
-	_ KnowledgeStore   = noopKnowledge{}
-	_ CredentialBroker = noopBroker{}
-	_ McpServer        = noopMcp{}
+	_ MemoryStore    = noopMemory{}
+	_ KnowledgeStore = noopKnowledge{}
+	_ McpServer      = noopMcp{}
 )
 
 func TestHandshakeProtocolVersion(t *testing.T) {
@@ -79,7 +72,6 @@ func TestRPCPlugins(t *testing.T) {
 	}{
 		{"memory", &MemoryPlugin{Impl: noopMemory{}}},
 		{"knowledge", &KnowledgePlugin{Impl: noopKnowledge{}}},
-		{"broker", &BrokerPlugin{Impl: noopBroker{}}},
 		{"mcp", &McpPlugin{Impl: noopMcp{}}},
 	}
 	for _, tc := range cases {
@@ -101,7 +93,6 @@ func TestPluginMap(t *testing.T) {
 	wants := map[string]interface{}{
 		"memory":    &MemoryPlugin{},
 		"knowledge": &KnowledgePlugin{},
-		"broker":    &BrokerPlugin{},
 		"mcp":       &McpPlugin{},
 	}
 	if len(PluginMap) != len(wants) {
@@ -123,10 +114,6 @@ func TestPluginMap(t *testing.T) {
 		case *KnowledgePlugin:
 			if _, ok := got.(*KnowledgePlugin); !ok {
 				t.Fatalf("PluginMap[%q] is %T, want *KnowledgePlugin", k, got)
-			}
-		case *BrokerPlugin:
-			if _, ok := got.(*BrokerPlugin); !ok {
-				t.Fatalf("PluginMap[%q] is %T, want *BrokerPlugin", k, got)
 			}
 		case *McpPlugin:
 			if _, ok := got.(*McpPlugin); !ok {
@@ -218,34 +205,6 @@ func TestRPCRoundTripMemory(t *testing.T) {
 	// Zero-arg method.
 	if got, err := c.Health(); err != nil || !got.OK || got.WatcherModel != "m" {
 		t.Fatalf("Health round trip: got %+v err %v", got, err)
-	}
-}
-
-// echoBroker mirrors args into its results.
-type echoBroker struct{}
-
-func (echoBroker) Mint(audience string, scopes []string) (Token, error) {
-	return Token{AccessToken: audience, TokenType: "Bearer", ExpiresIn: len(scopes)}, nil
-}
-func (echoBroker) Check() error { return nil }
-func (echoBroker) Describe() (BrokerInfo, error) {
-	return BrokerInfo{Name: "example", DefaultPort: 12345, RequiresHostCLI: true}, nil
-}
-
-func TestRPCRoundTripBroker(t *testing.T) {
-	client := newRPCPair(t, &brokerRPCServer{Impl: echoBroker{}})
-	c := &brokerRPCClient{client: client}
-
-	if got, err := c.Mint("aud", []string{"a", "b"}); err != nil || got.AccessToken != "aud" || got.ExpiresIn != 2 {
-		t.Fatalf("Mint round trip: got %+v err %v", got, err)
-	}
-	// Zero-arg method (empty reply too).
-	if err := c.Check(); err != nil {
-		t.Fatalf("Check round trip: err %v", err)
-	}
-	// Zero-arg method.
-	if got, err := c.Describe(); err != nil || got.Name != "example" || got.DefaultPort != 12345 || !got.RequiresHostCLI {
-		t.Fatalf("Describe round trip: got %+v err %v", got, err)
 	}
 }
 

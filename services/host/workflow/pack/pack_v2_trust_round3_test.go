@@ -38,7 +38,6 @@ import (
 	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/sys/systest"
-	"pix/host/workspace"
 )
 
 // --- #1: cross-process lock, fresh-load mutations ------------------------------
@@ -271,105 +270,6 @@ func TestLocalMCPClassifier_UnknownFailsClosed(t *testing.T) {
 // be removed (symlinked host bin dir), `pack rm` must exit non-zero and must
 // NOT claim "detached" — and nothing detaches, so a plain re-run retries.
 // Subprocess: the failure path os.Exits.
-func TestPackRm_ClearFailureExitsNonZero(t *testing.T) {
-	if os.Getenv("PIX_TEST_TRUST") == "rm-clear-fail" {
-		RunPackRm(os.Stdout, nil)
-		return // exit 0 == the clear failure was swallowed as success
-	}
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "config.toml")
-	stateDir := filepath.Join(dir, "state")
-	t.Setenv("PIX_CONFIG", cfgPath)
-	t.Setenv("XDG_STATE_HOME", stateDir)
-
-	root := filepath.Join(dir, "pack")
-	mustWritePack(t, root, Manifest{Name: "p", Schema: 1})
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.Pack = root
-	if err := cfg.Save(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := mutatePackTrustStore(func(s *PackTrustStore) error {
-		s.Installed = &packInstalledSet{Owner: "path:" + root, Wrappers: []string{"tool"}}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	// Make the clear FAIL: HostPackBinDir is a symlink (never traversed).
-	if err := os.MkdirAll(workspace.HostAgentDir(), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	elsewhere := filepath.Join(dir, "elsewhere")
-	if err := os.MkdirAll(elsewhere, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(elsewhere, HostPackBinDir()); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
-	}
-
-	cmd := exec.Command(os.Args[0], "-test.run", "^TestPackRm_ClearFailureExitsNonZero$")
-	cmd.Env = append(os.Environ(),
-		"PIX_TEST_TRUST=rm-clear-fail",
-		"PIX_CONFIG="+cfgPath,
-		"XDG_STATE_HOME="+stateDir,
-	)
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		t.Fatalf("pack rm must exit non-zero when the host wrappers cannot be removed; output:\n%s", out)
-	}
-	if strings.Contains(string(out), "detached active pack") {
-		t.Errorf("pack rm must NOT claim \"detached\" on a clear failure, got:\n%s", out)
-	}
-	// Nothing detached: the active pack and the attribution are intact, so a
-	// re-run retries the whole detach.
-	cfg2, err := config.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg2.Pack != root {
-		t.Errorf("nothing may detach on a clear failure, cfg.Pack=%q", cfg2.Pack)
-	}
-	store, serr := loadPackTrustStore()
-	if serr != nil {
-		t.Fatal(serr)
-	}
-	if store.Installed == nil || !slices.Contains(store.Installed.Wrappers, "tool") {
-		t.Errorf("attribution must be kept until removal is confirmed, got %+v", store.Installed)
-	}
-}
-
-// TestRefreshHostPackWrappers_LenientClearFailureSurfaced: the lenient
-// (non-strict) refresh must RETURN a clear failure instead of reporting
-// success while wrappers remain (round-3 #4; strict launch already refused).
-func TestRefreshHostPackWrappers_LenientClearFailureSurfaced(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
-	if _, err := mutatePackTrustStore(func(s *PackTrustStore) error {
-		s.Installed = &packInstalledSet{Owner: "path:/gone", Wrappers: []string{"stale"}}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(workspace.HostAgentDir(), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	elsewhere := filepath.Join(dir, "elsewhere")
-	if err := os.MkdirAll(elsewhere, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(elsewhere, HostPackBinDir()); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
-	}
-	var out bytes.Buffer
-	if _, err := RefreshHostPackWrappers(&out, &config.Config{}, false); err == nil {
-		t.Error("the lenient refresh must surface a clear failure, not report success")
-	}
-}
-
 // --- #5: acceptance identity is commit-stable ------------------------------------
 
 // TestTrustKey_StableAcrossCommits: the trust key is the remote URL without
@@ -438,7 +338,7 @@ func TestPackUse_NewCommitSameFingerprintDoesNotRegate(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
-	root := phase2HostPack(t, dir, "work", "platformio")
+	root := round3HostExecPack(t, dir, "work", "platformio")
 	const url = "https://example.com/work.git"
 	if err := recordPackAdoptionInTrustStore(root, url, "c1"); err != nil {
 		t.Fatal(err)
@@ -457,17 +357,47 @@ func TestPackUse_NewCommitSameFingerprintDoesNotRegate(t *testing.T) {
 		t.Errorf("a commit bump with an unchanged fingerprint must not re-prompt:\n%s", out.String())
 	}
 
-	// A CHANGED surface (mutated wrapper script) still re-gates: the strict
-	// launch-side check refuses until re-accepted.
+	// A CHANGED surface (mutated host-exec bin) still re-gates: a subsequent
+	// non-interactive `pack use` (no --yes) now REFUSES until re-accepted,
+	// rather than silently reusing the stale acceptance.
 	if err := os.WriteFile(filepath.Join(root, "bin", "platformio"), []byte("#!/bin/sh\necho evil\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := config.Load()
-	if err != nil {
+	if err := recordPackAdoptionInTrustStore(root, url, "c3"); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()
-	if _, rerr := RefreshHostPackWrappers(&out, cfg, true); rerr == nil {
-		t.Error("a changed host-exec fingerprint must still fail closed (re-gate/refuse)")
+	if os.Getenv("PIX_TEST_TRUST") == "changed-surface-regates" {
+		RunPackUse(fakeGitEnv(nil), &out, []string{root}, registerOK) // no --yes, non-TTY
+		return                                                        // exit 0 == a mutated surface slipped through unre-gated
 	}
+	cmd := exec.Command(os.Args[0], "-test.run", "^TestPackUse_NewCommitSameFingerprintDoesNotRegate$")
+	cmd.Env = append(os.Environ(),
+		"PIX_TEST_TRUST=changed-surface-regates",
+		"PIX_CONFIG="+filepath.Join(dir, "config.toml"),
+		"XDG_STATE_HOME="+filepath.Join(dir, "state"),
+	)
+	if cmdOut, err := cmd.CombinedOutput(); err == nil {
+		t.Errorf("a changed host-exec fingerprint must still fail closed (re-gate/refuse); output:\n%s", cmdOut)
+	}
+}
+
+// round3HostExecPack writes a pack with one host-exec [[bin]] facet (an
+// external, sha-pinned binary — the retained Tier-1 fitness that phase2HostPack
+// used to cover with a host=true proxy wrapper before the dormant host-mode
+// wrapper installer was deleted) and returns its root. XDG_STATE_HOME must
+// already be pointed at a temp dir by the caller.
+func round3HostExecPack(t *testing.T, dir, name, binName string) string {
+	t.Helper()
+	root := filepath.Join(dir, name)
+	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("#!/bin/sh\necho " + binName + "\n")
+	if err := os.WriteFile(filepath.Join(root, "bin", binName), content, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWritePack(t, root, Manifest{Name: name, Schema: 1,
+		Bins: []packBin{{Name: binName, Path: filepath.Join("bin", binName), Host: true, SHA: sha256Hex(content)}}})
+	return root
 }

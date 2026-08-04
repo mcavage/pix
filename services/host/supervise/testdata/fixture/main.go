@@ -27,19 +27,32 @@ import (
 
 type fixture struct{ tag string }
 
-func (f fixture) Mint(audience string, scopes []string) (plugin.Token, error) {
-	return plugin.Token{AccessToken: "fixture-" + audience, TokenType: "Bearer", ExpiresIn: 60}, nil
+func (f fixture) Remember(plugin.RememberReq) (plugin.RememberResp, error) {
+	return plugin.RememberResp{}, nil
 }
+func (f fixture) Recall(plugin.RecallReq) (plugin.RecallResp, error) { return plugin.RecallResp{}, nil }
+func (f fixture) Forget(plugin.ForgetReq) (plugin.ForgetResp, error) { return plugin.ForgetResp{}, nil }
+func (f fixture) Synthesize(plugin.SynthesizeReq) (plugin.SynthesizeResp, error) {
+	return plugin.SynthesizeResp{}, nil
+}
+func (f fixture) Promotable(plugin.PromotableReq) (plugin.PromotableResp, error) {
+	return plugin.PromotableResp{}, nil
+}
+func (f fixture) Observe(plugin.ObserveReq) (plugin.ObserveResp, error) {
+	return plugin.ObserveResp{}, nil
+}
+func (f fixture) Stats(string) (plugin.Stats, error) { return plugin.Stats{}, nil }
 
-func (f fixture) Check() error {
+// Health doubles as this fixture's Describe()/Check(): FIXTURE_UNHEALTHY drives
+// the health-budget eviction tests, and WatcherModel/CaptureReason carry the
+// generation tag + pid so a test can tell two generations of the same unit
+// apart — the same role BrokerInfo played before the dormant CredentialBroker
+// seam was removed.
+func (f fixture) Health() (plugin.Health, error) {
 	if os.Getenv("FIXTURE_UNHEALTHY") == "1" {
-		return errors.New("fixture is unhealthy on purpose")
+		return plugin.Health{}, errors.New("fixture is unhealthy on purpose")
 	}
-	return nil
-}
-
-func (f fixture) Describe() (plugin.BrokerInfo, error) {
-	return plugin.BrokerInfo{Name: "fixture", AuthHeader: f.tag, DefaultPort: os.Getpid()}, nil
+	return plugin.Health{OK: true, WatcherModel: f.tag, CaptureReason: strconv.Itoa(os.Getpid())}, nil
 }
 
 func main() {
@@ -67,5 +80,5 @@ func main() {
 		}()
 	}
 	impl := fixture{tag: os.Getenv("FIXTURE_TAG")}
-	plugin.Serve(map[string]goplugin.Plugin{"broker": &plugin.BrokerPlugin{Impl: impl}})
+	plugin.Serve(map[string]goplugin.Plugin{"memory": &plugin.MemoryPlugin{Impl: impl}})
 }

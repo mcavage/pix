@@ -3,10 +3,6 @@
 // dispensed plugin client. The sandbox never sees any of this — it POSTs
 // JSON-RPC to :11435; this process owns that listener and adapts it to the
 // plugin's typed interface, so a restart or reattach is invisible to callers.
-//
-// The CredentialBroker seam (brokerProxyMux / servePluginBroker) is DORMANT:
-// the public tree ships no built-in broker, but an external SHA-pinned binary
-// ([plugins.broker]) plugs into exactly this shim.
 
 package main
 
@@ -55,14 +51,6 @@ func unitHealth(kind string) supervise.HealthFunc {
 			}
 			_, err := m.Health()
 			return err
-		}
-	case "broker":
-		return func(impl any) error {
-			b, _ := impl.(plugin.CredentialBroker)
-			if b == nil {
-				return errors.New("broker plugin unavailable")
-			}
-			return b.Check()
 		}
 	default:
 		return nil
@@ -171,7 +159,6 @@ var pluginEnvAllowlist = map[string]bool{
 	// Port vars the supervisor communicates to plugins
 	"PIX_MEMORY_PORT":    true,
 	"PIX_KNOWLEDGE_PORT": true,
-	"PIX_BROKER_PORT":    true,
 }
 
 // pluginEnvAllowNames is the allowlist as a slice, the shape a UnitSpec carries
@@ -201,15 +188,6 @@ func verifyPluginSHA(spec config.PluginSpec) error {
 		return fmt.Errorf("plugin %s sha256 mismatch: got %s, want %s (refusing to launch)", spec.Path, got, strings.ToLower(want))
 	}
 	return nil
-}
-
-// brokerCheck is the serve preflight for an out-of-process CredentialBroker.
-func brokerCheck(h *pluginHolder) error {
-	b, _ := h.Get().(plugin.CredentialBroker)
-	if b == nil {
-		return errors.New("broker plugin unavailable")
-	}
-	return b.Check()
 }
 
 // --- HTTP shims backed by a plugin client -----------------------------------
@@ -486,54 +464,4 @@ func jsonrpcMux(methods map[string]func(jsonObj) (any, error)) http.Handler {
 		}
 	})
 	return mux
-}
-
-// brokerToken is the JSON shape a broker /token shim returns (a short-lived
-// bearer). It moved here from the deleted host token service; the generic broker
-// proxy (brokerProxyMux) is its only user.
-type brokerToken struct {
-	AccessToken string `json:"access_token"`
-	ExpiresIn   int    `json:"expires_in"`
-	TokenType   string `json:"token_type"`
-}
-
-// brokerProxyMux serves a /token surface that mints via the dispensed
-// CredentialBroker client. auth is the required bearer. This is the DORMANT
-// broker seam: no built-in broker constructs it in the public tree, but an
-// external broker plugin plugs into exactly this shim. FAIL CLOSED: an empty bearer
-// rejects every request rather than serving /token unauthenticated (brokerService
-// already refuses to start in that state; this is defense in depth).
-func brokerProxyMux(h *pluginHolder, auth string) http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not_found"})
-			return
-		}
-		if auth == "" || r.Header.Get("Authorization") != "Bearer "+auth {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-			return
-		}
-		b, _ := h.Get().(plugin.CredentialBroker)
-		if b == nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "token_error", "message": "broker plugin unavailable"})
-			return
-		}
-		t, err := b.Mint("", nil)
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "token_error", "message": err.Error()})
-			return
-		}
-		writeJSON(w, http.StatusOK, brokerToken{AccessToken: t.AccessToken, ExpiresIn: t.ExpiresIn, TokenType: t.TokenType})
-	})
-	return mux
-}
-
-// servePluginBroker is the self-exec entry `pix-host plugin broker` would serve
-// a built-in CredentialBroker from. The public tree ships none — the seam is
-// dormant — so this always exits cleanly. An external broker ships its own
-// main() and is exec'd directly; name is the kind it dispenses under.
-func servePluginBroker(name string) {
-	fmt.Fprintf(os.Stderr, "pix-host plugin %s: no built-in broker registered (set [plugins.broker] path+sha to an external plugin binary)\n", name)
-	os.Exit(2)
 }

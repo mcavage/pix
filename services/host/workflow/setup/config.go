@@ -127,10 +127,8 @@ func ConfigValue(cfg *config.Config, key string) (string, error) {
 		return cfg.RunIntent, nil
 	case "pack":
 		return cfg.Pack, nil
-	case "host.enabled":
-		return strconv.FormatBool(cfg.Host.Enabled), nil
-	case "host.autonomy":
-		return cfg.Host.Autonomy, nil
+	case "host.enabled", "host.autonomy":
+		return "", fmt.Errorf("%s is retired: `pix host` (the unsandboxed escape hatch) was removed — the sandbox is the only supported execution boundary now; this key does nothing", key)
 	case "host.autoserve":
 		return strconv.FormatBool(cfg.AutoserveEnabled()), nil
 	case "slack.client_id":
@@ -214,8 +212,6 @@ const ConfigKeysHelp = `keys:
                             'none' to opt out to pi's own default model
   pack <path>               active pack dir (run mounts its skills + knowledge);
                             usually set via 'pix pack use'
-  host.enabled true|false   gate for "pix host" (UNSANDBOXED; default false)
-  host.autonomy <mode>      reserved for the host-guard strictness (unused yet)
   host.autoserve true|false lazy auto-start of the services daemon on run/
                             memory/knowledge (default true; PIX_NO_AUTOSERVE
                             env also disables it)
@@ -350,23 +346,11 @@ func ApplyConfigChange(cfg *config.Config, unset bool, key string, args []string
 		}
 		return fmt.Sprintf("pack = %q", cfg.Pack), nil
 
-	case "host.enabled":
-		// The gate for `pix host` (unsandboxed). Default false; unset resets
-		// it. Set requires an explicit true/false — never inferred — so enabling
-		// the dangerous path is always a deliberate, legible command.
-		if unset {
-			cfg.Host.Enabled = false
-		} else {
-			if len(args) != 1 {
-				return "", fmt.Errorf("config set host.enabled <true|false>: needs exactly one value")
-			}
-			v, err := strconv.ParseBool(args[0])
-			if err != nil {
-				return "", fmt.Errorf("config set host.enabled: %q is not a boolean (want true or false)", args[0])
-			}
-			cfg.Host.Enabled = v
-		}
-		return fmt.Sprintf("host.enabled = %v", cfg.Host.Enabled), nil
+	case "host.enabled", "host.autonomy":
+		// RETIRED: `pix host` (the unsandboxed escape hatch) was deleted — the
+		// sandbox is the only supported execution boundary now. Neither key does
+		// anything; refuse rather than silently accept a no-op set/unset.
+		return "", fmt.Errorf("%s is retired: `pix host` was removed; this key does nothing (nothing was changed)", key)
 
 	case "host.autoserve":
 		// Opt-out flag for lazy auto-start (service.Ensure). Unset = nil = inherit the
@@ -385,19 +369,6 @@ func ApplyConfigChange(cfg *config.Config, unset bool, key string, args []string
 			cfg.Host.Autoserve = &v
 		}
 		return fmt.Sprintf("host.autoserve = %v", cfg.AutoserveEnabled()), nil
-
-	case "host.autonomy":
-		// RESERVED: stored for the future host-guard strictness knob; nothing
-		// reads it in Phase 1.
-		if unset {
-			cfg.Host.Autonomy = ""
-		} else {
-			if len(args) != 1 {
-				return "", fmt.Errorf("config set host.autonomy <mode>: needs exactly one value")
-			}
-			cfg.Host.Autonomy = args[0]
-		}
-		return fmt.Sprintf("host.autonomy = %q (reserved; unused in Phase 1)", cfg.Host.Autonomy), nil
 
 	case "slack.client_id":
 		// The public OAuth client id. Unset also clears the OAuth locator/grant
