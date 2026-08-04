@@ -10,7 +10,7 @@
       "exitCode": 0,
       "stream": "stdout",
       "contains": [
-        "usage: pix task"
+        "Usage: pix task"
       ]
     },
     {
@@ -22,7 +22,7 @@
       "exitCode": 2,
       "stream": "stderr",
       "contains": [
-        "unknown subcommand"
+        "unknown flag"
       ]
     }
   ]

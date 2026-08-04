@@ -1,83 +1,81 @@
-// task_cmd.go — the `pix task` dispatcher (new|run|ls|path|rm).
-//
-// Story06 simplification: `harvest` and `gc` were retired (see retired.go);
-// the launcher no longer decides how a task clone rejoins its parent repo or
-// when it is disposable — that is git's job and the user's call. This file
-// composes two things that stay deliberately separate:
-//
-//   - the checkout itself (naming, metadata, clone/worktree mechanism, the
-//     git-hygiene guard) — owned by the L1 "pix/host/workflow/task" package,
-//     which never imports launch/sandbox/lease;
-//   - the sandbox — launching is the EXISTING `pix run` path (runRun, in
-//     run_cmd.go) with an explicit --name and a task's checkout dir as the
-//     workspace; probing and tearing it down reuse launch.ProbeTaskSandbox
-//     and launch.RemovePixSandbox (sandbox.go, the same helper `pix rm`
-//     uses). There is no separate task-owned sandbox-lifecycle code.
+// task_cmd.go — the `pix task` dispatcher (new|run|ls|path|rm) under the cli
+// command contract (cli/cli.go): kong parses the struct tags below and
+// dispatches to the selected leaf's Run(*cli.Deps). Domain logic (naming,
+// clone/worktree mechanism, the git-hygiene guard) lives in L1
+// pix/host/workflow/task; launching reuses the EXISTING `pix run` path
+// (runRun in run_cmd.go) with an explicit --name and the checkout dir as the
+// workspace, so there is no separate task-owned sandbox-lifecycle code.
 package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"pix/host/cli"
+	"pix/host/sys"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/task"
 	"pix/host/workspace"
 	"strings"
 )
 
-const taskUsage = `usage: pix task <new|run|ls|path|rm> [args]
+const taskDescription = `Run parallel tasks on one repo: each task is a checkout (clone by default,
+or a linked worktree with --worktree) with its own branch, so tasks never
+collide. 'rm' persists the branch back into the main repo before the
+checkout goes away, and refuses a dirty/unpushed/live one without --force.
+'pix run --task NAME' is a shorthand for 'pix task run NAME'.`
 
-Run parallel tasks on one repo. Each task is a checkout of the repo (a local
-clone by default, or a linked worktree with --worktree) with its own branch,
-so tasks never collide. Commits land on the task's own branch and, on
-` + "`rm`" + `, are persisted back into the main repo before the checkout goes away.
-
-  new  <name> [--from REF] [--worktree] [-- pi-args]   create + launch
-  run  <name> [-- pi-args]                             (re)launch an existing task
-  ls   [--json]                                        tasks, branch, git + sandbox state
-  path <name>                                          print the task's checkout dir (for cd)
-  rm   <name> [--force]                                tear down sandbox + checkout (guarded)
-
-Checkouts live under $XDG_STATE_HOME/pix/tasks/<repo>/co/<name>, outside your
-repo. ` + "`pix task rm`" + ` refuses to drop a running sandbox, uncommitted changes,
-untracked files, or any commit unreachable from the main repo — ` + "`--force`" + `
-overrides only that last set of GIT-hygiene reasons, never a live sandbox.
-A shorthand ` + "`pix run --task NAME`" + ` is equivalent to ` + "`pix task run NAME`" + `.
-`
-
+// runTaskCmd is the argv seam. The retired check, the bare/-h fast path, and
+// the name-then-verb rewrite are argv-SHAPE decisions the parser cannot make
+// on its own; everything past them is kong's job.
 func runTaskCmd(argv []string) {
 	if len(argv) > 0 {
 		retiredIfRetired("task", argv[0])
 	}
 	if len(argv) == 0 || argv[0] == "-h" || argv[0] == "--help" {
-		fmt.Print(taskUsage)
+		fmt.Print(taskUsage())
 		return
 	}
-	switch argv[0] {
-	case "new":
-		runTaskNew(argv[1:])
-	case "run":
-		runTaskRunVerb(argv[1:])
-	case "ls", "list":
-		runTaskLs(argv[1:])
-	case "path":
-		runTaskPathVerb(argv[1:])
-	case "rm", "remove":
-		runTaskRmVerb(argv[1:])
-	default:
-		// `pix task <name> path` (name-then-verb) reads naturally for
-		// `cd "$(pix task foo path)"`; the canonical form is `task path <name>`.
-		if len(argv) == 2 && argv[1] == "path" {
-			runTaskPathVerb(argv[:1])
-			return
+	// `pix task <name> path` reads naturally for `cd "$(pix task foo path)"`;
+	// only rewritten when argv[0] is not itself a real subcommand.
+	if len(argv) == 2 && argv[1] == "path" && !isTaskKnownVerb(argv[0]) {
+		argv = []string{"path", argv[0]}
+	}
+	d := &cli.Deps{
+		Sys: sys.Real{}, Out: os.Stdout, Err: os.Stderr,
+		In: os.Stdin, Interactive: cli.IsTTY(os.Stdin),
+	}
+	if err := cli.Run[taskCmd]("task", taskDescription, argv, d); err != nil {
+		var silent cli.SilentError
+		if !errors.As(err, &silent) {
+			fmt.Fprintf(os.Stderr, "pix task: %v\n", err)
 		}
-		fmt.Fprintf(os.Stderr, "pix task: unknown subcommand %q\n\n%s", argv[0], taskUsage)
-		os.Exit(2)
+		os.Exit(cli.ExitCode(err))
 	}
 }
 
-// taskMainroot resolves the repo the current directory belongs to.
+// isTaskKnownVerb guards the name-then-verb rewrite: it must never fire for a
+// real subcommand or its aliases.
+func isTaskKnownVerb(v string) bool {
+	switch v {
+	case "new", "run", "ls", "list", "path", "rm", "remove":
+		return true
+	}
+	return false
+}
+
+// taskCmd is the verb tree; `list`/`remove` are kong aliases.
+type taskCmd struct {
+	New  taskNewCmd  `cmd:"" help:"Create + launch a new task checkout."`
+	Run  taskRunCmd  `cmd:"" help:"(Re)launch an existing task's sandbox."`
+	Ls   taskLsCmd   `cmd:"" aliases:"list" help:"Tasks, branch, git + sandbox state."`
+	Path taskPathCmd `cmd:"" help:"Print the task's checkout dir (for cd)."`
+	Rm   taskRmCmd   `cmd:"" aliases:"remove" help:"Tear down sandbox + checkout (guarded)."`
+}
+
+func taskUsage() string { return cli.Usage[taskCmd]("task", taskDescription) }
+
 func taskMainroot() (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -102,115 +100,75 @@ func taskProbe() func(string) task.SandboxDisposition {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// task new
-// ---------------------------------------------------------------------------
-
-func parseTaskNewArgs(argv []string) (name, from string, mechanism task.Mechanism, passthrough []string, err error) {
-	mechanism = task.Clone
-	pre := argv
-	for i, a := range argv {
-		if a == "--" {
-			pre = argv[:i]
-			passthrough = append([]string(nil), argv[i+1:]...)
-			break
-		}
-	}
-	nameSet := false
-	for i := 0; i < len(pre); i++ {
-		a := pre[i]
-		n := a
-		if eq := strings.IndexByte(a, '='); eq >= 0 {
-			n = a[:eq]
-		}
-		switch {
-		case n == "--from":
-			if eq := strings.IndexByte(a, '='); eq >= 0 {
-				from = a[eq+1:]
-			} else {
-				if i+1 >= len(pre) {
-					return "", "", "", nil, fmt.Errorf("flag --from needs a value")
-				}
-				i++
-				from = pre[i]
-			}
-		case a == "--worktree":
-			mechanism = task.Worktree
-		case a == "--clone":
-			mechanism = task.Clone
-		case strings.HasPrefix(a, "-"):
-			return "", "", "", nil, fmt.Errorf("unknown flag %q", a)
-		default:
-			if nameSet {
-				return "", "", "", nil, fmt.Errorf("unexpected extra argument %q (use -- for pi args)", a)
-			}
-			name = a
-			nameSet = true
-		}
-	}
-	if strings.HasPrefix(from, "-") {
-		return "", "", "", nil, fmt.Errorf("--from value %q must not begin with '-'", from)
-	}
-	if !nameSet || strings.TrimSpace(name) == "" {
-		return "", "", "", nil, fmt.Errorf("a task name is required")
-	}
-	return name, from, mechanism, passthrough, nil
+// taskNewCmd creates + launches a new task checkout.
+type taskNewCmd struct {
+	Name        string   `arg:"" help:"Task name."`
+	From        string   `help:"Branch or ref to create the task from."`
+	Worktree    bool     `help:"Use a linked worktree instead of a clone."`
+	Clone       bool     `help:"Use a local clone (default)."`
+	Passthrough []string `arg:"" optional:"" passthrough:"" help:"Args after -- forwarded to the launched pi session."`
 }
 
-func runTaskNew(argv []string) {
-	if cli.WantsHelp(argv) {
-		fmt.Print(taskUsage)
-		return
+func (c *taskNewCmd) Run(d *cli.Deps) error { return taskNew(d, c) }
+
+// taskNewPassthrough splits kong's passthrough arg (which always includes the
+// literal "--" it matched on) into the pi-args tail, rejecting a bare extra
+// positional that arrived without one — kong itself accepts that (passthrough
+// is exactly for a trailing positional), so the rejection is this guard's job.
+func taskNewPassthrough(raw []string) ([]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
 	}
-	name, from, mechanism, passthrough, err := parseTaskNewArgs(argv)
+	if raw[0] != "--" {
+		return nil, cli.Usagef("unexpected extra argument %q (use -- for pi args)", raw[0])
+	}
+	return raw[1:], nil
+}
+
+func taskNewMechanism(worktree bool) task.Mechanism {
+	if worktree {
+		return task.Worktree
+	}
+	return task.Clone
+}
+
+func taskNew(d *cli.Deps, c *taskNewCmd) error {
+	passthrough, err := taskNewPassthrough(c.Passthrough)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix task new: %v\n\n%s", err, taskUsage)
-		os.Exit(2)
+		return err
 	}
 	mainroot, err := taskMainroot()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix task new: not a git repository: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("not a git repository: %w", err)
 	}
 	if task.HasSubmodules(mainroot) {
-		fmt.Fprintln(os.Stderr, "pix task new: note: submodules are not auto-initialized. "+
+		fmt.Fprintln(d.Err, "note: submodules are not auto-initialized. "+
 			"Run `git submodule update --init` in the sandbox and add submodule remotes to the network allowlist.")
 	}
 	m, err := task.New(task.NewOptions{
-		StateRoot: workspace.TaskStateRoot(),
-		Mainroot:  mainroot,
-		Name:      name,
-		Ref:       from,
-		Mechanism: mechanism,
+		StateRoot: workspace.TaskStateRoot(), Mainroot: mainroot,
+		Name: c.Name, Ref: c.From, Mechanism: taskNewMechanism(c.Worktree),
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix task new: %v\n", err)
-		os.Exit(1)
+		return err
 	}
-	co, err := task.Path(workspace.TaskStateRoot(), mainroot, name)
+	co, err := task.Path(workspace.TaskStateRoot(), mainroot, c.Name)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix task new: %v\n", err)
-		os.Exit(1)
+		return err
 	}
-	fmt.Fprintf(os.Stderr, "pix: task %q ready at %s (branch %s, sandbox %s)\n", name, co, m.Branch, m.Sandbox)
-
+	fmt.Fprintf(d.Err, "pix: task %q ready at %s (branch %s, sandbox %s)\n", c.Name, co, m.Branch, m.Sandbox)
 	runArgv := []string{co, "--name", m.Sandbox}
 	if len(passthrough) > 0 {
-		runArgv = append(runArgv, "--")
-		runArgv = append(runArgv, passthrough...)
+		runArgv = append(append(runArgv, "--"), passthrough...)
 	}
 	runRun(runArgv)
+	return nil
 }
 
-// ---------------------------------------------------------------------------
-// task run / --task NAME shorthand
-// ---------------------------------------------------------------------------
-
 // resolveTaskRunArgv resolves an existing task NAME to the argv `pix run`
-// needs to (re)launch its sandbox: its checkout dir as the positional
-// workspace, plus an explicit --name so `run` attaches to the SAME sandbox
-// `task new` created (a bare directory would derive a different, colliding
-// name). rest is appended after (e.g. a `-- pi-args` tail).
+// needs to (re)launch its sandbox. Shared with run_cmd.go's `--task`
+// shorthand (a different argv, outside this migration), so it stays
+// argv-in/argv-out rather than a kong struct.
 func resolveTaskRunArgv(name string, rest []string) ([]string, error) {
 	mainroot, err := taskMainroot()
 	if err != nil {
@@ -223,28 +181,26 @@ func resolveTaskRunArgv(name string, rest []string) ([]string, error) {
 	return append([]string{co, "--name", m.Sandbox}, rest...), nil
 }
 
-func runTaskRunVerb(argv []string) {
-	if cli.WantsHelp(argv) || len(argv) == 0 {
-		fmt.Print(taskUsage)
-		if len(argv) == 0 {
-			os.Exit(2)
-		}
-		return
-	}
-	name := argv[0]
-	rest := argv[1:]
-	runArgv, err := resolveTaskRunArgv(name, rest)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix task run: %v\n", err)
-		os.Exit(1)
-	}
-	runRun(runArgv)
+// taskRunCmd (re)launches an existing task's sandbox. Rest forwards
+// VERBATIM, including a literal leading "--" — that is what `pix run`'s own
+// argv parser expects to introduce its pi passthrough.
+type taskRunCmd struct {
+	Name string   `arg:"" help:"Task to (re)launch."`
+	Rest []string `arg:"" optional:"" passthrough:"" help:"Forwarded to 'pix run' as-is."`
 }
 
-// expandTaskFlag rewrites a leading `--task NAME` (or `--task=NAME`) in argv,
-// before the `--` passthrough separator, into the resolved checkout + --name
-// form resolveTaskRunArgv produces. ok=false means no --task flag was found
-// and argv is returned unchanged.
+func (c *taskRunCmd) Run(d *cli.Deps) error {
+	runArgv, err := resolveTaskRunArgv(c.Name, c.Rest)
+	if err != nil {
+		return err
+	}
+	runRun(runArgv)
+	return nil
+}
+
+// expandTaskFlag rewrites a leading `--task NAME`/`--task=NAME` in argv
+// (before any `--`) into the resolved checkout + --name form. ok=false means
+// no --task flag was found and argv is unchanged.
 func expandTaskFlag(argv []string) (out []string, ok bool, err error) {
 	for i, a := range argv {
 		if a == "--" {
@@ -267,10 +223,6 @@ func expandTaskFlag(argv []string) (out []string, ok bool, err error) {
 	return argv, false, nil
 }
 
-// ---------------------------------------------------------------------------
-// task ls
-// ---------------------------------------------------------------------------
-
 type taskListRow struct {
 	Name          string   `json:"name"`
 	Branch        string   `json:"branch"`
@@ -286,27 +238,21 @@ type taskListRow struct {
 	Unreadable    string   `json:"unreadable,omitempty"`
 }
 
-func runTaskLs(argv []string) {
-	if cli.WantsHelp(argv) {
-		fmt.Print(taskUsage)
-		return
-	}
-	jsonOut := false
-	for _, a := range argv {
-		if a == "--json" {
-			jsonOut = true
-		}
-	}
+type taskLsCmd struct {
+	JSON bool `help:"Emit machine-readable JSON instead of a table."`
+}
+
+func (c *taskLsCmd) Run(d *cli.Deps) error { return taskLs(d, c.JSON) }
+
+func taskLs(d *cli.Deps, jsonOut bool) error {
 	mainroot, err := taskMainroot()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix task ls: not a git repository: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("not a git repository: %w", err)
 	}
 	stateRoot := workspace.TaskStateRoot()
 	names, err := task.SandboxNames(stateRoot, mainroot)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix task ls: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	probe := taskProbe()
 	dispositions := make(map[string]task.SandboxDisposition, len(names))
@@ -315,8 +261,7 @@ func runTaskLs(argv []string) {
 	}
 	entries, err := task.List(stateRoot, mainroot, dispositions)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix task ls: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	var rows []taskListRow
 	for _, e := range entries {
@@ -326,146 +271,97 @@ func runTaskLs(argv []string) {
 			continue
 		}
 		rows = append(rows, taskListRow{
-			Name:          e.Meta.Name,
-			Branch:        e.Meta.Branch,
-			Mechanism:     string(e.Meta.Mechanism),
-			Sandbox:       e.Meta.Sandbox,
-			SandboxState:  e.Sandbox.String(),
-			Dirty:         e.Git.Dirty,
-			Untracked:     e.Git.Untracked,
-			Unrecoverable: e.Git.Unrecoverable,
-			WouldRefuse:   e.WouldRefuse,
-			Reasons:       e.Reasons,
-			Path:          co,
+			Name: e.Meta.Name, Branch: e.Meta.Branch, Mechanism: string(e.Meta.Mechanism),
+			Sandbox: e.Meta.Sandbox, SandboxState: e.Sandbox.String(),
+			Dirty: e.Git.Dirty, Untracked: e.Git.Untracked, Unrecoverable: e.Git.Unrecoverable,
+			WouldRefuse: e.WouldRefuse, Reasons: e.Reasons, Path: co,
 		})
 	}
 	if jsonOut {
 		b, _ := json.MarshalIndent(rows, "", "  ")
-		fmt.Println(string(b))
-		return
+		fmt.Fprintln(d.Out, string(b))
+		return nil
 	}
 	if len(rows) == 0 {
-		fmt.Println("No tasks for this repo. Start one with `pix task new <name>`.")
-		return
+		fmt.Fprintln(d.Out, "No tasks for this repo. Start one with `pix task new <name>`.")
+		return nil
 	}
 	for _, r := range rows {
 		if r.Unreadable != "" {
-			fmt.Printf("%s\t(unreadable metadata: %s)\n", r.Name, r.Unreadable)
+			fmt.Fprintf(d.Out, "%s\t(unreadable metadata: %s)\n", r.Name, r.Unreadable)
 			continue
 		}
 		flag := ""
 		if r.WouldRefuse {
 			flag = " [rm would refuse: " + strings.Join(r.Reasons, "; ") + "]"
 		}
-		fmt.Printf("%s\t%s\t%s\t%s%s\n", r.Name, r.Branch, r.Mechanism, r.SandboxState, flag)
+		fmt.Fprintf(d.Out, "%s\t%s\t%s\t%s%s\n", r.Name, r.Branch, r.Mechanism, r.SandboxState, flag)
 	}
+	return nil
 }
 
-// ---------------------------------------------------------------------------
-// task path
-// ---------------------------------------------------------------------------
+type taskPathCmd struct {
+	Name string `arg:"" help:"Task whose checkout dir to print."`
+}
 
-func runTaskPathVerb(argv []string) {
-	if cli.WantsHelp(argv) || len(argv) != 1 {
-		fmt.Print(taskUsage)
-		if len(argv) != 1 {
-			os.Exit(2)
-		}
-		return
-	}
+func (c *taskPathCmd) Run(d *cli.Deps) error { return taskPath(d, c.Name) }
+
+func taskPath(d *cli.Deps, name string) error {
 	mainroot, err := taskMainroot()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix task path: not a git repository: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("not a git repository: %w", err)
 	}
-	co, err := task.Path(workspace.TaskStateRoot(), mainroot, argv[0])
+	co, err := task.Path(workspace.TaskStateRoot(), mainroot, name)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix task path: %v\n", err)
-		os.Exit(1)
+		return err
 	}
-	fmt.Println(co)
+	fmt.Fprintln(d.Out, co)
+	return nil
 }
 
-// ---------------------------------------------------------------------------
-// task rm
-// ---------------------------------------------------------------------------
-
-func parseTaskRmArgs(argv []string) (name string, force bool, err error) {
-	for _, a := range argv {
-		switch {
-		case a == "--force":
-			force = true
-		case strings.HasPrefix(a, "-"):
-			return "", false, fmt.Errorf("unknown flag %q", a)
-		default:
-			if name != "" {
-				return "", false, fmt.Errorf("unexpected extra argument %q", a)
-			}
-			name = a
-		}
-	}
-	if name == "" {
-		return "", false, fmt.Errorf("a task name is required")
-	}
-	return name, force, nil
+type taskRmCmd struct {
+	Name  string `arg:"" help:"Task to remove."`
+	Force bool   `help:"Override GIT-hygiene refusals (never a live sandbox)."`
 }
 
-func runTaskRmVerb(argv []string) {
-	if cli.WantsHelp(argv) {
-		fmt.Print(taskUsage)
-		return
-	}
-	name, force, err := parseTaskRmArgs(argv)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix task rm: %v\n\n%s", err, taskUsage)
-		os.Exit(2)
-	}
+func (c *taskRmCmd) Run(d *cli.Deps) error { return taskRm(d, c.Name, c.Force) }
+
+func taskRm(d *cli.Deps, name string, force bool) error {
 	mainroot, err := taskMainroot()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix task rm: not a git repository: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("not a git repository: %w", err)
 	}
 	stateRoot := workspace.TaskStateRoot()
 	co, m, err := task.Resolve(stateRoot, mainroot, name)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix task rm: %v\n", err)
-		os.Exit(1)
+		return err
 	}
-
 	git := task.GatherGitState(m.Mechanism, mainroot, co)
 	disposition := taskProbe()(m.Sandbox)
 	reasons, ok := task.RemoveGuard(git, disposition, force)
 	if !ok {
-		fmt.Fprintf(os.Stderr, "pix task rm: refusing to remove %q: %s\n", name, strings.Join(reasons, "; "))
+		fmt.Fprintf(d.Err, "pix task rm: refusing to remove %q: %s\n", name, strings.Join(reasons, "; "))
 		if disposition == task.SandboxRunning {
-			fmt.Fprintf(os.Stderr, "Stop it first: sbx stop %s\n", m.Sandbox)
+			fmt.Fprintf(d.Err, "Stop it first: sbx stop %s\n", m.Sandbox)
 		}
-		os.Exit(2)
+		return cli.SilentError{Code: 2}
 	}
-
-	// Persist the branch into the main repo BEFORE anything is torn down, so
-	// even a mid-teardown failure below never loses the work the guard just
-	// proved is safe to drop from the checkout.
+	// Persist the branch BEFORE anything is torn down, so a mid-teardown
+	// failure below never loses work the guard just proved safe to drop.
 	if err := task.PersistBranch(m.Mechanism, mainroot, co, m.Branch); err != nil {
-		fmt.Fprintf(os.Stderr, "pix task rm: %v\n", err)
-		os.Exit(1)
+		return err
 	}
-
-	// Tear the sandbox down via the SAME helper `pix rm` uses (no duplicated
-	// sandbox-lifecycle code here). Absent needs no removal call at all.
 	if disposition != task.SandboxAbsent {
 		if err := launch.RemovePixSandbox(defaultShellEnv(), m.Sandbox); err != nil {
-			fmt.Fprintf(os.Stderr, "pix task rm: could not remove sandbox %s; leaving the checkout intact: %v\n", m.Sandbox, err)
-			os.Exit(1)
+			return fmt.Errorf("could not remove sandbox %s; leaving the checkout intact: %w", m.Sandbox, err)
 		}
 	}
-
 	if err := task.RemoveCheckout(m.Mechanism, mainroot, co); err != nil {
-		fmt.Fprintf(os.Stderr, "pix task rm: sandbox removed, but the checkout could not be deleted: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("sandbox removed, but the checkout could not be deleted: %w", err)
 	}
 	if err := task.Forget(stateRoot, mainroot, name); err != nil {
-		fmt.Fprintf(os.Stderr, "pix task rm: warning: could not remove metadata: %v\n", err)
+		fmt.Fprintf(d.Err, "pix task rm: warning: could not remove metadata: %v\n", err)
 	}
-	fmt.Printf("pix: removed task %q (branch %s persisted in %s)\n", name, m.Branch, mainroot)
+	fmt.Fprintf(d.Out, "pix: removed task %q (branch %s persisted in %s)\n", name, m.Branch, mainroot)
+	return nil
 }

@@ -1,17 +1,22 @@
-// task_test.go — the cmd/pix `pix task` CLI-plumbing tests. The bulk of the
+// task_test.go — the cmd/pix `pix task` CLI-plumbing tests, under the cli
+// command contract (kong struct tags, Run(*cli.Deps)). The bulk of the
 // SUBSTANTIVE task logic (naming, git-hygiene probing, the removal guard,
 // clone vs worktree) is real-git tested directly in
-// pix/host/workflow/task (the new L1 package); this file only exercises the
-// argv parsing and the composition points specific to the CLI layer
-// (`--task` shorthand rewriting, `ls`/`path` rendering).
+// pix/host/workflow/task (the L1 checkout package); this file only exercises
+// the argv-shape composition specific to the CLI layer (`--task` shorthand
+// rewriting, the name-then-verb `path` shorthand, ls/path/rm dispatch, and
+// the passthrough-arg contract new/run declare).
 //
-// runTaskNew/runTaskRunVerb ultimately os.Exit on a launch failure (they
-// delegate straight to runRun, the same `pix run` entry point, deliberately
-// — see task_cmd.go's header comment for why that removes the old
-// task-specific sandbox-lifecycle duplication). Driving that all the way
-// through a real sandbox launch needs sbx + Docker on the host (same as
-// `pix run` itself; see docs/design/worktree-tasks.md's host-verification
-// section), so it is out of scope for this in-process suite.
+// taskNew/(*taskRunCmd).Run ultimately call runRun, the same `pix run` entry
+// point (see task_cmd.go's header comment for why that removes the old
+// task-specific sandbox-lifecycle duplication), which os.Exits on a launch
+// failure. Driving that all the way through a real sandbox launch needs sbx +
+// Docker on the host (same as `pix run` itself; see
+// docs/design/worktree-tasks.md's host-verification section), so it is out of
+// scope for this in-process suite — exactly as before this migration. What IS
+// covered here is everything reachable before that call: kong's parse (via
+// cli.Run[taskCmd]) and the pure guards in taskNew that run before any git or
+// process work.
 package main
 
 import (
@@ -19,6 +24,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"pix/host/cli"
+	"pix/host/sys/systest"
 	"pix/host/workflow/task"
 	"strings"
 	"testing"
@@ -61,41 +68,99 @@ func newRepo(t *testing.T) string {
 	return root
 }
 
-func TestParseTaskNewArgs(t *testing.T) {
-	name, from, mech, pass, err := parseTaskNewArgs([]string{"fix-login", "--from", "main", "--", "-p", "hi"})
+// testDeps builds a cli.Deps around captured stdout/stderr, matching the
+// mustRunAgent/mustRunSecret pattern used by the other migrated verbs.
+func taskTestDeps() *cli.Deps {
+	return &cli.Deps{
+		Sys: &systest.Fake{}, Out: os.Stdout, Err: os.Stderr,
+		In: strings.NewReader(""), Interactive: false,
+	}
+}
+
+// runTaskParse drives the real kong parser (cli.Run[taskCmd]) the way
+// production argv does, returning whatever error it produced (nil on
+// success). This is the "no hand parser loop" replacement for the old
+// parseTaskNewArgs/parseTaskRmArgs unit tests: the parsing IS kong now.
+func runTaskParse(t *testing.T, d *cli.Deps, argv ...string) error {
+	t.Helper()
+	return cli.Run[taskCmd]("task", taskDescription, argv, d)
+}
+
+// --- new: passthrough + mechanism guards (pure, no repo needed) -------------
+
+func TestTaskNewCmd_RequiresName(t *testing.T) {
+	if err := runTaskParse(t, taskTestDeps(), "new"); err == nil {
+		t.Error("want an error when no name is given")
+	}
+}
+
+func TestTaskNewCmd_UnknownFlagRejected(t *testing.T) {
+	if err := runTaskParse(t, taskTestDeps(), "new", "x", "--bogus"); err == nil {
+		t.Error("want an error on an unknown flag")
+	}
+}
+
+func TestTaskNewCmd_WorktreeFlag(t *testing.T) {
+	c := &taskNewCmd{Name: "x", Worktree: true}
+	if got := taskNewMechanism(c.Worktree); got != task.Worktree {
+		t.Errorf("mechanism = %q, want worktree", got)
+	}
+}
+
+func TestTaskNewCmd_DefaultMechanismIsClone(t *testing.T) {
+	if got := taskNewMechanism(false); got != task.Clone {
+		t.Errorf("mechanism = %q, want clone", got)
+	}
+}
+
+// TestTaskNewPassthrough_StripsLeadingDashDash: kong's passthrough arg always
+// includes the literal "--" it matched on (proven directly against the kong
+// version in use); taskNewPassthrough must strip it before the args reach
+// runRun (which adds its own "--" back).
+func TestTaskNewPassthrough_StripsLeadingDashDash(t *testing.T) {
+	pass, err := taskNewPassthrough([]string{"--", "-p", "hi"})
 	if err != nil {
 		t.Fatalf("err = %v", err)
-	}
-	if name != "fix-login" || from != "main" || mech != task.Clone {
-		t.Errorf("got name=%q from=%q mech=%q", name, from, mech)
 	}
 	if strings.Join(pass, ",") != "-p,hi" {
 		t.Errorf("passthrough = %v", pass)
 	}
-	if _, _, _, _, err := parseTaskNewArgs(nil); err == nil {
-		t.Error("want an error when no name is given")
-	}
-	if _, _, _, _, err := parseTaskNewArgs([]string{"--bogus"}); err == nil {
-		t.Error("want an error on an unknown flag")
-	}
-	_, _, mech2, _, err := parseTaskNewArgs([]string{"x", "--worktree"})
-	if err != nil || mech2 != task.Worktree {
-		t.Errorf("--worktree: mech=%q err=%v", mech2, err)
+}
+
+func TestTaskNewPassthrough_Empty(t *testing.T) {
+	pass, err := taskNewPassthrough(nil)
+	if err != nil || len(pass) != 0 {
+		t.Errorf("pass=%v err=%v, want empty/nil", pass, err)
 	}
 }
 
-func TestParseTaskRmArgs(t *testing.T) {
-	name, force, err := parseTaskRmArgs([]string{"work", "--force"})
-	if err != nil || name != "work" || !force {
-		t.Errorf("name=%q force=%v err=%v", name, force, err)
-	}
-	if _, _, err := parseTaskRmArgs(nil); err == nil {
-		t.Error("want an error when no name is given")
-	}
-	if _, _, err := parseTaskRmArgs([]string{"a", "b"}); err == nil {
-		t.Error("want an error on a second positional argument")
+// TestTaskNewPassthrough_RequiresDashDash: an extra positional that did not
+// come after "--" is rejected — matches the old parseTaskNewArgs contract
+// ("unexpected extra argument ... use -- for pi args"), now enforced as a
+// guard in taskNew itself rather than a hand-rolled arg loop.
+func TestTaskNewPassthrough_RequiresDashDash(t *testing.T) {
+	if _, err := taskNewPassthrough([]string{"stray"}); err == nil {
+		t.Error("want an error for a bare extra positional with no --")
+	} else {
+		var uerr cli.UsageError
+		if !errorsAs(err, &uerr) {
+			t.Errorf("want a UsageError (exit 2), got %v (%T)", err, err)
+		}
 	}
 }
+
+// TestTaskNewCmd_ExtraArgWithoutDashDash exercises the SAME guard end-to-end
+// through kong: kong's own arg/passthrough parsing accepts a bare extra
+// positional (that is what "passthrough" means to it), so the rejection has
+// to happen in taskNew's body — before any git or process work, which is why
+// this is safe to run outside a git repository.
+func TestTaskNewCmd_ExtraArgWithoutDashDash(t *testing.T) {
+	if err := runTaskParse(t, taskTestDeps(), "new", "x", "stray"); err == nil {
+		t.Error("want an error for an extra positional not introduced by --")
+	}
+}
+
+// --- run / --task shorthand (unchanged by this migration) ------------------
 
 func TestResolveTaskRunArgv(t *testing.T) {
 	mainroot := newRepo(t)
@@ -172,7 +237,9 @@ func TestExpandTaskFlag_UnknownTaskErrors(t *testing.T) {
 	}
 }
 
-func TestRunTaskLs_HumanAndJSON(t *testing.T) {
+// --- ls / path / rm ----------------------------------------------------------
+
+func TestTaskLs_HumanAndJSON(t *testing.T) {
 	mainroot := newRepo(t)
 	dataDir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", dataDir)
@@ -180,12 +247,20 @@ func TestRunTaskLs_HumanAndJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	human := captureStdout(t, func() { runTaskLs(nil) })
+	human := captureStdout(t, func() {
+		if err := taskLs(taskTestDeps(), false); err != nil {
+			t.Fatal(err)
+		}
+	})
 	if !strings.Contains(human, "clean") {
 		t.Errorf("human output missing task name:\n%s", human)
 	}
 
-	js := captureStdout(t, func() { runTaskLs([]string{"--json"}) })
+	js := captureStdout(t, func() {
+		if err := taskLs(taskTestDeps(), true); err != nil {
+			t.Fatal(err)
+		}
+	})
 	var rows []taskListRow
 	if err := json.Unmarshal([]byte(js), &rows); err != nil {
 		t.Fatalf("invalid JSON: %v\n%s", err, js)
@@ -198,7 +273,30 @@ func TestRunTaskLs_HumanAndJSON(t *testing.T) {
 	}
 }
 
-func TestRunTaskPathVerb_PrintsCheckoutDir(t *testing.T) {
+// TestTaskLsCmd_JSONFlagThroughKong proves --json reaches taskLs via the real
+// parser, not just the direct-call path above.
+func TestTaskLsCmd_JSONFlagThroughKong(t *testing.T) {
+	mainroot := newRepo(t)
+	dataDir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", dataDir)
+	if _, err := task.New(task.NewOptions{StateRoot: taskStateRootForTest(dataDir), Mainroot: mainroot, Name: "clean"}); err != nil {
+		t.Fatal(err)
+	}
+	js := captureStdout(t, func() {
+		if err := runTaskParse(t, taskTestDeps(), "ls", "--json"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	var rows []taskListRow
+	if err := json.Unmarshal([]byte(js), &rows); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, js)
+	}
+	if len(rows) != 1 || rows[0].Name != "clean" {
+		t.Fatalf("rows = %+v", rows)
+	}
+}
+
+func TestTaskPath_PrintsCheckoutDir(t *testing.T) {
 	mainroot := newRepo(t)
 	dataDir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", dataDir)
@@ -209,20 +307,114 @@ func TestRunTaskPathVerb_PrintsCheckoutDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out := strings.TrimSpace(captureStdout(t, func() { runTaskPathVerb([]string{"fix-login"}) }))
+	out := strings.TrimSpace(captureStdout(t, func() {
+		if err := taskPath(taskTestDeps(), "fix-login"); err != nil {
+			t.Fatal(err)
+		}
+	}))
 	if out != co {
 		t.Errorf("got %q, want %q", out, co)
 	}
 }
 
-func TestRunTaskCmd_HelpAndUnknown(t *testing.T) {
+func TestTaskPathCmd_ThroughKong(t *testing.T) {
+	mainroot := newRepo(t)
+	dataDir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", dataDir)
+	if _, err := task.New(task.NewOptions{StateRoot: taskStateRootForTest(dataDir), Mainroot: mainroot, Name: "fix-login"}); err != nil {
+		t.Fatal(err)
+	}
+	co, err := task.Path(taskStateRootForTest(dataDir), mainroot, "fix-login")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := strings.TrimSpace(captureStdout(t, func() {
+		if err := runTaskParse(t, taskTestDeps(), "path", "fix-login"); err != nil {
+			t.Fatal(err)
+		}
+	}))
+	if out != co {
+		t.Errorf("got %q, want %q", out, co)
+	}
+}
+
+// TestTaskRm_RefusesAndLeavesCheckoutIntact proves taskRm's guard runs and
+// fails CLOSED with exit 2 (cli.SilentError), same contract as the
+// pre-migration guard — and does not touch the checkout on refusal. The happy
+// (actually-removes) path additionally needs a real sandbox probe (`sbx ls`)
+// to report SandboxAbsent, which this in-process suite has no way to fake (the
+// probe is wired to the real OS in env.go, by design — see its header
+// comment); that path is out of scope here for the same reason
+// taskNew/(*taskRunCmd).Run's runRun call is (see this file's header comment).
+// A test environment with no `sbx` binary reports SandboxUnknown, which
+// RemoveGuard refuses unconditionally (fail-closed) regardless of git
+// state — so this exercises the same refusal path whether or not the
+// checkout is actually dirty.
+func TestTaskRm_RefusesAndLeavesCheckoutIntact(t *testing.T) {
+	mainroot := newRepo(t)
+	dataDir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", dataDir)
+	if _, err := task.New(task.NewOptions{StateRoot: taskStateRootForTest(dataDir), Mainroot: mainroot, Name: "dirty"}); err != nil {
+		t.Fatal(err)
+	}
+	co, err := task.Path(taskStateRootForTest(dataDir), mainroot, "dirty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(co, "uncommitted.txt"), []byte("x"), 0o644)
+
+	err = taskRm(taskTestDeps(), "dirty", false)
+	if err == nil {
+		t.Fatal("want a refusal error")
+	}
+	if cli.ExitCode(err) != 2 {
+		t.Errorf("ExitCode = %d, want 2", cli.ExitCode(err))
+	}
+	if _, statErr := os.Stat(co); statErr != nil {
+		t.Errorf("checkout should still be present after a refused rm: %v", statErr)
+	}
+}
+
+// --- runTaskCmd: the argv-shape decisions the parser cannot make -----------
+
+func TestRunTaskCmd_BareAndHelpPrintUsage(t *testing.T) {
 	out := captureStdout(t, func() { runTaskCmd(nil) })
-	if !strings.Contains(out, "usage: pix task") {
+	if !strings.Contains(out, "pix task") || !strings.Contains(out, "Create + launch a new task checkout") {
 		t.Errorf("bare `task` should print usage, got %q", out)
 	}
 	out2 := captureStdout(t, func() { runTaskCmd([]string{"-h"}) })
-	if !strings.Contains(out2, "usage: pix task") {
+	if !strings.Contains(out2, "pix task") {
 		t.Errorf("-h should print usage, got %q", out2)
+	}
+}
+
+// TestRunTaskCmd_NameThenVerbShorthand: `pix task <name> path` reads naturally
+// for `cd "$(pix task foo path)"`; verified through the real dispatcher so the
+// rewrite in runTaskCmd is exercised, not just taskPathCmd directly.
+func TestRunTaskCmd_NameThenVerbShorthand(t *testing.T) {
+	mainroot := newRepo(t)
+	dataDir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", dataDir)
+	if _, err := task.New(task.NewOptions{StateRoot: taskStateRootForTest(dataDir), Mainroot: mainroot, Name: "foo"}); err != nil {
+		t.Fatal(err)
+	}
+	co, err := task.Path(taskStateRootForTest(dataDir), mainroot, "foo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := strings.TrimSpace(captureStdout(t, func() { runTaskCmd([]string{"foo", "path"}) }))
+	if out != co {
+		t.Errorf("got %q, want %q", out, co)
+	}
+}
+
+// TestRunTaskCmd_NameThenVerbShorthand_DoesNotShadowRealVerbs: a task literally
+// named "ls" must not trigger the name-then-verb rewrite (isTaskKnownVerb
+// guards it) — `pix task ls path` stays a (malformed) `ls` invocation, not
+// `path ls`.
+func TestRunTaskCmd_NameThenVerbShorthand_DoesNotShadowRealVerbs(t *testing.T) {
+	if !isTaskKnownVerb("ls") {
+		t.Fatal("ls must be a known verb")
 	}
 }
 
@@ -234,4 +426,22 @@ func TestRunTaskCmd_HelpAndUnknown(t *testing.T) {
 
 func taskStateRootForTest(xdgStateHome string) string {
 	return filepath.Join(xdgStateHome, "pix", "tasks")
+}
+
+// errorsAs is a tiny local wrapper so this file only imports "errors" once,
+// at the call site that needs it, without shadowing the package-level err
+// variables used throughout the table-driven tests above.
+func errorsAs(err error, target *cli.UsageError) bool {
+	for err != nil {
+		if u, ok := err.(cli.UsageError); ok {
+			*target = u
+			return true
+		}
+		u, ok := err.(interface{ Unwrap() error })
+		if !ok {
+			return false
+		}
+		err = u.Unwrap()
+	}
+	return false
 }

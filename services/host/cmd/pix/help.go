@@ -169,7 +169,7 @@ func verbUsage(verb string) (string, bool) {
 	case "state":
 		return stateUsage, true
 	case "task":
-		return taskUsage, true
+		return taskUsage(), true
 	case "models":
 		return modelsUsage(), true
 	case "agent":

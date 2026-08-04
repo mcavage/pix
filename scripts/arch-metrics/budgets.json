@@ -16,11 +16,11 @@
       "exits": 4
     },
     "pix/host/cmd/pix": {
-      "prod_loc": 3805,
+      "prod_loc": 3701,
       "exports": 19,
       "globals": 15,
       "edges": 24,
-      "exits": 79
+      "exits": 60
     },
     "pix/host/cmd/pix/corpus": {
       "prod_loc": 573,
