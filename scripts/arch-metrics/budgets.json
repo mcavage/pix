@@ -141,6 +141,13 @@
       "edges": 0,
       "exits": 0
     },
+    "pix/host/sandbox": {
+      "prod_loc": 650,
+      "exports": 25,
+      "globals": 17,
+      "edges": 0,
+      "exits": 0
+    },
     "pix/host/secret": {
       "prod_loc": 1855,
       "exports": 52,

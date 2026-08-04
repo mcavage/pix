@@ -77,6 +77,11 @@ var pkgLayer = map[string]int{
 	"knowledge":  layerCapability,
 	"secret":     layerCapability,
 	"mcp":        layerCapability,
+	// sandbox is U04b's focused L1 sandbox domain: naming, the tolerant sbx-
+	// listing parser, create-vs-exec argv planning, fingerprint comparison and
+	// non-force removal planning. Pure and dependency-free (see sandbox/doc.go),
+	// same tier as its capability siblings, invisible to them.
+	"sandbox": layerCapability,
 	// workflow/task is Story06's L1 task-checkout capability: naming, metadata,
 	// the clone/worktree mechanism, and the git-hygiene removal guard, with NO
 	// import of workflow/launch, any sandbox runner, or lease (see its doc
