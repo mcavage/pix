@@ -1,0 +1,4 @@
+[
+  {"name": "pix-demo", "state": "running", "instance_id": "abc123"},
+  {"name": "pix-other", "state": "exited"}
+]
