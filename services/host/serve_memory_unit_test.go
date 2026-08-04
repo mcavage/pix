@@ -1,9 +1,8 @@
 // serve_memory_unit_test.go — memory is ALWAYS a supervised self-exec plugin
-// unit now, so this proves the thing that change could break: the :11435
-// JSON-RPC surface the sandbox extensions call, served over a REAL child
-// process backed by a REAL SQLite file. No stubs: it builds this binary, the
-// supervision tree execs it as `pix-host plugin memory`, and the assertions run
-// against the same handler serve installs.
+// unit now, so this proves what that could break: the :11435 JSON-RPC surface
+// the sandbox extensions call, over a REAL child process and a REAL SQLite
+// file. It builds this binary, the tree execs it as `pix-host plugin memory`,
+// and asserts against the same handler serve installs.
 package main
 
 import (
@@ -53,8 +52,7 @@ func TestMemoryUnitIsSelfExecAndPreservesTheRPCSurface(t *testing.T) {
 
 	sup := &supervisor{}
 	defer sup.shutdown()
-	// The BUILTIN memory impl: it must still be launched as a plugin unit
-	// (self-exec of this binary), never run in-process.
+	// The BUILTIN impl must still be launched as a unit, never in-process.
 	h, err := sup.launch("memory", "memory", config.PluginSpec{Impl: config.BuiltinImpl}, self, nil)
 	if err != nil {
 		t.Fatalf("launch memory unit: %v", err)
@@ -77,7 +75,7 @@ func TestMemoryUnitIsSelfExecAndPreservesTheRPCSurface(t *testing.T) {
 		t.Fatalf("no sqlite database at %s (%v)", db, err)
 	}
 
-	// recall -> the hit shape the recall extension parses, createdAt included.
+	// recall -> the hit shape the extension parses, createdAt included.
 	rec, _ := rpcPost(t, srv.URL, "recall", map[string]any{"query": "deploy runbook"})["result"].(map[string]any)
 	hits, _ := rec["hits"].([]any)
 	if len(hits) == 0 {
@@ -92,10 +90,14 @@ func TestMemoryUnitIsSelfExecAndPreservesTheRPCSurface(t *testing.T) {
 	if ca, _ := top["createdAt"].(string); strings.TrimSpace(ca) == "" {
 		t.Errorf("createdAt must be a real timestamp, got %q", top["createdAt"])
 	}
+	// identity still proves WHO holds :11435.
+	ident, _ := rpcPost(t, srv.URL, "identity", nil)["result"].(map[string]any)
+	if svc, _ := ident["name"].(string); svc == "" {
+		t.Errorf("identity lost its service field: %v", ident)
+	}
 
 	// stats honours the `profile` param the extension always sends: a row
-	// remembered INTO a profile is counted there and nowhere else. (Unscoped
-	// rows stay visible everywhere — that is the store's own rule.)
+	// remembered INTO a profile is counted there and nowhere else.
 	rpcPost(t, srv.URL, "remember", map[string]any{"content": "profile-scoped note", "profile": "p1"})
 	mine, _ := rpcPost(t, srv.URL, "stats", map[string]any{"profile": "p1"})["result"].(map[string]any)
 	theirs, _ := rpcPost(t, srv.URL, "stats", map[string]any{"profile": "p2"})["result"].(map[string]any)
@@ -105,19 +107,14 @@ func TestMemoryUnitIsSelfExecAndPreservesTheRPCSurface(t *testing.T) {
 		t.Errorf("stats is not profile-scoped over the plugin path: p1=%v p2=%v", mine, theirs)
 	}
 
-	// health keeps every key the doctor/extension read, captureReason included.
+	// health keeps every key the doctor/extension read.
 	hres, _ := rpcPost(t, srv.URL, "health", nil)["result"].(map[string]any)
 	for _, k := range []string{"ok", "vector", "capture", "captureReason", "watcherModel"} {
 		if _, present := hres[k]; !present {
 			t.Errorf("health missing %q: %v", k, hres)
 		}
 	}
-	// identity still proves WHO holds :11435.
-	ident, _ := rpcPost(t, srv.URL, "identity", nil)["result"].(map[string]any)
-	if svc, _ := ident["name"].(string); svc == "" {
-		t.Errorf("identity lost its service field: %v", ident)
-	}
-	// forget + synthesize + promotable + observe are all still routable.
+	// the remaining methods are all still routable.
 	for _, m := range []string{"synthesize", "promotable", "observe"} {
 		rpcPost(t, srv.URL, m, map[string]any{"user": "hello", "minFrequency": 3})
 	}

@@ -1,8 +1,7 @@
-// service.go — GoPluginService: one supervised go-plugin subprocess expressed
-// as a suture.Service. Serve() owns the whole life of one generation of the
-// child: reattach-or-spawn, dispense, health-probe until it dies, then drain
-// and stop within the pinned budgets. Restart policy is Suture's; everything
-// here is about the process and its identity.
+// service.go — GoPluginService: one supervised go-plugin subprocess as a
+// suture.Service. Serve() owns ONE generation of the child: reattach-or-spawn,
+// dispense, health-probe until it dies, then drain and stop inside the pinned
+// budgets. Restart policy is Suture's; this is the process and its identity.
 
 package supervise
 
@@ -22,9 +21,9 @@ import (
 	"github.com/thejerf/suture/v4"
 )
 
-// HealthFunc probes a dispensed implementation. It is the unit's OWN notion of
-// health (memory's Health(), the broker's Check()) — "the process is up" is not
-// health, and a unit that fails HealthFailures probes in a row is replaced.
+// HealthFunc is the unit's OWN notion of health (memory's Health(), the
+// broker's Check()): "the process is up" is not health, and a unit that fails
+// HealthFailures probes in a row is replaced.
 type HealthFunc func(impl any) error
 
 // GoPluginService supervises one go-plugin unit.
@@ -34,9 +33,8 @@ type GoPluginService struct {
 	holder *Holder
 	tree   *Tree
 
-	// ready reports the outcome of the FIRST start attempt back to Add, so a
-	// misconfigured unit fails `serve` loudly at startup instead of silently
-	// flapping. Sent at most once (readyDone).
+	// ready reports the FIRST start attempt's outcome back to Add, at most once
+	// (readyDone), so a misconfigured unit fails `serve` loudly at startup.
 	ready     chan error
 	readyDone bool
 }
@@ -44,8 +42,8 @@ type GoPluginService struct {
 // String is what Suture uses to name this service in its events.
 func (s *GoPluginService) String() string { return "unit." + s.spec.Name }
 
-// Serve runs one generation of the unit and returns when it dies (Suture then
-// applies backoff and restarts) or when ctx is cancelled (a clean stop).
+// Serve runs one generation and returns when it dies (Suture then backs off
+// and restarts) or when ctx is cancelled (a clean stop).
 func (s *GoPluginService) Serve(ctx context.Context) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -55,10 +53,8 @@ func (s *GoPluginService) Serve(ctx context.Context) error {
 
 	client, impl, reattached, err := s.start()
 	if err != nil {
-		// A pin that no longer matches, an invalid spec or a missing binary is
-		// OPERATOR state, not a transient fault: restarting cannot fix it, so the
-		// unit is removed from the tree (its subtree stops, the root and every
-		// sibling keep serving).
+		// A stale pin, an invalid spec or a missing binary is OPERATOR state,
+		// not a transient fault: this subtree stops, siblings keep serving.
 		if permanent(err) {
 			err = fmt.Errorf("%w: %w", err, suture.ErrDoNotRestart)
 			s.tree.transition(s.spec.Name, func(st *UnitStatus) {
@@ -86,8 +82,8 @@ func (s *GoPluginService) Serve(ctx context.Context) error {
 	}
 	s.tree.emit(Event{Unit: s.spec.Name, Type: evt, Message: fmt.Sprintf("pid %d", pid)})
 
-	// First probe inside the handshake budget: a unit that cannot answer is not
-	// started, it is broken, and `serve` must say so at startup.
+	// A unit that cannot answer its first probe is not started, it is broken,
+	// and `serve` must say so at startup.
 	if err := s.probe(b.HealthTimeout); err != nil {
 		err = fmt.Errorf("unit %s: first health probe failed: %w", s.spec.Name, err)
 		s.tree.emit(Event{Unit: s.spec.Name, Type: EventHealthFailed, Err: err.Error()})
@@ -105,7 +101,7 @@ func (s *GoPluginService) Serve(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			// Clean stop: drain in-flight work, then kill inside the stop budget.
+			// Clean stop: drain in-flight work, then kill inside the budget.
 			s.stopChild(client, true)
 			s.tree.transition(s.spec.Name, func(st *UnitStatus) {
 				st.State, st.PID, st.HealthOK = UnitStopped, 0, false
@@ -142,8 +138,8 @@ func (s *GoPluginService) Serve(ctx context.Context) error {
 	}
 }
 
-// probe runs the unit's health check under a hard timeout. The probe goroutine
-// is abandoned on timeout (an rpc call cannot be cancelled mid-flight); the
+// probe runs the unit's health check under a hard timeout. On timeout the
+// goroutine is abandoned (an rpc call cannot be cancelled mid-flight); its
 // buffered channel means it never blocks or touches shared state afterwards.
 func (s *GoPluginService) probe(budget time.Duration) error {
 	if s.health == nil {
@@ -184,8 +180,8 @@ func permanent(err error) bool {
 	return errors.As(err, &p)
 }
 
-// start reattaches to a surviving child if the persisted state still names THIS
-// unit and that process is alive; otherwise it spawns a fresh one.
+// start reattaches to a surviving child when the persisted state still names
+// THIS unit and it is alive; otherwise it spawns a fresh one.
 func (s *GoPluginService) start() (*goplugin.Client, any, bool, error) {
 	if client, impl, ok := s.tryReattach(); ok {
 		return client, impl, true, nil
@@ -212,12 +208,12 @@ func (s *GoPluginService) start() (*goplugin.Client, any, bool, error) {
 
 // command builds the child process: a staged, freshly-verified copy for an
 // external unit (re-verified on EVERY start, so a binary swapped under a
-// running unit is caught at its next restart), or a self-exec of this binary.
+// running unit is caught at its next restart), or a self-exec of this one.
 func (s *GoPluginService) command() (*exec.Cmd, error) {
 	if err := s.spec.Validate(); err != nil {
 		return nil, permanentErr{err}
 	}
-	path := s.tree.SelfPath()
+	path := s.tree.selfPath
 	argv := append([]string{"plugin", s.spec.Kind}, s.spec.Argv...)
 	if !s.spec.SelfExec {
 		staged, err := StageExecutable(s.tree.stageDir, s.spec.Name, s.spec.Path, s.spec.SHA)
@@ -269,11 +265,10 @@ func clientPID(c *goplugin.Client) int {
 
 // --- reattach state ---------------------------------------------------------
 
-// reattachState is what survives a HARD supervisor death (SIGKILL: no
-// shutdown, no cleanup, orphaned children). It records both how to reconnect
-// and WHO the child is supposed to be, because a pid is not an identity — pids
-// are recycled, and reattaching to whatever now holds one is how a supervisor
-// adopts a stranger.
+// reattachState survives a HARD supervisor death (SIGKILL: no shutdown, no
+// cleanup, orphaned children). It records how to reconnect AND who the child is
+// supposed to be: a pid is not an identity — pids are recycled, and reattaching
+// to whatever now holds one is how a supervisor adopts a stranger.
 type reattachState struct {
 	Unit            string    `json:"unit"`
 	Kind            string    `json:"kind"`
@@ -291,11 +286,9 @@ func reattachPath(stateDir, unit string) string {
 }
 
 // SaveReattach persists a unit's reattach state (0600, dir 0700). Exported so a
-// test — and any future out-of-tree supervisor front-end — can produce exactly
-// what the supervisor consumes. protocolVersion is the handshake version that
-// was negotiated with the child: go-plugin's own ReattachConfig() leaves that
-// field zero, and a reattach across a protocol bump must be refused, so the
-// caller supplies it.
+// test produces exactly what the supervisor consumes. protocolVersion is the
+// version negotiated with the child: go-plugin's ReattachConfig() leaves it
+// zero, and a reattach across a protocol bump must be refused.
 func SaveReattach(stateDir string, spec UnitSpec, rc *goplugin.ReattachConfig, protocolVersion int) error {
 	if rc == nil || stateDir == "" {
 		return nil
@@ -337,8 +330,8 @@ func (s *GoPluginService) clearReattach() {
 }
 
 // tryReattach adopts a surviving child ONLY when the persisted state names this
-// unit, this kind, this exact executable identity, and that pid is still alive
-// and still speaks our protocol. Anything else: drop the state, spawn fresh.
+// unit, kind and exact executable identity, and that pid is alive and still
+// speaks our protocol. Anything else: drop the state, spawn fresh.
 func (s *GoPluginService) tryReattach() (*goplugin.Client, any, bool) {
 	if s.tree.stateDir == "" {
 		return nil, nil, false
@@ -365,33 +358,31 @@ func (s *GoPluginService) tryReattach() (*goplugin.Client, any, bool) {
 	case st.Address == "":
 		reason = "no recorded address"
 	}
-	if reason != "" {
-		s.tree.emit(Event{Unit: s.spec.Name, Type: EventReattachRejected, Message: reason})
-		s.clearReattach()
-		return nil, nil, false
+	if reason == "" {
+		var addr net.Addr
+		if addr, err = resolveAddr(st.Network, st.Address); err == nil {
+			client := goplugin.NewClient(&goplugin.ClientConfig{
+				HandshakeConfig: s.tree.handshake,
+				Plugins:         s.tree.plugins,
+				Reattach: &goplugin.ReattachConfig{
+					Protocol: goplugin.Protocol(st.Protocol), ProtocolVersion: st.ProtocolVersion,
+					Addr: addr, Pid: st.Pid,
+				},
+				StartTimeout: s.tree.budgets.Handshake,
+			})
+			impl, derr := dispense(client, s.spec.Kind)
+			if derr == nil {
+				return client, impl, true
+			}
+			client.Kill()
+			reason = "reattach failed: " + derr.Error()
+		} else {
+			reason = "unusable address: " + err.Error()
+		}
 	}
-	addr, err := resolveAddr(st.Network, st.Address)
-	if err != nil {
-		s.clearReattach()
-		return nil, nil, false
-	}
-	client := goplugin.NewClient(&goplugin.ClientConfig{
-		HandshakeConfig: s.tree.handshake,
-		Plugins:         s.tree.plugins,
-		Reattach: &goplugin.ReattachConfig{
-			Protocol: goplugin.Protocol(st.Protocol), ProtocolVersion: st.ProtocolVersion,
-			Addr: addr, Pid: st.Pid,
-		},
-		StartTimeout: s.tree.budgets.Handshake,
-	})
-	impl, err := dispense(client, s.spec.Kind)
-	if err != nil {
-		client.Kill()
-		s.tree.emit(Event{Unit: s.spec.Name, Type: EventReattachRejected, Message: "reattach failed: " + err.Error()})
-		s.clearReattach()
-		return nil, nil, false
-	}
-	return client, impl, true
+	s.tree.emit(Event{Unit: s.spec.Name, Type: EventReattachRejected, Message: reason})
+	s.clearReattach()
+	return nil, nil, false
 }
 
 func resolveAddr(network, address string) (net.Addr, error) {

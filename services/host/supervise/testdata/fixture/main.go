@@ -7,6 +7,7 @@
 //	FIXTURE_UNHEALTHY=1    Check() fails (health-budget eviction)
 //	FIXTURE_STUBBORN=1     ignore SIGTERM/SIGINT (stop-budget escalation)
 //	FIXTURE_ENV_DUMP=<f>   write the received environment to f (env allowlist)
+//	FIXTURE_SPAWN_LOG=<f>  append one line per process start (restart counting)
 //	FIXTURE_TAG=<s>        reported by Describe(), so a test can tell two
 //	                       generations of the same unit apart
 package main
@@ -49,6 +50,12 @@ func main() {
 			buf = append(buf, '\n')
 		}
 		_ = os.WriteFile(dump, buf, 0o600)
+	}
+	if log := os.Getenv("FIXTURE_SPAWN_LOG"); log != "" {
+		if f, err := os.OpenFile(log, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+			_, _ = f.WriteString(strconv.Itoa(os.Getpid()) + "\n")
+			_ = f.Close()
+		}
 	}
 	if os.Getenv("FIXTURE_STUBBORN") == "1" {
 		signal.Notify(make(chan os.Signal, 4), syscall.SIGTERM, syscall.SIGINT)

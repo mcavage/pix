@@ -10,10 +10,9 @@ import "encoding/json"
 
 // --- MemoryStore -------------------------------------------------------------
 //
-// Mirrors the JSON-RPC surface of ../memory.go (the `methods` map in
-// memoryMux(): remember, recall, forget, synthesize, promotable, observe, stats,
-// health). The kernel keeps the JSON-RPC front-end on :11435 and turns each
-// method into a typed call on this interface.
+// Mirrors the JSON-RPC surface of ../memory.go (memoryMux()'s `methods` map).
+// This process keeps the JSON-RPC front-end on :11435 and turns each method
+// into a typed call on this interface.
 
 type MemoryStore interface {
 	Remember(RememberReq) (RememberResp, error)
@@ -22,7 +21,7 @@ type MemoryStore interface {
 	Synthesize(SynthesizeReq) (SynthesizeResp, error)
 	Promotable(PromotableReq) (PromotableResp, error)
 	Observe(ObserveReq) (ObserveResp, error)
-	Stats(StatsReq) (Stats, error)
+	Stats(profile string) (Stats, error)
 	Health() (Health, error)
 }
 
@@ -67,10 +66,7 @@ type Hit struct {
 	Kind       string
 	Durability string
 	Project    string
-	// CreatedAt is the row's RFC3339 timestamp. The JSON-RPC surface has always
-	// returned it (the recall extension renders it), so the typed surface must
-	// carry it too — memory is always plugin-backed now.
-	CreatedAt string
+	CreatedAt  string // RFC3339; the recall extension renders it
 }
 
 // RecallResp wraps the hit list ({"hits": [...]}).
@@ -128,13 +124,6 @@ type ObserveResp struct {
 	Reason   string
 }
 
-// StatsReq scopes stats() to a memory profile, exactly like the JSON-RPC
-// `stats` method's `profile` param the recall extension sends. Empty = the
-// shared default bucket.
-type StatsReq struct {
-	Profile string
-}
-
 // Stats mirrors stats().
 type Stats struct {
 	Active     int
@@ -147,21 +136,18 @@ type Stats struct {
 
 // Health mirrors the health method ({ok, vector, capture, watcherModel}).
 type Health struct {
-	OK           bool
-	Vector       bool
-	Capture      bool
-	WatcherModel string
-	// CaptureReason explains a false Capture (the JSON-RPC `captureReason`).
-	CaptureReason string
+	OK            bool
+	Vector        bool
+	Capture       bool
+	WatcherModel  string
+	CaptureReason string // explains a false Capture (JSON-RPC `captureReason`)
 }
 
 // --- KnowledgeStore ----------------------------------------------------------
 //
 // A retrieval-augmented knowledge base over one or more concept "bundles".
 // Query returns cited concepts ranked by relevance; Reindex (re)ingests bundle
-// paths; Health reports index status. Like MemoryStore, it uses plain Go structs
-// so arguments and results are trivially gob-compatible for the net/rpc
-// transport.
+// paths; Health reports index status. Same plain-struct rule as MemoryStore.
 
 type KnowledgeStore interface {
 	Query(QueryArgs) (QueryResult, error)
@@ -170,8 +156,7 @@ type KnowledgeStore interface {
 }
 
 // QueryArgs parameterizes a knowledge query. Bundles is a SET of bundle-path
-// filters: empty means all bundles, non-empty scopes the search to those
-// bundles (so recall can restrict to e.g. {global, this-project}).
+// filters: empty means all, non-empty scopes the search to those bundles.
 type QueryArgs struct {
 	Query   string
 	Bundles []string

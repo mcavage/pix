@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"sort"
 	"sync"
 	"time"
 
@@ -24,10 +23,10 @@ const (
 	UnitDegraded UnitState = "degraded" // up but failing probes (not yet evicted)
 	UnitBackoff  UnitState = "backoff"  // Suture is holding off a restart
 	UnitStopped  UnitState = "stopped"  // stopped on purpose
-	UnitFailed   UnitState = "failed"   // permanently out (ErrDoNotRestart)
+	UnitFailed   UnitState = "failed"   // permanently out of the tree
 )
 
-// UnitStatus is a snapshot of one unit. Copy semantics: callers get a value.
+// UnitStatus is a snapshot of one unit. Callers get a value, not a pointer.
 type UnitStatus struct {
 	Name        string
 	Kind        string
@@ -98,7 +97,6 @@ type Tree struct {
 
 	mu      sync.Mutex
 	units   map[string]*UnitStatus
-	order   []string
 	events  []Event
 	started bool
 	done    chan struct{}
@@ -116,18 +114,22 @@ func NewTree(cfg Config) *Tree {
 		plugins: cfg.Plugins, handshake: cfg.Handshake, sink: cfg.EventSink, logger: cfg.Logf,
 		units: map[string]*UnitStatus{},
 	}
-	// DontPropagateTermination: a unit that asks for its tree to terminate takes
-	// out its OWN subtree only — the root (and therefore every other unit) is
-	// never killed by one bad unit.
-	t.root = suture.New("pix-host", suture.Spec{
-		EventHook:                t.sutureHook(""),
-		FailureBackoff:           b.FailureBackoff,
-		FailureThreshold:         b.FailureThreshold,
-		FailureDecay:             b.FailureDecay,
-		Timeout:                  b.Stop,
-		DontPropagateTermination: true,
-	})
+	t.root = suture.New("pix-host", t.spec(""))
 	return t
+}
+
+// spec is the Suture spec the root and every child supervisor run under.
+// DontPropagateTermination: a unit that terminates takes out its OWN subtree
+// only — one bad unit never kills the root or a sibling.
+func (t *Tree) spec(unit string) suture.Spec {
+	return suture.Spec{
+		EventHook:                t.sutureHook(unit),
+		FailureBackoff:           t.budgets.FailureBackoff,
+		FailureThreshold:         t.budgets.FailureThreshold,
+		FailureDecay:             t.budgets.FailureDecay,
+		Timeout:                  t.budgets.Stop,
+		DontPropagateTermination: true,
+	}
 }
 
 func (t *Tree) logf(format string, a ...any) {
@@ -138,8 +140,7 @@ func (t *Tree) logf(format string, a ...any) {
 	log.Printf(format, a...)
 }
 
-// Start runs the root supervisor in the background. Cancelling ctx stops every
-// unit; Stop waits for that to finish.
+// Start runs the root supervisor in the background; Stop waits for it.
 func (t *Tree) Start(ctx context.Context) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -147,9 +148,7 @@ func (t *Tree) Start(ctx context.Context) {
 		return
 	}
 	cctx, cancel := context.WithCancel(ctx)
-	t.cancel = cancel
-	t.started = true
-	t.done = make(chan struct{})
+	t.cancel, t.started, t.done = cancel, true, make(chan struct{})
 	errCh := t.root.ServeBackground(cctx)
 	go func() {
 		if err := <-errCh; err != nil && err != context.Canceled {
@@ -160,9 +159,8 @@ func (t *Tree) Start(ctx context.Context) {
 }
 
 // Add supervises a unit and BLOCKS until its first generation is healthy, or
-// its first start attempt fails. A misconfigured unit therefore fails `serve`
-// at startup (loudly, with the real error) instead of flapping in the dark; a
-// unit that merely dies later is Suture's problem, not the caller's.
+// that attempt fails — a misconfigured unit fails `serve` at startup, loudly,
+// instead of flapping in the dark. A unit that dies later is Suture's problem.
 func (t *Tree) Add(spec UnitSpec, health HealthFunc) (*Holder, error) {
 	if err := spec.Validate(); err != nil {
 		return nil, err
@@ -177,32 +175,41 @@ func (t *Tree) Add(spec UnitSpec, health HealthFunc) (*Holder, error) {
 		return nil, fmt.Errorf("supervise: unit %q already supervised", spec.Name)
 	}
 	t.units[spec.Name] = &UnitStatus{Name: spec.Name, Kind: spec.Kind, State: UnitStarting, Since: time.Now()}
-	t.order = append(t.order, spec.Name)
 	t.mu.Unlock()
 
 	svc := &GoPluginService{spec: spec, health: health, holder: &Holder{}, tree: t, ready: make(chan error, 1)}
 	// One child supervisor per unit: its restart accounting, backoff and
 	// permanent death are its own.
-	child := suture.New("unit."+spec.Name, suture.Spec{
-		EventHook:                t.sutureHook(spec.Name),
-		FailureBackoff:           t.budgets.FailureBackoff,
-		FailureThreshold:         t.budgets.FailureThreshold,
-		FailureDecay:             t.budgets.FailureDecay,
-		Timeout:                  t.budgets.Stop,
-		DontPropagateTermination: true,
-	})
+	child := suture.New("unit."+spec.Name, t.spec(spec.Name))
 	child.Add(svc)
-	t.root.Add(child)
+	token := t.root.Add(child)
 
+	wait := t.budgets.Handshake + t.budgets.HealthTimeout
 	select {
 	case err := <-svc.ready:
-		if err != nil {
-			return nil, err
+		if err == nil {
+			return svc.holder, nil
 		}
-		return svc.holder, nil
-	case <-time.After(t.budgets.Handshake + t.budgets.HealthTimeout):
-		return nil, fmt.Errorf("unit %s: did not become healthy within %v", spec.Name, t.budgets.Handshake)
+		return nil, t.abandon(spec.Name, token, err)
+	case <-time.After(wait):
+		return nil, t.abandon(spec.Name, token,
+			fmt.Errorf("unit %s: did not become healthy within %v", spec.Name, wait))
 	}
+}
+
+// abandon takes a unit that never came up back OUT of the tree. Without it the
+// child supervisor keeps restarting, with backoff and forever, a unit whose
+// caller already gave up: a background restart leak nobody is watching.
+// RemoveAndWait means the child is gone (or the stop budget expired) first.
+func (t *Tree) abandon(name string, token suture.ServiceToken, cause error) error {
+	if err := t.root.RemoveAndWait(token, t.budgets.Stop); err != nil {
+		t.logf("supervise: unit %s did not leave the tree cleanly: %v", name, err)
+	}
+	t.transition(name, func(st *UnitStatus) {
+		st.State, st.PID, st.HealthOK, st.LastError = UnitFailed, 0, false, cause.Error()
+	})
+	t.emit(Event{Unit: name, Type: EventStopped, Message: "removed from the tree after a failed start", Err: cause.Error()})
+	return cause
 }
 
 // Stop cancels every unit and waits for the root supervisor to finish. Safe to
@@ -226,38 +233,6 @@ func (t *Tree) Stop() {
 	goplugin.CleanupClients()
 }
 
-// SetSelfPath records this binary's path, used to launch self-exec units. It
-// is a no-op for an empty path so a caller that could not resolve os.Executable
-// cannot blank an already-known one.
-func (t *Tree) SetSelfPath(path string) {
-	if path == "" {
-		return
-	}
-	t.mu.Lock()
-	t.selfPath = path
-	t.mu.Unlock()
-}
-
-// SelfPath is the recorded path of this binary.
-func (t *Tree) SelfPath() string {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.selfPath
-}
-
-// Status returns a snapshot of every unit, in the order they were added.
-func (t *Tree) Status() []UnitStatus {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	out := make([]UnitStatus, 0, len(t.order))
-	for _, n := range t.order {
-		if st := t.units[n]; st != nil {
-			out = append(out, *st)
-		}
-	}
-	return out
-}
-
 // Unit returns one unit's status snapshot.
 func (t *Tree) Unit(name string) (UnitStatus, bool) {
 	t.mu.Lock()
@@ -273,9 +248,7 @@ func (t *Tree) Unit(name string) (UnitStatus, bool) {
 func (t *Tree) Events() []Event {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	out := make([]Event, len(t.events))
-	copy(out, t.events)
-	return out
+	return append([]Event(nil), t.events...)
 }
 
 // transition mutates one unit's status under the lock.
@@ -318,8 +291,7 @@ func (t *Tree) emit(e Event) {
 }
 
 // sutureHook translates Suture's own events into the typed vocabulary, so
-// backoff/resume/stop-timeout/panic are visible in `Events()` alongside the
-// ones this package raises — one stream, one shape.
+// backoff/resume/stop-timeout/panic show up in Events() too: one stream.
 func (t *Tree) sutureHook(unit string) suture.EventHook {
 	return func(ev suture.Event) {
 		e := Event{Unit: unit, Message: ev.String()}
@@ -333,8 +305,7 @@ func (t *Tree) sutureHook(unit string) suture.EventHook {
 		case suture.EventServicePanic:
 			e.Type, e.Err = EventPanic, v.PanicMsg
 		case suture.EventServiceTerminate:
-			e.Type = EventExited
-			e.Err = fmt.Sprint(v.Err)
+			e.Type, e.Err = EventExited, fmt.Sprint(v.Err)
 			if !v.Restarting {
 				e.Type = EventDoNotRestart
 			}
@@ -343,14 +314,4 @@ func (t *Tree) sutureHook(unit string) suture.EventHook {
 		}
 		t.emit(e)
 	}
-}
-
-// SortedUnitNames is a small helper for callers rendering status tables.
-func SortedUnitNames(sts []UnitStatus) []string {
-	out := make([]string, 0, len(sts))
-	for _, s := range sts {
-		out = append(out, s.Name)
-	}
-	sort.Strings(out)
-	return out
 }

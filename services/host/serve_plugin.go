@@ -1,18 +1,12 @@
-// serve_plugin.go — the out-of-process half of the `serve` supervisor.
+// serve_plugin.go — the out-of-process half of `serve`: the supervision tree's
+// `serve`-side face, plus the HTTP shims that back the stable listeners with a
+// dispensed plugin client. The sandbox never sees any of this — it POSTs
+// JSON-RPC to :11435; this process owns that listener and adapts it to the
+// plugin's typed interface, so a restart or reattach is invisible to callers.
 //
-// The default config runs every capability BUILT-IN and IN-PROCESS (memoryMux()
-// exactly as before), so nothing here executes. Only when config selects a
-// non-builtin impl for a slot does `serve` launch a go-plugin subprocess
-// (startup-only, never per request), keep it alive with a basic health/backoff
-// watchdog, and back the stable HTTP shim (:11435 JSON-RPC) with a handler that
-// proxies to the dispensed plugin client.
-//
-// The sandbox never sees any of this: it still POSTs JSON-RPC to :11435; the
-// supervisor owns that listener and adapts it to the plugin's typed interface.
-//
-// The CredentialBroker seam (brokerProxyMux / servePluginBroker below) is
-// DORMANT: the public tree ships no built-in broker, but an external broker
-// binary (SHA-pinned via [plugins.broker]) plugs into exactly this shim.
+// The CredentialBroker seam (brokerProxyMux / servePluginBroker) is DORMANT:
+// the public tree ships no built-in broker, but an external SHA-pinned binary
+// ([plugins.broker]) plugs into exactly this shim.
 
 package main
 
@@ -38,22 +32,19 @@ import (
 )
 
 // pluginHolder is the supervision tree's holder for one unit: the proxy
-// handlers below read the dispensed client from it per request, so a restart
-// (or a reattach) is transparent to :11435 callers.
+// handlers below read the dispensed client from it per request.
 type pluginHolder = supervise.Holder
 
-// supervisor is the thin `serve`-side face of the supervision tree
-// (services/host/supervise): ONE root supervisor, one child supervisor per
-// unit, Suture-owned restart policy. It exists so serve.go keeps its
-// launch/shutdown vocabulary; there is no hand-rolled watchdog, backoff or
-// fail-counter here any more — that policy is Suture's.
+// supervisor is the thin `serve`-side face of the supervision tree: it keeps
+// serve.go's launch/shutdown vocabulary and nothing else. There is no watchdog,
+// backoff, fail-counter or holder logic here — that is supervise's.
 type supervisor struct {
 	mu   sync.Mutex
 	tree *supervise.Tree
 }
 
-// unitHealth is a unit's OWN health probe, by kind. "the process is up" is not
-// health: the supervisor evicts a unit that stops answering (see Budgets).
+// unitHealth is a unit's OWN health probe, by kind: "the process is up" is not
+// health, and the supervisor evicts a unit that stops answering.
 func unitHealth(kind string) supervise.HealthFunc {
 	switch kind {
 	case "memory":
@@ -78,13 +69,15 @@ func unitHealth(kind string) supervise.HealthFunc {
 	}
 }
 
-// ensure builds and starts the tree on first use.
-func (s *supervisor) ensure() *supervise.Tree {
+// ensure builds and starts the tree on first use. selfPath is this binary, the
+// executable a self-exec unit is launched from.
+func (s *supervisor) ensure(selfPath string) *supervise.Tree {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.tree == nil {
 		stage, state := supervisorDirs()
 		s.tree = supervise.NewTree(supervise.Config{
+			SelfPath:  selfPath,
 			StageDir:  stage,
 			StateDir:  state,
 			Budgets:   supervise.DefaultBudgets(),
@@ -99,9 +92,9 @@ func (s *supervisor) ensure() *supervise.Tree {
 	return s.tree
 }
 
-// supervisorDirs resolves the supervisor-owned staging + reattach state dirs
-// under the STATE dir (never the config dir), so `pix reset` cannot orphan a
-// running unit from the state that identifies it.
+// supervisorDirs resolves the staging + reattach state dirs under the STATE dir
+// (never the config dir), so `pix reset` cannot orphan a running unit from the
+// state that identifies it.
 func supervisorDirs() (stage, state string) {
 	dir, err := config.StateDir()
 	if err != nil {
@@ -112,10 +105,9 @@ func supervisorDirs() (stage, state string) {
 }
 
 // launch supervises one unit and blocks until its first generation is healthy
-// (or its first start attempt fails, which fails `serve` loudly at startup).
-// extraEnv is a small set of KEY=VALUE vars granted to THIS unit only, on top
-// of the allowlisted base env — e.g. an external broker's PIX_BROKER_AUTH,
-// which no other unit may see (F2).
+// (or that attempt fails, which fails `serve` loudly at startup). extraEnv is
+// KEY=VALUE granted to THIS unit only on top of the allowlisted base env — e.g.
+// an external broker's PIX_BROKER_AUTH, which no other unit may see (F2).
 func (s *supervisor) launch(name, kind string, spec config.PluginSpec, selfPath string, extraEnv []string) (*pluginHolder, error) {
 	// Pre-check the pin against the configured path for the operator-facing
 	// error message; the supervisor then re-verifies the bytes it STAGES on
@@ -129,9 +121,7 @@ func (s *supervisor) launch(name, kind string, spec config.PluginSpec, selfPath 
 		Name: name, Kind: kind, SelfExec: spec.Path == "", Path: spec.Path, SHA: spec.SHA,
 		EnvAllow: pluginEnvAllowNames(), EnvGrant: extraEnv,
 	}
-	tree := s.ensure()
-	tree.SetSelfPath(selfPath)
-	return tree.Add(unit, unitHealth(kind))
+	return s.ensure(selfPath).Add(unit, unitHealth(kind))
 }
 
 // shutdown stops every supervised unit (drain, then kill, inside the pinned
@@ -146,23 +136,10 @@ func (s *supervisor) shutdown() {
 	goplugin.CleanupClients()
 }
 
-// status is the typed unit status the supervision tree tracks.
-func (s *supervisor) status() []supervise.UnitStatus {
-	s.mu.Lock()
-	tree := s.tree
-	s.mu.Unlock()
-	if tree == nil {
-		return nil
-	}
-	return tree.Status()
-}
-
-// pluginEnvAllowlist is the set of environment variable names that plugin
-// subprocesses may inherit from the parent process. An allowlist approach
-// prevents plugins from picking up sensitive secrets (cloud credentials, API
-// keys, SSH agent sockets, etc.) the parent may carry. PIX_BROKER_AUTH is
-// deliberately absent — the broker gets its bearer exclusively via extraEnv in
-// brokerService(), and no other plugin may receive it (F2).
+// pluginEnvAllowlist is the set of env names a plugin subprocess may inherit,
+// so it never picks up a secret the parent carries (cloud creds, API keys, the
+// ssh-agent socket). PIX_BROKER_AUTH is deliberately absent: the broker gets
+// its bearer only via extraEnv in brokerService(), and no other unit sees it.
 var pluginEnvAllowlist = map[string]bool{
 	// Runtime essentials
 	"PATH": true, "HOME": true, "USER": true,
@@ -197,16 +174,8 @@ var pluginEnvAllowlist = map[string]bool{
 	"PIX_BROKER_PORT":    true,
 }
 
-// pluginEnv builds the environment for a plugin subprocess using an allowlist
-// approach: only variables in pluginEnvAllowlist are inherited from the parent
-// process, preventing plugins from picking up sensitive secrets (F2). The
-// broker's PIX_BROKER_AUTH is absent from the allowlist and is passed
-// exclusively via the extraEnv argument (only the broker gets it back).
-func pluginEnv(extra []string) []string {
-	return supervise.FilterEnv(pluginEnvAllowNames(), extra)
-}
-
-// pluginEnvAllowNames is the allowlist as a slice, the shape a UnitSpec carries.
+// pluginEnvAllowNames is the allowlist as a slice, the shape a UnitSpec carries
+// (supervise.FilterEnv does the filtering, per unit, in the child's env).
 func pluginEnvAllowNames() []string {
 	out := make([]string, 0, len(pluginEnvAllowlist))
 	for k := range pluginEnvAllowlist {
@@ -216,28 +185,20 @@ func pluginEnvAllowNames() []string {
 	return out
 }
 
-// verifyPluginSHA enforces the pinned checksum of an EXTERNAL plugin binary
-// before it is executed (F5). External plugins MUST be sha-pinned: an empty
-// spec.SHA is a hard refusal (never launch an unpinned binary), and a configured
-// spec.SHA that does not match the binary at spec.Path is likewise refused. The
-// built-in self-exec path (spec.Path == "") is exempt and never reaches here.
+// verifyPluginSHA is the operator-facing pre-check on an EXTERNAL plugin binary
+// (F5): an empty pin is a hard refusal, a mismatch names both hashes. The check
+// that actually gates exec is supervise.StageExecutable, which re-hashes the
+// bytes it stages on every (re)start.
 func verifyPluginSHA(spec config.PluginSpec) error {
 	if spec.SHA == "" {
 		return fmt.Errorf("plugin %s: refusing to launch an unpinned external plugin (no sha in config); external plugins must be sha-pinned", spec.Path)
 	}
-	f, err := os.Open(spec.Path)
-	if err != nil {
-		return fmt.Errorf("open plugin binary: %w", err)
-	}
-	defer f.Close()
-	f.Close()
 	got, err := supervise.FileSHA256(spec.Path)
 	if err != nil {
 		return fmt.Errorf("hash plugin binary: %w", err)
 	}
-	want := strings.ToLower(strings.TrimSpace(spec.SHA))
-	if !strings.EqualFold(got, want) {
-		return fmt.Errorf("plugin %s sha256 mismatch: got %s, want %s (refusing to launch)", spec.Path, got, want)
+	if want := strings.TrimSpace(spec.SHA); !strings.EqualFold(got, want) {
+		return fmt.Errorf("plugin %s sha256 mismatch: got %s, want %s (refusing to launch)", spec.Path, got, strings.ToLower(want))
 	}
 	return nil
 }
@@ -267,56 +228,44 @@ func projOrNil(p string) any {
 // byte-identical to the built-in path so the sandbox recall extension is
 // unaffected by which impl backs :11435.
 func memoryProxyMux(h *pluginHolder) http.Handler {
-	store := func() (plugin.MemoryStore, error) {
-		s, _ := h.Get().(plugin.MemoryStore)
-		if s == nil {
-			return nil, errors.New("memory plugin unavailable")
-		}
-		return s, nil
-	}
-	methods := map[string]func(jsonObj) (any, error){
-		// Same application-level identity the built-in path serves, so a
-		// plugin-backed :11435 is identifiable by exactly the same probe.
-		"identity": func(jsonObj) (any, error) {
-			s, err := store()
-			if err != nil {
-				return nil, err
+	// with resolves the dispensed store per CALL, so a restart or reattach is
+	// invisible to the caller and a down unit is a clean JSON-RPC error.
+	with := func(fn func(plugin.MemoryStore, jsonObj) (any, error)) func(jsonObj) (any, error) {
+		return func(p jsonObj) (any, error) {
+			s, _ := h.Get().(plugin.MemoryStore)
+			if s == nil {
+				return nil, errors.New("memory plugin unavailable")
 			}
+			return fn(s, p)
+		}
+	}
+	return jsonrpcMux(map[string]func(jsonObj) (any, error){
+		// Same application-level identity the built-in path serves, so a
+		// plugin-backed :11435 answers exactly the same probe.
+		"identity": with(func(s plugin.MemoryStore, _ jsonObj) (any, error) {
 			r, err := s.Health()
 			if err != nil {
 				return nil, err
 			}
 			return memoryIdentity(r.Vector).obj(), nil
-		},
-		"health": func(jsonObj) (any, error) {
-			s, err := store()
-			if err != nil {
-				return nil, err
-			}
+		}),
+		"health": with(func(s plugin.MemoryStore, _ jsonObj) (any, error) {
 			r, err := s.Health()
 			if err != nil {
 				return nil, err
 			}
 			return jsonObj{"ok": r.OK, "vector": r.Vector, "capture": r.Capture,
 				"captureReason": r.CaptureReason, "watcherModel": r.WatcherModel}, nil
-		},
-		"stats": func(p jsonObj) (any, error) {
-			s, err := store()
-			if err != nil {
-				return nil, err
-			}
-			r, err := s.Stats(plugin.StatsReq{Profile: profileFromParams(p)})
+		}),
+		"stats": with(func(s plugin.MemoryStore, p jsonObj) (any, error) {
+			r, err := s.Stats(profileFromParams(p))
 			if err != nil {
 				return nil, err
 			}
 			return jsonObj{"active": r.Active, "durable": r.Durable, "perishable": r.Perishable,
 				"facts": r.Facts, "learnings": r.Learnings, "deleted": r.Deleted}, nil
-		},
-		"recall": func(p jsonObj) (any, error) {
-			s, err := store()
-			if err != nil {
-				return nil, err
-			}
+		}),
+		"recall": with(func(s plugin.MemoryStore, p jsonObj) (any, error) {
 			r, err := s.Recall(plugin.RecallReq{
 				Query: getStr(p, "query"), Limit: clampInt(p["limit"], 0, 0, 1000),
 				CharBudget: clampInt(p["charBudget"], 0, 0, 1000000), Kind: getStr(p, "kind"), Project: getStr(p, "project"),
@@ -332,12 +281,8 @@ func memoryProxyMux(h *pluginHolder) http.Handler {
 					"createdAt": hit.CreatedAt})
 			}
 			return jsonObj{"hits": list}, nil
-		},
-		"remember": func(p jsonObj) (any, error) {
-			s, err := store()
-			if err != nil {
-				return nil, err
-			}
+		}),
+		"remember": with(func(s plugin.MemoryStore, p jsonObj) (any, error) {
 			in := rememberFromParams(p)
 			r, err := s.Remember(plugin.RememberReq{
 				Content: in.content, Kind: in.kind, Durability: in.durability, Source: in.source,
@@ -349,34 +294,22 @@ func memoryProxyMux(h *pluginHolder) http.Handler {
 				return nil, err
 			}
 			return jsonObj{"id": r.ID, "reaffirmed": r.Reaffirmed}, nil
-		},
-		"forget": func(p jsonObj) (any, error) {
-			s, err := store()
-			if err != nil {
-				return nil, err
-			}
+		}),
+		"forget": with(func(s plugin.MemoryStore, p jsonObj) (any, error) {
 			r, err := s.Forget(plugin.ForgetReq{ID: getStr(p, "id"), Profile: profileFromParams(p)})
 			if err != nil {
 				return nil, err
 			}
 			return jsonObj{"ok": r.OK}, nil
-		},
-		"synthesize": func(jsonObj) (any, error) {
-			s, err := store()
-			if err != nil {
-				return nil, err
-			}
+		}),
+		"synthesize": with(func(s plugin.MemoryStore, _ jsonObj) (any, error) {
 			r, err := s.Synthesize(plugin.SynthesizeReq{})
 			if err != nil {
 				return nil, err
 			}
 			return jsonObj{"merged": r.Merged, "expired": r.Expired}, nil
-		},
-		"promotable": func(p jsonObj) (any, error) {
-			s, err := store()
-			if err != nil {
-				return nil, err
-			}
+		}),
+		"promotable": with(func(s plugin.MemoryStore, p jsonObj) (any, error) {
 			r, err := s.Promotable(plugin.PromotableReq{MinFrequency: clampInt(p["minFrequency"], 3, 1, 1000000), Profile: profileFromParams(p)})
 			if err != nil {
 				return nil, err
@@ -386,12 +319,8 @@ func memoryProxyMux(h *pluginHolder) http.Handler {
 				list = append(list, jsonObj{"id": c.ID, "content": c.Content, "frequency": c.Frequency, "project": projOrNil(c.Project)})
 			}
 			return jsonObj{"candidates": list}, nil
-		},
-		"observe": func(p jsonObj) (any, error) {
-			s, err := store()
-			if err != nil {
-				return nil, err
-			}
+		}),
+		"observe": with(func(s plugin.MemoryStore, p jsonObj) (any, error) {
 			project, hasProj := projectFromParams(p)
 			r, err := s.Observe(plugin.ObserveReq{User: getStr(p, "user"), Project: project, HasProject: hasProj, Profile: profileFromParams(p)})
 			if err != nil {
@@ -402,9 +331,8 @@ func memoryProxyMux(h *pluginHolder) http.Handler {
 				out["reason"] = r.Reason
 			}
 			return out, nil
-		},
-	}
-	return jsonrpcMux(methods)
+		}),
+	})
 }
 
 // --- knowledge shims --------------------------------------------------------
@@ -414,12 +342,17 @@ func memoryProxyMux(h *pluginHolder) http.Handler {
 // so both surfaces are byte-identical. It exposes query / reindex / health and
 // resolves the backing KnowledgeStore per call (a restart is transparent).
 func knowledgeMethods(store func() (plugin.KnowledgeStore, error)) map[string]func(jsonObj) (any, error) {
-	return map[string]func(jsonObj) (any, error){
-		"query": func(p jsonObj) (any, error) {
+	with := func(fn func(plugin.KnowledgeStore, jsonObj) (any, error)) func(jsonObj) (any, error) {
+		return func(p jsonObj) (any, error) {
 			s, err := store()
 			if err != nil {
 				return nil, err
 			}
+			return fn(s, p)
+		}
+	}
+	return map[string]func(jsonObj) (any, error){
+		"query": with(func(s plugin.KnowledgeStore, p jsonObj) (any, error) {
 			// bundles is a SET filter. Prefer the `bundles` array; tolerate a
 			// single legacy `bundle` string by wrapping it into a 1-elem set.
 			bundles := strSliceParam(p, "bundles")
@@ -443,35 +376,24 @@ func knowledgeMethods(store func() (plugin.KnowledgeStore, error)) map[string]fu
 				})
 			}
 			return jsonObj{"concepts": list}, nil
-		},
-		"reindex": func(p jsonObj) (any, error) {
-			s, err := store()
-			if err != nil {
-				return nil, err
-			}
+		}),
+		"reindex": with(func(s plugin.KnowledgeStore, p jsonObj) (any, error) {
 			r, err := s.Reindex(plugin.ReindexArgs{BundlePaths: strSliceParam(p, "bundle_paths")})
 			if err != nil {
 				return nil, err
 			}
 			return jsonObj{"indexed": r.Indexed, "bundles": strSliceOrEmpty(r.Bundles)}, nil
-		},
-		"identity": func(jsonObj) (any, error) {
-			if _, err := store(); err != nil {
-				return nil, err
-			}
+		}),
+		"identity": with(func(plugin.KnowledgeStore, jsonObj) (any, error) {
 			return knowledgeIdentity().obj(), nil
-		},
-		"health": func(jsonObj) (any, error) {
-			s, err := store()
-			if err != nil {
-				return nil, err
-			}
+		}),
+		"health": with(func(s plugin.KnowledgeStore, _ jsonObj) (any, error) {
 			r, err := s.Health()
 			if err != nil {
 				return nil, err
 			}
 			return jsonObj{"ok": r.OK, "vector": r.Vector, "bundles": strSliceOrEmpty(r.Bundles), "concepts": r.Concepts}, nil
-		},
+		}),
 	}
 }
 
@@ -607,14 +529,10 @@ func brokerProxyMux(h *pluginHolder, auth string) http.Handler {
 	return mux
 }
 
-// servePluginBroker is the self-exec entry `pix-host plugin broker` would
-// serve a built-in CredentialBroker from. The public tree ships no built-in
-// broker — the seam is permanently dormant — so this always exits cleanly. An
-// external broker plugin (see examples/broker-example) ships its own main()
-// and never reaches this path: supervisor.spawn execs it directly whenever
-// config sets a path+sha, and only falls back to this self-exec entry when no
-// path is set (i.e. never, for broker, in the public tree).
-// name is the plugin map key the supervisor would dispense under (e.g. "broker").
+// servePluginBroker is the self-exec entry `pix-host plugin broker` would serve
+// a built-in CredentialBroker from. The public tree ships none — the seam is
+// dormant — so this always exits cleanly. An external broker ships its own
+// main() and is exec'd directly; name is the kind it dispenses under.
 func servePluginBroker(name string) {
 	fmt.Fprintf(os.Stderr, "pix-host plugin %s: no built-in broker registered (set [plugins.broker] path+sha to an external plugin binary)\n", name)
 	os.Exit(2)

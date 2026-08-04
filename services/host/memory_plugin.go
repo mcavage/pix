@@ -143,11 +143,10 @@ func (a *memoryStoreAdapter) Observe(req plugin.ObserveReq) (plugin.ObserveResp,
 	}
 }
 
-// Stats reports the requested profile's counts (plugin protocol v2), so the
-// plugin-backed :11435 answers `stats {profile}` exactly like the in-process
-// path did.
-func (a *memoryStoreAdapter) Stats(req plugin.StatsReq) (plugin.Stats, error) {
-	s := a.store.stats(req.Profile)
+// Stats reports the requested profile's counts (protocol v2), so the
+// plugin-backed :11435 answers `stats {profile}` like the in-process path did.
+func (a *memoryStoreAdapter) Stats(profile string) (plugin.Stats, error) {
+	s := a.store.stats(profile)
 	get := func(k string) int { n, _ := s[k].(int); return n }
 	return plugin.Stats{
 		Active:     get("active"),

@@ -25,7 +25,7 @@ func TestAdapterStatsHealth(t *testing.T) {
 	a := newTestAdapter(t, true)
 
 	// empty store
-	s, err := a.Stats(plugin.StatsReq{})
+	s, err := a.Stats("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestAdapterRememberRecallForget(t *testing.T) {
 	if !r2.Reaffirmed {
 		t.Fatal("duplicate remember should reaffirm")
 	}
-	if s, _ := a.Stats(plugin.StatsReq{}); s.Active != 1 {
+	if s, _ := a.Stats(""); s.Active != 1 {
 		t.Fatalf("expected 1 active memory, got %d", s.Active)
 	}
 
@@ -104,7 +104,7 @@ func TestAdapterRememberRecallForget(t *testing.T) {
 	if !f.OK {
 		t.Fatal("forget by 8-char prefix should succeed")
 	}
-	if s, _ := a.Stats(plugin.StatsReq{}); s.Active != 0 {
+	if s, _ := a.Stats(""); s.Active != 0 {
 		t.Fatalf("expected 0 active after forget, got %d", s.Active)
 	}
 }
