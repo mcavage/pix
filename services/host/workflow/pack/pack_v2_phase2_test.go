@@ -1,12 +1,12 @@
-// pack_v2_phase2_test.go — packs-v2 Phase 2: F3 host-mode wrappers + F5 Tier-1
-// trust gate (docs/design/packs-v2-impl.md; trust model packs.md §9).
+// pack_v2_phase2_test.go — packs-v2 Phase 2: F5 Tier-1 trust gate
+// (docs/design/packs-v2-impl.md; trust model packs.md §9). The F3 host-wrapper
+// install fitness this file used to cover was deleted with `pix host` (the
+// unsandboxed escape hatch) — see workflow/pack/host.go's doc comment for what
+// survives (bin-sha verification + stale-wrapper cleanup).
 //
 // Fitness functions covered here:
-//   - host wrapper on PATH for host mode only (hostChildEnv; the sandbox kit
-//     exclusion is pinned by TestSynthesizePackKit_SandboxOnly)
-//   - [[bin]] sha mismatch refuses at install AND at launch AND at activation
+//   - [[bin]] sha mismatch refuses at install AND at activation
 //   - Tier-1 adopt prompts; non-TTY fails closed without --yes; Tier-0 silent
-//   - host-wrapper swap on pack switch (old cleared)
 //   - BoM enumerates every host-exec facet + egress + credential names
 package pack
 
@@ -17,7 +17,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -502,177 +501,11 @@ func TestPackUse_BinShaMismatchRefusesActivation(t *testing.T) {
 	}
 }
 
-// --- F3: host wrapper install / clear / refresh -----------------------------------
-
-// phase2HostPack writes a pack with one host proxy wrapper (script) and returns
-// its root. XDG_STATE_HOME must already be pointed at a temp dir by the caller.
-func phase2HostPack(t *testing.T, dir, name, wrapper string) string {
-	t.Helper()
-	root := filepath.Join(dir, name)
-	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "bin", wrapper), []byte("#!/bin/sh\necho "+wrapper+"\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	mustWritePack(t, root, Manifest{Name: name, Schema: 1,
-		Proxies: []PackProxy{{Name: wrapper, Host: true}}})
-	return root
-}
-
-// TestRefreshHostPackWrappers_UnacceptedSurfaceInstallsNothing: acceptance is
-// fingerprint-level and all-or-nothing — with no recorded acceptance in the
-// HOST trust store, refresh installs NOTHING (with a pointer at `pack use`)
-// and a strict (launch) refresh refuses outright. Nothing a pack ships (e.g.
-// a forged pack.lock) can change that: the lock is not consulted at all.
-func TestRefreshHostPackWrappers_UnacceptedSurfaceInstallsNothing(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
-	root := phase2HostPack(t, dir, "work", "platformio")
-	// A forged, pack-supplied pack.lock using the OLD acceptance schema must
-	// buy the attacker nothing.
-	if err := os.WriteFile(PackLockPath(root), []byte("accepted_host_proxies = [\"platformio\"]\nhost_wrappers = [\"platformio\"]\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cfg := &config.Config{Pack: root}
-
-	var out bytes.Buffer
-	if _, err := RefreshHostPackWrappers(&out, cfg, false); err != nil {
-		t.Fatalf("lenient refresh must not hard-fail: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(HostPackBinDir(), "platformio")); err == nil {
-		t.Error("an unaccepted host wrapper must NOT be installed")
-	}
-	if !strings.Contains(out.String(), "not accepted") {
-		t.Errorf("the skip must be surfaced, got:\n%s", out.String())
-	}
-	// Strict (launch) fails closed on the same unaccepted surface.
-	if _, err := RefreshHostPackWrappers(&out, cfg, true); err == nil {
-		t.Error("strict refresh of an unaccepted host-exec surface must refuse the launch")
-	}
-}
-
-// TestInstallHostPackWrappers_BinShaMismatchRefusesAtInstall (fitness #4): an
-// ACCEPTED [[bin]] whose file was swapped after acceptance re-hashes at install
-// and is REFUSED — the tampered binary never lands in the host bin dir.
-func TestInstallHostPackWrappers_BinShaMismatchRefusesAtInstall(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
-	root := filepath.Join(dir, "work")
-	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	pinned := []byte("the real binary")
-	sha := sha256Hex(pinned)
-	bin := packBin{Name: "fm", Path: "bin/fm", SHA: sha, Host: true}
-	// The file on disk is NOT what was pinned/accepted.
-	if err := os.WriteFile(filepath.Join(root, "bin", "fm"), []byte("swapped"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	p := &Info{Root: root, Manifest: Manifest{Name: "work", Bins: []packBin{bin}}}
-
-	installed, err := installHostPackWrappersStaged(p, nil)
-	if err == nil || !strings.Contains(err.Error(), "mismatch") {
-		t.Fatalf("a mismatched bin must refuse the staged install, got (%v, %v)", installed, err)
-	}
-	if _, err := os.Stat(filepath.Join(HostPackBinDir(), "fm")); err == nil {
-		t.Error("the tampered binary must not exist in the host bin dir")
-	}
-
-	// And with the REAL pinned bytes it installs fine (the sha path works).
-	if err := os.WriteFile(filepath.Join(root, "bin", "fm"), pinned, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	installed, err = installHostPackWrappersStaged(p, nil)
-	if err != nil || len(installed) != 1 {
-		t.Fatalf("the matching bin must install, got (%v, %v)", installed, err)
-	}
-	fi, err := os.Stat(filepath.Join(HostPackBinDir(), "fm"))
-	if err != nil {
-		t.Fatalf("verified bin not installed: %v", err)
-	}
-	if fi.Mode().Perm() != 0o755 {
-		t.Errorf("wrapper mode = %v, want 0755", fi.Mode().Perm())
-	}
-}
-
-// TestRefreshHostPackWrappers_LaunchRefusesOnShaMismatch (fitness #4, launch
-// half): the strict (launch) refresh re-hashes every ACCEPTED [[bin]] and
-// returns an error on mismatch — runHostLaunch turns that into a refusal. The
-// lenient (setup) mode reports but does not error.
-func TestRefreshHostPackWrappers_LaunchRefusesOnShaMismatch(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
-	root := filepath.Join(dir, "work")
-	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	sha := sha256Hex([]byte("pinned"))
-	if err := os.WriteFile(filepath.Join(root, "bin", "fm"), []byte("tampered"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	bin := packBin{Name: "fm", Path: "bin/fm", SHA: sha, Host: true}
-	mustWritePack(t, root, Manifest{Name: "work", Schema: 1, Bins: []packBin{bin}})
-	// Acceptance is recorded in the HOST trust store (the fingerprint pins the
-	// DECLARED sha; the file's actual bytes are re-verified at install/launch).
-	acceptPackSurface(t, root, "")
-	cfg := &config.Config{Pack: root}
-
-	var out bytes.Buffer
-	if _, err := RefreshHostPackWrappers(&out, cfg, true); err == nil || !strings.Contains(err.Error(), "mismatch") {
-		t.Errorf("strict refresh must refuse a tampered accepted bin, got err=%v", err)
-	}
-	// Lenient (setup): no hard error; the bin is refused per-item instead.
-	out.Reset()
-	if _, err := RefreshHostPackWrappers(&out, cfg, false); err != nil {
-		t.Errorf("lenient refresh must not hard-fail: %v", err)
-	}
-	if !strings.Contains(out.String(), "mismatch") {
-		t.Errorf("lenient refresh must still surface the refusal:\n%s", out.String())
-	}
-	if _, err := os.Stat(filepath.Join(HostPackBinDir(), "fm")); err == nil {
-		t.Error("the tampered binary must never be installed")
-	}
-}
-
-// TestPackUse_HostWrapperSwapOnSwitch (fitness: swap): `pack use A` installs
-// A's accepted wrapper; `pack use B` clears A's and installs B's — the host
-// bin dir only ever holds the ACTIVE pack's wrappers.
-func TestPackUse_HostWrapperSwapOnSwitch(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
-	rootA := phase2HostPack(t, dir, "a", "a-tool")
-	rootB := phase2HostPack(t, dir, "b", "b-tool")
-
-	var out bytes.Buffer
-	RunPackUse(fakeGitEnv(nil), &out, []string{rootA, "--yes"}, registerOK)
-	if _, err := os.Stat(filepath.Join(HostPackBinDir(), "a-tool")); err != nil {
-		t.Fatalf("pack use A must install a-tool: %v\noutput:\n%s", err, out.String())
-	}
-	if store, serr := loadPackTrustStore(); serr != nil || store.Installed == nil || !slices.Contains(store.Installed.Wrappers, "a-tool") {
-		t.Errorf("HOST state must attribute the installed wrapper (store=%+v, err=%v)", store, serr)
-	}
-
-	out.Reset()
-	RunPackUse(fakeGitEnv(nil), &out, []string{rootB, "--yes"}, registerOK)
-	if _, err := os.Stat(filepath.Join(HostPackBinDir(), "b-tool")); err != nil {
-		t.Fatalf("pack use B must install b-tool: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(HostPackBinDir(), "a-tool")); err == nil {
-		t.Error("switching packs must clear the previous pack's host wrappers")
-	}
-
-	// And `pack rm` clears the active pack's wrappers too.
-	out.Reset()
-	RunPackRm(&out, nil)
-	if _, err := os.Stat(filepath.Join(HostPackBinDir(), "b-tool")); err == nil {
-		t.Error("pack rm must remove the detached pack's host wrappers")
-	}
-}
-
+// TestVerifyPackBinSHA_Contract (restored, U03B review finding: verifyPackBinSHA
+// is generic [[bin]] sha-pin verification used at `pack use`, not host-mode-
+// specific execution) pins the fail-closed contract directly: an empty sha
+// refuses as unpinned, a mismatched sha refuses, a missing file refuses (it
+// cannot be verified), and a correct sha (case-insensitively) passes.
 func TestVerifyPackBinSHA_Contract(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "bin"), 0o755); err != nil {

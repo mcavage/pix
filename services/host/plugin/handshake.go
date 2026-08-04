@@ -7,7 +7,7 @@
 // without ever linking into the public tree.
 //
 // This package is intentionally ADDITIVE: it defines the shared handshake, the
-// three capability interfaces (MemoryStore, CredentialBroker, McpServer) derived
+// two capability interfaces (MemoryStore, McpServer) derived
 // from the real services (../memory.go, ../slack.go), and the
 // net/rpc go-plugin wiring for each. A later unit wires the existing services
 // onto these interfaces; nothing here imports or mutates package main.
@@ -47,6 +47,5 @@ var Handshake = goplugin.HandshakeConfig{
 // a populated Impl (see Serve).
 var PluginMap = map[string]goplugin.Plugin{
 	"memory": &MemoryPlugin{},
-	"broker": &BrokerPlugin{},
 	"mcp":    &McpPlugin{},
 }

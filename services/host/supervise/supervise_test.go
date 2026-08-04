@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -90,28 +91,37 @@ func testTree(t *testing.T, mutate func(*Config)) *Tree {
 	return tr
 }
 
-func brokerHealth(impl any) error {
-	b, ok := impl.(plugin.CredentialBroker)
-	if !ok || b == nil {
-		return errors.New("not a broker")
+// fixtureHealth is the generic health check the fixture binary (which serves a
+// MemoryStore — the retained generic capability, standing in for whatever real
+// unit kind a test wants to exercise) answers through Health(). It is a
+// stand-in for the dormant CredentialBroker's Check(), removed with that seam.
+func fixtureHealth(impl any) error {
+	m, ok := impl.(plugin.MemoryStore)
+	if !ok || m == nil {
+		return errors.New("not a fixture memory store")
 	}
-	return b.Check()
+	_, err := m.Health()
+	return err
 }
 
 func fixtureUnit(name, bin, sha string, grant ...string) UnitSpec {
-	return UnitSpec{Name: name, Kind: "broker", Path: bin, SHA: sha,
+	return UnitSpec{Name: name, Kind: "memory", Path: bin, SHA: sha,
 		EnvAllow: []string{"PATH", "HOME", "TMPDIR"}, EnvGrant: grant}
 }
 
-func describe(t *testing.T, h *Holder) plugin.BrokerInfo {
+// describe returns the fixture's Health(), which carries the generation tag
+// (WatcherModel) and pid (CaptureReason) so a test can tell two generations of
+// the same unit apart — the same role BrokerInfo/Describe() played before the
+// dormant CredentialBroker seam was removed.
+func describe(t *testing.T, h *Holder) plugin.Health {
 	t.Helper()
-	b, ok := h.Get().(plugin.CredentialBroker)
-	if !ok || b == nil {
-		t.Fatalf("holder does not carry a dispensed broker: %T", h.Get())
+	m, ok := h.Get().(plugin.MemoryStore)
+	if !ok || m == nil {
+		t.Fatalf("holder does not carry a dispensed fixture store: %T", h.Get())
 	}
-	info, err := b.Describe()
+	info, err := m.Health()
 	if err != nil {
-		t.Fatalf("Describe over real rpc: %v", err)
+		t.Fatalf("Health over real rpc: %v", err)
 	}
 	return info
 }
@@ -202,16 +212,16 @@ func TestUnitSpecValidateFailsClosed(t *testing.T) {
 		spec UnitSpec
 		want string
 	}{
-		{"no name", UnitSpec{Kind: "broker", SelfExec: true}, "name"},
+		{"no name", UnitSpec{Kind: "memory", SelfExec: true}, "name"},
 		{"no kind", UnitSpec{Name: "x", SelfExec: true}, "kind"},
-		{"neither", UnitSpec{Name: "x", Kind: "broker"}, "exactly one"},
-		{"both", UnitSpec{Name: "x", Kind: "broker", SelfExec: true, Path: "/bin/true", SHA: sha}, "exactly one"},
-		{"unpinned", UnitSpec{Name: "x", Kind: "broker", Path: "/bin/true"}, "unpinned"},
-		{"short sha", UnitSpec{Name: "x", Kind: "broker", Path: "/bin/true", SHA: "abc"}, "sha256"},
-		{"relative path", UnitSpec{Name: "x", Kind: "broker", Path: "rel/bin", SHA: sha}, "absolute"},
-		{"env value", UnitSpec{Name: "x", Kind: "broker", SelfExec: true, EnvAllow: []string{"FOO=bar"}}, "reference name"},
-		{"env secret ref", UnitSpec{Name: "x", Kind: "broker", SelfExec: true, EnvAllow: []string{"op://vault/i/f"}}, "reference name"},
-		{"grant shape", UnitSpec{Name: "x", Kind: "broker", SelfExec: true, EnvGrant: []string{"NOEQUALS"}}, "KEY=VALUE"},
+		{"neither", UnitSpec{Name: "x", Kind: "memory"}, "exactly one"},
+		{"both", UnitSpec{Name: "x", Kind: "memory", SelfExec: true, Path: "/bin/true", SHA: sha}, "exactly one"},
+		{"unpinned", UnitSpec{Name: "x", Kind: "memory", Path: "/bin/true"}, "unpinned"},
+		{"short sha", UnitSpec{Name: "x", Kind: "memory", Path: "/bin/true", SHA: "abc"}, "sha256"},
+		{"relative path", UnitSpec{Name: "x", Kind: "memory", Path: "rel/bin", SHA: sha}, "absolute"},
+		{"env value", UnitSpec{Name: "x", Kind: "memory", SelfExec: true, EnvAllow: []string{"FOO=bar"}}, "reference name"},
+		{"env secret ref", UnitSpec{Name: "x", Kind: "memory", SelfExec: true, EnvAllow: []string{"op://vault/i/f"}}, "reference name"},
+		{"grant shape", UnitSpec{Name: "x", Kind: "memory", SelfExec: true, EnvGrant: []string{"NOEQUALS"}}, "KEY=VALUE"},
 	}
 	for _, c := range bad {
 		err := c.spec.Validate()
@@ -229,14 +239,14 @@ func TestUnitSpecValidateFailsClosed(t *testing.T) {
 // same fail-closed validation applies to a pack as to a config block.
 func TestNewExternalUnitIsTheWiringSeam(t *testing.T) {
 	bin, sha := buildFixture(t)
-	u, err := NewExternalUnit("packsvc", "broker", bin, sha, []string{"--flag"}, []string{"PATH"})
+	u, err := NewExternalUnit("packsvc", "memory", bin, sha, []string{"--flag"}, []string{"PATH"})
 	if err != nil {
 		t.Fatalf("NewExternalUnit: %v", err)
 	}
 	if u.SelfExec || u.Path != bin || u.SHA != sha || len(u.Argv) != 1 {
 		t.Fatalf("unexpected unit: %+v", u)
 	}
-	if _, err := NewExternalUnit("packsvc", "broker", bin, "", nil, nil); err == nil {
+	if _, err := NewExternalUnit("packsvc", "memory", bin, "", nil, nil); err == nil {
 		t.Fatal("an unpinned pack service must be refused")
 	}
 }
@@ -288,7 +298,7 @@ func TestChildEnvIsAllowlisted(t *testing.T) {
 	dump := filepath.Join(t.TempDir(), "env.txt")
 
 	tr := testTree(t, nil)
-	_, err := tr.Add(fixtureUnit("envunit", bin, sha, "FIXTURE_ENV_DUMP="+dump), brokerHealth)
+	_, err := tr.Add(fixtureUnit("envunit", bin, sha, "FIXTURE_ENV_DUMP="+dump), fixtureHealth)
 	must(t, err)
 	got, err := os.ReadFile(dump)
 	if err != nil {
@@ -312,9 +322,9 @@ func TestChildEnvIsAllowlisted(t *testing.T) {
 func TestUnitStartsHealthyReportsStatusAndIsRestartedOnCrash(t *testing.T) {
 	bin, sha := buildFixture(t)
 	tr := testTree(t, nil)
-	h, err := tr.Add(fixtureUnit("crasher", bin, sha, "FIXTURE_TAG=gen1", "FIXTURE_CRASH_MS=400"), brokerHealth)
+	h, err := tr.Add(fixtureUnit("crasher", bin, sha, "FIXTURE_TAG=gen1", "FIXTURE_CRASH_MS=400"), fixtureHealth)
 	must(t, err)
-	if got := describe(t, h).AuthHeader; got != "gen1" {
+	if got := describe(t, h).WatcherModel; got != "gen1" {
 		t.Errorf("dispensed the wrong generation: %q", got)
 	}
 	first, ok := tr.Unit("crasher")
@@ -324,7 +334,7 @@ func TestUnitStartsHealthyReportsStatusAndIsRestartedOnCrash(t *testing.T) {
 	if first.State != UnitRunning || !first.HealthOK || first.PID <= 0 || first.Restarts != 0 || first.Reattached {
 		t.Errorf("unexpected status: %+v", first)
 	}
-	if first.Kind != "broker" || first.Name != "crasher" || !alive(first.PID) {
+	if first.Kind != "memory" || first.Name != "crasher" || !alive(first.PID) {
 		t.Errorf("status identity/liveness wrong: %+v", first)
 	}
 	if len(tr.Events()) == 0 || tr.Events()[0].Type != EventStarted {
@@ -341,8 +351,8 @@ func TestUnitStartsHealthyReportsStatusAndIsRestartedOnCrash(t *testing.T) {
 	if !alive(st.PID) {
 		t.Fatalf("restarted pid %d is not alive", st.PID)
 	}
-	if got := describe(t, h).DefaultPort; got != st.PID {
-		t.Errorf("holder still points at the dead generation (pid %d, want %d)", got, st.PID)
+	if got := describe(t, h).CaptureReason; got != strconv.Itoa(st.PID) {
+		t.Errorf("holder still points at the dead generation (pid %s, want %d)", got, st.PID)
 	}
 	if !sawEvent(tr, "crasher", EventExited) {
 		t.Errorf("no typed exit event recorded: %+v", tr.Events())
@@ -365,7 +375,7 @@ func TestFailedStartIsRemovedFromTheTree(t *testing.T) {
 	t.Run("unhealthy", func(t *testing.T) {
 		log := filepath.Join(t.TempDir(), "spawns")
 		tr := testTree(t, nil)
-		_, err := tr.Add(fixtureUnit("sick", bin, sha, "FIXTURE_UNHEALTHY=1", "FIXTURE_SPAWN_LOG="+log), brokerHealth)
+		_, err := tr.Add(fixtureUnit("sick", bin, sha, "FIXTURE_UNHEALTHY=1", "FIXTURE_SPAWN_LOG="+log), fixtureHealth)
 		if err == nil {
 			t.Fatal("Add must fail when the unit never passes its first health probe")
 		}
@@ -410,7 +420,7 @@ func TestFailedStartIsRemovedFromTheTree(t *testing.T) {
 			c.Budgets.HealthTimeout = 300 * time.Millisecond
 		})
 		start := time.Now()
-		_, err := tr.Add(fixtureUnit("wedged", fifo, sha), brokerHealth)
+		_, err := tr.Add(fixtureUnit("wedged", fifo, sha), fixtureHealth)
 		if err == nil || !strings.Contains(err.Error(), "did not become healthy") {
 			t.Fatalf("a wedged start must time out, got %v", err)
 		}
@@ -430,13 +440,13 @@ func TestFailedStartIsRemovedFromTheTree(t *testing.T) {
 		copyBin := filepath.Join(t.TempDir(), "fixture")
 		must(t, os.WriteFile(copyBin, raw, 0o755))
 		tr := testTree(t, nil)
-		good, err := tr.Add(fixtureUnit("good", bin, sha, "FIXTURE_TAG=good"), brokerHealth)
+		good, err := tr.Add(fixtureUnit("good", bin, sha, "FIXTURE_TAG=good"), fixtureHealth)
 		if err != nil {
 			t.Fatalf("Add good: %v", err)
 		}
 		// Swap the pinned binary, then start a unit that pins the ORIGINAL sha.
 		must(t, os.WriteFile(copyBin, append(raw, '\n'), 0o755))
-		_, err = tr.Add(fixtureUnit("poisoned", copyBin, sha), brokerHealth)
+		_, err = tr.Add(fixtureUnit("poisoned", copyBin, sha), fixtureHealth)
 		if err == nil {
 			t.Fatal("a unit whose pinned bytes changed must refuse to start")
 		}
@@ -449,10 +459,10 @@ func TestFailedStartIsRemovedFromTheTree(t *testing.T) {
 		}
 		// Root and sibling survive: the good unit still answers real RPC, and
 		// the root still accepts new work.
-		if got := describe(t, good).AuthHeader; got != "good" {
+		if got := describe(t, good).WatcherModel; got != "good" {
 			t.Errorf("sibling died with the poisoned unit (tag %q)", got)
 		}
-		if _, err := tr.Add(fixtureUnit("later", bin, sha), brokerHealth); err != nil {
+		if _, err := tr.Add(fixtureUnit("later", bin, sha), fixtureHealth); err != nil {
 			t.Fatalf("root supervisor stopped accepting units: %v", err)
 		}
 	})
@@ -463,9 +473,9 @@ func TestFailedStartIsRemovedFromTheTree(t *testing.T) {
 func TestStopDrainsAndKillsWithinBudget(t *testing.T) {
 	bin, sha := buildFixture(t)
 	tr := testTree(t, nil)
-	h, err := tr.Add(fixtureUnit("stopper", bin, sha, "FIXTURE_STUBBORN=1"), brokerHealth)
+	h, err := tr.Add(fixtureUnit("stopper", bin, sha, "FIXTURE_STUBBORN=1"), fixtureHealth)
 	must(t, err)
-	pid := describe(t, h).DefaultPort
+	pid, _ := strconv.Atoi(describe(t, h).CaptureReason)
 
 	start := time.Now()
 	tr.Stop()
@@ -498,11 +508,11 @@ func TestReattachAfterHardSupervisorDeath(t *testing.T) {
 
 	// A FRESH spawn would answer "gen2"; a reattach answers "gen1".
 	spec2 := fixtureUnit("survivor", bin, sha, "FIXTURE_TAG=gen2")
-	h, err := tr.Add(spec2, brokerHealth)
+	h, err := tr.Add(spec2, fixtureHealth)
 	must(t, err)
 	info := describe(t, h)
-	if info.AuthHeader != "gen1" || info.DefaultPort != rc.Pid {
-		t.Fatalf("did not reattach: tag=%q pid=%d, want gen1/%d", info.AuthHeader, info.DefaultPort, rc.Pid)
+	if info.WatcherModel != "gen1" || info.CaptureReason != strconv.Itoa(rc.Pid) {
+		t.Fatalf("did not reattach: tag=%q pid=%s, want gen1/%d", info.WatcherModel, info.CaptureReason, rc.Pid)
 	}
 	st, _ := tr.Unit("survivor")
 	if !st.Reattached || st.PID != rc.Pid || st.State != UnitRunning {
@@ -531,9 +541,9 @@ func TestReattachRefusesForeignOrDeadState(t *testing.T) {
 			t.Fatal(err)
 		}
 		tr := testTree(t, func(c *Config) { c.StateDir = state })
-		h, err := tr.Add(spec, brokerHealth)
+		h, err := tr.Add(spec, fixtureHealth)
 		must(t, err)
-		if got := describe(t, h); got.AuthHeader != "fresh" || got.DefaultPort == pid {
+		if got := describe(t, h); got.WatcherModel != "fresh" || got.CaptureReason == strconv.Itoa(pid) {
 			t.Errorf("reattached to a dead pid: %+v", got)
 		}
 		if st, _ := tr.Unit("dead"); st.Reattached {
@@ -550,9 +560,9 @@ func TestReattachRefusesForeignOrDeadState(t *testing.T) {
 		must(t, SaveReattach(state, other, orphan.ReattachConfig(), plugin.ProtocolVersion))
 		tr := testTree(t, func(c *Config) { c.StateDir = state })
 		spec2 := fixtureUnit("foreign", bin, sha, "FIXTURE_TAG=gen2")
-		h, err := tr.Add(spec2, brokerHealth)
+		h, err := tr.Add(spec2, fixtureHealth)
 		must(t, err)
-		if got := describe(t, h).AuthHeader; got != "gen2" {
+		if got := describe(t, h).WatcherModel; got != "gen2" {
 			t.Errorf("reattached across an identity change (tag %q)", got)
 		}
 	})

@@ -370,128 +370,6 @@ func TestPackUse_GogReferenceStaysTier0(t *testing.T) {
 	}
 }
 
-// --- D: fail-closed install/clear transactions --------------------------------
-
-// TestRefreshHostPackWrappers_StoreWriteFailureFailsClosed: when the intended
-// attribution cannot be recorded (read-only config dir), NOTHING installs and
-// refresh returns an error in BOTH modes — a strict host launch refuses, and
-// there is never a live wrapper the store attributes to nobody.
-func TestRefreshHostPackWrappers_StoreWriteFailureFailsClosed(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("running as root: a read-only dir cannot force the store write to fail")
-	}
-	dir := t.TempDir()
-	cfgDir := filepath.Join(dir, "cfg")
-	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PIX_CONFIG", filepath.Join(cfgDir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
-	root := phase2HostPack(t, dir, "work", "platformio")
-	acceptPackSurface(t, root, "")
-	cfg := &config.Config{Pack: root}
-
-	if err := os.Chmod(cfgDir, 0o555); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(cfgDir, 0o755) })
-
-	var out bytes.Buffer
-	if _, err := RefreshHostPackWrappers(&out, cfg, true); err == nil {
-		t.Error("strict refresh must REFUSE when the attribution cannot be recorded")
-	}
-	if _, err := os.Stat(filepath.Join(HostPackBinDir(), "platformio")); err == nil {
-		t.Error("nothing may install when the attribution write failed (orphan wrapper)")
-	}
-	out.Reset()
-	if _, err := RefreshHostPackWrappers(&out, cfg, false); err == nil {
-		t.Error("lenient refresh must also surface the failed transaction as an error")
-	}
-	if _, err := os.Stat(filepath.Join(HostPackBinDir(), "platformio")); err == nil {
-		t.Error("nothing may install in lenient mode either")
-	}
-}
-
-// TestRefreshHostPackWrappers_AbsentPackClearsAttributedWrappersOrRefuses: a
-// missing active pack (deleted dir) and a detached pack (no active pack at
-// all) both still clear whatever host state attributes to the bin dir — and
-// when the clear FAILS, a strict (launch) refresh refuses instead of leaving
-// orphan host executables on PATH.
-func TestRefreshHostPackWrappers_AbsentPackClearsAttributedWrappersOrRefuses(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
-
-	seed := func() {
-		t.Helper()
-		if err := os.MkdirAll(HostPackBinDir(), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(HostPackBinDir(), "stale"), []byte("#!/bin/sh\n"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		store, err := loadPackTrustStore()
-		if err != nil {
-			t.Fatal(err)
-		}
-		store.Installed = &packInstalledSet{Owner: "path:/gone", Wrappers: []string{"stale"}}
-		if err := store.Save(); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	// 1) Active pack dir deleted: degrade, but the stale wrapper is cleared.
-	seed()
-	var out bytes.Buffer
-	if p, err := RefreshHostPackWrappers(&out, &config.Config{Pack: filepath.Join(dir, "gone")}, true); err != nil || p != nil {
-		t.Fatalf("absent pack must degrade after clearing, got (%v,%v)", p, err)
-	}
-	if _, err := os.Stat(filepath.Join(HostPackBinDir(), "stale")); err == nil {
-		t.Error("an absent active pack must still clear its attributed wrappers")
-	}
-	if store, err := loadPackTrustStore(); err != nil || store.Installed != nil {
-		t.Errorf("attribution must be discarded after a confirmed clear (store=%+v err=%v)", store, err)
-	}
-
-	// 2) No active pack at all: same clearing contract.
-	seed()
-	out.Reset()
-	if _, err := RefreshHostPackWrappers(&out, &config.Config{}, true); err != nil {
-		t.Fatalf("no active pack must clear cleanly: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(HostPackBinDir(), "stale")); err == nil {
-		t.Error("detached state must still clear attributed wrappers")
-	}
-
-	// 3) The clear FAILS (symlinked bin dir): a strict launch must refuse.
-	if err := os.RemoveAll(HostPackBinDir()); err != nil {
-		t.Fatal(err)
-	}
-	elsewhere := filepath.Join(dir, "elsewhere")
-	if err := os.MkdirAll(elsewhere, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(elsewhere, HostPackBinDir()); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
-	}
-	store, err := loadPackTrustStore()
-	if err != nil {
-		t.Fatal(err)
-	}
-	store.Installed = &packInstalledSet{Owner: "path:/gone", Wrappers: []string{"stale"}}
-	if err := store.Save(); err != nil {
-		t.Fatal(err)
-	}
-	out.Reset()
-	if _, rerr := RefreshHostPackWrappers(&out, &config.Config{}, true); rerr == nil {
-		t.Error("a strict refresh must REFUSE when stale attributed wrappers cannot be cleared")
-	}
-	out.Reset()
-	if _, rerr := RefreshHostPackWrappers(&out, &config.Config{Pack: filepath.Join(dir, "gone")}, true); rerr == nil {
-		t.Error("an absent pack whose stale wrappers cannot be cleared must refuse a strict refresh")
-	}
-}
-
 // --- E: forged Remote cannot evict another pack's acceptance -------------------
 
 // TestPackUse_ForgedRemoteCannotEvictOtherPacksAcceptance: acceptance
@@ -506,7 +384,7 @@ func TestPackUse_ForgedRemoteCannotEvictOtherPacksAcceptance(t *testing.T) {
 	const legitRemote = "https://example.com/legit.git"
 
 	// Legit pack B: host-recorded clone provenance + accepted Tier-1 surface.
-	rootB := phase2HostPack(t, dir, "b", "b-tool")
+	rootB := round3HostExecPack(t, dir, "b", "b-tool")
 	if err := recordPackAdoptionInTrustStore(rootB, legitRemote, "c1"); err != nil {
 		t.Fatal(err)
 	}
@@ -522,7 +400,7 @@ func TestPackUse_ForgedRemoteCannotEvictOtherPacksAcceptance(t *testing.T) {
 	}
 
 	// Evil local pack E ships a forged pack.lock claiming B's Remote.
-	rootE := phase2HostPack(t, dir, "e", "e-tool")
+	rootE := round3HostExecPack(t, dir, "e", "e-tool")
 	if err := os.WriteFile(PackLockPath(rootE), []byte("remote = \""+legitRemote+"\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

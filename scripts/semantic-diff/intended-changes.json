@@ -1,14 +1,14 @@
 [
 	{
 		"id": "ports.reserved.serve",
-		"rationale": "W1 U01a retires the knowledge surface: `serve` no longer composes the OKF index, so serve.go no longer binds :11436. The memory and broker pins are unchanged — this waiver narrows the pin to the two ports the supervisor still binds, it does not relax it.",
-		"evidence": "services/host/cmd/pix/corpus/retirement.jsonl (approved entries for `knowledge`/`kb` and `pix-host serve knowledge`); services/host/retired.go; services/host/serve.go serveServiceAliases()",
+		"rationale": "W2/U03B deletes host mode and the dormant broker: `serve` never launched it as a real service (BROKER_PORT was reserved but unbound in practice), and the whole slot is gone now, not just dormant. Knowledge was already retired in W1 U01a. serve.go binds only :11435 (memory) today, so the pin narrows from the historical three-port set down to the one port the supervisor actually still binds.",
+		"evidence": "commit cfd4522 (refactor(W2/U03B): delete host mode + dormant broker, retain generic plugin runtime); services/host/serve.go serveServiceAliases() returns `{\"memory\": \"memory\"}` only \u2014 the knowledge branch (W2/U03A) and the broker branch (W2/U03B) are both gone from runServe",
 		"changes": [
 			{
 				"file": "services/host/serve.go",
 				"kind": "contains",
 				"from": ["env(\"MEMORY_PORT\", \"11435\")", "env(\"KNOWLEDGE_PORT\", \"11436\")", "env(\"BROKER_PORT\", \"11437\")"],
-				"to": ["env(\"MEMORY_PORT\", \"11435\")", "env(\"BROKER_PORT\", \"11437\")"]
+				"to": ["env(\"MEMORY_PORT\", \"11435\")"]
 			}
 		]
 	},
@@ -40,14 +40,15 @@
 	},
 	{
 		"id": "ports.reserved.plugin-env-allowlist",
-		"rationale": "W2 U03A finishes the knowledge-service retirement: no plugin subprocess needs to bind/discover a knowledge port anymore, so KNOWLEDGE_PORT/PIX_KNOWLEDGE_PORT are dropped from the allowlist alongside rpc.KnowledgePortDefault's removal.",
-		"evidence": "services/host/serve_plugin.go pluginEnvAllowlist; services/host/rpc/rpc.go (KnowledgePortDefault/KnowledgeClient removed)",
+		"rationale": "One pin, two retirements landing together. W2/U03A deletes the built-in knowledge service (KNOWLEDGE_PORT/PIX_KNOWLEDGE_PORT have nothing left to bind or discover, and rpc.KnowledgePortDefault is gone); W2/U03B deletes host mode and the dormant broker slot (PIX_BROKER_PORT was the var the supervisor handed a broker plugin subprocess, and there is no broker slot left to launch). Recorded as the single union transition rather than two half-steps, because the merged tree never occupies either intermediate state: memory is the only reserved port a plugin subprocess still needs.",
+		"evidence": "services/host/serve_plugin.go pluginEnvAllowlist (only MEMORY_PORT/PIX_MEMORY_PORT among the port vars); services/host/rpc/rpc.go (KnowledgePortDefault/KnowledgeClient removed); services/host/cmd/pix/hostmode_gone_test.go (sentinel: no CredentialBroker/BrokerPlugin symbol may return)",
 		"changes": [
 			{
 				"file": "services/host/serve_plugin.go",
 				"kind": "contains",
+				"region": { "start": "var pluginEnvAllowlist = map[string]bool{", "end": "\n}\n" },
 				"from": ["\"MEMORY_PORT\":", "\"KNOWLEDGE_PORT\":", "\"PIX_MEMORY_PORT\":", "\"PIX_KNOWLEDGE_PORT\":", "\"PIX_BROKER_PORT\":"],
-				"to": ["\"MEMORY_PORT\":", "\"PIX_MEMORY_PORT\":", "\"PIX_BROKER_PORT\":"]
+				"to": ["\"MEMORY_PORT\":", "\"PIX_MEMORY_PORT\":"]
 			}
 		]
 	}

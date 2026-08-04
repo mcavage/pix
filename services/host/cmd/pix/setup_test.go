@@ -310,21 +310,6 @@ func TestSetupHostPhase_InvalidFlags_NeverInvokesProviderKeyFlow(t *testing.T) {
 	}
 }
 
-// host-state reports host readiness only when enabled AND provisioned.
-func TestHostStateHostReadiness(t *testing.T) {
-	cfg := &config.Config{MemoryWatcherModel: "x", MemoryEmbedModel: "y"}
-	cfg.Host.Enabled = true
-	hs := launch.BuildHostState(cfg, "", false, func(int) bool { return false }, "", launch.HostStatePack{})
-	if !hs.Host.Enabled {
-		t.Error("host.enabled should reflect config")
-	}
-	// In this test env host mode is not provisioned, so Ready must be false even
-	// though Enabled is true (the exact enabled!=ready bug).
-	if hs.Host.Ready && !hs.Host.Provisioned {
-		t.Error("ready must be false when not provisioned")
-	}
-}
-
 func TestSetupSelectRunnableIntentForSingleProvider(t *testing.T) {
 	for _, tc := range []struct {
 		refs, start, want string

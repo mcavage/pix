@@ -1,3 +1,11 @@
+// RESTORED at the U03A+U03B merge: W2/U03B's first pass (cfd4522) deleted this
+// file wholesale with `pix host`, then its own review (d14c25a) restored
+// RefreshHostPackWrappers as CORE pack host-exec — but not the tests that pin
+// its cross-process transaction. d14c25a named exactly four host-wrapper tests
+// as intentionally out of scope; these two are not among them, and they pass
+// unchanged against the merged tree. Deleting the guard for code you kept is a
+// coverage regression, so it comes back.
+//
 // pack_v2_concurrency_test.go — the Phase-2 concurrency review (the last
 // correctness BLOCK): the host-wrapper lifecycle is ONE cross-process
 // transaction under the pack trust flock, held ACROSS the filesystem dir
@@ -232,4 +240,20 @@ func TestPackRm_RacingRefreshNeverOrphans(t *testing.T) {
 		t.Errorf("torn outcome: installed=%v attributed=%v (must be rm-wins or refresh-wins, never half); live=%v store=%+v",
 			installed, attributed, live, store.Installed)
 	}
+}
+
+// phase2HostPack writes a pack with one host proxy wrapper (script) and returns
+// its root. XDG_STATE_HOME must already be pointed at a temp dir by the caller.
+func phase2HostPack(t *testing.T, dir, name, wrapper string) string {
+	t.Helper()
+	root := filepath.Join(dir, name)
+	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "bin", wrapper), []byte("#!/bin/sh\necho "+wrapper+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWritePack(t, root, Manifest{Name: name, Schema: 1,
+		Proxies: []PackProxy{{Name: wrapper, Host: true}}})
+	return root
 }

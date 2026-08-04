@@ -81,17 +81,15 @@ func main() {
 
 // runPlugin is the self-exec entry `serve` launches for a non-builtin capability
 // slot: it serves the selected built-in implementation as a go-plugin over the
-// shared handshake. kind is memory|broker|mcp (mcp also needs a <name>).
+// shared handshake. kind is memory|mcp (mcp also needs a <name>).
 func runPlugin(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "pix-host plugin: missing <kind> (memory|broker|mcp)")
+		fmt.Fprintln(os.Stderr, "pix-host plugin: missing <kind> (memory|mcp)")
 		os.Exit(2)
 	}
 	switch args[0] {
 	case "memory":
 		servePluginMemory()
-	case "broker":
-		servePluginBroker("broker")
 	case "mcp":
 		if len(args) < 2 {
 			fmt.Fprintln(os.Stderr, "pix-host plugin mcp: missing <name>")
@@ -99,7 +97,7 @@ func runPlugin(args []string) {
 		}
 		servePluginMcp(args[1])
 	default:
-		fmt.Fprintf(os.Stderr, "pix-host plugin: unknown kind %q (memory|broker|mcp)\n", args[0])
+		fmt.Fprintf(os.Stderr, "pix-host plugin: unknown kind %q (memory|mcp)\n", args[0])
 		os.Exit(2)
 	}
 }
@@ -121,7 +119,7 @@ subcommands:
   restore        restore a FULL backup tar.gz (safe swap)
   route <cmd>    model router: pick | compile | show | models
   mcp <name>     stdio MCP bridge (run by the sbx gateway)
-  plugin <kind>  built-in go-plugin server, self-exec (memory|broker|mcp)
+  plugin <kind>  built-in go-plugin server, self-exec (memory|mcp)
   serve          run the long-running HTTP services (memory)
 `
 }

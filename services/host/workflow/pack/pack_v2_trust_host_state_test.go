@@ -1,3 +1,9 @@
+// RESTORED at the U03A+U03B merge, same reasoning as pack_v2_concurrency_test.go:
+// these pin AGENTS.md safety invariant #8 (pack trust acceptance lives in HOST
+// state, never in the attacker-controllable pack payload), which the merged tree
+// still implements. They were collateral of W2/U03B's host-mode deletion, are
+// not among the four tests d14c25a scoped out, and pass unchanged.
+//
 // pack_v2_trust_host_state_test.go — the Phase-2 trust-model rework: nothing
 // security-relevant is ever trusted from inside the pack payload.
 //

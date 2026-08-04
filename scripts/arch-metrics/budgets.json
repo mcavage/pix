@@ -2,11 +2,11 @@
   "schema": 1,
   "packages": {
     "pix/host": {
-      "prod_loc": 6788,
+      "prod_loc": 6654,
       "exports": 0,
       "globals": 64,
       "edges": 6,
-      "exits": 29
+      "exits": 28
     },
     "pix/host/cli": {
       "prod_loc": 543,
@@ -30,17 +30,10 @@
       "exits": 0
     },
     "pix/host/config": {
-      "prod_loc": 1387,
-      "exports": 48,
+      "prod_loc": 1401,
+      "exports": 47,
       "globals": 17,
       "edges": 0,
-      "exits": 0
-    },
-    "pix/host/examples/broker-example": {
-      "prod_loc": 44,
-      "exports": 0,
-      "globals": 0,
-      "edges": 1,
       "exits": 0
     },
     "pix/host/examples/mcp-example": {
@@ -107,9 +100,9 @@
       "exits": 0
     },
     "pix/host/plugin": {
-      "prod_loc": 583,
-      "exports": 33,
-      "globals": 9,
+      "prod_loc": 490,
+      "exports": 28,
+      "globals": 7,
       "edges": 0,
       "exits": 0
     },
@@ -205,11 +198,11 @@
       "exits": 0
     },
     "pix/host/workflow/launch": {
-      "prod_loc": 3177,
-      "exports": 101,
-      "globals": 32,
+      "prod_loc": 2214,
+      "exports": 79,
+      "globals": 20,
       "edges": 14,
-      "exits": 22
+      "exits": 3
     },
     "pix/host/workflow/man": {
       "prod_loc": 221,
@@ -226,7 +219,7 @@
       "exits": 0
     },
     "pix/host/workflow/pack": {
-      "prod_loc": 4831,
+      "prod_loc": 4833,
       "exports": 44,
       "globals": 9,
       "edges": 10,
@@ -240,7 +233,7 @@
       "exits": 0
     },
     "pix/host/workflow/setup": {
-      "prod_loc": 4068,
+      "prod_loc": 4039,
       "exports": 82,
       "globals": 31,
       "edges": 18,
@@ -268,7 +261,7 @@
       "exits": 4
     },
     "pix/host/workspace": {
-      "prod_loc": 1056,
+      "prod_loc": 1061,
       "exports": 42,
       "globals": 16,
       "edges": 2,

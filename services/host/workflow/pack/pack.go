@@ -2345,12 +2345,11 @@ func RunPackUse(env hostenv.Env, out io.Writer, rest []string, register Register
 		}
 	}
 
-	// F3: swap the host-mode wrappers NOW (live for the next `pix host`):
-	// RefreshHostPackWrappers clears what host state attributes to the previous
-	// activation and stages+verifies+swaps in this pack's ACCEPTED set (the
-	// acceptance recorded just above). Best-effort here, like every other
-	// post-Save side effect; the strict fingerprint + content re-verification
-	// happens again at every host launch.
+	// F3: swap the pack's host-exec wrappers NOW (core pack host-exec, not
+	// `pix host` mode): RefreshHostPackWrappers clears what host state
+	// attributes to the previous activation and stages+verifies+swaps in this
+	// pack's ACCEPTED set (the acceptance recorded just above). Best-effort
+	// here, like every other post-Save side effect.
 	refreshOut := out
 	if env.Quiet {
 		refreshOut = io.Discard
@@ -2427,10 +2426,10 @@ func RunPackRm(out io.Writer, rest []string) {
 		// One-time Phase-1 → Phase-2 migration (round-3 #2), same as `pack use`:
 		// a Phase-1 active pack's attribution lives only in its (local) pack.lock.
 		migratePhase1Activation(store, old)
-		// F3 + round-3 #4: "detached" includes the host wrappers — remove exactly
-		// what HOST state attributes to HostPackBinDir() (reliable even when the
-		// pack directory itself is gone; attribution never lived in the pack), and
-		// do it FIRST: a failed clear aborts with a non-zero exit BEFORE anything
+		// round-3 #4: "detached" includes the host wrappers — remove exactly what
+		// HOST state attributes to HostPackBinDir() (reliable even when the pack
+		// directory itself is gone; attribution never lived in the pack), and do
+		// it FIRST: a failed clear aborts with a non-zero exit BEFORE anything
 		// detaches, so `pack rm` never claims success while host executables
 		// remain, and a plain re-run retries the whole detach cleanly. The
 		// attribution is discarded only on CONFIRMED removal. Acceptance is kept:
@@ -2439,7 +2438,7 @@ func RunPackRm(out io.Writer, rest []string) {
 			removedWrappers = append([]string(nil), store.Installed.Wrappers...)
 			if cerr := clearInstalledHostPackWrappersLocked(out, store); cerr != nil {
 				removedWrappers = nil
-				return fmt.Errorf("host wrappers could not be removed: %v — nothing detached; fix that and re-run (a `pix host` launch refuses until they are cleared)", cerr)
+				return fmt.Errorf("stale host wrappers could not be removed: %v — nothing detached; fix that and re-run", cerr)
 			}
 		}
 		roots := ActivePackRoots(cfg, "")

@@ -164,67 +164,6 @@ func (c *memoryRPCClient) Health() (Health, error) {
 	return resp, err
 }
 
-// ============================= CredentialBroker ==============================
-
-// BrokerPlugin adapts a CredentialBroker to plugin.Plugin over net/rpc.
-type BrokerPlugin struct{ Impl CredentialBroker }
-
-func (p *BrokerPlugin) Server(*goplugin.MuxBroker) (interface{}, error) {
-	return &brokerRPCServer{Impl: p.Impl}, nil
-}
-
-func (p *BrokerPlugin) Client(_ *goplugin.MuxBroker, c *rpc.Client) (interface{}, error) {
-	return &brokerRPCClient{client: c}, nil
-}
-
-// MintArgs packs Mint's two parameters into one gob-encodable struct.
-type MintArgs struct {
-	Audience string
-	Scopes   []string
-}
-
-type brokerRPCServer struct{ Impl CredentialBroker }
-
-func (s *brokerRPCServer) Mint(args MintArgs, resp *Token) error {
-	t, err := s.Impl.Mint(args.Audience, args.Scopes)
-	if err != nil {
-		return err
-	}
-	*resp = t
-	return nil
-}
-
-func (s *brokerRPCServer) Check(_ Empty, _ *Empty) error {
-	return s.Impl.Check()
-}
-
-func (s *brokerRPCServer) Describe(_ Empty, resp *BrokerInfo) error {
-	info, err := s.Impl.Describe()
-	if err != nil {
-		return err
-	}
-	*resp = info
-	return nil
-}
-
-type brokerRPCClient struct{ client *rpc.Client }
-
-func (c *brokerRPCClient) Mint(audience string, scopes []string) (Token, error) {
-	var resp Token
-	err := c.client.Call("Plugin.Mint", MintArgs{Audience: audience, Scopes: scopes}, &resp)
-	return resp, err
-}
-
-func (c *brokerRPCClient) Check() error {
-	return c.client.Call("Plugin.Check", Empty{}, &Empty{})
-}
-
-func (c *brokerRPCClient) Describe() (BrokerInfo, error) {
-	var resp BrokerInfo
-	err := c.client.Call("Plugin.Describe", Empty{}, &resp)
-	return resp, err
-}
-
 // ================================= McpServer =================================
 
 // McpPlugin adapts an McpServer to plugin.Plugin over net/rpc.
@@ -296,11 +235,9 @@ func (c *mcpRPCClient) CallTool(name string, args json.RawMessage) (json.RawMess
 // Compile-time guarantees that the client stubs satisfy the public interfaces
 // and the plugin adapters satisfy plugin.Plugin.
 var (
-	_ MemoryStore      = (*memoryRPCClient)(nil)
-	_ CredentialBroker = (*brokerRPCClient)(nil)
-	_ McpServer        = (*mcpRPCClient)(nil)
+	_ MemoryStore = (*memoryRPCClient)(nil)
+	_ McpServer   = (*mcpRPCClient)(nil)
 
 	_ goplugin.Plugin = (*MemoryPlugin)(nil)
-	_ goplugin.Plugin = (*BrokerPlugin)(nil)
 	_ goplugin.Plugin = (*McpPlugin)(nil)
 )

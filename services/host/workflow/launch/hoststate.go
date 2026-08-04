@@ -24,14 +24,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"pix/host/hostenv"
 	"pix/host/readiness"
 	"pix/host/secret"
 	"pix/host/workflow/doctor"
 	"pix/host/workflow/pack"
-	"pix/host/workspace"
 	"slices"
 	"strings"
 	"unicode"
@@ -77,12 +75,6 @@ type hostStateModels struct {
 	Embed   string `json:"embed"`
 }
 
-type hostStateHost struct {
-	Enabled     bool `json:"enabled"`     // host.enabled config gate
-	Provisioned bool `json:"provisioned"` // host agent dir actually set up
-	Ready       bool `json:"ready"`       // enabled AND provisioned (safe to claim)
-}
-
 type HostStatePack struct {
 	Active         bool   `json:"active"`          // a pack is ACTUALLY active (config `pack` or a --pack override)
 	Exists         bool   `json:"exists"`          // a loadable pack exists at Path
@@ -101,7 +93,6 @@ type HostState struct {
 	MCP         hostStateMCP      `json:"mcp"`
 	Models      hostStateModels   `json:"models"`
 	Pack        HostStatePack     `json:"pack"`
-	Host        hostStateHost     `json:"host"`
 	Identity    hostStateIdentity `json:"identity"`
 }
 
@@ -208,7 +199,6 @@ func BuildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial f
 		MCP:    hostStateMCP{Enabled: len(mcpServers) > 0, Servers: mcpServers},
 		Models: hostStateModels{Watcher: cfg.MemoryWatcherModel, Embed: cfg.MemoryEmbedModel},
 		Pack:   pack,
-		Host:   buildHostStateHost(cfg),
 	}
 	// Provisioned: an inherited, fully set-up environment that must NOT be
 	// re-onboarded — keys resolved AND a pack actually active. Onboarding
@@ -231,34 +221,6 @@ func hasConfiguredKeylessModel(cfg *config.Config) bool {
 		}
 	}
 	return false
-}
-
-// buildHostStateHost builds the host slice with a SINGLE HostProvisioned() probe so
-// Ready can never disagree with Provisioned within one snapshot.
-func buildHostStateHost(cfg *config.Config) hostStateHost {
-	prov := HostProvisioned()
-	return hostStateHost{Enabled: cfg.Host.Enabled, Provisioned: prov, Ready: cfg.Host.Enabled && prov}
-}
-
-// HostProvisioned reports whether host mode is actually installed: harness
-// files, the exact pinned pi core, and the matching curated-extension marker.
-// It mirrors runHostLaunch's preconditions so host-state never claims "ready"
-// for a bare host.enabled flag or a partially upgraded installation.
-func HostProvisioned() bool {
-	dir := workspace.HostAgentDir()
-	if _, err := os.Stat(filepath.Join(dir, "settings.json")); err != nil {
-		return false
-	}
-	if _, err := os.Stat(filepath.Join(dir, "extensions", "host-guard.ts")); err != nil {
-		return false
-	}
-	// host mode launches `pi` DIRECTLY on the host; without it, host mode can't
-	// run, so it isn't truly provisioned (don't let host-state claim "ready").
-	piBin, err := exec.LookPath("pi")
-	if err != nil || checkHostPiVersion(piBin) != nil {
-		return false
-	}
-	return HostPiExtensionsInstalled(dir)
 }
 
 // ResolveHostStatePack reports pack truth for the in-VM onboarding agent, so

@@ -23,7 +23,7 @@
 //     consent screen shows and the fingerprint pins (AC-SUP-05's explicit env
 //     allowlist starts here).
 //   - listeners are loopback-only and the reserved pix-host ports (11435
-//     memory, 11437 monitor/broker) can never be claimed, so a pack service
+//     memory, 11437 pix monitor) can never be claimed, so a pack service
 //     can neither expose the LAN nor squat a built-in unit's front door.
 //   - mounts are repo-relative (a pack cannot claim /etc or ~/.ssh), network
 //     is bare egress hostnames, and license/source (SPDX + https URL) are

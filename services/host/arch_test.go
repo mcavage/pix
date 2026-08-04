@@ -138,9 +138,8 @@ var pkgLayer = map[string]int{
 
 	// Not part of the launcher's layering: the host daemon binary and its
 	// examples, which are separate programs.
-	".":                       -1,
-	"examples/broker-example": -1,
-	"examples/mcp-example":    -1,
+	".":                    -1,
+	"examples/mcp-example": -1,
 }
 
 // l0Order breaks ties inside L0, which is the one layer with internal
