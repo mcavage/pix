@@ -22,7 +22,6 @@ import (
 	"os"
 	"sort"
 
-	"pix/host/config"
 	"pix/host/plugin"
 )
 
@@ -89,50 +88,31 @@ func runMcpListTools(name string) {
 	}
 }
 
-// mcpServerFor resolves a bridge name to its McpServer implementation, honoring a
-// config-selected OVERRIDE. [plugins.mcp] is consulted FIRST: a non-builtin impl
-// overrides EVERY name (including the sole registered public MCP, "slack"), so an
-// operator override is never silently bypassed. In that case the external plugin
-// binary is launched ONCE here via the shared supervisor helper (which SHA-pins
-// and verifies the binary before exec and isolates its env so the broker bearer
-// never leaks), dispensed as a plugin.McpServer, and wrapped so the bridge body
-// proxies to it — a startup-only spawn, never per request. Only when the slot is
-// builtin does it fall back to the in-process adapter (builtinMcpServerFor, which
-// serves slack).
+// mcpServerFor resolves a bridge name to its McpServer implementation — always
+// the in-process adapter (builtinMcpServerFor, which serves slack). The old
+// [plugins.mcp] config OVERRIDE is RETIRED (U07d): a config file can no longer
+// name an executable this process launches — the declaration is swept inert
+// with a RetiredKeys notice at load (config.applyDefaults), so no code path
+// from here can ever reach an exec on config input. An external MCP unit now
+// enters only as a pack-trust-admitted [[services]] entry, consumed through
+// reconcilePackUnits (pack_units.go) after the Tier-1 fingerprint/consent
+// check.
 //
-// It returns a cleanup func the caller MUST run on every exit path (it shuts the
-// launched supervisor down; it is a no-op for the builtin path). The cleanup is
-// always non-nil so the caller can defer it unconditionally.
+// It returns a cleanup func the caller MUST run on every exit path (a no-op
+// today; kept so the pack-unit integration can hand back a supervisor
+// shutdown without changing the call sites).
 func mcpServerFor(name string) (plugin.McpServer, func(), error) {
 	noop := func() {}
-	cfg, err := config.Load()
-	if err != nil {
-		return nil, noop, fmt.Errorf("load config: %w", err)
-	}
-	spec := cfg.Plugin("mcp")
-	// Consult config FIRST: only a builtin slot uses the in-process adapter.
-	if spec.Impl == config.BuiltinImpl {
-		srv, err := builtinMcpServerFor(name)
-		return srv, noop, err
-	}
-	// A non-builtin impl overrides every name — launch the external plugin.
-	selfPath, err := os.Executable()
-	if err != nil {
-		return nil, noop, fmt.Errorf("locate self: %w", err)
-	}
-	sup := &supervisor{}
-	h, err := sup.launch(name, "mcp", spec, selfPath, spec.ExtraEnv)
-	if err != nil {
-		sup.shutdown()
-		return nil, noop, fmt.Errorf("launch external mcp plugin %q: %w", name, err)
-	}
-	return &pluginMcpServer{h: h}, sup.shutdown, nil
+	srv, err := builtinMcpServerFor(name)
+	return srv, noop, err
 }
 
 // pluginMcpServer adapts a supervisor-dispensed external MCP plugin to the
 // plugin.McpServer interface, so runMcpBridge proxies to it transparently. It
 // resolves the current client per call (a watchdog restart is invisible to the
-// caller), mirroring memoryProxyMux / brokerProxyMux.
+// caller), mirroring memoryProxyMux. With the [plugins.mcp] override retired
+// (U07d), its consumer is a pack-admitted [[services]] unit of kind "mcp": the
+// holder reconcilePackUnits returns is wrapped in this adapter.
 type pluginMcpServer struct{ h *pluginHolder }
 
 func (p *pluginMcpServer) srv() (plugin.McpServer, error) {

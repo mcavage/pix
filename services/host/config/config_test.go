@@ -87,13 +87,28 @@ port = 9000
 	if len(c.Skills.Paths) != 1 || c.Skills.Paths[0] != "/tmp/skills" {
 		t.Errorf("Skills.Paths = %v", c.Skills.Paths)
 	}
+	// [plugins.*] is RETIRED (U07d): the declarations above decode without
+	// error but are swept INERT — every slot answers builtin (no path, no sha,
+	// nothing launchable), and each declared slot surfaces through
+	// RetiredKeys as the operator-facing notice.
 	mem := c.Plugin("memory")
-	if mem.Impl != "external" || mem.Path != "/opt/mem" || mem.SHA != "deadbeef" || mem.Port != 9000 {
-		t.Errorf("Plugin(memory) = %+v", mem)
+	if mem.Impl != BuiltinImpl || mem.Path != "" || mem.SHA != "" || mem.Port != 0 {
+		t.Errorf("Plugin(memory) = %+v, want inert builtin (plugins.* is retired)", mem)
 	}
-	// A slot with no impl set defaults to builtin.
 	if got := c.Plugin("slack"); got.Impl != BuiltinImpl {
 		t.Errorf("Plugin(slack).Impl = %q, want %q", got.Impl, BuiltinImpl)
+	}
+	retired := c.RetiredKeys()
+	for _, want := range []string{"plugins.memory", "plugins.slack"} {
+		found := false
+		for _, k := range retired {
+			if k == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("RetiredKeys() = %v, want it to include %q (the inert notice)", retired, want)
+		}
 	}
 }
 
