@@ -61,6 +61,28 @@ test("full-history scan catches a secret buried in an amended-away commit", () =
 	fs.rmSync(tmp, { recursive: true, force: true });
 });
 
+test("the allowlist file's own path is excluded from the scan (self-referential fixed-point guard)", () => {
+	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "secret-scan-selfexclude-"));
+	const git = (args) => execFileSync("git", args, { cwd: tmp, encoding: "utf8" });
+	git(["init", "-q"]);
+	git(["config", "user.email", "test@example.com"]);
+	git(["config", "user.name", "Test"]);
+	fs.mkdirSync(path.join(tmp, "scripts/legal"), { recursive: true });
+	fs.writeFileSync(
+		path.join(tmp, "scripts/legal/secret-scan-allowlist.txt"),
+		'deadbeef  # aws-access-key-id in x.py — reviewed: fixture ("AKIAABCDEFGHIJKLMNOP")\n'
+	);
+	git(["add", "."]);
+	git(["commit", "-q", "-m", "allowlist with a quoted example"]);
+
+	const outPath = path.join(tmp, "report.json");
+	const res = execFileSync("node", [scanScript, "--scan", tmp, "--out", outPath], { encoding: "utf8" });
+	assert.match(res, /no secrets found/);
+	const report = JSON.parse(fs.readFileSync(outPath, "utf8"));
+	assert.equal(report.findings_count, 0);
+	fs.rmSync(tmp, { recursive: true, force: true });
+});
+
 test("full-history scan passes clean on a fixture repo with no secrets", () => {
 	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "secret-scan-clean-"));
 	const git = (args) => execFileSync("git", args, { cwd: tmp, encoding: "utf8" });

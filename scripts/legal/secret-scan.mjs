@@ -110,6 +110,18 @@ function loadAllowlist(path) {
 // scale, so we attribute by walking `git rev-list --objects --all` output,
 // which already pairs each blob with the path it was recorded at in at
 // least one tree).
+// The allowlist file records fingerprints of `blob:path:match` triples
+// found in OTHER files. Its own content necessarily quotes those match
+// snippets (that's what makes an allowlist entry legible on review), which
+// means IT would keep matching the very patterns it exists to allowlist —
+// and because its blob hash changes every time an entry is added, a
+// self-referential allowlist entry for its own past content can never reach
+// a fixed point (the same self-exclusion problem scripts/rename/build-inventory.sh
+// documents for its own inventory file). It is metadata ABOUT findings, not
+// a place a real secret would land, so every historical version of it is
+// excluded from the scan itself, by path.
+const SELF_EXCLUDED_PATHS = new Set(["scripts/legal/secret-scan-allowlist.txt"]);
+
 function scanRepo(repoDir, allowlistPath) {
 	const objects = execFileSync(
 		"git",
@@ -125,6 +137,7 @@ function scanRepo(repoDir, allowlistPath) {
 		if (sp === -1) continue; // a commit/tree with no path (root tree, etc.)
 		const sha = line.slice(0, sp);
 		const path = line.slice(sp + 1);
+		if (SELF_EXCLUDED_PATHS.has(path)) continue;
 
 		const catFile = spawnSync("git", ["cat-file", "-t", sha], { cwd: repoDir, encoding: "utf8" });
 		if (catFile.stdout.trim() !== "blob") continue;
