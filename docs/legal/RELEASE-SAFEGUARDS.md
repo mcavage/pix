@@ -55,7 +55,8 @@ extensions, or its skills changed.
 - `Dockerfile` now `COPY`s `THIRD_PARTY_NOTICES.md` and `NOTICE.md` into the
   image (`/home/agent/.pi/agent/`).
 - `.github/workflows/publish.yml`'s Homebrew darwin tarball step now bundles
-  both files alongside `pix`/`pix-host`/`pix.1`.
+  both files alongside `pix`/`pix-host`. (The man page, `pix.1`, was retired
+  along with `pix man`/`--man`, so it is no longer part of this tarball.)
 - Both are asserted by `scripts/check-third-party-notices.sh` and
   `tests/legal-inclusion-and-docker-base.test.mjs`.
 

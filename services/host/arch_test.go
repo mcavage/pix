@@ -104,9 +104,14 @@ var pkgLayer = map[string]int{
 
 	// L3 — workflow. A user-facing verb's logic. Allowed to compose L1+L2;
 	// may not contain a capability.
-	"workflow/backup":  layerWorkflow,
-	"workflow/man":     layerWorkflow,
-	"workflow/upgrade": layerWorkflow,
+	//
+	// workflow/backup, workflow/man, and workflow/upgrade (the launcher-side
+	// `pix backup`/`pix restore`, `pix man`/`--man`, and `pix upgrade` verbs) were
+	// deleted along with their dead code once U01 retired all three surfaces and
+	// left nothing importing them (see retired.go). The pix-host-side `backup`/
+	// `restore` subcommands that survive live at root (memory_backup.go,
+	// memory_restore.go) — they are the memory snapshot/real store, not this
+	// launcher package, and are unaffected.
 	// slack is a WORKFLOW, not a capability, and the layering test is what
 	// settled it: as an L1 it violated three rules at once (mcp, secret,
 	// readiness). `pix slack setup` sequences an OAuth grant, a credential

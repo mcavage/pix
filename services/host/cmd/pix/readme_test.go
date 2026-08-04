@@ -3,8 +3,6 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"pix/host/readiness"
-	"pix/host/workflow/man"
 	"regexp"
 	"strings"
 	"testing"
@@ -91,18 +89,5 @@ func TestReadmePrimaryPathCommandsExist(t *testing.T) {
 		if !strings.Contains(body, required) {
 			t.Errorf("README primary path missing %q", required)
 		}
-	}
-}
-
-func TestDocumentedExitCodesMatchImplementation(t *testing.T) {
-	man := string(man.Source())
-	for _, code := range []int{readiness.ExitReady, readiness.ExitNotReady, readiness.ExitUsage, readiness.ExitUnverifiable} {
-		needle := ".B " + string(rune('0'+code))
-		if !strings.Contains(man, needle) {
-			t.Errorf("man page missing exit status %d", code)
-		}
-	}
-	if !strings.Contains(man, "cannot be verified from the\ncurrent environment") {
-		t.Error("exit 3 documentation must mean unverifiable, not a positively observed failure")
 	}
 }

@@ -1,48 +1,12 @@
 package main
 
 import (
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"pix/host/config"
 	"pix/host/workflow/launch"
-	"pix/host/workflow/upgrade"
 )
-
-func TestParseLatestReleaseLocation(t *testing.T) {
-	ok := map[string]string{
-		"https://github.com/mcavage/pix/releases/tag/v0.1.2":   "0.1.2",
-		"https://github.com/mcavage/pix/releases/tag/0.1.2":    "0.1.2",
-		"https://github.com/mcavage/pix/releases/tag/v10.20.3": "10.20.3",
-		"https://github.com/mcavage/pix/releases/tag/v0.1.2?x": "0.1.2",
-		"https://github.com/mcavage/pix/releases/tag/v0.1.2#a": "0.1.2",
-	}
-	for loc, want := range ok {
-		if got := upgrade.ParseLatestReleaseLocation(loc); got != want {
-			t.Errorf("upgrade.ParseLatestReleaseLocation(%q) = %q, want %q", loc, got, want)
-		}
-	}
-	// Anything that is not a clean released semver must yield "" — a bogus pin is
-	// strictly worse than falling back to the stamped version.
-	bad := []string{
-		"",
-		"https://github.com/mcavage/pix/releases",
-		"https://github.com/login?return_to=%2Fmcavage%2Fpix",
-		"https://github.com/mcavage/pix/releases/tag/",
-		"https://github.com/mcavage/pix/releases/tag/nightly",
-		"https://github.com/mcavage/pix/releases/tag/v0.1",
-		"https://github.com/mcavage/pix/releases/tag/v0.1.2-rc1",
-		"https://github.com/mcavage/pix/releases/tag/v0.1.2+local",
-	}
-	for _, loc := range bad {
-		if got := upgrade.ParseLatestReleaseLocation(loc); got != "" {
-			t.Errorf("upgrade.ParseLatestReleaseLocation(%q) = %q, want \"\"", loc, got)
-		}
-	}
-}
 
 func TestResolveKitRef_Precedence(t *testing.T) {
 	cases := []struct {
@@ -74,56 +38,6 @@ func TestResolveKitRef_UnreleasedUsesLocalHandling(t *testing.T) {
 		if ref, src := launch.ResolveKitRef(v, "", ""); ref != "" || src != launch.KitRefUnreleased {
 			t.Errorf("version %q: got (%q,%v), want (\"\",launch.KitRefUnreleased)", v, ref, src)
 		}
-	}
-}
-
-func TestFetchLatestRelease_FollowsRedirect(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
-			http.Redirect(w, r, "/mcavage/pix/releases/tag/v0.1.2", http.StatusFound)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	if got := upgrade.FetchLatestRelease(srv.Client(), srv.URL+"/mcavage/pix/releases/latest"); got != "0.1.2" {
-		t.Errorf("upgrade.FetchLatestRelease = %q, want 0.1.2", got)
-	}
-}
-
-// Every network failure mode must degrade to "" so the caller keeps the stamped
-// pin. A resolver that can fail a run is worse than no resolver.
-func TestFetchLatestRelease_FailuresYieldEmpty(t *testing.T) {
-	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "boom", http.StatusInternalServerError)
-	}))
-	defer down.Close()
-	if got := upgrade.FetchLatestRelease(down.Client(), down.URL); got != "" {
-		t.Errorf("500 response = %q, want \"\"", got)
-	}
-
-	login := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/login" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		http.Redirect(w, r, "/login", http.StatusFound)
-	}))
-	defer login.Close()
-	if got := upgrade.FetchLatestRelease(login.Client(), login.URL); got != "" {
-		t.Errorf("login redirect = %q, want \"\"", got)
-	}
-
-	unreachable := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	url := unreachable.URL
-	unreachable.Close() // nothing is listening now
-	if got := upgrade.FetchLatestRelease(&http.Client{Timeout: time.Second}, url); got != "" {
-		t.Errorf("unreachable host = %q, want \"\"", got)
-	}
-
-	if got := upgrade.FetchLatestRelease(&http.Client{}, "://not a url"); got != "" {
-		t.Errorf("malformed url = %q, want \"\"", got)
 	}
 }
 

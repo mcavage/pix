@@ -22,9 +22,13 @@ test("later publishes select an unused patch tag without overwriting a release",
 	assert.match(workflow, /patch=\$\(\(patch \+ 1\)\)/);
 });
 
-test("Homebrew archives are additive and contain both binaries plus the manpage", () => {
+// The manpage (pix.1) was retired along with `pix man`/`--man` (`pix help
+// --all` is the one verb map now), so the Homebrew archive stopped bundling
+// it — the tarball carries just the two binaries plus the third-party notices.
+test("Homebrew archives are additive and contain both binaries, no manpage", () => {
 	assert.match(workflow, /pix_\$\{V\}_darwin_\$\{arch\}\.tar\.gz/);
-	assert.match(workflow, /tar -C "\$stage" -czf .* pix pix-host pix\.1/);
+	assert.match(workflow, /tar -C "\$stage" -czf .* pix pix-host THIRD_PARTY_NOTICES\.md NOTICE\.md/);
+	assert.doesNotMatch(workflow, /tar -C "\$stage" -czf .*pix\.1/);
 	assert.match(workflow, /sha256sum pix-\* pix_\*\.tar\.gz/);
 	assert.match(workflow, /dist\/pix_\*\.tar\.gz/);
 	assert.match(workflow, /-o "\$GITHUB_WORKSPACE\/dist\/pix-\$os-\$arch"/);
