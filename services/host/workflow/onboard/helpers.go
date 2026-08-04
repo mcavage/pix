@@ -1,16 +1,8 @@
 package onboard
 
 import (
-	"pix/host/knowledge"
 	"pix/host/sys"
 	"time"
-
-	"fmt"
-	"io"
-	"path/filepath"
-	"strings"
-
-	"pix/host/config"
 )
 
 // Shared onboarding helpers. The old interactive `pix setup` wizard was
@@ -35,24 +27,6 @@ func GogAuthed(env sys.Exec, account string) bool {
 	}
 	_, timedOut, err := env.RunWithin(gogAuthTimeout, "gog", "--account", account, "auth", "status")
 	return !timedOut && err == nil
-}
-
-// setupKnowledge sets up the global knowledge base from a user-supplied source,
-// reusing the `knowledge` verb's logic (no duplicated OKF scaffold or config
-// wiring). A git URL is cloned/pulled and used in place (knowledge.Use); a local
-// path is scaffolded-if-new and wired (knowledge.Init, which never clobbers an
-// existing bundle). Both add the bundle to knowledge_bundles + enable the
-// knowledge service and Save().
-func setupKnowledge(cfg *config.Config, ref string, out io.Writer) error {
-	ref = strings.TrimSpace(ref)
-	if knowledge.IsGitURL(ref) {
-		return knowledge.Use(cfg, ref, out)
-	}
-	abs, err := filepath.Abs(ref)
-	if err != nil {
-		return fmt.Errorf("resolving %s: %w", ref, err)
-	}
-	return knowledge.Init(cfg, abs, out)
 }
 
 // gogAuthTimeout bounds the `gog auth status` probe so the fast, read-only

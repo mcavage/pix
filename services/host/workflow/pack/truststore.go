@@ -170,7 +170,6 @@ type packActivationRecord struct {
 	Owner                  string   `json:"owner"`
 	Path                   string   `json:"path"`
 	MCP                    []string `json:"mcp,omitempty"`
-	Knowledge              []string `json:"knowledge,omitempty"`
 	GogAccount             string   `json:"gog_account,omitempty"`
 	PriorGogAccount        string   `json:"prior_gog_account,omitempty"`
 	OllamaBridgeModel      string   `json:"ollama_bridge_model,omitempty"`
@@ -304,7 +303,6 @@ func (s *PackTrustStore) activationFor(root string) packLock {
 	}
 	return packLock{
 		MCP:                    append([]string(nil), a.MCP...),
-		Knowledge:              append([]string(nil), a.Knowledge...),
 		GogAccount:             a.GogAccount,
 		PriorGogAccount:        a.PriorGogAccount,
 		OllamaBridgeModel:      a.OllamaBridgeModel,
@@ -351,7 +349,6 @@ func (s *PackTrustStore) newActivationRecord(root string, lock packLock) packAct
 		Owner:                  s.TrustKey(root),
 		Path:                   CanonicalizePackRoot(root),
 		MCP:                    append([]string(nil), lock.MCP...),
-		Knowledge:              append([]string(nil), lock.Knowledge...),
 		GogAccount:             lock.GogAccount,
 		PriorGogAccount:        lock.PriorGogAccount,
 		OllamaBridgeModel:      lock.OllamaBridgeModel,

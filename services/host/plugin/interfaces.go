@@ -143,63 +143,6 @@ type Health struct {
 	CaptureReason string // explains a false Capture (JSON-RPC `captureReason`)
 }
 
-// --- KnowledgeStore ----------------------------------------------------------
-//
-// A retrieval-augmented knowledge base over one or more concept "bundles".
-// Query returns cited concepts ranked by relevance; Reindex (re)ingests bundle
-// paths; Health reports index status. Same plain-struct rule as MemoryStore.
-
-type KnowledgeStore interface {
-	Query(QueryArgs) (QueryResult, error)
-	Reindex(ReindexArgs) (ReindexResult, error)
-	Health() (KnowledgeHealth, error)
-}
-
-// QueryArgs parameterizes a knowledge query. Bundles is a SET of bundle-path
-// filters: empty means all, non-empty scopes the search to those bundles.
-type QueryArgs struct {
-	Query   string
-	Bundles []string
-	Limit   int
-}
-
-// CitedConcept is a single ranked, cited result concept.
-type CitedConcept struct {
-	ID          string
-	Type        string
-	Title       string
-	Description string
-	Path        string
-	Snippet     string
-	Score       float64
-	Citations   []string
-	Bundle      string
-}
-
-// QueryResult wraps the ranked concept list.
-type QueryResult struct {
-	Concepts []CitedConcept
-}
-
-// ReindexArgs lists the bundle paths to (re)index.
-type ReindexArgs struct {
-	BundlePaths []string
-}
-
-// ReindexResult reports the number of concepts indexed and the bundles touched.
-type ReindexResult struct {
-	Indexed int
-	Bundles []string
-}
-
-// KnowledgeHealth reports index status ({ok, vector, bundles, concepts}).
-type KnowledgeHealth struct {
-	OK       bool
-	Vector   bool
-	Bundles  []string
-	Concepts int
-}
-
 // --- CredentialBroker --------------------------------------------------------
 //
 // The "keep the long-lived credential on the host, mint a short-lived one, run

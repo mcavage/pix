@@ -40,15 +40,9 @@ import (
 // host config.
 type OnboardingResult struct {
 	Version            int        `json:"version"`
-	MCP                []string   `json:"mcp,omitempty"`
-	Knowledge          *Knowledge `json:"knowledge,omitempty"`
-	OllamaBridgeModel  string     `json:"ollama_bridge_model,omitempty"`
-	MemoryWatcherModel string     `json:"memory_watcher_model,omitempty"`
-}
-
-type Knowledge struct {
-	Action string `json:"action"` // "scaffold" | "use" | "skip"
-	Source string `json:"source"` // path (scaffold) or path|git-url (use)
+	MCP                []string `json:"mcp,omitempty"`
+	OllamaBridgeModel  string   `json:"ollama_bridge_model,omitempty"`
+	MemoryWatcherModel string   `json:"memory_watcher_model,omitempty"`
 }
 
 // FileName is the per-ws control-plane proposal, written by the
@@ -98,17 +92,6 @@ func ValidateOnboardingResult(r *OnboardingResult, cfg *config.Config, env hoste
 		return fmt.Errorf("mcp %q is not an allowlisted server (gog, a locally-known host server, or a curated catalog name); configure it with `pix mcp` instead", m)
 	}
 
-	if r.Knowledge != nil {
-		switch r.Knowledge.Action {
-		case "scaffold", "use", "skip":
-		default:
-			return fmt.Errorf("knowledge.action %q invalid (want scaffold|use|skip)", r.Knowledge.Action)
-		}
-		if r.Knowledge.Action != "skip" && strings.TrimSpace(r.Knowledge.Source) == "" {
-			return fmt.Errorf("knowledge.action %q needs a source", r.Knowledge.Action)
-		}
-	}
-
 	for label, v := range map[string]string{
 		"ollama_bridge_model":  r.OllamaBridgeModel,
 		"memory_watcher_model": r.MemoryWatcherModel,
@@ -136,12 +119,6 @@ func ApplyOnboardingResult(r *OnboardingResult, cfg *config.Config, env hostenv.
 		if cfg.AddMCP(strings.TrimSpace(m)) {
 			changes = append(changes, "enabled "+strings.TrimSpace(m)+" (mcp)")
 		}
-	}
-	if r.Knowledge != nil && r.Knowledge.Action != "skip" {
-		if err := setupKnowledge(cfg, r.Knowledge.Source, out); err != nil {
-			return changes, fmt.Errorf("knowledge %s %q: %w", r.Knowledge.Action, r.Knowledge.Source, err)
-		}
-		changes = append(changes, "knowledge -> "+r.Knowledge.Source)
 	}
 	if v := strings.TrimSpace(r.OllamaBridgeModel); v != "" && v != cfg.OllamaBridgeModel {
 		cfg.OllamaBridgeModel = v
@@ -255,9 +232,8 @@ func ReconcileOnboarding(ws string, env hostenv.Env, in io.Reader, out io.Writer
 // on, and it stays exactly where it was. This parser is the flag surface both
 // the host phase and the --apply path share.
 type Opts struct {
-	Account   string
-	Knowledge string
-	Mcp       []string
+	Account string
+	Mcp     []string
 	Model     string
 	Models    string
 	Apply     bool
@@ -316,10 +292,8 @@ func ParseOnboardArgs(argv []string) (Opts, error) {
 			o.Account, err = next()
 		case strings.HasPrefix(a, "--account="):
 			o.Account = strings.TrimPrefix(a, "--account=")
-		case a == "--knowledge":
-			o.Knowledge, err = next()
-		case strings.HasPrefix(a, "--knowledge="):
-			o.Knowledge = strings.TrimPrefix(a, "--knowledge=")
+		case a == "--knowledge", strings.HasPrefix(a, "--knowledge="):
+			return o, fmt.Errorf("--knowledge was retired with the built-in OKF knowledge service (W2 U03A); use `pix pack use` for a pack's embedded knowledge/ dir")
 		case a == "--mcp":
 			var v string
 			if v, err = next(); err == nil {

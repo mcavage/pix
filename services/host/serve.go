@@ -1,5 +1,5 @@
 // `serve` is the plugin supervisor. It runs the long-running HTTP host services
-// (memory :11435, knowledge :11436, plus the dormant broker slot), resolving each
+// (memory :11435, plus the dormant broker slot), resolving each
 // capability slot from config: a "builtin" impl runs IN-PROCESS exactly as
 // before (memoryMux()); a non-builtin impl is launched ONCE at
 // startup as a go-plugin subprocess and the HTTP shim proxies to it. Plugins
@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"pix/host/config"
-	"pix/host/plugin"
 )
 
 type hostService struct {
@@ -118,8 +117,6 @@ func runServe(enabled []string) {
 		memSvc.mux = memoryProxyMux(h)
 		all = append(all, memSvc)
 	}
-
-	// knowledge: RETIRED (W1 U01a); a stale services entry is dropped on load.
 
 	// broker: the DORMANT credential-broker slot. There is NO built-in broker, so
 	// with the default builtin impl this starts NOTHING (brokerService returns
@@ -319,50 +316,3 @@ func applyMemoryModelEnv(cfg *config.Config) {
 	}
 }
 
-// reindexKnowledgePlugin indexes the configured bundles into a freshly launched
-// EXTERNAL knowledge plugin (F2). Without this the plugin path only installs the
-// proxy shim and never calls Reindex, so the external/self-exec plugin serves an
-// EMPTY index. It mirrors the built-in branch's logging + degrade behavior: no
-// bundles logs an empty-index notice, a reindex failure is logged loudly (a bad
-// OPTIONAL bundle must NOT crash serve), and success reports the counts. Factored
-// out of runServe so it is unit-testable with an injected/stubbed store.
-func reindexKnowledgePlugin(store plugin.KnowledgeStore, bundles []string) {
-	if store == nil {
-		log.Print("knowledge: plugin unavailable at startup — skipping reindex (will index on demand)")
-		return
-	}
-	if len(bundles) == 0 {
-		log.Print("knowledge: no bundles configured (set knowledge_bundles in config or KNOWLEDGE_BUNDLES); serving an empty index")
-		return
-	}
-	if res, err := store.Reindex(plugin.ReindexArgs{BundlePaths: bundles}); err != nil {
-		log.Printf("knowledge: reindex failed (serving whatever was already indexed): %v", err)
-	} else {
-		log.Printf("knowledge: indexed %d concept(s) from %d bundle(s)", res.Indexed, len(res.Bundles))
-	}
-}
-
-// knowledgeBundles resolves the OKF bundle paths to index at startup: the
-// configured knowledge_bundles win; otherwise the KNOWLEDGE_BUNDLES env is
-// split on the OS path-list separator or a comma (a convenience for `serve
-// knowledge` smoke runs without a config file). Empty means no bundles.
-func knowledgeBundles(cfg *config.Config) []string {
-	// Index the UNION across the base config and every profile so a `serve`
-	// started under one context still serves the bundles another profile scopes
-	// to (per-profile scoping happens at query time, not at index time).
-	if all := cfg.AllKnowledgeBundles(); len(all) > 0 {
-		return all
-	}
-	raw := strings.TrimSpace(os.Getenv("KNOWLEDGE_BUNDLES"))
-	if raw == "" {
-		return nil
-	}
-	split := func(r rune) bool { return r == os.PathListSeparator || r == ',' }
-	var out []string
-	for _, p := range strings.FieldsFunc(raw, split) {
-		if p = strings.TrimSpace(p); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
-}

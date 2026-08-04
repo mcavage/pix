@@ -81,13 +81,7 @@ permissions:
       # own host-daemon integration uses to reach host services on host.docker.internal.
       - host.docker.internal:11435
       - localhost:11435
-      # Host knowledge service (:11436). Same pattern as memory above: the recall
-      # extension calls it over JSON-RPC; the host store indexes a git-mounted OKF
-      # bundle (we ship the pointer to the bundle, not its content) and answers
-      # lookups. Host-internal, bypasses the proxy MITM; skipped if not running.
-      - host.docker.internal:11436
-      - localhost:11436
-      # Host monitor hub (:11437). Same pattern as memory/knowledge above: the
+      # Host monitor hub (:11437). Same pattern as memory above: the
       # in-sandbox monitor extension POSTs NDJSON events (model requests/
       # responses, tool + MCP calls) and blob bodies to it over plain HTTP.
       # Host-internal, bypasses the proxy MITM; the extension no-ops if the hub

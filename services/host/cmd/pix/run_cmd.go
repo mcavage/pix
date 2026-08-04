@@ -360,13 +360,6 @@ func runRun(argv []string) {
 	//     the session useless rather than degraded.
 	axis.RenderReadinessWarnings(os.Stderr, axis.FastReadinessSnapshot(cfg, defaultShellEnv(), keyEvidence), axis.LaunchWarningLimit)
 
-	// Knowledge scope: resolve this workspace's bundle set (global config bundles
-	// + the project's .pix/knowledge pointer), lazily reindex the project
-	// bundle when the daemon is up and doesn't know it yet, and write the scope
-	// file the in-VM recall extension reads. Entirely best-effort: it never blocks
-	// or fails the launch (recall just misses a bundle this run).
-	launch.WireKnowledgeScope(cfg, o.Workspace, launch.DefaultKnowledgeRPC())
-
 	// Local model + memory scope: hand the configured ollama_bridge_model to the
 	// in-VM ollama-bridge, and the active pack's memory_scope (default: the pack
 	// name; "default" is the shared/unscoped tag) to the in-VM recall/capture

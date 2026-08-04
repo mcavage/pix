@@ -29,7 +29,6 @@ func TestValidateOnboarding_Allowlist(t *testing.T) {
 	ok := []*OnboardingResult{
 		{Version: 1, MCP: []string{config.GWServerName}},
 		{Version: 1, MCP: []string{"notion", "atlassian", "granola"}},
-		{Version: 1, Knowledge: &Knowledge{Action: "skip"}},
 	}
 	for i, r := range ok {
 		if err := ValidateOnboardingResult(r, cfg, env, noHostResolver); err != nil {
@@ -43,8 +42,6 @@ func TestValidateOnboarding_Allowlist(t *testing.T) {
 		// "linear" was the drift the derived allowlist removes: it looks like a
 		// plausible catalog name but `pix mcp bundle` cannot register it.
 		"unshipped catalog-looking mcp": {Version: 1, MCP: []string{"linear"}},
-		"bad kb action":                 {Version: 1, Knowledge: &Knowledge{Action: "nuke", Source: "/x"}},
-		"kb missing source":             {Version: 1, Knowledge: &Knowledge{Action: "use"}},
 		"model whitespace":              {Version: 1, OllamaBridgeModel: "bad model"},
 	}
 	for name, r := range bad {

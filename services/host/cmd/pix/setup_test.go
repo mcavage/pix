@@ -185,7 +185,6 @@ func TestValidateSetupSemantics_AcceptsValidCatalogAndGoogleOptions(t *testing.T
 		WithSetup:       []string{"oauth"},
 		Mcp:             []string{"notion"},
 		Model:           "qwen3.5:9b",
-		Knowledge:       "/tmp/knowledge",
 	}
 	if err := setup.ValidateSetupSemantics(opts, &config.Config{}, hostenv.Env{System: &systest.Fake{}}, noHostResolver); err != nil {
 		t.Fatalf("valid setup semantics rejected: %v", err)

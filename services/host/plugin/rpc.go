@@ -164,69 +164,6 @@ func (c *memoryRPCClient) Health() (Health, error) {
 	return resp, err
 }
 
-// ============================== KnowledgeStore ===============================
-
-// KnowledgePlugin adapts a KnowledgeStore to plugin.Plugin over net/rpc. On the
-// client side Impl is nil (only Server consults it).
-type KnowledgePlugin struct{ Impl KnowledgeStore }
-
-func (p *KnowledgePlugin) Server(*goplugin.MuxBroker) (interface{}, error) {
-	return &knowledgeRPCServer{Impl: p.Impl}, nil
-}
-
-func (p *KnowledgePlugin) Client(_ *goplugin.MuxBroker, c *rpc.Client) (interface{}, error) {
-	return &knowledgeRPCClient{client: c}, nil
-}
-
-type knowledgeRPCServer struct{ Impl KnowledgeStore }
-
-func (s *knowledgeRPCServer) Query(req QueryArgs, resp *QueryResult) error {
-	r, err := s.Impl.Query(req)
-	if err != nil {
-		return err
-	}
-	*resp = r
-	return nil
-}
-
-func (s *knowledgeRPCServer) Reindex(req ReindexArgs, resp *ReindexResult) error {
-	r, err := s.Impl.Reindex(req)
-	if err != nil {
-		return err
-	}
-	*resp = r
-	return nil
-}
-
-func (s *knowledgeRPCServer) Health(_ Empty, resp *KnowledgeHealth) error {
-	r, err := s.Impl.Health()
-	if err != nil {
-		return err
-	}
-	*resp = r
-	return nil
-}
-
-type knowledgeRPCClient struct{ client *rpc.Client }
-
-func (c *knowledgeRPCClient) Query(req QueryArgs) (QueryResult, error) {
-	var resp QueryResult
-	err := c.client.Call("Plugin.Query", req, &resp)
-	return resp, err
-}
-
-func (c *knowledgeRPCClient) Reindex(req ReindexArgs) (ReindexResult, error) {
-	var resp ReindexResult
-	err := c.client.Call("Plugin.Reindex", req, &resp)
-	return resp, err
-}
-
-func (c *knowledgeRPCClient) Health() (KnowledgeHealth, error) {
-	var resp KnowledgeHealth
-	err := c.client.Call("Plugin.Health", Empty{}, &resp)
-	return resp, err
-}
-
 // ============================= CredentialBroker ==============================
 
 // BrokerPlugin adapts a CredentialBroker to plugin.Plugin over net/rpc.
@@ -360,12 +297,10 @@ func (c *mcpRPCClient) CallTool(name string, args json.RawMessage) (json.RawMess
 // and the plugin adapters satisfy plugin.Plugin.
 var (
 	_ MemoryStore      = (*memoryRPCClient)(nil)
-	_ KnowledgeStore   = (*knowledgeRPCClient)(nil)
 	_ CredentialBroker = (*brokerRPCClient)(nil)
 	_ McpServer        = (*mcpRPCClient)(nil)
 
 	_ goplugin.Plugin = (*MemoryPlugin)(nil)
-	_ goplugin.Plugin = (*KnowledgePlugin)(nil)
 	_ goplugin.Plugin = (*BrokerPlugin)(nil)
 	_ goplugin.Plugin = (*McpPlugin)(nil)
 )

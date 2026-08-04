@@ -545,16 +545,15 @@ func ValidateHostWorkspace(real, home string) error {
 
 // HostChildEnv returns the host-mode env contract (see the RunHost comment),
 // appended to os.Environ() for the child only — never exported, never persisted.
-// MEMORY_URL/KNOWLEDGE_URL honor the same MEMORY_PORT/KNOWLEDGE_PORT overrides
-// the services themselves honor (serve.go), so a non-default `pix serve`
-// and the host session agree on where the daemons live. ollamaModel (config
+// MEMORY_URL honors the same MEMORY_PORT override the service itself honors
+// (serve.go), so a non-default `pix serve` and the host session agree on
+// where the daemon lives. ollamaModel (config
 // ollama_bridge_model) rides along as OLLAMA_BRIDGE_MODEL — the env-var half of
 // what run.go does with the workspace file, and the bridge's strongest override.
 func HostChildEnv(agentDir, ollamaModel string) []string {
 	env := []string{
 		"PI_CODING_AGENT_DIR=" + agentDir,
 		fmt.Sprintf("MEMORY_URL=http://127.0.0.1:%d", rpc.PortFromEnv("MEMORY_PORT", rpc.MemoryPortDefault)),
-		fmt.Sprintf("KNOWLEDGE_URL=http://127.0.0.1:%d", rpc.PortFromEnv("KNOWLEDGE_PORT", rpc.KnowledgePortDefault)),
 		"OLLAMA_HOSTMODE=1",
 		"OLLAMA_URL=http://127.0.0.1:11434/v1",
 		"PI_SUBAGENT_DISABLED=1",
@@ -668,15 +667,14 @@ func runHostLaunch(o HostOpts) {
 		os.Exit(1)
 	}
 
-	// Shared launcher machinery: profile resolution (skill/memory/knowledge
-	// scoping — the sandbox-name half is meaningless here), knowledge scope, and
-	// the per-run profile file. All best-effort, exactly like run.go.
+	// Shared launcher machinery: profile resolution (skill/memory scoping — the
+	// sandbox-name half is meaningless here) and the per-run profile file. All
+	// best-effort, exactly like run.go.
 	cfg, _, err := workspace.LoadResolvedConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix host: %v\n", err)
 		os.Exit(1)
 	}
-	WireKnowledgeScope(cfg, ws, DefaultKnowledgeRPC())
 
 	// F3: refresh the active pack's host wrappers so a `pack use` since the
 	// last `host setup` takes effect, re-hashing every ACCEPTED [[bin]] against

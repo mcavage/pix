@@ -61,7 +61,6 @@ import (
 
 	"pix/host/config"
 	"pix/host/hostenv/hostenvtest"
-	"pix/host/knowledge"
 	"pix/host/routing"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/onboard"
@@ -75,20 +74,16 @@ import (
 // stale — that is the whole point of a named list instead of a comment.
 var workspaceMarkerFiles = []string{
 	"profile",
-	"knowledge.scope",
 	"ollama-bridge.model",
 	"sandbox.pack",
-	"knowledge",
 	"onboarding.json",
 }
 
 func TestWorkspaceMarkerInventory_MatchesEnumeratedSet(t *testing.T) {
 	want := map[string]bool{
 		"profile":             true,
-		"knowledge.scope":     true,
 		"ollama-bridge.model": true,
 		"sandbox.pack":        true,
-		"knowledge":           true,
 		"onboarding.json":     true,
 	}
 	if len(workspaceMarkerFiles) != len(want) {
@@ -118,20 +113,6 @@ func TestMarkerRoundTrip_Profile(t *testing.T) {
 	pack.WriteMemoryScope(ws, nil)
 	if _, err := os.Stat(filepath.Join(ws, ".pix", "profile")); !os.IsNotExist(err) {
 		t.Errorf("profile marker should be removed for a nil pack, stat err=%v", err)
-	}
-}
-
-// ── knowledge.scope ──────────────────────────────────────────────────────
-
-func TestMarkerRoundTrip_KnowledgeScope(t *testing.T) {
-	ws := t.TempDir()
-	if err := launch.WriteKnowledgeScope(ws, []string{"/global/bundle", "/project/bundle"}); err != nil {
-		t.Fatalf("launch.WriteKnowledgeScope: %v", err)
-	}
-	got := readFile(t, filepath.Join(ws, ".pix", "knowledge.scope"))
-	want := "/global/bundle\n/project/bundle\n"
-	if got != want {
-		t.Errorf("knowledge.scope = %q, want %q (knowledge-recall.ts splits on [\\n,] and trims each line)", got, want)
 	}
 }
 
@@ -180,32 +161,6 @@ func TestMarkerRoundTrip_SandboxPack(t *testing.T) {
 	launch.WriteSandboxPackMarker(ws, "")
 	if got := launch.ReadSandboxPackMarker(ws); got != "" {
 		t.Errorf("launch.ReadSandboxPackMarker after pack-less write = %q, want empty", got)
-	}
-}
-
-// ── knowledge (project pointer) ──────────────────────────────────────────
-
-func TestMarkerRoundTrip_KnowledgeProjectPointer(t *testing.T) {
-	repo := t.TempDir()
-	bundle := t.TempDir()
-
-	var out bytes.Buffer
-	if err := knowledge.KnowledgeUseProject(bundle, repo, &out); err != nil {
-		t.Fatalf("knowledge.KnowledgeUseProject: %v", err)
-	}
-
-	// knowledge.ReadProjectPointer sees the portable (repo-relative-or-absolute) ref...
-	pointer := knowledge.ReadProjectPointer(repo)
-	if pointer == "" {
-		t.Fatal("knowledge.ReadProjectPointer returned empty after knowledge.KnowledgeUseProject wrote the pointer")
-	}
-	// ...and launch.ProjectBundle re-resolves that ref back to the SAME canonical id
-	// the store keys its `bundle` column on — the round trip
-	// launch.WireKnowledgeScope actually depends on every real run.
-	want := knowledge.CanonicalizeKnowledgeBundle(bundle)
-	got := launch.ProjectBundle(repo)
-	if got != want {
-		t.Errorf("launch.ProjectBundle round-trip = %q, want %q (pointer was %q)", got, want, pointer)
 	}
 }
 
@@ -264,13 +219,9 @@ func TestMarkerRoundTrip_HostStateNeverBecomesAWorkspaceFile(t *testing.T) {
 
 	// Write every OTHER real marker into the same workspace...
 	pack.WriteMemoryScope(ws, &pack.Info{Manifest: pack.Manifest{MemoryScope: "work"}})
-	if err := launch.WriteKnowledgeScope(ws, []string{"/a"}); err != nil {
-		t.Fatal(err)
-	}
 	launch.WriteOllamaBridgeFile(ws, "qwen3.5:9b")
 	launch.WriteSandboxPackMarker(ws, filepath.Join(ws, "pack"))
 	var out bytes.Buffer
-	_ = knowledge.KnowledgeUseProject(t.TempDir(), ws, &out)
 	if err := os.WriteFile(filepath.Join(ws, ".pix", onboard.FileName), []byte(`{"version":1}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
