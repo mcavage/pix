@@ -85,6 +85,13 @@
       "edges": 0,
       "exits": 0
     },
+    "pix/host/lease": {
+      "prod_loc": 617,
+      "exports": 12,
+      "globals": 8,
+      "edges": 0,
+      "exits": 0
+    },
     "pix/host/mcp": {
       "prod_loc": 1782,
       "exports": 60,

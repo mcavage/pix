@@ -1,20 +1,21 @@
+//go:build unix
+
 // Package lease implements the hardened per-sandbox lifecycle/ref-lock
 // primitives for U04a (Story04, PRD AC-LIFE): an immutable creation record, an
 // identity-bound "keep alive" marker, and an flock-backed reference lock that
 // lets many holders share liveness while giving a reaper a kernel-verified,
 // non-blocking proof that zero holders remain.
 //
-// # Standalone by design
+// # Foundation, unix-only
 //
-// This package deliberately stands alone: its own module (go.mod), zero
-// non-stdlib dependencies, no edits to services/host/go.mod, services/host's
-// arch_test.go, or services/host/config. It is L0 foundation work (no domain
-// knowledge, unix syscalls + stdlib only) sized to be dropped in at
-// services/host/lease/ by whoever wires it into a workflow — at which point
-// the integrator adds one line to arch_test.go's pkgLayer map
-// ("lease": layerFoundation) and folds this go.mod into the host module.
-// Nothing here assumes that integration; it is exercised entirely through
-// its own `go test ./...` in this directory.
+// This is L0 foundation work (no domain knowledge, unix syscalls + stdlib
+// only — see arch_test.go's pkgLayer map: "lease": layerFoundation), folded
+// into the pix/host module: zero non-stdlib dependencies, no separate
+// go.mod. Every file here carries //go:build unix — the product compiles on
+// a macOS host and a Linux dev/CI box, and Windows support is intentionally
+// dropped, so there is no non-unix degrade variant to maintain (contrast
+// services/host/lock.go + lock_windows.go, which DOES need one because that
+// primitive is reachable on every platform pix-host ships).
 //
 // # What is NOT here (by design — no behavior wiring yet)
 //

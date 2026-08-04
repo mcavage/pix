@@ -1,3 +1,5 @@
+//go:build unix
+
 package lease
 
 import (
@@ -98,19 +100,39 @@ func (l *Lease) acquire(ctx context.Context, how int) error {
 // flockDeadline polls a non-blocking flock(how) on fd until it succeeds or
 // ctx is done. It is the shared deadline-bounded primitive behind both
 // Lease's acquires and keep.go's short-lived internal RMW guard.
+//
+// The poll uses ONE ticker for the whole wait, not a fresh time.After per
+// iteration: time.After allocates a new Timer on every call and — inside a
+// tight retry loop — leaves each of those timers live (and unstoppable) until
+// it fires, one per poll instead of one per call. A single time.NewTicker is
+// allocated once, reused for every tick, and its defer Stop() releases the
+// underlying runtime timer the moment this function returns instead of
+// leaving it to fire on its own.
 func flockDeadline(ctx context.Context, fd int, how int, path string) error {
-	for {
+	tryLock := func() (bool, error) {
 		err := syscall.Flock(fd, how|syscall.LOCK_NB)
 		if err == nil {
-			return nil
+			return true, nil
 		}
 		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
-			return &os.PathError{Op: "flock", Path: path, Err: err}
+			return false, &os.PathError{Op: "flock", Path: path, Err: err}
 		}
+		return false, nil
+	}
+	if ok, err := tryLock(); ok || err != nil {
+		return err
+	}
+
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	for {
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("lease: %w acquiring lock on %s", ctx.Err(), path)
-		case <-time.After(pollInterval):
+		case <-ticker.C:
+			if ok, err := tryLock(); ok || err != nil {
+				return err
+			}
 		}
 	}
 }

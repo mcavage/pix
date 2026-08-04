@@ -54,6 +54,11 @@ var pkgLayer = map[string]int{
 	"cli":                 layerFoundation,
 	"hostenv":             layerFoundation,
 	"launcher":            layerFoundation,
+	// lease is U04a's per-sandbox lifecycle/ref-lock primitives (an immutable
+	// creation record, an identity-bound keep marker, an flock-backed
+	// reference lock): unix syscalls + stdlib only, no domain knowledge, same
+	// tier as sys/config/workspace.
+	"lease": layerFoundation,
 	// workspace is L0, not a capability: it answers "where am I working and what
 	// state is stored there", which is location resolution in the same family as
 	// config. It imports only config and sys. Filing it as a capability was a
