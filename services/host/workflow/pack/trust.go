@@ -60,7 +60,7 @@ type hostBoM struct {
 	Prerequisites  []string           // pack-authored external state the user must bring
 	Setup          []packSetupStep    // pack setup executables, probes, and apply argv
 	Inference      []hostBoMInference // model endpoints plus credential-routing policy
-	Services       []PackService      // [[services]] long-running units (normalized; U08a, declaration-only)
+	Services       []packService      // [[services]] long-running units (normalized; U08a, declaration-only)
 }
 
 // hostBoMMCP is one host-spawned MCP server: its name plus the exact argv the
@@ -556,7 +556,7 @@ func renderHostBoM(out io.Writer, b hostBoM) {
 	for _, svc := range b.Services {
 		fmt.Fprintf(out, "  Host service:        %s (%s, activation %s)\n", svc.Name, svc.Runtime, svc.Activation)
 		switch svc.Runtime {
-		case ServiceRuntimeContainer:
+		case serviceRuntimeContainer:
 			fmt.Fprintf(out, "                       Runs a container on this Mac: %s\n", svc.Image)
 		default:
 			line := svc.Path

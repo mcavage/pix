@@ -39,64 +39,71 @@ import (
 	"strings"
 )
 
-// Service runtimes — the closed set. Container is accepted as a DECLARATION
-// (identity validated, consented, fingerprinted) but is the future path;
-// no runtime consumes either yet.
-const (
-	ServiceRuntimeGoPlugin  = "go-plugin"
-	ServiceRuntimeContainer = "container"
-)
+// serviceRuntimeContainer is the one runtime value another file needs to name
+// (trust.go renders container identity differently in the BoM). Everything
+// else in the vocabulary is data on serviceRules.
+const serviceRuntimeContainer = "container"
 
-// Service activations — the closed set: start with serve ("always") or on
-// first use ("on-demand").
-const (
-	ServiceActivationAlways   = "always"
-	ServiceActivationOnDemand = "on-demand"
-)
-
-// reservedServicePorts are pix-host's own front doors: a pack service that
-// "collides" with one would either fail to bind or — worse — win the race and
-// impersonate a built-in unit to every sandbox client. Rejected at load.
-// (11436/knowledge is currently also built-in but is expected to migrate to a
-// pack service; only the permanently-reserved ports are pinned here.)
-var reservedServicePorts = map[int]string{
-	11435: "pix-host memory",
-	11437: "pix monitor",
+// serviceRules is the whole [[services]] vocabulary: the closed sets, the
+// reserved names/ports, and the value shapes. ONE immutable package value
+// rather than a package-level name per rule — they are only ever read
+// together, by validatePackServices.
+//
+//   - runtimes: go-plugin, plus container accepted as a DECLARATION (identity
+//     validated, consented, fingerprinted) but the future path; no runtime
+//     consumes either yet.
+//   - activations: start with serve ("always") or on first use ("on-demand").
+//   - reservedPorts are pix-host's own front doors: a pack service that
+//     "collides" with one would either fail to bind or — worse — win the race
+//     and impersonate a built-in unit to every sandbox client. (11436/knowledge
+//     is currently also built-in but is expected to migrate to a pack service;
+//     only the permanently-reserved ports are pinned here.)
+//   - reservedNames are the built-in supervisor slots. A pack service shadowing
+//     one would make `serve status` and the consent screen ambiguous about
+//     WHOSE code runs under that name.
+//   - envName is what an env REFERENCE NAME may look like; anything else (an
+//     '=' assignment, an op:// ref, whitespace, a pasted token) is value-shaped
+//     and refused. spdx covers SPDX identifiers and expressions. shaHex is a
+//     full sha256 hex digest. networkHost is a bare egress hostname
+//     (optionally wildcarded or port-qualified) — never a URL, never a path.
+var serviceRules = struct {
+	runtimes      map[string]bool
+	activations   map[string]bool
+	reservedPorts map[int]string
+	reservedNames map[string]bool
+	envName       *regexp.Regexp
+	spdx          *regexp.Regexp
+	shaHex        *regexp.Regexp
+	networkHost   *regexp.Regexp
+}{
+	runtimes:    map[string]bool{"go-plugin": true, serviceRuntimeContainer: true},
+	activations: map[string]bool{"always": true, "on-demand": true},
+	reservedPorts: map[int]string{
+		11435: "pix-host memory",
+		11437: "pix monitor",
+	},
+	reservedNames: map[string]bool{
+		"memory":    true,
+		"knowledge": true,
+		"broker":    true,
+		"monitor":   true,
+		"serve":     true,
+	},
+	envName:     regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`),
+	spdx:        regexp.MustCompile(`^[A-Za-z0-9 .()+-]{1,128}$`),
+	shaHex:      regexp.MustCompile(`^[0-9a-fA-F]{64}$`),
+	networkHost: regexp.MustCompile(`^\*?[A-Za-z0-9][A-Za-z0-9.-]{0,252}(:[0-9]{1,5})?$`),
 }
 
-// reservedServiceNames are the built-in supervisor slots. A pack service
-// shadowing one would make `serve status` and the consent screen ambiguous
-// about WHOSE code runs under that name.
-var reservedServiceNames = map[string]bool{
-	"memory":    true,
-	"knowledge": true,
-	"broker":    true,
-	"monitor":   true,
-	"serve":     true,
-}
-
-// envNamePattern is what an env REFERENCE NAME may look like. Anything else
-// (an '=' assignment, an op:// ref, whitespace, a pasted token) is
-// value-shaped and refused.
-var envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
-
-// spdxPattern covers SPDX license identifiers and expressions
-// ("MIT", "Apache-2.0", "MIT OR GPL-2.0-only WITH Classpath-exception-2.0").
-var spdxPattern = regexp.MustCompile(`^[A-Za-z0-9 .()+-]{1,128}$`)
-
-// shaHexPattern is a full sha256 hex digest.
-var shaHexPattern = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
-
-// networkHostPattern is a bare egress hostname (optionally wildcarded or
-// port-qualified) — never a URL, never a path.
-var networkHostPattern = regexp.MustCompile(`^\*?[A-Za-z0-9][A-Za-z0-9.-]{0,252}(:[0-9]{1,5})?$`)
-
-// PackService is one [[services]] entry: a normalized long-running service
+// packService is one [[services]] entry: a normalized long-running service
 // declaration. All fields are part of the Tier-1 host-exec fingerprint.
-type PackService struct {
+// Unexported: nothing outside this package reads a service yet — the
+// supervisor story that consumes gate-passed specs is what earns the exported
+// surface, and it does not exist.
+type packService struct {
 	Name       string `toml:"name"`
-	Runtime    string `toml:"runtime"`    // ServiceRuntime* (closed set)
-	Activation string `toml:"activation"` // ServiceActivation* (closed set)
+	Runtime    string `toml:"runtime"`    // serviceRules.runtimes (closed set)
+	Activation string `toml:"activation"` // serviceRules.activations (closed set)
 	// go-plugin identity: repo-relative executable + pinned sha256 of its
 	// bytes (verified at staging/launch by the future consumer, exactly like
 	// [[bin]]). The file need not exist at declaration time — the pin is the
@@ -119,22 +126,22 @@ type PackService struct {
 	// Network are bare egress hostnames the unit declares it reaches.
 	Network []string `toml:"network,omitempty"`
 	// Resources are declared ceilings (informational until a consumer exists).
-	Resources *PackServiceResources `toml:"resources,omitempty"`
+	Resources *packServiceResources `toml:"resources,omitempty"`
 	// License (SPDX identifier/expression) and Source (https URL) attribute
 	// the code the user is consenting to run. Both required.
 	License string `toml:"license"`
 	Source  string `toml:"source"`
 }
 
-// PackServiceResources are declared resource ceilings.
-type PackServiceResources struct {
+// packServiceResources are declared resource ceilings.
+type packServiceResources struct {
 	MemoryMB   int `toml:"memory_mb,omitempty"`
 	CPUPercent int `toml:"cpu_percent,omitempty"`
 }
 
 // normalized returns a whitespace-trimmed, case-canonical copy: the SHAPE the
 // BoM shows, the fingerprint hashes, and (later) the supervisor consumes.
-func (s PackService) normalized() PackService {
+func (s packService) normalized() packService {
 	out := s
 	out.Name = strings.TrimSpace(s.Name)
 	out.Runtime = strings.ToLower(strings.TrimSpace(s.Runtime))
@@ -210,15 +217,25 @@ func validatePackServices(root string, m *Manifest) error {
 		if !safeArtifactName(s.Name) {
 			return bad("name %q is invalid (letters, digits, -, _, . only; no path separators)", m.Services[i].Name)
 		}
-		if reservedServiceNames[strings.ToLower(s.Name)] {
+		if serviceRules.reservedNames[strings.ToLower(s.Name)] {
 			return bad("name %q is reserved for a built-in pix-host unit", s.Name)
 		}
 		if seen[s.Name] {
 			return bad("duplicate service name %q; each service must be declared exactly once", s.Name)
 		}
 		seen[s.Name] = true
-		switch s.Runtime {
-		case ServiceRuntimeGoPlugin:
+		if !serviceRules.runtimes[s.Runtime] {
+			return bad("invalid runtime %q (want %q or %q)", m.Services[i].Runtime, "go-plugin", serviceRuntimeContainer)
+		}
+		if s.Runtime == serviceRuntimeContainer {
+			if s.Path != "" || s.SHA != "" {
+				return bad("runtime container must not set path/sha (identity is the digest-pinned image)")
+			}
+			at := strings.LastIndex(s.Image, "@sha256:")
+			if s.Image == "" || at < 1 || !serviceRules.shaHex.MatchString(s.Image[at+len("@sha256:"):]) {
+				return bad("runtime container requires a digest-pinned image (repo@sha256:<64 hex>), got %q", s.Image)
+			}
+		} else { // go-plugin: the only other member of the closed set
 			if s.Image != "" {
 				return bad("runtime go-plugin must not set image (image identifies a container runtime)")
 			}
@@ -228,24 +245,12 @@ func validatePackServices(root string, m *Manifest) error {
 			if err := validateRepoRelativePath(root, s.Path); err != nil {
 				return bad("%v", err)
 			}
-			if !shaHexPattern.MatchString(s.SHA) {
+			if !serviceRules.shaHex.MatchString(s.SHA) {
 				return bad("runtime go-plugin requires a full sha256 hex pin in sha (external service binaries are never admitted unpinned; fail closed)")
 			}
-		case ServiceRuntimeContainer:
-			if s.Path != "" || s.SHA != "" {
-				return bad("runtime container must not set path/sha (identity is the digest-pinned image)")
-			}
-			at := strings.LastIndex(s.Image, "@sha256:")
-			if s.Image == "" || at < 1 || !shaHexPattern.MatchString(s.Image[at+len("@sha256:"):]) {
-				return bad("runtime container requires a digest-pinned image (repo@sha256:<64 hex>), got %q", s.Image)
-			}
-		default:
-			return bad("invalid runtime %q (want %q or %q)", m.Services[i].Runtime, ServiceRuntimeGoPlugin, ServiceRuntimeContainer)
 		}
-		switch s.Activation {
-		case ServiceActivationAlways, ServiceActivationOnDemand:
-		default:
-			return bad("invalid activation %q (want %q or %q)", m.Services[i].Activation, ServiceActivationAlways, ServiceActivationOnDemand)
+		if !serviceRules.activations[s.Activation] {
+			return bad("invalid activation %q (want %q or %q)", m.Services[i].Activation, "always", "on-demand")
 		}
 		for _, arg := range s.Argv {
 			if strings.ContainsAny(arg, "\x00\r\n") {
@@ -253,14 +258,14 @@ func validatePackServices(root string, m *Manifest) error {
 			}
 		}
 		for _, e := range s.Env {
-			if !envNamePattern.MatchString(e) {
+			if !serviceRules.envName.MatchString(e) {
 				return bad("env entry %q is value-shaped; [[services]] env carries reference NAMES only (the value stays in 1Password / op-refs.env)", e)
 			}
 		}
 		if s.Port < 0 || s.Port > 65535 {
 			return bad("port %d is out of range", s.Port)
 		}
-		if owner, taken := reservedServicePorts[s.Port]; taken {
+		if owner, taken := serviceRules.reservedPorts[s.Port]; taken {
 			return bad("port %d is reserved for %s; a pack service can never claim a built-in pix-host port", s.Port, owner)
 		}
 		if s.Listen != "" && !serviceListenIsLoopback(s.Listen) {
@@ -278,14 +283,14 @@ func validatePackServices(root string, m *Manifest) error {
 			}
 		}
 		for _, host := range s.Network {
-			if !networkHostPattern.MatchString(host) {
+			if !serviceRules.networkHost.MatchString(host) {
 				return bad("network entry %q is not a bare egress hostname", host)
 			}
 		}
 		if r := s.Resources; r != nil && (r.MemoryMB < 0 || r.CPUPercent < 0) {
 			return bad("resources must be non-negative")
 		}
-		if !spdxPattern.MatchString(s.License) {
+		if !serviceRules.spdx.MatchString(s.License) {
 			return bad("license %q must be a non-empty SPDX identifier/expression", m.Services[i].License)
 		}
 		u, err := url.Parse(s.Source)

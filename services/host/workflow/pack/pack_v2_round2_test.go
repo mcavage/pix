@@ -428,7 +428,7 @@ func TestSynthesizePackKit_ResynthOverExistingKit(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
-		if strings.Contains(e.Name(), kitTmpInfix) || strings.Contains(e.Name(), kitOldInfix) || strings.HasSuffix(e.Name(), ".tmp") {
+		if strings.Contains(e.Name(), ".tmp-") || strings.Contains(e.Name(), ".old-") || strings.HasSuffix(e.Name(), ".tmp") {
 			t.Errorf("leftover synth debris: %s", e.Name())
 		}
 	}

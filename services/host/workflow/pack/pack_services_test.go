@@ -78,14 +78,14 @@ func TestPackServices_ValidManifestLoads(t *testing.T) {
 		t.Fatalf("want 2 services, got %d", len(p.Manifest.Services))
 	}
 	s := p.Manifest.Services[0]
-	if s.Name != "telemetry" || s.Runtime != ServiceRuntimeGoPlugin || s.Activation != ServiceActivationOnDemand {
+	if s.Name != "telemetry" || s.Runtime != "go-plugin" || s.Activation != "on-demand" {
 		t.Fatalf("bad first service: %+v", s)
 	}
 	if s.Resources == nil || s.Resources.MemoryMB != 256 || s.Resources.CPUPercent != 50 {
 		t.Fatalf("resources not parsed: %+v", s.Resources)
 	}
 	c := p.Manifest.Services[1]
-	if c.Runtime != ServiceRuntimeContainer || c.Image == "" {
+	if c.Runtime != serviceRuntimeContainer || c.Image == "" {
 		t.Fatalf("bad container service: %+v", c)
 	}
 }
