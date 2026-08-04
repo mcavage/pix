@@ -2,6 +2,7 @@ package corpus
 
 import (
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"testing"
 )
@@ -144,30 +145,120 @@ func mustJSON(t *testing.T, v any) string {
 	return string(b)
 }
 
+// dangerousVerbs is the flat set of pix verbs whose corpus shard may ONLY
+// exercise -h/--help/bad-flag cases (never actually launch/mutate/reach the
+// network). Keep this in sync with runVerb's switch in main.go: any verb that
+// mutates on-disk state, spawns a sandbox, or touches the network belongs
+// here, not just the ones that happen to have a shard today.
+var dangerousVerbs = map[string]bool{
+	"run": true, "reset": true, "rm": true, "restore": true, "backup": true,
+	"task": true, "setup": true,
+}
+
+// groupedDangerousSubcommands maps a "grouping" verb (one whose subcommands
+// fan out to already-dangerous flat aliases, e.g. `pix state reset` runs the
+// exact same runReset as the top-level `pix reset` — see state.go) to the set
+// of its OWN subcommands that are dangerous. A grouping verb itself is safe
+// to invoke bare or with -h (it only prints group usage), so it is
+// deliberately absent from dangerousVerbs; only once the subcommand token
+// resolves to a dangerous one does the same safe-tail rule apply, starting
+// one position later.
+var groupedDangerousSubcommands = map[string]map[string]bool{
+	"state": {"backup": true, "restore": true, "reset": true},
+}
+
+// safeTailArg reports whether a single argv token, appearing after a
+// resolved dangerous verb (or grouped dangerous subcommand), is safe: it can
+// only ever print help or a usage error, never launch/mutate/reach the
+// network.
+func safeTailArg(a string) bool {
+	return a == "--help" || a == "-h" || a == "--this-is-not-a-real-flag-9x7z"
+}
+
+// dangerousArgvViolation returns a non-empty reason if args reaches a
+// dangerous verb (flat, e.g. `reset`, or a grouped subcommand, e.g. `state
+// reset`) with anything beyond a safe -h/--help/bad-flag tail. An empty args,
+// or a verb/subcommand not in either dangerous set, or a dangerous verb with
+// no tail at all, is not a violation (matches the existing `rm` bare-argument
+// corpus case, whose bare invocation is a "missing argument" usage error, not
+// a mutation).
+func dangerousArgvViolation(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	verb, tail := args[0], args[1:]
+	if subs, ok := groupedDangerousSubcommands[verb]; ok {
+		if len(args) < 2 || !subs[args[1]] {
+			// Bare group noun, group -h/--help, or an unresolved/unknown
+			// subcommand — none of these dispatch to a dangerous action.
+			return ""
+		}
+		verb, tail = verb+" "+args[1], args[2:]
+	} else if !dangerousVerbs[verb] {
+		return ""
+	}
+	for _, a := range tail {
+		if !safeTailArg(a) {
+			return fmt.Sprintf("touches a destructive verb %q with a non-safe argument %q", verb, a)
+		}
+	}
+	return ""
+}
+
+// TestDangerousArgvViolation locks the classifier's contract directly
+// (independent of whatever cases the shipped corpus happens to contain
+// today), including the two gaps W0 review found: "setup" was missing from
+// the flat set entirely, and a grouping verb's dangerous subcommand (`state
+// reset`/`state restore`/`state backup`) was invisible because the original
+// guard only ever inspected args[0].
+func TestDangerousArgvViolation(t *testing.T) {
+	cases := []struct {
+		name          string
+		args          []string
+		wantViolation bool
+	}{
+		{"empty", nil, false},
+		{"safe verb untouched", []string{"config", "show"}, false},
+		{"reset help", []string{"reset", "--help"}, false},
+		{"reset bad-flag", []string{"reset", "--this-is-not-a-real-flag-9x7z"}, false},
+		{"reset bare", []string{"reset"}, false},
+		{"reset real flag mutates", []string{"reset", "--yes"}, true},
+		{"rm bare is a usage error, not a mutation", []string{"rm"}, false},
+		{"setup help", []string{"setup", "--help"}, false},
+		{"setup bad-flag", []string{"setup", "--this-is-not-a-real-flag-9x7z"}, false},
+		{"setup with a real dir launches provisioning", []string{"setup", "."}, true},
+		{"state group bare", []string{"state"}, false},
+		{"state group help", []string{"state", "--help"}, false},
+		{"state bad-invocation", []string{"state", "--this-is-not-a-real-flag-9x7z"}, false},
+		{"state reset help is fine", []string{"state", "reset", "--help"}, false},
+		{"state reset with a real flag mutates", []string{"state", "reset", "--yes"}, true},
+		{"state restore with an archive path restores", []string{"state", "restore", "/tmp/x.tar.gz"}, true},
+		{"state backup with an out path writes", []string{"state", "backup", "--out", "/tmp/x"}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := dangerousArgvViolation(c.args) != ""
+			if got != c.wantViolation {
+				t.Errorf("dangerousArgvViolation(%v) violation=%v, want %v", c.args, got, c.wantViolation)
+			}
+		})
+	}
+}
+
 // sanity: this package must never shell out to anything but the built pix
 // binary — no docker/sbx/network client. This is a text-level guard against a
-// case sneaking in a destructive/network argv (e.g. "reset", "rm --all", "run").
+// case sneaking in a destructive/network argv (e.g. "reset", "rm --all", "run",
+// "state reset --yes", "setup .").
 func TestShards_ForbidDangerousArgvPrefixes(t *testing.T) {
 	shards, err := LoadShards(realShardsDir(t))
 	if err != nil {
 		t.Fatalf("LoadShards: %v", err)
 	}
-	dangerous := map[string]bool{"run": true, "reset": true, "rm": true, "restore": true, "backup": true, "task": true}
 	for _, s := range shards {
 		for _, c := range s.Cases {
-			if len(c.Args) == 0 {
-				continue
-			}
-			if dangerous[c.Args[0]] {
-				// A dangerous verb's shard may ONLY exercise -h/--help/bad-flag
-				// cases (never actually launch/mutate anything).
-				for _, a := range c.Args[1:] {
-					if a != "--help" && a != "-h" && a != "--this-is-not-a-real-flag-9x7z" {
-						t.Errorf("shard %q case %q touches a destructive verb with a non-safe argument %q", s.Verb, c.Name, a)
-					}
-				}
+			if reason := dangerousArgvViolation(c.Args); reason != "" {
+				t.Errorf("shard %q case %q %s", s.Verb, c.Name, reason)
 			}
 		}
 	}
 }
-
