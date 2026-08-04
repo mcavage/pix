@@ -11,6 +11,24 @@ pix is an independent project. It is not affiliated with, endorsed by, or
 sponsored by any of the organizations named below; their names appear solely
 to attribute the open-source components pix depends on. See `NOTICE.md`.
 
+## Directly-downloaded/baked toolchain binaries (Dockerfile)
+
+These are NOT npm/go-module dependencies — they are static binaries or
+tarballs fetched directly by `curl` in the Dockerfile from the project's own
+GitHub Releases (or, for Go, go.dev/dl), pinned by an explicit `ARG` (never
+`releases/latest`) so builds stay reproducible and the pin is one grep away
+from the source of truth.
+
+| Tool | Version | License | Source |
+| --- | --- | --- | --- |
+| fd | 10.4.2 | MIT OR Apache-2.0 | https://github.com/sharkdp/fd |
+| go | 1.26.5 | BSD-3-Clause | https://go.dev/dl/ (https://github.com/golang/go) |
+| ruff | 0.15.22 | MIT | https://github.com/astral-sh/ruff |
+
+- **fd@10.4.2** (MIT OR Apache-2.0) — Dockerfile: official static binary release, fetched via `curl` from GitHub Releases (pinned by ARG FD_VERSION), installed to /usr/local/bin/fd and symlinked into ~/.pi/agent/bin/fd — fast file finder pi otherwise auto-downloads per-sandbox.
+- **go@1.26.5** (BSD-3-Clause) — Dockerfile: official Go toolchain tarball, fetched via `curl` from go.dev/dl (pinned by ARG GO_VERSION to match services/host/go.mod's `go` directive), installed to /usr/local/go — builds/tests the host binary (pix-host) from inside a sandbox. Distributed as a runtime/compiler in the image, not imported source, but still a directly-downloaded bundled binary.
+- **ruff@0.15.22** (MIT) — Dockerfile: official static binary release, fetched via `curl` from GitHub Releases (pinned by ARG RUFF_VERSION, not `releases/latest`), installed to /usr/local/bin/ruff — Python lint/format toolchain for agent use.
+
 ## Go modules (services/host — pix-host)
 
 | Module | Version | License |

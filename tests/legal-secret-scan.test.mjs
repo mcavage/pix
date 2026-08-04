@@ -61,6 +61,80 @@ test("full-history scan catches a secret buried in an amended-away commit", () =
 	fs.rmSync(tmp, { recursive: true, force: true });
 });
 
+test("parseBatchOutput() parses a blob record and a missing record from a raw Buffer", () => {
+	const content = Buffer.from("hello\nworld", "utf8"); // deliberately contains an internal newline
+	const header = Buffer.from(`abc123 blob ${content.length}\n`, "utf8");
+	const missing = Buffer.from("def456 missing\n", "utf8");
+	const buf = Buffer.concat([header, content, Buffer.from("\n"), missing]);
+	const map = scanMod.parseBatchOutput(buf);
+	assert.equal(map.get("abc123").toString("utf8"), "hello\nworld");
+	assert.equal(map.get("def456"), null);
+});
+
+test("batchCheck() and batchContent() report the same type/size/content as per-object `git cat-file`", () => {
+	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "secret-scan-batch-"));
+	const git = (args) => execFileSync("git", args, { cwd: tmp, encoding: "utf8" });
+	git(["init", "-q"]);
+	git(["config", "user.email", "test@example.com"]);
+	git(["config", "user.name", "Test"]);
+	fs.writeFileSync(path.join(tmp, "a.txt"), "hello world\n");
+	fs.writeFileSync(path.join(tmp, "b.txt"), "AKIAABCDEFGHIJKLMNOP\n");
+	git(["add", "."]);
+	git(["commit", "-q", "-m", "init"]);
+	const shaA = git(["rev-parse", "HEAD:a.txt"]).trim();
+	const shaB = git(["rev-parse", "HEAD:b.txt"]).trim();
+
+	const meta = scanMod.batchCheck(tmp, [shaA, shaB]);
+	assert.equal(meta.get(shaA).type, "blob");
+	assert.equal(meta.get(shaA).size, "hello world\n".length);
+	assert.equal(meta.get(shaB).type, "blob");
+
+	const contents = scanMod.batchContent(tmp, [shaA, shaB], (sha) => meta.get(sha).size);
+	assert.equal(contents.get(shaA).toString("utf8"), "hello world\n");
+	assert.equal(contents.get(shaB).toString("utf8"), "AKIAABCDEFGHIJKLMNOP\n");
+	fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test("scanRepo() makes a FIXED, small number of git invocations regardless of history size (no per-object spawnSync loop)", () => {
+	function makeRepo(fileCount) {
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "secret-scan-scale-"));
+		const git = (args) => execFileSync("git", args, { cwd: tmp, encoding: "utf8" });
+		git(["init", "-q"]);
+		git(["config", "user.email", "test@example.com"]);
+		git(["config", "user.name", "Test"]);
+		for (let i = 0; i < fileCount; i++) {
+			fs.writeFileSync(path.join(tmp, `file${i}.txt`), `ordinary content number ${i}\n`);
+			git(["add", "."]);
+			git(["commit", "-q", "-m", `commit ${i}`]);
+		}
+		return tmp;
+	}
+
+	const small = makeRepo(3);
+	const large = makeRepo(40);
+	try {
+		scanMod.resetGitCallCount();
+		scanMod.scanRepo(small, null);
+		const smallCalls = scanMod.gitCallCount;
+
+		scanMod.resetGitCallCount();
+		scanMod.scanRepo(large, null);
+		const largeCalls = scanMod.gitCallCount;
+
+		// The old implementation spawned 3 processes PER OBJECT, so 40 files
+		// across 40 commits (~80+ blobs/trees) would cost 200+ calls versus a
+		// handful for 3 files. The batched implementation makes the SAME small
+		// number of git invocations (rev-list + batch-check + a couple of
+		// content-fetch chunks) no matter how many objects are in history.
+		assert.ok(smallCalls <= 5, `expected <=5 git calls for the small repo, got ${smallCalls}`);
+		assert.ok(largeCalls <= 5, `expected <=5 git calls for the large repo (batched!), got ${largeCalls}`);
+		assert.equal(largeCalls, smallCalls, "call count should be flat regardless of history size");
+	} finally {
+		fs.rmSync(small, { recursive: true, force: true });
+		fs.rmSync(large, { recursive: true, force: true });
+	}
+});
+
 test("the allowlist file's own path is excluded from the scan (self-referential fixed-point guard)", () => {
 	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "secret-scan-selfexclude-"));
 	const git = (args) => execFileSync("git", args, { cwd: tmp, encoding: "utf8" });

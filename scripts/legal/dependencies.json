@@ -52,6 +52,38 @@
     { "module": "modernc.org/memory", "version": "v1.11.0", "license": "BSD-3-Clause", "licenseFile": "LICENSE", "class": "permissive" },
     { "module": "modernc.org/sqlite", "version": "v1.53.0", "license": "BSD-3-Clause", "licenseFile": "LICENSE", "class": "permissive" }
   ],
+  "bakedTools": [
+    {
+      "name": "ruff",
+      "version": "0.15.22",
+      "license": "MIT",
+      "source": "https://github.com/astral-sh/ruff",
+      "dockerfileArg": "RUFF_VERSION",
+      "role": "Dockerfile: official static binary release, fetched via `curl` from GitHub Releases (pinned by ARG RUFF_VERSION, not `releases/latest`), installed to /usr/local/bin/ruff — Python lint/format toolchain for agent use.",
+      "licenseEvidence": "https://raw.githubusercontent.com/astral-sh/ruff/0.15.22/LICENSE — live-fetched at the exact pinned tag; MIT, copyright Charles Marsh. That file also reproduces third-party MIT-licensed code ruff embeds (autoflake, Flake8, isort, Pyright, pyupgrade, etc.) as attribution notices within ruff's own LICENSE — all MIT, no additional obligations beyond ruff's own.",
+      "class": "permissive"
+    },
+    {
+      "name": "fd",
+      "version": "10.4.2",
+      "license": "MIT OR Apache-2.0",
+      "source": "https://github.com/sharkdp/fd",
+      "dockerfileArg": "FD_VERSION",
+      "role": "Dockerfile: official static binary release, fetched via `curl` from GitHub Releases (pinned by ARG FD_VERSION), installed to /usr/local/bin/fd and symlinked into ~/.pi/agent/bin/fd — fast file finder pi otherwise auto-downloads per-sandbox.",
+      "licenseEvidence": "https://raw.githubusercontent.com/sharkdp/fd/v10.4.2/LICENSE-MIT and .../LICENSE-APACHE — both live-fetched at the exact pinned tag. Dual-licensed (recipient's choice of either); treated as permissive, notices elect the MIT text.",
+      "class": "permissive"
+    },
+    {
+      "name": "go",
+      "version": "1.26.5",
+      "license": "BSD-3-Clause",
+      "source": "https://go.dev/dl/ (https://github.com/golang/go)",
+      "dockerfileArg": "GO_VERSION",
+      "role": "Dockerfile: official Go toolchain tarball, fetched via `curl` from go.dev/dl (pinned by ARG GO_VERSION to match services/host/go.mod's `go` directive), installed to /usr/local/go — builds/tests the host binary (pix-host) from inside a sandbox. Distributed as a runtime/compiler in the image, not imported source, but still a directly-downloaded bundled binary.",
+      "licenseEvidence": "https://raw.githubusercontent.com/golang/go/go1.26.5/LICENSE — live-fetched at the exact pinned tag; BSD-3-Clause, copyright The Go Authors. Same license class already carried by the golang.org/x/* modules above.",
+      "class": "permissive"
+    }
+  ],
   "goModulesPlanned": [
     {
       "module": "github.com/thejerf/suture",

@@ -35,6 +35,58 @@ test("ledger declares MPL-2.0 for go-plugin and yamux, allowlisted by policy", (
 	assert.ok(policy.weakCopyleftAllowlist.includes(yamux.module));
 });
 
+test("bakedTools ledger records ruff, fd, and go with license/source/version provenance", () => {
+	const ruff = deps.bakedTools.find((t) => t.name === "ruff");
+	const fd = deps.bakedTools.find((t) => t.name === "fd");
+	const go = deps.bakedTools.find((t) => t.name === "go");
+	assert.ok(ruff, "expected a bakedTools entry for ruff");
+	assert.ok(fd, "expected a bakedTools entry for fd");
+	assert.ok(go, "expected a bakedTools entry for go");
+	for (const t of [ruff, fd, go]) {
+		assert.equal(t.class, "permissive");
+		assert.ok(t.license, `${t.name} missing license`);
+		assert.ok(t.source, `${t.name} missing source`);
+		assert.ok(t.version, `${t.name} missing version`);
+		assert.ok(t.dockerfileArg, `${t.name} missing dockerfileArg cross-check`);
+		assert.ok(t.licenseEvidence, `${t.name} missing licenseEvidence`);
+	}
+	assert.equal(ruff.license, "MIT");
+	assert.equal(fd.license, "MIT OR Apache-2.0");
+	assert.equal(go.license, "BSD-3-Clause");
+});
+
+test("validateBakedTools(): passes when the Dockerfile ARG pins match the ledger", () => {
+	const dockerfileText = fs.readFileSync(path.join(repoRoot, "Dockerfile"), "utf8");
+	const { ok, findings } = gen.validateBakedTools(dockerfileText, deps.bakedTools);
+	assert.equal(ok, true, JSON.stringify(findings));
+});
+
+test("validateBakedTools(): fails closed when the Dockerfile ARG drifts from the ledger version", () => {
+	const drifted = "ARG RUFF_VERSION=99.99.99\n";
+	const { ok, findings } = gen.validateBakedTools(drifted, [
+		{ name: "ruff", version: "0.15.22", dockerfileArg: "RUFF_VERSION" },
+	]);
+	assert.equal(ok, false);
+	assert.match(findings[0].reason, /ledger pins 0\.15\.22, Dockerfile ARG RUFF_VERSION pins 99\.99\.99/);
+});
+
+test("validateBakedTools(): fails closed when a ledger tool has no matching Dockerfile ARG", () => {
+	const { ok, findings } = gen.validateBakedTools("FROM scratch\n", [
+		{ name: "ruff", version: "0.15.22", dockerfileArg: "RUFF_VERSION" },
+	]);
+	assert.equal(ok, false);
+	assert.match(findings[0].reason, /no longer baked|ARG renamed/);
+});
+
+test("CLI --check-baked-tools passes against the real Dockerfile", () => {
+	const out = execFileSync(
+		"node",
+		[genScript, "--check-baked-tools", path.join(repoRoot, "Dockerfile")],
+		{ cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }
+	);
+	void out;
+});
+
 test("Suture is recorded as a planned entry, not a live dependency", () => {
 	const planned = deps.goModulesPlanned.find((m) => m.module === "github.com/thejerf/suture");
 	assert.ok(planned, "expected a planned ledger entry for thejerf/suture");
@@ -88,6 +140,9 @@ test("renderNotices() output contains required sections", () => {
 	assert.match(rendered, /planned/i);
 	assert.match(rendered, /@earendil-works\/pi-tui/);
 	assert.match(rendered, /not affiliated/i);
+	assert.match(rendered, /astral-sh\/ruff/);
+	assert.match(rendered, /sharkdp\/fd/);
+	assert.match(rendered, /go\.dev\/dl/);
 });
 
 test("committed THIRD_PARTY_NOTICES.md is in sync with the ledger (no drift)", () => {

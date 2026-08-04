@@ -51,6 +51,18 @@ else
 	cat "$TMP_DIR/list.err" >&2
 fi
 
+# --- 2b. baked-tool (ruff/fd/go) version gate --------------------------------
+# These are static binaries `curl`'d straight from GitHub Releases / go.dev in
+# the Dockerfile (not npm/go.mod managed), pinned by an ARG. Fails closed if
+# the Dockerfile ARG drifts from the ledger's recorded, license-verified
+# version (e.g. someone bumps RUFF_VERSION without touching the ledger).
+if node scripts/legal/generate-third-party-notices.mjs --check-baked-tools Dockerfile >"$TMP_DIR/baked.out" 2>"$TMP_DIR/baked.err"; then
+	ok "baked-tool (ruff/fd/go) versions match the ledger"
+else
+	fail "baked-tool (ruff/fd/go) version drift between Dockerfile and the ledger"
+	cat "$TMP_DIR/baked.err" >&2
+fi
+
 # --- 3. required attributions -------------------------------------------------
 require_text() { # require_text <pattern> <label>
 	if grep -qE "$1" THIRD_PARTY_NOTICES.md; then
@@ -59,6 +71,9 @@ require_text() { # require_text <pattern> <label>
 		fail "notices are missing required attribution: $2"
 	fi
 }
+require_text 'astral-sh/ruff' "ruff (baked tool) attribution"
+require_text 'sharkdp/fd' "fd (baked tool) attribution"
+require_text 'go\.dev/dl' "Go toolchain (baked tool) attribution"
 require_text 'hashicorp/go-plugin.*MPL-2\.0|MPL-2\.0.*go-plugin' "go-plugin MPL-2.0"
 require_text 'hashicorp/yamux.*MPL-2\.0|MPL-2\.0.*yamux' "yamux MPL-2.0"
 require_text 'thejerf/suture' "Suture planned entry"

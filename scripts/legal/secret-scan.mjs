@@ -1,9 +1,20 @@
 #!/usr/bin/env node
 // Full-history secret scan (AC-REL-01/legal): scans every blob reachable from
 // every ref (not just HEAD) for common secret shapes. Pattern matching is
-// pure and exported for tests; the CLI wires it to `git rev-list --objects
-// --all` + `git cat-file --batch` so nothing is skipped because it was
-// rewritten out of the current tree.
+// pure and exported for tests; the CLI wires it to a TRULY BATCHED git
+// plumbing traversal: one `git rev-list --objects --all`, one
+// `git cat-file --batch-check` (fed every object at once), and a small,
+// fixed number of `git cat-file --batch` calls chunked by content size (fed
+// only the wanted blob shas at once) — never one `spawnSync` per object.
+//
+// This replaced an earlier version that ran THREE `spawnSync("git", ...)`
+// calls PER OBJECT (`cat-file -t`, `cat-file -s`, `cat-file blob`), which
+// made a full-history scan take O(objects) process spawns — ~24s on this
+// repo's ~700-commit history, and scaling linearly (badly) with repo size.
+// The batched form below does a small, ~constant number of git invocations
+// regardless of history size (see `gitCallCount` / `resetGitCallCount()`,
+// exported so tests can PROVE the call count stays flat as history grows —
+// see tests/legal-secret-scan.test.mjs).
 //
 // Usage:
 //   node secret-scan.mjs --self-test          # pattern-matching unit checks
@@ -16,7 +27,7 @@
 //     scripts/legal/secret-scan-allowlist.txt. Empty by default: nothing is
 //     pre-allowlisted, so a genuinely clean history stays provably clean.
 
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -55,6 +66,20 @@ export function scanText(text) {
 
 export function fingerprint(ref, path, match) {
 	return createHash("sha256").update(`${ref}:${path}:${match}`).digest("hex");
+}
+
+// --- git call instrumentation (lets tests PROVE batching, not counting) -----
+// Every actual `spawnSync("git", ...)` in this file goes through `runGit()`,
+// which is the only place `gitCallCount` is incremented. A scan of full
+// history therefore makes a small, bounded number of git invocations no
+// matter how many objects are in that history.
+export let gitCallCount = 0;
+export function resetGitCallCount() {
+	gitCallCount = 0;
+}
+function runGit(args, opts) {
+	gitCallCount++;
+	return spawnSync("git", args, opts);
 }
 
 function selfTest() {
@@ -104,58 +129,167 @@ function loadAllowlist(path) {
 	);
 }
 
-// Scans full history: every blob reachable from every ref, with the
-// commit+path that introduced it (best-effort attribution via
-// `git log --all --diff-filter=A --name-only` per blob is too slow at this
-// scale, so we attribute by walking `git rev-list --objects --all` output,
-// which already pairs each blob with the path it was recorded at in at
-// least one tree).
-// The allowlist file records fingerprints of `blob:path:match` triples
-// found in OTHER files. Its own content necessarily quotes those match
-// snippets (that's what makes an allowlist entry legible on review), which
-// means IT would keep matching the very patterns it exists to allowlist —
-// and because its blob hash changes every time an entry is added, a
-// self-referential allowlist entry for its own past content can never reach
-// a fixed point (the same self-exclusion problem scripts/rename/build-inventory.sh
-// documents for its own inventory file). It is metadata ABOUT findings, not
-// a place a real secret would land, so every historical version of it is
-// excluded from the scan itself, by path.
+// The allowlist file records fingerprints of `blob:path:match` triples found
+// in OTHER files. Its own content necessarily quotes those match snippets
+// (that's what makes an allowlist entry legible on review), which means IT
+// would keep matching the very patterns it exists to allowlist — and because
+// its blob hash changes every time an entry is added, a self-referential
+// allowlist entry for its own past content can never reach a fixed point (the
+// same self-exclusion problem scripts/rename/build-inventory.sh documents for
+// its own inventory file). It is metadata ABOUT findings, not a place a real
+// secret would land, so every historical version of it is excluded from the
+// scan itself, by path.
 const SELF_EXCLUDED_PATHS = new Set(["scripts/legal/secret-scan-allowlist.txt"]);
 
-function scanRepo(repoDir, allowlistPath) {
-	const objects = execFileSync(
-		"git",
-		["rev-list", "--objects", "--all"],
-		{ cwd: repoDir, encoding: "utf8", maxBuffer: 1024 * 1024 * 256 }
-	);
-	const allowlist = loadAllowlist(allowlistPath);
-	const findings = [];
-	const lines = objects.split("\n").filter(Boolean);
+// Objects larger than this are skipped (secrets live in text, not multi-MB
+// blobs; also caps how much content any single batch call has to move).
+const DEFAULT_MAX_BLOB_BYTES = 2 * 1024 * 1024;
 
-	for (const line of lines) {
+// `git cat-file --batch-check` in ONE call for every candidate sha (deduped).
+// Output format (default, one line per input): `<sha> <type> <size>\n`, or
+// `<sha> missing\n` for a sha that doesn't resolve (shouldn't happen here —
+// rev-list only emits objects it can see — but handled defensively).
+// Returns Map<sha, {type, size} | null>.
+export function batchCheck(repoDir, shas) {
+	const map = new Map();
+	if (shas.length === 0) return map;
+	const res = runGit(["cat-file", "--batch-check"], {
+		cwd: repoDir,
+		input: shas.join("\n") + "\n",
+		encoding: "utf8",
+		maxBuffer: 1024 * 1024 * 512,
+	});
+	if (res.error) throw res.error;
+	for (const line of res.stdout.split("\n")) {
+		if (!line) continue;
+		const missing = line.match(/^(\S+) missing$/);
+		if (missing) {
+			map.set(missing[1], null);
+			continue;
+		}
+		const m = line.match(/^(\S+) (\S+) (\d+)$/);
+		if (!m) continue; // malformed/unexpected line; skip defensively
+		map.set(m[1], { type: m[2], size: parseInt(m[3], 10) });
+	}
+	return map;
+}
+
+// `git cat-file --batch` for a set of blob shas with known sizes, chunked so
+// no single call has to hold an unbounded amount of blob content in memory
+// at once — still a small, FIXED number of git invocations regardless of
+// object count (chunk boundaries are drawn by cumulative content size AND a
+// hard object-count cap, not "one object per call"). `sizeOf(sha)` returns
+// the blob's byte size (from a prior `batchCheck()`), used only to decide
+// chunk boundaries and size `maxBuffer` — never to skip a real git call.
+// Returns Map<sha, Buffer>.
+export function batchContent(repoDir, shas, sizeOf, { maxChunkBytes = 64 * 1024 * 1024, maxChunkObjects = 5000 } = {}) {
+	const contents = new Map();
+	if (shas.length === 0) return contents;
+
+	let chunk = [];
+	let chunkBytes = 0;
+	const flush = () => {
+		if (chunk.length === 0) return;
+		const res = runGit(["cat-file", "--batch"], {
+			cwd: repoDir,
+			input: chunk.join("\n") + "\n",
+			maxBuffer: Math.max(chunkBytes * 2 + 1024 * 1024, 16 * 1024 * 1024),
+		});
+		if (res.error) throw res.error;
+		parseBatchOutput(res.stdout, contents);
+		chunk = [];
+		chunkBytes = 0;
+	};
+	for (const sha of shas) {
+		const size = sizeOf(sha) || 0;
+		if (chunk.length > 0 && chunkBytes + size > maxChunkBytes) flush();
+		chunk.push(sha);
+		chunkBytes += size;
+		if (chunk.length >= maxChunkObjects) flush();
+	}
+	flush();
+	return contents;
+}
+
+// Parses the raw (binary-safe) output of `git cat-file --batch`: repeated
+// `<sha> <type> <size>\n<size bytes of content>\n` records (or
+// `<sha> missing\n`). Must operate on a Buffer, not a string — blob content
+// can contain arbitrary bytes, including bytes that look like the record
+// separator, so we advance by the DECLARED size, never by scanning for the
+// next newline inside content.
+export function parseBatchOutput(buf, into = new Map()) {
+	let offset = 0;
+	while (offset < buf.length) {
+		const nl = buf.indexOf(0x0a, offset);
+		if (nl === -1) break;
+		const header = buf.slice(offset, nl).toString("utf8");
+		offset = nl + 1;
+		const missing = header.match(/^(\S+) missing$/);
+		if (missing) {
+			into.set(missing[1], null);
+			continue;
+		}
+		const m = header.match(/^(\S+) (\S+) (\d+)$/);
+		if (!m) break; // malformed; stop defensively rather than mis-parse
+		const [, sha, , sizeStr] = m;
+		const size = parseInt(sizeStr, 10);
+		into.set(sha, buf.slice(offset, offset + size));
+		offset += size + 1; // skip the trailing newline after content
+	}
+	return into;
+}
+
+export function scanRepo(repoDir, allowlistPath, { maxBlobBytes = DEFAULT_MAX_BLOB_BYTES } = {}) {
+	// 1 call: every object reachable from every ref, paired with a path.
+	const objectsRes = runGit(["rev-list", "--objects", "--all"], {
+		cwd: repoDir,
+		encoding: "utf8",
+		maxBuffer: 1024 * 1024 * 256,
+	});
+	if (objectsRes.error) throw objectsRes.error;
+
+	const allowlist = loadAllowlist(allowlistPath);
+	const records = []; // { sha, path }
+	const uniqueShas = new Set();
+	for (const line of objectsRes.stdout.split("\n")) {
+		if (!line) continue;
 		const sp = line.indexOf(" ");
 		if (sp === -1) continue; // a commit/tree with no path (root tree, etc.)
 		const sha = line.slice(0, sp);
 		const path = line.slice(sp + 1);
 		if (SELF_EXCLUDED_PATHS.has(path)) continue;
+		records.push({ sha, path });
+		uniqueShas.add(sha);
+	}
 
-		const catFile = spawnSync("git", ["cat-file", "-t", sha], { cwd: repoDir, encoding: "utf8" });
-		if (catFile.stdout.trim() !== "blob") continue;
+	// 1 call: type + size for every unique object at once.
+	const meta = batchCheck(repoDir, [...uniqueShas]);
 
-		const sizeRes = spawnSync("git", ["cat-file", "-s", sha], { cwd: repoDir, encoding: "utf8" });
-		const size = parseInt(sizeRes.stdout.trim(), 10);
-		if (!Number.isFinite(size) || size > 2 * 1024 * 1024) continue; // skip huge/binary blobs
+	// Only blobs under the size cap are worth fetching content for.
+	const wantedShas = [];
+	let totalWantedBytes = 0;
+	for (const sha of uniqueShas) {
+		const info = meta.get(sha);
+		if (!info || info.type !== "blob" || info.size > maxBlobBytes) continue;
+		wantedShas.push(sha);
+		totalWantedBytes += info.size;
+	}
 
-		const content = spawnSync("git", ["cat-file", "blob", sha], {
-			cwd: repoDir,
-			encoding: "utf8",
-			maxBuffer: 1024 * 1024 * 4,
-		});
-		if (content.status !== 0 || content.stdout == null) continue;
+	// A small, FIXED number of calls (chunked by cumulative content size, not
+	// one per object) to fetch content for exactly the objects we need.
+	const contents = batchContent(repoDir, wantedShas, (sha) => meta.get(sha)?.size);
+	void totalWantedBytes; // (kept for readability of the sizing rationale above)
+
+	const findings = [];
+	for (const { sha, path } of records) {
+		const info = meta.get(sha);
+		if (!info || info.type !== "blob" || info.size > maxBlobBytes) continue;
+		const content = contents.get(sha);
+		if (!content) continue;
 		// A NUL byte is the cheap binary-file signal; skip (secrets live in text).
-		if (content.stdout.includes("\u0000")) continue;
-
-		for (const f of scanText(content.stdout)) {
+		if (content.includes(0)) continue;
+		const text = content.toString("utf8");
+		for (const f of scanText(text)) {
 			const fp = fingerprint(sha, path, f.match);
 			if (allowlist.has(fp)) continue;
 			findings.push({ blob: sha, path, ...f, fingerprint: fp });

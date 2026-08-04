@@ -52,6 +52,37 @@ export function classify(entry, policy) {
 	return { ok: true };
 }
 
+// Validate the ledger's `bakedTools` entries (ruff/fd/go — static binaries
+// fetched directly by `curl` in the Dockerfile, pinned by an ARG, not managed
+// by npm/go.mod) against the ACTUAL Dockerfile ARG pins. Fails closed on any
+// drift (ledger says one version, Dockerfile pins another) or a tool present
+// in one but not the other, so a bump to RUFF_VERSION/FD_VERSION/GO_VERSION
+// that forgets the ledger doesn't silently go unnoticed.
+// Returns { ok, findings[] }. findings[] entries: { tool, reason }.
+export function validateBakedTools(dockerfileText, bakedTools) {
+	const findings = [];
+	for (const tool of bakedTools || []) {
+		const argName = tool.dockerfileArg;
+		if (!argName) {
+			findings.push({ tool: tool.name, reason: "ledger entry has no dockerfileArg to cross-check" });
+			continue;
+		}
+		const m = dockerfileText.match(new RegExp(`ARG ${argName}=(\\S+)`));
+		if (!m) {
+			findings.push({ tool: tool.name, reason: `Dockerfile has no "ARG ${argName}=..." (tool no longer baked, or ARG renamed — update the ledger)` });
+			continue;
+		}
+		const live = m[1];
+		if (live !== tool.version) {
+			findings.push({
+				tool: tool.name,
+				reason: `ledger pins ${tool.version}, Dockerfile ARG ${argName} pins ${live} — re-verify the license at the new version and update the ledger`,
+			});
+		}
+	}
+	return { ok: findings.length === 0, findings };
+}
+
 // Validate a LIVE `module@version` list against the ledger + policy.
 // Returns { ok, findings[] }. findings[] entries: { module, version, reason }.
 export function validateLiveModules(liveEntries, deps, policy) {
@@ -91,8 +122,29 @@ export function renderNotices(deps) {
 	const goRows = [...deps.goModules].sort((a, b) => a.module.localeCompare(b.module));
 	const npmRows = [...deps.npmGlobal].sort((a, b) => a.name.localeCompare(b.name));
 	const plannedRows = deps.goModulesPlanned || [];
+	const bakedToolRows = [...(deps.bakedTools || [])].sort((a, b) => a.name.localeCompare(b.name));
 
 	const parts = [HEADER];
+
+	if (bakedToolRows.length) {
+		parts.push("## Directly-downloaded/baked toolchain binaries (Dockerfile)\n");
+		parts.push(
+			"These are NOT npm/go-module dependencies — they are static binaries or\ntarballs fetched directly by `curl` in the Dockerfile from the project's own\nGitHub Releases (or, for Go, go.dev/dl), pinned by an explicit `ARG` (never\n`releases/latest`) so builds stay reproducible and the pin is one grep away\nfrom the source of truth.\n"
+		);
+		parts.push(
+			renderTable(bakedToolRows, [
+				{ label: "Tool", get: (r) => r.name },
+				{ label: "Version", get: (r) => r.version },
+				{ label: "License", get: (r) => r.license },
+				{ label: "Source", get: (r) => r.source },
+			])
+		);
+		parts.push("");
+		for (const r of bakedToolRows) {
+			parts.push(`- **${r.name}@${r.version}** (${r.license}) — ${r.role}`);
+		}
+		parts.push("");
+	}
 
 	parts.push("## Go modules (services/host — pix-host)\n");
 	parts.push(
@@ -176,6 +228,25 @@ function main() {
 			process.exit(1);
 		}
 		console.error(`license-class gate OK (${liveEntries.filter((l) => l.trim()).length} live modules)`);
+	}
+
+	const dockerfileIdx = args.indexOf("--check-baked-tools");
+	if (dockerfileIdx !== -1) {
+		const dockerfilePath = args[dockerfileIdx + 1];
+		if (!dockerfilePath) {
+			console.error("--check-baked-tools requires a Dockerfile path");
+			process.exit(2);
+		}
+		const dockerfileText = readFileSync(dockerfilePath, "utf8");
+		const { ok, findings } = validateBakedTools(dockerfileText, deps.bakedTools);
+		if (!ok) {
+			console.error("baked-tool version gate FAILED (fail-closed):");
+			for (const f of findings) {
+				console.error(`  - ${f.tool}: ${f.reason}`);
+			}
+			process.exit(1);
+		}
+		console.error(`baked-tool version gate OK (${(deps.bakedTools || []).length} tools)`);
 	}
 
 	const rendered = renderNotices(deps);
