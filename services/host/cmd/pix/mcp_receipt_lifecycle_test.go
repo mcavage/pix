@@ -18,7 +18,6 @@
 package main
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -265,46 +264,13 @@ func TestRemovePixSandbox_ClearsReceiptOnSuccessRetainsOnFailure(t *testing.T) {
 	}
 }
 
-// A task teardown that positively removes its sandbox clears the receipt; an
-// aborted teardown (sandbox still running, non-force) retains it.
-func TestExecuteTaskTeardown_ClearsReceiptOnRemovalRetainsOnAbort(t *testing.T) {
-	dir := t.TempDir()
-	withSandboxMCPStateDirFn(t, func() (string, error) { return dir, nil })
-	sandbox := "pix-t-x-work"
-	m := launch.TaskMeta{Name: "work", Sandbox: sandbox, Mainroot: t.TempDir(), Branch: "pix/work"}
-
-	// Success: git snapshot ok, `sbx ls` reads absent, `sbx rm -f` succeeds.
-	if err := workspace.WriteCreateReceipt(dir, sandbox, "", []string{"slack"}, receiptClock); err != nil {
-		t.Fatal(err)
-	}
-	ok := hostenv.Env{System: &systest.Fake{RunFn: func(string, ...string) (string, error) { return "", nil }}}
-	var out bytes.Buffer
-	if rc := launch.ExecuteTaskTeardown(ok, &out, m, t.TempDir(), "work", "refs/pix/recovered/work", true, launch.TaskState{}); rc != 0 {
-		t.Fatalf("rc = %d, want 0, out:\n%s", rc, out.String())
-	}
-	if _, status, _ := workspace.ReadMCPReceipt(dir, sandbox); status != workspace.MCPStateAbsent {
-		t.Fatalf("status = %v, want absent after task teardown removed the sandbox", status)
-	}
-
-	// Abort: non-force with the sandbox running — teardown refuses before any
-	// rm, so the receipt (a live lifetime's evidence) must survive.
-	if err := workspace.WriteCreateReceipt(dir, sandbox, "", []string{"slack"}, receiptClock); err != nil {
-		t.Fatal(err)
-	}
-	running := hostenv.Env{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
-		if name == "sbx" && len(args) == 1 && args[0] == "ls" {
-			return sandbox + "  abc123  running\n", nil
-		}
-		return "", nil
-	}}}
-	out.Reset()
-	if rc := launch.ExecuteTaskTeardown(running, &out, m, t.TempDir(), "work", "refs/pix/recovered/work", false, launch.TaskState{}); rc == 0 {
-		t.Fatalf("rc = 0, want non-zero (running sandbox, non-force), out:\n%s", out.String())
-	}
-	if _, status, _ := workspace.ReadMCPReceipt(dir, sandbox); status != workspace.MCPStateOK {
-		t.Fatalf("status = %v, want ok: an ABORTED teardown must retain the receipt", status)
-	}
-}
+// Story06: `task rm` no longer has its own teardown executor (ExecuteTaskTeardown
+// is gone) — a positive removal now goes through launch.RemovePixSandbox, the
+// SAME helper `pix rm` uses, so its receipt-clearing behavior is covered by
+// TestRemovePixSandbox_ClearsReceiptOnSuccessRetainsOnFailure above. The
+// refuse-before-any-rm case (sandbox still running, non-force) is covered by
+// pix/host/workflow/task's TestRemoveGuard, which never even reaches a `sbx`
+// call — there is nothing left to retain a receipt FOR in that path.
 
 // --- D: partial receipt semantics at the receipt layer ---------------------
 

@@ -501,15 +501,24 @@ func TestMCPReceiptCallSitesAreGuarded(t *testing.T) {
 	assertOnlyCalledFrom(t, "workspace.ClearRemovedReceipt(", []string{"workflow/launch/run.go", "workflow/launch/sandbox.go", "workflow/launch/task.go", "workflow/reset/reset.go"})
 }
 
-// C: task.go must actually route its create through the shared lifecycle (not
-// merely be allowed to) — a task-created sandbox records the same receipt.
+// C: task_cmd.go must actually route a task's sandbox launch through the
+// SAME shared create lifecycle `pix run` uses — a task-created sandbox
+// records the same receipt. Story06 removed task.go's own launch path
+// (launchTask/ExecSbxRunAndRecordCreate duplicated here); `task new` and
+// `task run` now delegate straight to runRun (run_cmd.go), which already
+// goes through ExecSbxRunAndRecordCreate, so the guarantee is that neither
+// verb ever launches a sandbox any other way.
 func TestTaskLaunchUsesSharedCreateLifecycle(t *testing.T) {
-	b, err := os.ReadFile(filepath.Join("..", "..", "workflow", "launch", "task.go"))
+	b, err := os.ReadFile(filepath.Join("task_cmd.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(b), "ExecSbxRunAndRecordCreate(cmd, true, o.Name, workspace.CanonicalPath(o.Workspace), o.StaticMCP)") {
-		t.Fatal("launchTask (workflow/launch/task.go) must launch via ExecSbxRunAndRecordCreate(cmd, true, o.Name, workspace.CanonicalPath(o.Workspace), o.StaticMCP) so task sandboxes get the same create-receipt lifecycle as `pix run`")
+	src := string(b)
+	if strings.Count(src, "runRun(") < 2 {
+		t.Fatal("task_cmd.go must launch a task's sandbox by delegating to runRun (both `task new` and `task run`/--task), not a separate exec.Command(\"sbx\", ...) path")
+	}
+	if strings.Contains(src, "exec.Command(\"sbx\"") {
+		t.Fatal("task_cmd.go must not shell out to sbx directly for a sandbox LAUNCH; that duplicates run.go's create-receipt lifecycle")
 	}
 }
 
