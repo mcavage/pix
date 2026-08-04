@@ -22,6 +22,8 @@ import (
 	"os"
 	"sort"
 
+	goplugin "github.com/hashicorp/go-plugin"
+
 	"pix/host/config"
 	"pix/host/plugin"
 )
@@ -31,17 +33,15 @@ import (
 // (servePluginMcp), which must serve the built-in impl WITHOUT re-consulting
 // config (config selection is decided by the supervisor, not the servant).
 //
-// The public tree ships exactly one built-in: slack. Any OTHER local stdio
-// server (a pack-provided integration, say) does not extend this switch — it
-// either registers as a container the sbx gateway runs, or overrides this slot
-// entirely via the generic [plugins.mcp] SHA-pinned external-process mechanism
-// (mcpServerFor, consulted first in that path). This runs on BOTH the
-// in-process bridge (runMcpBridge) and the self-exec plugin path (servePluginMcp),
-// since both route through here.
+// Slack was the public tree's one built-in local server; it was externalized
+// (W2/U02a — see docs/design/slack-setup.md) and this switch no longer serves
+// it. Any local stdio server now either registers as a container the sbx
+// gateway runs, or overrides this slot entirely via the generic [plugins.mcp]
+// SHA-pinned external-process mechanism (mcpServerFor, consulted first in that
+// path). This runs on BOTH the in-process bridge (runMcpBridge) and the
+// self-exec plugin path (servePluginMcp), since both route through here.
 func builtinMcpServerFor(name string) (plugin.McpServer, error) {
 	switch name {
-	case "slack":
-		return slackMcpAdapter{}, nil
 	case googleDocsCreateServerName:
 		return googleDocsCreateMcpAdapter{}, nil
 	}
@@ -49,12 +49,12 @@ func builtinMcpServerFor(name string) (plugin.McpServer, error) {
 }
 
 // builtinMcpNames returns the sorted names this binary can serve locally as a
-// `pix-host mcp <name>` stdio bridge: today just "slack". gog is
-// DELIBERATELY excluded — it is the external Google Workspace CLI, not served by
-// this bridge. This is the source of truth for "is <name> a local stdio server"
-// that the launcher (`pix mcp register`) and doctor consult via `mcp --list`.
+// `pix-host mcp <name>` stdio bridge. gog is DELIBERATELY excluded — it is the
+// external Google Workspace CLI, not served by this bridge. This is the source
+// of truth for "is <name> a local stdio server" that the launcher (`pix mcp
+// register`) and doctor consult via `mcp --list`.
 func builtinMcpNames() []string {
-	names := []string{googleDocsCreateServerName, "slack"}
+	names := []string{googleDocsCreateServerName}
 	sort.Strings(names)
 	return names
 }
@@ -91,14 +91,13 @@ func runMcpListTools(name string) {
 
 // mcpServerFor resolves a bridge name to its McpServer implementation, honoring a
 // config-selected OVERRIDE. [plugins.mcp] is consulted FIRST: a non-builtin impl
-// overrides EVERY name (including the sole registered public MCP, "slack"), so an
-// operator override is never silently bypassed. In that case the external plugin
-// binary is launched ONCE here via the shared supervisor helper (which SHA-pins
-// and verifies the binary before exec and isolates its env so the broker bearer
-// never leaks), dispensed as a plugin.McpServer, and wrapped so the bridge body
-// proxies to it — a startup-only spawn, never per request. Only when the slot is
-// builtin does it fall back to the in-process adapter (builtinMcpServerFor, which
-// serves slack).
+// overrides EVERY name, so an operator override is never silently bypassed. In
+// that case the external plugin binary is launched ONCE here via the shared
+// supervisor helper (which SHA-pins and verifies the binary before exec and
+// isolates its env so the broker bearer never leaks), dispensed as a
+// plugin.McpServer, and wrapped so the bridge body proxies to it — a
+// startup-only spawn, never per request. Only when the slot is builtin does it
+// fall back to the in-process adapter (builtinMcpServerFor).
 //
 // It returns a cleanup func the caller MUST run on every exit path (it shuts the
 // launched supervisor down; it is a no-op for the builtin path). The cleanup is
@@ -274,4 +273,20 @@ func runMcpBridge(name string) {
 	}
 	handle := mcpDispatcher(serverName, tools, handlers)
 	mcpStdio(handle)
+}
+
+// servePluginMcp runs the host binary AS a go-plugin MCP plugin, serving the
+// built-in McpServer selected by name over the shared handshake (see
+// plugin.Serve / plugin.PluginMap). This is the "self-exec as a plugin" path a
+// supervisor would launch; the in-process bridge (runMcpBridge) does NOT use
+// it. It resolves the BUILT-IN adapter directly (builtinMcpServerFor), never
+// re-consulting config: config selection is the supervisor's job, and routing
+// through mcpServerFor here would recurse into another launch.
+func servePluginMcp(name string) {
+	srv, err := builtinMcpServerFor(name)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "pix-host plugin mcp: "+err.Error())
+		os.Exit(2)
+	}
+	plugin.Serve(map[string]goplugin.Plugin{"mcp": &plugin.McpPlugin{Impl: srv}})
 }

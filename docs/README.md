@@ -24,8 +24,10 @@ tutorials.
 
 - [onboarding-v3.md](design/onboarding-v3.md) — the proposed one-path setup,
   dependency, OAuth, pack, doctor, and provider-routing design.
-- [slack-setup.md](design/slack-setup.md) — the accepted per-user Slack
-  credential model and proposed guided setup flow.
+- [slack-setup.md](design/slack-setup.md) — MERGE-BLOCKED migration reference:
+  Slack's built-in implementation was deleted (W2/U02a); this names the
+  required pinned/on-demand posture for an external pack replacement and the
+  per-user credential rules it must keep. Not evidence anything external works.
 - [routing.md](design/routing.md) — the model router: registry, scorecard,
   policy, and how `models route` bakes `routing.json`.
 - [models-cli.md](design/models-cli.md) — the `pix models` noun rename and the

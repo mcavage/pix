@@ -5,7 +5,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"pix/host/config"
 	"pix/host/workflow/setup"
@@ -160,94 +159,6 @@ func TestApplyConfigChange_Models(t *testing.T) {
 	}
 	if cfg.MemoryEmbedModel != "embed-x" {
 		t.Errorf("embed = %q, want embed-x", cfg.MemoryEmbedModel)
-	}
-}
-
-// TestApplyConfigChange_SlackClientID: set writes the public client id; unset
-// clears it AND every OAuth locator/grant field (vault id, document id, cached
-// grant expiry) so a stale locator can never point at a mismatched app once
-// the client id it was minted under is gone.
-func TestApplyConfigChange_SlackClientID(t *testing.T) {
-	cfg := defaultCfg()
-	if _, err := setup.ApplyConfigChange(cfg, false, "slack.client_id", []string{"abc123.public"}); err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Slack.ClientID != "abc123.public" {
-		t.Errorf("slack.client_id = %q, want abc123.public", cfg.Slack.ClientID)
-	}
-	// Managed state a real `pix slack setup` would have written alongside it.
-	cfg.Slack.OAuthVaultID = "vault-1"
-	cfg.Slack.OAuthDocumentID = "doc-1"
-	cfg.Slack.OAuthGrantExpiresAt = time.Now()
-
-	if _, err := setup.ApplyConfigChange(cfg, true, "slack.client_id", nil); err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Slack.ClientID != "" {
-		t.Errorf("unset slack.client_id: ClientID = %q, want empty", cfg.Slack.ClientID)
-	}
-	if cfg.Slack.OAuthVaultID != "" || cfg.Slack.OAuthDocumentID != "" || !cfg.Slack.OAuthGrantExpiresAt.IsZero() {
-		t.Errorf("unset slack.client_id must also clear OAuth locator/grant fields, got vault=%q document=%q expiry=%v",
-			cfg.Slack.OAuthVaultID, cfg.Slack.OAuthDocumentID, cfg.Slack.OAuthGrantExpiresAt)
-	}
-
-	// set with the wrong arity errors.
-	if _, err := setup.ApplyConfigChange(cfg, false, "slack.client_id", nil); err == nil {
-		t.Error("expected an arity error for set slack.client_id with no value")
-	}
-}
-
-// TestApplyConfigChange_SlackRedirectURI: set overrides the redirect uri;
-// unset restores the built-in default when a client id is configured (so the
-// OAuth flow still has somewhere to send Slack), but clears to empty when no
-// client id is set (matching config.applyDefaults, which only ever resolves
-// the default off a non-empty ClientID).
-func TestApplyConfigChange_SlackRedirectURI(t *testing.T) {
-	cfg := defaultCfg()
-	cfg.Slack.ClientID = "abc123.public"
-	if _, err := setup.ApplyConfigChange(cfg, false, "slack.redirect_uri", []string{"http://localhost:9999/slack/callback"}); err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Slack.RedirectURI != "http://localhost:9999/slack/callback" {
-		t.Errorf("slack.redirect_uri = %q, want the override", cfg.Slack.RedirectURI)
-	}
-	if _, err := setup.ApplyConfigChange(cfg, true, "slack.redirect_uri", nil); err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Slack.RedirectURI != config.DefaultSlackOAuthRedirectURI {
-		t.Errorf("unset slack.redirect_uri with a client id set = %q, want default %q", cfg.Slack.RedirectURI, config.DefaultSlackOAuthRedirectURI)
-	}
-
-	// No client id configured: unset clears to empty rather than resolving a
-	// default nothing will use.
-	cfg2 := defaultCfg()
-	cfg2.Slack.RedirectURI = "http://localhost:9999/slack/callback"
-	if _, err := setup.ApplyConfigChange(cfg2, true, "slack.redirect_uri", nil); err != nil {
-		t.Fatal(err)
-	}
-	if cfg2.Slack.RedirectURI != "" {
-		t.Errorf("unset slack.redirect_uri with no client id = %q, want empty", cfg2.Slack.RedirectURI)
-	}
-
-	if _, err := setup.ApplyConfigChange(cfg, false, "slack.redirect_uri", nil); err == nil {
-		t.Error("expected an arity error for set slack.redirect_uri with no value")
-	}
-}
-
-// TestApplyConfigChange_SlackManagedFieldsNotSettable: the OAuth locator/grant
-// fields are managed state written only by `pix slack setup` (and cleared by
-// unset slack.client_id) — set/unset on them directly is refused so a stale
-// hand-set vault/document id can never point at credentials that don't match
-// the current client id.
-func TestApplyConfigChange_SlackManagedFieldsNotSettable(t *testing.T) {
-	for _, key := range []string{"slack.oauth_vault_id", "slack.oauth_document_id", "slack.oauth_grant_expires_at"} {
-		cfg := defaultCfg()
-		if _, err := setup.ApplyConfigChange(cfg, false, key, []string{"x"}); err == nil {
-			t.Errorf("expected set %s to be refused (managed by pix slack setup)", key)
-		}
-		if _, err := setup.ApplyConfigChange(cfg, true, key, nil); err == nil {
-			t.Errorf("expected unset %s to be refused (managed by pix slack setup)", key)
-		}
 	}
 }
 

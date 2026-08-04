@@ -99,13 +99,15 @@ func TestExternalMcpOverrideEndToEnd(t *testing.T) {
 	}
 }
 
-// TestMcpServerForUsesOverrideEvenForSlack proves F-A: [plugins.mcp] is consulted
-// FIRST, so a non-builtin impl overrides EVERY name — including "slack", the only
-// registered public MCP. Previously mcpServerFor hard-coded name=="slack" to the
-// built-in adapter before ever looking at config, silently bypassing the
-// operator override. Now mcpServerFor("slack") must return the external
-// pluginMcpServer (a real launched subprocess), not the in-process slackMcpAdapter.
-func TestMcpServerForUsesOverrideEvenForSlack(t *testing.T) {
+// TestMcpServerForUsesOverrideEvenForBuiltin proves F-A: [plugins.mcp] is
+// consulted FIRST, so a non-builtin impl overrides EVERY name — including a
+// registered public built-in (googleDocsCreateServerName). Previously
+// mcpServerFor hard-coded name=="slack" to the built-in adapter before ever
+// looking at config, silently bypassing the operator override. Now
+// mcpServerFor(googleDocsCreateServerName) must return the external
+// pluginMcpServer (a real launched subprocess), not the in-process built-in
+// adapter.
+func TestMcpServerForUsesOverrideEvenForBuiltin(t *testing.T) {
 	bin, sha := buildExampleMcp(t)
 
 	// Point [plugins.mcp] at the external example binary via a temp config the
@@ -117,18 +119,18 @@ func TestMcpServerForUsesOverrideEvenForSlack(t *testing.T) {
 	}
 	t.Setenv("PIX_CONFIG", cfgPath)
 
-	srv, cleanup, err := mcpServerFor("slack")
+	srv, cleanup, err := mcpServerFor(googleDocsCreateServerName)
 	if err != nil {
-		t.Fatalf("mcpServerFor(slack) with an override = %v", err)
+		t.Fatalf("mcpServerFor(%s) with an override = %v", googleDocsCreateServerName, err)
 	}
 	defer cleanup()
 
-	if _, ok := srv.(slackMcpAdapter); ok {
-		t.Fatal("mcpServerFor(slack) returned the built-in adapter; the [plugins.mcp] override was bypassed")
+	if _, ok := srv.(googleDocsCreateMcpAdapter); ok {
+		t.Fatal("mcpServerFor returned the built-in adapter; the [plugins.mcp] override was bypassed")
 	}
 	ps, ok := srv.(*pluginMcpServer)
 	if !ok {
-		t.Fatalf("mcpServerFor(slack) returned %T, want the external *pluginMcpServer", srv)
+		t.Fatalf("mcpServerFor(%s) returned %T, want the external *pluginMcpServer", googleDocsCreateServerName, srv)
 	}
 	// Prove it really is the launched external plugin, not a stub.
 	info, err := ps.Info()

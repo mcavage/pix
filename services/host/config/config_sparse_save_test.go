@@ -6,7 +6,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 )
 
 // These tests are the regression guard for config-default PETRIFICATION: the
@@ -275,10 +274,10 @@ func TestRemovedServiceOnlyListFallsBackToDefaults(t *testing.T) {
 	}
 }
 
-// TestSlackOAuthEmptyOmittedFromFile: an untouched (all-zero) Slack config
-// never appears in the saved file at all — no bare `[slack]` table, same
-// petrification guard as every other defaultable field.
-func TestSlackOAuthEmptyOmittedFromFile(t *testing.T) {
+// TestRetiredSlackTableOmittedFromFile: a leftover `[slack]` table from a
+// pre-externalization config.toml is tolerated by Load (see
+// retiredConfigKeys) but never resurrected by Save.
+func TestRetiredSlackTableOmittedFromFile(t *testing.T) {
 	path := tempConfig(t)
 	cfg, err := Load()
 	if err != nil {
@@ -290,101 +289,6 @@ func TestSlackOAuthEmptyOmittedFromFile(t *testing.T) {
 	}
 	raw := rawFile(t, path)
 	if strings.Contains(raw, "slack") {
-		t.Errorf("raw file petrified an empty slack table:\n%s", raw)
-	}
-}
-
-// TestSlackOAuthClientIDOnlySparseRoundTrip: setting only ClientID (the
-// redirect uri resolves to the default in memory) saves WITHOUT redirect_uri
-// — the same omit-the-resolved-default tradeoff every other defaultable field
-// uses — and reload re-resolves the default.
-func TestSlackOAuthClientIDOnlySparseRoundTrip(t *testing.T) {
-	path := tempConfig(t)
-	cfg, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.SetSlackClientID("123.456")
-	if err := cfg.Save(); err != nil {
-		t.Fatal(err)
-	}
-	raw := rawFile(t, path)
-	if !strings.Contains(raw, `client_id = "123.456"`) {
-		t.Errorf("raw file missing explicit client_id:\n%s", raw)
-	}
-	if strings.Contains(raw, "redirect_uri") {
-		t.Errorf("raw file petrified the resolved default redirect_uri:\n%s", raw)
-	}
-
-	got, err := LoadFrom(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Slack.ClientID != "123.456" {
-		t.Errorf("ClientID = %q, want 123.456", got.Slack.ClientID)
-	}
-	if got.Slack.RedirectURI != DefaultSlackOAuthRedirectURI {
-		t.Errorf("RedirectURI = %q, want default %q", got.Slack.RedirectURI, DefaultSlackOAuthRedirectURI)
-	}
-}
-
-// TestSlackOAuthExplicitRedirectRoundTrips: a custom (non-default) redirect
-// uri round-trips through Save/Load unchanged.
-func TestSlackOAuthExplicitRedirectRoundTrips(t *testing.T) {
-	path := tempConfig(t)
-	cfg, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.SetSlackClientID("123.456")
-	cfg.SetSlackRedirectURI("https://example.com/slack/callback")
-	if err := cfg.Save(); err != nil {
-		t.Fatal(err)
-	}
-	raw := rawFile(t, path)
-	if !strings.Contains(raw, `redirect_uri = "https://example.com/slack/callback"`) {
-		t.Errorf("raw file missing the explicit non-default redirect_uri:\n%s", raw)
-	}
-
-	got, err := LoadFrom(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Slack.RedirectURI != "https://example.com/slack/callback" {
-		t.Errorf("RedirectURI = %q, want the explicit value", got.Slack.RedirectURI)
-	}
-}
-
-// TestSlackOAuthVaultDocumentAndGrantExpiresAtRoundTrip: the 1Password
-// location fields and the cached grant expiry survive a full Save/Load cycle.
-func TestSlackOAuthVaultDocumentAndGrantExpiresAtRoundTrip(t *testing.T) {
-	path := tempConfig(t)
-	cfg, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.SetSlackOAuthVaultID("Private")
-	cfg.SetSlackOAuthDocumentID("itemid123")
-	stamp := time.Date(2025, 8, 15, 0, 0, 0, 0, time.UTC)
-	cfg.SetSlackOAuthGrantExpiresAt(stamp)
-	if err := cfg.Save(); err != nil {
-		t.Fatal(err)
-	}
-	raw := rawFile(t, path)
-	for _, want := range []string{`oauth_vault_id = "Private"`, `oauth_document_id = "itemid123"`, "oauth_grant_expires_at = 2025-08-15T00:00:00Z"} {
-		if !strings.Contains(raw, want) {
-			t.Errorf("raw file missing %q:\n%s", want, raw)
-		}
-	}
-
-	got, err := LoadFrom(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Slack.OAuthVaultID != "Private" || got.Slack.OAuthDocumentID != "itemid123" {
-		t.Errorf("vault/document = %q/%q", got.Slack.OAuthVaultID, got.Slack.OAuthDocumentID)
-	}
-	if !got.Slack.OAuthGrantExpiresAt.Equal(stamp) {
-		t.Errorf("OAuthGrantExpiresAt = %v, want %v", got.Slack.OAuthGrantExpiresAt, stamp)
+		t.Errorf("raw file petrified a retired slack table:\n%s", raw)
 	}
 }

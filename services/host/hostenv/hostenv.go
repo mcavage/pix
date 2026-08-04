@@ -22,13 +22,6 @@ import (
 	"pix/host/sys"
 )
 
-// SlackIdentity is who a Slack token belongs to. It lives here rather than in a
-// slack package only because the prober signature does, and the prober is a
-// field of Env; it moves with the slack extraction.
-type SlackIdentity struct {
-	Team, TeamID, User, UserID string
-}
-
 // ServiceIdentity and IdentityProber live in rpc, which is where the call they
 // describe lives. Aliased here because Env carries the prober as a field.
 type (
@@ -50,10 +43,6 @@ type Env struct {
 
 	// IdentityProbe answers a service's `identity` method. → readiness package.
 	IdentityProbe IdentityProber
-
-	// SlackAuth performs a live Slack auth.test. The token is never logged,
-	// persisted, or echoed by any caller. → slack package.
-	SlackAuth func(token string) (SlackIdentity, error)
 
 	// DirectInference makes one bounded, model-specific provider call. The key
 	// is held only in memory and must never appear in a returned error.

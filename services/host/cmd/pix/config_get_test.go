@@ -4,7 +4,6 @@ import (
 	"pix/host/workflow/setup"
 	"strings"
 	"testing"
-	"time"
 )
 
 // TestConfigValue is the table-driven contract for `config get`: one resolved
@@ -20,12 +19,6 @@ func TestConfigValue(t *testing.T) {
 	cfg.MemoryWatcherModel = "qwen3.5:9b"
 	cfg.MemoryEmbedModel = "nomic-embed-text"
 	cfg.OllamaBridgeModel = "qwen3.5:9b"
-	cfg.Slack.ClientID = "abc123.public"
-	cfg.Slack.RedirectURI = "http://localhost:17373/slack/callback"
-	cfg.Slack.OAuthVaultID = "vault-1"
-	cfg.Slack.OAuthDocumentID = "doc-1"
-	grantExpiry := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	cfg.Slack.OAuthGrantExpiresAt = grantExpiry
 
 	tests := []struct {
 		key     string
@@ -39,11 +32,6 @@ func TestConfigValue(t *testing.T) {
 		{key: "memory_watcher_model", want: "qwen3.5:9b"},
 		{key: "memory_embed_model", want: "nomic-embed-text"},
 		{key: "ollama_bridge_model", want: "qwen3.5:9b"},
-		{key: "slack.client_id", want: "abc123.public"},
-		{key: "slack.redirect_uri", want: "http://localhost:17373/slack/callback"},
-		{key: "slack.oauth_vault_id", want: "vault-1"},
-		{key: "slack.oauth_document_id", want: "doc-1"},
-		{key: "slack.oauth_grant_expires_at", want: grantExpiry.Format(time.RFC3339)},
 		{key: "nope", wantErr: true},
 		{key: "", wantErr: true},
 	}
@@ -78,13 +66,3 @@ func TestConfigValue_EmptyList(t *testing.T) {
 	}
 }
 
-// TestConfigValue_SlackGrantExpiresAtZero: an unset (zero-time) grant expiry
-// prints as an empty string, not "0001-01-01...", so a diagnostic read looks
-// like "not set" rather than a bogus date.
-func TestConfigValue_SlackGrantExpiresAtZero(t *testing.T) {
-	cfg := defaultCfg()
-	got, err := setup.ConfigValue(cfg, "slack.oauth_grant_expires_at")
-	if err != nil || got != "" {
-		t.Errorf("setup.ConfigValue(slack.oauth_grant_expires_at) on zero time = %q, %v; want \"\", nil", got, err)
-	}
-}

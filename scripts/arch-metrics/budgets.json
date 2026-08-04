@@ -2,10 +2,10 @@
   "schema": 1,
   "packages": {
     "pix/host": {
-      "prod_loc": 7515,
+      "prod_loc": 6658,
       "exports": 0,
-      "globals": 68,
-      "edges": 7,
+      "globals": 54,
+      "edges": 6,
       "exits": 29
     },
     "pix/host/cli": {
@@ -16,10 +16,10 @@
       "exits": 4
     },
     "pix/host/cmd/pix": {
-      "prod_loc": 3701,
+      "prod_loc": 3700,
       "exports": 19,
       "globals": 15,
-      "edges": 24,
+      "edges": 23,
       "exits": 60
     },
     "pix/host/cmd/pix/corpus": {
@@ -30,9 +30,9 @@
       "exits": 0
     },
     "pix/host/config": {
-      "prod_loc": 1455,
-      "exports": 49,
-      "globals": 17,
+      "prod_loc": 1350,
+      "exports": 47,
+      "globals": 16,
       "edges": 0,
       "exits": 0
     },
@@ -51,8 +51,8 @@
       "exits": 0
     },
     "pix/host/hostenv": {
-      "prod_loc": 67,
-      "exports": 4,
+      "prod_loc": 56,
+      "exports": 3,
       "globals": 0,
       "edges": 2,
       "exits": 0
@@ -169,13 +169,6 @@
       "edges": 6,
       "exits": 8
     },
-    "pix/host/slackoauth": {
-      "prod_loc": 1128,
-      "exports": 26,
-      "globals": 16,
-      "edges": 0,
-      "exits": 0
-    },
     "pix/host/supervise": {
       "prod_loc": 991,
       "exports": 36,
@@ -254,18 +247,11 @@
       "exits": 0
     },
     "pix/host/workflow/setup": {
-      "prod_loc": 4081,
+      "prod_loc": 4003,
       "exports": 82,
       "globals": 31,
       "edges": 18,
       "exits": 12
-    },
-    "pix/host/workflow/slack": {
-      "prod_loc": 1798,
-      "exports": 12,
-      "globals": 18,
-      "edges": 7,
-      "exits": 0
     },
     "pix/host/workflow/task": {
       "prod_loc": 833,

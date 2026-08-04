@@ -53,9 +53,11 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # Note: Google Workspace access is NOT in this image. It runs host-side as the
-# `gog` MCP server, spawned by the sbx gateway and reached through it (the same
-# pattern as `slack`). The VM never talks to Google — no CLI, no token service,
-# no Google endpoints in the kit allowlist. See `make mcp-register`.
+# `gog` MCP server, spawned by the sbx gateway and reached through it. The VM
+# never talks to Google — no CLI, no token service, no Google endpoints in the
+# kit allowlist. See `make mcp-register`. (Slack was the other local stdio MCP
+# server this pattern covered; it was externalized — W2/U02a, see
+# docs/design/slack-setup.md — and no longer ships built into this image.)
 
 # --- npm global prefix (sandbox-template convention) --------------------------
 ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global

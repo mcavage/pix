@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -48,15 +47,6 @@ const (
 	// rather than run as an external sub-process.
 	BuiltinImpl = "builtin"
 )
-
-// DefaultSlackOAuthRedirectURI is the local HTTP callback the generic Slack
-// rotating-PKCE OAuth flow (services/host/slackoauth, docs/design/
-// slack-setup.md) uses when a client id is configured but no redirect uri was
-// set explicitly. It ONLY ever applies once SlackOAuth.ClientID is non-empty
-// (see applyDefaults) — there is deliberately NO baked-in default client id
-// (no shared/"Docker" OAuth app ships in core; see SlackOAuth.ClientID), so an
-// unconfigured install resolves neither a client id nor a redirect uri.
-const DefaultSlackOAuthRedirectURI = "http://localhost:17373/slack/callback"
 
 // DefaultServices is intentionally empty. Memory requires a verified local
 // Ollama watcher + embedding model and is enabled by setup only after those
@@ -94,30 +84,6 @@ type HostMode struct {
 // AutoserveEnabled reports whether lazy auto-start is enabled (default true).
 func (c *Config) AutoserveEnabled() bool {
 	return c.Host.Autoserve == nil || *c.Host.Autoserve
-}
-
-// SlackOAuth configures the generic Slack rotating-PKCE OAuth app wiring (see
-// the slackoauth package and the org-owned-callback-service design in
-// docs/design/slack-setup.md): the PUBLIC client id Slack issued the app, the
-// registered redirect uri a local callback listens on, and WHERE the
-// resulting credential blob lives in 1Password (a vault + document id —
-// never the blob itself, which is the whole point of slackoauth.OPStore).
-// OAuthGrantExpiresAt is a CACHED mirror of slackoauth.Blob.GrantExpiresAt so
-// a status check can report "needs re-auth soon" without a live `op document
-// get` round trip; it is advisory only — the 1Password document remains the
-// source of truth, and a stale or missing cache here never blocks reading the
-// real blob.
-//
-// Every field here is PUBLIC (an app id, a callback URL, a 1Password
-// location, a cached timestamp) — none of it is a credential. The
-// access_token/refresh_token never touch config.toml; they live only in the
-// 1Password document identified by OAuthVaultID + OAuthDocumentID.
-type SlackOAuth struct {
-	ClientID            string    `toml:"client_id,omitempty"`
-	RedirectURI         string    `toml:"redirect_uri,omitempty"`
-	OAuthVaultID        string    `toml:"oauth_vault_id,omitempty"`
-	OAuthDocumentID     string    `toml:"oauth_document_id,omitempty"`
-	OAuthGrantExpiresAt time.Time `toml:"oauth_grant_expires_at,omitempty"`
 }
 
 // Config is the pix configuration, decoded from TOML.
@@ -208,11 +174,6 @@ type Config struct {
 	// GLOBAL, never per-profile: leaving the sandbox is a machine-level decision.
 	Host HostMode `toml:"host,omitempty"`
 
-	// Slack configures the generic Slack rotating-PKCE OAuth app wiring. See
-	// SlackOAuth. Empty (the default): no OAuth app configured (uses the static
-	// `--token-ref` path for pre-issued tokens; see docs/design/slack-setup.md).
-	Slack SlackOAuth `toml:"slack,omitempty"`
-
 	// retiredKeys / unknownKeys capture the top-level TOML keys Load/LoadFrom
 	// found in the file that don't map to any field above (BurntSushi's
 	// MetaData.Undecoded()). retiredKeys is the subset in retiredConfigKeys —
@@ -298,9 +259,14 @@ const VerifiedByProbe = "probe"
 // RetiredKeys reports them so a caller (`config show`, `doctor`) can tell the
 // user "this key no longer does anything" instead of "you made a typo" (which
 // is what an unrecognized key normally means — see UnknownKeys).
+// "slack" was the built-in Slack OAuth/token table (client_id, redirect_uri,
+// oauth_vault_id, oauth_document_id, oauth_grant_expires_at), retired when
+// Slack was externalized (W2/U02a; see docs/design/slack-setup.md) — a leftover
+// `[slack]` table in an old config.toml is a known-retired key, not a typo.
 var retiredConfigKeys = map[string]bool{
 	"mcp_static":  true,
 	"mcp_dynamic": true,
+	"slack":       true,
 }
 
 // RetiredKeys returns the retired top-level config keys (see retiredConfigKeys)
@@ -598,11 +564,6 @@ func (c *Config) applyDefaults() {
 			c.Plugins[slot] = spec
 		}
 	}
-	// The redirect uri only ever defaults once a client id is configured — an
-	// install with no OAuth app has neither (see DefaultSlackOAuthRedirectURI).
-	if c.Slack.ClientID != "" && c.Slack.RedirectURI == "" {
-		c.Slack.RedirectURI = DefaultSlackOAuthRedirectURI
-	}
 }
 
 // Load reads and decodes Path(). If the file is absent it returns a Config
@@ -712,16 +673,6 @@ paths = []
 # path = ""
 # sha  = ""
 # port = 0
-
-# Generic Slack rotating-PKCE OAuth app wiring (public fields only — the
-# credential blob itself lives in 1Password, never here). No client_id ships
-# by default; set one to configure your own Slack app.
-# [slack]
-# client_id = ""
-# redirect_uri = ""
-# oauth_vault_id = ""
-# oauth_document_id = ""
-# oauth_grant_expires_at = ""
 `
 
 // Save writes the config back to Path() as TOML. It is the write half of the
@@ -844,12 +795,6 @@ func (c *Config) sparseForSave() *Config {
 	if len(sp.Plugins) == 0 {
 		sp.Plugins = nil
 	}
-	// Same tradeoff as every other defaultable field: a redirect uri that
-	// equals the resolved default is omitted rather than pinned, so a future
-	// default change still reaches an install that only ever set a client id.
-	if sp.Slack.RedirectURI == DefaultSlackOAuthRedirectURI {
-		sp.Slack.RedirectURI = ""
-	}
 	return &sp
 }
 
@@ -874,46 +819,6 @@ func (c *Config) SetGogAccount(account string) { c.GogAccount = strings.TrimSpac
 // profile. This is capability metadata, never a credential or OAuth token.
 func (c *Config) SetGoogleWorkspaceAccess(access string) {
 	c.GoogleWorkspaceAccess = strings.TrimSpace(access)
-}
-
-// SetSlackClientID sets the Slack app's public OAuth client id (trimmed). An
-// empty value clears it — and, since RedirectURI only ever defaults off a
-// non-empty ClientID, also stops a future Load from resolving a default
-// redirect uri.
-func (c *Config) SetSlackClientID(id string) { c.Slack.ClientID = strings.TrimSpace(id) }
-
-// SetSlackRedirectURI sets the registered OAuth redirect uri (trimmed). An
-// empty value clears the explicit override; applyDefaults then resolves
-// DefaultSlackOAuthRedirectURI on the next Load if a ClientID is set.
-func (c *Config) SetSlackRedirectURI(uri string) { c.Slack.RedirectURI = strings.TrimSpace(uri) }
-
-// SetSlackOAuthVaultID sets the 1Password vault (name or id) holding the
-// rotating credential document (trimmed). An empty value clears it.
-func (c *Config) SetSlackOAuthVaultID(id string) { c.Slack.OAuthVaultID = strings.TrimSpace(id) }
-
-// SetSlackOAuthDocumentID sets the 1Password document (item) id holding the
-// rotating credential blob (trimmed). An empty value clears it.
-func (c *Config) SetSlackOAuthDocumentID(id string) {
-	c.Slack.OAuthDocumentID = strings.TrimSpace(id)
-}
-
-// SetSlackOAuthGrantExpiresAt sets the cached grant expiry mirrored from
-// slackoauth.Blob.GrantExpiresAt (see SlackOAuth's doc for why this is only
-// advisory). A zero time clears it.
-func (c *Config) SetSlackOAuthGrantExpiresAt(t time.Time) { c.Slack.OAuthGrantExpiresAt = t }
-
-// ClearSlackOAuthManaged clears exactly the fields a rotating OAuth grant
-// owns (the 1Password vault/document locators and the cached grant expiry)
-// while RETAINING ClientID and RedirectURI. `pix slack disable`'s OAuth-mode
-// path calls this after the grant has been revoked at Slack and its
-// 1Password document deleted, so config never claims a document that no
-// longer exists — but the public app wiring stays put, making a later `pix
-// slack setup` re-authorization a one-step operation rather than asking for
-// the client id and redirect uri all over again.
-func (c *Config) ClearSlackOAuthManaged() {
-	c.Slack.OAuthVaultID = ""
-	c.Slack.OAuthDocumentID = ""
-	c.Slack.OAuthGrantExpiresAt = time.Time{}
 }
 
 // AddMCP adds name to the MCP set if absent, returning true when it changed.
@@ -1028,8 +933,8 @@ func HostRefsPath() string {
 }
 
 // GWServerName is the google-workspace MCP server's registration + display
-// name. It lives here, not in the gworkspace workflow, because six unrelated
-// callers (secret, mcp, doctor, status, setup, slack) need to recognise the
+// name. It lives here, not in the gworkspace workflow, because five unrelated
+// callers (secret, mcp, doctor, status, setup) need to recognise the
 // server without importing the workflow that installs it. A name that crosses
 // domains is configuration, not behaviour.
 // MCPContainer is one MCP server a pack contributes: a Manifest ref (`sbx mcp
@@ -1072,16 +977,10 @@ vars — the secret never touches disk or the sandbox. A server with no creds
 // vault/item/field REFERENCE. GOG_ACCOUNT/GOG_HOME/GOG_KEYRING_BACKEND configure
 // gog's headless keyring + account/home; the keyring PASSWORD is a secret and
 // must still be an op:// ref, so it is DELIBERATELY not listed here.
-// SLACK_TEAM_ID/SLACK_USER_ID are `pix slack setup`'s identity pins: the
-// team/user id its live auth.test resolved AT setup time, written as plain
-// literals so `pix slack status` can flag SLACK_TOKEN silently resolving to a
-// DIFFERENT identity later. Neither value is a credential on its own.
 var NonSecretOpRefsKeys = map[string]bool{
 	"GOG_ACCOUNT":         true,
 	"GOG_HOME":            true,
 	"GOG_KEYRING_BACKEND": true,
-	"SLACK_TEAM_ID":       true,
-	"SLACK_USER_ID":       true,
 }
 
 // OpRefsTemplate is the seed content for a fresh op-refs.env: op:// references
@@ -1100,9 +999,9 @@ const OpRefsTemplate = `# pix op-refs.env — 1Password refs the sbx gateway res
 # (pio) needs no entry.
 #
 # This file holds op://vault/item/field REFERENCES only, plus the documented
-# non-secret env allowlist (GOG_ACCOUNT, GOG_HOME, GOG_KEYRING_BACKEND,
-# SLACK_TEAM_ID, SLACK_USER_ID). Everything secret (tokens, keyring passwords)
-# is an op:// ref resolved from 1Password at spawn time — never a pasted secret.
+# non-secret env allowlist (GOG_ACCOUNT, GOG_HOME, GOG_KEYRING_BACKEND).
+# Everything secret (tokens, keyring passwords) is an op:// ref resolved from
+# 1Password at spawn time — never a pasted secret.
 #
 # Every line below is COMMENTED OUT: a freshly-seeded file has zero active
 # entries. Uncomment + fill in a line only when you wire that server.
@@ -1110,15 +1009,11 @@ const OpRefsTemplate = `# pix op-refs.env — 1Password refs the sbx gateway res
 # Verify:  op read "op://<vault>/<item>/<field>" >/dev/null && echo OK
 # Tip:     1Password app -> right-click a field -> "Copy Secret Reference".
 
-# slack MCP server. Run 'pix slack setup' (or 'pix slack setup --token-ref ...'
-# for static tokens) instead of hand-editing these lines — it verifies identity
-# live (auth.test) and writes the identity pins below. It is per-user and must
-# never be a shared "employee"/team/bot token, and never handed to a second
-# person to reuse — each user runs their own pix slack setup instead. See
-# docs/design/slack-setup.md for PKCE OAuth options, minimal scopes, and revocation.
-# SLACK_TOKEN=op://<vault>/<item>/<field>
-# SLACK_TEAM_ID=<team id auth.test resolved at setup>
-# SLACK_USER_ID=<user id auth.test resolved at setup>
+# Slack is no longer a built-in host MCP server (see docs/design/
+# slack-setup.md, W2/U02a): a pinned external pack now owns registering it.
+# If your active pack's Slack MCP server needs a token, it documents its own
+# ENV_VAR here (still an op:// ref, same mechanism) — nothing to seed by
+# default.
 
 # gog (Google Workspace) MCP server. gog only needs op to inject a headless
 # keyring password; a keyring reachable without a password does not need this.
