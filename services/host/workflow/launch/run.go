@@ -1,12 +1,10 @@
 package launch
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +17,7 @@ import (
 	"pix/host/knowledge"
 	"pix/host/mcp"
 	"pix/host/readiness/axis"
+	"pix/host/rpc"
 	"pix/host/sys"
 	"pix/host/workflow/doctor"
 	"pix/host/workflow/pack"
@@ -744,51 +743,33 @@ func WriteKnowledgeScope(ws string, ids []string) error {
 	return workspace.WriteStateFile(ws, "knowledge.scope", []byte(content), 0o644)
 }
 
-// DefaultKnowledgeRPC wires the real, short-timeout HTTP JSON-RPC client for the
-// knowledge daemon on 127.0.0.1:11436.
+// DefaultKnowledgeRPC wires the real knowledge-daemon client from the shared
+// pix/host/rpc package (the same JSON-RPC transport reset.go and the CLI's
+// memory/knowledge verbs already use), rather than hand-rolling a second HTTP
+// client with its own hardcoded port. Using rpc.KnowledgeClient() also means
+// this now honors a KNOWLEDGE_PORT override, which the old bespoke transport
+// (a bare `const port = 11436`) silently ignored.
 func DefaultKnowledgeRPC() KnowledgeRPC {
-	const port = 11436
+	client := rpc.KnowledgeClient()
 	return KnowledgeRPC{
-		Up:      func() bool { return sys.Real{}.DialLocal(port) },
-		Health:  func() ([]string, error) { return knowledgeHealthBundles(port) },
-		Reindex: func(bundle string) error { return knowledgeReindex(port, bundle) },
+		Up:      client.Up,
+		Health:  func() ([]string, error) { return knowledgeHealthBundles(client) },
+		Reindex: func(bundle string) error { return knowledgeReindex(client, bundle) },
 	}
-}
-
-// knowledgeRPCCall POSTs a JSON-RPC 2.0 request to the daemon and returns the
-// decoded envelope, mapping a JSON-RPC error object to a Go error. Short
-// timeout: launch must never hang on a slow daemon.
-func knowledgeRPCCall(port int, method string, params map[string]any) (map[string]any, error) {
-	body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
-	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Post(fmt.Sprintf("http://127.0.0.1:%d/", port), "application/json", bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	var parsed map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return nil, err
-	}
-	if e, ok := parsed["error"].(map[string]any); ok {
-		return nil, fmt.Errorf("rpc %s: %v", method, e["message"])
-	}
-	return parsed, nil
 }
 
 // knowledgeHealthBundles returns the bundle ids the daemon reports as indexed.
-func knowledgeHealthBundles(port int) ([]string, error) {
-	r, err := knowledgeRPCCall(port, "health", nil)
+func knowledgeHealthBundles(client rpc.Client) ([]string, error) {
+	result, err := client.Call("health", nil)
 	if err != nil {
 		return nil, err
 	}
-	result, _ := r["result"].(map[string]any)
 	return ToStringSlice(result["bundles"]), nil
 }
 
 // knowledgeReindex fires a reindex for a single bundle path (idempotent add).
-func knowledgeReindex(port int, bundle string) error {
-	_, err := knowledgeRPCCall(port, "reindex", map[string]any{"bundle_paths": []string{bundle}})
+func knowledgeReindex(client rpc.Client, bundle string) error {
+	_, err := client.Call("reindex", map[string]any{"bundle_paths": []string{bundle}})
 	return err
 }
 

@@ -16,7 +16,6 @@ import (
 	"pix/host/hostenv/hostenvtest"
 	"pix/host/rpc"
 	"pix/host/sys/systest"
-	"pix/host/workflow/upgrade"
 )
 
 // fixedNow returns a stable timestamp so .bak suffixes are predictable in tests.
@@ -329,103 +328,23 @@ func TestRunResetCore_YesExecutes(t *testing.T) {
 	}
 }
 
-// TestUninstall_RemovesBinSymlinks: uninstall removes our symlinks but leaves a
-// non-symlink (not ours) in place, and still runs the reset.
-func TestUninstall_RemovesBinSymlinks(t *testing.T) {
-	stubStopServe(t)
-	root := t.TempDir()
-	p := tempPaths(t, root)
-
-	bin := filepath.Join(root, "bin")
-	if err := os.MkdirAll(bin, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// A repo checkout's launcher: basename is exactly "pix" (what we install).
-	outDir := filepath.Join(root, "out")
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	target := filepath.Join(outDir, "pix")
-	writeFile(t, target, "binary")
-	link := filepath.Join(bin, "pix")
-	if err := os.Symlink(target, link); err != nil {
-		t.Fatal(err)
-	}
-	// A real (non-symlink) file at the pix-host slot must be left alone.
-	notOurs := filepath.Join(bin, "pix-host")
-	writeFile(t, notOurs, "hand-placed")
-
-	rio := cli.IO{In: strings.NewReader(""), Out: &bytes.Buffer{}, IsTTY: false}
-	err := runUninstallCore(resetCfg(), p, []string{link, notOurs}, Opts{assumeYes: true}, upgrade.Provenance{Channel: upgrade.ChannelInstaller},
-		DefaultResetFS(), noToolEnv(), rio, fixedNow)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if exists(link) {
-		t.Error("uninstall should remove our bin symlink")
-	}
-	if !exists(notOurs) {
-		t.Error("uninstall must NOT remove a non-symlink we didn't install")
-	}
-	if exists(p.ConfigDir) {
-		t.Error("uninstall should also run the reset (config dir moved)")
-	}
-}
-
-// TestUninstall_NonTTYNoYesRefuses: uninstall inherits the same guard as reset.
-func TestUninstall_NonTTYNoYesRefuses(t *testing.T) {
-	root := t.TempDir()
-	p := tempPaths(t, root)
-	link := filepath.Join(root, "pix")
-	rio := cli.IO{In: strings.NewReader(""), Out: &bytes.Buffer{}, IsTTY: false}
-
-	err := runUninstallCore(resetCfg(), p, []string{link}, Opts{}, upgrade.Provenance{Channel: upgrade.ChannelInstaller}, DefaultResetFS(), noToolEnv(), rio, fixedNow)
-	if !errors.Is(err, ErrResetNeedsYes) {
-		t.Fatalf("want ErrResetNeedsYes, got %v", err)
-	}
-	if !exists(p.ConfigDir) {
-		t.Error("a refused uninstall must not move anything")
-	}
-}
-
-func TestRunUninstallHomebrewDoesNotRemoveOwnedOrDuplicateBinaries(t *testing.T) {
-	stubStopServe(t)
-	root := t.TempDir()
-	p := tempPaths(t, root)
-	localPix := filepath.Join(root, "bin", "pix")
-	if err := os.MkdirAll(filepath.Dir(localPix), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeFile(t, localPix, "curl-installed copy")
-
-	var out bytes.Buffer
-	rio := cli.IO{In: strings.NewReader(""), Out: &out, IsTTY: false}
-	err := runUninstallCore(resetCfg(), p, []string{localPix}, Opts{assumeYes: true}, upgrade.Provenance{Channel: upgrade.ChannelHomebrew},
-		DefaultResetFS(), noToolEnv(), rio, fixedNow)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !exists(localPix) {
-		t.Fatal("Homebrew uninstall path must not remove any binary directly")
-	}
-	for _, want := range []string{"owned by Homebrew", "brew uninstall mcavage/tap/pix", "next launch"} {
-		if !strings.Contains(out.String(), want) {
-			t.Errorf("output %q missing %q", out.String(), want)
-		}
-	}
-}
-
 // TestParseResetArgs covers reset flags, help, and unknown input.
 func TestParseResetArgs(t *testing.T) {
-	if o, err := ParseArgs([]string{"--keep-memory", "--purge-data", "--sbx", "--yes"}, true, true); err != nil ||
-		!o.keepMemory || !o.PurgeData || !o.sbx || !o.assumeYes {
+	if o, err := ParseArgs([]string{"--keep-memory", "--sbx", "--yes"}, true); err != nil ||
+		!o.keepMemory || !o.sbx || !o.assumeYes {
 		t.Fatalf("reset flags: %+v err=%v", o, err)
 	}
-	if o, err := ParseArgs([]string{"-h"}, true, false); err != nil || !o.Help {
+	if o, err := ParseArgs([]string{"-h"}, true); err != nil || !o.Help {
 		t.Errorf("help: %+v err=%v", o, err)
 	}
-	if _, err := ParseArgs([]string{"--nope"}, true, false); err == nil {
+	if _, err := ParseArgs([]string{"--nope"}, true); err == nil {
 		t.Error("unknown flag must error")
+	}
+	if _, err := ParseArgs([]string{"--purge-data"}, true); err == nil {
+		t.Error("--purge-data was retired from reset's owned flag set and must now be unknown")
+	}
+	if _, err := ParseArgs([]string{"--sbx"}, false); err == nil {
+		t.Error("--sbx must still be gateable via allowSbx=false")
 	}
 }
 
@@ -449,43 +368,6 @@ func TestExecuteReset_MoveFailureReturnsError(t *testing.T) {
 	rio := cli.IO{In: strings.NewReader(""), Out: &bytes.Buffer{}, IsTTY: false}
 	if rErr := RunCore(resetCfg(), p, Opts{assumeYes: true}, fsys, noToolEnv(), rio, fixedNow); rErr == nil {
 		t.Error("RunCore must return non-nil when a move failed")
-	}
-}
-
-// TestUninstall_BackupFailureKeepsSymlinks: if the reset backup fails, uninstall
-// must NOT remove the bin symlinks (never strand the user with no binaries).
-func TestUninstall_BackupFailureKeepsSymlinks(t *testing.T) {
-	stubStopServe(t)
-	root := t.TempDir()
-	p := tempPaths(t, root)
-
-	bin := filepath.Join(root, "bin")
-	if err := os.MkdirAll(bin, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(root, "out"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	target := filepath.Join(root, "out", "pix")
-	if err := os.WriteFile(target, []byte("bin"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	link := filepath.Join(bin, "pix")
-	if err := os.Symlink(target, link); err != nil {
-		t.Fatal(err)
-	}
-
-	fsys := DefaultResetFS()
-	fsys.rename = func(_, _ string) error { return errors.New("backup failed") }
-
-	rio := cli.IO{In: strings.NewReader(""), Out: &bytes.Buffer{}, IsTTY: false}
-	err := runUninstallCore(resetCfg(), p, []string{link}, Opts{assumeYes: true}, upgrade.Provenance{Channel: upgrade.ChannelInstaller},
-		fsys, noToolEnv(), rio, fixedNow)
-	if err == nil {
-		t.Fatal("uninstall must return the backup error")
-	}
-	if !exists(link) {
-		t.Error("uninstall must NOT remove the bin symlink after a failed backup")
 	}
 }
 
@@ -644,57 +526,6 @@ func TestMoveAside_NoOverwrite(t *testing.T) {
 	}
 	if !exists(dest) {
 		t.Error("the source must have moved to the unique dest")
-	}
-}
-
-// TestUninstall_LeavesUnrelatedSymlinks: symlinks in bin slots whose target
-// BASENAME is not EXACTLY pix/pix-host are left in place + reported —
-// both a genuinely unrelated target AND a DECEPTIVE one whose path merely
-// CONTAINS "pix" (a substring match would wrongly delete it).
-func TestUninstall_LeavesUnrelatedSymlinks(t *testing.T) {
-	stubStopServe(t)
-	root := t.TempDir()
-	p := tempPaths(t, root)
-
-	bin := filepath.Join(root, "bin")
-	if err := os.MkdirAll(bin, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// A genuinely unrelated target, and a DECEPTIVE one (path contains "pix"
-	// but its basename does NOT match our binaries).
-	other := filepath.Join(root, "opt", "other-tool")
-	deceptive := filepath.Join(root, "opt", "pix-ish-wrapper")
-	for _, tgt := range []string{other, deceptive} {
-		if err := os.MkdirAll(filepath.Dir(tgt), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(tgt, []byte("x"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	linkA := filepath.Join(bin, "pix")      // -> /opt/other-tool
-	linkB := filepath.Join(bin, "pix-host") // -> /opt/pix-ish-wrapper
-	if err := os.Symlink(other, linkA); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(deceptive, linkB); err != nil {
-		t.Fatal(err)
-	}
-
-	rio := cli.IO{In: strings.NewReader(""), Out: &bytes.Buffer{}, IsTTY: false}
-	if err := runUninstallCore(resetCfg(), p, []string{linkA, linkB}, Opts{assumeYes: true}, upgrade.Provenance{Channel: upgrade.ChannelInstaller},
-		DefaultResetFS(), noToolEnv(), rio, fixedNow); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !exists(linkA) {
-		t.Error("uninstall must NOT remove an unrelated symlink (/opt/other-tool)")
-	}
-	if !exists(linkB) {
-		t.Error("uninstall must NOT remove a deceptive substring symlink (/opt/pix-ish-wrapper)")
-	}
-	out := rio.Out.(*bytes.Buffer).String()
-	if !strings.Contains(out, "not a pix binary") {
-		t.Errorf("want a 'left in place' report, got %q", out)
 	}
 }
 
