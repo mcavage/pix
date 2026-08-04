@@ -11,5 +11,18 @@
 				"to": ["env(\"MEMORY_PORT\", \"11435\")", "env(\"BROKER_PORT\", \"11437\")"]
 			}
 		]
+	},
+	{
+		"id": "config-keys.top-level.surface",
+		"rationale": "W2 U02B deletes the built-in `pix gworkspace setup --create-docs` wizard and the separate google-docs-create write-scoped MCP it provisioned (workflow/gworkspace, google_docs_create_plugin.go). google_workspace_access was the get-only permission profile that wizard wrote and nothing else ever read once the wizard is gone, so it drops from the top-level key surface. google_workspace_account is UNCHANGED: gog stays registerable the generic way every other local stdio MCP server is, via `pix mcp register` (mcp.GogHardenedArgv already bakes in --readonly/--gmail-no-send/--wrap-untrusted).",
+		"evidence": "docs/design/gworkspace-externalization.md; services/host/config/config.go (GoogleWorkspaceAccess field + SetGoogleWorkspaceAccess removed); services/host/workflow/setup/config.go (google_workspace_access get-key case removed)",
+		"changes": [
+			{
+				"file": "scripts/semantic-diff/rules/config-keys.rules.mjs",
+				"kind": "set",
+				"from": ["services", "mcp", "memory_watcher_model", "memory_embed_model", "ollama_bridge_model", "run_intent", "inference", "google_workspace_account", "google_workspace_access", "knowledge_bundles"],
+				"to": ["services", "mcp", "memory_watcher_model", "memory_embed_model", "ollama_bridge_model", "run_intent", "inference", "google_workspace_account", "knowledge_bundles"]
+			}
+		]
 	}
 ]

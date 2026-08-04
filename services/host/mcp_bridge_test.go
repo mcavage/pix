@@ -118,9 +118,12 @@ func TestBuiltinMcpServerFor(t *testing.T) {
 	}
 }
 
-// TestBuiltinMcpNames proves the local-server source of truth: Slack and the
-// create-only Docs adapter are listed, gog is NEVER listed (external CLI), and
-// the result is sorted.
+// TestBuiltinMcpNames proves the local-server source of truth: Slack is
+// listed (the public tree's one built-in), gog is NEVER listed (external
+// CLI, registered directly — see mcp.GogHardenedArgv), and the result is
+// sorted. The `google-docs-create` write-scoped companion was retired
+// alongside the built-in `pix gworkspace setup` wizard — see
+// docs/design/gworkspace-externalization.md.
 func TestBuiltinMcpNames(t *testing.T) {
 	names := builtinMcpNames()
 	got := map[string]bool{}
@@ -130,14 +133,14 @@ func TestBuiltinMcpNames(t *testing.T) {
 	if !got["slack"] {
 		t.Errorf("builtinMcpNames() = %v, want slack present", names)
 	}
-	if !got[googleDocsCreateServerName] {
-		t.Errorf("builtinMcpNames() = %v, want %s present", names, googleDocsCreateServerName)
-	}
-	if len(names) != 2 {
-		t.Errorf("builtinMcpNames() = %v, want exactly two built-ins", names)
+	if len(names) != 1 {
+		t.Errorf("builtinMcpNames() = %v, want exactly one built-in", names)
 	}
 	if got["gog"] {
 		t.Errorf("builtinMcpNames() = %v, must NOT list gog (external CLI)", names)
+	}
+	if got["google-docs-create"] {
+		t.Errorf("builtinMcpNames() = %v, must NOT list the retired google-docs-create companion", names)
 	}
 	for i := 1; i < len(names); i++ {
 		if names[i-1] > names[i] {

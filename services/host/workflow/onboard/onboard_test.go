@@ -91,8 +91,8 @@ func TestApplyOnboarding_AppliesFields(t *testing.T) {
 	}
 	// There is deliberately NO account writer in onboarding — Google Workspace
 	// authorization needs a browser, so applying an OnboardingResult must never
-	// set google_workspace_account (the only writer is the gworkspace
-	// transaction, reached via `pix gworkspace setup`).
+	// set google_workspace_account (that write is manual: `pix config set
+	// google_workspace_account <email>`, then `pix mcp register`).
 	if cfg.GogAccount != "" {
 		t.Errorf("onboarding must never set google_workspace_account, got %q", cfg.GogAccount)
 	}

@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"pix/host/cli"
 	"pix/host/hostenv"
-	"pix/host/mcp"
 	"pix/host/readiness"
 	"pix/host/readiness/axis"
 	"pix/host/secret"
@@ -107,61 +106,19 @@ const gogAcct = "you@example.com"
 const gogCfgFile = "/fake/config/config.toml"
 const gogOpRefs = "/fake/config/op-refs.env"
 
-// bareGog / opWrappedGog are the two ways `pix mcp register` actually wires
-// gog (see mcp.go serverCmd/addArgs): a BARE `gog … mcp …` command when no
-// op-refs.env is present (1Password is optional for gog), or that same command
-// behind the `op run --env-file=<refs> -- …` wrapper when op-refs is present.
-// Tests use these so the fixtures match a real registration rather than a
-// stand-in binary.
-func bareGog(acct string) string {
-	return "gog --account " + acct +
-		" --gmail-no-send --wrap-untrusted --readonly mcp --allow-tool read"
-}
-func opWrappedGog(refs, acct string) string {
-	return "op run --no-masking --env-file=" + refs + " -- " + bareGog(acct)
-}
-
-// reconstructedGogProbe is the exact best-effort headless probe when the refs
-// file has no GOG_KEYRING_PASSWORD. Unrelated integration refs must not wrap
-// gog in `op run`; gog's own OAuth keyring is independently headless.
-func reconstructedGogProbe(refs, acct string) string {
-	_ = refs
-	return strings.Join(append(mcp.GogRegisteredArgv("/usr/bin/gog", "", "", acct), "--list-tools"), " ")
-}
-
-// gogGreen adds the fixtures that make the whole gog group green: gog + op on
-// PATH, GOG_ACCOUNT set, interactive auth passing, the headless op-run probe
-// returning a non-empty tool list, and gog registered with the gateway.
-func gogGreen(f fakeEnv) fakeEnv {
-	f.present["gog"] = true
-	f.present["op"] = true
-	if f.envVars == nil {
-		f.envVars = map[string]string{}
-	}
-	if f.statFile == nil {
-		f.statFile = map[string]bool{}
-	}
-	f.envVars["GOG_ACCOUNT"] = gogAcct
-	f.envVars["PIX_CONFIG"] = gogCfgFile // makes resolveOpRefs -> gogOpRefs
-	f.statFile[gogOpRefs] = true
-	f.output["gog --account "+gogAcct+" auth doctor --check"] = "ok"
-	f.output[reconstructedGogProbe(gogOpRefs, gogAcct)] =
-		"gmail_search\ncalendar_events\ndocs_get\n"
-	return f
-}
-
-// gogConfirmed layers the sbx-registered-command fixtures on top of gogGreen so
-// the gog group takes the HONEST confirmed path (doctor reads the registered
-// command via `sbx mcp get google-workspace` and probes THAT). Only this path is a real
-// green ✓ — the best-effort reconstruction fallback (gogGreen alone) is now a
-// TODO because it can't confirm what the gateway registered.
-func gogConfirmed(f fakeEnv) fakeEnv {
-	f = gogGreen(f)
-	regCmd := opWrappedGog(gogOpRefs, gogAcct)
-	f.output["sbx mcp get google-workspace"] = "name: gog\ncommand: " + regCmd + "\n"
-	f.output[regCmd+" --list-tools"] = "gmail_search\ncalendar_events\n"
-	return f
-}
+// gogGreen / gogConfirmed used to layer elaborate headless-spawn/hardened-flag
+// probe fixtures onto a fakeEnv (gog + op on PATH, GOG_ACCOUNT, a reconstructed
+// --list-tools probe, a confirmed `sbx mcp get google-workspace` registration).
+// That probing was retired with the built-in `pix gworkspace setup` wizard
+// (workflow/gworkspace, deleted) — the gog group now renders the same two
+// facts every other MCP server's group does (registration + attachment, see
+// gog.go), neither of which reads gog/op PATH presence or any of those
+// fixtures. Both are kept as identity no-ops rather than deleted so the many
+// call sites below (which use them as readable "this env has gog available"
+// markers) don't need a mechanical rewrite for a distinction that no longer
+// exists in production.
+func gogGreen(f fakeEnv) fakeEnv     { return f }
+func gogConfirmed(f fakeEnv) fakeEnv { return f }
 
 func defaultCfg() *config.Config {
 	c := &config.Config{}

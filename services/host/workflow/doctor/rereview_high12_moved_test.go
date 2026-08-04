@@ -37,21 +37,12 @@ func TestMcpLocalCheck_RejectedWrapperNeverProbed(t *testing.T) {
 	}
 }
 
-// TestGogParse_RejectedWrapperFallsThrough: an op-wrapped gog registration
-// with a non-launcher env file no longer parses as a confident registered
-// command, so doctor falls back to the reconstruction — the registered
-// command itself is never probed.
-
-func TestGogParse_RejectedWrapperFallsThrough(t *testing.T) {
-	env := f2Env()
-	line := "name: gog\ncommand: " + f2Op + " run --no-masking --env-file=/tmp/evil.env -- " + f2Gog + " --account you@example.com mcp\n"
-	if argv, ok := parseGogCommandLine(env, line); ok {
-		t.Errorf("a non-launcher wrapper must not parse as a confident gog command, got %v", argv)
-	}
-	canonical := "name: gog\ncommand: " + f2Op + " run --no-masking --env-file=" + f2Refs + " -- " + f2Gog + " --account you@example.com mcp\n"
-	if _, ok := parseGogCommandLine(env, canonical); !ok {
-		t.Error("the canonical launcher wrapper must still parse")
-	}
-}
+// TestGogParse_RejectedWrapperFallsThrough (parseGogCommandLine /
+// RegisteredGogCommand) tested the registered-command reconstruction the
+// built-in `pix gworkspace setup` wizard's status probe relied on. That
+// wizard is retired (workflow/gworkspace, deleted — see
+// docs/design/gworkspace-externalization.md); the gog doctor group no longer
+// reads back or parses a registered command at all, so the subject of this
+// test no longer exists.
 
 var _ = filepath.Clean // keep filepath imported if fixtures above change

@@ -244,9 +244,11 @@ mcp-register: require-launcher ## Register the local stdio MCP servers you use (
 	for s in $(REGISTER); do \
 		case "$$s" in \
 		google-workspace) \
-			: 'Google Workspace has ONE writer: the launcher transaction. It authorizes,'; \
-			: 'proves the headless spawn, then registers. Never hand-rolled here.'; \
-			echo "  google-workspace: run 'pix gworkspace setup' (it registers after proving the spawn)" ;; \
+			: 'gog has no built-in guided setup (that wizard is retired); it registers'; \
+			: 'the same generic way every other local stdio server does, via pix mcp'; \
+			: 'register (mcp.GogHardenedArgv bakes in --readonly/--gmail-no-send/'; \
+			: '--wrap-untrusted). Delegate instead of hand-rolling the sbx add here.'; \
+			"$(PIX_BIN)" mcp register google-workspace && echo "  registered: google-workspace" || echo "  FAILED to register: google-workspace" ;; \
 		*) \
 			sbx mcp add $$s --command "$(OP_BIN)" \
 				--args run --args --no-masking --args "--env-file=$(OP_REFS)" --args -- --args "$$BIN" --args mcp --args "$$s" \
@@ -310,13 +312,13 @@ doctor: require-launcher ## Show models + each optional integration: set up? ser
 	echo ""; \
 	echo "Data tools (host side):"; \
 	printf "  %-7s setup: %-30s serving: %s\n" "gh"    "$$(sset github)" "proxy-injected (no service)"; \
-	printf "  %-7s setup: %-30s serving: %s\n" "gwork" "$$(command -v gog >/dev/null 2>&1 && echo 'dependency installed' || echo 'TODO: pix gworkspace setup')" "MCP via gateway (pix gworkspace setup)"; \
+	printf "  %-7s setup: %-30s serving: %s\n" "gwork" "$$(command -v gog >/dev/null 2>&1 && echo 'dependency installed' || echo 'TODO: brew install openclaw/tap/gogcli, then pix mcp register')" "MCP via gateway (pix mcp register)"; \
 	printf "  %-7s setup: %-30s serving: %s\n" "memory" "watcher+embed above" ":11435 $$(port 11435) (capture needs the watcher model)"; \
 	echo ""; \
 	echo "MCP servers (local stdio, run by the sbx gateway — register with 'make mcp-register', attach with 'make run'):"; \
 	reg() { sbx mcp ls 2>/dev/null | grep -qw "$$1" && echo "registered" || echo "TODO: make mcp-register"; }; \
 	printf "  %-7s %-14s %s\n" "slack"  "$$(reg slack)"    "$(if $(filter slack,$(MCP)),auto-attached on make run,NOT in MCP — 'pix config set mcp slack' to use)"; \
-	printf "  %-7s %-14s %s\n" "gwork" "$$(reg google-workspace)" "$(if $(filter google-workspace,$(MCP)),auto-attached on make run,NOT set up — 'pix gworkspace setup' to use)"; \
+	printf "  %-7s %-14s %s\n" "gwork" "$$(reg google-workspace)" "$(if $(filter google-workspace,$(MCP)),auto-attached on make run,NOT set up — 'pix config set mcp google-workspace' then 'pix mcp register' to use)"; \
 	echo "  gateway catalog (atlassian/notion/granola/linear/...): sbx mcp add … then pix config set mcp <name>"; \
 	echo ""; \
 	echo "All of the above is configured in ~/.config/pix/config.toml (pix config set). Start it: make serve (host) + make run (sandbox)."

@@ -128,10 +128,10 @@ func ApplyOnboardingResult(r *OnboardingResult, cfg *config.Config, env hostenv.
 	var changes []string
 
 	// There is deliberately NO account writer here. Setting
-	// google_workspace_account without completing OAuth is what produced a
-	// config that claimed Google Workspace while nothing worked; the only
-	// writer is the gworkspace transaction (gog_setup.go), reached via
-	// `pix gworkspace setup` or `pix setup --google-workspace`.
+	// google_workspace_account without a real, authorized gog installation is
+	// what produced a config that claimed Google Workspace while nothing
+	// worked; that write happens manually (`pix config set
+	// google_workspace_account <email>` then `pix mcp register`), never here.
 	for _, m := range r.MCP {
 		if cfg.AddMCP(strings.TrimSpace(m)) {
 			changes = append(changes, "enabled "+strings.TrimSpace(m)+" (mcp)")

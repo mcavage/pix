@@ -25,6 +25,13 @@ export default [
 				// the TOML-facing field) sits ON the start-anchor line itself and is
 				// excluded from the scanned region by construction; it is not a real
 				// on-disk key so it does not belong in this set anyway.
+				// google_workspace_access dropped W2 U02B: it was the runtime profile
+				// ("create-docs") the built-in `pix gworkspace setup --create-docs`
+				// wizard wrote for the separate google-docs-create MCP. Both the
+				// wizard and that MCP are retired — see
+				// docs/design/gworkspace-externalization.md and the matching
+				// scripts/semantic-diff/intended-changes.json entry. google_workspace_account
+				// stays: gog is still registered generically via `pix mcp register`.
 				expected: [
 					"services",
 					"mcp",
@@ -34,7 +41,6 @@ export default [
 					"run_intent",
 					"inference",
 					"google_workspace_account",
-					"google_workspace_access",
 					"knowledge_bundles",
 				],
 			},

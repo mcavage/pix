@@ -587,12 +587,12 @@ func indent(s string) string {
 
 // AnyOpWrappedServer reports whether any configured MCP server makes the Secrets
 // (1Password) group relevant: a NON-gog server. gog is deliberately excluded —
-// it authenticates via guided OAuth (`pix gworkspace setup`), never an op-refs
-// token, so a gog-only config needs no op-refs.env (mcp-register registers
-// gog BARE for exactly this reason, and setup's Step 4 skips it via
-// hasNonGogMCP). gog's ONE conditional op-refs need — a headless keyring
-// password — is owned by the gog group's headless-spawn check, not this
-// group, so counting gog here produced a
+// it authenticates via its own OAuth grant (no built-in guided setup; see
+// docs/gworkspace.md), never an op-refs token, so a gog-only config needs no
+// op-refs.env (mcp-register registers gog BARE for exactly this reason, and
+// setup's Step 4 skips it via hasNonGogMCP). gog's ONE conditional op-refs
+// need — a headless keyring password — is owned by the gog group's
+// headless-spawn check, not this group, so counting gog here produced a
 // phantom `pix secret set` TODO on a fresh gog-only install. Remote
 // gateway-catalog servers don't strictly need op-refs either, but distinguishing
 // them requires probing pix-host; for this coarse gate any non-gog name

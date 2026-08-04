@@ -42,19 +42,18 @@ func builtinMcpServerFor(name string) (plugin.McpServer, error) {
 	switch name {
 	case "slack":
 		return slackMcpAdapter{}, nil
-	case googleDocsCreateServerName:
-		return googleDocsCreateMcpAdapter{}, nil
 	}
 	return nil, fmt.Errorf("no built-in MCP server named %q", name)
 }
 
 // builtinMcpNames returns the sorted names this binary can serve locally as a
 // `pix-host mcp <name>` stdio bridge: today just "slack". gog is
-// DELIBERATELY excluded — it is the external Google Workspace CLI, not served by
-// this bridge. This is the source of truth for "is <name> a local stdio server"
-// that the launcher (`pix mcp register`) and doctor consult via `mcp --list`.
+// DELIBERATELY excluded — it is the external Google Workspace CLI, registered
+// directly (see mcp.GogHardenedArgv), not served by this bridge. This is the
+// source of truth for "is <name> a local stdio server" that the launcher
+// (`pix mcp register`) and doctor consult via `mcp --list`.
 func builtinMcpNames() []string {
-	names := []string{googleDocsCreateServerName, "slack"}
+	names := []string{"slack"}
 	sort.Strings(names)
 	return names
 }

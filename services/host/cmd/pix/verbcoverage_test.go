@@ -162,7 +162,7 @@ func TestExitMatrix(t *testing.T) {
 func TestRequestedPromotionBlocks(t *testing.T) {
 	builders := map[readiness.Axis]readiness.AxisBuilder{
 		readiness.AxisGworkspace: func() []readiness.Check {
-			return []readiness.Check{{Label: "gworkspace", Requirement: readiness.RequirementOptional, Verdict: readiness.VerdictTodo, Evidence: "not authed", Todo: "pix gworkspace setup"}}
+			return []readiness.Check{{Label: "gworkspace", Requirement: readiness.RequirementOptional, Verdict: readiness.VerdictTodo, Evidence: "not authed", Todo: "pix mcp register"}}
 		},
 	}
 	unrequested := readiness.Build(readiness.Request{Axes: []readiness.Axis{readiness.AxisGworkspace}}, builders)
