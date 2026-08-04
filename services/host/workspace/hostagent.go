@@ -6,15 +6,15 @@ import (
 	"strings"
 )
 
-// HostAgentDir is the on-disk location a PRE-retirement `pix host` used to
-// provision as PI_CODING_AGENT_DIR: $XDG_STATE_HOME/pix/host-agent (default
-// ~/.local/state/pix/host-agent). `pix host` (the unsandboxed escape hatch) was
-// retired and its launcher/provisioning code deleted — nothing installs into
-// this dir any more — but the path is kept as the well-known location a pack's
-// `pack rm` still tidies up a PRE-retirement install's leftover wrapper
-// binaries from (workflow/pack's clearHostPackWrappers), so an upgrader is
-// never left with stale executables under a directory nothing references any
-// more.
+// HostAgentDir is the on-disk root a pack's host-exec wrappers install under:
+// $XDG_STATE_HOME/pix/host-agent (default ~/.local/state/pix/host-agent).
+// `pix host` (the unsandboxed escape hatch that once also provisioned this
+// dir as PI_CODING_AGENT_DIR) was retired — but workflow/pack's
+// RefreshHostPackWrappers/installHostPackWrappersStaged still install a
+// pack's accepted [[bin]]/host-proxy set into HostPackBinDir() (this dir's
+// bin/ subdir) at `pack use`, and `pack rm` tidies it back up
+// (clearHostPackWrappers) — this is core pack host-exec, not host-mode
+// execution.
 func HostAgentDir() string {
 	if x := strings.TrimSpace(os.Getenv("XDG_STATE_HOME")); x != "" {
 		return filepath.Join(x, "pix", "host-agent")

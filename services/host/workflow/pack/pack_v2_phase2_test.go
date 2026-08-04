@@ -500,3 +500,32 @@ func TestPackUse_BinShaMismatchRefusesActivation(t *testing.T) {
 		t.Error("nothing may commit when the pinned binary is tampered")
 	}
 }
+
+// TestVerifyPackBinSHA_Contract (restored, U03B review finding: verifyPackBinSHA
+// is generic [[bin]] sha-pin verification used at `pack use`, not host-mode-
+// specific execution) pins the fail-closed contract directly: an empty sha
+// refuses as unpinned, a mismatched sha refuses, a missing file refuses (it
+// cannot be verified), and a correct sha (case-insensitively) passes.
+func TestVerifyPackBinSHA_Contract(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data := []byte("binary bytes")
+	if err := os.WriteFile(filepath.Join(dir, "bin", "fm"), data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sha := sha256Hex(data)
+	if err := verifyPackBinSHA(dir, packBin{Name: "fm", Path: "bin/fm"}); err == nil || !strings.Contains(err.Error(), "SHA-pinned") {
+		t.Errorf("empty sha must refuse as unpinned, got %v", err)
+	}
+	if err := verifyPackBinSHA(dir, packBin{Name: "fm", Path: "bin/fm", SHA: "0000dead"}); err == nil || !strings.Contains(err.Error(), "mismatch") {
+		t.Errorf("wrong sha must refuse with a mismatch, got %v", err)
+	}
+	if err := verifyPackBinSHA(dir, packBin{Name: "gone", Path: "bin/gone", SHA: sha}); err == nil {
+		t.Error("a missing file must refuse (cannot verify)")
+	}
+	if err := verifyPackBinSHA(dir, packBin{Name: "fm", Path: "bin/fm", SHA: strings.ToUpper(sha)}); err != nil {
+		t.Errorf("correct (uppercase) sha must pass, got %v", err)
+	}
+}
