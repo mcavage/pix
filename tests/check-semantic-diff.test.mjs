@@ -256,6 +256,43 @@ test("checkRuleDrift PASSES the same drift once a matching intended-change manif
 	assert.equal(result.ok, true);
 });
 
+// Doc assertion: README.md's "Landing a rule change: same commit vs. a
+// subsequent commit" section, encoded as behavior so the doc claim can't
+// silently go stale. Models the full two-commit workflow: (1) rule change +
+// waiver land together in one commit and are safe to commit, (2) a LATER,
+// separate commit that only deletes the now-stale waiver is safe because the
+// fingerprint no longer differs from the new base, (3) doing the rule change
+// and the waiver removal in the SAME commit fails.
+test("README workflow: rule change + waiver together (same commit) passes, stale-waiver removal in a SUBSEQUENT commit passes, but removing the waiver in the SAME commit as the rule change fails", async () => {
+	const root = makeScratchRepo();
+	const rulesDir = path.join(root, "rules");
+	writeFixture(root, { "rules/fixture.rules.mjs": RULE_FILE_V1 });
+	git(root, "add", "-A");
+	git(root, "commit", "-q", "-m", "v1 base");
+
+	// (3) SAME-commit attempt: rule changed, but the manifest that would waive
+	// it is absent (never added, or stripped in this same working-tree state) — fails.
+	writeFixture(root, { "rules/fixture.rules.mjs": RULE_FILE_V2 });
+	const sameCommitNoWaiver = await checkRuleDrift(rulesDir, root, "HEAD", []);
+	assert.equal(sameCommitNoWaiver.ok, false, "rule change with no waiver present in this same commit's final state must fail");
+
+	// (1) The correct move: land the rule change WITH its waiver, together, in one commit.
+	const waiver = [{ id: "fixture.pin", rationale: "v1 -> v2, documented", evidence: "PR #1", changes: [{ file: "a.txt", kind: "contains", from: ["v1"], to: ["v2"] }] }];
+	const sameCommitWithWaiver = await checkRuleDrift(rulesDir, root, "HEAD", waiver);
+	assert.equal(sameCommitWithWaiver.ok, true, "rule change + waiver together in the same commit must pass");
+
+	// Actually commit that state (rule=V2, manifest carries the waiver) as the new base.
+	writeFixture(root, { "intended-changes.json": JSON.stringify(waiver) });
+	git(root, "add", "-A");
+	git(root, "commit", "-q", "-m", "v2 + waiver");
+
+	// (2) A SUBSEQUENT, separate commit deletes the now-stale waiver; the rule
+	// file itself is untouched — no fingerprint change vs. the new base, so this
+	// is safe regardless of the (now empty) manifest.
+	const subsequentRemoval = await checkRuleDrift(rulesDir, root, "HEAD", []);
+	assert.equal(subsequentRemoval.ok, true, "deleting a stale waiver in a later commit, with the rule unchanged, must pass");
+});
+
 test("checkRuleDrift ignores an unrelated (non-checkable) description-only edit", async () => {
 	const root = makeScratchRepo();
 	writeFixture(root, { "rules/fixture.rules.mjs": RULE_FILE_V1 });

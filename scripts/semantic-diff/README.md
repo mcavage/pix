@@ -94,6 +94,42 @@ production code) by just editing the rules file itself, unreviewed. It is
 defense-in-depth: it no-ops cleanly (not a failure) on a fresh checkout or
 when a rules file/ref has no prior committed version yet.
 
+## Landing a rule change: same commit vs. a subsequent commit
+
+`checkRuleDrift()` diffs the CURRENT rules directory against a git base ref
+(default `HEAD`, i.e. the tip this change is built on), so the manifest
+entry that waives a pin's fingerprint change must exist **in the same
+commit** that changes the pin's `expected`/`values` — that diff is exactly
+what gets compared against the base, and if the fingerprint moved with no
+matching manifest `id` present at that point, the guard fails, full stop.
+Concretely:
+
+1. **Rule change + intended-change waiver land together, in the same
+   commit (or PR).** Editing `rules/<domain>.rules.mjs` to a new literal
+   without a matching `intended-changes.json` entry in that SAME commit
+   fails `checkRuleDrift()` — the drift check has no way to tell an
+   intentional, reviewed contract change from a hostile or accidental edit
+   to the pin itself, so it always requires the waiver to be present at the
+   moment the fingerprint changes.
+2. **Stale waiver removal happens in a SUBSEQUENT commit/PR, never the
+   same one.** Once the rule-change commit lands, its new `expected` value
+   becomes the base ref for every later diff. A follow-up commit that only
+   deletes the now-unused manifest entry (flagged by `unusedManifestEntries`)
+   sees NO fingerprint change between base and current — the rule already
+   reads the new value on both sides — so `checkRuleDrift()` no-ops on it
+   regardless of the manifest. That is what makes the removal safe.
+3. **Removing the waiver in the SAME commit as the rule change fails.** If
+   a commit changes the pin's literal AND strips (or never adds) the
+   manifest entry, the final state `checkRuleDrift()` sees for that commit
+   has a changed fingerprint with no corresponding `id` in the manifest —
+   this is indistinguishable from an unreviewed pin edit, so it is rejected
+   the same way. The waiver is only unnecessary AFTER its commit is the new
+   base, never within it.
+
+So the sequence is always: **(a)** ship the rule change with its waiver
+together, **(b)** merge, **(c)** delete the now-stale waiver entry in a
+later, separate commit or PR.
+
 ## Story04
 
 `rules/lifecycle.rules.mjs` is the reserved, present-but-empty shard for
