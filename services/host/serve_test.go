@@ -13,6 +13,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/plugin"
+	"pix/host/supervise"
 )
 
 // --- F1: enabled-set resolution honors cfg.Services and CLI override ---------
@@ -186,6 +187,13 @@ func TestLaunchRefusesOnSHAMismatch(t *testing.T) {
 
 // --- F2: a plugin subprocess env never contains the broker bearer ------------
 
+// pluginEnv is the exact composition prod uses: every unit is launched with
+// EnvAllow: pluginEnvAllowNames(), which supervise.FilterEnv applies to the
+// child's environment.
+func pluginEnv(extra []string) []string {
+	return supervise.FilterEnv(pluginEnvAllowNames(), extra)
+}
+
 func TestPluginEnvStripsBearer(t *testing.T) {
 	t.Setenv("PIX_BROKER_AUTH", "super-secret-bearer")
 
@@ -271,7 +279,7 @@ func (stubStore) Promotable(plugin.PromotableReq) (plugin.PromotableResp, error)
 func (stubStore) Observe(plugin.ObserveReq) (plugin.ObserveResp, error) {
 	return plugin.ObserveResp{Accepted: true}, nil
 }
-func (stubStore) Stats() (plugin.Stats, error) {
+func (stubStore) Stats(string) (plugin.Stats, error) {
 	return plugin.Stats{Active: 3, Durable: 2, Perishable: 1}, nil
 }
 func (stubStore) Health() (plugin.Health, error) {
@@ -295,7 +303,7 @@ func rpcCall(t *testing.T, srv *httptest.Server, method string) map[string]any {
 
 func TestMemoryProxyMuxContract(t *testing.T) {
 	h := &pluginHolder{}
-	h.set(stubStore{}, nil)
+	h.Set(stubStore{}, nil)
 	srv := httptest.NewServer(memoryProxyMux(h))
 	defer srv.Close()
 
@@ -347,7 +355,7 @@ func (stubBroker) Describe() (plugin.BrokerInfo, error) {
 
 func TestBrokerProxyMuxAuth(t *testing.T) {
 	h := &pluginHolder{}
-	h.set(stubBroker{}, nil)
+	h.Set(stubBroker{}, nil)
 	srv := httptest.NewServer(brokerProxyMux(h, "the-secret"))
 	defer srv.Close()
 

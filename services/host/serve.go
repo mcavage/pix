@@ -96,46 +96,26 @@ func runServe(enabled []string) {
 	enabledSvc := func(name string) bool { return len(want) == 0 || want[name] }
 
 	var all []hostService
-	// Released on graceful shutdown (below), alongside the pidfile. Nil unless the
-	// built-in memory store runs in-process and took the store lock.
-	var memLockRelease func()
 
-	// memory: the built-in store runs IN-PROCESS (fast path — recall is per-turn);
-	// only a non-builtin impl is spawned as a plugin. memory degrades gracefully
-	// (recall -> keyword, capture off) and logs its own status, so no fatal
-	// preflight in either path.
+	// memory ALWAYS runs as a supervised go-plugin unit — the built-in impl as a
+	// self-exec of this binary (`pix-host plugin memory`), a configured impl as
+	// its own sha-pinned executable. One path, one lifecycle: the store (and its
+	// advisory lock, taken by servePluginMemory) lives in a child process the
+	// supervision tree can restart, health-probe and reattach to, while THIS
+	// process keeps owning the :11435 listener the sandbox depends on. The
+	// JSON-RPC surface is unchanged — memoryProxyMux serves the same methods and
+	// params, over the same real SQLite store.
 	if enabledSvc("memory") {
-		// Wire the configured model names into the in-process build (F6). An
-		// explicit env override still wins; otherwise the config value (or its
-		// default) applies.
+		// Wire the configured model names into the env the unit inherits (F6). An
+		// explicit env override still wins; otherwise the config value applies.
 		applyMemoryModelEnv(cfg)
 		memSvc := hostService{name: "memory", addr: env("MEMORY_BIND", "127.0.0.1") + ":" + env("MEMORY_PORT", "11435")}
-		if spec := cfg.Plugin("memory"); spec.Impl == config.BuiltinImpl {
-			// Take the shared advisory store lock BEFORE opening the db — the
-			// correctness primitive that makes `restore`, this daemon, and every
-			// other live-serving entry point mutually exclusive, closing the
-			// port-probe TOCTOU (the store opens before the port binds). Held for the
-			// process lifetime; released on graceful shutdown. NON-BLOCKING: a held
-			// lock means another serve/holder owns the db, so fail loudly rather than
-			// deadlock (the port-in-use path guards double-serve; the lock is the
-			// correctness guarantee). fatalf routes the failure through supervisor
-			// cleanup so no already-launched plugin is orphaned.
-			memLockRelease = lockMemoryStoreOrFatal(fatalf)
-			// Build the store with error handling and route a failure through fatalf
-			// (F3): a bare log.Fatalf here would skip sup.shutdown() and orphan an
-			// already-launched external plugin subprocess.
-			store, hasEmb, berr := buildMemStore()
-			if berr != nil {
-				fatalf("%v", berr)
-			}
-			memSvc.mux = newMemoryMux(store, hasEmb)
-		} else {
-			h, lerr := sup.launch("memory", "memory", spec, selfPath, spec.ExtraEnv)
-			if lerr != nil {
-				fatalf("launch memory plugin: %v", lerr)
-			}
-			memSvc.mux = memoryProxyMux(h)
+		spec := cfg.Plugin("memory")
+		h, lerr := sup.launch("memory", "memory", spec, selfPath, spec.ExtraEnv)
+		if lerr != nil {
+			fatalf("launch memory unit: %v", lerr)
 		}
+		memSvc.mux = memoryProxyMux(h)
 		all = append(all, memSvc)
 	}
 
@@ -226,16 +206,10 @@ func runServe(enabled []string) {
 	case sig := <-sigCh:
 		log.Printf("serve: received %v; shutting down", sig)
 		sup.shutdown()
-		if memLockRelease != nil {
-			memLockRelease()
-		}
 		// defers (removeServePidFile, removeServeLazyMarker) run on return
 	case err := <-fatalCh:
 		log.Printf("serve: fatal: %v", err)
 		sup.shutdown()
-		if memLockRelease != nil {
-			memLockRelease()
-		}
 		// Explicitly run deferred cleanup before os.Exit since defers don't run
 		// when Exit is called (defers only run on return from runServe).
 		removeServePidFile()

@@ -52,9 +52,9 @@ func TestExternalBrokerOverrideEndToEnd(t *testing.T) {
 		t.Fatalf("launch external broker: %v", err)
 	}
 
-	b, ok := h.get().(plugin.CredentialBroker)
+	b, ok := h.Get().(plugin.CredentialBroker)
 	if !ok || b == nil {
-		t.Fatalf("dispensed impl is not a CredentialBroker: %T", h.get())
+		t.Fatalf("dispensed impl is not a CredentialBroker: %T", h.Get())
 	}
 
 	// Mint round-trips over real RPC and honours the audience.

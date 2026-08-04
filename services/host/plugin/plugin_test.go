@@ -23,7 +23,7 @@ func (noopMemory) Forget(ForgetReq) (ForgetResp, error)             { return For
 func (noopMemory) Synthesize(SynthesizeReq) (SynthesizeResp, error) { return SynthesizeResp{}, nil }
 func (noopMemory) Promotable(PromotableReq) (PromotableResp, error) { return PromotableResp{}, nil }
 func (noopMemory) Observe(ObserveReq) (ObserveResp, error)          { return ObserveResp{}, nil }
-func (noopMemory) Stats() (Stats, error)                            { return Stats{}, nil }
+func (noopMemory) Stats(string) (Stats, error)                      { return Stats{}, nil }
 func (noopMemory) Health() (Health, error)                          { return Health{}, nil }
 
 type noopKnowledge struct{}
@@ -55,11 +55,11 @@ var (
 )
 
 func TestHandshakeProtocolVersion(t *testing.T) {
-	if ProtocolVersion != 1 {
-		t.Fatalf("ProtocolVersion = %d, want 1", ProtocolVersion)
+	if ProtocolVersion != 2 {
+		t.Fatalf("ProtocolVersion = %d, want 2", ProtocolVersion)
 	}
-	if Handshake.ProtocolVersion != 1 {
-		t.Fatalf("Handshake.ProtocolVersion = %d, want 1", Handshake.ProtocolVersion)
+	if Handshake.ProtocolVersion != 2 {
+		t.Fatalf("Handshake.ProtocolVersion = %d, want 2", Handshake.ProtocolVersion)
 	}
 	if Handshake.MagicCookieKey != "PIX_PLUGIN" {
 		t.Fatalf("MagicCookieKey = %q, want PIX_PLUGIN", Handshake.MagicCookieKey)
@@ -186,8 +186,8 @@ func (echoMemory) Promotable(r PromotableReq) (PromotableResp, error) {
 func (echoMemory) Observe(r ObserveReq) (ObserveResp, error) {
 	return ObserveResp{Accepted: true, Reason: r.User}, nil
 }
-func (echoMemory) Stats() (Stats, error)   { return Stats{Active: 11, Durable: 22}, nil }
-func (echoMemory) Health() (Health, error) { return Health{OK: true, WatcherModel: "m"}, nil }
+func (echoMemory) Stats(string) (Stats, error) { return Stats{Active: 11, Durable: 22}, nil }
+func (echoMemory) Health() (Health, error)     { return Health{OK: true, WatcherModel: "m"}, nil }
 
 func TestRPCRoundTripMemory(t *testing.T) {
 	client := newRPCPair(t, &memoryRPCServer{Impl: echoMemory{}})
@@ -212,7 +212,7 @@ func TestRPCRoundTripMemory(t *testing.T) {
 		t.Fatalf("Observe round trip: got %+v err %v", got, err)
 	}
 	// Zero-arg method — the exact shape net/rpc would drop with an unexported arg.
-	if got, err := c.Stats(); err != nil || got.Active != 11 || got.Durable != 22 {
+	if got, err := c.Stats(""); err != nil || got.Active != 11 || got.Durable != 22 {
 		t.Fatalf("Stats round trip: got %+v err %v", got, err)
 	}
 	// Zero-arg method.
@@ -288,13 +288,13 @@ func TestRPCRoundTripMcp(t *testing.T) {
 // the error string survives the rpc.ServerError round trip.
 type errMemory struct{ echoMemory }
 
-func (errMemory) Stats() (Stats, error) { return Stats{}, errors.New("boom: stats failed") }
+func (errMemory) Stats(string) (Stats, error) { return Stats{}, errors.New("boom: stats failed") }
 
 func TestRPCRoundTripError(t *testing.T) {
 	client := newRPCPair(t, &memoryRPCServer{Impl: errMemory{}})
 	c := &memoryRPCClient{client: client}
 
-	_, err := c.Stats()
+	_, err := c.Stats("")
 	if err == nil {
 		t.Fatal("Stats: expected non-nil error from impl, got nil")
 	}

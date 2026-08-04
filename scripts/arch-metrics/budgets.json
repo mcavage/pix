@@ -2,10 +2,10 @@
   "schema": 1,
   "packages": {
     "pix/host": {
-      "prod_loc": 7640,
+      "prod_loc": 7515,
       "exports": 0,
       "globals": 68,
-      "edges": 6,
+      "edges": 7,
       "exits": 29
     },
     "pix/host/cli": {
@@ -173,6 +173,13 @@
       "prod_loc": 1128,
       "exports": 26,
       "globals": 16,
+      "edges": 0,
+      "exits": 0
+    },
+    "pix/host/supervise": {
+      "prod_loc": 991,
+      "exports": 36,
+      "globals": 21,
       "edges": 0,
       "exits": 0
     },

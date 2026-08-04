@@ -96,8 +96,8 @@ func (s *memoryRPCServer) Observe(req ObserveReq, resp *ObserveResp) error {
 	return nil
 }
 
-func (s *memoryRPCServer) Stats(_ Empty, resp *Stats) error {
-	r, err := s.Impl.Stats()
+func (s *memoryRPCServer) Stats(profile string, resp *Stats) error {
+	r, err := s.Impl.Stats(profile)
 	if err != nil {
 		return err
 	}
@@ -152,9 +152,9 @@ func (c *memoryRPCClient) Observe(req ObserveReq) (ObserveResp, error) {
 	return resp, err
 }
 
-func (c *memoryRPCClient) Stats() (Stats, error) {
+func (c *memoryRPCClient) Stats(profile string) (Stats, error) {
 	var resp Stats
-	err := c.client.Call("Plugin.Stats", Empty{}, &resp)
+	err := c.client.Call("Plugin.Stats", profile, &resp)
 	return resp, err
 }
 

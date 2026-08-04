@@ -136,7 +136,7 @@ func (stubKnowledge) Health() (plugin.KnowledgeHealth, error) {
 
 func TestKnowledgeProxyMuxContract(t *testing.T) {
 	h := &pluginHolder{}
-	h.set(stubKnowledge{}, nil)
+	h.Set(stubKnowledge{}, nil)
 	srv := httptest.NewServer(knowledgeProxyMux(h))
 	defer srv.Close()
 

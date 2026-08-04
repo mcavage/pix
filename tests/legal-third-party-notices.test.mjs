@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 // AC-REL-01: generated THIRD_PARTY_NOTICES.md, with a fail-closed license-class
 // gate over the live Go module set. Covers: MPL-2.0 go-plugin/yamux attribution,
-// the Suture "planned" entry, npm globals (incl. the patched pi-tui), and the
+// the live Suture entry, npm globals (incl. the patched pi-tui), and the
 // committed file staying in sync with the ledger.
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -87,11 +87,17 @@ test("CLI --check-baked-tools passes against the real Dockerfile", () => {
 	void out;
 });
 
-test("Suture is recorded as a planned entry, not a live dependency", () => {
-	const planned = deps.goModulesPlanned.find((m) => m.module === "github.com/thejerf/suture");
-	assert.ok(planned, "expected a planned ledger entry for thejerf/suture");
-	assert.equal(planned.status, "planned");
-	assert.ok(!deps.goModules.some((m) => m.module === "github.com/thejerf/suture"));
+// U07 landed the supervision tree, so Suture stopped being a plan and became a
+// linked dependency: it must now be a LIVE ledger entry (license verified at
+// the exact version in go.mod), and it must no longer sit in the planned list —
+// a shipped dependency disclosed as "planned" is the failure this guards.
+test("Suture is a live, license-verified ledger entry", () => {
+	const live = deps.goModules.find((m) => m.module === "github.com/thejerf/suture/v4");
+	assert.ok(live, "expected a live ledger entry for thejerf/suture/v4");
+	assert.equal(live.license, "MIT");
+	assert.equal(live.class, "permissive");
+	assert.ok(live.version.startsWith("v4."), `unexpected version ${live.version}`);
+	assert.ok(!(deps.goModulesPlanned || []).some((m) => m.module.includes("suture")));
 });
 
 test("npm globals include the patched pi-tui with attribution", () => {
@@ -137,7 +143,6 @@ test("renderNotices() output contains required sections", () => {
 	assert.match(rendered, /github\.com\/hashicorp\/go-plugin/);
 	assert.match(rendered, /MPL-2\.0/);
 	assert.match(rendered, /thejerf\/suture/);
-	assert.match(rendered, /planned/i);
 	assert.match(rendered, /@earendil-works\/pi-tui/);
 	assert.match(rendered, /not affiliated/i);
 	assert.match(rendered, /astral-sh\/ruff/);
