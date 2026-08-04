@@ -330,13 +330,8 @@ install: launcher ## Build + put the Go binaries (out/pix launcher + out/pix-hos
 	ln -sf $(CURDIR)/out/pix-host $(HOME)/.local/bin/pix-host
 	@echo "Installed: pix -> $(CURDIR)/out/pix"
 	@echo "Installed: pix-host -> $(CURDIR)/out/pix-host"
-	@# Drop the man page on the user manpath too (bonus; the binary embed is the
-	@# guarantee, so `pix man` works with or without this). No sudo.
-	mkdir -p $(HOME)/.local/share/man/man1
-	cp services/host/workflow/man/pix.1 $(HOME)/.local/share/man/man1/pix.1
-	@echo "Installed: man page -> $(HOME)/.local/share/man/man1/pix.1"
-	@manpath 2>/dev/null | tr ':' '\n' | grep -qx "$(HOME)/.local/share/man" \
-		|| echo "Tip: add ~/.local/share/man to MANPATH for \`man pix\` (or just use \`pix man\`)."
+	@# The man page is RETIRED (W1 U01a): `pix help --all` is the one verb map,
+	@# so install drops nothing on the manpath.
 	@echo "Runtime config lives in ~/.config/pix/config.toml — manage it with"
 	@echo "'pix config set <key> <value>' (or 'pix setup' for the guided flow)."
 	@echo "Ensure ~/.local/bin is on your PATH, then: cd <any project> && pix"

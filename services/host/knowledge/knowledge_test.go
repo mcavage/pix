@@ -83,8 +83,11 @@ func TestKnowledgeInit_Scaffold(t *testing.T) {
 	if !containsStr(got.KnowledgeBundles, absDir) {
 		t.Errorf("knowledge_bundles = %v, want %q", got.KnowledgeBundles, absDir)
 	}
-	if !containsStr(got.Services, "knowledge") {
-		t.Errorf("services = %v, want knowledge", got.Services)
+	// The knowledge SERVICE name is retired (W1 U01a: `serve` no longer composes
+	// it, config.removedServices drops it on load). init still records the
+	// bundle; the dead service name does not survive a reload.
+	if containsStr(got.Services, "knowledge") {
+		t.Errorf("services = %v, want the retired knowledge service dropped", got.Services)
 	}
 }
 

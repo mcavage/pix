@@ -529,8 +529,8 @@ func TestSaveAndMutators(t *testing.T) {
 	if c.AddMCP("gog") {
 		t.Error("AddMCP(gog) twice: want changed=false (no duplicate)")
 	}
-	if !c.AddService("knowledge") {
-		t.Error("AddService(knowledge): want changed=true")
+	if !c.AddService("broker") {
+		t.Error("AddService(broker): want changed=true")
 	}
 	if err := c.Save(); err != nil {
 		t.Fatalf("Save(): %v", err)
@@ -556,8 +556,8 @@ func TestSaveAndMutators(t *testing.T) {
 	if len(got.MCP) != 1 || got.MCP[0] != "gog" {
 		t.Errorf("MCP = %v, want [gog]", got.MCP)
 	}
-	if !contains(got.Services, "knowledge") {
-		t.Errorf("Services = %v, want it to contain knowledge", got.Services)
+	if !contains(got.Services, "broker") {
+		t.Errorf("Services = %v, want it to contain broker", got.Services)
 	}
 
 	// Remove mutators.
@@ -567,8 +567,8 @@ func TestSaveAndMutators(t *testing.T) {
 	if got.RemoveMCP("gog") {
 		t.Error("RemoveMCP(gog) twice: want changed=false")
 	}
-	if !got.RemoveService("knowledge") {
-		t.Error("RemoveService(knowledge): want changed=true")
+	if !got.RemoveService("broker") {
+		t.Error("RemoveService(broker): want changed=true")
 	}
 }
 

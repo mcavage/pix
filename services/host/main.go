@@ -6,17 +6,15 @@
 // Subcommands (one per host service):
 //
 //	memory         self-learning memory store  (:11435, JSON-RPC)
-//	knowledge      OKF knowledge retrieval idx (:11436, JSON-RPC)
 //	backup         hot FULL backup (memory + config + op-refs) -> tar.gz
 //	restore        restore a FULL backup tar.gz (safe swap)
 //	mcp <name>     stdio MCP bridge            (run by the sbx gateway)
-//	slack          alias for `mcp slack`       (stdio; run by the sbx gateway)
 //	plugin <kind>  built-in go-plugin server   (self-exec, launched by `serve`)
-//	serve          run the long-running HTTP services together (memory, knowledge)
+//	serve          run the long-running HTTP services together (memory)
 //
 // The MCP servers are stdio and spawned by the sbx gateway via `sbx mcp add`
-// (see `make mcp-register`), not by `serve`; the gateway now runs `mcp <name>`
-// (the generic bridge), of which `slack` is a back-compatible alias.
+// (see `make mcp-register`), not by `serve`; the gateway runs `mcp <name>`, the
+// generic bridge. The old per-server `slack` alias is retired (see retired.go).
 //
 // `plugin <kind>` is the self-exec entry `serve` launches when config selects a
 // non-builtin implementation for a capability slot; it is not meant to be run
@@ -53,10 +51,6 @@ func main() {
 	switch os.Args[1] {
 	case "version", "--version", "-v":
 		fmt.Println(version)
-	case "slack":
-		// Back-compat alias: the Slack MCP is now served through the generic
-		// stdio bridge (behaviourally identical to the old runSlack()).
-		runMcpBridge("slack")
 	case "mcp":
 		runMcpSubcommand(os.Args[2:])
 	case "plugin":
@@ -74,8 +68,13 @@ func main() {
 	case "-h", "--help", "help":
 		usage()
 	default:
-		fmt.Fprintf(os.Stderr, "pix-host: unknown subcommand %q\n\n", os.Args[1])
-		usage()
+		// A retired subcommand answers here (already exit 2) with its replacement.
+		if notice, retired := retiredHostNotice(os.Args[1:]); retired {
+			fmt.Fprint(os.Stderr, notice)
+		} else {
+			fmt.Fprintf(os.Stderr, "pix-host: unknown subcommand %q\n\n", os.Args[1])
+			usage()
+		}
 		os.Exit(2)
 	}
 }
@@ -107,8 +106,13 @@ func runPlugin(args []string) {
 	}
 }
 
-func usage() {
-	fmt.Fprint(os.Stderr, `pix-host — host-side services for pix
+func usage() { fmt.Fprint(os.Stderr, usageText()) }
+
+// usageText is the host binary's whole discoverable surface, split out from
+// usage() so the retirement test can assert a retired subcommand is not
+// advertised here.
+func usageText() string {
+	return `pix-host — host-side services for pix
 
 usage: pix-host <subcommand>
 
@@ -118,11 +122,10 @@ subcommands:
   backup         hot FULL backup (memory + config + op-refs) -> tar.gz
   restore        restore a FULL backup tar.gz (safe swap)
   route <cmd>    model router: pick | compile | show | models
-  mcp <name>     stdio MCP bridge (run by the sbx gateway); slack is an alias
-  slack          alias for "mcp slack"
-  plugin <kind>  built-in go-plugin server, self-exec (memory|knowledge|broker|mcp)
-  serve          run the long-running HTTP services (memory, knowledge)
-`)
+  mcp <name>     stdio MCP bridge (run by the sbx gateway)
+  plugin <kind>  built-in go-plugin server, self-exec (memory|broker|mcp)
+  serve          run the long-running HTTP services (memory)
+`
 }
 
 // --- small shared helpers ----------------------------------------------------

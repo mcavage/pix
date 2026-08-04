@@ -952,11 +952,13 @@ func TestSetupNoAgent_IsSetupsOwnFlag(t *testing.T) {
 	if _, ok := verbUsage("onboard"); ok {
 		t.Error("`pix help onboard` must not resolve to a usage page for a deleted verb")
 	}
-	if s, ok := suggestVerb("onboard"); !ok || s != "setup --no-agent" {
-		t.Errorf("an `onboard` argv must take the unknown-verb path suggesting `setup`, got %q (%v)", s, ok)
+	// `onboard` is a RETIRED surface: it is dispatched (retired.go) and answers
+	// with PIX_RETIRED + the replacement, which is strictly more than the
+	// did-you-mean hint it used to get.
+	if got := retiredSurfaces()["onboard"]; got != "pix setup --no-agent" {
+		t.Errorf("retiredSurfaces()[onboard] = %q, want \"pix setup --no-agent\"", got)
 	}
-	msg, launch := classifyBareArg("onboard")
-	if launch || !strings.Contains(msg, `Did you mean "setup --no-agent"?`) {
-		t.Errorf("`pix onboard` must print a did-you-mean and exit 2, got %q (launch=%v)", msg, launch)
+	if msg := retiredMessage("onboard"); !strings.Contains(msg, "pix setup --no-agent") {
+		t.Errorf("`pix onboard` must name its replacement, got %q", msg)
 	}
 }

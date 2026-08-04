@@ -1,1 +1,15 @@
-[]
+[
+	{
+		"id": "ports.reserved.serve",
+		"rationale": "W1 U01a retires the knowledge surface: `serve` no longer composes the OKF index, so serve.go no longer binds :11436. The memory and broker pins are unchanged — this waiver narrows the pin to the two ports the supervisor still binds, it does not relax it.",
+		"evidence": "services/host/cmd/pix/corpus/retirement.jsonl (approved entries for `knowledge`/`kb` and `pix-host serve knowledge`); services/host/retired.go; services/host/serve.go serveServiceAliases()",
+		"changes": [
+			{
+				"file": "services/host/serve.go",
+				"kind": "contains",
+				"from": ["env(\"MEMORY_PORT\", \"11435\")", "env(\"KNOWLEDGE_PORT\", \"11436\")", "env(\"BROKER_PORT\", \"11437\")"],
+				"to": ["env(\"MEMORY_PORT\", \"11435\")", "env(\"BROKER_PORT\", \"11437\")"]
+			}
+		]
+	}
+]

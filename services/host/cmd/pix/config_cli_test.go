@@ -115,8 +115,14 @@ func TestApplyConfigChange_KnowledgeBundles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(got.KnowledgeBundles, abs) || !slices.Contains(got.Services, "knowledge") {
-		t.Errorf("round-trip lost data: bundles=%v services=%v", got.KnowledgeBundles, got.Services)
+	if !slices.Contains(got.KnowledgeBundles, abs) {
+		t.Errorf("round-trip lost the bundle path: bundles=%v", got.KnowledgeBundles)
+	}
+	// The knowledge SERVICE is retired (W1 U01a): setup still records the bundle
+	// list verbatim, but a reload drops the dead service name rather than
+	// carrying it forward (config.removedServices).
+	if slices.Contains(got.Services, "knowledge") {
+		t.Errorf("reload kept the retired knowledge service: services=%v", got.Services)
 	}
 
 	// Unset removes the bundle (the knowledge service stays; unset targets the

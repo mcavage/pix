@@ -543,7 +543,7 @@ func MemoryLockPath() string {
 // removedServices are service names that no longer exist (e.g. gws, which the
 // Google Workspace port replaced with the host `gog` MCP server). We drop them
 // silently from a loaded config so a stale services list doesn't fatal `serve`.
-var removedServices = map[string]bool{"gws": true, "gws-token": true}
+var removedServices = map[string]bool{"gws": true, "gws-token": true, "knowledge": true} // knowledge: W1 U01a
 
 // defaults returns a Config with the sane defaults applied to any unset field.
 func (c *Config) applyDefaults() {

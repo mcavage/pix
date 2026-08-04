@@ -37,6 +37,13 @@ type hostService struct {
 // from `services` in config.toml (config-friendly aliases: memory, knowledge,
 // broker); empty means "all". The MCP servers (e.g. slack) are stdio commands
 // run by the sbx gateway via `sbx mcp add`, not HTTP daemons.
+// serveServiceAliases is the config name -> internal service name table: the
+// WHOLE set of capabilities `serve` composes. A retired capability leaves here,
+// which is what makes `serve <retired>` a usage error, not a started daemon.
+func serveServiceAliases() map[string]string {
+	return map[string]string{"memory": "memory", "broker": "broker"}
+}
+
 func runServe(enabled []string) {
 	cfg, err := config.Load()
 	if err != nil {
@@ -69,11 +76,7 @@ func runServe(enabled []string) {
 	// preflighted below — so `serve memory` never launches or preflights knowledge.
 	effective := resolveServices(enabled, cfg.Services)
 	// config-friendly aliases -> internal service name.
-	alias := map[string]string{
-		"memory":    "memory",
-		"knowledge": "knowledge",
-		"broker":    "broker",
-	}
+	alias := serveServiceAliases()
 	valid := make([]string, 0, len(alias))
 	for k := range alias {
 		valid = append(valid, k)
@@ -136,48 +139,7 @@ func runServe(enabled []string) {
 		all = append(all, memSvc)
 	}
 
-	// knowledge: the OKF retrieval index. Opt-in (NOT in DefaultServices) — it only
-	// runs when named in SERVICES/config, so a fresh install pays nothing for it.
-	// Like memory, the built-in store runs IN-PROCESS (fast path); only a
-	// non-builtin impl is spawned as a plugin. The configured bundles are indexed
-	// at startup and it degrades loudly (empty index / keyword-only) rather than
-	// failing, so no fatal preflight in either path.
-	if enabledSvc("knowledge") {
-		// The knowledge embedder reuses the memory embed model knob (MEMORY_EMBED_MODEL);
-		// wire it in for the case where knowledge runs without memory enabled.
-		applyMemoryModelEnv(cfg)
-		knSvc := hostService{name: "knowledge", addr: env("KNOWLEDGE_BIND", "127.0.0.1") + ":" + env("KNOWLEDGE_PORT", "11436")}
-		if spec := cfg.Plugin("knowledge"); spec.Impl == config.BuiltinImpl {
-			// Route a build failure through fatalf (F3) so cleanup runs and any
-			// already-launched plugin subprocess is not orphaned.
-			store, _, kerr := buildKnowledgeStore()
-			if kerr != nil {
-				fatalf("%v", kerr)
-			}
-			bundles := knowledgeBundles(cfg)
-			if len(bundles) == 0 {
-				log.Print("knowledge: no bundles configured (set knowledge_bundles in config or KNOWLEDGE_BUNDLES); serving an empty index")
-			} else if n, indexed, rerr := store.reindex(bundles); rerr != nil {
-				log.Printf("knowledge: reindex failed (serving whatever was already indexed): %v", rerr)
-			} else {
-				log.Printf("knowledge: indexed %d concept(s) from %d bundle(s)", n, len(indexed))
-			}
-			knSvc.mux = knowledgeMux(store)
-		} else {
-			h, lerr := sup.launch("knowledge", "knowledge", spec, selfPath, spec.ExtraEnv)
-			if lerr != nil {
-				fatalf("launch knowledge plugin: %v", lerr)
-			}
-			// F2: the built-in path indexes the configured bundles at startup; the
-			// PLUGIN path must do the same or an external/self-exec knowledge plugin
-			// serves an EMPTY index. Reindex the freshly dispensed store with the same
-			// bundles + degrade behavior as the built-in branch.
-			ks, _ := h.get().(plugin.KnowledgeStore)
-			reindexKnowledgePlugin(ks, knowledgeBundles(cfg))
-			knSvc.mux = knowledgeProxyMux(h)
-		}
-		all = append(all, knSvc)
-	}
+	// knowledge: RETIRED (W1 U01a); a stale services entry is dropped on load.
 
 	// broker: the DORMANT credential-broker slot. There is NO built-in broker, so
 	// with the default builtin impl this starts NOTHING (brokerService returns

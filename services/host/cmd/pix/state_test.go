@@ -30,10 +30,12 @@ func captureStdout(t *testing.T, fn func()) string {
 // side-effect-free --help seam: each subcommand + --help prints that verb's own
 // usage (no exec, no config, no filesystem move).
 func TestRunState_RoutesToAliasesViaHelp(t *testing.T) {
+	// backup/restore are RETIRED (W1 U01a); reset is the group's only live
+	// subcommand. The retired pair is covered by the retirement contract
+	// (retired_test.go + corpus/retired_dispatch_test.go), which asserts the
+	// notice and exit 2 out of process — it cannot be exercised in-process.
 	cases := map[string]string{
-		"backup":  "usage: pix backup",
-		"restore": "usage: pix restore",
-		"reset":   "usage: pix reset",
+		"reset": "usage: pix reset",
 	}
 	for sub, want := range cases {
 		out := captureStdout(t, func() { runState([]string{sub, "--help"}) })
@@ -62,10 +64,10 @@ func TestState_KnownAndRoutable(t *testing.T) {
 	}
 }
 
-// TestLegacyLifecycleAliasesPreserved is the constraint-c regression: the four
-// flat lifecycle verbs stay dispatchable + documented even after grouping.
+// TestLegacyLifecycleAliasesPreserved: the lifecycle verbs that SURVIVED
+// retirement stay dispatchable + documented. backup/restore left with W1 U01a.
 func TestLegacyLifecycleAliasesPreserved(t *testing.T) {
-	for _, v := range []string{"backup", "restore", "reset"} {
+	for _, v := range []string{"reset"} {
 		if !knownVerbs[v] {
 			t.Errorf("%s dropped from knownVerbs", v)
 		}

@@ -3,18 +3,16 @@ package main
 import (
 	"fmt"
 	"os"
-	"pix/host/workflow/backup"
 )
 
-const stateUsage = `usage: pix state <backup|restore|reset> [args]
+const stateUsage = `usage: pix state reset [args]
 
-Group for the stack's on-disk lifecycle. Each subcommand is identical to its
-top-level alias (which keeps working):
+Group for the stack's on-disk lifecycle.
 
-  backup [--out P] [--keep N]   hot FULL backup (memory + config + op-refs) -> tar.gz
-  restore <archive> [--force]   restore a FULL backup (safe swap)
   reset [flags]                 move stack state aside (reversible)
-Run ` + "`pix help <subcommand>`" + ` for full flags.
+
+Run ` + "`pix help reset`" + ` for full flags. Archiving state is no longer a
+launcher verb: use ` + "`pix-host backup`" + ` / ` + "`pix-host restore`" + `.
 `
 
 // runState is a thin verbatim dispatcher for the `state` grouping noun. It does
@@ -26,11 +24,8 @@ func runState(argv []string) {
 		fmt.Print(stateUsage)
 		return
 	}
+	retiredIfRetired("state", argv[0])
 	switch argv[0] {
-	case "backup":
-		backup.RunBackup(argv[1:])
-	case "restore":
-		backup.RunRestore(argv[1:])
 	case "reset":
 		runReset(argv[1:])
 	default:
