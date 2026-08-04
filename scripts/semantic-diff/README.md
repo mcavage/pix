@@ -130,9 +130,48 @@ So the sequence is always: **(a)** ship the rule change with its waiver
 together, **(b)** merge, **(c)** delete the now-stale waiver entry in a
 later, separate commit or PR.
 
-## Story04
+## Story04 / staged pins (U04g)
 
-`rules/lifecycle.rules.mjs` is the reserved, present-but-empty shard for
-sandbox/process lifecycle contracts (keep polarity, non-force `rm`, instance
-identity, lease paths/CLOEXEC) — see that file's header comment. Adding pins
-there requires no engine or CLI change.
+`rules/lifecycle.rules.mjs` is the sandbox/process lifecycle shard (keep
+polarity, non-force `rm`, instance identity, lease paths/CLOEXEC) — it
+shipped W0 present-but-empty and now (U04g) carries real pins, both kinds:
+
+- **ACTIVE** pins on contracts already true today: the `pix rm` seam's
+  non-force scoping and keep polarity, and the U04a lease foundation's
+  write-once instance records, state file paths/modes, and CLOEXEC.
+- **STAGED** pins (`activation: "<key>"`) on contracts describing behavior
+  that does not exist in production yet — the orphan reaper, bare non-TTY
+  `pix rm` refusal, and the `-k`/`--keep` flag. Evaluating these for real
+  today would permanently redden the gate for unlanded work, so a pin whose
+  `activation` key is not present in `scripts/semantic-diff/activation.json`
+  is **skipped entirely** by `evaluatePins` (no file I/O, reported
+  `pending: true`, never counted as a failure) instead of evaluated.
+
+### The activation manifest
+
+`activation.json` is `intended-changes.json`'s sibling, same discipline,
+inverted purpose: instead of waiving an already-true pin's changed value, it
+**turns a staged pin on**. Shape:
+
+```json
+[{ "key": "story04", "rationale": "landed the orphan reaper + -k/--keep", "evidence": "PR #123" }]
+```
+
+`rationale`/`evidence` must be non-empty (same hard-error-on-malformed rule
+as the manifest). It ships **empty** until a story lands the real behavior.
+A pin's `activation` field is part of its fingerprint for `checkRuleDrift()`
+too — silently flipping a pin from staged to active (or vice versa) outside
+a reviewed commit is caught exactly like any other pin-content drift.
+
+**Landing sequence, mirroring the manifest's:** (a) the commit that lands the
+real behavior ALSO adds the matching `activation.json` entry, in the same
+commit — an unlanded feature can never accidentally get evaluated, and a
+landed one can never silently stay pending; (b) the STAGED pin itself
+typically stays as-is (or graduates to no `activation` field at all in a
+later, separate commit, the same subsequent-commit pattern
+`checkRuleDrift()` already supports for manifest waivers).
+
+Use `node scripts/check-semantic-diff.mjs --activate <key>` to preview what a
+staged pin would check locally without editing `activation.json` — this is
+how `tests/check-semantic-diff.test.mjs` proves every staged lifecycle pin is
+a real, currently-failing TODO and not a vacuous placeholder.
