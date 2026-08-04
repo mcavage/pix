@@ -1,215 +1,197 @@
 package monitor
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 )
 
-// startTestIngest binds a real IngestServer on an ephemeral loopback port
-// and returns its base URL plus the Store/BlobStore it persists to. Uses a
-// REAL socket end to end (no mocked http.Handler) per the story's "real
-// loopback/files tests, no mocks" requirement.
-func startTestIngest(t *testing.T, filter string) (baseURL string, store *Store, blobs *BlobStore) {
+// startTestIngest binds a REAL IngestServer on an ephemeral loopback port —
+// real socket, real files, no mocked handler — and returns its base URL and
+// store.
+func startTestIngest(t *testing.T, filter string) (string, *Store) {
 	t.Helper()
-	store = newTestStore(t, StoreConfig{})
-	blobs = newTestBlobStore(t, BlobStoreConfig{})
-	srv, err := NewIngestServer(IngestConfig{Port: 0, BindAddr: "127.0.0.1", Store: store, Blobs: blobs, Filter: filter})
+	store := newTestStore(t, StoreConfig{})
+	srv, err := NewIngestServer(IngestConfig{Port: 0, BindAddr: "127.0.0.1", Store: store, Filter: filter})
 	if err != nil {
 		t.Fatalf("NewIngestServer: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- srv.Start(ctx) }()
-
-	deadline := time.Now().Add(2 * time.Second)
-	for srv.Addr() == "" {
-		if time.Now().After(deadline) {
-			t.Fatal("ingest server never bound")
-		}
-		time.Sleep(time.Millisecond)
-	}
+	go func() { done <- srv.Serve(ctx) }()
 	t.Cleanup(func() {
 		cancel()
 		if err := <-done; err != nil {
-			t.Errorf("Start() returned error after shutdown: %v", err)
+			t.Errorf("Serve returned %v after shutdown, want nil", err)
 		}
 	})
-	return "http://" + srv.Addr(), store, blobs
+	return "http://" + srv.Addr(), store
 }
 
-func postNDJSON(t *testing.T, baseURL string, lines ...string) *http.Response {
+func post(t *testing.T, url, contentType, body string) *http.Response {
 	t.Helper()
-	body := strings.Join(lines, "\n") + "\n"
-	resp, err := http.Post(baseURL+"/ingest", "application/x-ndjson", strings.NewReader(body))
+	resp, err := http.Post(url, contentType, strings.NewReader(body))
 	if err != nil {
-		t.Fatalf("POST /ingest: %v", err)
+		t.Fatalf("POST %s: %v", url, err)
 	}
+	t.Cleanup(func() { resp.Body.Close() })
 	return resp
 }
 
-func TestIngestServerPersistsValidEventsToStore(t *testing.T) {
-	base, store, _ := startTestIngest(t, "")
-	line, err := Encode(toolEvent("sbx", "sess", "1", "t1"))
+func encodeLine(t *testing.T, e Event) string {
+	t.Helper()
+	line, err := Encode(e)
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
-	resp := postNDJSON(t, base, string(line))
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("POST /ingest status = %d, want 200", resp.StatusCode)
-	}
-	resp.Body.Close()
-
-	deadline := time.Now().Add(time.Second)
-	for {
-		got, err := store.Tail("sbx", "sess", 0)
-		if err != nil {
-			t.Fatalf("Tail: %v", err)
-		}
-		if len(got) == 1 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("Tail() never observed the ingested event, got %d", len(got))
-		}
-		time.Sleep(time.Millisecond)
-	}
+	return string(line)
 }
 
-func TestIngestServerSkipsUnparseableLinesButKeepsGoing(t *testing.T) {
-	base, store, _ := startTestIngest(t, "")
-	good1, _ := Encode(toolEvent("sbx", "sess", "1", "t1"))
-	good2, _ := Encode(toolEvent("sbx", "sess", "1", "t2"))
-	resp := postNDJSON(t, base, string(good1), "not json at all", string(good2))
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("POST /ingest status = %d, want 200 (a bad line must not fail the request)", resp.StatusCode)
-	}
-	resp.Body.Close()
-
-	waitForTailCount(t, store, "sbx", "sess", 2)
-}
-
-func waitForTailCount(t *testing.T, store *Store, sandboxID, sessionID string, n int) {
+func waitForTail(t *testing.T, store *Store, sandboxID, sessionID string, want int) []Event {
 	t.Helper()
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(2 * time.Second)
 	for {
 		got, err := store.Tail(sandboxID, sessionID, 0)
 		if err != nil {
 			t.Fatalf("Tail: %v", err)
 		}
-		if len(got) == n {
-			return
+		if len(got) >= want || time.Now().After(deadline) {
+			return got
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("Tail() = %d events after 1s, want %d", len(got), n)
-		}
-		time.Sleep(time.Millisecond)
+		time.Sleep(2 * time.Millisecond)
 	}
 }
 
-func TestIngestServerFilterDropsNonMatchingSandbox(t *testing.T) {
-	base, store, _ := startTestIngest(t, "match-me")
-	matching, _ := Encode(toolEvent("sbx-match-me-1", "sess", "1", "t1"))
-	other, _ := Encode(toolEvent("sbx-other", "sess2", "1", "t2"))
-	resp := postNDJSON(t, base, string(matching), string(other))
-	resp.Body.Close()
+// TestIngestPersistsAndSurvivesBadLines: a valid line lands in the store, and
+// neither an unparseable line, a blank line, nor an oversized one may drop
+// the rest of the stream or fail the request.
+func TestIngestPersistsAndSurvivesBadLines(t *testing.T) {
+	base, store := startTestIngest(t, "")
+	body := strings.Join([]string{
+		encodeLine(t, toolEvent("sbx", "sess", "first", 1)),
+		"{not json",
+		"",
+		strings.Repeat("A", maxIngestLine+10),
+		encodeLine(t, toolEvent("sbx", "sess", "last", 2)),
+	}, "\n") + "\n"
 
-	waitForTailCount(t, store, "sbx-match-me-1", "sess", 1)
-	got, err := store.Tail("sbx-other", "sess2", 0)
-	if err != nil {
-		t.Fatalf("Tail: %v", err)
-	}
-	if len(got) != 0 {
-		t.Errorf("Tail(non-matching sandbox) = %d events, want 0 (filtered out)", len(got))
-	}
-}
-
-func TestIngestServerBlobPostVerifiesHashAndPersists(t *testing.T) {
-	base, _, blobs := startTestIngest(t, "")
-	text := "full tool output text"
-	body, _ := json.Marshal(Blob{Hash: hashOf(text), Text: text})
-	resp, err := http.Post(base+"/blob", "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("POST /blob: %v", err)
-	}
+	resp := post(t, base+"/ingest", "application/x-ndjson", body)
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("POST /blob status = %d, want 200", resp.StatusCode)
+		t.Fatalf("POST /ingest = %d, want 200", resp.StatusCode)
 	}
-	resp.Body.Close()
-
-	got, ok, err := blobs.Get(hashOf(text))
-	if err != nil {
-		t.Fatalf("Get: %v", err)
+	got := waitForTail(t, store, "sbx", "sess", 2)
+	if len(got) != 2 {
+		t.Fatalf("stored %d events, want exactly the 2 valid ones", len(got))
 	}
-	if !ok {
-		t.Fatal("blob was not persisted by the ingest server")
-	}
-	if got.Text != text {
-		t.Errorf("Get().Text = %q, want %q", got.Text, text)
+	if got[0].(ToolEnd).ResultSummary != "first" || got[1].(ToolEnd).ResultSummary != "last" {
+		t.Fatalf("stored %+v, want first then last", got)
 	}
 }
 
-func TestIngestServerBlobPostRejectsMismatchedHash(t *testing.T) {
-	base, _, _ := startTestIngest(t, "")
-	body, _ := json.Marshal(Blob{Hash: strings.Repeat("a", 64), Text: "hello"})
-	resp, err := http.Post(base+"/blob", "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("POST /blob: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("POST /blob (mismatched hash) status = %d, want 400", resp.StatusCode)
-	}
-}
-
-func TestIngestServerHealthz(t *testing.T) {
-	base, _, _ := startTestIngest(t, "")
-	resp, err := http.Get(base + "/healthz")
-	if err != nil {
-		t.Fatalf("GET /healthz: %v", err)
-	}
-	defer resp.Body.Close()
+// An event whose ids the store refuses must be dropped, not written and not
+// fatal to the request.
+func TestIngestDropsEventsWithInvalidIDs(t *testing.T) {
+	base, store := startTestIngest(t, "")
+	resp := post(t, base+"/ingest", "application/x-ndjson",
+		encodeLine(t, toolEvent("../escape", "sess", "x", 1))+"\n")
 	if resp.StatusCode != http.StatusOK {
-		t.Errorf("GET /healthz status = %d, want 200", resp.StatusCode)
+		t.Fatalf("POST /ingest = %d, want 200", resp.StatusCode)
+	}
+	time.Sleep(20 * time.Millisecond)
+	metas, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(metas) != 0 {
+		t.Fatalf("stored %d streams, want none", len(metas))
 	}
 }
 
-func TestIngestServerBindsLoopbackOnly(t *testing.T) {
-	base, _, _ := startTestIngest(t, "")
-	if !strings.HasPrefix(base, "http://127.0.0.1:") {
-		t.Errorf("ingest server bound %q, want loopback", base)
+func TestIngestFilterDropsNonMatchingStreams(t *testing.T) {
+	base, store := startTestIngest(t, "keep")
+	body := encodeLine(t, toolEvent("keep-me", "sess", "yes", 1)) + "\n" +
+		encodeLine(t, toolEvent("other", "sess", "no", 1)) + "\n"
+	post(t, base+"/ingest", "application/x-ndjson", body)
+	waitForTail(t, store, "keep-me", "sess", 1)
+	if got, _ := store.Tail("other", "sess", 0); len(got) != 0 {
+		t.Fatalf("filtered stream stored %d events, want 0", len(got))
 	}
 }
 
-func TestNewIngestServerRequiresStoreAndBlobs(t *testing.T) {
+func TestIngestBlobEndpointVerifiesHash(t *testing.T) {
+	base, store := startTestIngest(t, "")
+	text := "full tool output"
+	resp := post(t, base+"/blob", "application/json",
+		fmt.Sprintf(`{"hash":%q,"bytes":%d,"text":%q}`, hashOf(text), len(text), text))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /blob = %d, want 200", resp.StatusCode)
+	}
+	blobs := readStoredBlobs(t, store)
+	if len(blobs) != 1 || blobs[0].Text != text {
+		t.Fatalf("stored blobs = %+v, want the posted text", blobs)
+	}
+
+	bad := post(t, base+"/blob", "application/json", `{"hash":"deadbeef","text":"other"}`)
+	if bad.StatusCode != http.StatusBadRequest {
+		t.Fatalf("POST /blob with a mismatched hash = %d, want 400", bad.StatusCode)
+	}
+	if malformed := post(t, base+"/blob", "application/json", "{"); malformed.StatusCode != http.StatusBadRequest {
+		t.Fatalf("POST /blob with malformed json = %d, want 400", malformed.StatusCode)
+	}
+	if got := len(readStoredBlobs(t, store)); got != 1 {
+		t.Fatalf("stored %d blobs after two rejected posts, want 1", got)
+	}
+}
+
+// The ingest endpoint carries full agent context and tool output with NO
+// auth, so the default bind must be loopback and nothing else.
+func TestIngestBindsLoopbackByDefault(t *testing.T) {
 	store := newTestStore(t, StoreConfig{})
-	blobs := newTestBlobStore(t, BlobStoreConfig{})
-	if _, err := NewIngestServer(IngestConfig{Blobs: blobs}); err == nil {
-		t.Error("NewIngestServer(no Store) = nil error, want a requirement error")
-	}
-	if _, err := NewIngestServer(IngestConfig{Store: store}); err == nil {
-		t.Error("NewIngestServer(no Blobs) = nil error, want a requirement error")
-	}
-}
-
-func TestIngestServerBindErrorOnPortInUse(t *testing.T) {
-	base, _, _ := startTestIngest(t, "")
-	var port int
-	if _, err := fmt.Sscanf(strings.TrimPrefix(base, "http://127.0.0.1:"), "%d", &port); err != nil {
-		t.Fatalf("parse port from %q: %v", base, err)
-	}
-	store := newTestStore(t, StoreConfig{})
-	blobs := newTestBlobStore(t, BlobStoreConfig{})
-	srv, err := NewIngestServer(IngestConfig{Port: port, BindAddr: "127.0.0.1", Store: store, Blobs: blobs})
+	srv, err := NewIngestServer(IngestConfig{Port: 0, Store: store})
 	if err != nil {
 		t.Fatalf("NewIngestServer: %v", err)
 	}
-	if err := srv.Start(context.Background()); err == nil {
-		t.Error("Start() on an already-bound port = nil error, want a bind failure")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go srv.Serve(ctx) //nolint:errcheck // shutdown path is covered elsewhere
+	host, _, err := net.SplitHostPort(srv.Addr())
+	if err != nil {
+		t.Fatalf("SplitHostPort(%q): %v", srv.Addr(), err)
 	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		t.Fatalf("default bind is %q, want a loopback address", host)
+	}
+}
+
+func TestNewIngestServerRequiresStoreAndReportsBindFailure(t *testing.T) {
+	if _, err := NewIngestServer(IngestConfig{Port: 0}); err == nil {
+		t.Fatal("NewIngestServer with no Store = nil error, want an error")
+	}
+	store := newTestStore(t, StoreConfig{})
+	first, err := NewIngestServer(IngestConfig{Port: 0, Store: store})
+	if err != nil {
+		t.Fatalf("NewIngestServer: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- first.Serve(ctx) }()
+	_, port, err := net.SplitHostPort(first.Addr())
+	if err != nil {
+		t.Fatalf("SplitHostPort: %v", err)
+	}
+	var n int
+	fmt.Sscanf(port, "%d", &n)
+	// The port is taken, so the CONSTRUCTOR must report it — that is why it
+	// binds eagerly instead of failing asynchronously inside Serve.
+	if _, err := NewIngestServer(IngestConfig{Port: n, Store: store}); err == nil {
+		t.Fatal("NewIngestServer on a taken port = nil error, want a bind error")
+	}
+	cancel()
+	<-done
 }

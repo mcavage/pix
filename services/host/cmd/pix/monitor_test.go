@@ -3,7 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"io"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -13,10 +20,8 @@ import (
 	"pix/host/monitor"
 )
 
-// syncBuffer wraps a bytes.Buffer with a mutex: a monitor run happens in a
-// background goroutine in the live-mode tests below, while the test
-// goroutine polls its output — bytes.Buffer alone is not safe for that
-// concurrent read/write.
+// syncBuffer is a bytes.Buffer safe for the test goroutine to read while a
+// backgrounded monitor run writes to it.
 type syncBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
@@ -34,252 +39,207 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-// panicIngestServer is a newIngestServerFunc that panics if called — used to
-// prove a --help / usage-error / --path (offline) path never constructs a
-// real ingest server.
+// panicIngestServer proves a --help / usage-error / --path run never
+// constructs an ingest server.
 func panicIngestServer(monitor.IngestConfig) (*monitor.IngestServer, error) {
 	panic("runMonitorCore must not construct an ingest server here")
 }
 
-func TestMonitorHelp(t *testing.T) {
+func TestMonitorHelpAndUsageErrors(t *testing.T) {
 	for _, argv := range [][]string{{"-h"}, {"--help"}, {"--help", "mybox"}} {
 		var out bytes.Buffer
-		ctx := context.Background()
-		if err := runMonitorCore(ctx, argv, panicIngestServer, &out, io.Discard, t.TempDir(), false); err != nil {
+		if err := runMonitorCore(context.Background(), argv, panicIngestServer, &out, io.Discard, t.TempDir(), false); err != nil {
 			t.Fatalf("runMonitorCore(%v): %v", argv, err)
 		}
-		if !strings.Contains(out.String(), "usage: pix monitor") {
-			t.Errorf("runMonitorCore(%v) = %q, want monitor usage", argv, out.String())
+		// The usage text is the only place these operational facts are
+		// discoverable, so pin them rather than just "usage:".
+		for _, want := range []string{"usage: pix monitor", "make load", "PIX_MONITOR=0", "PIX_MONITOR_URL", "CASE-SENSITIVE", "--path DIR", "--json", "loopback-only"} {
+			if !strings.Contains(out.String(), want) {
+				t.Errorf("monitor usage missing %q", want)
+			}
+		}
+	}
+	for _, argv := range [][]string{{"--nope"}, {"one", "two"}} {
+		err := runMonitorCore(context.Background(), argv, panicIngestServer, io.Discard, io.Discard, t.TempDir(), false)
+		if err == nil {
+			t.Fatalf("runMonitorCore(%v) = nil error, want a usage error", argv)
+		}
+		var usage cli.UsageError2
+		if !errors.As(err, &usage) {
+			t.Errorf("runMonitorCore(%v) error = %v (%T), want a usage error (exit 2)", argv, err, err)
 		}
 	}
 }
 
-func TestMonitorUsageDocumentsStaleImageAndEnvAndCaseSensitivity(t *testing.T) {
-	for _, want := range []string{
-		"make load",
-		"PIX_MONITOR=0",
-		"PIX_MONITOR_URL",
-		"host.docker.internal:11437",
-		"CASE-SENSITIVE",
-		"--path",
-		"--json",
-	} {
-		if !strings.Contains(monitorUsage, want) {
-			t.Errorf("monitorUsage missing %q:\n%s", want, monitorUsage)
-		}
+// storeFixture writes one captured stream into dir the way the store does,
+// so --path mode has something real to read.
+func storeFixture(t *testing.T, dir, sandboxID, sessionID string, events ...string) {
+	t.Helper()
+	streamDir := filepath.Join(dir, sandboxID+"="+sessionID)
+	if err := os.MkdirAll(streamDir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	body := strings.Join(events, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(streamDir, "events.ndjson"), []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
 	}
 }
 
-func TestMonitorUnknownFlag(t *testing.T) {
-	ctx := context.Background()
-	err := runMonitorCore(ctx, []string{"--bogus"}, panicIngestServer, &bytes.Buffer{}, io.Discard, t.TempDir(), false)
-	if !cli.IsUsage(err) {
-		t.Errorf("runMonitorCore(--bogus): err = %v, want cli.UsageError2", err)
-	}
+func toolEndLine(sandboxID, sessionID, toolID string) string {
+	return `{"kind":"tool_end","sandboxId":"` + sandboxID + `","sessionId":"` + sessionID +
+		`","turnId":"t1","seq":1,"ts":1700000000000,"toolId":"` + toolID + `","ok":true,"resultBytes":7,"durationMs":3}`
 }
 
-func TestMonitorTooManyPositional(t *testing.T) {
-	ctx := context.Background()
-	err := runMonitorCore(ctx, []string{"box1", "box2"}, panicIngestServer, &bytes.Buffer{}, io.Discard, t.TempDir(), false)
-	if !cli.IsUsage(err) {
-		t.Errorf("runMonitorCore(box1 box2): err = %v, want cli.UsageError2", err)
-	}
-}
-
-func TestMonitorUsage(t *testing.T) {
-	u, ok := verbUsage("monitor")
-	if !ok {
-		t.Fatal(`verbUsage("monitor") ok = false, want true`)
-	}
-	if !strings.HasPrefix(u, "usage: pix monitor") {
-		t.Errorf("verbUsage(monitor) = %q, want prefix %q", u, "usage: pix monitor")
-	}
-}
-
-func TestMonitorKnownVerb(t *testing.T) {
-	if !knownVerbs["monitor"] {
-		t.Error(`knownVerbs["monitor"] = false, want true`)
-	}
-}
-
-// TestMonitorPathModeNeverConstructsIngestServer proves --path runs as a
-// pure offline reader: no network listener, ever.
-func TestMonitorPathModeNeverConstructsIngestServer(t *testing.T) {
-	dir := t.TempDir()
-	store, err := monitor.NewStore(monitor.StoreConfig{Root: dir})
-	if err != nil {
-		t.Fatalf("NewStore: %v", err)
-	}
-	if err := store.Append(sampleToolEvent()); err != nil {
-		t.Fatalf("Append: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancel()
-	var out bytes.Buffer
-	if err := runMonitorCore(ctx, []string{"--path", dir}, panicIngestServer, &out, io.Discard, "/should-not-be-used", false); err != nil {
-		t.Fatalf("runMonitorCore: %v", err)
-	}
-	if !strings.Contains(out.String(), "tool") {
-		t.Errorf("output = %q, want it to contain the pre-existing event", out.String())
-	}
-}
-
-// TestMonitorPathModeJSONPrintsRawEvents proves --json emits the raw
-// (decodable) event JSON instead of the concise line.
-func TestMonitorPathModeJSONPrintsRawEvents(t *testing.T) {
-	dir := t.TempDir()
-	store, err := monitor.NewStore(monitor.StoreConfig{Root: dir})
-	if err != nil {
-		t.Fatalf("NewStore: %v", err)
-	}
-	if err := store.Append(sampleToolEvent()); err != nil {
-		t.Fatalf("Append: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancel()
-	var out bytes.Buffer
-	if err := runMonitorCore(ctx, []string{"--path", dir, "--json"}, panicIngestServer, &out, io.Discard, "", false); err != nil {
-		t.Fatalf("runMonitorCore: %v", err)
-	}
-	line := strings.TrimSpace(out.String())
-	ev, err := monitor.Decode([]byte(line))
-	if err != nil {
-		t.Fatalf("--json output did not decode as an event: %v\noutput: %s", err, out.String())
-	}
-	if ev.Envelope().SandboxID != "sbx" {
-		t.Errorf("decoded event sandboxId = %q, want %q", ev.Envelope().SandboxID, "sbx")
-	}
-}
-
-// TestMonitorPathModeFiltersBySandboxSubstring proves the [name] positional
-// filters which streams the reader prints.
-func TestMonitorPathModeFiltersBySandboxSubstring(t *testing.T) {
-	dir := t.TempDir()
-	store, err := monitor.NewStore(monitor.StoreConfig{Root: dir})
-	if err != nil {
-		t.Fatalf("NewStore: %v", err)
-	}
-	if err := store.Append(mustDecodeToolEvent(t, "match-me", "sess", "t1")); err != nil {
-		t.Fatalf("Append: %v", err)
-	}
-	if err := store.Append(mustDecodeToolEvent(t, "other-sbx", "sess2", "t2")); err != nil {
-		t.Fatalf("Append: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancel()
-	var out bytes.Buffer
-	if err := runMonitorCore(ctx, []string{"--path", dir, "match-me"}, panicIngestServer, &out, io.Discard, "", false); err != nil {
-		t.Fatalf("runMonitorCore: %v", err)
-	}
-	if !strings.Contains(out.String(), "match-me") {
-		t.Errorf("output = %q, want the matching sandbox's events", out.String())
-	}
-	if strings.Contains(out.String(), "other-sbx") {
-		t.Errorf("output = %q, want the non-matching sandbox filtered out", out.String())
-	}
-}
-
-// TestMonitorLiveModeBindsIngestAndStoresEvents proves the default (no
-// --path) mode binds a real ingest server and both the reader and a
-// subsequent offline read of the SAME directory see events posted to it —
-// a real loopback socket + real files, no mocks.
-func TestMonitorLiveModeBindsIngestAndStoresEvents(t *testing.T) {
-	dir := t.TempDir()
+// runMonitorUntil runs runMonitorCore in the background until out contains
+// want, then cancels — the reader polls, so a test waits rather than calling
+// it once.
+func runMonitorUntil(t *testing.T, argv []string, newSrv newIngestServerFunc, want string) (string, string) {
+	t.Helper()
+	var out, errOut syncBuffer
 	ctx, cancel := context.WithCancel(context.Background())
-	out := &syncBuffer{}
 	done := make(chan error, 1)
-	go func() {
-		done <- runMonitorCore(ctx, []string{"--port", "0"}, monitor.NewIngestServer, out, io.Discard, dir, false)
-	}()
-
-	// Wait for the ingest server to actually bind by polling the store
-	// directory it will create, then post an event to it via a real HTTP
-	// client against the bound port. Since --port 0 picks an ephemeral
-	// port we don't know in advance, drive this through the store
-	// directly instead (the ingest server persists to the SAME store this
-	// test constructs independently) — proves the reader side (poll loop)
-	// picks up an event that "arrived" while it was running.
-	store, err := monitor.NewStore(monitor.StoreConfig{Root: dir})
-	if err != nil {
-		t.Fatalf("NewStore: %v", err)
-	}
-	deadlineAppend := time.Now().Add(2 * time.Second)
-	for {
-		if err := store.Append(sampleToolEvent()); err == nil {
-			break
-		}
-		if time.Now().After(deadlineAppend) {
-			t.Fatal("could not append to the live store")
-		}
+	go func() { done <- runMonitorCore(ctx, argv, newSrv, &out, &errOut, t.TempDir(), false) }()
+	deadline := time.Now().Add(3 * time.Second)
+	for !strings.Contains(out.String()+errOut.String(), want) && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
-
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		if strings.Contains(out.String(), "tool") {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("reader never printed the appended event; output so far: %q", out.String())
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-
 	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("runMonitorCore: %v", err)
+	}
+	return out.String(), errOut.String()
+}
+
+// --path is a pure OFFLINE reader: no listener, ever.
+func TestMonitorPathModeReadsWithoutAListener(t *testing.T) {
+	dir := t.TempDir()
+	storeFixture(t, dir, "sbx", "sess", toolEndLine("sbx", "sess", "tool-1"))
+	out, _ := runMonitorUntil(t, []string{"--path", dir}, panicIngestServer, "tool_end")
+	if !strings.Contains(out, "sbx/sess") || !strings.Contains(out, "tool_end") {
+		t.Fatalf("output = %q, want a concise tool_end line", out)
+	}
+}
+
+func TestMonitorPathModeJSONAndFilter(t *testing.T) {
+	dir := t.TempDir()
+	storeFixture(t, dir, "keep-me", "sess", toolEndLine("keep-me", "sess", "kept"))
+	storeFixture(t, dir, "other", "sess", toolEndLine("other", "sess", "dropped"))
+
+	out, _ := runMonitorUntil(t, []string{"keep", "--path", dir, "--json"}, panicIngestServer, "kept")
+	if strings.Contains(out, "dropped") {
+		t.Errorf("filtered output %q includes a non-matching stream", out)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("--json emitted a non-JSON line %q: %v", line, err)
+		}
+		if m["kind"] != "tool_end" {
+			t.Errorf("--json line kind = %v, want tool_end", m["kind"])
+		}
+	}
+}
+
+// Live mode is the real thing end to end: a bound loopback listener, a real
+// POST from a "sandbox", and the reader printing what was persisted.
+func TestMonitorLiveModeIngestsAndPrints(t *testing.T) {
+	// The constructor runs on the run goroutine, so hand its address back
+	// over a channel rather than a shared variable.
+	addrCh := make(chan string, 1)
+	capture := func(cfg monitor.IngestConfig) (*monitor.IngestServer, error) {
+		if cfg.Port != 0 {
+			t.Errorf("test asked for an ephemeral port but got %d", cfg.Port)
+		}
+		srv, err := monitor.NewIngestServer(cfg)
+		if err == nil {
+			addrCh <- srv.Addr()
+		}
+		return srv, err
+	}
+	var out, errOut syncBuffer
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	root := t.TempDir()
+	go func() {
+		done <- runMonitorCore(ctx, []string{"--port", "0"}, capture, &out, &errOut, root, false)
+	}()
+	deadline := time.Now().Add(3 * time.Second)
+	var srvAddr string
 	select {
-	case err := <-done:
-		if err != nil {
-			t.Errorf("runMonitorCore returned error after cancel: %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("runMonitorCore did not return after ctx cancel")
+	case srvAddr = <-addrCh:
+	case <-time.After(3 * time.Second):
+		cancel()
+		<-done
+		t.Fatal("ingest server never bound")
 	}
-}
+	resp, err := http.Post("http://"+srvAddr+"/ingest", "application/x-ndjson",
+		strings.NewReader(toolEndLine("sbx", "sess", "live-tool")+"\n"))
+	if err != nil {
+		cancel()
+		<-done
+		t.Fatalf("POST /ingest: %v", err)
+	}
+	resp.Body.Close()
 
-func TestMonitorLiveModeNonLoopbackBindWarns(t *testing.T) {
-	dir := t.TempDir()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	out := &syncBuffer{}
-	errOut := &syncBuffer{}
-	done := make(chan error, 1)
-	go func() {
-		done <- runMonitorCore(ctx, []string{"--port", "0", "--bind", "0.0.0.0"}, monitor.NewIngestServer, out, errOut, dir, false)
-	}()
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		if strings.Contains(errOut.String(), "WARNING") {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("no non-loopback warning printed; stderr so far: %q", errOut.String())
-		}
+	text := "assistant said this"
+	sum := sha256.Sum256([]byte(text))
+	blobResp, err := http.Post("http://"+srvAddr+"/blob", "application/json",
+		strings.NewReader(`{"hash":"`+hex.EncodeToString(sum[:])+`","bytes":19,"text":"`+text+`"}`))
+	if err != nil {
+		cancel()
+		<-done
+		t.Fatalf("POST /blob: %v", err)
+	}
+	blobResp.Body.Close()
+
+	for !strings.Contains(out.String(), "tool_end") && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	cancel()
-	<-done
-}
-
-// sampleToolEvent and mustDecodeToolEvent build a monitor.Event the way a
-// real producer does — via Decode over a JSON line — rather than a struct
-// literal, since ToolStart's envelope field is unexported (monitor.Envelope
-// values are set through the wire shape, not by embedding, from outside the
-// monitor package).
-func sampleToolEvent() monitor.Event {
-	return mustDecodeToolEvent(nil, "sbx", "sess", "t1")
-}
-
-func mustDecodeToolEvent(t *testing.T, sandboxID, sessionID, toolID string) monitor.Event {
-	line := `{"kind":"tool_start","sandboxId":"` + sandboxID + `","sessionId":"` + sessionID + `","turnId":"1","ts":1,"toolId":"` + toolID + `","source":"builtin","name":"bash","argsSummary":"go test ./..."}`
-	ev, err := monitor.Decode([]byte(line))
-	if err != nil {
-		if t != nil {
-			t.Fatalf("Decode: %v", err)
-		}
-		panic(err)
+	if err := <-done; err != nil {
+		t.Fatalf("runMonitorCore: %v", err)
 	}
-	return ev
+	if !strings.Contains(out.String(), "sbx/sess") {
+		t.Fatalf("output = %q, want the ingested event printed", out.String())
+	}
+	if !strings.Contains(errOut.String(), "monitor: listening on") {
+		t.Errorf("stderr = %q, want the listening banner", errOut.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "sbx=sess", "events.ndjson")); err != nil {
+		t.Errorf("event was not persisted under the store root: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "blobs.ndjson")); err != nil {
+		t.Errorf("blob was not persisted under the store root: %v", err)
+	}
+}
+
+// A non-loopback bind exposes full agent context with no auth, so it must
+// warn loudly — and only then.
+func TestMonitorNonLoopbackBindWarns(t *testing.T) {
+	cfgCh := make(chan monitor.IngestConfig, 2)
+	stub := func(cfg monitor.IngestConfig) (*monitor.IngestServer, error) {
+		cfgCh <- cfg
+		cfg.Port, cfg.BindAddr = 0, "127.0.0.1"
+		return monitor.NewIngestServer(cfg)
+	}
+	_, errOut := runMonitorUntil(t, []string{"--bind", "0.0.0.0", "--port", "0"}, stub, "WARNING")
+	if !strings.Contains(errOut, "NO AUTHENTICATION") {
+		t.Errorf("stderr = %q, want the no-auth warning", errOut)
+	}
+	if got := <-cfgCh; got.BindAddr != "0.0.0.0" {
+		t.Errorf("bind addr passed through = %q, want 0.0.0.0", got.BindAddr)
+	}
+	_, quiet := runMonitorUntil(t, []string{"--port", "0"}, stub, "monitor: listening on")
+	if strings.Contains(quiet, "WARNING") {
+		t.Errorf("loopback bind warned anyway: %q", quiet)
+	}
+	if got := <-cfgCh; got.BindAddr != monitor.DefaultBindAddr {
+		t.Errorf("default bind = %q, want %q", got.BindAddr, monitor.DefaultBindAddr)
+	}
+}
+
+func TestMonitorIsAKnownVerb(t *testing.T) {
+	if !knownVerbs["monitor"] {
+		t.Fatal(`knownVerbs["monitor"] = false, want true`)
+	}
 }

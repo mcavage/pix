@@ -1,83 +1,67 @@
 package monitor
 
-// store.go is the on-disk event domain: append/decode/tail/list. It
-// replaces the in-memory-only Ring (deleted with the bubbletea TUI it fed)
-// with a bounded, per-(sandboxId,sessionId) NDJSON file store — every event
-// is redacted (see redact.go) before it ever touches disk, and every
-// stream is bounded independently by both event count and byte size so a
-// single noisy sandbox can't grow the store without limit. It has no
-// network code and no in-process fan-out; ingest.go is the (separate,
-// loopback-only) HTTP layer that calls Append, and cmd/pix/monitor.go's
-// concise reader is the (separate) poller that calls Tail/List. Decoupling
-// them through the filesystem, rather than a shared in-process channel, is
-// what lets `--path DIR` review an already-captured directory with no
-// listener running at all (see monitor_test.go / cmd/pix's reader).
+// store.go is the whole on-disk domain: one bounded, redacted NDJSON file
+// per (sandboxId, sessionId) stream, plus the filesystem safety layer every
+// write goes through (0700 dirs, 0600 files, no symlink followed, no
+// wire-supplied string used as a path component unless validID accepts it).
+// Writer and reader share only the files — see docs/design/monitor.md.
+
 import (
-	"bufio"
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
 
 const (
-	// DefaultMaxEventsPerStream / DefaultMaxBytesPerStream bound ONE
-	// stream's events.ndjson file, enforced by Append's trim pass. A
-	// single event is capped independently at maxIngestLine by the
-	// ingest server before it ever reaches Append, so these bounds are
-	// about cumulative retained size across many events, the same
-	// concern the deleted Ring's byte budget addressed.
-	DefaultMaxEventsPerStream = 4000
-	DefaultMaxBytesPerStream  = 8 << 20 // 8MB per stream
-
-	// DefaultMaxStreams bounds the NUMBER of distinct (sandboxId,
-	// sessionId) streams the store retains at once: without this, a
-	// churn of short-lived sessions (or a hostile ingest client sending
-	// a fresh sessionId per event) would grow the store directory
-	// without limit even though each individual stream stays small.
-	// Appending to a stream beyond this cap evicts the oldest stream
-	// (by its file's mtime) entirely.
-	DefaultMaxStreams = 200
-
-	streamEventsFile = "events.ndjson"
+	// maxStreams bounds the NUMBER of retained streams, so a churn of
+	// short-lived sessions cannot grow the root forever; one past the cap
+	// evicts the oldest by mtime.
+	maxStreams = 200
+	// idSep is outside validID's charset, so splitting a stream directory
+	// name back into its two ids is unambiguous.
+	idSep      = "="
+	eventsFile = "events.ndjson"
+	// unattributed replaces an EMPTY id (the tap sends sandboxId "" when
+	// SANDBOX_VM_ID is unset). A fixed constant, not a transform of input.
+	unattributed = "unattributed"
 )
 
-// StoreConfig configures a Store. Zero-valued Max* fields fall back to
-// their DefaultXxx constant (see NewStore); Root has no default and is
-// required.
+// StoreConfig configures a Store. Root is required; the bounds default to
+// 4000 events / 8MB per stream and cap cumulative retained size (one event
+// is already capped at maxIngestLine before it gets here).
 type StoreConfig struct {
-	Root               string
-	MaxEventsPerStream int
-	MaxBytesPerStream  int
-	MaxStreams         int
+	Root      string
+	MaxEvents int
+	MaxBytes  int
 }
 
-// Store is the bounded, file-backed event domain. Safe for concurrent use;
-// Append serializes writes with an internal mutex (a debug wiretap's
-// ingest rate does not need finer-grained locking than that).
+// Store is the bounded, file-backed event domain. Safe for concurrent use:
+// writes serialize on one mutex, ample for a debug wiretap.
 type Store struct {
 	cfg StoreConfig
 	mu  sync.Mutex
 }
 
 // NewStore constructs a Store rooted at cfg.Root, creating it (0700) if
-// absent. Root is required (a zero-value StoreConfig is refused rather
-// than silently writing into the process's current directory).
+// absent. Root is required, never defaulted, so a zero-value config cannot
+// write into the process's working directory.
 func NewStore(cfg StoreConfig) (*Store, error) {
 	if cfg.Root == "" {
 		return nil, fmt.Errorf("monitor: NewStore: Root is required")
 	}
-	if cfg.MaxEventsPerStream <= 0 {
-		cfg.MaxEventsPerStream = DefaultMaxEventsPerStream
+	if cfg.MaxEvents <= 0 {
+		cfg.MaxEvents = 4000
 	}
-	if cfg.MaxBytesPerStream <= 0 {
-		cfg.MaxBytesPerStream = DefaultMaxBytesPerStream
-	}
-	if cfg.MaxStreams <= 0 {
-		cfg.MaxStreams = DefaultMaxStreams
+	if cfg.MaxBytes <= 0 {
+		cfg.MaxBytes = 8 << 20
 	}
 	if err := ensureDir0700(cfg.Root); err != nil {
 		return nil, err
@@ -85,60 +69,105 @@ func NewStore(cfg StoreConfig) (*Store, error) {
 	return &Store{cfg: cfg}, nil
 }
 
-// Root returns the store's root directory.
-func (s *Store) Root() string { return s.cfg.Root }
-
-// streamDir returns (creating it, 0700, if absent) the directory for one
-// (sandboxID, sessionID) stream. It also enforces DefaultMaxStreams: if
-// creating a NEW stream would exceed the cap, the oldest existing stream
-// (by its events file's mtime) is removed first.
-func (s *Store) streamDir(sandboxID, sessionID string) (string, error) {
-	dir := filepath.Join(s.cfg.Root, streamDirName(sandboxID, sessionID))
-	if _, err := os.Stat(dir); err == nil {
-		return dir, ensureDir0700(dir) // existing stream: just make sure perms still hold
+// validID reports whether an id is safe verbatim in a directory name:
+// 1..96 bytes, leading alphanumeric (no ".", "..", or dotfile), thereafter
+// only [A-Za-z0-9._-] (no separator, NUL, control byte, or idSep). Strict
+// allowlist, no repair: slugifying bad input would silently accept hostile
+// ids and collapse distinct ones onto one directory.
+func validID(id string) bool {
+	if len(id) == 0 || len(id) > 96 {
+		return false
 	}
-	if err := s.evictOldestStreamIfAtCapacityLocked(); err != nil {
-		return "", err
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case (c == '.' || c == '_' || c == '-') && i > 0:
+		default:
+			return false
+		}
 	}
-	if err := ensureDir0700(dir); err != nil {
-		return "", err
-	}
-	return dir, nil
+	return true
 }
 
-// evictOldestStreamIfAtCapacityLocked removes the least-recently-appended
-// stream directory when the store already holds cfg.MaxStreams streams —
-// called only from streamDir, which only reaches it right before creating a
-// genuinely NEW stream (so it never evicts the stream about to be (re)used).
-func (s *Store) evictOldestStreamIfAtCapacityLocked() error {
-	metas, err := s.List()
-	if err != nil {
-		return err
+// streamDirName maps one (sandboxID, sessionID) pair to its directory name,
+// erroring if either id is invalid. The ONLY place wire input becomes a path
+// component.
+func streamDirName(sandboxID, sessionID string) (string, error) {
+	if sandboxID == "" {
+		sandboxID = unattributed
 	}
-	if len(metas) < s.cfg.MaxStreams {
-		return nil
+	if sessionID == "" {
+		sessionID = unattributed
 	}
-	sort.Slice(metas, func(i, j int) bool { return metas[i].ModTime.Before(metas[j].ModTime) })
-	return os.RemoveAll(metas[0].Dir)
+	if !validID(sandboxID) || !validID(sessionID) {
+		return "", fmt.Errorf("monitor: refusing invalid stream id (sandbox %q, session %q)", sandboxID, sessionID)
+	}
+	return sandboxID + idSep + sessionID, nil
 }
 
-// Append encodes e (after Redact — see redact.go) and appends it as one
-// NDJSON line to its (sandboxId, sessionId) stream file, then trims that
-// file back within budget if the append pushed it over either bound.
+// Append redacts e and appends it as one NDJSON line to its stream file,
+// then trims that file back within budget.
 func (s *Store) Append(e Event) error {
 	env := e.Envelope()
+	name, err := streamDirName(env.SandboxID, env.SessionID)
+	if err != nil {
+		return err
+	}
+	line, err := Encode(redact(e))
+	if err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	dir := filepath.Join(s.cfg.Root, name)
+	if _, err := os.Stat(dir); err != nil {
+		if err := s.evictOldestStreamIfFull(); err != nil {
+			return err
+		}
+	}
+	if err := ensureDir0700(dir); err != nil {
+		return err
+	}
+	return s.appendLine(filepath.Join(dir, eventsFile), line)
+}
 
-	dir, err := s.streamDir(env.SandboxID, env.SessionID)
-	if err != nil {
-		return err
+// storedBlob is one full payload body as persisted: Bytes is always
+// len(Text), and Redacted=false implies sha256(Text) == Hash. Blobs are not
+// a separate content-addressed subsystem: they are one more bounded NDJSON
+// file under the same root, trimmed by the same pass.
+type storedBlob struct {
+	Hash     string `json:"hash"`
+	Bytes    int    `json:"bytes"`
+	Text     string `json:"text"`
+	Redacted bool   `json:"redacted,omitempty"`
+}
+
+// AppendBlob verifies the client-asserted hash against sha256(text) (on a
+// mismatch nothing is written and ok is false) and appends the REDACTED
+// text. Redaction wins over content-addressing purity here — this is raw
+// tool output, the highest-risk text in the pipeline — so the record states
+// whether its bytes are still the preimage of Hash.
+func (s *Store) AppendBlob(hash, text string) (bool, error) {
+	sum := sha256.Sum256([]byte(text))
+	if hash == "" || hash != hex.EncodeToString(sum[:]) {
+		return false, nil
 	}
-	line, err := Encode(Redact(e))
+	scrubbed := redactText(text)
+	line, err := json.Marshal(storedBlob{
+		Hash: hash, Bytes: len(scrubbed), Text: scrubbed, Redacted: scrubbed != text,
+	})
 	if err != nil {
-		return err
+		return false, fmt.Errorf("monitor: encode blob %s: %w", hash, err)
 	}
-	path := filepath.Join(dir, streamEventsFile)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return true, s.appendLine(filepath.Join(s.cfg.Root, "blobs.ndjson"), line)
+}
+
+// appendLine appends one newline-terminated line to path, then trims path
+// back within budget. Callers hold s.mu.
+func (s *Store) appendLine(path string, line []byte) error {
 	f, err := openAppend0600(path)
 	if err != nil {
 		return err
@@ -151,75 +180,73 @@ func (s *Store) Append(e Event) error {
 	if cerr != nil {
 		return fmt.Errorf("monitor: close %s: %w", path, cerr)
 	}
-	return s.trimIfOverBudget(path)
+	return s.trim(path)
 }
 
-// trimIfOverBudget rewrites path to keep only its newest lines when it
-// exceeds either DefaultMaxBytesPerStream or DefaultMaxEventsPerStream — the
-// per-stream analogue of the deleted Ring's drop-oldest eviction, just
-// applied to a file instead of an in-memory slice. It reads the whole file
-// (acceptable: bounded by MaxBytesPerStream itself, a few MB at most) and
-// rewrites it atomically via writeFileAtomic0600, so a concurrent Tail/List
-// never observes a partially-trimmed file.
-func (s *Store) trimIfOverBudget(path string) error {
-	fi, err := os.Stat(path)
-	if err != nil {
-		return fmt.Errorf("monitor: stat %s: %w", path, err)
-	}
+// trim rewrites path keeping only its newest lines once it exceeds either
+// bound: drop-oldest eviction applied to a file, atomically so a concurrent
+// reader never sees a half-trimmed file.
+func (s *Store) trim(path string) error {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("monitor: read %s: %w", path, err)
 	}
-	lines := splitNDJSONLines(raw)
-	if len(lines) <= s.cfg.MaxEventsPerStream && fi.Size() <= int64(s.cfg.MaxBytesPerStream) {
+	lines := splitLines(raw)
+	if len(lines) <= s.cfg.MaxEvents && len(raw) <= s.cfg.MaxBytes {
 		return nil
 	}
-	// Drop oldest lines until both bounds are satisfied.
-	start := 0
-	if len(lines) > s.cfg.MaxEventsPerStream {
-		start = len(lines) - s.cfg.MaxEventsPerStream
+	if len(lines) > s.cfg.MaxEvents {
+		lines = lines[len(lines)-s.cfg.MaxEvents:]
 	}
-	kept := lines[start:]
 	total := 0
-	for _, l := range kept {
+	for _, l := range lines {
 		total += len(l) + 1
 	}
-	for total > s.cfg.MaxBytesPerStream && len(kept) > 1 {
-		total -= len(kept[0]) + 1
-		kept = kept[1:]
+	for total > s.cfg.MaxBytes && len(lines) > 1 {
+		total -= len(lines[0]) + 1
+		lines = lines[1:]
 	}
 	var buf bytes.Buffer
-	for _, l := range kept {
+	for _, l := range lines {
 		buf.Write(l)
 		buf.WriteByte('\n')
 	}
 	return writeFileAtomic0600(path, buf.Bytes())
 }
 
-// splitNDJSONLines splits raw on '\n', dropping the trailing empty element a
-// well-formed (every line newline-terminated) file produces, and any blank
-// line.
-func splitNDJSONLines(raw []byte) [][]byte {
+// evictOldestStreamIfFull removes the least-recently-appended stream when
+// the store already holds maxStreams. Callers hold s.mu and reach it only
+// before creating a genuinely new stream.
+func (s *Store) evictOldestStreamIfFull() error {
+	metas, err := s.List()
+	if err != nil || len(metas) < maxStreams {
+		return err
+	}
+	sort.Slice(metas, func(i, j int) bool { return metas[i].ModTime.Before(metas[j].ModTime) })
+	return os.RemoveAll(metas[0].Dir)
+}
+
+// splitLines splits raw on '\n', dropping blank lines.
+func splitLines(raw []byte) [][]byte {
 	var lines [][]byte
 	for _, l := range bytes.Split(raw, []byte("\n")) {
-		if len(bytes.TrimSpace(l)) == 0 {
-			continue
+		if len(bytes.TrimSpace(l)) > 0 {
+			lines = append(lines, l)
 		}
-		lines = append(lines, l)
 	}
 	return lines
 }
 
-// Tail returns the newest n decoded events (oldest-first) for one
-// (sandboxID, sessionID) stream. n <= 0 returns every retained event. A
-// stream that doesn't exist returns an empty slice, not an error (an
-// unstarted/never-seen stream is a normal state for a reader, not a
-// failure). A line that fails to decode is skipped rather than failing the
-// whole Tail — matches the ingest server's existing "one bad line must not
-// drop the rest of the stream" rule.
+// Tail returns the newest n decoded events (oldest-first) for one stream;
+// n <= 0 returns all of them. A missing stream yields nothing and no error
+// (normal for a reader), and an undecodable line is skipped rather than
+// failing the whole tail.
 func (s *Store) Tail(sandboxID, sessionID string, n int) ([]Event, error) {
-	dir := filepath.Join(s.cfg.Root, streamDirName(sandboxID, sessionID))
-	path := filepath.Join(dir, streamEventsFile)
+	name, err := streamDirName(sandboxID, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	path := filepath.Join(s.cfg.Root, name, eventsFile)
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -227,23 +254,22 @@ func (s *Store) Tail(sandboxID, sessionID string, n int) ([]Event, error) {
 		}
 		return nil, fmt.Errorf("monitor: read %s: %w", path, err)
 	}
-	lines := splitNDJSONLines(raw)
+	lines := splitLines(raw)
 	if n > 0 && len(lines) > n {
 		lines = lines[len(lines)-n:]
 	}
 	events := make([]Event, 0, len(lines))
 	for _, l := range lines {
-		ev, err := Decode(l)
-		if err != nil {
-			continue
+		if ev, err := Decode(l); err == nil {
+			events = append(events, ev)
 		}
-		events = append(events, ev)
 	}
 	return events, nil
 }
 
-// StreamMeta describes one retained stream, for List's callers (the
-// concise reader enumerates streams this way to know what to Tail).
+// StreamMeta describes one retained stream. The ids come from the directory
+// name, exact because only validID-approved ids built it — no sidecar
+// metadata file to keep in sync.
 type StreamMeta struct {
 	SandboxID string
 	SessionID string
@@ -252,15 +278,8 @@ type StreamMeta struct {
 	ModTime   time.Time
 }
 
-// List enumerates every retained stream under the store's root. SandboxID
-// and SessionID are recovered from the FIRST event actually stored in each
-// stream's file (every event in one stream carries the same pair, by
-// construction of streamDirName) rather than from a separate metadata
-// sidecar file — one less thing to keep in sync, and the file is always
-// there once a stream has at least one event (List skips an empty/
-// unreadable stream directory rather than failing the whole listing, since
-// a stream directory only ever exists because Append just created it and
-// is about to write its first line — a race, not corruption).
+// List enumerates every retained stream, skipping anything that is not one
+// (blobs.ndjson, a stray file, a directory with no events yet).
 func (s *Store) List() ([]StreamMeta, error) {
 	entries, err := os.ReadDir(s.cfg.Root)
 	if err != nil {
@@ -271,39 +290,99 @@ func (s *Store) List() ([]StreamMeta, error) {
 	}
 	var metas []StreamMeta
 	for _, ent := range entries {
-		if !ent.IsDir() {
+		sandboxID, sessionID, ok := strings.Cut(ent.Name(), idSep)
+		if !ent.IsDir() || !ok {
 			continue
 		}
 		dir := filepath.Join(s.cfg.Root, ent.Name())
-		path := filepath.Join(dir, streamEventsFile)
-		fi, err := os.Stat(path)
+		fi, err := os.Stat(filepath.Join(dir, eventsFile))
 		if err != nil {
-			continue // no events file yet (mid-creation race) or removed concurrently
+			continue
 		}
-		meta := StreamMeta{Dir: dir, Bytes: fi.Size(), ModTime: fi.ModTime()}
-		if first, err := firstLine(path); err == nil {
-			if ev, err := Decode(first); err == nil {
-				env := ev.Envelope()
-				meta.SandboxID, meta.SessionID = env.SandboxID, env.SessionID
-			}
-		}
-		metas = append(metas, meta)
+		metas = append(metas, StreamMeta{
+			SandboxID: sandboxID, SessionID: sessionID,
+			Dir: dir, Bytes: fi.Size(), ModTime: fi.ModTime(),
+		})
 	}
 	return metas, nil
 }
 
-// firstLine reads only the first '\n'-delimited line of path, without
-// reading the whole (possibly several-MB) file.
-func firstLine(path string) ([]byte, error) {
-	f, err := os.Open(path)
+// The filesystem helpers below mirror services/host/lease/paths.go, but are
+// Lstat-based rather than O_NOFOLLOW so this package stays portable; the
+// residual check-to-open TOCTOU window is an accepted tradeoff for a
+// host-local debug wiretap.
+
+// refuseSymlink errors if path exists and is a symlink; missing is fine.
+func refuseSymlink(path string) error {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("monitor: refusing to follow symlink at %s", path)
+	}
+	return nil
+}
+
+// ensureDir0700 creates dir at 0700 if absent, refuses a symlink or
+// non-directory in its place, and tightens a loose mode back.
+func ensureDir0700(dir string) error {
+	if err := refuseSymlink(dir); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("monitor: create dir %s: %w", dir, err)
+	}
+	fi, err := os.Lstat(dir)
+	if err != nil {
+		return fmt.Errorf("monitor: stat dir %s: %w", dir, err)
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("monitor: %s exists and is not a directory", dir)
+	}
+	if fi.Mode().Perm() != 0o700 {
+		return os.Chmod(dir, 0o700)
+	}
+	return nil
+}
+
+// openAppend0600 opens path for append at 0600, refusing an existing
+// symlink. O_CREATE does not re-apply the mode to an existing file, so a
+// loose one is tightened explicitly.
+func openAppend0600(path string) (*os.File, error) {
+	if err := refuseSymlink(path); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-	r := bufio.NewReader(f)
-	line, err := r.ReadBytes('\n')
-	if err != nil && len(line) == 0 {
-		return nil, err
+	if fi, err := f.Stat(); err == nil && fi.Mode().Perm() != 0o600 {
+		_ = f.Chmod(0o600)
 	}
-	return bytes.TrimRight(line, "\r\n"), nil
+	return f, nil
+}
+
+// writeFileAtomic0600 writes data via a temp file plus rename, so a
+// concurrent reader never observes a partial file.
+func writeFileAtomic0600(path string, data []byte) error {
+	tmp := path + ".tmp"
+	if err := refuseSymlink(path); err != nil {
+		return err
+	}
+	if err := refuseSymlink(tmp); err != nil {
+		return err
+	}
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("monitor: write %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("monitor: rename %s -> %s: %w", tmp, path, err)
+	}
+	return nil
 }

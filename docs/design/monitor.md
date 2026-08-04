@@ -2,20 +2,49 @@
 
 Status: shipped (MVP), REPLACED by Story05. Owner: Mark.
 
-**Story05 update:** the bubbletea TUI (`services/host/monitor/tui`), the
-in-memory ring buffer, the content-addressed in-memory blob cache, and the
-SSE `/stream` + `/blob/{hash}` endpoints described below are DELETED. They
-are replaced by a small, file-backed domain (`services/host/monitor`:
-`Store`/`BlobStore` — bounded, redacted, 0700/0600/symlink-safe on-disk
-NDJSON — plus a loopback-only `IngestServer`) and a concise line reader in
-`cmd/pix/monitor.go` (`--path`/`--json`, TTY/non-TTY). The event wire
-schema (Section 2 below), the `:11437` loopback bind default, and "monitor
-IS the service, not wired into `pix-host serve`" are UNCHANGED — Story07 is
-expected to move the ingest constructor under `serve` without changing
-either. The rest of this document (problem statement, event model, wire
-protocol) is still accurate; the "Resolved decisions" and "TUI (live
-follow + toggles)" sections below describe the DELETED design and are kept
-for history, not as the current contract.
+**Story05 update — what the host side actually is now.** The bubbletea TUI
+(`services/host/monitor/tui`, 3,150 LOC), the in-memory ring buffer, the
+content-addressed in-memory blob cache, and the SSE `/stream` +
+`/blob/{hash}` endpoints described below are DELETED. What replaces them is
+deliberately small:
+
+* **One store, no second subsystem.** `services/host/monitor` is a single
+  bounded, redacted, file-backed domain: one `events.ndjson` per
+  `(sandboxId, sessionId)` stream under a 0700 root, 0600 files, trimmed
+  drop-oldest by both event count and bytes, with the number of retained
+  streams capped too. Full payload bodies (`POST /blob`) are NOT a separate
+  content-addressed store — they are one more bounded NDJSON file
+  (`blobs.ndjson`) under the same root, appended by the same code path and
+  trimmed by the same pass.
+* **Strict ids, never repaired.** A wire-supplied `sandboxId`/`sessionId`
+  becomes a path component only if it passes a strict allowlist (1..96 bytes,
+  leading alphanumeric, then `[A-Za-z0-9._-]`). Traversal, separators, control
+  bytes, dotfiles and over-long ids are REFUSED and the event is dropped with
+  a log line. An earlier draft slugified them instead; that silently accepts
+  hostile input and collapses distinct ids onto one directory, so it is gone.
+  The one exception is an EMPTY id, which the tap legitimately sends outside a
+  sandbox: it maps to the fixed constant `unattributed`.
+* **Blob content vs its hash.** A blob is stored REDACTED, so its bytes are
+  not always the preimage of the hash events reference it by. The record says
+  so: `bytes` is always `len(text)`, and `redacted:false` implies
+  `sha256(text) == hash`. Redaction wins over content-addressing purity
+  because this is raw tool output, the highest-risk text in the pipeline.
+* **The reader is a poll loop, not a bus.** `monitor.Follow` tails the files
+  and prints one concise line per event (`--json` prints the raw stored
+  event). Writer and reader share nothing but the filesystem, which is what
+  makes `pix monitor --path DIR` work with no listener running at all.
+  `cmd/pix/monitor.go` is argv parsing plus wiring, ~145 lines.
+* **Unchanged on purpose:** the event wire schema (Section 2 below), the
+  `:11437` loopback-only bind default, and "monitor IS the service, not wired
+  into `pix-host serve`". Story07 can move the ingest constructor under
+  `serve` without changing either. `NewIngestServer` now BINDS eagerly, so a
+  port conflict is a constructor error instead of an asynchronous one every
+  caller had to poll for.
+
+The rest of this document (problem statement, event model, wire protocol) is
+still accurate; the "Resolved decisions" and "TUI (live follow + toggles)"
+sections below describe the DELETED design and are kept for history, not as
+the current contract.
 
 ## Problem
 

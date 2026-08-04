@@ -46,7 +46,7 @@ func TestFixturesDecodeAndRoundTripThroughStore(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read %s: %v", ent.Name(), err)
 			}
-			lines := splitNDJSONLines(raw)
+			lines := splitLines(raw)
 			if len(lines) == 0 {
 				t.Fatalf("%s has no lines", ent.Name())
 			}
