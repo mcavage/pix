@@ -11,14 +11,9 @@ import (
 )
 
 // ollama.go answers "where does this host's Ollama listen, and what does it
-// call a catalog model" — the two facts every caller needs before it can
-// probe, pull or bind a local model.
-//
-// ONE resolver owns the endpoint (OllamaEndpointFor). Every surface that names
-// an address goes through it, so setup, models and the live probe can never
-// report on an endpoint the daemon does not actually use;
-// scripts/check-endpoint-literals.sh fails the build on any other
-// 127.0.0.1:11434 / localhost:11434 literal in Go source.
+// call a catalog model". ONE resolver owns the endpoint, so no surface can
+// report on an address the daemon does not use;
+// scripts/check-endpoint-literals.sh fails the build on any other literal.
 
 // defaultOllamaHost is the only place the default endpoint is spelled out.
 const defaultOllamaHost = "127.0.0.1:" + defaultOllamaPortStr
@@ -38,7 +33,7 @@ type OllamaEndpoint struct {
 }
 
 // String renders the endpoint for evidence lines. The zero value reads as the
-// default, so an evidence line can never trail off into an empty address.
+// default, so a line never trails off into an empty address.
 func (e OllamaEndpoint) String() string {
 	if e.URL == "" {
 		return "http://" + defaultOllamaHost
@@ -46,9 +41,8 @@ func (e OllamaEndpoint) String() string {
 	return e.URL
 }
 
-// OllamaEndpointFor is THE resolver. It mirrors the daemon-side resolution in
-// services/host/memembed.go: OLLAMA_HOST wins, with a bare host, host:port or
-// a full URL all accepted; otherwise the default.
+// OllamaEndpointFor is THE resolver, mirroring services/host/memembed.go:
+// OLLAMA_HOST wins (bare host, host:port or full URL); otherwise the default.
 func OllamaEndpointFor(env hostenv.Env) OllamaEndpoint {
 	raw := strings.TrimSpace(env.Getenv("OLLAMA_HOST"))
 	if raw == "" {
@@ -90,7 +84,8 @@ func OllamaTagFor(catalogID string) string {
 	return strings.TrimPrefix(catalogID, "ollama/")
 }
 
-// OllamaBindingDriver reports whether a binding runs through an ollama backend.
+// OllamaBindingDriver keys off the BACKEND's driver: a binding named
+// "ollama/..." on some other backend is not an ollama binding.
 func OllamaBindingDriver(cfg *config.Config, b config.InferenceModelBinding) bool {
 	if cfg == nil {
 		return false

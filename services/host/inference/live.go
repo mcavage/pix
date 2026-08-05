@@ -9,26 +9,26 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"pix/host/config"
-	"pix/host/routing"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"pix/host/config"
+	"pix/host/routing"
 )
 
-// live.go — the REAL provider probes: actually call the endpoint and report
-// whether a (provider, model, key) triple answers. They lived in cmd/pix
-// because doctor was the first caller; asking "does this model actually work"
-// is the inference capability's own question.
+// live.go — the REAL provider probes (call the endpoint, report whether a
+// (provider, model, key) triple answers) and the create-time artifacts built
+// from what those probes proved.
 
-// LiveOllamaInferenceProbe posts ONE minimal generate to endpoint/api/generate.
-// endpoint is ALWAYS supplied by axis.EffectiveOllamaEndpoint; this function never
-// spells an address of its own (scripts/check-endpoint-literals.sh). No auth
-// header: the local daemon owns any cloud credential and Pix stores none.
-//
-// keep_alive:0 is load-bearing, not tidiness — it tells the daemon to unload
-// the model as soon as the response is written, so probe n+1 starts against a
+const directInferenceProbeTimeout = 8 * time.Second
+
+// LiveOllamaInferenceProbe posts ONE minimal generate. endpoint always comes
+// from OllamaEndpointFor; this function never spells an address of its own. No
+// auth header: the local daemon owns any cloud credential. keep_alive:0 is
+// load-bearing — the daemon unloads on response, so probe n+1 starts against a
 // free memory budget instead of stacking on probe n's resident weights.
 func LiveOllamaInferenceProbe(endpoint, model string, numCtx int, timeout time.Duration) error {
 	options := map[string]any{"num_predict": 8}
@@ -41,47 +41,12 @@ func LiveOllamaInferenceProbe(endpoint, model string, numCtx int, timeout time.D
 	if err != nil {
 		return fmt.Errorf("could not build probe")
 	}
-	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(endpoint, "/")+"/api/generate", bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("could not build probe")
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := (&http.Client{Timeout: timeout}).Do(req)
-	if err != nil {
-		return fmt.Errorf("probe unavailable")
-	}
-	defer resp.Body.Close()
-	// Drained, never echoed: an Ollama error body can quote request content.
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 32<<10))
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("endpoint rejected the request (HTTP %d)", resp.StatusCode)
-	}
-	return nil
-}
-
-func InferenceNeedsOnePassword(cfg *config.Config) bool {
-	if cfg == nil || len(cfg.Inference.Backends) == 0 {
-		return true // default setup path is a direct API key
-	}
-	for _, binding := range cfg.Inference.Models {
-		// Availability is probe evidence, not topology. Setup must still require
-		// 1Password for an allowed direct binding before that first probe has
-		// promoted it; exclusivity alone decides whether a backend is dormant.
-		if !Allowed(cfg, binding) {
-			continue
-		}
-		b, ok := cfg.Inference.Backends[binding.Backend]
-		if ok && BackendAllowed(cfg, b, binding.Backend) && b.Auth == "1password" {
-			return true
-		}
-	}
-	return false
+	return postProbe(strings.TrimRight(endpoint, "/")+"/api/generate", body,
+		map[string]string{"Content-Type": "application/json"}, timeout, "endpoint rejected the request")
 }
 
 // LiveDirectInferenceProbe makes a minimal generation request through the
-// provider's public API. The client has a hard wall-clock timeout and response
-// bodies are never echoed, preventing provider errors from accidentally
-// reflecting credential material into setup output.
+// provider's public API.
 func LiveDirectInferenceProbe(provider, model, key string) error {
 	var endpoint string
 	var body []byte
@@ -103,6 +68,13 @@ func LiveDirectInferenceProbe(provider, model, key string) error {
 	default:
 		return fmt.Errorf("unsupported provider")
 	}
+	return postProbe(endpoint, body, headers, directInferenceProbeTimeout, "provider rejected model request")
+}
+
+// postProbe is the one HTTP shape both probes share: hard wall-clock timeout,
+// body drained and NEVER echoed (an error body can quote request content),
+// status is the whole verdict.
+func postProbe(endpoint string, body []byte, headers map[string]string, timeout time.Duration, reject string) error {
 	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("could not build probe")
@@ -110,30 +82,47 @@ func LiveDirectInferenceProbe(provider, model, key string) error {
 	for name, value := range headers {
 		req.Header.Set(name, value)
 	}
-	resp, err := (&http.Client{Timeout: directInferenceProbeTimeout}).Do(req)
+	resp, err := (&http.Client{Timeout: timeout}).Do(req)
 	if err != nil {
 		return fmt.Errorf("probe unavailable")
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 32<<10))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("provider rejected model request (HTTP %d)", resp.StatusCode)
+		return fmt.Errorf("%s (HTTP %d)", reject, resp.StatusCode)
 	}
 	return nil
 }
 
-const directInferenceProbeTimeout = 8 * time.Second
+// InferenceNeedsOnePassword reports whether this host's inference depends on a
+// 1Password credential. Availability is probe evidence, not topology: an
+// ALLOWED direct binding still needs 1Password before its first probe.
+func InferenceNeedsOnePassword(cfg *config.Config) bool {
+	if cfg == nil || len(cfg.Inference.Backends) == 0 {
+		return true // default setup path is a direct API key
+	}
+	for _, binding := range cfg.Inference.Models {
+		if !Allowed(cfg, binding) {
+			continue
+		}
+		b, ok := cfg.Inference.Backends[binding.Backend]
+		if ok && BackendAllowed(cfg, b, binding.Backend) && b.Auth == "1password" {
+			return true
+		}
+	}
+	return false
+}
 
 func ConfiguredKeylessInference() bool {
 	cfg, err := config.Load()
-	return err == nil && len(cfg.Inference.Models) > 0 && !InferenceNeedsOnePassword(cfg)
+	return err == nil && Configured(cfg) && !InferenceNeedsOnePassword(cfg)
 }
 
 // SynthesizeInferenceKit creates a create-time mixin containing only generated
 // public metadata. It carries no credential values. The extension reads the
 // manifest; subagents read the compiled routing file beside it.
 func SynthesizeInferenceKit(cfg *config.Config) (string, error) {
-	if cfg == nil || len(cfg.Inference.Models) == 0 {
+	if !Configured(cfg) {
 		return "", nil
 	}
 	compiled, manifest, err := CompileInferenceRuntime(cfg, time.Now())
@@ -141,9 +130,7 @@ func SynthesizeInferenceKit(cfg *config.Config) (string, error) {
 		return "", err
 	}
 	if len(manifest.Models) == 0 {
-		// A dead-end refusal is the failure mode here: the user is told what is
-		// wrong and not what to type. The usual cause is weights that were never
-		// pulled, so name the pull.
+		// Name the fix, not just the fault; the usual cause is unpulled weights.
 		return "", fmt.Errorf("inference is configured but no model binding passed its probe; pull a local model with `pix setup --pull-models`, or re-run `pix setup` to re-verify")
 	}
 	state, err := config.StateDir()
@@ -189,38 +176,34 @@ func SynthesizeInferenceKit(cfg *config.Config) (string, error) {
 	return dir, nil
 }
 
-// CallableRuntimeModels is the exact create-time model surface. Keeping this
-// list beside the generated manifest prevents the baked image's broad default
-// cycle from advertising models that this machine cannot call.
+// CallableRuntimeModels is the exact create-time model surface and the list
+// `pix run` passes as --models, so the image's broad default cycle can never
+// advertise a model this machine cannot call.
 func CallableRuntimeModels(cfg *config.Config) ([]string, error) {
-	if cfg == nil || len(cfg.Inference.Models) == 0 {
+	if !Configured(cfg) {
 		return nil, nil
 	}
-	_, manifest, err := CompileInferenceRuntime(cfg, time.Now())
+	reg, err := routing.LoadRegistry()
 	if err != nil {
 		return nil, err
 	}
-	ids := make([]string, 0, len(manifest.Models))
-	for _, model := range manifest.Models {
-		ids = append(ids, model.ID)
+	models := manifestModels(cfg, reg)
+	ids := make([]string, 0, len(models))
+	for _, m := range models {
+		ids = append(ids, m.ID)
 	}
 	return ids, nil
 }
 
 func AllowsModel(cfg *config.Config, id string) bool {
-	if cfg == nil || len(cfg.Inference.Models) == 0 || strings.TrimSpace(id) == "" {
+	if !Configured(cfg) || strings.TrimSpace(id) == "" {
 		return true
 	}
 	models, err := CallableRuntimeModels(cfg)
 	if err != nil {
 		return false
 	}
-	for _, candidate := range models {
-		if candidate == id {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(models, id)
 }
 
 func CompileInferenceRuntime(cfg *config.Config, now time.Time) (routing.CompiledRouting, runtimeInferenceManifest, error) {
@@ -239,43 +222,48 @@ func CompileInferenceRuntime(cfg *config.Config, now time.Time) (routing.Compile
 	bindings := Bindings(cfg)
 	filtered := routing.RegistryForBindings(reg, bindings, "")
 	compiled := routing.MaterializeBindings(routing.Compile(filtered, sc, pol, now), bindings, "")
-	manifest := runtimeInferenceManifest{Version: 1, Backends: map[string]runtimeBackend{}}
+	manifest := runtimeInferenceManifest{Version: 1, Backends: map[string]runtimeBackend{}, Models: manifestModels(cfg, reg)}
 	for name, b := range cfg.Inference.Backends {
 		if !BackendAllowed(cfg, b, name) {
 			continue
 		}
 		manifest.Backends[name] = runtimeBackend{Driver: b.Driver, Protocol: b.Protocol, BaseURL: b.BaseURL, Auth: b.Auth, KeyEnv: b.KeyEnv}
 	}
-	for _, configured := range cfg.Inference.Models {
-		if !Callable(cfg, configured) {
-			continue
-		}
-		b := routing.Binding{Model: configured.Model, Backend: configured.Backend, UpstreamID: configured.Upstream, Available: true}
+	return compiled, manifest, nil
+}
+
+// manifestModels is the ONE place a callable binding becomes runtime metadata,
+// so --models and the manifest the bridge registers from can never disagree
+// about which ids exist or how they are spelled. A binding whose catalog row is
+// gone is dropped: the runtime needs its limits and prices.
+func manifestModels(cfg *config.Config, reg *routing.Registry) []runtimeModel {
+	var out []runtimeModel
+	for _, b := range Bindings(cfg) {
 		m, ok := reg.Get(b.Model)
 		if !ok {
 			continue
 		}
-		manifest.Models = append(manifest.Models, runtimeModel{
+		out = append(out, runtimeModel{
 			ID: RuntimeID(b), CatalogModel: m.ID, Backend: b.Backend, Name: m.Label,
 			ContextWindow: m.ContextWindow, MaxTokens: m.MaxOutputTokens,
 			Reasoning: true, AdaptiveThinking: m.AdaptiveThinking,
 			InputCost: m.InputPerMTok, OutputCost: m.OutputPerMTok,
 		})
 	}
-	sort.Slice(manifest.Models, func(i, j int) bool { return manifest.Models[i].ID < manifest.Models[j].ID })
-	return compiled, manifest, nil
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
 }
 
+// InferenceKitSpec is the create-time mixin: egress hosts for the callable
+// backends, plus the proxy-managed credentials to inject into them.
 func InferenceKitSpec(cfg *config.Config) (string, error) {
-	var hosts []string
 	type credential struct{ service, name, domain, header, format string }
+	var hosts []string
 	var credentials []credential
 	seenHost, seenCredential := map[string]bool{}, map[string]bool{}
 	referenced := map[string]bool{}
-	for _, binding := range cfg.Inference.Models {
-		if Callable(cfg, binding) {
-			referenced[binding.Backend] = true
-		}
+	for _, b := range Bindings(cfg) {
+		referenced[b.Backend] = true
 	}
 	for name, backend := range cfg.Inference.Backends {
 		if !referenced[name] || !BackendAllowed(cfg, backend, name) || backend.Driver == "ollama" || backend.BaseURL == "" {
@@ -292,19 +280,20 @@ func InferenceKitSpec(cfg *config.Config) (string, error) {
 		if !seenHost[host] {
 			seenHost[host], hosts = true, append(hosts, host)
 		}
-		if backend.Auth == "sbx-session" {
-			header, format := backend.CredentialHeader, backend.CredentialFormat
-			if header == "" {
-				header = "Authorization"
-			}
-			if format == "" {
-				format = "Bearer %s"
-			}
-			key := backend.CredentialService + "\x00" + backend.KeyEnv + "\x00" + u.Hostname()
-			if !seenCredential[key] {
-				seenCredential[key] = true
-				credentials = append(credentials, credential{backend.CredentialService, backend.KeyEnv, u.Hostname(), header, format})
-			}
+		if backend.Auth != "sbx-session" {
+			continue
+		}
+		header, format := backend.CredentialHeader, backend.CredentialFormat
+		if header == "" {
+			header = "Authorization"
+		}
+		if format == "" {
+			format = "Bearer %s"
+		}
+		key := backend.CredentialService + "\x00" + backend.KeyEnv + "\x00" + u.Hostname()
+		if !seenCredential[key] {
+			seenCredential[key] = true
+			credentials = append(credentials, credential{backend.CredentialService, backend.KeyEnv, u.Hostname(), header, format})
 		}
 	}
 	sort.Strings(hosts)
