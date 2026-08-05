@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -45,19 +46,55 @@ func ApplyConfiguredSessionModel(o *RunOpts, cfg *config.Config) (bool, error) {
 	return true, nil
 }
 
-// Creation-evidence poll seams. After `sbx run` is STARTED (not waited), the
-// create path polls for the sandbox to become visible and records the receipt
-// the moment it is, so status/doctor render preload provenance WHILE the
-// session is alive. Injectable so tests never shell out or sleep. The timeout
-// is generous on purpose: a first create may pull the image for minutes, and
-// the poll runs only while `sbx run` is still alive.
-var (
-	SandboxAppearProbeFn = func(name string) SbxState {
-		return ProbeTaskSandbox(DefaultEnv(), name)
-	}
-	SandboxAppearPollInterval = 500 * time.Millisecond
-	SandboxAppearPollTimeout  = 15 * time.Minute
+// Creation-evidence poll. After `sbx run` is STARTED (not waited), the create
+// path polls for the sandbox to become visible and records the receipt the
+// moment it is, so status/doctor render preload provenance WHILE the session
+// is alive. It is a PARAMETER, not a package var: the composition root alone
+// knows which env answers the probe, and a test passes its own without
+// mutating shared state. Every field is required — a create with an
+// incomplete poll is an error, never a silent "record nothing".
+type CreatePoll struct {
+	// Probe answers "does a sandbox by this name exist yet".
+	Probe func(name string) SbxState
+	// Interval is the gap between probes; Timeout bounds the whole poll.
+	Interval time.Duration
+	Timeout  time.Duration
+}
+
+// SbxCreatePollInterval/Timeout are the production poll budget. The timeout is
+// generous on purpose: a first create may pull the image for minutes, and the
+// poll runs only while `sbx run` is still alive.
+const (
+	SbxCreatePollInterval = 500 * time.Millisecond
+	SbxCreatePollTimeout  = 15 * time.Minute
 )
+
+// SbxCreatePoll is the real creation-evidence poll: `sbx ls` through env, on
+// the production budget. The composition root builds it and hands it to
+// ExecSbxRunAndRecordCreate; nothing in this package can conjure an env.
+func SbxCreatePoll(env hostenv.Env) CreatePoll {
+	return CreatePoll{
+		Probe:    func(name string) SbxState { return ProbeTaskSandbox(env, name) },
+		Interval: SbxCreatePollInterval,
+		Timeout:  SbxCreatePollTimeout,
+	}
+}
+
+// validate refuses a poll that cannot decide anything. Failing here — BEFORE
+// `sbx run` starts — is the fail-closed half of deleting the package-var seam:
+// an unwired poll used to degrade into "probe nothing, record nothing", which
+// is the silent failure this whole receipt path exists to prevent.
+func (p CreatePoll) validate() error {
+	switch {
+	case p.Probe == nil:
+		return errors.New("create-receipt poll has no sandbox probe (pass launch.SbxCreatePoll(env))")
+	case p.Interval <= 0:
+		return fmt.Errorf("create-receipt poll interval must be positive, got %s", p.Interval)
+	case p.Timeout <= 0:
+		return fmt.Errorf("create-receipt poll timeout must be positive, got %s", p.Timeout)
+	}
+	return nil
+}
 
 // sandboxAppeared reports whether st is POSITIVE existence evidence. Absent
 // keeps polling; unknown proves nothing and also keeps polling — never record
@@ -106,9 +143,12 @@ func RecordCreateReceipt(sandbox, ws string, preloaded []string, merge bool) err
 // caller reports "launched, but state unrecorded" and exits non-zero rather
 // than a silent success or a fake launch failure. The Wait goroutine always
 // terminates and its result is always drained.
-func ExecSbxRunAndRecordCreate(cmd *exec.Cmd, writeReceipt bool, sandbox, ws string, preloaded []string) error {
+func ExecSbxRunAndRecordCreate(cmd *exec.Cmd, poll CreatePoll, writeReceipt bool, sandbox, ws string, preloaded []string) error {
 	if !writeReceipt {
 		return cmd.Run()
+	}
+	if err := poll.validate(); err != nil {
+		return err
 	}
 
 	// Pre-create clear: under the same per-sandbox lock the writers use, drop
@@ -129,19 +169,19 @@ func ExecSbxRunAndRecordCreate(cmd *exec.Cmd, writeReceipt bool, sandbox, ws str
 	go func() { waitCh <- cmd.Wait() }()
 
 	var recErr error
-	deadline := time.Now().Add(SandboxAppearPollTimeout)
-	ticker := time.NewTicker(SandboxAppearPollInterval)
+	deadline := time.Now().Add(poll.Timeout)
+	ticker := time.NewTicker(poll.Interval)
 	defer ticker.Stop()
-poll:
+polling:
 	for {
-		if sandboxAppeared(SandboxAppearProbeFn(sandbox)) {
+		if sandboxAppeared(poll.Probe(sandbox)) {
 			recErr = RecordCreateReceipt(sandbox, ws, preloaded, merge)
-			break poll
+			break polling
 		}
 		if time.Now().After(deadline) {
 			recErr = &workspace.ReceiptRecordError{Op: "create", Sandbox: sandbox,
-				Err: fmt.Errorf("timed out after %s waiting for the sandbox to appear in `sbx ls`; its preloaded MCP set was not recorded", SandboxAppearPollTimeout)}
-			break poll
+				Err: fmt.Errorf("timed out after %s waiting for the sandbox to appear in `sbx ls`; its preloaded MCP set was not recorded", poll.Timeout)}
+			break polling
 		}
 		select {
 		case werr := <-waitCh:
@@ -152,7 +192,7 @@ poll:
 			if werr != nil {
 				return werr
 			}
-			if sandboxAppeared(SandboxAppearProbeFn(sandbox)) {
+			if sandboxAppeared(poll.Probe(sandbox)) {
 				return RecordCreateReceipt(sandbox, ws, preloaded, merge)
 			}
 			return nil
@@ -174,7 +214,10 @@ poll:
 // with stale kit/mcp flags — exactly what --replace was avoiding). Clearing
 // the removed sandbox's receipt is best-effort; ExecSbxRunAndRecordCreate's
 // pre-create clear is the correctness backstop.
-func ApplyReplaceRm(env hostenv.Env, plan RunLaunchPlan, name string) error {
+//
+// warn takes the best-effort clear's failure note; it is a caller-supplied
+// stream (never os.Stderr) so a test reads it and a command routes it.
+func ApplyReplaceRm(env hostenv.Env, warn io.Writer, plan RunLaunchPlan, name string) error {
 	if !plan.RmFirst {
 		return nil
 	}
@@ -182,7 +225,7 @@ func ApplyReplaceRm(env hostenv.Env, plan RunLaunchPlan, name string) error {
 		return fmt.Errorf("could not remove existing sandbox %q to replace it: %w", name, err)
 	}
 	if err := workspace.ClearRemovedReceipt(name); err != nil {
-		fmt.Fprintf(os.Stderr, "pix: warning: removed sandbox %q but could not clear its mcp receipt: %v\n", name, err)
+		fmt.Fprintf(warn, "pix: warning: removed sandbox %q but could not clear its mcp receipt: %v\n", name, err)
 	}
 	return nil
 }
@@ -332,27 +375,18 @@ func RunReplaceCommand(ws string) string {
 	return "pix run " + sys.ShellQuote(ws) + " --replace"
 }
 
-// DefaultEnv builds the real hostenv.Env. Only the composition root can — it
-// alone knows which capability supplies each probe — so it injects this here.
-// The default panics rather than returning a half-wired env: a launch that
-// silently probes nothing is the failure mode this seam exists to delete.
-var DefaultEnv = func() hostenv.Env {
-	panic("launch: DefaultEnv not wired — the composition root must set it")
-}
-
-// IsKnownVerb reports whether a bare positional is actually a mistyped verb,
-// so "pix statuss" can suggest "pix status". Only cmd/pix has the verb table,
-// so it supplies this; the default answers no, which loses the hint and
-// nothing else.
-var IsKnownVerb = func(string) bool { return false }
-
 // ValidateRunWorkspace verifies a resolved run workspace is launchable: the cwd
 // default (".") always is; any other value must name an existing directory. A
 // non-directory token that matches a known verb gets a "did you mean" hint.
-func ValidateRunWorkspace(ws string) error {
+//
+// knownVerb is the verb table, passed in because only cmd/pix has one: it
+// turns `pix run doctro` into a suggestion instead of a junk sandbox. A caller
+// with no verb table passes nil and loses the hint, nothing else — a choice
+// visible at the call site, which is the point of it not being a package var.
+func ValidateRunWorkspace(ws string, knownVerb func(string) bool) error {
 	err := workspace.Validate(ws)
 	var nd workspace.ErrNotDirectory
-	if errors.As(err, &nd) && IsKnownVerb(ws) {
+	if errors.As(err, &nd) && knownVerb != nil && knownVerb(ws) {
 		return fmt.Errorf("%q is not a directory. Did you mean `pix %s`?", ws, ws)
 	}
 	return err
@@ -441,9 +475,17 @@ func WriteOllamaBridgeFile(ws, model string) {
 	_ = workspace.WriteStateFile(ws, "ollama-bridge.model", []byte(model+"\n"), 0o644)
 }
 
-func PrintJSONLauncher(v any) {
-	b, _ := json.MarshalIndent(v, "", "  ")
-	fmt.Println(string(b))
+// PrintJSONLauncher writes v as indented JSON to w and returns the marshal or
+// write error instead of printing to a stream it chose itself. The caller owns
+// the destination (`--json` output must reach the command's stdout and nowhere
+// else) and the failure.
+func PrintJSONLauncher(w io.Writer, v any) error {
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(w, string(b))
+	return err
 }
 
 // GeneratedInputMarker prefixes any user-role message `pix` itself synthesizes

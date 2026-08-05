@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -389,7 +390,7 @@ func TestApplyPackToLaunch_IntegrationMCPAlwaysPreloaded(t *testing.T) {
 		t.Fatal(err)
 	}
 	o := launch.RunOpts{Pack: root}
-	if _, err := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil)); err != nil {
+	if _, err := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil), io.Discard); err != nil {
 		t.Fatalf("launch.ApplyPackToLaunch: %v", err)
 	}
 	if !slices.Contains(cfg.MCP, "fastmail") || !slices.Contains(cfg.MCP, "notion") {

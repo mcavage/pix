@@ -10,7 +10,7 @@ package launch
 import (
 	"errors"
 	"fmt"
-	"os"
+	"io"
 	"slices"
 	"strings"
 
@@ -25,8 +25,8 @@ import (
 // ApplyPackStackToLaunch applies each active pack in stack order, folding every
 // applied pack's MCP servers into the create-time preload set. It returns the
 // last effectively-applied root, with the same "" contract as
-// ApplyPackToLaunch.
-func ApplyPackStackToLaunch(cfg *config.Config, o *RunOpts, env hostenv.Env) (string, error) {
+// ApplyPackToLaunch. warn carries the degrade notes through, unchanged.
+func ApplyPackStackToLaunch(cfg *config.Config, o *RunOpts, env hostenv.Env, warn io.Writer) (string, error) {
 	roots := pack.ActivePackRoots(cfg, o.Pack)
 	if len(roots) == 0 {
 		return "", nil
@@ -36,7 +36,7 @@ func ApplyPackStackToLaunch(cfg *config.Config, o *RunOpts, env hostenv.Env) (st
 	var effective string
 	for _, root := range roots {
 		cfg.Pack, o.Pack = root, ""
-		applied, err := ApplyPackToLaunch(cfg, o, env)
+		applied, err := ApplyPackToLaunch(cfg, o, env, warn)
 		if err != nil {
 			return "", err
 		}
@@ -77,7 +77,11 @@ func ApplyPackStackToLaunch(cfg *config.Config, o *RunOpts, env hostenv.Env) (st
 // never from pack.ActivePackRoot directly — the configured path can name a pack
 // that degraded to pack-less this launch, and recording it anyway would make a
 // later StalePackReattachWarning wrongly stay silent.
-func ApplyPackToLaunch(cfg *config.Config, o *RunOpts, env hostenv.Env) (string, error) {
+//
+// warn receives the degrade + unconnected-integration notes. It is the
+// caller's stream: this package never writes to a stream of its own choosing,
+// so a test reads these notes instead of racing the process's stderr.
+func ApplyPackToLaunch(cfg *config.Config, o *RunOpts, env hostenv.Env, warn io.Writer) (string, error) {
 	packRoot := pack.ActivePackRoot(cfg.Pack, o.Pack)
 	if packRoot == "" {
 		return "", nil // no active pack (detached or never created)
@@ -88,7 +92,7 @@ func ApplyPackToLaunch(cfg *config.Config, o *RunOpts, env hostenv.Env) (string,
 			return "", fmt.Errorf("--pack %s: %v", o.Pack, err)
 		}
 		if errors.Is(err, pack.ErrNotAPack) {
-			fmt.Fprintf(os.Stderr, "pix: active pack unavailable (%v); launching without it — `pix pack use <path>` to re-point it or `pix pack rm` to detach\n", err)
+			fmt.Fprintf(warn, "pix: active pack unavailable (%v); launching without it — `pix pack use <path>` to re-point it or `pix pack rm` to detach\n", err)
 			return "", nil
 		}
 		return "", fmt.Errorf("active pack %s: %v (refusing to launch without the pack's declared context; fix the pack or `pix pack rm` to detach it)", packRoot, err)
@@ -126,9 +130,9 @@ func ApplyPackToLaunch(cfg *config.Config, o *RunOpts, env hostenv.Env) (string,
 		// op-run-wrapped (host-provided/remote) integrations warn.
 		if ig.Env != "" && ig.Manifest == "" && !secret.OpRefFilled(env, ig.Env) {
 			if ig.Setup != "" {
-				fmt.Fprintf(os.Stderr, "pix: pack integration %q is not connected; run: pix setup --pack %s --with %s\n", ig.Name, sys.ShellQuote(p.Root), sys.ShellQuote(ig.Setup))
+				fmt.Fprintf(warn, "pix: pack integration %q is not connected; run: pix setup --pack %s --with %s\n", ig.Name, sys.ShellQuote(p.Root), sys.ShellQuote(ig.Setup))
 			} else {
-				fmt.Fprintf(os.Stderr, "pix: pack integration %q needs a credential; set it: pix secret set %s op://vault/item/field\n", ig.Name, ig.Env)
+				fmt.Fprintf(warn, "pix: pack integration %q needs a credential; set it: pix secret set %s op://vault/item/field\n", ig.Name, ig.Env)
 			}
 		}
 	}
@@ -154,10 +158,10 @@ func ApplyPackToLaunch(cfg *config.Config, o *RunOpts, env hostenv.Env) (string,
 //
 // effectivePack is the root ApplyPackToLaunch actually applied, NOT
 // pack.ActivePackRoot — that keeps memory scoping honest with the sandbox.pack
-// marker when the pack degraded.
-func WritePackContextFiles(cfg *config.Config, o RunOpts, effectivePack string) {
+// marker when the pack degraded. warn takes the one note it can emit.
+func WritePackContextFiles(cfg *config.Config, o RunOpts, effectivePack string, warn io.Writer) {
 	if _, err := workspace.EnsureGitExclude(o.Workspace); err != nil {
-		fmt.Fprintf(os.Stderr, "pix: could not add .pix ws state to git excludes: %v\n", err)
+		fmt.Fprintf(warn, "pix: could not add .pix ws state to git excludes: %v\n", err)
 	}
 	WriteOllamaBridgeFile(o.Workspace, cfg.OllamaBridgeModel)
 	var activePack *pack.Info

@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"text/tabwriter"
 
@@ -153,7 +152,7 @@ func Rm(env hostenv.Env, out, errOut io.Writer, opts RmOptions) error {
 			failed = true
 			continue
 		}
-		if err := RemovePixSandbox(env, n); err != nil {
+		if err := RemovePixSandbox(env, errOut, n); err != nil {
 			fmt.Fprintf(errOut, "failed to remove %s: %v\n", n, err)
 			failed = true
 			continue
@@ -171,13 +170,14 @@ func Rm(env hostenv.Env, out, errOut io.Writer, opts RmOptions) error {
 // lifetime. A failed rm returns the error and RETAINS the receipt: an unknown
 // removal outcome must keep the evidence, never discard it on a guess. The
 // clear itself is best-effort (the removal DID succeed, and the next create's
-// pre-create clear is the correctness backstop).
-func RemovePixSandbox(env hostenv.Env, name string) error {
+// pre-create clear is the correctness backstop), and its note goes to the
+// caller's warn stream — this package writes to no stream it picked itself.
+func RemovePixSandbox(env hostenv.Env, warn io.Writer, name string) error {
 	if _, err := env.Run("sbx", "rm", "-f", name); err != nil {
 		return err
 	}
 	if err := workspace.ClearRemovedReceipt(name); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: removed %s but could not clear its mcp receipt: %v\n", name, err)
+		fmt.Fprintf(warn, "warning: removed %s but could not clear its mcp receipt: %v\n", name, err)
 	}
 	return nil
 }

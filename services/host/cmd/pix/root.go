@@ -262,7 +262,7 @@ type lsCmd struct {
 }
 
 func (c *lsCmd) Run(d *cli.Deps) error {
-	return launch.Ls(launch.DefaultEnv(), d.Out, c.JSON)
+	return launch.Ls(defaultShellEnv(), d.Out, c.JSON)
 }
 
 func (c *rmCmd) Help() string { return launch.RmDescription }
@@ -277,7 +277,7 @@ func (c *rmCmd) Run(d *cli.Deps) error {
 	if !c.All && len(c.Names) == 0 {
 		return cli.Usagef("name a sandbox to remove, or use --all (see `pix rm --help`)")
 	}
-	return launch.Rm(launch.DefaultEnv(), d.Out, d.Err, launch.RmOptions{
+	return launch.Rm(defaultShellEnv(), d.Out, d.Err, launch.RmOptions{
 		Names: c.Names, All: c.All, Except: c.Except,
 	})
 }

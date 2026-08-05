@@ -252,8 +252,7 @@ func agentLs(d *cli.Deps, jsonOut bool) error {
 			model, why := resolveAgentModel(m, reg, sc, pol)
 			rows = append(rows, row{n, model, why, m.Intent, m.Tools, m.BudgetUSD})
 		}
-		launch.PrintJSONLauncher(rows)
-		return nil
+		return launch.PrintJSONLauncher(d.Out, rows)
 	}
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "AGENT\tMODEL\tWHY\tTOOLS\tBUDGET")

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -322,7 +323,7 @@ func TestApplyReplaceRm_FailurePropagatesAndBlocksCreate(t *testing.T) {
 	}}}
 	plan := launch.RunLaunchPlan{RmFirst: true, Args: []string{"run", "pix", "."}}
 
-	err := launch.ApplyReplaceRm(env, plan, "pix-t")
+	err := launch.ApplyReplaceRm(env, io.Discard, plan, "pix-t")
 	if err == nil {
 		t.Fatal("expected an error when `sbx rm -f` fails")
 	}
@@ -346,7 +347,7 @@ func TestApplyReplaceRm_FailurePropagatesAndBlocksCreate(t *testing.T) {
 func TestApplyReplaceRm_SuccessAllowsCreate(t *testing.T) {
 	env := hostenv.Env{System: &systest.Fake{RunFn: func(cmd string, args ...string) (string, error) { return "", nil }}}
 	plan := launch.RunLaunchPlan{RmFirst: true}
-	if err := launch.ApplyReplaceRm(env, plan, "pix-t"); err != nil {
+	if err := launch.ApplyReplaceRm(env, io.Discard, plan, "pix-t"); err != nil {
 		t.Errorf("expected nil error on a successful rm, got %v", err)
 	}
 }
@@ -356,7 +357,7 @@ func TestApplyReplaceRm_SuccessAllowsCreate(t *testing.T) {
 func TestApplyReplaceRm_NoOpWhenNotNeeded(t *testing.T) {
 	called := false
 	env := hostenv.Env{System: &systest.Fake{RunFn: func(cmd string, args ...string) (string, error) { called = true; return "", nil }}}
-	if err := launch.ApplyReplaceRm(env, launch.RunLaunchPlan{RmFirst: false}, "pix-t"); err != nil {
+	if err := launch.ApplyReplaceRm(env, io.Discard, launch.RunLaunchPlan{RmFirst: false}, "pix-t"); err != nil {
 		t.Errorf("expected nil error, got %v", err)
 	}
 	if called {

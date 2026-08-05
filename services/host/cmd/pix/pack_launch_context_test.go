@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -30,7 +31,7 @@ func TestWritePackContextFiles_WritesMemoryScopeAndOllamaModel(t *testing.T) {
 	cfg := &config.Config{Pack: packRoot, OllamaBridgeModel: "qwen3.5:9b"}
 	o := launch.RunOpts{Workspace: ws}
 
-	launch.WritePackContextFiles(cfg, o, pack.ActivePackRoot(cfg.Pack, o.Pack))
+	launch.WritePackContextFiles(cfg, o, pack.ActivePackRoot(cfg.Pack, o.Pack), io.Discard)
 
 	gotScope := readFile(t, filepath.Join(ws, ".pix", "profile"))
 	if got := trimTrailingNewline(gotScope); got != "work-scope" {
@@ -50,7 +51,7 @@ func TestWritePackContextFiles_NoPack_UnscopedMemoryDefaultModel(t *testing.T) {
 	cfg := &config.Config{}
 	o := launch.RunOpts{Workspace: ws}
 
-	launch.WritePackContextFiles(cfg, o, pack.ActivePackRoot(cfg.Pack, o.Pack))
+	launch.WritePackContextFiles(cfg, o, pack.ActivePackRoot(cfg.Pack, o.Pack), io.Discard)
 
 	if _, err := os.Stat(filepath.Join(ws, ".pix", "profile")); err == nil {
 		t.Error("no active pack should leave memory unscoped (no profile file)")
@@ -74,7 +75,7 @@ func TestWritePackContextFiles_PackOverrideWins(t *testing.T) {
 	cfg := &config.Config{Pack: "/nonexistent/pack"}
 	o := launch.RunOpts{Workspace: ws, Pack: packRoot}
 
-	launch.WritePackContextFiles(cfg, o, pack.ActivePackRoot(cfg.Pack, o.Pack))
+	launch.WritePackContextFiles(cfg, o, pack.ActivePackRoot(cfg.Pack, o.Pack), io.Discard)
 
 	gotScope := trimTrailingNewline(readFile(t, filepath.Join(ws, ".pix", "profile")))
 	if gotScope != "personal-scope" {

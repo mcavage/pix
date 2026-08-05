@@ -136,7 +136,7 @@ func (c *setupCmd) Run(d *cli.Deps) error {
 	// `--apply` reconciles a pending <DIR>/.pix/onboarding.json and stops: it is
 	// NOT provisioning, so it touches no pack, model or sandbox.
 	if c.Apply {
-		if err := launch.ValidateRunWorkspace(c.Dir); err != nil {
+		if err := launch.ValidateRunWorkspace(c.Dir, knownVerb); err != nil {
 			return cli.UsageError{Err: err}
 		}
 		onboard.ReconcileOnboarding(c.Dir, env, d.In, d.Out, parsed.AssumeYes, d.Interactive, onboardDeps())
@@ -145,7 +145,7 @@ func (c *setupCmd) Run(d *cli.Deps) error {
 	// DIR must be validated (exists AND is a directory) BEFORE the host phase
 	// runs: provisioning mutates real host state, and a typo'd DIR must fail
 	// with nothing touched rather than be caught only at the handoff.
-	if err := launch.ValidateRunWorkspace(c.Dir); err != nil {
+	if err := launch.ValidateRunWorkspace(c.Dir, knownVerb); err != nil {
 		return cli.UsageError{Err: err}
 	}
 	if err := provision.EnsureSetupSbxSession(env, d.Out, d.Interactive && !parsed.AssumeYes); err != nil {

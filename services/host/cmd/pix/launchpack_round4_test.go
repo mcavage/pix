@@ -4,6 +4,7 @@
 package main
 
 import (
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -83,7 +84,7 @@ func TestApplyPackToLaunch_FailsClosedOnBrokenDeclaredProxy(t *testing.T) {
 	mustWritePack(t, broken, pack.Manifest{Name: "broken", Schema: 1, Proxies: []pack.PackProxy{{Name: "warehouse"}}})
 	cfg.Pack = broken
 	o := launch.RunOpts{}
-	if _, lerr := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil)); lerr == nil {
+	if _, lerr := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil), io.Discard); lerr == nil {
 		t.Fatal("F2: expected an error for a declared sandbox proxy whose kit can't be built")
 	} else if !strings.Contains(lerr.Error(), "refusing") {
 		t.Errorf("expected a refusal message, got: %v", lerr)
@@ -97,7 +98,7 @@ func TestApplyPackToLaunch_FailsClosedOnBrokenDeclaredProxy(t *testing.T) {
 	mustWritePack(t, plain, pack.Manifest{Name: "plain", Schema: 1})
 	cfg.Pack = plain
 	o = launch.RunOpts{}
-	if _, lerr := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil)); lerr != nil {
+	if _, lerr := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil), io.Discard); lerr != nil {
 		t.Fatalf("a pack with no proxies must launch fine: %v", lerr)
 	}
 	if len(o.PackKits) != 0 {
@@ -115,7 +116,7 @@ func TestApplyPackToLaunch_FailsClosedOnBrokenDeclaredProxy(t *testing.T) {
 	}
 	cfg.Pack = good
 	o = launch.RunOpts{}
-	if _, lerr := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil)); lerr != nil {
+	if _, lerr := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil), io.Discard); lerr != nil {
 		t.Fatalf("a buildable proxy must launch fine: %v", lerr)
 	}
 	if len(o.PackKits) != 1 {

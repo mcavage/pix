@@ -17,6 +17,7 @@
 package main
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -36,7 +37,7 @@ func TestApplyPackToLaunch_DegradedMissingPack_EffectiveRootEmpty(t *testing.T) 
 	cfg := &config.Config{Pack: filepath.Join(dir, "gone")}
 	o := launch.RunOpts{}
 
-	root, err := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil))
+	root, err := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil), io.Discard)
 	if err != nil {
 		t.Fatalf("a genuinely absent active pack must degrade, not fail: %v", err)
 	}
@@ -57,7 +58,7 @@ func TestApplyPackToLaunch_ValidPack_EffectiveRootIsRealRoot(t *testing.T) {
 	cfg := &config.Config{Pack: packRoot}
 	o := launch.RunOpts{}
 
-	root, err := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil))
+	root, err := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil), io.Discard)
 	if err != nil {
 		t.Fatalf("a valid active pack must load cleanly: %v", err)
 	}
@@ -87,7 +88,7 @@ func TestSandboxPackMarker_HonestAboutDegradedLaunch(t *testing.T) {
 		cfg := &config.Config{Pack: filepath.Join(dir, "gone")}
 		o := launch.RunOpts{Workspace: ws}
 
-		effectiveRoot, err := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil))
+		effectiveRoot, err := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil), io.Discard)
 		if err != nil {
 			t.Fatalf("degrade path must not error: %v", err)
 		}
@@ -106,7 +107,7 @@ func TestSandboxPackMarker_HonestAboutDegradedLaunch(t *testing.T) {
 		cfg := &config.Config{Pack: packRoot}
 		o := launch.RunOpts{Workspace: ws}
 
-		effectiveRoot, err := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil))
+		effectiveRoot, err := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil), io.Discard)
 		if err != nil {
 			t.Fatalf("a valid active pack must load cleanly: %v", err)
 		}
@@ -128,11 +129,11 @@ func TestWritePackContextFiles_AgreesWithDegradedMarker(t *testing.T) {
 	cfg := &config.Config{Pack: filepath.Join(dir, "gone")}
 	o := launch.RunOpts{Workspace: ws}
 
-	effectiveRoot, err := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil))
+	effectiveRoot, err := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil), io.Discard)
 	if err != nil {
 		t.Fatalf("degrade path must not error: %v", err)
 	}
-	launch.WritePackContextFiles(cfg, o, effectiveRoot)
+	launch.WritePackContextFiles(cfg, o, effectiveRoot, io.Discard)
 	launch.WriteSandboxPackMarker(o.Workspace, effectiveRoot)
 
 	if _, err := os.Stat(filepath.Join(ws, ".pix", "profile")); err == nil {
