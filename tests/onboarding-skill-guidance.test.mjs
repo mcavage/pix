@@ -25,7 +25,7 @@ test("onboarding distinguishes disabled memory from enabled-but-stopped memory",
 });
 
 test("onboarding never claims ordinary setup creates a pack", () => {
-	assert.match(skill, /`pack\.exists` is false, `pix pack new <path>` creates one/s);
-	assert.match(skill, /Ordinary `pix setup` does not/s);
+	assert.match(skill, /`pack\.exists` is false, say creating one is a `pack\.toml`/s);
+	assert.match(skill, /Ordinary `pix\s+setup` does not/s);
 	assert.doesNotMatch(skill, /`pix setup` \(or `pix pack new/);
 });

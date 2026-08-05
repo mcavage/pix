@@ -9,6 +9,15 @@ Locked: name = `pack`; single active pack (no multi-pack) in v1; packs are
 with `op://` credential solicitation; pack-shipped executables + trust gate +
 signing shipped in v2; personal pack is local-only by default.
 
+**U08f (retired the authoring surface):** `pack new` and `pack add` are gone
+from the CLI. A `pack.toml` and its `skills/*/SKILL.md`, `bin/<name>`, and
+`[[integrations]]`/`[[proxy]]` stanzas are created and edited by hand — a
+pack is a plain directory a text editor and `git` already know how to work
+with, so a scaffolding verb bought little. Everything below describing `pack
+new`/`pack add` is the historical record of why the schema looks the way it
+does; `use`/`ls`/`show`/`rm`, git-ref adoption, the active pack, and the
+Tier-1 trust gate are unchanged and still exactly as described.
+
 ## 1. The idea
 
 > A **pack** is the one folder, in git, that makes your setup yours and

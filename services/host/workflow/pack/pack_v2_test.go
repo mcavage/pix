@@ -117,57 +117,6 @@ func TestLoadPack_RejectsBinPathEscape(t *testing.T) {
 
 // --- F2: sandbox bin/ wrappers -------------------------------------------------
 
-// TestPackAdd_Proxy_ScaffoldsWrapperAndManifest: `pack add proxy` writes the
-// bin/<name> shim (0755) + a [[proxy]] manifest entry, and prints the recreate
-// line (F2/ADR-3) for a non-host proxy.
-func TestPackAdd_Proxy_ScaffoldsWrapperAndManifest(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	root := filepath.Join(dir, "pack")
-	env := fakeGitEnv(nil)
-	var out bytes.Buffer
-	RunPackAdd(env, &out, []string{"proxy", "warehouse", root}, registerOK)
-
-	binFile := filepath.Join(root, "bin", "warehouse")
-	fi, err := os.Stat(binFile)
-	if err != nil {
-		t.Fatalf("bin/warehouse not scaffolded: %v", err)
-	}
-	if fi.Mode().Perm()&0o111 == 0 {
-		t.Errorf("bin/warehouse is not executable: %v", fi.Mode())
-	}
-	p, err := LoadPack(root)
-	if err != nil {
-		t.Fatalf("LoadPack: %v", err)
-	}
-	if len(p.Manifest.Proxies) != 1 || p.Manifest.Proxies[0].Name != "warehouse" || p.Manifest.Proxies[0].Host {
-		t.Errorf("proxy manifest entry missing/wrong: %+v", p.Manifest.Proxies)
-	}
-	if !strings.Contains(out.String(), "pix rm <box> && pix run") {
-		t.Errorf("expected the recreate line, got:\n%s", out.String())
-	}
-}
-
-// TestPackAdd_Proxy_Host_NoRecreateLine: a host=true proxy is a Phase-2 facet —
-// nothing sandbox-related changed, so no recreate line is printed.
-func TestPackAdd_Proxy_Host_NoRecreateLine(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	root := filepath.Join(dir, "pack")
-	var out bytes.Buffer
-	RunPackAdd(fakeGitEnv(nil), &out, []string{"proxy", "platformio", root, "--host"}, registerOK)
-	if strings.Contains(out.String(), "pix rm <box> && pix run") {
-		t.Errorf("host proxy should not print the sandbox recreate line, got:\n%s", out.String())
-	}
-	p, err := LoadPack(root)
-	if err != nil {
-		t.Fatalf("LoadPack: %v", err)
-	}
-	if len(p.Manifest.Proxies) != 1 || !p.Manifest.Proxies[0].Host {
-		t.Errorf("host proxy not recorded: %+v", p.Manifest.Proxies)
-	}
-}
-
 // TestSynthesizePackKit_SandboxOnly: the ephemeral mixin kit carries only the
 // NON-host proxy wrappers, copied (not symlinked) into files/home/.local/bin/.
 func TestSynthesizePackKit_SandboxOnly(t *testing.T) {
@@ -211,80 +160,6 @@ func TestSynthesizePackKit_NoProxiesReturnsEmpty(t *testing.T) {
 	p := &Info{Root: t.TempDir(), Manifest: Manifest{Name: "p"}}
 	if kit, err := SynthesizePackKit(p); err != nil || kit != "" {
 		t.Errorf("expected no kit and no error, got %q, err=%v", kit, err)
-	}
-}
-
-// --- F1: mcp attach ------------------------------------------------------------
-
-// TestPackAdd_Mcp_NotActive_NoAttachNoRecreate: adding an mcp integration to a
-// pack that is NOT the active pack only writes the manifest — nothing in the
-// sandbox facet set changed, so no recreate line and no cfg.MCP mutation.
-func TestPackAdd_Mcp_NotActive_NoAttachNoRecreate(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	root := filepath.Join(dir, "pack")
-	var out bytes.Buffer
-	RunPackAdd(fakeGitEnv(nil), &out, []string{"mcp", "fastmail", root, "--env", "FASTMAIL_TOKEN"}, registerOK)
-
-	p, err := LoadPack(root)
-	if err != nil {
-		t.Fatalf("LoadPack: %v", err)
-	}
-	if len(p.Manifest.Integrations) != 1 || p.Manifest.Integrations[0].MCP != "fastmail" || p.Manifest.Integrations[0].Env != "FASTMAIL_TOKEN" {
-		t.Errorf("mcp integration not recorded: %+v", p.Manifest.Integrations)
-	}
-	if strings.Contains(out.String(), "pix rm <box> && pix run") {
-		t.Errorf("inactive pack must not print the recreate line, got:\n%s", out.String())
-	}
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if slices.Contains(cfg.MCP, "fastmail") {
-		t.Error("cfg.MCP must not gain the mcp until the pack is activated")
-	}
-}
-
-// TestPackAdd_Mcp_Active_AttachesAndPrintsRecreate: adding an mcp integration to
-// the CURRENTLY ACTIVE pack attaches it into cfg.MCP immediately and prints the
-// recreate line (F1 + ADR-3).
-func TestPackAdd_Mcp_Active_AttachesAndPrintsRecreate(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	root := filepath.Join(dir, "pack")
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := WriteManifest(root, Manifest{Name: "work", Schema: 1}); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.Pack = root
-	if err := cfg.Save(); err != nil {
-		t.Fatal(err)
-	}
-
-	var out bytes.Buffer
-	// F5 (Phase 2): attaching an MCP to the active pack is Tier-1 — the host
-	// BoM gate fires; --yes accepts it non-interactively (tests have no TTY).
-	RunPackAdd(fakeGitEnv(nil), &out, []string{"mcp", "fastmail", root, "--yes"}, registerOK)
-
-	cfg2, err := config.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Contains(cfg2.MCP, "fastmail") {
-		t.Errorf("cfg.MCP should gain fastmail on the active pack, got %v", cfg2.MCP)
-	}
-	if !strings.Contains(out.String(), "pix rm <box> && pix run") {
-		t.Errorf("expected the recreate line, got:\n%s", out.String())
-	}
-	lock := readPackLock(root)
-	if !slices.Contains(lock.MCP, "fastmail") {
-		t.Errorf("pack.lock should record the attached mcp, got %+v", lock)
 	}
 }
 
@@ -375,10 +250,10 @@ func stringSlicesEqualUnordered(a, b []string) bool {
 	return true
 }
 
-// The [[knowledge]] ref facet's reversible-swap, private-never-travels, and
-// `pack add knowledge --ref --private` coverage was retired along with the
-// facet itself (W2 U03A). The embedded knowledge/ dir stays (LoadPack's
-// KnowledgeDir, `pack add knowledge` embed-only), just inert.
+// The [[knowledge]] ref facet's reversible-swap and private-never-travels
+// coverage was retired along with the facet itself (W2 U03A). The embedded
+// knowledge/ dir stays (LoadPack's KnowledgeDir; a plain markdown file placed
+// there by hand), just inert.
 
 // --- F1/ADR-3: recreate line -----------------------------------------------
 

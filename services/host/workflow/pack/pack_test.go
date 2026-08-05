@@ -1,7 +1,6 @@
 package pack
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
 	"pix/host/cli"
@@ -21,67 +20,10 @@ func fakeGitEnv(calls *[]string) hostenv.Env {
 	}}}
 }
 
-func TestPackNew_InitsAndAddSkill(t *testing.T) {
-	dir := t.TempDir()
-	root := filepath.Join(dir, "mypack")
-	var git []string
-	env := fakeGitEnv(&git)
-
-	var out bytes.Buffer
-	RunPackNew(env, &out, []string{root})
-	if _, err := os.Stat(filepath.Join(root, "pack.toml")); err != nil {
-		t.Fatalf("pack.toml not created: %v", err)
-	}
-	if !strings.Contains(strings.Join(git, "\n"), "git -C "+root+" init") {
-		t.Errorf("expected git init, got: %v", git)
-	}
-
-	// LoadPack reads it back.
-	p, err := LoadPack(root)
-	if err != nil {
-		t.Fatalf("LoadPack: %v", err)
-	}
-	if p.Manifest.Name != "mypack" || p.Manifest.Schema != 1 {
-		t.Errorf("manifest = %+v", p.Manifest)
-	}
-	if p.SkillsDir != "" {
-		t.Error("no skills yet, SkillsDir should be empty")
-	}
-
-	// add a skill -> SkillsDir now populated.
-	out.Reset()
-	RunPackAdd(env, &out, []string{"skill", "deploy", root}, registerOK)
-	sk := filepath.Join(root, "skills", "deploy", "SKILL.md")
-	if _, err := os.Stat(sk); err != nil {
-		t.Fatalf("skill not written: %v", err)
-	}
-	p2, _ := LoadPack(root)
-	if p2.SkillsDir == "" {
-		t.Error("SkillsDir should be set after adding a skill")
-	}
-}
-
-func TestPackNew_AdoptsExistingRepo(t *testing.T) {
-	dir := t.TempDir()
-	// Pre-existing repo: a .git dir already present.
-	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	var git []string
-	env := fakeGitEnv(&git)
-	var out bytes.Buffer
-	RunPackNew(env, &out, []string{dir})
-	// Must NOT re-init an existing repo.
-	if strings.Contains(strings.Join(git, "\n"), "init") {
-		t.Errorf("must not git-init an existing repo, calls: %v", git)
-	}
-	if !strings.Contains(out.String(), "adopted existing repo") {
-		t.Errorf("want adopt message, got %q", out.String())
-	}
-	if _, err := os.Stat(filepath.Join(dir, "pack.toml")); err != nil {
-		t.Errorf("pack.toml should be added to the adopted repo: %v", err)
-	}
-}
+// Pack authoring (`pack new`/`pack add`) is a retired CLI surface (U08f): a
+// pack.toml and its skills/*/SKILL.md files are created and edited by hand.
+// LoadPack, WriteManifest and the git-URL adoption path (below) are what
+// remain to exercise pack creation/parsing.
 
 func TestLoadPack_NotAPack(t *testing.T) {
 	if _, err := LoadPack(t.TempDir()); err == nil {

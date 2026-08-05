@@ -257,40 +257,6 @@ func TestCanonicalizePackRoot_NormalizesEquivalentPaths(t *testing.T) {
 	}
 }
 
-// TestPackAdd_Mcp_CanonicalizesActivePackComparison: `pack add mcp fastmail
-// ./work` (a RELATIVE path) must still recognize the active pack even though
-// cfg.Pack is stored as an absolute path.
-func TestPackAdd_Mcp_CanonicalizesActivePackComparison(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	root := filepath.Join(dir, "work")
-	mustWritePack(t, root, Manifest{Name: "work", Schema: 1})
-
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.Pack = root // stored absolute, as `pack use` always leaves it
-	if err := cfg.Save(); err != nil {
-		t.Fatal(err)
-	}
-
-	t.Chdir(dir)
-	var out bytes.Buffer
-	RunPackAdd(fakeGitEnv(nil), &out, []string{"mcp", "fastmail", "./work", "--yes"}, registerOK)
-
-	if strings.Contains(out.String(), "activate the pack to attach it") {
-		t.Errorf("finding #7: relative path should have matched the active pack, got:\n%s", out.String())
-	}
-	cfg2, err := config.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Contains(cfg2.MCP, "fastmail") {
-		t.Errorf("expected fastmail to attach to the active pack, cfg.MCP = %v", cfg2.MCP)
-	}
-}
-
 // --- finding #8 [CONCERN]: honest live-vs-recreate messaging -----------------
 
 func TestPrintPackRecreateLine_MentionsSkills(t *testing.T) {
@@ -503,33 +469,6 @@ func TestPackUse_RegistersMcpAlreadyPresentInConfig(t *testing.T) {
 	// per-server line for fastmail (here classified remote in the fake env).
 	if !strings.Contains(out.String(), "fastmail") {
 		t.Errorf("mcp.RegisterServers must run for an already-present pack MCP (retry recovery), got:\n%s", out.String())
-	}
-}
-
-// TestPackAdd_Mcp_RetryReregisters: `pack add mcp <name>` on the active pack
-// re-registers even when the name is already in cfg.MCP, so a retry after a
-// failed gateway registration actually recovers instead of silently no-oping.
-func TestPackAdd_Mcp_RetryReregisters(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	root := filepath.Join(dir, "pack")
-	mustWritePack(t, root, Manifest{Name: "work", Schema: 1})
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.Pack = root
-	cfg.AddMCP("fastmail") // a previous attempt already persisted the name
-	if err := cfg.Save(); err != nil {
-		t.Fatal(err)
-	}
-
-	var out bytes.Buffer
-	RunPackAdd(fakeGitEnv(nil), &out, []string{"mcp", "fastmail", root, "--yes"}, registerOK)
-	// Re-invocation is observable as mcp.RegisterServers' own per-server line for
-	// fastmail (here classified remote in the fake env), not the error-only note.
-	if !strings.Contains(out.String(), "fastmail") {
-		t.Errorf("retrying pack add mcp must re-invoke registration, got:\n%s", out.String())
 	}
 }
 
@@ -773,90 +712,6 @@ func TestRevertPackPriorContribution_ToleratesOverclaimingLock(t *testing.T) {
 	}
 }
 
-// TestPackAddMcp_LockWrittenBeforeSaveFailure: the R1 ordering, behaviorally.
-// cfg.Save fails (read-only config dir) AFTER the lock write — and since the
-// phase-1 consistency fix (FIX A) the commit point ROLLS the lock BACK to its
-// prior state (here: absent), so an ordinary Save failure leaves NO residue at
-// all. A later `pack rm` (once the disk recovers) must detach cleanly with no
-// orphaned contributions and no bogus "detached mcp" claim. Since round-4 F1
-// the commit point FAILS on a Save failure, which the add now returns as an
-// error rather than an exit code.
-func TestPackAddMcp_LockWrittenBeforeSaveFailure(t *testing.T) {
-	if os.Getuid() == 0 {
-		t.Skip("root ignores directory write permissions")
-	}
-	dir := t.TempDir()
-	cfgDir := filepath.Join(dir, "cfg")
-	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PIX_CONFIG", filepath.Join(cfgDir, "config.toml"))
-	root := filepath.Join(dir, "pack")
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := WriteManifest(root, Manifest{Name: "work", Schema: 1}); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.Pack = root
-	if err := cfg.Save(); err != nil {
-		t.Fatal(err)
-	}
-
-	// Make cfg.Save fail (its atomic temp file can't be created), then add.
-	if err := os.Chmod(cfgDir, 0o500); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(cfgDir, 0o755) })
-	// --yes accepts the Phase-2 Tier-1 gate so the commit point is reached.
-	var addOut bytes.Buffer
-	addErr := RunPackAdd(fakeGitEnv(nil), &addOut, []string{"mcp", "fastmail", root, "--yes"}, registerOK)
-	if addErr == nil {
-		t.Fatalf("round-4 F1: pack add must fail when cfg.Save fails, got:\n%s", addOut.String())
-	}
-	if got := addOut.String() + addErr.Error(); !strings.Contains(got, "saving config") {
-		t.Fatalf("expected the save failure message, got:\n%s", got)
-	}
-	// FIX A: the lock (written first, R1) is ROLLED BACK on the Save failure —
-	// no prior lock existed, so nothing may over-claim the never-committed name.
-	if lock := readPackLock(root); slices.Contains(lock.MCP, "fastmail") {
-		t.Fatalf("FIX A: the lock must be rolled back after a Save failure, got %+v", lock)
-	}
-	// Config on disk never committed the entry.
-	cfgAfter, err := config.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if slices.Contains(cfgAfter.MCP, "fastmail") {
-		t.Fatalf("cfg must not carry the entry after the failed save, got %v", cfgAfter.MCP)
-	}
-
-	// Disk recovers; the next `pack rm` must detach cleanly (removal of the
-	// over-claimed, absent entry is a safe no-op — not an error, not a lie).
-	if err := os.Chmod(cfgDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	var rmOut bytes.Buffer
-	RunPackRm(&rmOut, nil)
-	if !strings.Contains(rmOut.String(), "detached active pack") {
-		t.Errorf("pack rm must succeed after the crash residue, got:\n%s", rmOut.String())
-	}
-	if strings.Contains(rmOut.String(), "detached mcp") {
-		t.Errorf("nothing was ever attached, so nothing must claim detachment, got:\n%s", rmOut.String())
-	}
-	final, err := config.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if final.Pack != "" || len(final.MCP) != 0 {
-		t.Errorf("no orphaned contributions allowed: pack=%q mcp=%v", final.Pack, final.MCP)
-	}
-}
-
 // --- R2 [BLOCK]: per-launch unique kit dirs + age-gated sweep ------------------
 
 // TestSweepStaleKitTemps_AgeGatedLaunchDirs: an old (>1h) per-launch kit dir is
@@ -926,10 +781,22 @@ func brokenPackLock(t *testing.T, root string) {
 
 // --- F1: abort-on-lock-failure, unit level -------------------------------------
 
-// TestCommitPackActivation_LockFailureAbortsBeforeSave: when the lock can't be
-// written, commitPackActivation returns an error WITHOUT calling cfg.Save —
-// the on-disk config is untouched (here: never even created).
-func TestCommitPackActivation_LockFailureAbortsBeforeSave(t *testing.T) {
+// commitOnePack is a single-pack commitPackActivation-shaped call, inlined
+// here now that the CLI-only wrapper (only `pack add mcp` used it) is gone:
+// packTxn.commit is still the ONE commit point `pack use` shares, and these
+// tests pin its rollback contract directly.
+func commitOnePack(cfg *config.Config, store *PackTrustStore, root string, lock packLock) error {
+	return packTxn{
+		records:  []packActivationRecord{store.newActivationRecord(root, lock)},
+		lockRoot: root,
+		lock:     lock,
+	}.commit(cfg)
+}
+
+// TestPackTxnCommit_LockFailureAbortsBeforeSave: when the lock can't be
+// written, packTxn.commit returns an error WITHOUT calling cfg.Save — the
+// on-disk config is untouched (here: never even created).
+func TestPackTxnCommit_LockFailureAbortsBeforeSave(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.toml")
 	t.Setenv("PIX_CONFIG", cfgPath)
@@ -949,7 +816,7 @@ func TestCommitPackActivation_LockFailureAbortsBeforeSave(t *testing.T) {
 	if serr != nil {
 		t.Fatal(serr)
 	}
-	if err := commitPackActivation(cfg, store, root, packLock{MCP: []string{"fastmail"}}); err == nil {
+	if err := commitOnePack(cfg, store, root, packLock{MCP: []string{"fastmail"}}); err == nil {
 		t.Fatal("expected an error when the lock cannot be written")
 	}
 	if _, err := os.Stat(cfgPath); !os.IsNotExist(err) {
@@ -960,7 +827,7 @@ func TestCommitPackActivation_LockFailureAbortsBeforeSave(t *testing.T) {
 	if err := os.RemoveAll(PackLockPath(root)); err != nil {
 		t.Fatal(err)
 	}
-	if err := commitPackActivation(cfg, store, root, packLock{MCP: []string{"fastmail"}}); err != nil {
+	if err := commitOnePack(cfg, store, root, packLock{MCP: []string{"fastmail"}}); err != nil {
 		t.Fatalf("commit with a writable lock should succeed: %v", err)
 	}
 	if readPackLock(root).MCP[0] != "fastmail" {
@@ -1010,7 +877,7 @@ func TestPackUse_LockWriteFailureAbortsWithoutCommit(t *testing.T) {
 // --- from pack_v2_phase1_fixups_test.go ---
 // --- FIX A: Save failure restores the prior lock -------------------------------
 
-// TestCommitPackActivation_SaveFailureRestoresPriorLock: a same-pack
+// TestPackTxnCommit_SaveFailureRestoresPriorLock: a same-pack
 // reactivation that DROPS an MCP, with the commit forced to fail (read-only
 // config dir — under the round-2 A model this now trips the HOST-STATE
 // activation write, which shares the config dir and aborts BEFORE cfg.Save),
@@ -1018,7 +885,7 @@ func TestPackUse_LockWriteFailureAbortsWithoutCommit(t *testing.T) {
 // config unchanged, (3) leave the on-disk PRIOR activation record intact, and
 // (4) let a subsequent successful `pack rm` remove everything cleanly — no
 // orphaned, unattributed MCP.
-func TestCommitPackActivation_SaveFailureRestoresPriorLock(t *testing.T) {
+func TestPackTxnCommit_SaveFailureRestoresPriorLock(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("running as root: a read-only dir cannot force cfg.Save to fail")
 	}
@@ -1078,9 +945,9 @@ func TestCommitPackActivation_SaveFailureRestoresPriorLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cerr := commitPackActivation(cfg, store, root, packLock{})
+	cerr := commitOnePack(cfg, store, root, packLock{})
 	if cerr == nil {
-		t.Fatal("expected commitPackActivation to fail when the commit cannot write")
+		t.Fatal("expected packTxn.commit to fail when the commit cannot write")
 	}
 	if !strings.Contains(cerr.Error(), "nothing was committed") {
 		t.Errorf("error should say nothing was committed, got: %v", cerr)
@@ -1133,11 +1000,11 @@ func TestCommitPackActivation_SaveFailureRestoresPriorLock(t *testing.T) {
 	}
 }
 
-// TestCommitPackActivation_SaveFailureRemovesFirstLock: when there was NO
+// TestPackTxnCommit_SaveFailureRemovesFirstLock: when there was NO
 // prior lock (first activation), a Save failure must remove the just-written
 // lock — an over-claiming lock beside an uncommitted config is the exact
 // divergence FIX A closes.
-func TestCommitPackActivation_SaveFailureRemovesFirstLock(t *testing.T) {
+func TestPackTxnCommit_SaveFailureRemovesFirstLock(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("running as root: a read-only dir cannot force cfg.Save to fail")
 	}
@@ -1159,8 +1026,8 @@ func TestCommitPackActivation_SaveFailureRemovesFirstLock(t *testing.T) {
 	cfg.AddMCP("fastmail")
 	cfg.Pack = root
 
-	if cerr := commitPackActivation(cfg, &PackTrustStore{}, root, packLock{MCP: []string{"fastmail"}}); cerr == nil {
-		t.Fatal("expected commitPackActivation to fail when cfg.Save cannot write")
+	if cerr := commitOnePack(cfg, &PackTrustStore{}, root, packLock{MCP: []string{"fastmail"}}); cerr == nil {
+		t.Fatal("expected packTxn.commit to fail when cfg.Save cannot write")
 	}
 	if _, serr := os.Stat(PackLockPath(root)); !os.IsNotExist(serr) {
 		t.Errorf("FIX A: with no prior lock, a Save failure must remove the new lock (stat err=%v)", serr)

@@ -4,7 +4,6 @@
 package main
 
 import (
-	"bytes"
 	"io"
 	"os"
 	"path/filepath"
@@ -16,47 +15,7 @@ import (
 	"pix/host/workflow/pack"
 )
 
-// TestPackAddMcp_LockWriteFailureAbortsWithoutCommit: same guarantee on the
-// active-pack `pack add mcp` path — the pre-existing config (active pack, no
-// MCP) is left byte-for-byte alone when the lock can't be written.
-func TestPackAddMcp_LockWriteFailureAbortsWithoutCommit(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "config.toml")
-	t.Setenv("PIX_CONFIG", cfgPath)
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
-	root := filepath.Join(dir, "pack")
-	mustWritePack(t, root, pack.Manifest{Name: "work", Schema: 1})
-	brokenPackLock(t, root)
-	// The pack is ACTIVE (that is what routes `pack add mcp` into the attach+
-	// commit path).
-	before := "pack = \"" + root + "\"\n"
-	if err := os.WriteFile(cfgPath, []byte(before), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	var buf bytes.Buffer
-	err := pack.RunPackAdd(fakeGitEnv(nil), &buf, []string{"mcp", "fastmail", root, "--yes"}, registerServers)
-	if err == nil {
-		t.Fatalf("expected `pack add mcp` to fail on a lock-write failure; output:\n%s", buf.String())
-	}
-	if out := buf.String() + err.Error(); !strings.Contains(out, "aborting without saving config") {
-		t.Errorf("expected the abort message, got:\n%s", out)
-	}
-	after, rerr := os.ReadFile(cfgPath)
-	if rerr != nil {
-		t.Fatal(rerr)
-	}
-	if string(after) != before {
-		t.Errorf("F1: config must be unchanged after a lock failure (no MCP committed).\nbefore: %q\nafter:  %q", before, after)
-	}
-}
-
 // --- F2: launch fails closed on a declared-but-unbuildable proxy ---------------
-
-// TestApplyPackToLaunch_FailsClosedOnBrokenDeclaredProxy: a pack that DECLARES
-// a sandbox proxy whose wrapper can't be read makes launch.ApplyPackToLaunch return an
-// error (the launch path aborts), never a kitless create — while "no proxies
-// declared" and "buildable proxy" both proceed.
 
 // TestApplyPackToLaunch_FailsClosedOnBrokenDeclaredProxy: a pack that DECLARES
 // a sandbox proxy whose wrapper can't be read makes launch.ApplyPackToLaunch return an

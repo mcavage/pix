@@ -50,7 +50,7 @@ type rootCmd struct {
 	Doctor doctorCmd `cmd:"" group:"Setup & health" help:"Diagnose problems and print the fix commands."`
 
 	Memory memoryCmd `cmd:"" group:"Data" aliases:"mem" help:"recall | remember | forget | learnings | stats."`
-	Pack   packCmd   `cmd:"" group:"Data" help:"new | add | ls | show | use | rm."`
+	Pack   packCmd   `cmd:"" group:"Data" help:"ls | show | use | rm."`
 
 	Monitor monitorCmd `cmd:"" group:"Observability" help:"Follow a sandbox's out-of-sandbox traffic."`
 
