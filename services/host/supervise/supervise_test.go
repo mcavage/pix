@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,23 +32,67 @@ var (
 	fixtureErr  error
 )
 
-// buildFixture compiles testdata/fixture once per test binary.
+// packageDir returns the directory containing this test file, resolved via
+// runtime.Caller rather than the process's actual working directory. `go
+// test` sets the process CWD to the package directory, which is why a bare
+// os.ReadFile("testdata/...") and an unset cmd.Dir on the `go build` below
+// have always worked — but that is an implicit invariant of the test
+// runner, not something compileFixture asserts. Pinning it explicitly means
+// module resolution for the fixture's "pix/host/plugin" import (and the
+// cached github.com/hashicorp/go-plugin dependency) survives even if a
+// caller changes the working directory (t.Chdir, a future TestMain, or this
+// helper getting called from somewhere else). See TestFixtureBuildSurvivesCWDChange.
+func packageDir() string {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		panic("supervise: runtime.Caller failed to resolve package directory")
+	}
+	return filepath.Dir(file)
+}
+
+// compileFixture reads testdata/fixture/main.go.txt (or any srcRelPath, path
+// relative to this package's own directory), writes it into a fresh temp dir
+// as main.go, and compiles it there. Building it via cmd.Dir = packageDir(),
+// rather than an inherited process CWD, is what makes module resolution for
+// "pix/host/plugin" and the go-plugin dependency CWD-independent.
+func compileFixture(srcRelPath string) (string, error) {
+	pkgDir := packageDir()
+	dir, err := os.MkdirTemp("", "supervise-fixture")
+	if err != nil {
+		return "", err
+	}
+	src, err := os.ReadFile(filepath.Join(pkgDir, srcRelPath))
+	if err != nil {
+		return "", err
+	}
+	mainGo := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(mainGo, src, 0o644); err != nil {
+		return "", err
+	}
+	out := filepath.Join(dir, "fixture")
+	cmd := exec.Command("go", "build", "-o", out, mainGo)
+	cmd.Dir = pkgDir // pin module resolution explicitly; do not rely on inherited CWD
+	cmd.Env = append(os.Environ(), "GOFLAGS=")
+	if b, err := cmd.CombinedOutput(); err != nil {
+		return "", errors.New(string(b))
+	}
+	return out, nil
+}
+
+// buildFixture compiles testdata/fixture once per test binary. The fixture's
+// source lives at testdata/fixture/main.go.txt — a .txt, not a .go file, on
+// purpose: it is a real, complete go-plugin program, but naming it main.go
+// would make it a second copy of production Go source sitting outside any
+// *_test.go file, indistinguishable from shipped code to a LOC/production-
+// metrics scanner (anything that globs *.go and excludes *_test.go, same as
+// `go build ./...` itself). Reading it as data and writing it into a temp dir
+// as main.go right before the compile keeps this a REAL compiled executable
+// — same handshake, same net/rpc calls, same classification under test —
+// while its source counts as test fixture data, not production Go.
 func buildFixture(t *testing.T) (string, string) {
 	t.Helper()
 	fixtureOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "supervise-fixture")
-		if err != nil {
-			fixtureErr = err
-			return
-		}
-		out := filepath.Join(dir, "fixture")
-		cmd := exec.Command("go", "build", "-o", out, "./testdata/fixture")
-		cmd.Env = append(os.Environ(), "GOFLAGS=")
-		if b, err := cmd.CombinedOutput(); err != nil {
-			fixtureErr = errors.New(string(b))
-			return
-		}
-		fixtureBin = out
+		fixtureBin, fixtureErr = compileFixture("testdata/fixture/main.go.txt")
 	})
 	if fixtureErr != nil {
 		t.Fatalf("build fixture plugin: %v", fixtureErr)
@@ -55,6 +100,32 @@ func buildFixture(t *testing.T) (string, string) {
 	sha, err := FileSHA256(fixtureBin)
 	must(t, err)
 	return fixtureBin, sha
+}
+
+// TestFixtureBuildSurvivesCWDChange is the regression test for the concern
+// that compiling the fixture from an absolute temp-dir path could lose
+// module resolution for its "pix/host/plugin" import and its cached
+// github.com/hashicorp/go-plugin dependency. It moves the process's working
+// directory away from the package directory (something buildFixture's old,
+// CWD-implicit form would have broken under) and gives itself a private,
+// empty GOCACHE (equivalent to a clean cache, but scoped to this test —
+// `go clean -cache` is process-global and would race every other package's
+// build under a parallel `go test ./...`), then proves compileFixture still
+// resolves both offline under GOPROXY=off. Before pinning cmd.Dir explicitly
+// in compileFixture, this test failed with "package pix/host/plugin is not
+// in std" and "go.mod file not found".
+func TestFixtureBuildSurvivesCWDChange(t *testing.T) {
+	t.Setenv("GOPROXY", "off")
+	t.Setenv("GOCACHE", filepath.Join(t.TempDir(), "gocache"))
+	t.Chdir(t.TempDir()) // simulate a caller whose process CWD is not this package
+
+	bin, err := compileFixture("testdata/fixture/main.go.txt")
+	if err != nil {
+		t.Fatalf("fixture build lost module resolution after a CWD change: %v", err)
+	}
+	if _, err := os.Stat(bin); err != nil {
+		t.Fatalf("compiled fixture binary missing: %v", err)
+	}
 }
 
 // testBudgets shrink the pinned budgets so a test runs in seconds; the
