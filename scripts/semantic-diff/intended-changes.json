@@ -1,5 +1,23 @@
 [
 	{
+		"id": "lifecycle.lease.paths-and-modes",
+		"rationale": "U04c1 fixes a flock-on-a-path TOCTOU review finding and, in the same reshard the review is layered on top of, the single lease.lock file the pin previously named was already split (commit 74ab769) into refs.lock (RefLease) + lifecycle.lock (LifecycleLock) without the pin being updated to match — this entry documents catching up the stale literal, not a new rename. The invariant the pin polices (fixed file names + 0600/0700 modes, independent of production code's own reasons to touch them) is unchanged; only the literals it checks against reflect the file names that have been live since 74ab769.",
+		"evidence": "services/host/lease/lock.go: `const refsLockFileName = \"refs.lock\"`; services/host/lease/lifecycle.go: `const lifecycleLockFileName = \"lifecycle.lock\"` (both already shipped in commit 74ab769, pre-dating this manifest entry)",
+		"changes": [
+			{
+				"file": "scripts/semantic-diff/rules/lifecycle.rules.mjs",
+				"kind": "contains",
+				"from": [
+					"const lockFileName = \"lease.lock\""
+				],
+				"to": [
+					"const refsLockFileName = \"refs.lock\"",
+					"const lifecycleLockFileName = \"lifecycle.lock\""
+				]
+			}
+		]
+	},
+	{
 		"id": "ports.reserved.serve",
 		"rationale": "W2/U03B deletes host mode and the dormant broker: `serve` never launched it as a real service (BROKER_PORT was reserved but unbound in practice), and the whole slot is gone now, not just dormant. Knowledge was already retired in W1 U01a. serve.go binds only :11435 (memory) today, so the pin narrows from the historical three-port set down to the one port the supervisor actually still binds.",
 		"evidence": "commit cfd4522 (refactor(W2/U03B): delete host mode + dormant broker, retain generic plugin runtime); services/host/serve.go serveServiceAliases() returns `{\"memory\": \"memory\"}` only — the knowledge branch (W2/U03A) and the broker branch (W2/U03B) are both gone from runServe",

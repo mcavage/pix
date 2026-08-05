@@ -28,14 +28,14 @@ func mustOpenLease(t *testing.T) (*Lease, string) {
 
 func TestOpen_Creates0600LockFile(t *testing.T) {
 	l, dir := mustOpenLease(t)
-	fi, err := os.Stat(filepath.Join(dir, lockFileName))
+	fi, err := os.Stat(filepath.Join(dir, refsLockFileName))
 	if err != nil {
 		t.Fatalf("Stat: %v", err)
 	}
 	if perm := fi.Mode().Perm(); perm != 0o600 {
 		t.Errorf("lock file perm = %o, want 0600", perm)
 	}
-	if l.Path() != filepath.Join(dir, lockFileName) {
+	if l.Path() != filepath.Join(dir, refsLockFileName) {
 		t.Errorf("Path = %q", l.Path())
 	}
 }

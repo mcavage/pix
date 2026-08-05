@@ -93,10 +93,11 @@ export default [
 	{
 		id: "lifecycle.lease.paths-and-modes",
 		description:
-			"The three lease state file names (record.json, keep.json + its keep.lock guard, lease.lock) and their permission modes (0700 sandbox dirs, 0600 files — never group/other readable or writable) are fixed literals independent production code has no reason to touch; a bulk rename or a loosened mode would otherwise sail through untouched.",
+			"The lease state file names (record.json, keep.json + its keep.lock guard, refs.lock, lifecycle.lock) and their permission modes (0700 sandbox dirs, 0600 files — never group/other readable or writable) are fixed literals independent production code has no reason to touch; a bulk rename or a loosened mode would otherwise sail through untouched. U04c1 resharded the single lease.lock into refs.lock (RefLease) + lifecycle.lock (LifecycleLock) — this pin now tracks both.",
 		checks: [
 			{ file: "services/host/lease/record.go", kind: "contains", values: ['const recordFileName = "record.json"', "0o600"] },
-			{ file: "services/host/lease/lock.go", kind: "contains", values: ['const lockFileName = "lease.lock"', "0o600"] },
+			{ file: "services/host/lease/lock.go", kind: "contains", values: ['const refsLockFileName = "refs.lock"', "0o600"] },
+			{ file: "services/host/lease/lifecycle.go", kind: "contains", values: ['const lifecycleLockFileName = "lifecycle.lock"'] },
 			{ file: "services/host/lease/keep.go", kind: "contains", values: ['keepFileName     = "keep.json"', 'keepLockFileName = "keep.lock"', "0o600"] },
 			{ file: "services/host/lease/paths.go", kind: "contains", values: ["os.Mkdir(dir, 0o700)"] },
 		],
