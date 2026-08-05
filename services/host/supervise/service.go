@@ -1,7 +1,7 @@
 // service.go — GoPluginService: one supervised go-plugin subprocess as a
 // suture.Service. Serve() owns ONE generation of the child: reattach-or-spawn,
 // dispense, health-probe until it dies, then drain and stop inside the pinned
-// budgets. Restart policy is Suture's; this is the process and its identity.
+// budgets (restart policy is Suture's; this is the process and its identity).
 
 package supervise
 
@@ -22,8 +22,7 @@ import (
 )
 
 // HealthFunc is the unit's OWN notion of health (memory's Health(), the
-// broker's Check()): "the process is up" is not health, and a unit that fails
-// HealthFailures probes in a row is replaced.
+// broker's Check()); "the process is up" is not health, and a unit failing HealthFailures probes in a row is replaced.
 type HealthFunc func(impl any) error
 
 // GoPluginService supervises one go-plugin unit.
@@ -33,8 +32,7 @@ type GoPluginService struct {
 	holder *Holder
 	tree   *Tree
 
-	// ready reports the FIRST start attempt's outcome back to Add, at most once
-	// (readyDone), so a misconfigured unit fails `serve` loudly at startup.
+	// ready+readyDone report the FIRST start attempt's outcome back to Add, at most once, so a misconfigured unit fails `serve` loudly at startup.
 	ready     chan error
 	readyDone bool
 }
@@ -42,8 +40,7 @@ type GoPluginService struct {
 // String is what Suture uses to name this service in its events.
 func (s *GoPluginService) String() string { return "unit." + s.spec.Name }
 
-// Serve runs one generation and returns when it dies (Suture then backs off
-// and restarts) or when ctx is cancelled (a clean stop).
+// Serve runs one generation, returning when it dies (Suture backs off and restarts) or ctx is cancelled (a clean stop).
 func (s *GoPluginService) Serve(ctx context.Context) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -138,9 +135,8 @@ func (s *GoPluginService) Serve(ctx context.Context) error {
 	}
 }
 
-// probe runs the unit's health check under a hard timeout. On timeout the
-// goroutine is abandoned (an rpc call cannot be cancelled mid-flight); its
-// buffered channel means it never blocks or touches shared state afterwards.
+// probe runs the unit's health check under a hard timeout; on timeout the
+// goroutine is abandoned (an rpc call cannot be cancelled mid-flight), and its buffered channel means it never blocks or touches shared state afterwards.
 func (s *GoPluginService) probe(budget time.Duration) error {
 	if s.health == nil {
 		return nil
@@ -180,8 +176,7 @@ func permanent(err error) bool {
 	return errors.As(err, &p)
 }
 
-// start reattaches to a surviving child when the persisted state still names
-// THIS unit and it is alive; otherwise it spawns a fresh one.
+// start reattaches to a surviving child naming THIS unit, alive; otherwise it spawns a fresh one.
 func (s *GoPluginService) start() (*goplugin.Client, any, bool, error) {
 	if client, impl, ok := s.tryReattach(); ok {
 		return client, impl, true, nil
@@ -207,8 +202,7 @@ func (s *GoPluginService) start() (*goplugin.Client, any, bool, error) {
 }
 
 // command builds the child process: a staged, freshly-verified copy for an
-// external unit (re-verified on EVERY start, so a binary swapped under a
-// running unit is caught at its next restart), or a self-exec of this one.
+// external unit (re-verified on EVERY start, catching a swap under a running unit at its next restart), or a self-exec of this one.
 func (s *GoPluginService) command() (*exec.Cmd, error) {
 	if err := s.spec.Validate(); err != nil {
 		return nil, permanentErr{err}
@@ -266,9 +260,8 @@ func clientPID(c *goplugin.Client) int {
 // --- reattach state ---------------------------------------------------------
 
 // reattachState survives a HARD supervisor death (SIGKILL: no shutdown, no
-// cleanup, orphaned children). It records how to reconnect AND who the child is
-// supposed to be: a pid is not an identity — pids are recycled, and reattaching
-// to whatever now holds one is how a supervisor adopts a stranger.
+// cleanup, orphaned children). It records how to reconnect AND who the child
+// is supposed to be — a pid is not an identity, and reattaching to whatever now holds one is how a supervisor adopts a stranger.
 type reattachState struct {
 	Unit            string    `json:"unit"`
 	Kind            string    `json:"kind"`
@@ -287,8 +280,7 @@ func reattachPath(stateDir, unit string) string {
 
 // SaveReattach persists a unit's reattach state (0600, dir 0700). Exported so a
 // test produces exactly what the supervisor consumes. protocolVersion is the
-// version negotiated with the child: go-plugin's ReattachConfig() leaves it
-// zero, and a reattach across a protocol bump must be refused.
+// version negotiated with the child (go-plugin's ReattachConfig() leaves it zero); a reattach across a protocol bump must be refused.
 func SaveReattach(stateDir string, spec UnitSpec, rc *goplugin.ReattachConfig, protocolVersion int) error {
 	if rc == nil || stateDir == "" {
 		return nil
@@ -330,8 +322,7 @@ func (s *GoPluginService) clearReattach() {
 }
 
 // tryReattach adopts a surviving child ONLY when the persisted state names this
-// unit, kind and exact executable identity, and that pid is alive and still
-// speaks our protocol. Anything else: drop the state, spawn fresh.
+// unit, kind and exact executable identity, and that pid is alive and still speaks our protocol; anything else drops the state and spawns fresh.
 func (s *GoPluginService) tryReattach() (*goplugin.Client, any, bool) {
 	if s.tree.stateDir == "" {
 		return nil, nil, false

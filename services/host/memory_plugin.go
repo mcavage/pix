@@ -1,9 +1,8 @@
 // memory_plugin.go — adapts the built-in memory store (memory.go's *memStore) to
 // the go-plugin `plugin.MemoryStore` interface, plus the self-exec serve entry
-// point `pix-host plugin memory` runs.
-//
-// Every method maps 1:1 onto a *memStore method, or (observe/health) onto the
-// SAME shared helper the JSON-RPC surface calls, so the two cannot drift.
+// point `pix-host plugin memory` runs. Every method maps 1:1 onto a *memStore
+// method, or (observe/health) onto the SAME shared helper the JSON-RPC surface
+// calls, so the two cannot drift.
 
 package main
 

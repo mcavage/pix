@@ -1,15 +1,9 @@
 // pix-host — the single compiled binary for everything that runs on the HOST
-// (outside the sandbox). Convention: host code is Go, in-sandbox code (pi
-// extensions, in-box MCP) is TypeScript — see AGENTS.md.
+// (outside the sandbox). Convention: host code is Go, in-sandbox code (pi extensions, in-box MCP) is TypeScript — see AGENTS.md.
 //
-// Subcommands (one per host service):
-//
-//	memory         self-learning memory store (:11435, JSON-RPC), plus its
-//	               snapshot/restore data-safety primitives
-//	route          the model router CLI
-//	mcp --list     the local stdio MCP servers this binary serves: NONE
-//	plugin memory  built-in go-plugin server (self-exec, launched by `serve`)
-//	serve          run the long-running HTTP services together (memory)
+// Subcommands: memory (:11435 JSON-RPC store + snapshot/restore), route (model
+// router CLI), mcp --list (local stdio servers: NONE), plugin memory (built-in
+// go-plugin server, self-exec via `serve`), serve (the long-running services).
 //
 // Company-specific integrations are never compiled in: they ship as a pack, as
 // a container MCP server the sbx gateway runs, or as a standalone host daemon
@@ -68,10 +62,9 @@ func main() {
 
 // runMcpNames answers `pix-host mcp --list` (alias `list`): the names this
 // binary serves as a local stdio MCP server, one per line. That set is EMPTY
-// and printing it is the whole point — the launcher and doctor partition
-// configured servers into local-vs-remote from this output, and fail closed on
-// a failed probe. Exit 0 with no lines is the honest "I serve none of them";
-// exiting 2 would make every remote catalog server look host-executing.
+// and printing it is the whole point — the launcher/doctor partition servers
+// into local-vs-remote from this output. Exit 0 with no lines is honest;
+// exit 2 would make every remote catalog server look host-executing.
 func runMcpNames(args []string) {
 	if len(args) == 1 && (args[0] == "--list" || args[0] == "list") {
 		return // the empty set, exit 0
@@ -83,8 +76,7 @@ func runMcpNames(args []string) {
 
 // runPlugin is the self-exec entry `serve` launches for a capability slot: it
 // serves the built-in implementation as a go-plugin over the shared handshake.
-// memory is the only dispensable kind (plugin.PluginMap is the closed set); it
-// is not meant to be run by hand (go-plugin refuses without the handshake).
+// memory is the only dispensable kind (plugin.PluginMap is the closed set).
 func runPlugin(args []string) {
 	if len(args) == 1 && args[0] == "memory" {
 		servePluginMemory()

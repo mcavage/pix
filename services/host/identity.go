@@ -8,19 +8,15 @@ import (
 )
 
 // identity.go is the APPLICATION-LEVEL readiness surface of the host services.
-//
-// A TCP dial proves something holds a port. It does not prove the thing holding
-// it is ours, that it is the version we shipped, or that it can answer a request.
-// Every readiness verdict about memory (:11435) goes through this RPC instead, so
-// a foreign listener — most realistically a surviving daemon from an older
-// install — renders as "port held by an unidentified process", never as ready.
-//
-// The shape is fixed: {name, version, port, db_path, ready, degraded_reason}, and
-// the launcher's probe matches on name and version.
+// A TCP dial proves something holds a port, not that it is ours, our version,
+// or answerable — every readiness verdict about memory (:11435) goes through
+// this RPC instead, so a foreign listener (e.g. a surviving older daemon)
+// renders as "port held by an unidentified process", never as ready. Shape:
+// {name, version, port, db_path, ready, degraded_reason}; the launcher's probe
+// matches on name and version.
 
-// identityMemory is the wire name, matched EXACTLY by the launcher: change it and
-// every readiness verdict for memory turns into "unidentified process" until both
-// sides ship together.
+// identityMemory is the wire name, matched EXACTLY by the launcher: change it
+// and every verdict for memory becomes "unidentified process" until both ship together.
 const identityMemory = "pix-memory"
 
 // serviceIdentity is the payload of the `identity` JSON-RPC method.

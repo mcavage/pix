@@ -2,9 +2,8 @@
 // child supervisor per unit (Suture v4), running go-plugin subprocesses as its
 // units. Suture owns restart policy; this package owns what Suture cannot know
 // — what a unit IS (staged, sha-pinned, env-isolated, health-probed,
-// reattachable) and what pix-host must SEE (typed status and events). One child
-// supervisor per unit keeps failure accounting per unit: a unit that returns
-// ErrDoNotRestart takes out its own subtree and nothing else.
+// reattachable) and what pix-host must SEE (typed status and events). One
+// child supervisor per unit: a unit returning ErrDoNotRestart takes out only its own subtree.
 package supervise
 
 import (
@@ -36,8 +35,7 @@ type Budgets struct {
 	FailureDecay     float64
 }
 
-// DefaultBudgets are the production values, PINNED in code and not config so
-// nobody widens the stop budget past what launchd will wait for.
+// DefaultBudgets are the production values, PINNED in code (not config) so nobody widens the stop budget past what launchd will wait for.
 func DefaultBudgets() Budgets {
 	return Budgets{
 		Handshake:        30 * time.Second,
@@ -111,8 +109,7 @@ func (s UnitSpec) Validate() error {
 	return nil
 }
 
-// identity is the fingerprint a reattach must match: change the executable,
-// pin, kind or argv and the surviving process is NOT this unit.
+// identity is the fingerprint a reattach must match: change the executable, pin, kind or argv and the surviving process is NOT this unit.
 func (s UnitSpec) identity() string {
 	h := sha256.New()
 	for _, part := range append([]string{s.Name, s.Kind, s.Path, strings.ToLower(s.SHA), fmt.Sprint(s.SelfExec)}, s.Argv...) {
@@ -130,8 +127,7 @@ func redactKV(kv string) string {
 }
 
 // NewExternalUnit is the constructor every EXTERNAL unit is wired through (an
-// operator's [plugins.*] block, a pack-admitted [[services]] entry), so a pack
-// can never obtain a unit the config path could not.
+// operator's [plugins.*] block, a pack-admitted [[services]] entry), so a pack can never obtain a unit the config path could not.
 func NewExternalUnit(name, kind, path, sha string, argv, envAllow []string) (UnitSpec, error) {
 	u := UnitSpec{Name: name, Kind: kind, Path: path, SHA: strings.ToLower(strings.TrimSpace(sha)), Argv: argv, EnvAllow: envAllow}
 	if err := u.Validate(); err != nil {
@@ -141,8 +137,7 @@ func NewExternalUnit(name, kind, path, sha string, argv, envAllow []string) (Uni
 }
 
 // FilterEnv builds a child environment from an allowlist of names plus explicit
-// grants. Nothing else crosses the process boundary: the host carries cloud
-// creds, agent sockets and a bearer exactly one unit may see.
+// grants; nothing else crosses the process boundary (cloud creds, agent sockets, a bearer exactly one unit may see).
 func FilterEnv(allow []string, grant []string) []string {
 	allowed := make(map[string]bool, len(allow))
 	for _, n := range allow {
@@ -174,7 +169,7 @@ func FileSHA256(path string) (string, error) {
 // StageExecutable copies an external unit's binary into the supervisor-owned
 // staging dir, verifies the pin against the bytes it copied, and returns the
 // STAGED path. Execing that copy (never the original) closes the
-// verify-then-exec TOCTOU. A mismatch leaves nothing behind.
+// verify-then-exec TOCTOU; a mismatch leaves nothing behind.
 func StageExecutable(stageDir, unit, src, sha string) (string, error) {
 	want := strings.ToLower(strings.TrimSpace(sha))
 	if !shaHexRe.MatchString(want) {
@@ -216,8 +211,7 @@ func StageExecutable(stageDir, unit, src, sha string) (string, error) {
 }
 
 // Holder carries the dispensed client for one unit. A restart swaps it under
-// the readers, so an HTTP shim never learns its backing process changed; Use
-// tracks in-flight calls so a stop can DRAIN.
+// the readers, so an HTTP shim never learns its backing process changed; Use tracks in-flight calls so a stop can DRAIN.
 type Holder struct {
 	mu       sync.RWMutex
 	impl     any

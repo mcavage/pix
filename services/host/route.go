@@ -3,14 +3,10 @@
 // compiles the full intent->model map the agent reads (route compile), and
 // prints the current tables (route show / models). See docs/design/routing.md.
 //
-// Everything here answers about THIS HOST by default: the catalog says what a
-// model IS, but only a probed backend binding says what this host can CALL, and a
-// route compiled to a provider with no key is a guaranteed call-time failure. See
-// package pix/host/inference.
-//
-// `--catalog` restores the host-independent view on every subcommand. It is for
-// ONE job: baking the image's default routing.json in a maintainer checkout,
-// where filtering by the maintainer's personal keys would be exactly wrong.
+// Everything here answers about THIS HOST by default (pix/host/inference probes
+// which backend binding this host can actually CALL, not just what the catalog
+// says a model IS). `--catalog` restores the host-independent view, for baking
+// the image's default routing.json in a maintainer checkout.
 
 package main
 
@@ -72,8 +68,7 @@ Truth files (disk override, else embedded default):
 
 // routeView is the resolved answer to "what is this command talking about": the
 // three truth files, plus whether the registry was narrowed to this host's
-// callable bindings. Every subcommand takes one, so none can silently disagree
-// with the others about what "available" means.
+// callable bindings, so no subcommand can silently disagree about "available".
 type routeView struct {
 	reg *routing.Registry
 	sc  *routing.Scorecard
@@ -90,9 +85,9 @@ type routeView struct {
 }
 
 // loadView loads the three truth sources and narrows them to this host, or dies
-// with a clear message. A config that will not load is NOT fatal — failing the
-// whole command would hide the router behind an unrelated problem — so it
-// degrades to the catalog and says so through bound=false.
+// with a clear message. A config that will not load is NOT fatal (that would
+// hide the router behind an unrelated problem) — it degrades to the catalog
+// and says so through bound=false.
 func loadView(args []string) routeView {
 	reg, err := routing.LoadRegistry()
 	if err != nil {
@@ -267,10 +262,9 @@ func droppedIntents(pol *routing.Policy, cr routing.CompiledRouting) []string {
 	return out
 }
 
-// Reference workload for the real-dollar cost estimate. One representative agent
-// turn: enough input to carry real context, a modest completion. It is a
-// COMPARISON unit across models (same tokens for every row), not a prediction of
-// your bill. Priced from each model's actual per-Mtok rates via Model.CostFor.
+// Reference workload for the real-dollar cost estimate: one representative
+// agent turn, a COMPARISON unit across models (same tokens every row), not a
+// bill prediction. Priced via each model's actual per-Mtok rate, Model.CostFor.
 const (
 	refInputTokens  = 30_000
 	refOutputTokens = 3_000
@@ -285,10 +279,9 @@ func estRunCost(m routing.Model) string {
 	return fmt.Sprintf("$%.4f", m.CostFor(refInputTokens, refOutputTokens))
 }
 
-// modelStatus is the honest one-word answer to "can I use this model", and it
-// needs BOTH inputs: the CATALOG says whether Pix still routes to a model at all
-// (available:false means RETIRED — see the notes in models.json), and the
-// BINDINGS say whether this host can call it.
+// modelStatus is the honest one-word answer to "can I use this model": the
+// CATALOG says whether Pix still routes to it (available:false = RETIRED, see
+// models.json), and BINDINGS say whether this host can call it.
 func modelStatus(catalog routing.Model, wired, bound bool) string {
 	if !catalog.Available {
 		return "retired"
