@@ -34,7 +34,7 @@
 //	                                   rather than warning. No writer, no
 //	                                   reader, no file.)
 //	.pix/onboarding.json         — the IN-SANDBOX AGENT writes it (not Go);
-//	                                   Go reads + removes it (onboard.ReconcileOnboarding)
+//	                                   Go reads + removes it (provision.ReconcileOnboarding)
 //	.pix/host-state.json         — NEVER a file on EITHER side, by design
 //	                                   (hoststate.go); this file's job is to
 //	                                   prove that stays true even after every
@@ -64,8 +64,8 @@ import (
 	"pix/host/hostenv/hostenvtest"
 	"pix/host/routing"
 	"pix/host/workflow/launch"
-	"pix/host/workflow/onboard"
 	"pix/host/workflow/pack"
+	"pix/host/workflow/provision"
 	"pix/host/workspace"
 )
 
@@ -142,7 +142,7 @@ func TestMarkerRoundTrip_OllamaBridgeModel(t *testing.T) {
 //
 // Unlike every marker above, this file is written by the IN-SANDBOX AGENT,
 // not by Go — Go is the READER here. The round trip under test is therefore
-// "the exact JSON shape the agent is documented to write" -> onboard.ReconcileOnboarding
+// "the exact JSON shape the agent is documented to write" -> provision.ReconcileOnboarding
 // consumes it -> the marker is gone and config reflects it exactly once.
 
 func TestMarkerRoundTrip_OnboardingJSON(t *testing.T) {
@@ -154,19 +154,19 @@ func TestMarkerRoundTrip_OnboardingJSON(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	proposal := onboard.OnboardingResult{Version: 1, MCP: []string{config.GWServerName}}
+	proposal := provision.OnboardingResult{Version: 1, MCP: []string{config.GWServerName}}
 	data, err := json.Marshal(proposal)
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, onboard.FileName)
+	path := filepath.Join(dir, provision.OnboardingFileName)
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	env := hostenvtest.Env{Present: map[string]bool{}}.Build()
 	var out bytes.Buffer
-	onboard.ReconcileOnboarding(ws, env, strings.NewReader(""), &out, true, false, onboardDeps())
+	provision.ReconcileOnboarding(ws, env, strings.NewReader(""), &out, true, false)
 
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("onboarding.json must be removed once applied, stat err=%v", err)
@@ -195,11 +195,11 @@ func TestMarkerRoundTrip_HostStateNeverBecomesAWorkspaceFile(t *testing.T) {
 	pack.WriteMemoryScope(ws, &pack.Info{Manifest: pack.Manifest{MemoryScope: "work"}})
 	launch.WriteOllamaBridgeFile(ws, "qwen3.5:9b")
 	var out bytes.Buffer
-	if err := os.WriteFile(filepath.Join(ws, ".pix", onboard.FileName), []byte(`{"version":1}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(ws, ".pix", provision.OnboardingFileName), []byte(`{"version":1}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	env := hostenvtest.Env{Present: map[string]bool{}}.Build()
-	onboard.ReconcileOnboarding(ws, env, strings.NewReader(""), &out, true, false, onboardDeps())
+	provision.ReconcileOnboarding(ws, env, strings.NewReader(""), &out, true, false)
 
 	// ...and confirm host-state.json never appeared. See hoststate.go's own
 	// package comment + hoststate_test.go's

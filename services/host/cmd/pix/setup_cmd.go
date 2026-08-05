@@ -15,11 +15,9 @@ import (
 	"os"
 
 	"pix/host/cli"
-	"pix/host/config"
 	"pix/host/sandbox"
 	"pix/host/sys"
 	"pix/host/workflow/launch"
-	"pix/host/workflow/onboard"
 	"pix/host/workflow/pack"
 	"pix/host/workflow/provision"
 )
@@ -120,17 +118,13 @@ func (c *setupCmd) Run(d *cli.Deps) error {
 	if c.Verbose {
 		_ = os.Setenv("PIX_SETUP_VERBOSE", "1")
 	}
-	parsed, err := onboard.ParseOnboardArgs(hostArgs)
+	parsed, err := provision.ParseSetupArgs(hostArgs)
 	if err != nil {
 		return cli.UsageError{Err: err}
 	}
 	// Validate every semantic flag/value before pack adoption or any mutation;
 	// the host phase repeats the same pure validator.
-	preflightCfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
-	}
-	if err := provision.ValidateSetupSemantics(parsed, preflightCfg, env, hostBinaryResolver); err != nil {
+	if err := provision.ValidateSetupSemantics(parsed, env, hostBinaryResolver); err != nil {
 		return cli.UsageError{Err: err}
 	}
 
@@ -140,7 +134,7 @@ func (c *setupCmd) Run(d *cli.Deps) error {
 		if err := launch.ValidateRunWorkspace(c.Dir, knownVerb); err != nil {
 			return cli.UsageError{Err: err}
 		}
-		onboard.ReconcileOnboarding(c.Dir, env, d.In, d.Out, parsed.AssumeYes, d.Interactive, onboardDeps())
+		provision.ReconcileOnboarding(c.Dir, env, d.In, d.Out, parsed.AssumeYes, d.Interactive)
 		return nil
 	}
 	// DIR must exist AND be a directory BEFORE the host phase mutates real host
@@ -169,7 +163,7 @@ func (c *setupCmd) Run(d *cli.Deps) error {
 	}
 
 	// The host phase: check, apply the verified gaps, check again.
-	if err := provision.RunSetup(env, hostArgs, d.In, d.Out, d.Interactive); err != nil {
+	if err := provision.RunSetup(env, hostArgs, d.Out); err != nil {
 		var usage provision.ErrUsage
 		if errors.As(err, &usage) {
 			// an argument mistake, caught before any probe or mutation

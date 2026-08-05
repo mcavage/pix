@@ -1,26 +1,22 @@
-// Package provision is the one setup loop: CHECK, apply what is missing,
-// CHECK AGAIN — and success comes only from the second check.
-// It replaces the setup/onboard phase machinery (ordered mutation steps, a
-// receipt writer, a prompt budget, a handoff, and their several private
-// notions of "done") with the shape all of that was approximating. The rules
-// are small and each one is a real incident:
+// Package provision is `pix setup` and the host half of onboarding: one loop —
+// CHECK, apply what is missing, CHECK AGAIN — where success comes only from the
+// second check. Three rules, each a real incident:
 //
-//   - The second check is authoritative. An apply that returns nil has
-//     reported success; it has not PROVEN it. Provisioning that trusts the
-//     mutation instead of re-probing is how "setup complete" ships next to a
-//     host that cannot launch.
-//   - Only a VERIFIED gap is applied. Unknown means the probe could not see;
-//     mutating on that is guessing with the user's machine. Denied means the
-//     org said no; applying cannot help.
-//   - A step that is already ready is never touched. Provisioning is
-//     idempotent because it re-derives what to do from the first check, not
-//     from a receipt of what happened last time.
+//   - The second check is authoritative. An apply returning nil has REPORTED
+//     success, not proven it; trusting the mutation is how "setup complete"
+//     ships next to a host that cannot launch.
+//   - Only a VERIFIED gap is applied. Unknown means the probe could not see, and
+//     mutating on that is guessing with the user's machine; denied means the org
+//     said no, and applying cannot help.
+//   - An already-ready step is never touched, because the loop re-derives what
+//     to do from the first check rather than a receipt of last time.
 package provision
 
 import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"time"
 
 	"pix/host/health"
@@ -117,7 +113,7 @@ func Run(ctx context.Context, opts Options, steps ...Step) Outcome {
 		if !ok || after.OK() {
 			continue
 		}
-		if contains(o.Applied, stepName(s)) {
+		if slices.Contains(o.Applied, stepName(s)) {
 			o.Unverified = append(o.Unverified, Unverified{stepName(s),
 				"apply reported success but the second check still finds it " + string(after.Effective())})
 		}
@@ -150,24 +146,12 @@ func stepName(s Step) string {
 	return s.Probe.Name()
 }
 
-func contains(list []string, s string) bool {
-	for _, x := range list {
-		if x == s {
-			return true
-		}
-	}
-	return false
-}
-
 // Verified reports whether the SECOND check proved this step ready. It is the
 // only success predicate in this package.
 func (o Outcome) Verified(name string) bool {
 	r, ok := o.After.Find(name)
 	return ok && r.OK()
 }
-
-// Ready reports whether the second check proved every required capability.
-func (o Outcome) Ready() bool { return o.After.Ready() }
 
 // ExitCode is the second check's exit code: a verified gap in something
 // required fails, an unknown does not.

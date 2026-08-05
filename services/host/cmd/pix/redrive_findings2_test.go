@@ -29,7 +29,6 @@ import (
 	"pix/host/sys"
 	"pix/host/sys/systest"
 	"pix/host/workflow/launch"
-	"pix/host/workflow/onboard"
 	"pix/host/workflow/provision"
 )
 
@@ -149,7 +148,7 @@ func TestReconcileOnboarding_CatalogGateLeavesFileAndConfig(t *testing.T) {
 	env := catalogGateEnv(t, map[string]string{"sbx mcp ls": "atlassian\n"})
 
 	var out bytes.Buffer
-	onboard.ReconcileOnboarding(ws, env, strings.NewReader(""), &out, true, false, onboardDeps())
+	provision.ReconcileOnboarding(ws, env, strings.NewReader(""), &out, true, false)
 
 	if _, err := os.Stat(fp); err != nil {
 		t.Errorf("proposal file must be left in place on a gate failure, err=%v", err)
@@ -166,21 +165,11 @@ func TestReconcileOnboarding_CatalogGateLeavesFileAndConfig(t *testing.T) {
 	}
 }
 
-// TestOnboardCatalogAllowlist_IsTheShippedCatalog: the accepted catalog names
-// derive from mcp.McpCatalogNames — no independent list that can drift.
-func TestOnboardCatalogAllowlist_IsTheShippedCatalog(t *testing.T) {
-	if len(onboard.MCPCatalogAllow) != len(mcp.McpCatalogNames) {
-		t.Fatalf("allowlist (%v) must equal mcp.McpCatalogNames (%v)", onboard.MCPCatalogAllow, mcp.McpCatalogNames)
-	}
-	for n := range mcp.McpCatalogNames {
-		if !onboard.MCPCatalogAllow[n] {
-			t.Errorf("shipped catalog name %q missing from the onboarding allowlist", n)
-		}
-	}
-	if onboard.MCPCatalogAllow["linear"] {
-		t.Error("\"linear\" is not a shipped catalog server and must not be accepted (the drift finding 8 removes)")
-	}
-}
+// Finding 8's drift guard is now structural: onboarding reads
+// mcp.McpCatalogNames directly, so the copy that could drift out of step with
+// `pix mcp bundle` no longer exists to be tested. What a proposal does with a
+// catalog-shaped name that is NOT shipped is covered where the validation
+// lives (provision: TestValidateOnboarding_Allowlist rejects "linear").
 
 // --- finding 9: local denied verdict + gog registration tri-state ----------
 

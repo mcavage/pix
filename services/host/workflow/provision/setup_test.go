@@ -12,17 +12,14 @@ import (
 	"pix/host/health"
 	"pix/host/hostenv"
 	"pix/host/sys"
-	"pix/host/workflow/onboard"
 	"pix/host/workflow/pack"
 )
 
-// The setup port's safety scenarios, ported from the deleted phase machine's
-// suite. Every one of them runs against REAL executables and REAL files: the
-// probes here exec whatever is on PATH, so each test writes a small script that
+// Setup's safety scenarios, every one against REAL executables and REAL files:
+// the probes exec whatever is on PATH, so each test writes a small script that
 // behaves like the boundary it stands for (a key store that refuses, an ollama
-// that hangs up, one that lists weights). Nothing stubs a probe's answer,
-// because the property under test is precisely how a boundary's behaviour is
-// classified.
+// that hangs up, one that lists weights). Nothing stubs a probe's answer — how a
+// boundary's behaviour is CLASSIFIED is the property under test.
 
 // fixtureBin writes an executable script and puts its directory on PATH for the
 // duration of the test. The script IS the boundary — no seam, no fake.
@@ -59,13 +56,12 @@ func realEnv() hostenv.Env { return hostenv.Env{System: sys.Real{}, Quiet: true}
 
 // --- what setup may and may not do ------------------------------------------
 
-// The surviving scope is a property of the step table, not of prose: exactly
-// three capabilities carry an Apply. If a future edit gives `providers` one,
-// this fails — which is the point, since setup collecting credentials again is
-// the regression this port exists to prevent.
+// Scope is a property of the step table, not of prose: exactly three
+// capabilities carry an Apply. If a future edit gives `providers` one, this
+// fails — setup collecting credentials again is the regression it prevents.
 func TestSetupSteps_OnlyLaunchdPacksAndModelsApply(t *testing.T) {
 	cfg := &config.Config{}
-	steps := SetupSteps(cfg, realEnv(), onboard.Opts{Packs: []string{"acme/pack"}, PullModels: true}, os.Stderr)
+	steps := setupSteps(cfg, realEnv(), Opts{Packs: []string{"acme/pack"}, PullModels: true}, os.Stderr)
 	got := map[string]bool{}
 	for _, s := range steps {
 		got[s.Name] = s.Apply != nil
@@ -81,49 +77,37 @@ func TestSetupSteps_OnlyLaunchdPacksAndModelsApply(t *testing.T) {
 	}
 }
 
-// Consent is structural: with no --pull-models there is no apply at all, so a
-// multi-gigabyte download cannot be a side effect of running setup. A broad
-// --yes is NOT consent.
-func TestSetupSteps_ModelPullNeedsExplicitConsent(t *testing.T) {
+// Consent is structural: a step carries an Apply only because a flag asked for
+// it. Without --pull-models a multi-gigabyte download cannot be a side effect of
+// running setup, and without --pack no pack is manufactured to turn a row green.
+// A broad --yes is NOT consent — it suppresses questions, it does not answer them.
+func TestSetupSteps_ApplyOnlyWhenAFlagAskedForIt(t *testing.T) {
 	cfg := &config.Config{MemoryEmbedModel: "nomic-embed-text"}
 	for _, tc := range []struct {
-		name string
-		opts onboard.Opts
-		want bool
+		name, step string
+		opts       Opts
+		want       bool
 	}{
-		{"no flags", onboard.Opts{}, false},
-		{"--yes alone", onboard.Opts{AssumeYes: true}, false},
-		{"--pull-models", onboard.Opts{PullModels: true}, true},
+		{"no flags: no pull", "models", Opts{}, false},
+		{"--yes alone is not consent", "models", Opts{AssumeYes: true}, false},
+		{"--pull-models", "models", Opts{PullModels: true}, true},
+		{"no flags: no pack adoption", "pack", Opts{}, false},
+		{"--pack", "pack", Opts{Packs: []string{"acme/pack"}}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, s := range SetupSteps(cfg, realEnv(), tc.opts, os.Stderr) {
-				if s.Name != "models" {
-					continue
-				}
-				if (s.Apply != nil) != tc.want {
-					t.Fatalf("models apply present = %v, want %v", s.Apply != nil, tc.want)
+			for _, s := range setupSteps(cfg, realEnv(), tc.opts, os.Stderr) {
+				if s.Name == tc.step && (s.Apply != nil) != tc.want {
+					t.Fatalf("%s apply present = %v, want %v", tc.step, s.Apply != nil, tc.want)
 				}
 			}
 		})
 	}
 }
 
-// A pack is never manufactured to turn a row green: with no --pack there is
-// nothing to adopt, so the step is probe-only and the report names the command.
-func TestSetupSteps_NoPackRequestedMeansNoPackApply(t *testing.T) {
-	for _, s := range SetupSteps(&config.Config{}, realEnv(), onboard.Opts{}, os.Stderr) {
-		if s.Name == "pack" && s.Apply != nil {
-			t.Fatal("setup adopted a pack nobody asked for")
-		}
-	}
-}
-
-// A pack RunPackUse refuses (Tier-1, non-TTY, no --yes) or is otherwise broken
-// must abort the ENTIRE setup — the discarded error this test guards against
-// used to let a refused/broken pack fall straight through to "setup complete",
-// because PackProbe is not itself a required probe (a host with no pack is
-// fine) so the second check alone never caught it. Real pack, real Tier-1
-// gate, real config file: nothing here is stubbed.
+// A pack RunPackUse refuses (Tier-1, non-TTY, no --yes) must abort the ENTIRE
+// setup. The discarded error this guards against let a refused pack fall through
+// to "setup complete": PackProbe is not required (a host with no pack is fine),
+// so the second check alone never caught it. Real pack, real gate, real config.
 func TestPackApply_RefusedPackAbortsAndConfigUnchanged(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
@@ -145,7 +129,7 @@ func TestPackApply_RefusedPackAbortsAndConfigUnchanged(t *testing.T) {
 	}
 
 	// --- unit level: packApply itself must surface RunPackUse's error -------
-	apply := packApply(realEnv(), onboard.Opts{Packs: []string{root}}, io.Discard)
+	apply := packApply(realEnv(), Opts{Packs: []string{root}}, io.Discard)
 	if apply == nil {
 		t.Fatal("--pack must produce an apply")
 	}
@@ -156,8 +140,8 @@ func TestPackApply_RefusedPackAbortsAndConfigUnchanged(t *testing.T) {
 	}
 
 	// --- provision-loop level: Failed, never Applied -------------------------
-	o := Run(context.Background(), Options{Budget: SetupBudget},
-		SetupSteps(&config.Config{}, realEnv(), onboard.Opts{Packs: []string{root}}, io.Discard)...)
+	o := Run(context.Background(), Options{Budget: setupBudget},
+		setupSteps(&config.Config{}, realEnv(), Opts{Packs: []string{root}}, io.Discard)...)
 	if len(o.Failed) != 1 || o.Failed[0].Name != "pack" {
 		t.Fatalf("outcome.Failed = %+v, want exactly one failure named pack", o.Failed)
 	}
@@ -168,7 +152,7 @@ func TestPackApply_RefusedPackAbortsAndConfigUnchanged(t *testing.T) {
 	}
 
 	// --- RunSetup level: the whole command aborts, never reports success ----
-	if err := RunSetup(realEnv(), []string{"--pack", root}, strings.NewReader(""), io.Discard, false); err == nil {
+	if err := RunSetup(realEnv(), []string{"--pack", root}, io.Discard); err == nil {
 		t.Fatal("RunSetup must abort on a refused pack, not report success")
 	} else if !strings.Contains(err.Error(), "--yes") {
 		t.Errorf("RunSetup's error must carry the pack's own refusal, got: %v", err)
@@ -189,45 +173,39 @@ func TestPackApply_RefusedPackAbortsAndConfigUnchanged(t *testing.T) {
 
 // --- the provider key probe stays tri-state ---------------------------------
 
-func TestProviderKeysProbe_TriState(t *testing.T) {
+// The tri-state classification itself is health.ProviderKeyProbe's (proven in
+// health/probes_test.go, in both any-of and all-of modes). What setup owns is
+// the WIRING: any-of over the env vars a launch needs, so the row that would
+// otherwise refuse a launch says "unknown" when the store merely broke, and
+// "ready" as soon as ONE key is listed. Real `sbx` fixtures, through the real
+// step table.
+func TestSetupSteps_ProviderKeysAreAnyOfAndTriState(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		script string
-		want   health.Status
-		fix    bool
+		name, script string
+		want         health.Status
 	}{
-		// The store ANSWERED and listed a key: the only ready verdict.
-		{"answered with a key", "echo ANTHROPIC_API_KEY", health.StatusReady, false},
-		// The store ANSWERED and listed none: a verified gap, with the one
-		// command that solicits a credential.
-		{"answered without keys", "echo GITHUB_TOKEN", health.StatusAbsent, true},
-		// The store BROKE. This is the incident: a transient failure must never
-		// read as "no key", because a no-key answer refuses a launch.
-		{"store failed", "echo 'boom' >&2; exit 3", health.StatusUnknown, false},
-		// The store REFUSED. That is a positive answer, and no setup step can
-		// grant a permission — so it is denied, and denied is never applied.
-		{"store refused", "echo 'permission denied'; exit 1", health.StatusDenied, true},
+		{"one key is enough", "echo ANTHROPIC_API_KEY", health.StatusReady},
+		{"answered without keys", "echo GITHUB_TOKEN", health.StatusAbsent},
+		// The incident: a transient failure must never read as "no key", because
+		// a no-key answer refuses a launch.
+		{"store failed", "echo 'boom' >&2; exit 3", health.StatusUnknown},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fixtureBin(t, "sbx", tc.script)
-			r := providerKeysProbe{Env: realEnv()}.Check(context.Background())
+			var probe health.Probe
+			for _, s := range setupSteps(&config.Config{}, realEnv(), Opts{}, io.Discard) {
+				if s.Name == "providers" {
+					probe = s.Probe
+					if s.Apply != nil {
+						t.Fatal("setup must never carry an apply for provider keys")
+					}
+				}
+			}
+			r := probe.Check(context.Background())
 			if r.Effective() != tc.want {
 				t.Fatalf("status = %q (%s), want %q", r.Effective(), r.Evidence, tc.want)
 			}
-			if (strings.TrimSpace(r.Fix) != "") != tc.fix {
-				t.Errorf("fix = %q, want present=%v", r.Fix, tc.fix)
-			}
 		})
-	}
-}
-
-// A key store that is not installed at all is unknown, not absent: we learned
-// nothing about this host's keys.
-func TestProviderKeysProbe_NoStoreIsUnknown(t *testing.T) {
-	binDir(t) // empty PATH: no sbx anywhere
-	r := providerKeysProbe{Env: realEnv()}.Check(context.Background())
-	if r.Effective() != health.StatusUnknown {
-		t.Fatalf("status = %q, want unknown", r.Effective())
 	}
 }
 
@@ -257,8 +235,7 @@ func TestOllamaModelsProbe_ClassifiesTheListing(t *testing.T) {
 	}
 }
 
-// Ollama absent is unknown and optional: a host without it runs Pix fine, and
-// setup never installs it.
+// Ollama absent is unknown and optional: a host without it runs Pix fine.
 func TestOllamaModelsProbe_NoOllamaIsUnknownAndOptional(t *testing.T) {
 	binDir(t)
 	p := ollamaModelsProbe{Env: realEnv(), Tags: []string{"nomic-embed-text"}}
@@ -270,8 +247,8 @@ func TestOllamaModelsProbe_NoOllamaIsUnknownAndOptional(t *testing.T) {
 	}
 }
 
-// The apply pulls ONLY tags the listing positively lacked, and it proves it by
-// letting a real `ollama` fixture record its own argv.
+// The apply pulls ONLY tags the listing positively lacked, proven by letting a
+// real `ollama` fixture record its own argv.
 func TestModelsApply_PullsOnlyConfirmedMissingTags(t *testing.T) {
 	dir := binDir(t)
 	log := filepath.Join(dir, "pulls.log")
@@ -280,7 +257,7 @@ list) echo "nomic-embed-text:latest	abc" ;;
 pull) echo "$2" >> `+log+` ;;
 esac`)
 	cfg := &config.Config{MemoryEmbedModel: "nomic-embed-text", MemoryWatcherModel: "qwen3:4b"}
-	apply := modelsApply(realEnv(), cfg, onboard.Opts{PullModels: true})
+	apply := modelsApply(realEnv(), cfg, Opts{PullModels: true})
 	if apply == nil {
 		t.Fatal("--pull-models must produce an apply")
 	}
@@ -296,8 +273,7 @@ esac`)
 	}
 }
 
-// An unreadable listing means the apply pulls NOTHING and says why. This is the
-// same rule as the probe's unknown, enforced at the mutation.
+// An unreadable listing pulls NOTHING: the probe's unknown rule, at the mutation.
 func TestModelsApply_UnreadableListingPullsNothing(t *testing.T) {
 	dir := binDir(t)
 	log := filepath.Join(dir, "pulls.log")
@@ -306,7 +282,7 @@ list) exit 7 ;;
 pull) echo "$2" >> `+log+` ;;
 esac`)
 	cfg := &config.Config{MemoryEmbedModel: "nomic-embed-text"}
-	err := modelsApply(realEnv(), cfg, onboard.Opts{PullModels: true})(context.Background())
+	err := modelsApply(realEnv(), cfg, Opts{PullModels: true})(context.Background())
 	if err == nil {
 		t.Fatal("an unreadable listing must fail the apply, not silently pull")
 	}
@@ -317,12 +293,12 @@ esac`)
 
 // --- the loop's verdict is the second check ---------------------------------
 
-// End to end over the real step table with a real (broken) world: no step can
-// be proven, and the run's verdict comes from the second check alone.
+// End to end over the real step table in a real (broken) world: nothing can be
+// proven, and the verdict comes from the second check alone.
 func TestSetupSteps_UnprovableWorldIsNotReady(t *testing.T) {
 	fixtureBin(t, "sbx", "exit 4")
-	o := Run(context.Background(), Options{Budget: SetupBudget},
-		SetupSteps(&config.Config{}, realEnv(), onboard.Opts{}, os.Stderr)...)
+	o := Run(context.Background(), Options{Budget: setupBudget},
+		setupSteps(&config.Config{}, realEnv(), Opts{}, os.Stderr)...)
 	if o.Verified("providers") {
 		t.Fatal("a broken key store must never verify providers")
 	}
@@ -345,17 +321,11 @@ func TestSetupSteps_UnprovableWorldIsNotReady(t *testing.T) {
 	}
 }
 
-// FlagTakesValue and the pack-arg shorthand are the CLI signature Story11
-// builds on; they are unchanged by the port.
+// The pack-arg shorthand is the CLI signature Story11 builds on; it is
+// unchanged by the fold. (Flag arity is no longer a separate table: kong owns
+// the user-facing grammar and ParseSetupArgs owns the host argv, so the third
+// copy that had to agree with both is gone.)
 func TestSetupCLISignatureIsPreserved(t *testing.T) {
-	for _, f := range []string{"--account", "--credentials", "--knowledge", "--mcp", "--model", "--models", "--pack", "--with"} {
-		if !FlagTakesValue(f) {
-			t.Errorf("%s must still consume a value", f)
-		}
-	}
-	if FlagTakesValue("--yes") || FlagTakesValue("--pull-models") {
-		t.Error("a boolean flag must not swallow the next token")
-	}
 	if got := NormalizeSetupPackArg("acme/work-pack"); got != "https://github.com/acme/work-pack.git" {
 		t.Errorf("owner/repo shorthand = %q", got)
 	}

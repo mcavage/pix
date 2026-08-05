@@ -190,13 +190,6 @@
       "edges": 6,
       "exits": 0
     },
-    "pix/host/workflow/onboard": {
-      "prod_loc": 370,
-      "exports": 10,
-      "globals": 3,
-      "edges": 7,
-      "exits": 0
-    },
     "pix/host/workflow/pack": {
       "prod_loc": 3983,
       "exports": 43,
@@ -205,8 +198,8 @@
       "exits": 0
     },
     "pix/host/workflow/provision": {
-      "prod_loc": 1190,
-      "exports": 35,
+      "prod_loc": 1308,
+      "exports": 30,
       "globals": 11,
       "edges": 12,
       "exits": 0

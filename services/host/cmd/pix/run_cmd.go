@@ -30,8 +30,8 @@ import (
 	"pix/host/service"
 	"pix/host/workflow/doctor"
 	"pix/host/workflow/launch"
-	"pix/host/workflow/onboard"
 	"pix/host/workflow/pack"
+	"pix/host/workflow/provision"
 	"pix/host/workspace"
 )
 
@@ -263,7 +263,7 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	// Reconcile a prior in-session onboarding proposal (<workspace>/.pix/
 	// onboarding.json) BEFORE LoadResolvedConfig so a fresh create picks it up.
 	// Best-effort; a non-TTY just leaves the file.
-	onboard.ReconcileOnboarding(o.Workspace, defaultShellEnv(), os.Stdin, os.Stdout, false, d.Interactive, onboardDeps())
+	provision.ReconcileOnboarding(o.Workspace, defaultShellEnv(), os.Stdin, os.Stdout, false, d.Interactive)
 
 	// Load the config for the rest of run (kits, mcp, gog, pack).
 	cfg, _, err := workspace.LoadResolvedConfig()
