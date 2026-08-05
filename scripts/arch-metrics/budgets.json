@@ -16,11 +16,11 @@
       "exits": 4
     },
     "pix/host/cmd/pix": {
-      "prod_loc": 3978,
+      "prod_loc": 3815,
       "exports": 19,
       "globals": 14,
       "edges": 24,
-      "exits": 9
+      "exits": 3
     },
     "pix/host/cmd/pix/corpus": {
       "prod_loc": 588,
@@ -30,9 +30,9 @@
       "exits": 0
     },
     "pix/host/config": {
-      "prod_loc": 1300,
-      "exports": 45,
-      "globals": 15,
+      "prod_loc": 804,
+      "exports": 39,
+      "globals": 14,
       "edges": 0,
       "exits": 0
     },
@@ -44,8 +44,8 @@
       "exits": 0
     },
     "pix/host/health": {
-      "prod_loc": 1191,
-      "exports": 42,
+      "prod_loc": 1161,
+      "exports": 41,
       "globals": 29,
       "edges": 3,
       "exits": 0
@@ -65,30 +65,30 @@
       "exits": 0
     },
     "pix/host/inference": {
-      "prod_loc": 919,
-      "exports": 33,
+      "prod_loc": 808,
+      "exports": 30,
       "globals": 7,
-      "edges": 4,
+      "edges": 3,
       "exits": 0
     },
     "pix/host/launcher": {
-      "prod_loc": 75,
+      "prod_loc": 66,
       "exports": 4,
       "globals": 2,
       "edges": 0,
       "exits": 0
     },
     "pix/host/lease": {
-      "prod_loc": 1159,
-      "exports": 22,
+      "prod_loc": 705,
+      "exports": 17,
       "globals": 11,
       "edges": 0,
       "exits": 0
     },
     "pix/host/mcp": {
-      "prod_loc": 954,
-      "exports": 33,
-      "globals": 17,
+      "prod_loc": 892,
+      "exports": 29,
+      "globals": 15,
       "edges": 7,
       "exits": 3
     },
@@ -142,10 +142,10 @@
       "exits": 9
     },
     "pix/host/service": {
-      "prod_loc": 1718,
+      "prod_loc": 1522,
       "exports": 24,
       "globals": 17,
-      "edges": 6,
+      "edges": 5,
       "exits": 5
     },
     "pix/host/supervise": {
@@ -156,35 +156,35 @@
       "exits": 0
     },
     "pix/host/sys": {
-      "prod_loc": 549,
+      "prod_loc": 486,
       "exports": 24,
       "globals": 11,
       "edges": 1,
       "exits": 0
     },
     "pix/host/sys/systest": {
-      "prod_loc": 364,
+      "prod_loc": 326,
       "exports": 6,
       "globals": 1,
       "edges": 1,
       "exits": 0
     },
     "pix/host/workflow/doctor": {
-      "prod_loc": 666,
-      "exports": 23,
+      "prod_loc": 623,
+      "exports": 22,
       "globals": 8,
-      "edges": 14,
+      "edges": 13,
       "exits": 0
     },
     "pix/host/workflow/launch": {
-      "prod_loc": 3270,
-      "exports": 133,
+      "prod_loc": 2292,
+      "exports": 110,
       "globals": 40,
-      "edges": 15,
+      "edges": 14,
       "exits": 0
     },
     "pix/host/workflow/models": {
-      "prod_loc": 1500,
+      "prod_loc": 1252,
       "exports": 21,
       "globals": 6,
       "edges": 6,
@@ -212,7 +212,7 @@
       "exits": 0
     },
     "pix/host/workflow/reset": {
-      "prod_loc": 755,
+      "prod_loc": 732,
       "exports": 10,
       "globals": 5,
       "edges": 6,
@@ -226,9 +226,9 @@
       "exits": 0
     },
     "pix/host/workspace": {
-      "prod_loc": 1061,
-      "exports": 42,
-      "globals": 16,
+      "prod_loc": 272,
+      "exports": 14,
+      "globals": 2,
       "edges": 2,
       "exits": 0
     }
