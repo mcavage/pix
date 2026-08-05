@@ -12,10 +12,7 @@ import (
 
 	"pix/host/cli"
 	"pix/host/config"
-	"pix/host/hostenv"
-	"pix/host/hostenv/hostenvtest"
 	"pix/host/rpc"
-	"pix/host/sys/systest"
 )
 
 // fixedNow returns a stable timestamp so .bak suffixes are predictable in tests.
@@ -371,7 +368,7 @@ func TestExecuteReset_ServeUpAbortsDataMove(t *testing.T) {
 	p := tempPaths(t, root)
 	a := Plan(resetCfg(), p, Opts{})
 
-	env := hostenvtest.Env{Present: map[string]bool{}, Ports: map[int]bool{rpc.MemoryPortDefault: true}}.Build()
+	env := resetHost{ports: map[int]bool{rpc.MemoryPortDefault: true}}
 	var buf bytes.Buffer
 	_, err := executeReset(a, DefaultResetFS(), env, &buf, fixedNow)
 	if err == nil {
@@ -669,24 +666,17 @@ func TestExecuteReset_KeepMemoryReadDirErrorSurfaces(t *testing.T) {
 	}
 }
 
-// noToolEnv is a hostenv.Env with no sbx on PATH, so the executor degrades (prints
-// commands) without touching the host. The serve-stop no longer probes PATH (it
-// is pidfile-based via service.Stop), so this env exercises the sbx path only.
-func noToolEnv() hostenv.Env {
-	return hostenvtest.Env{Present: map[string]bool{}, Output: map[string]string{}}.Build()
-}
+// noToolEnv is a host with no sbx on PATH, so the executor degrades (prints
+// commands) without touching the machine. The serve-stop no longer probes PATH
+// (it is pidfile-based via service.Stop), so this exercises the sbx path only.
+func noToolEnv() resetHost { return resetHost{} }
 
 // TestResolveResetPaths_RelativeMemoryDBAbsolute gates round-6: a relative
 // MEMORY_DB must be normalized to an absolute path at resolution so the
 // --keep-memory preserve set matches the sweep's absolute entries.
 func TestResolveResetPaths_RelativeMemoryDBAbsolute(t *testing.T) {
 	t.Chdir(t.TempDir())
-	env := hostenv.Env{System: &systest.Fake{HomeDirFn: func() string { return "/home/fake" }, GetenvFn: func(k string) string {
-		if k == "MEMORY_DB" {
-			return ".pix/custom-memory.db"
-		}
-		return ""
-	}}}
+	env := resetHost{home: "/home/fake", envVars: map[string]string{"MEMORY_DB": ".pix/custom-memory.db"}}
 	p := ResolveResetPaths(env)
 	if !filepath.IsAbs(p.memoryDB) {
 		t.Errorf("memoryDB = %q, want absolute", p.memoryDB)
@@ -723,15 +713,8 @@ func TestExecuteReset_ClearsRuntimeFilesAndRestarts(t *testing.T) {
 
 	// dial returns true exactly once: wasUp probe sees it up, the post-stop guard
 	// sees it down (so the data move isn't blocked and restart runs).
-	firstDial := true
-	env := noToolEnv()
-	systest.Of(env.System).DialLocalFn = func(int) bool {
-		if firstDial {
-			firstDial = false
-			return true
-		}
-		return false
-	}
+	probed := false
+	env := dialUpThenDownHost{probed: &probed}
 
 	a := Actions{RuntimeFiles: []string{pid, lock}}
 	var buf bytes.Buffer
