@@ -38,6 +38,7 @@ type UnitStatus struct {
 	Generations int
 	LastError   string
 	Since       time.Time
+	token       suture.ServiceToken // internal: which child Remove takes back out
 }
 
 // EventType is the typed vocabulary of supervision events.
@@ -70,8 +71,7 @@ type Event struct {
 // eventRing caps retained events; a supervisor must never grow without bound.
 const eventRing = 256
 
-// Config builds a Tree. Everything is explicit so a test can point the tree at
-// temp dirs and shrunk budgets without touching global state.
+// Config builds a Tree; everything is explicit so a test can point it at temp dirs and shrunk budgets without touching global state.
 type Config struct {
 	SelfPath  string // this binary, re-exec'd for self-exec units
 	StageDir  string // where external unit binaries are staged + verified
@@ -159,8 +159,7 @@ func (t *Tree) Start(ctx context.Context) {
 }
 
 // Add supervises a unit and BLOCKS until its first generation is healthy, or
-// that attempt fails — a misconfigured unit fails `serve` at startup, loudly,
-// instead of flapping in the dark. A unit that dies later is Suture's problem.
+// that attempt fails loudly at `serve` startup; a unit that dies later is Suture's problem.
 func (t *Tree) Add(spec UnitSpec, health HealthFunc) (*Holder, error) {
 	if err := spec.Validate(); err != nil {
 		return nil, err
@@ -183,6 +182,9 @@ func (t *Tree) Add(spec UnitSpec, health HealthFunc) (*Holder, error) {
 	child := suture.New("unit."+spec.Name, t.spec(spec.Name))
 	child.Add(svc)
 	token := t.root.Add(child)
+	t.mu.Lock()
+	t.units[spec.Name].token = token
+	t.mu.Unlock()
 
 	wait := t.budgets.Handshake + t.budgets.HealthTimeout
 	select {
@@ -197,10 +199,8 @@ func (t *Tree) Add(spec UnitSpec, health HealthFunc) (*Holder, error) {
 	}
 }
 
-// abandon takes a unit that never came up back OUT of the tree. Without it the
-// child supervisor keeps restarting, with backoff and forever, a unit whose
-// caller already gave up: a background restart leak nobody is watching.
-// RemoveAndWait means the child is gone (or the stop budget expired) first.
+// abandon takes a unit that never came up back OUT of the tree — without it the
+// child supervisor keeps restarting a unit whose caller already gave up forever.
 func (t *Tree) abandon(name string, token suture.ServiceToken, cause error) error {
 	if err := t.root.RemoveAndWait(token, t.budgets.Stop); err != nil {
 		t.logf("supervise: unit %s did not leave the tree cleanly: %v", name, err)
@@ -212,8 +212,7 @@ func (t *Tree) abandon(name string, token suture.ServiceToken, cause error) erro
 	return cause
 }
 
-// Stop cancels every unit and waits for the root supervisor to finish. Safe to
-// call more than once, and safe with nothing started.
+// Stop cancels every unit and waits for the root supervisor; safe to call more than once, or with nothing started.
 func (t *Tree) Stop() {
 	t.mu.Lock()
 	cancel, done, started := t.cancel, t.done, t.started
@@ -231,6 +230,23 @@ func (t *Tree) Stop() {
 	}
 	// Belt and braces for any client that outlived its Serve goroutine.
 	goplugin.CleanupClients()
+}
+
+// Remove stops and forgets one supervised unit — reconciliation's vocabulary
+// for "no longer wanted" (dropped from a desired set, or superseded ahead of a
+// same-name Add with a changed spec). A name never supervised is a no-op.
+func (t *Tree) Remove(name string) error {
+	t.mu.Lock()
+	st, ok := t.units[name]
+	t.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	err := t.root.RemoveAndWait(st.token, t.budgets.Stop)
+	t.mu.Lock()
+	delete(t.units, name)
+	t.mu.Unlock()
+	return err
 }
 
 // Unit returns one unit's status snapshot.
@@ -290,8 +306,7 @@ func (t *Tree) emit(e Event) {
 	}
 }
 
-// sutureHook translates Suture's own events into the typed vocabulary, so
-// backoff/resume/stop-timeout/panic show up in Events() too: one stream.
+// sutureHook translates Suture's own events into the typed vocabulary (backoff/resume/stop-timeout/panic), so Events() is one stream.
 func (t *Tree) sutureHook(unit string) suture.EventHook {
 	return func(ev suture.Event) {
 		e := Event{Unit: unit, Message: ev.String()}

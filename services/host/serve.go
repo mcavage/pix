@@ -31,6 +31,7 @@ import (
 	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/monitor"
+	"pix/host/workflow/pack"
 )
 
 // hostService is one mux-based listener `serve` owns: a name for the log line,
@@ -102,6 +103,28 @@ func runServe(argv []string) {
 	selfPath, err := os.Executable()
 	if err != nil {
 		fatalf("locate self: %v", err)
+	}
+	// Every active pack's Tier-1-accepted [[services]] view, reconciled against
+	// the tree; no `plugins.*` shortcut, and one bad pack's load/trust failure
+	// only logs, never blocking `serve` or a sibling pack.
+	for _, root := range pack.ActivePackRoots(cfg, "") {
+		p, perr := pack.LoadPack(root)
+		if perr != nil {
+			log.Printf("serve: pack %s: %v", root, perr)
+			continue
+		}
+		views, verr := pack.AcceptedGoPluginServicesForSelf(p, cfg.GogAccount, selfPath)
+		if verr != nil {
+			log.Printf("serve: pack %s services: %v", root, verr)
+			continue
+		}
+		units, rerr := sup.reconcilePackUnits(selfPath, views)
+		if rerr != nil {
+			log.Printf("serve: pack %s services: %v", root, rerr)
+		}
+		if len(units) > 0 {
+			log.Printf("serve: pack %s: supervising %d service(s)", p.Manifest.Name, len(units))
+		}
 	}
 
 	// Resolve the enabled set FIRST: CLI args win, else config's `services`, else

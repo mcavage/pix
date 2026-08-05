@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 
 	"pix/host/hostenv"
+	"pix/host/sys"
 )
 
 // AcceptedService is the minimal accepted, normalized view of ONE go-plugin
@@ -78,4 +79,13 @@ func AcceptedGoPluginServices(p *Info, cfgGogAccount string, env hostenv.Env) ([
 		})
 	}
 	return out, nil
+}
+
+// AcceptedGoPluginServicesForSelf is AcceptedGoPluginServices for pix-host's
+// OWN process: selfPath (its own os.Executable()) stands in for the launcher's
+// HostBinary resolver, so `serve` needs no hostenv import of its own to ask
+// the one seam this package already exposes.
+func AcceptedGoPluginServicesForSelf(p *Info, cfgGogAccount, selfPath string) ([]AcceptedService, error) {
+	env := hostenv.Env{System: sys.Real{}, HostBinary: func() (string, error) { return selfPath, nil }}
+	return AcceptedGoPluginServices(p, cfgGogAccount, env)
 }

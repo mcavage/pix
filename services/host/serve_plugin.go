@@ -34,6 +34,8 @@ type pluginHolder = supervise.Holder
 type supervisor struct {
 	mu   sync.Mutex
 	tree *supervise.Tree
+	// packUnits is reconcilePackUnits' desired-state ledger (pack_units.go).
+	packUnits map[string]supervise.UnitSpec
 }
 
 // unitHealth is a unit's OWN health probe, by kind: "the process is up" is not
