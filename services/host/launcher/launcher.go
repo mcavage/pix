@@ -15,8 +15,7 @@ import (
 var Version = "dev"
 
 // FindHostBinary resolves the sibling pix-host and verifies it reports the SAME
-// version as this binary. A mismatch is an error, not a warning: two halves of
-// one release that disagree is exactly the state that produces bugs nobody can
+// version as this binary. A mismatch is an error, never a warning.
 func FindHostBinary() (string, error) {
 	verify := func(path string) (string, error) {
 		out, err := exec.Command(path, "version").CombinedOutput()

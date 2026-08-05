@@ -1,5 +1,5 @@
-// Package config is the pix config schema + loader, shared by the host
-// binary (pix-host) AND the launcher binary. Deliberately dependency-light:
+// Package config is the pix config schema + loader, shared by the host binary
+// (pix-host) AND the launcher binary. Deliberately dependency-light.
 package config
 
 import (
@@ -14,8 +14,8 @@ import (
 
 // Defaults applied when a config file is absent or a field is unset.
 const (
-	// A small, fast, extraction-grade local model DEDICATED to fact capture. It is
-	// The watcher must reliably emit STRUCTURED JSON (facts/events/corrections).
+	// A small, fast, extraction-grade local model DEDICATED to fact capture: it
+	// must reliably emit STRUCTURED JSON (facts/events/corrections).
 	DefaultMemoryWatcherModel = "qwen3.5:9b"
 	DefaultMemoryEmbedModel   = "nomic-embed-text"
 	// DefaultOllamaBridgeModel is the local model the sandbox's ollama-bridge
@@ -29,9 +29,8 @@ const (
 	BuiltinImpl = "builtin"
 )
 
-// DefaultServices is intentionally empty. Memory requires a verified local
-// Ollama watcher + embedding model and is enabled by setup only after those
-// requirements pass; a fresh API-key/gateway user should not inherit a broken
+// DefaultServices is intentionally empty: memory needs a verified local Ollama
+// watcher + embedding model, so only setup enables it once those probes pass.
 var DefaultServices = []string{}
 
 // PluginSpec configures one plugin slot: how it is implemented and, for external
@@ -44,9 +43,8 @@ type PluginSpec struct {
 	ExtraEnv []string `toml:"extra_env"` // additional env vars granted to this plugin subprocess
 }
 
-// HostMode configures the `[host]` table. The unsandboxed escape hatch it used
-// to gate (`pix host` / host.enabled / host.autonomy) was RETIRED and deleted —
-// the sandbox is the only supported execution boundary now; see
+// HostMode configures the `[host]` table. The unsandboxed escape hatch it once
+// gated is RETIRED: the sandbox is the only supported execution boundary.
 type HostMode struct {
 	// Autoserve gates the launcher's LAZY AUTO-START of `pix-host serve`
 	// (docs/design/serve-lifecycle.md §1). nil = default TRUE (auto-start on).
@@ -62,17 +60,16 @@ func (c *Config) AutoserveEnabled() bool {
 type Config struct {
 	VersionPin string `toml:"version_pin"`
 
-	// Services is the RESOLVED runtime service set every consumer reads
-	// (serve, ensureServe, doctor, …). It is never (de)serialized directly:
+	// Services is the RESOLVED runtime service set every consumer reads (serve,
+	// ensureServe, doctor, …); it is never (de)serialized directly.
 	Services []string `toml:"-"`
-	// ServicesRaw is the TOML image of Services: nil = the key was ABSENT from
-	// the file (resolve to DefaultServices); non-nil — even pointing at an empty
-	// slice — = the key was PRESENT and is authoritative (`services = []` stays
+	// ServicesRaw is the TOML image of Services: nil = the key was ABSENT (resolve
+	// to DefaultServices); non-nil — even an empty slice — = PRESENT, authoritative.
 	ServicesRaw *[]string `toml:"services,omitempty"`
 
-	// MCP is every configured MCP server. S01: there is no eager/lazy split any
-	// more — every configured server (plus every pack integration's server)
-	// preloads at sandbox CREATE (`--static-mcp`). The retired mcp_static/
+	// MCP is every configured MCP server. There is no eager/lazy split: every
+	// configured server (plus every pack integration's) preloads at sandbox
+	// CREATE (`--static-mcp`), and the mcp_static/mcp_dynamic knobs are retired.
 	MCP []string `toml:"mcp,omitempty"`
 
 	MemoryWatcherModel string `toml:"memory_watcher_model,omitempty"`
@@ -80,13 +77,11 @@ type Config struct {
 	OllamaBridgeModel  string `toml:"ollama_bridge_model,omitempty"`
 
 	// RunIntent is the routing intent for the top-level interactive session (the
-	// "overlord" that orchestrates the subagent crew). When neither --model nor
-	// --intent is passed, `pix run` resolves this intent through the router to
+	// "overlord"), resolved through the router when neither --model nor --intent.
 	RunIntent string `toml:"run_intent,omitempty"`
 
-	// Inference describes WHERE catalog models can be called. Model identity and
-	// quality remain in the shipped routing catalog; this block contains only
-	// user/pack-owned backend wiring and model-id bindings. Secrets never live
+	// Inference describes WHERE catalog models can be called: user/pack-owned
+	// backend wiring and model-id bindings only, never model identity or secrets.
 	Inference InferenceConfig `toml:"inference,omitempty"`
 
 	// GogAccount is the Google Workspace account the gog host-MCP server serves.
@@ -108,8 +103,8 @@ type Config struct {
 
 	Plugins map[string]PluginSpec `toml:"plugins"`
 
-	// Host gates + configures `pix host` (the unsandboxed escape hatch).
-	// GLOBAL, never per-profile: leaving the sandbox is a machine-level decision.
+	// Host gates + configures `pix host` (the unsandboxed escape hatch). GLOBAL,
+	// never per-profile: leaving the sandbox is a machine-level decision.
 	Host HostMode `toml:"host,omitempty"`
 
 	// retiredKeys are the top-level TOML keys in the file that map to no field
@@ -120,19 +115,16 @@ type Config struct {
 	retiredKeys []string
 }
 
-// InferenceConfig is deliberately small. Setup and packs author it; ordinary
-// users should not need to understand it. ExclusiveSource, when non-empty, is
-// an enforcement boundary contributed by a pack: every runtime backend/model
+// InferenceConfig is deliberately small: setup and packs author it. A non-empty
+// ExclusiveSource is a pack-contributed enforcement boundary.
 type InferenceConfig struct {
 	Backends map[string]InferenceBackend `toml:"backends,omitempty"`
 	Models   []InferenceModelBinding     `toml:"models,omitempty"`
-	// AllowedModels is the user's canonical catalog-model roster. An empty list
-	// means no user restriction (pack declarations / legacy config remain
-	// callable). Exclusive pack inference bypasses this personal preference
+	// AllowedModels is the user's canonical catalog-model roster; empty means no
+	// user restriction. Exclusive pack inference bypasses this preference.
 	AllowedModels []string `toml:"allowed_models,omitempty"`
-	// RosterProviders records which providers the roster has already been
-	// offered for. It is what lets a NEWLY added provider widen AllowedModels
-	// while a deliberate narrowing within providers the user has already seen is
+	// RosterProviders records which providers the roster was already offered for,
+	// so a NEWLY added provider can widen AllowedModels.
 	RosterProviders  []string `toml:"roster_providers,omitempty"`
 	ExclusiveBackend string   `toml:"exclusive_backend,omitempty"`
 	ExclusiveSource  string   `toml:"exclusive_source,omitempty"`
@@ -176,27 +168,23 @@ type InferenceModelBinding struct {
 // provenance can never outlive the claim it describes.
 const VerifiedByProbe = "probe"
 
-// retiredConfigKeys is the allowlist of top-level (or dotted-nested) config
-// keys that once had meaning but were retired: mcp_static / mcp_dynamic, the
-// per-server eager/lazy attach override S01 removed when every configured/pack
+// retiredConfigKeys is the allowlist of top-level (or dotted-nested) config keys
+// that once had meaning and are now tolerated but inert (reported by RetiredKeys).
 var retiredConfigKeys = map[string]bool{
 	"mcp_static":    true,
 	"mcp_dynamic":   true,
 	"host.enabled":  true,
 	"host.autonomy": true,
-	// knowledge_bundles: the built-in OKF knowledge service (:11436) was retired
-	// (W2 U03A) along with config.KnowledgeBundles/AddKnowledgeBundle/
-	// AllKnowledgeBundles — a still-present key from an older config.toml is
+	// knowledge_bundles: the built-in OKF knowledge service (:11436) is retired, so
+	// a still-present key from an older config.toml does nothing.
 	"knowledge_bundles": true,
-	// slack: the built-in Slack OAuth/token table (client_id, redirect_uri,
-	// oauth_vault_id, oauth_document_id, oauth_grant_expires_at), retired when
-	// Slack was externalized (W2/U02a; see docs/design/slack-setup.md) — a
+	// slack: the built-in Slack OAuth/token table, retired when Slack was
+	// externalized (see docs/design/slack-setup.md).
 	"slack": true,
 }
 
-// RetiredKeys returns the retired top-level config keys (see retiredConfigKeys)
-// found in the loaded file, sorted, deduplicated. Empty when the file has none
-// — including when no file was loaded at all. A copy: callers cannot mutate the
+// RetiredKeys returns the retired top-level config keys found in the loaded file,
+// sorted and deduplicated — a copy, so callers cannot mutate the stored slice.
 func (c *Config) RetiredKeys() []string { return append([]string(nil), c.retiredKeys...) }
 
 // retiredIn returns the retired keys (see retiredConfigKeys) among BurntSushi's
@@ -250,9 +238,8 @@ func Path() string {
 	return filepath.Join(dir, "config.toml")
 }
 
-// ServePidPath resolves the absolute path of serve.pid — the pidfile
-// `pix-host serve` writes on startup so the launcher's `serve stop` /
-// `serve status` can find and signal the running supervisor SAFELY (instead of a
+// ServePidPath resolves the absolute path of serve.pid — the pidfile `pix-host
+// serve` writes so `serve stop`/`serve status` can signal the supervisor SAFELY.
 func ServePidPath() string {
 	dir, err := StateDir()
 	if err != nil {
@@ -261,9 +248,8 @@ func ServePidPath() string {
 	return filepath.Join(dir, "serve.pid")
 }
 
-// ServeSpawnLockPath is the flock file the launcher's lazy auto-start takes
-// around its spawn decision (double-checked locking against a concurrent
-// `pix run`). Ephemeral runtime state — a sibling of the pidfile in the
+// ServeSpawnLockPath is the flock file the launcher's lazy auto-start takes around
+// its spawn decision (double-checked locking against a concurrent `pix run`).
 func ServeSpawnLockPath() string {
 	dir, err := StateDir()
 	if err != nil {
@@ -272,9 +258,8 @@ func ServeSpawnLockPath() string {
 	return filepath.Join(dir, "serve.spawn.lock")
 }
 
-// ServeLazyMarkerPath is the marker file the launcher writes after a successful
-// LAZY detached spawn of `pix-host serve`, so config propagation can tell
-// a lazy daemon (safe to stop-and-restart) from a FOREGROUND one the user is
+// ServeLazyMarkerPath is the marker the launcher writes after a successful LAZY
+// detached spawn: a lazy daemon is safe to stop-and-restart, a foreground one not.
 func ServeLazyMarkerPath() string {
 	dir, err := StateDir()
 	if err != nil {
@@ -283,9 +268,8 @@ func ServeLazyMarkerPath() string {
 	return filepath.Join(dir, "serve.lazy")
 }
 
-// MonitorStoreRoot is <state-dir>/monitor: the on-disk root the monitor
-// ingest server (now composed inside `pix-host serve`, see serve.go) writes
-// under and `pix monitor` (a pure offline reader with no listener of its
+// MonitorStoreRoot is <state-dir>/monitor: the on-disk root monitor ingest (inside
+// `pix-host serve`, see serve.go) writes and `pix monitor` reads back offline.
 func MonitorStoreRoot() (string, error) {
 	dir, err := StateDir()
 	if err != nil {
@@ -295,8 +279,7 @@ func MonitorStoreRoot() (string, error) {
 }
 
 // StateDir resolves the per-user state dir: $XDG_STATE_HOME/pix, else
-// ~/.local/state/pix. Used for logs (NOT config): serve.log lives here, and
-// every launch mode writes to it — the lazy auto-start and the managed
+// ~/.local/state/pix. Runtime state and serve.log live here, never config.
 func StateDir() (string, error) {
 	if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
 		return filepath.Join(xdg, "pix"), nil
@@ -319,8 +302,7 @@ func ServeLogPath() string {
 }
 
 // DataDir resolves the per-user DATA dir: $XDG_DATA_HOME/pix, else
-// ~/.local/share/pix. This is the durable data root — the captured memory
-// store, the knowledge index, backups, and routing overrides all live under it,
+// ~/.local/share/pix — the durable root for the memory store, backups, routing.
 func DataDir() (string, error) {
 	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
 		return filepath.Join(xdg, "pix"), nil
@@ -332,14 +314,12 @@ func DataDir() (string, error) {
 	return filepath.Join(home, ".local", "share", "pix"), nil
 }
 
-// PackDir is the per-user DEFAULT PACK root: $XDG_DATA_HOME/pix/default,
-// else ~/.local/share/pix/default. A proper pack (pack.toml + skills/ +
-// knowledge/), git-initialized, the default home for what you author for
+// PackDir is the per-user DEFAULT PACK root: $XDG_DATA_HOME/pix/default, else
+// ~/.local/share/pix/default — a proper pack (pack.toml + skills/ + knowledge/).
 func PackDir() string { return filepath.Join(dataDirOr(), "default") }
 
-// ContextDir is the always-on, user-authored context layer. It is DATA (durable
-// AGENTS.md + skills), not runtime config or ephemeral state. Team/project
-// context belongs in packs; this directory remains personal and composes above
+// ContextDir is the always-on, user-authored context layer: DATA (durable
+// AGENTS.md + skills), personal — team context belongs in a pack.
 func ContextDir() string { return filepath.Join(dataDirOr(), "context") }
 
 // PacksDir is where adopted REMOTE packs are cloned:
@@ -368,8 +348,7 @@ func MemoryDBPath() string {
 }
 
 // MemoryLockPath is the advisory flock file the memory daemon and `restore` both
-// take to be mutually exclusive around the sqlite store. It sits next to the
-// memory db (honoring MEMORY_DB's dir) as .memory.lock, so both processes
+// take around the sqlite store: .memory.lock beside the db (honoring MEMORY_DB).
 func MemoryLockPath() string {
 	return filepath.Join(filepath.Dir(MemoryDBPath()), ".memory.lock")
 }
@@ -425,9 +404,8 @@ func (c *Config) applyDefaults() {
 	if c.Plugins == nil {
 		c.Plugins = map[string]PluginSpec{}
 	}
-	// The ENTIRE [plugins.*] table is RETIRED (U07d; it subsumes the earlier
-	// plugins.broker-only retirement): a config file can no longer name an
-	// executable for the supervisor to run. External units are
+	// The ENTIRE [plugins.*] table is RETIRED: a config file can no longer name an
+	// executable for the supervisor to run.
 	if len(c.Plugins) > 0 {
 		seen := map[string]bool{}
 		for _, k := range c.retiredKeys {
@@ -451,9 +429,8 @@ func Load() (*Config, error) {
 	return LoadFrom(Path())
 }
 
-// LoadFrom reads and decodes a config.toml at an EXPLICIT path (rather than the
-// resolved Path()). It is used by callers that must inspect a config file which
-// is not the active one — e.g. `restore` validating that an archived
+// LoadFrom reads and decodes a config.toml at an EXPLICIT path, for a caller that
+// must inspect a file that is not the active one (`restore` validating an archive).
 func LoadFrom(path string) (*Config, error) {
 	c := &Config{}
 	if _, err := os.Stat(path); err != nil {
@@ -472,9 +449,8 @@ func LoadFrom(path string) (*Config, error) {
 	return c, nil
 }
 
-// Plugin returns the spec for slot. With the [plugins.*] declaration retired
-// (U07d; applyDefaults sweeps every declared slot into retiredKeys and empties
-// the map), a loaded config always answers builtin here — an external unit can
+// Plugin returns the spec for slot. With the [plugins.*] declaration retired, a
+// loaded config always answers builtin here.
 func (c *Config) Plugin(slot string) PluginSpec {
 	if spec, ok := c.Plugins[slot]; ok {
 		if spec.Impl == "" {
@@ -501,9 +477,8 @@ func (c *Config) Save() error {
 	return writeFileAtomic(dir, path, buf.Bytes(), 0o600)
 }
 
-// writeFileAtomic writes data to path by writing a temp file IN THE SAME dir
-// (so the rename below is on one filesystem), fsync-ing it, then atomically
-// renaming it over path. os.WriteFile truncates the destination in place, so a
+// writeFileAtomic writes data to a temp file IN THE SAME dir (so the rename is on
+// one filesystem), fsyncs it, then renames it over path — never a truncate in place.
 func writeFileAtomic(dir, path string, data []byte, perm os.FileMode) error {
 	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
@@ -538,14 +513,12 @@ func writeFileAtomic(dir, path string, data []byte, perm os.FileMode) error {
 	return nil
 }
 
-// sparseForSave returns a shallow copy with every defaultable field that equals
-// its current default reset to the zero value, so Save (via `,omitempty`)
-// writes only explicit deviations. mcp and knowledge_bundles default to EMPTY,
+// sparseForSave returns a shallow copy with every defaultable field that equals its
+// default zeroed, so Save (via `,omitempty`) writes only explicit deviations.
 func (c *Config) sparseForSave() *Config {
 	sp := *c
-	// services: an untouched default is omitted (nil raw); ANY deviation —
-	// including an explicitly-empty list — is serialized. The toml encoder
-	// writes a non-nil pointer to an empty slice as `services = []`, which
+	// services: an untouched default is omitted (nil raw); ANY deviation — including
+	// an explicitly-empty list — is serialized (`services = []`).
 	if stringSlicesEqual(sp.Services, DefaultServices) {
 		sp.ServicesRaw = nil
 	} else {
@@ -640,9 +613,8 @@ func removeValue(list *[]string, value string) bool {
 	return changed
 }
 
-// OpRefsPath resolves the absolute XDG path of op-refs.env (the 1Password refs
-// file the sbx gateway resolves via `op run --env-file`), a sibling of
-// config.toml: <config-dir>/op-refs.env. Repo-less hosts have no repo
+// OpRefsPath resolves the absolute XDG path of op-refs.env (the 1Password refs file
+// the sbx gateway resolves via `op run --env-file`): <config-dir>/op-refs.env.
 func OpRefsPath() string {
 	dir, err := configDir()
 	if err != nil {
@@ -651,9 +623,8 @@ func OpRefsPath() string {
 	return filepath.Join(dir, "op-refs.env")
 }
 
-// GWServerName is the google-workspace MCP server's registration + display
-// name. It lives here, not in the gworkspace workflow, because five unrelated
-// callers (secret, mcp, doctor, status, setup) need to recognise the
+// GWServerName is the google-workspace MCP server's registration + display name. It
+// lives here because five unrelated callers must recognise the same name.
 type MCPContainer struct {
 	Manifest  string
 	Image     string
@@ -668,26 +639,23 @@ const GWServerName = "google-workspace"
 // a user; it crosses domain boundaries for the same reason GWServerName does.
 const GWInstallCmd = "brew install openclaw/tap/gogcli"
 
-// OpRefsMentalModel is the ≤4-line plain explanation of what op-refs.env is and
-// how the gateway uses it. Reused VERBATIM in `pix setup`, the `secret`
-// help, and the template header so the concept is described identically
+// OpRefsMentalModel is the ≤4-line plain explanation of what op-refs.env is, reused
+// VERBATIM in `pix setup`, the `secret` help, and the template header.
 const OpRefsMentalModel = `op-refs.env maps ENV_VAR = op://vault/item/field. When the gateway spawns a
 host MCP server it resolves those refs from 1Password and injects them as env
 vars — the secret never touches disk or the sandbox. A server with no creds
 (pio) needs no entry.`
 
 // NonSecretOpRefsKeys is the documented allowlist of NON-secret env vars that may
-// appear in op-refs.env with a literal value; everything else must be an op://
-// vault/item/field REFERENCE. GOG_ACCOUNT/GOG_HOME/GOG_KEYRING_BACKEND configure
+// appear in op-refs.env with a literal value; everything else must be an op:// ref.
 var NonSecretOpRefsKeys = map[string]bool{
 	"GOG_ACCOUNT":         true,
 	"GOG_HOME":            true,
 	"GOG_KEYRING_BACKEND": true,
 }
 
-// OpRefsTemplate is the seed content for a fresh op-refs.env: op:// references
-// ONLY (plus the documented non-secret env allowlist), with generic placeholders
-// to fill. Every example line is COMMENTED OUT so a freshly-seeded file has ZERO
+// OpRefsTemplate is the seed content for a fresh op-refs.env: op:// references ONLY
+// (plus the non-secret allowlist), every example line COMMENTED OUT.
 const OpRefsTemplate = `# pix op-refs.env — 1Password refs the sbx gateway resolves via
 # ` + "`op run --env-file`" + ` when it spawns each host MCP server.
 #
@@ -722,18 +690,16 @@ const OpRefsTemplate = `# pix op-refs.env — 1Password refs the sbx gateway res
 # GOG_KEYRING_PASSWORD=op://<vault>/<item>/<field>
 `
 
-// SeedOpRefs writes OpRefsTemplate to OpRefsPath() with 0600 perms only if the
-// file is absent, creating the config dir (0700) as needed. It returns the
-// resolved path, whether it created the file (false if it already existed), and
+// SeedOpRefs writes OpRefsTemplate to OpRefsPath() 0600 only if the file is absent,
+// creating the config dir 0700. Returns the path and whether it created the file.
 func SeedOpRefs() (path string, created bool, err error) {
 	path = OpRefsPath()
 	created, err = SeedOpRefsAt(path)
 	return path, created, err
 }
 
-// SeedOpRefsAt is the path-parameterized seeder SeedOpRefs delegates to (so a
-// caller that resolves op-refs.env through an injected env can reuse the exact
-// same no-clobber + 0700 dir / 0600 file guarantees). It writes OpRefsTemplate
+// SeedOpRefsAt is the path-parameterized seeder SeedOpRefs delegates to, with the
+// same no-clobber + 0700 dir / 0600 file guarantees.
 func SeedOpRefsAt(path string) (created bool, err error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return false, err

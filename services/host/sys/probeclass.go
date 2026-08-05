@@ -5,9 +5,8 @@ import (
 	"strings"
 )
 
-// probeclass.go is the PURE probe-outcome classifier: given the captured
-// output (+ error) of a failed readiness probe, decide whether the failure is
-// a positive policy/permission DENIAL (verdict denied), a missing/expired
+// probeclass.go is the PURE probe-outcome classifier: given the captured output (+
+// error) of a failed readiness probe, decide what that failure positively proves.
 
 // ProbeClass is the classified outcome of a failed probe.
 type ProbeClass int
@@ -56,9 +55,8 @@ var deniedPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`\bpermission denied\b[^\n.]*\bpolic(?:y|ies)\b`),
 }
 
-// deniedBodyTokens are the denial words that, combined with an HTTP 403 status
-// in the same output, make the 403 a positive denial. A bare 403 with no
-// denial body stays unverifiable (proxies and gateways emit contentless 403s
+// deniedBodyTokens are the denial words that, with an HTTP 403 in the same output,
+// make the 403 a positive denial. A bare 403 with no denial body stays unverifiable.
 var deniedBodyTokens = regexp.MustCompile(`\b(?:denied|denial|forbidden|not allowed|not permitted|prohibited)\b`)
 
 var http403 = regexp.MustCompile(`\b403\b`)

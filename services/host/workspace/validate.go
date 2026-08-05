@@ -5,9 +5,8 @@ import (
 	"os"
 )
 
-// ErrNotDirectory is returned by Validate when the positional workspace
-// argument does not name a directory. It is a sentinel so the CALLER can add
-// the "did you mean `pix <verb>`?" hint — only cmd/pix knows the verb table,
+// ErrNotDirectory is returned by Validate when the positional workspace argument
+// does not name a directory — a sentinel, so the CALLER can add the verb hint.
 type ErrNotDirectory struct{ Path string }
 
 func (e ErrNotDirectory) Error() string { return fmt.Sprintf("%q is not a directory", e.Path) }

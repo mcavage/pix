@@ -6,14 +6,11 @@ import "pix/host/cli"
 // what host registration a bounded `sbx mcp ls` can prove. Nothing here
 // probes, execs, or does I/O: the caller supplies what it already fetched.
 //
-// U04e deleted the second question this file used to answer. A per-sandbox
-// "attachment" claim was read out of a launcher-written receipt — a record
-// that pix ITSELF once preloaded or loaded a server — and rendered by
-// status/doctor as "attached". That is a verdict derived from a past action,
-// not a probe: the sandbox it described can be torn down and recreated by any
-// other shell (U04d), and nothing pix can run reports what a live gateway
-// session currently has attached. Registration is the only MCP fact this host
-// can actually establish, so it is the only one anything here answers.
+// Attachment is deliberately NOT answered here. A launcher-written receipt is
+// a verdict derived from a past action, not a probe: the sandbox it described
+// can be recreated by any other shell, and nothing pix can run reports what a
+// live gateway session has attached. Registration is the only MCP fact this
+// host can establish, so it is the only one anything here answers.
 
 // McpRegEvidence is the tri-state host registration evidence for one server
 // name: what the bounded `sbx mcp ls` listing the caller already ran could

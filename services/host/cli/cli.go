@@ -1,19 +1,6 @@
 // Package cli is the command contract: how a pix verb is declared, what it is
 // given, and who owns the exit code.
 //
-// It replaces 34 hand-rolled argument loops. Not one file in cmd/pix imported
-// `flag`; every verb parsed its own argv, wrote its own usage string, and
-// called os.Exit itself — 266 exits across 25 files and 349 direct writes to
-// os.Stderr. Three consequences, all of which this package removes:
-//
-//   - Usage drifted from behaviour, because nothing connected them. A flag could
-//     exist without appearing in help, and did.
-//   - A verb's exit code could only be tested by re-execing the test binary,
-//     which several tests do — slow, and it hides the assertion behind a
-//     subprocess.
-//   - Output went to the process's stdout, so asserting on it meant capturing
-//     global state.
-//
 // The contract, in three rules:
 //
 //  1. A command RETURNS an error. It never calls os.Exit. main owns the single
@@ -136,8 +123,7 @@ func ExitCode(err error) int {
 //     the `help --all` tier, generated from the same tags that parse argv.
 //
 // kong's default exits the process on --help and on a parse error. Both are
-// errors here instead, or this package would reintroduce the 266 exits it
-// exists to remove.
+// errors here instead: this package owns no exit.
 func RunRoot[T any](name, description, rootHelp string, argv []string, d *Deps) error {
 	var cmd T
 	parser, err := kong.New(&cmd,

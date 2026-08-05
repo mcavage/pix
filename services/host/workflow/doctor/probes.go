@@ -17,10 +17,7 @@ import (
 
 // probes.go is where a config becomes a list of things to go and check. It is
 // the whole of doctor's and status's knowledge of WHAT a healthy host is; both
-// verbs render the same Snapshot, so they can no longer disagree — the bug the
-// six group builders this file replaces produced twice (a fix printed by one
-// surface and not the other, and a "registered" claim status made that doctor
-// contradicted).
+// verbs render the same Snapshot, so they cannot disagree about the same host.
 //
 // The probes themselves live in health: they cross real boundaries (exec a
 // binary, dial a port, stat a directory) and classify what they find. Nothing
@@ -76,8 +73,7 @@ type Options struct {
 //
 // Every probe is included unconditionally. A capability the host has not
 // enabled is reported as OPTIONAL, never omitted: a missing line is a fact a
-// reader cannot see, and "why does doctor not mention monitor" was a real
-// support question about the report this one replaces.
+// reader cannot see.
 func Probes(cfg *config.Config, o Options) []health.Probe {
 	sbxBin := orElse(o.SbxBin, "sbx")
 	keyBin := orElse(o.KeyStoreBin, sbxBin)

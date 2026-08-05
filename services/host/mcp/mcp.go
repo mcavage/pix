@@ -133,13 +133,9 @@ func ParseMcpLoadArgs(argv []string) (name, ws string, err error) {
 // invocation): the load either succeeded or it did not, and the child's own
 // error is the whole answer.
 //
-// U04e removed what used to follow a success: an appended "load receipt" in a
-// launcher-owned per-sandbox store, which status/doctor then rendered as
-// "attached". A one-time record of a past load is not the state of a live
-// session, so nothing writes one and nothing reads one. The sandbox this
-// targets is DERIVED by the caller from the workspace (the same deterministic
-// name `pix run` gives it) rather than looked up in that store — a store whose
-// receiptless fallback had already drifted from run's own default name.
+// Nothing records a "load receipt": a one-time record of a past load is not the
+// state of a live session. The sandbox this targets is DERIVED by the caller
+// from the workspace — the same deterministic name `pix run` gives it.
 func ExecSbxMcpLoad(cmd *exec.Cmd) error { return cmd.Run() }
 
 // RunMcpLsCore is runMcpLs's testable core (see RunSbxMcpCore). It exits 3 when

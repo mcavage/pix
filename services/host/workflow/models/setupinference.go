@@ -32,9 +32,8 @@ type probeOutcome struct {
 }
 
 // ErrNoProbeSeam is returned when a verify function is handed a hostenv.Env
-// with no probe. That is a PROGRAMMING error; it used to return `0 attempted, 0
-// verified, no failures`, indistinguishable from a clean pass, so a caller
-// printed "0 model(s) answered a live request" and exited zero.
+// with no probe. That is a PROGRAMMING error, and it must never be reported as
+// `0 attempted, 0 verified, no failures` — indistinguishable from a clean pass.
 var ErrNoProbeSeam = fmt.Errorf("no inference probe is configured on this hostenv.Env (use defaultShellEnv, or inject a probe in tests)")
 
 // reconcileResult is what a reconcile actually did and proved.
@@ -247,9 +246,8 @@ func VerifyOllamaInference(cfg *config.Config, env hostenv.Env, out io.Writer) (
 }
 
 // ReconcileDirectInference turns the provider keys on this host into callable
-// bindings. It used to live only inside setup's keys step, which is why adding
-// a key any other way left it inert: `pix secret set` wrote the ref and nothing
-// rebuilt, probed or widened.
+// bindings. Every path that adds a key routes through it, so a key written by
+// `pix secret set` is rebuilt, probed and widened like setup's own.
 //
 // requestedProvider is the provider the USER named, or "" for setup's own
 // reconcile; it alone overrides the roster's already-offered stamp.

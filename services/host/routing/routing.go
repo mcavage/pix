@@ -242,13 +242,10 @@ type Policy struct {
 // Prefers is the ONE reader of the two provider spellings, folding the legacy
 // one in at the point of use.
 //
-// The alternative — normalizing on load — was written first and is worse: it
-// makes correctness depend on HOW the Intent was obtained, so an Intent built
-// in code (a test, an ad-hoc `route pick <task-type>`) silently loses its
-// preference while an identical one read from disk keeps it. A field that only
-// works if you came through the right door is a trap, and this codebase already
-// has one such bug in its history. Fold where it is read; there is exactly one
-// such place.
+// Normalizing on LOAD instead would make correctness depend on HOW the Intent
+// was obtained: an Intent built in code (a test, an ad-hoc `route pick
+// <task-type>`) would silently lose its preference while an identical one read
+// from disk kept it. Fold where it is read; there is exactly one such place.
 func (in Intent) Prefers() []string {
 	if len(in.PreferProviders) > 0 {
 		return in.PreferProviders

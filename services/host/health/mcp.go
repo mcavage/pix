@@ -9,12 +9,9 @@ import (
 	"pix/host/mcp"
 )
 
-// mcp.go restores the MCP diagnosis the doctor port left behind, ported onto
-// the health model instead of the readiness one it was written against.
-//
-// It answers the three MCP truths SEPARATELY, because each has its own honest
-// source and inferring one from another is the bug the original group existed
-// to prevent:
+// mcp.go is the MCP diagnosis on the health model. It answers each MCP truth
+// SEPARATELY, because each has its own honest source and inferring one from
+// another is the bug this probe exists to prevent:
 //
 //	registration  a bounded `sbx mcp ls`, read through mcp.McpRegEvidenceFrom
 //	              — the ONE definition of "registered" in the tree.
@@ -23,18 +20,13 @@ import (
 //	              stdio server has no control-plane auth to check.
 //
 // Both are tri-state. The rule the whole probe is built around: a listing that
-// did not ANSWER means unknown, never "not registered". The readiness version
-// of this check rendered every `sbx mcp ls` failure as an outstanding TODO,
-// which is how a user learns to ignore the report.
+// did not ANSWER means unknown, never "not registered".
 //
-// There used to be a THIRD truth here, "attachment", supplied by the caller
-// from a launcher-written per-sandbox receipt. U04e deleted it: a receipt says
-// pix once preloaded or loaded a server, and this probe rendered that as
-// "registered, attached" — a ready verdict earned by a past action rather than
-// a probe (AGENTS.md safety invariant #13). Nothing pix can run answers what a
-// live session currently has attached, and `pix mcp ls` says so itself, so the
-// honest report is registration and auth only. Do not reintroduce an
-// attachment claim here without a live query that can be wrong.
+// Attachment is deliberately NOT a third truth: nothing pix can run answers
+// what a live session currently has attached, and a launcher-written receipt
+// is a verdict earned by a past action rather than a probe (AGENTS.md safety
+// invariant #13). Do not reintroduce an attachment claim here without a live
+// query that can be wrong.
 
 // MCP fixes. Registration is per-server (the command depends on what KIND of
 // server it is, which only the caller can classify), so it is carried on the

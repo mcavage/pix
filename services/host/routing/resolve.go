@@ -52,18 +52,13 @@ type relaxationStage struct {
 }
 
 // relaxationLadder is the DOCUMENTED order in which hard constraints are
-// surrendered when nothing is feasible. It replaces a single cliff that dropped
-// every constraint at once — which, on a pure-Ollama box, made a cheap breadth
-// fan-out land on the largest local model (every local cost is $0, so the cost
-// objective tie-broke on accuracy descending).
+// surrendered when nothing is feasible — never all at once, which on a
+// pure-Ollama box lands a cheap breadth fan-out on the largest local model
+// (every local cost is $0, so cost tie-breaks on accuracy descending).
 //
-// The ladder has three rungs, one per HARD constraint. It used to have four:
-// the provider allowlist was dropped first, "because vendor diversity is a
-// PREFERENCE encoded as a constraint". A preference does not belong on a ladder
-// of things you are forced to give up — it belongs in the ranking, which is
-// where it now lives (see Intent.PreferProviders). Removing that rung deleted
-// the only stage whose whole job was to undo a constraint the resolver should
-// never have imposed.
+// The ladder has three rungs, one per HARD constraint. Vendor diversity is not
+// one of them: a preference does not belong on a ladder of things you are
+// forced to give up — it belongs in the ranking (see Intent.PreferProviders).
 //
 // Latency goes last on purpose: it is the axis that still protects the user's
 // wall-clock time on a laptop, and it is what keeps `breadth` off the 35B rung.

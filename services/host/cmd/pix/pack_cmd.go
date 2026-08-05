@@ -8,9 +8,9 @@ package main
 // host bill-of-materials gate, fingerprint and host-state acceptance store;
 // kong decides the grammar and nothing else.
 //
-// There is no `pack new`/`pack add` (retired U08f): a pack's pack.toml,
-// skills/*/SKILL.md, bin/<name>, and [[integrations]]/[[proxy]] stanzas are
-// authored by hand, then picked up on the next `pack use`.
+// There is no `pack new`/`pack add`: a pack's pack.toml, skills/*/SKILL.md,
+// bin/<name>, and [[integrations]]/[[proxy]] stanzas are authored by hand, then
+// picked up on the next `pack use`.
 
 import (
 	"errors"

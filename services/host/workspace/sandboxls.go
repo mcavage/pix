@@ -29,9 +29,8 @@ type SbxBox struct {
 	Dir   string `json:"dir,omitempty"`
 }
 
-// ParsePixBoxes filters `sbx ls` output to pix-* rows and pulls name,
-// state, and (best-effort) the workspace dir. It tolerates column drift: the
-// state is whichever field is a known lifecycle word. A raw row supplies the
+// ParsePixBoxes filters `sbx ls` output to pix-* rows and pulls name, state, and
+// (best-effort) the workspace dir. The state is whichever field is a lifecycle word.
 func ParsePixBoxes(sbxLsOut string) []SbxBox {
 	var out []SbxBox
 	for _, ln := range strings.Split(sbxLsOut, "\n") {
