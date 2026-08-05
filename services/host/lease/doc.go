@@ -6,6 +6,35 @@
 // lets many holders share liveness while giving a reaper a kernel-verified,
 // non-blocking proof that zero holders remain.
 //
+// # U04c1: lifecycle serialization resharded off live refs
+//
+// U04a's single lease.lock file served two different jobs at once: many
+// concurrent SHARED holders declaring liveness, and the EXCLUSIVE
+// zero-holder proof a reaper needs before destroying state. U04c1 splits
+// those into two files with two different concurrency shapes:
+//
+//   - refs.lock (RefLease, OpenRefLease) — unchanged job, many concurrent
+//     SHARED holders, non-blocking EXCLUSIVE zero-holder proof.
+//   - lifecycle.lock (LifecycleLock, OpenLifecycleLock) — EXCLUSIVE only,
+//     one lifecycle transition (create/destroy/state change) at a time,
+//     deadline-bounded, meant to be held BRIEFLY.
+//
+// Lease/Open remain as compatibility aliases for RefLease/OpenRefLease.
+//
+// AttachRef, WithLifecycle, and TryReapProof (ordering.go) compose the two
+// locks correctly so callers never have to get the ordering right by hand:
+// AttachRef takes lifecycle EX, then refs SH, then releases lifecycle —
+// NEVER lifecycle-EX-forever and NEVER refs EX at all — so a new live
+// reference can never deadlock against another process's already-held refs
+// SH (shared never blocks shared) while still being serialized against a
+// concurrent lifecycle transition. TryReapProof is the reaper's whole safety
+// contract in one non-blocking call: it only runs its fn when BOTH the
+// lifecycle lock and the refs lock can be proven uncontended right now.
+//
+// This reshard adds no application wiring: nothing outside this package
+// calls RefLease, LifecycleLock, or the ordering helpers yet. That remains a
+// later integration decision, same as U04a's original scope.
+//
 // # Foundation, unix-only
 //
 // This is L0 foundation work (no domain knowledge, unix syscalls + stdlib

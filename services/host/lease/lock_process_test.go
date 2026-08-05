@@ -38,19 +38,28 @@ func helperCommand(env ...string) *exec.Cmd {
 	return cmd
 }
 
+// helperActions is the LEASE_HELPER_ACTION dispatch registry. Split across
+// files (this one seeds "hold"/"check-fds"; ordering_process_test.go adds
+// "attach"/"lifecycle"/"reap" via its own init) so each set of helper
+// process behaviors lives next to the tests that exercise it, rather than
+// all funneling through one giant switch.
+var helperActions = map[string]func(){
+	"hold":      helperHold,
+	"check-fds": helperCheckFDs,
+}
+
 // TestHelperProcess dispatches on LEASE_HELPER_ACTION; see helperCommand.
 func TestHelperProcess(t *testing.T) {
-	switch os.Getenv(helperActionEnv) {
-	case "":
+	action := os.Getenv(helperActionEnv)
+	if action == "" {
 		return // not invoked as a helper; a plain `go test` no-ops here.
-	case "hold":
-		helperHold()
-	case "check-fds":
-		helperCheckFDs()
-	default:
-		fmt.Fprintf(os.Stderr, "unknown %s=%s\n", helperActionEnv, os.Getenv(helperActionEnv))
+	}
+	fn, ok := helperActions[action]
+	if !ok {
+		fmt.Fprintf(os.Stderr, "unknown %s=%s\n", helperActionEnv, action)
 		os.Exit(2)
 	}
+	fn()
 }
 
 // helperHold opens the lease at LEASE_HELPER_DIR, acquires it in

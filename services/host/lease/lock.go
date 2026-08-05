@@ -62,8 +62,8 @@ func openFlockFile(dir, leaf string) (*flockHandle, error) {
 	return &flockHandle{f: f, path: path}, nil
 }
 
-func (h *flockHandle) Path() string  { return h.path }
-func (h *flockHandle) Fd() uintptr   { return h.f.Fd() }
+func (h *flockHandle) Path() string { return h.path }
+func (h *flockHandle) Fd() uintptr  { return h.f.Fd() }
 func (h *flockHandle) acquire(ctx context.Context, how int) error {
 	return flockDeadline(ctx, int(h.f.Fd()), how, h.path)
 }
