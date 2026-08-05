@@ -1,18 +1,16 @@
 // root.go — the ONE kong root: the launcher's verb table as a typed tree, and the
 // only thing that parses argv, dispatches a verb, or answers a help request. The
 // tree is the single source of truth for all three (what dispatches, what the
-// suggester knows, what help says).
+// suggester knows, what help says), because EVERY verb is TYPED: the struct tags
+// that parse a verb also generate its help and place it in a help tier
+// (`group:`). `help` is the one `passthrough:""` command, for the opposite
+// reason: `pix help <anything>` is a question, not a grammar, so it must answer
+// rather than reject.
 //
-// Two decisions stay in FRONT of the parser because they are argv SHAPE, not
+// Three decisions stay in FRONT of the parser because they are argv SHAPE, not
 // grammar: the retired table (retired.go), which must answer before any config
-// read or side effect, and a bare positional naming a directory, which is `run
-// DIR` (classifyBareArg) — plus the `task NAME path` rewrite.
-//
-// EVERY verb is TYPED: struct tags parse it, generate its help, and place it in a
-// help tier (`group:`), so the usage a user reads comes from the tags that parse
-// the verb. `help` is the one `passthrough:""` command, for the opposite reason:
-// `pix help <anything>` is a question, not a grammar, so it must answer rather
-// than reject.
+// read or side effect; a bare positional naming a directory, which is `run DIR`
+// (classifyBareArg); and the `task NAME path` rewrite.
 package main
 
 import (
@@ -20,7 +18,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -29,7 +26,6 @@ import (
 
 	"pix/host/cli"
 	"pix/host/config"
-	"pix/host/launcher"
 	"pix/host/monitor"
 	"pix/host/service"
 	"pix/host/sys"
@@ -79,10 +75,10 @@ type legacyArgs struct {
 	Args []string `arg:"" optional:"" passthrough:"" help:"Passed to the verb unchanged."`
 }
 
-// testSeams are the two indirections the root's tests need: legacy proves a
+// testSeams are the two indirections the root's tests need — legacy proves a
 // passthrough command gets its argv verbatim without running the seam behind it,
-// and monitor supplies a context + store root without a signal handler. Never set
-// in production.
+// monitor supplies a context + store root without a signal handler. Never set in
+// production.
 var testSeams struct {
 	legacy  func(verb string, args []string)
 	monitor func(*monitorCmd, *cli.Deps) error
@@ -318,24 +314,11 @@ func (c *serveExecCmd) Run(d *cli.Deps) error {
 	return execHostServe(d, argv)
 }
 
-// execHostServe runs the sibling pix-host's `serve`, found next to this binary
-// or on PATH.
+// execHostServe runs the sibling pix-host's `serve` through the one host-binary
+// exec seam (execHostBinary), so serve and the router map a child failure the
+// same way: the host already reported the problem in its own words.
 func execHostServe(d *cli.Deps, argv []string) error {
-	bin, err := launcher.FindHostBinary()
-	if err != nil {
-		return err
-	}
-	cmd := exec.Command(bin, append([]string{"serve"}, argv...)...)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, d.Out, d.Err
-	if err := cmd.Run(); err != nil {
-		var exit *exec.ExitError
-		if errors.As(err, &exit) {
-			// The host already reported the problem in its own words.
-			return cli.SilentError{Code: exit.ExitCode()}
-		}
-		return fmt.Errorf("exec %s: %w", bin, err)
-	}
-	return nil
+	return execHostBinary(d, append([]string{"serve"}, argv...))
 }
 
 type serveStopCmd struct{}

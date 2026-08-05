@@ -78,16 +78,15 @@ func memNormProfile(p string) string {
 	return p
 }
 
-// memProfileVisible is the SQL WHERE fragment (with one bound arg) selecting the
-// rows a given active profile may see: its own rows UNION the default bucket
-// (NULL/”/'default'). Bind the normalized active profile as the single arg.
+// memProfileVisible is the READ-time SQL WHERE fragment (one bound arg): the rows
+// an active profile may see, its own UNION the default bucket. Bind the
+// normalized active profile.
 const memProfileVisible = "(profile IS NULL OR profile = '' OR profile = 'default' OR profile = ?)"
 
-// memProfileStorage is the SQL WHERE fragment (with one bound arg) matching the
-// EXACT storage bucket of a row. Unlike memProfileVisible (the read-time union)
-// this is the write-time bucket used for dedupe/reaffirm/synthesis/ownership, so
-// `work` remembering text `personal` already has creates a NEW work row rather
-// than reaffirming personal's. Bind the normalized profile as the single arg.
+// memProfileStorage matches a row's EXACT storage bucket — the WRITE-time half,
+// used for dedupe/reaffirm/synthesis/ownership, so `work` remembering text
+// `personal` already has creates a NEW work row instead of reaffirming
+// personal's. Bind the normalized profile.
 const memProfileStorage = "COALESCE(NULLIF(profile,''),'default') = ?"
 
 func memNowIso() string { return time.Now().UTC().Format(time.RFC3339Nano) }
@@ -274,8 +273,8 @@ func (s *memStore) bump(id string, confidence float64) {
 func (s *memStore) reaffirm(hash, profile string) string {
 	var id string
 	var conf float64
-	// Scope to the SAME storage bucket: a hash collision across profiles must NOT
-	// reaffirm a sibling's row (that would leak/merge across profiles).
+	// Same storage bucket only: a cross-profile hash collision must not reaffirm
+	// (i.e. merge into) a sibling's row.
 	if s.db.QueryRow("SELECT id, confidence FROM memories WHERE content_hash = ? AND deleted_at IS NULL AND "+memProfileStorage, hash, memNormProfile(profile)).Scan(&id, &conf) == nil {
 		s.bump(id, conf)
 		return id
@@ -284,8 +283,8 @@ func (s *memStore) reaffirm(hash, profile string) string {
 }
 
 func (s *memStore) findSimilar(vec []float64, threshold float64, profile string) (string, bool) {
-	// Only scan rows in the same storage bucket: near-duplicate dedupe must never
-	// collapse a new row into a sibling profile's existing row.
+	// Same storage bucket only (see reaffirm): dedupe must not collapse a new row
+	// into a sibling profile's.
 	rows, err := s.db.Query("SELECT id, confidence, embedding FROM memories WHERE deleted_at IS NULL AND embedding IS NOT NULL AND "+memProfileStorage, memNormProfile(profile))
 	if err != nil {
 		return "", false
@@ -644,10 +643,8 @@ func (s *memStore) synthesize(threshold float64) jsonObj {
 	if res != nil {
 		expired, _ = res.RowsAffected()
 	}
-	// Partition by storage bucket and merge WITHIN each bucket only: a merge must
-	// never compare or collapse rows across profiles, and frequency must never
-	// move between buckets. Fetch the distinct normalized profiles, then run the
-	// existing pairwise merge per bucket.
+	// Merge WITHIN each storage bucket only: a merge must never compare or collapse
+	// rows across profiles, and frequency must never move between buckets.
 	buckets := []string{}
 	prows, _ := s.db.Query("SELECT DISTINCT COALESCE(NULLIF(profile,''),'default') FROM memories WHERE deleted_at IS NULL AND embedding IS NOT NULL")
 	for prows.Next() {
@@ -832,10 +829,9 @@ func memWatcherStatus() (capture bool, reason string) {
 
 // memObserve is the ONE capture-admission path BOTH front ends use (the JSON-RPC
 // observe method and the plugin adapter's Observe): reject empty input, refuse
-// with a reason rather than claim success the watcher model cannot deliver, and
-// otherwise start the background capture under bounded concurrency (each capture
-// hits Ollama, so a giant observe batch meets honest backpressure instead of
-// spawning unbounded goroutines; memCapture releases the slot).
+// with a reason rather than claim a success the watcher model cannot deliver, and
+// otherwise capture in the background under bounded concurrency — honest
+// backpressure instead of a goroutine per entry (memCapture releases the slot).
 func memObserve(store *memStore, user, project string, hasProject bool, profile string) (accepted bool, reason string) {
 	user = truncate(user, 8000)
 	if strings.TrimSpace(user) == "" {

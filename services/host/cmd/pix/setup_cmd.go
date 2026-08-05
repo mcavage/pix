@@ -1,11 +1,9 @@
 // setup_cmd.go — `pix setup` as a typed root child, plus the one thing
-// deliberately NOT part of the provision loop: the agent handoff. The handoff
-// execs another command whose decision matrix is about a sandbox that may already
-// be alive, and a step that cannot be re-probed does not belong in a loop whose
-// contract is that the second check is authoritative.
-//
-// The host phase is handed the argv the flags COMPOSE TO, not the one the user
-// typed: kong alone decides what a flag is.
+// deliberately NOT part of the provision loop: the agent handoff. It execs another
+// command whose decision matrix is about a sandbox that may already be alive, and
+// a step that cannot be re-probed does not belong in a loop whose contract is that
+// the second check is authoritative. The host phase is handed the argv the flags
+// COMPOSE TO, not the one the user typed: kong alone decides what a flag is.
 package main
 
 import (
@@ -199,10 +197,8 @@ func dispatchRun(d *cli.Deps, argv []string) error {
 // runSetupHandoff is the pure post-host-phase decision + action, separate from
 // setupCmd.Run so the state matrix is testable without the provisioning loop or an
 // sbx exec. Errors ONLY on the fail-closed unknown state (or a failed launch).
-//
 // setup has no shape that removes a sandbox: an existing one is ALWAYS left alone
-// and the user is handed the two commands (attach, or remove-then-run) rather than
-// a flag that force-removes a box another shell might be live in.
+// and the user is handed the two commands (attach, or remove-then-run).
 func runSetupHandoff(dir, name string, state sandbox.State, out io.Writer, runFn func([]string) error) error {
 	// kickoffArgs builds the run argv for a launch that gets the tour: [DIR] --
 	// <OnboardingKickoff>. DIR is forwarded only when explicit, so `pix setup` in a

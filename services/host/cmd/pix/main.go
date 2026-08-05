@@ -20,12 +20,10 @@ import (
 )
 
 // version is stamped at build time via -ldflags "-X main.version=0.0.x"; an
-// unstamped build reports "dev" and tracks the kit's main branch.
-//
-// It MUST stay a plain string with a CONSTANT initializer: `-X` silently does
-// nothing to a variable initialised from an expression, so `var version =
-// launcher.Version` would leave every release reporting "dev" with no error
-// anywhere. main owns the stamp and pushes it down.
+// unstamped build reports "dev" and tracks the kit's main branch. It MUST stay a
+// plain string with a CONSTANT initializer: `-X` silently does nothing to a
+// variable initialised from an expression, so `var version = launcher.Version`
+// would leave every release reporting "dev" with no error anywhere.
 var version = "dev"
 
 func init() { launcher.Version = version }
@@ -89,7 +87,7 @@ func resolvedBareArgPath(a string) string {
 // matched verb: the stderr message to print, and whether it should launch `run` (an
 // existing directory). A path-like token, or one that exists but is not a
 // directory, is a missing/!dir workspace; only a plausible bare-word verb gets the
-// did-you-mean suggester. Both non-launch branches exit 2.
+// did-you-mean suggester.
 func classifyBareArg(a string) (msg string, launch bool) {
 	fi, statErr := os.Stat(a)
 	if statErr == nil && fi.IsDir() {
@@ -120,7 +118,7 @@ New here?   pix setup      one-time guided setup (a few minutes, resumable)
 Workflow
   run [DIR]        launch the sandbox in DIR (default: .). This is the main one.
   ls               list your pix sandboxes;  rm <name>  removes one
-  serve            start the host services (memory, knowledge); ` + "`serve stop|status`" + `
+  serve            start the host services (memory, monitor); ` + "`serve stop|status`" + `
   status           what is up, what is down, what is next   (also the bare command)
 
 Setup & health
@@ -131,7 +129,7 @@ Setup & health
 Data & models
   memory           recall | remember | forget | learnings | stats
   models           which models pix can use, and which are wired up
-  agent            manage subagents: ls | new | edit | rm | reassess
+  agent            the subagent roster: each agent's resolved model, and why
 
 More             config, mcp, task, state, version   (see ` + "`pix help --all`" + `)
 

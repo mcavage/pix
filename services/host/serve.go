@@ -16,12 +16,13 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"maps"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -108,11 +109,7 @@ func runServe(argv []string) {
 	effective := resolveServices(enabled, cfg.Services)
 	// config-friendly aliases -> internal service name.
 	alias := serveServiceAliases()
-	valid := make([]string, 0, len(alias))
-	for k := range alias {
-		valid = append(valid, k)
-	}
-	sort.Strings(valid)
+	valid := slices.Sorted(maps.Keys(alias))
 	want := map[string]bool{}
 	for _, e := range effective {
 		if strings.TrimSpace(e) == "" {

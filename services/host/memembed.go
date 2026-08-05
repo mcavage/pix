@@ -67,11 +67,21 @@ var embedLastProbe atomic.Int64
 
 // modelProbeClient is the HTTP client for lightweight Ollama model-presence
 // probes (/api/show). The timeout prevents goroutine leaks when Ollama accepts
-// the connection but never answers; a package var so tests can point it at a
-// mock server.
+// the connection but never answers; a package var so a test can redirect it.
 var modelProbeClient = &http.Client{Timeout: 10 * time.Second}
 
 var embedDisabled atomic.Bool
+
+// embedUnavailable latches semantic recall off and returns the nil vector
+// memEmbed answers with. It logs only on the FIRST latch (a wedged Ollama cannot
+// flood the log) and names the retry interval, so the degradation reads as
+// temporary.
+func embedUnavailable(why string) []float64 {
+	if !embedDisabled.Swap(true) {
+		log.Printf("memory embed: semantic recall DISABLED, %s; will retry automatically every %.0fs", why, embedProbeInterval.Seconds())
+	}
+	return nil
+}
 
 func memEmbed(text string) []float64 {
 	if embedDisabled.Load() {
@@ -95,18 +105,11 @@ func memEmbed(text string) []float64 {
 	client := &http.Client{Timeout: embedTimeout()}
 	res, err := client.Post(ollamaHost()+"/api/embed", "application/json", bytes.NewReader(body))
 	if err != nil {
-		if !embedDisabled.Swap(true) {
-			// First time latching: log so users know why semantic recall degraded.
-			log.Printf("memory embed: semantic recall DISABLED, embed model unavailable: %v; will retry automatically every %.0fs", err, embedProbeInterval.Seconds())
-		}
-		return nil
+		return embedUnavailable(fmt.Sprintf("embed model unavailable: %v", err))
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
-		if !embedDisabled.Swap(true) {
-			log.Printf("memory embed: semantic recall DISABLED, embed HTTP %d; will retry automatically every %.0fs", res.StatusCode, embedProbeInterval.Seconds())
-		}
-		return nil
+		return embedUnavailable(fmt.Sprintf("embed HTTP %d", res.StatusCode))
 	}
 	// Success: if the flag was set (recovery path), announce the restoration.
 	if embedDisabled.Swap(false) {
@@ -139,9 +142,9 @@ func memWatcherModel() string {
 
 // memWatcherWarm forces the watcher model resident in Ollama at startup so the
 // FIRST real capture doesn't pay the cold-load latency that caused watcher
-// timeouts. Best-effort and background; it does NOT touch the capture
-// availability/degraded flags (warming is priming, not a readiness verdict —
-// memWatch owns that). No-op if the model isn't pulled.
+// timeouts. Best-effort and background; warming is priming, not a readiness
+// verdict, so it never touches the capture flags. No-op if the model isn't
+// pulled.
 func memWatcherWarm() {
 	m := memWatcherModel()
 	if !memOllamaHasModel(m) {
@@ -172,14 +175,30 @@ var watcherUnavailable atomic.Bool
 // watcherUnavailable so observe()/health() surface WHY, not just a bool.
 var watcherReason atomic.Pointer[string]
 
-// watcherDegradedUntil is the unix-nano deadline of a backoff started by a real
-// memWatch() failure (timeout/transport error/non-200). Inside that window
-// watcherCaptureAvailable() returns false WITHOUT re-probing /api/show: that
-// probe only proves the model is present, which succeeds even while inference is
-// wedged, so it must not flip capture back to available mid-wedge.
+// watcherDegradedUntil is the unix-nano deadline of the backoff watcherDegrade
+// opens after a real memWatch() failure (timeout/transport error/non-200).
 var watcherDegradedUntil atomic.Int64
 
 func setWatcherReason(s string) { watcherReason.Store(&s) }
+
+// watcherDegrade is the ONE way capture goes off: record why, open the backoff
+// window (inside it watcherCaptureAvailable must not consult the metadata-only
+// /api/show probe, which succeeds while inference is wedged), and log once so a
+// dead capture half stays diagnosable. Recall works throughout.
+func watcherDegrade(reason string) {
+	watcherUnavailable.Store(true)
+	setWatcherReason(reason)
+	watcherDegradedUntil.Store(time.Now().Add(watcherBackoff).UnixNano())
+	log.Printf("memory watcher: %s, capture skipped", reason)
+}
+
+// watcherHealthy is its inverse: capture is on, with no reason and no backoff
+// left over from an earlier failure.
+func watcherHealthy() {
+	watcherUnavailable.Store(false)
+	setWatcherReason("")
+	watcherDegradedUntil.Store(0)
+}
 
 func getWatcherReason() string {
 	if p := watcherReason.Load(); p != nil {
@@ -216,8 +235,7 @@ func memOllamaHasModel(model string) bool {
 func memWatcherProbe() {
 	m := memWatcherModel()
 	if memOllamaHasModel(m) {
-		watcherUnavailable.Store(false)
-		setWatcherReason("")
+		watcherHealthy()
 		return
 	}
 	watcherUnavailable.Store(true)
@@ -236,8 +254,8 @@ var watcherLastProbe atomic.Int64
 // breaks the startup latch: memWatcherProbe() runs once at boot, so an Ollama
 // that was down then would otherwise keep capture off forever (observe
 // short-circuits before the watcher call that would clear the flag). When marked
-// unavailable it re-probes at most once per interval, so capture recovers the
-// moment the model appears. Available is the common path and returns at once.
+// unavailable it re-probes at most once per interval. Available is the common
+// path and returns at once.
 func watcherCaptureAvailable() bool {
 	if time.Now().UnixNano() < watcherDegradedUntil.Load() {
 		// Backing off after a real inference failure: the metadata-only /api/show
@@ -258,8 +276,7 @@ func watcherCaptureAvailable() bool {
 	}
 	m := memWatcherModel()
 	if memOllamaHasModel(m) {
-		watcherUnavailable.Store(false)
-		setWatcherReason("")
+		watcherHealthy()
 		log.Printf("memory watcher: model %q is now available, fact capture re-enabled.", m)
 		return true
 	}
@@ -559,35 +576,23 @@ func memWatch(user string) *watchResult {
 	client := &http.Client{Timeout: watcherTimeout()}
 	res, err := client.Post(ollamaHost()+"/api/chat", "application/json", bytes.NewReader(body))
 	if err != nil {
-		// Surface it: a silent return is why the capture half can look "dead" (Ollama
-		// down, model not pulled, or the observed failure mode — Ollama accepting the
-		// connection and never finishing inference). Recall still works.
-		watcherUnavailable.Store(true)
-		var reason string
+		// A timeout is the observed failure mode: Ollama accepts the connection and
+		// never finishes inference.
+		reason := fmt.Sprintf("Ollama /api/chat unreachable at %s: %v", ollamaHost(), err)
 		if isTimeoutErr(err) {
 			reason = fmt.Sprintf("Ollama not responding: watcher inference timed out after %ds (is ollama healthy? try restarting it)", int(watcherTimeout().Seconds()))
-		} else {
-			reason = fmt.Sprintf("Ollama /api/chat unreachable at %s: %v", ollamaHost(), err)
 		}
-		setWatcherReason(reason)
-		watcherDegradedUntil.Store(time.Now().Add(watcherBackoff).UnixNano())
-		log.Printf("memory watcher: %s, capture skipped", reason)
+		watcherDegrade(reason)
 		return nil
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
 		b, _ := io.ReadAll(io.LimitReader(res.Body, 512))
-		watcherUnavailable.Store(true)
-		reason := fmt.Sprintf("Ollama /api/chat HTTP %d (is model %q pulled? `ollama pull %s`): %s",
-			res.StatusCode, model, model, strings.TrimSpace(string(b)))
-		setWatcherReason(reason)
-		watcherDegradedUntil.Store(time.Now().Add(watcherBackoff).UnixNano())
-		log.Printf("memory watcher: %s, capture skipped", reason)
+		watcherDegrade(fmt.Sprintf("Ollama /api/chat HTTP %d (is model %q pulled? `ollama pull %s`): %s",
+			res.StatusCode, model, model, strings.TrimSpace(string(b))))
 		return nil
 	}
-	watcherUnavailable.Store(false)
-	setWatcherReason("")
-	watcherDegradedUntil.Store(0)
+	watcherHealthy()
 	rawBody, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 	var chat struct {
 		Message struct {
