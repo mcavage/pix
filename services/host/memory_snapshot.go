@@ -3,18 +3,18 @@
 // the dependency-light launcher because they need sqlite.
 //
 // ONE artifact: a snapshot is a plain sqlite file written with `VACUUM INTO`
-// against a READ-ONLY handle on the live db — a consistent single file (WAL
-// permits concurrent readers, and the -wal/-shm sidecars are folded in), safe to
-// take while `serve` holds the store. memory.db is the only unreproducible piece
-// of pix state, so nothing else rides along: config.toml is reproducible with
-// `pix config set`, and op-refs.env holds only op:// pointers.
+// against a READ-ONLY handle on the live db — a consistent single file (the
+// -wal/-shm sidecars are folded in), safe to take while `serve` holds the store.
+// memory.db is the only unreproducible piece of pix state, so nothing else rides
+// along: config.toml is reproducible with `pix config set`, and op-refs.env holds
+// only op:// pointers.
 //
 // Restore is the STOPPED-SERVICE primitive, and its ordering is the mechanism:
 // take the advisory flock the daemon holds FIRST and keep it across the whole
 // commit — that lock, not a port probe, is the authority, because the daemon
 // opens the db before it binds. Under it: validate, move the current db +
 // sidecars aside to a KEPT .bak set, rename the staged copy into place LAST.
-// Nothing fallible runs after that rename; an earlier failure rolls the .bak set
+// Nothing fallible follows that rename; an earlier failure rolls the .bak set
 // back, loudly if the rollback itself fails.
 
 package main

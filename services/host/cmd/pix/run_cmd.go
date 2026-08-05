@@ -56,10 +56,7 @@ lifecycle (matches sbx's own re-attach model):
                                  An attach whose create-time MCP set or image
                                  no longer matches is REFUSED, not silently
                                  attached; to recreate, remove it first:
-                                 pix rm <box> && pix run. There is no
-                                 --replace: a forced removal that races another
-                                 shell's live session is exactly what the
-                                 proof-gated 'pix rm' exists to prevent.
+                                 pix rm <box> && pix run.
 
   the last shell to leave a sandbox tears it down (pix run -k keeps it).
 
@@ -195,6 +192,15 @@ func runFail(d *cli.Deps, code int, format string, a ...any) error {
 	return cli.SilentError{Code: code}
 }
 
+// unloadedLocalImage is the refusal both local-image preflight arms share: what
+// was pinned, why sbx would stall on it, and the one command that fixes it.
+func unloadedLocalImage(d *cli.Deps, what string) error {
+	fmt.Fprintf(d.Err, "pix: %s is not loaded in sbx.\n", what)
+	fmt.Fprintln(d.Err, "It's a local build (never published), so sbx would try to pull it and stall on a prompt.")
+	fmt.Fprintln(d.Err, "Load it into sbx first, from the checkout that built it:  make load")
+	return cli.SilentError{Code: 1}
+}
+
 // runLaunch reads the config, resolves the run options (including a repo checkout
 // for --dev), composes the sbx argv, and execs it with stdio inherited. It
 // forwards NO credential bearer into the sandbox: host MCP servers authenticate on
@@ -274,9 +280,17 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	state := launch.ProbeTaskSandbox(defaultShellEnv(), o.Name)
 
 	// Mirror sbx's own model: an existing sandbox (running OR stopped) is ATTACHED
-	// to rather than recreated, so the create-only flags are not even RESOLVED here.
-	// ONE predicate answers it, for this gate and for the plan.
+	// to rather than recreated, so NOTHING in the create-only block below — kit
+	// selection, the pack stack, the local-image preflight, the MCP set — is even
+	// RESOLVED on an attach. ONE predicate answers it, for this gate and the plan.
 	creating := launch.WillCreate(state)
+	// effectivePack is the pack that ACTUALLY loaded, which keeps the sandbox.pack
+	// marker and the memory scope from disagreeing. --pack applies at create only,
+	// since a re-attach keeps what it was made with.
+	effectivePack := pack.ActivePackRoot(cfg.Pack, o.Pack)
+	if !creating && o.Dev {
+		fmt.Fprintf(d.Err, "pix: --dev is create-only; attaching to the existing sandbox as-is (to get --dev, %s)\n", launch.RecreateGuidance(o.Name))
+	}
 	if creating {
 		// Kit selection. A CLEAN released version pins the matching git tag; anything
 		// else (unstamped "dev", "0.0.16+local", non-semver) is UNRELEASED and its tag
@@ -320,19 +334,10 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 					"checkout or `pix run --kit <path-or-git-url>` to override.\n", version)
 			}
 		}
-	} else if o.Dev {
-		fmt.Fprintf(d.Err, "pix: --dev is create-only; attaching to the existing sandbox as-is (to get --dev, %s)\n", launch.RecreateGuidance(o.Name))
-	}
 
-	// Active pack: mount its skills/ + knowledge/ into this sandbox. --pack
-	// overrides config.Pack, create-time only, since a re-attach keeps what it was
-	// made with. effectivePack is the pack that ACTUALLY loaded, which keeps the
-	// sandbox.pack marker and the memory scope from disagreeing.
-	effectivePack := pack.ActivePackRoot(cfg.Pack, o.Pack)
-	if creating {
-		// Fail closed on an explicit --pack that doesn't load, or a declared
-		// sandbox proxy whose kit can't be built: never create a sandbox missing
-		// context the pack declared.
+		// The active pack's skills/ + knowledge/ mount into this sandbox. Fail closed
+		// on an explicit --pack that doesn't load, or a declared sandbox proxy whose
+		// kit can't be built: never create a sandbox missing context the pack declared.
 		root, perr := launch.ApplyPackStackToLaunch(cfg, &o, defaultShellEnv(), d.Err)
 		if perr != nil {
 			return runFail(d, 1, "%v", perr)
@@ -360,35 +365,22 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 			o.PackKits = append(o.PackKits, contextKit)
 			generatedKitDirs = append(generatedKitDirs, contextKit)
 		}
-	}
 
-	// Local-image preflight: a local-* tag is NEVER published, so pinning --template
-	// to one sbx has not loaded makes sbx try to pull it and stall on an interactive
-	// prompt. Refuse fast with the real fix instead. Create-only: a re-attach reads
-	// the sandbox's own spec and re-pins nothing.
-	if creating {
+		// Local-image preflight: a local-* tag is NEVER published, so pinning it when
+		// sbx has not loaded it makes sbx try to pull and stall on an interactive
+		// prompt. Refuse fast with the real fix instead.
 		switch {
 		case o.Template != "":
 			if tag := launch.TemplateTag(o.Template); strings.HasPrefix(tag, "local-") && !launch.LocalImageLoaded(defaultShellEnv(), tag) {
-				fmt.Fprintf(d.Err, "pix: --template %s is not loaded in sbx.\n", o.Template)
-				fmt.Fprintln(d.Err, "It's a local build (never published), so sbx would try to pull it and stall on a prompt.")
-				fmt.Fprintln(d.Err, "Load it first, from the checkout that built it:  make load")
-				return cli.SilentError{Code: 1}
+				return unloadedLocalImage(d, "--template "+o.Template)
 			}
 		case o.LocalImageTag != "" && o.LocalKit != "" && len(o.Kits) == 0:
 			if !launch.LocalImageLoaded(defaultShellEnv(), o.LocalImageTag) {
-				fmt.Fprintf(d.Err, "pix: local image %s:%s is not loaded in sbx.\n", launch.DockerImageRepo, o.LocalImageTag)
-				fmt.Fprintln(d.Err, "It's a local build (never published), so sbx would try to pull it and stall on a prompt.")
-				fmt.Fprintln(d.Err, "Load this build into sbx first, from your pix checkout:")
-				fmt.Fprintln(d.Err, "  make load")
-				return cli.SilentError{Code: 1}
+				return unloadedLocalImage(d, "local image "+launch.DockerImageRepo+":"+o.LocalImageTag)
 			}
 		}
-	}
 
-	// Every configured MCP server attaches at create (--static-mcp); a re-attach
-	// never sends it.
-	if creating {
+		// Every configured MCP server attaches at create (--static-mcp).
 		o.StaticMCP = mcp.AllPreloadedMCP(append(append([]string(nil), cfg.MCP...), o.MCP...))
 	}
 
@@ -408,11 +400,8 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	attachExec := false
 	if plan.Reattach {
 		_, attachExec = launch.FindPositivelyIdentifiedRunning(defaultShellEnv(), o.Name)
-	}
-	if !plan.Reattach {
-		if verr := launch.ValidateCreateKits(plan.Args, launch.ValidateSbxKit); verr != nil {
-			return runFail(d, 1, "%v", verr)
-		}
+	} else if verr := launch.ValidateCreateKits(plan.Args, launch.ValidateSbxKit); verr != nil {
+		return runFail(d, 1, "%v", verr)
 	}
 	// What this launch is DOING, in one line. Nothing here warns about create-only
 	// drift (a stale pack, a changed MCP set): the recorded create-time FINGERPRINT
@@ -456,16 +445,13 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		fmt.Fprintln(d.Err, "+ sbx "+strings.Join(args, " "))
 	}
 
-	// The sandbox's whole create/attach lifecycle runs through launch.RunSession,
-	// which OWNS the ordering: lifecycle lock EX, a fresh probe under it, the child
-	// started, the create-time facts recorded, the refs SHARED reference taken while
-	// lifecycle is still held, lifecycle released, and only THEN the session waited
-	// out. This layer owns stdio wiring, the exit code and the words, never the
-	// ordering.
-	//
-	// ONE invocation builder serves both roles — the argv this create records, and
-	// the recomputed default an attach falls back to when nothing was recorded — so
-	// "default" cannot drift from what a create would have sent.
+	// launch.RunSession OWNS the create/attach ordering: lifecycle lock EX, a fresh
+	// probe under it, the child started, the create-time facts recorded, the refs
+	// SHARED reference taken while lifecycle is still held, lifecycle released, and
+	// only THEN the session waited out. This layer owns stdio wiring, the exit code
+	// and the words, never the ordering. ONE invocation builder serves both the argv
+	// this create records and the default an attach falls back to, so they cannot
+	// drift.
 	invocation := launch.BuildPiInvocation(launch.LiveSkillDirs(cfg, o), o)
 	spec := launch.SessionSpec{
 		Key:               sessionKey,
@@ -499,28 +485,27 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 			// attach, no removal. run's own complete message.
 			return runFail(d, 1, "%v", refused)
 		}
+		code := 1
 		var exitErr *exec.ExitError
 		if errors.As(xerr, &exitErr) {
+			code = exitErr.ExitCode()
 			// A pinned git #ref kit that sbx could not resolve fails with an opaque
 			// git 128; replace it with an actionable note.
 			if msg := launch.KitResolveFailureMsg(launch.PinnedGitKit(args)); msg != "" {
 				fmt.Fprintln(d.Err, msg)
 			}
-			// A re-attach can fail on an sbx that won't reattach a kit-created sandbox;
-			// never leave the user without a next step.
-			if plan.Reattach {
-				fmt.Fprintf(d.Err, "pix run: attach failed; %s\n", launch.RecreateGuidance(o.Name))
+		} else {
+			fmt.Fprintf(d.Err, "pix run: exec sbx: %v\n", xerr)
+			if errors.Is(xerr, exec.ErrNotFound) {
+				fmt.Fprintln(d.Err, "install sbx with: "+doctor.SbxInstallHint)
 			}
-			return cli.SilentError{Code: exitErr.ExitCode()}
 		}
-		fmt.Fprintf(d.Err, "pix run: exec sbx: %v\n", xerr)
-		if errors.Is(xerr, exec.ErrNotFound) {
-			fmt.Fprintln(d.Err, "install sbx with: "+doctor.SbxInstallHint)
-		}
+		// A re-attach can fail on an sbx that won't reattach a kit-created sandbox;
+		// never leave the user without a next step.
 		if plan.Reattach {
 			fmt.Fprintf(d.Err, "pix run: attach failed; %s\n", launch.RecreateGuidance(o.Name))
 		}
-		return cli.SilentError{Code: 1}
+		return cli.SilentError{Code: code}
 	}
 	return nil
 }

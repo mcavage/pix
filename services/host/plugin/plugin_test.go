@@ -67,11 +67,10 @@ func TestRPCPlugins(t *testing.T) {
 
 // TestPluginMap asserts the client-side map covers the dispensable capability
 // with the matching adapter type (nil Impl is correct for the client side).
-// The set is CLOSED and it is the closed set pack_units.go validates a pack
-// [[services]] kind against: memory is the only capability this binary
-// dispenses now that the MCP plugin transport is retired (the bridge served
-// zero built-in servers, and an external MCP server ships as a container the
-// sbx gateway runs).
+// The set is CLOSED: memory is the only capability this binary dispenses now
+// that the MCP plugin transport is retired (the bridge served zero built-in
+// servers, and an external MCP server ships as a container the sbx gateway
+// runs).
 func TestPluginMap(t *testing.T) {
 	wants := map[string]interface{}{
 		"memory": &MemoryPlugin{},
