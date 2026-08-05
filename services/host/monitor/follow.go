@@ -29,13 +29,26 @@ type FollowConfig struct {
 // skipped, not fatal.
 func Follow(ctx context.Context, store *Store, cfg FollowConfig) {
 	const pollInterval = 150 * time.Millisecond
-	printed := map[string]int{} // stream -> events already printed
+	// cursors tracks, per stream directory, the canonical wire bytes of the
+	// LAST event this loop has printed. A byte identity survives the store's
+	// own drop-oldest trim() (an atomic rename to a shorter file) and any
+	// external truncate/rotate of the file underneath it, which a plain
+	// "count already printed" cursor does not: once the file shrinks, an
+	// index-based cursor either re-prints everything before it (duplicates)
+	// or silently adopts the new, shorter length as "already printed" and
+	// never emits the events that are actually new (drops). Anchoring on the
+	// last event's own bytes instead means every poll re-locates that exact
+	// event in the current file — wherever it now sits, or its absence — and
+	// only the events strictly after it (by position) are new.
+	cursors := map[string]string{}
 	poll := func() {
 		metas, err := store.List()
 		if err != nil {
 			return
 		}
+		seen := map[string]bool{}
 		for _, m := range metas {
+			seen[m.Dir] = true
 			if f := cfg.Filter; f != "" && !strings.Contains(m.SandboxID, f) && !strings.Contains(m.SessionID, f) {
 				continue
 			}
@@ -43,14 +56,48 @@ func Follow(ctx context.Context, store *Store, cfg FollowConfig) {
 			if err != nil {
 				continue
 			}
-			for _, e := range events[min(printed[m.Dir], len(events)):] {
-				if !cfg.JSON {
-					fmt.Fprintln(cfg.Out, concise(e, cfg.TTY))
-				} else if line, err := Encode(e); err == nil {
-					fmt.Fprintln(cfg.Out, string(line))
+			lines := make([]string, len(events))
+			for i, e := range events {
+				line, err := Encode(e)
+				if err != nil {
+					continue
+				}
+				lines[i] = string(line)
+			}
+			start := 0
+			if last, ok := cursors[m.Dir]; ok {
+				// Anchor found: only what comes after it is new. Anchor gone
+				// (evicted by trim, or the file was replaced outright): every
+				// event now present was appended after our anchor — drop-oldest
+				// is the only way lines disappear, so nothing left can predate
+				// what we already printed — so all of it is new, start stays 0.
+				for i := len(lines) - 1; i >= 0; i-- {
+					if lines[i] == last {
+						start = i + 1
+						break
+					}
 				}
 			}
-			printed[m.Dir] = len(events)
+			for i := start; i < len(events); i++ {
+				e := events[i]
+				if !cfg.JSON {
+					fmt.Fprintln(cfg.Out, concise(e, cfg.TTY))
+				} else if lines[i] != "" {
+					fmt.Fprintln(cfg.Out, lines[i])
+				}
+			}
+			if len(lines) > 0 {
+				cursors[m.Dir] = lines[len(lines)-1]
+			}
+		}
+		// A stream that fell out of List() (evicted for good) can never come
+		// back under the same directory, so its cursor is dead weight; drop it
+		// rather than let a long session accumulate one entry per churned
+		// short-lived stream forever.
+		for dir := range cursors {
+			if !seen[dir] {
+				delete(cursors, dir)
+			}
 		}
 	}
 	poll() // whatever is already there, before the first sleep

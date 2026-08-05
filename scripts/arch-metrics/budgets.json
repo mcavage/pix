@@ -100,7 +100,7 @@
       "exits": 0
     },
     "pix/host/monitor": {
-      "prod_loc": 1092,
+      "prod_loc": 1139,
       "exports": 33,
       "globals": 20,
       "edges": 0,
