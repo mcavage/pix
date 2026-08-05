@@ -99,7 +99,6 @@ func TestParseRunArgs_HelpSentinel(t *testing.T) {
 	}
 }
 
-
 // --- S1: cli.FlagSet help bool + dispatch help routing ---
 
 func TestFlagSetHelp(t *testing.T) {

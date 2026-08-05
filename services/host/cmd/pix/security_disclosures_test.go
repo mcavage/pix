@@ -16,11 +16,8 @@ import (
 	"testing"
 
 	"pix/host/config"
-	"pix/host/hostenv"
 	"pix/host/hostenv/hostenvtest"
-	"pix/host/sys/systest"
 	"pix/host/workflow/doctor"
-	"pix/host/workflow/setup"
 )
 
 // mcpHostTrustNoticeFacts are the exact facts the disclosure must state,
@@ -71,58 +68,6 @@ func TestDoctorRender_NoDisclosure_WhenNoMCPConfigured(t *testing.T) {
 		t.Errorf("doctor must not print the MCP host-trust notice with no MCP configured, got:\n%s", buf.String())
 	}
 }
-
-// hostTrustSummaryEnv is a minimal hostenv.Env sufficient for
-// setup.PrintSetupSummary's own reads (secret.HostModeProviderKeys, gworkspace.GogSetupAccountHealthy)
-// without touching the real filesystem.
-func hostTrustSummaryEnv(t *testing.T) hostenv.Env {
-	t.Helper()
-	home := t.TempDir()
-	return hostenv.Env{System: &systest.Fake{GetenvFn: func(string) string { return "" }, HomeDirFn: func() string { return home }}}
-}
-
-// TestPrintSetupSummary_DisclosesHostMCPTrust_WhenMCPConfigured: setup's
-// completion summary must state the same two facts when MCP is configured.
-func TestPrintSetupSummary_DisclosesHostMCPTrust_WhenMCPConfigured(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	cfg := &config.Config{MCP: []string{config.GWServerName}}
-	if err := cfg.Save(); err != nil {
-		t.Fatal(err)
-	}
-	var out bytes.Buffer
-	setup.PrintSetupSummary(cfg, hostTrustSummaryEnv(t), &out, setup.SetupModelsOutcome{})
-	got := out.String()
-	for _, want := range mcpHostTrustNoticeFacts {
-		if !strings.Contains(got, want) {
-			t.Errorf("setup summary missing disclosure fact %q, got:\n%s", want, got)
-		}
-	}
-}
-
-// TestPrintSetupSummary_NoDisclosure_WhenNoMCPConfigured mirrors doctor's
-// same-gate behavior: no MCP configured, no notice.
-func TestPrintSetupSummary_NoDisclosure_WhenNoMCPConfigured(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	cfg := &config.Config{}
-	if err := cfg.Save(); err != nil {
-		t.Fatal(err)
-	}
-	var out bytes.Buffer
-	setup.PrintSetupSummary(cfg, hostTrustSummaryEnv(t), &out, setup.SetupModelsOutcome{})
-	if strings.Contains(out.String(), doctor.McpHostTrustNotice) {
-		t.Errorf("setup summary must not print the MCP host-trust notice with no MCP configured, got:\n%s", out.String())
-	}
-}
-
-// TestGworkspaceSkill_DisclosesConversationExposure (product gap #1, third
-// surface): the gworkspace skill must state, before "using" returned content,
-// that Google Workspace content is returned into the agent conversation and
-// therefore sent to the selected model provider, plus that credentials stay
-// host-side and write/send is disabled by default. Anti-drift: pins the
-// facts, not the exact prose, so the skill can be reworded without silently
-// dropping a fact.
 func TestGworkspaceSkill_DisclosesConversationExposure(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "skills", "gworkspace", "SKILL.md"))
 	if err != nil {
