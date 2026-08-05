@@ -61,8 +61,9 @@ import (
 	"testing"
 
 	"pix/host/config"
-	"pix/host/hostenv/hostenvtest"
+	"pix/host/hostenv"
 	"pix/host/routing"
+	"pix/host/sys"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/pack"
 	"pix/host/workflow/provision"
@@ -149,6 +150,7 @@ func TestMarkerRoundTrip_OnboardingJSON(t *testing.T) {
 	ws := t.TempDir()
 	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
 	t.Setenv("PIX_PROFILE", "")
+	t.Setenv("PATH", t.TempDir()) // no MCP-relevant binary present
 
 	dir := filepath.Join(ws, ".pix")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -164,7 +166,7 @@ func TestMarkerRoundTrip_OnboardingJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	env := hostenvtest.Env{Present: map[string]bool{}}.Build()
+	env := hostenv.Env{System: sys.Real{}}
 	var out bytes.Buffer
 	provision.ReconcileOnboarding(ws, env, strings.NewReader(""), &out, true, false)
 
@@ -190,6 +192,7 @@ func TestMarkerRoundTrip_HostStateNeverBecomesAWorkspaceFile(t *testing.T) {
 	ws := t.TempDir()
 	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
 	t.Setenv("PIX_PROFILE", "")
+	t.Setenv("PATH", t.TempDir()) // no MCP-relevant binary present
 
 	// Write every OTHER real marker into the same workspace...
 	pack.WriteMemoryScope(ws, &pack.Info{Manifest: pack.Manifest{MemoryScope: "work"}})
@@ -198,7 +201,7 @@ func TestMarkerRoundTrip_HostStateNeverBecomesAWorkspaceFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(ws, ".pix", provision.OnboardingFileName), []byte(`{"version":1}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	env := hostenvtest.Env{Present: map[string]bool{}}.Build()
+	env := hostenv.Env{System: sys.Real{}}
 	provision.ReconcileOnboarding(ws, env, strings.NewReader(""), &out, true, false)
 
 	// ...and confirm host-state.json never appeared. See hoststate.go's own

@@ -43,13 +43,6 @@
       "edges": 2,
       "exits": 0
     },
-    "pix/host/hostenv/hostenvtest": {
-      "prod_loc": 78,
-      "exports": 1,
-      "globals": 0,
-      "edges": 2,
-      "exits": 0
-    },
     "pix/host/inference": {
       "prod_loc": 808,
       "exports": 30,

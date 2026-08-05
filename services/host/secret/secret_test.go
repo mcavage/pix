@@ -3,6 +3,7 @@ package secret
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,10 +12,60 @@ import (
 
 	"pix/host/config"
 	"pix/host/hostenv"
-	"pix/host/hostenv/hostenvtest"
 	"pix/host/sys"
 	"pix/host/sys/systest"
 )
+
+// --- real fixtures, replacing the retired hostenv/hostenvtest package ------
+//
+// Every op-facing probe secret.go uses is env.LookPath("op") + env.Run("op",
+// ...) (OpInstalled/OpSignedIn), plus env.Getenv/IsFile/ReadFile/HomeDir for
+// locating op-refs.env — so a fixture needs only a PATH-isolated bin dir for a
+// real "op" executable, plus a real PIX_CONFIG-pointed tempdir, never an
+// in-memory call-keyed double.
+
+// realFixture points PIX_CONFIG at a fresh tempdir (so DefaultOpRefsPath
+// resolves there exactly like production) and, when opRefs is non-empty,
+// writes a REAL op-refs.env with that content. It returns the real env plus
+// the real path, so a test can name the file precisely. PATH is isolated to
+// an empty dir, so op is absent unless installOp below adds it.
+func realFixture(t *testing.T, opRefs string) (hostenv.Env, string) {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
+	t.Setenv("PATH", t.TempDir())
+	path := filepath.Join(dir, "op-refs.env")
+	if opRefs != "" {
+		if err := os.WriteFile(path, []byte(opRefs), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return hostenv.Env{System: sys.Real{}}, path
+}
+
+// installOp writes a REAL "op" executable on PATH. Invoked with argv, it
+// answers with the entry in output keyed by the space-joined argv and exits
+// 0; any other invocation exits 1 — an undeclared command fails the test
+// loudly, the same contract the retired shared fixture documented.
+func installOp(t *testing.T, output map[string]string) {
+	t.Helper()
+	dir := t.TempDir()
+	var b strings.Builder
+	b.WriteString("#!/bin/sh\ncase \"$*\" in\n")
+	for args, out := range output {
+		fmt.Fprintf(&b, "%s)\nprintf %%s %s\nexit 0\n;;\n", shQuote(args), shQuote(out))
+	}
+	b.WriteString("*) exit 1 ;;\nesac\n")
+	if err := os.WriteFile(filepath.Join(dir, "op"), []byte(b.String()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+}
+
+// shQuote single-quotes s for embedding in a POSIX shell script, so neither
+// glob metacharacters in a case pattern nor shell syntax in canned output can
+// leak out of the literal string a test declared.
+func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 func TestParseOpRefsClassification(t *testing.T) {
 	content := `# a comment
@@ -90,13 +141,9 @@ func TestRepairLegacyOpRefsTemplate(t *testing.T) {
 // printed.
 func TestSecretLsShortLiteralFlagged(t *testing.T) {
 	const val = "correcthorsebattery"
-	f := hostenvtest.Env{
-		Present: map[string]bool{},
-		EnvVars: map[string]string{"PIX_CONFIG": "/fake/config/config.toml"},
-		Files:   map[string]string{"/fake/config/op-refs.env": "SLACK_TOKEN=" + val + "\n"},
-	}
+	env, _ := realFixture(t, "SLACK_TOKEN="+val+"\n")
 	var out bytes.Buffer
-	RunSecretLs(f.Build(), &out)
+	RunSecretLs(env, &out)
 	s := out.String()
 	if strings.Contains(s, val) {
 		t.Errorf("secret ls LEAKED the literal value:\n%s", s)
@@ -119,13 +166,9 @@ func TestHasPlaceholder(t *testing.T) {
 // NEVER appear in `secret ls` output.
 func TestSecretLsNeverLeaksValue(t *testing.T) {
 	const pasted = "xoxb-THIS-MUST-NOT-BE-PRINTED"
-	f := hostenvtest.Env{
-		Present: map[string]bool{}, // op not installed
-		EnvVars: map[string]string{"PIX_CONFIG": "/fake/config/config.toml"},
-		Files:   map[string]string{"/fake/config/op-refs.env": "SLACK_TOKEN=" + pasted + "\n"},
-	}
+	env, _ := realFixture(t, "SLACK_TOKEN="+pasted+"\n") // op not installed
 	var out bytes.Buffer
-	RunSecretLs(f.Build(), &out)
+	RunSecretLs(env, &out)
 	s := out.String()
 	if strings.Contains(s, pasted) {
 		t.Errorf("secret ls LEAKED the pasted value:\n%s", s)
@@ -139,15 +182,11 @@ func TestSecretLsNeverLeaksValue(t *testing.T) {
 
 func TestSecretLsStates(t *testing.T) {
 	// op installed + signed in; a filled ref + a placeholder.
-	f := hostenvtest.Env{
-		Present: map[string]bool{"op": true},
-		Output:  map[string]string{"op account list": "me@example.com\n"},
-		EnvVars: map[string]string{"PIX_CONFIG": "/fake/config/config.toml"},
-		Files: map[string]string{"/fake/config/op-refs.env": "SLACK_TOKEN=op://Private/Slack/credential\n" +
-			"OTHER=op://<vault>/<item>/credential\n"},
-	}
+	env, _ := realFixture(t, "SLACK_TOKEN=op://Private/Slack/credential\n"+
+		"OTHER=op://<vault>/<item>/credential\n")
+	installOp(t, map[string]string{"account list": "me@example.com\n"})
 	var out bytes.Buffer
-	RunSecretLs(f.Build(), &out)
+	RunSecretLs(env, &out)
 	s := out.String()
 	if !strings.Contains(s, "installed + account configured") {
 		t.Errorf("want op installed+account-configured state:\n%s", s)
@@ -161,13 +200,10 @@ func TestSecretLsStates(t *testing.T) {
 }
 
 func TestSecretLsOpNotSignedIn(t *testing.T) {
-	f := hostenvtest.Env{
-		Present: map[string]bool{"op": true},
-		// no "op account list" output => not signed in
-		EnvVars: map[string]string{"PIX_CONFIG": "/fake/config/config.toml"},
-	}
+	env, _ := realFixture(t, "")
+	installOp(t, nil) // present, but no "account list" answer => not signed in
 	var out bytes.Buffer
-	RunSecretLs(f.Build(), &out)
+	RunSecretLs(env, &out)
 	s := out.String()
 	if !strings.Contains(s, "no account configured") {
 		t.Errorf("want no-account-configured state:\n%s", s)
@@ -184,17 +220,13 @@ func TestSecretLsOpNotSignedIn(t *testing.T) {
 // key and never prints the resolved secret value.
 func TestSecretCheckOKNeverLeaks(t *testing.T) {
 	const resolved = "SECRET-VALUE-DO-NOT-PRINT"
-	f := hostenvtest.Env{
-		Present: map[string]bool{"op": true},
-		Output: map[string]string{
-			"op account list":                       "me@example.com\n",
-			"op read op://Private/Slack/credential": resolved,
-		},
-		EnvVars: map[string]string{"PIX_CONFIG": "/fake/config/config.toml"},
-		Files:   map[string]string{"/fake/config/op-refs.env": "SLACK_TOKEN=op://Private/Slack/credential\n"},
-	}
+	env, _ := realFixture(t, "SLACK_TOKEN=op://Private/Slack/credential\n")
+	installOp(t, map[string]string{
+		"account list":                       "me@example.com\n",
+		"read op://Private/Slack/credential": resolved,
+	})
 	var out bytes.Buffer
-	RunSecretCheck(f.Build(), &out)
+	RunSecretCheck(env, &out)
 	s := out.String()
 	if strings.Contains(s, resolved) {
 		t.Errorf("secret check LEAKED the resolved value:\n%s", s)
@@ -209,8 +241,8 @@ func TestSecretCheckOKNeverLeaks(t *testing.T) {
 // calls os.Exit(3) on a missing file, so this runs in a subprocess.
 func TestSecretCheckMissingRefsHintsSet(t *testing.T) {
 	if os.Getenv("PIX_SECRET_CHECK_MISSING") == "1" {
-		f := hostenvtest.Env{EnvVars: map[string]string{"PIX_CONFIG": "/fake/config/config.toml"}}
-		RunSecretCheck(f.Build(), os.Stdout)
+		env, _ := realFixture(t, "") // no op-refs.env at all
+		RunSecretCheck(env, os.Stdout)
 		return
 	}
 	cmd := exec.Command(os.Args[0], "-test.run", "TestSecretCheckMissingRefsHintsSet")

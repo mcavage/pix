@@ -3,15 +3,63 @@ package mcp
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"pix/host/config"
 	"pix/host/hostenv"
-	"pix/host/hostenv/hostenvtest"
+	"pix/host/sys"
 	"pix/host/sys/systest"
 	"strings"
 	"testing"
 )
+
+// --- real fixtures, replacing the retired hostenv/hostenvtest package -------
+//
+// RegisterServers only ever touches env.LookPath, env.RunTimed, env.
+// RunInteractive(Quiet) and env.Quiet (verified against mcp.go directly — it
+// never calls Getenv/IsFile/HomeDir/ReadFile), so a fixture here needs only
+// two primitives: a PATH-isolated bin dir a test can drop a real "sbx"/"gog"
+// executable into, and a real file a hostResolver can point at for pix-host.
+// Every probe below execs the real thing; nothing is a call-keyed double.
+
+// binDir returns a fresh, PATH-isolated directory: with PATH replaced (not
+// appended) an unwritten binary is genuinely ABSENT, regardless of what the
+// host running these tests happens to have installed.
+func binDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	return dir
+}
+
+// installBin writes a REAL executable named name into dir. Invoked with argv,
+// it answers with the entry in output keyed by the space-joined argv (exactly
+// what env.RunTimed(name, argv...) will be called with) and exits 0; any
+// other invocation exits 1 — an undeclared command fails the test loudly,
+// the same contract the retired shared fixture documented.
+func installBin(t *testing.T, dir, name string, output map[string]string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	var b strings.Builder
+	b.WriteString("#!/bin/sh\ncase \"$*\" in\n")
+	for args, out := range output {
+		fmt.Fprintf(&b, "%s)\nprintf %%s %s\nexit 0\n;;\n", shQuote(args), shQuote(out))
+	}
+	b.WriteString("*) exit 1 ;;\nesac\n")
+	if err := os.WriteFile(path, []byte(b.String()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// shQuote single-quotes s for embedding in a POSIX shell script, so neither
+// glob metacharacters in a case pattern nor shell syntax in canned output can
+// leak out of the literal string a test declared.
+func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// realEnv is the real System every fixture above wires into.
+func realEnv() hostenv.Env { return hostenv.Env{System: sys.Real{}} }
 
 // hostStub is a hostResolver that returns a fixed path (or an error).
 func hostStub(path string, err error) func() (string, error) {
@@ -104,16 +152,12 @@ func TestAddArgs_GogBare(t *testing.T) {
 // with the OAuth note. gog authenticates via its own OAuth grant, never
 // op-refs, so the note must NOT mention op-refs.
 func TestRegisterServers_GogNoOpRefsBare(t *testing.T) {
-	f := hostenvtest.Env{
-		Present: map[string]bool{"gog": true}, // no op, no sbx
-		Output:  map[string]string{},
-		EnvVars: map[string]string{"SBX_MCP_URL": "https://gateway.docker.com", "HOME": "/home/me"},
-		Home:    "/home/me",
-	}
+	dir := binDir(t)
+	installBin(t, dir, "gog", nil) // present, never executed by RegisterServers
 	cfg := defaultCfg()
 	cfg.GogAccount = "me@x.com"
 	var buf bytes.Buffer
-	if err := RegisterServers(cfg, f.Build(), &buf, []string{config.GWServerName}, hostStub("", nil), nil, Credentials{}); !errors.Is(err, ErrSbxUnavailable) {
+	if err := RegisterServers(cfg, realEnv(), &buf, []string{config.GWServerName}, hostStub("", nil), nil, Credentials{}); !errors.Is(err, ErrSbxUnavailable) {
 		t.Fatalf("expected ErrSbxUnavailable, got: %v", err)
 	}
 	out := buf.String()
@@ -124,7 +168,7 @@ func TestRegisterServers_GogNoOpRefsBare(t *testing.T) {
 		t.Errorf("gog-only note must NOT mention op-refs (gog uses OAuth), got:\n%s", out)
 	}
 	// The would-run command must be the bare gog command, not an op wrapper.
-	if !strings.Contains(out, "sbx mcp add google-workspace --command /usr/bin/gog") {
+	if !strings.Contains(out, "sbx mcp add google-workspace --command "+filepath.Join(dir, "gog")) {
 		t.Errorf("expected a bare gog would-run command, got:\n%s", out)
 	}
 }
@@ -134,18 +178,14 @@ func TestRegisterServers_GogNoOpRefsBare(t *testing.T) {
 // "seeded" line. gog authenticates via its own OAuth grant, never op-refs, so
 // seeding one would be actively wrong.
 func TestRegisterServers_GogOnlyNoSeed(t *testing.T) {
+	dir := binDir(t)
+	installBin(t, dir, "gog", nil) // op absent -> not resolvable
 	home := t.TempDir()
-	env := (hostenvtest.Env{
-		Present: map[string]bool{"gog": true}, // op absent -> not resolvable
-		Output:  map[string]string{},
-		EnvVars: map[string]string{"SBX_MCP_URL": "https://gateway.docker.com"},
-		Home:    home,
-	}).Build()
 	cfg := defaultCfg()
 	cfg.MCP = []string{config.GWServerName}
 	cfg.GogAccount = "me@x.com"
 	var buf bytes.Buffer
-	if err := RegisterServers(cfg, env, &buf, nil, hostStub("/usr/bin/pix-host", nil), nil, Credentials{}); !errors.Is(err, ErrSbxUnavailable) {
+	if err := RegisterServers(cfg, realEnv(), &buf, nil, hostStub("/usr/bin/pix-host", nil), nil, Credentials{}); !errors.Is(err, ErrSbxUnavailable) {
 		t.Fatalf("expected ErrSbxUnavailable, got: %v", err)
 	}
 	seeded := filepath.Join(home, ".config", "pix", "op-refs.env")
@@ -165,23 +205,19 @@ func TestRegisterServers_GogOnlyNoSeed(t *testing.T) {
 // longer errors — it registers BARE (no op-run wrapper), so a no-creds server
 // registers without 1Password. sbx absent -> the would-run command is printed.
 func TestRegisterServers_SlackNoOpRefsBare(t *testing.T) {
-	f := hostenvtest.Env{
-		Present: map[string]bool{}, // no op, no sbx
-		Output:  map[string]string{"/usr/bin/pix-host mcp --list": "slack\n"},
-		EnvVars: map[string]string{"SBX_MCP_URL": "https://gateway.docker.com", "HOME": "/home/me"},
-		Home:    "/home/me",
-	}
+	dir := binDir(t) // no op, no sbx
+	hostBin := installBin(t, dir, "pix-host", map[string]string{"mcp --list": "slack\n"})
 	cfg := defaultCfg()
 	var buf bytes.Buffer
-	if err := RegisterServers(cfg, f.Build(), &buf, []string{"slack"}, hostStub("/usr/bin/pix-host", nil), nil, Credentials{}); !errors.Is(err, ErrSbxUnavailable) {
+	if err := RegisterServers(cfg, realEnv(), &buf, []string{"slack"}, hostStub(hostBin, nil), nil, Credentials{}); !errors.Is(err, ErrSbxUnavailable) {
 		t.Fatalf("expected ErrSbxUnavailable, got: %v", err)
 	}
 	out := buf.String()
 	if !strings.Contains(out, "registered slack directly (bare, no 1Password)") {
 		t.Errorf("expected the bare-registration note for slack, got:\n%s", out)
 	}
-	// Bare command: --command /usr/bin/pix-host, no op-run wrapper.
-	if !strings.Contains(out, "sbx mcp add slack --command /usr/bin/pix-host --args mcp --args slack") {
+	// Bare command: --command <pix-host>, no op-run wrapper.
+	if !strings.Contains(out, "sbx mcp add slack --command "+hostBin+" --args mcp --args slack") {
 		t.Errorf("expected a bare slack would-run command, got:\n%s", out)
 	}
 	if strings.Contains(out, "op") && strings.Contains(out, "run --no-masking") {
@@ -193,20 +229,16 @@ func TestRegisterServers_SlackNoOpRefsBare(t *testing.T) {
 // ABSENT -> seed a template at the absolute XDG path (via the ONE seeder,
 // config.SeedOpRefsAt) and register BARE (no error), noting the seeded path.
 func TestRegisterServers_SlackOpRefsAbsentSeeds(t *testing.T) {
+	dir := binDir(t)
+	hostBin := installBin(t, dir, "pix-host", map[string]string{"mcp --list": "slack\n"})
 	home := t.TempDir()
-	env := (hostenvtest.Env{
-		Present: map[string]bool{"op": true},
-		Output:  map[string]string{"/usr/bin/pix-host mcp --list": "slack\n"},
-		EnvVars: map[string]string{"SBX_MCP_URL": "https://gateway.docker.com"},
-		Home:    home,
-	}).Build()
 	cfg := defaultCfg()
 	var buf bytes.Buffer
 	// op present, no op-refs found: the caller still says where one WOULD go,
 	// which is what makes seeding possible without this package resolving paths.
 	seeded := filepath.Join(home, ".config", "pix", "op-refs.env")
 	creds := Credentials{OpPath: "/usr/bin/op", SeedPath: seeded}
-	if err := RegisterServers(cfg, env, &buf, []string{"slack"}, hostStub("/usr/bin/pix-host", nil), nil, creds); !errors.Is(err, ErrSbxUnavailable) {
+	if err := RegisterServers(cfg, realEnv(), &buf, []string{"slack"}, hostStub(hostBin, nil), nil, creds); !errors.Is(err, ErrSbxUnavailable) {
 		t.Fatalf("expected ErrSbxUnavailable, got: %v", err)
 	}
 	info, err := os.Stat(seeded)
@@ -228,18 +260,12 @@ func TestRegisterServers_SlackOpRefsAbsentSeeds(t *testing.T) {
 // This gate fails if the local-vs-remote guard is removed (notion would then be
 // wrongly registered).
 func TestRegisterServers_RemoteSkipped(t *testing.T) {
-	f := hostenvtest.Env{
-		Present: map[string]bool{"op": true}, // no sbx -> would-run printed
-		Output: map[string]string{
-			"/usr/bin/pix-host mcp --list": "slack\n", // notion is NOT local
-		},
-		EnvVars:  map[string]string{"PIX_CONFIG": "/fake/config/config.toml", "SBX_MCP_URL": "https://gateway.docker.com"},
-		StatFile: map[string]bool{"/fake/config/op-refs.env": true},
-	}
+	dir := binDir(t)                                                                      // no sbx -> would-run printed
+	hostBin := installBin(t, dir, "pix-host", map[string]string{"mcp --list": "slack\n"}) // notion is NOT local
 	cfg := defaultCfg()
 	cfg.MCP = []string{"slack", "notion"}
 	var buf bytes.Buffer
-	if err := RegisterServers(cfg, f.Build(), &buf, nil, hostStub("/usr/bin/pix-host", nil), nil, Credentials{}); !errors.Is(err, ErrSbxUnavailable) {
+	if err := RegisterServers(cfg, realEnv(), &buf, nil, hostStub(hostBin, nil), nil, Credentials{}); !errors.Is(err, ErrSbxUnavailable) {
 		t.Fatalf("expected ErrSbxUnavailable, got: %v", err)
 	}
 	out := buf.String()
@@ -260,19 +286,13 @@ func TestRegisterServers_RemoteSkipped(t *testing.T) {
 // op-run wrapper. This is the pack-self-registers-remotes path; it fails if the
 // RemoteURL branch is dropped and meetings/notion/etc. fall back to the skip line.
 func TestRegisterServers_RemoteWithURLRegistered(t *testing.T) {
-	f := hostenvtest.Env{
-		Present: map[string]bool{"op": true}, // no sbx -> would-run printed
-		Output: map[string]string{
-			"/usr/bin/pix-host mcp --list": "slack\n", // meetings is NOT a local server
-		},
-		EnvVars:  map[string]string{"PIX_CONFIG": "/fake/config/config.toml"},
-		StatFile: map[string]bool{"/fake/config/op-refs.env": true},
-	}
+	dir := binDir(t)                                                                      // no sbx -> would-run printed
+	hostBin := installBin(t, dir, "pix-host", map[string]string{"mcp --list": "slack\n"}) // meetings is NOT a local server
 	cfg := defaultCfg()
 	cfg.MCP = []string{"meetings"}
 	containers := map[string]config.MCPContainer{"meetings": {RemoteURL: "https://app.trymeetings.com/mcp"}}
 	var buf bytes.Buffer
-	if err := RegisterServers(cfg, f.Build(), &buf, nil, hostStub("/usr/bin/pix-host", nil), containers, Credentials{}); !errors.Is(err, ErrSbxUnavailable) {
+	if err := RegisterServers(cfg, realEnv(), &buf, nil, hostStub(hostBin, nil), containers, Credentials{}); !errors.Is(err, ErrSbxUnavailable) {
 		t.Fatalf("expected ErrSbxUnavailable, got: %v", err)
 	}
 	out := buf.String()
@@ -287,25 +307,30 @@ func TestRegisterServers_RemoteWithURLRegistered(t *testing.T) {
 	}
 }
 
+// The next three tests pin which of sbx's two mutation seams a remote-URL
+// registration uses — RunInteractive (never killed mid-OAuth) vs the bounded
+// RunTimed probe. That is a routing/seam-choice property, not a real
+// subprocess's behavior, so it stays on the narrow, local systest.Fake
+// (sys.System's ONE sanctioned test double) rather than a shell fixture.
+
 func TestRegisterServers_RemoteURLUsesInteractiveRunner(t *testing.T) {
-	env := hostenvtest.Env{
-		Present: map[string]bool{"sbx": true},
-		Output:  map[string]string{"/usr/bin/pix-host mcp --list": "slack\n"},
-	}.Build()
 	var interactive []string
-	systest.Of(env.System).RunInteractiveFn = func(name string, args ...string) error {
-		interactive = append([]string{name}, args...)
-		return nil
-	}
-	systest.Of(env.System).RunTimedFn = func(name string, args ...string) (string, bool, error) {
-		if name == "sbx" && len(args) >= 2 && args[1] == "add" {
-			t.Fatalf("remote OAuth registration was sent through the bounded probe: %s %s", name, strings.Join(args, " "))
-		}
-		if name == "sbx" {
-			return "", false, errors.New("not registered")
-		}
-		return "slack\n", false, nil
-	}
+	env := hostenv.Env{System: &systest.Fake{
+		LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		RunInteractiveFn: func(name string, args ...string) error {
+			interactive = append([]string{name}, args...)
+			return nil
+		},
+		RunTimedFn: func(name string, args ...string) (string, bool, error) {
+			if name == "sbx" && len(args) >= 2 && args[1] == "add" {
+				t.Fatalf("remote OAuth registration was sent through the bounded probe: %s %s", name, strings.Join(args, " "))
+			}
+			if name == "sbx" {
+				return "", false, errors.New("not registered")
+			}
+			return "slack\n", false, nil
+		},
+	}}
 	cfg := defaultCfg()
 	cfg.MCP = []string{"meetings"}
 	containers := map[string]config.MCPContainer{"meetings": {RemoteURL: "https://app.trymeetings.com/mcp"}}
@@ -320,21 +345,23 @@ func TestRegisterServers_RemoteURLUsesInteractiveRunner(t *testing.T) {
 
 func TestRegisterServers_CurrentRemoteDoesNotReopenOAuth(t *testing.T) {
 	endpoint := "https://app.trymeetings.com/mcp"
-	env := hostenvtest.Env{Present: map[string]bool{"sbx": true}}.Build()
-	systest.Of(env.System).RunTimedFn = func(name string, args ...string) (string, bool, error) {
-		command := strings.Join(args, " ")
-		if name == "sbx" && command == "mcp inspect meetings" {
-			return "URL: " + endpoint, false, nil
-		}
-		if name == "sbx" && command == "mcp auth status meetings" {
-			return "meetings: authorized", false, nil
-		}
-		return "slack\n", false, nil
-	}
-	systest.Of(env.System).RunInteractiveFn = func(string, ...string) error {
-		t.Fatal("an unchanged registered remote must not reopen OAuth")
-		return nil
-	}
+	env := hostenv.Env{System: &systest.Fake{
+		LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		RunTimedFn: func(name string, args ...string) (string, bool, error) {
+			command := strings.Join(args, " ")
+			if name == "sbx" && command == "mcp inspect meetings" {
+				return "URL: " + endpoint, false, nil
+			}
+			if name == "sbx" && command == "mcp auth status meetings" {
+				return "meetings: authorized", false, nil
+			}
+			return "slack\n", false, nil
+		},
+		RunInteractiveFn: func(string, ...string) error {
+			t.Fatal("an unchanged registered remote must not reopen OAuth")
+			return nil
+		},
+	}}
 	cfg := defaultCfg()
 	cfg.MCP = []string{"meetings"}
 	if err := RegisterServers(cfg, env, &bytes.Buffer{}, nil, hostStub("/usr/bin/pix-host", nil),
@@ -346,27 +373,28 @@ func TestRegisterServers_CurrentRemoteDoesNotReopenOAuth(t *testing.T) {
 func TestRegisterServers_CurrentUnauthorizedRemoteRepairsOAuthOnce(t *testing.T) {
 	endpoint := "https://app.trymeetings.com/mcp"
 	authorized := false
-	env := hostenvtest.Env{Present: map[string]bool{"sbx": true}}.Build()
-	systest.Of(env.System).RunTimedFn = func(name string, args ...string) (string, bool, error) {
-		command := strings.Join(args, " ")
-		switch command {
-		case "mcp inspect meetings":
-			return `{"url":"` + endpoint + `"}`, false, nil
-		case "mcp auth status meetings":
-			if authorized {
-				return "meetings: authorized", false, nil
-			}
-			return "meetings: not authenticated", false, nil
-		default:
-			return "slack\n", false, nil
-		}
-	}
 	var interactive []string
-	systest.Of(env.System).RunInteractiveFn = func(name string, args ...string) error {
-		interactive = append([]string{name}, args...)
-		authorized = true
-		return nil
-	}
+	env := hostenv.Env{System: &systest.Fake{
+		LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		RunTimedFn: func(name string, args ...string) (string, bool, error) {
+			switch strings.Join(args, " ") {
+			case "mcp inspect meetings":
+				return `{"url":"` + endpoint + `"}`, false, nil
+			case "mcp auth status meetings":
+				if authorized {
+					return "meetings: authorized", false, nil
+				}
+				return "meetings: not authenticated", false, nil
+			default:
+				return "slack\n", false, nil
+			}
+		},
+		RunInteractiveFn: func(name string, args ...string) error {
+			interactive = append([]string{name}, args...)
+			authorized = true
+			return nil
+		},
+	}}
 	cfg := defaultCfg()
 	cfg.MCP = []string{"meetings"}
 	if err := RegisterServers(cfg, env, &bytes.Buffer{}, nil, hostStub("/usr/bin/pix-host", nil),
@@ -419,17 +447,11 @@ func TestRemoteMCPRegistrationCurrentCanonicalExactMatch(t *testing.T) {
 // RegisterServers must return a non-nil error so the command exits non-zero.
 // This gate fails if the old fall-back-to-local behavior returns.
 func TestRegisterServers_LocalSetUnknownFailClosed(t *testing.T) {
-	f := hostenvtest.Env{
-		Present:  map[string]bool{"op": true, "sbx": true},
-		Output:   map[string]string{}, // no `mcp --list` output -> local set UNKNOWN
-		EnvVars:  map[string]string{"PIX_CONFIG": "/fake/config/config.toml", "SBX_MCP_URL": "https://gateway.docker.com"},
-		StatFile: map[string]bool{"/fake/config/op-refs.env": true},
-	}
 	cfg := defaultCfg()
 	cfg.MCP = []string{"notion"} // a gateway-catalog name, NOT a local server
 	var buf bytes.Buffer
 	// hostStub fails: pix-host cannot be resolved, so the local set is unknown.
-	err := RegisterServers(cfg, f.Build(), &buf, nil, hostStub("", errors.New("pix-host not found")), nil, Credentials{})
+	err := RegisterServers(cfg, realEnv(), &buf, nil, hostStub("", errors.New("pix-host not found")), nil, Credentials{})
 	if err == nil {
 		t.Fatal("expected a non-nil error when the local set is unknown, got nil (silent success)")
 	}
@@ -449,16 +471,13 @@ func TestRegisterServers_LocalSetUnknownFailClosed(t *testing.T) {
 // server, register attempts it, prints the failure, AND returns a non-nil error
 // so `pix mcp register` exits non-zero.
 func TestRegisterServers_FailuresReturnError(t *testing.T) {
-	f := hostenvtest.Env{
-		Present:  map[string]bool{"op": true, "gog": true, "sbx": true},
-		Output:   map[string]string{}, // no success output for the sbx add -> it "fails"
-		EnvVars:  map[string]string{"PIX_CONFIG": "/fake/config/config.toml", "SBX_MCP_URL": "https://gateway.docker.com"},
-		StatFile: map[string]bool{"/fake/config/op-refs.env": true},
-	}
+	dir := binDir(t)
+	installBin(t, dir, "gog", nil)
+	installBin(t, dir, "sbx", nil) // present but no matching output -> every add "fails"
 	cfg := defaultCfg()
 	cfg.GogAccount = "me@x.com"
 	var buf bytes.Buffer
-	err := RegisterServers(cfg, f.Build(), &buf, []string{config.GWServerName}, hostStub("", nil), nil, Credentials{})
+	err := RegisterServers(cfg, realEnv(), &buf, []string{config.GWServerName}, hostStub("", nil), nil, Credentials{})
 	if err == nil || !strings.Contains(err.Error(), "failed to register") || !strings.Contains(err.Error(), config.GWServerName) {
 		t.Errorf("expected a joined registration error mentioning gog, got %v", err)
 	}
@@ -469,16 +488,11 @@ func TestRegisterServers_FailuresReturnError(t *testing.T) {
 
 // TestRegisterServers_GogNotFound: op present, gog requested but absent.
 func TestRegisterServers_GogNotFound(t *testing.T) {
-	f := hostenvtest.Env{
-		Present:  map[string]bool{"op": true},
-		Output:   map[string]string{},
-		EnvVars:  map[string]string{"PIX_CONFIG": "/fake/config/config.toml", "SBX_MCP_URL": "https://gateway.docker.com"},
-		StatFile: map[string]bool{"/fake/config/op-refs.env": true},
-	}
+	binDir(t) // op present is irrelevant here (never LookPath'd); gog stays absent
 	cfg := defaultCfg()
 	cfg.GogAccount = "me@x.com"
 	var buf bytes.Buffer
-	err := RegisterServers(cfg, f.Build(), &buf, []string{config.GWServerName}, hostStub("", nil), nil, Credentials{})
+	err := RegisterServers(cfg, realEnv(), &buf, []string{config.GWServerName}, hostStub("", nil), nil, Credentials{})
 	if err == nil || !strings.Contains(err.Error(), "brew install openclaw/tap/gogcli") {
 		t.Errorf("expected a gog-not-found guard, got %v", err)
 	}
@@ -487,15 +501,11 @@ func TestRegisterServers_GogNotFound(t *testing.T) {
 // TestRegisterServers_GogAccountUnset: op+gog present but no account -> guide the
 // config-set command (never file editing).
 func TestRegisterServers_GogAccountUnset(t *testing.T) {
-	f := hostenvtest.Env{
-		Present:  map[string]bool{"op": true, "gog": true},
-		Output:   map[string]string{},
-		EnvVars:  map[string]string{"PIX_CONFIG": "/fake/config/config.toml", "SBX_MCP_URL": "https://gateway.docker.com"},
-		StatFile: map[string]bool{"/fake/config/op-refs.env": true},
-	}
+	dir := binDir(t)
+	installBin(t, dir, "gog", nil)
 	cfg := defaultCfg() // GogAccount empty
 	var buf bytes.Buffer
-	err := RegisterServers(cfg, f.Build(), &buf, []string{config.GWServerName}, hostStub("", nil), nil, Credentials{})
+	err := RegisterServers(cfg, realEnv(), &buf, []string{config.GWServerName}, hostStub("", nil), nil, Credentials{})
 	if err == nil || !strings.Contains(err.Error(), "pix config set google_workspace_account") {
 		t.Errorf("expected the config-set google_workspace_account guide, got %v", err)
 	}
@@ -504,16 +514,12 @@ func TestRegisterServers_GogAccountUnset(t *testing.T) {
 // TestRegisterServers_SbxAbsentPrintsWouldRun: everything resolves but sbx is
 // absent -> print the would-run command instead of crashing.
 func TestRegisterServers_SbxAbsentPrintsWouldRun(t *testing.T) {
-	f := hostenvtest.Env{
-		Present:  map[string]bool{"op": true, "gog": true}, // no sbx
-		Output:   map[string]string{},
-		EnvVars:  map[string]string{"PIX_CONFIG": "/fake/config/config.toml", "SBX_MCP_URL": "https://gateway.docker.com"},
-		StatFile: map[string]bool{"/fake/config/op-refs.env": true},
-	}
+	dir := binDir(t) // no sbx
+	installBin(t, dir, "gog", nil)
 	cfg := defaultCfg()
 	cfg.GogAccount = "me@x.com"
 	var buf bytes.Buffer
-	if err := RegisterServers(cfg, f.Build(), &buf, []string{config.GWServerName}, hostStub("", nil), nil, Credentials{}); !errors.Is(err, ErrSbxUnavailable) {
+	if err := RegisterServers(cfg, realEnv(), &buf, []string{config.GWServerName}, hostStub("", nil), nil, Credentials{}); !errors.Is(err, ErrSbxUnavailable) {
 		t.Fatalf("expected ErrSbxUnavailable, got: %v", err)
 	}
 	out := buf.String()
@@ -527,23 +533,21 @@ func TestRegisterServers_SbxAbsentPrintsWouldRun(t *testing.T) {
 
 // TestRegisterServers_Registers: everything present + sbx runs -> registered.
 func TestRegisterServers_Registers(t *testing.T) {
-	f := hostenvtest.Env{
-		Present:  map[string]bool{"op": true, "gog": true, "sbx": true},
-		Output:   map[string]string{},
-		EnvVars:  map[string]string{"PIX_CONFIG": "/fake/config/config.toml", "SBX_MCP_URL": "https://gateway.docker.com"},
-		StatFile: map[string]bool{"/fake/config/op-refs.env": true},
-	}
+	dir := binDir(t)
+	gogBin := installBin(t, dir, "gog", nil)
 	cfg := defaultCfg()
 	cfg.GogAccount = "me@x.com"
-	// Provide success output for the exact sbx call the registrar builds.
-	reg := McpRegistrar{Op: "/usr/bin/op", OpRefs: "/fake/config/op-refs.env", Gog: "/usr/bin/gog", Account: "me@x.com"}
-	key := strings.Join(append([]string{"sbx"}, reg.AddArgs(config.GWServerName)...), " ")
-	if strings.Contains(key, "--command /usr/bin/op") {
+	// Provide success output for the exact sbx call the registrar builds. GogUseOp
+	// stays false (Credentials{} below -> opReady false), so this is the bare form
+	// regardless of OpRefs — mirrored here by leaving it unset too.
+	reg := McpRegistrar{Gog: gogBin, Account: "me@x.com"}
+	key := strings.Join(reg.AddArgs(config.GWServerName), " ")
+	if strings.Contains(key, "--command "+gogBin+" --command") || strings.HasPrefix(key, "run") {
 		t.Fatalf("unrelated op-refs must not wrap normal gog OAuth: %s", key)
 	}
-	f.Output[key] = "ok"
+	installBin(t, dir, "sbx", map[string]string{key: "ok"})
 	var buf bytes.Buffer
-	if err := RegisterServers(cfg, f.Build(), &buf, []string{config.GWServerName}, hostStub("", nil), nil, Credentials{}); err != nil {
+	if err := RegisterServers(cfg, realEnv(), &buf, []string{config.GWServerName}, hostStub("", nil), nil, Credentials{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(buf.String(), "registered: google-workspace") {
@@ -558,21 +562,17 @@ func TestRegisterServers_Registers(t *testing.T) {
 // is registered as a local stdio server. A non-gog name like "pio" registers as
 // `pix-host mcp pio` (sbx absent -> would-run is printed).
 func TestRegisterServers_DefaultsToConfigMCP(t *testing.T) {
-	f := hostenvtest.Env{
-		Present:  map[string]bool{"op": true}, // no sbx -> would-run printed
-		Output:   map[string]string{"/usr/bin/pix-host mcp --list": "pio\n"},
-		EnvVars:  map[string]string{"PIX_CONFIG": "/fake/config/config.toml", "SBX_MCP_URL": "https://gateway.docker.com"},
-		StatFile: map[string]bool{"/fake/config/op-refs.env": true},
-	}
+	dir := binDir(t) // no sbx -> would-run printed
+	hostBin := installBin(t, dir, "pix-host", map[string]string{"mcp --list": "pio\n"})
 	cfg := defaultCfg()
 	cfg.MCP = []string{"pio"} // an arbitrary local stdio server
 	var buf bytes.Buffer
-	if err := RegisterServers(cfg, f.Build(), &buf, nil, hostStub("/usr/bin/pix-host", nil), nil, Credentials{}); !errors.Is(err, ErrSbxUnavailable) {
+	if err := RegisterServers(cfg, realEnv(), &buf, nil, hostStub(hostBin, nil), nil, Credentials{}); !errors.Is(err, ErrSbxUnavailable) {
 		t.Fatalf("expected ErrSbxUnavailable, got: %v", err)
 	}
 	out := buf.String()
 	if !strings.Contains(out, "sbx mcp add pio") ||
-		!strings.Contains(out, "/usr/bin/pix-host --args mcp --args pio") {
+		!strings.Contains(out, hostBin+" --args mcp --args pio") {
 		t.Errorf("expected pio registered as pix-host mcp pio, got:\n%s", out)
 	}
 }
@@ -580,11 +580,11 @@ func TestRegisterServers_DefaultsToConfigMCP(t *testing.T) {
 // TestRegisterServers_EmptyConfig: with no names and an empty cfg.MCP, there is
 // nothing to register.
 func TestRegisterServers_EmptyConfig(t *testing.T) {
-	f := hostenvtest.Env{Present: map[string]bool{}, Output: map[string]string{}}
+	binDir(t)
 	cfg := defaultCfg()
 	cfg.MCP = nil
 	var buf bytes.Buffer
-	if err := RegisterServers(cfg, f.Build(), &buf, nil, hostStub("", nil), nil, Credentials{}); err != nil {
+	if err := RegisterServers(cfg, realEnv(), &buf, nil, hostStub("", nil), nil, Credentials{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(buf.String(), "Nothing to register") {

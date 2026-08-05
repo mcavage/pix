@@ -88,7 +88,7 @@ violation.
 
 ```
 L0  sys  sys/systest  config  routing  rpc  cli  launcher
-    hostenv  hostenv/hostenvtest  workspace                          done
+    hostenv  workspace                                              done
 L1  inference  mcp  secret  memory  knowledge  service
     monitor  monitor/tui  okf  plugin  slackoauth                    done
 L2  health                                                           done
