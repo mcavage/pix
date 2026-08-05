@@ -427,38 +427,15 @@ func StopAnyMode(managedActive func() bool, stopManaged func(io.Writer) error, c
 }
 
 // RunStop is the `serve stop` entry point.
-func RunStop(argv []string) {
-	if cli.WantsHelp(argv) {
-		fmt.Print(Usage)
-		return
-	}
-	if len(argv) > 0 {
-		fmt.Fprintf(os.Stderr, "pix serve stop: unexpected argument %q\n\n%s", argv[0], Usage)
-		os.Exit(2)
-	}
-	_, err := StopAnyMode(ManagedActive, StopManaged, DefaultCtl(), os.Stdout)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix serve stop: %v\n", err)
-		os.Exit(1)
-	}
+// StopService stops a running serve. Mode-aware: a MANAGED service is stopped
+// through its supervisor, never by a bare SIGTERM a KeepAlive would undo.
+func StopService(out io.Writer) error {
+	_, err := StopAnyMode(ManagedActive, StopManaged, DefaultCtl(), out)
+	return err
 }
 
-// RunStatus is the `serve status` entry point.
-func RunStatus(argv []string) {
-	jsonOut := false
-	for _, a := range argv {
-		switch a {
-		case "-h", "--help":
-			fmt.Print(Usage)
-			return
-		case "--json":
-			jsonOut = true
-		default:
-			fmt.Fprintf(os.Stderr, "pix serve status: unknown flag %q\n\n%s", a, Usage)
-			os.Exit(2)
-		}
-	}
-	env := hostenv.Env{System: sys.Real{}}
-	st := resolveServeStatus(DefaultCtl(), env)
-	printServeStatus(st, os.Stdout, jsonOut)
+// ReportStatus prints whether serve is running and whether its ports are up.
+func ReportStatus(out io.Writer, jsonOut bool) error {
+	printServeStatus(resolveServeStatus(DefaultCtl(), hostenv.Env{System: sys.Real{}}), out, jsonOut)
+	return nil
 }

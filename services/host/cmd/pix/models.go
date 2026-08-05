@@ -5,16 +5,12 @@
 //
 // `models` is the noun the owner asked for (docs/design/models-cli.md,
 // Problem B): `ls`/`show`/`pick`/`route` are thin passthroughs to the
-// unchanged `pix-host route` subcommand tree (see execHost below); bare
-// `pix models` is a launcher-local, read-only status screen. `models add`
-// and `models setup` (Problem A: wiring a second provider key in) are a
-// DELIBERATE gap in this file — a later change adds them as two more cases
-// in runModels' switch, on top of the tree built here.
+// unchanged `pix-host route` subcommand tree (see execHostRoute); bare
+// `pix models` is a launcher-local, read-only status screen.
 
 package main
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -22,36 +18,11 @@ import (
 	"sort"
 	"strings"
 
-	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/inference"
 	"pix/host/launcher"
-	"pix/host/sys"
 	"pix/host/workflow/doctor"
 )
-
-// execHost runs `pix-host <verb> <args...>` with inherited stdio and
-
-// runModels is the entry point main's switch calls. The verb tree, its flags
-// and its usage all live in models_cmd.go as kong-tagged structs — this is only
-// the seam between an argv slice and the command contract.
-//
-// It replaced a hand-written switch plus two hand-maintained usage strings plus
-// nine os.Exit calls.
-func runModels(argv []string) {
-	d := &cli.Deps{
-		Sys: sys.Real{}, Out: os.Stdout, Err: os.Stderr,
-		In: os.Stdin, Interactive: cli.IsTTY(os.Stdin),
-	}
-	err := cli.Run[ModelsCmd]("models", modelsDescription(), argv, d)
-	if err != nil {
-		var silent cli.SilentError
-		if !errors.As(err, &silent) {
-			fmt.Fprintf(os.Stderr, "pix models: %v\n", err)
-		}
-		os.Exit(cli.ExitCode(err))
-	}
-}
 
 // runRouteAlias is the retired `pix route` spelling, forwarded RAW to the host
 // tree for one release so it stays bug-for-bug the command it replaces. Routing
@@ -210,11 +181,3 @@ func renderModelsStatus(cfg *config.Config, out io.Writer) {
 		fmt.Fprintf(out, "   pix models add %s\n", p)
 	}
 }
-
-// modelsUsage renders the SAME help kong prints for `pix models --help`, so the
-// tiered help tree (`pix help models`) cannot drift from the parser.
-//
-// It used to be a hand-written string that the parser never read. That is the
-// drift this migration removes: a flag could be added to one and not the other,
-// and was.
-func modelsUsage() string { return cli.Usage[ModelsCmd]("models", modelsDescription()) }

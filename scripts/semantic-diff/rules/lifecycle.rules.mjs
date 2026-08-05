@@ -60,12 +60,12 @@ export default [
 	{
 		id: "lifecycle.rm.keep-polarity-except",
 		description:
-			"`pix rm --all --except <name>` removes a box only when it is ABSENT from the keep set (!keepSet[b.Name]) — the direction documented in RmUsage (\"remove all but one\"). Flipping this one-word condition would silently reverse which boxes survive. The --all discovery loop is also scoped: it only ever iterates workspace.ParsePixBoxes (already pix-* filtered), so an automatic/bulk removal can never reach a non-pix sandbox in the first place.",
+			"`pix rm --all --except <name>` removes a box only when it is ABSENT from the keep set (!keepSet[b.Name]) — the direction documented in RmDescription (\"remove all but one\"). Flipping this one-word condition would silently reverse which boxes survive. The --all discovery loop is also scoped: it only ever iterates workspace.ParsePixBoxes (already pix-* filtered), so an automatic/bulk removal can never reach a non-pix sandbox in the first place.",
 		checks: [
 			{
 				file: "services/host/workflow/launch/sandbox.go",
 				kind: "contains",
-				values: ["for _, b := range workspace.ParsePixBoxes(out) {", "if !keepSet[b.Name] {"],
+				values: ["for _, b := range workspace.ParsePixBoxes(raw) {", "if !keep[b.Name] {"],
 			},
 		],
 	},
@@ -152,7 +152,7 @@ export default [
 	{
 		id: "lifecycle.rm.keep-short-and-long-flag",
 		description:
-			"STAGED for Story04: RunRm's argv parser recognizes only the long `--except <name>` spelling today. Story04 adds a `-k`/`--keep` flag (short and long) with the SAME keep-polarity direction pinned above in lifecycle.rm.keep-polarity-except.",
+			"STAGED for Story04: Rm's RmOptions carries only the long `--except <name>` spelling today. Story04 adds a `-k`/`--keep` flag (short and long) with the SAME keep-polarity direction pinned above in lifecycle.rm.keep-polarity-except.",
 		activation: "story04",
 		checks: [
 			{

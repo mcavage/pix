@@ -160,7 +160,7 @@ func TestMemoryHelp_NoRPC(t *testing.T) {
 }
 
 func TestVerbUsage_Routing(t *testing.T) {
-	for _, verb := range []string{"run", "memory", "config", "status", "pack", "doctor", "mcp", "serve", "setup", "version", "reset"} {
+	for _, verb := range []string{"run", "memory", "config", "status", "pack", "doctor", "mcp", "setup"} {
 		u, ok := verbUsage(verb)
 		if !ok || strings.TrimSpace(u) == "" {
 			t.Errorf("verbUsage(%q) = (%q,%v), want non-empty usage", verb, u, ok)
@@ -180,7 +180,7 @@ func TestVerbUsage_Routing(t *testing.T) {
 // curated Core listing hides.
 func TestHelpAll_ListsExpertVerbs(t *testing.T) {
 	for _, v := range []string{"mcp", "secret", "state", "reset", "task", "version"} {
-		if !strings.Contains(helpAllText, v) {
+		if !strings.Contains(helpAll(), v) {
 			t.Errorf("help --all missing %q", v)
 		}
 	}

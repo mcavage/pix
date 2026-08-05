@@ -84,12 +84,16 @@ func TestValidateShard_RejectsBadJSONKeysWithoutStream(t *testing.T) {
 // --- deletion guard: every known verb is either covered or retired ---------
 
 func TestCoverage_EveryKnownVerbHasShardOrRetirement(t *testing.T) {
-	verbs, err := ExtractKnownVerbs(helpGoPath(t))
+	bin, err := BuildPixBinary()
+	if err != nil {
+		t.Fatalf("BuildPixBinary: %v", err)
+	}
+	verbs, err := ExtractKnownVerbs(bin)
 	if err != nil {
 		t.Fatalf("ExtractKnownVerbs: %v", err)
 	}
-	if len(verbs) == 0 {
-		t.Fatal("ExtractKnownVerbs found zero verbs; did help.go's knownVerbs map move?")
+	if len(verbs) < 10 {
+		t.Fatalf("ExtractKnownVerbs found %d verbs; the generated listing stopped listing them", len(verbs))
 	}
 
 	shards, err := LoadShards(realShardsDir(t))
@@ -114,7 +118,7 @@ func TestCoverage_EveryKnownVerbHasShardOrRetirement(t *testing.T) {
 		}
 	}
 	if len(missing) > 0 {
-		t.Errorf("verbs present in help.go's knownVerbs but neither corpus-covered nor retired: %v\n"+
+		t.Errorf("verbs dispatched by the kong root but neither corpus-covered nor retired: %v\n"+
 			"Add a shard (corpus/shards/<verb>.json) or an approved retirement entry (corpus/retirement.jsonl).", missing)
 	}
 }

@@ -352,11 +352,11 @@ func reportManagedServeHealth(dial func(int) bool, ports []servePortSpec,
 // serve_install_{darwin,linux,other}.go).
 func RunInstall(argv []string) {
 	if cli.WantsHelp(argv) {
-		fmt.Print(Usage)
+		fmt.Print(Description)
 		return
 	}
 	if len(argv) > 0 {
-		fmt.Fprintf(os.Stderr, "pix serve install: unexpected argument %q\n\n%s", argv[0], Usage)
+		fmt.Fprintf(os.Stderr, "pix serve install: unexpected argument %q\n\n%s", argv[0], Description)
 		os.Exit(2)
 	}
 	rl := DefaultReloader()
@@ -385,11 +385,11 @@ func Install(out io.Writer) error { return platformServeInstall(out) }
 // RunUninstall is the `serve uninstall` entry point.
 func RunUninstall(argv []string) {
 	if cli.WantsHelp(argv) {
-		fmt.Print(Usage)
+		fmt.Print(Description)
 		return
 	}
 	if len(argv) > 0 {
-		fmt.Fprintf(os.Stderr, "pix serve uninstall: unexpected argument %q\n\n%s", argv[0], Usage)
+		fmt.Fprintf(os.Stderr, "pix serve uninstall: unexpected argument %q\n\n%s", argv[0], Description)
 		os.Exit(2)
 	}
 	if err := platformServeUninstall(os.Stdout); err != nil {

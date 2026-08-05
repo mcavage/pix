@@ -10,7 +10,7 @@
       "exitCode": 0,
       "stream": "stdout",
       "contains": [
-        "usage: pix ls"
+        "Usage: pix ls"
       ]
     }
   ]

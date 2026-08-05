@@ -34,6 +34,17 @@ import (
 	"pix/host/rpc"
 )
 
+// modelsHelp renders `pix models --help` the way a user reads it: through the
+// root parser, off the same tags that parse the verb.
+func modelsHelp(t *testing.T) string {
+	t.Helper()
+	d, out, _ := rootDeps()
+	if err := runRootParse([]string{"models", "--help"}, d); err != nil {
+		t.Fatalf("models --help: %v", err)
+	}
+	return out.String()
+}
+
 // --- finding 1: route/models help is repo-less for the consumer -----------
 
 // TestRouteUsage_ConsumerPathsAreLiveOverrideDir proves `models --help` points
@@ -45,7 +56,7 @@ func TestRouteUsage_ConsumerPathsAreLiveOverrideDir(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("ROUTING_DIR", dir)
 
-	usage := modelsUsage()
+	usage := modelsHelp(t)
 
 	wantModels := filepath.Join(dir, "models.json")
 	wantScorecard := filepath.Join(dir, "scorecard.json")
@@ -65,7 +76,7 @@ func TestRouteUsage_ConsumerPathsAreLiveOverrideDir(t *testing.T) {
 // editing shipped defaults, not a personal override) must be explicitly
 // labeled — never presented as if it were the consumer's recovery path.
 func TestRouteUsage_EmbeddedRepoSourceIsLabeledMaintainerOnly(t *testing.T) {
-	usage := modelsUsage()
+	usage := modelsHelp(t)
 	idx := strings.Index(usage, "services/host/routing/defaults")
 	if idx < 0 {
 		return // no mention at all is also fine

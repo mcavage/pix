@@ -10,7 +10,7 @@
       "exitCode": 0,
       "stream": "stdout",
       "contains": [
-        "usage: pix serve"
+        "Usage: pix serve"
       ]
     },
     {
@@ -19,10 +19,10 @@
         "serve",
         "--this-is-not-a-real-flag-9x7z"
       ],
-      "exitCode": 1,
+      "exitCode": 2,
       "stream": "stderr",
       "contains": [
-        "pix serve:"
+        "unknown flag"
       ]
     }
   ]

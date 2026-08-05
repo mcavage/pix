@@ -18,7 +18,6 @@
 package launch
 
 import (
-	"path/filepath"
 	"pix/host/hostenv"
 	"pix/host/sandbox"
 	"strings"
@@ -86,31 +85,4 @@ func ProbeTaskSandbox(env hostenv.Env, name string) SbxState {
 		}
 	}
 	return SbxAbsent
-}
-
-// ResolveThroughMissing canonicalizes a path that may not exist yet, so it is
-// comparable byte-for-byte with a filepath.EvalSymlinks'd sibling. EvalSymlinks
-// fails outright on a missing path, so walk up to the deepest ancestor that DOES
-// exist, resolve that, and re-append the segments below it. A path with no
-// resolvable ancestor at all falls back to its cleaned absolute form. Kept as a
-// general path utility (unrelated to tasks; used by setup's interrupt-resume
-// path comparison) even though Story06 removed its original caller (task
-// harvest's symlink-safety check).
-func ResolveThroughMissing(abs string) string {
-	cur := filepath.Clean(abs)
-	rest := ""
-	for {
-		if r, err := filepath.EvalSymlinks(cur); err == nil {
-			if rest == "" {
-				return r
-			}
-			return filepath.Join(r, rest)
-		}
-		parent := filepath.Dir(cur)
-		if parent == cur {
-			return filepath.Clean(abs)
-		}
-		rest = filepath.Join(filepath.Base(cur), rest)
-		cur = parent
-	}
 }

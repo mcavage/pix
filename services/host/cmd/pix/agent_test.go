@@ -156,7 +156,7 @@ func mustRunAgent(t *testing.T, argv ...string) {
 		Sys: &systest.Fake{}, Out: os.Stdout, Err: os.Stderr,
 		In: strings.NewReader(""), Interactive: false,
 	}
-	if err := cli.Run[AgentCmd]("agent", agentDescription, argv, d); err != nil {
+	if err := runRootParse(append([]string{"agent"}, argv...), d); err != nil {
 		t.Fatalf("pix agent %v: %v", argv, err)
 	}
 }

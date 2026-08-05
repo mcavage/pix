@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -75,35 +76,30 @@ func ValidateShard(s Shard) error {
 	return nil
 }
 
-// knownVerbsBlockRe extracts the body of help.go's `var knownVerbs = map[string]bool{ ... }`
-// literal, and verbKeyRe pulls each quoted key out of that body. Scanning the
-// real source (rather than hand-duplicating the list here) means this guard
-// can never silently drift from the CLI's actual dispatch table.
-var (
-	knownVerbsBlockRe = regexp.MustCompile(`(?s)var knownVerbs = map\[string\]bool\{(.*?)\n\}`)
-	verbKeyRe         = regexp.MustCompile(`"([a-zA-Z0-9_-]+)"\s*:\s*true`)
-)
+// helpAllVerbRe matches one verb row of the generated `pix help --all`
+// listing: every verb sits two spaces under its tier heading, and headings and
+// prose sit in column 0.
+var helpAllVerbRe = regexp.MustCompile(`(?m)^ {2}([a-z][a-z0-9-]*) `)
 
-// ExtractKnownVerbs scans help.go's source text for the knownVerbs map and
-// returns its keys. It errors if the map can't be found at all (the anchor
-// moved), which is the same "warn, don't silently pass" contract the other
-// scripts/check-*.sh guards use for a moved anchor.
-func ExtractKnownVerbs(helpGoPath string) (map[string]bool, error) {
-	b, err := os.ReadFile(helpGoPath)
+// ExtractKnownVerbs returns the launcher's live top-level verb set by ASKING
+// THE BINARY. `pix help --all` is generated from the kong root (root.go's
+// `type rootCmd struct`), which is the only dispatcher, so its listing is the
+// dispatcher's own answer to "what does pix accept?" — not a list beside it,
+// and not a source scan a moved anchor can silently defeat. Zero verbs is an
+// error, the same "warn, don't silently pass" contract the scripts/check-*.sh
+// guards use.
+func ExtractKnownVerbs(bin string) (map[string]bool, error) {
+	listing, err := exec.Command(bin, "help", "--all").Output()
 	if err != nil {
-		return nil, fmt.Errorf("corpus: read %s: %w", helpGoPath, err)
+		return nil, fmt.Errorf("corpus: %s help --all: %w", bin, err)
 	}
-	block := knownVerbsBlockRe.FindSubmatch(b)
-	if block == nil {
-		return nil, fmt.Errorf("corpus: could not find `var knownVerbs = map[string]bool{...}` in %s (did it move? update knownVerbsBlockRe)", helpGoPath)
+	rows := helpAllVerbRe.FindAllSubmatch(listing, -1)
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("corpus: `%s help --all` listed no verbs (did the generated listing change shape?)", bin)
 	}
-	matches := verbKeyRe.FindAllSubmatch(block[1], -1)
-	if len(matches) == 0 {
-		return nil, fmt.Errorf("corpus: knownVerbs block in %s matched but contained no \"verb\": true entries", helpGoPath)
-	}
-	out := make(map[string]bool, len(matches))
-	for _, m := range matches {
-		out[string(m[1])] = true
+	out := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		out[string(row[1])] = true
 	}
 	return out, nil
 }

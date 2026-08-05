@@ -25,13 +25,12 @@
 //     same declaration that parses them, so it cannot describe a flag that does
 //     not exist, or omit one that does.
 //
-// Migration is verb-by-verb, not big-bang: main.go's switch stays, and a
-// migrated verb's case calls Run[T]. An unmigrated verb is untouched. There is
-// no flag day and no period where half a parser is live.
+// One root parses everything (RunRoot): a verb that has not been migrated yet
+// declares a passthrough tail and hands its own seam the argv verbatim, so the
+// tree can absorb a verb at a time without a flag day.
 package cli
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -126,28 +125,33 @@ func ExitCode(err error) int {
 	return 1
 }
 
-// Runner is what every command implements. kong finds it by method name on the
-// selected node; it is declared here so the contract is stated in one place.
-type Runner interface{ Run(*Deps) error }
-
-// Run parses argv into a fresh T and runs it. T's fields carry the flag/arg
-// declarations; kong generates the usage from them.
+// RunRoot parses argv against the ROOT command tree T — the whole verb table —
+// and runs the selected leaf. Two properties a root must have:
 //
-// Generic over the command type so each verb can be migrated on its own: main's
-// switch calls Run[ModelsCmd] for a migrated verb and leaves the rest alone.
-// There is no root command that has to know about all 34 at once, which is what
-// would have forced a big-bang cutover.
-func Run[T any](name, description string, argv []string, d *Deps) error {
+//   - help goes to Deps.Out, because `pix ls --help` is a successful answer to
+//     a question, not a diagnostic;
+//   - a help request for the root ITSELF prints rootHelp verbatim, when one is
+//     given. The tiered landing screen is a curated, deliberately short
+//     document. Pass "" to get kong's own generated listing instead — that is
+//     the `help --all` tier, generated from the same tags that parse argv.
+//
+// kong's default exits the process on --help and on a parse error. Both are
+// errors here instead, or this package would reintroduce the 266 exits it
+// exists to remove.
+func RunRoot[T any](name, description, rootHelp string, argv []string, d *Deps) error {
 	var cmd T
 	parser, err := kong.New(&cmd,
-		kong.Name("pix "+name),
+		kong.Name(name),
 		kong.Description(description),
-		kong.Writers(d.Err, d.Err),
-		// kong's default exits the process on --help and on a parse error. Both
-		// must be errors instead, or this package would reintroduce the 266 exits
-		// it exists to remove.
+		kong.Writers(d.Out, d.Err),
 		kong.Exit(func(int) { panic(errHelpRequested) }),
-		kong.UsageOnError(),
+		kong.Help(func(o kong.HelpOptions, ctx *kong.Context) error {
+			if ctx.Selected() == nil && rootHelp != "" {
+				fmt.Fprint(d.Out, rootHelp)
+				return nil
+			}
+			return kong.DefaultHelpPrinter(o, ctx)
+		}),
 	)
 	if err != nil {
 		return fmt.Errorf("internal: building the %s parser: %w", name, err)
@@ -156,9 +160,6 @@ func Run[T any](name, description string, argv []string, d *Deps) error {
 	if err != nil || ctx == nil {
 		return err // ctx == nil means --help was printed
 	}
-	// kong dispatches to the SELECTED leaf, which is what lets a verb group
-	// (`models ls` vs `models add`) live in one struct without a hand-written
-	// switch. Deps is bound so each leaf's Run(*Deps) receives it.
 	return ctx.Run(d)
 }
 
@@ -183,36 +184,6 @@ func parse(parser *kong.Kong, argv []string) (ctx *kong.Context, err error) {
 		return nil, UsageError{Err: perr}
 	}
 	return c, nil
-}
-
-// Usage renders T's help exactly as `pix <name> --help` would, as a string.
-//
-// This is what lets the tiered help tree (`pix help <verb>`) stay a feature
-// without becoming a second source of truth. Before, a verb had a hand-written
-// usage constant that `help` printed and the parser never read, so a flag could
-// be added to one and not the other — which is how `pix models` came to
-// document a `--json` its parser rejected and omit the `--catalog` it accepted.
-func Usage[T any](name, description string) string {
-	var cmd T
-	var buf bytes.Buffer
-	parser, err := kong.New(&cmd,
-		kong.Name("pix "+name),
-		kong.Description(description),
-		kong.Writers(&buf, &buf),
-		kong.Exit(func(int) { panic(errHelpRequested) }),
-	)
-	if err != nil {
-		return ""
-	}
-	func() {
-		defer func() {
-			if r := recover(); r != nil && r != errHelpRequested {
-				panic(r)
-			}
-		}()
-		_, _ = parser.Parse([]string{"--help"})
-	}()
-	return buf.String()
 }
 
 // ── shared launcher primitives ──────────────────────────────────────────────
@@ -247,16 +218,6 @@ func IsTTY(r io.Reader) bool {
 		return false
 	}
 	return term.IsTerminal(int(f.Fd()))
-}
-
-// Plural renders "1 thing" / "2 things". Naive by design: every noun it is
-// asked about is an English word with an -s plural, and a real pluralizer would
-// be a dependency to avoid saying "2 checks".
-func Plural(n int, noun string) string {
-	if n == 1 {
-		return fmt.Sprintf("1 %s", noun)
-	}
-	return fmt.Sprintf("%d %ss", n, noun)
 }
 
 // UpDown renders a liveness boolean. Trivial, and shared because two renderers

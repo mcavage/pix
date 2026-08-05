@@ -747,49 +747,9 @@ func RunCore(cfg *config.Config, paths Paths, opts Opts,
 }
 
 // ParseArgs parses the reset flag set.
-func ParseArgs(argv []string, allowSbx bool) (Opts, error) {
-	var o Opts
-	for _, a := range argv {
-		switch a {
-		case "-h", "--help":
-			o.Help = true
-			return o, nil
-		case "--keep-memory":
-			o.keepMemory = true
-		case "--yes", "-y":
-			o.assumeYes = true
-		case "--force":
-			o.force = true
-		case "--sbx":
-			if !allowSbx {
-				return o, fmt.Errorf("unknown flag %q", a)
-			}
-			o.sbx = true
-		default:
-			return o, fmt.Errorf("unknown flag %q", a)
-		}
-	}
-	return o, nil
+// NewOpts builds the option set from already-parsed flags. Parsing itself is
+// the root parser's job (root.go's resetCmd): this is the L1 seam that keeps
+// the option struct's fields unexported and its invariants here.
+func NewOpts(keepMemory, sbx, assumeYes, force bool) Opts {
+	return Opts{keepMemory: keepMemory, sbx: sbx, assumeYes: assumeYes, force: force}
 }
-
-const Usage = `usage: pix reset [--keep-memory] [--sbx] [--yes] [--force]
-
-Reset the stack to a clean slate (REVERSIBLE). Nothing is hard-deleted: state is
-moved aside to a timestamped <path>.bak-<unixts> sibling you can rename back.
-
-Moves aside the config dir (~/.config/pix) and the data dir (~/.local/share/pix:
-captured memory + the knowledge index). Best-effort stops a running
-'pix-host serve' first.
-
-flags:
-  --keep-memory   preserve ~/.local/share/pix/memory (your captured facts); reset the rest
-  --sbx           also remove every pix-* sandbox and unregister the
-                  configured local MCP servers (provider secrets are left alone)
-  --force         move the data dir even if 'pix-host serve' still appears
-                  to be running (otherwise the data move is refused to avoid
-                  splitting a live sqlite db from its wal)
-  --yes, -y       don't prompt (REQUIRED on a non-interactive terminal)
-
-Without --yes on a TTY it prints exactly what will move and prompts before acting.
-On a non-TTY it refuses unless --yes is given.
-`

@@ -5,7 +5,7 @@ package cli
 // three packages need it, NOT because it is good.
 //
 // It is TRANSITIONAL and should shrink to nothing: every verb migrated to the
-// kong contract (see Run) drops its FlagSet use, and when the last one does,
+// kong contract (see RunRoot) drops its FlagSet use, and when the last one does,
 // delete this file. Do not add features to it -- if a verb needs a flag shape
 // this cannot express, that verb is ready to migrate.
 

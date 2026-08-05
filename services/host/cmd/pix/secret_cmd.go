@@ -13,12 +13,8 @@ package main
 // one, required, named in generated help, with kong producing the error.
 
 import (
-	"errors"
-	"fmt"
-	"os"
 	"pix/host/cli"
 	"pix/host/secret"
-	"pix/host/sys"
 )
 
 const secretDescription = `Provider credentials, as 1Password references.
@@ -27,22 +23,9 @@ Pix never stores a secret value: op-refs.env maps ENV_VAR to an op:// reference,
 and the value is resolved just-in-time when a host MCP server is spawned. The
 secret never touches disk or the sandbox.`
 
-// runSecretCmd is the seam between argv and the command contract. The verb
-// tree, its arities and its usage live below; the behaviour lives in
-// pix/host/secret.
-func runSecretCmd(argv []string) {
-	d := &cli.Deps{
-		Sys: sys.Real{}, Out: os.Stdout, Err: os.Stderr,
-		In: os.Stdin, Interactive: cli.IsTTY(os.Stdin),
-	}
-	if err := cli.Run[SecretCmd]("secret", secretDescription, argv, d); err != nil {
-		var silent cli.SilentError
-		if !errors.As(err, &silent) {
-			fmt.Fprintf(os.Stderr, "pix secret: %v\n", err)
-		}
-		os.Exit(cli.ExitCode(err))
-	}
-}
+// SecretCmd is a child of the kong root; the verb tree, its arities and its
+// usage are these tags, and the behaviour lives in pix/host/secret.
+func (c *SecretCmd) Help() string { return secretDescription }
 
 type SecretCmd struct {
 	Ls    SecretLsCmd    `cmd:"" default:"1" help:"List configured references and whether they resolve."`

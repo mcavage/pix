@@ -132,7 +132,7 @@ func TestRetiredVerbsAreGoneFromDiscovery(t *testing.T) {
 		if flag != "" || verb == "pix" {
 			continue
 		}
-		if knownVerbs[verb] {
+		if knownVerbs()[verb] {
 			t.Errorf("retired verb %q is still in knownVerbs", verb)
 		}
 		if _, ok := verbUsage(verb); ok {
@@ -140,7 +140,7 @@ func TestRetiredVerbsAreGoneFromDiscovery(t *testing.T) {
 		}
 	}
 	for _, verb := range []string{"slack", "gworkspace", "knowledge", "upgrade", "backup", "restore"} {
-		for name, text := range map[string]string{"helpText": helpText, "helpAllText": helpAllText} {
+		for name, text := range map[string]string{"helpText": helpText, "helpAll()": helpAll()} {
 			for _, line := range strings.Split(text, "\n") {
 				if strings.HasPrefix(strings.TrimSpace(line), verb) {
 					t.Errorf("%s still advertises retired verb %q:\n  %s", name, verb, line)
