@@ -152,11 +152,13 @@ var pkgLayer = map[string]int{
 
 	// L4 — the command layer.
 	"cmd/pix": layerCommand,
-	// cmd/pix/corpus is the golden CLI corpus + retirement-manifest harness
-	// (W0 U00b): it imports nothing below it (stdlib + os/exec only) and
-	// drives the compiled cmd/pix binary as a real subprocess rather than
-	// importing it, so it belongs beside the command it exercises.
-	"cmd/pix/corpus": layerCommand,
+	// cmd/pix/corpus (the W0 U00b golden CLI corpus + retirement-manifest
+	// harness) is deliberately ABSENT from this map: U11k reclassified it as
+	// test-only support (every file under it is now a _test.go file, so it
+	// has zero production LOC and no runtime caller). scanPackages below
+	// skips packages with no production .go files for exactly this reason —
+	// a package that is entirely tests has no layer to place, the same way it
+	// has no budget to track in scripts/arch-metrics/budgets.json.
 
 	// Not part of the launcher's layering: the host daemon binary, a separate
 	// program. Its examples/ tree is gone with the MCP plugin transport it
@@ -283,12 +285,14 @@ func scanPackages(t *testing.T) map[string][]string {
 		}
 		var imports []string
 		fset := token.NewFileSet()
+		hasProd := false
 		for _, f := range files {
 			// Test files are excluded: a test may legitimately reach for a fake in
 			// another layer, and policing that would punish good tests.
 			if strings.HasSuffix(f, "_test.go") {
 				continue
 			}
+			hasProd = true
 			parsed, perr := parser.ParseFile(fset, f, nil, parser.ImportsOnly)
 			if perr != nil {
 				continue
@@ -299,6 +303,14 @@ func scanPackages(t *testing.T) map[string][]string {
 					imports = append(imports, strings.TrimPrefix(p, mod+"/"))
 				}
 			}
+		}
+		// A package with ONLY _test.go files is test-only support, not part of
+		// the production architecture: it has no layer to place and no imports
+		// to police (see cmd/pix/corpus, reclassified in U11k). Skipping it here
+		// keeps the unplaced-package check honest — it fires for a genuine new
+		// production package, not for a package that stopped shipping one.
+		if !hasProd {
+			return nil
 		}
 		out[filepath.ToSlash(rel)] = imports
 		return nil

@@ -10,6 +10,29 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **U11k: `cmd/pix/corpus` reclassified as test-only support (588 -> 0
+  production LOC).** The golden CLI corpus + retirement-manifest harness had
+  no runtime caller — it exists solely to be driven by `go test
+  ./cmd/pix/corpus`, exercising the real compiled `pix` binary as a
+  subprocess — so its four implementation files (`loader.go`, `regen.go`,
+  `retirement.go`, `runner.go`, plus `types.go`) are folded into their
+  matching `*_test.go` files (`types.go` simply renamed to `types_test.go`,
+  no collision). Every `.go` file under the package is now a `_test.go` file:
+  `go test ./cmd/pix/corpus` and the full golden-corpus run (CI's `metrics`
+  job) are unchanged and still green, including the sharded corpus, the
+  append-only retirement-manifest checks, and the real-binary behavioral
+  tests. Folding in the duplicate `buildPixBinary`/`BuildPixBinary` wrapper
+  pair into one `sync.Once`-cached test helper avoided growing total test
+  LOC while merging: the package's combined line count actually shrank
+  588+863=1,451 -> 1,421. `arch_test.go`'s `pkgLayer` map and
+  `scanPackages` now skip packages with zero non-test `.go` files (a
+  package that is only tests has no layer to place), and
+  `scripts/arch-metrics/main.go`'s `scan()` mirrors that rule for the same
+  reason, so `cmd/pix/corpus` is gone from both the architecture layer map
+  and `scripts/arch-metrics/budgets.json` — not zeroed, removed. Both
+  changes are shrink-only: `pix/host` and every other package's recorded
+  budget ceiling is unchanged.
+
 - **U07b: `pix-host backup`/`restore` collapse into `pix-host memory
   snapshot`/`memory restore`.** The multi-component hot archive (a versioned
   `tar.gz` carrying `memory.db` + `config.toml` + `op-refs.env` + a
