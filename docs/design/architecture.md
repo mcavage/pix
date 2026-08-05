@@ -9,11 +9,14 @@ fails the build on violation — so it cannot rot into aspirational prose.
 
 ```
 L4  cmd/pix          argv -> a command. Owns os.Exit. Nothing imports it.
-L3  workflow/*       doctor, setup, status, run, task. Orchestrate L1+L2.
-L2  readiness        turns L1 probes into a Snapshot with verdicts.
-L1  capability/*     inference, secret, mcp, service, pack, sandbox, agentdef.
-                     One domain each. MAY NOT import each other.
-L0  foundation       sys, config, routing, rpc, cli, hostenv.
+L3  workflow/*       pack, doctor, launch, models, provision. Orchestrate L1+L2.
+L2  health           turns L1 probes into a Snapshot with verdicts (plus
+                     supervise, the process lifecycle that RUNS a capability).
+L1  capability/*     inference, secret, mcp, service, memory, monitor, plugin,
+                     sandbox, workflow/task. One domain each. MAY NOT import
+                     each other.
+L0  foundation       sys, config, routing, rpc, cli, hostenv, launcher, lease,
+                     workspace.
 ```
 
 The load-bearing clause is **L1 may not import L1**. Everything else follows
@@ -88,14 +91,29 @@ violation.
 
 ```
 L0  sys  sys/systest  config  routing  rpc  cli  launcher
-    hostenv  workspace                                              done
-L1  inference  mcp  secret  memory  knowledge  service
-    monitor  monitor/tui  okf  plugin  slackoauth                    done
-L2  health                                                           done
-L3  workflow/{setup, launch, doctor, pack, slack, gworkspace,
-             onboard, reset, upgrade, backup, man}                    done
+    lease  hostenv  workspace                                        done
+L1  inference  mcp  secret  memory  service  monitor  plugin
+    sandbox  workflow/task                                           done
+L2  health  supervise                                                done
+L3  workflow/{pack, doctor, launch, models, provision}                done
 L4  cmd/pix                                                          done
 ```
+
+`knowledge`, `okf`, `slackoauth`, `slack`, `gworkspace`, `onboard`, `reset`,
+`upgrade`, `man`, and `backup` — all present in an earlier revision of this
+map — no longer exist. `slack` and `gworkspace` were externalized (see
+`docs/design/slack-setup.md`, `docs/design/gworkspace-externalization.md`);
+`onboard`/`reset`/`upgrade`/`man`/`backup` were retired outright (their verbs
+answer `PIX_RETIRED`); `knowledge` and `okf` collapsed once the public stack
+shipped no built-in corpus — `knowledge` is a capability a pack wires
+(`files`/`http`), not a host package. `lease` (U04a: per-sandbox
+lifecycle/ref-lock primitives), `sandbox` (U04b: naming, listing, argv
+planning, fingerprinting), `workflow/task` (Story06: task-checkout, filed
+under `workflow/` for discoverability but an L1 capability, not a workflow),
+`supervise` (the Suture-based process lifecycle that runs a capability, filed
+at L2 because it composes `plugin` rather than owning a domain), and
+`workflow/provision` (the current name for what used to be called `setup`)
+are net-new since the table above was first written.
 
 **`readiness` and `readiness/axis` are gone (W5/U11r).** The Requirement ×
 Verdict model, its lazy axis registry, its four exit codes and its second
@@ -105,10 +123,12 @@ session-model resolution, Ollama endpoint resolution and machine sizing to
 `inference`; "is a model key present" to `secret`; the launch gate and its
 warning rows to `workflow/launch`.
 
-`cmd/pix` is **40,905 -> 3,503** production lines across 21 files: thirteen argv
-seams, the composition root, the verb table, and the two kong verbs whose
-handlers take command structs directly (`agent`, `models`) and are therefore L4
-by definition.
+`cmd/pix` is **40,905 -> 3,207** production lines across 20 files (measured at
+this writing; the count keeps shrinking as unrelated tidy passes trim prose
+and dead branches — treat the ratio, not the exact figure, as the point):
+thirteen argv seams, the composition root, the verb table, and the two kong
+verbs whose handlers take command structs directly (`agent`, `models`) and are
+therefore L4 by definition.
 
 **drainingPackages is empty.** It held one entry, `cmd/pix`, for the whole of
 this work; every package in the module now satisfies the layering with no
@@ -116,6 +136,12 @@ exemption. `TestArchitecture_DrainingListIsShrinking` ratchets it at zero.
 
 Order to drain in is **inbound count ascending**, because inbound is the real
 blocker (an extracted package cannot import `package main`):
+
+**Historical record.** The table below is the plan for the original
+40,905-line extraction, kept for what it teaches about measuring before you
+move code. Several of its domains (`knowledge`, `man`/`backup`, `upgrade`,
+`slack`, `reset`, `onboard`, `gworkspace`) were later externalized or retired
+outright and no longer exist in the tree; the counts are not current LOC.
 
 | domain               | LOC   | inbound at plan | at extraction |
 |----------------------|-------|-----------------|---------------|

@@ -27,7 +27,7 @@ CLI reference of its own.
 | `task` | isolated parallel-work clones + sandboxes | `docs/design/worktree-tasks.md` |
 | `monitor` | live-follow a sandbox's out-of-sandbox traffic | `docs/design/monitor.md` |
 | `models` | which models pix can use, and the model router: ls/show/pick/route | `docs/design/routing.md`, `docs/design/models-cli.md` |
-| `agent` | the subagent roster: ls/new/edit/rm/reassess | §4 |
+| `agent` | the subagent roster, read-only: `ls` only — `new`/`edit`/`rm`/`reassess` are RETIRED | §4 |
 | `version`, `help` | stamped version; tiered help | — |
 
 Retired verbs (`slack`, `gworkspace`, `knowledge`, `host`, `upgrade`, `man`,
@@ -181,6 +181,12 @@ resolves to a different vendor than whichever one wrote the code, on purpose.
 pix agent ls                 # roster with each agent's resolved model and WHY
 pix models pick <intent>     # what the router would resolve for that intent
 ```
+
+`pix agent ls` is the only `agent` subcommand. `new`/`edit`/`rm`/`reassess`
+are RETIRED (each answers `PIX_RETIRED` and exits 2, doing nothing else): an
+agent is a hand-edited `agents/*.md` file, not a CLI mutation surface. To
+change one, edit its frontmatter (or add a new file) directly, then run
+`pix models route` to re-resolve intents and recompile `routing.json`.
 
 Example: `code-review` finishes its own pass, then dispatches the `review`
 subagent, which the router resolves to GPT if your code was written by Claude.
@@ -336,27 +342,33 @@ pix mcp bundle                 # register the shipped catalog (notion/
                                     # atlassian/granola) in one step
 ```
 
-`pix mcp load` resolves to `sbx mcp load <name> --sandbox <box>` and
-records a receipt only after that attach succeeds; `pix status` and
-`pix doctor` read that receipt back, they do not poll the gateway live
-(see §9).
+`pix mcp load` resolves to `sbx mcp load <name> --sandbox <box>`. It writes
+no receipt — the launcher-side MCP receipt store was deleted (U04e), because
+"attached once" is not the state of a live session, and rendering it as
+`attached` was a lie by the time you read it. `pix status` and `pix doctor`
+never poll a sandbox and never claim to know what it has attached; they
+report what the HOST can check (see §9).
 
 ## 9. Status and doctor
 
-`pix status` is a fast, read-only dashboard: services, provider keys,
-knowledge bundles, and, per configured MCP server per running sandbox, one of
-five states drawn from launcher receipts, not a live gateway probe:
+`pix status` is a fast, read-only dashboard: services, provider keys, the
+active pack, and, per configured MCP server, the two things the host can
+actually check, each tri-state (yes / no / unknown — never guessed):
 
-- **preloaded**: the sandbox's create receipt says this server shipped as
-  `--static-mcp`, and it's still registered
-- **loaded**: a later `pix mcp load` receipt attached it, and it's
-  still registered
-- **registered-not-attached**: registered, but neither receipt covers this
-  sandbox; the fix is `pix mcp load <name> <dir>`
-- **not-registered**: `sbx mcp ls` positively lacks the server
-- **unverifiable**: an old or externally created sandbox with no launcher
-  receipt, or the registration/sandbox listing itself failed; status never
-  guesses a state it can't back with a receipt
+- **registration**: `sbx mcp ls` says the server is known to the gateway
+- **auth**: for a remote/OAuth server only (catalog or pack-remote), the
+  hosted control plane's login state; a local stdio server has no
+  control-plane auth to check
+
+**Attachment is deliberately not a third truth.** Nothing pix can run from
+the host answers whether a RUNNING sandbox currently has a server's tools
+loaded, so a registered server's note always carries the same caveat —
+"host registration; attachment to a live session is not checkable from
+here" — instead of guessing `attached`/`not attached`. `pix mcp ls` prints
+the identical caveat. The fix for a server that's registered but not (yet)
+in your session is always the same regardless of history:
+`pix mcp load <name> [DIR]` to attach it live, or `pix rm BOX && pix run` to
+recreate and pick up the full `--static-mcp` set.
 
 `pix doctor` runs the same evidence through four verdicts per check:
 **ready** (verified working), **todo** (a verified, fixable gap, with the

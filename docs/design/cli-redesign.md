@@ -3,6 +3,17 @@
 Status: IMPLEMENTED (Shape B shipped — `state` grouping noun, tiered `help` / `help --all` with per-noun `help <verb>`, staged `setup`; all legacy verb spellings retained as aliases)
 Authors: pi + crew (dx-consultant, product-manager, architect, ux-copywriter), reviewed by cross-vendor `review`
 
+> **Later retirements not reflected in the mockups below.** The screens in
+> this doc predate several surfaces that have since been deleted outright:
+> the built-in `knowledge` service (`:11436`, `pix knowledge init/use/query`)
+> and the guided `pix gog setup` wizard were both externalized/removed (see
+> AGENTS.md's go-plugin + Suture architecture note and
+> `docs/design/gworkspace-externalization.md`), and `state reset` was
+> retired in U11r. `slack`/`gworkspace` config wiring shown here is likewise
+> pre-externalization. Read every `knowledge`/`gog setup`/`state reset` line
+> in the mockups as the historical shape being redesigned, not a current
+> screen; `docs/reference.md` is the current, accurate command reference.
+
 ## The problem
 
 The `pix` launcher has grown to ~19 top-level verbs in a flat namespace.
