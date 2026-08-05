@@ -4,7 +4,7 @@ package monitor
 // per (sandboxId, sessionId) stream, plus the filesystem safety layer every
 // write goes through (0700 dirs, 0600 files, no symlink followed, no
 // wire-supplied string used as a path component unless validID accepts it).
-// Writer and reader share only the files — see docs/design/monitor.md.
+// See docs/design/monitor.md.
 
 import (
 	"bytes"
@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -35,8 +34,8 @@ const (
 )
 
 // StoreConfig configures a Store. Root is required; the bounds default to
-// 4000 events / 8MB per stream and cap cumulative retained size (one event
-// is already capped at maxIngestLine before it gets here).
+// 4000 events / 8MB per stream (one event is already capped at
+// maxIngestLine before it gets here).
 type StoreConfig struct {
 	Root      string
 	MaxEvents int
@@ -50,9 +49,9 @@ type Store struct {
 	mu  sync.Mutex
 }
 
-// NewStore constructs a Store rooted at cfg.Root, creating it (0700) if
-// absent. Root is required, never defaulted, so a zero-value config cannot
-// write into the process's working directory.
+// NewStore roots a Store at cfg.Root, creating it (0700) if absent. Root is
+// never defaulted, so a zero-value config cannot write into the process's
+// working directory.
 func NewStore(cfg StoreConfig) (*Store, error) {
 	if cfg.Root == "" {
 		return nil, fmt.Errorf("monitor: NewStore: Root is required")
@@ -90,10 +89,10 @@ func validID(id string) bool {
 	return true
 }
 
-// streamDirName maps one (sandboxID, sessionID) pair to its directory name,
-// erroring if either id is invalid. The ONLY place wire input becomes a path
-// component.
-func streamDirName(sandboxID, sessionID string) (string, error) {
+// streamPath maps one (sandboxID, sessionID) pair to its directory and
+// events file, erroring if either id is invalid. The ONLY place wire input
+// becomes a path component: writer and reader both go through it.
+func (s *Store) streamPath(sandboxID, sessionID string) (dir, file string, err error) {
 	if sandboxID == "" {
 		sandboxID = unattributed
 	}
@@ -101,16 +100,16 @@ func streamDirName(sandboxID, sessionID string) (string, error) {
 		sessionID = unattributed
 	}
 	if !validID(sandboxID) || !validID(sessionID) {
-		return "", fmt.Errorf("monitor: refusing invalid stream id (sandbox %q, session %q)", sandboxID, sessionID)
+		return "", "", fmt.Errorf("monitor: refusing invalid stream id (sandbox %q, session %q)", sandboxID, sessionID)
 	}
-	return sandboxID + idSep + sessionID, nil
+	dir = filepath.Join(s.cfg.Root, sandboxID+idSep+sessionID)
+	return dir, filepath.Join(dir, eventsFile), nil
 }
 
-// Append redacts e and appends it as one NDJSON line to its stream file,
-// then trims that file back within budget.
+// Append redacts e and appends it as one line to its stream file.
 func (s *Store) Append(e Event) error {
 	env := e.Envelope()
-	name, err := streamDirName(env.SandboxID, env.SessionID)
+	dir, file, err := s.streamPath(env.SandboxID, env.SessionID)
 	if err != nil {
 		return err
 	}
@@ -120,7 +119,6 @@ func (s *Store) Append(e Event) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	dir := filepath.Join(s.cfg.Root, name)
 	if _, err := os.Stat(dir); err != nil {
 		if err := s.evictOldestStreamIfFull(); err != nil {
 			return err
@@ -129,13 +127,13 @@ func (s *Store) Append(e Event) error {
 	if err := ensureDir0700(dir); err != nil {
 		return err
 	}
-	return s.appendLine(filepath.Join(dir, eventsFile), line)
+	return s.appendLine(file, line)
 }
 
 // storedBlob is one full payload body as persisted: Bytes is always
-// len(Text), and Redacted=false implies sha256(Text) == Hash. Blobs are not
-// a separate content-addressed subsystem: they are one more bounded NDJSON
-// file under the same root, trimmed by the same pass.
+// len(Text), and Redacted=false implies sha256(Text) == Hash. Not a separate
+// content-addressed subsystem — one more bounded NDJSON file under the same
+// root, trimmed by the same pass.
 type storedBlob struct {
 	Hash     string `json:"hash"`
 	Bytes    int    `json:"bytes"`
@@ -145,8 +143,8 @@ type storedBlob struct {
 
 // AppendBlob verifies the client-asserted hash against sha256(text) (on a
 // mismatch nothing is written and ok is false) and appends the REDACTED
-// text. Redaction wins over content-addressing purity here — this is raw
-// tool output, the highest-risk text in the pipeline — so the record states
+// text. Redaction wins over content-addressing purity — this is raw tool
+// output, the highest-risk text in the pipeline — so the record states
 // whether its bytes are still the preimage of Hash.
 func (s *Store) AppendBlob(hash, text string) (bool, error) {
 	sum := sha256.Sum256([]byte(text))
@@ -165,8 +163,7 @@ func (s *Store) AppendBlob(hash, text string) (bool, error) {
 	return true, s.appendLine(filepath.Join(s.cfg.Root, "blobs.ndjson"), line)
 }
 
-// appendLine appends one newline-terminated line to path, then trims path
-// back within budget. Callers hold s.mu.
+// appendLine appends one line to path and trims it. Callers hold s.mu.
 func (s *Store) appendLine(path string, line []byte) error {
 	f, err := openAppend0600(path)
 	if err != nil {
@@ -183,9 +180,9 @@ func (s *Store) appendLine(path string, line []byte) error {
 	return s.trim(path)
 }
 
-// trim rewrites path keeping only its newest lines once it exceeds either
-// bound: drop-oldest eviction applied to a file, atomically so a concurrent
-// reader never sees a half-trimmed file.
+// trim rewrites path with only its newest lines once it exceeds either
+// bound: drop-oldest applied to a file, atomically so a concurrent reader
+// never sees a half-trimmed one.
 func (s *Store) trim(path string) error {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -198,18 +195,14 @@ func (s *Store) trim(path string) error {
 	if len(lines) > s.cfg.MaxEvents {
 		lines = lines[len(lines)-s.cfg.MaxEvents:]
 	}
-	total := 0
-	for _, l := range lines {
-		total += len(l) + 1
-	}
-	for total > s.cfg.MaxBytes && len(lines) > 1 {
-		total -= len(lines[0]) + 1
-		lines = lines[1:]
-	}
 	var buf bytes.Buffer
 	for _, l := range lines {
 		buf.Write(l)
 		buf.WriteByte('\n')
+	}
+	for buf.Len() > s.cfg.MaxBytes && len(lines) > 1 {
+		buf.Next(len(lines[0]) + 1) // drop the oldest retained line
+		lines = lines[1:]
 	}
 	return writeFileAtomic0600(path, buf.Bytes())
 }
@@ -222,8 +215,13 @@ func (s *Store) evictOldestStreamIfFull() error {
 	if err != nil || len(metas) < maxStreams {
 		return err
 	}
-	sort.Slice(metas, func(i, j int) bool { return metas[i].ModTime.Before(metas[j].ModTime) })
-	return os.RemoveAll(metas[0].Dir)
+	oldest := metas[0]
+	for _, m := range metas[1:] {
+		if m.ModTime.Before(oldest.ModTime) {
+			oldest = m
+		}
+	}
+	return os.RemoveAll(oldest.Dir)
 }
 
 // splitLines splits raw on '\n', dropping blank lines.
@@ -238,21 +236,19 @@ func splitLines(raw []byte) [][]byte {
 }
 
 // Tail returns the newest n decoded events (oldest-first) for one stream;
-// n <= 0 returns all of them. A missing stream yields nothing and no error
-// (normal for a reader), and an undecodable line is skipped rather than
-// failing the whole tail.
+// n <= 0 returns all. A missing stream yields nothing and no error (normal
+// for a reader), and an undecodable line is skipped, not fatal.
 func (s *Store) Tail(sandboxID, sessionID string, n int) ([]Event, error) {
-	name, err := streamDirName(sandboxID, sessionID)
+	_, file, err := s.streamPath(sandboxID, sessionID)
 	if err != nil {
 		return nil, err
 	}
-	path := filepath.Join(s.cfg.Root, name, eventsFile)
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(file)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("monitor: read %s: %w", path, err)
+		return nil, fmt.Errorf("monitor: read %s: %w", file, err)
 	}
 	lines := splitLines(raw)
 	if n > 0 && len(lines) > n {
@@ -268,13 +264,11 @@ func (s *Store) Tail(sandboxID, sessionID string, n int) ([]Event, error) {
 }
 
 // StreamMeta describes one retained stream. The ids come from the directory
-// name, exact because only validID-approved ids built it — no sidecar
-// metadata file to keep in sync.
+// name, exact because only validID-approved ids built it.
 type StreamMeta struct {
 	SandboxID string
 	SessionID string
 	Dir       string
-	Bytes     int64
 	ModTime   time.Time
 }
 
@@ -300,8 +294,7 @@ func (s *Store) List() ([]StreamMeta, error) {
 			continue
 		}
 		metas = append(metas, StreamMeta{
-			SandboxID: sandboxID, SessionID: sessionID,
-			Dir: dir, Bytes: fi.Size(), ModTime: fi.ModTime(),
+			SandboxID: sandboxID, SessionID: sessionID, Dir: dir, ModTime: fi.ModTime(),
 		})
 	}
 	return metas, nil
@@ -309,20 +302,19 @@ func (s *Store) List() ([]StreamMeta, error) {
 
 // The filesystem helpers below mirror services/host/lease/paths.go, but are
 // Lstat-based rather than O_NOFOLLOW so this package stays portable; the
-// residual check-to-open TOCTOU window is an accepted tradeoff for a
-// host-local debug wiretap.
+// residual check-to-open TOCTOU window is an accepted tradeoff here.
 
-// refuseSymlink errors if path exists and is a symlink; missing is fine.
-func refuseSymlink(path string) error {
-	fi, err := os.Lstat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
+// refuseSymlink errors if any path exists and is a symlink; missing is fine.
+func refuseSymlink(paths ...string) error {
+	for _, path := range paths {
+		fi, err := os.Lstat(path)
+		switch {
+		case os.IsNotExist(err):
+		case err != nil:
+			return err
+		case fi.Mode()&os.ModeSymlink != 0:
+			return fmt.Errorf("monitor: refusing to follow symlink at %s", path)
 		}
-		return err
-	}
-	if fi.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("monitor: refusing to follow symlink at %s", path)
 	}
 	return nil
 }
@@ -337,13 +329,12 @@ func ensureDir0700(dir string) error {
 		return fmt.Errorf("monitor: create dir %s: %w", dir, err)
 	}
 	fi, err := os.Lstat(dir)
-	if err != nil {
+	switch {
+	case err != nil:
 		return fmt.Errorf("monitor: stat dir %s: %w", dir, err)
-	}
-	if !fi.IsDir() {
+	case !fi.IsDir():
 		return fmt.Errorf("monitor: %s exists and is not a directory", dir)
-	}
-	if fi.Mode().Perm() != 0o700 {
+	case fi.Mode().Perm() != 0o700:
 		return os.Chmod(dir, 0o700)
 	}
 	return nil
@@ -366,14 +357,11 @@ func openAppend0600(path string) (*os.File, error) {
 	return f, nil
 }
 
-// writeFileAtomic0600 writes data via a temp file plus rename, so a
-// concurrent reader never observes a partial file.
+// writeFileAtomic0600 writes via temp file plus rename, so a concurrent
+// reader never observes a partial file.
 func writeFileAtomic0600(path string, data []byte) error {
 	tmp := path + ".tmp"
-	if err := refuseSymlink(path); err != nil {
-		return err
-	}
-	if err := refuseSymlink(tmp); err != nil {
+	if err := refuseSymlink(path, tmp); err != nil {
 		return err
 	}
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {

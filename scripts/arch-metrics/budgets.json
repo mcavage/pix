@@ -100,8 +100,8 @@
       "exits": 0
     },
     "pix/host/monitor": {
-      "prod_loc": 1130,
-      "exports": 34,
+      "prod_loc": 1139,
+      "exports": 33,
       "globals": 20,
       "edges": 0,
       "exits": 0
@@ -198,7 +198,7 @@
       "exits": 0
     },
     "pix/host/workflow/pack": {
-      "prod_loc": 4001,
+      "prod_loc": 4000,
       "exports": 43,
       "globals": 8,
       "edges": 10,

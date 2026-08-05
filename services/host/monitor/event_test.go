@@ -2,6 +2,7 @@ package monitor
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -45,11 +46,10 @@ func sampleEvents() []Event {
 }
 
 // TestEncodeDecodeRoundTrip covers every concrete kind: Encode then Decode
-// must reproduce an equal value carrying the same envelope.
+// must reproduce an equal value carrying the same envelope and wire form.
 func TestEncodeDecodeRoundTrip(t *testing.T) {
 	for _, want := range sampleEvents() {
-		kind := want.Envelope().Kind
-		t.Run(string(kind), func(t *testing.T) {
+		t.Run(string(want.Envelope().Kind), func(t *testing.T) {
 			line, err := Encode(want)
 			if err != nil {
 				t.Fatalf("Encode: %v", err)
@@ -96,6 +96,7 @@ func TestWireSchemaGolden(t *testing.T) {
 		KindToolEnd:          {"toolId", "ok", "resultBytes", "resultSummary", "resultHash", "durationMs"},
 		KindContextEvent:     {"ctxKind", "detail"},
 	}
+	summaryKeys := []string{"systemPromptHash", "systemPromptBytes", "messageCount", "newMessages", "toolCount", "toolNames", "mcpToolNames", "toolSchemaHash", "estTokens"}
 	for _, e := range sampleEvents() {
 		kind := e.Envelope().Kind
 		want, ok := keys[kind]
@@ -110,20 +111,20 @@ func TestWireSchemaGolden(t *testing.T) {
 		if err := json.Unmarshal(line, &m); err != nil {
 			t.Fatalf("Unmarshal %s: %v", kind, err)
 		}
-		for _, k := range want {
-			if _, ok := m[k]; !ok {
-				t.Errorf("%s JSON missing key %q: %s", kind, k, line)
-			}
-		}
 		if kind == KindProviderRequest {
 			var summary map[string]json.RawMessage
 			if err := json.Unmarshal(m["summary"], &summary); err != nil {
 				t.Fatalf("Unmarshal summary: %v", err)
 			}
-			for _, k := range []string{"systemPromptHash", "systemPromptBytes", "messageCount", "newMessages", "toolCount", "toolNames", "mcpToolNames", "toolSchemaHash", "estTokens"} {
+			for _, k := range summaryKeys {
 				if _, ok := summary[k]; !ok {
 					t.Errorf("summary missing key %q: %s", k, m["summary"])
 				}
+			}
+		}
+		for _, k := range want {
+			if _, ok := m[k]; !ok {
+				t.Errorf("%s JSON missing key %q: %s", kind, k, line)
 			}
 		}
 	}
@@ -168,136 +169,147 @@ func TestDecodeUnknownKindIsForwardCompatible(t *testing.T) {
 	}
 }
 
-// TestDecodeCapsEveryStringBearingField is the retained-memory bound: no
-// decoded string, and no decoded slice, may exceed its cap, whatever the tap
-// sends. One oversized value per field, checked on one event per kind.
+// longWireFields are the fields allowed maxFieldBytes; every other string is
+// an id/label/hash and must come back under maxIDBytes. Kept as data, and
+// the input is built off the struct types, so a field ADDED to the wire
+// contract is bound-checked by this test without editing it.
+var longWireFields = map[string]bool{
+	"preview": true, "textPreview": true, "argsSummary": true, "resultSummary": true, "detail": true,
+}
+
+// TestDecodeCapsEveryStringBearingField is the retained-memory bound: for
+// every kind, decoding a line whose every string is oversized and every list
+// over-long must yield nothing above its cap.
 func TestDecodeCapsEveryStringBearingField(t *testing.T) {
-	huge := strings.Repeat("x", maxFieldBytes*2)
-	// List entries only need to exceed maxIDBytes; repeating the 128KB
-	// string 562 times per list would make this test cost hundreds of MB of
-	// JSON for no extra coverage.
-	long := strings.Repeat("x", maxIDBytes*2)
-	hugeList := make([]string, maxListEntries+50)
-	for i := range hugeList {
-		hugeList[i] = long
+	for _, sample := range sampleEvents() {
+		kind := sample.Envelope().Kind
+		t.Run(string(kind), func(t *testing.T) {
+			ev, err := Decode(oversizedLine(t, kind, reflect.TypeOf(sample)))
+			if err != nil {
+				t.Fatalf("Decode: %v", err)
+			}
+			checkBounds(t, reflect.ValueOf(ev), "")
+		})
 	}
-	envJSON := func(kind Kind, extra map[string]any) []byte {
-		obj := map[string]any{"kind": kind, "sandboxId": huge, "sessionId": huge, "turnId": huge, "seq": 1, "ts": 2}
-		for k, v := range extra {
-			obj[k] = v
-		}
-		line, err := json.Marshal(obj)
+	t.Run("unknown kind", func(t *testing.T) {
+		line, err := json.Marshal(map[string]any{"kind": "some_future_kind", "detail": hugeText()})
 		if err != nil {
 			t.Fatalf("marshal: %v", err)
 		}
-		return line
-	}
-	check := func(what, s string, limit int) {
-		if len(s) > limit {
-			t.Errorf("%s is %d bytes, want <= %d", what, len(s), limit)
-		}
-	}
-	checkList := func(what string, list []string, limit int) {
-		if len(list) > maxListEntries {
-			t.Errorf("%s has %d entries, want <= %d", what, len(list), maxListEntries)
-		}
-		for _, s := range list {
-			check(what+" entry", s, limit)
-		}
-	}
-	checkEnvelope := func(e Envelope) {
-		check("sandboxId", e.SandboxID, maxIDBytes)
-		check("sessionId", e.SessionID, maxIDBytes)
-		check("turnId", e.TurnID, maxIDBytes)
-	}
-
-	decode := func(kind Kind, extra map[string]any) Event {
-		ev, err := Decode(envJSON(kind, extra))
+		ev, err := Decode(line)
 		if err != nil {
-			t.Fatalf("Decode %s: %v", kind, err)
+			t.Fatalf("Decode: %v", err)
 		}
-		checkEnvelope(ev.Envelope())
-		return ev
-	}
-
-	ts := decode(KindTurnStart, map[string]any{"model": huge, "trigger": huge}).(TurnStart)
-	check("turn_start.model", ts.Model, maxIDBytes)
-	check("turn_start.trigger", ts.Trigger, maxIDBytes)
-
-	pr := decode(KindProviderRequest, map[string]any{
-		"model": huge, "trigger": huge, "changedBlobs": hugeList,
-		"summary": map[string]any{
-			"systemPromptHash": huge, "toolSchemaHash": huge,
-			"toolNames": hugeList, "mcpToolNames": hugeList,
-			"newMessages": func() []any {
-				var out []any
-				for i := 0; i < maxListEntries+50; i++ {
-					out = append(out, map[string]any{"role": long, "hash": long, "preview": long})
-				}
-				return out
-			}(),
-		},
-	}).(ProviderRequest)
-	check("provider_request.model", pr.Model, maxIDBytes)
-	check("summary.systemPromptHash", pr.Summary.SystemPromptHash, maxIDBytes)
-	check("summary.toolSchemaHash", pr.Summary.ToolSchemaHash, maxIDBytes)
-	checkList("summary.toolNames", pr.Summary.ToolNames, maxIDBytes)
-	checkList("summary.mcpToolNames", pr.Summary.McpToolNames, maxIDBytes)
-	checkList("changedBlobs", pr.ChangedBlobs, maxIDBytes)
-	if len(pr.Summary.NewMessages) > maxListEntries {
-		t.Errorf("summary.newMessages has %d entries, want <= %d", len(pr.Summary.NewMessages), maxListEntries)
-	}
-	for _, m := range pr.Summary.NewMessages {
-		check("newMessages.role", m.Role, maxIDBytes)
-		check("newMessages.hash", m.Hash, maxIDBytes)
-		check("newMessages.preview", m.Preview, maxFieldBytes)
-	}
-
-	presp := decode(KindProviderResponse, map[string]any{
-		"stopReason": huge, "textPreview": huge, "textHash": huge, "toolCalls": hugeList,
-	}).(ProviderResponse)
-	check("provider_response.stopReason", presp.StopReason, maxIDBytes)
-	check("provider_response.textPreview", presp.TextPreview, maxFieldBytes)
-	check("provider_response.textHash", presp.TextHash, maxIDBytes)
-	checkList("provider_response.toolCalls", presp.ToolCalls, maxIDBytes)
-
-	tstart := decode(KindToolStart, map[string]any{
-		"toolId": huge, "source": huge, "name": huge, "argsSummary": huge, "argsHash": huge,
-	}).(ToolStart)
-	check("tool_start.toolId", tstart.ToolID, maxIDBytes)
-	check("tool_start.source", tstart.Source, maxIDBytes)
-	check("tool_start.name", tstart.Name, maxIDBytes)
-	check("tool_start.argsSummary", tstart.ArgsSummary, maxFieldBytes)
-	check("tool_start.argsHash", tstart.ArgsHash, maxIDBytes)
-
-	tend := decode(KindToolEnd, map[string]any{"toolId": huge, "resultSummary": huge, "resultHash": huge}).(ToolEnd)
-	check("tool_end.toolId", tend.ToolID, maxIDBytes)
-	check("tool_end.resultSummary", tend.ResultSummary, maxFieldBytes)
-	check("tool_end.resultHash", tend.ResultHash, maxIDBytes)
-
-	ctx := decode(KindContextEvent, map[string]any{"ctxKind": huge, "detail": huge}).(ContextEvent)
-	check("context_event.ctxKind", ctx.CtxKind, maxIDBytes)
-	check("context_event.detail", ctx.Detail, maxFieldBytes)
-
-	unknown := decode("some_future_kind", map[string]any{"detail": huge}).(UnknownEvent)
-	if len(unknown.Raw) > maxFieldBytes*4 {
-		t.Errorf("UnknownEvent.Raw is %d bytes, want <= %d", len(unknown.Raw), maxFieldBytes*4)
-	}
+		checkBounds(t, reflect.ValueOf(ev), "")
+	})
+	t.Run("multibyte utf8 truncation never panics", func(t *testing.T) {
+		// Capping slices bytes, so a 2-byte rune can be cut in half. That
+		// must stay a harmless truncation.
+		line, err := json.Marshal(map[string]any{
+			"kind": KindContextEvent, "ctxKind": "x", "detail": strings.Repeat("é", maxFieldBytes),
+		})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		ev, err := Decode(line)
+		if err != nil {
+			t.Fatalf("Decode: %v", err)
+		}
+		if got := len(ev.(ContextEvent).Detail); got > maxFieldBytes {
+			t.Fatalf("detail is %d bytes, want <= %d", got, maxFieldBytes)
+		}
+	})
 }
 
-// TestCapTruncationNeverPanicsOnMultibyteUTF8: capping is a byte slice, so a
-// multi-byte rune can be cut in half. That must stay a harmless truncation.
-func TestCapTruncationNeverPanicsOnMultibyteUTF8(t *testing.T) {
-	detail := strings.Repeat("é", maxFieldBytes) // 2 bytes per rune
-	line, err := json.Marshal(map[string]any{"kind": KindContextEvent, "ctxKind": "x", "detail": detail})
+func hugeText() string { return strings.Repeat("x", maxFieldBytes*2) }
+
+// oversizedLine builds a wire line for kind straight off its struct type,
+// with every string over maxFieldBytes and every list over maxListEntries.
+// List ENTRIES only need to exceed maxIDBytes; repeating a 128KB string 562
+// times per list would cost hundreds of MB for no extra coverage.
+func oversizedLine(t *testing.T, kind Kind, typ reflect.Type) []byte {
+	t.Helper()
+	obj := oversizedFields(typ, hugeText())
+	obj["kind"] = kind
+	line, err := json.Marshal(obj)
 	if err != nil {
-		t.Fatalf("marshal: %v", err)
+		t.Fatalf("marshal %s: %v", kind, err)
 	}
-	ev, err := Decode(line)
-	if err != nil {
-		t.Fatalf("Decode: %v", err)
+	return line
+}
+
+func oversizedFields(typ reflect.Type, text string) map[string]any {
+	const entryText = 2 * maxIDBytes
+	out := map[string]any{}
+	for i := 0; i < typ.NumField(); i++ {
+		f := typ.Field(i)
+		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		ft := f.Type
+		if ft.Kind() == reflect.Pointer {
+			ft = ft.Elem()
+		}
+		switch {
+		case f.Anonymous && ft.Kind() == reflect.Struct: // embedded envelope: flattened on the wire
+			for k, v := range oversizedFields(ft, text) {
+				out[k] = v
+			}
+		case name == "" || name == "-":
+		case ft.Kind() == reflect.String:
+			out[name] = text
+		case ft.Kind() == reflect.Struct:
+			out[name] = oversizedFields(ft, text)
+		case ft.Kind() == reflect.Slice && ft.Elem().Kind() == reflect.String:
+			out[name] = overLong(strings.Repeat("x", entryText))
+		case ft.Kind() == reflect.Slice && ft.Elem().Kind() == reflect.Struct:
+			out[name] = overLong(oversizedFields(ft.Elem(), strings.Repeat("x", entryText)))
+		}
 	}
-	if got := len(ev.(ContextEvent).Detail); got > maxFieldBytes {
-		t.Fatalf("detail is %d bytes, want <= %d", got, maxFieldBytes)
+	return out
+}
+
+func overLong[T any](v T) []T {
+	list := make([]T, maxListEntries+50)
+	for i := range list {
+		list[i] = v
+	}
+	return list
+}
+
+// checkBounds walks a decoded event and asserts every retained string, list
+// and raw line is within its cap.
+func checkBounds(t *testing.T, v reflect.Value, tag string) {
+	t.Helper()
+	switch v.Kind() {
+	case reflect.String:
+		limit := maxIDBytes
+		if longWireFields[tag] {
+			limit = maxFieldBytes
+		}
+		if v.Len() > limit {
+			t.Errorf("field %q is %d bytes, want <= %d", tag, v.Len(), limit)
+		}
+	case reflect.Pointer, reflect.Interface:
+		if !v.IsNil() {
+			checkBounds(t, v.Elem(), tag)
+		}
+	case reflect.Slice:
+		if v.Type().Elem().Kind() == reflect.Uint8 { // UnknownEvent.Raw
+			const maxRaw = maxFieldBytes * 4
+			if v.Len() > maxRaw {
+				t.Errorf("raw line is %d bytes, want <= %d", v.Len(), maxRaw)
+			}
+			return
+		}
+		if v.Len() > maxListEntries {
+			t.Errorf("list %q has %d entries, want <= %d", tag, v.Len(), maxListEntries)
+		}
+		for i := 0; i < v.Len(); i++ {
+			checkBounds(t, v.Index(i), tag)
+		}
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			name, _, _ := strings.Cut(v.Type().Field(i).Tag.Get("json"), ",")
+			checkBounds(t, v.Field(i), name)
+		}
 	}
 }

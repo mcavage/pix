@@ -13,9 +13,9 @@ import (
 
 // canaryAWSKey is a deliberately fake-but-realistic AWS access key id: a
 // known secret-shaped token planted in input whose ABSENCE from the stored
-// bytes is what these tests prove. TestRedactionCanaryIsRealSecretShape
-// keeps it honest — if the canary stopped matching a pattern, every
-// "redaction worked" assertion below would pass for the wrong reason.
+// bytes is what these tests prove. TestRedactTextScrubsSecretShapes keeps it
+// honest — if the canary stopped matching a pattern, every "redaction
+// worked" assertion below would pass for the wrong reason.
 const canaryAWSKey = "AKIAABCDEFGHIJKLMNOP"
 
 func newTestStore(t *testing.T, cfg StoreConfig) *Store {
@@ -40,6 +40,47 @@ func toolEvent(sandboxID, sessionID, summary string, seq uint64) ToolEnd {
 	}
 }
 
+func streamFile(s *Store, sandboxID, sessionID string) string {
+	return filepath.Join(s.cfg.Root, sandboxID+idSep+sessionID, eventsFile)
+}
+
+func fileSize(t *testing.T, path string) int64 {
+	t.Helper()
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	return fi.Size()
+}
+
+// mustAppend, mustTail and mustList keep the store's error contract out of
+// every assertion: these calls must not fail, and a failure is fatal here,
+// not three lines at each call site.
+func mustAppend(t *testing.T, s *Store, e Event) {
+	t.Helper()
+	if err := s.Append(e); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+}
+
+func mustTail(t *testing.T, s *Store, sandboxID, sessionID string, n int) []Event {
+	t.Helper()
+	got, err := s.Tail(sandboxID, sessionID, n)
+	if err != nil {
+		t.Fatalf("Tail(%s/%s): %v", sandboxID, sessionID, err)
+	}
+	return got
+}
+
+func mustList(t *testing.T, s *Store) []StreamMeta {
+	t.Helper()
+	metas, err := s.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	return metas
+}
+
 func TestNewStoreRequiresRootAndCreatesItAt0700(t *testing.T) {
 	if _, err := NewStore(StoreConfig{}); err == nil {
 		t.Fatal("NewStore with no Root = nil error, want an error")
@@ -57,28 +98,15 @@ func TestNewStoreRequiresRootAndCreatesItAt0700(t *testing.T) {
 func TestAppendTailListRoundTrip(t *testing.T) {
 	s := newTestStore(t, StoreConfig{})
 	for i := 1; i <= 3; i++ {
-		if err := s.Append(toolEvent("sbx-1", "sess-1", fmt.Sprintf("r%d", i), uint64(i))); err != nil {
-			t.Fatalf("Append: %v", err)
-		}
+		mustAppend(t, s, toolEvent("sbx-1", "sess-1", fmt.Sprintf("r%d", i), uint64(i)))
 	}
-	if err := s.Append(toolEvent("sbx-2", "sess-2", "other", 1)); err != nil {
-		t.Fatalf("Append: %v", err)
-	}
+	mustAppend(t, s, toolEvent("sbx-2", "sess-2", "other", 1))
 
-	got, err := s.Tail("sbx-1", "sess-1", 0)
-	if err != nil {
-		t.Fatalf("Tail: %v", err)
+	got := mustTail(t, s, "sbx-1", "sess-1", 0)
+	if len(got) != 3 || got[2].(ToolEnd).ResultSummary != "r3" {
+		t.Fatalf("Tail = %+v, want 3 events, oldest-first", got)
 	}
-	if len(got) != 3 {
-		t.Fatalf("Tail returned %d events, want 3", len(got))
-	}
-	if sum := got[2].(ToolEnd).ResultSummary; sum != "r3" {
-		t.Fatalf("last event summary = %q, want r3 (oldest-first order)", sum)
-	}
-	newest, err := s.Tail("sbx-1", "sess-1", 2)
-	if err != nil {
-		t.Fatalf("Tail(2): %v", err)
-	}
+	newest := mustTail(t, s, "sbx-1", "sess-1", 2)
 	if len(newest) != 2 || newest[0].(ToolEnd).ResultSummary != "r2" {
 		t.Fatalf("Tail(2) = %+v, want the newest two", newest)
 	}
@@ -86,21 +114,12 @@ func TestAppendTailListRoundTrip(t *testing.T) {
 		t.Fatalf("Tail(unknown stream) = %v, %v; want empty and no error", empty, err)
 	}
 
-	metas, err := s.List()
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	if len(metas) != 2 {
-		t.Fatalf("List returned %d streams, want 2", len(metas))
-	}
+	metas := mustList(t, s)
 	seen := map[string]bool{}
 	for _, m := range metas {
 		seen[m.SandboxID+"/"+m.SessionID] = true
-		if m.Bytes <= 0 {
-			t.Errorf("stream %s has Bytes=%d, want > 0", m.Dir, m.Bytes)
-		}
 	}
-	if !seen["sbx-1/sess-1"] || !seen["sbx-2/sess-2"] {
+	if len(metas) != 2 || !seen["sbx-1/sess-1"] || !seen["sbx-2/sess-2"] {
 		t.Fatalf("List ids = %v, want the original (sandbox, session) pairs", seen)
 	}
 }
@@ -108,7 +127,9 @@ func TestAppendTailListRoundTrip(t *testing.T) {
 // TestAppendRejectsInvalidIDsStrictly is the strict-name regression: a
 // traversal, a separator, a control byte, a dotfile, an over-long id, or the
 // stream separator itself must be REFUSED — never slugified into some
-// neighbouring directory — and nothing may be written outside the root.
+// neighbouring directory — and nothing may be written outside the root. An
+// EMPTY id is the one non-conforming value that is not hostile (the tap
+// sends sandboxId "" outside a sandbox): it maps to one fixed constant.
 func TestAppendRejectsInvalidIDsStrictly(t *testing.T) {
 	bad := []string{
 		"..", ".", "../../etc", "a/b", `a\b`, "/abs", ".hidden", "-lead", "_lead",
@@ -136,36 +157,26 @@ func TestAppendRejectsInvalidIDsStrictly(t *testing.T) {
 			}
 		})
 	}
-}
-
-// An EMPTY id is the one non-conforming value that is not hostile (the tap
-// sends sandboxId "" outside a sandbox): it maps to one fixed constant.
-func TestAppendMapsEmptyIDsToOneFixedStream(t *testing.T) {
-	s := newTestStore(t, StoreConfig{})
-	if err := s.Append(toolEvent("", "", "x", 1)); err != nil {
-		t.Fatalf("Append: %v", err)
-	}
-	metas, err := s.List()
-	if err != nil || len(metas) != 1 {
-		t.Fatalf("List = %+v, %v; want one stream", metas, err)
-	}
-	if metas[0].SandboxID != unattributed || metas[0].SessionID != unattributed {
-		t.Fatalf("ids = %q/%q, want %q for both", metas[0].SandboxID, metas[0].SessionID, unattributed)
-	}
+	t.Run("empty ids", func(t *testing.T) {
+		s := newTestStore(t, StoreConfig{})
+		mustAppend(t, s, toolEvent("", "", "x", 1))
+		metas := mustList(t, s)
+		if len(metas) != 1 {
+			t.Fatalf("List = %+v, want one stream", metas)
+		}
+		if metas[0].SandboxID != unattributed || metas[0].SessionID != unattributed {
+			t.Fatalf("ids = %q/%q, want %q for both", metas[0].SandboxID, metas[0].SessionID, unattributed)
+		}
+	})
 }
 
 func TestAppendBoundsEventsBytesAndStreams(t *testing.T) {
 	t.Run("events per stream", func(t *testing.T) {
 		s := newTestStore(t, StoreConfig{MaxEvents: 5})
 		for i := 1; i <= 20; i++ {
-			if err := s.Append(toolEvent("sbx", "sess", fmt.Sprintf("r%d", i), uint64(i))); err != nil {
-				t.Fatalf("Append: %v", err)
-			}
+			mustAppend(t, s, toolEvent("sbx", "sess", fmt.Sprintf("r%d", i), uint64(i)))
 		}
-		got, err := s.Tail("sbx", "sess", 0)
-		if err != nil {
-			t.Fatalf("Tail: %v", err)
-		}
+		got := mustTail(t, s, "sbx", "sess", 0)
 		if len(got) != 5 {
 			t.Fatalf("retained %d events, want the 5 newest", len(got))
 		}
@@ -176,42 +187,28 @@ func TestAppendBoundsEventsBytesAndStreams(t *testing.T) {
 	t.Run("bytes per stream", func(t *testing.T) {
 		s := newTestStore(t, StoreConfig{MaxBytes: 2048})
 		for i := 1; i <= 40; i++ {
-			if err := s.Append(toolEvent("sbx", "sess", strings.Repeat("z", 200), uint64(i))); err != nil {
-				t.Fatalf("Append: %v", err)
-			}
+			mustAppend(t, s, toolEvent("sbx", "sess", strings.Repeat("z", 200), uint64(i)))
 		}
-		metas, err := s.List()
-		if err != nil || len(metas) != 1 {
-			t.Fatalf("List = %+v, %v", metas, err)
-		}
-		if metas[0].Bytes > 2048 {
-			t.Fatalf("stream is %d bytes, want <= 2048", metas[0].Bytes)
+		if n := fileSize(t, streamFile(s, "sbx", "sess")); n > 2048 {
+			t.Fatalf("stream is %d bytes, want <= 2048", n)
 		}
 	})
 	t.Run("number of streams", func(t *testing.T) {
 		s := newTestStore(t, StoreConfig{})
 		for i := 0; i < maxStreams+10; i++ {
-			if err := s.Append(toolEvent("sbx", fmt.Sprintf("sess-%d", i), "x", 1)); err != nil {
-				t.Fatalf("Append: %v", err)
-			}
+			mustAppend(t, s, toolEvent("sbx", fmt.Sprintf("sess-%d", i), "x", 1))
 		}
-		metas, err := s.List()
-		if err != nil {
-			t.Fatalf("List: %v", err)
-		}
+		metas := mustList(t, s)
 		if len(metas) > maxStreams {
 			t.Fatalf("retained %d streams, want <= %d", len(metas), maxStreams)
 		}
 	})
 }
 
-func TestRedactionCanaryIsRealSecretShape(t *testing.T) {
+func TestRedactTextScrubsSecretShapes(t *testing.T) {
 	if redactText(canaryAWSKey) == canaryAWSKey {
 		t.Fatalf("canary %q is not matched by any pattern — every redaction assertion would pass vacuously", canaryAWSKey)
 	}
-}
-
-func TestRedactTextScrubsKnownSecretShapesAndLeavesProseAlone(t *testing.T) {
 	secrets := map[string]string{
 		"aws":        "export AWS_ACCESS_KEY_ID=" + canaryAWSKey,
 		"github":     "token: ghp_1234567890abcdefghijklmnopqrstuvwxyz",
@@ -221,8 +218,7 @@ func TestRedactTextScrubsKnownSecretShapesAndLeavesProseAlone(t *testing.T) {
 		"assignment": `api_key = "abcdefghijklmnop12345"`,
 	}
 	for name, in := range secrets {
-		out := redactText(in)
-		if !strings.Contains(out, redactionMarker) {
+		if out := redactText(in); !strings.Contains(out, redactionMarker) {
 			t.Errorf("%s: redactText(%q) = %q, want a %s", name, in, out, redactionMarker)
 		}
 	}
@@ -235,7 +231,8 @@ func TestRedactTextScrubsKnownSecretShapesAndLeavesProseAlone(t *testing.T) {
 
 // TestAppendPersistsRedactedBytesOnly is the end-to-end security property:
 // the canary must never reach the file, in ANY free-text field, including
-// the whole raw line of an unknown kind.
+// the whole raw line of an unknown kind — which must still be RETAINED
+// (forward compatibility), just scrubbed.
 func TestAppendPersistsRedactedBytesOnly(t *testing.T) {
 	s := newTestStore(t, StoreConfig{})
 	events := []Event{
@@ -247,17 +244,16 @@ func TestAppendPersistsRedactedBytesOnly(t *testing.T) {
 			env:     env{Kind: KindProviderRequest, SandboxID: "sbx", SessionID: "sess"},
 			Summary: RequestSummary{NewMessages: []MessageSummary{{Role: "user", Preview: canaryAWSKey}}},
 		},
+		TurnStart{env: env{Kind: KindTurnStart, SandboxID: "sbx", SessionID: "sess"}, Model: canaryAWSKey},
 	}
 	unknown, err := Decode([]byte(`{"kind":"future","sandboxId":"sbx","sessionId":"sess","detail":"` + canaryAWSKey + `"}`))
 	if err != nil {
 		t.Fatalf("Decode unknown: %v", err)
 	}
 	for _, e := range append(events, unknown) {
-		if err := s.Append(e); err != nil {
-			t.Fatalf("Append: %v", err)
-		}
+		mustAppend(t, s, e)
 	}
-	raw, err := os.ReadFile(filepath.Join(s.cfg.Root, "sbx=sess", eventsFile))
+	raw, err := os.ReadFile(streamFile(s, "sbx", "sess"))
 	if err != nil {
 		t.Fatalf("read stream: %v", err)
 	}
@@ -267,27 +263,19 @@ func TestAppendPersistsRedactedBytesOnly(t *testing.T) {
 	if !strings.Contains(string(raw), redactionMarker) {
 		t.Fatalf("stream file has no %s marker, so nothing was scrubbed:\n%s", redactionMarker, raw)
 	}
-	// The unknown kind must still be RETAINED (forward compatibility), just
-	// scrubbed, and a reader must get it back.
-	got, err := s.Tail("sbx", "sess", 0)
-	if err != nil {
-		t.Fatalf("Tail: %v", err)
+	got := mustTail(t, s, "sbx", "sess", 0)
+	if len(got) != len(events)+1 {
+		t.Fatalf("Tail returned %d events, want all %d including the unknown kind", len(got), len(events)+1)
 	}
-	if len(got) != 6 {
-		t.Fatalf("Tail returned %d events, want all 6 including the unknown kind", len(got))
-	}
-	if _, ok := got[5].(UnknownEvent); !ok {
-		t.Fatalf("last event is %T, want UnknownEvent", got[5])
+	if _, ok := got[len(got)-1].(UnknownEvent); !ok {
+		t.Fatalf("last event is %T, want UnknownEvent", got[len(got)-1])
 	}
 }
 
 func TestTailSkipsCorruptLinesInsteadOfFailing(t *testing.T) {
 	s := newTestStore(t, StoreConfig{})
-	if err := s.Append(toolEvent("sbx", "sess", "good", 1)); err != nil {
-		t.Fatalf("Append: %v", err)
-	}
-	path := filepath.Join(s.cfg.Root, "sbx=sess", eventsFile)
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	mustAppend(t, s, toolEvent("sbx", "sess", "good", 1))
+	f, err := os.OpenFile(streamFile(s, "sbx", "sess"), os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -295,10 +283,7 @@ func TestTailSkipsCorruptLinesInsteadOfFailing(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 	f.Close()
-	got, err := s.Tail("sbx", "sess", 0)
-	if err != nil {
-		t.Fatalf("Tail: %v", err)
-	}
+	got := mustTail(t, s, "sbx", "sess", 0)
 	if len(got) != 1 {
 		t.Fatalf("Tail returned %d events, want the 1 decodable one", len(got))
 	}
@@ -334,11 +319,9 @@ func readStoredBlobs(t *testing.T, s *Store) []storedBlob {
 // record must declare.
 func TestAppendBlobStoredContentMatchesItsOwnAccounting(t *testing.T) {
 	s := newTestStore(t, StoreConfig{})
-	clean := "the quick brown fox"
-	secret := "AWS_ACCESS_KEY_ID=" + canaryAWSKey
+	clean, secret := "the quick brown fox", "AWS_ACCESS_KEY_ID="+canaryAWSKey
 	for _, text := range []string{clean, secret} {
-		ok, err := s.AppendBlob(hashOf(text), text)
-		if err != nil || !ok {
+		if ok, err := s.AppendBlob(hashOf(text), text); err != nil || !ok {
 			t.Fatalf("AppendBlob(%q) = %v, %v; want stored", text, ok, err)
 		}
 	}
@@ -357,19 +340,16 @@ func TestAppendBlobStoredContentMatchesItsOwnAccounting(t *testing.T) {
 	if blobs[0].Redacted || blobs[0].Text != clean {
 		t.Errorf("clean blob = %+v, want stored verbatim and not marked redacted", blobs[0])
 	}
-	if !blobs[1].Redacted {
-		t.Errorf("secret blob = %+v, want Redacted=true", blobs[1])
-	}
-	if strings.Contains(blobs[1].Text, canaryAWSKey) {
-		t.Errorf("secret blob kept the canary: %q", blobs[1].Text)
+	if !blobs[1].Redacted || strings.Contains(blobs[1].Text, canaryAWSKey) {
+		t.Errorf("secret blob = %+v, want Redacted=true and no canary", blobs[1])
 	}
 	if blobs[1].Hash != hashOf(secret) {
 		t.Errorf("blob hash = %s, want the ORIGINAL hash %s so events can still reference it", blobs[1].Hash, hashOf(secret))
 	}
 }
 
-func TestAppendBlobRejectsHashMismatchAndWritesNothing(t *testing.T) {
-	s := newTestStore(t, StoreConfig{})
+func TestAppendBlobRejectsHashMismatchAndStaysBounded(t *testing.T) {
+	s := newTestStore(t, StoreConfig{MaxEvents: 4})
 	for name, hash := range map[string]string{
 		"wrong hash": hashOf("something else"),
 		"empty hash": "",
@@ -383,10 +363,6 @@ func TestAppendBlobRejectsHashMismatchAndWritesNothing(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(s.cfg.Root, "blobs.ndjson")); !os.IsNotExist(err) {
 		t.Fatalf("blobs file exists after only-rejected puts (err=%v)", err)
 	}
-}
-
-func TestAppendBlobIsBounded(t *testing.T) {
-	s := newTestStore(t, StoreConfig{MaxEvents: 4})
 	for i := 0; i < 12; i++ {
 		text := fmt.Sprintf("payload-%d", i)
 		if ok, err := s.AppendBlob(hashOf(text), text); err != nil || !ok {
@@ -400,60 +376,41 @@ func TestAppendBlobIsBounded(t *testing.T) {
 
 // ─── filesystem safety ──────────────────────────────────────────────────────
 
-func TestStoredFilesAre0700DirsAnd0600Files(t *testing.T) {
-	s := newTestStore(t, StoreConfig{})
-	if err := s.Append(toolEvent("sbx", "sess", "x", 1)); err != nil {
-		t.Fatalf("Append: %v", err)
-	}
-	if ok, err := s.AppendBlob(hashOf("b"), "b"); err != nil || !ok {
-		t.Fatalf("AppendBlob: %v, %v", ok, err)
-	}
-	dirs := []string{s.cfg.Root, filepath.Join(s.cfg.Root, "sbx=sess")}
-	files := []string{filepath.Join(s.cfg.Root, "sbx=sess", eventsFile), filepath.Join(s.cfg.Root, "blobs.ndjson")}
-	for _, d := range dirs {
-		fi, err := os.Stat(d)
-		if err != nil {
-			t.Fatalf("stat %s: %v", d, err)
-		}
-		if fi.Mode().Perm() != 0o700 {
-			t.Errorf("%s perms = %o, want 0700", d, fi.Mode().Perm())
-		}
-	}
-	for _, f := range files {
-		fi, err := os.Stat(f)
-		if err != nil {
-			t.Fatalf("stat %s: %v", f, err)
-		}
-		if fi.Mode().Perm() != 0o600 {
-			t.Errorf("%s perms = %o, want 0600", f, fi.Mode().Perm())
-		}
-	}
-}
-
-func TestLooseModesAreTightenedOnUse(t *testing.T) {
+func TestStoredFilesAre0700DirsAnd0600FilesAndLooseModesAreTightened(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "monitor")
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	s := newTestStore(t, StoreConfig{Root: root})
-	fi, err := os.Stat(root)
-	if err != nil {
-		t.Fatalf("stat: %v", err)
+	s := newTestStore(t, StoreConfig{Root: root}) // NewStore must tighten 0755 -> 0700
+	mustAppend(t, s, toolEvent("sbx", "sess", "x", 1))
+	if ok, err := s.AppendBlob(hashOf("b"), "b"); err != nil || !ok {
+		t.Fatalf("AppendBlob: %v, %v", ok, err)
 	}
-	if fi.Mode().Perm() != 0o700 {
-		t.Fatalf("root perms = %o after NewStore, want tightened to 0700", fi.Mode().Perm())
-	}
-	path := filepath.Join(s.cfg.Root, "loose.ndjson")
-	if err := os.WriteFile(path, []byte("x\n"), 0o644); err != nil {
+	loose := filepath.Join(root, "loose.ndjson")
+	if err := os.WriteFile(loose, []byte("x\n"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	f, err := openAppend0600(path)
+	f, err := openAppend0600(loose)
 	if err != nil {
 		t.Fatalf("openAppend0600: %v", err)
 	}
 	f.Close()
-	if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o600 {
-		t.Fatalf("file perms = %v (err %v), want 0600", fi.Mode().Perm(), err)
+
+	want := map[string]os.FileMode{
+		root:                                    0o700,
+		filepath.Join(root, "sbx"+idSep+"sess"): 0o700,
+		streamFile(s, "sbx", "sess"):            0o600,
+		filepath.Join(root, "blobs.ndjson"):     0o600,
+		loose:                                   0o600,
+	}
+	for path, mode := range want {
+		fi, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat %s: %v", path, err)
+		}
+		if fi.Mode().Perm() != mode {
+			t.Errorf("%s perms = %o, want %o", path, fi.Mode().Perm(), mode)
+		}
 	}
 }
 
@@ -478,21 +435,15 @@ func TestWritesRefuseToFollowASymlink(t *testing.T) {
 	if err := writeFileAtomic0600(link, []byte("overwritten")); err == nil {
 		t.Error("writeFileAtomic0600(symlink) = nil error, want refusal")
 	}
-	got, err := os.ReadFile(target)
-	if err != nil {
-		t.Fatalf("read target: %v", err)
+	if got, err := os.ReadFile(target); err != nil || string(got) != "victim\n" {
+		t.Fatalf("symlink target = %q (err %v), want it untouched", got, err)
 	}
-	if string(got) != "victim\n" {
-		t.Fatalf("symlink target was modified: %q", got)
-	}
-}
 
-// A store whose stream directory is a symlink must not be appendable either
-// (the check runs on the directory this package is about to create).
-func TestAppendRefusesSymlinkedStreamDir(t *testing.T) {
+	// The same refusal must hold through Append, whose stream directory is
+	// the path an attacker would plant.
 	s := newTestStore(t, StoreConfig{})
 	elsewhere := t.TempDir()
-	if err := os.Symlink(elsewhere, filepath.Join(s.cfg.Root, "sbx=sess")); err != nil {
+	if err := os.Symlink(elsewhere, filepath.Join(s.cfg.Root, "sbx"+idSep+"sess")); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	if err := s.Append(toolEvent("sbx", "sess", "x", 1)); err == nil {

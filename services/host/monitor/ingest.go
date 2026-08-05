@@ -1,14 +1,11 @@
 package monitor
 
-// ingest.go is the loopback ingest server: it receives NDJSON events and
-// blob bodies from the in-VM tap and persists them through Store. No
-// /stream, no subscribe, no live-view state — a reader tails the files
-// (follow.go), decoupled through the filesystem.
-//
-// It is deliberately NOT wired into `pix-host serve`, and keeps the loopback
-// bind + :11437 default the deleted Hub used so a later story can move it
-// under serve without changing pi-kit's allowlist entry. See
-// docs/design/monitor.md.
+// ingest.go is the loopback ingest server: NDJSON events and blob bodies
+// from the in-VM tap, persisted through Store. No /stream, no subscribe, no
+// live-view state — a reader tails the files (follow.go), decoupled through
+// the filesystem. The loopback bind + :11437 default are the ones the
+// deleted Hub used, so pi-kit's allowlist entry still holds now that
+// `pix-host serve` owns this. See docs/design/monitor.md.
 
 import (
 	"bufio"
@@ -22,7 +19,6 @@ import (
 	"net"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -39,14 +35,14 @@ const (
 // errLineTooLong is returned by readLine for a line over maxIngestLine.
 var errLineTooLong = errors.New("monitor: ingest line exceeds max length")
 
-// IngestConfig configures an IngestServer. Filter, when non-empty, is a
-// substring match against an event's sandboxId or sessionId: anything else
-// is acknowledged (200, so the tap's retry never spins) but not persisted.
+// IngestConfig configures an IngestServer. There is no write-side stream
+// filter: the writer persists everything the tap sends and the READER picks
+// (`pix monitor [name]`), so a capture can never be missing what you did not
+// know to ask for.
 type IngestConfig struct {
 	Port     int    // 0 = OS-assigned ephemeral port
 	BindAddr string // default DefaultBindAddr
 	Store    *Store
-	Filter   string
 }
 
 // IngestServer receives events over loopback HTTP and persists them.
@@ -57,8 +53,8 @@ type IngestServer struct {
 
 // NewIngestServer BINDS the listener immediately, so a port conflict is
 // reported here instead of asynchronously from Serve (which forced callers
-// to poll "did it bind yet"). Store is required: a nil one would silently
-// discard every event.
+// to poll "did it bind yet"). Store is required: nil would silently discard
+// every event.
 func NewIngestServer(cfg IngestConfig) (*IngestServer, error) {
 	if cfg.Store == nil {
 		return nil, fmt.Errorf("monitor: NewIngestServer: Store is required")
@@ -142,20 +138,16 @@ func (s *IngestServer) handleIngest(w http.ResponseWriter, r *http.Request) {
 			log.Printf("monitor: skip unparseable /ingest line: %v", err)
 			continue
 		}
-		env := ev.Envelope()
-		if f := s.cfg.Filter; f != "" && !strings.Contains(env.SandboxID, f) && !strings.Contains(env.SessionID, f) {
-			continue
-		}
 		if err := s.cfg.Store.Append(ev); err != nil {
 			log.Printf("monitor: store append: %v", err)
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	writeOK(w)
 }
 
 // handleBlob stores one full payload body, capping the request body
-// independently of the store's accounting so an oversized one cannot exhaust
-// memory before that accounting runs.
+// independently of the store so an oversized one cannot exhaust memory
+// first.
 func (s *IngestServer) handleBlob(w http.ResponseWriter, r *http.Request) {
 	var bl struct {
 		Hash string `json:"hash"`
@@ -166,19 +158,18 @@ func (s *IngestServer) handleBlob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ok, err := s.cfg.Store.AppendBlob(bl.Hash, bl.Text)
-	if err != nil {
+	switch {
+	case err != nil:
 		log.Printf("monitor: blob store: %v", err)
 		http.Error(w, "monitor: internal error", http.StatusInternalServerError)
-		return
-	}
-	if !ok {
+	case !ok:
 		http.Error(w, "monitor: blob hash does not match sha256(text)", http.StatusBadRequest)
-		return
+	default:
+		writeOK(w)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// readLine reads one '\n'-delimited line (delimiter stripped), up to maxLen
+// readLine reads one '\n'-delimited line (delimiter stripped) up to maxLen
 // bytes; a longer one is discarded through its newline and reported as
 // errLineTooLong for that line only. A final unterminated line is still
 // returned; EOF with nothing pending returns io.EOF.
@@ -199,9 +190,7 @@ func readLine(r *bufio.Reader, maxLen int) ([]byte, error) {
 			continue
 		case overflow:
 			return nil, errLineTooLong
-		case err == nil:
-			return bytes.TrimRight(buf, "\r\n"), nil
-		case len(buf) > 0:
+		case err == nil, len(buf) > 0:
 			return bytes.TrimRight(buf, "\r\n"), nil
 		default:
 			return nil, err
@@ -209,8 +198,8 @@ func readLine(r *bufio.Reader, maxLen int) ([]byte, error) {
 	}
 }
 
-func writeJSON(w http.ResponseWriter, status int, v any) {
+// writeOK is the only success body either endpoint returns.
+func writeOK(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	_, _ = io.WriteString(w, `{"ok":true}`)
 }
