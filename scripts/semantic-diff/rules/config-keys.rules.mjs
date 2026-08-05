@@ -9,16 +9,17 @@
 export default [
 	{
 		id: "config-keys.top-level.surface",
-		description: "Config's top-level toml tags, from the Services field through GoogleWorkspaceAccess, still name exactly this key set.",
+		description: "Config's top-level toml tags, from the Services field through GogAccount, still name exactly this key set.",
 		checks: [
 			{
 				file: "services/host/config/config.go",
 				kind: "set",
 				// Bounded to the AGENTS.md-documented user surface: Services through
-				// GoogleWorkspaceAccess (KnowledgeBundles was retired, W2 U03A, along
-				// with the built-in knowledge service — it no longer has a live
-				// on-disk key; Slack went the same way in W2/U02a with the built-in
-				// Slack MCP server). Kits/Skills/Packs/Plugins/Host (further down
+				// GogAccount (KnowledgeBundles was retired, W2 U03A, along with the
+				// built-in knowledge service — it no longer has a live on-disk key;
+				// Slack went the same way in W2/U02a with the built-in Slack MCP
+				// server, and GoogleWorkspaceAccess in W2/U02B with the built-in
+				// Google Workspace wizard). Kits/Skills/Packs/Plugins/Host (further down
 				// the same struct) are real keys too but are out of scope for this W0
 				// pin — Story-scoped follow-up, not this guard's job to enumerate the
 				// entire struct.
@@ -28,6 +29,13 @@ export default [
 				// the TOML-facing field) sits ON the start-anchor line itself and is
 				// excluded from the scanned region by construction; it is not a real
 				// on-disk key so it does not belong in this set anyway.
+				// google_workspace_access dropped W2 U02B: it was the runtime profile
+				// ("create-docs") the built-in `pix gworkspace setup --create-docs`
+				// wizard wrote for the separate google-docs-create MCP. Both the
+				// wizard and that MCP are retired — see
+				// docs/design/gworkspace-externalization.md and the matching
+				// scripts/semantic-diff/intended-changes.json entry. google_workspace_account
+				// stays: gog is still registered generically via `pix mcp register`.
 				expected: [
 					"services",
 					"mcp",
@@ -37,7 +45,6 @@ export default [
 					"run_intent",
 					"inference",
 					"google_workspace_account",
-					"google_workspace_access",
 				],
 			},
 		],

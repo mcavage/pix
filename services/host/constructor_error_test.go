@@ -23,7 +23,6 @@ func TestBuildStoresReturnErrorNotFatal(t *testing.T) {
 	}
 	bad := filepath.Join(blocker, "store.db")
 
-
 	t.Run("memory", func(t *testing.T) {
 		t.Setenv("MEMORY_DB", bad)
 		store, _, err := buildMemStore()

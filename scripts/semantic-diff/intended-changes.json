@@ -51,5 +51,24 @@
 				"to": ["\"MEMORY_PORT\":", "\"PIX_MEMORY_PORT\":"]
 			}
 		]
+	},
+	{
+		"id": "config-keys.top-level.surface",
+		"rationale": "W2 U02B deletes the built-in `pix gworkspace setup --create-docs` wizard and the separate google-docs-create write-scoped MCP it provisioned (workflow/gworkspace, google_docs_create_plugin.go). google_workspace_access was the get-only permission profile that wizard wrote and nothing else ever read once the wizard is gone, so it drops from the top-level key surface. It lands ON TOP of the W2 U03A knowledge_bundles removal recorded above — the merged tree never occupies an intermediate state where only one of the two keys is gone — so the destination recorded here is the whole surface that remains: Services through google_workspace_account. That key is UNCHANGED: gog stays registerable the generic way every other local stdio MCP server is, via `pix mcp register` (mcp.GogHardenedArgv already bakes in --readonly/--gmail-no-send/--wrap-untrusted).",
+		"evidence": "docs/design/gworkspace-externalization.md; services/host/config/config.go (GoogleWorkspaceAccess field + SetGoogleWorkspaceAccess removed); services/host/workflow/provision/config.go (the google_workspace_access get-key case and its ConfigKeysHelp line removed — `pix config get|set` belongs to provision now, workflow/setup having been deleted by the U10b/U10c provision port)",
+		"changes": [
+			{
+				"file": "services/host/config/config.go",
+				"kind": "set",
+				"from": ["services", "mcp", "memory_watcher_model", "memory_embed_model", "ollama_bridge_model", "run_intent", "inference", "google_workspace_account", "google_workspace_access"],
+				"to": ["services", "mcp", "memory_watcher_model", "memory_embed_model", "ollama_bridge_model", "run_intent", "inference", "google_workspace_account"]
+			},
+			{
+				"file": "scripts/semantic-diff/rules/config-keys.rules.mjs",
+				"kind": "set",
+				"from": ["services", "mcp", "memory_watcher_model", "memory_embed_model", "ollama_bridge_model", "run_intent", "inference", "google_workspace_account", "google_workspace_access"],
+				"to": ["services", "mcp", "memory_watcher_model", "memory_embed_model", "ollama_bridge_model", "run_intent", "inference", "google_workspace_account"]
+			}
+		]
 	}
 ]

@@ -7,12 +7,12 @@
 // It is retained, and its deletion DEFERRED, because it still has real
 // consumers this unit did not own. As of W5/U10c they are, exactly:
 //
-//	workflow/gworkspace   renders its own readiness Checks for `gworkspace
-//	                      setup` (the gog leaf; a separate unit)
 //	workflow/models       `pix models add`'s inference selection/verification
 //	workflow/launch       the launch key gate and the host-state read
-//	workflow/doctor       the three LEAF helpers the four above call
-//	                      (SecretCheck, the gog probes, OllamaReadinessAxes)
+//	workflow/doctor       the LEAF helpers the others call (SecretCheck,
+//	                      OllamaReadinessAxes); workflow/gworkspace was a
+//	                      consumer too until W2/U02B retired the built-in
+//	                      Google Workspace wizard and its gog probes
 //	cmd/pix               `run`/`agent`/`models` use readiness/axis for model
 //	                      RESOLUTION (ResolveSessionModel) and the sbx key
 //	                      evidence probe — utilities that live here by history,

@@ -164,8 +164,10 @@ exist, keep the top 3 by this order and drop the rest.
    call it broken. If this repo has durable docs or team conventions worth
    indexing: `pix knowledge init`.
 4. **`gog.enabled` is false**: optional. If they want Gmail, Calendar, or
-   Drive access: `pix gworkspace setup` (guided: installs check, OAuth import,
-   read-only authorization, and gateway registration in one command), then
+   Drive access: install `gog` (`brew install openclaw/tap/gogcli`), authorize
+   an account with its own auth command, `pix config set
+   google_workspace_account <email>`, `pix config set mcp google-workspace`,
+   `pix mcp register` (no guided wizard — see docs/gworkspace.md), then
    `pix run --replace` to attach it to a running sandbox.
 5. **`mcp.enabled` is false and they need some other external tool** (not
    gog, don't duplicate that line): configure the MCP provider they need,

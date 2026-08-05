@@ -101,7 +101,7 @@ func TestAddArgs_GogBare(t *testing.T) {
 
 // TestRegisterServers_GogNoOpRefsBare: gateway on, op + op-refs ABSENT, gog
 // present + account set -> gog registers DIRECTLY (bare command, no op wrapper)
-// with the OAuth note. gog uses guided OAuth (`pix gworkspace setup`), never
+// with the OAuth note. gog authenticates via its own OAuth grant, never
 // op-refs, so the note must NOT mention op-refs.
 func TestRegisterServers_GogNoOpRefsBare(t *testing.T) {
 	f := hostenvtest.Env{
@@ -131,9 +131,8 @@ func TestRegisterServers_GogNoOpRefsBare(t *testing.T) {
 
 // TestRegisterServers_GogOnlyNoSeed (R5-1/R5-2): a gog-only clean state with op
 // NOT resolvable must NOT create op-refs.env at the XDG path and must NOT print a
-// "seeded" line. gog authenticates via guided OAuth (`pix gworkspace setup`),
-// never op-refs, so seeding one contradicts setup Step 4's "No file is
-// created" copy.
+// "seeded" line. gog authenticates via its own OAuth grant, never op-refs, so
+// seeding one would be actively wrong.
 func TestRegisterServers_GogOnlyNoSeed(t *testing.T) {
 	home := t.TempDir()
 	env := (hostenvtest.Env{
@@ -653,33 +652,9 @@ func TestMcpRegistrar_ContainerAddArgs(t *testing.T) {
 	}
 }
 
-// TestBuildGogRegistrarWrapsOnlyForTheKeyringRef: gog's normal macOS OAuth
-// lives in its own keychain and must NOT inherit an `op run` wrapper merely
-// because unrelated integration refs exist. Only the explicit file-keyring
-// topology — GOG_KEYRING_PASSWORD present as a filled ref — earns the wrapper.
-//
-// This used to write real op-refs.env files into a temp dir and fake two OS
-// seams to make BuildGogRegistrar read them. It does not read anything now:
-// resolving credentials is secret's job, so the two cases ARE two struct
-// literals. That is what inverting the dependency bought.
-func TestBuildGogRegistrarWrapsOnlyForTheKeyringRef(t *testing.T) {
-	unrelated := Credentials{OpPath: "/usr/bin/op", OpRefsPath: "/cfg/op-refs.env", GogKeyring: false}
-	reg := BuildGogRegistrar("/usr/bin/gog", "you@example.com", unrelated)
-	if reg.OpRefs != "" || strings.HasSuffix(reg.ExecArgv(config.GWServerName)[0], "/op") {
-		t.Fatalf("unrelated refs wrapped gog: %+v", reg.ExecArgv(config.GWServerName))
-	}
-
-	keyring := Credentials{OpPath: "/usr/bin/op", OpRefsPath: "/cfg/op-refs.env", GogKeyring: true}
-	reg = BuildGogRegistrar("/usr/bin/gog", "you@example.com", keyring)
-	if reg.OpRefs == "" {
-		t.Fatal("explicit gog file-keyring password ref did not enable op wrapper")
-	}
-
-	// No op on PATH means no wrapper even with the keyring ref: there is
-	// nothing to wrap WITH, and registering a command that cannot exec is
-	// worse than registering a bare one.
-	noOp := Credentials{OpRefsPath: "/cfg/op-refs.env", GogKeyring: true}
-	if got := BuildGogRegistrar("/usr/bin/gog", "you@example.com", noOp); got.OpRefs != "" {
-		t.Fatalf("wrapped gog with no op binary: %+v", got)
-	}
-}
+// The gog-only-wraps-for-an-explicit-keyring-ref behavior (BuildGogRegistrar)
+// used to back the built-in `pix gworkspace setup` wizard's pre-registration
+// snapshot and had its own test here. That wizard is retired; the same gate
+// (opReady && creds.GogKeyring) is now inlined directly in RegisterServers
+// and exercised through it — see TestRegisterServers_GogNoOpRefsBare and
+// TestRegisterServers_Registers below.

@@ -335,11 +335,10 @@ func TestFastSurfacesShareTheVocabulary(t *testing.T) {
 // consumer means writing new code against a retired model; the fix is to use
 // pix/host/health. When the list is empty, delete the package.
 var readinessConsumers = map[string]bool{
-	"cmd/pix":             true, // ResolveSessionModel + the sbx key-evidence probe
-	"workflow/doctor":     true, // the leaf helpers the four below call
-	"workflow/gworkspace": true,
-	"workflow/launch":     true,
-	"workflow/models":     true,
+	"cmd/pix":         true, // ResolveSessionModel + the sbx key-evidence probe
+	"workflow/doctor": true, // the leaf helpers the three below call
+	"workflow/launch": true,
+	"workflow/models": true,
 }
 
 // TestReadinessConsumersOnlyShrink walks the module for PRODUCTION files that

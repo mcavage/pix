@@ -196,14 +196,12 @@ pack repo — hand the user the diff to apply.
   `--gmail-no-send` by default** (write tools gated/off), exposes typed read tools
   (`gmail_search`, `gmail_get_message`, `drive_search`, `drive_get`, `docs_get`,
   `sheets_read_range`, `calendar_events`), and **wraps returned Gmail/Doc content as
-  untrusted** (prompt-injection guard). The opt-in `pix gworkspace setup
-  --create-docs` profile adds a separate compiled `google-docs-create` host MCP
-  with exactly one tool, `google_docs_create`. That tool invokes only
-  `gog docs create`; it accepts no document ID and therefore cannot edit,
-  delete, move, or share existing Docs. Gmail and Slack sending remain absent.
-  Registered via `make mcp-register`, attached
-  at sandbox creation via the `MCP` list. See the `gworkspace` skill. (The old
-  Google Workspace cli host-token wrapper it replaces is gone.)
+  untrusted** (prompt-injection guard). No built-in guided setup remains — the
+  old `pix gworkspace setup` wizard and its `--create-docs` companion MCP are
+  retired (see `docs/design/gworkspace-externalization.md`). gog registers the
+  same generic way every other local stdio server does, `pix mcp register`
+  (hardened flags baked into `mcp.GogHardenedArgv`), not a dedicated verb. See
+  `docs/gworkspace.md` and the `gworkspace` skill.
 - **Private packs + host/container integrations (company-specific).** Open-core
   boundary: nothing company-specific is in the public repo, and **no `pix-host`
   recompile is ever needed.** Private context ships three ways:

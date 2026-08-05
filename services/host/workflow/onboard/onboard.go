@@ -39,7 +39,7 @@ import (
 // deliberately ABSENT: it is memory data, written live over the memory RPC, not
 // host config.
 type OnboardingResult struct {
-	Version            int        `json:"version"`
+	Version            int      `json:"version"`
 	MCP                []string `json:"mcp,omitempty"`
 	OllamaBridgeModel  string   `json:"ollama_bridge_model,omitempty"`
 	MemoryWatcherModel string   `json:"memory_watcher_model,omitempty"`
@@ -111,10 +111,10 @@ func ApplyOnboardingResult(r *OnboardingResult, cfg *config.Config, env hostenv.
 	var changes []string
 
 	// There is deliberately NO account writer here. Setting
-	// google_workspace_account without completing OAuth is what produced a
-	// config that claimed Google Workspace while nothing worked; the only
-	// writer is the gworkspace transaction (gog_setup.go), reached via
-	// `pix gworkspace setup` or `pix setup --google-workspace`.
+	// google_workspace_account without a real, authorized gog installation is
+	// what produced a config that claimed Google Workspace while nothing
+	// worked; that write happens manually (`pix config set
+	// google_workspace_account <email>` then `pix mcp register`), never here.
 	for _, m := range r.MCP {
 		if cfg.AddMCP(strings.TrimSpace(m)) {
 			changes = append(changes, "enabled "+strings.TrimSpace(m)+" (mcp)")
@@ -232,8 +232,8 @@ func ReconcileOnboarding(ws string, env hostenv.Env, in io.Reader, out io.Writer
 // on, and it stays exactly where it was. This parser is the flag surface both
 // the host phase and the --apply path share.
 type Opts struct {
-	Account string
-	Mcp     []string
+	Account   string
+	Mcp       []string
 	Model     string
 	Models    string
 	Apply     bool

@@ -78,6 +78,17 @@ func classifyMCPServer(name string, containers map[string]config.MCPContainer, l
 			return health.MCPServer{Name: name, RegisterFix: "pix mcp register " + name}
 		}
 	}
+	// gog is the documented local special case (mcp.LocalMCPNames): the bridge
+	// NEVER lists it — it is the external Google Workspace CLI, not a `pix-host
+	// mcp <name>` subcommand — but `pix mcp register` registers it with the
+	// gateway exactly like a local stdio server, hardened argv and all
+	// (mcp.GogHardenedArgv). Classifying it off the bridge list alone would
+	// print `sbx mcp add --help` for a server pix registers itself. W2/U02B
+	// retired the gworkspace wizard and with it gog's bespoke doctor group, so
+	// this is now the only place that fact is stated to a user.
+	if name == config.GWServerName {
+		return health.MCPServer{Name: name, RegisterFix: "pix mcp register " + name}
+	}
 	if localKnown && localSet[name] {
 		return health.MCPServer{Name: name, RegisterFix: "pix mcp register " + name}
 	}

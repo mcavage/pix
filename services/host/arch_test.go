@@ -67,15 +67,15 @@ var pkgLayer = map[string]int{
 	"workspace": layerFoundation,
 
 	// L1 — capability. One domain each, siblings invisible to each other.
-	"inference":  layerCapability,
-	"monitor":    layerCapability,
-	"okf":        layerCapability,
-	"plugin":     layerCapability,
-	"service":    layerCapability,
-	"memory":     layerCapability,
-	"knowledge":  layerCapability,
-	"secret":     layerCapability,
-	"mcp":        layerCapability,
+	"inference": layerCapability,
+	"monitor":   layerCapability,
+	"okf":       layerCapability,
+	"plugin":    layerCapability,
+	"service":   layerCapability,
+	"memory":    layerCapability,
+	"knowledge": layerCapability,
+	"secret":    layerCapability,
+	"mcp":       layerCapability,
 	// sandbox is U04b's focused L1 sandbox domain: naming, the tolerant sbx-
 	// listing parser, create-vs-exec argv planning, fingerprint comparison and
 	// non-force removal planning. Pure and dependency-free (see sandbox/doc.go),
@@ -134,12 +134,16 @@ var pkgLayer = map[string]int{
 	// nothing below L4 consumes it. The capability-shaped parts inside it
 	// (manifest parsing, the trust store, the host BoM) are candidates to split
 	// out later; being a workflow is already correct today.
-	"workflow/pack":       layerWorkflow,
-	"workflow/reset":      layerWorkflow,
-	"workflow/onboard":    layerWorkflow,
-	"workflow/doctor":     layerWorkflow,
-	"workflow/gworkspace": layerWorkflow,
-	"workflow/launch":     layerWorkflow,
+	//
+	// gworkspace (the built-in `pix gworkspace setup|status|disable` wizard and
+	// its headless-spawn probing) was externalized the same way in W2/U02B — see
+	// docs/design/gworkspace-externalization.md — so that package is gone too;
+	// gog is registered generically through `pix mcp register`.
+	"workflow/pack":    layerWorkflow,
+	"workflow/reset":   layerWorkflow,
+	"workflow/onboard": layerWorkflow,
+	"workflow/doctor":  layerWorkflow,
+	"workflow/launch":  layerWorkflow,
 	// workflow/models is `pix models add`: the inference selection, live
 	// verification and roster machinery that used to be welded into setup's
 	// keys/inference mutation steps. It is a workflow (it composes config,

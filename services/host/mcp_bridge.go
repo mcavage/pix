@@ -32,28 +32,27 @@ import (
 // (servePluginMcp), which must serve the built-in impl WITHOUT re-consulting
 // config (config selection is decided by the supervisor, not the servant).
 //
-// Slack was the public tree's one built-in local server; it was externalized
-// (W2/U02a — see docs/design/slack-setup.md) and this switch no longer serves
-// it. Any local stdio server now either registers as a container the sbx
-// gateway runs, or overrides this slot entirely via the generic [plugins.mcp]
-// SHA-pinned external-process mechanism (mcpServerFor, consulted first in that
-// path). This runs on BOTH the in-process bridge (runMcpBridge) and the
-// self-exec plugin path (servePluginMcp), since both route through here.
+// The public tree now ships ZERO built-in local servers. Slack was the last
+// one and was externalized (W2/U02a — see docs/design/slack-setup.md); the
+// write-scoped `google-docs-create` companion retired with the built-in Google
+// Workspace wizard (W2/U02B — see docs/design/gworkspace-externalization.md).
+// A local stdio server now either registers as a container the sbx gateway
+// runs, or arrives as a pack-trust-admitted [[services]] unit. The lookup is
+// kept (rather than deleted) because it is the single "is <name> served by this
+// binary" answer both the in-process bridge (runMcpBridge) and the self-exec
+// plugin path (servePluginMcp) ask, and it must keep failing CLOSED.
 func builtinMcpServerFor(name string) (plugin.McpServer, error) {
-	switch name {
-	case googleDocsCreateServerName:
-		return googleDocsCreateMcpAdapter{}, nil
-	}
 	return nil, fmt.Errorf("no built-in MCP server named %q", name)
 }
 
 // builtinMcpNames returns the sorted names this binary can serve locally as a
-// `pix-host mcp <name>` stdio bridge. gog is DELIBERATELY excluded — it is the
-// external Google Workspace CLI, not served by this bridge. This is the source
-// of truth for "is <name> a local stdio server" that the launcher (`pix mcp
-// register`) and doctor consult via `mcp --list`.
+// `pix-host mcp <name>` stdio bridge: today NONE. gog is DELIBERATELY excluded
+// — it is the external Google Workspace CLI, registered directly (see
+// mcp.GogHardenedArgv), not served by this bridge. This is the source of truth
+// for "is <name> a local stdio server" that the launcher (`pix mcp register`)
+// and doctor consult via `mcp --list`.
 func builtinMcpNames() []string {
-	names := []string{googleDocsCreateServerName}
+	var names []string
 	sort.Strings(names)
 	return names
 }

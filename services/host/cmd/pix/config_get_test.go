@@ -74,4 +74,3 @@ func TestConfigValue_EmptyList(t *testing.T) {
 		t.Errorf("provision.ConfigValue(mcp) on empty list = %q, %v; want \"\", nil", got, err)
 	}
 }
-

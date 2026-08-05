@@ -67,8 +67,8 @@ by default.
 
 **Revoking and rotating access.** An OAuth grant (Google Workspace, a remote
 catalog server) is revoked from that provider's own account security page,
-not from pix; `pix gworkspace setup` re-authorizes cleanly afterward if you
-need the integration back. A 1Password-backed MCP credential (a Slack token,
+not from pix; re-authorize with the `gog` CLI's own auth command afterward if
+you need the integration back, then `pix mcp register` again. A 1Password-backed MCP credential (a Slack token,
 a keyring password) is rotated in 1Password itself; the gateway only resolves
 an `op://` ref at spawn time, so the new value takes effect once you
 re-register the server (`pix mcp register`), which triggers a fresh

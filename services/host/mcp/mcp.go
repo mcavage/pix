@@ -389,80 +389,14 @@ func RawAddArgs(name string, argv []string) []string {
 	return args
 }
 
-// GogRegisteredArgv returns the EXACT argv the sbx gateway will exec for gog,
-// given resolved binaries/refs/account — literally McpRegistrar{…}.ExecArgv
-// ("gog") for the same inputs RegisterServers would use. gog_setup.go's
-// pre-commit headless verification and doctor's best-effort reconstruction
-// fallback (when sbx's own registration can't be read) both call THIS, so
-// neither can silently probe lighter flags/wrapper than what registration will
-// actually run. Pass opBin/OpRefs both "" for a bare (no 1Password) probe —
-// mirrors RegisterServers' opReady gate, where op and op-refs are only ever
-// used together.
-func GogRegisteredArgv(gogBin, opBin, OpRefs, account string) []string {
-	return McpRegistrar{Gog: gogBin, Account: account, Op: opBin, OpRefs: OpRefs, GogUseOp: OpRefs != ""}.ExecArgv(config.GWServerName)
-}
-
-// gogBareRegistrationNote is the ONE shared message printed whenever gog is
-// registered without an op-refs.env wrapper (1Password not configured): gog
-// authenticates via its own OAuth flow, never op-refs, so this points at the
-// guided `pix gworkspace setup` recovery path — never a raw legacy direct-login
-// recipe.
-func gogBareRegistrationNote(out io.Writer) {
-	fmt.Fprintln(out, "note: registered gog directly (bare); gog authenticates via its own OAuth flow — "+
-		"if it ever needs re-authorizing, run: pix gworkspace setup")
-}
-
-// BuildGogRegistrar resolves op + op-refs EXACTLY ONCE and pairs them with the
-// already-resolved gogPath/account into an IMMUTABLE McpRegistrar snapshot.
-// gogSetup calls this a single time, before its headless verification probe;
-// the returned reg is then used, UNCHANGED, both to build the probe's argv
-// (reg.ExecArgv("gog")) and to register it (RegisterGogRegistrar ->
-// reg.AddArgs("gog")) — no re-resolution of op/op-refs/gog happens between the
-// two, so a PATH or op-refs.env mutation in that window can never register a
-// different command than the one that was just proven healthy.
-func BuildGogRegistrar(gogPath, account string, creds Credentials) McpRegistrar {
-	reg := McpRegistrar{Gog: gogPath, Account: account}
-	OpPath, OpRefs := creds.OpPath, creds.OpRefsPath
-	// gog's normal macOS OAuth lives in its own keychain and must not inherit an
-	// op wrapper merely because unrelated integration refs exist. The wrapper
-	// is only for the explicit file-keyring topology, identified by its password
-	// ref; otherwise `op run` adds a needless sign-in dependency and can prevent
-	// an already-working bare gog command from running at all.
-	if OpPath != "" && OpRefs != "" && creds.GogKeyring {
-		reg.Op = OpPath
-		reg.OpRefs = OpRefs
-		reg.GogUseOp = true
-	}
-	return reg
-}
-
-// RegisterGogRegistrar registers gog with the sbx gateway using the EXACT,
-// already-resolved reg snapshot gogSetup built via BuildGogRegistrar and
-// probed against — no independent re-resolution here, so the registered
-// command is byte-for-byte the one that was just verified.
-func RegisterGogRegistrar(reg McpRegistrar, env hostenv.Env, out io.Writer) error {
-
-	if reg.OpRefs == "" {
-		gogBareRegistrationNote(out)
-	}
-	if _, err := env.Run("sbx", reg.AddArgs(config.GWServerName)...); err != nil {
-		return fmt.Errorf("sbx mcp add %s: %w", config.GWServerName, err)
-	}
-	fmt.Fprintln(out, "  registered: "+config.GWServerName)
-	return nil
-}
-
-func RegisterDocsCreateRegistrar(reg McpRegistrar, env hostenv.Env, out io.Writer) error {
-
-	if strings.TrimSpace(reg.HostBin) == "" {
-		return fmt.Errorf("pix-host path is unavailable")
-	}
-	if _, err := env.Run("sbx", reg.AddArgs(config.GWDocsCreateServerName)...); err != nil {
-		return fmt.Errorf("sbx mcp add %s: %w", config.GWDocsCreateServerName, err)
-	}
-	fmt.Fprintln(out, "  registered: "+config.GWDocsCreateServerName)
-	return nil
-}
+// BuildGogRegistrar, RegisterGogRegistrar, RegisterDocsCreateRegistrar, and
+// GogRegisteredArgv used to back the built-in `pix gworkspace setup` OAuth
+// wizard (register-then-save-with-rollback transaction) and the separate
+// `google-docs-create` write-scoped companion MCP. Both were retired — see
+// docs/design/gworkspace-externalization.md. gog registration now goes
+// through the same generic path every other local stdio server uses:
+// RegisterServers below (McpRegistrar + GogHardenedArgv), invoked by
+// `pix mcp register` or a pack.
 
 // RegisterServers resolves + guards + builds + runs the `sbx mcp add` commands
 // for the requested local stdio servers. With no requested names it registers
@@ -605,11 +539,12 @@ func RegisterServers(cfg *config.Config, env hostenv.Env, out io.Writer,
 				strings.Join(finalNames, ", "), refsPath)
 		} else if wantGog {
 			// gog-only: gog authenticates via its own OAuth grant, never op-refs, so
-			// do NOT seed op-refs.env or mention it. Register bare. The grant
-			// guidance is the GUIDED command only — gog is a LOCAL stdio MCP, so
-			// neither native `sbx mcp auth` (remote catalog OAuth) nor a raw legacy
-			// direct-login recipe is ever printed.
-			fmt.Fprintln(out, "note: registered gog directly (bare); gog authenticates via OAuth — wire it: pix gworkspace setup")
+			// do NOT seed op-refs.env or mention it. Register bare. gog is a LOCAL
+			// stdio MCP with no built-in guided setup (that wizard was retired —
+			// see docs/design/gworkspace-externalization.md): authorize the account
+			// with the external `gog` CLI directly, never native `sbx mcp auth`
+			// (remote catalog OAuth) or a raw legacy direct-login recipe.
+			fmt.Fprintln(out, "note: registered gog directly (bare); gog authenticates via its own OAuth grant — run the gog CLI's own auth command if it needs (re)authorizing")
 		}
 		// container-only: nothing to seed — container creds are Docker-side, not op-refs.
 	}

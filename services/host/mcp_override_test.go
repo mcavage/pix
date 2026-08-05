@@ -103,10 +103,11 @@ func TestExternalMcpOverrideEndToEnd(t *testing.T) {
 // override is RETIRED. A config.toml that names an external binary (pinned and
 // otherwise launchable) is INERT — the slot loads as builtin with no path/sha,
 // the declared key surfaces through RetiredKeys (the operator-facing notice),
-// and mcpServerFor(googleDocsCreateServerName) returns the in-process built-in
-// adapter. No subprocess is ever launched from a config declaration; the only
-// admission path for an external unit is a pack-trust-admitted [[services]]
-// entry.
+// and mcpServerFor never dispenses a plugin-backed server from it. With no
+// built-in servers left (W2/U02a slack, W2/U02B google-docs-create), the
+// resolver's only honest answer is an error: no subprocess is ever launched
+// from a config declaration, and the only admission path for an external unit
+// is a pack-trust-admitted [[services]] entry.
 func TestMcpServerForConfigPluginsInert(t *testing.T) {
 	bin, sha := buildExampleMcp(t)
 
@@ -135,16 +136,13 @@ func TestMcpServerForConfigPluginsInert(t *testing.T) {
 		t.Errorf("RetiredKeys() = %v, want it to include plugins.mcp (the inert notice)", cfg.RetiredKeys())
 	}
 
-	srv, cleanup, err := mcpServerFor(googleDocsCreateServerName)
-	if err != nil {
-		t.Fatalf("mcpServerFor(%s) = %v", googleDocsCreateServerName, err)
-	}
+	srv, cleanup, err := mcpServerFor("example")
 	defer cleanup()
 	if _, ok := srv.(*pluginMcpServer); ok {
-		t.Fatalf("mcpServerFor(%s) launched an external plugin from config; [plugins.mcp] must be inert", googleDocsCreateServerName)
+		t.Fatalf("mcpServerFor launched an external plugin from config; [plugins.mcp] must be inert")
 	}
-	if _, ok := srv.(googleDocsCreateMcpAdapter); !ok {
-		t.Fatalf("mcpServerFor(%s) returned %T, want the built-in googleDocsCreateMcpAdapter", googleDocsCreateServerName, srv)
+	if err == nil {
+		t.Fatalf("mcpServerFor(example) = %T, want an error (no built-in servers remain)", srv)
 	}
 }
 
