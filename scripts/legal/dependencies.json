@@ -273,7 +273,7 @@
     },
     {
       "module": "golang.org/x/net",
-      "version": "v0.38.0",
+      "version": "v0.53.0",
       "license": "BSD-3-Clause",
       "licenseFile": "LICENSE",
       "class": "permissive"
@@ -287,35 +287,35 @@
     },
     {
       "module": "golang.org/x/term",
-      "version": "v0.36.0",
+      "version": "v0.42.0",
       "license": "BSD-3-Clause",
       "licenseFile": "LICENSE",
       "class": "permissive"
     },
     {
       "module": "golang.org/x/text",
-      "version": "v0.30.0",
+      "version": "v0.36.0",
       "license": "BSD-3-Clause",
       "licenseFile": "LICENSE",
       "class": "permissive"
     },
     {
       "module": "google.golang.org/genproto/googleapis/rpc",
-      "version": "v0.0.0-20231106174013-bbf56f31fb17",
+      "version": "v0.0.0-20260414002931-afd174a4e478",
       "license": "Apache-2.0",
       "licenseFile": "LICENSE",
       "class": "permissive"
     },
     {
       "module": "google.golang.org/grpc",
-      "version": "v1.61.0",
+      "version": "v1.82.1",
       "license": "Apache-2.0",
       "licenseFile": "LICENSE",
       "class": "permissive"
     },
     {
       "module": "google.golang.org/protobuf",
-      "version": "v1.36.6",
+      "version": "v1.36.11",
       "license": "BSD-3-Clause",
       "licenseFile": "LICENSE",
       "class": "permissive"
