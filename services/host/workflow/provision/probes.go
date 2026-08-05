@@ -2,9 +2,8 @@
 // the way health's own probes do: a boundary that did not ANSWER is unknown, and
 // only a positive answer may be absent and hand out a repair command. The loop
 // applies verified gaps only, so a misclassified unknown here is the one way
-// setup could mutate a host on a guess. (The provider-key probe that used to sit
-// beside it is gone: health.ProviderKeyProbe in AnyOf mode is the same check,
-// and setup now reports from the probe doctor reports from.)
+// setup could mutate a host on a guess. The provider-key check is
+// health.ProviderKeyProbe in AnyOf mode — the probe doctor reports from.
 package provision
 
 import (

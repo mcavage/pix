@@ -2,17 +2,10 @@
 // (sys.System) plus the live probes that are domain-specific and therefore do
 // not belong in sys.
 //
-// It exists to unblock Phase 3 (docs/design/rearchitecture.md). Extracting a
-// domain out of `package main` was impossible while the bundle every function
-// takes was itself declared in `package main` — the extracted package could not
-// name its own parameter type. Moving the type here breaks that cycle for all
-// seven remaining domains at once.
-//
 // It is TRANSITIONAL, and should shrink rather than grow. The end state is that
 // a function takes what it uses — `sys.Exec`, or a domain's own prober — and
 // this bundle disappears. Each probe below is annotated with the package it
-// leaves for. Do not add a field here to avoid threading a dependency: that is
-// exactly how the 22-field shellEnv this replaced came to exist.
+// leaves for. Do not add a field here to avoid threading a dependency.
 package hostenv
 
 import (

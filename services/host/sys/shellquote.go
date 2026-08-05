@@ -2,9 +2,8 @@ package sys
 
 import "strings"
 
-// ShellQuote quotes s for safe copy-paste into a POSIX shell: a token made
-// only of clearly-safe characters passes through untouched; anything else is
-// single-quoted using the standard close-escape-reopen sequence for embedded
+// ShellQuote quotes s for safe copy-paste into a POSIX shell: a clearly-safe token
+// passes through untouched; anything else is single-quoted (close-escape-reopen).
 func ShellQuote(s string) string {
 	if s == "" {
 		return "''"

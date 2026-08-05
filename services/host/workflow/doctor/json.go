@@ -6,11 +6,9 @@ import (
 	"pix/host/launcher"
 )
 
-// json.go is ONE schema for both verbs. The pair used to emit two (doctor's
-// nested groups + a flat checks array, status's dashboard object with a
-// different notion of "up"), which meant two parsers and two chances to
-// disagree about the same host. A consumer now reads one shape from either
-// command and gets the same rows.
+// json.go is ONE schema for both verbs — one parser, and no second chance to
+// disagree about the same host. A consumer reads one shape from either command
+// and gets the same rows.
 //
 // SchemaVersion 4 is a BREAK, not an extension: v1-v3 described the
 // requirement/verdict matrix this wave deleted, and there is no honest

@@ -1,8 +1,6 @@
 // Package health is the one readiness model every pix command renders.
 //
-// It replaces the readiness/axis pair (a Requirement × Verdict matrix, a lazy
-// axis registry, four exit codes and two renderers) with the smallest model
-// that still tells the truth:
+// The model is the smallest one that still tells the truth:
 //
 //	Probe    one thing we can go and check, bounded by a context
 //	Result   what that check PROVED — ready, absent, denied, or unknown

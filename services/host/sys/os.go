@@ -37,8 +37,7 @@ func RunTimed(timeout time.Duration, name string, args ...string) (string, bool,
 }
 
 // AtomicWriteInDir writes data to dir/name atomically, and is the ONE hardened
-// writer in the tree (config saves, workspace state, secret refs all route
-// here). The destination is never opened directly, so a leaf symlink is
+// writer in the tree (config saves, workspace state, secret refs all route here).
 func AtomicWriteInDir(dir, name string, data []byte, perm os.FileMode) error {
 	tmp, err := os.CreateTemp(dir, name+".tmp-")
 	if err != nil {
@@ -54,14 +53,12 @@ func AtomicWriteInDir(dir, name string, data []byte, perm os.FileMode) error {
 		return fail(err)
 	}
 	// chmod the REQUESTED mode before Sync (CreateTemp makes 0600): fchmod on the
-	// open handle, so the fsync below flushes data AND metadata with the intended
-	// mode already in place — the file is never made visible, or made durable,
+	// open handle, so the fsync flushes data AND metadata with the mode in place.
 	if err := tmp.Chmod(perm); err != nil {
 		return fail(err)
 	}
-	// fsync before rename: the write must be durable before the atomic rename
-	// makes it visible, so a crash between rename and the next read can never
-	// observe a truncated file. The OS buffer cache alone does not guarantee
+	// fsync before rename: the write must be durable before the atomic rename makes
+	// it visible, so a crash can never expose a truncated file.
 	if err := tmp.Sync(); err != nil {
 		return fail(err)
 	}

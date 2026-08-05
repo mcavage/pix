@@ -3,11 +3,9 @@
 // experience lives INSIDE a pix sandbox: the agent writes identity to the memory
 // service (data plane) and PROPOSES host config by writing
 // <workspace>/.pix/onboarding.json (control plane). Here is the schema, its
-// allowlist validation, the applier and the reconcile-on-next-run path. It is
-// provision's file because the `pix onboard` verb is gone (AC-P0-308: `pix setup
-// --no-agent` replaced it), setup is the only caller left, and the separate
-// package's Deps struct was a second copy of the composition provision already
-// owns (HostBinary, Register, VerifyCatalogMCPReady).
+// allowlist validation, the applier and the reconcile-on-next-run path. `pix
+// setup` is the only caller, and it reuses provision's own composition
+// (HostBinary, Register, VerifyCatalogMCPReady).
 //
 // SECURITY MODEL: the sandbox is network-fenced and non-root and can only PROPOSE
 // config within OnboardingResult's fixed field set. Unmarshalling into a typed
@@ -62,9 +60,8 @@ func validateOnboarding(r *OnboardingResult, env hostenv.Env, hostResolver func(
 			return fmt.Errorf("empty mcp name")
 		}
 		// The accepted remotes ARE mcp.McpCatalogNames — the single source of
-		// truth for what `pix mcp bundle` registers — read directly rather than
-		// aliased, because the hand-written copy this replaced had grown a
-		// "linear" no pix command could register.
+		// truth for what `pix mcp bundle` registers — read directly, never
+		// copied, so the list cannot drift into a name pix cannot register.
 		if m == config.GWServerName || mcp.McpCatalogNames[m] {
 			continue
 		}
@@ -93,8 +90,7 @@ func validateOnboarding(r *OnboardingResult, env hostenv.Env, hostResolver func(
 
 // applyOnboarding applies a VALIDATED proposal onto cfg through the same setters
 // the CLI uses and returns the human-readable changes. It does NOT save: the
-// caller picks preview (a copy) or commit, which is all the save seam the old
-// signature threaded ever expressed. Idempotent.
+// caller picks preview (a copy) or commit. Idempotent.
 //
 // There is deliberately NO account writer. Setting google_workspace_account
 // without an authorized gog installation is what produced a config that claimed
@@ -200,9 +196,8 @@ func ReconcileOnboarding(ws string, env hostenv.Env, in io.Reader, out io.Writer
 
 // Opts is `pix setup`'s host-phase flag set. kong owns the user-facing grammar and
 // hands the host phase the argv its flags COMPOSE TO, so this parser accepts what
-// setup_cmd.go emits and nothing else. Retired spellings are not re-litigated
-// here: the command layer answers those with their migration sentence first, and a
-// second copy is a second thing to keep in step.
+// setup_cmd.go emits and nothing else. Retired spellings are answered by the
+// command layer, never a second time here.
 type Opts struct {
 	Mcp        []string
 	Model      string

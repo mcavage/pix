@@ -74,10 +74,9 @@ func Ls(env hostenv.Env, out io.Writer, jsonOut bool) error {
 	if timedOut || err != nil {
 		return fmt.Errorf("sbx ls failed: %v", err)
 	}
-	// DIR is sbx's own best-effort column, and it is labelled as sbx's: the
-	// launcher used to overlay it with a workspace it had recorded at create
-	// time, which was a second store of a fact only the runtime can answer for
-	// a box that may since have been recreated by anyone.
+	// DIR is sbx's own best-effort column, and it is labelled as sbx's: never
+	// overlaid with a workspace the launcher recorded at create time, a fact
+	// only the runtime can answer for a box anyone may have recreated.
 	boxes := workspace.ParsePixBoxes(raw)
 	if jsonOut {
 		b, err := json.MarshalIndent(boxes, "", "  ")

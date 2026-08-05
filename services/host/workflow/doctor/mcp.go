@@ -14,12 +14,9 @@ import (
 // honest) lives here, where the pack and the local inventory are visible; the
 // CHECKING lives in health.MCPProbe, which asks sbx.
 //
-// U04e removed the third half. This file also used to answer "what is attached
-// to this workspace's sandbox" by reading a launcher-written receipt — a record
-// of pix's own past preloads and loads — which the probe rendered as a verdict.
-// Two of the truths the original group established survive because they are
-// probes (registration from `sbx mcp ls`, auth from the control plane); the
-// receipt-derived third one does not, because nothing here can check it.
+// Attachment is deliberately not a third truth: only registration (`sbx mcp
+// ls`) and auth (the control plane) are probes, and nothing here can check
+// what a live session has attached.
 //
 // McpLoadCommand stays a plain exported helper because
 // workflow/launch prints the same one when a sandbox comes up without a server
@@ -81,9 +78,8 @@ func classifyMCPServer(name string, containers map[string]config.MCPContainer, l
 	// mcp <name>` subcommand — but `pix mcp register` registers it with the
 	// gateway exactly like a local stdio server, hardened argv and all
 	// (mcp.GogHardenedArgv). Classifying it off the bridge list alone would
-	// print `sbx mcp add --help` for a server pix registers itself. W2/U02B
-	// retired the gworkspace wizard and with it gog's bespoke doctor group, so
-	// this is now the only place that fact is stated to a user.
+	// print `sbx mcp add --help` for a server pix registers itself, and this is
+	// the only place that fact is stated to a user.
 	if name == config.GWServerName {
 		return health.MCPServer{Name: name, RegisterFix: "pix mcp register " + name}
 	}

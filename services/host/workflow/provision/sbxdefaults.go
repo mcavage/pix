@@ -44,9 +44,8 @@ func EnsureSetupSbxDefaults(env hostenv.Env) error {
 }
 
 // kitAllowedSources reads sbx's kit publisher allowlist and reports whether it
-// already carries Pix's publisher. ONE reader: the decision and the
-// verify-after-write used to be two copies of this parse + scan, which is two
-// places for the allowlist's shape to be misread.
+// already carries Pix's publisher. ONE reader, shared by the decision and the
+// verify-after-write, so the allowlist's shape is parsed in exactly one place.
 func kitAllowedSources(env hostenv.Env, stage string) ([]string, bool, error) {
 	out, timedOut, err := env.RunTimed("sbx", "settings", "get", setupKitSourcesKey)
 	if err != nil || timedOut {

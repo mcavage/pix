@@ -12,11 +12,8 @@ import (
 
 // The CLI verbs below are the memory daemon's read/write surface. They take
 // what they need as ORDINARY PARAMETERS: `pix memory` is a kong tree in
-// cmd/pix now, so the flag set, its help and its arity are declared once by
-// the struct that parses them. What used to live here — RunCore's argv switch,
-// a Usage constant listing five subcommands beside a Dispatch that listed them
-// again, and five hand-rolled flag sets each printing their own usage line —
-// was three statements of the same grammar with nothing keeping them in step.
+// cmd/pix, so the flag set, its help and its arity are declared once by the
+// struct that parses them — never restated here.
 //
 // What is NOT delegated upward: a blank query/content/id is still refused
 // here, because "match everything" and "store nothing" are the daemon's

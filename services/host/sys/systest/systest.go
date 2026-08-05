@@ -36,8 +36,7 @@ type Fake struct {
 	DialLocalFn func(port int) bool
 
 	// Base, when set, answers any method this fixture did not wire, instead of
-	// refusing. It is for the handful of tests that genuinely want "the real OS,
-	// except these two seams" — one writes real files to a temp dir and only
+	// refusing — for a test that wants "the real OS, except these two seams".
 	Base sys.System
 
 	// Calls records every command Run/RunTimed/RunInteractive* was asked to
@@ -96,9 +95,8 @@ func (f *Fake) Run(name string, args ...string) (string, error) {
 	return f.RunFn(name, args...)
 }
 
-// RunTimed falls back to Run when only Run is wired. This is the ONE
-// convenience fallback, and it is safe in a way the old `probeRun` was not: it
-// substitutes a wired seam for an unwired one, never silence for an answer. A
+// RunTimed falls back to Run when only Run is wired. The ONE convenience fallback,
+// and a safe one: it substitutes a wired seam for an unwired one, never silence.
 func (f *Fake) RunTimed(name string, args ...string) (string, bool, error) {
 	if f.RunTimedFn == nil {
 		if f.RunFn == nil {
@@ -227,9 +225,8 @@ func (f *Fake) Getwd() (string, error) {
 	return f.GetwdFn()
 }
 
-// StateDir resolves for real when unwired, because it is an OVERRIDE seam
-// rather than a required one: production code always fell back to
-// config.StateDir(), and that resolver is driven by $XDG_STATE_HOME, which
+// StateDir resolves for real when unwired, because it is an OVERRIDE seam rather
+// than a required one: config.StateDir() is driven by $XDG_STATE_HOME.
 func (f *Fake) StateDir() (string, error) {
 	if f.StateDirFn == nil {
 		if f.Base != nil {
@@ -264,9 +261,8 @@ func (f *Fake) DialLocal(port int) bool {
 // interface breaks here rather than at 205 call sites.
 var _ sys.System = (*Fake)(nil)
 
-// Of asserts that s is a Fake and returns it, for fixtures that build a base
-// env and then override one seam. TEST-ONLY: it panics on a real System, which
-// is the right outcome for test-only code reached in production -- the
+// Of asserts that s is a Fake and returns it, for a fixture that overrides one seam
+// of a base env. TEST-ONLY: it panics on a real System, deliberately.
 func Of(s sys.System) *Fake { return s.(*Fake) }
 
 // --- lock observation ---------------------------------------------------

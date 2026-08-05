@@ -137,9 +137,8 @@ func setupSteps(cfg *config.Config, env hostenv.Env, opts Opts, out io.Writer) [
 		// not ANSWER is unknown, never "no key", and the one place a credential is
 		// solicited is `pix models add`, so setup can neither prompt for one nor
 		// claim to have written one. ANY-OF, because one key is enough to launch —
-		// the same probe `pix doctor` reports from, not a second implementation of
-		// the same classification (the hand-rolled copy this replaced predated
-		// health's AnyOf and had drifted to its own detail strings).
+		// the same probe `pix doctor` reports from, never a second implementation
+		// of the same classification.
 		Name: "providers",
 		Probe: health.ProviderKeyProbe{Bin: "sbx", Args: []string{"secret", "ls"},
 			Want: providerKeyEnvVars(), AnyOf: true},

@@ -3,10 +3,8 @@
 // are present, what each command prints, the env vars, the files) rather than
 // wired one closure at a time.
 //
-// It exists because the second extracted package needed the same fixture as
-// the first. One copy is a copy; two is a fixture, and a fixture belongs next
-// to the type it fakes — which is why this sits under hostenv, mirroring
-// sys/systest sitting under sys.
+// A fixture belongs next to the type it fakes, which is why this sits under
+// hostenv, mirroring sys/systest sitting under sys.
 //
 // Anything left unset is ABSENT, not an error: an undeclared binary is not on
 // PATH, an undeclared file does not exist. An undeclared COMMAND is different

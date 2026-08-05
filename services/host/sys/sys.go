@@ -17,19 +17,17 @@ import (
 
 // Exec runs other programs. Five methods rather than one because the CALLER's
 // obligations differ: Run captures, RunTimed bounds an untrusted command,
-// RunInteractive hands over the terminal. Collapsing them would put the
+// RunInteractive hands over the terminal — collapsing them would hide that.
 type Exec interface {
 	// LookPath resolves a binary on PATH.
 	LookPath(name string) (string, error)
 	// Run executes name and returns its combined output.
 	Run(name string, args ...string) (string, error)
-	// RunTimed executes an UNTRUSTED command with a hard timeout and capped
-	// output, so a misbehaving MCP server can neither hang nor flood us. The
-	// second return distinguishes a timeout from a failure: a timeout is not
+	// RunTimed executes an UNTRUSTED command with a hard timeout and capped output,
+	// so a server can neither hang nor flood us; the second return marks a timeout.
 	RunTimed(name string, args ...string) (out string, timedOut bool, err error)
 	// RunWithin is RunTimed with a caller-chosen bound, for a probe that must be
-	// tighter than the default (status' gog check allows 2s, not 5s). It exists
-	// as a METHOD rather than a package function because the previous code
+	// tighter than the default (status' gog check allows 2s, not 5s).
 	RunWithin(timeout time.Duration, name string, args ...string) (out string, timedOut bool, err error)
 	// RunInteractive inherits the terminal (browser-based OAuth, `op signin`).
 	RunInteractive(name string, args ...string) error
@@ -89,9 +87,8 @@ type System interface {
 	Net
 }
 
-// Real is the production System. Its zero value is fully functional and it
-// holds NO nullable state — that is the property that makes every nil guard in
-// the caller unnecessary, and it is worth protecting: the moment Real grows an
+// Real is the production System: its zero value is fully functional and it holds NO
+// nullable state — the property that makes nil guards in callers unnecessary.
 type Real struct{}
 
 const dialTimeout = 400 * time.Millisecond
@@ -187,8 +184,7 @@ var _ System = Real{}
 type Getenver interface{ Getenv(name string) string }
 
 // GetenvFunc adapts a bare lookup function to Getenver. It has no nil case on
-// purpose: a nil GetenvFunc is a programming error that panics at the call,
-// rather than silently reporting every variable as unset — which is how a
+// purpose: a nil GetenvFunc is a programming error that panics at the call.
 type GetenvFunc func(name string) string
 
 func (f GetenvFunc) Getenv(name string) string { return f(name) }

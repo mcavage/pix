@@ -9,9 +9,8 @@ import (
 	"syscall"
 )
 
-// withFlock takes a BLOCKING advisory exclusive lock on lockPath for the
-// duration of fn. Blocking, not try-lock: every caller here is serializing a
-// short critical section it must actually perform, so failing fast would just
+// withFlock takes a BLOCKING advisory exclusive lock on lockPath for the duration
+// of fn: every caller serializes a short section it must actually perform.
 func withFlock(lockPath string, fn func() error) error {
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
 		return fmt.Errorf("create lock dir: %w", err)
