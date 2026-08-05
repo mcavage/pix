@@ -93,7 +93,7 @@
       "exits": 3
     },
     "pix/host/memory": {
-      "prod_loc": 314,
+      "prod_loc": 316,
       "exports": 3,
       "globals": 1,
       "edges": 3,

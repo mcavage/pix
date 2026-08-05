@@ -62,9 +62,11 @@ const Usage = `usage: pix memory <recall|remember|forget|learnings|stats> [args]
   learnings [--min N] [--json]                          recurring learnings (promotable)
   stats [--json]                                        counts by kind/durability
 
-Backup/restore are now TOP-LEVEL verbs (they cover config + op-refs + memory):
-  pix backup [--out PATH] [--keep N]
-  pix restore <archive> [--force]`
+The only unreproducible artifact here is memory.db; config.toml is recreated
+with "pix config set" and op-refs.env holds op:// references, not secrets, so
+neither needs a backup. Snapshot/restore live on the host binary:
+  pix-host memory snapshot PATH           hot: safe while the service runs
+  pix-host memory restore  PATH [--force] stopped-service: stop the daemon first`
 
 // Dispatch is the testable core: it runs one subcommand against an
 // injected client + writer and returns an error (instead of exiting).
