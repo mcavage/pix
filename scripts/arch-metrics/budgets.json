@@ -2,9 +2,9 @@
   "schema": 1,
   "packages": {
     "pix/host": {
-      "prod_loc": 7515,
+      "prod_loc": 7375,
       "exports": 0,
-      "globals": 68,
+      "globals": 64,
       "edges": 7,
       "exits": 29
     },
@@ -30,9 +30,9 @@
       "exits": 0
     },
     "pix/host/config": {
-      "prod_loc": 1455,
-      "exports": 49,
-      "globals": 17,
+      "prod_loc": 1443,
+      "exports": 48,
+      "globals": 16,
       "edges": 0,
       "exits": 0
     },
@@ -93,8 +93,8 @@
       "exits": 0
     },
     "pix/host/mcp": {
-      "prod_loc": 1782,
-      "exports": 60,
+      "prod_loc": 1717,
+      "exports": 56,
       "globals": 22,
       "edges": 7,
       "exits": 3
@@ -205,17 +205,10 @@
       "exits": 0
     },
     "pix/host/workflow/doctor": {
-      "prod_loc": 2382,
-      "exports": 27,
-      "globals": 17,
+      "prod_loc": 2131,
+      "exports": 21,
+      "globals": 15,
       "edges": 14,
-      "exits": 0
-    },
-    "pix/host/workflow/gworkspace": {
-      "prod_loc": 1227,
-      "exports": 14,
-      "globals": 11,
-      "edges": 10,
       "exits": 0
     },
     "pix/host/workflow/launch": {
@@ -254,7 +247,7 @@
       "exits": 0
     },
     "pix/host/workflow/setup": {
-      "prod_loc": 4081,
+      "prod_loc": 4077,
       "exports": 82,
       "globals": 31,
       "edges": 18,
