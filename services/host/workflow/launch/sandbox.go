@@ -1,3 +1,10 @@
+// sandbox.go — sandbox liveness and the `ls`/`rm` verbs.
+//
+// The probe (running/stopped/absent/unknown) is what drives run's
+// create-vs-reattach-vs-replace decision and task's teardown guard, so it lives
+// with them rather than in either caller. `ls`/`rm` manage the pix-* sandboxes
+// `run` and `task` create — scoped to pix-* names on purpose: this tool manages
+// the sandboxes it made, not every sbx box on the host.
 package launch
 
 import (
@@ -5,21 +12,51 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"pix/host/cli"
-	"pix/host/hostenv"
-	"pix/host/workspace"
 	"strings"
 	"text/tabwriter"
+
+	"pix/host/cli"
+	"pix/host/hostenv"
+	"pix/host/sandbox"
+	"pix/host/workspace"
 )
 
-// The `ls` and `rm` verbs manage the pix-* sandboxes that `run` and `task`
-// create. `status` SHOWS them; these let you act on them without dropping to raw
-// `sbx`. Both are scoped to pix-* names on purpose: this tool manages the
-// sandboxes it made, not every sbx box on the host (use `sbx` directly for the
-// rest).
+// SbxState is a package-local alias for the canonical sandbox.State, and
+// SbxUnknown/Absent/Running/Stopped are launch's stable names for its four
+// values. They are produced and consumed entirely within this package's probe.
+type SbxState = sandbox.State
+
+const (
+	SbxUnknown = sandbox.StateUnknown // could not determine (sbx errored / no runner)
+	SbxAbsent  = sandbox.StateAbsent  // sbx responded and the name is not present
+	SbxRunning = sandbox.StateRunning // present, status column reads running
+	SbxStopped = sandbox.StateStopped // present, any other status
+)
+
+// ProbeTaskSandbox classifies name from `sbx ls` into one of {running, stopped,
+// absent, unknown}. A non-zero/errored sbx invocation (or a missing runner) is
+// UNKNOWN, never absent, so a failed probe can never be read as "the sandbox
+// was never created". BOUNDED: a hung sbx times out to UNKNOWN, so run/setup/
+// task preflights degrade honestly instead of wedging.
+func ProbeTaskSandbox(env hostenv.Env, name string) SbxState {
+	out, timedOut, err := env.RunTimed("sbx", "ls")
+	if timedOut || err != nil {
+		return SbxUnknown
+	}
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		if len(f) >= 1 && f[0] == name {
+			if len(f) >= 3 && f[2] == "running" {
+				return SbxRunning
+			}
+			return SbxStopped
+		}
+	}
+	return SbxAbsent
+}
 
 // OverlayReceiptDirs replaces best-effort sbx display data with Pix's trusted
-// create receipt. The receipt records the canonical workspace passed to the
+// create receipt, which records the canonical workspace passed to the
 // successful create and is therefore authoritative when packs add other host
 // paths to the sbx listing.
 func OverlayReceiptDirs(boxes []workspace.SbxBox, stateDir string) {
@@ -37,13 +74,13 @@ func Ls(env hostenv.Env, out io.Writer, jsonOut bool) error {
 	if _, err := env.LookPath("sbx"); err != nil {
 		return fmt.Errorf("sbx not found on PATH; install the Docker Sandboxes CLI to list sandboxes")
 	}
-	// BOUNDED (probeRun): a hung `sbx ls` fails with a message, never wedges.
+	// BOUNDED: a hung `sbx ls` fails with a message, never wedges.
 	raw, timedOut, err := env.RunTimed("sbx", "ls")
 	if timedOut || err != nil {
 		return fmt.Errorf("sbx ls failed: %v", err)
 	}
 	boxes := workspace.ParsePixBoxes(raw)
-	if stateDir, err := workspace.MCPStateDirFn(); err == nil {
+	if stateDir, derr := workspace.MCPStateDirFn(); derr == nil {
 		OverlayReceiptDirs(boxes, stateDir)
 	}
 	if jsonOut {
@@ -78,19 +115,18 @@ type RmOptions struct {
 }
 
 // Rm removes one or more pix sandboxes via `sbx rm -f`. It refuses names that
-// are not pix-* (this tool manages its own boxes; use `sbx` for the rest), and
-// All removes every pix-* box, with Except keeping one (e.g. the box you are
-// in). A per-name failure is reported as it happens and summarised as exit 1
-// through a SilentError, because each cause was already named.
+// are not pix-*, and All removes every pix-* box with Except keeping one (e.g.
+// the box you are in). A per-name failure is reported as it happens and
+// summarised as exit 1 through a SilentError, because each cause was named.
 func Rm(env hostenv.Env, out, errOut io.Writer, opts RmOptions) error {
 	if _, err := env.LookPath("sbx"); err != nil {
 		return fmt.Errorf("sbx not found on PATH; install the Docker Sandboxes CLI to remove sandboxes")
 	}
 	names := append([]string(nil), opts.Names...)
 	if opts.All {
-		// BOUNDED (probeRun): the --all discovery listing is read-only; a hung
-		// sbx fails with a message rather than wedging (the `sbx rm -f` calls
-		// below are mutating lifecycle commands and stay on env.Run).
+		// BOUNDED: the --all discovery listing is read-only, so a hung sbx
+		// fails with a message rather than wedging (the `sbx rm -f` calls below
+		// are mutating lifecycle commands and stay on env.Run).
 		raw, timedOut, err := env.RunTimed("sbx", "ls")
 		if timedOut || err != nil {
 			return fmt.Errorf("sbx ls failed: %v", err)
@@ -130,13 +166,12 @@ func Rm(env hostenv.Env, out, errOut io.Writer, opts RmOptions) error {
 	return nil
 }
 
-// RemovePixSandbox force-removes name via env and, on SUCCESS, clears the
-// launcher's per-sandbox MCP receipt — a removed sandbox's receipt describes
-// a dead lifetime. A failed rm returns the error and RETAINS the receipt: an
-// unknown removal outcome must keep the evidence, never discard it on a
-// guess. The receipt clear itself is best-effort (warn, don't fail the rm —
-// the removal DID succeed, and the next launcher create's pre-create clear is
-// the correctness backstop).
+// RemovePixSandbox force-removes name and, on SUCCESS, clears the launcher's
+// per-sandbox MCP receipt — a removed sandbox's receipt describes a dead
+// lifetime. A failed rm returns the error and RETAINS the receipt: an unknown
+// removal outcome must keep the evidence, never discard it on a guess. The
+// clear itself is best-effort (the removal DID succeed, and the next create's
+// pre-create clear is the correctness backstop).
 func RemovePixSandbox(env hostenv.Env, name string) error {
 	if _, err := env.Run("sbx", "rm", "-f", name); err != nil {
 		return err
@@ -149,7 +184,7 @@ func RemovePixSandbox(env hostenv.Env, name string) error {
 
 // LsDescription and RmDescription are the long help the root's generated usage
 // prints. They live with the behaviour they describe, so a change to one shows
-// up in the other's diff; they replaced two hand-written usage constants.
+// up in the other's diff.
 const LsDescription = `List the pix sandboxes on this host (name, state, ws dir). These are the
 boxes 'pix run' and 'pix task' create. For every sbx sandbox (not just pix's),
 use 'sbx ls'.`

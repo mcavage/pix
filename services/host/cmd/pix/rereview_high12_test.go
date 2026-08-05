@@ -82,17 +82,6 @@ func TestProbeTaskSandbox_UsesBoundedSeam(t *testing.T) {
 	}
 }
 
-func TestTaskSandboxStatus_HangingSbxIsEmptyBounded(t *testing.T) {
-	env := hostenv.Env{System: &systest.Fake{LookPathFn: sbxOnlyLookPath, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
-	start := time.Now()
-	if s := launch.TaskSandboxStatus(env, "pix-x"); s != "" {
-		t.Errorf("hanging `sbx ls` must yield an empty display status, got %q", s)
-	}
-	if el := time.Since(start); el > 10*time.Second {
-		t.Fatalf("launch.TaskSandboxStatus took %s — unbounded", el)
-	}
-}
-
 // TestSetupHandoff_HangingSbxFailsClosed: setup's agent phase probes the
 // sandbox state before any handoff; a hanging sbx is launch.SbxUnknown, which must
 // FAIL CLOSED (never launch) and must not hang.
