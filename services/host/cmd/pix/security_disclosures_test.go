@@ -17,7 +17,6 @@ import (
 
 	"pix/host/config"
 	"pix/host/hostenv"
-	"pix/host/hostenv/hostenvtest"
 	"pix/host/sys/systest"
 	"pix/host/workflow/doctor"
 	"pix/host/workflow/setup"
@@ -41,34 +40,6 @@ func TestMcpHostTrustNotice_StatesBothFacts(t *testing.T) {
 	}
 	if strings.Contains(doctor.McpHostTrustNotice, "\u2014") {
 		t.Errorf("doctor.McpHostTrustNotice must not use an em dash, got: %q", doctor.McpHostTrustNotice)
-	}
-}
-
-// TestDoctorRender_DisclosesHostMCPTrust_WhenMCPConfigured: doctor's footer
-// must print the disclosure when at least one MCP server is configured.
-func TestDoctorRender_DisclosesHostMCPTrust_WhenMCPConfigured(t *testing.T) {
-	r := doctor.RunDoctor(defaultCfg(), hostenvtest.Env{}.Build())
-	r.Services, r.MCP = defaultCfg().Services, []string{config.GWServerName}
-	var buf bytes.Buffer
-	r.Render(&buf, false, doctor.Hints())
-	out := buf.String()
-	for _, want := range mcpHostTrustNoticeFacts {
-		if !strings.Contains(out, want) {
-			t.Errorf("doctor render missing disclosure fact %q, got:\n%s", want, out)
-		}
-	}
-}
-
-// TestDoctorRender_NoDisclosure_WhenNoMCPConfigured: with nothing configured
-// there is nothing to disclose, so doctor must stay notice-free (concise,
-// never alarmist about something the user hasn't touched).
-func TestDoctorRender_NoDisclosure_WhenNoMCPConfigured(t *testing.T) {
-	r := doctor.RunDoctor(defaultCfg(), hostenvtest.Env{}.Build())
-	r.Services, r.MCP = defaultCfg().Services, nil
-	var buf bytes.Buffer
-	r.Render(&buf, false, doctor.Hints())
-	if strings.Contains(buf.String(), doctor.McpHostTrustNotice) {
-		t.Errorf("doctor must not print the MCP host-trust notice with no MCP configured, got:\n%s", buf.String())
 	}
 }
 

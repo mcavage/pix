@@ -55,6 +55,24 @@ func RenderStatus(w io.Writer, s Snapshot) {
 	if len(unknown) > 0 {
 		fmt.Fprintf(w, "  unknown  %s\n", strings.Join(unknown, " "))
 	}
+	// The one pointer status is allowed to make: the count, and where the
+	// commands live. Status names no repair itself — printing a fix here is
+	// how two surfaces start disagreeing about the same gap.
+	if n := len(gaps); n > 0 {
+		fmt.Fprintf(w, "  %s. Run `%s` for the exact fix %s.\n", plural(n, "issue"), DoctorCommand, plural(n, "command"))
+	}
+}
+
+// DoctorCommand is where status sends a user with something to fix. It is a
+// constant because status must never print a repair itself: one surface owns
+// the commands, the other owns the glance.
+const DoctorCommand = "pix doctor"
+
+func plural(n int, word string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, word)
+	}
+	return fmt.Sprintf("%d %ss", n, word)
 }
 
 // headlineStatus reduces a snapshot to the single status its headline claims:
@@ -96,7 +114,16 @@ func requiredCount(s Snapshot) int {
 // then the exact fixes, in order. An unknown result explains WHY it is
 // unknown and offers no command — doctor never guesses a repair for something
 // it could not verify.
-func RenderDoctor(w io.Writer, s Snapshot) {
+func RenderDoctor(w io.Writer, s Snapshot) { RenderDoctorWith(w, s, DoctorOpts{Verbose: true}) }
+
+// DoctorOpts tunes the full report. Concise (the default for `pix doctor`)
+// prints the evidence only for what is NOT ready: a green line's proof is
+// noise until someone doubts it, and --verbose is that doubt.
+type DoctorOpts struct{ Verbose bool }
+
+// RenderDoctorWith is RenderDoctor with the verbosity decision made by the
+// caller.
+func RenderDoctorWith(w io.Writer, s Snapshot, o DoctorOpts) {
 	fmt.Fprintf(w, "%s %s\n\n", Glyph(headlineStatus(s)), headline(s))
 	for _, r := range s.Results {
 		req := "optional"
@@ -104,7 +131,7 @@ func RenderDoctor(w io.Writer, s Snapshot) {
 			req = "required"
 		}
 		fmt.Fprintf(w, "%s %-10s %-8s %s\n", Glyph(r.Effective()), r.Name, req, r.Detail)
-		if ev := strings.TrimSpace(r.Evidence); ev != "" {
+		if ev := strings.TrimSpace(r.Evidence); ev != "" && (o.Verbose || !r.OK()) {
 			fmt.Fprintf(w, "    evidence: %s\n", ev)
 		}
 	}

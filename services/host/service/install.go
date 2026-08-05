@@ -31,6 +31,12 @@ import (
 // serveLaunchdLabel is the LaunchAgent label (and plist basename).
 const serveLaunchdLabel = "com.pix.serve"
 
+// LaunchdLabel is serveLaunchdLabel for the one caller outside this package:
+// health's launchd probe, which has to name the label it asks launchctl
+// about. Exported rather than copied, because a doctor that probes a label
+// the installer does not write is worse than no probe at all.
+const LaunchdLabel = serveLaunchdLabel
+
 // The embedded template is the SINGLE SOURCE OF TRUTH for the generated
 // plist (the old scripts/macos CHANGEME plist is superseded — go:embed
 // cannot reach outside the module, so the template lives here and the script

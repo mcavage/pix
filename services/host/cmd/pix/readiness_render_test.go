@@ -16,7 +16,7 @@ import (
 func TestRenderHeadline(t *testing.T) {
 	render := func(r *readiness.Report) string {
 		var buf bytes.Buffer
-		r.Render(&buf, false, doctor.Hints())
+		r.Render(&buf, false, readiness.Hints{SbxInstall: doctor.SbxInstallHint, MCPHostTrust: doctor.McpHostTrustNotice})
 		return buf.String()
 	}
 	coreFail := &readiness.Report{Groups: []readiness.Group{{Title: "g", Checks: []readiness.Check{
@@ -62,7 +62,7 @@ func TestRenderConciseVsVerbose(t *testing.T) {
 		}},
 	}}
 	var concise bytes.Buffer
-	r.Render(&concise, false, doctor.Hints())
+	r.Render(&concise, false, readiness.Hints{SbxInstall: doctor.SbxInstallHint, MCPHostTrust: doctor.McpHostTrustNotice})
 	out := concise.String()
 	for _, hidden := range []string{"ready-detail-1", "ready-detail-2", "ready-detail-3"} {
 		if strings.Contains(out, hidden) {
@@ -82,7 +82,7 @@ func TestRenderConciseVsVerbose(t *testing.T) {
 	}
 
 	var verbose bytes.Buffer
-	r.Render(&verbose, true, doctor.Hints())
+	r.Render(&verbose, true, readiness.Hints{SbxInstall: doctor.SbxInstallHint, MCPHostTrust: doctor.McpHostTrustNotice})
 	vout := verbose.String()
 	for _, shown := range []string{"ready-detail-1", "ready-detail-2", "ready-detail-3", "broken", "annotation-line", "cannot-Check"} {
 		if !strings.Contains(vout, shown) {
@@ -100,7 +100,7 @@ func TestRenderConcise_NoHintWhenNothingHidden(t *testing.T) {
 		{Label: "bad", Verdict: readiness.VerdictTodo, Detail: "broken", Todo: "fix-it"},
 	}}}}
 	var buf bytes.Buffer
-	r.Render(&buf, false, doctor.Hints())
+	r.Render(&buf, false, readiness.Hints{SbxInstall: doctor.SbxInstallHint, MCPHostTrust: doctor.McpHostTrustNotice})
 	if strings.Contains(buf.String(), "--verbose") {
 		t.Errorf("nothing was collapsed; no hint expected:\n%s", buf.String())
 	}
@@ -112,7 +112,7 @@ func TestDoctorRender_OptionalTodoRendersWarnGlyph(t *testing.T) {
 		{Label: "opt", Detail: "needs setup", Todo: "fix-it", Verdict: readiness.VerdictTodo, Requirement: readiness.RequirementOptional},
 	}}}}
 	var buf bytes.Buffer
-	r.Render(&buf, true, doctor.Hints())
+	r.Render(&buf, true, readiness.Hints{SbxInstall: doctor.SbxInstallHint, MCPHostTrust: doctor.McpHostTrustNotice})
 	if !strings.Contains(buf.String(), "⚠ opt") {
 		t.Errorf("an optional verified-todo row must render ⚠, got:\n%s", buf.String())
 	}

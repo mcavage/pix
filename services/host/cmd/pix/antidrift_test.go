@@ -22,6 +22,10 @@ func TestPrimaryHelpAndStatusAvoidEmDashes(t *testing.T) {
 	for _, file := range []string{
 		"help.go",
 		filepath.Join("..", "..", "workflow", "doctor", "status.go"),
+		// The words status PRINTS now live in the health renderer; checking
+		// only the verb's file would leave the landing screen unguarded
+		// again, which is the exact rot the comment above describes.
+		filepath.Join("..", "..", "health", "render.go"),
 	} {
 		node, err := parser.ParseFile(token.NewFileSet(), file, nil, 0)
 		if err != nil {

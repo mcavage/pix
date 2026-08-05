@@ -14,6 +14,9 @@
 //	crash      die on SIGKILL — no exit status, no output
 //	hang       sleep past any sane probe deadline, ignoring SIGTERM
 //	malformed  exit 0 with output that carries no recognizable version
+//	keys       exit 0 listing every model provider key, the way a key store
+//	           that ANSWERED does
+//	nokeys     exit 0 listing a store that answered and holds no model key
 //
 // The distinction the tests exist to pin: only `notloaded` (and a missing
 // binary) may render absent. broken/crash/hang/malformed are all unknown,
@@ -51,6 +54,10 @@ func main() {
 	case "hang":
 		signal.Ignore(syscall.SIGTERM, syscall.SIGINT)
 		time.Sleep(time.Minute)
+	case "keys":
+		fmt.Println("NAME        SCOPE\nanthropic   global\nopenai      global\ngoogle      global")
+	case "nokeys":
+		fmt.Println("NAME        SCOPE\ngithub      global")
 	case "malformed":
 		fmt.Println("\x00\x01 not a version banner at all")
 	default:

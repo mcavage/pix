@@ -131,26 +131,6 @@ func GogSpawnCheck(env hostenv.Env, res axis.ProbeResult, readyDetail, noToolsDe
 	}
 }
 
-// gogGroup builds doctor's Google Workspace group down to the same two facts
-// every other MCP server's group renders: registration with the sbx gateway
-// (gogRegistrationCheck) and sandbox attachment via the shared receipt-backed
-// join row (gogAttachCheck). gog keeps its own group rather than joining the
-// generic MCP servers group because `pix-host mcp --list` never lists it
-// (mcp.LocalMCPNames' documented special case), so the generic classifier
-// cannot place it. The elaborate hardened-flags/headless-spawn/account-auth
-// probing that used to live here belonged to the retired built-in onboarding
-// flow (the old `pix gworkspace setup` OAuth dance) and is gone from doctor;
-// GogSpawnCheck/RegisteredGogCommand/GogHardenedFlags/GogHeadlessOK remain
-// exported only because workflow/gworkspace (a surviving leaf, retired later
-// alongside its own package) still calls them directly.
-func gogGroup(cfg *config.Config, env hostenv.Env, mcpOut string, mcpOK, sbxPresent bool, ctx mcpSandboxContext) readiness.Group {
-	g := readiness.Group{Title: "Google Workspace (optional, via host MCP — read-only)"}
-	gogReg := mcp.McpRegEvidenceFrom(mcpOut, mcpOK, config.GWServerName)
-	g.Checks = append(g.Checks, gogRegistrationCheck(mcpOut, mcpOK, sbxPresent))
-	g.Checks = append(g.Checks, gogAttachCheck(cfg, ctx, gogReg))
-	return g
-}
-
 // RegisteredGogCommand asks sbx what command it ACTUALLY registered for the gog
 // MCP server, so doctor can probe the real registration instead of a config
 // reconstruction that may have drifted from what `make mcp-register` wired up.
@@ -283,30 +263,4 @@ func parseGogCommandJSON(env hostenv.Env, out string) ([]string, bool) {
 		return argv, true
 	}
 	return nil, false
-}
-
-// gogAttachCheck is check 5: gog's sandbox attachment. With a workspace
-// sandbox context it is the SAME receipt-backed join row every other MCP
-// server gets (mcpAttachCheck -> mcp.JoinMCPSandboxRow): preloaded/loaded receipt
-// claims render ready; a registered server a COMPLETE valid receipt has no
-// entry for is a verified registered-not-attached TODO (a sandbox created
-// BEFORE gog was configured is NOT attached just because cfg now names it);
-// everything else stays unverifiable. Without a sandbox context, config
-// membership is stated as INTENT (preloads at the next create) — an
-// informational note, never a ready attachment claim.
-func gogAttachCheck(cfg *config.Config, ctx mcpSandboxContext, reg mcp.McpRegEvidence) readiness.Check {
-	if ctx.mode == mcpAttachReceipt {
-		return mcpAttachCheck(config.GWServerName, ctx, reg)
-	}
-	if mcp.Configured(cfg, config.GWServerName) {
-		det := "in the configured MCP set — preloads at sandbox create (intent, not attachment)"
-		if ctx.mode == mcpAttachSandboxAbsent {
-			det = "sandbox " + ctx.sandbox + " not created yet — gog preloads at `pix run` create"
-		} else if ctx.note != "" {
-			det = ctx.note + " — attachment cannot be reported"
-		}
-		return readiness.Check{Label: "attached", Note: true, Verdict: readiness.VerdictUnverifiable, Detail: det}
-	}
-	return readiness.Check{Label: "attached", Note: true, Verdict: readiness.VerdictUnverifiable,
-		Detail: "run `pix config set mcp " + config.GWServerName + "` to attach it"}
 }

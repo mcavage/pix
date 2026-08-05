@@ -11,7 +11,6 @@ import (
 	"pix/host/hostenv"
 	"pix/host/readiness"
 	"pix/host/readiness/axis"
-	"pix/host/workflow/doctor"
 	"sort"
 	"strconv"
 	"strings"
@@ -258,16 +257,6 @@ func walkEvidenceAndFix(t *testing.T, where string, checks []readiness.Check) {
 			t.Errorf("%s: fix for %q starts with %q, which is not a command: %q", where, c.Label, first, c.Todo)
 		}
 	}
-}
-
-// TestEvidenceAndFixWalk_Doctor walks a full doctor run on a cold host (no
-// sbx, no ollama, nothing listening) — the worst case for evidence quality,
-// because almost everything is a gap.
-func TestEvidenceAndFixWalk_Doctor(t *testing.T) {
-	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "", errNotFoundFixture }, RunFn: func(string, ...string) (string, error) { return "", errNotFoundFixture }, GetenvFn: func(string) string { return "" }, DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }, HomeDirFn: func() string { return t.TempDir() }}}
-	cfg := &config.Config{Services: []string{"memory", "knowledge"}}
-	r := doctor.RunDoctor(cfg, env)
-	walkEvidenceAndFix(t, "doctor", r.Snapshot().All())
 }
 
 // TestEvidenceAndFixWalk_Fast walks the shared fast snapshot the daily

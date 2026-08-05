@@ -25,12 +25,10 @@ import (
 
 	"pix/host/config"
 	"pix/host/hostenv"
-	"pix/host/hostenv/hostenvtest"
 	"pix/host/mcp"
 	"pix/host/secret"
 	"pix/host/sys"
 	"pix/host/sys/systest"
-	"pix/host/workflow/doctor"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/onboard"
 	"pix/host/workflow/setup"
@@ -280,70 +278,6 @@ func TestSbxModelKeyState_HangingProbeUnknownProceeds(t *testing.T) {
 	present, probeOK := launch.SbxModelKeyState(env)
 	if present || probeOK {
 		t.Errorf("hanging preflight must be (present=false, probeOK=false) so run proceeds, got (%v,%v)", present, probeOK)
-	}
-}
-
-func TestGatherStatus_HangingSbxBounded(t *testing.T) {
-	cfg := &config.Config{MCP: []string{"notion"}}
-	sd := t.TempDir()
-	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
-		if name == "sbx" {
-			return "/usr/bin/sbx", nil
-		}
-		return "", fmt.Errorf("%q not found", name)
-	}, RunTimedFn: hangingProbe(t, 100*time.Millisecond), DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }, StateDirFn: func() (string, error) { return sd, nil }}}
-	start := time.Now()
-	st := doctor.GatherStatus(cfg, "default", env)
-	if el := time.Since(start); el > 30*time.Second {
-		t.Fatalf("doctor.GatherStatus took %s with a hanging sbx — unbounded", el)
-	}
-	found := false
-	for _, tdo := range st.Todos {
-		if strings.Contains(tdo, "could not verify provider keys") {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("hanging secret ls must degrade to an honest could-not-verify todo, got %v", st.Todos)
-	}
-	if len(st.MCPRows) != 1 || st.MCPRows[0].State != mcp.McpJoinUnverifiable {
-		t.Errorf("hanging sbx ls must yield an unverifiable row, never a false claim: %+v", st.MCPRows)
-	}
-	if st.MCPRows[0].Registered != "unknown" {
-		t.Errorf("hanging mcp ls must leave registration unknown, got %q", st.MCPRows[0].Registered)
-	}
-}
-
-func TestDoctor_SecretLsFailure_IsNotSbxAbsent(t *testing.T) {
-	cfg := defaultCfg()
-	f := hostenvtest.Env{
-		Present: map[string]bool{"sbx": true},
-		Output:  map[string]string{}, // `sbx secret ls` errors (no canned output)
-	}
-	r := doctor.RunDoctor(cfg, f.Build())
-	if r.SbxAbsent {
-		t.Fatal("sbx IS on PATH — a failing `sbx secret ls` must not set launch.SbxAbsent")
-	}
-	// Human rendering: the in-sandbox note must NOT appear.
-	var buf bytes.Buffer
-	r.Render(&buf, false, doctor.Hints())
-	if strings.Contains(buf.String(), "sbx not on PATH") {
-		t.Errorf("human output must not claim sbx is off PATH:\n%s", buf.String())
-	}
-	// JSON: sbx_absent false.
-	if doctor.JsonView(r, "").SbxAbsent {
-		t.Error("JSON sbx_absent must be false when sbx is present but the probe failed")
-	}
-
-	// Converse: sbx genuinely off PATH -> launch.SbxAbsent true, note rendered.
-	absent := doctor.RunDoctor(cfg, hostenvtest.Env{Present: map[string]bool{}}.Build())
-	if !absent.SbxAbsent || !doctor.JsonView(absent, "").SbxAbsent {
-		t.Error("sbx off PATH must set launch.SbxAbsent (human + JSON)")
-	}
-	buf.Reset()
-	absent.Render(&buf, false, doctor.Hints())
-	if !strings.Contains(buf.String(), "sbx not on PATH") {
-		t.Errorf("sbx off PATH should render the in-sandbox note:\n%s", buf.String())
 	}
 }
 
