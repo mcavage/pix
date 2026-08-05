@@ -20,7 +20,7 @@ CLI reference of its own.
 | `setup` | the guided host+agent setup path (keys, memory, pack, identity) | `docs/design/onboarding.md` |
 | `serve` | the long-running host services (memory :11435) | `docs/design/serve-lifecycle.md` |
 | `memory` (`mem`) | recall/remember/forget/learnings/stats from the host | §2, `docs/memory.md` |
-| `pack` | the portable capability context: new/add/ls/show/use/rm | §5, `docs/design/packs-v2.md` |
+| `pack` | the portable capability context: ls/show/use/rm — no authoring verb, edit `pack.toml`/`skills/` by hand | §5, `docs/design/packs-v2.md` |
 | `mcp` | register/list/load MCP servers through the sbx gateway — the one door integrations come through | §8 |
 | `secret` | manage the 1Password `op://` refs (never the values) | §8 |
 | `config` | `show`/`path`/`get`/`set`/`unset` the single runtime config | §1 |

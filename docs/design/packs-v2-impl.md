@@ -13,6 +13,12 @@ lightweight ATAM tradeoff notes on each hard decision.
 
 ## AS-SHIPPED ADDENDUM (supersedes the `pack.lock`-based trust design below)
 
+**U08f note:** every `pack add mcp|proxy|knowledge <name>` and `pack new`
+invocation below names a retired authoring verb — the facet, gate, and
+fingerprint machinery they describe are still exactly as shipped, but you now
+write the `pack.toml` stanza (and any `bin/<name>` script) by hand instead of
+scaffolding it. See `docs/design/packs.md`'s retirement callout.
+
 Both phases shipped and passed cross-vendor review + security 5/5. The build
 hardened the trust model well past this original spec; where they conflict, THIS
 addendum is authoritative (the sections below are the pre-review design intent):
