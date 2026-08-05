@@ -21,7 +21,7 @@
       "exitCode": 2,
       "stream": "stderr",
       "contains": [
-        "pix: name a sandbox to remove"
+        "refusing bare `pix rm` on a non-interactive terminal"
       ]
     }
   ]

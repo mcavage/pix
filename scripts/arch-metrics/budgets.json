@@ -79,8 +79,8 @@
       "exits": 0
     },
     "pix/host/lease": {
-      "prod_loc": 1088,
-      "exports": 21,
+      "prod_loc": 1159,
+      "exports": 22,
       "globals": 11,
       "edges": 0,
       "exits": 0
@@ -177,9 +177,9 @@
       "exits": 0
     },
     "pix/host/workflow/launch": {
-      "prod_loc": 2505,
-      "exports": 105,
-      "globals": 21,
+      "prod_loc": 3270,
+      "exports": 133,
+      "globals": 40,
       "edges": 15,
       "exits": 0
     },

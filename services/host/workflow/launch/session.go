@@ -23,12 +23,12 @@
 // TRANSITION — never the session's own lifetime — so a second attach against
 // a live session is not serialized behind it.
 //
-// Deliberately NOT here: teardown, the orphan reaper, and `pix rm`'s own
-// -k/--keep (see scripts/semantic-diff/rules/lifecycle.rules.mjs' STAGED
-// pins, which stay staged). Nothing in this file plans, executes, or
-// authorizes a removal — see RecordSessionCreation's doc for why an attach to
-// a sandbox this host never recorded creating can never become one by
-// accident.
+// Teardown is U04d's, and it lives next door in reap.go: this file's last act
+// is to CLOSE this shell's reference and hand the decision to
+// TeardownSandbox, which owns the whole "may this be removed" argument. Nothing
+// in this file plans or executes a removal itself — see RecordSessionCreation's
+// doc for why an attach to a sandbox this host never recorded creating can
+// never authorize one by accident.
 package launch
 
 import (
@@ -124,10 +124,10 @@ func LeaseDirFor(sessionKey string) (string, error) {
 }
 
 // SetSessionKeep binds a sticky, identity-bound keep marker to sessionKey:
-// -k/--keep's whole effect for U04c2. It is deliberately the ONLY thing
-// -k/--keep does here — there is no reaper yet to consult it (see this file's
-// header) — so setting it today is inert except as the durable signal a
-// future teardown pass will honor.
+// -k/--keep's whole effect. Since U04d it is no longer inert — it is exactly
+// what the last-shell teardown and the orphan sweep refuse on (reap.go's
+// TeardownKeptKeep). It still does NOT stop an explicitly named `pix rm`: a
+// keep argues with the reaper, never with the operator.
 func SetSessionKeep(sessionKey string) error {
 	dir, err := LeaseDirFor(sessionKey)
 	if err != nil {
@@ -228,6 +228,19 @@ func CheckSessionFingerprint(sessionKey string, current sandbox.Fingerprint) (di
 		return nil, false
 	}
 	return sandbox.Diff(stored, current), true
+}
+
+// ReadSessionFingerprint returns sessionKey's RECORDED create-time
+// fingerprint. ok=false covers every "nothing usable was recorded" case —
+// missing, corrupt, or decoded-but-empty — which is what U04d's teardown
+// needs: an incompletely recorded creation is not ownership, so it authorizes
+// no removal (see reap.go's teardownUnderProof).
+func ReadSessionFingerprint(sessionKey string) (sandbox.Fingerprint, bool) {
+	var fp sandbox.Fingerprint
+	if !readSessionState(sessionKey, sessionFingerprintFileName, &fp) || len(fp) == 0 {
+		return nil, false
+	}
+	return fp, true
 }
 
 // WriteSessionInvocation stores invocation (the create-time pi argv from
@@ -395,6 +408,10 @@ type SessionDeps struct {
 	// LockTimeout bounds the lifecycle-lock acquire; zero means
 	// SessionLockTimeout.
 	LockTimeout time.Duration
+	// Teardown tunes the LAST-SHELL teardown attempt this session makes after
+	// its child exits (see reap.go). The zero value is the production shape;
+	// a test tightens the bounds or redirects the journal through it.
+	Teardown TeardownOptions
 }
 
 // SessionRefused is a lifecycle refusal decided UNDER the lifecycle lock: the
@@ -470,8 +487,37 @@ func RunSession(spec SessionSpec, deps SessionDeps) error {
 	}
 	// Lifecycle released by AttachRefUnderLifecycle; only the SHARED reference
 	// is still held, and it is held for exactly as long as the session lives.
-	defer ref.Close()
-	return child.Wait()
+	werr := child.Wait()
+
+	// U04d: this shell is out. Drop OUR reference FIRST and only then attempt
+	// the reaper's proof — the order is the whole mechanism, because
+	// TryReapProof's refs EXCLUSIVE can never succeed while this process still
+	// holds its own SHARED reference, so a teardown attempted before this Close
+	// would report "busy" against itself, every time. A close that fails leaves
+	// the reference held (the kernel drops it at exit anyway) and skips the
+	// attempt rather than reaping without a valid proof.
+	if cerr := ref.Close(); cerr != nil {
+		fmt.Fprintf(deps.Warn, "pix: warning: releasing %s's reference lease: %v; skipping teardown\n", spec.Key, cerr)
+		return werr
+	}
+	reportTeardown(deps.Warn, TeardownSandbox(deps.Env, spec.Key, spec.Name, TriggerSession, deps.Teardown))
+	return werr
+}
+
+// reportTeardown prints the one line a last-shell teardown is allowed to say,
+// on the caller's warn stream (stderr) — never stdout, which belonged to the
+// session. TeardownKeptUnowned is silent on purpose: it is the ordinary
+// outcome for a legacy or never-recorded sandbox, and a note on every such exit
+// would be noise that trains people to ignore the ones that matter.
+func reportTeardown(warn io.Writer, res TeardownResult) {
+	switch res.Verdict {
+	case TeardownKeptUnowned:
+		return
+	case TeardownRemoved, TeardownAlreadyAbsent:
+		fmt.Fprintf(warn, "pix: %s\n", res.Detail)
+	default:
+		fmt.Fprintf(warn, "pix: kept %s: %s\n", res.Sandbox, res.Detail)
+	}
 }
 
 // runSessionUnleased is the degraded path for a host whose lease state dir is

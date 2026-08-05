@@ -87,7 +87,7 @@ type runCmd struct {
 	Intent   string   `help:"Resolve the session model via the router; --model overrides it. Intents: pix models show." placeholder:"NAME"`
 	Replace  bool     `help:"Recreate the sandbox (sbx rm -f, then create) instead of re-attaching; picks up changed create-only flags."`
 	Task     string   `help:"Launch an existing task's sandbox (same as 'pix task run NAME')." placeholder:"NAME"`
-	Keep     bool     `short:"k" help:"Mark this session as kept: a sticky, identity-bound marker a future teardown pass will honor (inert today — there is no reaper yet)."`
+	Keep     bool     `short:"k" help:"Keep the sandbox when the last shell exits: a sticky, identity-bound marker the teardown/orphan reaper refuses on (an explicit 'pix rm' still removes it)."`
 
 	// PiArg is the `--` tail, rewritten by rewriteRunPassthrough. Hidden
 	// because a user never types it: they type `-- <pi args>`, which the

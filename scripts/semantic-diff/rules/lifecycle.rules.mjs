@@ -10,6 +10,12 @@
 //    scoping, keep polarity, pix-* scope). These are evaluated on every run
 //    like any other domain shard.
 //
+//    (U04d NOTE: the three formerly-staged pins below are now ACTIVE. Story04's
+//    teardown/reaper landed in the same commit that added `story04` to
+//    scripts/semantic-diff/activation.json and the matching intended-change
+//    entries for un-staging them — the exact "the waiver lands with the change"
+//    sequence this header describes.)
+//
 // 2. STAGED (`activation: "story04"`) pins on contracts that describe
 //    BEHAVIOR THAT DOES NOT EXIST YET — the orphan reaper, bare non-TTY `pix
 //    rm` refusal, and the `-k`/`--keep` flag. Evaluating these for real today
@@ -255,12 +261,11 @@ export default [
 		],
 	},
 
-	// --- STAGED (Story04): orphan reaper — no force, keep-absence required --
+	// --- ACTIVE (U04d): reaper — no force, keep-absence required ------------
 	{
 		id: "lifecycle.reaper.no-force-requires-absence",
 		description:
-			"STAGED for Story04: the automatic/orphan sandbox reaper does not exist yet (services/host/lease/doc.go: \"no supervisor loop, no policy for WHEN to reap\"). Once built, it must (a) NEVER force-remove — only lease.TryExclusive()'s kernel-verified zero-holder proof authorizes destroying sandbox state, never a bulk `sbx rm -f` sweep — and (b) treat a KeepState as blocking: auto-remove requires its ABSENCE (ReadKeep's isSet == false), never removing while a keep is held by any identity.",
-		activation: "story04",
+			"U04d (Story04) landed the automatic last-shell/orphan reaper in services/host/workflow/launch/reap.go, and it must stay this shape: (a) it NEVER force-removes — only lease.TryExclusive()'s kernel-verified zero-holder proof (reached via lease.TryReapProof) authorizes destroying sandbox state, never a bulk `sbx rm -f` sweep — and (b) a KeepState BLOCKS the automatic path: auto-remove requires its ABSENCE, never removing while a keep is held by any identity.",
 		checks: [
 			{
 				file: "services/host/workflow/launch/reap.go",
@@ -275,12 +280,11 @@ export default [
 		],
 	},
 
-	// --- STAGED (Story04): bare `pix rm` refuses on a non-interactive term --
+	// --- ACTIVE (U04d): bare `pix rm` refuses on a non-interactive terminal -
 	{
 		id: "lifecycle.rm.bare-nontty-refusal",
 		description:
-			"STAGED for Story04: `pix rm` with no name and no --all/--except (a \"bare\" invocation) run from a non-interactive (non-TTY) context does not yet refuse — RunRm currently only distinguishes \"no argv at all\" (usage + exit 2). Story04 adds an explicit refusal so a bare rm can never silently no-op (or, worse, later silently act) when nothing is there to confirm it interactively.",
-		activation: "story04",
+			"U04d (Story04): `pix rm` with no name and no --all/--orphans (a \"bare\" invocation) run from a non-interactive (non-TTY) context REFUSES explicitly, in the domain (launch.validateRmShape) rather than the command layer, so a bare rm can never silently no-op — or, worse, silently act — when nothing is there to confirm it interactively.",
 		checks: [
 			{
 				file: "services/host/workflow/launch/sandbox.go",
@@ -290,17 +294,75 @@ export default [
 		],
 	},
 
-	// --- STAGED (Story04): -k/--keep flag -------------------------------------
+	// --- ACTIVE (U04d): -k/--keep flag ---------------------------------------
 	{
 		id: "lifecycle.rm.keep-short-and-long-flag",
 		description:
-			"STAGED for Story04: Rm's RmOptions carries only the long `--except <name>` spelling today. Story04 adds a `-k`/`--keep` flag (short and long) with the SAME keep-polarity direction pinned above in lifecycle.rm.keep-polarity-except.",
-		activation: "story04",
+			"U04d (Story04): `pix rm` carries the `-k`/`--keep` spelling (short and long) for its keep set, with the SAME keep-polarity direction pinned above in lifecycle.rm.keep-polarity-except. The flag is DECLARED where every other pix flag is declared — the one kong-parsed command struct in cmd/pix — and both spellings fold into RmOptions.Except, so the polarity pin keeps covering the direction for either one. It is pinned at the declaration AND at the fold, because dropping either half silently loses the short flag or silently drops --keep's names.",
 		checks: [
 			{
-				file: "services/host/workflow/launch/sandbox.go",
+				file: "services/host/cmd/pix/root.go",
 				kind: "contains",
-				values: ['case a == "-k", a == "--keep":'],
+				values: [
+					'short:"k" help:"With --all: keep this one (repeatable)."',
+					"append(append([]string(nil), c.Keep...), c.Except...),",
+				],
+			},
+		],
+	},
+
+	// --- ACTIVE (U04d): teardown ordering, proof before removal -------------
+	{
+		id: "lifecycle.teardown.ref-closed-before-the-proof",
+		description:
+			"U04d: the last shell out CLOSES its own refs SHARED reference BEFORE attempting the reaper's proof, and only then calls TeardownSandbox. The order is the mechanism, not a style choice: TryReapProof's refs EXCLUSIVE can never succeed while this process still holds its own SHARED reference, so a teardown attempted before the Close would report \"busy\" against itself on every exit and the sandbox would never be reaped at all.",
+		checks: [
+			{
+				file: "services/host/workflow/launch/session.go",
+				kind: "contains",
+				values: [
+					"werr := child.Wait()",
+					"if cerr := ref.Close(); cerr != nil {",
+					"reportTeardown(deps.Warn, TeardownSandbox(deps.Env, spec.Key, spec.Name, TriggerSession, deps.Teardown))",
+				],
+			},
+		],
+	},
+
+	{
+		id: "lifecycle.teardown.absent-probe-before-state-clear",
+		description:
+			"U04d: the recorded identity is cleared ONLY after the removal's absence was POSITIVELY confirmed by a bounded re-probe (clearedResult is reached from the SbxAbsent branch and from the already-absent branch, never from the rm's own exit status). A removal whose outcome could not be confirmed is TeardownFailed and RETAINS its state, because an unknown outcome must keep its evidence. The bounds are pinned too: 15s for the mutating rm, 3s per absent probe with 2 retries, and a 20s total ceiling every step is clamped against (budgetedTimeout), so the composed worst case cannot exceed the ceiling.",
+		checks: [
+			{
+				file: "services/host/workflow/launch/reap.go",
+				kind: "contains",
+				values: [
+					"TeardownRmTimeout    = 15 * time.Second",
+					"TeardownProbeTimeout = 3 * time.Second",
+					"TeardownProbeRetries = 2",
+					"TeardownBudget       = 20 * time.Second",
+					"if probeStateWithin(env, name, within) == SbxAbsent {",
+					"its state is retained",
+				],
+			},
+		],
+	},
+
+	{
+		id: "lifecycle.teardown.journal-bounded-0600",
+		description:
+			"U04d: every teardown attempt — including every refusal — is journalled to a BOUNDED, 0600 JSONL file in the STATE dir (AGENTS.md safety invariant #4), capped in both directions a log can grow (entries and bytes) and rewritten through a temp file + rename so the mode is exact and a symlink at the path is replaced rather than written through.",
+		checks: [
+			{
+				file: "services/host/workflow/launch/reap.go",
+				kind: "contains",
+				values: [
+					'TeardownJournalName       = "teardown.jsonl"',
+					"TeardownJournalMaxEntries = 200",
+					"teardownJournalMaxBytes   = 64 * 1024",
+					"os.WriteFile(tmp, []byte(strings.Join(lines, \"\\n\")+\"\\n\"), 0o600)",
+				],
 			},
 		],
 	},

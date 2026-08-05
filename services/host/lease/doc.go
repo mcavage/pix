@@ -31,9 +31,10 @@
 // contract in one non-blocking call: it only runs its fn when BOTH the
 // lifecycle lock and the refs lock can be proven uncontended right now.
 //
-// This reshard adds no application wiring: nothing outside this package
-// calls RefLease, LifecycleLock, or the ordering helpers yet. That remains a
-// later integration decision, same as U04a's original scope.
+// U04c2 wired create/attach onto these (launch.RunSession) and U04d wired the
+// LAST-SHELL TEARDOWN onto TryReapProof + ClearState (launch.TeardownSandbox):
+// the policy for WHEN to reap lives there, in the launcher, while this package
+// still only provides locks and state a caller cannot get wrong.
 //
 // # Foundation, unix-only
 //
@@ -50,8 +51,9 @@
 // # What is NOT here (by design — no behavior wiring yet)
 //
 // No supervisor loop, no policy for WHEN to reap, no wiring to sbx/pi-kit,
-// no CLI. Those are integration decisions for the caller; this package only
-// gives them a lock they cannot get wrong.
+// no CLI. Those are integration decisions for the caller (see
+// workflow/launch's reap.go, which makes them); this package only gives them
+// a lock, a record, a keep and a proven clear they cannot get wrong.
 //
 // # Threat model / hardening summary
 //

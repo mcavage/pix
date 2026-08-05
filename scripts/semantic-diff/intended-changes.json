@@ -1,7 +1,7 @@
 [
 	{
 		"id": "lifecycle.lease.paths-and-modes",
-		"rationale": "U04c1 fixes a flock-on-a-path TOCTOU review finding and, in the same reshard the review is layered on top of, the single lease.lock file the pin previously named was already split (commit 74ab769) into refs.lock (RefLease) + lifecycle.lock (LifecycleLock) without the pin being updated to match — this entry documents catching up the stale literal, not a new rename. The invariant the pin polices (fixed file names + 0600/0700 modes, independent of production code's own reasons to touch them) is unchanged; only the literals it checks against reflect the file names that have been live since 74ab769.",
+		"rationale": "U04c1 fixes a flock-on-a-path TOCTOU review finding and, in the same reshard the review is layered on top of, the single lease.lock file the pin previously named was already split (commit 74ab769) into refs.lock (RefLease) + lifecycle.lock (LifecycleLock) without the pin being updated to match \u2014 this entry documents catching up the stale literal, not a new rename. The invariant the pin polices (fixed file names + 0600/0700 modes, independent of production code's own reasons to touch them) is unchanged; only the literals it checks against reflect the file names that have been live since 74ab769.",
 		"evidence": "services/host/lease/lock.go: `const refsLockFileName = \"refs.lock\"`; services/host/lease/lifecycle.go: `const lifecycleLockFileName = \"lifecycle.lock\"` (both already shipped in commit 74ab769, pre-dating this manifest entry)",
 		"changes": [
 			{
@@ -20,7 +20,7 @@
 	{
 		"id": "ports.reserved.serve",
 		"rationale": "W2/U03B deletes host mode and the dormant broker: `serve` never launched it as a real service (BROKER_PORT was reserved but unbound in practice), and the whole slot is gone now, not just dormant. Knowledge was already retired in W1 U01a. serve.go binds only :11435 (memory) today, so the pin narrows from the historical three-port set down to the one port the supervisor actually still binds.",
-		"evidence": "commit cfd4522 (refactor(W2/U03B): delete host mode + dormant broker, retain generic plugin runtime); services/host/serve.go serveServiceAliases() returns `{\"memory\": \"memory\"}` only — the knowledge branch (W2/U03A) and the broker branch (W2/U03B) are both gone from runServe",
+		"evidence": "commit cfd4522 (refactor(W2/U03B): delete host mode + dormant broker, retain generic plugin runtime); services/host/serve.go serveServiceAliases() returns `{\"memory\": \"memory\"}` only \u2014 the knowledge branch (W2/U03A) and the broker branch (W2/U03B) are both gone from runServe",
 		"changes": [
 			{
 				"file": "services/host/serve.go",
@@ -38,7 +38,7 @@
 	},
 	{
 		"id": "config-keys.top-level.surface",
-		"rationale": "W2 U03A finishes the knowledge-service retirement: config.KnowledgeBundles (the built-in OKF knowledge service's bundle-path list) is deleted from the Config struct — an older config.toml's knowledge_bundles key is now tolerated as a retired key (config.RetiredKeys/config show/doctor), never a live field. The pin narrows to the surface that remains.",
+		"rationale": "W2 U03A finishes the knowledge-service retirement: config.KnowledgeBundles (the built-in OKF knowledge service's bundle-path list) is deleted from the Config struct \u2014 an older config.toml's knowledge_bundles key is now tolerated as a retired key (config.RetiredKeys/config show/doctor), never a live field. The pin narrows to the surface that remains.",
 		"evidence": "services/host/config/config.go retiredConfigKeys[\"knowledge_bundles\"]; services/host/workflow/setup/config.go's `config set/get knowledge_bundles` refusal",
 		"changes": [
 			{
@@ -72,7 +72,7 @@
 	},
 	{
 		"id": "ports.reserved.identity",
-		"rationale": "W2 U03A finishes the knowledge-service retirement: identity.go no longer probes a :11436 knowledge service identity (there is nothing left to probe — the service, its RPC client, and its default port constant are all deleted).",
+		"rationale": "W2 U03A finishes the knowledge-service retirement: identity.go no longer probes a :11436 knowledge service identity (there is nothing left to probe \u2014 the service, its RPC client, and its default port constant are all deleted).",
 		"evidence": "services/host/identity.go; services/host/rpc/rpc.go (KnowledgePortDefault/KnowledgeClient removed)",
 		"changes": [
 			{
@@ -116,8 +116,8 @@
 	},
 	{
 		"id": "config-keys.top-level.surface",
-		"rationale": "W2 U02B deletes the built-in `pix gworkspace setup --create-docs` wizard and the separate google-docs-create write-scoped MCP it provisioned (workflow/gworkspace, google_docs_create_plugin.go). google_workspace_access was the get-only permission profile that wizard wrote and nothing else ever read once the wizard is gone, so it drops from the top-level key surface. It lands ON TOP of the W2 U03A knowledge_bundles removal recorded above — the merged tree never occupies an intermediate state where only one of the two keys is gone — so the destination recorded here is the whole surface that remains: Services through google_workspace_account. That key is UNCHANGED: gog stays registerable the generic way every other local stdio MCP server is, via `pix mcp register` (mcp.GogHardenedArgv already bakes in --readonly/--gmail-no-send/--wrap-untrusted).",
-		"evidence": "docs/design/gworkspace-externalization.md; services/host/config/config.go (GoogleWorkspaceAccess field + SetGoogleWorkspaceAccess removed); services/host/workflow/provision/config.go (the google_workspace_access get-key case and its ConfigKeysHelp line removed — `pix config get|set` belongs to provision now, workflow/setup having been deleted by the U10b/U10c provision port)",
+		"rationale": "W2 U02B deletes the built-in `pix gworkspace setup --create-docs` wizard and the separate google-docs-create write-scoped MCP it provisioned (workflow/gworkspace, google_docs_create_plugin.go). google_workspace_access was the get-only permission profile that wizard wrote and nothing else ever read once the wizard is gone, so it drops from the top-level key surface. It lands ON TOP of the W2 U03A knowledge_bundles removal recorded above \u2014 the merged tree never occupies an intermediate state where only one of the two keys is gone \u2014 so the destination recorded here is the whole surface that remains: Services through google_workspace_account. That key is UNCHANGED: gog stays registerable the generic way every other local stdio MCP server is, via `pix mcp register` (mcp.GogHardenedArgv already bakes in --readonly/--gmail-no-send/--wrap-untrusted).",
+		"evidence": "docs/design/gworkspace-externalization.md; services/host/config/config.go (GoogleWorkspaceAccess field + SetGoogleWorkspaceAccess removed); services/host/workflow/provision/config.go (the google_workspace_access get-key case and its ConfigKeysHelp line removed \u2014 `pix config get|set` belongs to provision now, workflow/setup having been deleted by the U10b/U10c provision port)",
 		"changes": [
 			{
 				"file": "services/host/config/config.go",
@@ -173,7 +173,7 @@
 	},
 	{
 		"id": "lifecycle.rm.keep-polarity-except",
-		"rationale": "W6/U11a ports `pix rm` onto the kong root: RunRm(argv) became Rm(env, out, errOut, RmOptions), so the --all discovery loop reads the `sbx ls` output as `raw` and the keep set is the local `keep` map built from opts.Except. The pinned PROPERTY is unchanged — the loop still iterates only workspace.ParsePixBoxes (pix-* filtered) and still removes a box only when it is ABSENT from the keep set; only the two identifier spellings moved.",
+		"rationale": "W6/U11a ports `pix rm` onto the kong root: RunRm(argv) became Rm(env, out, errOut, RmOptions), so the --all discovery loop reads the `sbx ls` output as `raw` and the keep set is the local `keep` map built from opts.Except. The pinned PROPERTY is unchanged \u2014 the loop still iterates only workspace.ParsePixBoxes (pix-* filtered) and still removes a box only when it is ABSENT from the keep set; only the two identifier spellings moved.",
 		"evidence": "services/host/workflow/launch/sandbox.go Rm(): `raw, timedOut, err := env.RunTimed(\"sbx\", \"ls\")` then `for _, b := range workspace.ParsePixBoxes(raw) { if !keep[b.Name] {`",
 		"changes": [
 			{
@@ -192,7 +192,7 @@
 	},
 	{
 		"id": "stdio.sandbox-scope.refusal-goes-to-stderr",
-		"rationale": "Same port: Rm takes its two streams as parameters instead of writing to the process globals, which is what makes the refusal assertable in-process. The pinned PROPERTY is unchanged — the refusal goes to the ERROR stream, never to out — so the pin follows the writer: os.Stderr -> errOut, which the launcher binds to Deps.Err (os.Stderr in production).",
+		"rationale": "Same port: Rm takes its two streams as parameters instead of writing to the process globals, which is what makes the refusal assertable in-process. The pinned PROPERTY is unchanged \u2014 the refusal goes to the ERROR stream, never to out \u2014 so the pin follows the writer: os.Stderr -> errOut, which the launcher binds to Deps.Err (os.Stderr in production).",
 		"evidence": "services/host/workflow/launch/sandbox.go Rm(env, out, errOut, opts): `fmt.Fprintf(errOut, \"refusing %q: not a pix sandbox ...\")`; cmd/pix/root.go rmCmd.Run passes d.Out, d.Err",
 		"changes": [
 			{
@@ -209,8 +209,8 @@
 	},
 	{
 		"id": "argv.op-run-wrapper.exact-grammar",
-		"rationale": "W2 U09B slims pix/host/mcp: OpRunWrapPrefix existed as a named seam ONLY so doctor's UnwrapOpRun recognizer could be pinned against the same literal the generator writes. That recognizer (mcp/trust.go, mcp/registration.go) had no production caller left once the built-in Slack/gog bridge probes were retired (W2 U02a/U02B), and is deleted here — so the wrapper grammar has exactly one site again, its generator McpRegistrar.ExecArgv. The pin follows the grammar to that single site; the emitted argv is byte-identical.",
-		"evidence": "services/host/mcp/mcp.go McpRegistrar.ExecArgv emits `append([]string{m.Op, \"run\", \"--no-masking\", \"--env-file=\" + m.OpRefs, \"--\"}, cmd...)`; services/host/mcp/trust.go (UnwrapOpRun/TrustedGogSpawn/TrustedHostBinaryExecPath) and services/host/mcp/registration.go (RegisteredCommand/RecognizedArgv) deleted — test-only symbols, zero production callers",
+		"rationale": "W2 U09B slims pix/host/mcp: OpRunWrapPrefix existed as a named seam ONLY so doctor's UnwrapOpRun recognizer could be pinned against the same literal the generator writes. That recognizer (mcp/trust.go, mcp/registration.go) had no production caller left once the built-in Slack/gog bridge probes were retired (W2 U02a/U02B), and is deleted here \u2014 so the wrapper grammar has exactly one site again, its generator McpRegistrar.ExecArgv. The pin follows the grammar to that single site; the emitted argv is byte-identical.",
+		"evidence": "services/host/mcp/mcp.go McpRegistrar.ExecArgv emits `append([]string{m.Op, \"run\", \"--no-masking\", \"--env-file=\" + m.OpRefs, \"--\"}, cmd...)`; services/host/mcp/trust.go (UnwrapOpRun/TrustedGogSpawn/TrustedHostBinaryExecPath) and services/host/mcp/registration.go (RegisteredCommand/RecognizedArgv) deleted \u2014 test-only symbols, zero production callers",
 		"changes": [
 			{
 				"file": "services/host/mcp/mcp.go",
@@ -226,7 +226,7 @@
 	},
 	{
 		"id": "argv.raw-add-args.no-env-flag",
-		"rationale": "W2 U09B: RawAddArgs was a separate entry point only for the retired gog-setup registration rollback, which re-registered a prior argv read back from `sbx mcp get`. With that gone its sole caller is McpRegistrar.AddArgs, so the body is inlined there. The registration argv is unchanged and still carries no `--env` form — credentials only ever arrive through the op-run wrapper.",
+		"rationale": "W2 U09B: RawAddArgs was a separate entry point only for the retired gog-setup registration rollback, which re-registered a prior argv read back from `sbx mcp get`. With that gone its sole caller is McpRegistrar.AddArgs, so the body is inlined there. The registration argv is unchanged and still carries no `--env` form \u2014 credentials only ever arrive through the op-run wrapper.",
 		"evidence": "services/host/mcp/mcp.go McpRegistrar.AddArgs builds `[]string{\"mcp\", \"add\", name, \"--command\", argv[0]}` plus --args pairs directly; workflow/gworkspace (the only other RawAddArgs caller) was retired in W2 U02B",
 		"changes": [
 			{
@@ -243,7 +243,7 @@
 	},
 	{
 		"id": "permissions.op-refs.seed-mode",
-		"rationale": "U11h deletes config.Seed() and its defaultConfigTOML template as dead code: nothing in the tree seeded a commented config.toml any more (Save() owns the file, and it writes 0600 through writeFileAtomic). The config.toml seed-mode pin goes with the function it described. This pin is unchanged in SUBSTANCE — op-refs.env is still created 0600 inside a 0700 dir, and still never 0644 — only its end anchor moved, because the `// Seed writes` comment it bounded against no longer exists and SeedOpRefsAt is now the last function in the file.",
+		"rationale": "U11h deletes config.Seed() and its defaultConfigTOML template as dead code: nothing in the tree seeded a commented config.toml any more (Save() owns the file, and it writes 0600 through writeFileAtomic). The config.toml seed-mode pin goes with the function it described. This pin is unchanged in SUBSTANCE \u2014 op-refs.env is still created 0600 inside a 0700 dir, and still never 0644 \u2014 only its end anchor moved, because the `// Seed writes` comment it bounded against no longer exists and SeedOpRefsAt is now the last function in the file.",
 		"evidence": "services/host/config/config.go: SeedOpRefsAt is the final declaration (O_CREATE|O_EXCL|O_WRONLY, 0o600 after MkdirAll/Chmod 0o700); config.Seed/defaultConfigTOML deleted with no remaining caller (config.Seed had zero references outside its own test)",
 		"changes": [
 			{
@@ -254,6 +254,55 @@
 				],
 				"to": [
 					"region runs to end of file (SeedOpRefsAt is the last declaration)"
+				]
+			}
+		]
+	},
+	{
+		"id": "lifecycle.reaper.no-force-requires-absence",
+		"rationale": "U04d lands the reaper this pin was staged for, so the pin stops being staged: the `activation: \"story04\"` field is removed and the description moves from future tense to the shipped contract. The CONTRACT it polices is unchanged \u2014 never force, keep-absence required \u2014 and its checks still match verbatim: services/host/workflow/launch/reap.go genuinely contains both `lease.TryExclusive()` (in the safety argument its header states) and the `refusing to reap: keep is held` refusal, and contains no `\"sbx\", \"rm\", \"-f\"` anywhere.",
+		"evidence": "services/host/workflow/launch/reap.go (TeardownSandbox -> decideTeardown -> teardownUnderProof); scripts/semantic-diff/activation.json now carries the story04 key with its own rationale/evidence",
+		"changes": [
+			{
+				"file": "scripts/semantic-diff/rules/lifecycle.rules.mjs",
+				"kind": "contains",
+				"from": [
+					"activation: \"story04\""
+				],
+				"to": []
+			}
+		]
+	},
+	{
+		"id": "lifecycle.rm.bare-nontty-refusal",
+		"rationale": "U04d lands the refusal, so the pin is un-staged. The checked literal does not change (\"refusing bare `pix rm` on a non-interactive terminal\" in services/host/workflow/launch/sandbox.go); only the `activation` field and the future-tense description go.",
+		"evidence": "services/host/workflow/launch/sandbox.go: validateRmShape returns cli.Usagef(\"refusing bare `pix rm` on a non-interactive terminal: ...\") when !opts.Interactive; test: workflow/launch/reap_test.go TestRm_FlagShapeRefusals/bare-non-tty",
+		"changes": [
+			{
+				"file": "scripts/semantic-diff/rules/lifecycle.rules.mjs",
+				"kind": "contains",
+				"from": [
+					"activation: \"story04\""
+				],
+				"to": []
+			}
+		]
+	},
+	{
+		"id": "lifecycle.rm.keep-short-and-long-flag",
+		"rationale": "U04d lands the -k/--keep spelling, and the pin's CHECK moves to where the flag actually is. The pin was written expecting a hand-rolled argv switch inside workflow/launch (`case a == \"-k\", a == \"--keep\":`), but pix has exactly one parser \u2014 the kong-tagged command structs in cmd/pix \u2014 and duplicating a flag parse inside the domain purely to satisfy a literal would be a worse design than the one shipped. The invariant is preserved and tightened: the pin now checks BOTH halves of the landed flag (the `short:\"k\"` declaration and the fold of --keep/--except into RmOptions.Except), so losing either the short spelling or --keep's names still trips it, while lifecycle.rm.keep-polarity-except still owns the direction.",
+		"evidence": "services/host/cmd/pix/root.go: rmCmd.Keep declared `short:\"k\"` and folded via `Except: append(append([]string(nil), c.Keep...), c.Except...)`; services/host/workflow/launch/sandbox.go keeps the `if !keep[b.Name]` polarity",
+		"changes": [
+			{
+				"file": "scripts/semantic-diff/rules/lifecycle.rules.mjs",
+				"kind": "contains",
+				"from": [
+					"case a == \"-k\", a == \"--keep\":",
+					"activation: \"story04\""
+				],
+				"to": [
+					"short:\"k\" help:\"With --all: keep this one (repeatable).\"",
+					"append(append([]string(nil), c.Keep...), c.Except...),"
 				]
 			}
 		]
