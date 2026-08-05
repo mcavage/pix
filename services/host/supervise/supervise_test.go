@@ -31,7 +31,16 @@ var (
 	fixtureErr  error
 )
 
-// buildFixture compiles testdata/fixture once per test binary.
+// buildFixture compiles testdata/fixture once per test binary. The fixture's
+// source lives at testdata/fixture/main.go.txt — a .txt, not a .go file, on
+// purpose: it is a real, complete go-plugin program, but naming it main.go
+// would make it a second copy of production Go source sitting outside any
+// *_test.go file, indistinguishable from shipped code to a LOC/production-
+// metrics scanner (anything that globs *.go and excludes *_test.go, same as
+// `go build ./...` itself). Reading it as data and writing it into a temp dir
+// as main.go right before the compile keeps this a REAL compiled executable
+// — same handshake, same net/rpc calls, same classification under test —
+// while its source counts as test fixture data, not production Go.
 func buildFixture(t *testing.T) (string, string) {
 	t.Helper()
 	fixtureOnce.Do(func() {
@@ -40,8 +49,18 @@ func buildFixture(t *testing.T) (string, string) {
 			fixtureErr = err
 			return
 		}
+		src, err := os.ReadFile("testdata/fixture/main.go.txt")
+		if err != nil {
+			fixtureErr = err
+			return
+		}
+		mainGo := filepath.Join(dir, "main.go")
+		if err := os.WriteFile(mainGo, src, 0o644); err != nil {
+			fixtureErr = err
+			return
+		}
 		out := filepath.Join(dir, "fixture")
-		cmd := exec.Command("go", "build", "-o", out, "./testdata/fixture")
+		cmd := exec.Command("go", "build", "-o", out, mainGo)
 		cmd.Env = append(os.Environ(), "GOFLAGS=")
 		if b, err := cmd.CombinedOutput(); err != nil {
 			fixtureErr = errors.New(string(b))

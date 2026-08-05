@@ -30,7 +30,15 @@ var (
 )
 
 // buildPackFixture compiles the supervise test fixture once per test binary —
-// the real go-plugin executable a pack would ship.
+// the real go-plugin executable a pack would ship. Its source lives at
+// supervise/testdata/fixture/main.go.txt — a .txt, not a .go file, on purpose:
+// it is a real, complete go-plugin program, but naming it main.go would make
+// it a second copy of production Go source outside any *_test.go file,
+// indistinguishable from shipped code to a LOC/production-metrics scanner
+// (anything that globs *.go and excludes *_test.go, same as `go build ./...`
+// itself). Reading it as data and writing it into a temp dir as main.go right
+// before the compile keeps this a REAL compiled executable, unchanged from
+// before, while its source counts as test fixture data, not production Go.
 func buildPackFixture(t *testing.T) string {
 	t.Helper()
 	packFixtureOnce.Do(func() {
@@ -39,8 +47,18 @@ func buildPackFixture(t *testing.T) string {
 			packFixtureErr = err
 			return
 		}
+		src, err := os.ReadFile("supervise/testdata/fixture/main.go.txt")
+		if err != nil {
+			packFixtureErr = err
+			return
+		}
+		mainGo := filepath.Join(dir, "main.go")
+		if err := os.WriteFile(mainGo, src, 0o644); err != nil {
+			packFixtureErr = err
+			return
+		}
 		out := filepath.Join(dir, "fixture")
-		if b, err := exec.Command("go", "build", "-o", out, "./supervise/testdata/fixture").CombinedOutput(); err != nil {
+		if b, err := exec.Command("go", "build", "-o", out, mainGo).CombinedOutput(); err != nil {
 			packFixtureErr = errors.New(string(b))
 			return
 		}

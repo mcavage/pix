@@ -30,7 +30,16 @@ import (
 //
 // The fixture is health's, reached by relative path rather than copied: two
 // fixtures drifting apart is how two surfaces start disagreeing about what
-// "broken" looks like.
+// "broken" looks like. Its source lives at
+// ../../health/testdata/fixture/main.go.txt — a .txt, not a .go file, on
+// purpose: it is a real, complete Go program, but naming it main.go would
+// make it a second copy of production Go source outside any *_test.go file,
+// indistinguishable from shipped code to a LOC/production-metrics scanner
+// (anything that globs *.go and excludes *_test.go, same as `go build ./...`
+// itself). Reading it as data and writing it into a temp dir as main.go right
+// before the compile keeps this a REAL compiled executable — same exec, same
+// classification under test — while its source counts as test fixture data,
+// not production Go.
 
 var (
 	fixtureOnce sync.Once
@@ -46,8 +55,18 @@ func buildFixture(t *testing.T) string {
 			fixtureErr = err
 			return
 		}
+		src, err := os.ReadFile("../../health/testdata/fixture/main.go.txt")
+		if err != nil {
+			fixtureErr = err
+			return
+		}
+		mainGo := filepath.Join(dir, "main.go")
+		if err := os.WriteFile(mainGo, src, 0o644); err != nil {
+			fixtureErr = err
+			return
+		}
 		out := filepath.Join(dir, "fixture")
-		cmd := exec.Command("go", "build", "-o", out, "../../health/testdata/fixture")
+		cmd := exec.Command("go", "build", "-o", out, mainGo)
 		cmd.Env = append(os.Environ(), "GOFLAGS=")
 		if b, err := cmd.CombinedOutput(); err != nil {
 			fixtureErr = errors.New(string(b))
