@@ -110,10 +110,15 @@ func CheckCase(c Case, r Result) error {
 	return nil
 }
 
+// checkJSONKeys accepts either a JSON array of objects (a listing verb) or a
+// single JSON object (a report verb, e.g. `status --json`), treating the
+// latter as a one-row array. Both are "rows with an exact key set", which is
+// what the contract guards; refusing the object form only meant report verbs
+// went uncovered.
 func checkJSONKeys(stream string, want []string) error {
-	var rows []map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(stream), &rows); err != nil {
-		return fmt.Errorf("jsonKeys contract: output is not a JSON array of objects: %w", err)
+	rows, err := jsonRows(stream)
+	if err != nil {
+		return err
 	}
 	if len(rows) == 0 {
 		return fmt.Errorf("jsonKeys contract: output parsed as an empty JSON array (proves nothing)")
@@ -133,6 +138,20 @@ func checkJSONKeys(stream string, want []string) error {
 		}
 	}
 	return nil
+}
+
+// jsonRows parses stream as an array of objects, falling back to a single
+// object.
+func jsonRows(stream string) ([]map[string]json.RawMessage, error) {
+	var rows []map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(stream), &rows); err == nil {
+		return rows, nil
+	}
+	var one map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(stream), &one); err != nil {
+		return nil, fmt.Errorf("jsonKeys contract: output is neither a JSON array of objects nor a JSON object: %w", err)
+	}
+	return []map[string]json.RawMessage{one}, nil
 }
 
 func sortedKeys(m map[string]json.RawMessage) []string {

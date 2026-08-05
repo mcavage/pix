@@ -12,11 +12,44 @@ import (
 // disagree about the same host. A consumer now reads one shape from either
 // command and gets the same rows.
 //
-// schemaVersion 4 is a BREAK, not an extension: v1-v3 described the
+// SchemaVersion 4 is a BREAK, not an extension: v1-v3 described the
 // requirement/verdict matrix this wave deleted, and there is no honest
 // mapping from a four-status probe result onto a vocabulary that could not
-// say "unknown". The version number is the contract that says so out loud.
-const schemaVersion = 4
+// say "unknown". The version number is the contract that says so out loud,
+// and RetiredSchemas below is the migration note that says what a consumer
+// must do about it.
+const SchemaVersion = 4
+
+// RetiredSchemas is the MIGRATION CONTRACT for the versions this one
+// replaces, keyed by version. Each value states what that shape was and what
+// a consumer pinned to it has to do — which in every case is "read
+// schema_version and re-read the rows", because there is no field-level
+// mapping to write:
+//
+//   - v1/v2 published a nested `groups` tree of readiness Checks whose
+//     verdict vocabulary (ready/todo/denied/unverifiable, crossed with
+//     required/optional) does not survive; `unverifiable` and `todo` both
+//     land in a four-status model that separates "I could not check" from
+//     "I checked and it is missing" DIFFERENTLY per probe, so translating
+//     mechanically would invent verdicts.
+//   - v3 added a flat `checks` array alongside the groups, and `pix status`
+//     published a SECOND, differently-shaped `dashboard` object. Both are
+//     gone: the two verbs now emit one shape.
+//
+// The list is exhaustive and frozen. A consumer that finds a version not in
+// {4} ∪ keys(RetiredSchemas) is reading output from a build newer than its
+// own, which is the one case it should fail loudly on.
+var RetiredSchemas = map[int]string{
+	1: "nested `groups` of readiness Checks; no field maps onto the four-status model — read schema_version and re-read `checks`",
+	2: "as v1 plus per-axis requirement rollups; same break, same migration",
+	3: "`groups` plus a flat `checks` array, and a separate `dashboard` object from `pix status`; both verbs now emit one shape — read `checks`",
+}
+
+// RetiredSchemaKeys are the top-level field names v1-v3 published that v4
+// does NOT. They are listed so the break is testable in both directions: a v4
+// payload must carry none of them, which is what makes a stale parser fail on
+// a missing field instead of silently reading a subset it recognizes.
+var RetiredSchemaKeys = []string{"groups", "dashboard", "axes", "ok"}
 
 // ReportJSONView is the machine-readable snapshot behind `--json`.
 type ReportJSONView struct {
@@ -58,7 +91,7 @@ type CheckJSON struct {
 // its own (always 0) exit code.
 func ReportJSON(s health.Snapshot, profile string, exit int) ReportJSONView {
 	v := ReportJSONView{
-		SchemaVersion: schemaVersion,
+		SchemaVersion: SchemaVersion,
 		Version:       launcher.Version,
 		ConfigPath:    config.Path(),
 		Profile:       profile,

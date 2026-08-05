@@ -142,7 +142,7 @@ func TestProbes_CoverTheWholeHostSurface(t *testing.T) {
 	for _, p := range Probes(&config.Config{}, Options{}) {
 		names = append(names, p.Name())
 	}
-	want := []string{"sbx", "pack", "providers", "memory", "monitor", "launchd"}
+	want := []string{"sbx", "pack", "providers", "memory", "monitor", "launchd", "mcp"}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("probe set = %v, want %v", names, want)
 	}
@@ -367,8 +367,8 @@ func TestReportJSON_SchemaAndFixes(t *testing.T) {
 	if err := json.Unmarshal([]byte(b.String()), &v); err != nil {
 		t.Fatalf("doctor --json is not valid JSON: %v\n%s", err, b.String())
 	}
-	if v.SchemaVersion != schemaVersion {
-		t.Errorf("schema_version = %d, want %d", v.SchemaVersion, schemaVersion)
+	if v.SchemaVersion != SchemaVersion {
+		t.Errorf("schema_version = %d, want %d", v.SchemaVersion, SchemaVersion)
 	}
 	if v.Profile != "work" || v.ConfigPath == "" {
 		t.Errorf("profile/config_path missing: %+v", v)

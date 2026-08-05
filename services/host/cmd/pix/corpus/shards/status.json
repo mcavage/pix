@@ -24,6 +24,42 @@
       "contains": [
         "unknown flag"
       ]
+    },
+    {
+      "name": "json-schema-v4",
+      "args": [
+        "status",
+        "--json"
+      ],
+      "exitCode": 0,
+      "stream": "stdout",
+      "contains": [
+        "\"schema_version\": 4"
+      ],
+      "jsonKeys": [
+        "schema_version",
+        "version",
+        "config_path",
+        "profile",
+        "verdict",
+        "ready",
+        "checks",
+        "fixes",
+        "exit",
+        "elapsed_ms"
+      ]
+    },
+    {
+      "name": "help-names-the-schema-version",
+      "args": [
+        "status",
+        "--help"
+      ],
+      "exitCode": 0,
+      "stream": "stdout",
+      "contains": [
+        "schema_version 4"
+      ]
     }
   ]
 }

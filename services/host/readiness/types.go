@@ -1,3 +1,28 @@
+// Package readiness is COMPATIBILITY-ONLY. It is the pre-health readiness
+// model (Requirement x Verdict, a lazy axis registry, four exit codes, two
+// renderers), and nothing new may be written against it: `pix status` and
+// `pix doctor` render pix/host/health now, and so must every surface that
+// follows them.
+//
+// It is retained, and its deletion DEFERRED, because it still has real
+// consumers this unit did not own. As of W5/U10c they are, exactly:
+//
+//	workflow/gworkspace   renders its own readiness Checks for `gworkspace
+//	                      setup` (the gog leaf; a separate unit)
+//	workflow/slack        the same, for the Slack OAuth surface
+//	workflow/models       `pix models add`'s inference selection/verification
+//	workflow/launch       the launch key gate and the host-state read
+//	workflow/doctor       the three LEAF helpers the four above call
+//	                      (SecretCheck, the gog probes, OllamaReadinessAxes)
+//	cmd/pix               `run`/`agent`/`models` use readiness/axis for model
+//	                      RESOLUTION (ResolveSessionModel) and the sbx key
+//	                      evidence probe — utilities that live here by history,
+//	                      not because they are about readiness reporting
+//
+// The deletion condition is mechanical, not a judgement call: when that list
+// is empty, this package goes. cmd/pix's TestReadinessConsumersOnlyShrink
+// pins the list and lets it only shrink, so "we will delete it later" is a
+// ratchet rather than a promise.
 package readiness
 
 import (

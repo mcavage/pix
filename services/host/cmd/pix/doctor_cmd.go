@@ -29,10 +29,14 @@ func runDoctorCmd(argv []string) {
 	}
 	cfg, profile, err := workspace.LoadResolvedConfig()
 	if err != nil {
+		// Doctor DOES fail on this: an unreadable config is a verified gap in
+		// something required, and doctor's whole contract is that exit 1 means
+		// exactly that. Status renders the same fact and exits 0.
 		fmt.Fprintf(os.Stderr, "pix doctor: %v\n", err)
+		health.RenderDoctorWith(os.Stdout, doctor.ConfigLoadSnapshot(err), health.DoctorOpts{Verbose: verbose})
 		os.Exit(health.ExitNotReady)
 	}
-	if code := doctor.RunDoctor(context.Background(), cfg, profile, os.Stdout, doctor.Options{}, jsonOut, verbose); code != health.ExitOK {
+	if code := doctor.RunDoctor(context.Background(), cfg, profile, os.Stdout, doctorOptions(), jsonOut, verbose); code != health.ExitOK {
 		os.Exit(code)
 	}
 }
@@ -58,8 +62,24 @@ func runStatusCmd(argv []string) {
 	}
 	cfg, profile, err := workspace.LoadResolvedConfig()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix status: %v\n", err)
-		os.Exit(health.ExitNotReady)
+		// A config that will not load is an ISSUE on the glance, not a reason
+		// to take the caller's shell down. Status always exits 0 (see
+		// StatusExit); the verdict rides in --json's `exit` field.
+		doctor.RenderStatusConfigError(os.Stdout, profile, err, jsonOut)
+		return
 	}
-	doctor.RenderStatus(context.Background(), cfg, profile, os.Stdout, doctor.Options{}, jsonOut)
+	doctor.RenderStatus(context.Background(), cfg, profile, os.Stdout, doctorOptions(), jsonOut)
+}
+
+// doctorOptions fills the seams both surfaces share: the host environment and
+// the workspace whose sandbox the MCP attachment answer is about. A workspace
+// that cannot be resolved leaves Workspace empty, which is reported as
+// "attachment unknown" rather than guessed.
+func doctorOptions() doctor.Options {
+	env := defaultShellEnv()
+	o := doctor.Options{Env: env, HostResolver: env.HostBinary}
+	if ws, err := os.Getwd(); err == nil {
+		o.Workspace = ws
+	}
+	return o
 }

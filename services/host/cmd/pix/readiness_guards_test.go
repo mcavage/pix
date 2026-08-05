@@ -45,7 +45,10 @@ const glyphOwner = "readiness/render.go"
 // The list may only SHRINK, like drainingPackages in arch_test.go. Routing
 // those progress lines through the shared vocabulary would be a real
 // improvement; adding a second entry should require arguing for it.
-var glyphExempt = map[string]bool{"workflow/setup/setup.go": true}
+// W5/U10b deleted workflow/setup entirely (the provision loop replaced it),
+// so the one entry that was here is gone and the list is now EMPTY. It may
+// only shrink, and it has nowhere left to shrink to.
+var glyphExempt = map[string]bool{}
 
 // verdictGlyphs is the closed set of markers the vocabulary owns.
 var verdictGlyphs = []string{"✓", "✗", "⚠", "⊘"}
@@ -134,8 +137,8 @@ func TestRendererPurity(t *testing.T) {
 // TestArchitecture_DrainingListIsShrinking guards its own: a list of "allowed
 // to break the rule" stays honest only while growing it is deliberate.
 func TestGlyphExemptIsShrinking(t *testing.T) {
-	if len(glyphExempt) > 1 {
-		t.Errorf("glyphExempt has %d entries; it may only shrink", len(glyphExempt))
+	if len(glyphExempt) > 0 {
+		t.Errorf("glyphExempt has %d entries; it may only shrink, and it is empty", len(glyphExempt))
 	}
 }
 
@@ -319,6 +322,92 @@ func TestFastSurfacesShareTheVocabulary(t *testing.T) {
 		axis.RenderReadinessWarnings(&out, s, axis.LaunchWarningLimit)
 		if !strings.Contains(out.String(), tc.glyph+" axis: "+tc.word) {
 			t.Errorf("(%s, %s) rendered %q, want glyph %q + word %q", tc.req, tc.v, out.String(), tc.glyph, tc.word)
+		}
+	}
+}
+
+// readinessConsumers is every package outside readiness/ that still imports
+// it. The readiness model is COMPATIBILITY-ONLY (see the package doc): health
+// replaced it for `status`/`doctor`, and this list is the honest, enforced
+// record of what is left rather than a claim that the migration finished.
+//
+// It may only SHRINK, exactly like glyphExempt and drainingPackages. Adding a
+// consumer means writing new code against a retired model; the fix is to use
+// pix/host/health. When the list is empty, delete the package.
+var readinessConsumers = map[string]bool{
+	"cmd/pix":             true, // ResolveSessionModel + the sbx key-evidence probe
+	"workflow/doctor":     true, // the leaf helpers the four below call
+	"workflow/gworkspace": true,
+	"workflow/launch":     true,
+	"workflow/models":     true,
+	"workflow/slack":      true,
+}
+
+// TestReadinessConsumersOnlyShrink walks the module for PRODUCTION files that
+// import the readiness model and asserts the set of owning packages is
+// exactly readinessConsumers — no more (a new consumer is a regression) and
+// no stale entry (a package that finished migrating must be struck off, or
+// the list stops describing anything).
+func TestReadinessConsumersOnlyShrink(t *testing.T) {
+	root := filepath.Join("..", "..")
+	found := map[string]bool{}
+	if err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && path != root && (d.Name() == "testdata" || strings.HasPrefix(d.Name(), ".")) {
+			return filepath.SkipDir
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		rel, _ := filepath.Rel(root, path)
+		rel = filepath.ToSlash(rel)
+		if strings.HasPrefix(rel, "readiness/") {
+			return nil
+		}
+		b, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		src := string(b)
+		if strings.Contains(src, `"pix/host/readiness"`) || strings.Contains(src, `"pix/host/readiness/axis"`) {
+			found[filepath.ToSlash(filepath.Dir(rel))] = true
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for pkg := range found {
+		if !readinessConsumers[pkg] {
+			t.Errorf("%s imports the COMPATIBILITY-ONLY readiness model; new code must use pix/host/health", pkg)
+		}
+	}
+	for pkg := range readinessConsumers {
+		if !found[pkg] {
+			t.Errorf("%s no longer imports readiness — strike it off readinessConsumers (the list must stay true)", pkg)
+		}
+	}
+}
+
+// TestCoreSurfacesAreOffReadiness is the positive half of the U10c claim: the
+// files that BUILD and RENDER `pix status` and `pix doctor` import health and
+// nothing from the retired model. The leaf helpers in the same package (gog,
+// ollama, providers) still do, which is why the package-level list above
+// still names workflow/doctor — and why this test names files, not packages.
+func TestCoreSurfacesAreOffReadiness(t *testing.T) {
+	for _, rel := range []string{
+		"workflow/doctor/doctor.go", "workflow/doctor/status.go", "workflow/doctor/probes.go",
+		"workflow/doctor/json.go", "workflow/doctor/render.go", "workflow/doctor/mcp.go",
+		"health/health.go", "health/probes.go", "health/mcp.go", "health/render.go",
+		"cmd/pix/doctor_cmd.go",
+	} {
+		b, err := os.ReadFile(filepath.Join("..", "..", rel))
+		if err != nil {
+			t.Fatalf("read %s: %v", rel, err)
+		}
+		if strings.Contains(string(b), `"pix/host/readiness`) {
+			t.Errorf("%s still imports the retired readiness model", rel)
 		}
 	}
 }

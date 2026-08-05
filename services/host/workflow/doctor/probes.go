@@ -7,6 +7,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/health"
+	"pix/host/hostenv"
 	"pix/host/monitor"
 	"pix/host/rpc"
 	"pix/host/secret"
@@ -52,6 +53,20 @@ type Options struct {
 	// process's own.
 	LaunchdLabel string
 	UID          int
+	// Env and HostResolver are how the MCP probe learns what kind of server
+	// each configured name is (the pack's declarations plus `pix-host mcp
+	// --list`). A zero Env means the real host; a nil HostResolver means the
+	// local inventory is UNKNOWN, which the classification fails closed on.
+	Env          hostenv.Env
+	HostResolver func() (string, error)
+	// Workspace is the directory whose sandbox the attachment answer is
+	// about. Empty means "no sandbox context", and attachment is unknown.
+	Workspace string
+	// MCPBin, MCPListArgs and MCPAuthArgs are the MCP probe's exec seams,
+	// same contract as the others: a real process, pointed at a fixture.
+	MCPBin      string
+	MCPListArgs []string
+	MCPAuthArgs []string
 }
 
 // Probes builds the host's probe set, in the order a report reads best:
@@ -87,6 +102,24 @@ func Probes(cfg *config.Config, o Options) []health.Probe {
 		health.MonitorProbe{Port: portOr(o.MonitorPort, monitor.DefaultPort),
 			Enabled: config.ServiceEnabled(cfg, "monitor")},
 		health.LaunchdProbe{Bin: o.LaunchctlBin, Label: orElse(o.LaunchdLabel, service.LaunchdLabel), UID: uid, Args: o.LaunchctlArgs},
+		mcpProbe(cfg, o, sbxBin),
+	}
+}
+
+// mcpProbe assembles the MCP probe from the two things only this layer can
+// resolve: the per-server classification, and what the launcher receipt
+// proves about attachment. Both degrade to "unknown", never to a guess.
+func mcpProbe(cfg *config.Config, o Options, sbxBin string) health.MCPProbe {
+	attached, known, sandbox := MCPAttachment(o.Env, o.Workspace)
+	return health.MCPProbe{
+		Servers:         MCPServers(cfg, o.Env, o.HostResolver),
+		Bin:             orElse(o.MCPBin, sbxBin),
+		ListArgs:        o.MCPListArgs,
+		AuthArgs:        o.MCPAuthArgs,
+		Attached:        attached,
+		AttachmentKnown: known,
+		Sandbox:         sandbox,
+		Workspace:       o.Workspace,
 	}
 }
 

@@ -66,3 +66,38 @@ func RenderStatus(ctx context.Context, cfg *config.Config, profile string, out i
 	health.RenderStatus(out, snap)
 	return StatusExit
 }
+
+// ConfigLoadSnapshot is what a config that would not load looks like as a
+// health answer: one required check that VERIFIED a gap, with the exact
+// command that shows the reader where the file is.
+//
+// It exists so a broken config is RENDERED by the same surfaces as everything
+// else instead of being a bare stderr line and an exit code. Nothing else can
+// be probed with no config, so it is the whole snapshot.
+func ConfigLoadSnapshot(err error) health.Snapshot {
+	return health.Snapshot{Results: []health.Result{{
+		Name: "config", Status: health.StatusAbsent, Required: true,
+		Detail:   "could not be loaded",
+		Fix:      "pix config path",
+		Evidence: config.Path() + ": " + err.Error(),
+	}}}
+}
+
+// RenderStatusConfigError renders a config-load failure as an ISSUE on the
+// glance and returns StatusExit — zero, like every other status outcome.
+//
+// This is the whole point of status's exit contract: the landing screen runs
+// in prompts and under `set -e`, and a user whose config is broken needs to
+// SEE that, not have their shell die on it. The verdict is still published —
+// the JSON `exit` field carries doctor's 1 — so no machine reader loses
+// anything.
+func RenderStatusConfigError(out io.Writer, profile string, err error, jsonOut bool) int {
+	snap := ConfigLoadSnapshot(err)
+	if jsonOut {
+		_ = cli.WriteJSONOut(out, ReportJSON(snap, profile, snap.ExitCode()))
+		return StatusExit
+	}
+	fmt.Fprintf(out, "pix %s\n", launcher.Version)
+	health.RenderStatus(out, snap)
+	return StatusExit
+}

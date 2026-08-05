@@ -16,14 +16,14 @@
       "exits": 4
     },
     "pix/host/cmd/pix": {
-      "prod_loc": 3640,
+      "prod_loc": 3643,
       "exports": 19,
       "globals": 15,
       "edges": 25,
       "exits": 55
     },
     "pix/host/cmd/pix/corpus": {
-      "prod_loc": 573,
+      "prod_loc": 592,
       "exports": 18,
       "globals": 7,
       "edges": 0,
@@ -44,10 +44,10 @@
       "exits": 0
     },
     "pix/host/health": {
-      "prod_loc": 868,
-      "exports": 35,
-      "globals": 21,
-      "edges": 2,
+      "prod_loc": 1191,
+      "exports": 42,
+      "globals": 29,
+      "edges": 3,
       "exits": 0
     },
     "pix/host/hostenv": {
@@ -114,7 +114,7 @@
       "exits": 0
     },
     "pix/host/readiness": {
-      "prod_loc": 695,
+      "prod_loc": 720,
       "exports": 51,
       "globals": 35,
       "edges": 0,
@@ -191,10 +191,10 @@
       "exits": 0
     },
     "pix/host/workflow/doctor": {
-      "prod_loc": 838,
-      "exports": 28,
-      "globals": 8,
-      "edges": 16,
+      "prod_loc": 1043,
+      "exports": 35,
+      "globals": 10,
+      "edges": 17,
       "exits": 0
     },
     "pix/host/workflow/gworkspace": {

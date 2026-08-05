@@ -24,6 +24,18 @@
       "contains": [
         "unknown flag"
       ]
+    },
+    {
+      "name": "help-names-the-schema-version",
+      "args": [
+        "doctor",
+        "--help"
+      ],
+      "exitCode": 0,
+      "stream": "stdout",
+      "contains": [
+        "schema_version 4"
+      ]
     }
   ]
 }

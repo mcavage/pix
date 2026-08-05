@@ -17,6 +17,12 @@
 //	keys       exit 0 listing every model provider key, the way a key store
 //	           that ANSWERED does
 //	nokeys     exit 0 listing a store that answered and holds no model key
+//	mcpls      exit 0 listing slack + notion as registered MCP servers
+//	mcpnone    exit 0 with an MCP listing that holds nothing
+//	authok     exit 0 saying the named server is authenticated
+//	authno     exit 1 saying the named server is NOT authenticated (a
+//	           POSITIVE answer, even though the process failed)
+//	authnoise  exit 1 with output that says nothing about auth either way
 //
 // The distinction the tests exist to pin: only `notloaded` (and a missing
 // binary) may render absent. broken/crash/hang/malformed are all unknown,
@@ -31,11 +37,17 @@ import (
 	"time"
 )
 
-func main() {
-	mode := ""
-	if len(os.Args) > 1 {
-		mode = os.Args[1]
+// argAt returns os.Args[i] or "" — the auth modes are handed the server name
+// as the argument after the mode.
+func argAt(i int) string {
+	if len(os.Args) > i {
+		return os.Args[i]
 	}
+	return ""
+}
+
+func main() {
+	mode := argAt(1)
 	switch mode {
 	case "healthy":
 		fmt.Println("pix-fixture version 9.9.9")
@@ -58,6 +70,18 @@ func main() {
 		fmt.Println("NAME        SCOPE\nanthropic   global\nopenai      global\ngoogle      global")
 	case "nokeys":
 		fmt.Println("NAME        SCOPE\ngithub      global")
+	case "mcpls":
+		fmt.Println("NAME     TRANSPORT\nslack    stdio\nnotion   remote")
+	case "mcpnone":
+		fmt.Println("NAME     TRANSPORT")
+	case "authok":
+		fmt.Printf("%s: authenticated\n", argAt(2))
+	case "authno":
+		fmt.Fprintf(os.Stderr, "%s: not authenticated\n", argAt(2))
+		os.Exit(1)
+	case "authnoise":
+		fmt.Fprintln(os.Stderr, "fixture: the control plane fell over")
+		os.Exit(1)
 	case "malformed":
 		fmt.Println("\x00\x01 not a version banner at all")
 	default:
