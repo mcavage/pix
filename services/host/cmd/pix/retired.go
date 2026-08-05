@@ -15,8 +15,11 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
+
+	"pix/host/cli"
 )
 
 // retiredSep separates a verb from its retired subcommand/flag in a table key.
@@ -51,21 +54,26 @@ func retiredSurfaces() map[string]string {
 	return map[string]string{
 		// W1 U01a: the host-integration, distribution, and state-management
 		// surfaces the launcher no longer owns.
-		"backup":                       "pix-host backup",
-		"evals":                        "pix models route",
-		"gworkspace":                   "pix mcp register",
-		"host":                         "pix run",
-		"kb":                           "pix pack use",
-		"knowledge":                    "pix pack use",
-		"man":                          "pix help --all",
-		"restore":                      "pix-host restore",
-		"slack":                        "pix mcp register",
-		"upgrade":                      "brew upgrade pix",
-		retiredKey("pix", "--man"):     "pix help --all",
-		retiredKey("state", "backup"):  "pix-host backup",
-		retiredKey("state", "restore"): "pix-host restore",
-		retiredKey("task", "gc"):       "pix task rm",
-		retiredKey("task", "harvest"):  "pix task path",
+		"backup":                   "pix-host backup",
+		"evals":                    "pix models route",
+		"gworkspace":               "pix mcp register",
+		"host":                     "pix run",
+		"kb":                       "pix pack use",
+		"knowledge":                "pix pack use",
+		"man":                      "pix help --all",
+		"restore":                  "pix-host restore",
+		"slack":                    "pix mcp register",
+		"upgrade":                  "brew upgrade pix",
+		retiredKey("pix", "--man"): "pix help --all",
+		// U04e: --replace was a forced `sbx rm -f` before a create, issued with
+		// no zero-holder proof — it could destroy a sandbox another shell was
+		// live in. Removal is explicit and proof-gated now.
+		retiredKey("run", "--replace"):   "pix rm BOX",
+		retiredKey("setup", "--replace"): "pix rm BOX",
+		retiredKey("state", "backup"):    "pix-host backup",
+		retiredKey("state", "restore"):   "pix-host restore",
+		retiredKey("task", "gc"):         "pix task rm",
+		retiredKey("task", "harvest"):    "pix task path",
 		// Earlier retirements, previously answered only by a did-you-mean hint on
 		// the unknown-verb path. They answer with the marker now, same as the rest.
 		"gog":     "pix gworkspace",
@@ -119,6 +127,23 @@ func retiredMessage(key string) string {
 func retiredExit(key string) {
 	fmt.Fprint(os.Stderr, retiredMessage(key))
 	os.Exit(2)
+}
+
+// retiredFlag is the answer for a retired FLAG of a live verb: the same
+// PIX_RETIRED notice on the caller's stderr and the same exit 2, but returned
+// through the root's error mapping instead of os.Exit, because the verb's
+// parser has already run by the time a flag value is visible. It stays inert —
+// the caller must consult it before any probe, config read or mutation.
+func retiredFlag(errOut io.Writer, verb, flag string) error {
+	key := retiredKey(verb, flag)
+	if _, ok := retiredSurfaces()[key]; !ok {
+		// A flag routed here without a table entry would exit 2 saying nothing
+		// useful. Fail loudly instead: the table and the call site are one
+		// decision (retired_test.go proves the table matches the manifest).
+		return fmt.Errorf("internal: %s %s is not a retired surface", verb, flag)
+	}
+	fmt.Fprint(errOut, retiredMessage(key))
+	return cli.SilentError{Code: 2}
 }
 
 // retiredIfRetired exits with the notice when key names a retired surface, and

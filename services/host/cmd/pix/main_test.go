@@ -207,15 +207,12 @@ func TestBuildSbxArgs_TemplateOrthogonalToKit(t *testing.T) {
 
 func TestParseRunArgs_Template(t *testing.T) {
 	ref := "docker.io/mcavage/pix:local-999"
-	o, err := parseRunOpts([]string{"--template", ref, "--replace"})
+	o, err := parseRunOpts([]string{"--template", ref})
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 	if o.Template != ref {
 		t.Errorf("Template = %q, want %q", o.Template, ref)
-	}
-	if !o.Replace {
-		t.Errorf("Replace should be set")
 	}
 	// --template=REF form too.
 	o2, err := parseRunOpts([]string{"--template=" + ref})

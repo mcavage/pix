@@ -630,17 +630,9 @@ func ExecuteSbxReset(a Actions, env sys.System, out io.Writer) {
 		}
 		for _, sb := range boxes {
 			if _, err := env.Run("sbx", "rm", "-f", sb.Name); err != nil {
-				// Removal FAILED (or unknowable): the receipt is RETAINED —
-				// evidence is discarded only on positive proof of removal.
 				fmt.Fprintf(out, "  ✗ sbx rm -f %s — %v\n", sb.Name, err)
 			} else {
 				fmt.Fprintf(out, "  ✓ removed sandbox %s\n", sb.Name)
-				// Positive removal success: clear the launcher's per-sandbox MCP
-				// receipt via the SAME hardened helper `pix rm`/task teardown
-				// use (lock-serialized, symlink-safe). Best-effort: the removal
-				if cerr := workspace.ClearRemovedReceipt(sb.Name); cerr != nil {
-					fmt.Fprintf(out, "  · could not clear the mcp receipt for %s — %v\n", sb.Name, cerr)
-				}
 			}
 		}
 	} else {

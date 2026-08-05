@@ -306,5 +306,75 @@
 				]
 			}
 		]
+	},
+	{
+		"id": "lifecycle.rm.force-scoped-to-explicit-seams",
+		"rationale": "U04e retires `pix run --replace`, deleting ApplyReplaceRm \u2014 the second `sbx rm -f` caller. It force-removed with NO zero-holder proof and outside the lifecycle lock, so it could destroy a sandbox another shell was live in, which is exactly what U04d's proof-gated teardown exists to prevent. The invariant the pin polices (force is reachable only from an explicit, human-typed seam) is unchanged and now STRONGER: one caller instead of two. The pin's second and third checks named the deleted seam's internals; they are replaced by the retirement-table entry, which is what makes the flag answer with the recovery path instead of silently coming back.",
+		"evidence": "services/host/workflow/launch/run.go no longer declares ApplyReplaceRm; services/host/cmd/pix/retired.go: `retiredKey(\"run\", \"--replace\"): \"pix rm BOX\"`; corpus/retirement.jsonl seq 19/20",
+		"changes": [
+			{
+				"file": "scripts/semantic-diff/rules/lifecycle.rules.mjs",
+				"kind": "contains",
+				"from": [
+					"if !plan.RmFirst {",
+					"RmFirst: replace && (state == SbxRunning || state == SbxStopped),"
+				],
+				"to": [
+					"retiredKey(\"run\", \"--replace\"):"
+				]
+			}
+		]
+	},
+	{
+		"id": "lifecycle.session.record-before-lifecycle-unlock",
+		"rationale": "U04e deletes the per-sandbox MCP receipt, so the create-time recording StartSbxRunAndRecordCreate wrapped is now the lease record/fingerprint/invocation only. The function is renamed StartSbxSession and loses the receipt parameters (ws, preloaded) and the receipt error it folded into Wait. The ORDERING the pin polices \u2014 child started and every create-time fact recorded inside AttachRefUnderLifecycle's fn, refs SHARED taken while lifecycle EX is held, child.Wait() only after \u2014 is unchanged; only the signature literal moves.",
+		"evidence": "services/host/workflow/launch/run.go: `func StartSbxSession(cmd *exec.Cmd, poll CreatePoll, creating bool, sandbox string) (*SessionChild, error) {`",
+		"changes": [
+			{
+				"file": "scripts/semantic-diff/rules/lifecycle.rules.mjs",
+				"kind": "contains",
+				"from": [
+					"func StartSbxRunAndRecordCreate(cmd *exec.Cmd, poll CreatePoll, writeReceipt bool, sandbox, ws string, preloaded []string) (*SessionChild, error) {"
+				],
+				"to": [
+					"func StartSbxSession(cmd *exec.Cmd, poll CreatePoll, creating bool, sandbox string) (*SessionChild, error) {"
+				]
+			}
+		]
+	},
+	{
+		"id": "lifecycle.session.fingerprint-mismatch-refuses-attach",
+		"rationale": "The refusal is unchanged; its recovery SENTENCE moves. With --replace retired, \"Recreate it explicitly: pix run --replace\" would name a retired flag, so the message defers to launch.RecreateGuidance(spec.Name) \u2014 the one place the two-step, proof-gated recreate is spelled. The pin now checks the refusal delegates to that helper rather than inlining a command.",
+		"evidence": "services/host/workflow/launch/session.go: `refusing to attach. %s\", ... RecreateGuidance(spec.Name))`; services/host/workflow/launch/run.go: `func RecreateGuidance(name string) string`",
+		"changes": [
+			{
+				"file": "scripts/semantic-diff/rules/lifecycle.rules.mjs",
+				"kind": "contains",
+				"from": [
+					"refusing to attach. Recreate it explicitly:"
+				],
+				"to": [
+					"refusing to attach. %s",
+					"RecreateGuidance(spec.Name)"
+				]
+			}
+		]
+	},
+	{
+		"id": "sandbox-scope.prefix.derive-name",
+		"rationale": "U04e deletes workspace.DeriveSandboxName with the receipt store that was its last real consumer. Its bare \"pix-<basename>\" had ALREADY drifted from `pix run`'s default (sandbox.Name's digest form), so setup's handoff guard and `mcp load`'s fallback were naming a sandbox nothing creates. The scope property the pin exists for \u2014 every default name is inside pix-*, which is what `pix rm` and the reaper refuse outside of \u2014 now has exactly one producer, sandbox.Name, and the pin follows it there.",
+		"evidence": "services/host/sandbox/name.go: `const Prefix = \"pix-\"` and Name()'s composition; services/host/workspace/resolve.go deleted",
+		"changes": [
+			{
+				"file": "scripts/semantic-diff/rules/sandbox-scope.rules.mjs",
+				"kind": "contains",
+				"from": [
+					"return \"pix-\" + base"
+				],
+				"to": [
+					"const Prefix = \"pix-\""
+				]
+			}
+		]
 	}
 ]

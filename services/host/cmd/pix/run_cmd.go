@@ -46,16 +46,23 @@ command.
 
 lifecycle (matches sbx's own re-attach model):
   no sandbox named N          -> create it (the flags below apply).
-  a sandbox named N exists    -> RE-ATTACH to it as-is (running or stopped);
-                                 sbx reads the agent from its own spec, so
+  a sandbox named N exists    -> ATTACH to it as-is (running or stopped); sbx
+                                 reads the agent from its own spec, so
                                  --kit/--mcp/--template, --dev, and the
                                  create-only skill flags are NOT re-sent (--dev
-                                 is create/replace-only and is ignored, with a
-                                 note, on a plain re-attach). Use --replace to
-                                 recreate with the current flags instead.
-                                 --model/--intent are NOT create-only: they are
-                                 pi runtime args, so they still reach the pi
-                                 session on a re-attach too.
+                                 is create-only and is ignored, with a note, on
+                                 an attach). --model/--intent are NOT create-
+                                 only: they are pi runtime args, so they still
+                                 reach the pi session on an attach too.
+                                 An attach whose create-time MCP set or image
+                                 no longer matches is REFUSED, not silently
+                                 attached; to recreate, remove it first:
+                                 pix rm <box> && pix run. There is no
+                                 --replace: a forced removal that races another
+                                 shell's live session is exactly what the
+                                 proof-gated 'pix rm' exists to prevent.
+
+  the last shell to leave a sandbox tears it down (pix run -k keeps it).
 
 released vs local:
   A RELEASED launcher (a clean version like 0.0.16) tracks the LATEST STABLE
@@ -85,9 +92,13 @@ type runCmd struct {
 	Name     string   `help:"Sandbox name." placeholder:"N"`
 	Model    string   `help:"Active pi model (passed through to pi)." placeholder:"M"`
 	Intent   string   `help:"Resolve the session model via the router; --model overrides it. Intents: pix models show." placeholder:"NAME"`
-	Replace  bool     `help:"Recreate the sandbox (sbx rm -f, then create) instead of re-attaching; picks up changed create-only flags."`
-	Task     string   `help:"Launch an existing task's sandbox (same as 'pix task run NAME')." placeholder:"NAME"`
-	Keep     bool     `short:"k" help:"Keep the sandbox when the last shell exits: a sticky, identity-bound marker the teardown/orphan reaper refuses on (an explicit 'pix rm' still removes it)."`
+	// Replace is RETIRED (U04e). It is still parsed, hidden, so typing it
+	// answers with the standard PIX_RETIRED notice and the two-step
+	// replacement instead of kong's "unknown flag" — a stale script or shell
+	// history gets a recovery path, not a syntax error.
+	Replace bool   `hidden:"" help:"Retired: remove the sandbox explicitly (pix rm BOX), then run."`
+	Task    string `help:"Launch an existing task's sandbox (same as 'pix task run NAME')." placeholder:"NAME"`
+	Keep    bool   `short:"k" help:"Keep the sandbox when the last shell exits: a sticky, identity-bound marker the teardown/orphan reaper refuses on (an explicit 'pix rm' still removes it)."`
 
 	// PiArg is the `--` tail, rewritten by rewriteRunPassthrough. Hidden
 	// because a user never types it: they type `-- <pi args>`, which the
@@ -125,7 +136,6 @@ func (c *runCmd) opts() (launch.RunOpts, error) {
 		Name:        c.Name,
 		Model:       c.Model,
 		Intent:      c.Intent,
-		Replace:     c.Replace,
 		Pack:        c.Pack,
 		Passthrough: c.PiArg,
 		Keep:        c.Keep,
@@ -155,6 +165,11 @@ func (c *runCmd) opts() (launch.RunOpts, error) {
 }
 
 func (c *runCmd) Run(d *cli.Deps) error {
+	// The retired flag answers before ANY resolution, probe or mutation: the
+	// same inert contract every other retired surface holds (retired.go).
+	if c.Replace {
+		return retiredFlag(d.Err, "run", "--replace")
+	}
 	o, err := c.opts()
 	if err != nil {
 		return err
@@ -265,10 +280,10 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	o.Name = resolveSandboxName(o.Name, o.Workspace)
 	state := launch.ProbeTaskSandbox(defaultShellEnv(), o.Name)
 
-	// Mirror sbx's own model: an existing sandbox (running OR stopped)
-	// RE-ATTACHES rather than being recreated, so the create-only flags are not
-	// even RESOLVED here. --replace forces rm -f + create for either state.
-	creating := launch.WillCreate(state, o.Replace)
+	// Mirror sbx's own model: an existing sandbox (running OR stopped) is
+	// ATTACHED to rather than recreated, so the create-only flags are not even
+	// RESOLVED here. ONE predicate answers it, for this gate and for the plan.
+	creating := launch.WillCreate(state)
 	if creating {
 		// Kit selection. A CLEAN released version pins the matching git tag;
 		// anything else (unstamped "dev", "0.0.16+local", non-semver) is
@@ -313,7 +328,7 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 			}
 		}
 	} else if o.Dev {
-		fmt.Fprintln(d.Err, "pix: --dev is create/replace-only; re-attaching to the existing sandbox as-is (use --replace to recreate with --dev)")
+		fmt.Fprintf(d.Err, "pix: --dev is create-only; attaching to the existing sandbox as-is (to get --dev, %s)\n", launch.RecreateGuidance(o.Name))
 	}
 
 	// Active pack: mount its skills/ + knowledge/ into this sandbox. --pack
@@ -386,10 +401,10 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		o.StaticMCP = mcp.AllPreloadedMCP(append(append([]string(nil), cfg.MCP...), o.MCP...))
 	}
 
-	plan := launch.PlanSandboxLaunch(state, o.Replace, cfg, o, version)
+	plan := launch.PlanSandboxLaunch(state, cfg, o, version)
 	if plan.Err != nil {
-		// Fail closed BEFORE any output claims a replace/create/reattach is
-		// happening, and before RmFirst or exec (SbxUnknown + --replace).
+		// Fail closed BEFORE any output claims a create or attach is happening,
+		// and before exec (SbxUnknown).
 		return runFail(d, 1, "%v", plan.Err)
 	}
 	// U04c2: sessionKey is the lease identity for THIS workspace (the same
@@ -400,7 +415,7 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	sessionKey := launch.SessionName(o.Workspace)
 	fp := launch.SessionFingerprint(cfg, o)
 	attachExec := false
-	if plan.Reattach && !o.Replace {
+	if plan.Reattach {
 		_, attachExec = launch.FindPositivelyIdentifiedRunning(defaultShellEnv(), o.Name)
 	}
 	if !plan.Reattach {
@@ -408,23 +423,17 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 			return runFail(d, 1, "%v", verr)
 		}
 	}
+	// What this launch is DOING, in one line. Nothing here warns about
+	// create-only drift (a stale pack, a changed MCP set): those claims used to
+	// be assembled from a workspace marker and a launcher receipt, and now the
+	// recorded create-time FINGERPRINT decides them under the lifecycle lock —
+	// an attach that no longer matches is refused with RecreateGuidance rather
+	// than attached with a warning nobody can verify.
 	switch {
-	case o.Replace:
-		fmt.Fprintf(d.Err, "pix run: replacing sandbox %q\n", o.Name)
 	case plan.Reattach && state == launch.SbxRunning:
-		fmt.Fprintf(d.Err, "pix run: re-attaching to running sandbox %q\n", o.Name)
+		fmt.Fprintf(d.Err, "pix run: attaching to running sandbox %q\n", o.Name)
 	case plan.Reattach:
-		fmt.Fprintf(d.Err, "pix run: starting + attaching existing sandbox %q (use --replace to recreate with current kit/mcp/flags)\n", o.Name)
-	}
-	// A pack switched since this sandbox was created is create-only drift: its
-	// mcp/bin/skills won't attach without --replace, so say so.
-	if msg := launch.StalePackReattachWarning(cfg, o, plan.Reattach); msg != "" {
-		fmt.Fprintln(d.Err, msg)
-	}
-	// MCP attachment, checked PRECISELY via the launcher's own receipt whatever
-	// the reason a desired server is missing. Never auto-loads, only reports.
-	if msg := launch.McpReattachWarning(cfg, o, plan.Reattach); msg != "" {
-		fmt.Fprintln(d.Err, msg)
+		fmt.Fprintf(d.Err, "pix run: starting + attaching existing sandbox %q\n", o.Name)
 	}
 	// Lazy auto-start of the configured host services, under ONE short deadline
 	// (spawn lock + health poll); the launch proceeds regardless, and recall
@@ -449,27 +458,12 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		packForState = o.Pack
 	}
 	// A HARD contract: a generated prompt is the fenced agent's ONLY trusted
-	// host truth, so a launch that cannot build it ABORTS before exec.
-	// Destructive replacement is last: every fallible read-only preflight must
-	// pass before the old sandbox is removed.
-	var args []string
-	if perr := launch.PreflightBeforeReplace(func() error {
-		var preflightErr error
-		args, preflightErr = launch.InjectTrustedHostState(plan.Args, cfg, defaultShellEnv(), packForState)
-		if preflightErr != nil {
-			return fmt.Errorf("could not build trusted host state: %w", preflightErr)
-		}
-		return nil
-	}, func() error {
-		return launch.ApplyReplaceRm(defaultShellEnv(), d.Err, plan, o.Name)
-	}); perr != nil {
-		return runFail(d, 1, "%v", perr)
-	}
-	// Record the pack only after every hard-fail preflight and any replacement
-	// removal succeeded: a failed preflight leaves the old sandbox AND its
-	// create-time marker untouched.
-	if launch.DefinitelyCreating(state, o.Replace) {
-		launch.WriteSandboxPackMarker(o.Workspace, effectivePack)
+	// host truth, so a launch that cannot build it ABORTS before exec. Nothing
+	// destructive follows it any more — with --replace retired, this launch
+	// removes nothing, so there is no ordering left to get wrong.
+	args, perr := launch.InjectTrustedHostState(plan.Args, cfg, defaultShellEnv(), packForState)
+	if perr != nil {
+		return runFail(d, 1, "could not build trusted host state: %v", perr)
 	}
 
 	if os.Getenv("PIX_DEBUG") != "" {
@@ -491,8 +485,7 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	spec := launch.SessionSpec{
 		Key:               sessionKey,
 		Name:              o.Name,
-		Workspace:         workspace.CanonicalPath(o.Workspace),
-		Creating:          launch.DefinitelyCreating(state, o.Replace),
+		Creating:          creating,
 		Keep:              o.Keep,
 		CreateArgs:        args,
 		AttachTTY:         d.Interactive,
@@ -500,7 +493,6 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		Fingerprint:       fp,
 		Invocation:        invocation,
 		DefaultInvocation: invocation,
-		Preloaded:         o.StaticMCP,
 	}
 	deps := launch.SessionDeps{
 		Env:  defaultShellEnv(),
@@ -524,16 +516,6 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 			// create, no attach, no removal. run's own complete message.
 			return runFail(d, 1, "%v", refused)
 		}
-		var rerr *workspace.ReceiptRecordError
-		if errors.As(xerr, &rerr) {
-			// The sandbox itself WAS created successfully — only the local
-			// receipt failed. Say so honestly rather than implying the launch
-			// failed, but still exit non-zero: doctor/status must not be told
-			// this sandbox's MCP set is recorded when it isn't.
-			fmt.Fprintf(d.Err, "pix run: %v\n", rerr)
-			fmt.Fprintln(d.Err, "the sandbox itself launched fine; only pix's local record of its preloaded MCP set failed to write. check state-dir permissions and re-run `pix doctor`.")
-			return cli.SilentError{Code: 1}
-		}
 		var exitErr *exec.ExitError
 		if errors.As(xerr, &exitErr) {
 			// A pinned git #ref kit that sbx could not resolve fails with an opaque
@@ -544,7 +526,7 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 			// A re-attach can fail on an sbx that won't reattach a kit-created
 			// sandbox; never leave the user without a next step.
 			if plan.Reattach {
-				fmt.Fprintf(d.Err, "pix run: re-attach failed; recreate it with: %s\n", launch.RunReplaceCommand(o.Workspace))
+				fmt.Fprintf(d.Err, "pix run: attach failed; %s\n", launch.RecreateGuidance(o.Name))
 			}
 			return cli.SilentError{Code: exitErr.ExitCode()}
 		}
@@ -553,7 +535,7 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 			fmt.Fprintln(d.Err, "install sbx with: "+doctor.SbxInstallHint)
 		}
 		if plan.Reattach {
-			fmt.Fprintf(d.Err, "pix run: re-attach failed; recreate it with: %s\n", launch.RunReplaceCommand(o.Workspace))
+			fmt.Fprintf(d.Err, "pix run: attach failed; %s\n", launch.RecreateGuidance(o.Name))
 		}
 		return cli.SilentError{Code: 1}
 	}

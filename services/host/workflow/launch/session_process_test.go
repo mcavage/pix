@@ -130,10 +130,9 @@ func TestRunSession_RecordsBeforeWaiting_AndUnblocksAttachOnRecord(t *testing.T)
 	created := make(chan error, 1)
 	go func() {
 		created <- RunSession(SessionSpec{
-			Key: key, Name: "pix-demo", Workspace: ws, Creating: true,
+			Key: key, Name: "pix-demo", Creating: true,
 			CreateArgs:  []string{"run", "--name", "pix-demo"},
 			Fingerprint: fp, Invocation: []string{"--model", "m"},
-			Preloaded: []string{"slack"},
 		}, SessionDeps{Env: realEnv(), Poll: fastPoll(), Warn: io.Discard, Spawn: fixtureSpawn(t)})
 	}()
 
@@ -144,7 +143,7 @@ func TestRunSession_RecordsBeforeWaiting_AndUnblocksAttachOnRecord(t *testing.T)
 	attached := make(chan error, 1)
 	go func() {
 		attached <- RunSession(SessionSpec{
-			Key: key, Name: "pix-demo", Workspace: ws, AttachExec: true, AttachTTY: true,
+			Key: key, Name: "pix-demo", AttachExec: true, AttachTTY: true,
 			CreateArgs: []string{"run", "--name", "pix-demo"}, Fingerprint: fp,
 			DefaultInvocation: []string{"--unused-default"},
 		}, SessionDeps{Env: realEnv(), Poll: fastPoll(), Warn: io.Discard, Spawn: fixtureSpawn(t)})
@@ -224,7 +223,7 @@ func TestRunSession_AttachUnowned_UsesSafeDefaultArgv(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- RunSession(SessionSpec{
-			Key: key, Name: "pix-demo", Workspace: ws, AttachExec: true, AttachTTY: false, Keep: true,
+			Key: key, Name: "pix-demo", AttachExec: true, AttachTTY: false, Keep: true,
 			CreateArgs: []string{"run", "--name", "pix-demo"},
 			// A fingerprint that would DIVERGE if anything were recorded:
 			// nothing is, so there is nothing to compare against.
@@ -272,8 +271,8 @@ func TestRunSession_CreateArgvIsVerbatim(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- RunSession(SessionSpec{
-			Key: SessionName(ws), Name: "pix-demo", Workspace: ws, Creating: true,
-			CreateArgs: want, Invocation: []string{"--model", "m"}, Preloaded: []string{"slack"},
+			Key: SessionName(ws), Name: "pix-demo", Creating: true,
+			CreateArgs: want, Invocation: []string{"--model", "m"},
 		}, SessionDeps{Env: realEnv(), Poll: fastPoll(), Warn: io.Discard, Spawn: fixtureSpawn(t)})
 	}()
 	waitForFile(t, filepath.Join(fixture, "created"), 10*time.Second)
@@ -308,11 +307,10 @@ func TestSessionCreateHelperProcess(t *testing.T) {
 		return
 	}
 	err := RunSession(SessionSpec{
-		Key: os.Getenv("HELPER_KEY"), Name: "pix-demo", Workspace: os.Getenv("HELPER_WS"), Creating: true,
+		Key: os.Getenv("HELPER_KEY"), Name: "pix-demo", Creating: true,
 		CreateArgs:  []string{"run", "--name", "pix-demo"},
 		Fingerprint: sandbox.Fingerprint{"static_mcp": "slack"},
 		Invocation:  []string{"--model", "m"},
-		Preloaded:   []string{"slack"},
 		Keep:        true,
 	}, SessionDeps{Env: realEnv(), Poll: fastPoll(), Warn: os.Stderr, Spawn: func(argv []string) *exec.Cmd {
 		cmd := exec.Command("sbx", argv...)

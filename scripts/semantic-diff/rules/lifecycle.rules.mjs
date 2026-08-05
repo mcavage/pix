@@ -38,11 +38,11 @@
 // pin is silently skipped (pending, gate-green) with activation.json's
 // shipped (empty) content.
 export default [
-	// --- ACTIVE: force is scoped to explicit user/replace seams -------------
+	// --- ACTIVE: force is scoped to the ONE explicit user seam --------------
 	{
 		id: "lifecycle.rm.force-scoped-to-explicit-seams",
 		description:
-			"`sbx rm -f` fires in exactly two seams, both explicit: RemovePixSandbox (the user-facing `pix rm <name>` command) and ApplyReplaceRm, whose RmFirst is only true when the user passed --replace. AGENTS.md safety invariant #7 (\"an existing sandbox is never force-removed... --replace is the only path that recreates one\") depends on RmFirst's condition, not merely its name.",
+			"`sbx rm -f` fires in exactly ONE seam, and it is explicit: RemovePixSandbox, reachable only from a named `pix rm --force`. U04e deleted the second one (ApplyReplaceRm, gated on --replace): it removed with no zero-holder proof and outside the lifecycle lock, so it could destroy a sandbox another shell was live in. AGENTS.md safety invariant #7 now depends on there being no other caller.",
 		checks: [
 			{
 				file: "services/host/workflow/launch/sandbox.go",
@@ -50,14 +50,12 @@ export default [
 				values: ['env.Run("sbx", "rm", "-f", name)'],
 			},
 			{
-				file: "services/host/workflow/launch/run.go",
+				// The retired flag must stay retired: a table entry is what makes
+				// `pix run --replace` answer with the recovery path instead of
+				// quietly force-removing again.
+				file: "services/host/cmd/pix/retired.go",
 				kind: "contains",
-				values: ["if !plan.RmFirst {", 'env.Run("sbx", "rm", "-f", name)'],
-			},
-			{
-				file: "services/host/workflow/launch/sbxargs.go",
-				kind: "contains",
-				values: ["RmFirst: replace && (state == SbxRunning || state == SbxStopped),"],
+				values: ['retiredKey("run", "--replace"):'],
 			},
 		],
 	},
@@ -124,7 +122,7 @@ export default [
 	{
 		id: "lifecycle.session.record-before-lifecycle-unlock",
 		description:
-			"U04c2: launch.RunSession performs the whole transition inside lease.AttachRefUnderLifecycle's fn — lifecycle EXCLUSIVE held — so the child is started and every create-time fact (immutable instance id, fingerprint, exact pi invocation, MCP receipt) is recorded BEFORE the lifecycle lock is released and BEFORE the session is waited for. A creator SIGKILLed mid-session therefore still leaves a complete record, and a reaper acquiring the lifecycle lock next can never see a recorded sandbox with zero holders. The refs SHARED reference is taken by the SAME helper while lifecycle is still held; child.Wait() is called only after it returns.",
+			"U04c2: launch.RunSession performs the whole transition inside lease.AttachRefUnderLifecycle's fn — lifecycle EXCLUSIVE held — so the child is started and every create-time fact (immutable instance id, fingerprint, exact pi invocation) is recorded BEFORE the lifecycle lock is released and BEFORE the session is waited for. A creator SIGKILLed mid-session therefore still leaves a complete record, and a reaper acquiring the lifecycle lock next can never see a recorded sandbox with zero holders. The refs SHARED reference is taken by the SAME helper while lifecycle is still held; child.Wait() is called only after it returns.",
 		checks: [
 			{
 				file: "services/host/workflow/launch/session.go",
@@ -147,7 +145,7 @@ export default [
 			{
 				file: "services/host/workflow/launch/run.go",
 				kind: "contains",
-				values: ["func StartSbxRunAndRecordCreate(cmd *exec.Cmd, poll CreatePoll, writeReceipt bool, sandbox, ws string, preloaded []string) (*SessionChild, error) {"],
+				values: ["func StartSbxSession(cmd *exec.Cmd, poll CreatePoll, creating bool, sandbox string) (*SessionChild, error) {"],
 			},
 		],
 	},
@@ -219,7 +217,8 @@ export default [
 				kind: "contains",
 				values: [
 					"if diverged, found := CheckSessionFingerprint(spec.Key, spec.Fingerprint); found && len(diverged) > 0 {",
-					"refusing to attach. Recreate it explicitly:",
+					"refusing to attach. %s",
+					"RecreateGuidance(spec.Name)",
 				],
 			},
 		],

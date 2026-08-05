@@ -27,14 +27,17 @@ export default [
 		],
 	},
 	{
+		// U04e retired workspace.DeriveSandboxName (bare "pix-<basename>"): it had
+		// already drifted from run's default, which is sandbox.Name's digest form.
+		// The pix-* SCOPE the reaper and `pix rm` depend on is what actually
+		// matters, and it now has exactly one producer.
 		id: "sandbox-scope.prefix.derive-name",
-		description: "workspace.DeriveSandboxName still derives every default sandbox name as \"pix-\" + the workspace directory's base name.",
+		description: "sandbox.Name is the ONE default-sandbox-name derivation, and every name it produces is inside the pix-* scope `pix rm`/the reaper refuse outside of.",
 		checks: [
 			{
-				file: "services/host/workspace/resolve.go",
+				file: "services/host/sandbox/name.go",
 				kind: "contains",
-				region: { start: "func DeriveSandboxName(ws string) string {", end: "\n}\n" },
-				values: ['return "pix-" + base'],
+				values: ['const Prefix = "pix-"'],
 			},
 		],
 	},

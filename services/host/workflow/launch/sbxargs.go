@@ -43,11 +43,10 @@ type RunOpts struct {
 	Model     string   // --model M: active pi model (passed through to pi)
 	Models    []string // create-time callable model cycle, derived from probed bindings
 	Intent    string   // --intent NAME: resolve the session model via the router (unless --model overrides)
-	Replace   bool     // --replace: recreate (rm -f then create) instead of re-attaching
 	Pack      string   // --pack PATH: active pack for this run (overrides config.Pack)
 	// Keep is -k/--keep: bind a sticky, identity-bound keep marker to this
-	// session (see SetSessionKeep). Story04c wiring only — there is no reaper
-	// yet to consult it (see session.go's file doc).
+	// session — what the last-shell teardown and the orphan sweep refuse on
+	// (see reap.go's TeardownKeptKeep).
 	Keep bool
 	// PackKits are ephemeral mixin kit dir(s) synthesized from the active pack's
 	// bin/ wrappers. Deliberately SEPARATE from Kits: a non-empty Kits is the
@@ -233,13 +232,12 @@ func BuildAttachArgv(name string, tty bool, invocation []string) ([]string, erro
 	})
 }
 
-// RunLaunchPlan is the OUTCOME of the create-vs-reattach-vs-replace decision.
-// Err is set ONLY for the fail-closed unknown-state case: a non-nil Err means
-// Args/RmFirst/Reattach are meaningless zero values, and the caller MUST check
-// it before printing anything that claims a launch is happening, before
-// running RmFirst, and before exec'ing sbx at all.
+// RunLaunchPlan is the OUTCOME of the create-vs-attach decision. Err is set
+// ONLY for the fail-closed unknown-state case: a non-nil Err means Args and
+// Reattach are meaningless zero values, and the caller MUST check it before
+// printing anything that claims a launch is happening and before exec'ing sbx
+// at all.
 type RunLaunchPlan struct {
-	RmFirst  bool     // run `sbx rm -f <name>` before Args
 	Args     []string // sbx argv (after "sbx")
 	Reattach bool     // Args is the thin re-attach form, not a full create
 	Err      error
@@ -249,52 +247,50 @@ type RunLaunchPlan struct {
 // matching sbx's own re-attach model: a create-only flag (--kit/--template/
 // --static-mcp) only makes sense when the sandbox does not already exist.
 //
-//   - absent -> CREATE: the full BuildSbxArgs, unchanged.
-//   - unknown -> FAIL CLOSED: never guess create vs reattach. `sbx run` may
+//   - absent -> CREATE: the full BuildSbxArgs.
+//   - running or stopped -> ATTACH (BuildReattachArgs, or the `sbx exec` form
+//     the session layer substitutes under the lifecycle lock).
+//   - unknown -> FAIL CLOSED: never guess create vs attach. `sbx run` may
 //     reattach an existing sandbox, so guessing "absent" could replay runtime
 //     arguments into a live session.
-//   - running or stopped, no --replace -> RE-ATTACH (BuildReattachArgs).
-//   - any state, --replace -> `sbx rm -f <name>` (skipped when already absent)
-//     then a full create, so changed create-only flags take effect.
-func PlanSandboxLaunch(state SbxState, replace bool, cfg *config.Config, o RunOpts, version string) RunLaunchPlan {
+//
+// There is no third arm. U04e retired --replace, which added a `sbx rm -f`
+// before the create: an unproven forced removal that could destroy a sandbox
+// another shell was live in, issued outside the lifecycle lock the rest of this
+// lifecycle is serialized by. Removal is now always explicit and always
+// proof-gated (`pix rm`), so this decision has exactly the two outcomes the
+// runtime state has.
+func PlanSandboxLaunch(state SbxState, cfg *config.Config, o RunOpts, version string) RunLaunchPlan {
 	if state == SbxUnknown {
-		return RunLaunchPlan{Err: fmt.Errorf("could not determine whether sandbox %q exists (`sbx ls` failed or sbx is unavailable); refusing to create or reattach blind — fix sbx and retry", o.Name)}
+		return RunLaunchPlan{Err: fmt.Errorf("could not determine whether sandbox %q exists (`sbx ls` failed or sbx is unavailable); refusing to create or attach blind — fix sbx and retry", o.Name)}
 	}
-	if !WillCreate(state, replace) {
+	if !WillCreate(state) {
 		return RunLaunchPlan{Args: BuildReattachArgs(o), Reattach: true}
 	}
-	return RunLaunchPlan{
-		RmFirst: replace && (state == SbxRunning || state == SbxStopped),
-		Args:    BuildSbxArgs(cfg, o, version),
-	}
+	return RunLaunchPlan{Args: BuildSbxArgs(cfg, o, version)}
 }
 
-// WillCreate reports whether PlanSandboxLaunch will create (or replace) rather
-// than plainly re-attach — i.e. whether the create-only inputs (repo checkout /
-// --dev / kit resolution) are even needed. It is the single source of truth for
-// that branch so run.go can SKIP resolving create-only inputs before a plain
-// re-attach (which must never fail on a --dev problem it doesn't need) without
-// duplicating, and drifting from, PlanSandboxLaunch.
-func WillCreate(state SbxState, replace bool) bool {
-	if state == SbxUnknown {
-		return false
-	}
-	if replace {
-		return true
-	}
-	return state == SbxAbsent
-}
+// WillCreate is THE create-vs-attach predicate: a POSITIVE "not present" probe,
+// and nothing else. Unknown is false — an indeterminate read never authorizes
+// create-only work, exactly as PlanSandboxLaunch refuses to plan one.
+//
+// It is exported because the command layer must know the answer BEFORE the plan
+// exists: create-only inputs (kit resolution, --dev checkout, pack mount,
+// generated kits) are resolved only when they will be used, so a plain attach
+// never fails on a --dev problem it does not need. One function, consulted by
+// both, so the two can never disagree.
+//
+// U04e collapsed three predicates into this one. WillCreate(state, replace) and
+// DefinitelyCreating(state, replace) differed on exactly one input —
+// (unknown, --replace) — which PlanSandboxLaunch had already refused before
+// either was consulted, so they were two names and two doc comments for one
+// fact, with a third spelling (plan.Reattach) alongside them. Persisted
+// create-time state (the lease record, the fingerprint, the invocation) is
+// gated on THIS answer plus positive creation evidence from the runtime itself
+// (SessionChild.Appeared).
+func WillCreate(state SbxState) bool { return state == SbxAbsent }
 
-// DefinitelyCreating reports whether the launch is CERTAIN to create a fresh
-// sandbox: a POSITIVE "not present" probe, or --replace when removal actually
-// happens. Unknown is false here just as in WillCreate; this stricter predicate
-// guards persisted create-time state, which only positive creation evidence may
-// update.
-func DefinitelyCreating(state SbxState, replace bool) bool {
-	return state == SbxAbsent || (replace && state != SbxUnknown)
-}
-
-// BuildReattachArgs composes the argv for RE-ATTACHING: `run --name <name>`,
+// BuildReattachArgs composes the argv for ATTACHING: `run --name <name>`,
 // deliberately WITHOUT any create-only flag — sbx reads the agent from the
 // existing sandbox's own spec, so reapplying them would be a no-op at best and
 // a lie about what's running at worst. --model is NOT create-only: it is a pi

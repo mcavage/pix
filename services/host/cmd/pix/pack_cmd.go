@@ -55,7 +55,7 @@ integrations, proxy wrappers and config. See docs/design/packs.md.
 Adopting a pack that runs HOST code (a local MCP server, a host wrapper, an
 external [[bin]]) halts at a Tier-1 bill-of-materials review ([y/N], default
 No). A non-TTY adoption fails closed unless --yes. MCP attach and sandbox bin/
-wrappers need a recreate ('pix run --replace') to take effect.
+wrappers need a recreate ('pix rm <box>', then 'pix run') to take effect.
 
 Paths default to the default pack root (~/.local/share/pix/default); every
 "add" implicit-creates the pack it writes into.`

@@ -1269,7 +1269,7 @@ func WriteMemoryScope(ws string, p *Info) {
 // sandbox-facet change MUST print, because --mcp/--kit are create-only.
 func printPackRecreateLine(out io.Writer) {
 	fmt.Fprintln(out, "MCP attach + sandbox bin/ wrappers + pack skills only take effect on a sandbox CREATE.")
-	fmt.Fprintln(out, "Recreate to pick them up:  pix run --replace")
+	fmt.Fprintln(out, "Recreate to pick them up:  pix rm <box> && pix run  (`pix ls` names the box)")
 }
 
 // --- verb tree --------------------------------------------------------------

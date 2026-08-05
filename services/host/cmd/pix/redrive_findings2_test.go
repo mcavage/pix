@@ -31,7 +31,6 @@ import (
 	"pix/host/workflow/launch"
 	"pix/host/workflow/onboard"
 	"pix/host/workflow/provision"
-	"pix/host/workspace"
 )
 
 // --- finding 8: catalog MCP readiness gate ---------------------------------
@@ -282,17 +281,30 @@ func TestParseMcpLoadArgs(t *testing.T) {
 	}
 }
 
-// TestParseMcpLoadArgs_FailureWritesNoReceipt: a usage failure returns before
-// any sandbox name is derived, so nothing downstream (exec, receipt) can run.
-// The receipt path is only reachable via mcp.ExecSbxMcpLoadAndRecord, which the
-// wiring tests already gate on a successful exec; here we prove the parse
-// layer rejects without touching launcher state at all.
-func TestParseMcpLoadArgs_FailureWritesNoReceipt(t *testing.T) {
-	sd := t.TempDir()
-	orig := workspace.MCPStateDirFn
-	workspace.MCPStateDirFn = func() (string, error) { return sd, nil }
-	t.Cleanup(func() { workspace.MCPStateDirFn = orig })
+// TestMcpLoadSandbox_IsRunsOwnDefaultName: `pix mcp load NAME [DIR]` must
+// target the SAME box `pix run DIR` would, and it derives that name rather than
+// looking it up — U04e deleted the receipt store the old resolver scanned, and
+// with it the stale "pix-<basename>" fallback that named a sandbox nothing
+// creates. One derivation shared by both commands is what makes them agree.
+func TestMcpLoadSandbox_IsRunsOwnDefaultName(t *testing.T) {
+	ws := t.TempDir()
+	got := resolveSandboxName("", ws)
+	if got != resolveSandboxName("", ws) {
+		t.Error("the derivation must be stable for one workspace")
+	}
+	if other := resolveSandboxName("", t.TempDir()); other == got {
+		t.Error("two different workspaces must not derive one sandbox name")
+	}
+	if !strings.HasPrefix(got, "pix-") {
+		t.Errorf("derived sandbox %q must be in the pix-* scope pix rm owns", got)
+	}
+}
 
+// TestParseMcpLoadArgs_FailureIsInertOnDisk: a usage failure returns before any
+// sandbox name is derived and before sbx is consulted, so nothing downstream
+// can run or write.
+func TestParseMcpLoadArgs_FailureIsInertOnDisk(t *testing.T) {
+	sd := t.TempDir()
 	if _, _, err := mcp.ParseMcpLoadArgs([]string{"slack", filepath.Join(sd, "nope")}); err == nil {
 		t.Fatal("expected a usage failure")
 	}

@@ -194,11 +194,6 @@ func TestRunSession_LastShellOut_KeptWhileAnotherProcessHoldsARef(t *testing.T) 
 		}
 	}
 	assertLeaseStateCleared(t, leaseDir)
-	// The MCP receipt is deliberately RETAINED: reaping receipts is its own
-	// slice, and the next create's pre-create clear is the backstop.
-	if _, err := os.Stat(filepath.Join(leaseDir, "mcp.json")); err != nil {
-		t.Errorf("the create receipt must survive this slice's teardown: %v", err)
-	}
 }
 
 // TestRunSession_LastShellOut_RemovesWhenAlone: the single-shell case, which is
@@ -269,11 +264,10 @@ func runFixtureSessionKeep(t *testing.T, key, ws string, warn io.Writer, opts Te
 func runFixtureSessionSpec(t *testing.T, key, ws string, warn io.Writer, opts TeardownOptions, keep bool) error {
 	t.Helper()
 	return RunSession(SessionSpec{
-		Key: key, Name: "pix-demo", Workspace: ws, Creating: true, Keep: keep,
+		Key: key, Name: "pix-demo", Creating: true, Keep: keep,
 		CreateArgs:  []string{"run", "--name", "pix-demo"},
 		Fingerprint: sandbox.Fingerprint{"static_mcp": "slack"},
 		Invocation:  []string{"--model", "m"},
-		Preloaded:   []string{"slack"},
 	}, SessionDeps{
 		Env: realEnv(), Poll: fastPoll(), Warn: warn,
 		Spawn:    fixtureSpawn(t),

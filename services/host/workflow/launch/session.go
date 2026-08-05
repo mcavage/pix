@@ -12,7 +12,7 @@
 //
 //	lifecycle EX  ->  re-probe the runtime under it  ->  start the child
 //	              ->  (create) poll until visible, then record instance id,
-//	                  fingerprint, invocation and the MCP receipt
+//	                  fingerprint and invocation
 //	              ->  refs SH (still under lifecycle EX)
 //	              ->  lifecycle UNLOCK  ->  wait for the session to exit
 //
@@ -139,9 +139,14 @@ func SetSessionKeep(sessionKey string) error {
 // SessionFingerprint captures the identity-relevant facets of a launch that
 // must agree between create and attach: the resolved create-time preloaded
 // MCP set and the pinned image/template. Deliberately EXCLUDES anything
-// create-only-heavy (kit resolution, --dev checkout) — WillCreate exists
-// specifically so a plain re-attach never re-resolves those, and this
-// fingerprint must be cheaply recomputable on every attach without doing so.
+// create-only-heavy (kit resolution, --dev checkout) — an attach never
+// re-resolves those, and this fingerprint must be cheaply recomputable on
+// every attach without doing so.
+//
+// The static-MCP facet is load-bearing since U04e: it is what makes a changed
+// MCP set REFUSE an attach with the recreate guidance, replacing the warning
+// that used to compare the desired set against a launcher-written receipt and
+// report an unprovable "not attached" gap.
 func SessionFingerprint(cfg *config.Config, o RunOpts) sandbox.Fingerprint {
 	mcpSet := o.StaticMCP
 	if len(mcpSet) == 0 && cfg != nil {
@@ -358,13 +363,13 @@ func SessionRecorded(sessionKey string) bool {
 // by the command layer BEFORE the lifecycle lock is taken; nothing here is
 // re-derived under it except the runtime state itself (see RunSession).
 type SessionSpec struct {
-	Key       string // lease identity (SessionName)
-	Name      string // the ACTUAL sbx sandbox name this launch targets
-	Workspace string // canonical workspace, for the MCP receipt
+	Key  string // lease identity (SessionName)
+	Name string // the ACTUAL sbx sandbox name this launch targets
 
-	// Creating is DefinitelyCreating: this launch is CERTAIN to create a
-	// fresh sandbox, so the create-evidence poll, the MCP receipt and the
-	// lease record all apply. Anything less certain attaches.
+	// Creating is the one create-vs-attach fact, decided once by the command
+	// layer from a POSITIVE probe (see PlanSandboxLaunch): this launch will
+	// create a fresh sandbox, so the create-evidence poll and the lease record
+	// apply. Anything less certain attaches.
 	Creating bool
 	// Keep is -k/--keep: bind an identity-bound keep AFTER the record exists.
 	Keep bool
@@ -389,7 +394,6 @@ type SessionSpec struct {
 	// when nothing was ever recorded (a legacy or never-owned sandbox) — the
 	// same BuildPiInvocation a create would have sent, never an invented one.
 	DefaultInvocation []string
-	Preloaded         []string // the exact --static-mcp set, for the receipt
 }
 
 // SessionDeps are the collaborators RunSession cannot conjure: the env its
@@ -434,8 +438,8 @@ func (e *SessionRefused) Unwrap() error { return e.Err }
 //     other answer is exactly the guess this package refuses to make. It
 //     never force-removes anything to resolve the race;
 //  3. on create: start the child, poll until the sandbox is VISIBLE, then
-//     record the immutable instance id, the fingerprint, the exact pi
-//     invocation and the MCP receipt. On attach: validate the recorded
+//     record the immutable instance id, the fingerprint and the exact pi
+//     invocation. On attach: validate the recorded
 //     fingerprint (a divergence refuses; no record attaches UNOWNED with the
 //     safe default invocation) and start `sbx exec -it/-i` with the STORED
 //     invocation;
@@ -445,9 +449,8 @@ func (e *SessionRefused) Unwrap() error { return e.Err }
 //  5. release lifecycle, THEN wait for the session to exit, holding only the
 //     shared reference — which the kernel releases even on SIGKILL.
 //
-// The returned error is the child's own (an *exec.ExitError the caller maps
-// to an exit code), a *workspace.ReceiptRecordError when only local recording
-// failed, or a *SessionRefused decided before anything started.
+// The returned error is the child's own (an *exec.ExitError the caller maps to
+// an exit code) or a *SessionRefused decided before anything started.
 func RunSession(spec SessionSpec, deps SessionDeps) error {
 	if deps.Spawn == nil {
 		return fmt.Errorf("launch: RunSession needs a Spawn (the command layer owns stdio wiring)")
@@ -525,7 +528,7 @@ func reportTeardown(warn io.Writer, res TeardownResult) {
 // as its own function so the leased path above reads as the one true ordering
 // rather than a maze of nil checks.
 func runSessionUnleased(spec SessionSpec, deps SessionDeps) error {
-	child, err := StartSbxRunAndRecordCreate(deps.Spawn(spec.CreateArgs), deps.Poll, spec.Creating, spec.Name, spec.Workspace, spec.Preloaded)
+	child, err := StartSbxSession(deps.Spawn(spec.CreateArgs), deps.Poll, spec.Creating, spec.Name)
 	if err != nil {
 		return err
 	}
@@ -553,8 +556,8 @@ func startSessionTransition(spec SessionSpec, deps SessionDeps) (*SessionChild, 
 			return nil, &SessionRefused{Err: fmt.Errorf("%q disappeared while this launch was preparing — nothing was created or removed; re-run to create it", spec.Name)}
 		}
 		if diverged, found := CheckSessionFingerprint(spec.Key, spec.Fingerprint); found && len(diverged) > 0 {
-			return nil, &SessionRefused{Err: fmt.Errorf("%q was created with a different %s — refusing to attach. Recreate it explicitly: %s",
-				spec.Name, strings.Join(diverged, ", "), RunReplaceCommand(spec.Workspace))}
+			return nil, &SessionRefused{Err: fmt.Errorf("%q was created with a different %s — refusing to attach. %s",
+				spec.Name, strings.Join(diverged, ", "), RecreateGuidance(spec.Name))}
 		}
 		if spec.AttachExec {
 			// The stored create-time invocation is replayed VERBATIM; a
@@ -574,7 +577,7 @@ func startSessionTransition(spec SessionSpec, deps SessionDeps) (*SessionChild, 
 		}
 	}
 
-	child, err := StartSbxRunAndRecordCreate(deps.Spawn(argv), deps.Poll, spec.Creating, spec.Name, spec.Workspace, spec.Preloaded)
+	child, err := StartSbxSession(deps.Spawn(argv), deps.Poll, spec.Creating, spec.Name)
 	if err != nil {
 		return nil, err
 	}

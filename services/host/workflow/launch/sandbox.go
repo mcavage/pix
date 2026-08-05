@@ -61,19 +61,6 @@ func classifySbxListing(out, name string) SbxState {
 	return SbxAbsent
 }
 
-// OverlayReceiptDirs replaces best-effort sbx display data with Pix's trusted
-// create receipt, which records the canonical workspace passed to the
-// successful create and is therefore authoritative when packs add other host
-// paths to the sbx listing.
-func OverlayReceiptDirs(boxes []workspace.SbxBox, stateDir string) {
-	for i := range boxes {
-		receipt, status, err := workspace.ReadMCPReceipt(stateDir, boxes[i].Name)
-		if err == nil && status == workspace.MCPStateOK && receipt != nil {
-			boxes[i].Dir = receipt.Workspace
-		}
-	}
-}
-
 // Ls lists the pix sandboxes on this host. It returns an error rather than
 // exiting: the exit code is the root's one mapper, not this function's.
 func Ls(env hostenv.Env, out io.Writer, jsonOut bool) error {
@@ -85,10 +72,11 @@ func Ls(env hostenv.Env, out io.Writer, jsonOut bool) error {
 	if timedOut || err != nil {
 		return fmt.Errorf("sbx ls failed: %v", err)
 	}
+	// DIR is sbx's own best-effort column, and it is labelled as sbx's: the
+	// launcher used to overlay it with a workspace it had recorded at create
+	// time, which was a second store of a fact only the runtime can answer for
+	// a box that may since have been recreated by anyone.
 	boxes := workspace.ParsePixBoxes(raw)
-	if stateDir, derr := workspace.MCPStateDirFn(); derr == nil {
-		OverlayReceiptDirs(boxes, stateDir)
-	}
 	if jsonOut {
 		b, err := json.MarshalIndent(boxes, "", "  ")
 		if err != nil {
@@ -200,7 +188,7 @@ func Rm(env hostenv.Env, out, errOut io.Writer, opts RmOptions) error {
 			continue
 		}
 		if opts.Force {
-			if err := RemovePixSandbox(env, errOut, n); err != nil {
+			if err := RemovePixSandbox(env, n); err != nil {
 				fmt.Fprintf(errOut, "failed to remove %s: %v\n", n, err)
 				failed = true
 				continue
@@ -255,21 +243,11 @@ func validateRmShape(opts RmOptions) error {
 	return nil
 }
 
-// RemovePixSandbox force-removes name and, on SUCCESS, clears the launcher's
-// per-sandbox MCP receipt — a removed sandbox's receipt describes a dead
-// lifetime. A failed rm returns the error and RETAINS the receipt: an unknown
-// removal outcome must keep the evidence, never discard it on a guess. The
-// clear itself is best-effort (the removal DID succeed, and the next create's
-// pre-create clear is the correctness backstop), and its note goes to the
-// caller's warn stream — this package writes to no stream it picked itself.
-func RemovePixSandbox(env hostenv.Env, warn io.Writer, name string) error {
-	if _, err := env.Run("sbx", "rm", "-f", name); err != nil {
-		return err
-	}
-	if err := workspace.ClearRemovedReceipt(name); err != nil {
-		fmt.Fprintf(warn, "warning: removed %s but could not clear its mcp receipt: %v\n", name, err)
-	}
-	return nil
+// RemovePixSandbox force-removes name. It is reachable ONLY from an explicitly
+// named `pix rm --force` (see Rm): the one forced seam, typed by a human.
+func RemovePixSandbox(env hostenv.Env, name string) error {
+	_, err := env.Run("sbx", "rm", "-f", name)
+	return err
 }
 
 // LsDescription and RmDescription are the long help the root's generated usage

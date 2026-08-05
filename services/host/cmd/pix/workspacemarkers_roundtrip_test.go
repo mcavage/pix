@@ -25,9 +25,14 @@
 //	                                   memory-capture.ts)
 //	.pix/ollama-bridge.model    — Go writes (run.go launch.WriteOllamaBridgeFile),
 //	                                   TS reads (ollama-bridge.ts)
-//	.pix/sandbox.pack           — Go writes AND reads
-//	                                   (launch.WriteSandboxPackMarker /
-//	                                   launch.ReadSandboxPackMarker); no TS reader
+//	(.pix/sandbox.pack           — RETIRED, U04e: it recorded the pack root a
+//	                                   sandbox was created with, so a later
+//	                                   re-attach could warn that the active
+//	                                   pack had changed. The create-time
+//	                                   session FINGERPRINT decides that now,
+//	                                   under the lifecycle lock, and REFUSES
+//	                                   rather than warning. No writer, no
+//	                                   reader, no file.)
 //	.pix/onboarding.json         — the IN-SANDBOX AGENT writes it (not Go);
 //	                                   Go reads + removes it (onboard.ReconcileOnboarding)
 //	.pix/host-state.json         — NEVER a file on EITHER side, by design
@@ -133,33 +138,6 @@ func TestMarkerRoundTrip_OllamaBridgeModel(t *testing.T) {
 	}
 }
 
-// ── sandbox.pack ─────────────────────────────────────────────────────────
-
-func TestMarkerRoundTrip_SandboxPack(t *testing.T) {
-	ws := t.TempDir()
-	packRoot := filepath.Join(t.TempDir(), "mypack")
-	if err := os.MkdirAll(packRoot, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	launch.WriteSandboxPackMarker(ws, packRoot)
-
-	want := pack.CanonicalizePackRoot(packRoot)
-	got := launch.ReadSandboxPackMarker(ws)
-	if got != want {
-		t.Errorf("launch.ReadSandboxPackMarker = %q, want %q", got, want)
-	}
-	raw := readFile(t, launch.SandboxPackMarkerPath(ws))
-	if raw != want+"\n" {
-		t.Errorf("sandbox.pack file = %q, want %q", raw, want+"\n")
-	}
-
-	// Pack-less creation removes any prior marker.
-	launch.WriteSandboxPackMarker(ws, "")
-	if got := launch.ReadSandboxPackMarker(ws); got != "" {
-		t.Errorf("launch.ReadSandboxPackMarker after pack-less write = %q, want empty", got)
-	}
-}
-
 // ── onboarding.json ──────────────────────────────────────────────────────
 //
 // Unlike every marker above, this file is written by the IN-SANDBOX AGENT,
@@ -216,7 +194,6 @@ func TestMarkerRoundTrip_HostStateNeverBecomesAWorkspaceFile(t *testing.T) {
 	// Write every OTHER real marker into the same workspace...
 	pack.WriteMemoryScope(ws, &pack.Info{Manifest: pack.Manifest{MemoryScope: "work"}})
 	launch.WriteOllamaBridgeFile(ws, "qwen3.5:9b")
-	launch.WriteSandboxPackMarker(ws, filepath.Join(ws, "pack"))
 	var out bytes.Buffer
 	if err := os.WriteFile(filepath.Join(ws, ".pix", onboard.FileName), []byte(`{"version":1}`), 0o644); err != nil {
 		t.Fatal(err)
