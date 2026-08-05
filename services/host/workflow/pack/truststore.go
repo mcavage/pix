@@ -27,7 +27,7 @@ const packTrustStoreName = "pack-trust.json"
 
 // packTrustLockPath is the advisory cross-process lock file serializing every
 // trust-store read-modify-write. It lives in the STATE dir — never in the config
-// dir beside the store, so a `pix state reset` cannot orphan a held lock.
+// dir beside the store, so moving the config dir aside cannot orphan a held lock.
 func packTrustLockPath() string {
 	dir, err := config.StateDir()
 	if err != nil {

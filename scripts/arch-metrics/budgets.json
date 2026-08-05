@@ -16,10 +16,10 @@
       "exits": 4
     },
     "pix/host/cmd/pix": {
-      "prod_loc": 3262,
+      "prod_loc": 3207,
       "exports": 15,
-      "globals": 13,
-      "edges": 23,
+      "globals": 12,
+      "edges": 22,
       "exits": 2
     },
     "pix/host/config": {
@@ -190,13 +190,6 @@
       "edges": 12,
       "exits": 0
     },
-    "pix/host/workflow/reset": {
-      "prod_loc": 687,
-      "exports": 7,
-      "globals": 5,
-      "edges": 5,
-      "exits": 0
-    },
     "pix/host/workflow/task": {
       "prod_loc": 833,
       "exports": 42,
@@ -205,8 +198,8 @@
       "exits": 0
     },
     "pix/host/workspace": {
-      "prod_loc": 268,
-      "exports": 14,
+      "prod_loc": 251,
+      "exports": 12,
       "globals": 2,
       "edges": 2,
       "exits": 0

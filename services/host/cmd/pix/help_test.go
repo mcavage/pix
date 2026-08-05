@@ -161,7 +161,7 @@ func TestMemoryHelp_NoRPC(t *testing.T) {
 // it. An unknown verb falls through to the tiered screen at exit 0, because
 // `pix help <anything>` is a question, never a mistake.
 func TestHelpVerb_RoutesToGeneratedUsage(t *testing.T) {
-	for _, verb := range []string{"run", "config", "status", "doctor", "setup", "memory", "mem", "pack", "mcp", "state"} {
+	for _, verb := range []string{"run", "config", "status", "doctor", "setup", "memory", "mem", "pack", "mcp"} {
 		d, out, errb := rootDeps()
 		if code := dispatch([]string{"help", verb}, d); code != 0 {
 			t.Errorf("pix help %s = %d, want 0 (stderr: %s)", verb, code, errb.String())
@@ -183,7 +183,7 @@ func TestHelpVerb_RoutesToGeneratedUsage(t *testing.T) {
 // TestHelpAll_ListsExpertVerbs: `help --all` must name the rare/expert verbs the
 // curated Core listing hides.
 func TestHelpAll_ListsExpertVerbs(t *testing.T) {
-	for _, v := range []string{"mcp", "secret", "state", "reset", "task", "version"} {
+	for _, v := range []string{"mcp", "secret", "task", "version"} {
 		if !strings.Contains(helpAll(), v) {
 			t.Errorf("help --all missing %q", v)
 		}
@@ -196,8 +196,8 @@ func TestSuggestVerb(t *testing.T) {
 	if s, ok := suggestVerb("memoyr"); !ok || s != "memory" {
 		t.Errorf("suggestVerb(memoyr) = %q,%v, want memory,true", s, ok)
 	}
-	if s, ok := suggestVerb("stat"); !ok || (s != "status" && s != "state") {
-		t.Errorf("suggestVerb(stat) = %q,%v, want status|state,true", s, ok)
+	if s, ok := suggestVerb("stat"); !ok || (s != "status" && s != "st") {
+		t.Errorf("suggestVerb(stat) = %q,%v, want status|st,true", s, ok)
 	}
 	if s, ok := suggestVerb("zzzzzzzz"); ok {
 		t.Errorf("suggestVerb(zzzzzzzz) = %q,%v, want no suggestion", s, ok)

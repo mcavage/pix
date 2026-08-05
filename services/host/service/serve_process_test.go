@@ -215,8 +215,8 @@ func TestReadLiveServePid_RealProcess(t *testing.T) {
 	}
 }
 
-// ServeIdentityUp is the answer `pix reset` gates its destructive steps on, and
-// it is a question about PROCESS IDENTITY, not about a port: a REAL live
+// ServeIdentityUp is the answer a state-mutating caller gates its destructive
+// steps on, and it is a question about PROCESS IDENTITY, not about a port: a REAL live
 // `pix-host serve` in the pidfile reads UP with nothing bound anywhere; a dead
 // pid reads down; a live process that is provably NOT ours reads down; and the
 // settle wait returns down as soon as the process actually exits (a bootout or

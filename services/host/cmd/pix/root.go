@@ -60,9 +60,6 @@ type rootCmd struct {
 	Mcp    mcpCmd    `cmd:"" group:"Integrations & credentials" help:"register | ls | load | auth | bundle."`
 	Secret SecretCmd `cmd:"" group:"Integrations & credentials" help:"ls | set | rm | check | sync the op-refs."`
 
-	State stateCmd `cmd:"" group:"State (on-disk lifecycle)" help:"reset (grouped alias)."`
-	Reset resetCmd `cmd:"" group:"State (on-disk lifecycle)" help:"Move Pix's state aside (reversible). (WRITES)"`
-
 	Version versionCmd `cmd:"" group:"Meta" help:"Print the stamped launcher version."`
 	Help    helpCmd    `cmd:"" group:"Meta" passthrough:"" help:"Print this help (or a verb's usage)."`
 }

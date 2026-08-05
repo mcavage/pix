@@ -80,8 +80,8 @@ func (s *supervisor) ensure(selfPath string) *supervise.Tree {
 }
 
 // supervisorDirs resolves the staging + reattach state dirs under the STATE dir
-// (never the config dir), so `pix reset` cannot orphan a running unit from the
-// state that identifies it.
+// (never the config dir), so moving the config dir aside can never orphan a
+// running unit from the state that identifies it.
 func supervisorDirs() (stage, state string) {
 	dir, err := config.StateDir()
 	if err != nil {

@@ -97,7 +97,7 @@ func TestStopServe_NoPidfile(t *testing.T) {
 }
 
 // TestStopServe_NoPidfile_DiscoversOrphan: no pidfile, but a live verified-ours
-// serve is discovered (the `pix reset` orphan case) => it is stopped.
+// serve is discovered (the orphaned-config-dir case) => it is stopped.
 func TestStopServe_NoPidfile_DiscoversOrphan(t *testing.T) {
 	removed := false
 	proc := &fakeProc{pid: 5150, alive: true, dieOnTerm: true}

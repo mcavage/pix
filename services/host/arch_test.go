@@ -120,6 +120,13 @@ var pkgLayer = map[string]int{
 	// snapshot|restore` at root (memory_snapshot.go) — one sqlite file, not an
 	// archive format, and not this launcher package.
 	//
+	// workflow/reset (the launcher-side `pix reset`/`pix state reset` move-
+	// things-aside verb, 687 lines) is GONE too (U11r): ephemeral sandboxes plus
+	// setup/doctor do its job now, and recovering from a broken host is a manual,
+	// evidence-first walk (`pix doctor` -> `pix config path`/`pix status --json`
+	// -> `pix setup`), never an automated wipe. Both surfaces answer with the
+	// standard PIX_RETIRED notice (retired.go); nothing imports the package.
+	//
 	// slack (the OAuth/credential/MCP-registration workflow, plus the slackoauth
 	// L1 capability underneath it) was externalized in W2/U02a — see
 	// docs/design/slack-setup.md — and neither package exists in the public tree.
@@ -136,7 +143,6 @@ var pkgLayer = map[string]int{
 	// docs/design/gworkspace-externalization.md — so that package is gone too;
 	// gog is registered generically through `pix mcp register`.
 	"workflow/pack":   layerWorkflow,
-	"workflow/reset":  layerWorkflow,
 	"workflow/doctor": layerWorkflow,
 	"workflow/launch": layerWorkflow,
 	// workflow/models is `pix models add`: the inference selection, live

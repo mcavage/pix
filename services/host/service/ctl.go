@@ -55,7 +55,7 @@ func DefaultCtl() serveCtl {
 // "running" means — only on what they DO about it.
 type pidProbe struct {
 	pid     int   // 0 when the pidfile was missing or unparseable
-	missing bool  // no pidfile at all (the common `pix reset` orphan case)
+	missing bool  // no pidfile at all (the common orphaned-config-dir case)
 	alive   bool  // kill(pid, 0) succeeded
 	ours    bool  // verified our own `pix-host serve`
 	known   bool  // the identity question was answerable at all
@@ -216,9 +216,9 @@ func Stop(ctl serveCtl, out io.Writer) (stopped bool, err error) {
 	case pr.err != nil:
 		return false, fmt.Errorf("read pidfile %s: %w", path, pr.err)
 	case pr.missing:
-		// No pidfile. This is the common orphan case after `pix reset` (which
-		// moves the config dir — pidfile included — aside while a daemon keeps
-		// running). Fall back to discovery.
+		// No pidfile. This is the common orphan case when the config dir —
+		// pidfile included — is moved aside by hand while a daemon keeps
+		// running. Fall back to discovery.
 		return stopServeByDiscovery(ctl, out)
 	case pr.pid == 0:
 		_ = ctl.removePid(path)
@@ -248,7 +248,7 @@ func Stop(ctl serveCtl, out io.Writer) (stopped bool, err error) {
 
 // stopServeByDiscovery handles the missing-pidfile case: of ctl.discover's
 // candidates it keeps only pids POSITIVELY verified as our live serve, and stops
-// each. This is what recovers the daemon `pix reset` orphaned.
+// each. This is what recovers a daemon orphaned by a moved-aside config dir.
 func stopServeByDiscovery(ctl serveCtl, out io.Writer) (bool, error) {
 	var ours []int
 	if ctl.discover != nil {
