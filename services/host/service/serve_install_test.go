@@ -68,7 +68,7 @@ func TestRenderPlist(t *testing.T) {
 		HostBin: "/home/u/.local/bin/pix-host",
 		Home:    "/home/u",
 		LogPath: logPath,
-		Label:   serveLaunchdLabel,
+		Label:   LaunchdLabel,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -198,7 +198,7 @@ func TestRenderPlistEscapesXMLMetachars(t *testing.T) {
 	got, err := renderPlist(plistData{
 		HostBin: evil,
 		Home:    "/home/u",
-		LogPath: `/logs/a&b"c'd/out.log`, Label: serveLaunchdLabel,
+		LogPath: `/logs/a&b"c'd/out.log`, Label: LaunchdLabel,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -218,7 +218,7 @@ func TestRenderPlistEscapesXMLMetachars(t *testing.T) {
 func TestRenderPlistRejectsControlChars(t *testing.T) {
 	_, err := renderPlist(plistData{
 		HostBin: "/bin/x\n<key>Injected</key>",
-		Home:    "/home/u", LogPath: "/l/o", Label: serveLaunchdLabel,
+		Home:    "/home/u", LogPath: "/l/o", Label: LaunchdLabel,
 	})
 	if err == nil {
 		t.Fatal("newline in HostBin accepted")
@@ -257,7 +257,7 @@ func TestCapturedServeEnv(t *testing.T) {
 func TestRenderPlistCarriesCapturedEnv(t *testing.T) {
 	got, err := renderPlist(plistData{
 		HostBin: "/opt/pix-host", Home: "/Users/u",
-		LogPath: "/l/o", Label: serveLaunchdLabel,
+		LogPath: "/l/o", Label: LaunchdLabel,
 		Env: []envKV{
 			{Key: "PIX_CONFIG", Value: "/custom/config.toml"},
 			{Key: "MEMORY_PORT", Value: "21435"},
@@ -427,7 +427,7 @@ func TestRenderPlistHomeWithDoubleDashProducesValidXML(t *testing.T) {
 		HostBin: "/opt/pix-host",
 		Home:    home,
 		LogPath: config.ServeLogPath(),
-		Label:   serveLaunchdLabel,
+		Label:   LaunchdLabel,
 	})
 	if err != nil {
 		t.Fatal(err)

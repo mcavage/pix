@@ -1,6 +1,8 @@
-// serve_install.go implements the MANAGED LOGIN SERVICE (docs/design/
+// install.go implements the MANAGED LOGIN SERVICE (docs/design/
 // serve-lifecycle.md §2): `pix serve install` / `serve uninstall` register
-// `pix-host serve` as a launchd LaunchAgent — pix's host lifecycle is macOS
+// `pix-host serve` as a launchd LaunchAgent (macOS only — see install_other.go).
+// Every argv choice lives here, unit-tested through an injected runner; the
+// platform files bind only the real runner, uid and $HOME.
 
 package service
 
@@ -21,12 +23,10 @@ import (
 	"pix/host/launcher"
 )
 
-// serveLaunchdLabel is the LaunchAgent label (and plist basename).
-const serveLaunchdLabel = "com.pix.serve"
-
-// LaunchdLabel exports the label for health's launchd probe. Exported rather
-// than copied: probing a label the installer never writes is worse than none.
-const LaunchdLabel = serveLaunchdLabel
+// LaunchdLabel is the LaunchAgent label (and plist basename). Exported rather
+// than copied for health's launchd probe: probing a label the installer never
+// writes is worse than not probing at all.
+const LaunchdLabel = "com.pix.serve"
 
 // The embedded template is the SINGLE SOURCE OF TRUTH for the generated plist.
 //
@@ -34,15 +34,15 @@ const LaunchdLabel = serveLaunchdLabel
 var plistTemplate string
 
 // envKV is one install-time environment override rendered into the generated
-// unit (H6). Order is preserved so the rendered files are deterministic.
+// unit (H6), in a deterministic order.
 type envKV struct {
 	Key   string
 	Value string
 }
 
-// capturedServeEnvVars is the documented allowlist of daemon-relevant env vars
-// captured at `serve install` time (beyond the always-rendered
-// PIX_CONFIG): they change which config/store/ports the daemon reads, so
+// capturedServeEnvVars is the allowlist of daemon-relevant env vars captured at
+// `serve install` time (beyond the always-rendered PIX_CONFIG): they decide which
+// config/store/ports the daemon reads, and launchd starts it with a bare env.
 var capturedServeEnvVars = []string{
 	"XDG_CONFIG_HOME",
 	"MEMORY_DB",
@@ -50,7 +50,7 @@ var capturedServeEnvVars = []string{
 	"OLLAMA_HOST",
 }
 
-// capturedServeEnv resolves the env block rendered into the managed unit (H6):
+// capturedServeEnv resolves the env block rendered into the managed unit (H6).
 func capturedServeEnv(getenv func(string) string) []envKV {
 	cfgPath := config.Path()
 	if abs, err := filepath.Abs(cfgPath); err == nil {
@@ -74,9 +74,8 @@ type plistData struct {
 	Env     []envKV // install-time env overrides (H6)
 }
 
-// validateUnitValue rejects values no generated plist can carry safely:
-// newlines/control chars would inject fresh plist elements no quoting can
-// contain (H7). Loud error beats silent mangling.
+// validateUnitValue rejects values no plist can carry safely: newlines/control
+// chars inject fresh plist elements no quoting can contain (H7).
 func validateUnitValue(what, v string) error {
 	for _, r := range v {
 		if r == '\n' || r == '\r' || (r < 0x20 && r != '\t') {
@@ -86,9 +85,9 @@ func validateUnitValue(what, v string) error {
 	return nil
 }
 
-// xmlEscape escapes a value for use inside a plist <string> element (H7):
-// text/template does NOT XML-escape, so a `</string>` embedded in $HOME or the
-// binary path would otherwise inject plist structure launchd happily parses.
+// xmlEscape escapes a value for a plist <string> (H7): text/template does NOT
+// XML-escape, so a `</string>` in $HOME or the binary path would otherwise inject
+// plist structure launchd happily parses.
 func xmlEscape(v string) string {
 	var buf bytes.Buffer
 	// xml.EscapeText never fails on a bytes.Buffer.
@@ -119,23 +118,19 @@ func renderPlist(d plistData) (string, error) {
 		}
 		esc.Env = append(esc.Env, envKV{Key: xmlEscape(kv.Key), Value: xmlEscape(kv.Value)})
 	}
-	return renderTemplate("plist", plistTemplate, esc)
-}
-
-func renderTemplate(name, tmpl string, data any) (string, error) {
-	t, err := template.New(name).Parse(tmpl)
+	t, err := template.New("plist").Parse(plistTemplate)
 	if err != nil {
 		return "", err
 	}
 	var buf bytes.Buffer
-	if err := t.Execute(&buf, data); err != nil {
+	if err := t.Execute(&buf, esc); err != nil {
 		return "", err
 	}
 	return buf.String(), nil
 }
 
-// cmdRunner runs one external command and returns its combined output. It is
-// the injected exec seam so install/uninstall argv sequences are unit-testable.
+// cmdRunner is the injected exec seam that makes every install/uninstall argv
+// sequence unit-testable.
 type cmdRunner func(name string, args ...string) (string, error)
 
 // installFS bundles the injected filesystem ops the installers need.
@@ -151,20 +146,18 @@ func realInstallFS() installFS {
 
 // --- launchd (macOS) ---------------------------------------------------------
 
-// launchdPaths derives the launchd plist path from $HOME. The serve log
-// itself is config.ServeLogPath() — unified across lazy auto-start and the
-// managed launchd form — so it no longer derives from $HOME here.
+// launchdPaths derives the launchd plist path from $HOME. The serve log is
+// config.ServeLogPath(), one unified log across lazy and managed starts.
 func launchdPaths(home string) string {
-	return filepath.Join(home, "Library", "LaunchAgents", serveLaunchdLabel+".plist")
+	return filepath.Join(home, "Library", "LaunchAgents", LaunchdLabel+".plist")
 }
 
-// launchdInstall renders + writes the plist and bootstraps it. Steps (all argv
-// choices unit-tested via the injected runner):
+// launchdInstall renders + writes the plist and bootstraps it.
 func launchdInstall(run cmdRunner, fs installFS, uid int, home, hostBin string, env []envKV, out io.Writer) error {
 	plistPath := launchdPaths(home)
 	logPath := config.ServeLogPath()
 	rendered, err := renderPlist(plistData{
-		HostBin: hostBin, Home: home, LogPath: logPath, Label: serveLaunchdLabel, Env: env,
+		HostBin: hostBin, Home: home, LogPath: logPath, Label: LaunchdLabel, Env: env,
 	})
 	if err != nil {
 		return err
@@ -178,7 +171,7 @@ func launchdInstall(run cmdRunner, fs installFS, uid int, home, hostBin string, 
 	if err := fs.writeFile(plistPath, []byte(rendered), 0o644); err != nil {
 		return err
 	}
-	target := fmt.Sprintf("gui/%d/%s", uid, serveLaunchdLabel)
+	target := fmt.Sprintf("gui/%d/%s", uid, LaunchdLabel)
 	domain := fmt.Sprintf("gui/%d", uid)
 	// Idempotent re-install: unload any loaded copy; "not loaded" errors ignored.
 	_, _ = run("launchctl", "bootout", target)
@@ -191,14 +184,14 @@ func launchdInstall(run cmdRunner, fs installFS, uid int, home, hostBin string, 
 	// Start it now; RunAtLoad usually already did, so a kickstart failure is not fatal.
 	_, _ = run("launchctl", "kickstart", "-k", target)
 	fmt.Fprintf(out, "installed managed service %s (starts at login, auto-restarts). logs: %s\n",
-		serveLaunchdLabel, logPath)
+		LaunchdLabel, logPath)
 	return nil
 }
 
 // launchdUninstall bootouts the agent (ignoring not-loaded) and removes the plist.
 func launchdUninstall(run cmdRunner, fs installFS, uid int, home string, out io.Writer) error {
 	plistPath := launchdPaths(home)
-	_, _ = run("launchctl", "bootout", fmt.Sprintf("gui/%d/%s", uid, serveLaunchdLabel))
+	_, _ = run("launchctl", "bootout", fmt.Sprintf("gui/%d/%s", uid, LaunchdLabel))
 	if err := fs.remove(plistPath); err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -206,25 +199,25 @@ func launchdUninstall(run cmdRunner, fs installFS, uid int, home string, out io.
 	return nil
 }
 
-// launchdActive reports whether the LaunchAgent is loaded (launchctl print
-// exits 0 for a loaded service).
+// launchdActive: launchctl print exits 0 for a loaded service.
 func launchdActive(run cmdRunner, uid int) bool {
-	_, err := run("launchctl", "print", fmt.Sprintf("gui/%d/%s", uid, serveLaunchdLabel))
+	_, err := run("launchctl", "print", fmt.Sprintf("gui/%d/%s", uid, LaunchdLabel))
 	return err == nil
 }
 
-// launchdRestart kickstarts the managed unit in place (`-k` kills + restarts
-// while keeping RunAtLoad/KeepAlive — the "reload config" primitive).
+// launchdRestart kickstarts the managed unit in place: `-k` kills + restarts
+// while keeping RunAtLoad/KeepAlive, the "reload config" primitive.
 func launchdRestart(run cmdRunner, uid int) error {
-	_, err := run("launchctl", "kickstart", "-k", fmt.Sprintf("gui/%d/%s", uid, serveLaunchdLabel))
+	_, err := run("launchctl", "kickstart", "-k", fmt.Sprintf("gui/%d/%s", uid, LaunchdLabel))
 	return err
 }
 
 // launchdStop boots the agent OUT of its domain so KeepAlive stops respawning it,
-// WITHOUT removing the plist (unlike launchdUninstall). It stays installed and
-// returns at next login, or immediately via `pix serve install`. This is
+// WITHOUT removing the plist (unlike launchdUninstall): a bare SIGTERM would be
+// respawned instantly, the classic "I stopped it but it came right back" bug.
+// It stays installed and returns at next login.
 func launchdStop(run cmdRunner, uid int, out io.Writer) error {
-	if _, err := run("launchctl", "bootout", fmt.Sprintf("gui/%d/%s", uid, serveLaunchdLabel)); err != nil {
+	if _, err := run("launchctl", "bootout", fmt.Sprintf("gui/%d/%s", uid, LaunchdLabel)); err != nil {
 		return err
 	}
 	fmt.Fprintln(out, "stopped the managed pix service (launchd). It stays installed and returns at next login; start it now with `pix serve install`, or remove it with `pix serve uninstall`.")
@@ -233,9 +226,9 @@ func launchdStop(run cmdRunner, uid int, out io.Writer) error {
 
 // --- shared entry points ------------------------------------------------------
 
-// resolvedHostBinary is launcher.FindHostBinary + EvalSymlinks: launchd needs the
-// REAL absolute path (a ~/.local/bin symlink into a repo's out/ dir would break
-// when the repo moves, and launchd has a minimal PATH).
+// resolvedHostBinary is launcher.FindHostBinary + EvalSymlinks: launchd has a
+// minimal PATH and needs the REAL absolute path (a ~/.local/bin symlink into a
+// repo's out/ dir would break when the repo moves).
 func resolvedHostBinary() (string, error) {
 	bin, err := launcher.FindHostBinary()
 	if err != nil {
@@ -251,8 +244,9 @@ func resolvedHostBinary() (string, error) {
 }
 
 // preInstallGuard clears the ground before a managed-service install (H5): a
-// KeepAlive/Restart=always unit installed over an already-running daemon
-// collides on ports + store lock and crash-loops while install reports
+// KeepAlive unit installed over an already-running daemon collides on ports +
+// store lock and crash-loops while install claims success. A foreground daemon
+// is the user's to stop; a lazy one we started, we stop.
 func preInstallGuard(mode func() serveMode, stop func(io.Writer) (bool, error), out io.Writer) error {
 	switch mode() {
 	case serveForeground:
@@ -270,24 +264,21 @@ func preInstallGuard(mode func() serveMode, stop func(io.Writer) (bool, error), 
 	return nil
 }
 
-// managedHealthTimeout bounds the post-install health verification.
-const managedHealthTimeout = 10 * time.Second
-
-// verifyManagedInstallHealth is the post-install verification step (round 2,
-// H8): a config.Load() failure used to be silently swallowed (`if err == nil`
-// guarded the whole check, and the else branch did nothing) so a malformed
+// verifyManagedInstallHealth is the post-install verification step (round 2, H8):
+// a swallowed config.Load() failure used to let install report success for a unit
+// that could never start. Success words are earned by a probe, or not at all.
 func verifyManagedInstallHealth(cfg *config.Config, cfgErr error, st serveStarter, out io.Writer) bool {
 	if cfgErr != nil {
 		fmt.Fprintf(out, "warning: installed managed service, but could not verify it started: config.toml failed to load (%v). It will not start until this is fixed — edit config.toml, then check with `pix serve status`.\n", cfgErr)
 		return false
 	}
 	return reportManagedServeHealth(st.dial, requiredServePorts(st, cfg, nil),
-		time.Now, time.Sleep, managedHealthTimeout, out)
+		time.Now, time.Sleep, 10*time.Second, out)
 }
 
-// reportManagedServeHealth verifies (bounded) that the freshly-installed
-// managed service actually came up — its required service ports answer — and
-// reports HONESTLY when it did not (H5: "installed" must not paper over a
+// reportManagedServeHealth verifies (bounded) that the freshly-installed managed
+// service actually came up — its required ports answer — and reports HONESTLY
+// when it did not (H5: "installed" must not paper over a crash-loop).
 func reportManagedServeHealth(dial func(int) bool, ports []servePortSpec,
 	now func() time.Time, sleep func(time.Duration), timeout time.Duration, out io.Writer) bool {
 	if len(ports) == 0 {
@@ -315,16 +306,25 @@ func reportManagedServeHealth(dial func(int) bool, ports []servePortSpec,
 	}
 }
 
-// RunInstall is the `serve install` entry point (platform dispatch is in
-// serve_install_{darwin,linux,other}.go).
-func RunInstall(argv []string) {
+// checkManagedVerbArgs is the shared front door of `serve install`/`uninstall`:
+// help, then a hard refusal of any argument (neither verb takes one).
+func checkManagedVerbArgs(verb string, argv []string) (run bool) {
 	if cli.WantsHelp(argv) {
 		fmt.Print(Description)
-		return
+		return false
 	}
 	if len(argv) > 0 {
-		fmt.Fprintf(os.Stderr, "pix serve install: unexpected argument %q\n\n%s", argv[0], Description)
+		fmt.Fprintf(os.Stderr, "pix serve %s: unexpected argument %q\n\n%s", verb, argv[0], Description)
 		os.Exit(2)
+	}
+	return true
+}
+
+// RunInstall is the `serve install` entry point (platform dispatch is in
+// install_{darwin,other}.go).
+func RunInstall(argv []string) {
+	if !checkManagedVerbArgs("install", argv) {
+		return
 	}
 	rl := DefaultReloader()
 	if err := preInstallGuard(rl.mode, rl.Stop, os.Stdout); err != nil {
@@ -335,27 +335,20 @@ func RunInstall(argv []string) {
 		fmt.Fprintf(os.Stderr, "pix serve install: %v\n", err)
 		os.Exit(1)
 	}
-	// Bounded post-install verification: report honestly if the unit did not
-	// come up, or if we could not even check because config.toml won't load
-	// (exit 0 either way — the install itself succeeded; the warning + pointers
+	// Bounded post-install verification. Exit 0 either way: the install itself
+	// succeeded, and the warning carries the next step.
 	cfg, cfgErr := config.Load()
 	verifyManagedInstallHealth(cfg, cfgErr, DefaultStarter(), os.Stdout)
 }
 
-// Install is the non-exiting install seam: `pix setup` provisions the launchd
-// agent through the provision loop, which needs an apply that RETURNS its
-// failure (the loop records it and re-checks) rather than one that exits the
+// Install is the non-exiting install seam: `pix setup`'s provision loop needs an
+// apply that RETURNS its failure (the loop records it and re-checks).
 func Install(out io.Writer) error { return platformServeInstall(out) }
 
 // RunUninstall is the `serve uninstall` entry point.
 func RunUninstall(argv []string) {
-	if cli.WantsHelp(argv) {
-		fmt.Print(Description)
+	if !checkManagedVerbArgs("uninstall", argv) {
 		return
-	}
-	if len(argv) > 0 {
-		fmt.Fprintf(os.Stderr, "pix serve uninstall: unexpected argument %q\n\n%s", argv[0], Description)
-		os.Exit(2)
 	}
 	if err := platformServeUninstall(os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "pix serve uninstall: %v\n", err)
@@ -363,8 +356,8 @@ func RunUninstall(argv []string) {
 	}
 }
 
-// realCmdRunner is the concrete exec shim (kept thin like DefaultCtl's
-// syscalls; the argv sequences around it are what the tests prove).
+// realCmdRunner is the concrete exec shim; the argv sequences around it are what
+// the tests prove.
 func realCmdRunner(name string, args ...string) (string, error) {
 	out, err := exec.Command(name, args...).CombinedOutput()
 	return string(out), err

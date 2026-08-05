@@ -135,7 +135,7 @@
       "exits": 9
     },
     "pix/host/service": {
-      "prod_loc": 1522,
+      "prod_loc": 1553,
       "exports": 24,
       "globals": 17,
       "edges": 5,

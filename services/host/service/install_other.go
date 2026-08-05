@@ -1,28 +1,23 @@
 //go:build !darwin
 
-// serve_install_other.go is the ONE non-darwin compile stub: pix's managed
-// login service is launchd-only (macOS host), but `services/host` must still
-// `go build`/`go test` under GOOS=linux — that's the toolchain the Linux
+// install_other.go is the ONE non-darwin compile stub: the managed login service
+// is launchd-only (macOS host), but `services/host` must still build and test
+// under GOOS=linux (the sandbox toolchain). Every managed entry point answers
+// with the same refusal, and ManagedActive is false — so mode detection on Linux
+// always resolves to lazy/foreground/down, never managed.
 
 package service
 
-import "io"
+import (
+	"errors"
+	"io"
+)
 
-// ErrUnsupportedHost is returned by every managed-service entry point on a
-// non-darwin GOOS. Managed `pix serve install` is macOS (launchd) only.
-var ErrUnsupportedHost = errUnsupportedHost{}
+var errUnsupportedHost = errors.New(
+	"managed service install is only supported on macOS (launchd); use lazy auto-start (default) or run `pix serve` yourself")
 
-type errUnsupportedHost struct{}
-
-func (errUnsupportedHost) Error() string {
-	return "managed service install is only supported on macOS (launchd); use lazy auto-start (default) or run `pix serve` yourself"
-}
-
-func platformServeInstall(io.Writer) error   { return ErrUnsupportedHost }
-func platformServeUninstall(io.Writer) error { return ErrUnsupportedHost }
-
-func ManagedActive() bool { return false }
-
-func restartManagedService() error { return ErrUnsupportedHost }
-
-func StopManaged(io.Writer) error { return ErrUnsupportedHost }
+func platformServeInstall(io.Writer) error   { return errUnsupportedHost }
+func platformServeUninstall(io.Writer) error { return errUnsupportedHost }
+func restartManagedService() error           { return errUnsupportedHost }
+func StopManaged(io.Writer) error            { return errUnsupportedHost }
+func ManagedActive() bool                    { return false }

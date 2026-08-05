@@ -1,8 +1,7 @@
 //go:build unix
 
-// serve_start_unix.go holds the real detached-spawn + flock shims for lazy
-// auto-start (M1: they use Setsid and syscall.Flock, which only exist on unix;
-// serve_start_windows.go carries the graceful-degrade shims so GOOS=windows
+// start_unix.go holds the real detached-spawn + flock shims for lazy auto-start
+// (Setsid and syscall.Flock are unix-only).
 
 package service
 
@@ -18,9 +17,8 @@ import (
 	"pix/host/config"
 )
 
-// spawnDetachedServe is the real detached-spawn shim (kept a thin one-liner-ish
-// wrapper like DefaultCtl's syscalls; everything around it is tested via
-// fakes). Setsid gives the child its own session so a terminal close / SIGHUP
+// spawnDetachedServe is the real detached-spawn shim. Setsid gives the child its
+// own session, so closing the terminal that started it cannot SIGHUP the daemon.
 func spawnDetachedServe(bin string, args []string, logPath string) (serveChildHandle, error) {
 	logf, err := openServeLogFile(logPath)
 	if err != nil {
@@ -47,7 +45,8 @@ func spawnDetachedServe(bin string, args []string, logPath string) (serveChildHa
 
 // openServeLogFile opens (creating 0600) the lazy daemon's log for append,
 // REFUSING to follow a symlink (H1): serve.log lives in a user-writable state
-// dir, and a planted `serve.log -> /some/sensitive/file` symlink would make the
+// dir, so a planted `serve.log -> /some/sensitive/file` would make the daemon
+// truncate the target.
 func openServeLogFile(logPath string) (*os.File, error) {
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
 		return nil, err
@@ -67,9 +66,9 @@ func openServeLogFile(logPath string) (*os.File, error) {
 	return f, nil
 }
 
-// ReadFileNoSymlink reads path via O_NOFOLLOW so the open itself atomically
-// refuses a symlink — there is no separate Lstat-then-open TOCTOU window for
-// an attacker to swap the target in (round 2, H8: tailFileLines' read side).
+// ReadFileNoSymlink reads path via O_NOFOLLOW so the open ITSELF refuses a
+// symlink: no Lstat-then-open window for an attacker to swap the target in
+// (round 2, H8).
 func ReadFileNoSymlink(path string) ([]byte, error) {
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
@@ -80,16 +79,11 @@ func ReadFileNoSymlink(path string) ([]byte, error) {
 }
 
 // tryServeSpawnLock attempts (NON-blocking) the exclusive flock that serializes
-// the spawn decision on config.ServeSpawnLockPath(): two concurrent `pix
-// run`s cannot both fork a daemon. (false, nil) = the lock is busy; Ensure
+// the spawn DECISION on config.ServeSpawnLockPath(), so two concurrent `pix run`s
+// cannot both fork a daemon. (false, nil) means the lock is busy: the caller
+// retries under its own deadline, so a wedged holder can never hang `pix run`.
 func tryServeSpawnLock(fn func() error) (bool, error) {
-	return tryFlock(config.ServeSpawnLockPath(), fn)
-}
-
-// tryFlock is the non-blocking sibling of withFlock: take
-// syscall.Flock(LOCK_EX|LOCK_NB); if the lock is held elsewhere return
-// (false, nil) so the caller can retry on its own schedule.
-func tryFlock(lockPath string, fn func() error) (bool, error) {
+	lockPath := config.ServeSpawnLockPath()
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
 		return false, fmt.Errorf("create lock dir: %w", err)
 	}

@@ -2,16 +2,52 @@ package reset
 
 import (
 	"fmt"
+	"os"
 	"strings"
+	"testing"
 	"time"
 
 	"pix/host/config"
+	"pix/host/service"
 	"pix/host/sys"
 )
+
+// TestMain pins ONE thing for the whole suite: the liveness probe never asks the
+// DEVELOPER'S machine whether IT has a managed pix service loaded (on darwin
+// that is a real `launchctl` call, and a loaded unit would make every reset test
+// think a daemon is up). The pidfile half stays the REAL one — process identity
+// is what these tests are about — so "a daemon is up" means a real pidfile
+// naming a real live process, and nothing else.
+func TestMain(m *testing.M) {
+	probeServeUp = func(pidPath string, settle time.Duration) (bool, int) {
+		return service.ServeIdentityUp(nil, pidPath, settle)
+	}
+	os.Exit(m.Run())
+}
 
 // defaultCfg is a minimal Config carrying the fields these tests read.
 func defaultCfg() *config.Config {
 	return &config.Config{Services: []string{"memory"}}
+}
+
+// stubServeProbe drives the liveness probe's answers IN SEQUENCE — one per call,
+// which is the pre-stop "was a daemon running" question and then the post-stop
+// "is it really gone" one — so a decision-table test can model a daemon state
+// without a process. Calls past the last answer repeat it. The real-process
+// layer (reset_process_test.go) proves the probe itself.
+func stubServeProbe(t *testing.T, answers ...bool) {
+	t.Helper()
+	orig := probeServeUp
+	calls := 0
+	probeServeUp = func(string, time.Duration) (bool, int) {
+		i := calls
+		if i >= len(answers) {
+			i = len(answers) - 1
+		}
+		calls++
+		return answers[i], 4242
+	}
+	t.Cleanup(func() { probeServeUp = orig })
 }
 
 // resetHost is this suite's host: a REAL filesystem (every test operates on
@@ -62,20 +98,9 @@ func (h resetHost) RunInteractiveQuiet(name string, args ...string) error {
 
 func (h resetHost) Getenv(name string) string { return h.envVars[name] }
 func (h resetHost) HomeDir() string           { return h.home }
-func (h resetHost) DialLocal(port int) bool   { return h.ports[port] }
 
-// dialUpThenDownHost answers "listening" for the FIRST probe and "down"
-// afterwards — the sequence a running daemon actually produces across one
-// reset: the wasUp probe finds it, the post-stop guard finds it gone.
-type dialUpThenDownHost struct {
-	resetHost
-	probed *bool
-}
-
-func (h dialUpThenDownHost) DialLocal(int) bool {
-	if *h.probed {
-		return false
-	}
-	*h.probed = true
-	return true
-}
+// DialLocal exists because sys.System requires it. Reset itself no longer asks a
+// PORT anything: whether a daemon is running is a question about the daemon's
+// identity (managed unit / pidfile ownership), and :11435 answers it wrong in
+// both directions — see probeServeUp.
+func (h resetHost) DialLocal(port int) bool { return h.ports[port] }
