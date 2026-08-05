@@ -1,27 +1,27 @@
 // bootstrap.go: the "bare-minimum keys" provisioning flow used by `pix run`
 // (auto, only when no key is present). Policy: 1Password (op required). `pix
-// setup` does NOT use BootstrapProviderKeys. Its setupProvisionKeys path
-// validates and reconciles the configured 1Password refs into sbx. This file keeps
-// the tri-state sbx probes (SbxModelKeyState, secret.SbxAllModelKeysPresent) both share.
+// setup` does NOT use BootstrapProviderKeys — its setupProvisionKeys path
+// validates and reconciles the configured refs into sbx. This file keeps the
+// tri-state sbx probes both share.
 package launch
 
 import (
 	"io"
+
 	"pix/host/hostenv"
 	"pix/host/secret"
 )
 
-// SbxModelKeyState probes sbx for a model provider key (anthropic/openai/google;
-// github does not count) as a TRI-STATE: present says a key is set, probeOK says
-// we could actually check. probeOK is false when sbx is absent OR `sbx secret ls`
-// errors (control plane down) — the caller must NOT treat that as "no key".
+// SbxModelKeyState probes sbx for a model provider key (anthropic/openai/
+// google; github does not count) as a TRI-STATE: present says a key is set,
+// probeOK says we could actually check. probeOK is false when sbx is absent,
+// when `sbx secret ls` errors (control plane down), or when it hangs — the
+// caller must NOT treat any of those as "no key", because under run's
+// tri-state rule unknown PROCEEDS and only a confirmed absence blocks.
 func SbxModelKeyState(env hostenv.Env) (present, probeOK bool) {
 	if _, err := env.LookPath("sbx"); err != nil {
 		return false, false
 	}
-	// BOUNDED (probeRun): a hung `sbx secret ls` degrades to probeOK=false —
-	// under run's tri-state rule that PROCEEDS (unknown never blocks a launch;
-	// only a positively confirmed missing key does) — never a wedged preflight.
 	out, timedOut, err := env.RunTimed("sbx", "secret", "ls")
 	if err != nil || timedOut {
 		return false, false
@@ -30,23 +30,21 @@ func SbxModelKeyState(env hostenv.Env) (present, probeOK bool) {
 }
 
 // AnyModelKeyPresent reports whether sbx has at least one model provider key.
-// Returns false when sbx can't be probed (can't verify -> caller decides).
+// False when sbx cannot be probed (can't verify -> caller decides).
 func AnyModelKeyPresent(env hostenv.Env) bool {
 	present, _ := SbxModelKeyState(env)
 	return present
 }
 
 // BootstrapProviderKeys is `run`'s "get a usable model key in place" step:
-//  1. resolve any existing 1Password key refs into sbx (the no-ritual path);
-//  2. if a model key is now present, done;
-//  3. otherwise, on a TTY, offer 1Password (writes op-refs.env + hostmode.env and
-//     syncs into sbx) so both the sandbox and host mode get keys from one paste.
+// resolve any existing 1Password refs into sbx; if a model key is now present,
+// done; otherwise, on a TTY, offer 1Password (writing op-refs.env +
+// hostmode.env and syncing into sbx) so the sandbox and host mode get keys from
+// one paste.
 //
-// Returns whether a model key ended up present. It NEVER blocks or exits \u2014 the
-// caller decides (run refuses to launch only when SbxModelKeyState POSITIVELY
-// confirms no key). Idempotent: with a key already present it does nothing beyond
-// a cheap sbx probe (op is never touched). Only `run` calls this; `setup` uses
-// the stronger setupProvisionKeys.
+// Returns whether a model key ended up present. It NEVER blocks or exits — run
+// refuses to launch only when SbxModelKeyState POSITIVELY confirms no key.
+// Idempotent: with a key present it does nothing beyond a cheap sbx probe.
 func BootstrapProviderKeys(env hostenv.Env, in io.Reader, out io.Writer, tty bool) bool {
 	secret.EnsureProviderKeysFromRefs(env, out)
 	if AnyModelKeyPresent(env) {

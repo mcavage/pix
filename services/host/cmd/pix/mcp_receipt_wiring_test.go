@@ -17,6 +17,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -49,16 +50,12 @@ func withSandboxMCPStateDirFn(t *testing.T, fn func() (string, error)) {
 func trueCmd(t *testing.T) *exec.Cmd  { t.Helper(); return exec.Command("true") }
 func falseCmd(t *testing.T) *exec.Cmd { t.Helper(); return exec.Command("false") }
 
-// withCreatePollSeams installs a fast, deterministic creation-evidence poll
-// (probe + interval + timeout) for the duration of the test — no real `sbx
-// ls`, no real half-second sleeps.
-func withCreatePollSeams(t *testing.T, probe func(name string) sandbox.State, interval, timeout time.Duration) {
-	t.Helper()
-	oldProbe, oldInt, oldTO := launch.SandboxAppearProbeFn, launch.SandboxAppearPollInterval, launch.SandboxAppearPollTimeout
-	launch.SandboxAppearProbeFn, launch.SandboxAppearPollInterval, launch.SandboxAppearPollTimeout = probe, interval, timeout
-	t.Cleanup(func() {
-		launch.SandboxAppearProbeFn, launch.SandboxAppearPollInterval, launch.SandboxAppearPollTimeout = oldProbe, oldInt, oldTO
-	})
+// createPoll builds a fast, deterministic creation-evidence poll (probe +
+// interval + timeout) — no real `sbx ls`, no real half-second sleeps. It is a
+// VALUE handed to the call under test: the poll used to be three mutable
+// package vars in launch, which every test had to swap and restore.
+func createPoll(probe func(name string) sandbox.State, interval, timeout time.Duration) launch.CreatePoll {
+	return launch.CreatePoll{Probe: probe, Interval: interval, Timeout: timeout}
 }
 
 // probeAlways is a creation-evidence probe pinned to one state.
@@ -73,9 +70,9 @@ func probeAlways(st sandbox.State) func(string) sandbox.State {
 func TestExecSbxRunAndRecordCreate_FailedExecWritesNoReceipt(t *testing.T) {
 	dir := t.TempDir()
 	withSandboxMCPStateDirFn(t, func() (string, error) { return dir, nil })
-	withCreatePollSeams(t, probeAlways(launch.SbxAbsent), time.Millisecond, 5*time.Second)
+	poll := createPoll(probeAlways(launch.SbxAbsent), time.Millisecond, 5*time.Second)
 
-	err := launch.ExecSbxRunAndRecordCreate(falseCmd(t), true, "pix-fail", "", []string{"slack"})
+	err := launch.ExecSbxRunAndRecordCreate(falseCmd(t), poll, true, "pix-fail", "", []string{"slack"})
 	if err == nil {
 		t.Fatal("want an error propagated from the failed exec")
 	}
@@ -89,12 +86,13 @@ func TestExecSbxRunAndRecordCreate_FailedExecWritesNoReceipt(t *testing.T) {
 }
 
 // A successful exec with writeReceipt=false (a plain re-attach) writes
-// nothing — the reattach contract.
+// nothing — the reattach contract. The zero CreatePoll is deliberate: a
+// reattach records nothing, so it needs no probe and must not demand one.
 func TestExecSbxRunAndRecordCreate_ReattachWritesNothing(t *testing.T) {
 	dir := t.TempDir()
 	withSandboxMCPStateDirFn(t, func() (string, error) { return dir, nil })
 
-	if err := launch.ExecSbxRunAndRecordCreate(trueCmd(t), false, "pix-reattach", "", []string{"slack"}); err != nil {
+	if err := launch.ExecSbxRunAndRecordCreate(trueCmd(t), launch.CreatePoll{}, false, "pix-reattach", "", []string{"slack"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if _, status, _ := workspace.ReadMCPReceipt(dir, "pix-reattach"); status != workspace.MCPStateAbsent {
@@ -107,10 +105,10 @@ func TestExecSbxRunAndRecordCreate_ReattachWritesNothing(t *testing.T) {
 func TestExecSbxRunAndRecordCreate_CreateWritesExactPreloadedSet(t *testing.T) {
 	dir := t.TempDir()
 	withSandboxMCPStateDirFn(t, func() (string, error) { return dir, nil })
-	withCreatePollSeams(t, probeAlways(launch.SbxRunning), time.Millisecond, 5*time.Second)
+	poll := createPoll(probeAlways(launch.SbxRunning), time.Millisecond, 5*time.Second)
 
 	preloaded := []string{"slack", "gog", "notion"}
-	if err := launch.ExecSbxRunAndRecordCreate(trueCmd(t), true, "pix-create", "", preloaded); err != nil {
+	if err := launch.ExecSbxRunAndRecordCreate(trueCmd(t), poll, true, "pix-create", "", preloaded); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	r, status, err := workspace.ReadMCPReceipt(dir, "pix-create")
@@ -137,10 +135,10 @@ func TestExecSbxRunAndRecordCreate_CreateWritesExactPreloadedSet(t *testing.T) {
 func TestExecSbxRunAndRecordCreate_ReplaceRewritesAndClearsLoads(t *testing.T) {
 	dir := t.TempDir()
 	withSandboxMCPStateDirFn(t, func() (string, error) { return dir, nil })
-	withCreatePollSeams(t, probeAlways(launch.SbxRunning), time.Millisecond, 5*time.Second)
+	poll := createPoll(probeAlways(launch.SbxRunning), time.Millisecond, 5*time.Second)
 
 	sandbox := "pix-replace-wire"
-	if err := launch.ExecSbxRunAndRecordCreate(trueCmd(t), true, sandbox, "", []string{"slack"}); err != nil {
+	if err := launch.ExecSbxRunAndRecordCreate(trueCmd(t), poll, true, sandbox, "", []string{"slack"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := workspace.AppendLoadReceipt(dir, sandbox, "notion", nil); err != nil {
@@ -148,7 +146,7 @@ func TestExecSbxRunAndRecordCreate_ReplaceRewritesAndClearsLoads(t *testing.T) {
 	}
 	// A --replace re-run: launch.DefinitelyCreating is true again (state doesn't
 	// matter to the wrapper — the caller already decided), new preloaded set.
-	if err := launch.ExecSbxRunAndRecordCreate(trueCmd(t), true, sandbox, "", []string{config.GWServerName}); err != nil {
+	if err := launch.ExecSbxRunAndRecordCreate(trueCmd(t), poll, true, sandbox, "", []string{config.GWServerName}); err != nil {
 		t.Fatal(err)
 	}
 	r, status, err := workspace.ReadMCPReceipt(dir, sandbox)
@@ -168,9 +166,9 @@ func TestExecSbxRunAndRecordCreate_ReplaceRewritesAndClearsLoads(t *testing.T) {
 // silent success.
 func TestExecSbxRunAndRecordCreate_ReceiptWriteFailureIsDistinctError(t *testing.T) {
 	withSandboxMCPStateDirFn(t, func() (string, error) { return "", errors.New("boom: state dir unresolvable") })
-	withCreatePollSeams(t, probeAlways(launch.SbxRunning), time.Millisecond, 5*time.Second)
+	poll := createPoll(probeAlways(launch.SbxRunning), time.Millisecond, 5*time.Second)
 
-	err := launch.ExecSbxRunAndRecordCreate(trueCmd(t), true, "pix-recerr", "", []string{"slack"})
+	err := launch.ExecSbxRunAndRecordCreate(trueCmd(t), poll, true, "pix-recerr", "", []string{"slack"})
 	if err == nil {
 		t.Fatal("want an error when the receipt write fails")
 	}
@@ -207,7 +205,7 @@ func TestCreateReceiptGate_MirrorsDefinitelyCreating(t *testing.T) {
 		{launch.SbxRunning, true, true},
 		{launch.SbxStopped, true, true},
 	}
-	withCreatePollSeams(t, probeAlways(launch.SbxRunning), time.Millisecond, 5*time.Second)
+	poll := createPoll(probeAlways(launch.SbxRunning), time.Millisecond, 5*time.Second)
 	for _, tc := range cases {
 		dir := t.TempDir()
 		withSandboxMCPStateDirFn(t, func() (string, error) { return dir, nil })
@@ -221,7 +219,7 @@ func TestCreateReceiptGate_MirrorsDefinitelyCreating(t *testing.T) {
 		if writeReceipt != tc.want {
 			t.Fatalf("launch.DefinitelyCreating(%v,%v) = %v, want %v", tc.State, tc.replace, writeReceipt, tc.want)
 		}
-		if err := launch.ExecSbxRunAndRecordCreate(trueCmd(t), writeReceipt, sandbox, "", []string{"fresh"}); err != nil {
+		if err := launch.ExecSbxRunAndRecordCreate(trueCmd(t), poll, writeReceipt, sandbox, "", []string{"fresh"}); err != nil {
 			t.Fatal(err)
 		}
 		r, _, err := workspace.ReadMCPReceipt(dir, sandbox)
@@ -417,7 +415,7 @@ func TestPackIntegrations_FoldIntoStaticSetAndReceipt(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.MCP = []string{"slack"} // an already-persisted, non-pack server
 	o := launch.RunOpts{Pack: root}
-	if _, err := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil)); err != nil {
+	if _, err := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil), io.Discard); err != nil {
 		t.Fatalf("launch.ApplyPackToLaunch: %v", err)
 	}
 

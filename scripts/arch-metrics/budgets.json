@@ -178,8 +178,8 @@
     },
     "pix/host/workflow/launch": {
       "prod_loc": 2129,
-      "exports": 84,
-      "globals": 21,
+      "exports": 82,
+      "globals": 18,
       "edges": 14,
       "exits": 0
     },

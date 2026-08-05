@@ -306,7 +306,7 @@ func taskRm(d *cli.Deps, name string, force bool) error {
 		return err
 	}
 	if disposition != task.SandboxAbsent {
-		if err := launch.RemovePixSandbox(defaultShellEnv(), m.Sandbox); err != nil {
+		if err := launch.RemovePixSandbox(defaultShellEnv(), d.Err, m.Sandbox); err != nil {
 			return fmt.Errorf("could not remove sandbox %s; leaving the checkout intact: %w", m.Sandbox, err)
 		}
 	}

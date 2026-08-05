@@ -1,6 +1,7 @@
-// run_cmd.go — `pix run` as a typed root child, plus the two things the launch
-// package deliberately does not know: the verb table (for the "did you mean"
-// hint) and the real env.
+// run_cmd.go — `pix run` as a typed root child. The two things the launch
+// package deliberately does not know — the verb table (for the "did you mean"
+// hint) and the real env — are passed to it from here, at each call, rather
+// than installed into package vars by an init().
 //
 // The flags are struct fields, so the usage a user reads is generated from the
 // declaration that parses them. One shape the grammar cannot express stays in
@@ -35,10 +36,9 @@ import (
 	"pix/host/workspace"
 )
 
-func init() {
-	launch.IsKnownVerb = func(v string) bool { return knownVerbs()[v] }
-	launch.DefaultEnv = defaultShellEnv
-}
+// knownVerb is the verb table launch asks about to turn `pix run doctro` into
+// a suggestion. L4 owns the table, so L4 hands it over per call.
+func knownVerb(v string) bool { return knownVerbs()[v] }
 
 // runDescription is run's long help: the lifecycle and released-vs-local
 // rules, which generated usage cannot infer from a struct tag. The flag list
@@ -153,7 +153,7 @@ func (c *runCmd) opts() (launch.RunOpts, error) {
 	// A non-"." workspace MUST be an existing directory. Otherwise a mistyped
 	// verb (`pix run doctro`) would silently boot a junk sandbox named after the
 	// typo.
-	if err := launch.ValidateRunWorkspace(o.Workspace); err != nil {
+	if err := launch.ValidateRunWorkspace(o.Workspace, knownVerb); err != nil {
 		return o, cli.UsageError{Err: err}
 	}
 	return o, nil
@@ -331,7 +331,7 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		// Fatal on error (explicit --pack that doesn't load, or a declared
 		// sandbox proxy whose kit can't be built — round-4 F2 fail-closed):
 		// never create a sandbox missing context the pack declared.
-		root, perr := launch.ApplyPackStackToLaunch(cfg, &o, defaultShellEnv())
+		root, perr := launch.ApplyPackStackToLaunch(cfg, &o, defaultShellEnv(), d.Err)
 		if perr != nil {
 			fmt.Fprintf(d.Err, "pix: %v\n", perr)
 			return cli.SilentError{Code: 1}
@@ -454,7 +454,7 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	// recall/capture extensions via per-run workspace files. Best-effort: an
 	// unloadable pack degrades to unscoped rather than failing run. Shared with
 	// `task new` so both launch paths write the SAME pack context.
-	launch.WritePackContextFiles(cfg, o, effectivePack)
+	launch.WritePackContextFiles(cfg, o, effectivePack, d.Err)
 
 	// Trusted host state travels ONLY inside the launcher-generated initial
 	// prompt, never as a workspace file a cloned repo could plant. It is a
@@ -477,7 +477,7 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		}
 		return nil
 	}, func() error {
-		return launch.ApplyReplaceRm(defaultShellEnv(), plan, o.Name)
+		return launch.ApplyReplaceRm(defaultShellEnv(), d.Err, plan, o.Name)
 	}); perr != nil {
 		return runFail(d, 1, "%v", perr)
 	}
@@ -506,7 +506,7 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	// fresh create receipt over the existing lifetime), record the
 	// create receipt ONLY after this exact `sbx run` exec has itself succeeded
 	// — never before, never on failure, never on reattach.
-	if xerr := launch.ExecSbxRunAndRecordCreate(cmd, launch.DefinitelyCreating(state, o.Replace), o.Name, workspace.CanonicalPath(o.Workspace), o.StaticMCP); xerr != nil {
+	if xerr := launch.ExecSbxRunAndRecordCreate(cmd, launch.SbxCreatePoll(defaultShellEnv()), launch.DefinitelyCreating(state, o.Replace), o.Name, workspace.CanonicalPath(o.Workspace), o.StaticMCP); xerr != nil {
 		var rerr *workspace.ReceiptRecordError
 		if errors.As(xerr, &rerr) {
 			// The sandbox itself WAS created successfully — only the local

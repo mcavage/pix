@@ -4,6 +4,7 @@
 package main
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,7 +45,7 @@ func TestApplyPackToLaunch_BrokenActivePackFailsClosed(t *testing.T) {
 	}
 	cfg.Pack = tampered
 	o := launch.RunOpts{}
-	_, lerr := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil))
+	_, lerr := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil), io.Discard)
 	if lerr == nil {
 		t.Fatal("FIX B: a broken/tampered ACTIVE pack must refuse the launch, not proceed without its context")
 	}
@@ -58,7 +59,7 @@ func TestApplyPackToLaunch_BrokenActivePackFailsClosed(t *testing.T) {
 	// 2) Genuinely absent active pack (deleted dir): warn + proceed.
 	cfg.Pack = filepath.Join(dir, "gone")
 	o = launch.RunOpts{}
-	if _, lerr := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil)); lerr != nil {
+	if _, lerr := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil), io.Discard); lerr != nil {
 		t.Fatalf("a deleted active-pack dir must degrade to no-pack, got: %v", lerr)
 	}
 	if len(o.Skills) != 0 || len(o.PackKits) != 0 {
@@ -72,18 +73,18 @@ func TestApplyPackToLaunch_BrokenActivePackFailsClosed(t *testing.T) {
 	}
 	cfg.Pack = notAPack
 	o = launch.RunOpts{}
-	if _, lerr := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil)); lerr != nil {
+	if _, lerr := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil), io.Discard); lerr != nil {
 		t.Fatalf("a dir without pack.toml must degrade to no-pack, got: %v", lerr)
 	}
 
 	// 3) Explicit --pack keeps failing closed, even for the absent class.
 	cfg.Pack = ""
 	o = launch.RunOpts{Pack: filepath.Join(dir, "gone")}
-	if _, lerr := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil)); lerr == nil {
+	if _, lerr := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil), io.Discard); lerr == nil {
 		t.Fatal("an explicit --pack that does not load must stay fatal")
 	}
 	o = launch.RunOpts{Pack: tampered}
-	if _, lerr := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil)); lerr == nil {
+	if _, lerr := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil), io.Discard); lerr == nil {
 		t.Fatal("an explicit --pack with a tampered bin/ must stay fatal")
 	}
 }

@@ -66,11 +66,11 @@ func TestParseRunArgs_ExistingDirOK(t *testing.T) {
 }
 
 func TestValidateRunWorkspace(t *testing.T) {
-	if err := launch.ValidateRunWorkspace("."); err != nil {
+	if err := launch.ValidateRunWorkspace(".", knownVerb); err != nil {
 		t.Errorf("cwd default should validate: %v", err)
 	}
 	dir := t.TempDir()
-	if err := launch.ValidateRunWorkspace(dir); err != nil {
+	if err := launch.ValidateRunWorkspace(dir, knownVerb); err != nil {
 		t.Errorf("existing dir should validate: %v", err)
 	}
 	// A regular file is not a directory.
@@ -78,7 +78,7 @@ func TestValidateRunWorkspace(t *testing.T) {
 	if err := os.WriteFile(f, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := launch.ValidateRunWorkspace(f); err == nil {
+	if err := launch.ValidateRunWorkspace(f, knownVerb); err == nil {
 		t.Error("a regular file should not validate as a workspace")
 	}
 }
