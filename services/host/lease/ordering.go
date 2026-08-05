@@ -31,6 +31,38 @@ import (
 // regardless of ordering, while still serializing correctly against a
 // transition.
 func AttachRef(ctx context.Context, dir string) (*RefLease, error) {
+	return AttachRefUnderLifecycle(ctx, dir, nil)
+}
+
+// AttachRefUnderLifecycle is AttachRef with a CRITICAL SECTION: it acquires
+// the lifecycle lock EXCLUSIVE, runs fn while holding it, and only if fn
+// succeeds goes on to acquire the refs SHARED lock — still under the
+// lifecycle lock — before releasing lifecycle and returning the reference.
+// AttachRef is exactly this with a nil fn, so there is ONE implementation of
+// the ordering, not two that could drift.
+//
+// It exists because a lifecycle transition and the reference that survives it
+// are one atomic step for the caller that performs it: an integration that
+// CREATES a sandbox must have recorded the sandbox's immutable identity
+// (and anything else a later attach or a reaper reads) BEFORE any other
+// process is allowed to observe the transition as finished, and it must hold
+// a live reference by then too — otherwise a reaper that acquired the
+// lifecycle lock next would see a recorded sandbox with zero holders and be
+// entitled to destroy it. Both halves happen inside this one EX window.
+//
+// fn MUST NOT call AttachRef, WithLifecycle, TryReapProof, or anything else
+// that opens dir's lifecycle lock again: flock conflicts are per open file
+// description, so a second open from the SAME process deadlocks against this
+// one (the same reason keep.json has its own keep.lock guard). fn's error is
+// returned unwrapped, no reference is taken, and the lifecycle lock is
+// released.
+//
+// The lifecycle lock is held for as long as fn runs, so fn must be the
+// TRANSITION only — never the sandbox's whole session. A caller that starts a
+// long-lived child process inside fn is expected to return from fn as soon as
+// the transition is recorded and to wait on that child AFTER this returns,
+// with only the refs SHARED lock still held.
+func AttachRefUnderLifecycle(ctx context.Context, dir string, fn func() error) (*RefLease, error) {
 	lc, err := OpenLifecycleLock(dir)
 	if err != nil {
 		return nil, err
@@ -40,6 +72,12 @@ func AttachRef(ctx context.Context, dir string) (*RefLease, error) {
 		return nil, fmt.Errorf("lease: attach %s: acquiring lifecycle lock: %w", dir, err)
 	}
 	defer lc.Unlock()
+
+	if fn != nil {
+		if err := fn(); err != nil {
+			return nil, err
+		}
+	}
 
 	rl, err := OpenRefLease(dir)
 	if err != nil {

@@ -25,6 +25,7 @@ import (
 	"pix/host/inference"
 	"pix/host/launcher"
 	"pix/host/mcp"
+	"pix/host/sandbox"
 	"pix/host/secret"
 	"pix/host/service"
 	"pix/host/workflow/doctor"
@@ -86,6 +87,7 @@ type runCmd struct {
 	Intent   string   `help:"Resolve the session model via the router; --model overrides it. Intents: pix models show." placeholder:"NAME"`
 	Replace  bool     `help:"Recreate the sandbox (sbx rm -f, then create) instead of re-attaching; picks up changed create-only flags."`
 	Task     string   `help:"Launch an existing task's sandbox (same as 'pix task run NAME')." placeholder:"NAME"`
+	Keep     bool     `short:"k" help:"Mark this session as kept: a sticky, identity-bound marker a future teardown pass will honor (inert today — there is no reaper yet)."`
 
 	// PiArg is the `--` tail, rewritten by rewriteRunPassthrough. Hidden
 	// because a user never types it: they type `-- <pi args>`, which the
@@ -126,6 +128,7 @@ func (c *runCmd) opts() (launch.RunOpts, error) {
 		Replace:     c.Replace,
 		Pack:        c.Pack,
 		Passthrough: c.PiArg,
+		Keep:        c.Keep,
 	}
 	if c.KitRef != "" {
 		o.KitRef = launch.NormalizeKitRef(c.KitRef)
@@ -157,6 +160,22 @@ func (c *runCmd) Run(d *cli.Deps) error {
 		return err
 	}
 	return runLaunch(d, o)
+}
+
+// resolveSandboxName is the sandbox `pix run` actually targets: an explicit
+// --name travels verbatim, unchanged — it is a user-owned display name, never
+// mangled or reinterpreted. Absent that, the DEFAULT is the deterministic,
+// digest-suffixed sandbox.Name(workspace) — the SAME identity
+// launch.SessionName keys lease state by — not workspace.DeriveSandboxName's
+// bare "pix-<basename>" (still used, unchanged, by the separate MCP-receipt
+// lattice). Two workspaces that happen to share a basename get two DIFFERENT
+// default sandbox names, because the digest is computed over the full
+// canonical path, not the basename alone (see sandbox.Name's own doc).
+func resolveSandboxName(explicit, workspace string) string {
+	if explicit != "" {
+		return explicit
+	}
+	return sandbox.Name(workspace)
 }
 
 // runFail reports a launch failure in run's own words and hands the root the
@@ -243,9 +262,7 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	// Own the sandbox name (sbx would auto-derive `pix-<dir>`) and probe its
 	// state BEFORE any create-only resolution below, so a plain re-attach never
 	// fails on a --dev/checkout or --kit problem it does not even need.
-	if o.Name == "" {
-		o.Name = workspace.DeriveSandboxName(o.Workspace)
-	}
+	o.Name = resolveSandboxName(o.Name, o.Workspace)
 	state := launch.ProbeTaskSandbox(defaultShellEnv(), o.Name)
 
 	// Mirror sbx's own model: an existing sandbox (running OR stopped)
@@ -375,6 +392,17 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		// happening, and before RmFirst or exec (SbxUnknown + --replace).
 		return runFail(d, 1, "%v", plan.Err)
 	}
+	// U04c2: sessionKey is the lease identity for THIS workspace (the same
+	// digest name resolveSandboxName defaults the sandbox to), and fp is what
+	// a later attach must match. The DECISION to exec-attach is probed here,
+	// read-only, and re-validated under the lifecycle lock by launch.RunSession
+	// — which is also where a fingerprint divergence refuses.
+	sessionKey := launch.SessionName(o.Workspace)
+	fp := launch.SessionFingerprint(cfg, o)
+	attachExec := false
+	if plan.Reattach && !o.Replace {
+		_, attachExec = launch.FindPositivelyIdentifiedRunning(defaultShellEnv(), o.Name)
+	}
 	if !plan.Reattach {
 		if verr := launch.ValidateCreateKits(plan.Args, launch.ValidateSbxKit); verr != nil {
 			return runFail(d, 1, "%v", verr)
@@ -448,17 +476,54 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		fmt.Fprintln(d.Err, "+ sbx "+strings.Join(args, " "))
 	}
 
-	cmd := exec.Command("sbx", args...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	// No credential bearer: host MCP servers authenticate on the host, so the
-	// sandbox never sees a token.
-	cmd.Env = os.Environ()
-	// S03: on a DEFINITE create (the same predicate that gates the sandbox.pack
-	// marker above), record the create receipt ONLY after this exact `sbx run`
-	// exec succeeded — never before, never on failure, never on reattach.
-	if xerr := launch.ExecSbxRunAndRecordCreate(cmd, launch.SbxCreatePoll(defaultShellEnv()), launch.DefinitelyCreating(state, o.Replace), o.Name, workspace.CanonicalPath(o.Workspace), o.StaticMCP); xerr != nil {
+	// U04c2: the sandbox's whole create/attach lifecycle runs through
+	// launch.RunSession, which owns the ordering: lifecycle lock EX, a FRESH
+	// probe under it, the child started, the create-time facts (instance id,
+	// fingerprint, exact pi invocation, MCP receipt) all recorded, the refs
+	// SHARED reference taken while lifecycle is still held, lifecycle
+	// released, and only THEN the session waited out. This command layer owns
+	// stdio wiring, the exit code, and the words — never the ordering.
+	// ONE invocation builder, used for both roles it can play: the argv this
+	// create records, and the safe recomputed default an attach falls back to
+	// when nothing was ever recorded — so "default" can never drift from what
+	// a create would have sent.
+	invocation := launch.BuildPiInvocation(launch.LiveSkillDirs(cfg, o), o)
+	spec := launch.SessionSpec{
+		Key:               sessionKey,
+		Name:              o.Name,
+		Workspace:         workspace.CanonicalPath(o.Workspace),
+		Creating:          launch.DefinitelyCreating(state, o.Replace),
+		Keep:              o.Keep,
+		CreateArgs:        args,
+		AttachTTY:         d.Interactive,
+		AttachExec:        attachExec,
+		Fingerprint:       fp,
+		Invocation:        invocation,
+		DefaultInvocation: invocation,
+		Preloaded:         o.StaticMCP,
+	}
+	deps := launch.SessionDeps{
+		Env:  defaultShellEnv(),
+		Poll: launch.SbxCreatePoll(defaultShellEnv()),
+		Warn: d.Err,
+		Spawn: func(argv []string) *exec.Cmd {
+			cmd := exec.Command("sbx", argv...)
+			cmd.Stdin = os.Stdin
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			// No credential bearer: host MCP servers authenticate on the host,
+			// so the sandbox never sees a token.
+			cmd.Env = os.Environ()
+			return cmd
+		},
+	}
+	if xerr := launch.RunSession(spec, deps); xerr != nil {
+		var refused *launch.SessionRefused
+		if errors.As(xerr, &refused) {
+			// Decided under the lifecycle lock, before anything started: no
+			// create, no attach, no removal. run's own complete message.
+			return runFail(d, 1, "%v", refused)
+		}
 		var rerr *workspace.ReceiptRecordError
 		if errors.As(xerr, &rerr) {
 			// The sandbox itself WAS created successfully — only the local

@@ -114,6 +114,147 @@ export default [
 		],
 	},
 
+	// --- ACTIVE (U04c2): the create/attach ordering, lock by lock ------------
+	{
+		id: "lifecycle.session.record-before-lifecycle-unlock",
+		description:
+			"U04c2: launch.RunSession performs the whole transition inside lease.AttachRefUnderLifecycle's fn — lifecycle EXCLUSIVE held — so the child is started and every create-time fact (immutable instance id, fingerprint, exact pi invocation, MCP receipt) is recorded BEFORE the lifecycle lock is released and BEFORE the session is waited for. A creator SIGKILLed mid-session therefore still leaves a complete record, and a reaper acquiring the lifecycle lock next can never see a recorded sandbox with zero holders. The refs SHARED reference is taken by the SAME helper while lifecycle is still held; child.Wait() is called only after it returns.",
+		checks: [
+			{
+				file: "services/host/workflow/launch/session.go",
+				kind: "contains",
+				values: [
+					"ref, err := lease.AttachRefUnderLifecycle(ctx, dir, func() error {",
+					"child, terr = startSessionTransition(spec, deps)",
+					"return child.Wait()",
+				],
+			},
+			{
+				file: "services/host/lease/ordering.go",
+				kind: "contains",
+				values: [
+					"func AttachRefUnderLifecycle(ctx context.Context, dir string, fn func() error) (*RefLease, error) {",
+					"if err := lc.AcquireExclusive(ctx); err != nil {",
+					"if err := rl.AcquireShared(ctx); err != nil {",
+				],
+			},
+			{
+				file: "services/host/workflow/launch/run.go",
+				kind: "contains",
+				values: ["func StartSbxRunAndRecordCreate(cmd *exec.Cmd, poll CreatePoll, writeReceipt bool, sandbox, ws string, preloaded []string) (*SessionChild, error) {"],
+			},
+		],
+	},
+
+	{
+		id: "lifecycle.session.reprobe-under-the-lifecycle-lock",
+		description:
+			"U04c2: the create-vs-attach decision made before the lock is ADVISORY; RunSession re-probes the runtime under the lifecycle lock and REFUSES (SessionRefused, nothing started) when the answer changed — a create whose sandbox now exists, or an attach whose sandbox vanished. It never force-removes anything to resolve the race, so AGENTS.md safety invariant #7 holds by construction.",
+		checks: [
+			{
+				file: "services/host/workflow/launch/session.go",
+				kind: "contains",
+				values: [
+					"if state := ProbeTaskSandbox(deps.Env, spec.Name); sandboxAppeared(state) {",
+					"if state := ProbeTaskSandbox(deps.Env, spec.Name); state == SbxAbsent {",
+					"nothing was created or removed",
+				],
+			},
+			{
+				file: "services/host/workflow/launch/session.go",
+				kind: "notContains",
+				values: ['"rm", "-f"'],
+			},
+		],
+	},
+
+	{
+		id: "lifecycle.session.create-record-requires-verified-instance-id",
+		description:
+			"U04c2: RecordSessionCreation writes the immutable lease record ONLY when a fresh `sbx ls --json` positively names a schema-verified instance id for the sandbox — an absent listing, a parse failure, an unverified row, or a present-but-empty instance id all record NOTHING, leaving the session permanently UNOWNED rather than inventing an identity that would authorize a future teardown. A missing or CORRUPT record attaches unowned with the safe recomputed invocation (readSessionState's found=false covers both identically), and -k/--keep refuses to bind a keep to a session with no recorded identity.",
+		checks: [
+			{
+				file: "services/host/workflow/launch/session.go",
+				kind: "contains",
+				values: [
+					"if found == nil || !found.IdentityVerified || found.InstanceID == nil || *found.InstanceID == \"\" {",
+					"return false, nil // present but unowned: no verifiable instance id to record",
+					"recorded := SessionRecorded(spec.Key)",
+				],
+			},
+		],
+	},
+
+	{
+		id: "lifecycle.session.digest-name-keys-lease-state",
+		description:
+			"U04c2: a session's lease/keep/fingerprint state is keyed by sandbox.Name(workspace) (SessionName) — the deterministic, digest-suffixed identity U04b's sandbox package derives — and `pix run`'s DEFAULT sandbox name is that same digest form, not workspace.DeriveSandboxName's bare \"pix-<basename>\". Two workspaces sharing a basename can never alias the same lease directory or the same box. An explicit --name still travels verbatim.",
+		checks: [
+			{
+				file: "services/host/workflow/launch/session.go",
+				kind: "contains",
+				values: ["func SessionName(workspace string) string { return sandbox.Name(workspace) }"],
+			},
+			{
+				file: "services/host/cmd/pix/run_cmd.go",
+				kind: "contains",
+				values: ["return sandbox.Name(workspace)"],
+			},
+		],
+	},
+
+	{
+		id: "lifecycle.session.fingerprint-mismatch-refuses-attach",
+		description:
+			"U04c2: an attach whose RECORDED create-time fingerprint diverges from the current one refuses outright with the diverged keys named, under the lifecycle lock, rather than silently attaching to a sandbox created under different terms. A sandbox with no recorded fingerprint (found=false) has nothing to compare against and attaches unowned instead of refusing.",
+		checks: [
+			{
+				file: "services/host/workflow/launch/session.go",
+				kind: "contains",
+				values: [
+					"if diverged, found := CheckSessionFingerprint(spec.Key, spec.Fingerprint); found && len(diverged) > 0 {",
+					"refusing to attach. Recreate it explicitly:",
+				],
+			},
+		],
+	},
+
+	{
+		id: "lifecycle.session.attach-execs-stored-invocation",
+		description:
+			"U04c2: an attach to a POSITIVELY IDENTIFIED, RUNNING sandbox re-invokes pi through `sbx exec -it` (interactive) / `-i` (piped) with the STORED create-time invocation replayed verbatim — never asking sbx to re-derive a command from the container's spec. A stopped or schema-unverified row keeps the legacy `sbx run --name` reattach argv, because exec has no start of its own.",
+		checks: [
+			{
+				file: "services/host/workflow/launch/sbxargs.go",
+				kind: "contains",
+				values: ["Command: append([]string{\"pi\"}, invocation...),"],
+			},
+			{
+				file: "services/host/sandbox/argv.go",
+				kind: "contains",
+				values: ['args := []string{"exec", ttyFlag(o.TTY), o.Name}', 'return "-it"'],
+			},
+			{
+				file: "services/host/workflow/launch/session.go",
+				kind: "contains",
+				values: ["execArgs, aerr := BuildAttachArgv(spec.Name, spec.AttachTTY, invocation)"],
+			},
+		],
+	},
+
+	{
+		id: "lifecycle.run.bare-nontty-refusal-no-create",
+		description:
+			"U04c2: a BARE positional launch (never the explicit `run` verb) on a non-interactive terminal refuses before the root parser ever runs — no create, no attach, stderr-only guidance naming the resolved path, exit 2. An explicit `pix run DIR` from the same non-interactive shell is unaffected and gets `sbx exec -i`.",
+		checks: [
+			{
+				file: "services/host/cmd/pix/root.go",
+				kind: "contains",
+				values: ["if !d.Interactive {", "fmt.Fprintf(d.Err, bareNonTTYRefusalFmt, resolvedBareArgPath(a))"],
+			},
+		],
+	},
+
 	// --- STAGED (Story04): orphan reaper — no force, keep-absence required --
 	{
 		id: "lifecycle.reaper.no-force-requires-absence",

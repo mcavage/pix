@@ -12,6 +12,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"pix/host/launcher"
@@ -69,6 +70,24 @@ func looksLikePath(a string) bool {
 	return strings.ContainsRune(a, '/') ||
 		strings.HasPrefix(a, ".") ||
 		strings.HasPrefix(a, "~")
+}
+
+// bareNonTTYRefusalFmt is Story04c's bare-non-interactive refusal message: it
+// names the RESOLVED absolute path (never the raw, possibly-relative arg the
+// user typed) so a script reading this from a different cwd still gets an
+// unambiguous, copy-pasteable next step.
+const bareNonTTYRefusalFmt = "pix: refusing to launch %[1]q on a non-interactive terminal.\n" +
+	"Run it explicitly instead:  pix run %[1]s\n"
+
+// resolvedBareArgPath resolves a to its absolute form for the refusal
+// message above. A resolution failure (should not happen for a path
+// classifyBareArg already proved is a directory) falls back to a rather than
+// ever printing an empty path.
+func resolvedBareArgPath(a string) string {
+	if abs, err := filepath.Abs(a); err == nil {
+		return abs
+	}
+	return a
 }
 
 // classifyBareArg decides what a bare (non-flag) positional means when it is

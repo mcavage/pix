@@ -144,11 +144,75 @@ func RecordCreateReceipt(sandbox, ws string, preloaded []string, merge bool) err
 // than a silent success or a fake launch failure. The Wait goroutine always
 // terminates and its result is always drained.
 func ExecSbxRunAndRecordCreate(cmd *exec.Cmd, poll CreatePoll, writeReceipt bool, sandbox, ws string, preloaded []string) error {
+	child, err := StartSbxRunAndRecordCreate(cmd, poll, writeReceipt, sandbox, ws, preloaded)
+	if err != nil {
+		return err
+	}
+	return child.Wait()
+}
+
+// SessionChild is a STARTED child session whose create-time recording is
+// already DECIDED but whose exit has not been waited for yet. It exists so a
+// caller holding a lifecycle lock can do the two things in the right order:
+// finish recording (Appeared says whether there is anything to record
+// against), release the lock, and only THEN wait — a session's own lifetime
+// is not a lifecycle transition and must never be serialized as one.
+//
+// Wait is safe to call exactly once and always terminates: the Wait goroutine
+// started at Start writes its result to a buffered channel, and a result
+// already consumed during the creation poll is replayed rather than waited
+// for a second time.
+type SessionChild struct {
+	// Appeared reports that the create poll POSITIVELY saw this sandbox in
+	// `sbx ls` — the only state in which anything at all was recorded, and
+	// the only state in which a caller may record its own create-time facts
+	// (lease record, fingerprint, invocation) against it.
+	Appeared bool
+
+	waitCh  chan error
+	recErr  error // receipt outcome, surfaced by Wait on a clean session exit
+	drained bool  // the child already exited during the creation poll
+	exitErr error // its exit result, replayed by Wait
+}
+
+// Wait hands the terminal back and waits the session out. The child's own
+// failure dominates; a receipt failure surfaces only on a clean session exit,
+// so a caller can report "launched, but state unrecorded" without inventing a
+// launch failure.
+func (c *SessionChild) Wait() error {
+	if c.drained {
+		if c.exitErr != nil {
+			return c.exitErr
+		}
+		return c.recErr
+	}
+	if werr := <-c.waitCh; werr != nil {
+		return werr
+	}
+	return c.recErr
+}
+
+// StartSbxRunAndRecordCreate is ExecSbxRunAndRecordCreate's first half: it
+// runs every step that must complete BEFORE the session is waited for, and
+// returns the still-running child. writeReceipt=false (a plain re-attach, or
+// an inconclusive probe — see DefinitelyCreating) starts cmd and nothing
+// else: a re-attach writes nothing and clears nothing. writeReceipt=true
+// CLEARS any stale receipt, STARTS cmd, polls for the sandbox, and commits
+// the receipt the moment it appears (merging loads recorded since the clear).
+//
+// A non-nil error means the child never started (or the poll was unusable) —
+// nothing was created, nothing recorded. Everything else, including a child
+// that already exited and a receipt that could not be written, is reported
+// through the returned SessionChild's Wait.
+func StartSbxRunAndRecordCreate(cmd *exec.Cmd, poll CreatePoll, writeReceipt bool, sandbox, ws string, preloaded []string) (*SessionChild, error) {
 	if !writeReceipt {
-		return cmd.Run()
+		if err := cmd.Start(); err != nil {
+			return nil, err
+		}
+		return startedChild(cmd), nil
 	}
 	if err := poll.validate(); err != nil {
-		return err
+		return nil, err
 	}
 
 	// Pre-create clear: under the same per-sandbox lock the writers use, drop
@@ -163,49 +227,51 @@ func ExecSbxRunAndRecordCreate(cmd *exec.Cmd, poll CreatePoll, writeReceipt bool
 	}
 
 	if err := cmd.Start(); err != nil {
-		return err
+		return nil, err
 	}
-	waitCh := make(chan error, 1)
-	go func() { waitCh <- cmd.Wait() }()
+	child := startedChild(cmd)
 
-	var recErr error
 	deadline := time.Now().Add(poll.Timeout)
 	ticker := time.NewTicker(poll.Interval)
 	defer ticker.Stop()
-polling:
 	for {
 		if sandboxAppeared(poll.Probe(sandbox)) {
-			recErr = RecordCreateReceipt(sandbox, ws, preloaded, merge)
-			break polling
+			child.Appeared = true
+			child.recErr = RecordCreateReceipt(sandbox, ws, preloaded, merge)
+			return child, nil
 		}
 		if time.Now().After(deadline) {
-			recErr = &workspace.ReceiptRecordError{Op: "create", Sandbox: sandbox,
+			child.recErr = &workspace.ReceiptRecordError{Op: "create", Sandbox: sandbox,
 				Err: fmt.Errorf("timed out after %s waiting for the sandbox to appear in `sbx ls`; its preloaded MCP set was not recorded", poll.Timeout)}
-			break polling
+			return child, nil
 		}
 		select {
-		case werr := <-waitCh:
+		case werr := <-child.waitCh:
 			// Exited before creation evidence. A failed exec surfaces its OWN
 			// error, receiptless. A clean exit gets ONE final probe (the
 			// sandbox may have appeared exactly as it exited); still no
 			// evidence means honestly no receipt.
+			child.drained, child.exitErr = true, werr
 			if werr != nil {
-				return werr
+				return child, nil
 			}
 			if sandboxAppeared(poll.Probe(sandbox)) {
-				return RecordCreateReceipt(sandbox, ws, preloaded, merge)
+				child.Appeared = true
+				child.recErr = RecordCreateReceipt(sandbox, ws, preloaded, merge)
 			}
-			return nil
+			return child, nil
 		case <-ticker.C:
 		}
 	}
-	// Receipt outcome decided — hand the terminal back and wait the session
-	// out. Its failure dominates; a receipt failure surfaces only on a clean
-	// session exit.
-	if werr := <-waitCh; werr != nil {
-		return werr
-	}
-	return recErr
+}
+
+// startedChild wires the one Wait goroutine every started child gets: it
+// always terminates and its result is always buffered, so a caller that never
+// reaches Wait (a refused lifecycle transition) cannot leak it.
+func startedChild(cmd *exec.Cmd) *SessionChild {
+	waitCh := make(chan error, 1)
+	go func() { waitCh <- cmd.Wait() }()
+	return &SessionChild{waitCh: waitCh}
 }
 
 // ApplyReplaceRm runs the plan's RmFirst step and MUST be checked by the

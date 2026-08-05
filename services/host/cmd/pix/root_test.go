@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -96,6 +97,53 @@ func TestRootHelpIsTheCuratedScreen(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Parallel work") {
 		t.Errorf("help --all printed %q, want the full listing", out.String())
+	}
+}
+
+// TestDispatch_BareNonTTY_RefusesWithNoCreate (Story04c): a bare positional
+// naming a real directory (never the explicit `run` verb) on a
+// non-interactive terminal (d.Interactive == false, the zero value rootDeps
+// already uses) must refuse outright — exit 2, guidance on stderr ONLY
+// (nothing on stdout, which a script may be capturing), and it must never
+// even reach the root parser (no create, no attach, no side effect).
+func TestDispatch_BareNonTTY_RefusesWithNoCreate(t *testing.T) {
+	dir := t.TempDir()
+	d, out, errb := rootDeps()
+	d.Interactive = false
+
+	code := dispatch([]string{dir}, d)
+
+	if code != 2 {
+		t.Errorf("dispatch(%v) = %d, want 2", dir, code)
+	}
+	if out.String() != "" {
+		t.Errorf("stdout = %q, want empty (bare non-TTY must never print to stdout)", out.String())
+	}
+	abs, _ := filepath.Abs(dir)
+	if !strings.Contains(errb.String(), abs) {
+		t.Errorf("stderr = %q, want it to name the resolved path %q", errb.String(), abs)
+	}
+	if !strings.Contains(errb.String(), "pix run ") {
+		t.Errorf("stderr = %q, want explicit `pix run` guidance", errb.String())
+	}
+}
+
+// TestDispatch_BareInteractive_StillLaunches: the SAME bare positional on an
+// interactive terminal is unaffected by the new refusal — it still
+// re-normalizes to `run DIR` (proven here by the exit code/behavior being
+// whatever `run` itself would produce, not the bare-refusal's exit 2/stderr
+// shape). A workspace with nothing else configured will fail further down
+// run's own pipeline (no sbx, etc.) but must NOT fail with the bare-refusal
+// message.
+func TestDispatch_BareInteractive_StillLaunches(t *testing.T) {
+	dir := t.TempDir()
+	d, _, errb := rootDeps()
+	d.Interactive = true
+
+	_ = dispatch([]string{dir}, d)
+
+	if strings.Contains(errb.String(), "non-interactive terminal") {
+		t.Errorf("an interactive bare launch must not hit the non-TTY refusal, stderr = %q", errb.String())
 	}
 }
 

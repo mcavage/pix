@@ -206,3 +206,117 @@ func TestTryReapProof_SucceedsAfterAttachedRefReleases(t *testing.T) {
 		t.Errorf("TryReapProof after release = %v, want nil", err)
 	}
 }
+
+// --- U04c2: AttachRefUnderLifecycle -------------------------------------
+//
+// The composed create/attach transition: the caller's fn runs under the
+// lifecycle EXCLUSIVE lock, and the refs SHARED lock is taken BEFORE that
+// lock is released, so no other process can ever observe the transition as
+// finished with zero holders.
+
+// TestAttachRefUnderLifecycle_FnRunsUnderExclusiveLifecycle: while fn runs,
+// the lifecycle lock is genuinely held — a would-be reaper's non-blocking
+// proof reports ErrHeld rather than running.
+func TestAttachRefUnderLifecycle_FnRunsUnderExclusiveLifecycle(t *testing.T) {
+	dir := t.TempDir()
+	ran := false
+	rl, err := AttachRefUnderLifecycle(context.Background(), dir, func() error {
+		ran = true
+		if perr := TryReapProof(dir, func() error { return nil }); !errors.Is(perr, ErrHeld) {
+			t.Errorf("inside fn, TryReapProof = %v, want ErrHeld (the lifecycle lock must be held)", perr)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("AttachRefUnderLifecycle: %v", err)
+	}
+	defer rl.Close()
+	if !ran {
+		t.Fatal("fn never ran")
+	}
+	// After returning: the REFS lock is held (so a reaper still cannot act)
+	// but the LIFECYCLE lock is free (so another transition is not blocked
+	// behind this session's lifetime).
+	if perr := TryReapProof(dir, func() error { return nil }); !errors.Is(perr, ErrHeld) {
+		t.Errorf("after attach, TryReapProof = %v, want ErrHeld (the reference must be held)", perr)
+	}
+	lc, err := OpenLifecycleLock(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lc.Close()
+	if lerr := lc.TryExclusive(); lerr != nil {
+		t.Errorf("after attach, the lifecycle lock is still held (%v) — it must cover the transition only", lerr)
+	}
+	lc.Unlock()
+}
+
+// TestAttachRefUnderLifecycle_FnErrorTakesNoReference: a refused transition
+// returns fn's error unwrapped, takes no reference, and leaves BOTH locks
+// free — nothing half-registered.
+func TestAttachRefUnderLifecycle_FnErrorTakesNoReference(t *testing.T) {
+	dir := t.TempDir()
+	sentinel := errors.New("refused under the lock")
+	rl, err := AttachRefUnderLifecycle(context.Background(), dir, func() error { return sentinel })
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("AttachRefUnderLifecycle err = %v, want the sentinel unwrapped", err)
+	}
+	if rl != nil {
+		t.Fatal("a refused transition must return no reference")
+	}
+	if perr := TryReapProof(dir, func() error { return nil }); perr != nil {
+		t.Errorf("after a refused transition, TryReapProof = %v, want nil (both locks free)", perr)
+	}
+}
+
+// TestAttachRefUnderLifecycle_SecondAttachWaitsForTheTransition: a second
+// attach cannot slip in while a transition is mid-flight; it acquires
+// promptly once the transition releases. This is the in-process shape of the
+// cross-process guarantee workflow/launch's session tests measure end to end.
+func TestAttachRefUnderLifecycle_SecondAttachWaitsForTheTransition(t *testing.T) {
+	dir := t.TempDir()
+	inFn := make(chan struct{})
+	finish := make(chan struct{})
+	acquired := make(chan error, 1)
+
+	go func() {
+		rl, err := AttachRefUnderLifecycle(context.Background(), dir, func() error {
+			close(inFn)
+			<-finish
+			return nil
+		})
+		if err == nil {
+			defer rl.Close()
+		}
+		acquired <- err
+	}()
+
+	<-inFn
+	second := make(chan time.Duration, 1)
+	go func() {
+		start := time.Now()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		rl, err := AttachRef(ctx, dir)
+		if err != nil {
+			second <- -1
+			return
+		}
+		defer rl.Close()
+		second <- time.Since(start)
+	}()
+
+	select {
+	case d := <-second:
+		t.Fatalf("a second attach acquired in %s while a transition was still mid-flight", d)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(finish)
+	if err := <-acquired; err != nil {
+		t.Fatalf("first attach: %v", err)
+	}
+	d := <-second
+	if d < 0 {
+		t.Fatal("second attach failed")
+	}
+}

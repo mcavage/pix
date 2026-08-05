@@ -71,6 +71,14 @@ func refuseSymlink(path string) error {
 	return nil
 }
 
+// EnsureSandboxDir creates dir 0700 if absent (the same TOCTOU-safe,
+// symlink-refusing create CreateRecord performs internally before writing),
+// exported for a caller that needs a lease directory to exist for a
+// dir-level operation — Open, SetKeep — that itself writes no record. A
+// caller that goes on to CreateRecord does not need this first; CreateRecord
+// calls the same guarded path itself.
+func EnsureSandboxDir(dir string) error { return ensureSandboxDir(dir) }
+
 // ensureSandboxDir creates dir 0700 if absent, refusing to create through or
 // follow a symlink either before or after the create (closing the TOCTOU
 // window where something replaces dir with a symlink between the check and
