@@ -77,41 +77,30 @@ host = true
 	}
 }
 
-// TestLoadPack_RejectsEmptyBinSHA: fail-closed — an unpinned external binary
-// never reaches an exec path because it never even loads.
-func TestLoadPack_RejectsEmptyBinSHA(t *testing.T) {
-	root := t.TempDir()
-	toml := "name=\"p\"\nschema=1\n[[bin]]\nname=\"tool\"\npath=\"bin/tool\"\n"
-	if err := os.WriteFile(filepath.Join(root, "pack.toml"), []byte(toml), 0o644); err != nil {
-		t.Fatal(err)
+// TestLoadPack_RejectsUnsafeV2Facets table-drives fail-closed load-time
+// rejections across the v2 facets: an unpinned external binary never reaches
+// an exec path because it never even loads (empty sha), a [[bin]].path that
+// walks out of the pack root is refused, and an unsafe [[proxy]] name is
+// refused too.
+func TestLoadPack_RejectsUnsafeV2Facets(t *testing.T) {
+	cases := []struct {
+		name string
+		toml string
+	}{
+		{"empty bin sha", "name=\"p\"\nschema=1\n[[bin]]\nname=\"tool\"\npath=\"bin/tool\"\n"},
+		{"invalid proxy name", "name=\"p\"\nschema=1\n[[proxy]]\nname=\"../escape\"\n"},
+		{"bin path escape", "name=\"p\"\nschema=1\n[[bin]]\nname=\"tool\"\npath=\"../../etc/passwd\"\nsha=\"deadbeef\"\n"},
 	}
-	if _, err := LoadPack(root); err == nil {
-		t.Error("LoadPack must reject a [[bin]] with no sha")
-	}
-}
-
-// TestLoadPack_RejectsInvalidProxyName.
-func TestLoadPack_RejectsInvalidProxyName(t *testing.T) {
-	root := t.TempDir()
-	toml := "name=\"p\"\nschema=1\n[[proxy]]\nname=\"../escape\"\n"
-	if err := os.WriteFile(filepath.Join(root, "pack.toml"), []byte(toml), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := LoadPack(root); err == nil {
-		t.Error("LoadPack must reject an unsafe [[proxy]] name")
-	}
-}
-
-// TestLoadPack_RejectsBinPathEscape: a [[bin]].path that walks out of the pack
-// root must be refused at load time.
-func TestLoadPack_RejectsBinPathEscape(t *testing.T) {
-	root := t.TempDir()
-	toml := "name=\"p\"\nschema=1\n[[bin]]\nname=\"tool\"\npath=\"../../etc/passwd\"\nsha=\"deadbeef\"\n"
-	if err := os.WriteFile(filepath.Join(root, "pack.toml"), []byte(toml), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := LoadPack(root); err == nil {
-		t.Error("LoadPack must reject a [[bin]].path that escapes the pack root")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, "pack.toml"), []byte(tc.toml), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadPack(root); err == nil {
+				t.Errorf("LoadPack must reject: %s", tc.name)
+			}
+		})
 	}
 }
 

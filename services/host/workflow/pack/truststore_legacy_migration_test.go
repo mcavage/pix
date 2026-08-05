@@ -25,147 +25,138 @@ func writeLegacyStore(t *testing.T, raw string) {
 	}
 }
 
-// TestLoadPackTrustStore_MigratesLegacyActivationOnly: a pre-packslim store
-// with ONLY the legacy singular `activation` object (no `activations` ledger
-// at all — the exact shape a long-untouched user's disk file has) is imported
-// into a one-element Activations ledger on load.
-func TestLoadPackTrustStore_MigratesLegacyActivationOnly(t *testing.T) {
-	isolatePackHost(t)
-	writeLegacyStore(t, `{
-		"version": 1,
-		"activation": {
-			"owner": "path:/packs/solo",
-			"path": "/packs/solo",
-			"mcp": ["slack"],
-			"gog_account": "me@example.com",
-			"prior_gog_account": ""
-		}
-	}`)
-
-	s, err := loadPackTrustStore()
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if len(s.Activations) != 1 {
-		t.Fatalf("want 1 migrated activation, got %d (%+v)", len(s.Activations), s.Activations)
-	}
-	got := s.Activations[0]
-	if got.Owner != "path:/packs/solo" || got.Path != "/packs/solo" {
-		t.Errorf("migrated record has wrong identity: %+v", got)
-	}
-	if len(got.MCP) != 1 || got.MCP[0] != "slack" {
-		t.Errorf("migrated record dropped MCP attribution: %+v", got)
-	}
-	if got.GogAccount != "me@example.com" {
-		t.Errorf("migrated record dropped gog_account attribution: %+v", got)
-	}
-
-	// activationFor must resolve through the migrated record — this is the
-	// actual behavior the migration exists to preserve: revertPackPriorContribution
-	// still finds this pack's attribution after the upgrade.
-	lock := s.activationFor("/packs/solo")
-	if len(lock.MCP) != 1 || lock.MCP[0] != "slack" {
-		t.Errorf("activationFor did not resolve through the migrated ledger entry: %+v", lock)
-	}
-}
-
-// TestLoadPackTrustStore_LegacyActivationDedupedAgainstLedger: a store that
-// already carries BOTH the legacy `activation` object and an `activations`
-// ledger entry for the SAME pack (owner+path) must not double it — the
-// ledger entry already representing that pack wins, no duplicate append.
-func TestLoadPackTrustStore_LegacyActivationDedupedAgainstLedger(t *testing.T) {
-	isolatePackHost(t)
-	writeLegacyStore(t, `{
-		"version": 1,
-		"activation": {
-			"owner": "path:/packs/dup",
-			"path": "/packs/dup",
-			"mcp": ["stale-legacy-value"]
+// TestLoadPackTrustStore_LegacyActivationMigration table-drives the four
+// shapes migrateLegacyActivation must handle at load: the solo pre-packslim
+// case (only `activation`, no ledger), a duplicate of an already-ledgered
+// pack (existing entry wins, no dup), a legacy entry for a DIFFERENT pack
+// than the ledger (appended, order preserved), and a malformed `activation`
+// value (ignored, rest of the store still parses). Each case writes a REAL
+// pack-trust.json and drives it through loadPackTrustStore — no in-memory
+// struct shortcuts.
+func TestLoadPackTrustStore_LegacyActivationMigration(t *testing.T) {
+	cases := []struct {
+		name  string
+		raw   string
+		check func(t *testing.T, s *PackTrustStore)
+	}{
+		{
+			name: "solo activation migrates into the ledger",
+			raw: `{
+				"version": 1,
+				"activation": {
+					"owner": "path:/packs/solo",
+					"path": "/packs/solo",
+					"mcp": ["slack"],
+					"gog_account": "me@example.com",
+					"prior_gog_account": ""
+				}
+			}`,
+			check: func(t *testing.T, s *PackTrustStore) {
+				if len(s.Activations) != 1 {
+					t.Fatalf("want 1 migrated activation, got %d (%+v)", len(s.Activations), s.Activations)
+				}
+				got := s.Activations[0]
+				if got.Owner != "path:/packs/solo" || got.Path != "/packs/solo" {
+					t.Errorf("migrated record has wrong identity: %+v", got)
+				}
+				if len(got.MCP) != 1 || got.MCP[0] != "slack" {
+					t.Errorf("migrated record dropped MCP attribution: %+v", got)
+				}
+				if got.GogAccount != "me@example.com" {
+					t.Errorf("migrated record dropped gog_account attribution: %+v", got)
+				}
+				// activationFor must resolve through the migrated record — the
+				// actual behavior the migration exists to preserve:
+				// revertPackPriorContribution still finds this pack's
+				// attribution after the upgrade.
+				lock := s.activationFor("/packs/solo")
+				if len(lock.MCP) != 1 || lock.MCP[0] != "slack" {
+					t.Errorf("activationFor did not resolve through the migrated ledger entry: %+v", lock)
+				}
+			},
 		},
-		"activations": [
-			{
-				"owner": "path:/packs/dup",
-				"path": "/packs/dup",
-				"mcp": ["current-ledger-value"]
-			}
-		]
-	}`)
-
-	s, err := loadPackTrustStore()
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if len(s.Activations) != 1 {
-		t.Fatalf("legacy activation for an already-ledgered pack must not duplicate; got %d entries: %+v", len(s.Activations), s.Activations)
-	}
-	if s.Activations[0].MCP[0] != "current-ledger-value" {
-		t.Errorf("the existing ledger entry must win over the stale legacy value, got %+v", s.Activations[0])
-	}
-}
-
-// TestLoadPackTrustStore_LegacyActivationAppendedForDifferentPack: the legacy
-// `activation` object names a DIFFERENT pack than anything already in the
-// ledger (a composed-stack store where the singular legacy field predates the
-// stack, e.g. from before that host ever ran `pack use --stack`) — it is
-// appended, not dropped, since "no duplicate" means no duplicate for THAT
-// identity, not "ledger already non-empty".
-func TestLoadPackTrustStore_LegacyActivationAppendedForDifferentPack(t *testing.T) {
-	isolatePackHost(t)
-	writeLegacyStore(t, `{
-		"version": 1,
-		"activation": {
-			"owner": "path:/packs/legacy-solo",
-			"path": "/packs/legacy-solo",
-			"mcp": ["legacy-mcp"]
+		{
+			name: "duplicate of an already-ledgered pack is deduped",
+			raw: `{
+				"version": 1,
+				"activation": {
+					"owner": "path:/packs/dup",
+					"path": "/packs/dup",
+					"mcp": ["stale-legacy-value"]
+				},
+				"activations": [
+					{
+						"owner": "path:/packs/dup",
+						"path": "/packs/dup",
+						"mcp": ["current-ledger-value"]
+					}
+				]
+			}`,
+			check: func(t *testing.T, s *PackTrustStore) {
+				if len(s.Activations) != 1 {
+					t.Fatalf("legacy activation for an already-ledgered pack must not duplicate; got %d entries: %+v", len(s.Activations), s.Activations)
+				}
+				if s.Activations[0].MCP[0] != "current-ledger-value" {
+					t.Errorf("the existing ledger entry must win over the stale legacy value, got %+v", s.Activations[0])
+				}
+			},
 		},
-		"activations": [
-			{
-				"owner": "path:/packs/stack-a",
-				"path": "/packs/stack-a",
-				"mcp": ["a-mcp"]
+		{
+			name: "legacy entry for a distinct pack is appended, order preserved",
+			raw: `{
+				"version": 1,
+				"activation": {
+					"owner": "path:/packs/legacy-solo",
+					"path": "/packs/legacy-solo",
+					"mcp": ["legacy-mcp"]
+				},
+				"activations": [
+					{
+						"owner": "path:/packs/stack-a",
+						"path": "/packs/stack-a",
+						"mcp": ["a-mcp"]
+					}
+				]
+			}`,
+			check: func(t *testing.T, s *PackTrustStore) {
+				if len(s.Activations) != 2 {
+					t.Fatalf("want the existing ledger entry preserved plus the migrated one, got %d: %+v", len(s.Activations), s.Activations)
+				}
+				if s.Activations[0].Owner != "path:/packs/stack-a" {
+					t.Errorf("existing ledger order must be preserved, got %+v", s.Activations[0])
+				}
+				if s.Activations[1].Owner != "path:/packs/legacy-solo" || s.Activations[1].MCP[0] != "legacy-mcp" {
+					t.Errorf("legacy activation for a distinct pack must be appended, got %+v", s.Activations[1])
+				}
+			},
+		},
+		{
+			name: "malformed activation value is ignored, rest of store parses",
+			raw: `{
+				"version": 1,
+				"activation": "not-an-object",
+				"accepted": {"path:/x": {"fingerprint": "abcd"}}
+			}`,
+			check: func(t *testing.T, s *PackTrustStore) {
+				if len(s.Activations) != 0 {
+					t.Errorf("a malformed legacy activation must migrate nothing, got %+v", s.Activations)
+				}
+				if fp, ok := s.acceptedFingerprint("path:/x"); !ok || fp != "abcd" {
+					t.Errorf("the rest of the store must still parse: acceptedFingerprint=%q ok=%v", fp, ok)
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			isolatePackHost(t)
+			writeLegacyStore(t, tc.raw)
+			s, err := loadPackTrustStore()
+			if err != nil {
+				t.Fatalf("load: %v", err)
 			}
-		]
-	}`)
-
-	s, err := loadPackTrustStore()
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if len(s.Activations) != 2 {
-		t.Fatalf("want the existing ledger entry preserved plus the migrated one, got %d: %+v", len(s.Activations), s.Activations)
-	}
-	if s.Activations[0].Owner != "path:/packs/stack-a" {
-		t.Errorf("existing ledger order must be preserved, got %+v", s.Activations[0])
-	}
-	if s.Activations[1].Owner != "path:/packs/legacy-solo" || s.Activations[1].MCP[0] != "legacy-mcp" {
-		t.Errorf("legacy activation for a distinct pack must be appended, got %+v", s.Activations[1])
-	}
-}
-
-// TestLoadPackTrustStore_MalformedLegacyActivationIgnored: a legacy
-// `activation` key that is NOT an object (garbage written by hand, or by a
-// tool that never understood the shape) must not fail the whole load — the
-// rest of the store (a well-formed `activations` ledger, accepted records)
-// is still usable. This is a narrower failure mode than an unparsable store:
-// the top-level JSON is valid, just one key inside it is not what
-// migrateLegacyActivation expects.
-func TestLoadPackTrustStore_MalformedLegacyActivationIgnored(t *testing.T) {
-	isolatePackHost(t)
-	writeLegacyStore(t, `{
-		"version": 1,
-		"activation": "not-an-object",
-		"accepted": {"path:/x": {"fingerprint": "abcd"}}
-	}`)
-
-	s, err := loadPackTrustStore()
-	if err != nil {
-		t.Fatalf("a malformed legacy `activation` value must not fail the whole load: %v", err)
-	}
-	if len(s.Activations) != 0 {
-		t.Errorf("a malformed legacy activation must migrate nothing, got %+v", s.Activations)
-	}
-	if fp, ok := s.acceptedFingerprint("path:/x"); !ok || fp != "abcd" {
-		t.Errorf("the rest of the store must still parse: acceptedFingerprint=%q ok=%v", fp, ok)
+			tc.check(t, s)
+		})
 	}
 }
 

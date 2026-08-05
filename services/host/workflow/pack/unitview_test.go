@@ -17,12 +17,6 @@ import (
 	"pix/host/sys/systest"
 )
 
-// isolateTrustState points the trust store + lock at temp dirs.
-func isolateTrustState(t *testing.T) {
-	t.Helper()
-	isolatePackHost(t)
-}
-
 func viewEnv() hostenv.Env {
 	return hostenv.Env{System: &systest.Fake{}}
 }
@@ -31,7 +25,7 @@ func viewEnv() hostenv.Env {
 // surface was NEVER accepted exports nothing — the error names the re-review
 // path and no view escapes. Consent strictly precedes export.
 func TestAcceptedServices_RejectedBeforeAcceptance(t *testing.T) {
-	isolateTrustState(t)
+	isolatePackHost(t)
 	root := writeServicePack(t, validGoPluginService)
 	p, err := LoadPack(root)
 	if err != nil {
@@ -54,7 +48,7 @@ func TestAcceptedServices_RejectedBeforeAcceptance(t *testing.T) {
 // consented but never exported — no runtime consumes them), normalized, with
 // an absolute path under the pack root and env reference NAMES only.
 func TestAcceptedServices_AcceptedExportsMinimalView(t *testing.T) {
-	isolateTrustState(t)
+	isolatePackHost(t)
 	root := writeServicePack(t, validGoPluginService+validContainerService)
 	acceptPackSurface(t, root, "")
 	p, err := LoadPack(root)
@@ -95,7 +89,7 @@ func TestAcceptedServices_AcceptedExportsMinimalView(t *testing.T) {
 // fingerprint match — any change to the accepted surface re-gates before a
 // single view (and therefore a single staged byte) exists.
 func TestAcceptedServices_ChangeSinceAcceptanceRegates(t *testing.T) {
-	isolateTrustState(t)
+	isolatePackHost(t)
 	root := writeServicePack(t, validGoPluginService)
 	acceptPackSurface(t, root, "")
 
@@ -126,7 +120,7 @@ func TestAcceptedServices_ChangeSinceAcceptanceRegates(t *testing.T) {
 // the trust check ever runs — reserved ports/loopback/env-shape rules hold at
 // the last pack-side gate too, not only at load.
 func TestAcceptedServices_RevalidatesMutatedInfo(t *testing.T) {
-	isolateTrustState(t)
+	isolatePackHost(t)
 	root := writeServicePack(t, validGoPluginService)
 	acceptPackSurface(t, root, "")
 	p, err := LoadPack(root)
@@ -142,7 +136,7 @@ func TestAcceptedServices_RevalidatesMutatedInfo(t *testing.T) {
 // TestAcceptedServices_NoServicesIsQuietlyEmpty: a pack with no [[services]]
 // answers nil/nil without consulting the trust store — nothing to admit.
 func TestAcceptedServices_NoServicesIsQuietlyEmpty(t *testing.T) {
-	isolateTrustState(t)
+	isolatePackHost(t)
 	root := writeServicePack(t, "")
 	p, err := LoadPack(root)
 	if err != nil {
