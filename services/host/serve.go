@@ -1,21 +1,15 @@
 // `serve` is the plugin supervisor. It runs the long-running HTTP host services
-// (memory :11435, monitor ingest :11437), resolving each
-// capability slot from config: a "builtin" impl runs IN-PROCESS exactly as
-// before (memoryMux()); a non-builtin impl is launched ONCE at
-// startup as a go-plugin subprocess and the HTTP shim proxies to it. Plugins
-// never bind ports — the supervisor owns the listeners and the stable host
-// surface every sandbox already depends on. The MCP servers (e.g. slack) are
-// stdio and spawned on demand by the sbx gateway (`mcp <name>`), not here.
+// (memory :11435, monitor ingest :11437), resolving each capability slot from
+// config. Plugins never bind ports — the supervisor owns the listeners and the
+// stable host surface every sandbox depends on. MCP servers are stdio and
+// spawned on demand by the sbx gateway, not here.
 //
-// monitor ingest is composed directly (no go-plugin subprocess: it is a
-// single loopback HTTP listener over a file-backed store, not a capability
-// worth the supervision-tree machinery). It owns its own net.Listener
-// (monitor.NewIngestServer binds eagerly, so a port conflict is a startup
-// error here rather than a silent later failure) and its own context-based
-// Serve/shutdown, so it is NOT one of the mux-based hostServices below —
-// `ctx` is threaded through specifically so cancelling it on shutdown drains
-// monitor's listener the same way SIGINT/a fatal service error do for
-// everything else. See docs/design/monitor.md.
+// monitor ingest is composed directly rather than as a supervised unit: it is one
+// loopback listener over a file-backed store, and it already owns both its
+// net.Listener (bound eagerly, so a port conflict is a startup error) and its
+// context-based Serve/shutdown. `ctx` is threaded through so cancelling it on
+// shutdown drains monitor the way SIGINT drains everything else. See
+// docs/design/monitor.md.
 package main
 
 import (
@@ -39,23 +33,19 @@ import (
 )
 
 // hostService is one mux-based listener `serve` owns: a name for the log line,
-// the address it binds, and the handler behind it. There is no preflight hook:
-// the last capability that had one is gone, memory degrades on purpose (a
-// missing Ollama must not stop the store from answering), and monitor is not a
-// mux service at all — so the field, and the barf-on-failure loop reading it,
-// were a mechanism with no implementors.
+// the address it binds, and the handler behind it. There is no preflight hook by
+// design — memory degrades rather than refusing to serve (a missing Ollama must
+// not stop the store from answering).
 type hostService struct {
 	name string
 	addr string
 	mux  http.Handler
 }
 
-// serveUsage documents the flags runServe itself parses (--bind/--port,
-// monitor-only — memory's bind/port stay env-only via MEMORY_BIND/
-// MEMORY_PORT, unchanged) plus the enabled-service positionals. `pix serve`
-// (the launcher) intercepts -h/--help before ever exec'ing this binary and
-// prints service.Usage instead; this text is for a direct `pix-host serve
-// -h` invocation (as `make serve` does).
+// serveUsage documents the flags runServe parses (--bind/--port are
+// monitor-only; memory's bind/port stay env-only via MEMORY_BIND/MEMORY_PORT)
+// plus the enabled-service positionals. `pix serve` intercepts -h/--help and
+// prints service.Usage instead; this text is for a direct `pix-host serve -h`.
 const serveUsage = `usage: pix-host serve [service...] [--bind ADDR] [--port N]
 
   Run the long-running host services: memory (:11435), monitor ingest
@@ -69,10 +59,6 @@ const serveUsage = `usage: pix-host serve [service...] [--bind ADDR] [--port N]
   --port N      monitor ingest port (default 11437)
 `
 
-// runServe starts the long-running HTTP host services. Positional args are
-// the list from `services` in config.toml (config-friendly alias: memory,
-// monitor); empty means "all". The MCP servers (e.g. slack) are stdio
-// commands run by the sbx gateway via `sbx mcp add`, not HTTP daemons.
 // serveServiceAliases is the config name -> internal service name table: the
 // WHOLE set of capabilities `serve` composes. A retired capability leaves here,
 // which is what makes `serve <retired>` a usage error, not a started daemon.
@@ -102,10 +88,9 @@ func runServe(argv []string) {
 	sup := &supervisor{}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	// fatalf routes every fatal exit through plugin cleanup (F4). A plain
-	// log.Fatalf calls os.Exit and skips the signal-handler shutdown, orphaning
-	// any launched plugin subprocess; sup.shutdown() is a no-op with none running,
-	// so this is always safe. Use it for every fatal after `sup` exists.
+	// fatalf routes every fatal exit through plugin cleanup: a plain log.Fatalf
+	// skips the signal-handler shutdown and orphans a launched plugin subprocess.
+	// sup.shutdown() is a no-op with none running, so use it for EVERY fatal below.
 	fatalf := func(format string, a ...any) {
 		log.Printf("serve: "+format, a...)
 		cancel()
@@ -118,8 +103,8 @@ func runServe(argv []string) {
 		fatalf("locate self: %v", err)
 	}
 
-	// Resolve the enabled set FIRST (F1): CLI args win; else config's `services`;
-	// else empty == "all". Only enabled services are constructed and launched.
+	// Resolve the enabled set FIRST: CLI args win, else config's `services`, else
+	// empty == "all". Only enabled services are constructed and launched.
 	effective := resolveServices(enabled, cfg.Services)
 	// config-friendly aliases -> internal service name.
 	alias := serveServiceAliases()
@@ -144,16 +129,14 @@ func runServe(argv []string) {
 	var all []hostService
 
 	// memory ALWAYS runs as a supervised go-plugin unit — the built-in impl as a
-	// self-exec of this binary (`pix-host plugin memory`), a configured impl as
-	// its own sha-pinned executable. One path, one lifecycle: the store (and its
-	// advisory lock, taken by servePluginMemory) lives in a child process the
-	// supervision tree can restart, health-probe and reattach to, while THIS
-	// process keeps owning the :11435 listener the sandbox depends on. The
-	// JSON-RPC surface is unchanged — memoryProxyMux serves the same methods and
-	// params, over the same real SQLite store.
+	// self-exec of this binary (`pix-host plugin memory`), a configured impl as its
+	// own sha-pinned executable. One path, one lifecycle: the store (and its
+	// advisory lock, taken by servePluginMemory) lives in a child the supervision
+	// tree can restart, health-probe and reattach to, while THIS process keeps
+	// owning the :11435 listener the sandbox depends on.
 	if enabledSvc("memory") {
-		// Wire the configured model names into the env the unit inherits (F6). An
-		// explicit env override still wins; otherwise the config value applies.
+		// Wire the configured model names into the env the unit inherits; an explicit
+		// env override still wins.
 		applyMemoryModelEnv(cfg)
 		memSvc := hostService{name: "memory", addr: env("MEMORY_BIND", "127.0.0.1") + ":" + env("MEMORY_PORT", "11435")}
 		spec := cfg.Plugin("memory")
@@ -165,12 +148,8 @@ func runServe(argv []string) {
 		all = append(all, memSvc)
 	}
 
-	// monitor ingest: a loopback HTTP listener over a bounded, file-backed
-	// store (services/host/monitor), receiving NDJSON events + blob bodies
-	// from the in-sandbox tap. It composes directly rather than through a
-	// mux-based hostService because NewIngestServer already owns its own
-	// listener AND its own Serve(ctx)/shutdown — duplicating that behind a
-	// second http.Server here would just be two owners of one socket.
+	// monitor ingest: a loopback HTTP listener over a bounded, file-backed store,
+	// receiving NDJSON events + blob bodies from the in-sandbox tap.
 	var monitorSrv *monitor.IngestServer
 	if enabledSvc("monitor") {
 		root, rerr := config.MonitorStoreRoot()
@@ -192,30 +171,24 @@ func runServe(argv []string) {
 		fatalf("no services enabled (run: pix config set services %s)", strings.Join(valid, ","))
 	}
 
-	// Record our pid so the launcher's `serve stop` / `serve status` can find and
-	// signal us safely (no blind pkill). A stale pidfile from a previous crash is
-	// overwritten — the new pid is authoritative. Best-effort: a failure only logs,
-	// and we remove the file again on graceful shutdown (below) and normal return.
+	// Record our pid so the launcher's `serve stop`/`serve status` can find and
+	// signal us safely (no blind pkill).
 	writeServePidFile()
 	defer removeServePidFile()
 	defer removeServeLazyMarker()
 
 	// fatalCh carries service-goroutine errors (e.g. port already in use) back to
-	// the main goroutine so deferred cleanup (pidfile, lazy marker) runs before
-	// exit rather than being skipped by a direct os.Exit in a side goroutine (M-4).
+	// the main goroutine, and sigCh carries SIGINT/SIGTERM: both are handled in the
+	// select below rather than by a side goroutine calling os.Exit, so the deferred
+	// cleanup (pidfile, lazy marker) actually runs.
 	fatalCh := make(chan error, len(all)+2)
-
-	// sigCh receives SIGINT/SIGTERM for graceful shutdown. Handling it in the main
-	// goroutine's select (instead of a side goroutine calling os.Exit) ensures the
-	// deferred cleanup runs on normal signal handling (M-4).
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	for _, s := range all {
 		s := s
-		// Bound HTTP servers: ReadTimeout prevents slow-loris header floods;
-		// WriteTimeout caps long-running handlers. Synthesis is the ceiling at ~60s,
-		// so 90s gives comfortable headroom. (M-1)
+		// Bound HTTP servers: ReadTimeout prevents slow-loris header floods,
+		// WriteTimeout caps long-running handlers. Synthesis is the ~60s ceiling.
 		srv := &http.Server{
 			Addr:         s.addr,
 			Handler:      s.mux,
@@ -230,9 +203,8 @@ func runServe(argv []string) {
 		}()
 	}
 
-	// monitor ingest runs its own Serve(ctx): cancelling ctx (below, on
-	// either shutdown path) is what stops it — there is no separate
-	// http.Server to close here, unlike the mux-based services above.
+	// monitor ingest runs its own Serve(ctx): cancelling ctx on either shutdown
+	// path is what stops it — there is no http.Server to close here.
 	if monitorSrv != nil {
 		go func() {
 			if err := monitorSrv.Serve(ctx); err != nil {
@@ -241,8 +213,7 @@ func runServe(argv []string) {
 		}()
 	}
 
-	// Block until a signal or a service failure. The select here (vs the former
-	// goroutine calling os.Exit directly) lets deferred cleanup run for both paths.
+	// Block until a signal or a service failure.
 	select {
 	case sig := <-sigCh:
 		log.Printf("serve: received %v; shutting down", sig)
@@ -261,10 +232,9 @@ func runServe(argv []string) {
 	}
 }
 
-// buildMonitorIngest constructs the monitor store + ingest server for
-// `serve` composition. Split out from runServe so a test can build one
-// against a t.TempDir() root without the signal handling / pidfile / plugin
-// supervision machinery around it.
+// buildMonitorIngest constructs the monitor store + ingest server, split out
+// from runServe so a test can build one against a t.TempDir() root without the
+// signal handling, pidfile and plugin supervision around it.
 func buildMonitorIngest(bind string, port int, root string) (*monitor.IngestServer, error) {
 	store, err := monitor.NewStore(monitor.StoreConfig{Root: root})
 	if err != nil {
@@ -277,9 +247,8 @@ func buildMonitorIngest(bind string, port int, root string) (*monitor.IngestServ
 	return srv, nil
 }
 
-// isLoopbackAddr reports whether host (no port) is the loopback interface —
-// the same warn-on-LAN-bind classification `pix monitor` used before ingest
-// moved under serve (docs/design/monitor.md).
+// isLoopbackAddr reports whether host (no port) is the loopback interface: the
+// warn-on-LAN-bind classification for monitor ingest (docs/design/monitor.md).
 func isLoopbackAddr(host string) bool {
 	switch host {
 	case "", "localhost":
@@ -290,10 +259,8 @@ func isLoopbackAddr(host string) bool {
 }
 
 // writeServePidFile records the current pid at config.ServePidPath() (0600, dir
-// 0700) so the launcher's `serve stop` / `serve status` can find and signal this
-// supervisor safely. Best-effort: a failed MkdirAll/write only logs — it never
-// crashes serve. A stale pidfile from a previous crash is overwritten, since the
-// live pid is authoritative.
+// 0700). Best-effort: a failed MkdirAll/write only logs, never crashes serve. A
+// stale pidfile from a previous crash is overwritten — the live pid is authority.
 func writeServePidFile() {
 	path := config.ServePidPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -325,9 +292,9 @@ func removeServeLazyMarker() {
 	}
 }
 
-// resolveServices picks the effective service list for `serve` (F1): the CLI
-// args win if any is non-empty; otherwise config's `services`; an empty result
-// means "all". CLI wins so `serve memory` overrides a broader config set.
+// resolveServices picks the effective service list for `serve`: the CLI args win
+// if any is non-empty (so `serve memory` overrides a broader config set), else
+// config's `services`; an empty result means "all".
 func resolveServices(cli, cfgServices []string) []string {
 	for _, s := range cli {
 		if strings.TrimSpace(s) != "" {
@@ -337,11 +304,10 @@ func resolveServices(cli, cfgServices []string) []string {
 	return cfgServices
 }
 
-// applyMemoryModelEnv wires the configured memory model names into the
-// in-process memory build (F6). memembed.go reads these from the env, so an
-// explicit env override wins; otherwise the config value (or its default)
-// applies. Set only in the memory branch so it never leaks into an unrelated
-// plugin subprocess (they also get a filtered Cmd.Env — see pluginEnv).
+// applyMemoryModelEnv wires the configured memory model names into the env the
+// memory unit inherits (memembed.go reads them there), so an explicit env
+// override wins and the config value applies otherwise. Set only in the memory
+// branch so it never leaks into an unrelated plugin subprocess.
 func applyMemoryModelEnv(cfg *config.Config) {
 	if os.Getenv("MEMORY_WATCHER_MODEL") == "" && cfg.MemoryWatcherModel != "" {
 		os.Setenv("MEMORY_WATCHER_MODEL", cfg.MemoryWatcherModel)

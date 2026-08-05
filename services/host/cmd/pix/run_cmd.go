@@ -1,13 +1,12 @@
 // run_cmd.go — `pix run` as a typed root child. The two things the launch
 // package deliberately does not know — the verb table (for the "did you mean"
-// hint) and the real env — are passed to it from here, at each call, rather
-// than installed into package vars by an init().
+// hint) and the real env — are passed to it from here at each call, rather than
+// installed into package vars by an init().
 //
-// One shape the grammar cannot express stays in FRONT of the parser: the `--`
-// pi passthrough. kong consumes `--` as an end-of-flags marker and would feed
-// the first pi arg to the DIR positional, so the tail is rewritten into
-// repeated `--pi-arg=` values (rewriteRunPassthrough) — an argv REWRITE, like
-// the `task NAME path` one, not a second parser.
+// One shape the grammar cannot express stays in FRONT of the parser: the `--` pi
+// passthrough. kong consumes `--` as an end-of-flags marker and would feed the
+// first pi arg to the DIR positional, so the tail is rewritten into repeated
+// `--pi-arg=` values (rewriteRunPassthrough) — an argv REWRITE, not a parser.
 package main
 
 import (
@@ -92,17 +91,15 @@ type runCmd struct {
 	Name     string   `help:"Sandbox name." placeholder:"N"`
 	Model    string   `help:"Active pi model (passed through to pi)." placeholder:"M"`
 	Intent   string   `help:"Resolve the session model via the router; --model overrides it. Intents: pix models show." placeholder:"NAME"`
-	// Replace is RETIRED (U04e). It is still parsed, hidden, so typing it
-	// answers with the standard PIX_RETIRED notice and the two-step
-	// replacement instead of kong's "unknown flag" — a stale script or shell
-	// history gets a recovery path, not a syntax error.
+	// Replace is RETIRED, but still parsed (hidden) so typing it answers with the
+	// PIX_RETIRED notice and the two-step replacement instead of kong's "unknown
+	// flag": a stale script gets a recovery path, not a syntax error.
 	Replace bool   `hidden:"" help:"Retired: remove the sandbox explicitly (pix rm BOX), then run."`
 	Task    string `help:"Launch an existing task's sandbox (same as 'pix task run NAME')." placeholder:"NAME"`
 	Keep    bool   `short:"k" help:"Keep the sandbox when the last shell exits: a sticky, identity-bound marker the teardown/orphan reaper refuses on (an explicit 'pix rm' still removes it)."`
 
-	// PiArg is the `--` tail, rewritten by rewriteRunPassthrough. Hidden
-	// because a user never types it: they type `-- <pi args>`, which the
-	// description above documents.
+	// PiArg is the `--` tail, rewritten by rewriteRunPassthrough. Hidden because a
+	// user never types it: they type `-- <pi args>`, documented above.
 	PiArg []string `name:"pi-arg" hidden:""`
 }
 
@@ -143,9 +140,9 @@ func (c *runCmd) opts() (launch.RunOpts, error) {
 	if c.KitRef != "" {
 		o.KitRef = launch.NormalizeKitRef(c.KitRef)
 	}
-	// `--task NAME` is the `pix task run NAME` shorthand: task.Resolve (L1) does
-	// the work and this only fills the ordinary DIR + --name shape, so no
-	// sandbox-lifecycle code is duplicated here. An explicit --name still wins.
+	// `--task NAME` is the `pix task run NAME` shorthand: task.Resolve does the work
+	// and this fills the ordinary DIR + --name shape, so no sandbox-lifecycle code is
+	// duplicated here. An explicit --name still wins.
 	if c.Task != "" {
 		dir, sandboxName, err := resolveTaskTarget(c.Task)
 		if err != nil {
@@ -165,8 +162,8 @@ func (c *runCmd) opts() (launch.RunOpts, error) {
 }
 
 func (c *runCmd) Run(d *cli.Deps) error {
-	// The retired flag answers before ANY resolution, probe or mutation: the
-	// same inert contract every other retired surface holds (retired.go).
+	// The retired flag answers before ANY resolution, probe or mutation — the inert
+	// contract every retired surface holds (retired.go).
 	if c.Replace {
 		return retiredFlag(d.Err, "run", "--replace")
 	}
@@ -178,14 +175,11 @@ func (c *runCmd) Run(d *cli.Deps) error {
 }
 
 // resolveSandboxName is the sandbox `pix run` actually targets: an explicit
-// --name travels verbatim, unchanged — it is a user-owned display name, never
-// mangled or reinterpreted. Absent that, the DEFAULT is the deterministic,
-// digest-suffixed sandbox.Name(workspace) — the SAME identity
-// launch.SessionName keys lease state by — not workspace.DeriveSandboxName's
-// bare "pix-<basename>" (still used, unchanged, by the separate MCP-receipt
-// lattice). Two workspaces that happen to share a basename get two DIFFERENT
-// default sandbox names, because the digest is computed over the full
-// canonical path, not the basename alone (see sandbox.Name's own doc).
+// --name travels verbatim (a user-owned display name, never reinterpreted).
+// Absent that, the DEFAULT is the deterministic, digest-suffixed
+// sandbox.Name(workspace) — the SAME identity launch.SessionName keys lease state
+// by — so two workspaces sharing a basename can never alias one sandbox or one
+// lease directory (the digest covers the full canonical path).
 func resolveSandboxName(explicit, workspace string) string {
 	if explicit != "" {
 		return explicit
@@ -201,10 +195,10 @@ func runFail(d *cli.Deps, code int, format string, a ...any) error {
 	return cli.SilentError{Code: code}
 }
 
-// runLaunch reads the config, resolves the run options (including a repo
-// checkout for --dev), composes the sbx argv, and execs it with stdio
-// inherited. It forwards NO credential bearer into the sandbox: host MCP
-// servers authenticate on the host, so there is nothing to inject.
+// runLaunch reads the config, resolves the run options (including a repo checkout
+// for --dev), composes the sbx argv, and execs it with stdio inherited. It
+// forwards NO credential bearer into the sandbox: host MCP servers authenticate on
+// the host, so there is nothing to inject.
 func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	var generatedKitDirs []string
 	defer func() {
@@ -213,9 +207,8 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		}
 	}()
 
-	// Default the session intent from config (run_intent, the "overlord") when
-	// the user pinned neither --model nor --intent — this is what flips the
-	// top-level orchestrator to its configured vendor.
+	// Default the session intent from config (run_intent, the "overlord") when the
+	// user pinned neither --model nor --intent.
 	if o.Intent == "" && o.Model == "" {
 		if cfg, cerr := config.Load(); cerr == nil {
 			if applied, rerr := launch.ApplyConfiguredSessionModel(&o, cfg); rerr != nil {
@@ -245,10 +238,10 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		fmt.Fprintf(d.Err, "pix: intent %q -> model %s\n", o.Intent, m)
 	}
 
-	// A pi session needs at least one provider key: resolve the 1Password refs
-	// into sbx (a no-op when a key is there), then refuse ONLY on a POSITIVE "no
-	// key" answer — unprobeable means can't verify, which proceeds. keyResult is
-	// kept for the readiness snapshot, so run pays for one `sbx secret ls`.
+	// A pi session needs at least one provider key: resolve the 1Password refs into
+	// sbx (a no-op when a key is there), then refuse ONLY on a POSITIVE "no key"
+	// answer — unprobeable means cannot verify, which proceeds. keyResult is kept for
+	// the readiness snapshot, so run pays for one `sbx secret ls`.
 	var keyResult health.Result
 	if _, lerr := defaultShellEnv().LookPath("sbx"); lerr == nil && !inference.ConfiguredKeylessInference() {
 		env := defaultShellEnv()
@@ -274,22 +267,22 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		return runFail(d, 2, "model %q is not available through the configured inference backends", o.Model)
 	}
 
-	// Own the sandbox name (sbx would auto-derive `pix-<dir>`) and probe its
-	// state BEFORE any create-only resolution below, so a plain re-attach never
-	// fails on a --dev/checkout or --kit problem it does not even need.
+	// Own the sandbox name (sbx would auto-derive `pix-<dir>`) and probe its state
+	// BEFORE any create-only resolution below, so a plain re-attach never fails on a
+	// --dev/checkout or --kit problem it does not need.
 	o.Name = resolveSandboxName(o.Name, o.Workspace)
 	state := launch.ProbeTaskSandbox(defaultShellEnv(), o.Name)
 
-	// Mirror sbx's own model: an existing sandbox (running OR stopped) is
-	// ATTACHED to rather than recreated, so the create-only flags are not even
-	// RESOLVED here. ONE predicate answers it, for this gate and for the plan.
+	// Mirror sbx's own model: an existing sandbox (running OR stopped) is ATTACHED
+	// to rather than recreated, so the create-only flags are not even RESOLVED here.
+	// ONE predicate answers it, for this gate and for the plan.
 	creating := launch.WillCreate(state)
 	if creating {
-		// Kit selection. A CLEAN released version pins the matching git tag;
-		// anything else (unstamped "dev", "0.0.16+local", non-semver) is
-		// UNRELEASED and its tag does not exist, so v<version> is never pinned.
-		// --dev forces the local checkout kit; an unreleased build uses it too
-		// when a checkout is resolvable, else falls back to #ref=main.
+		// Kit selection. A CLEAN released version pins the matching git tag; anything
+		// else (unstamped "dev", "0.0.16+local", non-semver) is UNRELEASED and its tag
+		// does not exist, so v<version> is never pinned. --dev forces the local
+		// checkout kit; an unreleased build uses it too when a checkout resolves, else
+		// falls back to #ref=main.
 		released := launcher.IsReleased(version)
 		kitOverride := len(o.Kits) > 0
 
@@ -332,10 +325,9 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	}
 
 	// Active pack: mount its skills/ + knowledge/ into this sandbox. --pack
-	// overrides config.Pack; create-time only, since a re-attach keeps what it
-	// was made with. effectivePack is the pack that ACTUALLY loaded (not merely
-	// the configured one), which is what keeps the sandbox.pack marker and the
-	// memory scope from disagreeing.
+	// overrides config.Pack, create-time only, since a re-attach keeps what it was
+	// made with. effectivePack is the pack that ACTUALLY loaded, which keeps the
+	// sandbox.pack marker and the memory scope from disagreeing.
 	effectivePack := pack.ActivePackRoot(cfg.Pack, o.Pack)
 	if creating {
 		// Fail closed on an explicit --pack that doesn't load, or a declared
@@ -346,9 +338,8 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 			return runFail(d, 1, "%v", perr)
 		}
 		effectivePack = root
-		// Inference is a generated create-time facet like pack wrappers: probed
-		// models, compiled routes, public endpoint metadata. No credential value
-		// ever enters this kit.
+		// Inference is a generated create-time facet like pack wrappers: probed models,
+		// compiled routes, public endpoint metadata. No credential value enters it.
 		inferenceKit, ierr := inference.SynthesizeInferenceKit(cfg)
 		if ierr != nil {
 			return runFail(d, 1, "inference: %v", ierr)
@@ -371,10 +362,10 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		}
 	}
 
-	// Local-image preflight: a local-* tag is NEVER published, so pinning
-	// --template to one sbx has not loaded makes sbx try to pull it and stall on
-	// an interactive prompt. Refuse fast with the real fix instead. Only on a
-	// create: a re-attach reads the sandbox's own spec and re-pins nothing.
+	// Local-image preflight: a local-* tag is NEVER published, so pinning --template
+	// to one sbx has not loaded makes sbx try to pull it and stall on an interactive
+	// prompt. Refuse fast with the real fix instead. Create-only: a re-attach reads
+	// the sandbox's own spec and re-pins nothing.
 	if creating {
 		switch {
 		case o.Template != "":
@@ -407,11 +398,11 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		// and before exec (SbxUnknown).
 		return runFail(d, 1, "%v", plan.Err)
 	}
-	// U04c2: sessionKey is the lease identity for THIS workspace (the same
-	// digest name resolveSandboxName defaults the sandbox to), and fp is what
-	// a later attach must match. The DECISION to exec-attach is probed here,
-	// read-only, and re-validated under the lifecycle lock by launch.RunSession
-	// — which is also where a fingerprint divergence refuses.
+	// sessionKey is the lease identity for THIS workspace (the same digest name
+	// resolveSandboxName defaults the sandbox to), and fp is what a later attach must
+	// match. The exec-attach DECISION is probed here read-only and re-validated under
+	// the lifecycle lock by launch.RunSession, which is also where a fingerprint
+	// divergence refuses.
 	sessionKey := launch.SessionName(o.Workspace)
 	fp := launch.SessionFingerprint(cfg, o)
 	attachExec := false
@@ -423,21 +414,19 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 			return runFail(d, 1, "%v", verr)
 		}
 	}
-	// What this launch is DOING, in one line. Nothing here warns about
-	// create-only drift (a stale pack, a changed MCP set): those claims used to
-	// be assembled from a workspace marker and a launcher receipt, and now the
-	// recorded create-time FINGERPRINT decides them under the lifecycle lock —
-	// an attach that no longer matches is refused with RecreateGuidance rather
-	// than attached with a warning nobody can verify.
+	// What this launch is DOING, in one line. Nothing here warns about create-only
+	// drift (a stale pack, a changed MCP set): the recorded create-time FINGERPRINT
+	// decides that under the lifecycle lock, and a divergent attach is REFUSED with
+	// RecreateGuidance rather than attached with a warning nobody can verify.
 	switch {
 	case plan.Reattach && state == launch.SbxRunning:
 		fmt.Fprintf(d.Err, "pix run: attaching to running sandbox %q\n", o.Name)
 	case plan.Reattach:
 		fmt.Fprintf(d.Err, "pix run: starting + attaching existing sandbox %q\n", o.Name)
 	}
-	// Lazy auto-start of the configured host services, under ONE short deadline
-	// (spawn lock + health poll); the launch proceeds regardless, and recall
-	// degrades in-VM as before. service.Ensure prints its own lines.
+	// Lazy auto-start of the configured host services under ONE short deadline
+	// (spawn lock + health poll). The launch proceeds regardless; recall degrades
+	// in-VM. service.Ensure prints its own lines.
 	service.EnsureUp(nil, service.EnsureRunTimeout)
 
 	// Readiness, reusing the key evidence the launch gate already paid for. AT
@@ -449,18 +438,15 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	// extensions. Best-effort: an unloadable pack degrades to unscoped.
 	launch.WritePackContextFiles(cfg, o, effectivePack, d.Err)
 
-	// Trusted host state travels ONLY inside the launcher-generated initial
-	// prompt, never as a workspace file a cloned repo could plant, and probes
-	// nothing without one. --pack applies on CREATE only, so a re-attach must
-	// not claim it.
+	// Trusted host state travels ONLY inside the launcher-generated initial prompt,
+	// never as a workspace file a cloned repo could plant. --pack applies on CREATE
+	// only, so a re-attach must not claim it.
 	packForState := ""
 	if creating {
 		packForState = o.Pack
 	}
-	// A HARD contract: a generated prompt is the fenced agent's ONLY trusted
-	// host truth, so a launch that cannot build it ABORTS before exec. Nothing
-	// destructive follows it any more — with --replace retired, this launch
-	// removes nothing, so there is no ordering left to get wrong.
+	// A HARD contract: a generated prompt is the fenced agent's ONLY trusted host
+	// truth, so a launch that cannot build it ABORTS before exec.
 	args, perr := launch.InjectTrustedHostState(plan.Args, cfg, defaultShellEnv(), packForState)
 	if perr != nil {
 		return runFail(d, 1, "could not build trusted host state: %v", perr)
@@ -470,17 +456,16 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		fmt.Fprintln(d.Err, "+ sbx "+strings.Join(args, " "))
 	}
 
-	// U04c2: the sandbox's whole create/attach lifecycle runs through
-	// launch.RunSession, which owns the ordering: lifecycle lock EX, a FRESH
-	// probe under it, the child started, the create-time facts (instance id,
-	// fingerprint, exact pi invocation, MCP receipt) all recorded, the refs
-	// SHARED reference taken while lifecycle is still held, lifecycle
-	// released, and only THEN the session waited out. This command layer owns
-	// stdio wiring, the exit code, and the words — never the ordering.
-	// ONE invocation builder, used for both roles it can play: the argv this
-	// create records, and the safe recomputed default an attach falls back to
-	// when nothing was ever recorded — so "default" can never drift from what
-	// a create would have sent.
+	// The sandbox's whole create/attach lifecycle runs through launch.RunSession,
+	// which OWNS the ordering: lifecycle lock EX, a fresh probe under it, the child
+	// started, the create-time facts recorded, the refs SHARED reference taken while
+	// lifecycle is still held, lifecycle released, and only THEN the session waited
+	// out. This layer owns stdio wiring, the exit code and the words, never the
+	// ordering.
+	//
+	// ONE invocation builder serves both roles — the argv this create records, and
+	// the recomputed default an attach falls back to when nothing was recorded — so
+	// "default" cannot drift from what a create would have sent.
 	invocation := launch.BuildPiInvocation(launch.LiveSkillDirs(cfg, o), o)
 	spec := launch.SessionSpec{
 		Key:               sessionKey,
@@ -500,11 +485,9 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		Warn: d.Err,
 		Spawn: func(argv []string) *exec.Cmd {
 			cmd := exec.Command("sbx", argv...)
-			cmd.Stdin = os.Stdin
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-			// No credential bearer: host MCP servers authenticate on the host,
-			// so the sandbox never sees a token.
+			cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+			// No credential bearer: host MCP servers authenticate on the host, so the
+			// sandbox never sees a token.
 			cmd.Env = os.Environ()
 			return cmd
 		},
@@ -512,8 +495,8 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	if xerr := launch.RunSession(spec, deps); xerr != nil {
 		var refused *launch.SessionRefused
 		if errors.As(xerr, &refused) {
-			// Decided under the lifecycle lock, before anything started: no
-			// create, no attach, no removal. run's own complete message.
+			// Decided under the lifecycle lock, before anything started: no create, no
+			// attach, no removal. run's own complete message.
 			return runFail(d, 1, "%v", refused)
 		}
 		var exitErr *exec.ExitError
@@ -523,8 +506,8 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 			if msg := launch.KitResolveFailureMsg(launch.PinnedGitKit(args)); msg != "" {
 				fmt.Fprintln(d.Err, msg)
 			}
-			// A re-attach can fail on an sbx that won't reattach a kit-created
-			// sandbox; never leave the user without a next step.
+			// A re-attach can fail on an sbx that won't reattach a kit-created sandbox;
+			// never leave the user without a next step.
 			if plan.Reattach {
 				fmt.Fprintf(d.Err, "pix run: attach failed; %s\n", launch.RecreateGuidance(o.Name))
 			}

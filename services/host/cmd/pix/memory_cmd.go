@@ -1,11 +1,11 @@
 package main
 
-// memory_cmd.go is `pix memory`: the host-side CLI over the memory daemon
-// (:11435), so you can inspect and repair recall WITHOUT launching a sandbox.
+// memory_cmd.go is `pix memory`: the host-side CLI over the memory daemon (:11435),
+// so recall can be inspected and repaired WITHOUT launching a sandbox.
 //
-// Two behaviours are contracts: the daemon is lazily auto-started before a
-// real subcommand (never on a help request, which stays side-effect free), and
-// a down daemon exits 3, distinct from usage (2).
+// Two behaviours are contracts: the daemon is lazily auto-started before a real
+// subcommand (never on a help request, which stays side-effect free), and a down
+// daemon exits 3, distinct from usage (2).
 
 import (
 	"errors"
@@ -40,11 +40,10 @@ type memoryCmd struct {
 	Stats     memoryStatsCmd     `cmd:"" help:"Counts by kind and durability."`
 }
 
-// withMemory resolves what every subcommand needs — a live-enough daemon, a
-// client, the scope profile — runs the call, and maps the one failure the root
-// cannot classify: a down daemon is exit 3 with the recovery command. EnsureUp
-// is best-effort; on failure the client's own ErrServiceDown lands here. The
-// config load is what surfaces a broken config.toml instead of a fallback.
+// withMemory resolves what every subcommand needs (a live-enough daemon, a client,
+// the scope profile), runs the call, and maps the one failure the root cannot
+// classify: a down daemon is exit 3 with the recovery command. EnsureUp is
+// best-effort; on failure the client's own ErrServiceDown lands here.
 func withMemory(d *cli.Deps, sub string, call func(memory.CLI) error) error {
 	service.EnsureUp([]string{"memory"}, service.EnsureTimeout)
 	_, profile, err := workspace.LoadResolvedConfig()
@@ -62,8 +61,8 @@ func withMemory(d *cli.Deps, sub string, call func(memory.CLI) error) error {
 	}
 }
 
-// A free-text tail is ONE value, not N arguments: `remember a new fact` always
-// meant one fact.
+// A free-text tail is ONE value, not N arguments: `remember a new fact` always meant
+// one fact.
 type memoryRecallCmd struct {
 	Query   []string `arg:"" help:"What to search for (free text)."`
 	Limit   int      `default:"8" help:"Maximum hits to return." placeholder:"N"`

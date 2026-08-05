@@ -1,8 +1,8 @@
 // serve_plugin.go — the out-of-process half of `serve`: the supervision tree's
 // `serve`-side face, plus the HTTP shims that back the stable listeners with a
-// dispensed plugin client. The sandbox never sees any of this — it POSTs
-// JSON-RPC to :11435; this process owns that listener and adapts it to the
-// plugin's typed interface, so a restart or reattach is invisible to callers.
+// dispensed plugin client. The sandbox never sees any of this: it POSTs JSON-RPC
+// to :11435, this process owns that listener and adapts it to the plugin's typed
+// interface, so a restart or reattach is invisible to callers.
 
 package main
 
@@ -28,9 +28,9 @@ import (
 // handlers below read the dispensed client from it per request.
 type pluginHolder = supervise.Holder
 
-// supervisor is the thin `serve`-side face of the supervision tree: it keeps
-// serve.go's launch/shutdown vocabulary and nothing else. There is no watchdog,
-// backoff, fail-counter or holder logic here — that is supervise's.
+// supervisor is the thin `serve`-side face of the supervision tree: serve.go's
+// launch/shutdown vocabulary and nothing else. Watchdog, backoff, fail counters
+// and holder logic all belong to supervise.
 type supervisor struct {
 	mu   sync.Mutex
 	tree *supervise.Tree
@@ -92,14 +92,12 @@ func supervisorDirs() (stage, state string) {
 // launch supervises one unit and blocks until its first generation is healthy
 // (or that attempt fails, which fails `serve` loudly at startup). extraEnv is
 // KEY=VALUE granted to THIS unit only on top of the allowlisted base env — e.g.
-// an external plugin's own bearer, which no other unit may see (F2).
+// an external plugin's own bearer, which no other unit may see.
 //
-// There is no pin pre-check here: supervise owns that gate at both ends —
-// UnitSpec.Validate refuses an unpinned or relative external path before
-// anything is spawned, and StageExecutable re-hashes the bytes it stages on
-// every (re)start, which is the check that actually precedes exec. A second
-// hash of the configured path here proved nothing the stager does not, and
-// proved it of a file that could still change before the exec.
+// There is deliberately no pin pre-check here: supervise owns that gate at both
+// ends (UnitSpec.Validate refuses an unpinned or relative external path before
+// anything spawns, and StageExecutable re-hashes the bytes it stages on every
+// start — the check that actually precedes exec).
 func (s *supervisor) launch(name, kind string, spec config.PluginSpec, selfPath string, extraEnv []string) (*pluginHolder, error) {
 	unit := supervise.UnitSpec{
 		Name: name, Kind: kind, SelfExec: spec.Path == "", Path: spec.Path, SHA: spec.SHA,
@@ -121,13 +119,11 @@ func (s *supervisor) shutdown() {
 }
 
 // pluginEnvAllow is the env policy every supervised unit inherits: the names a
-// plugin subprocess may see, and nothing else — so it never picks up a secret
-// the parent carries (cloud creds, API keys, the ssh-agent socket).
+// plugin subprocess may see and nothing else, so it never picks up a secret the
+// parent carries (cloud creds, API keys, the ssh-agent socket).
 // supervise.FilterEnv applies it per unit. A per-unit secret is deliberately
 // absent: a unit that needs one gets it only through launch()'s extraEnv
-// (EnvGrant), which no sibling unit sees. It is a flat list because that is the
-// shape a UnitSpec carries; the map-plus-sorted-slice-adapter it replaces was
-// two representations of one allowlist.
+// (EnvGrant), which no sibling unit sees.
 var pluginEnvAllow = []string{
 	// Runtime essentials
 	"HOME", "PATH", "TEMP", "TMP", "TMPDIR", "USER",
@@ -147,8 +143,7 @@ var pluginEnvAllow = []string{
 
 // --- HTTP shims backed by a plugin client -----------------------------------
 
-// projOrNil mirrors nullStr(): an empty project string surfaces as JSON null,
-// matching the built-in memoryMux() output shape.
+// projOrNil mirrors nullStr(): an empty project string surfaces as JSON null.
 func projOrNil(p string) any {
 	if p == "" {
 		return nil
@@ -172,9 +167,9 @@ func memoryProxyMux(h *pluginHolder) http.Handler {
 // memoryStoreMux is THE :11435 JSON-RPC surface, expressed once over the typed
 // MemoryStore interface. `get` resolves the store per call — a holder-backed
 // plugin client for the supervised unit, or the in-process adapter for the bare
-// `pix-host memory` daemon (newMemoryMux) — so the two entry points cannot
-// answer differently. Response shapes are the sandbox recall extension's
-// contract; every one of them is built here and nowhere else.
+// `pix-host memory` daemon — so the two entry points cannot answer differently.
+// Response shapes are the sandbox recall extension's contract, and every one of
+// them is built here and nowhere else.
 func memoryStoreMux(get func() (plugin.MemoryStore, error)) http.Handler {
 	with := func(fn func(plugin.MemoryStore, jsonObj) (any, error)) func(jsonObj) (any, error) {
 		return func(p jsonObj) (any, error) {
@@ -186,7 +181,7 @@ func memoryStoreMux(get func() (plugin.MemoryStore, error)) http.Handler {
 		}
 	}
 	return jsonrpcMux(map[string]func(jsonObj) (any, error){
-		// Same application-level identity the built-in path serves, so a
+		// The same application-level identity the built-in path serves, so a
 		// plugin-backed :11435 answers exactly the same probe.
 		"identity": with(func(s plugin.MemoryStore, _ jsonObj) (any, error) {
 			r, err := s.Health()

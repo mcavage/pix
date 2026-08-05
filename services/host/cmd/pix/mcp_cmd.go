@@ -1,14 +1,14 @@
 package main
 
 // mcp_cmd.go is `pix mcp`: the typed verb tree, plus the composition the mcp
-// capability deliberately does not do for itself (the active pack's
-// containers, a real env, the host-binary resolver). kong owns the grammar;
-// mcpFailed owns the one exit mapping.
+// capability deliberately does not do for itself (the active pack's containers, a
+// real env, the host-binary resolver). kong owns the grammar, mcpFailed the one
+// exit mapping.
 //
-// The honesty contract is why this verb has a custom mapping at all: a
-// subcommand that PROMISES an operation must never exit 0 having done nothing.
-// sbx missing prints the exact command to run by hand and exits 3
-// (rpc.ExitServiceDown); a child's own exit code is propagated as-is.
+// The honesty contract is why this verb maps exits itself: a subcommand that
+// PROMISES an operation must never exit 0 having done nothing. A missing sbx
+// prints the command to run by hand and exits 3 (rpc.ExitServiceDown); a child's
+// own exit code propagates as-is.
 
 import (
 	"errors"
@@ -24,8 +24,8 @@ import (
 	"pix/host/workspace"
 )
 
-// mcpCmd is a child of the kong root. There is no default subcommand: a bare
-// `pix mcp` is an incomplete invocation (exit 2), as it always was.
+// mcpCmd is a child of the kong root. There is no default subcommand: a bare `pix
+// mcp` is an incomplete invocation, exit 2.
 func (c *mcpCmd) Help() string {
 	return `Wire MCP servers into the sbx gateway, and into a running sandbox.
 
@@ -67,8 +67,8 @@ func mcpFailed(d *cli.Deps, sub string, err error) error {
 	return cli.SilentError{Code: 1}
 }
 
-// mcpRegisterCmd registers the requested local stdio servers (default: the
-// local ones in cfg.MCP) — `make mcp-register` without the repo.
+// mcpRegisterCmd registers the requested local stdio servers (default: the local
+// ones in cfg.MCP) — `make mcp-register` without the repo.
 type mcpRegisterCmd struct {
 	Names []string `arg:"" optional:"" help:"Servers to register (default: every local server in the resolved mcp list)."`
 }
@@ -82,11 +82,11 @@ func (c *mcpRegisterCmd) Run(d *cli.Deps) error {
 	return mcpFailed(d, "register", registerServers(cfg, env, d.Out, c.Names, launcher.FindHostBinary, pack.ActiveContainerMCP(cfg)))
 }
 
-// mcpLsCmd shells `sbx mcp ls`, degrading honestly when sbx is absent (e.g.
-// inside the sandbox): the caller asked for gateway state and got none, so
-// that is exit 3, never a quiet success implying "zero servers". Extra args
-// forward verbatim, and suppress the plain-text attachment note so a script
-// parsing structured output never has to filter out prose.
+// mcpLsCmd shells `sbx mcp ls`, degrading honestly when sbx is absent (e.g. inside
+// the sandbox): the caller asked for gateway state and got none, which is exit 3,
+// never a quiet success implying "zero servers". Extra args forward verbatim and
+// suppress the plain-text attachment note, so a script parsing structured output
+// never has to filter out prose.
 type mcpLsCmd struct {
 	Args []string `arg:"" optional:"" passthrough:"all" help:"Forwarded verbatim to 'sbx mcp ls'."`
 }
@@ -95,41 +95,39 @@ func (c *mcpLsCmd) Run(d *cli.Deps) error {
 	return mcpFailed(d, "ls", mcp.RunMcpLsCore(exec.LookPath, d.Out, d.In, d.Err, c.Args...))
 }
 
-// mcpLoadCmd attaches an ALREADY-REGISTERED server to the RUNNING sandbox for
-// DIR. Connected agents see the new tools immediately (MCP tools/list_changed).
+// mcpLoadCmd attaches an ALREADY-REGISTERED server to the RUNNING sandbox for DIR.
+// Connected agents see the new tools at once (MCP tools/list_changed).
 type mcpLoadCmd struct {
 	Name string `arg:"" help:"A server already registered with the gateway."`
 	Dir  string `arg:"" optional:"" default:"." help:"Workspace whose sandbox to attach to (default: cwd). A --name'd sandbox: sbx mcp load NAME --sandbox BOX."`
 }
 
 func (c *mcpLoadCmd) Run(d *cli.Deps) error {
-	// Arity is kong's; what survives is the VALIDATION a parser cannot do — a
-	// blank name, and a workspace `pix run` would refuse.
+	// Arity is kong's; this is the VALIDATION a parser cannot do — a blank name, and
+	// a workspace `pix run` would refuse.
 	name, ws, err := mcp.ParseMcpLoadArgs(mcpLoadArgs(c.Name, c.Dir))
 	if err != nil {
 		return cli.Usagef("mcp load: %v", err)
 	}
-	// The sandbox is DERIVED from the validated workspace, through the SAME
-	// helper `pix run` defaults its name with, so the two can never disagree
-	// about which box a workspace owns. A `--name`d sandbox has no workspace to
-	// derive from and is addressed directly: `sbx mcp load NAME --sandbox BOX`.
+	// The sandbox is DERIVED from the validated workspace through the SAME helper
+	// `pix run` defaults its name with, so the two can never disagree about which box
+	// a workspace owns. A `--name`d sandbox is addressed directly instead.
 	sandbox := resolveSandboxName("", ws)
 	if _, err := exec.LookPath("sbx"); err != nil {
 		// A command that promises to attach a server must not exit 0 having done
-		// nothing (mcp.ErrSbxUnavailable). McpWouldRun preserves the exact
-		// recovery command; no load receipt is reached on this path.
+		// nothing (mcp.ErrSbxUnavailable); McpWouldRun prints the recovery command.
 		return mcpFailed(d, "load", mcp.McpWouldRun(d.Out, "mcp", "load", name, "--sandbox", sandbox))
 	}
 	cmd := exec.Command("sbx", "mcp", "load", name, "--sandbox", sandbox)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, d.Out, d.Err
-	// The load either happened or it did not, and `sbx mcp load`'s own exit is
-	// the whole answer: this command records nothing about it (see
-	// mcp.McpLoadSandbox for what the receipt claimed and why it is gone).
+	// The load either happened or it did not, and `sbx mcp load`'s own exit is the
+	// whole answer: this command records nothing about it, because "pix loaded this
+	// once" is not the state of a live session.
 	return mcpFailed(d, "load", mcp.ExecSbxMcpLoad(cmd))
 }
 
-// mcpLoadArgs rebuilds the pair ParseMcpLoadArgs validates — the shared
-// statement of the load contract; kong took only the counting from it.
+// mcpLoadArgs rebuilds the pair ParseMcpLoadArgs validates: the shared statement
+// of the load contract, of which kong took only the counting.
 func mcpLoadArgs(name, dir string) []string {
 	if dir == "" || dir == "." {
 		return []string{name}
@@ -148,8 +146,7 @@ func (c *mcpAuthCmd) Run(d *cli.Deps) error {
 }
 
 // mcpBundleCmd manages the shipped public MCP catalog bundle. Bare (or `add`)
-// registers the pinned set matching this build; anything else forwards
-// verbatim to `sbx mcp bundle`.
+// registers the pinned set matching this build; anything else forwards verbatim.
 type mcpBundleCmd struct {
 	Args []string `arg:"" optional:"" passthrough:"all" help:"add (default) | ls | rm ... — forwarded to 'sbx mcp bundle'."`
 }

@@ -3,12 +3,10 @@
 // compiles the full intent->model map the agent reads (route compile), and
 // prints the current tables (route show / models). See docs/design/routing.md.
 //
-// Everything here answers about THIS HOST by default. That was not always true:
-// the whole tree used to load the shipped catalog and nothing else, so a box
-// with no OpenAI key was told its default intent resolved to openai/gpt-5.6-sol
-// — and `route compile` wrote that into routing.json, which host-mode subagents
-// read. The catalog says what a model IS; only a probed backend binding says
-// what this host can CALL. See package pix/host/inference.
+// Everything here answers about THIS HOST by default: the catalog says what a
+// model IS, but only a probed backend binding says what this host can CALL, and a
+// route compiled to a provider with no key is a guaranteed call-time failure. See
+// package pix/host/inference.
 //
 // `--catalog` restores the host-independent view on every subcommand. It is for
 // ONE job: baking the image's default routing.json in a maintainer checkout,
@@ -72,31 +70,29 @@ Truth files (disk override, else embedded default):
 `)
 }
 
-// routeView is the resolved answer to "what is this command talking about" —
-// the three truth files, plus whether the registry was narrowed to this host's
-// callable bindings. Every subcommand takes one so none of them can silently
-// disagree with the others about what "available" means.
+// routeView is the resolved answer to "what is this command talking about": the
+// three truth files, plus whether the registry was narrowed to this host's
+// callable bindings. Every subcommand takes one, so none can silently disagree
+// with the others about what "available" means.
 type routeView struct {
 	reg *routing.Registry
 	sc  *routing.Scorecard
 	pol *routing.Policy
 	cfg *config.Config
-	// bound is true when reg has been narrowed to probed bindings. False means
-	// the caller is looking at the raw catalog — and MUST say so, because the
-	// three ways to get here read very differently to a user: they asked for the
-	// catalog, nothing is wired yet, or config.toml would not load.
+	// bound is true when reg has been narrowed to probed bindings. False means the
+	// caller is looking at the raw catalog — and MUST say so, because the three ways
+	// to get here read very differently: they asked for the catalog, nothing is
+	// wired yet, or config.toml would not load.
 	bound bool
-	// catalogOnly records that --catalog was passed. Without it an explicit
-	// catalog request is indistinguishable from a broken config, and the command
-	// reports a scary "config could not be read" for a flag the user just typed.
+	// catalogOnly records that --catalog was passed, so an explicit catalog request
+	// is not reported as the scary "config could not be read".
 	catalogOnly bool
 }
 
 // loadView loads the three truth sources and narrows them to this host, or dies
-// with a clear message. A config that will not load is NOT fatal: the catalog
-// view still answers most of what the user asked, and failing the whole command
-// because config.toml is unreadable would hide the router behind an unrelated
-// problem. It degrades to the catalog and says so through bound=false.
+// with a clear message. A config that will not load is NOT fatal — failing the
+// whole command would hide the router behind an unrelated problem — so it
+// degrades to the catalog and says so through bound=false.
 func loadView(args []string) routeView {
 	reg, err := routing.LoadRegistry()
 	if err != nil {
@@ -214,10 +210,9 @@ func routePick(args []string) {
 
 func routeCompile(args []string) {
 	v := loadView(args)
-	// Validate the TRUTH FILES, not the narrowed view: a host that has wired one
-	// provider has an "unavailable" majority by design, and that is not a config
-	// error. Validate answers "are models.json/scorecard.json/policy.json
-	// internally consistent", which is a property of the catalog alone.
+	// Validate the TRUTH FILES, not the narrowed view: a host that wired one
+	// provider has an "unavailable" majority by design, which is not a config error.
+	// Internal consistency is a property of the catalog alone.
 	catalog, err := routing.LoadRegistry()
 	if err != nil {
 		fatal(err)
@@ -249,9 +244,8 @@ func routeCompile(args []string) {
 		}
 		fmt.Printf("  %-14s -> %s%s\n", name, r.Model, flag)
 	}
-	// Naming the dropped intents is the whole point of dropping them: silence
-	// here would read as "every intent routed", which is how the openai-with-no-key
-	// route survived this long.
+	// Naming the dropped intents is the whole point of dropping them: silence here
+	// would read as "every intent routed".
 	if dropped := droppedIntents(v.pol, cr); len(dropped) > 0 {
 		fmt.Printf("\n%d intent(s) have no callable model on this host and were left out:\n  %v\n",
 			len(dropped), dropped)
@@ -291,12 +285,10 @@ func estRunCost(m routing.Model) string {
 	return fmt.Sprintf("$%.4f", m.CostFor(refInputTokens, refOutputTokens))
 }
 
-// modelStatus is the honest one-word answer to "can I use this model", which the
-// old boolean AVAIL column could not give. It needed two inputs and only ever
-// had one: the CATALOG says whether Pix still routes to a model at all
+// modelStatus is the honest one-word answer to "can I use this model", and it
+// needs BOTH inputs: the CATALOG says whether Pix still routes to a model at all
 // (available:false means RETIRED — see the notes in models.json), and the
-// BINDINGS say whether this host can call it. Printing the first under a column
-// named AVAIL is what told a keyless box that OpenAI was available.
+// BINDINGS say whether this host can call it.
 func modelStatus(catalog routing.Model, wired, bound bool) string {
 	if !catalog.Available {
 		return "retired"
@@ -351,10 +343,10 @@ func routeShow(args []string) {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", in.Name, d.Objective, d.Model, acc, cost, est, lat, ok)
 	}
 	tw.Flush()
-	// A missed vendor preference is INFORMATION, not a warning. These routes are
-	// fully valid; they just could not reach the vendor the policy would have
-	// picked first. Reporting it in the OK column (as the old hard allowlist did)
-	// made a working default install read as broken on its most important route.
+	// A missed vendor preference is INFORMATION, not a warning: these routes are
+	// fully valid, they just could not reach the vendor the policy would have picked
+	// first. Reporting it in the OK column would make a working default install read
+	// as broken on its most important route.
 	if len(unpreferred) > 0 {
 		fmt.Printf("\n%d intent(s) resolved off their preferred vendor — valid routes, no key needed:\n  %s\n",
 			len(unpreferred), strings.Join(unpreferred, ", "))
@@ -378,8 +370,8 @@ func routeModels(args []string) {
 
 func printModels(v routeView) {
 	// The catalog is reloaded rather than carried alongside: STATUS needs the
-	// UNNARROWED availability bit to tell "retired from the catalog" apart from
-	// "not wired here", and v.reg has already overwritten it.
+	// UNNARROWED availability bit to tell "retired from the catalog" apart from "not
+	// wired here", and v.reg has already overwritten it.
 	catalog, err := routing.LoadRegistry()
 	if err != nil {
 		catalog = v.reg

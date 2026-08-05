@@ -1,12 +1,12 @@
 //go:build unix
 
-// Advisory file locking (unix: linux + darwin, the only hosts pix-host runs
-// on). acquireLock is the correctness primitive that makes the memory daemon and
-// `restore` mutually exclusive around the sqlite store: both take an EXCLUSIVE
-// flock on the SAME lock file (config.MemoryLockPath()), so restore can never
-// swap the db out from under a running daemon — even in the window where the
-// daemon has opened the store but not yet bound its port (the TOCTOU the port
-// probe alone leaves open).
+// Advisory file locking (unix: linux + darwin, the only hosts pix-host runs on).
+// acquireLock is the correctness primitive that makes every memory server and
+// `restore` mutually exclusive around the sqlite store: all of them take an
+// EXCLUSIVE flock on the SAME file (config.MemoryLockPath()), so restore can
+// never swap the db out from under a running daemon — including in the window
+// where the daemon has opened the store but not yet bound its port, which a port
+// probe alone leaves open.
 
 package main
 
@@ -28,11 +28,10 @@ import (
 // deadlocking. The returned release func drops the lock (LOCK_UN) and closes the
 // fd; it is idempotent and safe to call from a defer and a signal handler both.
 func acquireLock(path string) (release func(), err error) {
-	// On a fresh install the memory dir may not exist yet (setup writes config
-	// but never touches the store dir), and O_CREATE only creates the leaf file,
-	// not parent dirs — so ensure the parent exists first, otherwise OpenFile
-	// fails with a misleading ENOENT that the fatal wrapper reports as "another
-	// memory server ... is using the database".
+	// On a fresh install the memory dir may not exist yet and O_CREATE only creates
+	// the leaf file, so the parent is ensured first: otherwise OpenFile fails with a
+	// misleading ENOENT the fatal wrapper reports as "another memory server ... is
+	// using the database".
 	if dir := filepath.Dir(path); dir != "" {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, fmt.Errorf("create lock dir %s: %w", dir, err)
@@ -56,17 +55,12 @@ func acquireLock(path string) (release func(), err error) {
 }
 
 // lockMemoryStoreOrFatal is the shared prologue every LIVE-SERVING memory entry
-// point runs BEFORE opening the store: it takes the exclusive, non-blocking
-// advisory flock on config.MemoryLockPath() — the correctness primitive that
-// makes the built-in `serve`, the bare `memory` daemon, the memory plugin
-// self-exec, and `restore` all mutually exclusive around the sqlite db, closing
-// the port-probe TOCTOU (the store opens before any port binds). It returns the
-// release func to hold for the process lifetime and drop on shutdown. On failure
-// (another memory server or a restore already holds it) it does NOT open the
-// store — it fails fast through fatal, which MUST NOT return. Pass a
-// cleanup-aware fatal (serve's fatalf, which runs supervisor shutdown before
-// os.Exit); a nil fatal defaults to log.Fatalf. The acquire is indirected via
-// acquireMemLockFn so tests can drive the refuse/free paths hermetically.
+// point runs BEFORE opening the store. It returns the release func to hold for the
+// process lifetime and drop on shutdown. On failure (another memory server or a
+// restore holds it) it does NOT open the store — it fails fast through fatal,
+// which MUST NOT return. Pass a cleanup-aware fatal (serve's fatalf, which runs
+// supervisor shutdown before os.Exit); nil defaults to log.Fatalf. The acquire is
+// indirected via acquireMemLockFn so tests can drive both paths hermetically.
 var acquireMemLockFn = acquireLock
 
 func lockMemoryStoreOrFatal(fatal func(format string, a ...any)) func() {

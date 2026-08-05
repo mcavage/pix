@@ -1,12 +1,12 @@
 // pix — the user-facing launcher for the pix sandbox: a standalone binary a
-// consumer installs without cloning the repo. It reads ~/.config/pix config
-// and shells out to `sbx run pix`, pinning the git-hosted kit to this build's
-// stamped version, and shares pix-host's config package so the two agree on
-// config location + the broker token.
+// consumer installs without cloning the repo. It reads ~/.config/pix config and
+// shells out to `sbx run pix`, pinning the git-hosted kit to this build's stamped
+// version, and shares pix-host's config package so the two agree on config
+// location.
 //
-// The verb tree is root.go's rootCmd — the one parser, the one dispatcher, and
-// (via `pix help --all`) the one listing. main owns only what comes BEFORE a
-// parse: the retired table, the bare-`pix` status screen, and the exit code.
+// The verb tree is root.go's rootCmd — the one parser, the one dispatcher, and (via
+// `pix help --all`) the one listing. main owns only what comes BEFORE a parse: the
+// retired table, the bare-`pix` status screen, and the exit code.
 package main
 
 import (
@@ -40,18 +40,17 @@ func main() {
 	}
 
 	if len(args) == 0 {
-		// Bare `pix` shows STATUS — never launches a sandbox (launching is
-		// explicit behind `run`). On a fresh host with no config, offer onboarding.
+		// Bare `pix` shows STATUS — it never launches a sandbox (launching is explicit,
+		// behind `run`). On a fresh host with no config, offer onboarding.
 		if provision.MaybeFirstRun() {
 			return
 		}
 		args = []string{"status"}
 	}
 
-	// A retired surface answers before anything else: no config read, no probe,
-	// no side effect. Both granularities are checked, because a retired
-	// SUBCOMMAND (`task gc`) must answer before its group's parser rejects a
-	// name it no longer knows (see retired.go).
+	// A retired surface answers before anything else: no config read, no probe, no
+	// side effect. Both granularities are checked, because a retired SUBCOMMAND
+	// (`task gc`) must answer before its group's parser rejects the name.
 	retiredIfRetired(args[0], "")
 	if len(args) > 1 {
 		retiredIfRetired(args[0], args[1])
@@ -63,26 +62,22 @@ func main() {
 	}
 }
 
-// looksLikePath reports whether a non-flag token is meant as a filesystem path
-// (so a failure to resolve it is a missing/!dir workspace, never a verb typo).
-// A path either contains a separator or begins with a path-ish prefix.
+// looksLikePath reports whether a non-flag token is meant as a filesystem path (so
+// failing to resolve it is a missing/!dir workspace, never a verb typo).
 func looksLikePath(a string) bool {
 	return strings.ContainsRune(a, '/') ||
 		strings.HasPrefix(a, ".") ||
 		strings.HasPrefix(a, "~")
 }
 
-// bareNonTTYRefusalFmt is Story04c's bare-non-interactive refusal message: it
-// names the RESOLVED absolute path (never the raw, possibly-relative arg the
-// user typed) so a script reading this from a different cwd still gets an
-// unambiguous, copy-pasteable next step.
+// bareNonTTYRefusalFmt is the bare-non-interactive refusal message. It names the
+// RESOLVED absolute path (never the raw, possibly-relative arg the user typed), so
+// a script reading it from another cwd still gets a copy-pasteable next step.
 const bareNonTTYRefusalFmt = "pix: refusing to launch %[1]q on a non-interactive terminal.\n" +
 	"Run it explicitly instead:  pix run %[1]s\n"
 
-// resolvedBareArgPath resolves a to its absolute form for the refusal
-// message above. A resolution failure (should not happen for a path
-// classifyBareArg already proved is a directory) falls back to a rather than
-// ever printing an empty path.
+// resolvedBareArgPath resolves a to its absolute form for the refusal message
+// above, falling back to a rather than ever printing an empty path.
 func resolvedBareArgPath(a string) string {
 	if abs, err := filepath.Abs(a); err == nil {
 		return abs
@@ -90,11 +85,11 @@ func resolvedBareArgPath(a string) string {
 	return a
 }
 
-// classifyBareArg decides what a bare (non-flag) positional means when it is
-// not a matched verb: the stderr message to print, and whether it should launch
-// `run` (an existing directory). A path-like token, or one that exists but is
-// not a directory, is a missing/!dir workspace; only a plausible bare-word verb
-// gets the did-you-mean suggester. Both non-launch branches exit 2.
+// classifyBareArg decides what a bare (non-flag) positional means when it is not a
+// matched verb: the stderr message to print, and whether it should launch `run` (an
+// existing directory). A path-like token, or one that exists but is not a
+// directory, is a missing/!dir workspace; only a plausible bare-word verb gets the
+// did-you-mean suggester. Both non-launch branches exit 2.
 func classifyBareArg(a string) (msg string, launch bool) {
 	fi, statErr := os.Stat(a)
 	if statErr == nil && fi.IsDir() {
@@ -112,9 +107,8 @@ func classifyBareArg(a string) (msg string, launch bool) {
 }
 
 // hostBinaryResolver locates pix-host. "Which pix-host am I paired with" is an
-// identity question the launcher package answers; this var exists so a test can
-// inject a fake `pix-host mcp --list` responder for setup's local-vs-remote
-// MCP partition.
+// identity question the launcher package answers; the var exists so a test can
+// inject a fake `pix-host mcp --list` responder for setup's MCP partition.
 var hostBinaryResolver = launcher.FindHostBinary
 
 const helpText = `pix — a personal, multi-model pi coding agent in a Docker sandbox.

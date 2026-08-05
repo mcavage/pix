@@ -1,10 +1,9 @@
 package main
 
-// models_cmd.go is `pix models` under the cli command contract
-// (docs/design/rearchitecture.md, Phase 2): the flag, its help text and its
-// validation are ONE struct field, and nothing here calls os.Exit or writes to
-// os.Stdout — every subcommand runs against a *cli.Deps, so its output and its
-// exit code are ordinary assertions instead of a re-exec.
+// models_cmd.go is `pix models`: the flag, its help text and its validation are
+// ONE struct field, and nothing here calls os.Exit or writes to os.Stdout — every
+// subcommand runs against a *cli.Deps, so its output and its exit code are
+// ordinary assertions instead of a re-exec.
 
 import (
 	"errors"
@@ -19,10 +18,9 @@ import (
 	"pix/host/workflow/models"
 )
 
-// modelsDescription is the prose kong puts above the generated command list.
-// A FUNC, not a const, so the override paths it prints are the REAL resolved
-// ones ($ROUTING_DIR / $XDG_DATA_HOME) and never the repo's embedded defaults,
-// which mean nothing on a consumer's machine.
+// modelsDescription is the prose kong puts above the generated command list. A
+// FUNC, not a const, so the override paths it prints are the REAL resolved ones
+// and never the repo's embedded defaults, which mean nothing to a consumer.
 func modelsDescription() string {
 	return `Which models pix can use, and which are wired up.
 
@@ -68,9 +66,9 @@ func (c *ModelsStatusCmd) Run(d *cli.Deps) error {
 	return nil
 }
 
-// hostQuery is the flag pair every read-only router query shares. Each
-// subcommand is still its OWN type: they forward to different host verbs, and
-// a shared type could not tell which one kong had selected.
+// hostQuery is the flag pair every read-only router query shares. Each subcommand
+// is still its OWN type: they forward to different host verbs, and a shared type
+// could not tell which one kong selected.
 type hostQuery struct {
 	JSON    bool `help:"Emit machine-readable JSON."`
 	Catalog bool `help:"Describe the shipped catalog, not this host."`
@@ -122,8 +120,8 @@ func (c *ModelsRouteCmd) Run(d *cli.Deps) error {
 	return execHostRoute(d, "compile", argv)
 }
 
-// ModelsAddCmd wires a provider end to end. `enum` does real work: the
-// provider list a user is offered cannot drift from the one that parses.
+// ModelsAddCmd wires a provider end to end. `enum` does real work: the provider
+// list a user is offered cannot drift from the one that parses.
 type ModelsAddCmd struct {
 	Provider string `arg:"" enum:"anthropic,openai,google,gemini,ollama" help:"anthropic | openai | google | ollama"`
 	Local    bool   `help:"Ollama only: models that run on this machine."`
@@ -157,8 +155,8 @@ func execHostRoute(d *cli.Deps, verb string, argv []string) error {
 
 // execHostBinary runs the sibling pix-host with argv, wired to this command's
 // streams. It is the ONE place cmd/pix maps a host-binary failure: the child
-// already said what was wrong in its own words, so its exit code travels as a
-// SilentError rather than being re-reported here.
+// already said what was wrong, so its exit code travels as a SilentError rather
+// than being re-reported here.
 func execHostBinary(d *cli.Deps, argv []string) error {
 	bin, err := launcher.FindHostBinary()
 	if err != nil {
