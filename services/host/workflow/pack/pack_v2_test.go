@@ -25,9 +25,9 @@ ollama_bridge_model = "qwen3.5:9b"
 gog_account = "me@company.com"
 memory_scope = "work"
 
+# An unknown/legacy facet must never fail the load.
 [routing]
 policy = "routing/policy.json"
-scorecard = "routing/scorecard.json"
 
 [[integrations]]
 name = "Fastmail"
@@ -65,9 +65,6 @@ host = true
 	m := p.Manifest
 	if m.GogAccount != "me@company.com" || m.MemoryScope != "work" {
 		t.Errorf("gog/memory_scope not parsed: %+v", m)
-	}
-	if m.Routing == nil || m.Routing.Policy != "routing/policy.json" || m.Routing.Scorecard != "routing/scorecard.json" {
-		t.Errorf("routing not parsed: %+v", m.Routing)
 	}
 	if len(m.Proxies) != 2 || m.Proxies[0].Name != "warehouse" || m.Proxies[0].Host {
 		t.Errorf("sandbox proxy not parsed: %+v", m.Proxies)

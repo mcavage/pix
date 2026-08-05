@@ -95,17 +95,7 @@ func snapshotAcceptedPackSetup(env hostenv.Env, p *Info, wanted map[string]bool)
 	if err != nil {
 		return nil, cleanup, err
 	}
-	err = withPackTrustLock(func() error {
-		store, err := loadPackTrustStore()
-		if err != nil {
-			return fmt.Errorf("pack trust state unreadable: %w", err)
-		}
-		if got, ok := store.acceptedFingerprint(store.TrustKey(p.Root)); !ok || got != fp {
-			return fmt.Errorf("pack %s setup hooks are not accepted (or changed since acceptance) — run `pix pack use %s` to review them", p.Manifest.Name, p.Root)
-		}
-		return nil
-	})
-	if err != nil {
+	if err := requireAcceptedFingerprint(p, fp, "setup hooks"); err != nil {
 		return nil, cleanup, err
 	}
 	state, err := config.StateDir()

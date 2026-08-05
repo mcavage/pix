@@ -1,35 +1,15 @@
-// pack_v2_trust_round2_test.go — round-2 security+review fixes for the
-// packs-v2 Phase 2 trust model:
-//
-//	A — activation provenance (the reversible-switch attribution) lives in the
-//	    LAUNCHER-OWNED trust store, never the pack-payload pack.lock: a
-//	    same-pack `git pull` lock forgery can no longer delete the user's own
-//	    config entries on reactivation/switch-away.
-//	B — the acceptance fingerprint uses a CANONICAL, INJECTIVE encoding
-//	    (structured JSON, then hash) — the reviewer's egress delimiter
-//	    collision now produces distinct fingerprints — and only host=true
-//	    [[bin]] entries ever enter the accepted surface (a Host flip re-gates
-//	    instead of silently installing).
-//	C — reference-only MCP integrations (remote gateway-catalog names, the
-//	    host-provided gog registration) are Tier-0 again (no prompt, non-TTY
-//	    OK); only an integration.mcp resolving to a LOCAL stdio host command
-//	    is Tier-1.
-//	D — wrapper install + attribution is a fail-closed transaction: a failed
-//	    trust-store write means NO install (and a strict launch refusal), and
-//	    an absent active pack still clears its previously-attributed wrappers
-//	    or refuses the launch.
-//	E — acceptance provenance (Remote/Commit) is host-recorded only: a forged
-//	    pack.lock Remote cannot evict another pack's acceptance record.
-//	F — the trust store is Lstat-refused on READ when symlinked (write
-//	    already was).
 package pack
 
 import (
 	"bytes"
+	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"pix/host/config"
@@ -37,6 +17,7 @@ import (
 	"pix/host/sys/systest"
 )
 
+// --- from pack_v2_trust_round2_test.go ---
 // localMCPEnv returns a hostenv.Env whose `pix-host mcp --list` reports the
 // given names as LOCAL stdio servers (every other command pretends to
 // succeed, like fakeGitEnv).
@@ -376,7 +357,7 @@ func TestPackUse_ForgedRemoteCannotEvictOtherPacksAcceptance(t *testing.T) {
 	const legitRemote = "https://example.com/legit.git"
 
 	// Legit pack B: host-recorded clone provenance + accepted Tier-1 surface.
-	rootB := round3HostExecPack(t, dir, "b", "b-tool")
+	rootB := hostExecPack(t, dir, "b", "bin", "b-tool")
 	if err := recordPackAdoptionInTrustStore(rootB, legitRemote, "c1"); err != nil {
 		t.Fatal(err)
 	}
@@ -392,7 +373,7 @@ func TestPackUse_ForgedRemoteCannotEvictOtherPacksAcceptance(t *testing.T) {
 	}
 
 	// Evil local pack E ships a forged pack.lock claiming B's Remote.
-	rootE := round3HostExecPack(t, dir, "e", "e-tool")
+	rootE := hostExecPack(t, dir, "e", "bin", "e-tool")
 	if err := os.WriteFile(PackLockPath(rootE), []byte("remote = \""+legitRemote+"\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -432,5 +413,314 @@ func TestLoadPackTrustStore_RefusesSymlinkedStoreOnRead(t *testing.T) {
 	}
 	if _, err := loadPackTrustStore(); err == nil || !strings.Contains(err.Error(), "symlink") {
 		t.Errorf("a symlinked trust store must be refused on read, got err=%v", err)
+	}
+}
+
+// --- from pack_v2_trust_round3_test.go ---
+// --- #1: cross-process lock, fresh-load mutations ------------------------------
+
+// TestMutatePackTrustStore_InterleavedMutationsLoseNothing: two writers whose
+// in-memory views were loaded independently (the `pack use` commit vs the host
+// launch's wrapper refresh) both mutate through the serialized helper — each
+// re-loads FRESH under the lock, so neither can clobber the other's committed
+// record (the old last-writer-wins bug saved whichever stale object came last).
+func TestMutatePackTrustStore_InterleavedMutationsLoseNothing(t *testing.T) {
+	dir := isolatePackHost(t)
+	root := filepath.Join(dir, "pack")
+
+	// Writer 1 (a `pack use` commit): records an activation + an acceptance.
+	if _, err := mutatePackTrustStore(func(s *PackTrustStore) error {
+		s.setActivation(root, packLock{MCP: []string{"a-mcp"}})
+		s.RecordAcceptance("path:"+root, PackTrustRecord{Path: root, Fingerprint: "fp1"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Writer 2 (a concurrent host launch): its logical view predates writer 1,
+	// but the helper re-loads fresh, so its Installed write lands BESIDE the
+	// activation instead of over it.
+	if _, err := mutatePackTrustStore(func(s *PackTrustStore) error {
+		s.Installed = &packInstalledSet{Owner: "path:" + root, Wrappers: []string{"tool"}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	after, err := loadPackTrustStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := after.activationFor(root); len(got.MCP) != 1 || got.MCP[0] != "a-mcp" {
+		t.Errorf("the committed activation was clobbered by a later mutation, got %+v", got)
+	}
+	if fp, ok := after.acceptedFingerprint("path:" + root); !ok || fp != "fp1" {
+		t.Errorf("the committed acceptance was clobbered, got (%q,%v)", fp, ok)
+	}
+	if after.Installed == nil || !slices.Contains(after.Installed.Wrappers, "tool") {
+		t.Errorf("the second writer's own mutation must land too, got %+v", after.Installed)
+	}
+}
+
+// TestMutatePackTrustStore_ConcurrentWritersSerialized: N goroutines each
+// commit one acceptance record through the lock-serialized helper; every
+// record survives (no lost update). Run with -race, this also exercises the
+// flock across distinct file descriptors.
+func TestMutatePackTrustStore_ConcurrentWritersSerialized(t *testing.T) {
+	isolatePackHost(t)
+
+	const writers = 8
+	var wg sync.WaitGroup
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			key := fmt.Sprintf("path:/pack-%d", i)
+			if _, err := mutatePackTrustStore(func(s *PackTrustStore) error {
+				s.RecordAcceptance(key, PackTrustRecord{Path: fmt.Sprintf("/pack-%d", i), Fingerprint: "fp"})
+				return nil
+			}); err != nil {
+				t.Errorf("writer %d: %v", i, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	after, err := loadPackTrustStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < writers; i++ {
+		if _, ok := after.acceptedFingerprint(fmt.Sprintf("path:/pack-%d", i)); !ok {
+			t.Errorf("writer %d's record was lost (last-writer-wins clobber); store=%+v", i, after.Accepted)
+		}
+	}
+}
+
+// --- #2: the pack payload lock is never a reversibility source -----------------
+
+// TestPackUse_PayloadLockIsNeverAReversibilitySource: activation attribution
+// lives ONLY in the launcher-owned trust store. A pack — local OR adopted —
+// with no activation record therefore reverts NOTHING when you switch away
+// (safe over-retention), and a pack.lock claiming the user's own MCP as this
+// pack's contribution can never make that switch delete it.
+func TestPackUse_PayloadLockIsNeverAReversibilitySource(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		adopted bool
+	}{{"local", false}, {"adopted", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := isolatePackHost(t)
+			pinLocalMCP(t)
+
+			rootA := filepath.Join(dir, "a")
+			mustWritePack(t, rootA, Manifest{Name: "a", Schema: 1})
+			rootB := filepath.Join(dir, "b")
+			mustWritePack(t, rootB, Manifest{Name: "b", Schema: 1})
+
+			cfg, err := config.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg.AddMCP("usermcp")
+			cfg.Pack = rootA
+			if err := cfg.Save(); err != nil {
+				t.Fatal(err)
+			}
+			if tc.adopted {
+				if err := recordPackAdoptionInTrustStore(rootA, "https://example.com/a.git", "c1"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := writePackLock(rootA, packLock{MCP: []string{"usermcp"}}); err != nil {
+				t.Fatal(err)
+			}
+
+			var out bytes.Buffer
+			RunPackUse(fakeGitEnv(nil), &out, []string{rootB}, registerOK)
+			cfg2, err := config.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Contains(cfg2.MCP, "usermcp") {
+				t.Errorf("CRITICAL: the pack payload lock was trusted and deleted the user's own MCP, cfg.MCP=%v", cfg2.MCP)
+			}
+		})
+	}
+}
+
+// --- #3: unknown MCP classification fails closed --------------------------------
+
+// TestLocalMCPClassifier_UnknownFailsClosed: when the local set cannot be
+// established (no probe at all, or a failing probe), a non-gog name classifies
+// as HOST-EXEC — the pack is Tier-1 and the gate fails closed on a non-TTY
+// without --yes. gog stays reference-only Tier-0.
+func TestLocalMCPClassifier_UnknownFailsClosed(t *testing.T) {
+	// No probe available at all.
+	unknown := LocalMCPClassifier(hostenv.Env{System: &systest.Fake{}}, nil)
+	if !unknown("fastmail") {
+		t.Error("unknown classification must treat a non-gog name as host-exec (fail closed)")
+	}
+	if unknown(config.GWServerName) {
+		t.Error("gog stays the reference-only Tier-0 special case even when the partition is unknown")
+	}
+	// Probe resolves but errors.
+	failEnv := hostenv.Env{System: &systest.Fake{RunFn: func(string, ...string) (string, error) { return "", fmt.Errorf("probe failed") }}}
+	resolver := func() (string, error) { return "pix-host", nil }
+	unknown2 := LocalMCPClassifier(failEnv, resolver)
+	if !unknown2("notion") {
+		t.Error("a failing `mcp --list` probe must classify a non-gog name as host-exec")
+	}
+
+	p := &Info{Root: "/p", Manifest: Manifest{Name: "p",
+		Integrations: []Integration{{Name: "N", MCP: "notion"}}}}
+	b := ComputeHostBoM(p, "", unknown2)
+	if !b.Tier1() {
+		t.Fatalf("a pack whose MCP cannot be classified must be Tier-1 (gated), got %+v", b)
+	}
+	// The gate itself fails closed non-interactively without --yes.
+	if err := packTrustGate(strings.NewReader(""), io.Discard, false, false, "p", b); err == nil {
+		t.Error("non-TTY without --yes must fail closed for an unclassifiable MCP")
+	}
+	// A nil classifier (no partition available) fails closed the same way.
+	if bn := ComputeHostBoM(p, "", nil); !bn.Tier1() {
+		t.Errorf("a nil classifier must fail closed too, got %+v", bn)
+	}
+	// gog-only packs stay Tier-0 under an unknown partition.
+	pg := &Info{Root: "/p", Manifest: Manifest{Name: "g",
+		Integrations: []Integration{{Name: "gog", MCP: config.GWServerName}}}}
+	if ComputeHostBoM(pg, "", unknown2).Tier1() {
+		t.Error("a gog-only reference must stay Tier-0 even when the partition is unknown")
+	}
+}
+
+// --- #4: a clear failure is an honest failure ------------------------------------
+
+// TestPackRm_ClearFailureExitsNonZero: when the installed host wrappers cannot
+// be removed (symlinked host bin dir), `pack rm` must exit non-zero and must
+// NOT claim "detached" — and nothing detaches, so a plain re-run retries.
+// Subprocess: the failure path os.Exits.
+// --- #5: acceptance identity is commit-stable ------------------------------------
+
+// TestTrustKey_StableAcrossCommits: the trust key is the remote URL without
+// the commit; a provenance update (new commit after a pull) does not move the
+// identity, so an acceptance over an unchanged fingerprint still matches (no
+// re-prompt) while a CHANGED fingerprint still mismatches (re-gates). A
+// legacy commit-suffixed record is honored via the one-time fallback.
+func TestTrustKey_StableAcrossCommits(t *testing.T) {
+	dir := isolatePackHost(t)
+	root := filepath.Join(dir, "clone")
+	mustWritePack(t, root, Manifest{Name: "c", Schema: 1})
+	const url = "https://example.com/x.git"
+
+	if err := recordPackAdoptionInTrustStore(root, url, "c1"); err != nil {
+		t.Fatal(err)
+	}
+	store, err := loadPackTrustStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := store.TrustKey(root)
+	if strings.Contains(key, "#") {
+		t.Fatalf("the trust key must not embed the commit, got %q", key)
+	}
+	store.RecordAcceptance(key, PackTrustRecord{Path: CanonicalizePackRoot(root), Remote: url, Commit: "c1", Fingerprint: "fp1"})
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	// A new commit lands (git pull): provenance updates, identity must not move.
+	if err := recordPackAdoptionInTrustStore(root, url, "c2"); err != nil {
+		t.Fatal(err)
+	}
+	store2, err := loadPackTrustStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := store2.TrustKey(root); got != key {
+		t.Errorf("a commit bump moved the identity (%q -> %q); acceptance would spuriously re-gate", key, got)
+	}
+	got, ok := store2.acceptedFingerprint(store2.TrustKey(root))
+	if !ok || got != "fp1" {
+		t.Errorf("same fingerprint across commits must stay accepted (no re-prompt), got (%q,%v)", got, ok)
+	}
+	if got == "fp2-changed-surface" {
+		t.Error("sanity: a changed fingerprint must mismatch and re-gate")
+	}
+
+}
+
+// TestPackUse_NewCommitSameFingerprintDoesNotRegate (end-to-end): an accepted
+// adopted Tier-1 pack whose provenance commit changes — but whose host-exec
+// fingerprint is byte-identical — re-activates non-interactively with NO
+// --yes. In-process: a misfiring gate would os.Exit(1) and fail the test
+// binary, exactly like the non-interactive pack trust-gate tests.
+func TestPackUse_NewCommitSameFingerprintDoesNotRegate(t *testing.T) {
+	dir := isolatePackHost(t)
+	root := hostExecPack(t, dir, "work", "bin", "platformio")
+	const url = "https://example.com/work.git"
+	if err := recordPackAdoptionInTrustStore(root, url, "c1"); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	RunPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerOK) // accept once
+
+	// A README-only pull: new commit, identical host-exec surface.
+	if err := recordPackAdoptionInTrustStore(root, url, "c2"); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	RunPackUse(fakeGitEnv(nil), &out, []string{root}, registerOK) // no --yes, non-TTY
+	if strings.Contains(out.String(), "adds these integrations to Pix") {
+		t.Errorf("a commit bump with an unchanged fingerprint must not re-prompt:\n%s", out.String())
+	}
+
+	// A CHANGED surface (mutated host-exec bin) still re-gates: a subsequent
+	// non-interactive `pack use` (no --yes) now REFUSES until re-accepted,
+	// rather than silently reusing the stale acceptance.
+	if err := os.WriteFile(filepath.Join(root, "bin", "platformio"), []byte("#!/bin/sh\necho evil\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := recordPackAdoptionInTrustStore(root, url, "c3"); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if os.Getenv("PIX_TEST_TRUST") == "changed-surface-regates" {
+		RunPackUse(fakeGitEnv(nil), &out, []string{root}, registerOK) // no --yes, non-TTY
+		return                                                        // exit 0 == a mutated surface slipped through unre-gated
+	}
+	cmd := exec.Command(os.Args[0], "-test.run", "^TestPackUse_NewCommitSameFingerprintDoesNotRegate$")
+	cmd.Env = append(os.Environ(),
+		"PIX_TEST_TRUST=changed-surface-regates",
+		"PIX_CONFIG="+filepath.Join(dir, "config.toml"),
+		"XDG_STATE_HOME="+filepath.Join(dir, "state"),
+	)
+	if cmdOut, err := cmd.CombinedOutput(); err == nil {
+		t.Errorf("a changed host-exec fingerprint must still fail closed (re-gate/refuse); output:\n%s", cmdOut)
+	}
+}
+
+// round3HostExecPack writes a pack with one host-exec [[bin]] facet (an
+// external, sha-pinned binary — the retained Tier-1 fitness that phase2HostPack
+// used to cover with a host=true proxy wrapper before the dormant host-mode
+// wrapper installer was deleted) and returns its root. XDG_STATE_HOME must
+// already be pointed at a temp dir by the caller.
+
+// --- from pack_v2_trust_host_state2_test.go ---
+func TestPackUse_ForgedDirectorySymlinkLockScrubbedNotFollowed(t *testing.T) {
+	dir := isolatePackHost(t)
+	victim := filepath.Join(dir, "victim")
+	if err := os.Mkdir(victim, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(dir, "evil")
+	mustWritePack(t, root, Manifest{Name: "evil", Schema: 1})
+	if err := os.Symlink(victim, PackLockPath(root)); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	var out bytes.Buffer
+	RunPackUse(fakeGitEnv(nil), &out, []string{root}, registerOK)
+	if fi, err := os.Lstat(PackLockPath(root)); err != nil || !fi.Mode().IsRegular() {
+		t.Errorf("pack.lock must be a fresh regular file after adoption, got %v (err=%v)", fi, err)
 	}
 }

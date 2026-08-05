@@ -1,28 +1,19 @@
 // service.go — the trusted pack [[services]] UnitSpec.
 //
 // [[services]] is the SOLE way any pack may declare a long-running external
-// service unit for the host supervisor — never a hand-edited `plugins.*` config
-// block, never any other manifest facet. This file is declaration + validation
-// only: the struct parses, normalizes, validates fail-closed at LoadPack, and
-// enters the Tier-1 bill-of-materials and the host-exec fingerprint. Nothing
-// here launches anything; a supervisor may consume ONLY a gate-passed service
-// (see unitview.go).
+// service unit for the host supervisor — never a hand-edited `plugins.*` block.
+// This file is declaration + validation only: the struct parses, normalizes,
+// validates fail-closed at LoadPack, and enters the Tier-1 bill-of-materials
+// and the host-exec fingerprint. A supervisor may consume ONLY a gate-passed
+// service (unitview.go).
 //
-// Security posture (the trust boundary is the pack author → this host):
-//   - runtime is a closed set: "go-plugin" (a repo-relative executable,
-//     SHA-pinned like [[bin]]) or "container" (digest-pinned image, declared for
-//     the future container path). The typed schema is the allowlist.
-//   - env carries REFERENCE NAMES only. A value-shaped entry ("FOO=bar", an
-//     op:// ref, a pasted token) is refused at load: secret VALUES never live in
-//     a pack manifest, and the allowlist of names is exactly what the consent
-//     screen shows and the fingerprint pins.
-//   - listeners are loopback-only and the reserved pix-host ports can never be
-//     claimed, so a pack service can neither expose the LAN nor squat a built-in
-//     unit's front door.
-//   - mounts are repo-relative (a pack cannot claim /etc or ~/.ssh), network is
-//     bare egress hostnames, and license/source (SPDX + https URL) are required
-//     so the BoM screen can attribute what the user is about to run.
-//   - EVERY field is fingerprinted: any change re-gates through acceptance.
+// Security posture (the trust boundary is the pack author → this host): runtime
+// is a closed set (SHA-pinned "go-plugin" executable or digest-pinned
+// "container" image); env carries REFERENCE NAMES only, so secret VALUES never
+// live in a manifest; listeners are loopback-only and reserved pix-host ports
+// unclaimable; mounts are repo-relative (never /etc or ~/.ssh) and network bare
+// egress hostnames; license/source (SPDX + https) are required so the BoM can
+// attribute what runs. EVERY field is fingerprinted, so any change re-gates.
 package pack
 
 import (
@@ -36,20 +27,12 @@ import (
 // (trust.go renders container identity differently in the BoM).
 const serviceRuntimeContainer = "container"
 
-// serviceRules is the whole [[services]] vocabulary: the closed sets, the
-// reserved names/ports, and the value shapes. ONE immutable package value
-// rather than a name per rule — they are only ever read together.
-//
-//   - runtimes: go-plugin, plus container accepted as a DECLARATION (identity
-//     validated, consented, fingerprinted) with no consumer yet.
-//   - activations: start with serve ("always") or on first use ("on-demand").
-//   - reservedPorts are pix-host's own front doors: a colliding pack service
-//     would either fail to bind or win the race and impersonate a built-in unit.
-//   - reservedNames are the built-in supervisor slots; shadowing one would make
-//     `serve status` and the consent screen ambiguous about WHOSE code runs.
-//   - envName is what an env REFERENCE NAME may look like; anything else is
-//     value-shaped and refused. spdx covers SPDX identifiers and expressions,
-//     shaHex a full sha256 digest, networkHost a bare egress hostname.
+// serviceRules is the whole [[services]] vocabulary — closed sets, reserved
+// names/ports, value shapes — as ONE immutable package value, since they are
+// only ever read together. container is accepted as a DECLARATION (validated,
+// consented, fingerprinted) with no consumer yet. reservedPorts are pix-host's
+// own front doors and reservedNames its built-in supervisor slots: a pack
+// service may never bind, impersonate or shadow one.
 var serviceRules = struct {
 	runtimes      map[string]bool
 	activations   map[string]bool
@@ -80,44 +63,42 @@ var serviceRules = struct {
 }
 
 // packService is one [[services]] entry: a normalized long-running service
-// declaration. All fields are part of the Tier-1 host-exec fingerprint.
-// Unexported — unitview.go's accepted view is the only way out of this package.
+// declaration. Unexported — unitview.go's accepted view is the only way out of
+// this package. EVERY field is part of the Tier-1 host-exec fingerprint, and
+// the json tags below ARE that canonical encoding (see trust.go): their names,
+// order and omitempty are load-bearing.
 type packService struct {
-	Name       string `toml:"name"`
-	Runtime    string `toml:"runtime"`    // serviceRules.runtimes (closed set)
-	Activation string `toml:"activation"` // serviceRules.activations (closed set)
-	// go-plugin identity: repo-relative executable + pinned sha256 of its bytes
-	// (verified at staging/launch, exactly like [[bin]]). The file need not exist
-	// at declaration time — the pin is the identity.
-	Path string `toml:"path,omitempty"`
-	SHA  string `toml:"sha,omitempty"`
-	// container identity: a digest-pinned OCI image ref (future runtime).
-	Image string `toml:"image,omitempty"`
-	// Argv are the arguments the unit is launched with (no interpretation).
-	Argv []string `toml:"argv,omitempty"`
-	// Env is the explicit allowlist of environment REFERENCE NAMES the unit
-	// receives (resolved elsewhere, e.g. op-refs.env). Names only, never values.
-	Env []string `toml:"env,omitempty"`
+	Name       string `toml:"name" json:"name"`
+	Runtime    string `toml:"runtime" json:"runtime"`       // serviceRules.runtimes (closed set)
+	Activation string `toml:"activation" json:"activation"` // serviceRules.activations (closed set)
+	// go-plugin identity: repo-relative executable + pinned sha256 of its bytes,
+	// verified at staging/launch. The file need not exist at declaration time —
+	// the pin IS the identity.
+	Path  string   `toml:"path,omitempty" json:"path,omitempty"`
+	SHA   string   `toml:"sha,omitempty" json:"sha,omitempty"`
+	Image string   `toml:"image,omitempty" json:"image,omitempty"` // container identity: digest-pinned OCI ref
+	Argv  []string `toml:"argv,omitempty" json:"argv,omitempty"`   // launch arguments, uninterpreted
+	// Env is the allowlist of environment REFERENCE NAMES the unit receives
+	// (resolved elsewhere, e.g. op-refs.env). Names only, never values.
+	Env []string `toml:"env,omitempty" json:"env,omitempty"`
 	// Port + Listen + Health describe the unit's loopback front door.
-	Port   int    `toml:"port,omitempty"`
-	Listen string `toml:"listen,omitempty"` // loopback only; default 127.0.0.1
-	Health string `toml:"health,omitempty"` // "tcp" or an HTTP path ("/healthz")
-	// Mounts are repo-relative paths the unit may be given access to.
-	Mounts []string `toml:"mounts,omitempty"`
-	// Network are bare egress hostnames the unit declares it reaches.
-	Network []string `toml:"network,omitempty"`
+	Port    int      `toml:"port,omitempty" json:"port,omitempty"`
+	Listen  string   `toml:"listen,omitempty" json:"listen,omitempty"`   // loopback only; default 127.0.0.1
+	Health  string   `toml:"health,omitempty" json:"health,omitempty"`   // "tcp" or an HTTP path ("/healthz")
+	Mounts  []string `toml:"mounts,omitempty" json:"mounts,omitempty"`   // repo-relative paths only
+	Network []string `toml:"network,omitempty" json:"network,omitempty"` // bare egress hostnames
 	// Resources are declared ceilings (informational until a consumer exists).
-	Resources *packServiceResources `toml:"resources,omitempty"`
-	// License (SPDX identifier/expression) and Source (https URL) attribute
-	// the code the user is consenting to run. Both required.
-	License string `toml:"license"`
-	Source  string `toml:"source"`
+	Resources *packServiceResources `toml:"resources,omitempty" json:"resources,omitempty"`
+	// License (SPDX) and Source (https URL) attribute the code the user is
+	// consenting to run. Both required.
+	License string `toml:"license" json:"license"`
+	Source  string `toml:"source" json:"source"`
 }
 
 // packServiceResources are declared resource ceilings.
 type packServiceResources struct {
-	MemoryMB   int `toml:"memory_mb,omitempty"`
-	CPUPercent int `toml:"cpu_percent,omitempty"`
+	MemoryMB   int `toml:"memory_mb,omitempty" json:"memory_mb"`
+	CPUPercent int `toml:"cpu_percent,omitempty" json:"cpu_percent"`
 }
 
 // normalized returns a whitespace-trimmed, case-canonical copy: the SHAPE the
@@ -157,9 +138,8 @@ func (s packService) normalized() packService {
 	return out
 }
 
-// serviceListenIsLoopback reports whether listen names a loopback interface:
-// localhost, ::1, or anything in 127.0.0.0/8. A pack service must never be
-// reachable from the LAN.
+// serviceListenIsLoopback reports whether listen names a loopback interface
+// (localhost, ::1, 127.0.0.0/8). A pack service is never LAN-reachable.
 func serviceListenIsLoopback(listen string) bool {
 	switch listen {
 	case "localhost", "::1":
@@ -180,9 +160,9 @@ func serviceListenIsLoopback(listen string) bool {
 	return false
 }
 
-// validatePackServices hardens the [[services]] facet at load time — the same
-// fail-closed posture as the rest of validatePackFacets. Every rejection here is
-// a declaration that must never reach the BoM, the fingerprint, or an exec path.
+// validatePackServices hardens the [[services]] facet at load time, the same
+// fail-closed posture as the rest of validatePackFacets: every rejection here
+// never reaches the BoM, the fingerprint, or an exec path.
 func validatePackServices(root string, m *Manifest) error {
 	seen := map[string]bool{}
 	for i := range m.Services {

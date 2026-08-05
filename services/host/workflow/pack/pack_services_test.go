@@ -282,6 +282,51 @@ func TestPackServices_ServicelessFingerprintUnchanged(t *testing.T) {
 	}
 }
 
+// TestHostExecFingerprint_RichSurfaceGolden pins the fingerprint of a surface
+// that exercises EVERY facet — the encoding is now the json tags on the BoM
+// types themselves (trust.go), so a renamed/reordered/retagged field would
+// silently re-gate every accepted pack on upgrade. This golden catches that.
+func TestHostExecFingerprint_RichSurfaceGolden(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "bin", "wrap"), []byte("#!/bin/sh\necho hi\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "hook.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b := hostBoM{
+		MCP:            []hostBoMMCP{{Name: "zeta", Argv: []string{"pix-host", "mcp", "zeta"}}, {Name: "alpha", Argv: []string{"pix-host", "mcp", "alpha"}}},
+		Containers:     []hostBoMContainer{{Name: "hr", Image: "img@sha256:abc", EnvKeys: []string{"B_KEY", "A_KEY"}, EnvValues: map[string]string{"T": "acme"}}, {Name: "mf", Manifest: "https://x/server.json"}},
+		RemoteMCP:      []hostBoMRemote{{Name: "notion", URL: "https://mcp.notion.com"}},
+		Proxies:        []string{"wrap"},
+		SandboxProxies: []PackProxy{{Name: "sb", Egress: []string{"api.example.com"}}},
+		Bins:           []packBin{{Name: "tool", Path: "bin/tool", SHA: "AB12", Host: true}},
+		Egress:         []string{"api.example.com"},
+		Creds:          []string{"MY_TOKEN"},
+		Prerequisites:  []string{"a VPN session"},
+		Setup:          []packSetupStep{{ID: "auth", Description: "log in", Path: "hook.sh", CheckArgs: []string{"check"}, ApplyArgs: []string{"apply"}, Required: true}},
+		Inference:      []hostBoMInference{{Name: "gw", URL: "https://gw.example.com", Auth: "sbx-session", Service: "sbx-login", Header: "Authorization", Format: "Bearer %s"}},
+		Services: []packService{(packService{
+			Name: "svc", Runtime: "go-plugin", Activation: "always", Path: "bin/svc", SHA: "AAbb",
+			Argv: []string{"--x"}, Env: []string{"Z_VAR", "A_VAR"}, Port: 12345, Listen: "127.0.0.1", Health: "tcp",
+			Mounts: []string{"m2", "m1"}, Network: []string{"n2", "n1"},
+			Resources: &packServiceResources{MemoryMB: 128, CPUPercent: 50},
+			License:   "Apache-2.0", Source: "https://example.com/src",
+		}).normalized()},
+	}
+	fp, _, err := ComputeHostExecFingerprint(dir, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const golden = "09d3ee2b9a274344bd0242265a9e41cc213ef59811add0cdc008d76a7bc3eabc"
+	if fp != golden {
+		t.Fatalf("rich-surface fingerprint drifted (breaks every accepted pack):\n got %s\nwant %s", fp, golden)
+	}
+}
+
 func serviceFingerprint(t *testing.T, body string) string {
 	t.Helper()
 	root := writeServicePack(t, body)
