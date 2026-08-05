@@ -6,7 +6,7 @@ package main
 
 import (
 	"pix/host/workflow/onboard"
-	"pix/host/workflow/setup"
+	"pix/host/workflow/provision"
 )
 
 // onboardDeps is the real wiring, in one place so the two launch paths that
@@ -15,6 +15,6 @@ func onboardDeps() onboard.Deps {
 	return onboard.Deps{
 		HostBinary:    hostBinaryResolver,
 		Register:      registerServers,
-		VerifyCatalog: setup.VerifyCatalogMCPReady,
+		VerifyCatalog: provision.VerifyCatalogMCPReady,
 	}
 }

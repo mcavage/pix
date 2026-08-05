@@ -1,36 +1,41 @@
-// setup_cmd.go — the argv seam for `pix setup`, plus the composition setup
-// cannot do for itself. setup sequences nearly every other workflow, so this is
-// the widest Deps in the tree; that is what a top-level guided flow looks like.
+// setup_cmd.go — the argv seam for `pix setup`, plus the one thing that is
+// deliberately NOT part of the provision loop: the agent handoff.
+//
+// The handoff lives here, at L4, because it is not a capability that can be
+// checked, applied and checked again — it is an exec into another command, and
+// its whole decision matrix is about a sandbox that may already be alive. A
+// step that cannot be re-probed does not belong in a loop whose contract is
+// that the second check is authoritative.
 package main
 
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/sys"
+	"pix/host/workflow/doctor"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/onboard"
 	"pix/host/workflow/pack"
-	"pix/host/workflow/setup"
+	"pix/host/workflow/provision"
 	"slices"
-	"strings"
 )
 
-// runSetupCmd is the `pix setup` entry. It accepts the same host-config
-// flags as `onboard` plus an optional DIR (default "."), runs the host phase,
-// prints the handoff, then execs the run with the onboarding kickoff message.
+// runSetupCmd is the `pix setup` entry: parse, run the host provisioning loop,
+// then (unless --no-agent) hand off to the sandbox.
 func runSetupCmd(argv []string) {
 	if cli.WantsHelp(argv) {
-		fmt.Print(setup.Usage)
+		fmt.Print(provision.Usage)
 		return
 	}
 
 	// Split an optional positional DIR from the onboard-style flags. DIR is the
 	// single non-flag token; everything else is forwarded to the host phase.
-	// --replace is SETUP'S OWN flag (recreate an existing sandbox and hand it
-	// the tour): consumed here, never forwarded to onboard.ParseOnboardArgs — it is not
-	// host config.
+	// --replace, --verbose and --no-agent are SETUP'S OWN flags: consumed here,
+	// never forwarded to the host-config parser.
 	dir := "."
 	dirSet := false
 	replace := false
@@ -39,19 +44,14 @@ func runSetupCmd(argv []string) {
 	var hostArgs []string
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
-		if a == "--replace" {
+		switch a {
+		case "--replace":
 			replace = true
 			continue
-		}
-		if a == "--verbose" {
+		case "--verbose":
 			verbose = true
 			continue
-		}
-		// --no-agent is SETUP'S OWN flag (AC-P0-308): run the host phase and
-		// stop there — no sandbox, no handoff. It replaces the deleted
-		// `pix onboard` verb, so it is consumed here and never forwarded
-		// to the host-config parser.
-		if a == "--no-agent" {
+		case "--no-agent":
 			noAgent = true
 			continue
 		}
@@ -64,7 +64,7 @@ func runSetupCmd(argv []string) {
 			continue
 		}
 		hostArgs = append(hostArgs, a)
-		if setup.FlagTakesValue(a) && i+1 < len(argv) {
+		if provision.FlagTakesValue(a) && i+1 < len(argv) {
 			i++
 			hostArgs = append(hostArgs, argv[i])
 		}
@@ -77,178 +77,161 @@ func runSetupCmd(argv []string) {
 	}
 	parsed, parseErr := onboard.ParseOnboardArgs(hostArgs)
 	if parseErr != nil {
-		fmt.Fprintf(os.Stderr, "pix setup: %v\n\n%s", parseErr, setup.Usage)
+		fmt.Fprintf(os.Stderr, "pix setup: %v\n\n%s", parseErr, provision.Usage)
 		os.Exit(2)
 	}
-	// Load + validate every built-in semantic flag/value before prerequisites,
-	// pack adoption, setup hooks, or browser-capable authorization. The later
-	// host phase repeats the same pure validator for direct/test callers.
+	// Load + validate every built-in semantic flag/value before pack adoption or
+	// any other mutation. The host phase repeats the same pure validator for
+	// direct/test callers.
 	preflightCfg, cfgErr := config.Load()
 	if cfgErr != nil {
 		fmt.Fprintf(os.Stderr, "pix setup: loading config: %v\n", cfgErr)
 		os.Exit(1)
 	}
-	if err := setup.ValidateSetupSemantics(parsed, preflightCfg, env, hostBinaryResolver); err != nil {
-		fmt.Fprintf(os.Stderr, "pix setup: %v\n\n%s", err, setup.Usage)
+	if err := provision.ValidateSetupSemantics(parsed, preflightCfg, env, hostBinaryResolver); err != nil {
+		fmt.Fprintf(os.Stderr, "pix setup: %v\n\n%s", err, provision.Usage)
 		os.Exit(2)
 	}
 
-	// `--apply` is the surviving half of the deleted `pix onboard`: reconcile
-	// a pending <DIR>/.pix/onboarding.json (the control-plane proposal an
-	// in-sandbox onboarding agent wrote) and stop. It is deliberately NOT part of
-	// the phase machine — it applies a proposal the user already reviewed rather
-	// than provisioning a host — so it validates DIR, reconciles, and returns
-	// without touching keys, packs, or the sandbox.
+	// `--apply` reconciles a pending <DIR>/.pix/onboarding.json (the
+	// control-plane proposal an in-sandbox onboarding agent wrote) and stops. It
+	// is deliberately NOT provisioning — it applies a proposal the user already
+	// reviewed — so it validates DIR, reconciles, and returns without touching
+	// packs, models, or the sandbox.
 	if slices.Contains(hostArgs, "--apply") {
 		if err := launch.ValidateRunWorkspace(dir); err != nil {
 			fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
 			os.Exit(2)
 		}
-		opts, perr := onboard.ParseOnboardArgs(hostArgs)
-		if perr != nil {
-			fmt.Fprintf(os.Stderr, "pix setup: %v\n\n%s", perr, setup.Usage)
-			os.Exit(2)
-		}
-		onboard.ReconcileOnboarding(dir, env, os.Stdin, os.Stdout, opts.AssumeYes, cli.IsTTY(os.Stdin), onboardDeps())
+		onboard.ReconcileOnboarding(dir, env, os.Stdin, os.Stdout, parsed.AssumeYes, cli.IsTTY(os.Stdin), onboardDeps())
 		return
 	}
+	// DIR must be validated (exists AND is a directory) BEFORE the host phase
+	// runs: provisioning mutates real host state, and a typo'd DIR must fail
+	// with nothing touched rather than be caught only at the handoff.
 	if err := launch.ValidateRunWorkspace(dir); err != nil {
 		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
 		os.Exit(2)
 	}
-	// sbx is universally required. 1Password is conditional and is decided only
-	// AFTER explicit packs have contributed inference; a keyless work gateway
-	// must never trigger an irrelevant op installation/login flow.
-	if err := setup.EnsureSetupPrereqsFor(env, os.Stdin, os.Stdout, cli.IsTTY(os.Stdin) && !parsed.AssumeYes, false); err != nil {
-		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
-		os.Exit(1)
-	}
-	if err := setup.EnsureSetupSbxSession(env, os.Stdout, cli.IsTTY(os.Stdin) && !parsed.AssumeYes); err != nil {
+	if err := provision.EnsureSetupSbxSession(env, os.Stdout, cli.IsTTY(os.Stdin) && !parsed.AssumeYes); err != nil {
 		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
 		os.Exit(1)
 	}
 	// Pix's published base kit comes from GitHub, while a fresh sbx install only
 	// trusts docker.io kit sources. Fill that one publisher allowlist entry and
 	// initialize the one-time global network policy before the first handoff.
-	// Existing publishers and an existing (possibly tightened) policy are kept.
-	if err := setup.EnsureSetupSbxDefaults(env); err != nil {
+	if err := provision.EnsureSetupSbxDefaults(env); err != nil {
 		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
 		os.Exit(1)
 	}
 	// An unreleased launcher uses its local checkout kit. Validate that kit with
-	// the installed sbx parser before pack OAuth/setup or any other mutation;
-	// nightly schema skew must fail once, early, without opening browsers and
-	// only later dumping YAML from `sbx run`.
+	// the installed sbx parser before pack OAuth or any other mutation; nightly
+	// schema skew must fail once, early.
 	if err := launch.ValidateSetupKit(version, launch.ResolveRepoRoot, launch.ValidateSbxKit); err != nil {
 		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
 		os.Exit(1)
 	}
 
-	// A requested pack is adopted through the existing pack trust transaction
-	// before host setup. This gives `pix setup --pack owner/repo` one setup
-	// engine while preserving the exact same BoM review, fingerprint, and
-	// rollback behavior as `pix pack use`.
-	var activatedPacks []string
-	if len(parsed.Packs) > 0 && env.Quiet {
-		fmt.Fprintln(os.Stdout, "Configuring pack integrations…")
-	}
-	for _, requestedPack := range parsed.Packs {
-		packArg := setup.NormalizeSetupPackArg(requestedPack)
-		useArgs := []string{packArg}
-		if parsed.AssumeYes {
-			useArgs = append([]string{"--yes"}, useArgs...)
-		}
-		pack.RunPackUse(env, os.Stdout, useArgs, registerServers)
-		if cfg, err := config.Load(); err == nil && strings.TrimSpace(cfg.Pack) != "" {
-			activatedPacks = append(activatedPacks, cfg.Pack)
-		}
-	}
-	activatedPacks = pack.UniquePackRoots(activatedPacks)
-	if len(activatedPacks) > 0 {
-		if err := pack.PersistPackStack(activatedPacks); err != nil {
-			fmt.Fprintf(os.Stderr, "pix setup: composing packs: %v\n", err)
-			os.Exit(1)
-		}
-	}
-	// A pack's required setup owns its interactive authorization flows. Run it
-	// before the ordinary host gate: that gate verifies configured MCP servers,
-	// so placing hooks afterward made it impossible for a fresh pack to satisfy
-	// the very prerequisites the gate checked (and skipped integration
-	// entirely on the first missing remote registration).
-	setupRequests, err := pack.PlanPackSetupRequests(activatedPacks, parsed.WithSetup)
-	if err != nil {
+	// The host phase: check, apply the verified gaps, check again.
+	if err := provision.RunSetup(env, hostArgs, os.Stdin, os.Stdout, cli.IsTTY(os.Stdin)); err != nil {
 		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
-		os.Exit(1)
-	}
-	for _, root := range activatedPacks {
-		if err := pack.RunPackSetup(env, os.Stdout, root, setupRequests[root], cli.IsTTY(os.Stdin) && !parsed.AssumeYes); err != nil {
-			fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
-			os.Exit(1)
-		}
-	}
-
-	// Phase 1: host config — source keys from 1Password, ensure memory, create the
-	// pack, seed identity, provision+enable host mode (see setup.SetupHostPhase). This
-	// ALWAYS runs first, regardless of whether a sandbox already exists for dir —
-	// `pix setup` run a second time must still reconcile host keys/config
-	// (a changed/rotated 1Password ref, a newly-added --mcp, etc), not skip
-	// straight past it because a sandbox happens to be there.
-	//
-	// DIR must be validated (exists AND is a directory) BEFORE any of that runs —
-	// setup.SetupHostPhase mutates real host state (op-refs.env/hostmode.env, config.toml,
-	// the default pack, memory, host-mode enablement). A typo'd or nonexistent DIR
-	// must fail immediately, with nothing touched, not be caught only later when the
-	// (already-mutated) phase 2 sandbox probe/handoff can't resolve it. setup.RunSetupCore
-	// is the seam: it does the validation-then-hostPhase-call as one pure step so a
-	// test can assert hostPhase is never invoked for a bad DIR without exercising
-	// os.Exit.
-	if env.Quiet {
-		fmt.Fprintln(os.Stdout, "Setting up inference and host services…")
-	}
-	if err := setup.RunSetupCore(env, dir, hostArgs, os.Stdin, os.Stdout, cli.IsTTY(os.Stdin), setup.SetupHostPhase); err != nil {
-		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
-		var usage setup.ErrUsage
+		var usage provision.ErrUsage
 		if errors.As(err, &usage) {
 			os.Exit(2) // an argument mistake, caught before any probe or mutation
 		}
 		os.Exit(1)
 	}
-	// --no-agent stops here: the host phase is the whole command. The phase
-	// header is still printed so the transcript is complete and a reader can
-	// see that the handoff was skipped by request, not silently dropped.
+	// --no-agent stops here: the host phase is the whole command.
 	if noAgent {
-		setup.SetupPhaseHeader(os.Stdout, setup.SetupPhaseHandoff, "skipped (--no-agent): host phase only, no sandbox")
 		return
 	}
 
-	setup.SetupPhaseHeader(os.Stdout, setup.SetupPhaseHandoff, "")
-
-	// Phase 2 decision: probe the sandbox for dir and branch on the POSITIVE
+	// Handoff decision: probe the sandbox for dir and branch on the POSITIVE
 	// state. Existing without --replace is left alone — setup never
 	// force-removes it and never replays the onboarding kickoff into a live
-	// session (the fenced agent inside it may be mid-task). Existing WITH
-	// --replace relaunches through `run --replace` carrying the kickoff, so
-	// the recreated sandbox actually receives the tour. Only a POSITIVE
-	// launch.SbxAbsent gets the normal first handoff; an unprobeable sbx (launch.SbxUnknown,
-	// or an unresolvable name) FAILS CLOSED — launching blind could replay the
-	// kickoff into a live session we simply couldn't see.
-	name, nameOK := setup.SetupSandboxName(dir)
+	// session. Existing WITH --replace relaunches through `run --replace`
+	// carrying the kickoff. Only a POSITIVE launch.SbxAbsent gets the normal
+	// first handoff; an unprobeable sbx FAILS CLOSED.
+	name, nameOK := provision.SetupSandboxName(dir)
 	state := launch.SbxUnknown
 	if nameOK && name != "" {
 		state = launch.ProbeTaskSandbox(env, name)
 	}
-	if err := setup.RunSetupHandoff(dir, name, state, replace, os.Stdout, runRun); err != nil {
+	if err := runSetupHandoff(dir, name, state, replace, os.Stdout, runRun); err != nil {
 		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-// init supplies the composition setup declares but cannot perform. This is the
-// whole cost of setup being a workflow instead of living at L4, and it is four
-// lines.
+// runSetupHandoff is the pure post-host-phase decision + action, kept separate
+// from runSetupCmd so the state/replace matrix is testable without exercising
+// os.Exit or actually exec'ing sbx. Returns an error ONLY for the fail-closed
+// unknown state.
+func runSetupHandoff(dir, name string, state doctor.SbxState, replace bool, out io.Writer, runFn func([]string)) error {
+	// kickoffArgs builds the runRun argv for a launch that should receive the
+	// tour: [DIR] [--replace] -- <OnboardingKickoff>. DIR is forwarded only when
+	// explicit so `pix setup` from inside a repo behaves exactly like `pix run`
+	// there.
+	kickoffArgs := func() []string {
+		args := []string{}
+		if dir != "." {
+			args = append(args, dir)
+		}
+		if replace {
+			args = append(args, "--replace")
+		}
+		return append(args, "--", provision.OnboardingKickoff)
+	}
+	dirArg := ""
+	if dir != "." {
+		dirArg = " " + sys.ShellQuote(dir)
+	}
+	// retryArg carries the caller's ORIGINAL --replace request into the retry
+	// command printed below: dropping it would silently downgrade a requested
+	// recreate into a plain reattach.
+	retryArg := dirArg
+	if replace {
+		retryArg += " --replace"
+	}
+
+	switch state {
+	case launch.SbxUnknown:
+		// FAIL CLOSED: we could not determine whether a sandbox exists. Never
+		// launch — runRun would re-attach a live session and replay the kickoff
+		// into it. The host phase already completed, so a retry is cheap.
+		which := fmt.Sprintf("sandbox %q", name)
+		if name == "" {
+			which = fmt.Sprintf("the sandbox for %s", dir)
+		}
+		return fmt.Errorf("cannot determine the state of %s (`sbx ls` failed or sbx is unavailable). Host setup completed; install or fix sbx and retry with: pix setup%s", which, retryArg)
+	case launch.SbxRunning, launch.SbxStopped:
+		if replace {
+			fmt.Fprintln(out, "")
+			fmt.Fprintf(out, "Recreating sandbox %q (--replace): it'll come back with your current\n", name)
+			fmt.Fprintln(out, "pack/MCP/skills and walk you through the guided tour.")
+			runFn(kickoffArgs())
+			return nil
+		}
+		fmt.Fprintln(out, "")
+		fmt.Fprintf(out, "Host configuration reconciled. Existing sandbox %q was left alone.\n", name)
+		fmt.Fprintln(out, "Reattaching keeps the sandbox exactly as it was created (its pack, MCP")
+		fmt.Fprintln(out, "servers, and skills were attached at create time); recreating applies the")
+		fmt.Fprintln(out, "current ones. Choose one:")
+		fmt.Fprintf(out, "  pix run%s              # reattach as-is\n", dirArg)
+		fmt.Fprintf(out, "  pix setup%s --replace  # recreate with current settings + get the tour\n", dirArg)
+		return nil
+	}
+
+	// launch.SbxAbsent (positively confirmed): normal first launch.
+	fmt.Fprintln(out, "")
+	fmt.Fprintln(out, "Launching Pix — the agent will take it from here.")
+	runFn(kickoffArgs())
+	return nil
+}
+
+// init supplies the composition provisioning declares but cannot perform.
 func init() {
-	setup.DefaultEnv = defaultShellEnv
-	setup.HostBinary = hostBinaryResolver
-	setup.Register = registerServers
-	setup.Credentials = mcpCredentials
+	provision.DefaultEnv = defaultShellEnv
+	provision.HostBinary = hostBinaryResolver
+	provision.Register = pack.RegisterFn(registerServers)
 }

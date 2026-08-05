@@ -372,6 +372,16 @@ func RunInstall(argv []string) {
 	verifyManagedInstallHealth(cfg, cfgErr, DefaultStarter(), os.Stdout)
 }
 
+// Install is the non-exiting install seam: `pix setup` provisions the launchd
+// agent through the provision loop, which needs an apply that RETURNS its
+// failure (the loop records it and re-checks) rather than one that exits the
+// process. RunInstall keeps owning the argv/exit-code contract for the verb.
+func Install(out io.Writer) error { return platformServeInstall(out) }
+
+// LaunchdLabel is the LaunchAgent label, exported so a health probe can name
+// the exact unit this package installs instead of re-spelling it.
+const LaunchdLabel = serveLaunchdLabel
+
 // RunUninstall is the `serve uninstall` entry point.
 func RunUninstall(argv []string) {
 	if cli.WantsHelp(argv) {

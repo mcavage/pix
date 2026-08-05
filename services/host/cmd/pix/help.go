@@ -8,8 +8,8 @@ import (
 	"pix/host/workflow/doctor"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/pack"
+	"pix/host/workflow/provision"
 	"pix/host/workflow/reset"
-	"pix/host/workflow/setup"
 )
 
 // cli.ErrHelpRequested is the shared sentinel a parser returns when the argv asks
@@ -149,9 +149,9 @@ func verbUsage(verb string) (string, bool) {
 	case "doctor":
 		return doctor.Usage, true
 	case "setup":
-		return setup.Usage, true
+		return provision.Usage, true
 	case "config":
-		return setup.ConfigUsage, true
+		return provision.ConfigUsage, true
 	case "mcp":
 		return mcp.McpUsage, true
 	case "pack":

@@ -1,9 +1,9 @@
-// setup_flagarity_test.go — setup.FlagTakesValue is setup's argument splitting, so
+// setup_flagarity_test.go — provision.FlagTakesValue is setup's argument splitting, so
 // its test lives with it even though the flags it names are onboarding's.
 package main
 
 import (
-	"pix/host/workflow/setup"
+	"pix/host/workflow/provision"
 	"testing"
 )
 
@@ -11,12 +11,12 @@ import (
 // value-bearing flags.
 func TestFlagTakesValue(t *testing.T) {
 	for _, f := range []string{"--account", "--knowledge", "--mcp", "--model"} {
-		if !setup.FlagTakesValue(f) {
+		if !provision.FlagTakesValue(f) {
 			t.Errorf("%s should take a value", f)
 		}
 	}
 	for _, f := range []string{"--help", "-h", "--yes", "--account=x"} {
-		if setup.FlagTakesValue(f) {
+		if provision.FlagTakesValue(f) {
 			t.Errorf("%s should NOT consume a following token", f)
 		}
 	}
