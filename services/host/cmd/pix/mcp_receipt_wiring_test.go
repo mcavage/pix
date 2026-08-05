@@ -20,10 +20,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/mcp"
 	"pix/host/rpc"
 	"pix/host/sandbox"
+	"pix/host/sys"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/pack"
 	"pix/host/workspace"
@@ -315,38 +317,23 @@ func TestExecSbxMcpLoadAndRecord_ReceiptWriteFailureIsDistinctError(t *testing.T
 	}
 }
 
-// runMcpLoad's "sbx absent" branch returns before constructing any *exec.Cmd
+// mcpLoadCmd's "sbx absent" branch returns before constructing any *exec.Cmd
 // at all, so it never reaches mcp.ExecSbxMcpLoadAndRecord — no receipt is ever
 // written. A command that PROMISES an attach must not exit 0 having done
-// nothing (finding: no-sbx behavior), so this now exits rpc.ExitServiceDown (3)
-// instead of returning — proven in a subprocess since runMcpLoad calls
-// os.Exit on this path.
+// nothing (finding: no-sbx behavior), so this exits rpc.ExitServiceDown (3).
 func TestRunMcpLoad_AbsentSbxExitsServiceDownWritesNoReceipt(t *testing.T) {
 	stateHome := t.TempDir()
 	ws := t.TempDir()
 
-	if os.Getenv("PIX_MCP_LOAD_ABSENT_SBX") == "1" {
-		runMcpLoad([]string{"slack", ws})
-		return
-	}
+	t.Setenv("PATH", t.TempDir()) // nothing on PATH, including no sbx
+	t.Setenv("XDG_STATE_HOME", stateHome)
 
-	cmd := exec.Command(os.Args[0], "-test.run", "TestRunMcpLoad_AbsentSbxExitsServiceDownWritesNoReceipt")
-	cmd.Env = append(envWithout(os.Environ(), "PATH"),
-		"PIX_MCP_LOAD_ABSENT_SBX=1",
-		"XDG_STATE_HOME="+stateHome,
-		"PATH="+t.TempDir(), // nothing on PATH, including no sbx
-	)
 	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	runErr := cmd.Run()
+	d := &cli.Deps{Sys: sys.Real{}, Out: &out, Err: &out, In: strings.NewReader("")}
+	code := cli.ExitCode(cli.RunRoot[mcpCmd]("pix mcp", "", "", []string{"load", "slack", ws}, d))
 
-	var ee *exec.ExitError
-	if !errors.As(runErr, &ee) {
-		t.Fatalf("expected an ExitError, got %v (Output: %s)", runErr, out.String())
-	}
-	if ee.ExitCode() != rpc.ExitServiceDown {
-		t.Errorf("exit code = %d, want %d (rpc.ExitServiceDown); output:\n%s", ee.ExitCode(), rpc.ExitServiceDown, out.String())
+	if code != rpc.ExitServiceDown {
+		t.Errorf("exit code = %d, want %d (rpc.ExitServiceDown); output:\n%s", code, rpc.ExitServiceDown, out.String())
 	}
 	sandbox := workspace.DeriveSandboxName(ws)
 	want := "would run: sbx mcp load slack --sandbox " + sandbox

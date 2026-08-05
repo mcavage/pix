@@ -7,208 +7,113 @@ import (
 	"time"
 
 	"pix/host/cli"
-	"pix/host/config"
 	"pix/host/rpc"
 )
 
-// Run moved to cmd/pix as runMemory. It was this package's composition root:
-// it reached for the service capability (to auto-start the daemon) and the
-// workspace capability (to resolve config), which is a capability calling two
-// siblings -- the exact thing arch_test.go forbids, and it caught it.
+// The CLI verbs below are the memory daemon's read/write surface. They take
+// what they need as ORDINARY PARAMETERS: `pix memory` is a kong tree in
+// cmd/pix now, so the flag set, its help and its arity are declared once by
+// the struct that parses them. What used to live here — RunCore's argv switch,
+// a Usage constant listing five subcommands beside a Dispatch that listed them
+// again, and five hand-rolled flag sets each printing their own usage line —
+// was three statements of the same grammar with nothing keeping them in step.
 //
-// RunCore below was ALREADY inverted: it takes its config loader and its client
-// as parameters. Only the wrapper that chose them needed to move up, which is
-// what "invert it into the workflow" means in practice.
+// What is NOT delegated upward: a blank query/content/id is still refused
+// here, because "match everything" and "store nothing" are the daemon's
+// problem, not the parser's.
 
-// RunCore is the testable core of Run. It dispatches the memory
-// subcommand, resolving config LAZILY so a -h/--help request prints usage even
-// when config is broken (help must be config-independent). load + client are
-// injected so tests can feed a failing loader and prove help still works. It
-// returns an error (nil on success/help) instead of calling os.Exit; Run
-// classifies the error into an exit code.
-func RunCore(argv []string, load func() (*config.Config, string, error), client func() rpc.Client, out io.Writer) error {
-	if len(argv) == 0 {
-		return cli.UsageErr(Usage)
-	}
-	// `memory -h` / `memory --help` (no subcommand): print usage, exit 0.
-	if argv[0] == "-h" || argv[0] == "--help" {
-		fmt.Fprintln(out, Usage)
-		return nil
-	}
-	sub, rest := argv[0], argv[1:]
-	// A `<sub> --help` prints the subcommand usage BEFORE any config load: dispatch
-	// with a zero client + empty profile, which Dispatch only reaches after
-	// printing usage (fs.Help short-circuits before any RPC), so neither is used.
-	if cli.WantsHelp(rest) {
-		return Dispatch(sub, rest, rpc.Client{}, out, "")
-	}
-	// Load config to surface a config error up front rather than proceeding with a
-	// fallback (config.Load() can still fail on malformed TOML). The second return
-	// is always "" now — profiles were removed; the memory daemon's scope column
-	// is retained but dormant — threaded through unchanged so Dispatch's
-	// signature stays stable.
-	_, profile, err := load()
-	if err != nil {
-		return err
-	}
-	return Dispatch(sub, rest, client(), out, profile)
+// CLI is the daemon's command surface: the client, where to render, and the
+// scope profile, bound once. It is the package's ONLY export because a kong
+// tree in cmd/pix now owns the grammar these methods used to re-parse.
+type CLI struct {
+	Client  rpc.Client
+	Out     io.Writer
+	Profile string
 }
 
-const Usage = `usage: pix memory <recall|remember|forget|learnings|stats> [args]
-
-  recall <query> [--limit N] [--project P] [--json]   search stored facts
-  remember <text...> [--json]                          store a fact
-  forget <id> [--json]                                 delete a fact by id/prefix
-  learnings [--min N] [--json]                          recurring learnings (promotable)
-  stats [--json]                                        counts by kind/durability
-
-The only unreproducible artifact here is memory.db; config.toml is recreated
-with "pix config set" and op-refs.env holds op:// references, not secrets, so
-neither needs a backup. Snapshot/restore live on the host binary:
-  pix-host memory snapshot PATH           hot: safe while the service runs
-  pix-host memory restore  PATH [--force] stopped-service: stop the daemon first`
-
-// Dispatch is the testable core: it runs one subcommand against an
-// injected client + writer and returns an error (instead of exiting).
-func Dispatch(sub string, argv []string, c rpc.Client, out io.Writer, profile string) error {
-	switch sub {
-	case "recall", "search":
-		return memoryRecall(argv, c, out, profile)
-	case "remember", "add":
-		return memoryRemember(argv, c, out, profile)
-	case "forget", "rm":
-		return memoryForget(argv, c, out, profile)
-	case "learnings", "promotable":
-		return memoryLearnings(argv, c, out, profile)
-	case "stats", "status":
-		return memoryStats(argv, c, out, profile)
-	default:
-		return cli.UsageErr(fmt.Sprintf("memory: unknown subcommand %q\n%s", sub, Usage))
-	}
-}
-
-func memoryRecall(argv []string, c rpc.Client, out io.Writer, profile string) error {
-	fs := cli.NewFlagSet()
-	fs.EnableJSON()
-	limit := fs.Int("limit", 8, "n")
-	project := fs.Str("project", "", "p")
-	positional, err := fs.Parse(argv)
-	if err != nil {
-		return err
-	}
-	const usage = "usage: pix memory recall <query> [--limit N] [--project P] [--json]"
-	if fs.Help {
-		fmt.Fprintln(out, usage)
-		return nil
-	}
-	query := strings.TrimSpace(strings.Join(positional, " "))
+// Recall searches stored facts, newest-scored first.
+func (m CLI) Recall(query string, limit int, project string, asJSON bool) error {
+	query = strings.TrimSpace(query)
 	if query == "" {
-		return cli.UsageErr(usage)
+		return cli.UsageErr("usage: pix memory recall <query> [--limit N] [--project P] [--json]")
 	}
-	res, err := c.Call("recall", map[string]any{"query": query, "limit": *limit, "project": *project, "profile": profile})
+	res, err := m.Client.Call("recall", map[string]any{"query": query, "limit": limit, "project": project, "profile": m.Profile})
 	if err != nil {
 		return err
 	}
 	hits := rpc.AsList(res["hits"])
-	if fs.Json {
-		return cli.WriteJSONOut(out, map[string]any{"hits": hits})
+	if asJSON {
+		return cli.WriteJSONOut(m.Out, map[string]any{"hits": hits})
 	}
 	if len(hits) == 0 {
-		fmt.Fprintln(out, "(no matches)")
+		fmt.Fprintln(m.Out, "(no matches)")
 		return nil
 	}
 	for _, h := range hits {
-		fmt.Fprintf(out, "%s  %s  %s%s\n", memoryTimestamp(rpc.Str(h, "createdAt")), shortID(rpc.Str(h, "id")), rpc.Str(h, "content"), memoryMeta(h))
+		fmt.Fprintf(m.Out, "%s  %s  %s%s\n", memoryTimestamp(rpc.Str(h, "createdAt")), shortID(rpc.Str(h, "id")), rpc.Str(h, "content"), memoryMeta(h))
 	}
 	return nil
 }
 
-func memoryRemember(argv []string, c rpc.Client, out io.Writer, profile string) error {
-	fs := cli.NewFlagSet()
-	fs.EnableJSON()
-	positional, err := fs.Parse(argv)
-	if err != nil {
-		return err
-	}
-	if fs.Help {
-		fmt.Fprintln(out, "usage: pix memory remember <text...> [--json]")
-		return nil
-	}
-	content := strings.TrimSpace(strings.Join(positional, " "))
+// Remember stores one fact, reporting whether the daemon reaffirmed an
+// existing one instead of creating a duplicate.
+func (m CLI) Remember(content string, asJSON bool) error {
+	content = strings.TrimSpace(content)
 	if content == "" {
-		return cli.UsageErr("usage: pix memory remember <text...>")
+		return cli.UsageErr("usage: pix memory remember <text...> [--json]")
 	}
-	res, err := c.Call("remember", map[string]any{"content": content, "source": "cli", "profile": profile})
+	res, err := m.Client.Call("remember", map[string]any{"content": content, "source": "cli", "profile": m.Profile})
 	if err != nil {
 		return err
 	}
-	if fs.Json {
-		return cli.WriteJSONOut(out, res)
+	if asJSON {
+		return cli.WriteJSONOut(m.Out, res)
 	}
 	id := shortID(rpc.Str(res, "id"))
 	if reaff, _ := res["reaffirmed"].(bool); reaff {
-		fmt.Fprintf(out, "reaffirmed %s\n", id)
+		fmt.Fprintf(m.Out, "reaffirmed %s\n", id)
 	} else {
-		fmt.Fprintf(out, "remembered %s\n", id)
+		fmt.Fprintf(m.Out, "remembered %s\n", id)
 	}
 	return nil
 }
 
-func memoryForget(argv []string, c rpc.Client, out io.Writer, profile string) error {
-	fs := cli.NewFlagSet()
-	fs.EnableJSON()
-	positional, err := fs.Parse(argv)
-	if err != nil {
-		return err
-	}
-	if fs.Help {
-		fmt.Fprintln(out, "usage: pix memory forget <id> [--json]")
-		return nil
-	}
-	if len(positional) != 1 {
+// Forget deletes one fact by id (or id prefix). A miss is reported as a miss,
+// never as a deletion.
+func (m CLI) Forget(id string, asJSON bool) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
 		return cli.UsageErr("usage: pix memory forget <id> [--json]")
 	}
-	res, err := c.Call("forget", map[string]any{"id": positional[0], "profile": profile})
+	res, err := m.Client.Call("forget", map[string]any{"id": id, "profile": m.Profile})
 	if err != nil {
 		return err
 	}
 	ok, _ := res["ok"].(bool)
-	if fs.Json {
-		return cli.WriteJSONOut(out, res)
+	if asJSON {
+		return cli.WriteJSONOut(m.Out, res)
 	}
 	if ok {
-		fmt.Fprintf(out, "forgot %s\n", positional[0])
+		fmt.Fprintf(m.Out, "forgot %s\n", id)
 	} else {
-		fmt.Fprintf(out, "no fact matched %q\n", positional[0])
+		fmt.Fprintf(m.Out, "no fact matched %q\n", id)
 	}
 	return nil
 }
 
-func memoryLearnings(argv []string, c rpc.Client, out io.Writer, profile string) error {
-	fs := cli.NewFlagSet()
-	fs.EnableJSON()
-	min := fs.Int("min", 3)
-	positional, perr := fs.Parse(argv)
-	if perr != nil {
-		return perr
-	}
-	if fs.Help {
-		fmt.Fprintln(out, "usage: pix memory learnings [--min N] [--json]")
-		return nil
-	}
-	if len(positional) > 0 {
-		return cli.UsageErr("usage: pix memory learnings [--min N] [--json]")
-	}
-	res, err := c.Call("promotable", map[string]any{"minFrequency": *min, "profile": profile})
+// Learnings lists the recurring lessons seen at least min times — the
+// promotable set the `promote` skill reads.
+func (m CLI) Learnings(min int, asJSON bool) error {
+	res, err := m.Client.Call("promotable", map[string]any{"minFrequency": min, "profile": m.Profile})
 	if err != nil {
 		return err
 	}
 	cands := rpc.AsList(res["candidates"])
-	if fs.Json {
-		return cli.WriteJSONOut(out, map[string]any{"candidates": cands})
+	if asJSON {
+		return cli.WriteJSONOut(m.Out, map[string]any{"candidates": cands})
 	}
 	if len(cands) == 0 {
-		fmt.Fprintf(out, "(no learnings seen %d+ times)\n", *min)
+		fmt.Fprintf(m.Out, "(no learnings seen %d+ times)\n", min)
 		return nil
 	}
 	for _, cn := range cands {
@@ -216,31 +121,19 @@ func memoryLearnings(argv []string, c rpc.Client, out io.Writer, profile string)
 		if f, ok := cn["frequency"].(float64); ok {
 			freq = int(f)
 		}
-		fmt.Fprintf(out, "%s  %s  (%dx)  %s\n", memoryTimestamp(rpc.Str(cn, "createdAt")), shortID(rpc.Str(cn, "id")), freq, rpc.Str(cn, "content"))
+		fmt.Fprintf(m.Out, "%s  %s  (%dx)  %s\n", memoryTimestamp(rpc.Str(cn, "createdAt")), shortID(rpc.Str(cn, "id")), freq, rpc.Str(cn, "content"))
 	}
 	return nil
 }
 
-func memoryStats(argv []string, c rpc.Client, out io.Writer, profile string) error {
-	fs := cli.NewFlagSet()
-	fs.EnableJSON()
-	positional, perr := fs.Parse(argv)
-	if perr != nil {
-		return perr
-	}
-	if fs.Help {
-		fmt.Fprintln(out, "usage: pix memory stats [--json]")
-		return nil
-	}
-	if len(positional) > 0 {
-		return cli.UsageErr("usage: pix memory stats [--json]")
-	}
-	res, err := c.Call("stats", map[string]any{"profile": profile})
+// Stats prints the daemon's counts by kind and durability.
+func (m CLI) Stats(asJSON bool) error {
+	res, err := m.Client.Call("stats", map[string]any{"profile": m.Profile})
 	if err != nil {
 		return err
 	}
-	if fs.Json {
-		return cli.WriteJSONOut(out, res)
+	if asJSON {
+		return cli.WriteJSONOut(m.Out, res)
 	}
 	num := func(k string) int {
 		if f, ok := res[k].(float64); ok {
@@ -248,7 +141,7 @@ func memoryStats(argv []string, c rpc.Client, out io.Writer, profile string) err
 		}
 		return 0
 	}
-	fmt.Fprintf(out, "active %d  (durable %d, perishable %d)  facts %d  learnings %d  deleted %d\n",
+	fmt.Fprintf(m.Out, "active %d  (durable %d, perishable %d)  facts %d  learnings %d  deleted %d\n",
 		num("active"), num("durable"), num("perishable"), num("facts"), num("learnings"), num("deleted"))
 	return nil
 }

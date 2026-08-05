@@ -6,10 +6,7 @@ import (
 
 	"github.com/alecthomas/kong"
 
-	"pix/host/mcp"
-	"pix/host/memory"
 	"pix/host/workflow/doctor"
-	"pix/host/workflow/pack"
 	"pix/host/workflow/provision"
 )
 
@@ -108,14 +105,17 @@ func verbUsage(verb string) (string, bool) {
 		return provision.Usage, true
 	case "config":
 		return provision.ConfigUsage, true
-	case "mcp":
-		return mcp.McpUsage, true
-	case "pack":
-		return pack.Usage, true
-	case "memory", "mem":
-		return memory.Usage + "\n", true
 	case "state":
 		return stateUsage, true
+	// mcp/pack/memory are TYPED but not yet root children (typed_verb_bridge.go):
+	// their usage is generated from the same tags that parse them, and these
+	// three entries die with the bridge.
+	case "mcp":
+		return typedVerbUsage[mcpCmd]("pix mcp"), true
+	case "pack":
+		return typedVerbUsage[packCmd]("pix pack"), true
+	case "memory", "mem":
+		return typedVerbUsage[memoryCmd]("pix memory"), true
 	}
 	return "", false
 }

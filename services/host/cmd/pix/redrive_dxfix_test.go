@@ -30,8 +30,10 @@ import (
 	"strings"
 	"testing"
 
+	"pix/host/cli"
 	"pix/host/routing"
 	"pix/host/rpc"
+	"pix/host/sys"
 )
 
 // modelsHelp renders `pix models --help` the way a user reads it: through the
@@ -199,92 +201,55 @@ func TestAgentReassessModel_PointsAtLiveScorecardPath(t *testing.T) {
 
 // --- finding 3: mcp verbs that promise an operation must not exit 0 --------
 
+// runTypedMcp drives one `pix mcp` subcommand through its typed tree with sbx
+// absent from PATH, and returns the exit code the launcher would produce plus
+// the combined output. These cases used to re-exec the test binary because the
+// seam called os.Exit deep inside itself; the command returns an error now, so
+// the exit code is an ordinary assertion.
+func runTypedMcp(t *testing.T, argv []string, extraEnv map[string]string) (int, string) {
+	t.Helper()
+	t.Setenv("PATH", t.TempDir()) // nothing on PATH, including no sbx
+	for k, v := range extraEnv {
+		t.Setenv(k, v)
+	}
+	var out bytes.Buffer
+	d := &cli.Deps{Sys: sys.Real{}, Out: &out, Err: &out, In: strings.NewReader("")}
+	err := cli.RunRoot[mcpCmd]("pix mcp", "", "", argv, d)
+	return cli.ExitCode(err), out.String()
+}
+
+// wantServiceDown asserts the honest-unknown contract shared by every mcp verb
+// that promises an operation: exit 3, and the exact command to run by hand.
+func wantServiceDown(t *testing.T, code int, out, wantCmd string) {
+	t.Helper()
+	if code != rpc.ExitServiceDown {
+		t.Errorf("exit code = %d, want %d (rpc.ExitServiceDown); output:\n%s", code, rpc.ExitServiceDown, out)
+	}
+	if !strings.Contains(out, wantCmd) {
+		t.Errorf("expected the exact recovery command %q, got:\n%s", wantCmd, out)
+	}
+}
+
 // TestRunMcpLs_AbsentSbxExitsServiceDown: read-only `mcp ls` also exits 3 when
 // sbx is unreachable — the documented policy decision (see mcp.ErrSbxUnavailable)
 // so a caller can tell "zero servers" from "couldn't ask".
 func TestRunMcpLs_AbsentSbxExitsServiceDown(t *testing.T) {
-	if os.Getenv("PIX_DXFIX_MCP_LS") == "1" {
-		runMcpLs()
-		return
-	}
-	cmd := exec.Command(os.Args[0], "-test.run", "TestRunMcpLs_AbsentSbxExitsServiceDown")
-	cmd.Env = append(envWithout(os.Environ(), "PATH"),
-		"PIX_DXFIX_MCP_LS=1",
-		"PATH="+t.TempDir(),
-	)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	runErr := cmd.Run()
-
-	var ee *exec.ExitError
-	if !errors.As(runErr, &ee) {
-		t.Fatalf("expected an ExitError, got %v (Output: %s)", runErr, out.String())
-	}
-	if ee.ExitCode() != rpc.ExitServiceDown {
-		t.Errorf("exit code = %d, want %d (rpc.ExitServiceDown); output:\n%s", ee.ExitCode(), rpc.ExitServiceDown, out.String())
-	}
-	if !strings.Contains(out.String(), "would run: sbx mcp ls") {
-		t.Errorf("expected the exact recovery command, got:\n%s", out.String())
-	}
+	code, out := runTypedMcp(t, []string{"ls"}, nil)
+	wantServiceDown(t, code, out, "would run: sbx mcp ls")
 }
 
 // TestRunMcpAuth_AbsentSbxExitsServiceDown: `mcp auth` promises an OAuth
 // operation; sbx-absent must not exit 0.
 func TestRunMcpAuth_AbsentSbxExitsServiceDown(t *testing.T) {
-	if os.Getenv("PIX_DXFIX_MCP_AUTH") == "1" {
-		runMcpAuth([]string{"--all"})
-		return
-	}
-	cmd := exec.Command(os.Args[0], "-test.run", "TestRunMcpAuth_AbsentSbxExitsServiceDown")
-	cmd.Env = append(envWithout(os.Environ(), "PATH"),
-		"PIX_DXFIX_MCP_AUTH=1",
-		"PATH="+t.TempDir(),
-	)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	runErr := cmd.Run()
-
-	var ee *exec.ExitError
-	if !errors.As(runErr, &ee) {
-		t.Fatalf("expected an ExitError, got %v (Output: %s)", runErr, out.String())
-	}
-	if ee.ExitCode() != rpc.ExitServiceDown {
-		t.Errorf("exit code = %d, want %d (rpc.ExitServiceDown); output:\n%s", ee.ExitCode(), rpc.ExitServiceDown, out.String())
-	}
-	if !strings.Contains(out.String(), "would run: sbx mcp auth --all") {
-		t.Errorf("expected the exact recovery command, got:\n%s", out.String())
-	}
+	code, out := runTypedMcp(t, []string{"auth", "--all"}, nil)
+	wantServiceDown(t, code, out, "would run: sbx mcp auth --all")
 }
 
 // TestRunMcpBundle_AbsentSbxExitsServiceDown: `mcp bundle` promises registering
 // the catalog bundle; sbx-absent must not exit 0.
 func TestRunMcpBundle_AbsentSbxExitsServiceDown(t *testing.T) {
-	if os.Getenv("PIX_DXFIX_MCP_BUNDLE") == "1" {
-		runMcpBundle(nil)
-		return
-	}
-	cmd := exec.Command(os.Args[0], "-test.run", "TestRunMcpBundle_AbsentSbxExitsServiceDown")
-	cmd.Env = append(envWithout(os.Environ(), "PATH"),
-		"PIX_DXFIX_MCP_BUNDLE=1",
-		"PATH="+t.TempDir(),
-	)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	runErr := cmd.Run()
-
-	var ee *exec.ExitError
-	if !errors.As(runErr, &ee) {
-		t.Fatalf("expected an ExitError, got %v (Output: %s)", runErr, out.String())
-	}
-	if ee.ExitCode() != rpc.ExitServiceDown {
-		t.Errorf("exit code = %d, want %d (rpc.ExitServiceDown); output:\n%s", ee.ExitCode(), rpc.ExitServiceDown, out.String())
-	}
-	if !strings.Contains(out.String(), "would run: sbx mcp bundle add") {
-		t.Errorf("expected the exact recovery command, got:\n%s", out.String())
-	}
+	code, out := runTypedMcp(t, []string{"bundle"}, nil)
+	wantServiceDown(t, code, out, "would run: sbx mcp bundle add")
 }
 
 // TestRunMcpRegister_AbsentSbxExitsServiceDownNoConfigMutation: `mcp register`
@@ -312,38 +277,17 @@ func TestRunMcpRegister_AbsentSbxExitsServiceDownNoConfigMutation(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	if os.Getenv("PIX_DXFIX_MCP_REGISTER") == "1" {
-		runMcpRegister(nil)
-		return
-	}
-
-	cmd := exec.Command(os.Args[0], "-test.run", "TestRunMcpRegister_AbsentSbxExitsServiceDownNoConfigMutation")
-	cmd.Env = append(envWithout(os.Environ(), "PATH"),
-		"PIX_DXFIX_MCP_REGISTER=1",
-		"PIX_CONFIG="+cfgPath,
-		"PATH="+binDir, // pix-host resolvable; sbx is not
-	)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	runErr := cmd.Run()
-
-	var ee *exec.ExitError
-	if !errors.As(runErr, &ee) {
-		t.Fatalf("expected an ExitError, got %v (Output: %s)", runErr, out.String())
-	}
-	if ee.ExitCode() != rpc.ExitServiceDown {
-		t.Errorf("exit code = %d, want %d (rpc.ExitServiceDown); output:\n%s", ee.ExitCode(), rpc.ExitServiceDown, out.String())
-	}
-	if !strings.Contains(out.String(), "sbx mcp add slack") {
-		t.Errorf("expected the exact would-run registration command, got:\n%s", out.String())
-	}
+	code, out := runTypedMcp(t, []string{"register"}, map[string]string{
+		"PIX_CONFIG": cfgPath,
+		"PATH":       binDir, // pix-host resolvable; sbx is not
+	})
+	wantServiceDown(t, code, out, "sbx mcp add slack")
 
 	after, err := os.ReadFile(cfgPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(after) != cfgContent {
-		t.Errorf("config.toml was mutated by a failed `mcp register`:\nbefore:\n%s\nafter:\n%s", cfgContent, after)
+		t.Errorf("config.toml mutated by `mcp register`:\n got: %q\nwant: %q", string(after), cfgContent)
 	}
 }

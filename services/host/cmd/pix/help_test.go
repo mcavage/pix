@@ -5,9 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"pix/host/cli"
-	"pix/host/mcp"
-	"pix/host/memory"
-	"pix/host/rpc"
 	"pix/host/workflow/doctor"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/onboard"
@@ -141,34 +138,37 @@ func TestFlagSetJSONOptIn(t *testing.T) {
 }
 
 func TestMemoryHelp_NoRPC(t *testing.T) {
-	// `memory recall --help` must print usage and NOT hit the (down) daemon.
-	var out bytes.Buffer
-	if err := memory.Dispatch("recall", []string{"--help"}, rpc.Client{Port: 1}, &out, "default"); err != nil {
-		t.Fatalf("memory recall --help: %v", err)
-	}
-	if !strings.Contains(out.String(), "usage: pix memory recall") {
-		t.Errorf("expected recall usage, got %q", out.String())
-	}
-	// stats/learnings likewise.
-	out.Reset()
-	if err := memory.Dispatch("stats", []string{"--help"}, rpc.Client{Port: 1}, &out, "default"); err != nil {
-		t.Fatalf("memory stats --help: %v", err)
-	}
-	if !strings.Contains(out.String(), "usage: pix memory stats") {
-		t.Errorf("expected stats usage, got %q", out.String())
+	// `memory recall --help` prints kong's generated usage and NEVER opens a
+	// session, so a down daemon is irrelevant to a help request. The tree is
+	// driven the way the root drives it, so this asserts the shipped path.
+	for _, sub := range []string{"recall", "stats"} {
+		var out bytes.Buffer
+		d := &cli.Deps{Out: &out, Err: &out}
+		if err := cli.RunRoot[memoryCmd]("pix memory", "", "", []string{sub, "--help"}, d); err != nil {
+			t.Fatalf("memory %s --help: %v", sub, err)
+		}
+		if !strings.Contains(out.String(), "Usage: pix memory "+sub) {
+			t.Errorf("expected %s usage, got %q", sub, out.String())
+		}
 	}
 }
 
 func TestVerbUsage_Routing(t *testing.T) {
-	for _, verb := range []string{"run", "memory", "config", "status", "pack", "doctor", "mcp", "setup"} {
+	// Typed verbs are absent on purpose: they have no usage constant, and
+	// runHelp re-enters the root as `<verb> --help` for them instead.
+	for _, verb := range []string{"run", "config", "status", "doctor", "setup"} {
 		u, ok := verbUsage(verb)
 		if !ok || strings.TrimSpace(u) == "" {
 			t.Errorf("verbUsage(%q) = (%q,%v), want non-empty usage", verb, u, ok)
 		}
 	}
-	// Aliases route too.
-	if _, ok := verbUsage("mem"); !ok {
-		t.Error("verbUsage(mem) should route to memory usage")
+	// A typed verb reached through the last passthrough bridge routes to its
+	// GENERATED usage, never a constant.
+	for _, verb := range []string{"memory", "mem", "pack", "mcp"} {
+		u, ok := verbUsage(verb)
+		if !ok || !strings.Contains(u, "Usage: pix ") {
+			t.Errorf("verbUsage(%q) = (%q,%v), want generated usage", verb, u, ok)
+		}
 	}
 	// Unknown verb: no usage.
 	if _, ok := verbUsage("frobnicate"); ok {
@@ -262,9 +262,17 @@ func TestRunVerb_HelpPrintsUsage(t *testing.T) {
 	}
 }
 
-func TestMCPUsageListsEverySubcommand(t *testing.T) {
-	const want = "usage: pix mcp <register|ls|load|auth|bundle> [args]"
-	if !strings.Contains(mcp.McpUsage, want) {
-		t.Fatalf("mcp usage synopsis missing subcommands: %q", mcp.McpUsage)
+func TestMCPHelpListsEverySubcommand(t *testing.T) {
+	// The synopsis is GENERATED from the tree that dispatches, so this asserts
+	// the tree, not a constant that has to be kept in step with it.
+	var out bytes.Buffer
+	d := &cli.Deps{Out: &out, Err: &out}
+	if err := cli.RunRoot[mcpCmd]("pix mcp", "", "", []string{"--help"}, d); err != nil {
+		t.Fatalf("mcp --help: %v", err)
+	}
+	for _, sub := range []string{"register", "ls", "load", "auth", "bundle"} {
+		if !strings.Contains(out.String(), sub) {
+			t.Errorf("mcp --help missing %q:\n%s", sub, out.String())
+		}
 	}
 }

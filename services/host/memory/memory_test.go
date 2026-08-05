@@ -3,7 +3,6 @@ package memory
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -12,7 +11,6 @@ import (
 	"time"
 
 	"pix/host/cli"
-	"pix/host/config"
 	"pix/host/rpc"
 )
 
@@ -86,16 +84,16 @@ func TestMemoryProfileForwarded(t *testing.T) {
 
 	cases := []struct {
 		sub    string
-		argv   []string
+		call   func() error
 		method string
 	}{
-		{"recall", []string{"q"}, "recall"},
-		{"remember", []string{"a", "fact"}, "remember"},
-		{"learnings", nil, "promotable"},
-		{"stats", nil, "stats"},
+		{"recall", func() error { return (CLI{c, &bytes.Buffer{}, "work"}).Recall("q", 8, "", false) }, "recall"},
+		{"remember", func() error { return (CLI{c, &bytes.Buffer{}, "work"}).Remember("a fact", false) }, "remember"},
+		{"learnings", func() error { return (CLI{c, &bytes.Buffer{}, "work"}).Learnings(3, false) }, "promotable"},
+		{"stats", func() error { return (CLI{c, &bytes.Buffer{}, "work"}).Stats(false) }, "stats"},
 	}
 	for _, tc := range cases {
-		if err := Dispatch(tc.sub, tc.argv, c, &bytes.Buffer{}, "work"); err != nil {
+		if err := tc.call(); err != nil {
 			t.Fatalf("%s: %v", tc.sub, err)
 		}
 		if got, _ := seen[tc.method]["profile"].(string); got != "work" {
@@ -111,7 +109,7 @@ func TestMemoryRecall(t *testing.T) {
 		}},
 	})
 	var out bytes.Buffer
-	if err := Dispatch("recall", []string{"guitar"}, c, &out, "default"); err != nil {
+	if err := (CLI{c, &out, "default"}).Recall("guitar", 8, "", false); err != nil {
 		t.Fatalf("recall: %v", err)
 	}
 	got := out.String()
@@ -138,7 +136,7 @@ func TestMemoryRecall_NoTimestampDoesNotCrash(t *testing.T) {
 		}},
 	})
 	var out bytes.Buffer
-	if err := Dispatch("recall", []string{"x"}, c, &out, "default"); err != nil {
+	if err := (CLI{c, &out, "default"}).Recall("x", 8, "", false); err != nil {
 		t.Fatalf("recall: %v", err)
 	}
 	got := out.String()
@@ -170,7 +168,7 @@ func TestMemoryTimestamp(t *testing.T) {
 func TestMemoryRecallJSON(t *testing.T) {
 	c := fakeRPCServer(t, map[string]any{"recall": map[string]any{"hits": []any{}}})
 	var out bytes.Buffer
-	if err := Dispatch("recall", []string{"x", "--json"}, c, &out, "default"); err != nil {
+	if err := (CLI{c, &out, "default"}).Recall("x", 8, "", true); err != nil {
 		t.Fatalf("recall --json: %v", err)
 	}
 	var parsed map[string]any
@@ -181,7 +179,7 @@ func TestMemoryRecallJSON(t *testing.T) {
 
 func TestMemoryRecallNoQuery(t *testing.T) {
 	c := rpc.Client{Port: 1}
-	if err := Dispatch("recall", nil, c, &bytes.Buffer{}, "default"); !cli.IsUsage(err) {
+	if err := (CLI{c, &bytes.Buffer{}, "default"}).Recall("", 8, "", false); !cli.IsUsage(err) {
 		t.Errorf("recall with no query: err = %v, want cli.UsageError2", err)
 	}
 }
@@ -189,7 +187,7 @@ func TestMemoryRecallNoQuery(t *testing.T) {
 func TestMemoryRemember(t *testing.T) {
 	c := fakeRPCServer(t, map[string]any{"remember": map[string]any{"id": "deadbeef-00", "reaffirmed": false}})
 	var out bytes.Buffer
-	if err := Dispatch("remember", []string{"a", "new", "fact"}, c, &out, "default"); err != nil {
+	if err := (CLI{c, &out, "default"}).Remember("a new fact", false); err != nil {
 		t.Fatalf("remember: %v", err)
 	}
 	if !strings.Contains(out.String(), "remembered deadbeef") {
@@ -200,7 +198,7 @@ func TestMemoryRemember(t *testing.T) {
 func TestMemoryForget(t *testing.T) {
 	c := fakeRPCServer(t, map[string]any{"forget": map[string]any{"ok": true}})
 	var out bytes.Buffer
-	if err := Dispatch("forget", []string{"abc123"}, c, &out, "default"); err != nil {
+	if err := (CLI{c, &out, "default"}).Forget("abc123", false); err != nil {
 		t.Fatalf("forget: %v", err)
 	}
 	if !strings.Contains(out.String(), "forgot abc123") {
@@ -213,7 +211,7 @@ func TestMemoryLearnings(t *testing.T) {
 		map[string]any{"id": "aa11-bb", "content": "always run tests", "frequency": 5.0, "createdAt": "2026-07-22T16:15:03Z"},
 	}}})
 	var out bytes.Buffer
-	if err := Dispatch("learnings", nil, c, &out, "default"); err != nil {
+	if err := (CLI{c, &out, "default"}).Learnings(3, false); err != nil {
 		t.Fatalf("learnings: %v", err)
 	}
 	if !strings.Contains(out.String(), "5x") || !strings.Contains(out.String(), "always run tests") {
@@ -230,7 +228,7 @@ func TestMemoryStats(t *testing.T) {
 		"active": 10.0, "durable": 3.0, "perishable": 7.0, "facts": 8.0, "learnings": 2.0, "deleted": 1.0,
 	}})
 	var out bytes.Buffer
-	if err := Dispatch("stats", nil, c, &out, "default"); err != nil {
+	if err := (CLI{c, &out, "default"}).Stats(false); err != nil {
 		t.Fatalf("stats: %v", err)
 	}
 	if !strings.Contains(out.String(), "active 10") {
@@ -241,45 +239,9 @@ func TestMemoryStats(t *testing.T) {
 func TestMemoryServiceDown(t *testing.T) {
 	// Nothing listening on this port -> rpc.ErrServiceDown.
 	c := rpc.Client{Port: 1}
-	err := Dispatch("recall", []string{"x"}, c, &bytes.Buffer{}, "default")
+	err := (CLI{c, &bytes.Buffer{}, "default"}).Recall("x", 8, "", false)
 	if err != rpc.ErrServiceDown {
 		t.Errorf("recall against down service: err = %v, want rpc.ErrServiceDown", err)
-	}
-}
-
-func TestMemoryUnknownSub(t *testing.T) {
-	if err := Dispatch("frobnicate", nil, rpc.Client{Port: 1}, &bytes.Buffer{}, "default"); !cli.IsUsage(err) {
-		t.Errorf("unknown sub: err = %v, want cli.UsageError2", err)
-	}
-}
-
-// TestMemoryUsageMentionsSnapshotRestore keeps the memory usage pointing users
-// at the real U07b data-safety primitives (pix-host memory snapshot/restore),
-// not the retired, never-rebuilt full config+op-refs archive. `pix backup`/
-// `pix restore` are RETIRED verbs (services/host/cmd/pix/retired.go); the
-// usage text must not tell a user to run something that itself answers
-// PIX_RETIRED, and must not claim snapshot/restore covers anything beyond
-// memory.db.
-func TestMemoryUsageMentionsSnapshotRestore(t *testing.T) {
-	if !strings.Contains(Usage, "pix-host memory snapshot") || !strings.Contains(Usage, "pix-host memory restore") {
-		t.Error("Usage should point to pix-host memory snapshot/restore, the live data-safety primitives")
-	}
-	if strings.Contains(Usage, "pix backup") || strings.Contains(Usage, "pix restore") {
-		t.Error("Usage should not name the retired pix backup/restore verbs")
-	}
-	if strings.Contains(Usage, "config + op-refs") {
-		t.Error("Usage should not claim snapshot/restore covers config or op-refs — memory.db is the only unreproducible artifact")
-	}
-}
-
-// TestMemoryDispatchNoLongerHasBackupRestore proves backup/restore were removed
-// as memory subcommands (they are top-level verbs now) and are treated as an
-// unknown subcommand.
-func TestMemoryDispatchNoLongerHasBackupRestore(t *testing.T) {
-	for _, sub := range []string{"backup", "restore"} {
-		if err := Dispatch(sub, nil, rpc.Client{}, &bytes.Buffer{}, "default"); !cli.IsUsage(err) {
-			t.Errorf("Dispatch(%q) err = %v, want cli.UsageError2 (removed subcommand)", sub, err)
-		}
 	}
 }
 
@@ -382,20 +344,6 @@ func TestFlagSetHelpWinsOverValue(t *testing.T) {
 	}
 }
 
-// TestMemoryRecallHelp_BothPositions is the F3 recall gate: both `recall -h foo`
-// and `recall foo -h` print usage and never RPC (Port:1 would fail a dial).
-func TestMemoryRecallHelp_BothPositions(t *testing.T) {
-	for _, argv := range [][]string{{"-h", "foo"}, {"foo", "-h"}, {"--help", "foo"}} {
-		var out bytes.Buffer
-		if err := memoryRecall(argv, rpc.Client{Port: 1}, &out, "default"); err != nil {
-			t.Fatalf("memoryRecall(%v): %v", argv, err)
-		}
-		if !strings.Contains(out.String(), "usage: pix memory recall") {
-			t.Errorf("memoryRecall(%v) = %q, want recall usage", argv, out.String())
-		}
-	}
-}
-
 // TestKnowledgeSyncHelp_NoCommit is the F3 sync gate: `sync -m --help` must set
 // help via the cli.FlagSet pre-scan and NOT consume `--help` as the -m value, so the
 // commit/push path is never reached. Asserted at the cli.FlagSet level (the same
@@ -414,41 +362,6 @@ func TestKnowledgeSyncHelp_NoCommit(t *testing.T) {
 	}
 	if *msg != "" || len(pos) != 0 {
 		t.Errorf("sync -m --help consumed a value/positional (msg=%q pos=%v) — commit path reachable", *msg, pos)
-	}
-}
-
-// TestRunMemoryCore_HelpIgnoresBrokenConfig is the F5 gate: a subcommand help
-// request prints usage WITHOUT loading config, so `memory recall --help` works
-// even when config is malformed / names an unknown profile. The injected loader
-// errors and the client panics if reached — proving neither is touched on help.
-func TestRunMemoryCore_HelpIgnoresBrokenConfig(t *testing.T) {
-	brokenLoad := func() (*config.Config, string, error) {
-		return nil, "", fmt.Errorf(`no profile "wrok" — configured: work`)
-	}
-	panicClient := func() rpc.Client { panic("RunCore must not RPC on a help request") }
-
-	for _, argv := range [][]string{{"recall", "--help"}, {"stats", "-h"}, {"forget", "--help"}} {
-		var out bytes.Buffer
-		if err := RunCore(argv, brokenLoad, panicClient, &out); err != nil {
-			t.Fatalf("RunCore(%v) with broken config: %v", argv, err)
-		}
-		if !strings.Contains(out.String(), "usage: pix memory "+argv[0]) {
-			t.Errorf("RunCore(%v) = %q, want %s usage", argv, out.String(), argv[0])
-		}
-	}
-
-	// Without a help request, the broken config MUST surface (never a silent
-	// fallback to the default bucket).
-	if err := RunCore([]string{"recall", "foo"}, brokenLoad, rpc.MemoryClient, &bytes.Buffer{}); err == nil {
-		t.Error("RunCore(recall foo) with broken config should error, not fall back")
-	}
-	// Bare `memory --help` prints the top-level usage, also config-free.
-	var out bytes.Buffer
-	if err := RunCore([]string{"--help"}, brokenLoad, panicClient, &out); err != nil {
-		t.Fatalf("RunCore([--help]): %v", err)
-	}
-	if !strings.Contains(out.String(), "usage: pix memory <") {
-		t.Errorf("memory --help = %q, want top-level usage", out.String())
 	}
 }
 
