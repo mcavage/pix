@@ -45,14 +45,27 @@ const (
 // architecture was chosen.
 var pkgLayer = map[string]int{
 	// L0 — foundation. No domain knowledge.
-	"sys":         layerFoundation,
+	"sys": layerFoundation,
+	// sys/systest is placed and layer-checked like any other L0 package, but its
+	// status is honestly test-only: its every importer, across the whole module,
+	// is a _test.go file (grep it) — sys.System's one fake, consumed only to
+	// build fixtures. It cannot be reclassified as test-only support the way
+	// cmd/pix/corpus was (U11k): its file must keep the plain .go name, because a
+	// package built ONLY from _test.go files cannot be imported by another
+	// package's tests. So it stays production-shaped by necessity while being
+	// test-only in fact; this comment is that fact, not a claim it has a real
+	// caller.
 	"sys/systest": layerFoundation,
 	"config":      layerFoundation,
 	"routing":     layerFoundation,
 	"rpc":         layerFoundation,
 	"cli":         layerFoundation,
-	"hostenv":     layerFoundation,
-	"launcher":    layerFoundation,
+	// hostenv, unlike sys/systest, is genuinely production L0: pack, provision,
+	// launch, doctor, models, secret, inference and mcp all import it from
+	// non-test files (hostenv.Env is the injected "what can this host do" seam
+	// those workflows and capabilities take as a parameter).
+	"hostenv":  layerFoundation,
+	"launcher": layerFoundation,
 	// lease is U04a's per-sandbox lifecycle/ref-lock primitives (an immutable
 	// creation record, an identity-bound keep marker, an flock-backed
 	// reference lock): unix syscalls + stdlib only, no domain knowledge, same
@@ -165,10 +178,14 @@ var pkgLayer = map[string]int{
 	// a package that is entirely tests has no layer to place, the same way it
 	// has no budget to track in scripts/arch-metrics/budgets.json.
 
-	// Not part of the launcher's layering: the host daemon binary, a separate
-	// program. Its examples/ tree is gone with the MCP plugin transport it
+	// "." is the pix-host daemon binary's own root package — a separate program
+	// from cmd/pix, but the same shape: argv/RPC in, dispatch out. It was
+	// exempted (-1) as a placeholder; it earns L4 honestly — its production
+	// imports (config, cli, routing, inference, monitor, plugin, supervise,
+	// workflow/pack) are all L0-L3, so it satisfies the down-only rule without
+	// help. Its examples/ tree is gone with the MCP plugin transport it
 	// demonstrated (U11j).
-	".": -1,
+	".": layerCommand,
 }
 
 // l0Order breaks ties inside L0, which is the one layer with internal

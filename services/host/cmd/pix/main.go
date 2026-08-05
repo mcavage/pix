@@ -40,7 +40,7 @@ func main() {
 	if len(args) == 0 {
 		// Bare `pix` shows STATUS — it never launches a sandbox (launching is explicit,
 		// behind `run`). On a fresh host with no config, offer onboarding.
-		if provision.MaybeFirstRun() {
+		if provision.MaybeFirstRun(os.Stdout) {
 			return
 		}
 		args = []string{"status"}
