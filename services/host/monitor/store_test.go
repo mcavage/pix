@@ -18,6 +18,17 @@ import (
 // worked" assertion below would pass for the wrong reason.
 const canaryAWSKey = "AKIAABCDEFGHIJKLMNOP"
 
+// canaryGoogleKey, canaryJWT and canaryBearer extend the same trick to the
+// Google AIza, JWT and Authorization: Bearer shapes. All are synthetic.
+const (
+	canaryGoogleKey = "AIzaSyCanary0123456789_abcdefghijklmnoq"
+	canaryJWT       = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJjYW5hcnkifQ.c2lnLWNhbmFyeQ"
+	canaryBearer    = "Authorization: Bearer canary.bearer-token-0123456789"
+)
+
+// allCanaries is every secret-shaped canary the redaction tests plant.
+var allCanaries = []string{canaryAWSKey, canaryGoogleKey, canaryJWT, canaryBearer}
+
 func newTestStore(t *testing.T, cfg StoreConfig) *Store {
 	t.Helper()
 	if cfg.Root == "" {
@@ -206,14 +217,19 @@ func TestAppendBoundsEventsBytesAndStreams(t *testing.T) {
 }
 
 func TestRedactTextScrubsSecretShapes(t *testing.T) {
-	if redactText(canaryAWSKey) == canaryAWSKey {
-		t.Fatalf("canary %q is not matched by any pattern — every redaction assertion would pass vacuously", canaryAWSKey)
+	for _, c := range allCanaries {
+		if redactText(c) == c {
+			t.Fatalf("canary %q is not matched by any pattern — every redaction assertion would pass vacuously", c)
+		}
 	}
 	secrets := map[string]string{
 		"aws":        "export AWS_ACCESS_KEY_ID=" + canaryAWSKey,
 		"github":     "token: ghp_1234567890abcdefghijklmnopqrstuvwxyz",
 		"slack":      "posted with xoxb-1234567890-abcdefghijklmnop",
 		"openai":     "sk-abcdefghijklmnopqrstuvwxyz012345",
+		"google":     "called the maps api with " + canaryGoogleKey,
+		"jwt":        "session cookie " + canaryJWT,
+		"bearer":     "-H '" + canaryBearer + "'",
 		"pem":        "-----BEGIN RSA PRIVATE KEY-----\nMIIE...",
 		"assignment": `api_key = "abcdefghijklmnop12345"`,
 	}
@@ -222,7 +238,15 @@ func TestRedactTextScrubsSecretShapes(t *testing.T) {
 			t.Errorf("%s: redactText(%q) = %q, want a %s", name, in, out, redactionMarker)
 		}
 	}
-	for _, ok := range []string{"", "ran ls -l in /tmp and read 42 files", "model=claude-opus-5 tokens=1234"} {
+	ordinary := []string{
+		"",
+		"ran ls -l in /tmp and read 42 files",
+		"model=claude-opus-5 tokens=1234",
+		"the bearer of good news brought authorization for the plan",
+		"Authorization headers were discussed in the design review",
+		"GET https://api.example.com/v1/users?page=2 returned 200",
+	}
+	for _, ok := range ordinary {
 		if got := redactText(ok); got != ok {
 			t.Errorf("redactText(%q) = %q, want it unchanged", ok, got)
 		}
