@@ -7,6 +7,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/launcher"
+	"pix/host/sandbox"
 	"pix/host/sys"
 )
 
@@ -44,6 +45,10 @@ type RunOpts struct {
 	Intent    string   // --intent NAME: resolve the session model via the router (unless --model overrides)
 	Replace   bool     // --replace: recreate (rm -f then create) instead of re-attaching
 	Pack      string   // --pack PATH: active pack for this run (overrides config.Pack)
+	// Keep is -k/--keep: bind a sticky, identity-bound keep marker to this
+	// session (see SetSessionKeep). Story04c wiring only — there is no reaper
+	// yet to consult it (see session.go's file doc).
+	Keep bool
 	// PackKits are ephemeral mixin kit dir(s) synthesized from the active pack's
 	// bin/ wrappers. Deliberately SEPARATE from Kits: a non-empty Kits is the
 	// escape hatch that REPLACES the base pin, and a pack mixin must stack
@@ -147,17 +152,52 @@ func BuildSbxArgs(cfg *config.Config, o RunOpts, version string) []string {
 
 	// Live skill trees: config paths + personal dir + --skills flags. Each is
 	// mounted as an extra workspace so pi can read it inside the sandbox.
-	liveSkills := append([]string(nil), cfg.Skills.Paths...)
-	if personal := filepath.Join(config.ContextDir(), "skills"); sys.DirHasEntries(personal) {
-		liveSkills = append(liveSkills, personal)
-	}
-	liveSkills = append(liveSkills, o.Skills...)
+	liveSkills := LiveSkillDirs(cfg, o)
 	args = append(args, liveSkills...)
 	if o.Dev {
 		args = append(args, filepath.Join(o.DevRoot, "skills"))
 	}
 
-	// pi passthrough args (after `--`).
+	// pi passthrough args (after `--`), the SAME builder a later attach's
+	// stored (or, absent a record, freshly recomputed) invocation reuses — see
+	// BuildPiInvocation.
+	if piArgs := BuildPiInvocation(liveSkills, o); len(piArgs) > 0 {
+		args = append(args, "--")
+		args = append(args, piArgs...)
+	}
+	return args
+}
+
+// LiveSkillDirs is the ordered set of extra skill trees a launch mounts:
+// config's own Skills.Paths, the personal context dir (only when it has
+// entries), then any --skills flags. Extracted from BuildSbxArgs so the SAME
+// list feeds both the create-time mount args and BuildPiInvocation's "--"
+// tail — one list, never two that could drift apart.
+func LiveSkillDirs(cfg *config.Config, o RunOpts) []string {
+	liveSkills := append([]string(nil), cfg.Skills.Paths...)
+	if personal := filepath.Join(config.ContextDir(), "skills"); sys.DirHasEntries(personal) {
+		liveSkills = append(liveSkills, personal)
+	}
+	liveSkills = append(liveSkills, o.Skills...)
+	return liveSkills
+}
+
+// BuildPiInvocation composes the pi argv a launch sends after "--": the pi
+// COMMAND, not the sbx wrapper around it. It is deliberately the ONE place
+// this is built, used for THREE callers that must never drift apart:
+//   - BuildSbxArgs' own "--" tail on create,
+//   - the invocation STORED at create time (session.WriteSessionInvocation),
+//     replayed verbatim by a later `sbx exec ... pi <invocation>` attach, and
+//   - the "safe current/default invocation" a caller recomputes on the spot
+//     when an attach finds no stored record (a legacy or never-owned
+//     sandbox) — same inputs, same function, so "default" can never mean
+//     something subtly different from what create would have sent.
+//
+// liveSkills is passed in (rather than recomputed from cfg) so a caller that
+// already has it (BuildSbxArgs) does not pay for or risk desyncing a second
+// LiveSkillDirs call; a caller building a fresh default passes
+// LiveSkillDirs(cfg, o) itself.
+func BuildPiInvocation(liveSkills []string, o RunOpts) []string {
 	var piArgs []string
 	if o.Dev {
 		// Mode B: turn off baked skills and load the repo tree live.
@@ -173,12 +213,24 @@ func BuildSbxArgs(cfg *config.Config, o RunOpts, version string) []string {
 		piArgs = append(piArgs, "--models", strings.Join(o.Models, ","))
 	}
 	piArgs = append(piArgs, o.Passthrough...)
+	return piArgs
+}
 
-	if len(piArgs) > 0 {
-		args = append(args, "--")
-		args = append(args, piArgs...)
-	}
-	return args
+// BuildAttachArgv composes `sbx exec` argv to re-attach to an existing,
+// POSITIVELY IDENTIFIED, RUNNING sandbox by re-invoking pi directly with
+// invocation — replacing `sbx run --name`, which asks sbx to re-derive a pi
+// command from the container's own spec, with an explicit exec pix fully
+// controls. tty selects "-it" (interactive) vs "-i" (piped/scripted), the
+// same convention sandbox.ExecOpts/CreateOpts already use everywhere else.
+// A sandbox sbx cannot verify (unschema'd row) or that is merely STOPPED
+// still uses the legacy BuildReattachArgs path — exec has no "start" of its
+// own, and this package plans no destructive fallback for that case.
+func BuildAttachArgv(name string, tty bool, invocation []string) ([]string, error) {
+	return sandbox.ExecArgv(sandbox.ExecOpts{
+		Name:    name,
+		TTY:     tty,
+		Command: append([]string{"pi"}, invocation...),
+	})
 }
 
 // RunLaunchPlan is the OUTCOME of the create-vs-reattach-vs-replace decision.

@@ -10,6 +10,45 @@ import (
 	"testing"
 )
 
+// TestEnsureSandboxDir_CreatesThenIsIdempotent (Story04c): the exported
+// wrapper is the SAME guarded path CreateRecord uses internally — a caller
+// that only needs the directory to exist (Open, SetKeep) gets the identical
+// TOCTOU-safe, symlink-refusing create, and calling it twice is a no-op.
+func TestEnsureSandboxDir_CreatesThenIsIdempotent(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "sess")
+	if err := EnsureSandboxDir(dir); err != nil {
+		t.Fatalf("EnsureSandboxDir: %v", err)
+	}
+	fi, err := os.Stat(dir)
+	if err != nil || !fi.IsDir() {
+		t.Fatalf("expected %s to exist as a dir, err=%v", dir, err)
+	}
+	if fi.Mode().Perm() != 0o700 {
+		t.Errorf("mode = %v, want 0700", fi.Mode().Perm())
+	}
+	if err := EnsureSandboxDir(dir); err != nil {
+		t.Fatalf("second EnsureSandboxDir call: %v", err)
+	}
+}
+
+// TestEnsureSandboxDir_RefusesSymlink: the same symlink refusal CreateRecord
+// gets must apply here too — a caller must never be handed a directory that
+// is actually a symlink to somewhere else.
+func TestEnsureSandboxDir_RefusesSymlink(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "elsewhere")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "sess")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureSandboxDir(link); err == nil {
+		t.Fatal("expected a symlink at the sandbox dir path to be refused")
+	}
+}
+
 func TestValidateInstanceID_AcceptsSafeIDs(t *testing.T) {
 	for _, id := range []string{"a", "abc123", "sbx-1", "sbx_1.2", strings.Repeat("a", 128)} {
 		if err := ValidateInstanceID(id); err != nil {

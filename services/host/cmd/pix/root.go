@@ -142,6 +142,18 @@ func dispatch(argv []string, d *cli.Deps) int {
 			fmt.Fprint(d.Err, msg)
 			return 2
 		}
+		// Story04c: a BARE positional (never the explicit `run` verb) is an
+		// IMPLICIT launch decision — on a non-interactive terminal there is
+		// nobody to have meant it, so it refuses rather than silently creating
+		// or attaching a sandbox from a script/pipe. stderr only (never stdout,
+		// which a script may be capturing), exit 2, and the root parser never
+		// runs at all: no create, no attach, no side effect of any kind. An
+		// explicit `pix run DIR` from the same non-interactive shell is
+		// unaffected — see run_cmd.go's own TTY-driven exec -it/-i choice.
+		if !d.Interactive {
+			fmt.Fprintf(d.Err, bareNonTTYRefusalFmt, resolvedBareArgPath(a))
+			return 2
+		}
 		// `pix DIR` IS `pix run DIR`; re-normalize so the pi passthrough tail is
 		// rewritten for the run grammar exactly as the explicit spelling is.
 		argv = normalizeArgv(append([]string{"run"}, argv...))
