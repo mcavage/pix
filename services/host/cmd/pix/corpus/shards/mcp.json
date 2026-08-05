@@ -10,7 +10,7 @@
       "exitCode": 0,
       "stream": "stdout",
       "contains": [
-        "usage: pix mcp"
+        "Usage: pix mcp"
       ]
     },
     {
@@ -22,7 +22,7 @@
       "exitCode": 2,
       "stream": "stderr",
       "contains": [
-        "unknown subcommand"
+        "unknown flag"
       ]
     }
   ]
