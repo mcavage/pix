@@ -1,14 +1,12 @@
 package main
 
-// pack_cmd.go is `pix pack`, plus the composition the pack capability
-// deliberately does not do for itself: building the real env, supplying the
-// MCP register function, pinning the local-MCP classifier, and turning the
-// typed error a pack verb returns into an exit code.
+// pack_cmd.go is `pix pack`, plus the composition the pack capability deliberately
+// does not do for itself: the real env, the MCP register function, the local-MCP
+// classifier, and the mapping from a typed pack error to an exit code.
 //
-// What is NOT here: pack's trust and service admission. `use`/`add mcp` still
-// go through the same Tier-1 host bill-of-materials gate, the same
-// fingerprint, and the same host-state acceptance store; kong decides the
-// grammar and nothing else.
+// NOT here: pack's trust and service admission. `use`/`add mcp` go through the same
+// Tier-1 host bill-of-materials gate, fingerprint and host-state acceptance store;
+// kong decides the grammar and nothing else.
 
 import (
 	"errors"
@@ -18,12 +16,11 @@ import (
 	"pix/host/workflow/pack"
 )
 
-// packRun is the ONE place a pack operation's typed error becomes an exit
-// code: pack returns errors and writes to the injected writer, this layer owns
-// the streams and the codes. A cli.UsageError is a bad invocation (bare message
-// on stderr, exit 2); anything else is a failed operation ("pix pack <verb>:
-// <err>" on the verb's OWN stream, exit 1). Both come back SILENT so the
-// root's "pix: %v" does not say it twice.
+// packRun is the ONE place a pack operation's typed error becomes an exit code: pack
+// returns errors and writes to the injected writer, this layer owns the streams and
+// the codes. A cli.UsageError is a bad invocation (bare message on stderr, exit 2);
+// anything else is a failed operation (exit 1). Both come back SILENT so the root's
+// "pix: %v" does not say it twice.
 func packRun(d *cli.Deps, verb string, err error) error {
 	if err == nil {
 		return nil

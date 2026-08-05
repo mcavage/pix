@@ -1,11 +1,9 @@
 package main
 
 // config_cmd.go is `pix config`: the subcommand tree, its arguments and its
-// per-command help are the struct tags, so kong renders `pix config set
-// --help` from the SAME declaration that parses `pix config set run_intent
-// strategy`. No config domain logic lives here — the key table, arity and
-// validation stay in provision (ApplyConfigChange, ConfigValue,
-// ConfigKeysHelp).
+// per-command help are the struct tags, so kong renders `pix config set --help`
+// from the SAME declaration that parses the command. No config domain logic lives
+// here — the key table, arity and validation stay in provision.
 
 import (
 	"fmt"
@@ -58,9 +56,9 @@ func (c *configShowCmd) Run(d *cli.Deps) error {
 
 // ── path ─────────────────────────────────────────────────────────────────
 
-// configPathCmd takes one optional positional because `pix config path
-// op-refs` is sugar on the same noun, not a distinct switch. Kind is validated
-// by hand, not `enum:""`, because the empty default must also be valid.
+// configPathCmd takes one optional positional because `pix config path op-refs` is
+// sugar on the same noun, not a distinct switch. Kind is validated by hand, not
+// `enum:""`, because the empty default must also be valid.
 type configPathCmd struct {
 	Kind string `arg:"" optional:"" help:"'op-refs' to print the op-refs.env path instead of config.toml." placeholder:"op-refs"`
 }
@@ -80,8 +78,8 @@ func (c *configPathCmd) Run(d *cli.Deps) error {
 // ── get ──────────────────────────────────────────────────────────────────
 
 // configGetCmd prints ONE resolved value with no decoration — the accessor the
-// Makefile shells out to. Composition only: provision.ConfigValue owns the key
-// table (including the retired-key refusals).
+// Makefile shells out to. provision.ConfigValue owns the key table (including the
+// retired-key refusals).
 type configGetCmd struct {
 	Key string `arg:"" help:"Config key (see 'pix config --help' for the list)."`
 }
@@ -104,9 +102,8 @@ func (c *configGetCmd) Run(d *cli.Deps) error {
 // ── set / unset ──────────────────────────────────────────────────────────
 
 // configSetCmd and configUnsetCmd both take a key plus zero-or-more trailing
-// values. The per-key arity contract is provision.ApplyConfigChange's;
-// re-stating it as per-key struct shapes would duplicate domain logic here, so
-// both trailing arities are just `[]string`.
+// values: the per-key arity contract is provision.ApplyConfigChange's, so both
+// trailing arities are just `[]string` rather than duplicated domain logic.
 type configSetCmd struct {
 	Key    string   `arg:"" help:"Config key."`
 	Values []string `arg:"" optional:"" help:"Value for the key (see 'pix config --help' for the list)."`
@@ -129,11 +126,10 @@ func (c *configUnsetCmd) Run(d *cli.Deps) error {
 	return runConfigChange(d, true, c.Key, c.Values)
 }
 
-// runConfigChange loads the config, applies a set/unset, Save()s it, prints
-// the new value + path, then propagates to a running serve when the key is
-// daemon-affecting. It owns exactly two things: wiring Deps.Out/Save into
-// provision's pure ApplyConfigChange, and mapping its error to a usage failure
-// (exit 2) rather than a bare one (exit 1).
+// runConfigChange loads the config, applies a set/unset, Save()s it, prints the new
+// value + path, then propagates to a running serve when the key is daemon-
+// affecting. It owns exactly two things: wiring Deps.Out/Save into provision's pure
+// ApplyConfigChange, and mapping its error to a usage failure (exit 2).
 func runConfigChange(d *cli.Deps, unset bool, key string, values []string) error {
 	cfg, err := d.Config()
 	if err != nil {
@@ -147,8 +143,8 @@ func runConfigChange(d *cli.Deps, unset bool, key string, values []string) error
 		return err
 	}
 	fmt.Fprintf(d.Out, "%s\n# saved to %s\n", summary, config.Path())
-	// Config propagation: a daemon-affecting key only takes effect when serve
-	// restarts — do that for the user per the detected lifecycle mode.
+	// A daemon-affecting key only takes effect when serve restarts — do that for the
+	// user, per the detected lifecycle mode.
 	if service.IsDaemonAffecting(key) {
 		service.PropagateConfig(service.DefaultReloader(), d.Out)
 	}

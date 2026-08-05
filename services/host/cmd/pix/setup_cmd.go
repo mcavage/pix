@@ -1,8 +1,8 @@
-// setup_cmd.go — `pix setup` as a typed root child, plus the one thing that is
+// setup_cmd.go — `pix setup` as a typed root child, plus the one thing
 // deliberately NOT part of the provision loop: the agent handoff. The handoff
-// is an exec into another command whose decision matrix is about a sandbox
-// that may already be alive, and a step that cannot be re-probed does not
-// belong in a loop whose contract is that the second check is authoritative.
+// execs another command whose decision matrix is about a sandbox that may already
+// be alive, and a step that cannot be re-probed does not belong in a loop whose
+// contract is that the second check is authoritative.
 //
 // The host phase is handed the argv the flags COMPOSE TO, not the one the user
 // typed: kong alone decides what a flag is.
@@ -31,9 +31,9 @@ type setupCmd struct {
 	Dir string `arg:"" optional:"" default:"." help:"Workspace to provision and launch in (default: .)."`
 
 	NoAgent bool `help:"Run the HOST phase only: no sandbox, no handoff. The scripted/CI path."`
-	// Replace is RETIRED with run's (U04e): recreating meant a forced,
-	// unproven `sbx rm -f`. Parsed hidden so a stale script gets the recovery
-	// path instead of "unknown flag".
+	// Replace is RETIRED with run's: recreating meant a forced, unproven `sbx rm
+	// -f`. Parsed hidden so a stale script gets the recovery path, not "unknown
+	// flag".
 	Replace bool `hidden:"" help:"Retired: remove the sandbox explicitly (pix rm BOX), then pix setup."`
 	Verbose bool `help:"Show underlying sbx, Git, Docker and setup output, not just actions/results."`
 	Apply   bool `help:"Apply a pending .pix/onboarding.json in DIR, under a confirmation gate."`
@@ -49,17 +49,16 @@ type setupCmd struct {
 	GoogleWorkspace bool   `hidden:"" help:"Route setup through the Google Workspace transaction."`
 	Credentials     string `hidden:"" help:"OAuth client path for --google-workspace."`
 
-	// The retired spellings stay DECLARED so they keep answering with the
-	// sentence that says what replaced them. Deleting them would downgrade a
-	// migration notice into "unknown flag".
+	// The retired spellings stay DECLARED so they keep answering with the sentence
+	// naming their replacement, rather than degrading to "unknown flag".
 	UseSbxKeys   bool   `hidden:"" name:"use-sbx-keys"`
 	Use1Password bool   `hidden:"" name:"use-1password"`
 	Knowledge    string `hidden:""`
 }
 
 // hostArgs recomposes the host phase's argv. Order is fixed so one invocation
-// always produces the same argv (and receipt), and every value uses
-// `--flag=value` so a value that looks like a flag cannot be re-split.
+// always produces the same argv (and receipt), and every value uses `--flag=value`
+// so a value that looks like a flag cannot be re-split.
 func (c *setupCmd) hostArgs() []string {
 	var a []string
 	add := func(flag, v string) {
@@ -122,14 +121,14 @@ func (c *setupCmd) Run(d *cli.Deps) error {
 	if err != nil {
 		return cli.UsageError{Err: err}
 	}
-	// Validate every semantic flag/value before pack adoption or any mutation;
-	// the host phase repeats the same pure validator.
+	// Validate every semantic flag/value before pack adoption or any mutation; the
+	// host phase repeats the same pure validator.
 	if err := provision.ValidateSetupSemantics(parsed, env, hostBinaryResolver); err != nil {
 		return cli.UsageError{Err: err}
 	}
 
-	// `--apply` reconciles a pending <DIR>/.pix/onboarding.json and stops: it is
-	// NOT provisioning, so it touches no pack, model or sandbox.
+	// `--apply` reconciles a pending <DIR>/.pix/onboarding.json and stops: NOT
+	// provisioning, so it touches no pack, model or sandbox.
 	if c.Apply {
 		if err := launch.ValidateRunWorkspace(c.Dir, knownVerb); err != nil {
 			return cli.UsageError{Err: err}
@@ -145,9 +144,9 @@ func (c *setupCmd) Run(d *cli.Deps) error {
 	if err := provision.EnsureSetupSbxSession(env, d.Out, d.Interactive && !parsed.AssumeYes); err != nil {
 		return err
 	}
-	// The published base kit comes from GitHub, but a fresh sbx install trusts
-	// only docker.io: fill that one publisher allowlist entry (and the one-time
-	// global network policy) before the first handoff.
+	// The published base kit comes from GitHub, but a fresh sbx install trusts only
+	// docker.io: fill that one publisher allowlist entry (and the one-time global
+	// network policy) before the first handoff.
 	if err := provision.EnsureSetupSbxDefaults(env); err != nil {
 		return err
 	}
@@ -176,9 +175,8 @@ func (c *setupCmd) Run(d *cli.Deps) error {
 		return nil
 	}
 
-	// Handoff: branch on the POSITIVE state. Existing without --replace is left
-	// alone (never force-removed, never replayed into); --replace relaunches
-	// through `run --replace` with the kickoff; an unprobeable sbx FAILS CLOSED.
+	// Handoff: branch on the POSITIVE state. An existing sandbox is left alone
+	// (never force-removed, never replayed into); an unprobeable sbx FAILS CLOSED.
 	name, nameOK := provision.SetupSandboxName(c.Dir)
 	state := launch.SbxUnknown
 	if nameOK && name != "" {
@@ -189,9 +187,8 @@ func (c *setupCmd) Run(d *cli.Deps) error {
 	})
 }
 
-// dispatchRun re-enters the ROOT for the handoff launch, so setup cannot
-// acquire its own copy of run's grammar: it hands `run` an argv exactly as a
-// user would type it.
+// dispatchRun re-enters the ROOT for the handoff launch, so setup cannot acquire
+// its own copy of run's grammar: it hands `run` an argv as a user would type it.
 func dispatchRun(d *cli.Deps, argv []string) error {
 	if code := dispatch(append([]string{"run"}, argv...), d); code != 0 {
 		return cli.SilentError{Code: code}
@@ -200,18 +197,16 @@ func dispatchRun(d *cli.Deps, argv []string) error {
 }
 
 // runSetupHandoff is the pure post-host-phase decision + action, separate from
-// setupCmd.Run so the state matrix is testable without the provisioning loop or
-// an sbx exec. Errors ONLY on the fail-closed unknown state (or a failed
-// launch).
+// setupCmd.Run so the state matrix is testable without the provisioning loop or an
+// sbx exec. Errors ONLY on the fail-closed unknown state (or a failed launch).
 //
-// U04e removed the recreate arm with --replace: setup no longer has a shape
-// that removes a sandbox, so an existing one is ALWAYS left alone and the user
-// is handed the two commands (attach, or remove-then-run) rather than a flag
-// that force-removed a box another shell might be live in.
+// setup has no shape that removes a sandbox: an existing one is ALWAYS left alone
+// and the user is handed the two commands (attach, or remove-then-run) rather than
+// a flag that force-removes a box another shell might be live in.
 func runSetupHandoff(dir, name string, state sandbox.State, out io.Writer, runFn func([]string) error) error {
-	// kickoffArgs builds the run argv for a launch that gets the tour:
-	// [DIR] -- <OnboardingKickoff>. DIR is forwarded only when explicit, so
-	// `pix setup` in a repo behaves exactly like `pix run` there.
+	// kickoffArgs builds the run argv for a launch that gets the tour: [DIR] --
+	// <OnboardingKickoff>. DIR is forwarded only when explicit, so `pix setup` in a
+	// repo behaves exactly like `pix run` there.
 	kickoffArgs := func() []string {
 		args := []string{}
 		if dir != "." {
@@ -226,8 +221,8 @@ func runSetupHandoff(dir, name string, state sandbox.State, out io.Writer, runFn
 
 	switch state {
 	case launch.SbxUnknown:
-		// FAIL CLOSED: launching would re-attach a live session and replay the
-		// kickoff into it. The host phase completed, so a retry is cheap.
+		// FAIL CLOSED: launching would re-attach a live session and replay the kickoff
+		// into it. The host phase completed, so a retry is cheap.
 		which := fmt.Sprintf("sandbox %q", name)
 		if name == "" {
 			which = fmt.Sprintf("the sandbox for %s", dir)

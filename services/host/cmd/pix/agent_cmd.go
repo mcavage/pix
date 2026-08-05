@@ -1,9 +1,8 @@
 package main
 
-// agent_cmd.go is `pix agent` under the cli command contract: five
-// subcommands, nine flags, and no os.Exit. Every handler returns an error, so
-// `pix agent edit` failing to parse frontmatter is a value a test inspects
-// rather than a process death it has to fork to observe.
+// agent_cmd.go is `pix agent`: five subcommands, nine flags, and no os.Exit. Every
+// handler returns an error, so `pix agent edit` failing to parse frontmatter is a
+// value a test inspects rather than a process death it has to fork to observe.
 
 import (
 	"pix/host/cli"
@@ -15,8 +14,8 @@ An agent stores an INTENT, not a pinned model; the router derives its default
 model from a hand-maintained scorecard. Agents live in ./agents (or
 $PIX_AGENTS_DIR); run from the repo root.`
 
-// AgentCmd is the verb tree. `list`/`remove` are kong aliases, so they appear
-// in generated help instead of hiding in a dispatcher.
+// AgentCmd is the verb tree. `list`/`remove` are kong aliases, so they appear in
+// generated help instead of hiding in a dispatcher.
 func (c *AgentCmd) Help() string { return agentDescription }
 
 type AgentCmd struct {
@@ -33,8 +32,8 @@ type AgentLsCmd struct {
 
 func (c *AgentLsCmd) Run(d *cli.Deps) error { return agentLs(d, c.JSON) }
 
-// AgentNewCmd scaffolds an agent. The defaults live in the tags, so the value
-// a user reads in help is the value that parses.
+// AgentNewCmd scaffolds an agent. The defaults live in the tags, so the value a
+// user reads in help is the value that parses.
 type AgentNewCmd struct {
 	Name        string  `arg:"" help:"Agent name (lowercase a-z0-9 and dashes)."`
 	Intent      string  `default:"code" help:"Routing intent (see 'pix models show')."`
@@ -57,9 +56,8 @@ type AgentEditCmd struct {
 
 func (c *AgentEditCmd) Run(d *cli.Deps) error { return agentEdit(d, c) }
 
-// AgentRmCmd removes an agent. `--yes` is required rather than prompted,
-// because the command is scriptable and a prompt that a script cannot answer is
-// worse than an explicit flag.
+// AgentRmCmd removes an agent. `--yes` is required rather than prompted: the
+// command is scriptable, and a prompt a script cannot answer is worse than a flag.
 type AgentRmCmd struct {
 	Name string `arg:"" help:"Agent to remove."`
 	Yes  bool   `short:"y" help:"Confirm removal."`

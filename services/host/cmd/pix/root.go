@@ -1,24 +1,18 @@
-// root.go — the ONE kong root: the launcher's verb table as a typed tree, and
-// the only thing that parses argv, dispatches a verb, or answers a help
-// request. It replaces main.go's `switch args[0]`, which let three sources of
-// truth disagree — the switch decided what was dispatchable, a hand-written
-// knownVerbs map decided what the suggester knew, and usage constants decided
-// what help said. Here the tree is all three.
+// root.go — the ONE kong root: the launcher's verb table as a typed tree, and the
+// only thing that parses argv, dispatches a verb, or answers a help request. The
+// tree is the single source of truth for all three (what dispatches, what the
+// suggester knows, what help says).
 //
 // Two decisions stay in FRONT of the parser because they are argv SHAPE, not
 // grammar: the retired table (retired.go), which must answer before any config
-// read or side effect, and a bare positional naming a directory, which is
-// `run DIR` (classifyBareArg) — plus the `task NAME path` rewrite.
+// read or side effect, and a bare positional naming a directory, which is `run
+// DIR` (classifyBareArg) — plus the `task NAME path` rewrite.
 //
-// EVERY verb is now TYPED: struct tags parse it, generate its help, and place
-// it in a help tier (`group:`). The passthrough seams that handed a verb's argv
-// verbatim to a hand-rolled switch are gone, and with them the usage constants
-// that stood beside those switches — `pix help <verb>` re-enters the root, so
-// the usage a user reads is generated from the tags that parse the verb.
-//
-// `help` is the one command that stays `passthrough:""`, and for the opposite
-// reason: `pix help <anything>` is a question, not a grammar, so it must answer
-// rather than reject.
+// EVERY verb is TYPED: struct tags parse it, generate its help, and place it in a
+// help tier (`group:`), so the usage a user reads comes from the tags that parse
+// the verb. `help` is the one `passthrough:""` command, for the opposite reason:
+// `pix help <anything>` is a question, not a grammar, so it must answer rather
+// than reject.
 package main
 
 import (
@@ -44,7 +38,7 @@ import (
 
 // rootCmd is the verb table. Field ORDER and the `group:` keys ARE the tiered
 // help: helpAll renders the listing straight off this declaration, so a verb
-// cannot be dispatchable and undocumented at the same time.
+// cannot be dispatchable and undocumented at once.
 type rootCmd struct {
 	Run    runCmd    `cmd:"" group:"Workflow" help:"Launch the sandbox in DIR (default: .). This is the main one."`
 	Ls     lsCmd     `cmd:"" group:"Workflow" help:"List your pix sandboxes (name, state, dir)."`
@@ -77,41 +71,36 @@ type rootCmd struct {
 	Help    helpCmd    `cmd:"" group:"Meta" passthrough:"" help:"Print this help (or a verb's usage)."`
 }
 
-// legacyArgs is the passthrough tail the last two unmigrated seams carry —
-// `serve install`/`serve uninstall`, whose flags belong to a hand-rolled loop
-// in the service package: kong stops parsing at the subcommand name, so the
-// seam sees the argv the switch used to hand it, its own `--help` included.
+// legacyArgs is the passthrough tail the last two unmigrated seams carry — `serve
+// install`/`serve uninstall`, whose flags belong to a hand-rolled loop in the
+// service package: kong stops parsing at the subcommand name, so the seam sees the
+// whole argv, its own `--help` included.
 type legacyArgs struct {
 	Args []string `arg:"" optional:"" passthrough:"" help:"Passed to the verb unchanged."`
 }
 
 // testSeams are the two indirections the root's tests need: legacy proves a
-// passthrough command gets its argv verbatim without running the seam behind
-// it; monitor supplies a context + store root without a signal handler. Never
-// set in production.
+// passthrough command gets its argv verbatim without running the seam behind it,
+// and monitor supplies a context + store root without a signal handler. Never set
+// in production.
 var testSeams struct {
 	legacy  func(verb string, args []string)
 	monitor func(*monitorCmd, *cli.Deps) error
 }
 
-func legacyIntercepted(verb string, args []string) bool {
-	if testSeams.legacy == nil {
-		return false
-	}
-	testSeams.legacy(verb, args)
-	return true
-}
-
+// legacyForward hands a passthrough seam its argv verbatim, or to the test seam
+// when one is installed.
 func legacyForward(verb string, args []string, fn func([]string)) error {
-	if legacyIntercepted(verb, args) {
+	if testSeams.legacy != nil {
+		testSeams.legacy(verb, args)
 		return nil
 	}
 	fn(args)
 	return nil
 }
 
-// versionCmd prints the stamped launcher version. Typed rather than
-// passthrough: it has no flags at all, so its usage is entirely generated.
+// versionCmd prints the stamped launcher version. Typed rather than passthrough:
+// it has no flags, so its usage is entirely generated.
 type versionCmd struct{}
 
 func (c *versionCmd) Run(d *cli.Deps) error {
@@ -142,19 +131,17 @@ func dispatch(argv []string, d *cli.Deps) int {
 			fmt.Fprint(d.Err, msg)
 			return 2
 		}
-		// Story04c: a BARE positional (never the explicit `run` verb) is an
-		// IMPLICIT launch decision — on a non-interactive terminal there is
-		// nobody to have meant it, so it refuses rather than silently creating
-		// or attaching a sandbox from a script/pipe. stderr only (never stdout,
-		// which a script may be capturing), exit 2, and the root parser never
-		// runs at all: no create, no attach, no side effect of any kind. An
-		// explicit `pix run DIR` from the same non-interactive shell is
-		// unaffected — see run_cmd.go's own TTY-driven exec -it/-i choice.
+		// A BARE positional (never the explicit `run` verb) is an IMPLICIT launch
+		// decision: on a non-interactive terminal nobody is there to have meant it, so
+		// it REFUSES rather than creating or attaching a sandbox from a script/pipe.
+		// stderr only (never stdout, which a script may capture), exit 2, and the root
+		// parser never runs: no create, no attach, no side effect. An explicit `pix run
+		// DIR` from the same shell is unaffected.
 		if !d.Interactive {
 			fmt.Fprintf(d.Err, bareNonTTYRefusalFmt, resolvedBareArgPath(a))
 			return 2
 		}
-		// `pix DIR` IS `pix run DIR`; re-normalize so the pi passthrough tail is
+		// `pix DIR` IS `pix run DIR`: re-normalize so the pi passthrough tail is
 		// rewritten for the run grammar exactly as the explicit spelling is.
 		argv = normalizeArgv(append([]string{"run"}, argv...))
 	}
@@ -168,17 +155,14 @@ func dispatch(argv []string, d *cli.Deps) int {
 	return cli.ExitCode(err)
 }
 
-// normalizeArgv rewrites the one shape the grammar cannot express:
-// `pix task NAME path` -> `pix task path NAME`, so `cd "$(pix task foo path)"`
-// reads as written. A REWRITE, not a parse: the root still owns every decision
-// downstream, and it never fires for a real subcommand.
+// normalizeArgv rewrites the shapes the grammar cannot express: `pix task NAME
+// path` -> `pix task path NAME`, so `cd "$(pix task foo path)"` reads as written,
+// and run's `--` pi tail. A REWRITE, not a parse: the root still owns every
+// decision downstream, and it never fires for a real subcommand.
 func normalizeArgv(argv []string) []string {
 	if len(argv) == 3 && argv[0] == "task" && argv[2] == "path" && !isTaskKnownVerb(argv[1]) {
 		return []string{"task", "path", argv[1]}
 	}
-	// `run ... -- <pi args>`: kong eats the `--` and would feed the first pi arg
-	// to run's DIR positional, so the tail is rewritten into repeated
-	// `--pi-arg=` values before the parser sees it (see run_cmd.go).
 	if argv[0] == "run" {
 		return rewriteRunPassthrough(argv)
 	}
@@ -197,8 +181,8 @@ func isTaskKnownVerb(v string) bool {
 
 // ── monitor ─────────────────────────────────────────────────────────────────
 
-// monitorDescription is the verb's long help: the operational facts (reader,
-// not listener; where the store comes from; the env the in-VM tap reads) that
+// monitorDescription is the verb's long help: the operational facts (reader, not
+// listener; where the store comes from; the env the in-VM tap reads) that
 // generated usage cannot infer from a struct tag.
 const monitorDescription = `Concisely follow a sandbox's out-of-sandbox traffic (model requests,
 responses, tool + MCP calls, context/control events), as captured on disk.
@@ -220,8 +204,8 @@ ENV (read by the in-VM extension, documented here for discoverability):
   PIX_MONITOR_URL      override the host ingest URL
                        (default http://host.docker.internal:11437)`
 
-// monitorCmd is a pure offline reader over the on-disk event store — which is
-// why it has a --path and no --bind.
+// monitorCmd is a pure offline reader over the on-disk event store — hence a
+// --path and no --bind.
 func (c *monitorCmd) Help() string { return monitorDescription }
 
 type monitorCmd struct {
@@ -248,7 +232,7 @@ func (c *monitorCmd) Run(d *cli.Deps) error {
 }
 
 // follow is the testable core: ctx governs the run so a test cancels
-// deterministically instead of signalling. There is no listener to inject.
+// deterministically instead of signalling.
 func (c *monitorCmd) follow(ctx context.Context, d *cli.Deps, tty bool) error {
 	root := c.Path
 	if root == "" {
@@ -290,8 +274,8 @@ type rmCmd struct {
 
 func (c *rmCmd) Run(d *cli.Deps) error {
 	// The bare/flag-shape refusals live with the behaviour they protect
-	// (launch.validateRmShape), not here: this layer only reports whether the
-	// terminal is interactive, which is a fact only it knows.
+	// (launch.validateRmShape): this layer only reports whether the terminal is
+	// interactive, which is a fact only it knows.
 	return launch.Rm(defaultShellEnv(), d.Out, d.Err, launch.RmOptions{
 		Names: c.Names, All: c.All, Orphans: c.Orphans, Force: c.Force,
 		Except:      append(append([]string(nil), c.Keep...), c.Except...),
@@ -302,8 +286,8 @@ func (c *rmCmd) Run(d *cli.Deps) error {
 // ── lifecycle: serve ────────────────────────────────────────────────────────
 
 // serveCmd is the host-services group. Its DEFAULT command execs the sibling
-// pix-host's `serve`, so `pix serve --port N` still starts the daemon; the
-// control verbs beside it are launcher-side and never reach the host binary.
+// pix-host's `serve`, so `pix serve --port N` starts the daemon; the control verbs
+// beside it are launcher-side and never reach the host binary.
 func (c *serveCmd) Help() string { return service.Description }
 
 type serveCmd struct {
@@ -315,9 +299,8 @@ type serveCmd struct {
 	Uninstall serveUninstallCmd `cmd:"" passthrough:"" help:"Remove the managed login service."`
 }
 
-// serveExecCmd forwards to `pix-host serve`. --bind/--port are declared
-// because they are the flags that serve documents; a raw tail still goes
-// through with `pix serve -- ARGS`.
+// serveExecCmd forwards to `pix-host serve`. --bind/--port are declared because
+// they are the flags serve documents; a raw tail goes through `pix serve -- ARGS`.
 type serveExecCmd struct {
 	Bind string   `help:"Monitor ingest listen address (default 127.0.0.1, loopback-only)." placeholder:"ADDR"`
 	Port int      `help:"Monitor ingest port (default 11437)." placeholder:"N"`

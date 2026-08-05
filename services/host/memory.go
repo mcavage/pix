@@ -1,15 +1,14 @@
-// pix memory service (host side). Port of mcp/memory/{server,store,embeddings,
-// watcher}.ts. JSON-RPC 2.0 over HTTP; pure-Go sqlite (modernc) with FTS5 + a
-// JSON-stored embedding per row; embeddings + the capture "watcher" run against
-// the host's Ollama. One global store every sandbox talks to over
-// host.docker.internal.
+// pix memory service (host side). JSON-RPC 2.0 over HTTP; pure-Go sqlite
+// (modernc) with FTS5 + a JSON-stored embedding per row; embeddings and the
+// capture "watcher" run against the host's Ollama. One global store every
+// sandbox talks to over host.docker.internal.
 //
 // Trust model: this service is UNAUTHENTICATED by design. It binds loopback
 // (MEMORY_BIND=127.0.0.1) and is reached by sandboxes via the Docker Desktop
-// host.docker.internal proxy. The deliberate assumption is single-user: it's
-// your machine, your disposable VMs, and your own memory store, so any sandbox
-// you launch may read/write it. Do not bind it to a routable interface or run it
-// on a shared host without putting an auth proxy in front.
+// host.docker.internal proxy. The deliberate assumption is single-user: your
+// machine, your disposable VMs, your memory store, so any sandbox you launch may
+// read/write it. Do not bind it to a routable interface or run it on a shared
+// host without putting an auth proxy in front.
 //
 // Env: MEMORY_PORT (11435), MEMORY_BIND (127.0.0.1), MEMORY_DB
 // (~/.local/share/pix/memory/memory.db), OLLAMA_HOST, MEMORY_EMBED_MODEL,
@@ -85,11 +84,10 @@ func memNormProfile(p string) string {
 const memProfileVisible = "(profile IS NULL OR profile = '' OR profile = 'default' OR profile = ?)"
 
 // memProfileStorage is the SQL WHERE fragment (with one bound arg) matching the
-// EXACT storage bucket of a row: its normalized profile equals the bound value.
-// Unlike memProfileVisible (the read-time union), this is the write-time bucket
-// used for dedupe/reaffirm/synthesis/ownership, so `work` remembering text that
-// `personal` already has creates a NEW work row rather than reaffirming
-// personal's. Bind the normalized profile (memNormProfile) as the single arg.
+// EXACT storage bucket of a row. Unlike memProfileVisible (the read-time union)
+// this is the write-time bucket used for dedupe/reaffirm/synthesis/ownership, so
+// `work` remembering text `personal` already has creates a NEW work row rather
+// than reaffirming personal's. Bind the normalized profile as the single arg.
 const memProfileStorage = "COALESCE(NULLIF(profile,''),'default') = ?"
 
 func memNowIso() string { return time.Now().UTC().Format(time.RFC3339Nano) }
@@ -166,11 +164,9 @@ func newMemStore(path string, embedder func(string) []float64) (*memStore, error
 	if _, err := db.Exec(memSchema); err != nil {
 		return nil, err
 	}
-	// Idempotent migration: CREATE TABLE IF NOT EXISTS never alters an existing
-	// table, so a DB created before profile-scoping lacks the column. Probe the
-	// schema with PRAGMA table_info and ALTER only when the column is absent (more
-	// robust than string-matching a "duplicate column name" driver error). Legacy
-	// rows get profile NULL, which memNormProfile treats as the default bucket.
+	// CREATE TABLE IF NOT EXISTS never alters an existing table, so a DB created
+	// before profile-scoping lacks the column: probe with PRAGMA table_info and
+	// ALTER only when absent. Legacy rows get profile NULL = the default bucket.
 	hasProfile, err := memColumnExists(db, "memories", "profile")
 	if err != nil {
 		return nil, err
@@ -180,31 +176,22 @@ func newMemStore(path string, embedder func(string) []float64) (*memStore, error
 			return nil, err
 		}
 	}
-	// Stamp the current schema version. memSchema already sets it for a fresh DB,
-	// but a migrated legacy DB predates the pragma, set it explicitly so
-	// backup/restore can detect version drift later.
+	// Stamp the schema version explicitly: memSchema sets it for a fresh DB, but a
+	// migrated legacy DB predates the pragma and snapshot/restore reads it.
 	if _, err := db.Exec("PRAGMA user_version = 1"); err != nil {
 		return nil, err
 	}
-	// Idempotent data migration (no schema change): shorten any pre-existing
-	// watcher/perishable rows still carrying the old 21-day TTL down to the
-	// current 7-day TTL. See migrateLegacyWatcherPerishableTTL.
 	if err := migrateLegacyWatcherPerishableTTL(db); err != nil {
 		return nil, err
 	}
 	return &memStore{db: db, embedder: embedder}, nil
 }
 
-// migrateLegacyWatcherPerishableTTL is an idempotent startup migration, run on
-// every newMemStore. Before this change, a watcher-captured perishable event
-// got a 21-day TTL (memCapture now uses 7); a database written by an older
-// binary can still have active rows expiring up to 21 days out. Shorten ONLY
-// those rows, source='watcher', durability='perishable', not deleted, and
-// expiring later than created_at+7d, down to created_at+7d, in place. This
-// never touches a user-created row (source='user'/'agent'/anything else) or a
-// row someone gave a custom/shorter TTL: a row already at or before
-// created_at+7d is left exactly as it is. No schema change, safe to run on
-// every startup.
+// migrateLegacyWatcherPerishableTTL is an idempotent startup data migration (no
+// schema change): a db written by an older binary can hold watcher-captured
+// perishable rows with the former 21-day TTL. Shorten ONLY those (source
+// 'watcher', perishable, live, expiring after created_at+7d) to created_at+7d.
+// A user-created row, or one given a custom/shorter TTL, is left exactly as is.
 func migrateLegacyWatcherPerishableTTL(db *sql.DB) error {
 	rows, err := db.Query(
 		"SELECT id, created_at, expires_at FROM memories WHERE source = 'watcher' AND durability = 'perishable' AND deleted_at IS NULL AND expires_at IS NOT NULL",
@@ -432,13 +419,11 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 
 	s.db.Exec("UPDATE memories SET deleted_at = ? WHERE expires_at IS NOT NULL AND expires_at < ? AND deleted_at IS NULL", memNowIso(), memNowIso())
 
-	// The literal query "*" is "list everything" (what `pix memory recall '*'`
-	// and a blank sandbox /recall send): relevance is pinned to 1 for every
-	// visible row and neither FTS nor the embedder is consulted, so it still
-	// answers with no keyword match and no embedder (Ollama down), where a
-	// scored query may legitimately return nothing. Everything downstream —
-	// filters, scoring factors, truncation, access bookkeeping — is the SAME
-	// path; only relevance and the ordering differ.
+	// The literal query "*" is "list everything" (what `pix memory recall '*'` and
+	// a blank sandbox /recall send): relevance is pinned to 1 for every visible row
+	// and neither FTS nor the embedder is consulted, so it still answers with
+	// Ollama down. Everything downstream is the SAME path; only relevance and the
+	// ordering differ.
 	star := strings.TrimSpace(query) == "*"
 
 	// FTS candidates → normalized [0,1] per id.
@@ -449,10 +434,9 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 			val float64
 		}
 		hits := []fh{}
-		// The join to memories carries the id out directly (no separate rowid->id
-		// scan of the whole table), and applies the visible-profile filter BEFORE
-		// the ORDER BY rank LIMIT 50: ranking across ALL profiles first would let a
-		// flood of invisible sibling rows evict the visible matches from the top 50.
+		// The visible-profile filter applies BEFORE the ORDER BY rank LIMIT 50:
+		// ranking across ALL profiles first would let a flood of invisible sibling
+		// rows evict the visible matches from the top 50.
 		rows, err := s.db.Query("SELECT m.id, f.rank FROM memories_fts f JOIN memories m ON m.rowid = f.rowid WHERE f.content MATCH ? AND m.deleted_at IS NULL AND "+memProfileVisible+" ORDER BY f.rank LIMIT 50", match, memNormProfile(profile))
 		if err == nil {
 			for rows.Next() {
@@ -489,10 +473,9 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 		queryVec = s.embedder(query)
 	}
 
-	// Restrict candidates to the visible set for the active profile: its own rows
-	// UNION the default bucket. An FTS-only hit on an invisible row is harmless -
-	// it lands in ftsScore but the row is never scanned by this query, so it can
-	// never become a candidate.
+	// Candidates are the visible set for the active profile: its own rows UNION the
+	// default bucket. An FTS-only hit on an invisible row is harmless — it lands in
+	// ftsScore but this query never scans the row, so it cannot become a candidate.
 	where := "SELECT id, kind, content, durability, confidence, frequency, reward, created_at, project, embedding FROM memories WHERE deleted_at IS NULL"
 	args := []any{}
 	if kind != "" {
@@ -529,9 +512,8 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 			var v []float64
 			if json.Unmarshal([]byte(r.embedding.String), &v) == nil {
 				if len(v) != len(queryVec) {
-					// Stored embedding has a different dimension than the current
-					// model, the embedding model changed. memCosine would return 0
-					// (silent degradation); count it and warn after the loop.
+					// The embedding model changed: memCosine would return 0 (silent
+					// degradation), so count it and warn after the loop.
 					dimMismatch++
 				} else {
 					c := memCosine(queryVec, v)
@@ -772,25 +754,19 @@ func memoryMux() http.Handler {
 	return newMemoryMux(store, hasEmb)
 }
 
-// newMemoryMux serves :11435 over an already-constructed IN-PROCESS store. It
-// is memoryStoreMux (serve_plugin.go) over the same typed adapter the go-plugin
-// unit serves, which is the point: there is ONE JSON-RPC surface, and both the
-// bare daemon and the supervised unit answer through it. The duplicate method
-// table this function used to carry was 100 lines restating the proxy's — two
-// implementations of one wire contract, free to drift, and drift they had (the
-// proxy path `serve` actually runs dropped `createdAt` from promotable).
+// newMemoryMux serves :11435 over an already-constructed IN-PROCESS store: it is
+// memoryStoreMux (serve_plugin.go) over the same typed adapter the go-plugin
+// unit serves. There is ONE JSON-RPC surface, and both the bare daemon and the
+// supervised unit answer through it, so the two cannot drift.
 func newMemoryMux(store *memStore, hasEmb bool) http.Handler {
 	adapter := newMemoryStoreAdapter(store, hasEmb)
 	return memoryStoreMux(func() (plugin.MemoryStore, error) { return adapter, nil })
 }
 
 func runMemory() {
-	// Take the shared store lock BEFORE opening the db (memoryMux -> buildMemStore),
-	// exactly as serve.go's built-in branch does, so the bare daemon is mutually
-	// exclusive with `serve`, the memory plugin, and `restore`. Held for the
-	// process lifetime; dropped when ListenAndServe returns (the OS also releases
-	// the flock on process exit / signal). Fails fast (log.Fatalf) if another
-	// holder owns the db instead of opening it anyway.
+	// Store lock BEFORE opening the db, so the bare daemon is mutually exclusive
+	// with `serve`, the memory plugin, and `restore` (see lock.go). Held for the
+	// process lifetime; fails fast if another holder owns the db.
 	release := lockMemoryStoreOrFatal(nil)
 	defer release()
 	addr := env("MEMORY_BIND", "127.0.0.1") + ":" + env("MEMORY_PORT", "11435")
@@ -803,10 +779,9 @@ func runMemory() {
 }
 
 // buildMemStore constructs the memory store. It returns an error rather than
-// log.Fatalf-ing (F3): when called from runServe AFTER a plugin subprocess has
-// launched, a bare os.Exit would skip supervisor cleanup and orphan it. The
-// caller routes the error through its cleanup-aware fatal; standalone callers
-// (memoryMux/runMemory, servePluginMemory self-exec) may still fatal on it.
+// log.Fatalf-ing: called after a plugin subprocess has launched, a bare os.Exit
+// would skip supervisor cleanup and orphan it. The caller routes the error
+// through its cleanup-aware fatal; standalone callers may still fatal on it.
 func buildMemStore() (*memStore, bool, error) {
 	dbPath := config.MemoryDBPath()
 	hasEmb := memEmbedderAvailable()
@@ -855,15 +830,12 @@ func memWatcherStatus() (capture bool, reason string) {
 	return false, getWatcherReason()
 }
 
-// memObserve is the ONE capture-admission path BOTH front ends use (the
-// JSON-RPC observe method and the plugin adapter's Observe): reject empty
-// input, refuse with a reason rather than claim success the watcher model
-// cannot deliver, and otherwise start the background capture under bounded
-// concurrency (each capture hits Ollama, so a giant observe batch must meet
-// honest backpressure instead of spawning unbounded goroutines; memCapture
-// releases the slot). Keeping it in one place is what stops the two surfaces
-// drifting — they were two copies of this branch with a comment asking the
-// next editor to keep them identical.
+// memObserve is the ONE capture-admission path BOTH front ends use (the JSON-RPC
+// observe method and the plugin adapter's Observe): reject empty input, refuse
+// with a reason rather than claim success the watcher model cannot deliver, and
+// otherwise start the background capture under bounded concurrency (each capture
+// hits Ollama, so a giant observe batch meets honest backpressure instead of
+// spawning unbounded goroutines; memCapture releases the slot).
 func memObserve(store *memStore, user, project string, hasProject bool, profile string) (accepted bool, reason string) {
 	user = truncate(user, 8000)
 	if strings.TrimSpace(user) == "" {
@@ -923,12 +895,11 @@ func profileFromParams(p jsonObj) string {
 	return memNormProfile(getStr(p, "profile"))
 }
 
-// memCaptureMaxConcurrency bounds the number of in-flight background captures.
-// Each capture makes a watcher-model (Ollama) call, so an unbounded `go
-// memCapture` per observe entry let a single sandbox-issued JSON-RPC BATCH
-// (thousands of observe calls inside the 1 MiB body cap) spawn thousands of
-// goroutines and concurrent Ollama requests on the host, a trivial local DoS.
-// The observe handler acquires memCaptureSem non-blockingly and applies
+// memCaptureMaxConcurrency bounds in-flight background captures. Each makes a
+// watcher-model (Ollama) call, so an unbounded `go memCapture` per observe entry
+// lets one sandbox-issued JSON-RPC BATCH (thousands of observe calls inside the
+// 1 MiB body cap) spawn thousands of goroutines and concurrent Ollama requests —
+// a trivial local DoS. observe acquires the sem non-blockingly and applies
 // honest backpressure (accepted:false) when saturated.
 const memCaptureMaxConcurrency = 8
 
@@ -937,9 +908,9 @@ var memCaptureSem = make(chan struct{}, memCaptureMaxConcurrency)
 func memCapture(store *memStore, user, project string, hasProj bool, profile string) {
 	defer func() { recover() }()
 	defer func() { <-memCaptureSem }()
-	// Observability: make every capture attempt visible. memWatch logs its own
-	// errors (Ollama down, HTTP != 200), but a 200 with unparseable/empty content
-	// returns nil SILENTLY, the exact "capture on but 0 facts" black box. Log it.
+	// Make every capture attempt visible: memWatch logs its own errors, but a 200
+	// with unparseable/empty content returns nil silently — the exact "capture on
+	// but 0 facts" black box.
 	log.Printf("memory: observe -> watcher (user %d chars, project %q, profile %q)", len(user), project, profile)
 	w := memWatch(user)
 	if w == nil {
@@ -947,22 +918,18 @@ func memCapture(store *memStore, user, project string, hasProj bool, profile str
 		return
 	}
 	// A question-only user message asserts nothing, so any "facts" the watcher
-	// still extracted from it are a false positive (the observed failure: "so
-	// are you using my memories?" -> "user is using memory"). Drop facts
-	// deterministically rather than trust the model's own judgment here.
-	// Corrections are exempt: a correction phrased as a polite question
-	// ("Can you stop using em dashes?") is still a real, capturable rule.
+	// extracted from it are a false positive (observed: "so are you using my
+	// memories?" -> "user is using memory"). Dropped deterministically rather than
+	// trusting the model. Corrections are exempt: a correction phrased as a polite
+	// question ("Can you stop using em dashes?") is still a capturable rule.
 	if len(w.Facts) > 0 && questionOnlyUserMessage(user) {
 		log.Printf("memory: dropping %d fact(s), user message was question-only, no assertions to extract", len(w.Facts))
 		w.Facts = nil
 	}
-	// Noise filter: facts and events are session narration ABOUT the user's
+	// Noise filter: facts and events are session narration about the user's
 	// activity ("user asked...", "user ran...") often enough that a conservative
-	// prefix match is worth the (rare) false drop. Corrections are exempt and
-	// NEVER run through this filter: a legitimate correction can be phrased
-	// exactly like the noise patterns ("The user requested the agent stop doing
-	// X" is a real, capturable rule, not narration), so filtering that channel
-	// would eat real corrections for no benefit.
+	// prefix match is worth the rare false drop. Corrections NEVER run through it:
+	// a legitimate correction can be phrased exactly like the noise patterns.
 	dropNoise := func(label string, in []string) []string {
 		out := make([]string, 0, len(in))
 		dropped := 0
@@ -991,9 +958,8 @@ func memCapture(store *memStore, user, project string, hasProj bool, profile str
 		rem(f, "fact", "durable", 0, 0.65)
 	}
 	for _, e := range w.Events {
-		// 7-day TTL (was 21): watcher events are perishable session status, and
-		// 21 days let stale "currently doing X" rows linger and get recalled long
-		// after they went false.
+		// 7-day TTL: watcher events are perishable session status, and a longer one
+		// let stale "currently doing X" rows get recalled after they went false.
 		rem(e, "fact", "perishable", 7, 0.6)
 	}
 	for _, c := range w.Corrections {

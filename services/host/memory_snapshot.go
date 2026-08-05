@@ -1,25 +1,21 @@
-// pix-host `memory snapshot` / `memory restore` — the memory store's data
-// safety primitives, and deliberately the whole of them.
+// pix-host `memory snapshot` / `memory restore` — the memory store's data safety
+// primitives, and deliberately the whole of them. They live here rather than in
+// the dependency-light launcher because they need sqlite.
 //
 // ONE artifact: a snapshot is a plain sqlite file written with `VACUUM INTO`
 // against a READ-ONLY handle on the live db — a consistent single file (WAL
-// permits concurrent readers; the -wal/-shm sidecars are already folded in),
-// safe to take while `serve` holds the store. No tar, no manifest, no
-// config/op-refs riding along: config.toml is reproducible with `pix config
-// set` and op-refs.env holds only op:// pointers, so archiving them bought a
-// multi-component format nobody could verify. memory.db is the unreproducible
-// artifact, and a snapshot IS one.
+// permits concurrent readers, and the -wal/-shm sidecars are folded in), safe to
+// take while `serve` holds the store. memory.db is the only unreproducible piece
+// of pix state, so nothing else rides along: config.toml is reproducible with
+// `pix config set`, and op-refs.env holds only op:// pointers.
 //
-// Restore is the STOPPED-SERVICE primitive. It takes the advisory flock the
-// daemon holds (config.MemoryLockPath()) FIRST and keeps it across the whole
+// Restore is the STOPPED-SERVICE primitive, and its ordering is the mechanism:
+// take the advisory flock the daemon holds FIRST and keep it across the whole
 // commit — that lock, not a port probe, is the authority, because the daemon
-// opens the db before it binds, and holding it from the start means every
-// check is made under state we own (no TOCTOU re-check to get wrong). Under
-// it: validate, move the current db + sidecars aside to a KEPT .bak set,
-// rename the staged copy into place last. Nothing fallible runs after that
-// rename; an earlier failure rolls the .bak set back, loudly if that fails.
-//
-// Here, not the dependency-light launcher, because it needs sqlite.
+// opens the db before it binds. Under it: validate, move the current db +
+// sidecars aside to a KEPT .bak set, rename the staged copy into place LAST.
+// Nothing fallible runs after that rename; an earlier failure rolls the .bak set
+// back, loudly if the rollback itself fails.
 
 package main
 
@@ -65,8 +61,8 @@ func memorySnapshot(dbPath, outPath string) (snapshotResult, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return snapshotResult{}, fmt.Errorf("snapshot dir: %w", err)
 	}
-	// Stage in the DEST dir so the commit is same-filesystem; the random token
-	// keeps the name free (VACUUM INTO refuses an existing target).
+	// Stage in the DEST dir so the commit is same-filesystem; the random token keeps
+	// the name free (VACUUM INTO refuses an existing target).
 	staged, _, err := stagePath(dir, ".pix-snapshot-")
 	if err != nil {
 		return snapshotResult{}, err
@@ -75,8 +71,8 @@ func memorySnapshot(dbPath, outPath string) (snapshotResult, error) {
 	if err := vacuumInto(dbPath, staged); err != nil {
 		return snapshotResult{}, err
 	}
-	// sqlite honors umask; a copy of a 0600 store carries the same facts, so the
-	// snapshot gets the store's mode rather than whatever umask allowed.
+	// sqlite honors umask, and a copy of a 0600 store carries the same facts — so
+	// the snapshot gets the store's mode, not whatever umask allowed.
 	if err := os.Chmod(staged, 0o600); err != nil {
 		return snapshotResult{}, fmt.Errorf("chmod snapshot: %w", err)
 	}
@@ -84,8 +80,8 @@ func memorySnapshot(dbPath, outPath string) (snapshotResult, error) {
 	if err != nil {
 		return snapshotResult{}, err
 	}
-	// Hard-link, not rename: os.Link fails EEXIST — the atomic no-clobber commit
-	// rename lacks on POSIX, closing the window after the check above.
+	// Hard-link, not rename: os.Link fails EEXIST, which is the atomic no-clobber
+	// commit rename lacks on POSIX, closing the window after the check above.
 	if err := os.Link(staged, outPath); err != nil {
 		return snapshotResult{}, fmt.Errorf("finalize snapshot (refusing to clobber %s): %w", outPath, err)
 	}
@@ -96,7 +92,7 @@ func memorySnapshot(dbPath, outPath string) (snapshotResult, error) {
 	return snapshotResult{Path: outPath, Rows: rows, Size: fi.Size(), UserVersion: userVersion}, nil
 }
 
-// restoreParams are the fully-resolved inputs to the restore core, so it stays
+// restoreParams are the fully-resolved inputs to the restore core, keeping it
 // hermetic (no env/home lookups inside).
 type restoreParams struct {
 	SnapshotPath string // source snapshot (a plain memory.db)
@@ -156,8 +152,8 @@ func memoryRestore(p restoreParams) (restoreResult, error) {
 	if err := os.MkdirAll(destDir, 0o700); err != nil {
 		return restoreResult{}, fmt.Errorf("dest dir: %w", err)
 	}
-	// Stage with VACUUM INTO, not a byte copy: same-filesystem (so the final
-	// rename is atomic) and it re-reads the snapshot through sqlite once more.
+	// Stage with VACUUM INTO, not a byte copy: same-filesystem (so the final rename
+	// is atomic), and it re-reads the snapshot through sqlite once more.
 	staged, token, err := stagePath(destDir, ".pix-restore-")
 	if err != nil {
 		return restoreResult{}, err
@@ -170,9 +166,9 @@ func memoryRestore(p restoreParams) (restoreResult, error) {
 		return restoreResult{}, fmt.Errorf("chmod staged db: %w", err)
 	}
 
-	// Move the CURRENT state aside COMPLETELY (db + -wal + -shm) into a unique
-	// kept .bak set. This runs even when the main db is absent: a prior failed run
-	// can leave an ORPHAN sidecar, and installing beside a stale WAL replays it.
+	// Move the CURRENT state aside COMPLETELY (db + -wal + -shm) into a unique kept
+	// .bak set. This runs even when the main db is absent: a prior failed run can
+	// leave an ORPHAN sidecar, and installing beside a stale WAL replays it.
 	bakBase := p.LiveDBPath + ".bak-" + now.Format("20060102-150405") + "-" + token
 	var moved [][2]string
 	for _, sc := range []string{"", "-wal", "-shm"} {
@@ -188,9 +184,8 @@ func memoryRestore(p restoreParams) (restoreResult, error) {
 	if len(moved) == 0 {
 		bakBase = ""
 	}
-	// Atomic move into place LAST. Nothing fallible follows: the row count came
-	// from the snapshot, and the FTS index travels INSIDE the db (a content
-	// table), so there is nothing to rebuild.
+	// Atomic move into place LAST. Nothing fallible follows: the row count came from
+	// the snapshot, and the FTS index travels INSIDE the db, so nothing is rebuilt.
 	if err := rename(staged, p.LiveDBPath); err != nil {
 		return restoreResult{}, rollback(rename, moved, fmt.Errorf("swap restored db into place: %w", err))
 	}
@@ -244,10 +239,10 @@ func vacuumInto(srcPath, dst string) error {
 }
 
 // verifyMemoryDB opens path READ-ONLY and answers "is this a memory store I can
-// trust", returning its schema version and live-row count. Past integrity and
-// the version gate it runs the ACTUAL queries the app relies on: a db with a
-// table merely NAMED `memories` passes integrity_check but is not a store, and
-// must be refused before it can become live.
+// trust", returning its schema version and live-row count. Past integrity and the
+// version gate it runs the ACTUAL queries the app relies on: a db with a table
+// merely NAMED `memories` passes integrity_check but is not a store, and must be
+// refused before it can become live.
 func verifyMemoryDB(path string) (userVersion, rows int, err error) {
 	if !fileExists(path) {
 		return 0, 0, fmt.Errorf("snapshot %s does not exist", path)
@@ -377,14 +372,15 @@ func runMemoryHost(args []string) {
 	}
 }
 
-// memoryCLIFatal reports a failed subcommand and exits 1. snapshotArgs parses
-// the shared `<sub> PATH [--force]` argv: -h/--help prints usage and reports
-// ok=false; anything missing, duplicated or unknown is a usage error, exit 2.
+// memoryCLIFatal reports a failed subcommand and exits 1.
 func memoryCLIFatal(sub string, err error) {
 	fmt.Fprintf(os.Stderr, "pix-host memory %s: %v\n", sub, err)
 	os.Exit(1)
 }
 
+// snapshotArgs parses the shared `<sub> PATH [--force]` argv: -h/--help prints
+// usage and reports ok=false; anything missing, duplicated or unknown is a usage
+// error, exit 2.
 func snapshotArgs(sub string, args []string) (path string, force, ok bool) {
 	for _, a := range args {
 		switch {

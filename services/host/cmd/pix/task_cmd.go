@@ -1,8 +1,7 @@
 // task_cmd.go — the `pix task` verb tree (new|run|ls|path|rm). Domain logic
 // (naming, clone/worktree mechanism, the git-hygiene guard) lives in
-// pix/host/workflow/task; launching re-enters `pix run` with an explicit
-// --name and the checkout as the workspace, so there is no task-owned
-// sandbox-lifecycle code here.
+// pix/host/workflow/task; launching re-enters `pix run` with an explicit --name
+// and the checkout as the workspace, so no sandbox-lifecycle code lives here.
 package main
 
 import (
@@ -42,19 +41,14 @@ func (c *taskUsageCmd) Run(d *cli.Deps) error {
 	return nil
 }
 
-func taskMainroot() (string, error) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", err
-	}
-	return task.ResolveMainroot(cwd)
-}
-
-// taskRepo is what every subcommand starts with: the main checkout this task
-// tree hangs off, plus the state root its metadata lives in. Not being in a
-// git repo is the one failure they all report identically.
+// taskRepo is what every subcommand starts with: the main checkout this task tree
+// hangs off, plus the state root its metadata lives in. Not being in a git repo is
+// the one failure they all report identically.
 func taskRepo() (mainroot, stateRoot string, err error) {
-	mainroot, err = taskMainroot()
+	cwd, err := os.Getwd()
+	if err == nil {
+		mainroot, err = task.ResolveMainroot(cwd)
+	}
 	if err != nil {
 		return "", "", fmt.Errorf("not a git repository: %w", err)
 	}
@@ -90,8 +84,8 @@ func (c *taskNewCmd) Run(d *cli.Deps) error { return taskNew(d, c) }
 
 // taskNewPassthrough splits kong's passthrough arg (which always includes the
 // literal "--" it matched on) into the pi-args tail, rejecting a bare extra
-// positional that arrived without one — kong itself accepts that (passthrough
-// is exactly for a trailing positional), so the rejection is this guard's job.
+// positional that arrived without one — kong accepts that, so refusing it is this
+// guard's job.
 func taskNewPassthrough(raw []string) ([]string, error) {
 	if len(raw) == 0 {
 		return nil, nil
@@ -141,10 +135,9 @@ func taskNew(d *cli.Deps, c *taskNewCmd) error {
 	return dispatchRun(d, runArgv)
 }
 
-// resolveTaskRunArgv resolves an existing task NAME to the argv `pix run`
-// needs to (re)launch its sandbox. Shared with run_cmd.go's `--task`
-// shorthand (a different argv, outside this migration), so it stays
-// argv-in/argv-out rather than a kong struct.
+// resolveTaskRunArgv resolves an existing task NAME to the argv `pix run` needs to
+// (re)launch its sandbox. argv-in/argv-out rather than a kong struct, because
+// run_cmd.go's `--task` shorthand shares the resolution.
 func resolveTaskRunArgv(name string, rest []string) ([]string, error) {
 	co, sandboxName, err := resolveTaskTarget(name)
 	if err != nil {
@@ -168,9 +161,9 @@ func resolveTaskTarget(name string) (dir, sandboxName string, err error) {
 	return co, m.Sandbox, nil
 }
 
-// taskRunCmd (re)launches an existing task's sandbox. Rest forwards
-// VERBATIM, including a literal leading "--" — that is what `pix run`'s own
-// argv parser expects to introduce its pi passthrough.
+// taskRunCmd (re)launches an existing task's sandbox. Rest forwards VERBATIM,
+// including a literal leading "--": that is what `pix run`'s argv parser expects
+// to introduce its pi passthrough.
 type taskRunCmd struct {
 	Name string   `arg:"" help:"Task to (re)launch."`
 	Rest []string `arg:"" optional:"" passthrough:"" help:"Forwarded to 'pix run' as-is."`
@@ -232,8 +225,8 @@ func taskLs(d *cli.Deps, jsonOut bool) error {
 		}
 		rows = append(rows, taskListRow{
 			Name: e.Meta.Name, Branch: e.Meta.Branch, Mechanism: string(e.Meta.Mechanism),
-			Sandbox: e.Meta.Sandbox, SandboxState: e.Sandbox.String(),
-			Dirty: e.Git.Dirty, Untracked: e.Git.Untracked, Unrecoverable: e.Git.Unrecoverable,
+			Sandbox: e.Meta.Sandbox, SandboxState: e.Sandbox.String(), Dirty: e.Git.Dirty,
+			Untracked: e.Git.Untracked, Unrecoverable: e.Git.Unrecoverable,
 			WouldRefuse: e.WouldRefuse, Reasons: e.Reasons, Path: co,
 		})
 	}
@@ -305,8 +298,8 @@ func taskRm(d *cli.Deps, name string, force bool) error {
 		}
 		return cli.SilentError{Code: 2}
 	}
-	// Persist the branch BEFORE anything is torn down, so a mid-teardown
-	// failure below never loses work the guard just proved safe to drop.
+	// Persist the branch BEFORE anything is torn down, so a mid-teardown failure
+	// never loses work the guard just proved safe to drop.
 	if err := task.PersistBranch(m.Mechanism, mainroot, co, m.Branch); err != nil {
 		return err
 	}

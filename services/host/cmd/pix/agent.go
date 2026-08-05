@@ -27,8 +27,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// parseBudget rejects non-positive, NaN and Inf (ParseFloat accepts "NaN"/
-// "+Inf", which would poison the frontmatter).
+// parseBudget rejects non-positive, NaN and Inf (ParseFloat accepts "NaN"/"+Inf",
+// which would poison the frontmatter).
 func parseBudget(s string) (float64, error) {
 	b, err := strconv.ParseFloat(s, 64)
 	if err != nil || math.IsNaN(b) || math.IsInf(b, 0) || b <= 0 {
@@ -37,8 +37,8 @@ func parseBudget(s string) (float64, error) {
 	return b, nil
 }
 
-// agentNameRe forbids path separators and dots, so a name can never traverse
-// out of agentsDir() in new/edit/rm (e.g. `agent rm ../README`).
+// agentNameRe forbids path separators and dots, so a name can never traverse out of
+// agentsDir() in new/edit/rm (e.g. `agent rm ../README`).
 var agentNameRe = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`)
 
 func mustValidName(name string) error {
@@ -57,8 +57,8 @@ func agentsDir() string {
 	return "agents"
 }
 
-// agentMeta is the typed view of an agent's frontmatter (edits round-trip
-// through a yaml.Node, so unknown fields survive).
+// agentMeta is the typed view of an agent's frontmatter (edits round-trip through a
+// yaml.Node, so unknown fields survive).
 type agentMeta struct {
 	Description string  `yaml:"description,omitempty"`
 	Intent      string  `yaml:"intent,omitempty"`
@@ -120,9 +120,8 @@ func listAgents() ([]string, error) {
 // resolveAgentModel returns the model an agent resolves to and a one-line WHY.
 func resolveAgentModel(m agentMeta, reg *routing.Registry, sc *routing.Scorecard, pol *routing.Policy) (model, why string) {
 	if strings.TrimSpace(m.Model) != "" {
-		// An explicit pin bypasses intent routing, so flag one that names no
-		// registered model: that is almost always a typo, and it would otherwise
-		// fail at spawn instead of here.
+		// An explicit pin bypasses intent routing, so flag one that names no registered
+		// model: almost always a typo, and it would otherwise fail at spawn.
 		if reg != nil {
 			if _, ok := reg.Get(m.Model); !ok {
 				return m.Model, "pinned (UNKNOWN — not in models.json)"
@@ -142,9 +141,8 @@ func resolveAgentModel(m agentMeta, reg *routing.Registry, sc *routing.Scorecard
 }
 
 // explainDecision turns a routing Decision into a WHY in words, not unmeasured
-// numbers: a contest names what it beat and on which axis, a sole survivor
-// names the CONSTRAINTS that eliminated the field (what you tune in
-// policy.json), a fallback says nothing matched.
+// numbers: a contest names what it beat and on which axis, a sole survivor names the
+// CONSTRAINTS that eliminated the field (what you tune in policy.json).
 func explainDecision(in routing.Intent, d routing.Decision) string {
 	obj := d.Objective
 	if obj == "" {
@@ -175,8 +173,8 @@ func explainDecision(in routing.Intent, d routing.Decision) string {
 	return fmt.Sprintf("%s: only model matching %s", in.Name, cons)
 }
 
-// intentConstraints renders an intent's hard constraints compactly (the same
-// filters Resolve applies), so a WHY can explain what eliminated the field.
+// intentConstraints renders an intent's hard constraints compactly (the same filters
+// Resolve applies), so a WHY can explain what eliminated the field.
 func intentConstraints(in routing.Intent) string {
 	var p []string
 	if len(in.Providers) > 0 {
@@ -194,8 +192,7 @@ func intentConstraints(in routing.Intent) string {
 	return strings.Join(p, ", ")
 }
 
-// shortModel drops the provider prefix for compact display (anthropic/claude-
-// sonnet-5 -> claude-sonnet-5).
+// shortModel drops the provider prefix for compact display.
 func shortModel(id string) string {
 	if i := strings.IndexByte(id, '/'); i >= 0 {
 		return id[i+1:]
@@ -333,9 +330,8 @@ func agentEdit(d *cli.Deps, c *AgentEditCmd) error {
 	if err := yaml.Unmarshal([]byte(fmText), &node); err != nil {
 		return fmt.Errorf("bad frontmatter: %w", err)
 	}
-	// budget_usd is the one non-string field, and the only one re-validated here
-	// (kong already rejected an unparseable float; this rejects a non-positive
-	// or non-finite one before it reaches the frontmatter).
+	// budget_usd is the one non-string field and the only one re-validated here: kong
+	// rejected an unparseable float, this rejects a non-positive or non-finite one.
 	budget := budgetArg(c.Budget)
 	if budget != "" {
 		if _, err := parseBudget(budget); err != nil {
@@ -390,15 +386,15 @@ func agentRm(d *cli.Deps, c *AgentRmCmd) error {
 	return nil
 }
 
-// agentReassess re-resolves the roster under the current policy/scorecard
-// (zero spend) and recompiles routing.json, printing the routing diff. Scores
-// are hand-maintained, so --model only points at scorecard.json and stops.
+// agentReassess re-resolves the roster under the current policy/scorecard (zero
+// spend) and recompiles routing.json, printing the routing diff. Scores are
+// hand-maintained, so --model only points at scorecard.json and stops.
 func agentReassess(d *cli.Deps, c *AgentReassessCmd) error {
 	model := c.Model
 
-	// Baseline = the CURRENTLY COMPILED routing.json (what is live), so the diff
-	// also catches a stale routing.json after a policy/budget change. Falls back to
-	// a fresh resolve when no compiled file exists yet.
+	// Baseline = the CURRENTLY COMPILED routing.json (what is live), so the diff also
+	// catches a stale routing.json after a policy change. Falls back to a fresh
+	// resolve when no compiled file exists yet.
 	before := readCompiledRoutes()
 	if before == nil {
 		var err error
@@ -412,8 +408,8 @@ func agentReassess(d *cli.Deps, c *AgentReassessCmd) error {
 		fmt.Fprintf(d.Err, "note: automated eval measurement was removed. Add/edit %q's scores by\n", model)
 		fmt.Fprintf(d.Err, "  hand in %s, then re-run\n", routing.ScorecardPath())
 		fmt.Fprintln(d.Err, "  `pix agent reassess` (no --model) to re-resolve + recompile.")
-		// Usage exit (2), returned rather than os.Exit'd so the guidance is
-		// testable in-process like every other handler in this package.
+		// Usage exit (2), returned rather than os.Exit'd so the guidance is testable
+		// in-process like every other handler here.
 		return cli.SilentError{Code: 2}
 	}
 
@@ -424,8 +420,8 @@ func agentReassess(d *cli.Deps, c *AgentReassessCmd) error {
 
 	fmt.Println("routing changes:")
 	changed := 0
-	// Union of before + after so a REMOVED intent (compiled but no longer in
-	// policy) also shows in the diff.
+	// Union of before + after, so a REMOVED intent (compiled but no longer in policy)
+	// also shows in the diff.
 	nameSet := map[string]bool{}
 	for n := range before {
 		nameSet[n] = true
@@ -455,9 +451,9 @@ func agentReassess(d *cli.Deps, c *AgentReassessCmd) error {
 	if changed == 0 {
 		fmt.Println("  (none)")
 	}
-	// Compile to the RIGHT file: `route compile` defaults to the routing override
-	// dir, but the image bakes the repo-root routing.json, so a reassess run from
-	// the repo must target that file or it never reaches the image.
+	// Compile to the RIGHT file: `route compile` defaults to the routing override dir,
+	// but the image bakes the repo-root routing.json, so a reassess run from the repo
+	// must target that file or it never reaches the image.
 	compileArgs := []string{"route", "compile"}
 	if repo := repoRoutingTarget(); repo != "" {
 		compileArgs = append(compileArgs, "--out", repo)
@@ -471,8 +467,8 @@ func agentReassess(d *cli.Deps, c *AgentReassessCmd) error {
 	return nil
 }
 
-// repoRoutingTarget returns the repo-root routing.json the image bakes, but
-// ONLY when the cwd is unmistakably the pix repo (a routing.json next to
+// repoRoutingTarget returns the repo-root routing.json the image bakes, but ONLY
+// when the cwd is unmistakably the pix repo checkout (a routing.json next to
 // pi-kit/spec.yaml); "" otherwise, so the caller keeps compile's own default.
 func repoRoutingTarget() string {
 	wd, err := os.Getwd()
@@ -487,9 +483,9 @@ func repoRoutingTarget() string {
 	return ""
 }
 
-// launchInteractiveAuthoring hands off to an interactive `pi` session seeded to
-// run the agent-new skill, which drives the whole flow (including `pix agent
-// new` for the files). This process's stdio becomes pi's.
+// launchInteractiveAuthoring hands off to an interactive `pi` session seeded to run
+// the agent-new skill, which drives the whole flow. This process's stdio becomes
+// pi's.
 func launchInteractiveAuthoring(name string) error {
 	pi := "pi"
 	if _, err := exec.LookPath(pi); err != nil {
@@ -515,8 +511,7 @@ func launchInteractiveAuthoring(name string) error {
 	return nil
 }
 
-// readCompiledRoutes reads the live compiled routing.json (intent -> model)
-// the sandbox reads, or nil.
+// readCompiledRoutes reads the live compiled routing.json (intent -> model), or nil.
 func readCompiledRoutes() map[string]string {
 	b, err := os.ReadFile(routing.CompiledRoutingPath())
 	if err != nil {
@@ -576,8 +571,7 @@ func setMappingValue(doc *yaml.Node, key, val, tag string) {
 }
 
 // budgetArg renders a parsed --budget back into the frontmatter writer's string
-// form. kong parses it as a float64, so a bad value is already rejected by the
-// flag layer, naming the flag.
+// form. kong parses it as a float64, so the flag layer already rejected a bad one.
 func budgetArg(v float64) string {
 	if v <= 0 {
 		return ""
