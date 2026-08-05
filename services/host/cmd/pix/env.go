@@ -10,12 +10,11 @@ package main
 import (
 	"pix/host/hostenv"
 	"pix/host/inference"
-	"pix/host/rpc"
 	"pix/host/sys"
 )
 
 // defaultShellEnv returns a hostenv.Env backed by the real OS.
 func defaultShellEnv() hostenv.Env {
 	return hostenv.Env{
-		System: sys.Real{}, HostBinary: func() (string, error) { return hostBinaryResolver() }, IdentityProbe: rpc.IdentityProbe, DirectInference: inference.LiveDirectInferenceProbe, OllamaInference: inference.LiveOllamaInferenceProbe}
+		System: sys.Real{}, HostBinary: func() (string, error) { return hostBinaryResolver() }, DirectInference: inference.LiveDirectInferenceProbe, OllamaInference: inference.LiveOllamaInferenceProbe}
 }

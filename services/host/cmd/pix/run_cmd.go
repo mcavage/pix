@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -11,10 +12,10 @@ import (
 	"path/filepath"
 	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/health"
 	"pix/host/inference"
 	"pix/host/launcher"
 	"pix/host/mcp"
-	"pix/host/readiness/axis"
 	"pix/host/secret"
 	"pix/host/service"
 	"pix/host/workflow/doctor"
@@ -103,7 +104,7 @@ func runRun(argv []string) {
 	// already pinned one, which wins). This makes the INTERACTIVE session use the
 	// same cost/latency/accuracy routing the subagent crew uses.
 	if o.Intent != "" && o.Model == "" {
-		m, rerr := axis.ResolveSessionModel(o.Intent)
+		m, rerr := inference.ResolveSessionModel(o.Intent)
 		if rerr != nil {
 			fmt.Fprintf(os.Stderr, "pix run: --intent %q: %v\n", o.Intent, rerr)
 			exit(2)
@@ -121,15 +122,14 @@ func runRun(argv []string) {
 	// confirm no key (tri-state): sbx absent OR its control plane unprobeable =
 	// can't verify = proceed, never a false refusal on a transient failure.
 	//
-	// The probe result is KEPT (keyEvidence) and handed to the readiness
-	// snapshot further down, so rendering readiness costs `run` no second
-	// `sbx secret ls`.
-	var keyEvidence axis.SbxKeyEvidence
+	// The probe result is KEPT (keyResult) and handed to the readiness snapshot
+	// further down, so rendering readiness costs `run` no second `sbx secret ls`.
+	var keyResult health.Result
 	if _, err := defaultShellEnv().LookPath("sbx"); err == nil && !inference.ConfiguredKeylessInference() {
 		env := defaultShellEnv()
 		launch.BootstrapProviderKeys(env, os.Stdin, os.Stderr, cli.IsTTY(os.Stdin))
-		keyEvidence = axis.ProbeSbxKeyEvidence(env)
-		if keyEvidence.Ok() && !axis.AnyModelKeyInOutput(keyEvidence.Out) {
+		keyResult = launch.ProbeModelKeys(context.Background(), "")
+		if launch.RefusesLaunch(keyResult) {
 			fmt.Fprint(os.Stderr, secret.ModelKeyMissingMessage(env))
 			exit(1)
 		}
@@ -349,16 +349,16 @@ func runRun(argv []string) {
 	// progress/failure lines.
 	service.EnsureUp(nil, service.EnsureRunTimeout)
 
-	// Readiness, rendered from the SHARED lazy snapshot (readiness_launch.go)
+	// Readiness, rendered from the small shared snapshot (launch/readiness.go)
 	// and reusing the key evidence the launch gate above already paid for. Two
 	// rules, both deliberate:
-	//   - AT MOST axis.LaunchWarningLimit rows, then a single count pointing at
+	//   - AT MOST launch.WarningLimit rows, then a single count pointing at
 	//     doctor. `run` is the daily command; a wall of readiness text here is
 	//     how a user learns to skip readiness output entirely.
 	//   - It NEVER blocks. The only launch-stopping condition is the missing
 	//     provider key handled above, because that is the only gap that makes
 	//     the session useless rather than degraded.
-	axis.RenderReadinessWarnings(os.Stderr, axis.FastReadinessSnapshot(cfg, defaultShellEnv(), keyEvidence), axis.LaunchWarningLimit)
+	launch.RenderWarnings(os.Stderr, launch.FastSnapshot(context.Background(), cfg, keyResult), launch.WarningLimit)
 
 	// Local model + memory scope: hand the configured ollama_bridge_model to the
 	// in-VM ollama-bridge, and the active pack's memory_scope (default: the pack

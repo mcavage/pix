@@ -13,8 +13,8 @@ import (
 	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/hostenv"
+	"pix/host/inference"
 	"pix/host/mcp"
-	"pix/host/readiness/axis"
 	"pix/host/sys"
 	"pix/host/workflow/doctor"
 	"pix/host/workflow/pack"
@@ -37,7 +37,7 @@ func ApplyConfiguredSessionModel(o *RunOpts, cfg *config.Config) (bool, error) {
 	if strings.EqualFold(intent, "none") || strings.EqualFold(intent, "off") {
 		return true, nil
 	}
-	model, err := axis.ResolveSessionModel(intent)
+	model, err := inference.ResolveSessionModel(intent)
 	if err != nil {
 		return true, err
 	}

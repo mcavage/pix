@@ -8,7 +8,6 @@ package launch
 import (
 	"io"
 	"pix/host/hostenv"
-	"pix/host/readiness/axis"
 	"pix/host/secret"
 )
 
@@ -27,7 +26,7 @@ func SbxModelKeyState(env hostenv.Env) (present, probeOK bool) {
 	if err != nil || timedOut {
 		return false, false
 	}
-	return axis.AnyModelKeyInOutput(out), true
+	return secret.AnyModelKeyInOutput(out), true
 }
 
 // AnyModelKeyPresent reports whether sbx has at least one model provider key.

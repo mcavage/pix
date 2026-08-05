@@ -602,6 +602,21 @@ func SbxAllModelKeysPresent(env hostenv.Env) (all bool, state SbxSecretsProbeSta
 // not the model.
 var ModelProviders = []string{"anthropic", "openai", "google"}
 
+// AnyModelKeyInOutput reports whether out (the text of `sbx secret ls`) shows
+// any model provider key as set. Pure, and the SINGLE definition of "what
+// counts as a present model key", so the launch gate and every reporter agree.
+// It says nothing about whether the probe ANSWERED — that tri-state is the
+// caller's (SbxSecretsProbeState), and conflating the two is exactly how a
+// failed probe turns into a false "you have no key".
+func AnyModelKeyInOutput(out string) bool {
+	for _, k := range ModelProviders {
+		if cli.GrepWord(out, k) {
+			return true
+		}
+	}
+	return false
+}
+
 // ModelKeyMissingMessage is the guidance printed when no model key could be put
 // in place. (The launch-blocking presence CHECK lives in runRun/launchTask via
 // sbxModelKeyState's tri-state; this is only the how-to-fix text.)

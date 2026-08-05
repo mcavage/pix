@@ -16,10 +16,10 @@
       "exits": 4
     },
     "pix/host/cmd/pix": {
-      "prod_loc": 3642,
+      "prod_loc": 3640,
       "exports": 19,
       "globals": 15,
-      "edges": 25,
+      "edges": 24,
       "exits": 53
     },
     "pix/host/cmd/pix/corpus": {
@@ -51,24 +51,24 @@
       "exits": 0
     },
     "pix/host/hostenv": {
-      "prod_loc": 56,
+      "prod_loc": 53,
       "exports": 3,
       "globals": 0,
       "edges": 2,
       "exits": 0
     },
     "pix/host/hostenv/hostenvtest": {
-      "prod_loc": 87,
+      "prod_loc": 80,
       "exports": 1,
       "globals": 0,
       "edges": 2,
       "exits": 0
     },
     "pix/host/inference": {
-      "prod_loc": 538,
-      "exports": 18,
-      "globals": 1,
-      "edges": 2,
+      "prod_loc": 919,
+      "exports": 33,
+      "globals": 7,
+      "edges": 4,
       "exits": 0
     },
     "pix/host/launcher": {
@@ -113,20 +113,6 @@
       "edges": 0,
       "exits": 0
     },
-    "pix/host/readiness": {
-      "prod_loc": 719,
-      "exports": 51,
-      "globals": 35,
-      "edges": 0,
-      "exits": 0
-    },
-    "pix/host/readiness/axis": {
-      "prod_loc": 1419,
-      "exports": 50,
-      "globals": 19,
-      "edges": 10,
-      "exits": 0
-    },
     "pix/host/routing": {
       "prod_loc": 947,
       "exports": 29,
@@ -149,8 +135,8 @@
       "exits": 0
     },
     "pix/host/secret": {
-      "prod_loc": 1225,
-      "exports": 41,
+      "prod_loc": 1240,
+      "exports": 42,
       "globals": 8,
       "edges": 3,
       "exits": 9
@@ -184,24 +170,24 @@
       "exits": 0
     },
     "pix/host/workflow/doctor": {
-      "prod_loc": 788,
-      "exports": 28,
+      "prod_loc": 706,
+      "exports": 25,
       "globals": 8,
-      "edges": 17,
+      "edges": 14,
       "exits": 0
     },
     "pix/host/workflow/launch": {
-      "prod_loc": 2224,
-      "exports": 80,
-      "globals": 20,
-      "edges": 15,
+      "prod_loc": 2326,
+      "exports": 85,
+      "globals": 21,
+      "edges": 14,
       "exits": 3
     },
     "pix/host/workflow/models": {
-      "prod_loc": 1502,
+      "prod_loc": 1500,
       "exports": 21,
       "globals": 6,
-      "edges": 7,
+      "edges": 6,
       "exits": 0
     },
     "pix/host/workflow/onboard": {
@@ -216,7 +202,7 @@
       "exports": 46,
       "globals": 9,
       "edges": 10,
-      "exits": 39
+      "exits": 28
     },
     "pix/host/workflow/provision": {
       "prod_loc": 1366,
