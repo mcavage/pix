@@ -41,6 +41,12 @@ type Paths struct {
 	knowledgeDir string // <dataRoot>/knowledge or dir(KNOWLEDGE_DB): the rebuildable index
 	memoryDB     string // the custom MEMORY_DB file path (set ONLY when MEMORY_DB is given); "" for the default
 	knowledgeDB  string // the custom KNOWLEDGE_DB file path (set ONLY when KNOWLEDGE_DB is given); "" for the default
+	// RuntimeFiles are the daemon's ephemeral state-dir files (pid/lazy/lock),
+	// resolved HERE (from the same injected env every other field derives from)
+	// rather than by Plan reaching for config.ServePidPath() et al. globally —
+	// see resolveStateDir. A test host's fake $HOME/$XDG_STATE_HOME must be the
+	// only thing that decides where these point, never the real process env.
+	RuntimeFiles []string
 }
 
 // backupTarget is one path the reset moves aside, with a human label. Dangerous
@@ -120,6 +126,56 @@ var (
 	errNotExist      = errors.New("path does not exist")
 )
 
+// resolveConfigDir mirrors config.configDir()'s precedence (PIX_CONFIG's
+// parent dir, else $XDG_CONFIG_HOME/pix, else ~/.config/pix) but reads it
+// through the INJECTED sys.System rather than the real process env. sys.System
+// (see sys.Env) has no higher-level "config dir" abstraction — Getenv/HomeDir
+// are the narrowed explicit inputs available — so this reimplements config's
+// precedence against them instead of calling config.Path()/configDir()
+// directly, which read os.Getenv/os.UserHomeDir and would silently ignore
+// whatever host a caller (a test, a future scoped invocation) injected. A
+// production sys.Real's Getenv/HomeDir delegate to the same os calls, so this
+// resolves byte-identically to config.Path() there — only an injected fake
+// host changes the answer, which is exactly the point.
+func resolveConfigDir(env sys.System) string {
+	if p := strings.TrimSpace(env.Getenv("PIX_CONFIG")); p != "" {
+		return filepath.Dir(p)
+	}
+	if xdg := strings.TrimSpace(env.Getenv("XDG_CONFIG_HOME")); xdg != "" {
+		return filepath.Join(xdg, "pix")
+	}
+	if home := env.HomeDir(); home != "" {
+		return filepath.Join(home, ".config", "pix")
+	}
+	// Mirrors config.Path()'s fallback when the home dir can't be resolved:
+	// config.Path() returns the bare relative "config.toml", whose dir is ".".
+	return "."
+}
+
+// resolveStateDir mirrors config.StateDir()'s precedence ($XDG_STATE_HOME/pix,
+// else ~/.local/state/pix), again through the injected env rather than the
+// real process env — see resolveConfigDir for why. An empty result mirrors
+// config.StateDir()'s unresolvable-home case, where the *Path() helpers fall
+// back to a bare relative filename (see stateFilePath).
+func resolveStateDir(env sys.System) string {
+	if xdg := strings.TrimSpace(env.Getenv("XDG_STATE_HOME")); xdg != "" {
+		return filepath.Join(xdg, "pix")
+	}
+	if home := env.HomeDir(); home != "" {
+		return filepath.Join(home, ".local", "state", "pix")
+	}
+	return ""
+}
+
+// stateFilePath joins name under stateDir, or returns name bare when stateDir
+// couldn't be resolved — matching config.ServePidPath() et al.'s fallback.
+func stateFilePath(stateDir, name string) string {
+	if stateDir == "" {
+		return name
+	}
+	return filepath.Join(stateDir, name)
+}
+
 // ResolveResetPaths resolves the host paths reset touches from the injected env
 // (MEMORY_DB/KNOWLEDGE_DB honored; the data root defaults to
 // $XDG_DATA_HOME/pix, else ~/.local/share/pix; the config dir to
@@ -154,13 +210,19 @@ func ResolveResetPaths(env sys.System) Paths {
 		knowledgeDir = filepath.Dir(db)
 		knowledgeDB = db
 	}
+	stateDir := resolveStateDir(env)
 	return Paths{
-		ConfigDir:    filepath.Dir(config.Path()),
+		ConfigDir:    resolveConfigDir(env),
 		DataRoot:     dataRoot,
 		MemoryDir:    memoryDir,
 		knowledgeDir: knowledgeDir,
 		memoryDB:     memoryDB,
 		knowledgeDB:  knowledgeDB,
+		RuntimeFiles: []string{
+			stateFilePath(stateDir, "serve.pid"),
+			stateFilePath(stateDir, "serve.lazy"),
+			stateFilePath(stateDir, "serve.spawn.lock"),
+		},
 	}
 }
 
@@ -204,11 +266,10 @@ func Plan(cfg *config.Config, paths Paths, opts Opts) Actions {
 	// The daemon's ephemeral runtime files live in the STATE dir (not the config/
 	// data dirs we move aside), so a plain reset would leave them behind. They are
 	// stale the moment serve stops (a lock file, a pidfile, a lazy marker) and have
-	a.RuntimeFiles = []string{
-		config.ServePidPath(),
-		config.ServeLazyMarkerPath(),
-		config.ServeSpawnLockPath(),
-	}
+	// already been resolved (from the SAME injected env every other Paths field
+	// came from) in ResolveResetPaths — not re-derived here from config's
+	// globals, which would reach past whatever host the caller injected.
+	a.RuntimeFiles = paths.RuntimeFiles
 	return a
 }
 

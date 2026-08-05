@@ -686,6 +686,121 @@ func TestResolveResetPaths_RelativeMemoryDBAbsolute(t *testing.T) {
 	}
 }
 
+// TestResolveResetPaths_DerivesFromInjectedEnvNotRealProcessEnv is the pure,
+// no-filesystem half of the U11h safety gate: ResolveResetPaths must resolve
+// ConfigDir/RuntimeFiles from the INJECTED sys.System, never by reaching past
+// it into the real process environment (config.Path()/config.StateDir() read
+// os.Getenv/os.UserHomeDir directly). This sets the REAL $HOME (via t.Setenv)
+// to a canary tree and asserts the resolved paths land under the completely
+// different injected host's home instead — proving the real env never leaks
+// through. Fails before the fix (ConfigDir would resolve under realHome).
+func TestResolveResetPaths_DerivesFromInjectedEnvNotRealProcessEnv(t *testing.T) {
+	realHome := t.TempDir()
+	t.Setenv("HOME", realHome)
+	t.Setenv("PIX_CONFIG", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("XDG_STATE_HOME", "")
+	t.Setenv("XDG_DATA_HOME", "")
+
+	injectedHome := t.TempDir()
+	env := resetHost{home: injectedHome}
+	p := ResolveResetPaths(env)
+
+	wantConfigDir := filepath.Join(injectedHome, ".config", "pix")
+	if p.ConfigDir != wantConfigDir {
+		t.Errorf("ConfigDir = %q, want %q (derived from the injected host)", p.ConfigDir, wantConfigDir)
+	}
+	if strings.HasPrefix(p.ConfigDir, realHome) {
+		t.Errorf("ConfigDir leaked the REAL process $HOME: %q", p.ConfigDir)
+	}
+	for _, rf := range p.RuntimeFiles {
+		if strings.HasPrefix(rf, realHome) {
+			t.Errorf("runtime file %q resolved under the REAL process $HOME, not the injected host", rf)
+		}
+		if !strings.HasPrefix(rf, injectedHome) {
+			t.Errorf("runtime file %q did not resolve under the injected host %q", rf, injectedHome)
+		}
+	}
+}
+
+// TestResolveResetPaths_RealHomeCanarySurvivesReset is the full end-to-end
+// U11h safety gate: it plants a canary config.toml at the path the REAL
+// $HOME/$XDG_* env resolves to (simulating the operator's actual machine),
+// injects a totally different temp-dir host, runs a real (--yes, real
+// filesystem) reset against the paths ResolveResetPaths resolves for that
+// injected host, and proves the REAL canary is never touched — only the
+// injected tree moves aside. Before the fix, ResolveResetPaths.ConfigDir came
+// from config.Path() (real os.Getenv/os.UserHomeDir), so this test would
+// resolve the REAL canary directory and executeReset would move it aside;
+// this test fails loudly in that world (the canary vanishes/gets a .bak).
+func TestResolveResetPaths_RealHomeCanarySurvivesReset(t *testing.T) {
+	stubStopServe(t)
+
+	// The "real machine": every OS-level env var the OLD code path read
+	// directly (config.Path()/config.StateDir()) now points at a canary tree.
+	realHome := t.TempDir()
+	t.Setenv("HOME", realHome)
+	t.Setenv("PIX_CONFIG", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("XDG_STATE_HOME", "")
+	t.Setenv("XDG_DATA_HOME", "")
+
+	realConfigDir := filepath.Join(realHome, ".config", "pix")
+	if err := os.MkdirAll(realConfigDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	canaryPath := filepath.Join(realConfigDir, "config.toml")
+	writeFile(t, canaryPath, "REAL-CANARY-DO-NOT-TOUCH")
+
+	realStatePid := filepath.Join(realHome, ".local", "state", "pix", "serve.pid")
+	if err := os.MkdirAll(filepath.Dir(realStatePid), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, realStatePid, "REAL-PID-DO-NOT-TOUCH")
+
+	// The INJECTED host: a completely different temp tree — the only one
+	// reset is allowed to touch.
+	injectedHome := t.TempDir()
+	env := resetHost{home: injectedHome}
+
+	p := ResolveResetPaths(env)
+	if err := os.MkdirAll(p.ConfigDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	injectedCanary := filepath.Join(p.ConfigDir, "config.toml")
+	writeFile(t, injectedCanary, "injected")
+
+	a := Plan(resetCfg(), p, Opts{})
+
+	var buf bytes.Buffer
+	if _, err := executeReset(a, DefaultResetFS(), env, &buf, fixedNow); err != nil {
+		t.Fatalf("executeReset: %v", err)
+	}
+
+	// The injected config dir WAS moved aside (proves reset actually ran).
+	if exists(p.ConfigDir) {
+		t.Error("the injected config dir should have been moved aside")
+	}
+	if !exists(p.ConfigDir + ".bak-" + fixedTS) {
+		t.Error("expected a .bak sibling for the injected config dir")
+	}
+
+	// The REAL canary is UNTOUCHED: present, unmoved, unmodified, no .bak sibling.
+	data, err := os.ReadFile(canaryPath)
+	if err != nil {
+		t.Fatalf("real canary config.toml was removed/moved: %v", err)
+	}
+	if string(data) != "REAL-CANARY-DO-NOT-TOUCH" {
+		t.Error("real canary config.toml content changed")
+	}
+	if exists(realConfigDir + ".bak-" + fixedTS) {
+		t.Fatal("reset moved the REAL config dir aside — it must only touch the injected path")
+	}
+	if data, err := os.ReadFile(realStatePid); err != nil || string(data) != "REAL-PID-DO-NOT-TOUCH" {
+		t.Fatalf("real serve.pid canary was touched: data=%q err=%v", data, err)
+	}
+}
+
 // stubRestartServe records whether the post-reset restart fired.
 func stubRestartServe(t *testing.T) *bool {
 	t.Helper()
