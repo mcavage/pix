@@ -1,10 +1,5 @@
 // Package launcher is the running binary's own identity: its version, and the
 // sibling pix-host it is paired with.
-//
-// It exists because "where is pix-host, and does it match me" was answered in
-// package main, which meant every package needing the host binary had to depend
-// on the command layer. Two facts and one lookup; it is a package because of
-// who needs it, not because of its size.
 package launcher
 
 import (
@@ -22,7 +17,6 @@ var Version = "dev"
 // FindHostBinary resolves the sibling pix-host and verifies it reports the SAME
 // version as this binary. A mismatch is an error, not a warning: two halves of
 // one release that disagree is exactly the state that produces bugs nobody can
-// reproduce.
 func FindHostBinary() (string, error) {
 	verify := func(path string) (string, error) {
 		out, err := exec.Command(path, "version").CombinedOutput()

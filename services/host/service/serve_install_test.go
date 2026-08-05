@@ -384,8 +384,6 @@ func TestReportManagedServeHealth(t *testing.T) {
 // Round 2 (H8): a config.Load() failure must be reported as a verification
 // FAILURE, not silently skipped. The old code ran health verification only
 // `if err == nil`, so a malformed config.toml printed "installed managed
-// service" while the check silently no-oped and the unit crash-looped in the
-// background with no honest signal.
 func TestVerifyManagedInstallHealthConfigLoadFailure(t *testing.T) {
 	var out bytes.Buffer
 	st := serveStarter{dial: func(int) bool {
@@ -423,8 +421,6 @@ func TestVerifyManagedInstallHealthConfigLoadSuccess(t *testing.T) {
 // A home directory containing `--` must still produce a VALID plist: XML
 // text-escaping does not make `--` legal inside a `<!-- -->` comment, so the
 // old template (which interpolated OutLog/ErrLog — both under Home — directly
-// into its top comment) broke for exactly this home. The fix keeps every
-// user-interpolated value out of comments entirely.
 func TestRenderPlistHomeWithDoubleDashProducesValidXML(t *testing.T) {
 	home := "/Users/alice--work"
 	got, err := renderPlist(plistData{

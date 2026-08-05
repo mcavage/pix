@@ -128,9 +128,6 @@ func TestWriteWorkspaceStateFileSymlinkedDir(t *testing.T) {
 // A .pix that is a SYMLINK to another repo's .pix must be refused
 // outright: RemoveStateFile must not traverse the symlinked parent
 // to delete the TARGET repo's profile/knowledge.scope/sandbox.pack, which a
-// plain os.Remove(filepath.Join(Workspace, ".pix", name)) would do (it
-// only refuses to follow a symlinked *destination file*, not a symlinked
-// *parent directory*).
 func TestRemoveWorkspaceStateFileSymlinkedDirRefused(t *testing.T) {
 	ws := t.TempDir()
 	target := t.TempDir() // another "repo"'s real .pix dir

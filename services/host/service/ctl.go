@@ -1,13 +1,6 @@
 // serve_ctl.go implements the launcher-side control verbs `serve stop` and
 // `serve status`, the SAFE replacement for the old `pkill -f 'pix-host
 // serve'`. The host writes its pid to config.ServePidPath() on startup; these
-// verbs read it, verify the process is actually OUR `pix-host serve`, and
-// then signal it — so we never kill an arbitrary pid that happens to be in a
-// stale/hijacked pidfile.
-//
-// The OS surface (pid read, remove, kill, /proc verify, sleep) is injected via
-// serveCtl so the stale / alive / not-ours / term-then-kill paths are all
-// unit-testable WITHOUT real processes (mirroring how reset.go injects resetFS).
 
 package service
 
@@ -19,7 +12,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"pix/host/cli"
-	"pix/host/hostenv"
 	"pix/host/rpc"
 	"pix/host/sys"
 	"strconv"
@@ -58,12 +50,6 @@ func DefaultCtl() serveCtl {
 }
 
 // verifyServeProc reports whether pid is OUR `pix-host serve` process.
-// Linux: read /proc/<pid>/cmdline (authoritative). Elsewhere (darwin/BSD, no
-// /proc): fall back to `ps -o command= -p <pid>`. known=false means the check is
-// unavailable (no /proc AND no usable ps) so ownership CANNOT be positively
-// verified — the caller must REFUSE to signal rather than trust the pidfile.
-// ours=false with known=true means the pid is ALIVE but clearly NOT our process
-// (a recycled/hijacked pid) — the caller must also REFUSE to kill it.
 func verifyServeProc(pid int) (ours bool, known bool) {
 	if b, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid)); err == nil {
 		// cmdline is a NUL-separated argv (with a trailing NUL).
@@ -80,18 +66,6 @@ func verifyServeProc(pid int) (ours bool, known bool) {
 // verifyServeProcPS is the darwin/BSD verify path: it asks `ps` for the target
 // pid's identity and matches it. run is injected so it is unit-testable without
 // a real process. A ps failure (absent, or the pid already gone) yields
-// known=false: ownership cannot be positively verified, so the caller REFUSES to
-// signal rather than trust the pidfile it wrote.
-//
-// Round 2 (H8, space-safe): the original single `ps -o command=` call then
-// strings.Fields(line) SPLIT the executable path on every space in it — a
-// binary at e.g. "/Users/alice/My Projects/pix-host" parsed argv[0] as
-// just "/Users/alice/My", so cmdlineIsServe's basename check always failed for
-// any path containing a space and verification broke (stop/status/install
-// guard all rely on it). `comm=` returns ONE field — the executable path alone,
-// no argv — so its basename is space-safe with no splitting at all; a separate
-// `args=` call is only ever scanned for a standalone "serve" token, which is
-// unaffected by spaces elsewhere in the line.
 func verifyServeProcPS(pid int, run func(name string, args ...string) (string, error)) (ours bool, known bool) {
 	commOut, err := run("ps", "-o", "comm=", "-p", strconv.Itoa(pid))
 	if err != nil {
@@ -113,17 +87,6 @@ func verifyServeProcPS(pid int, run func(name string, args ...string) (string, e
 		return false, false
 	}
 	// Scan for the standalone "serve" token ONLY in the arguments AFTER argv[0].
-	// argv[0] in `args=` is the executable path, which `comm=` already gave us
-	// EXACTLY (both are the full path, space-safe), so we strip it as a literal
-	// prefix. This is immune to a path that both contains spaces AND repeats our
-	// basename or a "serve" component
-	// ("/opt/pix-host/x/pix-host serve/pix-host status") — the old
-	// basename-search approaches all mis-located argv[0]'s end in that case and
-	// leaked a path "serve" into the token scan (a false positive that could
-	// signal the wrong process). Fallback (comm != argv[0], e.g. a symlinked
-	// launch, which our own spawns never produce): the basename occurrence that
-	// ENDS argv[0] (followed by whitespace or EOL); conservative, and this branch
-	// is only reached when the exact-prefix strip fails.
 	var rest string
 	if strings.HasPrefix(line, exe) {
 		rest = line[len(exe):]
@@ -156,9 +119,6 @@ func cmdlineIsServe(argv []string) bool {
 // Stop is the SAFE replacement for `pkill -f 'pix-host serve'`. It
 // returns stopped=true only when it signalled a live, verified-ours process and
 // confirmed it exited. Every "not running" / stale / not-ours case returns
-// stopped=false with a nil error and an explanatory line on out. A hard error
-// (e.g. an unreadable pidfile that is NOT ENOENT) is returned so a caller can
-// distinguish it.
 func Stop(ctl serveCtl, out io.Writer) (stopped bool, err error) {
 	path := ctl.pidPath()
 
@@ -168,8 +128,6 @@ func Stop(ctl serveCtl, out io.Writer) (stopped bool, err error) {
 			// No pidfile. This is the common orphan case after `pix reset`
 			// (which moves the config dir — pidfile included — aside while a daemon
 			// keeps running). Fall back to discovery: find any live process that we
-			// can POSITIVELY verify is our `pix-host serve` and stop it. Still
-			// never a blind pkill — each candidate is verified before signalling.
 			return stopServeByDiscovery(ctl, out)
 		}
 		return false, fmt.Errorf("read pidfile %s: %w", path, rerr)
@@ -210,9 +168,6 @@ func Stop(ctl serveCtl, out io.Writer) (stopped bool, err error) {
 // stopServeByDiscovery handles the missing-pidfile case: it asks ctl.discover
 // for candidate pids, keeps only those it can POSITIVELY verify are our
 // `pix-host serve` (alive + verified-ours), and stops each. This recovers
-// an orphaned daemon (classically: `pix reset` moved the config dir, and
-// the pidfile with it, out from under a still-running serve) without ever
-// resorting to a blind `pkill`. No verified process => the honest "not running".
 func stopServeByDiscovery(ctl serveCtl, out io.Writer) (bool, error) {
 	if ctl.discover == nil {
 		fmt.Fprintln(out, "serve not running (no pidfile)")
@@ -256,7 +211,6 @@ func stopServeByDiscovery(ctl serveCtl, out io.Writer) (bool, error) {
 // signalServeToExit runs the SIGTERM -> poll -> re-verify -> SIGKILL escalation
 // against an already-verified-alive-and-ours pid, returning stopped=true only
 // once the process is confirmed gone. path (may be "") only feeds the refusal
-// hint; pidfile removal is the caller's job (discovery has none to remove).
 func signalServeToExit(ctl serveCtl, pid int, path string, out io.Writer) (bool, error) {
 	if err := ctl.kill(pid, syscall.SIGTERM); err != nil {
 		return false, fmt.Errorf("SIGTERM pid %d: %w", pid, err)
@@ -298,11 +252,6 @@ func clearServeLazyMarker(ctl serveCtl) {
 
 // serveOwnershipRefused re-checks (via ctl.verify) that pid is still our serve
 // process right before a signal, printing + returning true when we must REFUSE.
-// `when` is a short phase label folded into the message. We REFUSE in BOTH
-// unsafe cases: the pid is alive but verified NOT ours (known && !ours), AND when
-// ownership cannot be positively verified at all (!known: no /proc and ps is
-// missing/errored). Signalling an UNVERIFIABLE pid would SIGTERM/SIGKILL a
-// stale/reused pid from the pidfile — so we never trust the pidfile alone.
 func serveOwnershipRefused(ctl serveCtl, pid int, path, when string, out io.Writer) bool {
 	ours, known := ctl.verify(pid)
 	rmHint, certainHint := "", ""
@@ -346,11 +295,17 @@ type serveState struct {
 	MemoryPort int    `json:"memory_port"`
 }
 
+// portProbe is what the status/upgrade paths actually touch: one environment
+// variable and one local port. Taking this instead of a whole-world bundle is
+// the signature saying so — and it is what a test has to supply.
+type portProbe interface {
+	sys.Getenver
+	sys.Net
+}
+
 // Port resolves a service port honoring the MEMORY_PORT env override `serve`
 // itself reads, preferring the injected env.Getenv (so tests stay hermetic)
 // and falling back to the process environment.
-// Port takes sys.Getenver, not the whole world: it reads one variable.
-// The signature is now the documentation.
 func Port(env sys.Getenver, name string, def int) int {
 	if v := strings.TrimSpace(env.Getenv(name)); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -362,7 +317,7 @@ func Port(env sys.Getenver, name string, def int) int {
 
 // resolveServeStatus reads the pidfile + probes the process and the service ports
 // WITHOUT signalling anything. Split from the printer so it is unit-testable.
-func resolveServeStatus(ctl serveCtl, env hostenv.Env) serveState {
+func resolveServeStatus(ctl serveCtl, env portProbe) serveState {
 	var st serveState
 	path := ctl.pidPath()
 	if raw, err := ctl.readPid(path); err == nil {
@@ -411,11 +366,6 @@ func printServeStatus(st serveState, out io.Writer, jsonOut bool) {
 }
 
 // StopAnyMode stops the serve daemon in whatever lifecycle mode it is in.
-// A MANAGED service (launchd KeepAlive) MUST be stopped via
-// its supervisor — a bare SIGTERM to the pid is respawned within a second — so
-// managed is handled FIRST via StopManaged. Lazy/foreground/down all fall
-// through to the pidfile-based (and discovery-fallback) Stop. Injectable
-// deps mirror the rest of this file so it stays unit-testable.
 func StopAnyMode(managedActive func() bool, stopManaged func(io.Writer) error, ctl serveCtl, out io.Writer) (bool, error) {
 	if managedActive() {
 		if err := stopManaged(out); err != nil {
@@ -436,6 +386,6 @@ func StopService(out io.Writer) error {
 
 // ReportStatus prints whether serve is running and whether its ports are up.
 func ReportStatus(out io.Writer, jsonOut bool) error {
-	printServeStatus(resolveServeStatus(DefaultCtl(), hostenv.Env{System: sys.Real{}}), out, jsonOut)
+	printServeStatus(resolveServeStatus(DefaultCtl(), sys.Real{}), out, jsonOut)
 	return nil
 }

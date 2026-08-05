@@ -3,11 +3,6 @@
 // serve_install_other.go is the ONE non-darwin compile stub: pix's managed
 // login service is launchd-only (macOS host), but `services/host` must still
 // `go build`/`go test` under GOOS=linux — that's the toolchain the Linux
-// sandbox dev image bakes so a checkout can be hacked on from inside a
-// running sandbox. So this file carries NO lifecycle behavior of its own: it
-// only satisfies the platformServeInstall/Uninstall + ManagedActive +
-// restart/stop symbols the rest of the package calls, all degrading to
-// ErrUnsupportedHost.
 
 package service
 

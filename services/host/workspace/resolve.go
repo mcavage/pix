@@ -3,31 +3,6 @@ package workspace
 // workspaceresolve.go — the hardened Workspace->sandbox resolver. A sandbox
 // created with a CUSTOM name (`pix run --name pix-demo`) breaks the
 // old assumption that a Workspace's sandbox is always
-// `pix-<basename>` (DeriveSandboxName). The create receipt
-// (sandboxmcpstate.go) now records the canonical Workspace it was created
-// for, so verbs that only know a DIR (`pix mcp load NAME [DIR]`, doctor's
-// Workspace sandbox context) can find the box pix itself created for it.
-//
-// TRUST POSTURE (same class as the receipt reads): the resolver only ever
-// TARGETS a sandbox it can positively justify —
-//
-//   - exactly ONE trustworthy receipt maps the canonical Workspace -> that
-//     sandbox (SandboxMapped);
-//   - the scan completed cleanly and NO receipt maps it -> the derived
-//     default name (SandboxDefault: an old sandbox predating the
-//     Workspace field, or none yet);
-//   - MORE than one trustworthy receipt claims the Workspace ->
-//     SandboxAmbiguous, no target (never pick one arbitrarily);
-//   - any receipt in the store is untrustworthy (corrupt, wrong schema,
-//     identity mismatch, unreadable, a symlinked or invalid directory) ->
-//     WorkspaceSandboxUntrusted, no target: an unreadable receipt could be
-//     the very mapping being asked about, so "no mapping found" is not a
-//     positive conclusion. Mutating callers (`mcp load`) MUST refuse;
-//     read-only callers (doctor) may fall back to the derived name for
-//     REPORTING, where the box's own receipt state still governs rendering.
-//
-// The resolver never creates anything and never follows a symlinked receipt
-// (ReadMCPReceiptFile's own hardening applies per entry).
 
 import (
 	"fmt"
@@ -84,8 +59,6 @@ type workspaceSandboxResolution struct {
 // CanonicalPath resolves workspace to ONE canonical absolute form — the form
 // the create receipt records and every resolver comparison uses, so `run .`,
 // `run ./proj/../proj`, and a later `mcp load NAME /abs/proj` all agree.
-// Symlinks are resolved when the path exists (macOS /tmp vs /private/tmp);
-// a nonexistent path degrades to the cleaned absolute spelling.
 func CanonicalPath(ws string) string {
 	abs, err := filepath.Abs(ws)
 	if err != nil {
@@ -167,7 +140,6 @@ func ResolveSandbox(stateDir, ws string) workspaceSandboxResolution {
 // DeriveSandboxName is the default sandbox name for a Workspace: "pix-" plus
 // the directory's base name. It lived in run.go, which is where it was called
 // from, but naming a Workspace is this package's job — run.go was reaching down
-// into Workspace semantics it does not own.
 func DeriveSandboxName(ws string) string {
 	abs, err := filepath.Abs(ws)
 	if err != nil {

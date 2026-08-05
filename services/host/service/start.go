@@ -1,21 +1,6 @@
 // serve_start.go implements LAZY AUTO-START of the host services daemon
 // (docs/design/serve-lifecycle.md §1): the first `pix run` / `pix
 // memory …` spins up a detached `pix-host
-// serve` if the configured service ports are down — the Ollama-CLI model
-// (`ollama run` starts `ollama serve`), so nobody babysits a foreground serve.
-//
-// Backdoor-shape note (AGENTS.md HOST convention): the spawn trigger here is a
-// USER-invoked CLI command run in the user's own login session, spawning the
-// user's OWN already-installed `pix-host serve`. There is no network input
-// in the trigger path — nothing listening on a socket decides to spawn. What
-// AGENTS.md prohibits is a *listening* process that forks on a received
-// request; this is a foreground CLI forking a sibling binary. Different shape.
-//
-// Every OS boundary (spawn, dial, flock, clock) is injected via serveStarter so
-// the whole flow is unit-testable with NO real process spawn. The real
-// detached-spawn + flock shims live in serve_start_unix.go (//go:build unix) —
-// pix's host lifecycle is unix-only (macOS host, plus Linux for sandbox dev
-// builds); there is no Windows degrade to maintain.
 
 package service
 
@@ -24,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"pix/host/hostenv"
 	"pix/host/launcher"
 	"pix/host/rpc"
 	"pix/host/sys"
@@ -42,7 +26,6 @@ const autoserveEnvVar = "PIX_NO_AUTOSERVE"
 // EnsureTimeout is the default health-wait budget: memory opens a sqlite
 // store under an advisory flock at startup, so a cold start can take a few
 // seconds; 15s avoids false failures while a truly broken start (port
-// permanently in use) still fails fast.
 const EnsureTimeout = 15 * time.Second
 
 // EnsureRunTimeout is the SHORTER budget `pix run` uses: a sandbox
@@ -57,11 +40,6 @@ const serveSpawnLockRetry = 100 * time.Millisecond
 // serveChildHandle is what spawn returns for the just-launched child: enough
 // to record its pid, and — ONLY if recordPid then fails — to kill and reap it
 // before the spawn lock releases (round 3, H10). release() detaches the
-// launcher from the child (the unix impl's Process.Release, deferred until
-// AFTER recordPid succeeds — a released process can no longer be Wait()ed, so
-// releasing early was exactly what let a recordPid failure leak a zombie /
-// leave an unkillable-by-Wait child on a failed kill). kill()/wait() are only
-// ever called on the recordPid-failure path, before release() has run.
 type serveChildHandle struct {
 	pid     int
 	kill    func() error // SIGKILL the child; used ONLY when recordPid fails
@@ -78,24 +56,14 @@ type serveStarter struct {
 	// tryLock attempts the spawn lock WITHOUT blocking: (false, nil) means the
 	// lock is busy (another launcher is mid-spawn) — the caller retries under
 	// its own deadline, so a wedged lock-holder can never hang `pix run`
-	// past the health budget (M2).
 	tryLock func(fn func() error) (acquired bool, err error)
 	// recordPid writes the freshly-spawned child pid to the serve pidfile
 	// BEFORE the spawn lock is released, closing the cold-init double-spawn
 	// window (H3): the daemon itself writes serve.pid only after config load +
-	// store open + indexing, and a second caller acquiring the lock in that gap
-	// used to see no pidfile and fork a second daemon. The daemon later
-	// overwrites the file with the SAME pid. It RETURNS an error (round 2, H8):
-	// a discarded MkdirAll/WriteFile failure used to let the lock release as if
-	// the pid had landed, reopening the exact double-spawn window it exists to
-	// close. Ensure treats a non-nil error as a FAILED spawn — it kills the
-	// just-recorded child and returns the error instead of releasing the lock as
-	// success.
 	recordPid func(pid int) error
 	// markLazy writes the serve.lazy marker carrying the spawned PID, so mode
 	// detection only classifies a daemon as lazy when the marker pid MATCHES the
 	// live verified pidfile pid — a stale marker from a crash can never get a
-	// later foreground daemon killed by config propagation (H4).
 	markLazy func(pid int)
 	ctl      serveCtl                            // REUSE: verify an already-running pid is ours
 	sleep    func(d time.Duration)               // poll delay (injected)
@@ -132,8 +100,6 @@ func DefaultStarter() serveStarter {
 // recordSpawnedServePid is the launcher-side pidfile write (see
 // serveStarter.recordPid). It RETURNS an error (round 2, H8): a swallowed
 // MkdirAll/WriteFile failure used to let Ensure's spawn lock release as
-// if the pid had been recorded, reopening the H3 double-spawn window with no
-// backstop when memory is disabled (its own flock does not exist then).
 func recordSpawnedServePid(pid int) error {
 	path := config.ServePidPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -161,10 +127,6 @@ var errAutoserveDisabled = fmt.Errorf(
 // Ensure makes the required services reachable, auto-starting a detached
 // `pix-host serve` if needed. Returns nil when the required ports answer
 // (already up OR started-and-became-ready), or an error describing why it could
-// not (spawn failed / timed out / opted out and down). The WHOLE flow —
-// including spawn-lock acquisition — is bounded by one deadline, and it prints
-// its own user-facing progress/failure lines to st.stderr so callers can treat
-// the error as best-effort.
 func Ensure(st serveStarter, cfg *config.Config, opts EnsureOpts) error {
 	ports := requiredServePorts(st, cfg, opts.Services)
 	if len(ports) == 0 {
@@ -208,8 +170,6 @@ func Ensure(st serveStarter, cfg *config.Config, opts EnsureOpts) error {
 		// Idempotency via pidfile: a live, verified-ours `pix-host serve`
 		// means a start is already in progress (process up, port not bound yet) —
 		// wait for it instead of spawning a second one. Reuses serve_ctl's
-		// ownership check verbatim. The launcher's recordPid write below is what
-		// makes this catch a cold-init racer (H3).
 		if pid, ok := readLiveServePid(st.ctl); ok {
 			_ = pid
 			waiting = true
@@ -227,15 +187,6 @@ func Ensure(st serveStarter, cfg *config.Config, opts EnsureOpts) error {
 		// BOTH writes happen before the lock releases: a racer that acquires the
 		// lock next sees the pidfile (readLiveServePid above) and waits (H3), and
 		// the lazy marker carries the pid for stale-marker-proof detection (H4).
-		// recordPid failing must NOT release the lock as success (round 2, H8): a
-		// racer would then see no pidfile AND a still-alive unrecorded child, and
-		// spawn a second daemon. Round 3 (H10): the spawn seam holds off
-		// Process.Release() until recordPid succeeds, so on failure we can still
-		// Kill() AND Wait()/reap the child here — a released process can't be
-		// reaped, which used to leave a zombie (or, worse, an unverified survivor
-		// if the signal itself failed). A failed Kill() is NOT swallowed: it is
-		// folded into the returned error so the launch fails loudly instead of the
-		// lock releasing as if cleanup had succeeded.
 		if err := st.recordPid(handle.pid); err != nil {
 			if killErr := handle.kill(); killErr != nil {
 				return fmt.Errorf("spawned pix services (pid %d) but could not record its pidfile (%v), AND could not kill it to avoid a double-spawn race (%v) — a second daemon must not be started until pid %d is confirmed dead", handle.pid, err, killErr, handle.pid)
@@ -295,9 +246,6 @@ type servePortSpec struct {
 }
 
 // requiredServePorts resolves which service ports Ensure must see up:
-// the caller's requested subset (or the whole config set), intersected with the
-// ENABLED services — a disabled service is never required — mapped to ports via
-// the same MEMORY_PORT-aware resolution serve_ctl uses.
 func requiredServePorts(st serveStarter, cfg *config.Config, requested []string) []servePortSpec {
 	enabled := map[string]bool{}
 	for _, s := range cfg.Services {
@@ -333,7 +281,6 @@ func describeServePorts(ports []servePortSpec) string {
 // readLiveServePid reads the pidfile through ctl and reports (pid, true) only
 // for a live, VERIFIED-ours `pix-host serve` — the same refuse-unless-sure
 // posture as `serve stop` (an unverifiable pid is treated as not-running so we
-// rely on the daemon's own store flock as the correctness backstop).
 func readLiveServePid(ctl serveCtl) (int, bool) {
 	raw, err := ctl.readPid(ctl.pidPath())
 	if err != nil {
@@ -356,7 +303,6 @@ func readLiveServePid(ctl serveCtl) (int, bool) {
 // readServeLazyMarkerPid parses the pid out of the serve.lazy marker. ok=false
 // for a missing, unparseable, or legacy-format ("lazy\n") marker — mode
 // detection then treats the daemon as FOREGROUND, the conservative direction
-// (config propagation advises instead of killing).
 func readServeLazyMarkerPid() (pid int, ok bool) {
 	b, err := os.ReadFile(config.ServeLazyMarkerPath())
 	if err != nil {
@@ -372,10 +318,6 @@ func readServeLazyMarkerPid() (pid int, ok bool) {
 // tailFileLines returns the last n lines of a file ("" when unreadable/empty),
 // used to fold the daemon's own words into a health-wait timeout error. It
 // REFUSES to read through a symlink (H1). Round 2 (H8) closes a TOCTOU: the
-// original Lstat-then-ReadFile left a window where swapping the log for a
-// symlink AFTER the Lstat made it read+echo an arbitrary file. ReadFileNoSymlink
-// (serve_start_unix.go) opens with O_NOFOLLOW so the
-// open itself atomically refuses a symlink — there is no separate check to race.
 func tailFileLines(path string, n int) string {
 	b, err := ReadFileNoSymlink(path)
 	if err != nil {
@@ -391,13 +333,12 @@ func tailFileLines(path string, n int) string {
 // EnsureUp is the best-effort call-site helper `run` and `memory` use: load
 // the base config, run Ensure with the real ops, and swallow the error
 // (Ensure already told the user why on stderr) so the primary action proceeds
-// and degrades exactly as it did before lazy start.
 func EnsureUp(services []string, timeout time.Duration) {
 	cfg, err := config.Load()
 	if err != nil {
 		return // a broken config fails loudly in the primary action instead
 	}
-	if from, stale := staleServeVersion(cfg, hostenv.Env{System: sys.Real{}}, services, rpc.IdentityProbe); stale {
+	if from, stale := staleServeVersion(cfg, sys.Real{}, services, rpc.IdentityProbe); stale {
 		restartStaleServe(DefaultReloader(), from, launcher.Version, os.Stderr)
 	}
 	_ = Ensure(DefaultStarter(), cfg, EnsureOpts{Services: services, Timeout: timeout})
@@ -405,7 +346,7 @@ func EnsureUp(services []string, timeout time.Duration) {
 
 // staleServeVersion recognizes only a positively identified Pix service at a
 // different launcher.Version. Foreign/unresponsive port holders are never restarted.
-func staleServeVersion(cfg *config.Config, env hostenv.Env, requested []string, probe rpc.IdentityProber) (string, bool) {
+func staleServeVersion(cfg *config.Config, env portProbe, requested []string, probe rpc.IdentityProber) (string, bool) {
 	if cfg == nil || probe == nil {
 		return "", false
 	}
@@ -451,8 +392,6 @@ func restartStaleServe(rl serveReloader, from, to string, out io.Writer) {
 		// A previous launcher can leave a positively identified Pix daemon with
 		// neither a current pidfile nor a lazy/managed marker. mode() calls this
 		// "down", but the identity probe above proved the port holder is Pix.
-		// Reuse serve stop's ownership discovery rather than spawning a competing
-		// daemon; it still refuses to signal anything it cannot verify as ours.
 		stopped, err := rl.Stop(io.Discard)
 		if err != nil || !stopped {
 			fmt.Fprintf(out, "warning: could not safely stop pix services %s — run: pix serve stop && pix serve\n", from)

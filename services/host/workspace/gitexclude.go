@@ -12,7 +12,6 @@ import (
 // EnsureGitExclude keeps Pix's machine-local workspace state out of git
 // without changing the repository's tracked .gitignore. Git's per-repository
 // info/exclude file is the right scope: every repository Pix touches gets the
-// rule, while the optional .pix/knowledge pointer remains trackable.
 func EnsureGitExclude(workspace string) (bool, error) {
 	cmd := exec.Command("git", "-C", workspace, "rev-parse", "--git-path", "info/exclude")
 	out, err := cmd.Output()

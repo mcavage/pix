@@ -5,7 +5,6 @@ import "strings"
 // ShellQuote quotes s for safe copy-paste into a POSIX shell: a token made
 // only of clearly-safe characters passes through untouched; anything else is
 // single-quoted using the standard close-escape-reopen sequence for embedded
-// apostrophes, so a DIR like `my repo's` round-trips exactly.
 func ShellQuote(s string) string {
 	if s == "" {
 		return "''"

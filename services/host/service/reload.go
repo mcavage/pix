@@ -1,12 +1,6 @@
 // serve_reload.go implements CONFIG PROPAGATION (docs/design/serve-lifecycle.md
 // §3): after `pix config set/unset` writes a DAEMON-AFFECTING key, the
 // running `pix-host serve` is restarted per its lifecycle mode so the
-// change takes effect with no manual step. The daemon reads services /
-// memory_*_model at startup only, never live.
-//
-// Everything OS-shaped (launchctl/systemctl query + restart, stop, re-spawn) is
-// injected via serveReloader so every mode routes are unit-tested with no real
-// process.
 
 package service
 
@@ -20,7 +14,6 @@ import (
 // daemonAffectingKeys are the config keys the daemon reads at startup and never
 // re-reads: changing one requires a serve restart to take effect. Everything
 // else (gog_account, mcp, ollama_bridge_model, host.*, pack) is read by the
-// launcher or the gateway, NOT by serve — and must trigger NOTHING.
 var daemonAffectingKeys = map[string]bool{
 	"services":             true,
 	"memory_watcher_model": true,
@@ -73,12 +66,6 @@ func DefaultReloader() serveReloader {
 // detectServeMode resolves which lifecycle mode the daemon is in. Managed is
 // checked FIRST and is authoritative: a managed service also writes the pidfile
 // (it runs the same `pix-host serve`), so the pidfile alone cannot tell
-// managed from foreground. A pidfile that is live + verified-ours is lazy ONLY
-// when the serve.lazy marker exists AND carries that same pid (H4): a marker
-// left behind by a lazy spawn that crashed before its pidfile landed must not
-// misclassify a LATER foreground daemon as lazy — config propagation would
-// stop+restart a process the user is watching. A mismatched/legacy/absent
-// marker means foreground; everything without a live pid is down (self-heals).
 func detectServeMode(ctl serveCtl, managedActive func() bool, lazyPid func() (int, bool)) serveMode {
 	if managedActive() {
 		return serveManaged
@@ -95,7 +82,6 @@ func detectServeMode(ctl serveCtl, managedActive func() bool, lazyPid func() (in
 // PropagateConfig restarts (or advises about) the running daemon after a
 // daemon-affecting config write. Best-effort on every branch: the config file
 // is already saved and is the source of truth — a failed restart prints a
-// warning and the user restarts manually.
 func PropagateConfig(rl serveReloader, out io.Writer) {
 	switch rl.mode() {
 	case serveManaged:

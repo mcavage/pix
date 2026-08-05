@@ -11,8 +11,6 @@ import (
 // These tests are the regression guard for config-default PETRIFICATION: the
 // first `pix config set <anything>` used to freeze the then-current
 // defaults (applied in memory by Load/applyDefaults) into config.toml forever,
-// so a future default change (e.g. a new memory_watcher_model) never reached
-// users. Save must persist ONLY explicit deviations from defaults.
 
 // tempConfig points PIX_CONFIG at a fresh temp file and returns its path.
 func tempConfig(t *testing.T) string {
@@ -34,7 +32,6 @@ func rawFile(t *testing.T, path string) string {
 // (a) Setting an UNRELATED key must not petrify untouched defaults: after
 // `config set google_workspace_account x` the raw file contains google_workspace_account but NOT the
 // resolved memory_watcher_model / memory_embed_model / ollama_bridge_model /
-// services defaults.
 func TestSaveDoesNotPetrifyUntouchedDefaults(t *testing.T) {
 	path := tempConfig(t)
 

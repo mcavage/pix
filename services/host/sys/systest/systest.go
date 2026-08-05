@@ -1,18 +1,4 @@
 // Package systest is the ONE test double for sys.System.
-//
-// Its fields are nullable, and that is deliberate: this is the single place in
-// the tree where "not wired" is a legitimate state, because a test that does
-// not care about the filesystem should not have to fake one. What makes it safe
-// — and what the old shellEnv got wrong — is that absence here is LOUD. Calling
-// an unwired method returns an error naming the method, so a fixture gap
-// surfaces as a failing test with an actionable message instead of a zero value
-// that reads like a real answer.
-//
-// The three bugs in docs/design/rearchitecture.md were all fixture gaps that
-// looked like results: verification that never ran and reported "0 verified",
-// a setup path whose hard-error branch was unreachable because the probe was
-// nil. Under this type, each of those is a test failure that says
-// `systest.Fake: RunTimed is not wired`.
 package systest
 
 import (
@@ -27,11 +13,6 @@ import (
 
 // Fake is a sys.System whose behaviour a test declares field by field. Anything
 // left nil refuses when called.
-//
-// It is a struct of funcs rather than an interface-per-test because the shape a
-// test wants is "the real world, except X": listing the one seam that matters
-// beside a zero value for the rest is the readable form of that, and it is what
-// the 205 existing fixtures already say.
 type Fake struct {
 	LookPathFn            func(name string) (string, error)
 	RunFn                 func(name string, args ...string) (string, error)
@@ -57,12 +38,6 @@ type Fake struct {
 	// Base, when set, answers any method this fixture did not wire, instead of
 	// refusing. It is for the handful of tests that genuinely want "the real OS,
 	// except these two seams" — one writes real files to a temp dir and only
-	// needs LookPath and Getenv faked.
-	//
-	// It must be set EXPLICITLY. A default of sys.Real{} would silently turn
-	// every fixture gap into a real subprocess or a real file read, which is the
-	// failure this package exists to prevent; opting in names the intent at the
-	// call site.
 	Base sys.System
 
 	// Calls records every command Run/RunTimed/RunInteractive* was asked to
@@ -124,7 +99,6 @@ func (f *Fake) Run(name string, args ...string) (string, error) {
 // RunTimed falls back to Run when only Run is wired. This is the ONE
 // convenience fallback, and it is safe in a way the old `probeRun` was not: it
 // substitutes a wired seam for an unwired one, never silence for an answer. A
-// fixture with neither still refuses.
 func (f *Fake) RunTimed(name string, args ...string) (string, bool, error) {
 	if f.RunTimedFn == nil {
 		if f.RunFn == nil {
@@ -256,8 +230,6 @@ func (f *Fake) Getwd() (string, error) {
 // StateDir resolves for real when unwired, because it is an OVERRIDE seam
 // rather than a required one: production code always fell back to
 // config.StateDir(), and that resolver is driven by $XDG_STATE_HOME, which
-// tests already redirect. Refusing here would demand that every fixture wire a
-// seam whose real implementation is hermetic anyway.
 func (f *Fake) StateDir() (string, error) {
 	if f.StateDirFn == nil {
 		if f.Base != nil {
@@ -295,19 +267,9 @@ var _ sys.System = (*Fake)(nil)
 // Of asserts that s is a Fake and returns it, for fixtures that build a base
 // env and then override one seam. TEST-ONLY: it panics on a real System, which
 // is the right outcome for test-only code reached in production -- the
-// alternative is a silent no-op, and silent no-ops are what this refactor
-// exists to delete.
 func Of(s sys.System) *Fake { return s.(*Fake) }
 
 // --- lock observation ---------------------------------------------------
-//
-// LockRecorder is a sys.Lock double that records acquire/release events into a
-// shared log and reports a NESTED acquisition of the same path as a fatal --
-// which with the real flock (per-open-file-description) would block forever,
-// so it is exactly the deadlock a test suite must catch deterministically.
-//
-// It takes a Fatalf callback rather than a *testing.T so this package need not
-// import "testing"; callers pass t.Fatalf.
 type LockRecorder struct {
 	fatalf func(string, ...any)
 	mu     sync.Mutex

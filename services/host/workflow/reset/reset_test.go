@@ -12,10 +12,7 @@ import (
 
 	"pix/host/cli"
 	"pix/host/config"
-	"pix/host/hostenv"
-	"pix/host/hostenv/hostenvtest"
 	"pix/host/rpc"
-	"pix/host/sys/systest"
 )
 
 // fixedNow returns a stable timestamp so .bak suffixes are predictable in tests.
@@ -371,7 +368,7 @@ func TestExecuteReset_ServeUpAbortsDataMove(t *testing.T) {
 	p := tempPaths(t, root)
 	a := Plan(resetCfg(), p, Opts{})
 
-	env := hostenvtest.Env{Present: map[string]bool{}, Ports: map[int]bool{rpc.MemoryPortDefault: true}}.Build()
+	env := resetHost{ports: map[int]bool{rpc.MemoryPortDefault: true}}
 	var buf bytes.Buffer
 	_, err := executeReset(a, DefaultResetFS(), env, &buf, fixedNow)
 	if err == nil {
@@ -431,9 +428,6 @@ func TestExecuteReset_KeepMemoryCustomDBDir(t *testing.T) {
 // TestExecuteReset_KeepMemoryLooseDBInRoot: --keep-memory with MEMORY_DB pointing
 // at a db FILE sitting DIRECTLY inside the data root (memoryDir == dataRoot). The
 // sweep must preserve that db file + its -wal sidecar (never move them), while an
-// unrelated sibling file/dir IS moved aside. This is the data-loss regression: the
-// old sweep only matched an entry whose path == MemoryDir (== dataRoot), so it
-// preserved NOTHING and swept the db away while reporting it preserved.
 func TestExecuteReset_KeepMemoryLooseDBInRoot(t *testing.T) {
 	stubStopServe(t)
 	root := t.TempDir()
@@ -582,7 +576,6 @@ func TestExecuteReset_CustomDBOutsideRootMovesFileOnly(t *testing.T) {
 // TestExecuteReset_KeepMemoryCustomKnowledgeDBOutsideRoot: --keep-memory with a
 // custom KNOWLEDGE_DB pointing at a file OUTSIDE the data root moves ONLY that
 // db file (+ its -wal/-shm sidecars), NEVER the parent dir or an unrelated
-// sibling in it — while captured memory is still preserved in the same run.
 func TestExecuteReset_KeepMemoryCustomKnowledgeDBOutsideRoot(t *testing.T) {
 	stubStopServe(t)
 	root := t.TempDir()
@@ -673,30 +666,138 @@ func TestExecuteReset_KeepMemoryReadDirErrorSurfaces(t *testing.T) {
 	}
 }
 
-// noToolEnv is a hostenv.Env with no sbx on PATH, so the executor degrades (prints
-// commands) without touching the host. The serve-stop no longer probes PATH (it
-// is pidfile-based via service.Stop), so this env exercises the sbx path only.
-func noToolEnv() hostenv.Env {
-	return hostenvtest.Env{Present: map[string]bool{}, Output: map[string]string{}}.Build()
-}
+// noToolEnv is a host with no sbx on PATH, so the executor degrades (prints
+// commands) without touching the machine. The serve-stop no longer probes PATH
+// (it is pidfile-based via service.Stop), so this exercises the sbx path only.
+func noToolEnv() resetHost { return resetHost{} }
 
 // TestResolveResetPaths_RelativeMemoryDBAbsolute gates round-6: a relative
 // MEMORY_DB must be normalized to an absolute path at resolution so the
 // --keep-memory preserve set matches the sweep's absolute entries.
 func TestResolveResetPaths_RelativeMemoryDBAbsolute(t *testing.T) {
 	t.Chdir(t.TempDir())
-	env := hostenv.Env{System: &systest.Fake{HomeDirFn: func() string { return "/home/fake" }, GetenvFn: func(k string) string {
-		if k == "MEMORY_DB" {
-			return ".pix/custom-memory.db"
-		}
-		return ""
-	}}}
+	env := resetHost{home: "/home/fake", envVars: map[string]string{"MEMORY_DB": ".pix/custom-memory.db"}}
 	p := ResolveResetPaths(env)
 	if !filepath.IsAbs(p.memoryDB) {
 		t.Errorf("memoryDB = %q, want absolute", p.memoryDB)
 	}
 	if !filepath.IsAbs(p.MemoryDir) {
 		t.Errorf("memoryDir = %q, want absolute", p.MemoryDir)
+	}
+}
+
+// TestResolveResetPaths_DerivesFromInjectedEnvNotRealProcessEnv is the pure,
+// no-filesystem half of the U11h safety gate: ResolveResetPaths must resolve
+// ConfigDir/RuntimeFiles from the INJECTED sys.System, never by reaching past
+// it into the real process environment (config.Path()/config.StateDir() read
+// os.Getenv/os.UserHomeDir directly). This sets the REAL $HOME (via t.Setenv)
+// to a canary tree and asserts the resolved paths land under the completely
+// different injected host's home instead — proving the real env never leaks
+// through. Fails before the fix (ConfigDir would resolve under realHome).
+func TestResolveResetPaths_DerivesFromInjectedEnvNotRealProcessEnv(t *testing.T) {
+	realHome := t.TempDir()
+	t.Setenv("HOME", realHome)
+	t.Setenv("PIX_CONFIG", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("XDG_STATE_HOME", "")
+	t.Setenv("XDG_DATA_HOME", "")
+
+	injectedHome := t.TempDir()
+	env := resetHost{home: injectedHome}
+	p := ResolveResetPaths(env)
+
+	wantConfigDir := filepath.Join(injectedHome, ".config", "pix")
+	if p.ConfigDir != wantConfigDir {
+		t.Errorf("ConfigDir = %q, want %q (derived from the injected host)", p.ConfigDir, wantConfigDir)
+	}
+	if strings.HasPrefix(p.ConfigDir, realHome) {
+		t.Errorf("ConfigDir leaked the REAL process $HOME: %q", p.ConfigDir)
+	}
+	for _, rf := range p.RuntimeFiles {
+		if strings.HasPrefix(rf, realHome) {
+			t.Errorf("runtime file %q resolved under the REAL process $HOME, not the injected host", rf)
+		}
+		if !strings.HasPrefix(rf, injectedHome) {
+			t.Errorf("runtime file %q did not resolve under the injected host %q", rf, injectedHome)
+		}
+	}
+}
+
+// TestResolveResetPaths_RealHomeCanarySurvivesReset is the full end-to-end
+// U11h safety gate: it plants a canary config.toml at the path the REAL
+// $HOME/$XDG_* env resolves to (simulating the operator's actual machine),
+// injects a totally different temp-dir host, runs a real (--yes, real
+// filesystem) reset against the paths ResolveResetPaths resolves for that
+// injected host, and proves the REAL canary is never touched — only the
+// injected tree moves aside. Before the fix, ResolveResetPaths.ConfigDir came
+// from config.Path() (real os.Getenv/os.UserHomeDir), so this test would
+// resolve the REAL canary directory and executeReset would move it aside;
+// this test fails loudly in that world (the canary vanishes/gets a .bak).
+func TestResolveResetPaths_RealHomeCanarySurvivesReset(t *testing.T) {
+	stubStopServe(t)
+
+	// The "real machine": every OS-level env var the OLD code path read
+	// directly (config.Path()/config.StateDir()) now points at a canary tree.
+	realHome := t.TempDir()
+	t.Setenv("HOME", realHome)
+	t.Setenv("PIX_CONFIG", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("XDG_STATE_HOME", "")
+	t.Setenv("XDG_DATA_HOME", "")
+
+	realConfigDir := filepath.Join(realHome, ".config", "pix")
+	if err := os.MkdirAll(realConfigDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	canaryPath := filepath.Join(realConfigDir, "config.toml")
+	writeFile(t, canaryPath, "REAL-CANARY-DO-NOT-TOUCH")
+
+	realStatePid := filepath.Join(realHome, ".local", "state", "pix", "serve.pid")
+	if err := os.MkdirAll(filepath.Dir(realStatePid), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, realStatePid, "REAL-PID-DO-NOT-TOUCH")
+
+	// The INJECTED host: a completely different temp tree — the only one
+	// reset is allowed to touch.
+	injectedHome := t.TempDir()
+	env := resetHost{home: injectedHome}
+
+	p := ResolveResetPaths(env)
+	if err := os.MkdirAll(p.ConfigDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	injectedCanary := filepath.Join(p.ConfigDir, "config.toml")
+	writeFile(t, injectedCanary, "injected")
+
+	a := Plan(resetCfg(), p, Opts{})
+
+	var buf bytes.Buffer
+	if _, err := executeReset(a, DefaultResetFS(), env, &buf, fixedNow); err != nil {
+		t.Fatalf("executeReset: %v", err)
+	}
+
+	// The injected config dir WAS moved aside (proves reset actually ran).
+	if exists(p.ConfigDir) {
+		t.Error("the injected config dir should have been moved aside")
+	}
+	if !exists(p.ConfigDir + ".bak-" + fixedTS) {
+		t.Error("expected a .bak sibling for the injected config dir")
+	}
+
+	// The REAL canary is UNTOUCHED: present, unmoved, unmodified, no .bak sibling.
+	data, err := os.ReadFile(canaryPath)
+	if err != nil {
+		t.Fatalf("real canary config.toml was removed/moved: %v", err)
+	}
+	if string(data) != "REAL-CANARY-DO-NOT-TOUCH" {
+		t.Error("real canary config.toml content changed")
+	}
+	if exists(realConfigDir + ".bak-" + fixedTS) {
+		t.Fatal("reset moved the REAL config dir aside — it must only touch the injected path")
+	}
+	if data, err := os.ReadFile(realStatePid); err != nil || string(data) != "REAL-PID-DO-NOT-TOUCH" {
+		t.Fatalf("real serve.pid canary was touched: data=%q err=%v", data, err)
 	}
 }
 
@@ -727,15 +828,8 @@ func TestExecuteReset_ClearsRuntimeFilesAndRestarts(t *testing.T) {
 
 	// dial returns true exactly once: wasUp probe sees it up, the post-stop guard
 	// sees it down (so the data move isn't blocked and restart runs).
-	firstDial := true
-	env := noToolEnv()
-	systest.Of(env.System).DialLocalFn = func(int) bool {
-		if firstDial {
-			firstDial = false
-			return true
-		}
-		return false
-	}
+	probed := false
+	env := dialUpThenDownHost{probed: &probed}
 
 	a := Actions{RuntimeFiles: []string{pid, lock}}
 	var buf bytes.Buffer
