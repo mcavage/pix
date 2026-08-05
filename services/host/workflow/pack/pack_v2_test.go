@@ -308,9 +308,7 @@ func mustWritePack(t *testing.T, root string, m Manifest) {
 // user-added MCP present before any pack use survives every switch (§7 fitness
 // function #6).
 func TestPackUse_ReversibleSwitch(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	dir := isolatePackHost(t)
 
 	rootA := filepath.Join(dir, "a")
 	rootB := filepath.Join(dir, "b")
@@ -390,9 +388,7 @@ func stringSlicesEqualUnordered(a, b []string) bool {
 // TestPackUse_AlwaysPrintsRecreateLine covers §7 fitness function #7: `pack
 // use` always emits the recreate instruction.
 func TestPackUse_AlwaysPrintsRecreateLine(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	dir := isolatePackHost(t)
 	root := filepath.Join(dir, "p")
 	mustWritePack(t, root, Manifest{Name: "p", Schema: 1})
 

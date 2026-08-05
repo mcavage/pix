@@ -54,8 +54,8 @@ func TestPersistPackStackComposesAllFacetsAndKeepsPerPackOwnership(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if store.Activation != nil || len(store.Activations) != 2 {
-		t.Fatalf("activation ledger = single:%+v stack:%+v", store.Activation, store.Activations)
+	if len(store.Activations) != 2 {
+		t.Fatalf("activation ledger = %+v", store.Activations)
 	}
 	if store.Activations[0].PriorGogAccount != "manual@example.com" ||
 		store.Activations[1].PriorGogAccount != "first@example.com" {

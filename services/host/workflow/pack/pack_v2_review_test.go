@@ -28,9 +28,7 @@ import (
 // claim it as this activation's contribution — otherwise switching away would
 // remove the user's own pre-existing entry.
 func TestPackUse_LockOnlyRecordsWhatThisActivationAdded(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	dir := isolatePackHost(t)
 
 	// The user already has config.GWServerName configured, BEFORE any pack use.
 	cfg, err := config.Load()
@@ -100,9 +98,7 @@ func TestReadPackLock_CorruptFileReturnsSafeDefault(t *testing.T) {
 // declare it must restore whatever cfg held before (not leak the value across
 // packs, and not just leave it stuck).
 func TestPackUse_RestoresGogAccountToPriorValueOnSwitchAway(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	dir := isolatePackHost(t)
 
 	// A manual value set before any pack was ever active.
 	cfg, err := config.Load()
@@ -138,9 +134,7 @@ func TestPackUse_RestoresGogAccountToPriorValueOnSwitchAway(t *testing.T) {
 // the active pack's mcp + gog_account contributions, not just clear cfg.Pack —
 // otherwise "detached" is a lie about what happened.
 func TestPackRm_RemovesActivePackContributions(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	dir := isolatePackHost(t)
 
 	root := filepath.Join(dir, "work")
 	mustWritePack(t, root, Manifest{

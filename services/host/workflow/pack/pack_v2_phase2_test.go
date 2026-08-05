@@ -357,9 +357,7 @@ func TestPackUse_Tier1NonTTYFailsClosed(t *testing.T) {
 // with NO prompt and NO BoM screen — unchanged Phase-1 behavior, in-process
 // (a misfiring gate would os.Exit(1) and fail the whole test binary).
 func TestPackUse_Tier0StillSilent(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	dir := isolatePackHost(t)
 	root := filepath.Join(dir, "pack")
 	mustWritePack(t, root, Manifest{Name: "personal", Schema: 1,
 		Proxies: []PackProxy{{Name: "warehouse"}}}) // sandbox-only proxy: Tier-0
@@ -386,9 +384,7 @@ func TestPackUse_Tier0StillSilent(t *testing.T) {
 // granted at adoption, no re-prompt). The mcp is pinned LOCAL so the pack is
 // Tier-1 (round-2 C: a remote reference would not gate at all).
 func TestPackUse_AcceptanceSticksAcrossReactivation(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	dir := isolatePackHost(t)
 	pinLocalMCP(t, "fastmail")
 	root := filepath.Join(dir, "pack")
 	mustWritePack(t, root, Manifest{Name: "work", Schema: 1,

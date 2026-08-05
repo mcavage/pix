@@ -20,9 +20,7 @@ import (
 // isolateTrustState points the trust store + lock at temp dirs.
 func isolateTrustState(t *testing.T) {
 	t.Helper()
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	isolatePackHost(t)
 }
 
 func viewEnv() hostenv.Env {

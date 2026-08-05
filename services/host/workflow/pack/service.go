@@ -1,35 +1,28 @@
-// service.go — U08a: the trusted pack [[services]] UnitSpec (PRD AC-PACK-02,
-// AC-SUP-05, Story 08).
+// service.go — the trusted pack [[services]] UnitSpec.
 //
 // [[services]] is the SOLE way any pack may declare a long-running external
-// service unit for the host supervisor. AC-SUP-05: external units are
-// pack-trust-admitted [[services]] only — never a hand-edited `plugins.*`
-// config block, never any other manifest facet.
-//
-// THIS BUILD IS DECLARATION-ONLY. The struct parses, normalizes, validates
-// fail-closed at LoadPack, enters the Tier-1 bill-of-materials (consent
-// screen) and the host-exec fingerprint — but NOTHING launches one. Supervisor
-// consumption (staging-copy, hash-verify, exec, health) is a later story; it
-// must consume ONLY a service that passed this gate.
+// service unit for the host supervisor — never a hand-edited `plugins.*` config
+// block, never any other manifest facet. This file is declaration + validation
+// only: the struct parses, normalizes, validates fail-closed at LoadPack, and
+// enters the Tier-1 bill-of-materials and the host-exec fingerprint. Nothing
+// here launches anything; a supervisor may consume ONLY a gate-passed service
+// (see unitview.go).
 //
 // Security posture (the trust boundary is the pack author → this host):
 //   - runtime is a closed set: "go-plugin" (a repo-relative executable,
-//     SHA-pinned like [[bin]]) or "container" (declared for the future
-//     container path; the image must be digest-pinned). Anything else is
-//     rejected — the typed schema is the allowlist.
+//     SHA-pinned like [[bin]]) or "container" (digest-pinned image, declared for
+//     the future container path). The typed schema is the allowlist.
 //   - env carries REFERENCE NAMES only. A value-shaped entry ("FOO=bar", an
-//     op:// ref, a pasted token) is refused at load: secret VALUES never live
-//     in a pack manifest, and the allowlist of names is exactly what the
-//     consent screen shows and the fingerprint pins (AC-SUP-05's explicit env
-//     allowlist starts here).
-//   - listeners are loopback-only and the reserved pix-host ports (11435
-//     memory, 11437 pix monitor) can never be claimed, so a pack service
-//     can neither expose the LAN nor squat a built-in unit's front door.
-//   - mounts are repo-relative (a pack cannot claim /etc or ~/.ssh), network
-//     is bare egress hostnames, and license/source (SPDX + https URL) are
-//     required so the BoM screen can attribute what the user is about to run.
-//   - EVERY field is fingerprinted (fpService in trust.go): any change to any
-//     field re-gates through the Tier-1 acceptance store.
+//     op:// ref, a pasted token) is refused at load: secret VALUES never live in
+//     a pack manifest, and the allowlist of names is exactly what the consent
+//     screen shows and the fingerprint pins.
+//   - listeners are loopback-only and the reserved pix-host ports can never be
+//     claimed, so a pack service can neither expose the LAN nor squat a built-in
+//     unit's front door.
+//   - mounts are repo-relative (a pack cannot claim /etc or ~/.ssh), network is
+//     bare egress hostnames, and license/source (SPDX + https URL) are required
+//     so the BoM screen can attribute what the user is about to run.
+//   - EVERY field is fingerprinted: any change re-gates through acceptance.
 package pack
 
 import (
@@ -40,32 +33,23 @@ import (
 )
 
 // serviceRuntimeContainer is the one runtime value another file needs to name
-// (trust.go renders container identity differently in the BoM). Everything
-// else in the vocabulary is data on serviceRules.
+// (trust.go renders container identity differently in the BoM).
 const serviceRuntimeContainer = "container"
 
 // serviceRules is the whole [[services]] vocabulary: the closed sets, the
 // reserved names/ports, and the value shapes. ONE immutable package value
-// rather than a package-level name per rule — they are only ever read
-// together, by validatePackServices.
+// rather than a name per rule — they are only ever read together.
 //
 //   - runtimes: go-plugin, plus container accepted as a DECLARATION (identity
-//     validated, consented, fingerprinted) but the future path; no runtime
-//     consumes either yet.
+//     validated, consented, fingerprinted) with no consumer yet.
 //   - activations: start with serve ("always") or on first use ("on-demand").
-//   - reservedPorts are pix-host's own front doors: a pack service that
-//     "collides" with one would either fail to bind or — worse — win the race
-//     and impersonate a built-in unit to every sandbox client. (The built-in
-//     knowledge service, once :11436, was retired — W2 U03A — its slot NAME
-//     stays reserved below for a future pack service, but its port is not.)
-//   - reservedNames are the built-in supervisor slots. A pack service shadowing
-//     one would make `serve status` and the consent screen ambiguous about
-//     WHOSE code runs under that name.
-//   - envName is what an env REFERENCE NAME may look like; anything else (an
-//     '=' assignment, an op:// ref, whitespace, a pasted token) is value-shaped
-//     and refused. spdx covers SPDX identifiers and expressions. shaHex is a
-//     full sha256 hex digest. networkHost is a bare egress hostname
-//     (optionally wildcarded or port-qualified) — never a URL, never a path.
+//   - reservedPorts are pix-host's own front doors: a colliding pack service
+//     would either fail to bind or win the race and impersonate a built-in unit.
+//   - reservedNames are the built-in supervisor slots; shadowing one would make
+//     `serve status` and the consent screen ambiguous about WHOSE code runs.
+//   - envName is what an env REFERENCE NAME may look like; anything else is
+//     value-shaped and refused. spdx covers SPDX identifiers and expressions,
+//     shaHex a full sha256 digest, networkHost a bare egress hostname.
 var serviceRules = struct {
 	runtimes      map[string]bool
 	activations   map[string]bool
@@ -97,17 +81,14 @@ var serviceRules = struct {
 
 // packService is one [[services]] entry: a normalized long-running service
 // declaration. All fields are part of the Tier-1 host-exec fingerprint.
-// Unexported: nothing outside this package reads a service yet — the
-// supervisor story that consumes gate-passed specs is what earns the exported
-// surface, and it does not exist.
+// Unexported — unitview.go's accepted view is the only way out of this package.
 type packService struct {
 	Name       string `toml:"name"`
 	Runtime    string `toml:"runtime"`    // serviceRules.runtimes (closed set)
 	Activation string `toml:"activation"` // serviceRules.activations (closed set)
-	// go-plugin identity: repo-relative executable + pinned sha256 of its
-	// bytes (verified at staging/launch by the future consumer, exactly like
-	// [[bin]]). The file need not exist at declaration time — the pin is the
-	// identity.
+	// go-plugin identity: repo-relative executable + pinned sha256 of its bytes
+	// (verified at staging/launch, exactly like [[bin]]). The file need not exist
+	// at declaration time — the pin is the identity.
 	Path string `toml:"path,omitempty"`
 	SHA  string `toml:"sha,omitempty"`
 	// container identity: a digest-pinned OCI image ref (future runtime).
@@ -200,9 +181,8 @@ func serviceListenIsLoopback(listen string) bool {
 }
 
 // validatePackServices hardens the [[services]] facet at load time — the same
-// fail-closed posture as the rest of validatePackFacets. Every rejection here
-// is a declaration that must never reach the BoM, the fingerprint, or (later)
-// an exec path.
+// fail-closed posture as the rest of validatePackFacets. Every rejection here is
+// a declaration that must never reach the BoM, the fingerprint, or an exec path.
 func validatePackServices(root string, m *Manifest) error {
 	seen := map[string]bool{}
 	for i := range m.Services {

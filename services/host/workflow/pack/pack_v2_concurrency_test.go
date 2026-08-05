@@ -128,9 +128,7 @@ func auditHostWrapperInvariant(stop <-chan struct{}) (<-chan string, *sync.WaitG
 // rest the live dir must EXACTLY match the store's attribution — never one
 // pack's wrappers under the other's attribution.
 func TestRefreshHostPackWrappers_ConcurrentRefreshesNoOrphan(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	dir := isolatePackHost(t)
 	pinLocalMCP(t)
 	rootA := phase2HostPack(t, dir, "a", "a-tool")
 	rootB := phase2HostPack(t, dir, "b", "b-tool")
@@ -191,9 +189,7 @@ func TestRefreshHostPackWrappers_ConcurrentRefreshesNoOrphan(t *testing.T) {
 // is what the pre-lock-snapshot rm allowed (refresh installs after rm
 // reported "detached", store cleared).
 func TestPackRm_RacingRefreshNeverOrphans(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	dir := isolatePackHost(t)
 	pinLocalMCP(t)
 	root := phase2HostPack(t, dir, "work", "platformio")
 

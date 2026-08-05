@@ -1,31 +1,23 @@
-// packtrust.go — F5: the Tier-1 trust gate (packs-v2-impl.md F5, packs.md §9).
+// trust.go — the Tier-1 pack trust gate (docs/design/packs.md §9).
 //
 // The trust model splits on whether the pack EXECUTES code on the host:
 //
-//   - Tier-0: skills / knowledge / config / sandbox-only wrappers. Nothing
-//     pack-authored runs on the host → adopt with NO prompt (unchanged from
-//     Phase 1).
-//   - Tier-0 also includes REFERENCE-ONLY integrations (packs.md §9 /
-//     packs-v2-impl.md §6): an integration.mcp naming a REMOTE
-//     gateway-catalog server (notion/atlassian/…) or the host-provided gog
-//     registration ships NO pack-authored executable — the pack contributes
-//     only a NAME, and the argv (if any) is launcher-built. No prompt,
-//     non-TTY fine.
-//   - Tier-1: ANY host-exec facet — an integration.mcp that resolves to a
-//     LOCAL stdio host command (mcp.McpRegistrar's local partition:
-//     `pix-host mcp <name>` per `pix-host mcp --list`), a
-//     host=true [[proxy]] wrapper, or a host=true [[bin]] external binary.
-//     Adoption halts at the bill-of-materials screen and requires an
-//     explicit yes; non-TTY FAILS CLOSED unless --yes.
+//   - Tier-0: skills / knowledge / config / sandbox-only wrappers, plus
+//     REFERENCE-ONLY integrations (an integration.mcp naming a REMOTE
+//     gateway-catalog server or the host-provided gog registration ships no
+//     pack-authored executable — the pack contributes only a NAME, and the argv
+//     is launcher-built). Nothing pack-authored runs on the host → adopt with
+//     NO prompt, non-TTY fine.
+//   - Tier-1: ANY host-exec facet — an integration.mcp resolving to a LOCAL
+//     stdio host command, a host=true [[proxy]] wrapper, a host=true [[bin]]
+//     external binary, or a [[services]] unit. Adoption halts at the
+//     bill-of-materials screen and requires an explicit yes; non-TTY FAILS
+//     CLOSED unless --yes.
 //
-// Acceptance lives in TRUSTED HOST STATE (packtruststore.go — never inside
-// the pack payload), keyed by pack identity, over a FINGERPRINT of the entire
-// host-exec surface (ComputeHostExecFingerprint). Switching between accepted
-// packs never re-prompts, but ANY change to the surface — a facet added, a
-// [[bin]] sha changed, a host proxy script mutated, an MCP argv resolved
-// differently (e.g. gog_account) — changes the fingerprint and re-triggers
-// the gate. The typed schema is the allowlist: only integration.mcp, host
-// [[proxy]], and [[bin]] ever reach an exec path.
+// Acceptance lives in TRUSTED HOST STATE (truststore.go — never inside the pack
+// payload), keyed by pack identity, over a FINGERPRINT of the entire host-exec
+// surface. Switching between accepted packs never re-prompts, but ANY change to
+// the surface re-triggers the gate. The typed schema is the allowlist.
 package pack
 
 import (
@@ -45,9 +37,8 @@ import (
 )
 
 // hostBoM is the host bill-of-materials: everything a pack would run on (or
-// solicit from) THIS machine. Pure data, computed by ComputeHostBoM, rendered
-// by renderHostBoM, gated by packTrustGate, and accepted as a fingerprint in
-// the HOST trust store (ComputeHostExecFingerprint + packtruststore.go).
+// solicit from) THIS machine. Pure data — computed by ComputeHostBoM, rendered
+// by renderHostBoM, gated by packTrustGate, accepted as a fingerprint.
 type hostBoM struct {
 	MCP            []hostBoMMCP       // built-in MCP servers the gateway spawns on the host
 	Containers     []hostBoMContainer // OCI MCP servers Docker runs on the host
@@ -64,9 +55,8 @@ type hostBoM struct {
 }
 
 // hostBoMMCP is one host-spawned MCP server: its name plus the exact argv the
-// gateway will ultimately run (mcp.McpRegistrar.serverCmd — reused, not re-derived,
-// so the screen shows the real shape: gog's hardened flags, or
-// `pix-host mcp <name>`).
+// gateway will run (reused from the registrar, not re-derived, so the screen
+// shows the real shape).
 type hostBoMMCP struct {
 	Name string
 	Argv []string
@@ -94,21 +84,19 @@ type hostBoMInference struct {
 	Format  string
 }
 
-// tier1 reports whether any host-exec facet is present — the Tier-0/Tier-1
-// split of packs.md §9. Egress and creds alone never raise the tier (a
-// sandbox wrapper's egress is fenced by the kit allowlist; a credential ref is
-// solicited, not executed). b.MCP holds only LOCAL host-spawned servers and
-// b.Bins only host=true entries (ComputeHostBoM filters). An explicit remote
-// MCP endpoint does raise the tier: adopting it sends conversation context to
-// a pack-selected third party and may launch OAuth, so it requires consent.
+// Tier1 reports whether any host-exec facet is present. Egress and creds alone
+// never raise the tier (a sandbox wrapper's egress is fenced by the kit
+// allowlist; a credential ref is solicited, not executed). An explicit remote
+// MCP endpoint DOES raise it: adopting one sends conversation context to a
+// pack-selected third party and may launch OAuth, so it requires consent.
 func (b hostBoM) Tier1() bool {
 	return len(b.MCP) > 0 || len(b.Containers) > 0 || len(b.RemoteMCP) > 0 || len(b.Proxies) > 0 || len(b.Bins) > 0 || len(b.Setup) > 0 || len(b.Inference) > 0 || len(b.Services) > 0
 }
 
-// VerifyPackInferenceTrust closes the adoption-to-launch gap for credential-
-// routing inference. A pack remains mutable after `pack use`; before a sandbox
-// consumes its endpoint/service/header policy, recompute the accepted surface
-// and require an exact launcher-owned trust-store match.
+// VerifyPackInferenceTrust closes the adoption-to-launch gap for
+// credential-routing inference: a pack stays mutable after `pack use`, so
+// before a sandbox consumes its endpoint/service/header policy, recompute the
+// surface and require an exact launcher-owned trust-store match.
 func VerifyPackInferenceTrust(p *Info, cfgGogAccount string, env hostenv.Env) error {
 	if p == nil {
 		return nil
@@ -134,24 +122,18 @@ func VerifyPackInferenceTrust(p *Info, cfgGogAccount string, env hostenv.Env) er
 	})
 }
 
-// LocalMCPClassifier resolves mcp.McpRegistrar's local-vs-gateway partition into
-// a predicate: TRUE for a name treated as a LOCAL stdio server this host runs
-// (`pix-host mcp --list`) — i.e. attaching it spawns a host command.
-// With the partition ESTABLISHED, a name not in the local set — a remote
-// gateway-catalog name (notion/atlassian) or the host-provided gog
-// registration (never listed) — is a reference-only Tier-0 fact: nothing
-// pack-authored executes.
+// LocalMCPClassifier resolves the registrar's local-vs-gateway partition into a
+// predicate: TRUE for a name this host runs as a LOCAL stdio server, i.e.
+// attaching it spawns a host command. With the partition ESTABLISHED, a name
+// outside the local set (a remote catalog name, or gog) is reference-only
+// Tier-0 — nothing pack-authored executes.
 //
-// UNKNOWN classification FAILS CLOSED (round-3 #3): when the local set cannot
-// be established (probe error / pix-host unresolved), every non-gog name
-// is treated as HOST-EXEC (Tier-1) so the adoption gate fires. The old
-// unknown⇒Tier-0 shortcut leaned on mcp.RegisterServers skipping registration on
-// the same condition — but the name still lands in cfg.MCP and is attached
-// via --mcp, so one ALREADY-registered in the gateway would run its host
-// command with NO gate ever shown. Over-prompting on a transient probe
-// failure is acceptable; silently skipping the gate is not. gog stays the
-// reference-only special case (its registration is launcher-built, never
-// pack-authored).
+// UNKNOWN classification FAILS CLOSED: when the local set cannot be established
+// (probe error, pix-host unresolved), every non-gog name is treated as
+// host-exec so the gate fires. The name still lands in cfg.MCP and is attached
+// via --mcp, so one ALREADY registered in the gateway would otherwise run its
+// host command with NO gate ever shown. Over-prompting on a transient probe
+// failure is acceptable; silently skipping the gate is not.
 func LocalMCPClassifier(env hostenv.Env, hostResolver func() (string, error)) func(string) bool {
 	set, known := mcp.LocalMCPNames(env, hostResolver)
 	return func(name string) bool {
@@ -163,35 +145,26 @@ func LocalMCPClassifier(env hostenv.Env, hostResolver func() (string, error)) fu
 }
 
 // PackLocalMCP builds the classifier for callers without an injected env
-// (RefreshHostPackWrappers). A package var so tests can pin the partition, and
-// so the composition root can supply the real env without this package having
-// to construct one.
+// (RefreshHostPackWrappers). A package var so tests can pin the partition and
+// the composition root can supply the real env.
 var PackLocalMCP = func() func(string) bool { return func(string) bool { return false } }
 
 // ComputeHostBoM enumerates a pack's host bill-of-materials (pure, testable):
-// MCP commands (resolved argv via mcp.go's serverCmd), host=true wrappers,
-// [[bin]] external binaries, the egress union, and credential VAR names. The
-// display registrar uses the bare binary names ("gog", "pix-host") so the
-// result is deterministic — the real registration resolves absolute paths, but
-// the SHAPE the user reviews is identical.
+// MCP commands (resolved argv), host=true wrappers, [[bin]] external binaries,
+// [[services]], the egress union, and credential VAR names. Display uses bare
+// binary names so the result is deterministic; the SHAPE the user reviews is
+// identical to what registration resolves.
 //
-// cfgGogAccount is the RESOLVED fallback account (config gog_account) used
-// when the manifest doesn't pin one: the argv the user reviews — and the
-// fingerprint the acceptance is recorded over — must be the argv that will
-// actually run, so a later gog_account change re-gates (it changes what the
-// gateway spawns on the host).
+// cfgGogAccount is the RESOLVED fallback account: the argv the user reviews —
+// and the fingerprint the acceptance is recorded over — must be the argv that
+// will actually run, so a later gog_account change re-gates.
 //
 // isLocalMCP is the local-vs-gateway partition (LocalMCPClassifier): only an
-// integration.mcp that resolves to a LOCAL host command enters the BoM — a
-// remote gateway-catalog reference (notion/atlassian/gog) ships no
-// pack-authored executable and stays Tier-0 (packs.md §9). nil means "no
-// local partition available" and FAILS CLOSED exactly like an unknown probe
-// (round-3 #3): every non-gog name classifies as host-exec, so an
-// unclassifiable MCP reference is gated rather than silently Tier-0.
+// integration.mcp resolving to a LOCAL host command enters the BoM. nil means
+// "no partition available" and FAILS CLOSED exactly like an unknown probe.
 //
 // [[bin]] entries enter the BoM ONLY with host=true (mirroring host=true
-// proxies): an inert host=false bin never enters the accepted surface, so
-// flipping it to host=true later is a NEW surface that re-gates.
+// proxies), so flipping an inert bin to host=true later is a NEW surface.
 func ComputeHostBoM(p *Info, cfgGogAccount string, isLocalMCP func(string) bool) hostBoM {
 	var b hostBoM
 	account := strings.TrimSpace(p.Manifest.GogAccount)
@@ -278,26 +251,19 @@ func ComputeHostBoM(p *Info, cfgGogAccount string, isLocalMCP func(string) bool)
 }
 
 // ComputeHostExecFingerprint hashes the ENTIRE host-exec surface of a pack —
-// what the Tier-1 acceptance is actually FOR: every MCP's resolved argv,
-// every host=true [[proxy]] script's CONTENT (sha256 of the bytes on disk,
-// symlink-refused — a mutated script changes the fingerprint), every [[bin]]
-// name + pinned sha (the pin itself is verified against the file separately,
-// at activation/install/launch), the egress union, and the credential VAR
-// names. Entries are sorted into a canonical form so a pure manifest reorder
-// never re-gates. Returns the fingerprint plus the per-proxy content hashes
-// it was computed over, so the installer can verify the exact bytes it stages
-// against what was accepted (no hash-then-install TOCTOU).
+// what the Tier-1 acceptance is actually FOR: every MCP's resolved argv, every
+// host=true [[proxy]] script's CONTENT (sha256 of the bytes on disk,
+// symlink-refused), every [[bin]] name + pinned sha, every [[services]] field,
+// the egress union, and the credential VAR names. Entries are sorted into a
+// canonical form so a pure manifest reorder never re-gates. Returns the
+// fingerprint plus the per-proxy content hashes it was computed over, so the
+// installer can verify the exact bytes it stages (no hash-then-install TOCTOU).
 //
-// ENCODING IS CANONICAL AND INJECTIVE (round-2 B): the surface is marshaled
-// as a structured JSON document (fixed field order, sorted entries, every
-// string JSON-escaped) and THAT is hashed. The previous ad-hoc NUL/newline
-// concatenation was not injective for unconstrained strings — an egress (or
-// cred/argv) value containing the delimiter bytes could encode a DIFFERENT
-// surface with an identical hash (the reviewer showed a real collision:
-// egress ["a","b"] vs ["a\negress\x00b"]). JSON escaping makes any two
-// distinct surfaces serialize to distinct bytes. [[bin]] entries also encode
-// their Host flag (belt-and-suspenders on top of ComputeHostBoM only ever
-// admitting host=true bins).
+// THE ENCODING IS CANONICAL AND INJECTIVE: the surface is marshaled as a
+// structured JSON document (fixed field order, sorted entries, every string
+// JSON-escaped) and THAT is hashed. An ad-hoc NUL/newline concatenation is not
+// injective for unconstrained strings — a value containing the delimiter bytes
+// can encode a DIFFERENT surface with an identical hash.
 //
 // An unreadable host proxy script is an ERROR (fail closed): a surface that
 // cannot be fingerprinted cannot be accepted or installed.
@@ -307,8 +273,8 @@ func ComputeHostExecFingerprint(root string, b hostBoM) (string, map[string]stri
 
 // computeHostExecFingerprintWithSetup hashes immutable setup-hook snapshots
 // when supplied. RunPackSetup executes those same bytes, binding the accepted
-// fingerprint to the actual executable instead of re-opening mutable pack
-// paths after the trust decision.
+// fingerprint to the actual executable instead of re-opening mutable paths
+// after the trust decision.
 func computeHostExecFingerprintWithSetup(root string, b hostBoM, setupBytes map[string][]byte) (string, map[string]string, error) {
 	type fpProxy struct {
 		Name string `json:"name"`
@@ -388,9 +354,9 @@ func computeHostExecFingerprintWithSetup(root string, b hostBoM, setupBytes map[
 		Setup         []fpSetup     `json:"setup"`
 		Inference     []fpInference `json:"inference"`
 		// Services is ADDITIVE with omitempty on purpose: a pack with no
-		// [[services]] keeps its exact pre-U08a byte encoding, so every
-		// already-accepted fingerprint stays valid (no upgrade re-gate storm).
-		// Injectivity holds: the key is present iff a service is declared.
+		// [[services]] keeps its exact prior byte encoding, so every
+		// already-accepted fingerprint stays valid. Injectivity holds: the key is
+		// present iff a service is declared.
 		Services []fpService `json:"services,omitempty"`
 	}
 	doc := fpDoc{V: 6}
@@ -627,12 +593,11 @@ func renderHostBoM(out io.Writer, b hostBoM) {
 	}
 }
 
-// packTrustGate enforces the Tier-1 adoption gate: render the BoM, then
-// require an explicit yes. --yes accepts (the screen still prints, for the
-// record). Otherwise: non-TTY FAILS CLOSED (a CI/script adoption must never
-// silently enable host code — packs-v2-impl.md F5, non-negotiable), and on a
-// TTY the answer defaults to No. A non-nil error means NOT adopted; the caller
-// must abort before anything registers, installs, or commits.
+// packTrustGate enforces the Tier-1 adoption gate: render the BoM, then require
+// an explicit yes. --yes accepts (the screen still prints, for the record).
+// Otherwise a non-TTY FAILS CLOSED — a CI/script adoption must never silently
+// enable host code — and on a TTY the answer defaults to No. A non-nil error
+// means NOT adopted: the caller aborts before anything registers or commits.
 func packTrustGate(in io.Reader, out io.Writer, tty, yes bool, packName string, b hostBoM) error {
 	renderHostBoM(out, b)
 	if yes {
