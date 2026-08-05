@@ -43,6 +43,14 @@ func retiredSplit(key string) (verb, flag string) {
 	return key, ""
 }
 
+// resetRecoveryGuidance is the shared replacement text for `reset` and `state
+// reset`: manual, evidence-first recovery, not an automated wipe. A sandbox is
+// thrown away rather than reset, so the state left to recover from is the HOST
+// side only — `pix doctor` names the exact gap, `pix config path` and `pix
+// status --json` name every path worth backing up before touching it by hand,
+// and `pix setup` rebuilds from there. No command does this for you.
+const resetRecoveryGuidance = "pix doctor, then back up the paths from pix config path / pix status --json, then pix setup (no automated wipe)"
+
 // retiredSurfaces maps a retired surface to the command that replaced it. The value
 // is a full command line, not a bare verb, because a replacement is not always a
 // pix verb (`upgrade` is the package manager's job).
@@ -53,14 +61,19 @@ func retiredSurfaces() map[string]string {
 	return map[string]string{
 		// The host-integration, distribution and state-management surfaces the
 		// launcher no longer owns.
-		"backup":                   "pix-host backup",
-		"evals":                    "pix models route",
-		"gworkspace":               "pix mcp register",
-		"host":                     "pix run",
-		"kb":                       "pix pack use",
-		"knowledge":                "pix pack use",
-		"man":                      "pix help --all",
-		"restore":                  "pix-host restore",
+		"backup":     "pix-host backup",
+		"evals":      "pix models route",
+		"gworkspace": "pix mcp register",
+		"host":       "pix run",
+		"kb":         "pix pack use",
+		"knowledge":  "pix pack use",
+		"man":        "pix help --all",
+		"restore":    "pix-host restore",
+		// A destructive-but-reversible move-things-aside verb whose job ephemeral
+		// sandboxes plus setup/doctor now do: throw the sandbox away rather than
+		// reset it, and diagnose/fix a broken config or data dir by hand. There is
+		// no automated fallback that wipes state — see the replacement text.
+		"reset":                    resetRecoveryGuidance,
 		"slack":                    "pix mcp register",
 		"upgrade":                  "brew upgrade pix",
 		retiredKey("pix", "--man"): "pix help --all",
@@ -71,6 +84,7 @@ func retiredSurfaces() map[string]string {
 		retiredKey("setup", "--replace"): "pix rm BOX",
 		retiredKey("state", "backup"):    "pix-host backup",
 		retiredKey("state", "restore"):   "pix-host restore",
+		retiredKey("state", "reset"):     resetRecoveryGuidance,
 		retiredKey("task", "gc"):         "pix task rm",
 		retiredKey("task", "harvest"):    "pix task path",
 		// An agent is a hand-edited agents/*.md file plus scorecard.json now, not a

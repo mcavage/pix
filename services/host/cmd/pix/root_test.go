@@ -49,7 +49,7 @@ func TestRootOwnsEveryVerb(t *testing.T) {
 	for _, want := range []string{
 		"run", "status", "st", "ls", "rm", "version", "config", "serve",
 		"doctor", "setup", "mcp", "pack", "secret", "memory", "mem",
-		"monitor", "models", "agent", "reset", "state", "task", "help",
+		"monitor", "models", "agent", "task", "help",
 	} {
 		if !got[want] {
 			t.Errorf("verb %q is not a child of the kong root (got %v)", want, rootVerbs())
@@ -156,7 +156,6 @@ func TestMigratedVerbHelpIsGenerated(t *testing.T) {
 		"agent":   "Usage: pix agent",
 		"secret":  "Usage: pix secret",
 		"rm":      "Usage: pix rm",
-		"reset":   "Usage: pix reset",
 		"serve":   "Usage: pix serve",
 		"task":    "Usage: pix task",
 		"monitor": "Usage: pix monitor",
@@ -164,7 +163,6 @@ func TestMigratedVerbHelpIsGenerated(t *testing.T) {
 		"status":  "Usage: pix status",
 		"doctor":  "Usage: pix doctor",
 		"setup":   "Usage: pix setup",
-		"state":   "Usage: pix state",
 	} {
 		d, out, errb := rootDeps()
 		if code := dispatch([]string{verb, "--help"}, d); code != 0 {
@@ -184,12 +182,10 @@ func TestExitMapper(t *testing.T) {
 		{"rm", "--this-is-not-a-real-flag-9x7z"},
 		{"monitor", "--this-is-not-a-real-flag-9x7z"},
 		{"task", "--this-is-not-a-real-flag-9x7z"},
-		{"reset", "--this-is-not-a-real-flag-9x7z"},
 		{"run", "--this-is-not-a-real-flag-9x7z"},
 		{"status", "--this-is-not-a-real-flag-9x7z"},
 		{"doctor", "--this-is-not-a-real-flag-9x7z"},
 		{"setup", "--this-is-not-a-real-flag-9x7z"},
-		{"state", "--this-is-not-a-real-flag-9x7z"},
 		{"serve", "--this-is-not-a-real-flag-9x7z"},
 	} {
 		d, _, errb := rootDeps()

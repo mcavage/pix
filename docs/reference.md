@@ -28,13 +28,16 @@ CLI reference of its own.
 | `monitor` | live-follow a sandbox's out-of-sandbox traffic | `docs/design/monitor.md` |
 | `models` | which models pix can use, and the model router: ls/show/pick/route | `docs/design/routing.md`, `docs/design/models-cli.md` |
 | `agent` | the subagent roster: ls/new/edit/rm/reassess | §4 |
-| `state` | `reset` the on-disk state (reversible) | §9 |
 | `version`, `help` | stamped version; tiered help | — |
 
 Retired verbs (`slack`, `gworkspace`, `knowledge`, `host`, `upgrade`, `man`,
-`backup`, `restore`, `state backup|restore`, `task harvest|gc`, `route`,
-`onboard`, `evals`) answer with a `PIX_RETIRED` line naming the replacement and
-exit 2, doing nothing else. Every one is recorded, with its reason and
+`backup`, `restore`, `reset`, `state backup|restore|reset`, `task harvest|gc`,
+`route`, `onboard`, `evals`) answer with a `PIX_RETIRED` line naming the
+replacement and exit 2, doing nothing else. `reset`/`state reset` moved state
+aside as a reversible clean-slate; ephemeral sandboxes plus `setup`/`doctor` do
+that job now, so recovery is manual and evidence-first: run `doctor` first,
+back up whatever `config path` / `status --json` show, then `setup` — there is
+no automated wipe. Every retirement is recorded, with its reason and
 replacement, in `services/host/cmd/pix/corpus/retirement.jsonl`.
 
 ## 1. What pix is

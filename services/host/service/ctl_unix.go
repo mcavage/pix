@@ -16,7 +16,7 @@ import (
 func killProcess(pid int, sig syscall.Signal) error { return syscall.Kill(pid, sig) }
 
 // discoverServeProcs finds candidate `pix-host serve` pids when the pidfile is
-// gone (e.g. `pix reset` moved the config dir out from under a running daemon).
+// gone (e.g. the config dir was moved out from under a running daemon by hand).
 // It is deliberately LOOSE — every candidate is verified before it is signalled,
 // so widening the search cannot widen what gets killed.
 func discoverServeProcs() ([]int, error) {

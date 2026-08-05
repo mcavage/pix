@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 )
 
-// DirSize counts the regular files under root and their total bytes. Both task
-// (reporting what it harvested) and reset (deciding whether there is anything
-// to move aside) need it, so it sits below both.
+// DirSize counts the regular files under root and their total bytes. task
+// (reporting what it harvested) needs it, so it sits below foundation-adjacent
+// callers rather than inside any one capability.
 
 // DirSize sums the file count + byte size under root (best-effort; an
 // unreadable tree or a missing root contributes 0). Shared by the status summary

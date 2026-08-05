@@ -2,25 +2,8 @@ package workspace
 
 import "strings"
 
-// sandboxls.go — parsing `sbx ls` output. It lives here, below both callers,
-// because status renders these lines and reset deletes what they name; a type
-// two callers exchange belongs under both of them.
-
-type SandboxLine struct {
-	Name  string `json:"name"`
-	State string `json:"state"`
-}
-
-// ParseSandboxes extracts pix-* sandbox lines from `sbx ls` output. It is
-// lenient about column layout by reusing the canonical sbx parser. In
-// particular, the final column may be a pack mount rather than the state.
-func ParseSandboxes(sbxLsOut string) []SandboxLine {
-	var out []SandboxLine
-	for _, box := range ParsePixBoxes(sbxLsOut) {
-		out = append(out, SandboxLine{Name: box.Name, State: box.State})
-	}
-	return out
-}
+// sandboxls.go — parsing `sbx ls` output. It lives here, below its callers
+// (launch's ls/rm), as the one canonical parser every reader of `sbx ls` shares.
 
 // SbxBox is one parsed `sbx ls` row for a pix sandbox.
 type SbxBox struct {
