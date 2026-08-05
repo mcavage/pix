@@ -1,10 +1,7 @@
-// env.go — the composition root's env constructor.
-//
-// This is the ONE place the real OS seams, the real identity probe, and the
-// real live probes are wired together. It lives at L4 because that is what L4
-// is for: everything below takes a hostenv.Env as a parameter, and nothing
-// below may construct one, or it would have to know which capability supplies
-// each probe.
+// env.go — the composition root's env constructor: the ONE place the real OS
+// seams and live probes are wired together. Everything below takes a
+// hostenv.Env as a parameter and may not construct one, or it would have to
+// know which capability supplies each probe.
 package main
 
 import (

@@ -2,9 +2,8 @@
 //
 // mcp needs four facts about the host's 1Password setup and secret is the
 // package that knows them. mcp may not ask secret directly (both are L1), so
-// the wiring lives here: cmd/pix asks, and passes the answers down. This file
-// is the entire cost of that rule, and it is the right cost — mcp is now
-// testable with a struct literal instead of a faked filesystem.
+// the wiring lives here: cmd/pix asks and passes the answers down, which is
+// what makes mcp testable with a struct literal instead of a faked filesystem.
 package main
 
 import (
@@ -18,10 +17,8 @@ import (
 )
 
 // registerServers is the ONE way cmd/pix registers MCP servers: repair the
-// legacy op-refs.env first, then resolve credentials, then register. The
-// repair used to live inside mcp.RegisterServers, so every caller got it for
-// free; keeping all three steps in one function is how that stays true now
-// that the first two are cmd/pix's job.
+// legacy op-refs.env, resolve credentials, register. All three stay in one
+// function so no caller can get two of the three.
 func registerServers(cfg *config.Config, env hostenv.Env, out io.Writer,
 	requested []string, hostResolver func() (string, error),
 	containers map[string]config.MCPContainer) error {
@@ -50,18 +47,9 @@ func mcpCredentials(env hostenv.Env) mcp.Credentials {
 	}
 }
 
-// repairLegacyOpRefs is the side effect RegisterServers used to perform
-// itself: Pix 0.1.14 emitted malformed prose into op-refs.env, and `op run`
-// fails during dotenv parsing on it. Doing it here keeps mcp free of both the
-// write and the knowledge of which release was broken.
+// repairLegacyOpRefs undoes a 0.1.14 bug: malformed prose in op-refs.env makes
+// `op run` fail during dotenv parsing. Here, so mcp needs neither the write nor
+// the knowledge of which release was broken.
 func repairLegacyOpRefs(env hostenv.Env) error {
 	return secret.RepairLegacyOpRefsFile(env, secret.DefaultOpRefsPath(env))
-}
-
-// registerNoContainers adapts registerServers to slack.RegisterFn: slack has
-// no pack containers to contribute, and saying so here keeps that fact out of
-// the slack code, which has no business knowing what a pack container is.
-func registerNoContainers(cfg *config.Config, env hostenv.Env, out io.Writer, names []string,
-	hostResolver func() (string, error)) error {
-	return registerServers(cfg, env, out, names, hostResolver, nil)
 }

@@ -1,7 +1,6 @@
 // onboard_cmd.go — the composition onboarding cannot do for itself: the paired
 // pix-host binary, MCP registration, and the shipped-catalog readiness gate.
-// Two of the three reach capabilities onboarding may not import, which is why
-// they are supplied rather than called.
+// Two of the three reach capabilities onboarding may not import.
 package main
 
 import (

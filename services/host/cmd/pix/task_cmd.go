@@ -1,10 +1,8 @@
-// task_cmd.go — the `pix task` dispatcher (new|run|ls|path|rm) under the cli
-// command contract (cli/cli.go): kong parses the struct tags below and
-// dispatches to the selected leaf's Run(*cli.Deps). Domain logic (naming,
-// clone/worktree mechanism, the git-hygiene guard) lives in L1
-// pix/host/workflow/task; launching reuses the EXISTING `pix run` path
-// (runRun in run_cmd.go) with an explicit --name and the checkout dir as the
-// workspace, so there is no separate task-owned sandbox-lifecycle code.
+// task_cmd.go — the `pix task` verb tree (new|run|ls|path|rm). Domain logic
+// (naming, clone/worktree mechanism, the git-hygiene guard) lives in
+// pix/host/workflow/task; launching re-enters `pix run` with an explicit
+// --name and the checkout as the workspace, so there is no task-owned
+// sandbox-lifecycle code here.
 package main
 
 import (
@@ -37,7 +35,6 @@ type taskCmd struct {
 }
 
 // taskUsageCmd is what bare `pix task` selects: the group's usage, exit 0.
-// The hand-rolled seam special-cased this before the root existed.
 type taskUsageCmd struct{}
 
 func (c *taskUsageCmd) Run(d *cli.Deps) error {
@@ -51,6 +48,17 @@ func taskMainroot() (string, error) {
 		return "", err
 	}
 	return task.ResolveMainroot(cwd)
+}
+
+// taskRepo is what every subcommand starts with: the main checkout this task
+// tree hangs off, plus the state root its metadata lives in. Not being in a
+// git repo is the one failure they all report identically.
+func taskRepo() (mainroot, stateRoot string, err error) {
+	mainroot, err = taskMainroot()
+	if err != nil {
+		return "", "", fmt.Errorf("not a git repository: %w", err)
+	}
+	return mainroot, workspace.TaskStateRoot(), nil
 }
 
 func taskProbe() func(string) task.SandboxDisposition {
@@ -106,22 +114,22 @@ func taskNew(d *cli.Deps, c *taskNewCmd) error {
 	if err != nil {
 		return err
 	}
-	mainroot, err := taskMainroot()
+	mainroot, stateRoot, err := taskRepo()
 	if err != nil {
-		return fmt.Errorf("not a git repository: %w", err)
+		return err
 	}
 	if task.HasSubmodules(mainroot) {
 		fmt.Fprintln(d.Err, "note: submodules are not auto-initialized. "+
 			"Run `git submodule update --init` in the sandbox and add submodule remotes to the network allowlist.")
 	}
 	m, err := task.New(task.NewOptions{
-		StateRoot: workspace.TaskStateRoot(), Mainroot: mainroot,
+		StateRoot: stateRoot, Mainroot: mainroot,
 		Name: c.Name, Ref: c.From, Mechanism: taskNewMechanism(c.Worktree),
 	})
 	if err != nil {
 		return err
 	}
-	co, err := task.Path(workspace.TaskStateRoot(), mainroot, c.Name)
+	co, err := task.Path(stateRoot, mainroot, c.Name)
 	if err != nil {
 		return err
 	}
@@ -147,14 +155,13 @@ func resolveTaskRunArgv(name string, rest []string) ([]string, error) {
 
 // resolveTaskTarget resolves an existing task NAME to the two facts a launch
 // needs: its checkout directory and its sandbox name. Shared with `pix run
-// --task`, which fills them straight into RunOpts rather than round-tripping
-// through an argv.
+// --task`, which fills them straight into RunOpts.
 func resolveTaskTarget(name string) (dir, sandboxName string, err error) {
-	mainroot, err := taskMainroot()
+	mainroot, stateRoot, err := taskRepo()
 	if err != nil {
-		return "", "", fmt.Errorf("not a git repository: %w", err)
+		return "", "", err
 	}
-	co, m, err := task.Resolve(workspace.TaskStateRoot(), mainroot, name)
+	co, m, err := task.Resolve(stateRoot, mainroot, name)
 	if err != nil {
 		return "", "", err
 	}
@@ -199,11 +206,10 @@ type taskLsCmd struct {
 func (c *taskLsCmd) Run(d *cli.Deps) error { return taskLs(d, c.JSON) }
 
 func taskLs(d *cli.Deps, jsonOut bool) error {
-	mainroot, err := taskMainroot()
+	mainroot, stateRoot, err := taskRepo()
 	if err != nil {
-		return fmt.Errorf("not a git repository: %w", err)
+		return err
 	}
-	stateRoot := workspace.TaskStateRoot()
 	names, err := task.SandboxNames(stateRoot, mainroot)
 	if err != nil {
 		return err
@@ -261,11 +267,11 @@ type taskPathCmd struct {
 func (c *taskPathCmd) Run(d *cli.Deps) error { return taskPath(d, c.Name) }
 
 func taskPath(d *cli.Deps, name string) error {
-	mainroot, err := taskMainroot()
+	mainroot, stateRoot, err := taskRepo()
 	if err != nil {
-		return fmt.Errorf("not a git repository: %w", err)
+		return err
 	}
-	co, err := task.Path(workspace.TaskStateRoot(), mainroot, name)
+	co, err := task.Path(stateRoot, mainroot, name)
 	if err != nil {
 		return err
 	}
@@ -281,11 +287,10 @@ type taskRmCmd struct {
 func (c *taskRmCmd) Run(d *cli.Deps) error { return taskRm(d, c.Name, c.Force) }
 
 func taskRm(d *cli.Deps, name string, force bool) error {
-	mainroot, err := taskMainroot()
+	mainroot, stateRoot, err := taskRepo()
 	if err != nil {
-		return fmt.Errorf("not a git repository: %w", err)
+		return err
 	}
-	stateRoot := workspace.TaskStateRoot()
 	co, m, err := task.Resolve(stateRoot, mainroot, name)
 	if err != nil {
 		return err

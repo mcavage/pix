@@ -1,16 +1,8 @@
 package main
 
-// secret_cmd.go is `pix secret` under the cli command contract.
-//
-// It is the clearest case for the migration so far, because almost everything
-// it replaced was arity checking. The old dispatcher spent forty lines on two
-// switch statements — one to validate `len(rest)` per subcommand and print a
-// bespoke "want exactly N arguments (got %d)" message, another to actually
-// dispatch — plus a hand-written usage constant listing the same argument
-// counts a third time. All three had to agree, and nothing made them.
-//
-// Here the argument count IS the struct. `Ref string \`arg:""\`` means exactly
-// one, required, named in generated help, with kong producing the error.
+// secret_cmd.go is `pix secret` under the cli command contract: the argument
+// count IS the struct. `Ref string \`arg:""\`` means exactly one, required,
+// named in generated help, with kong producing the arity error.
 
 import (
 	"pix/host/cli"
@@ -43,7 +35,6 @@ func (c *SecretLsCmd) Run(d *cli.Deps) error {
 }
 
 // SecretSetCmd takes exactly two arguments because it declares exactly two.
-// The old version counted them by hand and produced its own error.
 type SecretSetCmd struct {
 	EnvVar string `arg:"" help:"Environment variable name (e.g. ANTHROPIC_API_KEY)."`
 	Ref    string `arg:"" help:"1Password reference (op://vault/item/field)."`

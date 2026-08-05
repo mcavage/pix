@@ -1,19 +1,11 @@
 package main
 
-// config_cmd.go is `pix config` under the cli command contract (see cli.go,
-// and models_cmd.go/secret_cmd.go for the worked examples this follows). It
-// replaced the hand-rolled dispatcher in workflow/provision/config.go: a
-// switch on argv[0], manual `len(argv) > 1` arity checks with bespoke
-// "unexpected argument" messages, and a single ConfigUsage constant printed
-// unconditionally for `-h`/`--help` on show, path, get, set AND unset alike —
-// one usage screen standing in for five different commands' actual grammar.
-//
-// Here the subcommand tree, its arguments and its per-command help are the
-// struct tags; kong renders `pix config set --help` from the SAME declaration
-// that parses `pix config set run_intent strategy`, so the two can no longer
-// drift. No config domain logic lives here, only the command composition kong
-// needs: the key table, arity and validation stay in provision
-// (ApplyConfigChange, ConfigValue, ConfigKeysHelp).
+// config_cmd.go is `pix config`: the subcommand tree, its arguments and its
+// per-command help are the struct tags, so kong renders `pix config set
+// --help` from the SAME declaration that parses `pix config set run_intent
+// strategy`. No config domain logic lives here — the key table, arity and
+// validation stay in provision (ApplyConfigChange, ConfigValue,
+// ConfigKeysHelp).
 
 import (
 	"fmt"
@@ -26,11 +18,8 @@ import (
 	"pix/host/workflow/provision"
 )
 
-// configDescription is the verb's long help. The show|path|get|set|unset
-// table itself is generated from each field's `help:` tag; this says only
-// what generated usage cannot infer — the mental model (one managed config,
-// never hand-edited) — and reuses ConfigKeysHelp rather than re-listing the
-// keys a second time.
+// configDescription is the verb's long help: the mental model generated usage
+// cannot infer, plus ConfigKeysHelp rather than a second copy of the keys.
 func configDescription() string {
 	return `The single managed config: one config.toml, mutated only through
 'pix config set'/'unset' (never hand-edited — see AGENTS.md).
@@ -43,8 +32,7 @@ instead of a second config file.
 }
 
 // configCmd is the verb tree. Bare `pix config` is `show`, so Show is kong's
-// default command rather than a subcommand a user must know — matching the
-// legacy dispatcher's `sub := "show"` fallback.
+// default command rather than a subcommand a user must know.
 func (c *configCmd) Help() string { return configDescription() }
 
 type configCmd struct {
@@ -70,11 +58,9 @@ func (c *configShowCmd) Run(d *cli.Deps) error {
 
 // ── path ─────────────────────────────────────────────────────────────────
 
-// configPathCmd takes one optional positional rather than a flag because
-// `pix config path op-refs` is discoverability sugar on the same noun `path`
-// prints, not a distinct switch. Kind is validated by hand (not `enum:""`)
-// because the empty default must ALSO be a valid value, and kong's enum
-// tag rejects a zero value that isn't itself listed.
+// configPathCmd takes one optional positional because `pix config path
+// op-refs` is sugar on the same noun, not a distinct switch. Kind is validated
+// by hand, not `enum:""`, because the empty default must also be valid.
 type configPathCmd struct {
 	Kind string `arg:"" optional:"" help:"'op-refs' to print the op-refs.env path instead of config.toml." placeholder:"op-refs"`
 }
@@ -93,11 +79,9 @@ func (c *configPathCmd) Run(d *cli.Deps) error {
 
 // ── get ──────────────────────────────────────────────────────────────────
 
-// configGetCmd prints ONE resolved value with no decoration — the
-// machine-readable accessor the Makefile shells out to. Its whole body is
-// composition over provision.ConfigValue, which owns the key table
-// (including the retired-key refusals) and is exercised directly by
-// config_get_test.go; this must not duplicate that logic.
+// configGetCmd prints ONE resolved value with no decoration — the accessor the
+// Makefile shells out to. Composition only: provision.ConfigValue owns the key
+// table (including the retired-key refusals).
 type configGetCmd struct {
 	Key string `arg:"" help:"Config key (see 'pix config --help' for the list)."`
 }
@@ -120,12 +104,9 @@ func (c *configGetCmd) Run(d *cli.Deps) error {
 // ── set / unset ──────────────────────────────────────────────────────────
 
 // configSetCmd and configUnsetCmd both take a key plus zero-or-more trailing
-// values: a scalar key takes exactly one value on set and none on unset, a
-// list key (mcp/services) takes exactly one either way. That arity contract
-// is provision.ApplyConfigChange's, already covered by config_cli_test.go —
-// duplicating it here as per-key struct shapes would be exactly the kind of
-// domain logic this file must not carry, so both trailing arities are just
-// `[]string` and the shared arity/validation lives in one place.
+// values. The per-key arity contract is provision.ApplyConfigChange's;
+// re-stating it as per-key struct shapes would duplicate domain logic here, so
+// both trailing arities are just `[]string`.
 type configSetCmd struct {
 	Key    string   `arg:"" help:"Config key."`
 	Values []string `arg:"" optional:"" help:"Value for the key (see 'pix config --help' for the list)."`
@@ -148,13 +129,11 @@ func (c *configUnsetCmd) Run(d *cli.Deps) error {
 	return runConfigChange(d, true, c.Key, c.Values)
 }
 
-// runConfigChange loads the config, applies a set/unset, Save()s it, and
-// prints the new value + path so the user sees the effect without opening
-// the file — then propagates to a running serve when the key is
-// daemon-affecting. The only two things this function owns are wiring
-// Deps.Out/Save into provision's pure ApplyConfigChange and mapping its
-// error to a usage failure (exit 2, kong's contract) rather than a bare one
-// (exit 1); everything else is provision.ApplyConfigChange's.
+// runConfigChange loads the config, applies a set/unset, Save()s it, prints
+// the new value + path, then propagates to a running serve when the key is
+// daemon-affecting. It owns exactly two things: wiring Deps.Out/Save into
+// provision's pure ApplyConfigChange, and mapping its error to a usage failure
+// (exit 2) rather than a bare one (exit 1).
 func runConfigChange(d *cli.Deps, unset bool, key string, values []string) error {
 	cfg, err := d.Config()
 	if err != nil {

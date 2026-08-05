@@ -1,22 +1,13 @@
 package main
 
 // models_cmd.go is `pix models` under the cli command contract
-// (docs/design/rearchitecture.md, Phase 2). It is the first verb migrated and
-// is meant to be read as the worked example for the other 33.
-//
-// What the shape buys, measured against the hand-rolled version it replaces:
-//
-//   - The flag, its help text and its validation are ONE struct field. Before,
-//     `--local`/`--cloud` were a hand-written loop over argv that rejected
-//     unknown flags itself, and the usage describing them was a separate blob
-//     maintained by hand. They drifted — the provider list in the error message
-//     omitted ollama for as long as ollama was unsupported, and stayed wrong
-//     after it was added.
-//   - Nothing here calls os.Exit or writes to os.Stdout. Every subcommand runs
-//     against a *cli.Deps whose Out is a bytes.Buffer, so its output and its
-//     exit code are ordinary assertions instead of a re-exec.
+// (docs/design/rearchitecture.md, Phase 2): the flag, its help text and its
+// validation are ONE struct field, and nothing here calls os.Exit or writes to
+// os.Stdout — every subcommand runs against a *cli.Deps, so its output and its
+// exit code are ordinary assertions instead of a re-exec.
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -29,12 +20,9 @@ import (
 )
 
 // modelsDescription is the prose kong puts above the generated command list.
-// Per-command help lives on the fields; this says only what generated usage
-// cannot infer.
-// It is a FUNC, not a const, so the override paths it prints are the REAL
-// resolved ones (honoring $ROUTING_DIR / $XDG_DATA_HOME) rather than a
-// hardcoded guess, and never the repo's embedded default source — which only
-// exists in a pix checkout and means nothing on a consumer's machine.
+// A FUNC, not a const, so the override paths it prints are the REAL resolved
+// ones ($ROUTING_DIR / $XDG_DATA_HOME) and never the repo's embedded defaults,
+// which mean nothing on a consumer's machine.
 func modelsDescription() string {
 	return `Which models pix can use, and which are wired up.
 
@@ -80,10 +68,9 @@ func (c *ModelsStatusCmd) Run(d *cli.Deps) error {
 	return nil
 }
 
-// hostQuery is the flag pair every read-only router query shares. It is
-// embedded rather than duplicated, but each subcommand is its OWN type: they
-// forward to different host verbs, and a shared type could not tell which one
-// kong had selected.
+// hostQuery is the flag pair every read-only router query shares. Each
+// subcommand is still its OWN type: they forward to different host verbs, and
+// a shared type could not tell which one kong had selected.
 type hostQuery struct {
 	JSON    bool `help:"Emit machine-readable JSON."`
 	Catalog bool `help:"Describe the shipped catalog, not this host."`
@@ -135,11 +122,8 @@ func (c *ModelsRouteCmd) Run(d *cli.Deps) error {
 	return execHostRoute(d, "compile", argv)
 }
 
-// ModelsAddCmd wires a provider end to end.
-//
-// `enum` is doing real work here. The hand-rolled version validated the
-// provider in its own if-chain and printed its own "want one of" list, which
-// had to be kept in step with models.ProviderNames() by hand — and was not.
+// ModelsAddCmd wires a provider end to end. `enum` does real work: the
+// provider list a user is offered cannot drift from the one that parses.
 type ModelsAddCmd struct {
 	Provider string `arg:"" enum:"anthropic,openai,google,gemini,ollama" help:"anthropic | openai | google | ollama"`
 	Local    bool   `help:"Ollama only: models that run on this machine."`
@@ -168,16 +152,23 @@ func (c *ModelsAddCmd) Run(d *cli.Deps) error {
 // execHostRoute forwards to the sibling pix-host binary, which owns the router.
 // It is the one place that knows the host tree is still spelled `route`.
 func execHostRoute(d *cli.Deps, verb string, argv []string) error {
+	return execHostBinary(d, append([]string{"route", verb}, argv...))
+}
+
+// execHostBinary runs the sibling pix-host with argv, wired to this command's
+// streams. It is the ONE place cmd/pix maps a host-binary failure: the child
+// already said what was wrong in its own words, so its exit code travels as a
+// SilentError rather than being re-reported here.
+func execHostBinary(d *cli.Deps, argv []string) error {
 	bin, err := launcher.FindHostBinary()
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command(bin, append([]string{"route", verb}, argv...)...)
+	cmd := exec.Command(bin, argv...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, d.Out, d.Err
 	if err := cmd.Run(); err != nil {
-		if exit, ok := err.(*exec.ExitError); ok {
-			// The host already said what was wrong in its own words; repeating it
-			// here would double-report one cause.
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
 			return cli.SilentError{Code: exit.ExitCode()}
 		}
 		return fmt.Errorf("exec %s: %w", bin, err)

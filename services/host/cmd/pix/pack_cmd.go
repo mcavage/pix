@@ -1,16 +1,8 @@
 package main
 
-// pack_cmd.go is `pix pack` under the cli command contract, plus the
-// composition the pack capability deliberately does not do for itself:
-// building the real env, supplying the MCP register function, and pinning the
-// local-MCP classifier.
-//
-// The typed tree replaced a subcommand switch here and a 44-line Usage
-// constant in the pack package. That constant was not merely duplicated, it
-// was WRONG: it documented `add knowledge --ref <git-url|path>` and
-// `--private`, neither of which any code path accepts — pack add's flag loop
-// rejects both as unknown flags. Generated help cannot describe a flag that
-// does not exist, which is the whole argument for this shape.
+// pack_cmd.go is `pix pack`, plus the composition the pack capability
+// deliberately does not do for itself: building the real env, supplying the
+// MCP register function, and pinning the local-MCP classifier.
 //
 // What is NOT here: pack's trust and service admission. `use`/`add mcp` still
 // go through the same Tier-1 host bill-of-materials gate, the same
@@ -66,8 +58,7 @@ func (c *packNewCmd) Run(d *cli.Deps) error {
 }
 
 // packAddCmd writes one artifact into a pack. The kind is an `enum`, so an
-// unknown kind is kong's error against the list the code actually implements,
-// rather than a hand-written "want: ..." string beside a switch.
+// unknown kind is kong's error against the list the code implements.
 type packAddCmd struct {
 	Kind string `arg:"" enum:"skill,knowledge,proxy,mcp" help:"skill | knowledge | proxy | mcp"`
 	Name string `arg:"" help:"Artifact name (letters, digits, -, _, . only)."`
@@ -84,9 +75,8 @@ func (c *packAddCmd) Run(d *cli.Deps) error {
 }
 
 // packAddArgs renders the typed fields into the argv pack's writer still
-// takes. pack's own parse survives this change on purpose: it is load-bearing
-// for the trust tests that drive RunPackAdd/RunPackUse directly, and moving it
-// is a capability-side change (U11e), not a root-grammar one.
+// takes. pack's own parse stays on purpose: it is load-bearing for the trust
+// tests that drive RunPackAdd/RunPackUse directly.
 func packAddArgs(c *packAddCmd) []string {
 	args := []string{c.Kind, c.Name}
 	if c.Path != "" {
