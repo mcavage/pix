@@ -59,7 +59,11 @@ func RenderStatus(w io.Writer, s Snapshot) {
 	// commands live. Status names no repair itself — printing a fix here is
 	// how two surfaces start disagreeing about the same gap.
 	if n := len(gaps); n > 0 {
-		fmt.Fprintf(w, "  %s. Run `%s` for the exact fix %s.\n", plural(n, "issue"), DoctorCommand, plural(n, "command"))
+		word := "the exact fix commands"
+		if n == 1 {
+			word = "the exact fix command"
+		}
+		fmt.Fprintf(w, "  %s. Run `%s` for %s.\n", plural(n, "issue"), DoctorCommand, word)
 	}
 }
 

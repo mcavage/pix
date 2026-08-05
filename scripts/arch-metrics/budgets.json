@@ -44,7 +44,7 @@
       "exits": 0
     },
     "pix/host/health": {
-      "prod_loc": 864,
+      "prod_loc": 868,
       "exports": 35,
       "globals": 21,
       "edges": 2,
