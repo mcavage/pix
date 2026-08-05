@@ -180,7 +180,35 @@ func loadPackTrustStore() (*PackTrustStore, error) {
 	if err := json.Unmarshal(b, &s); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", packTrustStorePath(), err)
 	}
+	migrateLegacyActivation(&s, b)
 	return &s, nil
+}
+
+// migrateLegacyActivation is the read-time backward-compat bridge for a
+// pack-trust.json written before the dual-field collapse (W3/U08b): that wire
+// format carried a single `"activation"` object alongside `"activations"`.
+// PackTrustStore no longer has a Go field for it (json.Unmarshal above silently
+// drops the unknown key), so an existing user's on-disk record would otherwise
+// vanish unread the first time it's loaded post-upgrade — losing the
+// attribution revertPackPriorContribution needs to reverse that pack's
+// contribution. This re-parses raw JUST for the legacy key and, when it names
+// a pack not already represented in Activations (same Owner+Path — never a
+// duplicate append), appends it to the ledger. Read-only and one-directional:
+// Save (below) has no Activation field to round-trip, so the legacy key is
+// written back exactly once — as a ledger entry — and never reappears.
+func migrateLegacyActivation(s *PackTrustStore, raw []byte) {
+	var legacy struct {
+		Activation *packActivationRecord `json:"activation"`
+	}
+	if err := json.Unmarshal(raw, &legacy); err != nil || legacy.Activation == nil {
+		return
+	}
+	for _, a := range s.Activations {
+		if a.Owner == legacy.Activation.Owner && a.Path == legacy.Activation.Path {
+			return // already represented in the ledger; not a duplicate append
+		}
+	}
+	s.Activations = append(s.Activations, *legacy.Activation)
 }
 
 // Save writes the store symlink-safe + atomic (the same posture as
