@@ -1,23 +1,19 @@
-// root.go — the ONE kong root: the launcher's whole verb table as a typed
-// tree, and the only thing that parses argv, dispatches a verb, or answers a
-// help request.
+// root.go — the ONE kong root: the launcher's verb table as a typed tree, and
+// the only thing that parses argv, dispatches a verb, or answers a help
+// request. It replaces main.go's `switch args[0]`, which let three sources of
+// truth disagree — the switch decided what was dispatchable, a hand-written
+// knownVerbs map decided what the suggester knew, and usage constants decided
+// what help said. Here the tree is all three.
 //
-// It replaces main.go's `switch args[0]`, the last place three sources of
-// truth could disagree: the switch decided what was dispatchable, a
-// hand-written `knownVerbs` map decided what the suggester knew about, and a
-// pile of usage constants decided what help said. A verb could be in any two
-// of the three (`gworkspace` once was). Here the tree IS all three.
-//
-// Two decisions stay in FRONT of the parser, because they are argv SHAPE, not
+// Two decisions stay in FRONT of the parser because they are argv SHAPE, not
 // grammar: the retired table (retired.go), which must answer before any config
-// read or side effect, and a bare positional that names an existing directory,
-// which is `run DIR` (classifyBareArg) — plus the `task NAME path` rewrite.
+// read or side effect, and a bare positional naming a directory, which is
+// `run DIR` (classifyBareArg) — plus the `task NAME path` rewrite.
 //
-// Migration status: the lifecycle group (ls, rm, reset, serve), task, monitor
-// and version are TYPED — struct tags parse them and generate their help.
-// Every other verb is a `passthrough:""` command whose argv reaches its
-// existing seam VERBATIM, so the cutover changed no behaviour it did not
-// migrate. Each adapter that lands deletes its field's Args tail.
+// ls, rm, reset, serve, task, monitor and version are TYPED: struct tags parse
+// them and generate their help. Every other verb is a `passthrough:""`
+// command, so its existing seam is handed the argv VERBATIM and nothing it
+// does changed. Each later migration deletes its field's Args tail.
 package main
 
 import (
@@ -70,10 +66,9 @@ type rootCmd struct {
 	Help    legacyHelpCmd   `cmd:"" passthrough:"" help:"Print this help (or a verb's usage)."`
 }
 
-// legacyArgs is the passthrough tail every unmigrated verb carries. kong stops
-// parsing at the verb name, so the seam behind it sees exactly the argv the
-// switch used to hand it — including flags kong knows nothing about, and a
-// `--help` that verb answers itself.
+// legacyArgs is the passthrough tail every unmigrated verb carries: kong stops
+// parsing at the verb name, so the seam sees the argv the switch used to hand
+// it — unknown flags and its own `--help` included.
 type legacyArgs struct {
 	Args []string `arg:"" optional:"" passthrough:"" help:"Passed to the verb unchanged."`
 }
@@ -115,10 +110,9 @@ func (c *legacyHelpCmd) Run(d *cli.Deps) error {
 	return nil
 }
 
-// testSeams are the two indirections the root's own tests need: legacy proves
-// an adapter is handed its argv verbatim without running a verb that launches
-// a sandbox, and monitor supplies a context + store root without a signal
-// handler. One var, because each is a global the production path never sets.
+// testSeams are the two indirections the root's tests need: legacy proves an
+// adapter gets its argv verbatim without launching a sandbox; monitor supplies
+// a context + store root without a signal handler. Never set in production.
 var testSeams struct {
 	legacy  func(verb string, args []string)
 	monitor func(*monitorCmd, *cli.Deps) error
@@ -140,7 +134,7 @@ func legacyForward(verb string, args []string, fn func([]string)) error {
 	return nil
 }
 
-// runHelp is the `help` verb: the tiered screen, `--all`, or one verb's usage.
+// runHelp is the `help` verb: the tiered screen, `--all`, or a verb's usage.
 func runHelp(d *cli.Deps, argv []string) {
 	if len(argv) > 0 {
 		if argv[0] == "--all" {
@@ -174,10 +168,9 @@ func newRootDeps() *cli.Deps {
 	}
 }
 
-// dispatch parses and runs one argv against the root, and returns the process
-// exit code. It is the SINGLE exit mapper: 0 success, 1 failure, 2 the user's
-// invocation was wrong, and whatever code a command asked for by name (3, the
-// "unverifiable" arm of the readiness contract, is the only other one in use).
+// dispatch runs one argv against the root and returns the process exit code.
+// It is the SINGLE exit mapper: 0 success, 1 failure, 2 a wrong invocation, and
+// a SilentError's own code (3, readiness' unverifiable arm).
 func dispatch(argv []string, d *cli.Deps) int {
 	argv = normalizeArgv(argv)
 	// A bare positional is `run DIR` when it names a directory, and a verb typo
@@ -201,11 +194,10 @@ func dispatch(argv []string, d *cli.Deps) int {
 	return cli.ExitCode(err)
 }
 
-// normalizeArgv rewrites the one argv shape the grammar cannot express:
+// normalizeArgv rewrites the one shape the grammar cannot express:
 // `pix task NAME path` -> `pix task path NAME`, so `cd "$(pix task foo path)"`
-// reads the way a user writes it. It never fires when the first token is
-// itself a subcommand, and it is a REWRITE, not a parse — the root still owns
-// every decision downstream of it.
+// reads as written. A REWRITE, not a parse: the root still owns every decision
+// downstream, and it never fires for a real subcommand.
 func normalizeArgv(argv []string) []string {
 	if len(argv) == 3 && argv[0] == "task" && argv[2] == "path" && !isTaskKnownVerb(argv[1]) {
 		return []string{"task", "path", argv[1]}
@@ -248,8 +240,8 @@ ENV (read by the in-VM extension, documented here for discoverability):
   PIX_MONITOR_URL      override the host ingest URL
                        (default http://host.docker.internal:11437)`
 
-// monitorCmd is the `monitor` verb: a pure offline reader over the on-disk
-// event store, which is why it has a --path and no --bind.
+// monitorCmd is a pure offline reader over the on-disk event store — which is
+// why it has a --path and no --bind.
 func (c *monitorCmd) Help() string { return monitorDescription }
 
 type monitorCmd struct {
@@ -276,8 +268,7 @@ func (c *monitorCmd) Run(d *cli.Deps) error {
 }
 
 // follow is the testable core: ctx governs the run so a test cancels
-// deterministically instead of signalling, and defaultRoot/tty are injected.
-// There is no listener to inject — monitor is a Follow loop over the store.
+// deterministically instead of signalling. There is no listener to inject.
 func (c *monitorCmd) follow(ctx context.Context, d *cli.Deps, tty bool) error {
 	root := c.Path
 	if root == "" {
@@ -326,9 +317,8 @@ func (c *rmCmd) Run(d *cli.Deps) error {
 // ── lifecycle: serve ────────────────────────────────────────────────────────
 
 // serveCmd is the host-services group. Its DEFAULT command execs the sibling
-// pix-host binary's `serve`, so `pix serve` and `pix serve --port N` still
-// start the daemon; the control verbs beside it (stop/status/start/…) are
-// launcher-side and never reach the host binary.
+// pix-host's `serve`, so `pix serve --port N` still starts the daemon; the
+// control verbs beside it are launcher-side and never reach the host binary.
 func (c *serveCmd) Help() string { return service.Description }
 
 type serveCmd struct {
@@ -340,9 +330,9 @@ type serveCmd struct {
 	Uninstall serveUninstallCmd `cmd:"" passthrough:"" help:"Remove the managed login service."`
 }
 
-// serveExecCmd forwards to `pix-host serve`. --bind/--port are declared here
-// because they are the two flags the host's serve documents; anything else is
-// an argument, and a raw tail can always be forced with `pix serve -- ARGS`.
+// serveExecCmd forwards to `pix-host serve`. --bind/--port are declared
+// because they are the flags that serve documents; a raw tail still goes
+// through with `pix serve -- ARGS`.
 type serveExecCmd struct {
 	Bind string   `help:"Monitor ingest listen address (default 127.0.0.1, loopback-only)." placeholder:"ADDR"`
 	Port int      `help:"Monitor ingest port (default 11437)." placeholder:"N"`
@@ -360,8 +350,8 @@ func (c *serveExecCmd) Run(d *cli.Deps) error {
 	return execHostServe(d, argv)
 }
 
-// execHostServe runs the sibling pix-host binary's `serve` subcommand, found
-// next to this binary or on PATH.
+// execHostServe runs the sibling pix-host's `serve`, found next to this binary
+// or on PATH.
 func execHostServe(d *cli.Deps, argv []string) error {
 	bin, err := launcher.FindHostBinary()
 	if err != nil {

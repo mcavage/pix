@@ -81,15 +81,11 @@ func ValidateShard(s Shard) error {
 
 // ExtractKnownVerbs returns the launcher's live top-level verb set by reading
 // the KONG ROOT (root.go's `type rootCmd struct`): every field tagged `cmd:""`
-// is a verb (aliases are the same verb under a second spelling, so they are
-// not listed separately).
-//
-// It parses the root rather than a hand-maintained list because the root is
-// the only dispatcher: a list beside it can only ever be a second, stale
-// answer to "what does pix accept?" (this guard previously scanned a
-// `knownVerbs` map that the switch could out-run). It errors when the struct
-// cannot be found at all — the same "warn, don't silently pass" contract the
-// scripts/check-*.sh guards use for a moved anchor.
+// is a verb. It parses the root because the root is the only dispatcher — a
+// list beside it can only be a second, stale answer to "what does pix
+// accept?" (this guard used to scan a knownVerbs map the switch could out-run).
+// A missing struct is an error, the same "warn, don't silently pass" contract
+// the scripts/check-*.sh guards use for a moved anchor.
 func ExtractKnownVerbs(rootGoPath string) (map[string]bool, error) {
 	file, err := parser.ParseFile(token.NewFileSet(), rootGoPath, nil, 0)
 	if err != nil {
@@ -112,10 +108,8 @@ func ExtractKnownVerbs(rootGoPath string) (map[string]bool, error) {
 		if _, isCmd := st.Lookup("cmd"); !isCmd {
 			continue
 		}
-		// Canonical names only: an alias (`st`, `mem`) is the same verb under a
-		// second spelling, and is covered by that verb's shard. Requiring a
-		// shard per alias would multiply the corpus without proving anything
-		// the canonical case does not.
+		// Canonical names only: an alias (`st`, `mem`) is covered by its verb's
+		// shard, and a shard per alias would prove nothing extra.
 		out[kongVerbName(f.Names[0].Name)] = true
 	}
 	if len(out) == 0 {
