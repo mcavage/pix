@@ -1,55 +1,33 @@
-// pix agent — manage subagents as first-class objects: ls / new / edit / rm /
-// reassess. You manage AGENTS; the router manages MODELS: an agent stores an
-// INTENT, not a pinned model, and `agent ls` makes the derivation legible.
-// See docs/design/routing.md.
+// pix agent — the subagent roster: `agent ls` shows each agent's resolved
+// model and WHY. You manage AGENTS (their .md files under ./agents); the
+// router manages MODELS: an agent stores an INTENT, not a pinned model, and
+// `agent ls` makes the derivation legible. See docs/design/routing.md.
+//
+// Authoring, editing, removing and re-scoring an agent are hand-edits now
+// (agents/*.md + scorecard.json), not CLI mutations — see retired.go for the
+// retired new/edit/rm/reassess surfaces and their guidance.
 
 package main
 
 import (
-	"encoding/json"
 	"fmt"
-	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"text/tabwriter"
 
 	"pix/host/cli"
-	"pix/host/inference"
 	"pix/host/routing"
-	"pix/host/sys"
 	"pix/host/workflow/launch"
 
 	"gopkg.in/yaml.v3"
 )
 
-// parseBudget rejects non-positive, NaN and Inf (ParseFloat accepts "NaN"/"+Inf",
-// which would poison the frontmatter).
-func parseBudget(s string) (float64, error) {
-	b, err := strconv.ParseFloat(s, 64)
-	if err != nil || math.IsNaN(b) || math.IsInf(b, 0) || b <= 0 {
-		return 0, fmt.Errorf("budget must be a positive finite number (got %q)", s)
-	}
-	return b, nil
-}
-
-// agentNameRe forbids path separators and dots, so a name can never traverse out of
-// agentsDir() in new/edit/rm (e.g. `agent rm ../README`).
-var agentNameRe = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`)
-
-func mustValidName(name string) error {
-	if !agentNameRe.MatchString(name) {
-		return fmt.Errorf("agent name %q must match %s (lowercase a-z0-9 and dashes, no slashes or dots)", name, agentNameRe.String())
-	}
-	return nil
-}
-
 // agentsDir resolves the directory holding agent markdown files: $PIX_AGENTS_DIR
-// else ./agents (run from the repo root).
+// else ./agents (run from the repo root). Also used by subagents.ts's own
+// (independent) roster read — this is the Go side's copy of that same
+// resolution rule.
 func agentsDir() string {
 	if d := strings.TrimSpace(os.Getenv("PIX_AGENTS_DIR")); d != "" {
 		return d
@@ -57,8 +35,7 @@ func agentsDir() string {
 	return "agents"
 }
 
-// agentMeta is the typed view of an agent's frontmatter (edits round-trip through a
-// yaml.Node, so unknown fields survive).
+// agentMeta is the typed view of an agent's frontmatter.
 type agentMeta struct {
 	Description string  `yaml:"description,omitempty"`
 	Intent      string  `yaml:"intent,omitempty"`
@@ -69,12 +46,16 @@ type agentMeta struct {
 }
 
 // parseAgent splits an agent file into (frontmatter text, body). hasFM is false
-// when the file has no `---` frontmatter block.
+// when the file has no `---` frontmatter block. Line endings are normalized to
+// LF before parsing, so a CRLF (Windows-authored) frontmatter block is
+// recognized the same as an LF one — the `---\n` prefix check and `\n---`
+// terminator search would otherwise both miss a `\r\n` file entirely.
 func parseAgent(content string) (fm string, body string, hasFM bool) {
-	if !strings.HasPrefix(content, "---\n") {
+	norm := strings.ReplaceAll(content, "\r\n", "\n")
+	if !strings.HasPrefix(norm, "---\n") {
 		return "", content, false
 	}
-	rest := content[len("---\n"):]
+	rest := norm[len("---\n"):]
 	end := strings.Index(rest, "\n---")
 	if end < 0 {
 		return "", content, false
@@ -219,14 +200,22 @@ func agentLs(d *cli.Deps, jsonOut bool) error {
 	}
 	rows := make([]agentRow, 0, len(names))
 	for _, n := range names {
-		m, _, _ := loadAgentMeta(filepath.Join(agentsDir(), n+".md"))
+		m, _, err := loadAgentMeta(filepath.Join(agentsDir(), n+".md"))
+		if err != nil {
+			// A malformed frontmatter block resolves no intent, so surfacing it as
+			// plain "(inherit parent)" would hide a broken agents/*.md file behind
+			// the same row a well-formed, intent-less agent gets. Name the error
+			// instead so it's the first thing a roster read shows.
+			rows = append(rows, agentRow{Name: n, Model: "(error)", Why: err.Error()})
+			continue
+		}
 		model, why := resolveAgentModel(m, reg, sc, pol)
 		rows = append(rows, agentRow{n, model, why, m.Intent, m.Tools, m.BudgetUSD})
 	}
 	if jsonOut {
 		return launch.PrintJSONLauncher(d.Out, rows)
 	}
-	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	tw := tabwriter.NewWriter(d.Out, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "AGENT\tMODEL\tWHY\tTOOLS\tBUDGET")
 	for _, r := range rows {
 		tools := "all"
@@ -240,341 +229,9 @@ func agentLs(d *cli.Deps, jsonOut bool) error {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", r.Name, r.Model, r.Why, tools, budget)
 	}
 	tw.Flush()
-	fmt.Println()
-	fmt.Println("WHY explains the pick: what the winner beat, or the constraints that left it the only")
-	fmt.Println("fit. The accuracy/cost/latency behind it are hand-maintained in scorecard.json (see")
-	fmt.Println("`pix models show`). Tune the tradeoffs in policy.json, then `pix models route`.")
+	fmt.Fprintln(d.Out)
+	fmt.Fprintln(d.Out, "WHY explains the pick: what the winner beat, or the constraints that left it the only")
+	fmt.Fprintln(d.Out, "fit. The accuracy/cost/latency behind it are hand-maintained in scorecard.json (see")
+	fmt.Fprintln(d.Out, "`pix models show`). Tune the tradeoffs in policy.json, then `pix models route`.")
 	return nil
-}
-
-func agentNew(d *cli.Deps, c *AgentNewCmd) error {
-	name := c.Name
-	if err := mustValidName(name); err != nil {
-		return err
-	}
-	if c.Interactive {
-		return launchInteractiveAuthoring(name)
-	}
-	path := filepath.Join(agentsDir(), name+".md")
-	if _, err := os.Stat(path); err == nil {
-		return fmt.Errorf("agent %q already exists at %s", name, path)
-	}
-	intent := c.Intent
-	desc := c.Description
-	if desc == "" {
-		desc = fmt.Sprintf("%s specialist. Describe what this agent is for.", name)
-	}
-	tools := c.Tools
-	budget := budgetArg(c.Budget)
-
-	// Warn, do not block: the user may add the intent to policy next.
-	if pol, err := routing.LoadPolicy(); err == nil {
-		if _, ok := pol.Intent(intent); !ok {
-			fmt.Fprintf(os.Stderr, "note: intent %q is not in policy yet; the agent will inherit the parent model until you add it (pix models show).\n", intent)
-		}
-	}
-
-	// yaml.Marshal so a description containing ': ' or '#' cannot corrupt the
-	// frontmatter; a struct keeps field order and omits empty optionals.
-	var fmStruct struct {
-		Description string  `yaml:"description"`
-		Intent      string  `yaml:"intent"`
-		Tools       string  `yaml:"tools,omitempty"`
-		BudgetUSD   float64 `yaml:"budget_usd,omitempty"`
-	}
-	fmStruct.Description = desc
-	fmStruct.Intent = intent
-	fmStruct.Tools = tools
-	if budget != "" {
-		b, err := parseBudget(budget)
-		if err != nil {
-			return err
-		}
-		fmStruct.BudgetUSD = b
-	}
-	fmBytes, err := yaml.Marshal(&fmStruct)
-	if err != nil {
-		return err
-	}
-	body := fmt.Sprintf("You are the **%s**. (Write the role brief here: what you do, how you\nwork, what good output looks like.)\n", name)
-	content := "---\n" + string(fmBytes) + "---\n\n" + body
-
-	if err := os.MkdirAll(agentsDir(), 0o755); err != nil {
-		return err
-	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		return err
-	}
-
-	fmt.Printf("created agent %q\n  %s\n\nNext:\n  1. Edit the role brief in %s\n  2. If %q needs a new task_type, hand-add its scores to\n     %s\n  3. pix models route                      # route it\nOr run `pix agent new %s --interactive` to author it conversationally.\n",
-		name, path, path, intent, routing.ScorecardPath(), name)
-	return nil
-}
-
-func agentEdit(d *cli.Deps, c *AgentEditCmd) error {
-	name := c.Name
-	if err := mustValidName(name); err != nil {
-		return err
-	}
-	path := filepath.Join(agentsDir(), name+".md")
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("agent %q not found: %w", name, err)
-	}
-	fmText, body, ok := parseAgent(string(b))
-	if !ok {
-		return fmt.Errorf("agent %q has no frontmatter to edit", name)
-	}
-	// Round-trip through an ordered node so unknown fields + order survive.
-	var node yaml.Node
-	if err := yaml.Unmarshal([]byte(fmText), &node); err != nil {
-		return fmt.Errorf("bad frontmatter: %w", err)
-	}
-	// budget_usd is the one non-string field and the only one re-validated here: kong
-	// rejected an unparseable float, this rejects a non-positive or non-finite one.
-	budget := budgetArg(c.Budget)
-	if budget != "" {
-		if _, err := parseBudget(budget); err != nil {
-			return err
-		}
-	}
-	changed := false
-	for _, f := range []struct{ key, val, tag string }{
-		{"intent", c.Intent, "!!str"},
-		{"description", c.Description, "!!str"},
-		{"tools", c.Tools, "!!str"},
-		{"budget_usd", budget, "!!float"},
-		{"model", c.Model, "!!str"},
-	} {
-		if f.val == "" {
-			continue
-		}
-		setMappingValue(&node, f.key, f.val, f.tag)
-		changed = true
-	}
-	if !changed {
-		return fmt.Errorf("agent edit: nothing to change (try --intent/--description/--tools/--budget/--model)")
-	}
-	out, err := yaml.Marshal(node.Content[0])
-	if err != nil {
-		return err
-	}
-	content := "---\n" + string(out) + "---\n\n" + strings.TrimLeft(body, "\n")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		return err
-	}
-	fmt.Printf("updated %s\n", path)
-	return nil
-}
-
-func agentRm(d *cli.Deps, c *AgentRmCmd) error {
-	name := c.Name
-	if err := mustValidName(name); err != nil {
-		return err
-	}
-	path := filepath.Join(agentsDir(), name+".md")
-	if _, err := os.Stat(path); err != nil {
-		return fmt.Errorf("agent %q not found", name)
-	}
-	if !c.Yes {
-		return fmt.Errorf("agent rm %q removes %s; pass --yes to confirm", name, path)
-	}
-	if err := os.Remove(path); err != nil {
-		return err
-	}
-	fmt.Printf("removed %s\n", path)
-	return nil
-}
-
-// agentReassess re-resolves the roster under the current policy/scorecard (zero
-// spend) and recompiles routing.json, printing the routing diff. Scores are
-// hand-maintained, so --model only points at scorecard.json and stops.
-func agentReassess(d *cli.Deps, c *AgentReassessCmd) error {
-	model := c.Model
-
-	// Baseline = the CURRENTLY COMPILED routing.json (what is live), so the diff also
-	// catches a stale routing.json after a policy change. Falls back to a fresh
-	// resolve when no compiled file exists yet.
-	before := readCompiledRoutes()
-	if before == nil {
-		var err error
-		before, err = resolveRoster()
-		if err != nil {
-			return err
-		}
-	}
-
-	if model != "" {
-		fmt.Fprintf(d.Err, "note: automated eval measurement was removed. Add/edit %q's scores by\n", model)
-		fmt.Fprintf(d.Err, "  hand in %s, then re-run\n", routing.ScorecardPath())
-		fmt.Fprintln(d.Err, "  `pix agent reassess` (no --model) to re-resolve + recompile.")
-		// Usage exit (2), returned rather than os.Exit'd so the guidance is testable
-		// in-process like every other handler here.
-		return cli.SilentError{Code: 2}
-	}
-
-	after, err := resolveRoster()
-	if err != nil {
-		return err
-	}
-
-	fmt.Println("routing changes:")
-	changed := 0
-	// Union of before + after, so a REMOVED intent (compiled but no longer in policy)
-	// also shows in the diff.
-	nameSet := map[string]bool{}
-	for n := range before {
-		nameSet[n] = true
-	}
-	for n := range after {
-		nameSet[n] = true
-	}
-	names := make([]string, 0, len(nameSet))
-	for n := range nameSet {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	for _, n := range names {
-		b, a := before[n], after[n]
-		if b == a {
-			continue
-		}
-		if b == "" {
-			b = "(none)"
-		}
-		if a == "" {
-			a = "(removed)"
-		}
-		fmt.Printf("  %-14s %s -> %s\n", n, b, a)
-		changed++
-	}
-	if changed == 0 {
-		fmt.Println("  (none)")
-	}
-	// Compile to the RIGHT file: `route compile` defaults to the routing override dir,
-	// but the image bakes the repo-root routing.json, so a reassess run from the repo
-	// must target that file or it never reaches the image.
-	compileArgs := []string{"route", "compile"}
-	if repo := repoRoutingTarget(); repo != "" {
-		compileArgs = append(compileArgs, "--out", repo)
-		fmt.Fprintf(os.Stderr, "\ncompiling routing.json (repo target: %s)...\n", repo)
-	} else {
-		fmt.Fprintln(os.Stderr, "\ncompiling routing.json...")
-	}
-	if err := execHostBinary(d, compileArgs); err != nil {
-		return fmt.Errorf("route compile: %w", err)
-	}
-	return nil
-}
-
-// repoRoutingTarget returns the repo-root routing.json the image bakes, but ONLY
-// when the cwd is unmistakably the pix repo checkout (a routing.json next to
-// pi-kit/spec.yaml); "" otherwise, so the caller keeps compile's own default.
-func repoRoutingTarget() string {
-	wd, err := os.Getwd()
-	if err != nil {
-		return ""
-	}
-	routing := filepath.Join(wd, "routing.json")
-	spec := filepath.Join(wd, "pi-kit", "spec.yaml")
-	if sys.IsRegularFile(routing) && sys.IsRegularFile(spec) {
-		return routing
-	}
-	return ""
-}
-
-// launchInteractiveAuthoring hands off to an interactive `pi` session seeded to run
-// the agent-new skill, which drives the whole flow. This process's stdio becomes
-// pi's.
-func launchInteractiveAuthoring(name string) error {
-	pi := "pi"
-	if _, err := exec.LookPath(pi); err != nil {
-		return fmt.Errorf("pi is not on PATH; cannot launch interactive authoring (scaffold non-interactively with `pix agent new %s`)", name)
-	}
-	seed := fmt.Sprintf("Use the agent-new skill to author a new subagent named %q, end to end: intake, scaffold, decide its scores in scorecard.json if it needs a new task_type, and set the default.", name)
-	fmt.Fprintf(os.Stderr, "launching pi to author %q via the agent-new skill; if it does not auto-start, run: /skill:agent-new\n", name)
-	piArgs := []string{seed}
-	// Force the authoring intent so this does not run on a weak default model.
-	if m, err := inference.ResolveSessionModel("authoring"); err == nil && m != "" {
-		piArgs = append([]string{"--model", m}, piArgs...)
-	}
-	cmd := exec.Command(pi, piArgs...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		if exit, ok := err.(*exec.ExitError); ok {
-			os.Exit(exit.ExitCode())
-		}
-		return err
-	}
-	return nil
-}
-
-// readCompiledRoutes reads the live compiled routing.json (intent -> model), or nil.
-func readCompiledRoutes() map[string]string {
-	b, err := os.ReadFile(routing.CompiledRoutingPath())
-	if err != nil {
-		return nil
-	}
-	var cr routing.CompiledRouting
-	if json.Unmarshal(b, &cr) != nil {
-		return nil
-	}
-	out := map[string]string{}
-	for name, r := range cr.Routes {
-		out[name] = r.Model
-	}
-	return out
-}
-
-// resolveRoster returns intent -> resolved model for every policy intent.
-func resolveRoster() (map[string]string, error) {
-	reg, err := routing.LoadRegistry()
-	if err != nil {
-		return nil, err
-	}
-	sc, err := routing.LoadScorecard()
-	if err != nil {
-		return nil, err
-	}
-	pol, err := routing.LoadPolicy()
-	if err != nil {
-		return nil, err
-	}
-	out := map[string]string{}
-	for _, in := range pol.Intents {
-		out[in.Name] = routing.Resolve(reg, sc, pol, in).Model
-	}
-	return out, nil
-}
-
-// setMappingValue sets key=val in a YAML mapping node, in place if present and
-// appended otherwise. doc is yaml.Unmarshal's top-level document node.
-func setMappingValue(doc *yaml.Node, key, val, tag string) {
-	if len(doc.Content) == 0 {
-		return
-	}
-	m := doc.Content[0] // mapping node
-	for i := 0; i+1 < len(m.Content); i += 2 {
-		if m.Content[i].Value == key {
-			m.Content[i+1].Value = val
-			m.Content[i+1].Tag = tag
-			m.Content[i+1].Style = 0
-			return
-		}
-	}
-	m.Content = append(m.Content,
-		&yaml.Node{Kind: yaml.ScalarNode, Value: key, Tag: "!!str"},
-		&yaml.Node{Kind: yaml.ScalarNode, Value: val, Tag: tag},
-	)
-}
-
-// budgetArg renders a parsed --budget back into the frontmatter writer's string
-// form. kong parses it as a float64, so the flag layer already rejected a bad one.
-func budgetArg(v float64) string {
-	if v <= 0 {
-		return ""
-	}
-	return fmt.Sprintf("%g", v)
 }

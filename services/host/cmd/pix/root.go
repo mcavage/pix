@@ -55,7 +55,7 @@ type rootCmd struct {
 	Monitor monitorCmd `cmd:"" group:"Observability" help:"Follow a sandbox's out-of-sandbox traffic."`
 
 	Models ModelsCmd `cmd:"" group:"Models & agents" help:"Which models pix can use, and which are wired."`
-	Agent  AgentCmd  `cmd:"" group:"Models & agents" help:"ls | new | edit | rm | reassess."`
+	Agent  AgentCmd  `cmd:"" group:"Models & agents" help:"List the roster: resolved model + WHY (new/edit/rm/reassess retired; edit agents/*.md)."`
 
 	Config configCmd `cmd:"" group:"Config & context" help:"show | path | get | set | unset."`
 
