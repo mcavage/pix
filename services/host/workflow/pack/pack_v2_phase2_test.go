@@ -15,7 +15,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -304,40 +303,28 @@ func TestHostExecFingerprint(t *testing.T) {
 // --- F5: end-to-end through RunPackUse -------------------------------------------
 
 // TestPackUse_Tier1NonTTYFailsClosed (fitness #5): a Tier-1 `pack use` on a
-// non-TTY without --yes exits non-zero and registers NOTHING — no config
-// commit, no acceptance recorded. Subprocess because RunPackUse os.Exits.
+// non-TTY without --yes FAILS and registers NOTHING — no config commit, no
+// acceptance recorded. In-process: the refusal is a returned error now, so the
+// assertion is on the error itself rather than on a subprocess's exit status.
 func TestPackUse_Tier1NonTTYFailsClosed(t *testing.T) {
-	if os.Getenv("PIX_TEST_PHASE2") == "tier1-nontty" {
-		// The pack's mcp must classify as a LOCAL host command for Tier-1
-		// (round-2 C: a remote reference no longer gates).
-		RunPackUse(localMCPEnv("fastmail"), os.Stdout, []string{os.Getenv("PIX_TEST_PACK_ROOT")}, registerOK)
-		return // exit 0 == the gate did NOT fail closed
-	}
-	dir := t.TempDir()
+	dir := isolatePackHost(t)
 	cfgPath := filepath.Join(dir, "config.toml")
 	root := filepath.Join(dir, "pack")
 	mustWritePack(t, root, Manifest{Name: "work", Schema: 1,
 		Integrations: []Integration{{Name: "Fastmail", MCP: "fastmail", Env: "FASTMAIL_TOKEN"}}})
 
-	cmd := exec.Command(os.Args[0], "-test.run", "^TestPackUse_Tier1NonTTYFailsClosed$")
-	// A pipe stdin (NOT the inherited /dev/null, which Stat()s as a char
-	// device) so the child's isTTY is deterministically false — the exact
-	// CI/script shape the fail-closed contract is about.
-	cmd.Stdin = strings.NewReader("")
-	cmd.Env = append(os.Environ(),
-		"PIX_TEST_PHASE2=tier1-nontty",
-		"PIX_TEST_PACK_ROOT="+root,
-		"PIX_CONFIG="+cfgPath,
-		"XDG_STATE_HOME="+filepath.Join(dir, "state"),
-	)
-	out, err := cmd.CombinedOutput()
+	// The pack's mcp must classify as a LOCAL host command for Tier-1
+	// (round-2 C: a remote reference no longer gates).
+	var buf bytes.Buffer
+	err := RunPackUse(localMCPEnv("fastmail"), &buf, []string{root}, registerOK)
 	if err == nil {
-		t.Fatalf("Tier-1 non-TTY adopt without --yes must exit non-zero; output:\n%s", out)
+		t.Fatalf("Tier-1 non-TTY adopt without --yes must fail; output:\n%s", buf.String())
 	}
-	if !strings.Contains(string(out), "--yes") {
+	out := buf.String() + err.Error()
+	if !strings.Contains(out, "--yes") {
 		t.Errorf("the refusal must point at --yes, got:\n%s", out)
 	}
-	if !strings.Contains(string(out), "fastmail") {
+	if !strings.Contains(out, "fastmail") {
 		t.Errorf("the BoM screen must have printed the mcp, got:\n%s", out)
 	}
 	if _, serr := os.Stat(cfgPath); !os.IsNotExist(serr) {
@@ -414,16 +401,9 @@ func TestPackUse_AcceptanceSticksAcrossReactivation(t *testing.T) {
 
 // TestPackUse_NewHostFacetRetriggersGate: a host-exec facet ADDED after
 // adoption is not covered by the old acceptance — the next `pack use` fails
-// closed again on a non-TTY. Subprocess (RunPackUse os.Exits on refusal).
+// closed again on a non-TTY.
 func TestPackUse_NewHostFacetRetriggersGate(t *testing.T) {
-	if os.Getenv("PIX_TEST_PHASE2") == "regate" {
-		RunPackUse(fakeGitEnv(nil), os.Stdout, []string{os.Getenv("PIX_TEST_PACK_ROOT")}, registerOK)
-		return
-	}
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "config.toml")
-	t.Setenv("PIX_CONFIG", cfgPath)
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	dir := isolatePackHost(t)
 	root := filepath.Join(dir, "pack")
 	mustWritePack(t, root, Manifest{Name: "work", Schema: 1,
 		Integrations: []Integration{{Name: "Fastmail", MCP: "fastmail"}}})
@@ -441,20 +421,13 @@ func TestPackUse_NewHostFacetRetriggersGate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command(os.Args[0], "-test.run", "^TestPackUse_NewHostFacetRetriggersGate$")
-	cmd.Stdin = strings.NewReader("") // pipe stdin: deterministically non-TTY
-	cmd.Env = append(os.Environ(),
-		"PIX_TEST_PHASE2=regate",
-		"PIX_TEST_PACK_ROOT="+root,
-		"PIX_CONFIG="+cfgPath,
-		"XDG_STATE_HOME="+filepath.Join(dir, "state"),
-	)
-	cmdOut, err := cmd.CombinedOutput()
+	out.Reset()
+	err := RunPackUse(fakeGitEnv(nil), &out, []string{root}, registerOK)
 	if err == nil {
-		t.Fatalf("a NEW host facet must re-trigger the gate (fail closed non-TTY); output:\n%s", cmdOut)
+		t.Fatalf("a NEW host facet must re-trigger the gate (fail closed non-TTY); output:\n%s", out.String())
 	}
-	if !strings.Contains(string(cmdOut), "platformio") {
-		t.Errorf("the re-fired BoM must name the new wrapper, got:\n%s", cmdOut)
+	if got := out.String() + err.Error(); !strings.Contains(got, "platformio") {
+		t.Errorf("the re-fired BoM must name the new wrapper, got:\n%s", got)
 	}
 }
 
@@ -462,11 +435,7 @@ func TestPackUse_NewHostFacetRetriggersGate(t *testing.T) {
 // [[bin]] whose file does not hash to its pinned sha refuses `pack use`
 // OUTRIGHT — even with --yes, before anything commits.
 func TestPackUse_BinShaMismatchRefusesActivation(t *testing.T) {
-	if os.Getenv("PIX_TEST_PHASE2") == "binsha" {
-		RunPackUse(fakeGitEnv(nil), os.Stdout, []string{os.Getenv("PIX_TEST_PACK_ROOT"), "--yes"}, registerOK)
-		return
-	}
-	dir := t.TempDir()
+	dir := isolatePackHost(t)
 	cfgPath := filepath.Join(dir, "config.toml")
 	root := filepath.Join(dir, "pack")
 	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
@@ -478,18 +447,12 @@ func TestPackUse_BinShaMismatchRefusesActivation(t *testing.T) {
 	mustWritePack(t, root, Manifest{Name: "work", Schema: 1,
 		Bins: []packBin{{Name: "fm", Path: "bin/fm", SHA: sha256Hex([]byte("the pinned bytes")), Host: true}}})
 
-	cmd := exec.Command(os.Args[0], "-test.run", "^TestPackUse_BinShaMismatchRefusesActivation$")
-	cmd.Env = append(os.Environ(),
-		"PIX_TEST_PHASE2=binsha",
-		"PIX_TEST_PACK_ROOT="+root,
-		"PIX_CONFIG="+cfgPath,
-		"XDG_STATE_HOME="+filepath.Join(dir, "state"),
-	)
-	out, err := cmd.CombinedOutput()
+	var buf bytes.Buffer
+	err := RunPackUse(fakeGitEnv(nil), &buf, []string{root, "--yes"}, registerOK)
 	if err == nil {
-		t.Fatalf("a sha-mismatched [[bin]] must refuse activation; output:\n%s", out)
+		t.Fatalf("a sha-mismatched [[bin]] must refuse activation; output:\n%s", buf.String())
 	}
-	if !strings.Contains(string(out), "mismatch") {
+	if out := buf.String() + err.Error(); !strings.Contains(out, "mismatch") {
 		t.Errorf("expected a mismatch refusal, got:\n%s", out)
 	}
 	if _, serr := os.Stat(cfgPath); !os.IsNotExist(serr) {

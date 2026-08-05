@@ -2,10 +2,8 @@
 //
 // The model splits on whether the pack EXECUTES code on the host. Tier-0 —
 // skills / knowledge / config / sandbox-only wrappers, plus REFERENCE-ONLY
-// integrations where the pack contributes only a NAME and the argv is
-// launcher-built — adopts with NO prompt, non-TTY fine. Tier-1 is ANY host-exec
-// facet (a local stdio MCP, a container/remote MCP, a host=true [[proxy]] or
-// [[bin]], a [[setup]] hook, an inference gateway, a [[services]] unit): it
+// integrations contributing only a NAME to launcher-built argv — adopts with NO
+// prompt, non-TTY fine. Tier-1 is ANY host-exec facet (see hostBoM.Tier1): it
 // halts at the bill-of-materials screen and requires an explicit yes; non-TTY
 // FAILS CLOSED unless --yes.
 //
@@ -28,6 +26,7 @@ import (
 	"pix/host/hostenv"
 	"pix/host/mcp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -111,13 +110,10 @@ func VerifyPackInferenceTrust(p *Info, cfgGogAccount string, env hostenv.Env) er
 }
 
 // LocalMCPClassifier resolves the registrar's local-vs-gateway partition into a
-// predicate: TRUE for a name this host runs as a LOCAL stdio server, i.e. one
-// whose attach spawns a host command. Anything outside that set is
-// reference-only Tier-0. UNKNOWN FAILS CLOSED: when the set cannot be
-// established (probe error, pix-host unresolved) every non-gog name is treated
-// as host-exec, because a name already registered in the gateway would
-// otherwise run with NO gate shown. Over-prompting on a transient probe failure
-// is acceptable; skipping the gate is not.
+// predicate: TRUE for a name this host runs as a LOCAL stdio server (its attach
+// spawns a host command); anything else is reference-only Tier-0. UNKNOWN FAILS
+// CLOSED — an unestablished set treats every non-gog name as host-exec, because
+// a name already registered in the gateway would otherwise run with NO gate.
 func LocalMCPClassifier(env hostenv.Env, hostResolver func() (string, error)) func(string) bool {
 	set, known := mcp.LocalMCPNames(env, hostResolver)
 	return func(name string) bool {
@@ -136,11 +132,11 @@ var PackLocalMCP = func() func(string) bool { return func(string) bool { return 
 // ComputeHostBoM enumerates a pack's host bill-of-materials (pure, testable):
 // MCP commands (resolved argv), host=true wrappers and [[bin]]s, [[services]],
 // setup hooks, inference gateways, the egress union and credential VAR names.
-// Bare binary names keep the reviewed SHAPE deterministic and identical to what
-// registration resolves. cfgGogAccount is the RESOLVED fallback account, so a
-// later gog_account change re-gates. isLocalMCP is the local-vs-gateway
-// partition; nil FAILS CLOSED exactly like an unknown probe. [[bin]] entries
-// enter ONLY with host=true, so flipping an inert bin later is a NEW surface.
+// Bare binary names keep the reviewed SHAPE identical to what registration
+// resolves. cfgGogAccount is the RESOLVED fallback account, so a later
+// gog_account change re-gates; isLocalMCP nil FAILS CLOSED like an unknown
+// probe; a [[bin]] enters ONLY with host=true, so flipping an inert bin is a
+// NEW surface.
 func ComputeHostBoM(p *Info, cfgGogAccount string, isLocalMCP func(string) bool) hostBoM {
 	var b hostBoM
 	account := strings.TrimSpace(p.Manifest.GogAccount)
@@ -227,18 +223,17 @@ func ComputeHostBoM(p *Info, cfgGogAccount string, isLocalMCP func(string) bool)
 
 // ComputeHostExecFingerprint hashes the ENTIRE host-exec surface — what the
 // Tier-1 acceptance is FOR: every MCP's resolved argv, every host=true
-// [[proxy]] script's CONTENT (sha256 of the bytes on disk, symlink-refused),
-// every [[bin]] pin, every [[services]] field, setup hook bytes, inference
-// policy, egress and credential VAR names. Entries sort canonically, so a pure
-// manifest reorder never re-gates, and the per-proxy content hashes come back
-// so the installer verifies the exact bytes it stages (no TOCTOU).
+// [[proxy]] script's CONTENT, every [[bin]] pin, every [[services]] field,
+// setup hook bytes, inference policy, egress and credential VAR names. Entries
+// sort canonically, so a pure manifest reorder never re-gates, and the
+// per-proxy content hashes come back so the installer verifies the exact bytes
+// it stages (no TOCTOU).
 //
 // THE ENCODING IS CANONICAL AND INJECTIVE: a structured JSON document (fixed
-// field order, sorted entries, every string escaped) is what gets hashed. An
+// field order, sorted entries, every string escaped) is hashed, because an
 // ad-hoc NUL/newline concatenation is not injective — a value containing the
-// delimiter bytes could encode a DIFFERENT surface with an identical hash. An
-// unfingerprintable surface is an ERROR: it can be neither accepted nor
-// installed.
+// delimiter could encode a DIFFERENT surface with an identical hash. An
+// unfingerprintable surface is an ERROR: neither acceptable nor installable.
 func ComputeHostExecFingerprint(root string, b hostBoM) (string, map[string]string, error) {
 	return computeHostExecFingerprintWithSetup(root, b, nil)
 }
@@ -289,92 +284,88 @@ func computeHostExecFingerprintWithSetup(root string, b hostBoM, setupBytes map[
 	}
 	doc := fpDoc{V: 6}
 	proxySHA := map[string]string{}
-	doc.MCP = append(doc.MCP, b.MCP...)
-	sort.Slice(doc.MCP, func(i, j int) bool {
-		if doc.MCP[i].Name != doc.MCP[j].Name {
-			return doc.MCP[i].Name < doc.MCP[j].Name
-		}
-		return strings.Join(doc.MCP[i].Argv, "\x00") < strings.Join(doc.MCP[j].Argv, "\x00")
-	})
+	doc.MCP = sortedByKey(b.MCP, func(m hostBoMMCP) string { return m.Name + "\x00" + strings.Join(m.Argv, "\x00") })
 	for _, c := range b.Containers {
-		c.EnvKeys = append([]string(nil), c.EnvKeys...)
-		sort.Strings(c.EnvKeys)
+		c.EnvKeys = sortedByKey(c.EnvKeys, func(k string) string { return k })
 		doc.Containers = append(doc.Containers, c)
 	}
-	sort.Slice(doc.Containers, func(i, j int) bool { return doc.Containers[i].Name < doc.Containers[j].Name })
-	doc.RemoteMCP = append(doc.RemoteMCP, b.RemoteMCP...)
-	sort.Slice(doc.RemoteMCP, func(i, j int) bool { return doc.RemoteMCP[i].Name < doc.RemoteMCP[j].Name })
+	doc.Containers = sortedByKey(doc.Containers, func(c hostBoMContainer) string { return c.Name })
+	doc.RemoteMCP = sortedByKey(b.RemoteMCP, func(r hostBoMRemote) string { return r.Name })
 	for _, name := range b.Proxies {
-		src := filepath.Join(root, "bin", name)
-		if isSymlinkPath(src) {
-			return "", nil, fmt.Errorf("host wrapper %q is a symlink; refusing to fingerprint it", name)
-		}
-		data, err := os.ReadFile(src)
+		sha, err := hashHostExecFile(filepath.Join(root, "bin", name), "host wrapper "+strconv.Quote(name))
 		if err != nil {
-			return "", nil, fmt.Errorf("host wrapper %q: %v (cannot fingerprint the host-exec surface; fail closed)", name, err)
+			return "", nil, err
 		}
-		sum := sha256.Sum256(data)
-		sha := hex.EncodeToString(sum[:])
 		proxySHA[name] = sha
 		doc.Proxies = append(doc.Proxies, fpProxy{Name: name, SHA: sha})
 	}
-	sort.Slice(doc.Proxies, func(i, j int) bool { return doc.Proxies[i].Name < doc.Proxies[j].Name })
+	doc.Proxies = sortedByKey(doc.Proxies, func(p fpProxy) string { return p.Name })
 	for _, bn := range b.Bins {
 		doc.Bins = append(doc.Bins, fpBin{Name: bn.Name, SHA: strings.ToLower(strings.TrimSpace(bn.SHA)), Host: bn.Host})
 	}
-	sort.Slice(doc.Bins, func(i, j int) bool {
-		if doc.Bins[i].Name != doc.Bins[j].Name {
-			return doc.Bins[i].Name < doc.Bins[j].Name
-		}
-		return doc.Bins[i].SHA < doc.Bins[j].SHA
-	})
-	doc.Egress = append([]string(nil), b.Egress...)
-	sort.Strings(doc.Egress)
-	doc.Creds = append([]string(nil), b.Creds...)
-	sort.Strings(doc.Creds)
+	doc.Bins = sortedByKey(doc.Bins, func(b fpBin) string { return b.Name + "\x00" + b.SHA })
+	doc.Egress = sortedByKey(b.Egress, func(e string) string { return e })
+	doc.Creds = sortedByKey(b.Creds, func(c string) string { return c })
 	doc.Prerequisites = append([]string(nil), b.Prerequisites...)
 	for _, s := range b.Setup {
-		data, snapshotted := setupBytes[s.ID]
-		if !snapshotted {
-			path := filepath.Join(root, s.Path)
-			if isSymlinkPath(path) {
-				return "", nil, fmt.Errorf("setup hook %q is a symlink; refusing to fingerprint it", s.ID)
-			}
+		sha, ok := "", false
+		if data, snapshotted := setupBytes[s.ID]; snapshotted {
+			sum := sha256.Sum256(data)
+			sha, ok = hex.EncodeToString(sum[:]), true
+		}
+		if !ok {
 			var err error
-			data, err = os.ReadFile(path)
-			if err != nil {
-				return "", nil, fmt.Errorf("setup hook %q: %v (cannot fingerprint the host-exec surface; fail closed)", s.ID, err)
+			if sha, err = hashHostExecFile(filepath.Join(root, s.Path), "setup hook "+strconv.Quote(s.ID)); err != nil {
+				return "", nil, err
 			}
 		}
-		sum := sha256.Sum256(data)
 		doc.Setup = append(doc.Setup, fpSetup{
-			ID: s.ID, Path: filepath.Clean(s.Path), SHA: hex.EncodeToString(sum[:]),
+			ID: s.ID, Path: filepath.Clean(s.Path), SHA: sha,
 			CheckArgs: append([]string(nil), s.CheckArgs...), ApplyArgs: append([]string(nil), s.ApplyArgs...),
 			Required: s.Required, Description: s.Description,
 		})
 	}
-	sort.Slice(doc.Setup, func(i, j int) bool { return doc.Setup[i].ID < doc.Setup[j].ID })
+	doc.Setup = sortedByKey(doc.Setup, func(s fpSetup) string { return s.ID })
 	doc.Inference = append(doc.Inference, b.Inference...)
 	for _, svc := range b.Services {
-		// Argv order is semantic (kept); env/mounts/network are sets \u2014 sorted so
+		// Argv order is semantic (kept); env/mounts/network are sets — sorted so
 		// a pure list reorder never re-gates.
 		svc.SHA = strings.ToLower(strings.TrimSpace(svc.SHA))
-		svc.Env = append([]string(nil), svc.Env...)
-		svc.Mounts = append([]string(nil), svc.Mounts...)
-		svc.Network = append([]string(nil), svc.Network...)
-		sort.Strings(svc.Env)
-		sort.Strings(svc.Mounts)
-		sort.Strings(svc.Network)
+		id := func(s string) string { return s }
+		svc.Env, svc.Mounts, svc.Network = sortedByKey(svc.Env, id), sortedByKey(svc.Mounts, id), sortedByKey(svc.Network, id)
 		doc.Services = append(doc.Services, svc)
 	}
 	// Names are unique (validatePackServices), so name order is total.
-	sort.Slice(doc.Services, func(i, j int) bool { return doc.Services[i].Name < doc.Services[j].Name })
+	doc.Services = sortedByKey(doc.Services, func(s packService) string { return s.Name })
 	enc, err := json.Marshal(doc)
 	if err != nil {
 		return "", nil, fmt.Errorf("encoding host-exec surface: %v", err)
 	}
 	sum := sha256.Sum256(enc)
 	return hex.EncodeToString(sum[:]), proxySHA, nil
+}
+
+// sortedByKey returns a sorted COPY of in — the canonical ordering every
+// fingerprint section needs, so a pure manifest reorder never re-gates.
+func sortedByKey[T any](in []T, key func(T) string) []T {
+	out := append([]T(nil), in...)
+	sort.Slice(out, func(i, j int) bool { return key(out[i]) < key(out[j]) })
+	return out
+}
+
+// hashHostExecFile is the fingerprint side of the content pin: hash the bytes
+// on disk, symlink-refused. An unhashable surface is an ERROR — it can be
+// neither accepted nor installed.
+func hashHostExecFile(path, label string) (string, error) {
+	if isSymlinkPath(path) {
+		return "", fmt.Errorf("%s is a symlink; refusing to fingerprint it", label)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("%s: %v (cannot fingerprint the host-exec surface; fail closed)", label, err)
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // renderHostBoM prints the review screen: exactly what would run on the host,

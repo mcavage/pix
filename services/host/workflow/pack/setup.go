@@ -12,10 +12,10 @@ import (
 	"pix/host/service"
 )
 
-// RunPackSetup runs a pack's required setup contributions after the
-// pack has been adopted through the normal Tier-1 trust gate. Every step is
-// resumable: its bounded check runs first, apply runs only when check fails,
-// and the same check must pass afterward before Pix reports readiness.
+// RunPackSetup runs a pack's required setup contributions after adoption
+// through the normal Tier-1 trust gate. Every step is resumable: its bounded
+// check runs first, apply runs only when check fails, and the same check must
+// pass afterward before Pix reports readiness.
 func RunPackSetup(env hostenv.Env, out io.Writer, root string, requested []string, interactive bool) error {
 	p, err := LoadPack(root)
 	if err != nil {
@@ -69,9 +69,9 @@ func RunPackSetup(env hostenv.Env, out io.Writer, root string, requested []strin
 }
 
 // snapshotAcceptedPackSetup copies every selected executable into a private
-// launcher-owned directory, then fingerprints the complete host surface using
-// the captured bytes and requires an exact accepted trust record. Checks,
-// apply, and re-check all execute the same immutable snapshot path.
+// launcher-owned directory, fingerprints the host surface from the CAPTURED
+// bytes and requires an exact accepted trust record — so check, apply and
+// re-check all execute the same immutable snapshot path.
 func snapshotAcceptedPackSetup(env hostenv.Env, p *Info, wanted map[string]bool) (map[string]string, func(), error) {
 	paths := map[string]string{}
 	cleanup := func() {}
