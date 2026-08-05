@@ -79,9 +79,9 @@
       "exits": 0
     },
     "pix/host/lease": {
-      "prod_loc": 618,
-      "exports": 12,
-      "globals": 8,
+      "prod_loc": 1042,
+      "exports": 19,
+      "globals": 11,
       "edges": 0,
       "exits": 0
     },
