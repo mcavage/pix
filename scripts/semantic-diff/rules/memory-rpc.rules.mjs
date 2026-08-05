@@ -7,13 +7,13 @@
 export default [
 	{
 		id: "memory.rpc.methods.server",
-		description: "services/host/memory.go's JSON-RPC method table (newMemoryMux) exposes exactly this method set.",
+		description: "services/host/serve_plugin.go's JSON-RPC method table (memoryStoreMux, the ONE :11435 surface both the supervised unit and the bare daemon answer through) exposes exactly this method set.",
 		checks: [
 			{
-				file: "services/host/memory.go",
+				file: "services/host/serve_plugin.go",
 				kind: "set",
-				region: { start: "methods := map[string]func(jsonObj) (any, error){", end: "handleOne := func" },
-				pattern: '"([a-z]+)":\\s*func\\(',
+				region: { start: "return jsonrpcMux(map[string]func(jsonObj) (any, error){", end: "\n\t})\n}" },
+				pattern: '"([a-z]+)":\\s*with\\(func\\(',
 				expected: ["forget", "health", "identity", "observe", "promotable", "recall", "remember", "stats", "synthesize"],
 			},
 		],
@@ -35,9 +35,9 @@ export default [
 		description: "The server-side `recall` handler reads exactly these param names off the JSON-RPC request.",
 		checks: [
 			{
-				file: "services/host/memory.go",
+				file: "services/host/serve_plugin.go",
 				kind: "set",
-				region: { start: '"recall": func(p jsonObj) (any, error) {', end: '\n\t\t"remember":' },
+				region: { start: '"recall": with(func(s plugin.MemoryStore, p jsonObj) (any, error) {', end: '\n\t\t"remember":' },
 				patterns: ['getStr\\(p, "([a-zA-Z]+)"\\)', 'clampInt\\(p\\["([a-zA-Z]+)"\\]'],
 				expected: ["query", "limit", "charBudget", "kind", "project"],
 			},
@@ -47,9 +47,9 @@ export default [
 				// handler still routes profile through that shared reader instead
 				// of reading p["profile"] directly (which would silently bypass
 				// memNormProfile's default-bucket normalization).
-				file: "services/host/memory.go",
+				file: "services/host/serve_plugin.go",
 				kind: "contains",
-				region: { start: '"recall": func(p jsonObj) (any, error) {', end: '\n\t\t"remember":' },
+				region: { start: '"recall": with(func(s plugin.MemoryStore, p jsonObj) (any, error) {', end: '\n\t\t"remember":' },
 				values: ["profileFromParams(p)"],
 			},
 		],

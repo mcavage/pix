@@ -530,8 +530,11 @@ test("the CLI exits 0 against the real repo and exits 1 against a fixture with a
 	fs.cpSync(path.join(REPO_ROOT, "services"), path.join(root, "services"), { recursive: true });
 	fs.cpSync(path.join(REPO_ROOT, "extensions"), path.join(root, "extensions"), { recursive: true });
 	// Corrupt the memory RPC method table: rename "remember" -> "rememberFact".
-	const memGo = path.join(root, "services/host/memory.go");
-	fs.writeFileSync(memGo, fs.readFileSync(memGo, "utf8").replace('"remember": func(p jsonObj)', '"rememberFact": func(p jsonObj)'));
+	// The table lives in serve_plugin.go (memoryStoreMux): U11j collapsed the
+	// duplicate in memory.go into it, so both :11435 entry points answer through
+	// this one map — which is exactly the file a lockstep rename would hit.
+	const muxGo = path.join(root, "services/host/serve_plugin.go");
+	fs.writeFileSync(muxGo, fs.readFileSync(muxGo, "utf8").replace('"remember": with(func(', '"rememberFact": with(func('));
 
 	let failed = false;
 	try {
