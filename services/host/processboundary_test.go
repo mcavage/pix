@@ -40,12 +40,10 @@ var processExits = map[string]bool{"Exit": true, "Stdout": true, "Stderr": true}
 
 // l3Debt is the remaining, KNOWN process-boundary debt in L3, by package and
 // count. Every entry is a promise to pay, with the reason it has not been.
-var l3Debt = map[string]int{
-	// provision's first-run flow is the ONE composition-root-shaped workflow:
-	// FirstRunFlow itself takes (in, out, tty), and this is the wrapper that
-	// supplies the process's own three.
-	"workflow/provision": 1,
-}
+// It is empty: every L3 workflow returns a typed error and writes to an
+// injected writer, including provision's first-run flow (FirstRunFlow takes
+// out io.Writer; its cmd/pix caller supplies the process's own os.Stdout).
+var l3Debt = map[string]int{}
 
 func TestL3NeverTouchesTheProcessBoundary(t *testing.T) {
 	root := hostModuleRoot(t)
