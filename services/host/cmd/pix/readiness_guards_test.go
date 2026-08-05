@@ -340,7 +340,6 @@ var readinessConsumers = map[string]bool{
 	"workflow/gworkspace": true,
 	"workflow/launch":     true,
 	"workflow/models":     true,
-	"workflow/slack":      true,
 }
 
 // TestReadinessConsumersOnlyShrink walks the module for PRODUCTION files that

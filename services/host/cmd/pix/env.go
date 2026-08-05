@@ -12,11 +12,10 @@ import (
 	"pix/host/inference"
 	"pix/host/rpc"
 	"pix/host/sys"
-	"pix/host/workflow/slack"
 )
 
 // defaultShellEnv returns a hostenv.Env backed by the real OS.
 func defaultShellEnv() hostenv.Env {
 	return hostenv.Env{
-		System: sys.Real{}, HostBinary: func() (string, error) { return hostBinaryResolver() }, IdentityProbe: rpc.IdentityProbe, SlackAuth: slack.LiveSlackAuthTest, DirectInference: inference.LiveDirectInferenceProbe, OllamaInference: inference.LiveOllamaInferenceProbe}
+		System: sys.Real{}, HostBinary: func() (string, error) { return hostBinaryResolver() }, IdentityProbe: rpc.IdentityProbe, DirectInference: inference.LiveDirectInferenceProbe, OllamaInference: inference.LiveOllamaInferenceProbe}
 }

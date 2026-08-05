@@ -17,7 +17,8 @@ export default [
 				// Bounded to the AGENTS.md-documented user surface: Services through
 				// GoogleWorkspaceAccess (KnowledgeBundles was retired, W2 U03A, along
 				// with the built-in knowledge service — it no longer has a live
-				// on-disk key). Kits/Skills/Packs/Plugins/Host/Slack (further down
+				// on-disk key; Slack went the same way in W2/U02a with the built-in
+				// Slack MCP server). Kits/Skills/Packs/Plugins/Host (further down
 				// the same struct) are real keys too but are out of scope for this W0
 				// pin — Story-scoped follow-up, not this guard's job to enumerate the
 				// entire struct.

@@ -2,10 +2,10 @@
   "schema": 1,
   "packages": {
     "pix/host": {
-      "prod_loc": 6790,
+      "prod_loc": 5934,
       "exports": 0,
-      "globals": 64,
-      "edges": 9,
+      "globals": 50,
+      "edges": 8,
       "exits": 29
     },
     "pix/host/cli": {
@@ -16,11 +16,11 @@
       "exits": 4
     },
     "pix/host/cmd/pix": {
-      "prod_loc": 3643,
+      "prod_loc": 3642,
       "exports": 19,
       "globals": 15,
-      "edges": 26,
-      "exits": 55
+      "edges": 25,
+      "exits": 53
     },
     "pix/host/cmd/pix/corpus": {
       "prod_loc": 592,
@@ -30,9 +30,9 @@
       "exits": 0
     },
     "pix/host/config": {
-      "prod_loc": 1415,
-      "exports": 48,
-      "globals": 17,
+      "prod_loc": 1312,
+      "exports": 46,
+      "globals": 16,
       "edges": 0,
       "exits": 0
     },
@@ -51,8 +51,8 @@
       "exits": 0
     },
     "pix/host/hostenv": {
-      "prod_loc": 67,
-      "exports": 4,
+      "prod_loc": 56,
+      "exports": 3,
       "globals": 0,
       "edges": 2,
       "exits": 0
@@ -114,7 +114,7 @@
       "exits": 0
     },
     "pix/host/readiness": {
-      "prod_loc": 720,
+      "prod_loc": 719,
       "exports": 51,
       "globals": 35,
       "edges": 0,
@@ -162,13 +162,6 @@
       "edges": 6,
       "exits": 8
     },
-    "pix/host/slackoauth": {
-      "prod_loc": 1031,
-      "exports": 26,
-      "globals": 14,
-      "edges": 0,
-      "exits": 0
-    },
     "pix/host/supervise": {
       "prod_loc": 991,
       "exports": 36,
@@ -192,7 +185,7 @@
     },
     "pix/host/workflow/doctor": {
       "prod_loc": 1043,
-      "exports": 35,
+      "exports": 34,
       "globals": 10,
       "edges": 17,
       "exits": 0
@@ -233,7 +226,7 @@
       "exits": 39
     },
     "pix/host/workflow/provision": {
-      "prod_loc": 1448,
+      "prod_loc": 1370,
       "exports": 37,
       "globals": 12,
       "edges": 12,
@@ -244,13 +237,6 @@
       "exports": 11,
       "globals": 6,
       "edges": 6,
-      "exits": 0
-    },
-    "pix/host/workflow/slack": {
-      "prod_loc": 1798,
-      "exports": 12,
-      "globals": 18,
-      "edges": 7,
       "exits": 0
     },
     "pix/host/workflow/task": {

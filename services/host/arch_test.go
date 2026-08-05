@@ -71,7 +71,6 @@ var pkgLayer = map[string]int{
 	"monitor":    layerCapability,
 	"okf":        layerCapability,
 	"plugin":     layerCapability,
-	"slackoauth": layerCapability,
 	"service":    layerCapability,
 	"memory":     layerCapability,
 	"knowledge":  layerCapability,
@@ -124,16 +123,14 @@ var pkgLayer = map[string]int{
 	// `restore` subcommands that survive live at root (memory_backup.go,
 	// memory_restore.go) — they are the memory snapshot/real store, not this
 	// launcher package, and are unaffected.
-	// slack is a WORKFLOW, not a capability, and the layering test is what
-	// settled it: as an L1 it violated three rules at once (mcp, secret,
-	// readiness). `pix slack setup` sequences an OAuth grant, a credential
-	// write, an MCP registration and a readiness report — that is cross-domain
-	// sequencing, which is the definition of L3. The pure capability underneath
-	// it is slackoauth, which was already L1 and already correct.
-	"workflow/slack": layerWorkflow,
-	// pack is a workflow for the same reason slack is: `pix pack use` resolves a
-	// pack, then registers its MCP servers, wires its knowledge refs, seeds its
-	// credentials and restarts services. It consumes five capabilities and
+	//
+	// slack (the OAuth/credential/MCP-registration workflow, plus the slackoauth
+	// L1 capability underneath it) was externalized in W2/U02a — see
+	// docs/design/slack-setup.md — and neither package exists in the public tree.
+	//
+	// pack is a workflow for the same reason slack was: `pix pack use` resolves
+	// a pack, then registers its MCP servers, wires its knowledge refs, seeds
+	// its credentials and restarts services. It consumes five capabilities and
 	// nothing below L4 consumes it. The capability-shaped parts inside it
 	// (manifest parsing, the trust store, the host BoM) are candidates to split
 	// out later; being a workflow is already correct today.

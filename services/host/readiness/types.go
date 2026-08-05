@@ -9,7 +9,6 @@
 //
 //	workflow/gworkspace   renders its own readiness Checks for `gworkspace
 //	                      setup` (the gog leaf; a separate unit)
-//	workflow/slack        the same, for the Slack OAuth surface
 //	workflow/models       `pix models add`'s inference selection/verification
 //	workflow/launch       the launch key gate and the host-state read
 //	workflow/doctor       the three LEAF helpers the four above call

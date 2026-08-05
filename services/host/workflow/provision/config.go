@@ -5,7 +5,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"pix/host/cli"
 	"pix/host/config"
@@ -131,19 +130,6 @@ func ConfigValue(cfg *config.Config, key string) (string, error) {
 		return "", fmt.Errorf("%s is retired: `pix host` (the unsandboxed escape hatch) was removed — the sandbox is the only supported execution boundary now; this key does nothing", key)
 	case "host.autoserve":
 		return strconv.FormatBool(cfg.AutoserveEnabled()), nil
-	case "slack.client_id":
-		return cfg.Slack.ClientID, nil
-	case "slack.redirect_uri":
-		return cfg.Slack.RedirectURI, nil
-	case "slack.oauth_vault_id":
-		return cfg.Slack.OAuthVaultID, nil
-	case "slack.oauth_document_id":
-		return cfg.Slack.OAuthDocumentID, nil
-	case "slack.oauth_grant_expires_at":
-		if cfg.Slack.OAuthGrantExpiresAt.IsZero() {
-			return "", nil
-		}
-		return cfg.Slack.OAuthGrantExpiresAt.Format(time.RFC3339), nil
 	default:
 		return "", fmt.Errorf("unknown key %q\n%s", key, ConfigKeysHelp)
 	}
@@ -213,23 +199,6 @@ const ConfigKeysHelp = `keys:
   host.autoserve true|false lazy auto-start of the services daemon on run/
                             memory/knowledge (default true; PIX_NO_AUTOSERVE
                             env also disables it)
-  slack.client_id <id>      Slack app's PUBLIC OAuth client id (no secret;
-                            used by 'pix slack setup'); unset also clears the
-                            OAuth vault/document id and cached grant expiry,
-                            since those locators are only valid for the app
-                            they were minted under
-  slack.redirect_uri <uri>  registered OAuth callback (http://localhost:<port>
-                            /slack/callback); unset restores the built-in
-                            default when a client_id is configured, else
-                            clears it
-  slack.oauth_vault_id <id> 1Password vault holding the OAuth credential
-                            (get-only diagnostic; written by 'pix slack setup')
-  slack.oauth_document_id <id>
-                            1Password document id holding the OAuth credential
-                            (get-only diagnostic; written by 'pix slack setup')
-  slack.oauth_grant_expires_at <ts>
-                            cached rotating-grant expiry (get-only diagnostic;
-                            written by 'pix slack setup')
 `
 
 // ApplyConfigChange applies a set (unset=false) or unset to cfg and returns a
@@ -356,53 +325,6 @@ func ApplyConfigChange(cfg *config.Config, unset bool, key string, args []string
 			cfg.Host.Autoserve = &v
 		}
 		return fmt.Sprintf("host.autoserve = %v", cfg.AutoserveEnabled()), nil
-
-	case "slack.client_id":
-		// The public OAuth client id. Unset also clears the OAuth locator/grant
-		// fields (vault id, document id, cached grant expiry): those only ever
-		// resolve to a credential minted under a particular client id, and
-		// leaving them behind after the client id changes would let the runtime
-		// pick up a vault/document that no longer matches the configured app.
-		if unset {
-			cfg.SetSlackClientID("")
-			cfg.SetSlackOAuthVaultID("")
-			cfg.SetSlackOAuthDocumentID("")
-			cfg.SetSlackOAuthGrantExpiresAt(time.Time{})
-		} else {
-			if len(args) != 1 {
-				return "", fmt.Errorf("config set slack.client_id <id>: needs exactly one value")
-			}
-			cfg.SetSlackClientID(args[0])
-		}
-		return fmt.Sprintf("slack.client_id = %q", cfg.Slack.ClientID), nil
-
-	case "slack.redirect_uri":
-		if unset {
-			if strings.TrimSpace(cfg.Slack.ClientID) != "" {
-				// A client id is configured, so the OAuth flow still needs
-				// somewhere to send Slack — restore the built-in default rather
-				// than leave it blank (matches config.applyDefaults's own
-				// client-id-gated resolution on the next Load).
-				cfg.SetSlackRedirectURI(config.DefaultSlackOAuthRedirectURI)
-			} else {
-				cfg.SetSlackRedirectURI("")
-			}
-		} else {
-			if len(args) != 1 {
-				return "", fmt.Errorf("config set slack.redirect_uri <uri>: needs exactly one value")
-			}
-			cfg.SetSlackRedirectURI(args[0])
-		}
-		return fmt.Sprintf("slack.redirect_uri = %q", cfg.Slack.RedirectURI), nil
-
-	case "slack.oauth_vault_id", "slack.oauth_document_id", "slack.oauth_grant_expires_at":
-		// Managed state: written only by `pix slack setup` (and cleared
-		// together by `unset slack.client_id`). Refuse direct set/unset so a
-		// hand-edited locator can never point at a credential that doesn't
-		// match the configured client id; `config get` still reads them for
-		// diagnostics.
-		return "", fmt.Errorf("%s is managed by `pix slack setup` and not directly settable; "+
-			"run `pix slack setup` to (re)authorize, or `pix config unset slack.client_id` to clear it", key)
 
 	default:
 		return "", fmt.Errorf("unknown key %q\n%s", key, ConfigKeysHelp)

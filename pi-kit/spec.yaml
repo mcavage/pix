@@ -95,10 +95,10 @@ permissions:
       # domain to permissions.network.allow from its own synthesized mixin kit — the
       # public kit stays free of company-specific host services. See
       # docs/design/packs.md.
-      # Note: local stdio MCP servers (e.g. slack) are NOT here. They're registered
-      # with sbx (`sbx mcp add … --command pix-host --args slack`), run by the
-      # MCP gateway and reached through it — not over host.docker.internal — so they
-      # need no allowlist entry.
+      # Note: local stdio MCP servers (e.g. google-workspace) are NOT here.
+      # They're registered with sbx (`sbx mcp add … --command pix-host --args
+      # <name>`), run by the MCP gateway and reached through it — not over
+      # host.docker.internal — so they need no allowlist entry.
 
 # Each provider key: `service` is the sbx secret-store identifier (pix seeds
 # it from 1Password); apiKey.name is the in-VM env var, set to the proxy-managed
@@ -237,10 +237,10 @@ agentInstructions:
     ## CLIs and MCP
     `gh` is installed; GitHub auth is routed through sbx credentials. Google
     Workspace runs host-side as the `gog` MCP server (spawned by the MCP gateway,
-    authed with the host's own gog credentials, read-only by default) — the same
-    pattern as Slack (the `chat` capability). The VM never talks to Google
-    directly. Run the host services with `make serve`. Use sbx Cloud MCP Gateway
-    profiles for catalog servers (notion, atlassian, granola, …).
+    authed with the host's own gog credentials, read-only by default). The VM
+    never talks to Google directly. Run the host services with `make serve`.
+    Use sbx Cloud MCP Gateway profiles for catalog servers (notion, atlassian,
+    granola, …).
 
     ## Posture
     Full-auto: no permission prompts. The sandbox isolation is the safety boundary.
