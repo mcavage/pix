@@ -13,12 +13,6 @@ import (
 	"time"
 )
 
-// KeepState is a mutable, identity-bound marker: "this identity currently
-// wants the sandbox kept alive". Unlike Record it can change, but only in
-// ways that preserve the identity binding — nothing may clear or overwrite a
-// keep set by a DIFFERENT identity. This is the primitive a higher-level
-// reaper policy checks alongside the Lease's holder proof, without ever
-// trusting a PID (Record.CreatedPID is advisory only) as proof of who set it.
 type KeepState struct {
 	Identity  string    `json:"identity"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -34,11 +28,6 @@ const (
 	keepGuardTimeout = 2 * time.Second
 )
 
-// SetKeep records that identity wants dir's sandbox kept alive. It succeeds
-// if no keep is currently set, or if the existing keep is already bound to
-// the SAME identity (refreshing UpdatedAt). It is refused if a DIFFERENT
-// identity currently holds the keep: ownership does not change hands by
-// being overwritten, it must be explicitly cleared by its holder first.
 func SetKeep(dir, identity string) error {
 	if identity == "" {
 		return errors.New("lease: empty identity")
@@ -60,35 +49,6 @@ func SetKeep(dir, identity string) error {
 	})
 }
 
-// ClearKeep releases identity's keep on dir. It is a no-op if no keep is
-// currently set, and refused if the keep is bound to a DIFFERENT identity —
-// clearing someone else's keep is not this function's job; a caller building
-// a force-clear policy on top must do so explicitly and visibly, not through
-// this call silently succeeding.
-func ClearKeep(dir, identity string) error {
-	if identity == "" {
-		return errors.New("lease: empty identity")
-	}
-	return withKeepGuard(dir, func() error {
-		path := filepath.Join(dir, keepFileName)
-		existing, err := readKeepFile(path)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return nil
-			}
-			return err
-		}
-		if existing.Identity != identity {
-			return fmt.Errorf("lease: keep on %s is held by %q, refusing to clear as %q", dir, existing.Identity, identity)
-		}
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("lease: remove keep %s: %w", path, err)
-		}
-		return nil
-	})
-}
-
-// ReadKeep reports the current keep state for dir, and whether one is set.
 func ReadKeep(dir string) (*KeepState, bool, error) {
 	state, err := readKeepFile(filepath.Join(dir, keepFileName))
 	if err != nil {
@@ -100,14 +60,6 @@ func ReadKeep(dir string) (*KeepState, bool, error) {
 	return state, true, nil
 }
 
-// withKeepGuard serializes a read-modify-write on keep.json using a SEPARATE
-// lock file (keep.lock), not the sandbox's reference Lease. Reusing the
-// reference lease.lock here would be a correctness bug, not just a style
-// choice: flock conflicts are per OPEN FILE DESCRIPTION, so a process that
-// already holds a SHARED reference lock via one fd and then opened lease.lock
-// again for an exclusive RMW guard via a second fd would deadlock against
-// itself. keep.lock exists only to guard this file; it says nothing about
-// whether the sandbox has live holders.
 func withKeepGuard(dir string, fn func() error) error {
 	path := filepath.Join(dir, keepLockFileName)
 	f, err := openNoFollow(path, syscall.O_RDWR|syscall.O_CREAT, 0o600)

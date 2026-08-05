@@ -72,36 +72,6 @@ func TestSetKeep_RefusesDifferentIdentity(t *testing.T) {
 	}
 }
 
-func TestClearKeep_RefusesDifferentIdentity(t *testing.T) {
-	dir := mustDir(t)
-	if err := SetKeep(dir, "alice"); err != nil {
-		t.Fatalf("SetKeep: %v", err)
-	}
-	if err := ClearKeep(dir, "bob"); err == nil {
-		t.Error("ClearKeep as bob over alice's keep = nil error, want refusal")
-	}
-	if _, ok, _ := ReadKeep(dir); !ok {
-		t.Error("keep was cleared despite refusal")
-	}
-}
-
-func TestClearKeep_OwnerClearsAndMissingIsNoop(t *testing.T) {
-	dir := mustDir(t)
-	if err := SetKeep(dir, "alice"); err != nil {
-		t.Fatalf("SetKeep: %v", err)
-	}
-	if err := ClearKeep(dir, "alice"); err != nil {
-		t.Fatalf("ClearKeep: %v", err)
-	}
-	if _, ok, _ := ReadKeep(dir); ok {
-		t.Error("keep still set after owner clear")
-	}
-	// Clearing again (nobody holds it) is a no-op, not an error.
-	if err := ClearKeep(dir, "alice"); err != nil {
-		t.Errorf("ClearKeep on an already-clear keep = %v, want nil", err)
-	}
-}
-
 func TestReadKeep_UnsetIsFalseNotError(t *testing.T) {
 	dir := mustDir(t)
 	state, ok, err := ReadKeep(dir)

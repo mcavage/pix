@@ -75,7 +75,7 @@ exit 0
 const reapHelperEnv = "LAUNCH_REAP_HELPER"
 
 // TestReapHolderHelperProcess is the re-exec'd second shell: it takes a REAL
-// refs SHARED reference through the production helper (lease.AttachRef, the
+// refs SHARED reference through the production helper (AttachRefUnderLifecycle,
 // same call an attach makes), announces it, and holds it until stdin says
 // otherwise. A no-op under a normal `go test` run.
 func TestReapHolderHelperProcess(t *testing.T) {
@@ -84,7 +84,7 @@ func TestReapHolderHelperProcess(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	rl, err := lease.AttachRef(ctx, os.Getenv("HELPER_LEASE_DIR"))
+	rl, err := lease.AttachRefUnderLifecycle(ctx, os.Getenv("HELPER_LEASE_DIR"), nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "helper AttachRef: %v\n", err)
 		os.Exit(1)
@@ -136,7 +136,7 @@ func TestRunSession_LastShellOut_KeptWhileAnotherProcessHoldsARef(t *testing.T) 
 	fixture := installFakeSbx(t, teardownFixture)
 	ws := t.TempDir()
 	key := "pix-demo"
-	leaseDir, err := LeaseDirFor(key)
+	leaseDir, err := leaseDirFor(key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestRunSession_LastShellOut_RemovesWhenAlone(t *testing.T) {
 	fixture := installFakeSbx(t, teardownFixture)
 	ws := t.TempDir()
 	key := "pix-demo"
-	leaseDir, err := LeaseDirFor(key)
+	leaseDir, err := leaseDirFor(key)
 	if err != nil {
 		t.Fatal(err)
 	}

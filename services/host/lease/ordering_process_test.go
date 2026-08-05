@@ -2,7 +2,7 @@
 
 package lease
 
-// These tests exercise the U04c1 reshard (AttachRef / WithLifecycle /
+// These tests exercise the composed ordering helpers (
 // TryReapProof) across REAL OS processes, the same TestHelperProcess
 // re-exec pattern lock_process_test.go uses for the raw RefLease primitive.
 // See helperCommand/readAcquired there; this file adds the helper actions
@@ -40,7 +40,7 @@ func helperAttach() {
 	dir := os.Getenv("LEASE_HELPER_DIR")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	rl, err := AttachRef(ctx, dir)
+	rl, err := AttachRefUnderLifecycle(ctx, dir, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "helper AttachRef: %v\n", err)
 		os.Exit(1)
@@ -55,26 +55,26 @@ func helperAttach() {
 	select {} // wait to be killed
 }
 
-// helperLifecycle runs WithLifecycle, printing ACQUIRED once fn is entered
-// (i.e. the lifecycle EXCLUSIVE lock is held) and then blocking inside fn
-// until stdin delivers "release\n", at which point fn returns and
-// WithLifecycle's defers release the lock before exit(0).
+// helperLifecycle holds the lifecycle lock EXCLUSIVE, printing ACQUIRED once it
+// is held and then blocking until stdin delivers "release\n".
 func helperLifecycle() {
 	dir := os.Getenv("LEASE_HELPER_DIR")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	err := WithLifecycle(ctx, dir, func() error {
-		fmt.Println("ACQUIRED")
-		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-		if line != "release\n" {
-			select {} // wait to be killed inside the held lock
-		}
-		return nil
-	})
+	lc, err := OpenLifecycleLock(dir)
+	if err == nil {
+		err = lc.AcquireExclusive(ctx)
+	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "helper WithLifecycle: %v\n", err)
+		fmt.Fprintf(os.Stderr, "helper lifecycle: %v\n", err)
 		os.Exit(1)
 	}
+	fmt.Println("ACQUIRED")
+	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	if line != "release\n" {
+		select {} // wait to be killed inside the held lock
+	}
+	lc.Close()
 	os.Exit(0)
 }
 
@@ -214,12 +214,16 @@ func TestLifecycleOperation_SerializesSeparatelyFromRefs(t *testing.T) {
 	// A lifecycle-only operation (no refs proof needed) must proceed
 	// promptly despite the live refs holder.
 	ranAt := time.Now()
-	err := WithLifecycle(context.Background(), dir, func() error { return nil })
+	lc, err := OpenLifecycleLock(dir)
 	if err != nil {
-		t.Fatalf("WithLifecycle while a ref is attached = %v, want nil", err)
+		t.Fatalf("OpenLifecycleLock: %v", err)
 	}
+	if err := lc.AcquireExclusive(context.Background()); err != nil {
+		t.Fatalf("lifecycle EX while a ref is attached = %v, want nil", err)
+	}
+	lc.Close()
 	if elapsed := time.Since(ranAt); elapsed > 250*time.Millisecond {
-		t.Errorf("WithLifecycle took %v while only a refs holder was live, want < 250ms", elapsed)
+		t.Errorf("the lifecycle transition took %v while only a refs holder was live, want < 250ms", elapsed)
 	}
 
 	// But the REAP proof (which also checks refs) correctly still refuses.

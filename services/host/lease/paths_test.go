@@ -135,11 +135,11 @@ func TestOpenNoFollow_SetsCLOEXEC(t *testing.T) {
 		t.Fatalf("openNoFollow: %v", err)
 	}
 	defer f.Close()
-	flags, err := fcntlGetFD(f.Fd())
-	if err != nil {
-		t.Fatalf("fcntlGetFD: %v", err)
+	flags, _, errno := syscall.Syscall(syscall.SYS_FCNTL, f.Fd(), uintptr(syscall.F_GETFD), 0)
+	if errno != 0 {
+		t.Fatalf("F_GETFD: %v", errno)
 	}
-	if flags&syscall.FD_CLOEXEC == 0 {
+	if int(flags)&syscall.FD_CLOEXEC == 0 {
 		t.Error("openNoFollow fd is not close-on-exec")
 	}
 }

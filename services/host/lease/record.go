@@ -30,15 +30,6 @@ type Record struct {
 
 const recordFileName = "record.json"
 
-// CreateRecord writes the record for instanceID into dir (creating dir 0700
-// if needed) exactly once and returns it. dir should come from SandboxDir.
-//
-// A second call for the SAME instanceID is a no-op that returns the EXISTING
-// record unchanged — it does not overwrite CreatedAt/CreatedPID, because the
-// record is immutable once created. A call naming a DIFFERENT instanceID than
-// the one already on disk at dir is refused: a lease directory belongs to
-// exactly one instance for its lifetime, and silently re-labelling it would
-// let two different sandbox lifetimes alias the same directory.
 func CreateRecord(dir, instanceID string) (*Record, error) {
 	if err := ValidateInstanceID(instanceID); err != nil {
 		return nil, err
@@ -80,7 +71,6 @@ func CreateRecord(dir, instanceID string) (*Record, error) {
 	return rec, nil
 }
 
-// ReadRecord reads the existing immutable record from dir.
 func ReadRecord(dir string) (*Record, error) {
 	return readRecordFile(filepath.Join(dir, recordFileName))
 }

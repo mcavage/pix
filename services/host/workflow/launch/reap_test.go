@@ -11,6 +11,7 @@ package launch
 // implementation's own beliefs about those.
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -68,17 +69,17 @@ exit 0
 // immutable instance id, the fingerprint and the pi invocation.
 func seedRecordedSession(t *testing.T, key, instanceID string) string {
 	t.Helper()
-	dir, err := LeaseDirFor(key)
+	dir, err := leaseDirFor(key)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := lease.CreateRecord(dir, instanceID); err != nil {
 		t.Fatal(err)
 	}
-	if err := WriteSessionFingerprint(key, sandbox.Fingerprint{"static_mcp": "slack"}); err != nil {
+	if err := writeSessionState(key, sessionFingerprintFileName, sandbox.Fingerprint{"static_mcp": "slack"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := WriteSessionInvocation(key, []string{"--model", "m"}); err != nil {
+	if err := writeSessionState(key, sessionInvocationFileName, []string{"--model", "m"}); err != nil {
 		t.Fatal(err)
 	}
 	return dir
@@ -130,11 +131,32 @@ func assertLeaseStateCleared(t *testing.T, dir string) {
 	}
 }
 
+// journalOf reads the JSONL journal the test itself pinned: one entry per line,
+// oldest first, a line that does not decode SKIPPED — a journal is evidence, and
+// one corrupt tail line must not hide the other 199.
 func journalOf(t *testing.T, opts TeardownOptions) []TeardownJournalEntry {
 	t.Helper()
-	entries, err := ReadTeardownJournal(opts.JournalPath)
+	return readJournalFile(t, opts.JournalPath)
+}
+
+func readJournalFile(t *testing.T, path string) []TeardownJournalEntry {
+	t.Helper()
+	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("ReadTeardownJournal: %v", err)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		t.Fatalf("read journal %s: %v", path, err)
+	}
+	var entries []TeardownJournalEntry
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var e TeardownJournalEntry
+		if json.Unmarshal([]byte(line), &e) == nil {
+			entries = append(entries, e)
+		}
 	}
 	return entries
 }
@@ -299,7 +321,7 @@ func TestTeardown_UnownedKeeps(t *testing.T) {
 	t.Run("no-record", func(t *testing.T) {
 		isolateState(t)
 		fixture := installFakeSbx(t, removableFixture)
-		if _, err := LeaseDirFor("pix-demo"); err != nil {
+		if _, err := leaseDirFor("pix-demo"); err != nil {
 			t.Fatal(err)
 		}
 		res := TeardownSandbox(realEnv(), "pix-demo", "pix-demo", TriggerSession, fastTeardown(t))
@@ -315,7 +337,7 @@ func TestTeardown_UnownedKeeps(t *testing.T) {
 	t.Run("record-without-fingerprint", func(t *testing.T) {
 		isolateState(t)
 		installFakeSbx(t, removableFixture)
-		dir, err := LeaseDirFor("pix-demo")
+		dir, err := leaseDirFor("pix-demo")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -467,10 +489,7 @@ func TestTeardownJournal_BoundedAnd0600(t *testing.T) {
 			t.Fatalf("append %d: %v", i, err)
 		}
 	}
-	entries, err := ReadTeardownJournal(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	entries := readJournalFile(t, path)
 	if len(entries) != TeardownJournalMaxEntries {
 		t.Errorf("journal holds %d entries, want the %d cap", len(entries), TeardownJournalMaxEntries)
 	}
@@ -488,8 +507,8 @@ func TestTeardownJournal_BoundedAnd0600(t *testing.T) {
 	if err := os.WriteFile(path, []byte("{\"verdict\":\"removed\"}\nnot json\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := ReadTeardownJournal(path); err != nil || len(got) != 1 {
-		t.Errorf("ReadTeardownJournal over a corrupt line = (%v, %v), want the 1 good entry", got, err)
+	if got := readJournalFile(t, path); len(got) != 1 {
+		t.Errorf("journal read over a corrupt line = %v, want the 1 good entry", got)
 	}
 }
 
@@ -517,12 +536,12 @@ esac
 exit 0
 `)
 	owned := seedRecordedSession(t, "pix-owned", "inst-1")
-	unownedDir, err := LeaseDirFor("pix-unowned")
+	unownedDir, err := leaseDirFor("pix-unowned")
 	if err != nil {
 		t.Fatal(err)
 	}
 	var out strings.Builder
-	results, err := SweepOrphans(realEnv(), &out, fastTeardown(t))
+	results, err := sweepOrphans(realEnv(), &out, fastTeardown(t))
 	if err != nil {
 		t.Fatalf("SweepOrphans: %v", err)
 	}

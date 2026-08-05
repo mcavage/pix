@@ -1,10 +1,4 @@
 // sandbox.go — sandbox liveness and the `ls`/`rm` verbs.
-//
-// The probe (running/stopped/absent/unknown) is what drives run's
-// create-vs-reattach-vs-replace decision and task's teardown guard, so it lives
-// with them rather than in either caller. `ls`/`rm` manage the pix-* sandboxes
-// `run` and `task` create — scoped to pix-* names on purpose: this tool manages
-// the sandboxes it made, not every sbx box on the host.
 package launch
 
 import (
@@ -13,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"pix/host/cli"
 	"pix/host/hostenv"
@@ -38,16 +33,25 @@ const (
 // was never created". BOUNDED: a hung sbx times out to UNKNOWN, so run/setup/
 // task preflights degrade honestly instead of wedging.
 func ProbeTaskSandbox(env hostenv.Env, name string) SbxState {
-	out, timedOut, err := env.RunTimed("sbx", "ls")
+	return probeStateWithin(env, name, 0)
+}
+
+func probeStateWithin(env hostenv.Env, name string, within time.Duration) SbxState {
+	var out string
+	var timedOut bool
+	var err error
+	if within > 0 {
+		out, timedOut, err = env.RunWithin(within, "sbx", "ls")
+	} else {
+		out, timedOut, err = env.RunTimed("sbx", "ls")
+	}
 	if timedOut || err != nil {
 		return SbxUnknown
 	}
 	return classifySbxListing(out, name)
 }
 
-// classifySbxListing is the row-reading half of the probe, shared with the
-// teardown's tighter-bounded absent confirmation (reap.go's probeStateWithin)
-// so the two can never disagree about what a listing row means.
+// classifySbxListing is the row-reading half of the probe.
 func classifySbxListing(out, name string) SbxState {
 	for _, line := range strings.Split(out, "\n") {
 		f := strings.Fields(line)
@@ -61,8 +65,6 @@ func classifySbxListing(out, name string) SbxState {
 	return SbxAbsent
 }
 
-// Ls lists the pix sandboxes on this host. It returns an error rather than
-// exiting: the exit code is the root's one mapper, not this function's.
 func Ls(env hostenv.Env, out io.Writer, jsonOut bool) error {
 	if _, err := env.LookPath("sbx"); err != nil {
 		return fmt.Errorf("sbx not found on PATH; install the Docker Sandboxes CLI to list sandboxes")
@@ -122,21 +124,6 @@ type RmOptions struct {
 }
 
 // Rm removes pix sandboxes, in one of four explicitly-chosen shapes:
-//
-//   - `pix rm NAME...` — NON-FORCE `sbx rm <name>`, gated on the same
-//     kernel-verified zero-reference proof the automatic reaper uses. A box
-//     with a KEEP marker and zero references is removed without force: a keep
-//     exists to stop the AUTOMATIC reaper, not to argue with the operator.
-//   - `pix rm NAME --force` — the one forced seam, and only with explicit
-//     names (AGENTS.md safety invariant #7).
-//   - `pix rm --all [--keep NAME]` — every pix-* box ABSENT from the keep set,
-//     each removed non-force. Never forced, even with --force (refused).
-//   - `pix rm --orphans` — only sandboxes this host can prove it created
-//     (a valid creation record whose instance id still matches the runtime's)
-//     with zero live references and no keep. Never forced.
-//
-// A per-name failure is reported as it happens and summarised as exit 1 through
-// a SilentError, because each cause was named.
 func Rm(env hostenv.Env, out, errOut io.Writer, opts RmOptions) error {
 	if err := validateRmShape(opts); err != nil {
 		return err
@@ -145,7 +132,7 @@ func Rm(env hostenv.Env, out, errOut io.Writer, opts RmOptions) error {
 		return fmt.Errorf("sbx not found on PATH; install the Docker Sandboxes CLI to remove sandboxes")
 	}
 	if opts.Orphans {
-		results, err := SweepOrphans(env, out, opts.Teardown)
+		results, err := sweepOrphans(env, out, opts.Teardown)
 		if err != nil {
 			return err
 		}
@@ -220,13 +207,6 @@ func Rm(env hostenv.Env, out, errOut io.Writer, opts RmOptions) error {
 // validateRmShape refuses the invocations whose MEANING is undefined, before
 // anything is listed or removed. Two of the three are safety refusals, not
 // ergonomics:
-//
-//   - --force with --all/--orphans: force is reserved for an explicitly named
-//     sandbox a human typed. A bulk forced sweep is exactly the shape AGENTS.md
-//     safety invariant #7 and the reaper's no-force contract exist to prevent.
-//   - a BARE `pix rm` on a non-interactive terminal: nothing named, nothing
-//     confirmable, no terminal to ask. It refuses instead of silently
-//     no-opping (or, worse, later silently acting).
 func validateRmShape(opts RmOptions) error {
 	if opts.All && opts.Orphans {
 		return cli.Usagef("--all and --orphans mean different things (every pix box vs. only unreferenced pix-owned ones); pick one")
@@ -243,16 +223,11 @@ func validateRmShape(opts RmOptions) error {
 	return nil
 }
 
-// RemovePixSandbox force-removes name. It is reachable ONLY from an explicitly
-// named `pix rm --force` (see Rm): the one forced seam, typed by a human.
 func RemovePixSandbox(env hostenv.Env, name string) error {
 	_, err := env.Run("sbx", "rm", "-f", name)
 	return err
 }
 
-// LsDescription and RmDescription are the long help the root's generated usage
-// prints. They live with the behaviour they describe, so a change to one shows
-// up in the other's diff.
 const LsDescription = `List the pix sandboxes on this host (name, state, ws dir). These are the
 boxes 'pix run' and 'pix task' create. For every sbx sandbox (not just pix's),
 use 'sbx ls'.`

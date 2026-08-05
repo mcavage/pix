@@ -1,16 +1,10 @@
 // readiness.go is what `pix run` knows about host health: the ONE probe the
 // launch gate turns on, and the handful of rows it may print before it gets out
-// of the way.
-//
-// Two properties are load-bearing:
-//
-//  1. THE GATE IS TRI-STATE, AND ONLY A POSITIVE ANSWER REFUSES. `sbx secret
-//     ls` either lists a model key, positively lists none, or could not be
-//     asked. Only the middle case stops a launch; an absent sbx, a refused
-//     query or a timeout PROCEEDS, because a false refusal is worse than a
-//     failed launch (safety invariant 6).
-//  2. THE EVIDENCE IS PAID FOR ONCE. The gate's Result is handed back to
-//     FastSnapshot rather than re-probed.
+// of the way. Two properties are load-bearing: the gate is TRI-STATE and only a
+// POSITIVE "no model key" answer refuses (an absent sbx, a refused query or a
+// timeout PROCEEDS — a false refusal is worse than a failed launch, safety
+// invariant 6), and the evidence is paid for ONCE (the gate's Result is handed
+// to FastSnapshot rather than re-probed).
 package launch
 
 import (

@@ -23,8 +23,6 @@ import (
 // user-initiated update channel, so the kit and image move only when the
 // launcher moves, and kit metadata never changes without an explicit upgrade.
 
-// KitRefSource explains which rule produced the ref, for the one-line notice
-// `pix run` prints when it is NOT simply using this build's own version.
 type KitRefSource int
 
 const (
@@ -35,9 +33,6 @@ const (
 )
 
 // ResolveKitRef applies the precedence chain and reports which rule won.
-// flagRef and pinRef are taken as given — a user who names a ref means it, so
-// neither is validated against IsReleased, preserving the escape hatch for a
-// branch or unpublished tag.
 func ResolveKitRef(version, flagRef, pinRef string) (ref string, src KitRefSource) {
 	switch {
 	case flagRef != "":
@@ -51,9 +46,6 @@ func ResolveKitRef(version, flagRef, pinRef string) (ref string, src KitRefSourc
 	}
 }
 
-// NormalizeKitRef lets a config pin be written either way: version_pin =
-// "0.1.0" and "v0.1.0" both mean the v0.1.0 tag. A non-semver value (a branch,
-// a sha) passes through untouched.
 func NormalizeKitRef(pin string) string {
 	pin = strings.TrimSpace(pin)
 	if launcher.IsReleased(pin) {
@@ -62,9 +54,6 @@ func NormalizeKitRef(pin string) string {
 	return pin
 }
 
-// KitRefNotice is the one line `pix run` prints when the kit is NOT this
-// build's own version, so the resolution is never invisible. A --kit-ref is the
-// user's own explicit argument; echoing it back is noise, so it says nothing.
 func KitRefNotice(version, ref string, src KitRefSource) string {
 	switch src {
 	case KitRefConfigPin:
@@ -74,10 +63,6 @@ func KitRefNotice(version, ref string, src KitRefSource) string {
 	}
 }
 
-// SynthesizePersonalContextKit turns the user's durable AGENTS.md into the sbx
-// agentInstructions layer. It is appended after pack kits, so personal instructions
-// compose above organizational context while workspace AGENTS.md remains the
-// most specific layer. Skills are mounted live separately by BuildSbxArgs.
 func SynthesizePersonalContextKit() (string, error) {
 	source := filepath.Join(config.ContextDir(), "AGENTS.md")
 	b, err := os.ReadFile(source)
@@ -183,9 +168,6 @@ func ValidateSetupKit(version string, repoRoot func() (string, error), validate 
 	return ValidateCreateKits([]string{"--kit", filepath.Join(root, "pi-kit")}, validate)
 }
 
-// CleanupGeneratedKitDirs removes only the exact transient kit directories
-// returned by the launcher synthesizers. Pack-authored kit paths are never
-// passed here: they have a separate lifetime and ownership model.
 func CleanupGeneratedKitDirs(paths []string) error {
 	seen := map[string]bool{}
 	var errs []error
