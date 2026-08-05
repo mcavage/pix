@@ -369,11 +369,9 @@ func TestSecretSetKeepsLiteralSpacedField(t *testing.T) {
 }
 
 // Regression: `pix secret set` given a %20-encoded ref (the value the OLD
-// help/man/hostrun guidance told users to type) must normalize it to a
-// literal space in op-refs.env, matching what WriteOpRefFileQuietLocked
-// already self-heals on the hostmode.env mirror. Before this fix,
-// RunSecretSetLocked wrote the %20 unchanged, so a provider key's op-refs.env
-// entry and its hostmode.env mirror permanently disagreed on the same ref.
+// help/man guidance told users to type) must normalize it to a literal space
+// in op-refs.env — op 2.35.0 rejects a percent-encoded ref outright, so the
+// stored ref would never resolve.
 func TestSecretSetNormalizesPercentEncodedSpaceToLiteral(t *testing.T) {
 	files := map[string]string{fakeRefsPath: ""}
 	env := memEnv(files)
@@ -386,55 +384,6 @@ func TestSecretSetNormalizesPercentEncodedSpaceToLiteral(t *testing.T) {
 	}
 	if strings.Contains(opRefs, "api%20key") {
 		t.Errorf("op-refs.env = %q, must NOT keep the percent-encoded space", opRefs)
-	}
-
-	hostMode, err := env.ReadFile(HostModeRefsPath(env))
-	if err != nil {
-		t.Fatalf("read hostmode.env: %v", err)
-	}
-	if !strings.Contains(hostMode, "ANTHROPIC_API_KEY=op://Vault/Item/api key") {
-		t.Errorf("hostmode.env = %q, want the %%20 normalized to a literal space", hostMode)
-	}
-	if strings.Contains(hostMode, "api%20key") {
-		t.Errorf("hostmode.env = %q, must NOT keep the percent-encoded space", hostMode)
-	}
-
-	// op-refs.env and its hostmode.env mirror must agree on the SAME literal
-	// value — the bug this regression guards was the two files diverging.
-	if !strings.Contains(opRefs, "api key") || !strings.Contains(hostMode, "api key") {
-		t.Errorf("op-refs.env and hostmode.env must both store the literal space: op-refs=%q hostmode=%q", opRefs, hostMode)
-	}
-}
-
-// item 7: `pix secret set` for a provider key mirrors it into
-// hostmode.env too, not just op-refs.env, so a single `secret set` per
-// provider is really enough to wire BOTH the sandbox and host mode.
-func TestSecretSetMirrorsProviderKeyToHostMode(t *testing.T) {
-	files := map[string]string{fakeRefsPath: ""}
-	env := memEnv(files)
-	var out bytes.Buffer
-	RunSecretSet(env, &out, "ANTHROPIC_API_KEY", "op://v/anthropic/key")
-	hostMode, err := env.ReadFile(HostModeRefsPath(env))
-	if err != nil {
-		t.Fatalf("read hostmode.env: %v", err)
-	}
-	if !strings.Contains(hostMode, "ANTHROPIC_API_KEY=op://v/anthropic/key") {
-		t.Errorf("hostmode.env = %q, want the mirrored ref", hostMode)
-	}
-	if !strings.Contains(files[fakeRefsPath], "ANTHROPIC_API_KEY=op://v/anthropic/key") {
-		t.Errorf("op-refs.env = %q, want the ref too", files[fakeRefsPath])
-	}
-}
-
-// A non-provider key (e.g. SLACK_TOKEN) is NOT mirrored to hostmode.env —
-// only the three model-provider keys are.
-func TestSecretSetDoesNotMirrorNonProviderKeys(t *testing.T) {
-	files := map[string]string{fakeRefsPath: ""}
-	env := memEnv(files)
-	var out bytes.Buffer
-	RunSecretSet(env, &out, "SLACK_TOKEN", "op://v/slack/token")
-	if _, err := env.ReadFile(HostModeRefsPath(env)); err == nil {
-		t.Error("a non-provider key must not create/mirror into hostmode.env")
 	}
 }
 
@@ -514,107 +463,19 @@ func TestSecretSetAndRmFailOnUnreadableOpRefs(t *testing.T) {
 	}
 }
 
-// --- item 1: `secret set`/`secret rm` exit codes + dual-file provider-key
-// lifecycle -------------------------------------------------------------
-
-// A provider key present in BOTH op-refs.env and hostmode.env is removed from
-// BOTH by a single `secret rm`.
-func TestSecretRm_ProviderKey_RemovesFromBothFiles(t *testing.T) {
-	files := map[string]string{
-		fakeRefsPath: "ANTHROPIC_API_KEY=op://v/anthropic/key\nSLACK_TOKEN=op://v/slack/token\n",
-	}
-	env := memEnv(files)
-	hmPath := HostModeRefsPath(env)
-	if err := env.WriteFile(hmPath, []byte("ANTHROPIC_API_KEY=op://v/anthropic/key\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var out bytes.Buffer
-	if err := RunSecretRm(env, &out, "ANTHROPIC_API_KEY"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if strings.Contains(files[fakeRefsPath], "ANTHROPIC_API_KEY") {
-		t.Errorf("op-refs.env still has the key: %q", files[fakeRefsPath])
-	}
-	if !strings.Contains(files[fakeRefsPath], "SLACK_TOKEN") {
-		t.Errorf("op-refs.env must preserve the untouched entry: %q", files[fakeRefsPath])
-	}
-	if strings.Contains(files[hmPath], "ANTHROPIC_API_KEY") {
-		t.Errorf("hostmode.env still has the key: %q", files[hmPath])
-	}
-	if !strings.Contains(out.String(), "removed ANTHROPIC_API_KEY from "+fakeRefsPath+" and "+hmPath) {
-		t.Errorf("output = %q, want a confirmation naming both files", out.String())
-	}
-}
-
-// A non-provider key (e.g. SLACK_TOKEN) is removed ONLY from op-refs.env,
-// exactly as before this feature — hostmode.env is never even consulted.
-func TestSecretRm_NonProviderKey_OnlyTouchesOpRefs(t *testing.T) {
-	files := map[string]string{fakeRefsPath: "SLACK_TOKEN=op://v/slack/token\n"}
-	env := memEnv(files)
-	hmPath := HostModeRefsPath(env)
-	if err := env.WriteFile(hmPath, []byte("SLACK_TOKEN=op://v/slack/token\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var out bytes.Buffer
-	if err := RunSecretRm(env, &out, "SLACK_TOKEN"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if strings.Contains(files[fakeRefsPath], "SLACK_TOKEN") {
-		t.Error("op-refs.env should no longer have SLACK_TOKEN")
-	}
-	// hostmode.env is untouched: a non-provider key was never mirrored there in
-	// the first place, so rm must not touch it either.
-	if !strings.Contains(files[hmPath], "SLACK_TOKEN") {
-		t.Error("hostmode.env must be left untouched for a non-provider key")
-	}
-}
-
-// A partial failure — op-refs.env removal succeeds, but the hostmode.env
-// write fails — is reported HONESTLY (names both what succeeded and what
-// didn't) and returns a non-nil error, never a silent success.
-func TestSecretRm_ProviderKey_PartialFailure_HostModeWriteFails(t *testing.T) {
-	files := map[string]string{
-		fakeRefsPath: "ANTHROPIC_API_KEY=op://v/anthropic/key\n",
-	}
-	env := memEnv(files)
-	hmPath := HostModeRefsPath(env)
-	if err := env.WriteFile(hmPath, []byte("ANTHROPIC_API_KEY=op://v/anthropic/key\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	realWrite := systest.Of(env.System).WriteFileFn
-	systest.Of(env.System).WriteFileFn = func(p string, d []byte, m os.FileMode) error {
-		if p == hmPath {
-			return os.ErrPermission
-		}
-		return realWrite(p, d, m)
-	}
-	var out bytes.Buffer
-	err := RunSecretRm(env, &out, "ANTHROPIC_API_KEY")
-	if err == nil {
-		t.Fatal("a hostmode.env write failure must return a non-nil error")
-	}
-	if strings.Contains(files[fakeRefsPath], "ANTHROPIC_API_KEY") {
-		t.Errorf("op-refs.env removal (which succeeded) must still take effect: %q", files[fakeRefsPath])
-	}
-	if !strings.Contains(out.String(), "removed ANTHROPIC_API_KEY from "+fakeRefsPath) || !strings.Contains(out.String(), "could not remove it from") {
-		t.Errorf("output must honestly report the partial failure, got:\n%s", out.String())
-	}
-}
-
-// TestSecretSetThenRm_FullLifecycle: `secret set` mirrors a provider key into
-// both files, and a subsequent `secret rm` fully undoes it in both — the
-// full round trip, not just each half in isolation.
+// TestSecretSetThenRm_FullLifecycle: `secret set` lands a provider key in
+// op-refs.env and a subsequent `secret rm` fully undoes it — the full round
+// trip, not just each half in isolation.
 func TestSecretSetThenRm_FullLifecycle(t *testing.T) {
 	files := map[string]string{fakeRefsPath: ""}
 	env := memEnv(files)
-	hmPath := HostModeRefsPath(env)
 
 	var setOut bytes.Buffer
 	if err := RunSecretSet(env, &setOut, "OPENAI_API_KEY", "op://v/openai/key"); err != nil {
 		t.Fatalf("set: unexpected error: %v", err)
 	}
-	if !strings.Contains(files[fakeRefsPath], "OPENAI_API_KEY") || !strings.Contains(files[hmPath], "OPENAI_API_KEY") {
-		t.Fatalf("set must land the ref in both Files: op-refs=%q hostmode=%q", files[fakeRefsPath], files[hmPath])
+	if !strings.Contains(files[fakeRefsPath], "OPENAI_API_KEY") {
+		t.Fatalf("set must land the ref in op-refs.env: %q", files[fakeRefsPath])
 	}
 
 	var rmOut bytes.Buffer
@@ -624,10 +485,7 @@ func TestSecretSetThenRm_FullLifecycle(t *testing.T) {
 	if strings.Contains(files[fakeRefsPath], "OPENAI_API_KEY") {
 		t.Errorf("rm must remove the ref from op-refs.env, got %q", files[fakeRefsPath])
 	}
-	if strings.Contains(files[hmPath], "OPENAI_API_KEY") {
-		t.Errorf("rm must remove the ref from hostmode.env, got %q", files[hmPath])
-	}
-	if strings.Contains(setOut.String(), "op://v/openai/key") == false {
+	if !strings.Contains(setOut.String(), "op://v/openai/key") {
 		t.Error("the set confirmation should echo the ref (refs are safe to print)")
 	}
 }

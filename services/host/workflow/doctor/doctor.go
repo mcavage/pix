@@ -112,7 +112,7 @@ func UnwiredProviderKeys(cfg *config.Config, env hostenv.Env) []string {
 	if cfg == nil || cfg.Inference.ExclusiveSource != "" {
 		return nil
 	}
-	names, err := secret.HostModeProviderKeys(env)
+	names, err := secret.ProviderKeyNames(env)
 	if err != nil || len(names) == 0 {
 		return nil
 	}

@@ -89,7 +89,6 @@ func HasPlaceholder(val string) bool {
 
 // OpInstalled reports whether the 1Password CLI (op) is on PATH.
 func OpInstalled(env hostenv.Env) bool {
-
 	_, err := env.LookPath("op")
 	return err == nil
 }
@@ -111,7 +110,6 @@ func OpSignedIn(env hostenv.Env) bool {
 // its path, contents, and whether it exists.
 func OpRefsContent(env hostenv.Env) (path, content string, exists bool) {
 	path = DefaultOpRefsPath(env)
-
 	c, err := env.ReadFile(path)
 	if err != nil {
 		return path, "", false
@@ -151,12 +149,10 @@ func RunSecretLs(env hostenv.Env, out io.Writer) {
 		switch {
 		case r.NonSecret:
 			fmt.Fprintf(out, "    · %s (non-secret env)\n", r.Key)
-		case r.IsRef && r.Placeholder:
+		case r.Placeholder:
 			fmt.Fprintf(out, "    ✗ %s = placeholder (fill in the op:// ref)\n", r.Key)
 		case r.IsRef:
 			fmt.Fprintf(out, "    ✓ %s = op:// ref\n", r.Key)
-		case r.Placeholder:
-			fmt.Fprintf(out, "    ✗ %s = placeholder (fill in the op:// ref)\n", r.Key)
 		case config.LooksSecretShaped(r.Key, r.Value):
 			// A non-ref that looks like a pasted secret: flag WITHOUT printing the value.
 			fmt.Fprintf(out, "    ✗ %s = possible pasted secret — replace with op://vault/item/field\n", r.Key)
@@ -180,20 +176,15 @@ func RunSecretLs(env hostenv.Env, out io.Writer) {
 // prints the REF it stored (never a resolved secret — a ref is safe to echo).
 //
 // CLI-ARGUMENT validation failures (a bad env-var name, a control character, a
-// non-ref value for a secret key) still call os.Exit(2) directly, exactly as
-// before: they are immediate, unrecoverable rejections of the invocation
-// itself, and existing subprocess tests depend on the process actually
-// exiting from within this call. Everything AFTER argument validation — the
-// read/seed/upsert of op-refs.env plus the provider-key mirror into
-// hostmode.env — is one transaction under the provider-refs lock
+// non-ref value for a secret key) call os.Exit(2) directly: they are
+// immediate, unrecoverable rejections of the invocation itself, and existing
+// subprocess tests depend on the process actually exiting from within this
+// call. Everything AFTER argument validation — the read/seed/upsert of
+// op-refs.env — is one transaction under the provider-refs lock
 // (WithProviderRefsLock), so a concurrent `secret set`/`secret rm`/setup in
-// another process can never interleave between the two file writes. File
-// failures inside the transaction return errors (never os.Exit — the lock's
-// deferred release must run); runSecretCmd turns any non-nil error into a
-// nonzero exit. The one failure mode that must NOT exit silently-successful
-// is a provider key's hostmode.env MIRROR failing after op-refs.env was
-// already written — the op-refs.env write genuinely succeeded (the sandbox
-// is wired), but the CLI as a whole must still report failure.
+// another process can never interleave. File failures inside the transaction
+// return errors (never os.Exit — the lock's deferred release must run);
+// runSecretCmd turns any non-nil error into a nonzero exit.
 func RunSecretSet(env hostenv.Env, out io.Writer, key, value string) error {
 	if !EnvVarNameRe.MatchString(key) {
 		fmt.Fprintf(out, "pix secret set: %q does not look like an env var name (want %s)\n", key, EnvVarNameRe.String())
@@ -244,18 +235,13 @@ func RunSecretSet(env hostenv.Env, out io.Writer, key, value string) error {
 }
 
 // RunSecretSetLocked is RunSecretSet's file transaction (read/seed/upsert
-// op-refs.env + the provider-key hostmode.env mirror). Caller MUST hold the
-// provider-refs lock; every failure returns an error (never os.Exit) so the
-// lock is always released.
+// op-refs.env). Caller MUST hold the provider-refs lock; every failure returns
+// an error (never os.Exit) so the lock is always released.
 func RunSecretSetLocked(env hostenv.Env, out io.Writer, key, value string) error {
 	// Normalize %20 to a literal space BEFORE writing op-refs.env: op 2.35.0's
 	// `op read` AND `op run --env-file` both require a literal space in a ref
 	// (a spaced 1Password field name, e.g. "Anthropic API Key") and reject a
-	// percent-encoded one outright. WriteOpRefFileQuietLocked (the hostmode.env
-	// mirror below, and the standalone entry point) already self-heals %20 on
-	// write; without this normalization here, a %20 value would land literally
-	// in op-refs.env while the mirror decoded it, leaving the two files
-	// permanently out of sync for the very key that matters most.
+	// percent-encoded one outright.
 	value = strings.ReplaceAll(value, "%20", " ")
 	path := DefaultOpRefsPath(env)
 	content := ""
@@ -291,22 +277,6 @@ func RunSecretSetLocked(env hostenv.Env, out io.Writer, key, value string) error
 		return fmt.Errorf("write %s: %w", path, err)
 	}
 
-	// One of the three model-provider keys ALSO needs to land in hostmode.env
-	// (`pix host` resolves cloud keys from THAT file, never op-refs.env) —
-	// otherwise "run `pix secret set` three times" would wire the sandbox
-	// but silently leave host mode local/Ollama-only until the next full
-	// `pix setup`. Mirror it here so a single `secret set` per provider is
-	// really enough, matching what the command's own guidance elsewhere
-	// promises. The op-refs.env write above already landed (the sandbox is
-	// wired regardless), so a failed mirror is reported as a partial, actionable
-	// shortfall — never silently dropped, and never claimed as done alongside a
-	// success line that would contradict it.
-	if _, isProviderKey := providerKeyRefs[key]; isProviderKey {
-		if err := WriteOpRefFileQuietLocked(env, HostModeRefsPath(env), key, value); err != nil {
-			fmt.Fprintf(out, "set %s = %s in %s, but could not mirror it to %s: %v — host mode won't see this key until you fix that (or re-run `pix setup`)\n", key, value, path, HostModeRefsPath(env), err)
-			return fmt.Errorf("mirror %s to hostmode.env: %w", key, err)
-		}
-	}
 	fmt.Fprintf(out, "set %s = %s in %s\n", key, value, path)
 	// A provider key is only half-wired at this point. `secret set` deliberately
 	// does NOT reconcile: it is a file transaction over arbitrary keys, and making
@@ -324,24 +294,17 @@ func RunSecretSetLocked(env hostenv.Env, out io.Writer, key, value string) error
 // line (comments, blanks, other refs). A missing file or a key that was never
 // present is a clean, exit-0 no-op — `rm` is idempotent.
 //
-// For one of the three model-provider keys, it ALSO removes the same line
-// from hostmode.env — the mirror RunSecretSet writes there — so `secret rm`
-// fully undoes what `secret set` did in BOTH files, never leaving a stale
-// key in one of them. A non-provider key is unchanged: op-refs.env only.
-//
-// Every write goes through env.WriteFile, which for the real CLI
+// The write goes through env.WriteFile, which for the real CLI
 // (defaultShellEnv) is symlink-safe and atomic (a same-directory temp file +
 // rename, so a symlinked leaf is replaced rather than followed/truncated —
-// see atomicWriteInDir). A partial failure (one file's removal succeeds, the
-// other's write errors) is reported HONESTLY and returns a non-nil error so
-// the dispatcher exits nonzero — it never claims a clean removal while a
-// file still carries the key. Never prints a resolved secret value: rm takes
-// no value at all, only a ref (refs are safe to echo).
+// see atomicWriteInDir). A write failure is reported HONESTLY and returns a
+// non-nil error so the dispatcher exits nonzero — it never claims a clean
+// removal while the file still carries the key. Never prints a resolved
+// secret value: rm takes no value at all, only a ref (refs are safe to echo).
 //
-// The whole both-file removal is one transaction under the provider-refs
-// lock, mirroring RunSecretSet: a concurrent set/setup cannot interleave
-// between op-refs.env and hostmode.env being updated. A lock acquisition
-// failure fails the command honestly.
+// The removal runs under the provider-refs lock, mirroring RunSecretSet, so a
+// concurrent set/setup cannot interleave. A lock acquisition failure fails the
+// command honestly.
 func RunSecretRm(env hostenv.Env, out io.Writer, key string) error {
 	var txErr error
 	if lerr := WithProviderRefsLock(env, func() error {
@@ -365,7 +328,7 @@ func runSecretRmLocked(env hostenv.Env, out io.Writer, key string) error {
 	case err == nil:
 		content, exists = c, true
 	case os.IsNotExist(err):
-		// Missing is an idempotent no-op unless hostmode.env has the key.
+		// Missing is an idempotent no-op.
 	default:
 		fmt.Fprintf(out, "pix secret rm: could not read %s: %v\n", path, err)
 		return fmt.Errorf("read %s: %w", path, err)
@@ -374,7 +337,6 @@ func runSecretRmLocked(env hostenv.Env, out io.Writer, key string) error {
 	if exists {
 		newContent, removed := removeOpRef(content, key)
 		if removed {
-
 			if err := env.WriteFile(path, []byte(newContent), 0o600); err != nil {
 				fmt.Fprintf(out, "pix secret rm: could not write %s: %v\n", path, err)
 				return err
@@ -383,43 +345,13 @@ func runSecretRmLocked(env hostenv.Env, out io.Writer, key string) error {
 		}
 	}
 
-	hmPath := HostModeRefsPath(env)
-	hmRemoved := false
-	if _, isProviderKey := providerKeyRefs[key]; isProviderKey {
-		hmContent, rerr := env.ReadFile(hmPath)
-		switch {
-		case rerr == nil:
-			newHm, removed := removeOpRef(hmContent, key)
-			if removed {
-
-				if err := env.WriteFile(hmPath, []byte(newHm), 0o600); err != nil {
-					fmt.Fprintf(out, "pix secret rm: removed %s from %s, but could not remove it from %s: %v — host mode still has this key until you fix that\n", key, path, hmPath, err)
-					return fmt.Errorf("remove %s from hostmode.env: %w", key, err)
-				}
-				hmRemoved = true
-			}
-		case os.IsNotExist(rerr):
-			// hostmode.env absent: nothing there to remove, not an error.
-		default:
-			// A real read error must never be silently treated as "nothing to
-			// remove" — that would leave a stale key in hostmode.env while
-			// claiming a clean removal.
-			fmt.Fprintf(out, "pix secret rm: removed %s from %s, but could not check %s: %v\n", key, path, hmPath, rerr)
-			return fmt.Errorf("check %s: %w", hmPath, rerr)
-		}
-	}
-
 	switch {
-	case !exists && !hmRemoved:
+	case !exists:
 		fmt.Fprintf(out, "op-refs.env not found (%s) — nothing to remove\n", path)
-	case !opRemoved && !hmRemoved:
+	case !opRemoved:
 		fmt.Fprintf(out, "no ref named %s in %s\n", key, path)
-	case opRemoved && hmRemoved:
-		fmt.Fprintf(out, "removed %s from %s and %s\n", key, path, hmPath)
-	case opRemoved:
+	default:
 		fmt.Fprintf(out, "removed %s from %s\n", key, path)
-	default: // hmRemoved only
-		fmt.Fprintf(out, "removed %s from %s\n", key, hmPath)
 	}
 	return nil
 }
@@ -512,7 +444,6 @@ func repairLegacyOpRefsTemplate(content string) (string, bool) {
 }
 
 func RepairLegacyOpRefsFile(env hostenv.Env, path string) error {
-
 	content, err := env.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -585,53 +516,10 @@ func indent(s string) string {
 	return strings.Join(lines, "\n")
 }
 
-// AnyOpWrappedServer reports whether any configured MCP server makes the Secrets
-// (1Password) group relevant: a NON-gog server. gog is deliberately excluded —
-// it authenticates via its own OAuth grant (no built-in guided setup; see
-// docs/gworkspace.md), never an op-refs token, so a gog-only config needs no
-// op-refs.env (mcp-register registers gog BARE for exactly this reason, and
-// setup's Step 4 skips it via hasNonGogMCP). gog's ONE conditional op-refs
-// need — a headless keyring password — is owned by the gog group's
-// headless-spawn check, not this group, so counting gog here produced a
-// phantom `pix secret set` TODO on a fresh gog-only install. Remote
-// gateway-catalog servers don't strictly need op-refs either, but distinguishing
-// them requires probing pix-host; for this coarse gate any non-gog name
-// counts (mirrors setup's hasNonGogMCP).
-func AnyOpWrappedServer(cfg *config.Config) bool {
-	for _, m := range cfg.MCP {
-		if m != config.GWServerName {
-			return true
-		}
-	}
-	return false
-}
-
-// ── moved here from four unrelated files ─────────────────────────────────────
-//
-// Each of these answers a question about SECRETS and had come to rest wherever
-// its first caller happened to live: CurrentOpRef in setup.go, DefaultOpRefsPath
-// in mcp.go, ProbeSbxSecrets in bootstrap.go, looksSecretShaped in
-// doctor_secrets.go. Scattering a domain across its callers is what made this
-// package a web; putting each function where it answers a question about is
-// what has driven every extraction's inbound count down.
-
-// CurrentOpRef returns the current FILLED op:// ref for a provider env var. It
-// checks op-refs.env (sandbox) AND hostmode.env (host mode): a ref given via
-// EITHER path counts, so setup never re-prompts for a ref the user already
-// provided in one file but not the other. Pure/read-only — it does NOT write
-// anything: a ref found only in hostmode.env is backfilled into op-refs.env by
-// the caller (setupProvisionKeys' hasRef branch), which writes to BOTH files
-// and fails setup outright if either write errors, rather than this function
-// doing a silent best-effort backfill whose failure nobody checks.
+// CurrentOpRef returns the current FILLED op:// ref for a provider env var
+// from op-refs.env, the single refs file. Pure/read-only — it never writes.
 func CurrentOpRef(env hostenv.Env, envVar string) (string, bool) {
 	if _, content, exists := OpRefsContent(env); exists {
-		for _, r := range ParseOpRefs(content) {
-			if r.Key == envVar && r.IsRef && !r.Placeholder {
-				return r.Value, true
-			}
-		}
-	}
-	if content, err := env.ReadFile(HostModeRefsPath(env)); err == nil {
 		for _, r := range ParseOpRefs(content) {
 			if r.Key == envVar && r.IsRef && !r.Placeholder {
 				return r.Value, true

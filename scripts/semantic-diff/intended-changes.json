@@ -70,5 +70,31 @@
 				"to": ["services", "mcp", "memory_watcher_model", "memory_embed_model", "ollama_bridge_model", "run_intent", "inference", "google_workspace_account"]
 			}
 		]
+	},
+	{
+		"id": "argv.op-run-wrapper.exact-grammar",
+		"rationale": "W2 U09B slims pix/host/mcp: OpRunWrapPrefix existed as a named seam ONLY so doctor's UnwrapOpRun recognizer could be pinned against the same literal the generator writes. That recognizer (mcp/trust.go, mcp/registration.go) had no production caller left once the built-in Slack/gog bridge probes were retired (W2 U02a/U02B), and is deleted here — so the wrapper grammar has exactly one site again, its generator McpRegistrar.ExecArgv. The pin follows the grammar to that single site; the emitted argv is byte-identical.",
+		"evidence": "services/host/mcp/mcp.go McpRegistrar.ExecArgv emits `append([]string{m.Op, \"run\", \"--no-masking\", \"--env-file=\" + m.OpRefs, \"--\"}, cmd...)`; services/host/mcp/trust.go (UnwrapOpRun/TrustedGogSpawn/TrustedHostBinaryExecPath) and services/host/mcp/registration.go (RegisteredCommand/RecognizedArgv) deleted \u2014 test-only symbols, zero production callers",
+		"changes": [
+			{
+				"file": "services/host/mcp/mcp.go",
+				"kind": "contains",
+				"from": ["return []string{op, \"run\", \"--no-masking\", \"--env-file=\" + refs, \"--\"}"],
+				"to": ["return append([]string{m.Op, \"run\", \"--no-masking\", \"--env-file=\" + m.OpRefs, \"--\"}, cmd...)"]
+			}
+		]
+	},
+	{
+		"id": "argv.raw-add-args.no-env-flag",
+		"rationale": "W2 U09B: RawAddArgs was a separate entry point only for the retired gog-setup registration rollback, which re-registered a prior argv read back from `sbx mcp get`. With that gone its sole caller is McpRegistrar.AddArgs, so the body is inlined there. The registration argv is unchanged and still carries no `--env` form \u2014 credentials only ever arrive through the op-run wrapper.",
+		"evidence": "services/host/mcp/mcp.go McpRegistrar.AddArgs builds `[]string{\"mcp\", \"add\", name, \"--command\", argv[0]}` plus --args pairs directly; workflow/gworkspace (the only other RawAddArgs caller) was retired in W2 U02B",
+		"changes": [
+			{
+				"file": "services/host/mcp/mcp.go",
+				"kind": "region-anchor",
+				"from": ["func RawAddArgs(name string, argv []string) []string {"],
+				"to": ["func (m McpRegistrar) AddArgs(name string) []string {"]
+			}
+		]
 	}
 ]

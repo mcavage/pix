@@ -86,9 +86,9 @@
       "exits": 0
     },
     "pix/host/mcp": {
-      "prod_loc": 1717,
-      "exports": 56,
-      "globals": 22,
+      "prod_loc": 971,
+      "exports": 34,
+      "globals": 18,
       "edges": 7,
       "exits": 3
     },
@@ -149,10 +149,10 @@
       "exits": 0
     },
     "pix/host/secret": {
-      "prod_loc": 1855,
-      "exports": 52,
-      "globals": 9,
-      "edges": 4,
+      "prod_loc": 1225,
+      "exports": 41,
+      "globals": 8,
+      "edges": 3,
       "exits": 9
     },
     "pix/host/service": {

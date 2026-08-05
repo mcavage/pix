@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"pix/host/hostenv"
 	"pix/host/sys/systest"
 	"strings"
@@ -210,76 +209,23 @@ func TestNormalizeOpRef(t *testing.T) {
 	}
 }
 
-// mirrorProviderRefsToHostMode copies FILLED provider refs from op-refs.env into
-// hostmode.env, upserting without touching unrelated entries.
-func TestMirrorProviderRefsToHostMode(t *testing.T) {
-	files := map[string]string{}
-	dir := "/cfg/pix"
-	files[filepath.Join(dir, "op-refs.env")] = "ANTHROPIC_API_KEY=op://v/anthropic/key\nSLACK_TOKEN=op://v/slack/tok\n"
-	files[filepath.Join(dir, "hostmode.env")] = "EXISTING=op://v/x/y\n"
-	env := hostenv.Env{System: &systest.Fake{GetenvFn: func(k string) string {
-		if k == "XDG_CONFIG_HOME" {
-			return "/cfg"
-		}
-		return ""
-	}, ReadFileFn: func(p string) (string, error) {
-		if v, ok := files[p]; ok {
-			return v, nil
-		}
-		return "", os.ErrNotExist
-	}, WriteFileFn: func(p string, d []byte, _ os.FileMode) error { files[p] = string(d); return nil }}}
-	mirrorProviderRefsToHostMode(env)
-	got := files[filepath.Join(dir, "hostmode.env")]
-	if !strings.Contains(got, "ANTHROPIC_API_KEY=op://v/anthropic/key") {
-		t.Errorf("provider ref not mirrored into hostmode.env: %q", got)
-	}
-	if !strings.Contains(got, "EXISTING=op://v/x/y") {
-		t.Errorf("mirror clobbered an unrelated hostmode.env entry: %q", got)
-	}
-	if strings.Contains(got, "SLACK_TOKEN") {
-		t.Errorf("mirror copied a non-provider ref: %q", got)
-	}
-}
-
-func TestMirrorProviderRefsToHostModeUsesFirstConflictingRef(t *testing.T) {
-	files := map[string]string{}
-	dir := "/cfg/pix"
-	files[filepath.Join(dir, "op-refs.env")] = "ANTHROPIC_API_KEY=op://vault/new/key\nANTHROPIC_API_KEY=op://vault/old/key\n"
-	env := hostenv.Env{System: &systest.Fake{GetenvFn: func(k string) string {
-		if k == "XDG_CONFIG_HOME" {
-			return "/cfg"
-		}
-		return ""
-	}, ReadFileFn: func(p string) (string, error) {
-		if v, ok := files[p]; ok {
-			return v, nil
-		}
-		return "", os.ErrNotExist
-	}, WriteFileFn: func(p string, d []byte, _ os.FileMode) error { files[p] = string(d); return nil }}}
-	mirrorProviderRefsToHostMode(env)
-	got := files[filepath.Join(dir, "hostmode.env")]
-	if !strings.Contains(got, "ANTHROPIC_API_KEY=op://vault/new/key") || strings.Contains(got, "old/key") {
-		t.Fatalf("mirror must use the same first ref setup validates, got %q", got)
-	}
-}
-
-// writeOpRefFileQuiet must NOT clobber a file it can't read (a real read error,
+// WriteOpRefQuiet must NOT clobber a file it can't read (a real read error,
 // e.g. EACCES); it fails closed instead of truncating to a single entry.
-func TestWriteOpRefFileQuiet_ReadErrorNoClobber(t *testing.T) {
+func TestWriteOpRefQuiet_ReadErrorNoClobber(t *testing.T) {
 	env := hostenv.Env{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "", errors.New("permission denied") }, WriteFileFn: func(string, []byte, os.FileMode) error { t.Fatal("must not write when read fails"); return nil }}}
-	if err := writeOpRefFileQuiet(env, "/x/op-refs.env", "ANTHROPIC_API_KEY", "op://v/a/k"); err == nil {
+	if err := WriteOpRefQuiet(env, "ANTHROPIC_API_KEY", "op://v/a/k"); err == nil {
 		t.Fatal("expected error on unreadable file, got nil")
 	}
 }
 
-// writeOpRefFileQuiet stores refs with LITERAL spaces (op 2.35.0: both `op read`
+// WriteOpRefQuiet stores refs with LITERAL spaces (op 2.35.0: both `op read`
 // and `op run --env-file` require literal spaces and reject %20), and decodes any
 // %20 from refs written by the old buggy encoding so files self-heal.
-func TestWriteOpRefFileQuiet_KeepsLiteralSpaces_DecodesEncoded(t *testing.T) {
+func TestWriteOpRefQuiet_KeepsLiteralSpaces_DecodesEncoded(t *testing.T) {
 	write := func(val string) string {
 		var written string
 		env := hostenv.Env{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "", os.ErrNotExist }, WriteFileFn: func(_ string, d []byte, _ os.FileMode) error { written = string(d); return nil }}}
-		if err := writeOpRefFileQuiet(env, "/x/hostmode.env", "OPENAI_API_KEY", val); err != nil {
+		if err := WriteOpRefQuiet(env, "OPENAI_API_KEY", val); err != nil {
 			t.Fatal(err)
 		}
 		return written
@@ -296,51 +242,6 @@ func TestWriteOpRefFileQuiet_KeepsLiteralSpaces_DecodesEncoded(t *testing.T) {
 	healed := write("op://Docker/OPENAI_API_KEY/api%20key")
 	if !strings.Contains(healed, "op://Docker/OPENAI_API_KEY/api key") {
 		t.Errorf("existing %%20 not decoded to a literal space: %q", healed)
-	}
-}
-
-// --- item 3: HostModeProviderKeys dedupes; completeness is exact-set -------
-
-// A duplicate ANTHROPIC_API_KEY line (or any repeated provider ref) must
-// never inflate HostModeProviderKeys past the real distinct-provider count —
-// dedupe is by PROVIDER NAME, not by input line.
-func TestHostModeProviderKeys_DedupesDuplicateEntries(t *testing.T) {
-	env := hostenv.Env{System: &systest.Fake{GetenvFn: func(k string) string {
-		if k == "XDG_CONFIG_HOME" {
-			return "/cfg"
-		}
-		return ""
-	}, ReadFileFn: func(p string) (string, error) {
-		if p == filepath.Join("/cfg", "pix", "hostmode.env") {
-			// ANTHROPIC_API_KEY declared TWICE, GEMINI_API_KEY never.
-			return "ANTHROPIC_API_KEY=op://v/a/k\nANTHROPIC_API_KEY=op://v/a/k2\nOPENAI_API_KEY=op://v/o/k\n", nil
-		}
-		return "", os.ErrNotExist
-	}}}
-	got, err := HostModeProviderKeys(env)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("duplicate anthropic entries must not inflate the count: got %v (len %d), want 2 distinct providers", got, len(got))
-	}
-	if hasAllProviderKeyNames(got) {
-		t.Error("a duplicate anthropic entry must NEVER let the exact-set check pass with google actually missing")
-	}
-}
-
-// hasAllProviderKeyNames is a set-membership check, not a length check: a
-// padded-but-incomplete list (e.g. from a duplicate/aliased entry) must not
-// satisfy it, and the real three-provider set must.
-func TestHasAllProviderKeyNames_ExactSetNotLength(t *testing.T) {
-	if hasAllProviderKeyNames([]string{"anthropic", "anthropic", "openai"}) {
-		t.Error("a duplicate name padding the length to 3 must NOT count as complete (google is missing)")
-	}
-	if !hasAllProviderKeyNames([]string{"anthropic", "openai", "google"}) {
-		t.Error("the real three-provider set must count as complete")
-	}
-	if hasAllProviderKeyNames([]string{"anthropic", "openai"}) {
-		t.Error("two of three must not count as complete")
 	}
 }
 
