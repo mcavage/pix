@@ -3,12 +3,9 @@ package main
 // memory_cmd.go is `pix memory`: the host-side CLI over the memory daemon
 // (:11435), so you can inspect and repair recall WITHOUT launching a sandbox.
 //
-// It replaced an argv switch here, a Usage constant in the memory package
-// listing five subcommands, a Dispatch switch listing them again, and five
-// hand-rolled flag sets each printing their own usage line. Two behaviours are
-// preserved because they are contracts: the daemon is lazily auto-started
-// before a real subcommand (never on a help request, which must stay
-// side-effect free), and a down daemon exits 3, distinct from usage (2).
+// Two behaviours are contracts: the daemon is lazily auto-started before a
+// real subcommand (never on a help request, which stays side-effect free), and
+// a down daemon exits 3, distinct from usage (2).
 
 import (
 	"errors"
@@ -45,11 +42,9 @@ type memoryCmd struct {
 
 // withMemory resolves what every subcommand needs — a live-enough daemon, a
 // client, the scope profile — runs the call, and maps the one failure the root
-// cannot classify: a down daemon is exit 3 with the recovery command.
-// EnsureUp is best-effort; on failure the client's own ErrServiceDown lands
-// here anyway. Config is loaded to surface a broken config.toml rather than
-// proceeding on a fallback (profile is always "" today: profiles were removed,
-// the daemon's scope column is dormant).
+// cannot classify: a down daemon is exit 3 with the recovery command. EnsureUp
+// is best-effort; on failure the client's own ErrServiceDown lands here. The
+// config load is what surfaces a broken config.toml instead of a fallback.
 func withMemory(d *cli.Deps, sub string, call func(memory.CLI) error) error {
 	service.EnsureUp([]string{"memory"}, service.EnsureTimeout)
 	_, profile, err := workspace.LoadResolvedConfig()

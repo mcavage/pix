@@ -7,9 +7,8 @@ import (
 	"github.com/alecthomas/kong"
 )
 
-// rootNodes returns the kong root's top-level commands, in declaration order.
-// What a verb IS, what it does and which tier it lives in are all answered by
-// the parser, because a list beside the parser can only be a second answer.
+// rootNodes returns the kong root's top-level commands, in declaration order:
+// a list beside the parser could only ever be a second answer.
 func rootNodes() []*kong.Node {
 	parser, err := kong.New(&rootCmd{}, kong.Name("pix"), kong.Exit(func(int) {}))
 	if err != nil {
@@ -48,11 +47,9 @@ func helpAll() string {
 	return b.String()
 }
 
-// suggestVerb returns the closest known verb to input within edit distance 2 —
-// the did-you-mean hint on an unknown command. It no longer carries the retired
-// names: a retired surface is DISPATCHED (retired.go) and answers with its own
-// replacement before this is ever reached, which is strictly more useful than a
-// hint on an error path.
+// suggestVerb returns the closest known verb within edit distance 2 — the
+// did-you-mean hint. Retired names are not here: a retired surface is
+// DISPATCHED (retired.go) and answers with its replacement first.
 func suggestVerb(input string) (string, bool) {
 	best, bestD := "", 3
 	for v := range knownVerbs() {

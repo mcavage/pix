@@ -1,12 +1,11 @@
 // retired.go — the one table of retired CLI surfaces, and the one way a
 // retired surface answers.
 //
-// Retirement is not deletion-by-silence. A verb removed from the dispatch
-// switch would fall to the unknown-command path, which guesses by edit
+// Retirement is not deletion-by-silence: an unknown verb guesses by edit
 // distance and cannot possibly guess `mcp register` from `slack`. So a retired
-// surface keeps exactly one behaviour: print a machine-greppable PIX_RETIRED
-// line naming the replacement, exit 2, and do NOTHING else — no config load,
-// no daemon, no sandbox, no file. That is what makes hitting one from a stale
+// surface keeps exactly one behaviour — print a machine-greppable PIX_RETIRED
+// line naming the replacement, exit 2, and do NOTHING else: no config load, no
+// daemon, no sandbox, no file. That is what makes hitting one from a stale
 // script or a shell history safe.
 //
 // Every entry here has an approved, append-only record in
@@ -43,13 +42,11 @@ func retiredSplit(key string) (verb, flag string) {
 }
 
 // retiredSurfaces maps a retired surface to the command that replaced it. The
-// value is a full command line (not a bare verb) because a replacement is not
-// always a pix verb — `upgrade` is now the package manager's job.
+// value is a full command line, not a bare verb, because a replacement is not
+// always a pix verb (`upgrade` is the package manager's job).
 //
-// A value may itself name a retired surface (`gog` -> `gworkspace`, retired by
-// W1; `backup` -> the host verb U07b folded into `pix-host memory snapshot`).
-// History stays as written — the manifest is append-only — and every hop still
-// answers: terminalReplacement chains here, the host binary chains its own.
+// A value may itself name a retired surface: the manifest is append-only, so
+// history stays as written and terminalReplacement chains the hops.
 func retiredSurfaces() map[string]string {
 	return map[string]string{
 		// W1 U01a: the host-integration, distribution, and state-management
@@ -77,9 +74,9 @@ func retiredSurfaces() map[string]string {
 	}
 }
 
-// terminalReplacement resolves a retirement chain: it follows a replacement
-// whose own verb was retired later, and stops at the first surface that still
-// exists (or after the chain is exhausted, which a cycle cannot outlive).
+// terminalReplacement follows a replacement whose own verb was retired later,
+// stopping at the first surface that still exists (or when the chain is
+// exhausted, which a cycle cannot outlive).
 func terminalReplacement(key string) string {
 	table := retiredSurfaces()
 	replacement := table[key]
@@ -117,8 +114,8 @@ func retiredMessage(key string) string {
 	return fmt.Sprintf("PIX_RETIRED: `%s` was retired. Use `%s` instead.\n", typed, terminalReplacement(key))
 }
 
-// retiredExit prints the notice on stderr and exits 2. stdout stays clean so a
-// script that pipes it gets no output to misparse.
+// retiredExit prints the notice on stderr and exits 2; stdout stays clean, so
+// a script that pipes it has nothing to misparse.
 func retiredExit(key string) {
 	fmt.Fprint(os.Stderr, retiredMessage(key))
 	os.Exit(2)
@@ -133,9 +130,7 @@ func retiredIfRetired(verb, flag string) {
 }
 
 // hasGlobalManFlag reports whether the retired global `--man` appears before a
-// `--` terminator (everything after `--` is pi passthrough). It replaces the
-// call into the man renderer: the flag no longer renders anything, so the
-// launcher no longer composes that capability at all.
+// `--` terminator (everything after `--` is pi passthrough).
 func hasGlobalManFlag(argv []string) bool {
 	for _, a := range argv {
 		if a == "--" {

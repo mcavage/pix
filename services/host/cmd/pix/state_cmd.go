@@ -1,7 +1,6 @@
 // state_cmd.go — `pix state`, the grouping noun for the stack's on-disk
-// lifecycle. It is an ALIAS group and nothing else: `state reset` IS `reset`,
-// the same typed command struct, so the two spellings cannot drift apart the
-// way a group that parses its own flags always does.
+// lifecycle. An ALIAS group and nothing else: `state reset` IS `reset`, the
+// same typed struct, so the two spellings cannot drift apart.
 package main
 
 import "pix/host/cli"

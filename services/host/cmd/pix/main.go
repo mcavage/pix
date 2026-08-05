@@ -1,12 +1,8 @@
-// pix — the user-facing launcher for the pix sandbox. Unlike the old
-// repo-relative bin/pix shell script, this is a standalone binary a
-// consumer installs without cloning the repo: it reads ~/.config/pix config
-// and shells out to `sbx run pix`, pinning the git-hosted kit to this
-// build's stamped version.
-//
-// Host convention is Go (one static binary; see services/host/main.go), and this
-// launcher shares that binary's config package (pix/host/config) so the two
-// agree on config location + the broker token.
+// pix — the user-facing launcher for the pix sandbox: a standalone binary a
+// consumer installs without cloning the repo. It reads ~/.config/pix config
+// and shells out to `sbx run pix`, pinning the git-hosted kit to this build's
+// stamped version, and shares pix-host's config package so the two agree on
+// config location + the broker token.
 //
 // The verb tree is root.go's rootCmd — the one parser, the one dispatcher, and
 // (via `pix help --all`) the one listing. main owns only what comes BEFORE a
@@ -22,15 +18,13 @@ import (
 	"pix/host/workflow/provision"
 )
 
-// version is stamped at build time via -ldflags "-X main.version=0.0.x". An
+// version is stamped at build time via -ldflags "-X main.version=0.0.x"; an
 // unstamped build reports "dev" and tracks the kit's main branch.
 //
-// It must stay a plain string with a CONSTANT initializer. `-X` silently does
-// nothing to a variable initialised from a non-constant expression, so writing
-// `var version = launcher.Version` here would leave every release reporting
-// "dev" with no error anywhere — and the Makefile stamps this same symbol in
-// pix-host, which is a different package, so the stamp cannot simply move.
-// Instead main OWNS the stamp and pushes it down.
+// It MUST stay a plain string with a CONSTANT initializer: `-X` silently does
+// nothing to a variable initialised from an expression, so `var version =
+// launcher.Version` would leave every release reporting "dev" with no error
+// anywhere. main owns the stamp and pushes it down.
 var version = "dev"
 
 func init() { launcher.Version = version }
@@ -38,10 +32,8 @@ func init() { launcher.Version = version }
 func main() {
 	args := os.Args[1:]
 
-	// The global `--man` flag is retired along with the `man` verb: the embedded
-	// page was a third rendering of the verb table, and `pix help --all` is the
-	// one that stays. Checked first, before any dispatch, so `pix run --man`
-	// answers with the notice instead of launching.
+	// The retired global `--man` is checked before any dispatch, so `pix run
+	// --man` answers with the notice instead of launching.
 	if hasGlobalManFlag(args) {
 		retiredExit(retiredKey("pix", "--man"))
 	}
@@ -55,10 +47,10 @@ func main() {
 		args = []string{"status"}
 	}
 
-	// A retired surface answers before anything else can happen: no config read,
-	// no probe, no side effect. Both granularities are checked here, because a
-	// retired SUBCOMMAND (`task gc`, `state backup`) must answer before its
-	// group's parser rejects the name it no longer knows (see retired.go).
+	// A retired surface answers before anything else: no config read, no probe,
+	// no side effect. Both granularities are checked, because a retired
+	// SUBCOMMAND (`task gc`) must answer before its group's parser rejects a
+	// name it no longer knows (see retired.go).
 	retiredIfRetired(args[0], "")
 	if len(args) > 1 {
 		retiredIfRetired(args[0], args[1])
@@ -79,12 +71,11 @@ func looksLikePath(a string) bool {
 		strings.HasPrefix(a, "~")
 }
 
-// classifyBareArg decides what a bare (non-flag) positional means when it is not
-// a matched verb. It returns the stderr message to print and whether the arg
-// should launch `run` (an existing directory). A path-like token, or a token
-// that exists but is not a directory, is reported as a missing/!dir workspace
-// ("no such directory"). Only a plausible bare-word verb gets the did-you-mean
-// suggester. Both non-launch branches map to exit code 2 at the call site.
+// classifyBareArg decides what a bare (non-flag) positional means when it is
+// not a matched verb: the stderr message to print, and whether it should launch
+// `run` (an existing directory). A path-like token, or one that exists but is
+// not a directory, is a missing/!dir workspace; only a plausible bare-word verb
+// gets the did-you-mean suggester. Both non-launch branches exit 2.
 func classifyBareArg(a string) (msg string, launch bool) {
 	fi, statErr := os.Stat(a)
 	if statErr == nil && fi.IsDir() {
@@ -101,13 +92,11 @@ func classifyBareArg(a string) (msg string, launch bool) {
 	return msg, false
 }
 
-// hostBinaryResolver locates pix-host. It is indirected through a package
-// var (like firstRunHook) so tests can inject a fake `pix-host mcp --list`
-// responder when exercising the local-vs-remote MCP partition in setup.
+// hostBinaryResolver locates pix-host. "Which pix-host am I paired with" is an
+// identity question the launcher package answers; this var exists so a test can
+// inject a fake `pix-host mcp --list` responder for setup's local-vs-remote
+// MCP partition.
 var hostBinaryResolver = launcher.FindHostBinary
-
-// "which pix-host am I paired with" is an identity question, so the answer
-// lives in the launcher package; only the test indirection stays here.
 
 const helpText = `pix — a personal, multi-model pi coding agent in a Docker sandbox.
 

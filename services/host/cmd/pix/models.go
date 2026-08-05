@@ -1,67 +1,20 @@
-// pix models — a thin launcher passthrough to the sibling pix-host
-// binary, which owns the model router (registry + scorecard + resolver). Kept
-// here so a user drives the whole feature from the one `pix` command. See
-// docs/design/routing.md and docs/design/models-cli.md (the noun rename).
-//
-// `models` is the noun the owner asked for (docs/design/models-cli.md,
-// Problem B): `ls`/`show`/`pick`/`route` are thin passthroughs to the
-// unchanged `pix-host route` subcommand tree (see execHostRoute); bare
-// `pix models` is a launcher-local, read-only status screen.
+// pix models — the launcher side of the model router. `ls`/`show`/`pick`/
+// `route` are thin passthroughs to the unchanged `pix-host route` subcommand
+// tree (see execHostRoute); bare `pix models` is this file: a launcher-local,
+// read-only status screen. See docs/design/routing.md, docs/design/models-cli.md.
 
 package main
 
 import (
 	"fmt"
 	"io"
-	"os"
-	"os/exec"
 	"sort"
 	"strings"
 
 	"pix/host/config"
 	"pix/host/inference"
-	"pix/host/launcher"
 	"pix/host/workflow/doctor"
 )
-
-// runRouteAlias is the retired `pix route` spelling, forwarded RAW to the host
-// tree for one release so it stays bug-for-bug the command it replaces. Routing
-// it through the new verb once broke `pix route models` (the old spelling of
-// the registry list), which is the exact compatibility the alias promises.
-func runRouteAlias(argv []string) {
-	// The retired noun is a CONSTANT, never a literal in a message: the rename
-	// guard (models_rename_test.go) bans raw `pix route` from production source,
-	// and it should — the one place still allowed to say it is the alias whose
-	// whole job is to answer to it.
-	const verb = "route"
-	bin, err := launcher.FindHostBinary()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix %s: %v\n", verb, err)
-		os.Exit(1)
-	}
-	cmd := exec.Command(bin, append([]string{verb}, argv...)...)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
-		if exit, ok := err.(*exec.ExitError); ok {
-			os.Exit(exit.ExitCode())
-		}
-		fmt.Fprintf(os.Stderr, "pix %s: exec %s: %v\n", verb, bin, err)
-		os.Exit(1)
-	}
-}
-
-// runModelsStatus renders the bare `pix models` screen: read-only, no probe,
-// no mutation. It answers the discovery half of Problem A in
-// docs/design/models-cli.md — the noun a user reaches for when they want to
-// know what pix can use has somewhere to look.
-func runModelsStatus() {
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix models: %v\n", err)
-		os.Exit(1)
-	}
-	renderModelsStatus(cfg, os.Stdout)
-}
 
 // modelsBackendRow is one line of the bare status screen's Backends block: a
 // backend name plus how many of its bindings are callable vs. live-verified.
@@ -104,8 +57,7 @@ func modelsBackendRows(cfg *config.Config) []modelsBackendRow {
 }
 
 // modelsRuntimeLabel names the current inference topology in the same terms
-// doctor/setup already use: an exclusive pack, direct provider keys (the
-// default), a local Ollama backend, or a custom gateway.
+// doctor/setup use: exclusive pack, direct keys, local Ollama, or gateway.
 func modelsRuntimeLabel(cfg *config.Config) string {
 	if cfg.Inference.ExclusiveSource != "" {
 		return "pack (" + cfg.Inference.ExclusiveSource + ")"
@@ -132,8 +84,8 @@ func modelsRosterLine(cfg *config.Config) string {
 }
 
 // modelsSessionLine renders the top-level session's resolved model, matching
-// inference.ResolveSessionModel's own read of cfg.RunIntent (doctor_providers.go) so the
-// two never disagree about what the session would launch.
+// inference.ResolveSessionModel's own read of cfg.RunIntent so the two never
+// disagree about what the session would launch.
 func modelsSessionLine(cfg *config.Config) string {
 	intent := config.DefaultRunIntent
 	if cfg != nil && strings.TrimSpace(cfg.RunIntent) != "" {
@@ -150,7 +102,6 @@ func modelsSessionLine(cfg *config.Config) string {
 }
 
 // renderModelsStatus writes the bare `pix models` screen to out. Read-only:
-// every value it prints already lives in cfg or the router's own resolve —
 // no network probe, no write.
 func renderModelsStatus(cfg *config.Config, out io.Writer) {
 	fmt.Fprintf(out, "Inference                                        config: %s\n\n", config.Path())

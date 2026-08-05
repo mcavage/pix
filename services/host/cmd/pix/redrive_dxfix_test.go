@@ -25,7 +25,6 @@ import (
 	"bytes"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -34,6 +33,7 @@ import (
 	"pix/host/routing"
 	"pix/host/rpc"
 	"pix/host/sys"
+	"pix/host/sys/systest"
 )
 
 // modelsHelp renders `pix models --help` the way a user reads it: through the
@@ -163,32 +163,27 @@ func TestAgentNew_NextStepsPointAtLiveScorecardPath(t *testing.T) {
 }
 
 // TestAgentReassessModel_PointsAtLiveScorecardPath: `agent reassess --model X`
-// exits 2 with guidance (measurement was removed); that guidance must be the
-// live override path, not the repo's embedded defaults file. Run in a
-// subprocess since agentReassess calls os.Exit(2) on this path.
+// fails with exit 2 and guidance (measurement was removed); that guidance must
+// name the live override path, not the repo's embedded defaults file. Driven
+// in-process: the handler returns its usage exit rather than calling os.Exit.
 func TestAgentReassessModel_PointsAtLiveScorecardPath(t *testing.T) {
-	if os.Getenv("PIX_DXFIX_REASSESS") == "1" {
-		mustRunAgent(t, "reassess", "--model", "anthropic/claude-haiku-4-5")
-		return
-	}
 	dir := t.TempDir()
-	cmd := exec.Command(os.Args[0], "-test.run", "TestAgentReassessModel_PointsAtLiveScorecardPath")
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
-		"PIX_DXFIX_REASSESS=1",
-		"ROUTING_DIR="+filepath.Join(dir, "routing"),
-	)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	runErr := cmd.Run()
+	t.Chdir(dir)
+	t.Setenv("ROUTING_DIR", filepath.Join(dir, "routing"))
 
-	var ee *exec.ExitError
-	if !errors.As(runErr, &ee) {
-		t.Fatalf("expected an ExitError, got %v (Output: %s)", runErr, out.String())
+	var out bytes.Buffer
+	d := &cli.Deps{
+		Sys: &systest.Fake{}, Out: &out, Err: &out,
+		In: strings.NewReader(""), Interactive: false,
 	}
-	if ee.ExitCode() != 2 {
-		t.Errorf("exit code = %d, want 2; output:\n%s", ee.ExitCode(), out.String())
+	err := runRootParse([]string{"agent", "reassess", "--model", "anthropic/claude-haiku-4-5"}, d)
+
+	var silent cli.SilentError
+	if !errors.As(err, &silent) {
+		t.Fatalf("expected a SilentError, got %v (output: %s)", err, out.String())
+	}
+	if silent.Code != 2 {
+		t.Errorf("exit code = %d, want 2; output:\n%s", silent.Code, out.String())
 	}
 	wantPath := filepath.Join(dir, "routing", "scorecard.json")
 	if !strings.Contains(out.String(), wantPath) {

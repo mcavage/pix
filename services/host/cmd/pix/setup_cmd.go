@@ -1,12 +1,11 @@
 // setup_cmd.go — `pix setup` as a typed root child, plus the one thing that is
 // deliberately NOT part of the provision loop: the agent handoff. The handoff
 // is an exec into another command whose decision matrix is about a sandbox
-// that may already be alive; a step that cannot be re-probed does not belong
-// in a loop whose contract is that the second check is authoritative.
+// that may already be alive, and a step that cannot be re-probed does not
+// belong in a loop whose contract is that the second check is authoritative.
 //
-// The flags are struct fields, and the host phase is handed the argv they
-// COMPOSE TO rather than the one the user typed: kong alone decides what a
-// flag is, and provision keeps its single string-argv entry point.
+// The host phase is handed the argv the flags COMPOSE TO, not the one the user
+// typed: kong alone decides what a flag is.
 package main
 
 import (
@@ -57,10 +56,9 @@ type setupCmd struct {
 	Knowledge    string `hidden:""`
 }
 
-// hostArgs recomposes the host phase's argv from the parsed flags. Order is
-// fixed so the same invocation always produces the same argv (and the same
-// receipt), and every value uses the `--flag=value` form so a value that looks
-// like a flag cannot be re-split by the downstream parser.
+// hostArgs recomposes the host phase's argv. Order is fixed so one invocation
+// always produces the same argv (and receipt), and every value uses
+// `--flag=value` so a value that looks like a flag cannot be re-split.
 func (c *setupCmd) hostArgs() []string {
 	var a []string
 	add := func(flag, v string) {
@@ -123,8 +121,8 @@ func (c *setupCmd) Run(d *cli.Deps) error {
 	if err != nil {
 		return cli.UsageError{Err: err}
 	}
-	// Validate every built-in semantic flag/value before pack adoption or any
-	// other mutation. The host phase repeats the same pure validator.
+	// Validate every semantic flag/value before pack adoption or any mutation;
+	// the host phase repeats the same pure validator.
 	preflightCfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -142,24 +140,22 @@ func (c *setupCmd) Run(d *cli.Deps) error {
 		onboard.ReconcileOnboarding(c.Dir, env, d.In, d.Out, parsed.AssumeYes, d.Interactive, onboardDeps())
 		return nil
 	}
-	// DIR must be validated (exists AND is a directory) BEFORE the host phase
-	// runs: provisioning mutates real host state, and a typo'd DIR must fail
-	// with nothing touched rather than be caught only at the handoff.
+	// DIR must exist AND be a directory BEFORE the host phase mutates real host
+	// state, so a typo'd DIR fails with nothing touched.
 	if err := launch.ValidateRunWorkspace(c.Dir, knownVerb); err != nil {
 		return cli.UsageError{Err: err}
 	}
 	if err := provision.EnsureSetupSbxSession(env, d.Out, d.Interactive && !parsed.AssumeYes); err != nil {
 		return err
 	}
-	// Pix's published base kit comes from GitHub, while a fresh sbx install only
-	// trusts docker.io kit sources. Fill that one publisher allowlist entry and
-	// initialize the one-time global network policy before the first handoff.
+	// The published base kit comes from GitHub, but a fresh sbx install trusts
+	// only docker.io: fill that one publisher allowlist entry (and the one-time
+	// global network policy) before the first handoff.
 	if err := provision.EnsureSetupSbxDefaults(env); err != nil {
 		return err
 	}
-	// An unreleased launcher uses its local checkout kit. Validate that kit with
-	// the installed sbx parser before pack OAuth or any other mutation; nightly
-	// schema skew must fail once, early.
+	// An unreleased launcher uses its local checkout kit: validate it with the
+	// installed sbx parser before any mutation, so schema skew fails once.
 	if err := launch.ValidateSetupKit(version, launch.ResolveRepoRoot, launch.ValidateSbxKit); err != nil {
 		return err
 	}
@@ -178,10 +174,9 @@ func (c *setupCmd) Run(d *cli.Deps) error {
 		return nil
 	}
 
-	// Handoff decision: probe the sandbox for dir and branch on the POSITIVE
-	// state. Existing without --replace is left alone (never force-removed,
-	// never replayed into); with --replace it relaunches through `run
-	// --replace` carrying the kickoff; an unprobeable sbx FAILS CLOSED.
+	// Handoff: branch on the POSITIVE state. Existing without --replace is left
+	// alone (never force-removed, never replayed into); --replace relaunches
+	// through `run --replace` with the kickoff; an unprobeable sbx FAILS CLOSED.
 	name, nameOK := provision.SetupSandboxName(c.Dir)
 	state := launch.SbxUnknown
 	if nameOK && name != "" {
@@ -202,15 +197,14 @@ func dispatchRun(d *cli.Deps, argv []string) error {
 	return nil
 }
 
-// runSetupHandoff is the pure post-host-phase decision + action, kept separate
-// from setupCmd.Run so the state/replace matrix is testable without exercising
-// the provisioning loop or actually exec'ing sbx. Returns an error ONLY for the
-// fail-closed unknown state (or a failed launch).
+// runSetupHandoff is the pure post-host-phase decision + action, separate from
+// setupCmd.Run so the state/replace matrix is testable without the provisioning
+// loop or an sbx exec. Errors ONLY on the fail-closed unknown state (or a
+// failed launch).
 func runSetupHandoff(dir, name string, state sandbox.State, replace bool, out io.Writer, runFn func([]string) error) error {
-	// kickoffArgs builds the run argv for a launch that should receive the
-	// tour: [DIR] [--replace] -- <OnboardingKickoff>. DIR is forwarded only when
-	// explicit so `pix setup` from inside a repo behaves exactly like `pix run`
-	// there.
+	// kickoffArgs builds the run argv for a launch that gets the tour:
+	// [DIR] [--replace] -- <OnboardingKickoff>. DIR is forwarded only when
+	// explicit, so `pix setup` in a repo behaves exactly like `pix run` there.
 	kickoffArgs := func() []string {
 		args := []string{}
 		if dir != "." {
@@ -225,9 +219,8 @@ func runSetupHandoff(dir, name string, state sandbox.State, replace bool, out io
 	if dir != "." {
 		dirArg = " " + sys.ShellQuote(dir)
 	}
-	// retryArg carries the caller's ORIGINAL --replace request into the retry
-	// command printed below: dropping it would silently downgrade a requested
-	// recreate into a plain reattach.
+	// retryArg carries the ORIGINAL --replace into the retry command below:
+	// dropping it would downgrade a requested recreate into a reattach.
 	retryArg := dirArg
 	if replace {
 		retryArg += " --replace"
@@ -235,9 +228,8 @@ func runSetupHandoff(dir, name string, state sandbox.State, replace bool, out io
 
 	switch state {
 	case launch.SbxUnknown:
-		// FAIL CLOSED: we could not determine whether a sandbox exists. Never
-		// launch — run would re-attach a live session and replay the kickoff
-		// into it. The host phase already completed, so a retry is cheap.
+		// FAIL CLOSED: launching would re-attach a live session and replay the
+		// kickoff into it. The host phase completed, so a retry is cheap.
 		which := fmt.Sprintf("sandbox %q", name)
 		if name == "" {
 			which = fmt.Sprintf("the sandbox for %s", dir)
