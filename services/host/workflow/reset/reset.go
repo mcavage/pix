@@ -12,27 +12,15 @@ import (
 
 	"pix/host/cli"
 	"pix/host/config"
-	"pix/host/hostenv"
 	"pix/host/rpc"
 	"pix/host/service"
+	"pix/host/sys"
 	"pix/host/workspace"
 )
 
 // reset is the destructive-but-reversible lifecycle verb. Nothing is ever
 // hard-removed. State is MOVED aside to a
 // timestamped `<dir>.bak-<unixts>` sibling, so a reset can always be undone by
-// renaming the backup back. reset wipes the stack's *state* (config + data),
-//
-// The design is split so the destructive core is unit-testable against a temp
-// HOME with no real sbx/pkill:
-//
-//   - Plan(cfg, paths, opts) is PURE — it resolves which paths get moved
-//     aside and which sbx actions run, with zero filesystem/exec side effects.
-//   - executeReset(...) takes injected fs ops (resetFS) + a hostenv.Env, so a test
-//     drives it against t.TempDir() and asserts files landed in .bak.
-//   - RunCore(...) wires plan -> guard (TTY prompt / --yes) -> execute, and
-//     RETURNS an error for the non-TTY-no-yes refusal instead of os.Exit, so the
-//     refusal path is testable.
 
 // Opts is the parsed reset flag set.
 type Opts struct {
@@ -58,7 +46,6 @@ type Paths struct {
 // backupTarget is one path the reset moves aside, with a human label. Dangerous
 // marks a move that must not run while `serve` is still up (moving the live data
 // dir out from under a sqlite writer splits the db/wal); the config-dir backup is
-// always safe.
 type backupTarget struct {
 	Path      string
 	Label     string
@@ -66,7 +53,6 @@ type backupTarget struct {
 	// WithSidecars marks a target that is a DB FILE (not a directory): move only
 	// that file plus its -wal/-shm sidecars, never its parent dir. Used for a
 	// custom MEMORY_DB/KNOWLEDGE_DB that lives OUTSIDE the pix data root (its
-	// parent may hold unrelated files, e.g. ~/Documents).
 	WithSidecars bool
 }
 
@@ -117,7 +103,6 @@ func DefaultResetFS() resetFS {
 // preservedRefFiles are the config-dir files reset snapshots before the config
 // dir moves aside and restores into the fresh one: 1Password op:// REFERENCES
 // (pointers, not secrets), so a reset doesn't force re-pasting every one of
-// them. They also stay in the .bak, so this is purely additive.
 var preservedRefFiles = []string{"op-refs.env", "hostmode.env"}
 
 // refFileSnapshot is one preserved-ref-file's captured content, read from the
@@ -138,9 +123,7 @@ var (
 // ResolveResetPaths resolves the host paths reset touches from the injected env
 // (MEMORY_DB/KNOWLEDGE_DB honored; the data root defaults to
 // $XDG_DATA_HOME/pix, else ~/.local/share/pix; the config dir to
-// config.Path()'s parent). It resolves the data root from the INJECTED env
-// (not config.DataDir()) so tests stay hermetic.
-func ResolveResetPaths(env hostenv.Env) Paths {
+func ResolveResetPaths(env sys.System) Paths {
 	home := ""
 	home = env.HomeDir()
 	var dataRoot string
@@ -157,8 +140,6 @@ func ResolveResetPaths(env hostenv.Env) Paths {
 	// Normalize custom db paths to ABSOLUTE at the source so every downstream
 	// comparison (dir-move vs file-only, the --keep-memory preserve set, the
 	// sweep) agrees. A relative MEMORY_DB (e.g. run from $HOME with
-	// MEMORY_DB=.pix/x.db) would otherwise leave relative preserve keys
-	// that never match the sweep's absolute entries -> memory swept aside.
 	if db := strings.TrimSpace(env.Getenv("MEMORY_DB")); db != "" {
 		if abs, err := filepath.Abs(db); err == nil {
 			db = abs
@@ -186,8 +167,6 @@ func ResolveResetPaths(env hostenv.Env) Paths {
 // Plan is the PURE planner. It resolves the backup targets + sbx actions
 // from the config, paths, and opts — no filesystem, no exec. The config dir is
 // always backed up. Without --keep-memory the whole data root (memory included)
-// is moved aside; with --keep-memory only the knowledge index is targeted here
-// and executeReset sweeps any OTHER non-memory data-root entry.
 func Plan(cfg *config.Config, paths Paths, opts Opts) Actions {
 	a := Actions{
 		KeepMemory: opts.keepMemory,
@@ -202,11 +181,6 @@ func Plan(cfg *config.Config, paths Paths, opts Opts) Actions {
 	}
 	if opts.keepMemory {
 		// Preserve the captured facts (memory); move the rebuildable index aside.
-		// A custom KNOWLEDGE_DB that lives OUTSIDE the data root must move ONLY the
-		// db file + its -wal/-shm sidecars, NEVER its parent dir (KNOWLEDGE_DB=
-		// ~/Documents/knowledge.db must not drag all of ~/Documents aside) — the same
-		// custom-outside-root handling the default path uses. A default in-root index
-		// is moved as a whole directory.
 		if t, ok := customDBOutsideRoot(paths.knowledgeDir, paths.knowledgeDB, paths.DataRoot, "knowledge database"); ok {
 			a.Backups = append(a.Backups, t)
 		} else if paths.knowledgeDir != "" {
@@ -216,9 +190,6 @@ func Plan(cfg *config.Config, paths Paths, opts Opts) Actions {
 		// Move the whole data root aside (captured memory + knowledge index).
 		a.Backups = append(a.Backups, backupTarget{Path: paths.DataRoot, Label: "data (memory, knowledge, skills)", Dangerous: true})
 		// Honor a custom MEMORY_DB / KNOWLEDGE_DB that lives OUTSIDE the data root:
-		// the data-root move alone would miss it. Move ONLY the db FILE + its
-		// -wal/-shm sidecars, NEVER the whole parent dir. A whole directory is moved
-		// only for the pix-owned default dir, handled by the data-root move above.
 		if t, ok := customDBOutsideRoot(paths.MemoryDir, paths.memoryDB, paths.DataRoot, "memory database"); ok {
 			a.Backups = append(a.Backups, t)
 		}
@@ -233,7 +204,6 @@ func Plan(cfg *config.Config, paths Paths, opts Opts) Actions {
 	// The daemon's ephemeral runtime files live in the STATE dir (not the config/
 	// data dirs we move aside), so a plain reset would leave them behind. They are
 	// stale the moment serve stops (a lock file, a pidfile, a lazy marker) and have
-	// no restore value, so hard-remove them for a truly clean slate.
 	a.RuntimeFiles = []string{
 		config.ServePidPath(),
 		config.ServeLazyMarkerPath(),
@@ -265,7 +235,6 @@ func moveAside(fsys resetFS, path string, ts int64) (string, error) {
 // moveFileWithSidecars moves a db FILE plus its -wal/-shm sidecars aside (each to
 // its own unique .bak), without ever touching the parent directory. Absent
 // sidecars are a soft skip; a real move error is collected. It records every
-// moved source in `moved` and returns the created .bak paths + any errors.
 func moveFileWithSidecars(fsys resetFS, b backupTarget, ts int64, moved map[string]bool, out io.Writer) ([]string, []error) {
 	var created []string
 	var errs []error
@@ -325,10 +294,6 @@ func fsPathExists(fsys resetFS, path string) bool {
 // customDBOutsideRoot decides dir-move vs file-only-with-sidecars for a memory/
 // knowledge db, shared by BOTH the default and --keep-memory paths so neither can
 // drift. When a custom MEMORY_DB/KNOWLEDGE_DB resolves OUTSIDE the pix data
-// root, its parent dir may hold unrelated files (e.g. ~/Documents), so moving the
-// directory would drag them aside; return a file-only target that moves just the
-// db file + its -wal/-shm sidecars. For a default in-root db it returns false and
-// the caller moves the owning directory instead.
 func customDBOutsideRoot(dir, dbPath, dataRoot, label string) (backupTarget, bool) {
 	if dbPath != "" && !underDir(dir, dataRoot) {
 		return backupTarget{Path: dbPath, Label: label, Dangerous: true, WithSidecars: true}, true
@@ -339,16 +304,6 @@ func customDBOutsideRoot(dir, dbPath, dataRoot, label string) (backupTarget, boo
 // keepMemoryPreserve computes the captured-memory artifacts the --keep-memory
 // sweep must NOT move aside, as a set of cleaned absolute top-level dataRoot
 // paths, plus a human label for the summary. Two shapes:
-//
-//   - db in a DEDICATED subdir of dataRoot (default dataRoot/memory/memory.db):
-//     preserve the top-level subdir entry on the path to it (e.g. dataRoot/memory).
-//   - db sitting DIRECTLY in dataRoot (MEMORY_DB=dataRoot/custom-memory.db, so
-//     memoryDir == dataRoot): preserve the db FILE + its -wal/-shm sidecars, and
-//     move everything else (incl. the knowledge db) aside.
-//
-// Matching by cleaned path (never a hardcoded "memory" name) is what fixes the
-// data-loss edge where a loose custom db in the root was swept away while the
-// code still reported it preserved.
 func keepMemoryPreserve(dataRoot, memoryDir, memoryDB string) (map[string]bool, string) {
 	preserve := map[string]bool{}
 	root := filepath.Clean(dataRoot)
@@ -396,21 +351,14 @@ func underDir(path, dir string) bool {
 // serveStillUp probes whether `pix-host serve` is still answering on the
 // memory service port (env-aware), so the executor can refuse the dangerous
 // data move after a best-effort stop failed to bring it down — a still-live
-// serve holds a live sqlite writer under the data root, so the move must not
-// proceed underneath it.
-func serveStillUp(env hostenv.Env) bool {
+func serveStillUp(env sys.System) bool {
 	return env.DialLocal(service.Port(env, "MEMORY_PORT", rpc.MemoryPortDefault))
 }
 
 // executeReset performs the plan: stop services (best-effort), move each backup
 // aside, sweep the data root for non-memory entries under --keep-memory, then
 // run the sbx removals. It never hard-removes. Returns the created .bak paths
-// (for the summary's restore hint).
-// It returns the created .bak paths AND a non-nil error if ANY move-aside or
-// sweep failed (or the serve-still-up guard blocked the data move). A partial
-// reset must NOT report success: the caller uses the error to exit non-zero and
-// to avoid reporting a partial reset as successful.
-func executeReset(a Actions, fsys resetFS, env hostenv.Env, out io.Writer, now func() time.Time) ([]string, error) {
+func executeReset(a Actions, fsys resetFS, env sys.System, out io.Writer, now func() time.Time) ([]string, error) {
 	ts := now().Unix()
 	var errs []error
 
@@ -423,8 +371,6 @@ func executeReset(a Actions, fsys resetFS, env hostenv.Env, out io.Writer, now f
 
 	// 1b. Verify serve is ACTUALLY down before we move the data dir. Renaming
 	// ~/.local/share/pix out from under a live sqlite writer splits the db from its wal.
-	// The config-dir backup stays safe; only the DATA moves are gated. --force
-	// overrides (the user accepts the risk).
 	dataBlocked := false
 	if !a.Force && serveStillUp(env) {
 		dataBlocked = true
@@ -436,8 +382,6 @@ func executeReset(a Actions, fsys resetFS, env hostenv.Env, out io.Writer, now f
 	// snapshot the 1Password ref files (op-refs.env, hostmode.env) BEFORE the
 	// config dir moves aside. They are op:// POINTERS, not secrets — resolvable
 	// only with the user's own 1Password — so re-pasting every one of them after
-	// every reset is pure friction. They stay in the .bak too, so restoring them
-	// into the fresh config dir below is purely additive, never a data loss risk.
 	var refSnapshots []refFileSnapshot
 	if a.PreserveRefs && a.ConfigDir != "" && fsys.readFile != nil {
 		for _, name := range preservedRefFiles {
@@ -506,10 +450,6 @@ func executeReset(a Actions, fsys resetFS, env hostenv.Env, out io.Writer, now f
 	// 3. --keep-memory: sweep the data root, moving aside every top-level entry
 	// that is NOT part of the captured memory (the resolved memory db + its
 	// -wal/-shm sidecars when they sit directly in the data root, or the dedicated
-	// memory subdir when the db lives in one) and not a backup we just created, so
-	// "anything else" beside the preserved facts is reset too. Preservation is by
-	// cleaned absolute path (honoring a custom MEMORY_DB), never a hardcoded name.
-	// Skipped when the data move was blocked.
 	if a.KeepMemory && a.DataRoot != "" && !dataBlocked {
 		preserve, preservedLabel := keepMemoryPreserve(a.DataRoot, a.MemoryDir, a.MemoryDB)
 		entries, rdErr := fsys.readDir(a.DataRoot)
@@ -546,8 +486,6 @@ func executeReset(a Actions, fsys resetFS, env hostenv.Env, out io.Writer, now f
 	// 3b. Clear the daemon's ephemeral runtime files (pid/lazy/lock in the STATE
 	// dir). They are stale after the stop and live OUTSIDE the moved dirs, so a
 	// plain reset would strand them. Hard-remove (best-effort; a missing file is
-	// fine). Skipped if the daemon wouldn't stop (data-move blocked) so we never
-	// yank the pidfile out from under a still-live daemon.
 	if !dataBlocked {
 		for _, p := range a.RuntimeFiles {
 			if err := fsys.remove(p); err != nil && !os.IsNotExist(err) {
@@ -566,8 +504,6 @@ func executeReset(a Actions, fsys resetFS, env hostenv.Env, out io.Writer, now f
 	// 5. Restart the daemon on the clean slate if one was running before (and we
 	// actually tore down). It comes up fresh against default config (the file was
 	// moved aside) with an empty store — the intended clean-slate running state.
-	// Best-effort: a failure just leaves services down and the next `pix run`
-	// lazy-starts them.
 	if wasUp && !dataBlocked {
 		fmt.Fprintln(out, "Restarting host services on the clean slate:")
 		if err := restartServeForReset(out); err != nil {
@@ -593,9 +529,6 @@ var restartServeForReset = func(out io.Writer) error {
 // stopServeForReset is the serve-stop the reset executor uses, indirected through
 // a package var so a test can stub it (and so the real path never signals a live
 // serve during unit tests). It is MODE-AWARE: a managed service (launchd)
-// is stopped via its supervisor so KeepAlive cannot respawn it mid-reset
-// (which would trip the data-move guard); otherwise it falls through to the
-// pidfile-based service.Stop (with its discovery fallback for an orphaned daemon).
 var stopServeForReset = func(out io.Writer) (bool, error) {
 	return service.StopAnyMode(service.ManagedActive, service.StopManaged, service.DefaultCtl(), out)
 }
@@ -603,10 +536,7 @@ var stopServeForReset = func(out io.Writer) (bool, error) {
 // stopHostServices best-effort stops any running `pix-host serve` so it
 // releases the db files before they move. It delegates to the pidfile-based
 // service.Stop (which verifies the pid is ours before signalling); service.Stop prints
-// exactly what it did (stopped / not running / stale / refused). Best-effort: a
-// hard error is reported but never aborts the reset, keeping the "cannot stop, do
-// it yourself" degradation.
-func stopHostServices(_ hostenv.Env, out io.Writer) {
+func stopHostServices(_ sys.System, out io.Writer) {
 	fmt.Fprintln(out, "Stopping host services:")
 	if _, err := stopServeForReset(out); err != nil {
 		fmt.Fprintf(out, "  · could not stop 'pix-host serve' (%v) — stop it yourself if running\n", err)
@@ -616,7 +546,7 @@ func stopHostServices(_ hostenv.Env, out io.Writer) {
 // ExecuteSbxReset removes pix-* sandboxes and unregisters the configured
 // local MCP servers. Best-effort throughout: each action is reported, and if sbx
 // is absent (e.g. inside a sandbox) it prints the commands for the user to run.
-func ExecuteSbxReset(a Actions, env hostenv.Env, out io.Writer) {
+func ExecuteSbxReset(a Actions, env sys.System, out io.Writer) {
 	fmt.Fprintln(out, "Sandboxes + MCP (sbx):")
 	haveSbx := false
 	_, err := env.LookPath("sbx")
@@ -632,7 +562,6 @@ func ExecuteSbxReset(a Actions, env hostenv.Env, out io.Writer) {
 	// Remove each pix-* sandbox parsed from `sbx ls`. The LISTING is a
 	// read-only probe and BOUNDED (probeRun) — a hung sbx degrades to the
 	// failed-listing message; the `sbx rm -f` removals below are mutating
-	// lifecycle commands and stay on env.Run.
 	if lsOut, timedOut, err := env.RunTimed("sbx", "ls"); err == nil && !timedOut {
 		boxes := workspace.ParseSandboxes(lsOut)
 		if len(boxes) == 0 {
@@ -648,8 +577,6 @@ func ExecuteSbxReset(a Actions, env hostenv.Env, out io.Writer) {
 				// Positive removal success: clear the launcher's per-sandbox MCP
 				// receipt via the SAME hardened helper `pix rm`/task teardown
 				// use (lock-serialized, symlink-safe). Best-effort: the removal
-				// DID succeed, so a clear failure is reported, never fatal — the
-				// next launcher create's pre-create clear is the backstop.
 				if cerr := workspace.ClearRemovedReceipt(sb.Name); cerr != nil {
 					fmt.Fprintf(out, "  · could not clear the mcp receipt for %s — %v\n", sb.Name, cerr)
 				}
@@ -725,7 +652,7 @@ func printResetSummary(created []string, out io.Writer) {
 // ErrResetNeedsYes on the non-TTY-no-yes refusal (the CLI maps it to exit 2);
 // an interactive "no" aborts cleanly with a nil error.
 func RunCore(cfg *config.Config, paths Paths, opts Opts,
-	fsys resetFS, env hostenv.Env, rio cli.IO, now func() time.Time) error {
+	fsys resetFS, env sys.System, rio cli.IO, now func() time.Time) error {
 
 	a := Plan(cfg, paths, opts)
 	printResetPlan(a, rio.Out)
@@ -747,9 +674,6 @@ func RunCore(cfg *config.Config, paths Paths, opts Opts,
 }
 
 // ParseArgs parses the reset flag set.
-// NewOpts builds the option set from already-parsed flags. Parsing itself is
-// the root parser's job (root.go's resetCmd): this is the L1 seam that keeps
-// the option struct's fields unexported and its invariants here.
 func NewOpts(keepMemory, sbx, assumeYes, force bool) Opts {
 	return Opts{keepMemory: keepMemory, sbx: sbx, assumeYes: assumeYes, force: force}
 }

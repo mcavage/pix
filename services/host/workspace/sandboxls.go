@@ -32,8 +32,6 @@ type SbxBox struct {
 // ParsePixBoxes filters `sbx ls` output to pix-* rows and pulls name,
 // state, and (best-effort) the workspace dir. It tolerates column drift: the
 // state is whichever field is a known lifecycle word. A raw row supplies the
-// dir only when it contains exactly one absolute path; pack mounts can add
-// more paths, and guessing among them would mislabel a mount as the workspace.
 func ParsePixBoxes(sbxLsOut string) []SbxBox {
 	var out []SbxBox
 	for _, ln := range strings.Split(sbxLsOut, "\n") {

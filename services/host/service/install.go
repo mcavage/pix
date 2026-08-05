@@ -1,13 +1,6 @@
 // serve_install.go implements the MANAGED LOGIN SERVICE (docs/design/
 // serve-lifecycle.md §2): `pix serve install` / `serve uninstall` register
 // `pix-host serve` as a launchd LaunchAgent — pix's host lifecycle is macOS
-// only, the Docker Desktop model, opt-in beside the default lazy auto-start.
-//
-// This file is testable on any OS (the rendering, install/uninstall step
-// sequences, and message formatting are pure functions over an injected
-// command runner + fs ops), but only actually WIRED on darwin. The tiny
-// real-exec dispatch lives in serve_install_darwin.go; every other GOOS gets
-// the single ErrUnsupportedHost stub in serve_install_other.go.
 
 package service
 
@@ -35,10 +28,7 @@ const serveLaunchdLabel = "com.pix.serve"
 // than copied: probing a label the installer never writes is worse than none.
 const LaunchdLabel = serveLaunchdLabel
 
-// The embedded template is the SINGLE SOURCE OF TRUTH for the generated
-// plist (the old scripts/macos CHANGEME plist is superseded — go:embed
-// cannot reach outside the module, so the template lives here and the script
-// now delegates to `pix serve install`).
+// The embedded template is the SINGLE SOURCE OF TRUTH for the generated plist.
 //
 //go:embed templates/com.pix.serve.plist.tmpl
 var plistTemplate string
@@ -53,10 +43,6 @@ type envKV struct {
 // capturedServeEnvVars is the documented allowlist of daemon-relevant env vars
 // captured at `serve install` time (beyond the always-rendered
 // PIX_CONFIG): they change which config/store/ports the daemon reads, so
-// a launcher that runs with them set MUST install a daemon that sees the same
-// values — otherwise config propagation "restarts" a daemon that never reads
-// the launcher's config. Kept in sync with the man page's `serve install`
-// section.
 var capturedServeEnvVars = []string{
 	"XDG_CONFIG_HOME",
 	"MEMORY_DB",
@@ -65,9 +51,6 @@ var capturedServeEnvVars = []string{
 }
 
 // capturedServeEnv resolves the env block rendered into the managed unit (H6):
-// always an ABSOLUTE PIX_CONFIG pinned to the launcher's resolved
-// config.Path() (so launcher and daemon can never read different configs),
-// plus each capturedServeEnvVars entry that is set at install time.
 func capturedServeEnv(getenv func(string) string) []envKV {
 	cfgPath := config.Path()
 	if abs, err := filepath.Abs(cfgPath); err == nil {
@@ -177,10 +160,6 @@ func launchdPaths(home string) string {
 
 // launchdInstall renders + writes the plist and bootstraps it. Steps (all argv
 // choices unit-tested via the injected runner):
-//  1. bootout any loaded copy first (idempotent re-install; "not loaded" ignored)
-//  2. launchctl bootstrap gui/<uid> <plist> (modern surface), falling back to
-//     the deprecated `load -w` on old macOS
-//  3. kickstart -k to start it NOW (RunAtLoad covers reboots)
 func launchdInstall(run cmdRunner, fs installFS, uid int, home, hostBin string, env []envKV, out io.Writer) error {
 	plistPath := launchdPaths(home)
 	logPath := config.ServeLogPath()
@@ -244,8 +223,6 @@ func launchdRestart(run cmdRunner, uid int) error {
 // launchdStop boots the agent OUT of its domain so KeepAlive stops respawning it,
 // WITHOUT removing the plist (unlike launchdUninstall). It stays installed and
 // returns at next login, or immediately via `pix serve install`. This is
-// the only way to actually stop a KeepAlive agent — a bare SIGTERM to the pid is
-// undone by launchd within a second.
 func launchdStop(run cmdRunner, uid int, out io.Writer) error {
 	if _, err := run("launchctl", "bootout", fmt.Sprintf("gui/%d/%s", uid, serveLaunchdLabel)); err != nil {
 		return err
@@ -276,9 +253,6 @@ func resolvedHostBinary() (string, error) {
 // preInstallGuard clears the ground before a managed-service install (H5): a
 // KeepAlive/Restart=always unit installed over an already-running daemon
 // collides on ports + store lock and crash-loops while install reports
-// success. A VERIFIED lazy daemon is stopped (it is ours to manage); a
-// FOREGROUND daemon is REFUSED with instructions (never kill a process the
-// user is watching); managed (idempotent re-install) and down proceed.
 func preInstallGuard(mode func() serveMode, stop func(io.Writer) (bool, error), out io.Writer) error {
 	switch mode() {
 	case serveForeground:
@@ -302,12 +276,6 @@ const managedHealthTimeout = 10 * time.Second
 // verifyManagedInstallHealth is the post-install verification step (round 2,
 // H8): a config.Load() failure used to be silently swallowed (`if err == nil`
 // guarded the whole check, and the else branch did nothing) so a malformed
-// config.toml printed "installed managed service" while health verification
-// was skipped entirely and the unit crash-loops in the background. A load
-// failure is now itself a verification FAILURE, reported honestly — the
-// install step already succeeded (the unit is on disk and enabled), but it
-// will not start until config.toml is fixed, and we say so instead of
-// claiming health we never checked. Returns whether health was verified.
 func verifyManagedInstallHealth(cfg *config.Config, cfgErr error, st serveStarter, out io.Writer) bool {
 	if cfgErr != nil {
 		fmt.Fprintf(out, "warning: installed managed service, but could not verify it started: config.toml failed to load (%v). It will not start until this is fixed — edit config.toml, then check with `pix serve status`.\n", cfgErr)
@@ -320,7 +288,6 @@ func verifyManagedInstallHealth(cfg *config.Config, cfgErr error, st serveStarte
 // reportManagedServeHealth verifies (bounded) that the freshly-installed
 // managed service actually came up — its required service ports answer — and
 // reports HONESTLY when it did not (H5: "installed" must not paper over a
-// crash-looping unit). Returns whether the services became healthy.
 func reportManagedServeHealth(dial func(int) bool, ports []servePortSpec,
 	now func() time.Time, sleep func(time.Duration), timeout time.Duration, out io.Writer) bool {
 	if len(ports) == 0 {
@@ -371,7 +338,6 @@ func RunInstall(argv []string) {
 	// Bounded post-install verification: report honestly if the unit did not
 	// come up, or if we could not even check because config.toml won't load
 	// (exit 0 either way — the install itself succeeded; the warning + pointers
-	// are the honest signal).
 	cfg, cfgErr := config.Load()
 	verifyManagedInstallHealth(cfg, cfgErr, DefaultStarter(), os.Stdout)
 }
@@ -379,7 +345,6 @@ func RunInstall(argv []string) {
 // Install is the non-exiting install seam: `pix setup` provisions the launchd
 // agent through the provision loop, which needs an apply that RETURNS its
 // failure (the loop records it and re-checks) rather than one that exits the
-// process. RunInstall keeps owning the argv/exit-code contract for the verb.
 func Install(out io.Writer) error { return platformServeInstall(out) }
 
 // RunUninstall is the `serve uninstall` entry point.

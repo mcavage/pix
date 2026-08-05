@@ -12,7 +12,6 @@ import (
 // H1: a symlinked serve.log must never be followed for WRITING — a planted
 // `serve.log -> sensitive-file` would make the lazily-spawned daemon append its
 // output into the target. openServeLogFile removes the symlink and creates a
-// regular 0600 file; the target stays untouched.
 func TestOpenServeLogFileRefusesSymlink(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "victim")

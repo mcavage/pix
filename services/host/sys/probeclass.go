@@ -8,21 +8,6 @@ import (
 // probeclass.go is the PURE probe-outcome classifier: given the captured
 // output (+ error) of a failed readiness probe, decide whether the failure is
 // a positive policy/permission DENIAL (verdict denied), a missing/expired
-// credential the user can fix (an auth TODO), or merely UNVERIFIABLE
-// (transport/infra/generic failure — doctor does not know, so it must not
-// claim a verified failure).
-//
-// The matching is deliberately conservative:
-//   - only EXPLICIT denial tokens count as denied: "forbidden",
-//     "access_denied"/"access denied", a denial verb bound to "policy"
-//     ("not allowed by policy", "denied by org policy", "policy forbids", an
-//     explicit "policy denial"), "permission denied" IN a policy context, or
-//     an HTTP 403 whose body carries a denial token. A bare "policy" word
-//     (help text, flag names, "see the retry policy docs") NEVER matches.
-//   - a bare 401/unauthorized is an AUTH gap for the caller to surface as a
-//     credential TODO — it is NOT an org-policy denial.
-//   - everything else — timeout, connection refused, EOF, DNS, TLS, a generic
-//     non-zero exit — is unverifiable.
 
 // ProbeClass is the classified outcome of a failed probe.
 type ProbeClass int
@@ -55,7 +40,6 @@ func (p ProbeClass) String() string {
 // deniedPatterns match ONLY explicit policy/permission denials. Every pattern
 // that involves the word "policy" binds it to a denial verb, so incidental
 // mentions of "policy" (help text, `--policy` flags, documentation pointers)
-// can never classify as denied.
 var deniedPatterns = []*regexp.Regexp{
 	// The universal HTTP/API denial words.
 	regexp.MustCompile(`\bforbidden\b`),
@@ -75,7 +59,6 @@ var deniedPatterns = []*regexp.Regexp{
 // deniedBodyTokens are the denial words that, combined with an HTTP 403 status
 // in the same output, make the 403 a positive denial. A bare 403 with no
 // denial body stays unverifiable (proxies and gateways emit contentless 403s
-// for transport reasons).
 var deniedBodyTokens = regexp.MustCompile(`\b(?:denied|denial|forbidden|not allowed|not permitted|prohibited)\b`)
 
 var http403 = regexp.MustCompile(`\b403\b`)
@@ -89,10 +72,6 @@ var authPatterns = []*regexp.Regexp{
 }
 
 // ClassifyProbeFailure classifies a FAILED probe's combined output + error.
-// It is pure (no I/O) and case-insensitive. Explicit denial tokens win over
-// auth tokens (a "403 forbidden" that also mentions a token is still a
-// denial); everything unmatched is unverifiable — the safe default that never
-// invents a verified failure out of a flaky transport.
 func ClassifyProbeFailure(output string, err error) ProbeClass {
 	hay := strings.ToLower(output)
 	if err != nil {

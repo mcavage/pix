@@ -14,7 +14,6 @@ import (
 // fakeProc is a scripted process used to exercise Stop without any real OS
 // process. It tracks liveness and the signals it received, and can be told to
 // die after N SIGTERM liveness probes (to simulate a graceful exit) or to ignore
-// SIGTERM entirely (to force the SIGKILL escalation).
 type fakeProc struct {
 	pid          int
 	alive        bool
@@ -227,7 +226,6 @@ func TestStopServe_SurvivesSIGTERM_Escalates(t *testing.T) {
 // TestStopServe_UnverifiableRefuses: no /proc AND ps unavailable (known=false) =>
 // ownership cannot be positively verified, so Stop REFUSES to signal (never
 // trusts the pidfile alone: a stale/reused pid would otherwise get SIGTERM). No
-// signal is delivered and the pidfile is left in place.
 func TestStopServe_UnverifiableRefuses(t *testing.T) {
 	removed := false
 	proc := &fakeProc{pid: 88, alive: true, dieOnTerm: true}
@@ -308,7 +306,6 @@ func TestResolveServeStatus_StaleNotRunning(t *testing.T) {
 // psFake builds a two-column `ps` fake: verifyServeProcPS calls `ps -o comm=`
 // (the executable path alone, no argv) then `ps -o args=` (the full command
 // line, only ever scanned for a standalone "serve" token). Dispatch is on the
-// `-o` value so a single fake covers both calls.
 func psFake(comm, args string, commErr, argsErr error) func(string, ...string) (string, error) {
 	return func(_ string, a ...string) (string, error) {
 		for _, v := range a {
@@ -345,9 +342,6 @@ func TestVerifyServeProcPS_Darwin(t *testing.T) {
 
 // Round 2 (H8, space-safe): a `pix-host` installed at a path containing
 // spaces (e.g. "/Users/alice/My Projects/pix-host") must still verify.
-// The old single `ps -o command=` + strings.Fields(line) split THIS path on
-// its own spaces and parsed argv[0] as just "/Users/alice/My", failing the
-// basename check and breaking stop/status/the install guard.
 func TestVerifyServeProcPS_PathWithSpaces(t *testing.T) {
 	spaced := psFake(
 		"/Users/alice/My Projects/pix-host\n",
@@ -368,13 +362,6 @@ func TestVerifyServeProcPS_PathWithSpaces(t *testing.T) {
 // Round 3 (H11): the standalone "serve" token scan must ignore argv[0], since
 // a `pix-host` binary installed under a path that has a directory
 // component literally named "serve" (e.g. "/Users/alice/My serve
-// Projects/pix-host") produces a `ps -o args=` line whose FIRST
-// space-separated field after that component is "serve" even though the real
-// subcommand is something else entirely ("status"). The old scan ran over the
-// WHOLE line and mistook that path component for a genuine `serve` subcommand
-// — a false positive that could make a stale pidfile verify as "ours" and get
-// signalled. The genuine case (a `serve` subcommand after a spaced path) must
-// still verify.
 func TestVerifyServeProcPS_ServeInPathNotSubcommand(t *testing.T) {
 	falsePositive := psFake(
 		"pix-host\n",
@@ -396,7 +383,6 @@ func TestVerifyServeProcPS_ServeInPathNotSubcommand(t *testing.T) {
 // TestVerifyServeProcPS_RepeatedBasenameFullComm exercises the robust primary
 // path: on macOS `ps -o comm=` returns the FULL executable path, so argv[0] is
 // stripped by exact prefix. A path that both contains spaces AND repeats the
-// basename (a "serve" directory component) must not smuggle a false serve token.
 func TestVerifyServeProcPS_RepeatedBasenameFullComm(t *testing.T) {
 	exe := "/opt/pix-host/My serve dir/pix-host"
 	falsePositive := psFake(exe+"\n", exe+" status\n", nil, nil)

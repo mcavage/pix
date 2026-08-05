@@ -19,10 +19,6 @@ func killProcess(pid int, sig syscall.Signal) error { return syscall.Kill(pid, s
 // discoverServeProcs finds candidate `pix-host serve` pids when the pidfile
 // is gone (e.g. `pix reset` moved the config dir out from under a running
 // daemon). It is deliberately LOOSE: `pgrep -f pix-host` returns anything
-// whose command line mentions our binary; the caller re-verifies each pid with
-// verifyServeProc before signalling, so a false positive here is harmless (it is
-// filtered out) and a blind kill is never possible. pgrep exit 1 = no match =>
-// (nil, nil). Its own pid is excluded so `serve stop` never lists itself.
 func discoverServeProcs() ([]int, error) {
 	out, err := exec.Command("pgrep", "-f", "pix-host").Output()
 	if err != nil {

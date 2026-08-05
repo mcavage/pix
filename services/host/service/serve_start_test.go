@@ -280,7 +280,6 @@ func TestEnsureServeRaceLoserDoesNotSpawn(t *testing.T) {
 // H3: the spawned child's pid is recorded in the pidfile (and the lazy marker)
 // BEFORE the spawn lock releases, so a cold-init racer that acquires the lock
 // next sees the pidfile instead of forking a second daemon. Round 3 (H10):
-// release() only runs AFTER recordPid succeeds, and strictly before markLazy.
 func TestEnsureServeRecordsPidBeforeUnlock(t *testing.T) {
 	rec := &starterRec{upAfter: 5}
 	if err := Ensure(rec.starter(), starterCfg(), EnsureOpts{}); err != nil {
@@ -301,7 +300,6 @@ func TestEnsureServeRecordsPidBeforeUnlock(t *testing.T) {
 // H3 end-to-end shape: caller A spawns (daemon pidfile not yet written by the
 // child); caller B runs in the window AFTER A released the lock but BEFORE the
 // daemon's own writeServePidFile — B must see A's launcher-recorded pid via
-// readLiveServePid and WAIT, never spawn a second daemon.
 func TestEnsureServeColdInitTwoCallersSingleSpawn(t *testing.T) {
 	// Shared "filesystem": the launcher-recorded pidfile contents.
 	pidfile := ""
@@ -348,11 +346,6 @@ func TestEnsureServeColdInitTwoCallersSingleSpawn(t *testing.T) {
 // Round 2 (H8) / Round 3 (H10) (a): recordPid failing must NOT release the
 // spawn lock as success. When the cleanup kill SUCCEEDS, the just-spawned
 // child is Kill()ed AND Wait()ed/reaped (round 3 closes the leaked-zombie /
-// unconfirmed-kill gap: the old code discarded the kill error and never
-// reaped, because spawnDetachedServe had already Release()d the process,
-// making it un-Wait()able). release() must never run on this path (it would
-// foreclose the Wait()), markLazy must not run, and the error surfaces so a
-// racing second caller can never end up with two live, unrecorded daemons.
 func TestEnsureServeRecordPidFailureKillSucceeds(t *testing.T) {
 	rec := &starterRec{upAfter: 5}
 	st := rec.starter()
@@ -397,8 +390,6 @@ func TestEnsureServeRecordPidFailureKillSucceeds(t *testing.T) {
 // Round 3 (H10) (b): if the CLEANUP kill itself fails, that failure must not be
 // swallowed (the old code did `_ = st.ctl.kill(...)`) — it must surface in the
 // returned error, since the child may still be alive, unrecorded, and
-// undetectable by a racing second launcher. Wait() must not be attempted on a
-// child whose kill failed (it may not be dead, so Wait would hang/misreport).
 func TestEnsureServeRecordPidFailureKillFails(t *testing.T) {
 	rec := &starterRec{upAfter: 5}
 	st := rec.starter()

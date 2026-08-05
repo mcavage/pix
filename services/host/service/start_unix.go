@@ -3,8 +3,6 @@
 // serve_start_unix.go holds the real detached-spawn + flock shims for lazy
 // auto-start (M1: they use Setsid and syscall.Flock, which only exist on unix;
 // serve_start_windows.go carries the graceful-degrade shims so GOOS=windows
-// still compiles). Everything around these thin wrappers is unit-tested via
-// the injected serveStarter seams in serve_start.go.
 
 package service
 
@@ -15,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"pix/host/sys"
 	"syscall"
 
 	"pix/host/config"
@@ -24,14 +21,6 @@ import (
 // spawnDetachedServe is the real detached-spawn shim (kept a thin one-liner-ish
 // wrapper like DefaultCtl's syscalls; everything around it is tested via
 // fakes). Setsid gives the child its own session so a terminal close / SIGHUP
-// to the launcher never reaches it. Round 3 (H10): Process.Release() is NO
-// LONGER called here — it is handed to the caller as handle.release(), to be
-// invoked ONLY after Ensure's recordPid succeeds. Releasing unconditionally
-// (the old behavior) meant a recordPid failure had no way to Wait()/reap the
-// child after killing it (a released *os.Process can't be waited on), leaking a
-// zombie and giving no confirmation the kill even landed. The launcher records
-// the child pid in the pidfile immediately (H3); the daemon overwrites it with
-// the same pid later.
 func spawnDetachedServe(bin string, args []string, logPath string) (serveChildHandle, error) {
 	logf, err := openServeLogFile(logPath)
 	if err != nil {
@@ -59,10 +48,6 @@ func spawnDetachedServe(bin string, args []string, logPath string) (serveChildHa
 // openServeLogFile opens (creating 0600) the lazy daemon's log for append,
 // REFUSING to follow a symlink (H1): serve.log lives in a user-writable state
 // dir, and a planted `serve.log -> /some/sensitive/file` symlink would make the
-// daemon append its output into the target (corruption) and a failed-start
-// tailFileLines echo the target's last lines to the terminal (secret leak). A
-// pre-existing symlink is removed and replaced by a regular file; O_NOFOLLOW
-// closes the Lstat→open TOCTOU window.
 func openServeLogFile(logPath string) (*os.File, error) {
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
 		return nil, err
@@ -97,9 +82,6 @@ func ReadFileNoSymlink(path string) ([]byte, error) {
 // tryServeSpawnLock attempts (NON-blocking) the exclusive flock that serializes
 // the spawn decision on config.ServeSpawnLockPath(): two concurrent `pix
 // run`s cannot both fork a daemon. (false, nil) = the lock is busy; Ensure
-// retries under its own deadline (M2), so a wedged holder can never hang the
-// caller. The daemon's own memory-store flock remains the correctness backstop
-// if this lock is ever lost (exotic NFS home).
 func tryServeSpawnLock(fn func() error) (bool, error) {
 	return tryFlock(config.ServeSpawnLockPath(), fn)
 }
@@ -127,9 +109,3 @@ func tryFlock(lockPath string, fn func() error) (bool, error) {
 	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 	return true, fn()
 }
-
-// withFlock delegates to sys, which owns the one implementation (and its
-// //go:build split). Kept as a name here because the serve lock path reads
-// better without a package qualifier, and because deleting the name would churn
-// call sites for no gain.
-func withFlock(lockPath string, fn func() error) error { return sys.Lock(lockPath, fn) }

@@ -431,9 +431,6 @@ func TestExecuteReset_KeepMemoryCustomDBDir(t *testing.T) {
 // TestExecuteReset_KeepMemoryLooseDBInRoot: --keep-memory with MEMORY_DB pointing
 // at a db FILE sitting DIRECTLY inside the data root (memoryDir == dataRoot). The
 // sweep must preserve that db file + its -wal sidecar (never move them), while an
-// unrelated sibling file/dir IS moved aside. This is the data-loss regression: the
-// old sweep only matched an entry whose path == MemoryDir (== dataRoot), so it
-// preserved NOTHING and swept the db away while reporting it preserved.
 func TestExecuteReset_KeepMemoryLooseDBInRoot(t *testing.T) {
 	stubStopServe(t)
 	root := t.TempDir()
@@ -582,7 +579,6 @@ func TestExecuteReset_CustomDBOutsideRootMovesFileOnly(t *testing.T) {
 // TestExecuteReset_KeepMemoryCustomKnowledgeDBOutsideRoot: --keep-memory with a
 // custom KNOWLEDGE_DB pointing at a file OUTSIDE the data root moves ONLY that
 // db file (+ its -wal/-shm sidecars), NEVER the parent dir or an unrelated
-// sibling in it — while captured memory is still preserved in the same run.
 func TestExecuteReset_KeepMemoryCustomKnowledgeDBOutsideRoot(t *testing.T) {
 	stubStopServe(t)
 	root := t.TempDir()

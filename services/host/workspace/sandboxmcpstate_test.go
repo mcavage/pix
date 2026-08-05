@@ -1,8 +1,5 @@
 // sandboxmcpstate_test.go — coverage for sandboxmcpstate.go: the launcher-owned
 // per-sandbox MCP receipt (<stateDir>/sandboxes/<sandbox>/mcp.json).
-//
-// Every test uses t.TempDir() as stateDir and a fixed injected clock — never
-// the real XDG state dir or wall clock (sandboxmcpstate.go's stated contract).
 package workspace
 
 import (
@@ -20,7 +17,6 @@ import (
 // GWServerName is a literal here rather than an import: a receipt records
 // whatever server names it is handed, and this package has no business knowing
 // that one of them belongs to Google Workspace. Using the real constant would
-// be an upward dependency on a capability.
 const GWServerName = "google-workspace"
 
 func fixedClock(ts string) func() time.Time {

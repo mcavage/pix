@@ -3,9 +3,6 @@ package service
 // Usage is the `pix serve` help text. It lives with the capability rather than
 // in a central help file, so a change to what serve does and a change to what
 // serve says are the same edit.
-// Description is the long help the root's generated `pix serve` usage prints.
-// It replaced a hand-written usage block that listed, separately, the
-// subcommands and flags the parser already declares.
 const Description = `Run the long-running host services (execs the sibling pix-host serve):
 memory (:11435, when enabled) and the monitor ingest listener (:11437, when
 enabled) that the in-VM monitor tap POSTs to — 'pix monitor' is a pure offline
