@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -10,6 +9,8 @@ import (
 
 	"pix/host/routing"
 	"pix/host/sys/systest"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestParseAgent(t *testing.T) {
@@ -27,6 +28,32 @@ func TestParseAgent(t *testing.T) {
 	_, b2, ok2 := parseAgent("just a body\n")
 	if ok2 || strings.TrimSpace(b2) != "just a body" {
 		t.Fatalf("no-fm case: ok=%v body=%q", ok2, b2)
+	}
+}
+
+// TestParseAgentCRLF proves a Windows-authored (CRLF) agent file is recognized
+// the same as an LF one: the `---\n` prefix check and `\n---` terminator
+// search must not both silently miss on `\r\n` line endings and fall through
+// to the no-frontmatter path.
+func TestParseAgentCRLF(t *testing.T) {
+	fm, body, ok := parseAgent("---\r\ndescription: hi\r\nintent: code\r\n---\r\n\r\nBody here.\r\n")
+	if !ok {
+		t.Fatal("expected frontmatter from a CRLF file")
+	}
+	if !strings.Contains(fm, "intent: code") {
+		t.Fatalf("fm = %q", fm)
+	}
+	if strings.TrimSpace(body) != "Body here." {
+		t.Fatalf("body = %q", body)
+	}
+
+	// The frontmatter round-trips through YAML once normalized to LF.
+	var m agentMeta
+	if err := yaml.Unmarshal([]byte(fm), &m); err != nil {
+		t.Fatalf("unmarshal CRLF frontmatter: %v", err)
+	}
+	if m.Intent != "code" || m.Description != "hi" {
+		t.Fatalf("meta = %+v", m)
 	}
 }
 
@@ -105,22 +132,79 @@ func TestAgentLs(t *testing.T) {
 	}
 
 	// Human table form: same roster, rendered with the WHY. agentLs's table
-	// branch writes straight to os.Stdout (a pre-existing quirk, not something
-	// this change touches), so capture that fd rather than Deps.Out.
-	d2, _, _ := rootDeps()
+	// branch writes to Deps.Out like every other command, so it's assertable
+	// straight off the injected buffer — no os.Stdout swap, no pipe, nothing
+	// that can deadlock if the writer ever outpaces an unread pipe.
+	d2, out2, _ := rootDeps()
 	d2.Sys = &systest.Fake{}
-	old := os.Stdout
-	rp, wp, _ := os.Pipe()
-	os.Stdout = wp
-	runErr := runRootParse([]string{"agent", "ls"}, d2)
-	_ = wp.Close()
-	os.Stdout = old
-	var buf bytes.Buffer
-	_, _ = buf.ReadFrom(rp)
-	if runErr != nil {
-		t.Fatalf("agent ls: %v", runErr)
+	if err := runRootParse([]string{"agent", "ls"}, d2); err != nil {
+		t.Fatalf("agent ls: %v", err)
 	}
-	if !strings.Contains(buf.String(), "AGENT") || !strings.Contains(buf.String(), "go-eng") {
-		t.Errorf("agent ls table missing header/row, got:\n%s", buf.String())
+	if !strings.Contains(out2.String(), "AGENT") || !strings.Contains(out2.String(), "go-eng") {
+		t.Errorf("agent ls table missing header/row, got:\n%s", out2.String())
+	}
+}
+
+// TestAgentLsMalformedYAML proves a broken agents/*.md frontmatter surfaces as
+// a named error on that agent's own row — both in the table and the --json
+// form — instead of silently falling through to the same "(inherit parent)"
+// a well-formed, intent-less agent gets. loadAgentMeta's error was being
+// discarded (`m, _, _ := loadAgentMeta(...)`), which hid a malformed file
+// behind a misleadingly benign roster row.
+func TestAgentLsMalformedYAML(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	t.Setenv("ROUTING_DIR", t.TempDir())
+	if err := os.MkdirAll("agents", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const good = "---\ndescription: fine\nintent: code\n---\n\nBody.\n"
+	// Unterminated flow sequence: invalid YAML, not merely an unknown key.
+	const bad = "---\nintent: [unterminated\n---\n\nBody.\n"
+	if err := os.WriteFile(filepath.Join("agents", "good.md"), []byte(good), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join("agents", "bad.md"), []byte(bad), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	d, out, _ := rootDeps()
+	d.Sys = &systest.Fake{}
+	if err := runRootParse([]string{"agent", "ls", "--json"}, d); err != nil {
+		t.Fatalf("agent ls --json: %v", err)
+	}
+	var rows []agentRow
+	if err := json.Unmarshal(out.Bytes(), &rows); err != nil {
+		t.Fatalf("unmarshal roster JSON: %v\n%s", err, out.String())
+	}
+	if len(rows) != 2 {
+		t.Fatalf("roster = %+v, want two rows", rows)
+	}
+	var badRow *agentRow
+	for i := range rows {
+		if rows[i].Name == "bad" {
+			badRow = &rows[i]
+		}
+	}
+	if badRow == nil {
+		t.Fatalf("no row for bad.md in %+v", rows)
+	}
+	if strings.Contains(badRow.Why, "inherit") {
+		t.Fatalf("malformed agent silently reported as inherit: %+v", badRow)
+	}
+	if !strings.Contains(badRow.Why, "bad frontmatter") {
+		t.Fatalf("malformed agent's WHY should name the error, got %+v", badRow)
+	}
+
+	// Same story in the human table: the bad row and its error text render,
+	// they don't just vanish or fall back to a plain roster line.
+	d2, out2, _ := rootDeps()
+	d2.Sys = &systest.Fake{}
+	if err := runRootParse([]string{"agent", "ls"}, d2); err != nil {
+		t.Fatalf("agent ls: %v", err)
+	}
+	table := out2.String()
+	if !strings.Contains(table, "bad") || !strings.Contains(table, "bad frontmatter") {
+		t.Errorf("table missing malformed-agent row/error, got:\n%s", table)
 	}
 }

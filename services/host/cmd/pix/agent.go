@@ -46,12 +46,16 @@ type agentMeta struct {
 }
 
 // parseAgent splits an agent file into (frontmatter text, body). hasFM is false
-// when the file has no `---` frontmatter block.
+// when the file has no `---` frontmatter block. Line endings are normalized to
+// LF before parsing, so a CRLF (Windows-authored) frontmatter block is
+// recognized the same as an LF one — the `---\n` prefix check and `\n---`
+// terminator search would otherwise both miss a `\r\n` file entirely.
 func parseAgent(content string) (fm string, body string, hasFM bool) {
-	if !strings.HasPrefix(content, "---\n") {
+	norm := strings.ReplaceAll(content, "\r\n", "\n")
+	if !strings.HasPrefix(norm, "---\n") {
 		return "", content, false
 	}
-	rest := content[len("---\n"):]
+	rest := norm[len("---\n"):]
 	end := strings.Index(rest, "\n---")
 	if end < 0 {
 		return "", content, false
@@ -196,14 +200,22 @@ func agentLs(d *cli.Deps, jsonOut bool) error {
 	}
 	rows := make([]agentRow, 0, len(names))
 	for _, n := range names {
-		m, _, _ := loadAgentMeta(filepath.Join(agentsDir(), n+".md"))
+		m, _, err := loadAgentMeta(filepath.Join(agentsDir(), n+".md"))
+		if err != nil {
+			// A malformed frontmatter block resolves no intent, so surfacing it as
+			// plain "(inherit parent)" would hide a broken agents/*.md file behind
+			// the same row a well-formed, intent-less agent gets. Name the error
+			// instead so it's the first thing a roster read shows.
+			rows = append(rows, agentRow{Name: n, Model: "(error)", Why: err.Error()})
+			continue
+		}
 		model, why := resolveAgentModel(m, reg, sc, pol)
 		rows = append(rows, agentRow{n, model, why, m.Intent, m.Tools, m.BudgetUSD})
 	}
 	if jsonOut {
 		return launch.PrintJSONLauncher(d.Out, rows)
 	}
-	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	tw := tabwriter.NewWriter(d.Out, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "AGENT\tMODEL\tWHY\tTOOLS\tBUDGET")
 	for _, r := range rows {
 		tools := "all"
@@ -217,9 +229,9 @@ func agentLs(d *cli.Deps, jsonOut bool) error {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", r.Name, r.Model, r.Why, tools, budget)
 	}
 	tw.Flush()
-	fmt.Println()
-	fmt.Println("WHY explains the pick: what the winner beat, or the constraints that left it the only")
-	fmt.Println("fit. The accuracy/cost/latency behind it are hand-maintained in scorecard.json (see")
-	fmt.Println("`pix models show`). Tune the tradeoffs in policy.json, then `pix models route`.")
+	fmt.Fprintln(d.Out)
+	fmt.Fprintln(d.Out, "WHY explains the pick: what the winner beat, or the constraints that left it the only")
+	fmt.Fprintln(d.Out, "fit. The accuracy/cost/latency behind it are hand-maintained in scorecard.json (see")
+	fmt.Fprintln(d.Out, "`pix models show`). Tune the tradeoffs in policy.json, then `pix models route`.")
 	return nil
 }
