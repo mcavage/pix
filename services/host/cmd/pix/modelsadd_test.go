@@ -16,7 +16,6 @@ import (
 	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/inference"
-	"pix/host/readiness"
 	"pix/host/secret"
 	"pix/host/sys/systest"
 	"pix/host/workflow/doctor"
@@ -197,33 +196,6 @@ func TestUnwiredProviderKeysReportsOnlyTheGap(t *testing.T) {
 	packed.Inference.ExclusiveSource = "/packs/work"
 	if gaps := doctor.UnwiredProviderKeys(&packed, env); len(gaps) != 0 {
 		t.Fatalf("no gap should be reported while a pack owns inference, got %v", gaps)
-	}
-}
-
-// TestDoctorGapCheckIsOptionalAndActionable: it must be reported (a user has to
-// learn the key is doing nothing) without blocking a launch, since one wired
-// provider is enough to run.
-func TestDoctorGapCheckIsOptionalAndActionable(t *testing.T) {
-	cfg := &config.Config{Inference: config.InferenceConfig{
-		Backends: map[string]config.InferenceBackend{
-			"anthropic": {Driver: "native", Auth: "1password", KeyEnv: "ANTHROPIC_API_KEY"},
-		},
-		Models: []config.InferenceModelBinding{
-			{Model: "anthropic/claude-sonnet-5", Backend: "anthropic", Upstream: "anthropic/claude-sonnet-5", Available: true, Verified: true},
-		},
-	}}
-	c := doctor.InferenceBindingGapCheck(cfg, hostenv.Env{System: &systest.Fake{}})
-	if c == nil {
-		t.Skip("no gap detectable in this environment")
-	}
-	if c.Requirement != readiness.RequirementOptional {
-		t.Errorf("the gap must not block a launch; one wired provider is enough: %+v", c)
-	}
-	if c.Note {
-		t.Errorf("the gap is actionable, so it must count in outstanding (note must be false): %+v", c)
-	}
-	if !strings.Contains(c.Todo, "pix models add") {
-		t.Errorf("the gap's fix must be the command that closes it, got %q", c.Todo)
 	}
 }
 

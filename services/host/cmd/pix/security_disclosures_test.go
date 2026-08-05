@@ -9,14 +9,11 @@
 package main
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"pix/host/config"
-	"pix/host/hostenv/hostenvtest"
 	"pix/host/workflow/doctor"
 )
 
@@ -41,33 +38,13 @@ func TestMcpHostTrustNotice_StatesBothFacts(t *testing.T) {
 	}
 }
 
-// TestDoctorRender_DisclosesHostMCPTrust_WhenMCPConfigured: doctor's footer
-// must print the disclosure when at least one MCP server is configured.
-func TestDoctorRender_DisclosesHostMCPTrust_WhenMCPConfigured(t *testing.T) {
-	r := doctor.RunDoctor(defaultCfg(), hostenvtest.Env{}.Build())
-	r.Services, r.MCP = defaultCfg().Services, []string{config.GWServerName}
-	var buf bytes.Buffer
-	r.Render(&buf, false, doctor.Hints())
-	out := buf.String()
-	for _, want := range mcpHostTrustNoticeFacts {
-		if !strings.Contains(out, want) {
-			t.Errorf("doctor render missing disclosure fact %q, got:\n%s", want, out)
-		}
-	}
-}
-
-// TestDoctorRender_NoDisclosure_WhenNoMCPConfigured: with nothing configured
-// there is nothing to disclose, so doctor must stay notice-free (concise,
-// never alarmist about something the user hasn't touched).
-func TestDoctorRender_NoDisclosure_WhenNoMCPConfigured(t *testing.T) {
-	r := doctor.RunDoctor(defaultCfg(), hostenvtest.Env{}.Build())
-	r.Services, r.MCP = defaultCfg().Services, nil
-	var buf bytes.Buffer
-	r.Render(&buf, false, doctor.Hints())
-	if strings.Contains(buf.String(), doctor.McpHostTrustNotice) {
-		t.Errorf("doctor must not print the MCP host-trust notice with no MCP configured, got:\n%s", buf.String())
-	}
-}
+// TestGworkspaceSkill_DisclosesConversationExposure (product gap #1, third
+// surface): the gworkspace skill must state, before "using" returned content,
+// that Google Workspace content is returned into the agent conversation and
+// therefore sent to the selected model provider, plus that credentials stay
+// host-side and write/send is disabled by default. Anti-drift: pins the
+// facts, not the exact prose, so the skill can be reworded without silently
+// dropping a fact.
 func TestGworkspaceSkill_DisclosesConversationExposure(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "skills", "gworkspace", "SKILL.md"))
 	if err != nil {

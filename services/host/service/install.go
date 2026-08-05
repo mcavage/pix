@@ -31,6 +31,10 @@ import (
 // serveLaunchdLabel is the LaunchAgent label (and plist basename).
 const serveLaunchdLabel = "com.pix.serve"
 
+// LaunchdLabel exports the label for health's launchd probe. Exported rather
+// than copied: probing a label the installer never writes is worse than none.
+const LaunchdLabel = serveLaunchdLabel
+
 // The embedded template is the SINGLE SOURCE OF TRUTH for the generated
 // plist (the old scripts/macos CHANGEME plist is superseded — go:embed
 // cannot reach outside the module, so the template lives here and the script
@@ -377,10 +381,6 @@ func RunInstall(argv []string) {
 // failure (the loop records it and re-checks) rather than one that exits the
 // process. RunInstall keeps owning the argv/exit-code contract for the verb.
 func Install(out io.Writer) error { return platformServeInstall(out) }
-
-// LaunchdLabel is the LaunchAgent label, exported so a health probe can name
-// the exact unit this package installs instead of re-spelling it.
-const LaunchdLabel = serveLaunchdLabel
 
 // RunUninstall is the `serve uninstall` entry point.
 func RunUninstall(argv []string) {

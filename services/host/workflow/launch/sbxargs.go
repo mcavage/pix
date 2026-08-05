@@ -8,7 +8,6 @@ import (
 	"pix/host/config"
 	"pix/host/launcher"
 	"pix/host/sys"
-	"pix/host/workflow/doctor"
 )
 
 // kitRepo is the canonical git-hosted kit source. The launcher pins it to the
@@ -250,7 +249,7 @@ type RunLaunchPlan struct {
 // arguments into a live session. The caller also uses WillCreate before this
 // planner to gate create-only preparation; that predicate must return false
 // for unknown so a refused launch has no generated-kit or pack side effects.
-func PlanSandboxLaunch(state doctor.SbxState, replace bool, cfg *config.Config, o RunOpts, version string) RunLaunchPlan {
+func PlanSandboxLaunch(state SbxState, replace bool, cfg *config.Config, o RunOpts, version string) RunLaunchPlan {
 	if state == SbxUnknown {
 		return RunLaunchPlan{Err: fmt.Errorf("could not determine whether sandbox %q exists (`sbx ls` failed or sbx is unavailable); refusing to create or reattach blind — fix sbx and retry", o.Name)}
 	}
@@ -270,7 +269,7 @@ func PlanSandboxLaunch(state doctor.SbxState, replace bool, cfg *config.Config, 
 // to SKIP resolving those create-only inputs before a plain re-attach (which
 // must never fail on a --dev/checkout problem it doesn't need) without
 // duplicating — and risking drifting from — PlanSandboxLaunch's own logic.
-func WillCreate(state doctor.SbxState, replace bool) bool {
+func WillCreate(state SbxState, replace bool) bool {
 	if state == SbxUnknown {
 		return false
 	}
@@ -293,7 +292,7 @@ func WillCreate(state doctor.SbxState, replace bool) bool {
 // running/stopped sandbox). Unknown is false here just as it is in WillCreate;
 // keep this stricter predicate for persisted create-time state because it also
 // documents that only positive creation evidence may update that state.
-func DefinitelyCreating(state doctor.SbxState, replace bool) bool {
+func DefinitelyCreating(state SbxState, replace bool) bool {
 	return state == SbxAbsent || (replace && state != SbxUnknown)
 }
 

@@ -15,8 +15,8 @@ import (
 	"os"
 	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/sandbox"
 	"pix/host/sys"
-	"pix/host/workflow/doctor"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/onboard"
 	"pix/host/workflow/pack"
@@ -167,7 +167,7 @@ func runSetupCmd(argv []string) {
 // from runSetupCmd so the state/replace matrix is testable without exercising
 // os.Exit or actually exec'ing sbx. Returns an error ONLY for the fail-closed
 // unknown state.
-func runSetupHandoff(dir, name string, state doctor.SbxState, replace bool, out io.Writer, runFn func([]string)) error {
+func runSetupHandoff(dir, name string, state sandbox.State, replace bool, out io.Writer, runFn func([]string)) error {
 	// kickoffArgs builds the runRun argv for a launch that should receive the
 	// tour: [DIR] [--replace] -- <OnboardingKickoff>. DIR is forwarded only when
 	// explicit so `pix setup` from inside a repo behaves exactly like `pix run`

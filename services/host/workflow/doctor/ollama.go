@@ -19,26 +19,6 @@ import (
 // missing model are verified todos; a failed `ollama list` is UNVERIFIABLE —
 // never "missing", and doctor NEVER pulls anything itself.
 
-// ollamaGroup renders the ollama + local-models cluster from the readiness
-// snapshot: the ollama binary at the RESOLVED endpoint, sandbox reachability
-// (never by creating a sandbox), and all THREE configured model roles —
-// watcher, embed and bridge. Every fact comes from OllamaReadinessAxes, so
-// doctor, status, setup and run cannot disagree about them.
-func ollamaGroup(cfg *config.Config, env hostenv.Env) readiness.Group {
-	ollama := readiness.Group{Title: "Ollama / local models (optional: fact capture + semantic recall)", Axis: readiness.AxisOllamaHost}
-	s := readiness.Build(
-		readiness.Request{Axes: []readiness.Axis{readiness.AxisOllamaHost, readiness.AxisOllamaSandbox, readiness.AxisModelWatcher, readiness.AxisModelEmbed, readiness.AxisModelBridge}},
-		OllamaReadinessAxes(cfg, env, resolveMCPSandboxContext(env).sandbox, nil),
-	)
-	ollama.Checks = append(ollama.Checks, s.All()...)
-	// The hardware reading sits with the local models it sizes. It is appended
-	// directly rather than through an axis because it asserts NOTHING about
-	// readiness: it is an inference, so it is always a note and never a verdict
-	// (see readiness_hardware.go).
-	ollama.Checks = append(ollama.Checks, axis.HardwareCheck(axis.ProbeHostMemory(env))...)
-	return ollama
-}
-
 // OllamaReadinessAxes is the ONE builder set for every Ollama axis, shared by
 // doctor, status, setup and run. It probes Ollama exactly once (lazily: a
 // caller that requests only ollama.host pays for one probe, one that requests

@@ -39,6 +39,10 @@ const (
 	PackUseFix      = "pix pack use <path|owner/repo>"
 	MonitorStartFix = "pix monitor"
 	SecretSetFix    = "pix secret set %s op://vault/item/field"
+	// ModelKeyFix repairs the ANY-OF gap: pix launches a model with one
+	// provider key, so the repair names one provider rather than listing three
+	// commands a user must choose between.
+	ModelKeyFix = "pix models add anthropic"
 )
 
 // versionish matches the digit.digit any real `--version` banner carries. It
@@ -387,10 +391,23 @@ func classifyStatErr(err error) string {
 type ProviderKeyProbe struct {
 	Bin  string
 	Args []string
-	Want []string // the env-var names one of which must be present
+	Want []string // the key names to look for
+	// AnyOf switches the verdict from "every name in Want" to "at least one".
+	// It is what the MODEL keys need: pix launches with anthropic OR openai OR
+	// google, so reporting the other two as gaps would print two repair
+	// commands for a host that is already able to run.
+	AnyOf bool
+	// Label names what this probe is checking when a host runs more than one
+	// of them (model keys vs infrastructure keys). Defaults to "providers".
+	Label string
 }
 
-func (ProviderKeyProbe) Name() string   { return "providers" }
+func (p ProviderKeyProbe) Name() string {
+	if strings.TrimSpace(p.Label) != "" {
+		return p.Label
+	}
+	return "providers"
+}
 func (ProviderKeyProbe) Required() bool { return true }
 
 func (p ProviderKeyProbe) Check(ctx context.Context) Result {
@@ -413,11 +430,22 @@ func (p ProviderKeyProbe) Check(ctx context.Context) Result {
 	for _, field := range strings.Fields(strings.ReplaceAll(o.out, "=", " ")) {
 		have[strings.Trim(field, "\"',:")] = true
 	}
-	var missing []string
+	var missing, present []string
 	for _, w := range p.Want {
-		if !have[w] {
-			missing = append(missing, w)
+		if have[w] {
+			present = append(present, w)
+			continue
 		}
+		missing = append(missing, w)
+	}
+	if p.AnyOf {
+		if len(present) > 0 {
+			return Result{Name: p.Name(), Status: StatusReady, Detail: strings.Join(present, ", "),
+				Evidence: "key store lists " + strings.Join(present, ", ")}
+		}
+		return Result{Name: p.Name(), Status: StatusAbsent,
+			Detail: "none of " + strings.Join(p.Want, ", ") + " is set", Fix: ModelKeyFix,
+			Evidence: "key store answered without " + strings.Join(p.Want, ", ")}
 	}
 	if len(missing) == 0 {
 		return Result{Name: p.Name(), Status: StatusReady, Detail: fmt.Sprintf("%d key(s) wired", len(p.Want)),

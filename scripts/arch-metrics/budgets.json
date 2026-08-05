@@ -16,14 +16,14 @@
       "exits": 4
     },
     "pix/host/cmd/pix": {
-      "prod_loc": 3639,
+      "prod_loc": 3643,
       "exports": 19,
       "globals": 15,
-      "edges": 25,
+      "edges": 26,
       "exits": 55
     },
     "pix/host/cmd/pix/corpus": {
-      "prod_loc": 573,
+      "prod_loc": 592,
       "exports": 18,
       "globals": 7,
       "edges": 0,
@@ -44,10 +44,10 @@
       "exits": 0
     },
     "pix/host/health": {
-      "prod_loc": 809,
-      "exports": 31,
-      "globals": 19,
-      "edges": 2,
+      "prod_loc": 1191,
+      "exports": 42,
+      "globals": 29,
+      "edges": 3,
       "exits": 0
     },
     "pix/host/hostenv": {
@@ -114,10 +114,10 @@
       "exits": 0
     },
     "pix/host/readiness": {
-      "prod_loc": 926,
-      "exports": 53,
+      "prod_loc": 720,
+      "exports": 51,
       "globals": 35,
-      "edges": 2,
+      "edges": 0,
       "exits": 0
     },
     "pix/host/readiness/axis": {
@@ -142,9 +142,9 @@
       "exits": 0
     },
     "pix/host/sandbox": {
-      "prod_loc": 650,
-      "exports": 25,
-      "globals": 17,
+      "prod_loc": 664,
+      "exports": 26,
+      "globals": 18,
       "edges": 0,
       "exits": 0
     },
@@ -191,10 +191,10 @@
       "exits": 0
     },
     "pix/host/workflow/doctor": {
-      "prod_loc": 2385,
-      "exports": 27,
-      "globals": 17,
-      "edges": 14,
+      "prod_loc": 1043,
+      "exports": 35,
+      "globals": 10,
+      "edges": 17,
       "exits": 0
     },
     "pix/host/workflow/gworkspace": {
@@ -205,10 +205,10 @@
       "exits": 0
     },
     "pix/host/workflow/launch": {
-      "prod_loc": 2214,
-      "exports": 79,
+      "prod_loc": 2224,
+      "exports": 80,
       "globals": 20,
-      "edges": 14,
+      "edges": 15,
       "exits": 3
     },
     "pix/host/workflow/models": {

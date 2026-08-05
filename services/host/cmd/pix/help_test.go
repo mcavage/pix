@@ -2,11 +2,9 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"pix/host/cli"
-	"pix/host/hostenv/hostenvtest"
 	"pix/host/mcp"
 	"pix/host/memory"
 	"pix/host/rpc"
@@ -241,89 +239,6 @@ func TestParseOnboardArgs_Help(t *testing.T) {
 	}
 	if _, err := onboard.ParseOnboardArgs([]string{"--bogus"}); err == nil {
 		t.Error("--bogus should be a usage error")
-	}
-}
-
-// TestDoctorJSONView round-trips the doctor report through the REAL serializer
-// and asserts the JSON actually carries the groups, their checks, and each
-// check's ok|todo|info state (not merely that it is valid JSON). The fixture is
-// a MIXED environment (sbx + keys present, ollama absent, no MCP) so all three
-// states appear: ok (providers/memory), todo (models/gog CLI), info (empty mcp).
-func TestDoctorJSONView(t *testing.T) {
-	f := hostenvtest.Env{
-		Present: map[string]bool{"sbx": true}, // ollama + gog absent -> TODOs
-		Output: map[string]string{
-			"sbx secret ls": "anthropic openai google github",
-			"sbx mcp ls":    "google-workspace\n",
-		},
-		Ports: map[int]bool{11435: true}, // memory up -> an OK check
-	}
-	cfg := defaultCfg()
-	r := doctor.RunDoctor(cfg, f.Build())
-	r.Services, r.MCP = cfg.Services, cfg.MCP
-	v := doctor.JsonView(r, "default")
-
-	// Serialize through cli.WriteJSONOut (the same path `doctor --json` uses) and parse.
-	var buf bytes.Buffer
-	if err := cli.WriteJSONOut(&buf, v); err != nil {
-		t.Fatalf("cli.WriteJSONOut: %v", err)
-	}
-	var got doctor.DoctorJSON
-	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
-		t.Fatalf("unmarshal doctor JSON: %v\n%s", err, buf.String())
-	}
-
-	if len(got.Groups) == 0 {
-		t.Fatal("serialized doctor JSON has no groups")
-	}
-	if got.Verdict != "outstanding" {
-		t.Errorf("mixed env verdict = %q, want outstanding", got.Verdict)
-	}
-	if len(got.Todos) == 0 {
-		t.Error("expected serialized todos for a mixed env")
-	}
-
-	// Every check must carry a valid state; a todo check must carry its command.
-	seen := map[string]bool{}
-	nChecks := 0
-	for _, g := range got.Groups {
-		if g.Title == "" {
-			t.Error("a serialized group has an empty title")
-		}
-		for _, c := range g.Checks {
-			nChecks++
-			switch c.State {
-			case "ok", "todo", "info", "warn":
-				// warn is additive over v1 (doctor_json.go's stateName): an
-				// unverifiable axis (e.g. "ollama in sandbox" with no sandbox
-				// yet) renders warn, never a silent ok/todo/info substitute.
-				seen[c.State] = true
-			default:
-				t.Errorf("check %q has invalid state %q", c.Label, c.State)
-			}
-			if c.State == "todo" && c.Todo == "" {
-				t.Errorf("todo check %q has an empty todo command", c.Label)
-			}
-		}
-	}
-	if nChecks == 0 {
-		t.Fatal("serialized doctor JSON has no checks")
-	}
-	for _, want := range []string{"ok", "todo", "info"} {
-		if !seen[want] {
-			t.Errorf("expected at least one %q check in serialized JSON, groups=%+v", want, got.Groups)
-		}
-	}
-	// The serialized bytes literally carry the state strings (belt-and-suspenders
-	// against a doctor.JsonView that renders states as ints or drops them).
-	for _, want := range []string{`"state": "ok"`, `"state": "todo"`, `"state": "info"`} {
-		if !strings.Contains(buf.String(), want) {
-			t.Errorf("serialized doctor JSON missing %s", want)
-		}
-	}
-	// The parsed todos match the report's own todos() (serialization preserved them).
-	if strings.Join(got.Todos, "\n") != strings.Join(r.Todos(), "\n") {
-		t.Errorf("serialized todos %v != report todos %v", got.Todos, r.Todos())
 	}
 }
 

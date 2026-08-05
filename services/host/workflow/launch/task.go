@@ -20,17 +20,27 @@ package launch
 import (
 	"path/filepath"
 	"pix/host/hostenv"
-	"pix/host/workflow/doctor"
+	"pix/host/sandbox"
 	"strings"
 )
 
-// SbxState tri-state constants. Kept here (not workflow/doctor) because they
-// are produced and consumed entirely within this package's probe.
+// SbxState is a package-local alias for the canonical sandbox.State (see
+// sandbox/list.go): the four-state a sandbox probe resolves to. It exists so
+// every existing `launch.SbxState`/`launch.SbxXxx` caller and test keeps
+// compiling unchanged now that the type itself lives in the L1 sandbox
+// package instead of being duplicated here.
+type SbxState = sandbox.State
+
+// SbxUnknown/Absent/Running/Stopped are launch's stable names for
+// sandbox.State's four values. Kept here (not just sandbox.StateXxx)
+// because they are produced and consumed entirely within this package's
+// probe, and renaming every existing call site to the sandbox spelling would
+// be a pure churn edit with no behavior change.
 const (
-	SbxUnknown doctor.SbxState = iota // could not determine (sbx errored / no runner)
-	SbxAbsent                         // sbx responded and the name is not present
-	SbxRunning                        // present, status column reads running
-	SbxStopped                        // present, any other status
+	SbxUnknown = sandbox.StateUnknown // could not determine (sbx errored / no runner)
+	SbxAbsent  = sandbox.StateAbsent  // sbx responded and the name is not present
+	SbxRunning = sandbox.StateRunning // present, status column reads running
+	SbxStopped = sandbox.StateStopped // present, any other status
 )
 
 // TaskSandboxStatus returns the status column for name from `sbx ls` via the
@@ -61,7 +71,7 @@ func TaskSandboxStatus(env hostenv.Env, name string) string {
 // missing runner) is UNKNOWN, never absent, so a failed probe can never be read
 // as "the sandbox was never created". BOUNDED (probeRun): a hung sbx times out
 // to UNKNOWN — run/setup/task preflights degrade honestly instead of wedging.
-func ProbeTaskSandbox(env hostenv.Env, name string) doctor.SbxState {
+func ProbeTaskSandbox(env hostenv.Env, name string) SbxState {
 	out, timedOut, err := env.RunTimed("sbx", "ls")
 	if timedOut || err != nil {
 		return SbxUnknown

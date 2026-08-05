@@ -57,7 +57,7 @@ func ApplyConfiguredSessionModel(o *RunOpts, cfg *config.Config) (bool, error) {
 // the poll only runs while `sbx run` itself is still alive, so a large bound
 // costs the happy path nothing.
 var (
-	SandboxAppearProbeFn = func(name string) doctor.SbxState {
+	SandboxAppearProbeFn = func(name string) SbxState {
 		return ProbeTaskSandbox(DefaultEnv(), name)
 	}
 	SandboxAppearPollInterval = 500 * time.Millisecond
@@ -68,7 +68,7 @@ var (
 // is present in `sbx ls`, running or not. Absent keeps polling; unknown (a
 // failed probe) proves nothing and also keeps polling — never record a create
 // receipt on an indeterminate read.
-func sandboxAppeared(st doctor.SbxState) bool { return st == SbxRunning || st == SbxStopped }
+func sandboxAppeared(st SbxState) bool { return st == SbxRunning || st == SbxStopped }
 
 // RecordCreateReceipt commits the create receipt for sandbox — called ONLY by
 // ExecSbxRunAndRecordCreate, once its creation-evidence poll has positively
@@ -659,7 +659,8 @@ func ToStringSlice(v any) []string {
 
 // The tri-state sandbox probe (running/stopped/absent/unknown) that drives the
 // create-vs-reattach-vs-replace decision lives in task.go as ProbeTaskSandbox +
-// doctor.SbxState — run.go reuses it rather than duplicating the `sbx ls` parse.
+// SbxState (an alias for the canonical sandbox.State) — run.go reuses it
+// rather than duplicating the `sbx ls` parse.
 
 func PrintJSONLauncher(v any) {
 	b, _ := json.MarshalIndent(v, "", "  ")
