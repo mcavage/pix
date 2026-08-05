@@ -120,9 +120,10 @@ var pkgLayer = map[string]int{
 	// `pix backup`/`pix restore`, `pix man`/`--man`, and `pix upgrade` verbs) were
 	// deleted along with their dead code once U01 retired all three surfaces and
 	// left nothing importing them (see retired.go). The pix-host-side `backup`/
-	// `restore` subcommands that survive live at root (memory_backup.go,
-	// memory_restore.go) — they are the memory snapshot/real store, not this
-	// launcher package, and are unaffected.
+	// `restore` subcommands they pointed at collapsed further in U07b: the
+	// multi-component archive is gone, and what survives is `pix-host memory
+	// snapshot|restore` at root (memory_snapshot.go) — one sqlite file, not an
+	// archive format, and not this launcher package.
 	//
 	// slack (the OAuth/credential/MCP-registration workflow, plus the slackoauth
 	// L1 capability underneath it) was externalized in W2/U02a — see

@@ -46,10 +46,10 @@ func retiredSplit(key string) (verb, flag string) {
 // value is a full command line (not a bare verb) because a replacement is not
 // always a pix verb — `upgrade` is now the package manager's job.
 //
-// A value may itself name a retired verb: `gog` was retired IN FAVOUR of
-// `gworkspace`, which W1 retired in turn. The recorded history stays as it was
-// written (the manifest is append-only); terminalReplacement follows the chain
-// so the message a user sees always names a surface that still exists.
+// A value may itself name a retired surface (`gog` -> `gworkspace`, retired by
+// W1; `backup` -> the host verb U07b folded into `pix-host memory snapshot`).
+// History stays as written — the manifest is append-only — and every hop still
+// answers: terminalReplacement chains here, the host binary chains its own.
 func retiredSurfaces() map[string]string {
 	return map[string]string{
 		// W1 U01a: the host-integration, distribution, and state-management

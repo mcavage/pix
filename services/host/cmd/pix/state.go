@@ -12,7 +12,7 @@ Group for the stack's on-disk lifecycle.
   reset [flags]                 move stack state aside (reversible)
 
 Run ` + "`pix help reset`" + ` for full flags. Archiving state is no longer a
-launcher verb: use ` + "`pix-host backup`" + ` / ` + "`pix-host restore`" + `.
+launcher verb: use ` + "`pix-host memory snapshot`" + ` / ` + "`pix-host memory restore`" + `.
 `
 
 // runState is a thin verbatim dispatcher for the `state` grouping noun. It does

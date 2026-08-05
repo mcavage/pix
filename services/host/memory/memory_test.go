@@ -253,11 +253,22 @@ func TestMemoryUnknownSub(t *testing.T) {
 	}
 }
 
-// TestMemoryUsageMentionsBackupRestore keeps the top-level memory usage pointing
-// users at the promoted top-level backup/restore verbs.
-func TestMemoryUsageMentionsBackupRestore(t *testing.T) {
-	if !strings.Contains(Usage, "pix backup") || !strings.Contains(Usage, "pix restore") {
-		t.Error("Usage should point to the top-level backup/restore verbs")
+// TestMemoryUsageMentionsSnapshotRestore keeps the memory usage pointing users
+// at the real U07b data-safety primitives (pix-host memory snapshot/restore),
+// not the retired, never-rebuilt full config+op-refs archive. `pix backup`/
+// `pix restore` are RETIRED verbs (services/host/cmd/pix/retired.go); the
+// usage text must not tell a user to run something that itself answers
+// PIX_RETIRED, and must not claim snapshot/restore covers anything beyond
+// memory.db.
+func TestMemoryUsageMentionsSnapshotRestore(t *testing.T) {
+	if !strings.Contains(Usage, "pix-host memory snapshot") || !strings.Contains(Usage, "pix-host memory restore") {
+		t.Error("Usage should point to pix-host memory snapshot/restore, the live data-safety primitives")
+	}
+	if strings.Contains(Usage, "pix backup") || strings.Contains(Usage, "pix restore") {
+		t.Error("Usage should not name the retired pix backup/restore verbs")
+	}
+	if strings.Contains(Usage, "config + op-refs") {
+		t.Error("Usage should not claim snapshot/restore covers config or op-refs — memory.db is the only unreproducible artifact")
 	}
 }
 

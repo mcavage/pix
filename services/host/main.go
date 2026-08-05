@@ -6,8 +6,7 @@
 // Subcommands (one per host service):
 //
 //	memory         self-learning memory store  (:11435, JSON-RPC)
-//	backup         hot FULL backup (memory + config + op-refs) -> tar.gz
-//	restore        restore a FULL backup tar.gz (safe swap)
+//	               plus its snapshot/restore data-safety primitives
 //	mcp <name>     stdio MCP bridge            (run by the sbx gateway)
 //	plugin <kind>  built-in go-plugin server   (self-exec, launched by `serve`)
 //	serve          run the long-running HTTP services together (memory)
@@ -39,8 +38,7 @@ import (
 )
 
 // version is stamped at build time via -ldflags "-X main.version=..." for both
-// release and local builds. Used for launcher/host compatibility checks and in
-// the backup manifest (pix_version).
+// release and local builds. Used for launcher/host compatibility checks.
 var version = "dev"
 
 func main() {
@@ -59,10 +57,6 @@ func main() {
 		runMemoryHost(os.Args[2:])
 	case "route":
 		runRouteHost(os.Args[2:])
-	case "backup":
-		runBackupCLI(os.Args[2:])
-	case "restore":
-		runRestoreCLI(os.Args[2:])
 	case "serve":
 		runServe(os.Args[2:])
 	case "-h", "--help", "help":
@@ -115,8 +109,6 @@ usage: pix-host <subcommand>
 subcommands:
   version        print the stamped host-binary version
   memory         self-learning memory store, JSON-RPC (:11435)
-  backup         hot FULL backup (memory + config + op-refs) -> tar.gz
-  restore        restore a FULL backup tar.gz (safe swap)
   route <cmd>    model router: pick | compile | show | models
   mcp <name>     stdio MCP bridge (run by the sbx gateway)
   plugin <kind>  built-in go-plugin server, self-exec (memory|mcp)
