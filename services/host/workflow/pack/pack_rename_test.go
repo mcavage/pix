@@ -11,6 +11,20 @@ import (
 	"pix/host/config"
 )
 
+// isolatePackRenameHost points XDG_DATA_HOME (pack roots live there) plus the
+// usual PIX_CONFIG/XDG_STATE_HOME pair at fresh temp dirs, and returns the
+// data dir. Every default/personal-alias test in this file needs the same
+// three env vars isolated.
+func isolatePackRenameHost(t *testing.T) string {
+	t.Helper()
+	data := t.TempDir()
+	cfgDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", data)
+	t.Setenv("PIX_CONFIG", filepath.Join(cfgDir, "config.toml"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(cfgDir, "state"))
+	return data
+}
+
 // TestPackDir_DefaultsToDefault: the built-in pack dir basename ("pack" ->
 // "personal" -> "default"), which the pack's Name derives from.
 func TestPackDir_DefaultsToDefault(t *testing.T) {
@@ -78,11 +92,7 @@ func TestWritePackManifest_AtomicRoundTrip(t *testing.T) {
 // TestPackUse_DefaultAlias_ResolvesToPackDir: `pack use default` resolves to
 // config.PackDir(), NOT $PWD/default.
 func TestPackUse_DefaultAlias_ResolvesToPackDir(t *testing.T) {
-	data := t.TempDir()
-	cfgDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", data)
-	t.Setenv("PIX_CONFIG", filepath.Join(cfgDir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(cfgDir, "state"))
+	isolatePackRenameHost(t)
 
 	// A decoy "default" dir under the CWD must never be picked instead.
 	wd, err := os.Getwd()
@@ -121,11 +131,7 @@ func TestPackUse_DefaultAlias_ResolvesToPackDir(t *testing.T) {
 // "personal" is a deprecated alias that still resolves to the default pack
 // root, with a deprecation warning printed.
 func TestPackUse_PersonalAlias_DeprecatedButResolvesToDefault(t *testing.T) {
-	data := t.TempDir()
-	cfgDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", data)
-	t.Setenv("PIX_CONFIG", filepath.Join(cfgDir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(cfgDir, "state"))
+	isolatePackRenameHost(t)
 
 	root := DefaultPackRoot()
 	if err := os.MkdirAll(root, 0o755); err != nil {
@@ -160,11 +166,7 @@ func TestPackUse_PersonalAlias_DeprecatedButResolvesToDefault(t *testing.T) {
 // (Only the BARE `pack use personal` token remains a deprecated alias — see
 // TestPackUse_PersonalAlias_DeprecatedButResolvesToDefault.)
 func TestDefaultPackRoot_LeavesLegacyDirsAlone(t *testing.T) {
-	data := t.TempDir()
-	cfgDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", data)
-	t.Setenv("PIX_CONFIG", filepath.Join(cfgDir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(cfgDir, "state"))
+	data := isolatePackRenameHost(t)
 
 	for _, name := range []string{"personal", "pack"} {
 		dir := filepath.Join(data, "pix", name)
