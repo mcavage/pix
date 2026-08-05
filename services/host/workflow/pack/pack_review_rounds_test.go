@@ -1071,7 +1071,7 @@ func TestCommitPackActivation_SaveFailureRestoresPriorLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	priorStore.setActivation(root, packLock{MCP: []string{"fastmail"}})
+	priorStore.setActivationStack([]packActivationRecord{priorStore.newActivationRecord(root, packLock{MCP: []string{"fastmail"}})})
 	if err := priorStore.Save(); err != nil {
 		t.Fatal(err)
 	}

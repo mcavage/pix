@@ -2,12 +2,10 @@
 //
 // AcceptedGoPluginServices is the SINGLE seam through which anything outside
 // this package may read a pack's [[services]], and it answers ONLY for a pack
-// whose ENTIRE host-exec surface is accepted at this exact fingerprint. The
-// order is the security property: consent STRICTLY precedes any export, and so
-// any staging, hashing or exec the supervisor does. The view is deliberately
-// MINIMAL — just the fields needed to construct one external go-plugin unit;
-// mounts, network, resources, license and source stay inside the package
-// (consent material, not launch material), and no supervisor state is nameable.
+// whose ENTIRE host-exec surface is accepted at this exact fingerprint —
+// consent STRICTLY precedes any export. The view is deliberately MINIMAL: only
+// the fields needed to construct one external go-plugin unit (mounts, network,
+// resources, license and source are consent material, not launch material).
 package pack
 
 import (

@@ -131,7 +131,7 @@ func TestCommitPackActivation_CfgSaveFailureRollsBackActivationRecord(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	prior.setActivation(root, packLock{MCP: []string{"old"}})
+	prior.setActivationStack([]packActivationRecord{prior.newActivationRecord(root, packLock{MCP: []string{"old"}})})
 	if err := prior.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -430,7 +430,7 @@ func TestMutatePackTrustStore_InterleavedMutationsLoseNothing(t *testing.T) {
 
 	// Writer 1 (a `pack use` commit): records an activation + an acceptance.
 	if _, err := mutatePackTrustStore(func(s *PackTrustStore) error {
-		s.setActivation(root, packLock{MCP: []string{"a-mcp"}})
+		s.setActivationStack([]packActivationRecord{s.newActivationRecord(root, packLock{MCP: []string{"a-mcp"}})})
 		s.RecordAcceptance("path:"+root, PackTrustRecord{Path: root, Fingerprint: "fp1"})
 		return nil
 	}); err != nil {

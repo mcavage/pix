@@ -11,13 +11,14 @@
 // is a closed set (SHA-pinned "go-plugin" executable or digest-pinned
 // "container" image); env carries REFERENCE NAMES only, so secret VALUES never
 // live in a manifest; listeners are loopback-only and reserved pix-host ports
-// unclaimable; mounts are repo-relative (never /etc or ~/.ssh) and network bare
-// egress hostnames; license/source (SPDX + https) are required so the BoM can
-// attribute what runs. EVERY field is fingerprinted, so any change re-gates.
+// unclaimable; mounts are repo-relative and network bare egress hostnames;
+// license/source (SPDX + https) attribute what runs. EVERY field is
+// fingerprinted, so any change re-gates.
 package pack
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"regexp"
 	"strings"
@@ -29,10 +30,10 @@ const serviceRuntimeContainer = "container"
 
 // serviceRules is the whole [[services]] vocabulary — closed sets, reserved
 // names/ports, value shapes — as ONE immutable package value, since they are
-// only ever read together. container is accepted as a DECLARATION (validated,
+// only ever read together. container is a DECLARATION-only runtime (validated,
 // consented, fingerprinted) with no consumer yet. reservedPorts are pix-host's
-// own front doors and reservedNames its built-in supervisor slots: a pack
-// service may never bind, impersonate or shadow one.
+// own front doors and reservedNames its built-in slots: a pack service may
+// never bind, impersonate or shadow one.
 var serviceRules = struct {
 	runtimes      map[string]bool
 	activations   map[string]bool
@@ -119,18 +120,7 @@ func (s packService) normalized() packService {
 	out.License = strings.TrimSpace(s.License)
 	out.Source = strings.TrimSpace(s.Source)
 	out.Argv = append([]string(nil), s.Argv...)
-	out.Env = append([]string(nil), s.Env...)
-	for i, e := range out.Env {
-		out.Env[i] = strings.TrimSpace(e)
-	}
-	out.Mounts = append([]string(nil), s.Mounts...)
-	for i, m := range out.Mounts {
-		out.Mounts[i] = strings.TrimSpace(m)
-	}
-	out.Network = append([]string(nil), s.Network...)
-	for i, n := range out.Network {
-		out.Network[i] = strings.TrimSpace(n)
-	}
+	out.Env, out.Mounts, out.Network = trimmedCopy(s.Env), trimmedCopy(s.Mounts), trimmedCopy(s.Network)
 	if s.Resources != nil {
 		r := *s.Resources
 		out.Resources = &r
@@ -138,26 +128,26 @@ func (s packService) normalized() packService {
 	return out
 }
 
+// trimmedCopy is a whitespace-trimmed copy of in (nil stays nil).
+func trimmedCopy(in []string) []string {
+	if in == nil {
+		return nil
+	}
+	out := make([]string, len(in))
+	for i, v := range in {
+		out[i] = strings.TrimSpace(v)
+	}
+	return out
+}
+
 // serviceListenIsLoopback reports whether listen names a loopback interface
 // (localhost, ::1, 127.0.0.0/8). A pack service is never LAN-reachable.
 func serviceListenIsLoopback(listen string) bool {
-	switch listen {
-	case "localhost", "::1":
+	if listen == "localhost" {
 		return true
 	}
-	if strings.HasPrefix(listen, "127.") {
-		parts := strings.Split(listen, ".")
-		if len(parts) != 4 {
-			return false
-		}
-		for _, p := range parts {
-			if p == "" || len(p) > 3 || strings.Trim(p, "0123456789") != "" {
-				return false
-			}
-		}
-		return true
-	}
-	return false
+	ip := net.ParseIP(listen)
+	return ip != nil && ip.IsLoopback()
 }
 
 // validatePackServices hardens the [[services]] facet at load time, the same
