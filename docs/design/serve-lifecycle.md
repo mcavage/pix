@@ -14,6 +14,17 @@ Status: IMPLEMENTED. Scope: three capabilities so users stop babysitting
 > Linux/systemd below describes that RETIRED design; read it as history, not
 > current behavior. The launchd (macOS) sections remain accurate.
 
+> **U0x update (knowledge service deleted):** every `knowledge`/`:11436`
+> reference below (the knowledge daemon, its `ensureServe` call sites,
+> `knowledge_bundles` config, `knowledge init`/`knowledge use`) describes a
+> service that was deleted outright, not merely retired-from-the-CLI — no
+> `config.toml` key, no supervised unit, no code path dispenses it
+> (`hostmode_gone_test.go` is the permanent sentinel). Read every `knowledge`
+> mention as history; `memory` (`:11435`) is the only daemon `pix-host serve`
+> still runs this way. A pack that needs knowledge wires it as a `files`/`http`
+> capability directly, never through `pix-host serve`. See AGENTS.md's
+> go-plugin + Suture architecture note.
+
 ## Problem
 
 Today `pix serve` is a FOREGROUND supervisor. To use memory (`:11435`) or

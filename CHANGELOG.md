@@ -8,6 +8,26 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## Unreleased
 
+### Docs
+
+- **U12: final public docs/release sync against delivered code.** `AGENTS.md`'s
+  repo-layout table, go-plugin host architecture section, and the agent/model
+  bullets described a stale shape (knowledge (:11436) + a credential broker as
+  live `serve` slots, `pix agent new/edit/rm/reassess` as a live CLI, host mode
+  gated by `host.enabled` rather than deleted) that no longer matches the code
+  — corrected in place, with safety invariant #9 rewritten from "off by
+  default" to "retired outright" (`tests/agents-md-invariants.test.mjs`
+  updated to match, same stable id). Added `docs/getting-started.md` (first
+  session, end to end), `docs/design/lifecycle-trust.md` (sandbox lifecycle +
+  pack trust in one place), `docs/MIGRATION.md` (retired-verb table +
+  upgrade/host-mode/knowledge migration notes), and `docs/HOST-UAT.md` (the
+  exact host-side verification script + in-sandbox prompt, since an agent
+  cannot run `make load`/`make run` from inside a sandbox). Marked
+  `docs/design/rearchitecture.md` and `docs/design/host-mode.md` superseded
+  in place (banner only — the historical prose is unedited). `NOTICE.md` now
+  states explicitly that a DHI entitlement is the operator's own, never
+  requested or recorded by pix. No application logic changed.
+
 ### Changed
 
 - **U11m: `pix agent` cut to `ls` only — `new`/`edit`/`rm`/`reassess` retired.**
