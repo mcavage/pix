@@ -346,9 +346,7 @@ func TestPackServices_EveryFieldChangesFingerprint(t *testing.T) {
 // --- re-gate through the real trust store ---------------------------------------
 
 func TestPackServices_ChangeReGatesAgainstTrustStore(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	isolatePackHost(t)
 
 	root := writeServicePack(t, validGoPluginService)
 	p, err := LoadPack(root)

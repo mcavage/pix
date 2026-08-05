@@ -76,9 +76,7 @@ func TestClonePack_MarksAdoptionDurablyBeforeReturn(t *testing.T) {
 // this coverage was retired with the [[knowledge]] facet, W2 U03A; the mcp
 // half is what remains.)
 func TestPackUse_EmptyLockSwitchRemovesNothing(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	dir := isolatePackHost(t)
 
 	rootA := filepath.Join(dir, "a")
 	mustWritePack(t, rootA, Manifest{Name: "a", Schema: 1, Integrations: []Integration{{Name: "A", MCP: "a-mcp"}}})
@@ -99,7 +97,7 @@ func TestPackUse_EmptyLockSwitchRemovesNothing(t *testing.T) {
 	if serr != nil {
 		t.Fatal(serr)
 	}
-	store.Activation = nil
+	store.Activations = nil
 	if err := store.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -122,9 +120,7 @@ func TestPackUse_EmptyLockSwitchRemovesNothing(t *testing.T) {
 // row must not erase A's lock attribution — a later switch to B still detaches
 // exactly what A contributed.
 func TestPackUse_SamePackReactivationPreservesAttribution(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	dir := isolatePackHost(t)
 
 	rootA := filepath.Join(dir, "a")
 	mustWritePack(t, rootA, Manifest{Name: "a", Schema: 1, Integrations: []Integration{{Name: "A", MCP: "a-mcp"}}})
@@ -157,9 +153,7 @@ func TestPackUse_SamePackReactivationPreservesAttribution(t *testing.T) {
 // activations reverts to its prior value on the next `pack use` of the same
 // pack, instead of staying live forever.
 func TestPackUse_SamePackReactivationReconcilesRemovedFields(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	dir := isolatePackHost(t)
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -205,9 +199,7 @@ func TestPackUse_SamePackReactivationReconcilesRemovedFields(t *testing.T) {
 // registration note from the fake (gateway-less) env, which the old
 // only-newly-added gate never produced.
 func TestPackUse_RegistersMcpAlreadyPresentInConfig(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	dir := isolatePackHost(t)
 
 	cfg, err := config.Load()
 	if err != nil {

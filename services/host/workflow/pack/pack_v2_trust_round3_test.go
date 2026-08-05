@@ -48,9 +48,7 @@ import (
 // re-loads FRESH under the lock, so neither can clobber the other's committed
 // record (the old last-writer-wins bug saved whichever stale object came last).
 func TestMutatePackTrustStore_InterleavedMutationsLoseNothing(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	dir := isolatePackHost(t)
 	root := filepath.Join(dir, "pack")
 
 	// Writer 1 (a `pack use` commit): records an activation + an acceptance.
@@ -91,9 +89,7 @@ func TestMutatePackTrustStore_InterleavedMutationsLoseNothing(t *testing.T) {
 // record survives (no lost update). Run with -race, this also exercises the
 // flock across distinct file descriptors.
 func TestMutatePackTrustStore_ConcurrentWritersSerialized(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	isolatePackHost(t)
 
 	const writers = 8
 	var wg sync.WaitGroup
@@ -123,99 +119,55 @@ func TestMutatePackTrustStore_ConcurrentWritersSerialized(t *testing.T) {
 	}
 }
 
-// --- #2: one-time Phase-1 → Phase-2 activation migration ------------------------
+// --- #2: the pack payload lock is never a reversibility source -----------------
 
-// TestPackUse_MigratesPhase1LocalActivation: a Phase-1 active LOCAL pack has
-// its attribution ONLY in pack.lock (the store has no activation record). The
-// first Phase-2 switch must migrate that lock into the store so A's
-// contribution reverts correctly — while a user-added MCP survives untouched.
-func TestPackUse_MigratesPhase1LocalActivation(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
-	pinLocalMCP(t) // nothing is local: a-mcp stays a remote (Tier-0) reference
+// TestPackUse_PayloadLockIsNeverAReversibilitySource: activation attribution
+// lives ONLY in the launcher-owned trust store. A pack — local OR adopted —
+// with no activation record therefore reverts NOTHING when you switch away
+// (safe over-retention), and a pack.lock claiming the user's own MCP as this
+// pack's contribution can never make that switch delete it.
+func TestPackUse_PayloadLockIsNeverAReversibilitySource(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		adopted bool
+	}{{"local", false}, {"adopted", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := isolatePackHost(t)
+			pinLocalMCP(t)
 
-	rootA := filepath.Join(dir, "a")
-	mustWritePack(t, rootA, Manifest{Name: "a", Schema: 1,
-		Integrations: []Integration{{Name: "A", MCP: "a-mcp"}}})
-	rootB := filepath.Join(dir, "b")
-	mustWritePack(t, rootB, Manifest{Name: "b", Schema: 1})
+			rootA := filepath.Join(dir, "a")
+			mustWritePack(t, rootA, Manifest{Name: "a", Schema: 1})
+			rootB := filepath.Join(dir, "b")
+			mustWritePack(t, rootB, Manifest{Name: "b", Schema: 1})
 
-	// Phase-1 residue: config carries the pack's MCP AND the user's own; the
-	// attribution lives ONLY in pack.lock; there is NO trust store at all.
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.AddMCP("usermcp")
-	cfg.AddMCP("a-mcp")
-	cfg.Pack = rootA
-	if err := cfg.Save(); err != nil {
-		t.Fatal(err)
-	}
-	if err := writePackLock(rootA, packLock{MCP: []string{"a-mcp"}}); err != nil {
-		t.Fatal(err)
-	}
-	if _, serr := os.Stat(packTrustStorePath()); !os.IsNotExist(serr) {
-		t.Fatalf("test setup: the store must not exist yet (Phase-1 state), stat=%v", serr)
-	}
+			cfg, err := config.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg.AddMCP("usermcp")
+			cfg.Pack = rootA
+			if err := cfg.Save(); err != nil {
+				t.Fatal(err)
+			}
+			if tc.adopted {
+				if err := recordPackAdoptionInTrustStore(rootA, "https://example.com/a.git", "c1"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := writePackLock(rootA, packLock{MCP: []string{"usermcp"}}); err != nil {
+				t.Fatal(err)
+			}
 
-	var out bytes.Buffer
-	RunPackUse(fakeGitEnv(nil), &out, []string{rootB}, registerOK)
-	cfg2, err := config.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if slices.Contains(cfg2.MCP, "a-mcp") {
-		t.Errorf("Phase-1 attribution must be migrated: switching away must revert a-mcp, cfg.MCP=%v", cfg2.MCP)
-	}
-	if !slices.Contains(cfg2.MCP, "usermcp") {
-		t.Errorf("the user's own MCP must survive the migrated switch, cfg.MCP=%v", cfg2.MCP)
-	}
-}
-
-// TestPackUse_AdoptedPackLockNeverMigrated: an ADOPTED pack with no store
-// activation record must NOT have its pack.lock trusted (it is remote-writable
-// payload — a forged lock could claim the user's own entries). The switch
-// reverts NOTHING (safe over-retention) and the user's config survives.
-func TestPackUse_AdoptedPackLockNeverMigrated(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
-	pinLocalMCP(t)
-
-	rootA := filepath.Join(dir, "a")
-	mustWritePack(t, rootA, Manifest{Name: "a", Schema: 1})
-	rootB := filepath.Join(dir, "b")
-	mustWritePack(t, rootB, Manifest{Name: "b", Schema: 1})
-
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.AddMCP("usermcp")
-	cfg.Pack = rootA
-	if err := cfg.Save(); err != nil {
-		t.Fatal(err)
-	}
-	// A is ADOPTED (host-recorded provenance) but has NO activation record —
-	// and its lock (a `git pull` away from the attacker) claims the user's MCP.
-	if err := recordPackAdoptionInTrustStore(rootA, "https://example.com/a.git", "c1"); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(PackLockPath(rootA),
-		[]byte("mcp = [\"usermcp\"]\nremote = \"https://example.com/a.git\"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	var out bytes.Buffer
-	RunPackUse(fakeGitEnv(nil), &out, []string{rootB}, registerOK)
-	cfg2, err := config.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Contains(cfg2.MCP, "usermcp") {
-		t.Errorf("CRITICAL: an adopted pack's lock was migrated and deleted the user's own MCP, cfg.MCP=%v", cfg2.MCP)
+			var out bytes.Buffer
+			RunPackUse(fakeGitEnv(nil), &out, []string{rootB}, registerOK)
+			cfg2, err := config.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Contains(cfg2.MCP, "usermcp") {
+				t.Errorf("CRITICAL: the pack payload lock was trusted and deleted the user's own MCP, cfg.MCP=%v", cfg2.MCP)
+			}
+		})
 	}
 }
 
@@ -278,9 +230,7 @@ func TestLocalMCPClassifier_UnknownFailsClosed(t *testing.T) {
 // re-prompt) while a CHANGED fingerprint still mismatches (re-gates). A
 // legacy commit-suffixed record is honored via the one-time fallback.
 func TestTrustKey_StableAcrossCommits(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	dir := isolatePackHost(t)
 	root := filepath.Join(dir, "clone")
 	mustWritePack(t, root, Manifest{Name: "c", Schema: 1})
 	const url = "https://example.com/x.git"
@@ -294,7 +244,7 @@ func TestTrustKey_StableAcrossCommits(t *testing.T) {
 	}
 	key := store.TrustKey(root)
 	if strings.Contains(key, "#") {
-		t.Fatalf("the trust key must not embed the commit (round-3 #5), got %q", key)
+		t.Fatalf("the trust key must not embed the commit, got %q", key)
 	}
 	store.RecordAcceptance(key, PackTrustRecord{Path: CanonicalizePackRoot(root), Remote: url, Commit: "c1", Fingerprint: "fp1"})
 	if err := store.Save(); err != nil {
@@ -320,13 +270,6 @@ func TestTrustKey_StableAcrossCommits(t *testing.T) {
 		t.Error("sanity: a changed fingerprint must mismatch and re-gate")
 	}
 
-	// Legacy commit-suffixed key (pre-round-3 store on disk) still honored.
-	legacy := &PackTrustStore{Accepted: map[string]PackTrustRecord{
-		"remote:https://l.example/y.git#c9": {Remote: "https://l.example/y.git", Commit: "c9", Fingerprint: "fpL"},
-	}}
-	if fp, ok := legacy.acceptedFingerprint("remote:https://l.example/y.git"); !ok || fp != "fpL" {
-		t.Errorf("legacy commit-suffixed acceptance must be honored once, got (%q,%v)", fp, ok)
-	}
 }
 
 // TestPackUse_NewCommitSameFingerprintDoesNotRegate (end-to-end): an accepted
@@ -335,9 +278,7 @@ func TestTrustKey_StableAcrossCommits(t *testing.T) {
 // --yes. In-process: a misfiring gate would os.Exit(1) and fail the test
 // binary, exactly like the non-interactive pack trust-gate tests.
 func TestPackUse_NewCommitSameFingerprintDoesNotRegate(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	dir := isolatePackHost(t)
 	root := round3HostExecPack(t, dir, "work", "platformio")
 	const url = "https://example.com/work.git"
 	if err := recordPackAdoptionInTrustStore(root, url, "c1"); err != nil {

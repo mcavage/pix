@@ -1,11 +1,6 @@
-// pack.go implements `pix pack` — the git-backed context bundle (skills +
-// knowledge + later mcp/proxies/routing/config). See docs/design/packs.md.
-//
-// v1 (this file): the local, Tier-0 slice — pack.toml manifest, new (adopt an
-// existing repo or git-init a fresh one), add skill|knowledge, ls, show, use, rm.
-// No host execution, no git-URL adoption yet, no profile deletion; those are
-// later increments. All OS/git calls go through defaultShellEnv so the logic is
-// testable with fakes.
+// pack.go implements `pix pack` — the git-backed context bundle (skills,
+// knowledge, mcp/proxy/config facets). See docs/design/packs.md. All OS/git
+// calls go through hostenv so the logic is testable with fakes.
 package pack
 
 import (
@@ -37,14 +32,10 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// Manifest is pack.toml. Identity + model prefs (v1), plus the v2 facets:
-// F1 integrations attach (unchanged shape, now enabling), F2/F3 proxy wrappers,
-// the (struct-only, P2) external-binary facet, F4 config layering (gog_account/
-// memory_scope/routing). Skills and embedded knowledge are still discovered by
-// convention (skills/, knowledge/), so a pack does not have to enumerate them.
-// The knowledge/ dir is INERT: it is mounted like skills/ but nothing indexes
-// it (the built-in OKF knowledge service was retired, W2 U03A) — it is a
-// future seam for a files/http/MCP knowledge capability provider.
+// Manifest is pack.toml: identity + model prefs, integrations, proxy/bin
+// wrappers, services and config layering. Skills and embedded knowledge are
+// discovered by convention (skills/, knowledge/), so a pack never enumerates
+// them; knowledge/ is INERT (mounted, indexed by nothing).
 type Manifest struct {
 	Name              string `toml:"name"`
 	Schema            int    `toml:"schema"`
@@ -71,25 +62,22 @@ type Manifest struct {
 	// nothing executes one — that is the P2 trust-gated host-exec path.
 	Bins []packBin `toml:"bin,omitempty"`
 	// Setup steps let a pack contribute resumable host onboarding to `pix
-	// setup --pack`. Each step is a repo-relative executable with a read-only
-	// probe and an idempotent apply action. The script bytes and argv are part of
-	// the Tier-1 host-exec fingerprint.
+	// setup --pack`: a repo-relative executable with a read-only probe and an
+	// idempotent apply. Script bytes and argv are in the Tier-1 fingerprint.
 	Setup []packSetupStep `toml:"setup,omitempty"`
 	// Inference lets a pack participate declaratively in setup before any user
 	// prompt. A private pack can provide an authenticated gateway and make it
 	// exclusive without adding its endpoint or aliases to public Pix.
 	Inference *Inference `toml:"inference,omitempty"`
-	// Services are [[services]] entries (U08a, AC-PACK-02/AC-SUP-05): the SOLE
-	// declaration of a long-running external service unit. Declaration-only in
-	// this build — validated fail-closed at load, Tier-1 gated and fully
-	// fingerprinted, consumed by no supervisor yet. See service.go.
+	// Services are [[services]] entries: the SOLE declaration of a long-running
+	// external service unit — validated fail-closed at load, Tier-1 gated and
+	// fully fingerprinted. See service.go.
 	Services []packService `toml:"services,omitempty"`
 }
 
 // ApplyPackInference projects a pack's declarative inference contract into
-// launcher config. It intentionally copies only public wiring metadata; secret
-// values are impossible in this schema. Probe evidence starts false and is
-// earned later by setup.
+// launcher config: public wiring metadata only (secret values are impossible in
+// this schema). Probe evidence starts false and is earned later by setup.
 func ApplyPackInference(cfg *config.Config, inf *Inference, source string) error {
 	if cfg == nil || inf == nil {
 		return nil
@@ -104,9 +92,8 @@ func ApplyPackInference(cfg *config.Config, inf *Inference, source string) error
 		}
 	}
 	// Reapplying an unchanged active pack at launch must not erase the
-	// availability evidence setup just earned. Preserve it only across an exact
-	// backend + binding match; any endpoint/protocol/auth/upstream change starts
-	// unverified again.
+	// availability evidence setup just earned: preserve it only across an exact
+	// backend + binding match; any change starts unverified again.
 	type evidence struct{ available, verified bool }
 	prior := map[string]evidence{}
 	for _, binding := range cfg.Inference.Models {
@@ -223,9 +210,8 @@ type packRouting struct {
 }
 
 // PackProxy is one [[proxy]] entry: a bin/<name> wrapper script. Host=false
-// (default) is an F2 in-sandbox wrapper, synthesized into an ephemeral mixin
-// kit at launch (SynthesizePackKit). Host=true is an F3 host-mode wrapper —
-// carried by the schema in Phase 1, but installation/PATH-wiring is P2.
+// (default) is an in-sandbox wrapper, synthesized into an ephemeral mixin kit
+// at launch (SynthesizePackKit); Host=true is a host-mode wrapper.
 type PackProxy struct {
 	Name   string   `toml:"name"`
 	Host   bool     `toml:"host,omitempty"`
@@ -242,30 +228,22 @@ type packBin struct {
 	Host bool   `toml:"host,omitempty"`
 }
 
-// Integration is a REFERENCE-ONLY integration (v1): the pack says "I use
-// <mcp> and need the credential <env>". It ships NO executable code — the MCP
-// server is host-provided (gog, a gateway-catalog server), and the credential is
-// solicited as an op:// ref the user owns. Pack-SHIPPED executables are v2.
+// Integration is a REFERENCE-ONLY integration: the pack says "I use <mcp> and
+// need the credential <env>". It ships NO executable code — the server is
+// host-provided and the credential is an op:// ref the user owns.
 type Integration struct {
 	Name string `toml:"name"`          // human label
 	Env  string `toml:"env,omitempty"` // op-refs.env ENV VAR the credential lives under
 	MCP  string `toml:"mcp,omitempty"` // MCP server name to attach (host-provided)
-	// Manifest, when set, makes this a CONTAINER integration: an OCI-packaged
-	// stdio MCP server the sbx gateway runs on the host via Docker. The value is a
-	// server-manifest URL (server.json/server.yaml, e.g. a GitHub raw or internal
-	// HTTP URL) or a registry ref that `sbx mcp add --local --url <manifest>`
-	// accepts. Registration uses that form (NOT the host `--command` path), so no
-	// pix-host recompile or private build is needed; the container's
-	// credentials are provided Docker-side (declared in its server.json), not via
-	// the op-run wrapper. Leave empty for a host-provided server (slack, gog) or a
-	// remote gateway-catalog server.
+	// Manifest, when set, makes this a CONTAINER integration: a server-manifest
+	// URL (server.json/yaml) that `sbx mcp add --local --url <manifest>` runs on
+	// the host via Docker. Credentials are provided Docker-side (declared in the
+	// manifest), never via the op-run wrapper.
 	Manifest string `toml:"manifest,omitempty"`
 	// Image, when set, is a CONTAINER integration registered by DIRECT image ref:
-	// pix registers it as `docker run -i --rm -e <KEY>… <image>`, op-run
-	// wrapped exactly like slack (so its creds resolve from 1Password at gateway
-	// spawn and forward into the container via `-e`). Simpler than Manifest — no
-	// server.json to host: a locally-built image tag works, and a registry only
-	// matters when you share it. Mutually exclusive with Manifest.
+	// `docker run -i --rm -e <KEY>… <image>`, op-run wrapped like slack, so its
+	// creds resolve from 1Password at gateway spawn and forward via `-e`.
+	// Mutually exclusive with Manifest.
 	Image string `toml:"image,omitempty"`
 	// EnvKeys are ADDITIONAL (typically non-secret) env var names forwarded into an
 	// Image container via `-e <KEY>` (e.g. HR_TENANT). The primary
@@ -275,13 +253,10 @@ type Integration struct {
 	// container command (for example, a company-wide tenant name). Secrets must
 	// use Env/op:// instead and are rejected here when they look secret-shaped.
 	EnvValues map[string]string `toml:"env_values,omitempty"`
-	// URL, when set, makes this a REMOTE integration the pack registers ITSELF:
-	// `pack use` runs `sbx mcp add <mcp> --url <url>` so the pack's remote
-	// gateway-catalog servers are wired without
-	// a manual `pix mcp bundle` + `sbx mcp add`. The URL is a remote MCP
-	// endpoint (https://host/mcp); OAuth is discovered + handled host-side by the
-	// gateway on first use (no credential in the pack). Mutually exclusive with
-	// Manifest/Image. Leave empty for a server the user registers out-of-band.
+	// URL, when set, makes this a REMOTE integration the pack registers ITSELF
+	// (`sbx mcp add <mcp> --url <url>`). OAuth is discovered and handled
+	// host-side by the gateway on first use (no credential in the pack).
+	// Mutually exclusive with Manifest/Image.
 	URL string `toml:"url,omitempty"`
 	// Setup links this integration to an optional [[setup]] hook. Pack
 	// activation registers it but does not solicit its credential up front.
@@ -299,21 +274,18 @@ type Info struct {
 	// else "". Mounted into the sandbox at ~/.pi/agent/capabilities.json via the
 	// synthesized mixin kit so a pack carries its own capability->provider routing.
 	CapabilitiesFile string
-	// WebSearchFile is <root>/web-search.json when present. It is mounted at
-	// ~/.pi/web-search.json (pi-web-access's sandbox config path) so a pack can
-	// route discovery through its private inference gateway without putting that
-	// endpoint in Pix.
+	// WebSearchFile is <root>/web-search.json when present, mounted at
+	// ~/.pi/web-search.json so a pack can route discovery through its private
+	// inference gateway without putting that endpoint in Pix.
 	WebSearchFile string
 }
 
 const PackManifestName = "pack.toml"
 
 // ErrNotAPack is the sentinel LoadPack wraps when root is not a pack AT ALL
-// (no pack.toml, including the root directory itself being gone). Callers use
-// errors.Is to distinguish this "genuinely absent" class — safe to degrade on
-// (e.g. a stale cfg.Pack pointing at a deleted dir) — from every OTHER load
-// error (symlink rejection, facet validation, parse failure), which means a
-// pack that EXISTS but is broken or tampered and must fail closed.
+// (no pack.toml). errors.Is separates that "genuinely absent" class — safe to
+// degrade on — from every OTHER load error (symlink rejection, facet
+// validation, parse failure), which means a pack that EXISTS but is broken.
 var ErrNotAPack = errors.New("not a pack")
 
 // LoadPack reads a pack from a directory. A missing pack.toml is an error (the
@@ -390,15 +362,11 @@ func LoadPack(root string) (*Info, error) {
 	return p, nil
 }
 
-// validatePackFacets hardens the v2 typed facets at load time (fail closed,
-// same posture as the existing skills/knowledge symlink checks): every
-// proxy/bin/knowledge Name must be a safe artifact name (reusing
-// safeArtifactName); every [[bin]].Path must be a repo-relative path that does
-// not escape the pack root and is not a symlink; every [[bin]] MUST carry a
-// non-empty SHA (an external binary is never registered unpinned — P2 never
-// reaches an exec path for one that failed to load). [[knowledge]].Source is
-// deliberately NOT root-scoped: a shared=false reference pointing OUTSIDE the
-// pack (e.g. ~/notes/okf) is the entire point of a private reference (F6).
+// validatePackFacets hardens the typed facets at load time (fail closed, same
+// posture as the skills/knowledge symlink checks): safe artifact names; every
+// [[bin]].Path repo-relative, non-escaping and not a symlink; every [[bin]]
+// SHA-pinned. [[knowledge]].Source is deliberately NOT root-scoped: a
+// shared=false reference outside the pack is the point of a private reference.
 func validatePackFacets(root string, m *Manifest) error {
 	if inf := m.Inference; inf != nil {
 		catalog, err := routing.LoadRegistry()
@@ -573,10 +541,9 @@ func validateNoSymlinkComponents(root, rel string) error {
 	return nil
 }
 
-// validateRepoRelativePath rejects a [[bin]].Path that is empty, absolute, that
-// escapes root via `..`, or that resolves to a symlink — mirroring the
-// skills/knowledge symlink posture. rel MUST be repo-relative (packs-v2-impl.md
-// §2: "path = bin/fastmail-mcp").
+// validateRepoRelativePath rejects a [[bin]].Path that is empty, absolute,
+// escapes root via `..`, or resolves to a symlink — mirroring the
+// skills/knowledge symlink posture. rel MUST be repo-relative.
 func validateRepoRelativePath(root, rel string) error {
 	if strings.TrimSpace(rel) == "" {
 		return fmt.Errorf("path is empty")
@@ -594,12 +561,10 @@ func validateRepoRelativePath(root, rel string) error {
 	return nil
 }
 
-// dirHasSymlink walks dir and reports the first symlink of ANY kind. Adopted
-// packs have no legitimate need for symlinks, and rejecting all of them is the
-// only complete defense: WalkDir does NOT descend into a symlinked DIRECTORY, so
-// an "escaping vs not" test can be masked (skills/sub -> ../masked, then
-// masked/x -> /etc). Rejecting the link entry itself (which WalkDir DOES visit)
-// closes that bypass. Returns (true, path) on the first symlink found.
+// dirHasSymlink walks dir and reports the first symlink of ANY kind. Rejecting
+// all of them is the only complete defense: WalkDir does NOT descend into a
+// symlinked DIRECTORY, so an "escaping vs not" test can be masked; rejecting
+// the link entry itself closes that bypass.
 // isSymlinkPath reports whether path itself is a symlink (Lstat, no follow).
 func isSymlinkPath(path string) bool {
 	fi, err := os.Lstat(path)
@@ -686,6 +651,43 @@ func UniquePackRoots(roots []string) []string {
 	return unique
 }
 
+// applyPackFacets applies ONE pack's declarative config facets to cfg and
+// returns the ownership record: the MCP names this pack actually added (never
+// a name the user already had), plus each scalar it overwrote with the value
+// cfg held BEFORE the overwrite, so switching away restores exactly that. The
+// caller owns the baseline (revert the prior activation, ClearPackInference)
+// and the commit. Shared by `pack use` and the composed setup stack.
+func applyPackFacets(cfg *config.Config, p *Info, root string) (packLock, error) {
+	var lock packLock
+	for _, name := range McpNames(p) {
+		if cfg.AddMCP(name) {
+			lock.MCP = append(lock.MCP, name)
+		}
+	}
+	// The pack's embedded knowledge/ dir is INERT: mounted like skills/, read by
+	// no config/service wiring — a future seam for a knowledge provider.
+	if v := strings.TrimSpace(p.Manifest.GogAccount); v != "" {
+		lock.PriorGogAccount = cfg.GogAccount
+		lock.GogAccount = v
+		cfg.SetGogAccount(v)
+	}
+	if v := strings.TrimSpace(p.Manifest.OllamaBridgeModel); v != "" {
+		lock.PriorOllamaBridgeModel = cfg.OllamaBridgeModel
+		lock.OllamaBridgeModel = v
+		cfg.OllamaBridgeModel = v
+	}
+	// Exclusive policy is an ordered scalar, not an additive facet: a later pack
+	// that explicitly declares non-exclusive inference clears an earlier pack's
+	// exclusivity (last writer wins).
+	if p.Manifest.Inference != nil && !p.Manifest.Inference.Exclusive {
+		cfg.Inference.ExclusiveSource = ""
+	}
+	if err := ApplyPackInference(cfg, p.Manifest.Inference, root); err != nil {
+		return packLock{}, err
+	}
+	return lock, nil
+}
+
 func composePackStack(cfg *config.Config, store *PackTrustStore, roots []string) ([]packActivationRecord, error) {
 	// Repeating the same pack does not create a second ownership layer. Without
 	// this normalization both records have the same identity, making a later
@@ -713,33 +715,8 @@ func composePackStack(cfg *config.Config, store *PackTrustStore, roots []string)
 		if err != nil {
 			return nil, err
 		}
-		lock := packLock{}
-		for _, name := range McpNames(p) {
-			if cfg.AddMCP(name) {
-				lock.MCP = append(lock.MCP, name)
-			}
-		}
-		// p.KnowledgeDir (the pack's embedded knowledge/ dir) is INERT: it is
-		// mounted like skills/ but no config/service wiring reads it (the
-		// built-in OKF knowledge daemon was retired, W2 U03A). It is a future
-		// seam for a files/http/MCP knowledge capability provider.
-		if v := strings.TrimSpace(p.Manifest.GogAccount); v != "" {
-			lock.PriorGogAccount = cfg.GogAccount
-			lock.GogAccount = v
-			cfg.SetGogAccount(v)
-		}
-		if v := strings.TrimSpace(p.Manifest.OllamaBridgeModel); v != "" {
-			lock.PriorOllamaBridgeModel = cfg.OllamaBridgeModel
-			lock.OllamaBridgeModel = v
-			cfg.OllamaBridgeModel = v
-		}
-		// Exclusive policy is an ordered scalar, not an additive facet. A
-		// later pack that explicitly declares non-exclusive inference clears
-		// an earlier pack's exclusivity (last writer wins).
-		if p.Manifest.Inference != nil && !p.Manifest.Inference.Exclusive {
-			cfg.Inference.ExclusiveSource = ""
-		}
-		if err := ApplyPackInference(cfg, p.Manifest.Inference, root); err != nil {
+		lock, err := applyPackFacets(cfg, p, root)
+		if err != nil {
 			return nil, err
 		}
 		records = append(records, store.newActivationRecord(root, lock))
@@ -773,15 +750,13 @@ func commitPackStack(cfg *config.Config, records []packActivationRecord) error {
 		if err != nil {
 			return err
 		}
-		priorSingle := store.Activation
-		priorStack := append([]packActivationRecord(nil), store.Activations...)
+		prior := append([]packActivationRecord(nil), store.Activations...)
 		store.setActivationStack(records)
 		if err := store.Save(); err != nil {
 			return err
 		}
 		if err := cfg.Save(); err != nil {
-			store.Activation = priorSingle
-			store.Activations = priorStack
+			store.Activations = prior
 			if rollbackErr := store.Save(); rollbackErr != nil {
 				return fmt.Errorf("saving config: %v (ownership rollback failed: %v)", err, rollbackErr)
 			}
@@ -802,20 +777,14 @@ func expandUser(p string) string {
 }
 
 // DefaultPackRoot is the default-pack location: the "default" directory under
-// the pix data dir. Resolution only — it creates nothing, migrates nothing and
-// never rewrites cfg.Pack. There is no legacy-path discovery here: the 0.1.0
-// rename was a clean pre-launch cutover, so the pre-public "pack"/"personal"
-// directory names were never written by any released build. (The BARE token
-// `pix pack use personal` remains a deprecated alias for this root; that is a
-// CLI spelling, not a path probe.)
+// the pix data dir. Resolution only — it creates nothing and never rewrites
+// cfg.Pack. (`pix pack use personal` is a deprecated CLI alias, not a path.)
 func DefaultPackRoot() string { return config.PackDir() }
 
 // packContainerMCP returns {integration.mcp: config.MCPContainer} for a pack's
-// CONTAINER/REMOTE integrations — Manifest servers (`sbx mcp add <name> --local
-// --url`), Image servers (`docker run <image>`, op-run wrapped), and remote URL
-// servers (`sbx mcp add <name> --url`, OAuth'd host-side). These are what
-// `pix mcp register` adds specially rather than as a plain host subcommand.
-// Returns nil when the pack declares none.
+// CONTAINER/REMOTE integrations — Manifest servers, Image servers (op-run
+// wrapped) and remote URL servers. These are what `pix mcp register` adds
+// specially rather than as a plain host subcommand. nil when the pack has none.
 func packContainerMCP(p *Info) map[string]config.MCPContainer {
 	out := map[string]config.MCPContainer{}
 	for _, ig := range p.Manifest.Integrations {
@@ -876,11 +845,9 @@ func McpNames(p *Info) []string {
 }
 
 // packKitDir resolves the PER-PACK KEY under which a pack's ephemeral mixin
-// kits are synthesized: <StateDir>/pix/pack-kits/<hash>, keyed by a hash
-// of the pack root. Since round-3 R2 this is a naming PREFIX, not a live dir:
-// every launch synthesizes into its own unique <hash>.kit-XXXX dir beside it
-// (see SynthesizePackKit), and sweepStaleKitTemps age-gates the cleanup of old
-// ones (a `pix state reset` sweep is the backstop).
+// kits are synthesized: <StateDir>/pix/pack-kits/<hash>. It is a naming PREFIX,
+// not a live dir: every launch synthesizes into its own unique <hash>.kit-XXXX
+// dir beside it, age-gate swept by sweepStaleKitTemps.
 func packKitDir(root string) string {
 	sum := sha256.Sum256([]byte(root))
 	dir, err := config.StateDir()
@@ -891,29 +858,16 @@ func packKitDir(root string) string {
 }
 
 // SynthesizePackKit builds the ephemeral mixin kit that puts a pack's non-host
-// bin/ wrappers on the sandbox PATH (F2/ADR-2): a minimal `kind: mixin`
-// spec.yaml, plus files/home/.local/bin/<name> (0755) for each [[proxy]] with
-// Host unset/false — ~/.local/bin is on the sandbox PATH and (unlike /usr/local)
-// is reached by the runtime mixin-kit mount. Returns (dir, nil) on success, ("", nil) when
-// the pack has no sandbox proxies (nothing to mount — the caller must not
-// stack an empty kit), and ("", err) when the pack DECLARES a sandbox proxy
-// but the kit can't be built — the caller must fail the launch closed
-// (round-4 F2), never proceed to a kitless create.
-// Copies (never symlinks): LoadPack already refuses a symlinked bin/, and sbx
-// mounts a real tree.
-//
-// PER-LAUNCH UNIQUE DIR (round-3 R2): every call synthesizes into its OWN
-// os.MkdirTemp dir (keyed by the pack hash as a name prefix) and returns THAT
-// path for --kit. There is no stable shared path any more, so there is no
-// replace-in-place window where the live kit is briefly absent, and two
-// concurrent launches of the same pack can never clash on a shared mutable
-// dir — each builds its kit COMPLETELY before returning it, then never touches
-// it again. A proxy removed from pack.toml can't resurrect either: the fresh
-// dir only ever holds what THIS synth wrote (the old finding-#6 guarantee,
-// now structural). Old launch dirs are age-gate swept (sweepStaleKitTemps).
-// And it FAILS CLOSED: if any declared wrapper can't be read or copied, the
-// whole synth is refused with an error — never a partial kit with that one
-// wrapper silently missing.
+// bin/ wrappers on the sandbox PATH: a minimal `kind: mixin` spec.yaml plus
+// files/home/.local/bin/<name> (0755) for each non-host [[proxy]]. Returns
+// (dir, nil) on success, ("", nil) when the pack has no sandbox proxies
+// (nothing to mount — the caller must not stack an empty kit), and ("", err)
+// when the pack DECLARES one but the kit cannot be built: the caller must fail
+// the launch closed, never proceed to a kitless create. Copies, never symlinks.
+// Every call synthesizes into its OWN MkdirTemp dir and builds it COMPLETELY
+// before returning, so two concurrent launches never clash on a shared mutable
+// dir and a proxy removed from pack.toml can't resurrect. Any wrapper that
+// cannot be read or copied fails the whole synth — never a partial kit.
 func SynthesizePackKit(p *Info) (string, error) {
 	var sandboxProxies []PackProxy
 	for _, pr := range p.Manifest.Proxies {
@@ -945,10 +899,9 @@ func SynthesizePackKit(p *Info) (string, error) {
 	// A stacked kit needs a valid manifest: schemaVersion (required by the loader),
 	// kind: mixin, and a name. Match the base kit's schemaVersion "2".
 	spec := fmt.Sprintf("schemaVersion: \"2\"\nkind: mixin\nname: %s\n", p.Manifest.Name)
-	// Fold each sandbox proxy's declared egress into permissions.network.allow so the
-	// wrapper can actually reach its host endpoint — the sbx egress proxy blocks
-	// (403) any destination not on the allowlist, even host.docker.internal. Kit
-	// stacking unions this with the base kit's allowlist.
+	// Fold each sandbox proxy's declared egress into permissions.network.allow so
+	// the wrapper can reach its host endpoint — the sbx egress proxy blocks (403)
+	// anything off the allowlist. Kit stacking unions this with the base kit's.
 	var egress []string
 	egSeen := map[string]bool{}
 	addEgress := func(e string) {
@@ -1041,9 +994,8 @@ func SynthesizePackKit(p *Info) (string, error) {
 const kitLaunchInfix = ".kit-"
 
 // sweepStaleKitTemps best-effort removes old per-launch kit dirs (and legacy
-// temp/aside/stable-path debris) for THIS pack. Only entries older than an
-// hour are touched, so a concurrent launch's freshly-built kit — which sbx may
-// still be reading at create time — is never yanked out from under it.
+// debris) for THIS pack. Only entries older than an hour are touched, so a
+// concurrent launch's freshly-built kit is never yanked out from under it.
 func sweepStaleKitTemps(parent, base string) {
 	entries, err := os.ReadDir(parent)
 	if err != nil {
@@ -1081,50 +1033,37 @@ func proxyShimTemplate(name string) string {
 }
 
 // packLock is <pack-root>/pack.lock: GENERATED activation provenance, not a
-// resolver lockfile (packs-v2-impl.md §3/ADR-1). It records exactly what the
-// LAST `pack use` of this pack contributed to cfg.MCP / cfg.KnowledgeBundles /
-// cfg.GogAccount / cfg.OllamaBridgeModel, so switching AWAY removes/restores
-// exactly that contribution — never a user's own manually-added entry, and
-// never leaking one pack's config into the next (finding #5). Git-ignored by
-// default (RunPackNew seeds a pack-local .gitignore line for it).
+// resolver lockfile. It records what the LAST `pack use` of this pack
+// contributed to cfg, so switching AWAY removes/restores exactly that
+// contribution — never a user's own manually-added entry. Git-ignored.
 //
-// TRUST (round-2 A): pack.lock is a LOCAL, HUMAN-READABLE HINT only. It sits
-// inside the pack directory — attacker-writable for any cloned pack via a
-// plain `git pull` (or a zip update), even for a pack that is ALREADY active
+// TRUST: pack.lock is a LOCAL, HUMAN-READABLE HINT only. It sits inside the
+// pack directory — attacker-writable for any cloned pack via a plain `git pull`
 // — so NOTHING that drives a config mutation is ever read from it. The
-// authoritative activation provenance lives in the launcher-owned trust
-// store (packtruststore.go, Activation), written at the same commit point.
-// The only field ever read back from pack.lock is Remote/Commit, used purely
-// as a FAIL-SAFE adoption marker (a forged marker only RESTRICTS what a pack
-// may do — isAdoptedPack).
+// authoritative activation provenance lives in the launcher-owned trust store
+// (truststore.go), written at the same commit point. The only field ever read
+// back is Remote/Commit, used purely as a FAIL-SAFE adoption marker (a forged
+// marker only RESTRICTS what a pack may do — isAdoptedPack).
 type packLock struct {
 	MCP []string `toml:"mcp,omitempty"`
 	// Remote/Commit are set ONLY when this pack was adopted via `pack use
 	// <git-url>` (clonePack) — a non-empty Remote is the provenance marker
-	// isAdoptedPack reads (finding #1, CRITICAL). Once set they are preserved
-	// across every later re-activation of this same pack (never re-derived from
-	// a local-path `pack use`), so adoption status can't be laundered by
-	// pointing `pack use` at the already-cloned local directory.
+	// isAdoptedPack reads. Once set they are preserved across every later
+	// re-activation, so adoption can't be laundered by pointing `pack use` at
+	// the already-cloned local directory.
 	Remote string `toml:"remote,omitempty"`
 	Commit string `toml:"commit,omitempty"`
 	// GogAccount/OllamaBridgeModel record the value THIS pack's last activation
-	// set on cfg (only present when the pack's manifest declares the field).
-	// Prior* is whatever cfg held immediately BEFORE this pack overwrote it, so
-	// reverting on switch-away restores exactly that (or empty, if there was
-	// none) instead of leaking this pack's value into the next one (finding #5).
+	// set on cfg. Prior* is whatever cfg held immediately BEFORE this pack
+	// overwrote it, so reverting on switch-away restores exactly that.
 	GogAccount             string `toml:"gog_account,omitempty"`
 	PriorGogAccount        string `toml:"prior_gog_account,omitempty"`
 	OllamaBridgeModel      string `toml:"ollama_bridge_model,omitempty"`
 	PriorOllamaBridgeModel string `toml:"prior_ollama_bridge_model,omitempty"`
-	// NOTHING security-relevant lives here. Trust acceptance and installed
-	// host-wrapper attribution used to (Accepted*/HostWrappers) — but pack.lock
-	// sits INSIDE the pack directory, i.e. inside the attacker-controlled
-	// payload for any downloaded/unzipped pack, so a pre-filled lock could
-	// pre-accept its own host-exec surface. Both moved to the launcher-owned
-	// trust store (<config-dir>/pack-trust.json — packtruststore.go). pack.lock
-	// is ONLY Phase-1 activation provenance for reversibility, and it is
-	// scrubbed/ignored whenever `pack use` targets a pack that is not already
-	// active (scrubUntrustedPackLock).
+	// NOTHING security-relevant lives here: trust acceptance and installed
+	// host-wrapper attribution live in the launcher-owned trust store, because a
+	// pre-filled lock inside an attacker-controlled payload could otherwise
+	// pre-accept its own host-exec surface.
 }
 
 const PackLockName = "pack.lock"
@@ -1132,13 +1071,11 @@ const PackLockName = "pack.lock"
 func PackLockPath(root string) string { return filepath.Join(root, PackLockName) }
 
 // readPackLock reads root's pack.lock, best-effort: an absent OR UNPARSABLE
-// file returns the zero value (no recorded contribution — the caller's removal
-// set is then empty, which is the safe default: never guess at what an older
-// activation contributed). A corrupt file is deliberately NOT trusted for a
-// partial decode (finding #3): toml.Unmarshal can populate some fields before
-// hitting a parse error, and treating that partial result as authoritative
-// could silently under- or over-report a removal set. On any parse error this
-// returns a clean zero value instead of whatever the decoder half-filled.
+// file returns the zero value (no recorded contribution — the safe default:
+// never guess at what an older activation contributed). A corrupt file is
+// deliberately NOT trusted for a partial decode: toml.Unmarshal can populate
+// some fields before failing, and that half-result could under- or over-report
+// a removal set.
 func readPackLock(root string) packLock {
 	b, err := os.ReadFile(PackLockPath(root))
 	if err != nil {
@@ -1151,20 +1088,13 @@ func readPackLock(root string) packLock {
 	return l
 }
 
-// writePackLock writes root's pack.lock (0644; not a secret — it holds server
-// NAMES and canonical bundle PATHS, never a credential value).
-//
-// Hardened two ways (round-3 S1 CRITICAL + R1):
-//   - Lstat-REFUSES a symlinked destination. os.WriteFile FOLLOWS a symlink,
-//     so a malicious cloned pack committing pack.lock as a symlink (-> /dev/null
-//     or a host file) could both swallow the adoption marker (the pack then
-//     reads as AUTHORED, bypassing the local-path knowledge guard) and
-//     overwrite an arbitrary host file. clonePack scrubs any checked-in
-//     pack.lock right after clone, so a symlink here is always hostile or
-//     corrupt — never legitimate local state.
-//   - Writes ATOMICALLY via a same-dir temp file + rename: an interrupted
-//     write can never truncate/corrupt an existing lock, and rename REPLACES a
-//     symlink rather than following it (a second layer under the Lstat check).
+// writePackLock writes root's pack.lock (0644; not a secret — server NAMES and
+// canonical paths, never a credential value). Hardened two ways:
+//   - Lstat-REFUSES a symlinked destination. os.WriteFile FOLLOWS a symlink, so
+//     a malicious pack committing pack.lock as a symlink could swallow the
+//     adoption marker and overwrite an arbitrary host file.
+//   - Writes ATOMICALLY via a same-dir temp + rename: an interrupted write can
+//     never truncate an existing lock, and rename REPLACES a symlink.
 func writePackLock(root string, l packLock) error {
 	var buf bytes.Buffer
 	if err := toml.NewEncoder(&buf).Encode(l); err != nil {
@@ -1173,11 +1103,10 @@ func writePackLock(root string, l packLock) error {
 	return writePackLockBytes(root, buf.Bytes())
 }
 
-// writePackLockBytes is the raw-bytes half of writePackLock (same Lstat
-// symlink refusal, same atomic same-dir temp + rename). Split out so
-// commitPackActivation can restore a SNAPSHOT of the prior lock byte-for-byte
-// on a cfg.Save failure without round-tripping it through the decoder (which
-// would silently normalize — or, for an unparsable lock, erase — it).
+// writePackLockBytes is the raw-bytes half of writePackLock (same symlink
+// refusal, same atomic temp + rename). Split out so commitPackActivation can
+// restore a SNAPSHOT of the prior lock byte-for-byte on a cfg.Save failure
+// without round-tripping it through the decoder.
 func writePackLockBytes(root string, data []byte) error {
 	dest := PackLockPath(root)
 	if fi, err := os.Lstat(dest); err == nil && fi.Mode()&os.ModeSymlink != 0 {
@@ -1190,27 +1119,20 @@ func writePackLockBytes(root string, data []byte) error {
 // active-pack `pack add mcp` path. It writes THREE things, in an order whose
 // failure residue is always safe:
 //
-//  1. pack.lock (the local HINT — round-4 abort-on-unwritable contract kept:
-//     a lock that cannot be written, e.g. a dir-shaped pack.lock, ABORTS
-//     before anything commits).
-//  2. The AUTHORITATIVE activation record in the launcher-owned trust store
-//     (round-2 A) — a store-write failure also aborts before cfg.Save, so
-//     the config is never committed without host-state attribution.
-//  3. cfg.Save. An ordinary Save failure ROLLS BACK both the store record
-//     and the prior pack.lock bytes, so on-disk state stays mutually
-//     consistent (the rollback contract the round-4 tests pin, now anchored
-//     on the HOST-STATE record).
+//  1. pack.lock (the local HINT) — a lock that cannot be written ABORTS before
+//     anything commits.
+//  2. The AUTHORITATIVE activation record in the launcher-owned trust store — a
+//     store-write failure also aborts before cfg.Save, so the config is never
+//     committed without host-state attribution.
+//  3. cfg.Save. An ordinary Save failure ROLLS BACK both the store record and
+//     the prior pack.lock bytes, so on-disk state stays mutually consistent.
 //
 // A true hard kill between the store write and the config rename leaves an
 // activation record that OVER-claims — harmless, because removing an absent
-// MCP/bundle is a no-op (see the commit-ordering comment in RunPackUse).
-//
-// CONCURRENCY (round-3 #1): the store write, cfg.Save, and the rollback all
-// run under the cross-process trust lock against a FRESH load of the store —
-// saving the caller's (possibly stale) in-memory object here was the
-// last-writer-wins clobber: a concurrent `pix host` wrapper refresh
-// could overwrite the activation this commit just wrote (or vice versa). The
-// caller's store view is synced on success.
+// MCP is a no-op. The store write, cfg.Save and the rollback all run under the
+// cross-process trust lock against a FRESH load of the store, so a concurrent
+// wrapper refresh can never be clobbered; the caller's view is synced on
+// success.
 func commitPackActivation(cfg *config.Config, store *PackTrustStore, root string, lock packLock) error {
 	priorLock, priorErr := os.ReadFile(PackLockPath(root))
 	priorExists := priorErr == nil
@@ -1236,7 +1158,6 @@ func commitPackActivation(cfg *config.Config, store *PackTrustStore, root string
 			}
 			return fmt.Errorf("pack trust state unreadable: %v — aborting without saving config (nothing was committed; fix %s and re-run)", lerr, packTrustStorePath())
 		}
-		priorActivation := fresh.Activation
 		priorActivations := append([]packActivationRecord(nil), fresh.Activations...)
 		fresh.setActivation(root, lock)
 		if err := fresh.Save(); err != nil {
@@ -1248,7 +1169,6 @@ func commitPackActivation(cfg *config.Config, store *PackTrustStore, root string
 		if err := cfg.Save(); err != nil {
 			// Roll BOTH the store record and the lock back so they match the
 			// (unchanged) on-disk config.
-			fresh.Activation = priorActivation
 			fresh.Activations = priorActivations
 			serr := fresh.Save()
 			rerr := restoreLock()
@@ -1258,63 +1178,77 @@ func commitPackActivation(cfg *config.Config, store *PackTrustStore, root string
 			return fmt.Errorf("saving config: %v (activation record rolled back; nothing was committed)", err)
 		}
 		if store != nil {
-			store.Activation = fresh.Activation // keep the caller's view coherent
+			// keep the caller's view coherent
 			store.Activations = append([]packActivationRecord(nil), fresh.Activations...)
 		}
 		return nil
 	})
 }
 
-// migratePhase1Activation is the ONE-TIME Phase-1 → Phase-2 migration
-// (round-3 #2). A pack activated by a Phase-1 build recorded its activation
-// attribution ONLY in pack.lock; Phase 2 reads reversibility exclusively from
-// the host-state store, which treats "no record" as "remove nothing" — so
-// without migration the FIRST Phase-2 switch/reactivation/rm would silently
-// lose the Phase-1 pack's attribution (its MCP/knowledge contributions
-// over-retained forever, its gog/model overrides never restored).
-//
-// It fires exactly when the store has NO activation record attributed to the
-// pack, and splits on adoption:
-//   - LOCAL (authored) pack: pack.lock is the user's OWN Phase-1 state — safe
-//     to trust ONCE — so its attribution is lifted into the store record the
-//     caller's revert reads.
-//   - ADOPTED pack: pack.lock is attacker-writable payload (`git pull` / zip
-//     update), so it is NEVER trusted — nothing migrates, nothing reverts
-//     (safe over-retention; the exact posture of a missing lock).
-//
-// The migrated record is IN-MEMORY only: on a completed switch the commit
-// point immediately replaces it with the new pack's record, and on an abort
-// (gate refusal, commit failure) the next run simply re-migrates — nothing
-// needs persisting here, and never persisting means the migration can never
-// clobber a concurrent writer either.
-func migratePhase1Activation(store *PackTrustStore, root string) {
-	if store == nil || strings.TrimSpace(root) == "" || store.hasActivationFor(root) {
+// gatePackHostSurface is the Tier-1 host-exec trust gate, shared by `pack use`
+// and the active-pack `pack add mcp` attach so both gate on the SAME surface.
+// Tier-0 (no host-exec facet) returns ("", "", nil) and adopts silently. Tier-1
+// halts at the BoM screen unless HOST trust state (never anything the pack
+// ships) already holds this pack identity's acceptance of the EXACT current
+// host-exec surface (fingerprint match: MCP argv, host proxy script content,
+// bin pins, services, egress, creds). Switching between accepted packs never
+// re-prompts; ANY surface change does; a non-TTY fails closed without --yes.
+// A non-nil error means the caller must commit NOTHING.
+func gatePackHostSurface(env hostenv.Env, out io.Writer, store *PackTrustStore, p *Info, root, cfgGogAccount string, yes bool) (fingerprint, key string, err error) {
+	bom := ComputeHostBoM(p, cfgGogAccount, LocalMCPClassifier(env, env.HostBinary))
+	if !bom.Tier1() {
+		return "", "", nil
+	}
+	fp, _, ferr := ComputeHostExecFingerprint(root, bom)
+	if ferr != nil {
+		return "", "", fmt.Errorf("pack %s: %v", root, ferr)
+	}
+	key = store.TrustKey(root)
+	if got, ok := store.acceptedFingerprint(key); !ok || got != fp {
+		if gerr := packTrustGate(os.Stdin, out, cli.IsTTY(os.Stdin), yes, p.Manifest.Name, bom); gerr != nil {
+			return "", "", gerr
+		}
+	}
+	return fp, key, nil
+}
+
+// recordPackAcceptance persists an accepted Tier-1 host-exec fingerprint in
+// HOST state; an empty fingerprint (Tier-0) records nothing. Provenance is
+// HOST-recorded ONLY — this activation's own clone, else the launcher's
+// adoption record — never the pack-supplied pack.lock, whose forged Remote
+// could alias a legit pack and make RecordAcceptance's hygiene sweep DELETE its
+// acceptance. Lock-serialized fresh-load mutation, so it can never clobber a
+// concurrent writer. The stored commit is provenance METADATA only: the key is
+// commit-stable, so a new commit with an unchanged fingerprint never
+// re-prompts. Best-effort: a failed write only re-prompts — never opens.
+func recordPackAcceptance(out io.Writer, key, root, fingerprint, remote, commit string) {
+	if fingerprint == "" {
 		return
 	}
-	if isAdoptedPack(root) {
-		return // adopted payload lock: never trusted (revert nothing)
+	rec := PackTrustRecord{Path: CanonicalizePackRoot(root), Fingerprint: fingerprint, Remote: remote, Commit: commit}
+	if _, werr := mutatePackTrustStore(func(s *PackTrustStore) error {
+		if rec.Remote == "" {
+			if prov, ok := s.Adopted[rec.Path]; ok {
+				rec.Remote, rec.Commit = prov.Remote, prov.Commit
+			}
+		}
+		s.RecordAcceptance(key, rec)
+		return nil
+	}); werr != nil {
+		fmt.Fprintf(out, "note: could not record the accepted host BoM: %v (the Tier-1 gate will re-prompt)\n", werr)
 	}
-	hint := readPackLock(root)
-	if len(hint.MCP) == 0 && hint.GogAccount == "" && hint.OllamaBridgeModel == "" {
-		return // no Phase-1 attribution to migrate
-	}
-	store.setActivation(root, hint)
 }
 
 // isAdoptedPack reports whether root carries adoption provenance, i.e. this
-// pack was cloned from a remote via `pack use <git-url>` at some point. Used
-// by the finding-#1 CRITICAL guard: a shared=false local-path [[knowledge]]
-// reference is NEVER honored for an adopted pack, because pack.toml there is
-// attacker-controlled input from the remote — honoring it would let a
-// malicious pack.toml point AddKnowledgeBundle at an arbitrary host directory
-// (e.g. ~/.ssh) that the sandbox can then read via the knowledge service.
+// pack was cloned from a remote via `pack use <git-url>` at some point. A
+// shared=false local-path reference is NEVER honored for an adopted pack:
+// pack.toml there is attacker-controlled input from the remote, and honoring it
+// would point host reads at an arbitrary directory (e.g. ~/.ssh).
 //
-// Three signals, ANY of which marks the pack adopted (all fail-safe: a forged
-// marker only ever RESTRICTS what a pack may do): the pack.lock Remote marker
-// (clonePack/markPackAdopted write it), the launcher-owned trust store's
-// adoption provenance (host state — survives even a scrubbed/forged lock),
-// and the clone LOCATION itself (everything under PacksDir was put there by
-// clonePack, never authored by the user).
+// Three signals, ANY of which marks the pack adopted (all fail-safe — a forged
+// marker only RESTRICTS what a pack may do): the pack.lock Remote marker, the
+// trust store's adoption provenance (survives a scrubbed/forged lock), and the
+// clone LOCATION (everything under PacksDir was put there by clonePack).
 func isAdoptedPack(root string) bool {
 	if strings.TrimSpace(readPackLock(root).Remote) != "" {
 		return true
@@ -1336,15 +1270,11 @@ func packRootInPacksDir(root string) bool {
 }
 
 // scrubUntrustedPackLock removes a pack-supplied pack.lock before a pack that
-// is NOT currently active is adopted (item 4 of the trust-model rework): a
-// downloaded/unzipped pack can ship a forged pack.lock — clonePack scrubs it
-// for remote clones, but a local-path adoption used to bypass that. The forged
-// file could claim the user's OWN mcp/knowledge entries as the pack's
-// contribution (corrupting Phase-1 reversibility: a later switch-away would
-// remove them) or be a symlink that blocks/redirects the fresh lock write.
-// os.Remove removes a symlink itself, never its target. The caller must also
-// IGNORE the lock's decoded content (treat as zero value) — scrubbing plus a
-// fresh regenerate at commit is the whole contract.
+// is NOT currently active is adopted: a downloaded/unzipped pack can ship a
+// forged one, which could claim the user's OWN entries as the pack's
+// contribution (so a later switch-away would remove them) or be a symlink that
+// blocks/redirects the fresh lock write. os.Remove removes a symlink itself,
+// never its target. The caller must also IGNORE the lock's decoded content.
 func scrubUntrustedPackLock(root string) error {
 	path := PackLockPath(root)
 	fi, err := os.Lstat(path)
@@ -1372,14 +1302,12 @@ func scrubUntrustedPackLock(root string) error {
 	return nil
 }
 
-// revertPackPriorContribution undoes a previous activation's contribution
-// (F4/finding #5): removes exactly the MCP entries prevLock attributes to that
-// pack (never a value the lock doesn't mention — the finding #3 reversibility
-// guarantee), and restores gog_account / ollama_bridge_model to whatever cfg
-// held immediately before that pack overwrote them (or empty, if there was
-// none). Shared by RunPackUse (switching to a different pack, or
-// re-activating the SAME pack — finding D) and RunPackRm (detaching), so all
-// are equally honest about what "detached"/"switched away" means.
+// revertPackPriorContribution undoes a previous activation's contribution:
+// removes exactly the MCP entries prevLock attributes to that pack (never a
+// value the lock doesn't mention), and restores gog_account /
+// ollama_bridge_model to whatever cfg held immediately before that pack
+// overwrote them. Shared by RunPackUse (switch, or same-pack re-activation) and
+// RunPackRm, so all are equally honest about what "detached" means.
 func revertPackPriorContribution(cfg *config.Config, prevLock packLock) (removedMCP []string) {
 	for _, m := range prevLock.MCP {
 		if cfg.RemoveMCP(m) {
@@ -1397,12 +1325,10 @@ func revertPackPriorContribution(cfg *config.Config, prevLock packLock) (removed
 	return removedMCP
 }
 
-// CanonicalizePackRoot normalizes a pack root path for identity comparison
-// (finding #7): expands ~, then filepath.Abs + Clean, so e.g. `pack add mcp
-// fastmail ./work` compares correctly against cfg.Pack even when cfg.Pack is
-// stored absolute and the CLI argument is a relative path (or vice versa).
-// Best-effort: a path that can't be made absolute falls back to
-// expandUser+Clean rather than failing.
+// CanonicalizePackRoot normalizes a pack root path for identity comparison:
+// expands ~, then Abs + Clean, so a relative CLI argument compares correctly
+// against the absolute cfg.Pack. Best-effort: a path that can't be made
+// absolute falls back to expandUser+Clean rather than failing.
 func CanonicalizePackRoot(p string) string {
 	p = expandUser(strings.TrimSpace(p))
 	if p == "" {
@@ -1414,31 +1340,23 @@ func CanonicalizePackRoot(p string) string {
 	return filepath.Clean(p)
 }
 
-// WriteMemoryScope writes (or removes) <workspace>/.pix/profile: the
-// memory scope tag the in-VM recall/capture extensions already read
-// (memory-recall.ts, memory-capture.ts — no extension change for F4). p is the
-// active pack (nil when none). The scope is p.Manifest.MemoryScope, defaulting
-// to the pack's Name; an empty result or the literal "default" selects the
-// shared/unscoped tag, matching "default" == the shared scope from the schema
-// doc. No pack (or an unscoped pack) removes any stale file — this REPLACES the
-// old unconditional profile-delete in run.go. Symlink-safe via
-// workspace.WriteStateFile (a hostile repo can commit .pix/profile as a
-// symlink) and workspace.RemoveStateFile (a hostile repo can commit .pix
-// ITSELF as a symlink to another repo's .pix, which a plain os.Remove
-// would traverse and delete through).
+// WriteMemoryScope writes (or removes) <workspace>/.pix/profile: the memory
+// scope tag the in-VM recall/capture extensions read. p is the active pack (nil
+// when none); the scope is p.Manifest.MemoryScope, and an empty value or the
+// literal "default" selects the shared/unscoped tag. No pack (or an unscoped
+// pack) removes any stale file. Symlink-safe via workspace.WriteStateFile /
+// RemoveStateFile (a hostile repo can commit .pix or .pix/profile as a
+// symlink).
 func WriteMemoryScope(ws string, p *Info) {
 	if p == nil {
 		_ = workspace.RemoveStateFile(ws, "profile")
 		return
 	}
-	// Memory is a single SHARED store by default (AGENTS: the in-store scope column
-	// is dormant). ONLY an explicit `memory_scope` in the manifest isolates a pack.
-	// The pack NAME must NOT become a scope: doing so stamped every conversational
-	// capture with the pack's own name, which hid it from the default recall view
-	// (recall sees {scope}∪{default}; host-side recall queries default), so
-	// captured preferences looked lost. Empty/"default" => shared, no scope file.
-	// (The default pack's own Name IS literally "default", so this guard is what
-	// keeps its captures shared rather than accidentally scoped to itself.)
+	// Memory is a single SHARED store by default; ONLY an explicit
+	// `memory_scope` isolates a pack. The pack NAME must NOT become a scope:
+	// that stamped every capture with the pack's name and hid it from the
+	// default recall view, so captured preferences looked lost. (The default
+	// pack's own Name IS "default", which this guard keeps shared.)
 	scope := strings.TrimSpace(p.Manifest.MemoryScope)
 	if scope == "" || scope == "default" {
 		_ = workspace.RemoveStateFile(ws, "profile")
@@ -1447,10 +1365,9 @@ func WriteMemoryScope(ws string, p *Info) {
 	_ = workspace.WriteStateFile(ws, "profile", []byte(scope+"\n"), 0o644)
 }
 
-// packRecreateLine is the ADR-3 "same breath" recreate instruction: any
-// operation that changes the sandbox facet set (MCP attach, sandbox bin/
-// wrappers) MUST print this, because --mcp/--kit are create-only — a running
-// sandbox cannot pick either up without a recreate (packs.md §13 must-fix).
+// printPackRecreateLine is the "same breath" recreate instruction: any
+// operation that changes the sandbox facet set MUST print it, because
+// --mcp/--kit are create-only.
 func printPackRecreateLine(out io.Writer) {
 	fmt.Fprintln(out, "MCP attach + sandbox bin/ wrappers + pack skills only take effect on a sandbox CREATE.")
 	fmt.Fprintln(out, "Recreate to pick them up:  pix run --replace")
@@ -1483,17 +1400,12 @@ func safeArtifactName(name string) bool {
 	return true
 }
 
-// activateDefaultPack sets the default pack as active (config `pack`) if no
-// pack is active yet, so implicit-create makes it immediately usable (no manual
-// `pack use`). Best-effort. Only for the default pack root.
 // activateDefaultPack points cfg.Pack at root when (and only when) root IS the
-// resolved default pack AND cfg.Pack is currently empty — it must NEVER
-// override an explicitly active alternate pack (cfg.Pack != ""), which is a
-// no-op, not an error. Returns an error instead of swallowing one: a caller
-// that reports "active pack -> this (default) pack" (or, worse, propagates
-// setup success) after a cfg.Save failure would be lying — the config on
-// disk still has no active pack. Every caller MUST check the returned error
-// before claiming activation succeeded.
+// resolved default pack AND cfg.Pack is currently empty, so implicit-create
+// makes a fresh default pack usable without a manual `pack use`. An explicitly
+// active alternate pack is NEVER overridden (a no-op, not an error). It returns
+// the cfg.Save error instead of swallowing it: reporting activation after a
+// failed save would be a lie. Every caller MUST check it.
 func activateDefaultPack(root string) error {
 	if root != DefaultPackRoot() {
 		return nil // not the default pack; nothing for this to do
@@ -1550,10 +1462,9 @@ func RunPackNew(env hostenv.Env, out io.Writer, rest []string) {
 		fmt.Fprintf(out, "pix pack new: could not write %s: %v\n", PackManifestName, err)
 		os.Exit(1)
 	}
-	// pack.lock is GENERATED activation provenance (ADR-1), never hand-authored;
-	// seed a pack-local .gitignore line for it so a fresh pack never accidentally
-	// commits it. Best-effort, no-clobber (never touches an existing .gitignore
-	// beyond appending the line once).
+	// pack.lock is GENERATED activation provenance, never hand-authored; seed a
+	// pack-local .gitignore line so a fresh pack never commits it. Best-effort,
+	// no-clobber.
 	seedPackGitignore(root)
 	switch {
 	case existsDir && isRepo:
@@ -1578,10 +1489,8 @@ func RunPackNew(env hostenv.Env, out io.Writer, rest []string) {
 
 // RunPackAdd writes one artifact into a pack (implicit-create), then registers
 // it by presence (skills/knowledge are discovered by convention).
-// RegisterFn registers the named servers with the sbx gateway. Activating a
-// pack registers the MCP servers it declares, but pack may not call mcp —
-// both are capabilities — so the caller supplies this. Same seam, same reason,
-// as slack.RegisterFn.
+// RegisterFn registers the named servers with the sbx gateway: pack may not
+// call mcp (both are capabilities), so the caller supplies this seam.
 type RegisterFn func(cfg *config.Config, env hostenv.Env, out io.Writer, names []string,
 	hostResolver func() (string, error), containers map[string]config.MCPContainer) error
 
@@ -1642,55 +1551,45 @@ func RunPackAdd(env hostenv.Env, out io.Writer, rest []string, register Register
 			os.Exit(1)
 		}
 	}
+	// die/writeArtifact: `pack add` writes one file per kind, with the same
+	// mkdir → no-clobber stat → write → report shape for each.
+	die := func(err error) {
+		fmt.Fprintf(out, "pix pack add: %v\n", err)
+		os.Exit(1)
+	}
+	writeArtifact := func(dir, file, body, label string) bool {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			die(err)
+		}
+		f := filepath.Join(dir, file)
+		if _, err := os.Stat(f); err == nil {
+			fmt.Fprintf(out, "%s already exists: %s\n", label, f)
+			return false
+		}
+		if err := os.WriteFile(f, []byte(body), 0o644); err != nil {
+			die(err)
+		}
+		fmt.Fprintf(out, "added %s %q: %s\n", label, name, f)
+		return true
+	}
 	switch kind {
 	case "skill":
-		dir := filepath.Join(root, "skills", name)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			fmt.Fprintf(out, "pix pack add: %v\n", err)
-			os.Exit(1)
+		if writeArtifact(filepath.Join(root, "skills", name), "SKILL.md", skillTemplate(name), "skill") {
+			fmt.Fprintln(out, "edit it, then commit it to your pack's git repo.")
 		}
-		f := filepath.Join(dir, "SKILL.md")
-		if _, err := os.Stat(f); err == nil {
-			fmt.Fprintf(out, "skill already exists: %s\n", f)
-			return
-		}
-		if err := os.WriteFile(f, []byte(skillTemplate(name)), 0o644); err != nil {
-			fmt.Fprintf(out, "pix pack add: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Fprintf(out, "added skill %q: %s\n", name, f)
-		fmt.Fprintln(out, "edit it, then commit it to your pack's git repo.")
 	case "knowledge":
-		// Embed only: a literal knowledge/ doc, discovered by convention. It is
-		// INERT (mounted like skills/, but nothing indexes it — the built-in OKF
-		// knowledge daemon was retired, W2 U03A; this is a future seam for a
-		// files/http/MCP knowledge capability provider).
-		dir := filepath.Join(root, "knowledge")
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			fmt.Fprintf(out, "pix pack add: %v\n", err)
-			os.Exit(1)
-		}
-		f := filepath.Join(dir, name+".md")
-		if _, err := os.Stat(f); err == nil {
-			fmt.Fprintf(out, "knowledge doc already exists: %s\n", f)
-			return
-		}
-		if err := os.WriteFile(f, []byte(knowledgeTemplate(name)), 0o644); err != nil {
-			fmt.Fprintf(out, "pix pack add: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Fprintf(out, "added knowledge doc %q: %s\n", name, f)
+		// Embed only: a literal knowledge/ doc, discovered by convention and INERT
+		// (mounted like skills/, indexed by nothing).
+		writeArtifact(filepath.Join(root, "knowledge"), name+".md", knowledgeTemplate(name), "knowledge doc")
 	case "proxy":
 		binDir := filepath.Join(root, "bin")
 		if err := os.MkdirAll(binDir, 0o755); err != nil {
-			fmt.Fprintf(out, "pix pack add: %v\n", err)
-			os.Exit(1)
+			die(err)
 		}
 		f := filepath.Join(binDir, name)
 		if _, err := os.Stat(f); err != nil {
 			if err := os.WriteFile(f, []byte(proxyShimTemplate(name)), 0o755); err != nil {
-				fmt.Fprintf(out, "pix pack add: %v\n", err)
-				os.Exit(1)
+				die(err)
 			}
 			fmt.Fprintf(out, "scaffolded proxy wrapper: %s\n", f)
 		} else {
@@ -1698,8 +1597,7 @@ func RunPackAdd(env hostenv.Env, out io.Writer, rest []string, register Register
 		}
 		p, err := LoadPack(root)
 		if err != nil {
-			fmt.Fprintf(out, "pix pack add: %v\n", err)
-			os.Exit(1)
+			die(err)
 		}
 		exists := false
 		for i, pr := range p.Manifest.Proxies {
@@ -1713,15 +1611,13 @@ func RunPackAdd(env hostenv.Env, out io.Writer, rest []string, register Register
 			p.Manifest.Proxies = append(p.Manifest.Proxies, PackProxy{Name: name, Host: host})
 		}
 		if err := WriteManifest(root, p.Manifest); err != nil {
-			fmt.Fprintf(out, "pix pack add: %v\n", err)
-			os.Exit(1)
+			die(err)
 		}
 		fmt.Fprintf(out, "added proxy %q to pack.toml (host=%v)\n", name, host)
 		if host {
-			// F3: a host wrapper is a Tier-1 facet — it installs only after the
-			// F5 BoM gate accepts it at `pack use`, and it is on PATH for
-			// `pix host` sessions ONLY (never the sandbox), behind the
-			// host.enabled machine gate.
+			// A host wrapper is a Tier-1 facet: it installs only after the BoM gate
+			// accepts it at `pack use`, and is on PATH for `pix host` sessions ONLY
+			// (never the sandbox), behind the host.enabled machine gate.
 			fmt.Fprintf(out, "host wrapper: review + accept it with `pix pack use %s` (Tier-1 host BoM gate);\n", root)
 			fmt.Fprintln(out, "once accepted it installs for `pix host` sessions only (requires host.enabled).")
 		} else {
@@ -1731,8 +1627,7 @@ func RunPackAdd(env hostenv.Env, out io.Writer, rest []string, register Register
 	case "mcp":
 		p, err := LoadPack(root)
 		if err != nil {
-			fmt.Fprintf(out, "pix pack add: %v\n", err)
-			os.Exit(1)
+			die(err)
 		}
 		exists := false
 		for i, ig := range p.Manifest.Integrations {
@@ -1746,26 +1641,20 @@ func RunPackAdd(env hostenv.Env, out io.Writer, rest []string, register Register
 			p.Manifest.Integrations = append(p.Manifest.Integrations, Integration{Name: name, MCP: name, Env: envVar})
 		}
 		if err := WriteManifest(root, p.Manifest); err != nil {
-			fmt.Fprintf(out, "pix pack add: %v\n", err)
-			os.Exit(1)
+			die(err)
 		}
 		fmt.Fprintf(out, "added mcp integration %q to pack.toml\n", name)
-		// F1: if this IS the active pack, attach it right now (cfg.MCP + gateway
+		// If this IS the active pack, attach it right now (cfg.MCP + gateway
 		// registration + credential solicit), same mechanism as `pack use` —
-		// otherwise nothing has changed in the sandbox facet set yet, so no
-		// recreate line is owed until the pack is actually activated.
+		// otherwise the sandbox facet set has not changed, so no recreate is owed.
 		cfg, cerr := config.Load()
-		// finding #7: compare CANONICALIZED paths — root here may be a raw
-		// (possibly relative) CLI argument, while cfg.Pack is stored resolved
-		// absolute by `pack use`. A raw-string compare made an active pack look
-		// inactive whenever the two spellings differed (e.g. `pack add mcp
-		// fastmail ./work` while cfg.Pack is the absolute form).
+		// Compare CANONICALIZED paths: root here may be a raw (possibly relative)
+		// CLI argument while cfg.Pack is stored resolved absolute, and a raw-string
+		// compare made an active pack look inactive whenever the spellings differed.
 		if cerr == nil && CanonicalizePackRoot(cfg.Pack) == CanonicalizePackRoot(root) {
-			// F5: attaching an MCP means the gateway runs its command ON THE
-			// HOST — a Tier-1 fact. Same gate as `pack use`: an exact
-			// fingerprint match in the HOST trust store skips the prompt,
-			// non-TTY fails closed unless --yes. On refusal the declaration
-			// stays in pack.toml (inert) but NOTHING attaches.
+			// Attaching an MCP means the gateway runs its command ON THE HOST — a
+			// Tier-1 fact, so the same gate as `pack use` applies. On refusal the
+			// declaration stays in pack.toml (inert) but NOTHING attaches.
 			trustStore, tserr := loadPackTrustStore()
 			if tserr != nil {
 				// FATAL (round-2 A): the store is both the acceptance source and
@@ -1774,38 +1663,19 @@ func RunPackAdd(env hostenv.Env, out io.Writer, rest []string, register Register
 				fmt.Fprintf(out, "pix pack add: pack trust state unreadable: %v (fix or remove %s and re-run)\n", tserr, packTrustStorePath())
 				os.Exit(1)
 			}
-			// One-time Phase-1 → Phase-2 migration (round-3 #2): without it, a
-			// Phase-1 active pack's lock attribution would be overwritten at the
-			// commit below with ONLY the newly-added name.
-			migratePhase1Activation(trustStore, root)
-			bom := ComputeHostBoM(p, cfg.GogAccount, LocalMCPClassifier(env, env.HostBinary))
-			var bomFingerprint, packKey string
-			if bom.Tier1() {
-				fp, _, ferr := ComputeHostExecFingerprint(root, bom)
-				if ferr != nil {
-					fmt.Fprintf(out, "pix pack add: pack %s: %v\n", root, ferr)
-					os.Exit(1)
-				}
-				bomFingerprint = fp
-				packKey = trustStore.TrustKey(root)
-				if got, ok := trustStore.acceptedFingerprint(packKey); !ok || got != fp {
-					if gerr := packTrustGate(os.Stdin, out, cli.IsTTY(os.Stdin), yes, p.Manifest.Name, bom); gerr != nil {
-						fmt.Fprintf(out, "pix pack add: %v (declared in pack.toml, but NOT attached)\n", gerr)
-						os.Exit(1)
-					}
-				}
+			bomFingerprint, packKey, gerr := gatePackHostSurface(env, out, trustStore, p, root, cfg.GogAccount, yes)
+			if gerr != nil {
+				fmt.Fprintf(out, "pix pack add: %v (declared in pack.toml, but NOT attached)\n", gerr)
+				os.Exit(1)
 			}
 			added := cfg.AddMCP(name)
 			if added {
-				// Attribution stays gated on the AddMCP result (finding #2): a
-				// pre-existing, user-added name is never claimed as this pack's.
-				// Lock BEFORE Save, ABORT on lock failure (round-3 R1 + round-4 F1,
-				// same commit point as RunPackUse): the config is never committed
-				// without its attribution, so a later `pack use`/`pack rm` can
-				// always clean up what this command added. The attribution BASE is
-				// the HOST-state activation record (round-2 A), never the payload
-				// lock; the adoption marker for the hint comes from host-recorded
-				// provenance first, else the (fail-safe) payload marker.
+				// Attribution stays gated on the AddMCP result: a pre-existing,
+				// user-added name is never claimed as this pack's. Lock BEFORE Save,
+				// ABORT on lock failure (same commit point as RunPackUse), so a later
+				// `pack use`/`pack rm` can always clean up what this added. The
+				// attribution BASE is the HOST-state activation record, never the
+				// payload lock; only the fail-safe adoption marker comes off the lock.
 				lock := trustStore.activationFor(root)
 				if !slices.Contains(lock.MCP, name) {
 					lock.MCP = append(lock.MCP, name)
@@ -1820,25 +1690,10 @@ func RunPackAdd(env hostenv.Env, out io.Writer, rest []string, register Register
 					os.Exit(1)
 				}
 			}
-			// F5: persist the acceptance in HOST state (the gate above passed,
-			// or the stored fingerprint already covered this surface), so a
-			// later `pack use` of this pack won't re-prompt for what was just
-			// accepted here. Best-effort: a failed write only re-prompts.
-			if bom.Tier1() {
-				// Lock-serialized fresh-load mutation (round-3 #1); commit is
-				// provenance metadata only (round-3 #5).
-				rec := PackTrustRecord{Path: CanonicalizePackRoot(root), Fingerprint: bomFingerprint}
-				if _, werr := mutatePackTrustStore(func(s *PackTrustStore) error {
-					if prov, ok := s.Adopted[rec.Path]; ok {
-						rec.Remote, rec.Commit = prov.Remote, prov.Commit
-					}
-					s.RecordAcceptance(packKey, rec)
-					return nil
-				}); werr != nil {
-					fmt.Fprintf(out, "note: could not record the accepted host BoM: %v (the Tier-1 gate will re-prompt)\n", werr)
-				}
-			}
-			// finding E: registration runs even when the name was ALREADY in
+			// Persist the acceptance in HOST state so a later `pack use` of this
+			// pack won't re-prompt for what was just accepted here.
+			recordPackAcceptance(out, packKey, root, bomFingerprint, "", "")
+			// Registration runs even when the name was ALREADY in
 			// cfg.MCP (added == false) — it is idempotent, and a retry after a
 			// failed gateway registration must actually re-register instead of
 			// silently doing nothing.
@@ -2032,12 +1887,9 @@ func RunPackUse(env hostenv.Env, out io.Writer, rest []string, register Register
 	}
 	arg := strings.TrimSpace(args[0])
 	// "default" is a real built-in alias for the default pack root (NOT
-	// $PWD/default): resolves through DefaultPackRoot() exactly like every other
-	// call site. "personal" is a DEPRECATED
-	// alias kept for backward compatibility with a deprecation warning; only the
-	// EXACT bare token matches — a git URL or a real path/dir literally named
-	// "personal" (e.g. `./personal`, `../personal`, a full path, or a git URL
-	// ending in personal.git) is unaffected and still resolves as a path/URL.
+	// $PWD/default). "personal" is a DEPRECATED alias kept with a warning; only
+	// the EXACT bare token matches, so a real path or git URL named "personal"
+	// still resolves as a path/URL.
 	switch arg {
 	case "default":
 		arg = DefaultPackRoot()
@@ -2068,10 +1920,9 @@ func RunPackUse(env hostenv.Env, out io.Writer, rest []string, register Register
 		fmt.Fprintf(out, "pix pack use: %v\n", err)
 		os.Exit(1)
 	}
-	// F5: re-hash every SHA-pinned [[bin]] BEFORE anything commits or the gate
-	// even renders — activating a pack whose pinned binary does not match its
-	// declared sha is refused outright (tampered binary or stale pin), so the
-	// sha the BoM screen shows is always the sha of the actual bytes on disk.
+	// Re-hash every SHA-pinned [[bin]] BEFORE anything commits or the gate even
+	// renders: activating a pack whose pinned binary does not match its declared
+	// sha is refused outright, so the BoM screen always shows the bytes on disk.
 	for _, bn := range p.Manifest.Bins {
 		if verr := verifyPackBinSHA(root, bn); verr != nil {
 			fmt.Fprintf(out, "pix pack use: pack %s: %v\n", root, verr)
@@ -2084,26 +1935,21 @@ func RunPackUse(env hostenv.Env, out io.Writer, rest []string, register Register
 		os.Exit(1)
 	}
 
-	// --- F4: the atomic swap. Everything below mutates the in-memory cfg; the
-	// ONE cfg.Save() further down is the single commit point for every host-side/
-	// config facet (ADR-3). Nothing is half-written to config if Save fails: the
-	// pre-Save cfg was never persisted. ---
+	// --- The atomic swap. Everything below mutates the in-memory cfg; the ONE
+	// cfg.Save() further down is the single commit point for every host-side
+	// facet. Nothing is half-written if Save fails. ---
 
 	prevRoot := cfg.Pack
 	prevRoots := ActivePackRoots(cfg, "")
 	switching := prevRoot != "" && (prevRoot != root || len(prevRoots) > 1)
-	// The pack-supplied pack.lock is NEVER trusted for reversibility (round-2
-	// A) — not even when this pack is already active: a plain `git pull` (or a
-	// zip update) rewrites files under an already-active pack root, so a forged
-	// lock claiming the user's own mcp/knowledge entries as the pack's
-	// contribution would make the revert below DELETE them. The ONLY thing
-	// read off the lock is the fail-safe adoption marker (Remote/Commit — a
-	// forged marker only RESTRICTS what a pack may do). Reversibility reads
-	// come exclusively from the launcher-owned trust store's activation
-	// record. The payload lock is additionally SCRUBBED on a not-currently-
-	// active local-path adoption (a symlinked lock must not redirect the fresh
-	// hint write); a URL adoption's lock was just written by
-	// clonePack/markPackAdopted — host-authored — so it is kept.
+	// The pack-supplied pack.lock is NEVER trusted for reversibility — not even
+	// when this pack is already active: a `git pull` rewrites files under an
+	// already-active pack root, so a forged lock claiming the user's own entries
+	// would make the revert below DELETE them. The ONLY thing read off the lock
+	// is the fail-safe adoption marker. Reversibility reads come exclusively from
+	// the trust store. The payload lock is additionally SCRUBBED on a
+	// not-currently-active local-path adoption; a URL adoption's lock was just
+	// written host-side by clonePack/markPackAdopted, so it is kept.
 	hint := readPackLock(root)
 	hintRemote, hintCommit := strings.TrimSpace(hint.Remote), strings.TrimSpace(hint.Commit)
 	if prevRoot != root && remoteURL == "" {
@@ -2113,55 +1959,26 @@ func RunPackUse(env hostenv.Env, out io.Writer, rest []string, register Register
 		}
 	}
 
-	// F5: the Tier-1 trust gate — against TRUSTED HOST STATE (packtruststore.go),
-	// never anything the pack ships. Tier-0 (no host-exec facet) adopts
-	// silently, exactly as Phase 1 did. Tier-1 halts at the BoM screen unless
-	// the trust store holds this pack identity's acceptance of the EXACT
-	// current host-exec surface (fingerprint match: MCP argv, host proxy script
-	// content, bin pins, egress, creds). Switching between accepted packs never
-	// re-prompts; ANY surface change does. Refusal aborts here: nothing
-	// registered, installed, or committed.
-	//
-	// An UNREADABLE trust store is now FATAL (it is the reversibility AND
-	// acceptance backbone): proceeding with an empty stand-in would both lose
-	// the previous activation's removal set and — at the commit point — clobber
-	// the store file with the stand-in. Fail closed with a pointer at the file.
+	// The Tier-1 trust gate runs against TRUSTED HOST STATE, never anything the
+	// pack ships (gatePackHostSurface). An UNREADABLE trust store is FATAL — it
+	// is the reversibility AND acceptance backbone, and proceeding with an empty
+	// stand-in would lose the previous activation's removal set and clobber the
+	// store at the commit point. Fail closed with a pointer at the file.
 	trustStore, tserr := loadPackTrustStore()
 	if tserr != nil {
 		fmt.Fprintf(out, "pix pack use: pack trust state unreadable: %v (fix or remove %s and re-run)\n", tserr, packTrustStorePath())
 		os.Exit(1)
 	}
-	// One-time Phase-1 → Phase-2 migration (round-3 #2): a pre-Phase-2 active
-	// pack has its activation attribution only in pack.lock — lift it into the
-	// (in-memory) store record BEFORE computing the switch below, so its
-	// contributions revert correctly. Adopted packs never migrate (their lock
-	// is payload); see migratePhase1Activation.
-	if prevRoot != "" && len(prevRoots) <= 1 {
-		migratePhase1Activation(trustStore, prevRoot)
-	}
-	bom := ComputeHostBoM(p, cfg.GogAccount, LocalMCPClassifier(env, env.HostBinary))
-	var bomFingerprint, packKey string
-	if bom.Tier1() {
-		fp, _, ferr := ComputeHostExecFingerprint(root, bom)
-		if ferr != nil {
-			fmt.Fprintf(out, "pix pack use: pack %s: %v\n", root, ferr)
-			os.Exit(1)
-		}
-		bomFingerprint = fp
-		packKey = trustStore.TrustKey(root)
-		if got, ok := trustStore.acceptedFingerprint(packKey); !ok || got != fp {
-			if gerr := packTrustGate(os.Stdin, out, cli.IsTTY(os.Stdin), yes, p.Manifest.Name, bom); gerr != nil {
-				fmt.Fprintf(out, "pix pack use: %v\n", gerr)
-				os.Exit(1)
-			}
-		}
+	bomFingerprint, packKey, gerr := gatePackHostSurface(env, out, trustStore, p, root, cfg.GogAccount, yes)
+	if gerr != nil {
+		fmt.Fprintf(out, "pix pack use: %v\n", gerr)
+		os.Exit(1)
 	}
 
-	// MCP set (F1 + ADR-1): remove exactly what the PREVIOUS pack's last
-	// activation ACTUALLY ADDED (never a user's own manually-added MCP the
-	// pack merely re-declares — finding #2), then add what the NEW pack
-	// declares. Reversible: pack-use(A) -> pack-use(B) -> pack-use(A) restores
-	// cfg.MCP to what it was after the first pack-use(A).
+	// MCP set: remove exactly what the PREVIOUS pack's last activation ACTUALLY
+	// ADDED (never a user's own manually-added MCP the pack merely re-declares),
+	// then add what the NEW pack declares. Reversible: use(A) -> use(B) -> use(A)
+	// restores cfg.MCP to what it was after the first use(A).
 	var removedMCP []string
 	switch {
 	case switching:
@@ -2173,50 +1990,26 @@ func RunPackUse(env hostenv.Env, out io.Writer, rest []string, register Register
 			removedMCP = append(removedMCP, mcp...)
 		}
 	case prevRoot == root:
-		// SAME-pack reactivation (finding D): revert THIS pack's own prior
-		// contribution first, then re-apply the manifest fresh below. Without
-		// the revert, every Add* returns false (the entries are already live),
-		// the new lock overwrites the attribution with EMPTY slices — so a
-		// later switch/rm could never remove this pack's contributions — and a
-		// field REMOVED from the manifest since the last activation
-		// (gog_account, ollama_bridge_model, an mcp) would stay live forever.
-		// Revert-then-reapply reconciles both: facets still declared re-add just
-		// below (regaining attribution), dropped ones stay reverted. The removal
-		// set comes from HOST state (round-2 A), never the pack-payload lock — a
-		// same-pack `git pull` forgery buys nothing.
+		// SAME-pack reactivation: revert THIS pack's own prior contribution first,
+		// then re-apply the manifest fresh below. Without the revert every Add*
+		// returns false, the new record would claim NOTHING (so a later switch/rm
+		// could never clean up), and a field REMOVED from the manifest since the
+		// last activation would stay live forever. The removal set comes from HOST
+		// state, so a same-pack `git pull` forgery buys nothing.
 		removedMCP = revertPackPriorContribution(cfg, trustStore.activationFor(root))
 	}
-	var addedMCP []string
-	for _, m := range McpNames(p) {
-		if cfg.AddMCP(m) {
-			addedMCP = append(addedMCP, m)
-		}
-	}
-
-	// Config layering (F4/finding #5): a value the pack declares overwrites, but
-	// remembers what cfg held immediately BEFORE the overwrite so switching away
-	// restores exactly that (or empty) — never leaking one pack's value into the
-	// next. On a SAME-pack reactivation the revert above already restored cfg to
-	// the true pre-pack baseline (finding D), so capturing cfg's current value
-	// is correct on every path (first use, switch, re-activation) — a chain of
+	// Config layering: the revert above restored cfg to the true pre-pack
+	// baseline on every path (first use, switch, same-pack reactivation), so the
+	// Prior* values applyPackFacets captures are the real ones — a chain of
 	// re-activations never loses the baseline, and a field the manifest DROPPED
 	// stays reverted instead of sticking around.
-	var lockGogAccount, lockPriorGogAccount, lockOllamaModel, lockPriorOllamaModel string
-	if p.Manifest.GogAccount != "" {
-		lockPriorGogAccount = cfg.GogAccount
-		lockGogAccount = p.Manifest.GogAccount
-		cfg.SetGogAccount(lockGogAccount)
-	}
-	if m := strings.TrimSpace(p.Manifest.OllamaBridgeModel); m != "" {
-		lockPriorOllamaModel = cfg.OllamaBridgeModel
-		lockOllamaModel = m
-		cfg.OllamaBridgeModel = lockOllamaModel
-	}
 	ClearPackInference(cfg, "")
-	if err := ApplyPackInference(cfg, p.Manifest.Inference, root); err != nil {
-		fmt.Fprintf(out, "pix pack use: %v\n", err)
+	lock, aerr := applyPackFacets(cfg, p, root)
+	if aerr != nil {
+		fmt.Fprintf(out, "pix pack use: %v\n", aerr)
 		os.Exit(1)
 	}
+	addedMCP := lock.MCP
 
 	cfg.Pack = root
 	// `pack use` remains a single-pack switch. Multi-pack composition is an
@@ -2224,49 +2017,27 @@ func RunPackUse(env hostenv.Env, out io.Writer, rest []string, register Register
 	// stale prior stack when a user later switches contexts.
 	cfg.Packs = []string{root}
 
-	// COMMIT ORDERING (round-3 R1 + round-4 F1): the lock is written BEFORE
-	// cfg.Save, it records the INTENDED contribution set computed above, and a
-	// lock-write FAILURE aborts before Save (commitPackActivation) — the config
-	// is never committed without its attribution. The two writes can't be one
-	// atomic transaction (two files), so pick the safe failure residue: a true
-	// crash (SIGKILL/power loss) in the window between lock-write and Save
-	// leaves a lock that OVER-claims (it names contributions the config never
-	// committed) — harmless, because removal of an absent MCP/bundle is a no-op
-	// (config.removeValue tolerates missing entries). The reverse order left
-	// the fatal residue: an ACTIVE pack whose config-committed contributions
-	// had NO lock attribution, so no later switch/rm could ever remove them.
+	// COMMIT ORDERING: the lock is written BEFORE cfg.Save, it records the
+	// INTENDED contribution set computed above, and a lock-write FAILURE aborts
+	// before Save (commitPackActivation) — the config is never committed without
+	// its attribution. Two files can't be one atomic transaction, so pick the
+	// safe failure residue: a true crash between the two renames leaves a lock
+	// that OVER-claims, which is harmless (removing an absent MCP is a no-op).
+	// The reverse order left the fatal residue instead: config-committed
+	// contributions with NO attribution, which no later switch/rm could remove.
 	//
-	// KNOWN RESIDUAL (deliberate, now crash-only): an ORDINARY cfg.Save
-	// failure is fully consistent — commitPackActivation snapshots the prior
-	// pack.lock and restores it atomically before returning the error, so lock
-	// and config never diverge on a plain error (read-only config dir, disk
-	// full). The only window left is a TRUE hard kill (SIGKILL/power loss) in
-	// the milliseconds between the atomic lock rename and the atomic config
-	// rename during a switch/reactivation: the new (narrower) lock lands
-	// beside the old config, leaving a dropped MCP/bundle in config with no
-	// lock attribution — over-retained until removed by hand (`pix
-	// config`), since `pack use`/`pack rm` deliberately remove ONLY what the
-	// lock attributes. That scoping is the chosen safe side of the
-	// lock-only-removal design: it can never remove a user's manually-added
-	// entry (the worse bug fixed in finding #2). Manifest-based reconciliation
-	// would reopen that. Over-retention is safe (an extra entry, never a lost
-	// one); do NOT "fix" it with manifest-driven removal.
-	lock := packLock{
-		MCP:                    addedMCP,
-		Remote:                 remoteURL,
-		Commit:                 remoteCommit,
-		GogAccount:             lockGogAccount,
-		PriorGogAccount:        lockPriorGogAccount,
-		OllamaBridgeModel:      lockOllamaModel,
-		PriorOllamaBridgeModel: lockPriorOllamaModel,
-	}
+	// KNOWN RESIDUAL (deliberate, crash-only): an ORDINARY cfg.Save failure is
+	// fully consistent (the prior lock is restored atomically). Only a hard kill
+	// between the two renames can leave a dropped MCP in config with no
+	// attribution — over-retained until removed by hand. That is the chosen safe
+	// side of lock-only removal: it can never remove a user's own entry. Do NOT
+	// "fix" it with manifest-driven removal.
+	lock.Remote, lock.Commit = remoteURL, remoteCommit
 	if lock.Remote == "" {
 		// Not cloned THIS activation: keep whatever adoption marker this pack
-		// already carried (a re-activation via local path must not un-adopt it) —
-		// the launcher's own host-state provenance first, else the (fail-safe)
-		// marker captured off the pack-supplied lock before the scrub. This
-		// lands only in the pack.lock HINT (fail-safe marker), never in the
-		// host-state activation or acceptance records.
+		// already carried (a local-path re-activation must not un-adopt it) — the
+		// host-state provenance first, else the fail-safe marker captured off the
+		// pack-supplied lock before the scrub. Hint only, never host state.
 		if prov, ok := trustStore.Adopted[CanonicalizePackRoot(root)]; ok {
 			lock.Remote, lock.Commit = prov.Remote, prov.Commit
 		} else {
@@ -2274,42 +2045,16 @@ func RunPackUse(env hostenv.Env, out io.Writer, rest []string, register Register
 		}
 	}
 	if err := commitPackActivation(cfg, trustStore, root, lock); err != nil {
-		// The lock IS part of this switch's committed state (finding #3 +
-		// round-4 F1): if it can't be written, NOTHING is committed — the
-		// in-memory cfg mutations above are discarded, the on-disk config (and
-		// the active pack) stay exactly as they were.
+		// The lock IS part of this switch's committed state: if it can't be
+		// written, NOTHING is committed — the in-memory cfg mutations above are
+		// discarded and the on-disk config stays exactly as it was.
 		fmt.Fprintf(out, "pix pack use: %v\n", err)
 		os.Exit(1)
 	}
 
-	// F5: persist the acceptance in HOST state (the gate above passed, or the
-	// stored fingerprint already covered this exact surface — recording is
-	// idempotent and re-normalizes provenance). A failed write just means the
-	// gate re-prompts next time: fail closed, never open.
-	if bom.Tier1() {
-		// Provenance on the acceptance record is HOST-recorded ONLY (round-2 E):
-		// this activation's own clone, or the launcher's adoption record — never
-		// the pack-supplied pack.lock, whose forged Remote could alias a legit
-		// pack and make recordAcceptance's hygiene sweep DELETE its acceptance.
-		// Written via the lock-serialized fresh-load mutation (round-3 #1) so
-		// this save can never clobber a concurrent writer's record. The commit
-		// stored on the record is provenance METADATA only (round-3 #5): the
-		// key is commit-stable, so a new commit with an unchanged host-exec
-		// fingerprint never re-prompts.
-		rec := PackTrustRecord{Path: CanonicalizePackRoot(root), Fingerprint: bomFingerprint}
-		rec.Remote, rec.Commit = remoteURL, remoteCommit
-		if _, werr := mutatePackTrustStore(func(s *PackTrustStore) error {
-			if rec.Remote == "" {
-				if prov, ok := s.Adopted[rec.Path]; ok {
-					rec.Remote, rec.Commit = prov.Remote, prov.Commit
-				}
-			}
-			s.RecordAcceptance(packKey, rec)
-			return nil
-		}); werr != nil {
-			fmt.Fprintf(out, "note: could not record the accepted host BoM: %v (the Tier-1 gate will re-prompt)\n", werr)
-		}
-	}
+	// Persist the acceptance in HOST state (the gate above passed, or the stored
+	// fingerprint already covered this exact surface).
+	recordPackAcceptance(out, packKey, root, bomFingerprint, remoteURL, remoteCommit)
 
 	// --- post-Save: best-effort side effects (each already idempotent). ---
 
@@ -2334,22 +2079,19 @@ func RunPackUse(env hostenv.Env, out io.Writer, rest []string, register Register
 	if len(addedMCP) > 0 && !env.Quiet {
 		fmt.Fprintf(out, "attached mcp: %s\n", strings.Join(addedMCP, ", "))
 	}
-	// finding E: register ALL of this pack's MCPs post-Save (registration is
-	// idempotent), never just the newly-added ones — a retry after a failed
-	// gateway registration finds the names already in cfg.MCP (AddMCP returned
-	// false) and must still re-register, and a pack changing gog_account while
-	// redeclaring an existing `gog` server must re-register the new account.
+	// Register ALL of this pack's MCPs post-Save (registration is idempotent),
+	// never just the newly-added ones: a retry after a failed gateway
+	// registration finds the names already in cfg.MCP and must still re-register,
+	// and a pack changing gog_account must re-register the new account.
 	if all := McpNames(p); len(all) > 0 {
 		if err := register(cfg, env, out, all, launcher.FindHostBinary, packContainerMCP(p)); err != nil {
 			fmt.Fprintf(out, "note: mcp registration: %v\n", err)
 		}
 	}
 
-	// F3: swap the pack's host-exec wrappers NOW (core pack host-exec, not
-	// `pix host` mode): RefreshHostPackWrappers clears what host state
-	// attributes to the previous activation and stages+verifies+swaps in this
-	// pack's ACCEPTED set (the acceptance recorded just above). Best-effort
-	// here, like every other post-Save side effect.
+	// Swap the pack's host-exec wrappers NOW: RefreshHostPackWrappers clears what
+	// host state attributes to the previous activation and stages+verifies+swaps
+	// in this pack's ACCEPTED set. Best-effort, like every post-Save effect.
 	refreshOut := out
 	if env.Quiet {
 		refreshOut = io.Discard
@@ -2385,18 +2127,13 @@ func RunPackRm(out io.Writer, rest []string) {
 		fmt.Fprintf(os.Stderr, "pix pack rm: unexpected argument %q (rm detaches the ACTIVE pack; it takes no name)\n", rest[0])
 		os.Exit(2)
 	}
-	// The ENTIRE detach — re-reading cfg (the active pack) AND the trust
-	// store, clearing the wrappers, reverting the contribution set, cfg.Save,
-	// and dropping the spent activation record — runs under ONE hold of the
-	// cross-process trust lock (concurrency review): `rm` used to decide what
-	// to clear from a PRE-lock snapshot, so a concurrent `pix host`
-	// wrapper refresh could install + attribute AFTER rm reported "detached",
-	// or interleave into a live dir the store attributed to nobody. Under the
-	// one lock the refresh and the detach serialize: either rm wins (nothing
-	// installed, nothing attributed) or the refresh wins (installed AND
-	// attributed) — never installed-but-unattributed. os.Exit stays OUTSIDE
-	// the locked fn (withFlock contract); failures return and exit after the
-	// lock is released.
+	// The ENTIRE detach — re-reading cfg and the trust store, clearing the
+	// wrappers, reverting the contribution set, cfg.Save, and dropping the spent
+	// activation record — runs under ONE hold of the cross-process trust lock.
+	// Deciding from a PRE-lock snapshot let a concurrent wrapper refresh install
+	// + attribute AFTER rm reported "detached". Under the one lock either rm wins
+	// (nothing installed) or the refresh wins (installed AND attributed) — never
+	// installed-but-unattributed. os.Exit stays OUTSIDE the locked fn.
 	var (
 		noActive        bool
 		old             string
@@ -2413,27 +2150,19 @@ func RunPackRm(out io.Writer, rest []string) {
 			return nil
 		}
 		old = cfg.Pack
-		// finding #5: `rm` must undo the active pack's contributions (mcp,
-		// knowledge, gog/model overrides) too — not just clear cfg.Pack — or
-		// "detached" is a lie about what actually happened. The contribution set
-		// comes from HOST state (round-2 A), never the pack-payload lock — and an
-		// unreadable trust store is FATAL: without it neither the removal set nor
-		// the wrapper attribution can be honored.
+		// `rm` must undo the active pack's contributions too — not just clear
+		// cfg.Pack — or "detached" is a lie. The contribution set comes from HOST
+		// state, and an unreadable trust store is FATAL: without it neither the
+		// removal set nor the wrapper attribution can be honored.
 		store, serr := loadPackTrustStore()
 		if serr != nil {
 			return fmt.Errorf("pack trust state unreadable: %v (fix or remove %s and re-run)", serr, packTrustStorePath())
 		}
-		// One-time Phase-1 → Phase-2 migration (round-3 #2), same as `pack use`:
-		// a Phase-1 active pack's attribution lives only in its (local) pack.lock.
-		migratePhase1Activation(store, old)
-		// round-3 #4: "detached" includes the host wrappers — remove exactly what
-		// HOST state attributes to HostPackBinDir() (reliable even when the pack
-		// directory itself is gone; attribution never lived in the pack), and do
-		// it FIRST: a failed clear aborts with a non-zero exit BEFORE anything
-		// detaches, so `pack rm` never claims success while host executables
-		// remain, and a plain re-run retries the whole detach cleanly. The
-		// attribution is discarded only on CONFIRMED removal. Acceptance is kept:
-		// trust was granted at adoption and re-attaching must not re-prompt.
+		// "detached" includes the host wrappers: remove exactly what HOST state
+		// attributes to HostPackBinDir() (reliable even when the pack directory is
+		// gone), and do it FIRST — a failed clear aborts BEFORE anything detaches,
+		// so `pack rm` never claims success while host executables remain.
+		// Attribution is discarded only on CONFIRMED removal; acceptance is kept.
 		if store.Installed != nil && len(store.Installed.Wrappers) > 0 {
 			removedWrappers = append([]string(nil), store.Installed.Wrappers...)
 			if cerr := clearInstalledHostPackWrappersLocked(out, store); cerr != nil {
@@ -2452,14 +2181,13 @@ func RunPackRm(out io.Writer, rest []string) {
 		if err := cfg.Save(); err != nil {
 			return err
 		}
-		// The activation record is spent (its contributions were just reverted).
-		// Dropped only when it was attributed to THIS pack, via the fresh-load
-		// already-locked mutation (round-3 #1; the lock is held — never nest
-		// withPackTrustLock); a failed store write merely over-claims (removals
-		// of absent entries are no-ops).
-		if len(store.Activations) > 0 || store.hasActivationFor(old) {
+		// The activation ledger is spent (its contributions were just reverted).
+		// Dropped via the fresh-load already-locked mutation (the lock is held —
+		// never nest withPackTrustLock); a failed store write merely over-claims
+		// (removals of absent entries are no-ops).
+		if len(store.Activations) > 0 {
 			if _, werr := mutatePackTrustStoreLocked(func(s *PackTrustStore) error {
-				s.clearActivations()
+				s.Activations = nil
 				return nil
 			}); werr != nil {
 				fmt.Fprintf(out, "note: could not clear the activation record: %v (harmless over-claim; re-run `pack rm` once %s is writable)\n", werr, packTrustStorePath())
@@ -2524,9 +2252,9 @@ func parsePackURL(raw string) (url, ref string) {
 }
 
 // packNameFromURL derives a SAFE, stable local dir name from a git URL: the
-// basename (minus .git), sanitized to [A-Za-z0-9._-] with any path-traversal
-// (`.`/`..`/empty) neutralized, plus a short hash of the FULL url so two remotes
-// with the same basename (org-a/tools vs org-b/tools) never collide on one dest.
+// basename (minus .git), sanitized to [A-Za-z0-9._-] with path traversal
+// neutralized, plus a short hash of the FULL url so two remotes sharing a
+// basename never collide on one dest.
 func packNameFromURL(url string) string {
 	u := strings.TrimSuffix(url, ".git")
 	u = strings.TrimRight(u, "/")
@@ -2570,10 +2298,9 @@ func clonePack(env hostenv.Env, out io.Writer, raw string) (string, error) {
 	}
 	freshClone := false
 	if _, err := os.Stat(filepath.Join(dest, ".git")); err == nil {
-		// A dir already exists at this URL-hash dest. Verify its origin actually
-		// matches the requested URL before trusting it — a 64-bit hash collision (or
-		// a pre-planted dir) must NOT let us fetch/activate the wrong repo. On
-		// mismatch, wipe and re-clone.
+		// A dir already exists at this URL-hash dest: verify its origin matches the
+		// requested URL before trusting it — a hash collision (or a pre-planted
+		// dir) must NOT let us fetch/activate the wrong repo. On mismatch, re-clone.
 		if got, _ := env.Run("git", "-C", dest, "remote", "get-url", "origin"); strings.TrimSpace(got) != url {
 			_ = os.RemoveAll(dest)
 		} else {
@@ -2613,30 +2340,23 @@ func clonePack(env hostenv.Env, out io.Writer, raw string) (string, error) {
 		}
 		return "", fmt.Errorf("cloned %s but it has no %s — not a pack", url, PackManifestName)
 	}
-	// pack.lock is LOCAL GENERATED activation state (ADR-1) and must NEVER come
-	// from the remote (round-3 S1, CRITICAL): a malicious pack could commit it
-	// as a SYMLINK (-> /dev/null, or a host file) so the adoption marker written
-	// below would land on the symlink's TARGET — un-adopting the pack (bypassing
-	// the local-path knowledge guard) and/or overwriting an arbitrary host file.
-	// A checked-in REGULAR pack.lock is just as hostile (its attribution fields
-	// would be merged by markPackAdopted and could claim the user's own MCP
-	// entries for removal on switch-away). Scrub it AFTER every git operation
-	// above (checkout/reset --hard restore tracked files) and BEFORE
-	// markPackAdopted writes the real one. Failing the scrub fails the adoption.
+	// pack.lock is LOCAL GENERATED activation state and must NEVER come from the
+	// remote: a malicious pack could commit it as a SYMLINK so the adoption
+	// marker written below lands on the target — un-adopting the pack and/or
+	// overwriting an arbitrary host file — and a checked-in REGULAR lock is just
+	// as hostile (its attribution would be merged and could claim the user's own
+	// entries). Scrub AFTER every git operation and BEFORE markPackAdopted. A
+	// failed scrub fails the adoption.
 	if err := scrubRemotePackLock(env, dest, freshClone); err != nil {
 		if freshClone {
 			_ = os.RemoveAll(dest)
 		}
 		return "", err
 	}
-	// Provenance durability (finding B): mark the clone ADOPTED here — durably,
-	// before returning — never leaving it to the caller's post-Save lock
-	// rewrite. A cfg.Save()/lock-write failure after this return must not leave
-	// an UNMARKED adopted clone on disk that a retry would treat as user-
-	// authored (and so honor its private/local knowledge refs — the finding-A
-	// guard keys on this marker). If the marker itself cannot be written, fail
-	// the whole adoption: an unmarked adopted clone is exactly the state this
-	// guard exists to prevent.
+	// Mark the clone ADOPTED here — durably, before returning. A later failure
+	// must not leave an UNMARKED adopted clone that a retry would treat as
+	// user-authored (and so honor its private local references). If the marker
+	// cannot be written, fail the whole adoption.
 	if err := markPackAdopted(env, dest, url); err != nil {
 		if freshClone {
 			_ = os.RemoveAll(dest)
@@ -2646,13 +2366,11 @@ func clonePack(env hostenv.Env, out io.Writer, raw string) (string, error) {
 	return dest, nil
 }
 
-// scrubRemotePackLock deletes a pack.lock that came from the REMOTE in a
-// cloned pack tree (round-3 S1): on a fresh clone ANY pack.lock came from the
-// remote; on an update, one that is a symlink (never legitimate — writePackLock
-// only ever creates regular files) or that git tracks (checkout/reset restore
-// it from the remote) is remote-authored. A legit LOCAL lock (untracked regular
-// file carrying prior activation attribution) is preserved. os.Remove removes a
-// symlink itself, never its target.
+// scrubRemotePackLock deletes a pack.lock that came from the REMOTE in a cloned
+// tree: on a fresh clone ANY pack.lock did; on an update, one that is a symlink
+// (never legitimate — writePackLock only creates regular files) or that git
+// tracks is remote-authored. A legit LOCAL lock (untracked regular file) is
+// preserved. os.Remove removes a symlink itself, never its target.
 func scrubRemotePackLock(env hostenv.Env, dest string, freshClone bool) error {
 	path := PackLockPath(dest)
 	fi, err := os.Lstat(path)
@@ -2676,12 +2394,11 @@ func scrubRemotePackLock(env hostenv.Env, dest string, freshClone bool) error {
 }
 
 // markPackAdopted durably records adoption provenance (pack.lock Remote +
-// Commit) on a cloned/updated pack (finding B). It MERGES into any existing
-// lock so a re-clone or update never sheds earlier activation attribution.
-// The same provenance is mirrored into the launcher-owned trust store (host
-// state — the trusted source for pack identity and the adopted-pack guard);
-// that mirror is best-effort because the lock marker plus the under-PacksDir
-// location check already keep the guard fail-safe without it.
+// Commit) on a cloned/updated pack. It MERGES into any existing lock so a
+// re-clone never sheds earlier activation attribution. The same provenance is
+// mirrored into the trust store (host state, the trusted source); that mirror is
+// best-effort because the lock marker plus the PacksDir location check already
+// keep the guard fail-safe.
 func markPackAdopted(env hostenv.Env, root, remote string) error {
 	lock := readPackLock(root)
 	lock.Remote = remote
@@ -2695,13 +2412,10 @@ func markPackAdopted(env hostenv.Env, root, remote string) error {
 
 // --- helpers ----------------------------------------------------------------
 
-// WriteManifest writes root's pack.toml. LEAF-symlink-safe (mirrors
-// writePackLock/writePackLockBytes): the pack root is untrusted input — an
-// adopted or migrated pack could have pack.toml replaced with a symlink (e.g.
-// pointing outside the pack root) — so this Lstat-REFUSES a symlinked
-// destination outright, then writes ATOMICALLY via a same-dir temp file +
-// rename (an interrupted write can never truncate/corrupt an existing
-// manifest).
+// WriteManifest writes root's pack.toml, LEAF-symlink-safe (mirrors
+// writePackLock): the pack root is untrusted input, so a symlinked destination
+// is REFUSED outright, then the write goes through a same-dir temp + rename so
+// an interrupted write can never truncate an existing manifest.
 func WriteManifest(root string, m Manifest) error {
 	var buf bytes.Buffer
 	if err := toml.NewEncoder(&buf).Encode(m); err != nil {
@@ -2715,16 +2429,12 @@ func WriteManifest(root string, m Manifest) error {
 }
 
 // seedPackGitignore appends a `pack.lock` line to <root>/.gitignore, creating
-// the file if absent, so a fresh pack never accidentally commits its generated
-// activation-provenance lockfile (ADR-1). Idempotent (checked by substring) and
-// best-effort: a write failure is silent — it must never block `pack new`.
-//
-// Symlink-safe (mirrors writePackLockBytes): `pack new .` can run in an
-// UNTRUSTED directory, and os.ReadFile/os.WriteFile FOLLOW symlinks — a
-// .gitignore symlinked at e.g. ~/.bashrc would have pack.lock appended to the
-// TARGET. Lstat-REFUSE a symlinked .gitignore outright, and write via the
-// same-dir atomic temp+rename (rename replaces a symlink, never follows one)
-// so there is no check-then-write window either.
+// the file if absent, so a fresh pack never commits its generated
+// activation-provenance lockfile. Idempotent and best-effort: a write failure is
+// silent — it must never block `pack new`. Symlink-safe (mirrors
+// writePackLockBytes): `pack new .` can run in an UNTRUSTED directory, and
+// ReadFile/WriteFile FOLLOW symlinks, so a .gitignore symlinked at e.g.
+// ~/.bashrc would have the line appended to the TARGET.
 func seedPackGitignore(root string) {
 	path := filepath.Join(root, ".gitignore")
 	const line = PackLockName

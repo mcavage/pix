@@ -90,9 +90,7 @@ func TestPackUse_ForgedPackLockDoesNotSkipGate(t *testing.T) {
 // adoption, so a later switch-away can never remove the user's entry (the
 // Phase-1 reversibility half of item 4).
 func TestPackUse_ForgedLockAttributionScrubbed(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	dir := isolatePackHost(t)
 	// The user's OWN mcp, added independently of any pack.
 	cfg, err := config.Load()
 	if err != nil {
@@ -132,9 +130,7 @@ func TestPackUse_ForgedLockAttributionScrubbed(t *testing.T) {
 // as a SYMLINK (e.g. at a host file) has the link itself removed on adoption —
 // the target is never written through, and the fresh lock is a regular file.
 func TestPackUse_ForgedSymlinkLockScrubbedNotFollowed(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	dir := isolatePackHost(t)
 	victim := filepath.Join(dir, "victim")
 	if err := os.WriteFile(victim, []byte("host secret\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -234,9 +230,7 @@ func TestPackUse_ChangedGogAccountRegates(t *testing.T) {
 // coverage hole) refuses a strict launch, is de-installed by a lenient
 // refresh, re-gates at `pack use`, and works again only after re-acceptance.
 func TestHostLaunch_MutatedProxyScriptRefusesUntilReaccepted(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	dir := isolatePackHost(t)
 	root := phase2HostPack(t, dir, "work", "platformio")
 
 	var out bytes.Buffer
@@ -290,9 +284,7 @@ func TestHostLaunch_MutatedProxyScriptRefusesUntilReaccepted(t *testing.T) {
 // identity in host state, so A → B → A never re-prompts (in-process non-TTY:
 // a misfiring gate would os.Exit(1) and fail the whole test binary).
 func TestPackSwitch_BetweenAcceptedPacksNoReprompt(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	dir := isolatePackHost(t)
 	rootA := phase2HostPack(t, dir, "a", "a-tool")
 	rootB := phase2HostPack(t, dir, "b", "b-tool")
 
@@ -319,9 +311,7 @@ func TestPackSwitch_BetweenAcceptedPacksNoReprompt(t *testing.T) {
 // pack directory itself was deleted (the old lock-based attribution died with
 // the dir).
 func TestPackRm_ClearsHostWrappersWhenPackDirGone(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	dir := isolatePackHost(t)
 	root := phase2HostPack(t, dir, "work", "platformio")
 
 	var out bytes.Buffer
@@ -355,9 +345,7 @@ func TestPackRm_ClearsHostWrappersWhenPackDirGone(t *testing.T) {
 // clearInstalledHostPackWrappers keeps the attribution until removal is
 // confirmed.
 func TestClearHostPackWrappers_ReturnsErrorAndKeepsAttribution(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	dir := isolatePackHost(t)
 	// Make HostPackBinDir a symlink.
 	agent := workspace.HostAgentDir()
 	if err := os.MkdirAll(agent, 0o755); err != nil {
@@ -390,9 +378,7 @@ func TestClearHostPackWrappers_ReturnsErrorAndKeepsAttribution(t *testing.T) {
 // makes the strict refresh ERROR — and the previously verified installed set
 // stays intact, never a half-installed mix.
 func TestRefreshHostPackWrappers_FailClosedNoPartialSet(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	dir := isolatePackHost(t)
 	root := filepath.Join(dir, "work")
 	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
 		t.Fatal(err)

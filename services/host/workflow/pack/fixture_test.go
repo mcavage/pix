@@ -3,6 +3,7 @@ package pack
 import (
 	"io"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"pix/host/config"
@@ -28,4 +29,16 @@ func readFile(t *testing.T, path string) string {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	return string(b)
+}
+
+// isolatePackHost points config + host state at one throwaway dir and returns
+// it. Every pack test needs the same isolation (the trust store, the activation
+// ledger and the config all live under these two roots), so it is one call
+// instead of three repeated lines per test.
+func isolatePackHost(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	return dir
 }

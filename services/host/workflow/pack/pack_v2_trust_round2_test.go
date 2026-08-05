@@ -79,9 +79,7 @@ func pinLocalMCP(t *testing.T, names ...string) {
 // entries untouched. (This test also covered a forged `knowledge` lock
 // claim before the [[knowledge]] facet was retired, W2 U03A.)
 func TestPackUse_SamePackLockForgeryCannotDeleteUserConfig(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	dir := isolatePackHost(t)
 
 	// The user's OWN entry, added independently of any pack.
 	cfg, err := config.Load()
@@ -321,9 +319,7 @@ func TestComputeHostBoM_RemoteMCPReferenceRequiresConsent(t *testing.T) {
 // explicitly accept a pack-selected remote endpoint. --yes is used here so
 // the in-process test can cross the same gate without an os.Exit.
 func TestPackUse_RemoteMCPReferenceRequiresYes(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	dir := isolatePackHost(t)
 	pinLocalMCP(t, "fastmail") // notion is NOT local
 	root := filepath.Join(dir, "pack")
 	mustWritePack(t, root, Manifest{Name: "personal", Schema: 1,
@@ -348,9 +344,7 @@ func TestPackUse_RemoteMCPReferenceRequiresYes(t *testing.T) {
 // in the local stdio list — a gog reference is Tier-0 (packs.md §9 names it
 // as the canonical reference-only case).
 func TestPackUse_GogReferenceStaysTier0(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	dir := isolatePackHost(t)
 	pinLocalMCP(t) // empty local set — gog is never listed
 	root := filepath.Join(dir, "pack")
 	mustWritePack(t, root, Manifest{Name: "personal", Schema: 1,
@@ -378,9 +372,7 @@ func TestPackUse_GogReferenceStaysTier0(t *testing.T) {
 // acceptance record — recordAcceptance's same-remote hygiene sweep would
 // otherwise DELETE the legit pack's acceptance.
 func TestPackUse_ForgedRemoteCannotEvictOtherPacksAcceptance(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	dir := isolatePackHost(t)
 	const legitRemote = "https://example.com/legit.git"
 
 	// Legit pack B: host-recorded clone provenance + accepted Tier-1 surface.

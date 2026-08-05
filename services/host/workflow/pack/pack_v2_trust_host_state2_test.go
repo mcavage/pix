@@ -8,9 +8,7 @@ import (
 )
 
 func TestPackUse_ForgedDirectorySymlinkLockScrubbedNotFollowed(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	dir := isolatePackHost(t)
 	victim := filepath.Join(dir, "victim")
 	if err := os.Mkdir(victim, 0o755); err != nil {
 		t.Fatal(err)
