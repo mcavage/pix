@@ -45,15 +45,14 @@ const (
 // architecture was chosen.
 var pkgLayer = map[string]int{
 	// L0 — foundation. No domain knowledge.
-	"sys":                 layerFoundation,
-	"sys/systest":         layerFoundation,
-	"hostenv/hostenvtest": layerFoundation,
-	"config":              layerFoundation,
-	"routing":             layerFoundation,
-	"rpc":                 layerFoundation,
-	"cli":                 layerFoundation,
-	"hostenv":             layerFoundation,
-	"launcher":            layerFoundation,
+	"sys":         layerFoundation,
+	"sys/systest": layerFoundation,
+	"config":      layerFoundation,
+	"routing":     layerFoundation,
+	"rpc":         layerFoundation,
+	"cli":         layerFoundation,
+	"hostenv":     layerFoundation,
+	"launcher":    layerFoundation,
 	// lease is U04a's per-sandbox lifecycle/ref-lock primitives (an immutable
 	// creation record, an identity-bound keep marker, an flock-backed
 	// reference lock): unix syscalls + stdlib only, no domain knowledge, same
@@ -179,8 +178,7 @@ var l0Order = map[string]int{
 	"sys": 1, "rpc": 1, "launcher": 1,
 	"workspace":   2,
 	"sys/systest": 2, "hostenv": 3,
-	"hostenv/hostenvtest": 4,
-	"cli":                 4,
+	"cli": 4,
 }
 
 // drainingPackages was the ONLY exemption, and it is now EMPTY: cmd/pix was

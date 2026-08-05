@@ -9,13 +9,33 @@ import (
 	"testing"
 
 	"pix/host/config"
-	"pix/host/hostenv/hostenvtest"
+	"pix/host/hostenv"
 	"pix/host/launcher"
 	"pix/host/mcp"
 	"pix/host/secret"
+	"pix/host/sys"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/pack"
 )
+
+// installFakeSbxSecretLs writes a REAL "sbx" executable on an isolated PATH
+// that answers exactly `sbx secret ls` with out, and points PIX_CONFIG at a
+// fresh, ref-less tempdir so ProviderKeyRefsPresent sees no op-refs.env —
+// replacing the retired hostenv/hostenvtest call-keyed fake.
+func installFakeSbxSecretLs(t *testing.T, out string) hostenv.Env {
+	t.Helper()
+	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	script := "#!/bin/sh\nif [ \"$1 $2\" = \"secret ls\" ]; then printf '%s' " + shellQuote(out) + "; exit 0; fi\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(dir, "sbx"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return hostenv.Env{System: sys.Real{}}
+}
+
+// shellQuote single-quotes s for embedding in a POSIX shell script.
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 // contains reports whether the ordered args slice contains the given
 // consecutive subsequence.
@@ -548,28 +568,28 @@ func TestParseRunArgs_Errors(t *testing.T) {
 // exact `sbx secret set` line when none is present.
 func TestAnyModelKeyPresent(t *testing.T) {
 	t.Run("no model key", func(t *testing.T) {
-		f := hostenvtest.Env{Present: map[string]bool{"sbx": true}, Output: map[string]string{"sbx secret ls": "github\n"}}
-		if launch.AnyModelKeyPresent(f.Build()) {
+		env := installFakeSbxSecretLs(t, "github\n")
+		if launch.AnyModelKeyPresent(env) {
 			t.Error("github alone is not a model key")
 		}
 	})
 	t.Run("model key present", func(t *testing.T) {
-		f := hostenvtest.Env{Present: map[string]bool{"sbx": true}, Output: map[string]string{"sbx secret ls": "anthropic github\n"}}
-		if !launch.AnyModelKeyPresent(f.Build()) {
+		env := installFakeSbxSecretLs(t, "anthropic github\n")
+		if !launch.AnyModelKeyPresent(env) {
 			t.Error("anthropic present should count")
 		}
 	})
 	t.Run("sbx absent -> cannot verify (false)", func(t *testing.T) {
-		f := hostenvtest.Env{Present: map[string]bool{}, Output: map[string]string{}}
-		if launch.AnyModelKeyPresent(f.Build()) {
+		t.Setenv("PATH", t.TempDir()) // no sbx
+		if launch.AnyModelKeyPresent(hostenv.Env{System: sys.Real{}}) {
 			t.Error("sbx absent must report not-present")
 		}
 	})
 }
 
 func TestModelKeyMissingMessage(t *testing.T) {
-	f := hostenvtest.Env{Present: map[string]bool{"sbx": true}, Output: map[string]string{"sbx secret ls": "github\n"}}
-	msg := secret.ModelKeyMissingMessage(f.Build())
+	env := installFakeSbxSecretLs(t, "github\n")
+	msg := secret.ModelKeyMissingMessage(env)
 	for _, want := range []string{"anthropic", "openai", "google", "pix setup", "op://vault/item/field"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("guidance missing %q, got:\n%s", want, msg)
