@@ -1,23 +1,18 @@
 // trust.go — the Tier-1 pack trust gate (docs/design/packs.md §9).
 //
-// The trust model splits on whether the pack EXECUTES code on the host:
-//
-//   - Tier-0: skills / knowledge / config / sandbox-only wrappers, plus
-//     REFERENCE-ONLY integrations (an integration.mcp naming a REMOTE
-//     gateway-catalog server or the host-provided gog registration ships no
-//     pack-authored executable — the pack contributes only a NAME, and the argv
-//     is launcher-built). Nothing pack-authored runs on the host → adopt with
-//     NO prompt, non-TTY fine.
-//   - Tier-1: ANY host-exec facet — an integration.mcp resolving to a LOCAL
-//     stdio host command, a host=true [[proxy]] wrapper, a host=true [[bin]]
-//     external binary, or a [[services]] unit. Adoption halts at the
-//     bill-of-materials screen and requires an explicit yes; non-TTY FAILS
-//     CLOSED unless --yes.
+// The model splits on whether the pack EXECUTES code on the host. Tier-0 —
+// skills / knowledge / config / sandbox-only wrappers, plus REFERENCE-ONLY
+// integrations where the pack contributes only a NAME and the argv is
+// launcher-built — adopts with NO prompt, non-TTY fine. Tier-1 is ANY host-exec
+// facet (a local stdio MCP, a container/remote MCP, a host=true [[proxy]] or
+// [[bin]], a [[setup]] hook, an inference gateway, a [[services]] unit): it
+// halts at the bill-of-materials screen and requires an explicit yes; non-TTY
+// FAILS CLOSED unless --yes.
 //
 // Acceptance lives in TRUSTED HOST STATE (truststore.go — never inside the pack
-// payload), keyed by pack identity, over a FINGERPRINT of the entire host-exec
-// surface. Switching between accepted packs never re-prompts, but ANY change to
-// the surface re-triggers the gate. The typed schema is the allowlist.
+// payload), keyed by pack identity, over a FINGERPRINT of the whole host-exec
+// surface: switching between accepted packs never re-prompts, ANY change to the
+// surface re-gates. The typed schema is the allowlist.
 package pack
 
 import (
@@ -37,8 +32,7 @@ import (
 )
 
 // hostBoM is the host bill-of-materials: everything a pack would run on (or
-// solicit from) THIS machine. Pure data — computed by ComputeHostBoM, rendered
-// by renderHostBoM, gated by packTrustGate, accepted as a fingerprint.
+// solicit from) THIS machine. Pure data — computed, rendered, gated, hashed.
 type hostBoM struct {
 	MCP            []hostBoMMCP       // built-in MCP servers the gateway spawns on the host
 	Containers     []hostBoMContainer // OCI MCP servers Docker runs on the host
@@ -51,44 +45,48 @@ type hostBoM struct {
 	Prerequisites  []string           // pack-authored external state the user must bring
 	Setup          []packSetupStep    // pack setup executables, probes, and apply argv
 	Inference      []hostBoMInference // model endpoints plus credential-routing policy
-	Services       []packService      // [[services]] long-running units (normalized; U08a, declaration-only)
+	Services       []packService      // [[services]] long-running units (normalized)
 }
 
+// The json tags on these types (and on packService) ARE the canonical
+// fingerprint encoding: computeHostExecFingerprintWithSetup marshals the BoM
+// itself instead of copying it into a parallel set of hash-only structs. Field
+// names, order and omitempty are therefore load-bearing — changing one re-gates
+// every already-accepted pack.
+
 // hostBoMMCP is one host-spawned MCP server: its name plus the exact argv the
-// gateway will run (reused from the registrar, not re-derived, so the screen
-// shows the real shape).
+// gateway will run, reused from the registrar so the screen shows the real one.
 type hostBoMMCP struct {
-	Name string
-	Argv []string
+	Name string   `json:"name"`
+	Argv []string `json:"argv"`
 }
 
 type hostBoMContainer struct {
-	Name      string
-	Image     string
-	Manifest  string
-	EnvKeys   []string
-	EnvValues map[string]string
+	Name      string            `json:"name"`
+	Image     string            `json:"image,omitempty"`
+	Manifest  string            `json:"manifest,omitempty"`
+	EnvKeys   []string          `json:"env_keys,omitempty"`
+	EnvValues map[string]string `json:"env_values,omitempty"`
 }
 
 type hostBoMRemote struct {
-	Name string
-	URL  string
+	Name string `json:"name"`
+	URL  string `json:"url"`
 }
 
 type hostBoMInference struct {
-	Name    string
-	URL     string
-	Auth    string
-	Service string
-	Header  string
-	Format  string
+	Name    string `json:"name"`
+	URL     string `json:"url"`
+	Auth    string `json:"auth"`
+	Service string `json:"service"`
+	Header  string `json:"header"`
+	Format  string `json:"format"`
 }
 
 // Tier1 reports whether any host-exec facet is present. Egress and creds alone
 // never raise the tier (a sandbox wrapper's egress is fenced by the kit
-// allowlist; a credential ref is solicited, not executed). An explicit remote
-// MCP endpoint DOES raise it: adopting one sends conversation context to a
-// pack-selected third party and may launch OAuth, so it requires consent.
+// allowlist; a credential ref is solicited, not executed). A remote MCP
+// endpoint DOES: it sends conversation context to a pack-selected third party.
 func (b hostBoM) Tier1() bool {
 	return len(b.MCP) > 0 || len(b.Containers) > 0 || len(b.RemoteMCP) > 0 || len(b.Proxies) > 0 || len(b.Bins) > 0 || len(b.Setup) > 0 || len(b.Inference) > 0 || len(b.Services) > 0
 }
@@ -109,31 +107,17 @@ func VerifyPackInferenceTrust(p *Info, cfgGogAccount string, env hostenv.Env) er
 	if err != nil {
 		return fmt.Errorf("pack %s inference trust surface: %w", p.Manifest.Name, err)
 	}
-	return withPackTrustLock(func() error {
-		store, err := loadPackTrustStore()
-		if err != nil {
-			return fmt.Errorf("pack trust state unreadable: %w", err)
-		}
-		key := store.TrustKey(p.Root)
-		if got, ok := store.acceptedFingerprint(key); !ok || got != fp {
-			return fmt.Errorf("pack %s inference credential routing is not accepted (or changed since acceptance) — run `pix pack use %s` to review it", p.Manifest.Name, p.Root)
-		}
-		return nil
-	})
+	return requireAcceptedFingerprint(p, fp, "inference credential routing")
 }
 
 // LocalMCPClassifier resolves the registrar's local-vs-gateway partition into a
-// predicate: TRUE for a name this host runs as a LOCAL stdio server, i.e.
-// attaching it spawns a host command. With the partition ESTABLISHED, a name
-// outside the local set (a remote catalog name, or gog) is reference-only
-// Tier-0 — nothing pack-authored executes.
-//
-// UNKNOWN classification FAILS CLOSED: when the local set cannot be established
-// (probe error, pix-host unresolved), every non-gog name is treated as
-// host-exec so the gate fires. The name still lands in cfg.MCP and is attached
-// via --mcp, so one ALREADY registered in the gateway would otherwise run its
-// host command with NO gate ever shown. Over-prompting on a transient probe
-// failure is acceptable; silently skipping the gate is not.
+// predicate: TRUE for a name this host runs as a LOCAL stdio server, i.e. one
+// whose attach spawns a host command. Anything outside that set is
+// reference-only Tier-0. UNKNOWN FAILS CLOSED: when the set cannot be
+// established (probe error, pix-host unresolved) every non-gog name is treated
+// as host-exec, because a name already registered in the gateway would
+// otherwise run with NO gate shown. Over-prompting on a transient probe failure
+// is acceptable; skipping the gate is not.
 func LocalMCPClassifier(env hostenv.Env, hostResolver func() (string, error)) func(string) bool {
 	set, known := mcp.LocalMCPNames(env, hostResolver)
 	return func(name string) bool {
@@ -145,26 +129,18 @@ func LocalMCPClassifier(env hostenv.Env, hostResolver func() (string, error)) fu
 }
 
 // PackLocalMCP builds the classifier for callers without an injected env
-// (RefreshHostPackWrappers). A package var so tests can pin the partition and
+// (refreshHostPackWrappers). A package var so tests can pin the partition and
 // the composition root can supply the real env.
 var PackLocalMCP = func() func(string) bool { return func(string) bool { return false } }
 
 // ComputeHostBoM enumerates a pack's host bill-of-materials (pure, testable):
-// MCP commands (resolved argv), host=true wrappers, [[bin]] external binaries,
-// [[services]], the egress union, and credential VAR names. Display uses bare
-// binary names so the result is deterministic; the SHAPE the user reviews is
-// identical to what registration resolves.
-//
-// cfgGogAccount is the RESOLVED fallback account: the argv the user reviews —
-// and the fingerprint the acceptance is recorded over — must be the argv that
-// will actually run, so a later gog_account change re-gates.
-//
-// isLocalMCP is the local-vs-gateway partition (LocalMCPClassifier): only an
-// integration.mcp resolving to a LOCAL host command enters the BoM. nil means
-// "no partition available" and FAILS CLOSED exactly like an unknown probe.
-//
-// [[bin]] entries enter the BoM ONLY with host=true (mirroring host=true
-// proxies), so flipping an inert bin to host=true later is a NEW surface.
+// MCP commands (resolved argv), host=true wrappers and [[bin]]s, [[services]],
+// setup hooks, inference gateways, the egress union and credential VAR names.
+// Bare binary names keep the reviewed SHAPE deterministic and identical to what
+// registration resolves. cfgGogAccount is the RESOLVED fallback account, so a
+// later gog_account change re-gates. isLocalMCP is the local-vs-gateway
+// partition; nil FAILS CLOSED exactly like an unknown probe. [[bin]] entries
+// enter ONLY with host=true, so flipping an inert bin later is a NEW surface.
 func ComputeHostBoM(p *Info, cfgGogAccount string, isLocalMCP func(string) bool) hostBoM {
 	var b hostBoM
 	account := strings.TrimSpace(p.Manifest.GogAccount)
@@ -176,8 +152,7 @@ func ComputeHostBoM(p *Info, cfgGogAccount string, isLocalMCP func(string) bool)
 	}
 	reg := mcp.McpRegistrar{Gog: "gog", Account: account, HostBin: "pix-host"}
 	if isLocalMCP == nil {
-		// No partition available at all: same fail-closed posture as an
-		// unknown probe (round-3 #3) — gate every non-gog name.
+		// No partition at all: same fail-closed posture as an unknown probe.
 		isLocalMCP = func(name string) bool { return name != config.GWServerName }
 	}
 	seenMCP := map[string]bool{}
@@ -250,32 +225,33 @@ func ComputeHostBoM(p *Info, cfgGogAccount string, isLocalMCP func(string) bool)
 	return b
 }
 
-// ComputeHostExecFingerprint hashes the ENTIRE host-exec surface of a pack —
-// what the Tier-1 acceptance is actually FOR: every MCP's resolved argv, every
-// host=true [[proxy]] script's CONTENT (sha256 of the bytes on disk,
-// symlink-refused), every [[bin]] name + pinned sha, every [[services]] field,
-// the egress union, and the credential VAR names. Entries are sorted into a
-// canonical form so a pure manifest reorder never re-gates. Returns the
-// fingerprint plus the per-proxy content hashes it was computed over, so the
-// installer can verify the exact bytes it stages (no hash-then-install TOCTOU).
+// ComputeHostExecFingerprint hashes the ENTIRE host-exec surface — what the
+// Tier-1 acceptance is FOR: every MCP's resolved argv, every host=true
+// [[proxy]] script's CONTENT (sha256 of the bytes on disk, symlink-refused),
+// every [[bin]] pin, every [[services]] field, setup hook bytes, inference
+// policy, egress and credential VAR names. Entries sort canonically, so a pure
+// manifest reorder never re-gates, and the per-proxy content hashes come back
+// so the installer verifies the exact bytes it stages (no TOCTOU).
 //
-// THE ENCODING IS CANONICAL AND INJECTIVE: the surface is marshaled as a
-// structured JSON document (fixed field order, sorted entries, every string
-// JSON-escaped) and THAT is hashed. An ad-hoc NUL/newline concatenation is not
-// injective for unconstrained strings — a value containing the delimiter bytes
-// can encode a DIFFERENT surface with an identical hash.
-//
-// An unreadable host proxy script is an ERROR (fail closed): a surface that
-// cannot be fingerprinted cannot be accepted or installed.
+// THE ENCODING IS CANONICAL AND INJECTIVE: a structured JSON document (fixed
+// field order, sorted entries, every string escaped) is what gets hashed. An
+// ad-hoc NUL/newline concatenation is not injective — a value containing the
+// delimiter bytes could encode a DIFFERENT surface with an identical hash. An
+// unfingerprintable surface is an ERROR: it can be neither accepted nor
+// installed.
 func ComputeHostExecFingerprint(root string, b hostBoM) (string, map[string]string, error) {
 	return computeHostExecFingerprintWithSetup(root, b, nil)
 }
 
 // computeHostExecFingerprintWithSetup hashes immutable setup-hook snapshots
 // when supplied. RunPackSetup executes those same bytes, binding the accepted
-// fingerprint to the actual executable instead of re-opening mutable paths
-// after the trust decision.
+// fingerprint to the actual executable rather than a re-opened mutable path.
 func computeHostExecFingerprintWithSetup(root string, b hostBoM, setupBytes map[string][]byte) (string, map[string]string, error) {
+	// The BoM types carry the json tags, so the surface is marshaled straight
+	// out of the reviewed structs. Only the three facets whose hashed shape is
+	// NOT the reviewed shape need a local type: a host proxy hashes its script
+	// CONTENT, a [[bin]] hashes its pin without its path, and a setup hook adds
+	// its script sha.
 	type fpProxy struct {
 		Name string `json:"name"`
 		SHA  string `json:"sha"`
@@ -284,21 +260,6 @@ func computeHostExecFingerprintWithSetup(root string, b hostBoM, setupBytes map[
 		Name string `json:"name"`
 		SHA  string `json:"sha"`
 		Host bool   `json:"host"`
-	}
-	type fpMCP struct {
-		Name string   `json:"name"`
-		Argv []string `json:"argv"`
-	}
-	type fpContainer struct {
-		Name      string            `json:"name"`
-		Image     string            `json:"image,omitempty"`
-		Manifest  string            `json:"manifest,omitempty"`
-		EnvKeys   []string          `json:"env_keys,omitempty"`
-		EnvValues map[string]string `json:"env_values,omitempty"`
-	}
-	type fpRemote struct {
-		Name string `json:"name"`
-		URL  string `json:"url"`
 	}
 	type fpSetup struct {
 		ID          string   `json:"id"`
@@ -309,61 +270,26 @@ func computeHostExecFingerprintWithSetup(root string, b hostBoM, setupBytes map[
 		Required    bool     `json:"required"`
 		Description string   `json:"description"`
 	}
-	type fpInference struct {
-		Name    string `json:"name"`
-		URL     string `json:"url"`
-		Auth    string `json:"auth"`
-		Service string `json:"service"`
-		Header  string `json:"header"`
-		Format  string `json:"format"`
-	}
-	type fpServiceResources struct {
-		MemoryMB   int `json:"memory_mb"`
-		CPUPercent int `json:"cpu_percent"`
-	}
-	// fpService pins EVERY [[services]] field (AC-PACK-02): any change to any
-	// of them is a different host-exec surface and re-gates.
-	type fpService struct {
-		Name       string              `json:"name"`
-		Runtime    string              `json:"runtime"`
-		Activation string              `json:"activation"`
-		Path       string              `json:"path,omitempty"`
-		SHA        string              `json:"sha,omitempty"`
-		Image      string              `json:"image,omitempty"`
-		Argv       []string            `json:"argv,omitempty"`
-		Env        []string            `json:"env,omitempty"`
-		Port       int                 `json:"port,omitempty"`
-		Listen     string              `json:"listen,omitempty"`
-		Health     string              `json:"health,omitempty"`
-		Mounts     []string            `json:"mounts,omitempty"`
-		Network    []string            `json:"network,omitempty"`
-		Resources  *fpServiceResources `json:"resources,omitempty"`
-		License    string              `json:"license"`
-		Source     string              `json:"source"`
-	}
 	type fpDoc struct {
-		V             int           `json:"v"`
-		MCP           []fpMCP       `json:"mcp"`
-		Containers    []fpContainer `json:"container"`
-		RemoteMCP     []fpRemote    `json:"remote_mcp"`
-		Proxies       []fpProxy     `json:"proxy"`
-		Bins          []fpBin       `json:"bin"`
-		Egress        []string      `json:"egress"`
-		Creds         []string      `json:"cred"`
-		Prerequisites []string      `json:"prerequisites"`
-		Setup         []fpSetup     `json:"setup"`
-		Inference     []fpInference `json:"inference"`
+		V             int                `json:"v"`
+		MCP           []hostBoMMCP       `json:"mcp"`
+		Containers    []hostBoMContainer `json:"container"`
+		RemoteMCP     []hostBoMRemote    `json:"remote_mcp"`
+		Proxies       []fpProxy          `json:"proxy"`
+		Bins          []fpBin            `json:"bin"`
+		Egress        []string           `json:"egress"`
+		Creds         []string           `json:"cred"`
+		Prerequisites []string           `json:"prerequisites"`
+		Setup         []fpSetup          `json:"setup"`
+		Inference     []hostBoMInference `json:"inference"`
 		// Services is ADDITIVE with omitempty on purpose: a pack with no
-		// [[services]] keeps its exact prior byte encoding, so every
-		// already-accepted fingerprint stays valid. Injectivity holds: the key is
-		// present iff a service is declared.
-		Services []fpService `json:"services,omitempty"`
+		// [[services]] keeps its exact prior encoding, so every already-accepted
+		// fingerprint stays valid. The key is present iff a service is declared.
+		Services []packService `json:"services,omitempty"`
 	}
 	doc := fpDoc{V: 6}
 	proxySHA := map[string]string{}
-	for _, m := range b.MCP {
-		doc.MCP = append(doc.MCP, fpMCP{Name: m.Name, Argv: append([]string(nil), m.Argv...)})
-	}
+	doc.MCP = append(doc.MCP, b.MCP...)
 	sort.Slice(doc.MCP, func(i, j int) bool {
 		if doc.MCP[i].Name != doc.MCP[j].Name {
 			return doc.MCP[i].Name < doc.MCP[j].Name
@@ -371,14 +297,12 @@ func computeHostExecFingerprintWithSetup(root string, b hostBoM, setupBytes map[
 		return strings.Join(doc.MCP[i].Argv, "\x00") < strings.Join(doc.MCP[j].Argv, "\x00")
 	})
 	for _, c := range b.Containers {
-		keys := append([]string(nil), c.EnvKeys...)
-		sort.Strings(keys)
-		doc.Containers = append(doc.Containers, fpContainer{Name: c.Name, Image: c.Image, Manifest: c.Manifest, EnvKeys: keys, EnvValues: c.EnvValues})
+		c.EnvKeys = append([]string(nil), c.EnvKeys...)
+		sort.Strings(c.EnvKeys)
+		doc.Containers = append(doc.Containers, c)
 	}
 	sort.Slice(doc.Containers, func(i, j int) bool { return doc.Containers[i].Name < doc.Containers[j].Name })
-	for _, r := range b.RemoteMCP {
-		doc.RemoteMCP = append(doc.RemoteMCP, fpRemote{Name: r.Name, URL: r.URL})
-	}
+	doc.RemoteMCP = append(doc.RemoteMCP, b.RemoteMCP...)
 	sort.Slice(doc.RemoteMCP, func(i, j int) bool { return doc.RemoteMCP[i].Name < doc.RemoteMCP[j].Name })
 	for _, name := range b.Proxies {
 		src := filepath.Join(root, "bin", name)
@@ -430,31 +354,18 @@ func computeHostExecFingerprintWithSetup(root string, b hostBoM, setupBytes map[
 		})
 	}
 	sort.Slice(doc.Setup, func(i, j int) bool { return doc.Setup[i].ID < doc.Setup[j].ID })
-	for _, inf := range b.Inference {
-		doc.Inference = append(doc.Inference, fpInference{
-			Name: inf.Name, URL: inf.URL, Auth: inf.Auth, Service: inf.Service, Header: inf.Header, Format: inf.Format,
-		})
-	}
+	doc.Inference = append(doc.Inference, b.Inference...)
 	for _, svc := range b.Services {
-		fp := fpService{
-			Name: svc.Name, Runtime: svc.Runtime, Activation: svc.Activation,
-			Path: svc.Path, SHA: strings.ToLower(strings.TrimSpace(svc.SHA)), Image: svc.Image,
-			Argv: append([]string(nil), svc.Argv...),
-			Env:  append([]string(nil), svc.Env...),
-			Port: svc.Port, Listen: svc.Listen, Health: svc.Health,
-			Mounts:  append([]string(nil), svc.Mounts...),
-			Network: append([]string(nil), svc.Network...),
-			License: svc.License, Source: svc.Source,
-		}
-		// Argv order is semantic (kept); env/mounts/network are sets — sorted
-		// so a pure list reorder never re-gates.
-		sort.Strings(fp.Env)
-		sort.Strings(fp.Mounts)
-		sort.Strings(fp.Network)
-		if svc.Resources != nil {
-			fp.Resources = &fpServiceResources{MemoryMB: svc.Resources.MemoryMB, CPUPercent: svc.Resources.CPUPercent}
-		}
-		doc.Services = append(doc.Services, fp)
+		// Argv order is semantic (kept); env/mounts/network are sets \u2014 sorted so
+		// a pure list reorder never re-gates.
+		svc.SHA = strings.ToLower(strings.TrimSpace(svc.SHA))
+		svc.Env = append([]string(nil), svc.Env...)
+		svc.Mounts = append([]string(nil), svc.Mounts...)
+		svc.Network = append([]string(nil), svc.Network...)
+		sort.Strings(svc.Env)
+		sort.Strings(svc.Mounts)
+		sort.Strings(svc.Network)
+		doc.Services = append(doc.Services, svc)
 	}
 	// Names are unique (validatePackServices), so name order is total.
 	sort.Slice(doc.Services, func(i, j int) bool { return doc.Services[i].Name < doc.Services[j].Name })
@@ -594,9 +505,8 @@ func renderHostBoM(out io.Writer, b hostBoM) {
 }
 
 // packTrustGate enforces the Tier-1 adoption gate: render the BoM, then require
-// an explicit yes. --yes accepts (the screen still prints, for the record).
-// Otherwise a non-TTY FAILS CLOSED — a CI/script adoption must never silently
-// enable host code — and on a TTY the answer defaults to No. A non-nil error
+// an explicit yes. --yes accepts (the screen still prints, for the record); a
+// non-TTY FAILS CLOSED, and on a TTY the answer defaults to No. A non-nil error
 // means NOT adopted: the caller aborts before anything registers or commits.
 func packTrustGate(in io.Reader, out io.Writer, tty, yes bool, packName string, b hostBoM) error {
 	renderHostBoM(out, b)

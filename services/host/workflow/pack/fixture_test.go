@@ -42,3 +42,28 @@ func isolatePackHost(t *testing.T) string {
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 	return dir
 }
+
+// hostExecPack writes a minimal Tier-1 pack at <dir>/<name> whose single
+// host-exec facet is bin/<artifact>: a host=true [[proxy]] wrapper for
+// kind "proxy", a SHA-pinned host=true [[bin]] for kind "bin". One fixture for
+// both because every host-exec test needs the same shape — a pack root, one
+// executable under bin/, and a manifest that declares it.
+func hostExecPack(t *testing.T, dir, name, kind, artifact string) string {
+	t.Helper()
+	root := filepath.Join(dir, name)
+	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("#!/bin/sh\necho " + artifact + "\n")
+	if err := os.WriteFile(filepath.Join(root, "bin", artifact), content, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := Manifest{Name: name, Schema: 1}
+	if kind == "bin" {
+		m.Bins = []packBin{{Name: artifact, Path: filepath.Join("bin", artifact), Host: true, SHA: sha256Hex(content)}}
+	} else {
+		m.Proxies = []PackProxy{{Name: artifact, Host: true}}
+	}
+	mustWritePack(t, root, m)
+	return root
+}

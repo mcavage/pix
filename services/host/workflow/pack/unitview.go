@@ -1,18 +1,13 @@
 // unitview.go — the trusted pack [[services]] → supervisor wiring, pack side.
 //
 // AcceptedGoPluginServices is the SINGLE seam through which anything outside
-// this package may read a pack's [[services]] declarations, and it answers ONLY
-// for a pack whose ENTIRE host-exec surface is accepted in the launcher-owned
-// trust store at this exact fingerprint. The order is the security property:
-// consent STRICTLY precedes any export, and therefore precedes any staging,
-// hashing or exec the supervisor performs on what is exported.
-//
-// The exported view is deliberately MINIMAL: exactly the fields a supervisor
-// needs to construct one external go-plugin unit. Mounts, network, resources,
-// license and source stay inside the package — consent-screen material, not
-// launch material. The view carries NO supervisor state and no way to reach
-// any: a pack cannot name a staging dir, a state dir, a reattach record or
-// another unit's slot. Supervisor state remains launcher-owned.
+// this package may read a pack's [[services]], and it answers ONLY for a pack
+// whose ENTIRE host-exec surface is accepted at this exact fingerprint. The
+// order is the security property: consent STRICTLY precedes any export, and so
+// any staging, hashing or exec the supervisor does. The view is deliberately
+// MINIMAL — just the fields needed to construct one external go-plugin unit;
+// mounts, network, resources, license and source stay inside the package
+// (consent material, not launch material), and no supervisor state is nameable.
 package pack
 
 import (
@@ -38,26 +33,19 @@ type AcceptedService struct {
 	Health     string   // "tcp", an HTTP path, or ""
 }
 
-// AcceptedGoPluginServices returns the go-plugin [[services]] views of p, and
-// ONLY after proving the pack's current host-exec surface is the exact one
-// accepted at the Tier-1 gate. It fails closed on every other answer:
-//
-//   - re-validation failure (a manifest mutated in memory or on disk into an
-//     invalid shape never reaches the trust check, let alone a caller);
-//   - an unreadable trust store, an unaccepted pack, or a fingerprint that no
-//     longer matches → an error naming `pix pack use` as the re-review path.
-//
-// Container-runtime services are declared/consented but have no consumer yet.
-// cfgGogAccount and env mirror VerifyPackInferenceTrust: the fingerprint must be
-// computed over the SAME resolved surface the acceptance was recorded over.
+// AcceptedGoPluginServices returns the go-plugin [[services]] views of p, ONLY
+// after proving its current host-exec surface is the exact one accepted at the
+// Tier-1 gate. Every other answer fails closed: a re-validation failure, an
+// unreadable store, an unaccepted pack, a stale fingerprint. Container services
+// are declared/consented but have no consumer yet. cfgGogAccount and env mirror
+// VerifyPackInferenceTrust so the fingerprint covers the SAME resolved surface
+// the acceptance was recorded over.
 func AcceptedGoPluginServices(p *Info, cfgGogAccount string, env hostenv.Env) ([]AcceptedService, error) {
 	if p == nil || len(p.Manifest.Services) == 0 {
 		return nil, nil
 	}
-	// Belt and suspenders: re-run the full load-time validation (reserved
-	// ports/names, loopback-only listeners, env reference names, repo-relative
-	// paths, pinned identity) so a caller holding a mutated Info can never
-	// export a shape LoadPack would have refused.
+	// Belt and suspenders: re-run the full load-time validation so a caller
+	// holding a mutated Info can never export a shape LoadPack would refuse.
 	if err := validatePackServices(p.Root, &p.Manifest); err != nil {
 		return nil, err
 	}
@@ -66,17 +54,7 @@ func AcceptedGoPluginServices(p *Info, cfgGogAccount string, env hostenv.Env) ([
 	if err != nil {
 		return nil, fmt.Errorf("pack %s services trust surface: %w", p.Manifest.Name, err)
 	}
-	if err := withPackTrustLock(func() error {
-		store, lerr := loadPackTrustStore()
-		if lerr != nil {
-			return fmt.Errorf("pack trust state unreadable: %w", lerr)
-		}
-		key := store.TrustKey(p.Root)
-		if got, ok := store.acceptedFingerprint(key); !ok || got != fp {
-			return fmt.Errorf("pack %s [[services]] are not accepted (or changed since acceptance) — run `pix pack use %s` to review them", p.Manifest.Name, p.Root)
-		}
-		return nil
-	}); err != nil {
+	if err := requireAcceptedFingerprint(p, fp, "[[services]]"); err != nil {
 		return nil, err
 	}
 	var out []AcceptedService
@@ -84,8 +62,7 @@ func AcceptedGoPluginServices(p *Info, cfgGogAccount string, env hostenv.Env) ([
 		if svc.Runtime != "go-plugin" {
 			continue // container: declaration-only, no runtime consumes it
 		}
-		// The relative path was validated above; resolve it under the pack
-		// root because supervise.UnitSpec requires an absolute source path.
+		// Validated above; resolved absolute because UnitSpec requires that.
 		abs, aerr := filepath.Abs(filepath.Join(p.Root, svc.Path))
 		if aerr != nil {
 			return nil, fmt.Errorf("pack %s service %s: %v", p.Manifest.Name, svc.Name, aerr)

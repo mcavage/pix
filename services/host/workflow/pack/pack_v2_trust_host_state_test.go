@@ -52,7 +52,7 @@ func TestPackUse_ForgedPackLockDoesNotSkipGate(t *testing.T) {
 	}
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.toml")
-	root := phase2HostPack(t, dir, "work", "platformio")
+	root := hostExecPack(t, dir, "work", "proxy", "platformio")
 	forged := "accepted_host_proxies = [\"platformio\"]\n" +
 		"accepted_mcp = [\"gog\"]\n" +
 		"host_wrappers = [\"platformio\"]\n"
@@ -220,7 +220,7 @@ func TestPackUse_ChangedGogAccountRegates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, rerr := RefreshHostPackWrappers(&out, cfg3, true); rerr == nil {
+	if _, rerr := refreshHostPackWrappers(&out, cfg3, true); rerr == nil {
 		t.Error("strict refresh must refuse a surface changed since acceptance (gog_account)")
 	}
 }
@@ -231,11 +231,11 @@ func TestPackUse_ChangedGogAccountRegates(t *testing.T) {
 // refresh, re-gates at `pack use`, and works again only after re-acceptance.
 func TestHostLaunch_MutatedProxyScriptRefusesUntilReaccepted(t *testing.T) {
 	dir := isolatePackHost(t)
-	root := phase2HostPack(t, dir, "work", "platformio")
+	root := hostExecPack(t, dir, "work", "proxy", "platformio")
 
 	var out bytes.Buffer
 	RunPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerOK)
-	installedAt := filepath.Join(HostPackBinDir(), "platformio")
+	installedAt := filepath.Join(hostPackBinDir(), "platformio")
 	if _, err := os.Stat(installedAt); err != nil {
 		t.Fatalf("accepted wrapper not installed: %v\n%s", err, out.String())
 	}
@@ -243,7 +243,7 @@ func TestHostLaunch_MutatedProxyScriptRefusesUntilReaccepted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, rerr := RefreshHostPackWrappers(&out, cfg, true); rerr != nil {
+	if _, rerr := refreshHostPackWrappers(&out, cfg, true); rerr != nil {
 		t.Fatalf("strict refresh of the accepted, unchanged surface must pass: %v", rerr)
 	}
 
@@ -252,12 +252,12 @@ func TestHostLaunch_MutatedProxyScriptRefusesUntilReaccepted(t *testing.T) {
 		t.Fatal(err)
 	}
 	out.Reset()
-	if _, rerr := RefreshHostPackWrappers(&out, cfg, true); rerr == nil || !strings.Contains(rerr.Error(), "not accepted") {
+	if _, rerr := refreshHostPackWrappers(&out, cfg, true); rerr == nil || !strings.Contains(rerr.Error(), "not accepted") {
 		t.Fatalf("strict launch must REFUSE a mutated accepted script, got err=%v", rerr)
 	}
 	// Lenient refresh de-installs the no-longer-accepted wrapper.
 	out.Reset()
-	if _, rerr := RefreshHostPackWrappers(&out, cfg, false); rerr != nil {
+	if _, rerr := refreshHostPackWrappers(&out, cfg, false); rerr != nil {
 		t.Fatalf("lenient refresh must not hard-fail: %v", rerr)
 	}
 	if _, err := os.Stat(installedAt); err == nil {
@@ -270,7 +270,7 @@ func TestHostLaunch_MutatedProxyScriptRefusesUntilReaccepted(t *testing.T) {
 	if !strings.Contains(out.String(), "adds these integrations to Pix") {
 		t.Errorf("the mutated script must have re-fired the gate:\n%s", out.String())
 	}
-	if _, rerr := RefreshHostPackWrappers(&out, cfg, true); rerr != nil {
+	if _, rerr := refreshHostPackWrappers(&out, cfg, true); rerr != nil {
 		t.Errorf("strict refresh after re-acceptance must pass: %v", rerr)
 	}
 	if b, err := os.ReadFile(installedAt); err != nil || !strings.Contains(string(b), "curl evil") {
@@ -285,8 +285,8 @@ func TestHostLaunch_MutatedProxyScriptRefusesUntilReaccepted(t *testing.T) {
 // a misfiring gate would os.Exit(1) and fail the whole test binary).
 func TestPackSwitch_BetweenAcceptedPacksNoReprompt(t *testing.T) {
 	dir := isolatePackHost(t)
-	rootA := phase2HostPack(t, dir, "a", "a-tool")
-	rootB := phase2HostPack(t, dir, "b", "b-tool")
+	rootA := hostExecPack(t, dir, "a", "proxy", "a-tool")
+	rootB := hostExecPack(t, dir, "b", "proxy", "b-tool")
 
 	var out bytes.Buffer
 	RunPackUse(fakeGitEnv(nil), &out, []string{rootA, "--yes"}, registerOK)
@@ -296,10 +296,10 @@ func TestPackSwitch_BetweenAcceptedPacksNoReprompt(t *testing.T) {
 	if strings.Contains(out.String(), "adds these integrations to Pix") {
 		t.Errorf("switching back to an accepted pack must not re-prompt:\n%s", out.String())
 	}
-	if _, err := os.Stat(filepath.Join(HostPackBinDir(), "a-tool")); err != nil {
+	if _, err := os.Stat(filepath.Join(hostPackBinDir(), "a-tool")); err != nil {
 		t.Errorf("A's wrapper must be re-installed on switch-back: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(HostPackBinDir(), "b-tool")); err == nil {
+	if _, err := os.Stat(filepath.Join(hostPackBinDir(), "b-tool")); err == nil {
 		t.Error("B's wrapper must be cleared on switch-back")
 	}
 }
@@ -312,11 +312,11 @@ func TestPackSwitch_BetweenAcceptedPacksNoReprompt(t *testing.T) {
 // the dir).
 func TestPackRm_ClearsHostWrappersWhenPackDirGone(t *testing.T) {
 	dir := isolatePackHost(t)
-	root := phase2HostPack(t, dir, "work", "platformio")
+	root := hostExecPack(t, dir, "work", "proxy", "platformio")
 
 	var out bytes.Buffer
 	RunPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerOK)
-	installedAt := filepath.Join(HostPackBinDir(), "platformio")
+	installedAt := filepath.Join(hostPackBinDir(), "platformio")
 	if _, err := os.Stat(installedAt); err != nil {
 		t.Fatalf("wrapper not installed: %v", err)
 	}
@@ -342,11 +342,10 @@ func TestPackRm_ClearsHostWrappersWhenPackDirGone(t *testing.T) {
 
 // TestClearHostPackWrappers_ReturnsErrorAndKeepsAttribution: a removal failure
 // (here: a symlinked host bin dir, which is never traversed) is RETURNED, and
-// clearInstalledHostPackWrappers keeps the attribution until removal is
-// confirmed.
+// the attribution is kept until removal is confirmed.
 func TestClearHostPackWrappers_ReturnsErrorAndKeepsAttribution(t *testing.T) {
 	dir := isolatePackHost(t)
-	// Make HostPackBinDir a symlink.
+	// Make hostPackBinDir a symlink.
 	agent := workspace.HostAgentDir()
 	if err := os.MkdirAll(agent, 0o755); err != nil {
 		t.Fatal(err)
@@ -355,7 +354,7 @@ func TestClearHostPackWrappers_ReturnsErrorAndKeepsAttribution(t *testing.T) {
 	if err := os.MkdirAll(elsewhere, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(elsewhere, HostPackBinDir()); err != nil {
+	if err := os.Symlink(elsewhere, hostPackBinDir()); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	if err := clearHostPackWrappers([]string{"platformio"}); err == nil {
@@ -363,8 +362,10 @@ func TestClearHostPackWrappers_ReturnsErrorAndKeepsAttribution(t *testing.T) {
 	}
 	store := &PackTrustStore{Installed: &packInstalledSet{Owner: "path:/x", Wrappers: []string{"platformio"}}}
 	var out bytes.Buffer
-	if err := clearInstalledHostPackWrappers(&out, store); err == nil {
-		t.Error("clearInstalledHostPackWrappers must surface the removal failure")
+	if err := withPackTrustLock(func() error {
+		return clearInstalledHostPackWrappersLocked(&out, store)
+	}); err == nil {
+		t.Error("clearInstalledHostPackWrappersLocked must surface the removal failure")
 	}
 	if store.Installed == nil {
 		t.Error("attribution must NOT be discarded until removal is confirmed")
@@ -397,7 +398,7 @@ func TestRefreshHostPackWrappers_FailClosedNoPartialSet(t *testing.T) {
 	var out bytes.Buffer
 	RunPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerOK)
 	for _, n := range []string{"tool", "fm"} {
-		if _, err := os.Stat(filepath.Join(HostPackBinDir(), n)); err != nil {
+		if _, err := os.Stat(filepath.Join(hostPackBinDir(), n)); err != nil {
 			t.Fatalf("accepted item %q not installed: %v\n%s", n, err, out.String())
 		}
 	}
@@ -411,12 +412,12 @@ func TestRefreshHostPackWrappers_FailClosedNoPartialSet(t *testing.T) {
 		t.Fatal(err)
 	}
 	out.Reset()
-	if _, rerr := RefreshHostPackWrappers(&out, cfg, true); rerr == nil {
+	if _, rerr := refreshHostPackWrappers(&out, cfg, true); rerr == nil {
 		t.Fatal("strict refresh must fail closed on ANY bad accepted item (host launch refuses)")
 	}
 	// The previously verified set is untouched — no partial swap.
 	for _, n := range []string{"tool", "fm"} {
-		if _, err := os.Stat(filepath.Join(HostPackBinDir(), n)); err != nil {
+		if _, err := os.Stat(filepath.Join(hostPackBinDir(), n)); err != nil {
 			t.Errorf("the previous verified set must stay intact on failure; %q missing: %v", n, err)
 		}
 	}

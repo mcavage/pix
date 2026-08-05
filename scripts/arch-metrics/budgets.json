@@ -198,11 +198,11 @@
       "exits": 0
     },
     "pix/host/workflow/pack": {
-      "prod_loc": 4464,
-      "exports": 45,
+      "prod_loc": 4001,
+      "exports": 43,
       "globals": 8,
       "edges": 10,
-      "exits": 28
+      "exits": 9
     },
     "pix/host/workflow/provision": {
       "prod_loc": 1190,
