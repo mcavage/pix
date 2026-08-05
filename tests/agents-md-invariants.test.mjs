@@ -78,8 +78,8 @@ const SAFETY_INVARIANTS = [
 	},
 	{
 		id: "host-mode-off-by-default",
-		invariant: "Host mode is off by default behind `host.enabled` and is never enabled by `pix setup`.",
-		phrases: ["host.enabled", "OFF by default", "host setup"],
+		invariant: "Host mode is retired outright (deleted, not merely off by default); `host.enabled` gates no real code path.",
+		phrases: ["Host mode is RETIRED", "host.enabled", "no code path"],
 	},
 	{
 		id: "secret-never-writes-values",

@@ -1,5 +1,12 @@
 # Host mode — running pix outside the sandbox
 
+> **SUPERSEDED / RETIRED (U03B).** Host mode described below was deleted
+> outright, not merely left gated off — there is no `pix host` verb, no
+> `host.enabled` code path, and no credential-broker plugin slot; a
+> `hostmode_gone_test.go` sentinel keeps it that way. `pix host` now answers
+> `PIX_RETIRED` (replacement: `pix run`). See AGENTS.md's safety invariant #9
+> and `docs/MIGRATION.md`. Kept below unedited for history.
+
 Status: Phase 1 IMPLEMENTED, gated off by default (`pix config set
 host.enabled true`). The Go launch path (`pix host [DIR]` + `pix host
 setup`, hostrun.go/hostargs.go) is built: default-off gate, host agent dir at

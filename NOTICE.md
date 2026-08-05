@@ -15,6 +15,14 @@ what the operator running a given build has separately obtained for
 themselves (see `docs/legal/RELEASE-SAFEGUARDS.md` and
 `docs/legal/FINDINGS.md` for the specific open items on that front).
 
+Building the image (`make build`) requires a Docker account with its own DHI
+entitlement, obtained directly from Docker by the person building it. pix
+never requests, stores, or asserts that entitlement on anyone's behalf, and
+keeps no record of who approved what — each operator's DHI approval is
+theirs, recorded (if at all) in their own release process, not in this
+repository. See `docs/HOST-UAT.md` for the pre-release verification script
+that depends on it.
+
 For third-party open-source components bundled into the image or the host
 binary, and their license terms, see `THIRD_PARTY_NOTICES.md`.
 

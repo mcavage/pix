@@ -1,5 +1,11 @@
 # Rearchitecture: foundations for a 41k-line package
 
+> **SUPERSEDED.** This was the phased plan; the drain it describes finished.
+> Read `docs/design/HANDOFF.md` for the actual final state and
+> `docs/design/architecture.md` for the enforced contract. Kept below
+> unedited for history — the "Status: in progress" line and the phase 2/3
+> plan are historical, not current fact.
+
 Status: **in progress.** Phases 0 and 1 are done and on `main`'s
 `refactor/foundations` branch, gate green. Phases 2 and 3 are specified below
 and not started. This doc is both the plan and the handoff — read "Where we
