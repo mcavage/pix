@@ -682,7 +682,7 @@ func TestMemCaptureDropsFactsForQuestionOnlyMessage(t *testing.T) {
 	memCaptureSem <- struct{}{}
 	memCapture(st, "so are you using my memories?", "", false, "default")
 
-	hits, err := st.recallAll(100, 1000000, "", "", "default", time.Now())
+	hits, err := st.recall("*", 100, 1000000, "", "", "default")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -706,7 +706,7 @@ func TestMemCaptureAppliesNoiseFilterToFactsAndEventsOnlyAndSevenDayEventTTL(t *
 	memCaptureSem <- struct{}{}
 	memCapture(st, "an assertion-bearing message, not a question.", "", false, "default")
 
-	hits, err := st.recallAll(100, 1000000, "", "", "default", time.Now())
+	hits, err := st.recall("*", 100, 1000000, "", "", "default")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -432,45 +432,33 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 
 	s.db.Exec("UPDATE memories SET deleted_at = ? WHERE expires_at IS NOT NULL AND expires_at < ? AND deleted_at IS NULL", memNowIso(), memNowIso())
 
-	// Explicit, deterministic "list everything" semantics: the literal query "*"
-	// (trimmed) bypasses FTS and embedding relevance entirely and just returns the
-	// newest memories visible to the requested profile/project, respecting limit
-	// and charBudget. This is what `pix memory recall '*'` and a blank
-	// sandbox /recall both send, and it must work even with no FTS match and no
-	// embedder configured (keyword-only store, or Ollama down), a relevance-
-	// scored query can legitimately return nothing in that case, but "show me
-	// everything" must not.
-	if strings.TrimSpace(query) == "*" {
-		return s.recallAll(limit, charBudget, kind, project, profile, now)
-	}
+	// The literal query "*" is "list everything" (what `pix memory recall '*'`
+	// and a blank sandbox /recall send): relevance is pinned to 1 for every
+	// visible row and neither FTS nor the embedder is consulted, so it still
+	// answers with no keyword match and no embedder (Ollama down), where a
+	// scored query may legitimately return nothing. Everything downstream —
+	// filters, scoring factors, truncation, access bookkeeping — is the SAME
+	// path; only relevance and the ordering differ.
+	star := strings.TrimSpace(query) == "*"
 
 	// FTS candidates → normalized [0,1] per id.
 	ftsScore := map[string]float64{}
-	if match := memFtsQuery(query); match != "" {
-		rowidToID := map[int64]string{}
-		idRows, _ := s.db.Query("SELECT rowid, id FROM memories WHERE deleted_at IS NULL")
-		for idRows.Next() {
-			var rid int64
-			var id string
-			idRows.Scan(&rid, &id)
-			rowidToID[rid] = id
-		}
-		idRows.Close()
+	if match := memFtsQuery(query); !star && match != "" {
 		type fh struct {
 			id  string
 			val float64
 		}
 		hits := []fh{}
-		// Join FTS to memories and apply the visible-profile filter BEFORE the
-		// ORDER BY rank LIMIT 50: ranking across ALL profiles first would let a
+		// The join to memories carries the id out directly (no separate rowid->id
+		// scan of the whole table), and applies the visible-profile filter BEFORE
+		// the ORDER BY rank LIMIT 50: ranking across ALL profiles first would let a
 		// flood of invisible sibling rows evict the visible matches from the top 50.
-		rows, err := s.db.Query("SELECT f.rowid, f.rank FROM memories_fts f JOIN memories m ON m.rowid = f.rowid WHERE f.content MATCH ? AND m.deleted_at IS NULL AND "+memProfileVisible+" ORDER BY f.rank LIMIT 50", match, memNormProfile(profile))
+		rows, err := s.db.Query("SELECT m.id, f.rank FROM memories_fts f JOIN memories m ON m.rowid = f.rowid WHERE f.content MATCH ? AND m.deleted_at IS NULL AND "+memProfileVisible+" ORDER BY f.rank LIMIT 50", match, memNormProfile(profile))
 		if err == nil {
 			for rows.Next() {
-				var rid int64
+				var id string
 				var bm float64
-				rows.Scan(&rid, &bm)
-				if id, ok := rowidToID[rid]; ok {
+				if rows.Scan(&id, &bm) == nil {
 					hits = append(hits, fh{id, -bm}) // higher = better
 				}
 			}
@@ -497,7 +485,7 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 	}
 
 	var queryVec []float64
-	if s.embedder != nil {
+	if s.embedder != nil && !star {
 		queryVec = s.embedder(query)
 	}
 
@@ -513,6 +501,11 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 	}
 	where += " AND " + memProfileVisible
 	args = append(args, memNormProfile(profile))
+	if star {
+		// Newest first, rowid as a same-timestamp tiebreak so the order is stable
+		// across calls. Scored queries are ordered by score below instead.
+		where += " ORDER BY created_at DESC, rowid DESC"
+	}
 	rows, err := s.db.Query(where, args...)
 	if err != nil {
 		return nil, err
@@ -530,6 +523,7 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 		if err := rows.Scan(&r.id, &r.kind, &r.content, &r.durability, &r.confidence, &r.frequency, &r.reward, &r.createdAt, &r.project, &r.embedding); err != nil {
 			continue
 		}
+		relevance := 1.0 // star: every visible row is equally "relevant"
 		relVec, haveVec := 0.0, false
 		if queryVec != nil && r.embedding.Valid {
 			var v []float64
@@ -547,20 +541,21 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 			}
 		}
 		relFts, haveFts := ftsScore[r.id]
-		if !haveFts && !haveVec {
-			continue
-		}
-		var relevance float64
-		switch {
-		case haveFts && haveVec:
-			relevance = 0.5*relFts + 0.5*relVec
-		case haveFts:
-			relevance = relFts
-		default:
-			relevance = relVec
-		}
-		if relevance < memMinRelevance {
-			continue
+		if !star {
+			if !haveFts && !haveVec {
+				continue
+			}
+			switch {
+			case haveFts && haveVec:
+				relevance = 0.5*relFts + 0.5*relVec
+			case haveFts:
+				relevance = relFts
+			default:
+				relevance = relVec
+			}
+			if relevance < memMinRelevance {
+				continue
+			}
 		}
 		ageDays := now.Sub(parseTime(r.createdAt)).Hours() / 24
 		recency := math.Pow(2, -ageDays/memRecencyHalflifeDays)
@@ -581,8 +576,10 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 		log.Printf("memory: %d stored embeddings have a different dimension than the current model (%d dims), they degrade to keyword-only. The embedding model likely changed; re-embed to restore semantic recall.", dimMismatch, len(queryVec))
 	}
 
-	// sort desc by score
-	sort.Slice(cands, func(i, j int) bool { return cands[i].score > cands[j].score })
+	// Scored queries rank by score; star keeps the SQL's newest-first order.
+	if !star {
+		sort.Slice(cands, func(i, j int) bool { return cands[i].score > cands[j].score })
+	}
 
 	out := []scoredHit{}
 	used := 0
@@ -595,79 +592,6 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 		}
 		out = append(out, c.hit)
 		used += len(c.hit.content)
-	}
-	ts := memNowIso()
-	for _, h := range out {
-		s.db.Exec("UPDATE memories SET access_count = access_count + 1, last_accessed = ? WHERE id = ?", ts, h.id)
-	}
-	return out, nil
-}
-
-// recallAll is the deterministic "list everything" path for the literal query
-// "*" (see recall). It never touches FTS or the embedder: rows are selected by
-// the same visible-profile/kind filter as normal recall, ordered newest-first
-// (created_at DESC, rowid DESC as a same-timestamp tiebreak so the order is
-// stable across calls), then truncated by limit and charBudget exactly like
-// normal recall. Scores are populated with the same recency/confidence/
-// frequency/reward/project factors as a relevance match (relevance pinned to
-// 1, since there is no query to be relevant to) so hits carry normal,
-// non-zero scores rather than a placeholder. The caller (recall) already holds
-// s.mu.
-func (s *memStore) recallAll(limit, charBudget int, kind, project, profile string, now time.Time) ([]scoredHit, error) {
-	where := "SELECT id, kind, content, durability, confidence, frequency, reward, created_at, project FROM memories WHERE deleted_at IS NULL"
-	args := []any{}
-	if kind != "" {
-		where += " AND kind = ?"
-		args = append(args, kind)
-	}
-	where += " AND " + memProfileVisible
-	args = append(args, memNormProfile(profile))
-	where += " ORDER BY created_at DESC, rowid DESC"
-	rows, err := s.db.Query(where, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	out := []scoredHit{}
-	used := 0
-	for rows.Next() {
-		if len(out) >= limit {
-			break
-		}
-		var id, kindVal, content, durability, createdAt string
-		var confidence, reward float64
-		var frequency int
-		var proj sql.NullString
-		if err := rows.Scan(&id, &kindVal, &content, &durability, &confidence, &frequency, &reward, &createdAt, &proj); err != nil {
-			continue
-		}
-		if used+len(content) > charBudget && len(out) > 0 {
-			break
-		}
-		ageDays := now.Sub(parseTime(createdAt)).Hours() / 24
-		recency := math.Pow(2, -ageDays/memRecencyHalflifeDays)
-		freqBoost := 1 + math.Log(float64(frequency))
-		rewardBoost := 1 + reward
-		projectFactor := 1.0
-		if project != "" {
-			if proj.Valid && proj.String == project {
-				projectFactor = memProjectMatchBoost
-			} else if proj.Valid && proj.String != "" {
-				projectFactor = memProjectOtherFactor
-			}
-		}
-		score := confidence * recency * freqBoost * rewardBoost * projectFactor
-		out = append(out, scoredHit{id, content, kindVal, durability, proj, score, createdAt})
-		used += len(content)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	// Close before updating access metadata. With SQLite's single connection,
-	// stopping early at limit leaves the query active and the updates deadlock.
-	if err := rows.Close(); err != nil {
-		return nil, err
 	}
 	ts := memNowIso()
 	for _, h := range out {
@@ -700,13 +624,31 @@ func (s *memStore) forget(idOrPrefix, profile string) bool {
 		}
 		rowid, id = found[0][0].(int64), found[0][1].(string)
 	}
-	if _, err := s.db.Exec("UPDATE memories SET deleted_at = ? WHERE id = ?", memNowIso(), id); err != nil {
-		log.Printf("forget: soft-delete failed for %s: %v", id, err)
-	}
-	if _, err := s.db.Exec("DELETE FROM memories_fts WHERE rowid = ?", rowid); err != nil {
-		log.Printf("forget: FTS delete failed for rowid %d: %v", rowid, err)
-	}
+	s.softDelete(id, rowid, "forget")
 	return true
+}
+
+// softDelete retires one row: stamp deleted_at and drop its FTS entry — the
+// pair that must always happen together, since a soft-deleted row left in the
+// index still answers keyword searches. rowid < 1 means "look it up"; a failed
+// lookup skips the index delete rather than issue a silent no-op DELETE WHERE
+// rowid=0 (0 is never a real rowid). Caller holds s.mu; failures are logged,
+// not returned, because both callers are best-effort sweeps.
+func (s *memStore) softDelete(id string, rowid int64, who string) {
+	if rowid < 1 {
+		if err := s.db.QueryRow("SELECT rowid FROM memories WHERE id = ?", id).Scan(&rowid); err != nil {
+			log.Printf("%s: rowid lookup failed for %s: %v", who, id, err)
+			rowid = -1
+		}
+	}
+	if _, err := s.db.Exec("UPDATE memories SET deleted_at = ? WHERE id = ?", memNowIso(), id); err != nil {
+		log.Printf("%s: soft-delete failed for %s: %v", who, id, err)
+	}
+	if rowid > 0 {
+		if _, err := s.db.Exec("DELETE FROM memories_fts WHERE rowid = ?", rowid); err != nil {
+			log.Printf("%s: FTS delete failed for rowid %d: %v", who, rowid, err)
+		}
+	}
 }
 
 func (s *memStore) synthesize(threshold float64) jsonObj {
@@ -773,22 +715,7 @@ func (s *memStore) synthesizeBucket(profile string, threshold float64) int {
 					recs[j].frequency, math.Min(1, recs[i].confidence+0.05), recs[i].id); err != nil {
 					log.Printf("synthesizeBucket: update survivor frequency failed for %s: %v", recs[i].id, err)
 				}
-				// forget j (inline; we already hold the lock)
-				var rowid int64
-				if err := s.db.QueryRow("SELECT rowid FROM memories WHERE id = ?", recs[j].id).Scan(&rowid); err != nil {
-					log.Printf("synthesizeBucket: rowid lookup failed for %s: %v", recs[j].id, err)
-					// Skip the FTS delete if we don't have a valid rowid (0 is never a
-					// real SQLite rowid; DELETE WHERE rowid=0 is a silent no-op).
-					rowid = -1
-				}
-				if _, err := s.db.Exec("UPDATE memories SET deleted_at = ? WHERE id = ?", memNowIso(), recs[j].id); err != nil {
-					log.Printf("synthesizeBucket: soft-delete failed for %s: %v", recs[j].id, err)
-				}
-				if rowid > 0 {
-					if _, err := s.db.Exec("DELETE FROM memories_fts WHERE rowid = ?", rowid); err != nil {
-						log.Printf("synthesizeBucket: FTS delete failed for rowid %d: %v", rowid, err)
-					}
-				}
+				s.softDelete(recs[j].id, 0, "synthesizeBucket") // merged into i
 				dead[recs[j].id] = true
 				merged++
 			}
@@ -852,13 +779,7 @@ func memoryMux() http.Handler {
 func newMemoryMux(store *memStore, hasEmb bool) http.Handler {
 	methods := map[string]func(jsonObj) (any, error){
 		"health": func(jsonObj) (any, error) {
-			// watcherCaptureAvailable re-probes (throttled) so health reflects a live
-			// recovery after `ollama pull`, and so `pix doctor` reads the truth.
-			capture := watcherCaptureAvailable()
-			reason := ""
-			if !capture {
-				reason = getWatcherReason()
-			}
+			capture, reason := memWatcherStatus()
 			return jsonObj{"ok": true, "vector": hasEmb, "capture": capture, "captureReason": reason, "watcherModel": memWatcherModel()}, nil
 		},
 		// identity is the APPLICATION-LEVEL readiness probe: it proves the
@@ -888,33 +809,13 @@ func newMemoryMux(store *memStore, hasEmb bool) http.Handler {
 			return jsonObj{"candidates": store.promotable(clampInt(p["minFrequency"], 3, 1, 1000000), profileFromParams(p))}, nil
 		},
 		"observe": func(p jsonObj) (any, error) {
-			user := truncate(getStr(p, "user"), 8000)
 			project, hasProj := projectFromParams(p)
-			profile := profileFromParams(p)
-			if strings.TrimSpace(user) == "" {
-				return jsonObj{"accepted": false}, nil
+			accepted, reason := memObserve(store, getStr(p, "user"), project, hasProj, profileFromParams(p))
+			out := jsonObj{"accepted": accepted}
+			if reason != "" {
+				out["reason"] = reason
 			}
-			// Don't claim success when the watcher model can't run, the capture
-			// would be silently dropped. Tell the caller why (recall still works).
-			// watcherCaptureAvailable re-probes (throttled) so capture recovers the
-			// moment the user pulls the model, without a daemon restart.
-			if !watcherCaptureAvailable() {
-				reason := getWatcherReason()
-				if reason == "" {
-					reason = "watcher model unavailable, run `ollama pull " + memWatcherModel() + "` (or set MEMORY_WATCHER_MODEL)"
-				}
-				return jsonObj{"accepted": false, "reason": reason + "; recall still works"}, nil
-			}
-			// Bound concurrent captures (each hits the watcher model). Non-blocking
-			// acquire + backpressure so a giant observe batch can't spawn unbounded
-			// goroutines/Ollama calls. memCapture releases the slot when it finishes.
-			select {
-			case memCaptureSem <- struct{}{}:
-				go memCapture(store, user, project, hasProj, profile)
-				return jsonObj{"accepted": true}, nil
-			default:
-				return jsonObj{"accepted": false, "reason": "capture busy (too many in flight); retry shortly, recall still works"}, nil
-			}
+			return out, nil
 		},
 	}
 
@@ -1023,6 +924,46 @@ func buildMemStore() (*memStore, bool, error) {
 }
 
 // --- helpers ---------------------------------------------------------------
+
+// memWatcherStatus reports whether capture is live and, when not, why.
+// watcherCaptureAvailable re-probes (throttled) so a live recovery after
+// `ollama pull` shows up without a daemon restart, and `pix doctor` reads the
+// truth.
+func memWatcherStatus() (capture bool, reason string) {
+	if watcherCaptureAvailable() {
+		return true, ""
+	}
+	return false, getWatcherReason()
+}
+
+// memObserve is the ONE capture-admission path BOTH front ends use (the
+// JSON-RPC observe method and the plugin adapter's Observe): reject empty
+// input, refuse with a reason rather than claim success the watcher model
+// cannot deliver, and otherwise start the background capture under bounded
+// concurrency (each capture hits Ollama, so a giant observe batch must meet
+// honest backpressure instead of spawning unbounded goroutines; memCapture
+// releases the slot). Keeping it in one place is what stops the two surfaces
+// drifting — they were two copies of this branch with a comment asking the
+// next editor to keep them identical.
+func memObserve(store *memStore, user, project string, hasProject bool, profile string) (accepted bool, reason string) {
+	user = truncate(user, 8000)
+	if strings.TrimSpace(user) == "" {
+		return false, ""
+	}
+	if capture, why := memWatcherStatus(); !capture {
+		if why == "" {
+			why = "watcher model unavailable, run `ollama pull " + memWatcherModel() + "` (or set MEMORY_WATCHER_MODEL)"
+		}
+		return false, why + "; recall still works"
+	}
+	select {
+	case memCaptureSem <- struct{}{}:
+		go memCapture(store, user, project, hasProject, profile)
+		return true, ""
+	default:
+		return false, "capture busy (too many in flight); retry shortly, recall still works"
+	}
+}
 
 func rememberFromParams(p jsonObj) rememberInput {
 	in := rememberInput{
@@ -1171,10 +1112,8 @@ func truncate(s string, n int) string {
 	return s
 }
 func parseTime(s string) time.Time {
-	for _, f := range []string{time.RFC3339Nano, time.RFC3339} {
-		if t, err := time.Parse(f, s); err == nil {
-			return t
-		}
+	if t, ok := parseTimeStrict(s); ok {
+		return t
 	}
 	return time.Now()
 }

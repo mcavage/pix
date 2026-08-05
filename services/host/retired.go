@@ -11,10 +11,16 @@ import (
 )
 
 // retiredHostSubcommands maps a retired subcommand to its replacement.
-// `serve knowledge` needs no entry (serve's alias table dropped the name);
-// `backup`/`restore` stay live — they ARE the launcher's replacement.
+// `serve knowledge` needs no entry (serve's alias table dropped the name).
+// The top-level `backup`/`restore` verbs were multi-component archive tooling
+// (memory + config + op-refs in a versioned tar.gz); the artifact worth keeping
+// is the memory db, so they collapsed into `memory snapshot`/`memory restore`.
 func retiredHostSubcommands() map[string]string {
-	return map[string]string{"slack": "pix-host mcp slack"}
+	return map[string]string{
+		"slack":   "pix-host mcp slack",
+		"backup":  "pix-host memory snapshot PATH",
+		"restore": "pix-host memory restore PATH",
+	}
 }
 
 func retiredHostMessage(name string) string {

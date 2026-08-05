@@ -107,3 +107,39 @@ func TestMigrateLegacyWatcherPerishableTTL(t *testing.T) {
 		t.Errorf("watcher-legacy expires_at after re-running migration = %v, want unchanged ~%v", got, sevenDayCap)
 	}
 }
+
+// TestMemStoreSchemaVersionStamp covers the OTHER half of opening an existing
+// db: a fresh store stamps user_version=1 (what a snapshot records and a
+// restore gates on), and a db written by a NEWER pix (user_version=2) is
+// refused rather than silently downgraded to the 1 marker, which would corrupt
+// a forward-incompatible schema.
+func TestMemStoreSchemaVersionStamp(t *testing.T) {
+	st, err := newMemStore(filepath.Join(t.TempDir(), "fresh.db"), nil)
+	if err != nil {
+		t.Fatalf("newMemStore: %v", err)
+	}
+	var uv int
+	if err := st.db.QueryRow("PRAGMA user_version").Scan(&uv); err != nil {
+		t.Fatalf("PRAGMA user_version: %v", err)
+	}
+	st.db.Close()
+	if uv != 1 {
+		t.Errorf("fresh store user_version = %d, want 1", uv)
+	}
+
+	path := filepath.Join(t.TempDir(), "future.db")
+	future, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := future.Exec("PRAGMA user_version = 2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := future.Exec("CREATE TABLE t(x)"); err != nil { // force the header to disk
+		t.Fatal(err)
+	}
+	future.Close()
+	if _, err := newMemStore(path, nil); err == nil {
+		t.Error("newMemStore accepted a db with user_version=2; want a version error")
+	}
+}

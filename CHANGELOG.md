@@ -10,6 +10,24 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **U07b: `pix-host backup`/`restore` collapse into `pix-host memory
+  snapshot`/`memory restore`.** The multi-component hot archive (a versioned
+  `tar.gz` carrying `memory.db` + `config.toml` + `op-refs.env` + a
+  `manifest.json`, with retention/pruning, tar-bomb guards, a plain-file
+  install/rollback stack and its own atomic-write helper — 1,610 lines across
+  `memory_backup.go`/`memory_restore.go`) is gone. What replaces it is ONE
+  artifact: a snapshot is a plain sqlite file written with `VACUUM INTO`
+  through a read-only handle (`pix-host memory snapshot PATH`, hot, verified,
+  `0600`, never clobbering), and the restore primitive
+  (`pix-host memory restore PATH [--force]`) installs one with the service
+  STOPPED — enforced by the same advisory store flock the daemon holds, taken
+  first and held across the commit, with the previous db and its sidecars kept
+  in a reversible `.bak-<ts>-<rand>` set. `config.toml` is reproducible with
+  `pix config set` and `op-refs.env` holds `op://` pointers, not values, so
+  neither needed an archive format. The DB path, schema and `0600` mode are
+  unchanged; the retired top-level `backup`/`restore` verbs answer with
+  `PIX_RETIRED` naming the new commands. Documented in `docs/memory.md`.
+
 - **U05b: monitor ingest ownership moved under `pix-host serve`; `pix
   monitor` is now a pure offline reader.** The loopback ingest listener that
   receives NDJSON events from the in-VM monitor tap (`services/host/monitor`,

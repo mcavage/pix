@@ -16,7 +16,6 @@ package main
 
 import (
 	"log"
-	"strings"
 
 	"pix/host/plugin"
 
@@ -116,31 +115,11 @@ func (a *memoryStoreAdapter) Promotable(req plugin.PromotableReq) (plugin.Promot
 	return plugin.PromotableResp{Candidates: out}, nil
 }
 
-// Observe mirrors the observe method in memoryMux(): reject empty input, refuse
-// (with a reason) when the watcher model is unavailable, otherwise kick off the
-// async capture and accept.
+// Observe and Health call the SAME helpers memoryMux() does (memObserve,
+// memWatcherStatus), so the typed surface cannot drift from the JSON-RPC one.
 func (a *memoryStoreAdapter) Observe(req plugin.ObserveReq) (plugin.ObserveResp, error) {
-	user := truncate(req.User, 8000)
-	if strings.TrimSpace(user) == "" {
-		return plugin.ObserveResp{Accepted: false}, nil
-	}
-	// Mirror memoryMux()'s observe branch exactly — this IS the live path now:
-	// re-probe (so capture recovers after an `ollama pull` without a restart)
-	// and apply the same bounded-concurrency backpressure.
-	if !watcherCaptureAvailable() {
-		reason := getWatcherReason()
-		if reason == "" {
-			reason = "watcher model unavailable, run `ollama pull " + memWatcherModel() + "` (or set MEMORY_WATCHER_MODEL)"
-		}
-		return plugin.ObserveResp{Accepted: false, Reason: reason + "; recall still works"}, nil
-	}
-	select {
-	case memCaptureSem <- struct{}{}:
-		go memCapture(a.store, user, req.Project, req.HasProject, req.Profile)
-		return plugin.ObserveResp{Accepted: true}, nil
-	default:
-		return plugin.ObserveResp{Accepted: false, Reason: "capture busy (too many in flight); retry shortly, recall still works"}, nil
-	}
+	accepted, reason := memObserve(a.store, req.User, req.Project, req.HasProject, req.Profile)
+	return plugin.ObserveResp{Accepted: accepted, Reason: reason}, nil
 }
 
 // Stats reports the requested profile's counts (protocol v2), so the
@@ -158,13 +137,8 @@ func (a *memoryStoreAdapter) Stats(profile string) (plugin.Stats, error) {
 	}, nil
 }
 
-// Health mirrors the health method in memoryMux(), re-probe and reason included.
 func (a *memoryStoreAdapter) Health() (plugin.Health, error) {
-	capture := watcherCaptureAvailable()
-	reason := ""
-	if !capture {
-		reason = getWatcherReason()
-	}
+	capture, reason := memWatcherStatus()
 	return plugin.Health{
 		OK:            true,
 		Vector:        a.hasVector,
