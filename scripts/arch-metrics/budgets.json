@@ -16,11 +16,11 @@
       "exits": 4
     },
     "pix/host/cmd/pix": {
-      "prod_loc": 3633,
+      "prod_loc": 3630,
       "exports": 19,
       "globals": 14,
       "edges": 24,
-      "exits": 41
+      "exits": 21
     },
     "pix/host/cmd/pix/corpus": {
       "prod_loc": 588,
@@ -170,14 +170,14 @@
       "exits": 0
     },
     "pix/host/workflow/doctor": {
-      "prod_loc": 706,
-      "exports": 25,
+      "prod_loc": 666,
+      "exports": 23,
       "globals": 8,
       "edges": 14,
       "exits": 0
     },
     "pix/host/workflow/launch": {
-      "prod_loc": 2246,
+      "prod_loc": 2129,
       "exports": 84,
       "globals": 21,
       "edges": 14,
@@ -205,7 +205,7 @@
       "exits": 28
     },
     "pix/host/workflow/provision": {
-      "prod_loc": 1366,
+      "prod_loc": 1338,
       "exports": 37,
       "globals": 12,
       "edges": 12,

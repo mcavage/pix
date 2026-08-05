@@ -38,7 +38,7 @@ func ResolveKitRef(version, flagRef, pinRef string) (ref string, src KitRefSourc
 	case flagRef != "":
 		return flagRef, KitRefFlag
 	case pinRef != "":
-		return normalizeKitRef(pinRef), KitRefConfigPin
+		return NormalizeKitRef(pinRef), KitRefConfigPin
 	case !launcher.IsReleased(version):
 		return "", KitRefUnreleased
 	default:
@@ -46,10 +46,10 @@ func ResolveKitRef(version, flagRef, pinRef string) (ref string, src KitRefSourc
 	}
 }
 
-// normalizeKitRef lets a config pin be written either way — version_pin =
+// NormalizeKitRef lets a config pin be written either way — version_pin =
 // "0.1.0" and version_pin = "v0.1.0" both mean the v0.1.0 tag. A non-semver
 // value (a branch name, a sha) passes through untouched.
-func normalizeKitRef(pin string) string {
+func NormalizeKitRef(pin string) string {
 	pin = strings.TrimSpace(pin)
 	if launcher.IsReleased(pin) {
 		return "v" + pin

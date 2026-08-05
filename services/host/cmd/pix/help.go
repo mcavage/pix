@@ -8,7 +8,6 @@ import (
 
 	"pix/host/mcp"
 	"pix/host/memory"
-	"pix/host/workflow/doctor"
 	"pix/host/workflow/pack"
 	"pix/host/workflow/provision"
 )
@@ -98,14 +97,6 @@ func levenshtein(a, b string) int {
 // ok is false for an unknown or already-migrated verb.
 func verbUsage(verb string) (string, bool) {
 	switch verb {
-	case "run":
-		return runUsage, true
-	case "status", "st":
-		return doctor.StatusUsage, true
-	case "doctor":
-		return doctor.Usage, true
-	case "setup":
-		return provision.Usage, true
 	case "config":
 		return provision.ConfigUsage, true
 	case "mcp":
@@ -114,8 +105,6 @@ func verbUsage(verb string) (string, bool) {
 		return pack.Usage, true
 	case "memory", "mem":
 		return memory.Usage + "\n", true
-	case "state":
-		return stateUsage, true
 	}
 	return "", false
 }

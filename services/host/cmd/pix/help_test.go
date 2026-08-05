@@ -8,7 +8,6 @@ import (
 	"pix/host/mcp"
 	"pix/host/memory"
 	"pix/host/rpc"
-	"pix/host/workflow/doctor"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/onboard"
 	"strings"
@@ -40,32 +39,32 @@ func TestWantsHelp(t *testing.T) {
 
 func TestParseRunArgs_NonDirWorkspaceRejected(t *testing.T) {
 	// A known verb typo suggests the verb (and never launches).
-	o, err := launch.ParseRunArgs([]string{"help"})
+	o, err := parseRunOpts([]string{"help"})
 	if err == nil {
-		t.Fatalf("launch.ParseRunArgs([help]) succeeded (workspace=%q) — should reject a non-dir", o.Workspace)
+		t.Fatalf("run help succeeded (workspace=%q) — should reject a non-dir", o.Workspace)
 	}
 	if !strings.Contains(err.Error(), "not a directory") || !strings.Contains(err.Error(), "pix help") {
 		t.Errorf("error = %q, want a not-a-directory + `pix help` hint", err)
 	}
 
 	// A non-verb typo just reports not-a-directory.
-	if _, err := launch.ParseRunArgs([]string{"nonexistent-xyz-123"}); err == nil {
-		t.Error("launch.ParseRunArgs([nonexistent]) succeeded — should reject a non-dir")
+	if _, err := parseRunOpts([]string{"nonexistent-xyz-123"}); err == nil {
+		t.Error("run nonexistent succeeded — should reject a non-dir")
 	}
 }
 
 func TestParseRunArgs_ExistingDirOK(t *testing.T) {
 	dir := t.TempDir()
-	o, err := launch.ParseRunArgs([]string{dir})
+	o, err := parseRunOpts([]string{dir})
 	if err != nil {
-		t.Fatalf("launch.ParseRunArgs(%q) error: %v", dir, err)
+		t.Fatalf("run %q error: %v", dir, err)
 	}
 	if o.Workspace != dir {
 		t.Errorf("workspace = %q, want %q", o.Workspace, dir)
 	}
 	// The cwd default is always launchable.
-	if _, err := launch.ParseRunArgs(nil); err != nil {
-		t.Errorf("launch.ParseRunArgs(nil) error: %v", err)
+	if _, err := parseRunOpts(nil); err != nil {
+		t.Errorf("bare run error: %v", err)
 	}
 }
 
@@ -87,12 +86,16 @@ func TestValidateRunWorkspace(t *testing.T) {
 	}
 }
 
-// --- B3: `run --help` is a help request (sentinel), not an error ---
+// --- B3: `run --help` is a help request (generated usage), not an error ---
 
-func TestParseRunArgs_HelpSentinel(t *testing.T) {
-	for _, argv := range [][]string{{"--help"}, {"-h"}, {"--help", "extra"}} {
-		if _, err := launch.ParseRunArgs(argv); err != cli.ErrHelpRequested {
-			t.Errorf("launch.ParseRunArgs(%v) err = %v, want cli.ErrHelpRequested", argv, err)
+func TestRunHelpIsGeneratedUsage(t *testing.T) {
+	for _, argv := range [][]string{{"run", "--help"}, {"run", "-h"}, {"run", "--help", "extra"}} {
+		d, out, errb := rootDeps()
+		if code := dispatch(argv, d); code != 0 {
+			t.Errorf("dispatch(%v) = %d, want 0 (stderr: %s)", argv, code, errb.String())
+		}
+		if !strings.Contains(out.String(), "Usage: pix run") {
+			t.Errorf("dispatch(%v) stdout = %q, want the generated run usage", argv, out.String())
 		}
 	}
 }
@@ -160,7 +163,9 @@ func TestMemoryHelp_NoRPC(t *testing.T) {
 }
 
 func TestVerbUsage_Routing(t *testing.T) {
-	for _, verb := range []string{"run", "memory", "config", "status", "pack", "doctor", "mcp", "setup"} {
+	// The MIGRATED verbs are absent on purpose: they have no usage constant,
+	// and `pix help <typed verb>` re-enters the root as `<verb> --help`.
+	for _, verb := range []string{"memory", "config", "pack", "mcp"} {
 		u, ok := verbUsage(verb)
 		if !ok || strings.TrimSpace(u) == "" {
 			t.Errorf("verbUsage(%q) = (%q,%v), want non-empty usage", verb, u, ok)
@@ -202,33 +207,26 @@ func TestSuggestVerb(t *testing.T) {
 
 // --- S2: status + doctor flag validation ---
 
-func TestParseStatusArgs(t *testing.T) {
-	if j, err := doctor.ParseStatusArgs([]string{"--json"}); err != nil || !j {
-		t.Errorf("--json = (%v,%v), want (true,nil)", j, err)
+// TestStatusAndDoctorFlagsAreTyped: --json/--verbose are struct fields now, so
+// the flags that parse and the flags that are documented are one declaration —
+// and a typo is a usage error (exit 2) instead of a silently ignored token.
+func TestStatusAndDoctorFlagsAreTyped(t *testing.T) {
+	root, err := parseRoot([]string{"status", "--json"})
+	if err != nil || !root.Status.JSON {
+		t.Errorf("status --json: json=%v err=%v", root.Status.JSON, err)
 	}
-	if j, err := doctor.ParseStatusArgs(nil); err != nil || j {
-		t.Errorf("no args = (%v,%v), want (false,nil)", j, err)
+	root, err = parseRoot([]string{"doctor", "--json", "--verbose"})
+	if err != nil || !root.Doctor.JSON || !root.Doctor.Verbose {
+		t.Errorf("doctor --json --verbose: %+v err=%v", root.Doctor, err)
 	}
-	if _, err := doctor.ParseStatusArgs([]string{"--help"}); err != cli.ErrHelpRequested {
-		t.Errorf("--help err = %v, want cli.ErrHelpRequested", err)
-	}
-	if _, err := doctor.ParseStatusArgs([]string{"--jsom"}); err == nil {
-		t.Error("--jsom (typo) should be a usage error")
-	}
-}
-
-func TestParseDoctorArgs(t *testing.T) {
-	if j, v, err := doctor.ParseDoctorArgs([]string{"--json"}); err != nil || !j || v {
-		t.Errorf("--json = (%v,%v,%v), want (true,false,nil)", j, v, err)
-	}
-	if j, v, err := doctor.ParseDoctorArgs([]string{"--verbose"}); err != nil || j || !v {
-		t.Errorf("--verbose = (%v,%v,%v), want (false,true,nil)", j, v, err)
-	}
-	if _, _, err := doctor.ParseDoctorArgs([]string{"--help"}); err != cli.ErrHelpRequested {
-		t.Errorf("--help err = %v, want cli.ErrHelpRequested", err)
-	}
-	if _, _, err := doctor.ParseDoctorArgs([]string{"--bogus"}); err == nil {
-		t.Error("--bogus should be a usage error")
+	for _, argv := range [][]string{{"status", "--jsom"}, {"doctor", "--bogus"}} {
+		d, _, errb := rootDeps()
+		if code := dispatch(argv, d); code != 2 {
+			t.Errorf("dispatch(%v) = %d, want 2 (usage error)", argv, code)
+		}
+		if !strings.Contains(errb.String(), "unknown flag") {
+			t.Errorf("dispatch(%v) stderr = %q, want an unknown-flag message", argv, errb.String())
+		}
 	}
 }
 
@@ -239,26 +237,6 @@ func TestParseOnboardArgs_Help(t *testing.T) {
 	}
 	if _, err := onboard.ParseOnboardArgs([]string{"--bogus"}); err == nil {
 		t.Error("--bogus should be a usage error")
-	}
-}
-
-// TestRunVerb_HelpPrintsUsage is the F1 gate: `run --help` prints run usage and
-// returns. `run` NEVER onboards (onboarding is opt-in and in-session), so there
-// is no first-run hook to reach; a help request just short-circuits to usage.
-func TestRunVerb_HelpPrintsUsage(t *testing.T) {
-	for _, argv := range [][]string{{"--help"}, {"-h"}, {"somedir", "--help"}} {
-		old := os.Stdout
-		rp, wp, _ := os.Pipe()
-		os.Stdout = wp
-		runVerb(argv)
-		_ = wp.Close()
-		os.Stdout = old
-		var buf bytes.Buffer
-		_, _ = buf.ReadFrom(rp)
-
-		if !strings.Contains(buf.String(), "usage: pix run") {
-			t.Errorf("runVerb(%v) = %q, want run usage", argv, buf.String())
-		}
 	}
 }
 

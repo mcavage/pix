@@ -35,21 +35,27 @@ func TestRunState_RoutesToAliasesViaHelp(t *testing.T) {
 	// (retired_test.go + corpus/retired_dispatch_test.go), which asserts the
 	// notice and exit 2 out of process — it cannot be exercised in-process.
 	cases := map[string]string{
-		"reset": "Usage: pix reset",
+		"reset": "Usage: pix state reset",
 	}
 	for sub, want := range cases {
-		out := captureStdout(t, func() { runState([]string{sub, "--help"}) })
-		if !strings.Contains(out, want) {
-			t.Errorf("state %s --help = %q, want %q", sub, out, want)
+		d, out, _ := rootDeps()
+		if code := dispatch([]string{"state", sub, "--help"}, d); code != 0 {
+			t.Errorf("state %s --help exit = %d, want 0", sub, code)
+		}
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("state %s --help = %q, want %q", sub, out.String(), want)
 		}
 	}
 }
 
 // TestRunState_BareUsage: a bare noun prints the group usage (exit 0).
 func TestRunState_BareUsage(t *testing.T) {
-	out := captureStdout(t, func() { runState(nil) })
-	if !strings.Contains(out, "usage: pix state") {
-		t.Errorf("bare state: %q", out)
+	d, out, _ := rootDeps()
+	if code := dispatch([]string{"state", "--help"}, d); code != 0 {
+		t.Errorf("state --help exit = %d, want 0", code)
+	}
+	if !strings.Contains(out.String(), "Usage: pix state") {
+		t.Errorf("bare state: %q", out.String())
 	}
 }
 
@@ -59,8 +65,9 @@ func TestState_KnownAndRoutable(t *testing.T) {
 	if !knownVerbs()["state"] {
 		t.Error("state missing from knownVerbs")
 	}
-	if u, ok := verbUsage("state"); !ok || u == "" {
-		t.Error("verbUsage(state) empty")
+	d, out, _ := rootDeps()
+	if code := dispatch([]string{"help", "state"}, d); code != 0 || !strings.Contains(out.String(), "Usage: pix state") {
+		t.Errorf("`pix help state` = %q (exit %d), want the generated usage", out.String(), code)
 	}
 }
 
@@ -72,7 +79,9 @@ func TestLegacyLifecycleAliasesPreserved(t *testing.T) {
 			t.Errorf("%s dropped from knownVerbs", v)
 		}
 		d, out, _ := rootDeps()
-		runHelp(d, []string{v})
+		if code := dispatch([]string{"help", v}, d); code != 0 {
+			t.Errorf("`pix help %s` exit = %d, want 0", v, code)
+		}
 		if !strings.Contains(out.String(), "Usage: pix "+v) {
 			t.Errorf("`pix help %s` printed %q, want the generated usage", v, out.String())
 		}

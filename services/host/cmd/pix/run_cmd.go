@@ -1,6 +1,14 @@
-// run_cmd.go — the argv seam for `pix run`, plus the two things the launch
+// run_cmd.go — `pix run` as a typed root child, plus the two things the launch
 // package deliberately does not know: the verb table (for the "did you mean"
 // hint) and the real env.
+//
+// The flags are struct fields, so the usage a user reads is generated from the
+// declaration that parses them. One shape the grammar cannot express stays in
+// front of the parser: the `--` pi passthrough. kong consumes `--` as an
+// end-of-flags marker and would then feed the first pi arg to the DIR
+// positional, so the root rewrites the tail into repeated `--pi-arg=` values
+// (rewriteRunPassthrough) before parsing — an argv REWRITE, exactly like the
+// `task NAME path` one, not a second parser.
 package main
 
 import (
@@ -10,6 +18,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+
 	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/health"
@@ -23,7 +33,6 @@ import (
 	"pix/host/workflow/onboard"
 	"pix/host/workflow/pack"
 	"pix/host/workspace"
-	"strings"
 )
 
 func init() {
@@ -31,49 +40,155 @@ func init() {
 	launch.DefaultEnv = defaultShellEnv
 }
 
-// runRun implements bare `pix [DIR]` and `pix run ...`. It reads the
-// config, resolves the run options (including a repo checkout for --dev),
-// composes the sbx argv, and execs it with stdio inherited.
+// runDescription is run's long help: the lifecycle and released-vs-local
+// rules, which generated usage cannot infer from a struct tag. The flag list
+// is NOT here — the fields below are the flag list.
+const runDescription = `Everything after -- is passed to pi. Set PIX_DEBUG=1 to print the composed sbx
+command.
+
+lifecycle (matches sbx's own re-attach model):
+  no sandbox named N          -> create it (the flags below apply).
+  a sandbox named N exists    -> RE-ATTACH to it as-is (running or stopped);
+                                 sbx reads the agent from its own spec, so
+                                 --kit/--mcp/--template, --dev, and the
+                                 create-only skill flags are NOT re-sent (--dev
+                                 is create/replace-only and is ignored, with a
+                                 note, on a plain re-attach). Use --replace to
+                                 recreate with the current flags instead.
+                                 --model/--intent are NOT create-only: they are
+                                 pi runtime args, so they still reach the pi
+                                 session on a re-attach too.
+
+released vs local:
+  A RELEASED launcher (a clean version like 0.0.16) tracks the LATEST STABLE
+  release: it resolves the newest published tag (cached 24h) and pins that, so
+  a launcher installed months ago still boots today's kit + image. If that
+  lookup cannot run — offline, GitHub unreachable — it falls back to this
+  build's own version; a run is never blocked by it. Precedence: --kit-ref,
+  version_pin in config.toml, latest stable, this build's version.
+
+  An UNRELEASED/local build never pins a nonexistent v<version> tag: it uses
+  your local checkout kit when one is resolvable (pinning the locally loaded
+  image via --template), else falls back to #ref=main with a warning.`
+
+func (c *runCmd) Help() string { return runDescription }
+
+// runCmd is the launcher's main verb.
+type runCmd struct {
+	Dir string `arg:"" optional:"" default:"." help:"Workspace to launch in (default: the current directory)."`
+
+	Dev      bool     `help:"Mode B: use the local checkout kit + load skills live from it (needs a checkout)."`
+	Skills   []string `help:"Mount an extra skill tree and load it live (repeatable)." placeholder:"DIR"`
+	Kit      []string `help:"Override the KIT — image + entrypoint + creds + egress + skills — instead of the auto git/local pin (repeatable; path or git+URL)." placeholder:"K"`
+	KitRef   string   `help:"Pin the auto kit to a git ref (v0.1.0, main) instead of the latest stable release." placeholder:"REF"`
+	Template string   `help:"Override only the IMAGE sbx boots (the ref 'make load' prints). Orthogonal to --kit." placeholder:"REF"`
+	Mcp      []string `help:"Attach an MCP server at creation (repeatable)." placeholder:"M"`
+	Pack     string   `help:"Active pack for this run (path or git-url); overrides the configured one." placeholder:"P"`
+	Name     string   `help:"Sandbox name." placeholder:"N"`
+	Model    string   `help:"Active pi model (passed through to pi)." placeholder:"M"`
+	Intent   string   `help:"Resolve the session model via the router; --model overrides it. Intents: pix models show." placeholder:"NAME"`
+	Replace  bool     `help:"Recreate the sandbox (sbx rm -f, then create) instead of re-attaching; picks up changed create-only flags."`
+	Task     string   `help:"Launch an existing task's sandbox (same as 'pix task run NAME')." placeholder:"NAME"`
+
+	// PiArg is the `--` tail, rewritten by rewriteRunPassthrough. Hidden
+	// because a user never types it: they type `-- <pi args>`, which the
+	// description above documents.
+	PiArg []string `name:"pi-arg" hidden:""`
+}
+
+// rewriteRunPassthrough turns `run ... -- a b` into `run ... --pi-arg=a
+// --pi-arg=b`, so the pi tail survives kong's end-of-flags handling intact.
+// The `=value` form is deliberate: a pi arg starting with `-` can never be
+// re-read as a flag of ours. Everything before the first `--` is untouched.
+func rewriteRunPassthrough(argv []string) []string {
+	for i, a := range argv {
+		if a != "--" {
+			continue
+		}
+		out := append([]string(nil), argv[:i]...)
+		for _, t := range argv[i+1:] {
+			out = append(out, "--pi-arg="+t)
+		}
+		return out
+	}
+	return argv
+}
+
+// opts turns the parsed command into the launch options, resolving the two
+// inputs that are not literal flag values: `--task NAME` (an existing task
+// checkout, resolved to its dir + sandbox name) and the workspace, which must
+// be a real directory or this is a mistyped verb rather than a launch.
+func (c *runCmd) opts() (launch.RunOpts, error) {
+	o := launch.RunOpts{
+		Workspace:   c.Dir,
+		Dev:         c.Dev,
+		Skills:      c.Skills,
+		Kits:        c.Kit,
+		Template:    c.Template,
+		MCP:         c.Mcp,
+		Name:        c.Name,
+		Model:       c.Model,
+		Intent:      c.Intent,
+		Replace:     c.Replace,
+		Pack:        c.Pack,
+		Passthrough: c.PiArg,
+	}
+	if c.KitRef != "" {
+		o.KitRef = launch.NormalizeKitRef(c.KitRef)
+	}
+	// `--task NAME` is the `pix task run NAME` shorthand: task.Resolve (L1) does
+	// the resolution and this only fills the ordinary DIR + --name shape run
+	// already understands, so no sandbox-lifecycle code is duplicated here. An
+	// explicit --name still wins.
+	if c.Task != "" {
+		dir, sandboxName, err := resolveTaskTarget(c.Task)
+		if err != nil {
+			return o, err
+		}
+		o.Workspace = dir
+		if o.Name == "" {
+			o.Name = sandboxName
+		}
+	}
+	// A non-"." workspace MUST be an existing directory. Otherwise a mistyped
+	// verb (`pix run doctro`) would silently boot a junk sandbox named after the
+	// typo.
+	if err := launch.ValidateRunWorkspace(o.Workspace); err != nil {
+		return o, cli.UsageError{Err: err}
+	}
+	return o, nil
+}
+
+func (c *runCmd) Run(d *cli.Deps) error {
+	o, err := c.opts()
+	if err != nil {
+		return err
+	}
+	return runLaunch(d, o)
+}
+
+// runFail reports a launch failure in run's own words and hands the root the
+// exit code to use. The message is already complete, so it travels as a
+// SilentError rather than being re-prefixed by the root's renderer.
+func runFail(d *cli.Deps, code int, format string, a ...any) error {
+	fmt.Fprintf(d.Err, "pix run: "+format+"\n", a...)
+	return cli.SilentError{Code: code}
+}
+
+// runLaunch reads the config, resolves the run options (including a repo
+// checkout for --dev), composes the sbx argv, and execs it with stdio
+// inherited.
 //
 // The default path forwards NO credential bearer into the sandbox: Google
-// Workspace now rides the sbx gateway as the host-side `gog` MCP server (the
+// Workspace rides the sbx gateway as the host-side `gog` MCP server (the
 // `slack` pattern), authed entirely on the host — there is nothing to inject.
-func runRun(argv []string) {
-	// `--task NAME` shorthand: equivalent to `pix task run NAME`, expanded
-	// BEFORE ParseRunArgs sees it — task.Path/Resolve (L1) do the resolution;
-	// this file only rewrites argv into the ordinary DIR + --name shape `run`
-	// already understands, so no sandbox-lifecycle code is duplicated here.
-	if expanded, matched, terr := expandTaskFlag(argv); matched {
-		if terr != nil {
-			fmt.Fprintf(os.Stderr, "pix run --task: %v\n", terr)
-			os.Exit(1)
-		}
-		argv = expanded
-	}
-
+func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	var generatedKitDirs []string
-	cleanupGeneratedKits := func() {
-		if err := launch.CleanupGeneratedKitDirs(generatedKitDirs); err != nil {
-			fmt.Fprintf(os.Stderr, "pix: warning: %v\n", err)
+	defer func() {
+		if cerr := launch.CleanupGeneratedKitDirs(generatedKitDirs); cerr != nil {
+			fmt.Fprintf(d.Err, "pix: warning: %v\n", cerr)
 		}
-	}
-	defer cleanupGeneratedKits()
-	exit := func(code int) {
-		cleanupGeneratedKits()
-		os.Exit(code)
-	}
-
-	o, err := launch.ParseRunArgs(argv)
-	if err != nil {
-		if err == cli.ErrHelpRequested {
-			// -h/--help: usage to STDOUT, exit 0 (a help request, not an error).
-			fmt.Print(runUsage)
-			return
-		}
-		fmt.Fprintf(os.Stderr, "pix run: %v\n\n", err)
-		fmt.Fprint(os.Stderr, runUsage)
-		exit(2)
-	}
+	}()
 
 	// Default the session intent from config (run_intent, the "overlord") when the
 	// user pinned neither --model nor --intent. This is what flips the top-level
@@ -86,9 +201,9 @@ func runRun(argv []string) {
 			if applied, rerr := launch.ApplyConfiguredSessionModel(&o, cfg); rerr != nil {
 				// A bad config value must not brick launch, but it must be loud. The
 				// explicit --intent path below remains a hard usage error.
-				fmt.Fprintf(os.Stderr, "pix: run_intent %q did not resolve (%v); using pi's default model. Fix with `pix config set run_intent <intent>`.\n", strings.TrimSpace(cfg.RunIntent), rerr)
+				fmt.Fprintf(d.Err, "pix: run_intent %q did not resolve (%v); using pi's default model. Fix with `pix config set run_intent <intent>`.\n", strings.TrimSpace(cfg.RunIntent), rerr)
 			} else if applied && o.Model != "" {
-				fmt.Fprintf(os.Stderr, "pix: intent %q -> model %s\n", o.Intent, o.Model)
+				fmt.Fprintf(d.Err, "pix: intent %q -> model %s\n", o.Intent, o.Model)
 			}
 		}
 	}
@@ -106,51 +221,40 @@ func runRun(argv []string) {
 	if o.Intent != "" && o.Model == "" {
 		m, rerr := inference.ResolveSessionModel(o.Intent)
 		if rerr != nil {
-			fmt.Fprintf(os.Stderr, "pix run: --intent %q: %v\n", o.Intent, rerr)
-			exit(2)
-		} else {
-			o.Model = m
-			fmt.Fprintf(os.Stderr, "pix: intent %q -> model %s\n", o.Intent, m)
+			return runFail(d, 2, "--intent %q: %v", o.Intent, rerr)
 		}
+		o.Model = m
+		fmt.Fprintf(d.Err, "pix: intent %q -> model %s\n", o.Intent, m)
 	}
 
-	// Bare-minimum key bootstrap: a pi session needs at least one model provider
-	// key. `run` otherwise stays out of the way (no onboarding, no nags), but with
-	// NO usable key it can't launch — so auto-run the key flow (resolve your
-	// 1Password refs into sbx; on a TTY, steer you to 1Password). When a key is
-	// already present this is a cheap no-op. Then refuse ONLY when we can POSITIVELY
-	// confirm no key (tri-state): sbx absent OR its control plane unprobeable =
-	// can't verify = proceed, never a false refusal on a transient failure.
-	//
-	// The probe result is KEPT (keyResult) and handed to the readiness snapshot
-	// further down, so rendering readiness costs `run` no second `sbx secret ls`.
+	// Bare-minimum key bootstrap: a pi session needs at least one provider key,
+	// so resolve the 1Password refs into sbx (a cheap no-op when a key is
+	// already there), then refuse ONLY on a POSITIVE "no key" answer — sbx
+	// absent or unprobeable means can't verify, which proceeds. keyResult is
+	// KEPT for the readiness snapshot, so run pays for one `sbx secret ls`.
 	var keyResult health.Result
-	if _, err := defaultShellEnv().LookPath("sbx"); err == nil && !inference.ConfiguredKeylessInference() {
+	if _, lerr := defaultShellEnv().LookPath("sbx"); lerr == nil && !inference.ConfiguredKeylessInference() {
 		env := defaultShellEnv()
-		launch.BootstrapProviderKeys(env, os.Stdin, os.Stderr, cli.IsTTY(os.Stdin))
+		launch.BootstrapProviderKeys(env, os.Stdin, d.Err, d.Interactive)
 		keyResult = launch.ProbeModelKeys(context.Background(), "")
 		if launch.RefusesLaunch(keyResult) {
-			fmt.Fprint(os.Stderr, secret.ModelKeyMissingMessage(env))
-			exit(1)
+			fmt.Fprint(d.Err, secret.ModelKeyMissingMessage(env))
+			return cli.SilentError{Code: 1}
 		}
 	}
 
 	// Reconcile any control-plane proposal a prior in-session onboarding wrote
-	// (<workspace>/.pix/onboarding.json): validate it, show the diff, apply
-	// under a [Y/n] gate, register newly-enabled MCP servers, delete the file. This
-	// runs BEFORE workspace.LoadResolvedConfig so a fresh create picks up the applied config.
-	// Best-effort and non-blocking on a non-TTY (it just leaves the file).
-	onboard.ReconcileOnboarding(o.Workspace, defaultShellEnv(), os.Stdin, os.Stdout, false, cli.IsTTY(os.Stdin), onboardDeps())
+	// (<workspace>/.pix/onboarding.json), BEFORE LoadResolvedConfig so a fresh
+	// create picks it up. Best-effort; a non-TTY just leaves the file.
+	onboard.ReconcileOnboarding(o.Workspace, defaultShellEnv(), os.Stdin, os.Stdout, false, d.Interactive, onboardDeps())
 
-	// Load the config for the rest of run (kits, mcp, gog, pack). The
+	// Load the config for the rest of run (kits, mcp, gog, pack).
 	cfg, _, err := workspace.LoadResolvedConfig()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix run: %v\n", err)
-		exit(1)
+		return runFail(d, 1, "%v", err)
 	}
 	if !inference.AllowsModel(cfg, o.Model) {
-		fmt.Fprintf(os.Stderr, "pix run: model %q is not available through the configured inference backends\n", o.Model)
-		exit(2)
+		return runFail(d, 2, "model %q is not available through the configured inference backends", o.Model)
 	}
 
 	// Own the sandbox name so we can manage its lifecycle. sbx would otherwise
@@ -162,12 +266,9 @@ func runRun(argv []string) {
 	}
 	state := launch.ProbeTaskSandbox(defaultShellEnv(), o.Name)
 
-	// Mirror sbx's own model: an existing sandbox (running OR stopped) RE-ATTACHES
-	// instead of refusing/recreating — the create-only flags (--kit/--template/
-	// --mcp/config-stacked-kits/--dev/dev-skills) only apply to a fresh create, so they are
-	// simply not sent (and, per launch.WillCreate below, not even RESOLVED) on re-attach.
-	// --replace forces the old implicit-recreate behavior (rm -f then create) for
-	// either state, so changed kit/mcp/create-only flags take effect.
+	// Mirror sbx's own model: an existing sandbox (running OR stopped)
+	// RE-ATTACHES rather than being recreated, so the create-only flags are not
+	// even RESOLVED here. --replace forces rm -f + create for either state.
 	if launch.WillCreate(state, o.Replace) {
 		// Kit selection. A CLEAN released version (e.g. "0.0.16") pins the matching
 		// git tag; anything else — an unstamped "dev" build, a "0.0.16+local" local
@@ -183,61 +284,57 @@ func runRun(argv []string) {
 			ref, src := launch.ResolveKitRef(version, o.KitRef, cfg.VersionPin)
 			o.KitRef = ref
 			if msg := launch.KitRefNotice(version, ref, src); msg != "" {
-				fmt.Fprintln(os.Stderr, msg)
+				fmt.Fprintln(d.Err, msg)
 			}
 		}
 
 		if o.Dev {
 			// --dev needs a resolvable repo checkout; fail loud otherwise. --dev is
 			// create/replace-only (this branch), so it is a no-op on a plain re-attach.
-			root, err := launch.ResolveRepoRoot()
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "pix run --dev: %v\n", err)
-				exit(1)
+			root, rerr := launch.ResolveRepoRoot()
+			if rerr != nil {
+				return runFail(d, 1, "--dev: %v", rerr)
 			}
 			o.DevRoot = root
 			o.LocalKit = filepath.Join(root, "pi-kit")
 			o.LocalImageTag = launch.ReadLocalImageTag(root)
 		} else if !released && !kitOverride {
-			if root, err := launch.ResolveRepoRoot(); err == nil {
+			if root, rerr := launch.ResolveRepoRoot(); rerr == nil {
 				o.LocalKit = filepath.Join(root, "pi-kit")
 				o.LocalImageTag = launch.ReadLocalImageTag(root)
 				note := ""
 				if o.LocalImageTag != "" {
 					note = " (local image :" + o.LocalImageTag + ")"
 				}
-				fmt.Fprintf(os.Stderr, "pix: unreleased build %q — using local checkout kit %s%s\n", version, o.LocalKit, note)
+				fmt.Fprintf(d.Err, "pix: unreleased build %q — using local checkout kit %s%s\n", version, o.LocalKit, note)
 			} else {
-				fmt.Fprintf(os.Stderr, "pix: unreleased build %q and no pix checkout found — "+
+				fmt.Fprintf(d.Err, "pix: unreleased build %q and no pix checkout found — "+
 					"kit tracks #ref=main (may not match this binary). Use `pix run --dev` from a "+
 					"checkout or `pix run --kit <path-or-git-url>` to override.\n", version)
 			}
 		}
 	} else if o.Dev {
-		fmt.Fprintln(os.Stderr, "pix: --dev is create/replace-only; re-attaching to the existing sandbox as-is (use --replace to recreate with --dev)")
+		fmt.Fprintln(d.Err, "pix: --dev is create/replace-only; re-attaching to the existing sandbox as-is (use --replace to recreate with --dev)")
 	}
 
 	// Active pack: mount its skills/ + knowledge/ so the pack's context loads in
 	// this sandbox. --pack overrides config.Pack; with neither set, no pack is
 	// active. Create-time only (skills + knowledge are create-time mounts; a
 	// re-attach keeps what it was made with).
-	// effectivePack is the pack root that ACTUALLY loaded and applied, as
-	// opposed to pack.ActivePackRoot(cfg.Pack, o.Pack) (the merely CONFIGURED one).
-	// It defaults to the configured root for a re-attach (no launch.ApplyPackToLaunch
-	// call — launch.WritePackContextFiles below still attempts its own load and
-	// degrades to unscoped on failure), and is overwritten with
-	// launch.ApplyPackToLaunch's honest return on a create, where it becomes "" if
-	// the pack degraded via pack.ErrNotAPack. This is what keeps the sandbox.pack
-	// marker and memory scope from disagreeing about what actually loaded.
+	// effectivePack is the pack root that ACTUALLY loaded, as opposed to the
+	// merely CONFIGURED one: it is the configured root on a re-attach, and
+	// ApplyPackStackToLaunch's honest return ("" when the pack degraded) on a
+	// create. That is what keeps the sandbox.pack marker and the memory scope
+	// from disagreeing about what loaded.
 	effectivePack := pack.ActivePackRoot(cfg.Pack, o.Pack)
 	if launch.WillCreate(state, o.Replace) {
 		// Fatal on error (explicit --pack that doesn't load, or a declared
 		// sandbox proxy whose kit can't be built — round-4 F2 fail-closed):
 		// never create a sandbox missing context the pack declared.
-		root, err := launch.ApplyPackStackToLaunch(cfg, &o, defaultShellEnv())
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "pix: %v\n", err)
-			exit(1)
+		root, perr := launch.ApplyPackStackToLaunch(cfg, &o, defaultShellEnv())
+		if perr != nil {
+			fmt.Fprintf(d.Err, "pix: %v\n", perr)
+			return cli.SilentError{Code: 1}
 		}
 		effectivePack = root
 		// Inference is a generated create-time facet just like pack wrappers: the
@@ -245,8 +342,8 @@ func runRun(argv []string) {
 		// metadata. Credential values never enter this kit.
 		inferenceKit, ierr := inference.SynthesizeInferenceKit(cfg)
 		if ierr != nil {
-			fmt.Fprintf(os.Stderr, "pix: inference: %v\n", ierr)
-			exit(1)
+			fmt.Fprintf(d.Err, "pix: inference: %v\n", ierr)
+			return cli.SilentError{Code: 1}
 		}
 		if inferenceKit != "" {
 			o.PackKits = append(o.PackKits, inferenceKit)
@@ -254,13 +351,13 @@ func runRun(argv []string) {
 		}
 		o.Models, ierr = inference.CallableRuntimeModels(cfg)
 		if ierr != nil {
-			fmt.Fprintf(os.Stderr, "pix: inference models: %v\n", ierr)
-			exit(1)
+			fmt.Fprintf(d.Err, "pix: inference models: %v\n", ierr)
+			return cli.SilentError{Code: 1}
 		}
 		contextKit, cerr := launch.SynthesizePersonalContextKit()
 		if cerr != nil {
-			fmt.Fprintf(os.Stderr, "pix: personal context: %v\n", cerr)
-			exit(1)
+			fmt.Fprintf(d.Err, "pix: personal context: %v\n", cerr)
+			return cli.SilentError{Code: 1}
 		}
 		if contextKit != "" {
 			o.PackKits = append(o.PackKits, contextKit)
@@ -276,11 +373,11 @@ func runRun(argv []string) {
 	// reads the sandbox's own spec and doesn't re-pin --template.)
 	if launch.WillCreate(state, o.Replace) && o.LocalImageTag != "" && len(o.Kits) == 0 && o.LocalKit != "" && o.Template == "" {
 		if !launch.LocalImageLoaded(defaultShellEnv(), o.LocalImageTag) {
-			fmt.Fprintf(os.Stderr, "pix: local image %s:%s is not loaded in sbx.\n", launch.DockerImageRepo, o.LocalImageTag)
-			fmt.Fprintln(os.Stderr, "It's a local build (never published), so sbx would try to pull it and stall on a prompt.")
-			fmt.Fprintln(os.Stderr, "Load this build into sbx first, from your pix checkout:")
-			fmt.Fprintln(os.Stderr, "  make load")
-			exit(1)
+			fmt.Fprintf(d.Err, "pix: local image %s:%s is not loaded in sbx.\n", launch.DockerImageRepo, o.LocalImageTag)
+			fmt.Fprintln(d.Err, "It's a local build (never published), so sbx would try to pull it and stall on a prompt.")
+			fmt.Fprintln(d.Err, "Load this build into sbx first, from your pix checkout:")
+			fmt.Fprintln(d.Err, "  make load")
+			return cli.SilentError{Code: 1}
 		}
 	}
 
@@ -289,10 +386,10 @@ func runRun(argv []string) {
 	// Only local-* tags get this guard — a published ref is legitimately pullable.
 	if launch.WillCreate(state, o.Replace) && o.Template != "" {
 		if tag := launch.TemplateTag(o.Template); strings.HasPrefix(tag, "local-") && !launch.LocalImageLoaded(defaultShellEnv(), tag) {
-			fmt.Fprintf(os.Stderr, "pix: --template %s is not loaded in sbx.\n", o.Template)
-			fmt.Fprintln(os.Stderr, "It's a local build (never published), so sbx would try to pull it and stall on a prompt.")
-			fmt.Fprintln(os.Stderr, "Load it first, from the checkout that built it:  make load")
-			exit(1)
+			fmt.Fprintf(d.Err, "pix: --template %s is not loaded in sbx.\n", o.Template)
+			fmt.Fprintln(d.Err, "It's a local build (never published), so sbx would try to pull it and stall on a prompt.")
+			fmt.Fprintln(d.Err, "Load it first, from the checkout that built it:  make load")
+			return cli.SilentError{Code: 1}
 		}
 	}
 
@@ -308,22 +405,20 @@ func runRun(argv []string) {
 		// Fail closed BEFORE any output claims a replace/create/reattach is
 		// happening, and before RmFirst or exec — see launch.PlanSandboxLaunch's
 		// launch.SbxUnknown+replace case.
-		fmt.Fprintf(os.Stderr, "pix run: %v\n", plan.Err)
-		exit(1)
+		return runFail(d, 1, "%v", plan.Err)
 	}
 	if !plan.Reattach {
-		if err := launch.ValidateCreateKits(plan.Args, launch.ValidateSbxKit); err != nil {
-			fmt.Fprintf(os.Stderr, "pix run: %v\n", err)
-			exit(1)
+		if verr := launch.ValidateCreateKits(plan.Args, launch.ValidateSbxKit); verr != nil {
+			return runFail(d, 1, "%v", verr)
 		}
 	}
 	switch {
 	case o.Replace:
-		fmt.Fprintf(os.Stderr, "pix run: replacing sandbox %q\n", o.Name)
+		fmt.Fprintf(d.Err, "pix run: replacing sandbox %q\n", o.Name)
 	case plan.Reattach && state == launch.SbxRunning:
-		fmt.Fprintf(os.Stderr, "pix run: re-attaching to running sandbox %q\n", o.Name)
+		fmt.Fprintf(d.Err, "pix run: re-attaching to running sandbox %q\n", o.Name)
 	case plan.Reattach:
-		fmt.Fprintf(os.Stderr, "pix run: starting + attaching existing sandbox %q (use --replace to recreate with current kit/mcp/flags)\n", o.Name)
+		fmt.Fprintf(d.Err, "pix run: starting + attaching existing sandbox %q (use --replace to recreate with current kit/mcp/flags)\n", o.Name)
 	}
 	// finding #8: a reattach is honest about live-vs-recreate for MOST facets
 	// above, but says nothing about a pack switched since this sandbox was
@@ -331,7 +426,7 @@ func runRun(argv []string) {
 	// --replace. Surface that explicitly rather than silently reattaching to a
 	// stale facet set.
 	if msg := launch.StalePackReattachWarning(cfg, o, plan.Reattach); msg != "" {
-		fmt.Fprintln(os.Stderr, msg)
+		fmt.Fprintln(d.Err, msg)
 	}
 	// Product gap #2: reattach honesty. Separate from launch.StalePackReattachWarning
 	// (which only speaks to skills/bin drift from a pack switch). This checks
@@ -339,7 +434,7 @@ func runRun(argv []string) {
 	// WHY a desired server might not be attached (config change, pack change,
 	// explicit --mcp, or no receipt at all). Never auto-loads, only reports.
 	if msg := launch.McpReattachWarning(cfg, o, plan.Reattach); msg != "" {
-		fmt.Fprintln(os.Stderr, msg)
+		fmt.Fprintln(d.Err, msg)
 	}
 	// Lazy auto-start: make the configured host services (memory) reachable
 	// before the sandbox tries them, with a SHORT budget — the launch waits AT
@@ -349,52 +444,32 @@ func runRun(argv []string) {
 	// progress/failure lines.
 	service.EnsureUp(nil, service.EnsureRunTimeout)
 
-	// Readiness, rendered from the small shared snapshot (launch/readiness.go)
-	// and reusing the key evidence the launch gate above already paid for. Two
-	// rules, both deliberate:
-	//   - AT MOST launch.WarningLimit rows, then a single count pointing at
-	//     doctor. `run` is the daily command; a wall of readiness text here is
-	//     how a user learns to skip readiness output entirely.
-	//   - It NEVER blocks. The only launch-stopping condition is the missing
-	//     provider key handled above, because that is the only gap that makes
-	//     the session useless rather than degraded.
-	launch.RenderWarnings(os.Stderr, launch.FastSnapshot(context.Background(), cfg, keyResult), launch.WarningLimit)
+	// Readiness, reusing the key evidence the launch gate above already paid
+	// for. AT MOST launch.WarningLimit rows (a wall of text here is how a user
+	// learns to skip readiness output), and it NEVER blocks: the missing
+	// provider key handled above is the only launch-stopping gap.
+	launch.RenderWarnings(d.Err, launch.FastSnapshot(context.Background(), cfg, keyResult), launch.WarningLimit)
 
-	// Local model + memory scope: hand the configured ollama_bridge_model to the
-	// in-VM ollama-bridge, and the active pack's memory_scope (default: the pack
-	// name; "default" is the shared/unscoped tag) to the in-VM recall/capture
-	// extensions, via per-run workspace files. No active pack -> pack.WriteMemoryScope
-	// removes any stale file (unscoped recall). Best-effort throughout: an
+	// Local model + memory scope, handed to the in-VM ollama-bridge and
+	// recall/capture extensions via per-run workspace files. Best-effort: an
 	// unloadable pack degrades to unscoped rather than failing run. Shared with
-	// `task new` via launch.WritePackContextFiles (pack.go) so both launch paths write
-	// the SAME pack context.
+	// `task new` so both launch paths write the SAME pack context.
 	launch.WritePackContextFiles(cfg, o, effectivePack)
 
-	// Trusted host state: the host-visible facts the fenced agent can't see for
-	// itself (keys/services/knowledge/gog/mcp/models/pack/identity). This
-	// travels ONLY inside the launcher-generated initial prompt (the pi
-	// passthrough arg carrying launch.GeneratedInputMarker, e.g. setup.OnboardingKickoff) —
-	// never as a workspace file, which a cloned repo could plant or leave stale.
-	// launch.InjectTrustedHostState is a no-op (and probes nothing) when no such arg is
-	// present, so a normal run never pays for or produces onboarding truth.
-	//
-	// The --pack override only takes effect on a CREATE (packs mount at creation);
-	// on a re-attach the sandbox keeps whatever pack it was made with, so don't
-	// claim the override in the payload — fall back to the persisted active pack.
+	// Trusted host state travels ONLY inside the launcher-generated initial
+	// prompt, never as a workspace file a cloned repo could plant. It is a
+	// no-op (and probes nothing) without such a prompt. The --pack override
+	// only takes effect on a CREATE, so a re-attach must not claim it.
 	packForState := ""
 	if launch.WillCreate(state, o.Replace) {
 		packForState = o.Pack
 	}
-	// This is a HARD contract, not best-effort: when a generated prompt IS
-	// present, it is the fenced in-VM agent's ONLY source of trusted host-visible
-	// truth, so a launch that can't build/encode it must ABORT before exec'ing
-	// sbx rather than hand the agent a generated prompt with no trusted payload.
-	// Destructive replacement is deliberately last: all fallible, read-only
-	// kit/readiness/trusted-state preflights above must succeed before the old
-	// sandbox is removed. A failed generated onboarding payload must never leave
-	// the user with neither the old sandbox nor a replacement.
+	// A HARD contract: when a generated prompt IS present it is the fenced
+	// agent's ONLY trusted host truth, so a launch that cannot build it ABORTS
+	// before exec. Destructive replacement is deliberately last — every
+	// fallible read-only preflight must pass before the old sandbox is removed.
 	var args []string
-	err = launch.PreflightBeforeReplace(func() error {
+	if perr := launch.PreflightBeforeReplace(func() error {
 		var preflightErr error
 		args, preflightErr = launch.InjectTrustedHostState(plan.Args, cfg, defaultShellEnv(), packForState)
 		if preflightErr != nil {
@@ -403,10 +478,8 @@ func runRun(argv []string) {
 		return nil
 	}, func() error {
 		return launch.ApplyReplaceRm(defaultShellEnv(), plan, o.Name)
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix run: %v\n", err)
-		exit(1)
+	}); perr != nil {
+		return runFail(d, 1, "%v", perr)
 	}
 	// Record the pack only after every hard-fail preflight and any replacement
 	// removal succeeded. A failed trusted-state preflight must leave both the old
@@ -416,7 +489,7 @@ func runRun(argv []string) {
 	}
 
 	if os.Getenv("PIX_DEBUG") != "" {
-		fmt.Fprintln(os.Stderr, "+ sbx "+strings.Join(args, " "))
+		fmt.Fprintln(d.Err, "+ sbx "+strings.Join(args, " "))
 	}
 
 	cmd := exec.Command("sbx", args...)
@@ -433,38 +506,40 @@ func runRun(argv []string) {
 	// fresh create receipt over the existing lifetime), record the
 	// create receipt ONLY after this exact `sbx run` exec has itself succeeded
 	// — never before, never on failure, never on reattach.
-	if err := launch.ExecSbxRunAndRecordCreate(cmd, launch.DefinitelyCreating(state, o.Replace), o.Name, workspace.CanonicalPath(o.Workspace), o.StaticMCP); err != nil {
+	if xerr := launch.ExecSbxRunAndRecordCreate(cmd, launch.DefinitelyCreating(state, o.Replace), o.Name, workspace.CanonicalPath(o.Workspace), o.StaticMCP); xerr != nil {
 		var rerr *workspace.ReceiptRecordError
-		if errors.As(err, &rerr) {
+		if errors.As(xerr, &rerr) {
 			// The sandbox itself WAS created successfully — only the local
 			// receipt failed. Say so honestly rather than implying the launch
 			// failed, but still exit non-zero: doctor/status must not be told
 			// this sandbox's MCP set is recorded when it isn't.
-			fmt.Fprintf(os.Stderr, "pix run: %v\n", rerr)
-			fmt.Fprintln(os.Stderr, "the sandbox itself launched fine; only pix's local record of its preloaded MCP set failed to write. check state-dir permissions and re-run `pix doctor`.")
-			exit(1)
+			fmt.Fprintf(d.Err, "pix run: %v\n", rerr)
+			fmt.Fprintln(d.Err, "the sandbox itself launched fine; only pix's local record of its preloaded MCP set failed to write. check state-dir permissions and re-run `pix doctor`.")
+			return cli.SilentError{Code: 1}
 		}
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		var exitErr *exec.ExitError
+		if errors.As(xerr, &exitErr) {
 			// If we pinned a git #ref kit and sbx bailed (classically git exit 128
 			// "Remote branch not found"), the raw error is opaque — replace it with
 			// an actionable note instead of leaking the git 128.
 			if msg := launch.KitResolveFailureMsg(launch.PinnedGitKit(args)); msg != "" {
-				fmt.Fprintln(os.Stderr, msg)
+				fmt.Fprintln(d.Err, msg)
 			}
 			// A re-attach exec can fail on an sbx version that won't reattach a
 			// kit-created sandbox; don't leave the user stuck without a next step.
 			if plan.Reattach {
-				fmt.Fprintf(os.Stderr, "pix run: re-attach failed; recreate it with: %s\n", launch.RunReplaceCommand(o.Workspace))
+				fmt.Fprintf(d.Err, "pix run: re-attach failed; recreate it with: %s\n", launch.RunReplaceCommand(o.Workspace))
 			}
-			exit(exitErr.ExitCode())
+			return cli.SilentError{Code: exitErr.ExitCode()}
 		}
-		fmt.Fprintf(os.Stderr, "pix run: exec sbx: %v\n", err)
-		if errors.Is(err, exec.ErrNotFound) {
-			fmt.Fprintln(os.Stderr, "install sbx with: "+doctor.SbxInstallHint)
+		fmt.Fprintf(d.Err, "pix run: exec sbx: %v\n", xerr)
+		if errors.Is(xerr, exec.ErrNotFound) {
+			fmt.Fprintln(d.Err, "install sbx with: "+doctor.SbxInstallHint)
 		}
 		if plan.Reattach {
-			fmt.Fprintf(os.Stderr, "pix run: re-attach failed; recreate it with: %s\n", launch.RunReplaceCommand(o.Workspace))
+			fmt.Fprintf(d.Err, "pix run: re-attach failed; recreate it with: %s\n", launch.RunReplaceCommand(o.Workspace))
 		}
-		exit(1)
+		return cli.SilentError{Code: 1}
 	}
+	return nil
 }

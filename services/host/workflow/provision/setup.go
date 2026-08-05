@@ -311,9 +311,10 @@ func ProviderKeyEnvVars() []string {
 	return out
 }
 
-const Usage = `usage: pix setup [DIR] [host-config flags]
-
-Provisions this host, then starts Pix. Setup CHECKS every capability it owns,
+// Description is the prose above setup's GENERATED usage: what the loop
+// guarantees and how a repeat behaves. The flag list is not here — the command
+// struct's tags are the flag list.
+const Description = `Provisions this host, then starts Pix. Setup CHECKS every capability it owns,
 applies only the gaps it verified, and CHECKS AGAIN — the second check is the
 only thing that reports readiness, so nothing is called ready because a step
 said so.
@@ -330,35 +331,6 @@ choices: 'pix run [DIR]' to reattach, or 'pix setup [DIR] --replace' to recreate
 it with your current settings and get the tour. Only a POSITIVELY absent sandbox
 gets the first-launch handoff; if the sandbox state cannot be determined at all
 (sbx errored), setup fails closed after the host phase — fix sbx and re-run.
-
-Setup flags:
-  --no-agent               run the HOST phase only: no sandbox, no handoff.
-                           This is the scripted/CI path
-  --apply                  apply a pending .pix/onboarding.json in DIR
-                           (the control-plane proposal an in-sandbox onboarding
-                           agent wrote), under a confirmation gate
-  --replace                recreate an existing sandbox for DIR (sbx rm -f +
-                           create) so it picks up current pack/MCP/skills and
-                           receives the guided tour; harmless when absent
-  --verbose                show underlying sbx, Git, Docker, and setup command
-                           output; ordinary setup prints only actions/results
-  --pull-models            pull any CONFIRMED-missing configured local Ollama
-                           model. This is the ONLY download consent setup
-                           honors — a broad --yes never downloads, and setup
-                           never installs Ollama itself
-
-Host-config flags (all optional):
-  --pack <path|git+https-url#ref=branch|tag|sha>
-                           activate a pack through the normal host trust gate,
-                           then run its required, resumable setup hooks;
-                           repeatable, composed in command order
-  --with <setup-id>        also run a named optional setup hook from --pack;
-                           repeatable, and invalid without --pack
-  --mcp <name>             enable an MCP server (repeatable; allowlisted)
-  --model <ollama-model>   set the ollama-bridge model
-  --models <id,id,...>     restrict agents to these canonical catalog models
-  --yes | --non-interactive  never prompt (CI)
-  -h | --help              this help
 
 Provider keys are NOT collected here: run ` + "`pix models add <provider>`" + `, which
 is the one place a 1Password ref is solicited. Setup reports the key store

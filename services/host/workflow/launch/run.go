@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/inference"
@@ -386,122 +385,6 @@ func RunReplaceCommand(ws string) string {
 		return "pix run --replace"
 	}
 	return "pix run " + sys.ShellQuote(ws) + " --replace"
-}
-
-// ParseRunArgs is a small hand-rolled parser (no cobra, no third-party flags) so
-// DIR can appear before or after the flags, matching the flexibility of the old
-// bin/pix shell launcher. Everything after `--` is pi passthrough.
-func ParseRunArgs(argv []string) (RunOpts, error) {
-	// -h/--help anywhere before `--` is a help request, not a parse error.
-	if cli.WantsHelp(argv) {
-		return RunOpts{}, cli.ErrHelpRequested
-	}
-	o := RunOpts{Workspace: "."}
-	wsSet := false
-
-	// Split off the `--` passthrough first.
-	pre := argv
-	for i, a := range argv {
-		if a == "--" {
-			pre = argv[:i]
-			o.Passthrough = append([]string(nil), argv[i+1:]...)
-			break
-		}
-	}
-
-	valueOf := func(a string, i *int) (string, error) {
-		if eq := strings.IndexByte(a, '='); eq >= 0 {
-			return a[eq+1:], nil
-		}
-		if *i+1 >= len(pre) {
-			return "", fmt.Errorf("flag %s needs a value", a)
-		}
-		*i++
-		return pre[*i], nil
-	}
-
-	for i := 0; i < len(pre); i++ {
-		a := pre[i]
-		name := a
-		if eq := strings.IndexByte(a, '='); eq >= 0 {
-			name = a[:eq]
-		}
-		switch {
-		case a == "--dev":
-			o.Dev = true
-		case a == "--replace":
-			o.Replace = true
-		case name == "--name":
-			v, err := valueOf(a, &i)
-			if err != nil {
-				return o, err
-			}
-			o.Name = v
-		case name == "--model":
-			v, err := valueOf(a, &i)
-			if err != nil {
-				return o, err
-			}
-			o.Model = v
-		case name == "--intent":
-			v, err := valueOf(a, &i)
-			if err != nil {
-				return o, err
-			}
-			o.Intent = v
-		case name == "--skills":
-			v, err := valueOf(a, &i)
-			if err != nil {
-				return o, err
-			}
-			o.Skills = append(o.Skills, v)
-		case name == "--kit":
-			v, err := valueOf(a, &i)
-			if err != nil {
-				return o, err
-			}
-			o.Kits = append(o.Kits, v)
-		case name == "--kit-ref":
-			v, err := valueOf(a, &i)
-			if err != nil {
-				return o, err
-			}
-			o.KitRef = normalizeKitRef(v)
-		case name == "--template":
-			v, err := valueOf(a, &i)
-			if err != nil {
-				return o, err
-			}
-			o.Template = v
-		case name == "--pack":
-			v, err := valueOf(a, &i)
-			if err != nil {
-				return o, err
-			}
-			o.Pack = v
-		case name == "--mcp":
-			v, err := valueOf(a, &i)
-			if err != nil {
-				return o, err
-			}
-			o.MCP = append(o.MCP, v)
-		case strings.HasPrefix(a, "-"):
-			return o, fmt.Errorf("unknown flag %q", a)
-		default:
-			if wsSet {
-				return o, fmt.Errorf("unexpected extra argument %q (only one DIR allowed; use -- for pi args)", a)
-			}
-			o.Workspace = a
-			wsSet = true
-		}
-	}
-	// A non-"." workspace MUST be an existing directory. Otherwise a mistyped verb
-	// (`pix run help`, `run doctro`) would silently boot a junk sandbox named
-	// after the typo. Reject it, suggesting the verb when the token matches one.
-	if err := ValidateRunWorkspace(o.Workspace); err != nil {
-		return o, err
-	}
-	return o, nil
 }
 
 // ValidateRunWorkspace verifies a resolved run workspace is launchable: the cwd

@@ -430,9 +430,9 @@ func TestRunDevResolution_SkippedOnReattach(t *testing.T) {
 
 // TestParseRunArgs_Replace: --replace parses as a bare boolean flag.
 func TestParseRunArgs_Replace(t *testing.T) {
-	o, err := launch.ParseRunArgs([]string{"--replace"})
+	o, err := parseRunOpts([]string{"--replace"})
 	if err != nil {
-		t.Fatalf("launch.ParseRunArgs(--replace) error: %v", err)
+		t.Fatalf("parseRunOpts(--replace) error: %v", err)
 	}
 	if !o.Replace {
 		t.Error("expected Replace=true")

@@ -104,8 +104,9 @@ func TestSetupHandoff_HangingSbxFailsClosed(t *testing.T) {
 		t.Fatalf("hanging probe must be launch.SbxUnknown, got %v", state)
 	}
 	var out bytes.Buffer
-	err := runSetupHandoff(".", "pix-ws", state, false, &out, func([]string) {
+	err := runSetupHandoff(".", "pix-ws", state, false, &out, func([]string) error {
 		t.Fatal("setup must never launch on an indeterminate sandbox state")
+		return nil
 	})
 	if err == nil || !strings.Contains(err.Error(), "cannot determine the state") {
 		t.Errorf("setup with an unknown sandbox state must fail closed, got: %v", err)

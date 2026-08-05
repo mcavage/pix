@@ -206,7 +206,7 @@ func TestBuildSbxArgs_TemplateOrthogonalToKit(t *testing.T) {
 
 func TestParseRunArgs_Template(t *testing.T) {
 	ref := "docker.io/mcavage/pix:local-999"
-	o, err := launch.ParseRunArgs([]string{"--template", ref, "--replace"})
+	o, err := parseRunOpts([]string{"--template", ref, "--replace"})
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestParseRunArgs_Template(t *testing.T) {
 		t.Errorf("Replace should be set")
 	}
 	// --template=REF form too.
-	o2, err := launch.ParseRunArgs([]string{"--template=" + ref})
+	o2, err := parseRunOpts([]string{"--template=" + ref})
 	if err != nil {
 		t.Fatalf("parse (=form): %v", err)
 	}
@@ -517,30 +517,30 @@ func TestParseRunArgs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := launch.ParseRunArgs(tt.argv)
+			got, err := parseRunOpts(tt.argv)
 			if err != nil {
-				t.Fatalf("launch.ParseRunArgs(%v) error: %v", tt.argv, err)
+				t.Fatalf("parseRunOpts(%v) error: %v", tt.argv, err)
 			}
 			if got.Workspace != tt.want.Workspace || got.Name != tt.want.Name ||
 				got.Model != tt.want.Model || got.Dev != tt.want.Dev {
-				t.Errorf("launch.ParseRunArgs(%v) = %+v, want %+v", tt.argv, got, tt.want)
+				t.Errorf("parseRunOpts(%v) = %+v, want %+v", tt.argv, got, tt.want)
 			}
 			if !equalSlice(got.MCP, tt.want.MCP) || !equalSlice(got.Kits, tt.want.Kits) ||
 				!equalSlice(got.Passthrough, tt.want.Passthrough) {
-				t.Errorf("launch.ParseRunArgs(%v) slices = %+v, want %+v", tt.argv, got, tt.want)
+				t.Errorf("parseRunOpts(%v) slices = %+v, want %+v", tt.argv, got, tt.want)
 			}
 		})
 	}
 }
 
 func TestParseRunArgs_Errors(t *testing.T) {
-	if _, err := launch.ParseRunArgs([]string{"--bogus"}); err == nil {
+	if _, err := parseRunOpts([]string{"--bogus"}); err == nil {
 		t.Error("expected error for unknown flag")
 	}
-	if _, err := launch.ParseRunArgs([]string{"/a", "/b"}); err == nil {
+	if _, err := parseRunOpts([]string{"/a", "/b"}); err == nil {
 		t.Error("expected error for two positional dirs")
 	}
-	if _, err := launch.ParseRunArgs([]string{"--name"}); err == nil {
+	if _, err := parseRunOpts([]string{"--name"}); err == nil {
 		t.Error("expected error for flag missing value")
 	}
 }
