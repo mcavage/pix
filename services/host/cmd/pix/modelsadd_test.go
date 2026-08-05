@@ -19,7 +19,7 @@ import (
 	"pix/host/secret"
 	"pix/host/sys/systest"
 	"pix/host/workflow/doctor"
-	"pix/host/workflow/setup"
+	"pix/host/workflow/models"
 )
 
 // reconcileEnv fakes a host where the named providers have resolvable 1Password
@@ -71,9 +71,9 @@ func modelProvidersIn(ids []string) map[string]bool {
 // because it predates that field.
 //
 // The first design computed "which providers have I seen" from the live
-// bindings AFTER setup.ConfigureDirectInference had already bound google. Google
+// bindings AFTER models.ConfigureDirectInference had already bound google. Google
 // therefore counted as seen, widening skipped it, the roster stayed
-// anthropic-only, setup.VerifyDirectInference skipped its bindings (they were not in
+// anthropic-only, models.VerifyDirectInference skipped its bindings (they were not in
 // the roster), and the command printed success — reproducing the dead end
 // behind a green message. The baseline has to be captured PRE-mutation.
 func TestReconcileWidensRosterForNewProviderOnLegacyConfig(t *testing.T) {
@@ -89,7 +89,7 @@ func TestReconcileWidensRosterForNewProviderOnLegacyConfig(t *testing.T) {
 		// RosterProviders deliberately absent: this is a pre-feature config.
 	}}
 
-	res, err := setup.ReconcileDirectInference(cfg, modelsAddEnv(t, "anthropic", "google"), strings.NewReader(""), io.Discard, false, "", "")
+	res, err := models.ReconcileDirectInference(cfg, modelsAddEnv(t, "anthropic", "google"), strings.NewReader(""), io.Discard, false, "", "")
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestReconcileWithNoNewProviderLeavesRosterAlone(t *testing.T) {
 		RosterProviders: []string{"anthropic"},
 	}}
 
-	if _, err := setup.ReconcileDirectInference(cfg, modelsAddEnv(t, "anthropic"), strings.NewReader(""), io.Discard, false, "", ""); err != nil {
+	if _, err := models.ReconcileDirectInference(cfg, modelsAddEnv(t, "anthropic"), strings.NewReader(""), io.Discard, false, "", ""); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 	if len(cfg.Inference.AllowedModels) != 1 || cfg.Inference.AllowedModels[0] != "anthropic/claude-sonnet-5" {
@@ -151,9 +151,9 @@ func TestReconcileWithNoNewProviderLeavesRosterAlone(t *testing.T) {
 // behind it.
 func TestReconcileRefusesUnderMandatoryPack(t *testing.T) {
 	cfg := &config.Config{Inference: config.InferenceConfig{ExclusiveSource: "/packs/work"}}
-	_, err := setup.ReconcileDirectInference(cfg, modelsAddEnv(t, "anthropic"), strings.NewReader(""), io.Discard, false, "", "")
-	if err != setup.ErrInferenceExclusive {
-		t.Fatalf("want setup.ErrInferenceExclusive, got %v", err)
+	_, err := models.ReconcileDirectInference(cfg, modelsAddEnv(t, "anthropic"), strings.NewReader(""), io.Discard, false, "", "")
+	if err != models.ErrInferenceExclusive {
+		t.Fatalf("want models.ErrInferenceExclusive, got %v", err)
 	}
 	if len(cfg.Inference.Models) != 0 || len(cfg.Inference.Backends) != 0 {
 		t.Fatalf("the refusal must happen before any mutation, got %+v", cfg.Inference)

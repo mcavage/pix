@@ -143,9 +143,14 @@ var pkgLayer = map[string]int{
 	"workflow/doctor":     layerWorkflow,
 	"workflow/gworkspace": layerWorkflow,
 	"workflow/launch":     layerWorkflow,
-	"workflow/setup":      layerWorkflow,
-	// provision is the setup loop as a workflow: check, apply, check again. It
-	// composes health (L2) and whatever applies the caller passes in, and owns
+	// workflow/models is `pix models add`: the inference selection, live
+	// verification and roster machinery that used to be welded into setup's
+	// keys/inference mutation steps. It is a workflow (it composes config,
+	// secret, inference and routing), and it is the ONE place a provider
+	// credential is solicited now that setup only probes for one.
+	"workflow/models": layerWorkflow,
+	// provision is `pix setup` itself: check, apply, check again. It composes
+	// health (L2) and the applies for the three things setup installs, and owns
 	// no domain knowledge of its own.
 	"workflow/provision": layerWorkflow,
 

@@ -31,10 +31,8 @@ import (
 // serveLaunchdLabel is the LaunchAgent label (and plist basename).
 const serveLaunchdLabel = "com.pix.serve"
 
-// LaunchdLabel is serveLaunchdLabel for the one caller outside this package:
-// health's launchd probe, which has to name the label it asks launchctl
-// about. Exported rather than copied, because a doctor that probes a label
-// the installer does not write is worse than no probe at all.
+// LaunchdLabel exports the label for health's launchd probe. Exported rather
+// than copied: probing a label the installer never writes is worse than none.
 const LaunchdLabel = serveLaunchdLabel
 
 // The embedded template is the SINGLE SOURCE OF TRUTH for the generated
@@ -377,6 +375,12 @@ func RunInstall(argv []string) {
 	cfg, cfgErr := config.Load()
 	verifyManagedInstallHealth(cfg, cfgErr, DefaultStarter(), os.Stdout)
 }
+
+// Install is the non-exiting install seam: `pix setup` provisions the launchd
+// agent through the provision loop, which needs an apply that RETURNS its
+// failure (the loop records it and re-checks) rather than one that exits the
+// process. RunInstall keeps owning the argv/exit-code contract for the verb.
+func Install(out io.Writer) error { return platformServeInstall(out) }
 
 // RunUninstall is the `serve uninstall` entry point.
 func RunUninstall(argv []string) {

@@ -28,7 +28,6 @@ import (
 	"pix/host/secret"
 	"pix/host/sys/systest"
 	"pix/host/workflow/launch"
-	"pix/host/workflow/setup"
 	"reflect"
 	"strings"
 	"testing"
@@ -108,7 +107,7 @@ func TestSetupHandoff_HangingSbxFailsClosed(t *testing.T) {
 		t.Fatalf("hanging probe must be launch.SbxUnknown, got %v", state)
 	}
 	var out bytes.Buffer
-	err := setup.RunSetupHandoff(".", "pix-ws", state, false, &out, func([]string) {
+	err := runSetupHandoff(".", "pix-ws", state, false, &out, func([]string) {
 		t.Fatal("setup must never launch on an indeterminate sandbox state")
 	})
 	if err == nil || !strings.Contains(err.Error(), "cannot determine the state") {

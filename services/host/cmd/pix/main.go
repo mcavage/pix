@@ -30,7 +30,7 @@ import (
 	"pix/host/launcher"
 	"pix/host/service"
 	"pix/host/workflow/launch"
-	"pix/host/workflow/setup"
+	"pix/host/workflow/provision"
 )
 
 // version is stamped at build time via -ldflags "-X main.version=0.0.x". An
@@ -60,7 +60,7 @@ func main() {
 	if len(args) == 0 {
 		// Bare `pix` shows STATUS — never launches a sandbox (launching is
 		// explicit behind `run`). On a fresh host with no config, offer onboarding.
-		if setup.MaybeFirstRun() {
+		if provision.MaybeFirstRun() {
 			return
 		}
 		runStatusCmd(nil)
@@ -91,7 +91,7 @@ func main() {
 		}
 		fmt.Println(version)
 	case "config":
-		setup.RunConfig(args[1:])
+		provision.RunConfig(args[1:])
 	case "serve":
 		runServe(args[1:])
 	case "doctor":

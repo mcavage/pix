@@ -1,7 +1,7 @@
 package main
 
 import (
-	"pix/host/workflow/setup"
+	"pix/host/workflow/provision"
 	"strings"
 	"testing"
 	"time"
@@ -47,18 +47,18 @@ func TestConfigValue(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.key, func(t *testing.T) {
-			got, err := setup.ConfigValue(cfg, tt.key)
+			got, err := provision.ConfigValue(cfg, tt.key)
 			if tt.wantErr {
 				if err == nil || !strings.Contains(err.Error(), "unknown key") {
-					t.Errorf("setup.ConfigValue(%q): expected unknown-key error, got %v", tt.key, err)
+					t.Errorf("provision.ConfigValue(%q): expected unknown-key error, got %v", tt.key, err)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("setup.ConfigValue(%q): %v", tt.key, err)
+				t.Fatalf("provision.ConfigValue(%q): %v", tt.key, err)
 			}
 			if got != tt.want {
-				t.Errorf("setup.ConfigValue(%q) = %q, want %q", tt.key, got, tt.want)
+				t.Errorf("provision.ConfigValue(%q) = %q, want %q", tt.key, got, tt.want)
 			}
 		})
 	}
@@ -70,7 +70,7 @@ func TestConfigValue(t *testing.T) {
 // it's a typo.
 func TestConfigValue_KnowledgeBundlesRetired(t *testing.T) {
 	cfg := defaultCfg()
-	if _, err := setup.ConfigValue(cfg, "knowledge_bundles"); err == nil {
+	if _, err := provision.ConfigValue(cfg, "knowledge_bundles"); err == nil {
 		t.Error("expected config get knowledge_bundles to refuse (retired key)")
 	}
 }
@@ -81,9 +81,9 @@ func TestConfigValue_KnowledgeBundlesRetired(t *testing.T) {
 func TestConfigValue_EmptyList(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.MCP = nil
-	got, err := setup.ConfigValue(cfg, "mcp")
+	got, err := provision.ConfigValue(cfg, "mcp")
 	if err != nil || got != "" {
-		t.Errorf("setup.ConfigValue(mcp) on empty list = %q, %v; want \"\", nil", got, err)
+		t.Errorf("provision.ConfigValue(mcp) on empty list = %q, %v; want \"\", nil", got, err)
 	}
 }
 
@@ -92,8 +92,8 @@ func TestConfigValue_EmptyList(t *testing.T) {
 // like "not set" rather than a bogus date.
 func TestConfigValue_SlackGrantExpiresAtZero(t *testing.T) {
 	cfg := defaultCfg()
-	got, err := setup.ConfigValue(cfg, "slack.oauth_grant_expires_at")
+	got, err := provision.ConfigValue(cfg, "slack.oauth_grant_expires_at")
 	if err != nil || got != "" {
-		t.Errorf("setup.ConfigValue(slack.oauth_grant_expires_at) on zero time = %q, %v; want \"\", nil", got, err)
+		t.Errorf("provision.ConfigValue(slack.oauth_grant_expires_at) on zero time = %q, %v; want \"\", nil", got, err)
 	}
 }

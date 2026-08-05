@@ -9,17 +9,12 @@
 package main
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"pix/host/config"
-	"pix/host/hostenv"
-	"pix/host/sys/systest"
 	"pix/host/workflow/doctor"
-	"pix/host/workflow/setup"
 )
 
 // mcpHostTrustNoticeFacts are the exact facts the disclosure must state,
@@ -40,50 +35,6 @@ func TestMcpHostTrustNotice_StatesBothFacts(t *testing.T) {
 	}
 	if strings.Contains(doctor.McpHostTrustNotice, "\u2014") {
 		t.Errorf("doctor.McpHostTrustNotice must not use an em dash, got: %q", doctor.McpHostTrustNotice)
-	}
-}
-
-// hostTrustSummaryEnv is a minimal hostenv.Env sufficient for
-// setup.PrintSetupSummary's own reads (secret.HostModeProviderKeys, gworkspace.GogSetupAccountHealthy)
-// without touching the real filesystem.
-func hostTrustSummaryEnv(t *testing.T) hostenv.Env {
-	t.Helper()
-	home := t.TempDir()
-	return hostenv.Env{System: &systest.Fake{GetenvFn: func(string) string { return "" }, HomeDirFn: func() string { return home }}}
-}
-
-// TestPrintSetupSummary_DisclosesHostMCPTrust_WhenMCPConfigured: setup's
-// completion summary must state the same two facts when MCP is configured.
-func TestPrintSetupSummary_DisclosesHostMCPTrust_WhenMCPConfigured(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	cfg := &config.Config{MCP: []string{config.GWServerName}}
-	if err := cfg.Save(); err != nil {
-		t.Fatal(err)
-	}
-	var out bytes.Buffer
-	setup.PrintSetupSummary(cfg, hostTrustSummaryEnv(t), &out, setup.SetupModelsOutcome{})
-	got := out.String()
-	for _, want := range mcpHostTrustNoticeFacts {
-		if !strings.Contains(got, want) {
-			t.Errorf("setup summary missing disclosure fact %q, got:\n%s", want, got)
-		}
-	}
-}
-
-// TestPrintSetupSummary_NoDisclosure_WhenNoMCPConfigured mirrors doctor's
-// same-gate behavior: no MCP configured, no notice.
-func TestPrintSetupSummary_NoDisclosure_WhenNoMCPConfigured(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	cfg := &config.Config{}
-	if err := cfg.Save(); err != nil {
-		t.Fatal(err)
-	}
-	var out bytes.Buffer
-	setup.PrintSetupSummary(cfg, hostTrustSummaryEnv(t), &out, setup.SetupModelsOutcome{})
-	if strings.Contains(out.String(), doctor.McpHostTrustNotice) {
-		t.Errorf("setup summary must not print the MCP host-trust notice with no MCP configured, got:\n%s", out.String())
 	}
 }
 

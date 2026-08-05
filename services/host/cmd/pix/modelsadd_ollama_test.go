@@ -15,11 +15,11 @@ import (
 	"pix/host/hostenv"
 	"pix/host/inference"
 	"pix/host/sys/systest"
-	"pix/host/workflow/setup"
+	"pix/host/workflow/models"
 )
 
 // ollamaAddEnv is ollamaListEnv plus an OLLAMA_HOST pointing at a fake daemon,
-// so setup.ReconcileOllamaInference's probe reaches a server this test controls.
+// so models.ReconcileOllamaInference's probe reaches a server this test controls.
 func ollamaAddEnv(t *testing.T, tags []string, totalGB float64, endpoint string) hostenv.Env {
 	t.Helper()
 	env := ollamaListEnv(tags, "darwin", totalGB)
@@ -35,7 +35,7 @@ func ollamaAddEnv(t *testing.T, tags []string, totalGB float64, endpoint string)
 	}
 	// The REAL probe against the fake daemon. Stubbing this out instead would
 	// make the test agree with itself and prove nothing about whether a binding
-	// is reachable — and leaving it nil is worse: setup.VerifyOllamaInference treats a
+	// is reachable — and leaving it nil is worse: models.VerifyOllamaInference treats a
 	// nil probe seam as "nothing to do" and returns 0 verified, 0 attempted, no
 	// failures, which is indistinguishable from a clean run that found nothing.
 	env.OllamaInference = inference.LiveOllamaInferenceProbe
@@ -48,14 +48,14 @@ func ollamaAddEnv(t *testing.T, tags []string, totalGB float64, endpoint string)
 // deriving the accepted list from secret.ProviderKeyRefOrder alone both rejected it
 // and told the user it did not exist.
 func TestModelsAddAcceptsOllama(t *testing.T) {
-	names := setup.ProviderNames()
-	if !setup.ContainsString(names, "ollama") {
-		t.Fatalf("setup.ProviderNames() = %v, want ollama in the list", names)
+	names := models.ProviderNames()
+	if !models.ContainsString(names, "ollama") {
+		t.Fatalf("models.ProviderNames() = %v, want ollama in the list", names)
 	}
 	// The keyed lookup must still NOT claim ollama: it has no env var, and a
 	// struct with an empty envVar would send `pix secret set "" op://...`.
-	if p, ok := setup.ProviderByName("ollama"); ok {
-		t.Fatalf("setup.ProviderByName(\"ollama\") = %+v, want not-found (it is keyless)", p)
+	if p, ok := models.ProviderByName("ollama"); ok {
+		t.Fatalf("models.ProviderByName(\"ollama\") = %+v, want not-found (it is keyless)", p)
 	}
 }
 
@@ -82,7 +82,7 @@ func TestReconcileOllamaInference_BindsProbesAndWidens(t *testing.T) {
 	}}
 	env := ollamaAddEnv(t, []string{"qwen3.5:9b"}, 32, srv.URL)
 
-	res, plan, err := setup.ReconcileOllamaInference(cfg, env, strings.NewReader(""), io.Discard, false, setup.OllamaSelection{Local: true})
+	res, plan, err := models.ReconcileOllamaInference(cfg, env, strings.NewReader(""), io.Discard, false, models.OllamaSelection{Local: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestReconcileOllamaInference_BindsProbesAndWidens(t *testing.T) {
 	if len(plan.LocalBound) != 1 {
 		t.Fatalf("plan.LocalBound = %v", plan.LocalBound)
 	}
-	if !setup.ContainsString(cfg.Inference.AllowedModels, "ollama/qwen3.5:9b") {
+	if !models.ContainsString(cfg.Inference.AllowedModels, "ollama/qwen3.5:9b") {
 		t.Fatalf("roster = %v; a stamped provider must still widen for an EXPLICIT add",
 			cfg.Inference.AllowedModels)
 	}
@@ -123,35 +123,13 @@ func TestReconcileOllamaInference_BindsProbesAndWidens(t *testing.T) {
 // reporting success would be a success word with nothing behind it.
 func TestReconcileOllamaInference_RefusesUnderExclusivePack(t *testing.T) {
 	cfg := &config.Config{Inference: config.InferenceConfig{ExclusiveSource: "/packs/corp"}}
-	_, _, err := setup.ReconcileOllamaInference(cfg, ollamaListEnv([]string{"qwen3.5:9b"}, "darwin", 32),
-		strings.NewReader(""), io.Discard, false, setup.OllamaSelection{Local: true})
-	if err != setup.ErrInferenceExclusive {
-		t.Fatalf("err = %v, want setup.ErrInferenceExclusive", err)
+	_, _, err := models.ReconcileOllamaInference(cfg, ollamaListEnv([]string{"qwen3.5:9b"}, "darwin", 32),
+		strings.NewReader(""), io.Discard, false, models.OllamaSelection{Local: true})
+	if err != models.ErrInferenceExclusive {
+		t.Fatalf("err = %v, want models.ErrInferenceExclusive", err)
 	}
 	if len(cfg.Inference.Models) != 0 {
 		t.Fatalf("refusal must write nothing, got %+v", cfg.Inference.Models)
-	}
-}
-
-// TestRequireOllamaReady_NamesTheRightProblem: telling someone to install
-// software they already have is its own kind of wrong, so a missing binary and
-// a dead daemon must not share a message.
-func TestRequireOllamaReady_NamesTheRightProblem(t *testing.T) {
-	missing := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", errNotFoundFixture }}}
-	err := setup.RequireOllamaReady(missing)
-	if err == nil || !strings.Contains(err.Error(), "not installed") {
-		t.Fatalf("missing binary: err = %v, want an install message", err)
-	}
-
-	installed := ollamaListEnv(nil, "darwin", 32)
-	systest.Of(installed.System).RunTimedFn = func(string, ...string) (string, bool, error) { return "", true, nil } // timeout
-	err = setup.RequireOllamaReady(installed)
-	if err == nil || !strings.Contains(err.Error(), "daemon") {
-		t.Fatalf("dead daemon: err = %v, want a daemon message", err)
-	}
-
-	if err := setup.RequireOllamaReady(ollamaListEnv([]string{"qwen3.5:9b"}, "darwin", 32)); err != nil {
-		t.Fatalf("healthy ollama rejected: %v", err)
 	}
 }
 
@@ -170,18 +148,18 @@ func TestWidenRosterForProvider_OnlyTouchesTheNamedProvider(t *testing.T) {
 			{Model: "anthropic/claude-haiku-4-5", Backend: "anthropic", Upstream: "anthropic/claude-haiku-4-5", Available: true},
 		},
 	}}
-	setup.WidenRosterForProvider(cfg, "ollama")
-	if !setup.ContainsString(cfg.Inference.AllowedModels, "ollama/qwen3.5:9b") {
+	models.WidenRosterForProvider(cfg, "ollama")
+	if !models.ContainsString(cfg.Inference.AllowedModels, "ollama/qwen3.5:9b") {
 		t.Fatalf("roster = %v, want the ollama model added", cfg.Inference.AllowedModels)
 	}
-	if setup.ContainsString(cfg.Inference.AllowedModels, "anthropic/claude-haiku-4-5") {
+	if models.ContainsString(cfg.Inference.AllowedModels, "anthropic/claude-haiku-4-5") {
 		t.Fatalf("roster = %v; widening for ollama must not add anthropic models", cfg.Inference.AllowedModels)
 	}
 
 	// An empty roster already means "no restriction" — widening it would turn an
 	// absence of policy into an explicit list that then freezes.
 	open := &config.Config{Inference: config.InferenceConfig{Models: cfg.Inference.Models}}
-	setup.WidenRosterForProvider(open, "ollama")
+	models.WidenRosterForProvider(open, "ollama")
 	if len(open.Inference.AllowedModels) != 0 {
 		t.Fatalf("an unrestricted roster must stay unrestricted, got %v", open.Inference.AllowedModels)
 	}
@@ -243,7 +221,7 @@ func TestInferenceManifestCarriesOllamaModels(t *testing.T) {
 // mustNoProbeErr fails the test on a verify error instead of letting it read as
 // "nothing to verify". A nil probe seam used to return a clean-looking zero
 // outcome, so a test that forgot to wire one asserted against silence and
-// passed; that is the exact confusion setup.ErrNoProbeSeam exists to end, and a
+// passed; that is the exact confusion models.ErrNoProbeSeam exists to end, and a
 // helper that swallows it here would reintroduce it in the test layer.
 func mustNoProbeErr(t *testing.T, err error) {
 	t.Helper()
@@ -258,15 +236,15 @@ func mustNoProbeErr(t *testing.T, err error) {
 // `0 model(s) answered a live request` got printed next to exit code 0.
 func TestVerify_NilProbeSeamIsLoud(t *testing.T) {
 	cfg := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
-	if _, err := setup.VerifyOllamaInference(cfg, hostenv.Env{System: &systest.Fake{}}, io.Discard); !errors.Is(err, setup.ErrNoProbeSeam) {
-		t.Fatalf("ollama verify with no probe seam: err = %v, want setup.ErrNoProbeSeam", err)
+	if _, err := models.VerifyOllamaInference(cfg, hostenv.Env{System: &systest.Fake{}}, io.Discard); !errors.Is(err, models.ErrNoProbeSeam) {
+		t.Fatalf("ollama verify with no probe seam: err = %v, want models.ErrNoProbeSeam", err)
 	}
-	if _, err := setup.VerifyDirectInference(&config.Config{}, hostenv.Env{System: &systest.Fake{}}); !errors.Is(err, setup.ErrNoProbeSeam) {
-		t.Fatalf("direct verify with no probe seam: err = %v, want setup.ErrNoProbeSeam", err)
+	if _, err := models.VerifyDirectInference(&config.Config{}, hostenv.Env{System: &systest.Fake{}}); !errors.Is(err, models.ErrNoProbeSeam) {
+		t.Fatalf("direct verify with no probe seam: err = %v, want models.ErrNoProbeSeam", err)
 	}
 	// A seam that IS wired reports honestly, including the legitimate
 	// nothing-to-do case, which must stay distinguishable from the above.
-	empty, err := setup.VerifyDirectInference(&config.Config{}, hostenv.Env{System: &systest.Fake{}, DirectInference: func(string, string, string) error { return nil }})
+	empty, err := models.VerifyDirectInference(&config.Config{}, hostenv.Env{System: &systest.Fake{}, DirectInference: func(string, string, string) error { return nil }})
 	if err != nil || empty.Attempted != 0 || empty.Verified != 0 {
 		t.Fatalf("a wired seam with no bindings = %+v, %v; want a clean zero outcome and no error", empty, err)
 	}

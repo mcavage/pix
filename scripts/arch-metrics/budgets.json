@@ -19,8 +19,8 @@
       "prod_loc": 3640,
       "exports": 19,
       "globals": 15,
-      "edges": 24,
-      "exits": 59
+      "edges": 25,
+      "exits": 55
     },
     "pix/host/cmd/pix/corpus": {
       "prod_loc": 573,
@@ -156,8 +156,8 @@
       "exits": 9
     },
     "pix/host/service": {
-      "prod_loc": 1772,
-      "exports": 23,
+      "prod_loc": 1776,
+      "exports": 24,
       "globals": 17,
       "edges": 6,
       "exits": 8
@@ -211,6 +211,13 @@
       "edges": 14,
       "exits": 3
     },
+    "pix/host/workflow/models": {
+      "prod_loc": 1502,
+      "exports": 21,
+      "globals": 6,
+      "edges": 7,
+      "exits": 0
+    },
     "pix/host/workflow/onboard": {
       "prod_loc": 370,
       "exports": 10,
@@ -226,11 +233,11 @@
       "exits": 39
     },
     "pix/host/workflow/provision": {
-      "prod_loc": 197,
-      "exports": 7,
-      "globals": 0,
-      "edges": 1,
-      "exits": 0
+      "prod_loc": 1448,
+      "exports": 37,
+      "globals": 12,
+      "edges": 12,
+      "exits": 12
     },
     "pix/host/workflow/reset": {
       "prod_loc": 795,
@@ -238,13 +245,6 @@
       "globals": 6,
       "edges": 6,
       "exits": 0
-    },
-    "pix/host/workflow/setup": {
-      "prod_loc": 4039,
-      "exports": 82,
-      "globals": 31,
-      "edges": 18,
-      "exits": 12
     },
     "pix/host/workflow/slack": {
       "prod_loc": 1798,

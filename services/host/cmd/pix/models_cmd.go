@@ -25,7 +25,7 @@ import (
 	"pix/host/cli"
 	"pix/host/launcher"
 	"pix/host/routing"
-	"pix/host/workflow/setup"
+	"pix/host/workflow/models"
 )
 
 // modelsDescription is the prose kong puts above the generated command list.
@@ -137,7 +137,7 @@ func (c *ModelsRouteCmd) Run(d *cli.Deps) error {
 //
 // `enum` is doing real work here. The hand-rolled version validated the
 // provider in its own if-chain and printed its own "want one of" list, which
-// had to be kept in step with setup.ProviderNames() by hand — and was not.
+// had to be kept in step with models.ProviderNames() by hand — and was not.
 type ModelsAddCmd struct {
 	Provider string `arg:"" enum:"anthropic,openai,google,gemini,ollama" help:"anthropic | openai | google | ollama"`
 	Local    bool   `help:"Ollama only: models that run on this machine."`
@@ -158,9 +158,9 @@ func (c *ModelsAddCmd) Run(d *cli.Deps) error {
 	}
 	env := defaultShellEnv()
 	if name == "ollama" {
-		return setup.AddOllamaProvider(d, cfg, env, setup.OllamaSelection{Local: c.Local, Cloud: c.Cloud})
+		return models.AddOllamaProvider(d, cfg, env, models.OllamaSelection{Local: c.Local, Cloud: c.Cloud})
 	}
-	return setup.AddKeyedProvider(d, cfg, env, name)
+	return models.AddKeyedProvider(d, cfg, env, name)
 }
 
 // execHostRoute forwards to the sibling pix-host binary, which owns the router.

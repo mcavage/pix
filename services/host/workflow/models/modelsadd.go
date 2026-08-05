@@ -1,4 +1,4 @@
-package setup
+package models
 
 // modelsadd.go implements `pix models add <provider>`: the answer to "setup
 // told me I could add the others later, but I could not find where."
@@ -48,7 +48,7 @@ func AddKeyedProvider(d *cli.Deps, cfg *config.Config, env hostenv.Env, provider
 			return fmt.Errorf("no 1Password ref for %s yet, and there is no terminal to ask on.\n"+
 				"  pix secret set %s op://vault/item/field && pix models add %s", p.Name, p.EnvVar, p.Name)
 		}
-		if err := EnsureSetupPrereqsFor(env, d.In, d.Out, d.Interactive, true); err != nil {
+		if err := requireOnePassword(env); err != nil {
 			return err
 		}
 		ref, _, ok := promptProviderRef(env, bufio.NewScanner(d.In), d.Out, p)
