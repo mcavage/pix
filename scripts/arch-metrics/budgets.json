@@ -22,13 +22,6 @@
       "edges": 24,
       "exits": 3
     },
-    "pix/host/cmd/pix/corpus": {
-      "prod_loc": 588,
-      "exports": 18,
-      "globals": 6,
-      "edges": 0,
-      "exits": 0
-    },
     "pix/host/config": {
       "prod_loc": 804,
       "exports": 39,

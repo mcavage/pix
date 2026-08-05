@@ -14,6 +14,13 @@
 // may reach a destructive or network operation (see
 // TestShards_ForbidDangerousArgvPrefixes and the isolated-HOME contract in
 // RunCase). This package touches nothing outside a test's own t.TempDir().
+//
+// This package is TEST-ONLY SUPPORT, not a runtime dependency: every .go file
+// in this directory is a _test.go file, nothing outside `go test` ever
+// imports it, and it is deliberately absent from docs/design/architecture.md's
+// layer map and scripts/arch-metrics/budgets.json — there is no production
+// LOC here to place or budget. `go test ./cmd/pix/corpus` (and the full
+// golden-corpus run in CI's `metrics` job) is the only way this code runs.
 package corpus
 
 // Case is one golden invocation of the pix CLI: an argv, the isolated

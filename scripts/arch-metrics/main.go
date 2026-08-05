@@ -371,6 +371,15 @@ func scan(root string) (*Report, error) {
 
 	out := map[string]PkgMetrics{}
 	for pkg, m := range packages {
+		// A package with zero production LOC has only _test.go files: it is
+		// test-only support, not a production package (see
+		// services/host/cmd/pix/corpus, reclassified in U11k). It has no LOC to
+		// budget and no layer to place, so it is excluded from the report
+		// entirely rather than recorded with all-zero metrics — the same
+		// distinction arch_test.go's scanPackages draws for import layering.
+		if m.ProdLOC == 0 {
+			continue
+		}
 		out[pkg] = *m
 	}
 	return &Report{
