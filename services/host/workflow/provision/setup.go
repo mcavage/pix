@@ -1,10 +1,8 @@
 // setup.go — `pix setup`, expressed as the provision loop and nothing else.
-//
 // What used to be here: an eight-phase transcript, a pre-mutation inventory, a
 // fixed-order mutation table, a two-question prompt budget, a per-axis readiness
 // builder set, and a renderer that had to be tested for not reading the
 // inventory. Seven notions of "done", six of which could disagree.
-//
 // What is here now: setup declares the capabilities it can both CHECK and
 // REPAIR, and hands them to Run. The loop checks, applies only VERIFIED gaps,
 // and checks again — and the second check is the only thing that may call
@@ -60,7 +58,6 @@ type ErrUsage struct{ error }
 // DefaultEnv, HostBinary and Register are the composition setup declares but
 // cannot perform: building a real env, resolving the paired pix-host, and
 // registering a pack's MCP servers with credentials resolved over secret.
-//
 // The env default PANICS rather than returning a half-wired one: a setup that
 // silently probes nothing is the failure mode this whole refactor exists to
 // delete.
@@ -113,6 +110,11 @@ func RunSetup(env hostenv.Env, flags []string, in io.Reader, out io.Writer, tty 
 
 	o := Run(context.Background(), Options{Budget: SetupBudget}, SetupSteps(cfg, env, opts, out)...)
 	o.Render(out)
+	if len(o.Failed) > 0 {
+		// A failed apply is a hard abort even for an optional probe (pack): a
+		// pack the user asked for and setup failed to adopt is never success.
+		return fmt.Errorf("setup could not apply %s: %w", o.Failed[0].Name, o.Failed[0].Err)
+	}
 	if o.ExitCode() != health.ExitOK {
 		return fmt.Errorf("setup could not prove every required capability — the rows above are the second check, not what setup tried")
 	}
@@ -170,7 +172,9 @@ func packApply(env hostenv.Env, opts onboard.Opts, out io.Writer) func(context.C
 			if opts.AssumeYes {
 				useArgs = append([]string{"--yes"}, useArgs...)
 			}
-			pack.RunPackUse(env, out, useArgs, Register)
+			if err := pack.RunPackUse(env, out, useArgs, Register); err != nil {
+				return fmt.Errorf("adopting pack %s: %w", requested, err)
+			}
 			if cfg, err := config.Load(); err == nil && strings.TrimSpace(cfg.Pack) != "" {
 				activated = append(activated, cfg.Pack)
 			}

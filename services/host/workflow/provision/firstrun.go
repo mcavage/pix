@@ -14,7 +14,6 @@ import (
 // explicit `pix setup`. This only nudges from the bare `pix` status
 // command so a fresh host is not left guessing. It returns false (never handles
 // the invocation) so the caller always continues to show status.
-//
 // Rules: trigger on config-FILE absence (not empty fields — defaults are
 // legitimate). This never launches a sandbox and never blocks: it prints one
 // line and returns.

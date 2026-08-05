@@ -800,7 +800,6 @@ func McpCatalogBundleURL(version string) string {
 	return "https://raw.githubusercontent.com/mcavage/pix/" + launcher.KitRef(version) + "/config/mcp-catalog.bundle.json"
 }
 
-
 const (
 	mcpAuthUnknown mcpAuthResult = iota
 	McpAuthOK

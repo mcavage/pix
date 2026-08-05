@@ -1,6 +1,5 @@
 // Package provision is the one setup loop: CHECK, apply what is missing,
 // CHECK AGAIN — and success comes only from the second check.
-//
 // It replaces the setup/onboard phase machinery (ordered mutation steps, a
 // receipt writer, a prompt budget, a handoff, and their several private
 // notions of "done") with the shape all of that was approximating. The rules

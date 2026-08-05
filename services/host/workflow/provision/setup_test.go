@@ -2,6 +2,7 @@ package provision
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"pix/host/hostenv"
 	"pix/host/sys"
 	"pix/host/workflow/onboard"
+	"pix/host/workflow/pack"
 )
 
 // The setup port's safety scenarios, ported from the deleted phase machine's
@@ -113,6 +115,75 @@ func TestSetupSteps_NoPackRequestedMeansNoPackApply(t *testing.T) {
 		if s.Name == "pack" && s.Apply != nil {
 			t.Fatal("setup adopted a pack nobody asked for")
 		}
+	}
+}
+
+// A pack RunPackUse refuses (Tier-1, non-TTY, no --yes) or is otherwise broken
+// must abort the ENTIRE setup — the discarded error this test guards against
+// used to let a refused/broken pack fall straight through to "setup complete",
+// because PackProbe is not itself a required probe (a host with no pack is
+// fine) so the second check alone never caught it. Real pack, real Tier-1
+// gate, real config file: nothing here is stubbed.
+func TestPackApply_RefusedPackAbortsAndConfigUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
+
+	root := filepath.Join(dir, "work-pack")
+	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The wrapper must actually exist to fingerprint (else the gate fails on a
+	// missing file, not on the TTY refusal this test is about).
+	if err := os.WriteFile(filepath.Join(root, "bin", "warehouse"), []byte("#!/bin/sh\necho warehouse\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A host=true proxy is a Tier-1 host-exec facet on its own: no MCP, no
+	// classifier wiring needed to force the gate.
+	if err := pack.WriteManifest(root, pack.Manifest{Name: "work", Schema: 1,
+		Proxies: []pack.PackProxy{{Name: "warehouse", Host: true}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// --- unit level: packApply itself must surface RunPackUse's error -------
+	apply := packApply(realEnv(), onboard.Opts{Packs: []string{root}}, io.Discard)
+	if apply == nil {
+		t.Fatal("--pack must produce an apply")
+	}
+	if err := apply(context.Background()); err == nil {
+		t.Fatal("a Tier-1 pack refused non-interactively must fail the apply, not swallow the error")
+	} else if !strings.Contains(err.Error(), "--yes") {
+		t.Errorf("the propagated refusal must name --yes, got: %v", err)
+	}
+
+	// --- provision-loop level: Failed, never Applied -------------------------
+	o := Run(context.Background(), Options{Budget: SetupBudget},
+		SetupSteps(&config.Config{}, realEnv(), onboard.Opts{Packs: []string{root}}, io.Discard)...)
+	if len(o.Failed) != 1 || o.Failed[0].Name != "pack" {
+		t.Fatalf("outcome.Failed = %+v, want exactly one failure named pack", o.Failed)
+	}
+	for _, applied := range o.Applied {
+		if applied == "pack" {
+			t.Fatal("a refused pack must never be recorded as applied")
+		}
+	}
+
+	// --- RunSetup level: the whole command aborts, never reports success ----
+	if err := RunSetup(realEnv(), []string{"--pack", root}, strings.NewReader(""), io.Discard, false); err == nil {
+		t.Fatal("RunSetup must abort on a refused pack, not report success")
+	} else if !strings.Contains(err.Error(), "--yes") {
+		t.Errorf("RunSetup's error must carry the pack's own refusal, got: %v", err)
+	}
+
+	// --- and nothing committed: no later apply, config still has no pack ----
+	cfg, lerr := config.Load()
+	if lerr != nil {
+		t.Fatalf("config.Load: %v", lerr)
+	}
+	if cfg.Pack != "" {
+		t.Errorf("a refused pack must never be adopted; cfg.Pack = %q", cfg.Pack)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "pack-trust.json")); !os.IsNotExist(statErr) {
+		t.Error("no Tier-1 acceptance may be recorded on refusal")
 	}
 }
 

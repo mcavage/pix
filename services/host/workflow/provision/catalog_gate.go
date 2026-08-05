@@ -9,7 +9,6 @@ import (
 
 // mcp_catalog_gate.go — the setup/onboard readiness gate for shipped-catalog
 // remote MCP servers (mcp.McpCatalogNames: notion/atlassian/granola).
-//
 // Persisting a catalog remote into config.toml (or launching a sandbox that
 // preloads it) while it is unregistered or unauthorized silently claims a
 // setup that cannot work: the gateway would preload a server it cannot spawn

@@ -1,5 +1,4 @@
 // probes.go — the two probes setup owns that no other surface needs.
-//
 // Both classify the same way health's own probes do, and for the same reason:
 // a boundary that did not ANSWER is unknown, and only an answer that positively
 // identifies the gap may be absent and hand out a repair command. The loop then
