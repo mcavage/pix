@@ -1,7 +1,4 @@
-// service.go — GoPluginService: one supervised go-plugin subprocess as a
-// suture.Service. Serve() owns ONE generation of the child: reattach-or-spawn,
-// dispense, health-probe until it dies, then drain and stop inside the pinned
-// budgets (restart policy is Suture's; this is the process and its identity).
+// service.go — GoPluginService: one supervised go-plugin subprocess as a suture.Service. Serve() owns ONE generation of the child: reattach-or-spawn, dispense, health-probe until it dies, then drain and stop inside the pinned budgets (restart policy is Suture's; this is the process and its identity).
 
 package supervise
 
@@ -14,6 +11,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -21,8 +20,7 @@ import (
 	"github.com/thejerf/suture/v4"
 )
 
-// HealthFunc is the unit's OWN notion of health (memory's Health(), the
-// broker's Check()); "the process is up" is not health, and a unit failing HealthFailures probes in a row is replaced.
+// HealthFunc is the unit's OWN notion of health (memory's Health(), the broker's Check()); "the process is up" is not health, and a unit failing HealthFailures probes in a row is replaced.
 type HealthFunc func(impl any) error
 
 // GoPluginService supervises one go-plugin unit.
@@ -50,8 +48,7 @@ func (s *GoPluginService) Serve(ctx context.Context) error {
 
 	client, impl, reattached, err := s.start()
 	if err != nil {
-		// A stale pin, an invalid spec or a missing binary is OPERATOR state,
-		// not a transient fault: this subtree stops, siblings keep serving.
+		// A stale pin, an invalid spec or a missing binary is OPERATOR state, not a transient fault: this subtree stops, siblings keep serving.
 		if permanent(err) {
 			err = fmt.Errorf("%w: %w", err, suture.ErrDoNotRestart)
 			s.tree.transition(s.spec.Name, func(st *UnitStatus) {
@@ -79,8 +76,7 @@ func (s *GoPluginService) Serve(ctx context.Context) error {
 	}
 	s.tree.emit(Event{Unit: s.spec.Name, Type: evt, Message: fmt.Sprintf("pid %d", pid)})
 
-	// A unit that cannot answer its first probe is not started, it is broken,
-	// and `serve` must say so at startup.
+	// A unit that cannot answer its first probe is not started, it is broken, and `serve` must say so at startup.
 	if err := s.probe(b.HealthTimeout); err != nil {
 		err = fmt.Errorf("unit %s: first health probe failed: %w", s.spec.Name, err)
 		s.tree.emit(Event{Unit: s.spec.Name, Type: EventHealthFailed, Err: err.Error()})
@@ -135,8 +131,7 @@ func (s *GoPluginService) Serve(ctx context.Context) error {
 	}
 }
 
-// probe runs the unit's health check under a hard timeout; on timeout the
-// goroutine is abandoned (an rpc call cannot be cancelled mid-flight), and its buffered channel means it never blocks or touches shared state afterwards.
+// probe runs the unit's health check under a hard timeout; on timeout the goroutine is abandoned (an rpc call cannot be cancelled mid-flight), and its buffered channel means it never blocks or touches shared state afterwards.
 func (s *GoPluginService) probe(budget time.Duration) error {
 	if s.health == nil {
 		return nil
@@ -201,8 +196,7 @@ func (s *GoPluginService) start() (*goplugin.Client, any, bool, error) {
 	return client, impl, false, nil
 }
 
-// command builds the child process: a staged, freshly-verified copy for an
-// external unit (re-verified on EVERY start, catching a swap under a running unit at its next restart), or a self-exec of this one.
+// command builds the child process: a staged, freshly-verified copy for an external unit (re-verified on EVERY start, catching a swap under a running unit at its next restart), or a self-exec of this one.
 func (s *GoPluginService) command() (*exec.Cmd, error) {
 	if err := s.spec.Validate(); err != nil {
 		return nil, permanentErr{err}
@@ -259,9 +253,7 @@ func clientPID(c *goplugin.Client) int {
 
 // --- reattach state ---------------------------------------------------------
 
-// reattachState survives a HARD supervisor death (SIGKILL: no shutdown, no
-// cleanup, orphaned children). It records how to reconnect AND who the child
-// is supposed to be — a pid is not an identity, and reattaching to whatever now holds one is how a supervisor adopts a stranger.
+// reattachState survives a HARD supervisor death (SIGKILL: no shutdown, no cleanup, orphaned children). It records how to reconnect AND who the child is supposed to be — a pid is not an identity, and reattaching to whatever now holds one is how a supervisor adopts a stranger.
 type reattachState struct {
 	Unit            string    `json:"unit"`
 	Kind            string    `json:"kind"`
@@ -278,9 +270,7 @@ func reattachPath(stateDir, unit string) string {
 	return filepath.Join(stateDir, "units", unit+".reattach.json")
 }
 
-// SaveReattach persists a unit's reattach state (0600, dir 0700). Exported so a
-// test produces exactly what the supervisor consumes. protocolVersion is the
-// version negotiated with the child (go-plugin's ReattachConfig() leaves it zero); a reattach across a protocol bump must be refused.
+// SaveReattach persists a unit's reattach state (0600, dir 0700). Exported so a test produces exactly what the supervisor consumes. protocolVersion is the version negotiated with the child (go-plugin's ReattachConfig() leaves it zero); a reattach across a protocol bump must be refused.
 func SaveReattach(stateDir string, spec UnitSpec, rc *goplugin.ReattachConfig, protocolVersion int) error {
 	if rc == nil || stateDir == "" {
 		return nil
@@ -321,8 +311,7 @@ func (s *GoPluginService) clearReattach() {
 	}
 }
 
-// tryReattach adopts a surviving child ONLY when the persisted state names this
-// unit, kind and exact executable identity, and that pid is alive and still speaks our protocol; anything else drops the state and spawns fresh.
+// tryReattach adopts a surviving child ONLY when the persisted state names this unit, kind and exact admission fingerprint (identity: executable, pin, argv, env surface), the pid is alive AND OURS, the endpoint is a unix socket WE own, and the child still speaks our protocol (dispense over the socket is the handshake); anything else drops the state and spawns fresh.
 func (s *GoPluginService) tryReattach() (*goplugin.Client, any, bool) {
 	if s.tree.stateDir == "" {
 		return nil, nil, false
@@ -345,54 +334,65 @@ func (s *GoPluginService) tryReattach() (*goplugin.Client, any, bool) {
 	case st.ProtocolVersion != int(s.tree.handshake.ProtocolVersion):
 		reason = "plugin protocol version changed"
 	case st.Pid <= 0 || !processAlive(st.Pid):
-		reason = "recorded process is gone"
+		reason = "recorded process is gone or not ours"
 	case st.Address == "":
 		reason = "no recorded address"
 	}
 	if reason == "" {
-		var addr net.Addr
-		if addr, err = resolveAddr(st.Network, st.Address); err == nil {
-			client := goplugin.NewClient(&goplugin.ClientConfig{
-				HandshakeConfig: s.tree.handshake,
-				Plugins:         s.tree.plugins,
-				Reattach: &goplugin.ReattachConfig{
-					Protocol: goplugin.Protocol(st.Protocol), ProtocolVersion: st.ProtocolVersion,
-					Addr: addr, Pid: st.Pid,
-				},
-				StartTimeout: s.tree.budgets.Handshake,
-			})
-			impl, derr := dispense(client, s.spec.Kind)
-			if derr == nil {
-				return client, impl, true
-			}
-			client.Kill()
-			reason = "reattach failed: " + derr.Error()
-		} else {
-			reason = "unusable address: " + err.Error()
+		reason = verifyReattachTarget(st.Network, st.Address)
+	}
+	if reason == "" {
+		client := goplugin.NewClient(&goplugin.ClientConfig{
+			HandshakeConfig: s.tree.handshake,
+			Plugins:         s.tree.plugins,
+			Reattach: &goplugin.ReattachConfig{
+				Protocol: goplugin.Protocol(st.Protocol), ProtocolVersion: st.ProtocolVersion,
+				Addr: &net.UnixAddr{Name: st.Address, Net: "unix"}, Pid: st.Pid,
+			},
+			StartTimeout: s.tree.budgets.Handshake,
+		})
+		impl, derr := dispense(client, s.spec.Kind)
+		if derr == nil {
+			return client, impl, true
 		}
+		client.Kill()
+		reason = "reattach failed: " + derr.Error()
 	}
 	s.tree.emit(Event{Unit: s.spec.Name, Type: EventReattachRejected, Message: reason})
 	s.clearReattach()
 	return nil, nil, false
 }
 
-func resolveAddr(network, address string) (net.Addr, error) {
-	switch network {
-	case "unix", "unixgram", "unixpacket":
-		return &net.UnixAddr{Name: address, Net: network}, nil
-	case "tcp", "tcp4", "tcp6":
-		return net.ResolveTCPAddr(network, address)
-	default:
-		return nil, fmt.Errorf("unsupported plugin address network %q", network)
+// verifyReattachTarget admits UNIX SOCKETS ONLY (a tcp target is whatever process got the port back after a reboot; a unix socket path carries an owner we can check), and only one owned by OUR uid: a regular file wearing the recorded path, or a socket created by another user, is a stranger's endpoint, not our child's. Returns a rejection reason, or "" to proceed.
+func verifyReattachTarget(network, address string) string {
+	if network != "unix" {
+		return fmt.Sprintf("refusing reattach over %q (unix sockets only)", network)
 	}
+	fi, err := os.Lstat(address)
+	if err != nil {
+		return "reattach socket: " + err.Error()
+	}
+	if fi.Mode()&os.ModeSocket == 0 {
+		return fmt.Sprintf("reattach address %s is not a unix socket", address)
+	}
+	if sys, ok := fi.Sys().(*syscall.Stat_t); !ok || int(sys.Uid) != os.Getuid() {
+		return fmt.Sprintf("reattach socket %s is not owned by uid %d", address, os.Getuid())
+	}
+	return ""
 }
 
-// processAlive reports whether a pid still exists (signal 0 probe).
+// processAlive: the recorded pid must exist AND be ours. A signal-0 EPERM proves only that SOME process wears the pid — after pid reuse that is anybody — so EPERM is a refusal, not proof; where /proc exposes the owner, the real uid must equal ours.
 func processAlive(pid int) bool {
 	p, err := os.FindProcess(pid)
-	if err != nil {
+	if err != nil || p.Signal(syscall.Signal(0)) != nil {
 		return false
 	}
-	err = p.Signal(syscall.Signal(0))
-	return err == nil || errors.Is(err, syscall.EPERM)
+	raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/status")
+	if err != nil {
+		// No /proc (darwin): a NON-root signal-0 success already proved real/saved-uid equality; root can signal anyone, so with nothing to check it refuses to vouch.
+		return os.Getuid() != 0
+	}
+	_, after, ok := strings.Cut(string(raw), "\nUid:\t")
+	f := strings.Fields(after)
+	return ok && len(f) > 0 && f[0] == strconv.Itoa(os.Getuid())
 }

@@ -15,10 +15,7 @@ import (
 	"pix/host/hostenv"
 )
 
-// ollamaModelsProbe answers "are the local model weights this host is
-// configured to use actually on disk". Ollama is optional: a host without it
-// runs Pix fine with memory off, so this probe is never required and a missing
-// daemon is unknown, not a gap — there is nothing to pull weights into.
+// ollamaModelsProbe answers "are the local model weights this host is configured to use actually on disk". Ollama is optional: a host without it runs Pix fine with memory off, so this probe is never required and a missing daemon is unknown, not a gap — there is nothing to pull weights into.
 type ollamaModelsProbe struct {
 	Env  hostenv.Env
 	Tags []string

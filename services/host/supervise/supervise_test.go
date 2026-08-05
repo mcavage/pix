@@ -563,8 +563,8 @@ func TestStopDrainsAndKillsWithinBudget(t *testing.T) {
 }
 
 // A HARD supervisor death (SIGKILL) leaves a live plugin process behind. The
-// next supervisor reattaches to it — identity verified — instead of orphaning
-// it and spawning a duplicate.
+// next supervisor reattaches to it — identity, pid ownership and socket
+// ownership all verified — instead of orphaning it and spawning a duplicate.
 func TestReattachAfterHardSupervisorDeath(t *testing.T) {
 	bin, sha := buildFixture(t)
 	state := filepath.Join(t.TempDir(), "state")
@@ -577,9 +577,9 @@ func TestReattachAfterHardSupervisorDeath(t *testing.T) {
 
 	tr := testTree(t, func(c *Config) { c.StateDir = state })
 
-	// A FRESH spawn would answer "gen2"; a reattach answers "gen1".
-	spec2 := fixtureUnit("survivor", bin, sha, "FIXTURE_TAG=gen2")
-	h, err := tr.Add(spec2, fixtureHealth)
+	// The SAME spec (the identity fingerprint covers the env surface now): a
+	// FRESH spawn would answer a new pid; a reattach answers the orphan's.
+	h, err := tr.Add(spec, fixtureHealth)
 	must(t, err)
 	info := describe(t, h)
 	if info.WatcherModel != "gen1" || info.CaptureReason != strconv.Itoa(rc.Pid) {
@@ -637,4 +637,237 @@ func TestReattachRefusesForeignOrDeadState(t *testing.T) {
 			t.Errorf("reattached across an identity change (tag %q)", got)
 		}
 	})
+}
+
+// M2: processAlive requires the pid to exist AND be OURS. A signal-0 EPERM
+// (the pid exists but belongs to someone else — after pid reuse, anybody) is a
+// refusal, not proof of our child.
+func TestProcessAliveRequiresSameUIDOwnership(t *testing.T) {
+	if !processAlive(os.Getpid()) {
+		t.Error("our own pid must be alive and ours")
+	}
+	dead := exec.Command("true")
+	must(t, dead.Start())
+	pid := dead.Process.Pid
+	_, _ = dead.Process.Wait()
+	if processAlive(pid) {
+		t.Errorf("a reaped pid %d reported alive", pid)
+	}
+	// A live process owned by ANOTHER uid: pid 1 stands in wherever we cannot
+	// signal it. The OLD code returned true here (EPERM taken as "alive").
+	if syscall.Kill(1, 0) == nil {
+		t.Skip("pid 1 is signalable from this uid; no foreign-uid pid to probe")
+	}
+	if processAlive(1) {
+		t.Error("a foreign-uid pid reported as ours — EPERM is not proof")
+	}
+}
+
+// M2 fixture: a recorded pid REUSED by a process that is not ours is refused
+// before any socket is touched — even when the recorded unix socket is live
+// and ours — and the unit comes up fresh.
+func TestReattachRefusesReusedPid(t *testing.T) {
+	if syscall.Kill(1, 0) == nil {
+		t.Skip("pid 1 is signalable from this uid; cannot stand in for a reused pid")
+	}
+	bin, sha := buildFixture(t)
+	dir := t.TempDir()
+	state := filepath.Join(dir, "state")
+	spec := fixtureUnit("reused", bin, sha, "FIXTURE_TAG=fresh")
+	sock := filepath.Join(dir, "live.sock")
+	l, err := net.Listen("unix", sock)
+	must(t, err)
+	t.Cleanup(func() { l.Close() })
+	must(t, SaveReattach(state, spec, &goplugin.ReattachConfig{
+		Pid: 1, Protocol: goplugin.ProtocolNetRPC, ProtocolVersion: plugin.ProtocolVersion,
+		Addr: &net.UnixAddr{Name: sock, Net: "unix"}}, plugin.ProtocolVersion))
+	tr := testTree(t, func(c *Config) { c.StateDir = state })
+	_, err = tr.Add(spec, fixtureHealth)
+	must(t, err)
+	if st, _ := tr.Unit("reused"); st.Reattached || st.PID == 1 {
+		t.Errorf("adopted a reused pid: %+v", st)
+	}
+	if !sawEvent(tr, "reused", EventReattachRejected) {
+		t.Errorf("no typed reattach-rejected event: %+v", tr.Events())
+	}
+}
+
+// M2: reattach targets are UNIX SOCKETS WE OWN, or nothing. A tcp address, a
+// regular file wearing the recorded path, and a live socket that is not our
+// child all get rejected — and the unit comes up FRESH instead.
+func TestReattachRefusesForeignSockets(t *testing.T) {
+	bin, sha := buildFixture(t)
+	cases := []struct {
+		name string
+		addr func(t *testing.T, dir string) net.Addr
+	}{
+		{"tcp address", func(t *testing.T, dir string) net.Addr {
+			l, err := net.Listen("tcp", "127.0.0.1:0")
+			must(t, err)
+			t.Cleanup(func() { l.Close() })
+			return l.Addr()
+		}},
+		{"regular file", func(t *testing.T, dir string) net.Addr {
+			path := filepath.Join(dir, "not-a-socket")
+			must(t, os.WriteFile(path, []byte("x"), 0o600))
+			return &net.UnixAddr{Name: path, Net: "unix"}
+		}},
+		{"imposter unix socket", func(t *testing.T, dir string) net.Addr {
+			path := filepath.Join(dir, "imposter.sock")
+			l, err := net.Listen("unix", path)
+			must(t, err)
+			go func() { // accepts and hangs up: never speaks our protocol
+				for {
+					c, err := l.Accept()
+					if err != nil {
+						return
+					}
+					c.Close()
+				}
+			}()
+			t.Cleanup(func() { l.Close() })
+			return &net.UnixAddr{Name: path, Net: "unix"}
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			state := filepath.Join(dir, "state")
+			spec := fixtureUnit("sockets", bin, sha, "FIXTURE_TAG=fresh")
+			// A live pid WE own, so a rejection is attributable to the endpoint alone.
+			orphanPid := startOrphan(t, bin, spec).ReattachConfig().Pid
+			must(t, SaveReattach(state, spec, &goplugin.ReattachConfig{
+				Pid: orphanPid, Protocol: goplugin.ProtocolNetRPC,
+				ProtocolVersion: plugin.ProtocolVersion, Addr: c.addr(t, dir)}, plugin.ProtocolVersion))
+			tr := testTree(t, func(cfg *Config) { cfg.StateDir = state })
+			h, err := tr.Add(spec, fixtureHealth)
+			must(t, err)
+			if got := describe(t, h).CaptureReason; got == strconv.Itoa(orphanPid) {
+				t.Errorf("adopted the orphan through a foreign endpoint (pid %s)", got)
+			}
+			st, _ := tr.Unit("sockets")
+			if st.Reattached {
+				t.Errorf("status claims a reattach through a foreign endpoint: %+v", st)
+			}
+			if !sawEvent(tr, "sockets", EventReattachRejected) {
+				t.Errorf("no typed reattach-rejected event: %+v", tr.Events())
+			}
+		})
+	}
+}
+
+// L1: the admission fingerprint covers the ENV SURFACE — order-independent for
+// the allowlist, value-sensitive for grants, collision-free against argv — and
+// the reattach state on disk never carries a grant's VALUE, hashed or plain.
+func TestIdentityCoversEnvSurfaceWithoutLeakingValues(t *testing.T) {
+	base := UnitSpec{Name: "u", Kind: "memory", SelfExec: true,
+		EnvAllow: []string{"PATH", "HOME"}, EnvGrant: []string{"TOKEN=hunter2-secret-value"}}
+	perm := base
+	perm.EnvAllow = []string{"HOME", "PATH"}
+	if base.identity() != perm.identity() {
+		t.Error("a reordered allowlist is the same grant; identity must not change")
+	}
+	widened := base
+	widened.EnvAllow = []string{"PATH", "HOME", "AWS_SECRET_ACCESS_KEY"}
+	if base.identity() == widened.identity() {
+		t.Error("widening EnvAllow must change the identity")
+	}
+	regrant := base
+	regrant.EnvGrant = []string{"TOKEN=rotated"}
+	if base.identity() == regrant.identity() {
+		t.Error("rotating a grant value must change the identity")
+	}
+	crossed := UnitSpec{Name: "u", Kind: "memory", SelfExec: true, Argv: []string{"PATH"}}
+	uncrossed := UnitSpec{Name: "u", Kind: "memory", SelfExec: true, EnvAllow: []string{"PATH"}}
+	if crossed.identity() == uncrossed.identity() {
+		t.Error("an argv element must not collide with an allow name")
+	}
+	// The persisted state carries the fingerprint, never the secret.
+	state := t.TempDir()
+	must(t, SaveReattach(state, base, &goplugin.ReattachConfig{Pid: os.Getpid(),
+		Addr: &net.UnixAddr{Name: "/tmp/x.sock", Net: "unix"}, Protocol: goplugin.ProtocolNetRPC,
+		ProtocolVersion: plugin.ProtocolVersion}, plugin.ProtocolVersion))
+	raw, err := os.ReadFile(reattachPath(state, "u"))
+	must(t, err)
+	for _, leak := range []string{"hunter2-secret-value", "TOKEN="} {
+		if strings.Contains(string(raw), leak) {
+			t.Errorf("reattach state leaked %q", leak)
+		}
+	}
+}
+
+// L1 fixture: a surviving child whose spec's grants have since ROTATED is
+// refused (its identity no longer matches) and replaced fresh.
+func TestReattachRefusesRotatedEnvIdentity(t *testing.T) {
+	bin, sha := buildFixture(t)
+	state := filepath.Join(t.TempDir(), "state")
+	old := fixtureUnit("envrot", bin, sha, "FIXTURE_TAG=old")
+	orphan := startOrphan(t, bin, old)
+	must(t, SaveReattach(state, old, orphan.ReattachConfig(), plugin.ProtocolVersion))
+	tr := testTree(t, func(c *Config) { c.StateDir = state })
+	rotated := fixtureUnit("envrot", bin, sha, "FIXTURE_TAG=new")
+	h, err := tr.Add(rotated, fixtureHealth)
+	must(t, err)
+	if got := describe(t, h).WatcherModel; got != "new" {
+		t.Errorf("reattached across an env-grant rotation (tag %q)", got)
+	}
+	if st, _ := tr.Unit("envrot"); st.Reattached {
+		t.Error("status claims a reattach across a rotated grant")
+	}
+	if !sawEvent(tr, "envrot", EventReattachRejected) {
+		t.Errorf("no typed reattach-rejected event: %+v", tr.Events())
+	}
+}
+
+// Revocation: a clean stop revokes the persisted reattach state, so the NEXT
+// supervisor spawns fresh instead of hunting a child that was deliberately stopped.
+func TestCleanStopRevokesReattachState(t *testing.T) {
+	bin, sha := buildFixture(t)
+	state := filepath.Join(t.TempDir(), "state")
+	tr := testTree(t, func(c *Config) { c.StateDir = state })
+	_, err := tr.Add(fixtureUnit("revoked", bin, sha), fixtureHealth)
+	must(t, err)
+	path := reattachPath(state, "revoked")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("no reattach state while running: %v", err)
+	}
+	tr.Stop()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("reattach state survived a clean stop (err=%v)", err)
+	}
+}
+
+// L2: staging a NEW pin sweeps the superseded copy and this unit's orphaned
+// temp files — and nothing else: the fresh copy and every sibling survive.
+func TestStageSweepsSupersededCopies(t *testing.T) {
+	bin, sha := buildFixture(t)
+	stage := t.TempDir()
+	sibling, err := StageExecutable(stage, "other", bin, sha)
+	must(t, err)
+	extending, err := StageExecutable(stage, "unit-b", bin, sha)
+	must(t, err)
+	orphan := filepath.Join(stage, "unit.stage-orphan")
+	must(t, os.WriteFile(orphan, []byte("tmp"), 0o600))
+
+	first, err := StageExecutable(stage, "unit", bin, sha)
+	must(t, err)
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Errorf("orphaned temp file survived the sweep (err=%v)", err)
+	}
+	raw, err := os.ReadFile(bin)
+	must(t, err)
+	v2 := filepath.Join(t.TempDir(), "fixture2")
+	must(t, os.WriteFile(v2, append(raw, '\n'), 0o755))
+	sha2, err := FileSHA256(v2)
+	must(t, err)
+	second, err := StageExecutable(stage, "unit", v2, sha2)
+	must(t, err)
+	if _, err := os.Stat(first); !os.IsNotExist(err) {
+		t.Errorf("superseded staged copy survived (err=%v)", err)
+	}
+	for name, path := range map[string]string{"current": second, "sibling": sibling, "name-extending sibling": extending} {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("sweep removed the %s copy: %v", name, err)
+		}
+	}
 }
