@@ -939,19 +939,6 @@ func sweepStaleKitTemps(parent, base string) {
 	}
 }
 
-// proxyShimTemplate is the scaffold `pack add proxy <name>` writes to bin/<name>
-// (0755): a bash shim the pack author fills in.
-func proxyShimTemplate(name string) string {
-	return "#!/usr/bin/env bash\n" +
-		"# " + name + " — pack proxy wrapper (scaffolded by `pix pack add proxy`).\n" +
-		"# Runs IN THE SANDBOX, fenced by the net allowlist. Edit it to wrap the real\n" +
-		"# CLI/API call, and declare any domains it needs in pack.toml's [[proxy]]\n" +
-		"# egress = [...] so the sbx kit allowlist matches.\n" +
-		"set -euo pipefail\n" +
-		"echo \"" + name + ": TODO — implement this wrapper\" >&2\n" +
-		"exit 1\n"
-}
-
 // packLock is <pack-root>/pack.lock: GENERATED activation provenance (what the
 // last `pack use` contributed to cfg), git-ignored.
 //
@@ -1102,19 +1089,8 @@ func (t packTxn) abort(restoreLock func() error, format string, a ...any) error 
 	return fmt.Errorf("%s — aborting without saving config (nothing was committed; fix %s and re-run)", cause, packTrustStorePath())
 }
 
-// commitPackActivation commits ONE pack's activation: the single-pack shape of
-// packTxn, with that pack's pack.lock hint.
-func commitPackActivation(cfg *config.Config, store *PackTrustStore, root string, lock packLock) error {
-	return packTxn{
-		records:  []packActivationRecord{store.newActivationRecord(root, lock)},
-		lockRoot: root,
-		lock:     lock,
-	}.commit(cfg)
-}
-
-// gatePackHostSurface is the Tier-1 host-exec trust gate, shared by `pack use`
-// and the active-pack `pack add mcp` attach so both gate on the SAME surface.
-// Tier-0 returns ("", "", nil) and adopts silently; Tier-1 halts at the BoM
+// gatePackHostSurface is the Tier-1 host-exec trust gate `pack use` runs before
+// any commit. Tier-0 returns ("", "", nil) and adopts silently; Tier-1 halts at the BoM
 // screen unless HOST trust state already holds this identity's acceptance of
 // the EXACT current surface. A non-nil error means the caller commits NOTHING.
 func gatePackHostSurface(env hostenv.Env, out io.Writer, store *PackTrustStore, p *Info, root, cfgGogAccount string, yes bool) (fingerprint, key string, err error) {
@@ -1281,31 +1257,20 @@ func printPackRecreateLine(out io.Writer) {
 // process.
 func usagef(format string, a ...any) error { return cli.Usagef(format, a...) }
 
-// packFlags is the ONE argv parse the verbs share (cmd/pix owns the typed
-// grammar and renders it back to argv).
+// packFlags is the ONE argv parse `pack use` needs (cmd/pix owns the typed
+// grammar and renders it back to argv). `pack add`'s --host/--env retired
+// with the verb, so this is just --yes plus positionals.
 type packFlags struct {
 	positionals []string
-	host, yes   bool
-	envVar      string
+	yes         bool
 }
 
 func parsePackFlags(rest []string) (packFlags, error) {
 	var f packFlags
-	for i := 0; i < len(rest); i++ {
-		a := rest[i]
+	for _, a := range rest {
 		switch {
-		case a == "--host":
-			f.host = true
 		case a == "--yes", a == "-y":
 			f.yes = true
-		case strings.HasPrefix(a, "--env="):
-			f.envVar = strings.TrimPrefix(a, "--env=")
-		case a == "--env":
-			if i+1 >= len(rest) {
-				return f, fmt.Errorf("--env needs a value")
-			}
-			i++
-			f.envVar = rest[i]
 		case strings.HasPrefix(a, "-"):
 			return f, fmt.Errorf("unknown flag %q", a)
 		default:
@@ -1322,12 +1287,6 @@ func packTarget(rest []string) string {
 		return expandUser(rest[0])
 	}
 	return DefaultPackRoot()
-}
-
-// isPackDir reports whether root already carries a pack.toml.
-func isPackDir(root string) bool {
-	_, err := os.Stat(filepath.Join(root, PackManifestName))
-	return err == nil
 }
 
 // safeArtifactRune is the ONE artifact-name character class: a name built from
@@ -1350,263 +1309,10 @@ func safeArtifactName(name string) bool {
 	return true
 }
 
-// activateDefaultPack points cfg.Pack at root when (and only when) root IS the
-// resolved default pack AND cfg.Pack is empty, so a fresh default pack is
-// usable without a manual `pack use`; an explicitly active alternate pack is
-// NEVER overridden. The cfg.Save error is returned, never swallowed.
-func activateDefaultPack(root string) error {
-	if root != DefaultPackRoot() {
-		return nil // not the default pack; nothing for this to do
-	}
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("loading config to activate default pack: %w", err)
-	}
-	if cfg.Pack != "" {
-		return nil // an explicitly active (possibly alternate) pack is never overridden
-	}
-	cfg.Pack = root
-	if err := cfg.Save(); err != nil {
-		return fmt.Errorf("could not save config to activate default pack %s: %w", root, err)
-	}
-	return nil
-}
-
-// RunPackNew adopts a pre-existing repo (or one already carrying pack.toml) in
-// place, else creates + git-inits a fresh pack. Never re-inits or clobbers.
-func RunPackNew(env hostenv.Env, out io.Writer, rest []string) error {
-	return packNew(env, out, packTarget(rest))
-}
-
-func packNew(env hostenv.Env, out io.Writer, root string) error {
-	if isPackDir(root) {
-		fmt.Fprintf(out, "already a pack: %s\n", root)
-		return activateDefaultPack(root)
-	}
-	fi, statErr := os.Stat(root)
-	existsDir := statErr == nil && fi.IsDir()
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		return err
-	}
-	// git init only if it isn't already a repo (adopt an existing one in place).
-	_, gitErr := os.Stat(filepath.Join(root, ".git"))
-	isRepo := gitErr == nil
-	if !isRepo {
-		if _, err := env.Run("git", "-C", root, "init"); err != nil {
-			fmt.Fprintf(out, "  note: `git init` failed (%v) — the pack still works; init it yourself\n", err)
-		} else {
-			isRepo = true
-		}
-	}
-	name := filepath.Base(root)
-	if err := WriteManifest(root, Manifest{Name: name, Schema: 1}); err != nil {
-		return fmt.Errorf("could not write %s: %w", PackManifestName, err)
-	}
-	// pack.lock is GENERATED provenance: seed a .gitignore line so a fresh pack
-	// never commits it. Best-effort, no-clobber.
-	seedPackGitignore(root)
-	switch {
-	case existsDir && isRepo:
-		fmt.Fprintf(out, "adopted existing repo as pack %q: %s\n", name, root)
-	case isRepo:
-		fmt.Fprintf(out, "created pack %q (git-initialized): %s\n", name, root)
-	default:
-		fmt.Fprintf(out, "created pack %q: %s (git init it to version it)\n", name, root)
-	}
-	// Auto-activate the default pack so it is immediately usable (no manual
-	// `pack use` for the common case). A named/other pack still needs `pack use`.
-	if root != DefaultPackRoot() {
-		fmt.Fprintf(out, "use it:  pix pack use %s\n", root)
-		return nil
-	}
-	if err := activateDefaultPack(root); err != nil {
-		return err
-	}
-	fmt.Fprintln(out, "active pack -> this (default) pack")
-	return nil
-}
-
 // RegisterFn registers the named servers with the sbx gateway: pack may not
 // call mcp (both are capabilities), so the caller supplies this seam.
 type RegisterFn func(cfg *config.Config, env hostenv.Env, out io.Writer, names []string,
 	hostResolver func() (string, error), containers map[string]config.MCPContainer) error
-
-func RunPackAdd(env hostenv.Env, out io.Writer, rest []string, register RegisterFn) error {
-	return packAdd(env, out, rest, register)
-}
-
-// packAdd writes ONE artifact into a pack, implicit-creating the pack when it
-// is absent. Each kind is its own operation below; only `mcp` touches the host.
-func packAdd(env hostenv.Env, out io.Writer, rest []string, register RegisterFn) error {
-	if len(rest) < 2 {
-		return usagef("usage: pix pack add <skill|knowledge|proxy|mcp> <name> [PACK] [flags]")
-	}
-	kind, name := rest[0], rest[1]
-	if !safeArtifactName(name) {
-		return usagef("pix pack add: invalid name %q (letters, digits, -, _, . only; no path separators)", name)
-	}
-	flags, err := parsePackFlags(rest[2:])
-	if err != nil {
-		return usagef("pix pack add: %v", err)
-	}
-	root := DefaultPackRoot()
-	if len(flags.positionals) >= 1 {
-		root = expandUser(flags.positionals[0])
-	}
-	if !isPackDir(root) {
-		RunPackNew(env, out, []string{root})
-	}
-	// Refuse to write through a symlinked skills/knowledge/bin dir (an adopted
-	// pack could point it outside the root) — LoadPack's mount posture.
-	for _, d := range []string{"skills", "knowledge", "bin"} {
-		if isSymlinkPath(filepath.Join(root, d)) {
-			return fmt.Errorf("%s has a symlinked %s/ dir; refusing to write through it", root, d)
-		}
-	}
-	switch kind {
-	case "skill":
-		wrote, err := writePackArtifact(out, filepath.Join(root, "skills", name), "SKILL.md", skillTemplate(name), "skill", name)
-		if wrote {
-			fmt.Fprintln(out, "edit it, then commit it to your pack's git repo.")
-		}
-		return err
-	case "knowledge":
-		// Embed only: a literal knowledge/ doc, discovered by convention and INERT
-		// (mounted like skills/, indexed by nothing).
-		_, err := writePackArtifact(out, filepath.Join(root, "knowledge"), name+".md", knowledgeTemplate(name), "knowledge doc", name)
-		return err
-	case "proxy":
-		return addPackProxy(out, root, name, flags.host)
-	case "mcp":
-		return addPackMCP(env, out, register, root, name, flags.envVar, flags.yes)
-	}
-	return usagef("pix pack add: unknown kind %q (want: skill, knowledge, proxy, mcp)", kind)
-}
-
-// writePackArtifact is the mkdir → no-clobber stat → write → report shape every
-// `pack add` kind shares; it reports whether it wrote the file.
-func writePackArtifact(out io.Writer, dir, file, body, label, name string) (bool, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return false, err
-	}
-	f := filepath.Join(dir, file)
-	if _, err := os.Stat(f); err == nil {
-		fmt.Fprintf(out, "%s already exists: %s\n", label, f)
-		return false, nil
-	}
-	if err := os.WriteFile(f, []byte(body), 0o644); err != nil {
-		return false, err
-	}
-	fmt.Fprintf(out, "added %s %q: %s\n", label, name, f)
-	return true, nil
-}
-
-// addPackProxy scaffolds bin/<name> and declares it in pack.toml. A host=true
-// wrapper is a Tier-1 facet: it installs only once the BoM gate accepts it at
-// `pack use`, and only for `pix host` (never the sandbox).
-func addPackProxy(out io.Writer, root, name string, host bool) error {
-	binDir := filepath.Join(root, "bin")
-	if err := os.MkdirAll(binDir, 0o755); err != nil {
-		return err
-	}
-	f := filepath.Join(binDir, name)
-	if _, err := os.Stat(f); err != nil {
-		if err := os.WriteFile(f, []byte(proxyShimTemplate(name)), 0o755); err != nil {
-			return err
-		}
-		fmt.Fprintf(out, "scaffolded proxy wrapper: %s\n", f)
-	} else {
-		fmt.Fprintf(out, "proxy wrapper already exists: %s\n", f)
-	}
-	p, err := LoadPack(root)
-	if err != nil {
-		return err
-	}
-	found := false
-	for i, pr := range p.Manifest.Proxies {
-		if pr.Name == name {
-			p.Manifest.Proxies[i].Host, found = host, true
-			break
-		}
-	}
-	if !found {
-		p.Manifest.Proxies = append(p.Manifest.Proxies, PackProxy{Name: name, Host: host})
-	}
-	if err := WriteManifest(root, p.Manifest); err != nil {
-		return err
-	}
-	fmt.Fprintf(out, "added proxy %q to pack.toml (host=%v)\n", name, host)
-	if !host {
-		printPackRecreateLine(out)
-		return nil
-	}
-	fmt.Fprintf(out, "host wrapper: review + accept it with `pix pack use %s` (Tier-1 host BoM gate);\n", root)
-	fmt.Fprintln(out, "once accepted it installs for `pix host` sessions only (requires host.enabled).")
-	return nil
-}
-
-// addPackMCP declares an mcp integration and, when this IS the active pack,
-// attaches it now. Attaching means the gateway runs its command ON THE HOST, so
-// it goes through the SAME Tier-1 gate and commit point as `pack use` — a
-// mid-session add is never a cheaper path to host exec. On refusal the
-// declaration stays in pack.toml (inert) but NOTHING attaches.
-func addPackMCP(env hostenv.Env, out io.Writer, register RegisterFn, root, name, envVar string, yes bool) error {
-	p, err := LoadPack(root)
-	if err != nil {
-		return err
-	}
-	found := false
-	for i, ig := range p.Manifest.Integrations {
-		if ig.MCP == name {
-			p.Manifest.Integrations[i].Env, found = envVar, true
-			break
-		}
-	}
-	if !found {
-		p.Manifest.Integrations = append(p.Manifest.Integrations, Integration{Name: name, MCP: name, Env: envVar})
-	}
-	if err := WriteManifest(root, p.Manifest); err != nil {
-		return err
-	}
-	fmt.Fprintf(out, "added mcp integration %q to pack.toml\n", name)
-	// Compare CANONICALIZED paths: root may be relative while cfg.Pack is
-	// stored absolute.
-	cfg, cerr := config.Load()
-	if cerr != nil || CanonicalizePackRoot(cfg.Pack) != CanonicalizePackRoot(root) {
-		fmt.Fprintf(out, "activate the pack to attach it to a sandbox:  pix pack use %s\n", root)
-		return nil
-	}
-	store, err := requireTrustStore()
-	if err != nil {
-		return err
-	}
-	fingerprint, key, gerr := gatePackHostSurface(env, out, store, p, root, cfg.GogAccount, yes)
-	if gerr != nil {
-		return fmt.Errorf("%v (declared in pack.toml, but NOT attached)", gerr)
-	}
-	// Attribution is gated on the AddMCP result, so a pre-existing user-added
-	// name is never claimed. Its BASE is the HOST-state record.
-	added := cfg.AddMCP(name)
-	if added {
-		lock := store.activationFor(root)
-		if !slices.Contains(lock.MCP, name) {
-			lock.MCP = append(lock.MCP, name)
-		}
-		lock.Remote, lock.Commit = adoptionMarker(store, root, readPackLock(root))
-		if err := commitPackActivation(cfg, store, root, lock); err != nil {
-			return err
-		}
-	}
-	// Persist the acceptance in HOST state so a later `pack use` of this pack
-	// won't re-prompt for what was just accepted here.
-	recordPackAcceptance(out, key, root, fingerprint, "", "")
-	registerPackMCP(register, cfg, env, out, p, []string{name})
-	solicitPackCredentials(env, os.Stdin, out, cli.IsTTY(os.Stdin), p)
-	if added {
-		printPackRecreateLine(out)
-	}
-	return nil
-}
 
 // registerPackMCP registers names with the sbx gateway. Idempotent, and it runs
 // even for a name ALREADY in cfg.MCP: a retry after a failed registration must
@@ -1631,7 +1337,7 @@ func packLs(out io.Writer) error {
 	}
 	active := ActivePackRoot(cfg.Pack, "")
 	if active == "" {
-		fmt.Fprintln(out, "no active pack (`pix pack add skill <name>` to start one, or `pix pack use <path|git-url>`)")
+		fmt.Fprintln(out, "no active pack (create a pack.toml + skills/ by hand, then `pix pack use <path|git-url>`)")
 		return nil
 	}
 	p, err := LoadPack(active)
@@ -2235,39 +1941,9 @@ func WriteManifest(root string, m Manifest) error {
 	return sys.AtomicWriteInDir(root, PackManifestName, buf.Bytes(), 0o644)
 }
 
-// seedPackGitignore appends a `pack.lock` line to <root>/.gitignore so a fresh
-// pack never commits its generated lockfile. Idempotent, best-effort, and
-// symlink-safe: `pack new .` can run in an UNTRUSTED directory where .gitignore
-// may point at e.g. ~/.bashrc.
-func seedPackGitignore(root string) {
-	path := filepath.Join(root, ".gitignore")
-	const line = PackLockName
-	if isSymlinkPath(path) {
-		return // never read or write through a symlinked .gitignore
-	}
-	b, err := os.ReadFile(path)
-	if err == nil && strings.Contains(string(b), line) {
-		return // already present
-	}
-	content := string(b)
-	if content != "" && !strings.HasSuffix(content, "\n") {
-		content += "\n"
-	}
-	content += line + "\n"
-	_ = sys.AtomicWriteInDir(root, ".gitignore", []byte(content), 0o644)
-}
-
 func present(p string) string {
 	if p == "" {
 		return "(none)"
 	}
 	return p
-}
-
-func skillTemplate(name string) string {
-	return "---\nname: " + name + "\ndescription: \"TODO: when should this skill fire? One sentence.\"\n---\n# " + name + "\n\nTODO: tight, opinionated steps.\n"
-}
-
-func knowledgeTemplate(name string) string {
-	return "# " + name + "\n\nTODO: durable, shared domain knowledge (what is X and why), not a personal preference.\n"
 }

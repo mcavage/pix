@@ -73,6 +73,10 @@ func retiredSurfaces() map[string]string {
 		retiredKey("state", "restore"):   "pix-host restore",
 		retiredKey("task", "gc"):         "pix task rm",
 		retiredKey("task", "harvest"):    "pix task path",
+		// The pack authoring surface: create/edit pack.toml and skills/*/SKILL.md
+		// files directly (a plain text edit, then `pack use` to activate).
+		retiredKey("pack", "new"): "editing pack.toml directly",
+		retiredKey("pack", "add"): "editing pack.toml and skills/*/SKILL.md directly",
 		// Earlier retirements, once answered only by a did-you-mean hint: they answer
 		// with the marker now, like the rest.
 		"gog":     "pix gworkspace",

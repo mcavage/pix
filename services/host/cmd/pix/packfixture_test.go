@@ -55,21 +55,6 @@ func phase2HostPack(t *testing.T, dir, name, wrapper string) string {
 	return root
 }
 
-// brokenPackLock makes writePackLock(root, ...) fail deterministically: the
-// destination pack.lock is a non-empty DIRECTORY, so the atomic tmp+rename in
-// writePackLock fails (rename onto a directory), while everything else in the
-// pack root (pack.toml, bin/) stays perfectly readable/writable.
-func brokenPackLock(t *testing.T, root string) {
-	t.Helper()
-	lockDir := pack.PackLockPath(root)
-	if err := os.MkdirAll(lockDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(lockDir, "occupied"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
 // writeFile is a three-line test write. reset has its own copy; sharing one
 // across a package boundary costs more than the duplication.
 func writeFile(t *testing.T, path, body string) {

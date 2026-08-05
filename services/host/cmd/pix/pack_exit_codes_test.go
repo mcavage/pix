@@ -11,9 +11,14 @@ package main
 // keep matching byte for byte:
 //
 //	pack ls (no pack)      exit 0, the "no active pack" line on STDOUT
-//	pack add <bad name>    exit 2, the bare usage message on STDERR, stdout empty
 //	pack use <not a pack>  exit 1, "pix pack use: ..." on STDOUT, stderr empty
 //	pack use <Tier-1>      exit 1, BoM + refusal on STDOUT, nothing committed
+//
+// The bad-invocation (usage error, exit 2, bare stderr) case pack add <bad
+// name> pinned is gone with `pack add` itself (U08f): kong's own grammar now
+// requires `pack use`'s target, so there is no more pack-specific business-
+// level usage error reachable from the real binary. The generic UsageError
+// contract (retired_dispatch_test.go, root_test.go) still covers the shape.
 
 import (
 	"os"
@@ -53,29 +58,12 @@ func TestPackBinary_SuccessWritesStdoutAndExitsZero(t *testing.T) {
 	if code != 0 {
 		t.Errorf("pack ls with no active pack must exit 0, got %d (stderr: %s)", code, stderr)
 	}
-	const want = "no active pack (`pix pack add skill <name>` to start one, or `pix pack use <path|git-url>`)\n"
+	const want = "no active pack (create a pack.toml + skills/ by hand, then `pix pack use <path|git-url>`)\n"
 	if stdout != want {
 		t.Errorf("stdout mismatch:\n got: %q\nwant: %q", stdout, want)
 	}
 	if stderr != "" {
 		t.Errorf("a successful verb writes nothing to stderr, got: %q", stderr)
-	}
-}
-
-// TestPackBinary_UsageErrorIsExit2OnStderr: a bad invocation is the user's
-// mistake — the bare message on stderr (no "pix:" prefix, no usage dump) and
-// exit 2, stdout untouched so a piped reader sees nothing.
-func TestPackBinary_UsageErrorIsExit2OnStderr(t *testing.T) {
-	stdout, stderr, code := runPackBinary(t, t.TempDir(), "pack", "add", "skill", "bad/name")
-	if code != 2 {
-		t.Errorf("a bad artifact name must exit 2, got %d", code)
-	}
-	const want = "pix pack add: invalid name \"bad/name\" (letters, digits, -, _, . only; no path separators)\n"
-	if stderr != want {
-		t.Errorf("stderr mismatch:\n got: %q\nwant: %q", stderr, want)
-	}
-	if stdout != "" {
-		t.Errorf("a usage error writes nothing to stdout, got: %q", stdout)
 	}
 }
 

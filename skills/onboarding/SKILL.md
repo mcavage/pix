@@ -135,7 +135,9 @@ One message, in this order:
    - `pack.active` false: do NOT claim any pack is active. If `pack.exists`
      is true, say the default pack exists but is not active, and
      `pix pack use default` activates it. If `pack.exists` is false,
-     say `pix pack new <path>` creates one. Ordinary `pix setup` does not.
+     say creating one is a `pack.toml` (plus `skills/`) written by hand at
+     `<path>`, then `pix pack use <path>` to activate it. Ordinary `pix
+     setup` does not.
    These are commands they run on their HOST, not in this session. `pack use`
    changes the active host configuration; the current sandbox keeps its
    creation-time skills, MCP, wrappers, and config until they run `pix
@@ -183,7 +185,8 @@ exist, keep the top 3 by this order and drop the rest.
    - `host.ready` true: skip this line entirely, nothing to do.
 7. **`pack.active` is false**: if `pack.exists` is true, the default pack
    just isn't active: `pix pack use default` activates it. If
-   `pack.exists` is false, `pix pack new <path>` creates one. If
+   `pack.exists` is false, say creating one is a `pack.toml` (plus
+   `skills/`) written by hand, then `pix pack use <path>` to activate it. If
    **`pack.active` is true but `pack.git_initialized` is
    false**, say plainly that the pack needs to be a git repo to be portable
    or shared, without assuming a specific fix command (don't invent an

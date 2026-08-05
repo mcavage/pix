@@ -22,7 +22,6 @@
 //     with the pack directory gone
 //   - clearHostPackWrappers returns errors; attribution survives a failed
 //     removal
-//   - seedPackGitignore refuses a symlinked .gitignore
 package pack
 
 import (
@@ -437,41 +436,5 @@ func TestPackTrustStore_IdentityAndProvenance(t *testing.T) {
 	}
 	if err := (&PackTrustStore{}).Save(); err == nil || !strings.Contains(err.Error(), "symlink") {
 		t.Errorf("save through a symlinked trust store must refuse, got %v", err)
-	}
-}
-
-// --- seedPackGitignore symlink safety -----------------------------------------
-
-// TestSeedPackGitignore_RefusesSymlinkedGitignore: `pack new .` in an untrusted
-// dir with .gitignore symlinked at e.g. ~/.bashrc must not append through the
-// link (os.ReadFile/os.WriteFile follow symlinks; seedPackGitignore must not).
-func TestSeedPackGitignore_RefusesSymlinkedGitignore(t *testing.T) {
-	dir := t.TempDir()
-	victim := filepath.Join(dir, "bashrc-stand-in")
-	if err := os.WriteFile(victim, []byte("export PS1=x\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	root := filepath.Join(dir, "pack")
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(victim, filepath.Join(root, ".gitignore")); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
-	}
-	seedPackGitignore(root)
-	if b, err := os.ReadFile(victim); err != nil || string(b) != "export PS1=x\n" {
-		t.Errorf("the symlink target must be untouched, got %q (err=%v)", b, err)
-	}
-	if fi, err := os.Lstat(filepath.Join(root, ".gitignore")); err != nil || fi.Mode()&os.ModeSymlink == 0 {
-		t.Errorf(".gitignore must be left alone (still a symlink), got %v (err=%v)", fi, err)
-	}
-	// The normal path still works.
-	root2 := filepath.Join(dir, "pack2")
-	if err := os.MkdirAll(root2, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	seedPackGitignore(root2)
-	if b, err := os.ReadFile(filepath.Join(root2, ".gitignore")); err != nil || !strings.Contains(string(b), PackLockName) {
-		t.Errorf("a real .gitignore must be seeded, got %q (err=%v)", b, err)
 	}
 }

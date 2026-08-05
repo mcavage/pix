@@ -49,63 +49,21 @@ func (c *packCmd) Help() string {
 	return `A pack is your context: a git-backed bundle of skills, knowledge, MCP
 integrations, proxy wrappers and config. See docs/design/packs.md.
 
+There is no authoring verb: create or edit pack.toml and skills/*/SKILL.md
+files directly (a plain text/TOML edit, then commit to the pack's git repo).
+The default pack root is ~/.local/share/pix/default.
+
 Adopting a pack that runs HOST code (a local MCP server, a host wrapper, an
 external [[bin]]) halts at a Tier-1 bill-of-materials review ([y/N], default
 No). A non-TTY adoption fails closed unless --yes. MCP attach and sandbox bin/
-wrappers need a recreate ('pix rm <box>', then 'pix run') to take effect.
-
-Paths default to the default pack root (~/.local/share/pix/default); every
-"add" implicit-creates the pack it writes into.`
+wrappers need a recreate ('pix rm <box>', then 'pix run') to take effect.`
 }
 
 type packCmd struct {
-	New  packNewCmd  `cmd:"" help:"Adopt a repo as a pack, or git-init a fresh one. (WRITES)"`
-	Add  packAddCmd  `cmd:"" help:"Add a skill | knowledge | proxy | mcp artifact. (WRITES)"`
 	Ls   packLsCmd   `cmd:"" default:"1" help:"Show the active pack."`
 	Show packShowCmd `cmd:"" help:"Inspect a pack (default: the active one)."`
 	Use  packUseCmd  `cmd:"" help:"Set the active pack — one transaction, Tier-1 gated. (WRITES)"`
 	Rm   packRmCmd   `cmd:"" help:"Detach the active pack (files untouched). (WRITES)"`
-}
-
-type packNewCmd struct {
-	Path string `arg:"" optional:"" help:"Pack root (default: the default pack root)."`
-}
-
-func (c *packNewCmd) Run(d *cli.Deps) error {
-	return packRun(d, "new", pack.RunPackNew(defaultShellEnv(), d.Out, packPath(c.Path)))
-}
-
-// packAddCmd writes one artifact into a pack. The kind is an `enum`, so an
-// unknown kind is kong's error against the list the code implements.
-type packAddCmd struct {
-	Kind string `arg:"" enum:"skill,knowledge,proxy,mcp" help:"skill | knowledge | proxy | mcp"`
-	Name string `arg:"" help:"Artifact name (letters, digits, -, _, . only)."`
-	Path string `arg:"" optional:"" help:"Pack root (default: the default pack root)."`
-	Host bool   `help:"proxy only: a HOST-mode wrapper (Tier-1, on PATH for 'pix host' only)."`
-	Env  string `help:"mcp only: the op-refs.env credential variable this server needs." placeholder:"VAR"`
-	Yes  bool   `short:"y" help:"Accept the Tier-1 host bill-of-materials review without prompting."`
-}
-
-func (c *packAddCmd) Run(d *cli.Deps) error {
-	env := defaultShellEnv()
-	return packRun(d, "add", pack.RunPackAdd(env, d.Out, packAddArgs(c), registerServers))
-}
-
-// packAddArgs renders the typed fields into the argv pack's writer still
-// takes. pack's own parse stays on purpose: it is load-bearing for the trust
-// tests that drive RunPackAdd/RunPackUse directly.
-func packAddArgs(c *packAddCmd) []string {
-	args := append([]string{c.Kind, c.Name}, packPath(c.Path)...)
-	if c.Host {
-		args = append(args, "--host")
-	}
-	if c.Env != "" {
-		args = append(args, "--env", c.Env)
-	}
-	if c.Yes {
-		args = append(args, "--yes")
-	}
-	return args
 }
 
 type packLsCmd struct{}

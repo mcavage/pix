@@ -152,8 +152,8 @@ refactor is sound, not whether one diff has a defect.
 **Limits.** Skills are mechanism, not your personal config. A skill never
 hardcodes your channel names or account IDs; that data lives in memory or a
 pack (§5) and the skill reads it at runtime. A skill baked into the image is
-read-only in a running sandbox; edit and version your own by adding it to a
-pack instead (`pack add skill`).
+read-only in a running sandbox; edit and version your own by adding a
+`skills/<name>/SKILL.md` file to a pack directly.
 
 ## 4. The crew
 
@@ -200,21 +200,19 @@ the thing you'd `git diff`, as opposed to memory, which you'd only see in a
 
 ```
 pix pack use <path|git-url> # switch to another pack (config, knowledge, MCP set)
-pix pack new [PATH]         # adopt an existing repo, or git-init a fresh one
-pix pack add skill <name> [PACK]
-pix pack add knowledge <name> [PACK] [--ref <git-url|path>] [--private]
-pix pack add proxy <name> [PACK] [--host]
-pix pack add mcp <name> [PACK] [--env VAR]
 pix pack ls                 # show the active pack
 pix pack show [PATH]        # inspect a pack's full facet inventory
 pix pack rm                 # detach the active pack (files untouched)
 ```
 
-Adding a capability is one command and one file. `pack add proxy warehouse`
-scaffolds `bin/warehouse`, a wrapper script that lands on PATH inside the
-sandbox. `pack add mcp fastmail --env FASTMAIL_TOKEN` declares an MCP server
-the pack needs plus the env var name it'll ask you to fill via 1Password;
-the value never touches the pack or the VM.
+There is no authoring verb. A pack is a directory you create and edit by
+hand: a `pack.toml` (name + facets) plus `skills/`, `knowledge/`, and `bin/`
+as needed — see docs/design/packs.md for the schema. Adding a capability is
+one file and one `pack.toml` stanza: a `bin/warehouse` wrapper script plus a
+`[[proxy]]` entry lands it on PATH inside the sandbox; an `[[integrations]]`
+stanza with `mcp = "fastmail"` and `env = "FASTMAIL_TOKEN"` declares an MCP
+server the pack needs plus the env var name `pack use` will ask you to fill
+via 1Password — the value never touches the pack or the VM.
 
 **MCP servers and `bin/` wrappers attach at sandbox CREATE, not live.** If you
 switch packs or add an MCP inside a running sandbox, it's registered on the
@@ -224,8 +222,8 @@ host but the running sandbox doesn't have it yet:
 pix rm BOX && pix run # recreate the sandbox to pick up the new MCP/bin set
 ```
 
-**Host-mode wrappers** (`pack add proxy platformio --host`) are for tools that
-need something the sandbox structurally can't reach, a `/dev/tty*` serial
+**Host-mode wrappers** (a `[[proxy]]` entry with `host = true`) are for tools
+that need something the sandbox structurally can't reach, a `/dev/tty*` serial
 device is the canonical case. They install to the host, not the sandbox, and
 run on the host, not in the sandbox (§7), so a sandboxed session cannot use
 them at all.
@@ -379,10 +377,10 @@ provider check; you don't need all three.
 3. Let the crew show up uninvited. If you ask for a code review, a
    cross-vendor subagent checks it without you naming a model.
 4. When you catch yourself repeating a preference or a wrapper script across
-   sessions, that's the trigger, not before: `pix pack new` to make it a
-   pack, `pack add skill <name>` to save what worked as a reusable flow. Run
-   `/learnings` first if you want to know what the watcher already noticed
-   repeating.
+   sessions, that's the trigger, not before: write a `pack.toml` and a
+   `skills/<name>/SKILL.md` by hand to save what worked as a reusable flow,
+   then `pix pack use <path>` to activate it. Run `/learnings` first if you
+   want to know what the watcher already noticed repeating.
 
 That's the whole loop: run, work, let the parts introduce themselves, save
 the repeat.

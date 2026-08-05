@@ -112,12 +112,12 @@ func TestPackUse_SamePackLockForgeryCannotDeleteUserConfig(t *testing.T) {
 	}
 }
 
-// TestCommitPackActivation_CfgSaveFailureRollsBackActivationRecord: an
+// TestPackTxnCommit_CfgSaveFailureRollsBackActivationRecord: an
 // ordinary cfg.Save failure (here: config.toml is a non-empty directory, so
 // the atomic rename fails while everything else stays writable) rolls the
 // HOST-STATE activation record back to its prior value AND restores the prior
 // pack.lock bytes — on-disk state stays mutually consistent.
-func TestCommitPackActivation_CfgSaveFailureRollsBackActivationRecord(t *testing.T) {
+func TestPackTxnCommit_CfgSaveFailureRollsBackActivationRecord(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.toml")
 	t.Setenv("PIX_CONFIG", cfgPath)
@@ -157,9 +157,9 @@ func TestCommitPackActivation_CfgSaveFailureRollsBackActivationRecord(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	cerr := commitPackActivation(cfg, store, root, packLock{MCP: []string{"new"}})
+	cerr := commitOnePack(cfg, store, root, packLock{MCP: []string{"new"}})
 	if cerr == nil {
-		t.Fatal("expected commitPackActivation to fail when cfg.Save cannot write")
+		t.Fatal("expected packTxn.commit to fail when cfg.Save cannot write")
 	}
 	if !strings.Contains(cerr.Error(), "activation record rolled back") {
 		t.Errorf("error should say the activation record was rolled back, got: %v", cerr)
