@@ -8,9 +8,8 @@ import (
 )
 
 // session.go turns an INTENT into the concrete model an interactive session
-// (or a verb that has to name one) will actually call. It lives here, not in
-// routing, because the answer is the two facts this package exists to keep
-// together: what the catalog routes to, and what this host can call.
+// will call. It lives here because the answer needs both facts this package
+// keeps together: what the catalog routes to, and what this host can call.
 
 // ResolveSessionModel turns a --intent into a concrete model id, using the same
 // router (registry + scorecard + policy) the subagent crew uses.
@@ -29,15 +28,12 @@ func ResolveSessionModel(intent string) (string, error) {
 	}
 	it, ok := pol.Intent(intent)
 	if !ok {
-		// An unknown intent must NOT silently fabricate a task type and fall back
-		// to the policy default (that hid a bad --intent/run_intent behind a
-		// Sonnet launch). Error instead: run.go exits on an explicit --intent typo
-		// and degrades to pi's default on a bad config-sourced run_intent.
+		// An unknown intent must NOT fall back to the policy default: that hid a
+		// bad --intent behind a Sonnet launch. run.go exits on an explicit typo.
 		return "", fmt.Errorf("unknown intent %q (see `pix models show` for the intent list)", intent)
 	}
-	// Once backend bindings exist they are the availability authority. The
-	// shipped catalog alone never proves that a model is callable.
-	if cfg, cerr := config.Load(); cerr == nil && len(cfg.Inference.Models) > 0 {
+	// Once bindings exist they are the availability authority.
+	if cfg, cerr := config.Load(); cerr == nil && Configured(cfg) {
 		bindings := Bindings(cfg)
 		d := routing.Resolve(routing.RegistryForBindings(reg, bindings, ""), sc, pol, it)
 		for _, b := range bindings {
@@ -54,25 +50,17 @@ func ResolveSessionModel(intent string) (string, error) {
 	return d.Model, nil
 }
 
-// ConfiguredSummary counts the models this host can actually call and names the
-// distinct backends they run through — the "is any inference wired here at all"
-// question setup and the models workflow ask before they offer to wire one.
+// ConfiguredSummary counts the callable models and names their distinct
+// backends — the "is any inference wired here at all" question.
 func ConfiguredSummary(cfg *config.Config) (int, []string) {
-	if cfg == nil {
-		return 0, nil
-	}
-	seen := map[string]bool{}
 	var backends []string
-	count := 0
-	for _, b := range cfg.Inference.Models {
-		if !Callable(cfg, b) {
-			continue
-		}
-		count++
+	seen := map[string]bool{}
+	bindings := Bindings(cfg)
+	for _, b := range bindings {
 		if !seen[b.Backend] {
 			seen[b.Backend] = true
 			backends = append(backends, b.Backend)
 		}
 	}
-	return count, backends
+	return len(bindings), backends
 }

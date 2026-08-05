@@ -2,6 +2,7 @@ package inference
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -53,9 +54,9 @@ func TestUsableMemoryByOS(t *testing.T) {
 		{"windows", 32, 0, false},
 		{"plan9", 32, 0, false},
 	} {
-		got, ok := UsableFraction(tc.goos, tc.totalGB)
+		got, ok := usableFraction(tc.goos, tc.totalGB)
 		if got != tc.want || ok != tc.ok {
-			t.Errorf("UsableFraction(%q, %g) = %g, %v; want %g, %v", tc.goos, tc.totalGB, got, ok, tc.want, tc.ok)
+			t.Errorf("usableFraction(%q, %g) = %g, %v; want %g, %v", tc.goos, tc.totalGB, got, ok, tc.want, tc.ok)
 		}
 	}
 }
@@ -63,8 +64,8 @@ func TestUsableMemoryByOS(t *testing.T) {
 // TestDarwinUsableFractionIsTiered: a single 0.75 over-promises against the
 // macOS wired-memory limit on small machines, which is the S1 arithmetic bug.
 func TestDarwinUsableFractionIsTiered(t *testing.T) {
-	small, _ := UsableFraction("darwin", 32)
-	large, _ := UsableFraction("darwin", 48)
+	small, _ := usableFraction("darwin", 32)
+	large, _ := usableFraction("darwin", 48)
 	if small != 0.67 {
 		t.Errorf("32 GB darwin fraction = %g, want 0.67", small)
 	}
@@ -77,24 +78,24 @@ func TestDarwinUsableFractionIsTiered(t *testing.T) {
 }
 
 func TestProbeHostMemoryReadsBothPlatformSeams(t *testing.T) {
-	mac := ProbeHostMemoryFor("darwin", hwMemEnv(t, "darwin", 48))
+	mac := probeHostMemoryFor("darwin", hwMemEnv(t, "darwin", 48))
 	if !mac.OK || mac.TotalGB != 48 || mac.Source != "sysctl hw.memsize" {
 		t.Fatalf("darwin memory = %+v", mac)
 	}
 	if mac.UsableGB != 36 {
 		t.Fatalf("darwin usable = %g, want 36 (48 * 0.75)", mac.UsableGB)
 	}
-	lin := ProbeHostMemoryFor("linux", hwMemEnv(t, "linux", 32))
+	lin := probeHostMemoryFor("linux", hwMemEnv(t, "linux", 32))
 	if !lin.OK || lin.TotalGB != 32 || lin.Source != "/proc/meminfo MemTotal" {
 		t.Fatalf("linux memory = %+v", lin)
 	}
 	if lin.UsableGB != 32*0.60 {
 		t.Fatalf("linux usable = %g, want 19.2", lin.UsableGB)
 	}
-	if got := ProbeHostMemoryFor("darwin", hostenv.Env{System: &systest.Fake{}}); got.OK {
+	if got := probeHostMemoryFor("darwin", hostenv.Env{System: &systest.Fake{}}); got.OK {
 		t.Fatalf("an unwired seam must not report a size: %+v", got)
 	}
-	if got := ProbeHostMemoryFor("windows", hwMemEnv(t, "linux", 32)); got.OK {
+	if got := probeHostMemoryFor("windows", hwMemEnv(t, "linux", 32)); got.OK {
 		t.Fatalf("an unsupported GOOS must not be sized: %+v", got)
 	}
 }
@@ -135,7 +136,7 @@ func TestChooseLocalRungByRAM(t *testing.T) {
 		{"darwin", 128, "ollama/qwen3.5:35b"},
 		{"linux", 128, "ollama/qwen3.5:35b"},
 	} {
-		mem := ProbeHostMemoryFor(tc.goos, hwMemEnv(t, tc.goos, tc.totalGB))
+		mem := probeHostMemoryFor(tc.goos, hwMemEnv(t, tc.goos, tc.totalGB))
 		if !mem.OK {
 			t.Fatalf("%s %gGB: probe failed: %+v", tc.goos, tc.totalGB, mem)
 		}
@@ -171,16 +172,20 @@ func TestUnknownMemoryOffersNothing(t *testing.T) {
 	}
 }
 
-// TestMinRAMArithmeticMatchesTheShippedCatalog keeps the host-side helper and
-// the catalog honest about the same formula.
+// TestMinRAMArithmeticMatchesTheShippedCatalog holds the catalog to the formula
+// the design fixed: weights*1.15 + declared context * KV per token + 1. The
+// arithmetic lives HERE, not in the package — nothing at runtime recomputes a
+// rung's gate, and an exported helper that only a test calls is a claim the
+// product does not make.
 func TestMinRAMArithmeticMatchesTheShippedCatalog(t *testing.T) {
 	reg, err := routing.LoadRegistry()
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, m := range routing.LocalRungs(reg) {
-		if got := MinRAMFor(m); got != m.MinRAMGB {
-			t.Errorf("%s: catalog min_ram_gb %g, recomputed %g", m.ID, m.MinRAMGB, got)
+		want := math.Ceil(m.DownloadGB*1.15 + float64(m.ContextWindow)*m.KVGBPerTok + 1.0)
+		if want != m.MinRAMGB {
+			t.Errorf("%s: catalog min_ram_gb %g, recomputed %g", m.ID, m.MinRAMGB, want)
 		}
 	}
 }

@@ -1,13 +1,10 @@
 package models
 
 // modelsadd.go implements `pix models add <provider>`: the answer to "setup
-// told me I could add the others later, but I could not find where."
-//
-// Before this, the only later path was `pix secret set <P>_API_KEY op://...`,
-// which writes the credential ref and mirrors it, and stops there. Nothing
-// rebuilt cfg.Inference.Models, nothing probed the new provider, and the roster
-// only ever pruned — so a second key was present, correct, and completely
-// inert, with no command that meant "take this into account".
+// told me I could add the others later, but I could not find where." The only
+// prior path, `pix secret set`, wrote the ref and stopped — nothing rebuilt the
+// bindings, probed them, or widened the roster, so a second key was present,
+// correct, and completely inert.
 
 import (
 	"bufio"
@@ -23,20 +20,13 @@ import (
 )
 
 // AddKeyedProvider and AddOllamaProvider are the two shapes a provider comes
-// in. They RETURN errors: the command contract owns the exit code, so neither
-// calls os.Exit, and both are testable against a bytes.Buffer.
-//
-// They replaced runModelsAdd, which hand-parsed argv, validated the provider
-// name against a list it maintained separately from ProviderNames(), and exited
-// the process from nine places.
+// in. They RETURN errors: the command contract owns the exit code.
 func AddKeyedProvider(d *cli.Deps, cfg *config.Config, env hostenv.Env, provider string) error {
 	p, ok := ProviderByName(provider)
 	if !ok {
 		return cli.Usagef("unknown provider %q (want one of: %s)", provider, strings.Join(ProviderNames(), ", "))
 	}
-	// Refuse under a mandatory pack BEFORE touching anything. configureDirect-
-	// Inference would happily write bindings that the topology filter then drops
-	// silently, so "added" would be a success word with nothing behind it.
+	// Refuse BEFORE touching anything; the key is still worth storing, so say so.
 	if cfg.Inference.ExclusiveSource != "" {
 		return fmt.Errorf("the active pack (%s) owns inference on this host, so a provider key cannot be wired in.\n"+
 			"  The key itself is still worth storing now: pix secret set %s op://vault/item/field\n"+
@@ -63,23 +53,19 @@ func AddKeyedProvider(d *cli.Deps, cfg *config.Config, env hostenv.Env, provider
 	if err != nil {
 		return err
 	}
-	renderModelsAdd(d.Out, p.Name, res)
+	renderAdd(d.Out, p.Name, res, nil)
 	// The sandbox reads the credential from sbx, not from this host's refs file,
 	// so a key that never reaches sbx is wired for host mode only.
 	secret.RunSecretSync(env, d.Out)
 	return nil
 }
 
-// AddOllamaProvider is the keyless half. Ollama needs no credential, so there
-// is no ref to prompt for and nothing to sync into sbx — the whole job is: is
-// the daemon up, what does it list, which of those can this machine/plan
-// actually run, and put the survivors in the roster.
-//
-// With neither --local nor --cloud it does BOTH. They are separate products (a
-// `:cloud` row appears on every signed-in machine and says nothing about what
-// this box can run), but a user typing `pix models add ollama` means "take
-// everything you can prove", and making them guess which flag they needed would
-// be the discoverability failure this command was written to end.
+// AddOllamaProvider is the keyless half: no ref to prompt for, nothing to sync
+// into sbx. The job is — is the daemon up, what does it list, which of those
+// can this machine/plan actually run, and put the survivors in the roster.
+// With neither --local nor --cloud it does BOTH: a user typing `pix models add
+// ollama` means "take everything you can prove", and making them guess the flag
+// is the discoverability failure this command exists to end.
 func AddOllamaProvider(d *cli.Deps, cfg *config.Config, env hostenv.Env, sel OllamaSelection) error {
 	if !sel.Local && !sel.Cloud {
 		sel = OllamaSelection{Local: true, Cloud: true}
@@ -93,59 +79,49 @@ func AddOllamaProvider(d *cli.Deps, cfg *config.Config, env hostenv.Env, sel Oll
 	if err != nil {
 		return err
 	}
-	renderModelsAddOllama(d.Out, res, plan)
+	renderAdd(d.Out, "ollama", res, &plan)
 	return nil
 }
 
-// renderModelsAddOllama reports proof, then the two things a user can act on:
-// a rung worth pulling, and rungs this machine is too small for. Both are said
-// out loud because the alternative — binding nothing and reporting a bare count
-// — is what made the local flow feel broken.
-func renderModelsAddOllama(out io.Writer, res reconcileResult, plan ollamaPlan) {
-	if len(res.Added) == 0 {
-		fmt.Fprintln(out, "ollama was already wired; re-checked it.")
-	}
-	fmt.Fprintf(out, "%d Ollama model(s) answered a live generate at %s.\n", res.Verified, plan.Endpoint)
-	if len(res.Failures) > 0 {
-		fmt.Fprintf(out, "%d candidate(s) did not answer: %s\n", len(res.Failures), strings.Join(res.Failures, "; "))
-	}
-	// Name the pullable rung in BOTH cases, or the offer line configureOllama-
-	// Inference already printed ("offering qwen3.5:35b") is left hanging.
-	switch {
-	case plan.WantPull != "":
-		fmt.Fprintf(out, "\nNot downloaded: %s is the largest local model that fits this machine, but it is not pulled.\n", plan.WantPull)
-		fmt.Fprintf(out, "  ollama pull %s && pix models add ollama --local\n", plan.WantPull)
-	case plan.BestFit != "" && !ContainsString(plan.LocalBoundTags(), plan.BestFit):
-		fmt.Fprintf(out, "\nA larger local model fits this machine but is not pulled: %s\n", plan.BestFit)
-		fmt.Fprintf(out, "  ollama pull %s && pix models add ollama --local\n", plan.BestFit)
-	}
-	if len(plan.SkippedRAM) > 0 {
-		fmt.Fprintf(out, "Too large for this machine (%0.f GB usable): %s\n", plan.Memory.UsableGB, strings.Join(plan.SkippedRAM, ", "))
-	}
-	fmt.Fprintln(out, "Next: pix models        (see the roster)")
-	fmt.Fprintln(out, "      pix models route  (re-resolve intents onto it)")
-}
-
-// renderModelsAdd reports what was PROVEN, never what was merely written. The
-// verified count comes from VerifyDirectInference's live per-model requests, so
-// "callable" here is probe-backed; a provider whose models all failed their
-// probe is reported as a shortfall even though its key resolved fine.
-func renderModelsAdd(out io.Writer, provider string, res reconcileResult) {
+// renderAdd reports what was PROVEN, never what was merely written: the counts
+// come from live per-model probes, so a provider whose models all failed reads
+// as a shortfall even though its key resolved fine. plan is Ollama's extra
+// evidence (nil for a keyed provider): a rung worth pulling, and rungs this
+// machine is too small for.
+func renderAdd(out io.Writer, provider string, res reconcileResult, plan *ollamaPlan) {
 	if len(res.Added) == 0 {
 		fmt.Fprintf(out, "%s was already wired; re-checked it.\n", provider)
 	}
-	fmt.Fprintf(out, "%d model(s) answered a live request across %d provider(s).\n", res.Verified, len(res.Providers))
+	if plan != nil {
+		fmt.Fprintf(out, "%d Ollama model(s) answered a live generate at %s.\n", res.Verified, plan.Endpoint)
+	} else {
+		fmt.Fprintf(out, "%d model(s) answered a live request across %d provider(s).\n", res.Verified, len(res.Providers))
+	}
 	if len(res.Failures) > 0 {
 		fmt.Fprintf(out, "%d candidate(s) did not answer: %s\n", len(res.Failures), strings.Join(res.Failures, "; "))
+	}
+	if plan != nil {
+		// Name the pullable rung in BOTH cases, or the offer line already printed
+		// is left hanging.
+		switch {
+		case plan.WantPull != "":
+			fmt.Fprintf(out, "\nNot downloaded: %s is the largest local model that fits this machine, but it is not pulled.\n", plan.WantPull)
+			fmt.Fprintf(out, "  ollama pull %s && pix models add ollama --local\n", plan.WantPull)
+		case plan.BestFit != "" && !ContainsString(plan.LocalBoundTags(), plan.BestFit):
+			fmt.Fprintf(out, "\nA larger local model fits this machine but is not pulled: %s\n", plan.BestFit)
+			fmt.Fprintf(out, "  ollama pull %s && pix models add ollama --local\n", plan.BestFit)
+		}
+		if len(plan.SkippedRAM) > 0 {
+			fmt.Fprintf(out, "Too large for this machine (%0.f GB usable): %s\n", plan.Memory.UsableGB, strings.Join(plan.SkippedRAM, ", "))
+		}
 	}
 	fmt.Fprintln(out, "Next: pix models        (see the roster)")
 	fmt.Fprintln(out, "      pix models route  (re-resolve intents onto it)")
 }
 
-// ProviderNames is what `models add` accepts, which is NOT the same list as
-// secret.ProviderKeyRefOrder: ollama is a provider you can add and has no key ref, and
-// leaving it out of the error message is how a user concludes it cannot be
-// added at all.
+// ProviderNames is what `models add` accepts — NOT secret.ProviderKeyRefOrder:
+// ollama is addable and keyless, and leaving it out of the error message is how
+// a user concludes it cannot be added at all.
 func ProviderNames() []string {
 	names := make([]string, 0, len(secret.ProviderKeyRefOrder)+1)
 	for _, p := range secret.ProviderKeyRefOrder {
@@ -156,9 +132,9 @@ func ProviderNames() []string {
 	return names
 }
 
-// ProviderByName accepts the provider name, its env var, and the obvious alias
-// (gemini for google), so a user who read the key name in a doc is not told
-// their own credential's name is wrong.
+// ProviderByName accepts the name, the env var and the gemini/google alias, so
+// a user who read the key name in a doc is not told it is wrong. Ollama is
+// absent on purpose: keyless, and a zero ref would send `pix secret set ""`.
 func ProviderByName(raw string) (secret.ProviderKeyRef, bool) {
 	want := strings.ToLower(strings.TrimSpace(raw))
 	if want == "gemini" {
@@ -170,31 +146,4 @@ func ProviderByName(raw string) (secret.ProviderKeyRef, bool) {
 		}
 	}
 	return secret.ProviderKeyRef{}, false
-}
-
-func modelsAddUsage() string {
-	return `usage: pix models add <provider> [--local] [--cloud]
-
-Wire a provider into callable models, end to end: rebuild the model bindings,
-prove each one with a live request, widen the roster to include it, and leave
-nothing claimed that was not proven.
-
-providers: ` + strings.Join(ProviderNames(), ", ") + `
-
-  anthropic | openai | google    keyed. Stores the provider's 1Password ref if
-                                 it has none yet (prompts on a terminal), then
-                                 reconciles the key into sbx so the sandbox can
-                                 use it too.
-  ollama                         keyless. Reads what your local daemon lists and
-                                 proves each one with a real generate. Does both
-                                 local and cloud models unless you narrow it:
-                                   --local   models that run on this machine
-                                   --cloud   models on your ollama.com plan
-                                 Downloads nothing; it names a tag worth pulling
-                                 and leaves the decision to you.
-
-This is the command setup means by "you can add others later". ` + "`pix secret set`" + `
-stores a credential ref; it deliberately does not make network calls, so it
-alone leaves a key unwired.
-`
 }
