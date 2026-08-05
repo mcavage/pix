@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -29,6 +30,47 @@ var (
 	packFixtureErr  error
 )
 
+// packageDir returns the directory containing this test file, resolved via
+// runtime.Caller rather than the process's actual working directory. See
+// supervise/supervise_test.go's packageDir for the full rationale: `go test`
+// happens to set the process CWD to the package directory, but compileFixture
+// pins it explicitly so module resolution doesn't depend on that invariant
+// holding. See TestPackFixtureBuildSurvivesCWDChange.
+func packageDir() string {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		panic("pix/host: runtime.Caller failed to resolve package directory")
+	}
+	return filepath.Dir(file)
+}
+
+// compileFixture reads srcRelPath (relative to this package's own directory),
+// writes it into a fresh temp dir as main.go, and compiles it there with
+// cmd.Dir pinned to packageDir() so resolving "pix/host/plugin" and the
+// cached go-plugin dependency never depends on an inherited process CWD.
+func compileFixture(srcRelPath string) (string, error) {
+	pkgDir := packageDir()
+	dir, err := os.MkdirTemp("", "pack-units-fixture")
+	if err != nil {
+		return "", err
+	}
+	src, err := os.ReadFile(filepath.Join(pkgDir, srcRelPath))
+	if err != nil {
+		return "", err
+	}
+	mainGo := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(mainGo, src, 0o644); err != nil {
+		return "", err
+	}
+	out := filepath.Join(dir, "fixture")
+	cmd := exec.Command("go", "build", "-o", out, mainGo)
+	cmd.Dir = pkgDir // pin module resolution explicitly; do not rely on inherited CWD
+	if b, err := cmd.CombinedOutput(); err != nil {
+		return "", errors.New(string(b))
+	}
+	return out, nil
+}
+
 // buildPackFixture compiles the supervise test fixture once per test binary —
 // the real go-plugin executable a pack would ship. Its source lives at
 // supervise/testdata/fixture/main.go.txt — a .txt, not a .go file, on purpose:
@@ -42,32 +84,36 @@ var (
 func buildPackFixture(t *testing.T) string {
 	t.Helper()
 	packFixtureOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "pack-units-fixture")
-		if err != nil {
-			packFixtureErr = err
-			return
-		}
-		src, err := os.ReadFile("supervise/testdata/fixture/main.go.txt")
-		if err != nil {
-			packFixtureErr = err
-			return
-		}
-		mainGo := filepath.Join(dir, "main.go")
-		if err := os.WriteFile(mainGo, src, 0o644); err != nil {
-			packFixtureErr = err
-			return
-		}
-		out := filepath.Join(dir, "fixture")
-		if b, err := exec.Command("go", "build", "-o", out, mainGo).CombinedOutput(); err != nil {
-			packFixtureErr = errors.New(string(b))
-			return
-		}
-		packFixtureBin = out
+		packFixtureBin, packFixtureErr = compileFixture("supervise/testdata/fixture/main.go.txt")
 	})
 	if packFixtureErr != nil {
 		t.Fatalf("build fixture plugin: %v", packFixtureErr)
 	}
 	return packFixtureBin
+}
+
+// TestPackFixtureBuildSurvivesCWDChange is the regression test for the
+// concern that compiling the fixture from an absolute temp-dir path could
+// lose module resolution for its "pix/host/plugin" import and its cached
+// github.com/hashicorp/go-plugin dependency. It moves the process's working
+// directory away from the package directory (something buildPackFixture's
+// old, CWD-implicit form would have broken under) and gives itself a
+// private, empty GOCACHE (equivalent to a clean cache, but scoped to this
+// test — `go clean -cache` is process-global and would race every other
+// package's build under a parallel `go test ./...`), then proves
+// compileFixture still resolves both offline under GOPROXY=off.
+func TestPackFixtureBuildSurvivesCWDChange(t *testing.T) {
+	t.Setenv("GOPROXY", "off")
+	t.Setenv("GOCACHE", filepath.Join(t.TempDir(), "gocache"))
+	t.Chdir(t.TempDir()) // simulate a caller whose process CWD is not this package
+
+	bin, err := compileFixture("supervise/testdata/fixture/main.go.txt")
+	if err != nil {
+		t.Fatalf("fixture build lost module resolution after a CWD change: %v", err)
+	}
+	if _, err := os.Stat(bin); err != nil {
+		t.Fatalf("compiled fixture binary missing: %v", err)
+	}
 }
 
 // writeUnitPack writes a real pack whose [[services]] entry ships bin/fixture
