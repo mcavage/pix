@@ -12,7 +12,6 @@ import (
 
 	"pix/host/cli"
 	"pix/host/config"
-	"pix/host/rpc"
 )
 
 // fixedNow returns a stable timestamp so .bak suffixes are predictable in tests.
@@ -279,19 +278,32 @@ func TestExecuteReset_MoveFailureReturnsError(t *testing.T) {
 	}
 }
 
-// TestExecuteReset_ServeUpAbortsDataMove: when serve is still up (injected dial),
-// the data dir move is refused (error) but the config dir is still backed up.
+// TestExecuteReset_ServeUpAbortsDataMove: a daemon the post-stop probe still
+// finds alive blocks the data dir move (error) but the config dir is still
+// backed up, and its runtime files are LEFT ALONE — deleting the pidfile of a
+// live daemon orphans it from `pix serve stop`.
 func TestExecuteReset_ServeUpAbortsDataMove(t *testing.T) {
 	stubStopServe(t)
+	stubServeProbe(t, true) // up before the stop, and still up after it
 	root := t.TempDir()
 	p := tempPaths(t, root)
+	state := t.TempDir()
+	p.PidFile = filepath.Join(state, "serve.pid")
+	p.RuntimeFiles = []string{p.PidFile, filepath.Join(state, "serve.spawn.lock")}
+	for _, rf := range p.RuntimeFiles {
+		writeFile(t, rf, "4242")
+	}
 	a := plan(resetCfg(), p, Opts{})
 
-	env := resetHost{ports: map[int]bool{rpc.MemoryPortDefault: true}}
 	var buf bytes.Buffer
-	_, err := executeReset(a, DefaultResetFS(), env, &buf, fixedNow)
+	_, err := executeReset(a, DefaultResetFS(), noToolEnv(), &buf, fixedNow)
 	if err == nil {
 		t.Fatal("serve still up must make executeReset return an error")
+	}
+	for _, rf := range p.RuntimeFiles {
+		if !exists(rf) {
+			t.Errorf("runtime file %s was deleted while the daemon is still alive", rf)
+		}
 	}
 	if exists(p.DataRoot + ".bak-" + fixedTS) {
 		t.Error("the data dir must NOT move while serve is up")
@@ -660,11 +672,14 @@ func stubRestartServe(t *testing.T) *bool {
 	return &called
 }
 
-// TestExecuteReset_ClearsRuntimeFilesAndRestarts: when a daemon was up, reset
-// wipes the state-dir runtime files and restarts a fresh daemon.
+// TestExecuteReset_ClearsRuntimeFilesAndRestarts: when a daemon was up and the
+// stop actually killed it, reset wipes the state-dir runtime files and restarts a
+// fresh daemon.
 func TestExecuteReset_ClearsRuntimeFilesAndRestarts(t *testing.T) {
 	stubStopServe(t)
 	restarted := stubRestartServe(t)
+	// up before the stop, gone after it: the sequence one successful reset produces.
+	stubServeProbe(t, true, false)
 
 	dir := t.TempDir()
 	pid := filepath.Join(dir, "serve.pid")
@@ -675,14 +690,9 @@ func TestExecuteReset_ClearsRuntimeFilesAndRestarts(t *testing.T) {
 		}
 	}
 
-	// dial returns true exactly once: wasUp probe sees it up, the post-stop guard
-	// sees it down (so the data move isn't blocked and restart runs).
-	probed := false
-	env := dialUpThenDownHost{probed: &probed}
-
-	a := actions{RuntimeFiles: []string{pid, lock}}
+	a := actions{PidFile: pid, RuntimeFiles: []string{pid, lock}}
 	var buf bytes.Buffer
-	if _, err := executeReset(a, DefaultResetFS(), env, &buf, fixedNow); err != nil {
+	if _, err := executeReset(a, DefaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	for _, p := range []string{pid, lock} {
@@ -695,17 +705,109 @@ func TestExecuteReset_ClearsRuntimeFilesAndRestarts(t *testing.T) {
 	}
 }
 
-// TestExecuteReset_NoRestartWhenDown: nothing running -> no restart.
+// TestExecuteReset_NoRestartWhenDown: nothing running -> no restart. The probe
+// answers from a state dir with no pidfile in it, which is the real "no daemon"
+// shape (no port, no process, nothing to classify).
 func TestExecuteReset_NoRestartWhenDown(t *testing.T) {
 	stubStopServe(t)
 	restarted := stubRestartServe(t)
-	env := noToolEnv() // dial nil => serveStillUp false
 	var buf bytes.Buffer
-	if _, err := executeReset(actions{}, DefaultResetFS(), env, &buf, fixedNow); err != nil {
+	a := actions{PidFile: filepath.Join(t.TempDir(), "serve.pid")}
+	if _, err := executeReset(a, DefaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
 		t.Fatal(err)
 	}
 	if *restarted {
 		t.Error("must not start a daemon that wasn't running before reset")
+	}
+}
+
+// TestExecuteReset_OrphanedDaemonStoppedByDiscoveryIsRestarted: the pidfile-less
+// orphan (an earlier reset moved the pidfile aside while the daemon kept running)
+// is invisible to the pidfile probe, but stop's DISCOVERY finds and kills it — and
+// that outcome is itself the proof a daemon was running, so reset must bring one
+// back rather than leave the host with none.
+func TestExecuteReset_OrphanedDaemonStoppedByDiscoveryIsRestarted(t *testing.T) {
+	orig := stopServeForReset
+	stopServeForReset = func(io.Writer) (bool, error) { return true, nil } // discovery killed one
+	t.Cleanup(func() { stopServeForReset = orig })
+	restarted := stubRestartServe(t)
+	stubServeProbe(t, false) // no pidfile: the probe cannot see the orphan
+
+	var buf bytes.Buffer
+	a := actions{PidFile: filepath.Join(t.TempDir(), "serve.pid")}
+	if _, err := executeReset(a, DefaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
+		t.Fatal(err)
+	}
+	if !*restarted {
+		t.Error("a daemon stop actually killed must be restarted on the clean slate")
+	}
+}
+
+// TestExecuteReset_FailedStopBlocksEverythingDestructive: the stop ERRORED, so
+// nothing may be assumed about the daemon — even though the probe finds no live
+// pid, the data move is refused, the runtime files stay, and no restart is
+// attempted. "We could not stop it" is not "it is down".
+func TestExecuteReset_FailedStopBlocksEverythingDestructive(t *testing.T) {
+	orig := stopServeForReset
+	stopServeForReset = func(io.Writer) (bool, error) {
+		return false, errors.New("SIGTERM pid 4242: operation not permitted")
+	}
+	t.Cleanup(func() { stopServeForReset = orig })
+	restarted := stubRestartServe(t)
+	stubServeProbe(t, true, false)
+
+	root := t.TempDir()
+	p := tempPaths(t, root)
+	state := t.TempDir()
+	p.PidFile = filepath.Join(state, "serve.pid")
+	p.RuntimeFiles = []string{p.PidFile}
+	writeFile(t, p.PidFile, "4242")
+	a := plan(resetCfg(), p, Opts{})
+
+	var buf bytes.Buffer
+	_, err := executeReset(a, DefaultResetFS(), noToolEnv(), &buf, fixedNow)
+	if err == nil {
+		t.Fatal("a failed stop must make executeReset return an error, not proceed")
+	}
+	if !exists(p.DataRoot) || exists(p.DataRoot+".bak-"+fixedTS) {
+		t.Error("a failed stop must block the data move")
+	}
+	if !exists(p.PidFile) {
+		t.Error("a failed stop must preserve the pidfile")
+	}
+	if *restarted {
+		t.Error("must not start a second daemon when the first could not be stopped")
+	}
+}
+
+// TestExecuteReset_ForceMovesDataButKeepsRuntimeFiles: --force overrides the DATA
+// guard only. The still-live daemon keeps its pid/lock files (invariant #4: reset
+// must never orphan a running daemon from its pidfile) and is not restarted.
+func TestExecuteReset_ForceMovesDataButKeepsRuntimeFiles(t *testing.T) {
+	stubStopServe(t)
+	restarted := stubRestartServe(t)
+	stubServeProbe(t, true) // still up after the stop
+
+	root := t.TempDir()
+	p := tempPaths(t, root)
+	state := t.TempDir()
+	p.PidFile = filepath.Join(state, "serve.pid")
+	p.RuntimeFiles = []string{p.PidFile}
+	writeFile(t, p.PidFile, "4242")
+	a := plan(resetCfg(), p, Opts{force: true})
+
+	var buf bytes.Buffer
+	if _, err := executeReset(a, DefaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
+		t.Fatalf("--force must not error on a live daemon: %v", err)
+	}
+	if !exists(p.DataRoot + ".bak-" + fixedTS) {
+		t.Error("--force must move the data dir even with serve up")
+	}
+	if !exists(p.PidFile) {
+		t.Error("--force must NOT delete a live daemon's pidfile")
+	}
+	if *restarted {
+		t.Error("a daemon that is still running must not be restarted")
 	}
 }
 

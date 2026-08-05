@@ -89,6 +89,23 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`pix reset` asked a PORT whether the daemon was running, and got it wrong
+  in both directions.** The pre-stop "was it up" answer and the post-stop "is it
+  down" proof were both a `MEMORY_PORT` health dial, so a daemon whose memory
+  service was disabled (monitor-only) or had crashed read as DOWN: reset stopped
+  it and never restarted it, and — worse — it moved `~/.local/share/pix` out from
+  under that still-live process and deleted the pidfile that was `pix serve
+  stop`'s only handle on it. A stop that FAILED or refused an unverifiable pid
+  was equally invisible: its error was printed and the destructive steps ran
+  anyway. Both questions are now asked of the daemon's IDENTITY
+  (`service.ServeIdentityUp`: a loaded managed unit, or a pidfile naming a live
+  process that is not provably a stranger's), the same ownership answer
+  `serve stop`/`serve status` already share. A daemon that cannot be PROVEN dead
+  blocks the data move, keeps its pid/lock files, and is not "restarted" behind
+  its own back; `--force` still overrides the data move, but never the runtime
+  files. Reproduced by real-process/real-pidfile tests
+  (`workflow/reset/reset_process_test.go`) that fail against the old probe.
+
 - **The model router described the shipped catalog, not your host.** `pix
   models show|ls|pick|route` (i.e. the whole `pix-host route` tree) loaded
   `models.json` and nothing else, so its `AVAIL` column reported "Pix ships

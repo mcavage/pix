@@ -107,6 +107,38 @@ func probeServePid(ctl serveCtl) pidProbe {
 	return pidProbe{pid: pid, alive: true, ours: ours, known: known}
 }
 
+// ServeIdentityUp answers "is a `pix-host serve` daemon really running?" from
+// what the daemon IS — a loaded managed unit, or a pidfile naming a live process
+// we cannot prove is a stranger's — and NEVER from a service port. A port is the
+// wrong question in BOTH directions: it stays silent for a daemon whose memory
+// service is disabled or has crashed (a caller then reads "down" and tears a live
+// daemon down for good), and it answers for any stranger that bound :11435 (a
+// caller then "restarts" a daemon that never ran). pidPath is the pidfile to
+// classify — "" when the caller has no state dir, where only the managed answer
+// applies. The polarity is pidProbe.running(), the REFUSING direction: a live pid
+// whose identity is unverifiable reads as UP. settle > 0 waits, bounded, for a
+// still-live pid to exit — a launchd bootout or a SIGTERM returns when the stop
+// is DELIVERED, not when the process is reaped, and a caller that read that
+// instant as "still up" would refuse a stop that in fact worked.
+func ServeIdentityUp(managedActive func() bool, pidPath string, settle time.Duration) (up bool, pid int) {
+	if managedActive != nil && managedActive() {
+		return true, 0
+	}
+	if pidPath == "" {
+		return false, 0
+	}
+	ctl := DefaultCtl()
+	ctl.pidPath = func() string { return pidPath }
+	pr := probeServePid(ctl)
+	if !pr.running() {
+		return false, pr.pid
+	}
+	if settle > 0 && serveProcGone(ctl, pr.pid, settle) {
+		return false, pr.pid
+	}
+	return true, pr.pid
+}
+
 // verifyServeProc reports whether pid is OUR `pix-host serve` process.
 func verifyServeProc(pid int) (ours bool, known bool) {
 	if b, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid)); err == nil {

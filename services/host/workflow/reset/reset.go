@@ -12,7 +12,6 @@ import (
 
 	"pix/host/cli"
 	"pix/host/config"
-	"pix/host/rpc"
 	"pix/host/service"
 	"pix/host/sys"
 	"pix/host/workspace"
@@ -41,6 +40,10 @@ type Paths struct {
 	DataRoot  string // ~/.local/share/pix (memory/, packs/, context/)
 	MemoryDir string // <dataRoot>/memory or dir(MEMORY_DB): the user's captured facts
 	memoryDB  string // the custom MEMORY_DB file path (set ONLY when MEMORY_DB is given); "" for the default
+	// PidFile is the daemon's pidfile (RuntimeFiles[0]), named separately because
+	// it is not just a file to clear: it is the ONLY thing that answers "is a
+	// daemon running, and is it ours" — see probeServeUp.
+	PidFile string
 	// RuntimeFiles are the daemon's ephemeral state-dir files (pid/lazy/lock),
 	// resolved HERE (from the same injected env every other field derives from)
 	// rather than by Plan reaching for config.ServePidPath() et al. globally —
@@ -74,8 +77,9 @@ type actions struct {
 	ConfigDir       string         // the config dir (~/.config/pix) being backed up
 	RemoveSandboxes bool           // --sbx: remove pix-* sandboxes
 	MCPRemove       []string       // --sbx: MCP server names to unregister (cfg.MCP)
-	Force           bool           // --force: skip the serve-still-up guard on the data move
+	Force           bool           // --force: skip the serve-still-up guard on the DATA move only (never on the runtime files)
 	RuntimeFiles    []string       // ephemeral daemon runtime files to HARD-remove (pid/lazy/lock in StateDir) — stale after the stop, not worth a .bak
+	PidFile         string         // the pidfile the liveness probe classifies (Paths.PidFile)
 }
 
 // resetFS is the injected filesystem surface, so executeReset stays hermetic in
@@ -172,13 +176,15 @@ func ResolveResetPaths(env sys.System) Paths {
 		memoryDB = db
 	}
 	stateDir := resolveStateDir(env)
+	pidFile := stateFilePath(stateDir, "serve.pid")
 	return Paths{
 		ConfigDir: resolveConfigDir(env),
 		DataRoot:  dataRoot,
 		MemoryDir: memoryDir,
 		memoryDB:  memoryDB,
+		PidFile:   pidFile,
 		RuntimeFiles: []string{
-			stateFilePath(stateDir, "serve.pid"),
+			pidFile,
 			stateFilePath(stateDir, "serve.lazy"),
 			stateFilePath(stateDir, "serve.spawn.lock"),
 		},
@@ -223,6 +229,7 @@ func plan(cfg *config.Config, paths Paths, opts Opts) actions {
 	// came from) in ResolveResetPaths — not re-derived here from config's
 	// globals, which would reach past whatever host the caller injected.
 	a.RuntimeFiles = paths.RuntimeFiles
+	a.PidFile = paths.PidFile
 	return a
 }
 
@@ -353,11 +360,19 @@ func underDir(path, dir string) bool {
 	return rel == "." || (!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".." && !filepath.IsAbs(rel))
 }
 
-// serveStillUp probes whether `pix-host serve` is still answering on the memory
-// service port (env-aware), so the executor can refuse the dangerous data move
-// after a best-effort stop failed to bring it down.
-func serveStillUp(env sys.System) bool {
-	return env.DialLocal(service.Port(env, "MEMORY_PORT", rpc.MemoryPortDefault))
+// probeServeUp answers "is a `pix-host serve` daemon running right now" from the
+// daemon's IDENTITY: a loaded managed unit, or the pidfile — the one resolved from
+// the INJECTED env, never config's globals — naming a live process that is not
+// provably a stranger's. It is deliberately NOT a MEMORY_PORT health probe, which
+// gets this wrong in both directions: silent for a monitor-only or
+// memory-crashed daemon (reset would stop it and never bring it back) and
+// answering for any stranger holding :11435 (reset would "restart" a daemon that
+// never ran, and would trust a stranger's silence to mean our data is safe to
+// move). settle > 0 waits, bounded, for a just-stopped daemon to actually exit.
+// Indirected through a package var so tests drive both answers without a daemon
+// on the developer's machine.
+var probeServeUp = func(pidPath string, settle time.Duration) (up bool, pid int) {
+	return service.ServeIdentityUp(service.ManagedActive, pidPath, settle)
 }
 
 // executeReset performs the plan: stop services (best-effort), move each backup
@@ -368,21 +383,51 @@ func executeReset(a actions, fsys resetFS, env sys.System, out io.Writer, now fu
 	ts := now().Unix()
 	var errs []error
 
-	// Was a daemon running BEFORE we tear down? If so, we bring a fresh one up on
-	// the clean slate at the end (step 5), so reset lands you running, not down.
-	wasUp := serveStillUp(env)
+	// Was a daemon running BEFORE we tear down? Asked of its identity, so a
+	// monitor-only or memory-crashed daemon still counts as running: it gets a
+	// fresh one back on the clean slate at the end (step 5) instead of being
+	// silently stopped for good.
+	wasUp, _ := probeServeUp(a.PidFile, 0)
 
 	// 1. Best-effort stop of the host services so they don't hold the db files.
-	stopHostServices(env, out)
+	stopped, stopErr := stopHostServices(out)
+	// A stop that actually SIGNALLED something is itself proof a daemon was
+	// running: the pidfile-less ORPHAN (a previous reset moved the pidfile aside
+	// while the daemon kept running) is invisible to the probe above but is exactly
+	// what stop's discovery finds and kills — and it deserves the same restart.
+	wasUp = wasUp || stopped
 
-	// 1b. Verify serve is ACTUALLY down before we move the data dir. Renaming
-	// ~/.local/share/pix out from under a live sqlite writer splits the db from its wal.
-	dataBlocked := false
-	if !a.Force && serveStillUp(env) {
-		dataBlocked = true
-		msg := "serve is still running after the stop attempt — refusing to move the data directory (a live sqlite writer would be split from its db/wal); stop it with 'pix serve stop' or re-run with --force"
-		fmt.Fprintf(out, "  ✗ %s\n", msg)
-		errs = append(errs, errors.New(msg))
+	// 1b. PROVE the daemon is down before anything destructive. Two independent
+	// facts can deny it: the stop itself failed (a refusal, a signal error), and
+	// the post-stop identity probe still finding a live process. Only a
+	// proven-dead daemon may have its data dir renamed (doing that under a live
+	// sqlite writer splits the db from its wal) or its runtime files deleted
+	// (deleting the pidfile of a LIVE daemon orphans it from the only handle
+	// `pix serve stop` has on it).
+	//
+	// A stop returns once the signal is delivered / the unit booted out, not once
+	// the process is reaped, so give it a bounded moment to actually exit.
+	const stopSettle = 2 * time.Second
+	stillUp, stillPid := probeServeUp(a.PidFile, stopSettle)
+	serveDown := !stillUp && stopErr == nil
+	dataBlocked := !serveDown && !a.Force
+	if !serveDown {
+		why := fmt.Sprintf("could not confirm 'pix-host serve' is down (the stop attempt failed: %v)", stopErr)
+		if stillUp {
+			why = "serve is STILL running after the stop attempt"
+			if stillPid > 0 {
+				why = fmt.Sprintf("serve is STILL running (pid %d) after the stop attempt", stillPid)
+			}
+		}
+		if dataBlocked {
+			msg := why + " — refusing to move the data directory (a live sqlite writer would be split from its db/wal); stop it with 'pix serve stop' or re-run with --force"
+			fmt.Fprintf(out, "  ✗ %s\n", msg)
+			errs = append(errs, errors.New(msg))
+		} else {
+			// --force is an override of the DATA move only. The runtime files stay
+			// (step 3b) either way: the live daemon keeps its pidfile.
+			fmt.Fprintf(out, "  · %s — --force: moving state anyway, keeping its pid/lock files so `pix serve stop` can still reach it\n", why)
+		}
 	}
 
 	// 2. Move each explicit backup aside. The config dir's 1Password op:// refs go
@@ -458,7 +503,11 @@ func executeReset(a actions, fsys resetFS, env sys.System, out io.Writer, now fu
 	// dir). They are stale after the stop and live OUTSIDE the moved dirs, so a
 	// plain reset would strand them. Hard-removed best-effort: a missing file is
 	// the expected case, and a stale lock is worth more noise than a .bak.
-	if !dataBlocked {
+	//
+	// Gated on serveDown, NOT on dataBlocked: while a daemon is still alive those
+	// files are not stale, they are its live state — removing the pidfile orphans
+	// it from `pix serve stop` (AGENTS.md invariant #4). --force does not buy this.
+	if serveDown {
 		for _, p := range a.RuntimeFiles {
 			if err := fsys.remove(p); err != nil && !os.IsNotExist(err) {
 				fmt.Fprintf(out, "  · could not clear runtime file %s — %v\n", p, err)
@@ -476,7 +525,7 @@ func executeReset(a actions, fsys resetFS, env sys.System, out io.Writer, now fu
 	// 5. Restart the daemon on the clean slate if one was running before (and we
 	// actually tore down). It comes up fresh against default config (the file was
 	// moved aside) with an empty store — the intended clean-slate running state.
-	if wasUp && !dataBlocked {
+	if wasUp && serveDown {
 		fmt.Fprintln(out, "Restarting host services on the clean slate:")
 		if err := restartServeForReset(out); err != nil {
 			fmt.Fprintf(out, "  · could not restart services (%v) — `pix run` will start them\n", err)
@@ -507,12 +556,20 @@ var stopServeForReset = func(out io.Writer) (bool, error) {
 }
 
 // stopHostServices best-effort stops any running `pix-host serve` so it releases
-// the db files before they move, verifying the pid is ours before signalling.
-func stopHostServices(_ sys.System, out io.Writer) {
+// the db files before they move, verifying the pid is ours before signalling. It
+// RETURNS its outcome instead of only printing it: a failed stop gates every
+// destructive step below, and printing it while carrying on is exactly how a live
+// daemon's data got moved out from under it. The bool means "we signalled
+// something of ours and it exited" (evidence a daemon WAS running); whether one
+// SURVIVED is the identity probe's question, never stop's — "nothing of ours to
+// stop" is the normal answer on a clean machine.
+func stopHostServices(out io.Writer) (bool, error) {
 	fmt.Fprintln(out, "Stopping host services:")
-	if _, err := stopServeForReset(out); err != nil {
+	stopped, err := stopServeForReset(out)
+	if err != nil {
 		fmt.Fprintf(out, "  · could not stop 'pix-host serve' (%v) — stop it yourself if running\n", err)
 	}
+	return stopped, err
 }
 
 // executeSbxReset removes pix-* sandboxes and unregisters the configured

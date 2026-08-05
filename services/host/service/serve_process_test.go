@@ -215,6 +215,54 @@ func TestReadLiveServePid_RealProcess(t *testing.T) {
 	}
 }
 
+// ServeIdentityUp is the answer `pix reset` gates its destructive steps on, and
+// it is a question about PROCESS IDENTITY, not about a port: a REAL live
+// `pix-host serve` in the pidfile reads UP with nothing bound anywhere; a dead
+// pid reads down; a live process that is provably NOT ours reads down; and the
+// settle wait returns down as soon as the process actually exits (a bootout or
+// SIGTERM returns before the reap).
+func TestServeIdentityUp_RealProcessPidfileAndSettle(t *testing.T) {
+	pid := 0
+	_, pid = startProcNamed(t, "pix-host", "serve")
+	state := t.TempDir()
+	pidPath := filepath.Join(state, "serve.pid")
+	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(pid)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if up, got := ServeIdentityUp(nil, pidPath, 0); !up || got != pid {
+		t.Fatalf("ServeIdentityUp(live serve) = (%v,%d), want (true,%d)", up, got, pid)
+	}
+	// The managed answer short-circuits, and no pidfile means no pidfile: neither
+	// path may reach for the real host's state dir.
+	if up, _ := ServeIdentityUp(func() bool { return true }, "", 0); !up {
+		t.Error("a loaded managed unit is up regardless of any pidfile")
+	}
+	if up, _ := ServeIdentityUp(func() bool { return false }, "", 0); up {
+		t.Error("no managed unit and no pidfile path is not up")
+	}
+	// A live process that is positively someone else's is NOT our daemon.
+	_, foreign := startProcNamed(t, "notpix", "serve")
+	foreignPath := filepath.Join(state, "foreign.pid")
+	if err := os.WriteFile(foreignPath, []byte(strconv.Itoa(foreign)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if up, _ := ServeIdentityUp(nil, foreignPath, 0); up {
+		t.Errorf("a provably foreign pid must not read as our serve")
+	}
+	// Settle: kill the real daemon and ask with a budget. It must report down
+	// (having WAITED for the exit) rather than "still up" on the delivery instant.
+	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if up, _ := ServeIdentityUp(nil, pidPath, 5*time.Second); up {
+		t.Error("the settle wait must see a killed daemon exit")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("settle waited %s, past its own budget", elapsed)
+	}
+}
+
 // The spawn lock is a REAL flock: while another open file description holds it,
 // tryServeSpawnLock reports busy WITHOUT running the critical section, and it
 // acquires again once the holder releases. This is what makes the "two `pix
