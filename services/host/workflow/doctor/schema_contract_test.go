@@ -115,7 +115,7 @@ func TestSchemaV4_IsPublishedByBothSurfaces(t *testing.T) {
 	if got := ReportJSON(snap, "", snap.ExitCode()).SchemaVersion; got != SchemaVersion {
 		t.Errorf("schema_version = %d, want %d", got, SchemaVersion)
 	}
-	if !strings.Contains(Usage, "schema_version 4") || !strings.Contains(StatusUsage, "schema_version 4") {
+	if !strings.Contains(Description, "schema_version 4") || !strings.Contains(StatusDescription, "schema_version 4") {
 		t.Error("both --json flags must document the schema version they emit")
 	}
 }

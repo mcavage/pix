@@ -2,104 +2,11 @@ package provision
 
 import (
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 
-	"pix/host/cli"
 	"pix/host/config"
-	"pix/host/service"
-	"pix/host/workspace"
-
-	"github.com/BurntSushi/toml"
 )
-
-// RunConfig implements the `config` verb tree: `show`, `path`, `get`, `set`,
-// `unset`. `set`/`unset` are THE answer to "why do I hand-edit the toml" — you
-// don't, you run `pix config set <key> <value>` and it loads, mutates, and
-// Save()s the machine-managed config for you. `get` is the machine-readable
-// read half: one resolved value, no decoration, so scripts (and the Makefile's
-// operational targets) source runtime config from config.toml instead of
-// keeping a second config file.
-func RunConfig(argv []string) {
-	// A leading -h/--help (with or without a subcommand) prints config usage.
-	if cli.WantsHelp(argv) {
-		fmt.Print(ConfigUsage)
-		return
-	}
-	sub := "show"
-	if len(argv) > 0 {
-		sub = argv[0]
-	}
-	switch sub {
-	case "path":
-		// `config path op-refs` prints the absolute op-refs.env path (discoverability
-		// sugar mirroring `config path`); bare `config path` prints config.toml. Any
-		// other trailing token is a typo, not a silently-ignored arg.
-		if len(argv) > 1 && argv[1] == "op-refs" && len(argv) == 2 {
-			fmt.Println(config.OpRefsPath())
-			return
-		}
-		if len(argv) > 1 {
-			fmt.Fprintf(os.Stderr, "pix config path: unexpected argument %q (want: op-refs)\n", argv[1])
-			os.Exit(2)
-		}
-		fmt.Println(config.Path())
-	case "show":
-		if len(argv) > 1 {
-			fmt.Fprintf(os.Stderr, "pix config show: unexpected argument %q\n", argv[1])
-			os.Exit(2)
-		}
-		cfg, err := config.Load()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "pix config: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Printf("# path: %s\n", config.Path())
-		if err := toml.NewEncoder(os.Stdout).Encode(cfg); err != nil {
-			fmt.Fprintf(os.Stderr, "pix config: encoding: %v\n", err)
-			os.Exit(1)
-		}
-	case "get":
-		runConfigGet(argv[1:])
-	case "set":
-		runConfigWrite(false, argv[1:])
-	case "unset":
-		runConfigWrite(true, argv[1:])
-	default:
-		fmt.Fprintf(os.Stderr, "pix config: unknown subcommand %q (want: show, path, get, set, unset)\n", sub)
-		os.Exit(2)
-	}
-}
-
-// runConfigGet prints ONE resolved config value to stdout with no decoration —
-// the machine-readable accessor the Makefile shells out to (`$(shell pix
-// config get mcp)`). The value comes straight from config.Load() (profiles were
-// removed; the active PACK is now the unit of context, see
-// docs/design/packs.md). List keys (mcp, services, knowledge_bundles) print
-// space-separated. An unknown key is a loud error on stderr + exit 2, never a
-// silent empty value.
-func runConfigGet(argv []string) {
-	if cli.WantsHelp(argv) {
-		fmt.Print(ConfigUsage)
-		return
-	}
-	if len(argv) != 1 {
-		fmt.Fprintf(os.Stderr, "usage: pix config get <key>\n%s", ConfigKeysHelp)
-		os.Exit(2)
-	}
-	cfg, _, err := workspace.LoadResolvedConfig()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix config get: %v\n", err)
-		os.Exit(1)
-	}
-	val, err := ConfigValue(cfg, argv[0])
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix config get: %v\n", err)
-		os.Exit(2)
-	}
-	fmt.Println(val)
-}
 
 // ConfigValue resolves one key against the loaded config and renders it for
 // machine consumption: scalars verbatim, lists space-separated. Pure +
@@ -130,49 +37,6 @@ func ConfigValue(cfg *config.Config, key string) (string, error) {
 		return strconv.FormatBool(cfg.AutoserveEnabled()), nil
 	default:
 		return "", fmt.Errorf("unknown key %q\n%s", key, ConfigKeysHelp)
-	}
-}
-
-// runConfigWrite loads the config, applies a set/unset, Save()s it, and prints
-// the new value + path so the user sees the effect without opening the file.
-// There is a single config.toml (profiles were removed; the active PACK is the
-// unit of context) and this is the only mutation path — it is never hand-edited
-// (AGENTS.md forbids it).
-func runConfigWrite(unset bool, argv []string) {
-	verb := "set"
-	if unset {
-		verb = "unset"
-	}
-	if cli.WantsHelp(argv) {
-		fmt.Print(ConfigUsage)
-		return
-	}
-	if len(argv) == 0 {
-		fmt.Fprintf(os.Stderr, "usage: pix config %s <key> [value]\n%s", verb, ConfigKeysHelp)
-		os.Exit(2)
-	}
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix config %s: loading config: %v\n", verb, err)
-		os.Exit(1)
-	}
-	summary, err := ApplyConfigChange(cfg, unset, argv[0], argv[1:])
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix config %s: %v\n", verb, err)
-		os.Exit(2)
-	}
-	if err := cfg.Save(); err != nil {
-		fmt.Fprintf(os.Stderr, "pix config %s: saving config: %v\n", verb, err)
-		os.Exit(1)
-	}
-	fmt.Printf("%s\n# saved to %s\n", summary, config.Path())
-	// Config propagation: a daemon-affecting key (services, memory_*_model,
-	// knowledge_bundles) only takes effect when serve restarts — do that for the
-	// user per the detected lifecycle mode (managed/lazy restart; foreground/down
-	// just advise). Composes with sparse Save: the change is both persisted
-	// correctly AND live, no manual step.
-	if service.IsDaemonAffecting(argv[0]) {
-		service.PropagateConfig(service.DefaultReloader(), os.Stdout)
 	}
 }
 
@@ -326,15 +190,3 @@ func ApplyConfigChange(cfg *config.Config, unset bool, key string, args []string
 		return "", fmt.Errorf("unknown key %q\n%s", key, ConfigKeysHelp)
 	}
 }
-
-const ConfigUsage = `usage: pix config <show|path|get|set|unset> [args]
-
-  show                     print the resolved config path + contents
-  path [op-refs]           print the config file path (or the op-refs.env path)
-  get K                    print ONE resolved value, no decoration (lists are
-                            space-separated); for scripts/make to source
-  set K V                   set a config key (never hand-edit the toml)
-  unset K [V]               reset/clear a scalar key, or remove value V from a
-                            list key (mcp/services/knowledge_bundles)
-
-` + ConfigKeysHelp

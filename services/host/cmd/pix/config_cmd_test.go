@@ -1,8 +1,8 @@
 package main
 
-// config_cmd_test.go proves ConfigCmd (config_cmd.go) end to end through the
+// config_cmd_test.go proves configCmd (config_cmd.go) end to end through the
 // SAME kong entry point production uses (cli.RunRoot), against a scratch
-// $PIX_CONFIG so a run never touches a real user's config. ConfigCmd is not
+// $PIX_CONFIG so a run never touches a real user's config. configCmd is not
 // wired into rootCmd yet (see config_cmd.go's integration note), so these
 // tests parse a small root local to this file rather than rootCmd — exactly
 // the shape rootCmd itself will take once the field is swapped in.
@@ -16,16 +16,10 @@ import (
 	"pix/host/config"
 )
 
-// configTestRoot is rootCmd's eventual `Config ConfigCmd` field in isolation:
-// parsing this is what parsing `pix config ...` through rootCmd will do the
-// moment the field is swapped in, so a passing test here is a passing test
-// of the wired verb, not just of the standalone struct.
-type configTestRoot struct {
-	Config ConfigCmd `cmd:""`
-}
-
+// runConfigParse drives the SHIPPED root, so every case below exercises the
+// wired verb (`Config configCmd` in rootCmd) rather than a stand-in struct.
 func runConfigParse(argv []string, d *cli.Deps) error {
-	return cli.RunRoot[configTestRoot]("pix", "", "", argv, d)
+	return cli.RunRoot[rootCmd]("pix", "", "", argv, d)
 }
 
 func configDeps(t *testing.T) (*cli.Deps, *bytes.Buffer, *bytes.Buffer) {

@@ -124,8 +124,10 @@ func TestTerminalReplacementFollowsChains(t *testing.T) {
 }
 
 // TestRetiredVerbsAreGoneFromDiscovery: a retired verb must not survive in
-// knownVerbs, in either help rendering, or in verbUsage — the three places a
-// user or a test would learn the surface still exists.
+// knownVerbs or in either help rendering — the places a user or a test would
+// learn the surface still exists. (There is no third place any more: the
+// verbUsage constant table died with the last passthrough seam, so `pix help
+// <verb>` can only answer for a verb the root actually parses.)
 func TestRetiredVerbsAreGoneFromDiscovery(t *testing.T) {
 	for key := range retiredSurfaces() {
 		verb, flag := retiredSplit(key)
@@ -134,9 +136,6 @@ func TestRetiredVerbsAreGoneFromDiscovery(t *testing.T) {
 		}
 		if knownVerbs()[verb] {
 			t.Errorf("retired verb %q is still in knownVerbs", verb)
-		}
-		if _, ok := verbUsage(verb); ok {
-			t.Errorf("retired verb %q still has usage text (pix help %s)", verb, verb)
 		}
 	}
 	for _, verb := range []string{"slack", "gworkspace", "knowledge", "upgrade", "backup", "restore"} {

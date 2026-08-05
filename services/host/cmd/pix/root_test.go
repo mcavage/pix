@@ -2,9 +2,13 @@ package main
 
 import (
 	"bytes"
-	"pix/host/cli"
 	"strings"
 	"testing"
+
+	"github.com/alecthomas/kong"
+
+	"pix/host/cli"
+	"pix/host/workflow/launch"
 )
 
 // root_test.go pins the ONE ROOT contract: kong's root tree is the only
@@ -108,6 +112,11 @@ func TestMigratedVerbHelpIsGenerated(t *testing.T) {
 		"serve":   "Usage: pix serve",
 		"task":    "Usage: pix task",
 		"monitor": "Usage: pix monitor",
+		"run":     "Usage: pix run",
+		"status":  "Usage: pix status",
+		"doctor":  "Usage: pix doctor",
+		"setup":   "Usage: pix setup",
+		"state":   "Usage: pix state",
 	} {
 		d, out, errb := rootDeps()
 		if code := dispatch([]string{verb, "--help"}, d); code != 0 {
@@ -128,6 +137,11 @@ func TestExitMapper(t *testing.T) {
 		{"monitor", "--this-is-not-a-real-flag-9x7z"},
 		{"task", "--this-is-not-a-real-flag-9x7z"},
 		{"reset", "--this-is-not-a-real-flag-9x7z"},
+		{"run", "--this-is-not-a-real-flag-9x7z"},
+		{"status", "--this-is-not-a-real-flag-9x7z"},
+		{"doctor", "--this-is-not-a-real-flag-9x7z"},
+		{"setup", "--this-is-not-a-real-flag-9x7z"},
+		{"state", "--this-is-not-a-real-flag-9x7z"},
 		{"serve", "--this-is-not-a-real-flag-9x7z"},
 	} {
 		d, _, errb := rootDeps()
@@ -143,11 +157,12 @@ func TestExitMapper(t *testing.T) {
 	}
 }
 
-// TestLegacyVerbsArePassthrough: an unmigrated verb receives its argv
-// VERBATIM — kong must not parse, reject or reorder a flag that belongs to a
-// hand-rolled loop, which is what makes the adapter behaviour-preserving.
+// TestLegacyVerbsArePassthrough: the remaining passthrough commands receive
+// their argv VERBATIM — kong must not parse, reject or reorder a flag that
+// belongs to a hand-rolled loop (`serve install`/`uninstall`) or a token that
+// is a question rather than a grammar (`help`).
 func TestLegacyVerbsArePassthrough(t *testing.T) {
-	for _, verb := range []string{"run", "status", "config", "doctor", "setup", "mcp", "pack", "memory", "state", "help"} {
+	for _, verb := range []string{"help"} {
 		var gotVerb string
 		var gotArgs []string
 		testSeams.legacy = func(v string, a []string) { gotVerb, gotArgs = v, a }
@@ -211,4 +226,28 @@ func TestBareTaskPrintsUsage(t *testing.T) {
 	if !strings.Contains(out.String(), "Usage: pix task") {
 		t.Errorf("bare `task` printed %q, want task usage", out.String())
 	}
+}
+
+// parseRoot parses a full argv against the REAL root and returns the populated
+// tree, for tests that assert on WHAT a flag parsed into rather than on what
+// running it does.
+func parseRoot(argv []string) (rootCmd, error) {
+	var root rootCmd
+	parser, err := kong.New(&root, kong.Name("pix"), kong.Exit(func(int) {}))
+	if err != nil {
+		return root, err
+	}
+	_, err = parser.Parse(normalizeArgv(argv))
+	return root, err
+}
+
+// parseRunOpts parses `pix run ARGS...` and returns the launch options it
+// resolves to. It replaces the hand-rolled launch.ParseRunArgs the tests used
+// to call directly: the grammar under test is now the one users type.
+func parseRunOpts(args []string) (launch.RunOpts, error) {
+	root, err := parseRoot(append([]string{"run"}, args...))
+	if err != nil {
+		return launch.RunOpts{}, err
+	}
+	return root.Run.opts()
 }

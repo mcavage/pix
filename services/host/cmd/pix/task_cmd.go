@@ -130,8 +130,7 @@ func taskNew(d *cli.Deps, c *taskNewCmd) error {
 	if len(passthrough) > 0 {
 		runArgv = append(append(runArgv, "--"), passthrough...)
 	}
-	runRun(runArgv)
-	return nil
+	return dispatchRun(d, runArgv)
 }
 
 // resolveTaskRunArgv resolves an existing task NAME to the argv `pix run`
@@ -139,15 +138,27 @@ func taskNew(d *cli.Deps, c *taskNewCmd) error {
 // shorthand (a different argv, outside this migration), so it stays
 // argv-in/argv-out rather than a kong struct.
 func resolveTaskRunArgv(name string, rest []string) ([]string, error) {
-	mainroot, err := taskMainroot()
-	if err != nil {
-		return nil, fmt.Errorf("not a git repository: %w", err)
-	}
-	co, m, err := task.Resolve(workspace.TaskStateRoot(), mainroot, name)
+	co, sandboxName, err := resolveTaskTarget(name)
 	if err != nil {
 		return nil, err
 	}
-	return append([]string{co, "--name", m.Sandbox}, rest...), nil
+	return append([]string{co, "--name", sandboxName}, rest...), nil
+}
+
+// resolveTaskTarget resolves an existing task NAME to the two facts a launch
+// needs: its checkout directory and its sandbox name. Shared with `pix run
+// --task`, which fills them straight into RunOpts rather than round-tripping
+// through an argv.
+func resolveTaskTarget(name string) (dir, sandboxName string, err error) {
+	mainroot, err := taskMainroot()
+	if err != nil {
+		return "", "", fmt.Errorf("not a git repository: %w", err)
+	}
+	co, m, err := task.Resolve(workspace.TaskStateRoot(), mainroot, name)
+	if err != nil {
+		return "", "", err
+	}
+	return co, m.Sandbox, nil
 }
 
 // taskRunCmd (re)launches an existing task's sandbox. Rest forwards
@@ -163,33 +174,7 @@ func (c *taskRunCmd) Run(d *cli.Deps) error {
 	if err != nil {
 		return err
 	}
-	runRun(runArgv)
-	return nil
-}
-
-// expandTaskFlag rewrites a leading `--task NAME`/`--task=NAME` in argv
-// (before any `--`) into the resolved checkout + --name form. ok=false means
-// no --task flag was found and argv is unchanged.
-func expandTaskFlag(argv []string) (out []string, ok bool, err error) {
-	for i, a := range argv {
-		if a == "--" {
-			break
-		}
-		switch {
-		case a == "--task":
-			if i+1 >= len(argv) {
-				return nil, true, fmt.Errorf("--task needs a NAME")
-			}
-			rest := append(append([]string(nil), argv[:i]...), argv[i+2:]...)
-			out, err = resolveTaskRunArgv(argv[i+1], rest)
-			return out, true, err
-		case strings.HasPrefix(a, "--task="):
-			rest := append(append([]string(nil), argv[:i]...), argv[i+1:]...)
-			out, err = resolveTaskRunArgv(strings.TrimPrefix(a, "--task="), rest)
-			return out, true, err
-		}
-	}
-	return argv, false, nil
+	return dispatchRun(d, runArgv)
 }
 
 type taskListRow struct {

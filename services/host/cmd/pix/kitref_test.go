@@ -77,14 +77,14 @@ func TestBuildSbxArgs_KitRefOverridesStampedPin(t *testing.T) {
 }
 
 func TestParseRunArgs_KitRef(t *testing.T) {
-	o, err := launch.ParseRunArgs([]string{"--kit-ref", "0.1.2"})
+	o, err := parseRunOpts([]string{"--kit-ref", "0.1.2"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if o.KitRef != "v0.1.2" {
 		t.Errorf("--kit-ref 0.1.2 = %q, want v0.1.2 (a bare semver means that tag)", o.KitRef)
 	}
-	if o, err = launch.ParseRunArgs([]string{"--kit-ref=main"}); err != nil || o.KitRef != "main" {
+	if o, err = parseRunOpts([]string{"--kit-ref=main"}); err != nil || o.KitRef != "main" {
 		t.Errorf("--kit-ref=main = (%q,%v), want (main,nil)", o.KitRef, err)
 	}
 }

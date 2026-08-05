@@ -380,30 +380,6 @@ func TestReportJSON_SchemaAndFixes(t *testing.T) {
 		t.Errorf("checks = %d, want one per probe (%d)", len(v.Checks), len(Probes(cfg, o)))
 	}
 }
-
-func TestParseDoctorArgs(t *testing.T) {
-	if j, v, err := ParseDoctorArgs([]string{"--json", "--verbose"}); err != nil || !j || !v {
-		t.Errorf("--json --verbose = (%v,%v,%v)", j, v, err)
-	}
-	if _, _, err := ParseDoctorArgs([]string{"--nope"}); err == nil || !strings.Contains(err.Error(), "unknown flag") {
-		t.Errorf("an unknown flag must be a usage error, got %v", err)
-	}
-	if _, _, err := ParseDoctorArgs([]string{"--help"}); err == nil {
-		t.Error("--help must request help")
-	}
-}
-
-func TestParseStatusArgs(t *testing.T) {
-	if j, err := ParseStatusArgs([]string{"--json"}); err != nil || !j {
-		t.Errorf("--json = (%v,%v)", j, err)
-	}
-	if _, err := ParseStatusArgs([]string{"--jsom"}); err == nil {
-		t.Error("a typo must fail loud, not run as if no flag were given")
-	}
-}
-
-// --verbose is the difference between the two doctor renderings, and the only
-// one: a green line's evidence is noise until someone doubts it.
 func TestDoctor_VerboseAddsEvidenceForReadyChecks(t *testing.T) {
 	cfg, o := healthyHost(t)
 	var concise, verbose strings.Builder

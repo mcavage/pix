@@ -21,7 +21,6 @@ package doctor
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"sort"
 
@@ -54,34 +53,14 @@ func RunDoctor(ctx context.Context, cfg *config.Config, profile string, out io.W
 	return snap.ExitCode()
 }
 
-// ParseDoctorArgs validates doctor flags: -h/--help returns cli.ErrHelpRequested,
-// --json sets jsonOut, --verbose sets verbose (evidence for every check, not
-// only the ones that are not ready), any other token is a usage error (exit 2).
-func ParseDoctorArgs(argv []string) (jsonOut, verbose bool, err error) {
-	for _, a := range argv {
-		switch a {
-		case "-h", "--help":
-			return false, false, cli.ErrHelpRequested
-		case "--json":
-			jsonOut = true
-		case "--verbose":
-			verbose = true
-		default:
-			return false, false, fmt.Errorf("unknown flag %q", a)
-		}
-	}
-	return jsonOut, verbose, nil
-}
-
-const Usage = `usage: pix doctor [--json] [--verbose]
-
-Diagnose host health: the sbx CLI, the active pack, provider keys, the memory
+// Description is the prose above doctor's GENERATED usage: what it proves and
+// what its exit codes mean. The flag list is not here — the command struct's
+// tags are the flag list, and a second copy could only disagree with it.
+const Description = `Diagnose host health: the sbx CLI, the active pack, provider keys, the memory
 unit, the monitor, and the LaunchAgent. Every check reports what it PROVED,
 with the exact command that repairs a verified gap.
 
-flags:
-  --json      emit the machine-readable snapshot (schema_version 4)
-  --verbose   show the evidence for every check, not only the ones that failed
+--json emits the machine-readable snapshot (schema_version 4).
 
 exit codes:
   0  nothing required is verifiably broken — including checks that could not

@@ -68,7 +68,7 @@ func TestEveryDispatchedSubcommandAppearsInItsUsage(t *testing.T) {
 		"models": {"ls", "show", "pick", "route"},
 	} {
 		d, out, _ := rootDeps()
-		runHelp(d, []string{verb})
+		dispatch([]string{"help", verb}, d)
 		usage := out.String()
 		if strings.TrimSpace(usage) == "" {
 			t.Errorf("verb %q has no usage text", verb)

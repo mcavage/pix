@@ -5,9 +5,6 @@ import (
 	"strings"
 
 	"github.com/alecthomas/kong"
-
-	"pix/host/workflow/doctor"
-	"pix/host/workflow/provision"
 )
 
 // rootNodes returns the kong root's top-level commands, in declaration order.
@@ -87,35 +84,4 @@ func levenshtein(a, b string) int {
 		prev, cur = cur, prev
 	}
 	return prev[len(rb)]
-}
-
-// verbUsage maps a LEGACY verb (and its aliases) to the usage constant its own
-// seam prints, so `pix help <verb>` routes to it. A migrated verb is absent on
-// purpose: it has no constant, and runHelp re-enters the root for it instead.
-// ok is false for an unknown or already-migrated verb.
-func verbUsage(verb string) (string, bool) {
-	switch verb {
-	case "run":
-		return runUsage, true
-	case "status", "st":
-		return doctor.StatusUsage, true
-	case "doctor":
-		return doctor.Usage, true
-	case "setup":
-		return provision.Usage, true
-	case "config":
-		return provision.ConfigUsage, true
-	case "state":
-		return stateUsage, true
-	// mcp/pack/memory are TYPED but not yet root children (typed_verb_bridge.go):
-	// their usage is generated from the same tags that parse them, and these
-	// three entries die with the bridge.
-	case "mcp":
-		return typedVerbUsage[mcpCmd]("pix mcp"), true
-	case "pack":
-		return typedVerbUsage[packCmd]("pix pack"), true
-	case "memory", "mem":
-		return typedVerbUsage[memoryCmd]("pix memory"), true
-	}
-	return "", false
 }

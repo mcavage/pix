@@ -10,11 +10,15 @@
 // read or side effect, and a bare positional naming a directory, which is
 // `run DIR` (classifyBareArg) — plus the `task NAME path` rewrite.
 //
-// ls, rm, reset, serve, task, monitor, version, models, agent and secret are
-// TYPED: struct tags parse them, generate their help, and place them in a help
-// tier (`group:`). Every other verb is a `passthrough:""` command, so its
-// existing seam is handed the argv VERBATIM and nothing it does changed. Each
-// later migration deletes its field's Args tail.
+// EVERY verb is now TYPED: struct tags parse it, generate its help, and place
+// it in a help tier (`group:`). The passthrough seams that handed a verb's argv
+// verbatim to a hand-rolled switch are gone, and with them the usage constants
+// that stood beside those switches — `pix help <verb>` re-enters the root, so
+// the usage a user reads is generated from the tags that parse the verb.
+//
+// `help` is the one command that stays `passthrough:""`, and for the opposite
+// reason: `pix help <anything>` is a question, not a grammar, so it must answer
+// rather than reject.
 package main
 
 import (
@@ -36,85 +40,55 @@ import (
 	"pix/host/service"
 	"pix/host/sys"
 	"pix/host/workflow/launch"
-	"pix/host/workflow/provision"
 )
 
 // rootCmd is the verb table. Field ORDER and the `group:` keys ARE the tiered
 // help: helpAll renders the listing straight off this declaration, so a verb
 // cannot be dispatchable and undocumented at the same time.
 type rootCmd struct {
-	Run    legacyRunCmd    `cmd:"" group:"Workflow" passthrough:"" help:"Launch the sandbox in DIR (default: .). This is the main one."`
-	Ls     lsCmd           `cmd:"" group:"Workflow" help:"List your pix sandboxes (name, state, dir)."`
-	Rm     rmCmd           `cmd:"" group:"Workflow" help:"Remove pix sandboxes (scoped to pix-* names)."`
-	Serve  serveCmd        `cmd:"" group:"Workflow" help:"Run the host services; serve stop|status|start."`
-	Status legacyStatusCmd `cmd:"" group:"Workflow" passthrough:"" aliases:"st" help:"What is up, what is down, what is next."`
+	Run    runCmd    `cmd:"" group:"Workflow" help:"Launch the sandbox in DIR (default: .). This is the main one."`
+	Ls     lsCmd     `cmd:"" group:"Workflow" help:"List your pix sandboxes (name, state, dir)."`
+	Rm     rmCmd     `cmd:"" group:"Workflow" help:"Remove pix sandboxes (scoped to pix-* names)."`
+	Serve  serveCmd  `cmd:"" group:"Workflow" help:"Run the host services; serve stop|status|start."`
+	Status statusCmd `cmd:"" group:"Workflow" aliases:"st" help:"What is up, what is down, what is next."`
 
-	Setup  legacySetupCmd  `cmd:"" group:"Setup & health" passthrough:"" help:"Guided setup: keys, memory, pack."`
-	Doctor legacyDoctorCmd `cmd:"" group:"Setup & health" passthrough:"" help:"Diagnose problems and print the fix commands."`
+	Setup  setupCmd  `cmd:"" group:"Setup & health" help:"Guided setup: keys, memory, pack."`
+	Doctor doctorCmd `cmd:"" group:"Setup & health" help:"Diagnose problems and print the fix commands."`
 
-	Memory legacyMemoryCmd `cmd:"" group:"Data" passthrough:"" aliases:"mem" help:"recall | remember | forget | learnings | stats."`
-	Pack   legacyPackCmd   `cmd:"" group:"Data" passthrough:"" help:"new | add | ls | show | use | rm."`
+	Memory memoryCmd `cmd:"" group:"Data" aliases:"mem" help:"recall | remember | forget | learnings | stats."`
+	Pack   packCmd   `cmd:"" group:"Data" help:"new | add | ls | show | use | rm."`
 
 	Monitor monitorCmd `cmd:"" group:"Observability" help:"Follow a sandbox's out-of-sandbox traffic."`
 
 	Models ModelsCmd `cmd:"" group:"Models & agents" help:"Which models pix can use, and which are wired."`
 	Agent  AgentCmd  `cmd:"" group:"Models & agents" help:"ls | new | edit | rm | reassess."`
 
-	Config legacyConfigCmd `cmd:"" group:"Config & context" passthrough:"" help:"show | path | get | set | unset."`
+	Config configCmd `cmd:"" group:"Config & context" help:"show | path | get | set | unset."`
 
 	Task taskCmd `cmd:"" group:"Parallel work" help:"Parallel task checkouts of one repo."`
 
-	Mcp    legacyMcpCmd `cmd:"" group:"Integrations & credentials" passthrough:"" help:"register | ls | load | auth | bundle."`
-	Secret SecretCmd    `cmd:"" group:"Integrations & credentials" help:"ls | set | rm | check | sync the op-refs."`
+	Mcp    mcpCmd    `cmd:"" group:"Integrations & credentials" help:"register | ls | load | auth | bundle."`
+	Secret SecretCmd `cmd:"" group:"Integrations & credentials" help:"ls | set | rm | check | sync the op-refs."`
 
-	State legacyStateCmd `cmd:"" group:"State (on-disk lifecycle)" passthrough:"" help:"reset (grouped alias)."`
-	Reset resetCmd       `cmd:"" group:"State (on-disk lifecycle)" help:"Move Pix's state aside (reversible). (WRITES)"`
+	State stateCmd `cmd:"" group:"State (on-disk lifecycle)" help:"reset (grouped alias)."`
+	Reset resetCmd `cmd:"" group:"State (on-disk lifecycle)" help:"Move Pix's state aside (reversible). (WRITES)"`
 
-	Version versionCmd    `cmd:"" group:"Meta" help:"Print the stamped launcher version."`
-	Help    legacyHelpCmd `cmd:"" group:"Meta" passthrough:"" help:"Print this help (or a verb's usage)."`
+	Version versionCmd `cmd:"" group:"Meta" help:"Print the stamped launcher version."`
+	Help    helpCmd    `cmd:"" group:"Meta" passthrough:"" help:"Print this help (or a verb's usage)."`
 }
 
-// legacyArgs is the passthrough tail every unmigrated verb carries: kong stops
-// parsing at the verb name, so the seam sees the argv the switch used to hand
-// it — unknown flags and its own `--help` included.
+// legacyArgs is the passthrough tail the last two unmigrated seams carry —
+// `serve install`/`serve uninstall`, whose flags belong to a hand-rolled loop
+// in the service package: kong stops parsing at the subcommand name, so the
+// seam sees the argv the switch used to hand it, its own `--help` included.
 type legacyArgs struct {
 	Args []string `arg:"" optional:"" passthrough:"" help:"Passed to the verb unchanged."`
 }
 
-type legacyRunCmd struct{ legacyArgs }
-type legacyStatusCmd struct{ legacyArgs }
-type legacyConfigCmd struct{ legacyArgs }
-type legacyDoctorCmd struct{ legacyArgs }
-type legacySetupCmd struct{ legacyArgs }
-type legacyMcpCmd struct{ legacyArgs }
-type legacyPackCmd struct{ legacyArgs }
-type legacyMemoryCmd struct{ legacyArgs }
-type legacyStateCmd struct{ legacyArgs }
-type legacyHelpCmd struct{ legacyArgs }
-
-func (c *legacyRunCmd) Run(*cli.Deps) error    { return legacyForward("run", c.Args, runVerb) }
-func (c *legacyStatusCmd) Run(*cli.Deps) error { return legacyForward("status", c.Args, runStatusCmd) }
-func (c *legacyConfigCmd) Run(*cli.Deps) error {
-	return legacyForward("config", c.Args, provision.RunConfig)
-}
-func (c *legacyDoctorCmd) Run(*cli.Deps) error { return legacyForward("doctor", c.Args, runDoctorCmd) }
-func (c *legacySetupCmd) Run(*cli.Deps) error  { return legacyForward("setup", c.Args, runSetupCmd) }
-func (c *legacyMcpCmd) Run(*cli.Deps) error    { return legacyForward("mcp", c.Args, runMcpCmd) }
-func (c *legacyPackCmd) Run(*cli.Deps) error   { return legacyForward("pack", c.Args, runPackCmd) }
-func (c *legacyMemoryCmd) Run(*cli.Deps) error { return legacyForward("memory", c.Args, runMemory) }
-func (c *legacyStateCmd) Run(*cli.Deps) error  { return legacyForward("state", c.Args, runState) }
-
-func (c *legacyHelpCmd) Run(d *cli.Deps) error {
-	if legacyIntercepted("help", c.Args) {
-		return nil
-	}
-	runHelp(d, c.Args)
-	return nil
-}
-
-// testSeams are the two indirections the root's tests need: legacy proves an
-// adapter gets its argv verbatim without launching a sandbox; monitor supplies
-// a context + store root without a signal handler. Never set in production.
+// testSeams are the two indirections the root's tests need: legacy proves a
+// passthrough command gets its argv verbatim without running the seam behind
+// it; monitor supplies a context + store root without a signal handler. Never
+// set in production.
 var testSeams struct {
 	legacy  func(verb string, args []string)
 	monitor func(*monitorCmd, *cli.Deps) error
@@ -134,28 +108,6 @@ func legacyForward(verb string, args []string, fn func([]string)) error {
 	}
 	fn(args)
 	return nil
-}
-
-// runHelp is the `help` verb: the tiered screen, `--all`, or a verb's usage.
-// A TYPED verb has no usage constant to print — `pix help ls` re-enters the
-// root as `pix ls --help`, so the usage a user reads is generated from the
-// same tags that parse it.
-func runHelp(d *cli.Deps, argv []string) {
-	if len(argv) > 0 {
-		if argv[0] == "--all" {
-			fmt.Fprint(d.Out, helpAll())
-			return
-		}
-		if u, ok := verbUsage(argv[0]); ok {
-			fmt.Fprint(d.Out, u)
-			return
-		}
-		if v := argv[0]; v != "help" && knownVerbs()[v] {
-			dispatch([]string{v, "--help"}, d)
-			return
-		}
-	}
-	fmt.Fprint(d.Out, helpText)
 }
 
 // versionCmd prints the stamped launcher version. Typed rather than
@@ -186,12 +138,13 @@ func dispatch(argv []string, d *cli.Deps) int {
 	// otherwise. kong would call both "unexpected argument".
 	if a := argv[0]; !strings.HasPrefix(a, "-") && !knownVerbs()[a] {
 		msg, launch := classifyBareArg(a)
-		if launch {
-			runVerb(argv)
-			return 0
+		if !launch {
+			fmt.Fprint(d.Err, msg)
+			return 2
 		}
-		fmt.Fprint(d.Err, msg)
-		return 2
+		// `pix DIR` IS `pix run DIR`; re-normalize so the pi passthrough tail is
+		// rewritten for the run grammar exactly as the explicit spelling is.
+		argv = normalizeArgv(append([]string{"run"}, argv...))
 	}
 	err := cli.RunRoot[rootCmd]("pix", "A personal, multi-model pi coding agent in a Docker sandbox.", helpText, argv, d)
 	if err != nil {
@@ -210,6 +163,12 @@ func dispatch(argv []string, d *cli.Deps) int {
 func normalizeArgv(argv []string) []string {
 	if len(argv) == 3 && argv[0] == "task" && argv[2] == "path" && !isTaskKnownVerb(argv[1]) {
 		return []string{"task", "path", argv[1]}
+	}
+	// `run ... -- <pi args>`: kong eats the `--` and would feed the first pi arg
+	// to run's DIR positional, so the tail is rewritten into repeated
+	// `--pi-arg=` values before the parser sees it (see run_cmd.go).
+	if argv[0] == "run" {
+		return rewriteRunPassthrough(argv)
 	}
 	return argv
 }

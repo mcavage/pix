@@ -185,18 +185,17 @@ func TestResolveTaskRunArgv(t *testing.T) {
 	}
 }
 
-func TestExpandTaskFlag_NoFlagPassesThrough(t *testing.T) {
-	argv := []string{"run", "--name", "x"}
-	out, matched, err := expandTaskFlag(argv)
-	if matched || err != nil {
-		t.Fatalf("matched=%v err=%v", matched, err)
+func TestRunTaskFlag_NoFlagLeavesTheWorkspaceAlone(t *testing.T) {
+	o, err := parseRunOpts([]string{"--name", "x"})
+	if err != nil {
+		t.Fatalf("err=%v", err)
 	}
-	if strings.Join(out, "|") != strings.Join(argv, "|") {
-		t.Errorf("argv rewritten when it should not be: %v", out)
+	if o.Workspace != "." || o.Name != "x" {
+		t.Errorf("run --name x = %+v, want the cwd workspace and the given name", o)
 	}
 }
 
-func TestExpandTaskFlag_RewritesToCheckoutAndName(t *testing.T) {
+func TestRunTaskFlag_ResolvesToCheckoutAndName(t *testing.T) {
 	mainroot := newRepo(t)
 	dataDir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", dataDir)
@@ -209,32 +208,28 @@ func TestExpandTaskFlag_RewritesToCheckoutAndName(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, matched, err := expandTaskFlag([]string{"--task", "work", "--replace"})
-	if err != nil {
-		t.Fatalf("err = %v", err)
-	}
-	if !matched {
-		t.Fatal("want matched=true")
-	}
-	want := []string{co, "--name", m.Sandbox, "--replace"}
-	if strings.Join(out, "|") != strings.Join(want, "|") {
-		t.Errorf("got %v, want %v", out, want)
+	for _, argv := range [][]string{{"--task", "work", "--replace"}, {"--task=work", "--replace"}} {
+		o, err := parseRunOpts(argv)
+		if err != nil {
+			t.Fatalf("run %v: %v", argv, err)
+		}
+		if o.Workspace != co || o.Name != m.Sandbox || !o.Replace {
+			t.Errorf("run %v = {ws:%q name:%q replace:%v}, want {%q %q true}", argv, o.Workspace, o.Name, o.Replace, co, m.Sandbox)
+		}
 	}
 
-	out2, matched2, err := expandTaskFlag([]string{"--task=work"})
-	if err != nil || !matched2 {
-		t.Fatalf("matched=%v err=%v", matched2, err)
-	}
-	if strings.Join(out2, "|") != strings.Join([]string{co, "--name", m.Sandbox}, "|") {
-		t.Errorf("got %v", out2)
+	// An explicit --name still wins over the task's derived sandbox name.
+	o, err := parseRunOpts([]string{"--task", "work", "--name", "mine"})
+	if err != nil || o.Name != "mine" {
+		t.Errorf("explicit --name = %q (err %v), want it to win", o.Name, err)
 	}
 }
 
-func TestExpandTaskFlag_UnknownTaskErrors(t *testing.T) {
+func TestRunTaskFlag_UnknownTaskErrors(t *testing.T) {
 	newRepo(t)
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	if _, matched, err := expandTaskFlag([]string{"--task", "nope"}); !matched || err == nil {
-		t.Errorf("want matched=true, err!=nil for an unknown task; got matched=%v err=%v", matched, err)
+	if _, err := parseRunOpts([]string{"--task", "nope"}); err == nil {
+		t.Error("an unknown task must be an error, not a launch")
 	}
 }
 
