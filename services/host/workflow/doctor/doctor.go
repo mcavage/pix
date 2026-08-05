@@ -127,8 +127,8 @@ func UnwiredProviderKeys(cfg *config.Config, env hostenv.Env) []string {
 	return gaps
 }
 
-// SbxState is the tri-state a task probe resolves a sandbox to. The whole point
-// is that an errored/unreachable `sbx` invocation is UNKNOWN, distinct from a
-// clean "not in the list" ABSENT: callers must refuse destructive action on
-// UNKNOWN rather than assume the safe-looking absent value.
-type SbxState int
+// The sandbox-liveness tri/four-state (unknown/absent/running/stopped) that
+// used to live here as SbxState moved to the L1 sandbox package (see
+// sandbox.State in sandbox/list.go) — this package built the probe but never
+// owned the vocabulary, and workflow/launch, the actual probe owner, now
+// depends on the canonical type directly instead of doctor re-exporting it.

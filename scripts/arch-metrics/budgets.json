@@ -19,7 +19,7 @@
       "prod_loc": 3643,
       "exports": 19,
       "globals": 15,
-      "edges": 25,
+      "edges": 26,
       "exits": 55
     },
     "pix/host/cmd/pix/corpus": {
@@ -142,9 +142,9 @@
       "exits": 0
     },
     "pix/host/sandbox": {
-      "prod_loc": 650,
-      "exports": 25,
-      "globals": 17,
+      "prod_loc": 664,
+      "exports": 26,
+      "globals": 18,
       "edges": 0,
       "exits": 0
     },
@@ -205,10 +205,10 @@
       "exits": 0
     },
     "pix/host/workflow/launch": {
-      "prod_loc": 2214,
-      "exports": 79,
+      "prod_loc": 2224,
+      "exports": 80,
       "globals": 20,
-      "edges": 14,
+      "edges": 15,
       "exits": 3
     },
     "pix/host/workflow/models": {

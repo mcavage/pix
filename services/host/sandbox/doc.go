@@ -50,8 +50,8 @@
 // (not a fallback alias) and carried no key outside the fully documented set.
 // A row that had to lean on an alias, or came with a key this package has
 // never heard of, parses successfully but reports IdentityVerified=false —
-// the same "fail closed on uncertainty, never guess" posture
-// workflow/doctor's SbxState tri-state and workflow/launch's
-// PlanSandboxLaunch already use for sandbox liveness. PlanLaunch (argv.go)
-// enforces this: it refuses to plan create-vs-exec against an unverified row.
+// the same "fail closed on uncertainty, never guess" posture this package's
+// own State four-state and workflow/launch's PlanSandboxLaunch already use
+// for sandbox liveness. PlanLaunch (argv.go) enforces this: it refuses to
+// plan create-vs-exec against an unverified row.
 package sandbox

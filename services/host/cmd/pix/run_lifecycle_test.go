@@ -9,6 +9,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/hostenv"
+	"pix/host/sandbox"
 	"pix/host/sys"
 	"pix/host/sys/systest"
 	"pix/host/workflow/doctor"
@@ -99,7 +100,7 @@ func TestPlanSandboxLaunch_ReplaceRecreates(t *testing.T) {
 	cfg := &config.Config{}
 	o := launch.RunOpts{Workspace: ".", Name: "pix-t", Replace: true}
 
-	for _, state := range []doctor.SbxState{launch.SbxRunning, launch.SbxStopped} {
+	for _, state := range []sandbox.State{launch.SbxRunning, launch.SbxStopped} {
 		plan := launch.PlanSandboxLaunch(state, true, cfg, o, "0.0.99")
 		if plan.Reattach {
 			t.Errorf("state=%v --replace must not reattach", state)
@@ -373,7 +374,7 @@ func TestWillCreate_MatchesPlanSandboxLaunchReattachDecision(t *testing.T) {
 	cfg := &config.Config{}
 	o := launch.RunOpts{Workspace: ".", Name: "pix-t"}
 	for _, tc := range []struct {
-		State   doctor.SbxState
+		State   sandbox.State
 		replace bool
 		want    bool
 	}{
@@ -407,14 +408,14 @@ func TestWillCreate_MatchesPlanSandboxLaunchReattachDecision(t *testing.T) {
 // }` branch is skipped entirely — a missing checkout is never even asked
 // about, let alone allowed to fail the launch.
 func TestRunDevResolution_SkippedOnReattach(t *testing.T) {
-	for _, state := range []doctor.SbxState{launch.SbxRunning, launch.SbxStopped} {
+	for _, state := range []sandbox.State{launch.SbxRunning, launch.SbxStopped} {
 		if launch.WillCreate(state, false) {
 			t.Fatalf("state=%v: launch.WillCreate must be false so --dev/checkout resolution (which needs a real repo"+
 				" checkout) is skipped on a plain re-attach", state)
 		}
 	}
 	// And the create/replace paths DO need it resolved.
-	for _, state := range []doctor.SbxState{launch.SbxAbsent} {
+	for _, state := range []sandbox.State{launch.SbxAbsent} {
 		if !launch.WillCreate(state, false) {
 			t.Fatalf("state=%v: launch.WillCreate must be true so --dev/checkout resolution runs for a fresh create", state)
 		}

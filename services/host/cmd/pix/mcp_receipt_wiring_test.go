@@ -23,7 +23,7 @@ import (
 	"pix/host/config"
 	"pix/host/mcp"
 	"pix/host/rpc"
-	"pix/host/workflow/doctor"
+	"pix/host/sandbox"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/pack"
 	"pix/host/workspace"
@@ -50,7 +50,7 @@ func falseCmd(t *testing.T) *exec.Cmd { t.Helper(); return exec.Command("false")
 // withCreatePollSeams installs a fast, deterministic creation-evidence poll
 // (probe + interval + timeout) for the duration of the test — no real `sbx
 // ls`, no real half-second sleeps.
-func withCreatePollSeams(t *testing.T, probe func(name string) doctor.SbxState, interval, timeout time.Duration) {
+func withCreatePollSeams(t *testing.T, probe func(name string) sandbox.State, interval, timeout time.Duration) {
 	t.Helper()
 	oldProbe, oldInt, oldTO := launch.SandboxAppearProbeFn, launch.SandboxAppearPollInterval, launch.SandboxAppearPollTimeout
 	launch.SandboxAppearProbeFn, launch.SandboxAppearPollInterval, launch.SandboxAppearPollTimeout = probe, interval, timeout
@@ -60,8 +60,8 @@ func withCreatePollSeams(t *testing.T, probe func(name string) doctor.SbxState, 
 }
 
 // probeAlways is a creation-evidence probe pinned to one state.
-func probeAlways(st doctor.SbxState) func(string) doctor.SbxState {
-	return func(string) doctor.SbxState { return st }
+func probeAlways(st sandbox.State) func(string) sandbox.State {
+	return func(string) sandbox.State { return st }
 }
 
 // --- launch.ExecSbxRunAndRecordCreate: ordering + gating ---------------------------
@@ -192,7 +192,7 @@ func TestExecSbxRunAndRecordCreate_ReceiptWriteFailureIsDistinctError(t *testing
 // always does, matching run.go's actual gate byte for byte.
 func TestCreateReceiptGate_MirrorsDefinitelyCreating(t *testing.T) {
 	cases := []struct {
-		State   doctor.SbxState
+		State   sandbox.State
 		replace bool
 		want    bool
 	}{

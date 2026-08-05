@@ -6,18 +6,30 @@ import (
 	"strings"
 )
 
-// State is the tri-state a parsed listing row resolves to for its own
-// lifecycle column. Unknown is returned whenever the raw value is not among
-// the documented aliases below — it is NEVER guessed into Running or
-// Stopped, the same fail-closed posture workflow/doctor's SbxState already
-// uses for sandbox liveness (an unrecognized/unreadable state must not be
-// mistaken for a known-safe one).
+// State is the sandbox liveness state: a parsed listing row resolves to
+// Unknown/Running/Stopped for its own lifecycle column, and a whole-probe
+// caller (e.g. workflow/launch, see its SbxState alias) additionally uses
+// Absent for "probe ran clean, name not present". Unknown is returned
+// whenever the raw value is not among the documented aliases below — it is
+// NEVER guessed into Running or Stopped, the fail-closed posture this
+// package and workflow/launch's PlanSandboxLaunch both hold for sandbox
+// liveness (an unrecognized/unreadable state must not be mistaken for a
+// known-safe one).
 type State int
 
 const (
 	StateUnknown State = iota
 	StateRunning
 	StateStopped
+	// StateAbsent is the fourth state a WHOLE-PROBE result (not a listing
+	// row) can resolve to: the probe positively confirmed name is NOT
+	// present, distinct from StateUnknown's "the probe itself could not be
+	// trusted". A ParseList row never carries this value on its own — it
+	// exists for callers (e.g. workflow/launch's sandbox-liveness probe)
+	// that fold "ran clean, name missing from the output" into the same
+	// state type as running/stopped/unknown rather than inventing a sibling
+	// enum for what is the same fail-closed tri/four-state posture.
+	StateAbsent
 )
 
 // String renders State for messages/tests.
@@ -27,6 +39,8 @@ func (s State) String() string {
 		return "running"
 	case StateStopped:
 		return "stopped"
+	case StateAbsent:
+		return "absent"
 	default:
 		return "unknown"
 	}

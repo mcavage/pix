@@ -36,6 +36,30 @@
       "contains": [
         "schema_version 4"
       ]
+    },
+    {
+      "name": "json-schema-v4",
+      "args": [
+        "doctor",
+        "--json"
+      ],
+      "exitCode": 1,
+      "stream": "stdout",
+      "contains": [
+        "\"schema_version\": 4"
+      ],
+      "jsonKeys": [
+        "schema_version",
+        "version",
+        "config_path",
+        "profile",
+        "verdict",
+        "ready",
+        "checks",
+        "fixes",
+        "exit",
+        "elapsed_ms"
+      ]
     }
   ]
 }
