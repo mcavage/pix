@@ -273,7 +273,7 @@ exit 0
 		t.Fatal(err)
 	}
 	err := RunSession(SessionSpec{
-		Key: key, Name: "pix-demo", Workspace: ws, AttachExec: true,
+		Key: key, Name: "pix-demo", AttachExec: true,
 		Fingerprint: sandbox.Fingerprint{"static_mcp": "slack,notion"},
 		CreateArgs:  []string{"run", "--name", "pix-demo"},
 	}, SessionDeps{Env: realEnv(), Poll: SbxCreatePoll(realEnv()), Warn: io.Discard, Spawn: fixtureSpawn(t)})
@@ -304,7 +304,7 @@ exit 0
 	key := SessionName(ws)
 	var warn strings.Builder
 	if err := RunSession(SessionSpec{
-		Key: key, Name: "pix-demo", Workspace: ws, Keep: true,
+		Key: key, Name: "pix-demo", Keep: true,
 		CreateArgs: []string{"run", "--name", "pix-demo"},
 	}, SessionDeps{Env: realEnv(), Poll: SbxCreatePoll(realEnv()), Warn: &warn, Spawn: fixtureSpawn(t)}); err != nil {
 		t.Fatalf("RunSession: %v", err)

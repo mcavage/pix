@@ -66,8 +66,9 @@ const SAFETY_INVARIANTS = [
 	},
 	{
 		id: "existing-sandbox-untouched",
-		invariant: "An existing sandbox is never force-removed or replayed into; unknown sandbox state fails closed.",
-		phrases: ["never force-removed", "--replace", "FAILS CLOSED"],
+		invariant:
+			"An existing sandbox is never force-removed or replayed into; nothing recreates one implicitly (--replace is retired); unknown sandbox state fails closed.",
+		phrases: ["never force-removed", "`--replace` is RETIRED", "proof-gated `pix rm BOX`", "FAILS CLOSED"],
 	},
 	{
 		id: "pack-trust-gate",

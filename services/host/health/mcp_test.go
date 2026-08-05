@@ -1,6 +1,7 @@
 package health
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -104,7 +105,6 @@ func TestMCPProbe_RefusedListingIsDenied(t *testing.T) {
 // register command for that server's kind.
 func TestMCPProbe_UnregisteredIsAVerifiedGap(t *testing.T) {
 	p := mcpProbe(t, "mcpnone", local("slack"))
-	p.AttachmentKnown = true
 	r := check(t, p, 2*time.Second)
 	if r.Status != StatusAbsent {
 		t.Fatalf("status = %s, want absent (got %+v)", r.Status, r)
@@ -119,7 +119,6 @@ func TestMCPProbe_UnregisteredIsAVerifiedGap(t *testing.T) {
 // safe to recommend. That is unknown, not a gap with a guessed command.
 func TestMCPProbe_UnclassifiedServerFailsClosed(t *testing.T) {
 	p := mcpProbe(t, "mcpnone", MCPServer{Name: "mystery"})
-	p.AttachmentKnown = true
 	r := check(t, p, 2*time.Second)
 	if r.Status != StatusUnknown {
 		t.Fatalf("status = %s, want unknown (got %+v)", r.Status, r)
@@ -129,46 +128,33 @@ func TestMCPProbe_UnclassifiedServerFailsClosed(t *testing.T) {
 	}
 }
 
-// TestMCPProbe_AttachmentIsNeverInferredFromConfig: registered is not
-// attached. With no trustworthy receipt the answer is unknown and names the
-// sandbox it could not read for.
-func TestMCPProbe_AttachmentUnknownWithoutAReceipt(t *testing.T) {
-	p := mcpProbe(t, "mcpls", local("slack"))
-	p.Sandbox = "pix-demo"
-	r := check(t, p, 2*time.Second)
-	if r.Status != StatusUnknown {
-		t.Fatalf("status = %s, want unknown (got %+v)", r.Status, r)
-	}
-	if !containsAny(r.Evidence, []string{"pix-demo"}) {
-		t.Errorf("evidence must name the sandbox it could not read for, got %q", r.Evidence)
-	}
-}
-
-// TestMCPProbe_RegisteredButNotAttachedIsAGap: with a trustworthy receipt,
-// "registered and not in it" IS a verified gap, and the repair is the exact
-// workspace-qualified load command.
-func TestMCPProbe_RegisteredButNotAttachedIsAGap(t *testing.T) {
-	p := mcpProbe(t, "mcpls", local("slack"))
-	p.AttachmentKnown, p.Sandbox, p.Workspace = true, "pix-demo", "/w/demo"
-	r := check(t, p, 2*time.Second)
-	if r.Status != StatusAbsent {
-		t.Fatalf("status = %s, want absent (got %+v)", r.Status, r)
-	}
-	if r.Fix != "pix mcp load slack /w/demo" {
-		t.Errorf("fix = %q, want the workspace-qualified load command", r.Fix)
-	}
-}
-
-// TestMCPProbe_RegisteredAndAttachedIsReady closes the happy path.
-func TestMCPProbe_RegisteredAndAttachedIsReady(t *testing.T) {
-	p := mcpProbe(t, "mcpls", local("slack"))
-	p.AttachmentKnown, p.Attached, p.Sandbox = true, []string{"slack"}, "pix-demo"
-	r := check(t, p, 2*time.Second)
+// TestMCPProbe_RegisteredNeverClaimsAttached is U04e's honesty property, and
+// it is the reason the attachment axis is gone rather than merely defaulted to
+// unknown: a REGISTERED server is reported registered, ready, and with an
+// explicit caveat that attachment is not checkable — never "attached", and
+// never with a `pix mcp load` repair for a gap nothing here verified.
+//
+// The deleted version answered from a launcher-written receipt: preloaded-at-
+// create or loaded-once, both of which are past pix actions, not the state of
+// the live session (which any other shell can have torn down and recreated —
+// U04d). "Registered and attached" was therefore a ready verdict earned by
+// memory, which AGENTS.md safety invariant #13 forbids.
+func TestMCPProbe_RegisteredNeverClaimsAttached(t *testing.T) {
+	r := check(t, mcpProbe(t, "mcpls", local("slack")), 2*time.Second)
 	if r.Status != StatusReady {
-		t.Fatalf("status = %s, want ready (got %+v)", r.Status, r)
+		t.Fatalf("status = %s, want ready — registration is a live probe and it answered (%+v)", r.Status, r)
 	}
 	if r.Fix != "" {
-		t.Errorf("a ready result must carry no repair, got %q", r.Fix)
+		t.Errorf("a registered server must carry no repair, got %q", r.Fix)
+	}
+	if strings.Contains(r.Detail, "attached") {
+		t.Errorf("detail claims attachment from no probe: %q", r.Detail)
+	}
+	if !strings.Contains(r.Evidence, "not checkable") {
+		t.Errorf("evidence must disclose that attachment is unknowable here, got %q", r.Evidence)
+	}
+	if strings.Contains(r.Evidence, "mcp load") {
+		t.Errorf("evidence offers a load repair for an unverified gap: %q", r.Evidence)
 	}
 }
 
@@ -188,7 +174,6 @@ func TestMCPProbe_RemoteAuth(t *testing.T) {
 		t.Run(tc.mode, func(t *testing.T) {
 			p := mcpProbe(t, "mcpls", remote("notion"))
 			p.AuthArgs = []string{tc.mode}
-			p.AttachmentKnown, p.Attached = true, []string{"notion"}
 			r := check(t, p, 2*time.Second)
 			if r.Status != tc.want {
 				t.Fatalf("status = %s, want %s (got %+v)", r.Status, tc.want, r)
@@ -208,7 +193,6 @@ func TestMCPProbe_LocalServerIsNeverAuthProbed(t *testing.T) {
 	// If the local path DID auth-probe, this argv would answer "not
 	// authenticated" and turn a healthy server into a gap.
 	p.AuthArgs = []string{"authno"}
-	p.AttachmentKnown, p.Attached = true, []string{"slack"}
 	r := check(t, p, 2*time.Second)
 	if r.Status != StatusReady {
 		t.Fatalf("status = %s, want ready — a local stdio server has no OAuth to fail (%+v)", r.Status, r)
@@ -220,7 +204,6 @@ func TestMCPProbe_LocalServerIsNeverAuthProbed(t *testing.T) {
 // fix, and the evidence still carries both.
 func TestMCPProbe_AGapDominatesAnUnknown(t *testing.T) {
 	p := mcpProbe(t, "mcpnone", local("slack"), MCPServer{Name: "mystery"})
-	p.AttachmentKnown = true
 	r := check(t, p, 2*time.Second)
 	if r.Status != StatusAbsent || r.Fix != "pix mcp register slack" {
 		t.Fatalf("got %+v, want absent with slack's register command", r)

@@ -141,7 +141,7 @@ test("invalid compiled routes become actionable diagnostics", async () => {
 		model: "docker-google/gemini-bad",
 	});
 	assert.match(result.errorMessage, /intent "review" resolved to/);
-	assert.match(result.errorMessage, /pix run --replace/);
+	assert.match(result.errorMessage, /pix rm <box> && pix run/);
 	assert.match(result.errorMessage, /Original: Model/);
 });
 

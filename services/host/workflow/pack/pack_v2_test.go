@@ -143,7 +143,7 @@ func TestPackAdd_Proxy_ScaffoldsWrapperAndManifest(t *testing.T) {
 	if len(p.Manifest.Proxies) != 1 || p.Manifest.Proxies[0].Name != "warehouse" || p.Manifest.Proxies[0].Host {
 		t.Errorf("proxy manifest entry missing/wrong: %+v", p.Manifest.Proxies)
 	}
-	if !strings.Contains(out.String(), "pix run --replace") {
+	if !strings.Contains(out.String(), "pix rm <box> && pix run") {
 		t.Errorf("expected the recreate line, got:\n%s", out.String())
 	}
 }
@@ -156,7 +156,7 @@ func TestPackAdd_Proxy_Host_NoRecreateLine(t *testing.T) {
 	root := filepath.Join(dir, "pack")
 	var out bytes.Buffer
 	RunPackAdd(fakeGitEnv(nil), &out, []string{"proxy", "platformio", root, "--host"}, registerOK)
-	if strings.Contains(out.String(), "pix run --replace") {
+	if strings.Contains(out.String(), "pix rm <box> && pix run") {
 		t.Errorf("host proxy should not print the sandbox recreate line, got:\n%s", out.String())
 	}
 	p, err := LoadPack(root)
@@ -233,7 +233,7 @@ func TestPackAdd_Mcp_NotActive_NoAttachNoRecreate(t *testing.T) {
 	if len(p.Manifest.Integrations) != 1 || p.Manifest.Integrations[0].MCP != "fastmail" || p.Manifest.Integrations[0].Env != "FASTMAIL_TOKEN" {
 		t.Errorf("mcp integration not recorded: %+v", p.Manifest.Integrations)
 	}
-	if strings.Contains(out.String(), "pix run --replace") {
+	if strings.Contains(out.String(), "pix rm <box> && pix run") {
 		t.Errorf("inactive pack must not print the recreate line, got:\n%s", out.String())
 	}
 	cfg, err := config.Load()
@@ -279,7 +279,7 @@ func TestPackAdd_Mcp_Active_AttachesAndPrintsRecreate(t *testing.T) {
 	if !slices.Contains(cfg2.MCP, "fastmail") {
 		t.Errorf("cfg.MCP should gain fastmail on the active pack, got %v", cfg2.MCP)
 	}
-	if !strings.Contains(out.String(), "pix run --replace") {
+	if !strings.Contains(out.String(), "pix rm <box> && pix run") {
 		t.Errorf("expected the recreate line, got:\n%s", out.String())
 	}
 	lock := readPackLock(root)
@@ -391,7 +391,7 @@ func TestPackUse_AlwaysPrintsRecreateLine(t *testing.T) {
 
 	var out bytes.Buffer
 	RunPackUse(fakeGitEnv(nil), &out, []string{root}, registerOK)
-	if !strings.Contains(out.String(), "pix run --replace") {
+	if !strings.Contains(out.String(), "pix rm <box> && pix run") {
 		t.Errorf("pack use must always print the recreate line, got:\n%s", out.String())
 	}
 }

@@ -14,10 +14,7 @@ import (
 	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/inference"
-	"pix/host/mcp"
 	"pix/host/sys"
-	"pix/host/workflow/doctor"
-	"pix/host/workflow/pack"
 	"pix/host/workspace"
 )
 
@@ -101,56 +98,6 @@ func (p CreatePoll) validate() error {
 // a create receipt on an indeterminate read.
 func sandboxAppeared(st SbxState) bool { return st == SbxRunning || st == SbxStopped }
 
-// RecordCreateReceipt commits the create receipt — called ONLY by
-// ExecSbxRunAndRecordCreate, once its poll has positively seen the create
-// appear. preloaded is the EXACT --static-mcp set launch emitted, so a later
-// read never disagrees with what create requested. merge=true (the pre-create
-// clear succeeded) preserves loads appended during the create window;
-// merge=false replaces outright so a prior lifetime's loads cannot survive.
-func RecordCreateReceipt(sandbox, ws string, preloaded []string, merge bool) error {
-	fail := func(err error) error {
-		return &workspace.ReceiptRecordError{Op: "create", Sandbox: sandbox, Err: err}
-	}
-	dir, err := workspace.MCPStateDirFn()
-	if err != nil {
-		return fail(fmt.Errorf("resolving pix state dir: %w", err))
-	}
-	var werr error
-	if merge {
-		werr = workspace.CommitCreateReceipt(dir, sandbox, ws, preloaded, nil)
-	} else {
-		werr = workspace.WriteCreateReceipt(dir, sandbox, ws, preloaded, nil)
-	}
-	if werr != nil {
-		return fail(werr)
-	}
-	return nil
-}
-
-// ExecSbxRunAndRecordCreate runs cmd (the composed `sbx run ...`, stdio already
-// wired) and owns the create-receipt lifecycle around it. writeReceipt=false (a
-// plain re-attach, or an inconclusive probe — see DefinitelyCreating) is
-// cmd.Run() and nothing else: a re-attach writes nothing and clears nothing.
-// writeReceipt=true CLEARS any stale receipt, STARTS cmd, polls for the
-// sandbox, commits the receipt the moment it appears (merging loads recorded
-// since the clear), then waits the session out.
-//
-// Outcome contract: an exit BEFORE creation evidence returns its own error and
-// writes no receipt (a final probe on a CLEAN exit still records — evidence
-// found at exit is evidence). A receipt that cannot be recorded after the
-// sandbox appeared, or a poll timeout with the session still running, still
-// waits the session out and surfaces as *workspace.ReceiptRecordError, so the
-// caller reports "launched, but state unrecorded" and exits non-zero rather
-// than a silent success or a fake launch failure. The Wait goroutine always
-// terminates and its result is always drained.
-func ExecSbxRunAndRecordCreate(cmd *exec.Cmd, poll CreatePoll, writeReceipt bool, sandbox, ws string, preloaded []string) error {
-	child, err := StartSbxRunAndRecordCreate(cmd, poll, writeReceipt, sandbox, ws, preloaded)
-	if err != nil {
-		return err
-	}
-	return child.Wait()
-}
-
 // SessionChild is a STARTED child session whose create-time recording is
 // already DECIDED but whose exit has not been waited for yet. It exists so a
 // caller holding a lifecycle lock can do the two things in the right order:
@@ -164,48 +111,43 @@ func ExecSbxRunAndRecordCreate(cmd *exec.Cmd, poll CreatePoll, writeReceipt bool
 // for a second time.
 type SessionChild struct {
 	// Appeared reports that the create poll POSITIVELY saw this sandbox in
-	// `sbx ls` — the only state in which anything at all was recorded, and
-	// the only state in which a caller may record its own create-time facts
-	// (lease record, fingerprint, invocation) against it.
+	// `sbx ls` — the only state in which a caller may record its own
+	// create-time facts (lease record, fingerprint, invocation) against it.
 	Appeared bool
 
 	waitCh  chan error
-	recErr  error // receipt outcome, surfaced by Wait on a clean session exit
 	drained bool  // the child already exited during the creation poll
 	exitErr error // its exit result, replayed by Wait
 }
 
-// Wait hands the terminal back and waits the session out. The child's own
-// failure dominates; a receipt failure surfaces only on a clean session exit,
-// so a caller can report "launched, but state unrecorded" without inventing a
-// launch failure.
+// Wait hands the terminal back and waits the session out, returning the
+// child's own exit result and nothing else.
 func (c *SessionChild) Wait() error {
 	if c.drained {
-		if c.exitErr != nil {
-			return c.exitErr
-		}
-		return c.recErr
+		return c.exitErr
 	}
-	if werr := <-c.waitCh; werr != nil {
-		return werr
-	}
-	return c.recErr
+	return <-c.waitCh
 }
 
-// StartSbxRunAndRecordCreate is ExecSbxRunAndRecordCreate's first half: it
-// runs every step that must complete BEFORE the session is waited for, and
-// returns the still-running child. writeReceipt=false (a plain re-attach, or
-// an inconclusive probe — see DefinitelyCreating) starts cmd and nothing
-// else: a re-attach writes nothing and clears nothing. writeReceipt=true
-// CLEARS any stale receipt, STARTS cmd, polls for the sandbox, and commits
-// the receipt the moment it appears (merging loads recorded since the clear).
+// StartSbxSession starts cmd (the composed `sbx ...` argv, stdio already
+// wired) and runs every step that must complete BEFORE the session is waited
+// for, returning the still-running child. creating=false (an attach) starts
+// cmd and nothing else. creating=true then POLLS until the runtime positively
+// lists the sandbox, so the caller — which is still holding the lifecycle lock
+// — can record its create-time facts against evidence rather than hope (see
+// SessionChild.Appeared and RecordSessionCreation).
 //
-// A non-nil error means the child never started (or the poll was unusable) —
-// nothing was created, nothing recorded. Everything else, including a child
-// that already exited and a receipt that could not be written, is reported
-// through the returned SessionChild's Wait.
-func StartSbxRunAndRecordCreate(cmd *exec.Cmd, poll CreatePoll, writeReceipt bool, sandbox, ws string, preloaded []string) (*SessionChild, error) {
-	if !writeReceipt {
+// A non-nil error means the child never started, or the poll was unusable:
+// nothing was created and nothing recorded. Everything else, including a child
+// that already exited, is reported through the returned SessionChild's Wait.
+//
+// The poll's OWN outcome is deliberately not an error. An exit before creation
+// evidence surfaces the child's own error; a clean exit gets ONE final probe,
+// because evidence found at exit is still evidence; a timeout with the session
+// still running leaves Appeared false, which the caller reads as "nothing to
+// record against" — the same honest answer as never having seen it.
+func StartSbxSession(cmd *exec.Cmd, poll CreatePoll, creating bool, sandbox string) (*SessionChild, error) {
+	if !creating {
 		if err := cmd.Start(); err != nil {
 			return nil, err
 		}
@@ -214,18 +156,6 @@ func StartSbxRunAndRecordCreate(cmd *exec.Cmd, poll CreatePoll, writeReceipt boo
 	if err := poll.validate(); err != nil {
 		return nil, err
 	}
-
-	// Pre-create clear: under the same per-sandbox lock the writers use, drop
-	// any receipt from a previous incarnation of this name. merge stays false
-	// unless the clear POSITIVELY succeeded; an unproven clear degrades to a
-	// plain replace, which cannot resurrect old loads.
-	merge := false
-	if stateDir, err := workspace.MCPStateDirFn(); err == nil {
-		if err := workspace.ClearMCPReceipt(stateDir, sandbox); err == nil {
-			merge = true
-		}
-	}
-
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
@@ -237,27 +167,16 @@ func StartSbxRunAndRecordCreate(cmd *exec.Cmd, poll CreatePoll, writeReceipt boo
 	for {
 		if sandboxAppeared(poll.Probe(sandbox)) {
 			child.Appeared = true
-			child.recErr = RecordCreateReceipt(sandbox, ws, preloaded, merge)
 			return child, nil
 		}
 		if time.Now().After(deadline) {
-			child.recErr = &workspace.ReceiptRecordError{Op: "create", Sandbox: sandbox,
-				Err: fmt.Errorf("timed out after %s waiting for the sandbox to appear in `sbx ls`; its preloaded MCP set was not recorded", poll.Timeout)}
 			return child, nil
 		}
 		select {
 		case werr := <-child.waitCh:
-			// Exited before creation evidence. A failed exec surfaces its OWN
-			// error, receiptless. A clean exit gets ONE final probe (the
-			// sandbox may have appeared exactly as it exited); still no
-			// evidence means honestly no receipt.
 			child.drained, child.exitErr = true, werr
-			if werr != nil {
-				return child, nil
-			}
-			if sandboxAppeared(poll.Probe(sandbox)) {
+			if werr == nil && sandboxAppeared(poll.Probe(sandbox)) {
 				child.Appeared = true
-				child.recErr = RecordCreateReceipt(sandbox, ws, preloaded, merge)
 			}
 			return child, nil
 		case <-ticker.C:
@@ -274,171 +193,20 @@ func startedChild(cmd *exec.Cmd) *SessionChild {
 	return &SessionChild{waitCh: waitCh}
 }
 
-// ApplyReplaceRm runs the plan's RmFirst step and MUST be checked by the
-// caller: a failed rm means the old sandbox may still exist under that name,
-// and creating against it is undefined (sbx may error, or silently reattach
-// with stale kit/mcp flags — exactly what --replace was avoiding). Clearing
-// the removed sandbox's receipt is best-effort; ExecSbxRunAndRecordCreate's
-// pre-create clear is the correctness backstop.
+// RecreateGuidance is the ONE recovery sentence for every "this sandbox is not
+// the one you asked for" outcome: an attach whose create-time fingerprint
+// diverged, and an attach that failed outright. It names the two steps that
+// exist, in order, with the resolved sandbox name filled in — never a guessed
+// or relative one.
 //
-// warn takes the best-effort clear's failure note; it is a caller-supplied
-// stream (never os.Stderr) so a test reads it and a command routes it.
-func ApplyReplaceRm(env hostenv.Env, warn io.Writer, plan RunLaunchPlan, name string) error {
-	if !plan.RmFirst {
-		return nil
-	}
-	if _, err := env.Run("sbx", "rm", "-f", name); err != nil {
-		return fmt.Errorf("could not remove existing sandbox %q to replace it: %w", name, err)
-	}
-	if err := workspace.ClearRemovedReceipt(name); err != nil {
-		fmt.Fprintf(warn, "pix: warning: removed sandbox %q but could not clear its mcp receipt: %v\n", name, err)
-	}
-	return nil
-}
-
-// SandboxPackMarkerPath is <workspace>/.pix/sandbox.pack: the pack root this
-// workspace's sandbox was CREATED with. Written on every create (removed when
-// created pack-less), never on a re-attach, so a later re-attach compares
-// create-time truth against the CURRENT active pack instead of guessing.
-func SandboxPackMarkerPath(ws string) string {
-	return filepath.Join(ws, ".pix", "sandbox.pack")
-}
-
-// WriteSandboxPackMarker records the pack root a sandbox is being created with
-// (or removes the marker when creating pack-less). Best-effort: a failed write
-// only costs a future stale-pack reminder, never the launch. Symlink-safe via
-// workspace.WriteStateFile/RemoveStateFile — a cloned repo can ship
-// .pix/sandbox.pack, or .pix ITSELF, as a tracked symlink.
-func WriteSandboxPackMarker(ws, packRoot string) {
-	if strings.TrimSpace(packRoot) == "" {
-		_ = workspace.RemoveStateFile(ws, "sandbox.pack")
-		return
-	}
-	_ = workspace.WriteStateFile(ws, "sandbox.pack", []byte(pack.CanonicalizePackRoot(packRoot)+"\n"), 0o644)
-}
-
-// ReadSandboxPackMarker returns the create-time pack root recorded for this
-// workspace's sandbox, or "" when no marker exists.
-func ReadSandboxPackMarker(ws string) string {
-	b, err := os.ReadFile(SandboxPackMarkerPath(ws))
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(b))
-}
-
-// StalePackReattachWarning is the reminder `run` prints when RE-ATTACHING to a
-// sandbox whose CREATE-TIME pack (the workspace marker) differs from the active
-// pack. Comparing marker vs active is what makes it honest in BOTH directions:
-// silent when the sandbox already carries the current pack, loud after `pack
-// rm` (marker set, active empty) where the old sandbox still has the removed
-// pack's bin/skills baked in. No marker => no warning; guessing from the active
-// pack alone produced the old false positives. It deliberately says nothing
-// about MCP — McpReattachWarning owns that claim precisely, via the receipt.
-func StalePackReattachWarning(cfg *config.Config, o RunOpts, reattaching bool) string {
-	if !reattaching || o.Replace {
-		return ""
-	}
-	created := ReadSandboxPackMarker(o.Workspace)
-	if created == "" {
-		return ""
-	}
-	active := ""
-	if root := pack.ActivePackRoot(cfg.Pack, o.Pack); root != "" {
-		active = pack.CanonicalizePackRoot(root)
-	}
-	if created == active {
-		return ""
-	}
-	if active == "" {
-		return fmt.Sprintf("pix: re-attaching without --replace — this sandbox was created with pack %q (since detached); its bin/skills are still attached until you recreate: %s", created, RunReplaceCommand(o.Workspace))
-	}
-	return fmt.Sprintf("pix: re-attaching without --replace — this sandbox was created with pack %q, not the active pack %q; the active pack's bin/skills won't attach until you recreate: %s", created, active, RunReplaceCommand(o.Workspace))
-}
-
-// desiredMCPUniverse is the FULL set of MCP server names this invocation would
-// preload at CREATE: cfg.MCP, the active/transient pack's integration servers,
-// and any explicit --mcp. It is the read-only twin of ApplyPackToLaunch's
-// pack-fold step, used ONLY for the reattach comparison: a re-attach never
-// mounts a pack and must not trigger the mount/kit-synthesis side effects just
-// to answer "what would this invocation want". A pack that fails to load
-// degrades to cfg.MCP+o.MCP rather than blocking the comparison.
-func desiredMCPUniverse(cfg *config.Config, o RunOpts) []string {
-	names := append([]string(nil), cfg.MCP...)
-	if root := pack.ActivePackRoot(cfg.Pack, o.Pack); root != "" {
-		if p, err := pack.LoadPack(root); err == nil {
-			names = append(names, pack.McpNames(p)...)
-		}
-	}
-	names = append(names, o.MCP...)
-	return mcp.AllPreloadedMCP(names)
-}
-
-// reattachGap is the one shape every MCP reattach warning takes: a reason, the
-// per-name live-attach commands (`mcp load` attaches one server at a time, so
-// N names need N commands), and the recreate path. Both remediations are
-// always offered.
-func reattachGap(reason string, names []string, ws string) string {
-	cmds := make([]string, 0, len(names))
-	for _, n := range names {
-		cmds = append(cmds, doctor.McpLoadCommand(n, ws))
-	}
-	return fmt.Sprintf("pix: re-attaching without --replace: %s. Attach live: %s. Or recreate with current context: %s",
-		reason, strings.Join(cmds, "; "), RunReplaceCommand(ws))
-}
-
-// McpReattachWarning is `pix run`'s reattach honesty check: it compares the
-// DESIRED MCP universe against the sandbox's own launcher receipt and warns,
-// BEFORE reattaching, about any desired name the receipt cannot PROVE is
-// attached (a positive preloaded/loaded claim is proof, anything else is a
-// gap). It never auto-loads, only reports, and never mentions a receipted name
-// that is no longer desired — that is legitimate history. An unresolvable state
-// dir, an absent receipt, and an unverifiable one (corrupt / wrong schema /
-// wrong sandbox identity) all mean the same honest thing: cannot verify.
-func McpReattachWarning(cfg *config.Config, o RunOpts, reattaching bool) string {
-	if !reattaching || o.Replace {
-		return ""
-	}
-	desired := desiredMCPUniverse(cfg, o)
-	if len(desired) == 0 {
-		return ""
-	}
-	unverified := func(why string) string {
-		return reattachGap(fmt.Sprintf("%s, so attachment for %s cannot be verified", why, strings.Join(desired, ", ")), desired, o.Workspace)
-	}
-	stateDir, err := workspace.MCPStateDirFn()
-	if err != nil {
-		return unverified(fmt.Sprintf("could not resolve local state (%v)", err))
-	}
-	receipt, rstatus, _ := workspace.ReadMCPReceipt(stateDir, o.Name)
-	switch {
-	case rstatus.Unverifiable():
-		return unverified("this sandbox's MCP receipt is " + rstatus.String())
-	case rstatus == workspace.MCPStateAbsent:
-		return unverified("no MCP receipt for this sandbox")
-	}
-	var missing []string
-	for _, name := range desired {
-		if mcp.ReceiptClaim(receipt, rstatus, name) == "" {
-			missing = append(missing, name)
-		}
-	}
-	if len(missing) == 0 {
-		return ""
-	}
-	return reattachGap(strings.Join(missing, ", ")+" not proven attached to this sandbox (no receipted preload or load)", missing, o.Workspace)
-}
-
-// RunReplaceCommand returns the exact `pix run [WORKSPACE] --replace` recovery
-// command, POSIX-shell-safe. Bare "pix run --replace" is only correct for the
-// "." default; an EXPLICIT workspace must be echoed back verbatim, because
-// omitting it would target whatever sandbox the CURRENT cwd derives — which
-// can be a different sandbox than the one that just failed.
-func RunReplaceCommand(ws string) string {
-	if ws == "" || ws == "." {
-		return "pix run --replace"
-	}
-	return "pix run " + sys.ShellQuote(ws) + " --replace"
+// It replaces `pix run --replace`, which U04e retired. --replace was an `sbx rm
+// -f` issued from the command layer, outside the lifecycle lock and with no
+// zero-holder proof, which is precisely the forced removal U04d's teardown
+// exists to prevent: it could destroy a sandbox another shell was live in.
+// `pix rm` is the proof-gated removal, and it refuses (rather than racing) when
+// somebody else still holds a reference — so the guidance points there.
+func RecreateGuidance(name string) string {
+	return fmt.Sprintf("remove it explicitly, then re-run: pix rm %s && pix run", sys.ShellQuote(name))
 }
 
 // ValidateRunWorkspace verifies a resolved run workspace is launchable: the cwd

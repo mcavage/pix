@@ -37,12 +37,12 @@ import (
 	"pix/host/health"
 	"pix/host/hostenv"
 	"pix/host/launcher"
+	"pix/host/sandbox"
 	"pix/host/secret"
 	"pix/host/service"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/onboard"
 	"pix/host/workflow/pack"
-	"pix/host/workspace"
 )
 
 // OnboardingKickoff is the first message `setup` hands the agent. It is
@@ -294,15 +294,15 @@ func NormalizeSetupPackArg(arg string) string {
 	return arg
 }
 
-// SetupSandboxName derives the sandbox name `pix run` would use for dir (base
-// name + active-profile suffix), so setup's handoff guard probes the SAME
-// sandbox run would attach to. ok=false when the name cannot be resolved; the
-// caller then fails closed rather than launching blind.
+// SetupSandboxName is the sandbox name `pix run` would use for dir — ONE shared
+// derivation, so setup's handoff guard probes the SAME box run attaches to (it
+// answered a bare "pix-<basename>" the digest default had displaced until U04e:
+// a box nothing creates). ok=false when unresolvable; the caller fails closed.
 func SetupSandboxName(dir string) (string, bool) {
 	if _, err := config.Load(); err != nil {
 		return "", false
 	}
-	return workspace.DeriveSandboxName(dir), true
+	return sandbox.Name(dir), true
 }
 
 // ProviderKeyEnvVars is the set of provider credentials any ONE of which makes
@@ -329,11 +329,11 @@ observe; a gap it cannot repair is reported with the exact command that does.
 
 DIR defaults to the current directory (like ` + "`pix run`" + `). Repeat semantics:
 the host phase ALWAYS reconciles again, even when a sandbox already exists for
-DIR. If one exists and you did not pass --replace, setup leaves it alone (never
-force-removes it, never replays the tour into a live session) and prints your
-choices: 'pix run [DIR]' to reattach, or 'pix setup [DIR] --replace' to recreate
-it with your current settings and get the tour. Only a POSITIVELY absent sandbox
-gets the first-launch handoff; if the sandbox state cannot be determined at all
+DIR. If one exists, setup leaves it alone (never removes it, never replays the
+tour into a live session) and prints your choices: 'pix run [DIR]' to attach, or
+'pix rm BOX' (proof-gated) then 'pix setup [DIR]' to recreate it with current
+settings + the tour. Only a POSITIVELY absent sandbox gets the first-launch
+handoff; if the sandbox state cannot be determined at all
 (sbx errored), setup fails closed after the host phase — fix sbx and re-run.
 
 Provider keys are NOT collected here: run ` + "`pix models add <provider>`" + `, which

@@ -1,27 +1,25 @@
 package doctor
 
 import (
-	"strings"
-
 	"pix/host/config"
 	"pix/host/health"
 	"pix/host/hostenv"
 	"pix/host/mcp"
 	"pix/host/sys"
 	"pix/host/workflow/pack"
-	"pix/host/workspace"
 )
 
-// mcp.go is the MCP diagnosis, and it is now two halves in two places: the
+// mcp.go is the MCP diagnosis, and it is two halves in two places: the
 // CLASSIFICATION (what kind of server is this, and therefore which repair is
 // honest) lives here, where the pack and the local inventory are visible; the
-// CHECKING lives in health.MCPProbe, which asks sbx and the launcher receipt.
+// CHECKING lives in health.MCPProbe, which asks sbx.
 //
-// The 600-line readiness group this replaces was doctor's and status's alone
-// and went with the model it was written against; the three truths it
-// established (registration from `sbx mcp ls`, attachment from the launcher's
-// own receipt, auth from the control plane, never one inferred from another)
-// did not, because they are the whole value of the check.
+// U04e removed the third half. This file also used to answer "what is attached
+// to this workspace's sandbox" by reading a launcher-written receipt — a record
+// of pix's own past preloads and loads — which the probe rendered as a verdict.
+// Two of the truths the original group established survive because they are
+// probes (registration from `sbx mcp ls`, auth from the control plane); the
+// receipt-derived third one does not, because nothing here can check it.
 //
 // McpLoadCommand stays a plain exported helper because
 // workflow/launch prints the same one when a sandbox comes up without a server
@@ -103,40 +101,4 @@ func classifyMCPServer(name string, containers map[string]config.MCPContainer, l
 	// has no command that can register it, so the honest pointer is native sbx
 	// with the server's own URL — which only the user has.
 	return health.MCPServer{Name: name, Remote: true, RegisterFix: "sbx mcp add --help"}
-}
-
-// MCPAttachment reads the LAUNCHER's per-sandbox receipt for ws and reports
-// what it proves. known is false whenever the receipt cannot be trusted to
-// answer for a name it does not list: no state dir, an ambiguous
-// workspace->sandbox mapping, an unverifiable receipt, or a PARTIAL one
-// (synthesized for a sandbox whose creation pix never observed, so its
-// silence about a server means nothing).
-func MCPAttachment(env hostenv.Env, ws string) (attached []string, known bool, sandbox string) {
-	if strings.TrimSpace(ws) == "" {
-		return nil, false, ""
-	}
-	sd, err := env.StateDir()
-	if err != nil || strings.TrimSpace(sd) == "" {
-		return nil, false, ""
-	}
-	res := workspace.ResolveSandbox(sd, ws)
-	if res.Sandbox == "" {
-		return nil, false, ""
-	}
-	r, status, err := workspace.ReadMCPReceipt(sd, res.Sandbox)
-	if err != nil || status.Unverifiable() || r == nil || r.IsPartial() {
-		return nil, false, res.Sandbox
-	}
-	seen := map[string]bool{}
-	for _, n := range r.Preloaded {
-		if !seen[n] {
-			seen[n], attached = true, append(attached, n)
-		}
-	}
-	for _, l := range r.Loads {
-		if !seen[l.Name] {
-			seen[l.Name], attached = true, append(attached, l.Name)
-		}
-	}
-	return attached, true, res.Sandbox
 }

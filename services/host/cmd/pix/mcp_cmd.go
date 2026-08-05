@@ -31,8 +31,9 @@ func (c *mcpCmd) Help() string {
 
 Registration is HOST state: it makes a server known to the gateway, which is
 not the same as a sandbox seeing its tools. A session sees a server's tools
-only once it was preloaded at create ('pix run --replace') or attached live
-('pix mcp load'). 'pix status'/'pix doctor' report what is actually live.
+only once it was preloaded at create or attached live ('pix mcp load'). Neither
+'pix status' nor 'pix doctor' can see inside a session, so they report host
+registration and say so.
 
 Remote catalog servers (notion/atlassian/granola) come from 'pix mcp bundle',
 then 'pix mcp auth --all'.`
@@ -98,7 +99,7 @@ func (c *mcpLsCmd) Run(d *cli.Deps) error {
 // DIR. Connected agents see the new tools immediately (MCP tools/list_changed).
 type mcpLoadCmd struct {
 	Name string `arg:"" help:"A server already registered with the gateway."`
-	Dir  string `arg:"" optional:"" default:"." help:"Workspace whose sandbox to attach to (default: cwd)."`
+	Dir  string `arg:"" optional:"" default:"." help:"Workspace whose sandbox to attach to (default: cwd). A --name'd sandbox: sbx mcp load NAME --sandbox BOX."`
 }
 
 func (c *mcpLoadCmd) Run(d *cli.Deps) error {
@@ -108,14 +109,11 @@ func (c *mcpLoadCmd) Run(d *cli.Deps) error {
 	if err != nil {
 		return cli.Usagef("mcp load: %v", err)
 	}
-	// The sandbox name is resolved ONLY from a validated workspace, through the
-	// hardened resolver: a sandbox created with a CUSTOM name is the one loaded
-	// into, and an ambiguous or untrustworthy mapping REFUSES rather than
-	// targeting an arbitrary box.
-	sandbox, rerr := mcp.ResolveMcpLoadSandbox(ws)
-	if rerr != nil {
-		return cli.Usagef("mcp load: %v", rerr)
-	}
+	// The sandbox is DERIVED from the validated workspace, through the SAME
+	// helper `pix run` defaults its name with, so the two can never disagree
+	// about which box a workspace owns. A `--name`d sandbox has no workspace to
+	// derive from and is addressed directly: `sbx mcp load NAME --sandbox BOX`.
+	sandbox := resolveSandboxName("", ws)
 	if _, err := exec.LookPath("sbx"); err != nil {
 		// A command that promises to attach a server must not exit 0 having done
 		// nothing (mcp.ErrSbxUnavailable). McpWouldRun preserves the exact
@@ -124,19 +122,10 @@ func (c *mcpLoadCmd) Run(d *cli.Deps) error {
 	}
 	cmd := exec.Command("sbx", "mcp", "load", name, "--sandbox", sandbox)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, d.Out, d.Err
-	// S03: append the load receipt ONLY after this exact `sbx mcp load` exec has
-	// itself succeeded — never before, never on a failed load.
-	err = mcp.ExecSbxMcpLoadAndRecord(cmd, sandbox, name)
-	var recErr *workspace.ReceiptRecordError
-	if errors.As(err, &recErr) {
-		// The attach succeeded, only the local receipt failed: report that
-		// distinctly and exit non-zero, so doctor/status degrade honestly
-		// instead of trusting a record that was never written.
-		fmt.Fprintf(d.Err, "pix mcp load: %v\n", recErr)
-		fmt.Fprintln(d.Err, "the server IS attached to the running sandbox; only pix's local record of it failed to write; retry `pix mcp load`, or check state-dir permissions.")
-		return cli.SilentError{Code: 1}
-	}
-	return mcpFailed(d, "load", err)
+	// The load either happened or it did not, and `sbx mcp load`'s own exit is
+	// the whole answer: this command records nothing about it (see
+	// mcp.McpLoadSandbox for what the receipt claimed and why it is gone).
+	return mcpFailed(d, "load", mcp.ExecSbxMcpLoad(cmd))
 }
 
 // mcpLoadArgs rebuilds the pair ParseMcpLoadArgs validates — the shared

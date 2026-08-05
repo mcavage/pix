@@ -101,12 +101,32 @@ func sbxArgv(t *testing.T, dir string) []string {
 // deliberately does not delete receipts — so a real session's lease dir
 // correctly SURVIVES, holding only the receipt, while every identity/ownership
 // file inside it is gone.
+// assertLeaseStateCleared checks that a PROVEN teardown left nothing behind:
+// every file this domain writes, and — since U04e — the lease DIRECTORY itself.
+//
+// The directory assertion is the load-bearing half, and it is new. lease's
+// ClearState removes only the files it owns and then removes the dir "unless
+// something this package does not own is still in it"; the launcher's
+// per-sandbox MCP receipt (mcp.json + mcp.json.lock) lived in the very same
+// <state>/sandboxes/<name> directory, so ENOTEMPTY was the NORMAL outcome and
+// every reaped session leaked its directory forever. Deleting the receipt store
+// is what makes the sweep complete, so this is the test that would catch a
+// second store being planted there again.
 func assertLeaseStateCleared(t *testing.T, dir string) {
 	t.Helper()
 	for _, name := range []string{"record.json", "keep.json", "fingerprint.json", "invocation.json", "refs.lock", "lifecycle.lock"} {
 		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
 			t.Errorf("%s survived the teardown (err %v)", name, err)
 		}
+	}
+	if entries, err := os.ReadDir(dir); err == nil {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("the lease dir %s survived the teardown holding %v; a proven teardown must clear it completely", dir, names)
+	} else if !os.IsNotExist(err) {
+		t.Errorf("stat lease dir %s: %v", dir, err)
 	}
 }
 

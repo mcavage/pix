@@ -21,16 +21,15 @@
 // reserved for an explicitly-named `pix rm --force` typed by a human (see
 // sandbox.go's RemovePixSandbox).
 //
-// MCP receipts are deliberately NOT touched here: a removed sandbox's receipt
-// describes a dead lifetime, but reaping receipts is its own slice, and the
-// next create's pre-create clear is the correctness backstop either way. This
-// file never deletes one. That has a VISIBLE consequence worth knowing before
-// reading the tests: workspace.MCPStateRoot is ALSO <state>/sandboxes/<name>,
-// so a real session's receipt (mcp.json + mcp.json.lock) lives in the very
-// directory the lease state does. lease.ClearState only removes the directory
-// when nothing it does not own is left in it, so after a successful teardown
-// the identity/ownership files are gone and the directory REMAINS, holding the
-// retained receipt. That is the intended boundary, not a leak.
+// A proven teardown now clears the session's state COMPLETELY, directory
+// included. It did not before U04e, and the reason is worth keeping: the
+// launcher's per-sandbox MCP receipt store rooted at <state>/sandboxes/<name>
+// wrote mcp.json + mcp.json.lock into the very directory the lease state lives
+// in, and lease.ClearState deliberately leaves a directory in place when it
+// still holds a file this domain does not own. So ENOTEMPTY was the ordinary
+// outcome and every reaped session leaked its directory. Deleting that second
+// store is what closed it; assertLeaseStateCleared is the test that keeps it
+// closed. Anything tempted to co-locate state here again owns that regression.
 package launch
 
 import (

@@ -31,7 +31,7 @@ func argvEqual(t *testing.T, got, want []string) {
 func TestCreateArgv_StillUsesSbxRun(t *testing.T) {
 	cfg := &config.Config{}
 	o := RunOpts{Workspace: ".", Name: "pix-t", Model: "anthropic/claude-sonnet-5"}
-	plan := PlanSandboxLaunch(SbxAbsent, false, cfg, o, "0.0.99")
+	plan := PlanSandboxLaunch(SbxAbsent, cfg, o, "0.0.99")
 
 	if plan.Reattach {
 		t.Fatal("a fresh create must not be flagged as a reattach")

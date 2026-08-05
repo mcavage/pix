@@ -139,7 +139,7 @@ One message, in this order:
    These are commands they run on their HOST, not in this session. `pack use`
    changes the active host configuration; the current sandbox keeps its
    creation-time skills, MCP, wrappers, and config until they run `pix
-   run --replace`.
+   rm BOX && pix run`.
 7. **What to set up next**, only if the trusted payload shows a real gap
    (see below). Omit this block entirely if there's nothing to say.
 8. **Close with exactly one question:** `What are we doing in <repo>?` (use
@@ -168,10 +168,10 @@ exist, keep the top 3 by this order and drop the rest.
    an account with its own auth command, `pix config set
    google_workspace_account <email>`, `pix config set mcp google-workspace`,
    `pix mcp register` (no guided wizard — see docs/gworkspace.md), then
-   `pix run --replace` to attach it to a running sandbox.
+   `pix rm BOX && pix run` to attach it to a fresh sandbox.
 5. **`mcp.enabled` is false and they need some other external tool** (not
    gog, don't duplicate that line): configure the MCP provider they need,
-   then `pix mcp register`, then `pix run --replace`.
+   then `pix mcp register`, then `pix rm BOX && pix run`.
 6. **Host mode**, only when they mention a device or system-level install
    (not general dev work), and only the step that is actually missing. Use
    `host.provisioned` and `host.enabled` separately, never just `host.ready`:
@@ -221,7 +221,7 @@ worth wiring up next, but the 3-line cap still applies.
 > Your pack (skills, knowledge, MCP, config) is portable: the default pack is
 > active (this example's trusted payload has `pack.active` and `pack.default`
 > true), and `pix pack use <path|git-url>` on your host switches the
-> active pack. Run `pix run --replace` to load it into a new sandbox.
+> active pack. Run `pix rm BOX && pix run` to load it into a new sandbox.
 >
 > What to set up next:
 > - No model key resolved yet: run `pix setup` on your host first.

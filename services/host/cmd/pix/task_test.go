@@ -208,13 +208,13 @@ func TestRunTaskFlag_ResolvesToCheckoutAndName(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, argv := range [][]string{{"--task", "work", "--replace"}, {"--task=work", "--replace"}} {
+	for _, argv := range [][]string{{"--task", "work"}, {"--task=work"}} {
 		o, err := parseRunOpts(argv)
 		if err != nil {
 			t.Fatalf("run %v: %v", argv, err)
 		}
-		if o.Workspace != co || o.Name != m.Sandbox || !o.Replace {
-			t.Errorf("run %v = {ws:%q name:%q replace:%v}, want {%q %q true}", argv, o.Workspace, o.Name, o.Replace, co, m.Sandbox)
+		if o.Workspace != co || o.Name != m.Sandbox {
+			t.Errorf("run %v = {ws:%q name:%q}, want {%q %q}", argv, o.Workspace, o.Name, co, m.Sandbox)
 		}
 	}
 

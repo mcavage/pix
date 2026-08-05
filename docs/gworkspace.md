@@ -67,7 +67,7 @@ Confirm it worked:
 
 ```bash
 pix doctor    # Google Workspace group should read ready
-pix run       # or: pix run --replace, to attach google-workspace to a fresh sandbox
+pix run       # or: pix rm BOX && pix run, to attach google-workspace to a fresh sandbox
 ```
 
 The registered server is locked down by default (baked into every

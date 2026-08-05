@@ -221,7 +221,7 @@ switch packs or add an MCP inside a running sandbox, it's registered on the
 host but the running sandbox doesn't have it yet:
 
 ```
-pix run --replace     # recreate the sandbox to pick up the new MCP/bin set
+pix rm BOX && pix run # recreate the sandbox to pick up the new MCP/bin set
 ```
 
 **Host-mode wrappers** (`pack add proxy platformio --host`) are for tools that
@@ -323,7 +323,7 @@ carries, is passed to sbx as `--static-mcp <name>` when the sandbox is
 CREATED, so its tools are in context from the start. There is no dynamic
 discovery and no on-demand attach: a server you add or register after a
 sandbox exists is not visible to it until you either recreate
-(`pix run --replace`, which re-sends the full `--static-mcp` set) or
+(`pix rm BOX && pix run`, which re-sends the full `--static-mcp` set) or
 attach it live:
 
 ```

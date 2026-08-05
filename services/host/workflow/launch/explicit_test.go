@@ -18,7 +18,6 @@ package launch
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -32,7 +31,6 @@ import (
 
 	"pix/host/hostenv"
 	"pix/host/sys/systest"
-	"pix/host/workspace"
 )
 
 // parsePackageFiles returns this package's production files, parsed.
@@ -134,29 +132,21 @@ func TestLaunch_NoProcessStreamsOrExit(t *testing.T) {
 	}
 }
 
-// TestExecSbxRunAndRecordCreate_UnwiredPollFailsClosedBeforeExec: the
-// replacement for the panicking DefaultEnv. A create that would record a
-// receipt but was handed no probe is a wiring bug, and it fails BEFORE `sbx
-// run` starts — the old package var degraded instead into "poll nothing,
-// record nothing", which is exactly the silent state loss the receipt exists
-// to prevent.
-func TestExecSbxRunAndRecordCreate_UnwiredPollFailsClosedBeforeExec(t *testing.T) {
+// TestStartSbxSession_UnwiredPollFailsClosedBeforeExec: the replacement for
+// the panicking DefaultEnv. A create that must produce creation EVIDENCE but
+// was handed no probe is a wiring bug, and it fails BEFORE `sbx run` starts —
+// the old package var degraded instead into "poll nothing, record nothing",
+// which is exactly the silent state loss the lease record exists to prevent.
+func TestStartSbxSession_UnwiredPollFailsClosedBeforeExec(t *testing.T) {
 	dir := t.TempDir()
-	old := workspace.MCPStateDirFn
-	workspace.MCPStateDirFn = func() (string, error) { return dir, nil }
-	t.Cleanup(func() { workspace.MCPStateDirFn = old })
-
 	ran := filepath.Join(dir, "ran")
 	cmd := exec.Command("sh", "-c", "touch "+ran)
-	err := ExecSbxRunAndRecordCreate(cmd, CreatePoll{}, true, "pix-unwired", "", []string{"slack"})
+	_, err := StartSbxSession(cmd, CreatePoll{}, true, "pix-unwired")
 	if err == nil || !strings.Contains(err.Error(), "no sandbox probe") {
 		t.Fatalf("err = %v, want a poll-not-wired error", err)
 	}
 	if _, serr := os.Stat(ran); serr == nil {
 		t.Error("`sbx run` must not be started when the create poll is unwired")
-	}
-	if _, status, _ := workspace.ReadMCPReceipt(dir, "pix-unwired"); status != workspace.MCPStateAbsent {
-		t.Errorf("status = %v, want absent", status)
 	}
 
 	for _, tc := range []struct {
@@ -166,7 +156,7 @@ func TestExecSbxRunAndRecordCreate_UnwiredPollFailsClosedBeforeExec(t *testing.T
 		{"no interval", CreatePoll{Probe: func(string) SbxState { return SbxRunning }, Timeout: time.Second}},
 		{"no timeout", CreatePoll{Probe: func(string) SbxState { return SbxRunning }, Interval: time.Millisecond}},
 	} {
-		if err := ExecSbxRunAndRecordCreate(exec.Command("true"), tc.poll, true, "pix-unwired", "", nil); err == nil {
+		if _, err := StartSbxSession(exec.Command("true"), tc.poll, true, "pix-unwired"); err == nil {
 			t.Errorf("%s: want an error, got nil", tc.name)
 		}
 	}
@@ -241,29 +231,3 @@ func TestPrintJSONLauncher_WritesToTheGivenWriter(t *testing.T) {
 type failWriter struct{}
 
 func (failWriter) Write([]byte) (int, error) { return 0, errors.New("boom") }
-
-// TestReplaceAndRemoveWarnToTheGivenWriter: the two best-effort receipt-clear
-// notes are the last two writes that went to os.Stderr from inside L3. They
-// now land in the caller's buffer, which is what makes them assertable at all.
-func TestReplaceAndRemoveWarnToTheGivenWriter(t *testing.T) {
-	old := workspace.MCPStateDirFn
-	workspace.MCPStateDirFn = func() (string, error) { return "", fmt.Errorf("no state dir") }
-	t.Cleanup(func() { workspace.MCPStateDirFn = old })
-	okEnv := hostenv.Env{System: &systest.Fake{RunFn: func(string, ...string) (string, error) { return "", nil }}}
-
-	var warn bytes.Buffer
-	if err := ApplyReplaceRm(okEnv, &warn, RunLaunchPlan{RmFirst: true}, "pix-w"); err != nil {
-		t.Fatalf("a failed receipt clear must not fail the replace: %v", err)
-	}
-	if !strings.Contains(warn.String(), "pix-w") {
-		t.Errorf("ApplyReplaceRm warning = %q, want the un-cleared receipt note", warn.String())
-	}
-
-	warn.Reset()
-	if err := RemovePixSandbox(okEnv, &warn, "pix-w"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !strings.Contains(warn.String(), "pix-w") {
-		t.Errorf("RemovePixSandbox warning = %q, want the un-cleared receipt note", warn.String())
-	}
-}

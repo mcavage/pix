@@ -97,7 +97,7 @@ when `sbx` is absent), and the gateway exposes Gmail/Drive tools in A3. Call one
 cheap read-only tool, such as `gmail_search` or `drive_search`, with a tiny
 limit. Registered-but-0-tools is a failure; it usually means attachment or the
 headless OAuth/keyring setup is wrong. Run `pix doctor` on the host, then use
-`pix mcp load google-workspace [DIR]` or `pix run --replace` when registration
+`pix mcp load google-workspace [DIR]` or `pix rm BOX && pix run` when registration
 is healthy but the current sandbox lacks the tools.
 
 ### A5. Agent roster

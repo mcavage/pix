@@ -1,48 +1,14 @@
 package main
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 
 	"pix/host/config"
 	"pix/host/inference"
 	"pix/host/workflow/launch"
 )
-
-func TestPreflightBeforeReplaceFailureLeavesOldSandboxAlone(t *testing.T) {
-	want := errors.New("trusted state unavailable")
-	replaced := false
-	err := launch.PreflightBeforeReplace(func() error { return want }, func() error {
-		replaced = true
-		return nil
-	})
-	if !errors.Is(err, want) {
-		t.Fatalf("error = %v, want %v", err, want)
-	}
-	if replaced {
-		t.Fatal("replacement ran after a hard-fail preflight")
-	}
-}
-
-func TestPreflightBeforeReplaceRunsReplacementLast(t *testing.T) {
-	var order []string
-	err := launch.PreflightBeforeReplace(func() error {
-		order = append(order, "preflight")
-		return nil
-	}, func() error {
-		order = append(order, "replace")
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := []string{"preflight", "replace"}; !reflect.DeepEqual(order, want) {
-		t.Fatalf("order = %v, want %v", order, want)
-	}
-}
 
 func TestCleanupGeneratedKitDirsRemovesSynthesizedKitsOnly(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())

@@ -200,13 +200,3 @@ func CleanupGeneratedKitDirs(paths []string) error {
 	}
 	return errors.Join(errs...)
 }
-
-// PreflightBeforeReplace preserves the destructive launch ordering: every
-// known hard-fail preflight completes before replacement may remove the old
-// sandbox. Keeping the ordering in a small helper makes it directly testable.
-func PreflightBeforeReplace(preflight, replace func() error) error {
-	if err := preflight(); err != nil {
-		return err
-	}
-	return replace()
-}

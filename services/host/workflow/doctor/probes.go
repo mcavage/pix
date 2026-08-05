@@ -106,20 +106,15 @@ func Probes(cfg *config.Config, o Options) []health.Probe {
 	}
 }
 
-// mcpProbe assembles the MCP probe from the two things only this layer can
-// resolve: the per-server classification, and what the launcher receipt
-// proves about attachment. Both degrade to "unknown", never to a guess.
+// mcpProbe assembles the MCP probe from the one thing only this layer can
+// resolve: the per-server classification, which decides which repair command
+// is honest. An unclassifiable server degrades to "unknown", never to a guess.
 func mcpProbe(cfg *config.Config, o Options, sbxBin string) health.MCPProbe {
-	attached, known, sandbox := MCPAttachment(o.Env, o.Workspace)
 	return health.MCPProbe{
-		Servers:         MCPServers(cfg, o.Env, o.HostResolver),
-		Bin:             orElse(o.MCPBin, sbxBin),
-		ListArgs:        o.MCPListArgs,
-		AuthArgs:        o.MCPAuthArgs,
-		Attached:        attached,
-		AttachmentKnown: known,
-		Sandbox:         sandbox,
-		Workspace:       o.Workspace,
+		Servers:  MCPServers(cfg, o.Env, o.HostResolver),
+		Bin:      orElse(o.MCPBin, sbxBin),
+		ListArgs: o.MCPListArgs,
+		AuthArgs: o.MCPAuthArgs,
 	}
 }
 

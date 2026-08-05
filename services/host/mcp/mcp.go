@@ -129,49 +129,18 @@ func ParseMcpLoadArgs(argv []string) (name, ws string, err error) {
 	return name, ws, nil
 }
 
-// ResolveMcpLoadSandbox resolves the sandbox `mcp load` targets for a
-// VALIDATED workspace via the hardened workspace->sandbox resolver: a unique
-// trustworthy receipt mapping wins, a positively-clean "no mapping" scan falls
-// back to the derived default name, and anything else — ambiguous, untrusted,
-// or unresolvable — errors so the caller REFUSES rather than attaching a
-// server to an arbitrary box.
-func ResolveMcpLoadSandbox(ws string) (string, error) {
-	dir, err := workspace.MCPStateDirFn()
-	if err != nil {
-		return "", fmt.Errorf("resolving pix state dir: %w", err)
-	}
-	res := workspace.ResolveSandbox(dir, ws)
-	switch res.Outcome {
-	case workspace.SandboxMapped, workspace.SandboxDefault:
-		return res.Sandbox, nil
-	default: // ambiguous / untrusted — never target an arbitrary box
-		return "", fmt.Errorf("cannot resolve which sandbox belongs to %s: %s", ws, res.Detail)
-	}
-}
-
-// ExecSbxMcpLoadAndRecord runs cmd (the already-composed `sbx mcp load ...`
-// invocation) and — ONLY when the exec itself succeeds — appends the load
-// receipt for sandbox/name. Mirrors execSbxRunAndRecordCreate's ordering
-// contract (run.go): a failed exec returns before any receipt write is
-// attempted, and a receipt failure surfaces as *workspace.ReceiptRecordError so
-// the caller reports "attached, but state unrecorded" rather than a plain
-// success or a plain failure.
-func ExecSbxMcpLoadAndRecord(cmd *exec.Cmd, sandbox, name string) error {
-	if err := cmd.Run(); err != nil {
-		return err
-	}
-	fail := func(err error) error {
-		return &workspace.ReceiptRecordError{Op: "mcp load", Sandbox: sandbox, Name: name, Err: err}
-	}
-	dir, err := workspace.MCPStateDirFn()
-	if err != nil {
-		return fail(fmt.Errorf("resolving pix state dir: %w", err))
-	}
-	if err := workspace.AppendLoadReceipt(dir, sandbox, name, nil); err != nil {
-		return fail(err)
-	}
-	return nil
-}
+// ExecSbxMcpLoad runs cmd (the already-composed `sbx mcp load ...`
+// invocation): the load either succeeded or it did not, and the child's own
+// error is the whole answer.
+//
+// U04e removed what used to follow a success: an appended "load receipt" in a
+// launcher-owned per-sandbox store, which status/doctor then rendered as
+// "attached". A one-time record of a past load is not the state of a live
+// session, so nothing writes one and nothing reads one. The sandbox this
+// targets is DERIVED by the caller from the workspace (the same deterministic
+// name `pix run` gives it) rather than looked up in that store — a store whose
+// receiptless fallback had already drifted from run's own default name.
+func ExecSbxMcpLoad(cmd *exec.Cmd) error { return cmd.Run() }
 
 // RunMcpLsCore is runMcpLs's testable core (see RunSbxMcpCore). It exits 3 when
 // the listing is unavailable, per the ErrSbxUnavailable policy above: a caller
@@ -196,7 +165,7 @@ func RunMcpLsCore(lookPath func(string) (string, error), out io.Writer, in io.Re
 const mcpLsAttachmentNote = "\nNote: this is the gateway's HOST registration list, not what's attached to\n" +
 	"your current sandbox. See `pix status` / `pix doctor` for what's live,\n" +
 	"`pix mcp load <name>` to attach a registered server to a running sandbox,\n" +
-	"or `pix run --replace` to recreate it with everything preloaded.\n"
+	"or recreate the sandbox to preload everything (`pix rm <box>`, then `pix run`).\n"
 
 // McpRegistrar carries the resolved ABSOLUTE paths + account needed to build a
 // `sbx mcp add` command. The gateway daemon's PATH may not include op/gog, so

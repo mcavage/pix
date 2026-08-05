@@ -18,16 +18,23 @@ import (
 //
 //	registration  a bounded `sbx mcp ls`, read through mcp.McpRegEvidenceFrom
 //	              — the ONE definition of "registered" in the tree.
-//	attachment    the LAUNCHER's own per-sandbox receipt, passed in by the
-//	              caller. Config membership is an intent, never an attachment.
 //	auth          a bounded `sbx mcp auth status <name>`, and only for a
 //	              server whose auth is hosted-control-plane OAuth. A local
 //	              stdio server has no control-plane auth to check.
 //
-// Every one of them is tri-state. The rule the whole probe is built around:
-// a listing that did not ANSWER means unknown, never "not registered". The
-// readiness version of this check rendered every `sbx mcp ls` failure as an
-// outstanding TODO, which is how a user learns to ignore the report.
+// Both are tri-state. The rule the whole probe is built around: a listing that
+// did not ANSWER means unknown, never "not registered". The readiness version
+// of this check rendered every `sbx mcp ls` failure as an outstanding TODO,
+// which is how a user learns to ignore the report.
+//
+// There used to be a THIRD truth here, "attachment", supplied by the caller
+// from a launcher-written per-sandbox receipt. U04e deleted it: a receipt says
+// pix once preloaded or loaded a server, and this probe rendered that as
+// "registered, attached" — a ready verdict earned by a past action rather than
+// a probe (AGENTS.md safety invariant #13). Nothing pix can run answers what a
+// live session currently has attached, and `pix mcp ls` says so itself, so the
+// honest report is registration and auth only. Do not reintroduce an
+// attachment claim here without a live query that can be wrong.
 
 // MCP fixes. Registration is per-server (the command depends on what KIND of
 // server it is, which only the caller can classify), so it is carried on the
@@ -38,8 +45,6 @@ const (
 	MCPGatewayFix = "sbx mcp status"
 	// MCPAuthFix authenticates one remote server.
 	MCPAuthFix = "pix mcp auth %s"
-	// MCPLoadFix attaches one registered server to the running sandbox.
-	MCPLoadFix = "pix mcp load %s"
 	// MCPNoneConfigured is the detail for a host that uses no MCP. It is a
 	// constant because the doctor renderer reads it to decide whether the
 	// host-trust disclosure applies, and a report that discloses a risk the
@@ -87,19 +92,6 @@ type MCPProbe struct {
 	// REAL process, just one that can be made to fail on purpose.
 	ListArgs []string
 	AuthArgs []string
-	// Attached is what the launcher RECEIPT records as attached to this
-	// workspace's sandbox — durable evidence of a successful pix action, not
-	// an inference from config.
-	Attached []string
-	// AttachmentKnown is false when there is no trustworthy receipt to read
-	// (no sandbox context, a corrupt/foreign receipt, or a PARTIAL one that
-	// proves only its own loads). With it false, attachment is reported as
-	// unknown and can never become a verified gap.
-	AttachmentKnown bool
-	// Sandbox and Workspace name what the attachment answer is ABOUT, so the
-	// evidence says which box it read and the `pix mcp load` repair points at
-	// the right workspace.
-	Sandbox, Workspace string
 }
 
 func (MCPProbe) Name() string { return "mcp" }
@@ -205,16 +197,19 @@ func (p MCPProbe) checkServer(ctx context.Context, bin, listOut string, s MCPSer
 		}
 	}
 
-	if !p.AttachmentKnown {
-		return mcpFinding{name: s.Name, unknown: true,
-			note: s.Name + ": registered, attachment unknown (" + p.attachSource() + ")"}
-	}
-	if !contains(p.Attached, s.Name) {
-		return mcpFinding{name: s.Name, gap: true, fix: p.loadFix(s.Name),
-			note: s.Name + ": registered, not attached to " + p.Sandbox}
-	}
-	return mcpFinding{name: s.Name, note: s.Name + ": registered, attached"}
+	// Registered and (if remote) authenticated is everything this host can
+	// establish. Whether a running session has the server ATTACHED is not
+	// checkable from here, so the note says exactly that instead of claiming
+	// either way — and it is not counted as unknown, because the checkable
+	// facts all came back clean.
+	return mcpFinding{name: s.Name, note: s.Name + ": registered" + attachmentCaveat}
 }
+
+// attachmentCaveat is the one phrase every registered server's note carries:
+// registration is host state, and a session sees a server's tools only if it
+// was preloaded at create or loaded live. `pix mcp ls` prints the same caveat,
+// deliberately in the same words.
+const attachmentCaveat = " (host registration; attachment to a live session is not checkable from here)"
 
 // mcpAuth is the auth tri-state as this probe needs it. The PARSING is not
 // redone here: mcp.McpAuthStatus is the one place that decides what sbx's
@@ -243,22 +238,6 @@ func (p MCPProbe) checkAuth(ctx context.Context, bin, name string) mcpAuth {
 		return mcpAuthNo
 	}
 	return mcpAuthUnknown
-}
-
-// attachSource names WHY attachment is unknown, so the line is evidence
-// rather than a shrug.
-func (p MCPProbe) attachSource() string {
-	if strings.TrimSpace(p.Sandbox) == "" {
-		return "no sandbox for this workspace"
-	}
-	return "no trustworthy receipt for " + p.Sandbox
-}
-
-func (p MCPProbe) loadFix(name string) string {
-	if ws := strings.TrimSpace(p.Workspace); ws != "" && ws != "." {
-		return fmt.Sprintf(MCPLoadFix, name) + " " + ws
-	}
-	return fmt.Sprintf(MCPLoadFix, name)
 }
 
 // reduce turns the per-server findings into the one Result the report shows.
@@ -291,7 +270,7 @@ func (p MCPProbe) reduce(findings []mcpFinding) Result {
 			Detail: fmt.Sprintf("%d of %d not checkable from here", unknowns, total), Evidence: ev}
 	}
 	return Result{Name: p.Name(), Status: StatusReady,
-		Detail: fmt.Sprintf("%d registered and attached", total), Evidence: ev}
+		Detail: fmt.Sprintf("%d registered", total), Evidence: ev}
 }
 
 func (p MCPProbe) serverNames() string {
@@ -301,13 +280,4 @@ func (p MCPProbe) serverNames() string {
 	}
 	sort.Strings(out)
 	return strings.Join(out, ", ")
-}
-
-func contains(hay []string, needle string) bool {
-	for _, h := range hay {
-		if h == needle {
-			return true
-		}
-	}
-	return false
 }

@@ -33,7 +33,10 @@ type setupCmd struct {
 	Dir string `arg:"" optional:"" default:"." help:"Workspace to provision and launch in (default: .)."`
 
 	NoAgent bool `help:"Run the HOST phase only: no sandbox, no handoff. The scripted/CI path."`
-	Replace bool `help:"Recreate an existing sandbox for DIR so it picks up current pack/MCP/skills and gets the tour."`
+	// Replace is RETIRED with run's (U04e): recreating meant a forced,
+	// unproven `sbx rm -f`. Parsed hidden so a stale script gets the recovery
+	// path instead of "unknown flag".
+	Replace bool `hidden:"" help:"Retired: remove the sandbox explicitly (pix rm BOX), then pix setup."`
 	Verbose bool `help:"Show underlying sbx, Git, Docker and setup output, not just actions/results."`
 	Apply   bool `help:"Apply a pending .pix/onboarding.json in DIR, under a confirmation gate."`
 
@@ -160,6 +163,11 @@ func (c *setupCmd) Run(d *cli.Deps) error {
 		return err
 	}
 
+	// The retired flag answers before the host phase runs: inert, exit 2.
+	if c.Replace {
+		return retiredFlag(d.Err, "setup", "--replace")
+	}
+
 	// The host phase: check, apply the verified gaps, check again.
 	if err := provision.RunSetup(env, hostArgs, d.In, d.Out, d.Interactive); err != nil {
 		var usage provision.ErrUsage
@@ -182,7 +190,7 @@ func (c *setupCmd) Run(d *cli.Deps) error {
 	if nameOK && name != "" {
 		state = launch.ProbeTaskSandbox(env, name)
 	}
-	return runSetupHandoff(c.Dir, name, state, c.Replace, d.Out, func(argv []string) error {
+	return runSetupHandoff(c.Dir, name, state, d.Out, func(argv []string) error {
 		return dispatchRun(d, argv)
 	})
 }
@@ -198,32 +206,28 @@ func dispatchRun(d *cli.Deps, argv []string) error {
 }
 
 // runSetupHandoff is the pure post-host-phase decision + action, separate from
-// setupCmd.Run so the state/replace matrix is testable without the provisioning
-// loop or an sbx exec. Errors ONLY on the fail-closed unknown state (or a
-// failed launch).
-func runSetupHandoff(dir, name string, state sandbox.State, replace bool, out io.Writer, runFn func([]string) error) error {
+// setupCmd.Run so the state matrix is testable without the provisioning loop or
+// an sbx exec. Errors ONLY on the fail-closed unknown state (or a failed
+// launch).
+//
+// U04e removed the recreate arm with --replace: setup no longer has a shape
+// that removes a sandbox, so an existing one is ALWAYS left alone and the user
+// is handed the two commands (attach, or remove-then-run) rather than a flag
+// that force-removed a box another shell might be live in.
+func runSetupHandoff(dir, name string, state sandbox.State, out io.Writer, runFn func([]string) error) error {
 	// kickoffArgs builds the run argv for a launch that gets the tour:
-	// [DIR] [--replace] -- <OnboardingKickoff>. DIR is forwarded only when
-	// explicit, so `pix setup` in a repo behaves exactly like `pix run` there.
+	// [DIR] -- <OnboardingKickoff>. DIR is forwarded only when explicit, so
+	// `pix setup` in a repo behaves exactly like `pix run` there.
 	kickoffArgs := func() []string {
 		args := []string{}
 		if dir != "." {
 			args = append(args, dir)
-		}
-		if replace {
-			args = append(args, "--replace")
 		}
 		return append(args, "--", provision.OnboardingKickoff)
 	}
 	dirArg := ""
 	if dir != "." {
 		dirArg = " " + sys.ShellQuote(dir)
-	}
-	// retryArg carries the ORIGINAL --replace into the retry command below:
-	// dropping it would downgrade a requested recreate into a reattach.
-	retryArg := dirArg
-	if replace {
-		retryArg += " --replace"
 	}
 
 	switch state {
@@ -234,21 +238,16 @@ func runSetupHandoff(dir, name string, state sandbox.State, replace bool, out io
 		if name == "" {
 			which = fmt.Sprintf("the sandbox for %s", dir)
 		}
-		return fmt.Errorf("cannot determine the state of %s (`sbx ls` failed or sbx is unavailable). Host setup completed; install or fix sbx and retry with: pix setup%s", which, retryArg)
+		return fmt.Errorf("cannot determine the state of %s (`sbx ls` failed or sbx is unavailable). Host setup completed; install or fix sbx and retry with: pix setup%s", which, dirArg)
 	case launch.SbxRunning, launch.SbxStopped:
-		if replace {
-			fmt.Fprintln(out, "")
-			fmt.Fprintf(out, "Recreating sandbox %q (--replace): it'll come back with your current\n", name)
-			fmt.Fprintln(out, "pack/MCP/skills and walk you through the guided tour.")
-			return runFn(kickoffArgs())
-		}
 		fmt.Fprintln(out, "")
 		fmt.Fprintf(out, "Host configuration reconciled. Existing sandbox %q was left alone.\n", name)
-		fmt.Fprintln(out, "Reattaching keeps the sandbox exactly as it was created (its pack, MCP")
-		fmt.Fprintln(out, "servers, and skills were attached at create time); recreating applies the")
-		fmt.Fprintln(out, "current ones. Choose one:")
-		fmt.Fprintf(out, "  pix run%s              # reattach as-is\n", dirArg)
-		fmt.Fprintf(out, "  pix setup%s --replace  # recreate with current settings + get the tour\n", dirArg)
+		fmt.Fprintln(out, "Attaching keeps the sandbox exactly as it was created (its pack, MCP")
+		fmt.Fprintln(out, "servers, and skills were attached at create time). To pick up current")
+		fmt.Fprintln(out, "settings instead, remove it first — removal is proof-gated, so it refuses")
+		fmt.Fprintln(out, "while another shell is still attached. Choose one:")
+		fmt.Fprintf(out, "  pix run%s                 # attach as-is\n", dirArg)
+		fmt.Fprintf(out, "  pix rm %s && pix setup%s  # recreate with current settings + get the tour\n", sys.ShellQuote(name), dirArg)
 		return nil
 	}
 
