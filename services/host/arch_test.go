@@ -135,11 +135,10 @@ var pkgLayer = map[string]int{
 	// its headless-spawn probing) was externalized the same way in W2/U02B — see
 	// docs/design/gworkspace-externalization.md — so that package is gone too;
 	// gog is registered generically through `pix mcp register`.
-	"workflow/pack":    layerWorkflow,
-	"workflow/reset":   layerWorkflow,
-	"workflow/onboard": layerWorkflow,
-	"workflow/doctor":  layerWorkflow,
-	"workflow/launch":  layerWorkflow,
+	"workflow/pack":   layerWorkflow,
+	"workflow/reset":  layerWorkflow,
+	"workflow/doctor": layerWorkflow,
+	"workflow/launch": layerWorkflow,
 	// workflow/models is `pix models add`: the inference selection, live
 	// verification and roster machinery that used to be welded into setup's
 	// keys/inference mutation steps. It is a workflow (it composes config,

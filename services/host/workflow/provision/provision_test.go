@@ -14,9 +14,9 @@ import (
 )
 
 // These tests provision REAL state: each step's probe reads the filesystem and
-// each apply writes it (one of them by exec'ing a real script), so "check,
-// apply, check again" is exercised end to end. Nothing here fakes a probe's
-// answer — the only way a step goes green is by actually creating the thing.
+// each apply writes it (one by exec'ing a real script), so "check, apply, check
+// again" runs end to end. Nothing fakes a probe's answer — the only way a step
+// goes green is by actually creating the thing.
 
 // packStep provisions a pack root: the probe is the production PackProbe, the
 // apply writes the manifest it looks for.
@@ -35,10 +35,8 @@ func namedPackStep(name, root string) Step {
 	}
 }
 
-// lyingStep claims success without doing anything — the failure mode the
+// namedLyingStep claims success without doing anything — the failure mode the
 // second check exists to catch.
-func lyingStep(root string) Step { return namedLyingStep("pack", root) }
-
 func namedLyingStep(name, root string) Step {
 	return Step{Name: name, Probe: health.PackProbe{Root: root}, Apply: func(context.Context) error { return nil }}
 }
@@ -67,7 +65,7 @@ func TestApplyThenSecondCheckIsTheOnlySuccess(t *testing.T) {
 
 func TestApplyThatLiesIsNotSuccess(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "pack")
-	o := Run(context.Background(), Options{}, lyingStep(root))
+	o := Run(context.Background(), Options{}, namedLyingStep("pack", root))
 
 	if o.Verified("pack") {
 		t.Fatal("a step whose apply returned nil but changed nothing must NEVER count as verified")
@@ -102,9 +100,8 @@ func TestAlreadyReadyIsNeverMutated(t *testing.T) {
 	}
 }
 
-// unknownProbe reports the one answer provisioning must refuse to act on. It
-// is not a fake capability: it is a probe that could not reach its boundary,
-// which is exactly the state a real timeout produces.
+// unknownProbe is a probe that could not reach its boundary — exactly the state a
+// real timeout produces, and the one answer provisioning must refuse to act on.
 type unknownProbe struct{ name string }
 
 func (p unknownProbe) Name() string   { return p.name }
@@ -135,8 +132,7 @@ func TestUnknownIsNeverApplied(t *testing.T) {
 	}
 }
 
-// deniedProbe stands in for a capability the org refused. Applying is pointless
-// and mutating on it is worse than pointless.
+// deniedProbe stands in for a capability the org refused: applying cannot help.
 type deniedProbe struct{}
 
 func (deniedProbe) Name() string   { return "policy" }
@@ -180,8 +176,8 @@ func TestApplyErrorIsRecordedAndOtherStepsStillRun(t *testing.T) {
 	}
 }
 
-// TestApplyRunsRealCommandAndSecondCheckSeesIt: the apply here is an exec of a
-// real script, so the loop is proven across a process boundary too.
+// The apply here execs a real script, so the loop is proven across a process
+// boundary too.
 func TestApplyRunsRealCommandAndSecondCheckSeesIt(t *testing.T) {
 	dir := t.TempDir()
 	root := filepath.Join(dir, "pack")

@@ -55,9 +55,10 @@ the one load-bearing clause (**L1 may not import L1**) are in
 
 If a new capability needs something from a sibling, do not move either package:
 define a struct of the facts it needs and let the workflow fill it. There are
-five worked examples — `mcp.Credentials`, `slack.RegisterFn`, `pack.RegisterFn`,
-`onboard.Deps`, `gworkspace.Creds` — and every one made the tests simpler, not
-just the graph.
+worked examples — `mcp.Credentials`, `pack.RegisterFn` — and each made the tests
+simpler, not just the graph. (Do it for a SIBLING's facts, not for composition a
+package already holds: `onboard.Deps` was a second copy of provision's own
+HostBinary/Register wiring, and folding onboarding into provision deleted it.)
 
 `drainingPackages` is empty and ratcheted at zero. An entry is legitimate for a
 package genuinely mid-extraction; it needs an argument in the commit message for

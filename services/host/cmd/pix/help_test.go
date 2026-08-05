@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"pix/host/cli"
 	"pix/host/workflow/launch"
-	"pix/host/workflow/onboard"
 	"strings"
 	"testing"
 )
@@ -227,16 +226,6 @@ func TestStatusAndDoctorFlagsAreTyped(t *testing.T) {
 		if !strings.Contains(errb.String(), "unknown flag") {
 			t.Errorf("dispatch(%v) stderr = %q, want an unknown-flag message", argv, errb.String())
 		}
-	}
-}
-
-func TestParseOnboardArgs_Help(t *testing.T) {
-	o, err := onboard.ParseOnboardArgs([]string{"--help"})
-	if err != nil || !o.Help {
-		t.Errorf("onboard.ParseOnboardArgs([--help]) = (%+v,%v), want help=true,nil", o, err)
-	}
-	if _, err := onboard.ParseOnboardArgs([]string{"--bogus"}); err == nil {
-		t.Error("--bogus should be a usage error")
 	}
 }
 

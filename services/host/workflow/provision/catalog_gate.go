@@ -7,28 +7,22 @@ import (
 	"strings"
 )
 
-// mcp_catalog_gate.go — the setup/onboard readiness gate for shipped-catalog
-// remote MCP servers (mcp.McpCatalogNames: notion/atlassian/granola).
-// Persisting a catalog remote into config.toml (or launching a sandbox that
-// preloads it) while it is unregistered or unauthorized silently claims a
-// setup that cannot work: the gateway would preload a server it cannot spawn
-// or that 401s on first use. So BEFORE any config save or handoff, setup and
-// onboard verify each proposed catalog name with the same bounded native
-// probes doctor uses (`sbx mcp ls` registration evidence + `sbx mcp auth
-// status <name>`), and FAIL with the exact repair commands (`pix mcp
-// bundle`, `pix mcp auth <name>`) on any gap. The gate never opens an
-// OAuth flow itself — auth is always the user's explicit command — so a
-// non-interactive setup can never wedge on (or silently trigger) a browser
-// grant. Local stdio servers (gog/slack/…) are untouched: they keep the
-// mcp.RegisterServers path.
+// catalog_gate.go — the readiness gate for shipped-catalog remote MCP servers
+// (mcp.McpCatalogNames: notion/atlassian/granola), shared by `pix setup` and the
+// onboarding reconcile. Persisting a catalog remote into config.toml, or launching
+// a sandbox that preloads it, while it is unregistered or unauthorized claims a
+// setup that cannot work: the gateway would preload a server it cannot spawn, or
+// that 401s on first use. So each name is verified BEFORE any save or handoff,
+// with the bounded native probes doctor uses, and any gap FAILS with the exact
+// repair command. The gate never opens an OAuth flow itself — auth is always the
+// user's explicit command — so a non-interactive setup can never wedge on, or
+// silently trigger, a browser grant.
 
-// VerifyCatalogMCPReady is the gate itself: every shipped-catalog name in
-// names (derived from mcp.McpCatalogNames — non-catalog names are never probed
-// here) must classify mcp.CatalogMCPReady, or the whole operation fails with the
-// exact repair command before the host phase saves its proposal or launches a
-// sandbox. Pack adoption may already have committed launcher-owned pack state,
-// so errors deliberately make no global "nothing was saved" claim. One
-// bounded `sbx mcp ls` is shared across all names.
+// VerifyCatalogMCPReady is the gate itself: every shipped-catalog name in names
+// (non-catalog names are never probed here) must classify mcp.CatalogMCPReady, or
+// the whole operation fails with the exact repair command. Pack adoption may
+// already have committed launcher-owned state, so errors make no global "nothing
+// was saved" claim. One bounded `sbx mcp ls` is shared across all names.
 func VerifyCatalogMCPReady(env hostenv.Env, names []string) error {
 	var catalog []string
 	seen := map[string]bool{}
