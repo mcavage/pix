@@ -1,8 +1,8 @@
 //go:build darwin
 
-// serve_install_darwin.go is the thin macOS dispatch for the managed login
-// service: all logic + argv choices live (unit-tested) in serve_install.go;
-// this file only binds the real runner, uid, and $HOME.
+// install_darwin.go is the thin macOS dispatch for the managed login service:
+// all logic + argv choices live (unit-tested) in install.go; this file only binds
+// the real runner, uid, and $HOME.
 
 package service
 
@@ -33,8 +33,8 @@ func platformServeUninstall(out io.Writer) error {
 	return launchdUninstall(realCmdRunner, realInstallFS(), os.Getuid(), home, out)
 }
 
-// ManagedActive reports whether the launchd unit is loaded (used by
-// config propagation's lifecycle-mode detection).
+// ManagedActive reports whether the launchd unit is loaded — the authoritative
+// first question in lifecycle-mode detection.
 func ManagedActive() bool { return launchdActive(realCmdRunner, os.Getuid()) }
 
 // restartManagedService kickstarts the launchd unit in place.
