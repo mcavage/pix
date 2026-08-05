@@ -280,17 +280,22 @@ func (c *lsCmd) Run(d *cli.Deps) error {
 func (c *rmCmd) Help() string { return launch.RmDescription }
 
 type rmCmd struct {
-	Names  []string `arg:"" optional:"" help:"Sandbox names to remove (pix-* only)."`
-	All    bool     `help:"Remove every pix-* sandbox."`
-	Except []string `help:"With --all: keep this one (repeatable)." placeholder:"NAME"`
+	Names   []string `arg:"" optional:"" help:"Sandbox names to remove (pix-* only)."`
+	All     bool     `help:"Remove every pix-* sandbox (never forced)."`
+	Orphans bool     `help:"Remove only pix-owned sandboxes with zero live references and no keep (never forced)."`
+	Force   bool     `short:"f" help:"Force-remove an explicitly named sandbox, skipping the zero-reference proof. Refused with --all/--orphans."`
+	Keep    []string `short:"k" help:"With --all: keep this one (repeatable)." placeholder:"NAME"`
+	Except  []string `help:"Deprecated spelling of --keep." placeholder:"NAME"`
 }
 
 func (c *rmCmd) Run(d *cli.Deps) error {
-	if !c.All && len(c.Names) == 0 {
-		return cli.Usagef("name a sandbox to remove, or use --all (see `pix rm --help`)")
-	}
+	// The bare/flag-shape refusals live with the behaviour they protect
+	// (launch.validateRmShape), not here: this layer only reports whether the
+	// terminal is interactive, which is a fact only it knows.
 	return launch.Rm(defaultShellEnv(), d.Out, d.Err, launch.RmOptions{
-		Names: c.Names, All: c.All, Except: c.Except,
+		Names: c.Names, All: c.All, Orphans: c.Orphans, Force: c.Force,
+		Except:      append(append([]string(nil), c.Keep...), c.Except...),
+		Interactive: d.Interactive,
 	})
 }
 

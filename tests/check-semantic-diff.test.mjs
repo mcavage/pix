@@ -418,21 +418,38 @@ test("checkRuleDrift ignores an unrelated (non-checkable) description-only edit"
 
 // --- tier 3: the real repo, the real W0 rules --------------------------------
 
-test("the shipped rules/lifecycle.rules.mjs (U04g) ships both ACTIVE and STAGED pins", async () => {
+// U04d: Story04 LANDED. Every lifecycle pin — including the three that were
+// staged behind `activation: "story04"` (the reaper, the bare non-TTY `pix rm`
+// refusal, the -k/--keep flag) — now describes shipped behavior and is
+// evaluated for real. The staged-pin MECHANISM is still fully covered, by the
+// tier-2b self-tests above, which use synthetic fixture pins precisely so that
+// landing a real one cannot leave the mechanism untested.
+test("the shipped rules/lifecycle.rules.mjs ships the whole Story04 pin set, all ACTIVE (nothing left staged)", async () => {
 	const mod = await import(path.join(REAL_RULES_DIR, "lifecycle.rules.mjs"));
 	const pins = mod.default;
-	assert.ok(pins.length >= 5, "lifecycle must ship the U04g pin set, not the W0 empty placeholder");
-	const active = pins.filter((p) => !p.activation);
+	assert.ok(pins.length >= 15, "lifecycle must ship the full U04a/U04c/U04d pin set, not the W0 empty placeholder");
 	const staged = pins.filter((p) => p.activation);
-	assert.ok(active.length >= 3, "at least the currently-true force/scope/instance-id/lease-foundation contracts must be active pins");
-	assert.ok(staged.length >= 3, "at least the not-yet-built reaper/non-TTY-refusal/-k-flag contracts must be staged pins");
-	for (const pin of staged) {
-		assert.equal(typeof pin.activation, "string");
-		assert.ok(pin.activation.length > 0);
+	assert.deepEqual(
+		staged.map((p) => p.id),
+		[],
+		"Story04 landed: no lifecycle pin may still hide behind an activation key",
+	);
+	for (const id of [
+		"lifecycle.reaper.no-force-requires-absence",
+		"lifecycle.rm.bare-nontty-refusal",
+		"lifecycle.rm.keep-short-and-long-flag",
+		"lifecycle.teardown.ref-closed-before-the-proof",
+		"lifecycle.teardown.absent-probe-before-state-clear",
+		"lifecycle.teardown.journal-bounded-0600",
+	]) {
+		assert.ok(
+			pins.some((p) => p.id === id),
+			`missing the U04d teardown pin ${id}`,
+		);
 	}
 });
 
-test("every real ACTIVE pin holds against THIS repository right now, and every STAGED pin is pending under the shipped activation.json (no manifest waivers needed)", async () => {
+test("every real pin holds against THIS repository right now under the shipped activation.json", async () => {
 	const pins = await loadRules(REAL_RULES_DIR);
 	assert.ok(pins.length >= 15, "should ship a meaningful pin set across all documented domains");
 	const domains = new Set(pins.map((p) => p.domain));
@@ -442,26 +459,40 @@ test("every real ACTIVE pin holds against THIS repository right now, and every S
 
 	const manifest = loadManifest(path.join(REPO_ROOT, "scripts", "semantic-diff", "intended-changes.json"));
 	const activation = loadActivation(path.join(REPO_ROOT, "scripts", "semantic-diff", "activation.json"));
-	assert.deepEqual(activation, [], "activation.json ships empty until Story04 lands and turns a key on");
+	assert.deepEqual(
+		activation.map((e) => e.key),
+		["story04"],
+		"U04d turned the story04 key on (with its rationale + evidence) in the same commit that landed the behavior",
+	);
 	const report = evaluatePins(pins, REPO_ROOT, manifest, activationKeySet(activation));
 	if (!report.ok) {
 		const failures = report.pins.filter((p) => !p.ok).map((p) => `${p.id}: ${JSON.stringify(p.checks.filter((c) => !c.ok))}`);
 		assert.fail(`real pins do not hold:\n${failures.join("\n")}`);
 	}
-	const lifecyclePins = report.pins.filter((p) => p.domain === "lifecycle");
-	const pending = lifecyclePins.filter((p) => p.pending);
-	assert.ok(pending.length >= 3, "the Story04 staged lifecycle pins must show up as pending, not silently absent");
+	const pending = report.pins.filter((p) => p.pending);
+	assert.deepEqual(pending.map((p) => p.id), [], "nothing ships staged any more: a pending pin here is a contract nobody is checking");
 });
 
-test("every STAGED (Story04) lifecycle pin genuinely fails right now if forcibly activated — a real TODO, never a vacuous placeholder", async () => {
+// The inverse of the test this replaces: those three pins USED to be provably
+// failing TODOs, which is how we knew they were not vacuous. Now they must
+// provably HOLD — same three ids, opposite expectation — which is the evidence
+// that activating the key was earned by behavior rather than by editing a
+// rule until it passed.
+test("the three formerly-staged Story04 pins now HOLD against this repo (the behavior landed, the pins were not weakened)", async () => {
 	const pins = await loadRules(REAL_RULES_DIR);
-	const staged = pins.filter((p) => p.domain === "lifecycle" && p.activation);
-	assert.ok(staged.length >= 3, "lifecycle must ship at least 3 staged Story04 pins");
 	const manifest = loadManifest(path.join(REPO_ROOT, "scripts", "semantic-diff", "intended-changes.json"));
-	for (const pin of staged) {
-		const report = evaluatePins([pin], REPO_ROOT, manifest, new Set([pin.activation]));
-		assert.equal(report.ok, false, `${pin.id}: forcibly activating a staged pin must fail against this repo today — its behavior genuinely does not exist yet`);
+	const landed = ["lifecycle.reaper.no-force-requires-absence", "lifecycle.rm.bare-nontty-refusal", "lifecycle.rm.keep-short-and-long-flag"];
+	for (const id of landed) {
+		const pin = pins.find((p) => p.id === id);
+		assert.ok(pin, `missing ${id}`);
+		assert.equal(pin.activation, undefined, `${id} must no longer be staged`);
+		const report = evaluatePins([pin], REPO_ROOT, manifest, new Set());
+		assert.equal(report.ok, true, `${id} must hold: ${JSON.stringify(report.pins[0].checks.filter((c) => !c.ok))}`);
 	}
+	// And the reaper still refuses force in the only way that counts: the file
+	// contains no forced-removal argv at all.
+	const reap = fs.readFileSync(path.join(REPO_ROOT, "services/host/workflow/launch/reap.go"), "utf8");
+	assert.ok(!reap.includes('"rm", "-f"'), "the reaper must never compose a forced removal");
 });
 
 // U03B regression sentinel: BROKER_PORT/PIX_BROKER_PORT were pinned here
@@ -513,19 +544,15 @@ test("the CLI exits 0 against the real repo and exits 1 against a fixture with a
 	assert.equal(failed, true, "CLI must exit non-zero on a planted corruption");
 });
 
-test("the CLI's --activate flag turns on a staged pin and fails it against the real repo (Story04 not landed yet)", () => {
-	let failed = false;
-	try {
-		execFileSync("node", [CLI, "--root", REPO_ROOT, "--no-git", "--activate", "story04"], { encoding: "utf8" });
-	} catch (err) {
-		failed = true;
-		assert.match(err.stdout, /FAIL {2}lifecycle\./);
-		assert.match(err.stdout, /semantic-diff: FAIL/);
-	}
-	assert.equal(failed, true, "activating story04 must fail the CLI: the lifecycle behavior it stages does not exist yet");
-
-	// Without --activate, the same run is clean: staged pins are pending, not failing.
+test("the shipped run is clean and has nothing pending; --activate story04 is now a no-op", () => {
 	const plainOut = execFileSync("node", [CLI, "--root", REPO_ROOT, "--no-git"], { encoding: "utf8" });
 	assert.match(plainOut, /semantic-diff: PASS/);
-	assert.match(plainOut, /PEND {2}lifecycle\./);
+	assert.doesNotMatch(plainOut, /PEND {2}lifecycle\./, "Story04 landed: no lifecycle pin may still report as pending");
+	assert.match(plainOut, /PASS {2}lifecycle\.reaper\.no-force-requires-absence/);
+
+	// Forcing the key that activation.json already ships changes nothing —
+	// which is the point: the pins are active because the behavior landed, not
+	// because a CLI flag was passed.
+	const activatedOut = execFileSync("node", [CLI, "--root", REPO_ROOT, "--no-git", "--activate", "story04"], { encoding: "utf8" });
+	assert.match(activatedOut, /semantic-diff: PASS/);
 });
