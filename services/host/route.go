@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -262,17 +263,6 @@ func routeCompile(args []string) {
 	}
 }
 
-func joinWords(parts []string) string {
-	out := ""
-	for i, p := range parts {
-		if i > 0 {
-			out += ", "
-		}
-		out += p
-	}
-	return out
-}
-
 func droppedIntents(pol *routing.Policy, cr routing.CompiledRouting) []string {
 	var out []string
 	for _, in := range pol.Intents {
@@ -338,7 +328,7 @@ func routeShow(args []string) {
 	for _, in := range v.pol.Intents {
 		d := routing.Resolve(v.reg, v.sc, v.pol, in)
 		if !d.PreferenceMet {
-			unpreferred = append(unpreferred, fmt.Sprintf("%s (prefers %s)", in.Name, joinWords(in.PreferProviders)))
+			unpreferred = append(unpreferred, fmt.Sprintf("%s (prefers %s)", in.Name, strings.Join(in.PreferProviders, ", ")))
 		}
 		acc, cost, est, lat := "-", "-", "-", "-"
 		if d.Chosen != nil {
@@ -367,7 +357,7 @@ func routeShow(args []string) {
 	// made a working default install read as broken on its most important route.
 	if len(unpreferred) > 0 {
 		fmt.Printf("\n%d intent(s) resolved off their preferred vendor — valid routes, no key needed:\n  %s\n",
-			len(unpreferred), joinWords(unpreferred))
+			len(unpreferred), strings.Join(unpreferred, ", "))
 		fmt.Println("  `pix models add <provider>` if you want the preference honored.")
 	}
 	if !v.bound && !v.catalogOnly {

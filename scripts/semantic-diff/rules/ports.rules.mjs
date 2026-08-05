@@ -43,13 +43,13 @@ export default [
 	},
 	{
 		id: "ports.reserved.plugin-env-allowlist",
-		description: "serve_plugin.go's pluginEnvAllowlist (the ONLY env an external plugin subprocess inherits, F2) still carries every port-related variable a plugin needs to bind/discover the reserved ports (KNOWLEDGE_PORT/PIX_KNOWLEDGE_PORT were retired with the built-in knowledge service, W2 U03A; PIX_BROKER_PORT with the dormant broker slot, W2 U03B).",
+		description: "serve_plugin.go's pluginEnvAllow (the ONLY env an external plugin subprocess inherits, F2) still carries every port-related variable a plugin needs to bind/discover the reserved ports (KNOWLEDGE_PORT/PIX_KNOWLEDGE_PORT were retired with the built-in knowledge service, W2 U03A; PIX_BROKER_PORT with the dormant broker slot, W2 U03B).",
 		checks: [
 			{
 				file: "services/host/serve_plugin.go",
 				kind: "contains",
-				region: { start: "var pluginEnvAllowlist = map[string]bool{", end: "\n}\n" },
-				values: ['"MEMORY_PORT":', '"PIX_MEMORY_PORT":'],
+				region: { start: "var pluginEnvAllow = []string{", end: "\n}\n" },
+				values: ['"MEMORY_PORT"', '"PIX_MEMORY_PORT"'],
 			},
 		],
 	},

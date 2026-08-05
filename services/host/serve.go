@@ -38,11 +38,16 @@ import (
 	"pix/host/monitor"
 )
 
+// hostService is one mux-based listener `serve` owns: a name for the log line,
+// the address it binds, and the handler behind it. There is no preflight hook:
+// the last capability that had one is gone, memory degrades on purpose (a
+// missing Ollama must not stop the store from answering), and monitor is not a
+// mux service at all — so the field, and the barf-on-failure loop reading it,
+// were a mechanism with no implementors.
 type hostService struct {
-	name  string
-	addr  string
-	mux   http.Handler
-	check func() error // optional serve-preflight; if non-nil it MUST pass or `serve` barfs
+	name string
+	addr string
+	mux  http.Handler
 }
 
 // serveUsage documents the flags runServe itself parses (--bind/--port,
@@ -114,8 +119,7 @@ func runServe(argv []string) {
 	}
 
 	// Resolve the enabled set FIRST (F1): CLI args win; else config's `services`;
-	// else empty == "all". Only enabled services are constructed, launched, and
-	// preflighted below.
+	// else empty == "all". Only enabled services are constructed and launched.
 	effective := resolveServices(enabled, cfg.Services)
 	// config-friendly aliases -> internal service name.
 	alias := serveServiceAliases()
@@ -186,26 +190,6 @@ func runServe(argv []string) {
 
 	if len(all) == 0 && monitorSrv == nil {
 		fatalf("no services enabled (run: pix config set services %s)", strings.Join(valid, ","))
-	}
-
-	// Preflight: every enabled service validates its host dependency UP FRONT, and
-	// the whole `serve` barfs if any is broken — so you fix it now instead of
-	// discovering mid-session that a capability was dark the whole time (the service
-	// bound its port but couldn't actually serve). Services that degrade gracefully
-	// (memory) set no check. `all` already holds only enabled services.
-	var failures []string
-	for _, s := range all {
-		if s.check == nil {
-			continue
-		}
-		if err := s.check(); err != nil {
-			failures = append(failures, "  ✗ "+s.name+": "+err.Error())
-		} else {
-			log.Printf("preflight ok: %s", s.name)
-		}
-	}
-	if len(failures) > 0 {
-		fatalf("host service preflight FAILED — not starting:\n%s\nFix the above, then re-run `make serve`.", strings.Join(failures, "\n"))
 	}
 
 	// Record our pid so the launcher's `serve stop` / `serve status` can find and

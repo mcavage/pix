@@ -159,10 +159,10 @@ var pkgLayer = map[string]int{
 	// importing it, so it belongs beside the command it exercises.
 	"cmd/pix/corpus": layerCommand,
 
-	// Not part of the launcher's layering: the host daemon binary and its
-	// examples, which are separate programs.
-	".":                    -1,
-	"examples/mcp-example": -1,
+	// Not part of the launcher's layering: the host daemon binary, a separate
+	// program. Its examples/ tree is gone with the MCP plugin transport it
+	// demonstrated (U11j).
+	".": -1,
 }
 
 // l0Order breaks ties inside L0, which is the one layer with internal

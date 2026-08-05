@@ -1,11 +1,9 @@
 package plugin
 
 import (
-	"encoding/json"
 	"errors"
 	"net"
 	"net/rpc"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -26,19 +24,8 @@ func (noopMemory) Observe(ObserveReq) (ObserveResp, error)          { return Obs
 func (noopMemory) Stats(string) (Stats, error)                      { return Stats{}, nil }
 func (noopMemory) Health() (Health, error)                          { return Health{}, nil }
 
-type noopMcp struct{}
-
-func (noopMcp) Info() (ServerInfo, error)      { return ServerInfo{}, nil }
-func (noopMcp) ListTools() ([]ToolSpec, error) { return nil, nil }
-func (noopMcp) CallTool(string, json.RawMessage) (json.RawMessage, error) {
-	return json.RawMessage("null"), nil
-}
-
-// Compile-time proof the trivial impls satisfy the interfaces.
-var (
-	_ MemoryStore = noopMemory{}
-	_ McpServer   = noopMcp{}
-)
+// Compile-time proof the trivial impl satisfies the interface.
+var _ MemoryStore = noopMemory{}
 
 func TestHandshakeProtocolVersion(t *testing.T) {
 	if ProtocolVersion != 2 {
@@ -64,7 +51,6 @@ func TestRPCPlugins(t *testing.T) {
 		p    goplugin.Plugin
 	}{
 		{"memory", &MemoryPlugin{Impl: noopMemory{}}},
-		{"mcp", &McpPlugin{Impl: noopMcp{}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -79,12 +65,16 @@ func TestRPCPlugins(t *testing.T) {
 	}
 }
 
-// TestPluginMap asserts the client-side map covers the two capabilities with
-// the matching adapter types (nil Impl is correct for the client side).
+// TestPluginMap asserts the client-side map covers the dispensable capability
+// with the matching adapter type (nil Impl is correct for the client side).
+// The set is CLOSED and it is the closed set pack_units.go validates a pack
+// [[services]] kind against: memory is the only capability this binary
+// dispenses now that the MCP plugin transport is retired (the bridge served
+// zero built-in servers, and an external MCP server ships as a container the
+// sbx gateway runs).
 func TestPluginMap(t *testing.T) {
 	wants := map[string]interface{}{
 		"memory": &MemoryPlugin{},
-		"mcp":    &McpPlugin{},
 	}
 	if len(PluginMap) != len(wants) {
 		t.Fatalf("PluginMap has %d entries, want %d", len(PluginMap), len(wants))
@@ -101,10 +91,6 @@ func TestPluginMap(t *testing.T) {
 		case *MemoryPlugin:
 			if _, ok := got.(*MemoryPlugin); !ok {
 				t.Fatalf("PluginMap[%q] is %T, want *MemoryPlugin", k, got)
-			}
-		case *McpPlugin:
-			if _, ok := got.(*McpPlugin); !ok {
-				t.Fatalf("PluginMap[%q] is %T, want *McpPlugin", k, got)
 			}
 		}
 	}
@@ -192,41 +178,6 @@ func TestRPCRoundTripMemory(t *testing.T) {
 	// Zero-arg method.
 	if got, err := c.Health(); err != nil || !got.OK || got.WatcherModel != "m" {
 		t.Fatalf("Health round trip: got %+v err %v", got, err)
-	}
-}
-
-// echoMcp mirrors args into its results.
-type echoMcp struct{}
-
-func (echoMcp) Info() (ServerInfo, error) {
-	return ServerInfo{Name: "slack", Version: "1", ProtocolVersion: "2024"}, nil
-}
-func (echoMcp) ListTools() ([]ToolSpec, error) {
-	return []ToolSpec{{Name: "post", Description: "d", InputSchema: json.RawMessage(`{"type":"object"}`)}}, nil
-}
-func (echoMcp) CallTool(name string, args json.RawMessage) (json.RawMessage, error) {
-	return json.RawMessage(`{"tool":"` + name + `"}`), nil
-}
-
-func TestRPCRoundTripMcp(t *testing.T) {
-	client := newRPCPair(t, &mcpRPCServer{Impl: echoMcp{}})
-	c := &mcpRPCClient{client: client}
-
-	// Zero-arg method.
-	if got, err := c.Info(); err != nil || got.Name != "slack" || got.ProtocolVersion != "2024" {
-		t.Fatalf("Info round trip: got %+v err %v", got, err)
-	}
-	// Zero-arg method.
-	got, err := c.ListTools()
-	if err != nil || len(got) != 1 || got[0].Name != "post" {
-		t.Fatalf("ListTools round trip: got %+v err %v", got, err)
-	}
-	if !reflect.DeepEqual([]byte(got[0].InputSchema), []byte(`{"type":"object"}`)) {
-		t.Fatalf("ListTools schema round trip: got %s", got[0].InputSchema)
-	}
-	out, err := c.CallTool("post", json.RawMessage(`{"a":1}`))
-	if err != nil || string(out) != `{"tool":"post"}` {
-		t.Fatalf("CallTool round trip: got %s err %v", out, err)
 	}
 }
 

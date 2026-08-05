@@ -1,7 +1,5 @@
 package plugin
 
-import "encoding/json"
-
 // The three capability interfaces below are derived from the real host services.
 // They deliberately use plain Go structs (no context.Context, no maps of any) so
 // their arguments and results are trivially gob-compatible for the net/rpc
@@ -105,6 +103,7 @@ type Candidate struct {
 	Content   string
 	Frequency int
 	Project   string
+	CreatedAt string // RFC3339; `pix memory learnings` renders it
 }
 
 type PromotableResp struct {
@@ -141,33 +140,4 @@ type Health struct {
 	Capture       bool
 	WatcherModel  string
 	CaptureReason string // explains a false Capture (JSON-RPC `captureReason`)
-}
-
-// --- McpServer ---------------------------------------------------------------
-//
-// Mirrors ../slack.go + the MCP scaffolding in ../util.go (mcpDispatcher:
-// initialize / tools/list / tools/call). The registered sbx-gateway stdio
-// command becomes a thin compiled bridge that forwards ListTools/CallTool to an
-// McpServer plugin, keeping the "compiled Go spawns from network input" EDR
-// property the arch doc requires.
-
-type McpServer interface {
-	Info() (ServerInfo, error)
-	ListTools() ([]ToolSpec, error)
-	CallTool(name string, args json.RawMessage) (json.RawMessage, error)
-}
-
-// ServerInfo mirrors the initialize result's serverInfo + protocolVersion.
-type ServerInfo struct {
-	Name            string
-	Version         string
-	ProtocolVersion string
-}
-
-// ToolSpec mirrors util.go's mcpTool.schema() output. InputSchema is carried as
-// raw JSON so arbitrary schemas stay gob-compatible.
-type ToolSpec struct {
-	Name        string
-	Description string
-	InputSchema json.RawMessage
 }

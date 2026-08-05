@@ -46,70 +46,52 @@ func TestResolveServices(t *testing.T) {
 	}
 }
 
-// --- F5: an external plugin with a mismatched SHA refuses to launch ----------
+// --- F5: an external plugin unit refuses to launch unless the bytes match -----
 
-func TestVerifyPluginSHA(t *testing.T) {
-	dir := t.TempDir()
-	bin := filepath.Join(dir, "fake-plugin")
-	content := []byte("#!/bin/sh\nexit 0\n")
-	if err := os.WriteFile(bin, content, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	// Compute the correct SHA-256 of the binary content.
-	sum := sha256.Sum256(content)
-	correctSHA := hex.EncodeToString(sum[:])
-
-	// Empty SHA is a hard refusal (F-C): external plugins MUST be sha-pinned.
-	if err := verifyPluginSHA(config.PluginSpec{Path: bin}); err == nil || !strings.Contains(err.Error(), "unpinned") {
-		t.Errorf("empty SHA should be refused as unpinned, got %v", err)
-	}
-
-	// Wrong SHA is a hard refusal.
-	err := verifyPluginSHA(config.PluginSpec{Path: bin, SHA: "0000deadbeef"})
-	if err == nil || !strings.Contains(err.Error(), "mismatch") {
-		t.Fatalf("wrong SHA should refuse with a mismatch error, got %v", err)
-	}
-
-	// Correct SHA passes (M-8).
-	if err := verifyPluginSHA(config.PluginSpec{Path: bin, SHA: correctSHA}); err != nil {
-		t.Errorf("correct SHA should be accepted, got %v", err)
-	}
-
-	// Uppercase SHA is accepted (case-insensitive match) (M-8).
-	if err := verifyPluginSHA(config.PluginSpec{Path: bin, SHA: strings.ToUpper(correctSHA)}); err != nil {
-		t.Errorf("uppercase SHA should be accepted, got %v", err)
-	}
-}
-
-// TestLaunchRefusesOnSHAMismatch proves the refusal is enforced at launch time
-// (before any subprocess is spawned) — hermetic, no real go-plugin handshake.
-func TestLaunchRefusesOnSHAMismatch(t *testing.T) {
+// TestLaunchRefusesUnpinnedAndMismatchedExternal drives the REAL refusal path:
+// `launch` no longer pre-hashes the configured path (supervise owns that gate at
+// both ends), so this proves the two refusals still happen through it — an
+// unpinned external path dies at spec validation, before anything is spawned,
+// and a pinned path whose bytes do not match dies in the stager, which is the
+// check that actually precedes exec.
+func TestLaunchRefusesUnpinnedAndMismatchedExternal(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "fake-plugin")
 	if err := os.WriteFile(bin, []byte("not a real plugin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+
 	sup := &supervisor{}
-	h, err := sup.launch("test", "memory", config.PluginSpec{Path: bin, SHA: "wrongsha"}, "", nil)
-	if err == nil {
-		t.Fatal("launch with a mismatched SHA should refuse, got nil error")
+	t.Cleanup(sup.shutdown)
+
+	// Unpinned: refused at spec time, no subprocess, no staging.
+	h, err := sup.launch("unpinned", "memory", config.PluginSpec{Path: bin}, "", nil)
+	if err == nil || !strings.Contains(err.Error(), "unpinned") {
+		t.Fatalf("unpinned external plugin: err = %v, want an unpinned refusal", err)
 	}
 	if h != nil {
-		t.Errorf("launch should not return a holder on SHA refusal, got %v", h)
+		t.Errorf("launch returned a holder for a refused unit: %v", h)
 	}
-	if !strings.Contains(err.Error(), "mismatch") {
-		t.Errorf("expected a sha256 mismatch error, got %v", err)
+
+	// Pinned to the WRONG bytes: the stager re-hashes and refuses.
+	wrong := hex.EncodeToString(sha256.New().Sum(nil)) // sha256 of the empty input
+	h, err = sup.launch("mismatch", "memory", config.PluginSpec{Path: bin, SHA: wrong}, "", nil)
+	if err == nil || !strings.Contains(err.Error(), "mismatch") {
+		t.Fatalf("mismatched external plugin: err = %v, want a sha256 mismatch refusal", err)
+	}
+	if h != nil {
+		t.Errorf("launch returned a holder for a refused unit: %v", h)
 	}
 }
 
 // --- F2: a plugin subprocess env never contains the broker bearer ------------
 
 // pluginEnv is the exact composition prod uses: every unit is launched with
-// EnvAllow: pluginEnvAllowNames(), which supervise.FilterEnv applies to the
-// child's environment.
+// EnvAllow: pluginEnvAllow, which supervise.FilterEnv applies to the child's
+// environment.
 func pluginEnv(extra []string) []string {
-	return supervise.FilterEnv(pluginEnvAllowNames(), extra)
+	return supervise.FilterEnv(pluginEnvAllow, extra)
 }
 
 func TestPluginEnvStripsBearer(t *testing.T) {

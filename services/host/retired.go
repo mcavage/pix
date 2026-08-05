@@ -17,7 +17,10 @@ import (
 // is the memory db, so they collapsed into `memory snapshot`/`memory restore`.
 func retiredHostSubcommands() map[string]string {
 	return map[string]string{
-		"slack":   "pix-host mcp slack",
+		// The bridge that replacement named is gone too (U11j: it served zero
+		// built-in servers), so the pointer moves to where a Slack server
+		// actually comes from now rather than to a second dead path.
+		"slack":   "sbx mcp add slack --local --url <manifest> (a container the gateway runs; docs/design/slack-setup.md)",
 		"backup":  "pix-host memory snapshot PATH",
 		"restore": "pix-host memory restore PATH",
 	}

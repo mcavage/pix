@@ -10,14 +10,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 	"sync"
 
 	goplugin "github.com/hashicorp/go-plugin"
@@ -96,18 +93,17 @@ func supervisorDirs() (stage, state string) {
 // (or that attempt fails, which fails `serve` loudly at startup). extraEnv is
 // KEY=VALUE granted to THIS unit only on top of the allowlisted base env — e.g.
 // an external plugin's own bearer, which no other unit may see (F2).
+//
+// There is no pin pre-check here: supervise owns that gate at both ends —
+// UnitSpec.Validate refuses an unpinned or relative external path before
+// anything is spawned, and StageExecutable re-hashes the bytes it stages on
+// every (re)start, which is the check that actually precedes exec. A second
+// hash of the configured path here proved nothing the stager does not, and
+// proved it of a file that could still change before the exec.
 func (s *supervisor) launch(name, kind string, spec config.PluginSpec, selfPath string, extraEnv []string) (*pluginHolder, error) {
-	// Pre-check the pin against the configured path for the operator-facing
-	// error message; the supervisor then re-verifies the bytes it STAGES on
-	// every (re)start, which is the check that actually gates exec.
-	if spec.Path != "" {
-		if err := verifyPluginSHA(spec); err != nil {
-			return nil, err
-		}
-	}
 	unit := supervise.UnitSpec{
 		Name: name, Kind: kind, SelfExec: spec.Path == "", Path: spec.Path, SHA: spec.SHA,
-		EnvAllow: pluginEnvAllowNames(), EnvGrant: extraEnv,
+		EnvAllow: pluginEnvAllow, EnvGrant: extraEnv,
 	}
 	return s.ensure(selfPath).Add(unit, unitHealth(kind))
 }
@@ -124,65 +120,29 @@ func (s *supervisor) shutdown() {
 	goplugin.CleanupClients()
 }
 
-// pluginEnvAllowlist is the set of env names a plugin subprocess may inherit,
-// so it never picks up a secret the parent carries (cloud creds, API keys, the
-// ssh-agent socket). A per-unit secret is deliberately absent from this list:
-// a unit that needs one gets it only via launch()'s extraEnv (EnvGrant), which
-// no other unit sees.
-var pluginEnvAllowlist = map[string]bool{
+// pluginEnvAllow is the env policy every supervised unit inherits: the names a
+// plugin subprocess may see, and nothing else — so it never picks up a secret
+// the parent carries (cloud creds, API keys, the ssh-agent socket).
+// supervise.FilterEnv applies it per unit. A per-unit secret is deliberately
+// absent: a unit that needs one gets it only through launch()'s extraEnv
+// (EnvGrant), which no sibling unit sees. It is a flat list because that is the
+// shape a UnitSpec carries; the map-plus-sorted-slice-adapter it replaces was
+// two representations of one allowlist.
+var pluginEnvAllow = []string{
 	// Runtime essentials
-	"PATH": true, "HOME": true, "USER": true,
-	"TMPDIR": true, "TEMP": true, "TMP": true,
+	"HOME", "PATH", "TEMP", "TMP", "TMPDIR", "USER",
 	// Config locations
-	"PIX_CONFIG":      true,
-	"XDG_CONFIG_HOME": true,
-	"XDG_DATA_HOME":   true,
-	"XDG_STATE_HOME":  true,
+	"PIX_CONFIG", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME",
 	// Memory service configuration
-	"MEMORY_PORT":               true,
-	"MEMORY_BIND":               true,
-	"MEMORY_DB":                 true,
-	"MEMORY_WATCHER_MODEL":      true,
-	"MEMORY_EMBED_MODEL":        true,
-	"MEMORY_EMBED_TIMEOUT_MS":   true,
-	"MEMORY_WATCHER_TIMEOUT_MS": true,
-	"MEMORY_SYNTH_MS":           true,
+	"MEMORY_BIND", "MEMORY_DB", "MEMORY_EMBED_MODEL", "MEMORY_EMBED_TIMEOUT_MS",
+	"MEMORY_PORT", "MEMORY_SYNTH_MS", "MEMORY_WATCHER_MODEL", "MEMORY_WATCHER_TIMEOUT_MS",
 	// Shared Ollama endpoint
-	"OLLAMA_HOST": true,
-	// Dynamic linker paths for CGO-built external plugins that link shared libraries.
-	"LD_LIBRARY_PATH":   true, // Linux
-	"DYLD_LIBRARY_PATH": true, // macOS
-	// Port vars the supervisor communicates to plugins
-	"PIX_MEMORY_PORT": true,
-}
-
-// pluginEnvAllowNames is the allowlist as a slice, the shape a UnitSpec carries
-// (supervise.FilterEnv does the filtering, per unit, in the child's env).
-func pluginEnvAllowNames() []string {
-	out := make([]string, 0, len(pluginEnvAllowlist))
-	for k := range pluginEnvAllowlist {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
-}
-
-// verifyPluginSHA is the operator-facing pre-check on an EXTERNAL plugin binary
-// (F5): an empty pin is a hard refusal, a mismatch names both hashes. The check
-// that actually gates exec is supervise.StageExecutable, which re-hashes the
-// bytes it stages on every (re)start.
-func verifyPluginSHA(spec config.PluginSpec) error {
-	if spec.SHA == "" {
-		return fmt.Errorf("plugin %s: refusing to launch an unpinned external plugin (no sha in config); external plugins must be sha-pinned", spec.Path)
-	}
-	got, err := supervise.FileSHA256(spec.Path)
-	if err != nil {
-		return fmt.Errorf("hash plugin binary: %w", err)
-	}
-	if want := strings.TrimSpace(spec.SHA); !strings.EqualFold(got, want) {
-		return fmt.Errorf("plugin %s sha256 mismatch: got %s, want %s (refusing to launch)", spec.Path, got, strings.ToLower(want))
-	}
-	return nil
+	"OLLAMA_HOST",
+	// Dynamic linker paths for CGO-built external plugins that link shared
+	// libraries (Linux, then macOS).
+	"LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH",
+	// Ports the supervisor communicates to plugins
+	"PIX_MEMORY_PORT",
 }
 
 // --- HTTP shims backed by a plugin client -----------------------------------
@@ -196,18 +156,31 @@ func projOrNil(p string) any {
 	return p
 }
 
-// memoryProxyMux serves the same JSON-RPC surface as memoryMux() but delegates
-// every method to the dispensed MemoryStore client. Response shapes are
-// byte-identical to the built-in path so the sandbox recall extension is
-// unaffected by which impl backs :11435.
+// memoryProxyMux backs :11435 with the SUPERVISED memory unit: it resolves the
+// dispensed client per call, so a restart or reattach is invisible to the
+// sandbox and a down unit is a clean JSON-RPC error rather than a dead socket.
 func memoryProxyMux(h *pluginHolder) http.Handler {
-	// with resolves the dispensed store per CALL, so a restart or reattach is
-	// invisible to the caller and a down unit is a clean JSON-RPC error.
+	return memoryStoreMux(func() (plugin.MemoryStore, error) {
+		s, _ := h.Get().(plugin.MemoryStore)
+		if s == nil {
+			return nil, errors.New("memory plugin unavailable")
+		}
+		return s, nil
+	})
+}
+
+// memoryStoreMux is THE :11435 JSON-RPC surface, expressed once over the typed
+// MemoryStore interface. `get` resolves the store per call — a holder-backed
+// plugin client for the supervised unit, or the in-process adapter for the bare
+// `pix-host memory` daemon (newMemoryMux) — so the two entry points cannot
+// answer differently. Response shapes are the sandbox recall extension's
+// contract; every one of them is built here and nowhere else.
+func memoryStoreMux(get func() (plugin.MemoryStore, error)) http.Handler {
 	with := func(fn func(plugin.MemoryStore, jsonObj) (any, error)) func(jsonObj) (any, error) {
 		return func(p jsonObj) (any, error) {
-			s, _ := h.Get().(plugin.MemoryStore)
-			if s == nil {
-				return nil, errors.New("memory plugin unavailable")
+			s, err := get()
+			if err != nil {
+				return nil, err
 			}
 			return fn(s, p)
 		}
@@ -289,7 +262,8 @@ func memoryProxyMux(h *pluginHolder) http.Handler {
 			}
 			list := []jsonObj{}
 			for _, c := range r.Candidates {
-				list = append(list, jsonObj{"id": c.ID, "content": c.Content, "frequency": c.Frequency, "project": projOrNil(c.Project)})
+				list = append(list, jsonObj{"id": c.ID, "content": c.Content, "frequency": c.Frequency,
+					"project": projOrNil(c.Project), "createdAt": c.CreatedAt})
 			}
 			return jsonObj{"candidates": list}, nil
 		}),
@@ -306,28 +280,6 @@ func memoryProxyMux(h *pluginHolder) http.Handler {
 			return out, nil
 		}),
 	})
-}
-
-// strSliceOrEmpty normalizes a nil string slice to a non-nil empty one so the
-// JSON encodes as [] rather than null (matching the built-in output shape).
-func strSliceOrEmpty(in []string) []string {
-	if in == nil {
-		return []string{}
-	}
-	return in
-}
-
-// strSliceParam extracts a []string from a JSON-RPC params array of strings.
-func strSliceParam(p jsonObj, key string) []string {
-	var out []string
-	if arr, ok := p[key].([]any); ok {
-		for _, v := range arr {
-			if s, ok := v.(string); ok {
-				out = append(out, s)
-			}
-		}
-	}
-	return out
 }
 
 // jsonrpcMux wraps a method table in the same JSON-RPC 2.0 envelope handling

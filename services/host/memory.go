@@ -23,7 +23,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"math"
 	"net/http"
@@ -39,6 +38,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"pix/host/config"
+	"pix/host/plugin"
 )
 
 const (
@@ -763,8 +763,7 @@ func (s *memStore) stats(profile string) jsonObj {
 // --- JSON-RPC server ---------------------------------------------------------
 
 // memoryMux is the standalone entry (runMemory): it builds the store and fatals
-// on failure. runServe does NOT use this path, it calls buildMemStore directly
-// and routes a failure through its cleanup-aware fatal (F3), then newMemoryMux.
+// on failure.
 func memoryMux() http.Handler {
 	store, hasEmb, err := buildMemStore()
 	if err != nil {
@@ -773,96 +772,16 @@ func memoryMux() http.Handler {
 	return newMemoryMux(store, hasEmb)
 }
 
-// newMemoryMux builds the JSON-RPC handler over an already-constructed store, so
-// runServe can construct the store with error handling and still share this
-// surface byte-for-byte with the standalone path.
+// newMemoryMux serves :11435 over an already-constructed IN-PROCESS store. It
+// is memoryStoreMux (serve_plugin.go) over the same typed adapter the go-plugin
+// unit serves, which is the point: there is ONE JSON-RPC surface, and both the
+// bare daemon and the supervised unit answer through it. The duplicate method
+// table this function used to carry was 100 lines restating the proxy's — two
+// implementations of one wire contract, free to drift, and drift they had (the
+// proxy path `serve` actually runs dropped `createdAt` from promotable).
 func newMemoryMux(store *memStore, hasEmb bool) http.Handler {
-	methods := map[string]func(jsonObj) (any, error){
-		"health": func(jsonObj) (any, error) {
-			capture, reason := memWatcherStatus()
-			return jsonObj{"ok": true, "vector": hasEmb, "capture": capture, "captureReason": reason, "watcherModel": memWatcherModel()}, nil
-		},
-		// identity is the APPLICATION-LEVEL readiness probe: it proves the
-		// process holding this port is ours, at this version, over this db.
-		// A bare dial proves none of that (see identity.go).
-		"identity": func(jsonObj) (any, error) { return memoryIdentity(hasEmb).obj(), nil },
-		"stats":    func(p jsonObj) (any, error) { return store.stats(profileFromParams(p)), nil },
-		"recall": func(p jsonObj) (any, error) {
-			hits, err := store.recall(getStr(p, "query"), clampInt(p["limit"], 0, 0, 1000),
-				clampInt(p["charBudget"], 0, 0, 1000000), getStr(p, "kind"), getStr(p, "project"), profileFromParams(p))
-			if err != nil {
-				return nil, err
-			}
-			list := []jsonObj{}
-			for _, h := range hits {
-				list = append(list, jsonObj{"id": h.id, "content": h.content, "score": h.score,
-					"kind": h.kind, "durability": h.durability, "project": nullStr(h.project), "createdAt": h.createdAt})
-			}
-			return jsonObj{"hits": list}, nil
-		},
-		"remember": func(p jsonObj) (any, error) { return store.remember(rememberFromParams(p)) },
-		"forget": func(p jsonObj) (any, error) {
-			return jsonObj{"ok": store.forget(getStr(p, "id"), profileFromParams(p))}, nil
-		},
-		"synthesize": func(jsonObj) (any, error) { return store.synthesize(0), nil },
-		"promotable": func(p jsonObj) (any, error) {
-			return jsonObj{"candidates": store.promotable(clampInt(p["minFrequency"], 3, 1, 1000000), profileFromParams(p))}, nil
-		},
-		"observe": func(p jsonObj) (any, error) {
-			project, hasProj := projectFromParams(p)
-			accepted, reason := memObserve(store, getStr(p, "user"), project, hasProj, profileFromParams(p))
-			out := jsonObj{"accepted": accepted}
-			if reason != "" {
-				out["reason"] = reason
-			}
-			return out, nil
-		},
-	}
-
-	handleOne := func(msg jsonObj) jsonObj {
-		id := msg["id"]
-		method, _ := msg["method"].(string)
-		fn := methods[method]
-		if fn == nil {
-			return jsonObj{"jsonrpc": "2.0", "id": id, "error": jsonObj{"code": -32601, "message": "method not found"}}
-		}
-		params, _ := msg["params"].(map[string]any)
-		if params == nil {
-			params = jsonObj{}
-		}
-		res, err := fn(params)
-		if err != nil {
-			return jsonObj{"jsonrpc": "2.0", "id": id, "error": jsonObj{"code": -32603, "message": err.Error()}}
-		}
-		return jsonObj{"jsonrpc": "2.0", "id": id, "result": res}
-	}
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeJSON(w, http.StatusMethodNotAllowed, jsonObj{"error": "POST JSON-RPC only"})
-			return
-		}
-		raw, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-		var parsed any
-		if json.Unmarshal(raw, &parsed) != nil {
-			writeJSON(w, http.StatusOK, jsonObj{"jsonrpc": "2.0", "id": nil, "error": jsonObj{"code": -32700, "message": "parse error"}})
-			return
-		}
-		switch v := parsed.(type) {
-		case []any:
-			out := []jsonObj{}
-			for _, mm := range v {
-				if m, ok := mm.(map[string]any); ok {
-					out = append(out, handleOne(m))
-				}
-			}
-			writeJSON(w, http.StatusOK, out)
-		case map[string]any:
-			writeJSON(w, http.StatusOK, handleOne(v))
-		}
-	})
-	return mux
+	adapter := newMemoryStoreAdapter(store, hasEmb)
+	return memoryStoreMux(func() (plugin.MemoryStore, error) { return adapter, nil })
 }
 
 func runMemory() {
