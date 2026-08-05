@@ -13,10 +13,10 @@ import (
 // startTestIngest binds a REAL IngestServer on an ephemeral loopback port —
 // real socket, real files, no mocked handler — and returns its base URL and
 // store.
-func startTestIngest(t *testing.T, filter string) (string, *Store) {
+func startTestIngest(t *testing.T) (string, *Store) {
 	t.Helper()
 	store := newTestStore(t, StoreConfig{})
-	srv, err := NewIngestServer(IngestConfig{Port: 0, BindAddr: "127.0.0.1", Store: store, Filter: filter})
+	srv, err := NewIngestServer(IngestConfig{Port: 0, BindAddr: "127.0.0.1", Store: store})
 	if err != nil {
 		t.Fatalf("NewIngestServer: %v", err)
 	}
@@ -55,10 +55,7 @@ func waitForTail(t *testing.T, store *Store, sandboxID, sessionID string, want i
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		got, err := store.Tail(sandboxID, sessionID, 0)
-		if err != nil {
-			t.Fatalf("Tail: %v", err)
-		}
+		got := mustTail(t, store, sandboxID, sessionID, 0)
 		if len(got) >= want || time.Now().After(deadline) {
 			return got
 		}
@@ -70,7 +67,7 @@ func waitForTail(t *testing.T, store *Store, sandboxID, sessionID string, want i
 // neither an unparseable line, a blank line, nor an oversized one may drop
 // the rest of the stream or fail the request.
 func TestIngestPersistsAndSurvivesBadLines(t *testing.T) {
-	base, store := startTestIngest(t, "")
+	base, store := startTestIngest(t)
 	body := strings.Join([]string{
 		encodeLine(t, toolEvent("sbx", "sess", "first", 1)),
 		"{not json",
@@ -95,35 +92,21 @@ func TestIngestPersistsAndSurvivesBadLines(t *testing.T) {
 // An event whose ids the store refuses must be dropped, not written and not
 // fatal to the request.
 func TestIngestDropsEventsWithInvalidIDs(t *testing.T) {
-	base, store := startTestIngest(t, "")
+	base, store := startTestIngest(t)
 	resp := post(t, base+"/ingest", "application/x-ndjson",
 		encodeLine(t, toolEvent("../escape", "sess", "x", 1))+"\n")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /ingest = %d, want 200", resp.StatusCode)
 	}
 	time.Sleep(20 * time.Millisecond)
-	metas, err := store.List()
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
+	metas := mustList(t, store)
 	if len(metas) != 0 {
 		t.Fatalf("stored %d streams, want none", len(metas))
 	}
 }
 
-func TestIngestFilterDropsNonMatchingStreams(t *testing.T) {
-	base, store := startTestIngest(t, "keep")
-	body := encodeLine(t, toolEvent("keep-me", "sess", "yes", 1)) + "\n" +
-		encodeLine(t, toolEvent("other", "sess", "no", 1)) + "\n"
-	post(t, base+"/ingest", "application/x-ndjson", body)
-	waitForTail(t, store, "keep-me", "sess", 1)
-	if got, _ := store.Tail("other", "sess", 0); len(got) != 0 {
-		t.Fatalf("filtered stream stored %d events, want 0", len(got))
-	}
-}
-
 func TestIngestBlobEndpointVerifiesHash(t *testing.T) {
-	base, store := startTestIngest(t, "")
+	base, store := startTestIngest(t)
 	text := "full tool output"
 	resp := post(t, base+"/blob", "application/json",
 		fmt.Sprintf(`{"hash":%q,"bytes":%d,"text":%q}`, hashOf(text), len(text), text))
@@ -147,28 +130,11 @@ func TestIngestBlobEndpointVerifiesHash(t *testing.T) {
 	}
 }
 
-// The ingest endpoint carries full agent context and tool output with NO
-// auth, so the default bind must be loopback and nothing else.
-func TestIngestBindsLoopbackByDefault(t *testing.T) {
-	store := newTestStore(t, StoreConfig{})
-	srv, err := NewIngestServer(IngestConfig{Port: 0, Store: store})
-	if err != nil {
-		t.Fatalf("NewIngestServer: %v", err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go srv.Serve(ctx) //nolint:errcheck // shutdown path is covered elsewhere
-	host, _, err := net.SplitHostPort(srv.Addr())
-	if err != nil {
-		t.Fatalf("SplitHostPort(%q): %v", srv.Addr(), err)
-	}
-	ip := net.ParseIP(host)
-	if ip == nil || !ip.IsLoopback() {
-		t.Fatalf("default bind is %q, want a loopback address", host)
-	}
-}
-
-func TestNewIngestServerRequiresStoreAndReportsBindFailure(t *testing.T) {
+// The constructor contract, in one place: Store is required, the default
+// bind is LOOPBACK (this endpoint carries full agent context and tool output
+// with no auth), and a taken port is reported HERE rather than
+// asynchronously from Serve — which is why it binds eagerly.
+func TestNewIngestServerRequiresStoreBindsLoopbackAndReportsBindFailure(t *testing.T) {
 	if _, err := NewIngestServer(IngestConfig{Port: 0}); err == nil {
 		t.Fatal("NewIngestServer with no Store = nil error, want an error")
 	}
@@ -181,17 +147,21 @@ func TestNewIngestServerRequiresStoreAndReportsBindFailure(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- first.Serve(ctx) }()
-	_, port, err := net.SplitHostPort(first.Addr())
+
+	host, port, err := net.SplitHostPort(first.Addr())
 	if err != nil {
-		t.Fatalf("SplitHostPort: %v", err)
+		t.Fatalf("SplitHostPort(%q): %v", first.Addr(), err)
+	}
+	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
+		t.Fatalf("default bind is %q, want a loopback address", host)
 	}
 	var n int
 	fmt.Sscanf(port, "%d", &n)
-	// The port is taken, so the CONSTRUCTOR must report it — that is why it
-	// binds eagerly instead of failing asynchronously inside Serve.
 	if _, err := NewIngestServer(IngestConfig{Port: n, Store: store}); err == nil {
 		t.Fatal("NewIngestServer on a taken port = nil error, want a bind error")
 	}
 	cancel()
-	<-done
+	if err := <-done; err != nil {
+		t.Errorf("Serve returned %v after shutdown, want nil", err)
+	}
 }

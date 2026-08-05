@@ -3,7 +3,7 @@ package monitor
 // follow.go is the reader half: poll the store, print each new event as one
 // concise line (or its raw stored JSON). It lives here, not in cmd/pix, so
 // the CLI stays argv parsing plus wiring and the printed form is testable
-// against the store without a process.
+// without a process.
 
 import (
 	"context"
@@ -24,9 +24,9 @@ type FollowConfig struct {
 	Out    io.Writer
 }
 
-// Follow prints every event already stored, then each new one until ctx is
-// done. Read errors are transient by nature (a file trimmed under us) and
-// are skipped, not fatal.
+// Follow prints every stored event, then each new one until ctx is done.
+// Read errors are transient by nature (a file trimmed under us), so they are
+// skipped, not fatal.
 func Follow(ctx context.Context, store *Store, cfg FollowConfig) {
 	const pollInterval = 150 * time.Millisecond
 	printed := map[string]int{} // stream -> events already printed
@@ -36,22 +36,19 @@ func Follow(ctx context.Context, store *Store, cfg FollowConfig) {
 			return
 		}
 		for _, m := range metas {
-			if cfg.Filter != "" && !strings.Contains(m.SandboxID, cfg.Filter) && !strings.Contains(m.SessionID, cfg.Filter) {
+			if f := cfg.Filter; f != "" && !strings.Contains(m.SandboxID, f) && !strings.Contains(m.SessionID, f) {
 				continue
 			}
 			events, err := store.Tail(m.SandboxID, m.SessionID, 0)
 			if err != nil {
 				continue
 			}
-			already := printed[m.Dir]
-			for _, e := range events[min(already, len(events)):] {
-				if cfg.JSON {
-					if line, err := Encode(e); err == nil {
-						fmt.Fprintln(cfg.Out, string(line))
-					}
-					continue
+			for _, e := range events[min(printed[m.Dir], len(events)):] {
+				if !cfg.JSON {
+					fmt.Fprintln(cfg.Out, concise(e, cfg.TTY))
+				} else if line, err := Encode(e); err == nil {
+					fmt.Fprintln(cfg.Out, string(line))
 				}
-				fmt.Fprintln(cfg.Out, concise(e, cfg.TTY))
 			}
 			printed[m.Dir] = len(events)
 		}
@@ -94,7 +91,7 @@ func concise(e Event, tty bool) string {
 		if !v.OK {
 			ok = "FAIL"
 		}
-		detail = fmt.Sprintf("%s %s %dms", ok, HumanBytes(int64(v.ResultBytes)), v.DurationMs)
+		detail = fmt.Sprintf("%s %s %dms", ok, humanBytes(int64(v.ResultBytes)), v.DurationMs)
 	case ContextEvent:
 		kind = "ctx"
 		detail = fmt.Sprintf("%s %s", v.CtxKind, v.Detail)
@@ -111,10 +108,8 @@ func concise(e Event, tty bool) string {
 	return fmt.Sprintf("%s %s %s %s", time.UnixMilli(env.TS).UTC().Format("15:04:05"), label, kind, detail)
 }
 
-// HumanBytes renders a byte count in the largest unit that keeps it under
-// 1024. Shared with workflow/doctor and workflow/reset, because a second
-// copy is how two renderers come to disagree about what "1.0MB" means.
-func HumanBytes(n int64) string {
+// humanBytes renders a byte count in the largest unit under 1024.
+func humanBytes(n int64) string {
 	const unit = 1024
 	if n < unit {
 		return fmt.Sprintf("%dB", n)

@@ -46,17 +46,19 @@ func (b *lockedBuffer) String() string {
 	return b.buf.String()
 }
 
-func TestFollowPrintsConciseLinesForStoredEvents(t *testing.T) {
+func TestFollowPrintsStoredEventsConciselyOrAsRawJSON(t *testing.T) {
 	store := newTestStore(t, StoreConfig{})
-	if err := store.Append(toolEvent("sbx", "sess", "ls -l", 1)); err != nil {
-		t.Fatalf("Append: %v", err)
-	}
+	mustAppend(t, store, toolEvent("sbx", "sess", "ls -l", 1))
 	out := followUntil(t, store, FollowConfig{}, "tool_end")
 	if !strings.Contains(out, "sbx/sess") {
 		t.Errorf("output %q, want the stream label", out)
 	}
 	if strings.Contains(out, "\x1b[") {
 		t.Errorf("non-TTY output %q must carry no ANSI escapes", out)
+	}
+	raw := followUntil(t, store, FollowConfig{JSON: true}, `"kind":"tool_end"`)
+	if !strings.Contains(raw, `"sandboxId":"sbx"`) {
+		t.Errorf("json output %q, want the raw stored event", raw)
 	}
 }
 
@@ -77,25 +79,10 @@ func stripANSI(s string) string {
 	return strings.NewReplacer("\x1b[1m", "", "\x1b[0m", "").Replace(s)
 }
 
-func TestFollowJSONModeEmitsTheStoredEventVerbatim(t *testing.T) {
-	store := newTestStore(t, StoreConfig{})
-	if err := store.Append(toolEvent("sbx", "sess", "x", 1)); err != nil {
-		t.Fatalf("Append: %v", err)
-	}
-	out := followUntil(t, store, FollowConfig{JSON: true}, `"kind":"tool_end"`)
-	if !strings.Contains(out, `"sandboxId":"sbx"`) {
-		t.Errorf("json output %q, want the raw stored event", out)
-	}
-}
-
 func TestFollowFilterSelectsStreams(t *testing.T) {
 	store := newTestStore(t, StoreConfig{})
-	if err := store.Append(toolEvent("keep-me", "sess", "kept", 1)); err != nil {
-		t.Fatalf("Append: %v", err)
-	}
-	if err := store.Append(toolEvent("other", "sess", "dropped", 1)); err != nil {
-		t.Fatalf("Append: %v", err)
-	}
+	mustAppend(t, store, toolEvent("keep-me", "sess", "kept", 1))
+	mustAppend(t, store, toolEvent("other", "sess", "dropped", 1))
 	out := followUntil(t, store, FollowConfig{Filter: "keep"}, "keep-me/sess")
 	if strings.Contains(out, "other/sess") {
 		t.Errorf("output %q includes a non-matching stream", out)
@@ -105,8 +92,8 @@ func TestFollowFilterSelectsStreams(t *testing.T) {
 func TestHumanBytes(t *testing.T) {
 	cases := map[int64]string{0: "0B", 512: "512B", 1024: "1.0KB", 1536: "1.5KB", 5 << 20: "5.0MB"}
 	for n, want := range cases {
-		if got := HumanBytes(n); got != want {
-			t.Errorf("HumanBytes(%d) = %q, want %q", n, got, want)
+		if got := humanBytes(n); got != want {
+			t.Errorf("humanBytes(%d) = %q, want %q", n, got, want)
 		}
 	}
 }
