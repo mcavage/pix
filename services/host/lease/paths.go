@@ -12,10 +12,6 @@ import (
 	"syscall"
 )
 
-// instanceIDRE is an ALLOWLIST, not a denylist of "..": only
-// [A-Za-z0-9._-], starting with an alphanumeric, capped at 128 bytes. An
-// allowlist is the traversal/symlink-adjacent refusal that survives a
-// creative encoding a denylist would miss.
 var instanceIDRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
 // ValidateInstanceID rejects any instance ID that could traverse or escape a
@@ -38,11 +34,6 @@ func ValidateInstanceID(id string) error {
 	return nil
 }
 
-// SandboxDir resolves the per-sandbox lease directory for id under root. It
-// refuses to return a path that escapes root even after Clean — belt and
-// suspenders alongside ValidateInstanceID, since the two checks guard
-// different attack shapes (charset vs. lexical join with a root that
-// happens to end oddly).
 func SandboxDir(root, id string) (string, error) {
 	if err := ValidateInstanceID(id); err != nil {
 		return "", err
@@ -71,12 +62,6 @@ func refuseSymlink(path string) error {
 	return nil
 }
 
-// EnsureSandboxDir creates dir 0700 if absent (the same TOCTOU-safe,
-// symlink-refusing create CreateRecord performs internally before writing),
-// exported for a caller that needs a lease directory to exist for a
-// dir-level operation — Open, SetKeep — that itself writes no record. A
-// caller that goes on to CreateRecord does not need this first; CreateRecord
-// calls the same guarded path itself.
 func EnsureSandboxDir(dir string) error { return ensureSandboxDir(dir) }
 
 // ensureSandboxDir creates dir 0700 if absent, refusing to create through or
@@ -110,13 +95,6 @@ func ensureSandboxDir(dir string) error {
 	return nil
 }
 
-// openNoFollow opens path with flag|O_NOFOLLOW|O_CLOEXEC via a raw syscall
-// (not os.OpenFile), because O_NOFOLLOW has no os-package equivalent. Setting
-// O_CLOEXEC explicitly here matters precisely BECAUSE this bypasses
-// os.OpenFile: the os package would have set it automatically (see
-// os/file_unix.go), but a raw syscall.Open does not, so every leaf file this
-// package touches must ask for it by hand. A pre-existing symlink at path is
-// refused as ELOOP, translated into a plain error, never followed.
 func openNoFollow(path string, flag int, perm os.FileMode) (*os.File, error) {
 	fd, err := syscall.Open(path, flag|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, uint32(perm))
 	if err != nil {
@@ -126,16 +104,4 @@ func openNoFollow(path string, flag int, perm os.FileMode) (*os.File, error) {
 		return nil, &os.PathError{Op: "open", Path: path, Err: err}
 	}
 	return os.NewFile(uintptr(fd), path), nil
-}
-
-// fcntlGetFD returns the raw fd flags (F_GETFD) for fd — exported at package
-// scope (rather than buried in _test.go) because it is the same primitive
-// production code could use to assert its own invariant, not just a test
-// helper reaching into internals.
-func fcntlGetFD(fd uintptr) (int, error) {
-	r, _, errno := syscall.Syscall(syscall.SYS_FCNTL, fd, uintptr(syscall.F_GETFD), 0)
-	if errno != 0 {
-		return 0, errno
-	}
-	return int(r), nil
 }

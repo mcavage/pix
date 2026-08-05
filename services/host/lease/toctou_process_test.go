@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -39,7 +40,7 @@ func init() {
 func helperOpenThenAcquire() {
 	dir := os.Getenv("LEASE_HELPER_DIR")
 	mode := os.Getenv("LEASE_HELPER_MODE")
-	l, err := Open(dir)
+	l, err := OpenRefLease(dir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "helper Open: %v\n", err)
 		os.Exit(1)
@@ -59,7 +60,7 @@ func helperOpenThenAcquire() {
 	case "sh":
 		err = l.AcquireShared(ctx)
 	case "ex":
-		err = l.AcquireExclusive(ctx)
+		err = l.h.acquireValidated(ctx, syscall.LOCK_EX)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown LEASE_HELPER_MODE=%s\n", mode)
 		os.Exit(2)
@@ -82,7 +83,7 @@ func testRealProcessUnlinkRecreateBetweenOpenAndAcquire(t *testing.T, mode strin
 	dir := mustDir(t)
 	// Learn the real path up front, from this (parent) process, without
 	// disturbing anything the child will open.
-	probe, err := Open(dir)
+	probe, err := OpenRefLease(dir)
 	if err != nil {
 		t.Fatalf("Open probe: %v", err)
 	}
@@ -149,7 +150,7 @@ func testRealProcessUnlinkRecreateBetweenOpenAndAcquire(t *testing.T, mode strin
 		t.Fatalf("helper exit: %v", err)
 	}
 
-	prober, err := Open(dir)
+	prober, err := OpenRefLease(dir)
 	if err != nil {
 		t.Fatalf("Open prober: %v", err)
 	}
@@ -177,7 +178,7 @@ func TestRealProcess_UnlinkRecreateBetweenOpenAndAcquire_Exclusive(t *testing.T)
 // double-holder outcome this fix exists to prevent.
 func TestRealProcess_TwoProcessesSerializeAcrossRecreate(t *testing.T) {
 	dir := mustDir(t)
-	probe, err := Open(dir)
+	probe, err := OpenRefLease(dir)
 	if err != nil {
 		t.Fatalf("Open probe: %v", err)
 	}

@@ -79,7 +79,7 @@ exit 1
 `)
 	key := SessionName(t.TempDir())
 	stored := []string{"--skill", "/opt/skills", "--model", "anthropic/claude-sonnet-5"}
-	if err := WriteSessionInvocation(key, stored); err != nil {
+	if err := writeSessionState(key, sessionInvocationFileName, stored); err != nil {
 		t.Fatalf("WriteSessionInvocation: %v", err)
 	}
 
@@ -88,7 +88,7 @@ exit 1
 		t.Fatalf("expected a positively identified running row, got ok=%v found=%v", ok, found)
 	}
 
-	invocation, has := ReadSessionInvocation(key)
+	invocation, has := readSessionInvocation(key)
 	if !has {
 		t.Fatal("expected the stored invocation to be readable back")
 	}
@@ -122,7 +122,7 @@ fi
 exit 1
 `)
 	key := SessionName(t.TempDir())
-	if _, has := ReadSessionInvocation(key); has {
+	if _, has := readSessionInvocation(key); has {
 		t.Fatal("precondition: nothing should be stored yet")
 	}
 	_, ok := FindPositivelyIdentifiedRunning(realEnv(), "pix-legacy")

@@ -11,14 +11,14 @@ import (
 	"time"
 )
 
-func mustOpenLease(t *testing.T) (*Lease, string) {
+func mustOpenLease(t *testing.T) (*RefLease, string) {
 	t.Helper()
 	root := t.TempDir()
 	dir := filepath.Join(root, "sbx-1")
 	if _, err := CreateRecord(dir, "sbx-1"); err != nil {
 		t.Fatalf("CreateRecord: %v", err)
 	}
-	l, err := Open(dir)
+	l, err := OpenRefLease(dir)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestOpen_Creates0600LockFile(t *testing.T) {
 
 func TestOpen_RefusesMissingDir(t *testing.T) {
 	root := t.TempDir()
-	if _, err := Open(filepath.Join(root, "never-created")); err == nil {
+	if _, err := OpenRefLease(filepath.Join(root, "never-created")); err == nil {
 		t.Error("Open on a nonexistent dir = nil error, want error")
 	}
 }
@@ -54,7 +54,7 @@ func TestOpen_RefusesSymlinkDir(t *testing.T) {
 	if err := os.Symlink(outside, link); err != nil {
 		t.Fatalf("Symlink: %v", err)
 	}
-	if _, err := Open(link); err == nil {
+	if _, err := OpenRefLease(link); err == nil {
 		t.Error("Open on a symlinked dir = nil error, want refusal")
 	}
 }
@@ -68,12 +68,12 @@ func TestTryExclusive_SucceedsWithZeroHolders(t *testing.T) {
 
 func TestSharedThenSharedBothSucceed(t *testing.T) {
 	dir := mustDir(t)
-	a, err := Open(dir)
+	a, err := OpenRefLease(dir)
 	if err != nil {
 		t.Fatalf("Open a: %v", err)
 	}
 	defer a.Close()
-	b, err := Open(dir)
+	b, err := OpenRefLease(dir)
 	if err != nil {
 		t.Fatalf("Open b: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestSharedThenSharedBothSucceed(t *testing.T) {
 
 func TestTryExclusive_FailsWhileSharedHeld(t *testing.T) {
 	dir := mustDir(t)
-	holder, err := Open(dir)
+	holder, err := OpenRefLease(dir)
 	if err != nil {
 		t.Fatalf("Open holder: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestTryExclusive_FailsWhileSharedHeld(t *testing.T) {
 		t.Fatalf("AcquireShared: %v", err)
 	}
 
-	prober, err := Open(dir)
+	prober, err := OpenRefLease(dir)
 	if err != nil {
 		t.Fatalf("Open prober: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestTryExclusive_FailsWhileSharedHeld(t *testing.T) {
 
 func TestTryExclusive_SucceedsAfterSharedReleased(t *testing.T) {
 	dir := mustDir(t)
-	holder, err := Open(dir)
+	holder, err := OpenRefLease(dir)
 	if err != nil {
 		t.Fatalf("Open holder: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestTryExclusive_SucceedsAfterSharedReleased(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	prober, err := Open(dir)
+	prober, err := OpenRefLease(dir)
 	if err != nil {
 		t.Fatalf("Open prober: %v", err)
 	}
@@ -139,45 +139,9 @@ func TestTryExclusive_SucceedsAfterSharedReleased(t *testing.T) {
 	}
 }
 
-func TestAcquireExclusive_DeadlineExceededWhileHeld(t *testing.T) {
-	dir := mustDir(t)
-	holder, err := Open(dir)
-	if err != nil {
-		t.Fatalf("Open holder: %v", err)
-	}
-	defer holder.Close()
-	if err := holder.TryExclusive(); err != nil {
-		t.Fatalf("holder TryExclusive: %v", err)
-	}
-
-	waiter, err := Open(dir)
-	if err != nil {
-		t.Fatalf("Open waiter: %v", err)
-	}
-	defer waiter.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-	start := time.Now()
-	err = waiter.AcquireExclusive(ctx)
-	elapsed := time.Since(start)
-	if err == nil {
-		t.Fatal("AcquireExclusive against a held exclusive lock = nil, want deadline error")
-	}
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("AcquireExclusive error = %v, want wrapping context.DeadlineExceeded", err)
-	}
-	if elapsed < 90*time.Millisecond {
-		t.Errorf("AcquireExclusive returned after %v, want roughly the 100ms deadline", elapsed)
-	}
-	if elapsed > 2*time.Second {
-		t.Errorf("AcquireExclusive returned after %v, deadline bound was not honored", elapsed)
-	}
-}
-
 func TestAcquireShared_SucceedsOnceExclusiveReleased(t *testing.T) {
 	dir := mustDir(t)
-	holder, err := Open(dir)
+	holder, err := OpenRefLease(dir)
 	if err != nil {
 		t.Fatalf("Open holder: %v", err)
 	}
@@ -185,7 +149,7 @@ func TestAcquireShared_SucceedsOnceExclusiveReleased(t *testing.T) {
 		t.Fatalf("holder TryExclusive: %v", err)
 	}
 
-	waiter, err := Open(dir)
+	waiter, err := OpenRefLease(dir)
 	if err != nil {
 		t.Fatalf("Open waiter: %v", err)
 	}

@@ -80,7 +80,7 @@ func TestSessionName_DeterministicDigest(t *testing.T) {
 // the config dir — AGENTS.md safety invariant #4) and is 0700.
 func TestLeaseDirFor_ModesAndRoot(t *testing.T) {
 	isolateState(t)
-	dir, err := LeaseDirFor(SessionName(t.TempDir()))
+	dir, err := leaseDirFor(SessionName(t.TempDir()))
 	if err != nil {
 		t.Fatalf("LeaseDirFor: %v", err)
 	}
@@ -115,7 +115,7 @@ exit 1
 	if err != nil || !recorded {
 		t.Fatalf("RecordSessionCreation = (%v, %v), want (true, nil)", recorded, err)
 	}
-	dir, err := LeaseDirFor(key)
+	dir, err := leaseDirFor(key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ exit 1
 	if diverged, found := CheckSessionFingerprint(key, fp); !found || len(diverged) > 0 {
 		t.Errorf("fingerprint round-trip: found=%v diverged=%v", found, diverged)
 	}
-	inv, found := ReadSessionInvocation(key)
+	inv, found := readSessionInvocation(key)
 	if !found || strings.Join(inv, " ") != "--model m" {
 		t.Errorf("invocation round-trip = %v (found %v)", inv, found)
 	}
@@ -174,7 +174,7 @@ exit 1
 func TestReadSessionInvocation_CorruptIsMissing(t *testing.T) {
 	isolateState(t)
 	key := SessionName(t.TempDir())
-	dir, err := LeaseDirFor(key)
+	dir, err := leaseDirFor(key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestReadSessionInvocation_CorruptIsMissing(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if inv, found := ReadSessionInvocation(key); found {
+	if inv, found := readSessionInvocation(key); found {
 		t.Errorf("corrupt invocation reported as found (%v)", inv)
 	}
 	if _, found := CheckSessionFingerprint(key, sandbox.Fingerprint{"a": "b"}); found {
@@ -269,7 +269,7 @@ exit 0
 `)
 	ws := t.TempDir()
 	key := SessionName(ws)
-	if err := WriteSessionFingerprint(key, sandbox.Fingerprint{"static_mcp": "slack"}); err != nil {
+	if err := writeSessionState(key, sessionFingerprintFileName, sandbox.Fingerprint{"static_mcp": "slack"}); err != nil {
 		t.Fatal(err)
 	}
 	err := RunSession(SessionSpec{
@@ -309,7 +309,7 @@ exit 0
 	}, SessionDeps{Env: realEnv(), Poll: SbxCreatePoll(realEnv()), Warn: &warn, Spawn: fixtureSpawn(t)}); err != nil {
 		t.Fatalf("RunSession: %v", err)
 	}
-	dir, err := LeaseDirFor(key)
+	dir, err := leaseDirFor(key)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -74,7 +74,7 @@ func TestHelperProcess(t *testing.T) {
 func helperHold() {
 	dir := os.Getenv("LEASE_HELPER_DIR")
 	mode := os.Getenv("LEASE_HELPER_MODE")
-	l, err := Open(dir)
+	l, err := OpenRefLease(dir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "helper Open: %v\n", err)
 		os.Exit(1)
@@ -85,7 +85,7 @@ func helperHold() {
 	case "sh":
 		err = l.AcquireShared(ctx)
 	case "ex":
-		err = l.AcquireExclusive(ctx)
+		err = l.h.acquireValidated(ctx, syscall.LOCK_EX)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown LEASE_HELPER_MODE=%s\n", mode)
 		os.Exit(2)
@@ -181,7 +181,7 @@ func TestSIGKILL_ReleasesLock(t *testing.T) {
 		t.Fatalf("helper said %q, want ACQUIRED", line)
 	}
 
-	prober, err := Open(dir)
+	prober, err := OpenRefLease(dir)
 	if err != nil {
 		t.Fatalf("Open prober: %v", err)
 	}
@@ -197,10 +197,8 @@ func TestSIGKILL_ReleasesLock(t *testing.T) {
 		t.Fatal("Wait on a SIGKILLed process returned nil, want a signal-exit error")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if err := prober.AcquireExclusive(ctx); err != nil {
-		t.Fatalf("AcquireExclusive after SIGKILLing the exclusive holder = %v, want success (kernel releases flock on process death)", err)
+	if err := prober.TryExclusive(); err != nil {
+		t.Fatalf("TryExclusive after SIGKILLing the exclusive holder = %v, want success (kernel releases flock on process death)", err)
 	}
 }
 
@@ -212,7 +210,7 @@ func TestSIGKILL_ReleasesLock(t *testing.T) {
 // opened through this package's openNoFollow, does not appear at all.
 func TestCLOEXEC_ChildDoesNotInheritLeaseFd(t *testing.T) {
 	dir := mustDir(t)
-	l, err := Open(dir)
+	l, err := OpenRefLease(dir)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -306,7 +304,7 @@ func TestEightHolders_RaceThenZeroHolderProof(t *testing.T) {
 		}
 	}
 
-	prober, err := Open(dir)
+	prober, err := OpenRefLease(dir)
 	if err != nil {
 		t.Fatalf("Open prober: %v", err)
 	}
@@ -324,9 +322,7 @@ func TestEightHolders_RaceThenZeroHolderProof(t *testing.T) {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if err := prober.AcquireExclusive(ctx); err != nil {
-		t.Fatalf("AcquireExclusive after all %d holders released = %v, want success (zero-holder proof)", n, err)
+	if err := prober.TryExclusive(); err != nil {
+		t.Fatalf("TryExclusive after all %d holders released = %v, want success (zero-holder proof)", n, err)
 	}
 }

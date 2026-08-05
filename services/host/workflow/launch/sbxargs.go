@@ -11,19 +11,12 @@ import (
 	"pix/host/sys"
 )
 
-// kitRepo is the canonical git-hosted kit source. The launcher pins it to the
-// stamped version so a consumer's `pix run` resolves the exact image/kit that
-// was published for this launcher build.
 const kitRepo = "git+https://github.com/mcavage/pix.git"
 
 // DockerImageRepo is the published image repo. A local build pins a locally
 // loaded tag from <repo>/out/.local-image-tag via --template.
 const DockerImageRepo = "docker.io/mcavage/pix"
 
-// RunOpts carries everything the arg builder needs, resolved by the caller. It
-// is deliberately side-effect-free (no filesystem probing, no token minting) so
-// BuildSbxArgs stays a pure function the tests can drive without sbx or a real
-// config on disk.
 type RunOpts struct {
 	Workspace     string   // positional DIR (default ".")
 	Dev           bool     // --dev: Mode B, skills load live from a repo checkout
@@ -33,56 +26,29 @@ type RunOpts struct {
 	Template      string   // --template REF: explicit image override; works from ANY directory and beats LocalImageTag
 	Skills        []string // --skills DIR: extra live skill trees
 	Kits          []string // --kit K: escape hatch. When present they REPLACE the auto git/local pin, then the config stack applies.
-	// KitRef steers the AUTO pin's git ref (e.g. "v0.1.2", "main"), resolved by
-	// the caller via ResolveKitRef. Empty means this build's stamped version.
-	// Distinct from Kits, which replaces the pin outright.
-	KitRef    string
-	MCP       []string // --mcp M: extra servers on top of config.MCP (folded into StaticMCP by the caller)
-	StaticMCP []string // RESOLVED create-time set, emitted as --static-mcp (mcp.AllPreloadedMCP of cfg.MCP+MCP)
-	Name      string   // --name N: sandbox name
-	Model     string   // --model M: active pi model (passed through to pi)
-	Models    []string // create-time callable model cycle, derived from probed bindings
-	Intent    string   // --intent NAME: resolve the session model via the router (unless --model overrides)
-	Pack      string   // --pack PATH: active pack for this run (overrides config.Pack)
+	KitRef        string
+	MCP           []string // --mcp M: extra servers on top of config.MCP (folded into StaticMCP by the caller)
+	StaticMCP     []string // RESOLVED create-time set, emitted as --static-mcp (mcp.AllPreloadedMCP of cfg.MCP+MCP)
+	Name          string   // --name N: sandbox name
+	Model         string   // --model M: active pi model (passed through to pi)
+	Models        []string // create-time callable model cycle, derived from probed bindings
+	Intent        string   // --intent NAME: resolve the session model via the router (unless --model overrides)
+	Pack          string   // --pack PATH: active pack for this run (overrides config.Pack)
 	// Keep is -k/--keep: bind a sticky, identity-bound keep marker to this
-	// session — what the last-shell teardown and the orphan sweep refuse on
-	// (see reap.go's TeardownKeptKeep).
-	Keep bool
-	// PackKits are ephemeral mixin kit dir(s) synthesized from the active pack's
-	// bin/ wrappers. Deliberately SEPARATE from Kits: a non-empty Kits is the
-	// escape hatch that REPLACES the base pin, and a pack mixin must stack
-	// alongside the base kit, never suppress it.
+	// session — what the teardown and the orphan sweep refuse on.
+	Keep        bool
 	PackKits    []string
 	Passthrough []string // args after `--`, handed straight to pi
-	// Token is the credential bearer for an OPTIONAL external credential broker
-	// plugin, reserved for the dormant generic broker seam. The default path
-	// leaves it empty; it would travel via the sbx child env, never argv.
-	Token string
+	Token       string
 }
 
-// gitKitURLRef is the full --kit URL for an ALREADY-RESOLVED ref, which may be
-// a release tag this binary was not stamped with.
-func gitKitURLRef(ref string) string {
+func gitKitURLRef(ref, version string) string {
+	if ref == "" {
+		ref = launcher.KitRef(version)
+	}
 	return kitRepo + "#ref=" + ref + "&dir=pi-kit"
 }
 
-// refOrStamped falls back to this build's own ref when nothing overrode it, so
-// every failure path in the resolver lands on the original lockstep behaviour.
-func refOrStamped(ref, version string) string {
-	if ref != "" {
-		return ref
-	}
-	return launcher.KitRef(version)
-}
-
-// localImageRef is the --template ref for a locally loaded image tag.
-func localImageRef(tag string) string {
-	return DockerImageRepo + ":" + tag
-}
-
-// TemplateTag returns the tag portion of a --template image ref (everything
-// after the final ':'), or "" if the ref carries no tag. Splitting on the LAST
-// colon keeps a registry port (localhost:5000/foo:tag) from confusing it.
 func TemplateTag(ref string) string {
 	i := strings.LastIndexByte(ref, ':')
 	if i < 0 || strings.IndexByte(ref[i:], '/') >= 0 {
@@ -112,14 +78,14 @@ func BuildSbxArgs(cfg *config.Config, o RunOpts, version string) []string {
 	if o.Template != "" {
 		args = append(args, "--template", o.Template)
 	} else if !kitOverride && o.LocalKit != "" && o.LocalImageTag != "" {
-		args = append(args, "--template", localImageRef(o.LocalImageTag))
+		args = append(args, "--template", DockerImageRepo+":"+o.LocalImageTag)
 	}
 
 	if !kitOverride {
 		if o.LocalKit != "" {
 			args = append(args, "--kit", o.LocalKit)
 		} else {
-			args = append(args, "--kit", gitKitURLRef(refOrStamped(o.KitRef, version)))
+			args = append(args, "--kit", gitKitURLRef(o.KitRef, version))
 		}
 	}
 	// User --kit flags are the base when present; pack-synthesized kits ALWAYS
@@ -142,10 +108,6 @@ func BuildSbxArgs(cfg *config.Config, o RunOpts, version string) []string {
 		args = append(args, "--static-mcp", m)
 	}
 
-	// The default path forwards NO credential bearer: gog authenticates on the
-	// host inside the gateway-spawned MCP server. A future broker's o.Token
-	// would go via the sbx child ENV, never argv (which `ps`/EDR can read).
-
 	// Workspace (first non-flag positional).
 	args = append(args, o.Workspace)
 
@@ -157,9 +119,8 @@ func BuildSbxArgs(cfg *config.Config, o RunOpts, version string) []string {
 		args = append(args, filepath.Join(o.DevRoot, "skills"))
 	}
 
-	// pi passthrough args (after `--`), the SAME builder a later attach's
-	// stored (or, absent a record, freshly recomputed) invocation reuses — see
-	// BuildPiInvocation.
+	// pi passthrough args (after `--`), from the SAME builder a later attach's
+	// stored (or freshly recomputed) invocation reuses.
 	if piArgs := BuildPiInvocation(liveSkills, o); len(piArgs) > 0 {
 		args = append(args, "--")
 		args = append(args, piArgs...)
@@ -168,10 +129,6 @@ func BuildSbxArgs(cfg *config.Config, o RunOpts, version string) []string {
 }
 
 // LiveSkillDirs is the ordered set of extra skill trees a launch mounts:
-// config's own Skills.Paths, the personal context dir (only when it has
-// entries), then any --skills flags. Extracted from BuildSbxArgs so the SAME
-// list feeds both the create-time mount args and BuildPiInvocation's "--"
-// tail — one list, never two that could drift apart.
 func LiveSkillDirs(cfg *config.Config, o RunOpts) []string {
 	liveSkills := append([]string(nil), cfg.Skills.Paths...)
 	if personal := filepath.Join(config.ContextDir(), "skills"); sys.DirHasEntries(personal) {
@@ -181,21 +138,6 @@ func LiveSkillDirs(cfg *config.Config, o RunOpts) []string {
 	return liveSkills
 }
 
-// BuildPiInvocation composes the pi argv a launch sends after "--": the pi
-// COMMAND, not the sbx wrapper around it. It is deliberately the ONE place
-// this is built, used for THREE callers that must never drift apart:
-//   - BuildSbxArgs' own "--" tail on create,
-//   - the invocation STORED at create time (session.WriteSessionInvocation),
-//     replayed verbatim by a later `sbx exec ... pi <invocation>` attach, and
-//   - the "safe current/default invocation" a caller recomputes on the spot
-//     when an attach finds no stored record (a legacy or never-owned
-//     sandbox) — same inputs, same function, so "default" can never mean
-//     something subtly different from what create would have sent.
-//
-// liveSkills is passed in (rather than recomputed from cfg) so a caller that
-// already has it (BuildSbxArgs) does not pay for or risk desyncing a second
-// LiveSkillDirs call; a caller building a fresh default passes
-// LiveSkillDirs(cfg, o) itself.
 func BuildPiInvocation(liveSkills []string, o RunOpts) []string {
 	var piArgs []string
 	if o.Dev {
@@ -221,9 +163,6 @@ func BuildPiInvocation(liveSkills []string, o RunOpts) []string {
 // command from the container's own spec, with an explicit exec pix fully
 // controls. tty selects "-it" (interactive) vs "-i" (piped/scripted), the
 // same convention sandbox.ExecOpts/CreateOpts already use everywhere else.
-// A sandbox sbx cannot verify (unschema'd row) or that is merely STOPPED
-// still uses the legacy BuildReattachArgs path — exec has no "start" of its
-// own, and this package plans no destructive fallback for that case.
 func BuildAttachArgv(name string, tty bool, invocation []string) ([]string, error) {
 	return sandbox.ExecArgv(sandbox.ExecOpts{
 		Name:    name,
@@ -232,11 +171,6 @@ func BuildAttachArgv(name string, tty bool, invocation []string) ([]string, erro
 	})
 }
 
-// RunLaunchPlan is the OUTCOME of the create-vs-attach decision. Err is set
-// ONLY for the fail-closed unknown-state case: a non-nil Err means Args and
-// Reattach are meaningless zero values, and the caller MUST check it before
-// printing anything that claims a launch is happening and before exec'ing sbx
-// at all.
 type RunLaunchPlan struct {
 	Args     []string // sbx argv (after "sbx")
 	Reattach bool     // Args is the thin re-attach form, not a full create
@@ -246,20 +180,6 @@ type RunLaunchPlan struct {
 // PlanSandboxLaunch is the pure decision at the heart of `pix run`'s lifecycle,
 // matching sbx's own re-attach model: a create-only flag (--kit/--template/
 // --static-mcp) only makes sense when the sandbox does not already exist.
-//
-//   - absent -> CREATE: the full BuildSbxArgs.
-//   - running or stopped -> ATTACH (BuildReattachArgs, or the `sbx exec` form
-//     the session layer substitutes under the lifecycle lock).
-//   - unknown -> FAIL CLOSED: never guess create vs attach. `sbx run` may
-//     reattach an existing sandbox, so guessing "absent" could replay runtime
-//     arguments into a live session.
-//
-// There is no third arm. U04e retired --replace, which added a `sbx rm -f`
-// before the create: an unproven forced removal that could destroy a sandbox
-// another shell was live in, issued outside the lifecycle lock the rest of this
-// lifecycle is serialized by. Removal is now always explicit and always
-// proof-gated (`pix rm`), so this decision has exactly the two outcomes the
-// runtime state has.
 func PlanSandboxLaunch(state SbxState, cfg *config.Config, o RunOpts, version string) RunLaunchPlan {
 	if state == SbxUnknown {
 		return RunLaunchPlan{Err: fmt.Errorf("could not determine whether sandbox %q exists (`sbx ls` failed or sbx is unavailable); refusing to create or attach blind — fix sbx and retry", o.Name)}
@@ -273,21 +193,6 @@ func PlanSandboxLaunch(state SbxState, cfg *config.Config, o RunOpts, version st
 // WillCreate is THE create-vs-attach predicate: a POSITIVE "not present" probe,
 // and nothing else. Unknown is false — an indeterminate read never authorizes
 // create-only work, exactly as PlanSandboxLaunch refuses to plan one.
-//
-// It is exported because the command layer must know the answer BEFORE the plan
-// exists: create-only inputs (kit resolution, --dev checkout, pack mount,
-// generated kits) are resolved only when they will be used, so a plain attach
-// never fails on a --dev problem it does not need. One function, consulted by
-// both, so the two can never disagree.
-//
-// U04e collapsed three predicates into this one. WillCreate(state, replace) and
-// DefinitelyCreating(state, replace) differed on exactly one input —
-// (unknown, --replace) — which PlanSandboxLaunch had already refused before
-// either was consulted, so they were two names and two doc comments for one
-// fact, with a third spelling (plan.Reattach) alongside them. Persisted
-// create-time state (the lease record, the fingerprint, the invocation) is
-// gated on THIS answer plus positive creation evidence from the runtime itself
-// (SessionChild.Appeared).
 func WillCreate(state SbxState) bool { return state == SbxAbsent }
 
 // BuildReattachArgs composes the argv for ATTACHING: `run --name <name>`,
@@ -310,9 +215,6 @@ func BuildReattachArgs(o RunOpts) []string {
 	return args
 }
 
-// PinnedGitKit returns the launcher's own pinned git kit URL if it appears in
-// the composed args, else "". Keys the post-exec failure message on whether we
-// pinned a git #ref (vs. a local checkout kit).
 func PinnedGitKit(args []string) string {
 	for _, a := range args {
 		if strings.HasPrefix(a, kitRepo) && strings.Contains(a, "#ref=") {
@@ -323,13 +225,7 @@ func PinnedGitKit(args []string) string {
 }
 
 // KitResolveFailureMsg formats an actionable error for when `sbx run` fails and
-// the composed kit used a git #ref. Returns "" when no git-ref kit was pinned.
-//
-// This fires on ANY `sbx run` failure that had a git-ref kit pinned — it has
-// NOT inspected why, so it must not assert a cause. It used to lead with
-// "release <ref> may not be published yet", which reads as a diagnosis and sent
-// someone hunting a release problem when the real error, printed directly
-// above, was git refusing to start in a deleted cwd.
+// the composed kit used a git #ref; "" when none was pinned.
 func KitResolveFailureMsg(pinnedKit string) string {
 	if pinnedKit == "" {
 		return ""

@@ -18,7 +18,7 @@ func TestAttachRef_LeavesOnlyRefsSharedHeld(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	rl, err := AttachRef(ctx, dir)
+	rl, err := AttachRefUnderLifecycle(ctx, dir, nil)
 	if err != nil {
 		t.Fatalf("AttachRef: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestAttachRef_BlocksBehindLifecycleHolderThenSucceeds(t *testing.T) {
 	shortCtx, shortCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer shortCancel()
 	start := time.Now()
-	if _, err := AttachRef(shortCtx, dir); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := AttachRefUnderLifecycle(shortCtx, dir, nil); !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("AttachRef while lifecycle held = %v, want wrapping context.DeadlineExceeded", err)
 	}
 	if elapsed := time.Since(start); elapsed < 90*time.Millisecond {
@@ -74,49 +74,11 @@ func TestAttachRef_BlocksBehindLifecycleHolderThenSucceeds(t *testing.T) {
 
 	longCtx, longCancel := context.WithTimeout(context.Background(), time.Second)
 	defer longCancel()
-	rl, err := AttachRef(longCtx, dir)
+	rl, err := AttachRefUnderLifecycle(longCtx, dir, nil)
 	if err != nil {
 		t.Fatalf("AttachRef after lifecycle release = %v, want success", err)
 	}
 	defer rl.Close()
-}
-
-// TestWithLifecycle_SerializesAgainstConcurrentTransition proves
-// WithLifecycle actually excludes a second concurrent lifecycle transition,
-// not merely "usually" — the second call blocks until the first's fn
-// returns and releases the lock.
-func TestWithLifecycle_SerializesAgainstConcurrentTransition(t *testing.T) {
-	dir := mustDir(t)
-	release := make(chan struct{})
-	entered := make(chan struct{})
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_ = WithLifecycle(ctx, dir, func() error {
-			close(entered)
-			<-release
-			return nil
-		})
-	}()
-
-	select {
-	case <-entered:
-	case <-time.After(time.Second):
-		t.Fatal("first WithLifecycle never entered fn")
-	}
-
-	shortCtx, shortCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer shortCancel()
-	start := time.Now()
-	err := WithLifecycle(shortCtx, dir, func() error { return nil })
-	elapsed := time.Since(start)
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("second WithLifecycle while first held = %v, want wrapping context.DeadlineExceeded", err)
-	}
-	if elapsed < 90*time.Millisecond {
-		t.Errorf("second WithLifecycle returned after %v, want roughly the 100ms deadline", elapsed)
-	}
-	close(release)
 }
 
 // TestTryReapProof_FailsWhileRefsHeld proves the attach-vs-transition
@@ -127,7 +89,7 @@ func TestTryReapProof_FailsWhileRefsHeld(t *testing.T) {
 	dir := mustDir(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	rl, err := AttachRef(ctx, dir)
+	rl, err := AttachRefUnderLifecycle(ctx, dir, nil)
 	if err != nil {
 		t.Fatalf("AttachRef: %v", err)
 	}
@@ -192,7 +154,7 @@ func TestTryReapProof_SucceedsAfterAttachedRefReleases(t *testing.T) {
 	dir := mustDir(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	rl, err := AttachRef(ctx, dir)
+	rl, err := AttachRefUnderLifecycle(ctx, dir, nil)
 	if err != nil {
 		t.Fatalf("AttachRef: %v", err)
 	}
@@ -297,7 +259,7 @@ func TestAttachRefUnderLifecycle_SecondAttachWaitsForTheTransition(t *testing.T)
 		start := time.Now()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		rl, err := AttachRef(ctx, dir)
+		rl, err := AttachRefUnderLifecycle(ctx, dir, nil)
 		if err != nil {
 			second <- -1
 			return

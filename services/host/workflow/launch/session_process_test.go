@@ -149,7 +149,7 @@ func TestRunSession_RecordsBeforeWaiting_AndUnblocksAttachOnRecord(t *testing.T)
 		}, SessionDeps{Env: realEnv(), Poll: fastPoll(), Warn: io.Discard, Spawn: fixtureSpawn(t)})
 	}()
 
-	leaseDir, err := LeaseDirFor(key)
+	leaseDir, err := leaseDirFor(key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestRunSession_RecordsBeforeWaiting_AndUnblocksAttachOnRecord(t *testing.T)
 	if diverged, found := CheckSessionFingerprint(key, fp); !found || len(diverged) > 0 {
 		t.Errorf("fingerprint not recorded before the session ended: found=%v diverged=%v", found, diverged)
 	}
-	if inv, found := ReadSessionInvocation(key); !found || strings.Join(inv, " ") != "--model m" {
+	if inv, found := readSessionInvocation(key); !found || strings.Join(inv, " ") != "--model m" {
 		t.Errorf("invocation not recorded before the session ended: %v (found %v)", inv, found)
 	}
 	select {
@@ -250,7 +250,7 @@ func TestRunSession_AttachUnowned_UsesSafeDefaultArgv(t *testing.T) {
 	if SessionRecorded(key) {
 		t.Error("an unowned attach must not create a creation record")
 	}
-	leaseDir, err := LeaseDirFor(key)
+	leaseDir, err := leaseDirFor(key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +335,7 @@ func TestRunSession_KilledCreator_LeavesTheRecord(t *testing.T) {
 	fixture := installFakeSbx(t, sessionFixture)
 	ws := t.TempDir()
 	key := SessionName(ws)
-	leaseDir, err := LeaseDirFor(key)
+	leaseDir, err := leaseDirFor(key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,7 +372,7 @@ func TestRunSession_KilledCreator_LeavesTheRecord(t *testing.T) {
 	if rerr != nil || rec.InstanceID != "inst-1" {
 		t.Fatalf("record after SIGKILL = %+v (err %v), want instance inst-1", rec, rerr)
 	}
-	if inv, found := ReadSessionInvocation(key); !found || strings.Join(inv, " ") != "--model m" {
+	if inv, found := readSessionInvocation(key); !found || strings.Join(inv, " ") != "--model m" {
 		t.Errorf("invocation after SIGKILL = %v (found %v)", inv, found)
 	}
 	if _, set, kerr := lease.ReadKeep(leaseDir); !set || kerr != nil {
