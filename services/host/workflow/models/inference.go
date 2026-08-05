@@ -70,59 +70,6 @@ func bind(cfg *config.Config, model, backend, upstream string) {
 	})
 }
 
-func configureCustomGateway(cfg *config.Config, in io.Reader, out io.Writer) (bool, error) {
-	fmt.Fprint(out, "Gateway base URL: ")
-	baseURL, ok := readSetupLine(in)
-	if !ok || (!strings.HasPrefix(baseURL, "https://") && !strings.HasPrefix(baseURL, "http://localhost") && !strings.HasPrefix(baseURL, "http://127.0.0.1")) {
-		return false, fmt.Errorf("gateway URL must use https (or loopback http)")
-	}
-	fmt.Fprint(out, "Authentication [sbx-session] (sbx-session/none): ")
-	auth, ok := readSetupLine(in)
-	if !ok || auth == "" {
-		auth = "sbx-session"
-	}
-	if auth != "sbx-session" && auth != "none" {
-		return false, fmt.Errorf("unsupported gateway authentication %q", auth)
-	}
-	fmt.Fprintln(out, "Map catalog models to gateway IDs (comma-separated catalog=upstream):")
-	fmt.Fprint(out, "Models: ")
-	mappings, ok := readSetupLine(in)
-	if !ok || strings.TrimSpace(mappings) == "" {
-		return false, fmt.Errorf("a gateway needs at least one model mapping")
-	}
-	reg, err := routing.LoadRegistry()
-	if err != nil {
-		return false, err
-	}
-	backend := config.InferenceBackend{Driver: "openai-compatible", BaseURL: strings.TrimRight(baseURL, "/"), Auth: auth}
-	if auth == "sbx-session" {
-		// sbx-login is a reserved Docker Sandboxes service resolved from the
-		// current `sbx login` session, not a secret users seed into sbx.
-		backend.KeyEnv, backend.CredentialService = "DOCKER_TOKEN", "sbx-login"
-		backend.CredentialHeader, backend.CredentialFormat = "Authorization", "Bearer %s"
-	}
-	backends(cfg)["gateway"] = backend
-	for _, raw := range strings.Split(mappings, ",") {
-		canonical, upstream, found := strings.Cut(strings.TrimSpace(raw), "=")
-		canonical, upstream = strings.TrimSpace(canonical), strings.TrimSpace(upstream)
-		switch {
-		case !found:
-			return false, fmt.Errorf("invalid model mapping %q (want catalog=upstream)", raw)
-		case !inCatalog(reg, canonical):
-			return false, fmt.Errorf("model %q is not in the Pix catalog", canonical)
-		case upstream == "" || strings.ContainsAny(upstream, " \t\r\n"):
-			return false, fmt.Errorf("invalid upstream model id %q", upstream)
-		}
-		bind(cfg, canonical, "gateway", upstream)
-	}
-	return true, nil
-}
-
-func inCatalog(reg *routing.Registry, id string) bool {
-	_, ok := reg.Get(id)
-	return ok
-}
-
 // OllamaSelection is what the user chose. Local and Cloud are separate answers
 // because they are separate products: a `:cloud` row appears on every signed-in
 // machine and says nothing about what this machine can RUN, and a local model
@@ -264,8 +211,7 @@ func ConfigureOllamaInference(cfg *config.Config, env hostenv.Env, sel OllamaSel
 		plan.WantPull = inference.OllamaTagFor(rung.ID)
 	case len(plan.LocalBound) == 0 && len(plan.CloudBound) == 0:
 		// A selection that produced NOTHING must not be persisted: a backend with
-		// no models makes the NEXT `pix setup` fatal in
-		// EnableDeclaredInferenceBindings, bricking it until `pix state reset`.
+		// no models is an inert half-state no later reconcile can widen out of.
 		// Reachable via Cloud-while-signed-out and local-under-the-floor, so roll
 		// the backend back and name the fix.
 		if !backendPreexisted {
@@ -294,27 +240,6 @@ func emptyOllamaSelectionMessage(sel OllamaSelection, plan ollamaPlan) string {
 		reasons = append(reasons, "cloud: `ollama list` shows no cloud models — sign in with `ollama signin`, then re-run setup")
 	}
 	return "Ollama was selected but nothing is callable through it (" + strings.Join(reasons, "; ") + "). Nothing was saved; re-run `pix setup` and choose Ollama Cloud or an API key."
-}
-
-// EnableDeclaredInferenceBindings promotes pack-declared bindings into the
-// create-time candidate set. The sandbox smoke test stays the success
-// authority: sbx-session auth cannot be replayed by a host HTTP probe.
-func EnableDeclaredInferenceBindings(cfg *config.Config) error {
-	if cfg == nil || len(cfg.Inference.Backends) == 0 || len(cfg.Inference.Models) == 0 {
-		return fmt.Errorf("inference backend is configured but declares no models")
-	}
-	for i := range cfg.Inference.Models {
-		m := &cfg.Inference.Models[i]
-		b, ok := cfg.Inference.Backends[m.Backend]
-		switch {
-		case !ok:
-			return fmt.Errorf("model %q references unknown backend %q", m.Model, m.Backend)
-		case b.Driver != "native" && strings.TrimSpace(b.BaseURL) == "":
-			return fmt.Errorf("backend %q has no base_url", m.Backend)
-		}
-		m.Available = true
-	}
-	return nil
 }
 
 // ConfigureDirectInference derives native backend bindings from the provider

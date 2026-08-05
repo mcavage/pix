@@ -595,11 +595,8 @@ func TestPackOnePasswordBindingStillNeedsHostProof(t *testing.T) {
 //
 // models.ConfigureOllamaInference writes the ollama backend before it knows whether
 // anything will bind. With the hard error gone it returned nil with an empty
-// plan, so setup's keys step reached cfg.Save() and persisted a backend with no
-// models — and the NEXT `pix setup` early-returns into
-// models.EnableDeclaredInferenceBindings ("configured but declares no models"), which
-// is fatal. Setup was then bricked until `pix state reset`, with config.toml
-// hand-editing forbidden by design.
+// plan, so a caller that reached cfg.Save() would persist a backend with no
+// models — an inert half-state no later reconcile can widen out of.
 //
 // Reachable two ways, both covered here: choosing Ollama Cloud while signed out
 // (no :cloud rows in the listing), and choosing local on a machine under the
@@ -657,14 +654,6 @@ func TestEmptyOllamaSelectionPersistsNothing(t *testing.T) {
 			}
 			if len(cfg.Inference.Models) != 0 {
 				t.Errorf("bindings were persisted despite the failure: %+v", cfg.Inference.Models)
-			}
-			// And prove the dead end really was a dead end: a config in the state we
-			// just refused to write is exactly what bricks the next run.
-			bricked := &config.Config{Inference: config.InferenceConfig{
-				Backends: map[string]config.InferenceBackend{"ollama": {Driver: "ollama", BaseURL: "http://x/v1", Auth: "none"}},
-			}}
-			if err := models.EnableDeclaredInferenceBindings(bricked); err == nil {
-				t.Fatal("expected the empty-backend config to be the fatal state; if this stops being true, revisit the rollback")
 			}
 		})
 	}
