@@ -1,7 +1,6 @@
 package readiness
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -68,45 +67,6 @@ func TestCheckZeroValuesFailSafe(t *testing.T) {
 	e := Check{Detail: "d", Evidence: "probe: x=y"}
 	if e.EvidenceString() != "probe: x=y" {
 		t.Errorf("explicit evidence = %q", e.EvidenceString())
-	}
-}
-
-// TestReportTallies_UnverifiableNeverTodo: an unverifiable Check never
-// surfaces its todo suggestion and never counts as Outstanding, while denied
-// counts as Outstanding and blocks when core. A note-only Check with an
-// explicit VerdictTodo + a populated todo field (e.g. an informational
-// annotation that happens to carry a suggestion string) must ALSO never
-// surface in Todos() — mirroring Outstanding()/UnverifiableCount(), which
-// already exclude notes. Without that exclusion a green headline (nothing
-// Outstanding) could still print an actionable TODO command generated purely
-// by an informational note.
-func TestReportTallies_UnverifiableNeverTodo(t *testing.T) {
-	r := &Report{Groups: []Group{{
-		Title: "g",
-		Checks: []Check{
-			{Label: "a", Verdict: VerdictUnverifiable, Todo: "should-not-appear"},
-			{Label: "b", Verdict: VerdictTodo, Todo: "fix-b"},
-			{Label: "c", Verdict: VerdictDenied, Todo: "escalate-c"},
-			{Label: "d", Verdict: VerdictReady},
-			{Label: "e", Note: true},
-			{Label: "f", Note: true, Verdict: VerdictTodo, Todo: "note-should-not-appear"},
-		},
-	}}}
-	if got := strings.Join(r.Todos(), ","); got != "fix-b,escalate-c" {
-		t.Errorf("Todos() = %q, want fix-b,escalate-c (a note-only check must never contribute a TODO)", got)
-	}
-	if r.Outstanding() != 2 {
-		t.Errorf("outstanding() = %d, want 2 (todo + denied; the note-only check f must not count)", r.Outstanding())
-	}
-	if r.UnverifiableCount() != 1 {
-		t.Errorf("UnverifiableCount() = %d, want 1", r.UnverifiableCount())
-	}
-	if r.Blocking() {
-		t.Error("all-optional report must not block")
-	}
-	r.Groups[0].Checks[2].Requirement = RequirementCore
-	if !r.Blocking() {
-		t.Error("a core denied must block")
 	}
 }
 

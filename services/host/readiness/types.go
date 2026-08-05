@@ -194,56 +194,6 @@ type Group struct {
 	Checks []Check
 }
 
-// Report is the full doctor result: an ordered set of groups. It knows how to
-// tally its verdicts (for the headline + exit code) and render itself.
-type Report struct {
-	Groups []Group
-	// SbxAbsent: sbx is not on PATH, so provider/mcp checks cannot be verified
-	// here. Not the same as "they failed".
-	SbxAbsent bool
-	// Services and MCP are the configured sets, carried for the footer.
-	Services []string
-	MCP      []string
-}
-
-// Todos returns every Outstanding TODO command across all groups, in order,
-// with duplicate commands dropped (so e.g. a `pix mcp register` that two
-// groups both surface only appears once). Only a VERIFIED failure (Verdict
-// todo/denied) may surface a repair command: unverifiable checks never do,
-// even if a constructor left a suggestion in the todo field. A note-only
-// Check is excluded outright, mirroring Outstanding()/UnverifiableCount(): a
-// note asserts nothing actionable by construction (it never counts toward the
-// headline's Outstanding tally), so it must never be able to generate a
-// copy-pasteable TODO either — otherwise a green "all checks pass" headline
-// could still print an actionable TODO command underneath it. Dedup is
-// normalized via TodoDedupKey so two commands that differ only in a trailing
-// parenthetical collapse. Order is preserved: the first occurrence's full
-// string wins.
-func (r *Report) Todos() []string {
-	var out []string
-	seen := map[string]bool{}
-	for _, g := range r.Groups {
-		for _, c := range g.Checks {
-			if c.Note {
-				continue
-			}
-			if v := c.Result(); v != VerdictTodo && v != VerdictDenied {
-				continue
-			}
-			if c.Todo == "" {
-				continue
-			}
-			key := TodoDedupKey(c.Todo)
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-			out = append(out, c.Todo)
-		}
-	}
-	return out
-}
-
 // TodoDedupKey normalizes a TODO for dedup so two commands that share the same
 // leading command but differ only in a trailing parenthetical (e.g. `pix
 // secret set <ENV_VAR> op://vault/item/field` vs the same command with a
@@ -254,48 +204,4 @@ func TodoDedupKey(todo string) string {
 		return strings.TrimSpace(todo[:i])
 	}
 	return strings.TrimSpace(todo)
-}
-
-// Blocking reports whether ANY Check across the whole Report is a verified
-// core failure — the aggregate `pix doctor` reads to decide its exit
-// code (1 vs 0). Usage errors are handled separately by parseDoctorArgs and
-// always exit 2 regardless of this.
-func (r *Report) Blocking() bool {
-	for _, g := range r.Groups {
-		for _, c := range g.Checks {
-			if BlockingCheck(c.Req(), c.Result()) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// Outstanding counts the verified failures (Verdict todo/denied, notes
-// excluded) across the Report — the headline's ⚠ tally.
-func (r *Report) Outstanding() int {
-	n := 0
-	for _, g := range r.Groups {
-		for _, c := range g.Checks {
-			if v := c.Result(); !c.Note && (v == VerdictTodo || v == VerdictDenied) {
-				n++
-			}
-		}
-	}
-	return n
-}
-
-// UnverifiableCount counts the checks whose Verdict is unverifiable (notes
-// excluded): they never block or count as Outstanding, but the headline must
-// not claim "all checks pass" over an unverified axis.
-func (r *Report) UnverifiableCount() int {
-	n := 0
-	for _, g := range r.Groups {
-		for _, c := range g.Checks {
-			if !c.Note && c.Result() == VerdictUnverifiable {
-				n++
-			}
-		}
-	}
-	return n
 }

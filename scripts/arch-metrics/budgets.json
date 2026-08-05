@@ -114,10 +114,10 @@
       "exits": 0
     },
     "pix/host/readiness": {
-      "prod_loc": 926,
-      "exports": 53,
+      "prod_loc": 695,
+      "exports": 51,
       "globals": 35,
-      "edges": 2,
+      "edges": 0,
       "exits": 0
     },
     "pix/host/readiness/axis": {
