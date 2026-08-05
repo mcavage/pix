@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # check-endpoint-literals.sh — one resolver owns the Ollama endpoint.
 #
-# Every Go readiness path must name the Ollama endpoint through
-# effectiveOllamaEndpoint (services/host/cmd/pix/readiness_ollama.go), so
-# doctor, status, setup and run can never report on an endpoint the daemon does
-# not actually use. This guard fails the build on any 127.0.0.1:11434 or
+# Every Go path must name the Ollama endpoint through
+# inference.OllamaEndpointFor (services/host/inference/ollama.go), so doctor,
+# status, setup and run can never report on an endpoint the daemon does not
+# actually use. This guard fails the build on any 127.0.0.1:11434 or
 # localhost:11434 literal in Go source outside the allowlisted files.
 #
 # Allowlisted, with reasons:
-#   readiness_ollama.go  the resolver itself (defaultOllamaHost)
+#   inference/ollama.go  the resolver itself (defaultOllamaHost, split so the
+#                        literal never appears whole)
 #   memembed.go          the daemon-side resolver on the other side of the RPC
 #                        boundary; it reads OLLAMA_HOST itself
 #   hostrun.go           OLLAMA_URL handed to the in-sandbox bridge, which is
@@ -23,7 +24,7 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-allow_re='(readiness_ollama\.go|memembed\.go|hostrun\.go|_test\.go)$'
+allow_re='(inference/ollama\.go|memembed\.go|hostrun\.go|_test\.go)$'
 pattern='(127\.0\.0\.1|localhost):11434'
 
 scan() {
@@ -43,7 +44,7 @@ done < <(scan "$root/services/host")
 if [ -n "$hits" ]; then
   echo "check-endpoint-literals: hard-coded Ollama endpoint outside the resolver:" >&2
   printf '%s' "$hits" >&2
-  echo "  fix: resolve it with effectiveOllamaEndpoint(cfg, env) instead" >&2
+  echo "  fix: resolve it with inference.OllamaEndpointFor(env) instead" >&2
   exit 1
 fi
 

@@ -8,7 +8,7 @@ package main
 //
 //	L4  cmd/pix        argv -> a command; owns os.Exit
 //	L3  workflow/*     orchestrate L1+L2
-//	L2  readiness      L1 probes -> a Snapshot
+//	L2  health         L1 probes -> a Snapshot
 //	L1  capability/*   one domain each; MAY NOT import each other
 //	L0  foundation     sys, config, routing, rpc, cli, hostenv
 //
@@ -97,20 +97,15 @@ var pkgLayer = map[string]int{
 	"supervise": layerReadiness,
 
 	// L2 — the shared model of "is this working".
-	"readiness": layerReadiness,
-	// readiness/axis holds the per-domain BUILDERS: given probes, produce the
-	// Checks for one axis (models, services, hardware, ollama). They are L2 with
-	// the model they build, and they were the entanglement architecture.md names
-	// -- the model was always independent, the builders were not. Extracting the
-	// model first (readiness) and the builders second (here) is why both came out
-	// at 2 inbound instead of 17.
-	"readiness/axis": layerReadiness,
-	// health is the readiness model's replacement: Probe -> Result -> Snapshot,
-	// plus the concrete probes. Same layer for the same reason — it turns L1
-	// facts into one snapshot every command renders — but it holds the probes
-	// itself rather than splitting model and builders across two packages,
-	// which is what made readiness/axis a pair nobody could reason about
-	// separately.
+	//
+	// The readiness/axis pair that used to live here is GONE (W5/U11r): a
+	// Requirement × Verdict matrix, a lazy axis registry, four exit codes and two
+	// renderers, split across a model package and a builders package nobody could
+	// reason about separately. health replaced it — Probe -> Result -> Snapshot,
+	// with the probes in the same package — and the utilities that lived in axis
+	// only by history went to the domains that own them (model resolution,
+	// endpoint resolution and machine sizing to inference; "is a model key
+	// present" to secret; the launch gate and its warnings to workflow/launch).
 	"health": layerReadiness,
 
 	// L3 — workflow. A user-facing verb's logic. Allowed to compose L1+L2;

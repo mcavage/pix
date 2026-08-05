@@ -1,36 +1,36 @@
-package axis
+package inference
 
 import (
 	"fmt"
 	"math"
-	"pix/host/hostenv"
-	"pix/host/readiness"
-	"pix/host/sys"
 	"runtime"
 	"strconv"
 	"strings"
 
+	"pix/host/hostenv"
 	"pix/host/routing"
+	"pix/host/sys"
 )
 
-// readiness_hardware.go owns ONE hardware fact — how much physical memory this
-// machine has — and it inherits readiness_ollama.go's header rule verbatim:
+// hardware.go owns ONE fact — how much physical memory this machine has — and
+// it exists for exactly one purpose: sizing the LOCAL model this host can be
+// OFFERED. It is part of the inference domain for that reason, and it inherits
+// one rule verbatim:
 //
 //	AN INFERENCE INFORMS REMEDIATION AND OFFERS. IT CAN NEVER PRODUCE A VERDICT.
 //
-// A RAM reading is not a probe of anything Pix ships: it proves nothing is
-// installed, configured, or callable. So it may size the local models setup
-// OFFERS, and it may explain why a rung was not offered, but it may never
-// render `ready` (safety invariant 13 — success words are earned by a probe).
-// HardwareCheck is therefore always a note and never green.
+// A RAM reading proves nothing is installed, configured or callable, so it may
+// size an offer and explain why a rung was not offered, and it may never make
+// anything read as ready (safety invariant 13 — success words are earned by a
+// probe).
 //
-// The reading is deliberately of TOTAL physical memory, not free/available
-// memory: free memory is a snapshot of an unrelated moment, and a machine with
-// a browser open would be offered a smaller model forever.
+// The reading is deliberately of TOTAL physical memory, not free/available:
+// free memory is a snapshot of an unrelated moment, and a machine with a
+// browser open would be offered a smaller model forever.
 
 // HostMemory is the probed physical-memory fact, the fraction of it a model
 // runtime may plan on, and where the number came from. OK=false means the
-// machine could not be sized: callers degrade to the floor rung, never up.
+// machine could not be sized: callers degrade to no offer, never up.
 type HostMemory struct {
 	TotalGB  float64
 	UsableGB float64
@@ -52,9 +52,6 @@ const darwinFractionTierGB = 36
 // default Metal working-set ceiling is: a flat 0.75 over-promises on exactly
 // the small unified-memory machines that can least afford it, and the runtime
 // then spills to the CPU path or swaps.
-//
-// Deviation from the design's `UsableFraction(goos string)` signature: the
-// two-tier darwin rule cannot be expressed without the machine's size.
 func UsableFraction(goos string, totalGB float64) (float64, bool) {
 	switch goos {
 	case "darwin":
@@ -63,16 +60,16 @@ func UsableFraction(goos string, totalGB float64) (float64, bool) {
 		}
 		return 0.67, true
 	case "linux":
-		// No unified-memory guarantee, discrete VRAM is not probed in v1, and CPU
-		// inference contends with the desktop. Deliberately conservative.
+		// No unified-memory guarantee, discrete VRAM is not probed in v1, and
+		// CPU inference contends with the desktop. Deliberately conservative.
 		return 0.60, true
 	default:
 		return 0, false
 	}
 }
 
-// ProbeHostMemory reads TOTAL physical memory through the hostenv.Env seams, so it
-// is fakeable in tests and never links cgo. darwin: `sysctl -n hw.memsize`
+// ProbeHostMemory reads TOTAL physical memory through the hostenv.Env seams, so
+// it is fakeable in tests and never links cgo. darwin: `sysctl -n hw.memsize`
 // (bytes). linux: /proc/meminfo MemTotal (kB). Any other GOOS: OK=false.
 func ProbeHostMemory(env hostenv.Env) HostMemory {
 	return ProbeHostMemoryFor(runtime.GOOS, env)
@@ -95,7 +92,6 @@ func ProbeHostMemoryFor(goos string, env hostenv.Env) HostMemory {
 		}
 		totalGB, source = bytes/BytesPerGB, "sysctl hw.memsize"
 	case "linux":
-
 		body, err := env.ReadFile("/proc/meminfo")
 		if err != nil {
 			return HostMemory{Source: "/proc/meminfo MemTotal"}
@@ -116,9 +112,7 @@ func ProbeHostMemoryFor(goos string, env hostenv.Env) HostMemory {
 }
 
 // probeMemoryCommand runs a hardware probe under the bounded seam, so a wedged
-// sysctl can never hang setup. It used to fall back to the plain runner "tests
-// usually wire" — a fallback that existed only because the bounded seam was
-// nullable. It is not, so there is nothing to fall back from.
+// sysctl can never hang setup.
 func probeMemoryCommand(env sys.Exec, name string, args ...string) (string, bool) {
 	out, timedOut, err := env.RunTimed(name, args...)
 	return out, err == nil && !timedOut
@@ -201,35 +195,9 @@ func LocalRungOfferLine(mem HostMemory, rung routing.Model, ok bool) string {
 	}
 }
 
-// HardwareCheck renders the doctor row. It is ALWAYS a note and NEVER ready:
-// see this file's header. There is nothing to fix, so it is never a todo
-// either — RAM is not a configuration mistake.
-func HardwareCheck(mem HostMemory) []readiness.Check {
-	c := readiness.Check{Label: "hardware", Note: true, Verdict: readiness.VerdictUnverifiable}
-	if !mem.OK {
-		source := mem.Source
-		if source == "" {
-			source = "unsupported platform"
-		}
-		c.Detail = "could not size this machine (" + source + ") — local model offers degrade to the smallest rung; not a readiness verdict"
-		c.Evidence = "host memory unreadable via " + source
-		return []readiness.Check{c}
-	}
-	c.Detail = fmt.Sprintf("%.0f GB (usable ~%.0f GB, %s) — informs local model offers; not a readiness verdict",
-		mem.TotalGB, mem.UsableGB, mem.Source)
-	c.Evidence = fmt.Sprintf("%s: %.0f GB total, planning on %.0f GB", mem.Source, mem.TotalGB, mem.UsableGB)
-	return []readiness.Check{c}
-}
-
 // MinRAMFor recomputes a rung's gate from its own declared terms. Nothing reads
 // it at runtime — it exists so a test can hold the catalog to the arithmetic
 // the design fixed (weights*1.15 + declared context * KV per token + 1).
 func MinRAMFor(m routing.Model) float64 {
 	return math.Ceil(m.DownloadGB*1.15 + float64(m.ContextWindow)*m.KVGBPerTok + 1.0)
-}
-
-// OllamaTagFor strips the catalog's provider prefix, giving the tag `ollama
-// pull` and `ollama list` actually speak.
-func OllamaTagFor(catalogID string) string {
-	return strings.TrimPrefix(catalogID, "ollama/")
 }

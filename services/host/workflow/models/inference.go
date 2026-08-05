@@ -11,7 +11,6 @@ import (
 	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/inference"
-	"pix/host/readiness/axis"
 	"pix/host/routing"
 	"pix/host/secret"
 )
@@ -123,12 +122,12 @@ type OllamaSelection struct{ Local, Cloud bool }
 // binding it created is a CANDIDATE (Verified: false) until a probe says
 // otherwise.
 type ollamaPlan struct {
-	Endpoint   string          // resolved via axis.EffectiveOllamaEndpoint
+	Endpoint   string          // resolved via inference.OllamaEndpointFor
 	LocalBound []string        // catalog ids bound as candidates from the listing
 	CloudBound []string        // ditto, cloud
 	WantPull   string          // the RAM-appropriate rung handed to SetupLocalModels
 	SkippedRAM []string        // catalog local ids this machine cannot run
-	Memory     axis.HostMemory // the reading that sized the offer
+	Memory     inference.HostMemory // the reading that sized the offer
 	// BestFit is the largest local rung this machine can run, pulled or not. It
 	// is NOT the same as WantPull: WantPull is only set when nothing local is on
 	// disk yet. Without BestFit the offer line ("offering qwen3.5:35b") is printed
@@ -144,7 +143,7 @@ type ollamaPlan struct {
 func (p ollamaPlan) LocalBoundTags() []string {
 	out := make([]string, 0, len(p.LocalBound))
 	for _, id := range p.LocalBound {
-		out = append(out, axis.OllamaTagFor(id))
+		out = append(out, inference.OllamaTagFor(id))
 	}
 	return out
 }
@@ -212,7 +211,7 @@ func ConfigureOllamaInference(cfg *config.Config, env hostenv.Env, sel OllamaSel
 		cfg.Inference.Backends = map[string]config.InferenceBackend{}
 	}
 	_, backendPreexisted := cfg.Inference.Backends["ollama"]
-	endpoint := strings.TrimRight(axis.EffectiveOllamaEndpoint(cfg, env).URL, "/")
+	endpoint := strings.TrimRight(inference.OllamaEndpointFor(env).URL, "/")
 	cfg.Inference.Backends["ollama"] = config.InferenceBackend{Driver: "ollama", BaseURL: endpoint + "/v1", Auth: "none"}
 
 	plan := ollamaPlan{Endpoint: endpoint}
@@ -228,26 +227,26 @@ func ConfigureOllamaInference(cfg *config.Config, env hostenv.Env, sel OllamaSel
 		cfg.Inference.Models = append(cfg.Inference.Models, config.InferenceModelBinding{
 			// A listing is not evidence. VerifyOllamaInference earns Verified with a
 			// bounded, model-specific request through the resolved endpoint.
-			Model: m.ID, Backend: "ollama", Upstream: axis.OllamaTagFor(m.ID), Available: true,
+			Model: m.ID, Backend: "ollama", Upstream: inference.OllamaTagFor(m.ID), Available: true,
 		})
 	}
 
 	var rung, bestLocal routing.Model
 	rungOK := false
 	if sel.Local {
-		plan.Memory = axis.ProbeHostMemory(env)
-		rung, rungOK = axis.ChooseLocalRung(reg, plan.Memory)
+		plan.Memory = inference.ProbeHostMemory(env)
+		rung, rungOK = inference.ChooseLocalRung(reg, plan.Memory)
 		if rungOK {
-			plan.BestFit = axis.OllamaTagFor(rung.ID)
+			plan.BestFit = inference.OllamaTagFor(rung.ID)
 		}
-		fmt.Fprintln(out, axis.LocalRungOfferLine(plan.Memory, rung, rungOK))
+		fmt.Fprintln(out, inference.LocalRungOfferLine(plan.Memory, rung, rungOK))
 	}
 
 	for _, m := range reg.Models {
 		if m.Provider != "ollama" || !m.Available {
 			continue
 		}
-		tag := axis.OllamaTagFor(m.ID)
+		tag := inference.OllamaTagFor(m.ID)
 		switch {
 		case m.Local && sel.Local:
 			// The gate decides what to OFFER TO PULL. A rung the user ALREADY pulled
@@ -277,7 +276,7 @@ func ConfigureOllamaInference(cfg *config.Config, env hostenv.Env, sel OllamaSel
 	if sel.Local && bestLocal.ID != "" {
 		// Something local is already on disk: the bridge and the router's local
 		// option point at the largest one that fits, and nothing needs pulling.
-		cfg.OllamaBridgeModel = axis.OllamaTagFor(bestLocal.ID)
+		cfg.OllamaBridgeModel = inference.OllamaTagFor(bestLocal.ID)
 		return plan, nil
 	}
 	if sel.Local && rungOK {
@@ -287,9 +286,9 @@ func ConfigureOllamaInference(cfg *config.Config, env hostenv.Env, sel OllamaSel
 		// before the step that asks about it — and naming a tag is a declared
 		// intent, not a claim (Verified stays false, the binding is not callable,
 		// and doctor's bridge row reports it missing).
-		cfg.OllamaBridgeModel = axis.OllamaTagFor(rung.ID)
+		cfg.OllamaBridgeModel = inference.OllamaTagFor(rung.ID)
 		bind(rung)
-		plan.WantPull = axis.OllamaTagFor(rung.ID)
+		plan.WantPull = inference.OllamaTagFor(rung.ID)
 	}
 
 	// An Ollama selection that produced NOTHING must not be persisted. Deleting
@@ -322,8 +321,8 @@ func emptyOllamaSelectionMessage(sel OllamaSelection, plan ollamaPlan) string {
 		switch {
 		case !plan.Memory.OK:
 			reasons = append(reasons, "local: could not size this machine, so no local model was offered")
-		case plan.Memory.TotalGB < axis.LocalFloorTotalGB:
-			reasons = append(reasons, fmt.Sprintf("local: %.0f GB RAM is below the %d GB a local model needs here", plan.Memory.TotalGB, axis.LocalFloorTotalGB))
+		case plan.Memory.TotalGB < inference.LocalFloorTotalGB:
+			reasons = append(reasons, fmt.Sprintf("local: %.0f GB RAM is below the %d GB a local model needs here", plan.Memory.TotalGB, inference.LocalFloorTotalGB))
 		default:
 			reasons = append(reasons, "local: no catalog model fits this machine's usable memory")
 		}
@@ -832,7 +831,7 @@ func ReconcileOllamaInference(cfg *config.Config, env hostenv.Env, in io.Reader,
 	if len(res.NotProbed) > 0 {
 		fmt.Fprintf(out, "%d candidate(s) were not probed within the time budget: %s\n", len(res.NotProbed), strings.Join(res.NotProbed, ", "))
 	}
-	if callable, _ := axis.ConfiguredInferenceSummary(cfg); callable > 0 {
+	if callable, _ := inference.ConfiguredSummary(cfg); callable > 0 {
 		if err := configureModelRosterFrom(cfg, in, out, interactive, "", inference.BoundNativeProviders(cfg)); err != nil {
 			return res, plan, fmt.Errorf("choosing models: %w", err)
 		}

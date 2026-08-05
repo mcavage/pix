@@ -36,12 +36,6 @@ type Env struct {
 	Ports    map[int]bool           // open local TCP ports
 	Home     string                 // fake home directory
 	HostBin  string                 // canonical pix-host path ("" = unresolvable)
-
-	// IdentityProbe answers a service's `identity` RPC. Nil by default, which
-	// is deliberate: a fixture that dials a service port "up" without also
-	// faking its identity must get an honest unverifiable, never a real network
-	// call and never a false ready.
-	IdentityProbe hostenv.IdentityProber
 }
 
 // Build returns the hostenv.Env this fixture describes.
@@ -82,6 +76,5 @@ func (f Env) Build() hostenv.Env {
 			}
 			return "", fmt.Errorf("pix-host not found")
 		},
-		IdentityProbe: f.IdentityProbe,
 	}
 }

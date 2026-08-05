@@ -1,4 +1,4 @@
-package axis
+package inference
 
 import (
 	"fmt"
@@ -6,11 +6,13 @@ import (
 	"testing"
 
 	"pix/host/hostenv"
-	"pix/host/readiness"
 	"pix/host/routing"
 	"pix/host/sys/systest"
 )
 
+// hwMemEnv wires the REAL platform readers at their seams: darwin reads
+// `sysctl -n hw.memsize`, linux reads /proc/meminfo. Both are wired whatever
+// GOOS the test binary runs on, so one machine exercises both paths.
 func hwMemEnv(t *testing.T, goos string, totalGB float64) hostenv.Env {
 	t.Helper()
 	env := hostenv.Env{System: &systest.Fake{}}
@@ -166,30 +168,6 @@ func TestUnknownMemoryOffersNothing(t *testing.T) {
 	line := LocalRungOfferLine(HostMemory{Source: "sysctl hw.memsize"}, rung, false)
 	if !strings.Contains(line, "could not size this machine") {
 		t.Fatalf("the offer line must say the machine was not sized, got %q", line)
-	}
-}
-
-// TestHardwareCheckIsNeverReady is invariant 13 in this file's own terms: a RAM
-// reading is an inference, and an inference can never produce a verdict.
-func TestHardwareCheckIsNeverReady(t *testing.T) {
-	for _, mem := range []HostMemory{
-		{},
-		{Source: "sysctl hw.memsize"},
-		{TotalGB: 8, UsableGB: 5.4, Source: "sysctl hw.memsize", OK: true},
-		{TotalGB: 128, UsableGB: 96, Source: "sysctl hw.memsize", OK: true},
-		{TotalGB: 32, UsableGB: 19.2, Source: "/proc/meminfo MemTotal", OK: true},
-	} {
-		for _, c := range HardwareCheck(mem) {
-			if c.Verdict == readiness.VerdictReady {
-				t.Errorf("HardwareCheck(%+v) rendered ready; a hardware reading is not a probe", mem)
-			}
-			if !c.Note {
-				t.Errorf("HardwareCheck(%+v) is not a note; it must never block or count as outstanding", mem)
-			}
-			if c.Todo != "" {
-				t.Errorf("HardwareCheck(%+v) offered a fix command (%q); RAM is not a configuration mistake", mem, c.Todo)
-			}
-		}
 	}
 }
 

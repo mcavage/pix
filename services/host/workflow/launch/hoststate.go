@@ -25,10 +25,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"pix/host/cli"
 	"pix/host/hostenv"
-	"pix/host/readiness"
 	"pix/host/secret"
-	"pix/host/workflow/doctor"
 	"pix/host/workflow/pack"
 	"slices"
 	"strings"
@@ -165,8 +164,12 @@ func BuildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial f
 		}
 		return dial(p)
 	}
+	// A key is OK only when the probe ANSWERED and named it. An unreadable
+	// `sbx secret ls` (sbxOK false, e.g. run from inside the sandbox) reports
+	// every key as not-set rather than inventing a green: the payload is read
+	// by an agent that cannot check for itself.
 	keyOK := func(name string) bool {
-		return doctor.SecretCheck(name, name, sbxSecretsOut, sbxOK).State() == readiness.StateOK
+		return sbxOK && cli.GrepWord(sbxSecretsOut, name)
 	}
 	if keysSource == "" {
 		keysSource = "sbx"

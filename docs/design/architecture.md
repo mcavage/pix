@@ -91,11 +91,19 @@ L0  sys  sys/systest  config  routing  rpc  cli  launcher
     hostenv  hostenv/hostenvtest  workspace                          done
 L1  inference  mcp  secret  memory  knowledge  service
     monitor  monitor/tui  okf  plugin  slackoauth                    done
-L2  readiness  readiness/axis                                        done
+L2  health                                                           done
 L3  workflow/{setup, launch, doctor, pack, slack, gworkspace,
              onboard, reset, upgrade, backup, man}                    done
 L4  cmd/pix                                                          done
 ```
+
+**`readiness` and `readiness/axis` are gone (W5/U11r).** The Requirement ×
+Verdict model, its lazy axis registry, its four exit codes and its second
+renderer were replaced by `health` (Probe → Result → Snapshot). The utilities
+that lived in `axis` only by history moved to the domains that own them:
+session-model resolution, Ollama endpoint resolution and machine sizing to
+`inference`; "is a model key present" to `secret`; the launch gate and its
+warning rows to `workflow/launch`.
 
 `cmd/pix` is **40,905 -> 3,503** production lines across 21 files: thirteen argv
 seams, the composition root, the verb table, and the two kong verbs whose

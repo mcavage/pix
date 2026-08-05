@@ -14,7 +14,6 @@ import (
 	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/inference"
-	"pix/host/readiness/axis"
 	"pix/host/routing"
 	"pix/host/secret"
 )
@@ -133,7 +132,7 @@ func VerifyOllamaInference(cfg *config.Config, env hostenv.Env, out io.Writer) (
 	if err != nil {
 		return res, fmt.Errorf("verify ollama inference: %w", err)
 	}
-	endpoint := strings.TrimRight(axis.EffectiveOllamaEndpoint(cfg, env).URL, "/")
+	endpoint := strings.TrimRight(inference.OllamaEndpointFor(env).URL, "/")
 	type candidate struct {
 		index  int
 		label  string
@@ -318,7 +317,7 @@ func ReconcileDirectInference(cfg *config.Config, env hostenv.Env, in io.Reader,
 		}
 		return res, fmt.Errorf("provider keys resolved, but live inference verification failed: %s", detail)
 	}
-	if callable, _ := axis.ConfiguredInferenceSummary(cfg); callable > 0 || strings.TrimSpace(requestedModels) != "" {
+	if callable, _ := inference.ConfiguredSummary(cfg); callable > 0 || strings.TrimSpace(requestedModels) != "" {
 		if err := configureModelRosterFrom(cfg, in, out, interactive, requestedModels, prior); err != nil {
 			return res, fmt.Errorf("choosing models: %w", err)
 		}

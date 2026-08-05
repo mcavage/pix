@@ -26,7 +26,6 @@ import (
 	"pix/host/config"
 	"pix/host/inference"
 	"pix/host/launcher"
-	"pix/host/readiness/axis"
 	"pix/host/sys"
 	"pix/host/workflow/doctor"
 )
@@ -162,7 +161,7 @@ func modelsRosterLine(cfg *config.Config) string {
 }
 
 // modelsSessionLine renders the top-level session's resolved model, matching
-// axis.RunIntentKeyCheck's own read of cfg.RunIntent (doctor_providers.go) so the
+// inference.ResolveSessionModel's own read of cfg.RunIntent (doctor_providers.go) so the
 // two never disagree about what the session would launch.
 func modelsSessionLine(cfg *config.Config) string {
 	intent := config.DefaultRunIntent
@@ -172,7 +171,7 @@ func modelsSessionLine(cfg *config.Config) string {
 	if strings.EqualFold(intent, "none") || strings.EqualFold(intent, "off") {
 		return fmt.Sprintf("run_intent=%s -> pi's own default model", intent)
 	}
-	model, err := axis.ResolveSessionModel(intent)
+	model, err := inference.ResolveSessionModel(intent)
 	if err != nil || model == "" {
 		return fmt.Sprintf("run_intent=%s -> does not resolve (see `pix doctor`)", intent)
 	}

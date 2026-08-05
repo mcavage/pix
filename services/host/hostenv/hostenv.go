@@ -41,9 +41,6 @@ type Env struct {
 	// swap the resolver stay effective.
 	HostBinary func() (string, error)
 
-	// IdentityProbe answers a service's `identity` method. → readiness package.
-	IdentityProbe IdentityProber
-
 	// DirectInference makes one bounded, model-specific provider call. The key
 	// is held only in memory and must never appear in a returned error.
 	// → inference package.

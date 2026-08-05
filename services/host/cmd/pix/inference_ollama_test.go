@@ -8,8 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"pix/host/hostenv"
-	"pix/host/readiness"
-	"pix/host/readiness/axis"
 	"pix/host/workflow/doctor"
 	"pix/host/workflow/models"
 	"runtime"
@@ -39,15 +37,44 @@ func ollamaListEnv(tags []string, _ string, totalGB float64) hostenv.Env {
 		case "ollama":
 			return rows, false, nil
 		case "sysctl":
-			return fmt.Sprintf("%d\n", int64(totalGB*axis.BytesPerGB)), false, nil
+			return fmt.Sprintf("%d\n", int64(totalGB*inference.BytesPerGB)), false, nil
 		}
 		return "", false, fmt.Errorf("unexpected command %s", name)
 	}
 	systest.Of(env.System).ReadFileFn = func(path string) (string, error) {
 		if path == "/proc/meminfo" {
-			return fmt.Sprintf("MemTotal: %d kB\n", int64(totalGB*axis.BytesPerGB/1024)), nil
+			return fmt.Sprintf("MemTotal: %d kB\n", int64(totalGB*inference.BytesPerGB/1024)), nil
 		}
 		return "", fmt.Errorf("unexpected file %s", path)
+	}
+	return env
+}
+
+// pullModelsFix is the ONE remediation for "bound but not pulled". The
+// workflows spell it in their own refusals; the tests assert they all name the
+// same command.
+const pullModelsFix = "pix setup --pull-models"
+
+// hwMemEnv wires the real memory readers at their platform seams (both, so the
+// fixture works whatever GOOS the test binary runs on).
+func hwMemEnv(t *testing.T, goos string, totalGB float64) hostenv.Env {
+	t.Helper()
+	env := hostenv.Env{System: &systest.Fake{}}
+	switch goos {
+	case "darwin":
+		systest.Of(env.System).RunFn = func(name string, args ...string) (string, error) {
+			if name == "sysctl" {
+				return fmt.Sprintf("%d\n", int64(totalGB*inference.BytesPerGB)), nil
+			}
+			return "", fmt.Errorf("unexpected command %s", name)
+		}
+	case "linux":
+		systest.Of(env.System).ReadFileFn = func(path string) (string, error) {
+			if path != "/proc/meminfo" {
+				return "", fmt.Errorf("unexpected file %s", path)
+			}
+			return fmt.Sprintf("MemFree:  1024 kB\nMemTotal:       %d kB\nSwapTotal: 0 kB\n", int64(totalGB*inference.BytesPerGB/1024)), nil
+		}
 	}
 	return env
 }
@@ -62,7 +89,7 @@ func ollamaCfgWith(bindings ...config.InferenceModelBinding) *config.Config {
 }
 
 func binding(model string) config.InferenceModelBinding {
-	return config.InferenceModelBinding{Model: model, Backend: "ollama", Upstream: axis.OllamaTagFor(model), Available: true}
+	return config.InferenceModelBinding{Model: model, Backend: "ollama", Upstream: inference.OllamaTagFor(model), Available: true}
 }
 
 // TestConfigureOllamaInferenceBindsUnverifiedCandidates: a listing is not
@@ -483,7 +510,7 @@ func TestNonInteractiveModelsFlagRejectsUnprobedModel(t *testing.T) {
 	if err == nil {
 		t.Fatal("a scripted setup naming a model that cannot answer must fail loudly")
 	}
-	if !strings.Contains(err.Error(), "has not passed a probe") || !strings.Contains(err.Error(), axis.PullModelsFixCmd) {
+	if !strings.Contains(err.Error(), "has not passed a probe") || !strings.Contains(err.Error(), pullModelsFix) {
 		t.Fatalf("error = %v; it must name the reason and the fix", err)
 	}
 }
@@ -495,42 +522,8 @@ func TestSynthesizeInferenceKitErrorNamesTheFix(t *testing.T) {
 	if err == nil {
 		t.Fatal("a config with no callable binding must refuse to build a kit")
 	}
-	if !strings.Contains(err.Error(), axis.PullModelsFixCmd) {
+	if !strings.Contains(err.Error(), pullModelsFix) {
 		t.Fatalf("refusal = %v; it must carry the remediation", err)
-	}
-}
-
-// TestUnverifiedOllamaCandidateRemediatesWithPullNotProviderKey (S3): the
-// fall-through to modelKeyCoreCheck told a pure-Ollama user to buy a key.
-func TestUnverifiedOllamaCandidateRemediatesWithPullNotProviderKey(t *testing.T) {
-	cfg := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
-	c := axis.InferenceCoreCheck(cfg, "", true)
-	if c.Verdict != readiness.VerdictTodo || c.Todo != axis.PullModelsFixCmd {
-		t.Fatalf("core check = %+v, want a todo remediated by %q", c, axis.PullModelsFixCmd)
-	}
-	if strings.Contains(c.Todo+c.Detail+c.Evidence, "ANTHROPIC_API_KEY") {
-		t.Fatalf("a not-pulled model must never be remediated with a cloud key: %+v", c)
-	}
-	// With no ollama candidates at all, the key fix is still correct.
-	empty := &config.Config{}
-	if got := axis.InferenceCoreCheck(empty, "", true); got.Todo != axis.ModelKeyFixCmd {
-		t.Fatalf("a host with no ollama candidates still needs a key: %+v", got)
-	}
-}
-
-// TestRunIntentRowNamesThePullForUnverifiedOllamaBinding is S3's second caller.
-func TestRunIntentRowNamesThePullForUnverifiedOllamaBinding(t *testing.T) {
-	cfg := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
-	cfg.RunIntent = "breadth"
-	model, err := axis.ResolveSessionModel("breadth")
-	if err != nil {
-		t.Skipf("breadth does not resolve here: %v", err)
-	}
-	cfg.Inference.Models[0].Model = model
-	cfg.Inference.Models[0].Upstream = axis.OllamaTagFor(model)
-	c := axis.RunIntentKeyCheck(cfg, "", true)
-	if c.Todo != axis.PullModelsFixCmd {
-		t.Fatalf("run_intent row = %+v, want the pull remediation", c)
 	}
 }
 
@@ -562,8 +555,8 @@ func TestLegacyVerifiedOllamaBindingFlaggedOnceThenClears(t *testing.T) {
 	if got := doctor.LegacyVerifiedOllamaBindings(demoted); len(got) != 0 {
 		t.Fatalf("the row must clear on demotion too: %v", got)
 	}
-	if len(axis.UnverifiedOllamaCandidates(demoted)) != 1 {
-		t.Fatal("a demoted binding becomes the candidate row that names the real problem")
+	if inference.Callable(demoted, demoted.Inference.Models[0]) {
+		t.Fatal("a demoted binding must stop being callable — that is what makes the row clear honest")
 	}
 }
 
@@ -636,7 +629,7 @@ func TestEmptyOllamaSelectionPersistsNothing(t *testing.T) {
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			// runtime.GOOS, not a fixed OS: axis.ProbeHostMemory dispatches on the real
+			// runtime.GOOS, not a fixed OS: inference.ProbeHostMemory dispatches on the real
 			// one, and the 24 GB floor is a TOTAL-RAM rule, so it fires identically
 			// whichever usable-fraction applies.
 			env := hwMemEnv(t, runtime.GOOS, tc.totalGB)
