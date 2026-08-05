@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -652,8 +651,7 @@ func TestTrustKey_StableAcrossCommits(t *testing.T) {
 // TestPackUse_NewCommitSameFingerprintDoesNotRegate (end-to-end): an accepted
 // adopted Tier-1 pack whose provenance commit changes — but whose host-exec
 // fingerprint is byte-identical — re-activates non-interactively with NO
-// --yes. In-process: a misfiring gate would os.Exit(1) and fail the test
-// binary, exactly like the non-interactive pack trust-gate tests.
+// --yes, while a CHANGED surface still refuses.
 func TestPackUse_NewCommitSameFingerprintDoesNotRegate(t *testing.T) {
 	dir := isolatePackHost(t)
 	root := hostExecPack(t, dir, "work", "bin", "platformio")
@@ -685,18 +683,8 @@ func TestPackUse_NewCommitSameFingerprintDoesNotRegate(t *testing.T) {
 		t.Fatal(err)
 	}
 	out.Reset()
-	if os.Getenv("PIX_TEST_TRUST") == "changed-surface-regates" {
-		RunPackUse(fakeGitEnv(nil), &out, []string{root}, registerOK) // no --yes, non-TTY
-		return                                                        // exit 0 == a mutated surface slipped through unre-gated
-	}
-	cmd := exec.Command(os.Args[0], "-test.run", "^TestPackUse_NewCommitSameFingerprintDoesNotRegate$")
-	cmd.Env = append(os.Environ(),
-		"PIX_TEST_TRUST=changed-surface-regates",
-		"PIX_CONFIG="+filepath.Join(dir, "config.toml"),
-		"XDG_STATE_HOME="+filepath.Join(dir, "state"),
-	)
-	if cmdOut, err := cmd.CombinedOutput(); err == nil {
-		t.Errorf("a changed host-exec fingerprint must still fail closed (re-gate/refuse); output:\n%s", cmdOut)
+	if err := RunPackUse(fakeGitEnv(nil), &out, []string{root}, registerOK); err == nil {
+		t.Errorf("a changed host-exec fingerprint must still fail closed (re-gate/refuse); output:\n%s", out.String())
 	}
 }
 

@@ -28,7 +28,6 @@ package pack
 import (
 	"bytes"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -43,14 +42,9 @@ import (
 // TestPackUse_ForgedPackLockDoesNotSkipGate (CRITICAL): a local pack shipping
 // a pre-filled pack.lock in the OLD acceptance schema (accepted_* /
 // host_wrappers) must still hit the Tier-1 gate — non-TTY without --yes fails
-// closed, nothing committed, nothing installed. Subprocess (RunPackUse
-// os.Exits on refusal).
+// closed, nothing committed, nothing installed.
 func TestPackUse_ForgedPackLockDoesNotSkipGate(t *testing.T) {
-	if os.Getenv("PIX_TEST_TRUST") == "forged-lock" {
-		RunPackUse(fakeGitEnv(nil), os.Stdout, []string{os.Getenv("PIX_TEST_PACK_ROOT")}, registerOK)
-		return // exit 0 == the forged lock skipped the gate
-	}
-	dir := t.TempDir()
+	dir := isolatePackHost(t)
 	cfgPath := filepath.Join(dir, "config.toml")
 	root := hostExecPack(t, dir, "work", "proxy", "platformio")
 	forged := "accepted_host_proxies = [\"platformio\"]\n" +
@@ -60,25 +54,18 @@ func TestPackUse_ForgedPackLockDoesNotSkipGate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command(os.Args[0], "-test.run", "^TestPackUse_ForgedPackLockDoesNotSkipGate$")
-	cmd.Stdin = strings.NewReader("") // pipe stdin: deterministically non-TTY
-	cmd.Env = append(os.Environ(),
-		"PIX_TEST_TRUST=forged-lock",
-		"PIX_TEST_PACK_ROOT="+root,
-		"PIX_CONFIG="+cfgPath,
-		"XDG_STATE_HOME="+filepath.Join(dir, "state"),
-	)
-	out, err := cmd.CombinedOutput()
+	var buf bytes.Buffer
+	err := RunPackUse(fakeGitEnv(nil), &buf, []string{root}, registerOK)
 	if err == nil {
-		t.Fatalf("CRITICAL: a forged pack.lock skipped the Tier-1 gate; output:\n%s", out)
+		t.Fatalf("CRITICAL: a forged pack.lock skipped the Tier-1 gate; output:\n%s", buf.String())
 	}
-	if !strings.Contains(string(out), "--yes") {
+	if out := buf.String() + err.Error(); !strings.Contains(out, "--yes") {
 		t.Errorf("the refusal must point at --yes, got:\n%s", out)
 	}
 	if _, serr := os.Stat(cfgPath); !os.IsNotExist(serr) {
 		t.Error("nothing may commit on refusal")
 	}
-	// Nothing installed either (XDG_STATE_HOME of the child).
+	// Nothing installed either.
 	binDir := filepath.Join(dir, "state", "pix", "host-agent", "bin")
 	if entries, _ := os.ReadDir(binDir); len(entries) != 0 {
 		t.Errorf("nothing may be installed on refusal, found %v", entries)
@@ -160,14 +147,7 @@ func TestPackUse_ForgedSymlinkLockScrubbedNotFollowed(t *testing.T) {
 // reference-only Tier-0 fact — see TestPackUse_GogReferenceStaysTier0); this
 // test pins the account→argv→fingerprint machinery for the local case.
 func TestPackUse_ChangedGogAccountRegates(t *testing.T) {
-	if os.Getenv("PIX_TEST_TRUST") == "gog-regate" {
-		RunPackUse(localMCPEnv(config.GWServerName), os.Stdout, []string{os.Getenv("PIX_TEST_PACK_ROOT")}, registerOK)
-		return
-	}
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "config.toml")
-	t.Setenv("PIX_CONFIG", cfgPath)
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	dir := isolatePackHost(t)
 	pinLocalMCP(t, config.GWServerName)
 	root := filepath.Join(dir, "pack")
 	mustWritePack(t, root, Manifest{Name: "work", Schema: 1,
@@ -183,8 +163,7 @@ func TestPackUse_ChangedGogAccountRegates(t *testing.T) {
 
 	var out bytes.Buffer
 	RunPackUse(localMCPEnv(config.GWServerName), &out, []string{root, "--yes"}, registerOK) // accept with a@
-	// Same account: re-activation must NOT re-prompt (in-process; a misfiring
-	// gate would os.Exit and fail the test binary).
+	// Same account: re-activation must NOT re-prompt.
 	out.Reset()
 	RunPackUse(localMCPEnv(config.GWServerName), &out, []string{root}, registerOK)
 	if strings.Contains(out.String(), "adds these integrations to Pix") {
@@ -200,20 +179,13 @@ func TestPackUse_ChangedGogAccountRegates(t *testing.T) {
 	if err := cfg2.Save(); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(os.Args[0], "-test.run", "^TestPackUse_ChangedGogAccountRegates$")
-	cmd.Stdin = strings.NewReader("")
-	cmd.Env = append(os.Environ(),
-		"PIX_TEST_TRUST=gog-regate",
-		"PIX_TEST_PACK_ROOT="+root,
-		"PIX_CONFIG="+cfgPath,
-		"XDG_STATE_HOME="+filepath.Join(dir, "state"),
-	)
-	cmdOut, cerr := cmd.CombinedOutput()
+	out.Reset()
+	cerr := RunPackUse(localMCPEnv(config.GWServerName), &out, []string{root}, registerOK)
 	if cerr == nil {
-		t.Fatalf("a changed gog_account must re-trigger the gate (fail closed non-TTY); output:\n%s", cmdOut)
+		t.Fatalf("a changed gog_account must re-trigger the gate (fail closed non-TTY); output:\n%s", out.String())
 	}
-	if !strings.Contains(string(cmdOut), "b@example.com") {
-		t.Errorf("the re-fired BoM must show the NEW resolved argv, got:\n%s", cmdOut)
+	if got := out.String() + cerr.Error(); !strings.Contains(got, "b@example.com") {
+		t.Errorf("the re-fired BoM must show the NEW resolved argv, got:\n%s", got)
 	}
 	// And the strict host launch refuses too (the surface is not accepted).
 	cfg3, err := config.Load()

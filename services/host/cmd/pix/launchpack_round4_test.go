@@ -4,8 +4,8 @@
 package main
 
 import (
+	"bytes"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -19,12 +19,10 @@ import (
 // active-pack `pack add mcp` path — the pre-existing config (active pack, no
 // MCP) is left byte-for-byte alone when the lock can't be written.
 func TestPackAddMcp_LockWriteFailureAbortsWithoutCommit(t *testing.T) {
-	if os.Getenv("PIX_TEST_LOCKFAIL") == "add" {
-		pack.RunPackAdd(fakeGitEnv(nil), os.Stdout, []string{"mcp", "fastmail", os.Getenv("PIX_TEST_PACK_ROOT"), "--yes"}, registerServers)
-		return
-	}
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.toml")
+	t.Setenv("PIX_CONFIG", cfgPath)
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 	root := filepath.Join(dir, "pack")
 	mustWritePack(t, root, pack.Manifest{Name: "work", Schema: 1})
 	brokenPackLock(t, root)
@@ -35,18 +33,12 @@ func TestPackAddMcp_LockWriteFailureAbortsWithoutCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command(os.Args[0], "-test.run", "^TestPackAddMcp_LockWriteFailureAbortsWithoutCommit$")
-	cmd.Env = append(os.Environ(),
-		"PIX_TEST_LOCKFAIL=add",
-		"PIX_TEST_PACK_ROOT="+root,
-		"PIX_CONFIG="+cfgPath,
-		"XDG_STATE_HOME="+filepath.Join(dir, "state"),
-	)
-	out, err := cmd.CombinedOutput()
+	var buf bytes.Buffer
+	err := pack.RunPackAdd(fakeGitEnv(nil), &buf, []string{"mcp", "fastmail", root, "--yes"}, registerServers)
 	if err == nil {
-		t.Fatalf("expected `pack add mcp` to exit non-zero on a lock-write failure; output:\n%s", out)
+		t.Fatalf("expected `pack add mcp` to fail on a lock-write failure; output:\n%s", buf.String())
 	}
-	if !strings.Contains(string(out), "aborting without saving config") {
+	if out := buf.String() + err.Error(); !strings.Contains(out, "aborting without saving config") {
 		t.Errorf("expected the abort message, got:\n%s", out)
 	}
 	after, rerr := os.ReadFile(cfgPath)

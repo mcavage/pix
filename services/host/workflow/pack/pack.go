@@ -1274,28 +1274,12 @@ func printPackRecreateLine(out io.Writer) {
 
 // --- verb tree --------------------------------------------------------------
 //
-// Every verb is a thin adapter over an operation that returns a typed error:
-// the domain never exits the process or picks a stream, and `run` below is the
-// ONE place `pix pack` turns an error into an exit code. usageError is a BAD
-// INVOCATION (exit 2 on stderr); anything else is a failed operation (exit 1 on
-// the verb's own stream).
-type usageError struct{ msg string }
-
-func (e usageError) Error() string { return e.msg }
-
-func usagef(format string, a ...any) error { return usageError{fmt.Sprintf(format, a...)} }
-func run(out io.Writer, verb string, err error) {
-	if err == nil {
-		return
-	}
-	var ue usageError
-	if errors.As(err, &ue) {
-		fmt.Fprintln(os.Stderr, ue.msg)
-		os.Exit(2)
-	}
-	fmt.Fprintf(out, "pix pack %s: %v\n", verb, err)
-	os.Exit(1)
-}
+// Every verb RETURNS a typed error and writes only to the injected writer: the
+// domain neither exits the process nor picks a stream. cli.UsageError is a BAD
+// INVOCATION; anything else is a failed operation. cmd/pix (L4) is the ONE
+// place either becomes an exit code, because that is the layer that owns the
+// process.
+func usagef(format string, a ...any) error { return cli.Usagef(format, a...) }
 
 // packFlags is the ONE argv parse the verbs share (cmd/pix owns the typed
 // grammar and renders it back to argv).
@@ -1390,8 +1374,8 @@ func activateDefaultPack(root string) error {
 
 // RunPackNew adopts a pre-existing repo (or one already carrying pack.toml) in
 // place, else creates + git-inits a fresh pack. Never re-inits or clobbers.
-func RunPackNew(env hostenv.Env, out io.Writer, rest []string) {
-	run(out, "new", packNew(env, out, packTarget(rest)))
+func RunPackNew(env hostenv.Env, out io.Writer, rest []string) error {
+	return packNew(env, out, packTarget(rest))
 }
 
 func packNew(env hostenv.Env, out io.Writer, root string) error {
@@ -1447,8 +1431,8 @@ func packNew(env hostenv.Env, out io.Writer, root string) error {
 type RegisterFn func(cfg *config.Config, env hostenv.Env, out io.Writer, names []string,
 	hostResolver func() (string, error), containers map[string]config.MCPContainer) error
 
-func RunPackAdd(env hostenv.Env, out io.Writer, rest []string, register RegisterFn) {
-	run(out, "add", packAdd(env, out, rest, register))
+func RunPackAdd(env hostenv.Env, out io.Writer, rest []string, register RegisterFn) error {
+	return packAdd(env, out, rest, register)
 }
 
 // packAdd writes ONE artifact into a pack, implicit-creating the pack when it
@@ -1636,8 +1620,8 @@ func registerPackMCP(register RegisterFn, cfg *config.Config, env hostenv.Env, o
 	}
 }
 
-func RunPackLs(out io.Writer) {
-	run(out, "ls", packLs(out))
+func RunPackLs(out io.Writer) error {
+	return packLs(out)
 }
 
 func packLs(out io.Writer) error {
@@ -1659,8 +1643,8 @@ func packLs(out io.Writer) error {
 	return nil
 }
 
-func RunPackShow(env hostenv.Env, out io.Writer, rest []string) {
-	run(out, "show", packShow(env, out, rest))
+func RunPackShow(env hostenv.Env, out io.Writer, rest []string) error {
+	return packShow(env, out, rest)
 }
 
 func packShow(env hostenv.Env, out io.Writer, rest []string) error {
@@ -1800,8 +1784,8 @@ func solicitPackCredentials(env hostenv.Env, in io.Reader, out io.Writer, tty bo
 	}
 }
 
-func RunPackUse(env hostenv.Env, out io.Writer, rest []string, register RegisterFn) {
-	run(out, "use", packUse(env, out, rest, register))
+func RunPackUse(env hostenv.Env, out io.Writer, rest []string, register RegisterFn) error {
+	return packUse(env, out, rest, register)
 }
 
 // packUse switches the active pack in ONE transaction: resolve the target
@@ -1963,14 +1947,16 @@ func reportPackActivation(out io.Writer, cfg *config.Config, root string, remove
 	printPackRecreateLine(out)
 }
 
-func RunPackRm(out io.Writer, rest []string) {
+func RunPackRm(out io.Writer, rest []string) error {
 	if len(rest) > 0 {
-		run(out, "rm", usagef("pix pack rm: unexpected argument %q (rm detaches the ACTIVE pack; it takes no name)", rest[0]))
-		return
+		return usagef("pix pack rm: unexpected argument %q (rm detaches the ACTIVE pack; it takes no name)", rest[0])
 	}
 	detached, err := packRm(out)
-	run(out, "rm", err)
+	if err != nil {
+		return err // a failed detach reports nothing: the ledger is untouched
+	}
 	reportPackDetach(out, detached)
+	return nil
 }
 
 // packDetach is what `pack rm` undid; nil means there was no active pack.

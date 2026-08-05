@@ -3,7 +3,6 @@ package pack
 import (
 	"bytes"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -780,15 +779,9 @@ func TestRevertPackPriorContribution_ToleratesOverclaimingLock(t *testing.T) {
 // prior state (here: absent), so an ordinary Save failure leaves NO residue at
 // all. A later `pack rm` (once the disk recovers) must detach cleanly with no
 // orphaned contributions and no bogus "detached mcp" claim. Since round-4 F1
-// the commit point exits non-zero on a Save failure, so the add runs in a
-// re-exec of this test binary.
+// the commit point FAILS on a Save failure, which the add now returns as an
+// error rather than an exit code.
 func TestPackAddMcp_LockWrittenBeforeSaveFailure(t *testing.T) {
-	if os.Getenv("PIX_TEST_SAVEFAIL") == "add" {
-		// Child: exits 1 at the commit point (Save fails on the read-only dir).
-		// --yes accepts the Phase-2 Tier-1 gate so the commit point is reached.
-		RunPackAdd(fakeGitEnv(nil), os.Stdout, []string{"mcp", "fastmail", os.Getenv("PIX_TEST_PACK_ROOT"), "--yes"}, registerOK)
-		return
-	}
 	if os.Getuid() == 0 {
 		t.Skip("root ignores directory write permissions")
 	}
@@ -819,18 +812,14 @@ func TestPackAddMcp_LockWrittenBeforeSaveFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(cfgDir, 0o755) })
-	cmd := exec.Command(os.Args[0], "-test.run", "^TestPackAddMcp_LockWrittenBeforeSaveFailure$")
-	cmd.Env = append(os.Environ(),
-		"PIX_TEST_SAVEFAIL=add",
-		"PIX_TEST_PACK_ROOT="+root,
-		"PIX_CONFIG="+filepath.Join(cfgDir, "config.toml"),
-	)
-	childOut, childErr := cmd.CombinedOutput()
-	if childErr == nil {
-		t.Fatalf("round-4 F1: pack add must exit non-zero when cfg.Save fails, got:\n%s", childOut)
+	// --yes accepts the Phase-2 Tier-1 gate so the commit point is reached.
+	var addOut bytes.Buffer
+	addErr := RunPackAdd(fakeGitEnv(nil), &addOut, []string{"mcp", "fastmail", root, "--yes"}, registerOK)
+	if addErr == nil {
+		t.Fatalf("round-4 F1: pack add must fail when cfg.Save fails, got:\n%s", addOut.String())
 	}
-	if !strings.Contains(string(childOut), "saving config") {
-		t.Fatalf("expected the save failure message, got:\n%s", childOut)
+	if got := addOut.String() + addErr.Error(); !strings.Contains(got, "saving config") {
+		t.Fatalf("expected the save failure message, got:\n%s", got)
 	}
 	// FIX A: the lock (written first, R1) is ROLLED BACK on the Save failure —
 	// no prior lock existed, so nothing may over-claim the never-committed name.
@@ -988,19 +977,11 @@ func TestCommitPackActivation_LockFailureAbortsBeforeSave(t *testing.T) {
 
 // --- F1: abort-on-lock-failure, end-to-end through RunPackUse ------------------
 
-// TestPackUse_LockWriteFailureAbortsWithoutCommit re-executes the test binary
-// (RunPackUse calls os.Exit on this path) and asserts a forced writePackLock
-// failure leaves the config UNCOMMITTED: no MCP added, pack not switched — the
-// config file is never written at all.
+// TestPackUse_LockWriteFailureAbortsWithoutCommit asserts a forced
+// writePackLock failure leaves the config UNCOMMITTED: no MCP added, pack not
+// switched — the config file is never written at all.
 func TestPackUse_LockWriteFailureAbortsWithoutCommit(t *testing.T) {
-	if os.Getenv("PIX_TEST_LOCKFAIL") == "use" {
-		// Child: this os.Exits(1) at the commit point if the fix holds. --yes
-		// accepts the Phase-2 Tier-1 gate (the pack declares an mcp) so the
-		// child reaches the commit point instead of failing closed at the gate.
-		RunPackUse(fakeGitEnv(nil), os.Stdout, []string{os.Getenv("PIX_TEST_PACK_ROOT"), "--yes"}, registerOK)
-		return // reaching here (exit 0) means RunPackUse did NOT abort
-	}
-	dir := t.TempDir()
+	dir := isolatePackHost(t)
 	cfgPath := filepath.Join(dir, "config.toml")
 	root := filepath.Join(dir, "pack")
 	mustWritePack(t, root, Manifest{Name: "work", Schema: 1, Integrations: []Integration{
@@ -1008,18 +989,14 @@ func TestPackUse_LockWriteFailureAbortsWithoutCommit(t *testing.T) {
 	}})
 	brokenPackLock(t, root)
 
-	cmd := exec.Command(os.Args[0], "-test.run", "^TestPackUse_LockWriteFailureAbortsWithoutCommit$")
-	cmd.Env = append(os.Environ(),
-		"PIX_TEST_LOCKFAIL=use",
-		"PIX_TEST_PACK_ROOT="+root,
-		"PIX_CONFIG="+cfgPath,
-		"XDG_STATE_HOME="+filepath.Join(dir, "state"),
-	)
-	out, err := cmd.CombinedOutput()
+	// --yes accepts the Phase-2 Tier-1 gate (the pack declares an mcp) so the
+	// run reaches the commit point instead of failing closed at the gate.
+	var buf bytes.Buffer
+	err := RunPackUse(fakeGitEnv(nil), &buf, []string{root, "--yes"}, registerOK)
 	if err == nil {
-		t.Fatalf("expected `pack use` to exit non-zero on a lock-write failure; output:\n%s", out)
+		t.Fatalf("expected `pack use` to fail on a lock-write failure; output:\n%s", buf.String())
 	}
-	if !strings.Contains(string(out), "aborting without saving config") {
+	if out := buf.String() + err.Error(); !strings.Contains(out, "aborting without saving config") {
 		t.Errorf("expected the abort message, got:\n%s", out)
 	}
 	// Nothing committed: the config file must not exist (Save never ran), so
