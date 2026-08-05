@@ -7,30 +7,30 @@
 export default [
 	{
 		id: "argv.op-run-wrapper.exact-grammar",
-		description: 'OpRunWrapPrefix is the ONE op-run wrapper grammar the launcher ever generates: `<op> run --no-masking --env-file=<refs> --`. Widening this (extra flags, different ordering, a different env-file form) breaks doctor\'s UnwrapOpRun recognizer, which trusts ONLY this exact shape.',
+		description: 'McpRegistrar.ExecArgv is the ONE op-run wrapper grammar the launcher ever generates: `<op> run --no-masking --env-file=<refs> --`. Widening this (extra flags, different ordering, a different env-file form) changes what credentials the sbx gateway resolves at spawn, so it must stay exactly this shape.',
 		checks: [
 			{
 				file: "services/host/mcp/mcp.go",
 				kind: "contains",
-				region: { start: "func OpRunWrapPrefix(op, refs string) []string {", end: "\n// RawAddArgs" },
-				values: ['return []string{op, "run", "--no-masking", "--env-file=" + refs, "--"}'],
+				region: { start: "func (m McpRegistrar) ExecArgv(name string) []string {", end: "\n// RegisterServers" },
+				values: ['return append([]string{m.Op, "run", "--no-masking", "--env-file=" + m.OpRefs, "--"}, cmd...)'],
 			},
 		],
 	},
 	{
 		id: "argv.raw-add-args.no-env-flag",
-		description: 'RawAddArgs registers a local MCP server via `sbx mcp add <name> --command <argv[0]> --args <argv[1]> ...`. There is deliberately no `--env` form (see AGENTS.md MCP section, "no `--env`") \u2014 credentials only ever arrive via the op-run wrapper above, never as a literal env flag on the registration command.',
+		description: 'McpRegistrar.AddArgs registers a local MCP server via `sbx mcp add <name> --command <argv[0]> --args <argv[1]> ...`. There is deliberately no `--env` form (see AGENTS.md MCP section, "no `--env`") \u2014 credentials only ever arrive via the op-run wrapper above, never as a literal env flag on the registration command.',
 		checks: [
 			{
 				file: "services/host/mcp/mcp.go",
 				kind: "contains",
-				region: { start: "func RawAddArgs(name string, argv []string) []string {", end: "\n// GogRegisteredArgv" },
+				region: { start: "func (m McpRegistrar) AddArgs(name string) []string {", end: "\n// ExecArgv" },
 				values: ['args := []string{"mcp", "add", name, "--command", argv[0]}', 'args = append(args, "--args", c)'],
 			},
 			{
 				file: "services/host/mcp/mcp.go",
 				kind: "notContains",
-				region: { start: "func RawAddArgs(name string, argv []string) []string {", end: "\n// GogRegisteredArgv" },
+				region: { start: "func (m McpRegistrar) AddArgs(name string) []string {", end: "\n// ExecArgv" },
 				values: ["--env"],
 			},
 		],

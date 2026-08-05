@@ -281,7 +281,7 @@ func ReconcileDirectInference(cfg *config.Config, env hostenv.Env, in io.Reader,
 	}
 	prior := inference.BoundNativeProviders(cfg)
 
-	providers, err := secret.HostModeProviderKeys(env)
+	providers, err := secret.ProviderKeyNames(env)
 	if err != nil {
 		return res, fmt.Errorf("reading configured providers: %w", err)
 	}

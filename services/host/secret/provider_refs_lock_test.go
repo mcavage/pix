@@ -19,7 +19,6 @@
 package secret
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -44,9 +43,9 @@ func lockWindow(t *testing.T, events []string, lockPath string) (first, last int
 	return first, last
 }
 
-// --- deterministic lock-window: secret set covers BOTH files in ONE lock ---
+// --- deterministic lock-window: secret set/rm are ONE locked transaction ---
 
-func TestSecretSetHoldsLockAcrossBothFileTransaction(t *testing.T) {
+func TestSecretSetHoldsLockAcrossFileTransaction(t *testing.T) {
 	files := map[string]string{fakeRefsPath: "# header\n"}
 	var events []string
 	env := memEnv(files)
@@ -68,7 +67,7 @@ func TestSecretSetHoldsLockAcrossBothFileTransaction(t *testing.T) {
 
 	lockPath := ProviderRefsLockPath(env)
 	if got := systest.CountEvents(events, "acquire "); got != 1 {
-		t.Fatalf("want exactly 1 lock acquisition (mirror must use the Locked variant), got %d: %v", got, events)
+		t.Fatalf("want exactly 1 lock acquisition (writes must use the Locked variant), got %d: %v", got, events)
 	}
 	first, last := lockWindow(t, events, lockPath)
 	for i, e := range events {
@@ -78,22 +77,13 @@ func TestSecretSetHoldsLockAcrossBothFileTransaction(t *testing.T) {
 			}
 		}
 	}
-	// Both files got the key inside that single transaction.
 	if !strings.Contains(files[fakeRefsPath], "ANTHROPIC_API_KEY=op://v/anthropic/key") {
 		t.Errorf("op-refs.env missing the key: %q", files[fakeRefsPath])
 	}
-	hm := files[filepath.Join(filepath.Dir(fakeRefsPath), "hostmode.env")]
-	if !strings.Contains(hm, "ANTHROPIC_API_KEY=op://v/anthropic/key") {
-		t.Errorf("hostmode.env missing the mirrored key: %q", hm)
-	}
 }
 
-func TestSecretRmHoldsLockAcrossBothFileTransaction(t *testing.T) {
-	hmPath := filepath.Join(filepath.Dir(fakeRefsPath), "hostmode.env")
-	files := map[string]string{
-		fakeRefsPath: "ANTHROPIC_API_KEY=op://v/anthropic/key\n",
-		hmPath:       "ANTHROPIC_API_KEY=op://v/anthropic/key\n",
-	}
+func TestSecretRmHoldsLockAcrossFileTransaction(t *testing.T) {
+	files := map[string]string{fakeRefsPath: "ANTHROPIC_API_KEY=op://v/anthropic/key\n"}
 	var events []string
 	env := memEnv(files)
 	origRead, origWrite := systest.Of(env.System).ReadFileFn, systest.Of(env.System).WriteFileFn
@@ -122,29 +112,8 @@ func TestSecretRmHoldsLockAcrossBothFileTransaction(t *testing.T) {
 			}
 		}
 	}
-	if strings.Contains(files[fakeRefsPath], "ANTHROPIC_API_KEY") || strings.Contains(files[hmPath], "ANTHROPIC_API_KEY") {
-		t.Errorf("key not removed from both Files: op-refs=%q hostmode=%q", files[fakeRefsPath], files[hmPath])
-	}
-}
-
-// --- deterministic lock-window: the strict setup flow ---
-
-// The standalone mirror helper is a public wrapper: it must take the lock
-// itself (one acquisition, Locked writes inside).
-func TestMirrorHelperStandaloneTakesLock(t *testing.T) {
-	files := map[string]string{fakeRefsPath: "ANTHROPIC_API_KEY=op://v/anthropic/key\n"}
-	var events []string
-	env := memEnv(files)
-	systest.Of(env.System).LockFn = systest.NewLockRecorder(t.Fatalf, &events).Lock
-
-	mirrorProviderRefsToHostMode(env)
-
-	if got := systest.CountEvents(events, "acquire "); got != 1 {
-		t.Fatalf("want exactly 1 lock acquisition, got %d: %v", got, events)
-	}
-	hm := files[filepath.Join(filepath.Dir(fakeRefsPath), "hostmode.env")]
-	if !strings.Contains(hm, "ANTHROPIC_API_KEY=op://v/anthropic/key") {
-		t.Errorf("hostmode.env not mirrored: %q", hm)
+	if strings.Contains(files[fakeRefsPath], "ANTHROPIC_API_KEY") {
+		t.Errorf("key not removed from op-refs.env: %q", files[fakeRefsPath])
 	}
 }
 
@@ -262,10 +231,9 @@ func TestEnsureProviderKeysFromRefsHoldsLockAcrossReadResolveSbxSync(t *testing.
 // OWN lock only AFTER every per-provider write lock has already been
 // released — calling it from inside a still-held lock would deadlock the
 // real flock.
-func TestOfferOnePasswordKeysWritesPairUnderOneLockThenSyncsAfterRelease(t *testing.T) {
+func TestOfferOnePasswordKeysWritesRefUnderOneLockThenSyncsAfterRelease(t *testing.T) {
 	dir := "/cfg-offertest"
 	refsPath := filepath.Join(dir, "pix", "op-refs.env")
-	hmPath := filepath.Join(dir, "pix", "hostmode.env")
 	files := map[string]string{}
 	var events []string
 	env := hostenv.Env{System: &systest.Fake{GetenvFn: func(k string) string {
@@ -310,7 +278,7 @@ func TestOfferOnePasswordKeysWritesPairUnderOneLockThenSyncsAfterRelease(t *test
 	// acquisition (the deadlock case), so surviving to this assertion is
 	// itself proof the two acquisitions never overlapped.
 	if got := systest.CountEvents(events, "acquire "); got != 2 {
-		t.Fatalf("want exactly 2 lock acquisitions (1 pair-write + 1 sync), got %d: %v", got, events)
+		t.Fatalf("want exactly 2 lock acquisitions (1 ref-write + 1 sync), got %d: %v", got, events)
 	}
 	var acquireIdx, releaseIdx []int
 	for i, e := range events {
@@ -325,28 +293,22 @@ func TestOfferOnePasswordKeysWritesPairUnderOneLockThenSyncsAfterRelease(t *test
 		t.Fatalf("expected 2 acquire/release pairs, got acquire=%v release=%v", acquireIdx, releaseIdx)
 	}
 	firstAcquire, firstRelease := acquireIdx[0], releaseIdx[0]
-	sawRefsWrite, sawHostWrite := false, false
+	sawRefsWrite := false
 	for i, e := range events {
-		switch e {
-		case "write " + refsPath:
+		if e == "write "+refsPath {
 			sawRefsWrite = true
 			if i < firstAcquire || i > firstRelease {
-				t.Errorf("op-refs.env write outside the first (pair-write) lock window: index %d, window %d..%d", i, firstAcquire, firstRelease)
-			}
-		case "write " + hmPath:
-			sawHostWrite = true
-			if i < firstAcquire || i > firstRelease {
-				t.Errorf("hostmode.env write outside the first (pair-write) lock window: index %d, window %d..%d", i, firstAcquire, firstRelease)
+				t.Errorf("op-refs.env write outside the first (ref-write) lock window: index %d, window %d..%d", i, firstAcquire, firstRelease)
 			}
 		}
 	}
-	if !sawRefsWrite || !sawHostWrite {
-		t.Fatalf("expected both op-refs.env and hostmode.env writes, events: %v", events)
+	if !sawRefsWrite {
+		t.Fatalf("expected an op-refs.env write, events: %v", events)
 	}
 	// The sync call's lock acquisition must start strictly after the
-	// pair-write's lock released — sequential, never overlapping.
+	// ref-write's lock released — sequential, never overlapping.
 	if secondAcquire := acquireIdx[1]; secondAcquire <= firstRelease {
-		t.Fatalf("sync's lock acquisition (index %d) must start after the pair-write lock released (index %d)", secondAcquire, firstRelease)
+		t.Fatalf("sync's lock acquisition (index %d) must start after the ref-write lock released (index %d)", secondAcquire, firstRelease)
 	}
 }
 
@@ -494,84 +456,6 @@ func TestProviderKeySetAndRmNoDeadlockUnderRealFlock(t *testing.T) {
 	hm, err := os.ReadFile(filepath.Join(dir, "hostmode.env"))
 	if err == nil && strings.Contains(string(hm), "ANTHROPIC_API_KEY") {
 		t.Errorf("hostmode.env still carries the removed key: %q", hm)
-	}
-}
-
-// --- reconcile works from the validated snapshot, never a file reread ---
-
-// reconcileEnv is a minimal env for ReconcileProviderKeysWithSbx: op
-// installed + signed in, a recording run fake, and refs files as given.
-func reconcileEnv(t *testing.T, files map[string]string, calls *[]string) hostenv.Env {
-	t.Helper()
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
-	return hostenv.Env{System: &systest.Fake{GetenvFn: func(k string) string {
-		if k == "PIX_CONFIG" {
-			return filepath.Join(dir, "config.toml")
-		}
-		return ""
-	}, LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, ReadFileFn: func(p string) (string, error) {
-		if c, ok := files[p]; ok {
-			return c, nil
-		}
-		return "", os.ErrNotExist
-	}, WriteFileFn: func(p string, d []byte, _ os.FileMode) error {
-		files[p] = string(d)
-		return nil
-	}, RunFn: func(name string, args ...string) (string, error) {
-		*calls = append(*calls, name+" "+strings.Join(args, " "))
-		switch {
-		case name == "op" && len(args) >= 1 && args[0] == "account":
-			return "acct", nil
-		case name == "op" && len(args) >= 1 && args[0] == "read":
-			return "resolved-tok", nil
-		case name == "sbx" && len(args) >= 2 && args[0] == "secret" && args[1] == "ls":
-			return "", nil // sbx has NO provider keys
-		}
-		return "", nil
-	}}}
-}
-
-// The snapshot IS the source: with EMPTY refs files, a snapshot entry must
-// still drive the sbx sync (with the cached resolved value — no extra op
-// read). A reread-based reconcile would find nothing and silently skip.
-func TestReconcileUsesSnapshotNotFileReread(t *testing.T) {
-	var calls []string
-	env := reconcileEnv(t, map[string]string{}, &calls)
-	refs := map[string]string{"ANTHROPIC_API_KEY": "op://v/anthropic/key"}
-	resolved := map[string]string{"ANTHROPIC_API_KEY": "cached-tok"}
-	var out bytes.Buffer
-	if !ReconcileProviderKeysWithSbx(env, bufio.NewScanner(strings.NewReader("")), &out, false, true, refs, resolved) {
-		t.Fatalf("reconcile failed: %s", out.String())
-	}
-	joined := strings.Join(calls, "\n")
-	if !strings.Contains(joined, "sbx secret set -f -g anthropic -t cached-tok") {
-		t.Errorf("expected sbx set from the snapshot's cached value, calls:\n%s", joined)
-	}
-	if strings.Contains(joined, "op read") {
-		t.Errorf("reconcile paid a second op read despite the cached snapshot value:\n%s", joined)
-	}
-}
-
-// The inverse: refs ON DISK but absent from the snapshot are ignored —
-// reconcile never falls back to rereading CurrentOpRef.
-func TestReconcileIgnoresOnDiskRefsAbsentFromSnapshot(t *testing.T) {
-	var calls []string
-	env := reconcileEnv(t, nil, &calls) // files set below to reuse the env's dir
-	files := map[string]string{DefaultOpRefsPath(env): "ANTHROPIC_API_KEY=op://v/anthropic/key\n"}
-	systest.Of(env.System).ReadFileFn = func(p string) (string, error) {
-		if c, ok := files[p]; ok {
-			return c, nil
-		}
-		return "", os.ErrNotExist
-	}
-	var out bytes.Buffer
-	if !ReconcileProviderKeysWithSbx(env, bufio.NewScanner(strings.NewReader("")), &out, false, true, map[string]string{}, map[string]string{}) {
-		t.Fatalf("reconcile with an empty snapshot should be a no-op success: %s", out.String())
-	}
-	if joined := strings.Join(calls, "\n"); strings.Contains(joined, "sbx secret set") {
-		t.Errorf("reconcile acted on an on-disk ref that was never in the validated snapshot:\n%s", joined)
 	}
 }
 

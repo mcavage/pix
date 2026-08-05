@@ -82,7 +82,7 @@ func runMcpBundle(argv []string) {
 	} else {
 		sbxArgs = append([]string{"mcp", "bundle"}, argv...)
 	}
-	mcp.ExitMcpVerb("mcp bundle", mcp.RunMcpBundleCore(exec.LookPath, os.Stdout, os.Stdin, os.Stderr, sbxArgs))
+	mcp.ExitMcpVerb("mcp bundle", mcp.RunSbxMcpCore(exec.LookPath, os.Stdout, os.Stdin, os.Stderr, sbxArgs))
 }
 
 // runMcpAuth is a thin passthrough to `sbx mcp auth <args...>` — the native
@@ -91,7 +91,7 @@ func runMcpBundle(argv []string) {
 // verbatim: `pix mcp auth --all`, `pix mcp auth notion`,
 // `pix mcp auth status --all`, `pix mcp auth rm notion`.
 func runMcpAuth(argv []string) {
-	mcp.ExitMcpVerb("mcp auth", mcp.RunMcpAuthCore(exec.LookPath, os.Stdout, os.Stdin, os.Stderr, argv))
+	mcp.ExitMcpVerb("mcp auth", mcp.RunSbxMcpCore(exec.LookPath, os.Stdout, os.Stdin, os.Stderr, append([]string{"mcp", "auth"}, argv...)))
 }
 
 // runMcpLoad attaches an ALREADY-REGISTERED MCP server to the RUNNING sandbox

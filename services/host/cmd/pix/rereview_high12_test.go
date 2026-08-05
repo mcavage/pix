@@ -22,13 +22,10 @@ package main
 import (
 	"bytes"
 	"fmt"
-	"pix/host/config"
 	"pix/host/hostenv"
-	"pix/host/mcp"
 	"pix/host/secret"
 	"pix/host/sys/systest"
 	"pix/host/workflow/launch"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -205,111 +202,4 @@ func f2Env() hostenv.Env {
 		}
 		return ""
 	}, IsFileFn: func(p string) bool { return p == f2Refs }}, HostBinary: func() (string, error) { return f2Host, nil }}
-}
-
-// TestUnwrapOpRun_AcceptsOnlyLauncherGrammar is the mutation-style grammar
-// test: the canonical launcher-generated wrapper unwraps; every single-token
-// deviation is rejected.
-func TestUnwrapOpRun_AcceptsOnlyLauncherGrammar(t *testing.T) {
-	env := f2Env()
-	inner := []string{f2Host, "mcp", "slack"}
-	canonical := append(mcp.OpRunWrapPrefix(f2Op, f2Refs), inner...)
-
-	got, ok := mcp.UnwrapOpRun(env, canonical, secret.FindOpRefs(env))
-	if !ok || !reflect.DeepEqual(got, inner) {
-		t.Fatalf("the canonical launcher wrapper must unwrap to the inner argv, got (%v,%v)", got, ok)
-	}
-	// A bare (unwrapped) command passes through untouched.
-	if got, ok := mcp.UnwrapOpRun(env, inner, secret.FindOpRefs(env)); !ok || !reflect.DeepEqual(got, inner) {
-		t.Errorf("a bare command must pass through, got (%v,%v)", got, ok)
-	}
-
-	rejects := map[string][]string{
-		"arbitrary op subcommand (signin)": append([]string{f2Op, "signin", "--no-masking", "--env-file=" + f2Refs, "--"}, inner...),
-		"arbitrary op subcommand (plugin)": append([]string{f2Op, "plugin", "run", "--env-file=" + f2Refs, "--"}, inner...),
-		"missing --no-masking":             append([]string{f2Op, "run", "--env-file=" + f2Refs, "--"}, inner...),
-		"reordered options":                append([]string{f2Op, "run", "--env-file=" + f2Refs, "--no-masking", "--"}, inner...),
-		"alternate env file":               append([]string{f2Op, "run", "--no-masking", "--env-file=/tmp/evil.env", "--"}, inner...),
-		"two-token env file":               append([]string{f2Op, "run", "--no-masking", "--env-file", f2Refs, "--"}, inner...),
-		"extra option injected":            append([]string{f2Op, "run", "--no-masking", "--env-file=" + f2Refs, "--account", "evil", "--"}, inner...),
-		"second separator":                 append(append(mcp.OpRunWrapPrefix(f2Op, f2Refs), inner...), "--", "evil"),
-		"empty inner command":              mcp.OpRunWrapPrefix(f2Op, f2Refs),
-		"foreign argv[0] wrapper":          append([]string{"/tmp/evil", "run", "--no-masking", "--env-file=" + f2Refs, "--"}, inner...),
-		"look-alike op path":               append([]string{"/tmp/op", "run", "--no-masking", "--env-file=" + f2Refs, "--"}, inner...),
-		"empty argv":                       {},
-	}
-	for name, argv := range rejects {
-		if _, ok := mcp.UnwrapOpRun(env, argv, secret.FindOpRefs(env)); ok {
-			t.Errorf("%s must be rejected, argv=%v", name, argv)
-		}
-	}
-
-	// No resolvable launcher refs file -> nothing legitimate to unwrap; the
-	// wrapped registration is rejected rather than blessed against an unknown
-	// env file.
-	noRefs := env
-	systest.Of(noRefs.System).IsFileFn = func(string) bool { return false }
-	if _, ok := mcp.UnwrapOpRun(noRefs, canonical, secret.FindOpRefs(noRefs)); ok {
-		t.Error("an op-wrapped registration must be rejected when the launcher refs file is unresolvable")
-	}
-}
-
-// TestUnwrapOpRun_MatchesExecArgvGrammar pins the shared-grammar invariant:
-// whatever mcp.McpRegistrar.execArgv generates (for pix-host AND gog),
-// mcp.UnwrapOpRun accepts and unwraps back to the bare server command — the
-// recognizer can never drift from the generator.
-func TestUnwrapOpRun_MatchesExecArgvGrammar(t *testing.T) {
-	env := f2Env()
-	reg := mcp.McpRegistrar{Op: f2Op, OpRefs: f2Refs, HostBin: f2Host, Gog: f2Gog, Account: "you@example.com"}
-	for _, name := range []string{"slack", config.GWServerName} {
-		wrapped := reg.ExecArgv(name)
-		want := reg.ServerCmd(name)
-		got, ok := mcp.UnwrapOpRun(env, wrapped, secret.FindOpRefs(env))
-		if !ok || !reflect.DeepEqual(got, want) {
-			t.Errorf("execArgv(%q)=%v must unwrap to serverCmd=%v, got (%v,%v)", name, wrapped, want, got, ok)
-		}
-	}
-}
-
-// TestTrustedGogSpawn_WrapperGrammar: the gog trust gate accepts the canonical
-// generated wrapper and rejects grammar mutants.
-func TestTrustedGogSpawn_WrapperGrammar(t *testing.T) {
-	env := f2Env()
-	inner := []string{f2Gog, "--account", "you@example.com", "--gmail-no-send", "--wrap-untrusted", "--readonly", "mcp", "--allow-tool", "read"}
-	canonical := append(mcp.OpRunWrapPrefix(f2Op, f2Refs), inner...)
-	if norm, ok := mcp.TrustedGogSpawn(env, canonical, secret.FindOpRefs(env)); !ok || norm[0] != f2Op {
-		t.Fatalf("canonical op-wrapped gog spawn must be trusted with canonical tokens, got (%v,%v)", norm, ok)
-	}
-	rejects := map[string][]string{
-		"op signin wrapper":  append([]string{f2Op, "signin", "--no-masking", "--env-file=" + f2Refs, "--"}, inner...),
-		"alternate env file": append([]string{f2Op, "run", "--no-masking", "--env-file=/tmp/evil.env", "--"}, inner...),
-		"extra option":       append([]string{f2Op, "run", "--no-masking", "--env-file=" + f2Refs, "--evil", "--"}, inner...),
-	}
-	for name, argv := range rejects {
-		if _, ok := mcp.TrustedGogSpawn(env, argv, secret.FindOpRefs(env)); ok {
-			t.Errorf("%s must not be trusted, argv=%v", name, argv)
-		}
-	}
-}
-
-// TestRecognizedMCPArgv_WrapperGrammar: same gate for pix-host servers.
-func TestRecognizedMCPArgv_WrapperGrammar(t *testing.T) {
-	env := f2Env()
-	inner := []string{f2Host, "mcp", "slack"}
-	canonical := append(mcp.OpRunWrapPrefix(f2Op, f2Refs), inner...)
-	norm, ok := mcp.RecognizedArgv(env, canonical, "slack", secret.FindOpRefs(env))
-	if !ok || norm[0] != f2Op || norm[len(norm)-3] != f2Host {
-		t.Fatalf("canonical op-wrapped host spawn must be recognized with canonical tokens, got (%v,%v)", norm, ok)
-	}
-	rejects := map[string][]string{
-		"op signin wrapper":  append([]string{f2Op, "signin", "--no-masking", "--env-file=" + f2Refs, "--"}, inner...),
-		"alternate env file": append([]string{f2Op, "run", "--no-masking", "--env-file=/tmp/evil.env", "--"}, inner...),
-		"missing no-masking": append([]string{f2Op, "run", "--env-file=" + f2Refs, "--"}, inner...),
-		"double separator":   append(append(mcp.OpRunWrapPrefix(f2Op, f2Refs), inner...), "--"),
-	}
-	for name, argv := range rejects {
-		if _, ok := mcp.RecognizedArgv(env, argv, "slack", secret.FindOpRefs(env)); ok {
-			t.Errorf("%s must not be recognized, argv=%v", name, argv)
-		}
-	}
 }

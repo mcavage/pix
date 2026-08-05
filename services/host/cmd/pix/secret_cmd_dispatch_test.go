@@ -80,72 +80,63 @@ func TestSecretHelpConfigIndependent(t *testing.T) {
 	}
 }
 
-// TestSecretSetMirrorFailure_DispatcherExitsNonzero: a hostmode.env mirror
-// failure for a provider key must make the CLI exit nonzero, never quietly
-// succeed. Runs through the REAL dispatcher (runSecretCmd) against the real
-// filesystem in a subprocess, so the exit code is genuinely observed rather
-// than merely a returned error value nobody acted on.
-func TestSecretSetMirrorFailure_DispatcherExitsNonzero(t *testing.T) {
-	if cfgDir := os.Getenv("PIX_SECRET_SET_MIRROR_FAIL_CFGDIR"); cfgDir != "" {
+// TestSecretSetWriteFailure_DispatcherExitsNonzero: a failed op-refs.env write
+// must make the CLI exit nonzero, never quietly succeed. Runs through the REAL
+// dispatcher (runSecretCmd) against the real filesystem in a subprocess, so
+// the exit code is genuinely observed rather than merely a returned error
+// value nobody acted on.
+func TestSecretSetWriteFailure_DispatcherExitsNonzero(t *testing.T) {
+	if cfgDir := os.Getenv("PIX_SECRET_SET_FAIL_CFGDIR"); cfgDir != "" {
 		runSecretCmd([]string{"set", "ANTHROPIC_API_KEY", "op://v/anthropic/key"})
 		return
 	}
 	dir := t.TempDir()
 	cfgDir := filepath.Join(dir, "cfg")
-	// Sabotage hostmode.env: pre-create it as a DIRECTORY, so the atomic
-	// rename-into-place mirror write fails (EISDIR), while op-refs.env (which
-	// doesn't exist yet, and gets freshly seeded) stays a normal writable file.
-	if err := os.MkdirAll(filepath.Join(cfgDir, "hostmode.env"), 0o755); err != nil {
+	// Sabotage op-refs.env: pre-create it as a DIRECTORY, so reading it fails
+	// (EISDIR) and the transaction must refuse rather than clobber it.
+	if err := os.MkdirAll(filepath.Join(cfgDir, "op-refs.env"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(os.Args[0], "-test.run", "TestSecretSetMirrorFailure_DispatcherExitsNonzero")
+	cmd := exec.Command(os.Args[0], "-test.run", "TestSecretSetWriteFailure_DispatcherExitsNonzero")
 	cmd.Env = append(os.Environ(),
-		"PIX_SECRET_SET_MIRROR_FAIL_CFGDIR="+cfgDir,
+		"PIX_SECRET_SET_FAIL_CFGDIR="+cfgDir,
 		"PIX_CONFIG="+filepath.Join(cfgDir, "config.toml"),
 	)
 	outBuf, err := cmd.CombinedOutput()
 	var ee *exec.ExitError
 	if !errors.As(err, &ee) {
-		t.Fatalf("expected an ExitError (a mirror failure must exit nonzero), got %v (Output: %s)", err, outBuf)
+		t.Fatalf("expected an ExitError (a write failure must exit nonzero), got %v (Output: %s)", err, outBuf)
 	}
 	if ee.ExitCode() == 0 {
 		t.Errorf("exit code = 0, want nonzero, Output: %s", outBuf)
 	}
-	if !strings.Contains(string(outBuf), "could not mirror") {
-		t.Errorf("output should explain the mirror failure, got:\n%s", outBuf)
+	if !strings.Contains(string(outBuf), "could not read") {
+		t.Errorf("output should explain the failure, got:\n%s", outBuf)
 	}
 }
 
-// TestSecretRm_DispatcherExitsNonzeroOnPartialFailure exercises the same
-// partial failure through the real dispatcher, proving the CLI itself exits
-// nonzero (not merely that secret.RunSecretRm returns an error nobody consumed).
-func TestSecretRm_DispatcherExitsNonzeroOnPartialFailure(t *testing.T) {
-	if cfgDir := os.Getenv("PIX_SECRET_RM_PARTIAL_FAIL_CFGDIR"); cfgDir != "" {
+// TestSecretRm_DispatcherExitsNonzeroOnFailure exercises the same failure
+// through the real dispatcher for `rm`, proving the CLI itself exits nonzero
+// (not merely that secret.RunSecretRm returns an error nobody consumed).
+func TestSecretRm_DispatcherExitsNonzeroOnFailure(t *testing.T) {
+	if cfgDir := os.Getenv("PIX_SECRET_RM_FAIL_CFGDIR"); cfgDir != "" {
 		runSecretCmd([]string{"rm", "ANTHROPIC_API_KEY"})
 		return
 	}
 	dir := t.TempDir()
 	cfgDir := filepath.Join(dir, "cfg")
-	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(cfgDir, "op-refs.env"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(cfgDir, "op-refs.env"), []byte("ANTHROPIC_API_KEY=op://v/anthropic/key\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	// hostmode.env exists with the same key, but AS A DIRECTORY so the rename-in
-	// removal write fails (EISDIR).
-	if err := os.MkdirAll(filepath.Join(cfgDir, "hostmode.env"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command(os.Args[0], "-test.run", "TestSecretRm_DispatcherExitsNonzeroOnPartialFailure")
+	cmd := exec.Command(os.Args[0], "-test.run", "TestSecretRm_DispatcherExitsNonzeroOnFailure")
 	cmd.Env = append(os.Environ(),
-		"PIX_SECRET_RM_PARTIAL_FAIL_CFGDIR="+cfgDir,
+		"PIX_SECRET_RM_FAIL_CFGDIR="+cfgDir,
 		"PIX_CONFIG="+filepath.Join(cfgDir, "config.toml"),
 	)
 	outBuf, err := cmd.CombinedOutput()
 	var ee *exec.ExitError
 	if !errors.As(err, &ee) {
-		t.Fatalf("expected an ExitError (a partial rm failure must exit nonzero), got %v (Output: %s)", err, outBuf)
+		t.Fatalf("expected an ExitError (a failed rm must exit nonzero), got %v (Output: %s)", err, outBuf)
 	}
 	if ee.ExitCode() == 0 {
 		t.Errorf("exit code = 0, want nonzero, Output: %s", outBuf)

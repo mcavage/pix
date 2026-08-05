@@ -393,7 +393,7 @@ func TestRecordMcpLoadReceipt_ExactSandboxDerivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	sandbox := workspace.DeriveSandboxName(ws)
-	if err := mcp.RecordMcpLoadReceipt(sandbox, "slack"); err != nil {
+	if err := mcp.ExecSbxMcpLoadAndRecord(exec.Command("true"), sandbox, "slack"); err != nil {
 		t.Fatal(err)
 	}
 	// Read back under the SAME derivation — proves the receipt is keyed by the
