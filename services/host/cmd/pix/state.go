@@ -27,7 +27,12 @@ func runState(argv []string) {
 	retiredIfRetired("state", argv[0])
 	switch argv[0] {
 	case "reset":
-		runReset(argv[1:])
+		// Re-enter the ROOT rather than reimplementing the verb: `state reset`
+		// is an alias, and an alias that parses its own flags is how the two
+		// spellings drift.
+		if code := dispatch(append([]string{"reset"}, argv[1:]...), newRootDeps()); code != 0 {
+			os.Exit(code)
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "pix state: unknown subcommand %q\n\n%s", argv[0], stateUsage)
 		os.Exit(2)

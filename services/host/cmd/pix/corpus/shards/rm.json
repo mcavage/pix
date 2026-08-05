@@ -10,7 +10,7 @@
       "exitCode": 0,
       "stream": "stdout",
       "contains": [
-        "usage: pix rm"
+        "Usage: pix rm"
       ]
     },
     {
@@ -19,9 +19,9 @@
         "rm"
       ],
       "exitCode": 2,
-      "stream": "stdout",
+      "stream": "stderr",
       "contains": [
-        "usage: pix rm"
+        "pix: name a sandbox to remove"
       ]
     }
   ]

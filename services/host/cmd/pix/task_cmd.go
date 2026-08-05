@@ -9,11 +9,9 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"pix/host/cli"
-	"pix/host/sys"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/task"
 	"pix/host/workspace"
@@ -26,55 +24,28 @@ collide. 'rm' persists the branch back into the main repo before the
 checkout goes away, and refuses a dirty/unpushed/live one without --force.
 'pix run --task NAME' is a shorthand for 'pix task run NAME'.`
 
-// runTaskCmd is the argv seam. The retired check, the bare/-h fast path, and
-// the name-then-verb rewrite are argv-SHAPE decisions the parser cannot make
-// on its own; everything past them is kong's job.
-func runTaskCmd(argv []string) {
-	if len(argv) > 0 {
-		retiredIfRetired("task", argv[0])
-	}
-	if len(argv) == 0 || argv[0] == "-h" || argv[0] == "--help" {
-		fmt.Print(taskUsage())
-		return
-	}
-	// `pix task <name> path` reads naturally for `cd "$(pix task foo path)"`;
-	// only rewritten when argv[0] is not itself a real subcommand.
-	if len(argv) == 2 && argv[1] == "path" && !isTaskKnownVerb(argv[0]) {
-		argv = []string{"path", argv[0]}
-	}
-	d := &cli.Deps{
-		Sys: sys.Real{}, Out: os.Stdout, Err: os.Stderr,
-		In: os.Stdin, Interactive: cli.IsTTY(os.Stdin),
-	}
-	if err := cli.Run[taskCmd]("task", taskDescription, argv, d); err != nil {
-		var silent cli.SilentError
-		if !errors.As(err, &silent) {
-			fmt.Fprintf(os.Stderr, "pix task: %v\n", err)
-		}
-		os.Exit(cli.ExitCode(err))
-	}
-}
-
-// isTaskKnownVerb guards the name-then-verb rewrite: it must never fire for a
-// real subcommand or its aliases.
-func isTaskKnownVerb(v string) bool {
-	switch v {
-	case "new", "run", "ls", "list", "path", "rm", "remove":
-		return true
-	}
-	return false
-}
+func (c *taskCmd) Help() string { return taskDescription }
 
 // taskCmd is the verb tree; `list`/`remove` are kong aliases.
 type taskCmd struct {
-	New  taskNewCmd  `cmd:"" help:"Create + launch a new task checkout."`
-	Run  taskRunCmd  `cmd:"" help:"(Re)launch an existing task's sandbox."`
-	Ls   taskLsCmd   `cmd:"" aliases:"list" help:"Tasks, branch, git + sandbox state."`
-	Path taskPathCmd `cmd:"" help:"Print the task's checkout dir (for cd)."`
-	Rm   taskRmCmd   `cmd:"" aliases:"remove" help:"Tear down sandbox + checkout (guarded)."`
+	Usage taskUsageCmd `cmd:"" default:"1" hidden:"" help:"Bare 'pix task' prints the group's usage."`
+	New   taskNewCmd   `cmd:"" help:"Create + launch a new task checkout."`
+	Run   taskRunCmd   `cmd:"" help:"(Re)launch an existing task's sandbox."`
+	Ls    taskLsCmd    `cmd:"" aliases:"list" help:"Tasks, branch, git + sandbox state."`
+	Path  taskPathCmd  `cmd:"" help:"Print the task's checkout dir (for cd)."`
+	Rm    taskRmCmd    `cmd:"" aliases:"remove" help:"Tear down sandbox + checkout (guarded)."`
 }
 
 func taskUsage() string { return cli.Usage[taskCmd]("task", taskDescription) }
+
+// taskUsageCmd is what bare `pix task` selects: the group's usage, exit 0.
+// The hand-rolled seam special-cased this before the root existed.
+type taskUsageCmd struct{}
+
+func (c *taskUsageCmd) Run(d *cli.Deps) error {
+	fmt.Fprint(d.Out, taskUsage())
+	return nil
+}
 
 func taskMainroot() (string, error) {
 	cwd, err := os.Getwd()

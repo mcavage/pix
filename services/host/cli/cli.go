@@ -162,6 +162,63 @@ func Run[T any](name, description string, argv []string, d *Deps) error {
 	return ctx.Run(d)
 }
 
+// RunRoot parses argv against the ROOT command tree T — the whole verb table,
+// not one verb. It differs from Run in the two ways a root must:
+//
+//   - help goes to Deps.Out, because `pix ls --help` is a successful answer to
+//     a question, not a diagnostic;
+//   - a help request for the root ITSELF prints rootHelp verbatim. The tiered
+//     landing screen is a curated, deliberately short document, and kong's
+//     generated listing is the `help --all` tier, so the root is the one node
+//     whose help is written rather than generated.
+//
+// Every other node still renders kong's generated help, which is what keeps a
+// migrated verb's flags and its usage the same declaration.
+func RunRoot[T any](name, description, rootHelp string, argv []string, d *Deps) error {
+	var cmd T
+	parser, err := kong.New(&cmd,
+		kong.Name(name),
+		kong.Description(description),
+		kong.Writers(d.Out, d.Err),
+		kong.Exit(func(int) { panic(errHelpRequested) }),
+		kong.Help(func(o kong.HelpOptions, ctx *kong.Context) error {
+			if ctx.Selected() == nil {
+				fmt.Fprint(d.Out, rootHelp)
+				return nil
+			}
+			return kong.DefaultHelpPrinter(o, ctx)
+		}),
+	)
+	if err != nil {
+		return fmt.Errorf("internal: building the %s parser: %w", name, err)
+	}
+	ctx, err := parse(parser, argv)
+	if err != nil || ctx == nil {
+		return err // ctx == nil means --help was printed
+	}
+	return ctx.Run(d)
+}
+
+// RootVerbs reports the top-level command names of the root tree T, including
+// aliases. It is how the launcher derives its known-verb set from the parser
+// instead of hand-maintaining a second list that can disagree with dispatch.
+func RootVerbs[T any]() []string {
+	var cmd T
+	parser, err := kong.New(&cmd, kong.Name("pix"), kong.Exit(func(int) {}))
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, child := range parser.Model.Children {
+		if child.Name == "" {
+			continue
+		}
+		out = append(out, child.Name)
+		out = append(out, child.Aliases...)
+	}
+	return out
+}
+
 // errHelpRequested is the sentinel kong's exit hook panics with. Recovering a
 // panic is not a style anyone enjoys, but kong offers no other way to intercept
 // its terminal paths, and confining the ugliness to this one function is better

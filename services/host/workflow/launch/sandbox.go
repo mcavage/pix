@@ -1,7 +1,9 @@
 package launch
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"pix/host/cli"
 	"pix/host/hostenv"
@@ -16,13 +18,6 @@ import (
 // sandboxes it made, not every sbx box on the host (use `sbx` directly for the
 // rest).
 
-// fatalSbx prints a sandbox-command error (correctly prefixed, unlike the
-// agent-scoped fatalLauncher) and exits non-zero.
-func fatalSbx(err error) {
-	fmt.Fprintf(os.Stderr, "pix: %v\n", err)
-	os.Exit(1)
-}
-
 // OverlayReceiptDirs replaces best-effort sbx display data with Pix's trusted
 // create receipt. The receipt records the canonical workspace passed to the
 // successful create and is therefore authoritative when packs add other host
@@ -36,129 +31,103 @@ func OverlayReceiptDirs(boxes []workspace.SbxBox, stateDir string) {
 	}
 }
 
-// RunLs lists the pix sandboxes on this host.
-func RunLs(argv []string) {
-	if cli.WantsHelp(argv) {
-		fmt.Print(LsUsage)
-		return
-	}
-	// hasJSONFlag rather than a shared helper: `ls` is the last verb still
-	// parsing argv by hand, and a one-line scan beats keeping a generic
-	// arg-parsing kit alive for it. It goes when `ls` migrates.
-	jsonOut := false
-	for _, a := range argv {
-		if a == "--json" {
-			jsonOut = true
-		}
-	}
-	env := DefaultEnv()
+// Ls lists the pix sandboxes on this host. It returns an error rather than
+// exiting: the exit code is the root's one mapper, not this function's.
+func Ls(env hostenv.Env, out io.Writer, jsonOut bool) error {
 	if _, err := env.LookPath("sbx"); err != nil {
-		fatalSbx(fmt.Errorf("sbx not found on PATH; install the Docker Sandboxes CLI to list sandboxes"))
+		return fmt.Errorf("sbx not found on PATH; install the Docker Sandboxes CLI to list sandboxes")
 	}
 	// BOUNDED (probeRun): a hung `sbx ls` fails with a message, never wedges.
-	out, timedOut, err := env.RunTimed("sbx", "ls")
+	raw, timedOut, err := env.RunTimed("sbx", "ls")
 	if timedOut || err != nil {
-		fatalSbx(fmt.Errorf("sbx ls failed: %v", err))
+		return fmt.Errorf("sbx ls failed: %v", err)
 	}
-	boxes := workspace.ParsePixBoxes(out)
+	boxes := workspace.ParsePixBoxes(raw)
 	if stateDir, err := workspace.MCPStateDirFn(); err == nil {
 		OverlayReceiptDirs(boxes, stateDir)
 	}
 	if jsonOut {
-		PrintJSONLauncher(boxes)
-		return
+		b, err := json.MarshalIndent(boxes, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(out, string(b))
+		return nil
 	}
 	if len(boxes) == 0 {
-		fmt.Println("No pix sandboxes. Start one with `pix run`.")
-		return
+		fmt.Fprintln(out, "No pix sandboxes. Start one with `pix run`.")
+		return nil
 	}
-	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "NAME\tSTATE\tDIR")
 	for _, b := range boxes {
 		fmt.Fprintf(tw, "%s\t%s\t%s\n", b.Name, b.State, b.Dir)
 	}
 	tw.Flush()
-	fmt.Println()
-	fmt.Println("Remove one:  pix rm <name>   (or `sbx rm -f <name>` for non-pix boxes)")
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "Remove one:  pix rm <name>   (or `sbx rm -f <name>` for non-pix boxes)")
+	return nil
 }
 
-// RunRm removes one or more pix sandboxes via `sbx rm -f`. It refuses names
-// that are not pix-* (this tool manages its own boxes; use `sbx` for the
-// rest) and `--all` removes every pix-* box, with `--except <name>` to keep
-// one (e.g. the box you are in).
-func RunRm(argv []string) {
-	if cli.WantsHelp(argv) || len(argv) == 0 {
-		fmt.Print(RmUsage)
-		if len(argv) == 0 {
-			os.Exit(2)
-		}
-		return
-	}
-	env := DefaultEnv()
+// RmOptions is the already-parsed `pix rm` invocation. Parsing is the root
+// parser's job; deciding what a removal MEANS is this package's.
+type RmOptions struct {
+	Names  []string
+	All    bool
+	Except []string
+}
+
+// Rm removes one or more pix sandboxes via `sbx rm -f`. It refuses names that
+// are not pix-* (this tool manages its own boxes; use `sbx` for the rest), and
+// All removes every pix-* box, with Except keeping one (e.g. the box you are
+// in). A per-name failure is reported as it happens and summarised as exit 1
+// through a SilentError, because each cause was already named.
+func Rm(env hostenv.Env, out, errOut io.Writer, opts RmOptions) error {
 	if _, err := env.LookPath("sbx"); err != nil {
-		fatalSbx(fmt.Errorf("sbx not found on PATH; install the Docker Sandboxes CLI to remove sandboxes"))
+		return fmt.Errorf("sbx not found on PATH; install the Docker Sandboxes CLI to remove sandboxes")
 	}
-
-	var names, keep []string
-	all := false
-	for i := 0; i < len(argv); i++ {
-		a := argv[i]
-		switch {
-		case a == "--all":
-			all = true
-		case a == "--except":
-			if i+1 >= len(argv) {
-				fatalSbx(fmt.Errorf("--except needs a name"))
-			}
-			i++
-			keep = append(keep, argv[i])
-		case strings.HasPrefix(a, "-"):
-			fatalSbx(fmt.Errorf("unknown flag %q\n\n%s", a, RmUsage))
-		default:
-			names = append(names, a)
-		}
-	}
-
-	if all {
+	names := append([]string(nil), opts.Names...)
+	if opts.All {
 		// BOUNDED (probeRun): the --all discovery listing is read-only; a hung
 		// sbx fails with a message rather than wedging (the `sbx rm -f` calls
 		// below are mutating lifecycle commands and stay on env.Run).
-		out, timedOut, err := env.RunTimed("sbx", "ls")
+		raw, timedOut, err := env.RunTimed("sbx", "ls")
 		if timedOut || err != nil {
-			fatalSbx(fmt.Errorf("sbx ls failed: %v", err))
+			return fmt.Errorf("sbx ls failed: %v", err)
 		}
-		keepSet := map[string]bool{}
-		for _, k := range keep {
-			keepSet[k] = true
+		keep := map[string]bool{}
+		for _, k := range opts.Except {
+			keep[k] = true
 		}
-		for _, b := range workspace.ParsePixBoxes(out) {
-			if !keepSet[b.Name] {
+		for _, b := range workspace.ParsePixBoxes(raw) {
+			if !keep[b.Name] {
 				names = append(names, b.Name)
 			}
 		}
 		if len(names) == 0 {
-			fmt.Println("No pix sandboxes to remove.")
-			return
+			fmt.Fprintln(out, "No pix sandboxes to remove.")
+			return nil
 		}
 	}
 
-	rc := 0
+	failed := false
 	for _, n := range names {
 		if !strings.HasPrefix(n, "pix-") {
-			fmt.Fprintf(os.Stderr, "refusing %q: not a pix sandbox (use `sbx rm -f %s` for that)\n", n, n)
-			rc = 1
+			fmt.Fprintf(errOut, "refusing %q: not a pix sandbox (use `sbx rm -f %s` for that)\n", n, n)
+			failed = true
 			continue
 		}
 		if err := RemovePixSandbox(env, n); err != nil {
-			fmt.Fprintf(os.Stderr, "failed to remove %s: %v\n", n, err)
-			rc = 1
+			fmt.Fprintf(errOut, "failed to remove %s: %v\n", n, err)
+			failed = true
 			continue
 		}
-		fmt.Printf("removed %s\n", n)
+		fmt.Fprintf(out, "removed %s\n", n)
 	}
-	if rc != 0 {
-		os.Exit(rc)
+	if failed {
+		return cli.SilentError{Code: 1}
 	}
+	return nil
 }
 
 // RemovePixSandbox force-removes name via env and, on SUCCESS, clears the
@@ -178,19 +147,16 @@ func RemovePixSandbox(env hostenv.Env, name string) error {
 	return nil
 }
 
-const LsUsage = `usage: pix ls [--json]
+// LsDescription and RmDescription are the long help the root's generated usage
+// prints. They live with the behaviour they describe, so a change to one shows
+// up in the other's diff; they replaced two hand-written usage constants.
+const LsDescription = `List the pix sandboxes on this host (name, state, ws dir). These are the
+boxes 'pix run' and 'pix task' create. For every sbx sandbox (not just pix's),
+use 'sbx ls'.`
 
-List the pix sandboxes on this host (name, state, ws dir). These are
-the boxes ` + "`pix run`" + ` and ` + "`pix task`" + ` create. For every sbx sandbox
-(not just pix's), use ` + "`sbx ls`" + `.
-`
+const RmDescription = `Remove pix sandboxes (via 'sbx rm -f'). Scoped to pix-* names; use 'sbx rm'
+for other boxes.
 
-const RmUsage = `usage: pix rm <name>... [--all] [--except <name>]
-
-Remove pix sandboxes (via ` + "`sbx rm -f`" + `). Scoped to pix-* names; use
-` + "`sbx rm`" + ` for other boxes.
-
-  pix rm pix-tact              remove one
-  pix rm pix-a pix-b      remove several
-  pix rm --all --except pix-pix   remove all but one
-`
+  pix rm pix-tact                  remove one
+  pix rm pix-a pix-b               remove several
+  pix rm --all --except pix-pix    remove all but one`

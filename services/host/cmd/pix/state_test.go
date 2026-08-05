@@ -35,7 +35,7 @@ func TestRunState_RoutesToAliasesViaHelp(t *testing.T) {
 	// (retired_test.go + corpus/retired_dispatch_test.go), which asserts the
 	// notice and exit 2 out of process — it cannot be exercised in-process.
 	cases := map[string]string{
-		"reset": "usage: pix reset",
+		"reset": "Usage: pix reset",
 	}
 	for sub, want := range cases {
 		out := captureStdout(t, func() { runState([]string{sub, "--help"}) })

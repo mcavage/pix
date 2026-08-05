@@ -23,13 +23,10 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 
 	"pix/host/cli"
 	"pix/host/launcher"
-	"pix/host/service"
-	"pix/host/workflow/launch"
 	"pix/host/workflow/provision"
 )
 
@@ -68,90 +65,17 @@ func main() {
 	}
 
 	// A retired surface answers before anything else can happen: no config read,
-	// no probe, no side effect. See retired.go.
+	// no probe, no side effect. Both granularities are checked here, because a
+	// retired SUBCOMMAND (`task gc`, `state backup`) must answer before its
+	// group's parser rejects the name it no longer knows (see retired.go).
 	retiredIfRetired(args[0], "")
+	if len(args) > 1 {
+		retiredIfRetired(args[0], args[1])
+	}
 
-	switch args[0] {
-	case "run":
-		runVerb(args[1:])
-	case "status", "st":
-		runStatusCmd(args[1:])
-	case "ls":
-		launch.RunLs(args[1:])
-	case "rm":
-		launch.RunRm(args[1:])
-	case "version", "--version", "-v":
-		if len(args) > 1 {
-			if args[1] == "-h" || args[1] == "--help" {
-				fmt.Print(versionUsage)
-				return
-			}
-			fmt.Fprintf(os.Stderr, "pix version: unexpected argument %q\n\n%s", args[1], versionUsage)
-			os.Exit(2)
-		}
-		fmt.Println(version)
-	case "config":
-		provision.RunConfig(args[1:])
-	case "serve":
-		runServe(args[1:])
-	case "doctor":
-		runDoctorCmd(args[1:])
-	case "setup":
-		// Explicit guided onboarding: host phase, then hand off to the in-VM
-		// agent. (`pix run` never onboards on its own; `pix setup
-		// --no-agent` is the host-only, no-handoff path for CI — the `onboard`
-		// verb it replaced is deleted, with no alias: an `onboard` argv takes
-		// the standard unknown-verb path, which suggests `setup` and exits 2.)
-		runSetupCmd(args[1:])
-	case "mcp":
-		runMcpCmd(args[1:])
-	case "pack":
-		runPackCmd(args[1:])
-	case "secret":
-		runSecretCmd(args[1:])
-	case "memory", "mem":
-		runMemory(args[1:])
-	case "monitor":
-		runMonitor(args[1:])
-	case "models":
-		runModels(args[1:])
-	case "agent":
-		runAgent(args[1:])
-	case "reset":
-		runReset(args[1:])
-	case "state":
-		runState(args[1:])
-	case "task":
-		runTaskCmd(args[1:])
-	case "help", "-h", "--help":
-		if len(args) > 1 {
-			if args[1] == "--all" {
-				fmt.Print(helpAllText)
-				return
-			}
-			if u, ok := verbUsage(args[1]); ok {
-				fmt.Print(u)
-				return
-			}
-		}
-		fmt.Print(helpText)
-	default:
-		// A bare positional is a run workspace ONLY when it names an existing
-		// directory (e.g. `pix ~/dev/foo`). Otherwise classifyBareArg decides:
-		// a path-like token is a missing/!dir workspace (no such directory), and a
-		// bare word is a probable verb typo (with a did-you-mean hint).
-		if a := args[0]; len(a) > 0 && a[0] != '-' {
-			msg, launch := classifyBareArg(a)
-			if launch {
-				runVerb(args)
-				return
-			}
-			fmt.Fprint(os.Stderr, msg)
-			os.Exit(2)
-		}
-		fmt.Fprintf(os.Stderr, "pix: unknown flag %q\n\n", args[0])
-		fmt.Print(helpText)
-		os.Exit(2)
+	// Everything else is the root's: one parser, one dispatch, one exit map.
+	if code := dispatch(args, newRootDeps()); code != 0 {
+		os.Exit(code)
 	}
 }
 
@@ -199,53 +123,6 @@ func runVerb(argv []string) {
 		return
 	}
 	runRun(argv)
-}
-
-// runServe execs the sibling pix-host binary's `serve` subcommand, found
-// next to this binary or on PATH, passing along any args.
-func runServe(argv []string) {
-	// A leading -h/--help prints serve usage instead of execing the host binary.
-	if len(argv) > 0 && (argv[0] == "-h" || argv[0] == "--help") {
-		fmt.Print(service.Usage)
-		return
-	}
-	// `serve stop` / `serve status` are launcher-side control verbs (pidfile-based)
-	// handled HERE — they are NOT passed through to `pix-host serve`.
-	if len(argv) > 0 {
-		switch argv[0] {
-		case "stop":
-			service.RunStop(argv[1:])
-			return
-		case "status":
-			service.RunStatus(argv[1:])
-			return
-		case "start", "install":
-			// `start` is an alias for `install`: it registers + (re)starts the
-			// managed service, picking up a freshly-rebuilt binary — the natural
-			// partner to `serve stop`.
-			service.RunInstall(argv[1:])
-			return
-		case "uninstall":
-			service.RunUninstall(argv[1:])
-			return
-		}
-	}
-	bin, err := launcher.FindHostBinary()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix serve: %v\n", err)
-		os.Exit(1)
-	}
-	cmd := exec.Command(bin, append([]string{"serve"}, argv...)...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		if exit, ok := err.(*exec.ExitError); ok {
-			os.Exit(exit.ExitCode())
-		}
-		fmt.Fprintf(os.Stderr, "pix serve: exec %s: %v\n", bin, err)
-		os.Exit(1)
-	}
 }
 
 // hostBinaryResolver locates pix-host. It is indirected through a package
@@ -336,15 +213,12 @@ Setup & health
   doctor           diagnose problems and print the exact fix commands
   monitor [name]   live-follow a sandbox's out-of-sandbox traffic (:11437)
 
-Data
+Data & models
   memory           recall | remember | forget | learnings | stats
-
-Models & agents
   models           which models pix can use, and which are wired up
   agent            manage subagents: ls | new | edit | rm | reassess
 
-More
-  config, mcp, state, version           (see ` + "`pix help --all`" + `)
+More             config, mcp, task, state, version   (see ` + "`pix help --all`" + `)
 
 Learn a command:  pix help run     ·     pix <command> -h
 `

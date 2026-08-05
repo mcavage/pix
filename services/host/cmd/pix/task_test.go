@@ -20,6 +20,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -375,14 +376,25 @@ func TestTaskRm_RefusesAndLeavesCheckoutIntact(t *testing.T) {
 	}
 }
 
-// --- runTaskCmd: the argv-shape decisions the parser cannot make -----------
+// --- the argv-shape decisions the parser cannot make, now in the root ------
+
+// dispatchStdout runs one argv through the REAL root and returns what the
+// command wrote to stdout.
+func dispatchStdout(t *testing.T, argv []string) string {
+	t.Helper()
+	var out, errb bytes.Buffer
+	if code := dispatch(argv, &cli.Deps{Out: &out, Err: &errb}); code != 0 {
+		t.Fatalf("dispatch(%v) = %d, stderr %q", argv, code, errb.String())
+	}
+	return out.String()
+}
 
 func TestRunTaskCmd_BareAndHelpPrintUsage(t *testing.T) {
-	out := captureStdout(t, func() { runTaskCmd(nil) })
+	out := dispatchStdout(t, []string{"task"})
 	if !strings.Contains(out, "pix task") || !strings.Contains(out, "Create + launch a new task checkout") {
 		t.Errorf("bare `task` should print usage, got %q", out)
 	}
-	out2 := captureStdout(t, func() { runTaskCmd([]string{"-h"}) })
+	out2 := dispatchStdout(t, []string{"task", "-h"})
 	if !strings.Contains(out2, "pix task") {
 		t.Errorf("-h should print usage, got %q", out2)
 	}
@@ -402,7 +414,7 @@ func TestRunTaskCmd_NameThenVerbShorthand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out := strings.TrimSpace(captureStdout(t, func() { runTaskCmd([]string{"foo", "path"}) }))
+	out := strings.TrimSpace(dispatchStdout(t, []string{"task", "foo", "path"}))
 	if out != co {
 		t.Errorf("got %q, want %q", out, co)
 	}

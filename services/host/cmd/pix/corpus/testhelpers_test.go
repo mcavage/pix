@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// realShardsDir/realRetirementPath/helpGoPath point at the actual corpus data
+// realShardsDir/realRetirementPath/rootGoPath point at the actual corpus data
 // this package ships (not a scratch fixture), so schema and coverage tests
 // exercise the real baseline the harness is meant to guard.
 func realShardsDir(t *testing.T) string {
@@ -19,9 +19,9 @@ func realRetirementPath(t *testing.T) string {
 	return filepath.Join(".", "retirement.jsonl")
 }
 
-func helpGoPath(t *testing.T) string {
+func rootGoPath(t *testing.T) string {
 	t.Helper()
-	return filepath.Join("..", "help.go")
+	return filepath.Join("..", "root.go")
 }
 
 func repoRoot(t *testing.T) string {

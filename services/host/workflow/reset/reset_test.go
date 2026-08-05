@@ -328,23 +328,15 @@ func TestRunResetCore_YesExecutes(t *testing.T) {
 	}
 }
 
-// TestParseResetArgs covers reset flags, help, and unknown input.
-func TestParseResetArgs(t *testing.T) {
-	if o, err := ParseArgs([]string{"--keep-memory", "--sbx", "--yes"}, true); err != nil ||
-		!o.keepMemory || !o.sbx || !o.assumeYes {
-		t.Fatalf("reset flags: %+v err=%v", o, err)
+// TestNewOpts: the flag SET is the root parser's (root.go's resetCmd); what
+// stays here is that each flag reaches the field the plan reads.
+func TestNewOpts(t *testing.T) {
+	o := NewOpts(true, true, true, true)
+	if !o.keepMemory || !o.sbx || !o.assumeYes || !o.force {
+		t.Fatalf("NewOpts(all true) = %+v", o)
 	}
-	if o, err := ParseArgs([]string{"-h"}, true); err != nil || !o.Help {
-		t.Errorf("help: %+v err=%v", o, err)
-	}
-	if _, err := ParseArgs([]string{"--nope"}, true); err == nil {
-		t.Error("unknown flag must error")
-	}
-	if _, err := ParseArgs([]string{"--purge-data"}, true); err == nil {
-		t.Error("--purge-data was retired from reset's owned flag set and must now be unknown")
-	}
-	if _, err := ParseArgs([]string{"--sbx"}, false); err == nil {
-		t.Error("--sbx must still be gateable via allowSbx=false")
+	if z := NewOpts(false, false, false, false); z.keepMemory || z.sbx || z.assumeYes || z.force {
+		t.Fatalf("NewOpts(all false) = %+v", z)
 	}
 }
 

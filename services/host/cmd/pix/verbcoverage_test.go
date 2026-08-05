@@ -1,11 +1,8 @@
 package main
 
 import (
-	"go/ast"
-	"go/parser"
-	"go/token"
+	"pix/host/cli"
 	"pix/host/readiness"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -28,48 +25,15 @@ var hiddenVerbs = map[string]string{
 	"mem":       "documented abbreviation of memory",
 }
 
-// dispatchVerbs extracts the case values of main.go's top-level `switch
-// args[0]` — the actual, live set of things a user may type.
+// dispatchVerbs is the actual, live set of things a user may type: the
+// children of the kong root. It was main.go's `switch args[0]`, parsed out of
+// the source; the root is now the only dispatcher, so the list is derived from
+// the parser itself and cannot describe a verb that is not dispatchable.
 func dispatchVerbs(t *testing.T) []string {
 	t.Helper()
-	node, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
-	if err != nil {
-		t.Fatalf("parse main.go: %v", err)
-	}
-	var verbs []string
-	ast.Inspect(node, func(n ast.Node) bool {
-		sw, ok := n.(*ast.SwitchStmt)
-		if !ok || sw.Tag == nil {
-			return true
-		}
-		// The dispatch switch is the one switching on args[0].
-		idx, ok := sw.Tag.(*ast.IndexExpr)
-		if !ok {
-			return true
-		}
-		id, ok := idx.X.(*ast.Ident)
-		if !ok || id.Name != "args" {
-			return true
-		}
-		for _, stmt := range sw.Body.List {
-			cc, ok := stmt.(*ast.CaseClause)
-			if !ok {
-				continue
-			}
-			for _, expr := range cc.List {
-				lit, ok := expr.(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING {
-					continue
-				}
-				if v, err := strconv.Unquote(lit.Value); err == nil {
-					verbs = append(verbs, v)
-				}
-			}
-		}
-		return true
-	})
+	verbs := cli.RootVerbs[rootCmd]()
 	if len(verbs) < 10 {
-		t.Fatalf("found only %d dispatch verbs (%v) — the switch shape moved and this test stopped testing anything", len(verbs), verbs)
+		t.Fatalf("found only %d root verbs (%v) — the root tree moved and this test stopped testing anything", len(verbs), verbs)
 	}
 	return verbs
 }

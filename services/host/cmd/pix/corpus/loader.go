@@ -3,10 +3,14 @@ package corpus
 import (
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
-	"regexp"
+	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -75,35 +79,76 @@ func ValidateShard(s Shard) error {
 	return nil
 }
 
-// knownVerbsBlockRe extracts the body of help.go's `var knownVerbs = map[string]bool{ ... }`
-// literal, and verbKeyRe pulls each quoted key out of that body. Scanning the
-// real source (rather than hand-duplicating the list here) means this guard
-// can never silently drift from the CLI's actual dispatch table.
-var (
-	knownVerbsBlockRe = regexp.MustCompile(`(?s)var knownVerbs = map\[string\]bool\{(.*?)\n\}`)
-	verbKeyRe         = regexp.MustCompile(`"([a-zA-Z0-9_-]+)"\s*:\s*true`)
-)
-
-// ExtractKnownVerbs scans help.go's source text for the knownVerbs map and
-// returns its keys. It errors if the map can't be found at all (the anchor
-// moved), which is the same "warn, don't silently pass" contract the other
+// ExtractKnownVerbs returns the launcher's live top-level verb set by reading
+// the KONG ROOT (root.go's `type rootCmd struct`): every field tagged `cmd:""`
+// is a verb (aliases are the same verb under a second spelling, so they are
+// not listed separately).
+//
+// It parses the root rather than a hand-maintained list because the root is
+// the only dispatcher: a list beside it can only ever be a second, stale
+// answer to "what does pix accept?" (this guard previously scanned a
+// `knownVerbs` map that the switch could out-run). It errors when the struct
+// cannot be found at all — the same "warn, don't silently pass" contract the
 // scripts/check-*.sh guards use for a moved anchor.
-func ExtractKnownVerbs(helpGoPath string) (map[string]bool, error) {
-	b, err := os.ReadFile(helpGoPath)
+func ExtractKnownVerbs(rootGoPath string) (map[string]bool, error) {
+	file, err := parser.ParseFile(token.NewFileSet(), rootGoPath, nil, 0)
 	if err != nil {
-		return nil, fmt.Errorf("corpus: read %s: %w", helpGoPath, err)
+		return nil, fmt.Errorf("corpus: parse %s: %w", rootGoPath, err)
 	}
-	block := knownVerbsBlockRe.FindSubmatch(b)
-	if block == nil {
-		return nil, fmt.Errorf("corpus: could not find `var knownVerbs = map[string]bool{...}` in %s (did it move? update knownVerbsBlockRe)", helpGoPath)
+	fields := rootStructFields(file)
+	if fields == nil {
+		return nil, fmt.Errorf("corpus: could not find `type rootCmd struct` in %s (did the root move?)", rootGoPath)
 	}
-	matches := verbKeyRe.FindAllSubmatch(block[1], -1)
-	if len(matches) == 0 {
-		return nil, fmt.Errorf("corpus: knownVerbs block in %s matched but contained no \"verb\": true entries", helpGoPath)
+	out := map[string]bool{}
+	for _, f := range fields {
+		if f.Tag == nil || len(f.Names) == 0 {
+			continue
+		}
+		tag, err := strconv.Unquote(f.Tag.Value)
+		if err != nil {
+			continue
+		}
+		st := reflect.StructTag(tag)
+		if _, isCmd := st.Lookup("cmd"); !isCmd {
+			continue
+		}
+		// Canonical names only: an alias (`st`, `mem`) is the same verb under a
+		// second spelling, and is covered by that verb's shard. Requiring a
+		// shard per alias would multiply the corpus without proving anything
+		// the canonical case does not.
+		out[kongVerbName(f.Names[0].Name)] = true
 	}
-	out := make(map[string]bool, len(matches))
-	for _, m := range matches {
-		out[string(m[1])] = true
+	if len(out) == 0 {
+		return nil, fmt.Errorf("corpus: rootCmd in %s has no `cmd:\"\"` fields", rootGoPath)
 	}
 	return out, nil
+}
+
+// rootStructFields returns the fields of `type rootCmd struct`, or nil.
+func rootStructFields(file *ast.File) []*ast.Field {
+	var fields []*ast.Field
+	ast.Inspect(file, func(n ast.Node) bool {
+		ts, ok := n.(*ast.TypeSpec)
+		if !ok || ts.Name == nil || ts.Name.Name != "rootCmd" {
+			return true
+		}
+		if st, ok := ts.Type.(*ast.StructType); ok && st.Fields != nil {
+			fields = st.Fields.List
+		}
+		return false
+	})
+	return fields
+}
+
+// kongVerbName mirrors kong's default namer: a field name becomes its
+// lower-kebab spelling (Ls -> ls, KitRef -> kit-ref).
+func kongVerbName(field string) string {
+	var b strings.Builder
+	for i, r := range field {
+		if i > 0 && r >= 'A' && r <= 'Z' {
+			b.WriteByte('-')
+		}
+		b.WriteRune(r)
+	}
+	return strings.ToLower(b.String())
 }

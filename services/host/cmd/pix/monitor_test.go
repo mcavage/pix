@@ -35,6 +35,26 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
+// runMonitorCore parses argv through the REAL root and runs the follow loop
+// with an injected context + default store root. The verb has no other core:
+// argv parsing is the root's, following is monitor's.
+func runMonitorCore(ctx context.Context, argv []string, out io.Writer, defaultRoot string, tty bool) error {
+	var ran error
+	testSeams.monitor = func(c *monitorCmd, d *cli.Deps) error {
+		if c.Path == "" {
+			c.Path = defaultRoot
+		}
+		ran = c.follow(ctx, d, tty)
+		return ran
+	}
+	defer func() { testSeams.monitor = nil }()
+	d := &cli.Deps{Out: out, Err: out}
+	if code := dispatch(append([]string{"monitor"}, argv...), d); code == 2 {
+		return cli.Usagef("monitor: bad invocation")
+	}
+	return ran
+}
+
 func TestMonitorHelpAndUsageErrors(t *testing.T) {
 	for _, argv := range [][]string{{"-h"}, {"--help"}, {"--help", "mybox"}} {
 		var out bytes.Buffer
@@ -45,8 +65,12 @@ func TestMonitorHelpAndUsageErrors(t *testing.T) {
 		// discoverable, so pin them rather than just "usage:". It must also
 		// say plainly this is a reader with no listener of its own, and point
 		// at `pix serve` for the ingest side.
-		for _, want := range []string{"usage: pix monitor", "PURE READER", "never binds a port", "pix serve", "make load", "PIX_MONITOR=0", "PIX_MONITOR_URL", "CASE-SENSITIVE", "--path DIR", "--json"} {
-			if !strings.Contains(out.String(), want) {
+		// Generated help re-WRAPS its prose, so a fact can land across a line
+		// break. Collapse whitespace before asserting: what must survive is the
+		// fact, not the column it happens to fall in.
+		flat := strings.Join(strings.Fields(out.String()), " ")
+		for _, want := range []string{"Usage: pix monitor", "PURE READER", "never binds a port", "pix serve", "make load", "PIX_MONITOR=0", "PIX_MONITOR_URL", "CASE-SENSITIVE", "--path", "--json"} {
+			if !strings.Contains(flat, want) {
 				t.Errorf("monitor usage missing %q", want)
 			}
 		}
@@ -60,7 +84,7 @@ func TestMonitorHelpAndUsageErrors(t *testing.T) {
 		if err == nil {
 			t.Fatalf("runMonitorCore(%v) = nil error, want a usage error", argv)
 		}
-		var usage cli.UsageError2
+		var usage cli.UsageError
 		if !errors.As(err, &usage) {
 			t.Errorf("runMonitorCore(%v) error = %v (%T), want a usage error (exit 2)", argv, err, err)
 		}

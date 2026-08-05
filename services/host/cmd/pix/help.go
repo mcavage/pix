@@ -9,20 +9,19 @@ import (
 	"pix/host/workflow/launch"
 	"pix/host/workflow/pack"
 	"pix/host/workflow/provision"
-	"pix/host/workflow/reset"
 )
 
-// cli.ErrHelpRequested is the shared sentinel a parser returns when the argv asks
-// knownVerbs is the set of top-level verbs, used to suggest a fix when a bare
-// positional (a would-be run DIR) is actually a mistyped verb.
-var knownVerbs = map[string]bool{
-	"help": true, "serve": true, "doctor": true, "setup": true, "status": true,
-	"ls": true, "rm": true,
-	"config": true, "mcp": true, "memory": true, "monitor": true,
-	"pack": true, "version": true, "run": true, "secret": true,
-	"reset": true,
-	"state": true,
-	"task":  true, "models": true, "agent": true,
+// knownVerbs is the set of top-level verbs, DERIVED from the kong root so the
+// suggester and the dispatcher cannot disagree. It is used to tell a mistyped
+// verb from a would-be `run` DIR, and to suggest the fix.
+var knownVerbs = derivedKnownVerbs()
+
+func derivedKnownVerbs() map[string]bool {
+	out := map[string]bool{}
+	for _, v := range cli.RootVerbs[rootCmd]() {
+		out[v] = true
+	}
+	return out
 }
 
 // suggestVerb returns the closest known verb to input within edit distance 2 —
@@ -139,13 +138,13 @@ func verbUsage(verb string) (string, bool) {
 	case "run":
 		return runUsage, true
 	case "serve":
-		return service.Usage, true
+		return cli.Usage[serveCmd]("serve", service.Description), true
 	case "status", "st":
 		return doctor.StatusUsage, true
 	case "ls":
-		return launch.LsUsage, true
+		return cli.Usage[lsCmd]("ls", launch.LsDescription), true
 	case "rm":
-		return launch.RmUsage, true
+		return cli.Usage[rmCmd]("rm", launch.RmDescription), true
 	case "doctor":
 		return doctor.Usage, true
 	case "setup":
@@ -159,13 +158,13 @@ func verbUsage(verb string) (string, bool) {
 	case "memory", "mem":
 		return memory.Usage + "\n", true
 	case "monitor":
-		return monitorUsage, true
+		return cli.Usage[monitorCmd]("monitor", monitorDescription), true
 	case "secret":
 		return secretUsage(), true
 	case "version":
-		return versionUsage, true
+		return cli.Usage[versionCmd]("version", ""), true
 	case "reset":
-		return reset.Usage, true
+		return cli.Usage[resetCmd]("reset", resetDescription), true
 	case "state":
 		return stateUsage, true
 	case "task":
@@ -186,8 +185,3 @@ func verbUsage(verb string) (string, bool) {
 // drift from `pix secret --help`. It was a hand-written block that listed
 // argument counts the parser also enforced, separately.
 func secretUsage() string { return cli.Usage[SecretCmd]("secret", secretDescription) }
-
-const versionUsage = `usage: pix version
-
-Print the stamped launcher version.
-`
