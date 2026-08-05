@@ -17,11 +17,28 @@ func rootDeps() (*cli.Deps, *bytes.Buffer, *bytes.Buffer) {
 	return &cli.Deps{Out: &out, Err: &errb}, &out, &errb
 }
 
+// runRootParse drives the REAL root parser over a full argv, which is how a
+// verb's flags reach it in production. Tests used to call cli.Run[T] on one
+// verb's subtree; there is no such subtree any more, and parsing the argv a
+// user actually types is the stronger assertion anyway.
+func runRootParse(argv []string, d *cli.Deps) error {
+	return cli.RunRoot[rootCmd]("pix", "", helpText, argv, d)
+}
+
+// rootVerbs is every name the root answers to, aliases included.
+func rootVerbs() []string {
+	var out []string
+	for v := range knownVerbs() {
+		out = append(out, v)
+	}
+	return out
+}
+
 // TestRootOwnsEveryVerb: every verb the launcher answers to is a child of the
 // kong root. The list is the one users type; it was main.go's switch.
 func TestRootOwnsEveryVerb(t *testing.T) {
 	got := map[string]bool{}
-	for _, v := range cli.RootVerbs[rootCmd]() {
+	for _, v := range rootVerbs() {
 		got[v] = true
 	}
 	for _, want := range []string{
@@ -30,7 +47,7 @@ func TestRootOwnsEveryVerb(t *testing.T) {
 		"monitor", "models", "agent", "reset", "state", "task", "help",
 	} {
 		if !got[want] {
-			t.Errorf("verb %q is not a child of the kong root (got %v)", want, cli.RootVerbs[rootCmd]())
+			t.Errorf("verb %q is not a child of the kong root (got %v)", want, rootVerbs())
 		}
 	}
 }
@@ -38,13 +55,13 @@ func TestRootOwnsEveryVerb(t *testing.T) {
 // TestKnownVerbsDerivedFromRoot: the did-you-mean set is DERIVED, so a verb
 // can never be dispatchable and unknown to the suggester at the same time.
 func TestKnownVerbsDerivedFromRoot(t *testing.T) {
-	for _, v := range cli.RootVerbs[rootCmd]() {
-		if !knownVerbs[v] {
+	for _, v := range rootVerbs() {
+		if !knownVerbs()[v] {
 			t.Errorf("root verb %q missing from the derived knownVerbs set", v)
 		}
 	}
-	if len(knownVerbs) < 10 {
-		t.Fatalf("knownVerbs has %d entries; the derivation stopped working", len(knownVerbs))
+	if len(knownVerbs()) < 10 {
+		t.Fatalf("knownVerbs has %d entries; the derivation stopped working", len(knownVerbs()))
 	}
 }
 
@@ -83,6 +100,9 @@ func TestRootHelpIsTheCuratedScreen(t *testing.T) {
 func TestMigratedVerbHelpIsGenerated(t *testing.T) {
 	for verb, want := range map[string]string{
 		"ls":      "Usage: pix ls",
+		"models":  "Usage: pix models",
+		"agent":   "Usage: pix agent",
+		"secret":  "Usage: pix secret",
 		"rm":      "Usage: pix rm",
 		"reset":   "Usage: pix reset",
 		"serve":   "Usage: pix serve",
@@ -127,7 +147,7 @@ func TestExitMapper(t *testing.T) {
 // VERBATIM — kong must not parse, reject or reorder a flag that belongs to a
 // hand-rolled loop, which is what makes the adapter behaviour-preserving.
 func TestLegacyVerbsArePassthrough(t *testing.T) {
-	for _, verb := range []string{"run", "status", "config", "doctor", "setup", "mcp", "pack", "secret", "memory", "models", "agent", "state", "help"} {
+	for _, verb := range []string{"run", "status", "config", "doctor", "setup", "mcp", "pack", "memory", "state", "help"} {
 		var gotVerb string
 		var gotArgs []string
 		testSeams.legacy = func(v string, a []string) { gotVerb, gotArgs = v, a }

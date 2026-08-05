@@ -15,7 +15,7 @@
 // docs/design/worktree-tasks.md's host-verification section), so it is out of
 // scope for this in-process suite — exactly as before this migration. What IS
 // covered here is everything reachable before that call: kong's parse (via
-// cli.Run[taskCmd]) and the pure guards in taskNew that run before any git or
+// the root parser) and the pure guards in taskNew that run before any git or
 // process work.
 package main
 
@@ -78,13 +78,13 @@ func taskTestDeps() *cli.Deps {
 	}
 }
 
-// runTaskParse drives the real kong parser (cli.Run[taskCmd]) the way
+// runTaskParse drives the real kong parser (the root) the way
 // production argv does, returning whatever error it produced (nil on
 // success). This is the "no hand parser loop" replacement for the old
 // parseTaskNewArgs/parseTaskRmArgs unit tests: the parsing IS kong now.
 func runTaskParse(t *testing.T, d *cli.Deps, argv ...string) error {
 	t.Helper()
-	return cli.Run[taskCmd]("task", taskDescription, argv, d)
+	return runRootParse(append([]string{"task"}, argv...), d)
 }
 
 // --- new: passthrough + mechanism guards (pure, no repo needed) -------------

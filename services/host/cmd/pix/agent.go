@@ -12,7 +12,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -69,20 +68,6 @@ func fatalLauncher(err error) {
 var valueFlags = map[string]bool{
 	"--intent": true, "--description": true, "--tools": true,
 	"--budget": true, "--model": true,
-}
-
-func runAgent(argv []string) {
-	d := &cli.Deps{
-		Sys: sys.Real{}, Out: os.Stdout, Err: os.Stderr,
-		In: os.Stdin, Interactive: cli.IsTTY(os.Stdin),
-	}
-	if err := cli.Run[AgentCmd]("agent", agentDescription, argv, d); err != nil {
-		var silent cli.SilentError
-		if !errors.As(err, &silent) {
-			fmt.Fprintf(os.Stderr, "pix agent: %v\n", err)
-		}
-		os.Exit(cli.ExitCode(err))
-	}
 }
 
 // agentsDir resolves the directory holding agent markdown files: $PIX_AGENTS_DIR
@@ -640,11 +625,6 @@ func setMappingValue(doc *yaml.Node, key, val, tag string) {
 		&yaml.Node{Kind: yaml.ScalarNode, Value: val, Tag: tag},
 	)
 }
-
-// agentUsage renders the SAME help kong prints, so `pix help agent` cannot
-// drift from `pix agent --help`. It was a hand-written block listing flags the
-// parser never read.
-func agentUsage() string { return cli.Usage[AgentCmd]("agent", agentDescription) }
 
 // budgetArg renders a parsed --budget back into the string form the frontmatter
 // writer expects. kong parses it as a float64 so an unparseable value is

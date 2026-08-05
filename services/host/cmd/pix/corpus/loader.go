@@ -3,14 +3,11 @@ package corpus
 import (
 	"encoding/json"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
-	"reflect"
+	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 )
 
@@ -79,70 +76,30 @@ func ValidateShard(s Shard) error {
 	return nil
 }
 
-// ExtractKnownVerbs returns the launcher's live top-level verb set by reading
-// the KONG ROOT (root.go's `type rootCmd struct`): every field tagged `cmd:""`
-// is a verb. It parses the root because the root is the only dispatcher — a
-// list beside it can only be a second, stale answer to "what does pix
-// accept?" (this guard used to scan a knownVerbs map the switch could out-run).
-// A missing struct is an error, the same "warn, don't silently pass" contract
-// the scripts/check-*.sh guards use for a moved anchor.
-func ExtractKnownVerbs(rootGoPath string) (map[string]bool, error) {
-	file, err := parser.ParseFile(token.NewFileSet(), rootGoPath, nil, 0)
+// helpAllVerbRe matches one verb row of the generated `pix help --all`
+// listing: every verb sits two spaces under its tier heading, and headings and
+// prose sit in column 0.
+var helpAllVerbRe = regexp.MustCompile(`(?m)^ {2}([a-z][a-z0-9-]*) `)
+
+// ExtractKnownVerbs returns the launcher's live top-level verb set by ASKING
+// THE BINARY. `pix help --all` is generated from the kong root (root.go's
+// `type rootCmd struct`), which is the only dispatcher, so its listing is the
+// dispatcher's own answer to "what does pix accept?" — not a list beside it,
+// and not a source scan a moved anchor can silently defeat. Zero verbs is an
+// error, the same "warn, don't silently pass" contract the scripts/check-*.sh
+// guards use.
+func ExtractKnownVerbs(bin string) (map[string]bool, error) {
+	listing, err := exec.Command(bin, "help", "--all").Output()
 	if err != nil {
-		return nil, fmt.Errorf("corpus: parse %s: %w", rootGoPath, err)
+		return nil, fmt.Errorf("corpus: %s help --all: %w", bin, err)
 	}
-	fields := rootStructFields(file)
-	if fields == nil {
-		return nil, fmt.Errorf("corpus: could not find `type rootCmd struct` in %s (did the root move?)", rootGoPath)
+	rows := helpAllVerbRe.FindAllSubmatch(listing, -1)
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("corpus: `%s help --all` listed no verbs (did the generated listing change shape?)", bin)
 	}
-	out := map[string]bool{}
-	for _, f := range fields {
-		if f.Tag == nil || len(f.Names) == 0 {
-			continue
-		}
-		tag, err := strconv.Unquote(f.Tag.Value)
-		if err != nil {
-			continue
-		}
-		st := reflect.StructTag(tag)
-		if _, isCmd := st.Lookup("cmd"); !isCmd {
-			continue
-		}
-		// Canonical names only: an alias (`st`, `mem`) is covered by its verb's
-		// shard, and a shard per alias would prove nothing extra.
-		out[kongVerbName(f.Names[0].Name)] = true
-	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("corpus: rootCmd in %s has no `cmd:\"\"` fields", rootGoPath)
+	out := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		out[string(row[1])] = true
 	}
 	return out, nil
-}
-
-// rootStructFields returns the fields of `type rootCmd struct`, or nil.
-func rootStructFields(file *ast.File) []*ast.Field {
-	var fields []*ast.Field
-	ast.Inspect(file, func(n ast.Node) bool {
-		ts, ok := n.(*ast.TypeSpec)
-		if !ok || ts.Name == nil || ts.Name.Name != "rootCmd" {
-			return true
-		}
-		if st, ok := ts.Type.(*ast.StructType); ok && st.Fields != nil {
-			fields = st.Fields.List
-		}
-		return false
-	})
-	return fields
-}
-
-// kongVerbName mirrors kong's default namer: a field name becomes its
-// lower-kebab spelling (Ls -> ls, KitRef -> kit-ref).
-func kongVerbName(field string) string {
-	var b strings.Builder
-	for i, r := range field {
-		if i > 0 && r >= 'A' && r <= 'Z' {
-			b.WriteByte('-')
-		}
-		b.WriteRune(r)
-	}
-	return strings.ToLower(b.String())
 }

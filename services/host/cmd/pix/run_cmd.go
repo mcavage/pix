@@ -26,7 +26,7 @@ import (
 )
 
 func init() {
-	launch.IsKnownVerb = func(v string) bool { return knownVerbs[v] }
+	launch.IsKnownVerb = func(v string) bool { return knownVerbs()[v] }
 	launch.DefaultEnv = defaultShellEnv
 }
 

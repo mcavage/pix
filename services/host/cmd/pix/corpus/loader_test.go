@@ -84,12 +84,16 @@ func TestValidateShard_RejectsBadJSONKeysWithoutStream(t *testing.T) {
 // --- deletion guard: every known verb is either covered or retired ---------
 
 func TestCoverage_EveryKnownVerbHasShardOrRetirement(t *testing.T) {
-	verbs, err := ExtractKnownVerbs(rootGoPath(t))
+	bin, err := BuildPixBinary()
+	if err != nil {
+		t.Fatalf("BuildPixBinary: %v", err)
+	}
+	verbs, err := ExtractKnownVerbs(bin)
 	if err != nil {
 		t.Fatalf("ExtractKnownVerbs: %v", err)
 	}
-	if len(verbs) == 0 {
-		t.Fatal("ExtractKnownVerbs found zero verbs; did the kong root move?")
+	if len(verbs) < 10 {
+		t.Fatalf("ExtractKnownVerbs found %d verbs; the generated listing stopped listing them", len(verbs))
 	}
 
 	shards, err := LoadShards(realShardsDir(t))

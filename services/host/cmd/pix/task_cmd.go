@@ -36,14 +36,12 @@ type taskCmd struct {
 	Rm    taskRmCmd    `cmd:"" aliases:"remove" help:"Tear down sandbox + checkout (guarded)."`
 }
 
-func taskUsage() string { return cli.Usage[taskCmd]("task", taskDescription) }
-
 // taskUsageCmd is what bare `pix task` selects: the group's usage, exit 0.
 // The hand-rolled seam special-cased this before the root existed.
 type taskUsageCmd struct{}
 
 func (c *taskUsageCmd) Run(d *cli.Deps) error {
-	fmt.Fprint(d.Out, taskUsage())
+	dispatch([]string{"task", "--help"}, d)
 	return nil
 }
 

@@ -7,34 +7,66 @@
 			{
 				"file": "services/host/serve.go",
 				"kind": "contains",
-				"from": ["env(\"MEMORY_PORT\", \"11435\")", "env(\"KNOWLEDGE_PORT\", \"11436\")", "env(\"BROKER_PORT\", \"11437\")"],
-				"to": ["env(\"MEMORY_PORT\", \"11435\")"]
+				"from": [
+					"env(\"MEMORY_PORT\", \"11435\")",
+					"env(\"KNOWLEDGE_PORT\", \"11436\")",
+					"env(\"BROKER_PORT\", \"11437\")"
+				],
+				"to": [
+					"env(\"MEMORY_PORT\", \"11435\")"
+				]
 			}
 		]
 	},
 	{
 		"id": "config-keys.top-level.surface",
-		"rationale": "W2 U03A finishes the knowledge-service retirement: config.KnowledgeBundles (the built-in OKF knowledge service's bundle-path list) is deleted from the Config struct — an older config.toml's knowledge_bundles key is now tolerated as a retired key (config.RetiredKeys/config show/doctor), never a live field. The pin narrows to the surface that remains.",
+		"rationale": "W2 U03A finishes the knowledge-service retirement: config.KnowledgeBundles (the built-in OKF knowledge service's bundle-path list) is deleted from the Config struct \u2014 an older config.toml's knowledge_bundles key is now tolerated as a retired key (config.RetiredKeys/config show/doctor), never a live field. The pin narrows to the surface that remains.",
 		"evidence": "services/host/config/config.go retiredConfigKeys[\"knowledge_bundles\"]; services/host/workflow/setup/config.go's `config set/get knowledge_bundles` refusal",
 		"changes": [
 			{
 				"file": "services/host/config/config.go",
 				"kind": "set",
-				"from": ["services", "mcp", "memory_watcher_model", "memory_embed_model", "ollama_bridge_model", "run_intent", "inference", "google_workspace_account", "google_workspace_access", "knowledge_bundles"],
-				"to": ["services", "mcp", "memory_watcher_model", "memory_embed_model", "ollama_bridge_model", "run_intent", "inference", "google_workspace_account", "google_workspace_access"]
+				"from": [
+					"services",
+					"mcp",
+					"memory_watcher_model",
+					"memory_embed_model",
+					"ollama_bridge_model",
+					"run_intent",
+					"inference",
+					"google_workspace_account",
+					"google_workspace_access",
+					"knowledge_bundles"
+				],
+				"to": [
+					"services",
+					"mcp",
+					"memory_watcher_model",
+					"memory_embed_model",
+					"ollama_bridge_model",
+					"run_intent",
+					"inference",
+					"google_workspace_account",
+					"google_workspace_access"
+				]
 			}
 		]
 	},
 	{
 		"id": "ports.reserved.identity",
-		"rationale": "W2 U03A finishes the knowledge-service retirement: identity.go no longer probes a :11436 knowledge service identity (there is nothing left to probe — the service, its RPC client, and its default port constant are all deleted).",
+		"rationale": "W2 U03A finishes the knowledge-service retirement: identity.go no longer probes a :11436 knowledge service identity (there is nothing left to probe \u2014 the service, its RPC client, and its default port constant are all deleted).",
 		"evidence": "services/host/identity.go; services/host/rpc/rpc.go (KnowledgePortDefault/KnowledgeClient removed)",
 		"changes": [
 			{
 				"file": "services/host/identity.go",
 				"kind": "contains",
-				"from": ["servicePort(\"MEMORY_PORT\", 11435)", "servicePort(\"KNOWLEDGE_PORT\", 11436)"],
-				"to": ["servicePort(\"MEMORY_PORT\", 11435)"]
+				"from": [
+					"servicePort(\"MEMORY_PORT\", 11435)",
+					"servicePort(\"KNOWLEDGE_PORT\", 11436)"
+				],
+				"to": [
+					"servicePort(\"MEMORY_PORT\", 11435)"
+				]
 			}
 		]
 	},
@@ -46,28 +78,114 @@
 			{
 				"file": "services/host/serve_plugin.go",
 				"kind": "contains",
-				"region": { "start": "var pluginEnvAllowlist = map[string]bool{", "end": "\n}\n" },
-				"from": ["\"MEMORY_PORT\":", "\"KNOWLEDGE_PORT\":", "\"PIX_MEMORY_PORT\":", "\"PIX_KNOWLEDGE_PORT\":", "\"PIX_BROKER_PORT\":"],
-				"to": ["\"MEMORY_PORT\":", "\"PIX_MEMORY_PORT\":"]
+				"region": {
+					"start": "var pluginEnvAllowlist = map[string]bool{",
+					"end": "\n}\n"
+				},
+				"from": [
+					"\"MEMORY_PORT\":",
+					"\"KNOWLEDGE_PORT\":",
+					"\"PIX_MEMORY_PORT\":",
+					"\"PIX_KNOWLEDGE_PORT\":",
+					"\"PIX_BROKER_PORT\":"
+				],
+				"to": [
+					"\"MEMORY_PORT\":",
+					"\"PIX_MEMORY_PORT\":"
+				]
 			}
 		]
 	},
 	{
 		"id": "config-keys.top-level.surface",
-		"rationale": "W2 U02B deletes the built-in `pix gworkspace setup --create-docs` wizard and the separate google-docs-create write-scoped MCP it provisioned (workflow/gworkspace, google_docs_create_plugin.go). google_workspace_access was the get-only permission profile that wizard wrote and nothing else ever read once the wizard is gone, so it drops from the top-level key surface. It lands ON TOP of the W2 U03A knowledge_bundles removal recorded above — the merged tree never occupies an intermediate state where only one of the two keys is gone — so the destination recorded here is the whole surface that remains: Services through google_workspace_account. That key is UNCHANGED: gog stays registerable the generic way every other local stdio MCP server is, via `pix mcp register` (mcp.GogHardenedArgv already bakes in --readonly/--gmail-no-send/--wrap-untrusted).",
-		"evidence": "docs/design/gworkspace-externalization.md; services/host/config/config.go (GoogleWorkspaceAccess field + SetGoogleWorkspaceAccess removed); services/host/workflow/provision/config.go (the google_workspace_access get-key case and its ConfigKeysHelp line removed — `pix config get|set` belongs to provision now, workflow/setup having been deleted by the U10b/U10c provision port)",
+		"rationale": "W2 U02B deletes the built-in `pix gworkspace setup --create-docs` wizard and the separate google-docs-create write-scoped MCP it provisioned (workflow/gworkspace, google_docs_create_plugin.go). google_workspace_access was the get-only permission profile that wizard wrote and nothing else ever read once the wizard is gone, so it drops from the top-level key surface. It lands ON TOP of the W2 U03A knowledge_bundles removal recorded above \u2014 the merged tree never occupies an intermediate state where only one of the two keys is gone \u2014 so the destination recorded here is the whole surface that remains: Services through google_workspace_account. That key is UNCHANGED: gog stays registerable the generic way every other local stdio MCP server is, via `pix mcp register` (mcp.GogHardenedArgv already bakes in --readonly/--gmail-no-send/--wrap-untrusted).",
+		"evidence": "docs/design/gworkspace-externalization.md; services/host/config/config.go (GoogleWorkspaceAccess field + SetGoogleWorkspaceAccess removed); services/host/workflow/provision/config.go (the google_workspace_access get-key case and its ConfigKeysHelp line removed \u2014 `pix config get|set` belongs to provision now, workflow/setup having been deleted by the U10b/U10c provision port)",
 		"changes": [
 			{
 				"file": "services/host/config/config.go",
 				"kind": "set",
-				"from": ["services", "mcp", "memory_watcher_model", "memory_embed_model", "ollama_bridge_model", "run_intent", "inference", "google_workspace_account", "google_workspace_access"],
-				"to": ["services", "mcp", "memory_watcher_model", "memory_embed_model", "ollama_bridge_model", "run_intent", "inference", "google_workspace_account"]
+				"from": [
+					"services",
+					"mcp",
+					"memory_watcher_model",
+					"memory_embed_model",
+					"ollama_bridge_model",
+					"run_intent",
+					"inference",
+					"google_workspace_account",
+					"google_workspace_access"
+				],
+				"to": [
+					"services",
+					"mcp",
+					"memory_watcher_model",
+					"memory_embed_model",
+					"ollama_bridge_model",
+					"run_intent",
+					"inference",
+					"google_workspace_account"
+				]
 			},
 			{
 				"file": "scripts/semantic-diff/rules/config-keys.rules.mjs",
 				"kind": "set",
-				"from": ["services", "mcp", "memory_watcher_model", "memory_embed_model", "ollama_bridge_model", "run_intent", "inference", "google_workspace_account", "google_workspace_access"],
-				"to": ["services", "mcp", "memory_watcher_model", "memory_embed_model", "ollama_bridge_model", "run_intent", "inference", "google_workspace_account"]
+				"from": [
+					"services",
+					"mcp",
+					"memory_watcher_model",
+					"memory_embed_model",
+					"ollama_bridge_model",
+					"run_intent",
+					"inference",
+					"google_workspace_account",
+					"google_workspace_access"
+				],
+				"to": [
+					"services",
+					"mcp",
+					"memory_watcher_model",
+					"memory_embed_model",
+					"ollama_bridge_model",
+					"run_intent",
+					"inference",
+					"google_workspace_account"
+				]
+			}
+		]
+	},
+	{
+		"id": "lifecycle.rm.keep-polarity-except",
+		"rationale": "W6/U11a ports `pix rm` onto the kong root: RunRm(argv) became Rm(env, out, errOut, RmOptions), so the --all discovery loop reads the `sbx ls` output as `raw` and the keep set is the local `keep` map built from opts.Except. The pinned PROPERTY is unchanged \u2014 the loop still iterates only workspace.ParsePixBoxes (pix-* filtered) and still removes a box only when it is ABSENT from the keep set; only the two identifier spellings moved.",
+		"evidence": "services/host/workflow/launch/sandbox.go Rm(): `raw, timedOut, err := env.RunTimed(\"sbx\", \"ls\")` then `for _, b := range workspace.ParsePixBoxes(raw) { if !keep[b.Name] {`",
+		"changes": [
+			{
+				"file": "services/host/workflow/launch/sandbox.go",
+				"kind": "contains",
+				"from": [
+					"for _, b := range workspace.ParsePixBoxes(out) {",
+					"if !keepSet[b.Name] {"
+				],
+				"to": [
+					"for _, b := range workspace.ParsePixBoxes(raw) {",
+					"if !keep[b.Name] {"
+				]
+			}
+		]
+	},
+	{
+		"id": "stdio.sandbox-scope.refusal-goes-to-stderr",
+		"rationale": "Same port: Rm takes its two streams as parameters instead of writing to the process globals, which is what makes the refusal assertable in-process. The pinned PROPERTY is unchanged \u2014 the refusal goes to the ERROR stream, never to out \u2014 so the pin follows the writer: os.Stderr -> errOut, which the launcher binds to Deps.Err (os.Stderr in production).",
+		"evidence": "services/host/workflow/launch/sandbox.go Rm(env, out, errOut, opts): `fmt.Fprintf(errOut, \"refusing %q: not a pix sandbox ...\")`; cmd/pix/root.go rmCmd.Run passes d.Out, d.Err",
+		"changes": [
+			{
+				"file": "services/host/workflow/launch/sandbox.go",
+				"kind": "contains",
+				"from": [
+					"fmt.Fprintf(os.Stderr, \"refusing %q: not a pix sandbox"
+				],
+				"to": [
+					"fmt.Fprintf(errOut, \"refusing %q: not a pix sandbox"
+				]
 			}
 		]
 	}

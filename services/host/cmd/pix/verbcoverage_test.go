@@ -1,7 +1,6 @@
 package main
 
 import (
-	"pix/host/cli"
 	"pix/host/readiness"
 	"strings"
 	"testing"
@@ -31,7 +30,7 @@ var hiddenVerbs = map[string]string{
 // the parser itself and cannot describe a verb that is not dispatchable.
 func dispatchVerbs(t *testing.T) []string {
 	t.Helper()
-	verbs := cli.RootVerbs[rootCmd]()
+	verbs := rootVerbs()
 	if len(verbs) < 10 {
 		t.Fatalf("found only %d root verbs (%v) — the root tree moved and this test stopped testing anything", len(verbs), verbs)
 	}
@@ -47,17 +46,18 @@ func TestHelpListsEveryTopLevelVerb(t *testing.T) {
 		if _, hidden := hiddenVerbs[verb]; hidden {
 			continue
 		}
-		if !strings.Contains(helpAllText, verb) {
+		if !strings.Contains(helpAll(), verb) {
 			t.Errorf("verb %q is dispatched but absent from `pix help --all` (add it, or add it to hiddenVerbs with a reason)", verb)
 		}
 	}
 }
 
-// TestEveryDispatchedSubcommandAppearsInItsUsage: a verb with its own usage
-// text must name every subcommand its own dispatch accepts. The measured pairs
-// below are the multi-subcommand verbs; each one's usage string is parsed for
-// the subcommand token. This is the test that would have caught `task path`
-// being implemented and unlisted.
+// TestEveryDispatchedSubcommandAppearsInItsUsage: a verb must name every
+// subcommand its own dispatch accepts. The measured pairs below are the
+// multi-subcommand verbs; each one's help screen — the legacy constant, or the
+// generated one for a migrated verb — is parsed for the subcommand token. This
+// is the test that would have caught `task path` being implemented and
+// unlisted.
 func TestEveryDispatchedSubcommandAppearsInItsUsage(t *testing.T) {
 	for verb, subs := range map[string][]string{
 		"config": {"show", "path", "get", "set", "unset"},
@@ -68,8 +68,10 @@ func TestEveryDispatchedSubcommandAppearsInItsUsage(t *testing.T) {
 		// ls/show/pick/route.
 		"models": {"ls", "show", "pick", "route"},
 	} {
-		usage, ok := verbUsage(verb)
-		if !ok {
+		d, out, _ := rootDeps()
+		runHelp(d, []string{verb})
+		usage := out.String()
+		if strings.TrimSpace(usage) == "" {
 			t.Errorf("verb %q has no usage text", verb)
 			continue
 		}

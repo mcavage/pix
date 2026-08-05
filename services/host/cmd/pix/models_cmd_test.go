@@ -50,7 +50,7 @@ func TestModelsStatus_RendersToDepsOut(t *testing.T) {
 		}},
 	}}
 	d, out, _ := testDeps(cfg)
-	if err := cli.Run[ModelsCmd]("models", modelsDescription(), nil, d); err != nil {
+	if err := runRootParse([]string{"models"}, d); err != nil {
 		t.Fatalf("bare `models` must succeed: %v", err)
 	}
 	for _, want := range []string{"Runtime", "Backends", "anthropic", "Roster"} {
@@ -65,7 +65,7 @@ func TestModelsStatus_RendersToDepsOut(t *testing.T) {
 // only observe by forking.
 func TestModelsAdd_RejectsOllamaFlagsOnAKeyedProvider(t *testing.T) {
 	d, _, _ := testDeps(&config.Config{})
-	err := cli.Run[ModelsCmd]("models", modelsDescription(), []string{"add", "anthropic", "--local"}, d)
+	err := runRootParse([]string{"models", "add", "anthropic", "--local"}, d)
 	if err == nil {
 		t.Fatal("--local on a keyed provider must be rejected")
 	}
@@ -90,7 +90,7 @@ func TestModelsAdd_ValidatesProviderFromOneList(t *testing.T) {
 		}
 	}
 	d, _, _ := testDeps(&config.Config{})
-	err := cli.Run[ModelsCmd]("models", modelsDescription(), []string{"add", "bogus"}, d)
+	err := runRootParse([]string{"models", "add", "bogus"}, d)
 	if cli.ExitCode(err) != 2 {
 		t.Fatalf("an unknown provider is a usage error, got exit %d (%v)", cli.ExitCode(err), err)
 	}
@@ -104,7 +104,7 @@ func TestModelsAdd_ValidatesProviderFromOneList(t *testing.T) {
 func kongParseInto(t *testing.T, _ *ModelsAddCmd, argv []string) error {
 	t.Helper()
 	d, _, _ := testDeps(&config.Config{Inference: config.InferenceConfig{ExclusiveSource: "/packs/stop"}})
-	err := cli.Run[ModelsCmd]("models", modelsDescription(), argv, d)
+	err := runRootParse(append([]string{"models"}, argv...), d)
 	// An exclusive pack refuses AFTER parsing, which is exactly the signal we
 	// want: the provider name was accepted, and the command stopped for an
 	// unrelated, deliberate reason.

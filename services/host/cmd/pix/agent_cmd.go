@@ -22,6 +22,8 @@ $PIX_AGENTS_DIR); run from the repo root.`
 // AgentCmd is the verb tree. `list` and `remove` are kong aliases rather than
 // extra switch arms, so the alias appears in generated help instead of being a
 // fact you could only learn by reading the dispatcher.
+func (c *AgentCmd) Help() string { return agentDescription }
+
 type AgentCmd struct {
 	Ls       AgentLsCmd       `cmd:"" aliases:"list" help:"List the roster with each agent's resolved model and why."`
 	New      AgentNewCmd      `cmd:"" help:"Scaffold an agent."`

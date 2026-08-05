@@ -172,7 +172,7 @@ func TestMonitorPathModeJSONAndFilter(t *testing.T) {
 }
 
 func TestMonitorIsAKnownVerb(t *testing.T) {
-	if !knownVerbs["monitor"] {
-		t.Fatal(`knownVerbs["monitor"] = false, want true`)
+	if !knownVerbs()["monitor"] {
+		t.Fatal(`knownVerbs()["monitor"] = false, want true`)
 	}
 }

@@ -1,5 +1,5 @@
 // secret_cmd_dispatch_test.go — argv dispatch and exit codes for `pix secret`.
-// The subject is runSecretCmd (the kong tree in cmd/pix), not the secret
+// The subject is SecretCmd (the kong tree in cmd/pix), not the secret
 // capability, so these live here; the capability's own behaviour is tested in
 // secret/.
 package main
@@ -15,11 +15,20 @@ import (
 	"pix/host/cli"
 )
 
+// runSecretDispatch drives `pix secret ...` through the REAL root and exits
+// with the code the launcher would. The command returns its error now rather
+// than calling os.Exit, but these cases assert the PROCESS exit code, so the
+// subprocess arm is where error becomes exit.
+func runSecretDispatch(argv []string) {
+	d := &cli.Deps{Out: os.Stdout, Err: os.Stderr, In: os.Stdin}
+	os.Exit(dispatch(append([]string{"secret"}, argv...), d))
+}
+
 // TestSecretCheckRejectsTrailingArg covers F6: `secret check --bogus` exits 2.
 // runSecretCmd calls os.Exit, so we exercise it in a subprocess.
 func TestSecretCheckRejectsTrailingArg(t *testing.T) {
 	if os.Getenv("PIX_SECRET_BOGUS") == "1" {
-		runSecretCmd([]string{"check", "--bogus"})
+		runSecretDispatch([]string{"check", "--bogus"})
 		return
 	}
 	cmd := exec.Command(os.Args[0], "-test.run", "TestSecretCheckRejectsTrailingArg")
@@ -50,7 +59,7 @@ func TestSecretCmdArgCounts(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if os.Getenv("PIX_SECRET_ARGCOUNT") == tc.name {
-				runSecretCmd(tc.argv)
+				runSecretDispatch(tc.argv)
 				return
 			}
 			cmd := exec.Command(os.Args[0], "-test.run", "TestSecretCmdArgCounts/"+strings.ReplaceAll(tc.name, " ", "_"))
@@ -68,26 +77,25 @@ func TestSecretCmdArgCounts(t *testing.T) {
 }
 
 func TestSecretHelpConfigIndependent(t *testing.T) {
-	// -h must print usage and NOT touch config/op — runSecretCmd handles help
-	// before any env work. We can't call os.Exit-free easily, so assert the
-	// help sentinel path via wantsHelp used inside runSecretCmd is honored by
-	// checking secretUsage() is non-empty and wantsHelp detects the flag.
-	if !cli.WantsHelp([]string{"--help"}) || !cli.WantsHelp([]string{"ls", "-h"}) {
-		t.Error("wantsHelp should detect secret help flags")
+	// -h prints usage and touches NOTHING: kong answers help before any leaf
+	// runs, so no config read and no op call can happen on the way.
+	d, out, _ := rootDeps()
+	if err := runRootParse([]string{"secret", "--help"}, d); err != nil {
+		t.Fatalf("secret --help: %v", err)
 	}
-	if secretUsage() == "" {
-		t.Error("secretUsage() must be defined")
+	if !strings.Contains(out.String(), "Usage: pix secret") {
+		t.Errorf("secret --help must render the generated usage, got:\n%s", out.String())
 	}
 }
 
 // TestSecretSetMirrorFailure_DispatcherExitsNonzero: a hostmode.env mirror
 // failure for a provider key must make the CLI exit nonzero, never quietly
-// succeed. Runs through the REAL dispatcher (runSecretCmd) against the real
+// succeed. Runs through the REAL dispatcher (the kong root) against the real
 // filesystem in a subprocess, so the exit code is genuinely observed rather
 // than merely a returned error value nobody acted on.
 func TestSecretSetMirrorFailure_DispatcherExitsNonzero(t *testing.T) {
 	if cfgDir := os.Getenv("PIX_SECRET_SET_MIRROR_FAIL_CFGDIR"); cfgDir != "" {
-		runSecretCmd([]string{"set", "ANTHROPIC_API_KEY", "op://v/anthropic/key"})
+		runSecretDispatch([]string{"set", "ANTHROPIC_API_KEY", "op://v/anthropic/key"})
 		return
 	}
 	dir := t.TempDir()
@@ -121,7 +129,7 @@ func TestSecretSetMirrorFailure_DispatcherExitsNonzero(t *testing.T) {
 // nonzero (not merely that secret.RunSecretRm returns an error nobody consumed).
 func TestSecretRm_DispatcherExitsNonzeroOnPartialFailure(t *testing.T) {
 	if cfgDir := os.Getenv("PIX_SECRET_RM_PARTIAL_FAIL_CFGDIR"); cfgDir != "" {
-		runSecretCmd([]string{"rm", "ANTHROPIC_API_KEY"})
+		runSecretDispatch([]string{"rm", "ANTHROPIC_API_KEY"})
 		return
 	}
 	dir := t.TempDir()

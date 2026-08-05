@@ -639,24 +639,6 @@ func WriteOllamaBridgeFile(ws, model string) {
 	_ = workspace.WriteStateFile(ws, "ollama-bridge.model", []byte(model+"\n"), 0o644)
 }
 
-// ToStringSlice coerces a decoded JSON array (any of []any / []string) to
-// []string, dropping non-strings.
-func ToStringSlice(v any) []string {
-	switch xs := v.(type) {
-	case []string:
-		return xs
-	case []any:
-		out := make([]string, 0, len(xs))
-		for _, x := range xs {
-			if s, ok := x.(string); ok {
-				out = append(out, s)
-			}
-		}
-		return out
-	}
-	return nil
-}
-
 // The tri-state sandbox probe (running/stopped/absent/unknown) that drives the
 // create-vs-reattach-vs-replace decision lives in task.go as ProbeTaskSandbox +
 // SbxState (an alias for the canonical sandbox.State) — run.go reuses it

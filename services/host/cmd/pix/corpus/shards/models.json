@@ -8,7 +8,7 @@
         "--help"
       ],
       "exitCode": 0,
-      "stream": "stderr",
+      "stream": "stdout",
       "contains": [
         "Usage: pix models"
       ]

@@ -8,16 +8,9 @@
 // launcher shares that binary's config package (pix/host/config) so the two
 // agree on config location + the broker token.
 //
-// Verb tree:
-//
-//	pix [DIR]                     alias for `run [DIR]`
-//	pix run [DIR] [flags] [-- …]  launch the sandbox (full)
-//	pix version                   print the stamped version (full)
-//	pix config show|path          show config path + contents (full)
-//	pix serve [args…]             exec the sibling pix-host serve (full)
-//	pix status|doctor|setup|mcp|memory|pack   (all implemented)
-//	pix reset                     (destructive, reversible: state moved aside)
-//	pix help [verb]               print the verb tree (or one verb's usage)
+// The verb tree is root.go's rootCmd — the one parser, the one dispatcher, and
+// (via `pix help --all`) the one listing. main owns only what comes BEFORE a
+// parse: the retired table, the bare-`pix` status screen, and the exit code.
 package main
 
 import (

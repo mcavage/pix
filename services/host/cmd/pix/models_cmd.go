@@ -56,6 +56,8 @@ baked map is compiled with ` + "`--catalog --out ./routing.json`" + `.)`
 
 // ModelsCmd is the verb tree. Bare `pix models` is the status screen, so Status
 // is kong's default command rather than a subcommand a user must know.
+func (c *ModelsCmd) Help() string { return modelsDescription() }
+
 type ModelsCmd struct {
 	Status  ModelsStatusCmd `cmd:"" default:"1" hidden:""`
 	Ls      ModelsLsCmd     `cmd:"" help:"One row per model: wired / unwired / retired."`

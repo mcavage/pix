@@ -10,10 +10,11 @@
 // read or side effect, and a bare positional naming a directory, which is
 // `run DIR` (classifyBareArg) — plus the `task NAME path` rewrite.
 //
-// ls, rm, reset, serve, task, monitor and version are TYPED: struct tags parse
-// them and generate their help. Every other verb is a `passthrough:""`
-// command, so its existing seam is handed the argv VERBATIM and nothing it
-// does changed. Each later migration deletes its field's Args tail.
+// ls, rm, reset, serve, task, monitor, version, models, agent and secret are
+// TYPED: struct tags parse them, generate their help, and place them in a help
+// tier (`group:`). Every other verb is a `passthrough:""` command, so its
+// existing seam is handed the argv VERBATIM and nothing it does changed. Each
+// later migration deletes its field's Args tail.
 package main
 
 import (
@@ -38,32 +39,39 @@ import (
 	"pix/host/workflow/provision"
 )
 
-// rootCmd is the verb table. Ordering follows the tiered help so the two read
-// the same way; kong sorts its own listing.
+// rootCmd is the verb table. Field ORDER and the `group:` keys ARE the tiered
+// help: helpAll renders the listing straight off this declaration, so a verb
+// cannot be dispatchable and undocumented at the same time.
 type rootCmd struct {
-	// ── typed: migrated to struct tags ──────────────────────────────────────
-	Ls      lsCmd      `cmd:"" help:"List your pix sandboxes (name, state, dir)."`
-	Rm      rmCmd      `cmd:"" help:"Remove pix sandboxes (scoped to pix-* names)."`
-	Reset   resetCmd   `cmd:"" help:"Move Pix's state aside (reversible). (WRITES)"`
-	Serve   serveCmd   `cmd:"" help:"Run the host services; serve stop|status|start."`
-	Task    taskCmd    `cmd:"" help:"Parallel task checkouts of one repo."`
-	Monitor monitorCmd `cmd:"" help:"Follow a sandbox's out-of-sandbox traffic."`
+	Run    legacyRunCmd    `cmd:"" group:"Workflow" passthrough:"" help:"Launch the sandbox in DIR (default: .). This is the main one."`
+	Ls     lsCmd           `cmd:"" group:"Workflow" help:"List your pix sandboxes (name, state, dir)."`
+	Rm     rmCmd           `cmd:"" group:"Workflow" help:"Remove pix sandboxes (scoped to pix-* names)."`
+	Serve  serveCmd        `cmd:"" group:"Workflow" help:"Run the host services; serve stop|status|start."`
+	Status legacyStatusCmd `cmd:"" group:"Workflow" passthrough:"" aliases:"st" help:"What is up, what is down, what is next."`
 
-	// ── legacy adapters: argv reaches the existing seam verbatim ────────────
-	Run     legacyRunCmd    `cmd:"" passthrough:"" help:"Launch the sandbox in DIR (default: .)."`
-	Status  legacyStatusCmd `cmd:"" passthrough:"" aliases:"st" help:"What is up, what is down, what is next."`
-	Version versionCmd      `cmd:"" help:"Print the stamped launcher version."`
-	Config  legacyConfigCmd `cmd:"" passthrough:"" help:"show | path | get | set | unset."`
-	Doctor  legacyDoctorCmd `cmd:"" passthrough:"" help:"Diagnose problems and print the fix commands."`
-	Setup   legacySetupCmd  `cmd:"" passthrough:"" help:"Guided setup: keys, memory, pack."`
-	Mcp     legacyMcpCmd    `cmd:"" passthrough:"" help:"register | ls | load | auth | bundle."`
-	Pack    legacyPackCmd   `cmd:"" passthrough:"" help:"new | add | ls | show | use | rm."`
-	Secret  legacySecretCmd `cmd:"" passthrough:"" help:"ls | set | rm | check | sync the op-refs."`
-	Memory  legacyMemoryCmd `cmd:"" passthrough:"" aliases:"mem" help:"recall | remember | forget | learnings | stats."`
-	Models  legacyModelsCmd `cmd:"" passthrough:"" help:"Which models pix can use, and which are wired."`
-	Agent   legacyAgentCmd  `cmd:"" passthrough:"" help:"ls | new | edit | rm | reassess."`
-	State   legacyStateCmd  `cmd:"" passthrough:"" help:"reset (grouped alias)."`
-	Help    legacyHelpCmd   `cmd:"" passthrough:"" help:"Print this help (or a verb's usage)."`
+	Setup  legacySetupCmd  `cmd:"" group:"Setup & health" passthrough:"" help:"Guided setup: keys, memory, pack."`
+	Doctor legacyDoctorCmd `cmd:"" group:"Setup & health" passthrough:"" help:"Diagnose problems and print the fix commands."`
+
+	Memory legacyMemoryCmd `cmd:"" group:"Data" passthrough:"" aliases:"mem" help:"recall | remember | forget | learnings | stats."`
+	Pack   legacyPackCmd   `cmd:"" group:"Data" passthrough:"" help:"new | add | ls | show | use | rm."`
+
+	Monitor monitorCmd `cmd:"" group:"Observability" help:"Follow a sandbox's out-of-sandbox traffic."`
+
+	Models ModelsCmd `cmd:"" group:"Models & agents" help:"Which models pix can use, and which are wired."`
+	Agent  AgentCmd  `cmd:"" group:"Models & agents" help:"ls | new | edit | rm | reassess."`
+
+	Config legacyConfigCmd `cmd:"" group:"Config & context" passthrough:"" help:"show | path | get | set | unset."`
+
+	Task taskCmd `cmd:"" group:"Parallel work" help:"Parallel task checkouts of one repo."`
+
+	Mcp    legacyMcpCmd `cmd:"" group:"Integrations & credentials" passthrough:"" help:"register | ls | load | auth | bundle."`
+	Secret SecretCmd    `cmd:"" group:"Integrations & credentials" help:"ls | set | rm | check | sync the op-refs."`
+
+	State legacyStateCmd `cmd:"" group:"State (on-disk lifecycle)" passthrough:"" help:"reset (grouped alias)."`
+	Reset resetCmd       `cmd:"" group:"State (on-disk lifecycle)" help:"Move Pix's state aside (reversible). (WRITES)"`
+
+	Version versionCmd    `cmd:"" group:"Meta" help:"Print the stamped launcher version."`
+	Help    legacyHelpCmd `cmd:"" group:"Meta" passthrough:"" help:"Print this help (or a verb's usage)."`
 }
 
 // legacyArgs is the passthrough tail every unmigrated verb carries: kong stops
@@ -80,10 +88,7 @@ type legacyDoctorCmd struct{ legacyArgs }
 type legacySetupCmd struct{ legacyArgs }
 type legacyMcpCmd struct{ legacyArgs }
 type legacyPackCmd struct{ legacyArgs }
-type legacySecretCmd struct{ legacyArgs }
 type legacyMemoryCmd struct{ legacyArgs }
-type legacyModelsCmd struct{ legacyArgs }
-type legacyAgentCmd struct{ legacyArgs }
 type legacyStateCmd struct{ legacyArgs }
 type legacyHelpCmd struct{ legacyArgs }
 
@@ -96,10 +101,7 @@ func (c *legacyDoctorCmd) Run(*cli.Deps) error { return legacyForward("doctor", 
 func (c *legacySetupCmd) Run(*cli.Deps) error  { return legacyForward("setup", c.Args, runSetupCmd) }
 func (c *legacyMcpCmd) Run(*cli.Deps) error    { return legacyForward("mcp", c.Args, runMcpCmd) }
 func (c *legacyPackCmd) Run(*cli.Deps) error   { return legacyForward("pack", c.Args, runPackCmd) }
-func (c *legacySecretCmd) Run(*cli.Deps) error { return legacyForward("secret", c.Args, runSecretCmd) }
 func (c *legacyMemoryCmd) Run(*cli.Deps) error { return legacyForward("memory", c.Args, runMemory) }
-func (c *legacyModelsCmd) Run(*cli.Deps) error { return legacyForward("models", c.Args, runModels) }
-func (c *legacyAgentCmd) Run(*cli.Deps) error  { return legacyForward("agent", c.Args, runAgent) }
 func (c *legacyStateCmd) Run(*cli.Deps) error  { return legacyForward("state", c.Args, runState) }
 
 func (c *legacyHelpCmd) Run(d *cli.Deps) error {
@@ -135,14 +137,21 @@ func legacyForward(verb string, args []string, fn func([]string)) error {
 }
 
 // runHelp is the `help` verb: the tiered screen, `--all`, or a verb's usage.
+// A TYPED verb has no usage constant to print — `pix help ls` re-enters the
+// root as `pix ls --help`, so the usage a user reads is generated from the
+// same tags that parse it.
 func runHelp(d *cli.Deps, argv []string) {
 	if len(argv) > 0 {
 		if argv[0] == "--all" {
-			fmt.Fprint(d.Out, helpAllText)
+			fmt.Fprint(d.Out, helpAll())
 			return
 		}
 		if u, ok := verbUsage(argv[0]); ok {
 			fmt.Fprint(d.Out, u)
+			return
+		}
+		if v := argv[0]; v != "help" && knownVerbs()[v] {
+			dispatch([]string{v, "--help"}, d)
 			return
 		}
 	}
@@ -175,7 +184,7 @@ func dispatch(argv []string, d *cli.Deps) int {
 	argv = normalizeArgv(argv)
 	// A bare positional is `run DIR` when it names a directory, and a verb typo
 	// otherwise. kong would call both "unexpected argument".
-	if a := argv[0]; !strings.HasPrefix(a, "-") && !knownVerbs[a] {
+	if a := argv[0]; !strings.HasPrefix(a, "-") && !knownVerbs()[a] {
 		msg, launch := classifyBareArg(a)
 		if launch {
 			runVerb(argv)

@@ -56,7 +56,7 @@ func TestRunState_BareUsage(t *testing.T) {
 // TestState_KnownAndRoutable: state is a known verb and routes to its usage so
 // `pix help state` and the suggester find it.
 func TestState_KnownAndRoutable(t *testing.T) {
-	if !knownVerbs["state"] {
+	if !knownVerbs()["state"] {
 		t.Error("state missing from knownVerbs")
 	}
 	if u, ok := verbUsage("state"); !ok || u == "" {
@@ -68,11 +68,13 @@ func TestState_KnownAndRoutable(t *testing.T) {
 // retirement stay dispatchable + documented. backup/restore left with W1 U01a.
 func TestLegacyLifecycleAliasesPreserved(t *testing.T) {
 	for _, v := range []string{"reset"} {
-		if !knownVerbs[v] {
+		if !knownVerbs()[v] {
 			t.Errorf("%s dropped from knownVerbs", v)
 		}
-		if _, ok := verbUsage(v); !ok {
-			t.Errorf("verbUsage(%s) gone", v)
+		d, out, _ := rootDeps()
+		runHelp(d, []string{v})
+		if !strings.Contains(out.String(), "Usage: pix "+v) {
+			t.Errorf("`pix help %s` printed %q, want the generated usage", v, out.String())
 		}
 	}
 }

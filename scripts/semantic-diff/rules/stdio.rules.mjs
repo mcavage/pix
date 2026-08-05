@@ -26,12 +26,12 @@ export default [
 	},
 	{
 		id: "stdio.sandbox-scope.refusal-goes-to-stderr",
-		description: "A refused (non-pix-*) rm target is reported on stderr, never stdout, so a caller piping stdout output never mistakes a refusal for a completed removal.",
+		description: "A refused (non-pix-*) rm target is reported on the ERROR stream (errOut, which the launcher binds to stderr), never on out, so a caller piping stdout never mistakes a refusal for a completed removal.",
 		checks: [
 			{
 				file: "services/host/workflow/launch/sandbox.go",
 				kind: "contains",
-				values: ['fmt.Fprintf(os.Stderr, "refusing %q: not a pix sandbox'],
+				values: ['fmt.Fprintf(errOut, "refusing %q: not a pix sandbox'],
 			},
 		],
 	},
