@@ -1,12 +1,13 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"pix/host/cli"
 	"pix/host/routing"
 	"pix/host/sys/systest"
 )
@@ -69,94 +70,57 @@ func TestResolveAgentModel(t *testing.T) {
 	}
 }
 
-// TestAgentNewEditRm exercises the file lifecycle. new/edit write files; rm
-// removes them. We chdir into a temp workspace so ./agents resolves there, and
-// force the embedded routing defaults via a fresh ROUTING_DIR.
-func TestAgentNewEditRm(t *testing.T) {
+// TestAgentLs proves the surviving roster path end to end: it discovers every
+// agents/*.md file (listAgents), resolves each one's model + WHY
+// (resolveAgentModel via loadAgentMeta), and renders both the table and the
+// --json form the way subagents.ts's own (independent) roster read expects the
+// files to look, without going through any of the retired mutation surfaces.
+func TestAgentLs(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 	t.Setenv("ROUTING_DIR", t.TempDir())
 	if err := os.MkdirAll("agents", 0o755); err != nil {
 		t.Fatal(err)
 	}
-
-	// Through the PARSER now, not straight into the handler: the flags, their
-	// types and their defaults are part of what is under test, and they were not
-	// before — the old call handed the handler a []string it parsed itself.
-	mustRunAgent(t, "new", "go-eng", "--intent", "code", "--budget", "0.25", "--tools", "read,edit")
-
-	mdPath := filepath.Join("agents", "go-eng.md")
-	m, _, err := loadAgentMeta(mdPath)
-	if err != nil {
-		t.Fatalf("loadAgentMeta after new: %v", err)
-	}
-	if m.Intent != "code" || m.BudgetUSD != 0.25 || m.Tools != "read,edit" {
-		t.Fatalf("new frontmatter: %+v", m)
-	}
-
-	// Edit: change intent + budget; parse must still succeed (the quoted-number bug).
-	mustRunAgent(t, "edit", "go-eng", "--intent", "reasoning", "--budget", "0.30")
-	m2, _, err := loadAgentMeta(mdPath)
-	if err != nil {
-		t.Fatalf("loadAgentMeta after edit: %v", err)
-	}
-	if m2.Intent != "reasoning" || m2.BudgetUSD != 0.30 {
-		t.Fatalf("edit frontmatter: %+v (a quoted budget would blank these)", m2)
-	}
-	if m2.Tools != "read,edit" {
-		t.Fatalf("edit dropped an untouched field: tools=%q", m2.Tools)
-	}
-
-	// Remove.
-	mustRunAgent(t, "rm", "go-eng", "--yes")
-	if _, err := os.Stat(mdPath); !os.IsNotExist(err) {
-		t.Fatalf("agent md should be gone: %v", err)
-	}
-}
-
-// TestRepoRoutingTarget verifies reassess compiles routing.json to the repo file
-// (the one Docker bakes) only when sitting in the pix repo, and otherwise
-// defers to route compile's default path. Guards the silent-wrong-path bug where
-// a maintainer's reassessment never reached the image.
-func TestRepoRoutingTarget(t *testing.T) {
-	// Not the repo (no routing.json / pi-kit/spec.yaml): empty, use the default.
-	dir := t.TempDir()
-	t.Chdir(dir)
-	if got := repoRoutingTarget(); got != "" {
-		t.Fatalf("non-repo dir: want \"\", got %q", got)
-	}
-
-	// routing.json alone is not enough (a consumer's home dir might hold one).
-	if err := os.WriteFile(filepath.Join(dir, "routing.json"), []byte("{}"), 0o644); err != nil {
+	const fm = "---\ndescription: go engineer\nintent: code\nbudget_usd: 0.25\ntools: read,edit\n---\n\nBody.\n"
+	if err := os.WriteFile(filepath.Join("agents", "go-eng.md"), []byte(fm), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := repoRoutingTarget(); got != "" {
-		t.Fatalf("routing.json without spec: want \"\", got %q", got)
+
+	d, out, _ := rootDeps()
+	d.Sys = &systest.Fake{}
+	if err := runRootParse([]string{"agent", "ls", "--json"}, d); err != nil {
+		t.Fatalf("agent ls --json: %v", err)
 	}
 
-	// routing.json next to pi-kit/spec.yaml = unmistakably the repo: target it.
-	if err := os.MkdirAll(filepath.Join(dir, "pi-kit"), 0o755); err != nil {
-		t.Fatal(err)
+	var rows []agentRow
+	if err := json.Unmarshal(out.Bytes(), &rows); err != nil {
+		t.Fatalf("unmarshal roster JSON: %v\n%s", err, out.String())
 	}
-	if err := os.WriteFile(filepath.Join(dir, "pi-kit", "spec.yaml"), []byte("image: x"), 0o644); err != nil {
-		t.Fatal(err)
+	if len(rows) != 1 || rows[0].Name != "go-eng" {
+		t.Fatalf("roster = %+v, want one row named go-eng", rows)
 	}
-	want := filepath.Join(dir, "routing.json")
-	if got := repoRoutingTarget(); got != want {
-		t.Fatalf("repo dir: want %q, got %q", want, got)
+	if rows[0].Intent != "code" || rows[0].Budget != 0.25 || rows[0].Tools != "read,edit" {
+		t.Fatalf("row = %+v", rows[0])
 	}
-}
 
-// mustRunAgent drives the real `pix agent` parser and fails on any error. It
-// exists because the handlers no longer take []string: argv goes through kong,
-// which is the behaviour worth testing.
-func mustRunAgent(t *testing.T, argv ...string) {
-	t.Helper()
-	d := &cli.Deps{
-		Sys: &systest.Fake{}, Out: os.Stdout, Err: os.Stderr,
-		In: strings.NewReader(""), Interactive: false,
+	// Human table form: same roster, rendered with the WHY. agentLs's table
+	// branch writes straight to os.Stdout (a pre-existing quirk, not something
+	// this change touches), so capture that fd rather than Deps.Out.
+	d2, _, _ := rootDeps()
+	d2.Sys = &systest.Fake{}
+	old := os.Stdout
+	rp, wp, _ := os.Pipe()
+	os.Stdout = wp
+	runErr := runRootParse([]string{"agent", "ls"}, d2)
+	_ = wp.Close()
+	os.Stdout = old
+	var buf bytes.Buffer
+	_, _ = buf.ReadFrom(rp)
+	if runErr != nil {
+		t.Fatalf("agent ls: %v", runErr)
 	}
-	if err := runRootParse(append([]string{"agent"}, argv...), d); err != nil {
-		t.Fatalf("pix agent %v: %v", argv, err)
+	if !strings.Contains(buf.String(), "AGENT") || !strings.Contains(buf.String(), "go-eng") {
+		t.Errorf("agent ls table missing header/row, got:\n%s", buf.String())
 	}
 }

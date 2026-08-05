@@ -17,13 +17,13 @@ package main
 //     rpc.ExitServiceDown (3), the SAME "dependency unavailable" code
 //     `pix memory`/`secret` already use, while still printing the exact
 //     recovery command verbatim and never mutating a receipt or config file.
-//  4: the same embedded-repo-path mistake as finding 1 also leaked into
-//     `pix agent new`'s next-steps, `pix agent reassess --model`'s
-//     guidance, and the removed `pix evals` message.
+//  4: the same embedded-repo-path mistake as finding 1 also leaked into the
+//     (now retired) `pix agent new`'s next-steps and `pix agent reassess
+//     --model`'s guidance, and the removed `pix evals` message; the sweep test
+//     below still guards the source it flagged.
 
 import (
 	"bytes"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,7 +33,6 @@ import (
 	"pix/host/routing"
 	"pix/host/rpc"
 	"pix/host/sys"
-	"pix/host/sys/systest"
 )
 
 // modelsHelp renders `pix models --help` the way a user reads it: through the
@@ -130,67 +129,6 @@ func TestNoUnlabeledRepoRoutingDefaultsInSource(t *testing.T) {
 			}
 			i = pos + len(needle)
 		}
-	}
-}
-
-// TestAgentNew_NextStepsPointAtLiveScorecardPath: `agent new`'s "hand-add its
-// scores to ..." next-step must be the live override path, not the repo's
-// embedded defaults file (which doesn't exist outside a checkout).
-func TestAgentNew_NextStepsPointAtLiveScorecardPath(t *testing.T) {
-	dir := t.TempDir()
-	t.Chdir(dir)
-	t.Setenv("ROUTING_DIR", t.TempDir())
-	if err := os.MkdirAll("agents", 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	old := os.Stdout
-	rp, wp, _ := os.Pipe()
-	os.Stdout = wp
-	mustRunAgent(t, "new", "redrive-dx-probe")
-	_ = wp.Close()
-	os.Stdout = old
-	var buf bytes.Buffer
-	_, _ = buf.ReadFrom(rp)
-
-	out := buf.String()
-	if !strings.Contains(out, routing.ScorecardPath()) {
-		t.Errorf("agent new next-steps must point at %s, got:\n%s", routing.ScorecardPath(), out)
-	}
-	if strings.Contains(out, "services/host/routing/defaults") {
-		t.Errorf("agent new next-steps must not point at the embedded repo source, got:\n%s", out)
-	}
-}
-
-// TestAgentReassessModel_PointsAtLiveScorecardPath: `agent reassess --model X`
-// fails with exit 2 and guidance (measurement was removed); that guidance must
-// name the live override path, not the repo's embedded defaults file. Driven
-// in-process: the handler returns its usage exit rather than calling os.Exit.
-func TestAgentReassessModel_PointsAtLiveScorecardPath(t *testing.T) {
-	dir := t.TempDir()
-	t.Chdir(dir)
-	t.Setenv("ROUTING_DIR", filepath.Join(dir, "routing"))
-
-	var out bytes.Buffer
-	d := &cli.Deps{
-		Sys: &systest.Fake{}, Out: &out, Err: &out,
-		In: strings.NewReader(""), Interactive: false,
-	}
-	err := runRootParse([]string{"agent", "reassess", "--model", "anthropic/claude-haiku-4-5"}, d)
-
-	var silent cli.SilentError
-	if !errors.As(err, &silent) {
-		t.Fatalf("expected a SilentError, got %v (output: %s)", err, out.String())
-	}
-	if silent.Code != 2 {
-		t.Errorf("exit code = %d, want 2; output:\n%s", silent.Code, out.String())
-	}
-	wantPath := filepath.Join(dir, "routing", "scorecard.json")
-	if !strings.Contains(out.String(), wantPath) {
-		t.Errorf("expected the live scorecard path %q in guidance, got:\n%s", wantPath, out.String())
-	}
-	if strings.Contains(out.String(), "services/host/routing/defaults") {
-		t.Errorf("agent reassess guidance must not point at the embedded repo source, got:\n%s", out.String())
 	}
 }
 

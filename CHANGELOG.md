@@ -10,6 +10,29 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **U11m: `pix agent` cut to `ls` only — `new`/`edit`/`rm`/`reassess` retired.**
+  Interactive authoring (`launchInteractiveAuthoring`, a `pi` re-exec), YAML
+  frontmatter mutation (`agentNew`/`agentEdit`/`agentRm`, nine flags across two
+  handlers, a yaml.Node round-trip), and the reassess host-exec wrapper
+  (`repoRoutingTarget`/`readCompiledRoutes`/`resolveRoster`, a `route compile`
+  passthrough duplicating what `pix models route` already does directly) are
+  gone. `pix agent ls` (table + `--json`) is the entire surviving surface —
+  same resolved-model-and-WHY roster read `subagents.ts` depends on
+  independently (it reads `agents/*.md` itself and never shelled out to this
+  command). Authoring/editing/removing an agent is now a hand-edit of its
+  `agents/<name>.md` frontmatter, same as always for its prompt body; a new
+  intent's scores go in `scorecard.json` by hand, then `pix models route`
+  recompiles `routing.json` and a sandbox relaunch picks it up. Typing
+  `new`/`edit`/`rm`/`remove`/`reassess` answers with the standard
+  `PIX_RETIRED` notice (exit 2, no side effect) naming that path — five new
+  entries in `retired.go` + `corpus/retirement.jsonl`, proved end to end by
+  the existing real-binary retirement harness
+  (`corpus/retired_dispatch_test.go`), no shard changes needed. Net: `agent.go`
+  580 -> 225 prod LOC, `agent_cmd.go` 74 -> 33; two now-obsolete redrive
+  regression tests (`TestAgentNew_NextStepsPointAtLiveScorecardPath`,
+  `TestAgentReassessModel_PointsAtLiveScorecardPath`) removed with the
+  surfaces they pinned. Shrink-only: no budget ceiling raised.
+
 - **U11k: `cmd/pix/corpus` reclassified as test-only support (588 -> 0
   production LOC).** The golden CLI corpus + retirement-manifest harness had
   no runtime caller — it exists solely to be driven by `go test

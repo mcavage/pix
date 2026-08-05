@@ -73,6 +73,13 @@ func retiredSurfaces() map[string]string {
 		retiredKey("state", "restore"):   "pix-host restore",
 		retiredKey("task", "gc"):         "pix task rm",
 		retiredKey("task", "harvest"):    "pix task path",
+		// An agent is a hand-edited agents/*.md file plus scorecard.json now, not a
+		// CLI mutation surface — see docs/design/routing.md.
+		retiredKey("agent", "new"):      "edit agents/*.md, then pix models route",
+		retiredKey("agent", "edit"):     "edit agents/*.md, then pix models route",
+		retiredKey("agent", "rm"):       "delete agents/*.md, then pix models route",
+		retiredKey("agent", "remove"):   "delete agents/*.md, then pix models route",
+		retiredKey("agent", "reassess"): "pix models route",
 		// Earlier retirements, once answered only by a did-you-mean hint: they answer
 		// with the marker now, like the rest.
 		"gog":     "pix gworkspace",
