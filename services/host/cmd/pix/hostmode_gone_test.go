@@ -88,12 +88,41 @@ var forbiddenHostModeSymbols = []string{
 	"type BrokerPlugin struct",
 }
 
-// TestNoHostModeExecutionSymbols greps every non-test .go file under
-// services/host for the deleted host-mode/broker symbols. This is the
-// sentinel: it fails loudly the moment any of them is reintroduced, wherever
-// in the tree that happens.
-func TestNoHostModeExecutionSymbols(t *testing.T) {
-	root := hostModeRoot(t)
+// forbiddenKnowledgeSymbols are identifiers that only ever existed to serve
+// the built-in OKF knowledge service (W2/U03A), which bound :11436 the same
+// way memory binds :11435. Deleted alongside host mode/broker in spirit (both
+// are "no supervised unit, no config key, no code path dispenses this any
+// more" retirements — see AGENTS.md's go-plugin+Suture section) but recorded
+// as its own list: a knowledge symbol reappearing is a DIFFERENT regression
+// than a host-mode one, and a single failure message that named the wrong
+// retirement would send whoever sees it hunting in the wrong package.
+// KNOWLEDGE_PORT (bare, so it also catches PIX_KNOWLEDGE_PORT) is the one
+// literal here that is not a Go identifier: it is the env var name every
+// resurrection of the port would have to reintroduce somewhere — servicePort,
+// env(), or a supervised-unit spec — so it stands in for "the :11436 default"
+// without hardcoding the bare port number itself, which still appears
+// (correctly) in retrospective doc comments like config.go's knowledge_bundles
+// note and would make a bare "11436" check fire on those instead of on code.
+var forbiddenKnowledgeSymbols = []string{
+	"func RunKnowledge(",
+	"func runKnowledgeServe(",
+	"func newKnowledgeMux(",
+	"type KnowledgeStore",
+	"KnowledgePortDefault",
+	"KnowledgeClient(",
+	"KnowledgeBundles",
+	"KNOWLEDGE_PORT",
+}
+
+// forbiddenSymbolViolations walks root for non-test .go files containing any
+// of symbols, returning one "relpath: symbol" string per hit. Pure — no
+// *testing.T — precisely so TestForbiddenSymbolSentinelDetectsAPlantedViolation
+// below can assert it actually returns something on a planted violation,
+// instead of the sentinel only ever having been observed passing (the same
+// "a guard nobody has seen work" concern arch_test.go's sibling-workflow test
+// documents for the layering checker).
+func forbiddenSymbolViolations(root string, symbols []string) ([]string, error) {
+	var violations []string
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -112,16 +141,94 @@ func TestNoHostModeExecutionSymbols(t *testing.T) {
 			return rerr
 		}
 		content := string(b)
-		for _, sym := range forbiddenHostModeSymbols {
+		for _, sym := range symbols {
 			if strings.Contains(content, sym) {
 				rel, _ := filepath.Rel(root, path)
-				t.Errorf("%s: forbidden host-mode/broker symbol %q found — `pix host` and the dormant CredentialBroker plugin were deleted; this must not come back", rel, sym)
+				violations = append(violations, fmt.Sprintf("%s: %s", rel, sym))
 			}
 		}
 		return nil
 	})
+	return violations, err
+}
+
+// TestNoHostModeExecutionSymbols greps every non-test .go file under
+// services/host for the deleted host-mode/broker symbols. This is the
+// sentinel: it fails loudly the moment any of them is reintroduced, wherever
+// in the tree that happens.
+func TestNoHostModeExecutionSymbols(t *testing.T) {
+	root := hostModeRoot(t)
+	violations, err := forbiddenSymbolViolations(root, forbiddenHostModeSymbols)
 	if err != nil {
 		t.Fatalf("walk %s: %v", root, err)
+	}
+	for _, v := range violations {
+		t.Errorf("%s — `pix host` and the dormant CredentialBroker plugin were deleted; this must not come back", v)
+	}
+}
+
+// TestNoKnowledgeExecutionSymbols is TestNoHostModeExecutionSymbols' sibling
+// for W2/U03A: the built-in :11436 OKF knowledge service (its RPC client, its
+// port default, its config bundle list, its serve mux) was deleted outright,
+// same standard as host mode/broker — no config key, no supervised unit, no
+// code path dispenses it (see AGENTS.md's go-plugin+Suture section, which
+// names this exact sentinel file for host mode and calls out knowledge as
+// deleted the same way).
+func TestNoKnowledgeExecutionSymbols(t *testing.T) {
+	root := hostModeRoot(t)
+	violations, err := forbiddenSymbolViolations(root, forbiddenKnowledgeSymbols)
+	if err != nil {
+		t.Fatalf("walk %s: %v", root, err)
+	}
+	for _, v := range violations {
+		t.Errorf("%s — the built-in :11436 knowledge service (W2/U03A) was deleted; this must not come back", v)
+	}
+}
+
+// TestForbiddenSymbolSentinelDetectsAPlantedViolation is the plausibility
+// assertion for BOTH sentinels above: it plants one forbidden symbol from
+// each list into a throwaway tree and proves forbiddenSymbolViolations
+// actually reports it, then proves the SAME symbol in a _test.go file is
+// correctly ignored (mirroring the real walk's test-file exclusion) — so a
+// passing TestNoHostModeExecutionSymbols/TestNoKnowledgeExecutionSymbols is
+// evidence the code is clean, not evidence the check forgot how to fail.
+func TestForbiddenSymbolSentinelDetectsAPlantedViolation(t *testing.T) {
+	dir := t.TempDir()
+	planted := filepath.Join(dir, "planted.go")
+	if err := os.WriteFile(planted, []byte("package x\n\nfunc RunHost() {}\n\nfunc RunKnowledge() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	hostViolations, err := forbiddenSymbolViolations(dir, forbiddenHostModeSymbols)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hostViolations) == 0 {
+		t.Fatal("expected forbiddenSymbolViolations to catch the planted func RunHost(), but it found nothing — a sentinel that never fires has never been proven to work")
+	}
+
+	knowledgeViolations, err := forbiddenSymbolViolations(dir, forbiddenKnowledgeSymbols)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(knowledgeViolations) == 0 {
+		t.Fatal("expected forbiddenSymbolViolations to catch the planted func RunKnowledge(), but it found nothing")
+	}
+
+	// The exact same symbol in a _test.go file must NOT be reported: a test
+	// legitimately naming a retired symbol (as this very file's forbidden lists
+	// do) must never trip the sentinel on itself.
+	testFile := filepath.Join(dir, "planted_test.go")
+	if err := os.WriteFile(testFile, []byte("package x\n\nfunc RunHost() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(planted) // isolate: only the _test.go file remains
+	isolated, err := forbiddenSymbolViolations(dir, forbiddenHostModeSymbols)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(isolated) != 0 {
+		t.Fatalf("forbiddenSymbolViolations must ignore _test.go files, got: %v", isolated)
 	}
 }
 

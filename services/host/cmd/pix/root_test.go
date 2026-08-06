@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -92,6 +93,67 @@ func TestHelpTextMoreLine_NamesOnlyLiveVerbs(t *testing.T) {
 	for _, tok := range moreLineTokens(line) {
 		if !knownVerbs()[tok] {
 			t.Errorf("helpText's More line names %q, which is not a live verb (knownVerbs); line: %q", tok, line)
+		}
+	}
+}
+
+// verbGroups reads rootCmd's own `group:` struct tags via reflection — the
+// SAME tags root.go's doc comment says are the one source of truth `pix help
+// --all` renders its tiers from — keyed by the lowercase verb name every
+// other helper here already uses.
+func verbGroups() map[string]string {
+	out := map[string]string{}
+	t := reflect.TypeOf(rootCmd{})
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if _, ok := f.Tag.Lookup("cmd"); !ok {
+			continue
+		}
+		out[strings.ToLower(f.Name)] = f.Tag.Get("group")
+	}
+	return out
+}
+
+// TestTieredHelpTiersMatchGeneratedGroups is the anti-drift guard DX finding
+// 4's short-help curation needed: helpText hand-curates its own tier headings
+// (deliberately merging some generated groups for brevity, e.g. "Data, models
+// & observability" folds root.go's Data/Models & agents/Observability
+// groups into one heading), but a heading whose text is a VERBATIM match for
+// one of rootCmd's real `group:` names must not silently list a verb from a
+// DIFFERENT group under it — that is not curation, it is drift (exactly the
+// bug this test was added to catch: `monitor` sat under the literal
+// "Setup & health" heading while rootCmd tags it `group:"Observability"`).
+// A heading whose text does not literally match any real group name is a
+// deliberate multi-group merge or the "More" overflow line and is skipped.
+func TestTieredHelpTiersMatchGeneratedGroups(t *testing.T) {
+	groups := verbGroups()
+	realGroupNames := map[string]bool{}
+	for _, g := range groups {
+		realGroupNames[g] = true
+	}
+
+	var heading string
+	for _, line := range strings.Split(helpText, "\n") {
+		trimmed := strings.TrimRight(line, " ")
+		switch {
+		case trimmed == "":
+			heading = ""
+		case !strings.HasPrefix(line, " "):
+			// A non-indented, non-blank line starts a new section. Only a line whose
+			// full text is a real group name is treated as a checkable heading;
+			// everything else (the title, "Usage:", "New here?", "Learn a command:",
+			// a curated/merged heading like "More") is prose this test has nothing to
+			// check, so it is ignored rather than misparsed as a verb bullet.
+			if realGroupNames[trimmed] {
+				heading = trimmed
+			} else {
+				heading = ""
+			}
+		case heading != "":
+			verb := strings.Fields(strings.TrimSpace(line))[0]
+			if got := groups[verb]; got != heading {
+				t.Errorf("helpText lists %q under the %q heading, but rootCmd tags it group:%q — either the tier drifted or the verb needs re-tagging", verb, heading, got)
+			}
 		}
 	}
 }

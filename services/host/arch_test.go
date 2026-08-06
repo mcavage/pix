@@ -84,13 +84,17 @@ var pkgLayer = map[string]int{
 	"unitreport": layerFoundation,
 
 	// L1 — capability. One domain each, siblings invisible to each other.
+	//
+	// okf and knowledge (the built-in OKF knowledge service, :11436) are
+	// deliberately ABSENT from this map: W2/U03A deleted the package outright,
+	// not merely its callers. A placement entry for a package that no longer
+	// exists on disk is a GHOST — see TestArchitecture_NoGhostPlacements below,
+	// which fails the day one lingers instead of relying on someone noticing.
 	"inference": layerCapability,
 	"monitor":   layerCapability,
-	"okf":       layerCapability,
 	"plugin":    layerCapability,
 	"service":   layerCapability,
 	"memory":    layerCapability,
-	"knowledge": layerCapability,
 	"secret":    layerCapability,
 	"mcp":       layerCapability,
 	// sandbox is U04b's focused L1 sandbox domain: naming, the tolerant sbx-
@@ -326,6 +330,35 @@ func TestArchitecture_SiblingWorkflowRuleIsEnforced(t *testing.T) {
 	checkImports(clean, map[string][]string{from: nil, to: nil})
 	if clean.Failed() {
 		t.Errorf("two workflows importing nothing must satisfy the rule; the check is over-broad")
+	}
+}
+
+// TestArchitecture_NoGhostPlacements is the inverse of the unplaced-package
+// check in TestArchitecture_ImportsPointDown: that one fails when a REAL
+// on-disk package has no entry here, this one fails when an entry here names
+// a package that is no longer on disk at all — a GHOST placement, like the
+// "okf"/"knowledge" lines this test replaces (W2/U03A deleted the built-in
+// :11436 knowledge service package, not just its callers, and the placement
+// entries were left behind describing a package nobody could open any more).
+// "." is exempt: it names the pix-host daemon's own root package, which
+// scanPackages reports under "." too (see its placement comment above), so it
+// is real, not a ghost — the exemption is structural, not a loophole.
+func TestArchitecture_NoGhostPlacements(t *testing.T) {
+	pkgs := scanPackages(t)
+	var ghosts []string
+	for p := range pkgLayer {
+		if p == "." {
+			continue
+		}
+		if _, ok := pkgs[p]; !ok {
+			ghosts = append(ghosts, p)
+		}
+	}
+	sort.Strings(ghosts)
+	if len(ghosts) > 0 {
+		t.Fatalf("pkgLayer places %v, but no such production package exists on disk any more.\n"+
+			"A deleted package's placement is a ghost entry describing an architecture that no longer "+
+			"exists — remove it from pkgLayer (and l0Order, if it was L0).", ghosts)
 	}
 }
 

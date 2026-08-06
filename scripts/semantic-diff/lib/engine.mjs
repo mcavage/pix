@@ -348,6 +348,7 @@ export async function checkRuleDrift(rulesDir, root, base, manifest) {
 
 	let anyBase = false;
 	const drifted = [];
+	const consumedManifestIds = new Set();
 	for (const f of files) {
 		const relFile = path.join(relRulesDir, f);
 		const oldSrc = gitShow(root, base, relFile);
@@ -380,11 +381,93 @@ export async function checkRuleDrift(rulesDir, root, base, manifest) {
 			const before = oldById.get(pin.id);
 			if (!before) continue; // brand-new pin: nothing to have drifted from
 			if (pinFingerprint(before) === pinFingerprint(pin)) continue; // unchanged
-			if (manifestIds.has(pin.id)) continue; // documented, explicit change
+			if (manifestIds.has(pin.id)) {
+				consumedManifestIds.add(pin.id); // documented, explicit change: the manifest entry earned its keep THIS run
+				continue;
+			}
 			drifted.push({ id: pin.id, file: relFile, reason: "expected value changed with no matching intended-change manifest entry" });
 		}
 	}
 
-	if (!anyBase) return { ok: true, skipped: true, drifted: [] };
-	return { ok: drifted.length === 0, skipped: false, drifted };
+	if (!anyBase) return { ok: true, skipped: true, drifted: [], consumedManifestIds: [] };
+	return { ok: drifted.length === 0, skipped: false, drifted, consumedManifestIds: [...consumedManifestIds] };
+}
+
+// --- meaningful default base -------------------------------------------------
+//
+// checkRuleDrift's `base` argument is only as good as what the caller passes.
+// Comparing against a literal "HEAD" is a no-op in the exact place it matters
+// most: CI (and any already-committed local state) checks out a ref with a
+// clean working tree, so "current rules vs. HEAD's rules" is "current vs.
+// itself" — it can never see a PR's own rule-file edits, which is precisely
+// the corruption this guard exists to catch. A MEANINGFUL base is the point
+// this change branched from: the merge-base with the target branch (an
+// explicit CI-provided base sha first, then the tracked remote default
+// branch, for a local developer running the gate against a feature branch),
+// falling back to the immediately preceding commit, and only to a literal
+// "HEAD" (effectively a no-op, same as before) when there is truly nothing
+// else to compare against (a brand-new, single-commit repo).
+function gitOk(root, args) {
+	try {
+		execFileSync("git", args, { cwd: root, stdio: ["ignore", "pipe", "ignore"] });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function gitMergeBase(root, a, b) {
+	try {
+		return execFileSync("git", ["merge-base", a, b], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Resolves a meaningful default git base for rule-drift comparison. Order:
+ *   1. `SEMANTIC_DIFF_BASE_SHA` — set by CI from the PR's actual base sha
+ *      (github.event.pull_request.base.sha) or the pre-push sha on a direct
+ *      push (github.event.before), when that ref is reachable in this clone.
+ *   2. merge-base(HEAD, origin/<default branch>) — a local developer running
+ *      the gate against a feature branch, or a CI job whose checkout fetched
+ *      the base branch too.
+ *   3. HEAD~1 — no remote tracking branch at all, but at least one prior
+ *      commit exists: still strictly more meaningful than comparing HEAD to
+ *      itself.
+ *   4. "HEAD" — brand-new/single-commit repo: nothing to compare against,
+ *      same effectively-inert result the old hardcoded default gave everyone.
+ */
+export function resolveDefaultBase(root) {
+	const envBase = process.env.SEMANTIC_DIFF_BASE_SHA;
+	if (envBase && gitOk(root, ["rev-parse", "--verify", "-q", `${envBase}^{commit}`])) return envBase;
+
+	// Deliberately remote-tracking refs ONLY (never bare "main"/"master"): a
+	// local repo whose current branch IS main/master would otherwise merge-base
+	// against itself and silently degrade back to the exact HEAD-self-compare
+	// no-op this function exists to avoid.
+	for (const candidate of ["origin/main", "origin/master"]) {
+		if (!gitOk(root, ["rev-parse", "--verify", "-q", `${candidate}^{commit}`])) continue;
+		const base = gitMergeBase(root, "HEAD", candidate);
+		if (base) return base;
+	}
+
+	if (gitOk(root, ["rev-parse", "--verify", "-q", "HEAD~1"])) return "HEAD~1";
+
+	return "HEAD";
+}
+
+/**
+ * A manifest entry is genuinely spent once neither mechanism needs it any
+ * more: evaluatePins never used it as a waiver for a currently-failing check
+ * (report.unusedManifestEntries), AND checkRuleDrift never needed it to
+ * explain an actual fingerprint change vs. the base (drift.consumedManifestIds).
+ * An entry present in BOTH "unused" sets is dead weight — either it never
+ * described a real transition, or the base has moved past the commit that
+ * needed it — and should be deleted, not left to accumulate forever.
+ */
+export function staleManifestEntries(report, drift) {
+	if (drift.skipped) return []; // no usable git base to prove staleness against: same "insufficient information" posture as drift itself
+	const consumed = new Set(drift.consumedManifestIds ?? []);
+	return report.unusedManifestEntries.filter((id) => !consumed.has(id));
 }
