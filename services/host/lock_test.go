@@ -90,6 +90,9 @@ func TestLockMemoryStoreOrFatal(t *testing.T) {
 // subprocess + real cross-process flock; no long-running daemon (all three
 // refuse instantly).
 func TestServingEntryPointsRefuseWhenLockHeld(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the real pix-host binary and execs three subprocess entry points; the hermetic TestLockMemoryStoreOrFatal covers the same refusal logic in-process and stays in the fast gate; this one is covered by the untimed race/metrics CI jobs")
+	}
 	bin := buildHostBinary(t)
 	cases := []struct {
 		name string

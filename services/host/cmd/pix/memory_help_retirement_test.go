@@ -104,6 +104,9 @@ func TestPixBackupRestore_RetireToLiveHostReplacement(t *testing.T) {
 // user who follows the launcher's advice one more hop must not land on
 // another dead end.
 func TestPixHostBackupRestore_FinalHopNamesMemorySnapshot(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds its own pix-host binary for a retirement-chain roundtrip; covered by the untimed race/metrics CI jobs")
+	}
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)

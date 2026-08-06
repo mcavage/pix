@@ -129,6 +129,9 @@ var monitorBannerRe = regexp.MustCompile(`starting monitor on http://(\S+) \(sto
 // ingest ownership actually lives inside `pix-host serve` end to end, not
 // just in unit-level Go calls.
 func TestServeMonitorProcessUAT(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the real pix-host binary and runs a full serve/POST/SIGTERM roundtrip; covered by the untimed race/metrics CI jobs")
+	}
 	bin := buildHostBinary(t)
 	stateDir := t.TempDir()
 	// Set it in THIS process too (not just the child's) so config.MonitorStoreRoot()
@@ -234,6 +237,9 @@ func TestServeMonitorProcessUAT(t *testing.T) {
 // (moved down from `pix monitor`), over the REAL compiled binary — a
 // subprocess is the only way to observe the os.Exit code these paths use.
 func TestServeCLIExitCodes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the real pix-host binary for an exit-code roundtrip; covered by the untimed race/metrics CI jobs")
+	}
 	bin := buildHostBinary(t)
 	env := append(os.Environ(), "XDG_STATE_HOME="+t.TempDir())
 

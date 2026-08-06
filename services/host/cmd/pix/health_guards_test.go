@@ -214,6 +214,9 @@ func TestLaunchGateRefusesOnlyAPositiveNoKey(t *testing.T) {
 		{"store refuses", "#!/bin/sh\necho 'permission denied' >&2\nexit 1\n", false, health.StatusUnknown},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.name == "store hangs" && testing.Short() {
+				t.Skip("timed hang probe: exec's a real `sleep 10` to prove the probe deadline is enforced; every other case in this table stays unconditional; covered by the untimed race/metrics CI jobs")
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
 			r := launch.ProbeModelKeys(ctx, keyStore(t, "keystore", tc.body), "secret", "ls")

@@ -115,6 +115,9 @@ func buildFixture(t *testing.T) (string, string) {
 // in compileFixture, this test failed with "package pix/host/plugin is not
 // in std" and "go.mod file not found".
 func TestFixtureBuildSurvivesCWDChange(t *testing.T) {
+	if testing.Short() {
+		t.Skip("forces a cold `go build` with an empty GOCACHE; slow by design, covered by the untimed race/metrics CI jobs")
+	}
 	t.Setenv("GOPROXY", "off")
 	t.Setenv("GOCACHE", filepath.Join(t.TempDir(), "gocache"))
 	t.Chdir(t.TempDir()) // simulate a caller whose process CWD is not this package
@@ -486,6 +489,9 @@ func TestUnitStartsHealthyReportsStatusAndIsRestartedOnCrash(t *testing.T) {
 // supervisor is gone — without that, Suture keeps restarting, with backoff,
 // forever, a unit `serve` already gave up on: a background restart leak.
 func TestFailedStartIsRemovedFromTheTree(t *testing.T) {
+	if testing.Short() {
+		t.Skip("exercises real Suture backoff/wedged-past-budget timing; covered by the untimed race/metrics CI jobs")
+	}
 	bin, sha := buildFixture(t)
 	spawns := func(log string) int {
 		raw, _ := os.ReadFile(log)
@@ -615,6 +621,9 @@ func TestStopDrainsAndKillsWithinBudget(t *testing.T) {
 // next supervisor reattaches to it — identity, pid ownership and socket
 // ownership all verified — instead of orphaning it and spawning a duplicate.
 func TestReattachAfterHardSupervisorDeath(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real process spawn/kill + reattach timing; covered by the untimed race/metrics CI jobs")
+	}
 	bin, sha := buildFixture(t)
 	state := filepath.Join(t.TempDir(), "state")
 
@@ -745,6 +754,9 @@ func TestReattachRefusesReusedPid(t *testing.T) {
 // regular file wearing the recorded path, and a live socket that is not our
 // child all get rejected — and the unit comes up FRESH instead.
 func TestReattachRefusesForeignSockets(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real process spawn + socket reattach timing; covered by the untimed race/metrics CI jobs")
+	}
 	bin, sha := buildFixture(t)
 	cases := []struct {
 		name string

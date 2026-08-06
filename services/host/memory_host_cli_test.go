@@ -25,6 +25,9 @@ func buildHostBinary(t *testing.T) string {
 // print usage and exit 2, NOT fall through to starting the daemon (which would
 // block forever on ListenAndServe).
 func TestMemoryHostUnknownSubExits2(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the real pix-host binary for an exit-code roundtrip; covered by the untimed race/metrics CI jobs")
+	}
 	bin := buildHostBinary(t)
 	cmd := exec.Command(bin, "memory", "bogus")
 	// Point MEMORY_DB at a temp path so even a mistaken daemon start wouldn't
@@ -47,6 +50,9 @@ func TestMemoryHostUnknownSubExits2(t *testing.T) {
 // snapshot/restore as memory.db-only primitives and must never resurrect the
 // retired multi-component archive's claim of covering config or op-refs too.
 func TestMemoryHostHelpDescribesSnapshotRestoreOnly(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the real pix-host binary for a help-text roundtrip; covered by the untimed race/metrics CI jobs")
+	}
 	bin := buildHostBinary(t)
 	for _, flag := range []string{"--help", "-h"} {
 		cmd := exec.Command(bin, "memory", flag)
@@ -77,6 +83,9 @@ func TestMemoryHostHelpDescribesSnapshotRestoreOnly(t *testing.T) {
 // primitives on stderr, write nothing to stdout, and must NOT start a daemon
 // or touch the filesystem under MEMORY_DB.
 func TestHostBackupRestoreRetireToMemorySnapshot(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the real pix-host binary for a retirement-chain roundtrip; covered by the untimed race/metrics CI jobs")
+	}
 	bin := buildHostBinary(t)
 	cases := map[string]string{
 		"backup":  "pix-host memory snapshot PATH",

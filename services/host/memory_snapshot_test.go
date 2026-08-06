@@ -375,6 +375,9 @@ func TestRestoreDecidesUnderTheLock(t *testing.T) {
 // `pix-host memory restore PATH`. It is the proof that the argv seam, the
 // MEMORY_DB resolution, and the primitives agree.
 func TestMemoryCLISnapshotRestoreRoundtrip(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the real pix-host binary for a snapshot/restore CLI roundtrip; covered by the untimed race/metrics CI jobs")
+	}
 	bin := buildHostBinary(t)
 	st, dbPath := seedMemDB(t, 3)
 	st.db.Close()

@@ -150,6 +150,9 @@ func TestHostGuardExtensionDeleted(t *testing.T) {
 // retirement table, so it also proves no OTHER dispatch path (an alias, a
 // forgotten case) reaches host execution.
 func TestRunHostAnswersRetiredAndExecutesNothing(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the real pix binary for a CLI roundtrip; TestNoHostModeExecutionSymbols and TestHostGuardExtensionDeleted keep the sentinel cheap in the fast gate; this one is covered by the untimed race/metrics CI jobs")
+	}
 	bin := buildPixBinary(t)
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.toml")

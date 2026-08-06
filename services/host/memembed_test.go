@@ -249,6 +249,9 @@ func TestMemEmbedTimeout(t *testing.T) {
 // (slow-loris / wedged inference scenario). Without the timeout fix (H-2) the
 // function would block indefinitely, leaking the goroutine.
 func TestMemOllamaHasModelTimeout(t *testing.T) {
+	if testing.Short() {
+		t.Skip("timed hang probe: the fixture handler dwells up to 1s to prove the timeout is enforced; covered by the untimed race/metrics CI jobs")
+	}
 	// A handler that accepts the connection and blocks, but with a maximum
 	// dwell time so the test server can shut down cleanly when the test ends.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

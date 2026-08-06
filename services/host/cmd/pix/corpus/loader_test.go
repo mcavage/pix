@@ -184,6 +184,9 @@ func TestValidateShard_RejectsBadJSONKeysWithoutStream(t *testing.T) {
 // --- deletion guard: every known verb is either covered or retired ---------
 
 func TestCoverage_EveryKnownVerbHasShardOrRetirement(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the real pix binary to extract the dispatched verb list; covered by the untimed race/metrics CI jobs")
+	}
 	bin := buildPixBinary(t)
 	verbs, err := ExtractKnownVerbs(bin)
 	if err != nil {
