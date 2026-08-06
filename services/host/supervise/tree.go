@@ -66,6 +66,13 @@ const (
 	// whatever the unit exclusively owns (memory's store flock is the
 	// motivating case) forever.
 	EventOrphanKilled EventType = "orphan_killed"
+	// EventOrphanKillFailed fires when tryReattach revalidated and attempted
+	// to kill a verified orphan (see EventOrphanKilled) but could not confirm
+	// the process is actually gone: either the kill signal itself failed to
+	// deliver, or the process was still alive after the kill wait budget.
+	// Distinct from EventOrphanKilled on purpose — a caller must never read
+	// "we tried to kill it" as "it is dead".
+	EventOrphanKillFailed EventType = "orphan_kill_failed"
 )
 
 // Event is one typed supervision event.

@@ -343,6 +343,13 @@ func (s *GoPluginService) tryReattach() (*goplugin.Client, any, bool) {
 		reason = verifyReattachTarget(st.Network, st.Address)
 	}
 	if reason == "" {
+		// Snapshot the pid's kernel-reported start time NOW, at the moment every
+		// ownership check above has just passed, so a revalidation right before
+		// any kill decision below has something trustworthy to compare against
+		// (see revalidateOrphan): the client construction + dispense RPC that
+		// follows can take up to the handshake budget, real time in which the
+		// pid could exit and be reused by an unrelated process.
+		startBefore, startKnown := processStartTime(st.Pid)
 		client := goplugin.NewClient(&goplugin.ClientConfig{
 			HandshakeConfig: s.tree.handshake,
 			Plugins:         s.tree.plugins,
@@ -361,19 +368,32 @@ func (s *GoPluginService) tryReattach() (*goplugin.Client, any, bool) {
 		// Every check above (unit/kind name, the exact identity fingerprint, the
 		// negotiated protocol version, processAlive's uid check, and
 		// verifyReattachTarget's uid-owned-unix-socket check) already PROVED
-		// st.Pid is our own previously-launched generation of this unit — not
-		// merely a live process wearing that pid. client.Kill() above only
-		// reaches the OS process when go-plugin's own reattach dial succeeded
-		// (it sets a runner only then); a unit that stopped answering its
-		// socket entirely — the exact failure that would otherwise leave
-		// memory's exclusive store flock held forever, deadlocking every spawn
-		// `serve` tries next — dials to ErrProcessNotFound and leaves
-		// client.Kill() a no-op. killVerifiedOrphan is the ONLY path that
-		// still reaps it, and it is unreachable except through this
-		// already-verified pid; never call it on a pid that has not cleared
-		// every check above.
-		if killVerifiedOrphan(st.Pid) {
-			s.tree.emit(Event{Unit: s.spec.Name, Type: EventOrphanKilled, Message: fmt.Sprintf("pid %d: %s", st.Pid, reason)})
+		// st.Pid is our own previously-launched generation of this unit at the
+		// time of that check — not merely a live process wearing that pid, and
+		// not necessarily still true NOW: the dispense attempt just spent real
+		// time (up to the handshake budget) during which the pid could have
+		// exited and been reused. client.Kill() above only reaches the OS
+		// process when go-plugin's own reattach dial succeeded (it sets a
+		// runner only then); a unit that stopped answering its socket entirely
+		// — the exact failure that would otherwise leave memory's exclusive
+		// store flock held forever, deadlocking every spawn `serve` tries next
+		// — dials to ErrProcessNotFound and leaves client.Kill() a no-op.
+		// killVerifiedOrphan is the ONLY path that still reaps it, and it is
+		// reachable ONLY after revalidateOrphan re-confirms, right now, that
+		// the pid (by start time, where available) and its socket are still
+		// the exact target already verified above: a stale or partial
+		// revalidation refuses to kill rather than risk a reused pid.
+		if ok, revReason := revalidateOrphan(st.Pid, st.Network, st.Address, startBefore, startKnown); ok {
+			switch killVerifiedOrphan(st.Pid) {
+			case orphanKillConfirmedDead:
+				s.tree.emit(Event{Unit: s.spec.Name, Type: EventOrphanKilled, Message: fmt.Sprintf("pid %d: %s", st.Pid, reason)})
+			case orphanKillSignalFailed:
+				s.tree.emit(Event{Unit: s.spec.Name, Type: EventOrphanKillFailed, Message: fmt.Sprintf("pid %d: kill signal not delivered: %s", st.Pid, reason)})
+			case orphanKillNotConfirmed:
+				s.tree.emit(Event{Unit: s.spec.Name, Type: EventOrphanKillFailed, Message: fmt.Sprintf("pid %d: still alive %v after SIGKILL: %s", st.Pid, orphanKillWait, reason)})
+			}
+		} else {
+			reason = reason + " (verified orphan NOT killed: " + revReason + ")"
 		}
 	}
 	s.tree.emit(Event{Unit: s.spec.Name, Type: EventReattachRejected, Message: reason})
@@ -388,25 +408,112 @@ func (s *GoPluginService) tryReattach() (*goplugin.Client, any, bool) {
 // race, not that tryReattach hangs indefinitely.
 const orphanKillWait = 2 * time.Second
 
+// orphanKillResult distinguishes the three outcomes a caller of
+// killVerifiedOrphan must NOT conflate: the process actually confirmed dead
+// (the only case that earns EventOrphanKilled), the kill signal itself
+// failing to deliver, and the signal being delivered but the process still
+// being alive after orphanKillWait (also not a confirmed kill).
+type orphanKillResult int
+
+const (
+	orphanKillConfirmedDead orphanKillResult = iota // process is actually gone
+	orphanKillSignalFailed                          // p.Kill() itself returned an error
+	orphanKillNotConfirmed                          // signaled, but still alive after the wait
+)
+
 // killVerifiedOrphan terminates pid, which the caller has ALREADY established
-// is our own previously-launched unit process (see the call site), and waits
-// briefly for it to actually exit so the fresh spawn that follows has a real
-// chance at whatever exclusive resource (a flock) the orphan was holding.
-// Reports whether the kill signal was delivered (false only means the pid was
-// already gone — never a reason to treat the caller's failure differently).
-func killVerifiedOrphan(pid int) bool {
+// (via revalidateOrphan, immediately beforehand) is our own previously-
+// launched unit process, and waits briefly for it to actually exit so the
+// fresh spawn that follows has a real chance at whatever exclusive resource
+// (a flock) the orphan was holding. It reports which of the three outcomes
+// above occurred; the caller emits EventOrphanKilled ONLY for
+// orphanKillConfirmedDead.
+func killVerifiedOrphan(pid int) orphanKillResult {
 	p, err := os.FindProcess(pid)
 	if err != nil {
-		return false
+		return orphanKillConfirmedDead // nothing to signal: already gone
 	}
-	if err := p.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-		return false
+	if err := p.Kill(); err != nil {
+		if errors.Is(err, os.ErrProcessDone) {
+			return orphanKillConfirmedDead
+		}
+		return orphanKillSignalFailed
 	}
 	deadline := time.Now().Add(orphanKillWait)
 	for time.Now().Before(deadline) && processAlive(pid) {
 		time.Sleep(20 * time.Millisecond)
 	}
-	return true
+	if processAlive(pid) {
+		return orphanKillNotConfirmed
+	}
+	return orphanKillConfirmedDead
+}
+
+// revalidateOrphan re-confirms, immediately before a kill decision, that pid
+// and its recorded socket are STILL the exact target already verified
+// earlier in tryReattach — not a different process or endpoint that appeared
+// in the window opened by constructing the reattach client and running the
+// failed dispense RPC (bounded by the handshake budget, which can be real
+// seconds). It binds identity to the pid's kernel-reported START TIME where
+// Linux exposes one (/proc/pid/stat): a pid-reusing successor process can
+// share processAlive's uid check but can never share the original process's
+// start time down to the clock tick. Where no start-time source exists
+// (non-Linux, or /proc unreadable), this refuses to kill conservatively:
+// alive-and-ours is necessary but not sufficient to prove it is the SAME
+// process, so it is not sufficient to kill. Any stale or partial result here
+// — not just an outright mismatch — means "do not kill".
+func revalidateOrphan(pid int, network, address string, startBefore uint64, startKnown bool) (ok bool, reason string) {
+	if !processAlive(pid) {
+		return false, "process is gone or no longer ours as of the kill decision"
+	}
+	if r := verifyReattachTarget(network, address); r != "" {
+		return false, "socket no longer verifies: " + r
+	}
+	if !startKnown {
+		return false, "no process start-time source available to rule out pid reuse"
+	}
+	startNow, ok2 := processStartTime(pid)
+	if !ok2 {
+		return false, "process start time unavailable as of the kill decision"
+	}
+	if startNow != startBefore {
+		return false, "process start time changed: the pid was reused"
+	}
+	return true, ""
+}
+
+// processStartTime reads pid's START TIME from /proc/pid/stat field 22
+// (clock ticks since boot) — the kernel's own answer to "when was THIS
+// process born", a value a pid-reusing successor process can never share
+// with the process it replaced, unlike the pid number itself. ok is false
+// wherever /proc does not exist (non-Linux) or the stat file cannot be
+// parsed; the caller must then refuse to bind identity by start time rather
+// than treat that as proof of anything.
+func processStartTime(pid int) (uint64, bool) {
+	raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return 0, false
+	}
+	// comm (field 2) is parenthesized and may itself contain spaces or ')';
+	// splitting on the LAST ')' is the standard safe way to parse the rest of
+	// /proc/pid/stat regardless of what the process name contains.
+	s := string(raw)
+	idx := strings.LastIndexByte(s, ')')
+	if idx < 0 || idx+2 > len(s) {
+		return 0, false
+	}
+	fields := strings.Fields(s[idx+1:])
+	// fields[0] is field 3 (state); starttime is field 22 overall, index 22-3
+	// in this 0-based slice.
+	const starttimeIdx = 22 - 3
+	if len(fields) <= starttimeIdx {
+		return 0, false
+	}
+	v, err := strconv.ParseUint(fields[starttimeIdx], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
 }
 
 // verifyReattachTarget admits UNIX SOCKETS ONLY (a tcp target is whatever process got the port back after a reboot; a unix socket path carries an owner we can check), and only one owned by OUR uid: a regular file wearing the recorded path, or a socket created by another user, is a stranger's endpoint, not our child's. Returns a rejection reason, or "" to proceed.
