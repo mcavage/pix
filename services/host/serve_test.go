@@ -1,15 +1,20 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"pix/host/config"
 	"pix/host/plugin"
@@ -238,5 +243,229 @@ func TestMemoryProxyMuxContract(t *testing.T) {
 	e, ok := nf["error"].(map[string]any)
 	if !ok || e["code"].(float64) != -32601 {
 		t.Errorf("unknown method should yield -32601, got %v", nf)
+	}
+}
+
+// --- R1: a losing second `serve` must never delete the WINNER's pidfile -----
+
+// TestRemoveOwnedPidFileOnlyDeletesOurOwnPid is the regression for the
+// compare-and-delete contract removeServePidFile/removeServeLazyMarker both
+// run through: the file is deleted ONLY when it currently names THIS
+// process's pid — never whatever pid happens to be sitting there, which is
+// what a bare os.Remove (the old behavior) did regardless of content.
+func TestRemoveOwnedPidFileOnlyDeletesOurOwnPid(t *testing.T) {
+	t.Run("a foreign pid is left untouched", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "serve.pid")
+		foreign := os.Getpid() + 1 // guaranteed != os.Getpid(); need not exist
+		if err := os.WriteFile(path, []byte(strconv.Itoa(foreign)+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		removeOwnedPidFile(path)
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("a foreign-owned pidfile was deleted: %v", err)
+		}
+		if strings.TrimSpace(string(raw)) != strconv.Itoa(foreign) {
+			t.Fatalf("pidfile content changed: %q", raw)
+		}
+	})
+
+	t.Run("our own pid is deleted", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "serve.pid")
+		if err := os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		removeOwnedPidFile(path)
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("our own pidfile was not removed: err=%v", err)
+		}
+	})
+
+	t.Run("a missing file is a silent no-op", func(t *testing.T) {
+		removeOwnedPidFile(filepath.Join(t.TempDir(), "does-not-exist"))
+	})
+
+	t.Run("garbage content is left untouched", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "serve.pid")
+		if err := os.WriteFile(path, []byte("not-a-pid\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		removeOwnedPidFile(path)
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("unparseable pidfile content was still deleted: %v", err)
+		}
+	})
+}
+
+// TestServeCleanupDoesNotClobberARunningWinner reproduces the race at the
+// config-path level runServe's deferred cleanup actually runs under: a
+// WINNER writes serve.pid/serve.lazy naming its own (different) pid, then a
+// LOSER runs the exact cleanup sequence runServe defers on its way out
+// (removeServePidFile, removeServeLazyMarker, called as this test process).
+// The winner's files must survive.
+func TestServeCleanupDoesNotClobberARunningWinner(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	if err := os.MkdirAll(filepath.Dir(config.ServePidPath()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	winner := os.Getpid() + 1000 // stands in for a DIFFERENT, still-running process
+	if err := os.WriteFile(config.ServePidPath(), []byte(strconv.Itoa(winner)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(config.ServeLazyMarkerPath(), []byte(strconv.Itoa(winner)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// The LOSER's own cleanup — exactly what runServe's defers/exit path call.
+	removeServePidFile()
+	removeServeLazyMarker()
+
+	raw, err := os.ReadFile(config.ServePidPath())
+	if err != nil {
+		t.Fatalf("winner's pidfile was deleted by a losing serve's cleanup: %v", err)
+	}
+	if strings.TrimSpace(string(raw)) != strconv.Itoa(winner) {
+		t.Fatalf("winner's pidfile content changed: %q", raw)
+	}
+	if _, err := os.Stat(config.ServeLazyMarkerPath()); err != nil {
+		t.Fatalf("winner's lazy marker was deleted by a losing serve's cleanup: %v", err)
+	}
+}
+
+// --- R2: every real memory RPC runs through Holder.Use, so Drain sees it ----
+
+// blockingStore wraps stubStore, blocking inside Recall (closing `started`
+// once the handler is actually running, so the test knows the call is truly
+// in flight) until `unblock` is closed.
+type blockingStore struct {
+	stubStore
+	started chan struct{}
+	unblock chan struct{}
+}
+
+func (b blockingStore) Recall(r plugin.RecallReq) (plugin.RecallResp, error) {
+	close(b.started)
+	<-b.unblock
+	return b.stubStore.Recall(r)
+}
+
+// TestMemoryProxyMuxRoutesRPCsThroughHolderUse is the regression for routing
+// every real memory RPC through Holder.Use rather than a bare Get(): before
+// that fix, memoryProxyMux resolved the dispensed client and returned
+// immediately, so Holder's in-flight accounting (what Drain waits on before a
+// stop kills the child) never saw an HTTP call that was still running — a
+// shutdown's drain could report "clean" with a sandbox request still
+// in-flight. This blocks a real call inside the handler and proves Drain
+// (given a short budget) reports NOT clean while it is still running, then
+// clean once it actually finishes.
+func TestMemoryProxyMuxRoutesRPCsThroughHolderUse(t *testing.T) {
+	h := &pluginHolder{}
+	started, unblock := make(chan struct{}), make(chan struct{})
+	h.Set(blockingStore{started: started, unblock: unblock}, nil)
+	srv := httptest.NewServer(memoryProxyMux(h))
+	defer srv.Close()
+
+	done := make(chan struct{})
+	var postErr error
+	go func() {
+		defer close(done)
+		body := `{"jsonrpc":"2.0","id":1,"method":"recall"}`
+		res, err := http.Post(srv.URL, "application/json", strings.NewReader(body))
+		if err != nil {
+			postErr = err
+			return
+		}
+		res.Body.Close()
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("recall handler never started")
+	}
+
+	if h.Drain(200 * time.Millisecond) {
+		t.Fatal("Drain reported clean with a memory RPC still in flight — memoryProxyMux is not routing through Holder.Use")
+	}
+
+	close(unblock)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the in-flight recall never completed")
+	}
+	if postErr != nil {
+		t.Fatalf("POST /recall: %v", postErr)
+	}
+
+	if !h.Drain(2 * time.Second) {
+		t.Fatal("Drain did not report clean once the in-flight call finished")
+	}
+}
+
+// --- R3: runServe must WAIT for monitor's graceful shutdown, not race it ----
+
+// TestServeMonitorAndWaitBlocksUntilGracefulShutdownActuallyCompletes proves
+// serveMonitorAndWait's wait() reflects monitor.IngestServer.Serve's REAL
+// completion, not just "the goroutine got scheduled": it holds a genuinely
+// in-flight /ingest request open across the cancel, so monitor's own
+// graceful shutdown (Server.Shutdown, monitor/ingest.go) has real work to
+// wait for, and asserts wait() does not return while that work is still
+// outstanding, only once the request actually unblocks and Serve(ctx) itself
+// returns. Before this wait existed, runServe raced this window: a fatal
+// failure elsewhere called os.Exit(1) without ever waiting on it.
+func TestServeMonitorAndWaitBlocksUntilGracefulShutdownActuallyCompletes(t *testing.T) {
+	root := t.TempDir()
+	srv, err := buildMonitorIngest("127.0.0.1", 0, root)
+	if err != nil {
+		t.Fatalf("buildMonitorIngest: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	fatalCh := make(chan error, 1)
+	wait := serveMonitorAndWait(srv, ctx, fatalCh)
+
+	// A real, incomplete request: full headers (so net/http hands it to the
+	// handler) declaring a body it never finishes sending, so handleIngest is
+	// genuinely blocked reading r.Body when we cancel below.
+	conn, err := net.Dial("tcp", srv.Addr())
+	if err != nil {
+		t.Fatalf("dial monitor ingest: %v", err)
+	}
+	defer conn.Close()
+	if _, err := fmt.Fprintf(conn, "POST /ingest HTTP/1.1\r\nHost: %s\r\nContent-Length: 4096\r\nContent-Type: application/x-ndjson\r\n\r\n{\"partial\":true", srv.Addr()); err != nil {
+		t.Fatalf("write partial request: %v", err)
+	}
+	// Give net/http time to parse the headers and hand the request to the
+	// handler (handleIngest, now blocked reading the rest of the declared
+	// body) BEFORE cancelling — otherwise Shutdown's very first idle-conn
+	// sweep can close an accepted-but-not-yet-dispatched connection as idle,
+	// which would race this test rather than exercise the wait.
+	time.Sleep(100 * time.Millisecond)
+
+	cancel()
+
+	// wait() must NOT return while the handler is still blocked on the
+	// in-flight (never completed) request.
+	waitDone := make(chan struct{})
+	go func() { wait(); close(waitDone) }()
+	select {
+	case <-waitDone:
+		t.Fatal("wait() returned before monitor's Serve(ctx) actually finished shutting down — an in-flight request was still open")
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	// Let the handler's blocked read fail (EOF), which lets Serve's own
+	// graceful shutdown proceed and return.
+	conn.Close()
+
+	select {
+	case <-waitDone:
+	case <-time.After(6 * time.Second):
+		t.Fatal("wait() never returned after the in-flight request ended")
+	}
+	select {
+	case err := <-fatalCh:
+		t.Fatalf("monitor reported a fatal error on what should be a clean shutdown: %v", err)
+	default:
 	}
 }

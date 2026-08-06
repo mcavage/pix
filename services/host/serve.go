@@ -191,6 +191,23 @@ func runServe(argv []string) {
 		fatalf("no services enabled (run: pix config set services %s)", strings.Join(valid, ","))
 	}
 
+	// Bind every mux-based listener EAGERLY, before anything below claims the
+	// pidfile: a losing second `serve` racing an already-running daemon for the
+	// same port dies right here, on a plain "address already in use", never
+	// having written its own pid over the winner's. monitor ingest already
+	// binds this early (NewIngestServer, called above by buildMonitorIngest);
+	// this closes the same gap for memory's listener. removeServePidFile below
+	// is ALSO ownership-safe on its own terms — this is belt and suspenders,
+	// not the only guard.
+	listeners := make(map[string]net.Listener, len(all))
+	for _, s := range all {
+		ln, lerr := net.Listen("tcp", s.addr)
+		if lerr != nil {
+			fatalf("bind %s (%s): %v", s.name, s.addr, lerr)
+		}
+		listeners[s.name] = ln
+	}
+
 	// Record our pid so the launcher's `serve stop`/`serve status` can find and
 	// signal us safely (no blind pkill).
 	writeServePidFile()
@@ -217,7 +234,7 @@ func runServe(argv []string) {
 		}
 		log.Printf("starting %s on http://%s", s.name, s.addr)
 		go func() {
-			if err := srv.ListenAndServe(); err != nil {
+			if err := srv.Serve(listeners[s.name]); err != nil && err != http.ErrServerClosed {
 				fatalCh <- fmt.Errorf("%s: %v", s.name, err)
 			}
 		}()
@@ -225,13 +242,7 @@ func runServe(argv []string) {
 
 	// monitor ingest runs its own Serve(ctx): cancelling ctx on either shutdown
 	// path is what stops it — there is no http.Server to close here.
-	if monitorSrv != nil {
-		go func() {
-			if err := monitorSrv.Serve(ctx); err != nil {
-				fatalCh <- fmt.Errorf("monitor: %v", err)
-			}
-		}()
-	}
+	waitMonitor := serveMonitorAndWait(monitorSrv, ctx, fatalCh)
 
 	// Block until a signal or a service failure.
 	select {
@@ -239,11 +250,13 @@ func runServe(argv []string) {
 		log.Printf("serve: received %v; shutting down", sig)
 		cancel()
 		sup.shutdown()
+		waitMonitor()
 		// defers (removeServePidFile, removeServeLazyMarker) run on return
 	case err := <-fatalCh:
 		log.Printf("serve: fatal: %v", err)
 		cancel()
 		sup.shutdown()
+		waitMonitor()
 		// Explicitly run deferred cleanup before os.Exit since defers don't run
 		// when Exit is called (defers only run on return from runServe).
 		removeServePidFile()
@@ -265,6 +278,28 @@ func buildMonitorIngest(bind string, port int, root string) (*monitor.IngestServ
 		return nil, fmt.Errorf("monitor ingest: %w", err)
 	}
 	return srv, nil
+}
+
+// serveMonitorAndWait runs monitorSrv.Serve(ctx) in the background and
+// returns a wait func that blocks until that call has ACTUALLY returned —
+// monitor's own graceful shutdown (bounded to 5s, see monitor/ingest.go)
+// having already completed, not merely started. runServe calls wait() before
+// it returns OR os.Exit(1)s, on every shutdown path, so a fatal failure
+// elsewhere in `serve` can never cut monitor off mid-drain the way an
+// unwaited background goroutine would. A nil monitorSrv (monitor not
+// enabled) returns a no-op wait.
+func serveMonitorAndWait(monitorSrv *monitor.IngestServer, ctx context.Context, fatalCh chan<- error) (wait func()) {
+	if monitorSrv == nil {
+		return func() {}
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := monitorSrv.Serve(ctx); err != nil {
+			fatalCh <- fmt.Errorf("monitor: %v", err)
+		}
+	}()
+	return func() { <-done }
 }
 
 // isLoopbackAddr reports whether host (no port) is the loopback interface: the
@@ -292,23 +327,50 @@ func writeServePidFile() {
 	}
 }
 
-// removeServePidFile deletes the pidfile on shutdown. Best-effort: a missing file
-// is fine and any other remove error only logs.
+// removeServePidFile deletes the pidfile on shutdown — but ONLY if it still
+// names OUR pid. See removeOwnedPidFile.
 func removeServePidFile() {
-	path := config.ServePidPath()
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		log.Printf("serve: could not remove pidfile %s: %v", path, err)
-	}
+	removeOwnedPidFile(config.ServePidPath())
 }
 
 // removeServeLazyMarker clears the launcher-written serve.lazy marker on a
 // clean exit (belt + suspenders with `serve stop`'s own removal), so a lazily
 // started daemon that shuts down gracefully never leaves a stale "lazy" flag.
 // A hard kill leaves it behind — harmless, since lifecycle-mode detection also
-// requires a live, verified-ours pidfile.
+// requires a live, verified-ours pidfile. Same ownership guard as the pidfile:
+// the marker is written carrying the SAME pid (service/start.go's markLazy),
+// so the check is identical.
 func removeServeLazyMarker() {
-	if err := os.Remove(config.ServeLazyMarkerPath()); err != nil && !os.IsNotExist(err) {
-		log.Printf("serve: could not remove lazy marker: %v", err)
+	removeOwnedPidFile(config.ServeLazyMarkerPath())
+}
+
+// removeOwnedPidFile deletes path ONLY when it currently names OUR pid: two
+// `serve` processes can race to write the SAME pidfile/lazy-marker path (a
+// loser starts, binds nothing — see the eager listener binds above — but can
+// still reach this cleanup on its way out through fatalf), and the loser's
+// own deferred cleanup must never delete a file the WINNER (or any other,
+// currently-running daemon) just wrote for itself. Reading before removing is
+// a best-effort compare-and-delete, not atomic against a concurrent write —
+// but the only way that race can resolve is in the FILE'S favor: we only ever
+// delete a file that, at the moment we looked, said WE are its owner; we
+// never delete one that says otherwise. A missing file is fine; any other
+// read/remove error only logs.
+func removeOwnedPidFile(path string) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("serve: could not read %s before removing: %v", path, err)
+		}
+		return
+	}
+	pid, perr := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if perr != nil || pid != os.Getpid() {
+		// Not ours (unparseable, or another process's pid): leave it exactly
+		// alone. Whoever it belongs to is responsible for its own cleanup.
+		return
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		log.Printf("serve: could not remove %s: %v", path, err)
 	}
 }
 

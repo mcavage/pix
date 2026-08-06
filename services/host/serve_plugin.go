@@ -211,33 +211,51 @@ func projOrNil(p string) any {
 	return p
 }
 
+// memoryUse is the single seam every REAL memory RPC executes through: for the
+// supervised unit it is Holder.Use (so a shutdown's drain WAITS for an
+// in-flight call, up to the drain budget, instead of killing the child out
+// from under it — see supervise.Holder.Drain); for the bare `pix-host memory`
+// daemon (no holder, nothing supervising it, nothing to drain against) it is a
+// direct call. Both wrap fn so a plugin-unavailable holder surfaces as the
+// same JSON-RPC error either path would give.
+type memoryUse func(fn func(plugin.MemoryStore) error) error
+
 // memoryProxyMux backs :11435 with the SUPERVISED memory unit: it resolves the
-// dispensed client per call, so a restart or reattach is invisible to the
-// sandbox and a down unit is a clean JSON-RPC error rather than a dead socket.
+// dispensed client per call THROUGH Holder.Use, so a restart or reattach is
+// invisible to the sandbox, a down unit is a clean JSON-RPC error rather than
+// a dead socket, and — the property this exists for — the call is counted as
+// in-flight for as long as it actually runs, not just for the instant it took
+// to read the holder.
 func memoryProxyMux(h *pluginHolder) http.Handler {
-	return memoryStoreMux(func() (plugin.MemoryStore, error) {
-		s, _ := h.Get().(plugin.MemoryStore)
-		if s == nil {
-			return nil, errors.New("memory plugin unavailable")
-		}
-		return s, nil
+	return memoryStoreMux(func(fn func(plugin.MemoryStore) error) error {
+		return h.Use(func(impl any) error {
+			s, _ := impl.(plugin.MemoryStore)
+			if s == nil {
+				return errors.New("memory plugin unavailable")
+			}
+			return fn(s)
+		})
 	})
 }
 
 // memoryStoreMux is THE :11435 JSON-RPC surface, expressed once over the typed
-// MemoryStore interface. `get` resolves the store per call — a holder-backed
-// plugin client for the supervised unit, or the in-process adapter for the bare
-// `pix-host memory` daemon — so the two entry points cannot answer differently.
-// Response shapes are the sandbox recall extension's contract, and every one of
-// them is built here and nowhere else.
-func memoryStoreMux(get func() (plugin.MemoryStore, error)) http.Handler {
+// MemoryStore interface. `use` resolves and calls the store per request — a
+// Holder.Use-wrapped plugin client for the supervised unit, or a direct call
+// against the in-process adapter for the bare `pix-host memory` daemon — so
+// the two entry points cannot answer differently, and every method below runs
+// for its ENTIRE duration inside whichever accounting `use` provides. Response
+// shapes are the sandbox recall extension's contract, and every one of them is
+// built here and nowhere else.
+func memoryStoreMux(use memoryUse) http.Handler {
 	with := func(fn func(plugin.MemoryStore, jsonObj) (any, error)) func(jsonObj) (any, error) {
 		return func(p jsonObj) (any, error) {
-			s, err := get()
-			if err != nil {
-				return nil, err
-			}
-			return fn(s, p)
+			var out any
+			err := use(func(s plugin.MemoryStore) error {
+				var ferr error
+				out, ferr = fn(s, p)
+				return ferr
+			})
+			return out, err
 		}
 	}
 	return jsonrpcMux(map[string]func(jsonObj) (any, error){

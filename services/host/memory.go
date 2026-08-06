@@ -757,7 +757,7 @@ func memoryMux() http.Handler {
 // supervised unit answer through it, so the two cannot drift.
 func newMemoryMux(store *memStore, hasEmb bool) http.Handler {
 	adapter := newMemoryStoreAdapter(store, hasEmb)
-	return memoryStoreMux(func() (plugin.MemoryStore, error) { return adapter, nil })
+	return memoryStoreMux(func(fn func(plugin.MemoryStore) error) error { return fn(adapter) })
 }
 
 func runMemory() {
