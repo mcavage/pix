@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -25,18 +26,33 @@ test("scripts/check-third-party-notices.sh passes on the real tree", () => {
 });
 
 test("scripts/check-third-party-notices.sh fails closed when the notices file is stale", () => {
-	const noticesPath = path.join(repoRoot, "THIRD_PARTY_NOTICES.md");
-	const original = fs.readFileSync(noticesPath, "utf8");
-	fs.writeFileSync(noticesPath, original + "\nstale drift line\n");
+	// The check script resolves its own repo ROOT from its own location
+	// (BASH_SOURCE) and reads/writes only within it, so a full working copy of
+	// the tree in a scratch temp dir is a fully isolated sandbox: the mutation
+	// below never touches the real, tracked THIRD_PARTY_NOTICES.md. This
+	// avoids a concurrency race against other test files that read the real
+	// file (e.g. legal-third-party-notices.test.mjs) under
+	// --test-concurrency>1.
+	const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "legal-notices-stale-"));
 	try {
+		// A committed-tree snapshot (git archive of HEAD), not a cp of the live
+		// working tree: immune to any uncommitted local edit in repoRoot too.
+		const tarPath = path.join(scratchRoot, "tree.tar");
+		execFileSync("bash", ["-c", `git -C "${repoRoot}" archive HEAD > "${tarPath}"`]);
+		execFileSync("tar", ["-xf", tarPath, "-C", scratchRoot]);
+
+		const scratchNoticesPath = path.join(scratchRoot, "THIRD_PARTY_NOTICES.md");
+		const original = fs.readFileSync(scratchNoticesPath, "utf8");
+		fs.writeFileSync(scratchNoticesPath, original + "\nstale drift line\n");
+
 		const res = spawnSync("bash", ["scripts/check-third-party-notices.sh"], {
-			cwd: repoRoot,
+			cwd: scratchRoot,
 			encoding: "utf8",
 		});
 		assert.notEqual(res.status, 0);
 		assert.match(res.stdout + res.stderr, /stale/i);
 	} finally {
-		fs.writeFileSync(noticesPath, original);
+		fs.rmSync(scratchRoot, { recursive: true, force: true });
 	}
 });
 
