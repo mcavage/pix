@@ -16,12 +16,14 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	goplugin "github.com/hashicorp/go-plugin"
 
 	"pix/host/config"
 	"pix/host/plugin"
 	"pix/host/supervise"
+	"pix/host/unitreport"
 )
 
 // pluginHolder is the supervision tree's holder for one unit: the proxy
@@ -34,6 +36,10 @@ type pluginHolder = supervise.Holder
 type supervisor struct {
 	mu   sync.Mutex
 	tree *supervise.Tree
+	// stopPublish ends the status-snapshot publisher; publishErrOnce keeps a
+	// broken state dir from filling serve.log with the same line every 5s.
+	stopPublish    chan struct{}
+	publishErrOnce sync.Once
 	// packUnits is reconcilePackUnits' desired-state ledger (pack_units.go).
 	packUnits map[string]supervise.UnitSpec
 }
@@ -71,12 +77,54 @@ func (s *supervisor) ensure(selfPath string) *supervise.Tree {
 			Plugins:   plugin.PluginMap,
 			Handshake: plugin.Handshake,
 			EventSink: func(e supervise.Event) {
-				log.Printf("supervise: %s %s %s %s", e.Unit, e.Type, e.Message, e.Err)
+				log.Printf("supervise: %s %s %s %s", e.Unit, e.Type, e.Message, unitreport.ScrubError(e.Err))
+				// Every state change is published immediately; the ticker below
+				// only covers what changes WITHOUT an event (probe latency).
+				s.publish()
 			},
 		})
 		s.tree.Start(context.Background())
+		s.stopPublish = make(chan struct{})
+		go s.publishLoop(s.stopPublish)
 	}
 	return s.tree
+}
+
+// unitsReportInterval is the ceiling on how stale `pix serve status --json` can
+// be about a probe latency. Events cover every state change; this covers the
+// numbers that move while nothing changes state.
+const unitsReportInterval = 5 * time.Second
+
+// publish writes the supervision-tree snapshot readers (serve status, doctor)
+// consume. Publishing is best-effort and NEVER fails a running daemon: a state
+// dir that cannot be written is a missing snapshot, which those readers render
+// as "unknown", not as healthy.
+func (s *supervisor) publish() {
+	s.mu.Lock()
+	tree := s.tree
+	s.mu.Unlock()
+	if tree == nil {
+		return
+	}
+	if err := unitreport.WriteReport(config.ServeUnitsPath(), tree.Report()); err != nil {
+		s.publishErrOnce.Do(func() {
+			log.Printf("supervise: cannot publish unit status to %s: %v", config.ServeUnitsPath(), err)
+		})
+	}
+}
+
+// publishLoop refreshes the snapshot on a fixed interval until shutdown.
+func (s *supervisor) publishLoop(stop <-chan struct{}) {
+	t := time.NewTicker(unitsReportInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			s.publish()
+		}
+	}
 }
 
 // supervisorDirs resolves the staging + reattach state dirs under the STATE dir
@@ -112,10 +160,20 @@ func (s *supervisor) launch(name, kind string, spec config.PluginSpec, selfPath 
 // budgets). Safe to call with nothing launched.
 func (s *supervisor) shutdown() {
 	s.mu.Lock()
-	tree := s.tree
+	tree, stop := s.tree, s.stopPublish
+	s.stopPublish = nil
 	s.mu.Unlock()
+	if stop != nil {
+		close(stop)
+	}
 	if tree != nil {
 		tree.Stop()
+	}
+	// The snapshot describes a LIVE tree; leaving it behind would let `serve
+	// status` report units of a daemon that is gone. Removal is best-effort:
+	// readers cross-check it against the pidfile anyway.
+	if tree != nil {
+		_ = os.Remove(config.ServeUnitsPath())
 	}
 	goplugin.CleanupClients()
 }

@@ -16,7 +16,7 @@ const StatusDescription = `Fast, read-only glance: what is ready, what is missin
 checked from here. Launches nothing, changes nothing, and always exits 0.
 Run ` + "`pix doctor`" + ` for the exact fix commands.
 
---json emits the machine-readable snapshot (schema_version 4).
+--json emits the machine-readable snapshot (schema_version 5).
 `
 
 // StatusExit is status's exit code, and it is a constant on purpose. Status is

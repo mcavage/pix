@@ -8,6 +8,54 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## Unreleased
 
+### Added
+
+- **Supervision-tree observability, end to end.** `pix-host serve` now publishes
+  a typed snapshot of the Suture tree (`~/.local/state/pix/serve.units.json`,
+  atomic + 0600, republished every 5 s and on every supervision event), and both
+  reader surfaces consume it instead of guessing: `pix serve status [--json]`
+  gains a `units[]` array and a per-unit human line, and `pix doctor --json` /
+  `pix status --json` gain a `supervisor` object. Each unit reports identity (the
+  sha256 admission fingerprint — env grant VALUES enter it only as digests),
+  state, pid, health, reattached, restarts, generation, scrubbed last error, and
+  last health-probe latency in microseconds. Every published error goes through
+  `unitreport.ScrubError`, which redacts `*_TOKEN=`/`Bearer `/`op://` shapes. A
+  missing, foreign-pid, schema-mismatched or >20 s stale snapshot renders as
+  UNKNOWN, never as healthy. New L0 package `services/host/unitreport` owns the
+  shared shape (supervise at L2 writes it; service at L1 and workflow/doctor at
+  L3 read it).
+- **`scripts/macos/verify-pix-lifecycle.sh`** — the machine-checkable half of
+  host UAT, with real assertions and no unconditional PASS: command/flag surface,
+  digest-suffixed sandbox naming, lease instance identity, attach fingerprint
+  refusal, exit-code propagation, multi-shell teardown, `--keep` vs the orphan
+  reaper, serve/doctor supervision JSON (including a no-secrets assertion),
+  memory-unit restart across a SIGKILL with `:11435` never dropping, launchd
+  respawn + mode-aware `serve stop`, and an opt-in external-OAuth pass. It greps
+  itself for blast-radius removal flags, removes only sandboxes it created,
+  asserts `$PWD` is unchanged, and reports SKIPs as an INCOMPLETE run (exit 2).
+- **`docs/runbooks/host-services.md`** — the on-call runbook: golden-signal SLIs
+  with SLOs and an error-budget policy, unit-field reference, alert-to-response
+  table, recovery order, a toil ledger, and the postmortem trigger.
+- **`TestMemoryListenerSurvivesUnitRestart`** (`services/host`) — a real
+  process/socket/SQLite test that SIGKILLs the memory child and proves the three
+  properties the design exists for: the listener stays bound, calls fail fast
+  while no unit is dispensed (never hang), and the unit recovers with its data
+  and a counted restart.
+
+### Changed
+
+- **doctor/status JSON is schema_version 5.** v5 adds the required top-level
+  `supervisor` object; `RetiredSchemas[4]` records the migration (a v4 consumer
+  keeps every field it knows). Corpus contract cases updated.
+- `docs/HOST-UAT.md` rewritten around the script: what the machine proves, what
+  only a human can judge, and the exit-code contract.
+
+### Fixed
+
+- `lib/recall-message.ts` no longer documents the deleted knowledge store
+  (`:11436`, `KNOWLEDGE_CHAR_BUDGET`, `/knowledge`) as live behaviour; the
+  per-channel budget rationale is restated for the store that actually exists.
+
 ### Docs
 
 - **U12: final public docs/release sync against delivered code.** `AGENTS.md`'s

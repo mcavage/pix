@@ -248,6 +248,18 @@ func ServePidPath() string {
 	return filepath.Join(dir, "serve.pid")
 }
 
+// ServeUnitsPath is <state-dir>/serve.units.json — the supervision-tree snapshot
+// `pix-host serve` publishes and `pix serve status --json` / `pix doctor --json`
+// read back. It lives in the STATE dir with the pidfile, so the same "move the
+// config aside" move can never leave a stale snapshot beside a live daemon.
+func ServeUnitsPath() string {
+	dir, err := StateDir()
+	if err != nil {
+		return "serve.units.json"
+	}
+	return filepath.Join(dir, "serve.units.json")
+}
+
 // ServeSpawnLockPath is the flock file the launcher's lazy auto-start takes around
 // its spawn decision (double-checked locking against a concurrent `pix run`).
 func ServeSpawnLockPath() string {

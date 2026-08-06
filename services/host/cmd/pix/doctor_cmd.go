@@ -20,7 +20,7 @@ import (
 func (c *doctorCmd) Help() string { return doctor.Description }
 
 type doctorCmd struct {
-	JSON    bool `help:"Emit the machine-readable snapshot (schema_version 4)."`
+	JSON    bool `help:"Emit the machine-readable snapshot (schema_version 5)."`
 	Verbose bool `help:"Show the evidence for every check, not only the ones that failed."`
 }
 
@@ -48,7 +48,7 @@ func (c *doctorCmd) Run(d *cli.Deps) error {
 func (c *statusCmd) Help() string { return doctor.StatusDescription }
 
 type statusCmd struct {
-	JSON bool `help:"Emit the machine-readable snapshot (schema_version 4)."`
+	JSON bool `help:"Emit the machine-readable snapshot (schema_version 5)."`
 }
 
 func (c *statusCmd) Run(d *cli.Deps) error {

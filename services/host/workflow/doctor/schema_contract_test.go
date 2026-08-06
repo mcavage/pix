@@ -21,7 +21,7 @@ import (
 // test is what makes that non-optional.
 var v4TopLevel = []string{
 	"schema_version", "version", "config_path", "profile", "verdict", "ready",
-	"checks", "fixes", "exit", "elapsed_ms",
+	"checks", "fixes", "exit", "elapsed_ms", "supervisor",
 }
 
 // v4Check is one row's key set. `evidence` and `fix` are omitempty, so the
@@ -115,7 +115,7 @@ func TestSchemaV4_IsPublishedByBothSurfaces(t *testing.T) {
 	if got := ReportJSON(snap, "", snap.ExitCode()).SchemaVersion; got != SchemaVersion {
 		t.Errorf("schema_version = %d, want %d", got, SchemaVersion)
 	}
-	if !strings.Contains(Description, "schema_version 4") || !strings.Contains(StatusDescription, "schema_version 4") {
+	if !strings.Contains(Description, "schema_version 5") || !strings.Contains(StatusDescription, "schema_version 5") {
 		t.Error("both --json flags must document the schema version they emit")
 	}
 }
