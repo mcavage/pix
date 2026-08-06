@@ -16,6 +16,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"pix/host/packinfo"
 	"strings"
 	"testing"
 
@@ -33,7 +34,7 @@ func sha256Hex(b []byte) string {
 // Tier-1 gate. PIX_CONFIG must already point into a temp dir.
 func acceptPackSurface(t *testing.T, root, cfgGogAccount string) {
 	t.Helper()
-	p, err := LoadPack(root)
+	p, err := packinfo.LoadPack(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +46,7 @@ func acceptPackSurface(t *testing.T, root, cfgGogAccount string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store.RecordAcceptance(store.TrustKey(root), PackTrustRecord{Path: CanonicalizePackRoot(root), Fingerprint: fp})
+	store.RecordAcceptance(store.TrustKey(root), PackTrustRecord{Path: packinfo.CanonicalizePackRoot(root), Fingerprint: fp})
 	if err := store.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -61,17 +62,17 @@ func acceptPackSurface(t *testing.T, root, cfgGogAccount string) {
 // Tier-1 case); the remote/reference-only partition half is pinned by
 // TestComputeHostBoM_RemoteMCPReferenceRequiresConsent.
 func TestComputeHostBoM_EnumeratesEveryHostExecFacet(t *testing.T) {
-	p := &Info{Root: "/p", Manifest: Manifest{
+	p := &packinfo.Info{Root: "/p", Manifest: packinfo.Manifest{
 		Name: "work",
-		Integrations: []Integration{
+		Integrations: []packinfo.Integration{
 			{Name: "Fastmail", MCP: "fastmail", Env: "FASTMAIL_TOKEN"},
 			{Name: "gog", MCP: config.GWServerName, Env: "GOG_KEYRING"},
 		},
-		Proxies: []PackProxy{
+		Proxies: []packinfo.PackProxy{
 			{Name: "platformio", Host: true, Egress: []string{"api.registry.platformio.org"}},
 			{Name: "warehouse", Egress: []string{"warehouse.example.test"}},
 		},
-		Bins:          []packBin{{Name: "fastmail-mcp", Path: "bin/fastmail-mcp", SHA: "9F2C", Host: true}},
+		Bins:          []packinfo.Bin{{Name: "fastmail-mcp", Path: "bin/fastmail-mcp", SHA: "9F2C", Host: true}},
 		Prerequisites: []string{"VPN connected"},
 	}}
 	b := ComputeHostBoM(p, "", func(string) bool { return true })
@@ -108,30 +109,10 @@ func TestComputeHostBoM_EnumeratesEveryHostExecFacet(t *testing.T) {
 	}
 }
 
-func TestValidatePackFacetsRejectsAmbiguousIntegrationExecution(t *testing.T) {
-	cases := []struct {
-		name         string
-		integrations []Integration
-	}{
-		{"duplicate MCP", []Integration{{MCP: "sneaky", Image: "safe"}, {MCP: "sneaky", Manifest: "https://evil.invalid/server.json"}}},
-		{"multiple execution kinds", []Integration{{MCP: "sneaky", Image: "safe", Manifest: "https://evil.invalid/server.json"}}},
-		{"manifest with ignored env", []Integration{{MCP: "sneaky", Manifest: "https://example.invalid/server.json", Env: "TOKEN"}}},
-		{"remote URL with ignored env keys", []Integration{{MCP: "sneaky", URL: "https://example.invalid/mcp", EnvKeys: []string{"TOKEN"}}}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			m := &Manifest{Integrations: tc.integrations}
-			if err := validatePackFacets(t.TempDir(), m); err == nil {
-				t.Fatal("ambiguous integration passed validation; trust rendering and execution could disagree")
-			}
-		})
-	}
-}
-
 func TestComputeHostBoM_DisclosesContainerAndRemoteIntegrations(t *testing.T) {
-	p := &Info{Root: "/p", Manifest: Manifest{
+	p := &packinfo.Info{Root: "/p", Manifest: packinfo.Manifest{
 		Name: "docker-work",
-		Integrations: []Integration{
+		Integrations: []packinfo.Integration{
 			{Name: "HR", MCP: "hr", Image: "hr-mcp:0.0.1", Env: "HR_API_KEY", EnvValues: map[string]string{"HR_COMPANY_DOMAIN": "acme"}},
 			{Name: "Meetings", MCP: "meetings", URL: "https://app.trymeetings.com/mcp"},
 		},
@@ -165,10 +146,10 @@ func TestComputeHostBoM_DisclosesContainerAndRemoteIntegrations(t *testing.T) {
 // TestComputeHostBoM_Tier0: skills/knowledge/sandbox-proxy-only packs have no
 // host-exec facet — egress and creds alone never raise the tier.
 func TestComputeHostBoM_Tier0(t *testing.T) {
-	p := &Info{Root: "/p", Manifest: Manifest{
+	p := &packinfo.Info{Root: "/p", Manifest: packinfo.Manifest{
 		Name:         "personal",
-		Proxies:      []PackProxy{{Name: "warehouse", Egress: []string{"warehouse.example.test"}}},
-		Integrations: []Integration{{Name: "ref-only", Env: "SOME_TOKEN"}}, // env but NO mcp
+		Proxies:      []packinfo.PackProxy{{Name: "warehouse", Egress: []string{"warehouse.example.test"}}},
+		Integrations: []packinfo.Integration{{Name: "ref-only", Env: "SOME_TOKEN"}}, // env but NO mcp
 	}}
 	b := ComputeHostBoM(p, "", func(string) bool { return true })
 	if b.Tier1() {
@@ -191,7 +172,7 @@ func TestRenderHostBoM_UsesExecutionBoundariesAndSetupDescriptions(t *testing.T)
 		MCP:           []hostBoMMCP{{Name: "chat", Argv: []string{"pix-host", "mcp", "chat"}}},
 		Containers:    []hostBoMContainer{{Name: "people", Image: "people-mcp:1"}},
 		RemoteMCP:     []hostBoMRemote{{Name: "docs", URL: "https://docs.example.test/mcp"}},
-		Setup:         []packSetupStep{{ID: "chat", Description: "Authorize chat", Path: "setup/chat", ApplyArgs: []string{"apply"}, Required: true}},
+		Setup:         []packinfo.SetupStep{{ID: "chat", Description: "Authorize chat", Path: "setup/chat", ApplyArgs: []string{"apply"}, Required: true}},
 		Prerequisites: []string{"Your VPN is connected"},
 	}
 	var out bytes.Buffer
@@ -251,17 +232,17 @@ func TestHostExecFingerprint(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "bin", "platformio"), []byte("#!/bin/sh\necho ok\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	base := Manifest{
+	base := packinfo.Manifest{
 		Name:         "work",
-		Integrations: []Integration{{Name: "gog", MCP: config.GWServerName, Env: "GOG_KEYRING"}},
-		Proxies:      []PackProxy{{Name: "platformio", Host: true, Egress: []string{"api.registry.platformio.org"}}},
-		Bins:         []packBin{{Name: "fm", Path: "bin/fm", SHA: "aaaa", Host: true}},
+		Integrations: []packinfo.Integration{{Name: "gog", MCP: config.GWServerName, Env: "GOG_KEYRING"}},
+		Proxies:      []packinfo.PackProxy{{Name: "platformio", Host: true, Egress: []string{"api.registry.platformio.org"}}},
+		Bins:         []packinfo.Bin{{Name: "fm", Path: "bin/fm", SHA: "aaaa", Host: true}},
 	}
-	fpOf := func(account string, m Manifest) string {
+	fpOf := func(account string, m packinfo.Manifest) string {
 		t.Helper()
 		// Classifier: every declared mcp name is LOCAL here — this test pins
 		// the fingerprint's coverage of the host-spawned MCP surface.
-		fp, _, err := ComputeHostExecFingerprint(root, ComputeHostBoM(&Info{Root: root, Manifest: m}, account, func(string) bool { return true }))
+		fp, _, err := ComputeHostExecFingerprint(root, ComputeHostBoM(&packinfo.Info{Root: root, Manifest: m}, account, func(string) bool { return true }))
 		if err != nil {
 			t.Fatalf("fingerprint: %v", err)
 		}
@@ -275,12 +256,12 @@ func TestHostExecFingerprint(t *testing.T) {
 		t.Error("a changed gog account (→ changed resolved MCP argv) must change the fingerprint")
 	}
 	m := base
-	m.Bins = []packBin{{Name: "fm", Path: "bin/fm", SHA: "bbbb", Host: true}}
+	m.Bins = []packinfo.Bin{{Name: "fm", Path: "bin/fm", SHA: "bbbb", Host: true}}
 	if fpOf("a@example.com", m) == fp0 {
 		t.Error("a CHANGED [[bin]] sha must change the fingerprint")
 	}
 	m = base
-	m.Integrations = append([]Integration{{Name: "New", MCP: "new-mcp"}}, base.Integrations...)
+	m.Integrations = append([]packinfo.Integration{{Name: "New", MCP: "new-mcp"}}, base.Integrations...)
 	if fpOf("a@example.com", m) == fp0 {
 		t.Error("a NEW mcp must change the fingerprint")
 	}
@@ -295,7 +276,7 @@ func TestHostExecFingerprint(t *testing.T) {
 	if err := os.Remove(filepath.Join(root, "bin", "platformio")); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := ComputeHostExecFingerprint(root, ComputeHostBoM(&Info{Root: root, Manifest: base}, "", func(string) bool { return true })); err == nil {
+	if _, _, err := ComputeHostExecFingerprint(root, ComputeHostBoM(&packinfo.Info{Root: root, Manifest: base}, "", func(string) bool { return true })); err == nil {
 		t.Error("a missing host proxy script must fail the fingerprint (fail closed)")
 	}
 }
@@ -310,8 +291,8 @@ func TestPackUse_Tier1NonTTYFailsClosed(t *testing.T) {
 	dir := isolatePackHost(t)
 	cfgPath := filepath.Join(dir, "config.toml")
 	root := filepath.Join(dir, "pack")
-	mustWritePack(t, root, Manifest{Name: "work", Schema: 1,
-		Integrations: []Integration{{Name: "Fastmail", MCP: "fastmail", Env: "FASTMAIL_TOKEN"}}})
+	mustWritePack(t, root, packinfo.Manifest{Name: "work", Schema: 1,
+		Integrations: []packinfo.Integration{{Name: "Fastmail", MCP: "fastmail", Env: "FASTMAIL_TOKEN"}}})
 
 	// The pack's mcp must classify as a LOCAL host command for Tier-1
 	// (round-2 C: a remote reference no longer gates).
@@ -346,8 +327,8 @@ func TestPackUse_Tier1NonTTYFailsClosed(t *testing.T) {
 func TestPackUse_Tier0StillSilent(t *testing.T) {
 	dir := isolatePackHost(t)
 	root := filepath.Join(dir, "pack")
-	mustWritePack(t, root, Manifest{Name: "personal", Schema: 1,
-		Proxies: []PackProxy{{Name: "warehouse"}}}) // sandbox-only proxy: Tier-0
+	mustWritePack(t, root, packinfo.Manifest{Name: "personal", Schema: 1,
+		Proxies: []packinfo.PackProxy{{Name: "warehouse"}}}) // sandbox-only proxy: Tier-0
 	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -374,8 +355,8 @@ func TestPackUse_AcceptanceSticksAcrossReactivation(t *testing.T) {
 	dir := isolatePackHost(t)
 	pinLocalMCP(t, "fastmail")
 	root := filepath.Join(dir, "pack")
-	mustWritePack(t, root, Manifest{Name: "work", Schema: 1,
-		Integrations: []Integration{{Name: "Fastmail", MCP: "fastmail"}}})
+	mustWritePack(t, root, packinfo.Manifest{Name: "work", Schema: 1,
+		Integrations: []packinfo.Integration{{Name: "Fastmail", MCP: "fastmail"}}})
 
 	var out bytes.Buffer
 	RunPackUse(localMCPEnv("fastmail"), &out, []string{root, "--yes"}, registerOK)
@@ -405,15 +386,15 @@ func TestPackUse_AcceptanceSticksAcrossReactivation(t *testing.T) {
 func TestPackUse_NewHostFacetRetriggersGate(t *testing.T) {
 	dir := isolatePackHost(t)
 	root := filepath.Join(dir, "pack")
-	mustWritePack(t, root, Manifest{Name: "work", Schema: 1,
-		Integrations: []Integration{{Name: "Fastmail", MCP: "fastmail"}}})
+	mustWritePack(t, root, packinfo.Manifest{Name: "work", Schema: 1,
+		Integrations: []packinfo.Integration{{Name: "Fastmail", MCP: "fastmail"}}})
 	var out bytes.Buffer
 	RunPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerOK) // adopt + accept
 
 	// The manifest gains a host wrapper AFTER adoption.
-	mustWritePack(t, root, Manifest{Name: "work", Schema: 1,
-		Integrations: []Integration{{Name: "Fastmail", MCP: "fastmail"}},
-		Proxies:      []PackProxy{{Name: "platformio", Host: true}}})
+	mustWritePack(t, root, packinfo.Manifest{Name: "work", Schema: 1,
+		Integrations: []packinfo.Integration{{Name: "Fastmail", MCP: "fastmail"}},
+		Proxies:      []packinfo.PackProxy{{Name: "platformio", Host: true}}})
 	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -444,8 +425,8 @@ func TestPackUse_BinShaMismatchRefusesActivation(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "bin", "fm"), []byte("tampered"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	mustWritePack(t, root, Manifest{Name: "work", Schema: 1,
-		Bins: []packBin{{Name: "fm", Path: "bin/fm", SHA: sha256Hex([]byte("the pinned bytes")), Host: true}}})
+	mustWritePack(t, root, packinfo.Manifest{Name: "work", Schema: 1,
+		Bins: []packinfo.Bin{{Name: "fm", Path: "bin/fm", SHA: sha256Hex([]byte("the pinned bytes")), Host: true}}})
 
 	var buf bytes.Buffer
 	err := RunPackUse(fakeGitEnv(nil), &buf, []string{root, "--yes"}, registerOK)
@@ -475,16 +456,16 @@ func TestVerifyPackBinSHA_Contract(t *testing.T) {
 		t.Fatal(err)
 	}
 	sha := sha256Hex(data)
-	if err := verifyPackBinSHA(dir, packBin{Name: "fm", Path: "bin/fm"}); err == nil || !strings.Contains(err.Error(), "SHA-pinned") {
+	if err := verifyPackBinSHA(dir, packinfo.Bin{Name: "fm", Path: "bin/fm"}); err == nil || !strings.Contains(err.Error(), "SHA-pinned") {
 		t.Errorf("empty sha must refuse as unpinned, got %v", err)
 	}
-	if err := verifyPackBinSHA(dir, packBin{Name: "fm", Path: "bin/fm", SHA: "0000dead"}); err == nil || !strings.Contains(err.Error(), "mismatch") {
+	if err := verifyPackBinSHA(dir, packinfo.Bin{Name: "fm", Path: "bin/fm", SHA: "0000dead"}); err == nil || !strings.Contains(err.Error(), "mismatch") {
 		t.Errorf("wrong sha must refuse with a mismatch, got %v", err)
 	}
-	if err := verifyPackBinSHA(dir, packBin{Name: "gone", Path: "bin/gone", SHA: sha}); err == nil {
+	if err := verifyPackBinSHA(dir, packinfo.Bin{Name: "gone", Path: "bin/gone", SHA: sha}); err == nil {
 		t.Error("a missing file must refuse (cannot verify)")
 	}
-	if err := verifyPackBinSHA(dir, packBin{Name: "fm", Path: "bin/fm", SHA: strings.ToUpper(sha)}); err != nil {
+	if err := verifyPackBinSHA(dir, packinfo.Bin{Name: "fm", Path: "bin/fm", SHA: strings.ToUpper(sha)}); err != nil {
 		t.Errorf("correct (uppercase) sha must pass, got %v", err)
 	}
 }

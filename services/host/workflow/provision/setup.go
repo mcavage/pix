@@ -23,18 +23,17 @@ import (
 	"pix/host/health"
 	"pix/host/hostenv"
 	"pix/host/launcher"
+	"pix/host/packinfo"
 	"pix/host/sandbox"
 	"pix/host/secret"
 	"pix/host/service"
-	"pix/host/workflow/launch"
-	"pix/host/workflow/pack"
 )
 
 // OnboardingKickoff is the first message `setup` hands the agent: DELIBERATELY
-// short and human, because the `onboarding` skill owns the actual flow. It
-// carries launch.GeneratedInputMarker so memory-capture.ts can tell this was
-// machine-generated, not typed by the user.
-const OnboardingKickoff = launch.GeneratedInputMarker + "I just ran pix setup. Give me the upfront guide and help me get started."
+// short and human, because the `onboarding` skill owns the actual flow. The
+// handoff itself belongs to the command layer, which prefixes the
+// generated-input marker and execs `run` — provision only authors the words.
+const OnboardingKickoff = "I just ran pix setup. Give me the upfront guide and help me get started."
 
 // ErrUsage marks an argument error, which exits 2 rather than 1.
 type ErrUsage struct{ error }
@@ -51,8 +50,23 @@ var (
 		panic("provision: DefaultEnv not wired — the composition root must set it")
 	}
 	HostBinary = launcher.FindHostBinary
-	Register   pack.RegisterFn
+	// Injected is the rest of that composition, as ONE value the command layer
+	// fills in one statement. Register is MCP registration; PackApply is pack
+	// adoption, which is a TRUST decision (Tier-1 bill of materials, fingerprint,
+	// rollback) that belongs to workflow/pack — provision declares the step and
+	// may not import the sibling workflow that can perform it. Unwired, PackApply
+	// FAILS rather than silently turning setup's pack row green.
+	Injected = Composition{}
 )
+
+// Composition is the shape of what provision declares but cannot perform. The
+// func types are written out rather than named because naming them here would
+// hand every caller a second name for the command layer's own registrar.
+type Composition struct {
+	Register func(cfg *config.Config, env hostenv.Env, out io.Writer, names []string,
+		hostResolver func() (string, error), containers map[string]config.MCPContainer) error
+	PackApply func(env hostenv.Env, out io.Writer, packs, with []string, assumeYes bool) error
+}
 
 // installLaunchd is the launchd apply. It is a variable so a test can point it
 // at a recorder instead of the real LaunchAgent.
@@ -126,7 +140,7 @@ func setupSteps(cfg *config.Config, env hostenv.Env, opts Opts, out io.Writer) [
 		Apply: func(context.Context) error { return installLaunchd(out) },
 	}, {
 		Name:  "pack",
-		Probe: health.PackProbe{Root: launch.ResolveHostStatePack(cfg, "").Path},
+		Probe: health.PackProbe{Root: packinfo.Resolve(cfg, "").Path},
 		Apply: packApply(env, opts, out),
 	}, {
 		Name:  "models",
@@ -145,48 +159,19 @@ func setupSteps(cfg *config.Config, env hostenv.Env, opts Opts, out io.Writer) [
 	}}
 }
 
-// packApply adopts the packs THIS invocation asked for, through the ordinary pack
-// trust transaction (same BoM review, fingerprint and rollback as `pix pack
-// use`). With no --pack it is nil: setup must never manufacture a pack to turn a
-// row green.
+// packApply is the `--pack` step, and it is deliberately thin: with no --pack it
+// is nil, so setup can never manufacture a pack to turn a row green; with one it
+// defers to the injected adoption authority, which runs the same BoM review,
+// fingerprint and rollback as `pix pack use`.
 func packApply(env hostenv.Env, opts Opts, out io.Writer) func(context.Context) error {
 	if len(opts.Packs) == 0 {
 		return nil
 	}
 	return func(context.Context) error {
-		var activated []string
-		for _, requested := range opts.Packs {
-			useArgs := []string{NormalizeSetupPackArg(requested)}
-			if opts.AssumeYes {
-				useArgs = append([]string{"--yes"}, useArgs...)
-			}
-			if err := pack.RunPackUse(env, out, useArgs, Register); err != nil {
-				return fmt.Errorf("adopting pack %s: %w", requested, err)
-			}
-			if cfg, err := config.Load(); err == nil && strings.TrimSpace(cfg.Pack) != "" {
-				activated = append(activated, cfg.Pack)
-			}
+		if Injected.PackApply == nil {
+			return fmt.Errorf("pack adoption is not wired — the composition root must set provision.Injected")
 		}
-		activated = pack.UniquePackRoots(activated)
-		if len(activated) > 0 {
-			if err := pack.PersistPackStack(activated); err != nil {
-				return fmt.Errorf("composing packs: %w", err)
-			}
-		}
-		// A pack's own required setup hooks own its interactive authorization
-		// flows, and they run as part of adopting it — a pack that is adopted
-		// but not set up is exactly the half-state the second check would then
-		// report as a gap with no way to close it.
-		requests, err := pack.PlanPackSetupRequests(activated, opts.WithSetup)
-		if err != nil {
-			return err
-		}
-		for _, root := range activated {
-			if err := pack.RunPackSetup(env, out, root, requests[root], false); err != nil {
-				return err
-			}
-		}
-		return nil
+		return Injected.PackApply(env, out, opts.Packs, opts.WithSetup, opts.AssumeYes)
 	}
 }
 
@@ -255,15 +240,6 @@ func ValidateSetupSemantics(opts Opts, env hostenv.Env, hostResolver func() (str
 		return ErrUsage{err}
 	}
 	return nil
-}
-
-// NormalizeSetupPackArg expands the `owner/repo` shorthand to a clone URL.
-func NormalizeSetupPackArg(arg string) string {
-	arg = strings.TrimSpace(arg)
-	if strings.Count(arg, "/") == 1 && !strings.Contains(arg, ":") && !strings.HasPrefix(arg, ".") && !strings.HasPrefix(arg, "~") {
-		return "https://github.com/" + arg + ".git"
-	}
-	return arg
 }
 
 // SetupSandboxName is the sandbox name `pix run` would use for dir — ONE shared

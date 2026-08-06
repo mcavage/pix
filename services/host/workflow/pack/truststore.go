@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"pix/host/config"
+	"pix/host/packinfo"
 	"pix/host/sys"
 )
 
@@ -202,7 +203,7 @@ func (s *PackTrustStore) Save() error {
 // identity buys nothing (the fingerprint still has to match byte-for-byte), and
 // it is NEVER derived from pack.lock (untrusted payload).
 func (s *PackTrustStore) TrustKey(root string) string {
-	canon := CanonicalizePackRoot(root)
+	canon := packinfo.CanonicalizePackRoot(root)
 	if s != nil {
 		if prov, ok := s.Adopted[canon]; ok && strings.TrimSpace(prov.Remote) != "" {
 			return "remote:" + strings.TrimSpace(prov.Remote)
@@ -216,7 +217,7 @@ func (s *PackTrustStore) TrustKey(root string) string {
 // re-verify here before acting on a pack that stayed mutable after adoption.
 // Under the lock, against a FRESH store, only an exact match for this identity
 // passes; every other answer names `pix pack use` as the re-review path.
-func requireAcceptedFingerprint(p *Info, fingerprint, what string) error {
+func requireAcceptedFingerprint(p *packinfo.Info, fingerprint, what string) error {
 	return withPackTrustLock(func() error {
 		store, err := loadPackTrustStore()
 		if err != nil {
@@ -277,7 +278,7 @@ func (s *PackTrustStore) activationFor(root string) packLock {
 	if s == nil {
 		return packLock{}
 	}
-	path, owner := CanonicalizePackRoot(root), s.TrustKey(root)
+	path, owner := packinfo.CanonicalizePackRoot(root), s.TrustKey(root)
 	for i := len(s.Activations) - 1; i >= 0; i-- {
 		if a := s.Activations[i]; a.Path == path || a.Owner == owner {
 			return a.lock()
@@ -289,7 +290,7 @@ func (s *PackTrustStore) activationFor(root string) packLock {
 func (s *PackTrustStore) newActivationRecord(root string, lock packLock) packActivationRecord {
 	return packActivationRecord{
 		Owner:                  s.TrustKey(root),
-		Path:                   CanonicalizePackRoot(root),
+		Path:                   packinfo.CanonicalizePackRoot(root),
 		MCP:                    append([]string(nil), lock.MCP...),
 		GogAccount:             lock.GogAccount,
 		PriorGogAccount:        lock.PriorGogAccount,
@@ -310,7 +311,7 @@ func recordPackAdoptionInTrustStore(root, remote, commit string) error {
 		if s.Adopted == nil {
 			s.Adopted = map[string]packProvenance{}
 		}
-		s.Adopted[CanonicalizePackRoot(root)] = packProvenance{Remote: remote, Commit: commit}
+		s.Adopted[packinfo.CanonicalizePackRoot(root)] = packProvenance{Remote: remote, Commit: commit}
 		return nil
 	})
 	return err

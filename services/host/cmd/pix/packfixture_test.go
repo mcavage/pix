@@ -7,6 +7,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"pix/host/packinfo"
 	"strings"
 	"testing"
 
@@ -15,7 +16,7 @@ import (
 	"pix/host/workflow/pack"
 )
 
-func mustWritePack(t *testing.T, root string, m pack.Manifest) {
+func mustWritePack(t *testing.T, root string, m packinfo.Manifest) {
 	t.Helper()
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
@@ -50,8 +51,8 @@ func phase2HostPack(t *testing.T, dir, name, wrapper string) string {
 	if err := os.WriteFile(filepath.Join(root, "bin", wrapper), []byte("#!/bin/sh\necho "+wrapper+"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	mustWritePack(t, root, pack.Manifest{Name: name, Schema: 1,
-		Proxies: []pack.PackProxy{{Name: wrapper, Host: true}}})
+	mustWritePack(t, root, packinfo.Manifest{Name: name, Schema: 1,
+		Proxies: []packinfo.PackProxy{{Name: wrapper, Host: true}}})
 	return root
 }
 

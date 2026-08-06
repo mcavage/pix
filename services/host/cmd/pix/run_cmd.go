@@ -24,6 +24,7 @@ import (
 	"pix/host/inference"
 	"pix/host/launcher"
 	"pix/host/mcp"
+	"pix/host/packinfo"
 	"pix/host/sandbox"
 	"pix/host/secret"
 	"pix/host/service"
@@ -171,6 +172,20 @@ func (c *runCmd) Run(d *cli.Deps) error {
 	return runLaunch(d, o)
 }
 
+// composeStaticMCP folds this launch's already-resolved StaticMCP — e.g. a pack
+// contribution ApplyPackContribution folded in earlier — together with the
+// configured (cfg.MCP) and flag-requested (o.MCP) servers into the final
+// create-time preloaded set. It reads all three inputs but never mutates or
+// aliases any of their backing arrays: the result is always a freshly made
+// slice, so a caller's cfg or o is safe to keep using afterward.
+func composeStaticMCP(existing, cfgMCP, oMCP []string) []string {
+	merged := make([]string, 0, len(existing)+len(cfgMCP)+len(oMCP))
+	merged = append(merged, existing...)
+	merged = append(merged, cfgMCP...)
+	merged = append(merged, oMCP...)
+	return mcp.AllPreloadedMCP(merged)
+}
+
 // resolveSandboxName is the sandbox `pix run` actually targets: an explicit
 // --name travels verbatim (a user-owned display name, never reinterpreted).
 // Absent that, the DEFAULT is the deterministic, digest-suffixed
@@ -287,7 +302,7 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	// effectivePack is the pack that ACTUALLY loaded, which keeps the sandbox.pack
 	// marker and the memory scope from disagreeing. --pack applies at create only,
 	// since a re-attach keeps what it was made with.
-	effectivePack := pack.ActivePackRoot(cfg.Pack, o.Pack)
+	effectivePack := packinfo.ActivePackRoot(cfg.Pack, o.Pack)
 	if !creating && o.Dev {
 		fmt.Fprintf(d.Err, "pix: --dev is create-only; attaching to the existing sandbox as-is (to get --dev, %s)\n", launch.RecreateGuidance(o.Name))
 	}
@@ -335,14 +350,13 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 			}
 		}
 
-		// The active pack's skills/ + knowledge/ mount into this sandbox. Fail closed
-		// on an explicit --pack that doesn't load, or a declared sandbox proxy whose
-		// kit can't be built: never create a sandbox missing context the pack declared.
-		root, perr := launch.ApplyPackStackToLaunch(cfg, &o, defaultShellEnv(), d.Err)
+		// The active pack's skills/ + knowledge/ mount into this sandbox: workflow/pack
+		// verifies the trust surface and fails closed; launch folds the verified value in.
+		contributed, perr := pack.ResolveLaunchContribution(cfg, o.Pack, defaultShellEnv(), d.Err)
 		if perr != nil {
 			return runFail(d, 1, "%v", perr)
 		}
-		effectivePack = root
+		effectivePack = o.ApplyPackContribution(contributed)
 		// Inference is a generated create-time facet like pack wrappers: probed models,
 		// compiled routes, public endpoint metadata. No credential value enters it.
 		inferenceKit, ierr := inference.SynthesizeInferenceKit(cfg)
@@ -380,8 +394,10 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 			}
 		}
 
-		// Every configured MCP server attaches at create (--static-mcp).
-		o.StaticMCP = mcp.AllPreloadedMCP(append(append([]string(nil), cfg.MCP...), o.MCP...))
+		// Every configured MCP server attaches at create (--static-mcp), on top of
+		// whatever a verified pack already contributed above (ApplyPackContribution) —
+		// composeStaticMCP folds all three in without discarding or aliasing any of them.
+		o.StaticMCP = composeStaticMCP(o.StaticMCP, cfg.MCP, o.MCP)
 	}
 
 	plan := launch.PlanSandboxLaunch(state, cfg, o, version)

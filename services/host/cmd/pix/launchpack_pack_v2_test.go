@@ -23,6 +23,6 @@ func TestBuildSbxArgs_PackKits_NeverSuppressesBaseKit(t *testing.T) {
 }
 
 // TestPackCapabilitiesJSON_LoadedAndMounted: a pack's capabilities.json is
-// discovered by pack.LoadPack and mounted by pack.SynthesizePackKit into the sandbox at
+// discovered by packinfo.LoadPack and mounted by pack.SynthesizePackKit into the sandbox at
 // files/home/.pi/agent/capabilities.json — even with no [[proxy]] entries. This
 // is what lets a pack carry its own capability routing.

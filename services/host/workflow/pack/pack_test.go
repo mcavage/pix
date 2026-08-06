@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"pix/host/cli"
 	"pix/host/hostenv"
+	"pix/host/packinfo"
 	"pix/host/sys/systest"
 	"strings"
 	"testing"
@@ -22,23 +23,23 @@ func fakeGitEnv(calls *[]string) hostenv.Env {
 
 // Pack authoring (`pack new`/`pack add`) is a retired CLI surface (U08f): a
 // pack.toml and its skills/*/SKILL.md files are created and edited by hand.
-// LoadPack, WriteManifest and the git-URL adoption path (below) are what
+// packinfo.LoadPack, WriteManifest and the git-URL adoption path (below) are what
 // remain to exercise pack creation/parsing.
 
 func TestLoadPack_NotAPack(t *testing.T) {
-	if _, err := LoadPack(t.TempDir()); err == nil {
+	if _, err := packinfo.LoadPack(t.TempDir()); err == nil {
 		t.Error("a dir with no pack.toml is not a pack")
 	}
 }
 
 func TestActivePackRoot_OverrideWins(t *testing.T) {
-	if got := ActivePackRoot("/cfg/pack", "/flag/pack"); got != "/flag/pack" {
+	if got := packinfo.ActivePackRoot("/cfg/pack", "/flag/pack"); got != "/flag/pack" {
 		t.Errorf("--pack override should win, got %q", got)
 	}
-	if got := ActivePackRoot("/cfg/pack", ""); got != "/cfg/pack" {
+	if got := packinfo.ActivePackRoot("/cfg/pack", ""); got != "/cfg/pack" {
 		t.Errorf("config pack when no override, got %q", got)
 	}
-	if got := ActivePackRoot("", ""); got != "" {
+	if got := packinfo.ActivePackRoot("", ""); got != "" {
 		t.Errorf("no pack -> empty, got %q", got)
 	}
 }
@@ -100,12 +101,12 @@ func TestSafeGitURL(t *testing.T) {
 
 func TestSafeArtifactName(t *testing.T) {
 	for _, n := range []string{"deploy", "fix-login", "a_b.c"} {
-		if !safeArtifactName(n) {
+		if !packinfo.SafeArtifactName(n) {
 			t.Errorf("safeArtifactName(%q) = false, want true", n)
 		}
 	}
 	for _, n := range []string{"", ".", "..", "../x", "a/b", "a\\b", "a b"} {
-		if safeArtifactName(n) {
+		if packinfo.SafeArtifactName(n) {
 			t.Errorf("safeArtifactName(%q) = true, want false", n)
 		}
 	}
@@ -124,7 +125,7 @@ func TestLoadPack_RejectsEscapingSymlink(t *testing.T) {
 	if err := os.Symlink("/etc", filepath.Join(root, "skills", "escape")); err != nil {
 		t.Skip("symlink unsupported: " + err.Error())
 	}
-	if _, err := LoadPack(root); err == nil {
+	if _, err := packinfo.LoadPack(root); err == nil {
 		t.Error("LoadPack must reject a pack whose skills/ escapes via symlink")
 	}
 }

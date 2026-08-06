@@ -19,8 +19,8 @@ import (
 	"pix/host/cli"
 	"pix/host/launcher"
 	"pix/host/mcp"
+	"pix/host/packinfo"
 	"pix/host/rpc"
-	"pix/host/workflow/pack"
 	"pix/host/workspace"
 )
 
@@ -79,7 +79,7 @@ func (c *mcpRegisterCmd) Run(d *cli.Deps) error {
 		return mcpFailed(d, "register", fmt.Errorf("loading config: %w", err))
 	}
 	env := defaultShellEnv()
-	return mcpFailed(d, "register", registerServers(cfg, env, d.Out, c.Names, launcher.FindHostBinary, pack.ActiveContainerMCP(cfg)))
+	return mcpFailed(d, "register", registerServers(cfg, env, d.Out, c.Names, launcher.FindHostBinary, packinfo.ActiveContainerMCP(cfg)))
 }
 
 // mcpLsCmd shells `sbx mcp ls`, degrading honestly when sbx is absent (e.g. inside

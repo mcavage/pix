@@ -11,6 +11,7 @@ package pack
 import (
 	"fmt"
 	"path/filepath"
+	"pix/host/packinfo"
 
 	"pix/host/hostenv"
 	"pix/host/sys"
@@ -39,13 +40,13 @@ type AcceptedService struct {
 // are declared/consented but have no consumer yet. cfgGogAccount and env mirror
 // VerifyPackInferenceTrust so the fingerprint covers the SAME resolved surface
 // the acceptance was recorded over.
-func AcceptedGoPluginServices(p *Info, cfgGogAccount string, env hostenv.Env) ([]AcceptedService, error) {
+func AcceptedGoPluginServices(p *packinfo.Info, cfgGogAccount string, env hostenv.Env) ([]AcceptedService, error) {
 	if p == nil || len(p.Manifest.Services) == 0 {
 		return nil, nil
 	}
 	// Belt and suspenders: re-run the full load-time validation so a caller
-	// holding a mutated Info can never export a shape LoadPack would refuse.
-	if err := validatePackServices(p.Root, &p.Manifest); err != nil {
+	// holding a mutated packinfo.Info can never export a shape packinfo.LoadPack would refuse.
+	if err := packinfo.ValidateServices(p.Root, &p.Manifest); err != nil {
 		return nil, err
 	}
 	bom := ComputeHostBoM(p, cfgGogAccount, LocalMCPClassifier(env, env.HostBinary))
@@ -85,7 +86,7 @@ func AcceptedGoPluginServices(p *Info, cfgGogAccount string, env hostenv.Env) ([
 // OWN process: selfPath (its own os.Executable()) stands in for the launcher's
 // HostBinary resolver, so `serve` needs no hostenv import of its own to ask
 // the one seam this package already exposes.
-func AcceptedGoPluginServicesForSelf(p *Info, cfgGogAccount, selfPath string) ([]AcceptedService, error) {
+func AcceptedGoPluginServicesForSelf(p *packinfo.Info, cfgGogAccount, selfPath string) ([]AcceptedService, error) {
 	env := hostenv.Env{System: sys.Real{}, HostBinary: func() (string, error) { return selfPath, nil }}
 	return AcceptedGoPluginServices(p, cfgGogAccount, env)
 }

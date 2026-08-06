@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"pix/host/packinfo"
 	"runtime"
 	"strings"
 	"sync"
@@ -109,7 +110,7 @@ sha = "` + sha + `"
 ` + argvLine + `license = "MIT"
 source = "https://github.com/example/fixture"
 `
-	if err := os.WriteFile(filepath.Join(root, pack.PackManifestName), []byte(manifest), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, packinfo.PackManifestName), []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return root
@@ -138,7 +139,7 @@ func isolatePackState(t *testing.T) {
 // store — the test-side stand-in for saying yes at the Tier-1 gate.
 func acceptSurface(t *testing.T, root string) {
 	t.Helper()
-	p, err := pack.LoadPack(root)
+	p, err := packinfo.LoadPack(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +148,7 @@ func acceptSurface(t *testing.T, root string) {
 		t.Fatal(err)
 	}
 	store := &pack.PackTrustStore{}
-	store.RecordAcceptance(store.TrustKey(root), pack.PackTrustRecord{Path: pack.CanonicalizePackRoot(root), Fingerprint: fp})
+	store.RecordAcceptance(store.TrustKey(root), pack.PackTrustRecord{Path: packinfo.CanonicalizePackRoot(root), Fingerprint: fp})
 	if err := store.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +157,7 @@ func acceptSurface(t *testing.T, root string) {
 // acceptedViews reloads root and returns its accepted go-plugin views.
 func acceptedViews(t *testing.T, root string) []pack.AcceptedService {
 	t.Helper()
-	p, err := pack.LoadPack(root)
+	p, err := packinfo.LoadPack(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +233,7 @@ func TestPackUnitWiring_RejectedStagesNothing(t *testing.T) {
 	root := writeUnitPack(t, bin, fileSHA(t, bin))
 	// no acceptSurface — the gate was never passed
 
-	p, err := pack.LoadPack(root)
+	p, err := packinfo.LoadPack(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +308,7 @@ func TestPackUnitWiring_RemovesDeletedService(t *testing.T) {
 	first := holders["fixture-svc"]
 
 	// The pack drops its [[services]] entry entirely; re-accept the smaller surface.
-	if err := os.WriteFile(filepath.Join(root, pack.PackManifestName), []byte("name = \"unit-pack\"\nschema = 2\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, packinfo.PackManifestName), []byte("name = \"unit-pack\"\nschema = 2\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	acceptSurface(t, root)
@@ -343,7 +344,7 @@ func TestPackUnitWiring_RestartsChangedService(t *testing.T) {
 
 	// Same binary, a changed declared argv: a different accepted spec.
 	root2 := writeUnitPack(t, bin, fileSHA(t, bin), "--changed")
-	if err := os.Rename(filepath.Join(root2, pack.PackManifestName), filepath.Join(root, pack.PackManifestName)); err != nil {
+	if err := os.Rename(filepath.Join(root2, packinfo.PackManifestName), filepath.Join(root, packinfo.PackManifestName)); err != nil {
 		t.Fatal(err)
 	}
 	acceptSurface(t, root)

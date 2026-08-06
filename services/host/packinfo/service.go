@@ -14,7 +14,7 @@
 // unclaimable; mounts are repo-relative and network bare egress hostnames;
 // license/source (SPDX + https) attribute what runs. EVERY field is
 // fingerprinted, so any change re-gates.
-package pack
+package packinfo
 
 import (
 	"fmt"
@@ -24,9 +24,9 @@ import (
 	"strings"
 )
 
-// serviceRuntimeContainer is the one runtime value another file needs to name
+// ServiceRuntimeContainer is the one runtime value another file needs to name
 // (trust.go renders container identity differently in the BoM).
-const serviceRuntimeContainer = "container"
+const ServiceRuntimeContainer = "container"
 
 // serviceRules is the whole [[services]] vocabulary — closed sets, reserved
 // names/ports, value shapes — as ONE immutable package value, since they are
@@ -44,7 +44,7 @@ var serviceRules = struct {
 	shaHex        *regexp.Regexp
 	networkHost   *regexp.Regexp
 }{
-	runtimes:    map[string]bool{"go-plugin": true, serviceRuntimeContainer: true},
+	runtimes:    map[string]bool{"go-plugin": true, ServiceRuntimeContainer: true},
 	activations: map[string]bool{"always": true, "on-demand": true},
 	reservedPorts: map[int]string{
 		11435: "pix-host memory",
@@ -63,12 +63,12 @@ var serviceRules = struct {
 	networkHost: regexp.MustCompile(`^\*?[A-Za-z0-9][A-Za-z0-9.-]{0,252}(:[0-9]{1,5})?$`),
 }
 
-// packService is one [[services]] entry: a normalized long-running service
+// Service is one [[services]] entry: a normalized long-running service
 // declaration. Unexported — unitview.go's accepted view is the only way out of
 // this package. EVERY field is part of the Tier-1 host-exec fingerprint, and
 // the json tags below ARE that canonical encoding (see trust.go): their names,
 // order and omitempty are load-bearing.
-type packService struct {
+type Service struct {
 	Name       string `toml:"name" json:"name"`
 	Runtime    string `toml:"runtime" json:"runtime"`       // serviceRules.runtimes (closed set)
 	Activation string `toml:"activation" json:"activation"` // serviceRules.activations (closed set)
@@ -89,22 +89,22 @@ type packService struct {
 	Mounts  []string `toml:"mounts,omitempty" json:"mounts,omitempty"`   // repo-relative paths only
 	Network []string `toml:"network,omitempty" json:"network,omitempty"` // bare egress hostnames
 	// Resources are declared ceilings (informational until a consumer exists).
-	Resources *packServiceResources `toml:"resources,omitempty" json:"resources,omitempty"`
+	Resources *ServiceResources `toml:"resources,omitempty" json:"resources,omitempty"`
 	// License (SPDX) and Source (https URL) attribute the code the user is
 	// consenting to run. Both required.
 	License string `toml:"license" json:"license"`
 	Source  string `toml:"source" json:"source"`
 }
 
-// packServiceResources are declared resource ceilings.
-type packServiceResources struct {
+// ServiceResources are declared resource ceilings.
+type ServiceResources struct {
 	MemoryMB   int `toml:"memory_mb,omitempty" json:"memory_mb"`
 	CPUPercent int `toml:"cpu_percent,omitempty" json:"cpu_percent"`
 }
 
 // normalized returns a whitespace-trimmed, case-canonical copy: the SHAPE the
 // BoM shows, the fingerprint hashes, and (later) the supervisor consumes.
-func (s packService) normalized() packService {
+func (s Service) Normalized() Service {
 	out := s
 	out.Name = strings.TrimSpace(s.Name)
 	out.Runtime = strings.ToLower(strings.TrimSpace(s.Runtime))
@@ -150,13 +150,13 @@ func serviceListenIsLoopback(listen string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// validatePackServices hardens the [[services]] facet at load time, the same
+// ValidateServices hardens the [[services]] facet at load time, the same
 // fail-closed posture as the rest of validatePackFacets: every rejection here
 // never reaches the BoM, the fingerprint, or an exec path.
-func validatePackServices(root string, m *Manifest) error {
+func ValidateServices(root string, m *Manifest) error {
 	seen := map[string]bool{}
 	for i := range m.Services {
-		s := m.Services[i].normalized()
+		s := m.Services[i].Normalized()
 		bad := func(format string, args ...any) error {
 			label := s.Name
 			if label == "" {
@@ -164,7 +164,7 @@ func validatePackServices(root string, m *Manifest) error {
 			}
 			return fmt.Errorf("pack %s: [[services]] %s: %s", root, label, fmt.Sprintf(format, args...))
 		}
-		if !safeArtifactName(s.Name) {
+		if !SafeArtifactName(s.Name) {
 			return bad("name %q is invalid (letters, digits, -, _, . only; no path separators)", m.Services[i].Name)
 		}
 		if serviceRules.reservedNames[strings.ToLower(s.Name)] {
@@ -175,9 +175,9 @@ func validatePackServices(root string, m *Manifest) error {
 		}
 		seen[s.Name] = true
 		if !serviceRules.runtimes[s.Runtime] {
-			return bad("invalid runtime %q (want %q or %q)", m.Services[i].Runtime, "go-plugin", serviceRuntimeContainer)
+			return bad("invalid runtime %q (want %q or %q)", m.Services[i].Runtime, "go-plugin", ServiceRuntimeContainer)
 		}
-		if s.Runtime == serviceRuntimeContainer {
+		if s.Runtime == ServiceRuntimeContainer {
 			if s.Path != "" || s.SHA != "" {
 				return bad("runtime container must not set path/sha (identity is the digest-pinned image)")
 			}

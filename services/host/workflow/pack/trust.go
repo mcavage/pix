@@ -25,6 +25,7 @@ import (
 	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/mcp"
+	"pix/host/packinfo"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,21 +34,21 @@ import (
 // hostBoM is the host bill-of-materials: everything a pack would run on (or
 // solicit from) THIS machine. Pure data — computed, rendered, gated, hashed.
 type hostBoM struct {
-	MCP            []hostBoMMCP       // built-in MCP servers the gateway spawns on the host
-	Containers     []hostBoMContainer // OCI MCP servers Docker runs on the host
-	RemoteMCP      []hostBoMRemote    // remote MCP endpoints attached by the pack
-	Proxies        []string           // host=true [[proxy]] wrapper names (bin/<name>)
-	SandboxProxies []PackProxy        // host=false wrappers: sandbox commands forwarding elsewhere
-	Bins           []packBin          // [[bin]] external binaries (path + pinned sha)
-	Egress         []string           // union of every facet's declared egress, sorted
-	Creds          []string           // credential ENV VAR names solicited (never values)
-	Prerequisites  []string           // pack-authored external state the user must bring
-	Setup          []packSetupStep    // pack setup executables, probes, and apply argv
-	Inference      []hostBoMInference // model endpoints plus credential-routing policy
-	Services       []packService      // [[services]] long-running units (normalized)
+	MCP            []hostBoMMCP         // built-in MCP servers the gateway spawns on the host
+	Containers     []hostBoMContainer   // OCI MCP servers Docker runs on the host
+	RemoteMCP      []hostBoMRemote      // remote MCP endpoints attached by the pack
+	Proxies        []string             // host=true [[proxy]] wrapper names (bin/<name>)
+	SandboxProxies []packinfo.PackProxy // host=false wrappers: sandbox commands forwarding elsewhere
+	Bins           []packinfo.Bin       // [[bin]] external binaries (path + pinned sha)
+	Egress         []string             // union of every facet's declared egress, sorted
+	Creds          []string             // credential ENV VAR names solicited (never values)
+	Prerequisites  []string             // pack-authored external state the user must bring
+	Setup          []packinfo.SetupStep // pack setup executables, probes, and apply argv
+	Inference      []hostBoMInference   // model endpoints plus credential-routing policy
+	Services       []packinfo.Service   // [[services]] long-running units (normalized)
 }
 
-// The json tags on these types (and on packService) ARE the canonical
+// The json tags on these types (and on packinfo.Service) ARE the canonical
 // fingerprint encoding: computeHostExecFingerprintWithSetup marshals the BoM
 // itself instead of copying it into a parallel set of hash-only structs. Field
 // names, order and omitempty are therefore load-bearing — changing one re-gates
@@ -94,7 +95,7 @@ func (b hostBoM) Tier1() bool {
 // credential-routing inference: a pack stays mutable after `pack use`, so
 // before a sandbox consumes its endpoint/service/header policy, recompute the
 // surface and require an exact launcher-owned trust-store match.
-func VerifyPackInferenceTrust(p *Info, cfgGogAccount string, env hostenv.Env) error {
+func VerifyPackInferenceTrust(p *packinfo.Info, cfgGogAccount string, env hostenv.Env) error {
 	if p == nil {
 		return nil
 	}
@@ -137,7 +138,7 @@ var PackLocalMCP = func() func(string) bool { return func(string) bool { return 
 // gog_account change re-gates; isLocalMCP nil FAILS CLOSED like an unknown
 // probe; a [[bin]] enters ONLY with host=true, so flipping an inert bin is a
 // NEW surface.
-func ComputeHostBoM(p *Info, cfgGogAccount string, isLocalMCP func(string) bool) hostBoM {
+func ComputeHostBoM(p *packinfo.Info, cfgGogAccount string, isLocalMCP func(string) bool) hostBoM {
 	var b hostBoM
 	account := strings.TrimSpace(p.Manifest.GogAccount)
 	if account == "" {
@@ -195,7 +196,7 @@ func ComputeHostBoM(p *Info, cfgGogAccount string, isLocalMCP func(string) bool)
 	for _, svc := range p.Manifest.Services {
 		// Normalized: the shape the user reviews IS the shape the fingerprint
 		// pins and a future supervisor consumes.
-		b.Services = append(b.Services, svc.normalized())
+		b.Services = append(b.Services, svc.Normalized())
 	}
 	if p.Manifest.Inference != nil {
 		for name, backend := range p.Manifest.Inference.Backends {
@@ -280,7 +281,7 @@ func computeHostExecFingerprintWithSetup(root string, b hostBoM, setupBytes map[
 		// Services is ADDITIVE with omitempty on purpose: a pack with no
 		// [[services]] keeps its exact prior encoding, so every already-accepted
 		// fingerprint stays valid. The key is present iff a service is declared.
-		Services []packService `json:"services,omitempty"`
+		Services []packinfo.Service `json:"services,omitempty"`
 	}
 	doc := fpDoc{V: 6}
 	proxySHA := map[string]string{}
@@ -336,7 +337,7 @@ func computeHostExecFingerprintWithSetup(root string, b hostBoM, setupBytes map[
 		doc.Services = append(doc.Services, svc)
 	}
 	// Names are unique (validatePackServices), so name order is total.
-	doc.Services = sortedByKey(doc.Services, func(s packService) string { return s.Name })
+	doc.Services = sortedByKey(doc.Services, func(s packinfo.Service) string { return s.Name })
 	enc, err := json.Marshal(doc)
 	if err != nil {
 		return "", nil, fmt.Errorf("encoding host-exec surface: %v", err)
@@ -357,7 +358,7 @@ func sortedByKey[T any](in []T, key func(T) string) []T {
 // on disk, symlink-refused. An unhashable surface is an ERROR — it can be
 // neither accepted nor installed.
 func hashHostExecFile(path, label string) (string, error) {
-	if isSymlinkPath(path) {
+	if packinfo.IsSymlinkPath(path) {
 		return "", fmt.Errorf("%s is a symlink; refusing to fingerprint it", label)
 	}
 	data, err := os.ReadFile(path)
@@ -424,7 +425,7 @@ func renderHostBoM(out io.Writer, b hostBoM) {
 	for _, svc := range b.Services {
 		fmt.Fprintf(out, "  Host service:        %s (%s, activation %s)\n", svc.Name, svc.Runtime, svc.Activation)
 		switch svc.Runtime {
-		case serviceRuntimeContainer:
+		case packinfo.ServiceRuntimeContainer:
 			fmt.Fprintf(out, "                       Runs a container on this Mac: %s\n", svc.Image)
 		default:
 			line := svc.Path

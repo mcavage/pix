@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"pix/host/packinfo"
 	"strings"
 	"testing"
 
@@ -16,15 +17,15 @@ import (
 
 func TestPackInferenceValidationIsGenericAndFailClosed(t *testing.T) {
 	root := t.TempDir()
-	m := pack.Manifest{Name: "team", Schema: 1, Inference: &pack.Inference{
+	m := packinfo.Manifest{Name: "team", Schema: 1, Inference: &packinfo.Inference{
 		Exclusive: true, RequiredBackend: "gateway",
-		Backends: map[string]pack.InferenceBack{"gateway": {Driver: "openai-compatible", Auth: "sbx-session", BaseURL: "https://models.example.test/v1", CredentialService: "sbx-login", KeyEnv: "SESSION_TOKEN"}},
-		Models:   []pack.InferenceModel{{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "alpha-prod"}},
+		Backends: map[string]packinfo.InferenceBack{"gateway": {Driver: "openai-compatible", Auth: "sbx-session", BaseURL: "https://models.example.test/v1", CredentialService: "sbx-login", KeyEnv: "SESSION_TOKEN"}},
+		Models:   []packinfo.InferenceModel{{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "alpha-prod"}},
 	}}
 	if err := pack.WriteManifest(root, m); err != nil {
 		t.Fatal(err)
 	}
-	p, err := pack.LoadPack(root)
+	p, err := packinfo.LoadPack(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,9 +43,9 @@ func TestPackInferenceValidationIsGenericAndFailClosed(t *testing.T) {
 
 func TestPackInferenceReapplyPreservesOnlyMatchingEvidence(t *testing.T) {
 	source := "/packs/work"
-	inf := &pack.Inference{
-		Backends: map[string]pack.InferenceBack{"gateway": {Driver: "openai-compatible", Protocol: "openai-responses", Auth: "sbx-session", BaseURL: "https://models.example.test/v1"}},
-		Models:   []pack.InferenceModel{{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "prod"}},
+	inf := &packinfo.Inference{
+		Backends: map[string]packinfo.InferenceBack{"gateway": {Driver: "openai-compatible", Protocol: "openai-responses", Auth: "sbx-session", BaseURL: "https://models.example.test/v1"}},
+		Models:   []packinfo.InferenceModel{{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "prod"}},
 	}
 	cfg := &config.Config{}
 	if err := pack.ApplyPackInference(cfg, inf, source); err != nil {
@@ -58,7 +59,7 @@ func TestPackInferenceReapplyPreservesOnlyMatchingEvidence(t *testing.T) {
 		t.Fatal("unchanged pack reapply erased availability evidence")
 	}
 	changed := *inf
-	changed.Backends = map[string]pack.InferenceBack{"gateway": {Driver: "openai-compatible", Protocol: "openai-responses", Auth: "sbx-session", BaseURL: "https://new.example.test/v1"}}
+	changed.Backends = map[string]packinfo.InferenceBack{"gateway": {Driver: "openai-compatible", Protocol: "openai-responses", Auth: "sbx-session", BaseURL: "https://new.example.test/v1"}}
 	if err := pack.ApplyPackInference(cfg, &changed, source); err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +72,7 @@ func TestPackInferenceCannotReplaceBackendFromAnotherSource(t *testing.T) {
 	cfg := &config.Config{Inference: config.InferenceConfig{Backends: map[string]config.InferenceBackend{
 		"openai": {Driver: "native", Auth: "1password"},
 	}}}
-	inf := &pack.Inference{Backends: map[string]pack.InferenceBack{
+	inf := &packinfo.Inference{Backends: map[string]packinfo.InferenceBack{
 		"openai": {Driver: "openai-compatible", Auth: "none", BaseURL: "https://models.example.test/v1"},
 	}}
 	if err := pack.ApplyPackInference(cfg, inf, "/packs/untrusted"); err == nil || !strings.Contains(err.Error(), "conflicts") {
@@ -84,17 +85,17 @@ func TestPackInferenceCannotReplaceBackendFromAnotherSource(t *testing.T) {
 
 func TestPackInferenceCredentialRoutingIsTrustGatedAndValidated(t *testing.T) {
 	root := t.TempDir()
-	manifest := pack.Manifest{Name: "team", Schema: 1, Inference: &pack.Inference{
-		Backends: map[string]pack.InferenceBack{"gateway": {
+	manifest := packinfo.Manifest{Name: "team", Schema: 1, Inference: &packinfo.Inference{
+		Backends: map[string]packinfo.InferenceBack{"gateway": {
 			Driver: "openai-compatible", Auth: "sbx-session", BaseURL: "https://models.example.test/v1",
 			CredentialService: "sbx-login", KeyEnv: "SESSION_TOKEN", CredentialHeader: "Authorization", CredentialFormat: "Bearer %s",
 		}},
-		Models: []pack.InferenceModel{{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "reasoner"}},
+		Models: []packinfo.InferenceModel{{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "reasoner"}},
 	}}
 	if err := pack.WriteManifest(root, manifest); err != nil {
 		t.Fatal(err)
 	}
-	p, err := pack.LoadPack(root)
+	p, err := packinfo.LoadPack(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,14 +103,14 @@ func TestPackInferenceCredentialRoutingIsTrustGatedAndValidated(t *testing.T) {
 	if !bom.Tier1() || len(bom.Inference) != 1 {
 		t.Fatalf("inference credential routing must be trust-gated: %+v", bom)
 	}
-	manifest.Inference.Backends["gateway"] = pack.InferenceBack{
+	manifest.Inference.Backends["gateway"] = packinfo.InferenceBack{
 		Driver: "openai-compatible", Auth: "sbx-session", BaseURL: "http://models.example.test/v1",
 		CredentialService: "sbx-login", KeyEnv: "SESSION_TOKEN",
 	}
 	if err := pack.WriteManifest(root, manifest); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pack.LoadPack(root); err == nil || !strings.Contains(err.Error(), "must use https") {
+	if _, err := packinfo.LoadPack(root); err == nil || !strings.Contains(err.Error(), "must use https") {
 		t.Fatalf("unsafe endpoint error = %v", err)
 	}
 }
@@ -122,17 +123,17 @@ func TestPackInferenceCredentialRoutingIsReverifiedAtLaunch(t *testing.T) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	manifest := pack.Manifest{Name: "team", Schema: 1, Inference: &pack.Inference{
-		Backends: map[string]pack.InferenceBack{"gateway": {
+	manifest := packinfo.Manifest{Name: "team", Schema: 1, Inference: &packinfo.Inference{
+		Backends: map[string]packinfo.InferenceBack{"gateway": {
 			Driver: "openai-compatible", Auth: "sbx-session", BaseURL: "https://models.example.test/v1",
 			CredentialService: "sbx-login", KeyEnv: "DOCKER_TOKEN", CredentialHeader: "Authorization", CredentialFormat: "Bearer %s",
 		}},
-		Models: []pack.InferenceModel{{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "reasoner"}},
+		Models: []packinfo.InferenceModel{{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "reasoner"}},
 	}}
 	if err := pack.WriteManifest(root, manifest); err != nil {
 		t.Fatal(err)
 	}
-	p, err := pack.LoadPack(root)
+	p, err := packinfo.LoadPack(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,12 +143,12 @@ func TestPackInferenceCredentialRoutingIsReverifiedAtLaunch(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := &pack.PackTrustStore{Version: 1}
-	store.RecordAcceptance(store.TrustKey(root), pack.PackTrustRecord{Path: pack.CanonicalizePackRoot(root), Fingerprint: fp})
+	store.RecordAcceptance(store.TrustKey(root), pack.PackTrustRecord{Path: packinfo.CanonicalizePackRoot(root), Fingerprint: fp})
 	if err := store.Save(); err != nil {
 		t.Fatal(err)
 	}
 	cfg := &config.Config{Inference: config.InferenceConfig{Backends: map[string]config.InferenceBackend{}}}
-	if _, err := launch.ApplyPackToLaunch(cfg, &launch.RunOpts{Pack: root}, hostenv.Env{System: &systest.Fake{}}, io.Discard); err != nil {
+	if _, err := packApplyForTest(cfg, &launch.RunOpts{Pack: root}, hostenv.Env{System: &systest.Fake{}}, io.Discard); err != nil {
 		t.Fatalf("accepted inference launch rejected: %v", err)
 	}
 
@@ -157,21 +158,21 @@ func TestPackInferenceCredentialRoutingIsReverifiedAtLaunch(t *testing.T) {
 	if err := pack.WriteManifest(root, manifest); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := launch.ApplyPackToLaunch(cfg, &launch.RunOpts{Pack: root}, hostenv.Env{System: &systest.Fake{}}, io.Discard); err == nil || !strings.Contains(err.Error(), "changed since acceptance") {
+	if _, err := packApplyForTest(cfg, &launch.RunOpts{Pack: root}, hostenv.Env{System: &systest.Fake{}}, io.Discard); err == nil || !strings.Contains(err.Error(), "changed since acceptance") {
 		t.Fatalf("mutated credential endpoint was not rejected: %v", err)
 	}
 }
 
 func TestPackInferenceRejectsModelOutsideCatalog(t *testing.T) {
 	root := t.TempDir()
-	m := pack.Manifest{Name: "team", Schema: 1, Inference: &pack.Inference{
-		Backends: map[string]pack.InferenceBack{"gateway": {Driver: "openai-compatible", Auth: "none", BaseURL: "http://127.0.0.1:9000/v1"}},
-		Models:   []pack.InferenceModel{{Model: "private/unknown", Backend: "gateway", Upstream: "unknown"}},
+	m := packinfo.Manifest{Name: "team", Schema: 1, Inference: &packinfo.Inference{
+		Backends: map[string]packinfo.InferenceBack{"gateway": {Driver: "openai-compatible", Auth: "none", BaseURL: "http://127.0.0.1:9000/v1"}},
+		Models:   []packinfo.InferenceModel{{Model: "private/unknown", Backend: "gateway", Upstream: "unknown"}},
 	}}
 	if err := pack.WriteManifest(root, m); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pack.LoadPack(root); err == nil || !strings.Contains(err.Error(), "not in the Pix model catalog") {
+	if _, err := packinfo.LoadPack(root); err == nil || !strings.Contains(err.Error(), "not in the Pix model catalog") {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -184,10 +185,10 @@ schema = 1
 [inference]
 required_backend = "missing"
 `
-	if err := os.WriteFile(filepath.Join(root, pack.PackManifestName), []byte(text), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, packinfo.PackManifestName), []byte(text), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := pack.LoadPack(root)
+	_, err := packinfo.LoadPack(root)
 	if err == nil || !strings.Contains(err.Error(), "not declared") {
 		t.Fatalf("error = %v", err)
 	}
@@ -200,10 +201,10 @@ func TestPersistPackStackComposesInferenceInOrder(t *testing.T) {
 	first, second := t.TempDir(), t.TempDir()
 	write := func(root, name, backend, model string, exclusive bool) {
 		t.Helper()
-		m := pack.Manifest{Name: name, Schema: 1, Inference: &pack.Inference{
+		m := packinfo.Manifest{Name: name, Schema: 1, Inference: &packinfo.Inference{
 			Exclusive: exclusive, RequiredBackend: backend,
-			Backends: map[string]pack.InferenceBack{backend: {Driver: "openai-compatible", Auth: "none", BaseURL: "http://127.0.0.1:9000/v1"}},
-			Models:   []pack.InferenceModel{{Model: model, Backend: backend, Upstream: name + "-model"}},
+			Backends: map[string]packinfo.InferenceBack{backend: {Driver: "openai-compatible", Auth: "none", BaseURL: "http://127.0.0.1:9000/v1"}},
+			Models:   []packinfo.InferenceModel{{Model: model, Backend: backend, Upstream: name + "-model"}},
 		}}
 		if err := pack.WriteManifest(root, m); err != nil {
 			t.Fatal(err)
@@ -233,10 +234,10 @@ func TestPersistPackStackLaterNonExclusiveClearsExclusivity(t *testing.T) {
 	first, second := t.TempDir(), t.TempDir()
 	write := func(root, name, backend string, exclusive bool) {
 		t.Helper()
-		m := pack.Manifest{Name: name, Schema: 1, Inference: &pack.Inference{
+		m := packinfo.Manifest{Name: name, Schema: 1, Inference: &packinfo.Inference{
 			Exclusive: exclusive,
-			Backends:  map[string]pack.InferenceBack{backend: {Driver: "openai-compatible", Auth: "none", BaseURL: "http://127.0.0.1:9000/v1"}},
-			Models:    []pack.InferenceModel{{Model: "openai/gpt-5.6-sol", Backend: backend, Upstream: name + "-model"}},
+			Backends:  map[string]packinfo.InferenceBack{backend: {Driver: "openai-compatible", Auth: "none", BaseURL: "http://127.0.0.1:9000/v1"}},
+			Models:    []packinfo.InferenceModel{{Model: "openai/gpt-5.6-sol", Backend: backend, Upstream: name + "-model"}},
 		}}
 		if err := pack.WriteManifest(root, m); err != nil {
 			t.Fatal(err)

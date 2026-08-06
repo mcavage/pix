@@ -5,7 +5,8 @@ fails the build on violation — so it cannot rot into aspirational prose.
 
 ## The rule
 
-**Five layers. Imports point down, never up, never sideways within L1.**
+**Five layers. Imports point down, never up, never sideways within L1 — and
+never sideways between L3 workflows either.**
 
 ```
 L4  cmd/pix          argv -> a command. Owns os.Exit. Nothing imports it.
@@ -13,14 +14,21 @@ L3  workflow/*       pack, doctor, launch, models, provision. Orchestrate L1+L2.
 L2  health           turns L1 probes into a Snapshot with verdicts (plus
                      supervise, the process lifecycle that RUNS a capability).
 L1  capability/*     inference, secret, mcp, service, memory, monitor, plugin,
-                     sandbox, workflow/task. One domain each. MAY NOT import
-                     each other.
+                     sandbox, packinfo, workflow/task. One domain each. MAY NOT
+                     import each other.
 L0  foundation       sys, config, routing, rpc, cli, hostenv, launcher, lease,
                      workspace.
 ```
 
 The load-bearing clause is **L1 may not import L1**. Everything else follows
-from it.
+from it — including its L3 twin, **a workflow may not import a workflow**. A
+verb that needs another verb's authority is a COMPOSITION, and composition is
+L4's job: move the shared FACTS down to a capability and let `cmd/pix` pass the
+rest in. Both clauses are enforced by `arch_test.go`, and the L3 one is proved
+by a case DERIVED from the real import graph
+(`TestArchitecture_SiblingWorkflowRuleIsEnforced`) rather than asserted in prose
+— see "The guards all rotted, every one" below for why a guard nobody has
+watched fail is not a guard.
 
 ## Why that clause
 
@@ -68,7 +76,23 @@ stack is healthy. It depends on L1 for probes and on nothing else.
 
 **L3 workflow.** A user-facing verb's logic. Workflows are where cross-domain
 sequencing lives, and they are ALLOWED to be big — `setup` legitimately touches
-eight capabilities. What they may not do is contain a capability.
+eight capabilities. What they may not do is contain a capability, or call a
+sibling workflow.
+
+The four sideways edges that used to exist here are the worked example.
+`doctor`, `launch` and `provision` all imported `pack` for the same thing — "what
+pack is active and what does it declare" — and `provision` imported `launch` for a
+kickoff marker and a pack probe. The fix was not an allowlist. The read-only
+half of `pack` (pack.toml's schema, the fail-closed loader, active-root
+resolution, and the facts derived from them) moved DOWN into the `packinfo`
+capability, where anything may read it; trust and adoption — the Tier-1 bill of
+materials, the fingerprint, the trust store, the config transaction — stayed at
+L3 in `pack`. What could not move down became an inversion: `pack` verifies a
+pack stack into a `packinfo.LaunchContribution` value, `launch` folds that value
+into its options, and `cmd/pix` is the only thing that calls both. `provision`
+declares its pack-adoption step and the composition root binds `pack`'s authority
+to it (`provision.Injected`), the same seam shape `mcp.Credentials` already used
+one layer down.
 
 **L4 cmd/pix.** argv, dependency construction, and the single `os.Exit`. It
 shrinks toward a lookup table.
@@ -93,7 +117,7 @@ violation.
 L0  sys  sys/systest  config  routing  rpc  cli  launcher
     lease  hostenv  workspace                                        done
 L1  inference  mcp  secret  memory  service  monitor  plugin
-    sandbox  workflow/task                                           done
+    sandbox  packinfo  workflow/task                                 done
 L2  health  supervise                                                done
 L3  workflow/{pack, doctor, launch, models, provision}                done
 L4  cmd/pix                                                          done
@@ -129,6 +153,10 @@ and dead branches — treat the ratio, not the exact figure, as the point):
 thirteen argv seams, the composition root, the verb table, and the two kong
 verbs whose handlers take command structs directly (`agent`, `models`) and are
 therefore L4 by definition.
+
+**No workflow imports a workflow.** `workflow/{pack,doctor,launch,models,
+provision}` have zero edges among themselves; `packinfo` is the capability that
+made that possible without duplicating a second pack.toml parser.
 
 **drainingPackages is empty.** It held one entry, `cmd/pix`, for the whole of
 this work; every package in the module now satisfies the layering with no

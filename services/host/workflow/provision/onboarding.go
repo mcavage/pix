@@ -27,7 +27,7 @@ import (
 	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/mcp"
-	"pix/host/workflow/pack"
+	"pix/host/packinfo"
 	"pix/host/workspace"
 )
 
@@ -183,8 +183,8 @@ func ReconcileOnboarding(ws string, env hostenv.Env, in io.Reader, out io.Writer
 		// An unwired registrar is REPORTED, never assumed successful: the point
 		// of this line is that pix never claims a registration it did not do.
 		regErr := fmt.Errorf("no MCP registrar wired")
-		if Register != nil {
-			regErr = Register(cfg, env, out, nil, HostBinary, pack.ActiveContainerMCP(cfg))
+		if Injected.Register != nil {
+			regErr = Injected.Register(cfg, env, out, nil, HostBinary, packinfo.ActiveContainerMCP(cfg))
 		}
 		if regErr != nil {
 			fmt.Fprintf(out, "  mcp register skipped: %v (finish later: pix mcp register)\n", regErr)

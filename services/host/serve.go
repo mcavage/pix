@@ -31,6 +31,7 @@ import (
 	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/monitor"
+	"pix/host/packinfo"
 	"pix/host/workflow/pack"
 )
 
@@ -104,11 +105,10 @@ func runServe(argv []string) {
 	if err != nil {
 		fatalf("locate self: %v", err)
 	}
-	// Every active pack's Tier-1-accepted [[services]] view, reconciled against
-	// the tree; no `plugins.*` shortcut, and one bad pack's load/trust failure
-	// only logs, never blocking `serve` or a sibling pack.
-	for _, root := range pack.ActivePackRoots(cfg, "") {
-		p, perr := pack.LoadPack(root)
+	// Every active pack's Tier-1-accepted [[services]] view, reconciled against the tree;
+	// no `plugins.*` shortcut, and one bad pack's failure only logs, never blocking serve.
+	for _, root := range packinfo.ActivePackRoots(cfg, "") {
+		p, perr := packinfo.LoadPack(root)
 		if perr != nil {
 			log.Printf("serve: pack %s: %v", root, perr)
 			continue

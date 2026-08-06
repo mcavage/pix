@@ -1,9 +1,9 @@
-// setup_cmd.go — `pix setup` as a typed root child, plus the one thing
-// deliberately NOT part of the provision loop: the agent handoff. It execs another
-// command whose decision matrix is about a sandbox that may already be alive, and
-// a step that cannot be re-probed does not belong in a loop whose contract is that
-// the second check is authoritative. The host phase is handed the argv the flags
-// COMPOSE TO, not the one the user typed: kong alone decides what a flag is.
+// setup_cmd.go — `pix setup` as a typed root child, plus the one thing deliberately NOT
+// part of the provision loop: the agent handoff. It execs another command whose decision
+// matrix is about a sandbox that may already be alive, and a step that cannot be re-probed
+// does not belong in a loop whose contract is that the second check is authoritative. The
+// host phase is handed the argv the flags COMPOSE TO, not the one the user typed: kong
+// alone decides what a flag is. This file also binds the pack authority provision declares.
 package main
 
 import (
@@ -201,14 +201,14 @@ func dispatchRun(d *cli.Deps, argv []string) error {
 // and the user is handed the two commands (attach, or remove-then-run).
 func runSetupHandoff(dir, name string, state sandbox.State, out io.Writer, runFn func([]string) error) error {
 	// kickoffArgs builds the run argv for a launch that gets the tour: [DIR] --
-	// <OnboardingKickoff>. DIR is forwarded only when explicit, so `pix setup` in a
-	// repo behaves exactly like `pix run` there.
+	// <marker><OnboardingKickoff>; the marker tells memory-capture.ts this was composed,
+	// not typed. DIR is forwarded only when explicit, so setup matches `pix run` there.
 	kickoffArgs := func() []string {
 		args := []string{}
 		if dir != "." {
 			args = append(args, dir)
 		}
-		return append(args, "--", provision.OnboardingKickoff)
+		return append(args, "--", launch.GeneratedInputMarker+provision.OnboardingKickoff)
 	}
 	dirArg := ""
 	if dir != "." {
@@ -246,5 +246,5 @@ func runSetupHandoff(dir, name string, state sandbox.State, out io.Writer, runFn
 func init() {
 	provision.DefaultEnv = defaultShellEnv
 	provision.HostBinary = hostBinaryResolver
-	provision.Register = pack.RegisterFn(registerServers)
+	provision.Injected = provision.Composition{Register: registerServers, PackApply: pack.SetupAdopter(registerServers)}
 }

@@ -5,8 +5,8 @@ import (
 	"pix/host/health"
 	"pix/host/hostenv"
 	"pix/host/mcp"
+	"pix/host/packinfo"
 	"pix/host/sys"
-	"pix/host/workflow/pack"
 )
 
 // mcp.go is the MCP diagnosis, and it is two halves in two places: the
@@ -52,7 +52,7 @@ func MCPServers(cfg *config.Config, env hostenv.Env, hostResolver func() (string
 	if cfg == nil || len(cfg.MCP) == 0 {
 		return nil
 	}
-	containers := pack.ActiveContainerMCP(cfg)
+	containers := packinfo.ActiveContainerMCP(cfg)
 	localSet, localKnown := mcp.LocalMCPNames(env, hostResolver)
 	out := make([]health.MCPServer, 0, len(cfg.MCP))
 	for _, name := range cfg.MCP {

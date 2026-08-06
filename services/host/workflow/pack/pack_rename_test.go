@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"pix/host/packinfo"
 	"strings"
 	"testing"
 
@@ -50,12 +51,12 @@ func TestWritePackManifest_RefusesSymlinkedManifest(t *testing.T) {
 	if err := os.WriteFile(target, []byte("do not touch"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	manifestPath := filepath.Join(root, PackManifestName)
+	manifestPath := filepath.Join(root, packinfo.PackManifestName)
 	if err := os.Symlink(target, manifestPath); err != nil {
 		t.Skipf("symlink not supported: %v", err)
 	}
 
-	err := WriteManifest(root, Manifest{Name: "default", Schema: 1})
+	err := WriteManifest(root, packinfo.Manifest{Name: "default", Schema: 1})
 	if err == nil {
 		t.Fatal("WriteManifest through a symlinked pack.toml should have failed")
 	}
@@ -72,14 +73,14 @@ func TestWritePackManifest_RefusesSymlinkedManifest(t *testing.T) {
 }
 
 // TestWritePackManifest_AtomicRoundTrip: a normal (non-symlinked) manifest
-// write round-trips every field via LoadPack.
+// write round-trips every field via packinfo.LoadPack.
 func TestWritePackManifest_AtomicRoundTrip(t *testing.T) {
 	root := t.TempDir()
-	m := Manifest{Name: "default", Schema: 1, OllamaBridgeModel: "llama3", GogAccount: "me@example.com"}
+	m := packinfo.Manifest{Name: "default", Schema: 1, OllamaBridgeModel: "llama3", GogAccount: "me@example.com"}
 	if err := WriteManifest(root, m); err != nil {
 		t.Fatal(err)
 	}
-	p, err := LoadPack(root)
+	p, err := packinfo.LoadPack(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,11 +105,11 @@ func TestPackUse_DefaultAlias_ResolvesToPackDir(t *testing.T) {
 		t.Fatalf("refusing to run: %s already exists on disk", decoy)
 	}
 
-	root := DefaultPackRoot() // creates+migrates nothing; just resolves the path and ensures parent exists
+	root := packinfo.DefaultPackRoot() // creates+migrates nothing; just resolves the path and ensures parent exists
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, PackManifestName), []byte("name = \"default\"\nschema = 1\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, packinfo.PackManifestName), []byte("name = \"default\"\nschema = 1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -133,11 +134,11 @@ func TestPackUse_DefaultAlias_ResolvesToPackDir(t *testing.T) {
 func TestPackUse_PersonalAlias_DeprecatedButResolvesToDefault(t *testing.T) {
 	isolatePackRenameHost(t)
 
-	root := DefaultPackRoot()
+	root := packinfo.DefaultPackRoot()
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, PackManifestName), []byte("name = \"default\"\nschema = 1\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, packinfo.PackManifestName), []byte("name = \"default\"\nschema = 1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -161,7 +162,7 @@ func TestPackUse_PersonalAlias_DeprecatedButResolvesToDefault(t *testing.T) {
 
 // TestDefaultPackRoot_LeavesLegacyDirsAlone: the 0.1.0 rename was a pre-launch
 // cutover with no legacy-path discovery, so a directory named "personal" or
-// "pack" sitting in the pix data dir is just a directory: DefaultPackRoot
+// "pack" sitting in the pix data dir is just a directory: packinfo.DefaultPackRoot
 // resolves the "default" root, renames nothing, and never rewrites cfg.Pack.
 // (Only the BARE `pack use personal` token remains a deprecated alias — see
 // TestPackUse_PersonalAlias_DeprecatedButResolvesToDefault.)
@@ -174,7 +175,7 @@ func TestDefaultPackRoot_LeavesLegacyDirsAlone(t *testing.T) {
 			t.Fatal(err)
 		}
 		body := fmt.Sprintf("name = %q\nschema = 1\n", name)
-		if err := os.WriteFile(filepath.Join(dir, PackManifestName), []byte(body), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, packinfo.PackManifestName), []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -187,7 +188,7 @@ func TestDefaultPackRoot_LeavesLegacyDirsAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := DefaultPackRoot()
+	got := packinfo.DefaultPackRoot()
 	if want := filepath.Join(data, "pix", "default"); got != want {
 		t.Errorf("DefaultPackRoot() = %q, want %q", got, want)
 	}
@@ -196,7 +197,7 @@ func TestDefaultPackRoot_LeavesLegacyDirsAlone(t *testing.T) {
 	}
 	for _, name := range []string{"personal", "pack"} {
 		dir := filepath.Join(data, "pix", name)
-		b, rerr := os.ReadFile(filepath.Join(dir, PackManifestName))
+		b, rerr := os.ReadFile(filepath.Join(dir, packinfo.PackManifestName))
 		if rerr != nil {
 			t.Fatalf("legacy-named dir %s was moved or rewritten: %v", dir, rerr)
 		}

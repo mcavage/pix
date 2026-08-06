@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"pix/host/packinfo"
 	"slices"
 	"strings"
 	"testing"
@@ -36,11 +37,11 @@ func TestPackUse_LockOnlyRecordsWhatThisActivationAdded(t *testing.T) {
 	}
 
 	rootA := filepath.Join(dir, "a")
-	mustWritePack(t, rootA, Manifest{Name: "a", Schema: 1, Integrations: []Integration{
+	mustWritePack(t, rootA, packinfo.Manifest{Name: "a", Schema: 1, Integrations: []packinfo.Integration{
 		{Name: "gog", MCP: config.GWServerName}, // overlapping name the pack merely re-declares
 	}})
 	rootB := filepath.Join(dir, "b")
-	mustWritePack(t, rootB, Manifest{Name: "b", Schema: 1})
+	mustWritePack(t, rootB, packinfo.Manifest{Name: "b", Schema: 1})
 
 	var out bytes.Buffer
 	// --yes: Tier-1 pack (declares an mcp); tests have no TTY (Phase-2 gate).
@@ -106,9 +107,9 @@ func TestPackUse_RestoresGogAccountToPriorValueOnSwitchAway(t *testing.T) {
 	}
 
 	rootWork := filepath.Join(dir, "work")
-	mustWritePack(t, rootWork, Manifest{Name: "work", Schema: 1, GogAccount: "work@company.com"})
+	mustWritePack(t, rootWork, packinfo.Manifest{Name: "work", Schema: 1, GogAccount: "work@company.com"})
 	rootPersonal := filepath.Join(dir, "personal")
-	mustWritePack(t, rootPersonal, Manifest{Name: "personal", Schema: 1})
+	mustWritePack(t, rootPersonal, packinfo.Manifest{Name: "personal", Schema: 1})
 
 	var out bytes.Buffer
 	RunPackUse(fakeGitEnv(nil), &out, []string{rootWork}, registerOK)
@@ -132,11 +133,11 @@ func TestPackRm_RemovesActivePackContributions(t *testing.T) {
 	dir := isolatePackHost(t)
 
 	root := filepath.Join(dir, "work")
-	mustWritePack(t, root, Manifest{
+	mustWritePack(t, root, packinfo.Manifest{
 		Name:         "work",
 		Schema:       1,
 		GogAccount:   "work@company.com",
-		Integrations: []Integration{{Name: "Fastmail", MCP: "fastmail"}},
+		Integrations: []packinfo.Integration{{Name: "Fastmail", MCP: "fastmail"}},
 	})
 
 	var out bytes.Buffer
@@ -184,7 +185,7 @@ func TestSynthesizePackKit_RebuildRemovesStaleWrapper(t *testing.T) {
 		}
 	}
 
-	p1 := &Info{Root: root, Manifest: Manifest{Name: "p", Proxies: []PackProxy{{Name: "a"}, {Name: "b"}}}}
+	p1 := &packinfo.Info{Root: root, Manifest: packinfo.Manifest{Name: "p", Proxies: []packinfo.PackProxy{{Name: "a"}, {Name: "b"}}}}
 	kit1, err := SynthesizePackKit(p1)
 	if err != nil || kit1 == "" {
 		t.Fatalf("expected a kit dir, got %q, err=%v", kit1, err)
@@ -194,7 +195,7 @@ func TestSynthesizePackKit_RebuildRemovesStaleWrapper(t *testing.T) {
 	}
 
 	// pack.toml no longer declares "b" (e.g. the author removed it).
-	p2 := &Info{Root: root, Manifest: Manifest{Name: "p", Proxies: []PackProxy{{Name: "a"}}}}
+	p2 := &packinfo.Info{Root: root, Manifest: packinfo.Manifest{Name: "p", Proxies: []packinfo.PackProxy{{Name: "a"}}}}
 	kit2, err := SynthesizePackKit(p2)
 	if err != nil || kit2 == "" {
 		t.Fatalf("expected a kit dir from the second synth, got %q, err=%v", kit2, err)
@@ -225,14 +226,14 @@ func TestSynthesizePackKit_FailsClosedOnUnreadableWrapper(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pGood := &Info{Root: root, Manifest: Manifest{Name: "p", Proxies: []PackProxy{{Name: "a"}}}}
+	pGood := &packinfo.Info{Root: root, Manifest: packinfo.Manifest{Name: "p", Proxies: []packinfo.PackProxy{{Name: "a"}}}}
 	kitGood, err := SynthesizePackKit(pGood)
 	if err != nil || kitGood == "" {
 		t.Fatalf("expected the first (good) synth to succeed, got %q, err=%v", kitGood, err)
 	}
 
 	// "missing" has no bin/missing file on disk.
-	pBad := &Info{Root: root, Manifest: Manifest{Name: "p", Proxies: []PackProxy{{Name: "a"}, {Name: "missing"}}}}
+	pBad := &packinfo.Info{Root: root, Manifest: packinfo.Manifest{Name: "p", Proxies: []packinfo.PackProxy{{Name: "a"}, {Name: "missing"}}}}
 	kitBad, badErr := SynthesizePackKit(pBad)
 	if kitBad != "" || badErr == nil {
 		t.Errorf("expected (\"\", error) (fail closed) when a declared wrapper is unreadable, got %q, err=%v", kitBad, badErr)
@@ -250,10 +251,10 @@ func TestSynthesizePackKit_FailsClosedOnUnreadableWrapper(t *testing.T) {
 // comparison -------------------------------------------------------------------
 
 func TestCanonicalizePackRoot_NormalizesEquivalentPaths(t *testing.T) {
-	a := CanonicalizePackRoot("/tmp/x/y/../y/work")
-	b := CanonicalizePackRoot("/tmp/x/y/work")
+	a := packinfo.CanonicalizePackRoot("/tmp/x/y/../y/work")
+	b := packinfo.CanonicalizePackRoot("/tmp/x/y/work")
 	if a != b {
-		t.Errorf("CanonicalizePackRoot(%q) = %q, want it to equal CanonicalizePackRoot(%q) = %q", "/tmp/x/y/../y/work", a, "/tmp/x/y/work", b)
+		t.Errorf("CanonicalizePackRoot(%q) = %q, want it to equal packinfo.CanonicalizePackRoot(%q) = %q", "/tmp/x/y/../y/work", a, "/tmp/x/y/work", b)
 	}
 }
 
@@ -286,7 +287,7 @@ func TestClonePack_MarksAdoptionDurablyBeforeReturn(t *testing.T) {
 			if err := os.MkdirAll(dest, 0o755); err != nil {
 				return "", err
 			}
-			if err := WriteManifest(dest, Manifest{Name: "adopted", Schema: 1}); err != nil {
+			if err := WriteManifest(dest, packinfo.Manifest{Name: "adopted", Schema: 1}); err != nil {
 				return "", err
 			}
 		}
@@ -326,9 +327,9 @@ func TestPackUse_EmptyLockSwitchRemovesNothing(t *testing.T) {
 	dir := isolatePackHost(t)
 
 	rootA := filepath.Join(dir, "a")
-	mustWritePack(t, rootA, Manifest{Name: "a", Schema: 1, Integrations: []Integration{{Name: "A", MCP: "a-mcp"}}})
+	mustWritePack(t, rootA, packinfo.Manifest{Name: "a", Schema: 1, Integrations: []packinfo.Integration{{Name: "A", MCP: "a-mcp"}}})
 	rootB := filepath.Join(dir, "b")
-	mustWritePack(t, rootB, Manifest{Name: "b", Schema: 1})
+	mustWritePack(t, rootB, packinfo.Manifest{Name: "b", Schema: 1})
 
 	var out bytes.Buffer
 	// --yes: Tier-1 pack (declares an mcp); tests have no TTY (Phase-2 gate).
@@ -370,9 +371,9 @@ func TestPackUse_SamePackReactivationPreservesAttribution(t *testing.T) {
 	dir := isolatePackHost(t)
 
 	rootA := filepath.Join(dir, "a")
-	mustWritePack(t, rootA, Manifest{Name: "a", Schema: 1, Integrations: []Integration{{Name: "A", MCP: "a-mcp"}}})
+	mustWritePack(t, rootA, packinfo.Manifest{Name: "a", Schema: 1, Integrations: []packinfo.Integration{{Name: "A", MCP: "a-mcp"}}})
 	rootB := filepath.Join(dir, "b")
-	mustWritePack(t, rootB, Manifest{Name: "b", Schema: 1})
+	mustWritePack(t, rootB, packinfo.Manifest{Name: "b", Schema: 1})
 
 	env := fakeGitEnv(nil)
 	var out bytes.Buffer
@@ -413,7 +414,7 @@ func TestPackUse_SamePackReactivationReconcilesRemovedFields(t *testing.T) {
 	}
 
 	root := filepath.Join(dir, "work")
-	mustWritePack(t, root, Manifest{Name: "work", Schema: 1,
+	mustWritePack(t, root, packinfo.Manifest{Name: "work", Schema: 1,
 		GogAccount: "work@company.com", OllamaBridgeModel: "work-model"})
 
 	env := fakeGitEnv(nil)
@@ -425,7 +426,7 @@ func TestPackUse_SamePackReactivationReconcilesRemovedFields(t *testing.T) {
 	}
 
 	// The author drops both fields from the manifest, then re-uses the pack.
-	mustWritePack(t, root, Manifest{Name: "work", Schema: 1})
+	mustWritePack(t, root, packinfo.Manifest{Name: "work", Schema: 1})
 	out.Reset()
 	RunPackUse(env, &out, []string{root}, registerOK)
 	cfg2, _ := config.Load()
@@ -458,8 +459,8 @@ func TestPackUse_RegistersMcpAlreadyPresentInConfig(t *testing.T) {
 	}
 
 	root := filepath.Join(dir, "work")
-	mustWritePack(t, root, Manifest{Name: "work", Schema: 1,
-		Integrations: []Integration{{Name: "Fastmail", MCP: "fastmail"}}})
+	mustWritePack(t, root, packinfo.Manifest{Name: "work", Schema: 1,
+		Integrations: []packinfo.Integration{{Name: "Fastmail", MCP: "fastmail"}}})
 
 	var out bytes.Buffer
 	// --yes: Tier-1 pack (declares an mcp); tests have no TTY (Phase-2 gate).
@@ -491,7 +492,7 @@ func TestSynthesizePackKit_ResynthOverExistingKit(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	p := &Info{Root: root, Manifest: Manifest{Name: "p", Proxies: []PackProxy{{Name: "a"}, {Name: "b"}}}}
+	p := &packinfo.Info{Root: root, Manifest: packinfo.Manifest{Name: "p", Proxies: []packinfo.PackProxy{{Name: "a"}, {Name: "b"}}}}
 
 	kit1, err := SynthesizePackKit(p)
 	if err != nil || kit1 == "" {
@@ -610,7 +611,7 @@ func TestClonePack_ScrubsSymlinkPackLock(t *testing.T) {
 			}
 			// The attacker's tree: a manifest, plus pack.lock checked in as a
 			// symlink at a host file.
-			if err := WriteManifest(dest, Manifest{Name: "evil", Schema: 1}); err != nil {
+			if err := WriteManifest(dest, packinfo.Manifest{Name: "evil", Schema: 1}); err != nil {
 				return "", err
 			}
 			if err := os.Symlink(victim, PackLockPath(dest)); err != nil {
@@ -642,7 +643,7 @@ func TestClonePack_ScrubsSymlinkPackLock(t *testing.T) {
 	if b, rerr := os.ReadFile(victim); rerr != nil || string(b) != "host secret\n" {
 		t.Errorf("symlink target must be untouched, got %q (err=%v)", b, rerr)
 	}
-	if _, perr := LoadPack(dest); perr != nil {
+	if _, perr := packinfo.LoadPack(dest); perr != nil {
 		t.Fatalf("LoadPack: %v", perr)
 	}
 }
@@ -663,7 +664,7 @@ func TestClonePack_ScrubsCheckedInRegularPackLock(t *testing.T) {
 			if err := os.MkdirAll(dest, 0o755); err != nil {
 				return "", err
 			}
-			if err := WriteManifest(dest, Manifest{Name: "evil2", Schema: 1}); err != nil {
+			if err := WriteManifest(dest, packinfo.Manifest{Name: "evil2", Schema: 1}); err != nil {
 				return "", err
 			}
 			// Poisoned attribution: claims the user's own MCP as this pack's.
@@ -727,7 +728,7 @@ func TestSweepStaleKitTemps_AgeGatedLaunchDirs(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "bin", "a"), []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	p := &Info{Root: root, Manifest: Manifest{Name: "p", Proxies: []PackProxy{{Name: "a"}}}}
+	p := &packinfo.Info{Root: root, Manifest: packinfo.Manifest{Name: "p", Proxies: []packinfo.PackProxy{{Name: "a"}}}}
 
 	kit1, err := SynthesizePackKit(p)
 	if err != nil || kit1 == "" {
@@ -802,7 +803,7 @@ func TestPackTxnCommit_LockFailureAbortsBeforeSave(t *testing.T) {
 	t.Setenv("PIX_CONFIG", cfgPath)
 
 	root := filepath.Join(dir, "pack")
-	mustWritePack(t, root, Manifest{Name: "p", Schema: 1})
+	mustWritePack(t, root, packinfo.Manifest{Name: "p", Schema: 1})
 	brokenPackLock(t, root)
 
 	cfg, err := config.Load()
@@ -851,7 +852,7 @@ func TestPackUse_LockWriteFailureAbortsWithoutCommit(t *testing.T) {
 	dir := isolatePackHost(t)
 	cfgPath := filepath.Join(dir, "config.toml")
 	root := filepath.Join(dir, "pack")
-	mustWritePack(t, root, Manifest{Name: "work", Schema: 1, Integrations: []Integration{
+	mustWritePack(t, root, packinfo.Manifest{Name: "work", Schema: 1, Integrations: []packinfo.Integration{
 		{Name: "fastmail", MCP: "fastmail"},
 	}})
 	brokenPackLock(t, root)
@@ -898,7 +899,7 @@ func TestPackTxnCommit_SaveFailureRestoresPriorLock(t *testing.T) {
 	t.Setenv("PIX_CONFIG", cfgPath)
 
 	root := filepath.Join(dir, "pack")
-	mustWritePack(t, root, Manifest{Name: "work", Schema: 1})
+	mustWritePack(t, root, packinfo.Manifest{Name: "work", Schema: 1})
 
 	// Prior activation state: the config carries the pack's MCP contribution
 	// and the lock attributes it.
@@ -1017,7 +1018,7 @@ func TestPackTxnCommit_SaveFailureRemovesFirstLock(t *testing.T) {
 	t.Setenv("PIX_CONFIG", filepath.Join(cfgDir, "config.toml"))
 
 	root := filepath.Join(dir, "pack")
-	mustWritePack(t, root, Manifest{Name: "work", Schema: 1})
+	mustWritePack(t, root, packinfo.Manifest{Name: "work", Schema: 1})
 
 	cfg, err := config.Load()
 	if err != nil {

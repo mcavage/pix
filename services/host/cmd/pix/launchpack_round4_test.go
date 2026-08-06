@@ -7,12 +7,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"pix/host/packinfo"
 	"strings"
 	"testing"
 
 	"pix/host/config"
 	"pix/host/workflow/launch"
-	"pix/host/workflow/pack"
 )
 
 // --- F2: launch fails closed on a declared-but-unbuildable proxy ---------------
@@ -32,10 +32,10 @@ func TestApplyPackToLaunch_FailsClosedOnBrokenDeclaredProxy(t *testing.T) {
 
 	// 1) Declared proxy, no bin/<name> on disk: the launch must refuse.
 	broken := filepath.Join(dir, "broken-pack")
-	mustWritePack(t, broken, pack.Manifest{Name: "broken", Schema: 1, Proxies: []pack.PackProxy{{Name: "warehouse"}}})
+	mustWritePack(t, broken, packinfo.Manifest{Name: "broken", Schema: 1, Proxies: []packinfo.PackProxy{{Name: "warehouse"}}})
 	cfg.Pack = broken
 	o := launch.RunOpts{}
-	if _, lerr := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil), io.Discard); lerr == nil {
+	if _, lerr := packApplyForTest(cfg, &o, fakeGitEnv(nil), io.Discard); lerr == nil {
 		t.Fatal("F2: expected an error for a declared sandbox proxy whose kit can't be built")
 	} else if !strings.Contains(lerr.Error(), "refusing") {
 		t.Errorf("expected a refusal message, got: %v", lerr)
@@ -46,10 +46,10 @@ func TestApplyPackToLaunch_FailsClosedOnBrokenDeclaredProxy(t *testing.T) {
 
 	// 2) No proxies declared: fine, no kit, no error.
 	plain := filepath.Join(dir, "plain-pack")
-	mustWritePack(t, plain, pack.Manifest{Name: "plain", Schema: 1})
+	mustWritePack(t, plain, packinfo.Manifest{Name: "plain", Schema: 1})
 	cfg.Pack = plain
 	o = launch.RunOpts{}
-	if _, lerr := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil), io.Discard); lerr != nil {
+	if _, lerr := packApplyForTest(cfg, &o, fakeGitEnv(nil), io.Discard); lerr != nil {
 		t.Fatalf("a pack with no proxies must launch fine: %v", lerr)
 	}
 	if len(o.PackKits) != 0 {
@@ -58,7 +58,7 @@ func TestApplyPackToLaunch_FailsClosedOnBrokenDeclaredProxy(t *testing.T) {
 
 	// 3) Buildable proxy: kit stacked, no error.
 	good := filepath.Join(dir, "good-pack")
-	mustWritePack(t, good, pack.Manifest{Name: "good", Schema: 1, Proxies: []pack.PackProxy{{Name: "warehouse"}}})
+	mustWritePack(t, good, packinfo.Manifest{Name: "good", Schema: 1, Proxies: []packinfo.PackProxy{{Name: "warehouse"}}})
 	if err := os.MkdirAll(filepath.Join(good, "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestApplyPackToLaunch_FailsClosedOnBrokenDeclaredProxy(t *testing.T) {
 	}
 	cfg.Pack = good
 	o = launch.RunOpts{}
-	if _, lerr := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil), io.Discard); lerr != nil {
+	if _, lerr := packApplyForTest(cfg, &o, fakeGitEnv(nil), io.Discard); lerr != nil {
 		t.Fatalf("a buildable proxy must launch fine: %v", lerr)
 	}
 	if len(o.PackKits) != 1 {

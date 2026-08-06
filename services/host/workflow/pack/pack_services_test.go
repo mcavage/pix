@@ -7,7 +7,7 @@
 // bill-of-materials/consent screen, and every field is part of the host-exec
 // fingerprint so ANY change re-gates.
 //
-// All tests use REAL temp packs on disk (LoadPack over a written pack.toml)
+// All tests use REAL temp packs on disk (packinfo.LoadPack over a written pack.toml)
 // and the real fingerprint/trust-store code. No mocks.
 package pack
 
@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"pix/host/packinfo"
 	"strings"
 	"testing"
 )
@@ -26,7 +27,7 @@ func writeServicePack(t *testing.T, body string) string {
 	t.Helper()
 	dir := t.TempDir()
 	manifest := "name = \"svc-pack\"\nschema = 2\n" + body
-	if err := os.WriteFile(filepath.Join(dir, PackManifestName), []byte(manifest), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, packinfo.PackManifestName), []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return dir
@@ -70,7 +71,7 @@ source = "https://github.com/example/indexer"
 
 func TestPackServices_ValidManifestLoads(t *testing.T) {
 	root := writeServicePack(t, validGoPluginService+validContainerService)
-	p, err := LoadPack(root)
+	p, err := packinfo.LoadPack(root)
 	if err != nil {
 		t.Fatalf("LoadPack: %v", err)
 	}
@@ -85,16 +86,16 @@ func TestPackServices_ValidManifestLoads(t *testing.T) {
 		t.Fatalf("resources not parsed: %+v", s.Resources)
 	}
 	c := p.Manifest.Services[1]
-	if c.Runtime != serviceRuntimeContainer || c.Image == "" {
+	if c.Runtime != packinfo.ServiceRuntimeContainer || c.Image == "" {
 		t.Fatalf("bad container service: %+v", c)
 	}
 }
 
-// requireLoadError asserts LoadPack fails and the error mentions want.
+// requireLoadError asserts packinfo.LoadPack fails and the error mentions want.
 func requireLoadError(t *testing.T, body, want string) {
 	t.Helper()
 	root := writeServicePack(t, body)
-	_, err := LoadPack(root)
+	_, err := packinfo.LoadPack(root)
 	if err == nil {
 		t.Fatalf("LoadPack accepted invalid [[services]] (want error containing %q):\n%s", want, body)
 	}
@@ -146,7 +147,7 @@ func TestPackServices_RejectsNonLoopbackListen(t *testing.T) {
 	// loopback spellings all pass
 	for _, ok := range []string{"127.0.0.1", "::1", "localhost", "127.1.2.3"} {
 		root := writeServicePack(t, mutateValid(t, "listen", fmt.Sprintf("listen = %q", ok)))
-		if _, err := LoadPack(root); err != nil {
+		if _, err := packinfo.LoadPack(root); err != nil {
 			t.Fatalf("loopback listen %q rejected: %v", ok, err)
 		}
 	}
@@ -211,7 +212,7 @@ func TestPackServices_MountAndNetworkHygiene(t *testing.T) {
 
 func TestPackServices_ServiceAloneIsTier1AndFailsClosedNonTTY(t *testing.T) {
 	root := writeServicePack(t, validGoPluginService)
-	p, err := LoadPack(root)
+	p, err := packinfo.LoadPack(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +231,7 @@ func TestPackServices_ServiceAloneIsTier1AndFailsClosedNonTTY(t *testing.T) {
 
 func TestPackServices_ConsentRendersEveryField(t *testing.T) {
 	root := writeServicePack(t, validGoPluginService+validContainerService)
-	p, err := LoadPack(root)
+	p, err := packinfo.LoadPack(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +269,7 @@ func TestPackServices_ServicelessFingerprintUnchanged(t *testing.T) {
 	}
 	b := hostBoM{
 		Proxies: []string{"wrap"},
-		Bins:    []packBin{{Name: "tool", Path: "bin/tool", SHA: "AB12", Host: true}},
+		Bins:    []packinfo.Bin{{Name: "tool", Path: "bin/tool", SHA: "AB12", Host: true}},
 		Egress:  []string{"api.example.com"},
 		Creds:   []string{"MY_TOKEN"},
 	}
@@ -302,20 +303,20 @@ func TestHostExecFingerprint_RichSurfaceGolden(t *testing.T) {
 		Containers:     []hostBoMContainer{{Name: "hr", Image: "img@sha256:abc", EnvKeys: []string{"B_KEY", "A_KEY"}, EnvValues: map[string]string{"T": "acme"}}, {Name: "mf", Manifest: "https://x/server.json"}},
 		RemoteMCP:      []hostBoMRemote{{Name: "notion", URL: "https://mcp.notion.com"}},
 		Proxies:        []string{"wrap"},
-		SandboxProxies: []PackProxy{{Name: "sb", Egress: []string{"api.example.com"}}},
-		Bins:           []packBin{{Name: "tool", Path: "bin/tool", SHA: "AB12", Host: true}},
+		SandboxProxies: []packinfo.PackProxy{{Name: "sb", Egress: []string{"api.example.com"}}},
+		Bins:           []packinfo.Bin{{Name: "tool", Path: "bin/tool", SHA: "AB12", Host: true}},
 		Egress:         []string{"api.example.com"},
 		Creds:          []string{"MY_TOKEN"},
 		Prerequisites:  []string{"a VPN session"},
-		Setup:          []packSetupStep{{ID: "auth", Description: "log in", Path: "hook.sh", CheckArgs: []string{"check"}, ApplyArgs: []string{"apply"}, Required: true}},
+		Setup:          []packinfo.SetupStep{{ID: "auth", Description: "log in", Path: "hook.sh", CheckArgs: []string{"check"}, ApplyArgs: []string{"apply"}, Required: true}},
 		Inference:      []hostBoMInference{{Name: "gw", URL: "https://gw.example.com", Auth: "sbx-session", Service: "sbx-login", Header: "Authorization", Format: "Bearer %s"}},
-		Services: []packService{(packService{
+		Services: []packinfo.Service{(packinfo.Service{
 			Name: "svc", Runtime: "go-plugin", Activation: "always", Path: "bin/svc", SHA: "AAbb",
 			Argv: []string{"--x"}, Env: []string{"Z_VAR", "A_VAR"}, Port: 12345, Listen: "127.0.0.1", Health: "tcp",
 			Mounts: []string{"m2", "m1"}, Network: []string{"n2", "n1"},
-			Resources: &packServiceResources{MemoryMB: 128, CPUPercent: 50},
+			Resources: &packinfo.ServiceResources{MemoryMB: 128, CPUPercent: 50},
 			License:   "Apache-2.0", Source: "https://example.com/src",
-		}).normalized()},
+		}).Normalized()},
 	}
 	fp, _, err := ComputeHostExecFingerprint(dir, b)
 	if err != nil {
@@ -330,7 +331,7 @@ func TestHostExecFingerprint_RichSurfaceGolden(t *testing.T) {
 func serviceFingerprint(t *testing.T, body string) string {
 	t.Helper()
 	root := writeServicePack(t, body)
-	p, err := LoadPack(root)
+	p, err := packinfo.LoadPack(root)
 	if err != nil {
 		t.Fatalf("LoadPack: %v\n%s", err, body)
 	}
@@ -394,7 +395,7 @@ func TestPackServices_ChangeReGatesAgainstTrustStore(t *testing.T) {
 	isolatePackHost(t)
 
 	root := writeServicePack(t, validGoPluginService)
-	p, err := LoadPack(root)
+	p, err := packinfo.LoadPack(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,7 +405,7 @@ func TestPackServices_ChangeReGatesAgainstTrustStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := mutatePackTrustStore(func(s *PackTrustStore) error {
-		s.RecordAcceptance(s.TrustKey(root), PackTrustRecord{Fingerprint: fp, Path: CanonicalizePackRoot(root)})
+		s.RecordAcceptance(s.TrustKey(root), PackTrustRecord{Fingerprint: fp, Path: packinfo.CanonicalizePackRoot(root)})
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -421,10 +422,10 @@ func TestPackServices_ChangeReGatesAgainstTrustStore(t *testing.T) {
 	// must no longer match, so adoption re-gates.
 	mutated := "name = \"svc-pack\"\nschema = 2\n" + mutateValid(t, "sha",
 		`sha = "cc11bb22cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66"`)
-	if err := os.WriteFile(filepath.Join(root, PackManifestName), []byte(mutated), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, packinfo.PackManifestName), []byte(mutated), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	p2, err := LoadPack(root)
+	p2, err := packinfo.LoadPack(root)
 	if err != nil {
 		t.Fatal(err)
 	}
