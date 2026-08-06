@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	goplugin "github.com/hashicorp/go-plugin"
@@ -229,12 +230,32 @@ func sweepStaged(unitDir, current string) {
 	}
 }
 
-// Holder carries the dispensed client for one unit. A restart swaps it under the readers, so an HTTP shim never learns its backing process changed; Use tracks in-flight calls so a stop can DRAIN.
+// Holder carries the dispensed client for one unit. A restart swaps it under
+// the readers, so an HTTP shim never learns its backing process changed; Use
+// tracks in-flight calls with a plain atomic counter, not a sync.WaitGroup: a
+// WaitGroup requires every Add(1) that starts from a zero counter to
+// happen-before any concurrent Wait, a guarantee this Holder cannot make —
+// it is reused across every restart generation of the unit, so a NEW
+// generation's first Use call can legitimately land the instant the
+// PREVIOUS generation's last call finishes, exactly when a concurrent
+// Drain's Wait() might be mid-return. Violating that WaitGroup invariant
+// panics at runtime ("WaitGroup is reused before previous Wait has
+// returned"); a plain counter has no such constraint.
 type Holder struct {
 	mu       sync.RWMutex
 	impl     any
 	client   *goplugin.Client
-	inflight sync.WaitGroup
+	inflight atomic.Int64
+
+	// afterCheckBeforeRegister, when non-nil, runs inside Use between
+	// confirming impl is live and registering the drain reference — still
+	// holding the read lock. It exists ONLY so a test can deterministically
+	// force a concurrent Clear to attempt to run right at that instant,
+	// proving the read lock actually excludes it (the property that closes
+	// the missed-call race), instead of hoping a scheduler happens to
+	// preempt inside a several-instruction-wide window. Nil on every real
+	// call path: one predictable, always-false nil check.
+	afterCheckBeforeRegister func()
 }
 
 // Get returns the dispensed impl, or nil when the unit is down.
@@ -251,24 +272,58 @@ func (h *Holder) Set(impl any, c *goplugin.Client) {
 func (h *Holder) Clear() { h.Set(nil, nil) }
 
 // Use runs fn against the dispensed impl holding a drain reference, so a shutdown waits for it (up to the drain budget) instead of killing it midway.
+//
+// The nil-check and the inflight.Add(1) MUST happen under the SAME RLock
+// section: Clear takes the write lock to swap impl to nil, so as long as Add
+// runs before RUnlock, Clear cannot complete (and let a concurrent Drain
+// start waiting on inflight) until every Use call that observed a non-nil
+// impl has already registered itself. Splitting Get() and Add() into two
+// separate critical sections (the earlier shape) leaves a window where Clear
+// + Drain can run entirely in between: Drain sees an inflight count of zero
+// and reports "drained" while this call is still about to invoke fn against a
+// unit that is seconds from being killed. Add is never called outside a lock
+// section that also holds off Clear, so no Add(1) can ever race a Wait() that
+// has already been satisfied at zero (the WaitGroup misuse this guards against).
 func (h *Holder) Use(fn func(impl any) error) error {
-	impl := h.Get()
+	h.mu.RLock()
+	impl := h.impl
 	if impl == nil {
+		h.mu.RUnlock()
 		return fmt.Errorf("unit unavailable")
 	}
+	if h.afterCheckBeforeRegister != nil {
+		h.afterCheckBeforeRegister()
+	}
 	h.inflight.Add(1)
-	defer h.inflight.Done()
+	h.mu.RUnlock()
+	defer h.inflight.Add(-1)
 	return fn(impl)
 }
 
-// Drain waits for in-flight Use calls, bounded by the drain budget.
+// drainPoll is how often Drain re-checks the in-flight count. Short enough
+// that Drain never meaningfully overshoots its budget, without busy-spinning.
+const drainPoll = 2 * time.Millisecond
+
+// Drain waits for in-flight Use calls, bounded by the drain budget. A plain
+// poll of the atomic counter, not a goroutine blocked on a WaitGroup: this
+// spawns NOTHING, so a unit whose one call never returns costs Drain's own
+// call stack and nothing more — never one leaked goroutine per restart that
+// times out draining it (unbounded over the process's lifetime with a
+// goroutine-per-call design).
 func (h *Holder) Drain(budget time.Duration) bool {
-	done := make(chan struct{})
-	go func() { h.inflight.Wait(); close(done) }()
-	select {
-	case <-done:
-		return true
-	case <-time.After(budget):
-		return false
+	deadline := time.Now().Add(budget)
+	for {
+		if h.inflight.Load() == 0 {
+			return true
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return false
+		}
+		sleep := drainPoll
+		if remaining < sleep {
+			sleep = remaining
+		}
+		time.Sleep(sleep)
 	}
 }
