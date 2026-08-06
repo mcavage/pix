@@ -6,8 +6,9 @@
 #   1. regenerate from scripts/legal/dependencies.json and diff against the
 #      COMMITTED THIRD_PARTY_NOTICES.md — any drift fails (stale notices).
 #   2. the LIVE Go module set (scripts/legal/list-go-modules.sh) validates
-#      against the ledger + scripts/legal/notices-policy.json — an
-#      undeclared dependency, or a disallowed license class, fails closed.
+#      against the ledger + scripts/legal/notices-policy.json BOTH WAYS — an
+#      undeclared dependency, a disallowed license class, or a ledger row that
+#      is no longer in the live build graph (stale attribution) fails closed.
 #   3. required attributions are present in the generated text: MPL-2.0 for
 #      go-plugin/yamux, Suture, and the patched pi-tui.
 #   4. inclusion: the Dockerfile COPYs THIRD_PARTY_NOTICES.md, NOTICE.md,
@@ -46,9 +47,9 @@ fi
 LIVE="$TMP_DIR/live-modules.txt"
 if bash scripts/legal/list-go-modules.sh >"$LIVE" 2>"$TMP_DIR/list.err"; then
 	if node scripts/legal/generate-third-party-notices.mjs --check-live "$LIVE" >"$TMP_DIR/gate.out" 2>"$TMP_DIR/gate.err"; then
-		ok "live Go module set passes the license-class gate"
+		ok "live Go module set passes the license-class gate, and the ledger carries no stale rows"
 	else
-		fail "live Go module set failed the license-class gate (AC-REL-01)"
+		fail "live Go module set failed the license-class gate (AC-REL-01, either direction)"
 		cat "$TMP_DIR/gate.err" >&2
 	fi
 else
@@ -66,6 +67,31 @@ if node scripts/legal/generate-third-party-notices.mjs --check-baked-tools Docke
 else
 	fail "baked-tool (ruff/fd/go) version drift between Dockerfile and the ledger"
 	cat "$TMP_DIR/baked.err" >&2
+fi
+
+# --- 2b2. ARG-pinned npm global (typescript) version gate --------------------
+# `npm install -g typescript` with no version resolves to whatever the registry
+# serves at build time, which makes the ledger's recorded version/license a
+# claim about an unreproducible build. Fails closed on drift between
+# ARG TYPESCRIPT_VERSION and the ledger's npmGlobal entry.
+if node scripts/legal/generate-third-party-notices.mjs --check-npm-pins Dockerfile >"$TMP_DIR/npmpins.out" 2>"$TMP_DIR/npmpins.err"; then
+	ok "ARG-pinned npm globals (typescript) match the ledger"
+else
+	fail "ARG-pinned npm global version drift between Dockerfile and the ledger"
+	cat "$TMP_DIR/npmpins.err" >&2
+fi
+
+if grep -qE 'npm install -g --ignore-scripts "typescript@\$\{TYPESCRIPT_VERSION\}"' Dockerfile; then
+	ok "Dockerfile installs typescript at the pinned ARG version"
+else
+	fail "Dockerfile installs an UNPINNED global typescript (use typescript@\${TYPESCRIPT_VERSION})"
+fi
+
+if [ "$(node -p 'require("./package.json").devDependencies.typescript')" = \
+	"$(node -p 'require("./scripts/legal/dependencies.json").npmGlobal.find(e=>e.name==="typescript").version')" ]; then
+	ok "package.json devDependency typescript matches the ledger version"
+else
+	fail "package.json devDependency typescript and the ledger disagree on the typescript version"
 fi
 
 # --- 2c. copyleft (MPL-2.0) disclosure gate ----------------------------------

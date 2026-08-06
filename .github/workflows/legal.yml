@@ -1,7 +1,15 @@
-# AC-REL-01..04 — legal/release safeguards. Deliberately a NEW, standalone
-# workflow (does not touch test.yml/publish.yml's job graph) so this can land
-# and evolve independently of the application CI. See
-# docs/legal/RELEASE-SAFEGUARDS.md for what each job proves and why, and
+# AC-REL-01..04 — legal/release safeguards.
+#
+# This is BOTH a standalone workflow (PRs and pushes to main) AND the
+# pre-publish gate: `workflow_call` makes it reusable, and publish.yml calls it
+# as the `legal-gate` job that `build` and `merge` both `needs`. That wiring is
+# the point. When this only ran as a SEPARATE workflow it raced publish.yml:
+# GitHub does not order two workflows against each other, so a push could
+# publish `pix:<version>` while the secret scan / license gate / SBOM were
+# still running — or after they had already failed. One definition, two entry
+# points, and the publish path cannot start pushing until it passes.
+#
+# See docs/legal/RELEASE-SAFEGUARDS.md for what each job proves and why, and
 # docs/legal/FINDINGS.md for the open items that need a human, not an agent.
 name: legal
 
@@ -9,6 +17,7 @@ on:
   push:
     branches: ["main"]
   pull_request:
+  workflow_call: {}
   workflow_dispatch: {}
 
 jobs:

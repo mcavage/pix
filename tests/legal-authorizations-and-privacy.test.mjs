@@ -166,3 +166,63 @@ test("PRIVACY.md states the data flows and does not overclaim compliance", () =>
 	// No blanket "pix is GDPR compliant" style claim.
 	assert.doesNotMatch(privacy, /is (fully )?(GDPR|CCPA)[- ]compliant/i);
 });
+
+// The disclosure gap: "no pix backend" was true and read as "no default
+// traffic", which is false. pix ships a default web-search backend, pi asks npm
+// whether a newer version exists, and the image/extension install path fetches
+// from several hosts — none of which the user chose. And the "what stays local"
+// section listed monitor as merely loopback-bound while it silently persists a
+// redacted transcript of prompts and tool output to disk.
+
+test("PRIVACY.md enumerates the DEFAULT network destinations, not just 'what you configured'", () => {
+	const privacy = read("docs/legal/PRIVACY.md");
+	const kit = read("pi-kit/spec.yaml");
+	// The zero-config web_search backend and its fallbacks: the user's QUERY
+	// text leaves the machine to a third party with no configuration at all.
+	assert.match(privacy, /web_search/);
+	for (const host of [
+		"api.exa.ai",
+		"generativelanguage.googleapis.com",
+		"api.perplexity.ai",
+		"registry.npmjs.org",
+		"objects.githubusercontent.com",
+		"codeload.github.com",
+		"api.github.com",
+	]) {
+		assert.ok(privacy.includes(host), `PRIVACY.md does not disclose ${host}`);
+		assert.ok(kit.includes(host), `${host} is not in the kit egress allowlist — one of these is wrong`);
+	}
+	// The npm version check (the in-sandbox "Update available" banner) is named
+	// as a network call, not left implicit.
+	assert.match(privacy, /version check|Update available/i);
+	// And the "nothing else" row, which papered over all of the above, is gone.
+	assert.doesNotMatch(privacy, /\| Nothing else \|/);
+});
+
+test("PRIVACY.md discloses that monitor PERSISTS a transcript, where, and with what bounds", () => {
+	const privacy = read("docs/legal/PRIVACY.md");
+	assert.match(privacy, /state\/pix\/monitor/);
+	assert.match(privacy, /events\.ndjson/);
+	assert.match(privacy, /blobs\.ndjson/);
+	// Bounds are caps, NOT a retention schedule — say so rather than implying one.
+	assert.match(privacy, /4000 events/);
+	assert.match(privacy, /8 MB/);
+	assert.match(privacy, /200/);
+	assert.match(privacy, /Nothing is deleted on a\s+schedule or by age/);
+	// Redaction is about credentials, and must not be sold as anonymization.
+	assert.match(privacy, /Redaction targets credentials, not personal data/);
+	// How to delete it and how to turn it off.
+	assert.match(privacy, /rm -rf ~\/\.local\/state\/pix\/monitor/);
+	assert.match(privacy, /pix config set services memory/);
+});
+
+test("the monitor disclosure matches the code's actual bounds and root", () => {
+	// If someone re-tunes the store, this fails instead of leaving PRIVACY.md
+	// quietly wrong about how much of your transcript is on disk.
+	const store = read("services/host/monitor/store.go");
+	assert.match(store, /maxStreams = 200/);
+	assert.match(store, /cfg\.MaxEvents = 4000/);
+	assert.match(store, /cfg\.MaxBytes = 8 << 20/);
+	assert.match(store, /eventsFile = "events\.ndjson"/);
+	assert.match(read("services/host/config/config.go"), /filepath\.Join\(dir, "monitor"\)/);
+});

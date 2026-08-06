@@ -1,19 +1,37 @@
 # Release legal/compliance safeguards (W0)
 
-Implements AC-REL-01..04. Everything here is disjoint from application
-source: new scripts under `scripts/legal/` and `scripts/release/`, new tests
-under `tests/legal-*.test.mjs` + `tests/slow/`, a new standalone CI workflow
-(`.github/workflows/legal.yml`), and small, additive edits to `Dockerfile`
-(a build ARG + two `COPY` lines) and `.github/workflows/publish.yml` (bundle
-the notices into the Homebrew tarball). No behavior of the agent, its
-extensions, or its skills changed.
+Implements AC-REL-01..04. The mechanisms live in `scripts/legal/`,
+`scripts/release/`, `tests/legal-*.test.mjs` + `tests/slow/`,
+`.github/workflows/legal.yml`, and the release path in
+`.github/workflows/publish.yml`. No behavior of the agent, its extensions, or
+its skills changed.
+
+## `legal.yml` is the PRE-PUBLISH gate, not a workflow beside it
+
+The first cut of this landed `legal.yml` as a deliberately standalone workflow
+so it could evolve without touching `publish.yml`'s job graph. That was wrong
+in one specific, load-bearing way: **GitHub does not order two workflows
+against each other.** A push to `main` started `legal` and `publish`
+concurrently, so `publish` could push `pix:<version>` while the full-history
+secret scan, the third-party/license gate, and the SBOM were still running —
+or after they had already gone red. A gate that runs beside the thing it gates
+is a report, not a gate.
+
+`legal.yml` now also declares `on: workflow_call`, and `publish.yml` calls it
+as the `legal-gate` job. **Both** `build` (which pushes layers by digest) and
+`merge` (which creates the versioned tag) list it in `needs`, so no bytes
+reach the registry until it is green. It still runs on its own for pull
+requests — one definition, two entry points.
+`tests/legal-workflow.test.mjs` parses both workflows and proves the
+dependency edges, so nobody can quietly drop the `needs` and keep the file.
 
 ## AC-REL-01 — generated THIRD_PARTY_NOTICES + fail-closed license gate
 
 - `scripts/legal/dependencies.json` — hand-maintained ledger (same convention
   as `scripts/arch-metrics/budgets.json` / `services/host/routing/scorecard.json`):
-  every Go module actually reachable from `services/host`'s build graph (49,
-  derived via `go list -deps`, see `scripts/legal/list-go-modules.sh`), every
+  every Go module actually reachable from `services/host`'s build graph (**27**,
+  derived via `go list -deps` across the release GOOS/GOARCH set, see
+  `scripts/legal/list-go-modules.sh`), every
   npm package baked into the image, the **MPL-2.0** entries for
   `github.com/hashicorp/go-plugin` and `github.com/hashicorp/yamux`, and the
   **MIT** entry for `github.com/thejerf/suture/v4` (live in `go.mod` since
@@ -40,6 +58,23 @@ extensions, or its skills changed.
 - `scripts/legal/notices-policy.json` — the fail-closed gate: only
   `permissive` and (explicitly allowlisted) `weak-copyleft` classes pass;
   everything else, including an **undeclared** live dependency, fails closed.
+- **The live-vs-ledger check runs BOTH directions now.** It only ever ran
+  forward (a live module with no ledger row fails), which means ledger
+  staleness could only grow: 24 rows for the `charmbracelet`/`glamour`
+  dependency tree survived the monitor TUI's deletion and were still being
+  published as attribution for code pix does not ship, while
+  `RELEASE-SAFEGUARDS.md` claimed a module count (49) nobody could reproduce
+  from `go list`. `validateLedgerLiveness()` is the reverse gate: a ledger row
+  that is not in the live build graph fails closed. It refuses to judge
+  against an EMPTY live list, so a broken `go list` reads as "undecidable",
+  never as "every row is stale".
+- **Global npm pins are gated too.** `typescript` was installed as a bare
+  `npm install -g typescript`, i.e. whatever the registry served that minute,
+  while the ledger recorded an exact version and license — a claim about an
+  unreproducible build. The Dockerfile pins `ARG TYPESCRIPT_VERSION` and
+  `--check-npm-pins` cross-checks it against the ledger row (and
+  `check-third-party-notices.sh` also requires `package.json`'s devDependency
+  to agree, and fails if the install line loses its `@${TYPESCRIPT_VERSION}`).
 - `scripts/legal/generate-third-party-notices.mjs` — renders
   `THIRD_PARTY_NOTICES.md` from the ledger; `--check-live <file>` validates a
   live `module@version` list against the ledger + policy.
@@ -74,8 +109,23 @@ extensions, or its skills changed.
 - `.github/workflows/publish.yml`'s Homebrew darwin tarball step now bundles
   all four alongside `pix`/`pix-host`. (The man page, `pix.1`, was retired
   along with `pix man`/`--man`, so it is no longer part of this tarball.)
-- Both are asserted by `scripts/check-third-party-notices.sh` and
-  `tests/legal-inclusion-and-docker-base.test.mjs`.
+- **The bare `pix-darwin-<arch>` / `pix-host-darwin-<arch>` release assets are
+  gone.** Bundling the notices into the tarball did not help the artifact most
+  non-Homebrew users actually installed: `install.sh` fetched the two loose
+  binaries, which are a distribution of pix (MIT s2) and of the MPL-2.0 code
+  linked into `pix-host` (MPL-2.0 s3.1) with no notices attached at all. The
+  release now publishes only the notice-bearing tarballs plus `SHA256SUMS`;
+  `install.sh` downloads the tarball, verifies its sha256 against
+  `SHA256SUMS`, refuses to install if any binary OR any required notice is
+  missing from it, and installs the notices to
+  `${XDG_DATA_HOME:-~/.local/share}/pix` next to the binaries. A release step
+  additionally unpacks each tarball and asserts the notices are inside it — a
+  check on the bytes, not on the workflow text that made them.
+- All of it is asserted by `scripts/check-third-party-notices.sh`,
+  `tests/legal-inclusion-and-docker-base.test.mjs`, and
+  `tests/install.test.mjs` (which runs the installer end to end against a
+  synthetic local release: a good tarball installs, a checksum mismatch
+  installs nothing, a notice-less tarball is refused).
 
 ## AC-REL-03 — Docker base image: explicit digest/build-arg path
 
@@ -98,9 +148,33 @@ extensions, or its skills changed.
 
 - `scripts/release/verify-provenance.sh` — records `out/provenance/<version>.json`
   (version, digest, git sha, timestamp) **after** `publish.yml`'s `merge` job
-  assembles the multi-arch manifest and captures its digest. A version's
-  digest is immutable once recorded: a re-run with a *different* digest for
-  an already-recorded version fails closed (a same-digest re-run is a no-op).
+  assembles the multi-arch manifest and captures its digest. Scope, stated
+  precisely: it fails closed when a version's digest would change **given a
+  record it can read**. In `publish.yml` that record is written into a fresh,
+  ephemeral runner workspace, so a later run has nothing to compare against
+  — **this script does not, and cannot, enforce immutability across runs.**
+  Anything that says otherwise is wrong; see the tag guard below for what
+  actually does.
+- **Cross-run tag immutability is enforced against the REGISTRY, because the
+  registry is the only durable state.** The failure was real and easy to hit:
+  `version` picks the next version with no `v<version>` git tag, but that tag
+  is created by `bump` — *after* `merge` has already pushed
+  `pix:<version>`. A run that published and then died (or was cancelled)
+  before `bump` left the git tag free and the Docker tag taken, so the next
+  push to `main` selected the same version and
+  `docker buildx imagetools create` silently overwrote a published tag with
+  different bytes. `scripts/release/tag-availability.sh` asks the registry
+  directly, in two places: the `version` job advances the patch past any
+  version whose tag already exists (with a loud warning naming the partial
+  release), and `merge` re-asks immediately **before** `imagetools create` and
+  FAILS rather than mutate — the second check exists because a full multi-arch
+  build separates the two, and `concurrency: publish` serializes runs without
+  undoing an earlier one's push. The verdict is tri-state and **fails closed**:
+  auth failure, network failure, or an unrecognized error is `UNDECIDED`
+  (exit 2), never "free". Its whole decision procedure is exposed as
+  `--classify <exit-code> <stderr-file>` so `tests/legal-provenance.test.mjs`
+  proves the classification offline — including that an `unauthorized` reply
+  mentioning "not found" is NOT read as free.
 - **It is wired.** `publish.yml`'s `merge` job now exports the multi-arch
   manifest digest as a job output, and a new **blocking** `provenance` job
   (`needs: [version, merge]`, and `bump` now `needs` it) runs

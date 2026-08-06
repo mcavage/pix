@@ -1,6 +1,6 @@
 {
-  "$schema": "hand-maintained curated dependency/license ledger \u2014 see docs/legal/RELEASE-SAFEGUARDS.md",
-  "_comment": "Same convention as scripts/arch-metrics/budgets.json and routing/scorecard.json: derived from real, checkable evidence at the time it was written (license text in the local Go module cache, or package.json 'license' field for baked npm packages), then hand-maintained going forward. scripts/check-third-party-notices.sh re-derives the LIVE dependency set at gate time and fails closed if it diverges from this ledger (new dep with no entry, or an entry whose class the policy disallows).",
+  "$schema": "hand-maintained curated dependency/license ledger — see docs/legal/RELEASE-SAFEGUARDS.md",
+  "_comment": "Same convention as scripts/arch-metrics/budgets.json and routing/scorecard.json: derived from real, checkable evidence at the time it was written (license text in the local Go module cache, or package.json 'license' field for baked npm packages), then hand-maintained going forward. scripts/check-third-party-notices.sh re-derives the LIVE dependency set at gate time and fails closed if it diverges from this ledger IN EITHER DIRECTION (a new dep with no entry, an entry whose class the policy disallows, or a ledger row that is no longer in the live build graph — stale attribution).",
   "goModules": [
     {
       "module": "github.com/BurntSushi/toml",
@@ -10,94 +10,10 @@
       "class": "permissive"
     },
     {
-      "module": "github.com/alecthomas/chroma/v2",
-      "version": "v2.20.0",
-      "license": "MIT",
-      "licenseFile": "COPYING",
-      "class": "permissive"
-    },
-    {
       "module": "github.com/alecthomas/kong",
       "version": "v1.16.0",
       "license": "MIT",
       "licenseFile": "COPYING",
-      "class": "permissive"
-    },
-    {
-      "module": "github.com/aymanbagabas/go-osc52/v2",
-      "version": "v2.0.1",
-      "license": "MIT",
-      "licenseFile": "LICENSE",
-      "class": "permissive"
-    },
-    {
-      "module": "github.com/aymerick/douceur",
-      "version": "v0.2.0",
-      "license": "MIT",
-      "licenseFile": "LICENSE",
-      "class": "permissive"
-    },
-    {
-      "module": "github.com/charmbracelet/bubbletea",
-      "version": "v1.3.10",
-      "license": "MIT",
-      "licenseFile": "LICENSE",
-      "class": "permissive"
-    },
-    {
-      "module": "github.com/charmbracelet/colorprofile",
-      "version": "v0.2.3-0.20250311203215-f60798e515dc",
-      "license": "MIT",
-      "licenseFile": "LICENSE",
-      "class": "permissive"
-    },
-    {
-      "module": "github.com/charmbracelet/glamour",
-      "version": "v1.0.0",
-      "license": "MIT",
-      "licenseFile": "LICENSE",
-      "class": "permissive"
-    },
-    {
-      "module": "github.com/charmbracelet/lipgloss",
-      "version": "v1.1.1-0.20250404203927-76690c660834",
-      "license": "MIT",
-      "licenseFile": "LICENSE",
-      "class": "permissive"
-    },
-    {
-      "module": "github.com/charmbracelet/x/ansi",
-      "version": "v0.10.2",
-      "license": "MIT",
-      "licenseFile": "LICENSE",
-      "class": "permissive"
-    },
-    {
-      "module": "github.com/charmbracelet/x/cellbuf",
-      "version": "v0.0.13",
-      "license": "MIT",
-      "licenseFile": "LICENSE",
-      "class": "permissive"
-    },
-    {
-      "module": "github.com/charmbracelet/x/exp/slice",
-      "version": "v0.0.0-20250327172914-2fdc97757edf",
-      "license": "MIT",
-      "licenseFile": "LICENSE",
-      "class": "permissive"
-    },
-    {
-      "module": "github.com/charmbracelet/x/term",
-      "version": "v0.2.1",
-      "license": "MIT",
-      "licenseFile": "LICENSE",
-      "class": "permissive"
-    },
-    {
-      "module": "github.com/dlclark/regexp2",
-      "version": "v1.11.5",
-      "license": "MIT",
-      "licenseFile": "LICENSE",
       "class": "permissive"
     },
     {
@@ -124,13 +40,6 @@
     {
       "module": "github.com/google/uuid",
       "version": "v1.6.0",
-      "license": "BSD-3-Clause",
-      "licenseFile": "LICENSE",
-      "class": "permissive"
-    },
-    {
-      "module": "github.com/gorilla/css",
-      "version": "v1.0.1",
       "license": "BSD-3-Clause",
       "licenseFile": "LICENSE",
       "class": "permissive"
@@ -163,13 +72,6 @@
       "notes": "Same MPL-2.0 posture as go-plugin (yamux is go-plugin's multiplexed-stream transport): unmodified import, no Modifications distributed."
     },
     {
-      "module": "github.com/lucasb-eyer/go-colorful",
-      "version": "v1.3.0",
-      "license": "MIT",
-      "licenseFile": "LICENSE",
-      "class": "permissive"
-    },
-    {
       "module": "github.com/mattn/go-colorable",
       "version": "v0.1.12",
       "license": "MIT",
@@ -179,48 +81,6 @@
     {
       "module": "github.com/mattn/go-isatty",
       "version": "v0.0.22",
-      "license": "MIT",
-      "licenseFile": "LICENSE",
-      "class": "permissive"
-    },
-    {
-      "module": "github.com/mattn/go-runewidth",
-      "version": "v0.0.17",
-      "license": "MIT",
-      "licenseFile": "LICENSE",
-      "class": "permissive"
-    },
-    {
-      "module": "github.com/microcosm-cc/bluemonday",
-      "version": "v1.0.27",
-      "license": "BSD-3-Clause",
-      "licenseFile": "LICENSE.md",
-      "class": "permissive"
-    },
-    {
-      "module": "github.com/muesli/ansi",
-      "version": "v0.0.0-20230316100256-276c6243b2f6",
-      "license": "MIT",
-      "licenseFile": "LICENSE",
-      "class": "permissive"
-    },
-    {
-      "module": "github.com/muesli/cancelreader",
-      "version": "v0.2.2",
-      "license": "MIT",
-      "licenseFile": "LICENSE",
-      "class": "permissive"
-    },
-    {
-      "module": "github.com/muesli/reflow",
-      "version": "v0.3.0",
-      "license": "MIT",
-      "licenseFile": "LICENSE",
-      "class": "permissive"
-    },
-    {
-      "module": "github.com/muesli/termenv",
-      "version": "v0.16.0",
       "license": "MIT",
       "licenseFile": "LICENSE",
       "class": "permissive"
@@ -248,40 +108,12 @@
       "class": "permissive"
     },
     {
-      "module": "github.com/rivo/uniseg",
-      "version": "v0.4.7",
-      "license": "MIT",
-      "licenseFile": "LICENSE.txt",
-      "class": "permissive"
-    },
-    {
       "module": "github.com/thejerf/suture/v4",
       "version": "v4.0.6",
       "license": "MIT",
       "licenseFile": "LICENSE",
       "class": "permissive",
       "notes": "Supervision-tree library for the host `serve` supervisor (services/host/supervise). LICENSE verified at v4.0.6 in the module cache: standard MIT text, copyright 2014-2024 Barracuda Networks, Inc."
-    },
-    {
-      "module": "github.com/xo/terminfo",
-      "version": "v0.0.0-20220910002029-abceb7e1c41e",
-      "license": "MIT",
-      "licenseFile": "LICENSE",
-      "class": "permissive"
-    },
-    {
-      "module": "github.com/yuin/goldmark",
-      "version": "v1.7.13",
-      "license": "MIT",
-      "licenseFile": "LICENSE",
-      "class": "permissive"
-    },
-    {
-      "module": "github.com/yuin/goldmark-emoji",
-      "version": "v1.0.6",
-      "license": "MIT",
-      "licenseFile": "LICENSE",
-      "class": "permissive"
     },
     {
       "module": "golang.org/x/net",
@@ -376,8 +208,8 @@
       "license": "MIT",
       "source": "https://github.com/astral-sh/ruff",
       "dockerfileArg": "RUFF_VERSION",
-      "role": "Dockerfile: official static binary release, fetched via `curl` from GitHub Releases (pinned by ARG RUFF_VERSION, not `releases/latest`), installed to /usr/local/bin/ruff \u2014 Python lint/format toolchain for agent use.",
-      "licenseEvidence": "https://raw.githubusercontent.com/astral-sh/ruff/0.15.22/LICENSE \u2014 live-fetched at the exact pinned tag; MIT, copyright Charles Marsh. That file also reproduces third-party MIT-licensed code ruff embeds (autoflake, Flake8, isort, Pyright, pyupgrade, etc.) as attribution notices within ruff's own LICENSE \u2014 all MIT, no additional obligations beyond ruff's own.",
+      "role": "Dockerfile: official static binary release, fetched via `curl` from GitHub Releases (pinned by ARG RUFF_VERSION, not `releases/latest`), installed to /usr/local/bin/ruff — Python lint/format toolchain for agent use.",
+      "licenseEvidence": "https://raw.githubusercontent.com/astral-sh/ruff/0.15.22/LICENSE — live-fetched at the exact pinned tag; MIT, copyright Charles Marsh. That file also reproduces third-party MIT-licensed code ruff embeds (autoflake, Flake8, isort, Pyright, pyupgrade, etc.) as attribution notices within ruff's own LICENSE — all MIT, no additional obligations beyond ruff's own.",
       "class": "permissive"
     },
     {
@@ -386,8 +218,8 @@
       "license": "MIT OR Apache-2.0",
       "source": "https://github.com/sharkdp/fd",
       "dockerfileArg": "FD_VERSION",
-      "role": "Dockerfile: official static binary release, fetched via `curl` from GitHub Releases (pinned by ARG FD_VERSION), installed to /usr/local/bin/fd and symlinked into ~/.pi/agent/bin/fd \u2014 fast file finder pi otherwise auto-downloads per-sandbox.",
-      "licenseEvidence": "https://raw.githubusercontent.com/sharkdp/fd/v10.4.2/LICENSE-MIT and .../LICENSE-APACHE \u2014 both live-fetched at the exact pinned tag. Dual-licensed (recipient's choice of either); treated as permissive, notices elect the MIT text.",
+      "role": "Dockerfile: official static binary release, fetched via `curl` from GitHub Releases (pinned by ARG FD_VERSION), installed to /usr/local/bin/fd and symlinked into ~/.pi/agent/bin/fd — fast file finder pi otherwise auto-downloads per-sandbox.",
+      "licenseEvidence": "https://raw.githubusercontent.com/sharkdp/fd/v10.4.2/LICENSE-MIT and .../LICENSE-APACHE — both live-fetched at the exact pinned tag. Dual-licensed (recipient's choice of either); treated as permissive, notices elect the MIT text.",
       "class": "permissive"
     },
     {
@@ -396,8 +228,8 @@
       "license": "BSD-3-Clause",
       "source": "https://go.dev/dl/ (https://github.com/golang/go)",
       "dockerfileArg": "GO_VERSION",
-      "role": "Dockerfile: official Go toolchain tarball, fetched via `curl` from go.dev/dl (pinned by ARG GO_VERSION to match services/host/go.mod's `go` directive), installed to /usr/local/go \u2014 builds/tests the host binary (pix-host) from inside a sandbox. Distributed as a runtime/compiler in the image, not imported source, but still a directly-downloaded bundled binary.",
-      "licenseEvidence": "https://raw.githubusercontent.com/golang/go/go1.26.5/LICENSE \u2014 live-fetched at the exact pinned tag; BSD-3-Clause, copyright The Go Authors. Same license class already carried by the golang.org/x/* modules above.",
+      "role": "Dockerfile: official Go toolchain tarball, fetched via `curl` from go.dev/dl (pinned by ARG GO_VERSION to match services/host/go.mod's `go` directive), installed to /usr/local/go — builds/tests the host binary (pix-host) from inside a sandbox. Distributed as a runtime/compiler in the image, not imported source, but still a directly-downloaded bundled binary.",
+      "licenseEvidence": "https://raw.githubusercontent.com/golang/go/go1.26.5/LICENSE — live-fetched at the exact pinned tag; BSD-3-Clause, copyright The Go Authors. Same license class already carried by the golang.org/x/* modules above.",
       "class": "permissive"
     }
   ],
@@ -407,7 +239,7 @@
       "name": "@earendil-works/pi-coding-agent",
       "version": "0.83.0",
       "license": "MIT",
-      "role": "npm install -g (Dockerfile ARG PI_PACKAGE) \u2014 the pi CLI itself",
+      "role": "npm install -g (Dockerfile ARG PI_PACKAGE) — the pi CLI itself",
       "verifiedVia": "package.json \"license\" field, installed image"
     },
     {
@@ -471,8 +303,9 @@
       "name": "typescript",
       "version": "5.9.3",
       "license": "Apache-2.0",
-      "role": "npm install -g (Dockerfile, dev typecheck toolchain in the image)",
-      "verifiedVia": "well-known published license (Apache-2.0), confirmed against the installed node_modules/typescript/package.json \"license\" field after npm ci \u2014 see docs/legal/FINDINGS.md #5 (closed)"
+      "role": "npm install -g typescript@${TYPESCRIPT_VERSION} (Dockerfile ARG TYPESCRIPT_VERSION, dev typecheck toolchain in the image)",
+      "verifiedVia": "well-known published license (Apache-2.0), confirmed against the installed node_modules/typescript/package.json \"license\" field after npm ci — see docs/legal/FINDINGS.md #5 (closed)",
+      "dockerfileArg": "TYPESCRIPT_VERSION"
     }
   ]
 }

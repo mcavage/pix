@@ -14,8 +14,9 @@
 //       [--write <path>]
 //     <live-modules-file>: newline-separated `module@version` (the output of
 //     list-go-modules.sh). Exits non-zero and prints every offending module if
-//     the live set diverges from the ledger (missing entry, or disallowed
-//     license class) — this is the fail-closed gate itself.
+//     the live set diverges from the ledger IN EITHER DIRECTION — a live module
+//     with no ledger entry (or a disallowed class), and a ledger entry that is
+//     no longer in the live build graph. This is the fail-closed gate itself.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -112,6 +113,52 @@ export function validateCopyleftDisclosure(deps, exists) {
 		}
 	}
 	return { ok: findings.length === 0, findings };
+}
+
+// The REVERSE of validateLiveModules: every ledger `goModules` row must still
+// be in the live build graph. A ledger that over-declares is not harmless — it
+// publishes attribution for code pix does not ship (24 stale charmbracelet/
+// glamour rows survived the monitor TUI's deletion), and it hides the real
+// dependency count behind a number nobody can reproduce from `go list`. Only
+// the forward direction was gated before, so staleness could only ever grow.
+// Returns { ok, findings[] }. findings[] entries: { module, version, reason }.
+export function validateLedgerLiveness(liveEntries, deps) {
+	const liveModules = new Set();
+	for (const raw of liveEntries) {
+		const trimmed = raw.trim();
+		if (!trimmed) continue;
+		liveModules.add(splitModule(trimmed).module);
+	}
+	const findings = [];
+	// An empty live list means the enumeration failed, not that nothing is
+	// live — refuse to turn that into 27 "stale entry" findings.
+	if (liveModules.size === 0) {
+		return { ok: false, findings: [{ module: "(none)", version: "", reason: "live module list is empty — refusing to judge the ledger against nothing" }] };
+	}
+	for (const entry of deps.goModules) {
+		if (!liveModules.has(entry.module)) {
+			findings.push({
+				module: entry.module,
+				version: entry.version,
+				reason: "declared in the ledger but NOT in the live build graph — stale attribution; drop the row and regenerate the notices",
+			});
+		}
+	}
+	return { ok: findings.length === 0, findings };
+}
+
+// npm globals that the Dockerfile pins with an explicit ARG (currently
+// `typescript`, via TYPESCRIPT_VERSION) get the same cross-check bakedTools
+// get: an unpinned `npm install -g typescript` resolves to whatever npm's
+// registry serves that day, so the ledger's recorded license/version is a
+// claim about a build nobody can reproduce. Entries with no dockerfileArg are
+// pinned some other way (ARG PI_PACKAGE, an inline pkg@version) and are out of
+// scope for this specific check.
+export function validateNpmGlobalPins(dockerfileText, npmGlobal) {
+	return validateBakedTools(
+		dockerfileText,
+		(npmGlobal || []).filter((e) => e.dockerfileArg)
+	);
 }
 
 // Validate a LIVE `module@version` list against the ledger + policy.
@@ -264,7 +311,15 @@ function main() {
 			}
 			process.exit(1);
 		}
-		console.error(`license-class gate OK (${liveEntries.filter((l) => l.trim()).length} live modules)`);
+		const stale = validateLedgerLiveness(liveEntries, deps);
+		if (!stale.ok) {
+			console.error("ledger-liveness gate FAILED (fail-closed, AC-REL-01 reverse direction):");
+			for (const f of stale.findings) {
+				console.error(`  - ${f.module}@${f.version}: ${f.reason}`);
+			}
+			process.exit(1);
+		}
+		console.error(`license-class gate OK (${liveEntries.filter((l) => l.trim()).length} live modules, ledger carries no stale rows)`);
 	}
 
 	const copyleftIdx = args.indexOf("--check-copyleft-disclosure");
@@ -302,6 +357,30 @@ function main() {
 			process.exit(1);
 		}
 		console.error(`baked-tool version gate OK (${(deps.bakedTools || []).length} tools)`);
+	}
+
+	const npmPinIdx = args.indexOf("--check-npm-pins");
+	if (npmPinIdx !== -1) {
+		const dockerfilePath = args[npmPinIdx + 1];
+		if (!dockerfilePath) {
+			console.error("--check-npm-pins requires a Dockerfile path");
+			process.exit(2);
+		}
+		const dockerfileText = readFileSync(dockerfilePath, "utf8");
+		const pinned = (deps.npmGlobal || []).filter((e) => e.dockerfileArg);
+		if (pinned.length === 0) {
+			console.error("npm-global pin gate FAILED: no npmGlobal entry declares a dockerfileArg (the gate would pass vacuously)");
+			process.exit(1);
+		}
+		const { ok, findings } = validateNpmGlobalPins(dockerfileText, deps.npmGlobal);
+		if (!ok) {
+			console.error("npm-global pin gate FAILED (fail-closed):");
+			for (const f of findings) {
+				console.error(`  - ${f.tool}: ${f.reason}`);
+			}
+			process.exit(1);
+		}
+		console.error(`npm-global pin gate OK (${pinned.length} ARG-pinned package(s))`);
 	}
 
 	const rendered = renderNotices(deps);

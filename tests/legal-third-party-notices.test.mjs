@@ -191,3 +191,107 @@ test("CLI --check-live passes on the real, live services/host module set", () =>
 		fs.rmSync(tmp, { recursive: true, force: true });
 	}
 });
+
+// --- reverse direction: the ledger must not over-declare -----------------------
+// Only the forward check existed (a live module with no ledger row fails), so
+// staleness could only grow: 24 rows for the charmbracelet/glamour tree
+// survived the monitor TUI's deletion and were still published as attribution
+// for code pix does not ship, while the docs quoted a module count nobody could
+// reproduce from `go list`.
+
+test("validateLedgerLiveness(): fails closed on a ledger row that is no longer in the live build graph", () => {
+	const live = deps.goModules
+		.filter((m) => m.module !== "github.com/hashicorp/yamux")
+		.map((m) => `${m.module}@${m.version}`);
+	const { ok, findings } = gen.validateLedgerLiveness(live, deps);
+	assert.equal(ok, false);
+	assert.equal(findings.length, 1);
+	assert.equal(findings[0].module, "github.com/hashicorp/yamux");
+	assert.match(findings[0].reason, /NOT in the live build graph/);
+});
+
+test("validateLedgerLiveness(): refuses to judge the ledger against an EMPTY live list", () => {
+	// A broken `go list` must read as undecidable, not as "every row is stale".
+	const { ok, findings } = gen.validateLedgerLiveness([], deps);
+	assert.equal(ok, false);
+	assert.match(findings[0].reason, /refusing to judge/);
+});
+
+test("validateLedgerLiveness(): passes against the REAL live module set", () => {
+	const listScript = path.join(repoRoot, "scripts/legal/list-go-modules.sh");
+	const live = execFileSync("bash", [listScript], { cwd: repoRoot, encoding: "utf8" }).split("\n");
+	const { ok, findings } = gen.validateLedgerLiveness(live, deps);
+	assert.equal(ok, true, JSON.stringify(findings, null, 2));
+	// And the same set, both directions, is exactly the ledger.
+	const liveModules = new Set(live.filter(Boolean).map((l) => gen.splitModule(l.trim()).module));
+	assert.equal(liveModules.size, deps.goModules.length);
+});
+
+test("CLI --check-live fails closed on a STALE ledger row (reverse direction)", () => {
+	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "notices-stale-"));
+	const liveFile = path.join(tmp, "live.txt");
+	// A live list that is a strict subset of the ledger.
+	fs.writeFileSync(
+		liveFile,
+		deps.goModules
+			.slice(0, 3)
+			.map((m) => `${m.module}@${m.version}`)
+			.join("\n") + "\n"
+	);
+	try {
+		execFileSync("node", [genScript, "--check-live", liveFile], {
+			cwd: repoRoot,
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		assert.fail("expected --check-live to exit non-zero on a stale ledger");
+	} catch (err) {
+		assert.notEqual(err.status, 0);
+		assert.match(err.stderr.toString(), /ledger-liveness gate FAILED/);
+	} finally {
+		fs.rmSync(tmp, { recursive: true, force: true });
+	}
+});
+
+test("RELEASE-SAFEGUARDS.md's stated Go module count matches the ledger (no unreproducible number)", () => {
+	const doc = fs.readFileSync(path.join(repoRoot, "docs/legal/RELEASE-SAFEGUARDS.md"), "utf8");
+	const m = doc.match(/build graph \(\*\*(\d+)\*\*,/);
+	assert.ok(m, "RELEASE-SAFEGUARDS.md no longer states the Go module count");
+	assert.equal(Number(m[1]), deps.goModules.length);
+});
+
+// --- global npm pins ----------------------------------------------------------
+// `npm install -g typescript` with no version resolves to whatever the registry
+// serves that build, which makes the ledger's recorded version and license a
+// claim about a build nobody can reproduce.
+
+test("the ledger's typescript row is ARG-pinned and matches the Dockerfile and package.json", () => {
+	const ts = deps.npmGlobal.find((p) => p.name === "typescript");
+	assert.ok(ts, "expected a typescript npmGlobal row");
+	assert.equal(ts.dockerfileArg, "TYPESCRIPT_VERSION");
+	const dockerfile = fs.readFileSync(path.join(repoRoot, "Dockerfile"), "utf8");
+	assert.match(dockerfile, new RegExp(`ARG TYPESCRIPT_VERSION=${ts.version.replace(/\./g, "\\.")}`));
+	assert.match(dockerfile, /npm install -g --ignore-scripts "typescript@\$\{TYPESCRIPT_VERSION\}"/);
+	const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
+	assert.equal(pkg.devDependencies.typescript, ts.version);
+});
+
+test("validateNpmGlobalPins(): fails closed on ARG drift, and on an unpinned install", () => {
+	const drifted = gen.validateNpmGlobalPins("ARG TYPESCRIPT_VERSION=4.0.0\n", deps.npmGlobal);
+	assert.equal(drifted.ok, false);
+	assert.match(drifted.findings[0].reason, /ledger pins .*Dockerfile ARG TYPESCRIPT_VERSION pins 4\.0\.0/);
+
+	const missing = gen.validateNpmGlobalPins("FROM scratch\n", deps.npmGlobal);
+	assert.equal(missing.ok, false);
+	assert.match(missing.findings[0].reason, /no longer baked|ARG renamed/);
+
+	// Rows pinned some other way (ARG PI_PACKAGE, inline pkg@version) are out of
+	// scope for this specific check and must not produce noise.
+	assert.equal(gen.validateNpmGlobalPins("FROM scratch\n", [{ name: "pi-plan", version: "0.1.1" }]).ok, true);
+});
+
+test("CLI --check-npm-pins passes against the real Dockerfile", () => {
+	execFileSync("node", [genScript, "--check-npm-pins", path.join(repoRoot, "Dockerfile")], {
+		cwd: repoRoot,
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+});

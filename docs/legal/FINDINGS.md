@@ -20,13 +20,44 @@ should be read as claiming any of these are closed.
 ### Provenance record durability (scope note, not a claim)
 
 `scripts/release/verify-provenance.sh` enforces that a version's digest can
-never be rewritten *given a prior record*. In `publish.yml` the record is
-written in a fresh workspace and uploaded as a 90-day artifact, so the
-cross-run guarantee rests on the `version` job only ever selecting an unused
-`v<version>` tag (one publish per version), not on the script re-reading an
-older run's file. That is the honest scope: immutability is enforced within a
-run and against any restored record; uniqueness across runs comes from the
-version selector.
+never be rewritten *given a prior record it can read*. In `publish.yml` that
+record is written into a fresh runner workspace and uploaded as a 90-day
+artifact; the next run starts with an empty `out/provenance/`. **So the script
+enforces nothing across runs, and this document previously implied more than
+that.** The earlier wording rested the cross-run guarantee on "the `version`
+job only ever selecting an unused `v<version>` tag", which was false in the
+exact case that matters: the `v<version>` git tag is created by `bump`, AFTER
+`merge` has already pushed `pix:<version>`, so a run that published and then
+failed left the git tag free and the Docker tag taken — and the next run
+re-selected that version and overwrote a published image.
+
+What enforces cross-run tag immutability now is the registry itself:
+`scripts/release/tag-availability.sh` is consulted in the `version` job (skip
+any version whose tag exists) and again in `merge` immediately before
+`imagetools create` (fail, mutating nothing). It is tri-state and fails closed
+— an undecidable answer is never "free". Honest scope, restated:
+
+* `verify-provenance.sh`: immutability **within a run**, and against any
+  record restored into its out-dir. Nothing more.
+* the registry pre-check: **cross-run** protection against overwriting a
+  published `:<version>` tag.
+* `:latest` is a deliberately moving tag and is not covered by either.
+* Neither is a signature. Nothing here proves *who* published a digest — no
+  cosign/attestation is wired — and no document should read as if it does.
+
+### Still open, unchanged by the release-blocker fixes
+
+Items **1** (MPL-2.0 compliance sign-off), **3** (a real, credentialed
+base-image digest), **4** (`gopkg.in/yaml.v3`'s per-file dual-license
+breakdown), **6** (`anchore/sbom-action`'s pinned SHA re-verified from a live
+`git ls-remote`) and **7** (SBOM-*diff* enforcement policy) are all still
+open, and deliberately so: each needs counsel, a credentialed human session,
+or an owner's decision on enforcement tolerance. The release-blocker work
+(pre-publish gating, cross-run tag immutability, notice-bearing release
+assets, a ledger regenerated from the live module set, a pinned global
+`typescript`, and the monitor/network disclosures in `PRIVACY.md`) closed
+mechanism gaps only. It closed none of these, and nothing in it should be read
+as doing so.
 
 None of the above blocks the mechanisms landing (the gates, scripts, and
 generated notices are all real, tested, and passing); they block *specific
