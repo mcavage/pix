@@ -280,6 +280,20 @@ func ServeLazyMarkerPath() string {
 	return filepath.Join(dir, "serve.lazy")
 }
 
+// PidFileLockPath is the STABLE sibling flock path for a pid-bearing file
+// (serve.pid, serve.lazy): every writer (the daemon's own writeServePidFile,
+// the launcher's recordSpawnedServePid/markLazy) and the daemon's own
+// compare-and-delete cleanup (removeOwnedPidFile) all serialize on THIS path
+// via sys.Lock/withFlock, never on the guarded file itself. That matters
+// because the guarded file gets REPLACED (removed, then rewritten by a
+// respawned daemon) across its lifetime, and locking a path that can be
+// unlinked out from under an open fd is the TOCTOU lock.go's flockHandle
+// guards against elsewhere in this tree — a fixed, never-removed sibling
+// path sidesteps that class entirely rather than re-solving it here.
+func PidFileLockPath(path string) string {
+	return path + ".lock"
+}
+
 // MonitorStoreRoot is <state-dir>/monitor: the on-disk root monitor ingest (inside
 // `pix-host serve`, see serve.go) writes and `pix monitor` reads back offline.
 func MonitorStoreRoot() (string, error) {

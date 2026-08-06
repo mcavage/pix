@@ -80,8 +80,14 @@ func DefaultStarter(progress io.Writer) serveStarter {
 		recordPid: recordSpawnedServePid,
 		markLazy: func(pid int) {
 			// Best-effort; a missing marker only downgrades config propagation
-			// from "restart the lazy daemon" to "print a note".
-			_ = os.WriteFile(config.ServeLazyMarkerPath(), []byte(strconv.Itoa(pid)+"\n"), 0o600)
+			// from "restart the lazy daemon" to "print a note". Locked on the
+			// SAME stable sibling path (config.PidFileLockPath) the daemon's own
+			// removeOwnedPidFile cleanup takes, so a dying old daemon's marker
+			// removal and this write can never interleave (see serve.go).
+			markerPath := config.ServeLazyMarkerPath()
+			_ = sys.Lock(config.PidFileLockPath(markerPath), func() error {
+				return os.WriteFile(markerPath, []byte(strconv.Itoa(pid)+"\n"), 0o600)
+			})
 		},
 		ctl:     DefaultCtl(),
 		sleep:   time.Sleep,
@@ -95,13 +101,19 @@ func DefaultStarter(progress io.Writer) serveStarter {
 
 // recordSpawnedServePid is the launcher-side pidfile write. It RETURNS an error
 // (round 2, H8): a swallowed failure would release the spawn lock with no record
-// of the child, so the next launcher would spawn a second daemon.
+// of the child, so the next launcher would spawn a second daemon. The write is
+// taken under config.PidFileLockPath's stable sibling lock — the SAME lock the
+// daemon's own removeOwnedPidFile cleanup takes (serve.go) — so a dying old
+// daemon's compare-and-delete can never race this write and strand the
+// just-spawned child without a pidfile.
 func recordSpawnedServePid(pid int) error {
 	path := config.ServePidPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create pidfile dir: %w", err)
 	}
-	if err := os.WriteFile(path, []byte(strconv.Itoa(pid)+"\n"), 0o600); err != nil {
+	if err := sys.Lock(config.PidFileLockPath(path), func() error {
+		return os.WriteFile(path, []byte(strconv.Itoa(pid)+"\n"), 0o600)
+	}); err != nil {
 		return fmt.Errorf("write pidfile %s: %w", path, err)
 	}
 	return nil

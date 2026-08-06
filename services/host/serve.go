@@ -42,6 +42,7 @@ import (
 	"pix/host/config"
 	"pix/host/monitor"
 	"pix/host/packinfo"
+	"pix/host/sys"
 	"pix/host/workflow/pack"
 )
 
@@ -448,13 +449,25 @@ func isLoopbackAddr(host string) bool {
 // writeServePidFile records the current pid at config.ServePidPath() (0600, dir
 // 0700). Best-effort: a failed MkdirAll/write only logs, never crashes serve. A
 // stale pidfile from a previous crash is overwritten — the live pid is authority.
+// The write is taken under the SAME sys.Lock as removeOwnedPidFile's
+// compare-and-delete (config.PidFileLockPath), so a just-exiting old owner's
+// cleanup and this respawn's write can never interleave: see removeOwnedPidFile.
 func writeServePidFile() {
-	path := config.ServePidPath()
+	writeServePidFileAt(config.ServePidPath(), os.Getpid())
+}
+
+// writeServePidFileAt is writeServePidFile's real body, parameterized so a
+// test can point it at a temp path and a synthetic pid (standing in for a
+// different, respawned process) without touching config.ServePidPath().
+func writeServePidFileAt(path string, pid int) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		log.Printf("serve: could not create pidfile dir %s: %v", filepath.Dir(path), err)
 		return
 	}
-	if err := os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
+	lockPath := config.PidFileLockPath(path)
+	if err := sys.Lock(lockPath, func() error {
+		return os.WriteFile(path, []byte(strconv.Itoa(pid)+"\n"), 0o600)
+	}); err != nil {
 		log.Printf("serve: could not write pidfile %s: %v", path, err)
 	}
 }
@@ -481,28 +494,57 @@ func removeServeLazyMarker() {
 // loser starts, binds nothing — see the eager listener binds above — but can
 // still reach this cleanup on its way out through fatalf), and the loser's
 // own deferred cleanup must never delete a file the WINNER (or any other,
-// currently-running daemon) just wrote for itself. Reading before removing is
-// a best-effort compare-and-delete, not atomic against a concurrent write —
-// but the only way that race can resolve is in the FILE'S favor: we only ever
-// delete a file that, at the moment we looked, said WE are its owner; we
-// never delete one that says otherwise. A missing file is fine; any other
-// read/remove error only logs.
+// currently-running daemon) just wrote for itself.
+//
+// The read-compare-delete runs INSIDE one sys.Lock hold on
+// config.PidFileLockPath(path) — a STABLE sibling path, never the pidfile
+// inode itself (which gets removed and recreated across a respawn, so
+// locking it directly would be the exact TOCTOU this function used to have:
+// a compare that reads true, then a respawned daemon overwrites the file,
+// then a stale Remove deletes the NEW owner's file out from under it).
+// writeServePidFile/writeServePidFileAt and the launcher's
+// recordSpawnedServePid/markLazy take the SAME lock around their writes, so
+// the two sides can never interleave: whichever gets the lock first runs its
+// whole compare-delete or whole write to completion before the other even
+// starts. A missing file is fine; any other read/remove/lock error only logs
+// (best-effort — cleanup must never crash serve on its way out).
 func removeOwnedPidFile(path string) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			log.Printf("serve: could not read %s before removing: %v", path, err)
+	removeOwnedPidFileWithHook(path, nil)
+}
+
+// removeOwnedPidFileWithHook is removeOwnedPidFile's real body. afterOwnershipConfirmed,
+// when non-nil, runs AFTER the ownership check succeeds but BEFORE os.Remove —
+// while the lock is STILL held. Production always calls removeOwnedPidFile,
+// which passes nil; the only other caller is
+// TestRemoveOwnedPidFileSerializesAgainstConcurrentWrite, which uses the hook
+// to deterministically pause an "old owner" mid-critical-section and prove a
+// concurrent respawn's write genuinely blocks on the same lock rather than
+// racing it.
+func removeOwnedPidFileWithHook(path string, afterOwnershipConfirmed func()) {
+	lockPath := config.PidFileLockPath(path)
+	if err := sys.Lock(lockPath, func() error {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				log.Printf("serve: could not read %s before removing: %v", path, err)
+			}
+			return nil
 		}
-		return
-	}
-	pid, perr := strconv.Atoi(strings.TrimSpace(string(raw)))
-	if perr != nil || pid != os.Getpid() {
-		// Not ours (unparseable, or another process's pid): leave it exactly
-		// alone. Whoever it belongs to is responsible for its own cleanup.
-		return
-	}
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		log.Printf("serve: could not remove %s: %v", path, err)
+		pid, perr := strconv.Atoi(strings.TrimSpace(string(raw)))
+		if perr != nil || pid != os.Getpid() {
+			// Not ours (unparseable, or another process's pid): leave it exactly
+			// alone. Whoever it belongs to is responsible for its own cleanup.
+			return nil
+		}
+		if afterOwnershipConfirmed != nil {
+			afterOwnershipConfirmed()
+		}
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			log.Printf("serve: could not remove %s: %v", path, err)
+		}
+		return nil
+	}); err != nil {
+		log.Printf("serve: could not acquire lock %s: %v", lockPath, err)
 	}
 }
 
