@@ -245,6 +245,8 @@ func TestRedactTextScrubsSecretShapes(t *testing.T) {
 		"the bearer of good news brought authorization for the plan",
 		"Authorization headers were discussed in the design review",
 		"GET https://api.example.com/v1/users?page=2 returned 200",
+		`{"maxTokens":1234567890123456,"seq":9}`,
+		`{"tokens": 99998888777766554433, "ts":1700000000123}`,
 	}
 	for _, ok := range ordinary {
 		if got := redactText(ok); got != ok {
@@ -293,6 +295,49 @@ func TestAppendPersistsRedactedBytesOnly(t *testing.T) {
 	}
 	if _, ok := got[len(got)-1].(UnknownEvent); !ok {
 		t.Fatalf("last event is %T, want UnknownEvent", got[len(got)-1])
+	}
+}
+
+// TestUnknownNumericTokenRoundTrip pins the R1-2 regression: an unknown
+// kind whose raw JSON holds a secret-named key with an UNQUOTED numeric
+// value must survive Append -> disk -> Tail. The scrub replaces the number
+// with a QUOTED marker; a bare marker would make Encode fail (the event is
+// lost) or leave an undecodable line (Tail skips it) — either way readback
+// returns nothing, which is what this test refuses.
+func TestUnknownNumericTokenRoundTrip(t *testing.T) {
+	const numericCanary = "31337133713371337"
+	s := newTestStore(t, StoreConfig{})
+	line := `{"kind":"tap_v99","sandboxId":"sbx","sessionId":"sess",` +
+		`"token": ` + numericCanary + `,"password":"` + numericCanary + `","kept":42}`
+	ev, err := Decode([]byte(line))
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	mustAppend(t, s, ev)
+	raw, err := os.ReadFile(streamFile(s, "sbx", "sess"))
+	if err != nil {
+		t.Fatalf("read stream: %v", err)
+	}
+	if strings.Contains(string(raw), numericCanary) {
+		t.Fatalf("stream file contains the numeric canary:\n%s", raw)
+	}
+	got := mustTail(t, s, "sbx", "sess", 0)
+	if len(got) != 1 {
+		t.Fatalf("Tail returned %d events, want 1 — 0 means redaction corrupted or dropped the line", len(got))
+	}
+	u, ok := got[0].(UnknownEvent)
+	if !ok {
+		t.Fatalf("Tail returned %T, want UnknownEvent", got[0])
+	}
+	var m map[string]any
+	if err := json.Unmarshal(u.Raw, &m); err != nil {
+		t.Fatalf("read-back raw is not valid JSON: %v\n%s", err, u.Raw)
+	}
+	if m["token"] != redactionMarker || m["password"] != redactionMarker {
+		t.Errorf("token/password = %v/%v, want both the %q string", m["token"], m["password"], redactionMarker)
+	}
+	if m["kept"] != float64(42) {
+		t.Errorf("kept = %v, want 42 retained", m["kept"])
 	}
 }
 

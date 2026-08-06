@@ -234,16 +234,18 @@ func TestIngestUnknownKindRawJSONRedactedEndToEnd(t *testing.T) {
 	const (
 		bearerTok  = "canary.e2e-bearer-9876543210"
 		genericVal = "canaryE2EGenericValue123456"
+		numericVal = "42424242424242424242"
 	)
 	unknownLine := `{"kind":"tap_v99_probe","sandboxId":"sbx","sessionId":"sess","turnId":"t1","seq":1,"ts":1700000000123,` +
 		`"authorization":"Bearer ` + bearerTok + `",` +
-		`"probe":{"api_key":"` + genericVal + `","note":"ordinary probe detail"}}`
+		`"probe":{"api_key":"` + genericVal + `","note":"ordinary probe detail","secret": ` + numericVal + `}}`
 	known := toolEvent("sbx", "sess", `curl -H '{"authorization":"Bearer `+bearerTok+`"}'`, 2)
 	body := unknownLine + "\n" + encodeLine(t, known) + "\n"
 	if resp := post(t, base+"/ingest", "application/x-ndjson", body); resp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /ingest = %d, want 200", resp.StatusCode)
 	}
-	blobText := `{"authorization":"Bearer ` + bearerTok + `","api_key":"` + genericVal + `","kept":"ordinary"}`
+	blobText := `{"authorization":"Bearer ` + bearerTok + `","api_key":"` + genericVal + `",` +
+		`"password": ` + numericVal + `,"kept":"ordinary"}`
 	payload := fmt.Sprintf(`{"hash":%q,"text":%q}`, hashOf(blobText), blobText)
 	if resp := post(t, base+"/blob", "application/json", payload); resp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /blob = %d, want 200", resp.StatusCode)
@@ -270,6 +272,10 @@ func TestIngestUnknownKindRawJSONRedactedEndToEnd(t *testing.T) {
 		if !ok || probe["note"] != "ordinary probe detail" {
 			t.Errorf("unknown event lost its unknown fields: %s", line)
 		}
+		if probe["secret"] != redactionMarker {
+			t.Errorf("unquoted numeric secret = %v (%T), want the marker as a JSON STRING: %s",
+				probe["secret"], probe["secret"], line)
+		}
 		if !strings.Contains(line, `"ts":1700000000123`) {
 			t.Errorf("unknown event ts lost its exact wire form: %s", line)
 		}
@@ -277,7 +283,7 @@ func TestIngestUnknownKindRawJSONRedactedEndToEnd(t *testing.T) {
 	if !sawUnknown {
 		t.Errorf("unknown kind tap_v99_probe was not retained:\n%s", raw)
 	}
-	for _, c := range []string{bearerTok, genericVal} {
+	for _, c := range []string{bearerTok, genericVal, numericVal} {
 		if strings.Contains(string(raw), c) {
 			t.Errorf("events file still contains canary %q:\n%s", c, raw)
 		}
@@ -294,7 +300,11 @@ func TestIngestUnknownKindRawJSONRedactedEndToEnd(t *testing.T) {
 	if b["kept"] != "ordinary" {
 		t.Errorf("blob lost its ordinary field: %s", blobs[0].Text)
 	}
-	for _, c := range []string{bearerTok, genericVal} {
+	if b["password"] != redactionMarker {
+		t.Errorf("blob's unquoted numeric secret = %v (%T), want the marker as a JSON STRING: %s",
+			b["password"], b["password"], blobs[0].Text)
+	}
+	for _, c := range []string{bearerTok, genericVal, numericVal} {
 		if strings.Contains(blobs[0].Text, c) {
 			t.Errorf("blob text still contains canary %q: %s", c, blobs[0].Text)
 		}
