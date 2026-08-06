@@ -2,7 +2,7 @@
   "schema": 1,
   "packages": {
     "pix/host": {
-      "prod_loc": 3997,
+      "prod_loc": 4008,
       "exports": 0,
       "globals": 39,
       "edges": 10,
@@ -135,7 +135,7 @@
       "exits": 0
     },
     "pix/host/supervise": {
-      "prod_loc": 1250,
+      "prod_loc": 1332,
       "exports": 38,
       "globals": 28,
       "edges": 1,
@@ -163,7 +163,7 @@
       "exits": 0
     },
     "pix/host/workflow/launch": {
-      "prod_loc": 2333,
+      "prod_loc": 2355,
       "exports": 107,
       "globals": 41,
       "edges": 14,
