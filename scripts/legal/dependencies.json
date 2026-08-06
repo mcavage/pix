@@ -222,6 +222,14 @@
       "class": "permissive"
     },
     {
+      "module": "github.com/ncruces/go-strftime",
+      "version": "v1.0.0",
+      "license": "MIT",
+      "licenseFile": "LICENSE",
+      "class": "permissive",
+      "notes": "Transitive dependency of modernc.org/libc (used by modernc.org/sqlite). Platform-gated: only reachable on darwin/windows builds (the cross-compiled darwin/amd64 + darwin/arm64 release targets per publish.yml), invisible to a linux-only `go list -deps` — see scripts/legal/list-go-modules.sh. LICENSE verified in the module cache at v1.0.0: standard MIT text, copyright 2022 Nuno Cruces. Source: https://github.com/ncruces/go-strftime"
+    },
+    {
       "module": "github.com/oklog/run",
       "version": "v1.1.0",
       "license": "Apache-2.0",
@@ -273,7 +281,7 @@
     },
     {
       "module": "golang.org/x/net",
-      "version": "v0.38.0",
+      "version": "v0.53.0",
       "license": "BSD-3-Clause",
       "licenseFile": "LICENSE",
       "class": "permissive"
@@ -287,35 +295,35 @@
     },
     {
       "module": "golang.org/x/term",
-      "version": "v0.36.0",
+      "version": "v0.42.0",
       "license": "BSD-3-Clause",
       "licenseFile": "LICENSE",
       "class": "permissive"
     },
     {
       "module": "golang.org/x/text",
-      "version": "v0.30.0",
+      "version": "v0.36.0",
       "license": "BSD-3-Clause",
       "licenseFile": "LICENSE",
       "class": "permissive"
     },
     {
       "module": "google.golang.org/genproto/googleapis/rpc",
-      "version": "v0.0.0-20231106174013-bbf56f31fb17",
+      "version": "v0.0.0-20260414002931-afd174a4e478",
       "license": "Apache-2.0",
       "licenseFile": "LICENSE",
       "class": "permissive"
     },
     {
       "module": "google.golang.org/grpc",
-      "version": "v1.61.0",
+      "version": "v1.82.1",
       "license": "Apache-2.0",
       "licenseFile": "LICENSE",
       "class": "permissive"
     },
     {
       "module": "google.golang.org/protobuf",
-      "version": "v1.36.6",
+      "version": "v1.36.11",
       "license": "BSD-3-Clause",
       "licenseFile": "LICENSE",
       "class": "permissive"

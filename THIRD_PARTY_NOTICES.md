@@ -64,6 +64,7 @@ from the source of truth.
 | github.com/muesli/cancelreader | v0.2.2 | MIT |
 | github.com/muesli/reflow | v0.3.0 | MIT |
 | github.com/muesli/termenv | v0.16.0 | MIT |
+| github.com/ncruces/go-strftime | v1.0.0 | MIT |
 | github.com/oklog/run | v1.1.0 | Apache-2.0 |
 | github.com/remyoudompheng/bigfft | v0.0.0-20230129092748-24d4a6f8daec | BSD-3-Clause |
 | github.com/rivo/uniseg | v0.4.7 | MIT |
@@ -71,13 +72,13 @@ from the source of truth.
 | github.com/xo/terminfo | v0.0.0-20220910002029-abceb7e1c41e | MIT |
 | github.com/yuin/goldmark | v1.7.13 | MIT |
 | github.com/yuin/goldmark-emoji | v1.0.6 | MIT |
-| golang.org/x/net | v0.38.0 | BSD-3-Clause |
+| golang.org/x/net | v0.53.0 | BSD-3-Clause |
 | golang.org/x/sys | v0.47.0 | BSD-3-Clause |
-| golang.org/x/term | v0.36.0 | BSD-3-Clause |
-| golang.org/x/text | v0.30.0 | BSD-3-Clause |
-| google.golang.org/genproto/googleapis/rpc | v0.0.0-20231106174013-bbf56f31fb17 | Apache-2.0 |
-| google.golang.org/grpc | v1.61.0 | Apache-2.0 |
-| google.golang.org/protobuf | v1.36.6 | BSD-3-Clause |
+| golang.org/x/term | v0.42.0 | BSD-3-Clause |
+| golang.org/x/text | v0.36.0 | BSD-3-Clause |
+| google.golang.org/genproto/googleapis/rpc | v0.0.0-20260414002931-afd174a4e478 | Apache-2.0 |
+| google.golang.org/grpc | v1.82.1 | Apache-2.0 |
+| google.golang.org/protobuf | v1.36.11 | BSD-3-Clause |
 | gopkg.in/yaml.v3 | v3.0.1 | Apache-2.0 AND MIT |
 | modernc.org/libc | v1.74.1 | BSD-3-Clause |
 | modernc.org/mathutil | v1.7.1 | BSD-3-Clause |
