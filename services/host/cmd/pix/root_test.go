@@ -78,6 +78,51 @@ func TestTieredHelpStaysShort(t *testing.T) {
 	}
 }
 
+// TestHelpTextMoreLine_NamesOnlyLiveVerbs: DX finding 4 — the curated
+// landing screen's "More" line hand-lists a few verbs `help --all` covers in
+// full. Every token in it must be a REAL, currently dispatchable verb (never
+// a retired one like "state", which has no live subcommand left at all), so
+// the short screen can never point a reader at a name that only answers
+// PIX_RETIRED.
+func TestHelpTextMoreLine_NamesOnlyLiveVerbs(t *testing.T) {
+	line, ok := findMoreLine(helpText)
+	if !ok {
+		t.Fatal("helpText has no \"More\" line to check")
+	}
+	for _, tok := range moreLineTokens(line) {
+		if !knownVerbs()[tok] {
+			t.Errorf("helpText's More line names %q, which is not a live verb (knownVerbs); line: %q", tok, line)
+		}
+	}
+}
+
+// findMoreLine locates the "More" line in the curated help text.
+func findMoreLine(text string) (string, bool) {
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "More") {
+			return line, true
+		}
+	}
+	return "", false
+}
+
+// moreLineTokens extracts the comma-separated verb list between "More" and
+// the trailing "(see ...)" parenthetical.
+func moreLineTokens(line string) []string {
+	after, _, _ := strings.Cut(line, "(")
+	_, list, found := strings.Cut(after, "More")
+	if !found {
+		return nil
+	}
+	var out []string
+	for _, tok := range strings.Split(list, ",") {
+		if t := strings.TrimSpace(tok); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 // TestRootHelpIsTheCuratedScreen: a root help request prints the tiered text,
 // not kong's generated command listing.
 func TestRootHelpIsTheCuratedScreen(t *testing.T) {

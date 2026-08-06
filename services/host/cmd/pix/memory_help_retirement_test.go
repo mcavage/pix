@@ -55,10 +55,15 @@ func TestPixMemoryHelp_DescribesSnapshotRestoreNotFullArchive(t *testing.T) {
 
 // TestPixBackupRestore_RetireToLiveHostReplacement is a real-subprocess
 // retirement check: `pix backup`/`pix restore` must exit 2, print a
-// PIX_RETIRED marker naming a replacement that is ALSO reachable (not a dead
-// end), and must not touch anything under HOME.
+// PIX_RETIRED marker naming the LIVE replacement DIRECTLY (DX finding 8 --
+// the ledger's historical replacement, "pix-host backup"/"pix-host
+// restore", was itself retired inside pix-host to `pix-host memory
+// snapshot|restore PATH`; sending a user to a hop that is ALSO a dead end is
+// exactly the bug terminalReplacement's pix-host chain-following in
+// retired.go fixes), and must not touch anything under HOME.
 func TestPixBackupRestore_RetireToLiveHostReplacement(t *testing.T) {
 	bin := buildPixBinary(t)
+	want := map[string]string{"backup": "pix-host memory snapshot PATH", "restore": "pix-host memory restore PATH"}
 	for _, verb := range []string{"backup", "restore"} {
 		t.Run(verb, func(t *testing.T) {
 			dir := t.TempDir()
@@ -75,8 +80,11 @@ func TestPixBackupRestore_RetireToLiveHostReplacement(t *testing.T) {
 			if !strings.Contains(string(out), "PIX_RETIRED") {
 				t.Errorf("pix %s output missing PIX_RETIRED:\n%s", verb, out)
 			}
-			if !strings.Contains(string(out), "pix-host "+verb) {
-				t.Errorf("pix %s output = %q, want it to name pix-host %s (which itself chains to memory %s)", verb, out, verb, verb)
+			if !strings.Contains(string(out), want[verb]) {
+				t.Errorf("pix %s output = %q, want it to name the live command %q directly (not a second dead end)", verb, out, want[verb])
+			}
+			if strings.Contains(string(out), "pix-host "+verb+" ") || strings.HasSuffix(strings.TrimSpace(string(out)), "pix-host "+verb+".") {
+				t.Errorf("pix %s output still names the retired pix-host hop instead of the live command:\n%s", verb, out)
 			}
 			entries, walkErr := os.ReadDir(dir)
 			if walkErr != nil {

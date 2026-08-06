@@ -26,11 +26,30 @@ import (
 
 	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/mcp"
 	"pix/host/monitor"
+	"pix/host/rpc"
 	"pix/host/service"
 	"pix/host/sys"
 	"pix/host/workflow/launch"
 )
+
+// sbxAwareFail is the shared exit mapping for every launcher verb that shells
+// to sbx directly (ls, rm; mcp_cmd.go's mcpFailed is the same contract for the
+// mcp group): mcp.ErrSbxUnavailable prints in the verb's own words on stderr
+// and exits rpc.ExitServiceDown (3), the SAME code `pix mcp`/`memory`/`secret`
+// already use for "dependency unavailable" — never the generic 1 a plain
+// error would fall through to.
+func sbxAwareFail(d *cli.Deps, err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, mcp.ErrSbxUnavailable) {
+		fmt.Fprintf(d.Err, "pix: %v\n", err)
+		return cli.SilentError{Code: rpc.ExitServiceDown}
+	}
+	return err
+}
 
 // rootCmd is the verb table. Field ORDER and the `group:` keys ARE the tiered
 // help: helpAll renders the listing straight off this declaration, so a verb
@@ -250,7 +269,7 @@ type lsCmd struct {
 }
 
 func (c *lsCmd) Run(d *cli.Deps) error {
-	return launch.Ls(defaultShellEnv(), d.Out, c.JSON)
+	return sbxAwareFail(d, launch.Ls(defaultShellEnv(), d.Out, c.JSON))
 }
 
 func (c *rmCmd) Help() string { return launch.RmDescription }
@@ -268,11 +287,11 @@ func (c *rmCmd) Run(d *cli.Deps) error {
 	// The bare/flag-shape refusals live with the behaviour they protect
 	// (launch.validateRmShape): this layer only reports whether the terminal is
 	// interactive, which is a fact only it knows.
-	return launch.Rm(defaultShellEnv(), d.Out, d.Err, launch.RmOptions{
+	return sbxAwareFail(d, launch.Rm(defaultShellEnv(), d.Out, d.Err, launch.RmOptions{
 		Names: c.Names, All: c.All, Orphans: c.Orphans, Force: c.Force,
 		Except:      append(append([]string(nil), c.Keep...), c.Except...),
 		Interactive: d.Interactive,
-	})
+	}))
 }
 
 // ── lifecycle: serve ────────────────────────────────────────────────────────

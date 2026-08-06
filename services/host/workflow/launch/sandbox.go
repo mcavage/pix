@@ -10,10 +10,23 @@ import (
 	"time"
 
 	"pix/host/cli"
+	"pix/host/health"
 	"pix/host/hostenv"
+	"pix/host/mcp"
 	"pix/host/sandbox"
 	"pix/host/workspace"
 )
+
+// SbxUnavailableErr is the ONE sbx-absent message every launcher surface that
+// needs sbx to do its job (ls, rm, and task new's pre-checkout probe) returns
+// — the SAME detectable sentinel (mcp.ErrSbxUnavailable, already the
+// read/write mcp verbs' contract, mapped to rpc.ExitServiceDown by the
+// command layer) and the SAME exact install fix doctor already prints
+// (health.SbxInstallFix), instead of each caller paraphrasing "install the
+// Docker Sandboxes CLI" differently with no exit code story of its own.
+func SbxUnavailableErr(action string) error {
+	return fmt.Errorf("sbx not on PATH; install it to %s: %s: %w", action, health.SbxInstallFix, mcp.ErrSbxUnavailable)
+}
 
 // SbxState is a package-local alias for the canonical sandbox.State, and
 // SbxUnknown/Absent/Running/Stopped are launch's stable names for its four
@@ -67,7 +80,7 @@ func classifySbxListing(out, name string) SbxState {
 
 func Ls(env hostenv.Env, out io.Writer, jsonOut bool) error {
 	if _, err := env.LookPath("sbx"); err != nil {
-		return fmt.Errorf("sbx not found on PATH; install the Docker Sandboxes CLI to list sandboxes")
+		return SbxUnavailableErr("list sandboxes")
 	}
 	// BOUNDED: a hung `sbx ls` fails with a message, never wedges.
 	raw, timedOut, err := env.RunTimed("sbx", "ls")
@@ -128,7 +141,7 @@ func Rm(env hostenv.Env, out, errOut io.Writer, opts RmOptions) error {
 		return err
 	}
 	if _, err := env.LookPath("sbx"); err != nil {
-		return fmt.Errorf("sbx not found on PATH; install the Docker Sandboxes CLI to remove sandboxes")
+		return SbxUnavailableErr("remove sandboxes")
 	}
 	if opts.Orphans {
 		results, err := sweepOrphans(env, out, opts.Teardown)

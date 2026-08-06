@@ -16,9 +16,9 @@
       "exits": 0
     },
     "pix/host/cmd/pix": {
-      "prod_loc": 3222,
+      "prod_loc": 3344,
       "exports": 15,
-      "globals": 12,
+      "globals": 13,
       "edges": 23,
       "exits": 2
     },
@@ -30,7 +30,7 @@
       "exits": 0
     },
     "pix/host/health": {
-      "prod_loc": 1151,
+      "prod_loc": 1158,
       "exports": 41,
       "globals": 29,
       "edges": 3,
@@ -65,7 +65,7 @@
       "exits": 0
     },
     "pix/host/mcp": {
-      "prod_loc": 869,
+      "prod_loc": 871,
       "exports": 28,
       "globals": 15,
       "edges": 6,
@@ -163,8 +163,8 @@
       "exits": 0
     },
     "pix/host/workflow/launch": {
-      "prod_loc": 2183,
-      "exports": 106,
+      "prod_loc": 2196,
+      "exports": 107,
       "globals": 40,
       "edges": 14,
       "exits": 0

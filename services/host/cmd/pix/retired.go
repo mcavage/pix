@@ -106,28 +106,60 @@ func retiredSurfaces() map[string]string {
 	}
 }
 
+// hostRetiredReplacements mirrors the ONE thing terminalReplacement needs from
+// the pix-host binary's own retirement table (services/host/retired.go's
+// retiredHostSubcommands): whether a "pix-host X" hop this launcher's ledger
+// once pointed at is ITSELF a dead end, and if so, the live command behind
+// it. It cannot import that table directly — both are unimportable `package
+// main` — so this is the smallest possible mirror. The ledger entry that sent
+// a user here (e.g. "backup" -> "pix-host backup") stays exactly as approved
+// and written; only the MESSAGE a user sees resolves past the dead hop.
+var hostRetiredReplacements = map[string]string{
+	"backup":  "pix-host memory snapshot PATH",
+	"restore": "pix-host memory restore PATH",
+}
+
 // terminalReplacement follows a replacement whose own verb was retired later,
-// stopping at the first surface that still exists (or when the chain is exhausted,
-// which a cycle cannot outlive).
+// stopping at the first surface that still exists (or when the chain is
+// exhausted, which a cycle cannot outlive). Two chains are followed: a "pix
+// X" hop through this launcher's own table, and a "pix-host X" hop through
+// hostRetiredReplacements (pix-host is a second binary with its own,
+// separately retired subcommands).
 func terminalReplacement(key string) string {
 	table := retiredSurfaces()
 	replacement := table[key]
 	seen := map[string]bool{key: true}
 	for range table {
 		fields := strings.Fields(replacement)
-		if len(fields) < 2 || fields[0] != "pix" {
+		if len(fields) < 2 {
 			return replacement
 		}
-		next := retiredKey(fields[1], "")
-		if seen[next] {
+		switch fields[0] {
+		case "pix":
+			next := retiredKey(fields[1], "")
+			if seen[next] {
+				return replacement
+			}
+			onward, ok := table[next]
+			if !ok {
+				return replacement
+			}
+			seen[next] = true
+			replacement = onward
+		case "pix-host":
+			sub := "host:" + fields[1]
+			if seen[sub] {
+				return replacement
+			}
+			onward, ok := hostRetiredReplacements[fields[1]]
+			if !ok {
+				return replacement
+			}
+			seen[sub] = true
+			replacement = onward
+		default:
 			return replacement
 		}
-		onward, ok := table[next]
-		if !ok {
-			return replacement
-		}
-		seen[next] = true
-		replacement = onward
 	}
 	return replacement
 }

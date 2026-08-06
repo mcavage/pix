@@ -80,7 +80,7 @@ type taskNewCmd struct {
 	Passthrough []string `arg:"" optional:"" passthrough:"" help:"Args after -- forwarded to the launched pi session."`
 }
 
-func (c *taskNewCmd) Run(d *cli.Deps) error { return taskNew(d, c) }
+func (c *taskNewCmd) Run(d *cli.Deps) error { return sbxAwareFail(d, taskNew(d, c)) }
 
 // taskNewPassthrough splits kong's passthrough arg (which always includes the
 // literal "--" it matched on) into the pi-args tail, rejecting a bare extra
@@ -107,6 +107,14 @@ func taskNew(d *cli.Deps, c *taskNewCmd) error {
 	passthrough, err := taskNewPassthrough(c.Passthrough)
 	if err != nil {
 		return err
+	}
+	// Probe sbx BEFORE reserving a checkout: task.New below creates the
+	// checkout dir, the branch, and the metadata file on disk, none of which
+	// dispatchRun's own (later) sbx probe can undo. Without this, a missing
+	// sbx left an orphan checkout+branch behind every time, discovered only
+	// after `pix run` failed deep inside dispatchRun.
+	if _, err := defaultShellEnv().LookPath("sbx"); err != nil {
+		return launch.SbxUnavailableErr("create a task sandbox")
 	}
 	mainroot, stateRoot, err := taskRepo()
 	if err != nil {
@@ -293,8 +301,19 @@ func taskRm(d *cli.Deps, name string, force bool) error {
 	reasons, ok := task.RemoveGuard(git, disposition, force)
 	if !ok {
 		fmt.Fprintf(d.Err, "pix task rm: refusing to remove %q: %s\n", name, strings.Join(reasons, "; "))
-		if disposition == task.SandboxRunning {
+		switch disposition {
+		case task.SandboxRunning:
 			fmt.Fprintf(d.Err, "Stop it first: sbx stop %s\n", m.Sandbox)
+		case task.SandboxUnknown:
+			// "resolve, then retry" names no command a user can run. sbx entirely
+			// absent gets the exact install fix (the SAME one ls/rm/doctor use);
+			// sbx present but unable to answer gets the exact retry, since telling
+			// someone to install a tool they already have is worse than useless.
+			if _, lerr := defaultShellEnv().LookPath("sbx"); lerr != nil {
+				fmt.Fprintf(d.Err, "%v\n", launch.SbxUnavailableErr("remove this task's sandbox"))
+			} else {
+				fmt.Fprintf(d.Err, "Run `sbx ls` to see why its state could not be read, then retry: pix task rm %s\n", name)
+			}
 		}
 		return cli.SilentError{Code: 2}
 	}

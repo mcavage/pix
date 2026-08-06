@@ -658,3 +658,25 @@ func TestMcpRegistrar_ContainerAddArgs(t *testing.T) {
 // (opReady && creds.GogKeyring) is now inlined directly in RegisterServers
 // and exercised through it — see TestRegisterServers_GogNoOpRefsBare and
 // TestRegisterServers_Registers below.
+
+// --- DX finding 6: sbx-absent errors go to stderr, not stdout --------------
+
+// TestRunMcpLsCore_SbxAbsentWritesRecoveryToStderr: `mcp ls` promises a
+// listing (exit 3 on ErrSbxUnavailable, see RunMcpLsCore's doc). The
+// recovery command it prints is an error report, not a listing row — a
+// caller piping stdout (`pix mcp ls | jq`) must see NOTHING there, and the
+// exact "would run" command on stderr where a human actually looks for it.
+func TestRunMcpLsCore_SbxAbsentWritesRecoveryToStderr(t *testing.T) {
+	var out, errOut bytes.Buffer
+	absent := func(string) (string, error) { return "", errors.New("not found") }
+	err := RunMcpLsCore(absent, &out, strings.NewReader(""), &errOut)
+	if !errors.Is(err, ErrSbxUnavailable) {
+		t.Fatalf("expected ErrSbxUnavailable, got %v", err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("mcp ls must write nothing to stdout on sbx-absent, got stdout=%q", out.String())
+	}
+	if !strings.Contains(errOut.String(), "would run: sbx mcp ls") {
+		t.Errorf("mcp ls must print the exact recovery command on stderr, got stderr=%q", errOut.String())
+	}
+}

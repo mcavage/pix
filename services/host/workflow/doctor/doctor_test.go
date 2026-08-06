@@ -414,3 +414,22 @@ func TestDoctor_VerboseAddsEvidenceForReadyChecks(t *testing.T) {
 		t.Errorf("--verbose must show the evidence:\n%s", verbose.String())
 	}
 }
+
+// TestDoctor_SbxAloneIsARequiredGap: DX finding 7 — docs/reference.md used to
+// say exit 1 happens "only when a core requirement (a model provider key, or
+// the config file itself)" verified a gap, omitting sbx — but SbxProbe.
+// Required() is unconditionally true (health/probes.go), so a missing sbx
+// alone, with every other check healthy, is ALSO a required, exit-1-causing
+// gap. This pins that contract so the doc's list can be checked against it.
+func TestDoctor_SbxAloneIsARequiredGap(t *testing.T) {
+	cfg, o := healthyHost(t)
+	o.SbxBin = filepath.Join(t.TempDir(), "no-sbx-here")
+	s := run(t, cfg, o)
+	r := result(t, s, "sbx")
+	if !r.Blocking() {
+		t.Fatalf("sbx = %+v, want a blocking (required+missing) gap", r)
+	}
+	if s.ExitCode() != health.ExitNotReady {
+		t.Errorf("exit = %d, want %d: sbx alone must be enough to fail doctor", s.ExitCode(), health.ExitNotReady)
+	}
+}

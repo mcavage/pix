@@ -32,7 +32,7 @@ stderr. The full table, with the reasoning for each retirement:
 | `pix upgrade` | `brew upgrade pix` |
 | `pix man` / `pix --man` | `pix help --all` |
 | `pix knowledge` / `pix kb` | `pix pack use` |
-| `pix backup` / `pix restore` | `pix-host backup` / `pix-host restore` |
+| `pix backup` / `pix restore` | `pix-host memory snapshot PATH` / `pix-host memory restore PATH` |
 | `pix evals` | `pix models route` |
 | `pix route` | `pix models` |
 | `pix onboard` | `pix setup --no-agent` |

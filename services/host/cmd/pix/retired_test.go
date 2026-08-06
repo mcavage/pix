@@ -123,6 +123,29 @@ func TestTerminalReplacementFollowsChains(t *testing.T) {
 	}
 }
 
+// TestBackupRestore_ResolveDirectlyToMemorySnapshot: `backup`/`restore` (and
+// their `state backup`/`state restore` aliases) were retired to "pix-host
+// backup"/"pix-host restore" -- but pix-host retired THOSE too, to `pix-host
+// memory snapshot PATH`/`pix-host memory restore PATH` (see retired.go's
+// retiredHostSubcommands). A user following the launcher's notice must land
+// on the live command in one hop, not a second dead end inside pix-host.
+func TestBackupRestore_ResolveDirectlyToMemorySnapshot(t *testing.T) {
+	cases := map[string]string{
+		retiredKey("backup", ""):       "pix-host memory snapshot PATH",
+		retiredKey("restore", ""):      "pix-host memory restore PATH",
+		retiredKey("state", "backup"):  "pix-host memory snapshot PATH",
+		retiredKey("state", "restore"): "pix-host memory restore PATH",
+	}
+	for key, want := range cases {
+		if got := terminalReplacement(key); got != want {
+			t.Errorf("terminalReplacement(%q) = %q, want %q (a live command, not the retired pix-host hop)", key, got, want)
+		}
+		if msg := retiredMessage(key); !strings.Contains(msg, want) {
+			t.Errorf("retiredMessage(%q) does not name the live command %q:\n%s", key, want, msg)
+		}
+	}
+}
+
 // TestRetiredVerbsAreGoneFromDiscovery: a retired verb must not survive in
 // knownVerbs or in either help rendering — the places a user or a test would
 // learn the surface still exists. (There is no third place any more: the

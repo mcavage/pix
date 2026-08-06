@@ -22,10 +22,12 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"pix/host/cli"
+	"pix/host/health"
 	"pix/host/sys/systest"
 	"pix/host/workflow/task"
 	"strings"
@@ -470,4 +472,116 @@ func errorsAs(err error, target *cli.UsageError) bool {
 		err = u.Unwrap()
 	}
 	return false
+}
+
+// --- new: DX finding 2 — probe sbx availability before creating a checkout -
+
+// TestTaskNew_ProbesSbxBeforeCreatingCheckout: `task new` used to reserve the
+// checkout directory, create the branch, and write task metadata BEFORE
+// dispatchRun ever got a chance to notice sbx is missing — leaving an orphan
+// checkout+branch on disk the user had to clean up by hand. The probe must
+// happen first, so a missing sbx never creates anything.
+func TestTaskNew_ProbesSbxBeforeCreatingCheckout(t *testing.T) {
+	root := newRepo(t)
+	stateRoot := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateRoot)
+	// PATH must still resolve git (task.New needs it) — only sbx is absent.
+	gitBin, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not on PATH for this test binary")
+	}
+	binDir := t.TempDir()
+	if err := os.Symlink(gitBin, filepath.Join(binDir, "git")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir) // sbx is not on PATH; git is
+
+	if err := runTaskParse(t, taskTestDeps(), "new", "probe-me"); err == nil {
+		t.Fatal("want an error from `task new` when sbx is not on PATH")
+	}
+
+	// Path/Resolve require an existing metadata file, so derive the checkout
+	// dir the SAME pure way task.New does (Paths), not through a resolver that
+	// would itself fail on the very absence this test proves.
+	co, _ := task.Paths(filepath.Join(stateRoot, "pix", "tasks"), task.RepoDir(root), task.SanitizeName("probe-me"))
+	if _, statErr := os.Stat(co); statErr == nil {
+		t.Errorf("task new left an orphan checkout at %s despite sbx being absent", co)
+	}
+}
+
+// --- rm: DX finding 2 — an unknown sandbox disposition names an exact fix --
+//
+// RemoveGuard's SandboxUnknown reason ("cannot determine the sandbox's
+// state; resolve, then retry") names no command a user can actually run —
+// contrast SandboxRunning, whose sibling case in taskRm follows up with
+// "Stop it first: sbx stop %s". `task rm` must do the same for unknown: sbx
+// entirely absent gets the exact install fix; sbx present but unable to
+// answer gets an exact command to diagnose and retry.
+
+func newTaskForRmTest(t *testing.T, name string) (root, stateRoot string) {
+	t.Helper()
+	root = newRepo(t)
+	stateRoot = t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateRoot)
+	tasksRoot := filepath.Join(stateRoot, "pix", "tasks")
+	if _, err := task.New(task.NewOptions{StateRoot: tasksRoot, Mainroot: root, Name: name}); err != nil {
+		t.Fatal(err)
+	}
+	return root, stateRoot
+}
+
+func TestTaskRm_UnknownDisposition_SbxAbsentNamesExactInstallFix(t *testing.T) {
+	newTaskForRmTest(t, "x")
+	// PATH must still resolve git (taskRepo/git-hygiene need it) -- only sbx
+	// is absent.
+	gitBin, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not on PATH for this test binary")
+	}
+	binDir := t.TempDir()
+	if err := os.Symlink(gitBin, filepath.Join(binDir, "git")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir) // sbx entirely absent -> ProbeTaskSandbox is unknown
+
+	var errb bytes.Buffer
+	d := &cli.Deps{Sys: &systest.Fake{}, Out: io.Discard, Err: &errb, In: strings.NewReader(""), Interactive: false}
+	if err := runTaskParse(t, d, "rm", "x"); err == nil {
+		t.Fatal("want a refusal when the sandbox's state cannot be determined")
+	}
+	if !strings.Contains(errb.String(), health.SbxInstallFix) {
+		t.Errorf("sbx-absent unknown disposition must name the exact install fix %q, got:\n%s", health.SbxInstallFix, errb.String())
+	}
+}
+
+func TestTaskRm_UnknownDisposition_SbxPresentButFailingNamesExactRetry(t *testing.T) {
+	root, _ := newTaskForRmTest(t, "y")
+	// sbx IS on PATH, but `sbx ls` fails -> ProbeTaskSandbox reports unknown
+	// for a reason that is NOT "sbx is missing".
+	binDir := t.TempDir()
+	gitBin, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not on PATH for this test binary")
+	}
+	if err := os.Symlink(gitBin, filepath.Join(binDir, "git")); err != nil {
+		t.Fatal(err)
+	}
+	failingSbx := filepath.Join(binDir, "sbx")
+	if err := os.WriteFile(failingSbx, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	_ = root
+
+	var errb bytes.Buffer
+	d := &cli.Deps{Sys: &systest.Fake{}, Out: io.Discard, Err: &errb, In: strings.NewReader(""), Interactive: false}
+	if err := runTaskParse(t, d, "rm", "y"); err == nil {
+		t.Fatal("want a refusal when `sbx ls` fails")
+	}
+	if !strings.Contains(errb.String(), "pix task rm y") {
+		t.Errorf("sbx-present-but-failing unknown disposition must name the exact retry command, got:\n%s", errb.String())
+	}
+	if strings.Contains(errb.String(), health.SbxInstallFix) {
+		t.Errorf("sbx IS installed here; must not tell the user to install it, got:\n%s", errb.String())
+	}
 }
