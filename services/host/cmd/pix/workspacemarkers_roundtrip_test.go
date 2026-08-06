@@ -20,7 +20,7 @@
 // THE MEASURED SET (shards.md U-W0b.05's row), and where each one actually
 // lives:
 //
-//	.pix/profile               — Go writes (pack.go pack.WriteMemoryScope),
+//	.pix/profile               — Go writes (pack.go packinfo.WriteMemoryScope),
 //	                                   TS reads (memory-recall.ts,
 //	                                   memory-capture.ts)
 //	.pix/ollama-bridge.model    — Go writes (run.go launch.WriteOllamaBridgeFile),
@@ -56,6 +56,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"pix/host/packinfo"
 	"slices"
 	"strings"
 	"testing"
@@ -65,7 +66,6 @@ import (
 	"pix/host/routing"
 	"pix/host/sys"
 	"pix/host/workflow/launch"
-	"pix/host/workflow/pack"
 	"pix/host/workflow/provision"
 	"pix/host/workspace"
 )
@@ -102,7 +102,7 @@ func TestWorkspaceMarkerInventory_MatchesEnumeratedSet(t *testing.T) {
 
 func TestMarkerRoundTrip_Profile(t *testing.T) {
 	ws := t.TempDir()
-	pack.WriteMemoryScope(ws, &pack.Info{Manifest: pack.Manifest{MemoryScope: "work"}})
+	packinfo.WriteMemoryScope(ws, &packinfo.Info{Manifest: packinfo.Manifest{MemoryScope: "work"}})
 
 	got := readFile(t, filepath.Join(ws, ".pix", "profile"))
 	if got != "work\n" {
@@ -112,7 +112,7 @@ func TestMarkerRoundTrip_Profile(t *testing.T) {
 	// nil pack (or a default/unscoped one) removes the marker entirely — the TS
 	// side's readFileSync then throws ENOENT and both readers fall back to
 	// "default", which is the documented un-scoped case.
-	pack.WriteMemoryScope(ws, nil)
+	packinfo.WriteMemoryScope(ws, nil)
 	if _, err := os.Stat(filepath.Join(ws, ".pix", "profile")); !os.IsNotExist(err) {
 		t.Errorf("profile marker should be removed for a nil pack, stat err=%v", err)
 	}
@@ -195,7 +195,7 @@ func TestMarkerRoundTrip_HostStateNeverBecomesAWorkspaceFile(t *testing.T) {
 	t.Setenv("PATH", t.TempDir()) // no MCP-relevant binary present
 
 	// Write every OTHER real marker into the same workspace...
-	pack.WriteMemoryScope(ws, &pack.Info{Manifest: pack.Manifest{MemoryScope: "work"}})
+	packinfo.WriteMemoryScope(ws, &packinfo.Info{Manifest: packinfo.Manifest{MemoryScope: "work"}})
 	launch.WriteOllamaBridgeFile(ws, "qwen3.5:9b")
 	var out bytes.Buffer
 	if err := os.WriteFile(filepath.Join(ws, ".pix", provision.OnboardingFileName), []byte(`{"version":1}`), 0o644); err != nil {

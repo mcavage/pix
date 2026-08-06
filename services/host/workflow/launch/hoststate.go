@@ -6,8 +6,6 @@ package launch
 import (
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"unicode"
@@ -16,9 +14,9 @@ import (
 	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/inference"
+	"pix/host/packinfo"
 	"pix/host/rpc"
 	"pix/host/secret"
-	"pix/host/workflow/pack"
 )
 
 type hostStateKeys struct {
@@ -50,16 +48,6 @@ type hostStateModels struct {
 	Embed   string `json:"embed"`
 }
 
-type HostStatePack struct {
-	Active         bool   `json:"active"`          // a pack is ACTUALLY active (config `pack` or a --pack override)
-	Exists         bool   `json:"exists"`          // a loadable pack exists at Path
-	Default        bool   `json:"default"`         // Path IS the default pack root
-	Path           string `json:"path"`            // the active pack's root, or the default's when none is active
-	GitInitialized bool   `json:"git_initialized"` // has a .git
-	Skills         bool   `json:"skills"`          // has skills/
-	Knowledge      bool   `json:"knowledge"`       // has knowledge/
-}
-
 type hostStateIdentity struct {
 	Name string `json:"name,omitempty"`
 }
@@ -71,7 +59,7 @@ type HostState struct {
 	Gog         hostStateGog      `json:"gog"`
 	MCP         hostStateMCP      `json:"mcp"`
 	Models      hostStateModels   `json:"models"`
-	Pack        HostStatePack     `json:"pack"`
+	Pack        packinfo.State    `json:"pack"`
 	Identity    hostStateIdentity `json:"identity"`
 }
 
@@ -103,7 +91,7 @@ func SanitizeIdentity(s string) string {
 	return strings.TrimSpace(b.String())
 }
 
-func BuildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial func(int) bool, keysSource string, pack HostStatePack) HostState {
+func BuildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial func(int) bool, keysSource string, pack packinfo.State) HostState {
 	dialer := func(p int) bool { return dial != nil && dial(p) }
 	// A key is OK only when the probe ANSWERED and named it. An unreadable
 	// `sbx secret ls` reports every key as not-set rather than inventing a
@@ -158,28 +146,6 @@ func hasConfiguredKeylessModel(cfg *config.Config) bool {
 	return false
 }
 
-func ResolveHostStatePack(cfg *config.Config, override string) HostStatePack {
-	root := pack.ActivePackRoot(cfg.Pack, override)
-	active := root != ""
-	if root == "" {
-		root = pack.DefaultPackRoot() // runs the legacy pack/personal -> default migration
-	}
-	p, err := pack.LoadPack(root)
-	if err != nil {
-		return HostStatePack{}
-	}
-	_, gitErr := os.Stat(filepath.Join(root, ".git"))
-	return HostStatePack{
-		Active:         active,
-		Exists:         true,
-		Default:        pack.CanonicalizePackRoot(p.Root) == pack.CanonicalizePackRoot(pack.DefaultPackRoot()),
-		Path:           p.Root,
-		GitInitialized: gitErr == nil,
-		Skills:         p.SkillsDir != "",
-		Knowledge:      p.KnowledgeDir != "",
-	}
-}
-
 func BuildTrustedHostState(cfg *config.Config, env hostenv.Env, packOverride string) HostState {
 	sbxOut, sbxOK := "", false
 	if _, err := env.LookPath("sbx"); err == nil {
@@ -193,7 +159,7 @@ func BuildTrustedHostState(cfg *config.Config, env hostenv.Env, packOverride str
 	if secret.ProviderKeyRefsPresent(env) {
 		source = "1password"
 	}
-	hs := BuildHostState(cfg, sbxOut, sbxOK, env.DialLocal, source, ResolveHostStatePack(cfg, packOverride))
+	hs := BuildHostState(cfg, sbxOut, sbxOK, env.DialLocal, source, packinfo.Resolve(cfg, packOverride))
 	hs.Identity = ReadGitIdentity(env)
 	return hs
 }

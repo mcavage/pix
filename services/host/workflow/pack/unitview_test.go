@@ -1,6 +1,6 @@
 // unitview_test.go — U07d: the pack-side [[services]] → supervisor export.
 //
-// All tests use REAL temp packs on disk (LoadPack over a written pack.toml),
+// All tests use REAL temp packs on disk (packinfo.LoadPack over a written pack.toml),
 // the real fingerprint code, and the real launcher-owned trust store under an
 // isolated PIX_CONFIG/XDG_STATE_HOME. No mocks: acceptance is a real
 // pack-trust.json record; rejection and change-detection are the real
@@ -10,6 +10,7 @@ package pack
 import (
 	"os"
 	"path/filepath"
+	"pix/host/packinfo"
 	"strings"
 	"testing"
 
@@ -27,7 +28,7 @@ func viewEnv() hostenv.Env {
 func TestAcceptedServices_RejectedBeforeAcceptance(t *testing.T) {
 	isolatePackHost(t)
 	root := writeServicePack(t, validGoPluginService)
-	p, err := LoadPack(root)
+	p, err := packinfo.LoadPack(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +52,7 @@ func TestAcceptedServices_AcceptedExportsMinimalView(t *testing.T) {
 	isolatePackHost(t)
 	root := writeServicePack(t, validGoPluginService+validContainerService)
 	acceptPackSurface(t, root, "")
-	p, err := LoadPack(root)
+	p, err := packinfo.LoadPack(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,10 +99,10 @@ func TestAcceptedServices_ChangeSinceAcceptanceRegates(t *testing.T) {
 		t.Fatal("test bug: argv replacement did not apply")
 	}
 	manifest := "name = \"svc-pack\"\nschema = 2\n" + changed
-	if err := os.WriteFile(filepath.Join(root, PackManifestName), []byte(manifest), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, packinfo.PackManifestName), []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	p, err := LoadPack(root)
+	p, err := packinfo.LoadPack(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +116,7 @@ func TestAcceptedServices_ChangeSinceAcceptanceRegates(t *testing.T) {
 }
 
 // TestAcceptedServices_RevalidatesMutatedInfo: the export re-runs the full
-// load-time validation, so an Info mutated in memory into a shape LoadPack
+// load-time validation, so an packinfo.Info mutated in memory into a shape packinfo.LoadPack
 // would refuse (here: squatting the reserved memory port) is rejected BEFORE
 // the trust check ever runs — reserved ports/loopback/env-shape rules hold at
 // the last pack-side gate too, not only at load.
@@ -123,13 +124,13 @@ func TestAcceptedServices_RevalidatesMutatedInfo(t *testing.T) {
 	isolatePackHost(t)
 	root := writeServicePack(t, validGoPluginService)
 	acceptPackSurface(t, root, "")
-	p, err := LoadPack(root)
+	p, err := packinfo.LoadPack(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	p.Manifest.Services[0].Port = 11435 // pix-host memory's reserved front door
 	if _, err := AcceptedGoPluginServices(p, "", viewEnv()); err == nil || !strings.Contains(err.Error(), "reserved") {
-		t.Fatalf("mutated Info exported (err=%v); want the reserved-port refusal", err)
+		t.Fatalf("mutated packinfo.Info exported (err=%v); want the reserved-port refusal", err)
 	}
 }
 
@@ -138,7 +139,7 @@ func TestAcceptedServices_RevalidatesMutatedInfo(t *testing.T) {
 func TestAcceptedServices_NoServicesIsQuietlyEmpty(t *testing.T) {
 	isolatePackHost(t)
 	root := writeServicePack(t, "")
-	p, err := LoadPack(root)
+	p, err := packinfo.LoadPack(root)
 	if err != nil {
 		t.Fatal(err)
 	}

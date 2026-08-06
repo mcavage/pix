@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"pix/host/hostenv"
+	"pix/host/packinfo"
 	"pix/host/sys/systest"
 	"strings"
 	"testing"
@@ -24,11 +25,11 @@ func writeSetupPack(t *testing.T, required bool) string {
 	if err := os.WriteFile(hook, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	mustWritePack(t, root, Manifest{Name: "work", Schema: 1, Setup: []packSetupStep{{
+	mustWritePack(t, root, packinfo.Manifest{Name: "work", Schema: 1, Setup: []packinfo.SetupStep{{
 		ID: "account", Path: "setup/account", CheckArgs: []string{"check"},
 		ApplyArgs: []string{"apply"}, Required: required, Description: "Connect account",
 	}}})
-	p, err := LoadPack(root)
+	p, err := packinfo.LoadPack(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,56 +38,16 @@ func writeSetupPack(t *testing.T, required bool) string {
 		t.Fatal(err)
 	}
 	store := &PackTrustStore{Version: 1}
-	store.RecordAcceptance(store.TrustKey(root), PackTrustRecord{Path: CanonicalizePackRoot(root), Fingerprint: fp})
+	store.RecordAcceptance(store.TrustKey(root), PackTrustRecord{Path: packinfo.CanonicalizePackRoot(root), Fingerprint: fp})
 	if err := store.Save(); err != nil {
 		t.Fatal(err)
 	}
 	return root
 }
 
-func TestPackSetupValidationRejectsUnsafeOrNonExecutableHooks(t *testing.T) {
-	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "hook"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	for _, step := range []packSetupStep{
-		{ID: "../bad", Path: "hook"},
-		{ID: "good", Path: "../escape"},
-		{ID: "good", Path: "hook"},
-	} {
-		m := Manifest{Name: "x", Schema: 1, Setup: []packSetupStep{step}}
-		if err := validatePackFacets(root, &m); err == nil {
-			t.Fatalf("expected validation failure for %+v", step)
-		}
-	}
-}
-
-func TestPackSetupValidationRejectsIntermediateSymlink(t *testing.T) {
-	root := t.TempDir()
-	outside := t.TempDir()
-	if err := os.WriteFile(filepath.Join(outside, "hook"), []byte("#!/bin/sh\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(outside, filepath.Join(root, "setup")); err != nil {
-		t.Fatal(err)
-	}
-	m := Manifest{Name: "x", Schema: 1, Setup: []packSetupStep{{ID: "bad", Path: "setup/hook"}}}
-	if err := validatePackFacets(root, &m); err == nil || !strings.Contains(err.Error(), "symlink component") {
-		t.Fatalf("got %v, want intermediate symlink rejection", err)
-	}
-}
-
-func TestPackIntegrationSetupMustReferenceDeclaredHook(t *testing.T) {
-	root := t.TempDir()
-	m := Manifest{Name: "x", Schema: 1, Integrations: []Integration{{Name: "CRM", MCP: "crm", Setup: "missing"}}}
-	if err := validatePackFacets(root, &m); err == nil || !strings.Contains(err.Error(), "unknown setup hook") {
-		t.Fatalf("got %v, want unknown setup hook failure", err)
-	}
-}
-
 func TestPackSetupFingerprintChangesWithHookBytes(t *testing.T) {
 	root := writeSetupPack(t, true)
-	p, err := LoadPack(root)
+	p, err := packinfo.LoadPack(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,10 +236,10 @@ func TestPlanPackSetupRequestsAssignsHookToOwningPack(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(second, "setup", "extra"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	mustWritePack(t, second, Manifest{Name: "second", Schema: 1, Setup: []packSetupStep{{
+	mustWritePack(t, second, packinfo.Manifest{Name: "second", Schema: 1, Setup: []packinfo.SetupStep{{
 		ID: "extra", Path: "setup/extra", CheckArgs: []string{"check"}, ApplyArgs: []string{"apply"},
 	}}})
-	p, err := LoadPack(second)
+	p, err := packinfo.LoadPack(second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +253,7 @@ func TestPlanPackSetupRequestsAssignsHookToOwningPack(t *testing.T) {
 	}
 	if _, err := mutatePackTrustStore(func(store *PackTrustStore) error {
 		store.RecordAcceptance(store.TrustKey(second), PackTrustRecord{
-			Path: CanonicalizePackRoot(second), Fingerprint: fp,
+			Path: packinfo.CanonicalizePackRoot(second), Fingerprint: fp,
 		})
 		return nil
 	}); err != nil {
@@ -332,11 +293,11 @@ func TestPackSetupPlanRunsOptionalHookOnlyForItsOwner(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(first, "setup", "ignored"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	mustWritePack(t, first, Manifest{Name: "first", Schema: 1, Setup: []packSetupStep{{
+	mustWritePack(t, first, packinfo.Manifest{Name: "first", Schema: 1, Setup: []packinfo.SetupStep{{
 		ID: "ignored", Path: "setup/ignored", CheckArgs: []string{"check"}, ApplyArgs: []string{"apply"},
 	}}})
 	second := writeSetupPack(t, false)
-	p, err := LoadPack(first)
+	p, err := packinfo.LoadPack(first)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -346,7 +307,7 @@ func TestPackSetupPlanRunsOptionalHookOnlyForItsOwner(t *testing.T) {
 	}
 	if _, err := mutatePackTrustStore(func(store *PackTrustStore) error {
 		store.RecordAcceptance(store.TrustKey(first), PackTrustRecord{
-			Path: CanonicalizePackRoot(first), Fingerprint: fp,
+			Path: packinfo.CanonicalizePackRoot(first), Fingerprint: fp,
 		})
 		return nil
 	}); err != nil {

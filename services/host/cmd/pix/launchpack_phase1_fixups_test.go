@@ -7,16 +7,16 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"pix/host/packinfo"
 	"strings"
 	"testing"
 
 	"pix/host/config"
 	"pix/host/workflow/launch"
-	"pix/host/workflow/pack"
 )
 
 // TestApplyPackToLaunch_BrokenActivePackFailsClosed: an ACTIVE pack (cfg.Pack,
-// no explicit --pack) whose bin/ contains a symlink is rejected by pack.LoadPack —
+// no explicit --pack) whose bin/ contains a symlink is rejected by packinfo.LoadPack —
 // the launch must REFUSE instead of proceeding without the pack's declared
 // wrappers. A cfg.Pack pointing at a deleted dir (or a dir with no pack.toml)
 // is "genuinely absent" and proceeds. An explicit --pack keeps failing closed
@@ -32,7 +32,7 @@ func TestApplyPackToLaunch_BrokenActivePackFailsClosed(t *testing.T) {
 
 	// 1) Tampered active pack: a symlink injected into bin/ -> launch refused.
 	tampered := filepath.Join(dir, "tampered")
-	mustWritePack(t, tampered, pack.Manifest{Name: "t", Schema: 1, Proxies: []pack.PackProxy{{Name: "warehouse"}}})
+	mustWritePack(t, tampered, packinfo.Manifest{Name: "t", Schema: 1, Proxies: []packinfo.PackProxy{{Name: "warehouse"}}})
 	if err := os.MkdirAll(filepath.Join(tampered, "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestApplyPackToLaunch_BrokenActivePackFailsClosed(t *testing.T) {
 	}
 	cfg.Pack = tampered
 	o := launch.RunOpts{}
-	_, lerr := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil), io.Discard)
+	_, lerr := packApplyForTest(cfg, &o, fakeGitEnv(nil), io.Discard)
 	if lerr == nil {
 		t.Fatal("FIX B: a broken/tampered ACTIVE pack must refuse the launch, not proceed without its context")
 	}
@@ -59,7 +59,7 @@ func TestApplyPackToLaunch_BrokenActivePackFailsClosed(t *testing.T) {
 	// 2) Genuinely absent active pack (deleted dir): warn + proceed.
 	cfg.Pack = filepath.Join(dir, "gone")
 	o = launch.RunOpts{}
-	if _, lerr := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil), io.Discard); lerr != nil {
+	if _, lerr := packApplyForTest(cfg, &o, fakeGitEnv(nil), io.Discard); lerr != nil {
 		t.Fatalf("a deleted active-pack dir must degrade to no-pack, got: %v", lerr)
 	}
 	if len(o.Skills) != 0 || len(o.PackKits) != 0 {
@@ -73,18 +73,18 @@ func TestApplyPackToLaunch_BrokenActivePackFailsClosed(t *testing.T) {
 	}
 	cfg.Pack = notAPack
 	o = launch.RunOpts{}
-	if _, lerr := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil), io.Discard); lerr != nil {
+	if _, lerr := packApplyForTest(cfg, &o, fakeGitEnv(nil), io.Discard); lerr != nil {
 		t.Fatalf("a dir without pack.toml must degrade to no-pack, got: %v", lerr)
 	}
 
 	// 3) Explicit --pack keeps failing closed, even for the absent class.
 	cfg.Pack = ""
 	o = launch.RunOpts{Pack: filepath.Join(dir, "gone")}
-	if _, lerr := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil), io.Discard); lerr == nil {
+	if _, lerr := packApplyForTest(cfg, &o, fakeGitEnv(nil), io.Discard); lerr == nil {
 		t.Fatal("an explicit --pack that does not load must stay fatal")
 	}
 	o = launch.RunOpts{Pack: tampered}
-	if _, lerr := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil), io.Discard); lerr == nil {
+	if _, lerr := packApplyForTest(cfg, &o, fakeGitEnv(nil), io.Discard); lerr == nil {
 		t.Fatal("an explicit --pack with a tampered bin/ must stay fatal")
 	}
 }

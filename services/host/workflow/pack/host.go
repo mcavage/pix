@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"pix/host/config"
+	"pix/host/packinfo"
 	"pix/host/workspace"
 )
 
@@ -40,7 +41,7 @@ func readPinned(path, wantSHA string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%v (cannot verify the pinned sha; refusing)", err)
 	}
-	if isSymlinkPath(path) {
+	if packinfo.IsSymlinkPath(path) {
 		return nil, fmt.Errorf("is a symlink; refusing to install it")
 	}
 	sum := sha256.Sum256(data)
@@ -53,7 +54,7 @@ func readPinned(path, wantSHA string) ([]byte, error) {
 // verifyPackBinSHA re-hashes a [[bin]] entry against its mandatory pinned sha,
 // failing closed on empty/missing/mismatch — the same contract verifyPluginSHA
 // enforces for external go-plugin binaries.
-func verifyPackBinSHA(root string, b packBin) error {
+func verifyPackBinSHA(root string, b packinfo.Bin) error {
 	if _, err := readPinned(filepath.Join(root, b.Path), b.SHA); err != nil {
 		return fmt.Errorf("[[bin]] %q: %v", b.Name, err)
 	}
@@ -69,12 +70,12 @@ func clearHostPackWrappers(names []string) error {
 		return nil
 	}
 	dir := hostPackBinDir()
-	if isSymlinkPath(dir) {
+	if packinfo.IsSymlinkPath(dir) {
 		return fmt.Errorf("%s is a symlink; refusing to remove host wrappers through it", dir)
 	}
 	var errs []string
 	for _, n := range names {
-		if !safeArtifactName(n) {
+		if !packinfo.SafeArtifactName(n) {
 			errs = append(errs, fmt.Sprintf("wrapper name %q is unsafe; not removed", n))
 			continue
 		}
@@ -137,7 +138,7 @@ func clearInstalledHostPackWrappersLocked(out io.Writer, store *PackTrustStore) 
 // [[proxy]] script, the manifest pin for a [[bin]]).
 type hostArtifact struct{ kind, name, src, wantSHA string }
 
-func hostArtifacts(p *Info) []hostArtifact {
+func hostArtifacts(p *packinfo.Info) []hostArtifact {
 	var out []hostArtifact
 	for _, pr := range p.Manifest.Proxies {
 		if pr.Host {
@@ -159,9 +160,9 @@ func hostArtifacts(p *Info) []hostArtifact {
 // before the swap, leaving the previous verified contents. The swap replaces
 // the whole dir — exclusively pack-owned rebuildable state — so it also flushes
 // anything stale.
-func installHostPackWrappersStaged(p *Info, proxySHA map[string]string) ([]string, error) {
+func installHostPackWrappersStaged(p *packinfo.Info, proxySHA map[string]string) ([]string, error) {
 	dir := hostPackBinDir()
-	if isSymlinkPath(dir) {
+	if packinfo.IsSymlinkPath(dir) {
 		return nil, fmt.Errorf("%s is a symlink; refusing to install host wrappers through it", dir)
 	}
 	parent := filepath.Dir(dir)
@@ -180,7 +181,7 @@ func installHostPackWrappersStaged(p *Info, proxySHA map[string]string) ([]strin
 		if a.kind == "host wrapper" {
 			a.wantSHA = proxySHA[a.name]
 		}
-		if !safeArtifactName(a.name) {
+		if !packinfo.SafeArtifactName(a.name) {
 			return nil, fmt.Errorf("host wrapper name %q is unsafe; refusing", a.name)
 		}
 		if seen[a.name] {
@@ -240,8 +241,8 @@ func installHostPackWrappersStaged(p *Info, proxySHA map[string]string) ([]strin
 // interleave and strand wrappers under the wrong attribution. The INTENDED
 // attribution is written BEFORE the swap and trimmed after, so the store is
 // always a SUPERSET of what is live — never a wrapper owned by nobody.
-func refreshHostPackWrappers(out io.Writer, cfg *config.Config, strict bool) (*Info, error) {
-	var p *Info
+func refreshHostPackWrappers(out io.Writer, cfg *config.Config, strict bool) (*packinfo.Info, error) {
+	var p *packinfo.Info
 	err := withPackTrustLock(func() error {
 		var rerr error
 		p, rerr = refreshHostPackWrappersLocked(out, cfg, strict)
@@ -253,10 +254,10 @@ func refreshHostPackWrappers(out io.Writer, cfg *config.Config, strict bool) (*I
 // refreshHostPackWrappersLocked is the ALREADY-HOLDING-THE-LOCK body of
 // refreshHostPackWrappers. It MUST NOT acquire withPackTrustLock (directly or
 // via mutatePackTrustStore) — only the *Locked variants and plain load/save.
-func refreshHostPackWrappersLocked(out io.Writer, cfg *config.Config, strict bool) (*Info, error) {
+func refreshHostPackWrappersLocked(out io.Writer, cfg *config.Config, strict bool) (*packinfo.Info, error) {
 	// degrade is the ONE strict-vs-lenient decision: a strict caller refuses,
 	// a lenient one gets a note and keeps whatever the step left behind.
-	degrade := func(p *Info, note string, err error) (*Info, error) {
+	degrade := func(p *packinfo.Info, note string, err error) (*packinfo.Info, error) {
 		if strict {
 			return nil, fmt.Errorf("%v (refusing; fail closed)", err)
 		}
@@ -282,13 +283,13 @@ func refreshHostPackWrappersLocked(out io.Writer, cfg *config.Config, strict boo
 		}
 		return cerr
 	}
-	root := ActivePackRoot(cfg.Pack, "")
+	root := packinfo.ActivePackRoot(cfg.Pack, "")
 	if root == "" {
 		return nil, clearOrFail("stale pack host wrappers could not be cleared")
 	}
-	p, err := LoadPack(root)
+	p, err := packinfo.LoadPack(root)
 	if err != nil {
-		if !errors.Is(err, ErrNotAPack) {
+		if !errors.Is(err, packinfo.ErrNotAPack) {
 			return nil, fmt.Errorf("active pack %s: %v (refusing to use its host wrappers; fix the pack or `pix pack rm` to detach it)", root, err)
 		}
 		// Genuinely absent pack: it still must not leave ITS wrappers live.

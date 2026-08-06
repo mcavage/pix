@@ -9,10 +9,10 @@ import (
 	"pix/host/health"
 	"pix/host/hostenv"
 	"pix/host/monitor"
+	"pix/host/packinfo"
 	"pix/host/rpc"
 	"pix/host/secret"
 	"pix/host/service"
-	"pix/host/workflow/pack"
 )
 
 // probes.go is where a config becomes a list of things to go and check. It is
@@ -87,7 +87,7 @@ func Probes(cfg *config.Config, o Options) []health.Probe {
 	}
 	return []health.Probe{
 		health.SbxProbe{Bin: sbxBin, Args: o.SbxArgs},
-		health.PackProbe{Root: pack.ActivePackRoot(packOf(cfg), o.PackOverride)},
+		health.PackProbe{Root: packinfo.ActivePackRoot(packOf(cfg), o.PackOverride)},
 		// The model keys are ANY-OF: one of anthropic/openai/google is enough
 		// to launch, which is the same definition `run`'s launch gate uses.
 		// Reporting the other two as gaps would hand a working host two repair

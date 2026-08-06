@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"pix/host/packinfo"
 	"slices"
 	"strings"
 	"testing"
@@ -15,7 +16,6 @@ import (
 	"pix/host/secret"
 	"pix/host/sys"
 	"pix/host/workflow/launch"
-	"pix/host/workflow/pack"
 )
 
 // installFakeSbxSecretLs writes a REAL "sbx" executable on an isolated PATH
@@ -390,7 +390,7 @@ func TestAllPreloadedMCP(t *testing.T) {
 func TestApplyPackToLaunch_IntegrationMCPAlwaysPreloaded(t *testing.T) {
 	dir := t.TempDir()
 	root := filepath.Join(dir, "override-pack")
-	mustWritePack(t, root, pack.Manifest{Name: "override", Schema: 1, Integrations: []pack.Integration{
+	mustWritePack(t, root, packinfo.Manifest{Name: "override", Schema: 1, Integrations: []packinfo.Integration{
 		{Name: "Fastmail", MCP: "fastmail"},
 		{Name: "Notion", MCP: "notion"},
 		{Name: "NoServer"}, // no mcp -> ignored
@@ -407,7 +407,7 @@ func TestApplyPackToLaunch_IntegrationMCPAlwaysPreloaded(t *testing.T) {
 		t.Fatal(err)
 	}
 	o := launch.RunOpts{Pack: root}
-	if _, err := launch.ApplyPackToLaunch(cfg, &o, fakeGitEnv(nil), io.Discard); err != nil {
+	if _, err := packApplyForTest(cfg, &o, fakeGitEnv(nil), io.Discard); err != nil {
 		t.Fatalf("launch.ApplyPackToLaunch: %v", err)
 	}
 	if !slices.Contains(cfg.MCP, "fastmail") || !slices.Contains(cfg.MCP, "notion") {

@@ -2,6 +2,7 @@ package pack
 
 import (
 	"path/filepath"
+	"pix/host/packinfo"
 	"slices"
 	"testing"
 
@@ -21,13 +22,13 @@ func TestPersistPackStackComposesAllFacetsAndKeepsPerPackOwnership(t *testing.T)
 	}
 
 	first, second := t.TempDir(), t.TempDir()
-	mustWritePack(t, first, Manifest{
+	mustWritePack(t, first, packinfo.Manifest{
 		Name: "first", Schema: 1, GogAccount: "first@example.com", OllamaBridgeModel: "first-model",
-		Integrations: []Integration{{Name: "first", MCP: "first-mcp"}},
+		Integrations: []packinfo.Integration{{Name: "first", MCP: "first-mcp"}},
 	})
-	mustWritePack(t, second, Manifest{
+	mustWritePack(t, second, packinfo.Manifest{
 		Name: "second", Schema: 1, GogAccount: "second@example.com",
-		Integrations: []Integration{{Name: "second", MCP: "second-mcp"}},
+		Integrations: []packinfo.Integration{{Name: "second", MCP: "second-mcp"}},
 	})
 
 	if err := PersistPackStack([]string{first, second}); err != nil {

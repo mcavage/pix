@@ -93,6 +93,13 @@ var pkgLayer = map[string]int{
 	// non-force removal planning. Pure and dependency-free (see sandbox/doc.go),
 	// same tier as its capability siblings, invisible to them.
 	"sandbox": layerCapability,
+	// packinfo is the READ-ONLY pack model — pack.toml's schema, the fail-closed
+	// loader, active-root resolution and the facts derived from them. It exists
+	// because launch, doctor and provision all need "what pack is active and what
+	// does it declare" and NONE of them may import workflow/pack to ask: that was
+	// the L3-to-L3 web this file now forbids outright. Trust and adoption stay at
+	// L3; this package reads, validates, and decides nothing.
+	"packinfo": layerCapability,
 	// workflow/task is Story06's L1 task-checkout capability: naming, metadata,
 	// the clone/worktree mechanism, and the git-hygiene removal guard, with NO
 	// import of workflow/launch, any sandbox runner, or lease (see its doc
@@ -232,6 +239,15 @@ func TestArchitecture_ImportsPointDown(t *testing.T) {
 			"\"wherever it ended up\" is how the previous architecture was chosen.", unplaced)
 	}
 
+	checkImports(t, pkgs)
+}
+
+// checkImports is the rule itself, separated from the scan so a derived case can
+// run it over a constructed graph. t is an argument, not a receiver, precisely so
+// TestArchitecture_SiblingWorkflowRuleIsEnforced can hand it a throwaway *testing.T
+// and assert that it FAILS.
+func checkImports(t *testing.T, pkgs map[string][]string) {
+	t.Helper()
 	for pkg, imports := range pkgs {
 		from, ok := pkgLayer[pkg]
 		if !ok || from < 0 || drainingPackages[pkg] {
@@ -254,6 +270,11 @@ func TestArchitecture_ImportsPointDown(t *testing.T) {
 				t.Errorf("LAYER VIOLATION: %s (L%d) imports %s (L%d).\n"+
 					"  Imports point down. Move the shared thing lower, or invert the call so the "+
 					"higher layer passes what the lower one needs.", pkg, from, imp, to)
+			case to == from && from == layerWorkflow:
+				t.Errorf("SIBLING WORKFLOW VIOLATION: workflow %s imports workflow %s.\n"+
+					"  L3 workflows may not import each other either: a verb that needs another "+
+					"verb's authority is a composition, and composition belongs to L4. Move the "+
+					"shared FACTS down to a capability and let cmd/pix pass the rest in.", pkg, imp)
 			case to == from && from == layerCapability:
 				t.Errorf("SIBLING VIOLATION: capability %s imports capability %s.\n"+
 					"  L1 capabilities may not import each other — that is the clause that keeps this "+
@@ -267,6 +288,39 @@ func TestArchitecture_ImportsPointDown(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// TestArchitecture_SiblingWorkflowRuleIsEnforced proves the L3-to-L3 clause is a
+// RULE and not a comment, by deriving a violation from the real import graph
+// instead of hand-writing a fixture: it takes two workflows that actually exist,
+// pretends one imports the other, and requires the checker to say so. A guard
+// that only ever sees passing input is a guard nobody has seen work — this file
+// documents six in this repo that rotted exactly that way.
+func TestArchitecture_SiblingWorkflowRuleIsEnforced(t *testing.T) {
+	var workflows []string
+	for pkg, layer := range pkgLayer {
+		if layer == layerWorkflow {
+			workflows = append(workflows, pkg)
+		}
+	}
+	sort.Strings(workflows)
+	if len(workflows) < 2 {
+		t.Fatalf("expected at least two L3 workflows to derive the case from, got %v", workflows)
+	}
+	from, to := workflows[0], workflows[1]
+	fake := &testing.T{}
+	checkImports(fake, map[string][]string{from: {to}})
+	if !fake.Failed() {
+		t.Errorf("the layering checker accepted %s importing %s; L3 workflows are siblings and "+
+			"the rule that forbids it is the whole reason provision no longer calls launch", from, to)
+	}
+	// The same pair with the import REMOVED must pass, so the case above proves
+	// the edge is what failed and not the fixture.
+	clean := &testing.T{}
+	checkImports(clean, map[string][]string{from: nil, to: nil})
+	if clean.Failed() {
+		t.Errorf("two workflows importing nothing must satisfy the rule; the check is over-broad")
 	}
 }
 

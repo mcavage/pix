@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"pix/host/packinfo"
 	"slices"
 	"strings"
 	"testing"
@@ -58,7 +59,7 @@ host = true
 		t.Fatal(err)
 	}
 
-	p, err := LoadPack(root)
+	p, err := packinfo.LoadPack(root)
 	if err != nil {
 		t.Fatalf("LoadPack: %v", err)
 	}
@@ -97,7 +98,7 @@ func TestLoadPack_RejectsUnsafeV2Facets(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(root, "pack.toml"), []byte(tc.toml), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := LoadPack(root); err == nil {
+			if _, err := packinfo.LoadPack(root); err == nil {
 				t.Errorf("LoadPack must reject: %s", tc.name)
 			}
 		})
@@ -121,9 +122,9 @@ func TestSynthesizePackKit_SandboxOnly(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "bin", "platformio"), []byte("#!/usr/bin/env bash\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	p := &Info{Root: root, Manifest: Manifest{
+	p := &packinfo.Info{Root: root, Manifest: packinfo.Manifest{
 		Name: "work",
-		Proxies: []PackProxy{
+		Proxies: []packinfo.PackProxy{
 			{Name: "warehouse"},
 			{Name: "platformio", Host: true},
 		},
@@ -146,7 +147,7 @@ func TestSynthesizePackKit_SandboxOnly(t *testing.T) {
 // TestSynthesizePackKit_NoProxiesReturnsEmpty: a pack with no sandbox proxies
 // synthesizes nothing (the caller must not stack an empty kit).
 func TestSynthesizePackKit_NoProxiesReturnsEmpty(t *testing.T) {
-	p := &Info{Root: t.TempDir(), Manifest: Manifest{Name: "p"}}
+	p := &packinfo.Info{Root: t.TempDir(), Manifest: packinfo.Manifest{Name: "p"}}
 	if kit, err := SynthesizePackKit(p); err != nil || kit != "" {
 		t.Errorf("expected no kit and no error, got %q, err=%v", kit, err)
 	}
@@ -154,7 +155,7 @@ func TestSynthesizePackKit_NoProxiesReturnsEmpty(t *testing.T) {
 
 // --- F4: atomic switch, reversibility -----------------------------------------
 
-func mustWritePack(t *testing.T, root string, m Manifest) {
+func mustWritePack(t *testing.T, root string, m packinfo.Manifest) {
 	t.Helper()
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
@@ -173,8 +174,8 @@ func TestPackUse_ReversibleSwitch(t *testing.T) {
 
 	rootA := filepath.Join(dir, "a")
 	rootB := filepath.Join(dir, "b")
-	mustWritePack(t, rootA, Manifest{Name: "a", Schema: 1, Integrations: []Integration{{Name: "A", MCP: "a-mcp"}}})
-	mustWritePack(t, rootB, Manifest{Name: "b", Schema: 1, Integrations: []Integration{{Name: "B", MCP: "b-mcp"}}})
+	mustWritePack(t, rootA, packinfo.Manifest{Name: "a", Schema: 1, Integrations: []packinfo.Integration{{Name: "A", MCP: "a-mcp"}}})
+	mustWritePack(t, rootB, packinfo.Manifest{Name: "b", Schema: 1, Integrations: []packinfo.Integration{{Name: "B", MCP: "b-mcp"}}})
 
 	// A pre-existing, user-added MCP that no pack ever declared.
 	cfg, err := config.Load()
@@ -241,7 +242,7 @@ func stringSlicesEqualUnordered(a, b []string) bool {
 
 // The [[knowledge]] ref facet's reversible-swap and private-never-travels
 // coverage was retired along with the facet itself (W2 U03A). The embedded
-// knowledge/ dir stays (LoadPack's KnowledgeDir; a plain markdown file placed
+// knowledge/ dir stays (packinfo.LoadPack's KnowledgeDir; a plain markdown file placed
 // there by hand), just inert.
 
 // --- F1/ADR-3: recreate line -----------------------------------------------
@@ -251,7 +252,7 @@ func stringSlicesEqualUnordered(a, b []string) bool {
 func TestPackUse_AlwaysPrintsRecreateLine(t *testing.T) {
 	dir := isolatePackHost(t)
 	root := filepath.Join(dir, "p")
-	mustWritePack(t, root, Manifest{Name: "p", Schema: 1})
+	mustWritePack(t, root, packinfo.Manifest{Name: "p", Schema: 1})
 
 	var out bytes.Buffer
 	RunPackUse(fakeGitEnv(nil), &out, []string{root}, registerOK)
@@ -279,7 +280,7 @@ func TestSolicitPackCredentials_OnlyWritesOpRefs(t *testing.T) {
 			return "", os.ErrNotExist
 		},
 	}}
-	p := &Info{Manifest: Manifest{Integrations: []Integration{
+	p := &packinfo.Info{Manifest: packinfo.Manifest{Integrations: []packinfo.Integration{
 		{Name: "Fastmail", MCP: "fastmail", Env: "FASTMAIL_TOKEN"},
 	}}}
 	in := strings.NewReader("op://Private/Fastmail/token\n")
@@ -316,7 +317,7 @@ func TestSolicitPackCredentials_RejectsPastedLiteral(t *testing.T) {
 			return "", os.ErrNotExist
 		},
 	}}
-	p := &Info{Manifest: Manifest{Integrations: []Integration{
+	p := &packinfo.Info{Manifest: packinfo.Manifest{Integrations: []packinfo.Integration{
 		{Name: "Fastmail", MCP: "fastmail", Env: "FASTMAIL_TOKEN"},
 	}}}
 	in := strings.NewReader("pasted-literal-secret-123\n")
@@ -338,8 +339,8 @@ func TestWriteMemoryScope_NoExplicitScopeIsShared(t *testing.T) {
 	// memory stays the single shared store (no profile file => "default"), else
 	// conversational captures get hidden from the default recall view.
 	ws := t.TempDir()
-	p := &Info{Manifest: Manifest{Name: "work"}}
-	WriteMemoryScope(ws, p)
+	p := &packinfo.Info{Manifest: packinfo.Manifest{Name: "work"}}
+	packinfo.WriteMemoryScope(ws, p)
 	if _, err := os.Stat(filepath.Join(ws, ".pix", "profile")); err == nil {
 		t.Error("a pack without explicit memory_scope must NOT write a scope file (memory stays shared)")
 	}
@@ -347,8 +348,8 @@ func TestWriteMemoryScope_NoExplicitScopeIsShared(t *testing.T) {
 
 func TestWriteMemoryScope_ExplicitOverridesName(t *testing.T) {
 	ws := t.TempDir()
-	p := &Info{Manifest: Manifest{Name: "work", MemoryScope: "shared-team"}}
-	WriteMemoryScope(ws, p)
+	p := &packinfo.Info{Manifest: packinfo.Manifest{Name: "work", MemoryScope: "shared-team"}}
+	packinfo.WriteMemoryScope(ws, p)
 	got := strings.TrimSpace(readFile(t, filepath.Join(ws, ".pix", "profile")))
 	if got != "shared-team" {
 		t.Errorf("profile = %q, want %q", got, "shared-team")
@@ -364,7 +365,7 @@ func TestWriteMemoryScope_NoPackRemovesStaleFile(t *testing.T) {
 	if err := os.WriteFile(stale, []byte("old\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	WriteMemoryScope(ws, nil)
+	packinfo.WriteMemoryScope(ws, nil)
 	if _, err := os.Stat(stale); err == nil {
 		t.Error("no active pack should remove the stale profile file")
 	}
@@ -379,8 +380,8 @@ func TestWriteMemoryScope_DefaultNameUnscoped(t *testing.T) {
 	if err := os.WriteFile(stale, []byte("old\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	p := &Info{Manifest: Manifest{Name: "default"}}
-	WriteMemoryScope(ws, p)
+	p := &packinfo.Info{Manifest: packinfo.Manifest{Name: "default"}}
+	packinfo.WriteMemoryScope(ws, p)
 	if _, err := os.Stat(stale); err == nil {
 		t.Error("a pack named/scoped \"default\" should be unscoped (no profile file)")
 	}
@@ -402,7 +403,7 @@ func TestPackCapabilitiesJSON_LoadedAndMounted(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "capabilities.json"), []byte(caps), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	p, err := LoadPack(root)
+	p, err := packinfo.LoadPack(root)
 	if err != nil {
 		t.Fatalf("LoadPack: %v", err)
 	}
@@ -445,7 +446,7 @@ func TestPackWebSearchJSONLoadedAndMounted(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "web-search.json"), []byte(config), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	p, err := LoadPack(root)
+	p, err := packinfo.LoadPack(root)
 	if err != nil {
 		t.Fatalf("LoadPack: %v", err)
 	}
@@ -492,7 +493,7 @@ func TestPackWebSearchJSONRejectsMalformedAndSymlink(t *testing.T) {
 			if err := tc.make(root); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := LoadPack(root); err == nil || !strings.Contains(err.Error(), "web-search.json") {
+			if _, err := packinfo.LoadPack(root); err == nil || !strings.Contains(err.Error(), "web-search.json") {
 				t.Fatalf("LoadPack error = %v, want web-search.json rejection", err)
 			}
 		})
@@ -511,9 +512,9 @@ func TestSynthesizePackKit_EgressAllow(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "bin", "snow"), []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	p := &Info{Root: root, Manifest: Manifest{
+	p := &packinfo.Info{Root: root, Manifest: packinfo.Manifest{
 		Name:    "work",
-		Proxies: []PackProxy{{Name: "snow", Egress: []string{"host.docker.internal:11442"}}},
+		Proxies: []packinfo.PackProxy{{Name: "snow", Egress: []string{"host.docker.internal:11442"}}},
 	}}
 	kit, err := SynthesizePackKit(p)
 	if err != nil || kit == "" {

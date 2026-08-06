@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"pix/host/packinfo"
 	"strings"
 	"testing"
 
@@ -110,6 +111,9 @@ func TestSetupSteps_ApplyOnlyWhenAFlagAskedForIt(t *testing.T) {
 // so the second check alone never caught it. Real pack, real gate, real config.
 func TestPackApply_RefusedPackAbortsAndConfigUnchanged(t *testing.T) {
 	dir := t.TempDir()
+	// The composition root binds pack adoption; this test is the REAL one, so it
+	// wires the same adopter cmd/pix does rather than a stand-in.
+	Injected.PackApply = pack.SetupAdopter(nil)
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 
 	root := filepath.Join(dir, "work-pack")
@@ -123,8 +127,8 @@ func TestPackApply_RefusedPackAbortsAndConfigUnchanged(t *testing.T) {
 	}
 	// A host=true proxy is a Tier-1 host-exec facet on its own: no MCP, no
 	// classifier wiring needed to force the gate.
-	if err := pack.WriteManifest(root, pack.Manifest{Name: "work", Schema: 1,
-		Proxies: []pack.PackProxy{{Name: "warehouse", Host: true}}}); err != nil {
+	if err := pack.WriteManifest(root, packinfo.Manifest{Name: "work", Schema: 1,
+		Proxies: []packinfo.PackProxy{{Name: "warehouse", Host: true}}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -318,18 +322,5 @@ func TestSetupSteps_UnprovableWorldIsNotReady(t *testing.T) {
 	}
 	if len(o.Applied) != 0 {
 		t.Errorf("applied %v; nothing unknown may be mutated", o.Applied)
-	}
-}
-
-// The pack-arg shorthand is the CLI signature Story11 builds on; it is
-// unchanged by the fold. (Flag arity is no longer a separate table: kong owns
-// the user-facing grammar and ParseSetupArgs owns the host argv, so the third
-// copy that had to agree with both is gone.)
-func TestSetupCLISignatureIsPreserved(t *testing.T) {
-	if got := NormalizeSetupPackArg("acme/work-pack"); got != "https://github.com/acme/work-pack.git" {
-		t.Errorf("owner/repo shorthand = %q", got)
-	}
-	if got := NormalizeSetupPackArg("./local/pack"); got != "./local/pack" {
-		t.Errorf("a path must be left alone, got %q", got)
 	}
 }

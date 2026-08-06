@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"pix/host/packinfo"
 	"slices"
 	"strings"
 	"sync"
@@ -72,9 +73,9 @@ func TestPackUse_SamePackLockForgeryCannotDeleteUserConfig(t *testing.T) {
 	}
 
 	root := filepath.Join(dir, "pack")
-	mustWritePack(t, root, Manifest{Name: "p", Schema: 1}) // Tier-0
+	mustWritePack(t, root, packinfo.Manifest{Name: "p", Schema: 1}) // Tier-0
 	other := filepath.Join(dir, "other")
-	mustWritePack(t, other, Manifest{Name: "other", Schema: 1})
+	mustWritePack(t, other, packinfo.Manifest{Name: "other", Schema: 1})
 
 	var out bytes.Buffer
 	RunPackUse(fakeGitEnv(nil), &out, []string{root}, registerOK) // activate (legit)
@@ -123,7 +124,7 @@ func TestPackTxnCommit_CfgSaveFailureRollsBackActivationRecord(t *testing.T) {
 	t.Setenv("PIX_CONFIG", cfgPath)
 
 	root := filepath.Join(dir, "pack")
-	mustWritePack(t, root, Manifest{Name: "p", Schema: 1})
+	mustWritePack(t, root, packinfo.Manifest{Name: "p", Schema: 1})
 
 	// Prior on-disk state: activation record + lock attribute "old".
 	prior, err := loadPackTrustStore()
@@ -227,10 +228,10 @@ func TestComputeHostBoM_InertBinNeverInSurface(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "bin", "w"), []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	inert := Manifest{Name: "w", Schema: 1,
-		Proxies: []PackProxy{{Name: "w", Host: true}},
-		Bins:    []packBin{{Name: "fm", Path: "bin/fm", SHA: "aaaa", Host: false}}}
-	b := ComputeHostBoM(&Info{Root: root, Manifest: inert}, "", nil)
+	inert := packinfo.Manifest{Name: "w", Schema: 1,
+		Proxies: []packinfo.PackProxy{{Name: "w", Host: true}},
+		Bins:    []packinfo.Bin{{Name: "fm", Path: "bin/fm", SHA: "aaaa", Host: false}}}
+	b := ComputeHostBoM(&packinfo.Info{Root: root, Manifest: inert}, "", nil)
 	if len(b.Bins) != 0 {
 		t.Fatalf("a host=false [[bin]] must never enter the BoM, got %+v", b.Bins)
 	}
@@ -239,8 +240,8 @@ func TestComputeHostBoM_InertBinNeverInSurface(t *testing.T) {
 		t.Fatal(err)
 	}
 	flipped := inert
-	flipped.Bins = []packBin{{Name: "fm", Path: "bin/fm", SHA: "aaaa", Host: true}}
-	b2 := ComputeHostBoM(&Info{Root: root, Manifest: flipped}, "", nil)
+	flipped.Bins = []packinfo.Bin{{Name: "fm", Path: "bin/fm", SHA: "aaaa", Host: true}}
+	b2 := ComputeHostBoM(&packinfo.Info{Root: root, Manifest: flipped}, "", nil)
 	if len(b2.Bins) != 1 {
 		t.Fatalf("a host=true [[bin]] must enter the BoM, got %+v", b2.Bins)
 	}
@@ -252,9 +253,9 @@ func TestComputeHostBoM_InertBinNeverInSurface(t *testing.T) {
 		t.Error("SILENT INSTALL: flipping [[bin]] host=false→true must change the fingerprint (re-gate)")
 	}
 	// A pack whose ONLY facet is an inert bin is Tier-0 outright.
-	onlyInert := Manifest{Name: "w", Schema: 1,
-		Bins: []packBin{{Name: "fm", Path: "bin/fm", SHA: "aaaa", Host: false}}}
-	if ComputeHostBoM(&Info{Root: root, Manifest: onlyInert}, "", nil).Tier1() {
+	onlyInert := packinfo.Manifest{Name: "w", Schema: 1,
+		Bins: []packinfo.Bin{{Name: "fm", Path: "bin/fm", SHA: "aaaa", Host: false}}}
+	if ComputeHostBoM(&packinfo.Info{Root: root, Manifest: onlyInert}, "", nil).Tier1() {
 		t.Error("an inert (host=false) [[bin]] alone must not raise the tier")
 	}
 }
@@ -271,17 +272,17 @@ func TestComputeHostBoM_InertBinNeverInSurface(t *testing.T) {
 // still lands in cfg.MCP and attaches via --mcp, so an already-registered
 // local server would otherwise run its host command ungated.
 func TestComputeHostBoM_RemoteMCPReferenceRequiresConsent(t *testing.T) {
-	p := &Info{Root: "/p", Manifest: Manifest{
+	p := &packinfo.Info{Root: "/p", Manifest: packinfo.Manifest{
 		Name:         "personal",
-		Integrations: []Integration{{Name: "Docs", MCP: "docs", URL: "https://docs.example.test/mcp"}},
+		Integrations: []packinfo.Integration{{Name: "Docs", MCP: "docs", URL: "https://docs.example.test/mcp"}},
 	}}
 	resolver := func() (string, error) { return "pix-host", nil }
 	remoteOnly := LocalMCPClassifier(localMCPEnv("fastmail"), resolver)
 	if b := ComputeHostBoM(p, "", remoteOnly); !b.Tier1() || len(b.RemoteMCP) != 1 || len(b.MCP) != 0 {
 		t.Errorf("an explicit remote endpoint must require consent, got %+v", b)
 	}
-	localRef := &Info{Root: "/p", Manifest: Manifest{
-		Name: "personal", Integrations: []Integration{{Name: "Notion", MCP: "notion"}},
+	localRef := &packinfo.Info{Root: "/p", Manifest: packinfo.Manifest{
+		Name: "personal", Integrations: []packinfo.Integration{{Name: "Notion", MCP: "notion"}},
 	}}
 	unknown := LocalMCPClassifier(hostenv.Env{System: &systest.Fake{}}, nil)
 	if b := ComputeHostBoM(localRef, "", unknown); !b.Tier1() {
@@ -302,8 +303,8 @@ func TestPackUse_RemoteMCPReferenceRequiresYes(t *testing.T) {
 	dir := isolatePackHost(t)
 	pinLocalMCP(t, "fastmail") // notion is NOT local
 	root := filepath.Join(dir, "pack")
-	mustWritePack(t, root, Manifest{Name: "personal", Schema: 1,
-		Integrations: []Integration{{Name: "Docs", MCP: "docs", URL: "https://docs.example.test/mcp"}}})
+	mustWritePack(t, root, packinfo.Manifest{Name: "personal", Schema: 1,
+		Integrations: []packinfo.Integration{{Name: "Docs", MCP: "docs", URL: "https://docs.example.test/mcp"}}})
 
 	var out bytes.Buffer
 	RunPackUse(localMCPEnv("fastmail"), &out, []string{"--yes", root}, registerOK)
@@ -327,8 +328,8 @@ func TestPackUse_GogReferenceStaysTier0(t *testing.T) {
 	dir := isolatePackHost(t)
 	pinLocalMCP(t) // empty local set — gog is never listed
 	root := filepath.Join(dir, "pack")
-	mustWritePack(t, root, Manifest{Name: "personal", Schema: 1,
-		Integrations: []Integration{{Name: "gog", MCP: config.GWServerName, Env: "GOG_KEYRING"}}})
+	mustWritePack(t, root, packinfo.Manifest{Name: "personal", Schema: 1,
+		Integrations: []packinfo.Integration{{Name: "gog", MCP: config.GWServerName, Env: "GOG_KEYRING"}}})
 
 	var out bytes.Buffer
 	RunPackUse(localMCPEnv(), &out, []string{root}, registerOK) // no --yes, non-TTY
@@ -512,9 +513,9 @@ func TestPackUse_PayloadLockIsNeverAReversibilitySource(t *testing.T) {
 			pinLocalMCP(t)
 
 			rootA := filepath.Join(dir, "a")
-			mustWritePack(t, rootA, Manifest{Name: "a", Schema: 1})
+			mustWritePack(t, rootA, packinfo.Manifest{Name: "a", Schema: 1})
 			rootB := filepath.Join(dir, "b")
-			mustWritePack(t, rootB, Manifest{Name: "b", Schema: 1})
+			mustWritePack(t, rootB, packinfo.Manifest{Name: "b", Schema: 1})
 
 			cfg, err := config.Load()
 			if err != nil {
@@ -570,8 +571,8 @@ func TestLocalMCPClassifier_UnknownFailsClosed(t *testing.T) {
 		t.Error("a failing `mcp --list` probe must classify a non-gog name as host-exec")
 	}
 
-	p := &Info{Root: "/p", Manifest: Manifest{Name: "p",
-		Integrations: []Integration{{Name: "N", MCP: "notion"}}}}
+	p := &packinfo.Info{Root: "/p", Manifest: packinfo.Manifest{Name: "p",
+		Integrations: []packinfo.Integration{{Name: "N", MCP: "notion"}}}}
 	b := ComputeHostBoM(p, "", unknown2)
 	if !b.Tier1() {
 		t.Fatalf("a pack whose MCP cannot be classified must be Tier-1 (gated), got %+v", b)
@@ -585,8 +586,8 @@ func TestLocalMCPClassifier_UnknownFailsClosed(t *testing.T) {
 		t.Errorf("a nil classifier must fail closed too, got %+v", bn)
 	}
 	// gog-only packs stay Tier-0 under an unknown partition.
-	pg := &Info{Root: "/p", Manifest: Manifest{Name: "g",
-		Integrations: []Integration{{Name: "gog", MCP: config.GWServerName}}}}
+	pg := &packinfo.Info{Root: "/p", Manifest: packinfo.Manifest{Name: "g",
+		Integrations: []packinfo.Integration{{Name: "gog", MCP: config.GWServerName}}}}
 	if ComputeHostBoM(pg, "", unknown2).Tier1() {
 		t.Error("a gog-only reference must stay Tier-0 even when the partition is unknown")
 	}
@@ -608,7 +609,7 @@ func TestLocalMCPClassifier_UnknownFailsClosed(t *testing.T) {
 func TestTrustKey_StableAcrossCommits(t *testing.T) {
 	dir := isolatePackHost(t)
 	root := filepath.Join(dir, "clone")
-	mustWritePack(t, root, Manifest{Name: "c", Schema: 1})
+	mustWritePack(t, root, packinfo.Manifest{Name: "c", Schema: 1})
 	const url = "https://example.com/x.git"
 
 	if err := recordPackAdoptionInTrustStore(root, url, "c1"); err != nil {
@@ -622,7 +623,7 @@ func TestTrustKey_StableAcrossCommits(t *testing.T) {
 	if strings.Contains(key, "#") {
 		t.Fatalf("the trust key must not embed the commit, got %q", key)
 	}
-	store.RecordAcceptance(key, PackTrustRecord{Path: CanonicalizePackRoot(root), Remote: url, Commit: "c1", Fingerprint: "fp1"})
+	store.RecordAcceptance(key, PackTrustRecord{Path: packinfo.CanonicalizePackRoot(root), Remote: url, Commit: "c1", Fingerprint: "fp1"})
 	if err := store.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -702,7 +703,7 @@ func TestPackUse_ForgedDirectorySymlinkLockScrubbedNotFollowed(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := filepath.Join(dir, "evil")
-	mustWritePack(t, root, Manifest{Name: "evil", Schema: 1})
+	mustWritePack(t, root, packinfo.Manifest{Name: "evil", Schema: 1})
 	if err := os.Symlink(victim, PackLockPath(root)); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}

@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"pix/host/packinfo"
 	"testing"
 
 	"pix/host/config"
@@ -58,11 +59,11 @@ func hostExecPack(t *testing.T, dir, name, kind, artifact string) string {
 	if err := os.WriteFile(filepath.Join(root, "bin", artifact), content, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	m := Manifest{Name: name, Schema: 1}
+	m := packinfo.Manifest{Name: name, Schema: 1}
 	if kind == "bin" {
-		m.Bins = []packBin{{Name: artifact, Path: filepath.Join("bin", artifact), Host: true, SHA: sha256Hex(content)}}
+		m.Bins = []packinfo.Bin{{Name: artifact, Path: filepath.Join("bin", artifact), Host: true, SHA: sha256Hex(content)}}
 	} else {
-		m.Proxies = []PackProxy{{Name: artifact, Host: true}}
+		m.Proxies = []packinfo.PackProxy{{Name: artifact, Host: true}}
 	}
 	mustWritePack(t, root, m)
 	return root

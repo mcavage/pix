@@ -28,6 +28,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"pix/host/packinfo"
 	"slices"
 	"strings"
 	"testing"
@@ -88,12 +89,12 @@ func TestPackUse_ForgedLockAttributionScrubbed(t *testing.T) {
 	}
 	// A Tier-0 pack (no gate) shipping a forged lock claiming config.GWServerName.
 	root := filepath.Join(dir, "evil")
-	mustWritePack(t, root, Manifest{Name: "evil", Schema: 1})
+	mustWritePack(t, root, packinfo.Manifest{Name: "evil", Schema: 1})
 	if err := os.WriteFile(PackLockPath(root), []byte("mcp = [\"gog\"]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	other := filepath.Join(dir, "other")
-	mustWritePack(t, other, Manifest{Name: "other", Schema: 1})
+	mustWritePack(t, other, packinfo.Manifest{Name: "other", Schema: 1})
 
 	var out bytes.Buffer
 	RunPackUse(fakeGitEnv(nil), &out, []string{root}, registerOK)
@@ -122,7 +123,7 @@ func TestPackUse_ForgedSymlinkLockScrubbedNotFollowed(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := filepath.Join(dir, "evil")
-	mustWritePack(t, root, Manifest{Name: "evil", Schema: 1})
+	mustWritePack(t, root, packinfo.Manifest{Name: "evil", Schema: 1})
 	if err := os.Symlink(victim, PackLockPath(root)); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
@@ -149,8 +150,8 @@ func TestPackUse_ChangedGogAccountRegates(t *testing.T) {
 	dir := isolatePackHost(t)
 	pinLocalMCP(t, config.GWServerName)
 	root := filepath.Join(dir, "pack")
-	mustWritePack(t, root, Manifest{Name: "work", Schema: 1,
-		Integrations: []Integration{{Name: "gog", MCP: config.GWServerName}}})
+	mustWritePack(t, root, packinfo.Manifest{Name: "work", Schema: 1,
+		Integrations: []packinfo.Integration{{Name: "gog", MCP: config.GWServerName}}})
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -362,9 +363,9 @@ func TestRefreshHostPackWrappers_FailClosedNoPartialSet(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "bin", "fm"), binBytes, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	mustWritePack(t, root, Manifest{Name: "work", Schema: 1,
-		Proxies: []PackProxy{{Name: "tool", Host: true}},
-		Bins:    []packBin{{Name: "fm", Path: "bin/fm", SHA: sha256Hex(binBytes), Host: true}}})
+	mustWritePack(t, root, packinfo.Manifest{Name: "work", Schema: 1,
+		Proxies: []packinfo.PackProxy{{Name: "tool", Host: true}},
+		Bins:    []packinfo.Bin{{Name: "fm", Path: "bin/fm", SHA: sha256Hex(binBytes), Host: true}}})
 
 	var out bytes.Buffer
 	RunPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerOK)
@@ -404,13 +405,13 @@ func TestPackTrustStore_IdentityAndProvenance(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 	root := filepath.Join(dir, "clone")
-	mustWritePack(t, root, Manifest{Name: "c", Schema: 1})
+	mustWritePack(t, root, packinfo.Manifest{Name: "c", Schema: 1})
 
 	store, err := loadPackTrustStore()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := store.TrustKey(root); got != "path:"+CanonicalizePackRoot(root) {
+	if got := store.TrustKey(root); got != "path:"+packinfo.CanonicalizePackRoot(root) {
 		t.Errorf("un-adopted pack must key by canonical path, got %q", got)
 	}
 	if err := recordPackAdoptionInTrustStore(root, "https://example.com/x.git", "abc123"); err != nil {

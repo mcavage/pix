@@ -9,6 +9,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/hostenv"
+	"pix/host/packinfo"
 	"pix/host/service"
 )
 
@@ -17,7 +18,7 @@ import (
 // check runs first, apply runs only when check fails, and the same check must
 // pass afterward before Pix reports readiness.
 func RunPackSetup(env hostenv.Env, out io.Writer, root string, requested []string, interactive bool) error {
-	p, err := LoadPack(root)
+	p, err := packinfo.LoadPack(root)
 	if err != nil {
 		return err
 	}
@@ -72,7 +73,7 @@ func RunPackSetup(env hostenv.Env, out io.Writer, root string, requested []strin
 // launcher-owned directory, fingerprints the host surface from the CAPTURED
 // bytes and requires an exact accepted trust record — so check, apply and
 // re-check all execute the same immutable snapshot path.
-func snapshotAcceptedPackSetup(env hostenv.Env, p *Info, wanted map[string]bool) (map[string]string, func(), error) {
+func snapshotAcceptedPackSetup(env hostenv.Env, p *packinfo.Info, wanted map[string]bool) (map[string]string, func(), error) {
 	paths := map[string]string{}
 	cleanup := func() {}
 	if p == nil {
@@ -133,12 +134,12 @@ func PlanPackSetupRequests(roots, requested []string) (map[string][]string, erro
 	owners := map[string][]string{}
 	seenRoots := map[string]bool{}
 	for _, root := range roots {
-		key := CanonicalizePackRoot(root)
+		key := packinfo.CanonicalizePackRoot(root)
 		if seenRoots[key] {
 			continue
 		}
 		seenRoots[key] = true
-		p, err := LoadPack(root)
+		p, err := packinfo.LoadPack(root)
 		if err != nil {
 			return nil, err
 		}
