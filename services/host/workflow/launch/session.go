@@ -312,22 +312,7 @@ func RunSession(spec SessionSpec, deps SessionDeps) error {
 	})
 	if err != nil {
 		if child != nil {
-			// The transition itself succeeded (fn returned nil): only the
-			// refs acquire that runs AFTER it failed. That child is now live
-			// with NO reference lease — a future reaper's zero-holder proof
-			// cannot distinguish it from an orphan. It must never be left
-			// running unreferenced, so kill it rather than waiting it out.
-			fmt.Fprintf(deps.Warn, "pix: warning: %s started but could not be given a reference lease (%v); killing it rather than leaving it live and unreferenced\n", spec.Key, err)
-			if kerr := child.Kill(); kerr != nil {
-				fmt.Fprintf(deps.Warn, "pix: warning: killing %s after the failed reference lease: %v\n", spec.Key, kerr)
-			}
-			// Killing the local `sbx` CLI invocation ends THIS shell's view of
-			// the session, but the sandbox it started is still live on the sbx
-			// runtime and now has no reference lease at all — left alone, it
-			// would sit unreferenced until some future orphan sweep happened to
-			// run. Hand it to the same proof-gated TeardownSandbox a normal
-			// session exit uses, right now, and report exactly what it decided.
-			reportTeardown(deps.Warn, TeardownSandbox(deps.Env, spec.Key, spec.Name, TriggerSession, deps.Teardown))
+			killUnreferencedAndTeardown(spec, deps, child, err)
 		}
 		return err
 	}
@@ -341,6 +326,43 @@ func RunSession(spec SessionSpec, deps SessionDeps) error {
 	}
 	reportTeardown(deps.Warn, TeardownSandbox(deps.Env, spec.Key, spec.Name, TriggerSession, deps.Teardown))
 	return werr
+}
+
+// killUnreferencedAndTeardown is RunSession's failed-ref path: the transition
+// itself succeeded (fn returned nil, child is live) but the refs acquire that
+// runs AFTER it could not — that child is now live with NO reference lease,
+// and a future reaper's zero-holder proof cannot distinguish it from an
+// orphan. It must never be left running unreferenced, so kill it rather than
+// waiting it out, then hand it to the same proof-gated TeardownSandbox a
+// normal session exit uses.
+//
+// child.Kill already blocks until the child's exit is drained off its wait
+// channel, but the explicit child.Wait below makes that reap-before-teardown
+// ordering a property of THIS function's own code, not merely of Kill's
+// current internals: TeardownSandbox's removal asks the sbx runtime to tear
+// down the sandbox this process started, and doing that while the local `sbx`
+// invocation is still, from the kernel's point of view, dying rather than
+// fully reaped is the remove-vs-dying-sbx race — killing the local process
+// only ends THIS shell's view of the session, it says nothing on its own
+// about whether the runtime has caught up, so the safe order is: kill, then
+// WAIT for the reap to be certain, then ask the runtime to remove it.
+func killUnreferencedAndTeardown(spec SessionSpec, deps SessionDeps, child *SessionChild, cause error) {
+	fmt.Fprintf(deps.Warn, "pix: warning: %s started but could not be given a reference lease (%v); killing it rather than leaving it live and unreferenced\n", spec.Key, cause)
+	if kerr := child.Kill(); kerr != nil {
+		fmt.Fprintf(deps.Warn, "pix: warning: killing %s after the failed reference lease: %v\n", spec.Key, kerr)
+	}
+	// Kill has already signalled the child; Wait replays its drained exit
+	// (a no-op over Kill's own result) but is the explicit proof, right here,
+	// that the process is fully reaped before the next line ever runs.
+	_ = child.Wait()
+	// Killing the local `sbx` CLI invocation ends THIS shell's view of the
+	// session, but the sandbox it started is still live on the sbx runtime and
+	// now has no reference lease at all — left alone, it would sit
+	// unreferenced until some future orphan sweep happened to run. Hand it to
+	// the same proof-gated TeardownSandbox a normal session exit uses, right
+	// now that its creator is confirmed gone, and report exactly what it
+	// decided.
+	reportTeardown(deps.Warn, TeardownSandbox(deps.Env, spec.Key, spec.Name, TriggerSession, deps.Teardown))
 }
 
 // reportTeardown prints the one line a last-shell teardown may say, on the

@@ -36,6 +36,7 @@ import (
 
 	"pix/host/lease"
 	"pix/host/sandbox"
+	"pix/host/sys"
 )
 
 // sessionFixture is the fixture sbx: a real script that records argv, becomes
@@ -603,5 +604,142 @@ func TestRunSession_RefLeaseFailsAfterChildStarts_AlsoTearsDown(t *testing.T) {
 	}
 	if !strings.Contains(warn.String(), "kept pix-demo") {
 		t.Errorf("warn output = %q, want it to report the kept teardown", warn.String())
+	}
+}
+
+// killedTeardownRemovesFixture is sessionFixture's run/ls plus removableFixture's
+// (non-force) rm, in one script: the failed-ref path's teardown must reach an
+// ACTUAL removal (not merely a "kept-busy" verdict) for the ordering test
+// below to exercise anything.
+const killedTeardownRemovesFixture = `
+d="$(dirname "$0")"
+echo "$@" >> "$d/argv.log"
+case "$1" in
+ls)
+	if [ -f "$d/removed" ]; then
+		exit 0
+	fi
+	if [ -f "$d/created" ]; then
+		if [ "$2" = "--json" ]; then
+			echo '[{"name":"pix-demo","state":"running","instance_id":"inst-1"}]'
+		else
+			echo "pix-demo  img  running"
+		fi
+	fi
+	exit 0
+	;;
+run)
+	touch "$d/created"
+	while [ ! -f "$d/release" ]; do sleep 0.02; done
+	exit 0
+	;;
+rm)
+	if [ "$2" = "-f" ]; then
+		echo "fixture: refusing a forced removal" >&2
+		exit 3
+	fi
+	touch "$d/removed"
+	exit 0
+	;;
+esac
+exit 0
+`
+
+// reapCheckingSystem wraps a real sys.System and, for exactly the "sbx rm"
+// call removeAndConfirm drives TeardownSandbox's actual removal through,
+// records whether the killed session child had ALREADY been reaped
+// (cmd.Wait returned, cmd.ProcessState set) at the moment that call ran —
+// the ordering the child.Wait-after-Kill fix guarantees on the failed-ref
+// path. Every other call passes straight through to the real System.
+type reapCheckingSystem struct {
+	sys.System
+	cmd    func() *exec.Cmd
+	result chan<- bool
+}
+
+func (s reapCheckingSystem) RunWithin(d time.Duration, name string, args ...string) (string, bool, error) {
+	if name == "sbx" && len(args) > 0 && args[0] == "rm" {
+		c := s.cmd()
+		select {
+		case s.result <- (c != nil && c.ProcessState != nil):
+		default:
+		}
+	}
+	return s.System.RunWithin(d, name, args...)
+}
+
+// TestKillUnreferencedAndTeardown_WaitsForReapBeforeRemoving is the
+// deterministic ordering proof for RunSession's failed-ref path: it drives
+// killUnreferencedAndTeardown directly — the exact function that path calls —
+// against a REAL, still-running session child and a REAL recorded lease, with
+// NO lock contention or timing margin anywhere: nothing else holds refs.lock,
+// so TeardownSandbox's own zero-holder proof succeeds immediately and its
+// removal genuinely runs, every time, not merely on a lucky race window.
+// killUnreferencedAndTeardown kills the child (child.Kill, which blocks on
+// its own wait channel) and calls the explicit child.Wait this fix adds
+// before ever reaching TeardownSandbox; the assertion sits directly on the
+// System.RunWithin call TeardownSandbox's removal is driven through, so it
+// catches a REGRESSION — say, a future edit that fires the removal off a
+// goroutine, or moves it before Kill — not just today's happy path. Getting
+// this order backwards is the "remove-vs-dying-sbx" race: asking the sbx
+// runtime to remove a sandbox while its own creator process is still, from
+// the kernel's point of view, dying rather than fully reaped.
+func TestKillUnreferencedAndTeardown_WaitsForReapBeforeRemoving(t *testing.T) {
+	isolateState(t)
+	fixture := installFakeSbx(t, killedTeardownRemovesFixture)
+	ws := t.TempDir()
+	key := SessionName(ws)
+	name := "pix-demo"
+
+	var cmd *exec.Cmd
+	spawn := fixtureSpawn(t)
+	captureSpawn := func(argv []string) *exec.Cmd {
+		cmd = spawn(argv)
+		return cmd
+	}
+
+	child, err := StartSbxSession(captureSpawn([]string{"run", "--name", name}), fastPoll(), true, name)
+	if err != nil {
+		t.Fatalf("StartSbxSession: %v", err)
+	}
+	waitForFile(t, filepath.Join(fixture, "created"), 10*time.Second)
+	if !child.Appeared {
+		t.Fatal("the fixture session never became visible")
+	}
+
+	// Record exactly what a real create's transition would have written —
+	// TeardownSandbox's ownership check (TriggerSession requires it) needs a
+	// valid record, fingerprint and invocation on disk, same as production.
+	fp := sandbox.Fingerprint{"static_mcp": "slack"}
+	if _, rerr := RecordSessionCreation(realEnv(), key, name, fp, []string{"--model", "m"}); rerr != nil {
+		t.Fatalf("RecordSessionCreation: %v", rerr)
+	}
+
+	reapedAtRemoval := make(chan bool, 1)
+	env := realEnv()
+	env.System = reapCheckingSystem{System: env.System, cmd: func() *exec.Cmd { return cmd }, result: reapedAtRemoval}
+
+	var warn strings.Builder
+	spec := SessionSpec{Key: key, Name: name, Creating: true, Fingerprint: fp}
+	deps := SessionDeps{Env: env, Warn: &warn}
+
+	// This is the call under test: RunSession's failed-ref branch calls
+	// exactly this, with exactly this shape of argument (a child already
+	// live, no reference lease held for it).
+	killUnreferencedAndTeardown(spec, deps, child, fmt.Errorf("injected: refs lease acquire failed"))
+
+	if cmd.ProcessState == nil {
+		t.Fatal("the session child was never reaped")
+	}
+	if _, serr := os.Stat(filepath.Join(fixture, "removed")); serr != nil {
+		t.Fatalf("teardown never actually removed the sandbox (fixture's removed marker is missing): %v; warn=%q", serr, warn.String())
+	}
+	select {
+	case reapedFirst := <-reapedAtRemoval:
+		if !reapedFirst {
+			t.Fatal("`sbx rm` ran BEFORE the killed session child was reaped — the remove-vs-dying-sbx race")
+		}
+	default:
+		t.Fatal("the instrumented `sbx rm` call was never observed — the removal path was not exercised")
 	}
 }

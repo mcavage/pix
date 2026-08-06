@@ -393,6 +393,47 @@ func TestPackUnitWiring_RestartsChangedService(t *testing.T) {
 	}
 }
 
+// TestReconcilePackUnits_ConcurrentCallsDoNotRaceOnPackUnits is the regression
+// proof that reconcilePackUnits never mutates s.packUnits outside s.mu: it
+// drives many concurrent reconcile passes (same views, so each pass is a
+// no-op diff after the first) against ONE supervisor from many goroutines.
+// Before the fix, prev := s.packUnits handed out the LIVE map and every
+// caller then read/deleted/wrote it with no lock held at all — `go test
+// -race` flags that as a data race even though no single test assertion
+// would ever catch the wrong RESULT. This test's only job is to run under
+// -race and stay clean; the reconcile outcomes themselves are already
+// covered above.
+func TestReconcilePackUnits_ConcurrentCallsDoNotRaceOnPackUnits(t *testing.T) {
+	isolatePackState(t)
+	bin := buildPackFixture(t)
+	root := writeUnitPack(t, bin, fileSHA(t, bin))
+	acceptSurface(t, root)
+	views := acceptedViews(t, root)
+
+	sup := &supervisor{}
+	t.Cleanup(sup.shutdown)
+	// Prime the tree with the unit once, outside the race window, so every
+	// concurrent pass below is a same-spec no-op diff (Add/Remove churn on
+	// the SAME unit name from many goroutines is the supervise tree's own
+	// concern, not what this test is proving).
+	if _, err := sup.reconcilePackUnits("", views); err != nil {
+		t.Fatalf("priming reconcile: %v", err)
+	}
+
+	const goroutines = 8
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			if _, err := sup.reconcilePackUnits("", views); err != nil {
+				t.Errorf("concurrent reconcile: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+}
+
 // TestMergePackServices_TwoPacksBothSurvive: two packs declaring distinct unit
 // names both come through mergePackServices intact, with no error — the
 // aggregation step behind the fix to the "one reconcile call per pack"

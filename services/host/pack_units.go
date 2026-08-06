@@ -109,21 +109,27 @@ func (s *supervisor) reconcilePackUnits(selfPath string, views []pack.AcceptedSe
 		wanted[v.Name] = spec
 	}
 
+	// Clone the previous ledger under the lock so the diff/mutate work below
+	// runs entirely on a private copy: s.packUnits itself is never touched
+	// outside s.mu, and a concurrent reconcile pass never observes a
+	// half-updated map. The clone is swapped back onto s.packUnits — one
+	// final atomic assignment under the lock — only once this pass's full
+	// result is known.
 	s.mu.Lock()
-	if s.packUnits == nil {
-		s.packUnits = map[string]supervise.UnitSpec{}
+	next := make(map[string]supervise.UnitSpec, len(s.packUnits))
+	for name, spec := range s.packUnits {
+		next[name] = spec
 	}
-	prev := s.packUnits
 	s.mu.Unlock()
 
-	for name := range prev {
-		if next, ok := wanted[name]; ok && reflect.DeepEqual(prev[name], next) {
+	for name, spec := range next {
+		if wantedSpec, ok := wanted[name]; ok && reflect.DeepEqual(spec, wantedSpec) {
 			continue
 		}
 		if err := tree.Remove(name); err != nil {
 			errs = append(errs, fmt.Errorf("pack unit %s: remove: %w", name, err))
 		}
-		delete(prev, name)
+		delete(next, name)
 	}
 
 	holders := map[string]*pluginHolder{}
@@ -137,7 +143,12 @@ func (s *supervisor) reconcilePackUnits(selfPath string, views []pack.AcceptedSe
 			continue
 		}
 		holders[name] = h
-		prev[name] = spec
+		next[name] = spec
 	}
+
+	s.mu.Lock()
+	s.packUnits = next
+	s.mu.Unlock()
+
 	return holders, errors.Join(errs...)
 }
