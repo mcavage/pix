@@ -136,8 +136,7 @@ func (s *GoPluginService) probe(budget time.Duration) error {
 	if s.health == nil {
 		return nil
 	}
-	// Time EVERY probe, failures included: the latency of the probe that timed
-	// out is the number that explains the eviction that follows it.
+	// Time EVERY probe, failures included: the latency of the probe that timed out is the number that explains the eviction that follows it.
 	start := time.Now()
 	defer func() {
 		us := time.Since(start).Microseconds()
@@ -172,8 +171,7 @@ type permanentErr struct{ err error }
 
 func (e permanentErr) Error() string { return e.err.Error() }
 func (e permanentErr) Unwrap() error { return e.err }
-
-func permanent(err error) bool { var p permanentErr; return errors.As(err, &p) }
+func permanent(err error) bool       { var p permanentErr; return errors.As(err, &p) }
 
 // start reattaches to a surviving child naming THIS unit, alive; otherwise it spawns a fresh one.
 func (s *GoPluginService) start() (*goplugin.Client, any, bool, error) {
@@ -247,7 +245,6 @@ func dispense(client *goplugin.Client, kind string) (any, error) {
 	}
 	return rpc.Dispense(kind)
 }
-
 func clientPID(c *goplugin.Client) int {
 	if rc := c.ReattachConfig(); rc != nil {
 		return rc.Pid

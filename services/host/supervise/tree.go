@@ -129,7 +129,6 @@ func (t *Tree) spec(unit string) suture.Spec {
 		DontPropagateTermination: true,
 	}
 }
-
 func (t *Tree) logf(format string, a ...any) {
 	if t.logger != nil {
 		t.logger(format, a...)

@@ -135,7 +135,7 @@
       "exits": 0
     },
     "pix/host/supervise": {
-      "prod_loc": 1050,
+      "prod_loc": 1028,
       "exports": 36,
       "globals": 21,
       "edges": 1,
