@@ -216,6 +216,29 @@ func TestAcquireShared_UnlinkWithoutRecreateSelfHeals(t *testing.T) {
 // DeadlineExceeded-wrapped error once ctx expires (since something is
 // replacing the file on essentially every attempt, it may never observe a
 // stable file within the window).
+//
+// Root cause of this test's original flake (investigated, not guessed): it
+// is a TEST-ONLY synchronization bug, not a production one. acquireValidated
+// (lock.go) never returns success without validateLive proving the fd it
+// holds is still the CURRENT path's inode — that proof is correct. The bug
+// was this test's own racer goroutine: it mutated the file in an
+// unconditional, uncoordinated loop with no idea whether AcquireShared had
+// already won, so a stray unlink+recreate could still land in the gap
+// between AcquireShared returning a genuine success and this test's fresh
+// prober observing it — first because the original code only stopped the
+// racer via a `defer` that (for the nil-err path) ran AFTER that observation
+// already happened, and residually, even once that ordering is fixed, because
+// closing a "please stop" channel can't interrupt a mutation the racer
+// goroutine already committed to moments earlier on an independent OS
+// thread. Both classes are closed the same way: the racer now goes through
+// the SAME kernel flock arbitration AcquireShared itself uses (a fresh
+// RefLease.TryExclusive() probe) before every mutation, so "is it safe to
+// replace this file right now" is answered by the kernel, atomically, the
+// instant before the racer acts — not by a side-channel signal that can go
+// stale between being read and being acted on. Once AcquireShared genuinely
+// holds the file, every subsequent racer probe conflicts (EX vs the held SH)
+// and the racer stands down for good; the assertion below is therefore exact,
+// not merely likely.
 func TestAcquireShared_ContinuousReplaceRetriesWithinDeadline(t *testing.T) {
 	dir := mustDir(t)
 	rl, err := OpenRefLease(dir)
@@ -234,18 +257,39 @@ func TestAcquireShared_ContinuousReplaceRetriesWithinDeadline(t *testing.T) {
 				return
 			default:
 			}
-			os.Remove(rl.Path())
-			os.WriteFile(rl.Path(), nil, 0o600)
+			// Probe-before-mutate: only replace the file if a fresh,
+			// independent handle can currently win an EX lock on it. If
+			// AcquireShared already holds a genuine SH lock on the CURRENT
+			// inode, this conflicts (ErrHeld) and the racer skips this
+			// iteration instead of blindly unlinking out from under a
+			// winner — the kernel, not a side-channel flag, is the
+			// arbiter of "is it safe to replace this file right now".
+			if prober, perr := OpenRefLease(dir); perr == nil {
+				if prober.TryExclusive() == nil {
+					os.Remove(rl.Path())
+					os.WriteFile(rl.Path(), nil, 0o600)
+				}
+				prober.Close()
+			}
 			time.Sleep(time.Microsecond)
 		}
 	}()
-	defer func() { close(stop); <-done }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
 	start := time.Now()
 	err = rl.AcquireShared(ctx)
 	elapsed := time.Since(start)
+
+	// Stop the racer and BLOCK until it has fully exited before inspecting
+	// any post-acquire state, so a straggler iteration already in flight
+	// (harmless now that it self-checked before mutating) is never still
+	// running when we assert. A `defer` placed before an early `return`
+	// inside the `if err == nil` branch below still only runs AFTER that
+	// branch's statements (including assertGenuinelyHeld) have executed, so
+	// it can't serve as this barrier.
+	close(stop)
+	<-done
 
 	if elapsed > 2*time.Second {
 		t.Fatalf("AcquireShared under continuous replacement took %v, want bounded near the 150ms deadline (never hang)", elapsed)
@@ -262,6 +306,77 @@ func TestAcquireShared_ContinuousReplaceRetriesWithinDeadline(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("AcquireShared under continuous replacement = %v, want nil or a wrapped context.DeadlineExceeded", err)
 	}
+}
+
+// TestAcquireShared_ReplaceDuringBlockedAcquireIsGenuinelyHeld is the
+// deterministic regression for the flake investigated in
+// TestAcquireShared_ContinuousReplaceRetriesWithinDeadline. That test drives
+// "replace lands while AcquireShared is in-flight" by racing a clock against
+// a free-running background goroutine; the flake turned out to be in the
+// TEST's own synchronization (see the barrier fix above), not in
+// acquireValidated — but a clock race, even a fixed one, still can't PROVE
+// the in-flight-replace path is exercised on every run. This test forces
+// that exact shape by hand, with zero reliance on scheduling or sleeps:
+//
+//  1. A second handle takes an EX lock on the CURRENT inode BEFORE the
+//     AcquireShared goroutine is even started, so — by program order, not
+//     timing — its first flock(2) attempt is guaranteed to observe
+//     contention and block on that same (about-to-be-replaced) inode.
+//  2. The file is replaced while that flock(2) is still pending, then the
+//     EX lock is released: the pending flock(2) now succeeds on the
+//     now-orphaned inode, forcing validateLive to detect staleness and
+//     reopen — deterministically exercising the mid-flight-replace path
+//     that TestAcquireShared_ContinuousReplaceRetriesWithinDeadline could
+//     only ever hit by chance.
+//  3. AcquireShared must still return nil, and a fresh prober must still
+//     observe the lock as genuinely held on the CURRENT path.
+func TestAcquireShared_ReplaceDuringBlockedAcquireIsGenuinelyHeld(t *testing.T) {
+	dir := mustDir(t)
+	rl, err := OpenRefLease(dir)
+	if err != nil {
+		t.Fatalf("OpenRefLease: %v", err)
+	}
+	defer rl.Close()
+
+	// Deterministically force "replace lands mid-acquire": take an EX lock
+	// on the CURRENT inode first, so AcquireShared's first flock(2) is
+	// guaranteed (by program order, not timing) to observe contention and
+	// block on that same inode.
+	blocker, err := OpenRefLease(dir)
+	if err != nil {
+		t.Fatalf("OpenRefLease blocker: %v", err)
+	}
+	if err := blocker.TryExclusive(); err != nil {
+		t.Fatalf("blocker TryExclusive: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	acquireErr := make(chan error, 1)
+	go func() { acquireErr <- rl.AcquireShared(ctx) }()
+
+	// rl's goroutine is now guaranteed blocked on the pre-replace inode
+	// (blocker still holds it). Replace the file out from under it, then
+	// release the blocker so the pending flock(2) succeeds on the now-
+	// orphaned inode, forcing exactly one validateLive-detected stale retry.
+	replaceFile(t, rl.Path())
+	if err := blocker.Close(); err != nil {
+		t.Fatalf("blocker Close: %v", err)
+	}
+
+	select {
+	case err = <-acquireErr:
+	case <-time.After(3 * time.Second):
+		t.Fatal("AcquireShared did not return after the forced mid-flight replace (want it to reopen and succeed)")
+	}
+	if err != nil {
+		t.Fatalf("AcquireShared after forced mid-flight replace = %v, want nil (transparent reopen+retry)", err)
+	}
+
+	// No further mutation is in flight at this point (the racer this test
+	// replaces was the source of the flake, not a needed ingredient): this
+	// assertion is now unconditionally deterministic.
+	assertGenuinelyHeld(t, dir)
 }
 
 // --- LifecycleLock.AcquireExclusive / TryExclusive ---
