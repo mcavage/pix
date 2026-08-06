@@ -1,9 +1,4 @@
-// Package supervise is the host's supervision tree: ONE root supervisor with a
-// child supervisor per unit (Suture v4), running go-plugin subprocesses as its
-// units. Suture owns restart policy; this package owns what Suture cannot know
-// — what a unit IS (staged, sha-pinned, env-isolated, health-probed,
-// reattachable) and what pix-host must SEE (typed status and events). One
-// child supervisor per unit: a unit returning ErrDoNotRestart takes out only its own subtree.
+// Package supervise is the host's supervision tree: ONE root supervisor with a child supervisor per unit (Suture v4), running go-plugin subprocesses as its units. Suture owns restart policy; this package owns what Suture cannot know — what a unit IS (staged, sha-pinned, env-isolated, health-probed, reattachable) and what pix-host must SEE (typed status and events). One child supervisor per unit: a unit returning ErrDoNotRestart takes out only its own subtree.
 package supervise
 
 import (
@@ -14,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -50,15 +46,11 @@ func DefaultBudgets() Budgets {
 	}
 }
 
-// UnitSpec is the SINGLE shape the supervisor consumes — built-in self-exec,
-// [plugins.*] override, pack [[services]] entry — so no path skips Validate.
+// UnitSpec is the SINGLE shape the supervisor consumes — built-in self-exec, [plugins.*] override, pack [[services]] entry — so no path skips Validate.
 type UnitSpec struct {
 	Name string // unit name (also the reattach state key)
 	Kind string // go-plugin map key to dispense (memory, broker, ...)
-
-	// Exactly one of SelfExec or Path. SelfExec re-execs THIS binary as
-	// `<self> plugin <kind>` (no third-party bytes, nothing to pin); Path is an
-	// external executable, which MUST carry a full sha256 pin.
+	// Exactly one of SelfExec or Path. SelfExec re-execs THIS binary as `<self> plugin <kind>` (no third-party bytes, nothing to pin); Path is an external executable, which MUST carry a full sha256 pin.
 	SelfExec bool
 	Path     string
 	SHA      string
@@ -68,10 +60,7 @@ type UnitSpec struct {
 	EnvGrant []string // explicit KEY=VALUE grants for THIS unit only
 }
 
-var (
-	envNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
-	shaHexRe  = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
-)
+var envNameRe, shaHexRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`), regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
 
 // Validate fails closed. Every rejection here is a launch that does not happen.
 func (s UnitSpec) Validate() error {
@@ -94,8 +83,7 @@ func (s UnitSpec) Validate() error {
 		}
 	}
 	for _, n := range s.EnvAllow {
-		// Names only: an '=' assignment, an op:// ref or a pasted token is a
-		// VALUE, and values never travel in a unit declaration.
+		// Names only: an '=' assignment, an op:// ref or a pasted token is a VALUE, and values never travel in a unit declaration.
 		if !envNameRe.MatchString(n) {
 			return fmt.Errorf("unit %s: env %q is not a bare reference name (names only, never values)", s.Name, n)
 		}
@@ -109,11 +97,21 @@ func (s UnitSpec) Validate() error {
 	return nil
 }
 
-// identity is the fingerprint a reattach must match: change the executable, pin, kind or argv and the surviving process is NOT this unit.
+// identity is the admission fingerprint a reattach must match: change the executable, pin, kind, argv or the ENV SURFACE and the surviving process is NOT this unit. EnvAllow is hashed sorted (a reordered allowlist is the same grant); EnvGrant enters as per-entry sha256 digests, so a secret VALUE never leaves the process — not in the reattach state, not even as this hash's on-disk preimage. Sections are length-framed AND separated, so an argv element can never collide with an allow name.
 func (s UnitSpec) identity() string {
+	allow := append([]string(nil), s.EnvAllow...)
+	sort.Strings(allow)
+	grants := make([]string, 0, len(s.EnvGrant))
+	for _, kv := range s.EnvGrant {
+		grants = append(grants, fmt.Sprintf("%x", sha256.Sum256([]byte(kv))))
+	}
+	sort.Strings(grants)
 	h := sha256.New()
-	for _, part := range append([]string{s.Name, s.Kind, s.Path, strings.ToLower(s.SHA), fmt.Sprint(s.SelfExec)}, s.Argv...) {
-		fmt.Fprintf(h, "%d:%s\x00", len(part), part)
+	for _, sec := range [][]string{{s.Name, s.Kind, s.Path, strings.ToLower(s.SHA), fmt.Sprint(s.SelfExec)}, s.Argv, allow, grants} {
+		for _, part := range sec {
+			fmt.Fprintf(h, "%d:%s\x00", len(part), part)
+		}
+		fmt.Fprint(h, "|")
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -126,8 +124,7 @@ func redactKV(kv string) string {
 	return "<redacted>"
 }
 
-// NewExternalUnit is the constructor every EXTERNAL unit is wired through (an
-// operator's [plugins.*] block, a pack-admitted [[services]] entry), so a pack can never obtain a unit the config path could not.
+// NewExternalUnit is the constructor every EXTERNAL unit is wired through (an operator's [plugins.*] block, a pack-admitted [[services]] entry), so a pack can never obtain a unit the config path could not.
 func NewExternalUnit(name, kind, path, sha string, argv, envAllow []string) (UnitSpec, error) {
 	u := UnitSpec{Name: name, Kind: kind, Path: path, SHA: strings.ToLower(strings.TrimSpace(sha)), Argv: argv, EnvAllow: envAllow}
 	if err := u.Validate(); err != nil {
@@ -136,8 +133,7 @@ func NewExternalUnit(name, kind, path, sha string, argv, envAllow []string) (Uni
 	return u, nil
 }
 
-// FilterEnv builds a child environment from an allowlist of names plus explicit
-// grants; nothing else crosses the process boundary (cloud creds, agent sockets, a bearer exactly one unit may see).
+// FilterEnv builds a child environment from an allowlist of names plus explicit grants; nothing else crosses the process boundary (cloud creds, agent sockets, a bearer exactly one unit may see).
 func FilterEnv(allow []string, grant []string) []string {
 	allowed := make(map[string]bool, len(allow))
 	for _, n := range allow {
@@ -166,10 +162,7 @@ func FileSHA256(path string) (string, error) {
 	return hex.EncodeToString(sum.Sum(nil)), nil
 }
 
-// StageExecutable copies an external unit's binary into the supervisor-owned
-// staging dir, verifies the pin against the bytes it copied, and returns the
-// STAGED path. Execing that copy (never the original) closes the
-// verify-then-exec TOCTOU; a mismatch leaves nothing behind.
+// StageExecutable copies an external unit's binary into the supervisor-owned staging dir, verifies the pin against the bytes it copied, and returns the STAGED path. Execing that copy (never the original) closes the verify-then-exec TOCTOU; a mismatch leaves nothing behind.
 func StageExecutable(stageDir, unit, src, sha string) (string, error) {
 	want := strings.ToLower(strings.TrimSpace(sha))
 	if !shaHexRe.MatchString(want) {
@@ -207,11 +200,29 @@ func StageExecutable(stageDir, unit, src, sha string) (string, error) {
 	if err := os.Rename(tmp.Name(), dst); err != nil {
 		return "", fmt.Errorf("stage unit binary: %w", err)
 	}
+	sweepStaged(stageDir, unit, filepath.Base(dst))
 	return dst, nil
 }
 
-// Holder carries the dispensed client for one unit. A restart swaps it under
-// the readers, so an HTTP shim never learns its backing process changed; Use tracks in-flight calls so a stop can DRAIN.
+// sweepStaged removes THIS unit's superseded staged copies (an old pin's bytes have no business staying executable in the stage dir) and its orphaned .stage-* temp files — never the copy just staged, and never a sibling's: the suffix must be exactly the "-<12 hex>" shape StageExecutable writes, or ".stage-*" (exactly "-" + 12 lowercase hex, so unit "me" can never sweep unit "mem"'s copies, nor unit "a" a sibling "a-b"'s). Best-effort, only after a successful stage; a sweep failure never blocks a launch.
+func sweepStaged(stageDir, unit, current string) {
+	ents, err := os.ReadDir(stageDir)
+	if err != nil {
+		return
+	}
+	for _, e := range ents {
+		name := e.Name()
+		if name == current || e.IsDir() || !strings.HasPrefix(name, unit) {
+			continue
+		}
+		rest := strings.TrimPrefix(name, unit)
+		if (len(rest) == 13 && rest[0] == '-' && strings.Trim(rest[1:], "0123456789abcdef") == "") || strings.HasPrefix(rest, ".stage-") {
+			_ = os.Remove(filepath.Join(stageDir, name))
+		}
+	}
+}
+
+// Holder carries the dispensed client for one unit. A restart swaps it under the readers, so an HTTP shim never learns its backing process changed; Use tracks in-flight calls so a stop can DRAIN.
 type Holder struct {
 	mu       sync.RWMutex
 	impl     any
@@ -236,8 +247,7 @@ func (h *Holder) Set(impl any, c *goplugin.Client) {
 // Clear takes the unit out of service (callers see "unavailable" immediately).
 func (h *Holder) Clear() { h.Set(nil, nil) }
 
-// Use runs fn against the dispensed impl holding a drain reference, so a
-// shutdown waits for it (up to the drain budget) instead of killing it midway.
+// Use runs fn against the dispensed impl holding a drain reference, so a shutdown waits for it (up to the drain budget) instead of killing it midway.
 func (h *Holder) Use(fn func(impl any) error) error {
 	impl := h.Get()
 	if impl == nil {

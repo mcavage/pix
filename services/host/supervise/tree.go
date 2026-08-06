@@ -1,5 +1,4 @@
-// tree.go — the root supervisor, the per-unit child supervisors, and the typed
-// status/event surface the rest of pix-host reads instead of grepping logs.
+// tree.go — the root supervisor, the per-unit child supervisors, and the typed status/event surface the rest of pix-host reads instead of grepping logs.
 
 package supervise
 
@@ -68,8 +67,7 @@ type Event struct {
 	Err     string
 }
 
-// eventRing caps retained events; a supervisor must never grow without bound.
-const eventRing = 256
+const eventRing = 256 // caps retained events; a supervisor must never grow without bound
 
 // Config builds a Tree; everything is explicit so a test can point it at temp dirs and shrunk budgets without touching global state.
 type Config struct {
@@ -118,9 +116,7 @@ func NewTree(cfg Config) *Tree {
 	return t
 }
 
-// spec is the Suture spec the root and every child supervisor run under.
-// DontPropagateTermination: a unit that terminates takes out its OWN subtree
-// only — one bad unit never kills the root or a sibling.
+// spec is the Suture spec the root and every child supervisor run under. DontPropagateTermination: a unit that terminates takes out its OWN subtree only — one bad unit never kills the root or a sibling.
 func (t *Tree) spec(unit string) suture.Spec {
 	return suture.Spec{
 		EventHook:                t.sutureHook(unit),
@@ -158,8 +154,7 @@ func (t *Tree) Start(ctx context.Context) {
 	}()
 }
 
-// Add supervises a unit and BLOCKS until its first generation is healthy, or
-// that attempt fails loudly at `serve` startup; a unit that dies later is Suture's problem.
+// Add supervises a unit and BLOCKS until its first generation is healthy, or that attempt fails loudly at `serve` startup; a unit that dies later is Suture's problem.
 func (t *Tree) Add(spec UnitSpec, health HealthFunc) (*Holder, error) {
 	if err := spec.Validate(); err != nil {
 		return nil, err
@@ -175,10 +170,8 @@ func (t *Tree) Add(spec UnitSpec, health HealthFunc) (*Holder, error) {
 	}
 	t.units[spec.Name] = &UnitStatus{Name: spec.Name, Kind: spec.Kind, State: UnitStarting, Since: time.Now()}
 	t.mu.Unlock()
-
 	svc := &GoPluginService{spec: spec, health: health, holder: &Holder{}, tree: t, ready: make(chan error, 1)}
-	// One child supervisor per unit: its restart accounting, backoff and
-	// permanent death are its own.
+	// One child supervisor per unit: its restart accounting, backoff and permanent death are its own.
 	child := suture.New("unit."+spec.Name, t.spec(spec.Name))
 	child.Add(svc)
 	token := t.root.Add(child)
@@ -199,8 +192,7 @@ func (t *Tree) Add(spec UnitSpec, health HealthFunc) (*Holder, error) {
 	}
 }
 
-// abandon takes a unit that never came up back OUT of the tree — without it the
-// child supervisor keeps restarting a unit whose caller already gave up forever.
+// abandon takes a unit that never came up back OUT of the tree — without it the child supervisor keeps restarting a unit whose caller already gave up forever.
 func (t *Tree) abandon(name string, token suture.ServiceToken, cause error) error {
 	if err := t.root.RemoveAndWait(token, t.budgets.Stop); err != nil {
 		t.logf("supervise: unit %s did not leave the tree cleanly: %v", name, err)
@@ -232,9 +224,7 @@ func (t *Tree) Stop() {
 	goplugin.CleanupClients()
 }
 
-// Remove stops and forgets one supervised unit — reconciliation's vocabulary
-// for "no longer wanted" (dropped from a desired set, or superseded ahead of a
-// same-name Add with a changed spec). A name never supervised is a no-op.
+// Remove stops and forgets one supervised unit — reconciliation's vocabulary for "no longer wanted" (dropped from a desired set, or superseded ahead of a same-name Add with a changed spec). A name never supervised is a no-op.
 func (t *Tree) Remove(name string) error {
 	t.mu.Lock()
 	st, ok := t.units[name]
