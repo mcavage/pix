@@ -17,7 +17,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -140,7 +139,11 @@ func TestMemoryListenerSurvivesUnitRestart(t *testing.T) {
 
 		start := time.Now()
 		_, rpcErr, terr := rpcTry(url, "identity", nil)
-		if terr != nil && !errors.Is(terr, net.ErrClosed) {
+		// memoryProxyMux always turns "no unit dispensed" into a clean JSON-RPC
+		// error (see serve_plugin.go); the listener never closes the connection
+		// out from under a call, so any transport error here is a real bug, not
+		// a race to tolerate.
+		if terr != nil {
 			t.Fatalf("call during restart failed at the transport, not the RPC: %v", terr)
 		}
 		if took := time.Since(start); took > 9*time.Second {

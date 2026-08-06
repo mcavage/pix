@@ -21,8 +21,9 @@
 #     of that name already exists.
 #   * It never changes your working directory out from under you: all work
 #     happens in a temp tree, and the final check asserts $PWD is what it was.
-#   * It restores host state it changed (a serve it installed is uninstalled; a
-#     serve it stopped is restarted) in a trap that runs on every exit path.
+#   * It restores host state it changed (a serve it installed is uninstalled,
+#     which also covers a serve it stopped mid-run) in a trap that runs on
+#     every exit path.
 #
 # Exit codes: 0 all checks passed, 1 a check failed, 2 the run was incomplete
 # (missing prerequisite, refused to start, cleanup could not finish).
@@ -38,7 +39,6 @@ PASS=0; FAIL=0; SKIP=0
 CREATED_BOXES=()
 EXTRA_BOXES=()   # digest-named boxes this run created (names discovered, not chosen)
 INSTALLED_SERVE=0
-STOPPED_SERVE=0
 WORK=""
 
 for arg in "$@"; do
@@ -144,9 +144,6 @@ cleanup() {
     pix serve uninstall >/dev/null 2>&1 \
       && printf '  launchd service uninstalled\n' \
       || printf '  %s could not uninstall the launchd service; run: pix serve uninstall\n' "$(red '!')"
-  fi
-  if [ "$STOPPED_SERVE" = 1 ]; then
-    (pix serve >/dev/null 2>&1 &) ; printf '  restarted the serve this script stopped\n'
   fi
   [ -n "$WORK" ] && rm -rf "$WORK"
   # cwd safety is an ASSERTION, not a hope.
@@ -379,7 +376,6 @@ if [ "$(uname)" = "Darwin" ] && [ "$INSTALLED_SERVE" = 1 ]; then
       sleep 10
       if pix serve status 2>/dev/null | grep -q "not running"; then pass "'serve stop' is mode-aware (KeepAlive did not respawn it)"
       else fail "'serve stop' is mode-aware" "serve came back after stop — it was stopped by pid, not through launchd"; fi
-      STOPPED_SERVE=0
     else
       fail "'serve stop'" "returned non-zero"
     fi

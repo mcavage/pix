@@ -97,8 +97,8 @@ Safety properties of the script itself, asserted or enforced:
   names it watched appear during its own run). It contains no `pix rm --all`
   and no `--force`, and greps ITSELF for those shapes before doing anything.
 - It works in a temp tree and asserts `$PWD` is unchanged at exit.
-- It uninstalls a launchd service it installed and restarts a serve it stopped,
-  in a trap that runs on every exit path.
+- It uninstalls a launchd service it installed (which also covers a serve it
+  stopped mid-run) in a trap that runs on every exit path.
 
 **Exit codes:** `0` every check passed · `1` a check failed · `2` incomplete
 (missing prerequisite, refused to start, or any SKIP — an incomplete run is not
