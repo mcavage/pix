@@ -22,7 +22,7 @@ import (
 func (c *memoryCmd) Help() string {
 	return `Inspect and repair the agent's recall without launching a sandbox.
 
-Facts live in the memory daemon (:11435), started by 'pix serve' — these verbs
+Facts live in the memory daemon (:11435), started by 'pix serve': these verbs
 auto-start it if it is down, and exit 3 if it cannot be reached.
 
 The only unreproducible artifact is memory.db; config.toml is recreated with
@@ -54,7 +54,7 @@ func withMemory(d *cli.Deps, sub string, call func(memory.CLI) error) error {
 	case err == nil:
 		return nil
 	case errors.Is(err, rpc.ErrServiceDown):
-		fmt.Fprintf(d.Err, "pix memory %s: service unreachable — start it with `pix serve`\n", sub)
+		fmt.Fprintf(d.Err, "pix memory %s: service unreachable: start it with `pix serve`\n", sub)
 		return cli.SilentError{Code: rpc.ExitServiceDown}
 	default:
 		return fmt.Errorf("memory %s: %w", sub, err)

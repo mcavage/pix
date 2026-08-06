@@ -1,6 +1,6 @@
 ---
 name: deliver
-description: Autonomous full-rigor delivery loop — product crew first, then engineering, spec to proven, committed, review-clean code without returning mid-flight. Use for "cook and deliver" or "full send".
+description: Autonomous full-rigor delivery loop (product crew first, then engineering, spec to proven, committed, review-clean code without returning mid-flight). Use for "cook and deliver" or "full send".
 ---
 # deliver
 

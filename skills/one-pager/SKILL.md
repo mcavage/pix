@@ -1,6 +1,6 @@
 ---
 name: one-pager
-description: Write an executive one-pager or decision document — a single page driving a specific ask (approval, budget, priority call). Use for "write a one-pager", "make the case for X", or "I need buy-in on Y".
+description: Write an executive one-pager or decision document, a single page driving a specific ask (approval, budget, priority call). Use for "write a one-pager", "make the case for X", or "I need buy-in on Y".
 ---
 # one-pager
 

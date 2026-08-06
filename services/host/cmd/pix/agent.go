@@ -153,7 +153,7 @@ func resolveAgentModel(m agentMeta, reg *routing.Registry, sc *routing.Scorecard
 		// model: almost always a typo, and it would otherwise fail at spawn.
 		if reg != nil {
 			if _, ok := reg.Get(m.Model); !ok {
-				return m.Model, "pinned (UNKNOWN — not in models.json)"
+				return m.Model, "pinned (UNKNOWN: not in models.json)"
 			}
 		}
 		return m.Model, "pinned (explicit model:)"

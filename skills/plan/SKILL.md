@@ -1,6 +1,6 @@
 ---
 name: plan
-description: Take a concrete idea to an eng-ready plan with the crew — discovery, PR/FAQ, PRD, design, architecture, DX, peer review, gated at PR/FAQ. Use for "plan this" or "write a PRD".
+description: Take a concrete idea to an eng-ready plan with the crew (discovery, PR/FAQ, PRD, design, architecture, DX, peer review, gated at PR/FAQ). Use for "plan this" or "write a PRD".
 ---
 # plan
 

@@ -1,6 +1,6 @@
 ---
 name: gtm-launch
-description: Take a built thing to a launched thing with the crew — positioning, competitive intel, content, enablement, campaign plan, launch readiness, gated at positioning. Use for "launch this feature".
+description: Take a built thing to a launched thing with the crew (positioning, competitive intel, content, enablement, campaign plan, launch readiness, gated at positioning). Use for "launch this feature".
 ---
 # gtm-launch
 

@@ -10,11 +10,11 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/mcavage/pix/main/install.sh | sh
 #
-# Inspect before you pipe to a shell — the source is right here:
+# Inspect before you pipe to a shell: the source is right here:
 #   https://github.com/mcavage/pix/blob/main/install.sh
 #
 # What it does:
-#   - detects your OS (darwin only — pix's host lifecycle is macOS-only) +
+#   - detects your OS (darwin only: pix's host lifecycle is macOS-only) +
 #     arch (amd64/arm64)
 #   - resolves the latest release (or PIX_VERSION if you set one)
 #   - downloads pix-<os>-<arch>, pix-host-<os>-<arch>, and SHA256SUMS
@@ -48,7 +48,7 @@ die()  { err "$*"; exit 1; }
 # --- OS/arch detection ------------------------------------------------------
 # Emits "<os> <arch>" using the Go convention (darwin, amd64/arm64). pix's
 # host lifecycle (launchd-managed serve, the pix/pix-host binaries) is
-# macOS-only — there is no linux release asset to fetch any more.
+# macOS-only: there is no linux release asset to fetch any more.
 detect_platform() {
 	os_raw="$(uname -s)"
 	arch_raw="$(uname -m)"
@@ -114,7 +114,7 @@ else
 	DL=""
 fi
 
-# fetch URL OUTFILE — download URL to OUTFILE, failing loudly on HTTP errors.
+# fetch URL OUTFILE: download URL to OUTFILE, failing loudly on HTTP errors.
 fetch() {
 	case "$DL" in
 		curl) curl -fsSL "$1" -o "$2" ;;
@@ -123,7 +123,7 @@ fetch() {
 	esac
 }
 
-# resolve_latest — follow the /releases/latest redirect and read the version out
+# resolve_latest: follow the /releases/latest redirect and read the version out
 # of the resulting .../tag/v<VER> URL. Works with curl or wget.
 resolve_latest() {
 	url="${GH}/releases/latest"
@@ -142,7 +142,7 @@ resolve_latest() {
 }
 
 # --- sha256 -----------------------------------------------------------------
-# sha256_of FILE — print the hex digest, portable across linux/darwin.
+# sha256_of FILE: print the hex digest, portable across linux/darwin.
 sha256_of() {
 	if have sha256sum; then
 		sha256sum "$1" | awk '{print $1}'
@@ -153,7 +153,7 @@ sha256_of() {
 	fi
 }
 
-# verify FILE NAME SUMSFILE — compare FILE's digest to the NAME entry in SUMSFILE.
+# verify FILE NAME SUMSFILE: compare FILE's digest to the NAME entry in SUMSFILE.
 verify() {
 	file="$1"; name="$2"; sums="$3"
 	want="$(awk -v n="$name" '$2 == n || $2 == "*"n {print $1}' "$sums" | head -1)"
@@ -187,7 +187,7 @@ do_install() {
 	sums_url="${base}/SHA256SUMS"
 
 	if [ "${PIX_DRYRUN:-}" = "1" ]; then
-		log "DRY RUN — nothing will be downloaded or written."
+		log "DRY RUN: nothing will be downloaded or written."
 		log "Source: ${SOURCE_URL}"
 		log "Platform: ${os}/${arch}"
 		log "Version:  ${ver}"
@@ -238,7 +238,7 @@ do_install() {
 		return 0
 	fi
 
-	# Everything verified — now install. These moves are the only writes to
+	# Everything verified: now install. These moves are the only writes to
 	# ${PREFIX}; they happen last so a failed/mismatched download never lands.
 	mkdir -p "$PREFIX"
 	for b in $BINARIES; do
@@ -248,7 +248,7 @@ do_install() {
 	report "$os" "$arch" "$ver"
 }
 
-# report — the first-run summary: where it landed, PATH status, next command.
+# report: the first-run summary: where it landed, PATH status, next command.
 report() {
 	os="$1"; arch="$2"; ver="$3"
 	log ""

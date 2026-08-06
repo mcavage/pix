@@ -200,7 +200,7 @@ responses, tool + MCP calls, context/control events), as captured on disk.
 
 This is a PURE READER: it never binds a port or starts a listener. The
 ingest listener that receives events from the in-VM tap runs inside
-'pix serve' (:11437, loopback-only by default — see 'pix serve --help'
+'pix serve' (:11437, loopback-only by default: see 'pix serve --help'
 for its --bind/--port flags). With no --path, monitor tails the same store
 root serve writes to; run 'pix serve' first (or already have it running)
 for there to be anything to follow.

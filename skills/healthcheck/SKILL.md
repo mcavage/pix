@@ -1,6 +1,6 @@
 ---
 name: healthcheck
-description: Two checks in one — HARNESS health (keys, memory, MCP, CLIs, agent roster, skills, routing) and CODE health (tests, types, lint, dead code, ranked fixes). Use for "healthcheck" or before `ship`.
+description: Two checks in one, HARNESS health (keys, memory, MCP, CLIs, agent roster, skills, routing) and CODE health (tests, types, lint, dead code, ranked fixes). Use for "healthcheck" or before `ship`.
 ---
 # healthcheck
 

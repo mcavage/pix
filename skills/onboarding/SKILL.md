@@ -1,6 +1,6 @@
 ---
 name: onboarding
-description: First-run onboarding — one thorough, opinionated message naming the right workflow, stating only grounded setup gaps, then handing the wheel back. Use on first run or "onboard me".
+description: First-run onboarding via one thorough, opinionated message that names the right workflow, states only grounded setup gaps, then hands the wheel back. Use on first run or "onboard me".
 ---
 # onboarding
 

@@ -1,6 +1,6 @@
 ---
 name: design-review
-description: Designer's-eye visual audit of a running web UI — screenshot each view, evaluate hierarchy, spacing, typography, consistency, AI-slop, score and fix. Use for "design review" or "polish the UI".
+description: Designer's-eye visual audit of a running web UI, screenshot each view, evaluate hierarchy, spacing, typography, consistency, AI-slop, score and fix. Use for "design review" or "polish the UI".
 ---
 # design-review
 

@@ -32,7 +32,7 @@ Add a model to the catalog: one entry in
   ` + routing.ModelsPath() + `
 and its scores in
   ` + routing.ScorecardPath() + `
-then ` + "`pix models route`" + `. Neither file exists until you create it — absent
+then ` + "`pix models route`" + `. Neither file exists until you create it: absent
 means "use the defaults built into this binary", so create only the one you
 want to override.
 (Maintainer-only, not a personal override: the shipped defaults live in
