@@ -526,3 +526,82 @@ func TestRunSession_RefLeaseFailsAfterChildStarts_KillsRatherThanLeavesUnreferen
 		t.Errorf("TryReapProof after the killed, unreferenced session = %v, want nil (no leaked holder)", perr)
 	}
 }
+
+// TestRunSession_RefLeaseFailsAfterChildStarts_AlsoTearsDown proves the OTHER
+// half of the same fix: killing the started child only ends this shell's OWN
+// `sbx` invocation, it does not touch the sandbox that invocation started on
+// the sbx runtime. Left there, that sandbox would sit unreferenced until some
+// future orphan sweep happened to run. RunSession must instead hand it,
+// immediately, to the very same proof-gated TeardownSandbox a normal session
+// exit uses — proven here by the journalled verdict that call leaves behind.
+// This test's own holder still has refs.lock EX, so the correct verdict is
+// "kept-busy", not a removal: the point is that TeardownSandbox was reached
+// and reported AT ALL, which the pre-fix code never did on this path.
+func TestRunSession_RefLeaseFailsAfterChildStarts_AlsoTearsDown(t *testing.T) {
+	isolateState(t)
+	fixture := installFakeSbx(t, sessionFixture)
+	ws := t.TempDir()
+	key := SessionName(ws)
+
+	dir, err := leaseDirFor(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	restore := lease.RefAcquireTimeout
+	lease.RefAcquireTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { lease.RefAcquireTimeout = restore })
+
+	// Hold refs.lock EXCLUSIVE for the whole test: the refs acquire that runs
+	// after the transition can never succeed, and neither can TeardownSandbox's
+	// own zero-holder proof — it must come back "kept-busy", not removed.
+	holder, err := lease.OpenRefLease(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := holder.TryExclusive(); err != nil {
+		t.Fatalf("holder TryExclusive: %v", err)
+	}
+	t.Cleanup(func() { _ = holder.Close() })
+
+	var warn strings.Builder
+	done := make(chan error, 1)
+	go func() {
+		done <- RunSession(SessionSpec{
+			Key: key, Name: "pix-demo", Creating: true,
+			CreateArgs:  []string{"run", "--name", "pix-demo"},
+			Fingerprint: sandbox.Fingerprint{"static_mcp": "slack"},
+			Invocation:  []string{"--model", "m"},
+		}, SessionDeps{Env: realEnv(), Poll: fastPoll(), Warn: &warn, Spawn: fixtureSpawn(t)})
+	}()
+
+	waitForFile(t, filepath.Join(fixture, "created"), 10*time.Second)
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("RunSession = nil error, want the failed reference-lease acquire surfaced")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("RunSession never returned after its reference lease could not be acquired")
+	}
+
+	path, perr := teardownJournalPath()
+	if perr != nil {
+		t.Fatal(perr)
+	}
+	entries := readJournalFile(t, path)
+	if len(entries) == 0 {
+		t.Fatal("the ref-lease failure never reached TeardownSandbox: the teardown journal has no entry for it")
+	}
+	last := entries[len(entries)-1]
+	if last.Sandbox != "pix-demo" || last.Key != key || last.Trigger != TriggerSession {
+		t.Errorf("teardown journal entry = %+v, want sandbox=pix-demo key=%s trigger=%s", last, key, TriggerSession)
+	}
+	if last.Verdict != TeardownKeptBusy {
+		t.Errorf("teardown verdict = %q, want %q (this test's holder still has refs.lock EX)", last.Verdict, TeardownKeptBusy)
+	}
+	if !strings.Contains(warn.String(), "kept pix-demo") {
+		t.Errorf("warn output = %q, want it to report the kept teardown", warn.String())
+	}
+}

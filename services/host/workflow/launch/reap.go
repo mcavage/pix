@@ -481,6 +481,7 @@ func appendTeardownJournal(o TeardownOptions, res TeardownResult) error {
 		return err
 	}
 	return withTeardownJournalGuard(path, func() error {
+		cleanStaleJournalTemp(path)
 		lines := append(readJournalLines(path), string(line))
 		if len(lines) > TeardownJournalMaxEntries {
 			lines = lines[len(lines)-TeardownJournalMaxEntries:]
@@ -490,6 +491,23 @@ func appendTeardownJournal(o TeardownOptions, res TeardownResult) error {
 		}
 		return writeFileAtomic(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600)
 	})
+}
+
+// cleanStaleJournalTemp removes any writeFileAtomic temp file left behind by a
+// PRIOR writer of this same journal that crashed between its write and its
+// rename (writeFileAtomic's own defer only cleans up the temp it just made,
+// within ITS OWN call). It is only ever called from inside
+// withTeardownJournalGuard, which is what makes the glob safe to remove
+// outright rather than merely report: holding that lock excludes every other
+// writer of this path, so any "<journal>.tmp-*" sibling found here cannot be a
+// write in flight — it can only be leftover debris from one that never
+// finished, the same crash-recovery posture clearSessionState already applies
+// to the fingerprint/invocation files next door.
+func cleanStaleJournalTemp(path string) {
+	leftover, _ := filepath.Glob(path + ".tmp-*")
+	for _, p := range leftover {
+		_ = os.Remove(p)
+	}
 }
 
 func journalBytes(lines []string) int {

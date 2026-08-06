@@ -32,6 +32,12 @@ func WriteStateFile(Workspace, name string, data []byte, perm os.FileMode) error
 // WriteStateFile's fail-safe symlink handling. A missing .pix dir or a missing
 // file both return os.ErrNotExist-wrapping errors (ordinary os.IsNotExist
 // works on the result); a symlink at either level is refused, never followed.
+// The directory-level check stays Lstat-then-open (there is no O_NOFOLLOW-
+// shaped open(2) for a directory lookup here); the state FILE itself is
+// opened by readStateFileNoFollow, whose unix build refuses the symlink
+// ATOMICALLY at open(2) — see state_unix.go — instead of the separate
+// Lstat-then-ReadFile this used to do, which left a TOCTOU window between the
+// check and the read for something to swap the symlink in.
 func ReadStateFile(Workspace, name string) ([]byte, error) {
 	dir := filepath.Join(Workspace, ".pix")
 	di, err := os.Lstat(dir)
@@ -41,15 +47,7 @@ func ReadStateFile(Workspace, name string) ([]byte, error) {
 	if di.Mode()&os.ModeSymlink != 0 {
 		return nil, fmt.Errorf("%s is a symlink; refusing to read workspace state through it", dir)
 	}
-	path := filepath.Join(dir, name)
-	fi, err := os.Lstat(path)
-	if err != nil {
-		return nil, err
-	}
-	if fi.Mode()&os.ModeSymlink != 0 {
-		return nil, fmt.Errorf("%s is a symlink; refusing to read workspace state through it", path)
-	}
-	return os.ReadFile(path)
+	return readStateFileNoFollow(filepath.Join(dir, name))
 }
 
 // RemoveStateFile removes <Workspace>/.pix/<name> without ever
