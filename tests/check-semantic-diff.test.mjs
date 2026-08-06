@@ -27,7 +27,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
-import { activationKeySet, checkRuleDrift, evaluateCheck, evaluatePins, extractRegion, extractSet, loadActivation, loadManifest, loadRules, resolveDefaultBase, staleManifestEntries } from "../scripts/semantic-diff/lib/engine.mjs";
+import { activationKeySet, checkRuleDrift, entriesExplainingDrift, evaluateCheck, evaluatePins, extractRegion, extractSet, loadActivation, loadManifest, loadRules, resolveDefaultBase, staleManifestEntries } from "../scripts/semantic-diff/lib/engine.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
@@ -444,6 +444,28 @@ test("staleManifestEntries: with no usable git base (skipped), nothing can be pr
 	assert.deepEqual(staleManifestEntries(report, drift), []);
 });
 
+test("entriesExplainingDrift: credits an entry that is unused as a waiver but not flagged stale (i.e. consumed by real drift)", () => {
+	const report = { unusedManifestEntries: ["some.pin", "other.pin"] };
+	const drift = { skipped: false, consumedManifestIds: ["some.pin"] };
+	const stale = staleManifestEntries(report, drift);
+	assert.deepEqual(stale, ["other.pin"]);
+	assert.deepEqual(entriesExplainingDrift(report, drift, stale), ["some.pin"]);
+});
+
+test("entriesExplainingDrift never claims an entry explains drift when drift.skipped, even though it is unused-as-waiver and (per staleManifestEntries) not flagged stale either", () => {
+	// This is exactly the historical bug: a skipped drift check (no usable git
+	// base) means staleManifestEntries() also can't prove anything, so its
+	// output alone can't distinguish "genuinely explained by drift" from
+	// "nothing was ever checked". entriesExplainingDrift must not paper over
+	// that by reporting the entry as drift-explaining just because it wasn't
+	// caught as stale.
+	const report = { unusedManifestEntries: ["some.pin"] };
+	const drift = { skipped: true, consumedManifestIds: [] };
+	const stale = staleManifestEntries(report, drift);
+	assert.deepEqual(stale, [], "sanity: skipped drift proves nothing stale either");
+	assert.deepEqual(entriesExplainingDrift(report, drift, stale), [], "a skipped drift check must never be reported as explaining anything");
+});
+
 // Full pipeline (evaluatePins + checkRuleDrift + staleManifestEntries), the
 // same three calls the CLI itself makes, against a self-contained fixture —
 // proves the mechanism end-to-end without the CLI's REPO_ROOT-fixed rules/
@@ -576,6 +598,66 @@ test("resolveDefaultBase falls back to the literal HEAD only for a brand-new, si
 	assert.equal(resolveDefaultBase(root), "HEAD");
 });
 
+test("resolveDefaultBase rejects a resolvable origin/main merge-base that predates the semantic rules directory entirely, falling through to HEAD~1 (long-lived-branch case)", async () => {
+	const root = makeScratchRepo();
+	writeFixture(root, { "a.txt": "v1" });
+	git(root, "add", "-A");
+	git(root, "commit", "-q", "-m", "pre-rules commit, this is all the stale tracked remote ever saw");
+	git(root, "branch", "-m", "main"); // deterministic branch name regardless of this host's git init.defaultBranch
+
+	// Fake a remote frozen at the pre-rules commit — mirrors a tracked
+	// origin/main that has not been fast-forwarded since long before this
+	// long-lived feature branch introduced the semantic-diff rules at all.
+	const remote = mkTmpDir();
+	execFileSync("git", ["clone", "--bare", "-q", root, remote]);
+	git(root, "remote", "add", "origin", remote);
+	git(root, "fetch", "-q", "origin");
+
+	// The branch introduces the real rules dir, and later moves a pin, all
+	// strictly AFTER the frozen remote snapshot: origin/main's merge-base with
+	// HEAD is that pre-rules commit, which cannot see rules/fixture.rules.mjs
+	// at all.
+	writeFixture(root, { "scripts/semantic-diff/rules/fixture.rules.mjs": RULE_FILE_V1 });
+	git(root, "add", "-A");
+	git(root, "commit", "-q", "-m", "introduce semantic-diff rules, long after origin/main was last synced");
+	writeFixture(root, { "scripts/semantic-diff/rules/fixture.rules.mjs": RULE_FILE_V2 });
+	git(root, "add", "-A");
+	git(root, "commit", "-q", "-m", "later commit moves the pin, no manifest entry for this move");
+
+	const mergeBase = git(root, "merge-base", "HEAD", "origin/main").trim();
+	const rulesDir = path.join(root, "scripts", "semantic-diff", "rules");
+	const uselessDrift = await checkRuleDrift(rulesDir, root, mergeBase, []);
+	assert.equal(uselessDrift.skipped, true, "sanity: the raw merge-base really is useless here — no rules file existed at it, so drift silently self-skips");
+
+	const base = resolveDefaultBase(root);
+	assert.notEqual(base, mergeBase, "a merge-base that predates the rules directory entirely must be rejected, not silently used");
+	assert.equal(base, "HEAD~1", "falls through to HEAD~1, the next meaningful candidate");
+
+	const drift = await checkRuleDrift(rulesDir, root, base, []);
+	assert.equal(drift.skipped, false, "HEAD~1 actually has a prior rules version to compare against, so the undocumented v1->v2 move is now visible instead of silently skipped");
+	assert.equal(drift.ok, false, "and it is genuinely undocumented drift");
+});
+
+test("post-merge on THIS repo: resolveDefaultBase does not silently degrade to the stale origin/main merge-base (the real long-lived-branch case this fix targets)", () => {
+	const staleMergeBase = execFileSync("git", ["merge-base", "HEAD", "origin/main"], { cwd: REPO_ROOT, encoding: "utf8" }).trim();
+
+	// Sanity: prove the scenario this fix targets is real in THIS checkout —
+	// the tracked origin/main genuinely predates the semantic-diff rules
+	// directory, so its merge-base with HEAD cannot see any rules file at all.
+	assert.throws(
+		() => execFileSync("git", ["cat-file", "-e", `${staleMergeBase}:scripts/semantic-diff/rules`], { cwd: REPO_ROOT, stdio: "ignore" }),
+		"origin/main's merge-base must genuinely predate the rules directory for this sentinel to mean anything",
+	);
+
+	const resolved = resolveDefaultBase(REPO_ROOT);
+	assert.notEqual(resolved, staleMergeBase, "must not use a merge-base that cannot see the rules directory at all");
+	assert.equal(resolved, "HEAD~1", "falls through to the literal HEAD~1, the next meaningful candidate on this long-lived branch");
+
+	const drift = execFileSync("node", [CLI, "--root", REPO_ROOT, "--base", resolved, "--json"], { encoding: "utf8" });
+	const parsed = JSON.parse(drift);
+	assert.equal(parsed.drift.skipped, false, "the resolved base must actually let rule-drift run, not silently skip");
+});
+
 test("the CLI's own default (no --base flag) resolves through resolveDefaultBase against the real repo, not a hardcoded HEAD self-compare", () => {
 	const resolved = resolveDefaultBase(REPO_ROOT);
 	assert.notEqual(resolved, "HEAD", "this checkout has a tracked origin/main, so the default must not degrade to a self-compare");
@@ -693,6 +775,20 @@ test("the ports domain no longer pins the retired broker port (W2/U03B deleted i
 			}
 		}
 	}
+});
+
+// The two U04f-era manifest entries (lifecycle.session.record-before-lifecycle-unlock,
+// lifecycle.teardown.journal-bounded-0600) documented transitions that landed
+// commits ago; the base this guard now resolves to (HEAD~1, see the
+// resolveDefaultBase tests above) already has those pins in their current
+// shape, so neither entry is needed as a waiver nor to explain any real
+// drift any more. They were removed in a follow-up commit so an unrelated,
+// later PR does not fail on a stale manifest it had no part in creating.
+test("the shipped intended-changes.json no longer carries the two now-spent U04f manifest entries", () => {
+	const manifest = loadManifest(path.join(REPO_ROOT, "scripts", "semantic-diff", "intended-changes.json"));
+	const ids = manifest.map((e) => e.id);
+	assert.ok(!ids.includes("lifecycle.session.record-before-lifecycle-unlock"), "spent entry must be removed once neither a waiver nor real drift needs it");
+	assert.ok(!ids.includes("lifecycle.teardown.journal-bounded-0600"), "spent entry must be removed once neither a waiver nor real drift needs it");
 });
 
 test("the CLI exits 0 against the real repo and exits 1 against a fixture with a planted corruption", () => {
