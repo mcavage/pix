@@ -114,6 +114,33 @@ func release(t *testing.T, dir string) {
 	}
 }
 
+// waitForRecordedCreateState blocks until every create-time artifact this
+// test asserts on after the kill is on disk: the record, the invocation, and
+// (when the spec asked for it) the keep binding. RecordSessionCreation and
+// setSessionKeep write these SEQUENTIALLY, in that order, still under the
+// lifecycle lock — but they are separate files committed by separate
+// rename(2)s, so a barrier on record.json alone left a window before the
+// LATER writes landed. Killing inside that window raced whichever write
+// hadn't happened yet, which is exactly the flake this barrier closes: it
+// waits (polling, not sleeping a fixed duration) for the LAST write in the
+// sequence, which proves the earlier ones already committed.
+func waitForRecordedCreateState(t *testing.T, leaseDir, sessionKey string, wantKeep bool, within time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for {
+		_, rerr := lease.ReadRecord(leaseDir)
+		_, invFound := readSessionInvocation(sessionKey)
+		_, keepSet, kerr := lease.ReadKeep(leaseDir)
+		if rerr == nil && invFound && (!wantKeep || (kerr == nil && keepSet)) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out after %s waiting for the full create-time record (record=%v invocation=%v keep=%v/%v)", within, rerr, invFound, keepSet, kerr)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
 // TestRunSession_RecordsBeforeWaiting_AndUnblocksAttachOnRecord proves the two
 // central ordering claims at once, because they are two halves of the same
 // window: while the first session is still running, its record is already
@@ -356,7 +383,10 @@ func TestRunSession_KilledCreator_LeavesTheRecord(t *testing.T) {
 		_, _ = cmd.Process.Wait()
 	})
 
-	waitForFile(t, filepath.Join(leaseDir, "record.json"), 20*time.Second)
+	// Wait for the WHOLE create-time sequence — record, invocation, and the
+	// keep binding the helper's spec asks for — not just record.json, so the
+	// kill lands strictly AFTER every write this test checks, never mid-write.
+	waitForRecordedCreateState(t, leaseDir, key, true, 20*time.Second)
 	if err := cmd.Process.Signal(syscall.SIGKILL); err != nil {
 		t.Fatalf("SIGKILL: %v", err)
 	}
