@@ -313,3 +313,105 @@ func checkBounds(t *testing.T, v reflect.Value, tag string) {
 		}
 	}
 }
+
+// TestRedactTextReplacesValueOnly pins the value-only property of the
+// contextual patterns: the key, assignment operator, and every structural
+// quote must survive; only the secret VALUE becomes the marker. This is what
+// keeps a scrubbed raw JSON line parseable — the historical bug was the
+// Authorization and assignment patterns consuming the key's closing quote,
+// the colon, and the value's opening quote, corrupting stored JSON.
+func TestRedactTextReplacesValueOnly(t *testing.T) {
+	cases := map[string]struct{ in, want string }{
+		"bearer in json": {
+			`{"authorization":"Bearer abc.123-456_789"}`,
+			`{"authorization":"Bearer ` + redactionMarker + `"}`,
+		},
+		"bearer header line": {
+			`Authorization: Bearer abc.123-456_789`,
+			`Authorization: Bearer ` + redactionMarker,
+		},
+		"assignment in json": {
+			`{"api_key":"abcdefghijkl0123"}`,
+			`{"api_key":"` + redactionMarker + `"}`,
+		},
+		"assignment in shell": {
+			`export PASSWORD=abcdefghijkl0123`,
+			`export PASSWORD=` + redactionMarker,
+		},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := redactText(c.in); got != c.want {
+				t.Fatalf("redactText(%q) = %q, want %q", c.in, got, c.want)
+			}
+			if json.Valid([]byte(c.in)) && !json.Valid([]byte(redactText(c.in))) {
+				t.Fatalf("redactText corrupted valid JSON: %q", redactText(c.in))
+			}
+		})
+	}
+}
+
+// TestUnknownEventRedactionKeepsJSONStructure: scrubbing an unknown kind's
+// raw line must yield VALID JSON with the kind, envelope numbers, and every
+// unknown field retained — while the Bearer token, a secret-named key's
+// value, and secret shapes nested in arrays/objects are all gone.
+func TestUnknownEventRedactionKeepsJSONStructure(t *testing.T) {
+	const (
+		bearerTok  = "canary.unknown-bearer-9876543210"
+		genericVal = "canaryGenericValue123456"
+	)
+	line := `{"kind":"future_kind","sandboxId":"sbx","sessionId":"sess","turnId":"t","seq":9,"ts":1700000000123,` +
+		`"authorization":"Bearer ` + bearerTok + `",` +
+		`"config":{"api_key":"` + genericVal + `","depth":3},` +
+		`"notes":["Authorization: Bearer ` + bearerTok + `","plain text"],` +
+		`"extra":{"a":1}}`
+	ev, err := Decode([]byte(line))
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	red, ok := redact(ev).(UnknownEvent)
+	if !ok {
+		t.Fatalf("redact returned %T, want UnknownEvent", redact(ev))
+	}
+	raw := string(red.Raw)
+	var m map[string]any
+	if err := json.Unmarshal(red.Raw, &m); err != nil {
+		t.Fatalf("redacted raw line is not valid JSON: %v\n%s", err, raw)
+	}
+	if m["kind"] != "future_kind" {
+		t.Errorf("kind = %v, want future_kind retained", m["kind"])
+	}
+	if _, ok := m["extra"]; !ok {
+		t.Errorf("unknown field %q was dropped:\n%s", "extra", raw)
+	}
+	if !strings.Contains(raw, `"ts":1700000000123`) {
+		t.Errorf("ts lost its exact wire form (scientific notation?):\n%s", raw)
+	}
+	for _, c := range []string{bearerTok, genericVal} {
+		if strings.Contains(raw, c) {
+			t.Errorf("redacted raw line still contains canary %q:\n%s", c, raw)
+		}
+	}
+	if !strings.Contains(raw, redactionMarker) {
+		t.Errorf("redacted raw line has no %s marker:\n%s", redactionMarker, raw)
+	}
+	if notes, _ := m["notes"].([]any); len(notes) != 2 || notes[1] != "plain text" {
+		t.Errorf("notes = %v, want the ordinary entry retained verbatim", m["notes"])
+	}
+
+	t.Run("unparseable raw is still scrubbed value-only", func(t *testing.T) {
+		// A line truncated by decodeUnknown's byte cap is not valid JSON;
+		// the scrub must still remove the token without touching the rest.
+		trunc := UnknownEvent{
+			env: env{Kind: "future_kind"},
+			Raw: []byte(`{"kind":"future_kind","authorization":"Bearer ` + bearerTok),
+		}
+		raw := string(trunc.redacted().(UnknownEvent).Raw)
+		if strings.Contains(raw, bearerTok) {
+			t.Fatalf("fallback pass leaked the canary: %s", raw)
+		}
+		if !strings.Contains(raw, `"authorization":"Bearer `+redactionMarker) {
+			t.Fatalf("fallback pass ate the key/quotes instead of the value only: %s", raw)
+		}
+	})
+}
