@@ -380,12 +380,12 @@ run. Exit codes: **2** on a usage error, **1** only when a REQUIRED check is a
 positively verified failure, **0** otherwise, including every optional or
 unverifiable gap. Required, always: the **sbx CLI** being installed and at
 least one resolved **provider key** (a single key for any one of Anthropic,
-OpenAI, or Google satisfies it; you don't need all three) — either one
+OpenAI, or Google satisfies it; you don't need all three): either one
 failing alone is enough to fail doctor. Required only when configured:
 **memory** and **monitor**, once listed in `services`. Never required:
 **launchd** and **pack** (a host with neither configured is a perfectly good
 host). A config file that fails to load entirely is its own separate
-required gap — nothing else can be probed without one, so it is reported
+required gap: nothing else can be probed without one, so it is reported
 alone.
 
 **sbx-missing exit codes are unified across every surface that shells to
@@ -405,7 +405,7 @@ The shared plumbing: `mcp.ErrSbxUnavailable` is the one sentinel every mutating
 mcp verb and `ls`/`rm` wrap (`errors.Is`-detectable); the command layer maps it
 to exit 3 (`sbxAwareFail` in `cmd/pix/root.go`, `mcpFailed` in
 `cmd/pix/mcp_cmd.go`) and the install fix text is the ONE constant
-(`health.SbxInstallFix`) doctor, ls, and rm all quote verbatim — never a
+(`health.SbxInstallFix`) doctor, ls, and rm all quote verbatim, never a
 second paraphrase of "go install the CLI" that can drift out of sync with the
 first.
 
