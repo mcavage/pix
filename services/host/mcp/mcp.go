@@ -54,9 +54,11 @@ var ErrSbxUnavailable = fmt.Errorf("sbx not on PATH")
 
 // McpWouldRun prints the exact host command a user can run manually (the
 // recovery path every mutating mcp subcommand must preserve verbatim) and
-// returns ErrSbxUnavailable so the caller exits non-zero.
-func McpWouldRun(out io.Writer, args ...string) error {
-	fmt.Fprintf(out, "sbx not on PATH; would run: sbx %s (run it on the host)\n", strings.Join(args, " "))
+// returns ErrSbxUnavailable so the caller exits non-zero. This is an ERROR
+// report (exit 3), so it goes to errW/stderr — a caller piping stdout (e.g.
+// `pix mcp ls | jq`) must never see it mixed into what looks like output.
+func McpWouldRun(errW io.Writer, args ...string) error {
+	fmt.Fprintf(errW, "sbx not on PATH; would run: sbx %s (run it on the host)\n", strings.Join(args, " "))
 	return ErrSbxUnavailable
 }
 
@@ -88,7 +90,7 @@ func ExitMcpVerb(ctx string, err error) {
 // is how the verbs drifted into phrasing the same failure differently.
 func RunSbxMcpCore(lookPath func(string) (string, error), out io.Writer, in io.Reader, errW io.Writer, args []string) error {
 	if _, err := lookPath("sbx"); err != nil {
-		return McpWouldRun(out, args...)
+		return McpWouldRun(errW, args...)
 	}
 	cmd := exec.Command("sbx", args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, out, errW

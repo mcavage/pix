@@ -55,7 +55,7 @@ func mcpFailed(d *cli.Deps, sub string, err error) error {
 		return nil
 	}
 	if errors.Is(err, mcp.ErrSbxUnavailable) {
-		// McpWouldRun already printed the recovery command to stdout.
+		// McpWouldRun already printed the recovery command to stderr.
 		return cli.SilentError{Code: rpc.ExitServiceDown}
 	}
 	var exit *exec.ExitError
@@ -115,8 +115,9 @@ func (c *mcpLoadCmd) Run(d *cli.Deps) error {
 	sandbox := resolveSandboxName("", ws)
 	if _, err := exec.LookPath("sbx"); err != nil {
 		// A command that promises to attach a server must not exit 0 having done
-		// nothing (mcp.ErrSbxUnavailable); McpWouldRun prints the recovery command.
-		return mcpFailed(d, "load", mcp.McpWouldRun(d.Out, "mcp", "load", name, "--sandbox", sandbox))
+		// nothing (mcp.ErrSbxUnavailable); McpWouldRun prints the recovery command
+		// to stderr, since this is an error report, not output.
+		return mcpFailed(d, "load", mcp.McpWouldRun(d.Err, "mcp", "load", name, "--sandbox", sandbox))
 	}
 	cmd := exec.Command("sbx", "mcp", "load", name, "--sandbox", sandbox)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, d.Out, d.Err
