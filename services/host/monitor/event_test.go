@@ -338,6 +338,22 @@ func TestRedactTextReplacesValueOnly(t *testing.T) {
 			`export PASSWORD=abcdefghijkl0123`,
 			`export PASSWORD=` + redactionMarker,
 		},
+		"unquoted numeric token in json": {
+			`{"token": 4111999988887777, "kept": 7}`,
+			`{"token": "` + redactionMarker + `", "kept": 7}`,
+		},
+		"unquoted numeric suffixed key in json": {
+			`{"access_token":9876543210987654}`,
+			`{"access_token":"` + redactionMarker + `"}`,
+		},
+		"quoted numeric in json": {
+			`{"api_key":"4111999988887777"}`,
+			`{"api_key":"` + redactionMarker + `"}`,
+		},
+		"numeric assignment in shell stays bare": {
+			`export SECRET=4111999988887777`,
+			`export SECRET=` + redactionMarker,
+		},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -359,10 +375,11 @@ func TestUnknownEventRedactionKeepsJSONStructure(t *testing.T) {
 	const (
 		bearerTok  = "canary.unknown-bearer-9876543210"
 		genericVal = "canaryGenericValue123456"
+		numericVal = "99887766554433221100"
 	)
 	line := `{"kind":"future_kind","sandboxId":"sbx","sessionId":"sess","turnId":"t","seq":9,"ts":1700000000123,` +
 		`"authorization":"Bearer ` + bearerTok + `",` +
-		`"config":{"api_key":"` + genericVal + `","depth":3},` +
+		`"config":{"api_key":"` + genericVal + `","depth":3,"session_token": ` + numericVal + `},` +
 		`"notes":["Authorization: Bearer ` + bearerTok + `","plain text"],` +
 		`"extra":{"a":1}}`
 	ev, err := Decode([]byte(line))
@@ -387,10 +404,14 @@ func TestUnknownEventRedactionKeepsJSONStructure(t *testing.T) {
 	if !strings.Contains(raw, `"ts":1700000000123`) {
 		t.Errorf("ts lost its exact wire form (scientific notation?):\n%s", raw)
 	}
-	for _, c := range []string{bearerTok, genericVal} {
+	for _, c := range []string{bearerTok, genericVal, numericVal} {
 		if strings.Contains(raw, c) {
 			t.Errorf("redacted raw line still contains canary %q:\n%s", c, raw)
 		}
+	}
+	if cfg, _ := m["config"].(map[string]any); cfg["session_token"] != redactionMarker {
+		t.Errorf("unquoted numeric secret = %v (%T), want the marker as a JSON STRING:\n%s",
+			cfg["session_token"], cfg["session_token"], raw)
 	}
 	if !strings.Contains(raw, redactionMarker) {
 		t.Errorf("redacted raw line has no %s marker:\n%s", redactionMarker, raw)
