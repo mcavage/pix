@@ -12,12 +12,18 @@
 //	              ->  refs SH (still under lifecycle EX)
 //	              ->  lifecycle UNLOCK  ->  wait for the session to exit
 //
-// Two properties are load-bearing, and the process tests prove them: everything
-// a later attach or a reaper reads is on disk BEFORE any other process can
-// observe the transition as finished (so a killed creator still leaves a
-// complete record), and the lifecycle lock covers only the TRANSITION, never the
-// session's own lifetime. Teardown is next door in reap.go: this file's last act
-// is to CLOSE this shell's reference and hand the decision to TeardownSandbox.
+// Three properties are load-bearing, and the process tests prove them:
+// everything a later attach or a reaper reads is on disk BEFORE any other
+// process can observe the transition as finished (so a killed creator still
+// leaves a complete record); the lifecycle lock covers only the TRANSITION,
+// never the session's own lifetime; and a child the transition already
+// started must never be left running WITHOUT a reference lease — if
+// lease.AttachRefUnderLifecycle's refs acquire fails after fn (this file's
+// startSessionTransition) already started it, RunSession kills it rather
+// than waiting it out unreferenced, because a future reaper's zero-holder
+// proof cannot tell "live and unreferenced" apart from "orphaned". Teardown
+// is next door in reap.go: this file's last act is to CLOSE this shell's
+// reference and hand the decision to TeardownSandbox.
 package launch
 
 import (
@@ -125,14 +131,8 @@ func writeSessionState(sessionKey, name string, v any) error {
 	if err != nil {
 		return fmt.Errorf("launch: marshal %s: %w", name, err)
 	}
-	path := filepath.Join(dir, name)
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	if err := writeFileAtomic(filepath.Join(dir, name), data, 0o600); err != nil {
 		return fmt.Errorf("launch: write %s: %w", name, err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("launch: commit %s: %w", name, err)
 	}
 	return nil
 }
@@ -309,11 +309,15 @@ func RunSession(spec SessionSpec, deps SessionDeps) error {
 	})
 	if err != nil {
 		if child != nil {
-			// The transition failed AFTER the child started (only the refs
-			// acquire can do that): the session is live and must still be
-			// waited out, unreferenced but honest about it.
-			fmt.Fprintf(deps.Warn, "pix: warning: %s started without a reference lease (%v)\n", spec.Key, err)
-			return child.Wait()
+			// The transition itself succeeded (fn returned nil): only the
+			// refs acquire that runs AFTER it failed. That child is now live
+			// with NO reference lease — a future reaper's zero-holder proof
+			// cannot distinguish it from an orphan. It must never be left
+			// running unreferenced, so kill it rather than waiting it out.
+			fmt.Fprintf(deps.Warn, "pix: warning: %s started but could not be given a reference lease (%v); killing it rather than leaving it live and unreferenced\n", spec.Key, err)
+			if kerr := child.Kill(); kerr != nil {
+				fmt.Fprintf(deps.Warn, "pix: warning: killing %s after the failed reference lease: %v\n", spec.Key, kerr)
+			}
 		}
 		return err
 	}

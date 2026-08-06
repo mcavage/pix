@@ -85,6 +85,7 @@ type SessionChild struct {
 	// create-time facts (lease record, fingerprint, invocation) against it.
 	Appeared bool
 
+	cmd     *exec.Cmd // kept only so Kill has something to signal
 	waitCh  chan error
 	drained bool  // the child already exited during the creation poll
 	exitErr error // its exit result, replayed by Wait
@@ -95,6 +96,25 @@ func (c *SessionChild) Wait() error {
 		return c.exitErr
 	}
 	return <-c.waitCh
+}
+
+// Kill is the abort path for a child that started but could not be handed a
+// reference lease (see RunSession): a live, unreferenced session is worse
+// than one killed outright, because a future reaper's zero-holder proof
+// cannot tell the two apart. It signals the child (a no-op if it already
+// exited) and then replays its exit the same way Wait does, so a caller
+// always gets a definite result instead of racing its own drained/exitErr
+// bookkeeping.
+func (c *SessionChild) Kill() error {
+	if c.drained {
+		return c.exitErr
+	}
+	if c.cmd != nil && c.cmd.Process != nil {
+		_ = c.cmd.Process.Kill()
+	}
+	err := <-c.waitCh
+	c.drained, c.exitErr = true, err
+	return err
 }
 
 func StartSbxSession(cmd *exec.Cmd, poll CreatePoll, creating bool, sandbox string) (*SessionChild, error) {
@@ -138,7 +158,7 @@ func StartSbxSession(cmd *exec.Cmd, poll CreatePoll, creating bool, sandbox stri
 func startedChild(cmd *exec.Cmd) *SessionChild {
 	waitCh := make(chan error, 1)
 	go func() { waitCh <- cmd.Wait() }()
-	return &SessionChild{waitCh: waitCh}
+	return &SessionChild{cmd: cmd, waitCh: waitCh}
 }
 
 // RecreateGuidance is the ONE recovery sentence for every "this sandbox is not

@@ -5,6 +5,7 @@ package lease
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -280,5 +281,127 @@ func TestAttachRefUnderLifecycle_SecondAttachWaitsForTheTransition(t *testing.T)
 	d := <-second
 	if d < 0 {
 		t.Fatal("second attach failed")
+	}
+}
+
+// --- U-fix-lifecycle: the expired-original-ctx gap -----------------------
+//
+// fn (the create/attach transition) can legitimately run for the full
+// sandbox create-poll window — up to fifteen minutes in production — while
+// STILL holding the lifecycle lock. ctx, sized only for the lifecycle
+// acquire that happens BEFORE fn runs, is therefore very likely already
+// past its own deadline by the time AttachRefUnderLifecycle reaches the
+// refs SHARED acquire AFTER fn returns. These tests prove that stale
+// deadline cannot turn a merely BRIEF refs contention into "fn's
+// already-started child is now live with no reference held".
+
+// TestAttachRefUnderLifecycle_ExpiredOriginalCtx_BriefRefsContentionStillSucceeds
+// is the core regression: with the original ctx already expired before fn
+// even runs (exactly the shape a 15-minute create leaves behind), a refs.lock
+// EXCLUSIVE holder that clears within milliseconds must not fail the attach —
+// the refs acquire needs its OWN fresh budget, not ctx's spent one.
+func TestAttachRefUnderLifecycle_ExpiredOriginalCtx_BriefRefsContentionStillSucceeds(t *testing.T) {
+	dir := t.TempDir()
+
+	holder, err := OpenRefLease(dir)
+	if err != nil {
+		t.Fatalf("OpenRefLease holder: %v", err)
+	}
+	if err := holder.TryExclusive(); err != nil {
+		t.Fatalf("holder TryExclusive: %v", err)
+	}
+	timer := time.AfterFunc(50*time.Millisecond, func() {
+		holder.Unlock()
+		holder.Close()
+	})
+	defer timer.Stop()
+
+	// Exactly the shape a 15-minute fn leaves ctx in: already past its
+	// deadline before the refs acquire even starts.
+	expired, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancel()
+	<-expired.Done()
+
+	fnRan := false
+	rl, err := AttachRefUnderLifecycle(expired, dir, func() error {
+		fnRan = true
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("AttachRefUnderLifecycle with an expired original ctx + brief refs contention = %v, want nil (the refs acquire must use a FRESH budget, not ctx's spent one)", err)
+	}
+	defer rl.Close()
+	if !fnRan {
+		t.Fatal("fn never ran")
+	}
+}
+
+// TestAttachRefUnderLifecycle_RefsContentionOutlastingFreshBudget_ReleasesBothLocks
+// proves the failure mode this fix must still handle safely: contention that
+// does NOT clear within the fresh budget still fails (bounded, not hung) and
+// leaves neither lock held — lifecycle is free for the next transition, and
+// nothing beyond fn's own side effects is left dangling inside this package.
+// (workflow/launch's tests prove the caller-level consequence: a child
+// already started by fn must be killed, never left running unreferenced.)
+func TestAttachRefUnderLifecycle_RefsContentionOutlastingFreshBudget_ReleasesBothLocks(t *testing.T) {
+	dir := t.TempDir()
+	restore := RefAcquireTimeout
+	RefAcquireTimeout = 40 * time.Millisecond
+	t.Cleanup(func() { RefAcquireTimeout = restore })
+
+	holder, err := OpenRefLease(dir)
+	if err != nil {
+		t.Fatalf("OpenRefLease holder: %v", err)
+	}
+	if err := holder.TryExclusive(); err != nil {
+		t.Fatalf("holder TryExclusive: %v", err)
+	}
+	defer holder.Close() // held for the whole test: contention never clears
+
+	expired, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancel()
+	<-expired.Done()
+
+	start := time.Now()
+	_, err = AttachRefUnderLifecycle(expired, dir, func() error { return nil })
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("AttachRefUnderLifecycle under sustained refs contention = %v, want a wrapped context.DeadlineExceeded from the FRESH budget", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("AttachRefUnderLifecycle took %s, want bounded near the shrunk 40ms budget, not a hang", elapsed)
+	}
+
+	lc, err := OpenLifecycleLock(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lc.Close()
+	if err := lc.TryExclusive(); err != nil {
+		t.Errorf("lifecycle lock still held after a failed refs acquire = %v, want free", err)
+	}
+}
+
+// TestAttachRefUnderLifecycle_LifecycleTimeoutNamesAnotherTransition proves
+// requirement (3): a lifecycle-lock acquire that times out says so in terms
+// an operator can act on, not just "context deadline exceeded".
+func TestAttachRefUnderLifecycle_LifecycleTimeoutNamesAnotherTransition(t *testing.T) {
+	dir := t.TempDir()
+	blocker, err := OpenLifecycleLock(dir)
+	if err != nil {
+		t.Fatalf("OpenLifecycleLock blocker: %v", err)
+	}
+	defer blocker.Close()
+	if err := blocker.TryExclusive(); err != nil {
+		t.Fatalf("blocker TryExclusive: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err = AttachRefUnderLifecycle(ctx, dir, nil)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("AttachRefUnderLifecycle while lifecycle held = %v, want wrapping context.DeadlineExceeded", err)
+	}
+	if !strings.Contains(err.Error(), "another create or attach is in progress") {
+		t.Errorf("error %q must identify another create/attach in progress", err.Error())
 	}
 }

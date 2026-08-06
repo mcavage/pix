@@ -12,9 +12,11 @@ package launch
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -509,6 +511,54 @@ func TestTeardownJournal_BoundedAnd0600(t *testing.T) {
 	}
 	if got := readJournalFile(t, path); len(got) != 1 {
 		t.Errorf("journal read over a corrupt line = %v, want the 1 good entry", got)
+	}
+}
+
+// TestAppendTeardownJournal_ConcurrentAppendsLoseNoEntries: the journal's
+// append is read-modify-write (read every prior line, append one, rewrite
+// the whole file). Without cross-process serialization, two writers racing
+// the SAME journal path each read the file before the other's write lands,
+// and the slower one's rewrite silently drops the faster one's entry — data
+// loss with no error anywhere. This drives that race with real concurrent
+// goroutines, each opening the lock file independently (so the flock
+// contention is the same shape it would be across processes), and proves
+// every entry survives.
+func TestAppendTeardownJournal_ConcurrentAppendsLoseNoEntries(t *testing.T) {
+	isolateState(t)
+	path := filepath.Join(t.TempDir(), "teardown.jsonl")
+	const n = 40
+
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			o := TeardownOptions{JournalPath: path, Now: time.Now}
+			errs <- appendTeardownJournal(o, TeardownResult{
+				Sandbox: fmt.Sprintf("pix-%02d", i), Key: fmt.Sprintf("pix-%02d", i),
+				Trigger: TriggerSession, Verdict: TeardownRemoved, Detail: "concurrent append",
+			})
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("appendTeardownJournal: %v", err)
+		}
+	}
+
+	entries := readJournalFile(t, path)
+	if len(entries) != n {
+		t.Fatalf("journal has %d entries, want %d — a concurrent append lost an entry to the read-modify-write race", len(entries), n)
+	}
+	seen := make(map[string]bool, n)
+	for _, e := range entries {
+		seen[e.Sandbox] = true
+	}
+	if len(seen) != n {
+		t.Errorf("journal has %d distinct sandboxes, want %d (a duplicate would hide a lost one behind it)", len(seen), n)
 	}
 }
 

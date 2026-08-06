@@ -35,6 +35,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"pix/host/config"
@@ -295,12 +296,18 @@ func clearedResult(v TeardownVerdict, dir, name, format string, a ...any) Teardo
 
 func clearSessionState(dir string) error {
 	var errs []error
-	for _, name := range []string{
-		sessionFingerprintFileName, sessionFingerprintFileName + ".tmp",
-		sessionInvocationFileName, sessionInvocationFileName + ".tmp",
-	} {
+	for _, name := range []string{sessionFingerprintFileName, sessionInvocationFileName} {
 		if err := os.Remove(filepath.Join(dir, name)); err != nil && !os.IsNotExist(err) {
 			errs = append(errs, err)
+		}
+		// writeFileAtomic's temp names carry a random suffix (unlike the old
+		// fixed ".tmp"), so a crash-leftover from a write that never reached
+		// its rename needs a glob, not an exact name, to find and remove.
+		leftover, _ := filepath.Glob(filepath.Join(dir, name+".tmp-*"))
+		for _, p := range leftover {
+			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+				errs = append(errs, err)
+			}
 		}
 	}
 	errs = append(errs, lease.ClearState(dir))
@@ -414,6 +421,49 @@ func teardownJournalPath() (string, error) {
 	return filepath.Join(state, TeardownJournalName), nil
 }
 
+// teardownJournalGuardTimeout bounds the flock below. It is NOT a liveness
+// signal — it only serializes a fast local read-modify-write, the same
+// posture as lease's keepGuardTimeout — so a short, fixed bound is correct:
+// a caller stuck longer than this is stuck on something else entirely.
+const teardownJournalGuardTimeout = 2 * time.Second
+
+// withTeardownJournalGuard serializes the journal's read-modify-write across
+// PROCESSES: an orphan sweep and a session's own teardown are frequently two
+// different `pix-host` invocations writing the SAME journal path, and a
+// unique temp name (writeFileAtomic) only stops one writer's rename from
+// landing HALF another's data — it does nothing about two writers each
+// reading the file's prior lines before either has appended its own, where
+// the slower writer's rewrite silently drops the faster one's entry. The
+// guard is a flock on a dedicated lock file next to the journal.
+func withTeardownJournalGuard(path string, fn func() error) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	lockPath := path + ".lock"
+	f, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	deadline := time.Now().Add(teardownJournalGuardTimeout)
+	for {
+		ferr := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if ferr == nil {
+			break
+		}
+		if !errors.Is(ferr, syscall.EWOULDBLOCK) && !errors.Is(ferr, syscall.EAGAIN) {
+			return &os.PathError{Op: "flock", Path: lockPath, Err: ferr}
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("launch: timed out waiting for the teardown journal lock at %s (another teardown is writing it)", lockPath)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return fn()
+}
+
 func appendTeardownJournal(o TeardownOptions, res TeardownResult) error {
 	path := o.JournalPath
 	if path == "" {
@@ -430,29 +480,16 @@ func appendTeardownJournal(o TeardownOptions, res TeardownResult) error {
 	if err != nil {
 		return err
 	}
-	lines := append(readJournalLines(path), string(line))
-	if len(lines) > TeardownJournalMaxEntries {
-		lines = lines[len(lines)-TeardownJournalMaxEntries:]
-	}
-	for len(lines) > 1 && journalBytes(lines) > teardownJournalMaxBytes {
-		lines = lines[1:]
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmp, 0o600); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	return nil
+	return withTeardownJournalGuard(path, func() error {
+		lines := append(readJournalLines(path), string(line))
+		if len(lines) > TeardownJournalMaxEntries {
+			lines = lines[len(lines)-TeardownJournalMaxEntries:]
+		}
+		for len(lines) > 1 && journalBytes(lines) > teardownJournalMaxBytes {
+			lines = lines[1:]
+		}
+		return writeFileAtomic(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600)
+	})
 }
 
 func journalBytes(lines []string) int {
