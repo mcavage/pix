@@ -162,13 +162,31 @@ func FileSHA256(path string) (string, error) {
 	return hex.EncodeToString(sum.Sum(nil)), nil
 }
 
+// unitStageDir returns THIS unit's own, exclusive subdirectory of the stage
+// dir. Every staged/temp file for a unit lives ONLY under its own dir, so a
+// sweep can never even LIST a sibling's files, let alone match one by a
+// string-prefix coincidence (R1-1: names like "a", "a-", and "a.stage-x" used
+// to be able to collide under a single flat stage dir). unit must already be
+// non-empty (UnitSpec.Validate) and is rejected here if it is not a bare,
+// traversal-free path component.
+func unitStageDir(stageDir, unit string) (string, error) {
+	if unit == "" || unit != filepath.Base(unit) || unit == "." || unit == ".." || strings.ContainsRune(unit, filepath.Separator) {
+		return "", fmt.Errorf("unit %q: not a valid stage directory name", unit)
+	}
+	return filepath.Join(stageDir, unit), nil
+}
+
 // StageExecutable copies an external unit's binary into the supervisor-owned staging dir, verifies the pin against the bytes it copied, and returns the STAGED path. Execing that copy (never the original) closes the verify-then-exec TOCTOU; a mismatch leaves nothing behind.
 func StageExecutable(stageDir, unit, src, sha string) (string, error) {
 	want := strings.ToLower(strings.TrimSpace(sha))
 	if !shaHexRe.MatchString(want) {
 		return "", fmt.Errorf("unit %s: sha256 pin must be 64 hex chars", unit)
 	}
-	if err := os.MkdirAll(stageDir, 0o700); err != nil {
+	unitDir, err := unitStageDir(stageDir, unit)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(unitDir, 0o700); err != nil {
 		return "", fmt.Errorf("stage dir: %w", err)
 	}
 	in, err := os.Open(src)
@@ -176,7 +194,7 @@ func StageExecutable(stageDir, unit, src, sha string) (string, error) {
 		return "", fmt.Errorf("open unit binary: %w", err)
 	}
 	defer in.Close()
-	tmp, err := os.CreateTemp(stageDir, unit+".stage-*")
+	tmp, err := os.CreateTemp(unitDir, "stage-*")
 	if err != nil {
 		return "", fmt.Errorf("stage unit binary: %w", err)
 	}
@@ -196,28 +214,30 @@ func StageExecutable(stageDir, unit, src, sha string) (string, error) {
 	if err := os.Chmod(tmp.Name(), 0o500); err != nil {
 		return "", fmt.Errorf("stage unit binary: %w", err)
 	}
-	dst := filepath.Join(stageDir, unit+"-"+want[:12])
+	dst := filepath.Join(unitDir, want[:12])
 	if err := os.Rename(tmp.Name(), dst); err != nil {
 		return "", fmt.Errorf("stage unit binary: %w", err)
 	}
-	sweepStaged(stageDir, unit, filepath.Base(dst))
+	sweepStaged(unitDir, filepath.Base(dst))
 	return dst, nil
 }
 
-// sweepStaged removes THIS unit's superseded staged copies (an old pin's bytes have no business staying executable in the stage dir) and its orphaned .stage-* temp files — never the copy just staged, and never a sibling's: the suffix must be exactly the "-<12 hex>" shape StageExecutable writes, or ".stage-*" (exactly "-" + 12 lowercase hex, so unit "me" can never sweep unit "mem"'s copies, nor unit "a" a sibling "a-b"'s). Best-effort, only after a successful stage; a sweep failure never blocks a launch.
-func sweepStaged(stageDir, unit, current string) {
-	ents, err := os.ReadDir(stageDir)
+// sweepStaged removes every OTHER file in THIS unit's stage directory — an
+// old pin's bytes (a superseded "<12 hex>" copy) and its orphaned "stage-*"
+// temp files. Safe by CONSTRUCTION, not by pattern-matching a sibling's name
+// out of a shared directory: unitStageDir gives each unit its own directory,
+// so this ReadDir can never even see a sibling's files, regardless of how
+// the two unit names relate as strings (prefix, suffix, substring — none of
+// it matters once the directory itself is exclusive). Best-effort, only
+// after a successful stage; a sweep failure never blocks a launch.
+func sweepStaged(unitDir, current string) {
+	ents, err := os.ReadDir(unitDir)
 	if err != nil {
 		return
 	}
 	for _, e := range ents {
-		name := e.Name()
-		if name == current || e.IsDir() || !strings.HasPrefix(name, unit) {
-			continue
-		}
-		rest := strings.TrimPrefix(name, unit)
-		if (len(rest) == 13 && rest[0] == '-' && strings.Trim(rest[1:], "0123456789abcdef") == "") || strings.HasPrefix(rest, ".stage-") {
-			_ = os.Remove(filepath.Join(stageDir, name))
+		if name := e.Name(); name != current && !e.IsDir() {
+			_ = os.Remove(filepath.Join(unitDir, name))
 		}
 	}
 }

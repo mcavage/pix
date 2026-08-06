@@ -331,8 +331,10 @@ func TestStageVerifiedExecutable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StageExecutable: %v", err)
 	}
-	if filepath.Dir(staged) != filepath.Clean(stage) {
-		t.Errorf("staged copy %q is not inside the stage dir %q", staged, stage)
+	// The staged copy lives in the unit's OWN subdirectory of the stage dir
+	// (R1-1: no shared, flat namespace a sibling's name could collide into).
+	if wantDir := filepath.Join(stage, "unit"); filepath.Dir(staged) != wantDir {
+		t.Errorf("staged copy %q is not inside its unit dir %q", staged, wantDir)
 	}
 	if got, _ := FileSHA256(staged); got != sha {
 		t.Errorf("staged copy sha = %s, want %s", got, sha)
@@ -352,10 +354,57 @@ func TestStageVerifiedExecutable(t *testing.T) {
 		!strings.Contains(err.Error(), "mismatch") {
 		t.Fatalf("expected a sha256 mismatch refusal, got %v", err)
 	}
-	ents, _ := os.ReadDir(stage)
+	ents, _ := os.ReadDir(filepath.Join(stage, "bad"))
 	for _, e := range ents {
-		if strings.HasPrefix(e.Name(), "bad-") {
-			t.Errorf("a refused binary was left staged: %s", e.Name())
+		t.Errorf("a refused binary was left staged: %s", e.Name())
+	}
+}
+
+// R1-1: a unit name that is a string-prefix of, or embeds the shape of,
+// another unit's stage filenames ("a" vs "a-" vs "a.stage-x") must never let
+// one unit's stage sweep touch a sibling's files — not by luck of a length
+// check, but because each unit stages into its OWN exclusive directory.
+func TestStageIsolatesPrefixOverlappingUnitNames(t *testing.T) {
+	bin, sha := buildFixture(t)
+	stage := t.TempDir()
+
+	// A sibling whose in-flight temp file, once "a" is trimmed as a string
+	// prefix, reproduces the exact "stage-" temp-file shape the old flat
+	// sweep matched on (the concrete R1-1 collision).
+	victimDir := filepath.Join(stage, "a.stage-foo")
+	must(t, os.MkdirAll(victimDir, 0o700))
+	victimTemp := filepath.Join(victimDir, "stage-inflight")
+	must(t, os.WriteFile(victimTemp, []byte("tmp"), 0o600))
+
+	// A sibling named with a trailing hyphen, and one that is a plain
+	// character-extension of "a" — both from the review's own examples.
+	hyphenSibling, err := StageExecutable(stage, "a-", bin, sha)
+	must(t, err)
+	extendingSibling, err := StageExecutable(stage, "ab", bin, sha)
+	must(t, err)
+
+	staged, err := StageExecutable(stage, "a", bin, sha)
+	must(t, err)
+
+	if _, err := os.Stat(victimTemp); err != nil {
+		t.Errorf("unit %q swept sibling %q's in-flight temp file: %v", "a", "a.stage-foo", err)
+	}
+	for name, path := range map[string]string{"a-": hyphenSibling, "ab": extendingSibling, "a (own copy)": staged} {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("sweep for unit %q removed sibling/own copy %q: %v", "a", name, err)
+		}
+	}
+}
+
+// R1-1 hardening: a unit name is a stage-directory component, not a free
+// string — path separators and traversal segments are refused rather than
+// silently escaping the stage dir.
+func TestStageRefusesUnsafeUnitNames(t *testing.T) {
+	bin, sha := buildFixture(t)
+	stage := t.TempDir()
+	for _, unit := range []string{"../escape", "a/b", ".", "..", ""} {
+		if _, err := StageExecutable(stage, unit, bin, sha); err == nil {
+			t.Errorf("StageExecutable(%q) should have been refused", unit)
 		}
 	}
 }
@@ -846,7 +895,8 @@ func TestStageSweepsSupersededCopies(t *testing.T) {
 	must(t, err)
 	extending, err := StageExecutable(stage, "unit-b", bin, sha)
 	must(t, err)
-	orphan := filepath.Join(stage, "unit.stage-orphan")
+	must(t, os.MkdirAll(filepath.Join(stage, "unit"), 0o700))
+	orphan := filepath.Join(stage, "unit", "stage-orphan")
 	must(t, os.WriteFile(orphan, []byte("tmp"), 0o600))
 
 	first, err := StageExecutable(stage, "unit", bin, sha)
