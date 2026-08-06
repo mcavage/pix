@@ -376,11 +376,17 @@ exact command), **unverifiable** (a probe timed out or the tool needed to
 check isn't available; never treated as broken), and **denied** (an explicit
 policy or permission refusal, distinct from a setup gap). `doctor --json`
 emits `schema_version` so a script can tell the shape apart from an older
-run. Exit codes: **2** on a usage error, **1** only when a core requirement
-(a model provider key, or the config file itself) is a positively verified
-failure, **0** otherwise, including every optional or unverifiable gap. A
-single resolved key for any one of Anthropic, OpenAI, or Google satisfies the
-provider check; you don't need all three.
+run. Exit codes: **2** on a usage error, **1** only when a REQUIRED check is a
+positively verified failure, **0** otherwise, including every optional or
+unverifiable gap. Required, always: the **sbx CLI** being installed and at
+least one resolved **provider key** (a single key for any one of Anthropic,
+OpenAI, or Google satisfies it; you don't need all three) — either one
+failing alone is enough to fail doctor. Required only when configured:
+**memory** and **monitor**, once listed in `services`. Never required:
+**launchd** and **pack** (a host with neither configured is a perfectly good
+host). A config file that fails to load entirely is its own separate
+required gap — nothing else can be probed without one, so it is reported
+alone.
 
 **sbx-missing exit codes are unified across every surface that shells to
 sbx.** `pix ls`, `pix rm`, and every `pix mcp` verb that promises an operation
