@@ -425,20 +425,57 @@ function gitMergeBase(root, a, b) {
 }
 
 /**
+ * True when at least one *.rules.mjs file in `rulesDir` existed at git ref
+ * `base` — i.e. `base` is from a point in history where the semantic-diff
+ * rules had already been introduced. If `rulesDir` doesn't exist on disk at
+ * all (a unit-test fixture with no rules directory), this is vacuously true:
+ * there's nothing to gate on, so callers keep their prior, ungated behavior.
+ *
+ * WHY: a long-lived branch's merge-base with a stale tracked remote (e.g.
+ * origin/main frozen months before this feature branched, never fast-forwarded)
+ * can land on a commit that PREDATES the rules directory entirely. checkRuleDrift
+ * then finds no old version of any rules file at that base for every single
+ * file (gitShow returns null each time), anyBase never becomes true, and the
+ * whole rule-drift check silently reports `skipped: true` — the exact
+ * HEAD-self-compare-shaped blind spot this function exists to avoid, just
+ * reached a different way. A resolvable candidate that can't see the rules at
+ * all is not meaningful; fall through to the next one.
+ */
+function candidateHasRules(root, rulesDir, base) {
+	if (!fs.existsSync(rulesDir)) return true;
+	let files;
+	try {
+		files = fs.readdirSync(rulesDir).filter((f) => f.endsWith(".rules.mjs"));
+	} catch {
+		return true;
+	}
+	if (files.length === 0) return true;
+	const relRulesDir = path.relative(root, rulesDir);
+	return files.some((f) => gitShow(root, base, path.join(relRulesDir, f)) !== null);
+}
+
+/**
  * Resolves a meaningful default git base for rule-drift comparison. Order:
  *   1. `SEMANTIC_DIFF_BASE_SHA` — set by CI from the PR's actual base sha
  *      (github.event.pull_request.base.sha) or the pre-push sha on a direct
  *      push (github.event.before), when that ref is reachable in this clone.
  *   2. merge-base(HEAD, origin/<default branch>) — a local developer running
  *      the gate against a feature branch, or a CI job whose checkout fetched
- *      the base branch too.
- *   3. HEAD~1 — no remote tracking branch at all, but at least one prior
- *      commit exists: still strictly more meaningful than comparing HEAD to
- *      itself.
+ *      the base branch too — but ONLY if that merge-base actually predates
+ *      (i.e. already contains) the semantic-diff rules directory. A
+ *      long-lived branch whose tracked remote is frozen from before the rules
+ *      existed would otherwise resolve to a base that makes checkRuleDrift
+ *      silently report `skipped` for every rule file, which is functionally
+ *      the same HEAD-self-compare blind spot this whole function exists to
+ *      close, just reached via a resolvable-but-useless candidate instead of
+ *      a missing one. See candidateHasRules() above.
+ *   3. HEAD~1 — no remote tracking branch at all (or none usable), but at
+ *      least one prior commit exists: still strictly more meaningful than
+ *      comparing HEAD to itself.
  *   4. "HEAD" — brand-new/single-commit repo: nothing to compare against,
  *      same effectively-inert result the old hardcoded default gave everyone.
  */
-export function resolveDefaultBase(root) {
+export function resolveDefaultBase(root, rulesDir = path.join(root, "scripts", "semantic-diff", "rules")) {
 	const envBase = process.env.SEMANTIC_DIFF_BASE_SHA;
 	if (envBase && gitOk(root, ["rev-parse", "--verify", "-q", `${envBase}^{commit}`])) return envBase;
 
@@ -449,7 +486,7 @@ export function resolveDefaultBase(root) {
 	for (const candidate of ["origin/main", "origin/master"]) {
 		if (!gitOk(root, ["rev-parse", "--verify", "-q", `${candidate}^{commit}`])) continue;
 		const base = gitMergeBase(root, "HEAD", candidate);
-		if (base) return base;
+		if (base && candidateHasRules(root, rulesDir, base)) return base;
 	}
 
 	if (gitOk(root, ["rev-parse", "--verify", "-q", "HEAD~1"])) return "HEAD~1";
@@ -470,4 +507,20 @@ export function staleManifestEntries(report, drift) {
 	if (drift.skipped) return []; // no usable git base to prove staleness against: same "insufficient information" posture as drift itself
 	const consumed = new Set(drift.consumedManifestIds ?? []);
 	return report.unusedManifestEntries.filter((id) => !consumed.has(id));
+}
+
+/**
+ * Manifest entries not needed as an evaluatePins waiver this run, but that DID
+ * explain a real checkRuleDrift fingerprint transition vs. the base (the
+ * CLI's informational "note:" line, as opposed to staleManifestEntries()'s
+ * hard FAIL). Always empty when drift.skipped: a skipped drift check (no
+ * usable git base) proved nothing about any pin's history, so no entry may be
+ * credited with "explaining real rule-drift this run" when no rule-drift
+ * check actually ran — that would be exactly the false confidence this guard
+ * exists to prevent, just moved into the non-failing note instead of the
+ * pass/fail verdict.
+ */
+export function entriesExplainingDrift(report, drift, stale) {
+	if (drift.skipped) return [];
+	return report.unusedManifestEntries.filter((id) => !stale.includes(id));
 }

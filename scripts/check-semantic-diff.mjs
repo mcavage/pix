@@ -38,7 +38,7 @@
 
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { activationKeySet, checkRuleDrift, evaluatePins, loadActivation, loadManifest, loadRules, resolveDefaultBase, staleManifestEntries } from "./semantic-diff/lib/engine.mjs";
+import { activationKeySet, checkRuleDrift, entriesExplainingDrift, evaluatePins, loadActivation, loadManifest, loadRules, resolveDefaultBase, staleManifestEntries } from "./semantic-diff/lib/engine.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
@@ -91,7 +91,7 @@ function printReport(report, drift, stale, opts) {
 	}
 	console.log("");
 
-	const usedForDrift = report.unusedManifestEntries.filter((id) => !stale.includes(id));
+	const usedForDrift = entriesExplainingDrift(report, drift, stale);
 	if (usedForDrift.length) {
 		console.log(`note: intended-change manifest entries not needed as an evaluatePins waiver, but explaining real rule-drift this run (fine, not failing): ${usedForDrift.join(", ")}`);
 	}
@@ -126,7 +126,7 @@ async function main() {
 	const activeKeys = activationKeySet(activation);
 	for (const key of opts.activate) activeKeys.add(key);
 	const report = evaluatePins(pins, opts.root, manifest, activeKeys);
-	const baseRef = opts.base ?? (opts.git ? resolveDefaultBase(opts.root) : "HEAD");
+	const baseRef = opts.base ?? (opts.git ? resolveDefaultBase(opts.root, RULES_DIR) : "HEAD");
 	const drift = opts.git ? await checkRuleDrift(RULES_DIR, opts.root, baseRef, manifest) : { ok: true, skipped: true, drifted: [], consumedManifestIds: [] };
 	const stale = staleManifestEntries(report, drift);
 
