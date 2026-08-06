@@ -25,7 +25,12 @@ package main
 // Not in scope, deliberately: log.Printf in the daemon-side packages (monitor's
 // ingest loop, supervise's tree). That is the standard logger, whose
 // destination the daemon's own main sets; it is a logging-configuration
-// question, not a command writing over a user's stdout.
+// question, not a command writing over a user's stdout. log.Fatal/Fatalf/
+// Fatalln ARE in scope, by contrast: each prints then calls os.Exit(1) under
+// the hood, so it is os.Exit wearing the logger's clothes, not a logging
+// question. Same for the two builtins, print and println: no import needed,
+// so the original AST walk — gated on "does this file import os or fmt" —
+// never even looked at them, despite both writing straight to os.Stderr.
 
 import (
 	"fmt"
@@ -45,6 +50,22 @@ import (
 // and pack's remaining two reads are a signature change (its trust gate takes
 // the reader from its caller), tracked separately from this guard.
 var processExits = map[string]bool{"Exit": true, "Stdout": true, "Stderr": true}
+
+// logExits are the log-package funcs that end the process exactly like
+// os.Exit — log.Fatal/Fatalf/Fatalln each print to os.Stderr then call
+// os.Exit(1) internally (see the log package source). A package below L4
+// calling one of these has found the same bypass as calling os.Exit
+// directly, just spelled through the standard logger. log.Panic/Panicf/
+// Panicln are deliberately absent: a panic can be recovered by a caller, so
+// it is not the same unconditional process-ending violation.
+var logExits = map[string]bool{"Fatal": true, "Fatalf": true, "Fatalln": true}
+
+// builtinStderrWrites are the two predeclared (universe-scope, no import)
+// functions that write straight to os.Stderr, unbuffered — the same class of
+// violation as fmt.Print writing to os.Stdout, just with no package
+// qualifier to key off of, so they need their own AST shape (a bare
+// *ast.Ident call, not a *ast.SelectorExpr).
+var builtinStderrWrites = map[string]bool{"print": true, "println": true}
 
 // streamSeams are the packages allowed to name os.Stdout/os.Stderr, and the
 // reason. sys is the only one: the package exists to BE the seam between this
@@ -213,12 +234,31 @@ func processBoundaryHits(t *testing.T, dir string) []string {
 	var hits []string
 	for _, pkg := range pkgs {
 		for _, file := range pkg.Files {
-			// A local identifier named os/fmt cannot be the stdlib package.
-			usesOS, usesFmt := importsPlain(file, "os"), importsPlain(file, "fmt")
-			if !usesOS && !usesFmt {
-				continue
-			}
+			// The local identifiers THIS file uses for os/fmt/log — its plain
+			// name, an alias, or none if the path isn't imported at all.
+			// Resolved per file (imports are file-scoped in Go), and through
+			// the alias rather than the literal package name: `import o "os"`
+			// then `o.Exit(...)` used to be invisible to this guard because it
+			// only ever looked for the identifier "os".
+			osNames := importedNames(file, "os")
+			fmtNames := importedNames(file, "fmt")
+			logNames := importedNames(file, "log")
 			ast.Inspect(file, func(n ast.Node) bool {
+				// print(...) / println(...): a bare call to the builtin, not a
+				// selector, so it needs its own shape check and runs
+				// regardless of what this file imports. ident.Obj != nil means
+				// this file (or an enclosing scope within it) itself declares
+				// something named print/println — a local func or var
+				// shadowing the builtin is not the builtin, and flagging it
+				// would be exactly the "unrelated local func" false positive
+				// this guard must not produce.
+				if call, ok := n.(*ast.CallExpr); ok {
+					if ident, ok := call.Fun.(*ast.Ident); ok && ident.Obj == nil && builtinStderrWrites[ident.Name] {
+						pos := fset.Position(ident.Pos())
+						hits = append(hits, fmt.Sprintf("%s:%d: os.Stderr (via builtin %s)", filepath.Base(pos.Filename), pos.Line, ident.Name))
+					}
+					return true
+				}
 				sel, ok := n.(*ast.SelectorExpr)
 				if !ok {
 					return true
@@ -229,10 +269,18 @@ func processBoundaryHits(t *testing.T, dir string) []string {
 				}
 				var what string
 				switch {
-				case usesOS && ident.Name == "os" && processExits[sel.Sel.Name]:
+				case osNames[ident.Name] && processExits[sel.Sel.Name]:
 					what = "os." + sel.Sel.Name
-				case usesFmt && ident.Name == "fmt" && implicitStdout[sel.Sel.Name]:
+				case fmtNames[ident.Name] && implicitStdout[sel.Sel.Name]:
 					what = "os.Stdout (via fmt." + sel.Sel.Name + ")"
+				case logNames[ident.Name] && logExits[sel.Sel.Name]:
+					// Phrased to END in the literal "os.Exit": both
+					// TestNothingBelowL4CallsOsExit and the sys stream-seam
+					// exemption above key off that exact suffix to recognize a
+					// process-ending hit regardless of which spelling reached
+					// it, and log.Fatal* must be recognized as exactly that —
+					// no exemption, same as a direct os.Exit.
+					what = "log." + sel.Sel.Name + " -> os.Exit"
 				default:
 					return true
 				}
@@ -246,14 +294,30 @@ func processBoundaryHits(t *testing.T, dir string) []string {
 	return hits
 }
 
-// importsPlain reports whether the file imports path under its own name, which
-// is what makes `os.Exit` in it the stdlib call rather than a local variable's
-// field.
-func importsPlain(file *ast.File, path string) bool {
+// importedNames returns every local identifier this file uses to refer to
+// the package imported from path: its own name for a plain import (`"os"` ->
+// "os"), an explicit alias (`o "os"` -> "o"), or an empty set if the file
+// doesn't import path at all. Resolving through the alias — not just the
+// literal package name importsPlain used to check for — is what closes the
+// hole an aliased `import o "os"` or `import l "log"` opened: renaming an
+// import at the call site used to be a free pass through every check below.
+// A blank import ("_") contributes no usable identifier and a dot import
+// (".") expands to bare identifiers instead of a qualifier — both left
+// unhandled here, same as this file's own "not in scope" carve-outs above.
+func importedNames(file *ast.File, path string) map[string]bool {
+	names := map[string]bool{}
 	for _, imp := range file.Imports {
-		if imp.Path.Value == `"`+path+`"` && imp.Name == nil {
-			return true
+		if imp.Path.Value != `"`+path+`"` {
+			continue
+		}
+		switch {
+		case imp.Name == nil:
+			names[path] = true // os, fmt, log: package name == import path (no "/")
+		case imp.Name.Name == "_" || imp.Name.Name == ".":
+			// no usable qualified identifier from either form
+		default:
+			names[imp.Name.Name] = true
 		}
 	}
-	return false
+	return names
 }
