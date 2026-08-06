@@ -103,7 +103,13 @@ RUN apt-get update \
 # and the agent hitting this mid-task just burns a turn working around it. Opt out
 # globally; `python3 -m venv` is still installed for anyone who wants isolation.
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
-RUN npm install -g --ignore-scripts typescript \
+# Pinned like every other baked tool: an unpinned `npm install -g typescript`
+# resolves to whatever the registry serves that day, so the version the license
+# ledger records (scripts/legal/dependencies.json -> npmGlobal.typescript) would
+# be a claim about a build nobody can reproduce. check-third-party-notices.sh's
+# --check-npm-pins gate fails closed if this ARG and the ledger ever drift.
+ARG TYPESCRIPT_VERSION=5.9.3
+RUN npm install -g --ignore-scripts "typescript@${TYPESCRIPT_VERSION}" \
  && npm cache clean --force
 # ruff (Python lint/format) via official static binary.
 # ARG is pinned (like FD_VERSION / GO_VERSION) so builds are reproducible:

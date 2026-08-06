@@ -13,6 +13,16 @@ before the real stories are built on top of it.
 > stays cross-platform and is a completely different artifact from these two
 > host binaries.
 
+> **AC-REL-02 update (loose assets retired):** every reference below to the
+> loose `pix-darwin-<arch>` / `pix-host-darwin-<arch>` release assets — P3's
+> observation, the "install.sh's existing loose-asset flow is untouched"
+> verification, and the SHA256SUMS-covers-every-asset note — is SUPERSEDED.
+> Those assets shipped the binaries with none of the notices that legally have
+> to travel with them, so the release no longer publishes them at all;
+> `install.sh` consumes the same notice-bearing tarball Homebrew does and
+> verifies it against `SHA256SUMS`. See `docs/legal/RELEASE-SAFEGUARDS.md`
+> (AC-REL-02).
+
 Decisions below are CLOSED. Do not relitigate them.
 
 - macOS only. The formula, docs, and new tests are darwin-only, and (per the

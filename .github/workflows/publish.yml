@@ -2,9 +2,20 @@ name: publish
 
 # Every push to main auto-publishes a NEW immutable version. CI starts with the
 # version committed in package.json (0.1.0 for the first Pix release), then
-# increments its patch component until it finds an unused v<version> git tag.
-# It builds multi-arch (amd64 + arm64), pushes :<version> + :latest, then commits
-# the selected version into all lockstep files ([skip ci] prevents recursion).
+# increments its patch component until it finds a version that is unused by BOTH
+# an unused v<version> git tag AND the image registry (see the `version` job:
+# the git tag is created late, by `bump`, so a run that pushed the image and
+# then died would otherwise hand the SAME version to the next run, silently
+# overwriting a published tag). It builds multi-arch (amd64 + arm64), pushes
+# :<version> + :latest, then commits the selected version into all lockstep
+# files ([skip ci] prevents recursion).
+#
+# NOTHING is pushed before the legal gate passes: `legal-gate` calls
+# .github/workflows/legal.yml (full-history secret scan, third-party/license
+# class gate, repo SBOM) as a job IN THIS GRAPH, and both `build` and `merge`
+# `needs` it. It used to run only as a separate workflow, which GitHub does not
+# order against this one — so the gate could still be running, or already red,
+# while a versioned image went out.
 #
 # Why: sbx caches materialized templates PER TAG NAME and won't re-pull a tag it
 # already has. A moving tag (:edge/:latest) therefore goes stale until you evict
@@ -38,6 +49,13 @@ env:
   IMAGE: docker.io/${{ vars.DOCKER_USER || 'mcavage' }}/pix
 
 jobs:
+  # The pre-publish legal gate, as a job in THIS graph (not a workflow racing
+  # this one): full-history secret scan, third-party notices + license-class
+  # gate, repo-tree SBOM. `build` and `merge` both wait on it.
+  legal-gate:
+    name: pre-publish legal gate
+    uses: ./.github/workflows/legal.yml
+
   version:
     name: compute version
     runs-on: ubuntu-latest
@@ -47,8 +65,16 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
+
+      # Needed to ASK the registry whether a tag already exists (below).
+      - name: Log in to Docker Hub (registry tag probe)
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - id: v
-        name: Select the next unused patch version
+        name: Select the next patch version unused by BOTH the git tags and the registry
         run: |
           set -euo pipefail
           base="$(node -p "require('./package.json').version")"
@@ -60,7 +86,32 @@ jobs:
           minor="${BASH_REMATCH[2]}"
           patch="${BASH_REMATCH[3]}"
           version="$base"
-          while git rev-parse -q --verify "refs/tags/v${version}" >/dev/null; do
+          # Two independent sources of "already used", because they are written
+          # at DIFFERENT times: `merge` pushes the registry tag, `bump` creates
+          # the git tag much later. A run that died in between leaves the git
+          # tag free and the registry tag taken; trusting only git here is what
+          # lets the next run overwrite a published image.
+          # tag-availability.sh fails CLOSED (exit 2) on any undecidable answer
+          # — auth, network, unknown error. Its verdict is captured by an
+          # ASSIGNMENT, deliberately: inside an `if [ "$(...)" = ... ]` the
+          # condition context suppresses `set -e`, so an exit-2 would read as
+          # an empty string, i.e. "not taken", i.e. fail OPEN — the exact
+          # failure this guard exists to prevent.
+          while :; do
+            if git rev-parse -q --verify "refs/tags/v${version}" >/dev/null; then
+              echo "git tag v${version} exists - trying the next patch"
+            else
+              verdict="$(bash scripts/release/tag-availability.sh "$IMAGE" "$version")"
+              if [ "$verdict" = "taken" ]; then
+                echo "::warning::${IMAGE}:${version} already exists in the registry with no v${version} git tag:"
+                echo "::warning::a previous run published it and then failed before tagging. Selecting the next patch instead of overwriting it."
+              elif [ "$verdict" = "free" ]; then
+                break
+              else
+                echo "::error::tag-availability.sh returned an unrecognized verdict '$verdict' for ${IMAGE}:${version}"
+                exit 1
+              fi
+            fi
             patch=$((patch + 1))
             version="${major}.${minor}.${patch}"
           done
@@ -158,7 +209,9 @@ jobs:
 
   build:
     name: build ${{ matrix.arch }}
-    needs: [version, patch-smoke]
+    # legal-gate FIRST: this job pushes layers by digest, so it must not run
+    # before the secret scan / license gate / SBOM have passed.
+    needs: [version, patch-smoke, legal-gate]
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -220,11 +273,17 @@ jobs:
 
   merge:
     name: merge manifest + push tags
-    needs: [version, build]
+    # The one job that creates the VERSIONED tag. legal-gate is named again
+    # (not just inherited through `build`) so the ordering is explicit at the
+    # step that mutates a public tag.
+    needs: [version, build, legal-gate]
     runs-on: ubuntu-latest
     outputs:
       digest: ${{ steps.manifest.outputs.digest }}
     steps:
+      # Needed for scripts/release/tag-availability.sh (the pre-mutation check).
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: /tmp/digests
@@ -238,6 +297,27 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Last line of defense before a public tag is mutated. The `version` job
+      # already asked the registry, but that was minutes and one full multi-arch
+      # build ago, and a concurrent/retried run could have published in between
+      # (`concurrency: publish` serializes runs, it does not make an earlier
+      # run's push disappear). Ask again, immediately before the create, and
+      # FAIL rather than overwrite. Fails closed on an undecidable answer too.
+      - name: Refuse to overwrite an existing :<version> tag
+        run: |
+          set -euo pipefail
+          V="${{ needs.version.outputs.version }}"
+          # ASSIGNMENT, not `if [ "$(...)" ]`: a condition context suppresses
+          # `set -e`, which would turn the script's fail-closed exit 2 into an
+          # empty string and let the create proceed.
+          verdict="$(bash scripts/release/tag-availability.sh "$IMAGE" "$V")"
+          if [ "$verdict" != "free" ]; then
+            echo "::error::${IMAGE}:${V}: refusing to overwrite a published tag (verdict: $verdict)."
+            echo "::error::Nothing was mutated. Re-run publish: the version selector will pick the next unused patch."
+            exit 1
+          fi
+          echo "${IMAGE}:${V} is unused - safe to create the manifest"
 
       - name: Create and push :<version> + :latest
         id: manifest
@@ -354,9 +434,17 @@ jobs:
           git push origin "v$V"
 
   # Cross-compile the two HOST binaries (pix launcher + pix-host) for
-  # darwin/linux × amd64/arm64 and attach them, plus a SHA256SUMS, to the v<VER>
-  # GitHub Release. This is the repo-less install path: `install.sh` fetches these
-  # assets so a consumer never clones. Pure Go toolchain — no Docker, no DHI base.
+  # darwin × amd64/arm64, bundle each pair into a NOTICE-BEARING tarball, and
+  # attach the tarballs plus a SHA256SUMS to the v<VER> GitHub Release. This is
+  # the repo-less install path: Homebrew and `install.sh` both fetch the SAME
+  # tarball. Pure Go toolchain — no Docker, no DHI base.
+  #
+  # AC-REL-02: the LOOSE `pix-darwin-<arch>` / `pix-host-darwin-<arch>` assets
+  # are deliberately NOT published any more. They were a bare distribution of
+  # pix (MIT s2) and of the MPL-2.0 code linked into pix-host (MPL-2.0 s3.1)
+  # with none of the required notices attached, and install.sh consumed exactly
+  # those. install.sh now consumes the tarball, so there is no remaining
+  # consumer for a notice-less asset — and the release must not offer one.
   # Runs after `bump` so the `v<VER>` tag already exists and the release hangs off
   # the commit carrying the stamped spec.yaml (same commit the kit pin resolves to).
   release-binaries:
@@ -377,8 +465,9 @@ jobs:
           cache-dependency-path: services/host/go.sum
 
       # -X main.version stamps both package-main binaries: the launcher and
-      # pix-host each define the same symbol. Output names match install.sh's
-      # existing loose-asset URL pattern. darwin ONLY: pix's host lifecycle
+      # pix-host each define the same symbol. These are BUILD INTERMEDIATES:
+      # they are staged into the notice-bearing tarballs below and are not
+      # published as release assets. darwin ONLY: pix's host lifecycle
       # (launchd-managed serve, the pix/pix-host binaries themselves) is
       # macOS-only, so there is no consumer for a linux pix/pix-host release
       # asset any more. This is unrelated to the pix SANDBOX image (built by
@@ -431,17 +520,37 @@ jobs:
           done
           ls -la pix_*.tar.gz
 
+      # Gate the assets themselves: every published tarball must carry the
+      # notices, or it is not a lawful distribution of what is inside it. This
+      # asserts the bytes that are about to be uploaded, not the workflow text
+      # that produced them.
+      - name: Assert every published tarball carries the notices
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          for t in pix_*.tar.gz; do
+            listing="$(tar -tzf "$t")"
+            for required in pix pix-host THIRD_PARTY_NOTICES.md NOTICE.md LICENSE licenses/MPL-2.0.txt; do
+              printf '%s\n' "$listing" | grep -qx "$required" \
+                || { echo "::error::$t is missing $required"; exit 1; }
+            done
+            echo "$t: notices present"
+          done
+
+      # Only the tarballs are hashed, because only the tarballs ship.
       - name: Generate SHA256SUMS
         working-directory: dist
-        run: sha256sum pix-* pix_*.tar.gz > SHA256SUMS && cat SHA256SUMS
+        run: sha256sum pix_*.tar.gz > SHA256SUMS && cat SHA256SUMS
 
       - name: Upload assets to the v<version> release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: v${{ needs.version.outputs.version }}
           name: pix v${{ needs.version.outputs.version }}
+          # NOTE: no `dist/pix-*` line. See the AC-REL-02 note on this job:
+          # publishing the bare binaries shipped pix and the MPL-2.0 code inside
+          # pix-host with no notices attached.
           files: |
-            dist/pix-*
             dist/pix_*.tar.gz
             dist/SHA256SUMS
           fail_on_unmatched_files: true

@@ -20,6 +20,12 @@ test("later publishes select an unused patch tag without overwriting a release",
 	assert.match(workflow, /fetch-depth:\s*0/);
 	assert.match(workflow, /refs\/tags\/v\$\{version\}/);
 	assert.match(workflow, /patch=\$\(\(patch \+ 1\)\)/);
+	// The git tag alone is NOT enough: it is created by `bump`, after `merge`
+	// already pushed the image, so a partial release leaves the tag free and
+	// the registry tag taken. The registry is asked too (see
+	// tests/legal-provenance.test.mjs for the classification and fail-closed
+	// behavior of scripts/release/tag-availability.sh).
+	assert.match(workflow, /tag-availability\.sh/);
 });
 
 // The manpage (pix.1) was retired along with `pix man`/`--man` (`pix help
@@ -29,7 +35,12 @@ test("Homebrew archives are additive and contain both binaries, no manpage", () 
 	assert.match(workflow, /pix_\$\{V\}_darwin_\$\{arch\}\.tar\.gz/);
 	assert.match(workflow, /tar -C "\$stage" -czf .* pix pix-host THIRD_PARTY_NOTICES\.md NOTICE\.md/);
 	assert.doesNotMatch(workflow, /tar -C "\$stage" -czf .*pix\.1/);
-	assert.match(workflow, /sha256sum pix-\* pix_\*\.tar\.gz/);
+	// Only the notice-bearing tarballs are hashed and published now: the loose
+	// pix-<os>-<arch> assets were a notice-less distribution of the same
+	// binaries (see tests/install.test.mjs, AC-REL-02). They still get BUILT as
+	// intermediates that get staged into the tarball.
+	assert.match(workflow, /sha256sum pix_\*\.tar\.gz > SHA256SUMS/);
+	assert.doesNotMatch(workflow, /sha256sum pix-\* pix_\*\.tar\.gz/);
 	assert.match(workflow, /dist\/pix_\*\.tar\.gz/);
 	assert.match(workflow, /-o "\$GITHUB_WORKSPACE\/dist\/pix-\$os-\$arch"/);
 	assert.doesNotMatch(workflow, /host binary has\s+no such symbol/);
