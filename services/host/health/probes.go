@@ -35,9 +35,16 @@ const (
 	SbxInstallFix   = "brew install docker/tap/sbx@nightly"
 	ServeInstallFix = "pix serve install"
 	ServeStartFix   = "pix serve"
-	ServeRestartFix = "pix serve restart"
+	// ServeRestartFix composes two real, existing verbs — `serve stop` is
+	// mode-aware (goes through the managed supervisor when there is one) and
+	// `serve start` is the (re)start alias — rather than naming a bare
+	// `restart` subcommand kong has never answered to.
+	ServeRestartFix = "pix serve stop && pix serve start"
 	PackUseFix      = "pix pack use <path|owner/repo>"
-	MonitorStartFix = "pix monitor"
+	// MonitorStartFix: `pix monitor` is a pure offline reader over the
+	// on-disk event store (see monitorCmd) — it starts nothing. The thing
+	// that actually starts the monitor ingest listener is `pix serve start`.
+	MonitorStartFix = "pix serve start"
 	SecretSetFix    = "pix secret set %s op://vault/item/field"
 	// ModelKeyFix repairs the ANY-OF gap: pix launches a model with one
 	// provider key, so the repair names one provider rather than listing three
