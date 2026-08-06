@@ -166,6 +166,44 @@ func TestPackRm_RemovesActivePackContributions(t *testing.T) {
 	}
 }
 
+// TestPackActivation_ReportsRegisteredDeregisteredNeverAttachedDetached: pack
+// activation only ever touches HOST registration (cfg.MCP + the gateway),
+// never a live sandbox, so its report must say `registered`/`deregistered`,
+// never `attached`/`detached` (those words belong to a claim about a running
+// session pix cannot make from here — see mcpLsAttachmentNote).
+func TestPackActivation_ReportsRegisteredDeregisteredNeverAttachedDetached(t *testing.T) {
+	dir := isolatePackHost(t)
+
+	root := filepath.Join(dir, "work")
+	mustWritePack(t, root, packinfo.Manifest{
+		Name:         "work",
+		Schema:       1,
+		Integrations: []packinfo.Integration{{Name: "Fastmail", MCP: "fastmail"}},
+	})
+
+	var out bytes.Buffer
+	RunPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerOK)
+	if !strings.Contains(out.String(), "registered mcp: fastmail") {
+		t.Errorf("pack use report = %q, want a %q line", out.String(), "registered mcp: fastmail")
+	}
+	for _, bad := range []string{"attached mcp", "detached mcp"} {
+		if strings.Contains(out.String(), bad) {
+			t.Errorf("pack use report contains %q, a claim about a live sandbox this command never touched:\n%s", bad, out.String())
+		}
+	}
+
+	out.Reset()
+	RunPackRm(&out, nil)
+	if !strings.Contains(out.String(), "deregistered mcp: fastmail") {
+		t.Errorf("pack rm report = %q, want a %q line", out.String(), "deregistered mcp: fastmail")
+	}
+	for _, bad := range []string{"attached mcp", "detached mcp:"} {
+		if strings.Contains(out.String(), bad) {
+			t.Errorf("pack rm report contains %q, a claim about a live sandbox this command never touched:\n%s", bad, out.String())
+		}
+	}
+}
+
 // --- finding #6 [BLOCK]: SynthesizePackKit must rebuild from scratch and fail
 // closed -----------------------------------------------------------------------
 

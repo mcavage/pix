@@ -143,11 +143,16 @@ func RunMcpLsCore(lookPath func(string) (string, error), out io.Writer, in io.Re
 }
 
 // mcpLsAttachmentNote is the disclaimer `pix mcp ls` prints after a successful
-// listing (see RunMcpLsCore).
+// listing (see RunMcpLsCore). It deliberately does NOT point to `pix status`/
+// `pix doctor` as an attachment authority: neither can see inside a live
+// session either (health/mcp.go's attachmentCaveat says so in its own words),
+// so sending a reader there to learn "what's live" would just relocate the
+// same unanswerable question. The two REAL options are named instead.
 const mcpLsAttachmentNote = "\nNote: this is the gateway's HOST registration list, not what's attached to\n" +
-	"your current sandbox. See `pix status` / `pix doctor` for what's live,\n" +
-	"`pix mcp load <name>` to attach a registered server to a running sandbox,\n" +
-	"or recreate the sandbox to preload everything (`pix rm <box>`, then `pix run`).\n"
+	"your current sandbox — `pix status`/`pix doctor` can't see inside a live\n" +
+	"session either. `pix mcp load <name>` attaches a registered server to a\n" +
+	"running sandbox now; `pix rm <box>` then `pix run` recreates it preloaded\n" +
+	"with everything registered.\n"
 
 // McpRegistrar carries the resolved ABSOLUTE paths + account needed to build a
 // `sbx mcp add` command. The gateway daemon's PATH may not include op/gog, so

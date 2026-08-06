@@ -65,7 +65,7 @@
       "exits": 0
     },
     "pix/host/mcp": {
-      "prod_loc": 871,
+      "prod_loc": 876,
       "exports": 28,
       "globals": 15,
       "edges": 6,
@@ -177,7 +177,7 @@
       "exits": 0
     },
     "pix/host/workflow/pack": {
-      "prod_loc": 3022,
+      "prod_loc": 3026,
       "exports": 28,
       "globals": 4,
       "edges": 10,
@@ -198,8 +198,8 @@
       "exits": 0
     },
     "pix/host/workspace": {
-      "prod_loc": 251,
-      "exports": 12,
+      "prod_loc": 307,
+      "exports": 14,
       "globals": 2,
       "edges": 2,
       "exits": 0

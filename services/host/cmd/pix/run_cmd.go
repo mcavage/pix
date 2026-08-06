@@ -266,7 +266,7 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	var keyResult health.Result
 	if _, lerr := defaultShellEnv().LookPath("sbx"); lerr == nil && !inference.ConfiguredKeylessInference() {
 		env := defaultShellEnv()
-		launch.BootstrapProviderKeys(env, os.Stdin, d.Err, d.Interactive)
+		launch.BootstrapProviderKeys(env, d.In, d.Err, d.Interactive)
 		keyResult = launch.ProbeModelKeys(context.Background(), "")
 		if launch.RefusesLaunch(keyResult) {
 			fmt.Fprint(d.Err, secret.ModelKeyMissingMessage(env))
@@ -277,7 +277,7 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	// Reconcile a prior in-session onboarding proposal (<workspace>/.pix/
 	// onboarding.json) BEFORE LoadResolvedConfig so a fresh create picks it up.
 	// Best-effort; a non-TTY just leaves the file.
-	provision.ReconcileOnboarding(o.Workspace, defaultShellEnv(), os.Stdin, os.Stdout, false, d.Interactive)
+	provision.ReconcileOnboarding(o.Workspace, defaultShellEnv(), d.In, d.Out, false, d.Interactive)
 
 	// Load the config for the rest of run (kits, mcp, gog, pack).
 	cfg, _, err := workspace.LoadResolvedConfig()
