@@ -472,7 +472,7 @@
       "version": "5.9.3",
       "license": "Apache-2.0",
       "role": "npm install -g (Dockerfile, dev typecheck toolchain in the image)",
-      "verifiedVia": "well-known published license (Apache-2.0); not independently re-read from a local file for this ledger \u2014 see docs/legal/FINDINGS.md"
+      "verifiedVia": "well-known published license (Apache-2.0), confirmed against the installed node_modules/typescript/package.json \"license\" field after npm ci \u2014 see docs/legal/FINDINGS.md #5 (closed)"
     }
   ]
 }

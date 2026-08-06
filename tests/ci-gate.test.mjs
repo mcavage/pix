@@ -34,3 +34,13 @@ test("every test skipped under -short is still run in full by an untimed CI job 
 	assert.match(metricsJob, /go test -cover \.\/\.\.\./);
 	assert.doesNotMatch(metricsJob, /-short/);
 });
+
+test("the macos job runs the full suite too, never gaining a -short flag", () => {
+	// macos is the only macOS CI signal (see the workflow header comment); if it
+	// ever picked up -short it would silently stop covering every
+	// testing.Short()-gated test on that platform, the same gap race/metrics
+	// guard against above.
+	const macosJob = workflow.slice(workflow.indexOf("macos:"));
+	assert.match(macosJob, /go test \.\/\.\.\./);
+	assert.doesNotMatch(macosJob, /-short/);
+});

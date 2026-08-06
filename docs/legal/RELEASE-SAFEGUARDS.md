@@ -15,10 +15,10 @@ extensions, or its skills changed.
   every Go module actually reachable from `services/host`'s build graph (49,
   derived via `go list -deps`, see `scripts/legal/list-go-modules.sh`), every
   npm package baked into the image, the **MPL-2.0** entries for
-  `github.com/hashicorp/go-plugin` and `github.com/hashicorp/yamux`, and a
-  **planned** entry for `github.com/thejerf/suture` (not yet vendored —
-  license verified via its published `LICENSE` file, MIT, but flagged as a
-  placeholder to re-verify at add-time).
+  `github.com/hashicorp/go-plugin` and `github.com/hashicorp/yamux`, and the
+  **MIT** entry for `github.com/thejerf/suture/v4` (live in `go.mod` since
+  U07's host `serve` supervision tree, not a placeholder — license verified
+  against the vendored module cache at the pinned `v4.0.6`).
 - `bakedTools` (same file) — the **directly-downloaded static binaries** the
   Dockerfile `curl`s straight from a GitHub Releases page (or, for Go,
   `go.dev/dl`) and bakes into the image, rather than installing via npm/`go.mod`
@@ -46,8 +46,8 @@ extensions, or its skills changed.
 - `scripts/check-third-party-notices.sh` — the CI check: regenerate + diff
   (no stale notices), live license-class gate, the `bakedTools` version gate
   (`--check-baked-tools Dockerfile`, ruff/fd/go pins match the ledger),
-  required-attribution assertions (go-plugin/yamux MPL-2.0, the Suture
-  planned entry, the patched pi-tui, ruff/fd/go), and **inclusion** checks
+  required-attribution assertions (go-plugin/yamux MPL-2.0, the live Suture
+  entry, the patched pi-tui, ruff/fd/go), and **inclusion** checks
   (Dockerfile `COPY`, the Homebrew tarball in `publish.yml`).
 
 ### MPL-2.0 disclosure (B1)

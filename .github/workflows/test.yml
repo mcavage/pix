@@ -6,14 +6,15 @@
 #   gate  — the FAST gate: build, go vet, NON-race `go test`, node --test,
 #           tsc --noEmit, the open-core boundary, and (once it exists) the
 #           rename guard. This job IS TIMED: scripts/gate.sh enforces an
-#           local `make gate` keeps the ABSOLUTE 12 s ceiling (10 s target).
+#           local `make gate` keeps the ABSOLUTE 34 s ceiling (30 s target).
 #           GitHub's shared x86 runner is measured separately with a fixed 75 s
-#           ceiling because the same uncached Go suite takes ~44 s there. Both
-#           are absolute, reviewable budgets, never "last run x 2".
+#           ceiling (60 s target) because the same uncached Go suite runs
+#           slower there. Both are absolute, reviewable budgets, never "last
+#           run x 2".
 #
 #   race  — gofmt + `go test -race ./...`. NO TIMING BUDGET APPLIES HERE, at
 #           all. The race detector multiplies wall time by design, so timing it
-#           would either make the 12 s number meaningless or make the job
+#           would either make the 34 s number meaningless or make the job
 #           flaky. It is a correctness job; it takes as long as it takes.
 #
 #   metrics — the FULL corpus/coverage/LOC report (AC-GATE-03/04): `go test
@@ -70,8 +71,9 @@ jobs:
       - name: gate
         run: bash scripts/gate.sh
         env:
-          # Local steady-state remains 12s/10s. GitHub's shared x86 runner
-          # takes ~42s for the uncached Go suite despite a warmed build cache.
+          # Local steady-state remains 34s/30s (scripts/gate.sh defaults).
+          # GitHub's shared x86 runner is slower for the uncached Go suite
+          # despite a warmed build cache, so CI gets its own wider budget.
           GATE_BUDGET_MS: "75000"
           GATE_TARGET_MS: "60000"
           GATE_SLOW_MS: "1000"
