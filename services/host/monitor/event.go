@@ -13,9 +13,8 @@ package monitor
 // field-for-field identical to the in-VM tap (extensions/monitor.ts;
 // tests/fixtures/monitor is the shared regression). An unrecognized kind
 // decodes to UnknownEvent, not an error, so a newer tap against an older
-// host loses nothing. Every decoded string is capped here, which bounds what
-// gets RETAINED: ingest bounds a whole line, this bounds each field. Each
-// type carries its own cap() and redacted() next to its fields.
+// host loses nothing. Ingest bounds a whole line; this bounds each RETAINED
+// field — each type carries its own cap() and redacted() next to its fields.
 
 import (
 	"encoding/json"
@@ -55,12 +54,11 @@ type Envelope struct {
 	TS        int64  `json:"ts"`
 }
 
-// Envelope returns e, so embedding one satisfies Event with no per-type
-// method; it also flattens the envelope into the wire object.
+// Envelope returns e: embedding one satisfies Event with no per-type
+// method and flattens the envelope into the wire object.
 func (e Envelope) Envelope() Envelope { return e }
 
-// env is Envelope under a second name, because Go forbids a field and a
-// method sharing one.
+// env is Envelope under a second name — Go forbids a field and a method sharing one.
 type env = Envelope
 
 // Event is implemented by every concrete kind carried on /ingest.
@@ -68,7 +66,7 @@ type Event interface {
 	Envelope() Envelope
 }
 
-// capEnvelope caps the ids on every event. A free function, not a method, so
+// capEnvelope caps the ids on every event. A free function, not a method:
 // a type that forgets its own cap() cannot silently inherit this one and
 // leave its payload uncapped.
 func capEnvelope(e *Envelope) { capIDs(&e.SandboxID, &e.SessionID, &e.TurnID) }
@@ -113,8 +111,8 @@ func (e *TurnStart) cap()           { capEnvelope(&e.env); capIDs(&e.Model, &e.T
 func (e TurnStart) redacted() Event { e.Model = redactText(e.Model); return e }
 
 // ProviderRequest summarizes the request sent to the provider. Trigger
-// ("user" | "tool_result" | "compaction" | "unknown") is duplicated from the
-// paired turn_start so a reader never has to cross-reference.
+// ("user" | "tool_result" | "compaction" | "unknown") is duplicated from
+// the paired turn_start so a reader never cross-references.
 type ProviderRequest struct {
 	env
 	Model        string         `json:"model"`
@@ -216,14 +214,14 @@ func (e *ContextEvent) cap()           { capEnvelope(&e.env); capIDs(&e.CtxKind)
 func (e ContextEvent) redacted() Event { e.Detail = redactText(e.Detail); return e }
 
 // UnknownEvent carries a well-formed event of an unrecognized kind: Raw is
-// the whole original line, kept verbatim (once scrubbed) so nothing is lost.
+// the whole original line, kept (scrubbed) so nothing is lost.
 type UnknownEvent struct {
 	env
 	Raw []byte
 }
 
-// MarshalJSON returns Raw verbatim; the empty case is a hand-built zero
-// value, since decodeUnknown always sets Raw.
+// MarshalJSON returns Raw verbatim; empty Raw (a hand-built zero value —
+// decodeUnknown always sets it) falls back to the envelope.
 func (e UnknownEvent) MarshalJSON() ([]byte, error) {
 	if len(e.Raw) == 0 {
 		return json.Marshal(e.env)
@@ -232,13 +230,13 @@ func (e UnknownEvent) MarshalJSON() ([]byte, error) {
 }
 
 // redacted has no known field shape, so it scrubs the WHOLE raw line. Safe
-// because every pattern matches a token-like charset with no '"', so a match
-// inside a JSON string is replaced without corrupting the structure.
+// because every pattern replaces only the secret VALUE, never the JSON
+// key/colon/quotes around it (see TestRedactTextReplacesValueOnly).
 func (e UnknownEvent) redacted() Event { e.Raw = []byte(redactText(string(e.Raw))); return e }
 
 // capIDs and capFields truncate each target in place to its bound. Slicing
 // bytes can land mid-rune, accepted deliberately: it never panics, and a
-// half-rune tail on a preview beats rune-scanning every field.
+// half-rune preview tail beats rune-scanning every field.
 func capIDs(ss ...*string)    { capEach(maxIDBytes, ss) }
 func capFields(ss ...*string) { capEach(maxFieldBytes, ss) }
 func capEach(limit int, ss []*string) {
@@ -271,9 +269,8 @@ type capper[T any] interface {
 }
 
 // Decode parses one NDJSON line into its concrete Event and caps every
-// decoded string. It errors on malformed JSON, a missing kind, or "blob"
-// (data-only: POSTed to /blob, never on the event stream); an unrecognized
-// kind is forward compatibility, not an error (see decodeUnknown).
+// decoded string. Errors on malformed JSON, a missing kind, or data-only
+// "blob"; an unrecognized kind is forward compat (see decodeUnknown).
 func Decode(line []byte) (Event, error) {
 	var probe struct {
 		Kind Kind `json:"kind"`
@@ -313,15 +310,13 @@ func decodeAs[T Event, P capper[T]](line []byte, kind Kind) (Event, error) {
 	return e, nil
 }
 
-// decodeUnknown builds an UnknownEvent, decoding the envelope best-effort
-// and bounding Raw like any other retained field.
+// decodeUnknown builds an UnknownEvent: envelope best-effort, Raw bounded.
 func decodeUnknown(line []byte, kind Kind) (Event, error) {
 	var e Envelope
 	_ = json.Unmarshal(line, &e)
 	e.Kind = kind
 	capEnvelope(&e)
-	// A whole unknown line has no field shape to cap individually, so it is
-	// bounded as one blob.
+	// No individual field shape to cap: bound the whole line as one blob.
 	raw := append([]byte(nil), line...)
 	if maxRaw := maxFieldBytes * 4; len(raw) > maxRaw {
 		raw = raw[:maxRaw]
@@ -343,43 +338,48 @@ func Encode(e Event) ([]byte, error) {
 // The host-side line of defense against a secret landing on disk in
 // cleartext. The tap sends hashes and short previews, but a tool's
 // argsSummary/resultSummary — or a blob body, the one place full text
-// crosses the wire — can carry a real secret. Everything this package writes
-// is written redacted; nothing is redacted after the fact. Pattern matching,
-// not a security boundary: recognizable secret SHAPES, deliberately
-// over-inclusive, not arbitrary sensitive text.
+// crosses the wire — can carry a real secret. Everything this package
+// writes is written redacted; nothing is redacted after the fact. Pattern
+// matching, not a security boundary: secret SHAPES, over-inclusive.
 
-// redactionMarker replaces a matched span. Free of characters ('"', '\\')
-// that could corrupt the JSON it sits inside.
+// redactionMarker replaces a matched span; free of '"' and '\\' so it can
+// never corrupt the JSON it sits inside.
 const redactionMarker = "[REDACTED]"
 
-// secretPatterns are recognizable secret shapes. Each is applied
-// independently so overlapping matches from different patterns all land.
+// secretPatterns are recognizable secret shapes, each applied independently
+// so overlapping matches from different patterns all land. A contextual
+// shape (Authorization, key=value) captures everything BEFORE the secret in
+// group 1, which redactText keeps: only the VALUE is ever replaced.
 var secretPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`AKIA[0-9A-Z]{16}`),             // AWS access key id
-	regexp.MustCompile(`gh[oprsu]_[A-Za-z0-9]{20,}`),   // GitHub tokens
-	regexp.MustCompile(`xox[baprs]-[0-9A-Za-z-]{10,}`), // Slack tokens
-	regexp.MustCompile(`sk-[A-Za-z0-9_-]{20,}`),        // OpenAI/Anthropic keys
+	regexp.MustCompile(`AKIA[0-9A-Z]{16}`),                                                       // AWS access key id
+	regexp.MustCompile(`gh[oprsu]_[A-Za-z0-9]{20,}`),                                             // GitHub tokens
+	regexp.MustCompile(`xox[baprs]-[0-9A-Za-z-]{10,}`),                                           // Slack tokens
+	regexp.MustCompile(`sk-[A-Za-z0-9_-]{20,}`),                                                  // OpenAI/Anthropic keys
+	regexp.MustCompile(`AIza[0-9A-Za-z_-]{35}`),                                                  // Google API key
+	regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]+`),             // JWT (header.payload.signature)
+	regexp.MustCompile(`(?i)(authorization["']?\s*[:=]\s*["']?bearer\s+)[A-Za-z0-9._~+/=-]{8,}`), // Authorization: Bearer <token>, token replaced
 	regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----`),
 	// Catch-all `key = value` / `"token": "value"` assignment shape: a
-	// secret-shaped NAME, an assignment operator, then a long opaque VALUE.
-	regexp.MustCompile(`(?i)(api[_-]?key|secret|token|password|passwd)["']?\s*[:=]\s*["']?[A-Za-z0-9/_.+-]{12,}`),
+	// secret-shaped NAME + operator (kept, group 1), then a long opaque VALUE.
+	regexp.MustCompile(`(?i)((?:api[_-]?key|secret|token|password|passwd)["']?\s*[:=]\s*["']?)[A-Za-z0-9/_.+-]{12,}`),
 }
 
-// redactText replaces every secret-shaped substring with redactionMarker.
+// redactText replaces every secret-shaped substring with redactionMarker,
+// keeping a contextual pattern's group-1 prefix ("${1}" expands empty for
+// bare shapes). Value-only replacement is load-bearing: this also runs over
+// whole raw JSON lines (unknown kinds, blob bodies), where consuming the
+// quotes or colon around a secret would corrupt the stored line.
 func redactText(s string) string {
-	if s == "" {
-		return s
-	}
 	for _, re := range secretPatterns {
-		s = re.ReplaceAllString(s, redactionMarker)
+		s = re.ReplaceAllString(s, "${1}"+redactionMarker)
 	}
 	return s
 }
 
-// redact returns a scrubbed copy of e from the type's own redacted() (value
-// receiver, so the caller's event is not replaced). Short label fields are
-// scrubbed too — cheap, and defends against a hostile tap hiding a secret in
-// one — but hashes are not, being content-addresses.
+// redact returns a scrubbed copy of e from the type's own redacted()
+// (value receiver: the caller's event is not replaced). Short labels are
+// scrubbed too — cheap, and defends against a hostile tap hiding a secret
+// in one — but hashes are not, being content-addresses.
 func redact(e Event) Event {
 	if r, ok := e.(interface{ redacted() Event }); ok {
 		return r.redacted()

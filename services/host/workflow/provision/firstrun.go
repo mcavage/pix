@@ -13,9 +13,6 @@ import (
 // its own; the guided flow is the explicit `pix setup`. This only nudges from the
 // bare `pix` status command so a fresh host is not left guessing, and it returns
 // false — never handling the invocation — so the caller always shows status.
-// It takes an injected writer rather than reaching for os.Stdout itself: L3
-// returns/writes through what its L4 caller supplies, so only cmd/pix owns the
-// process's actual stdout.
 func MaybeFirstRun(out io.Writer) bool {
 	if _, err := os.Stat(config.Path()); err == nil {
 		return false
