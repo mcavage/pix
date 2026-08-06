@@ -332,6 +332,95 @@ func TestServeCleanupDoesNotClobberARunningWinner(t *testing.T) {
 	}
 }
 
+// TestRemoveOwnedPidFileSerializesAgainstConcurrentWrite is the deterministic
+// regression for the TOCTOU removeOwnedPidFile used to have: read-compare then
+// remove, with nothing stopping a respawned daemon from writing a NEW pid into
+// the same path between the read and the remove — which would delete the new
+// owner's file right out from under it.
+//
+// The test drives the exact interleaving by hand rather than racing a timing
+// window: an "old owner" goroutine runs the real cleanup
+// (removeOwnedPidFileWithHook) and, via the hook, pauses AFTER its ownership
+// read succeeds but BEFORE it removes the file — while still holding
+// config.PidFileLockPath's lock. A "new owner" goroutine concurrently attempts
+// the real write path (writeServePidFileAt) for a DIFFERENT pid, standing in
+// for a respawned daemon. Because both sides take the SAME sys.Lock, the new
+// owner's write cannot even begin running until the old owner's paused
+// critical section (read-through-remove) has fully released the lock — this
+// is an OS-guaranteed exclusion, not a timing assumption, so the outcome is
+// deterministic regardless of goroutine scheduling. Covers both serve.pid and
+// serve.lazy, since both route through the same shared helpers.
+func TestRemoveOwnedPidFileSerializesAgainstConcurrentWrite(t *testing.T) {
+	for _, name := range []string{"serve.pid", "serve.lazy"} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), name)
+			oldPid := os.Getpid()
+			if err := os.WriteFile(path, []byte(strconv.Itoa(oldPid)+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			paused := make(chan struct{})  // old owner: ownership confirmed, about to pause
+			proceed := make(chan struct{}) // test: old owner may now resume and remove
+			oldDone := make(chan struct{})
+			go func() {
+				defer close(oldDone)
+				removeOwnedPidFileWithHook(path, func() {
+					close(paused)
+					<-proceed
+				})
+			}()
+
+			select {
+			case <-paused:
+			case <-time.After(5 * time.Second):
+				t.Fatal("old owner never reached its post-read pause")
+			}
+
+			// The new owner (a respawned daemon) attempts its write WHILE the old
+			// owner is paused, still holding the lock. Started only after `paused`
+			// closes, so this genuinely races the held lock rather than a fast
+			// write that finishes before the old owner even starts.
+			newPid := oldPid + 424242
+			newDone := make(chan struct{})
+			go func() {
+				defer close(newDone)
+				writeServePidFileAt(path, newPid)
+			}()
+
+			// The new owner cannot have finished yet: it is blocked in the kernel
+			// on the same flock the old owner still holds. This is not a sleep
+			// racing a window — it is a bounded sanity check that the write
+			// genuinely did not complete while excluded.
+			select {
+			case <-newDone:
+				t.Fatal("new owner's write completed while the old owner still held the lock")
+			case <-time.After(100 * time.Millisecond):
+			}
+
+			close(proceed) // old owner resumes: removes its own entry, releases the lock
+			select {
+			case <-oldDone:
+			case <-time.After(5 * time.Second):
+				t.Fatal("old owner never finished after being allowed to proceed")
+			}
+			select {
+			case <-newDone:
+			case <-time.After(5 * time.Second):
+				t.Fatal("new owner never finished its write after the old owner released the lock")
+			}
+
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("final path is absent, want the new owner's pid: %v", err)
+			}
+			got, perr := strconv.Atoi(strings.TrimSpace(string(raw)))
+			if perr != nil || got != newPid {
+				t.Fatalf("final path contains %q, want the new owner's pid %d", raw, newPid)
+			}
+		})
+	}
+}
+
 // --- R2: every real memory RPC runs through Holder.Use, so Drain sees it ----
 
 // blockingStore wraps stubStore, blocking inside Recall (closing `started`
