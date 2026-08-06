@@ -695,6 +695,20 @@ test("the ports domain no longer pins the retired broker port (W2/U03B deleted i
 	}
 });
 
+// The two U04f-era manifest entries (lifecycle.session.record-before-lifecycle-unlock,
+// lifecycle.teardown.journal-bounded-0600) documented transitions that landed
+// commits ago; the base this guard now resolves to (HEAD~1, see the
+// resolveDefaultBase tests above) already has those pins in their current
+// shape, so neither entry is needed as a waiver nor to explain any real
+// drift any more. They were removed in a follow-up commit so an unrelated,
+// later PR does not fail on a stale manifest it had no part in creating.
+test("the shipped intended-changes.json no longer carries the two now-spent U04f manifest entries", () => {
+	const manifest = loadManifest(path.join(REPO_ROOT, "scripts", "semantic-diff", "intended-changes.json"));
+	const ids = manifest.map((e) => e.id);
+	assert.ok(!ids.includes("lifecycle.session.record-before-lifecycle-unlock"), "spent entry must be removed once neither a waiver nor real drift needs it");
+	assert.ok(!ids.includes("lifecycle.teardown.journal-bounded-0600"), "spent entry must be removed once neither a waiver nor real drift needs it");
+});
+
 test("the CLI exits 0 against the real repo and exits 1 against a fixture with a planted corruption", () => {
 	const cliOut = execFileSync("node", [CLI, "--root", REPO_ROOT], { encoding: "utf8" });
 	assert.match(cliOut, /semantic-diff: PASS/);
