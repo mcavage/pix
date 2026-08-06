@@ -208,3 +208,72 @@ func TestAgentLsMalformedYAML(t *testing.T) {
 		t.Errorf("table missing malformed-agent row/error, got:\n%s", table)
 	}
 }
+
+// TestAgentLs_WorksFromAnySubdirectory: DX finding 3 — the roster resolver
+// used to hard-require the EXACT cwd to hold ./agents ("run from the repo
+// root"), which breaks a Homebrew install (no repo checkout to be in) and,
+// even inside a checkout, breaks the moment you cd into a subdirectory.
+// resolveAgentsDir must climb from cwd, so `pix agent ls` works from any
+// depth under a checkout, not only its root.
+func TestAgentLs_WorksFromAnySubdirectory(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "agents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const fm = "---\nintent: code\n---\n\nBody.\n"
+	if err := os.WriteFile(filepath.Join(root, "agents", "go-eng.md"), []byte(fm), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(root, "a", "b", "c")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(sub)
+	t.Setenv("ROUTING_DIR", t.TempDir())
+	t.Setenv("PIX_AGENTS_DIR", "")
+
+	names, dir, err := listAgents()
+	if err != nil {
+		t.Fatalf("listAgents from a nested subdirectory: %v", err)
+	}
+	if len(names) != 1 || names[0] != "go-eng" {
+		t.Fatalf("names = %v, want [go-eng]", names)
+	}
+	if dir != filepath.Join(root, "agents") {
+		t.Errorf("dir = %q, want %q", dir, filepath.Join(root, "agents"))
+	}
+}
+
+// TestResolveAgentsDir_NoRosterFound_AccurateGuidance: with no
+// $PIX_AGENTS_DIR, no bundled dir beside the test binary, and an isolated cwd
+// with nothing above it named "agents", the error must be accurate: it must
+// NOT blindly command "run from the repo root" (nonsensical on a packaged
+// install with no checkout) and must name the actual escape hatch
+// ($PIX_AGENTS_DIR).
+func TestResolveAgentsDir_NoRosterFound_AccurateGuidance(t *testing.T) {
+	isolated := t.TempDir()
+	t.Chdir(filepath.Join(isolated))
+	t.Setenv("PIX_AGENTS_DIR", "")
+
+	_, err := resolveAgentsDir()
+	if err == nil {
+		t.Fatal("want an error when no roster exists anywhere reachable")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "PIX_AGENTS_DIR") {
+		t.Errorf("error must name the escape hatch $PIX_AGENTS_DIR, got: %v", err)
+	}
+	if strings.Contains(msg, "run from the repo root") {
+		t.Errorf("error must not blindly command \"run from the repo root\" (no checkout exists here): %v", err)
+	}
+}
+
+// TestResolveAgentsDir_ExplicitEnvMustExist: a typo'd $PIX_AGENTS_DIR must
+// fail loudly, never silently fall through to a different roster the user
+// did not ask for.
+func TestResolveAgentsDir_ExplicitEnvMustExist(t *testing.T) {
+	t.Setenv("PIX_AGENTS_DIR", filepath.Join(t.TempDir(), "does-not-exist"))
+	if _, err := resolveAgentsDir(); err == nil {
+		t.Fatal("want an error for a nonexistent $PIX_AGENTS_DIR")
+	}
+}

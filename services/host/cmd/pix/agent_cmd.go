@@ -11,8 +11,11 @@ import (
 const agentDescription = `List the subagent roster.
 
 An agent stores an INTENT, not a pinned model; the router derives its default
-model from a hand-maintained scorecard. Agents live in ./agents (or
-$PIX_AGENTS_DIR); run from the repo root.
+model from a hand-maintained scorecard. The roster is $PIX_AGENTS_DIR if set,
+else a directory found beside the pix binary, else a pix repo checkout's
+agents/ (found by climbing from the current directory — works from any
+subdirectory, not only the repo root). A packaged install with none of those
+prints exactly what to set.
 
 new/edit/rm/reassess are retired: edit agents/*.md directly (add/change/remove
 the file), hand-score a new intent's models in scorecard.json if needed, then
