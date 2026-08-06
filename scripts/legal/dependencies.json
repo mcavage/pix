@@ -148,7 +148,9 @@
       "license": "MPL-2.0",
       "licenseFile": "LICENSE",
       "class": "weak-copyleft",
-      "notes": "File-level weak copyleft. Used as-is/unmodified via Go module import; no source files of go-plugin itself are modified. Notice + license text reproduced below satisfies MPL-2.0 s3.3 (attribution). See docs/legal/FINDINGS.md for the one open item (counsel sign-off, not blocking on evidence)."
+      "sourceUrl": "https://github.com/hashicorp/go-plugin/tree/v1.8.0",
+      "licenseTextFile": "licenses/MPL-2.0.txt",
+      "notes": "File-level weak copyleft. Linked into pix-host in Executable Form via an unmodified Go module import — pix creates no Modifications (MPL-2.0 s1.10), so the only Source Code Form a recipient needs is the upstream one linked above, at the pinned version. Attribution per MPL-2.0 s3.3 is this entry plus the verbatim license text shipped at licenses/MPL-2.0.txt."
     },
     {
       "module": "github.com/hashicorp/yamux",
@@ -156,7 +158,9 @@
       "license": "MPL-2.0",
       "licenseFile": "LICENSE",
       "class": "weak-copyleft",
-      "notes": "Same MPL-2.0 posture as go-plugin (yamux is go-plugin's multiplexed-stream transport); unmodified import."
+      "sourceUrl": "https://github.com/hashicorp/yamux/tree/v0.1.2",
+      "licenseTextFile": "licenses/MPL-2.0.txt",
+      "notes": "Same MPL-2.0 posture as go-plugin (yamux is go-plugin's multiplexed-stream transport): unmodified import, no Modifications distributed."
     },
     {
       "module": "github.com/lucasb-eyer/go-colorful",

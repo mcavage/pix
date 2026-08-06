@@ -17,7 +17,7 @@
 //     the live set diverges from the ledger (missing entry, or disallowed
 //     license class) — this is the fail-closed gate itself.
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -30,9 +30,10 @@ and diffed against the live dependency set by
 \`docs/legal/RELEASE-SAFEGUARDS.md\`). Do not hand-edit this file; edit the
 ledger and regenerate.
 
-pix is an independent project. It is not affiliated with, endorsed by, or
-sponsored by any of the organizations named below; their names appear solely
-to attribute the open-source components pix depends on. See \`NOTICE.md\`.
+pix is a Docker, Inc. project (see \`LICENSE\` and \`NOTICE.md\`). It is not affiliated
+with, endorsed by, or sponsored by any of the third-party organizations named
+below; their names appear solely to attribute the open-source components pix
+depends on.
 `;
 
 export function splitModule(entry) {
@@ -77,6 +78,36 @@ export function validateBakedTools(dockerfileText, bakedTools) {
 			findings.push({
 				tool: tool.name,
 				reason: `ledger pins ${tool.version}, Dockerfile ARG ${argName} pins ${live} — re-verify the license at the new version and update the ledger`,
+			});
+		}
+	}
+	return { ok: findings.length === 0, findings };
+}
+
+// AC-REL-01 (B1): every weak-copyleft (MPL-2.0) entry must carry the two things
+// a recipient actually needs — a Source Code Form URL pinned to the SAME version
+// the build links (MPL-2.0 s3.2(a)), and a verbatim license text file that is
+// really present in the tree (s3.1/s3.3). Referencing a license text that does
+// not ship is exactly the contradiction this gate exists to prevent.
+// Returns { ok, findings[] }. findings[] entries: { module, reason }.
+export function validateCopyleftDisclosure(deps, exists) {
+	const findings = [];
+	for (const r of deps.goModules) {
+		if (r.class !== "weak-copyleft") continue;
+		if (!/^https:\/\//.test(r.sourceUrl || "")) {
+			findings.push({ module: r.module, reason: "no https Source Code Form URL (MPL-2.0 s3.2) recorded in the ledger" });
+		} else if (!r.sourceUrl.includes(r.version)) {
+			findings.push({
+				module: r.module,
+				reason: `Source Code Form URL does not pin the ledger version ${r.version} (${r.sourceUrl}) — a recipient must be able to get the EXACT source that was linked`,
+			});
+		}
+		if (!r.licenseTextFile) {
+			findings.push({ module: r.module, reason: "no licenseTextFile recorded — the full license text must ship, not just be named" });
+		} else if (!exists(r.licenseTextFile)) {
+			findings.push({
+				module: r.module,
+				reason: `licenseTextFile ${r.licenseTextFile} is not present in the tree — the notices would reference a license text that does not ship`,
 			});
 		}
 	}
@@ -158,10 +189,16 @@ export function renderNotices(deps) {
 	const mpl = goRows.filter((r) => r.class === "weak-copyleft");
 	if (mpl.length) {
 		parts.push(
-			"### MPL-2.0 components (weak copyleft — noted per MPL-2.0 s3.3)\n"
+			"### MPL-2.0 components (weak copyleft — noted per MPL-2.0 s3.2/s3.3)\n"
+		);
+		parts.push(
+			"The complete, verbatim MPL-2.0 license text ships with every pix distribution:\n`licenses/MPL-2.0.txt`, baked into the image and bundled in the Homebrew\ntarball. Each component below is linked into `pix-host` in Executable Form and\nis unmodified, so pix distributes no Modifications; the Source Code Form for\nthe exact version linked is published at the URL given, which is how a\nrecipient obtains it under MPL-2.0 s3.2(a).\n"
 		);
 		for (const r of mpl) {
-			parts.push(`- **${r.module}@${r.version}** — MPL-2.0. ${r.notes || ""}`.trim());
+			const src = r.sourceUrl
+				? ` Source Code Form (MPL-2.0 s3.2), version ${r.version}: ${r.sourceUrl}. Full license text: \`${r.licenseTextFile || "licenses/MPL-2.0.txt"}\`.`
+				: "";
+			parts.push(`- **${r.module}@${r.version}** — MPL-2.0.${src} ${r.notes || ""}`.trim());
 		}
 		parts.push("");
 	}
@@ -199,7 +236,7 @@ export function renderNotices(deps) {
 	}
 
 	parts.push(
-		"---\n\nFull upstream license texts are not reproduced verbatim here (each is available from its module cache / npm package under the versions pinned above and in `go.sum` / the Dockerfile); this file exists to enumerate what is bundled and under what terms, per the fail-closed gate in `scripts/check-third-party-notices.sh`.\n"
+		"---\n\nUpstream license texts: the MPL-2.0 text — the only non-permissive license in this set — IS reproduced verbatim, in `licenses/MPL-2.0.txt`, and ships with the image and the Homebrew tarball. The permissive texts (MIT/BSD/Apache-2.0) are not reproduced here; each is available from its module cache / npm package at the versions pinned above and in `go.sum` / the Dockerfile. This file enumerates what is bundled and under what terms, per the fail-closed gate in `scripts/check-third-party-notices.sh`.\n"
 	);
 
 	return parts.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
@@ -228,6 +265,24 @@ function main() {
 			process.exit(1);
 		}
 		console.error(`license-class gate OK (${liveEntries.filter((l) => l.trim()).length} live modules)`);
+	}
+
+	const copyleftIdx = args.indexOf("--check-copyleft-disclosure");
+	if (copyleftIdx !== -1) {
+		const root = args[copyleftIdx + 1];
+		if (!root) {
+			console.error("--check-copyleft-disclosure requires a repo-root path");
+			process.exit(2);
+		}
+		const { ok, findings } = validateCopyleftDisclosure(deps, (f) => existsSync(join(root, f)));
+		if (!ok) {
+			console.error("copyleft-disclosure gate FAILED (fail-closed, MPL-2.0 s3.2/s3.3):");
+			for (const f of findings) {
+				console.error(`  - ${f.module}: ${f.reason}`);
+			}
+			process.exit(1);
+		}
+		console.error("copyleft-disclosure gate OK (source URLs pinned, license text present)");
 	}
 
 	const dockerfileIdx = args.indexOf("--check-baked-tools");

@@ -50,12 +50,29 @@ extensions, or its skills changed.
   planned entry, the patched pi-tui, ruff/fd/go), and **inclusion** checks
   (Dockerfile `COPY`, the Homebrew tarball in `publish.yml`).
 
+### MPL-2.0 disclosure (B1)
+
+- `licenses/MPL-2.0.txt` — the **full, verbatim** MPL-2.0 text, shipped in
+  the image and the Homebrew tarball. The notices previously said license
+  texts were "reproduced below" in one paragraph and "not reproduced
+  verbatim here" in another; that contradiction is gone, and
+  `check-third-party-notices.sh` fails if the blanket "not reproduced" claim
+  ever comes back while the file ships.
+- Each MPL-2.0 ledger entry carries a `sourceUrl` pinned to the **exact
+  version linked** (`.../tree/v1.8.0`, `.../tree/v0.1.2`) and a
+  `licenseTextFile`. `--check-copyleft-disclosure` (new,
+  `validateCopyleftDisclosure()`) fails closed if a weak-copyleft entry has
+  no https source URL, a URL that does not pin the ledger version, or names
+  a license text that is not actually present in the tree.
+
 ## AC-REL-02 — tarball/image inclusion
 
-- `Dockerfile` now `COPY`s `THIRD_PARTY_NOTICES.md` and `NOTICE.md` into the
-  image (`/home/agent/.pi/agent/`).
+- `Dockerfile` now `COPY`s `THIRD_PARTY_NOTICES.md`, `NOTICE.md`, `LICENSE`
+  and `licenses/` into the image (`/home/agent/.pi/agent/`). `LICENSE` is
+  there because MIT §2 requires the notice to travel with copies, and
+  `licenses/` because MPL-2.0 §3.1 requires recipients be told the terms.
 - `.github/workflows/publish.yml`'s Homebrew darwin tarball step now bundles
-  both files alongside `pix`/`pix-host`. (The man page, `pix.1`, was retired
+  all four alongside `pix`/`pix-host`. (The man page, `pix.1`, was retired
   along with `pix man`/`--man`, so it is no longer part of this tarball.)
 - Both are asserted by `scripts/check-third-party-notices.sh` and
   `tests/legal-inclusion-and-docker-base.test.mjs`.
@@ -84,11 +101,41 @@ extensions, or its skills changed.
   assembles the multi-arch manifest and captures its digest. A version's
   digest is immutable once recorded: a re-run with a *different* digest for
   an already-recorded version fails closed (a same-digest re-run is a no-op).
+- **It is wired.** `publish.yml`'s `merge` job now exports the multi-arch
+  manifest digest as a job output, and a new **blocking** `provenance` job
+  (`needs: [version, merge]`, and `bump` now `needs` it) runs
+  `verify-provenance.sh <version> <published-digest> <git-sha>` and uploads
+  the record. A release cannot proceed without an immutable version→digest
+  record of what was actually published.
 - `scripts/legal/sbom-config.json` — pins the SBOM tool (`anchore/sbom-action`,
   SHA-pinned) and states it reuses the SAME license-class policy as the
-  notices gate, rather than drifting. Wired as a **non-blocking** job in
-  `legal.yml` (no human has reviewed an SBOM-diff gating policy yet — see
-  `docs/legal/FINDINGS.md`).
+  notices gate, rather than drifting. It now runs in two places, both
+  **blocking for generation**: the `provenance` job scans the **published
+  image by digest** (`IMAGE@sha256:…`) and asserts the SBOM is non-empty and
+  references that digest; `legal.yml`'s `sbom` job scans the repo tree on
+  every PR and asserts a non-empty result. `continue-on-error` is gone — the
+  gate asserts `legal.yml` contains none.
+- What is still **not** claimed: SBOM *diffing* (failing a release because
+  the component set changed) is unimplemented and stated as such in
+  `docs/legal/FINDINGS.md` #7. Generation being blocking is not a
+  supply-chain diff gate, and this doc does not pretend otherwise.
+
+## Durable legal basis + privacy (B2/B4)
+
+- `docs/legal/AUTHORIZATIONS.md` — the record of who authorized what, in
+  what capacity: DHI base redistribution for the published image (A-1) and
+  the employer-IP/copyright posture (A-2). `LICENSE` names Docker, Inc. and
+  the pix contributors; `NOTICE.md` states ownership, the inbound = outbound
+  MIT contribution license, and points at the record instead of re-deriving
+  it per build. Each entry lists what it explicitly does **not** cover
+  (trademark license, third-party DHI entitlement, other contributors'
+  employment agreements).
+- `docs/legal/PRIVACY.md` — what data leaves the machine and to whom (model
+  providers and MCP servers you configured; no pix backend, no telemetry),
+  what stays loopback-local (memory, monitor), how credentials are handled
+  (`op://` refs, never written to disk), and the honest limit: the real
+  exposure is the data you route through it, and lawful basis/retention for
+  that data is the operator's obligation, not pix's.
 
 ## Full-history secret scan
 
@@ -136,13 +183,16 @@ extensions, or its skills changed.
   `secret-scan` job fetches every ref before running it and uploads the
   report as an artifact even on failure.
 
-## Affiliation disclaimer
+## Ownership + affiliation notice
 
-- `NOTICE.md` (new, root-level, disjoint file): pix is an independent
-  project, not affiliated with/endorsed by/sponsored by Docker, Inc.,
-  HashiCorp, or any other referenced vendor; trademark references are
-  descriptive only. Baked into the image and the Homebrew tarball alongside
-  `THIRD_PARTY_NOTICES.md`. `README.md` was deliberately left untouched (a
+- `NOTICE.md` (root-level): pix is a Docker, Inc. project (MIT), with an
+  inbound = outbound contribution sentence, a third-party non-affiliation
+  disclaimer (HashiCorp, Anthropic, OpenAI, Google, Mozilla — descriptive
+  trademark use only), and a pointer to the DHI authorization of record. The
+  earlier "pix is an independent project, not affiliated with Docker, Inc."
+  wording contradicted the recorded ownership and is gone. Baked into the
+  image and the Homebrew tarball alongside `THIRD_PARTY_NOTICES.md`,
+  `LICENSE`, and `licenses/`. `README.md` was deliberately left untouched (a
   shared, frequently-edited file) — the disclaimer lives entirely in the new
   file so this change stays disjoint.
 

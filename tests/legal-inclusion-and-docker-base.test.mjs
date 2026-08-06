@@ -63,13 +63,37 @@ test("Dockerfile bakes THIRD_PARTY_NOTICES.md and NOTICE.md into the image", () 
 	assert.match(dockerfile, /COPY --chown=agent:agent NOTICE\.md/);
 });
 
-test("publish.yml bundles THIRD_PARTY_NOTICES.md and NOTICE.md into the Homebrew darwin tarball", () => {
-	assert.match(publishWorkflow, /cp "\$GITHUB_WORKSPACE\/THIRD_PARTY_NOTICES\.md"/);
-	assert.match(publishWorkflow, /tar -C "\$stage" -czf .* THIRD_PARTY_NOTICES\.md NOTICE\.md/);
+// B3: the image is a distribution of pix (MIT s2) and of the MPL-2.0 code
+// linked into pix-host (MPL-2.0 s3.1) — both texts have to be IN it.
+test("Dockerfile bakes LICENSE and licenses/ (MPL-2.0 text) into the image", () => {
+	assert.match(dockerfile, /COPY --chown=agent:agent LICENSE\s+\/home\/agent\/\.pi\/agent\/LICENSE/);
+	assert.match(dockerfile, /COPY --chown=agent:agent licenses\/\s+\/home\/agent\/\.pi\/agent\/licenses\//);
 });
 
-test("NOTICE.md carries a non-affiliation disclaimer and does not claim legal confirmation", () => {
+test("publish.yml bundles the notices, LICENSE and licenses/ into the Homebrew darwin tarball", () => {
+	assert.match(publishWorkflow, /cp "\$GITHUB_WORKSPACE\/THIRD_PARTY_NOTICES\.md"/);
+	assert.match(publishWorkflow, /cp "\$GITHUB_WORKSPACE\/LICENSE"/);
+	assert.match(publishWorkflow, /cp "\$GITHUB_WORKSPACE\/licenses\/MPL-2\.0\.txt"/);
+	assert.match(
+		publishWorkflow,
+		/tar -C "\$stage" -czf .* THIRD_PARTY_NOTICES\.md NOTICE\.md LICENSE licenses/
+	);
+});
+
+test("licenses/MPL-2.0.txt is the full verbatim MPL-2.0 text, not a stub", () => {
+	const mpl = fs.readFileSync(path.join(repoRoot, "licenses/MPL-2.0.txt"), "utf8");
+	assert.match(mpl, /^Mozilla Public License Version 2\.0/);
+	assert.match(mpl, /3\.2\. Distribution of Executable Form/);
+	assert.match(mpl, /Exhibit B - "Incompatible With Secondary Licenses" Notice/);
+	assert.ok(mpl.length > 15000, `MPL-2.0 text looks truncated (${mpl.length} bytes)`);
+});
+
+test("NOTICE.md states ownership, disclaims third-party affiliation, and claims no legal advice", () => {
 	const notice = fs.readFileSync(path.join(repoRoot, "NOTICE.md"), "utf8");
+	assert.match(notice, /Docker, Inc\. project/);
 	assert.match(notice, /not affiliated with/i);
 	assert.match(notice, /does not constitute legal\s+advice/i);
+	// The pre-B2 wording said pix was NOT affiliated with Docker, Inc., which
+	// contradicts the recorded ownership. It must not come back.
+	assert.doesNotMatch(notice, /not affiliated with[\s\S]{0,120}Docker, Inc\./i);
 });

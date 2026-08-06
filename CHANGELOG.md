@@ -8,6 +8,27 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## Unreleased
 
+### Legal / release
+
+- **Phase10 legal blockers closed (B1–B4).** MPL-2.0 disclosure is now real,
+  not asserted: `licenses/MPL-2.0.txt` ships the full verbatim text in the
+  image and the Homebrew tarball, each MPL component records a Source Code
+  Form URL pinned to the exact linked version (go-plugin v1.8.0, yamux
+  v0.1.2), and the notices no longer both claim and deny that license texts
+  are reproduced. `LICENSE` now names **Docker, Inc. and the pix
+  contributors**, with the DHI-redistribution and employer-IP basis recorded
+  durably in `docs/legal/AUTHORIZATIONS.md` (A-1/A-2, each listing what it
+  explicitly does NOT cover) and `CONTRIBUTING.md`/`NOTICE.md` stating
+  inbound = outbound MIT. `LICENSE` + `licenses/` now ship in the image and
+  the tarball (MIT s2, MPL-2.0 s3.1). `publish.yml` exports the published
+  manifest digest, runs `verify-provenance.sh` against it in a **blocking**
+  `provenance` job, and generates the SBOM against that published digest;
+  `continue-on-error` is gone from `legal.yml` (SBOM *diffing* remains
+  explicitly ungated in `docs/legal/FINDINGS.md` #7). New
+  `docs/legal/PRIVACY.md`. All of it gated by
+  `scripts/check-third-party-notices.sh` +
+  `tests/legal-authorizations-and-privacy.test.mjs`.
+
 ### Docs
 
 - **U12: final public docs/release sync against delivered code.** `AGENTS.md`'s

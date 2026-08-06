@@ -11,9 +11,11 @@ each step names what a human confirms.
 
 - A Docker account with its own DHI entitlement, obtained directly from
   Docker. Building the image pulls a DHI base layer; pix never requests,
-  stores, or asserts this entitlement on the operator's behalf — see
-  `NOTICE.md`. Record who ran this UAT and against which entitlement in your
-  own release notes; pix keeps no such record itself.
+  stores, or asserts a third party's entitlement on their behalf — see
+  `NOTICE.md`. Redistribution of the PUBLISHED `docker.io/<ns>/pix` image is
+  authorized separately and durably in `docs/legal/AUTHORIZATIONS.md` (A-1);
+  that record covers this project's own publish, not your account. Record who
+  ran this UAT and against which entitlement in your own release notes.
 - `sbx` installed and authenticated.
 - A clean checkout of the release commit/tag.
 
