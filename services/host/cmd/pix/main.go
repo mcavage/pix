@@ -131,7 +131,7 @@ Data & models
   models           which models pix can use, and which are wired up
   agent            the subagent roster: each agent's resolved model, and why
 
-More             config, mcp, task, state, version   (see ` + "`pix help --all`" + `)
+More             config, pack, mcp, secret, task, version   (see ` + "`pix help --all`" + `)
 
 Learn a command:  pix help run     ·     pix <command> -h
 `
