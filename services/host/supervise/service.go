@@ -166,10 +166,7 @@ type permanentErr struct{ err error }
 func (e permanentErr) Error() string { return e.err.Error() }
 func (e permanentErr) Unwrap() error { return e.err }
 
-func permanent(err error) bool {
-	var p permanentErr
-	return errors.As(err, &p)
-}
+func permanent(err error) bool { var p permanentErr; return errors.As(err, &p) }
 
 // start reattaches to a surviving child naming THIS unit, alive; otherwise it spawns a fresh one.
 func (s *GoPluginService) start() (*goplugin.Client, any, bool, error) {

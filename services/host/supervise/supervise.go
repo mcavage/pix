@@ -162,13 +162,7 @@ func FileSHA256(path string) (string, error) {
 	return hex.EncodeToString(sum.Sum(nil)), nil
 }
 
-// unitStageDir returns THIS unit's own, exclusive subdirectory of the stage
-// dir. Every staged/temp file for a unit lives ONLY under its own dir, so a
-// sweep can never even LIST a sibling's files, let alone match one by a
-// string-prefix coincidence (R1-1: names like "a", "a-", and "a.stage-x" used
-// to be able to collide under a single flat stage dir). unit must already be
-// non-empty (UnitSpec.Validate) and is rejected here if it is not a bare,
-// traversal-free path component.
+// unitStageDir returns THIS unit's own, exclusive subdirectory of the stage dir — every staged/temp file for a unit lives ONLY there, so a sweep can never even LIST a sibling's files, let alone match one by a string-prefix coincidence (R1-1: "a", "a-", and "a.stage-x" used to collide under one flat stage dir); unit must already be non-empty (UnitSpec.Validate) and is rejected here if it is not a bare, traversal-free path component.
 func unitStageDir(stageDir, unit string) (string, error) {
 	if unit == "" || unit != filepath.Base(unit) || unit == "." || unit == ".." || strings.ContainsRune(unit, filepath.Separator) {
 		return "", fmt.Errorf("unit %q: not a valid stage directory name", unit)
@@ -222,14 +216,7 @@ func StageExecutable(stageDir, unit, src, sha string) (string, error) {
 	return dst, nil
 }
 
-// sweepStaged removes every OTHER file in THIS unit's stage directory — an
-// old pin's bytes (a superseded "<12 hex>" copy) and its orphaned "stage-*"
-// temp files. Safe by CONSTRUCTION, not by pattern-matching a sibling's name
-// out of a shared directory: unitStageDir gives each unit its own directory,
-// so this ReadDir can never even see a sibling's files, regardless of how
-// the two unit names relate as strings (prefix, suffix, substring — none of
-// it matters once the directory itself is exclusive). Best-effort, only
-// after a successful stage; a sweep failure never blocks a launch.
+// sweepStaged removes every OTHER file in THIS unit's stage directory — a superseded pin's "<12 hex>" bytes and orphaned "stage-*" temp files — safe by CONSTRUCTION (unitStageDir's exclusive per-unit directory means this ReadDir can never even see a sibling's files, regardless of how the two names relate as strings), not by pattern-matching a sibling's name out of a shared one. Best-effort, only after a successful stage; a sweep failure never blocks a launch.
 func sweepStaged(unitDir, current string) {
 	ents, err := os.ReadDir(unitDir)
 	if err != nil {
@@ -251,11 +238,7 @@ type Holder struct {
 }
 
 // Get returns the dispensed impl, or nil when the unit is down.
-func (h *Holder) Get() any {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return h.impl
-}
+func (h *Holder) Get() any { h.mu.RLock(); defer h.mu.RUnlock(); return h.impl }
 
 // Set installs a newly dispensed impl.
 func (h *Holder) Set(impl any, c *goplugin.Client) {
