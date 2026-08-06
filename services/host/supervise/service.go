@@ -223,7 +223,7 @@ func (s *GoPluginService) command() (*exec.Cmd, error) {
 // stopChild drains (optionally) and kills the child inside the stop budget.
 func (s *GoPluginService) stopChild(client *goplugin.Client, drain bool) {
 	s.holder.Clear()
-	if drain && !s.holder.drain(s.tree.budgets.Drain) {
+	if drain && !s.holder.Drain(s.tree.budgets.Drain) {
 		s.tree.emit(Event{Unit: s.spec.Name, Type: EventDrainTimeout,
 			Message: fmt.Sprintf("in-flight calls outlived the %v drain budget", s.tree.budgets.Drain)})
 	}
@@ -358,10 +358,55 @@ func (s *GoPluginService) tryReattach() (*goplugin.Client, any, bool) {
 		}
 		client.Kill()
 		reason = "reattach failed: " + derr.Error()
+		// Every check above (unit/kind name, the exact identity fingerprint, the
+		// negotiated protocol version, processAlive's uid check, and
+		// verifyReattachTarget's uid-owned-unix-socket check) already PROVED
+		// st.Pid is our own previously-launched generation of this unit — not
+		// merely a live process wearing that pid. client.Kill() above only
+		// reaches the OS process when go-plugin's own reattach dial succeeded
+		// (it sets a runner only then); a unit that stopped answering its
+		// socket entirely — the exact failure that would otherwise leave
+		// memory's exclusive store flock held forever, deadlocking every spawn
+		// `serve` tries next — dials to ErrProcessNotFound and leaves
+		// client.Kill() a no-op. killVerifiedOrphan is the ONLY path that
+		// still reaps it, and it is unreachable except through this
+		// already-verified pid; never call it on a pid that has not cleared
+		// every check above.
+		if killVerifiedOrphan(st.Pid) {
+			s.tree.emit(Event{Unit: s.spec.Name, Type: EventOrphanKilled, Message: fmt.Sprintf("pid %d: %s", st.Pid, reason)})
+		}
 	}
 	s.tree.emit(Event{Unit: s.spec.Name, Type: EventReattachRejected, Message: reason})
 	s.clearReattach()
 	return nil, nil, false
+}
+
+// orphanKillWait bounds how long killVerifiedOrphan waits for a verified
+// orphan to actually exit after SIGKILL. It bounds the WAIT, not the kill
+// (the signal is sent unconditionally, once, before this loop): a slow-to-
+// reap orphan just means the fresh spawn that follows may still lose one lock
+// race, not that tryReattach hangs indefinitely.
+const orphanKillWait = 2 * time.Second
+
+// killVerifiedOrphan terminates pid, which the caller has ALREADY established
+// is our own previously-launched unit process (see the call site), and waits
+// briefly for it to actually exit so the fresh spawn that follows has a real
+// chance at whatever exclusive resource (a flock) the orphan was holding.
+// Reports whether the kill signal was delivered (false only means the pid was
+// already gone — never a reason to treat the caller's failure differently).
+func killVerifiedOrphan(pid int) bool {
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	if err := p.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return false
+	}
+	deadline := time.Now().Add(orphanKillWait)
+	for time.Now().Before(deadline) && processAlive(pid) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	return true
 }
 
 // verifyReattachTarget admits UNIX SOCKETS ONLY (a tcp target is whatever process got the port back after a reboot; a unix socket path carries an owner we can check), and only one owned by OUR uid: a regular file wearing the recorded path, or a socket created by another user, is a stranger's endpoint, not our child's. Returns a rejection reason, or "" to proceed.

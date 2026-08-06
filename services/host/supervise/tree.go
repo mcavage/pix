@@ -58,6 +58,14 @@ const (
 	EventStopped          EventType = "stopped"
 	EventDoNotRestart     EventType = "do_not_restart"
 	EventPanic            EventType = "panic"
+	// EventOrphanKilled fires when tryReattach has already proven a persisted
+	// pid is OUR OWN previously-launched unit (identity, protocol version, a
+	// uid-owned process AND a uid-owned unix socket at the recorded address all
+	// matched) but the reattach RPC itself still failed, and the pid was
+	// therefore terminated directly rather than left running and holding
+	// whatever the unit exclusively owns (memory's store flock is the
+	// motivating case) forever.
+	EventOrphanKilled EventType = "orphan_killed"
 )
 
 // Event is one typed supervision event.

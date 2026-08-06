@@ -817,6 +817,82 @@ func TestReattachRefusesForeignSockets(t *testing.T) {
 	}
 }
 
+// M4: a reattach can be fully OWNERSHIP-VERIFIED (identity, uid-owned pid,
+// uid-owned unix socket — verifyReattachTarget passes) yet still fail to
+// reconnect, because the persisted socket exists and is ours but nothing is
+// listening on it anymore. Left alone, that live orphan keeps holding
+// whatever the unit exclusively owns (memory's store flock is the motivating
+// case) forever, deadlocking every subsequent spawn attempt the same way.
+// tryReattach must terminate exactly this VERIFIED orphan before falling back
+// to a fresh spawn — and must NEVER do so for a pid that failed any
+// ownership check (the sibling refusal tests above all hit a `reason != ""`
+// before killVerifiedOrphan is ever reachable, so none of them are at risk of
+// killing an unverified stranger).
+func TestReattachKillsAVerifiedOrphanThatStoppedAnsweringItsSocket(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real process spawn + socket reattach timing; covered by the untimed race/metrics CI jobs")
+	}
+	bin, sha := buildFixture(t)
+	dir := t.TempDir()
+	state := filepath.Join(dir, "state")
+	spec := fixtureUnit("stuck", bin, sha, "FIXTURE_TAG=orig")
+
+	// A REAL, live, uid-owned process standing in for the orphan holding
+	// whatever exclusive resource this unit serves — exec'd directly (not
+	// through go-plugin) since its only job here is to stay alive, exactly as
+	// a hung memory unit would. This test, not go-plugin, is its parent, so it
+	// reaps it itself the instant it exits (a zombie still answers kill(pid,0)
+	// as "alive").
+	orphan := exec.Command(bin)
+	orphan.Env = FilterEnv(spec.EnvAllow, spec.EnvGrant)
+	must(t, orphan.Start())
+	pid := orphan.Process.Pid
+	reaped := make(chan struct{})
+	go func() { _ = orphan.Wait(); close(reaped) }()
+	t.Cleanup(func() { _ = orphan.Process.Kill(); <-reaped })
+
+	// A REAL unix socket file the orphan does NOT own the listening end of
+	// anymore: bound, then closed WITHOUT unlinking, so the path still Lstat's
+	// as a socket owned by our uid (verifyReattachTarget passes) but dialing
+	// it fails — the same ErrProcessNotFound go-plugin's own reattach path
+	// gets connecting to any dead listener.
+	sock := filepath.Join(dir, "stuck.sock")
+	l, err := net.Listen("unix", sock)
+	must(t, err)
+	l.(*net.UnixListener).SetUnlinkOnClose(false)
+	must(t, l.Close())
+	if _, err := net.Dial("unix", sock); err == nil {
+		t.Fatal("test setup: the stale socket must refuse new connections")
+	}
+
+	must(t, SaveReattach(state, spec, &goplugin.ReattachConfig{
+		Pid: pid, Protocol: goplugin.ProtocolNetRPC, ProtocolVersion: plugin.ProtocolVersion,
+		Addr: &net.UnixAddr{Name: sock, Net: "unix"},
+	}, plugin.ProtocolVersion))
+
+	tr := testTree(t, func(c *Config) { c.StateDir = state })
+	h, err := tr.Add(spec, fixtureHealth)
+	must(t, err)
+
+	// The unit still comes up — freshly spawned, never reattached.
+	if got := describe(t, h); got.WatcherModel != "orig" || got.CaptureReason == strconv.Itoa(pid) {
+		t.Errorf("unexpected reattach to the stuck orphan: %+v", got)
+	}
+	if st, _ := tr.Unit("stuck"); st.Reattached {
+		t.Error("status claims a reattach to a socket that refuses connections")
+	}
+	if !sawEvent(tr, "stuck", EventReattachRejected) {
+		t.Errorf("no typed reattach-rejected event: %+v", tr.Events())
+	}
+
+	// The VERIFIED orphan must actually be dead — not left running to hold the
+	// flock forever.
+	waitFor(t, "the verified orphan to be killed", 3*time.Second, func() bool { return !alive(pid) })
+	if !sawEvent(tr, "stuck", EventOrphanKilled) {
+		t.Errorf("no typed orphan-killed event: %+v", tr.Events())
+	}
+}
+
 // L1: the admission fingerprint covers the ENV SURFACE — order-independent for
 // the allowlist, value-sensitive for grants, collision-free against argv — and
 // the reattach state on disk never carries a grant's VALUE, hashed or plain.

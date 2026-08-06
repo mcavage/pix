@@ -261,8 +261,8 @@ func (h *Holder) Use(fn func(impl any) error) error {
 	return fn(impl)
 }
 
-// drain waits for in-flight Use calls, bounded by the drain budget.
-func (h *Holder) drain(budget time.Duration) bool {
+// Drain waits for in-flight Use calls, bounded by the drain budget.
+func (h *Holder) Drain(budget time.Duration) bool {
 	done := make(chan struct{})
 	go func() { h.inflight.Wait(); close(done) }()
 	select {
