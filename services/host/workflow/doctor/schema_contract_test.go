@@ -9,29 +9,29 @@ import (
 	"pix/host/health"
 )
 
-// schema_contract_test.go is the enforcement half of the v4 break. Bumping a
+// schema_contract_test.go is the enforcement half of the v5 contract. Bumping a
 // schema version in a constant costs nothing; what a downstream reader needs
 // is the guarantee that the new shape is EXACTLY what was announced, that the
 // old field names are gone (so a stale parser fails loudly rather than
 // reading a subset it happens to recognize), and that the versions it
 // replaces are named with a migration note.
 
-// v4TopLevel is the published top-level key set. Changing it is a schema
+// v5TopLevel is the published top-level key set. Changing it is a schema
 // break and must come with a version bump and a RetiredSchemas entry — this
 // test is what makes that non-optional.
-var v4TopLevel = []string{
+var v5TopLevel = []string{
 	"schema_version", "version", "config_path", "profile", "verdict", "ready",
-	"checks", "fixes", "exit", "elapsed_ms",
+	"checks", "fixes", "exit", "elapsed_ms", "supervisor",
 }
 
-// v4Check is one row's key set. `evidence` and `fix` are omitempty, so the
+// v5Check is one row's key set. `evidence` and `fix` are omitempty, so the
 // contract is "no key outside this set", not "every key present".
-var v4Check = map[string]bool{
+var v5Check = map[string]bool{
 	"name": true, "status": true, "required": true, "detail": true,
 	"evidence": true, "fix": true, "duration_ms": true,
 }
 
-func v4Payload(t *testing.T) map[string]json.RawMessage {
+func v5Payload(t *testing.T) map[string]json.RawMessage {
 	t.Helper()
 	snap := health.Snapshot{Results: []health.Result{
 		{Name: "sbx", Status: health.StatusAbsent, Required: true, Detail: "not installed",
@@ -48,39 +48,39 @@ func v4Payload(t *testing.T) map[string]json.RawMessage {
 	return out
 }
 
-func TestSchemaV4_TopLevelKeysAreExactlyTheContract(t *testing.T) {
-	got := v4Payload(t)
+func TestSchemaV5_TopLevelKeysAreExactlyTheContract(t *testing.T) {
+	got := v5Payload(t)
 	var keys []string
 	for k := range got {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	want := append([]string(nil), v4TopLevel...)
+	want := append([]string(nil), v5TopLevel...)
 	sort.Strings(want)
 	if strings.Join(keys, ",") != strings.Join(want, ",") {
 		t.Errorf("top-level keys = %v\nwant %v", keys, want)
 	}
 }
 
-func TestSchemaV4_CarriesNoRetiredKey(t *testing.T) {
-	got := v4Payload(t)
+func TestSchemaV5_CarriesNoRetiredKey(t *testing.T) {
+	got := v5Payload(t)
 	for _, dead := range RetiredSchemaKeys {
 		if _, ok := got[dead]; ok {
-			t.Errorf("v4 still publishes the retired key %q — the break is not clean", dead)
+			t.Errorf("v5 still publishes the retired key %q — the break is not clean", dead)
 		}
 	}
 }
 
-func TestSchemaV4_RowKeysAreExactlyTheContract(t *testing.T) {
+func TestSchemaV5_RowKeysAreExactlyTheContract(t *testing.T) {
 	var rows []map[string]json.RawMessage
-	if err := json.Unmarshal(v4Payload(t)["checks"], &rows); err != nil {
+	if err := json.Unmarshal(v5Payload(t)["checks"], &rows); err != nil {
 		t.Fatalf("checks is not an array of objects: %v", err)
 	}
 	if len(rows) != 1 {
 		t.Fatalf("want 1 row, got %d", len(rows))
 	}
 	for k := range rows[0] {
-		if !v4Check[k] {
+		if !v5Check[k] {
 			t.Errorf("check row publishes undeclared key %q", k)
 		}
 	}
@@ -110,12 +110,12 @@ func TestSchemaRetirement_IsCompleteAndConsistent(t *testing.T) {
 
 // Both verbs publish the SAME schema version. They emit one shape now, and a
 // consumer that can read `pix doctor --json` can read `pix status --json`.
-func TestSchemaV4_IsPublishedByBothSurfaces(t *testing.T) {
+func TestSchemaV5_IsPublishedByBothSurfaces(t *testing.T) {
 	snap := health.Snapshot{}
 	if got := ReportJSON(snap, "", snap.ExitCode()).SchemaVersion; got != SchemaVersion {
 		t.Errorf("schema_version = %d, want %d", got, SchemaVersion)
 	}
-	if !strings.Contains(Description, "schema_version 4") || !strings.Contains(StatusDescription, "schema_version 4") {
+	if !strings.Contains(Description, "schema_version 5") || !strings.Contains(StatusDescription, "schema_version 5") {
 		t.Error("both --json flags must document the schema version they emit")
 	}
 }

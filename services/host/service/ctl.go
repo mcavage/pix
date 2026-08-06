@@ -15,6 +15,7 @@ import (
 	"pix/host/cli"
 	"pix/host/rpc"
 	"pix/host/sys"
+	"pix/host/unitreport"
 	"strconv"
 	"strings"
 	"syscall"
@@ -367,6 +368,43 @@ type serveState struct {
 	Detail     string `json:"detail,omitempty"`
 	Memory     bool   `json:"memory"`
 	MemoryPort int    `json:"memory_port"`
+	// Units is the supervision tree as `serve` last published it: identity,
+	// state, restarts, generation, reattach, scrubbed last error and last probe
+	// latency, per unit. Empty means "we could not see the tree", which
+	// UnitsDetail explains — never "everything is fine".
+	Units       []unitreport.Unit `json:"units,omitempty"`
+	UnitsDetail string            `json:"units_detail,omitempty"`
+}
+
+// unitsStaleAfter is how long a published snapshot stays believable. serve
+// republishes every 5s, so three missed intervals means the daemon is wedged or
+// died without cleaning up — either way the units are reported as stale, not as
+// their last known good state.
+const unitsStaleAfter = 20 * time.Second
+
+// resolveServeUnits loads the published supervision snapshot and decides whether
+// it describes THIS running daemon. Split out as a pure function so a test can
+// hand it a file and a clock instead of a live tree.
+func resolveServeUnits(path string, running bool, pid int, now time.Time) ([]unitreport.Unit, string) {
+	rep, found, err := unitreport.ReadReport(path)
+	switch {
+	case err != nil:
+		return nil, fmt.Sprintf("unreadable supervision snapshot (%v)", err)
+	case !found && !running:
+		return nil, "" // not running: no tree to report, and nothing surprising about it
+	case !found:
+		return nil, "serve is running but published no supervision snapshot"
+	case !running:
+		return nil, "stale supervision snapshot from a serve that is no longer running"
+	case pid != 0 && rep.PID != 0 && rep.PID != pid:
+		return nil, fmt.Sprintf("supervision snapshot belongs to pid %d, not the running pid %d", rep.PID, pid)
+	case rep.SchemaVersion != unitreport.SchemaVersion:
+		return nil, fmt.Sprintf("supervision snapshot schema %d, this build reads %d", rep.SchemaVersion, unitreport.SchemaVersion)
+	}
+	if age := now.Sub(time.Unix(rep.GeneratedUnix, 0)); age > unitsStaleAfter {
+		return rep.Units, fmt.Sprintf("supervision snapshot is %ds stale", int(age.Seconds()))
+	}
+	return rep.Units, ""
 }
 
 // portProbe is what the status/upgrade paths actually touch: one environment
@@ -398,6 +436,7 @@ func resolveServeStatus(ctl serveCtl, env portProbe) serveState {
 	}
 	st.MemoryPort = Port(env, "MEMORY_PORT", rpc.MemoryPortDefault)
 	st.Memory = env.DialLocal(st.MemoryPort)
+	st.Units, st.UnitsDetail = resolveServeUnits(config.ServeUnitsPath(), st.Running, st.PID, time.Now())
 	return st
 }
 
@@ -421,6 +460,33 @@ func printServeStatus(st serveState, out io.Writer, jsonOut bool) {
 		memPort = rpc.MemoryPortDefault
 	}
 	fmt.Fprintf(out, "  memory (:%d): %s\n", memPort, cli.UpDown(st.Memory))
+	printServeUnits(st, out)
+}
+
+// printServeUnits renders the supervision tree for humans: one line per unit,
+// with the numbers that answer "is it flapping" (restarts/generation) and "is it
+// slowing down" (last probe) beside the state. A unit we could not see says so.
+func printServeUnits(st serveState, out io.Writer) {
+	if st.UnitsDetail != "" {
+		fmt.Fprintf(out, "  units: unknown (%s)\n", st.UnitsDetail)
+	}
+	if len(st.Units) == 0 {
+		if st.UnitsDetail == "" && st.Running {
+			fmt.Fprintln(out, "  units: none supervised")
+		}
+		return
+	}
+	for _, u := range st.Units {
+		extra := ""
+		if u.Reattached {
+			extra = " reattached"
+		}
+		fmt.Fprintf(out, "  unit %s (%s): %s pid=%d gen=%d restarts=%d probe=%dus%s\n",
+			u.Name, u.Kind, u.State, u.PID, u.Generation, u.Restarts, u.LastProbeUS, extra)
+		if u.LastError != "" {
+			fmt.Fprintf(out, "    last error: %s\n", u.LastError)
+		}
+	}
 }
 
 // StopAnyMode stops the daemon in whatever lifecycle mode it is in. A MANAGED

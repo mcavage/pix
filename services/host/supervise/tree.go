@@ -29,6 +29,7 @@ const (
 type UnitStatus struct {
 	Name        string
 	Kind        string
+	Identity    string // admission fingerprint (sha256 hex of the spec; grant VALUES enter only as digests)
 	State       UnitState
 	PID         int
 	HealthOK    bool
@@ -36,6 +37,7 @@ type UnitStatus struct {
 	Restarts    int
 	Generations int
 	LastError   string
+	LastProbeUS int64 // wall time of the most recent health probe, in MICROSECONDS (a healthy local probe rounds to 0ms); the unit's latency SLI
 	Since       time.Time
 	token       suture.ServiceToken // internal: which child Remove takes back out
 }
@@ -168,7 +170,7 @@ func (t *Tree) Add(spec UnitSpec, health HealthFunc) (*Holder, error) {
 		t.mu.Unlock()
 		return nil, fmt.Errorf("supervise: unit %q already supervised", spec.Name)
 	}
-	t.units[spec.Name] = &UnitStatus{Name: spec.Name, Kind: spec.Kind, State: UnitStarting, Since: time.Now()}
+	t.units[spec.Name] = &UnitStatus{Name: spec.Name, Kind: spec.Kind, Identity: spec.identity(), State: UnitStarting, Since: time.Now()}
 	t.mu.Unlock()
 	svc := &GoPluginService{spec: spec, health: health, holder: &Holder{}, tree: t, ready: make(chan error, 1)}
 	// One child supervisor per unit: its restart accounting, backoff and permanent death are its own.

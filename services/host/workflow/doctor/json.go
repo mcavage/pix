@@ -10,13 +10,18 @@ import (
 // disagree about the same host. A consumer reads one shape from either command
 // and gets the same rows.
 //
-// SchemaVersion 4 is a BREAK, not an extension: v1-v3 described the
+// SchemaVersion 5 ADDS the `supervisor` object (the Suture tree serve
+// publishes) as a required top-level key. That is a key-set change, and the
+// contract test below refuses a key-set change without a version bump — so it
+// is a bump, with a migration note, rather than a field smuggled into v4.
+//
+// SchemaVersion 4 was a BREAK, not an extension: v1-v3 described the
 // requirement/verdict matrix this wave deleted, and there is no honest
 // mapping from a four-status probe result onto a vocabulary that could not
 // say "unknown". The version number is the contract that says so out loud,
 // and RetiredSchemas below is the migration note that says what a consumer
 // must do about it.
-const SchemaVersion = 4
+const SchemaVersion = 5
 
 // RetiredSchemas is the MIGRATION CONTRACT for the versions this one
 // replaces, keyed by version. Each value states what that shape was and what
@@ -40,6 +45,7 @@ const SchemaVersion = 4
 var RetiredSchemas = map[int]string{
 	1: "nested `groups` of readiness Checks; no field maps onto the four-status model — read schema_version and re-read `checks`",
 	2: "as v1 plus per-axis requirement rollups; same break, same migration",
+	4: "the v5 shape minus the `supervisor` object; a v4 consumer keeps reading every field it knows and gains supervision state by reading `supervisor`",
 	3: "`groups` plus a flat `checks` array, and a separate `dashboard` object from `pix status`; both verbs now emit one shape — read `checks`",
 }
 
@@ -69,6 +75,9 @@ type ReportJSONView struct {
 	// cannot tell a reader different things.
 	Exit      int   `json:"exit"`
 	ElapsedMS int64 `json:"elapsed_ms"`
+	// Supervisor is the Suture tree `pix-host serve` published, or the reason
+	// this process could not see it. Always present.
+	Supervisor SupervisorJSON `json:"supervisor"`
 }
 
 // CheckJSON is one probe's answer.
@@ -99,6 +108,7 @@ func ReportJSON(s health.Snapshot, profile string, exit int) ReportJSONView {
 		Fixes:         s.Fixes(),
 		Exit:          exit,
 		ElapsedMS:     s.Elapsed.Milliseconds(),
+		Supervisor:    supervisorSnapshot(),
 	}
 	if v.Fixes == nil {
 		v.Fixes = []string{}

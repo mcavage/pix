@@ -34,11 +34,11 @@
       "exitCode": 0,
       "stream": "stdout",
       "contains": [
-        "schema_version 4"
+        "schema_version 5"
       ]
     },
     {
-      "name": "json-schema-v4",
+      "name": "json-schema-v5",
       "args": [
         "doctor",
         "--json"
@@ -46,7 +46,7 @@
       "exitCode": 1,
       "stream": "stdout",
       "contains": [
-        "\"schema_version\": 4"
+        "\"schema_version\": 5"
       ],
       "jsonKeys": [
         "schema_version",
@@ -58,7 +58,8 @@
         "checks",
         "fixes",
         "exit",
-        "elapsed_ms"
+        "elapsed_ms",
+        "supervisor"
       ]
     }
   ]

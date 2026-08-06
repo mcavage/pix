@@ -77,6 +77,11 @@ var pkgLayer = map[string]int{
 	// mis-read that made two legitimate users (memory, knowledge) look like
 	// sibling violations.
 	"workspace": layerFoundation,
+	// unitreport is the SERIALIZED supervision snapshot and nothing else: no
+	// process, no lifecycle, no imports outside the stdlib. It is L0 because
+	// supervise (L2) writes it while service (L1) and workflow/doctor (L3) read
+	// it — a shape shared by three layers cannot live in any one of them.
+	"unitreport": layerFoundation,
 
 	// L1 — capability. One domain each, siblings invisible to each other.
 	"inference": layerCapability,

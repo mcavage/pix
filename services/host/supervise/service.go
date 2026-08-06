@@ -136,6 +136,13 @@ func (s *GoPluginService) probe(budget time.Duration) error {
 	if s.health == nil {
 		return nil
 	}
+	// Time EVERY probe, failures included: the latency of the probe that timed
+	// out is the number that explains the eviction that follows it.
+	start := time.Now()
+	defer func() {
+		us := time.Since(start).Microseconds()
+		s.tree.transition(s.spec.Name, func(st *UnitStatus) { st.LastProbeUS = us })
+	}()
 	done := make(chan error, 1)
 	go func() { done <- s.holder.Use(s.health) }()
 	timer := time.NewTimer(budget)
