@@ -1,6 +1,6 @@
 ---
 name: weekly-wrap
-description: Friday synthesis and weekly retro — pull the week's meetings, chat, calendar, and git activity, score priority progress, surface blockers, and build a concise wrap doc. Use for "weekly wrap".
+description: Friday synthesis and weekly retro that pulls the week's meetings, chat, calendar, and git activity, scores priority progress, surfaces blockers, and builds a concise wrap doc. Use for "weekly wrap".
 ---
 # weekly-wrap
 

@@ -80,7 +80,7 @@ type runCmd struct {
 
 	Dev      bool     `help:"Mode B: use the local checkout kit + load skills live from it (needs a checkout)."`
 	Skills   []string `help:"Mount an extra skill tree and load it live (repeatable)." placeholder:"DIR"`
-	Kit      []string `help:"Override the KIT — image + entrypoint + creds + egress + skills — instead of the auto git/local pin (repeatable; path or git+URL)." placeholder:"K"`
+	Kit      []string `help:"Override the KIT (image + entrypoint + creds + egress + skills) instead of the auto git/local pin (repeatable; path or git+URL)." placeholder:"K"`
 	KitRef   string   `help:"Pin the auto kit to a git ref (v0.1.0, main) instead of the latest stable release." placeholder:"REF"`
 	Template string   `help:"Override only the IMAGE sbx boots (the ref 'make load' prints). Orthogonal to --kit." placeholder:"REF"`
 	Mcp      []string `help:"Attach an MCP server at creation (repeatable)." placeholder:"M"`

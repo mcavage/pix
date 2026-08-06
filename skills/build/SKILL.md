@@ -1,6 +1,6 @@
 ---
 name: build
-description: Ship a feature with the crew, spec-first — story files, parallel worktrees, architect + engineer subagents, cross-vendor review, QA, security, verification gate. Use for "build X" or "implement this".
+description: Ship a feature with the crew, spec-first (story files, parallel worktrees, architect + engineer subagents, cross-vendor review, QA, security, verification gate). Use for "build X" or "implement this".
 ---
 # build
 

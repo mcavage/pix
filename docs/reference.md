@@ -7,7 +7,7 @@ This doc does. Read the section you need, run the command, move on.
 ## 0. Command map
 
 The authoritative verb/flag list is `pix help --all` (and `pix help
-<verb>`) — it is generated from the dispatch tree, so it
+<verb>`): it is generated from the dispatch tree, so it
 cannot drift. This table says what each verb is FOR and where the reasoning
 lives. It is the pointer target for `AGENTS.md`, which deliberately carries no
 CLI reference of its own.
@@ -20,15 +20,15 @@ CLI reference of its own.
 | `setup` | the guided host+agent setup path (keys, memory, pack, identity) | `docs/design/onboarding.md` |
 | `serve` | the long-running host services (memory :11435) | `docs/design/serve-lifecycle.md` |
 | `memory` (`mem`) | recall/remember/forget/learnings/stats from the host | §2, `docs/memory.md` |
-| `pack` | the portable capability context: ls/show/use/rm — no authoring verb, edit `pack.toml`/`skills/` by hand | §5, `docs/design/packs-v2.md` |
-| `mcp` | register/list/load MCP servers through the sbx gateway — the one door integrations come through | §8 |
+| `pack` | the portable capability context: ls/show/use/rm (no authoring verb, edit `pack.toml`/`skills/` by hand) | §5, `docs/design/packs-v2.md` |
+| `mcp` | register/list/load MCP servers through the sbx gateway (the one door integrations come through) | §8 |
 | `secret` | manage the 1Password `op://` refs (never the values) | §8 |
 | `config` | `show`/`path`/`get`/`set`/`unset` the single runtime config | §1 |
 | `task` | isolated parallel-work clones + sandboxes | `docs/design/worktree-tasks.md` |
 | `monitor` | live-follow a sandbox's out-of-sandbox traffic | `docs/design/monitor.md` |
 | `models` | which models pix can use, and the model router: ls/show/pick/route | `docs/design/routing.md`, `docs/design/models-cli.md` |
-| `agent` | the subagent roster, read-only: `ls` only — `new`/`edit`/`rm`/`reassess` are RETIRED | §4 |
-| `version`, `help` | stamped version; tiered help | — |
+| `agent` | the subagent roster, read-only: `ls` only (`new`/`edit`/`rm`/`reassess` are RETIRED) | §4 |
+| `version`, `help` | stamped version; tiered help | (none) |
 
 Retired verbs (`slack`, `gworkspace`, `knowledge`, `host`, `upgrade`, `man`,
 `backup`, `restore`, `reset`, `state backup|restore|reset`, `task harvest|gc`,
@@ -36,7 +36,7 @@ Retired verbs (`slack`, `gworkspace`, `knowledge`, `host`, `upgrade`, `man`,
 replacement and exit 2, doing nothing else. `reset`/`state reset` moved state
 aside as a reversible clean-slate; ephemeral sandboxes plus `setup`/`doctor` do
 that job now, so recovery is manual and evidence-first: run `doctor` first,
-back up whatever `config path` / `status --json` show, then `setup` — there is
+back up whatever `config path` / `status --json` show, then `setup`: there is
 no automated wipe. Every retirement is recorded, with its reason and
 replacement, in `services/host/cmd/pix/corpus/retirement.jsonl`.
 
@@ -216,12 +216,12 @@ pix pack rm                 # detach the active pack (files untouched)
 
 There is no authoring verb. A pack is a directory you create and edit by
 hand: a `pack.toml` (name + facets) plus `skills/`, `knowledge/`, and `bin/`
-as needed — see docs/design/packs.md for the schema. Adding a capability is
+as needed: see docs/design/packs.md for the schema. Adding a capability is
 one file and one `pack.toml` stanza: a `bin/warehouse` wrapper script plus a
 `[[proxy]]` entry lands it on PATH inside the sandbox; an `[[integrations]]`
 stanza with `mcp = "fastmail"` and `env = "FASTMAIL_TOKEN"` declares an MCP
 server the pack needs plus the env var name `pack use` will ask you to fill
-via 1Password — the value never touches the pack or the VM.
+via 1Password: the value never touches the pack or the VM.
 
 **MCP servers and `bin/` wrappers attach at sandbox CREATE, not live.** If you
 switch packs or add an MCP inside a running sandbox, it's registered on the
@@ -272,7 +272,7 @@ MCP or knowledge bundle you added by hand outside any pack.
 
 Knowledge is pack-delivered context: an OKF (Open Knowledge Format) directory
 of domain facts a pack points at. There is no launcher verb for it and no
-corpus shipped in the public stack — the `knowledge` capability resolves to
+corpus shipped in the public stack: the `knowledge` capability resolves to
 `none` until a pack wires one, and `pix pack use <path|url>` is how it arrives.
 
 A pack references bundles rather than only embedding them, and the reference
@@ -289,8 +289,8 @@ A bundle is markdown, not executable, so it never triggers the pack trust gate
 ## 7. Leaving the sandbox
 
 There is no unsandboxed run mode. The sandbox is the boundary the whole design
-rests on, so the two things it structurally cannot do — reach a real device and
-rebuild the pix image itself — are done from your own shell, not through pix.
+rests on, so the two things it structurally cannot do (reach a real device and
+rebuild the pix image itself) are done from your own shell, not through pix.
 
 ## 8. MCP and capabilities
 
@@ -299,8 +299,8 @@ in as MCP servers, run through the sbx gateway.
 
 A credential an MCP server needs is a 1Password `op://` reference resolved at
 spawn (§8 below, `pix secret`), never a value on disk and never baked into the
-gateway registration. Where a server needs a user identity — a Slack `xoxp-`
-user token is the canonical case — that identity is one named person's, never a
+gateway registration. Where a server needs a user identity (a Slack `xoxp-`
+user token is the canonical case), that identity is one named person's, never a
 shared team token and never handed to a second person to reuse.
 
 ```
@@ -343,7 +343,7 @@ pix mcp bundle                 # register the shipped catalog (notion/
 ```
 
 `pix mcp load` resolves to `sbx mcp load <name> --sandbox <box>`. It writes
-no receipt — the launcher-side MCP receipt store was deleted (U04e), because
+no receipt: the launcher-side MCP receipt store was deleted (U04e), because
 "attached once" is not the state of a live session, and rendering it as
 `attached` was a lie by the time you read it. `pix status` and `pix doctor`
 never poll a sandbox and never claim to know what it has attached; they
@@ -353,7 +353,7 @@ report what the HOST can check (see §9).
 
 `pix status` is a fast, read-only dashboard: services, provider keys, the
 active pack, and, per configured MCP server, the two things the host can
-actually check, each tri-state (yes / no / unknown — never guessed):
+actually check, each tri-state (yes / no / unknown: never guessed):
 
 - **registration**: `sbx mcp ls` says the server is known to the gateway
 - **auth**: for a remote/OAuth server only (catalog or pack-remote), the
@@ -362,9 +362,9 @@ actually check, each tri-state (yes / no / unknown — never guessed):
 
 **Attachment is deliberately not a third truth.** Nothing pix can run from
 the host answers whether a RUNNING sandbox currently has a server's tools
-loaded, so a registered server's note always carries the same caveat —
+loaded, so a registered server's note always carries the same caveat:
 "host registration; attachment to a live session is not checkable from
-here" — instead of guessing `attached`/`not attached`. `pix mcp ls` prints
+here", instead of guessing `attached`/`not attached`. `pix mcp ls` prints
 the identical caveat. The fix for a server that's registered but not (yet)
 in your session is always the same regardless of history:
 `pix mcp load <name> [DIR]` to attach it live, or `pix rm BOX && pix run` to

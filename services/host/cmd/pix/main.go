@@ -109,7 +109,7 @@ func classifyBareArg(a string) (msg string, launch bool) {
 // inject a fake `pix-host mcp --list` responder for setup's MCP partition.
 var hostBinaryResolver = launcher.FindHostBinary
 
-const helpText = `pix — a personal, multi-model pi coding agent in a Docker sandbox.
+const helpText = `pix: a personal, multi-model pi coding agent in a Docker sandbox.
 
 Usage:  pix <command> [args]
 

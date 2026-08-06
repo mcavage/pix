@@ -61,7 +61,7 @@ pix mcp register
 ```
 
 Typing a retired command prints a `PIX_RETIRED` line naming the replacement and
-exits 2 — it never half-runs the old behavior. The full list of retired verbs
+exits 2: it never half-runs the old behavior. The full list of retired verbs
 and flags, with the replacement for each, is
 `services/host/cmd/pix/corpus/retirement.jsonl`.
 

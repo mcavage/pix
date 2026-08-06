@@ -1,6 +1,6 @@
 ---
 name: ship
-description: Take the working tree from "done" to "PR open" — quality gate, rebase, tests + lint, code-review, bump version + changelog, commit, push, open a PR. Use for "ship" or "make a PR".
+description: Take the working tree from "done" to "PR open" (quality gate, rebase, tests + lint, code-review, bump version + changelog, commit, push, open a PR). Use for "ship" or "make a PR".
 ---
 # ship
 
