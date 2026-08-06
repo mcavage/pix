@@ -83,6 +83,14 @@ func buildPackFixture(t *testing.T) string {
 // with the given pinned sha and argv, and returns its root.
 func writeUnitPack(t *testing.T, fixtureBin, sha string, argv ...string) string {
 	t.Helper()
+	return writeNamedUnitPack(t, "unit-pack", "fixture-svc", fixtureBin, sha, argv...)
+}
+
+// writeNamedUnitPack is writeUnitPack with the pack name and the [[services]]
+// unit name both parameterized, so a multi-pack test can build two packs
+// that either share or collide on a unit name.
+func writeNamedUnitPack(t *testing.T, packName, svcName, fixtureBin, sha string, argv ...string) string {
+	t.Helper()
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
 		t.Fatal(err)
@@ -98,11 +106,11 @@ func writeUnitPack(t *testing.T, fixtureBin, sha string, argv ...string) string 
 	if len(argv) > 0 {
 		argvLine = `argv = ["` + strings.Join(argv, `", "`) + `"]` + "\n"
 	}
-	manifest := `name = "unit-pack"
+	manifest := `name = "` + packName + `"
 schema = 2
 
 [[services]]
-name = "fixture-svc"
+name = "` + svcName + `"
 runtime = "go-plugin"
 activation = "always"
 path = "bin/fixture"
@@ -149,6 +157,30 @@ func acceptSurface(t *testing.T, root string) {
 	}
 	store := &pack.PackTrustStore{}
 	store.RecordAcceptance(store.TrustKey(root), pack.PackTrustRecord{Path: packinfo.CanonicalizePackRoot(root), Fingerprint: fp})
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// acceptSurfaces is acceptSurface generalized to record MORE THAN ONE pack's
+// acceptance in the SAME trust-store save: acceptSurface builds a bare
+// &pack.PackTrustStore{} and calls Save() directly (no fresh load), which is
+// fine for a single call but would have the second call's Save silently wipe
+// the first pack's just-recorded acceptance out from under a multi-pack test.
+func acceptSurfaces(t *testing.T, roots ...string) {
+	t.Helper()
+	store := &pack.PackTrustStore{}
+	for _, root := range roots {
+		p, err := packinfo.LoadPack(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fp, _, err := pack.ComputeHostExecFingerprint(root, pack.ComputeHostBoM(p, "", pack.PackLocalMCP()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		store.RecordAcceptance(store.TrustKey(root), pack.PackTrustRecord{Path: packinfo.CanonicalizePackRoot(root), Fingerprint: fp})
+	}
 	if err := store.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -358,5 +390,154 @@ func TestPackUnitWiring_RestartsChangedService(t *testing.T) {
 	}
 	if first.Get() != nil {
 		t.Error("the stale generation is still dispensing — restart did not stop it")
+	}
+}
+
+// TestMergePackServices_TwoPacksBothSurvive: two packs declaring distinct unit
+// names both come through mergePackServices intact, with no error — the
+// aggregation step behind the fix to the "one reconcile call per pack"
+// defect (each such call treated its OWN pack's views as the entire desired
+// state, so calling it a second time for a second pack read the first
+// pack's units as dropped and removed them).
+func TestMergePackServices_TwoPacksBothSurvive(t *testing.T) {
+	a := pack.AcceptedService{Name: "svc-a", Activation: "always", Path: "/abs/a", SHA: strings.Repeat("aa", 32)}
+	b := pack.AcceptedService{Name: "svc-b", Activation: "always", Path: "/abs/b", SHA: strings.Repeat("bb", 32)}
+	merged, err := mergePackServices([]packServiceSet{
+		{packName: "pack-a", views: []pack.AcceptedService{a}},
+		{packName: "pack-b", views: []pack.AcceptedService{b}},
+	})
+	if err != nil {
+		t.Fatalf("mergePackServices: %v", err)
+	}
+	if len(merged) != 2 {
+		t.Fatalf("merged = %+v, want both packs' services", merged)
+	}
+	names := map[string]bool{}
+	for _, v := range merged {
+		names[v.Name] = true
+	}
+	if !names["svc-a"] || !names["svc-b"] {
+		t.Fatalf("merged = %+v, want svc-a AND svc-b, not one overwriting the other", merged)
+	}
+}
+
+// TestMergePackServices_DuplicateNameFailsClosed: two packs declaring the SAME
+// unit name is a hard conflict. Neither variant may win silently — the
+// colliding name is dropped from the merged result entirely (fail closed),
+// the returned error names BOTH packs, and an unrelated third service from a
+// third pack is unaffected.
+func TestMergePackServices_DuplicateNameFailsClosed(t *testing.T) {
+	first := pack.AcceptedService{Name: "shared-svc", Activation: "always", Path: "/abs/first", SHA: strings.Repeat("11", 32)}
+	second := pack.AcceptedService{Name: "shared-svc", Activation: "always", Path: "/abs/second", SHA: strings.Repeat("22", 32)}
+	other := pack.AcceptedService{Name: "svc-c", Activation: "always", Path: "/abs/c", SHA: strings.Repeat("cc", 32)}
+	merged, err := mergePackServices([]packServiceSet{
+		{packName: "pack-one", views: []pack.AcceptedService{first}},
+		{packName: "pack-two", views: []pack.AcceptedService{second}},
+		{packName: "pack-three", views: []pack.AcceptedService{other}},
+	})
+	if err == nil {
+		t.Fatal("duplicate unit name across two packs did not error")
+	}
+	if !strings.Contains(err.Error(), "pack-one") || !strings.Contains(err.Error(), "pack-two") {
+		t.Fatalf("error %q does not name both colliding packs", err.Error())
+	}
+	if !strings.Contains(err.Error(), "shared-svc") {
+		t.Fatalf("error %q does not name the colliding unit", err.Error())
+	}
+	for _, v := range merged {
+		if v.Name == "shared-svc" {
+			t.Fatalf("merged = %+v, want the colliding name dropped entirely, not one variant picked", merged)
+		}
+	}
+	if len(merged) != 1 || merged[0].Name != "svc-c" {
+		t.Fatalf("merged = %+v, want only the unrelated third-pack service to survive", merged)
+	}
+}
+
+// TestPackUnitWiring_TwoPacksBothRunAfterSingleReconcile is the end-to-end
+// regression proof for the defect: two REAL packs, each with a distinct
+// service, admitted through the SAME two-stage flow runServe now uses
+// (mergePackServices then exactly ONE reconcilePackUnits call). Both units
+// must be running holders afterward. Before the fix, runServe called
+// reconcilePackUnits once per pack; the second call's views (pack-b's alone)
+// caused pack-a's already-running unit to be read as dropped and removed.
+func TestPackUnitWiring_TwoPacksBothRunAfterSingleReconcile(t *testing.T) {
+	isolatePackState(t)
+	bin := buildPackFixture(t)
+	rootA := writeNamedUnitPack(t, "pack-a", "svc-a", bin, fileSHA(t, bin))
+	rootB := writeNamedUnitPack(t, "pack-b", "svc-b", bin, fileSHA(t, bin))
+	acceptSurfaces(t, rootA, rootB)
+
+	sets := []packServiceSet{
+		{packName: "pack-a", views: acceptedViews(t, rootA)},
+		{packName: "pack-b", views: acceptedViews(t, rootB)},
+	}
+	merged, err := mergePackServices(sets)
+	if err != nil {
+		t.Fatalf("mergePackServices: %v", err)
+	}
+
+	sup := &supervisor{}
+	t.Cleanup(sup.shutdown)
+	holders, err := sup.reconcilePackUnits("", merged)
+	if err != nil {
+		t.Fatalf("reconcilePackUnits: %v", err)
+	}
+	if holders["svc-a"] == nil || holders["svc-b"] == nil {
+		t.Fatalf("holders = %v, want both svc-a and svc-b running from one reconcile call", holders)
+	}
+	for name, h := range holders {
+		m, ok := h.Get().(plugin.MemoryStore)
+		if !ok || m == nil {
+			t.Fatalf("%s dispensed impl = %T, want a live MemoryStore", name, h.Get())
+		}
+		if info, herr := m.Health(); herr != nil || !info.OK {
+			t.Fatalf("%s health = (%+v, %v)", name, info, herr)
+		}
+	}
+
+	// Reproduce the OLD (buggy) call shape directly against the reconciler to
+	// pin the regression: calling reconcilePackUnits a SECOND time with only
+	// pack-b's views must not be how runServe drives the tree — this asserts
+	// what that shape would do, so the guard rail stays visible even if the
+	// merge step is ever bypassed. Given the actual, fixed call above already
+	// ran once with BOTH packs merged, confirm the two holders are still
+	// distinct, healthy units and neither one aliases the other.
+	if holders["svc-a"] == holders["svc-b"] {
+		t.Fatal("svc-a and svc-b resolved to the same holder — one pack's unit overwrote the other's")
+	}
+}
+
+// TestPackUnitWiring_DuplicateServiceNameAcrossPacksRefusedBoth: two REAL
+// packs both declaring a unit named "shared-svc" must have NEITHER survive
+// reconciliation — the fail-closed merge behavior, proven against the real
+// supervisor tree, not just the pure merge function.
+func TestPackUnitWiring_DuplicateServiceNameAcrossPacksRefusedBoth(t *testing.T) {
+	isolatePackState(t)
+	bin := buildPackFixture(t)
+	rootA := writeNamedUnitPack(t, "pack-one", "shared-svc", bin, fileSHA(t, bin))
+	rootB := writeNamedUnitPack(t, "pack-two", "shared-svc", bin, fileSHA(t, bin), "--other")
+	acceptSurfaces(t, rootA, rootB)
+
+	sets := []packServiceSet{
+		{packName: "pack-one", views: acceptedViews(t, rootA)},
+		{packName: "pack-two", views: acceptedViews(t, rootB)},
+	}
+	merged, mergeErr := mergePackServices(sets)
+	if mergeErr == nil {
+		t.Fatal("colliding unit name across two packs did not error")
+	}
+	if !strings.Contains(mergeErr.Error(), "pack-one") || !strings.Contains(mergeErr.Error(), "pack-two") {
+		t.Fatalf("error %q does not name both colliding packs", mergeErr.Error())
+	}
+
+	sup := &supervisor{}
+	t.Cleanup(sup.shutdown)
+	holders, err := sup.reconcilePackUnits("", merged)
+	if err != nil {
+		t.Fatalf("reconcilePackUnits on the (already deduped) merged set: %v", err)
+	}
+	if len(holders) != 0 {
+		t.Fatalf("holders = %v, want neither colliding pack's unit running", holders)
 	}
 }

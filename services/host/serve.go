@@ -105,8 +105,17 @@ func runServe(argv []string) {
 	if err != nil {
 		fatalf("locate self: %v", err)
 	}
-	// Every active pack's Tier-1-accepted [[services]] view, reconciled against the tree;
-	// no `plugins.*` shortcut, and one bad pack's failure only logs, never blocking serve.
+	// Every active pack's Tier-1-accepted [[services]] view, collected across ALL
+	// active packs and reconciled against the tree in exactly ONE call: no
+	// `plugins.*` shortcut, and one bad pack's load/export failure only logs,
+	// never blocking serve or a sibling pack. reconcilePackUnits treats its views
+	// argument as the FULL desired state, so calling it once per pack (the prior
+	// shape of this loop) made each pack's call remove every earlier pack's
+	// units; mergePackServices flattens every pack's views into the one
+	// argument this single call takes, and fails a colliding unit name closed
+	// (naming both packs) instead of one pack's view silently overwriting
+	// another's.
+	var packSets []packServiceSet
 	for _, root := range packinfo.ActivePackRoots(cfg, "") {
 		p, perr := packinfo.LoadPack(root)
 		if perr != nil {
@@ -118,13 +127,21 @@ func runServe(argv []string) {
 			log.Printf("serve: pack %s services: %v", root, verr)
 			continue
 		}
-		units, rerr := sup.reconcilePackUnits(selfPath, views)
-		if rerr != nil {
-			log.Printf("serve: pack %s services: %v", root, rerr)
+		if len(views) == 0 {
+			continue
 		}
-		if len(units) > 0 {
-			log.Printf("serve: pack %s: supervising %d service(s)", p.Manifest.Name, len(units))
-		}
+		packSets = append(packSets, packServiceSet{packName: p.Manifest.Name, views: views})
+	}
+	merged, mergeErr := mergePackServices(packSets)
+	if mergeErr != nil {
+		log.Printf("serve: pack services: %v", mergeErr)
+	}
+	units, rerr := sup.reconcilePackUnits(selfPath, merged)
+	if rerr != nil {
+		log.Printf("serve: pack services: %v", rerr)
+	}
+	if len(units) > 0 {
+		log.Printf("serve: supervising %d pack service(s): %s", len(units), strings.Join(slices.Sorted(maps.Keys(units)), ", "))
 	}
 
 	// Resolve the enabled set FIRST: CLI args win, else config's `services`, else

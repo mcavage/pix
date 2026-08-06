@@ -2,7 +2,12 @@
 // wiring. pack.AcceptedGoPluginServices is the ONLY source of these views,
 // answering only after the Tier-1 fingerprint/consent gate passes — admission
 // strictly precedes staging, hashing and exec, all downstream in the tree.
-// reconcilePackUnits is `serve`'s desired-state reconciler, run per pack.
+// reconcilePackUnits is `serve`'s desired-state reconciler: it treats its
+// WHOLE views argument as the full desired state, so it must be called
+// EXACTLY ONCE per reconcile pass across every active pack, never once per
+// pack (a second call would remove the first pack's units, since they are
+// absent from the second pack's views). mergePackServices below is what
+// flattens every active pack's views into that one call's argument.
 package main
 
 import (
@@ -16,6 +21,52 @@ import (
 	"pix/host/supervise"
 	"pix/host/workflow/pack"
 )
+
+// packServiceSet pairs one active pack's accepted go-plugin [[services]]
+// views with that pack's name, so a unit-name collision across two packs can
+// be reported by IDENTITY (which pack declared what) instead of one pack's
+// view silently replacing another's in a bare map keyed only by unit name.
+type packServiceSet struct {
+	packName string
+	views    []pack.AcceptedService
+}
+
+// mergePackServices flattens every active pack's accepted views into the
+// single wanted set reconcilePackUnits consumes in one call. A unit name
+// declared by more than one pack is a hard, FAIL-CLOSED conflict: pix has no
+// policy for picking a winner between two packs claiming the same unit name,
+// so every view sharing that name is dropped from the merged result (neither
+// runs) rather than the later pack silently overwriting the earlier one, and
+// the returned error names every colliding pack so an operator can fix the
+// collision. Non-conflicting units from every pack are unaffected and still
+// returned, sorted by name for deterministic ordering.
+func mergePackServices(sets []packServiceSet) ([]pack.AcceptedService, error) {
+	owner := map[string]string{}    // unit name -> the pack that declared it first
+	conflicted := map[string]bool{} // unit name -> seen from more than one pack
+	out := map[string]pack.AcceptedService{}
+	var errs []error
+	for _, set := range sets {
+		for _, v := range set.views {
+			prevPack, dup := owner[v.Name]
+			if !dup {
+				owner[v.Name] = set.packName
+				out[v.Name] = v
+				continue
+			}
+			delete(out, v.Name)
+			if !conflicted[v.Name] {
+				conflicted[v.Name] = true
+				errs = append(errs, fmt.Errorf("pack service %q declared by both pack %q and pack %q: refusing both (fail closed)", v.Name, prevPack, set.packName))
+			}
+		}
+	}
+	merged := make([]pack.AcceptedService, 0, len(out))
+	for _, v := range out {
+		merged = append(merged, v)
+	}
+	sort.Slice(merged, func(i, j int) bool { return merged[i].Name < merged[j].Name })
+	return merged, errors.Join(errs...)
+}
 
 // packUnitSpec converts one accepted view into the validated supervise.UnitSpec
 // the tree consumes. kind must be a registered plugin.PluginMap capability —
@@ -36,6 +87,11 @@ func packUnitSpec(v pack.AcceptedService, kind string) (supervise.UnitSpec, erro
 // reconcilePackUnits diffs views against s.packUnits (units THIS supervisor
 // previously admitted from a pack, never a built-in slot): ADD a new view,
 // REMOVE one dropped or gone on-demand, RESTART (remove+add) a changed spec.
+// views is treated as the COMPLETE desired state for every pack unit: a
+// caller with more than one active pack MUST merge every pack's views (see
+// mergePackServices) into one slice and call this exactly once per reconcile
+// pass, never once per pack — a second call with only a second pack's views
+// would read the first pack's units as dropped and remove them.
 func (s *supervisor) reconcilePackUnits(selfPath string, views []pack.AcceptedService) (map[string]*pluginHolder, error) {
 	tree := s.ensure(selfPath)
 	wanted := map[string]supervise.UnitSpec{}
