@@ -430,3 +430,99 @@ func TestRunSession_KilledCreator_LeavesTheRecord(t *testing.T) {
 		t.Fatal("the release barrier was written before the kill; the session was not live")
 	}
 }
+
+// --- U-fix-lifecycle: a started child must never continue unreferenced ---
+
+// TestRunSession_RefLeaseFailsAfterChildStarts_KillsRatherThanLeavesUnreferenced
+// forces the exact gap lease.AttachRefUnderLifecycle's fresh-context fix
+// closes: the transition (fn) succeeds and starts the child, but the refs
+// SHARED acquire that runs AFTER it cannot — here, sustained refs contention
+// past a shrunk RefAcquireTimeout, standing in for "the expired original ctx
+// + brief refs contention" case the lease-package tests prove directly. The
+// session must come out of this DEAD, not live and unreferenced: a future
+// reaper's zero-holder proof could not otherwise tell it apart from an
+// orphan it is safe to reap out from under a real user.
+func TestRunSession_RefLeaseFailsAfterChildStarts_KillsRatherThanLeavesUnreferenced(t *testing.T) {
+	isolateState(t)
+	fixture := installFakeSbx(t, sessionFixture)
+	ws := t.TempDir()
+	key := SessionName(ws)
+
+	dir, err := leaseDirFor(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	restore := lease.RefAcquireTimeout
+	lease.RefAcquireTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { lease.RefAcquireTimeout = restore })
+
+	// Hold refs.lock EXCLUSIVE for the whole test: the refs acquire that runs
+	// after the transition can never succeed.
+	holder, err := lease.OpenRefLease(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := holder.TryExclusive(); err != nil {
+		t.Fatalf("holder TryExclusive: %v", err)
+	}
+
+	var cmd *exec.Cmd
+	spawn := fixtureSpawn(t)
+	captureSpawn := func(argv []string) *exec.Cmd {
+		cmd = spawn(argv)
+		return cmd
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- RunSession(SessionSpec{
+			Key: key, Name: "pix-demo", Creating: true,
+			CreateArgs:  []string{"run", "--name", "pix-demo"},
+			Fingerprint: sandbox.Fingerprint{"static_mcp": "slack"},
+			Invocation:  []string{"--model", "m"},
+		}, SessionDeps{Env: realEnv(), Poll: fastPoll(), Warn: io.Discard, Spawn: captureSpawn})
+	}()
+
+	// The child genuinely started (the fixture's `run` ran and became
+	// visible) before the refs acquire could even begin.
+	waitForFile(t, filepath.Join(fixture, "created"), 10*time.Second)
+
+	var runErr error
+	select {
+	case runErr = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("RunSession never returned after its reference lease could not be acquired")
+	}
+	if runErr == nil {
+		t.Fatal("RunSession = nil error, want the failed reference-lease acquire surfaced")
+	}
+
+	// The child must be DEAD, not left running unreferenced: it was killed,
+	// not waited out to a clean exit the test never asked for (the fixture
+	// only exits on its own once `release` is written, and this test never
+	// writes it).
+	if cmd == nil || cmd.ProcessState == nil {
+		t.Fatal("the started child was never reaped")
+	}
+	if cmd.ProcessState.Success() {
+		t.Error("the child exited cleanly; want it killed instead")
+	}
+	if _, serr := os.Stat(filepath.Join(fixture, "release")); serr == nil {
+		t.Fatal("the release barrier was written; the child was supposed to be killed, not let run to completion")
+	}
+
+	// The create-time record still exists — the transition itself completed
+	// and wrote it before the refs acquire even ran — but nothing holds a
+	// reference to it any more, so once the artificial contention clears a
+	// reaper is free to act on it.
+	if !SessionRecorded(key) {
+		t.Error("the create-time record must still exist; only the reference lease failed")
+	}
+	if err := holder.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if perr := lease.TryReapProof(dir, func() error { return nil }); perr != nil {
+		t.Errorf("TryReapProof after the killed, unreferenced session = %v, want nil (no leaked holder)", perr)
+	}
+}
