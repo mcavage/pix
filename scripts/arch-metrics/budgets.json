@@ -16,7 +16,7 @@
       "exits": 4
     },
     "pix/host/cmd/pix": {
-      "prod_loc": 3207,
+      "prod_loc": 3223,
       "exports": 15,
       "globals": 12,
       "edges": 23,
