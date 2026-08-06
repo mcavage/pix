@@ -382,6 +382,27 @@ failure, **0** otherwise, including every optional or unverifiable gap. A
 single resolved key for any one of Anthropic, OpenAI, or Google satisfies the
 provider check; you don't need all three.
 
+**sbx-missing exit codes are unified across every surface that shells to
+sbx.** `pix ls`, `pix rm`, and every `pix mcp` verb that promises an operation
+(`register`/`load`/`auth`/`bundle`, and read-only `ls`) all return the SAME
+detectable error when `sbx` is not on PATH, so they exit and message this
+identically instead of drifting into four different "sbx is missing" stories:
+
+| surface | sbx absent -> exit | message names |
+| --- | --- | --- |
+| `pix ls` | 3 (`rpc.ExitServiceDown`) | the exact install fix (`brew install docker/tap/sbx@nightly`) |
+| `pix rm` | 3 (`rpc.ExitServiceDown`) | the exact install fix |
+| `pix mcp ls/register/load/auth/bundle` | 3 (`rpc.ExitServiceDown`) | `would run: sbx ...` on **stderr**, so a script piping stdout never sees it |
+| `pix doctor` | 1 (`ExitNotReady`) only if a REQUIRED check is a verified gap; sbx's own gap is `todo` with the exact install fix as its `Fix` | the exact install fix (`health.SbxInstallFix`) |
+
+The shared plumbing: `mcp.ErrSbxUnavailable` is the one sentinel every mutating
+mcp verb and `ls`/`rm` wrap (`errors.Is`-detectable); the command layer maps it
+to exit 3 (`sbxAwareFail` in `cmd/pix/root.go`, `mcpFailed` in
+`cmd/pix/mcp_cmd.go`) and the install fix text is the ONE constant
+(`health.SbxInstallFix`) doctor, ls, and rm all quote verbatim — never a
+second paraphrase of "go install the CLI" that can drift out of sync with the
+first.
+
 ## 10. Your first hour
 
 1. `pix run` in a real project directory. Not a toy repo, the thing you
