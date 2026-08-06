@@ -222,6 +222,8 @@ jobs:
     name: merge manifest + push tags
     needs: [version, build]
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.manifest.outputs.digest }}
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -238,17 +240,84 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Create and push :<version> + :latest
+        id: manifest
         working-directory: /tmp/digests
         run: |
+          set -euo pipefail
           V="${{ needs.version.outputs.version }}"
           docker buildx imagetools create \
             -t "${IMAGE}:${V}" -t "${IMAGE}:latest" \
             $(printf "${IMAGE}@sha256:%s " *)
           docker buildx imagetools inspect "${IMAGE}:${V}"
+          # AC-REL-04: the multi-arch manifest-list digest is the immutable
+          # identity of what was actually published. Capture it here (the one
+          # place it exists) and hand it to the provenance job.
+          digest="$(docker buildx imagetools inspect "${IMAGE}:${V}" \
+            --format '{{json .Manifest}}' | jq -r '.digest')"
+          case "$digest" in
+            sha256:*) ;;
+            *) echo "::error::could not resolve the published manifest digest (got '$digest')"; exit 1 ;;
+          esac
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "published ${IMAGE}:${V} -> $digest"
+
+  # AC-REL-04: provenance + SBOM for the artifact that was actually PUBLISHED,
+  # pinned to the manifest digest the `merge` job just resolved (not a local
+  # rebuild, which is a different artifact). BLOCKING on purpose: if we cannot
+  # record an immutable version->digest provenance record, or cannot produce an
+  # SBOM of the published image, the release does not get to claim either.
+  provenance:
+    name: provenance + SBOM (published digest)
+    needs: [version, merge]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Log in to Docker Hub (the SBOM scan pulls the published image)
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Record immutable provenance (version -> published digest)
+        env:
+          V: ${{ needs.version.outputs.version }}
+          DIGEST: ${{ needs.merge.outputs.digest }}
+        run: |
+          set -euo pipefail
+          test -n "$DIGEST"
+          bash scripts/release/verify-provenance.sh "$V" "$DIGEST" "$GITHUB_SHA"
+          cat "out/provenance/$V.json"
+
+      - name: SBOM of the PUBLISHED image (by digest, SPDX)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: ${{ env.IMAGE }}@${{ needs.merge.outputs.digest }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      - name: Assert the SBOM is real and pinned to the published digest
+        env:
+          DIGEST: ${{ needs.merge.outputs.digest }}
+        run: |
+          set -euo pipefail
+          test -s sbom.spdx.json
+          jq -e '.packages | length > 0' sbom.spdx.json >/dev/null
+          grep -q "$DIGEST" sbom.spdx.json \
+            || { echo "::error::SBOM does not reference the published digest $DIGEST"; exit 1; }
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: provenance-and-sbom-${{ needs.version.outputs.version }}
+          path: |
+            out/provenance/
+            sbom.spdx.json
+          if-no-files-found: error
+          retention-days: 90
 
   bump:
     name: commit version bump to main
-    needs: [version, merge]
+    needs: [version, merge, provenance]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -350,8 +419,14 @@ jobs:
             # `pix help --all` is the one verb map now, so nothing bundles it.)
             cp "$GITHUB_WORKSPACE/THIRD_PARTY_NOTICES.md" "$stage/THIRD_PARTY_NOTICES.md"
             cp "$GITHUB_WORKSPACE/NOTICE.md" "$stage/NOTICE.md"
+            # pix's own MIT terms (MIT s2) and the verbatim MPL-2.0 text for the
+            # go-plugin/yamux code linked into these binaries (MPL-2.0 s3.1/3.2)
+            # ship WITH the binaries, not just in the repo.
+            cp "$GITHUB_WORKSPACE/LICENSE" "$stage/LICENSE"
+            mkdir -p "$stage/licenses"
+            cp "$GITHUB_WORKSPACE/licenses/MPL-2.0.txt" "$stage/licenses/MPL-2.0.txt"
             chmod 0755 "$stage/pix" "$stage/pix-host"
-            tar -C "$stage" -czf "pix_${V}_darwin_${arch}.tar.gz" pix pix-host THIRD_PARTY_NOTICES.md NOTICE.md
+            tar -C "$stage" -czf "pix_${V}_darwin_${arch}.tar.gz" pix pix-host THIRD_PARTY_NOTICES.md NOTICE.md LICENSE licenses
             rm -rf "$stage"
           done
           ls -la pix_*.tar.gz

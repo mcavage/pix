@@ -7,9 +7,10 @@ and diffed against the live dependency set by
 `docs/legal/RELEASE-SAFEGUARDS.md`). Do not hand-edit this file; edit the
 ledger and regenerate.
 
-pix is an independent project. It is not affiliated with, endorsed by, or
-sponsored by any of the organizations named below; their names appear solely
-to attribute the open-source components pix depends on. See `NOTICE.md`.
+pix is a Docker, Inc. project (see `LICENSE` and `NOTICE.md`). It is not affiliated
+with, endorsed by, or sponsored by any of the third-party organizations named
+below; their names appear solely to attribute the open-source components pix
+depends on.
 
 ## Directly-downloaded/baked toolchain binaries (Dockerfile)
 
@@ -85,10 +86,17 @@ from the source of truth.
 | modernc.org/memory | v1.11.0 | BSD-3-Clause |
 | modernc.org/sqlite | v1.53.0 | BSD-3-Clause |
 
-### MPL-2.0 components (weak copyleft — noted per MPL-2.0 s3.3)
+### MPL-2.0 components (weak copyleft — noted per MPL-2.0 s3.2/s3.3)
 
-- **github.com/hashicorp/go-plugin@v1.8.0** — MPL-2.0. File-level weak copyleft. Used as-is/unmodified via Go module import; no source files of go-plugin itself are modified. Notice + license text reproduced below satisfies MPL-2.0 s3.3 (attribution). See docs/legal/FINDINGS.md for the one open item (counsel sign-off, not blocking on evidence).
-- **github.com/hashicorp/yamux@v0.1.2** — MPL-2.0. Same MPL-2.0 posture as go-plugin (yamux is go-plugin's multiplexed-stream transport); unmodified import.
+The complete, verbatim MPL-2.0 license text ships with every pix distribution:
+`licenses/MPL-2.0.txt`, baked into the image and bundled in the Homebrew
+tarball. Each component below is linked into `pix-host` in Executable Form and
+is unmodified, so pix distributes no Modifications; the Source Code Form for
+the exact version linked is published at the URL given, which is how a
+recipient obtains it under MPL-2.0 s3.2(a).
+
+- **github.com/hashicorp/go-plugin@v1.8.0** — MPL-2.0. Source Code Form (MPL-2.0 s3.2), version v1.8.0: https://github.com/hashicorp/go-plugin/tree/v1.8.0. Full license text: `licenses/MPL-2.0.txt`. File-level weak copyleft. Linked into pix-host in Executable Form via an unmodified Go module import — pix creates no Modifications (MPL-2.0 s1.10), so the only Source Code Form a recipient needs is the upstream one linked above, at the pinned version. Attribution per MPL-2.0 s3.3 is this entry plus the verbatim license text shipped at licenses/MPL-2.0.txt.
+- **github.com/hashicorp/yamux@v0.1.2** — MPL-2.0. Source Code Form (MPL-2.0 s3.2), version v0.1.2: https://github.com/hashicorp/yamux/tree/v0.1.2. Full license text: `licenses/MPL-2.0.txt`. Same MPL-2.0 posture as go-plugin (yamux is go-plugin's multiplexed-stream transport): unmodified import, no Modifications distributed.
 
 ## npm packages baked into the image (Dockerfile `npm install -g` / `pi install`)
 
@@ -113,4 +121,4 @@ from the source of truth.
 
 ---
 
-Full upstream license texts are not reproduced verbatim here (each is available from its module cache / npm package under the versions pinned above and in `go.sum` / the Dockerfile); this file exists to enumerate what is bundled and under what terms, per the fail-closed gate in `scripts/check-third-party-notices.sh`.
+Upstream license texts: the MPL-2.0 text — the only non-permissive license in this set — IS reproduced verbatim, in `licenses/MPL-2.0.txt`, and ships with the image and the Homebrew tarball. The permissive texts (MIT/BSD/Apache-2.0) are not reproduced here; each is available from its module cache / npm package at the versions pinned above and in `go.sum` / the Dockerfile. This file enumerates what is bundled and under what terms, per the fail-closed gate in `scripts/check-third-party-notices.sh`.

@@ -10,8 +10,13 @@
 #      undeclared dependency, or a disallowed license class, fails closed.
 #   3. required attributions are present in the generated text: MPL-2.0 for
 #      go-plugin/yamux, Suture, and the patched pi-tui.
-#   4. inclusion: the Dockerfile COPYs THIRD_PARTY_NOTICES.md into the image,
-#      and the release workflow bundles it into the Homebrew darwin tarball.
+#   4. inclusion: the Dockerfile COPYs THIRD_PARTY_NOTICES.md, NOTICE.md,
+#      LICENSE and licenses/ into the image, and the release workflow bundles
+#      all four into the Homebrew darwin tarball.
+#   5. copyleft disclosure: every MPL-2.0 component has a Source Code Form URL
+#      pinned to the version actually linked, the verbatim MPL-2.0 text really
+#      exists at licenses/MPL-2.0.txt, and the notices do not contradict
+#      themselves about whether that text is reproduced.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -63,6 +68,31 @@ else
 	cat "$TMP_DIR/baked.err" >&2
 fi
 
+# --- 2c. copyleft (MPL-2.0) disclosure gate ----------------------------------
+# A Source Code Form URL that does not pin the linked version, or a referenced
+# license text that does not ship, fails closed.
+if node scripts/legal/generate-third-party-notices.mjs --check-copyleft-disclosure . >"$TMP_DIR/copyleft.out" 2>"$TMP_DIR/copyleft.err"; then
+	ok "MPL-2.0 components disclose a pinned Source Code Form URL + a shipped license text"
+else
+	fail "MPL-2.0 copyleft-disclosure gate failed (source URL / license text)"
+	cat "$TMP_DIR/copyleft.err" >&2
+fi
+
+if [ -f licenses/MPL-2.0.txt ] && grep -q 'Mozilla Public License Version 2.0' licenses/MPL-2.0.txt &&
+	grep -q 'Exhibit B' licenses/MPL-2.0.txt; then
+	ok "licenses/MPL-2.0.txt carries the full, verbatim MPL-2.0 text"
+else
+	fail "licenses/MPL-2.0.txt is missing or truncated (the full MPL-2.0 text must ship)"
+fi
+
+# The notices file must not both claim the text is reproduced and claim it is
+# not. This is the exact contradiction B1 closed; keep it closed.
+if grep -q 'Full upstream license texts are not reproduced verbatim here' THIRD_PARTY_NOTICES.md; then
+	fail "notices still carry the blanket 'no license texts reproduced' claim while shipping licenses/MPL-2.0.txt (self-contradiction)"
+else
+	ok "notices make no self-contradictory claim about reproduced license texts"
+fi
+
 # --- 3. required attributions -------------------------------------------------
 require_text() { # require_text <pattern> <label>
 	if grep -qE "$1" THIRD_PARTY_NOTICES.md; then
@@ -86,6 +116,9 @@ else
 fi
 require_text '@earendil-works/pi-tui' "patched pi-tui attribution"
 require_text 'PATCH' "patched-component marker"
+require_text 'github\.com/hashicorp/go-plugin/tree/v1\.8\.0' "go-plugin Source Code Form URL (MPL-2.0 s3.2)"
+require_text 'github\.com/hashicorp/yamux/tree/v0\.1\.2' "yamux Source Code Form URL (MPL-2.0 s3.2)"
+require_text 'licenses/MPL-2\.0\.txt' "pointer to the shipped MPL-2.0 license text"
 
 # --- 4. inclusion: image + tarball -------------------------------------------
 if grep -qE 'COPY[[:space:]].*THIRD_PARTY_NOTICES\.md[[:space:]]' Dockerfile; then
@@ -94,11 +127,78 @@ else
 	fail "Dockerfile does not COPY THIRD_PARTY_NOTICES.md into the image"
 fi
 
+# MIT s2 ("included in all copies") + MPL-2.0 s3.1: pix's own license and the
+# MPL text must travel with the image, not only live in the repo.
+if grep -qE 'COPY[[:space:]].*[[:space:]]LICENSE[[:space:]]' Dockerfile; then
+	ok "Dockerfile COPYs LICENSE into the image"
+else
+	fail "Dockerfile does not COPY LICENSE into the image (MIT s2)"
+fi
+
+if grep -qE 'COPY[[:space:]].*[[:space:]]licenses/[[:space:]]' Dockerfile; then
+	ok "Dockerfile COPYs licenses/ (MPL-2.0 text) into the image"
+else
+	fail "Dockerfile does not COPY licenses/ into the image (MPL-2.0 s3.1)"
+fi
+
 if grep -q 'THIRD_PARTY_NOTICES.md' .github/workflows/publish.yml \
 	&& grep -qE 'tar .*THIRD_PARTY_NOTICES\.md' .github/workflows/publish.yml; then
 	ok "publish.yml bundles THIRD_PARTY_NOTICES.md into the Homebrew tarball"
 else
 	fail "publish.yml does not bundle THIRD_PARTY_NOTICES.md into the Homebrew tarball"
+fi
+
+if grep -qE 'tar .*NOTICE\.md LICENSE licenses' .github/workflows/publish.yml \
+	&& grep -qF 'licenses/MPL-2.0.txt" "$stage/licenses/MPL-2.0.txt"' .github/workflows/publish.yml; then
+	ok "publish.yml bundles LICENSE + licenses/MPL-2.0.txt into the Homebrew tarball"
+else
+	fail "publish.yml does not bundle LICENSE + licenses/MPL-2.0.txt into the Homebrew tarball"
+fi
+
+# --- 6. provenance/SBOM wiring + durable legal basis --------------------------
+if grep -q 'scripts/release/verify-provenance.sh' .github/workflows/publish.yml \
+	&& grep -q 'needs.merge.outputs.digest' .github/workflows/publish.yml; then
+	ok "publish.yml runs verify-provenance.sh against the published manifest digest"
+else
+	fail "publish.yml does not run verify-provenance.sh against the merge job's published digest (AC-REL-04)"
+fi
+
+if grep -qF 'image: ${{ env.IMAGE }}@${{ needs.merge.outputs.digest }}' .github/workflows/publish.yml; then
+	ok "publish.yml generates the SBOM against the PUBLISHED image digest"
+else
+	fail "publish.yml does not generate an SBOM against the published image digest (AC-REL-04)"
+fi
+
+if grep -q 'continue-on-error: true' .github/workflows/legal.yml; then
+	fail "legal.yml still has a continue-on-error job — either gate it or delete the claim"
+else
+	ok "legal.yml has no silently-passing (continue-on-error) job"
+fi
+
+for doc in docs/legal/AUTHORIZATIONS.md docs/legal/PRIVACY.md; do
+	if [ -f "$doc" ]; then
+		ok "$doc exists"
+	else
+		fail "$doc is missing"
+	fi
+done
+
+if grep -q 'docs/legal/AUTHORIZATIONS.md' NOTICE.md; then
+	ok "NOTICE.md points at the durable authorization record"
+else
+	fail "NOTICE.md does not point at docs/legal/AUTHORIZATIONS.md (the DHI basis of record)"
+fi
+
+if grep -q 'Docker, Inc.' LICENSE; then
+	ok "LICENSE names Docker, Inc. as the copyright holder"
+else
+	fail "LICENSE copyright holder does not match the recorded employer-IP authorization"
+fi
+
+if grep -qi 'MIT license' CONTRIBUTING.md && grep -qi 'inbound' CONTRIBUTING.md; then
+	ok "CONTRIBUTING.md states the inbound=outbound MIT contribution license"
+else
+	fail "CONTRIBUTING.md does not state the inbound contribution license (MIT)"
 fi
 
 exit "$FAILED"

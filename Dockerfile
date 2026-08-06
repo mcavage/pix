@@ -216,6 +216,12 @@ COPY --chown=agent:agent themes/       /home/agent/.pi/agent/themes/
 # exists, so the two can't silently drift apart).
 COPY --chown=agent:agent THIRD_PARTY_NOTICES.md /home/agent/.pi/agent/THIRD_PARTY_NOTICES.md
 COPY --chown=agent:agent NOTICE.md              /home/agent/.pi/agent/NOTICE.md
+# The image is a distribution of pix itself (MIT) and of the MPL-2.0 components
+# linked into pix-host, so both license texts have to travel WITH it: MIT s2
+# ("included in all copies or substantial portions") and MPL-2.0 s3.1/s3.2(b)
+# (recipients must be told the terms and how to get a copy of the license).
+COPY --chown=agent:agent LICENSE                /home/agent/.pi/agent/LICENSE
+COPY --chown=agent:agent licenses/              /home/agent/.pi/agent/licenses/
 # Note: company tooling (e.g. a `snow` wrapper) is NOT in the public image. Such
 # in-sandbox wrappers are delivered by a pack's `[[proxy]]` bin/ at run time; see
 # docs/design/packs.md.

@@ -35,6 +35,7 @@ jobs:
             tests/legal-third-party-notices.test.mjs \
             tests/legal-inclusion-and-docker-base.test.mjs \
             tests/legal-provenance.test.mjs \
+            tests/legal-authorizations-and-privacy.test.mjs \
             tests/legal-secret-scan.test.mjs
 
   # AC-REL-01: full-history secret scan over EVERY ref, not just the current
@@ -63,15 +64,20 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-  # AC-REL-04: SBOM generation is config'd (scripts/legal/sbom-config.json)
-  # and wired here for local/PR images, but non-blocking — no human has yet
-  # reviewed an SBOM-diff policy to gate on (see docs/legal/FINDINGS.md), and
-  # this job builds a LOCAL image rather than pulling the DHI base (which
-  # needs the dhi.io login only the publish workflow's secrets have).
+  # AC-REL-04: SBOM of the REPO TREE, on every PR. BLOCKING for generation: if
+  # an SBOM cannot be produced, or comes back empty, this job fails — a
+  # "non-blocking SBOM" that silently produced nothing was a claim nobody was
+  # checking. What is still NOT gated is SBOM *diffing* (failing a release
+  # because the component set changed); that policy is open in
+  # docs/legal/FINDINGS.md #7 and is not asserted anywhere.
+  #
+  # This job scans the source tree, NOT the published image (pulling the DHI
+  # base needs the dhi.io login only the publish workflow's secrets have). The
+  # SBOM of the artifact users actually run is produced by the `provenance`
+  # job in publish.yml, against the published manifest digest.
   sbom:
-    name: SBOM (non-blocking, local build only)
+    name: SBOM of the repo tree (blocking generation; no diff gate)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: Anchore SBOM scan of the repo tree (SPDX)
@@ -80,9 +86,14 @@ jobs:
           path: "."
           format: spdx-json
           output-file: sbom.spdx.json
+      - name: Assert the SBOM is non-empty (a generated-but-empty SBOM proves nothing)
+        run: |
+          set -euo pipefail
+          test -s sbom.spdx.json
+          jq -e '.packages | length > 0' sbom.spdx.json >/dev/null
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: sbom
           path: sbom.spdx.json
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30
