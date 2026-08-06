@@ -514,6 +514,54 @@ func TestTeardownJournal_BoundedAnd0600(t *testing.T) {
 	}
 }
 
+// TestAppendTeardownJournal_CleansStaleTempFiles: writeFileAtomic's own temp
+// name carries a random suffix (teardown.jsonl.tmp-XXXXXXXX), so a process
+// that crashed between writing that temp and renaming it over the journal
+// leaves it behind forever — nothing else ever names it to clean it up. The
+// next append, made under the SAME journal guard a crashed writer would also
+// have held, must sweep any such leftover away rather than let it accumulate
+// beside the journal indefinitely.
+func TestAppendTeardownJournal_CleansStaleTempFiles(t *testing.T) {
+	isolateState(t)
+	path := filepath.Join(t.TempDir(), "teardown.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stale1 := path + ".tmp-crash1"
+	stale2 := path + ".tmp-crash2"
+	for _, p := range []string{stale1, stale2} {
+		if err := os.WriteFile(p, []byte("half-written"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// An unrelated file sharing only the journal's directory (not its stem)
+	// must never be touched by the sweep.
+	survivor := filepath.Join(filepath.Dir(path), "unrelated.tmp-notmine")
+	if err := os.WriteFile(survivor, []byte("leave me alone"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	o := TeardownOptions{JournalPath: path}.withDefaults()
+	if err := appendTeardownJournal(o, TeardownResult{
+		Sandbox: "pix-demo", Key: "pix-demo", Trigger: TriggerSession, Verdict: TeardownRemoved,
+	}); err != nil {
+		t.Fatalf("appendTeardownJournal: %v", err)
+	}
+
+	for _, p := range []string{stale1, stale2} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("stale temp %s still present after an append (err=%v)", p, err)
+		}
+	}
+	if _, err := os.Stat(survivor); err != nil {
+		t.Errorf("unrelated file %s was swept up too: %v", survivor, err)
+	}
+	entries := readJournalFile(t, path)
+	if len(entries) != 1 || entries[0].Sandbox != "pix-demo" {
+		t.Errorf("journal after cleanup = %+v, want the one appended entry", entries)
+	}
+}
+
 // TestAppendTeardownJournal_ConcurrentAppendsLoseNoEntries: the journal's
 // append is read-modify-write (read every prior line, append one, rewrite
 // the whole file). Without cross-process serialization, two writers racing

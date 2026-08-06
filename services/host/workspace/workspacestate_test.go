@@ -252,6 +252,46 @@ func TestReadWorkspaceStateFileSymlinkedFileRefused(t *testing.T) {
 	}
 }
 
+// ReadStateFile must refuse a state file SWAPPED for a symlink via an atomic
+// rename, not just one created directly as a symlink from the start (the case
+// TestReadWorkspaceStateFileSymlinkedFileRefused already covers). This is the
+// shape a real TOCTOU attacker's substitution takes: the destination existed
+// as an ordinary file a moment ago and is a symlink now, with the change
+// landing in one atomic filesystem operation. The unix build's O_NOFOLLOW at
+// open(2) has no Lstat-then-open window at all for that substitution to land
+// in, regardless of when it happens; this proves the refusal holds whether
+// the symlink was there from the start or arrived by a later swap.
+func TestReadWorkspaceStateFileSymlinkSwapRefused(t *testing.T) {
+	ws := t.TempDir()
+	if err := WriteStateFile(ws, "profile", []byte("acme\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "victim")
+	const secret = "do not read through the swapped symlink\n"
+	if err := os.WriteFile(target, []byte(secret), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(ws, ".pix", "profile")
+	swapLink := dest + ".swap"
+	RequireSymlink(t, target, swapLink)
+	if err := os.Rename(swapLink, dest); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ReadStateFile(ws, "profile"); err == nil {
+		t.Fatal("ReadStateFile after a rename-swapped symlink: want error, got nil")
+	}
+	// The swapped-in symlink itself must be untouched (still a symlink, still
+	// pointing at target) — a refusal must not "fix" the swap by removing it.
+	fi, err := os.Lstat(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("the swapped symlink was replaced or removed by a refused read")
+	}
+}
+
 // atomicWriteInDir must land the file with the REQUESTED mode (fchmod'd on
 // the open handle BEFORE fsync, so data + metadata are flushed together under
 // the intended mode — CreateTemp starts at 0600).

@@ -21,9 +21,12 @@
 // lease.AttachRefUnderLifecycle's refs acquire fails after fn (this file's
 // startSessionTransition) already started it, RunSession kills it rather
 // than waiting it out unreferenced, because a future reaper's zero-holder
-// proof cannot tell "live and unreferenced" apart from "orphaned". Teardown
-// is next door in reap.go: this file's last act is to CLOSE this shell's
-// reference and hand the decision to TeardownSandbox.
+// proof cannot tell "live and unreferenced" apart from "orphaned" — so that
+// kill is followed by the SAME proof-gated TeardownSandbox a normal session
+// exit uses, rather than leaving the sandbox for a future orphan sweep to
+// eventually find. Teardown is next door in reap.go: this file's last acts,
+// on every path out of RunSession, are to CLOSE this shell's reference (or
+// give up trying to acquire one) and hand the decision to TeardownSandbox.
 package launch
 
 import (
@@ -318,6 +321,13 @@ func RunSession(spec SessionSpec, deps SessionDeps) error {
 			if kerr := child.Kill(); kerr != nil {
 				fmt.Fprintf(deps.Warn, "pix: warning: killing %s after the failed reference lease: %v\n", spec.Key, kerr)
 			}
+			// Killing the local `sbx` CLI invocation ends THIS shell's view of
+			// the session, but the sandbox it started is still live on the sbx
+			// runtime and now has no reference lease at all — left alone, it
+			// would sit unreferenced until some future orphan sweep happened to
+			// run. Hand it to the same proof-gated TeardownSandbox a normal
+			// session exit uses, right now, and report exactly what it decided.
+			reportTeardown(deps.Warn, TeardownSandbox(deps.Env, spec.Key, spec.Name, TriggerSession, deps.Teardown))
 		}
 		return err
 	}
