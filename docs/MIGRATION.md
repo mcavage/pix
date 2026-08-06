@@ -36,7 +36,8 @@ stderr. The full table, with the reasoning for each retirement:
 | `pix evals` | `pix models route` |
 | `pix route` | `pix models` |
 | `pix onboard` | `pix setup --no-agent` |
-| `pix slack` / `pix gworkspace` (verbs) | `pix mcp register` |
+| `pix gworkspace` (verb) | `pix mcp register` |
+| `pix slack` (verb) | `sbx mcp add slack --local --url <manifest>` (an external container the gateway runs; pix ships no built-in Slack server to register) |
 | `pix agent new\|edit\|rm\|reassess` | edit `agents/*.md` by hand, then `pix models route` |
 | `pix pack new\|add` | edit `pack.toml` / `skills/*/SKILL.md` by hand |
 | `pix task harvest` | `pix task path` (git does the rejoin) |

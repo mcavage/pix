@@ -27,6 +27,31 @@ func WriteStateFile(Workspace, name string, data []byte, perm os.FileMode) error
 	return sys.AtomicWriteInDir(dir, name, data, perm)
 }
 
+// ReadStateFile reads <Workspace>/.pix/<name> without ever following a
+// symlinked .pix DIRECTORY or a symlinked state FILE — the read-side mirror of
+// WriteStateFile's fail-safe symlink handling. A missing .pix dir or a missing
+// file both return os.ErrNotExist-wrapping errors (ordinary os.IsNotExist
+// works on the result); a symlink at either level is refused, never followed.
+func ReadStateFile(Workspace, name string) ([]byte, error) {
+	dir := filepath.Join(Workspace, ".pix")
+	di, err := os.Lstat(dir)
+	if err != nil {
+		return nil, err
+	}
+	if di.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("%s is a symlink; refusing to read workspace state through it", dir)
+	}
+	path := filepath.Join(dir, name)
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("%s is a symlink; refusing to read workspace state through it", path)
+	}
+	return os.ReadFile(path)
+}
+
 // RemoveStateFile removes <Workspace>/.pix/<name> without ever
 // traversing a symlinked .pix DIRECTORY:
 func RemoveStateFile(Workspace, name string) error {

@@ -45,20 +45,27 @@ declare optional setup hooks. Run one explicitly with `--with`, for example:
 pix setup --pack 'git+https://github.com/your-org/work-pack.git#ref=main' --with hr
 ```
 
-`--pack` is repeatable; packs compose in command order. Without `--with`, every
-pack is still activated and all required hooks run. Only
-the named optional hook is skipped. Repeat `--with` to select more than one.
+`--pack` is repeatable; packs compose in command order. A pack's required
+setup hooks always run once it is activated; an optional hook runs only when
+named with `--with <id>` (leaving `--with` off runs no optional hooks at
+all). Repeat `--with` to select more than one, across the whole composed
+stack.
 
 <!-- PIX_PRIMARY_PATH_END -->
 
 ## Retired surfaces
 
-The Google Workspace and Slack launcher verbs are retired. Those integrations
-are MCP servers the sbx gateway runs, registered like any other one:
+The Google Workspace and Slack launcher verbs are retired. Google Workspace is
+a local stdio MCP server registered like any other one:
 
 ```bash
 pix mcp register
 ```
+
+Slack is different: pix ships no built-in Slack MCP server to register. It
+runs as an external container the sbx gateway manages, registered by manifest
+instead: `sbx mcp add slack --local --url <manifest>` (see
+[docs/design/slack-setup.md](docs/design/slack-setup.md)).
 
 Typing a retired command prints a `PIX_RETIRED` line naming the replacement and
 exits 2: it never half-runs the old behavior. The full list of retired verbs
@@ -70,10 +77,12 @@ and flags, with the replacement for each, is
 ```bash
 pix                         # fast status dashboard
 pix run [DIR]               # create or reattach a sandbox
+pix run -k                  # keep the sandbox alive when the last shell exits
 pix doctor                  # full readiness evidence
 pix task new <name>         # isolated parallel task sandbox
 pix task ls                 # list parallel tasks
 pix task path <name>        # where a task's clone lives (git does the rest)
+pix models add <provider>   # wire a model provider in, proven with a live request
 pix help --all              # complete command map
 ```
 

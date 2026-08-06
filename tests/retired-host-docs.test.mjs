@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const readme = fs.readFileSync(path.join(repoRoot, "docs", "README.md"), "utf8");
 const migration = fs.readFileSync(path.join(repoRoot, "docs", "MIGRATION.md"), "utf8");
+const topReadme = fs.readFileSync(path.join(repoRoot, "README.md"), "utf8");
 
 test("docs index marks host-mode.md as superseded/retired, not a live gated feature", () => {
 	const line = readme.split("\n").find((l) => l.includes("host-mode.md"));
@@ -28,4 +29,21 @@ test("docs index marks host-mode.md as superseded/retired, not a live gated feat
 test("MIGRATION.md points backup/restore at the live memory snapshot commands directly", () => {
 	assert.match(migration, /pix-host memory snapshot PATH.*pix-host memory restore PATH/);
 	assert.doesNotMatch(migration, /`pix-host backup`\s*\/\s*`pix-host restore`/);
+});
+
+// `pix-host slack` (the local-stdio subcommand) is ITSELF retired
+// (services/host/retired.go), so pointing a Slack migration/reference reader
+// at `pix mcp register` — the path for a LOCAL stdio server — is a second
+// dead end: `pix mcp register` cannot register a container by manifest.
+test("MIGRATION.md sends Slack to the manifest path, not the dead pix-host subcommand", () => {
+	const slackLine = migration.split("\n").find((l) => l.includes("`pix slack`"));
+	assert.ok(slackLine, "MIGRATION.md must still document the retired `pix slack` verb");
+	assert.match(slackLine, /--local --url <manifest>/);
+	assert.doesNotMatch(slackLine, /`pix mcp register`/);
+});
+
+test("README.md's retired-surfaces section registers Slack by manifest, not `pix mcp register`", () => {
+	const section = topReadme.slice(topReadme.indexOf("## Retired surfaces"));
+	assert.match(section, /sbx mcp add slack --local --url <manifest>/);
+	assert.match(section, /ships no built-in Slack MCP server/);
 });

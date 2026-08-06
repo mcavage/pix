@@ -258,8 +258,9 @@ already give a single unambiguous selection surface. Adding parallel keys would 
 3. `solicitPackCredentials` (exists) prompts for missing `op://` refs. Already TTY-gated, already
    op-installed-gated, already writes only refs. **No change.**
 4. Print the recreate line **in the same breath** (PRD F1 + packs.md §13 must-fix):
-   > pack `work` attached 2 MCP server(s) to the gateway. They attach to a sandbox at CREATE
-   > only — recreate to pick them up:  `pix run --replace`
+   > pack `work` registered 2 MCP server(s) with the gateway (never "attached" — that
+   > would claim knowledge of a live sandbox this step never touches). They only attach to a
+   > sandbox at CREATE — recreate to pick them up: `pix rm <box>`, then `pix run`
 
 **`applyPackToLaunch` change.** Today it only *warns* about `integration.mcp` (it deliberately
 does not auto-enable). In v2 the enabling happened at `pack use` (into `cfg.MCP`), so

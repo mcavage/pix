@@ -57,8 +57,8 @@ const ConfigKeysHelp = `keys:
   pack <path>               active pack dir (run mounts its skills + knowledge);
                             usually set via 'pix pack use'
   host.autoserve true|false lazy auto-start of the services daemon on run/
-                            memory/knowledge (default true; PIX_NO_AUTOSERVE
-                            env also disables it)
+                            memory (default true; PIX_NO_AUTOSERVE env also
+                            disables it)
 `
 
 // ApplyConfigChange applies a set (unset=false) or unset to cfg and returns a

@@ -191,6 +191,67 @@ func TestRemoveWorkspaceStateFileNormal(t *testing.T) {
 	}
 }
 
+// ReadStateFile round-trips exactly what WriteStateFile wrote, and a missing
+// marker or missing .pix dir is a clean os.IsNotExist, not a hard error.
+func TestReadWorkspaceStateFileNormal(t *testing.T) {
+	ws := t.TempDir()
+	if err := WriteStateFile(ws, "profile", []byte("acme\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	b, err := ReadStateFile(ws, "profile")
+	if err != nil {
+		t.Fatalf("ReadStateFile: %v", err)
+	}
+	if string(b) != "acme\n" {
+		t.Fatalf("content = %q, want %q", b, "acme\n")
+	}
+
+	if _, err := ReadStateFile(ws, "no-such-marker"); !os.IsNotExist(err) {
+		t.Fatalf("missing marker: err = %v, want IsNotExist", err)
+	}
+	if _, err := ReadStateFile(t.TempDir(), "profile"); !os.IsNotExist(err) {
+		t.Fatalf("missing .pix dir: err = %v, want IsNotExist", err)
+	}
+}
+
+// ReadStateFile must refuse a symlinked .pix DIRECTORY outright — the read-side
+// mirror of TestRemoveWorkspaceStateFileSymlinkedDirRefused: a hostile clone
+// must not have its .pix point somewhere ReadStateFile will happily read.
+func TestReadWorkspaceStateFileSymlinkedDirRefused(t *testing.T) {
+	ws := t.TempDir()
+	target := t.TempDir()
+	const secret = "do not read through the symlink\n"
+	if err := os.WriteFile(filepath.Join(target, "profile"), []byte(secret), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	RequireSymlink(t, target, filepath.Join(ws, ".pix"))
+
+	if _, err := ReadStateFile(ws, "profile"); err == nil {
+		t.Fatal("ReadStateFile through a symlinked .pix dir: want error, got nil")
+	}
+}
+
+// ReadStateFile must refuse a symlinked state FILE too, even when .pix itself
+// is a real directory — a hostile TRACKED symlink at .pix/profile must not be
+// followed to whatever it points at.
+func TestReadWorkspaceStateFileSymlinkedFileRefused(t *testing.T) {
+	ws := t.TempDir()
+	stateDir := filepath.Join(ws, ".pix")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "victim")
+	const secret = "do not read through the symlink\n"
+	if err := os.WriteFile(target, []byte(secret), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	RequireSymlink(t, target, filepath.Join(stateDir, "profile"))
+
+	if _, err := ReadStateFile(ws, "profile"); err == nil {
+		t.Fatal("ReadStateFile through a symlinked state file: want error, got nil")
+	}
+}
+
 // atomicWriteInDir must land the file with the REQUESTED mode (fchmod'd on
 // the open handle BEFORE fsync, so data + metadata are flushed together under
 // the intended mode — CreateTemp starts at 0600).

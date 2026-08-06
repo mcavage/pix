@@ -1032,22 +1032,26 @@ func adoptionMarker(store *PackTrustStore, root string, hint packLock) (remote, 
 	return strings.TrimSpace(hint.Remote), strings.TrimSpace(hint.Commit)
 }
 
-// reportPackActivation summarizes the swap. Only MCP names that STAYED out are
-// reported as detached: a reactivation removes and immediately re-adds every
-// still-declared entry.
+// reportPackActivation summarizes the swap. `registered`/`deregistered` are the
+// honest words for what this actually did (added/removed the gateway's HOST
+// registration + cfg.MCP) — never `attached`/`detached`, which would claim
+// knowledge of a live sandbox this command never touched (see mcpLsAttachmentNote
+// / doctor's attachmentCaveat for the same distinction). Only MCP names that
+// STAYED out are reported as deregistered: a reactivation removes and
+// immediately re-adds every still-declared entry.
 func reportPackActivation(out io.Writer, cfg *config.Config, root string, removedMCP, addedMCP []string) {
 	fmt.Fprintf(out, "active pack -> %s\n", root)
-	var detached []string
+	var deregistered []string
 	for _, m := range removedMCP {
 		if !slices.Contains(cfg.MCP, m) {
-			detached = append(detached, m)
+			deregistered = append(deregistered, m)
 		}
 	}
-	if len(detached) > 0 {
-		fmt.Fprintf(out, "detached mcp (previous activation): %s\n", strings.Join(detached, ", "))
+	if len(deregistered) > 0 {
+		fmt.Fprintf(out, "deregistered mcp (previous activation): %s\n", strings.Join(deregistered, ", "))
 	}
 	if len(addedMCP) > 0 {
-		fmt.Fprintf(out, "attached mcp: %s\n", strings.Join(addedMCP, ", "))
+		fmt.Fprintf(out, "registered mcp: %s\n", strings.Join(addedMCP, ", "))
 	}
 	// --mcp/--kit are create-only, so the recreate line is UNCONDITIONAL: the
 	// sandbox-facet-changing case is never silently skipped.
@@ -1137,7 +1141,7 @@ func reportPackDetach(out io.Writer, d *packDetach) {
 		fmt.Fprintf(out, "removed host wrappers: %s\n", strings.Join(d.wrappers, ", "))
 	}
 	if len(d.mcp) > 0 {
-		fmt.Fprintf(out, "detached mcp: %s\n", strings.Join(d.mcp, ", "))
+		fmt.Fprintf(out, "deregistered mcp: %s\n", strings.Join(d.mcp, ", "))
 		printPackRecreateLine(out)
 	}
 }
