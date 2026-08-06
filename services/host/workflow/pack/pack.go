@@ -1579,9 +1579,9 @@ func packUse(env hostenv.Env, out io.Writer, rest []string, register RegisterFn)
 	}
 	// Solicit any 1Password creds this pack's reference-only integrations need.
 	solicitPackCredentials(env, os.Stdin, out, cli.IsTTY(os.Stdin), p)
-	// A knowledge change is daemon-affecting: advise the running serve so the
-	// new bundle is indexed.
-	service.PropagateConfig(service.DefaultReloader(), quietly(out, env))
+	// A knowledge change is daemon-affecting: advise the running serve so the new
+	// bundle is indexed — on THIS writer now, so --quiet silences the restart too.
+	service.PropagateConfig(service.DefaultReloader(quietly(out, env)), quietly(out, env))
 	return nil
 }
 

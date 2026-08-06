@@ -146,7 +146,7 @@ func runConfigChange(d *cli.Deps, unset bool, key string, values []string) error
 	// A daemon-affecting key only takes effect when serve restarts — do that for the
 	// user, per the detected lifecycle mode.
 	if service.IsDaemonAffecting(key) {
-		service.PropagateConfig(service.DefaultReloader(), d.Out)
+		service.PropagateConfig(service.DefaultReloader(d.Err), d.Out)
 	}
 	return nil
 }

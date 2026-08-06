@@ -26,6 +26,13 @@ var EnvVarNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // runSecretCmd stayed in cmd/pix with its kong command tree: choosing to build
 // a Deps and dispatch is composition, not a secret concern.
 
+// exitCode carries an exit code up to L4 for a message this package ALREADY
+// worded on its writer, so nothing re-renders it as a second, vaguer line.
+// 2 = the invocation was wrong, decided before any file is read or locked;
+// 3 = it could not be answered at all (no refs file, no op, no 1Password
+// session), never conflated with a bad answer; 1 = answered, and it failed.
+func exitCode(code int) error { return cli.SilentError{Code: code} }
+
 // NormalizeOpRef cleans a pasted op:// reference: trims whitespace and strips ONE
 // layer of matching surrounding quotes. 1Password's "Copy Secret Reference" hands
 // you the ref WITH double quotes ("op://Vault/Item/field"), which would otherwise
@@ -168,27 +175,20 @@ func RunSecretLs(env hostenv.Env, out io.Writer) {
 // op-refs.env, no editor involved. It enforces the refs-only policy — value
 // must be an op:// ref unless ENV_VAR is on config.NonSecretOpRefsKeys — and
 // normalizes any %20 in a ref to a literal space (op read/op run --env-file
-// both require a literal space and reject a percent-encoded one) so a spaced
-// 1Password field name, e.g. "api key", is stored the way op actually parses
-// it. It seeds the file (via the
-// ONE seeder, config.SeedOpRefs) if absent, so the header/mental-model comment
-// is always present, then upserts preserving every other line untouched. It
-// prints the REF it stored (never a resolved secret — a ref is safe to echo).
+// both require one and reject a percent-encoded one), seeds the file via the
+// ONE seeder (config.SeedOpRefs) if absent, upserts preserving every other
+// line, and prints the REF it stored (never a resolved secret).
 //
-// CLI-ARGUMENT validation failures (a bad env-var name, a control character, a
-// non-ref value for a secret key) call os.Exit(2) directly: they are
-// immediate, unrecoverable rejections of the invocation itself, and existing
-// subprocess tests depend on the process actually exiting from within this
-// call. Everything AFTER argument validation — the read/seed/upsert of
-// op-refs.env — is one transaction under the provider-refs lock
-// (WithProviderRefsLock), so a concurrent `secret set`/`secret rm`/setup in
-// another process can never interleave. File failures inside the transaction
-// return errors (never os.Exit — the lock's deferred release must run);
-// runSecretCmd turns any non-nil error into a nonzero exit.
+// CLI-ARGUMENT failures (a bad env-var name, a control character, a non-ref
+// value for a secret key) reject the invocation itself: the reason is printed
+// on out and exitCode(2) returned, before anything is read or locked. The rest
+// is one transaction under the provider-refs lock (WithProviderRefsLock), so a
+// concurrent `secret set`/`secret rm`/setup cannot interleave; failures inside
+// it return errors too, so the lock's deferred release always runs.
 func RunSecretSet(env hostenv.Env, out io.Writer, key, value string) error {
 	if !EnvVarNameRe.MatchString(key) {
 		fmt.Fprintf(out, "pix secret set: %q does not look like an env var name (want %s)\n", key, EnvVarNameRe.String())
-		os.Exit(2)
+		return exitCode(2)
 	}
 	// 1Password's "Copy Secret Reference" wraps the ref in quotes; strip them so
 	// a pasted `"op://…"` is accepted (only for an op:// ref — a genuine literal
@@ -203,7 +203,7 @@ func RunSecretSet(env hostenv.Env, out io.Writer, key, value string) error {
 	// (e.g. a pasted plaintext secret) into the file. One ref = one clean line.
 	if i := strings.IndexFunc(value, func(r rune) bool { return r < 0x20 || r == 0x7f }); i >= 0 {
 		fmt.Fprintf(out, "pix secret set: %s value contains a control character at byte %d; op-refs.env is one ref per line, so newlines/control chars are not allowed\n", key, i)
-		os.Exit(2)
+		return exitCode(2)
 	}
 
 	isRef := strings.HasPrefix(value, "op://")
@@ -213,15 +213,11 @@ func RunSecretSet(env hostenv.Env, out io.Writer, key, value string) error {
 		} else {
 			fmt.Fprintf(out, "pix secret set: %s is not an op:// ref — this file is refs-only; pass op://vault/item/field, or your secret would land on disk\n", key)
 		}
-		os.Exit(2)
+		return exitCode(2)
 	}
 
-	// Store refs with LITERAL spaces (an item/field name like "Anthropic API Key"
-	// is common): op 2.35.0's `op read` AND `op run --env-file` both require a
-	// literal space and reject %20. The write chokepoint normalizes any stray %20
-	// back to a space, so we pass the value through untouched here.
-
-	// Arguments are valid; the rest is the both-file transaction. A lock
+	// Refs are stored with LITERAL spaces; the write chokepoint below does that
+	// normalization, so the value passes through untouched here. A lock
 	// acquisition failure fails the command honestly — never write unlocked.
 	var txErr error
 	if lerr := WithProviderRefsLock(env, func() error {
@@ -236,12 +232,11 @@ func RunSecretSet(env hostenv.Env, out io.Writer, key, value string) error {
 
 // RunSecretSetLocked is RunSecretSet's file transaction (read/seed/upsert
 // op-refs.env). Caller MUST hold the provider-refs lock; every failure returns
-// an error (never os.Exit) so the lock is always released.
+// an error, so the lock is always released.
 func RunSecretSetLocked(env hostenv.Env, out io.Writer, key, value string) error {
-	// Normalize %20 to a literal space BEFORE writing op-refs.env: op 2.35.0's
-	// `op read` AND `op run --env-file` both require a literal space in a ref
-	// (a spaced 1Password field name, e.g. "Anthropic API Key") and reject a
-	// percent-encoded one outright.
+	// %20 -> literal space BEFORE writing: op 2.35.0's `op read` AND `op run
+	// --env-file` both require a literal space in a ref (a spaced 1Password
+	// field name, e.g. "Anthropic API Key") and reject a percent-encoded one.
 	value = strings.ReplaceAll(value, "%20", " ")
 	path := DefaultOpRefsPath(env)
 	content := ""
@@ -460,20 +455,21 @@ func RepairLegacyOpRefsFile(env hostenv.Env, path string) error {
 
 // RunSecretCheck resolves every op:// ref in op-refs.env with `op read` and
 // reports OK/FAIL per KEY. It NEVER prints the resolved value (only OK/FAIL).
-// Degrades clearly when op is absent or not signed in.
-func RunSecretCheck(env hostenv.Env, out io.Writer) {
+// The three no-evidence arms (no refs file, no op, not signed in) return exit
+// 3; a ref that fails to RESOLVE is a plain failure, exit 1.
+func RunSecretCheck(env hostenv.Env, out io.Writer) error {
 	path, content, exists := OpRefsContent(env)
 	if !exists {
 		fmt.Fprintf(out, "op-refs.env not found (%s) — create it with: pix secret set <ENV_VAR> op://vault/item/field\n", path)
-		os.Exit(3)
+		return exitCode(3)
 	}
 	if !OpInstalled(env) {
 		fmt.Fprintln(out, "op (1Password CLI) not installed — https://developer.1password.com/docs/cli")
-		os.Exit(3)
+		return exitCode(3)
 	}
 	if !OpSignedIn(env) {
 		fmt.Fprintln(out, "op is installed but no account configured — run: op signin, then retry")
-		os.Exit(3)
+		return exitCode(3)
 	}
 	refs := ParseOpRefs(content)
 	var checked, failed int
@@ -498,13 +494,14 @@ func RunSecretCheck(env hostenv.Env, out io.Writer) {
 	}
 	if checked == 0 {
 		fmt.Fprintln(out, "no op:// refs to check (add ENV_VAR=op://vault/item/field lines)")
-		return
+		return nil
 	}
 	if failed > 0 {
 		fmt.Fprintf(out, "%d of %d refs failed to resolve.\n", failed, checked)
-		os.Exit(1)
+		return exitCode(1)
 	}
 	fmt.Fprintf(out, "all %d refs resolve.\n", checked)
+	return nil
 }
 
 // indent prefixes every line of s with two spaces (for nested help/status text).

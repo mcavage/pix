@@ -9,14 +9,14 @@
       "exits": 15
     },
     "pix/host/cli": {
-      "prod_loc": 490,
-      "exports": 22,
+      "prod_loc": 475,
+      "exports": 21,
       "globals": 2,
-      "edges": 3,
-      "exits": 4
+      "edges": 2,
+      "exits": 0
     },
     "pix/host/cmd/pix": {
-      "prod_loc": 3207,
+      "prod_loc": 3206,
       "exports": 15,
       "globals": 12,
       "edges": 22,
@@ -65,11 +65,11 @@
       "exits": 0
     },
     "pix/host/mcp": {
-      "prod_loc": 885,
-      "exports": 29,
+      "prod_loc": 869,
+      "exports": 28,
       "globals": 15,
-      "edges": 7,
-      "exits": 3
+      "edges": 6,
+      "exits": 0
     },
     "pix/host/memory": {
       "prod_loc": 206,
@@ -118,14 +118,14 @@
       "exports": 42,
       "globals": 8,
       "edges": 3,
-      "exits": 9
+      "exits": 0
     },
     "pix/host/service": {
       "prod_loc": 1553,
       "exports": 24,
       "globals": 15,
       "edges": 5,
-      "exits": 4
+      "exits": 0
     },
     "pix/host/supervise": {
       "prod_loc": 991,
@@ -177,7 +177,7 @@
       "exits": 0
     },
     "pix/host/workflow/provision": {
-      "prod_loc": 1300,
+      "prod_loc": 1297,
       "exports": 30,
       "globals": 11,
       "edges": 12,

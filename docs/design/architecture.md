@@ -1,7 +1,9 @@
 # Architecture
 
-This is the contract. It is enforced by `services/host/arch_test.go`, which
-fails the build on violation — so it cannot rot into aspirational prose.
+This is the contract. It is enforced by `services/host/arch_test.go` (imports
+point down) and `services/host/processboundary_test.go` (the process boundary
+points down), which fail the build on violation — so it cannot rot into
+aspirational prose.
 
 ## The rule
 
@@ -71,7 +73,42 @@ sequencing lives, and they are ALLOWED to be big — `setup` legitimately touche
 eight capabilities. What they may not do is contain a capability.
 
 **L4 cmd/pix.** argv, dependency construction, and the single `os.Exit`. It
-shrinks toward a lookup table.
+shrinks toward a lookup table. (`services/host`'s own root package is the
+pix-host daemon binary — a different program, the same shape, so it is L4 too.)
+
+## The process boundary points down as well
+
+Imports are half the contract. The other half: **only L4 may end the process or
+reach for a global stream.** Below it — every L0, L1, L2 and L3 package — a
+failure is a RETURNED typed error and output goes to an INJECTED writer.
+
+```
+L4          os.Exit, os.Stdout, os.Stderr, fmt.Print*
+L0-L3       return an error; write to the io.Writer you were given
+```
+
+This is not tidiness. A capability that calls `os.Exit` can only be tested by
+re-execing the test binary, which reduces every assertion to a status byte —
+`secret`'s three argument-rejection tests could check the exit code but not the
+thing that actually matters, that op-refs.env was left untouched. A capability
+that writes to `os.Stdout` corrupts a `--json` answer from a layer that cannot
+know one was requested. And an `os.Exit(3)` inside a capability is a SECOND
+exit-code table, free to drift from the one in `dispatch`.
+
+When a lower layer needs a specific exit code for a message it has already
+worded on its writer, it returns `cli.SilentError{Code: n}`: the code travels
+up, and the exit mapper prints nothing extra. `cli.UsageError` (exit 2, usage
+printed) and a plain error (exit 1, printed as `pix: …`) are the other two.
+
+One exemption exists, and it is named in the guard rather than implied: package
+`sys` IS the OS seam, and `Real.RunInteractive` hands the real terminal to a
+child process (browser OAuth, `op signin`) — a pipe would break the interaction
+it exists for. That exemption covers stream HANDOVER into an `exec.Cmd` and
+nothing else; `os.Exit` is banned in `sys` like everywhere else below L4.
+
+`services/host/processboundary_test.go` enforces all of it by AST walk over
+every package the layer map places below L4, including the implicit-stdout
+`fmt.Print`/`Printf`/`Println` forms. There is no debt list: L0-L3 owe zero.
 
 ## Testability follows from the layering
 

@@ -154,11 +154,12 @@ func ProviderKeyNames(env hostenv.Env) ([]string, error) {
 	return names, nil
 }
 
-// WriteOpRefQuiet upserts KEY=op://ref into op-refs.env without the CLI wrapper's
-// os.Exit, so the interactive offer can loop. It VALIDATES the key as a shell env
-// var name (so a malicious pack.toml integration name can't inject extra
-// op-refs.env lines) and the value as a single-line op:// ref (never a literal
-// secret) — defense in depth beside the caller's own op:// check.
+// WriteOpRefQuiet upserts KEY=op://ref into op-refs.env without the CLI
+// wrapper's rejection contract, so the interactive offer can loop. It VALIDATES
+// the key as a shell env var name (so a malicious pack.toml integration name
+// can't inject extra op-refs.env lines) and the value as a single-line op://
+// ref (never a literal secret) — defense in depth beside the caller's own
+// op:// check.
 //
 // PUBLIC (standalone) entry: takes the provider-refs transaction lock around
 // the read-modify-write. Callers already inside a locked transaction (setup's
@@ -444,22 +445,24 @@ func FirstLine(s string) string {
 	return ""
 }
 
-// RunSecretSync is the `pix secret sync` entry: resolve provider-key op://
-// refs -> sbx secrets, with exit codes for scripting.
-func RunSecretSync(env hostenv.Env, out io.Writer) {
+// RunSecretSync is the `pix secret sync` entry: resolve provider-key op:// refs
+// -> sbx secrets. Its scripting exit codes are RETURNED (3 = nothing to resolve
+// from, 1 = a key failed to sync), already worded on out.
+func RunSecretSync(env hostenv.Env, out io.Writer) error {
 	synced, failed, fatal := syncProviderKeys(env, out)
 	if fatal != nil {
 		fmt.Fprintf(out, "pix secret sync: %v\n", fatal)
 		fmt.Fprintln(out, "Add a provider key with: pix models add anthropic")
-		os.Exit(3)
+		return exitCode(3)
 	}
 	if synced == 0 && failed == 0 {
 		fmt.Fprintln(out, "no provider-key refs in op-refs.env (add e.g. ANTHROPIC_API_KEY=op://vault/item/field)")
-		return
+		return nil
 	}
 	if failed > 0 {
 		fmt.Fprintf(out, "%d synced, %d failed.\n", synced, failed)
-		os.Exit(1)
+		return exitCode(1)
 	}
 	fmt.Fprintf(out, "%d provider key(s) synced from 1Password into sbx.\n", synced)
+	return nil
 }

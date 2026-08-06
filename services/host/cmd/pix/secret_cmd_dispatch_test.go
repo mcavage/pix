@@ -25,7 +25,8 @@ func runSecretDispatch(argv []string) {
 }
 
 // TestSecretCheckRejectsTrailingArg covers F6: `secret check --bogus` exits 2.
-// runSecretCmd calls os.Exit, so we exercise it in a subprocess.
+// The subject is the PROCESS exit code, which only a subprocess can observe;
+// the capability underneath it exits nothing (see secret/secret_test.go).
 func TestSecretCheckRejectsTrailingArg(t *testing.T) {
 	if os.Getenv("PIX_SECRET_BOGUS") == "1" {
 		runSecretDispatch([]string{"check", "--bogus"})
@@ -45,7 +46,8 @@ func TestSecretCheckRejectsTrailingArg(t *testing.T) {
 
 // TestSecretCmdArgCounts covers the dispatch surface: `set` requires exactly 2
 // args, `rm` requires exactly 1, and an unknown subcommand names the new CRUD
-// surface. All run in a subprocess since runSecretCmd calls os.Exit.
+// surface. All run in a subprocess because the claim is about the process exit
+// code, not about a returned error value.
 func TestSecretCmdArgCounts(t *testing.T) {
 	cases := []struct {
 		name string

@@ -45,7 +45,7 @@ type memoryCmd struct {
 // classify: a down daemon is exit 3 with the recovery command. EnsureUp is
 // best-effort; on failure the client's own ErrServiceDown lands here.
 func withMemory(d *cli.Deps, sub string, call func(memory.CLI) error) error {
-	service.EnsureUp([]string{"memory"}, service.EnsureTimeout)
+	service.EnsureUp(d.Err, []string{"memory"}, service.EnsureTimeout)
 	_, profile, err := workspace.LoadResolvedConfig()
 	if err == nil {
 		err = call(memory.CLI{Client: rpc.MemoryClient(), Out: d.Out, Profile: profile})
