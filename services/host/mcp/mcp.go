@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"os"
 	"os/exec"
 	"sort"
 	"strings"
@@ -14,7 +13,6 @@ import (
 	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/launcher"
-	"pix/host/rpc"
 	"pix/host/sys"
 	"pix/host/workspace"
 )
@@ -60,25 +58,11 @@ func McpWouldRun(out io.Writer, args ...string) error {
 	return ErrSbxUnavailable
 }
 
-// ExitMcpVerb is the shared exit dispatcher for the mcp subcommands: they
-// return an error instead of calling os.Exit deep inside their logic, so tests
-// drive the core hermetically and only this wrapper touches the process.
-// ErrSbxUnavailable -> rpc.ExitServiceDown (3); a captured child exit code is
-// propagated as-is; anything else is a generic failure (1), printed once.
-func ExitMcpVerb(ctx string, err error) {
-	if err == nil {
-		return
-	}
-	if errors.Is(err, ErrSbxUnavailable) {
-		os.Exit(rpc.ExitServiceDown)
-	}
-	var exit *exec.ExitError
-	if errors.As(err, &exit) {
-		os.Exit(exit.ExitCode())
-	}
-	fmt.Fprintf(os.Stderr, "pix %s: %v\n", ctx, err)
-	os.Exit(1)
-}
+// The exit dispatcher that used to live here (ExitMcpVerb, which mapped these
+// errors to os.Exit from inside the capability) is gone: every `pix mcp` verb
+// returns its error to cmd/pix, whose mcpExit wrapper does the same mapping at
+// the one layer allowed to end the process. Two mappers meant two places for
+// "what does exit 3 mean" to drift.
 
 // RunSbxMcpCore is the ONE passthrough every `pix mcp` verb that simply
 // forwards to sbx runs through (bundle, auth, ls): lookPath is injected so a

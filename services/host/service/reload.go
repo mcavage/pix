@@ -44,9 +44,10 @@ type serveReloader struct {
 	ensure      func() error                  // Ensure with the config set (re-lazy-start)
 }
 
-// DefaultReloader wires the real ops (platform managed-service calls live
-// behind build tags in serve_install_*.go).
-func DefaultReloader() serveReloader {
+// DefaultReloader wires the real ops (platform managed-service calls live behind
+// build tags in serve_install_*.go). progress carries the ensure's re-lazy-start
+// chatter, for the reason DefaultStarter takes one.
+func DefaultReloader(progress io.Writer) serveReloader {
 	ctl := DefaultCtl()
 	return serveReloader{
 		mode: func() serveMode {
@@ -59,7 +60,7 @@ func DefaultReloader() serveReloader {
 			if err != nil {
 				return err
 			}
-			return Ensure(DefaultStarter(), cfg, EnsureOpts{})
+			return Ensure(DefaultStarter(progress), cfg, EnsureOpts{})
 		},
 	}
 }

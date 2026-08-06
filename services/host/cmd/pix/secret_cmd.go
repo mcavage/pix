@@ -56,14 +56,14 @@ func (c *SecretRmCmd) Run(d *cli.Deps) error {
 
 type SecretCheckCmd struct{}
 
+// A returned error is the capability's own exit code (3 when it could not
+// check at all, 1 when a ref failed to resolve), already worded on d.Out.
 func (c *SecretCheckCmd) Run(d *cli.Deps) error {
-	secret.RunSecretCheck(defaultShellEnv(), d.Out)
-	return nil
+	return secret.RunSecretCheck(defaultShellEnv(), d.Out)
 }
 
 type SecretSyncCmd struct{}
 
 func (c *SecretSyncCmd) Run(d *cli.Deps) error {
-	secret.RunSecretSync(defaultShellEnv(), d.Out)
-	return nil
+	return secret.RunSecretSync(defaultShellEnv(), d.Out)
 }

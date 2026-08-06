@@ -83,13 +83,12 @@ var testSeams struct {
 
 // legacyForward hands a passthrough seam its argv verbatim, or to the test seam
 // when one is installed.
-func legacyForward(verb string, args []string, fn func([]string)) error {
+func legacyForward(verb string, args []string, fn func([]string) error) error {
 	if testSeams.legacy != nil {
 		testSeams.legacy(verb, args)
 		return nil
 	}
-	fn(args)
-	return nil
+	return fn(args)
 }
 
 // versionCmd prints the stamped launcher version. Typed rather than passthrough:
@@ -330,12 +329,12 @@ func (c *serveStatusCmd) Run(d *cli.Deps) error { return service.ReportStatus(d.
 
 type serveInstallCmd struct{ legacyArgs }
 
-func (c *serveInstallCmd) Run(*cli.Deps) error {
-	return legacyForward("serve install", c.Args, service.RunInstall)
+func (c *serveInstallCmd) Run(d *cli.Deps) error {
+	return legacyForward("serve install", c.Args, func(a []string) error { return service.RunInstall(d.Out, d.Err, a) })
 }
 
 type serveUninstallCmd struct{ legacyArgs }
 
-func (c *serveUninstallCmd) Run(*cli.Deps) error {
-	return legacyForward("serve uninstall", c.Args, service.RunUninstall)
+func (c *serveUninstallCmd) Run(d *cli.Deps) error {
+	return legacyForward("serve uninstall", c.Args, func(a []string) error { return service.RunUninstall(d.Out, d.Err, a) })
 }

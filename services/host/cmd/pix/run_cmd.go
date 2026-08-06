@@ -432,7 +432,7 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	// Lazy auto-start of the configured host services under ONE short deadline
 	// (spawn lock + health poll). The launch proceeds regardless; recall degrades
 	// in-VM. service.Ensure prints its own lines.
-	service.EnsureUp(nil, service.EnsureRunTimeout)
+	service.EnsureUp(d.Err, nil, service.EnsureRunTimeout)
 
 	// Readiness, reusing the key evidence the launch gate already paid for. AT
 	// MOST launch.WarningLimit rows, and it NEVER blocks: the missing provider

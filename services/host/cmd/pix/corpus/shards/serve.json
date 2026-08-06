@@ -24,6 +24,45 @@
       "contains": [
         "unknown flag"
       ]
+    },
+    {
+      "name": "install-help",
+      "args": [
+        "serve",
+        "install",
+        "--help"
+      ],
+      "exitCode": 0,
+      "stream": "stdout",
+      "contains": [
+        "Run the long-running host services"
+      ]
+    },
+    {
+      "name": "install-rejects-an-argument",
+      "args": [
+        "serve",
+        "install",
+        "--this-is-not-a-real-flag-9x7z"
+      ],
+      "exitCode": 2,
+      "stream": "stderr",
+      "contains": [
+        "pix serve install: unexpected argument"
+      ]
+    },
+    {
+      "name": "uninstall-rejects-an-argument",
+      "args": [
+        "serve",
+        "uninstall",
+        "--this-is-not-a-real-flag-9x7z"
+      ],
+      "exitCode": 2,
+      "stream": "stderr",
+      "contains": [
+        "pix serve uninstall: unexpected argument"
+      ]
     }
   ]
 }

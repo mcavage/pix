@@ -306,54 +306,50 @@ func reportManagedServeHealth(dial func(int) bool, ports []servePortSpec,
 	}
 }
 
-// checkManagedVerbArgs is the shared front door of `serve install`/`uninstall`:
-// help, then a hard refusal of any argument (neither verb takes one).
-func checkManagedVerbArgs(verb string, argv []string) (run bool) {
+// runManagedVerb is the shared front door of `serve install`/`uninstall`: help
+// on out, a hard refusal of any argument on errW (neither takes one), then the
+// verb. Each answer is a RETURNED cli.SilentError carrying the exit code for a
+// message already printed, so this package ends no process.
+func runManagedVerb(verb string, argv []string, out, errW io.Writer, do func() error) error {
 	if cli.WantsHelp(argv) {
-		fmt.Print(Description)
-		return false
+		fmt.Fprint(out, Description)
+		return nil
 	}
 	if len(argv) > 0 {
-		fmt.Fprintf(os.Stderr, "pix serve %s: unexpected argument %q\n\n%s", verb, argv[0], Description)
-		os.Exit(2)
+		fmt.Fprintf(errW, "pix serve %s: unexpected argument %q\n\n%s", verb, argv[0], Description)
+		return cli.SilentError{Code: 2}
 	}
-	return true
+	if err := do(); err != nil {
+		fmt.Fprintf(errW, "pix serve %s: %v\n", verb, err)
+		return cli.SilentError{Code: 1}
+	}
+	return nil
 }
 
-// RunInstall is the `serve install` entry point (platform dispatch is in
-// install_{darwin,other}.go).
-func RunInstall(argv []string) {
-	if !checkManagedVerbArgs("install", argv) {
-		return
-	}
-	rl := DefaultReloader()
-	if err := preInstallGuard(rl.mode, rl.Stop, os.Stdout); err != nil {
-		fmt.Fprintf(os.Stderr, "pix serve install: %v\n", err)
-		os.Exit(1)
-	}
-	if err := platformServeInstall(os.Stdout); err != nil {
-		fmt.Fprintf(os.Stderr, "pix serve install: %v\n", err)
-		os.Exit(1)
-	}
-	// Bounded post-install verification. Exit 0 either way: the install itself
-	// succeeded, and the warning carries the next step.
-	cfg, cfgErr := config.Load()
-	verifyManagedInstallHealth(cfg, cfgErr, DefaultStarter(), os.Stdout)
+// RunInstall is `serve install` (platform dispatch: install_{darwin,other}.go).
+func RunInstall(out, errW io.Writer, argv []string) error {
+	return runManagedVerb("install", argv, out, errW, func() error {
+		rl := DefaultReloader(errW)
+		if err := preInstallGuard(rl.mode, rl.Stop, out); err != nil {
+			return err
+		}
+		if err := platformServeInstall(out); err != nil {
+			return err
+		}
+		// Bounded post-install verification; the warning carries the next step.
+		cfg, cfgErr := config.Load()
+		verifyManagedInstallHealth(cfg, cfgErr, DefaultStarter(errW), out)
+		return nil // an unhealthy start is a warning, not a failed install
+	})
 }
 
 // Install is the non-exiting install seam: `pix setup`'s provision loop needs an
 // apply that RETURNS its failure (the loop records it and re-checks).
 func Install(out io.Writer) error { return platformServeInstall(out) }
 
-// RunUninstall is the `serve uninstall` entry point.
-func RunUninstall(argv []string) {
-	if !checkManagedVerbArgs("uninstall", argv) {
-		return
-	}
-	if err := platformServeUninstall(os.Stdout); err != nil {
-		fmt.Fprintf(os.Stderr, "pix serve uninstall: %v\n", err)
-		os.Exit(1)
-	}
+// RunUninstall is the `serve uninstall` entry point, on the same contract.
+func RunUninstall(out, errW io.Writer, argv []string) error {
+	return runManagedVerb("uninstall", argv, out, errW, func() error { return platformServeUninstall(out) })
 }
 
 // realCmdRunner is the concrete exec shim; the argv sequences around it are what

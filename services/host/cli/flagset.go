@@ -11,12 +11,8 @@ package cli
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
-	"os"
-	"os/exec"
-	"pix/host/rpc"
 	"strconv"
 	"strings"
 )
@@ -35,31 +31,20 @@ func NewFlagSet() *FlagSet {
 	return &FlagSet{ints: map[string]*int{}, strs: map[string]*string{}, bools: map[string]*bool{}, aliases: map[string]string{}}
 }
 
-// UsageErr / ExitFromErr classify errors into exit codes: usage (2), service
-// down (3), generic (1).
+// UsageErr marks a hand-rolled FlagSet parse failure as the user's mistake.
+// Classifying it into an exit code is the caller's job, all the way up at L4:
+// this package hands back a typed error and picks no stream.
+//
+// The exit-and-print counterpart that used to live here (ExitFromErr, which
+// wrote to os.Stderr and called os.Exit from L0) is gone — every verb reaches
+// the one exit mapper in cmd/pix's dispatch through RunRoot now, and a second
+// mapper reachable from the bottom of the stack was a way for the two to
+// disagree about what exit 3 means.
 type UsageError2 struct{ msg string }
 
 func (e UsageError2) Error() string { return e.msg }
 func UsageErr(msg string) error     { return UsageError2{msg} }
 
-func ExitFromErr(ctx string, err error) {
-	var exit *exec.ExitError
-	switch {
-	case err == rpc.ErrServiceDown:
-		fmt.Fprintf(os.Stderr, "pix %s: service unreachable — start it with `pix serve`\n", ctx)
-		os.Exit(rpc.ExitServiceDown)
-	case IsUsage(err):
-		fmt.Fprintln(os.Stderr, err.Error())
-		os.Exit(2)
-	case errors.As(err, &exit):
-		// A backup/restore child (pix-host) already printed its own diagnostic
-		// to stderr; propagate its exit code without a duplicate message.
-		os.Exit(exit.ExitCode())
-	default:
-		fmt.Fprintf(os.Stderr, "pix %s: %v\n", ctx, err)
-		os.Exit(1)
-	}
-}
 func IsUsage(err error) bool {
 	_, ok := err.(UsageError2)
 	return ok

@@ -318,6 +318,12 @@ var dangerousVerbs = map[string]bool{
 // later.
 var groupedDangerousSubcommands = map[string]map[string]bool{
 	"state": {"backup": true, "restore": true, "reset": true},
+	// `serve install`/`uninstall` register or remove a launchd LaunchAgent on
+	// the real machine. Their refusal and help paths are corpus-worthy (they
+	// are the exit codes P0-2 moved out of the service package), but only ever
+	// with a safe tail: a bare `serve install` in CI would install a login
+	// service. `serve` itself, and `serve status`, stay safe to invoke.
+	"serve": {"install": true, "uninstall": true},
 }
 
 // safeTailArg reports whether a single argv token, appearing after a
@@ -380,6 +386,9 @@ func TestDangerousArgvViolation(t *testing.T) {
 		{"setup help", []string{"setup", "--help"}, false},
 		{"setup bad-flag", []string{"setup", "--this-is-not-a-real-flag-9x7z"}, false},
 		{"setup with a real dir launches provisioning", []string{"setup", "."}, true},
+		{"serve status is not a mutation", []string{"serve", "status"}, false},
+		{"serve install help", []string{"serve", "install", "--help"}, false},
+		{"serve install with a real argument", []string{"serve", "install", "--now"}, true},
 		{"state group bare", []string{"state"}, false},
 		{"state group help", []string{"state", "--help"}, false},
 		{"state bad-invocation", []string{"state", "--this-is-not-a-real-flag-9x7z"}, false},

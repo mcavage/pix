@@ -2,14 +2,13 @@ package secret
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/sys"
@@ -237,26 +236,22 @@ func TestSecretCheckOKNeverLeaks(t *testing.T) {
 }
 
 // TestSecretCheckMissingRefsHintsSet: with no op-refs.env, `secret check`
-// points at the new `secret set` primitive, not the removed `edit`. RunSecretCheck
-// calls os.Exit(3) on a missing file, so this runs in a subprocess.
+// answers exit 3 ("could not check at all", never conflated with "checked, and
+// a ref failed") and points at the `secret set` primitive, not the removed
+// `edit`. In-process, because the code is a RETURNED error now: the subprocess
+// this used to need could only ever observe a status byte.
 func TestSecretCheckMissingRefsHintsSet(t *testing.T) {
-	if os.Getenv("PIX_SECRET_CHECK_MISSING") == "1" {
-		env, _ := realFixture(t, "") // no op-refs.env at all
-		RunSecretCheck(env, os.Stdout)
-		return
+	env, _ := realFixture(t, "") // no op-refs.env at all
+	var out bytes.Buffer
+	err := RunSecretCheck(env, &out)
+	if got := cli.ExitCode(err); got != 3 {
+		t.Errorf("exit code = %d, want 3 (err = %v)", got, err)
 	}
-	cmd := exec.Command(os.Args[0], "-test.run", "TestSecretCheckMissingRefsHintsSet")
-	cmd.Env = append(os.Environ(), "PIX_SECRET_CHECK_MISSING=1")
-	outBuf, err := cmd.CombinedOutput()
-	var ee *exec.ExitError
-	if !errors.As(err, &ee) {
-		t.Fatalf("expected an ExitError, got %v (Output: %s)", err, outBuf)
+	if !strings.Contains(out.String(), "pix secret set <ENV_VAR> op://vault/item/field") {
+		t.Errorf("want a `secret set` hint, got:\n%s", out.String())
 	}
-	if ee.ExitCode() != 3 {
-		t.Errorf("exit code = %d, want 3", ee.ExitCode())
-	}
-	if !strings.Contains(string(outBuf), "pix secret set <ENV_VAR> op://vault/item/field") {
-		t.Errorf("want a `secret set` hint, got:\n%s", outBuf)
+	if err != nil && strings.Contains(err.Error(), "op-refs.env") {
+		t.Errorf("the reason is printed once, on the writer, not re-rendered by the exit mapper: %v", err)
 	}
 }
 
@@ -309,53 +304,47 @@ func TestSecretSetReplacesExistingKeyPreservingOthers(t *testing.T) {
 	}
 }
 
+// TestSecretSetRejectsNonRefForSecretKey: a pasted value is refused (exit 2),
+// the message never echoes it, and — newly assertable now the rejection is a
+// returned error rather than an os.Exit — op-refs.env is left byte-identical.
 func TestSecretSetRejectsNonRefForSecretKey(t *testing.T) {
-	if os.Getenv("PIX_SECRET_SET_REJECT") == "1" {
-		RunSecretSet(memEnv(map[string]string{fakeRefsPath: "X=1\n"}), os.Stdout, "SLACK_TOKEN", "xoxb-pasted-secret-value")
-		return
+	files := map[string]string{fakeRefsPath: "X=1\n"}
+	var out bytes.Buffer
+	err := RunSecretSet(memEnv(files), &out, "SLACK_TOKEN", "xoxb-pasted-secret-value")
+	if got := cli.ExitCode(err); got != 2 {
+		t.Errorf("exit code = %d, want 2 (err = %v)", got, err)
 	}
-	cmd := exec.Command(os.Args[0], "-test.run", "TestSecretSetRejectsNonRefForSecretKey")
-	cmd.Env = append(os.Environ(), "PIX_SECRET_SET_REJECT=1")
-	outBuf, err := cmd.CombinedOutput()
-	var ee *exec.ExitError
-	if !errors.As(err, &ee) {
-		t.Fatalf("expected an ExitError, got %v (Output: %s)", err, outBuf)
+	if strings.Contains(out.String(), "xoxb-pasted-secret-value") {
+		t.Errorf("rejection message LEAKED the pasted value: %s", out.String())
 	}
-	if ee.ExitCode() != 2 {
-		t.Errorf("exit code = %d, want 2", ee.ExitCode())
+	if !strings.Contains(out.String(), "refs-only") {
+		t.Errorf("rejection message should explain the refs-only policy: %s", out.String())
 	}
-	if strings.Contains(string(outBuf), "xoxb-pasted-secret-value") {
-		t.Errorf("rejection message LEAKED the pasted value: %s", outBuf)
-	}
-	if !strings.Contains(string(outBuf), "refs-only") {
-		t.Errorf("rejection message should explain the refs-only policy: %s", outBuf)
+	if files[fakeRefsPath] != "X=1\n" {
+		t.Errorf("a rejected invocation must not touch op-refs.env, got %q", files[fakeRefsPath])
 	}
 }
 
 // TestSecretSetRejectsControlChars is the injection regression: a value carrying
 // a newline must be refused (exit 2), never written, so it cannot smuggle a
-// SECOND KEY=value line (e.g. a pasted plaintext secret) into op-refs.env.
+// SECOND KEY=value line (e.g. a pasted plaintext secret) into op-refs.env. The
+// "never written" half is what the old subprocess form could not check — its
+// in-memory refs file died with the child.
 func TestSecretSetRejectsControlChars(t *testing.T) {
-	if os.Getenv("PIX_SECRET_SET_NL") == "1" {
-		RunSecretSet(memEnv(map[string]string{fakeRefsPath: "X=1\n"}), os.Stdout,
-			"GITHUB_TOKEN", "op://V/I/f\nSLACK_TOKEN=xoxb-injected")
-		return
+	files := map[string]string{fakeRefsPath: "X=1\n"}
+	var out bytes.Buffer
+	err := RunSecretSet(memEnv(files), &out, "GITHUB_TOKEN", "op://V/I/f\nSLACK_TOKEN=xoxb-injected")
+	if got := cli.ExitCode(err); got != 2 {
+		t.Errorf("exit code = %d, want 2 (err = %v)", got, err)
 	}
-	cmd := exec.Command(os.Args[0], "-test.run", "TestSecretSetRejectsControlChars")
-	cmd.Env = append(os.Environ(), "PIX_SECRET_SET_NL=1")
-	outBuf, err := cmd.CombinedOutput()
-	var ee *exec.ExitError
-	if !errors.As(err, &ee) {
-		t.Fatalf("expected an ExitError, got %v (Output: %s)", err, outBuf)
+	if strings.Contains(out.String(), "xoxb-injected") {
+		t.Errorf("rejection LEAKED the injected value: %s", out.String())
 	}
-	if ee.ExitCode() != 2 {
-		t.Errorf("exit code = %d, want 2", ee.ExitCode())
+	if !strings.Contains(out.String(), "control character") {
+		t.Errorf("rejection should name the control-character reason: %s", out.String())
 	}
-	if strings.Contains(string(outBuf), "xoxb-injected") {
-		t.Errorf("rejection LEAKED the injected value: %s", outBuf)
-	}
-	if !strings.Contains(string(outBuf), "control character") {
-		t.Errorf("rejection should name the control-character reason: %s", outBuf)
+	if files[fakeRefsPath] != "X=1\n" {
+		t.Errorf("the smuggled line must never reach op-refs.env, got %q", files[fakeRefsPath])
 	}
 }
 

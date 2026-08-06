@@ -68,8 +68,10 @@ type serveStarter struct {
 	stderr   io.Writer                           // user-facing progress messages
 }
 
-// DefaultStarter wires the real OS-backed ops.
-func DefaultStarter() serveStarter {
+// DefaultStarter wires the real OS-backed ops. progress is where the "starting
+// pix services…" chatter goes, and it is a PARAMETER: this package cannot know
+// whether its caller is answering a --json question. CLI callers pass stderr.
+func DefaultStarter(progress io.Writer) serveStarter {
 	return serveStarter{
 		hostBin:   launcher.FindHostBinary,
 		dial:      sys.Real{}.DialLocal,
@@ -87,7 +89,7 @@ func DefaultStarter() serveStarter {
 		logPath: config.ServeLogPath,
 		tailLog: tailFileLines,
 		getenv:  os.Getenv,
-		stderr:  os.Stderr,
+		stderr:  progress,
 	}
 }
 
@@ -311,17 +313,18 @@ func tailFileLines(path string, n int) string {
 }
 
 // EnsureUp is the best-effort call-site helper `run` and `memory` use: load the
-// base config, run Ensure with the real ops, and swallow the error (Ensure
-// already told the user why on stderr) so the primary action still proceeds.
-func EnsureUp(services []string, timeout time.Duration) {
+// base config, run Ensure with the real ops, and swallow the error (Ensure told
+// the user why on progress) so the primary action proceeds. progress is the
+// caller's stderr, never its stdout.
+func EnsureUp(progress io.Writer, services []string, timeout time.Duration) {
 	cfg, err := config.Load()
 	if err != nil {
 		return // a broken config fails loudly in the primary action instead
 	}
 	if from, stale := staleServeVersion(cfg, sys.Real{}, services, rpc.IdentityProbe); stale {
-		restartStaleServe(DefaultReloader(), from, launcher.Version, os.Stderr)
+		restartStaleServe(DefaultReloader(progress), from, launcher.Version, progress)
 	}
-	_ = Ensure(DefaultStarter(), cfg, EnsureOpts{Services: services, Timeout: timeout})
+	_ = Ensure(DefaultStarter(progress), cfg, EnsureOpts{Services: services, Timeout: timeout})
 }
 
 // staleServeVersion recognizes ONLY a positively identified Pix service at a
