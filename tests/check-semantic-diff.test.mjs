@@ -27,7 +27,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
-import { activationKeySet, checkRuleDrift, evaluateCheck, evaluatePins, extractRegion, extractSet, loadActivation, loadManifest, loadRules } from "../scripts/semantic-diff/lib/engine.mjs";
+import { activationKeySet, checkRuleDrift, evaluateCheck, evaluatePins, extractRegion, extractSet, loadActivation, loadManifest, loadRules, resolveDefaultBase, staleManifestEntries } from "../scripts/semantic-diff/lib/engine.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
@@ -416,6 +416,183 @@ test("checkRuleDrift ignores an unrelated (non-checkable) description-only edit"
 	assert.equal(result.ok, true);
 });
 
+// --- unused-manifest-entries FAILS the guard, and staleManifestEntries -----
+//
+// Requirement: an intended-change manifest entry that neither waives a
+// currently-failing evaluatePins check NOR explains a real checkRuleDrift
+// fingerprint change vs. the base is dead weight — historically it was only
+// ever printed as a "note", never enforced, and this repo had ~20 of them
+// accumulate. staleManifestEntries() is the single source of truth the CLI
+// uses to fail on that; these tests watch the mechanism actually catch it,
+// not just report it.
+
+test("staleManifestEntries: an entry unused by evaluatePins AND not explaining any real drift is reported stale", () => {
+	const report = { unusedManifestEntries: ["some.pin"] };
+	const drift = { skipped: false, consumedManifestIds: [] };
+	assert.deepEqual(staleManifestEntries(report, drift), ["some.pin"]);
+});
+
+test("staleManifestEntries: an entry unused by evaluatePins BUT consumed by checkRuleDrift (a real transition landing this commit) is NOT stale", () => {
+	const report = { unusedManifestEntries: ["some.pin", "other.pin"] };
+	const drift = { skipped: false, consumedManifestIds: ["some.pin"] };
+	assert.deepEqual(staleManifestEntries(report, drift), ["other.pin"]);
+});
+
+test("staleManifestEntries: with no usable git base (skipped), nothing can be proven stale", () => {
+	const report = { unusedManifestEntries: ["some.pin"] };
+	const drift = { skipped: true, consumedManifestIds: [] };
+	assert.deepEqual(staleManifestEntries(report, drift), []);
+});
+
+// Full pipeline (evaluatePins + checkRuleDrift + staleManifestEntries), the
+// same three calls the CLI itself makes, against a self-contained fixture —
+// proves the mechanism end-to-end without the CLI's REPO_ROOT-fixed rules/
+// manifest paths getting in the way of a synthetic `--root`.
+test("pipeline FAILS on a stale manifest entry (no waiver use, no matching drift vs. the given base)", async () => {
+	const root = makeScratchRepo();
+	writeFixture(root, { "rules/fixture.rules.mjs": RULE_FILE_V1, "a.txt": "v1" });
+	git(root, "add", "-A");
+	git(root, "commit", "-q", "-m", "base: v1, no manifest entry needed");
+
+	// A manifest entry claiming a transition that never happened against THIS
+	// base: the rule never changed, so it can never be "consumed" by drift, and
+	// the underlying check already passes directly, so it is never used as a
+	// waiver either. That is exactly a stale entry.
+	const manifest = [{ id: "fixture.pin", rationale: "stale, nothing changed", evidence: "nowhere", changes: [{ file: "a.txt", kind: "contains", from: ["v1"], to: ["v1"] }] }];
+
+	const pins = await loadRules(path.join(root, "rules"));
+	const report = evaluatePins(pins, root, manifest, new Set());
+	const drift = await checkRuleDrift(path.join(root, "rules"), root, "HEAD", manifest);
+	const stale = staleManifestEntries(report, drift);
+	assert.deepEqual(stale, ["fixture.pin"], "an entry that neither waives a failing check nor explains real drift must be reported stale");
+});
+
+test("pipeline PASSES when the SAME manifest entry lands in the SAME commit as the rule-drift it documents (base predates the change)", async () => {
+	const root = makeScratchRepo();
+	writeFixture(root, { "rules/fixture.rules.mjs": RULE_FILE_V1, "a.txt": "v1" });
+	git(root, "add", "-A");
+	git(root, "commit", "-q", "-m", "base: v1");
+	const baseSha = git(root, "rev-parse", "HEAD").trim();
+
+	// Now land the transition for real: the rule's expected value moves to v2
+	// AND the file it checks moves to v2, with a manifest entry documenting it.
+	writeFixture(root, { "rules/fixture.rules.mjs": RULE_FILE_V2, "a.txt": "v2" });
+	git(root, "add", "-A");
+	git(root, "commit", "-q", "-m", "land v2 + waiver");
+	const manifest = [{ id: "fixture.pin", rationale: "v1 -> v2, documented", evidence: "PR #1", changes: [{ file: "a.txt", kind: "contains", from: ["v1"], to: ["v2"] }] }];
+
+	const pins = await loadRules(path.join(root, "rules"));
+	const report = evaluatePins(pins, root, manifest, new Set());
+	const drift = await checkRuleDrift(path.join(root, "rules"), root, baseSha, manifest);
+	const stale = staleManifestEntries(report, drift);
+	assert.equal(report.ok, true);
+	assert.equal(drift.ok, true);
+	assert.deepEqual(stale, [], "a manifest entry consumed by real drift this run must not be flagged stale");
+});
+
+// --- resolveDefaultBase: a meaningful base, not a self-compare against HEAD -
+
+test("resolveDefaultBase prefers SEMANTIC_DIFF_BASE_SHA when it names a real commit", () => {
+	const root = makeScratchRepo();
+	writeFixture(root, { "a.txt": "v1" });
+	git(root, "add", "-A");
+	git(root, "commit", "-q", "-m", "v1");
+	const sha = git(root, "rev-parse", "HEAD").trim();
+
+	const prior = process.env.SEMANTIC_DIFF_BASE_SHA;
+	process.env.SEMANTIC_DIFF_BASE_SHA = sha;
+	try {
+		assert.equal(resolveDefaultBase(root), sha);
+	} finally {
+		if (prior === undefined) delete process.env.SEMANTIC_DIFF_BASE_SHA;
+		else process.env.SEMANTIC_DIFF_BASE_SHA = prior;
+	}
+});
+
+test("resolveDefaultBase ignores a bogus SEMANTIC_DIFF_BASE_SHA and falls through", () => {
+	const root = makeScratchRepo();
+	writeFixture(root, { "a.txt": "v1" });
+	git(root, "add", "-A");
+	git(root, "commit", "-q", "-m", "v1");
+
+	const prior = process.env.SEMANTIC_DIFF_BASE_SHA;
+	process.env.SEMANTIC_DIFF_BASE_SHA = "not-a-real-sha-at-all";
+	try {
+		const base = resolveDefaultBase(root);
+		assert.notEqual(base, "not-a-real-sha-at-all");
+	} finally {
+		if (prior === undefined) delete process.env.SEMANTIC_DIFF_BASE_SHA;
+		else process.env.SEMANTIC_DIFF_BASE_SHA = prior;
+	}
+});
+
+test("resolveDefaultBase prefers merge-base(HEAD, origin/main) over a bare HEAD self-compare, and that base actually surfaces drift a literal HEAD never could", async () => {
+	const root = makeScratchRepo();
+	writeFixture(root, { "rules/fixture.rules.mjs": RULE_FILE_V1 });
+	git(root, "add", "-A");
+	git(root, "commit", "-q", "-m", "v1, this is what main has");
+
+	// Fake a remote: a bare clone playing the role of origin, so origin/main exists.
+	const remote = mkTmpDir();
+	execFileSync("git", ["clone", "--bare", "-q", root, remote]);
+	git(root, "remote", "add", "origin", remote);
+	git(root, "fetch", "-q", "origin");
+
+	// A feature branch moves the pin to v2 (committed, so HEAD == working tree —
+	// the exact case a literal "HEAD" base can never see as drift).
+	writeFixture(root, { "rules/fixture.rules.mjs": RULE_FILE_V2 });
+	git(root, "add", "-A");
+	git(root, "commit", "-q", "-m", "feature: v2, no manifest entry");
+
+	const literalHead = await checkRuleDrift(path.join(root, "rules"), root, "HEAD", []);
+	assert.equal(literalHead.ok, true, "comparing HEAD to itself trivially finds no drift — this is the bug being fixed");
+
+	const base = resolveDefaultBase(root);
+	assert.notEqual(base, "HEAD", "a repo with a tracked remote default branch must resolve to something more meaningful than HEAD");
+	const meaningful = await checkRuleDrift(path.join(root, "rules"), root, base, []);
+	assert.equal(meaningful.ok, false, "the resolved base must actually be the pre-feature-branch commit, so the undocumented v1->v2 move is caught");
+	assert.equal(meaningful.drifted[0].id, "fixture.pin");
+});
+
+test("resolveDefaultBase falls back to HEAD~1 with no remote at all, still more meaningful than HEAD", () => {
+	const root = makeScratchRepo();
+	writeFixture(root, { "a.txt": "v1" });
+	git(root, "add", "-A");
+	git(root, "commit", "-q", "-m", "v1");
+	writeFixture(root, { "a.txt": "v2" });
+	git(root, "add", "-A");
+	git(root, "commit", "-q", "-m", "v2");
+
+	const base = resolveDefaultBase(root);
+	assert.equal(base, "HEAD~1");
+});
+
+test("resolveDefaultBase falls back to the literal HEAD only for a brand-new, single-commit repo", () => {
+	const root = makeScratchRepo();
+	writeFixture(root, { "a.txt": "v1" });
+	git(root, "add", "-A");
+	git(root, "commit", "-q", "-m", "only commit");
+
+	assert.equal(resolveDefaultBase(root), "HEAD");
+});
+
+test("the CLI's own default (no --base flag) resolves through resolveDefaultBase against the real repo, not a hardcoded HEAD self-compare", () => {
+	const resolved = resolveDefaultBase(REPO_ROOT);
+	assert.notEqual(resolved, "HEAD", "this checkout has a tracked origin/main, so the default must not degrade to a self-compare");
+
+	// The CLI's own default-base wiring must reach the exact same resolved ref:
+	// running with no --base and running with --base <that ref> explicitly must
+	// produce byte-identical output against the real repo's real rules.
+	const run = (extra) => {
+		try {
+			return execFileSync("node", [CLI, "--root", REPO_ROOT, ...extra], { encoding: "utf8" });
+		} catch (err) {
+			return err.stdout;
+		}
+	};
+	assert.equal(run([]), run(["--base", resolved]));
+});
+
 // --- tier 3: the real repo, the real W0 rules --------------------------------
 
 // U04d: Story04 LANDED. Every lifecycle pin — including the three that were
@@ -521,6 +698,7 @@ test("the ports domain no longer pins the retired broker port (W2/U03B deleted i
 test("the CLI exits 0 against the real repo and exits 1 against a fixture with a planted corruption", () => {
 	const cliOut = execFileSync("node", [CLI, "--root", REPO_ROOT], { encoding: "utf8" });
 	assert.match(cliOut, /semantic-diff: PASS/);
+	assert.doesNotMatch(cliOut, /FAIL: stale intended-change manifest entries/, "the shipped intended-changes.json must carry no dead entries");
 
 	// Build a full standalone fixture repo tree containing ONLY the real rules
 	// + a deliberately corrupted copy of one pinned production file, and run

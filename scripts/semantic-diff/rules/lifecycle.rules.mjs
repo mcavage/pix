@@ -122,7 +122,7 @@ export default [
 	{
 		id: "lifecycle.session.record-before-lifecycle-unlock",
 		description:
-			"U04c2: launch.RunSession performs the whole transition inside lease.AttachRefUnderLifecycle's fn — lifecycle EXCLUSIVE held — so the child is started and every create-time fact (immutable instance id, fingerprint, exact pi invocation) is recorded BEFORE the lifecycle lock is released and BEFORE the session is waited for. A creator SIGKILLed mid-session therefore still leaves a complete record, and a reaper acquiring the lifecycle lock next can never see a recorded sandbox with zero holders. The refs SHARED reference is taken by the SAME helper while lifecycle is still held; child.Wait() is called only after it returns.",
+			"U04c2: launch.RunSession performs the whole transition inside lease.AttachRefUnderLifecycle's fn — lifecycle EXCLUSIVE held — so the child is started and every create-time fact (immutable instance id, fingerprint, exact pi invocation) is recorded BEFORE the lifecycle lock is released and BEFORE the session is waited for. A creator SIGKILLed mid-session therefore still leaves a complete record, and a reaper acquiring the lifecycle lock next can never see a recorded sandbox with zero holders. The refs SHARED reference is taken by the SAME helper while lifecycle is still held; child.Wait() is called only after it returns. U04f closed the follow-on expired-context gap: fn can legitimately run for the whole ~15-minute create-poll window while still holding the lifecycle lock, so the refs SHARED acquire AFTER fn returns takes its OWN fresh, RefAcquireTimeout-bounded context (detached from ctx via context.WithoutCancel) instead of reusing the caller's ctx, which by then is already past whatever deadline it was sized for.",
 		checks: [
 			{
 				file: "services/host/workflow/launch/session.go",
@@ -139,7 +139,8 @@ export default [
 				values: [
 					"func AttachRefUnderLifecycle(ctx context.Context, dir string, fn func() error) (*RefLease, error) {",
 					"if err := lc.AcquireExclusive(ctx); err != nil {",
-					"if err := rl.AcquireShared(ctx); err != nil {",
+					"refCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), RefAcquireTimeout)",
+					"if err := rl.AcquireShared(refCtx); err != nil {",
 				],
 			},
 			{
@@ -351,7 +352,7 @@ export default [
 	{
 		id: "lifecycle.teardown.journal-bounded-0600",
 		description:
-			"U04d: every teardown attempt — including every refusal — is journalled to a BOUNDED, 0600 JSONL file in the STATE dir (AGENTS.md safety invariant #4), capped in both directions a log can grow (entries and bytes) and rewritten through a temp file + rename so the mode is exact and a symlink at the path is replaced rather than written through.",
+			"U04d: every teardown attempt — including every refusal — is journalled to a BOUNDED, 0600 JSONL file in the STATE dir (AGENTS.md safety invariant #4), capped in both directions a log can grow (entries and bytes). U04f hardened the write itself two ways: SERIALIZED across processes (withTeardownJournalGuard's flock on a dedicated lock file, because an orphan sweep and a session's own teardown are frequently two different pix-host invocations doing a read-modify-write on the SAME journal path, which a unique temp name alone does not stop from silently dropping one writer's entry) and written through a UNIQUE same-dir temp file + rename (writeFileAtomic's os.CreateTemp, not a fixed '.tmp' name, so two racing writers can never interleave into one file or have one commit the other's half-written temp) so the mode is exact and a symlink at the path is replaced rather than written through.",
 		checks: [
 			{
 				file: "services/host/workflow/launch/reap.go",
@@ -360,7 +361,18 @@ export default [
 					'TeardownJournalName       = "teardown.jsonl"',
 					"TeardownJournalMaxEntries = 200",
 					"teardownJournalMaxBytes   = 64 * 1024",
-					"os.WriteFile(tmp, []byte(strings.Join(lines, \"\\n\")+\"\\n\"), 0o600)",
+					"return withTeardownJournalGuard(path, func() error {",
+					"syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)",
+					"return writeFileAtomic(path, []byte(strings.Join(lines, \"\\n\")+\"\\n\"), 0o600)",
+				],
+			},
+			{
+				file: "services/host/workflow/launch/atomic.go",
+				kind: "contains",
+				values: [
+					"func writeFileAtomic(path string, data []byte, perm os.FileMode) error {",
+					'tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")',
+					"return os.Rename(tmpPath, path)",
 				],
 			},
 		],

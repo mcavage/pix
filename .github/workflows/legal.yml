@@ -64,6 +64,16 @@ jobs:
           node-version: "25.9.0"
       - name: check-secret-history (fail-closed)
         run: bash scripts/check-secret-history.sh
+      # tests/slow/legal-secret-scan-full-history.test.mjs asserts the SAME
+      # full-history scan (once driving scripts/legal/secret-scan.mjs
+      # directly, once through this script) with real, checkable assertions
+      # (findings_count === 0, the report artifact actually exists) instead of
+      # just a shell exit code — it lives under tests/slow/ specifically so it
+      # never counts against scripts/gate.sh's timed fast-gate budget (see its
+      # own header comment), which means THIS is the only job that can run it.
+      # Run it for real here, or its assertions never execute anywhere.
+      - name: tests/slow/legal-secret-scan-full-history.test.mjs (the same scan, with real assertions)
+        run: node --test --test-force-exit tests/slow/legal-secret-scan-full-history.test.mjs
       - name: upload secret-scan report (always, even on failure)
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

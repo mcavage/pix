@@ -3,9 +3,13 @@ package corpus
 import (
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -105,6 +109,59 @@ func ExtractKnownVerbs(bin string) (map[string]bool, error) {
 	return out, nil
 }
 
+// ExtractKnownVerbsFromSource is ExtractKnownVerbs' no-build twin: it reads
+// cmd/pix/root.go's `type rootCmd struct` directly via go/ast and returns the
+// verb name (kong's lowercase-of-the-field-name default) for every field
+// carrying a `cmd:""` tag. root.go's own doc comment states this struct IS
+// the single source of truth `help --all`'s generated listing renders from
+// ("the tree is the single source of truth for all three"), so reading the
+// tags directly reaches the identical answer ExtractKnownVerbs gets by
+// building and exec'ing the real binary — without the build. corpus is a
+// test-only package (U11k) that deliberately does not, and as `package main`
+// cannot, import cmd/pix, so source parsing (not a direct import) is the only
+// no-exec route available; TestExtractKnownVerbsFromSource_MatchesTheRealBinary
+// keeps the two mechanisms from silently diverging.
+func ExtractKnownVerbsFromSource(rootGoPath string) (map[string]bool, error) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, rootGoPath, nil, 0)
+	if err != nil {
+		return nil, fmt.Errorf("corpus: parse %s: %w", rootGoPath, err)
+	}
+	var fields *ast.FieldList
+	ast.Inspect(f, func(n ast.Node) bool {
+		ts, ok := n.(*ast.TypeSpec)
+		if !ok || ts.Name.Name != "rootCmd" {
+			return true
+		}
+		st, ok := ts.Type.(*ast.StructType)
+		if !ok {
+			return true
+		}
+		fields = st.Fields
+		return false
+	})
+	if fields == nil {
+		return nil, fmt.Errorf("corpus: %s has no `type rootCmd struct` — has the verb table moved?", rootGoPath)
+	}
+	out := map[string]bool{}
+	for _, field := range fields.List {
+		if field.Tag == nil {
+			continue
+		}
+		tag := reflect.StructTag(strings.Trim(field.Tag.Value, "`"))
+		if _, ok := tag.Lookup("cmd"); !ok {
+			continue
+		}
+		for _, name := range field.Names {
+			out[strings.ToLower(name.Name)] = true
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("corpus: rootCmd in %s has no `cmd:\"\"` fields — has the tag shape changed?", rootGoPath)
+	}
+	return out, nil
+}
+
 // --- schema validation ------------------------------------------------------
 
 func TestLoadShards_ValidatesRealShards(t *testing.T) {
@@ -183,17 +240,22 @@ func TestValidateShard_RejectsBadJSONKeysWithoutStream(t *testing.T) {
 
 // --- deletion guard: every known verb is either covered or retired ---------
 
+// TestCoverage_EveryKnownVerbHasShardOrRetirement used to skip under
+// testing.Short() because it built and exec'd the real pix binary just to
+// read off the verb list — which meant it never ran in the fast gate
+// (`go test -short ./...`) at all, only in the untimed race/metrics CI jobs.
+// It now reads root.go's rootCmd struct directly (ExtractKnownVerbsFromSource,
+// no build, no exec), so the deletion guard runs on every fast-gate pass;
+// TestExtractKnownVerbsFromSource_MatchesTheRealBinary is the (still Short-
+// skipped, still binary-building) proof that source parsing and the real
+// dispatcher agree.
 func TestCoverage_EveryKnownVerbHasShardOrRetirement(t *testing.T) {
-	if testing.Short() {
-		t.Skip("builds the real pix binary to extract the dispatched verb list; covered by the untimed race/metrics CI jobs")
-	}
-	bin := buildPixBinary(t)
-	verbs, err := ExtractKnownVerbs(bin)
+	verbs, err := ExtractKnownVerbsFromSource(realRootGoPath(t))
 	if err != nil {
-		t.Fatalf("ExtractKnownVerbs: %v", err)
+		t.Fatalf("ExtractKnownVerbsFromSource: %v", err)
 	}
 	if len(verbs) < 10 {
-		t.Fatalf("ExtractKnownVerbs found %d verbs; the generated listing stopped listing them", len(verbs))
+		t.Fatalf("ExtractKnownVerbsFromSource found %d verbs; rootCmd stopped declaring them", len(verbs))
 	}
 
 	shards, err := LoadShards(realShardsDir(t))
@@ -220,6 +282,44 @@ func TestCoverage_EveryKnownVerbHasShardOrRetirement(t *testing.T) {
 	if len(missing) > 0 {
 		t.Errorf("verbs dispatched by the kong root but neither corpus-covered nor retired: %v\n"+
 			"Add a shard (corpus/shards/<verb>.json) or an approved retirement entry (corpus/retirement.jsonl).", missing)
+	}
+}
+
+// TestExtractKnownVerbsFromSource_MatchesTheRealBinary is what keeps the fast,
+// no-build source parser honest: it builds the real binary (genuinely slow,
+// hence Short-skipped, same as the coverage test used to be) exactly once and
+// asserts ExtractKnownVerbsFromSource reports the IDENTICAL verb set
+// ExtractKnownVerbs gets from `pix help --all`. If root.go's struct tags and
+// the generated listing ever disagree, this is what notices — the fast
+// deletion guard above is only as trustworthy as this equivalence holding.
+func TestExtractKnownVerbsFromSource_MatchesTheRealBinary(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the real pix binary; covered by the untimed race/metrics CI jobs, same as the coverage test this replaces used to be")
+	}
+	bin := buildPixBinary(t)
+	fromBinary, err := ExtractKnownVerbs(bin)
+	if err != nil {
+		t.Fatalf("ExtractKnownVerbs: %v", err)
+	}
+	fromSource, err := ExtractKnownVerbsFromSource(realRootGoPath(t))
+	if err != nil {
+		t.Fatalf("ExtractKnownVerbsFromSource: %v", err)
+	}
+	var onlyBinary, onlySource []string
+	for v := range fromBinary {
+		if !fromSource[v] {
+			onlyBinary = append(onlyBinary, v)
+		}
+	}
+	for v := range fromSource {
+		if !fromBinary[v] {
+			onlySource = append(onlySource, v)
+		}
+	}
+	sort.Strings(onlyBinary)
+	sort.Strings(onlySource)
+	if len(onlyBinary) > 0 || len(onlySource) > 0 {
+		t.Errorf("ExtractKnownVerbsFromSource disagrees with the real `pix help --all` binary: only-in-binary=%v only-in-source=%v", onlyBinary, onlySource)
 	}
 }
 

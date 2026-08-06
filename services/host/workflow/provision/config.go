@@ -84,7 +84,14 @@ func ApplyConfigChange(cfg *config.Config, unset bool, key string, args []string
 
 	case "mcp":
 		if len(args) != 1 {
-			return "", fmt.Errorf("config %s mcp <server>: needs a server name (e.g. google-workspace, slack)", verb)
+			// google-workspace (config.GWServerName) is the one example cited here on
+			// purpose: it is the only server this generic set/register path actually
+			// carries end to end (pix mcp register -> the op-run wrapper). Slack was
+			// externalized (W2/U02a, docs/design/slack-setup.md): it registers through
+			// a pack's own container manifest (`sbx mcp add --local --url <manifest>`),
+			// not this key, so it must not be cited here as if the two paths were
+			// interchangeable — that reads as "just works" and it does not.
+			return "", fmt.Errorf("config %s mcp <server>: needs a server name (e.g. %s)", verb, config.GWServerName)
 		}
 		if unset {
 			cfg.RemoveMCP(args[0])

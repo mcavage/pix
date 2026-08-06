@@ -1,445 +1,48 @@
 [
 	{
-		"id": "lifecycle.lease.paths-and-modes",
-		"rationale": "U04c1 fixes a flock-on-a-path TOCTOU review finding and, in the same reshard the review is layered on top of, the single lease.lock file the pin previously named was already split (commit 74ab769) into refs.lock (RefLease) + lifecycle.lock (LifecycleLock) without the pin being updated to match — this entry documents catching up the stale literal, not a new rename. The invariant the pin polices (fixed file names + 0600/0700 modes, independent of production code's own reasons to touch them) is unchanged; only the literals it checks against reflect the file names that have been live since 74ab769.",
-		"evidence": "services/host/lease/lock.go: `const refsLockFileName = \"refs.lock\"`; services/host/lease/lifecycle.go: `const lifecycleLockFileName = \"lifecycle.lock\"` (both already shipped in commit 74ab769, pre-dating this manifest entry)",
+		"id": "lifecycle.session.record-before-lifecycle-unlock",
+		"rationale": "U04f (lifecycle expired-context fix) closes the follow-on gap this pin's earlier transition (U04e's function rename) did not touch: AttachRefUnderLifecycle's refs SHARED acquire, taken AFTER fn returns but still under the lifecycle EXCLUSIVE lock, used to reuse the caller's ctx — sized only for the lifecycle-lock acquire above fn, seconds — even though fn can legitimately run for the whole ~15-minute create-poll window. The first brief refs contention hit after that window would then fail immediately on the already-elapsed deadline instead of retrying, leaving fn's already-started child live with no reference held. The fix gives that acquire its OWN fresh, RefAcquireTimeout-bounded context, detached from ctx via context.WithoutCancel. The pin now checks for that fresh context directly instead of the old ctx-reuse literal, so it polices the invariant that actually matters (a live, correctly-bounded context at acquire time), not just a name.",
+		"evidence": "services/host/lease/ordering.go: `refCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), RefAcquireTimeout)` then `rl.AcquireShared(refCtx)`, replacing the prior `rl.AcquireShared(ctx)`",
 		"changes": [
 			{
-				"file": "scripts/semantic-diff/rules/lifecycle.rules.mjs",
+				"file": "services/host/lease/ordering.go",
 				"kind": "contains",
 				"from": [
-					"const lockFileName = \"lease.lock\""
+					"if err := rl.AcquireShared(ctx); err != nil {"
 				],
 				"to": [
-					"const refsLockFileName = \"refs.lock\"",
-					"const lifecycleLockFileName = \"lifecycle.lock\""
+					"refCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), RefAcquireTimeout)",
+					"if err := rl.AcquireShared(refCtx); err != nil {"
 				]
 			}
 		]
 	},
 	{
-		"id": "ports.reserved.serve",
-		"rationale": "W2/U03B deletes host mode and the dormant broker: `serve` never launched it as a real service (BROKER_PORT was reserved but unbound in practice), and the whole slot is gone now, not just dormant. Knowledge was already retired in W1 U01a. serve.go binds only :11435 (memory) today, so the pin narrows from the historical three-port set down to the one port the supervisor actually still binds.",
-		"evidence": "commit cfd4522 (refactor(W2/U03B): delete host mode + dormant broker, retain generic plugin runtime); services/host/serve.go serveServiceAliases() returns `{\"memory\": \"memory\"}` only — the knowledge branch (W2/U03A) and the broker branch (W2/U03B) are both gone from runServe",
+		"id": "lifecycle.teardown.journal-bounded-0600",
+		"rationale": "U04f (supervisor/lifecycle reliability fixes) hardens the teardown journal's read-modify-write two ways beyond the bounded-0600-file property this pin already checked: the write itself moved from a bare os.WriteFile(tmp, ...) to writeFileAtomic (a unique per-call os.CreateTemp name, same directory, plus rename — closing the same fixed-temp-name collision surface writeFileAtomic's own doc explains), and the whole read-modify-write cycle is now serialized ACROSS PROCESSES by withTeardownJournalGuard's flock, because an orphan sweep and a session's own teardown are frequently two different pix-host invocations racing the same journal path, and a unique temp name alone only stops one writer's rename from landing half another's data — it does nothing about two readers each reading the prior lines before either has appended. Both are genuinely new invariants, not a renamed literal, so the pin's checks now cover the flock-guarded call and writeFileAtomic's unique-temp-plus-rename shape directly instead of the old inline os.WriteFile call.",
+		"evidence": "services/host/workflow/launch/reap.go: `return withTeardownJournalGuard(path, func() error { ... return writeFileAtomic(path, ..., 0o600) })`, guarded by `syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)`; services/host/workflow/launch/atomic.go: `writeFileAtomic` via `os.CreateTemp(dir, filepath.Base(path)+\".tmp-*\")` + `os.Rename(tmpPath, path)`",
 		"changes": [
 			{
-				"file": "services/host/serve.go",
+				"file": "services/host/workflow/launch/reap.go",
 				"kind": "contains",
 				"from": [
-					"env(\"MEMORY_PORT\", \"11435\")",
-					"env(\"KNOWLEDGE_PORT\", \"11436\")",
-					"env(\"BROKER_PORT\", \"11437\")"
+					"os.WriteFile(tmp, []byte(strings.Join(lines, \"\\n\")+\"\\n\"), 0o600)"
 				],
 				"to": [
-					"env(\"MEMORY_PORT\", \"11435\")"
-				]
-			}
-		]
-	},
-	{
-		"id": "config-keys.top-level.surface",
-		"rationale": "W2 U03A finishes the knowledge-service retirement: config.KnowledgeBundles (the built-in OKF knowledge service's bundle-path list) is deleted from the Config struct — an older config.toml's knowledge_bundles key is now tolerated as a retired key (config.RetiredKeys/config show/doctor), never a live field. The pin narrows to the surface that remains.",
-		"evidence": "services/host/config/config.go retiredConfigKeys[\"knowledge_bundles\"]; services/host/workflow/setup/config.go's `config set/get knowledge_bundles` refusal",
-		"changes": [
-			{
-				"file": "services/host/config/config.go",
-				"kind": "set",
-				"from": [
-					"services",
-					"mcp",
-					"memory_watcher_model",
-					"memory_embed_model",
-					"ollama_bridge_model",
-					"run_intent",
-					"inference",
-					"google_workspace_account",
-					"google_workspace_access",
-					"knowledge_bundles"
-				],
-				"to": [
-					"services",
-					"mcp",
-					"memory_watcher_model",
-					"memory_embed_model",
-					"ollama_bridge_model",
-					"run_intent",
-					"inference",
-					"google_workspace_account",
-					"google_workspace_access"
-				]
-			}
-		]
-	},
-	{
-		"id": "ports.reserved.identity",
-		"rationale": "W2 U03A finishes the knowledge-service retirement: identity.go no longer probes a :11436 knowledge service identity (there is nothing left to probe — the service, its RPC client, and its default port constant are all deleted).",
-		"evidence": "services/host/identity.go; services/host/rpc/rpc.go (KnowledgePortDefault/KnowledgeClient removed)",
-		"changes": [
-			{
-				"file": "services/host/identity.go",
-				"kind": "contains",
-				"from": [
-					"servicePort(\"MEMORY_PORT\", 11435)",
-					"servicePort(\"KNOWLEDGE_PORT\", 11436)"
-				],
-				"to": [
-					"servicePort(\"MEMORY_PORT\", 11435)"
-				]
-			}
-		]
-	},
-	{
-		"id": "ports.reserved.plugin-env-allowlist",
-		"rationale": "One pin, two retirements landing together. W2/U03A deletes the built-in knowledge service (KNOWLEDGE_PORT/PIX_KNOWLEDGE_PORT have nothing left to bind or discover, and rpc.KnowledgePortDefault is gone); W2/U03B deletes host mode and the dormant broker slot (PIX_BROKER_PORT was the var the supervisor handed a broker plugin subprocess, and there is no broker slot left to launch). Recorded as the single union transition rather than two half-steps, because the merged tree never occupies either intermediate state: memory is the only reserved port a plugin subprocess still needs.",
-		"evidence": "services/host/serve_plugin.go pluginEnvAllowlist (only MEMORY_PORT/PIX_MEMORY_PORT among the port vars); services/host/rpc/rpc.go (KnowledgePortDefault/KnowledgeClient removed); services/host/cmd/pix/hostmode_gone_test.go (sentinel: no CredentialBroker/BrokerPlugin symbol may return)",
-		"changes": [
-			{
-				"file": "services/host/serve_plugin.go",
-				"kind": "contains",
-				"region": {
-					"start": "var pluginEnvAllowlist = map[string]bool{",
-					"end": "\n}\n"
-				},
-				"from": [
-					"\"MEMORY_PORT\":",
-					"\"KNOWLEDGE_PORT\":",
-					"\"PIX_MEMORY_PORT\":",
-					"\"PIX_KNOWLEDGE_PORT\":",
-					"\"PIX_BROKER_PORT\":"
-				],
-				"to": [
-					"\"MEMORY_PORT\":",
-					"\"PIX_MEMORY_PORT\":"
-				]
-			}
-		]
-	},
-	{
-		"id": "config-keys.top-level.surface",
-		"rationale": "W2 U02B deletes the built-in `pix gworkspace setup --create-docs` wizard and the separate google-docs-create write-scoped MCP it provisioned (workflow/gworkspace, google_docs_create_plugin.go). google_workspace_access was the get-only permission profile that wizard wrote and nothing else ever read once the wizard is gone, so it drops from the top-level key surface. It lands ON TOP of the W2 U03A knowledge_bundles removal recorded above — the merged tree never occupies an intermediate state where only one of the two keys is gone — so the destination recorded here is the whole surface that remains: Services through google_workspace_account. That key is UNCHANGED: gog stays registerable the generic way every other local stdio MCP server is, via `pix mcp register` (mcp.GogHardenedArgv already bakes in --readonly/--gmail-no-send/--wrap-untrusted).",
-		"evidence": "docs/design/gworkspace-externalization.md; services/host/config/config.go (GoogleWorkspaceAccess field + SetGoogleWorkspaceAccess removed); services/host/workflow/provision/config.go (the google_workspace_access get-key case and its ConfigKeysHelp line removed — `pix config get|set` belongs to provision now, workflow/setup having been deleted by the U10b/U10c provision port)",
-		"changes": [
-			{
-				"file": "services/host/config/config.go",
-				"kind": "set",
-				"from": [
-					"services",
-					"mcp",
-					"memory_watcher_model",
-					"memory_embed_model",
-					"ollama_bridge_model",
-					"run_intent",
-					"inference",
-					"google_workspace_account",
-					"google_workspace_access"
-				],
-				"to": [
-					"services",
-					"mcp",
-					"memory_watcher_model",
-					"memory_embed_model",
-					"ollama_bridge_model",
-					"run_intent",
-					"inference",
-					"google_workspace_account"
+					"return withTeardownJournalGuard(path, func() error {",
+					"syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)",
+					"return writeFileAtomic(path, []byte(strings.Join(lines, \"\\n\")+\"\\n\"), 0o600)"
 				]
 			},
 			{
-				"file": "scripts/semantic-diff/rules/config-keys.rules.mjs",
-				"kind": "set",
-				"from": [
-					"services",
-					"mcp",
-					"memory_watcher_model",
-					"memory_embed_model",
-					"ollama_bridge_model",
-					"run_intent",
-					"inference",
-					"google_workspace_account",
-					"google_workspace_access"
-				],
-				"to": [
-					"services",
-					"mcp",
-					"memory_watcher_model",
-					"memory_embed_model",
-					"ollama_bridge_model",
-					"run_intent",
-					"inference",
-					"google_workspace_account"
-				]
-			}
-		]
-	},
-	{
-		"id": "lifecycle.rm.keep-polarity-except",
-		"rationale": "W6/U11a ports `pix rm` onto the kong root: RunRm(argv) became Rm(env, out, errOut, RmOptions), so the --all discovery loop reads the `sbx ls` output as `raw` and the keep set is the local `keep` map built from opts.Except. The pinned PROPERTY is unchanged — the loop still iterates only workspace.ParsePixBoxes (pix-* filtered) and still removes a box only when it is ABSENT from the keep set; only the two identifier spellings moved.",
-		"evidence": "services/host/workflow/launch/sandbox.go Rm(): `raw, timedOut, err := env.RunTimed(\"sbx\", \"ls\")` then `for _, b := range workspace.ParsePixBoxes(raw) { if !keep[b.Name] {`",
-		"changes": [
-			{
-				"file": "services/host/workflow/launch/sandbox.go",
+				"file": "services/host/workflow/launch/atomic.go",
 				"kind": "contains",
-				"from": [
-					"for _, b := range workspace.ParsePixBoxes(out) {",
-					"if !keepSet[b.Name] {"
-				],
+				"from": [],
 				"to": [
-					"for _, b := range workspace.ParsePixBoxes(raw) {",
-					"if !keep[b.Name] {"
+					"func writeFileAtomic(path string, data []byte, perm os.FileMode) error {",
+					"tmp, err := os.CreateTemp(dir, filepath.Base(path)+\".tmp-*\")",
+					"return os.Rename(tmpPath, path)"
 				]
-			}
-		]
-	},
-	{
-		"id": "stdio.sandbox-scope.refusal-goes-to-stderr",
-		"rationale": "Same port: Rm takes its two streams as parameters instead of writing to the process globals, which is what makes the refusal assertable in-process. The pinned PROPERTY is unchanged — the refusal goes to the ERROR stream, never to out — so the pin follows the writer: os.Stderr -> errOut, which the launcher binds to Deps.Err (os.Stderr in production).",
-		"evidence": "services/host/workflow/launch/sandbox.go Rm(env, out, errOut, opts): `fmt.Fprintf(errOut, \"refusing %q: not a pix sandbox ...\")`; cmd/pix/root.go rmCmd.Run passes d.Out, d.Err",
-		"changes": [
-			{
-				"file": "services/host/workflow/launch/sandbox.go",
-				"kind": "contains",
-				"from": [
-					"fmt.Fprintf(os.Stderr, \"refusing %q: not a pix sandbox"
-				],
-				"to": [
-					"fmt.Fprintf(errOut, \"refusing %q: not a pix sandbox"
-				]
-			}
-		]
-	},
-	{
-		"id": "argv.op-run-wrapper.exact-grammar",
-		"rationale": "W2 U09B slims pix/host/mcp: OpRunWrapPrefix existed as a named seam ONLY so doctor's UnwrapOpRun recognizer could be pinned against the same literal the generator writes. That recognizer (mcp/trust.go, mcp/registration.go) had no production caller left once the built-in Slack/gog bridge probes were retired (W2 U02a/U02B), and is deleted here — so the wrapper grammar has exactly one site again, its generator McpRegistrar.ExecArgv. The pin follows the grammar to that single site; the emitted argv is byte-identical.",
-		"evidence": "services/host/mcp/mcp.go McpRegistrar.ExecArgv emits `append([]string{m.Op, \"run\", \"--no-masking\", \"--env-file=\" + m.OpRefs, \"--\"}, cmd...)`; services/host/mcp/trust.go (UnwrapOpRun/TrustedGogSpawn/TrustedHostBinaryExecPath) and services/host/mcp/registration.go (RegisteredCommand/RecognizedArgv) deleted — test-only symbols, zero production callers",
-		"changes": [
-			{
-				"file": "services/host/mcp/mcp.go",
-				"kind": "contains",
-				"from": [
-					"return []string{op, \"run\", \"--no-masking\", \"--env-file=\" + refs, \"--\"}"
-				],
-				"to": [
-					"return append([]string{m.Op, \"run\", \"--no-masking\", \"--env-file=\" + m.OpRefs, \"--\"}, cmd...)"
-				]
-			}
-		]
-	},
-	{
-		"id": "argv.raw-add-args.no-env-flag",
-		"rationale": "W2 U09B: RawAddArgs was a separate entry point only for the retired gog-setup registration rollback, which re-registered a prior argv read back from `sbx mcp get`. With that gone its sole caller is McpRegistrar.AddArgs, so the body is inlined there. The registration argv is unchanged and still carries no `--env` form — credentials only ever arrive through the op-run wrapper.",
-		"evidence": "services/host/mcp/mcp.go McpRegistrar.AddArgs builds `[]string{\"mcp\", \"add\", name, \"--command\", argv[0]}` plus --args pairs directly; workflow/gworkspace (the only other RawAddArgs caller) was retired in W2 U02B",
-		"changes": [
-			{
-				"file": "services/host/mcp/mcp.go",
-				"kind": "region-anchor",
-				"from": [
-					"func RawAddArgs(name string, argv []string) []string {"
-				],
-				"to": [
-					"func (m McpRegistrar) AddArgs(name string) []string {"
-				]
-			}
-		]
-	},
-	{
-		"id": "permissions.op-refs.seed-mode",
-		"rationale": "U11h deletes config.Seed() and its defaultConfigTOML template as dead code: nothing in the tree seeded a commented config.toml any more (Save() owns the file, and it writes 0600 through writeFileAtomic). The config.toml seed-mode pin goes with the function it described. This pin is unchanged in SUBSTANCE — op-refs.env is still created 0600 inside a 0700 dir, and still never 0644 — only its end anchor moved, because the `// Seed writes` comment it bounded against no longer exists and SeedOpRefsAt is now the last function in the file.",
-		"evidence": "services/host/config/config.go: SeedOpRefsAt is the final declaration (O_CREATE|O_EXCL|O_WRONLY, 0o600 after MkdirAll/Chmod 0o700); config.Seed/defaultConfigTOML deleted with no remaining caller (config.Seed had zero references outside its own test)",
-		"changes": [
-			{
-				"file": "scripts/semantic-diff/rules/permissions.rules.mjs",
-				"kind": "region-anchor",
-				"from": [
-					"end: \"\\n\\n// Seed writes\""
-				],
-				"to": [
-					"region runs to end of file (SeedOpRefsAt is the last declaration)"
-				]
-			}
-		]
-	},
-	{
-		"id": "lifecycle.reaper.no-force-requires-absence",
-		"rationale": "U04d lands the reaper this pin was staged for, so the pin stops being staged: the `activation: \"story04\"` field is removed and the description moves from future tense to the shipped contract. The CONTRACT it polices is unchanged — never force, keep-absence required — and its checks still match verbatim: services/host/workflow/launch/reap.go genuinely contains both `lease.TryExclusive()` (in the safety argument its header states) and the `refusing to reap: keep is held` refusal, and contains no `\"sbx\", \"rm\", \"-f\"` anywhere.",
-		"evidence": "services/host/workflow/launch/reap.go (TeardownSandbox -> decideTeardown -> teardownUnderProof); scripts/semantic-diff/activation.json now carries the story04 key with its own rationale/evidence",
-		"changes": [
-			{
-				"file": "scripts/semantic-diff/rules/lifecycle.rules.mjs",
-				"kind": "contains",
-				"from": [
-					"activation: \"story04\""
-				],
-				"to": []
-			}
-		]
-	},
-	{
-		"id": "lifecycle.rm.bare-nontty-refusal",
-		"rationale": "U04d lands the refusal, so the pin is un-staged. The checked literal does not change (\"refusing bare `pix rm` on a non-interactive terminal\" in services/host/workflow/launch/sandbox.go); only the `activation` field and the future-tense description go.",
-		"evidence": "services/host/workflow/launch/sandbox.go: validateRmShape returns cli.Usagef(\"refusing bare `pix rm` on a non-interactive terminal: ...\") when !opts.Interactive; test: workflow/launch/reap_test.go TestRm_FlagShapeRefusals/bare-non-tty",
-		"changes": [
-			{
-				"file": "scripts/semantic-diff/rules/lifecycle.rules.mjs",
-				"kind": "contains",
-				"from": [
-					"activation: \"story04\""
-				],
-				"to": []
-			}
-		]
-	},
-	{
-		"id": "lifecycle.rm.keep-short-and-long-flag",
-		"rationale": "U04d lands the -k/--keep spelling, and the pin's CHECK moves to where the flag actually is. The pin was written expecting a hand-rolled argv switch inside workflow/launch (`case a == \"-k\", a == \"--keep\":`), but pix has exactly one parser — the kong-tagged command structs in cmd/pix — and duplicating a flag parse inside the domain purely to satisfy a literal would be a worse design than the one shipped. The invariant is preserved and tightened: the pin now checks BOTH halves of the landed flag (the `short:\"k\"` declaration and the fold of --keep/--except into RmOptions.Except), so losing either the short spelling or --keep's names still trips it, while lifecycle.rm.keep-polarity-except still owns the direction.",
-		"evidence": "services/host/cmd/pix/root.go: rmCmd.Keep declared `short:\"k\"` and folded via `Except: append(append([]string(nil), c.Keep...), c.Except...)`; services/host/workflow/launch/sandbox.go keeps the `if !keep[b.Name]` polarity",
-		"changes": [
-			{
-				"file": "scripts/semantic-diff/rules/lifecycle.rules.mjs",
-				"kind": "contains",
-				"from": [
-					"case a == \"-k\", a == \"--keep\":",
-					"activation: \"story04\""
-				],
-				"to": [
-					"short:\"k\" help:\"With --all: keep this one (repeatable).\"",
-					"append(append([]string(nil), c.Keep...), c.Except...),"
-				]
-			}
-		]
-	},
-	{
-		"id": "lifecycle.rm.force-scoped-to-explicit-seams",
-		"rationale": "U04e retires `pix run --replace`, deleting ApplyReplaceRm — the second `sbx rm -f` caller. It force-removed with NO zero-holder proof and outside the lifecycle lock, so it could destroy a sandbox another shell was live in, which is exactly what U04d's proof-gated teardown exists to prevent. The invariant the pin polices (force is reachable only from an explicit, human-typed seam) is unchanged and now STRONGER: one caller instead of two. The pin's second and third checks named the deleted seam's internals; they are replaced by the retirement-table entry, which is what makes the flag answer with the recovery path instead of silently coming back.",
-		"evidence": "services/host/workflow/launch/run.go no longer declares ApplyReplaceRm; services/host/cmd/pix/retired.go: `retiredKey(\"run\", \"--replace\"): \"pix rm BOX\"`; corpus/retirement.jsonl seq 19/20",
-		"changes": [
-			{
-				"file": "scripts/semantic-diff/rules/lifecycle.rules.mjs",
-				"kind": "contains",
-				"from": [
-					"if !plan.RmFirst {",
-					"RmFirst: replace && (state == SbxRunning || state == SbxStopped),"
-				],
-				"to": [
-					"retiredKey(\"run\", \"--replace\"):"
-				]
-			}
-		]
-	},
-	{
-		"id": "lifecycle.session.record-before-lifecycle-unlock",
-		"rationale": "U04e deletes the per-sandbox MCP receipt, so the create-time recording StartSbxRunAndRecordCreate wrapped is now the lease record/fingerprint/invocation only. The function is renamed StartSbxSession and loses the receipt parameters (ws, preloaded) and the receipt error it folded into Wait. The ORDERING the pin polices — child started and every create-time fact recorded inside AttachRefUnderLifecycle's fn, refs SHARED taken while lifecycle EX is held, child.Wait() only after — is unchanged; only the signature literal moves.",
-		"evidence": "services/host/workflow/launch/run.go: `func StartSbxSession(cmd *exec.Cmd, poll CreatePoll, creating bool, sandbox string) (*SessionChild, error) {`",
-		"changes": [
-			{
-				"file": "scripts/semantic-diff/rules/lifecycle.rules.mjs",
-				"kind": "contains",
-				"from": [
-					"func StartSbxRunAndRecordCreate(cmd *exec.Cmd, poll CreatePoll, writeReceipt bool, sandbox, ws string, preloaded []string) (*SessionChild, error) {"
-				],
-				"to": [
-					"func StartSbxSession(cmd *exec.Cmd, poll CreatePoll, creating bool, sandbox string) (*SessionChild, error) {"
-				]
-			}
-		]
-	},
-	{
-		"id": "lifecycle.session.fingerprint-mismatch-refuses-attach",
-		"rationale": "The refusal is unchanged; its recovery SENTENCE moves. With --replace retired, \"Recreate it explicitly: pix run --replace\" would name a retired flag, so the message defers to launch.RecreateGuidance(spec.Name) — the one place the two-step, proof-gated recreate is spelled. The pin now checks the refusal delegates to that helper rather than inlining a command.",
-		"evidence": "services/host/workflow/launch/session.go: `refusing to attach. %s\", ... RecreateGuidance(spec.Name))`; services/host/workflow/launch/run.go: `func RecreateGuidance(name string) string`",
-		"changes": [
-			{
-				"file": "scripts/semantic-diff/rules/lifecycle.rules.mjs",
-				"kind": "contains",
-				"from": [
-					"refusing to attach. Recreate it explicitly:"
-				],
-				"to": [
-					"refusing to attach. %s",
-					"RecreateGuidance(spec.Name)"
-				]
-			}
-		]
-	},
-	{
-		"id": "sandbox-scope.prefix.derive-name",
-		"rationale": "U04e deletes workspace.DeriveSandboxName with the receipt store that was its last real consumer. Its bare \"pix-<basename>\" had ALREADY drifted from `pix run`'s default (sandbox.Name's digest form), so setup's handoff guard and `mcp load`'s fallback were naming a sandbox nothing creates. The scope property the pin exists for — every default name is inside pix-*, which is what `pix rm` and the reaper refuse outside of — now has exactly one producer, sandbox.Name, and the pin follows it there.",
-		"evidence": "services/host/sandbox/name.go: `const Prefix = \"pix-\"` and Name()'s composition; services/host/workspace/resolve.go deleted",
-		"changes": [
-			{
-				"file": "scripts/semantic-diff/rules/sandbox-scope.rules.mjs",
-				"kind": "contains",
-				"from": [
-					"return \"pix-\" + base"
-				],
-				"to": [
-					"const Prefix = \"pix-\""
-				]
-			}
-		]
-	},
-	{
-		"id": "memory.rpc.methods.server",
-		"rationale": "U11j collapses the two implementations of the :11435 JSON-RPC surface into one. memory.go carried a 100-line method table and serve_plugin.go carried another; `serve` has run the supervised (proxy) path for every request since the memory unit became a go-plugin, so the memory.go table was a second wire contract free to drift — and it had drifted (the path in production dropped `createdAt` from promotable). The surviving table is memoryStoreMux in serve_plugin.go, expressed once over plugin.MemoryStore and used by BOTH the supervised unit and the bare `pix-host memory` daemon (newMemoryMux). The pinned method SET is unchanged; only the file and the handler shape the anchor names moved.",
-		"evidence": "services/host/serve_plugin.go func memoryStoreMux(get func() (plugin.MemoryStore, error)) http.Handler; services/host/memory.go newMemoryMux() now returns memoryStoreMux over newMemoryStoreAdapter(store, hasEmb); serve_test.go TestMemoryProxyMuxContract and memory_recall_star_test.go TestMemoryMux_RecallStar_EndToEnd both exercise the surviving surface over a real SQLite store",
-		"changes": [
-			{
-				"file": "scripts/semantic-diff/rules/memory-rpc.rules.mjs",
-				"kind": "contains",
-				"from": [
-					"region: { start: \"methods := map[string]func(jsonObj) (any, error){\", end: \"handleOne := func\" }"
-				],
-				"to": [
-					"region: { start: \"return jsonrpcMux(map[string]func(jsonObj) (any, error){\", end: \"\\n\\t})\\n}\" }"
-				]
-			}
-		]
-	},
-	{
-		"id": "memory.rpc.recall.params.server",
-		"rationale": "Same consolidation as memory.rpc.methods.server: recall's server-side handler is now the one in memoryStoreMux (serve_plugin.go). The pinned param set (query, limit, charBudget, kind, project) and the requirement that profile is routed through profileFromParams(p) are both unchanged — this entry only catches up the anchor to the handler's surviving location and signature.",
-		"evidence": "services/host/serve_plugin.go: `\"recall\": with(func(s plugin.MemoryStore, p jsonObj) (any, error) {` reads getStr(p, \"query\"), clampInt(p[\"limit\"]...), clampInt(p[\"charBudget\"]...), getStr(p, \"kind\"), getStr(p, \"project\") and Profile: profileFromParams(p)",
-		"changes": [
-			{
-				"file": "scripts/semantic-diff/rules/memory-rpc.rules.mjs",
-				"kind": "contains",
-				"from": [
-					"region: { start: '\"recall\": func(p jsonObj) (any, error) {', end: '\\n\\t\\t\"remember\":' }"
-				],
-				"to": [
-					"region: { start: '\"recall\": with(func(s plugin.MemoryStore, p jsonObj) (any, error) {', end: '\\n\\t\\t\"remember\":' }"
-				]
-			}
-		]
-	},
-	{
-		"id": "ports.reserved.plugin-env-allowlist",
-		"rationale": "The plugin env allowlist is a flat []string now instead of a map[string]bool plus a pluginEnvAllowNames() adapter that sorted it into the slice shape UnitSpec.EnvAllow actually carries — two representations of one allowlist, with the map existing only to be converted. The INVARIANT the pin polices is unchanged: MEMORY_PORT and PIX_MEMORY_PORT are still the only port variables a plugin subprocess inherits. Only the literal punctuation changes (map keys `\"MEMORY_PORT\":` become slice elements `\"MEMORY_PORT\"`).",
-		"evidence": "services/host/serve_plugin.go `var pluginEnvAllow = []string{ ... \"MEMORY_PORT\", ... \"PIX_MEMORY_PORT\" }`, passed as UnitSpec.EnvAllow in supervisor.launch; serve_test.go TestPluginEnvAllowlistStripsSecrets drives supervise.FilterEnv(pluginEnvAllow, ...)",
-		"changes": [
-			{
-				"file": "scripts/semantic-diff/rules/ports.rules.mjs",
-				"kind": "contains",
-				"from": [
-					"region: { start: \"var pluginEnvAllowlist = map[string]bool{\", end: \"\\n}\\n\" }"
-				],
-				"to": [
-					"region: { start: \"var pluginEnvAllow = []string{\", end: \"\\n}\\n\" }"
-				]
-			}
-		]
-	},
-	{
-		"id": "stdio.mcp-stdio.protocol-channel-is-stdout-only",
-		"rationale": "RETIRED, not relaxed: U11j deletes the `pix-host mcp <name>` stdio bridge and util.go's mcpStdio transport. The bridge served ZERO built-in servers (slack was externalized in W2/U02a, the google-docs-create companion retired in W2/U02B), so the dispatcher, the frame reader and the go-plugin MCP transport behind them all existed to serve an empty name set. pix-host frames no stdio protocol at all now — there is no channel left for an unframed fmt.Println to corrupt, and a pin whose file does not exist is a false guarantee. `mcp --list` survives (exit 0, empty set) because the launcher and doctor read it as the local-vs-remote source of truth and fail closed on a failed probe; it prints names, not a protocol stream. Re-pin the day a stdio server returns.",
-		"evidence": "deleted: services/host/mcp_bridge.go, services/host/util.go (mcpStdio/mcpDispatcher), services/host/examples/mcp-example, plugin.McpServer/McpPlugin and the mcp entry in plugin.PluginMap; surviving surface: services/host/main.go runMcpNames (`mcp --list` only) and mcp.LocalMCPNames' fail-closed contract",
-		"changes": [
-			{
-				"file": "scripts/semantic-diff/rules/stdio.rules.mjs",
-				"kind": "contains",
-				"from": [
-					"id: \"stdio.mcp-stdio.protocol-channel-is-stdout-only\""
-				],
-				"to": []
 			}
 		]
 	}

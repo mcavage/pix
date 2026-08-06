@@ -19,6 +19,15 @@ func realRetirementPath(t *testing.T) string {
 	return filepath.Join(".", "retirement.jsonl")
 }
 
+// realRootGoPath points at cmd/pix's own root.go — one directory up from this
+// test-only package, which deliberately does not (and, being package main,
+// cannot) import cmd/pix. TestCoverage_EveryKnownVerbHasShardOrRetirement
+// parses it directly instead of building/exec'ing the compiled binary.
+func realRootGoPath(t *testing.T) string {
+	t.Helper()
+	return filepath.Join("..", "root.go")
+}
+
 func repoRoot(t *testing.T) string {
 	t.Helper()
 	// services/host/cmd/pix/corpus -> repo root is four levels up.

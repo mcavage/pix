@@ -12,9 +12,22 @@
 //   node scripts/check-semantic-diff.mjs [--root DIR] [--base REF] [--json] [--no-git] [--activate KEY]...
 //
 // Exit 0 = every pin holds (directly or via a documented intended-change
-// manifest waiver) and no rule drifted without one. Exit 1 = a real
-// violation. This script is deliberately NOT wired into scripts/gate.sh at
-// W0 — see tests/check-semantic-diff.test.mjs, which runs it directly.
+// manifest waiver), no rule drifted vs. the base without a matching
+// intended-change entry, and no manifest entry is stale (unused by both
+// mechanisms). Exit 1 = a real violation. This script is deliberately NOT a
+// standalone scripts/gate.sh segment — tests/check-semantic-diff.test.mjs
+// runs it directly, and that test file is itself part of the timed gate's
+// `node --test tests/*.test.mjs` step.
+//
+// The rule-drift base defaults (with no --base flag) to resolveDefaultBase()
+// in scripts/semantic-diff/lib/engine.mjs: the CI-provided
+// SEMANTIC_DIFF_BASE_SHA (the PR's actual base sha, or the pre-push sha on a
+// direct push — see .github/workflows/test.yml's `gate` job), else
+// merge-base(HEAD, origin/main), else HEAD~1, else a literal "HEAD" only for
+// a brand-new single-commit repo — NEVER a bare "HEAD" when anything more
+// meaningful is available, because comparing the current rules against HEAD
+// compares them against themselves in exactly the case that matters (a
+// clean, already-committed checkout, which is every CI run).
 //
 // A pin may be STAGED (carries `activation: "<key>"`, see
 // scripts/semantic-diff/rules/lifecycle.rules.mjs) for a contract that
@@ -25,7 +38,7 @@
 
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { activationKeySet, checkRuleDrift, evaluatePins, loadActivation, loadManifest, loadRules } from "./semantic-diff/lib/engine.mjs";
+import { activationKeySet, checkRuleDrift, evaluatePins, loadActivation, loadManifest, loadRules, resolveDefaultBase, staleManifestEntries } from "./semantic-diff/lib/engine.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
@@ -34,7 +47,7 @@ const MANIFEST_PATH = path.join(__dirname, "semantic-diff", "intended-changes.js
 const ACTIVATION_PATH = path.join(__dirname, "semantic-diff", "activation.json");
 
 function parseArgs(argv) {
-	const opts = { root: REPO_ROOT, base: "HEAD", json: false, git: true, activate: [] };
+	const opts = { root: REPO_ROOT, base: null, json: false, git: true, activate: [] };
 	for (let i = 0; i < argv.length; i++) {
 		const a = argv[i];
 		if (a === "--root") opts.root = path.resolve(argv[++i]);
@@ -48,9 +61,9 @@ function parseArgs(argv) {
 	return opts;
 }
 
-function printReport(report, drift, opts) {
+function printReport(report, drift, stale, opts) {
 	if (opts.json) {
-		console.log(JSON.stringify({ ...report, drift }, null, 2));
+		console.log(JSON.stringify({ ...report, drift, staleManifestEntries: stale }, null, 2));
 		return;
 	}
 
@@ -78,8 +91,12 @@ function printReport(report, drift, opts) {
 	}
 	console.log("");
 
-	if (report.unusedManifestEntries.length) {
-		console.log(`note: unused intended-change manifest entries (no matching mismatch found): ${report.unusedManifestEntries.join(", ")}`);
+	const usedForDrift = report.unusedManifestEntries.filter((id) => !stale.includes(id));
+	if (usedForDrift.length) {
+		console.log(`note: intended-change manifest entries not needed as an evaluatePins waiver, but explaining real rule-drift this run (fine, not failing): ${usedForDrift.join(", ")}`);
+	}
+	if (stale.length) {
+		console.log(`FAIL: stale intended-change manifest entries — no matching mismatch AND no matching rule-drift vs. base (delete them): ${stale.join(", ")}`);
 	}
 
 	if (drift.skipped) {
@@ -93,7 +110,7 @@ function printReport(report, drift, opts) {
 		}
 	}
 	console.log("");
-	console.log(report.ok && drift.ok ? "semantic-diff: PASS" : "semantic-diff: FAIL");
+	console.log(report.ok && drift.ok && stale.length === 0 ? "semantic-diff: PASS" : "semantic-diff: FAIL");
 }
 
 async function main() {
@@ -109,10 +126,12 @@ async function main() {
 	const activeKeys = activationKeySet(activation);
 	for (const key of opts.activate) activeKeys.add(key);
 	const report = evaluatePins(pins, opts.root, manifest, activeKeys);
-	const drift = opts.git ? await checkRuleDrift(RULES_DIR, opts.root, opts.base, manifest) : { ok: true, skipped: true, drifted: [] };
+	const baseRef = opts.base ?? (opts.git ? resolveDefaultBase(opts.root) : "HEAD");
+	const drift = opts.git ? await checkRuleDrift(RULES_DIR, opts.root, baseRef, manifest) : { ok: true, skipped: true, drifted: [], consumedManifestIds: [] };
+	const stale = staleManifestEntries(report, drift);
 
-	printReport(report, drift, opts);
-	process.exitCode = report.ok && drift.ok ? 0 : 1;
+	printReport(report, drift, stale, opts);
+	process.exitCode = report.ok && drift.ok && stale.length === 0 ? 0 : 1;
 }
 
 main().catch((err) => {

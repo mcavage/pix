@@ -124,12 +124,12 @@ Workflow
 Setup & health
   setup            guided setup: keys, memory, pack (integrations optional)
   doctor           diagnose problems and print the exact fix commands
-  monitor [name]   live-follow a sandbox's out-of-sandbox traffic (:11437)
 
-Data & models
+Data, models & observability
   memory           recall | remember | forget | learnings | stats
   models           which models pix can use, and which are wired up
   agent            the subagent roster: each agent's resolved model, and why
+  monitor [name]   live-follow a sandbox's out-of-sandbox traffic (:11437)
 
 More             config, pack, mcp, secret, task, version   (see ` + "`pix help --all`" + `)
 
