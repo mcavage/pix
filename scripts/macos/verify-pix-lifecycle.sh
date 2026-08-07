@@ -571,8 +571,9 @@ fi
 # Keep field in it at all, so keeping BOX1 alive here cannot mask (nor fake)
 # the fingerprint-refusal check below — that refusal is exercised for real,
 # against a box that is only still around to attach to because it was kept.
-# Section [5] reuses this SAME kept box for exit-status propagation, then
-# removes it explicitly, before section [6]'s own $BOX2 is ever created.
+# Section [5] removes it explicitly (after its own, unrelated $BOX_EXIT
+# create/exit-propagation check below), before section [6]'s own $BOX2 is
+# ever created.
 head1 "[4] Launch, instance record, attach fingerprint"
 BOX1="${BOX_PREFIX}-one"
 LAUNCH1_OK=1
@@ -615,21 +616,48 @@ else
 fi
 
 # --- 5. exit-code propagation (the last shell's status is pix's status) --------
+# This MUST run against a fresh CREATE, never an attach: pix intentionally
+# REPLAYS the stored create-time invocation on attach (services/host/
+# workflow/launch/attach_argv_test.go — an attach's own new passthrough args
+# are not create-time state), so handing a new invalid flag to an attach of
+# the already-kept $BOX1 would be silently ignored BY DESIGN and would prove
+# nothing about exit-status propagation. A brand-new, uniquely named
+# sandbox/workspace ($BOX_EXIT, never referenced anywhere earlier in this
+# script) guarantees pix has never seen that name before, so this invocation
+# IS the create — the invalid flag is necessarily part of the create
+# invocation pix actually executes, and its failure must surface here.
 head1 "[5] Exit status propagation"
-(cd "$WORK/a/proj" && pix run . --name "$BOX1" -- --definitely-not-a-pi-flag) >/dev/null 2>&1
+BOX_EXIT="${BOX_PREFIX}-exit"
+mkdir -p "$WORK/exit/proj" || die "cannot create the exit-propagation workspace"
+runbox "$BOX_EXIT" "$WORK/exit/proj" -- --definitely-not-a-pi-flag >/dev/null 2>&1
 RC=$?
 if [ "$RC" -eq 0 ]; then fail "last-exit propagation" "a failing inner command produced exit 0"
 else pass "last-exit propagation (inner failure surfaced as exit $RC)"; fi
+# A non-interactive CREATE with no --keep tears itself down the instant its
+# inner command exits — a FAILING inner command included — so $BOX_EXIT
+# should already be gone with no further action. Assert that positively
+# instead of assuming it, and if it is somehow still listed (e.g. the
+# sandbox itself came up before the invalid flag made pi exit), remove it
+# explicitly so nothing from this section leaks into section [6].
+if pix ls 2>/dev/null | grep -q "$BOX_EXIT"; then
+  if pix rm "$BOX_EXIT" >/dev/null 2>&1 && ! pix ls 2>/dev/null | grep -q "$BOX_EXIT"; then
+    pass "explicit 'pix rm' removed $BOX_EXIT left behind by the failing create"
+  else
+    fail "cleanup of $BOX_EXIT" "$BOX_EXIT is still listed after 'pix rm $BOX_EXIT'"
+  fi
+else
+  pass "$BOX_EXIT was not left behind by its own failed non-interactive create"
+fi
 assert_exit 2 "bare 'pix <not-a-dir>' refuses" pix definitely-not-a-directory-"$RUN_ID"
 
 # $BOX1 was kept alive (section [4]'s --keep) purely so the record/instance-id/
-# fingerprint-refusal checks there, and the exit-propagation check just above,
-# had a live box to inspect and attach to. Every one of those inspections has
-# now run to completion, so remove it explicitly here — mirroring section
-# [7]'s "an explicit 'pix rm' still removes a kept sandbox" check — rather
-# than letting it ride to the end-of-script cleanup trap. That keeps it from
-# ever leaking into, or colliding with, section [6]'s own $BOX2, and proves
-# the explicit-rm-of-a-kept-box path a second, independent time.
+# fingerprint-refusal checks there had a live box to inspect and attach to.
+# Every one of those inspections has now run to completion, so remove it
+# explicitly here — mirroring section [7]'s "an explicit 'pix rm' still
+# removes a kept sandbox" check — rather than letting it ride to the
+# end-of-script cleanup trap. That keeps it from ever leaking into, or
+# colliding with, section [6]'s own $BOX2, and proves the
+# explicit-rm-of-a-kept-box path a second, independent time.
 if pix rm "$BOX1" >/dev/null 2>&1 && ! pix ls 2>/dev/null | grep -q "$BOX1"; then
   pass "explicit 'pix rm' removes the kept $BOX1 sandbox before section [6]"
 else

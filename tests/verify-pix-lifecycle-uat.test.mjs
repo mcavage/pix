@@ -728,16 +728,58 @@ test("section [4]'s changed-MCP fingerprint-refusal attach does NOT itself pass 
 	assert.match(attachLine[0], /--mcp definitely-not-registered/);
 });
 
-test("section [5] explicitly removes the kept $BOX1 sandbox, asserting it is gone, AFTER exit-propagation coverage and BEFORE section [6] begins", () => {
+test("section [5] runs its exit-propagation check against a FRESH $BOX_EXIT create, then explicitly removes the kept $BOX1 sandbox AFTER that coverage and BEFORE section [6] begins", () => {
 	const section5 = script.slice(script.indexOf('head1 "[5]'), script.indexOf('head1 "[6]'));
-	// Ordering within [5]: exit-propagation coverage first, explicit rm last.
-	const propagationIdx = section5.indexOf('pix run . --name "$BOX1" -- --definitely-not-a-pi-flag');
+	// Ordering within [5]: exit-propagation coverage against $BOX_EXIT first,
+	// BOX1's explicit rm last.
+	const propagationIdx = section5.indexOf('runbox "$BOX_EXIT" "$WORK/exit/proj" -- --definitely-not-a-pi-flag');
 	const rmIdx = section5.indexOf('pix rm "$BOX1"');
-	assert.ok(propagationIdx !== -1, "exit-propagation check against $BOX1 is missing from section [5]");
+	assert.ok(propagationIdx !== -1, "exit-propagation check against a fresh $BOX_EXIT is missing from section [5]");
 	assert.ok(rmIdx !== -1, "explicit 'pix rm \"$BOX1\"' is missing from section [5]");
 	assert.ok(propagationIdx < rmIdx, "BOX1 must be removed AFTER exit-propagation coverage, not before");
 	assert.match(section5, /if pix rm "\$BOX1" >\/dev\/null 2>&1 && ! pix ls 2>\/dev\/null \| grep -q "\$BOX1"; then/);
 	assert.match(section5, /pass "explicit 'pix rm' removes the kept \$BOX1 sandbox before section \[6\]"/);
+});
+
+// --- section [5]: exit-propagation must hit a CREATE, never an ATTACH ---------
+// The false test this replaces: section [5] used to run
+// `pix run . --name "$BOX1" -- --definitely-not-a-pi-flag` against the
+// ALREADY-CREATED, kept $BOX1 — an attach, not a create. pix intentionally
+// REPLAYS the stored create-time invocation on attach (services/host/
+// workflow/launch/attach_argv_test.go), so that new, invalid passthrough flag
+// was silently ignored by design: the check could only ever observe BOX1's
+// ORIGINAL (valid) create invocation's exit code, never the invalid one it
+// claimed to be testing. These tests pin that section [5] now targets a
+// brand-new, uniquely named $BOX_EXIT that pix has never seen before, so the
+// invalid flag is unavoidably part of the CREATE invocation pix executes.
+
+test("section [5] never reuses an already-created box name for exit-propagation: it creates a brand-new $BOX_EXIT via runbox, the same helper used for every other genuinely-fresh box in this script", () => {
+	const section5 = script.slice(script.indexOf('head1 "[5]'), script.indexOf('head1 "[6]'));
+	assert.match(section5, /BOX_EXIT="\$\{BOX_PREFIX\}-exit"/);
+	// The suffix is distinct from every other box this script names (-one,
+	// -multi, -keep), so it can never collide with (or be mistaken for) BOX1,
+	// BOX2, or BOX3.
+	assert.doesNotMatch(section5, /BOX_EXIT="\$\{BOX_PREFIX\}-(one|multi|keep)"/);
+	assert.match(section5, /runbox "\$BOX_EXIT" "\$WORK\/exit\/proj" -- --definitely-not-a-pi-flag/);
+	// The old attach-shaped invocation — a bare `pix run` naming the
+	// already-created $BOX1 — must be entirely gone from section [5].
+	assert.doesNotMatch(section5, /pix run \. --name "\$BOX1" -- --definitely-not-a-pi-flag/);
+});
+
+test("section [5] documents WHY it cannot reuse $BOX1: attach replays the stored create-time invocation, ignoring new passthrough flags by design", () => {
+	const section5WithComment = script.slice(script.indexOf('# --- 5. exit-code propagation'), script.indexOf('head1 "[6]'));
+	assert.match(section5WithComment, /REPLAYS the stored create-time invocation on attach/);
+	assert.match(section5WithComment, /attach_argv_test\.go/);
+	assert.match(section5WithComment, /silently ignored BY DESIGN/);
+});
+
+test("section [5] asserts $BOX_EXIT is absent after the failing create, or removes it explicitly — it never just assumes teardown happened", () => {
+	const section5 = script.slice(script.indexOf('head1 "[5]'), script.indexOf('head1 "[6]'));
+	assert.match(section5, /if pix ls 2>\/dev\/null \| grep -q "\$BOX_EXIT"; then/);
+	assert.match(section5, /if pix rm "\$BOX_EXIT" >\/dev\/null 2>&1 && ! pix ls 2>\/dev\/null \| grep -q "\$BOX_EXIT"; then/);
+	assert.match(section5, /pass "explicit 'pix rm' removed \$BOX_EXIT left behind by the failing create"/);
+	assert.match(section5, /pass "\$BOX_EXIT was not left behind by its own failed non-interactive create"/);
+	assert.match(section5, /fail "cleanup of \$BOX_EXIT" "\$BOX_EXIT is still listed/);
 });
 
 test("section [4] does not reappear inside section [6]: BOX1's explicit removal happens strictly before the [6] header, never after", () => {
@@ -764,11 +806,19 @@ function section4Through5Block() {
 
 // runSection4Through5Block — runs the ACTUAL extracted section [4]->[5] block
 // against a stub `pix` that records every invocation (command + full argv) to
-// a trace file and tracks the box's existence in a tiny state file, so this
+// a trace file and tracks BOX1's existence in a tiny state file, so this
 // proves the REAL execution order (record/fingerprint inspected before the
-// explicit rm) and the REAL end state (box gone, nothing leaked into [6]),
-// not a description of either.
-function runSection4Through5Block() {
+// explicit rm), the REAL end state (BOX1 gone, nothing leaked into [6]), and
+// that the exit-propagation invocation actually names a BRAND-NEW box
+// ($BOX_EXIT) rather than replaying an attach against BOX1 — not a
+// description of any of that. BOX_PREFIX is set for real (not text-replaced
+// after the fact), so `${BOX_PREFIX}-one` and `${BOX_PREFIX}-exit` in the
+// extracted script both expand exactly the way they do in production.
+// leftBehind controls whether the stub simulates $BOX_EXIT surviving its own
+// failed create (still listed on `pix ls` afterward) so both halves of
+// section [5]'s "assert absent, or explicitly remove it" branch run for
+// real, against the ACTUAL shipped bash, not just the common no-op case.
+function runSection4Through5Block({ leftBehind = false } = {}) {
 	const work = fs.mkdtempSync(path.join(os.tmpdir(), "pix-uat-rec2-"));
 	try {
 		const binDir = path.join(work, "bin");
@@ -776,25 +826,32 @@ function runSection4Through5Block() {
 		const stateDir = path.join(work, "state");
 		const trace = path.join(work, "trace.log");
 		const boxFlag = path.join(work, "box-exists");
+		const exitBoxFlag = path.join(work, "exit-box-exists");
 		fs.mkdirSync(binDir);
 		fs.mkdirSync(projDir, { recursive: true });
 		fs.mkdirSync(stateDir, { recursive: true });
 
-		const boxName = "pix-uat-rec2-test-one";
+		const boxPrefix = "pix-uat-rec2-test";
+		const boxName = `${boxPrefix}-one`;
+		const exitBoxName = `${boxPrefix}-exit`;
 		const recDir = path.join(stateDir, "pix", "sandboxes", boxName);
 
 		// A stub `pix` that:
-		//  - `run . --name NAME --keep -- -p '...'`      -> CREATE: writes the box's
-		//    record.json, marks it existing, exit 0 (this is BOX1's launch).
-		//  - `run . --name NAME --mcp ... -- -p hi`        -> the fingerprint-mismatch
-		//    attach: REFUSED (exit 1), box state untouched — the real gate this test
+		//  - `run . --name $BOX1 --keep -- -p '...'`         -> CREATE: writes BOX1's
+		//    record.json, marks it existing, exit 0 (BOX1's section-[4] launch).
+		//  - `run . --name $BOX1 --mcp ... -- -p hi`          -> the fingerprint-mismatch
+		//    attach: REFUSED (exit 1), BOX1's state untouched — the real gate this test
 		//    proves is exercised, independent of --keep (which never appears on this
 		//    invocation at all).
-		//  - `run . --name NAME -- --definitely-not-a-pi-flag` -> the exit-propagation
-		//    attach: box unchanged, inner command "fails" (exit 3).
-		//  - `ls`                                            -> lists the box name only
-		//    while boxFlag exists.
-		//  - `rm NAME`                                        -> removes boxFlag, exit 0.
+		//  - `run . --name $BOX_EXIT -- --definitely-not-a-pi-flag` -> the
+		//    exit-propagation CREATE of a name pix has never seen before: fails
+		//    (exit 3) and, unless leftBehind, never marks itself existing at all —
+		//    modeling the real self-teardown a non-interactive, non-kept create
+		//    does the instant its failing inner command exits.
+		//  - `ls`                                             -> lists BOX1 while
+		//    boxFlag exists, and $BOX_EXIT while exitBoxFlag exists.
+		//  - `rm NAME`                                        -> removes the matching flag,
+		//    exit 0.
 		// Every invocation is appended to trace.log as one line: "CMD|arg|arg|...".
 		const fakePix = path.join(binDir, "pix");
 		fs.writeFileSync(
@@ -812,14 +869,17 @@ function runSection4Through5Block() {
 				'    *" --mcp "*)',
 				'      echo "pix run: attach fingerprint diverged: static_mcp changed" >&2; exit 1 ;;',
 				'    *" --definitely-not-a-pi-flag "*)',
+				leftBehind ? `      touch "${exitBoxFlag}"` : "      :",
 				'      echo "unknown flag" >&2; exit 3 ;;',
 				'    *) echo "ready"; exit 0 ;;',
 				'  esac',
 				'elif [ "$1" = "ls" ]; then',
 				`  [ -f "${boxFlag}" ] && printf 'NAME\\n%s\\n' "${boxName}"`,
+				`  [ -f "${exitBoxFlag}" ] && printf '%s\\n' "${exitBoxName}"`,
 				'  exit 0',
 				'elif [ "$1" = "rm" ]; then',
-				`  rm -f "${boxFlag}"`,
+				`  [ "$2" = "${boxName}" ] && rm -f "${boxFlag}"`,
+				`  [ "$2" = "${exitBoxName}" ] && rm -f "${exitBoxFlag}"`,
 				'  exit 0',
 				'fi',
 				'exit 2',
@@ -834,43 +894,47 @@ function runSection4Through5Block() {
 			`WORK="${work}"`,
 			`XDG_STATE_HOME="${stateDir}"`,
 			`RUN_ID="rec2"`,
+			`BOX_PREFIX="${boxPrefix}"`,
 			"CREATED_BOXES=()",
 			'PASS=0; FAIL=0; SKIP=0',
 			'pass() { PASS=$((PASS+1)); printf "PASS:%s\\n" "$1"; }',
 			'fail() { FAIL=$((FAIL+1)); printf "FAIL:%s:%s\\n" "$1" "${2:-}"; }',
 			'skip() { SKIP=$((SKIP+1)); printf "SKIP:%s:%s\\n" "$1" "${2:-}"; }',
 			'head1() { :; }', // section headers between BOX1's launch and its explicit rm; not under test here
+			'die() { printf "DIE:%s\\n" "$1" >&2; exit 9; }',
 			'assert_contains() { local needle="$1" name="$2"; shift 2; local out; out="$("$@" 2>&1)"; if printf "%s" "$out" | grep -qF -- "$needle"; then pass "$name"; else fail "$name" "missing $needle"; fi; }',
 			fns,
-			section4Through5Block().replace(/\$\{BOX_PREFIX\}-one/, boxName),
+			section4Through5Block(),
 			`echo "===FINAL_LS==="`,
 			`pix ls`,
 		].join("\n");
 		const out = execFileSync("bash", ["-c", harness], { encoding: "utf8", timeout: 15000 });
-		return { out, trace: fs.readFileSync(trace, "utf8").trim().split("\n") };
+		return { out, trace: fs.readFileSync(trace, "utf8").trim().split("\n"), boxName, exitBoxName };
 	} finally {
 		fs.rmSync(work, { recursive: true, force: true });
 	}
 }
 
 test("section [4]->[5] (behavioral): the record and fingerprint-refusal checks run, in order, BEFORE BOX1's explicit removal, against the ACTUAL shipped bash", () => {
-	const { out, trace } = runSection4Through5Block();
+	const { out, trace, boxName } = runSection4Through5Block();
 	// The record was there to inspect: instance id surfaced, real refusal seen.
 	assert.match(out, /PASS:pix run launched pix-uat-rec2-test-one non-interactively/);
 	assert.match(out, /PASS:lease record carries an instance id \(iid-99\)/);
 	assert.match(out, /PASS:attach fingerprint gate refused a changed MCP set/);
 	assert.match(out, /PASS:last-exit propagation \(inner failure surfaced as exit 3\)/);
+	assert.match(out, /PASS:pix-uat-rec2-test-exit was not left behind by its own failed non-interactive create/);
 	assert.match(out, /PASS:explicit 'pix rm' removes the kept pix-uat-rec2-test-one sandbox before section \[6\]/);
 	assert.doesNotMatch(out, /FAIL:/);
 
-	// Order of REAL invocations pix actually received: create, then ls, then the
-	// fingerprint-mismatch attach (refused), then the exit-propagation attach,
-	// then — and only then — the explicit rm. The record/fingerprint inspection
-	// happens strictly before removal, never interleaved or reversed.
+	// Order of REAL invocations pix actually received: BOX1's create, then ls,
+	// then the fingerprint-mismatch attach (refused), then the exit-propagation
+	// CREATE against $BOX_EXIT, then — and only then — BOX1's explicit rm. The
+	// record/fingerprint inspection happens strictly before removal, never
+	// interleaved or reversed.
 	const createIdx = trace.findIndex((l) => l.includes("--keep") && l.includes("print the single word ready"));
 	const fingerprintIdx = trace.findIndex((l) => l.includes("--mcp"));
 	const propagationIdx = trace.findIndex((l) => l.includes("--definitely-not-a-pi-flag"));
-	const rmIdx = trace.findIndex((l) => l.startsWith("rm "));
+	const rmIdx = trace.findIndex((l) => l.startsWith("rm " + boxName));
 	assert.ok(createIdx !== -1 && fingerprintIdx !== -1 && propagationIdx !== -1 && rmIdx !== -1, `missing an expected invocation in trace: ${trace.join(" | ")}`);
 	assert.ok(createIdx < fingerprintIdx, "the box must be created before the fingerprint-mismatch attach is even attempted");
 	assert.ok(fingerprintIdx < rmIdx, "the fingerprint check must run BEFORE the explicit rm, not after");
@@ -881,10 +945,43 @@ test("section [4]->[5] (behavioral): the record and fingerprint-refusal checks r
 	// --keep flag BOX1 was originally created with.
 	assert.doesNotMatch(trace[fingerprintIdx], /--keep/);
 
-	// No leak: pix ls after the explicit rm reports the box gone, same as [6]
-	// will see it when it starts.
+	// No leak: pix ls after BOX1's explicit rm reports it gone, same as [6]
+	// will see it when it starts. $BOX_EXIT never appears at all — it was never
+	// left behind by its own failing create.
 	const finalLsSection = out.slice(out.indexOf("===FINAL_LS==="));
 	assert.doesNotMatch(finalLsSection, /pix-uat-rec2-test-one/);
+	assert.doesNotMatch(finalLsSection, /pix-uat-rec2-test-exit/);
+});
+
+test("section [4]->[5] (behavioral): the exit-propagation invocation names a box pix has NEVER SEEN BEFORE in this run — proof no attach path is used, since an attach requires a name pix already created", () => {
+	const { trace, boxName, exitBoxName } = runSection4Through5Block();
+	const propagationLine = trace.find((l) => l.includes("--definitely-not-a-pi-flag"));
+	assert.ok(propagationLine, `no exit-propagation invocation found in trace: ${trace.join(" | ")}`);
+	// It targets $BOX_EXIT, never the already-created $BOX1.
+	assert.match(propagationLine, new RegExp(`--name ${exitBoxName}\\b`));
+	assert.doesNotMatch(propagationLine, new RegExp(`--name ${boxName}\\b`));
+	// And that name never appeared in ANY earlier invocation this run made —
+	// the structural guarantee that this call is necessarily pix's first-ever
+	// encounter with it, so pix's own create/attach decision (based on sbx
+	// state, not on argv content) can only resolve it as a CREATE.
+	const propagationIdx = trace.indexOf(propagationLine);
+	const priorLines = trace.slice(0, propagationIdx);
+	assert.ok(
+		!priorLines.some((l) => l.includes(exitBoxName)),
+		`$BOX_EXIT's name (${exitBoxName}) appeared in an earlier invocation, which would make this an attach, not a create: ${priorLines.join(" | ")}`,
+	);
+});
+
+test("section [4]->[5] (behavioral): when the failing create somehow leaves $BOX_EXIT listed, section [5] explicitly removes it rather than assuming teardown happened", () => {
+	const { out, trace, exitBoxName } = runSection4Through5Block({ leftBehind: true });
+	assert.match(out, /PASS:last-exit propagation \(inner failure surfaced as exit 3\)/);
+	assert.match(out, new RegExp(`PASS:explicit 'pix rm' removed ${exitBoxName} left behind by the failing create`));
+	assert.doesNotMatch(out, /FAIL:/);
+	// The fallback rm was actually invoked against $BOX_EXIT specifically.
+	assert.ok(trace.some((l) => l === `rm ${exitBoxName}`), `expected an 'rm ${exitBoxName}' invocation in trace: ${trace.join(" | ")}`);
+	// And it is gone from the final listing, same as the common no-op case.
+	const finalLsSection = out.slice(out.indexOf("===FINAL_LS==="));
+	assert.doesNotMatch(finalLsSection, new RegExp(exitBoxName));
 });
 
 // --- multi-shell FIFO holds: behavioral proof -----------------------------
