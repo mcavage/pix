@@ -139,8 +139,17 @@ func setupSteps(cfg *config.Config, env hostenv.Env, opts Opts, out io.Writer) [
 		Probe: health.LaunchdProbe{Label: service.LaunchdLabel, UID: os.Getuid()},
 		Apply: func(context.Context) error { return installLaunchd(out) },
 	}, {
-		Name:  "pack",
-		Probe: health.PackProbe{Root: packinfo.Resolve(cfg, "").Path},
+		Name: "pack",
+		// Resolve, not a static Root: the pack step's own Apply (packApply, below)
+		// mutates the config on disk through a SEPARATE config.Load() (pack
+		// adoption is a trust decision this package may not perform, so it hands
+		// off to the injected adopter, which loads and saves its own *Config).
+		// That write never reaches the cfg pointer captured here, so a probe that
+		// resolved the root once at THIS call would still see the pre-adoption
+		// root on the second check even though the pack was adopted. Reloading
+		// fresh on every Check is what makes the second check see what the apply
+		// actually wrote.
+		Probe: health.PackProbe{Resolve: func() string { return currentPackRoot() }},
 		Apply: packApply(env, opts, out),
 	}, {
 		Name:  "models",
@@ -157,6 +166,18 @@ func setupSteps(cfg *config.Config, env hostenv.Env, opts Opts, out io.Writer) [
 		Probe: health.ProviderKeyProbe{Bin: "sbx", Args: []string{"secret", "ls"},
 			Want: providerKeyEnvVars(), AnyOf: true},
 	}}
+}
+
+// currentPackRoot re-derives the active pack root from a FRESH config.Load(),
+// never the cfg loaded once at the top of RunSetup: PackApply's own adoption
+// saves a different *Config to disk, so only a reload sees it. An unreadable
+// config resolves to "" (no active pack) rather than panicking a probe.
+func currentPackRoot() string {
+	c, err := config.Load()
+	if err != nil {
+		return ""
+	}
+	return packinfo.Resolve(c, "").Path
 }
 
 // packApply is the `--pack` step, and it is deliberately thin: with no --pack it
