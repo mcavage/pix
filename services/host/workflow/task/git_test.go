@@ -14,21 +14,89 @@ import (
 	"testing"
 )
 
-func mustRun(t *testing.T, dir string, args ...string) string {
-	t.Helper()
-	cmd := exec.Command("git", args...)
+// gitArgs builds a git invocation with commit signing forced off via -c,
+// the highest-precedence config source git has (it overrides every config
+// file, global or system). Every fixture git command in this file runs
+// through here so none of it depends on — or can be derailed by — the
+// host's own gitconfig: a global commit.gpgsign=true with no usable signing
+// key would otherwise hang on a passphrase prompt or fail outright, on a
+// dev box or a CI runner alike. Production git.go's own `run`/`runIn` are
+// untouched: they never issue `git commit`, so this only ever shapes what
+// these tests do, never real git behavior for a real user.
+func gitArgs(dir string, args ...string) []string {
+	full := []string{"-c", "commit.gpgsign=false"}
 	if dir != "" {
-		cmd.Args = append([]string{"git", "-C", dir}, args...)
+		full = append(full, "-C", dir)
 	}
-	cmd.Env = append(os.Environ(),
-		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t.test",
-		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t.test",
-	)
+	return append(full, args...)
+}
+
+// mustRunEnv is mustRun with an explicit environment, factored out so
+// TestMustRunSigningOverride_SurvivesPoisonedGlobalConfig can drive the exact
+// same signing-override code path against a deliberately hostile HOME,
+// instead of re-implementing (and risking drifting from) the real one.
+func mustRunEnv(t *testing.T, env []string, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", gitArgs(dir, args...)...)
+	cmd.Env = env
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
 	}
 	return string(out)
+}
+
+func mustRun(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	env := append(os.Environ(),
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t.test",
+		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t.test",
+	)
+	return mustRunEnv(t, env, dir, args...)
+}
+
+// TestMustRunSigningOverride_SurvivesPoisonedGlobalConfig is the regression
+// for the fix above: it proves the -c commit.gpgsign=false baked into every
+// mustRun call actually wins over an inherited GLOBAL gitconfig, not merely
+// over a machine that happens to have no signing configured (which would
+// never catch a regression that quietly dropped the override). HOME points
+// at a throwaway dir whose .gitconfig demands commit.gpgsign=true with a
+// gpg.program that cannot possibly run (a path that does not exist). -c on
+// the command line outranks every config file, so the commit below must
+// still succeed; if the override in gitArgs ever regresses, this test hangs
+// or fails instead.
+func TestMustRunSigningOverride_SurvivesPoisonedGlobalConfig(t *testing.T) {
+	poisonedHome := t.TempDir()
+	poisoned := "[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = /nonexistent/pix-test-gpg-does-not-exist\n"
+	if err := os.WriteFile(filepath.Join(poisonedHome, ".gitconfig"), []byte(poisoned), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Strip any inherited HOME/GNUPGHOME/GIT_CONFIG_GLOBAL: the poisoned HOME
+	// above must be the ONLY source of global git config for this process, or
+	// a leftover real value earlier in the slice could shadow it.
+	var env []string
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "HOME=") || strings.HasPrefix(kv, "GIT_CONFIG_GLOBAL=") || strings.HasPrefix(kv, "GNUPGHOME=") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	env = append(env, "HOME="+poisonedHome,
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t.test",
+		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t.test",
+	)
+
+	dir := t.TempDir()
+	mustRunEnv(t, env, "", "init", "-q", "-b", "main", dir)
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustRunEnv(t, env, dir, "add", ".")
+	// The regression this catches: without the -c override, this commit would
+	// try to run the poisoned gpg.program above and fail (or hang on a
+	// passphrase prompt) instead of succeeding.
+	mustRunEnv(t, env, dir, "commit", "-q", "-m", "init")
 }
 
 // newMainroot creates a fresh repo with one commit and returns its

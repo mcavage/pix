@@ -214,6 +214,15 @@ func TestLaunchGateRefusesOnlyAPositiveNoKey(t *testing.T) {
 	// almost instantly, so this only needs to be far larger than any real
 	// exec + pipe-read overhead, never a value this table is trying to prove.
 	const testKeyProbeBudget = 10 * time.Second
+	// testKeyProbeParentDeadline is the test's OWN parent context deadline,
+	// deliberately generous and independent of testKeyProbeBudget above: a
+	// tight 3s parent used to sit UNDER a 10s budget and silently cap every
+	// case's effective timeout to 3s regardless of the constant this table is
+	// meant to exercise, so a slow (not hung) subprocess spawn on a loaded
+	// runner could still read as a timeout. Sized well above the budget so
+	// the budget itself, not this deadline, governs the fixtures below —
+	// which all exit in milliseconds anyway.
+	const testKeyProbeParentDeadline = 30 * time.Second
 	for _, tc := range []struct {
 		name       string
 		body       string
@@ -226,7 +235,7 @@ func TestLaunchGateRefusesOnlyAPositiveNoKey(t *testing.T) {
 		{"store refuses", "#!/bin/sh\necho 'permission denied' >&2\nexit 1\n", false, health.StatusUnknown},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), testKeyProbeParentDeadline)
 			defer cancel()
 			r := launch.ProbeModelKeysBudget(ctx, testKeyProbeBudget, keyStore(t, "keystore", tc.body), "secret", "ls")
 			if got := r.Effective(); got != tc.wantStatus {
