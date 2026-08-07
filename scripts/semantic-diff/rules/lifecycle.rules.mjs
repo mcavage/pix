@@ -42,12 +42,12 @@ export default [
 	{
 		id: "lifecycle.rm.force-scoped-to-explicit-seams",
 		description:
-			"`sbx rm -f` fires in exactly ONE seam, and it is explicit: RemovePixSandbox, reachable only from a named `pix rm --force`. U04e deleted the second one (ApplyReplaceRm, gated on --replace): it removed with no zero-holder proof and outside the lifecycle lock, so it could destroy a sandbox another shell was live in. AGENTS.md safety invariant #7 now depends on there being no other caller.",
+			"`sbx rm -f` fires in exactly ONE seam, and it is explicit: RemovePixSandbox, reachable only from a named `pix rm --force`. U04e deleted the second one (ApplyReplaceRm, gated on --replace): it removed with no zero-holder proof and outside the lifecycle lock, so it could destroy a sandbox another shell was live in. AGENTS.md safety invariant #7 now depends on there being no other caller. sbx v0.38 (docs/upstream/sbx-0.38-noninteractive-rm.md) made `-f` a confirmation bypass every non-interactive removal needs, so RemovePixSandbox now composes it through the SAME shared planner (sandbox.PlanForceRemove) every other forced-argv caller uses — still the ONE seam, just no longer a literal argv this file hand-rolls.",
 		checks: [
 			{
 				file: "services/host/workflow/launch/sandbox.go",
 				kind: "contains",
-				values: ['env.Run("sbx", "rm", "-f", name)'],
+				values: ["argv, err := sandbox.PlanForceRemove(name)", 'env.Run("sbx", argv...)'],
 			},
 			{
 				// The retired flag must stay retired: a table entry is what makes

@@ -53,6 +53,19 @@ to skip the zero-reference proof is to name one sandbox explicitly with
 `--force`. `pix rm` only ever touches `pix-*` names; it cannot reach a sandbox
 it did not create.
 
+**`--force` is a confirmation bypass, not an authority bypass (sbx v0.38).**
+A bare `sbx rm` now prompts for confirmation and refuses outright with no TTY
+attached, and every removal pix-host performs is non-interactive — so the
+WIRE call to sbx now carries `-f` even for the automatic reaper and the
+orphan sweep, which are gated on the zero-reference proof, not on a human's
+`--force`. `sandbox.PlanForceRemove` composes that `-f` argv through the same
+pix-* scope/name-safety check `PlanRemove` uses, and is reached ONLY from a
+path that already holds one of the two authorizations above (the proof, or
+an explicitly-named intent with no lease state left to prove against) —
+never as a substitute for either. The one seam that actually skips the
+proof itself remains exactly what it always was: a human typing
+`pix rm NAME --force`. See `docs/upstream/sbx-0.38-noninteractive-rm.md`.
+
 **No automated wipe.** `reset`/`state reset` are retired. Recovery from a
 broken host-side config or data directory is manual and evidence-first: run
 `pix doctor` to name the exact gap, back up whatever `pix config path` /

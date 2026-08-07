@@ -39,9 +39,11 @@ func fastTeardown(t *testing.T) TeardownOptions {
 }
 
 // removableFixture is an sbx that lists one running, schema-verified sandbox
-// until a plain (NON-FORCE) `rm` removes it. A forced rm is a deliberate
-// FAILURE here: if any teardown path ever passes -f, these tests break rather
-// than silently accepting it.
+// until `rm -f` removes it. It models sbx v0.38: a BARE `rm` (no `-f`) is a
+// deliberate FAILURE here, standing in for sbx's own non-interactive
+// confirmation refusal — if any teardown path here ever plans a bare rm
+// instead of routing through sandbox.PlanForceRemove, these tests break
+// rather than silently accepting it.
 const removableFixture = `
 d="$(dirname "$0")"
 echo "$@" >> "$d/argv.log"
@@ -56,8 +58,8 @@ ls)
 	exit 0
 	;;
 rm)
-	if [ "$2" = "-f" ]; then
-		echo "fixture: refusing a forced removal" >&2
+	if [ "$2" != "-f" ]; then
+		echo "fixture: sbx v0.38 refuses a bare rm with no TTY attached; pass --force to skip confirmation" >&2
 		exit 3
 	fi
 	touch "$d/removed"
@@ -133,6 +135,22 @@ func assertLeaseStateCleared(t *testing.T, dir string) {
 	}
 }
 
+// assertSawRmArgv fails unless exactly one `rm`-prefixed call reached fixture,
+// and it was exactly want — tolerant of the ls probes around it, which is
+// what makes this safe to reuse across every removal-path test in this file.
+func assertSawRmArgv(t *testing.T, fixture, want string) {
+	t.Helper()
+	var rmCalls []string
+	for _, l := range argvLines(t, fixture) {
+		if strings.HasPrefix(l, "rm") {
+			rmCalls = append(rmCalls, l)
+		}
+	}
+	if len(rmCalls) != 1 || rmCalls[0] != want {
+		t.Errorf("rm calls = %v, want exactly one call: %q", rmCalls, want)
+	}
+}
+
 // journalOf reads the JSONL journal the test itself pinned: one entry per line,
 // oldest first, a line that does not decode SKIPPED — a journal is evidence, and
 // one corrupt tail line must not hide the other 199.
@@ -172,11 +190,15 @@ func lastVerdict(t *testing.T, opts TeardownOptions) TeardownJournalEntry {
 	return entries[len(entries)-1]
 }
 
-// TestTeardown_RemovesWithoutForceAndClearsState is the happy path end to end:
-// a fully recorded session whose instance still matches is removed with a
-// PLAIN `sbx rm`, the absence is confirmed, and every piece of state a future
-// create/attach/reaper would read is gone.
-func TestTeardown_RemovesWithoutForceAndClearsState(t *testing.T) {
+// TestTeardown_RemovesUnderProofAndClearsState is the happy path end to end:
+// a fully recorded session whose instance still matches is removed, its
+// absence confirmed, and every piece of state a future create/attach/reaper
+// would read is gone. The wire argv carries `-f` (sbx v0.38 refuses a bare,
+// non-interactive `rm` outright — see removableFixture), but that is a
+// confirmation bypass ONLY: pix's own authorization for reaching this argv at
+// all is the zero-holder reference proof this test's fixture proves ran,
+// not the -f flag itself.
+func TestTeardown_RemovesUnderProofAndClearsState(t *testing.T) {
 	isolateState(t)
 	fixture := installFakeSbx(t, removableFixture)
 	key := "pix-demo"
@@ -192,8 +214,8 @@ func TestTeardown_RemovesWithoutForceAndClearsState(t *testing.T) {
 	for _, l := range argv {
 		if strings.HasPrefix(l, "rm") {
 			sawRm = true
-			if l != "rm pix-demo" {
-				t.Errorf("removal argv = %q, want exactly %q (never -f)", l, "rm pix-demo")
+			if l != "rm -f pix-demo" {
+				t.Errorf("removal argv = %q, want exactly %q (sandbox.PlanForceRemove's shape)", l, "rm -f pix-demo")
 			}
 		}
 	}
@@ -244,7 +266,11 @@ func TestTeardown_KeepIsHeld(t *testing.T) {
 
 // TestTeardown_ExplicitRmIgnoresAKeptZeroLeaseBox: a keep stops the automatic
 // reaper, not the operator. An explicitly named `pix rm` on a KEPT box with
-// zero references removes it — without force.
+// zero references removes it — still gated on the zero-reference proof (this
+// box has lease state, so TryReapProof still runs), never pix's OWN --force
+// bypass. The wire argv carries `-f` regardless (sbx v0.38's confirmation
+// skip), so the assertion here is on the VERDICT and on the proof having run,
+// not on the literal absence of "-f".
 func TestTeardown_ExplicitRmIgnoresAKeptZeroLeaseBox(t *testing.T) {
 	isolateState(t)
 	fixture := installFakeSbx(t, removableFixture)
@@ -257,10 +283,17 @@ func TestTeardown_ExplicitRmIgnoresAKeptZeroLeaseBox(t *testing.T) {
 	if res.Verdict != TeardownRemoved {
 		t.Fatalf("verdict = %q (%s), want %q", res.Verdict, res.Detail, TeardownRemoved)
 	}
+	var sawRm bool
 	for _, l := range argvLines(t, fixture) {
-		if strings.Contains(l, "-f") {
-			t.Fatalf("an explicit non-force rm used force: %q", l)
+		if strings.HasPrefix(l, "rm") {
+			sawRm = true
+			if l != "rm -f pix-demo" {
+				t.Errorf("removal argv = %q, want exactly %q", l, "rm -f pix-demo")
+			}
 		}
+	}
+	if !sawRm {
+		t.Fatal("no rm reached sbx")
 	}
 }
 
@@ -629,7 +662,12 @@ ls)
 	fi
 	exit 0
 	;;
-rm) touch "$d/removed"; exit 0 ;;
+rm)
+	if [ "$2" != "-f" ]; then
+		echo "fixture: sbx v0.38 refuses a bare rm with no TTY attached" >&2
+		exit 3
+	fi
+	touch "$d/removed"; exit 0 ;;
 esac
 exit 0
 `)
@@ -693,9 +731,15 @@ func TestRm_FlagShapeRefusals(t *testing.T) {
 	}
 }
 
-// TestRm_NamedNonForceRemovesAndForceIsTheOnlyForcedSeam: the default named
-// path never forces; --force is the one seam that does.
-func TestRm_NamedNonForceRemovesAndForceIsTheOnlyForcedSeam(t *testing.T) {
+// TestRm_NamedNonForceRequiresProofButForceBypassesIt: sbx v0.38 puts `-f` on
+// the wire for BOTH the default named path and the explicit --force seam —
+// that is the confirmation bypass sbx now demands from every non-interactive
+// caller (see removableFixture), not evidence of which path pix itself
+// decided is safe. The real distinction lives entirely in pix's OWN gate: the
+// default path still enforces the zero-holder reference proof (a held
+// reference refuses it outright), while --force (RemovePixSandbox) is the
+// ONE seam that skips that proof and removes regardless.
+func TestRm_NamedNonForceRequiresProofButForceBypassesIt(t *testing.T) {
 	isolateState(t)
 	fixture := installFakeSbx(t, removableFixture)
 	seedRecordedSession(t, "pix-demo", "inst-1")
@@ -706,22 +750,35 @@ func TestRm_NamedNonForceRemovesAndForceIsTheOnlyForcedSeam(t *testing.T) {
 	if !strings.Contains(out.String(), "removed pix-demo") {
 		t.Errorf("stdout = %q, want it to report the removal", out.String())
 	}
-	for _, l := range argvLines(t, fixture) {
-		if strings.Contains(l, "-f") {
-			t.Fatalf("the default named path forced a removal: %q", l)
-		}
+	assertSawRmArgv(t, fixture, "rm -f pix-demo")
+
+	// A held reference still refuses the default (non-force) path outright:
+	// pix's own zero-holder proof, not sbx's confirmation flag, is what
+	// decides this.
+	isolateState(t)
+	fixture2 := installFakeSbx(t, removableFixture)
+	leaseDir := seedRecordedSession(t, "pix-demo", "inst-1")
+	_, stdin := startRefHolder(t, leaseDir)
+	out.Reset()
+	errOut.Reset()
+	err := Rm(realEnv(), &out, &errOut, RmOptions{Names: []string{"pix-demo"}, Interactive: true, Teardown: fastTeardown(t)})
+	if err == nil || !strings.Contains(errOut.String(), "pass --force to remove it anyway") {
+		t.Fatalf("Rm with a held reference = %v (stderr %q), want a refusal naming --force", err, errOut.String())
+	}
+	if _, serr := os.Stat(filepath.Join(fixture2, "removed")); serr == nil {
+		t.Fatal("a held reference did not stop the default (non-force) path from removing the sandbox")
 	}
 
-	// The forced seam: a fixture that ONLY accepts -f proves --force really is
-	// the forced call, not a relabelled non-force one.
-	isolateState(t)
-	forceOnly := installFakeSbx(t, "d=\"$(dirname \"$0\")\"\necho \"$@\" >> \"$d/argv.log\"\n[ \"$1\" = \"rm\" ] && { [ \"$2\" = \"-f\" ] || exit 9; }\nexit 0\n")
+	// --force is the ONE seam that bypasses that proof: the SAME held
+	// reference does not stop it.
 	out.Reset()
 	errOut.Reset()
 	if err := Rm(realEnv(), &out, &errOut, RmOptions{Names: []string{"pix-demo"}, Force: true, Interactive: true, Teardown: fastTeardown(t)}); err != nil {
 		t.Fatalf("Rm --force: %v (stderr %q)", err, errOut.String())
 	}
-	if got := argvLines(t, forceOnly); len(got) == 0 || got[0] != "rm -f pix-demo" {
-		t.Errorf("forced argv = %v, want [rm -f pix-demo]", got)
+	assertSawRmArgv(t, fixture2, "rm -f pix-demo")
+	if _, serr := os.Stat(filepath.Join(fixture2, "removed")); serr != nil {
+		t.Fatalf("--force did not remove the sandbox despite the held reference: %v", serr)
 	}
+	fmt.Fprintln(stdin, "release")
 }

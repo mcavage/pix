@@ -56,3 +56,58 @@ func TestPlanRemove_RefusesOverlongName(t *testing.T) {
 		t.Fatalf("PlanRemove(overlong name) = nil error, want one")
 	}
 }
+
+func TestPlanForceRemove_ValidPixName(t *testing.T) {
+	argv, err := PlanForceRemove("pix-demo")
+	if err != nil {
+		t.Fatalf("PlanForceRemove: %v", err)
+	}
+	if want := []string{"rm", "-f", "pix-demo"}; !reflect.DeepEqual(argv, want) {
+		t.Fatalf("PlanForceRemove = %v, want %v", argv, want)
+	}
+}
+
+// TestPlanForceRemove_SharesExactScopeWithPlanRemove proves the two planners
+// cannot diverge on WHAT they will remove — only on whether they pass `-f` —
+// by running every PlanRemove refusal fixture through PlanForceRemove too.
+func TestPlanForceRemove_SharesExactScopeWithPlanRemove(t *testing.T) {
+	cases := []string{
+		"",
+		"some-other-box",
+		"pix-" + "; rm -rf /",
+		"pix-foo/../bar",
+		"pix-foo bar",
+		"pix-$(whoami)",
+		"pix-" + strings.Repeat("a", MaxNameLen),
+	}
+	for _, name := range cases {
+		_, wantErr := PlanRemove(name)
+		_, gotErr := PlanForceRemove(name)
+		if (wantErr == nil) != (gotErr == nil) {
+			t.Errorf("PlanRemove(%q) err=%v, PlanForceRemove(%q) err=%v — the two planners disagree on scope", name, wantErr, name, gotErr)
+		}
+	}
+}
+
+func TestPlanForceRemove_RefusesOutOfScopeName(t *testing.T) {
+	_, err := PlanForceRemove("some-other-box")
+	if err == nil {
+		t.Fatalf("PlanForceRemove(non pix-* name) = nil error, want one")
+	}
+	if !strings.Contains(err.Error(), "namespace") {
+		t.Fatalf("error = %v, want it to mention the namespace scope refusal", err)
+	}
+}
+
+func TestPlanForceRemove_RefusesUnsafeCharacters(t *testing.T) {
+	for _, bad := range []string{
+		"pix-" + "; rm -rf /",
+		"pix-foo/../bar",
+		"pix-foo bar",
+		"pix-$(whoami)",
+	} {
+		if _, err := PlanForceRemove(bad); err == nil {
+			t.Fatalf("PlanForceRemove(%q) = nil error, want one (unsafe characters)", bad)
+		}
+	}
+}

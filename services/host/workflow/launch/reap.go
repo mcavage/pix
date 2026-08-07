@@ -7,17 +7,29 @@
 //	refs EX, both NON-BLOCKING: zero live references, no transition in flight)
 //	->  under that proof: a valid creation record, fingerprint and invocation;
 //	the SAME immutable instance id re-probed from the runtime; no valid
-//	identity-bound keep; a pix-* name this domain owns  ->  a NON-FORCE
-//	`sbx rm <name>` (bounded)  ->  a POSITIVE absent probe  ->  only then is the
+//	identity-bound keep; a pix-* name this domain owns  ->  a bounded
+//	`sbx rm -f <name>`  ->  a POSITIVE absent probe  ->  only then is the
 //	lease/keep/fingerprint/invocation state cleared.
 //
 // Every weaker answer — a held reference, a held keep, an untrusted probe, an
 // instance id that no longer matches the record, a name outside pix-* — KEEPS
-// the sandbox and journals why. There is no `sbx rm -f` in this file at all:
-// only lease.TryExclusive()'s kernel-verified zero-holder proof (via
-// lease.TryReapProof) authorizes destroying sandbox state, and force is reserved
-// for an explicitly-named `pix rm --force` typed by a human (sandbox.go's
-// RemovePixSandbox).
+// the sandbox and journals why.
+//
+// WHY `-f` APPEARS IN THIS FILE AT ALL (sbx v0.38): a bare `sbx rm` now
+// prompts for confirmation and refuses outright with no TTY attached, and
+// every call here runs from a non-interactive pix-host subprocess. `-f` is
+// therefore composed via sandbox.PlanForceRemove purely to skip a prompt
+// nobody here could ever answer — it is a TRANSPORT bypass of sbx's
+// confirmation, not an authority bypass of pix's own gate. The authority
+// gate is unchanged and is exactly what it always was: lease.TryExclusive()'s
+// kernel-verified zero-holder proof (via lease.TryReapProof) for the
+// automatic teardown and the orphan sweep, or — when there is no lease state
+// left to prove a reference against at all — an explicitly, individually
+// named removal intent with nothing else to check. Neither ever widens to a
+// wildcard or to a name outside pix-*. The ONE seam that skips the
+// zero-holder proof itself (not merely sbx's confirmation prompt) remains an
+// explicitly-named `pix rm --force` typed by a human (sandbox.go's
+// RemovePixSandbox, routed through the SAME sandbox.PlanForceRemove).
 //
 // A proven teardown clears the session's state COMPLETELY, directory included.
 // That only works while this domain owns every file in the lease directory:
@@ -174,8 +186,14 @@ func kept(v TeardownVerdict, format string, a ...any) TeardownResult {
 func decideTeardown(env hostenv.Env, key, name string, trigger TeardownTrigger, o TeardownOptions) TeardownResult {
 	deadline := o.Now().Add(o.Budget)
 
-	// pix-* scope FIRST, and through the planner that composes the argv:
-	rmArgv, perr := sandbox.PlanRemove(name)
+	// pix-* scope FIRST, and through the planner that composes the argv. This
+	// plans a FORCE removal (sandbox.PlanForceRemove) so the argv skips sbx
+	// v0.38's non-interactive confirmation refusal — see the file header for
+	// why that is a transport bypass, not an authority one: every path that
+	// reaches removeAndConfirm below has already cleared this domain's OWN
+	// gate (zero-holder proof, or an explicit individually-named intent with
+	// no lease state left to prove against) before rmArgv is ever run.
+	rmArgv, perr := sandbox.PlanForceRemove(name)
 	if perr != nil {
 		return kept(TeardownKeptUnowned, "%v", perr)
 	}
@@ -275,7 +293,7 @@ func removeAndConfirm(env hostenv.Env, dir, name string, rmArgv []string, o Tear
 			break
 		}
 		if probeStateWithin(env, name, within) == SbxAbsent {
-			return clearedResult(TeardownRemoved, dir, name, "removed %q (no force) and confirmed it is gone", name)
+			return clearedResult(TeardownRemoved, dir, name, "removed %q (pix's own zero-reference/explicit-intent gate, not sbx's -f) and confirmed it is gone", name)
 		}
 	}
 	return TeardownResult{Verdict: TeardownFailed, Detail: fmt.Sprintf("`sbx %s` reported success but %q was never confirmed absent within %d probes; its state is retained", strings.Join(rmArgv, " "), name, o.ProbeRetries+1)}

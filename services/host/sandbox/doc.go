@@ -17,8 +17,13 @@
 //     guess when List's parse could not verify identity or state.
 //   - fingerprint.go — comparing a STORED fingerprint (recorded at creation)
 //     against a freshly computed one and reporting which named keys diverged.
-//   - remove.go      — planning a NON-FORCE removal (`rm`, no `-f`), scoped to
-//     names in this package's own pix-* namespace.
+//   - remove.go      — planning a removal, scoped to names in this package's
+//     own pix-* namespace: PlanRemove (`rm`, no `-f`) and PlanForceRemove
+//     (`rm -f`) share the exact same scope/name-safety check, so neither argv
+//     shape can be handed a name the other would refuse. PlanForceRemove's
+//     `-f` is a transport detail (sbx v0.38 refuses a bare, non-interactive
+//     `rm` outright), never a widened authority — see its doc comment for
+//     the two proofs a caller must already hold before reaching for it.
 //
 // # What this package deliberately is NOT
 //

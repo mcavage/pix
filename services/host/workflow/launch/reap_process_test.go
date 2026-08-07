@@ -36,9 +36,11 @@ import (
 )
 
 // teardownFixture is the session fixture with a REMOVABLE sandbox: `run`
-// creates and keeps the session alive until released, `ls` reports it until a
-// PLAIN `rm` removes it, and a FORCED rm fails loudly — so any teardown path
-// that ever reached for -f fails these tests instead of passing quietly.
+// creates and keeps the session alive until released, `ls` reports it until
+// `rm -f` removes it. It models sbx v0.38: a BARE `rm` (no `-f`) fails loudly
+// here — standing in for sbx's own non-interactive confirmation refusal — so
+// any teardown path that ever plans a bare rm instead of routing through
+// sandbox.PlanForceRemove fails these tests instead of passing quietly.
 const teardownFixture = `
 d="$(dirname "$0")"
 echo "$@" >> "$d/argv.log"
@@ -61,8 +63,8 @@ run)
 	exit 0
 	;;
 rm)
-	if [ "$2" = "-f" ]; then
-		echo "fixture: refusing a forced removal" >&2
+	if [ "$2" != "-f" ]; then
+		echo "fixture: sbx v0.38 refuses a bare rm with no TTY attached; pass --force to skip confirmation" >&2
 		exit 3
 	fi
 	touch "$d/removed"
@@ -188,10 +190,21 @@ func TestRunSession_LastShellOut_KeptWhileAnotherProcessHoldsARef(t *testing.T) 
 	if res.Verdict != TeardownRemoved {
 		t.Fatalf("after the last reference left, verdict = %q (%s), want %q", res.Verdict, res.Detail, TeardownRemoved)
 	}
+	// The wire argv carries `-f` (sbx v0.38's confirmation skip, planned via
+	// sandbox.PlanForceRemove), but pix's OWN authorization for reaching this
+	// argv at all is exactly the zero-holder proof this test just exercised —
+	// the reaper never had, and never needed, pix's own --force bypass.
+	var sawRm bool
 	for _, l := range sbxArgv(t, fixture) {
-		if strings.Contains(l, "-f") {
-			t.Fatalf("the reaper forced a removal: %q", l)
+		if strings.HasPrefix(l, "rm") {
+			sawRm = true
+			if l != "rm -f pix-demo" {
+				t.Fatalf("removal argv = %q, want exactly %q", l, "rm -f pix-demo")
+			}
 		}
+	}
+	if !sawRm {
+		t.Fatal("no rm reached sbx after the last reference left")
 	}
 	assertLeaseStateCleared(t, leaseDir)
 }
