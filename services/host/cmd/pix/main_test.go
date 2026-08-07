@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"pix/host/packinfo"
+	"pix/host/sys/systest"
 	"slices"
 	"strings"
 	"testing"
@@ -386,7 +387,10 @@ func TestAllPreloadedMCP(t *testing.T) {
 // per-integration `static` field — every pack integration's MCP server is now
 // in the preload set unconditionally. A --pack OVERRIDE (never `pack use`d, so
 // its integration is not yet in cfg.MCP) still gets folded in, in memory only,
-// for this launch.
+// for this launch. The partition is pinned KNOWN with neither name local, so
+// both integrations are reference-only Tier-0 and no acceptance is required;
+// an UNKNOWN partition now fails closed at launch too (see
+// TestLaunchTrust_UnknownMCPPartitionFailsClosedAtLaunch).
 func TestApplyPackToLaunch_IntegrationMCPAlwaysPreloaded(t *testing.T) {
 	dir := t.TempDir()
 	root := filepath.Join(dir, "override-pack")
@@ -406,8 +410,12 @@ func TestApplyPackToLaunch_IntegrationMCPAlwaysPreloaded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// KNOWN, empty local set: both MCP names are gateway references (Tier-0).
+	env := hostenv.Env{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
+		return "", nil
+	}}, HostBinary: func() (string, error) { return "pix-host", nil }}
 	o := launch.RunOpts{Pack: root}
-	if _, err := packApplyForTest(cfg, &o, fakeGitEnv(nil), io.Discard); err != nil {
+	if _, err := packApplyForTest(cfg, &o, env, io.Discard); err != nil {
 		t.Fatalf("launch.ApplyPackToLaunch: %v", err)
 	}
 	if !slices.Contains(cfg.MCP, "fastmail") || !slices.Contains(cfg.MCP, "notion") {

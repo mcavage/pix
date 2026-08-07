@@ -91,23 +91,30 @@ func (b hostBoM) Tier1() bool {
 	return len(b.MCP) > 0 || len(b.Containers) > 0 || len(b.RemoteMCP) > 0 || len(b.Proxies) > 0 || len(b.Bins) > 0 || len(b.Setup) > 0 || len(b.Inference) > 0 || len(b.Services) > 0
 }
 
-// VerifyPackInferenceTrust closes the adoption-to-launch gap for
-// credential-routing inference: a pack stays mutable after `pack use`, so
-// before a sandbox consumes its endpoint/service/header policy, recompute the
-// surface and require an exact launcher-owned trust-store match.
-func VerifyPackInferenceTrust(p *packinfo.Info, cfgGogAccount string, env hostenv.Env) error {
+// VerifyPackLaunchTrust closes the adoption-to-launch gap for EVERY mutable
+// Tier-1 surface, not only credential-routing inference: a pack stays mutable
+// after `pack use`, so before a launch consumes ANY of its host-exec
+// contributions (host MCP argv, containers, remote MCP endpoints, host=true
+// [[proxy]] scripts, [[bin]] pins, [[setup]] hooks, [[services]] units, or
+// inference endpoint/service/header policy), recompute the COMPLETE host-exec
+// fingerprint and require an exact launcher-owned trust-store match. Tier-0
+// (skills / knowledge / sandbox-only wrappers / reference-only integrations)
+// passes with no store lookup, exactly as adoption promised. Nothing here
+// executes pack code: setup hooks and wrapper scripts are only HASHED
+// (hashHostExecFile), never run.
+func VerifyPackLaunchTrust(p *packinfo.Info, cfgGogAccount string, env hostenv.Env) error {
 	if p == nil {
 		return nil
 	}
 	bom := ComputeHostBoM(p, cfgGogAccount, LocalMCPClassifier(env, env.HostBinary))
-	if len(bom.Inference) == 0 {
-		return nil
+	if !bom.Tier1() {
+		return nil // Tier-0: no host-exec surface, nothing to re-verify
 	}
 	fp, _, err := ComputeHostExecFingerprint(p.Root, bom)
 	if err != nil {
-		return fmt.Errorf("pack %s inference trust surface: %w", p.Manifest.Name, err)
+		return fmt.Errorf("pack %s host-exec trust surface: %w", p.Manifest.Name, err)
 	}
-	return requireAcceptedFingerprint(p, fp, "inference credential routing")
+	return requireAcceptedFingerprint(p, fp, "host-exec surfaces")
 }
 
 // LocalMCPClassifier resolves the registrar's local-vs-gateway partition into a
