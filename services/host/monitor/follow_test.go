@@ -228,6 +228,115 @@ func TestFollowSurvivesStoresOwnTrimWithoutDropOrDuplicate(t *testing.T) {
 	}
 }
 
+// rawUnknownLineExceedingRawCap returns a WELL-FORMED NDJSON line (valid
+// JSON, unrecognized "kind") whose length exceeds decodeUnknown's raw cap
+// (maxFieldBytes*4). Decode succeeds — the probe unmarshal sees the whole
+// valid line before any truncation happens — but decodeUnknown then copies
+// only the first maxRaw bytes into the returned UnknownEvent's Raw field,
+// slicing it mid-string. UnknownEvent.MarshalJSON returns Raw verbatim, so
+// re-Encode-ing that decoded event feeds encoding/json bytes that are no
+// longer valid JSON, and Marshal errors. This is a real, reproducible way
+// for a stored event to decode fine and then fail Encode on the way back
+// out — not a synthetic type built just to break the interface.
+func rawUnknownLineExceedingRawCap(seq uint64) []byte {
+	blob := strings.Repeat("A", maxFieldBytes*4+8192)
+	return []byte(fmt.Sprintf(
+		`{"kind":"future_kind","sandboxId":"sbx","sessionId":"sess","turnId":"t1","seq":%d,"ts":1700000000000,"blob":"%s"}`,
+		seq, blob))
+}
+
+// writeStreamFile overwrites a stream file with exactly these already-wire
+// lines, one per line, bypassing the store entirely — the low-level
+// counterpart of writeRawEvents for a line this package could never Encode
+// in the first place (see rawUnknownLineExceedingRawCap above).
+func writeStreamFile(t *testing.T, path string, lines ...[]byte) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	var buf bytes.Buffer
+	for _, l := range lines {
+		buf.Write(l)
+		buf.WriteByte('\n')
+	}
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		t.Fatalf("WriteFile %s: %v", path, err)
+	}
+}
+
+// TestEmitNewNeverEmptiesCursorOrDuplicatesAfterAnUnencodableEvent is the
+// direct, non-timing-dependent regression for the cursor bug: emitNew used
+// to anchor on lines[len(lines)-1] unconditionally, so a stream whose
+// newest decoded event fails Encode (see rawUnknownLineExceedingRawCap)
+// set cursors[dir] = "". An empty anchor can never re-match a real line on
+// the next poll, so the anchor search below falls back to start=0 — a full
+// re-print of everything already emitted. The fix anchors on the LAST
+// SUCCESSFULLY encoded line instead. Exercised across two direct emitNew
+// calls (not Follow's poll loop) so the assertion is deterministic: no
+// sleep, no timeout, no goroutine race with the writer.
+func TestEmitNewNeverEmptiesCursorOrDuplicatesAfterAnUnencodableEvent(t *testing.T) {
+	store := newTestStore(t, StoreConfig{})
+	file := streamFile(store, "sbx", "sess")
+
+	before, err := Encode(redact(toolEvent("sbx", "sess", "before", 1)))
+	if err != nil {
+		t.Fatalf("Encode(before): %v", err)
+	}
+	bad := rawUnknownLineExceedingRawCap(2)
+
+	// Sanity-check the fixture actually reproduces the shape the fix must
+	// tolerate: decodes fine, re-encoding what decoded fails.
+	decodedBad, err := Decode(bad)
+	if err != nil {
+		t.Fatalf("Decode(bad) = %v, want the oversized-but-well-formed line to decode successfully", err)
+	}
+	if _, err := Encode(decodedBad); err == nil {
+		t.Fatal("Encode(decoded bad line) = nil error, want the truncated Raw to be unencodable")
+	}
+
+	writeStreamFile(t, file, before, bad)
+
+	cursors := map[string]string{}
+	var buf lockedBuffer
+	cfg := FollowConfig{JSON: true, Out: &buf}
+	if err := emitNew(store, cfg, cursors); err != nil {
+		t.Fatalf("emitNew (poll 1): %v", err)
+	}
+
+	dir := filepath.Dir(file)
+	if got, ok := cursors[dir]; !ok || got == "" {
+		t.Fatalf("cursor after poll 1 = %q (present=%v), want the last successfully encoded line, never empty", got, ok)
+	}
+	if n := strings.Count(buf.String(), `"resultSummary":"before"`); n != 1 {
+		t.Fatalf(`poll 1 printed "before" %d times, want exactly 1 (out=%q)`, n, buf.String())
+	}
+
+	// Poll 2: the same unencodable line is still there (nothing trimmed it),
+	// and one more valid event lands after it. It must be emitted exactly
+	// once, and "before" must not be re-emitted now that the anchor sits
+	// behind an event this package can never re-locate by content.
+	after, err := Encode(redact(toolEvent("sbx", "sess", "after", 3)))
+	if err != nil {
+		t.Fatalf("Encode(after): %v", err)
+	}
+	writeStreamFile(t, file, before, bad, after)
+
+	if err := emitNew(store, cfg, cursors); err != nil {
+		t.Fatalf("emitNew (poll 2): %v", err)
+	}
+
+	out := buf.String()
+	if n := strings.Count(out, `"resultSummary":"before"`); n != 1 {
+		t.Errorf(`"before" printed %d times across two polls, want exactly 1 (no duplicate) (out=%q)`, n, out)
+	}
+	if n := strings.Count(out, `"resultSummary":"after"`); n != 1 {
+		t.Errorf(`"after" printed %d times across two polls, want exactly 1 (no drop) (out=%q)`, n, out)
+	}
+	if got, ok := cursors[dir]; !ok || got == "" {
+		t.Errorf("cursor after poll 2 = %q (present=%v), want the last successfully encoded line, never empty", got, ok)
+	}
+}
+
 func TestHumanBytes(t *testing.T) {
 	cases := map[int64]string{0: "0B", 512: "512B", 1024: "1.0KB", 1536: "1.5KB", 5 << 20: "5.0MB"}
 	for n, want := range cases {
