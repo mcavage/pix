@@ -49,18 +49,35 @@ type CreatePoll struct {
 	// Interval is the gap between probes; Timeout bounds the whole poll.
 	Interval time.Duration
 	Timeout  time.Duration
+	// PostExitSettle bounds a SEPARATE, short poll that runs only after the
+	// child has already exited with no error and the poll's own Probe has
+	// not yet reported it appeared (see settleAfterExit). Zero means "use
+	// SbxCreatePollPostExitSettle": it is test-injectable, but production
+	// callers get the default without setting it.
+	PostExitSettle time.Duration
 }
 
 const (
 	SbxCreatePollInterval = 500 * time.Millisecond
 	SbxCreatePollTimeout  = 15 * time.Minute
+	// SbxCreatePollPostExitSettle bounds how long StartSbxSession keeps
+	// probing for the create receipt AFTER `sbx run` has already exited
+	// successfully. A fast, successful create can exit before the FIRST
+	// poll tick (500ms); sbx v0.38 may then publish the now-stopped sandbox
+	// into `sbx ls` a beat later. Without this settle window, the single
+	// immediate probe taken at exit sees nothing, Appeared stays false, the
+	// caller never records/keeps the lease, and the sandbox it just created
+	// gets torn down out from under it. Deliberately far short of the full
+	// create Timeout: this is a settle window, not another create wait.
+	SbxCreatePollPostExitSettle = 10 * time.Second
 )
 
 func SbxCreatePoll(env hostenv.Env) CreatePoll {
 	return CreatePoll{
-		Probe:    func(name string) SbxState { return ProbeTaskSandbox(env, name) },
-		Interval: SbxCreatePollInterval,
-		Timeout:  SbxCreatePollTimeout,
+		Probe:          func(name string) SbxState { return ProbeTaskSandbox(env, name) },
+		Interval:       SbxCreatePollInterval,
+		Timeout:        SbxCreatePollTimeout,
+		PostExitSettle: SbxCreatePollPostExitSettle,
 	}
 }
 
@@ -145,12 +162,48 @@ func StartSbxSession(cmd *exec.Cmd, poll CreatePoll, creating bool, sandbox stri
 		}
 		select {
 		case werr := <-child.waitCh:
+			// Preserve the child's exit result exactly as observed, regardless
+			// of whatever settling the receipt still needs below.
 			child.drained, child.exitErr = true, werr
-			if werr == nil && sandboxAppeared(poll.Probe(sandbox)) {
-				child.Appeared = true
+			if werr == nil {
+				child.Appeared = settleAfterExit(poll, sandbox)
 			}
 			return child, nil
 		case <-ticker.C:
+		}
+	}
+}
+
+// settleAfterExit is the fix for the fast-create race: `sbx run` can exit
+// (successfully) before this function's caller ever ticks, and sbx v0.38 may
+// not have published the now-stopped sandbox into `sbx ls` yet at that exact
+// instant. Rather than trust the single immediate probe taken at exit, it
+// keeps polling on the SAME cadence for a short, bounded settle window —
+// production ~10s, never the full 15-minute create Timeout — and reports
+// whatever it last saw. A child that never appears within the settle window
+// genuinely didn't create anything; the caller's own no-record/no-keep/
+// teardown path is correct for that case, just not for a receipt that was
+// merely running a few hundred milliseconds behind.
+func settleAfterExit(poll CreatePoll, sandbox string) bool {
+	if sandboxAppeared(poll.Probe(sandbox)) {
+		return true
+	}
+	settle := poll.PostExitSettle
+	if settle <= 0 {
+		settle = SbxCreatePollPostExitSettle
+	}
+	deadline := time.NewTimer(settle)
+	defer deadline.Stop()
+	ticker := time.NewTicker(poll.Interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-deadline.C:
+			return false
+		case <-ticker.C:
+			if sandboxAppeared(poll.Probe(sandbox)) {
+				return true
+			}
 		}
 	}
 }
