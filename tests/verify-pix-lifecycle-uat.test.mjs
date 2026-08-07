@@ -48,7 +48,19 @@ test("shellcheck reports no ERROR-severity findings, when shellcheck is availabl
 
 test("the OAuth pass authorizes each shipped catalog server individually, asserting its own exit code", () => {
 	assert.match(script, /assert_exit 0 "pix mcp auth \$s completed" pix mcp auth "\$s"/);
-	assert.match(script, /for s in notion atlassian granola; do\n\s*assert_exit 0 "pix mcp auth \$s completed"/);
+	// The loop iterates the GAP set (AUTH_GAPS), not the fixed three names
+	// unconditionally — a server doctor already certifies is never re-run
+	// through `pix mcp auth`.
+	assert.match(script, /for s in "\$\{AUTH_GAPS\[@\]\}"; do\n\s*assert_exit 0 "pix mcp auth \$s completed"/);
+});
+
+test("OAuth auth is gated on current doctor evidence BEFORE forcing any browser flow: an already registered+authenticated server is never re-authorized", () => {
+	const oauthSection = script.slice(script.indexOf("[9] External OAuth"));
+	assert.match(oauthSection, /PRE_AUTH_DOCTOR="\$\(pix doctor --json/);
+	assert.match(oauthSection, /AUTH_GAPS=\(\)/);
+	assert.match(oauthSection, /AUTH_GAPS\+=\("\$s"\)/);
+	assert.match(oauthSection, /if \[ "\$\{#AUTH_GAPS\[@\]\}" -eq 0 \]; then/);
+	assert.match(oauthSection, /pass "no OAuth gaps: notion\/atlassian\/granola are already registered\+authenticated \(pix doctor --json evidence\) — no browser flow invoked"/);
 });
 
 test("the OAuth pass never sweeps in every registered server via --all (an unrelated 8th server must not fail this release check)", () => {
@@ -151,6 +163,32 @@ test("every background wait is bounded, so a wedged pix run cannot hang the whol
 	assert.doesNotMatch(multiShell, /\bwait \$SH2\b/);
 	assert.match(multiShell, /bounded_wait "\$SH1" 60/);
 	assert.match(multiShell, /bounded_wait "\$SH2" 60/);
+});
+
+test("multi-shell readiness windows are bounded appropriately for a COLD post-load image pull (180s create / 90s attach by default), not the old flat 30s", () => {
+	assert.match(script, /UAT_CREATE_WAIT_SECS="\$\{UAT_CREATE_WAIT_SECS:-180\}"/);
+	assert.match(script, /UAT_ATTACH_WAIT_SECS="\$\{UAT_ATTACH_WAIT_SECS:-90\}"/);
+	// Both windows are overridable via env (never a hardcoded magic number that
+	// could regress below what a real cold pull needs, and never an untestable
+	// constant a test harness cannot shrink).
+	assert.match(script, /UAT_POLL_INTERVAL="\$\{UAT_POLL_INTERVAL:-1\}"/);
+});
+
+test("the assert_box_listed/assert_box_not_listed wrappers use the same cold-pull CREATE window, not a smaller magic number that could expire before creation finishes", () => {
+	const fnListed = extractFn("assert_box_listed");
+	const fnNotListed = extractFn("assert_box_not_listed");
+	assert.match(fnListed, /bounded_wait_listed "\$name" "\$UAT_CREATE_WAIT_SECS"/);
+	assert.match(fnNotListed, /bounded_wait_absent "\$name" "\$UAT_CREATE_WAIT_SECS"/);
+	assert.doesNotMatch(fnListed, /bounded_wait_listed "\$name" 15/);
+	assert.doesNotMatch(fnNotListed, /bounded_wait_absent "\$name" 15/);
+});
+
+test("every bounded_wait_* poll loop sleeps an injectable interval (UAT_POLL_INTERVAL), not a hardcoded 'sleep 1', so a test harness can shrink real wall time without editing the script", () => {
+	for (const name of ["bounded_wait", "bounded_wait_listed", "bounded_wait_attach_log", "bounded_wait_absent"]) {
+		const fn = extractFn(name);
+		assert.match(fn, /sleep "\$UAT_POLL_INTERVAL"/, `${name} does not sleep the injectable poll interval`);
+		assert.doesNotMatch(fn, /sleep 1\n/, `${name} still has a hardcoded 'sleep 1'`);
+	}
 });
 
 test("the snapshot secret scan does not pass vacuously when units[] is empty in a service-enabled run", () => {
@@ -787,6 +825,12 @@ test("multi-shell FIFO holds (behavioral): two real background sessions stay ali
 			// bounded poll, this would FAIL every run, not flake occasionally.
 			'export CREATE_DELAY="1"',
 			'export ATTACH_DELAY="1"',
+			// Same real values (1s poll, 30s bound) the OLD hardcoded call sites
+			// used, now injected explicitly so this test's semantics do not
+			// silently change now that the script reads them from the env.
+			'export UAT_CREATE_WAIT_SECS="30"',
+			'export UAT_ATTACH_WAIT_SECS="30"',
+			'export UAT_POLL_INTERVAL="1"',
 			"HOLD_PIDS=()",
 			'die() { printf "DIE:%s\\n" "$1" >&2; exit 9; }',
 			'pass() { printf "PASS:%s\\n" "$1"; }',
@@ -811,6 +855,73 @@ test("multi-shell FIFO holds (behavioral): two real background sessions stay ali
 			const n = fs.readFileSync(path.join(markDir, f), "utf8").trim();
 			assert.strictEqual(n, "0", `hold FIFO ${f} received ${n} byte(s), want 0 — nothing may ever cross a hold pipe`);
 		}
+	} finally {
+		fs.rmSync(work, { recursive: true, force: true });
+	}
+});
+
+test("multi-shell FIFO holds (behavioral): readiness needing MORE than 30 polls still succeeds under the cold-pull windows (180s create / 90s attach), proven via shrunk injectable poll-interval/window constants rather than real minutes of sleep", () => {
+	// The OLD script hardcoded a flat 30 at both call sites (30 polls at a real
+	// 1s interval = 30s), which a cold post-`make load` image pull can exceed.
+	// This proves the FIX (injectable UAT_CREATE_WAIT_SECS/UAT_ATTACH_WAIT_SECS,
+	// each polling at an injectable UAT_POLL_INTERVAL) genuinely survives
+	// readiness that needs well over 30 polling iterations, without the Node
+	// suite actually spending 30+ real seconds per assertion: shrink the poll
+	// interval so >30 iterations cost a fraction of a real second, while the
+	// iteration COUNT still exceeds the old bound.
+	const work = fs.mkdtempSync(path.join(os.tmpdir(), "pix-uat-fifo-coldpull-"));
+	try {
+		const binDir = path.join(work, "bin");
+		const markDir = path.join(work, "marks");
+		const projDir = path.join(work, "b", "proj");
+		fs.mkdirSync(binDir);
+		fs.mkdirSync(markDir);
+		fs.mkdirSync(projDir, { recursive: true });
+		writeFakeMultiShellPix(binDir);
+
+		const harness = [
+			`PATH="${binDir}:$PATH"`,
+			`export MARK_DIR="${markDir}"`,
+			`WORK="${work}"`,
+			'export BOX2="test-box2-coldpull"',
+			// Real per-poll delay before each readiness marker appears, tuned
+			// against the shrunk UAT_POLL_INTERVAL below so BOTH waits need
+			// roughly 45 polling iterations to succeed — comfortably more than
+			// the OLD hardcoded 30-iteration bound would ever have tolerated.
+			'export CREATE_DELAY="0.9"',
+			'export ATTACH_DELAY="0.9"',
+			// Shrunk injectable constants: the same knobs production's default
+			// 180s-create/90s-attach windows (at a real 1s poll interval) use,
+			// scaled down together so the >30-iteration proof above takes a
+			// fraction of a real second instead of real minutes.
+			'export UAT_POLL_INTERVAL="0.02"',
+			'export UAT_CREATE_WAIT_SECS="60"',
+			'export UAT_ATTACH_WAIT_SECS="60"',
+			"HOLD_PIDS=()",
+			'die() { printf "DIE:%s\\n" "$1" >&2; exit 9; }',
+			'pass() { printf "PASS:%s\\n" "$1"; }',
+			'fail() { printf "FAIL:%s:%s\\n" "$1" "${2:-}"; }',
+			"head1() { :; }",
+			"newbox() { :; }",
+			multiShellHelperFns,
+			multiShellSectionBlock(),
+		].join("\n");
+
+		const startedAt = Date.now();
+		const out = execFileSync("bash", ["-c", harness], { encoding: "utf8", timeout: 45000 });
+		const elapsedMs = Date.now() - startedAt;
+
+		assert.match(out, /PASS:test-box2-coldpull observed via pix ls --json after the first shell's FIFO connected/);
+		assert.match(out, /PASS:test-box2-coldpull's second shell observably attached \(log evidence \+ live process\)/);
+		assert.match(out, /PASS:test-box2-coldpull is up with two shells attached/);
+		assert.match(out, /PASS:sandbox survives the FIRST shell leaving/);
+		assert.match(out, /PASS:teardown on last shell exit/);
+		assert.doesNotMatch(out, /FAIL:/);
+		// The whole point: readiness that needed far more than 30 polls still
+		// finishes in well under a real minute (in practice under a couple of
+		// real seconds), proving the shrunk constants — not a real 30-180s wait —
+		// are what keeps this test fast.
+		assert.ok(elapsedMs < 20000, `expected the shrunk-constant run to stay fast, took ${elapsedMs}ms`);
 	} finally {
 		fs.rmSync(work, { recursive: true, force: true });
 	}
@@ -845,12 +956,108 @@ test("multi-shell FIFO holds (behavioral): a create that never gets listed withi
 		const fns = [extractFn("ls_json_lists"), extractFn("bounded_wait_listed")].join("\n");
 		// bounded_wait_listed's own default is 30s; a dedicated short-bound test
 		// keeps this fast without editing the real function.
-		const harness = [`PATH="${binDir}:$PATH"`, `TMPDIR="${work}"`, fns, 'bounded_wait_listed "never-created-box" 2; echo "RC=$?"'].join("\n");
+		const harness = [`PATH="${binDir}:$PATH"`, `TMPDIR="${work}"`, `UAT_POLL_INTERVAL="0.01"`, fns, 'bounded_wait_listed "never-created-box" 2; echo "RC=$?"'].join("\n");
 		const out = execFileSync("bash", ["-c", harness], { encoding: "utf8", timeout: 15000 });
 		assert.match(out, /RC=1/, "a genuinely never-listed box must time out (rc 1), not hang and not report an ls failure (rc 2)");
 	} finally {
 		fs.rmSync(work, { recursive: true, force: true });
 	}
+});
+
+// --- OAuth: doctor evidence gates auth BEFORE forcing a browser flow --------
+// extractAuthGapsBlock — the literal PRE_AUTH_DOCTOR/AUTH_GAPS block plus the
+// if/else that either PASSes with zero `pix mcp auth` invocations or
+// authorizes only the gap set, so the behavioral tests below run the ACTUAL
+// shipped logic, not a reimplementation of it.
+function extractAuthGapsBlock() {
+	const startMarker = 'PRE_AUTH_DOCTOR="$(pix doctor --json';
+	const start = script.indexOf(startMarker);
+	assert.ok(start !== -1, "could not find the PRE_AUTH_DOCTOR/AUTH_GAPS block");
+	const endMarker = 'assert_exit 0 "pix mcp auth $s completed" pix mcp auth "$s"\n    done\n  fi';
+	const end = script.indexOf(endMarker, start);
+	assert.ok(end !== -1, "could not find the end of the PRE_AUTH_DOCTOR/AUTH_GAPS block");
+	return script.slice(start, end + endMarker.length);
+}
+
+// runAuthGapsBlock DOCTOR_JSON — runs the extracted block under a stub `pix`
+// that records every `mcp auth <name>` invocation it receives (one file per
+// call, in order), so the test can assert exactly which servers were (and
+// were not) sent through a browser flow.
+function runAuthGapsBlock(doctorJson) {
+	const work = fs.mkdtempSync(path.join(os.tmpdir(), "pix-uat-authgaps-"));
+	try {
+		const binDir = path.join(work, "bin");
+		fs.mkdirSync(binDir);
+		const callLog = path.join(work, "auth-calls.log");
+		const fakePix = path.join(binDir, "pix");
+		fs.writeFileSync(
+			fakePix,
+			[
+				"#!/bin/sh",
+				'if [ "$1 $2" = "doctor --json" ]; then',
+				'  printf "%s" "$DOCTOR_JSON"',
+				"  exit 0",
+				'elif [ "$1 $2" = "mcp auth" ]; then',
+				`  printf '%s\\n' "$3" >> "${callLog}"`,
+				"  exit 0",
+				"fi",
+				"exit 1",
+				"",
+			].join("\n"),
+			{ mode: 0o755 },
+		);
+		const block = extractAuthGapsBlock();
+		const harness = [
+			`PATH="${binDir}:$PATH"`,
+			"set -uo pipefail",
+			'pass() { printf "PASS:%s\\n" "$1"; }',
+			'fail() { printf "FAIL:%s:%s\\n" "$1" "${2:-}"; }',
+			'assert_exit() { local want="$1" name="$2"; shift 2; local out; out="$("$@" 2>&1)"; local got=$?; if [ "$got" = "$want" ]; then pass "$name (exit $got)"; else fail "$name" "wanted exit $want, got $got"; fi; }',
+			block,
+		].join("\n");
+		const out = execFileSync("bash", ["-c", harness], {
+			encoding: "utf8",
+			env: { ...process.env, DOCTOR_JSON: doctorJson },
+		});
+		const calls = fs.existsSync(callLog)
+			? fs.readFileSync(callLog, "utf8").trim().split("\n").filter(Boolean)
+			: [];
+		return { out, calls };
+	} finally {
+		fs.rmSync(work, { recursive: true, force: true });
+	}
+}
+
+test("OAuth auth gate (behavioral): all three already registered+authenticated per doctor evidence PASSes with ZERO `pix mcp auth` invocations", () => {
+	const doctorJson =
+		"notion: registered (host registration; attachment to a live session is not checkable from here); " +
+		"atlassian: registered (host registration; attachment to a live session is not checkable from here); " +
+		"granola: registered (host registration; attachment to a live session is not checkable from here)";
+	const { out, calls } = runAuthGapsBlock(doctorJson);
+	assert.match(out, /PASS:no OAuth gaps: notion\/atlassian\/granola are already registered\+authenticated/);
+	assert.doesNotMatch(out, /FAIL:/);
+	assert.deepStrictEqual(calls, [], "pix mcp auth must never be invoked when every server is already registered+authenticated");
+});
+
+test("OAuth auth gate (behavioral): only the servers with a real gap are authorized, individually — an already-authenticated server is skipped", () => {
+	const doctorJson =
+		"notion: registered (host registration; attachment to a live session is not checkable from here); " +
+		"atlassian: not registered; " +
+		"granola: registered, not authenticated";
+	const { out, calls } = runAuthGapsBlock(doctorJson);
+	assert.doesNotMatch(out, /PASS:no OAuth gaps/);
+	assert.match(out, /PASS:pix mcp auth atlassian completed/);
+	assert.match(out, /PASS:pix mcp auth granola completed/);
+	assert.doesNotMatch(out, /pix mcp auth notion completed/);
+	assert.doesNotMatch(out, /FAIL:/);
+	assert.deepStrictEqual(calls.sort(), ["atlassian", "granola"], "only the gap servers should ever be sent through pix mcp auth, and notion (already authenticated) must never be one of them");
+});
+
+test("OAuth auth gate (behavioral): a totally empty doctor payload treats every server as a gap and authorizes all three (never silently skips an unclassifiable server)", () => {
+	const { out, calls } = runAuthGapsBlock("");
+	assert.doesNotMatch(out, /PASS:no OAuth gaps/);
+	assert.doesNotMatch(out, /FAIL:/);
+	assert.deepStrictEqual(calls.sort(), ["atlassian", "granola", "notion"]);
 });
 
 // --- ls_json_lists / bounded_wait_listed: a pix-ls FAILURE is never an ABSENCE ---
@@ -905,8 +1112,8 @@ test("multi-shell FIFO holds: no prompt (-p) or sleep-based timing gate remains 
 
 test("multi-shell FIFO holds: presence/absence of $BOX2 is asserted through pix ls --json, distinguishing an ls failure from a genuine absence, not a bare grep on possibly-failed output", () => {
 	const multiShell = script.slice(script.indexOf("[6] Multi-shell"), script.indexOf("[7] --keep"));
-	assert.match(multiShell, /bounded_wait_listed "\$BOX2" 30/);
-	assert.match(multiShell, /bounded_wait_attach_log "\$LOG2" "\$SH2" 30/);
+	assert.match(multiShell, /bounded_wait_listed "\$BOX2" "\$UAT_CREATE_WAIT_SECS"/);
+	assert.match(multiShell, /bounded_wait_attach_log "\$LOG2" "\$SH2" "\$UAT_ATTACH_WAIT_SECS"/);
 	assert.match(multiShell, /assert_box_listed "\$BOX2"/);
 	assert.match(multiShell, /assert_box_not_listed "\$BOX2" "teardown on last shell exit"/);
 	// Each backgrounded pix run now logs to its OWN file, never /dev/null, so
