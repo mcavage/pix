@@ -608,9 +608,9 @@ func TestRunSession_RefLeaseFailsAfterChildStarts_AlsoTearsDown(t *testing.T) {
 }
 
 // killedTeardownRemovesFixture is sessionFixture's run/ls plus removableFixture's
-// (non-force) rm, in one script: the failed-ref path's teardown must reach an
-// ACTUAL removal (not merely a "kept-busy" verdict) for the ordering test
-// below to exercise anything.
+// rm (v0.38-shaped: a bare rm refuses, -f removes), in one script: the
+// failed-ref path's teardown must reach an ACTUAL removal (not merely a
+// "kept-busy" verdict) for the ordering test below to exercise anything.
 const killedTeardownRemovesFixture = `
 d="$(dirname "$0")"
 echo "$@" >> "$d/argv.log"
@@ -634,8 +634,8 @@ run)
 	exit 0
 	;;
 rm)
-	if [ "$2" = "-f" ]; then
-		echo "fixture: refusing a forced removal" >&2
+	if [ "$2" != "-f" ]; then
+		echo "fixture: sbx v0.38 refuses a bare rm with no TTY attached" >&2
 		exit 3
 	fi
 	touch "$d/removed"

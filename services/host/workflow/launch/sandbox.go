@@ -235,8 +235,19 @@ func validateRmShape(opts RmOptions) error {
 	return nil
 }
 
+// RemovePixSandbox is the ONE forced seam: an explicitly-named `pix rm
+// --force` (or a task-checkout removal already cleared by its own git-hygiene
+// guard) that skips pix's own zero-holder-reference proof entirely — a human
+// (or an equivalent already-proven guard) is vouching for this ONE name, not
+// a wildcard. It routes through sandbox.PlanForceRemove for the exact same
+// pix-* scope/name-safety check every other removal path uses, so this seam
+// cannot reach a name PlanRemove would have refused either.
 func RemovePixSandbox(env hostenv.Env, name string) error {
-	_, err := env.Run("sbx", "rm", "-f", name)
+	argv, err := sandbox.PlanForceRemove(name)
+	if err != nil {
+		return err
+	}
+	_, err = env.Run("sbx", argv...)
 	return err
 }
 
