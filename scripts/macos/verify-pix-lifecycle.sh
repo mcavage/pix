@@ -64,6 +64,22 @@ BOX_PREFIX="pix-${RUN_ID}"
 WITH_OAUTH=0
 WITH_SERVICES=1
 PASS=0; FAIL=0; SKIP=0
+# Readiness windows bounded appropriately for a COLD post-`make load` image
+# pull: the first `pix run` against a freshly loaded image tag can spend real
+# wall time pulling/extracting layers before the sandbox is even creatable,
+# and a second shell's ATTACH still needs that same image already present.
+# Both are overridable via env (never hand-edit a smaller magic number back
+# into a call site instead) so a test harness can shrink them to exercise the
+# same bounded-loop logic in a fraction of a second, and so production never
+# silently regresses to a bound too short to survive a real cold pull.
+UAT_CREATE_WAIT_SECS="${UAT_CREATE_WAIT_SECS:-180}"
+UAT_ATTACH_WAIT_SECS="${UAT_ATTACH_WAIT_SECS:-90}"
+# Poll interval every bounded_wait_* loop below sleeps between checks.
+# Production default is one real second per poll (so a MAXSECS argument reads
+# as wall-clock seconds); a test harness can shrink this so a MAXSECS well
+# past 30 — proving the windows above actually outlive the old too-short
+# bound — costs a fraction of a real second instead of real minutes.
+UAT_POLL_INTERVAL="${UAT_POLL_INTERVAL:-1}"
 CREATED_BOXES=()
 EXTRA_BOXES=()   # digest-named boxes this run created (names discovered, not chosen)
 INSTALLED_SERVE=0
@@ -148,7 +164,7 @@ bounded_wait() {
       wait "$pid" 2>/dev/null
       return 1
     fi
-    sleep 1
+    sleep "$UAT_POLL_INTERVAL"
   done
   wait "$pid" 2>/dev/null
   return 0
@@ -210,7 +226,7 @@ bounded_wait_listed() {
       ERROR:*) printf '%s\n' "$state" >&2; return 2 ;;
     esac
     i=$((i+1))
-    sleep 1
+    sleep "$UAT_POLL_INTERVAL"
   done
   return 1
 }
@@ -235,7 +251,7 @@ bounded_wait_attach_log() {
       return 1
     fi
     i=$((i+1))
-    sleep 1
+    sleep "$UAT_POLL_INTERVAL"
   done
   return 1
 }
@@ -256,7 +272,7 @@ bounded_wait_absent() {
       ERROR:*) printf '%s\n' "$state" >&2; return 2 ;;
     esac
     i=$((i+1))
-    sleep 1
+    sleep "$UAT_POLL_INTERVAL"
   done
   return 1
 }
@@ -269,20 +285,20 @@ bounded_wait_absent() {
 # on a possibly-failed command would.
 assert_box_listed() {
   local name="$1" label="$2" rc
-  bounded_wait_listed "$name" 15; rc=$?
+  bounded_wait_listed "$name" "$UAT_CREATE_WAIT_SECS"; rc=$?
   case "$rc" in
     0) pass "$label" ;;
     2) fail "$label" "pix ls --json itself failed (not merely absent)" ;;
-    *) fail "$label" "pix ls --json ran fine but did not list $name within 15s" ;;
+    *) fail "$label" "pix ls --json ran fine but did not list $name within ${UAT_CREATE_WAIT_SECS}s" ;;
   esac
 }
 assert_box_not_listed() {
   local name="$1" label="$2" rc
-  bounded_wait_absent "$name" 15; rc=$?
+  bounded_wait_absent "$name" "$UAT_CREATE_WAIT_SECS"; rc=$?
   case "$rc" in
     0) pass "$label" ;;
     2) fail "$label" "pix ls --json itself failed (cannot confirm teardown, not proof of it)" ;;
-    *) fail "$label" "$name is still listed after 15s" ;;
+    *) fail "$label" "$name is still listed after ${UAT_CREATE_WAIT_SECS}s" ;;
   esac
 }
 
@@ -641,11 +657,11 @@ exec 5>"$FIFO1" || die "cannot open the shell-1 hold FIFO for writing"
 # has created $BOX2 yet. Wait for the real, machine-readable fact instead:
 # pix ls --json positively listing it, bounded so a wedged create cannot hang
 # this script, and never conflating an ls FAILURE with a still-absent box.
-WL1=$(bounded_wait_listed "$BOX2" 30; echo $?)
+WL1=$(bounded_wait_listed "$BOX2" "$UAT_CREATE_WAIT_SECS"; echo $?)
 case "$WL1" in
   0) pass "$BOX2 observed via pix ls --json after the first shell's FIFO connected" ;;
   2) fail "$BOX2 observed via pix ls --json" "pix ls --json itself failed (see stderr above) — not merely absent" ;;
-  *) fail "$BOX2 observed via pix ls --json" "not listed within 30s of the first shell's FIFO connecting: $(tail -3 "$LOG1" 2>/dev/null | tr '\n' ' ')" ;;
+  *) fail "$BOX2 observed via pix ls --json" "not listed within ${UAT_CREATE_WAIT_SECS}s of the first shell's FIFO connecting: $(tail -3 "$LOG1" 2>/dev/null | tr '\n' ' ')" ;;
 esac
 
 (exec 5>&- 6>&-; cd "$WORK/b/proj" && pix run . --name "$BOX2" <"$FIFO2" >"$LOG2" 2>&1) &
@@ -660,10 +676,10 @@ exec 6>"$FIFO2" || die "cannot open the shell-2 hold FIFO for writing"
 # every attach) together with shell 2's process still being alive at that
 # instant — a dead process past this point could never be that second
 # reference no matter how long this waited.
-if bounded_wait_attach_log "$LOG2" "$SH2" 30; then
+if bounded_wait_attach_log "$LOG2" "$SH2" "$UAT_ATTACH_WAIT_SECS"; then
   pass "$BOX2's second shell observably attached (log evidence + live process)"
 else
-  fail "$BOX2's second shell observably attached" "no 'attaching' evidence in $LOG2 with pid $SH2 still alive within 30s: $(tail -3 "$LOG2" 2>/dev/null | tr '\n' ' ')"
+  fail "$BOX2's second shell observably attached" "no 'attaching' evidence in $LOG2 with pid $SH2 still alive within ${UAT_ATTACH_WAIT_SECS}s: $(tail -3 "$LOG2" 2>/dev/null | tr '\n' ' ')"
 fi
 
 assert_box_listed "$BOX2" "$BOX2 is up with two shells attached"
@@ -821,16 +837,40 @@ else
     assert_contains "$s" "catalog server $s is registered" pix mcp ls
   done
 
-  printf '\n  A browser will open per server to complete each OAuth flow.\n'
-  # Authorize each SHIPPED catalog server INDIVIDUALLY, recording its own exact
-  # exit code and output via assert_exit. `pix mcp auth --all` would sweep in
-  # every OTHER server registered on this host (an unrelated 8th server from a
-  # private pack, or leftover state from a prior session) — one broken,
-  # unrelated server would then fail this release check for a server this
-  # release never shipped and never asked to authorize.
+  # Before forcing any browser flow, ask what's ALREADY true: pix doctor --json
+  # already carries the exact registered+authenticated evidence line for a
+  # remote catalog server (health/mcp.go's attachmentCaveat), so a server that
+  # is already registered and authenticated from a prior run — the common case
+  # on a host that has done this before — is certified a PASS right here,
+  # with zero browser flow invoked for it. Only servers doctor cannot already
+  # certify are gaps; ONLY those are authorized, and each individually.
+  PRE_AUTH_DOCTOR="$(pix doctor --json 2>/dev/null)"
+  AUTH_GAPS=()
   for s in notion atlassian granola; do
-    assert_exit 0 "pix mcp auth $s completed" pix mcp auth "$s"
+    if printf '%s' "$PRE_AUTH_DOCTOR" | grep -qF "$s: registered (host registration"; then
+      : # already registered+authenticated — certified below by the shared
+        # doctor-evidence classification loop; no browser flow needed.
+    else
+      AUTH_GAPS+=("$s")
+    fi
   done
+
+  if [ "${#AUTH_GAPS[@]}" -eq 0 ]; then
+    pass "no OAuth gaps: notion/atlassian/granola are already registered+authenticated (pix doctor --json evidence) — no browser flow invoked"
+  else
+    printf '\n  A browser will open per server needing authorization to complete its OAuth flow.\n'
+    # Authorize each GAP server INDIVIDUALLY, recording its own exact exit code
+    # and output via assert_exit. `pix mcp auth --all` would sweep in every
+    # OTHER server registered on this host (an unrelated 8th server from a
+    # private pack, or leftover state from a prior session) — one broken,
+    # unrelated server would then fail this release check for a server this
+    # release never shipped and never asked to authorize. Equally, a server
+    # doctor already certified above is never re-authorized just because it
+    # shares this loop with servers that do need it.
+    for s in "${AUTH_GAPS[@]}"; do
+      assert_exit 0 "pix mcp auth $s completed" pix mcp auth "$s"
+    done
+  fi
 
   # Completion is CERTIFIED by a machine-readable probe, never by an operator's
   # say-so: pix doctor --json runs health/mcp.go's own registered+authenticated

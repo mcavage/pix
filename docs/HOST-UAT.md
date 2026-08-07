@@ -74,7 +74,12 @@ What it asserts, and why each one is in a RELEASE gate rather than a unit test
 5. **Exit propagation.** A failing inner command surfaces as a non-zero `pix
    run`; a bare `pix <not-a-dir>` refuses with exit 2 and creates nothing.
 6. **Multi-shell teardown.** Two shells attach; the FIRST to leave does not
-   tear the sandbox down, the LAST one does.
+   tear the sandbox down, the LAST one does. The create/attach readiness
+   waits are bounded appropriately for a COLD post-`make load` image pull
+   (180s to observe the first shell's create, 90s to observe the second
+   shell's attach, by default), not a flat 30s that a real pull can exceed;
+   both windows (and the polling interval) are overridable via
+   `UAT_CREATE_WAIT_SECS` / `UAT_ATTACH_WAIT_SECS` / `UAT_POLL_INTERVAL`.
 7. **`--keep` and the orphan reaper.** A kept sandbox survives its last shell,
    `pix rm --orphans` refuses to reap it, and an explicit `pix rm NAME` still
    removes it.
@@ -101,8 +106,13 @@ What it asserts, and why each one is in a RELEASE gate rather than a unit test
 11. **External OAuth hooks** (`--with-oauth`): the catalog bundle registers
     only when one or more shipped servers are missing; the script tracks and
     removes exactly the individual registrations it added, preserving every
-    pre-existing same-name registration. It then authorizes ONLY the
-    required shipped catalog servers (`notion`/`atlassian`/`granola`)
+    pre-existing same-name registration. Before forcing ANY browser flow, it
+    reads CURRENT `pix doctor --json` evidence for notion/atlassian/granola
+    first: a server already registered and authenticated (the common case on
+    a host that has run this before) is certified a PASS right there, with
+    zero `pix mcp auth` invocation for it — a rerun on an already-authorized
+    host never re-forces a browser flow. Only servers doctor cannot already
+    certify are gaps, and it then authorizes ONLY those gap servers
     INDIVIDUALLY — `pix mcp auth notion`, `pix mcp auth atlassian`, `pix mcp
     auth granola` — ASSERTING each one's own exact exit code and output (never
     just firing `pix mcp auth --all` and hoping): a sweep-all call would rope
