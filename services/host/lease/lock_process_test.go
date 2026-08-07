@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -104,55 +105,42 @@ func helperHold() {
 	select {} // wait to be killed
 }
 
-// helperCheckFDs enumerates this process's own open file descriptors
-// (scanFDsForTargets is the platform-specific half: /proc/self/fd symlinks
-// on Linux, a direct numeric fd-range fcntl(F_GETFD)/fcntl(F_GETPATH) probe
-// on Darwin) and reports, for each of two target absolute paths passed in
-// LEASE_HELPER_TARGET_A / _B, whether an inherited fd resolves to it.
+// helperCheckFDs reports, for each of two EXACT fd numbers passed in
+// LEASE_HELPER_TARGET_A / _B, whether that fd number is still open in this
+// (post-exec) process. The parent already knows both fd numbers before it
+// execs this helper: fork+exec preserves the fd table verbatim except for
+// entries the kernel closes because they are O_CLOEXEC-marked, so nothing is
+// renumbered across the exec. That makes "is fd N still open" a direct,
+// one-syscall fcntl(F_GETFD) question (see fdOpenInThisProcess below), with
+// no /dev/fd enumeration and no path resolution (fcntl F_GETPATH) needed on
+// either platform this package builds for. scanFDsForTargets in
+// lock_process_fds_linux_test.go is the older, Linux-only, path-based
+// technique this replaced for the cross-process proof; it survives there only
+// for its own direct, in-process self-test.
 func helperCheckFDs() {
-	targets := map[string]string{
-		"A": os.Getenv("LEASE_HELPER_TARGET_A"),
-		"B": os.Getenv("LEASE_HELPER_TARGET_B"),
-	}
-	found, err := scanFDsForTargets(targets)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "scan fds: %v\n", err)
-		os.Exit(1)
-	}
 	for _, label := range []string{"A", "B"} {
-		fmt.Printf("%s=%v\n", label, found[label])
+		raw := os.Getenv("LEASE_HELPER_TARGET_" + label)
+		fd, err := strconv.Atoi(raw)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "bad fd for %s=%q: %v\n", label, raw, err)
+			os.Exit(2)
+		}
+		fmt.Printf("%s=%v\n", label, fdOpenInThisProcess(fd))
 	}
 }
 
-// TestScanFDsForTargets_FindsOpenFDByPath is a direct, in-process check of
-// the platform fd-resolution helper the check-fds helper action relies on
-// (see lock_process_fds_linux_test.go / lock_process_fds_darwin_test.go): does
-// opening a file put its path exactly where scanFDsForTargets says it
-// belongs, and does a path that was never opened stay absent. This is the
-// cheap, no-fork-exec half of the coverage; TestCLOEXEC_ChildDoesNotInheritLeaseFd
-// below is the expensive half that also proves cross-process inheritance.
-func TestScanFDsForTargets_FindsOpenFDByPath(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "watched")
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
-	if err != nil {
-		t.Fatalf("OpenFile: %v", err)
-	}
-	defer f.Close()
-
-	found, err := scanFDsForTargets(map[string]string{
-		"WATCHED": path,
-		"MISSING": filepath.Join(dir, "never-opened"),
-	})
-	if err != nil {
-		t.Fatalf("scanFDsForTargets: %v", err)
-	}
-	if !found["WATCHED"] {
-		t.Errorf("scanFDsForTargets did not find the open fd for %s among %v", path, found)
-	}
-	if found["MISSING"] {
-		t.Error("scanFDsForTargets reported a path that was never opened as found")
-	}
+// fdOpenInThisProcess reports whether fd currently names an open descriptor
+// in THIS process, via fcntl(fd, F_GETFD): the kernel answers EBADF for a
+// closed or never-opened fd number and the descriptor's flags word
+// otherwise. syscall.SYS_FCNTL and syscall.F_GETFD are both POSIX and both
+// defined by the syscall package on every unix this file builds for (linux
+// and darwin), so this one function needs no platform split at all — unlike
+// the abandoned Darwin scan-all-fds approach, which had to walk the entire
+// numeric fd space and read each one back out via fcntl(fd, F_GETPATH, ...)
+// because it did not yet know which fd number it was looking for.
+func fdOpenInThisProcess(fd int) bool {
+	_, _, errno := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), uintptr(syscall.F_GETFD), 0)
+	return errno == 0
 }
 
 // readAcquired reads exactly one line from r, bounded by timeout so a stuck
@@ -228,7 +216,11 @@ func TestSIGKILL_ReleasesLock(t *testing.T) {
 // child process spawned via a plain exec.Command inherits an "unprotected"
 // fd opened without O_CLOEXEC at the SAME fd table (fork+exec duplicates the
 // whole table; exec only closes cloexec-marked entries) while the lease fd,
-// opened through this package's openNoFollow, does not appear at all.
+// opened through this package's openNoFollow, does not appear at all. This
+// process already knows both fd numbers (rawFd and l.Fd()) before it execs
+// the helper, so it hands them over directly rather than having the child
+// rediscover them by scanning; see helperCheckFDs/fdOpenInThisProcess above
+// for why that makes this proof identical on Linux and Darwin.
 func TestCLOEXEC_ChildDoesNotInheritLeaseFd(t *testing.T) {
 	dir := mustDir(t)
 	l, err := OpenRefLease(dir)
@@ -245,8 +237,8 @@ func TestCLOEXEC_ChildDoesNotInheritLeaseFd(t *testing.T) {
 	defer syscall.Close(rawFd)
 
 	cmd := helperCommand(helperActionEnv+"=check-fds",
-		"LEASE_HELPER_TARGET_A="+unprotectedPath,
-		"LEASE_HELPER_TARGET_B="+l.Path(),
+		"LEASE_HELPER_TARGET_A="+strconv.Itoa(rawFd),
+		"LEASE_HELPER_TARGET_B="+strconv.Itoa(int(l.Fd())),
 	)
 	out, err := cmd.Output()
 	if err != nil {

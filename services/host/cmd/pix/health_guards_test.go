@@ -197,7 +197,23 @@ func keyStore(t *testing.T, name, body string) string {
 // to launch ONLY on a POSITIVE "no model key" answer. A key store that is
 // missing, broken, hung or refusing is UNKNOWN, and unknown proceeds — a false
 // refusal is worse than a failed launch.
+//
+// This table drives launch.ProbeModelKeysBudget directly, with a generous
+// TEST-only budget (testKeyProbeBudget), rather than launch.ProbeModelKeys
+// (which always pays the production health.StatusBudget, 2s). Every fixture
+// here exits in milliseconds, so the budget value itself proves nothing about
+// these cases — but pinning them to the production constant made this
+// correctness table hostage to that constant's real-world margin on a loaded
+// or slower runner (macOS CI in particular): a subprocess spawn that is merely
+// slow, not hung, could read as a timeout and turn an expected ready/absent
+// verdict into a flaky unknown. A generous, test-owned budget removes that
+// coupling; TestLaunchGateProbeModelKeysUsesTheProductionBudget below is the
+// separate, dedicated test that still pins ProbeModelKeys to health.StatusBudget.
 func TestLaunchGateRefusesOnlyAPositiveNoKey(t *testing.T) {
+	// testKeyProbeBudget is generous on purpose: these fixtures all exit
+	// almost instantly, so this only needs to be far larger than any real
+	// exec + pipe-read overhead, never a value this table is trying to prove.
+	const testKeyProbeBudget = 10 * time.Second
 	for _, tc := range []struct {
 		name       string
 		body       string
@@ -212,7 +228,7 @@ func TestLaunchGateRefusesOnlyAPositiveNoKey(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			r := launch.ProbeModelKeys(ctx, keyStore(t, "keystore", tc.body), "secret", "ls")
+			r := launch.ProbeModelKeysBudget(ctx, testKeyProbeBudget, keyStore(t, "keystore", tc.body), "secret", "ls")
 			if got := r.Effective(); got != tc.wantStatus {
 				t.Errorf("status = %s, want %s (%+v)", got, tc.wantStatus, r)
 			}
