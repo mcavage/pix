@@ -189,15 +189,27 @@ func composeStaticMCP(existing, cfgMCP, oMCP []string) []string {
 // resolveSandboxName is the sandbox `pix run` actually targets: an explicit
 // --name travels verbatim (a user-owned display name, never reinterpreted).
 // Absent that, the DEFAULT is the deterministic, digest-suffixed
-// sandbox.Name(workspace) — the SAME identity launch.SessionName keys lease state
-// by — so two workspaces sharing a basename can never alias one sandbox or one
-// lease directory (the digest covers the full canonical path).
+// sandbox.Name(workspace) — and lease state is keyed by whichever of those two
+// this function returns (see sessionKey below), so two workspaces sharing a
+// basename can never alias one sandbox or one lease directory in the default
+// case (the digest covers the full canonical path), and an explicit --name
+// reusing a workspace directory another sandbox already used never aliases
+// that sandbox's lease directory either.
 func resolveSandboxName(explicit, workspace string) string {
 	if explicit != "" {
 		return explicit
 	}
 	return sandbox.Name(workspace)
 }
+
+// sessionKeyFor is the lease identity for a resolved run: the FINAL sandbox
+// name (o.Name, already run through resolveSandboxName by the caller), never
+// the raw workspace path. Extracted as its own function so the collision this
+// guards against is unit-testable without exercising the rest of runCmd.Run:
+// two DIFFERENT explicit --name runs sharing one workspace directory (the
+// exact shape section [3]/[4] of the host UAT script exercises, reusing a
+// workspace across sandboxes) must never resolve to the same lease directory.
+func sessionKeyFor(o launch.RunOpts) string { return o.Name }
 
 // runFail reports a launch failure in run's own words and hands the root the
 // exit code to use. The message is already complete, so it travels as a
@@ -406,12 +418,18 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		// and before exec (SbxUnknown).
 		return runFail(d, 1, "%v", plan.Err)
 	}
-	// sessionKey is the lease identity for THIS workspace (the same digest name
-	// resolveSandboxName defaults the sandbox to), and fp is what a later attach must
-	// match. The exec-attach DECISION is probed here read-only and re-validated under
-	// the lifecycle lock by launch.RunSession, which is also where a fingerprint
-	// divergence refuses.
-	sessionKey := launch.SessionName(o.Workspace)
+	// sessionKey is the lease identity for THIS sandbox: the FINAL resolved name
+	// (o.Name, already resolved above by resolveSandboxName), never the workspace
+	// path directly. Keying by workspace instead would alias two DIFFERENT named
+	// sandboxes onto one lease directory the moment they share a workspace (e.g.
+	// an explicit --name reusing a directory pix already digest-named for another
+	// sandbox) — keying by the name sbx itself treats as the unique identity avoids
+	// that, and still lands on the same digest form in the default (unnamed) case,
+	// since resolveSandboxName's default IS sandbox.Name(workspace). fp is what a
+	// later attach must match. The exec-attach DECISION is probed here read-only
+	// and re-validated under the lifecycle lock by launch.RunSession, which is
+	// also where a fingerprint divergence refuses.
+	sessionKey := sessionKeyFor(o)
 	fp := launch.SessionFingerprint(cfg, o)
 	attachExec := false
 	if plan.Reattach {
