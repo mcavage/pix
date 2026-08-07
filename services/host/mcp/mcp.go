@@ -436,19 +436,167 @@ func RunBundleAdd(lookPath func(string) (string, error), out, errW io.Writer, na
 	return RunBundleAddDirect(out, errW, catalog)
 }
 
+// catalogEntryState is what a single bounded `sbx mcp ls` (plus, when the
+// name is present, one inspect/get probe) can PROVE about one shipped
+// catalog entry's current registration — the tri-state the direct add/rm
+// fallback acts on so neither ever guesses at ownership.
+type catalogEntryState int
+
+const (
+	// catalogEntryAbsent: `sbx mcp ls` positively lacks this name.
+	catalogEntryAbsent catalogEntryState = iota
+	// catalogEntryMatches: registered at EXACTLY the shipped catalog URL —
+	// ours, safe to leave alone (add) or remove (rm).
+	catalogEntryMatches
+	// catalogEntryCustom: the name is registered, but its inspected endpoint
+	// differs from the shipped URL, or no endpoint could be found at all
+	// (a different KIND of server entirely, e.g. a local command). Never
+	// ours to overwrite or remove.
+	catalogEntryCustom
+)
+
+// classifyCatalogEntry resolves one catalog entry's state from an
+// already-fetched successful `sbx mcp ls` (mcpOut) plus, only when the name
+// is present there, one further inspect/get probe to compare endpoints. It
+// returns an error ONLY on an operational inspect failure (both `inspect`
+// and `get` failed) — never a guess dressed up as a classification.
+func classifyCatalogEntry(mcpOut, name, url string) (catalogEntryState, error) {
+	if McpRegEvidenceFrom(mcpOut, true, name) == McpRegNo {
+		return catalogEntryAbsent, nil
+	}
+	match, err := catalogEntryMatchesShippedURL(name, url)
+	if err != nil {
+		return catalogEntryCustom, err
+	}
+	if match {
+		return catalogEntryMatches, nil
+	}
+	return catalogEntryCustom, nil
+}
+
+// catalogEntryMatchesShippedURL inspects an ALREADY-PRESENT registration
+// (via `sbx mcp inspect NAME`, falling back to `sbx mcp get NAME` exactly
+// like remoteMCPRegistrationCurrent) and reports whether its canonical
+// endpoint is EXACTLY url. It returns an error only when BOTH inspection
+// verbs fail operationally — that failure must fail the caller closed, never
+// be read as "no endpoint found" (which would misclassify a real custom
+// registration as absent-equivalent and license overwriting it).
+func catalogEntryMatchesShippedURL(name, url string) (bool, error) {
+	for _, verb := range []string{"inspect", "get"} {
+		stdout, _, err := runSbxCaptured([]string{"mcp", verb, name})
+		if err == nil {
+			return outputContainsCanonicalEndpoint(stdout, url), nil
+		}
+	}
+	return false, fmt.Errorf("could not inspect existing registration (`sbx mcp inspect|get %s` both failed)", name)
+}
+
+// catalogLsEvidenceOrFailClosed runs the ONE bounded `sbx mcp ls` every
+// direct catalog fallback (add or rm) fetches up front, so every catalog
+// entry is classified against a single consistent snapshot rather than a
+// fresh (and possibly inconsistent) listing per name. A failed listing is an
+// operational failure, not evidence of absence: fail closed rather than risk
+// treating an unreadable registration as fair game to add over or leave
+// unremoved.
+func catalogLsEvidenceOrFailClosed() (string, error) {
+	stdout, stderr, err := runSbxCaptured([]string{"mcp", "ls"})
+	if err != nil {
+		return "", fmt.Errorf("checking existing registrations before the direct catalog fallback (`sbx mcp ls`): %v: %s",
+			err, strings.TrimSpace(stderr))
+	}
+	return stdout, nil
+}
+
 // RunBundleAddDirect registers each catalog entry ONE AT A TIME via direct
 // `sbx mcp add NAME --url URL` — the compatibility fallback RunBundleAdd uses
-// once it has confirmed sbx has no `mcp bundle` subcommand at all. It stops
-// at the FIRST failure (a real add failure is never masked by continuing to
-// the next entry and reporting a false partial success) and reports every
+// once it has confirmed sbx has no `mcp bundle` subcommand at all. It first
+// fetches registration evidence ONCE (catalogLsEvidenceOrFailClosed) and
+// classifies every entry against it before touching anything:
+//
+//   - absent (catalogEntryAbsent): add it.
+//   - registered at the exact shipped URL (catalogEntryMatches): leave it
+//     unchanged — already ours, nothing to do.
+//   - registered under the same name but a different endpoint or kind
+//     (catalogEntryCustom): FAIL CLOSED without overwriting it — a caller's
+//     own "notion" server (say) must never be silently replaced by the
+//     shipped catalog default.
+//
+// It stops at the FIRST failure of any kind (a real add failure, an
+// unreadable inspection, or a positively custom entry) — a partial success is
+// never masked by continuing to the next entry — and reports every add
 // attempt's own streams as they happen, in catalog order, so a caller sees
-// exactly which entries registered before a failure. `sbx mcp add` is itself
-// additive — registering a name sbx already has is sbx's own decision, not
-// something this loop second-guesses — so it never removes a pre-existing
-// catalog registration, ordinary add or otherwise.
+// exactly which entries registered before a failure.
 func RunBundleAddDirect(out, errW io.Writer, catalog []CatalogServer) error {
+	mcpOut, err := catalogLsEvidenceOrFailClosed()
+	if err != nil {
+		return err
+	}
 	for _, c := range catalog {
-		stdout, stderr, err := runSbxCaptured([]string{"mcp", "add", c.Name, "--url", c.URL})
+		state, err := classifyCatalogEntry(mcpOut, c.Name, c.URL)
+		if err != nil {
+			return fmt.Errorf("%s: %v", c.Name, err)
+		}
+		switch state {
+		case catalogEntryMatches:
+			fmt.Fprintf(out, "  already registered: %s\n", c.Name)
+		case catalogEntryCustom:
+			return fmt.Errorf("%s: already registered with a different endpoint or kind than the shipped "+
+				"catalog entry (%s); refusing to overwrite it — remove it manually first if you want the catalog default",
+				c.Name, c.URL)
+		default: // catalogEntryAbsent
+			stdout, stderr, err := runSbxCaptured([]string{"mcp", "add", c.Name, "--url", c.URL})
+			fmt.Fprint(out, stdout)
+			fmt.Fprint(errW, stderr)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// RunBundleRmDirect removes each catalog entry ONE AT A TIME via direct
+// `sbx mcp rm NAME` — RunBundleRm's compatibility fallback once it has
+// confirmed sbx has no `mcp bundle` subcommand at all. It mirrors
+// RunBundleAddDirect's evidence-first shape: fetch registration evidence
+// ONCE (catalogLsEvidenceOrFailClosed), then classify every entry before
+// touching anything:
+//
+//   - absent (catalogEntryAbsent): nothing to remove — skip it and continue
+//     with the rest of the catalog; a partially-cleaned-up prior run (or a
+//     server someone already removed by hand) is not a failure.
+//   - registered under the same name but a different endpoint or kind
+//     (catalogEntryCustom): NOT ours — skip it and continue; a caller's own
+//     "notion" server must never be removed just because the shipped catalog
+//     also uses that name.
+//   - registered at the exact shipped URL (catalogEntryMatches): ours —
+//     remove it.
+//
+// An operational inspect/list failure (classifyCatalogEntry returning an
+// error) stops the loop immediately: it is never read as "must be absent" or
+// "must be custom", either of which could leave a stale entry behind or skip
+// removing one this host actually owns. A real removal failure also stops
+// the loop, reporting exactly which entries were removed first. Because
+// classification is re-derived fresh from a new `sbx mcp ls` on every call,
+// re-running RunBundleRmDirect after a failure safely picks up wherever the
+// prior run stopped: entries already removed now classify as absent and are
+// skipped, never re-attempted.
+func RunBundleRmDirect(out, errW io.Writer, catalog []CatalogServer) error {
+	mcpOut, err := catalogLsEvidenceOrFailClosed()
+	if err != nil {
+		return err
+	}
+	for _, c := range catalog {
+		state, err := classifyCatalogEntry(mcpOut, c.Name, c.URL)
+		if err != nil {
+			return fmt.Errorf("%s: %v", c.Name, err)
+		}
+		if state != catalogEntryMatches {
+			// Absent or custom: skip safely, continue across the rest of the
+			// catalog rather than treating either as a reason to stop.
+			continue
+		}
+		stdout, stderr, err := runSbxCaptured([]string{"mcp", "rm", c.Name})
 		fmt.Fprint(out, stdout)
 		fmt.Fprint(errW, stderr)
 		if err != nil {
@@ -477,15 +625,7 @@ func RunBundleRm(lookPath func(string) (string, error), out, errW io.Writer, bun
 		return runErr
 	}
 	fmt.Fprint(errW, noBundleCompatNote("removing the shipped catalog entries individually instead"))
-	for _, c := range catalog {
-		cStdout, cStderr, err := runSbxCaptured([]string{"mcp", "rm", c.Name})
-		fmt.Fprint(out, cStdout)
-		fmt.Fprint(errW, cStderr)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	return RunBundleRmDirect(out, errW, catalog)
 }
 
 // RunBundleLs reports the shipped catalog bundle's registration state. It
