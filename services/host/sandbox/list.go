@@ -97,9 +97,10 @@ const v38WrapperKey = "sandboxes"
 // otherwise pristine.
 var legacyAliasWrapperKeys = []string{"items", "boxes"}
 
-// v38RowKeys are the exact, complete row keys sbx v0.38 emits per sandbox:
+// v38RowKeys are the complete allowed row keys sbx v0.38 emits per sandbox:
 // name, id (a UUID), agent (string), status (a recognized value), workspaces
-// (array), workspace_missing (bool). Unlike the legacy profile's nameKeys/
+// (array), plus optional workspace_missing (bool, omitted when false on some
+// v0.38 builds). Unlike the legacy profile's nameKeys/
 // stateKeys/idKeys, this profile has NO key aliases — a v38-wrapped row using
 // a legacy alias (e.g. "instance_id" instead of "id") is a key outside the
 // selected profile, which this package treats the same as any other
@@ -294,8 +295,9 @@ func parseRow(m map[string]any) (Entry, error) {
 }
 
 // parseRowV38 parses one row of the v0.38 canonical profile: name, id, agent,
-// status, workspaces, workspace_missing, ALL required with the exact
-// canonical key (no aliases — see v38RowKeys' doc) and the exact documented
+// status and workspaces are required with exact canonical keys; optional
+// workspace_missing is accepted only as a bool (no aliases — see v38RowKeys'
+// doc). Every present field must have the exact documented
 // type. Unlike the legacy profile, where a missing/wrong-typed id or state is
 // tolerated (id is optional; an unreadable state value degrades to
 // StateUnknown), the v0.38 evidence pins exactly what a genuine row contains,
@@ -349,12 +351,10 @@ func parseRowV38(m map[string]any) (Entry, error) {
 		return Entry{}, fmt.Errorf("field %q is not an array", "workspaces")
 	}
 
-	wmVal, present := m["workspace_missing"]
-	if !present {
-		return Entry{}, fmt.Errorf("v0.38 row missing required field %q", "workspace_missing")
-	}
-	if _, ok := wmVal.(bool); !ok {
-		return Entry{}, fmt.Errorf("field %q is not a boolean", "workspace_missing")
+	if wmVal, present := m["workspace_missing"]; present {
+		if _, ok := wmVal.(bool); !ok {
+			return Entry{}, fmt.Errorf("field %q is not a boolean", "workspace_missing")
+		}
 	}
 
 	verified := true

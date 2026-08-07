@@ -4,7 +4,8 @@ import "testing"
 
 // TestParseList_V38Canonical: the exact top-level/row shape sbx v0.38 emits
 // for `sbx ls --json` — object-wrapped `{"sandboxes": [...]}`, rows keyed
-// name/id/agent/status/workspaces/workspace_missing — parses with every
+// name/id/agent/status/workspaces plus optional workspace_missing — parses
+// a mixed listing (one row with it, one omitting it) with every
 // entry (and the overall result) SchemaVerified/IdentityVerified, and the
 // UUID "id" lands as the entry's InstanceID.
 func TestParseList_V38Canonical(t *testing.T) {

@@ -50,7 +50,8 @@
 //     docs/upstream/sbx-0.38-noninteractive-rm.md for the other v0.38
 //     behavior change this repo already accounts for): the OBJECT
 //     `{"sandboxes": [...]}`, rows keyed EXACTLY name/id/agent/status/
-//     workspaces/workspace_missing — captured verbatim from a real v0.38
+//     workspaces plus optional workspace_missing (omitempty on v0.38) —
+//     captured verbatim from a real v0.38
 //     install (see list_test.go's testdata/list_v38_canonical.json), so this
 //     shape is trusted as fully as the legacy bare array, not treated as a
 //     lesser alias. It has NO key aliases of its own: a row using a legacy
@@ -64,9 +65,10 @@
 // set; a row that had to lean on an alias, or came with a key this package
 // has never heard of, parses successfully but reports IdentityVerified=false.
 // Under the v0.38 profile, the pinned evidence is stronger, so the bar is
-// higher in one direction and lower in another: id/status/agent/workspaces/
-// workspace_missing are each REQUIRED with the documented type (missing or
-// mistyped fails the WHOLE parse, not just this row — see parseRowV38), id
+// higher in one direction and lower in another: id/status/agent/workspaces
+// are each REQUIRED with the documented type; workspace_missing may be absent
+// but must be bool when present (missing required or mistyped fields fail the
+// WHOLE parse, not just this row — see parseRowV38). id
 // must be shaped like a UUID, and status must be a recognized value; but an
 // undocumented EXTRA key or an unrecognized-but-well-typed status value still
 // only downgrades IdentityVerified, exactly like the legacy profile. Either
