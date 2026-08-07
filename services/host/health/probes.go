@@ -122,28 +122,74 @@ func (p SbxProbe) argv() []string {
 	return []string{"--version"}
 }
 
+// sbxVersionFallback names the ONE known alternate argv for a version probe:
+// `sbx --version` (this host's default) and `sbx version` (the grammar a
+// newer sbx CLI generation may require instead, having dropped the root
+// `--version` flag). Any other argv (a test fixture mode, a future probe
+// arg) has no known alternate, so Check never retries it — the fallback
+// table is a fixed pair, not a loop over guesses.
+func sbxVersionFallback(argv []string) []string {
+	if len(argv) == 0 {
+		return nil
+	}
+	switch argv[0] {
+	case "--version":
+		return append([]string{"version"}, argv[1:]...)
+	case "version":
+		return append([]string{"--version"}, argv[1:]...)
+	default:
+		return nil
+	}
+}
+
 func (p SbxProbe) Check(ctx context.Context) Result {
 	bin := p.Bin
 	if strings.TrimSpace(bin) == "" {
 		bin = "sbx"
 	}
 	o := runBounded(ctx, bin, p.argv()...)
+	// A bounded, ONE-shot fallback: retry with the known alternate grammar
+	// ONLY when sbx's own output positively says it does not understand this
+	// argv (sys.IsUsageMismatch). A denied, timed-out, missing-binary, or
+	// generic non-zero exit never retries — those failures mean the same
+	// thing under either grammar, so a second attempt would only obscure the
+	// real cause.
+	if o.failed && sys.IsUsageMismatch(o.out) {
+		if alt := sbxVersionFallback(p.argv()); alt != nil {
+			if o2 := runBounded(ctx, bin, alt...); !o2.failed && !o2.notFound && !o2.denied && !o2.timedOut {
+				return sbxProbeResult(p.Name(), o2, true)
+			}
+		}
+	}
+	return sbxProbeResult(p.Name(), o, false)
+}
+
+// sbxProbeResult renders the classified outcome of ONE sbx version attempt.
+// usedFallback is true only when the alternate grammar (see
+// sbxVersionFallback) is the attempt actually being reported — the evidence
+// then says so explicitly; the common, unchanged case keeps the exact
+// literal wording doctor/status have always printed.
+func sbxProbeResult(name string, o execOutcome, usedFallback bool) Result {
 	switch {
 	case o.notFound:
-		return Result{Name: p.Name(), Status: StatusAbsent, Detail: "not installed", Fix: SbxInstallFix,
+		return Result{Name: name, Status: StatusAbsent, Detail: "not installed", Fix: SbxInstallFix,
 			Evidence: "sbx is not on PATH"}
 	case o.denied:
-		return Result{Name: p.Name(), Status: StatusDenied, Detail: "refused by policy", Fix: SbxInstallFix,
+		return Result{Name: name, Status: StatusDenied, Detail: "refused by policy", Fix: SbxInstallFix,
 			Evidence: "sbx --version was refused"}
 	case o.timedOut || o.failed:
-		return unknownExec(p.Name(), o, "sbx --version")
+		return unknownExec(name, o, "sbx --version")
 	}
 	v := versionish.FindString(o.out)
 	if v == "" {
-		return Result{Name: p.Name(), Status: StatusUnknown, Detail: "unrecognized version output",
+		return Result{Name: name, Status: StatusUnknown, Detail: "unrecognized version output",
 			Evidence: "sbx --version printed no version"}
 	}
-	return Result{Name: p.Name(), Status: StatusReady, Detail: v, Evidence: "sbx --version = " + v}
+	if usedFallback {
+		return Result{Name: name, Status: StatusReady, Detail: v,
+			Evidence: "sbx version = " + v + " (fell back from --version, which this sbx build rejected)"}
+	}
+	return Result{Name: name, Status: StatusReady, Detail: v, Evidence: "sbx --version = " + v}
 }
 
 // --- launchd ----------------------------------------------------------------

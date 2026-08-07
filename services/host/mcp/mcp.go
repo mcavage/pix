@@ -175,6 +175,14 @@ type McpRegistrar struct {
 	// name registers via `--url` (a remote MCP endpoint the gateway OAuths
 	// host-side; no op-run wrap).
 	containers map[string]config.MCPContainer
+	// LegacyPositionalURL flips a manifest/remote container's URL argument
+	// from the current --url FLAG grammar to the legacy POSITIONAL grammar
+	// (`mcp add name --local <manifest>` / `mcp add name <url>`, no --url).
+	// It is decided ONCE, up front, by a read-only `sbx mcp add --help` probe
+	// (see detectLegacyPositionalURL) — never by retrying a failed remote-URL
+	// registration, which can trigger an interactive OAuth grant a second
+	// attempt must not repeat.
+	LegacyPositionalURL bool
 }
 
 // GogHardenedArgv builds the EXACT hardened gog invocation used both when
@@ -240,12 +248,18 @@ func (m McpRegistrar) AddArgs(name string) []string {
 	// (declared in the server's server.json), never through op-refs. (Image
 	// containers fall through to serverCmd + the op-run wrapper below.)
 	if c := m.containers[name]; c.Manifest != "" {
+		if m.LegacyPositionalURL {
+			return []string{"mcp", "add", name, "--local", c.Manifest}
+		}
 		return []string{"mcp", "add", name, "--local", "--url", c.Manifest}
 	}
 	// Remote container: register the remote MCP endpoint by URL. No --local (it's a
 	// remote HTTP server, not an OCI image the gateway runs) and no op-run wrap —
 	// OAuth is discovered + handled host-side by the gateway on first use.
 	if c := m.containers[name]; c.RemoteURL != "" {
+		if m.LegacyPositionalURL {
+			return []string{"mcp", "add", name, c.RemoteURL}
+		}
 		return []string{"mcp", "add", name, "--url", c.RemoteURL}
 	}
 	argv := m.ExecArgv(name)
@@ -254,6 +268,78 @@ func (m McpRegistrar) AddArgs(name string) []string {
 		args = append(args, "--args", c)
 	}
 	return args
+}
+
+// detectLegacyPositionalURL is the bounded, side-effect-free FEATURE-DETECTION
+// probe that decides which `sbx mcp add` URL grammar this host's installed sbx
+// speaks, BEFORE ever registering a manifest/remote container. It runs the
+// read-only `sbx mcp add --help` (bounded by env.RunTimed, capped output) and
+// looks for a documented --url flag.
+//
+// A help call that fails, times out, or prints nothing recognizable NEVER
+// flips behavior: it returns false (the current --url-flag grammar, this
+// host's default and the one the public sbx v0.38 grammar documents) exactly
+// as if detection had not run at all. Only help text that positively omits
+// --url from its own flag listing switches to the legacy positional grammar.
+func detectLegacyPositionalURL(env hostenv.Env) bool {
+	out, timedOut, err := env.RunTimed("sbx", "mcp", "add", "--help")
+	if timedOut || err != nil || strings.TrimSpace(out) == "" {
+		return false
+	}
+	return !strings.Contains(out, "--url")
+}
+
+// BundleAddArgs builds the CURRENT `sbx mcp bundle add NAME --url URL`
+// grammar — this host's default. See BundleAddArgsPositional for the
+// alternate grammar RunSbxGrammarFallback retries with when sbx itself
+// rejects this one.
+func BundleAddArgs(name, url string) []string {
+	return []string{"mcp", "bundle", "add", name, "--url", url}
+}
+
+// BundleAddArgsPositional builds the ALTERNATE `sbx mcp bundle add NAME URL`
+// grammar — URL positional, no --url flag — for an sbx build that has moved
+// `mcp bundle add` off the flag form. RunSbxGrammarFallback tries this ONLY
+// after BundleAddArgs is rejected with a recognized CLI usage mismatch
+// (sys.IsUsageMismatch), never on an unrelated failure.
+func BundleAddArgsPositional(name, url string) []string {
+	return []string{"mcp", "bundle", "add", name, url}
+}
+
+// RunSbxGrammarFallback runs `sbx <primary...>`, captured. If that attempt
+// fails with a RECOGNIZED CLI grammar mismatch (sys.IsUsageMismatch) — an
+// unknown flag, unknown command, or wrong arity, i.e. sbx's own parser saying
+// it does not understand this argv — it retries EXACTLY ONCE with alt and
+// reports that attempt's outcome instead. Any other failure (auth, policy,
+// timeout, a crashed gateway) reports the primary attempt's own output
+// unchanged: retrying an operational failure with different flags cannot fix
+// it and would only hide the real cause behind a second, unrelated attempt.
+//
+// Like RunSbxMcpCore, an absent sbx never runs anything: it prints the
+// primary command a user would run by hand and returns ErrSbxUnavailable.
+func RunSbxGrammarFallback(lookPath func(string) (string, error), out, errW io.Writer, primary, alt []string) error {
+	if _, err := lookPath("sbx"); err != nil {
+		return McpWouldRun(errW, primary...)
+	}
+	text, runErr := runSbxCaptured(primary)
+	if runErr != nil && len(alt) > 0 && sys.IsUsageMismatch(text) {
+		text, runErr = runSbxCaptured(alt)
+	}
+	if runErr != nil {
+		fmt.Fprint(errW, text)
+		return runErr
+	}
+	fmt.Fprint(out, text)
+	return nil
+}
+
+// runSbxCaptured execs `sbx <args...>` with combined stdout+stderr captured
+// to a string, so RunSbxGrammarFallback can classify the failure before
+// deciding whether a retry is warranted.
+func runSbxCaptured(args []string) (string, error) {
+	cmd := exec.Command("sbx", args...)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
 }
 
 // ExecArgv returns the EXACT, literal command line the sbx gateway will exec to
@@ -388,6 +474,15 @@ func RegisterServers(cfg *config.Config, env hostenv.Env, out io.Writer,
 	opReady := OpPath != "" && OpRefs != ""
 
 	reg := McpRegistrar{containers: containers}
+	if len(containerServers) > 0 {
+		// Decide the manifest/remote URL grammar ONCE, up front, by a read-only
+		// help probe — never by retrying a failed registration. A remote
+		// container's `mcp add` can trigger an interactive OAuth grant, and
+		// retrying that with a different argv after a failed first attempt
+		// risks a second, unwanted device-code flow; deciding the grammar
+		// before ever registering anything avoids that entirely.
+		reg.LegacyPositionalURL = detectLegacyPositionalURL(env)
+	}
 	if opReady {
 		reg.Op = OpPath
 		reg.OpRefs = OpRefs

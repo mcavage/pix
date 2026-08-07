@@ -322,6 +322,13 @@ func TestRegisterServers_RemoteURLUsesInteractiveRunner(t *testing.T) {
 			return nil
 		},
 		RunTimedFn: func(name string, args ...string) (string, bool, error) {
+			// `sbx mcp add --help` is the bounded, read-only grammar-detection
+			// probe (detectLegacyPositionalURL) RegisterServers runs BEFORE any
+			// registration — it carries no server name and no --url, so it
+			// cannot be mistaken for the real mutation this test guards.
+			if name == "sbx" && len(args) >= 3 && args[1] == "add" && args[2] == "--help" {
+				return "", false, nil
+			}
 			if name == "sbx" && len(args) >= 2 && args[1] == "add" {
 				t.Fatalf("remote OAuth registration was sent through the bounded probe: %s %s", name, strings.Join(args, " "))
 			}
