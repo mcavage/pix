@@ -75,11 +75,31 @@ export function hasValidLimits(model: Model): boolean {
 }
 
 function readManifest(): Manifest | undefined {
+	const manifestPath = path.join(getAgentDir(), "inference.json");
+	let raw: string;
 	try {
-		const parsed = JSON.parse(fs.readFileSync(path.join(getAgentDir(), "inference.json"), "utf8"));
-		if (parsed?.version !== 1 || typeof parsed.backends !== "object" || !Array.isArray(parsed.models)) return undefined;
-		return parsed as Manifest;
+		raw = fs.readFileSync(manifestPath, "utf8");
 	} catch {
+		// Absent is the expected no-op path (no inference configured, or a
+		// stack that never runs the host launcher) — silent by design.
+		return undefined;
+	}
+	// From here the file EXISTS: a launcher ran and meant to hand this
+	// extension something. Malformed/wrong-shape is never silent past this
+	// point — it is exactly the failure mode that let the "json" vs.
+	// "inference.json" filename bug ship unnoticed (present file, nothing
+	// read it, fallback Anthropic 401 with no signal pointing here).
+	try {
+		const parsed = JSON.parse(raw);
+		if (parsed?.version !== 1 || typeof parsed.backends !== "object" || !Array.isArray(parsed.models)) {
+			process.stderr.write(
+				`[inference] ${manifestPath} is present but is not a v1 manifest (backends/models); ignoring it and registering no generated providers\n`,
+			);
+			return undefined;
+		}
+		return parsed as Manifest;
+	} catch (err) {
+		process.stderr.write(`[inference] ${manifestPath} is present but failed to parse as JSON: ${err}\n`);
 		return undefined;
 	}
 }

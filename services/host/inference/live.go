@@ -25,6 +25,13 @@ import (
 
 const directInferenceProbeTimeout = 8 * time.Second
 
+// inferenceManifestFilename names the generated manifest inside the mixin's
+// agent dir, beside routing.json. extensions/inference.ts and
+// extensions/ollama-bridge.ts hardcode the same literal on the TS side;
+// tests/inference-manifest-filename.test.mjs cross-checks all three so a
+// rename on one side can never drift from the others silently.
+const inferenceManifestFilename = "inference.json"
+
 // LiveOllamaInferenceProbe posts ONE minimal generate. endpoint always comes
 // from OllamaEndpointFor; this function never spells an address of its own. No
 // auth header: the local daemon owns any cloud credential. keep_alive:0 is
@@ -162,7 +169,7 @@ func SynthesizeInferenceKit(cfg *config.Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(filepath.Join(agentDir, "json"), append(b, '\n'), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(agentDir, inferenceManifestFilename), append(b, '\n'), 0o600); err != nil {
 		return "", err
 	}
 	spec, err := InferenceKitSpec(cfg)

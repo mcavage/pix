@@ -172,13 +172,23 @@ export function modelsFromManifest(
 // Best-effort by design — a missing, unreadable, or malformed manifest is the
 // pre-manifest world, where the bridge tag alone is exactly right.
 function bridgeModels(): BridgeModel[] {
-	let parsed: any = null;
+	const manifestPath = join(getAgentDir(), "inference.json");
+	let raw: string | undefined;
 	try {
-		parsed = JSON.parse(
-			readFileSync(join(getAgentDir(), "inference.json"), "utf8"),
-		);
+		raw = readFileSync(manifestPath, "utf8");
 	} catch {
-		/* absent or malformed -> bridge tag only */
+		/* absent -> bridge tag only, the expected pre-manifest world */
+	}
+	let parsed: any = null;
+	if (raw !== undefined) {
+		// Present but unparseable is loud: this is the failure mode that let
+		// the "json" vs. "inference.json" filename bug ship silently (see
+		// extensions/inference.ts's readManifest for the same guard).
+		try {
+			parsed = JSON.parse(raw);
+		} catch (err) {
+			process.stderr.write(`[ollama-bridge] ${manifestPath} is present but failed to parse as JSON: ${err}\n`);
+		}
 	}
 	return modelsFromManifest(parsed, bridgeTagModel());
 }
