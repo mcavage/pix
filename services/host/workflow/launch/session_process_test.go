@@ -130,13 +130,14 @@ func waitForRecordedCreateState(t *testing.T, leaseDir, sessionKey string, wantK
 	deadline := time.Now().Add(within)
 	for {
 		_, rerr := lease.ReadRecord(leaseDir)
+		_, fpFound := readSessionFingerprint(sessionKey)
 		_, invFound := readSessionInvocation(sessionKey)
 		_, keepSet, kerr := lease.ReadKeep(leaseDir)
-		if rerr == nil && invFound && (!wantKeep || (kerr == nil && keepSet)) {
+		if rerr == nil && fpFound && invFound && (!wantKeep || (kerr == nil && keepSet)) {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("timed out after %s waiting for the full create-time record (record=%v invocation=%v keep=%v/%v)", within, rerr, invFound, keepSet, kerr)
+			t.Fatalf("timed out after %s waiting for the full create-time record (record=%v fingerprint=%v invocation=%v keep=%v/%v)", within, rerr, fpFound, invFound, keepSet, kerr)
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
@@ -182,6 +183,7 @@ func TestRunSession_RecordsBeforeWaiting_AndUnblocksAttachOnRecord(t *testing.T)
 		t.Fatal(err)
 	}
 	recordSeen := waitForFile(t, filepath.Join(leaseDir, "record.json"), 20*time.Second)
+	waitForRecordedCreateState(t, leaseDir, key, false, 20*time.Second)
 
 	// (1) The record is COMPLETE — instance id, fingerprint, invocation — and
 	// the first session is still running: it cannot have exited, because
