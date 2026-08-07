@@ -484,9 +484,14 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 	where += " AND " + memProfileVisible
 	args = append(args, memNormProfile(profile))
 	if star {
-		// Newest first, rowid as a same-timestamp tiebreak so the order is stable
-		// across calls. Scored queries are ordered by score below instead.
-		where += " ORDER BY created_at DESC, rowid DESC"
+		// Newest first. rowid, not created_at, is the authoritative insertion
+		// sequence: created_at is wall-clock and can regress or tie (coarse
+		// clock resolution, NTP step-back, two inserts in the same millisecond),
+		// which would misorder "newest" if it were the sort key. rowid is an
+		// autoincrementing counter that only ever reflects insertion order, so
+		// it is used alone; created_at is still returned in the row for display.
+		// Scored queries are ordered by score below instead.
+		where += " ORDER BY rowid DESC"
 	}
 	rows, err := s.db.Query(where, args...)
 	if err != nil {
