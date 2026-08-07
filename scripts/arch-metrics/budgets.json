@@ -16,7 +16,7 @@
       "exits": 0
     },
     "pix/host/cmd/pix": {
-      "prod_loc": 3344,
+      "prod_loc": 3416,
       "exports": 15,
       "globals": 13,
       "edges": 23,
@@ -79,8 +79,8 @@
       "exits": 0
     },
     "pix/host/monitor": {
-      "prod_loc": 1139,
-      "exports": 33,
+      "prod_loc": 1174,
+      "exports": 35,
       "globals": 20,
       "edges": 0,
       "exits": 0

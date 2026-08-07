@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -233,5 +234,56 @@ func TestHumanBytes(t *testing.T) {
 		if got := humanBytes(n); got != want {
 			t.Errorf("humanBytes(%d) = %q, want %q", n, got, want)
 		}
+	}
+}
+
+// TestOnceReadsExistingEventsExactlyOnceAndReturns is the one-shot half of
+// the reader: unlike Follow it must return on its own — no context, no
+// cancellation — as soon as it has printed what's stored.
+func TestOnceReadsExistingEventsExactlyOnceAndReturns(t *testing.T) {
+	store := newTestStore(t, StoreConfig{})
+	mustAppend(t, store, toolEvent("sbx", "sess", "one", 1))
+	mustAppend(t, store, toolEvent("sbx", "sess", "two", 2))
+
+	var buf lockedBuffer
+	if err := Once(store, FollowConfig{JSON: true, Out: &buf}); err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	out := buf.String()
+	if n := strings.Count(out, `"kind":"tool_end"`); n != 2 {
+		t.Fatalf("Once printed %d events, want exactly 2 (out=%q)", n, out)
+	}
+
+	// A second call against the SAME store (no cursor carried across calls,
+	// unlike Follow) reprints everything again — Once has no notion of
+	// "already seen", by design: it is a snapshot, not a subscription.
+	buf = lockedBuffer{}
+	if err := Once(store, FollowConfig{JSON: true, Out: &buf}); err != nil {
+		t.Fatalf("Once (second call): %v", err)
+	}
+	if n := strings.Count(buf.String(), `"kind":"tool_end"`); n != 2 {
+		t.Fatalf("second Once printed %d events, want exactly 2 (out=%q)", n, buf.String())
+	}
+}
+
+// TestOnceSurfacesAListError is the one behavioral difference from Follow:
+// Once has no next poll to self-correct on, so a List failure must come
+// back as an error instead of being swallowed as merely transient.
+func TestOnceSurfacesAListError(t *testing.T) {
+	root := t.TempDir()
+	// A plain file where List expects a directory it can os.ReadDir: not a
+	// missing root (that's the legitimate "nothing yet" case, see
+	// OpenStore's tests), a genuinely broken one.
+	blocker := filepath.Join(root, "blocked")
+	if err := os.WriteFile(blocker, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenStore(blocker)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	var buf lockedBuffer
+	if err := Once(store, FollowConfig{JSON: true, Out: &buf}); err == nil {
+		t.Fatal("Once against a root that is a plain file = nil error, want the List failure surfaced")
 	}
 }

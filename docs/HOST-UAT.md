@@ -125,7 +125,9 @@ pix run --name pix-uat-manual
       ls` shows it; `pix task rm uat-check` persists the branch and tears the
       checkout down.
 - [ ] `pix monitor --json | head -5` prints valid NDJSON for the session just
-      run (needs monitor enabled in `pix serve`).
+      run (needs monitor enabled in `pix serve`) and EXITS on its own — it
+      must not hang even with no events yet; `pix monitor --follow --json`
+      is the explicit streaming form that keeps running.
 - [ ] `pix mcp ls` shows the configured servers; `pix-host mcp --list` prints
       nothing (Slack/Google Workspace are external, gateway-run, never
       host-binary-served).
@@ -144,7 +146,10 @@ Run the healthcheck skill. Then, without assuming anything from this
 conversation, verify from scratch: (1) `pix help --all` lists no retired verb —
 cross-check against services/host/cmd/pix/corpus/retirement.jsonl; (2) `pix
 task new`, `pix task ls`, `pix task rm` complete cleanly against this checkout;
-(3) `pix monitor --json | head -5` prints valid NDJSON; (4) `pix mcp ls` and
+(3) `pix monitor --json | head -5` prints valid NDJSON and returns to the
+prompt on its own (no hang); if the store is empty and no `pix serve` is
+running, it instead fails with an actionable nonzero exit rather than
+hanging or printing nothing; (4) `pix mcp ls` and
 `pix-host mcp --list` agree that Slack/Google Workspace are gateway-registered,
 not host-binary-served. Report each as pass/fail with the exact command and
 output, not a summary claim.

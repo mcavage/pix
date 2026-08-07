@@ -205,6 +205,19 @@ for its --bind/--port flags). With no --path, monitor tails the same store
 root serve writes to; run 'pix serve' first (or already have it running)
 for there to be anything to follow.
 
+DEFAULT IS ONE-SHOT: with no --follow and not run at an interactive
+terminal (a pipe, 'pix monitor --json | head -5', a script), monitor prints
+whatever is ALREADY stored and exits — it never blocks waiting for more. If
+nothing is stored AND no ingest listener is running, that is reported as an
+actionable error (exit 3), not silent empty output: run 'pix serve', or pass
+--path at a store that already has something in it. Nothing stored while an
+ingest listener IS running is reported as empty success (there is genuinely
+nothing yet).
+
+An interactive terminal keeps the old live-follow default (equivalent to
+--follow) and prints one banner line to stderr naming what it found before
+it starts waiting, so a TTY run is never a silent, indefinite hang.
+
 NOTE: live events only flow from a sandbox created with an image that
 includes the monitor extension + the :11437 network allowlist entry (baked
 via 'make load' on the host). A stale sandbox predates that and shows no
@@ -220,9 +233,10 @@ ENV (read by the in-VM extension, documented here for discoverability):
 func (c *monitorCmd) Help() string { return monitorDescription }
 
 type monitorCmd struct {
-	Name string `arg:"" optional:"" help:"Filter to one sandbox/session by id substring, CASE-SENSITIVE."`
-	Path string `help:"Read this store directory instead of <state-dir>/monitor." placeholder:"DIR"`
-	JSON bool   `help:"Print the raw stored event JSON (one object per line, pipe to jq)."`
+	Name   string `arg:"" optional:"" help:"Filter to one sandbox/session by id substring, CASE-SENSITIVE."`
+	Path   string `help:"Read this store directory instead of <state-dir>/monitor." placeholder:"DIR"`
+	JSON   bool   `help:"Print the raw stored event JSON (one object per line, pipe to jq)."`
+	Follow bool   `short:"f" help:"Keep streaming as new events land instead of the one-shot default. Implied at an interactive terminal."`
 }
 
 func (c *monitorCmd) Run(d *cli.Deps) error {
@@ -252,12 +266,70 @@ func (c *monitorCmd) follow(ctx context.Context, d *cli.Deps, tty bool) error {
 			return fmt.Errorf("resolve monitor store root: %w", err)
 		}
 	}
-	store, err := monitor.NewStore(monitor.StoreConfig{Root: root})
+	// OpenStore is read-only: a one-shot run must not fabricate an empty
+	// store just by looking, which would turn "no store yet" (actionable)
+	// into indistinguishable real emptiness.
+	store, err := monitor.OpenStore(root)
 	if err != nil {
 		return err
 	}
-	monitor.Follow(ctx, store, monitor.FollowConfig{Filter: c.Name, JSON: c.JSON, TTY: tty, Out: d.Out})
+	cfg := monitor.FollowConfig{Filter: c.Name, JSON: c.JSON, TTY: tty, Out: d.Out}
+
+	if !c.Follow && !tty {
+		return c.once(store, cfg, d)
+	}
+	if tty {
+		fmt.Fprintln(d.Err, monitorBanner(store))
+	}
+	monitor.Follow(ctx, store, cfg)
 	return nil
+}
+
+// once prints whatever is already stored and returns, per DEFAULT IS
+// ONE-SHOT above. Empty output is honest success only when a live ingest
+// listener could plausibly still fill the store in; with nothing stored AND
+// no listener running, empty output would be indistinguishable from broken,
+// so that combination is reported instead as an actionable, nonzero error.
+func (c *monitorCmd) once(store *monitor.Store, cfg monitor.FollowConfig, d *cli.Deps) error {
+	metas, err := store.List()
+	if err != nil {
+		return fmt.Errorf("monitor: list stored streams: %w", err)
+	}
+	if len(metas) == 0 && !ingestUp() {
+		fmt.Fprintln(d.Err, "pix monitor: no stored events, and no ingest listener is running.")
+		fmt.Fprintln(d.Err, "  Start it with `pix serve` (or point --path at a store that already has data), then re-run.")
+		fmt.Fprintln(d.Err, "  `pix monitor --follow` keeps this command open and waits for events instead of exiting.")
+		return cli.SilentError{Code: rpc.ExitServiceDown}
+	}
+	return monitor.Once(store, cfg)
+}
+
+// ingestUp reports whether a `pix-host serve` daemon (the only process that
+// ever writes to the monitor store) appears to be running, so an empty
+// one-shot read can tell "nothing has happened yet" apart from "nothing ever
+// will". A false negative just makes the error message fire when serve
+// happens to be reachable some OTHER way (e.g. a still-warming managed
+// unit); it never blocks a real read, since it only gates the error path.
+func ingestUp() bool {
+	up, _ := service.ServeIdentityUp(service.ManagedActive, config.ServePidPath(), 0)
+	return up
+}
+
+// monitorBanner is the one honest line an interactive follow prints to
+// stderr before it starts waiting, so a TTY run is never a silent hang: it
+// says what is already stored and whether an ingest listener was even found
+// to feed it anything more.
+func monitorBanner(store *monitor.Store) string {
+	metas, _ := store.List()
+	up := ingestUp()
+	switch {
+	case len(metas) == 0 && !up:
+		return "pix monitor: no stored events and no ingest listener detected — following anyway, but nothing will arrive until `pix serve` is running. Ctrl-C to stop."
+	case len(metas) == 0:
+		return "pix monitor: no stored events yet — following live, waiting for the first one. Ctrl-C to stop."
+	default:
+		return fmt.Sprintf("pix monitor: following %d stored stream(s) live. Ctrl-C to stop.", len(metas))
+	}
 }
 
 // ── lifecycle: ls / rm ──────────────────────────────────────────────────────

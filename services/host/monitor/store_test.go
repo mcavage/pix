@@ -522,3 +522,42 @@ func TestWritesRefuseToFollowASymlink(t *testing.T) {
 		t.Fatalf("wrote %d entries through the symlink", len(entries))
 	}
 }
+
+// TestOpenStoreDoesNotCreateRoot is the read-only-open contract a reader
+// (`pix monitor`) depends on: looking at a store that was never written to
+// must not fabricate it. NewStore's ensureDir0700 side effect would turn
+// "no store yet" into "an empty store exists" on every read, erasing the
+// distinction a one-shot reader needs (see cmd/pix's monitorCmd.once).
+func TestOpenStoreDoesNotCreateRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "never-created")
+	store, err := OpenStore(root)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("OpenStore(%s) created the root (stat err=%v), want it left absent", root, err)
+	}
+	metas, err := store.List()
+	if err != nil || len(metas) != 0 {
+		t.Fatalf("List() on a never-created root = (%v, %v), want (nil, nil)", metas, err)
+	}
+	if _, err := OpenStore(""); err == nil {
+		t.Error("OpenStore(\"\") = nil error, want a required-root error")
+	}
+}
+
+// TestOpenStoreReadsAPreExistingStore proves OpenStore is not merely
+// inert — it reads real data fine, it just never creates anything.
+func TestOpenStoreReadsAPreExistingStore(t *testing.T) {
+	writer := newTestStore(t, StoreConfig{})
+	mustAppend(t, writer, toolEvent("sbx", "sess", "hi", 1))
+
+	reader, err := OpenStore(writer.cfg.Root)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	events, err := reader.Tail("sbx", "sess", 0)
+	if err != nil || len(events) != 1 {
+		t.Fatalf("Tail via OpenStore = (%v, %v), want one event", events, err)
+	}
+}

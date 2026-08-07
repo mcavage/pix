@@ -7,13 +7,17 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"pix/host/cli"
+	"pix/host/config"
+	"pix/host/rpc"
 )
 
 // syncBuffer is a bytes.Buffer safe for the test goroutine to read while a
@@ -174,5 +178,178 @@ func TestMonitorPathModeJSONAndFilter(t *testing.T) {
 func TestMonitorIsAKnownVerb(t *testing.T) {
 	if !knownVerbs()["monitor"] {
 		t.Fatal(`knownVerbs()["monitor"] = false, want true`)
+	}
+}
+
+// startFakeServeProc spawns a real, live process whose argv genuinely
+// verifies as `pix-host serve` (see service.cmdlineIsServe: argv[0]'s base is
+// "pix-host", argv[1] is "serve") by symlinking sh under that name, so a test
+// can exercise the real ServeIdentityUp identity check instead of a stub.
+// The process is killed and reaped on test cleanup.
+func startFakeServeProc(t *testing.T) (pid int) {
+	t.Helper()
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("no sh on PATH: %v", err)
+	}
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "pix-host")
+	if err := os.Symlink(sh, bin); err != nil {
+		t.Fatalf("symlink %s -> %s: %v", bin, sh, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "serve"), []byte("while :; do sleep 0.05; done\n"), 0o700); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	cmd := exec.Command(bin, "serve")
+	cmd.Dir = dir
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start %s serve: %v", bin, err)
+	}
+	reaped := make(chan struct{})
+	go func() { _ = cmd.Wait(); close(reaped) }()
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		<-reaped
+	})
+	return cmd.Process.Pid
+}
+
+// isolateServeState points config.ServePidPath/StateDir at an empty temp
+// dir for the duration of a test, so "is `pix-host serve` running" always
+// reads false regardless of what happens to be running on the machine that
+// executes the test suite.
+func isolateServeState(t *testing.T) {
+	t.Helper()
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+}
+
+// TestMonitorOneShotIsTheNonTTYDefault is the core fix: `pix monitor --json |
+// head -5` must NOT block forever. With no --follow and tty=false (a pipe),
+// follow must return on its own, with no context cancellation at all, once
+// it has printed what is already stored.
+func TestMonitorOneShotIsTheNonTTYDefault(t *testing.T) {
+	isolateServeState(t)
+	dir := t.TempDir()
+	storeFixture(t, dir, "sbx", "sess",
+		toolEndLine("sbx", "sess", "tool-1"), toolEndLine("sbx", "sess", "tool-2"))
+
+	var out bytes.Buffer
+	// A context that is NEVER canceled: if this hangs, it hangs on the test
+	// deadline, not on us politely stopping it — which is exactly the
+	// behavior this test exists to rule out.
+	done := make(chan error, 1)
+	go func() {
+		done <- runMonitorCore(context.Background(), []string{"--path", dir, "--json"}, &out, t.TempDir(), false)
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runMonitorCore: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("one-shot monitor did not return on its own; the non-TTY default must not block waiting for --follow")
+	}
+
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("got %d lines, want exactly 2 (the two stored events, no more): %q", len(lines), out.String())
+	}
+	for _, line := range lines {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("one-shot --json emitted a non-JSON line %q: %v", line, err)
+		}
+	}
+}
+
+// TestMonitorOneShotErrorsOnAbsentStoreWithIngestDown is the OTHER half of
+// the fix: a one-shot read against a store that was never created, with no
+// `pix-host serve` running to ever fill it, must fail loudly and
+// actionably — not print nothing and exit 0, which is indistinguishable
+// from "ran fine, there's just nothing to see".
+func TestMonitorOneShotErrorsOnAbsentStoreWithIngestDown(t *testing.T) {
+	isolateServeState(t)
+	absent := filepath.Join(t.TempDir(), "never-created")
+
+	var out bytes.Buffer
+	err := runMonitorCore(context.Background(), []string{"--path", absent, "--json"}, &out, t.TempDir(), false)
+	if err == nil {
+		t.Fatalf("want a nonzero error for an absent store with no ingest running, got nil (output=%q)", out.String())
+	}
+	if code := cli.ExitCode(err); code != rpc.ExitServiceDown {
+		t.Errorf("ExitCode(err) = %d, want %d (rpc.ExitServiceDown)", code, rpc.ExitServiceDown)
+	}
+	if !strings.Contains(out.String(), "pix serve") {
+		t.Errorf("error output %q must name the fix (`pix serve`)", out.String())
+	}
+	if !strings.Contains(out.String(), "--follow") {
+		t.Errorf("error output %q must mention --follow as the explicit opt-in to wait instead", out.String())
+	}
+}
+
+// TestMonitorOneShotEmptyStoreWithIngestUpIsQuietSuccess is the documented
+// exception: an empty store is legitimate, not broken, when an ingest
+// listener IS running (nothing has arrived yet) — that is empty success,
+// not an error, and must not be confused with the down case above.
+func TestMonitorOneShotEmptyStoreWithIngestUpIsQuietSuccess(t *testing.T) {
+	isolateServeState(t)
+	// A pid that ACTUALLY verifies as `pix-host serve` (argv[0] base "pix-host",
+	// argv[1] "serve") — the same identity check ServeIdentityUp uses to refuse
+	// signalling a stranger, so this test proves the real path, not a stub.
+	pid := startFakeServeProc(t)
+	if err := os.MkdirAll(filepath.Dir(config.ServePidPath()), 0o700); err != nil {
+		t.Fatalf("mkdir state dir: %v", err)
+	}
+	if err := os.WriteFile(config.ServePidPath(), []byte(strconv.Itoa(pid)), 0o600); err != nil {
+		t.Fatalf("write fake pidfile: %v", err)
+	}
+
+	absent := filepath.Join(t.TempDir(), "never-created")
+	var out bytes.Buffer
+	err := runMonitorCore(context.Background(), []string{"--path", absent, "--json"}, &out, t.TempDir(), false)
+	if err != nil {
+		t.Fatalf("runMonitorCore: %v (output=%q)", err, out.String())
+	}
+	if out.String() != "" {
+		t.Errorf("output = %q, want nothing: an empty store with a live ingest listener is quiet success", out.String())
+	}
+}
+
+// TestMonitorFollowRunsUntilCanceled proves --follow (and the TTY-implied
+// equivalent) is a real streaming mode, not just a no-op flag: with an
+// empty store it must NOT return on its own — only ctx cancellation ends
+// it — and a TTY run must print its honest banner before it starts
+// waiting.
+func TestMonitorFollowRunsUntilCanceled(t *testing.T) {
+	isolateServeState(t)
+	dir := t.TempDir() // deliberately empty
+
+	var out syncBuffer
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- runMonitorCore(ctx, []string{"--path", dir, "--follow"}, &out, t.TempDir(), true /* tty */)
+	}()
+
+	// It must still be running a moment later: nothing to read, no signal to
+	// stop, so a one-shot implementation would have already returned.
+	time.Sleep(200 * time.Millisecond)
+	select {
+	case err := <-done:
+		t.Fatalf("follow returned on its own (err=%v) before cancellation; --follow must keep running on an empty store", err)
+	default:
+	}
+	if !strings.Contains(out.String(), "Ctrl-C to stop") {
+		t.Errorf("TTY follow banner %q must honestly say it is waiting and how to stop", out.String())
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runMonitorCore after cancel: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("follow did not stop within 2s of context cancellation")
 	}
 }

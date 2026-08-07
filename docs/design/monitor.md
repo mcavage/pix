@@ -1,7 +1,44 @@
 # pix monitor — live wiretap of the agent's back-and-forth
 
-Status: shipped (MVP), REPLACED by Story05, ingest ownership moved by U05b.
+Status: shipped (MVP), REPLACED by Story05, ingest ownership moved by U05b,
+reader made fail-fast/one-shot by the hostfix-monitor fix.
 Owner: Mark.
+
+**hostfix-monitor update — the reader no longer blocks forever by default.**
+`pix monitor --json | head -5` used to hang indefinitely against an empty or
+never-created store, because `Run` always called the polling `Follow` loop
+and `NewStore` silently created the (empty) root just by being asked to read
+it. Fixed on both counts:
+
+* **Read-only open never creates the root.** `monitor.OpenStore(root)`
+  replaces `NewStore` on the reader path: no `ensureDir0700` side effect, so
+  "no store yet" (an actionable signal) never gets silently turned into "an
+  empty store exists" (indistinguishable from later, real emptiness) just by
+  looking.
+* **One-shot is the non-interactive default.** With no `--follow`/`-f` and
+  not run at a TTY, `pix monitor` now calls the new `monitor.Once` (prints
+  whatever is already stored, once, and returns — no polling, no context
+  needed) instead of `monitor.Follow`. An interactive terminal keeps the old
+  live-follow default (equivalent to `--follow`) but now prints one honest
+  banner line to stderr first (what's already stored, whether an ingest
+  listener was even detected) so a TTY run is never a silent, indefinite
+  wait with no explanation.
+* **Empty + down is an error, not silent success.** The one-shot path checks
+  `service.ServeIdentityUp` (the same process-identity check `serve
+  stop`/`status` use, never a bare port probe) before treating zero stored
+  streams as fine. Nothing stored AND no `pix-host serve` running exits 3
+  (`rpc.ExitServiceDown`) with the fix command named on stderr. Nothing
+  stored while an ingest listener IS running is genuinely empty success
+  (nothing has arrived yet) — the two are never conflated.
+* **List errors are surfaced, not swallowed.** `Follow`'s poll loop still
+  treats a `Store.List` failure as transient (there's always a next poll to
+  self-correct on) and keeps going. `Once` has no next poll, so the same
+  failure now comes back as a real error instead of silently printing
+  nothing.
+
+See `services/host/monitor/follow.go` (`Once`, `emitNew`, `Follow`),
+`services/host/monitor/store.go` (`OpenStore`), and
+`services/host/cmd/pix/root.go` (`monitorCmd.follow`/`.once`/`monitorBanner`).
 
 **U05b update — ingest ownership moved under `pix-host serve`.** The
 "unchanged on purpose" bullet below (from Story05) predicted exactly this
