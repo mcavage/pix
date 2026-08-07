@@ -324,6 +324,21 @@ host-side), `--url` (a remote endpoint, OAuth'd host-side), or `--local --url
 <manifest>` (a container the gateway runs from an OCI manifest). `sbx mcp get
 <name>` shows you exactly what's registered.
 
+**pix tolerates one sbx CLI grammar change at a time, never blindly.**
+`pix mcp bundle`'s default `add` and `pix mcp register`'s container (manifest/
+remote-URL) registrations each know a CURRENT grammar and exactly one KNOWN
+alternate. `mcp bundle add` tries the current `NAME --url URL` form and
+retries with the positional `NAME URL` form ONLY when sbx's own parser
+rejects the first with a recognized usage error (an unknown flag/command or
+wrong arity); never on an auth or policy failure, which would fail
+identically either way. A manifest/remote container instead runs a read-only
+`sbx mcp add --help` once, up front, and picks the grammar that help text
+documents; chosen there instead of after a failed attempt because a
+remote-URL registration can open an interactive OAuth grant, and retrying
+that after a failure risks a second, unwanted grant. Neither path loops or
+guesses past its one known alternate; an unresolvable case reports the real
+failure, not an invented one.
+
 **Static preload, or explicit load, nothing else.** Every server in your
 configured `mcp` list, and every integration an active or transient pack
 carries, is passed to sbx as `--static-mcp <name>` when the sandbox is

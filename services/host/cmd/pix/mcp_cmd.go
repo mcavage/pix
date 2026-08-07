@@ -153,9 +153,18 @@ type mcpBundleCmd struct {
 }
 
 func (c *mcpBundleCmd) Run(d *cli.Deps) error {
-	sbxArgs := append([]string{"mcp", "bundle"}, c.Args...)
 	if len(c.Args) == 0 || (len(c.Args) == 1 && c.Args[0] == "add") {
-		sbxArgs = []string{"mcp", "bundle", "add", mcp.McpCatalogBundleName, "--url", mcp.McpCatalogBundleURL(version)}
+		// The default add is a fixed, non-interactive registration (the shipped
+		// catalog bundle, no user-supplied URL to authorize), so a bounded
+		// failed-attempt retry is safe here: a wrong grammar fails at argv
+		// parse time, before any registration side effect. Try the current
+		// --url grammar first, fall back to the positional grammar ONLY on a
+		// recognized CLI usage mismatch (see RunSbxGrammarFallback).
+		name, url := mcp.McpCatalogBundleName, mcp.McpCatalogBundleURL(version)
+		primary := mcp.BundleAddArgs(name, url)
+		alt := mcp.BundleAddArgsPositional(name, url)
+		return mcpFailed(d, "bundle", mcp.RunSbxGrammarFallback(exec.LookPath, d.Out, d.Err, primary, alt))
 	}
+	sbxArgs := append([]string{"mcp", "bundle"}, c.Args...)
 	return mcpFailed(d, "bundle", mcp.RunSbxMcpCore(exec.LookPath, d.Out, d.In, d.Err, sbxArgs))
 }

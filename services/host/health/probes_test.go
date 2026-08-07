@@ -110,6 +110,39 @@ func TestSbxProbe_RealExecutableOutcomes(t *testing.T) {
 	}
 }
 
+// TestSbxProbe_VersionGrammarFallback: an sbx build that rejects the root
+// --version flag with a recognized cobra-style usage error falls back to
+// `sbx version` and reports Ready — the exact v0.38 compatibility gap this
+// probe exists to bridge.
+func TestSbxProbe_VersionGrammarFallback(t *testing.T) {
+	bin := buildFixture(t)
+	r := check(t, SbxProbe{Bin: bin, Args: []string{"--version"}}, 5*time.Second)
+	wantStatus(t, r, StatusReady)
+	if !strings.Contains(r.Evidence, "fell back from --version") {
+		t.Errorf("evidence = %q, want it to say the fallback grammar was used", r.Evidence)
+	}
+}
+
+// TestSbxProbe_DeniedNeverTriesFallback: a POSITIVE policy refusal on the
+// primary grammar must classify as Denied and must NEVER retry the alternate
+// grammar — if it wrongly did, this fixture's "version" mode would answer
+// healthy and flip the result to Ready, which is exactly what this test
+// guards against.
+func TestSbxProbe_DeniedNeverTriesFallback(t *testing.T) {
+	bin := buildFixture(t)
+	r := check(t, SbxProbe{Bin: bin, Args: []string{"--version", "denied"}}, 5*time.Second)
+	wantStatus(t, r, StatusDenied)
+}
+
+// TestSbxProbe_FallbackAlsoFailingStaysUnknown: when BOTH the primary and the
+// alternate grammar fail, the probe is bounded to exactly the one retry and
+// reports Unknown rather than looping or guessing further.
+func TestSbxProbe_FallbackAlsoFailingStaysUnknown(t *testing.T) {
+	bin := buildFixture(t)
+	r := check(t, SbxProbe{Bin: bin, Args: []string{"--version", "brokenboth"}}, 5*time.Second)
+	wantStatus(t, r, StatusUnknown)
+}
+
 func TestSbxProbe_MissingBinaryIsVerifiedAbsent(t *testing.T) {
 	r := check(t, SbxProbe{Bin: filepath.Join(t.TempDir(), "definitely-not-here")}, 5*time.Second)
 	wantStatus(t, r, StatusAbsent)

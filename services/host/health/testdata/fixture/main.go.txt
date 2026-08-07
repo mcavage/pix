@@ -14,6 +14,16 @@
 //	crash      die on SIGKILL — no exit status, no output
 //	hang       sleep past any sane probe deadline, ignoring SIGTERM
 //	malformed  exit 0 with output that carries no recognizable version
+//	--version  simulates an sbx build that REJECTS the root --version flag
+//	           (exit 1, a cobra-style "unknown flag" usage error) so the
+//	           SbxProbe grammar-fallback path can be exercised end to end. A
+//	           second argv token selects a variant: "denied" answers with a
+//	           policy refusal instead (proving a non-usage failure never
+//	           triggers the fallback), anything else is the default rejection.
+//	version    the fallback grammar SbxProbe retries with: exit 0 with a
+//	           version banner, unless the second argv token is "brokenboth"
+//	           (a generic non-usage failure, proving a fallback that ALSO
+//	           fails just stays unknown rather than retrying further).
 //	keys       exit 0 listing every model provider key, the way a key store
 //	           that ANSWERED does
 //	nokeys     exit 0 listing a store that answered and holds no model key
@@ -60,6 +70,19 @@ func main() {
 	case "broken":
 		fmt.Fprintln(os.Stderr, "fixture: something went wrong")
 		os.Exit(1)
+	case "--version":
+		if argAt(2) == "denied" {
+			fmt.Fprintln(os.Stderr, "operation not permitted: blocked by organization policy")
+			os.Exit(1)
+		}
+		fmt.Fprintln(os.Stderr, "Error: unknown flag: --version\nUsage:\n  sbx [command]")
+		os.Exit(1)
+	case "version":
+		if argAt(2) == "brokenboth" {
+			fmt.Fprintln(os.Stderr, "fixture: something went wrong")
+			os.Exit(1)
+		}
+		fmt.Println("pix-fixture version 9.9.9")
 	case "crash":
 		_ = syscall.Kill(os.Getpid(), syscall.SIGKILL)
 		time.Sleep(time.Minute)

@@ -52,6 +52,20 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **sbx v0.38 CLI-grammar compatibility.** `pix doctor`/`pix status`'s sbx probe
+  now falls back from `sbx --version` to `sbx version` when a newer sbx build
+  rejects the root `--version` flag with a recognized usage error (evidence
+  says so explicitly); a denied, timed-out, or otherwise-failed probe never
+  retries. `pix mcp bundle`'s default `add` now tries the current `NAME --url
+  URL` grammar and falls back to the positional `NAME URL` form on the same
+  narrow signal. `pix mcp register`'s manifest/remote-URL container
+  registrations instead decide their `--url`-flag-vs-positional grammar up
+  front from a read-only `sbx mcp add --help` probe, never from a failed
+  attempt, because a remote registration can open an interactive OAuth grant
+  a retry must not repeat. New `sys.IsUsageMismatch` is the one shared
+  classifier every one of these call sites gates its retry on — an
+  unknown-flag/unknown-command/wrong-arity signature from the invoked CLI's
+  own parser, never an auth/policy/operational failure.
 - `lib/recall-message.ts` no longer documents the deleted knowledge store
   (`:11436`, `KNOWLEDGE_CHAR_BUDGET`, `/knowledge`) as live behaviour; the
   per-channel budget rationale is restated for the store that actually exists.
