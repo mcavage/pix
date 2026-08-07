@@ -18,16 +18,41 @@ import (
 	"pix/host/workspace"
 )
 
-// McpCatalogNames is the SINGLE public source of truth for the shipped MCP
-// catalog bundle (config/mcp-catalog.bundle.json): exactly the servers
-// `pix mcp bundle` registers. classifyMCPServer's remote-vs-custom split
-// reuses this set, so a plausible-looking but unshipped name (e.g. "linear")
-// can never be treated as a confirmed catalog server — that would recommend
+// CatalogServer is one shipped public MCP catalog entry: a name plus the
+// remote endpoint `sbx mcp add NAME --url URL` registers it under.
+type CatalogServer struct {
+	Name string
+	URL  string
+}
+
+// McpCatalog is the SINGLE source of truth for the shipped public MCP catalog
+// — config/mcp-catalog.bundle.json is a generated MIRROR of this slice (see
+// TestMcpCatalogMatchesShippedBundleJSON), never edited independently of it.
+// `pix mcp bundle add` registers these NATIVELY when sbx still has an `mcp
+// bundle` subcommand, or ONE AT A TIME via direct `sbx mcp add NAME --url
+// URL` when it does not (sbx v0.38 dropped `mcp bundle` entirely — see
+// RunBundleAdd). `pix mcp bundle rm pix-catalog` mirrors the same fallback
+// for removal.
+var McpCatalog = []CatalogServer{
+	{Name: "notion", URL: "https://mcp.notion.com/mcp"},
+	{Name: "atlassian", URL: "https://mcp.atlassian.com/v1/mcp"},
+	{Name: "granola", URL: "https://mcp.granola.ai/mcp"},
+}
+
+// McpCatalogNames is the SINGLE public source of truth for "is this a
+// confirmed shipped catalog name", DERIVED from McpCatalog so the two can
+// never disagree. classifyMCPServer's remote-vs-custom split reuses this
+// set, so a plausible-looking but unshipped name (e.g. "linear") can never be
+// treated as a confirmed catalog server — that would recommend
 // `pix mcp bundle` as a repair command that silently can't register it.
-var McpCatalogNames = map[string]bool{
-	"notion":    true,
-	"atlassian": true,
-	"granola":   true,
+var McpCatalogNames = catalogNameSet(McpCatalog)
+
+func catalogNameSet(catalog []CatalogServer) map[string]bool {
+	names := make(map[string]bool, len(catalog))
+	for _, c := range catalog {
+		names[c.Name] = true
+	}
+	return names
 }
 
 // Credentials is everything registration needs to know about the host's
@@ -333,13 +358,29 @@ func RunSbxGrammarFallback(lookPath func(string) (string, error), out, errW io.W
 	if _, err := lookPath("sbx"); err != nil {
 		return McpWouldRun(errW, primary...)
 	}
-	stdout, stderr, runErr := runSbxCaptured(primary)
-	if runErr != nil && len(alt) > 0 && sys.IsUsageMismatch(stdout+"\n"+stderr) {
-		stdout, stderr, runErr = runSbxCaptured(alt)
-	}
+	stdout, stderr, runErr, _ := attemptWithGrammarFallback(primary, alt)
 	fmt.Fprint(out, stdout)
 	fmt.Fprint(errW, stderr)
 	return runErr
+}
+
+// attemptWithGrammarFallback runs primary, retrying EXACTLY ONCE with alt on a
+// recognized usage mismatch (see RunSbxGrammarFallback for the full retry
+// contract), and additionally reports whether the FINAL attempt (primary
+// alone, or alt after a retry) is ITSELF a usage mismatch. That extra signal
+// is what lets a bundle-specific caller (RunBundleAdd, RunBundleRm) tell "this
+// sbx build's `mcp bundle` grammar merely moved" (mismatch resolved by alt,
+// finalMismatch = false) apart from "this sbx build has no `mcp bundle`
+// subcommand at all" (both grammars rejected the same way, finalMismatch =
+// true) — only the latter licenses falling back to a DIFFERENT command
+// (`sbx mcp add`/`sbx mcp rm`) entirely.
+func attemptWithGrammarFallback(primary, alt []string) (stdout, stderr string, err error, finalMismatch bool) {
+	stdout, stderr, err = runSbxCaptured(primary)
+	if err != nil && len(alt) > 0 && sys.IsUsageMismatch(stdout+"\n"+stderr) {
+		stdout, stderr, err = runSbxCaptured(alt)
+	}
+	finalMismatch = err != nil && sys.IsUsageMismatch(stdout+"\n"+stderr)
+	return stdout, stderr, err, finalMismatch
 }
 
 // runSbxCaptured execs `sbx <args...>` with stdout and stderr captured into
@@ -354,6 +395,128 @@ func runSbxCaptured(args []string) (stdout, stderr string, err error) {
 	cmd.Stderr = &errBuf
 	err = cmd.Run()
 	return outBuf.String(), errBuf.String(), err
+}
+
+// noBundleCompatNote is what every bundle-command fallback prints to stderr
+// the moment it discovers sbx has no `mcp bundle` subcommand at all (sbx
+// v0.38+): an honest, one-line explanation of what is about to happen
+// instead — never a silent behavior swap a caller has to infer from the
+// commands that follow.
+func noBundleCompatNote(verb string) string {
+	return "sbx has no `mcp bundle` subcommand (sbx v0.38+ dropped it); " + verb + "\n"
+}
+
+// RunBundleAdd registers the shipped MCP catalog bundle. It tries sbx's
+// NATIVE `mcp bundle add` first — the current --url-flag grammar, falling back
+// once to the legacy positional grammar on a recognized usage mismatch (the
+// SAME one-shot retry RunSbxGrammarFallback documents) — and reports that
+// attempt's own streams unchanged for success OR any non-grammar failure
+// (auth, policy, a crashed gateway): retrying those cannot fix them.
+//
+// ONLY when BOTH grammars are rejected the same way — sbx's own parser
+// saying it does not recognize `mcp bundle` at all, not merely this argv
+// shape of it — does it fall back further, to registering every entry in
+// catalog individually via direct `sbx mcp add NAME --url URL`
+// (RunBundleAddDirect): the grammar this host's evidence confirms sbx v0.38
+// still speaks. name/url are unused on that path (there is no bundle to name
+// or fetch); they only matter for the native attempt.
+func RunBundleAdd(lookPath func(string) (string, error), out, errW io.Writer, name, url string, catalog []CatalogServer) error {
+	primary := BundleAddArgs(name, url)
+	if _, err := lookPath("sbx"); err != nil {
+		return McpWouldRun(errW, primary...)
+	}
+	alt := BundleAddArgsPositional(name, url)
+	stdout, stderr, runErr, noBundleCmd := attemptWithGrammarFallback(primary, alt)
+	if !noBundleCmd {
+		fmt.Fprint(out, stdout)
+		fmt.Fprint(errW, stderr)
+		return runErr
+	}
+	fmt.Fprint(errW, noBundleCompatNote("registering the shipped catalog entries individually instead"))
+	return RunBundleAddDirect(out, errW, catalog)
+}
+
+// RunBundleAddDirect registers each catalog entry ONE AT A TIME via direct
+// `sbx mcp add NAME --url URL` — the compatibility fallback RunBundleAdd uses
+// once it has confirmed sbx has no `mcp bundle` subcommand at all. It stops
+// at the FIRST failure (a real add failure is never masked by continuing to
+// the next entry and reporting a false partial success) and reports every
+// attempt's own streams as they happen, in catalog order, so a caller sees
+// exactly which entries registered before a failure. `sbx mcp add` is itself
+// additive — registering a name sbx already has is sbx's own decision, not
+// something this loop second-guesses — so it never removes a pre-existing
+// catalog registration, ordinary add or otherwise.
+func RunBundleAddDirect(out, errW io.Writer, catalog []CatalogServer) error {
+	for _, c := range catalog {
+		stdout, stderr, err := runSbxCaptured([]string{"mcp", "add", c.Name, "--url", c.URL})
+		fmt.Fprint(out, stdout)
+		fmt.Fprint(errW, stderr)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// RunBundleRm removes the shipped MCP catalog bundle registered under
+// bundleName (McpCatalogBundleName in production). It mirrors RunBundleAdd's
+// compatibility shape exactly: try sbx's native `mcp bundle rm NAME` first,
+// and ONLY on a recognized "sbx has no `mcp bundle` at all" usage mismatch
+// fall back to removing every catalog entry individually via direct
+// `sbx mcp rm NAME`, stopping at the first real failure and reporting each
+// attempt's own streams in catalog order.
+func RunBundleRm(lookPath func(string) (string, error), out, errW io.Writer, bundleName string, catalog []CatalogServer) error {
+	primary := []string{"mcp", "bundle", "rm", bundleName}
+	if _, err := lookPath("sbx"); err != nil {
+		return McpWouldRun(errW, primary...)
+	}
+	stdout, stderr, runErr := runSbxCaptured(primary)
+	if runErr == nil || !sys.IsUsageMismatch(stdout+"\n"+stderr) {
+		fmt.Fprint(out, stdout)
+		fmt.Fprint(errW, stderr)
+		return runErr
+	}
+	fmt.Fprint(errW, noBundleCompatNote("removing the shipped catalog entries individually instead"))
+	for _, c := range catalog {
+		cStdout, cStderr, err := runSbxCaptured([]string{"mcp", "rm", c.Name})
+		fmt.Fprint(out, cStdout)
+		fmt.Fprint(errW, cStderr)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// RunBundleLs reports the shipped catalog bundle's registration state. It
+// tries sbx's native `mcp bundle ls` first (extraArgs forwarded verbatim, so
+// e.g. a future `-o json` still works unchanged on a native build), and on
+// success OR any non-grammar failure reports that attempt's own streams as-is
+// — identical to every other verb in this file.
+//
+// ONLY on a recognized "sbx has no `mcp bundle` at all" usage mismatch does it
+// degrade: rather than fabricate a bundle listing sbx no longer has a concept
+// of, it prints an HONEST compatibility note to stderr and maps the request
+// onto the one registration view sbx v0.38 still has — `sbx mcp ls` — via
+// RunMcpLsCore, so a caller can see for themselves whether notion/atlassian/
+// granola are registered.
+func RunBundleLs(lookPath func(string) (string, error), out io.Writer, in io.Reader, errW io.Writer, catalog []CatalogServer, extraArgs []string) error {
+	primary := append([]string{"mcp", "bundle", "ls"}, extraArgs...)
+	if _, err := lookPath("sbx"); err != nil {
+		return McpWouldRun(errW, primary...)
+	}
+	stdout, stderr, runErr := runSbxCaptured(primary)
+	if runErr == nil || !sys.IsUsageMismatch(stdout+"\n"+stderr) {
+		fmt.Fprint(out, stdout)
+		fmt.Fprint(errW, stderr)
+		return runErr
+	}
+	names := make([]string, 0, len(catalog))
+	for _, c := range catalog {
+		names = append(names, c.Name)
+	}
+	fmt.Fprint(errW, noBundleCompatNote("showing the gateway's full registration list instead — look for "+strings.Join(names, "/")+":"))
+	return RunMcpLsCore(lookPath, out, in, errW, extraArgs...)
 }
 
 // ExecArgv returns the EXACT, literal command line the sbx gateway will exec to

@@ -339,6 +339,22 @@ that after a failure risks a second, unwanted grant. Neither path loops or
 guesses past its one known alternate; an unresolvable case reports the real
 failure, not an invented one.
 
+**sbx v0.38 dropped `mcp bundle` entirely, so `pix mcp bundle` degrades to
+direct adds, not a hard failure.** When BOTH the current and positional
+`mcp bundle add` grammars are rejected with a recognized "unknown command"
+error (not merely an unrecognized flag on an existing `bundle` command), pix
+concludes this sbx build has no `mcp bundle` at all and falls back to
+registering `mcp-catalog.bundle.json`'s three entries (notion/atlassian/
+granola) one at a time via direct `sbx mcp add NAME --url URL`, stopping at
+the first real failure and never touching a pre-existing registration.
+`pix mcp bundle rm pix-catalog` mirrors this with direct `sbx mcp rm NAME`
+calls for the same three names; `pix mcp bundle ls` prints an honest note and
+maps the request onto `sbx mcp ls` (the gateway's one remaining registration
+view) instead of fabricating a bundle listing sbx no longer has a concept
+of. The three names + URLs live in exactly one place in code
+(`mcp.McpCatalog`), checked against the shipped `config/mcp-catalog.bundle.json`
+by an anti-drift test so the two can never disagree.
+
 **Static preload, or explicit load, nothing else.** Every server in your
 configured `mcp` list, and every integration an active or transient pack
 carries, is passed to sbx as `--static-mcp <name>` when the sandbox is

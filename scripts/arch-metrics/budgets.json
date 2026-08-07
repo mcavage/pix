@@ -16,7 +16,7 @@
       "exits": 0
     },
     "pix/host/cmd/pix": {
-      "prod_loc": 3425,
+      "prod_loc": 3434,
       "exports": 15,
       "globals": 13,
       "edges": 23,
@@ -65,9 +65,9 @@
       "exits": 0
     },
     "pix/host/mcp": {
-      "prod_loc": 989,
-      "exports": 31,
-      "globals": 15,
+      "prod_loc": 1152,
+      "exports": 37,
+      "globals": 16,
       "edges": 6,
       "exits": 0
     },
