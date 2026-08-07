@@ -86,8 +86,24 @@ func emitNew(store *Store, cfg FollowConfig, cursors map[string]string) error {
 				fmt.Fprintln(cfg.Out, lines[i])
 			}
 		}
-		if len(lines) > 0 {
-			cursors[m.Dir] = lines[len(lines)-1]
+		// Advance the anchor to the LAST successfully encoded line, not simply
+		// the last event: an Encode failure (e.g. an unknown-kind event whose
+		// raw bytes decodeUnknown had to truncate to its cap, leaving them no
+		// longer valid JSON) leaves lines[len(lines)-1] == "", and anchoring on
+		// that empty string is a double bug — it can never re-match a real
+		// line on the next poll (a false miss forces start back to 0, i.e. a
+		// full re-print/duplicate of everything already emitted), and if two
+		// unrelated streams both hit it, both empty cursors read as "already
+		// seen" against each other on the very next poll below. Skipping
+		// unencodable lines here means the anchor is always either absent or a
+		// real, re-locatable line, so an unencodable event can only ever cost
+		// itself a possible re-emit on the next poll — the events after it are
+		// unaffected either way, per the anchor loop above.
+		for i := len(lines) - 1; i >= 0; i-- {
+			if lines[i] != "" {
+				cursors[m.Dir] = lines[i]
+				break
+			}
 		}
 	}
 	// A stream that fell out of List() (evicted for good) can never come back
