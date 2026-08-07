@@ -370,10 +370,13 @@ type serveState struct {
 	MemoryPort int    `json:"memory_port"`
 	// Units is the supervision tree as `serve` last published it: identity,
 	// state, restarts, generation, reattach, scrubbed last error and last probe
-	// latency, per unit. Empty means "we could not see the tree", which
-	// UnitsDetail explains — never "everything is fine".
-	Units       []unitreport.Unit `json:"units,omitempty"`
-	UnitsDetail string            `json:"units_detail,omitempty"`
+	// latency, per unit. It is ALWAYS present in JSON — as [] when there is
+	// nothing to report — and NEVER omitted just because it is empty: a reader
+	// must be able to tell "zero supervised units" from "the field is missing
+	// because this build predates it". UnitsDetail explains an empty or stale
+	// Units; it is never "everything is fine" by omission either.
+	Units       []unitreport.Unit `json:"units"`
+	UnitsDetail string            `json:"units_detail"`
 }
 
 // unitsStaleAfter is how long a published snapshot stays believable. serve
@@ -386,25 +389,33 @@ const unitsStaleAfter = 20 * time.Second
 // it describes THIS running daemon. Split out as a pure function so a test can
 // hand it a file and a clock instead of a live tree.
 func resolveServeUnits(path string, running bool, pid int, now time.Time) ([]unitreport.Unit, string) {
+	// emptyUnits is returned (never nil) whenever there is no tree to show: a nil
+	// slice marshals to JSON `null`, and this field must always be an array —
+	// "zero units" and "field absent" are different claims.
+	emptyUnits := []unitreport.Unit{}
 	rep, found, err := unitreport.ReadReport(path)
 	switch {
 	case err != nil:
-		return nil, fmt.Sprintf("unreadable supervision snapshot (%v)", err)
+		return emptyUnits, fmt.Sprintf("unreadable supervision snapshot (%v)", err)
 	case !found && !running:
-		return nil, "" // not running: no tree to report, and nothing surprising about it
+		return emptyUnits, "" // not running: no tree to report, and nothing surprising about it
 	case !found:
-		return nil, "serve is running but published no supervision snapshot"
+		return emptyUnits, "serve is running but published no supervision snapshot"
 	case !running:
-		return nil, "stale supervision snapshot from a serve that is no longer running"
+		return emptyUnits, "stale supervision snapshot from a serve that is no longer running"
 	case pid != 0 && rep.PID != 0 && rep.PID != pid:
-		return nil, fmt.Sprintf("supervision snapshot belongs to pid %d, not the running pid %d", rep.PID, pid)
+		return emptyUnits, fmt.Sprintf("supervision snapshot belongs to pid %d, not the running pid %d", rep.PID, pid)
 	case rep.SchemaVersion != unitreport.SchemaVersion:
-		return nil, fmt.Sprintf("supervision snapshot schema %d, this build reads %d", rep.SchemaVersion, unitreport.SchemaVersion)
+		return emptyUnits, fmt.Sprintf("supervision snapshot schema %d, this build reads %d", rep.SchemaVersion, unitreport.SchemaVersion)
+	}
+	units := rep.Units
+	if units == nil {
+		units = emptyUnits
 	}
 	if age := now.Sub(time.Unix(rep.GeneratedUnix, 0)); age > unitsStaleAfter {
-		return rep.Units, fmt.Sprintf("supervision snapshot is %ds stale", int(age.Seconds()))
+		return units, fmt.Sprintf("supervision snapshot is %ds stale", int(age.Seconds()))
 	}
-	return rep.Units, ""
+	return units, ""
 }
 
 // portProbe is what the status/upgrade paths actually touch: one environment
@@ -443,6 +454,12 @@ func resolveServeStatus(ctl serveCtl, env portProbe) serveState {
 // printServeStatus renders a serveState for humans (or JSON when jsonOut).
 func printServeStatus(st serveState, out io.Writer, jsonOut bool) {
 	if jsonOut {
+		// Units must publish as [] , never JSON `null`, even for a serveState a
+		// caller built directly (not through resolveServeStatus) with the field
+		// left at its nil zero value.
+		if st.Units == nil {
+			st.Units = []unitreport.Unit{}
+		}
 		b, _ := json.MarshalIndent(st, "", "  ")
 		fmt.Fprintln(out, string(b))
 		return

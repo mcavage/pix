@@ -117,3 +117,43 @@ func TestPrintServeStatusRendersUnitsAndJSON(t *testing.T) {
 		t.Errorf("an unseen tree must render as unknown:\n%s", h2.String())
 	}
 }
+
+// TestPrintServeStatusJSONAlwaysHasUnitsFields is the JSON half of "units:
+// unknown" above: a machine reader gets no human sentence to fall back on, so
+// `units` and `units_detail` must always be keys in the object — `units` an
+// empty array (never absent, never null) whenever there is nothing to show,
+// with `units_detail` explaining why when that emptiness means something.
+func TestPrintServeStatusJSONAlwaysHasUnitsFields(t *testing.T) {
+	cases := []struct {
+		name string
+		st   serveState
+	}{
+		{"zero value", serveState{}},
+		{"running with no supervised units", serveState{Running: true, PID: 100}},
+		{"running with an unreadable snapshot", serveState{Running: true, PID: 100, UnitsDetail: "no supervision snapshot (serve not running?)"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			printServeStatus(tc.st, &buf, true)
+			var got map[string]any
+			if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+				t.Fatalf("status --json is not json: %v", err)
+			}
+			raw, ok := got["units"]
+			if !ok {
+				t.Fatalf("units key missing entirely: %s", buf.String())
+			}
+			units, ok := raw.([]any)
+			if !ok {
+				t.Fatalf("units is not a JSON array (got %T, probably null): %s", raw, buf.String())
+			}
+			if len(units) != 0 {
+				t.Fatalf("units should be empty here: %v", units)
+			}
+			if _, ok := got["units_detail"]; !ok {
+				t.Fatalf("units_detail key missing entirely: %s", buf.String())
+			}
+		})
+	}
+}

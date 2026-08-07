@@ -82,6 +82,13 @@ var pkgLayer = map[string]int{
 	// supervise (L2) writes it while service (L1) and workflow/doctor (L3) read
 	// it — a shape shared by three layers cannot live in any one of them.
 	"unitreport": layerFoundation,
+	// unitreport/unitreporttest is placed and layer-checked like sys/systest: a
+	// shared table of supervision-snapshot scenarios that `service` and
+	// `workflow/doctor` both classify (see its doc comment). Its every importer
+	// is a _test.go file; it stays production-shaped for the same reason
+	// sys/systest does — a package built only from _test.go files cannot be
+	// imported by another package's tests.
+	"unitreport/unitreporttest": layerFoundation,
 
 	// L1 — capability. One domain each, siblings invisible to each other.
 	//
@@ -213,11 +220,14 @@ var pkgLayer = map[string]int{
 // to config, which is correct — the OS seam should not re-derive the launcher's
 // data layout.
 var l0Order = map[string]int{
-	"config": 0, "routing": 0,
+	"config": 0, "routing": 0, "unitreport": 0,
 	"sys": 1, "rpc": 1, "launcher": 1,
 	"workspace":   2,
 	"sys/systest": 2, "hostenv": 3,
 	"cli": 4,
+	// unitreporttest imports only unitreport (rank 0), so any rank above that
+	// satisfies the strictly-lower-rank rule; parked alongside cli.
+	"unitreport/unitreporttest": 4,
 }
 
 // drainingPackages was the ONLY exemption, and it is now EMPTY: cmd/pix was
