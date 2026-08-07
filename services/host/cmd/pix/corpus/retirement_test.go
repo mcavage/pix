@@ -1,7 +1,9 @@
 package corpus
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -109,39 +111,83 @@ func RetiredFlags(entries []RetirementEntry) map[string]map[string]bool {
 }
 
 // CheckAppendOnly enforces that the manifest at path was only ever appended
-// to: it compares the file as committed at HEAD~1 (the state before whatever
-// most recent commit touched it) against the file's current on-disk content,
-// and requires every previously-committed line to still be present,
-// unchanged, in the same order, at the front of the current file.
+// to: it walks the commits that actually touched this path — the two most
+// recent are [tip, previous] — and requires every line the PREVIOUS one
+// committed to still be present, unchanged, in the same order, at the front
+// of the file's current on-disk content.
 //
-// A file with no earlier committed revision to compare against (brand new,
-// or the repo has no parent commit yet) is exempt — there is nothing to have
-// mutated. A missing git binary or a directory outside any repo is exempt for
-// the same reason: this is a guard against LATER edits, not a hard
-// dependency on git being present everywhere this package builds.
+// Deliberately not "HEAD~1": on a long-lived branch that carries merges (this
+// repo's own history does), HEAD~1 follows the first-parent chain only, which
+// can walk right past the commit that actually last touched this file — a
+// false "nothing to compare" that would let a mutation landing on the other
+// side of a merge through undetected. `git log -- path` instead walks every
+// commit that touched the path, in any parent, so the comparison is anchored
+// to the file's own history rather than to HEAD's immediate ancestry.
+//
+// A file with fewer than two such commits (brand new, or introduced in the
+// very commit under test) is exempt — there is nothing to have mutated yet;
+// so is a directory that git reports is not inside any repository, or a host
+// with no git binary at all: this is a guard against LATER edits, not a hard
+// dependency on git being present everywhere this package builds. Every OTHER
+// git failure (a corrupt repo, a bad ref, a permission error) is a real error
+// and is returned as one — it must never be folded into the same nil as
+// "nothing to compare", or a git failure silently passes a mutation that a
+// working git would have caught.
 func CheckAppendOnly(path string) error {
 	dir := filepath.Dir(path)
-	top, err := gitOutput(dir, "rev-parse", "--show-toplevel")
-	if err != nil {
-		return nil // not a git repo (or git unavailable): nothing to compare
+	topRes, err := runGit(dir, "rev-parse", "--show-toplevel")
+	switch {
+	case topRes.exempt:
+		return nil // not a git repo, or git itself is unavailable: nothing to compare
+	case err != nil:
+		return fmt.Errorf("corpus: determine git toplevel for %s: %w", dir, err)
 	}
-	top = strings.TrimSpace(top)
+	top := strings.TrimSpace(topRes.out)
 
+	// Resolve symlinks before computing the path relative to top: git's
+	// --show-toplevel always answers with the physical (symlink-resolved)
+	// path, but `path` may still carry an unresolved one (e.g. a macOS
+	// /tmp -> /private/tmp temp dir). Comparing an unresolved abs path against
+	// a resolved top silently produces a bogus "rel" (a pile of ".." that does
+	// not name the file in the repo at all), which makes every git lookup on
+	// it fail — and a caller that treats every such failure as "bootstrap"
+	// would then rubber-stamp any mutation. Resolve here instead so `rel` is
+	// always the repo path git itself would recognize.
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return fmt.Errorf("corpus: resolve %s: %w", path, err)
 	}
-	rel, err := filepath.Rel(top, abs)
+	resolved, err := filepath.EvalSymlinks(abs)
 	if err != nil {
-		return fmt.Errorf("corpus: relativize %s under %s: %w", abs, top, err)
+		return fmt.Errorf("corpus: resolve symlinks for %s: %w", abs, err)
+	}
+	rel, err := filepath.Rel(top, resolved)
+	if err != nil {
+		return fmt.Errorf("corpus: relativize %s under %s: %w", resolved, top, err)
 	}
 	rel = filepath.ToSlash(rel)
 
-	prev, err := gitOutput(top, "show", "HEAD~1:"+rel)
-	if err != nil {
-		return nil // no earlier committed revision: bootstrap case
+	logRes, err := runGit(top, "log", "--format=%H", "-n", "2", "--", rel)
+	switch {
+	case logRes.exempt:
+		return nil
+	case err != nil:
+		return fmt.Errorf("corpus: list commit history for %s: %w", rel, err)
 	}
-	prevLines := nonEmptyLines(prev)
+	hashes := nonEmptyLines(logRes.out)
+	if len(hashes) < 2 {
+		return nil // fewer than two commits ever touched this file: bootstrap case
+	}
+
+	prevRes, err := runGit(top, "show", hashes[1]+":"+rel)
+	if err != nil {
+		// hashes[1] came straight out of `git log` above for this exact path,
+		// so a failure reading it back is a real error, never "no earlier
+		// revision" — that case was already ruled out by the len(hashes) < 2
+		// check.
+		return fmt.Errorf("corpus: read %s at %s: %w", rel, hashes[1], err)
+	}
+	prevLines := nonEmptyLines(prevRes.out)
 
 	cur, err := os.ReadFile(abs)
 	if err != nil {
@@ -161,14 +207,60 @@ func CheckAppendOnly(path string) error {
 	return nil
 }
 
-func gitOutput(dir string, args ...string) (string, error) {
+// gitResult is one bounded git invocation's classified outcome.
+type gitResult struct {
+	out string
+	// exempt marks the two conditions CheckAppendOnly treats as "nothing to
+	// compare" rather than a failure: git itself is not on PATH, or dir is
+	// not inside any git repository. Every other non-nil error is real.
+	exempt bool
+}
+
+// gitSanitizedEnv returns the current process environment with every
+// GIT_-prefixed variable stripped: GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE,
+// GIT_CEILING_DIRECTORIES and friends all override where git thinks the
+// repository and working tree ARE, and they win over -C / cmd.Dir. Leaving
+// one inherited from whatever wrapped the test process (a hook, a worktree
+// helper, a prior GIT_DIR export left in a shell) means this guard can silently
+// run every git command against a different repository than the scratch one
+// (or the real one) it was just told to check — the append-only property
+// would then be checked against the wrong history, or against none at all.
+func gitSanitizedEnv() []string {
+	env := os.Environ()
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "GIT_") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
+// runGit execs git under dir with a sanitized environment (see
+// gitSanitizedEnv) and classifies the outcome: a genuine "not a git
+// repository" or a missing git binary is exempt (CheckAppendOnly's callers
+// treat that as nothing-to-compare); anything else that fails is returned as
+// a real error, stderr and all, so a failure can never be mistaken for one of
+// the two narrow conditions that are allowed to pass silently.
+func runGit(dir string, args ...string) (gitResult, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
+	cmd.Env = gitSanitizedEnv()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	if err == nil {
+		return gitResult{out: stdout.String()}, nil
 	}
-	return string(out), nil
+	if errors.Is(err, exec.ErrNotFound) {
+		return gitResult{exempt: true}, nil
+	}
+	msg := strings.TrimSpace(stderr.String())
+	if strings.Contains(msg, "not a git repository") {
+		return gitResult{exempt: true}, nil
+	}
+	return gitResult{}, fmt.Errorf("git %s (in %s): %w: %s", strings.Join(args, " "), dir, err, msg)
 }
 
 func nonEmptyLines(s string) []string {
@@ -293,12 +385,22 @@ func writeManifest(t *testing.T, dir string, lines []string) string {
 	return p
 }
 
+// gitTestEnv is gitSanitizedEnv plus a fixed, non-interactive identity: these
+// scratch repos never touch the user's real gitconfig, and (like
+// gitSanitizedEnv) never inherit a GIT_DIR/GIT_WORK_TREE/etc. from whatever
+// wraps the test process — every commit these helpers make must land in the
+// scratch repo they just created in dir, never in one named by an inherited
+// variable.
+func gitTestEnv() []string {
+	return append(gitSanitizedEnv(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+}
+
 func gitInit(t *testing.T, dir string) {
 	t.Helper()
 	run := func(args ...string) {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
-		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		cmd.Env = gitTestEnv()
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
@@ -313,7 +415,7 @@ func gitCommitAll(t *testing.T, dir, msg string) {
 	for _, args := range [][]string{{"add", "-A"}, {"commit", "-q", "-m", msg}} {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
-		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		cmd.Env = gitTestEnv()
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}

@@ -16,6 +16,20 @@ import (
 // produced by a process that actually falls over or a path that actually
 // does not exist, so the classification under test is production's.
 
+// mcpBudget is the ctx budget every case here hands to check()/Run(), except
+// the one test that deliberately exercises deadline ENFORCEMENT
+// (TestMCPProbe_HungListingIsUnknown, which passes its own short budget).
+// The fixture is a compiled Go binary that returns in milliseconds on the
+// happy path, so this budget is never actually waited out here — it only
+// guards against a genuine hang — and widening it costs nothing in real test
+// time. It is ONE named, tunable constant rather than a `2 * time.Second`
+// literal repeated at every call site, so a CI box where subprocess spawn is
+// measurably slower than a dev laptop needs one edit, not a search-and-
+// replace, and it is kept well clear of health.StatusBudget/DoctorBudget
+// (the PRODUCT probe budgets `pix status`/`pix doctor` actually run under):
+// this is test slack, not a change to what ships.
+const mcpBudget = 10 * time.Second
+
 // mcpProbe builds a probe pointed at the fixture, in the listing mode given.
 func mcpProbe(t *testing.T, listMode string, servers ...MCPServer) MCPProbe {
 	t.Helper()
@@ -65,7 +79,7 @@ func TestMCPProbe_MissingSbxIsUnknownNotUnregistered(t *testing.T) {
 // angry" is not "your servers are unregistered" — the readiness version of
 // this check rendered every listing failure as an outstanding TODO.
 func TestMCPProbe_BrokenListingIsUnknown(t *testing.T) {
-	r := check(t, mcpProbe(t, "broken", local("slack")), 2*time.Second)
+	r := check(t, mcpProbe(t, "broken", local("slack")), mcpBudget)
 	if r.Status != StatusUnknown {
 		t.Fatalf("status = %s, want unknown (got %+v)", r.Status, r)
 	}
@@ -91,7 +105,7 @@ func TestMCPProbe_HungListingIsUnknown(t *testing.T) {
 // verified condition, and its repair is about the GATEWAY, not any one server
 // (pointing a user at `pix mcp register` here would fix nothing).
 func TestMCPProbe_RefusedListingIsDenied(t *testing.T) {
-	r := check(t, mcpProbe(t, "denied", local("slack")), 2*time.Second)
+	r := check(t, mcpProbe(t, "denied", local("slack")), mcpBudget)
 	if r.Status != StatusDenied {
 		t.Fatalf("status = %s, want denied (got %+v)", r.Status, r)
 	}
@@ -105,7 +119,7 @@ func TestMCPProbe_RefusedListingIsDenied(t *testing.T) {
 // register command for that server's kind.
 func TestMCPProbe_UnregisteredIsAVerifiedGap(t *testing.T) {
 	p := mcpProbe(t, "mcpnone", local("slack"))
-	r := check(t, p, 2*time.Second)
+	r := check(t, p, mcpBudget)
 	if r.Status != StatusAbsent {
 		t.Fatalf("status = %s, want absent (got %+v)", r.Status, r)
 	}
@@ -119,7 +133,7 @@ func TestMCPProbe_UnregisteredIsAVerifiedGap(t *testing.T) {
 // safe to recommend. That is unknown, not a gap with a guessed command.
 func TestMCPProbe_UnclassifiedServerFailsClosed(t *testing.T) {
 	p := mcpProbe(t, "mcpnone", MCPServer{Name: "mystery"})
-	r := check(t, p, 2*time.Second)
+	r := check(t, p, mcpBudget)
 	if r.Status != StatusUnknown {
 		t.Fatalf("status = %s, want unknown (got %+v)", r.Status, r)
 	}
@@ -140,7 +154,7 @@ func TestMCPProbe_UnclassifiedServerFailsClosed(t *testing.T) {
 // U04d). "Registered and attached" was therefore a ready verdict earned by
 // memory, which AGENTS.md safety invariant #13 forbids.
 func TestMCPProbe_RegisteredNeverClaimsAttached(t *testing.T) {
-	r := check(t, mcpProbe(t, "mcpls", local("slack")), 2*time.Second)
+	r := check(t, mcpProbe(t, "mcpls", local("slack")), mcpBudget)
 	if r.Status != StatusReady {
 		t.Fatalf("status = %s, want ready — registration is a live probe and it answered (%+v)", r.Status, r)
 	}
@@ -174,7 +188,7 @@ func TestMCPProbe_RemoteAuth(t *testing.T) {
 		t.Run(tc.mode, func(t *testing.T) {
 			p := mcpProbe(t, "mcpls", remote("notion"))
 			p.AuthArgs = []string{tc.mode}
-			r := check(t, p, 2*time.Second)
+			r := check(t, p, mcpBudget)
 			if r.Status != tc.want {
 				t.Fatalf("status = %s, want %s (got %+v)", r.Status, tc.want, r)
 			}
@@ -193,7 +207,7 @@ func TestMCPProbe_LocalServerIsNeverAuthProbed(t *testing.T) {
 	// If the local path DID auth-probe, this argv would answer "not
 	// authenticated" and turn a healthy server into a gap.
 	p.AuthArgs = []string{"authno"}
-	r := check(t, p, 2*time.Second)
+	r := check(t, p, mcpBudget)
 	if r.Status != StatusReady {
 		t.Fatalf("status = %s, want ready — a local stdio server has no OAuth to fail (%+v)", r.Status, r)
 	}
@@ -204,7 +218,7 @@ func TestMCPProbe_LocalServerIsNeverAuthProbed(t *testing.T) {
 // fix, and the evidence still carries both.
 func TestMCPProbe_AGapDominatesAnUnknown(t *testing.T) {
 	p := mcpProbe(t, "mcpnone", local("slack"), MCPServer{Name: "mystery"})
-	r := check(t, p, 2*time.Second)
+	r := check(t, p, mcpBudget)
 	if r.Status != StatusAbsent || r.Fix != "pix mcp register slack" {
 		t.Fatalf("got %+v, want absent with slack's register command", r)
 	}
@@ -219,7 +233,7 @@ func TestMCPProbe_AGapDominatesAnUnknown(t *testing.T) {
 // holds for this probe when it goes through Run (the only place a Result is
 // normalized), not just when Check is called directly.
 func TestMCPProbe_RunStripsAFixFromAnUnknown(t *testing.T) {
-	s := Run(t.Context(), 2*time.Second, mcpProbe(t, "broken", local("slack")))
+	s := Run(t.Context(), mcpBudget, mcpProbe(t, "broken", local("slack")))
 	r, ok := s.Find("mcp")
 	if !ok {
 		t.Fatal("the mcp probe produced no result")
