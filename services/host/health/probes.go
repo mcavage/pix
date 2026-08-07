@@ -346,12 +346,23 @@ func (p MonitorProbe) Check(ctx context.Context) Result {
 // there" is a verified gap with an exact fix.
 type PackProbe struct {
 	Root string
+	// Resolve, when set, WINS over Root and is called fresh on every Check —
+	// so a probe built once (before an apply mutates the config that decides
+	// the pack root) still reports the CURRENT root on a later check, rather
+	// than the one resolved at construction. Callers with nothing mutating
+	// underneath them (doctor, tests) can keep using the plain Root field.
+	Resolve func() string
 }
 
 func (PackProbe) Name() string   { return "pack" }
 func (PackProbe) Required() bool { return false }
 
 func (p PackProbe) Check(context.Context) Result {
+	root := p.Root
+	if p.Resolve != nil {
+		root = p.Resolve()
+	}
+	p.Root = root
 	if strings.TrimSpace(p.Root) == "" {
 		return Result{Name: p.Name(), Status: StatusAbsent, Detail: "no active pack", Fix: PackUseFix,
 			Evidence: "no pack root configured"}

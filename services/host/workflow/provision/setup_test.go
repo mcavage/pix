@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"pix/host/packinfo"
+	"slices"
 	"strings"
 	"testing"
 
@@ -172,6 +173,72 @@ func TestPackApply_RefusedPackAbortsAndConfigUnchanged(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(dir, "pack-trust.json")); !os.IsNotExist(statErr) {
 		t.Error("no Tier-1 acceptance may be recorded on refusal")
+	}
+}
+
+// The mirror of the refusal test above: a pack apply that SUCCEEDS must be
+// verified against the root it just wrote, not the root setupSteps captured
+// into the pack probe BEFORE the apply ran. setupSteps builds the whole step
+// table — including the pack probe — from one cfg loaded at the top of
+// RunSetup; PackApply (SetupAdopter -> RunPackUse) loads and mutates its OWN
+// config.Load(), a different *Config, and saves it to disk. A probe that
+// captured cfg.Pack at construction time never sees that write, so the second
+// check re-probes the pre-adoption (empty) root and reports the just-adopted
+// pack as still absent even though `pix pack use` succeeded — exactly the
+// false-negative this regression pins.
+func TestPackApply_SuccessIsVerifiedAgainstTheRootApplyJustWrote(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
+	Injected.PackApply = pack.SetupAdopter(nil)
+
+	root := filepath.Join(dir, "quiet-pack")
+	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A host=true proxy makes this Tier-1 (same shape as the refusal test
+	// above), but here setup carries --yes, so the trust gate auto-accepts
+	// instead of refusing — this test is about the SUCCESS path.
+	if err := os.WriteFile(filepath.Join(root, "bin", "warehouse"), []byte("#!/bin/sh\necho warehouse\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := pack.WriteManifest(root, packinfo.Manifest{Name: "quiet", Schema: 1,
+		Proxies: []packinfo.PackProxy{{Name: "warehouse", Host: true}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The cfg setupSteps sees has NO pack configured — the exact stale snapshot
+	// the bug froze into the probe.
+	cfg := &config.Config{}
+	steps := setupSteps(cfg, realEnv(), Opts{Packs: []string{root}, AssumeYes: true}, io.Discard)
+	o := Run(context.Background(), Options{Budget: setupBudget}, steps...)
+
+	if len(o.Failed) != 0 {
+		t.Fatalf("pack apply failed: %+v", o.Failed)
+	}
+	if !slices.Contains(o.Applied, "pack") {
+		t.Fatalf("pack was not recorded as applied: %+v", o.Applied)
+	}
+	if !o.Verified("pack") {
+		after, _ := o.After.Find("pack")
+		t.Fatalf("second check did not verify the adopted pack: %+v", after)
+	}
+	after, ok := o.After.Find("pack")
+	if !ok {
+		t.Fatal("no second-check result for pack")
+	}
+	if wantBase := filepath.Base(root); after.Detail != wantBase {
+		t.Errorf("second check reports %q, want %q — it must probe the root PackApply just wrote, not the pre-apply snapshot",
+			after.Detail, wantBase)
+	}
+
+	// The config ON DISK — never the stale in-memory cfg setupSteps captured —
+	// now names this pack.
+	got, lerr := config.Load()
+	if lerr != nil {
+		t.Fatalf("config.Load: %v", lerr)
+	}
+	if packinfo.CanonicalizePackRoot(got.Pack) != packinfo.CanonicalizePackRoot(root) {
+		t.Fatalf("cfg.Pack = %q, want %q", got.Pack, root)
 	}
 }
 
