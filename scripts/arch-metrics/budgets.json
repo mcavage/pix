@@ -16,7 +16,7 @@
       "exits": 0
     },
     "pix/host/cmd/pix": {
-      "prod_loc": 3353,
+      "prod_loc": 3425,
       "exports": 15,
       "globals": 13,
       "edges": 23,
@@ -30,7 +30,7 @@
       "exits": 0
     },
     "pix/host/health": {
-      "prod_loc": 1204,
+      "prod_loc": 1215,
       "exports": 41,
       "globals": 29,
       "edges": 3,
@@ -79,8 +79,8 @@
       "exits": 0
     },
     "pix/host/monitor": {
-      "prod_loc": 1139,
-      "exports": 33,
+      "prod_loc": 1174,
+      "exports": 35,
       "globals": 20,
       "edges": 0,
       "exits": 0
@@ -128,7 +128,7 @@
       "exits": 0
     },
     "pix/host/service": {
-      "prod_loc": 1631,
+      "prod_loc": 1659,
       "exports": 24,
       "globals": 16,
       "edges": 6,
@@ -184,7 +184,7 @@
       "exits": 0
     },
     "pix/host/workflow/provision": {
-      "prod_loc": 1280,
+      "prod_loc": 1301,
       "exports": 30,
       "globals": 11,
       "edges": 11,
@@ -209,6 +209,13 @@
       "exports": 6,
       "globals": 2,
       "edges": 0,
+      "exits": 0
+    },
+    "pix/host/unitreport/unitreporttest": {
+      "prod_loc": 102,
+      "exports": 3,
+      "globals": 1,
+      "edges": 1,
       "exits": 0
     }
   }

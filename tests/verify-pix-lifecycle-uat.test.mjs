@@ -48,10 +48,11 @@ test("the optional human confirmation reads a bounded /dev/tty, never the script
 	assert.match(script, /read -r -t 30 ans <\/dev\/tty/);
 });
 
-test("a missing/closed TTY or a timed-out read is SKIP, never FAIL, for the operator confirmation", () => {
+test("optional operator confirmation cannot make machine-verified OAuth incomplete or failed", () => {
 	const oauthSection = script.slice(script.indexOf("[8] External OAuth"));
-	assert.match(oauthSection, /skip "operator confirmation" "no controlling TTY available/);
-	assert.match(oauthSection, /skip "operator confirmation" "no answer on \/dev\/tty within 30s/);
+	assert.match(oauthSection, /no optional operator answer within 30s/);
+	assert.match(oauthSection, /no controlling TTY for optional confirmation/);
+	assert.doesNotMatch(oauthSection, /skip "operator confirmation"/);
 	assert.doesNotMatch(oauthSection, /fail "operator confirmation"/);
 	assert.doesNotMatch(oauthSection, /fail "remote OAuth flows"/);
 });
@@ -74,8 +75,8 @@ test("a registered MCP catalog bundle this run added is tracked and restored on 
 	assert.match(cleanup, /pix mcp bundle rm "\$MCP_CATALOG_BUNDLE"/);
 });
 
-test("a catalog bundle already present before this run is left alone, not claimed as ours to remove", () => {
-	assert.match(script, /already registered before this run.*not ours to add or remove/);
+test("a pre-existing catalog bundle is verified as a pass and left unchanged", () => {
+	assert.match(script, /pass "mcp bundle is already registered \(pre-existing host state; left unchanged\)"/);
 });
 
 test("backgrounded pix run invocations redirect stdin from \\/dev\\/null", () => {
@@ -101,10 +102,12 @@ test("host services preflight WHICH pix-host binary an already-running serve is 
 	const hostSection = script.slice(script.indexOf("[7] Host services"), script.indexOf("[8] External OAuth"));
 	assert.match(hostSection, /current_bin_path pix-host/);
 	assert.match(hostSection, /running_bin_path "\$RUNNING_PID"/);
-	// A mismatch must die with the exact repair command, not merely warn.
+	// Any pre-existing daemon blocks a clean launchd lifecycle test, even if it is
+	// the current binary; the rerun must install and own the managed service.
+	assert.match(hostSection, /clean UAT must install and exercise the launchd-managed service itself/);
 	assert.match(hostSection, /die "a serve is already running.*pix serve stop.*re-run this script/s);
-	// An unresolvable comparison is SKIP (unproven), never a silent match.
-	assert.match(hostSection, /skip "which binary the running serve is"/);
+	assert.match(hostSection, /cannot prove which binary would be tested.*pix serve stop/s);
+	assert.doesNotMatch(hostSection, /skip "which binary the running serve is"/);
 });
 
 test("installing serve for this run is reported as reversible and names the binary under test", () => {

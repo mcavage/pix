@@ -381,12 +381,12 @@ if [ -n "$RUNNING_PID" ] && kill -0 "$RUNNING_PID" 2>/dev/null; then
   RUNNING_BIN="$(running_bin_path "$RUNNING_PID")"
   if [ -n "$CUR_HOSTBIN" ] && [ -n "$RUNNING_BIN" ]; then
     if [ "$RUNNING_BIN" = "$CUR_HOSTBIN" ]; then
-      pass "an already-running serve (pid $RUNNING_PID) is this build's pix-host — testing the current binary, not a stale one"
+      die "serve is already running (pid $RUNNING_PID) from this build, but a clean UAT must install and exercise the launchd-managed service itself. Run 'pix serve stop', then re-run this script; it will install the current build reversibly and uninstall it during cleanup."
     else
       die "a serve is already running (pid $RUNNING_PID, binary $RUNNING_BIN) that is NOT the pix-host this run just built ($CUR_HOSTBIN); testing it would certify a stale daemon. Fix: pix serve stop (or, if it is unmanaged: kill $RUNNING_PID), then re-run this script so it starts the current build."
     fi
   else
-    skip "which binary the running serve is" "could not resolve pid $RUNNING_PID's executable (no lsof/ps comm output) or pix-host is not on PATH — cannot prove the daemon under test matches this build"
+    die "serve pid $RUNNING_PID is live, but its executable or the current pix-host could not be resolved; cannot prove which binary would be tested. Stop it with 'pix serve stop' (or kill $RUNNING_PID if unmanaged), then re-run."
   fi
 fi
 
@@ -481,7 +481,7 @@ if [ "$WITH_OAUTH" = 0 ]; then
 else
   PRE_MCP_LS="$(pix mcp ls 2>&1)"
   if printf '%s' "$PRE_MCP_LS" | grep -qF "$MCP_CATALOG_BUNDLE"; then
-    skip "mcp bundle registration" "$MCP_CATALOG_BUNDLE was already registered before this run — not ours to add or remove"
+    pass "mcp bundle is already registered (pre-existing host state; left unchanged)"
   elif pix mcp bundle >/dev/null 2>&1; then
     MCP_BUNDLE_ADDED=1
     pass "pix mcp bundle registers the public catalog"
@@ -512,24 +512,22 @@ else
     fi
   done
 
-  # Optional human confirmation. It can only ADD a pass on top of the machine
-  # verdict above, never substitute for it: read from /dev/tty specifically
-  # (never this script's own stdin — a background/CI run may have that pointed
-  # at /dev/null), bounded with `read -t` so a silent terminal can never hang
-  # the run, and a closed/absent/timed-out TTY is SKIP, not FAIL, since the
-  # machine probe above already rendered the real verdict.
+  # Optional human confirmation. It is informational when absent or declined:
+  # the machine probe above already rendered the required verdict, so an
+  # optional observation must not turn an otherwise complete run INCOMPLETE.
+  # Read from /dev/tty specifically and bound the wait so it cannot hang.
   if [ -r /dev/tty ] && [ -w /dev/tty ] 2>/dev/null; then
     printf '  Optional: did every OAuth browser flow look right to you? [y/N] ' >/dev/tty
     if read -r -t 30 ans </dev/tty; then
       case "$ans" in
         y|Y|yes) pass "operator confirmed the OAuth flows looked right" ;;
-        *) skip "operator confirmation" "operator answered '$ans' — the machine probe above is the actual verdict" ;;
+        *) printf '  note: optional operator confirmation was not affirmative; machine auth evidence above remains authoritative\n' ;;
       esac
     else
-      skip "operator confirmation" "no answer on /dev/tty within 30s — the machine probe above is the actual verdict"
+      printf '  note: no optional operator answer within 30s; machine auth evidence above remains authoritative\n'
     fi
   else
-    skip "operator confirmation" "no controlling TTY available — the machine probe above is the actual verdict"
+    printf '  note: no controlling TTY for optional confirmation; machine auth evidence above remains authoritative\n'
   fi
 
   # Registration is host state; a session sees tools only if attached. The

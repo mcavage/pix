@@ -83,11 +83,11 @@ What it asserts, and why each one is in a RELEASE gate rather than a unit test
    `pix doctor --json` carries the same `supervisor` object, and neither leaks
    anything credential-shaped. Before any of this, the script PREFLIGHTS an
    already-running serve: it resolves the running pid's executable and
-   compares it to the `pix-host` this run just built. A mismatch dies with
-   the exact `pix serve stop`/`kill <pid>` command rather than silently
-   grading a stale unmanaged daemon; an unresolvable pid is SKIP (unproven),
-   never a silent pass. When nothing is running, it installs and starts the
-   current build itself — reversibly, uninstalled again on exit.
+   compares it to the `pix-host` this run just built. Any pre-existing daemon
+   stops the run with the exact `pix serve stop`/`kill <pid>` remedy: even a
+   matching unmanaged daemon cannot prove launchd install/respawn semantics.
+   With a clear host, the script installs and starts the current build itself,
+   reversibly, then uninstalls it on exit.
 9. **Memory unit restart.** The memory CHILD is SIGKILLed: `:11435` must never
    stop accepting connections, the unit's generation must advance, and `pix
    memory stats` must answer again.
@@ -102,8 +102,9 @@ What it asserts, and why each one is in a RELEASE gate rather than a unit test
     per-server registered/authenticated evidence) rather than an operator's
     say-so. An operator confirmation is optional and additive: it reads a
     bounded `read -t` from `/dev/tty` specifically (never the script's own
-    stdin), and a closed, absent, or silent TTY is SKIP, never FAIL — the
-    machine probe is the real verdict either way. Finally, `pix mcp ls` is
+    stdin). A closed, absent, silent, or declined optional confirmation is only
+    an informational note, never FAIL or SKIP; the machine probe is the real
+    verdict. Finally, `pix mcp ls` is
     checked for the honest host-registration disclaimer (a POSITIVE claim it
     must contain) and for the absence of any present-tense session-attachment
     claim (a precise NEGATIVE regex) — not a bare substring search for
