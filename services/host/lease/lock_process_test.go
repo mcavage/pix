@@ -105,10 +105,10 @@ func helperHold() {
 }
 
 // helperCheckFDs enumerates this process's own open file descriptors
-// (scanFDsForTargets is the platform-specific half: /proc/self/fd on Linux,
-// /dev/fd + fcntl(F_GETPATH) on Darwin) and reports, for each of two target
-// absolute paths passed in LEASE_HELPER_TARGET_A / _B, whether an inherited
-// fd resolves to it.
+// (scanFDsForTargets is the platform-specific half: /proc/self/fd symlinks
+// on Linux, a direct numeric fd-range fcntl(F_GETFD)/fcntl(F_GETPATH) probe
+// on Darwin) and reports, for each of two target absolute paths passed in
+// LEASE_HELPER_TARGET_A / _B, whether an inherited fd resolves to it.
 func helperCheckFDs() {
 	targets := map[string]string{
 		"A": os.Getenv("LEASE_HELPER_TARGET_A"),
