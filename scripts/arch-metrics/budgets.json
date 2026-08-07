@@ -65,9 +65,9 @@
       "exits": 0
     },
     "pix/host/mcp": {
-      "prod_loc": 1152,
-      "exports": 37,
-      "globals": 16,
+      "prod_loc": 1292,
+      "exports": 38,
+      "globals": 19,
       "edges": 6,
       "exits": 0
     },
