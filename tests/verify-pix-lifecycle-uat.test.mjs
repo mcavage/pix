@@ -100,16 +100,19 @@ test("mcp ls is checked for the honest disclaimer (positive claim) and a precise
 	assert.match(script, /grep -qE "\[Ii\]s \(now \|currently \)\?attached to \(your\|this\|the running\) sandbox\|\[Ss\]ession \(is \)\?attached"/);
 });
 
-test("a registered MCP catalog bundle this run added is tracked and restored on exit", () => {
-	assert.match(script, /MCP_BUNDLE_ADDED=0/);
-	assert.match(script, /MCP_CATALOG_BUNDLE="pix-catalog"/);
-	assert.match(script, /MCP_BUNDLE_ADDED=1/);
+test("only catalog registrations this run actually added are removed on cleanup", () => {
+	assert.match(script, /MCP_ADDED_NAMES=\(\)/);
+	assert.match(script, /MISSING_CATALOG=\(\)/);
+	assert.match(script, /MCP_ADDED_NAMES\+=\("\$s"\)/);
 	const cleanup = script.slice(script.indexOf("cleanup() {"), script.indexOf("verdict() {"));
-	assert.match(cleanup, /pix mcp bundle rm "\$MCP_CATALOG_BUNDLE"/);
+	assert.match(cleanup, /for s in "\$\{MCP_ADDED_NAMES\[@\]:-\}"/);
+	assert.match(cleanup, /sbx mcp rm "\$s"/);
+	assert.doesNotMatch(cleanup, /pix mcp bundle rm/);
 });
 
-test("a pre-existing catalog bundle is verified as a pass and left unchanged", () => {
-	assert.match(script, /pass "mcp bundle is already registered \(pre-existing host state; left unchanged\)"/);
+test("pre-existing catalog servers are verified individually and left unchanged", () => {
+	assert.match(script, /pass "shipped catalog servers are already registered \(pre-existing host state; left unchanged\)"/);
+	assert.match(script, /for s in notion atlassian granola/);
 });
 
 test("backgrounded pix run invocations redirect stdin from \\/dev\\/null", () => {

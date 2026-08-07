@@ -46,8 +46,7 @@ PASS=0; FAIL=0; SKIP=0
 CREATED_BOXES=()
 EXTRA_BOXES=()   # digest-named boxes this run created (names discovered, not chosen)
 INSTALLED_SERVE=0
-MCP_BUNDLE_ADDED=0        # this run registered the catalog bundle; restore it in cleanup
-MCP_CATALOG_BUNDLE="pix-catalog" # mcp.McpCatalogBundleName — keep in lockstep
+MCP_ADDED_NAMES=()        # exact registrations this run added; remove only these in cleanup
 WORK=""
 
 for arg in "$@"; do
@@ -234,11 +233,12 @@ cleanup() {
       && printf '  launchd service uninstalled\n' \
       || printf '  %s could not uninstall the launchd service; run: pix serve uninstall\n' "$(red '!')"
   fi
-  if [ "$MCP_BUNDLE_ADDED" = 1 ]; then
-    pix mcp bundle rm "$MCP_CATALOG_BUNDLE" >/dev/null 2>&1 \
-      && printf '  %s MCP bundle removed (restored pre-run state)\n' "$MCP_CATALOG_BUNDLE" \
-      || printf '  %s could not remove the %s MCP bundle; run: pix mcp bundle rm %s\n' "$(red '!')" "$MCP_CATALOG_BUNDLE" "$MCP_CATALOG_BUNDLE"
-  fi
+  for s in "${MCP_ADDED_NAMES[@]:-}"; do
+    [ -z "$s" ] && continue
+    sbx mcp rm "$s" >/dev/null 2>&1 \
+      && printf '  MCP server %s removed (restored pre-run state)\n' "$s" \
+      || printf '  %s could not remove MCP server %s; run: sbx mcp rm %s\n' "$(red '!')" "$s" "$s"
+  done
   [ -n "$WORK" ] && rm -rf "$WORK"
   # cwd safety is an ASSERTION, not a hope.
   if [ "$(pwd -P)" != "$START_PWD" ]; then
@@ -530,11 +530,22 @@ if [ "$WITH_OAUTH" = 0 ]; then
   skip "remote OAuth servers" "--with-oauth not passed (this run is NOT a full release verdict)"
 else
   PRE_MCP_LS="$(pix mcp ls 2>&1)"
-  if printf '%s' "$PRE_MCP_LS" | grep -qF "$MCP_CATALOG_BUNDLE"; then
-    pass "mcp bundle is already registered (pre-existing host state; left unchanged)"
+  MISSING_CATALOG=()
+  for s in notion atlassian granola; do
+    if ! printf '%s' "$PRE_MCP_LS" | grep -qE "(^|[[:space:]])${s}([[:space:]]|$)"; then
+      MISSING_CATALOG+=("$s")
+    fi
+  done
+  if [ "${#MISSING_CATALOG[@]}" -eq 0 ]; then
+    pass "shipped catalog servers are already registered (pre-existing host state; left unchanged)"
   elif pix mcp bundle >/dev/null 2>&1; then
-    MCP_BUNDLE_ADDED=1
-    pass "pix mcp bundle registers the public catalog"
+    POST_BUNDLE_LS="$(pix mcp ls 2>&1)"
+    for s in "${MISSING_CATALOG[@]}"; do
+      if printf '%s' "$POST_BUNDLE_LS" | grep -qE "(^|[[:space:]])${s}([[:space:]]|$)"; then
+        MCP_ADDED_NAMES+=("$s")
+      fi
+    done
+    pass "pix mcp bundle registers the missing public catalog servers"
   else
     fail "pix mcp bundle registers the public catalog" "pix mcp bundle exited non-zero"
   fi

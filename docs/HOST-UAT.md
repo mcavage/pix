@@ -99,8 +99,9 @@ What it asserts, and why each one is in a RELEASE gate rather than a unit test
     respawned by launchd; `pix serve stop` then actually stops it and it stays
     stopped (a bare SIGTERM would be undone by `KeepAlive` — invariant #3).
 11. **External OAuth hooks** (`--with-oauth`): the catalog bundle registers
-    (only if it was not already registered — the script tracks and restores
-    exactly the bundle state it added), then the script authorizes ONLY the
+    only when one or more shipped servers are missing; the script tracks and
+    removes exactly the individual registrations it added, preserving every
+    pre-existing same-name registration. It then authorizes ONLY the
     required shipped catalog servers (`notion`/`atlassian`/`granola`)
     INDIVIDUALLY — `pix mcp auth notion`, `pix mcp auth atlassian`, `pix mcp
     auth granola` — ASSERTING each one's own exact exit code and output (never
@@ -156,7 +157,7 @@ Safety properties of the script itself, asserted or enforced:
   and no `--force`, and greps ITSELF for those shapes before doing anything.
 - It works in a temp tree and asserts `$PWD` is unchanged at exit.
 - It uninstalls a launchd service it installed (which also covers a serve it
-  stopped mid-run), and removes an MCP catalog bundle it registered, in a trap
+  stopped mid-run), and removes only MCP catalog servers it registered, in a trap
   that runs on every exit path.
 - Every backgrounded `pix run` reads from `/dev/null`, never an inherited
   terminal or the script's own stdin, and every `wait` on one is bounded
