@@ -340,7 +340,13 @@ func EnsureUp(progress io.Writer, services []string, timeout time.Duration) {
 }
 
 // staleServeVersion recognizes ONLY a positively identified Pix service at a
-// different launcher.Version; a foreign or mute port holder is never restarted.
+// different launcher.Version; a foreign or mute port holder is never
+// restarted. An EMPTY version answering as our own service name is not
+// "nothing to compare, so leave it alone" — it is a daemon old enough to
+// predate the identity method reporting a version at all, which makes it
+// stale/incompatible by construction, not silently current. Either way this
+// only ever names OUR OWN service as stale; it never signals or kills the
+// foreign process behind a port that answers with a different name.
 func staleServeVersion(cfg *config.Config, env portProbe, requested []string, probe rpc.IdentityProber) (string, bool) {
 	if cfg == nil || probe == nil {
 		return "", false
@@ -352,9 +358,14 @@ func staleServeVersion(cfg *config.Config, env portProbe, requested []string, pr
 		}
 		id, err := probe(p.port)
 		want := rpc.MemoryName
-		if err == nil && id.Name == want && id.Version != "" && id.Version != launcher.Version {
-			return id.Version, true
+		if err != nil || id.Name != want || id.Version == launcher.Version {
+			continue
 		}
+		from := id.Version
+		if from == "" {
+			from = "unknown (pre-version daemon)"
+		}
+		return from, true
 	}
 	return "", false
 }
