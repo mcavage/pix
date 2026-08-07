@@ -700,6 +700,193 @@ test("section [4] record check (behavioral): a failed launch SKIPs the record ch
 	assert.doesNotMatch(out, /FAIL:lease instance record/);
 });
 
+// --- section [4]/[5]: BOX1 is kept so it can be INSPECTED before it is
+// explicitly removed, and never leaks into section [6] --------------------
+// The false failure this replaces: section [4] launched BOX1 with a plain
+// non-interactive `pix run` (no --keep). That launch tears the sandbox down
+// the instant its own `-p` command exits — the defining behavior of a
+// non-interactive launch — so `pix ls lists $BOX1`, the exact record.json
+// read, its instance id, and the changed-MCP attach-fingerprint refusal all
+// raced (and often lost to) a teardown that had nothing to do with any of
+// those checks. Keeping BOX1 fixes the race; these tests prove keeping it
+// does not itself introduce a NEW false pass: the record/fingerprint checks
+// must still run against the live box (not be skipped or trivially true),
+// the fingerprint refusal must still be a real refusal --keep cannot cause
+// or hide, and BOX1 must be explicitly removed — leaving no trace — before
+// section [6] ever creates $BOX2.
+
+test("section [4] launches BOX1 with --keep, so it survives its own non-interactive exit for the checks that follow", () => {
+	const section4 = script.slice(script.indexOf('head1 "[4]'), script.indexOf('head1 "[5]'));
+	assert.match(section4, /runbox "\$BOX1" "\$WORK\/a\/proj" --keep -- -p 'print the single word ready'/);
+});
+
+test("section [4]'s changed-MCP fingerprint-refusal attach does NOT itself pass --keep, so the refusal it asserts can never be attributed to (or masked by) the --keep BOX1 was created with", () => {
+	const section4 = script.slice(script.indexOf('head1 "[4]'), script.indexOf('head1 "[5]'));
+	const attachLine = section4.match(/if OUT="\$\( \(cd "\$WORK\/a\/proj" && pix run \. --name "\$BOX1"[^)]*\) 2>&1 \)"; then/);
+	assert.ok(attachLine, "could not find the fingerprint-refusal attach line in section [4]");
+	assert.doesNotMatch(attachLine[0], /--keep/);
+	assert.match(attachLine[0], /--mcp definitely-not-registered/);
+});
+
+test("section [5] explicitly removes the kept $BOX1 sandbox, asserting it is gone, AFTER exit-propagation coverage and BEFORE section [6] begins", () => {
+	const section5 = script.slice(script.indexOf('head1 "[5]'), script.indexOf('head1 "[6]'));
+	// Ordering within [5]: exit-propagation coverage first, explicit rm last.
+	const propagationIdx = section5.indexOf('pix run . --name "$BOX1" -- --definitely-not-a-pi-flag');
+	const rmIdx = section5.indexOf('pix rm "$BOX1"');
+	assert.ok(propagationIdx !== -1, "exit-propagation check against $BOX1 is missing from section [5]");
+	assert.ok(rmIdx !== -1, "explicit 'pix rm \"$BOX1\"' is missing from section [5]");
+	assert.ok(propagationIdx < rmIdx, "BOX1 must be removed AFTER exit-propagation coverage, not before");
+	assert.match(section5, /if pix rm "\$BOX1" >\/dev\/null 2>&1 && ! pix ls 2>\/dev\/null \| grep -q "\$BOX1"; then/);
+	assert.match(section5, /pass "explicit 'pix rm' removes the kept \$BOX1 sandbox before section \[6\]"/);
+});
+
+test("section [4] does not reappear inside section [6]: BOX1's explicit removal happens strictly before the [6] header, never after", () => {
+	const idx4 = script.indexOf('head1 "[4]');
+	const idx5 = script.indexOf('head1 "[5]');
+	const idx6 = script.indexOf('head1 "[6]');
+	const rmIdx = script.indexOf('pix rm "$BOX1"');
+	assert.ok(idx4 < idx5 && idx5 < idx6, "section headers are out of order");
+	assert.ok(rmIdx > idx5 && rmIdx < idx6, "BOX1's explicit removal must sit inside section [5], before section [6] begins");
+});
+
+// section4Through5Block — the literal, executable text from BOX1's launch in
+// section [4] through its explicit removal at the end of section [5], so the
+// behavioral test below runs the ACTUAL shipped bash end to end, not a
+// reimplementation of the ordering it claims.
+function section4Through5Block() {
+	const start = script.indexOf('BOX1="${BOX_PREFIX}-one"');
+	assert.ok(start !== -1, "could not find the BOX1 launch in section [4]");
+	const endMarker = 'fail "explicit rm of kept $BOX1" "$BOX1 is still listed after \'pix rm $BOX1\'"\nfi';
+	const end = script.indexOf(endMarker, start);
+	assert.ok(end !== -1, "could not find the end of the section [5] explicit-removal block");
+	return script.slice(start, end + endMarker.length);
+}
+
+// runSection4Through5Block — runs the ACTUAL extracted section [4]->[5] block
+// against a stub `pix` that records every invocation (command + full argv) to
+// a trace file and tracks the box's existence in a tiny state file, so this
+// proves the REAL execution order (record/fingerprint inspected before the
+// explicit rm) and the REAL end state (box gone, nothing leaked into [6]),
+// not a description of either.
+function runSection4Through5Block() {
+	const work = fs.mkdtempSync(path.join(os.tmpdir(), "pix-uat-rec2-"));
+	try {
+		const binDir = path.join(work, "bin");
+		const projDir = path.join(work, "a", "proj");
+		const stateDir = path.join(work, "state");
+		const trace = path.join(work, "trace.log");
+		const boxFlag = path.join(work, "box-exists");
+		fs.mkdirSync(binDir);
+		fs.mkdirSync(projDir, { recursive: true });
+		fs.mkdirSync(stateDir, { recursive: true });
+
+		const boxName = "pix-uat-rec2-test-one";
+		const recDir = path.join(stateDir, "pix", "sandboxes", boxName);
+
+		// A stub `pix` that:
+		//  - `run . --name NAME --keep -- -p '...'`      -> CREATE: writes the box's
+		//    record.json, marks it existing, exit 0 (this is BOX1's launch).
+		//  - `run . --name NAME --mcp ... -- -p hi`        -> the fingerprint-mismatch
+		//    attach: REFUSED (exit 1), box state untouched — the real gate this test
+		//    proves is exercised, independent of --keep (which never appears on this
+		//    invocation at all).
+		//  - `run . --name NAME -- --definitely-not-a-pi-flag` -> the exit-propagation
+		//    attach: box unchanged, inner command "fails" (exit 3).
+		//  - `ls`                                            -> lists the box name only
+		//    while boxFlag exists.
+		//  - `rm NAME`                                        -> removes boxFlag, exit 0.
+		// Every invocation is appended to trace.log as one line: "CMD|arg|arg|...".
+		const fakePix = path.join(binDir, "pix");
+		fs.writeFileSync(
+			fakePix,
+			[
+				"#!/bin/sh",
+				`printf '%s\\n' "$*" >> "${trace}"`,
+				'if [ "$1" = "run" ] && [ "$2" = "." ]; then',
+				'  case " $* " in',
+				'    *" --keep "*)',
+				`      mkdir -p "${recDir}"`,
+				`      printf '{"instance_id":"iid-99","created_pid":1}' > "${recDir}/record.json"`,
+				`      touch "${boxFlag}"`,
+				'      echo "ready"; exit 0 ;;',
+				'    *" --mcp "*)',
+				'      echo "pix run: attach fingerprint diverged: static_mcp changed" >&2; exit 1 ;;',
+				'    *" --definitely-not-a-pi-flag "*)',
+				'      echo "unknown flag" >&2; exit 3 ;;',
+				'    *) echo "ready"; exit 0 ;;',
+				'  esac',
+				'elif [ "$1" = "ls" ]; then',
+				`  [ -f "${boxFlag}" ] && printf 'NAME\\n%s\\n' "${boxName}"`,
+				'  exit 0',
+				'elif [ "$1" = "rm" ]; then',
+				`  rm -f "${boxFlag}"`,
+				'  exit 0',
+				'fi',
+				'exit 2',
+				"",
+			].join("\n"),
+			{ mode: 0o755 },
+		);
+
+		const fns = [extractFn("runbox"), extractFn("newbox"), extractFn("assert_exit")].join("\n");
+		const harness = [
+			`PATH="${binDir}:$PATH"`,
+			`WORK="${work}"`,
+			`XDG_STATE_HOME="${stateDir}"`,
+			`RUN_ID="rec2"`,
+			"CREATED_BOXES=()",
+			'PASS=0; FAIL=0; SKIP=0',
+			'pass() { PASS=$((PASS+1)); printf "PASS:%s\\n" "$1"; }',
+			'fail() { FAIL=$((FAIL+1)); printf "FAIL:%s:%s\\n" "$1" "${2:-}"; }',
+			'skip() { SKIP=$((SKIP+1)); printf "SKIP:%s:%s\\n" "$1" "${2:-}"; }',
+			'head1() { :; }', // section headers between BOX1's launch and its explicit rm; not under test here
+			'assert_contains() { local needle="$1" name="$2"; shift 2; local out; out="$("$@" 2>&1)"; if printf "%s" "$out" | grep -qF -- "$needle"; then pass "$name"; else fail "$name" "missing $needle"; fi; }',
+			fns,
+			section4Through5Block().replace(/\$\{BOX_PREFIX\}-one/, boxName),
+			`echo "===FINAL_LS==="`,
+			`pix ls`,
+		].join("\n");
+		const out = execFileSync("bash", ["-c", harness], { encoding: "utf8", timeout: 15000 });
+		return { out, trace: fs.readFileSync(trace, "utf8").trim().split("\n") };
+	} finally {
+		fs.rmSync(work, { recursive: true, force: true });
+	}
+}
+
+test("section [4]->[5] (behavioral): the record and fingerprint-refusal checks run, in order, BEFORE BOX1's explicit removal, against the ACTUAL shipped bash", () => {
+	const { out, trace } = runSection4Through5Block();
+	// The record was there to inspect: instance id surfaced, real refusal seen.
+	assert.match(out, /PASS:pix run launched pix-uat-rec2-test-one non-interactively/);
+	assert.match(out, /PASS:lease record carries an instance id \(iid-99\)/);
+	assert.match(out, /PASS:attach fingerprint gate refused a changed MCP set/);
+	assert.match(out, /PASS:last-exit propagation \(inner failure surfaced as exit 3\)/);
+	assert.match(out, /PASS:explicit 'pix rm' removes the kept pix-uat-rec2-test-one sandbox before section \[6\]/);
+	assert.doesNotMatch(out, /FAIL:/);
+
+	// Order of REAL invocations pix actually received: create, then ls, then the
+	// fingerprint-mismatch attach (refused), then the exit-propagation attach,
+	// then — and only then — the explicit rm. The record/fingerprint inspection
+	// happens strictly before removal, never interleaved or reversed.
+	const createIdx = trace.findIndex((l) => l.includes("--keep") && l.includes("print the single word ready"));
+	const fingerprintIdx = trace.findIndex((l) => l.includes("--mcp"));
+	const propagationIdx = trace.findIndex((l) => l.includes("--definitely-not-a-pi-flag"));
+	const rmIdx = trace.findIndex((l) => l.startsWith("rm "));
+	assert.ok(createIdx !== -1 && fingerprintIdx !== -1 && propagationIdx !== -1 && rmIdx !== -1, `missing an expected invocation in trace: ${trace.join(" | ")}`);
+	assert.ok(createIdx < fingerprintIdx, "the box must be created before the fingerprint-mismatch attach is even attempted");
+	assert.ok(fingerprintIdx < rmIdx, "the fingerprint check must run BEFORE the explicit rm, not after");
+	assert.ok(propagationIdx < rmIdx, "exit-propagation coverage must run BEFORE the explicit rm, not after");
+
+	// The fingerprint-mismatch attach itself never carries --keep: the refusal
+	// this proves cannot be attributed to (or accidentally bypassed by) the
+	// --keep flag BOX1 was originally created with.
+	assert.doesNotMatch(trace[fingerprintIdx], /--keep/);
+
+	// No leak: pix ls after the explicit rm reports the box gone, same as [6]
+	// will see it when it starts.
+	const finalLsSection = out.slice(out.indexOf("===FINAL_LS==="));
+	assert.doesNotMatch(finalLsSection, /pix-uat-rec2-test-one/);
+});
+
 // --- multi-shell FIFO holds: behavioral proof -----------------------------
 // The false-hold this replaces: the old section [6] (then [5]) launched two
 // REAL `pix run` sessions with `-p '<sleep text>'` prompts and separated

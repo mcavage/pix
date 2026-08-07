@@ -558,10 +558,25 @@ else
 fi
 
 # --- 4. launch, instance identity, and the attach fingerprint ------------------
+# BOX1 is launched with --keep. A plain non-interactive `pix run` (no --keep)
+# tears itself down the instant its inner `-p` command exits — which is
+# EXACTLY what a non-interactive launch does — so every check below that
+# depends on BOX1 still existing (pix ls, the exact record.json path, its
+# instance id, and the changed-MCP fingerprint-refusal attach) would race a
+# teardown that has often already won by the time this script's very next
+# line runs, producing a false FAIL that has nothing to do with the thing
+# being tested. --keep only changes WHEN the box is torn down, never HOW an
+# attach is validated: SessionFingerprint (services/host/workflow/launch/
+# session.go) is computed purely from the static MCP set + template, with no
+# Keep field in it at all, so keeping BOX1 alive here cannot mask (nor fake)
+# the fingerprint-refusal check below — that refusal is exercised for real,
+# against a box that is only still around to attach to because it was kept.
+# Section [5] reuses this SAME kept box for exit-status propagation, then
+# removes it explicitly, before section [6]'s own $BOX2 is ever created.
 head1 "[4] Launch, instance record, attach fingerprint"
 BOX1="${BOX_PREFIX}-one"
 LAUNCH1_OK=1
-if runbox "$BOX1" "$WORK/a/proj" -- -p 'print the single word ready' >"$WORK/run1.out" 2>"$WORK/run1.err"; then
+if runbox "$BOX1" "$WORK/a/proj" --keep -- -p 'print the single word ready' >"$WORK/run1.out" 2>"$WORK/run1.err"; then
   pass "pix run launched $BOX1 non-interactively"
 else
   LAUNCH1_OK=0
@@ -606,6 +621,20 @@ RC=$?
 if [ "$RC" -eq 0 ]; then fail "last-exit propagation" "a failing inner command produced exit 0"
 else pass "last-exit propagation (inner failure surfaced as exit $RC)"; fi
 assert_exit 2 "bare 'pix <not-a-dir>' refuses" pix definitely-not-a-directory-"$RUN_ID"
+
+# $BOX1 was kept alive (section [4]'s --keep) purely so the record/instance-id/
+# fingerprint-refusal checks there, and the exit-propagation check just above,
+# had a live box to inspect and attach to. Every one of those inspections has
+# now run to completion, so remove it explicitly here — mirroring section
+# [7]'s "an explicit 'pix rm' still removes a kept sandbox" check — rather
+# than letting it ride to the end-of-script cleanup trap. That keeps it from
+# ever leaking into, or colliding with, section [6]'s own $BOX2, and proves
+# the explicit-rm-of-a-kept-box path a second, independent time.
+if pix rm "$BOX1" >/dev/null 2>&1 && ! pix ls 2>/dev/null | grep -q "$BOX1"; then
+  pass "explicit 'pix rm' removes the kept $BOX1 sandbox before section [6]"
+else
+  fail "explicit rm of kept $BOX1" "$BOX1 is still listed after 'pix rm $BOX1'"
+fi
 
 # --- 6. multi-shell references and teardown ------------------------------------
 head1 "[6] Multi-shell references: the LAST shell tears down (deterministic FIFO holds)"
