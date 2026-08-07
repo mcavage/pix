@@ -207,16 +207,9 @@ func TestLaunchGateRefusesOnlyAPositiveNoKey(t *testing.T) {
 		{"listing names a key", "#!/bin/sh\necho anthropic\n", false, health.StatusReady},
 		{"listing answers with no model key", "#!/bin/sh\necho github\n", true, health.StatusAbsent},
 		{"store fails", "#!/bin/sh\nexit 3\n", false, health.StatusUnknown},
-		// `exec` so the killed process IS the sleep: a shell that forks keeps the
-		// output pipe open past the deadline, which is a fixture bug, not a probe
-		// one.
-		{"store hangs", "#!/bin/sh\nexec sleep 10\n", false, health.StatusUnknown},
 		{"store refuses", "#!/bin/sh\necho 'permission denied' >&2\nexit 1\n", false, health.StatusUnknown},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if tc.name == "store hangs" && testing.Short() {
-				t.Skip("timed hang probe: exec's a real `sleep 10` to prove the probe deadline is enforced; every other case in this table stays unconditional; covered by the untimed race/metrics CI jobs")
-			}
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
 			r := launch.ProbeModelKeys(ctx, keyStore(t, "keystore", tc.body), "secret", "ls")
@@ -227,6 +220,49 @@ func TestLaunchGateRefusesOnlyAPositiveNoKey(t *testing.T) {
 				t.Errorf("RefusesLaunch = %v, want %v (%+v)", got, tc.wantRefuse, r)
 			}
 		})
+	}
+}
+
+// TestLaunchGateTimeoutIsUnknownAndNeverRefuses is the hung-store arm of the
+// tri-state, split out of the table above on purpose: it is the one case that
+// needs a probe to actually time out, and the table's other four cases must
+// never be slowed down (or made flaky under load/-race) by sharing a run with
+// a real subprocess racing a production-sized deadline. It proves the
+// contract with a budget the TEST controls (workflow/launch.ProbeModelKeysBudget),
+// not the production 2s (health.StatusBudget) — so this test is fast and
+// deterministic on a loaded CI box, while a SEPARATE self-test below still
+// proves ProbeModelKeys itself is wired to the real production budget.
+func TestLaunchGateTimeoutIsUnknownAndNeverRefuses(t *testing.T) {
+	// `exec` so the killed process IS the sleep: a shell that forks keeps the
+	// output pipe open past the deadline, which is a fixture bug, not a probe
+	// one. The sleep only needs to outlast the tiny test budget below, not any
+	// production timing.
+	bin := keyStore(t, "keystore", "#!/bin/sh\nexec sleep 5\n")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	r := launch.ProbeModelKeysBudget(ctx, 50*time.Millisecond, bin, "secret", "ls")
+	if got := r.Effective(); got != health.StatusUnknown {
+		t.Errorf("status = %s, want %s (%+v)", got, health.StatusUnknown, r)
+	}
+	if got := launch.RefusesLaunch(r); got {
+		t.Errorf("RefusesLaunch = %v, want false: a timed-out store must never refuse a launch (%+v)", got, r)
+	}
+}
+
+// TestLaunchGateProbeModelKeysUsesTheProductionBudget pins the ONE thing the
+// budget seam above must never drift from: ProbeModelKeys (what `run` actually
+// calls) hands health.StatusBudget to the shared implementation, not some
+// other constant a future edit could quietly relax. It never has to wait for a
+// timeout to prove this — a fast store settles long before either budget
+// expires, so the two calls' results are compared directly instead.
+func TestLaunchGateProbeModelKeysUsesTheProductionBudget(t *testing.T) {
+	bin := keyStore(t, "keystore", "#!/bin/sh\necho anthropic\n")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	want := launch.ProbeModelKeysBudget(ctx, health.StatusBudget, bin, "secret", "ls")
+	got := launch.ProbeModelKeys(ctx, bin, "secret", "ls")
+	if got.Effective() != want.Effective() || got.Detail != want.Detail {
+		t.Errorf("ProbeModelKeys = %+v, want the same as an explicit health.StatusBudget call = %+v", got, want)
 	}
 }
 

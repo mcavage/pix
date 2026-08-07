@@ -56,6 +56,32 @@ var binDirs = map[string]string{}
 
 func realEnv() hostenv.Env { return hostenv.Env{System: sys.Real{}, Quiet: true} }
 
+// neutralHostSteps pins the two probes a pack-focused test does not mean to
+// exercise — sbx and launchd — to a deterministic, always-ready fixture PATH,
+// and traps the real launchd installer behind a recorder that fails the test
+// if it is EVER invoked. Without this seam, setupSteps' sbx/launchd probes run
+// against whatever the test process's REAL PATH and REAL launchd happen to
+// hold: a laptop with both present classifies the two steps differently than a
+// CI box with neither, and — the actual incident this closes — a laptop where
+// the pix LaunchAgent simply is not loaded yet turns the launchd row into a
+// VERIFIED gap, so Run() calls the real installLaunchd (service.Install) and
+// installs a REAL LaunchAgent on the developer's machine as a side effect of a
+// test that is only supposed to be about pack adoption. Wiring this explicit
+// fixture/seam, rather than relying on whatever PATH the test happened to
+// inherit, is what makes a pack-only test's outcome depend on packs and
+// nothing else.
+func neutralHostSteps(t *testing.T) {
+	t.Helper()
+	fixtureBin(t, "sbx", "echo 'sbx version 9.9.9'")
+	fixtureBin(t, "launchctl", "echo 'state = running'")
+	prev := installLaunchd
+	installLaunchd = func(io.Writer) error {
+		t.Fatal("a pack-only test must never install the real launchd agent")
+		return nil
+	}
+	t.Cleanup(func() { installLaunchd = prev })
+}
+
 // --- what setup may and may not do ------------------------------------------
 
 // Scope is a property of the step table, not of prose: exactly three
@@ -112,6 +138,9 @@ func TestSetupSteps_ApplyOnlyWhenAFlagAskedForIt(t *testing.T) {
 // so the second check alone never caught it. Real pack, real gate, real config.
 func TestPackApply_RefusedPackAbortsAndConfigUnchanged(t *testing.T) {
 	dir := t.TempDir()
+	// This test is about pack adoption ONLY: neutralize sbx/launchd so its
+	// outcome cannot depend on this host's real PATH or real launchd state.
+	neutralHostSteps(t)
 	// The composition root binds pack adoption; this test is the REAL one, so it
 	// wires the same adopter cmd/pix does rather than a stand-in.
 	Injected.PackApply = pack.SetupAdopter(nil)
@@ -188,6 +217,9 @@ func TestPackApply_RefusedPackAbortsAndConfigUnchanged(t *testing.T) {
 // false-negative this regression pins.
 func TestPackApply_SuccessIsVerifiedAgainstTheRootApplyJustWrote(t *testing.T) {
 	dir := t.TempDir()
+	// This test is about pack adoption ONLY: neutralize sbx/launchd so its
+	// outcome cannot depend on this host's real PATH or real launchd state.
+	neutralHostSteps(t)
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 	Injected.PackApply = pack.SetupAdopter(nil)
 
@@ -239,6 +271,40 @@ func TestPackApply_SuccessIsVerifiedAgainstTheRootApplyJustWrote(t *testing.T) {
 	}
 	if packinfo.CanonicalizePackRoot(got.Pack) != packinfo.CanonicalizePackRoot(root) {
 		t.Fatalf("cfg.Pack = %q, want %q", got.Pack, root)
+	}
+}
+
+// TestNeutralHostSteps_LaunchdGapNeverReachesTheRealInstaller is the seam's own
+// self-test: it puts the OTHER real incident in front of the loop — a launchd
+// fixture that answers "not loaded" (a verified gap, on ANY host) alongside a
+// pack request — and proves the loop still calls installLaunchd (the step
+// really runs; this is not a test that merely skips the row) while the call
+// lands on the recorder, never on service.Install. This is the property
+// TestPackApply_RefusedPackAbortsAndConfigUnchanged and
+// TestPackApply_SuccessIsVerifiedAgainstTheRootApplyJustWrote rely on
+// neutralHostSteps for: their own launchd fixture reports "already loaded" so
+// the row is never even a gap, so THIS test is what proves the recorder
+// actually intercepts the dangerous path rather than merely never being
+// exercised.
+func TestNeutralHostSteps_LaunchdGapNeverReachesTheRealInstaller(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
+	fixtureBin(t, "sbx", "echo 'sbx version 9.9.9'")
+	// notLoaded's own vocabulary: this is what launchctl says for a genuinely
+	// absent agent, so the probe classifies this a VERIFIED gap, not unknown.
+	fixtureBin(t, "launchctl", "echo 'Could not find service' >&2; exit 1")
+	prev := installLaunchd
+	var recorded int
+	installLaunchd = func(io.Writer) error { recorded++; return nil }
+	t.Cleanup(func() { installLaunchd = prev })
+
+	o := Run(context.Background(), Options{Budget: setupBudget}, setupSteps(&config.Config{}, realEnv(), Opts{}, io.Discard)...)
+
+	if recorded != 1 {
+		t.Fatalf("installLaunchd (the recorder) was called %d times, want exactly 1 — a verified launchd gap must still drive the loop", recorded)
+	}
+	if !slices.Contains(o.Applied, "launchd") {
+		t.Fatalf("launchd was not recorded as applied: %+v", o.Applied)
 	}
 }
 

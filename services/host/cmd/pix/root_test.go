@@ -242,15 +242,61 @@ func TestDispatch_BareNonTTY_RefusesWithNoCreate(t *testing.T) {
 // shape). A workspace with nothing else configured will fail further down
 // run's own pipeline (no sbx, etc.) but must NOT fail with the bare-refusal
 // message.
+// bareLaunchDeps builds the Deps for a bare-positional dispatch test with sbx
+// forced ABSENT: run's own `LookPath("sbx")` gates everything past it (key
+// bootstrap, probing an existing sandbox, and eventually a real `exec.Command
+// ("sbx", ...)` with the process's own stdio inherited), so a dispatch test
+// that leaves PATH as whatever the test process inherited is only "safe" by
+// the accident of sbx not being installed in THAT environment. On a real pix
+// host — which by this repo's own design HAS sbx installed — the same test
+// would actually create (and leak) a real sandbox. Pointing PATH at an empty
+// directory makes sbx-absent the test's explicit, host-independent contract
+// rather than a lucky accident of wherever `go test` happens to run.
+func bareLaunchDeps(t *testing.T) (*cli.Deps, *bytes.Buffer, *bytes.Buffer) {
+	t.Helper()
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
+	return rootDeps()
+}
+
 func TestDispatch_BareInteractive_StillLaunches(t *testing.T) {
 	dir := t.TempDir()
-	d, _, errb := rootDeps()
+	d, _, errb := bareLaunchDeps(t)
 	d.Interactive = true
 
 	_ = dispatch([]string{dir}, d)
 
 	if strings.Contains(errb.String(), "non-interactive terminal") {
 		t.Errorf("an interactive bare launch must not hit the non-TTY refusal, stderr = %q", errb.String())
+	}
+}
+
+// TestDispatch_BareInteractive_NeverTouchesARealSandbox is the side-effect
+// proof bareLaunchDeps exists for: with sbx forced absent, `pix DIR` must fail
+// CLOSED — sandbox state it cannot determine is never treated as "absent"
+// (safety invariant 6's sibling for sbx itself) — rather than reaching the
+// real `exec.Command("sbx", ...)` spawn buried at the bottom of runLaunch. The
+// exact refusal text is PlanSandboxLaunch's own "could not determine whether
+// sandbox ... exists", which only prints if run stopped BEFORE that exec, so
+// asserting it is evidence no subprocess was spawned, not just an absence of
+// a crash.
+func TestDispatch_BareInteractive_NeverTouchesARealSandbox(t *testing.T) {
+	dir := t.TempDir()
+	d, _, errb := bareLaunchDeps(t)
+	d.Interactive = true
+
+	code := dispatch([]string{dir}, d)
+
+	if code == 0 {
+		t.Fatalf("a launch with sbx forced absent must not report success, stderr = %q", errb.String())
+	}
+	if !strings.Contains(errb.String(), "could not determine whether sandbox") {
+		t.Errorf("expected the fail-closed sbx-unknown refusal (proof the real `sbx` exec was never reached), got stderr = %q", errb.String())
+	}
+	for _, leak := range []string{"attaching to running sandbox", "starting + attaching", "exec sbx:"} {
+		if strings.Contains(errb.String(), leak) {
+			t.Errorf("stderr mentions %q — this test must never reach the real sbx exec path, stderr = %q", leak, errb.String())
+		}
 	}
 }
 
