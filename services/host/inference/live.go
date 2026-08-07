@@ -263,11 +263,29 @@ func manifestModels(cfg *config.Config, reg *routing.Registry) []runtimeModel {
 
 // InferenceKitSpec is the create-time mixin: egress hosts for the callable
 // backends, plus the proxy-managed credentials to inject into them.
+//
+// A credential's IDENTITY is service+name (that pair is the `credentials[]`
+// entry the kit schema keys on): two backends sharing one identity must
+// collapse into ONE entry, never two entries with the same identity (a
+// duplicate identity is exactly the shape the upstream kit schema rejects).
+// Within that one entry, each distinct (domain, header, format) the identity
+// is actually used with becomes its own `inject[]` rule — same shape the
+// hand-authored anthropic block in pi-kit/spec.yaml already uses for three
+// domains sharing one header/format. So two backends with the same
+// service+name but a different header, format, or domain must never silently
+// drop one of them: both survive as separate inject rules under the shared
+// entry. Identical (domain, header, format) rules dedupe to one. Ordering is
+// sorted, never insertion order, so re-running against an unordered
+// cfg.Inference.Backends map (Go map iteration is unordered) always emits
+// byte-identical YAML.
 func InferenceKitSpec(cfg *config.Config) (string, error) {
-	type credential struct{ service, name, domain, header, format string }
+	type injectRule struct{ domain, header, format string }
+	type credIdentity struct{ service, name string }
 	var hosts []string
-	var credentials []credential
-	seenHost, seenCredential := map[string]bool{}, map[string]bool{}
+	seenHost := map[string]bool{}
+	var credOrder []credIdentity
+	seenIdentity := map[credIdentity]bool{}
+	credRules := map[credIdentity]map[injectRule]bool{}
 	referenced := map[string]bool{}
 	for _, b := range Bindings(cfg) {
 		referenced[b.Backend] = true
@@ -290,6 +308,14 @@ func InferenceKitSpec(cfg *config.Config) (string, error) {
 		if backend.Auth != "sbx-session" {
 			continue
 		}
+		// The pack loader (packinfo) rejects a sbx-session backend missing
+		// either field before it ever reaches disk, but hand-edited
+		// ~/.config/pix/config.toml never goes through that loader. Catch it
+		// here too: an incomplete identity has nowhere legitimate to inject,
+		// so fail loudly instead of emitting a kit the proxy can't wire.
+		if strings.TrimSpace(backend.CredentialService) == "" || strings.TrimSpace(backend.KeyEnv) == "" {
+			return "", fmt.Errorf("backend %q uses sbx-session auth but has no credential_service/key_env; set both, or switch auth to 1password or none", name)
+		}
 		header, format := backend.CredentialHeader, backend.CredentialFormat
 		if header == "" {
 			header = "Authorization"
@@ -297,13 +323,21 @@ func InferenceKitSpec(cfg *config.Config) (string, error) {
 		if format == "" {
 			format = "Bearer %s"
 		}
-		key := backend.CredentialService + "\x00" + backend.KeyEnv + "\x00" + u.Hostname()
-		if !seenCredential[key] {
-			seenCredential[key] = true
-			credentials = append(credentials, credential{backend.CredentialService, backend.KeyEnv, u.Hostname(), header, format})
+		id := credIdentity{backend.CredentialService, backend.KeyEnv}
+		if !seenIdentity[id] {
+			seenIdentity[id] = true
+			credOrder = append(credOrder, id)
+			credRules[id] = map[injectRule]bool{}
 		}
+		credRules[id][injectRule{u.Hostname(), header, format}] = true
 	}
 	sort.Strings(hosts)
+	sort.Slice(credOrder, func(i, j int) bool {
+		if credOrder[i].service != credOrder[j].service {
+			return credOrder[i].service < credOrder[j].service
+		}
+		return credOrder[i].name < credOrder[j].name
+	})
 	var b strings.Builder
 	b.WriteString("schemaVersion: \"2\"\nkind: mixin\nname: pix-inference\n")
 	if len(hosts) > 0 {
@@ -312,10 +346,26 @@ func InferenceKitSpec(cfg *config.Config) (string, error) {
 			fmt.Fprintf(&b, "      - %s\n", strconv.Quote(host))
 		}
 	}
-	if len(credentials) > 0 {
+	if len(credOrder) > 0 {
 		b.WriteString("credentials:\n")
-		for _, c := range credentials {
-			fmt.Fprintf(&b, "  - service: %s\n    apiKey:\n      name: %s\n      proxyManaged: true\n      inject:\n        - domain: %s\n          header: %s\n          format: %s\n", strconv.Quote(c.service), strconv.Quote(c.name), strconv.Quote(c.domain), strconv.Quote(c.header), strconv.Quote(c.format))
+		for _, id := range credOrder {
+			rules := make([]injectRule, 0, len(credRules[id]))
+			for r := range credRules[id] {
+				rules = append(rules, r)
+			}
+			sort.Slice(rules, func(i, j int) bool {
+				if rules[i].domain != rules[j].domain {
+					return rules[i].domain < rules[j].domain
+				}
+				if rules[i].header != rules[j].header {
+					return rules[i].header < rules[j].header
+				}
+				return rules[i].format < rules[j].format
+			})
+			fmt.Fprintf(&b, "  - service: %s\n    apiKey:\n      name: %s\n      proxyManaged: true\n      inject:\n", strconv.Quote(id.service), strconv.Quote(id.name))
+			for _, r := range rules {
+				fmt.Fprintf(&b, "        - domain: %s\n          header: %s\n          format: %s\n", strconv.Quote(r.domain), strconv.Quote(r.header), strconv.Quote(r.format))
+			}
 		}
 	}
 	return b.String(), nil
