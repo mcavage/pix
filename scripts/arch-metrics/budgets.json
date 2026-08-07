@@ -44,8 +44,8 @@
       "exits": 0
     },
     "pix/host/inference": {
-      "prod_loc": 808,
-      "exports": 30,
+      "prod_loc": 819,
+      "exports": 31,
       "globals": 7,
       "edges": 3,
       "exits": 0
@@ -177,10 +177,10 @@
       "exits": 0
     },
     "pix/host/workflow/pack": {
-      "prod_loc": 3033,
+      "prod_loc": 3049,
       "exports": 28,
       "globals": 4,
-      "edges": 10,
+      "edges": 11,
       "exits": 0
     },
     "pix/host/workflow/provision": {
