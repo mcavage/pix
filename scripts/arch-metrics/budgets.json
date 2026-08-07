@@ -44,7 +44,7 @@
       "exits": 0
     },
     "pix/host/inference": {
-      "prod_loc": 826,
+      "prod_loc": 876,
       "exports": 31,
       "globals": 8,
       "edges": 3,
