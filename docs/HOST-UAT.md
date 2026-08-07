@@ -100,24 +100,52 @@ What it asserts, and why each one is in a RELEASE gate rather than a unit test
     stopped (a bare SIGTERM would be undone by `KeepAlive` — invariant #3).
 11. **External OAuth hooks** (`--with-oauth`): the catalog bundle registers
     (only if it was not already registered — the script tracks and restores
-    exactly the bundle state it added), the script ASSERTS `pix mcp auth
-    --all`'s own exit code (never just fires it and hopes), and completion is
-    then CERTIFIED against a machine-readable probe (`pix doctor --json`'s
+    exactly the bundle state it added), then the script authorizes ONLY the
+    required shipped catalog servers (`notion`/`atlassian`/`granola`)
+    INDIVIDUALLY — `pix mcp auth notion`, `pix mcp auth atlassian`, `pix mcp
+    auth granola` — ASSERTING each one's own exact exit code and output (never
+    just firing `pix mcp auth --all` and hoping): a sweep-all call would rope
+    in every OTHER server registered on the host too, so one unrelated,
+    broken 8th server (a private pack's, or leftover state from a prior
+    session) can never fail a release check for a server this release never
+    shipped and never asked to authorize. Completion is then, per server,
+    CERTIFIED against a machine-readable probe (`pix doctor --json`'s
     per-server registered/authenticated evidence) rather than an operator's
-    say-so: a PASS requires the exact registered-and-authenticated evidence
-    line, "not registered" and "registered, not authenticated" are each their
-    own explicit FAIL, and anything else (unclassified, unknown, or no
-    evidence line at all) is an honest SKIP, never a silent PASS. An operator
+    say-so: a
+    PASS requires the exact registered-and-authenticated evidence line, "not
+    registered" and "registered, not authenticated" are each their own
+    explicit FAIL, and anything else (unclassified, unknown, or no evidence
+    line at all) is an honest SKIP, never a silent PASS. An operator
     confirmation is optional and additive: it reads a
     bounded `read -t` from `/dev/tty` specifically (never the script's own
-    stdin). A closed, absent, silent, or declined optional confirmation is only
-    an informational note, never FAIL or SKIP; the machine probe is the real
-    verdict. Finally, `pix mcp ls` is
+    stdin), through a real fd OPEN attempted first with its own stderr
+    suppressed — `/dev/tty` can fail to open (ENXIO, no controlling terminal)
+    even when its `-r`/`-w` permission bits pass, e.g. under a backgrounded or
+    fully non-interactive invocation, and an unsuppressed failed open would
+    otherwise print raw device-open noise into the release log. A closed,
+    absent, silent, or declined optional confirmation is
+    only an informational note, never FAIL or SKIP; the machine probe is the
+    real verdict. Finally, `pix mcp ls` is
     checked for the honest host-registration disclaimer (a POSITIVE claim it
     must contain) and for the absence of any present-tense session-attachment
     claim (a precise NEGATIVE regex) — not a bare substring search for
     "attached", which the disclaimer's own honest prose ("not what's attached
     to...") would always trip.
+12. **Snapshot secret scan is honest about empty units.** The `serve status
+    --json` credential-shape scan does not pass vacuously when the published
+    `units[]` is empty during a service-enabled (`--with-services`, the
+    default) full run: an empty snapshot has nothing in it to have scanned, so
+    a negative regex trivially "finding no secrets" there is not proof of
+    cleanliness. Memory always runs as a supervised unit in that mode, so zero
+    units is a real gap; the check FAILS explicitly instead of reporting a
+    free PASS.
+13. **`serve: not running` cannot be misread as running.** The install-if-down
+    gate reads `pix serve status --json`'s own boolean `running` field, never
+    a text substring match: the down state's human-readable line is literally
+    `serve: not running`, which CONTAINS the substring "running" — a bare
+    `grep -q running` matches (and reports "found") in BOTH states, so `! ...`
+    was permanently false and silently skipped installing serve when it was
+    actually down.
 
 Safety properties of the script itself, asserted or enforced:
 

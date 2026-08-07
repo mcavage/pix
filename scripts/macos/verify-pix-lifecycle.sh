@@ -101,6 +101,18 @@ port_open() {
   else (exec 3<>"/dev/tcp/$1/$2") >/dev/null 2>&1; fi
 }
 
+# serve_is_running — the machine-readable answer to "is serve up", read from
+# `pix serve status --json`'s own boolean `running` field. A text check like
+# `pix serve status | grep -q running` is NOT safe: the human-readable line
+# for the down state is literally "serve: not running", which CONTAINS the
+# substring "running" — so that grep matches (and reports "found") in BOTH
+# states, making `! grep -q running` permanently false and silently skipping
+# whatever it was meant to gate (e.g. installing serve when it is actually
+# down). The JSON boolean has no such substring trap.
+serve_is_running() {
+  printf '%s' "$(pix serve status --json 2>/dev/null)" | grep -q '"running": *true'
+}
+
 # bounded_wait PID MAXSECS — polls once a second for PID to exit, up to
 # MAXSECS. A background `pix run` that wedges must never hang the whole UAT
 # run on a bare `wait`: past the bound it is killed and `wait` still reaps it
@@ -419,7 +431,7 @@ if [ -n "$RUNNING_PID" ] && kill -0 "$RUNNING_PID" 2>/dev/null; then
   fi
 fi
 
-if ! pix serve status 2>/dev/null | grep -q "running"; then
+if ! serve_is_running; then
   if pix serve install >/dev/null 2>&1; then
     INSTALLED_SERVE=1; sleep 5
     pass "installed and started serve from the current build ($CUR_HOSTBIN) — reversible: uninstalled on exit"
@@ -436,9 +448,18 @@ if printf '%s' "$UNITS" | grep -q '"units"'; then
     else fail "unit report carries $field" "missing from serve status --json"; fi
   done
   # The published snapshot must not carry a credential: assert on the shapes.
-  if printf '%s' "$UNITS" | grep -qiE '(sk-[a-z0-9-]{16,}|xox[baprs]-|Bearer [A-Za-z0-9._-]{8,})'; then
+  # But do it HONESTLY: a negative regex over an EMPTY units[] trivially finds
+  # nothing and would pass "no secrets" without ever scanning a single unit's
+  # worth of real data. In a service-enabled full run at least the memory unit
+  # is always supervised (AGENTS.md: memory ALWAYS runs as a supervised
+  # go-plugin unit), so a zero-unit snapshot here is a real gap, not proof of
+  # cleanliness — fail it explicitly instead of letting the regex pass vacuously.
+  UNIT_COUNT="$(printf '%s' "$UNITS" | grep -c '"identity"')"
+  if [ "$UNIT_COUNT" -eq 0 ]; then
+    fail "snapshot carries no secrets" "0 units in serve status --json; cannot honestly certify a secret scan over units that were never present in a service-enabled full run"
+  elif printf '%s' "$UNITS" | grep -qiE '(sk-[a-z0-9-]{16,}|xox[baprs]-|Bearer [A-Za-z0-9._-]{8,})'; then
     fail "snapshot carries no secrets" "credential-shaped text in serve status --json"
-  else pass "snapshot carries no secrets"; fi
+  else pass "snapshot carries no secrets ($UNIT_COUNT unit(s) scanned)"; fi
 else
   fail "serve status --json publishes the supervision tree" "no units[] in the JSON"
 fi
@@ -488,7 +509,7 @@ if [ "$(uname)" = "Darwin" ] && [ "$INSTALLED_SERVE" = 1 ]; then
     else fail "launchd respawned serve" "no new pid within 30s of killing $SERVE_PID"; fi
     if pix serve stop >/dev/null 2>&1; then
       sleep 10
-      if pix serve status 2>/dev/null | grep -q "not running"; then pass "'serve stop' is mode-aware (KeepAlive did not respawn it)"
+      if ! serve_is_running; then pass "'serve stop' is mode-aware (KeepAlive did not respawn it)"
       else fail "'serve stop' is mode-aware" "serve came back after stop — it was stopped by pid, not through launchd"; fi
     else
       fail "'serve stop'" "returned non-zero"
@@ -523,7 +544,15 @@ else
   done
 
   printf '\n  A browser will open per server to complete each OAuth flow.\n'
-  assert_exit 0 "pix mcp auth --all completed" pix mcp auth --all
+  # Authorize each SHIPPED catalog server INDIVIDUALLY, recording its own exact
+  # exit code and output via assert_exit. `pix mcp auth --all` would sweep in
+  # every OTHER server registered on this host (an unrelated 8th server from a
+  # private pack, or leftover state from a prior session) — one broken,
+  # unrelated server would then fail this release check for a server this
+  # release never shipped and never asked to authorize.
+  for s in notion atlassian granola; do
+    assert_exit 0 "pix mcp auth $s completed" pix mcp auth "$s"
+  done
 
   # Completion is CERTIFIED by a machine-readable probe, never by an operator's
   # say-so: pix doctor --json runs health/mcp.go's own registered+authenticated
@@ -545,7 +574,7 @@ else
     elif printf '%s' "$DOCTOR_JSON" | grep -qF "$s: not registered"; then
       fail "catalog server $s authenticated" "pix doctor --json reports it NOT REGISTERED after 'pix mcp bundle'"
     elif printf '%s' "$DOCTOR_JSON" | grep -qF "$s: registered, not authenticated"; then
-      fail "catalog server $s authenticated" "pix doctor --json still reports it unauthenticated after 'pix mcp auth --all'"
+      fail "catalog server $s authenticated" "pix doctor --json still reports it unauthenticated after 'pix mcp auth $s'"
     else
       skip "catalog server $s auth" "pix doctor --json carries no explicit ready/authenticated evidence for $s (unknown or unclassified registration/auth state)"
     fi
@@ -555,9 +584,16 @@ else
   # the machine probe above already rendered the required verdict, so an
   # optional observation must not turn an otherwise complete run INCOMPLETE.
   # Read from /dev/tty specifically and bound the wait so it cannot hang.
-  if [ -r /dev/tty ] && [ -w /dev/tty ] 2>/dev/null; then
-    printf '  Optional: did every OAuth browser flow look right to you? [y/N] ' >/dev/tty
-    if read -r -t 30 ans </dev/tty; then
+  # A `[ -r /dev/tty ] && [ -w /dev/tty ]` stat check is not enough: the device
+  # node's permission bits can pass while the OPEN itself still fails (ENXIO,
+  # "no controlling terminal") — exactly the case for a backgrounded or fully
+  # non-interactive invocation. Attempt the real open (fd 3, read-write) with
+  # its own stderr suppressed so a failed open prints no device-noise error to
+  # the release log; the fd is the actual test, and either branch below is
+  # already purely informational.
+  if exec 3<>/dev/tty 2>/dev/null; then
+    printf '  Optional: did every OAuth browser flow look right to you? [y/N] ' >&3 2>/dev/null
+    if read -r -t 30 ans <&3 2>/dev/null; then
       case "$ans" in
         y|Y|yes) pass "operator confirmed the OAuth flows looked right" ;;
         *) printf '  note: optional operator confirmation was not affirmative; machine auth evidence above remains authoritative\n' ;;
@@ -565,6 +601,7 @@ else
     else
       printf '  note: no optional operator answer within 30s; machine auth evidence above remains authoritative\n'
     fi
+    exec 3<&- 2>/dev/null; exec 3>&- 2>/dev/null
   else
     printf '  note: no controlling TTY for optional confirmation; machine auth evidence above remains authoritative\n'
   fi

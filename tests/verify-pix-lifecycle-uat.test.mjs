@@ -46,8 +46,19 @@ test("shellcheck reports no ERROR-severity findings, when shellcheck is availabl
 	execFileSync("shellcheck", ["-S", "error", scriptPath.pathname], { stdio: "pipe" });
 });
 
-test("the OAuth pass asserts pix mcp auth --all's own exit code, not just fires it", () => {
-	assert.match(script, /assert_exit 0 "pix mcp auth --all completed" pix mcp auth --all/);
+test("the OAuth pass authorizes each shipped catalog server individually, asserting its own exit code", () => {
+	assert.match(script, /assert_exit 0 "pix mcp auth \$s completed" pix mcp auth "\$s"/);
+	assert.match(script, /for s in notion atlassian granola; do\n\s*assert_exit 0 "pix mcp auth \$s completed"/);
+});
+
+test("the OAuth pass never sweeps in every registered server via --all (an unrelated 8th server must not fail this release check)", () => {
+	// A rationale COMMENT is allowed to name the shape it avoids; only
+	// executable lines must never actually invoke it.
+	const executable = script
+		.split("\n")
+		.filter((l) => !/^\s*#/.test(l))
+		.join("\n");
+	assert.doesNotMatch(executable, /pix mcp auth --all/);
 });
 
 test("OAuth completion is certified by a machine-readable probe (pix doctor --json), not operator say-so", () => {
@@ -55,9 +66,19 @@ test("OAuth completion is certified by a machine-readable probe (pix doctor --js
 	assert.match(script, /registered, not authenticated/);
 });
 
-test("the optional human confirmation reads a bounded /dev/tty, never the script's own stdin", () => {
-	assert.match(script, /-r \/dev\/tty.*-w \/dev\/tty/);
-	assert.match(script, /read -r -t 30 ans <\/dev\/tty/);
+test("the optional human confirmation reads a bounded /dev/tty via a real fd open, never the script's own stdin", () => {
+	assert.match(script, /exec 3<>\/dev\/tty 2>\/dev\/null/);
+	assert.match(script, /read -r -t 30 ans <&3 2>\/dev\/null/);
+});
+
+test("the /dev/tty open suppresses device-open noise instead of relying on a -r/-w stat check that can lie", () => {
+	// /dev/tty can fail to OPEN (ENXIO, no controlling terminal) even when its
+	// stat permission bits pass -r/-w — a bare `[ -r /dev/tty ] && [ -w /dev/tty ]`
+	// check is not the real test; the open attempt itself, with stderr
+	// suppressed, is.
+	assert.doesNotMatch(script, /if \[ -r \/dev\/tty \] && \[ -w \/dev\/tty \]/);
+	const oauthSection = script.slice(script.indexOf("[8] External OAuth"));
+	assert.match(oauthSection, />&3 2>\/dev\/null/);
 });
 
 test("optional operator confirmation cannot make machine-verified OAuth incomplete or failed", () => {
@@ -110,6 +131,60 @@ test("every background wait is bounded, so a wedged pix run cannot hang the whol
 	assert.match(multiShell, /bounded_wait "\$SH2" 60/);
 });
 
+test("the snapshot secret scan does not pass vacuously when units[] is empty in a service-enabled run", () => {
+	const hostSection = script.slice(script.indexOf("[7] Host services"), script.indexOf("[8] External OAuth"));
+	assert.match(hostSection, /UNIT_COUNT="\$\(printf '%s' "\$UNITS" \| grep -c '"identity"'\)"/);
+	assert.match(hostSection, /if \[ "\$UNIT_COUNT" -eq 0 \]; then\n\s*fail "snapshot carries no secrets"/);
+	// The old shape: the negative regex ran unconditionally, so an empty
+	// units[] (nothing to have scanned) still printed a free "no secrets" PASS.
+	assert.doesNotMatch(hostSection, /else pass "snapshot carries no secrets";/);
+});
+
+// extractSecretsCheck — the literal if/elif/else block that scores the
+// snapshot secret scan, so the behavioral tests below run the ACTUAL shipped
+// logic against a fabricated UNITS payload.
+function extractSecretsCheck() {
+	const startMarker = 'UNIT_COUNT="$(printf';
+	const start = script.indexOf(startMarker);
+	assert.ok(start !== -1, "could not find the UNIT_COUNT secrets-check block");
+	const endMarker = 'else pass "snapshot carries no secrets ($UNIT_COUNT unit(s) scanned)"; fi';
+	const end = script.indexOf(endMarker, start);
+	assert.ok(end !== -1, "could not find the end of the secrets-check block");
+	return script.slice(start, end + endMarker.length);
+}
+
+function runSecretsCheck(unitsJson) {
+	const block = extractSecretsCheck();
+	const harness = [
+		"set -uo pipefail",
+		'pass() { printf "PASS:%s\\n" "$1"; }',
+		'fail() { printf "FAIL:%s\\n" "$1"; }',
+		block,
+	].join("\n");
+	return execFileSync("bash", ["-c", harness], {
+		encoding: "utf8",
+		env: { ...process.env, UNITS: unitsJson },
+	});
+}
+
+test("snapshot secret scan (behavioral): empty units[] FAILs, it does not pass vacuously", () => {
+	const out = runSecretsCheck('{"units": []}');
+	assert.match(out, /FAIL:snapshot carries no secrets/);
+	assert.doesNotMatch(out, /PASS:snapshot carries no secrets/);
+});
+
+test("snapshot secret scan (behavioral): a real unit with no credential-shaped text PASSes", () => {
+	const out = runSecretsCheck('{"units": [{"name": "memory", "identity": "abc123", "state": "running"}]}');
+	assert.match(out, /PASS:snapshot carries no secrets/);
+	assert.doesNotMatch(out, /FAIL:/);
+});
+
+test("snapshot secret scan (behavioral): a real unit WITH credential-shaped text still FAILs", () => {
+	const out = runSecretsCheck('{"units": [{"name": "memory", "identity": "abc123", "note": "Bearer abcd1234efgh"}]}');
+	assert.match(out, /FAIL:snapshot carries no secrets/);
+	assert.doesNotMatch(out, /PASS:/);
+});
+
 test("host services preflight WHICH pix-host binary an already-running serve is before trusting it", () => {
 	const hostSection = script.slice(script.indexOf("[7] Host services"), script.indexOf("[8] External OAuth"));
 	assert.match(hostSection, /current_bin_path pix-host/);
@@ -125,6 +200,54 @@ test("host services preflight WHICH pix-host binary an already-running serve is 
 test("installing serve for this run is reported as reversible and names the binary under test", () => {
 	const hostSection = script.slice(script.indexOf("[7] Host services"), script.indexOf("[8] External OAuth"));
 	assert.match(hostSection, /pass "installed and started serve from the current build \(\$CUR_HOSTBIN\).*reversible: uninstalled on exit"/);
+});
+
+test("the install-if-down gate uses the machine-readable serve_is_running helper, not a text substring match", () => {
+	const hostSection = script.slice(script.indexOf("[7] Host services"), script.indexOf("[8] External OAuth"));
+	assert.match(hostSection, /if ! serve_is_running; then/);
+	assert.match(hostSection, /if ! serve_is_running; then pass "'serve stop' is mode-aware/);
+	// The exact bug this replaces: "serve: not running" CONTAINS the substring
+	// "running", so a bare `grep -q running` matches both states and a `!`
+	// negation is permanently false — it can never gate an install.
+	assert.doesNotMatch(script, /pix serve status 2>\/dev\/null \| grep -q "running"/);
+	assert.doesNotMatch(script, /pix serve status 2>\/dev\/null \| grep -q "not running"/);
+});
+
+// serve_is_running (behavioral): proves the ACTUAL extracted helper against a
+// stub `pix` on PATH, for both the buggy substring shape ("serve: not
+// running" contains "running") and the fixed JSON-boolean shape.
+function runServeIsRunning(jsonRunning) {
+	const work = fs.mkdtempSync(path.join(os.tmpdir(), "pix-uat-serverunning-"));
+	try {
+		const fakePix = path.join(work, "pix");
+		fs.writeFileSync(
+			fakePix,
+			"#!/bin/sh\n" +
+				'if [ "$1 $2" = "serve status" ] && [ "$3" = "--json" ]; then\n' +
+				`  printf '{"running": ${jsonRunning}}\\n'\n` +
+				"  exit 0\n" +
+				"fi\n" +
+				'if [ "$1 $2" = "serve status" ]; then\n' +
+				`  if [ "${jsonRunning}" = "true" ]; then printf 'serve: running (pid 1)\\n'; else printf 'serve: not running\\n'; fi\n` +
+				"  exit 0\n" +
+				"fi\n" +
+				"exit 1\n",
+			{ mode: 0o755 },
+		);
+		const fn = extractFn("serve_is_running");
+		const harness = `PATH="$1:$PATH"\n${fn}\nif serve_is_running; then echo RUNNING; else echo NOT_RUNNING; fi`;
+		return execFileSync("bash", ["-c", harness, "bash", work], { encoding: "utf8" }).trim();
+	} finally {
+		fs.rmSync(work, { recursive: true, force: true });
+	}
+}
+
+test("serve_is_running (behavioral): reports NOT_RUNNING when the JSON boolean is false, even though the human line contains the substring 'running'", () => {
+	assert.strictEqual(runServeIsRunning("false"), "NOT_RUNNING");
+});
+
+test("serve_is_running (behavioral): reports RUNNING when the JSON boolean is true", () => {
+	assert.strictEqual(runServeIsRunning("true"), "RUNNING");
 });
 
 test("the destructive-flag self-check still finds nothing in the rewritten script", () => {
