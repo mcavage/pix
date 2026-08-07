@@ -38,7 +38,7 @@ type AcceptedService struct {
 // Tier-1 gate. Every other answer fails closed: a re-validation failure, an
 // unreadable store, an unaccepted pack, a stale fingerprint. Container services
 // are declared/consented but have no consumer yet. cfgGogAccount and env mirror
-// VerifyPackInferenceTrust so the fingerprint covers the SAME resolved surface
+// VerifyPackLaunchTrust so the fingerprint covers the SAME resolved surface
 // the acceptance was recorded over.
 func AcceptedGoPluginServices(p *packinfo.Info, cfgGogAccount string, env hostenv.Env) ([]AcceptedService, error) {
 	if p == nil || len(p.Manifest.Services) == 0 {
