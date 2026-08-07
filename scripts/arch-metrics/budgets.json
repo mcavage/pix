@@ -114,9 +114,9 @@
       "exits": 0
     },
     "pix/host/sandbox": {
-      "prod_loc": 708,
+      "prod_loc": 869,
       "exports": 27,
-      "globals": 18,
+      "globals": 23,
       "edges": 0,
       "exits": 0
     },
