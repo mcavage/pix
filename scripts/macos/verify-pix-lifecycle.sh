@@ -121,12 +121,41 @@ bounded_wait() {
   return 0
 }
 
+# resolve_symlink_final PATH — follows a POSIX `readlink` chain for PATH's
+# final component only (macOS ships no `readlink -f`/`realpath` guarantee, so
+# neither can be assumed). This is the piece that makes a make-install
+# symlink (e.g. /usr/local/bin/pix-host -> ../Cellar/pix/1.2.3/bin/pix-host)
+# and the real executable `lsof` reports for an already-running process
+# compare equal: without it, abs_path would realpath only the DIRECTORY and
+# leave the symlinked basename unresolved, so the two paths would never match
+# even though they name the same file. Bounded to 32 hops against a symlink
+# cycle (dangling or self-referential); a RELATIVE link target is resolved
+# against the symlink's OWN directory, per readlink(2)/POSIX semantics, not
+# the caller's cwd. Every path stays one string end to end (never split on
+# whitespace), so a target containing spaces survives intact.
+resolve_symlink_final() {
+  local p="$1" hops=0 target dir
+  while [ -L "$p" ] && [ "$hops" -lt 32 ]; do
+    target="$(readlink "$p")" || break
+    case "$target" in
+      /*) p="$target" ;;
+      *) dir="$(dirname "$p")"; p="$dir/$target" ;;
+    esac
+    hops=$((hops+1))
+  done
+  printf '%s\n' "$p"
+}
+
 # abs_path PATH — realpath of an existing file without touching $PWD (a `cd`
 # in a subshell), so callers can compare two binaries by path even when one
-# arrived as a relative/symlinked name. Empty in, empty out.
+# arrived as a relative/symlinked name. Resolves a symlinked FINAL component
+# (resolve_symlink_final) before realpath-ing the containing directory, so a
+# symlink and the real file it ultimately targets always compare equal. Empty
+# in, empty out.
 abs_path() {
   local p="$1"
   [ -n "$p" ] && [ -e "$p" ] || return 0
+  p="$(resolve_symlink_final "$p")"
   (cd "$(dirname "$p")" 2>/dev/null && printf '%s/%s\n' "$(pwd -P)" "$(basename "$p")")
 }
 
@@ -502,13 +531,23 @@ else
   # uses. A nervous or absent operator can never manufacture a PASS this way,
   # and a truthful gap can never be waved through by a hopeful click either.
   DOCTOR_JSON="$(pix doctor --json 2>/dev/null)"
+  # Only an explicit ready/authenticated line is a PASS: health/mcp.go's
+  # attachmentCaveat ("registered (host registration; attachment to a live
+  # session is not checkable from here)") is the ONE phrase it emits once a
+  # server verified registered AND (being remote) authenticated. Every other
+  # shape is a real gap or an honest unknown, never a silent pass — in
+  # particular the bare substring "$s:" used to match "not registered",
+  # "registration unknown", and "auth not checkable from here" too, which is
+  # exactly the false-PASS this rewrite closes.
   for s in notion atlassian granola; do
-    if printf '%s' "$DOCTOR_JSON" | grep -qF "$s: registered, not authenticated"; then
-      fail "catalog server $s authenticated" "pix doctor --json still reports it unauthenticated after 'pix mcp auth --all'"
-    elif printf '%s' "$DOCTOR_JSON" | grep -qF "$s:"; then
+    if printf '%s' "$DOCTOR_JSON" | grep -qF "$s: registered (host registration"; then
       pass "catalog server $s authenticated (pix doctor --json evidence)"
+    elif printf '%s' "$DOCTOR_JSON" | grep -qF "$s: not registered"; then
+      fail "catalog server $s authenticated" "pix doctor --json reports it NOT REGISTERED after 'pix mcp bundle'"
+    elif printf '%s' "$DOCTOR_JSON" | grep -qF "$s: registered, not authenticated"; then
+      fail "catalog server $s authenticated" "pix doctor --json still reports it unauthenticated after 'pix mcp auth --all'"
     else
-      skip "catalog server $s auth" "pix doctor --json carries no evidence line for $s"
+      skip "catalog server $s auth" "pix doctor --json carries no explicit ready/authenticated evidence for $s (unknown or unclassified registration/auth state)"
     fi
   done
 
