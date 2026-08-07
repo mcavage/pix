@@ -79,10 +79,15 @@ func emitNew(store *Store, cfg FollowConfig, cursors map[string]string) error {
 			}
 		}
 		for i := start; i < len(events); i++ {
-			e := events[i]
+			// An event that cannot round-trip to canonical wire bytes cannot be a
+			// stable cursor anchor. Skip it in BOTH render modes; printing it only
+			// in concise mode would print it again on every follow poll forever.
+			if lines[i] == "" {
+				continue
+			}
 			if !cfg.JSON {
-				fmt.Fprintln(cfg.Out, concise(e, cfg.TTY))
-			} else if lines[i] != "" {
+				fmt.Fprintln(cfg.Out, concise(events[i], cfg.TTY))
+			} else {
 				fmt.Fprintln(cfg.Out, lines[i])
 			}
 		}

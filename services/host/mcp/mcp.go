@@ -912,7 +912,11 @@ func remoteMCPAuthorizationState(env hostenv.Env, name string) catalogMCPReadine
 		return CatalogMCPDenied
 	}
 	if err != nil {
-		if sys.ClassifyProbeFailure(out, err) == sys.ProbeAuthTodo {
+		// The native status parser recognizes credential-specific evidence such
+		// as "expired" and "not logged in" that a generic process-failure
+		// classifier cannot enumerate. Preserve that positive evidence even when
+		// sbx correctly exits nonzero for the missing/expired credential.
+		if McpAuthStatus(out) == McpAuthFailed || sys.ClassifyProbeFailure(out, err) == sys.ProbeAuthTodo {
 			return CatalogMCPUnauthorized
 		}
 		return catalogMCPUnverifiable

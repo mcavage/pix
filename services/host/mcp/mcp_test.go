@@ -413,6 +413,19 @@ func TestRegisterServers_CurrentUnauthorizedRemoteRepairsOAuthOnce(t *testing.T)
 	}
 }
 
+func TestRemoteMCPAuthorizationStatePreservesExpiredEvidenceOnNonzeroExit(t *testing.T) {
+	for _, evidence := range []string{"credential expired", "not logged in", "authentication required"} {
+		t.Run(strings.ReplaceAll(evidence, " ", "_"), func(t *testing.T) {
+			env := hostenv.Env{System: &systest.Fake{RunTimedFn: func(string, ...string) (string, bool, error) {
+				return evidence, false, errors.New("exit status 1")
+			}}}
+			if got := remoteMCPAuthorizationState(env, "notion"); got != CatalogMCPUnauthorized {
+				t.Fatalf("remoteMCPAuthorizationState(%q, nonzero) = %v, want unauthorized", evidence, got)
+			}
+		})
+	}
+}
+
 func TestRemoteMCPRegistrationCurrentRejectsEndpointSubstring(t *testing.T) {
 	want := "https://expected.example/mcp"
 	env := hostenv.Env{System: &systest.Fake{RunTimedFn: func(string, ...string) (string, bool, error) {

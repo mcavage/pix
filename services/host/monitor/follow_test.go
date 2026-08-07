@@ -335,6 +335,22 @@ func TestEmitNewNeverEmptiesCursorOrDuplicatesAfterAnUnencodableEvent(t *testing
 	if got, ok := cursors[dir]; !ok || got == "" {
 		t.Errorf("cursor after poll 2 = %q (present=%v), want the last successfully encoded line, never empty", got, ok)
 	}
+
+	// Concise mode must skip the same unencodable event too. Printing it without
+	// a usable anchor would repeat it on every 150ms Follow poll forever.
+	writeStreamFile(t, file, before, bad)
+	var human lockedBuffer
+	humanCursors := map[string]string{}
+	humanCfg := FollowConfig{Out: &human}
+	if err := emitNew(store, humanCfg, humanCursors); err != nil {
+		t.Fatalf("emitNew concise poll 1: %v", err)
+	}
+	if err := emitNew(store, humanCfg, humanCursors); err != nil {
+		t.Fatalf("emitNew concise poll 2: %v", err)
+	}
+	if lines := strings.Count(strings.TrimSpace(human.String()), "\n") + 1; lines != 1 {
+		t.Errorf("concise output has %d lines, want only the one encodable event: %q", lines, human.String())
+	}
 }
 
 func TestHumanBytes(t *testing.T) {
