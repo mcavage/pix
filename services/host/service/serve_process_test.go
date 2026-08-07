@@ -32,6 +32,13 @@ import (
 // a shell that defers signals while a foreground child runs.
 func startProcNamed(t *testing.T, name, arg string) (dir string, pid int) {
 	t.Helper()
+	// The readiness wait below (and callers' cmdline assertions) read /proc
+	// directly: without it there is no portable way to confirm identity from
+	// argv, only the ps-based path verifyServeProcPS already covers on its
+	// own (TestVerifyServeProcPS_Darwin). Skip rather than hang or false-fail.
+	if _, err := os.Stat("/proc/self/cmdline"); err != nil {
+		t.Skip("no /proc: real-process identity tests require Linux (the ps path is covered by TestVerifyServeProcPS_Darwin)")
+	}
 	sh, err := exec.LookPath("sh")
 	if err != nil {
 		t.Skipf("no sh on PATH: %v", err)
@@ -125,9 +132,9 @@ func realCtl(pidPath, lazyPath string) serveCtl {
 // any other argv[0] is positively NOT ours (known, not-ours) — the check that
 // immediately precedes every SIGTERM.
 func TestVerifyServeProc_RealProcesses(t *testing.T) {
-	if _, err := os.Stat("/proc/self/cmdline"); err != nil {
-		t.Skip("no /proc: the ps path is covered by TestVerifyServeProcPS_Darwin")
-	}
+	// startProcNamed itself skips when /proc is unavailable (Darwin/BSD): the
+	// ps-based identity path it exercises is covered separately by
+	// TestVerifyServeProcPS_Darwin.
 	_, servePid := startProcNamed(t, "pix-host", "serve")
 	if ours, known := verifyServeProc(servePid); !ours || !known {
 		t.Errorf("verifyServeProc(%d) = (%v,%v) for %q, want (true,true)", servePid, ours, known, procCmdline(t, servePid))

@@ -104,33 +104,54 @@ func helperHold() {
 	select {} // wait to be killed
 }
 
-// helperCheckFDs enumerates this process's own open file descriptors via
-// /proc/self/fd and reports, for each of two target absolute paths passed in
-// LEASE_HELPER_TARGET_A / _B, whether an inherited fd resolves to it.
+// helperCheckFDs enumerates this process's own open file descriptors
+// (scanFDsForTargets is the platform-specific half: /proc/self/fd on Linux,
+// /dev/fd + fcntl(F_GETPATH) on Darwin) and reports, for each of two target
+// absolute paths passed in LEASE_HELPER_TARGET_A / _B, whether an inherited
+// fd resolves to it.
 func helperCheckFDs() {
 	targets := map[string]string{
 		"A": os.Getenv("LEASE_HELPER_TARGET_A"),
 		"B": os.Getenv("LEASE_HELPER_TARGET_B"),
 	}
-	found := map[string]bool{}
-	entries, err := os.ReadDir("/proc/self/fd")
+	found, err := scanFDsForTargets(targets)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "readdir /proc/self/fd: %v\n", err)
+		fmt.Fprintf(os.Stderr, "scan fds: %v\n", err)
 		os.Exit(1)
-	}
-	for _, e := range entries {
-		link, err := os.Readlink(filepath.Join("/proc/self/fd", e.Name()))
-		if err != nil {
-			continue
-		}
-		for label, target := range targets {
-			if target != "" && link == target {
-				found[label] = true
-			}
-		}
 	}
 	for _, label := range []string{"A", "B"} {
 		fmt.Printf("%s=%v\n", label, found[label])
+	}
+}
+
+// TestScanFDsForTargets_FindsOpenFDByPath is a direct, in-process check of
+// the platform fd-resolution helper the check-fds helper action relies on
+// (see lock_process_fds_linux_test.go / lock_process_fds_darwin_test.go): does
+// opening a file put its path exactly where scanFDsForTargets says it
+// belongs, and does a path that was never opened stay absent. This is the
+// cheap, no-fork-exec half of the coverage; TestCLOEXEC_ChildDoesNotInheritLeaseFd
+// below is the expensive half that also proves cross-process inheritance.
+func TestScanFDsForTargets_FindsOpenFDByPath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "watched")
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	defer f.Close()
+
+	found, err := scanFDsForTargets(map[string]string{
+		"WATCHED": path,
+		"MISSING": filepath.Join(dir, "never-opened"),
+	})
+	if err != nil {
+		t.Fatalf("scanFDsForTargets: %v", err)
+	}
+	if !found["WATCHED"] {
+		t.Errorf("scanFDsForTargets did not find the open fd for %s among %v", path, found)
+	}
+	if found["MISSING"] {
+		t.Error("scanFDsForTargets reported a path that was never opened as found")
 	}
 }
 
