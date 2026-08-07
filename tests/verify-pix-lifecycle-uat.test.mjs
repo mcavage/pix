@@ -77,12 +77,12 @@ test("the /dev/tty open suppresses device-open noise instead of relying on a -r/
 	// check is not the real test; the open attempt itself, with stderr
 	// suppressed, is.
 	assert.doesNotMatch(script, /if \[ -r \/dev\/tty \] && \[ -w \/dev\/tty \]/);
-	const oauthSection = script.slice(script.indexOf("[8] External OAuth"));
+	const oauthSection = script.slice(script.indexOf("[9] External OAuth"));
 	assert.match(oauthSection, />&3 2>\/dev\/null/);
 });
 
 test("optional operator confirmation cannot make machine-verified OAuth incomplete or failed", () => {
-	const oauthSection = script.slice(script.indexOf("[8] External OAuth"));
+	const oauthSection = script.slice(script.indexOf("[9] External OAuth"));
 	assert.match(oauthSection, /no optional operator answer within 30s/);
 	assert.match(oauthSection, /no controlling TTY for optional confirmation/);
 	assert.doesNotMatch(oauthSection, /skip "operator confirmation"/);
@@ -115,19 +115,38 @@ test("pre-existing catalog servers are verified individually and left unchanged"
 	assert.match(script, /for s in notion atlassian granola/);
 });
 
-test("backgrounded pix run invocations redirect stdin from \\/dev\\/null", () => {
-	const multiShell = script.slice(script.indexOf("[5] Multi-shell"), script.indexOf("[6]"));
-	const backgrounded = multiShell.split("\n").filter((l) => l.trim().endsWith("&"));
-	assert.ok(backgrounded.length >= 2, "expected at least the two backgrounded pix run lines in section 5");
+test("backgrounded pix run invocations read stdin from their OWN hold FIFO, never /dev/null or an inherited terminal", () => {
+	// The prompt-based hold this replaces read from /dev/null (a `-p` prompt
+	// needs no further input, so /dev/null was a safe sentinel then). A FIFO
+	// hold's whole point is that stdin stays open with nothing queued, so
+	// /dev/null (immediate EOF) or an inherited terminal (real keystrokes) are
+	// both wrong here — each backgrounded session must read its own named FIFO.
+	const multiShell = script.slice(script.indexOf("[6] Multi-shell"), script.indexOf("[7] --keep"));
+	const backgrounded = multiShell.split("\n").filter((l) => l.trim().endsWith("&") && /pix run/.test(l));
+	assert.ok(backgrounded.length >= 2, "expected at least the two backgrounded pix run lines in section 6");
 	for (const line of backgrounded) {
-		assert.match(line, /pix run/);
-		assert.match(line, /<\/dev\/null/, `backgrounded line does not redirect stdin from /dev/null: ${line}`);
+		assert.match(line, /<"\$FIFO[12]"/, `backgrounded line does not read its own hold FIFO: ${line}`);
+		assert.doesNotMatch(line, /<\/dev\/null/, `backgrounded line still reads /dev/null instead of a hold FIFO: ${line}`);
+	}
+});
+
+test("each backgrounded hold closes both hold FDs for ITSELF first, so the second job cannot inherit the first job's open write end", () => {
+	// The deadlock this closes: fd 5 (opened by THIS script before the second
+	// job is backgrounded) would otherwise be inherited into that second job's
+	// own subshell process, which never execs it away — a silent extra writer
+	// that keeps FIFO1 from ever reaching EOF no matter how deterministically
+	// this script later closes its OWN fd 5.
+	const multiShell = script.slice(script.indexOf("[6] Multi-shell"), script.indexOf("[7] --keep"));
+	const backgrounded = multiShell.split("\n").filter((l) => l.trim().endsWith("&") && /pix run/.test(l));
+	assert.strictEqual(backgrounded.length, 2, `expected exactly two backgrounded pix run lines, got ${backgrounded.length}`);
+	for (const line of backgrounded) {
+		assert.match(line, /^\(exec 5>&- 6>&-;/, `backgrounded hold does not close fds 5/6 for itself first: ${line}`);
 	}
 });
 
 test("every background wait is bounded, so a wedged pix run cannot hang the whole UAT run", () => {
 	assert.match(script, /bounded_wait\(\) \{/);
-	const multiShell = script.slice(script.indexOf("[5] Multi-shell"), script.indexOf("[6]"));
+	const multiShell = script.slice(script.indexOf("[6] Multi-shell"), script.indexOf("[7] --keep"));
 	assert.doesNotMatch(multiShell, /\bwait \$SH1\b/);
 	assert.doesNotMatch(multiShell, /\bwait \$SH2\b/);
 	assert.match(multiShell, /bounded_wait "\$SH1" 60/);
@@ -135,7 +154,7 @@ test("every background wait is bounded, so a wedged pix run cannot hang the whol
 });
 
 test("the snapshot secret scan does not pass vacuously when units[] is empty in a service-enabled run", () => {
-	const hostSection = script.slice(script.indexOf("[7] Host services"), script.indexOf("[8] External OAuth"));
+	const hostSection = script.slice(script.indexOf("[8] Host services"), script.indexOf("[9] External OAuth"));
 	assert.match(hostSection, /UNIT_COUNT="\$\(printf '%s' "\$UNITS" \| grep -c '"identity"'\)"/);
 	assert.match(hostSection, /if \[ "\$UNIT_COUNT" -eq 0 \]; then\n\s*fail "snapshot carries no secrets"/);
 	// The old shape: the negative regex ran unconditionally, so an empty
@@ -188,26 +207,62 @@ test("snapshot secret scan (behavioral): a real unit WITH credential-shaped text
 	assert.doesNotMatch(out, /PASS:/);
 });
 
+// preflightSection — section [2], the launchd preflight + reversible install,
+// which now runs BEFORE the first `pix run` (section [3]'s digest naming),
+// not inside the host-services checks (section [8]) anymore.
+function preflightSection() {
+	return script.slice(script.indexOf('[2] Host services'), script.indexOf('[3] Digest-suffixed'));
+}
+
 test("host services preflight WHICH pix-host binary an already-running serve is before trusting it", () => {
-	const hostSection = script.slice(script.indexOf("[7] Host services"), script.indexOf("[8] External OAuth"));
-	assert.match(hostSection, /current_bin_path pix-host/);
-	assert.match(hostSection, /running_bin_path "\$RUNNING_PID"/);
+	const preflight = preflightSection();
+	assert.match(preflight, /current_bin_path pix-host/);
+	assert.match(preflight, /running_bin_path "\$RUNNING_PID"/);
 	// Any pre-existing daemon blocks a clean launchd lifecycle test, even if it is
 	// the current binary; the rerun must install and own the managed service.
-	assert.match(hostSection, /clean UAT must install and exercise the launchd-managed service itself/);
-	assert.match(hostSection, /die "a serve is already running.*pix serve stop.*re-run this script/s);
-	assert.match(hostSection, /cannot prove which binary would be tested.*pix serve stop/s);
-	assert.doesNotMatch(hostSection, /skip "which binary the running serve is"/);
+	assert.match(preflight, /clean UAT must install and exercise the launchd-managed service itself/);
+	assert.match(preflight, /die "a serve is already running.*pix serve stop.*re-run this script/s);
+	assert.match(preflight, /cannot prove which binary would be tested.*pix serve stop/s);
+	assert.doesNotMatch(preflight, /skip "which binary the running serve is"/);
 });
 
 test("installing serve for this run is reported as reversible and names the binary under test", () => {
-	const hostSection = script.slice(script.indexOf("[7] Host services"), script.indexOf("[8] External OAuth"));
-	assert.match(hostSection, /pass "installed and started serve from the current build \(\$CUR_HOSTBIN\).*reversible: uninstalled on exit"/);
+	const preflight = preflightSection();
+	assert.match(preflight, /pass "installed and started serve from the current build \(\$CUR_HOSTBIN\).*reversible: uninstalled on exit"/);
+});
+
+test("the launchd preflight + reversible install runs BEFORE this script's first `pix run` (section [3]'s digest naming)", () => {
+	// This is the ordering fix: install/preflight must land ahead of any
+	// sandbox this run creates, so a later serve state change can never be
+	// confused with "changed because the lifecycle checks changed it".
+	const preflightIdx = script.indexOf('head1 "[2] Host services: launchd preflight + install"');
+	const installIdx = script.indexOf('pix serve install');
+	const firstRunIdx = script.indexOf("pix run . --keep -- -p 'digest a'");
+	assert.ok(preflightIdx !== -1, "could not find the section [2] preflight header");
+	assert.ok(installIdx !== -1, "could not find the 'pix serve install' call");
+	assert.ok(firstRunIdx !== -1, "could not find the script's first `pix run` invocation (digest naming)");
+	assert.ok(preflightIdx < firstRunIdx, "section [2]'s preflight header must appear before the first pix run");
+	assert.ok(installIdx < firstRunIdx, "'pix serve install' must run before the first pix run");
+});
+
+test("section [8] host services CONSUMES the already-installed daemon; it does not re-preflight or reinstall it", () => {
+	// Section7-was-[7]-is-now-[8]: after the reorder, the host-services check
+	// section must read $CUR_HOSTBIN/$INSTALLED_SERVE set by section [2], never
+	// call current_bin_path/running_bin_path or `pix serve install` itself —
+	// that would be re-running the same lazy-start gate a second time, after
+	// sandboxes it was meant to precede already exist.
+	const hostSection = script.slice(script.indexOf("[8] Host services"), script.indexOf("[9] External OAuth"));
+	assert.doesNotMatch(hostSection, /current_bin_path pix-host/);
+	assert.doesNotMatch(hostSection, /running_bin_path "\$RUNNING_PID"/);
+	assert.doesNotMatch(hostSection, /pix serve install/);
+	assert.doesNotMatch(hostSection, /RUNNING_PID="\$\(pix serve status/);
+	assert.match(hostSection, /CONSUMES that managed daemon/);
 });
 
 test("the install-if-down gate uses the machine-readable serve_is_running helper, not a text substring match", () => {
-	const hostSection = script.slice(script.indexOf("[7] Host services"), script.indexOf("[8] External OAuth"));
-	assert.match(hostSection, /if ! serve_is_running; then/);
+	const preflight = preflightSection();
+	assert.match(preflight, /if ! serve_is_running; then/);
+	const hostSection = script.slice(script.indexOf("[8] Host services"), script.indexOf("[9] External OAuth"));
 	assert.match(hostSection, /if ! serve_is_running; then pass "'serve stop' is mode-aware/);
 	// The exact bug this replaces: "serve: not running" CONTAINS the substring
 	// "running", so a bare `grep -q running` matches both states and a `!`
@@ -279,13 +334,13 @@ test("docs/HOST-UAT.md documents the machine-probe OAuth verdict and the binary 
 // shape of the fix and its actual runtime behavior against fabricated evidence.
 
 test("OAuth classification only PASSes on the exact registered+attachmentCaveat evidence line", () => {
-	const oauthSection = script.slice(script.indexOf("[8] External OAuth"));
+	const oauthSection = script.slice(script.indexOf("[9] External OAuth"));
 	assert.match(oauthSection, /grep -qF "\$s: registered \(host registration"/);
 	assert.match(oauthSection, /pass "catalog server \$s authenticated \(pix doctor --json evidence\)"/);
 });
 
 test("OAuth classification explicitly FAILs on 'not registered', separately from 'not authenticated'", () => {
-	const oauthSection = script.slice(script.indexOf("[8] External OAuth"));
+	const oauthSection = script.slice(script.indexOf("[9] External OAuth"));
 	assert.match(oauthSection, /grep -qF "\$s: not registered"/);
 	assert.match(oauthSection, /fail "catalog server \$s authenticated" "pix doctor --json reports it NOT REGISTERED/);
 	assert.match(oauthSection, /grep -qF "\$s: registered, not authenticated"/);
@@ -293,7 +348,7 @@ test("OAuth classification explicitly FAILs on 'not registered', separately from
 });
 
 test("OAuth classification no longer matches on the bare '$s:' substring (the false-PASS this rewrite closes)", () => {
-	const oauthSection = script.slice(script.indexOf("[8] External OAuth"));
+	const oauthSection = script.slice(script.indexOf("[9] External OAuth"));
 	// The old flawed elif: `grep -qF "$s:"` with no further qualifier.
 	assert.doesNotMatch(oauthSection, /grep -qF "\$s:"[^a-zA-Z(]/);
 });
@@ -467,4 +522,171 @@ test("current_bin_path (PATH symlink) and running_bin_path (lsof-reported real f
 	} finally {
 		fs.rmSync(work, { recursive: true, force: true });
 	}
+});
+
+// --- multi-shell FIFO holds: behavioral proof -----------------------------
+// The false-hold this replaces: the old section [6] (then [5]) launched two
+// REAL `pix run` sessions with `-p '<sleep text>'` prompts and separated
+// their "up"/"released" timing with blind `sleep 5`/`sleep 3`/`sleep 8`
+// guesses — every prompt was an actual MODEL CALL, and every timing decision
+// was a guess, not a fact. This test runs the ACTUAL extracted section-[6]
+// FIFO block (not a reimplementation) against a stub `pix` that blocks
+// reading its stdin and reports exactly how many bytes it ever received, so
+// the test proves both halves of the fix: (1) release is deterministic —
+// closing one fd ends exactly that one held session, in order — and (2) zero
+// bytes ever cross either pipe, so nothing sent could ever be mistaken for a
+// submitted prompt (a model call).
+test("multi-shell FIFO holds (behavioral): two real background sessions stay alive with zero bytes sent, released one then the other, deterministically", () => {
+	const work = fs.mkdtempSync(path.join(os.tmpdir(), "pix-uat-fifo-"));
+	try {
+		const binDir = path.join(work, "bin");
+		const markDir = path.join(work, "marks");
+		const projDir = path.join(work, "b", "proj");
+		fs.mkdirSync(binDir);
+		fs.mkdirSync(markDir);
+		fs.mkdirSync(projDir, { recursive: true });
+
+		// A stub `pix`: `run . --name X` blocks reading stdin (exactly like the
+		// real interactive RunSession would) and, on EOF, records the exact byte
+		// count it ever saw; `ls` reports the box as up while any hold is live.
+		const fakePix = path.join(binDir, "pix");
+		fs.writeFileSync(
+			fakePix,
+			"#!/bin/sh\n" +
+				'if [ "$1 $2" = "run ." ]; then\n' +
+				"  token=\"$$\"\n" +
+				'  : > "$MARK_DIR/live.$token"\n' +
+				"  n=$(wc -c | tr -d ' ')\n" +
+				'  echo "$n" > "$MARK_DIR/bytes.$token"\n' +
+				'  rm -f "$MARK_DIR/live.$token"\n' +
+				"  exit 0\n" +
+				'elif [ "$1" = "ls" ]; then\n' +
+				'  count=$(ls "$MARK_DIR"/live.* 2>/dev/null | wc -l | tr -d \' \')\n' +
+				'  if [ "$count" -gt 0 ]; then printf \'NAME\\n%s\\n\' "$BOX2"; else printf \'NAME\\n\'; fi\n' +
+				"  exit 0\n" +
+				"fi\n" +
+				"exit 1\n",
+			{ mode: 0o755 },
+		);
+
+		const startMarker = 'FIFO_DIR="$WORK/holds"';
+		const start = script.indexOf(startMarker);
+		assert.ok(start !== -1, "could not find the FIFO_DIR setup in section [6]");
+		const endMarker = 'else pass "teardown on last shell exit"; fi';
+		const end = script.indexOf(endMarker, start);
+		assert.ok(end !== -1, "could not find the end of the multi-shell FIFO block");
+		const block = script.slice(start, end + endMarker.length);
+
+		const fns = [extractFn("fifo_release"), extractFn("bounded_wait")].join("\n");
+		const harness = [
+			`PATH="${binDir}:$PATH"`,
+			`export MARK_DIR="${markDir}"`,
+			`WORK="${work}"`,
+			'export BOX2="test-box2-multi"',
+			"HOLD_PIDS=()",
+			'die() { printf "DIE:%s\\n" "$1" >&2; exit 9; }',
+			'pass() { printf "PASS:%s\\n" "$1"; }',
+			'fail() { printf "FAIL:%s:%s\\n" "$1" "${2:-}"; }',
+			"head1() { :; }",
+			"newbox() { :; }",
+			fns,
+			block,
+		].join("\n");
+
+		const out = execFileSync("bash", ["-c", harness], { encoding: "utf8", timeout: 20000 });
+		assert.match(out, /PASS:test-box2-multi is up with two shells attached/);
+		assert.match(out, /PASS:sandbox survives the FIRST shell leaving/);
+		assert.match(out, /PASS:teardown on last shell exit/);
+		assert.doesNotMatch(out, /FAIL:/);
+
+		const bytesFiles = fs.readdirSync(markDir).filter((f) => f.startsWith("bytes."));
+		assert.ok(bytesFiles.length >= 2, `expected at least 2 byte-count files (one per held session), got ${bytesFiles.length}`);
+		for (const f of bytesFiles) {
+			const n = fs.readFileSync(path.join(markDir, f), "utf8").trim();
+			assert.strictEqual(n, "0", `hold FIFO ${f} received ${n} byte(s), want 0 — nothing may ever cross a hold pipe`);
+		}
+	} finally {
+		fs.rmSync(work, { recursive: true, force: true });
+	}
+});
+
+test("multi-shell FIFO holds: no prompt (-p) or sleep-based timing gate remains in section [6]", () => {
+	const multiShell = script.slice(script.indexOf("[6] Multi-shell"), script.indexOf("[7] --keep"));
+	assert.doesNotMatch(multiShell, /-p 'sleep quietly'/);
+	assert.doesNotMatch(multiShell, /-p 'second shell'/);
+	assert.match(multiShell, /mkfifo "\$FIFO1" "\$FIFO2"/);
+	assert.match(multiShell, /fifo_release 5/);
+	assert.match(multiShell, /fifo_release 6/);
+});
+
+// --- verdict(): rc (die/abort) precedence over accumulated FAIL ----------------
+// The bug this closes: `die` exits 2 directly, and the EXIT trap always calls
+// cleanup -> verdict(rc). The old verdict() checked `[ "$FAIL" -gt 0 ]` FIRST,
+// so a die/abort that fired AFTER earlier sections already racked up real
+// FAILs got silently reported as plain "UAT FAILED" (exit 1) — the operator
+// never learns the run was cut short, only that "some checks failed".
+
+test("verdict() checks rc (die/abort) BEFORE the accumulated FAIL count, not after", () => {
+	const fn = extractFn("verdict");
+	const rcIdx = fn.indexOf('if [ "$rc" -ne 0 ]');
+	const failIdx = fn.indexOf('if [ "$FAIL" -gt 0 ]');
+	assert.ok(rcIdx !== -1, "verdict() has no rc-abort check");
+	assert.ok(failIdx !== -1, "verdict() has no FAIL check");
+	assert.ok(rcIdx < failIdx, "verdict() must check rc/abort before the accumulated FAIL count");
+});
+
+// runVerdict — runs the ACTUAL extracted verdict() against fabricated
+// PASS/FAIL/SKIP counters and an rc, capturing its exit code the same way the
+// exit trap would receive it.
+function runVerdict({ pass = 0, fail = 0, skip = 0, rc = 0 } = {}) {
+	const fn = extractFn("verdict");
+	const harness = [
+		"set -uo pipefail",
+		'red() { printf "%s" "$*"; }',
+		'grn() { printf "%s" "$*"; }',
+		'ylw() { printf "%s" "$*"; }',
+		"head1() { :; }",
+		`PASS=${pass}`,
+		`FAIL=${fail}`,
+		`SKIP=${skip}`,
+		fn,
+		`verdict ${rc}`,
+	].join("\n");
+	try {
+		const out = execFileSync("bash", ["-c", harness], { encoding: "utf8" });
+		return { code: 0, out };
+	} catch (e) {
+		return { code: e.status, out: `${e.stdout || ""}${e.stderr || ""}` };
+	}
+}
+
+test("verdict (behavioral): a die/abort (rc != 0) reports UAT ABORTED / exit 2, even with FAILs already accumulated", () => {
+	const { code, out } = runVerdict({ pass: 3, fail: 2, skip: 0, rc: 2 });
+	assert.strictEqual(code, 2);
+	assert.match(out, /UAT ABORTED/);
+	assert.doesNotMatch(out, /UAT FAILED/);
+});
+
+test("verdict (behavioral): rc=0 with accumulated FAIL still reports UAT FAILED / exit 1", () => {
+	const { code, out } = runVerdict({ pass: 3, fail: 2, skip: 0, rc: 0 });
+	assert.strictEqual(code, 1);
+	assert.match(out, /UAT FAILED/);
+});
+
+test("verdict (behavioral): rc=0, no FAIL, PASS=0 reports the vacuous-run INCOMPLETE / exit 2", () => {
+	const { code, out } = runVerdict({ pass: 0, fail: 0, skip: 0, rc: 0 });
+	assert.strictEqual(code, 2);
+	assert.match(out, /nothing was actually asserted/);
+});
+
+test("verdict (behavioral): rc=0, no FAIL, PASS>0, SKIP>0 reports INCOMPLETE / exit 2", () => {
+	const { code, out } = runVerdict({ pass: 3, fail: 0, skip: 1, rc: 0 });
+	assert.strictEqual(code, 2);
+	assert.match(out, /check\(s\) could not run/);
+});
+
+test("verdict (behavioral): a fully clean run (rc=0, no FAIL, PASS>0, no SKIP) reports UAT PASSED / exit 0", () => {
+	const { code, out } = runVerdict({ pass: 5, fail: 0, skip: 0, rc: 0 });
+	assert.strictEqual(code, 0);
+	assert.match(out, /UAT PASSED/);
 });

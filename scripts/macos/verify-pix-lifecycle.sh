@@ -27,13 +27,34 @@
 #   * It never certifies a stale daemon: host-service checks preflight WHICH
 #     pix-host binary an already-running serve is, and refuse rather than
 #     silently test one that does not match this build.
+#   * That preflight + the reversible launchd install run BEFORE this script's
+#     first `pix run` (section [2], ahead of the lifecycle sections), not
+#     after. Section [8]'s host-service checks then CONSUME that already-up
+#     daemon; they never preflight or lazily install it a second time.
+#   * Multi-shell holds (section [6]) are two REAL `pix run` sessions blocked
+#     on their own named FIFO, never a `-p` prompt: no model call is ever
+#     placed, and each is released — one, then the other — by closing that
+#     FIFO's write end, a deterministic EOF, not a guessed `sleep`. Every FD
+#     opened for a hold is force-closed in the exit trap, on every exit path,
+#     and each backgrounded holder closes BOTH hold FDs for itself first (its
+#     own subshell, not just the exec'd `pix`) so the SECOND background job
+#     can never inherit the FIRST job's still-open write end — an inherited
+#     write fd on an unrelated process is exactly what would keep a FIFO's
+#     reader from ever seeing EOF, deadlocking the release this section
+#     depends on.
 #   * The optional interactive OAuth confirmation reads only from /dev/tty,
 #     with a bound, and a missing TTY is SKIP, never FAIL — the real verdict
 #     comes from a machine-readable probe (pix doctor --json), not a human's
 #     say-so.
+#   * The verdict is precedence-ordered: a `die`/abort (script exited non-zero
+#     before reaching its own end) reports ABORTED/exit 2 even when earlier
+#     sections already accumulated real FAILs — an aborted run is a different,
+#     more urgent fact than "some checks failed" and must never be silently
+#     downgraded to plain UAT FAILED.
 #
 # Exit codes: 0 all checks passed, 1 a check failed, 2 the run was incomplete
-# (missing prerequisite, refused to start, cleanup could not finish).
+# (missing prerequisite, refused to start, cleanup could not finish, or an
+# abort/die fired ahead of the accumulated pass/fail/skip counts).
 
 set -uo pipefail
 
@@ -47,6 +68,7 @@ CREATED_BOXES=()
 EXTRA_BOXES=()   # digest-named boxes this run created (names discovered, not chosen)
 INSTALLED_SERVE=0
 MCP_ADDED_NAMES=()        # exact registrations this run added; remove only these in cleanup
+HOLD_PIDS=()              # pix run pids backgrounded behind a hold FIFO (section [6])
 WORK=""
 
 for arg in "$@"; do
@@ -132,6 +154,21 @@ bounded_wait() {
   return 0
 }
 
+# fifo_release FD — closes the write end held at file descriptor FD, sending
+# EOF to whatever process is blocked reading the far end of that FIFO. This is
+# the deterministic "release" primitive behind the multi-shell FIFO holds
+# (section [6]): the reader's next read() returns 0 the instant this close
+# happens — no data ever crosses the pipe, so nothing sent could ever be
+# mistaken for a submitted prompt (a model call). Idempotent: closing an
+# already-closed (or never-opened) fd is swallowed, not reported, so a
+# repeated call — including from the exit trap, after a normal release
+# already ran — is always safe.
+fifo_release() {
+  local fd="$1"
+  eval "exec ${fd}>&-" 2>/dev/null
+  return 0
+}
+
 # resolve_symlink_final PATH — follows a POSIX `readlink` chain for PATH's
 # final component only (macOS ships no `readlink -f`/`realpath` guarantee, so
 # neither can be assumed). This is the piece that makes a make-install
@@ -213,6 +250,19 @@ fi
 cleanup() {
   local rc=$?
   head1 "Cleanup"
+  # Deterministic FIFO holds (section [6]): force-release both writer fds and
+  # kill any held pix run process still alive, so an abort mid-hold (a `die`
+  # elsewhere, or the script erroring out before it reached its own release
+  # lines) can never leave an orphaned process or a leaked file descriptor
+  # behind. fifo_release is idempotent, so a normal run that already released
+  # both fds pays nothing extra here.
+  fifo_release 5
+  fifo_release 6
+  for p in "${HOLD_PIDS[@]:-}"; do
+    [ -z "$p" ] && continue
+    kill -0 "$p" 2>/dev/null && kill -9 "$p" 2>/dev/null
+    wait "$p" 2>/dev/null
+  done
   for b in "${CREATED_BOXES[@]:-}" "${EXTRA_BOXES[@]:-}"; do
     [ -z "$b" ] && continue
     # Only two ways a name gets here: this script chose it (our prefix), or this
@@ -256,12 +306,21 @@ verdict() {
   local rc="${1:-0}"
   head1 "Result"
   printf '  %d passed, %d failed, %d skipped\n' "$PASS" "$FAIL" "$SKIP"
+  # rc (die/abort) is checked FIRST, ahead of the accumulated FAIL count: a
+  # `die` can fire after earlier sections already racked up real FAILs (e.g.
+  # host services refusing a stale daemon in section [2], after section [1]
+  # already failed a flag check), and that abort is a DIFFERENT, more urgent
+  # fact than "some checks failed" — the run never reached its own end, so
+  # whatever it did or did not get to assert past that point is unknown, not
+  # failed. Reporting it as plain UAT FAILED (exit 1) would let a human read
+  # the printed failed-count as the whole story and miss that the run was cut
+  # short; ABORTED (exit 2, "incomplete") is the honest word for that.
+  if [ "$rc" -ne 0 ]; then printf '  %s (script exited %d)\n' "$(red 'UAT ABORTED')" "$rc"; exit 2; fi
   if [ "$FAIL" -gt 0 ]; then printf '  %s\n' "$(red 'UAT FAILED')"; exit 1; fi
   if [ "$PASS" -eq 0 ]; then printf '  %s\n' "$(red 'UAT INCOMPLETE: nothing was actually asserted')"; exit 2; fi
   if [ "$SKIP" -gt 0 ]; then
     printf '  %s — %d check(s) could not run; this is NOT a clean release verdict\n' "$(ylw 'UAT INCOMPLETE')" "$SKIP"; exit 2
   fi
-  [ "$rc" -ne 0 ] && { printf '  %s (script exited %d)\n' "$(red 'UAT ABORTED')" "$rc"; exit 2; }
   printf '  %s\n' "$(grn 'UAT PASSED')"; exit 0
 }
 trap cleanup EXIT
@@ -295,8 +354,52 @@ assert_contains "serve status" "pix serve declares status" pix help serve
 assert_exit 2 "pix host is retired (exit 2)" pix host
 assert_contains "PIX_RETIRED" "pix host names its replacement" pix host
 
-# --- 2. digest naming: same basename, different workspaces ---------------------
-head1 "[2] Digest-suffixed sandbox naming (two workspaces, one basename)"
+# --- 2. host services: launchd preflight + install, BEFORE any pix run --------
+# This runs before section [3]'s first `pix run`, on purpose: once a sandbox
+# exists, installing/uninstalling the managed serve mid-lifecycle-test would
+# make later serve state indistinguishable from "changed because the
+# lifecycle checks changed it" rather than a clean precondition every later
+# section (lifecycle AND host-services) can rely on. Section [8] below
+# CONSUMES the daemon this section establishes; it does not preflight or
+# install serve again — that would just be re-running this same lazy-start
+# logic a second time, after sandboxes it should have preceded already exist.
+if [ "$WITH_SERVICES" = 0 ]; then
+  skip "host services preflight" "--no-services was passed"
+else
+head1 "[2] Host services: launchd preflight + install"
+# Never silently test whatever daemon happens to answer :11435. If a serve is
+# already running, prove it is THIS build's pix-host before section [8] (or
+# anything else) relies on it — a stale, unmanaged daemon from before this
+# rebuild would otherwise pass every check there for a binary this run never
+# touched.
+CUR_HOSTBIN="$(current_bin_path pix-host)"
+printf '  testing pix-host binary: %s\n' "${CUR_HOSTBIN:-<pix-host not found on PATH>}"
+RUNNING_PID="$(pix serve status --json 2>/dev/null | sed -n 's/.*"pid"[: ]*\([0-9]*\).*/\1/p' | head -1)"
+if [ -n "$RUNNING_PID" ] && kill -0 "$RUNNING_PID" 2>/dev/null; then
+  RUNNING_BIN="$(running_bin_path "$RUNNING_PID")"
+  if [ -n "$CUR_HOSTBIN" ] && [ -n "$RUNNING_BIN" ]; then
+    if [ "$RUNNING_BIN" = "$CUR_HOSTBIN" ]; then
+      die "serve is already running (pid $RUNNING_PID) from this build, but a clean UAT must install and exercise the launchd-managed service itself. Run 'pix serve stop', then re-run this script; it will install the current build reversibly and uninstall it during cleanup."
+    else
+      die "a serve is already running (pid $RUNNING_PID, binary $RUNNING_BIN) that is NOT the pix-host this run just built ($CUR_HOSTBIN); testing it would certify a stale daemon. Fix: pix serve stop (or, if it is unmanaged: kill $RUNNING_PID), then re-run this script so it starts the current build."
+    fi
+  else
+    die "serve pid $RUNNING_PID is live, but its executable or the current pix-host could not be resolved; cannot prove which binary would be tested. Stop it with 'pix serve stop' (or kill $RUNNING_PID if unmanaged), then re-run."
+  fi
+fi
+
+if ! serve_is_running; then
+  if pix serve install >/dev/null 2>&1; then
+    INSTALLED_SERVE=1; sleep 5
+    pass "installed and started serve from the current build ($CUR_HOSTBIN) — reversible: uninstalled on exit"
+  else
+    die "cannot start serve; the service checks cannot run"
+  fi
+fi
+fi
+
+# --- 3. digest naming: same basename, different workspaces ---------------------
+head1 "[3] Digest-suffixed sandbox naming (two workspaces, one basename)"
 mkdir -p "$WORK/a/proj" "$WORK/b/proj"
 PRE_BOXES="$(pix ls 2>/dev/null | awk 'NR>1{print $1}' | sort)"
 (cd "$WORK/a/proj" && pix run . --keep -- -p 'digest a' >/dev/null 2>&1)
@@ -321,8 +424,8 @@ else
   fi
 fi
 
-# --- 3. launch, instance identity, and the attach fingerprint ------------------
-head1 "[3] Launch, instance record, attach fingerprint"
+# --- 4. launch, instance identity, and the attach fingerprint ------------------
+head1 "[4] Launch, instance record, attach fingerprint"
 BOX1="${BOX_PREFIX}-one"
 if runbox "$BOX1" "$WORK/a/proj" -- -p 'print the single word ready' >"$WORK/run1.log" 2>&1; then
   pass "pix run launched $BOX1 non-interactively"
@@ -349,44 +452,80 @@ else
   pass "attach fingerprint gate refused a changed MCP set"
 fi
 
-# --- 4. exit-code propagation (the last shell's status is pix's status) --------
-head1 "[4] Exit status propagation"
+# --- 5. exit-code propagation (the last shell's status is pix's status) --------
+head1 "[5] Exit status propagation"
 (cd "$WORK/a/proj" && pix run . --name "$BOX1" -- --definitely-not-a-pi-flag) >/dev/null 2>&1
 RC=$?
 if [ "$RC" -eq 0 ]; then fail "last-exit propagation" "a failing inner command produced exit 0"
 else pass "last-exit propagation (inner failure surfaced as exit $RC)"; fi
 assert_exit 2 "bare 'pix <not-a-dir>' refuses" pix definitely-not-a-directory-"$RUN_ID"
 
-# --- 5. multi-shell references and teardown ------------------------------------
-head1 "[5] Multi-shell references: the LAST shell tears down"
+# --- 6. multi-shell references and teardown ------------------------------------
+head1 "[6] Multi-shell references: the LAST shell tears down (deterministic FIFO holds)"
 BOX2="${BOX_PREFIX}-multi"
 newbox "$BOX2"
-# Background shells read from /dev/null, never this script's own stdin: an
-# inherited terminal fd would let a hung pi prompt block on human input that
-# will never come, and an inherited /dev/null (a backgrounded UAT run itself)
-# must not become an accidental EOF loop either. Both waits below are bounded
-# (bounded_wait): a wedged background pix run gets killed and reported, it
-# never hangs the rest of this script.
-(cd "$WORK/b/proj" && pix run . --name "$BOX2" -- -p 'sleep quietly' </dev/null >/dev/null 2>&1) &
+# Two REAL `pix run` invocations, neither ever given a -p prompt: each is an
+# actual interactive RunSession holding its own reference to $BOX2, and
+# neither can ever place a model call because neither ever sends a message.
+# Each reads its stdin from its OWN named FIFO instead of a prompt string:
+#   * opening a FIFO for read blocks until a writer connects, so the
+#     backgrounded `pix run` does not even exec until this script opens the
+#     matching write end below — that connect (not a guessed `sleep`) is the
+#     deterministic "it is really up now" signal;
+#   * holding the write end open then keeps the session alive indefinitely
+#     (nothing queued to read, no EOF);
+#   * fifo_release closes the write end on cue, delivering EOF to that ONE
+#     session the instant we choose — releasing shell 1 and then shell 2 is
+#     therefore an ORDERED, exact sequence, never a race against a sleep. No
+#     byte ever crosses either pipe, so nothing sent could ever be mistaken
+#     for a submitted prompt either.
+# bounded_wait remains the backstop after each release: if a held session
+# does not treat stdin EOF as a clean exit, it is still killed and reported
+# rather than hanging the rest of this script.
+FIFO_DIR="$WORK/holds"
+mkdir -p "$FIFO_DIR" || die "cannot create the FIFO hold directory"
+FIFO1="$FIFO_DIR/shell1"; FIFO2="$FIFO_DIR/shell2"
+mkfifo "$FIFO1" "$FIFO2" || die "cannot create the multi-shell hold FIFOs"
+
+# Each backgrounded job closes fds 5 and 6 for ITSELF first (`exec 5>&- 6>&-`
+# as its own first command, not a redirect merely attached to `pix run`):
+# without that, the SECOND job below would fork while fd 5 is already open in
+# this script and inherit that write end into its own subshell process, which
+# never execs it away and never closes it either — a silent extra writer that
+# would keep FIFO1 from ever reaching EOF no matter how deterministically we
+# close OUR fd 5 later. Order-independent: each job closes both, whichever it
+# does or does not yet need.
+(exec 5>&- 6>&-; cd "$WORK/b/proj" && pix run . --name "$BOX2" <"$FIFO1" >/dev/null 2>&1) &
 SH1=$!
-sleep 5
-(cd "$WORK/b/proj" && pix run . --name "$BOX2" -- -p 'second shell' </dev/null >/dev/null 2>&1) &
+HOLD_PIDS+=("$SH1")
+exec 5>"$FIFO1" || die "cannot open the shell-1 hold FIFO for writing"
+
+(exec 5>&- 6>&-; cd "$WORK/b/proj" && pix run . --name "$BOX2" <"$FIFO2" >/dev/null 2>&1) &
 SH2=$!
-sleep 5
+HOLD_PIDS+=("$SH2")
+exec 6>"$FIFO2" || die "cannot open the shell-2 hold FIFO for writing"
+
+# Both writer opens above only returned once their matching background
+# reader connected, so both sessions are genuinely up by this line already —
+# no sleep needed to "probably" be ready.
 if pix ls 2>/dev/null | grep -q "$BOX2"; then pass "$BOX2 is up with two shells attached"
 else fail "$BOX2 with two shells" "sandbox not listed while two shells hold it"; fi
+
+fifo_release 5   # release shell 1's hold: it sees EOF now, deterministically
 if bounded_wait "$SH1" 60; then :; else fail "first shell exited" "background pix run (pid $SH1) did not exit within 60s and was killed"; fi
 sleep 3
 if pix ls 2>/dev/null | grep -q "$BOX2"; then pass "sandbox survives the FIRST shell leaving"
 else fail "sandbox survives the first shell leaving" "torn down while a second shell still held it"; fi
+
+fifo_release 6   # release shell 2's hold: the LAST reference goes with it
 if bounded_wait "$SH2" 60; then :; else fail "second shell exited" "background pix run (pid $SH2) did not exit within 60s and was killed"; fi
 sleep 8
 if pix ls 2>/dev/null | grep -q "$BOX2"; then
   fail "teardown on last shell exit" "$BOX2 outlived every shell without --keep"
 else pass "teardown on last shell exit"; fi
 
-# --- 6. --keep, and the orphan reaper that must respect it ---------------------
-head1 "[6] --keep marker and orphan reaping"
+# --- 7. --keep, and the orphan reaper that must respect it ---------------------
+head1 "[7] --keep marker and orphan reaping"
 BOX3="${BOX_PREFIX}-keep"
 newbox "$BOX3"
 (cd "$WORK/b/proj" && pix run . --name "$BOX3" --keep -- -p 'kept box' >/dev/null 2>&1)
@@ -402,44 +541,20 @@ else
   fail "explicit rm of a kept sandbox" "$BOX3 is still listed"
 fi
 
-# --- 7. host services: launchd + the memory unit -------------------------------
+# --- 8. host services: consume the ALREADY-installed managed daemon -----------
 if [ "$WITH_SERVICES" = 0 ]; then
   skip "host services" "--no-services was passed"
 else
-head1 "[7] Host services: serve status, launchd restart, memory unit restart"
+head1 "[8] Host services: serve status, launchd restart, memory unit restart"
 assert_exit 0 "pix serve status" pix serve status
 assert_contains "schema_version" "pix doctor --json is machine-readable" pix doctor --json
 
-# Preflight: never silently test whatever daemon happens to answer :11435. If
-# a serve is already running, prove it is THIS build's pix-host before any
-# check below relies on it — a stale, unmanaged daemon from before this
-# rebuild would otherwise pass every check below for a binary this run never
-# touched.
-CUR_HOSTBIN="$(current_bin_path pix-host)"
-printf '  testing pix-host binary: %s\n' "${CUR_HOSTBIN:-<pix-host not found on PATH>}"
-RUNNING_PID="$(pix serve status --json 2>/dev/null | sed -n 's/.*"pid"[: ]*\([0-9]*\).*/\1/p' | head -1)"
-if [ -n "$RUNNING_PID" ] && kill -0 "$RUNNING_PID" 2>/dev/null; then
-  RUNNING_BIN="$(running_bin_path "$RUNNING_PID")"
-  if [ -n "$CUR_HOSTBIN" ] && [ -n "$RUNNING_BIN" ]; then
-    if [ "$RUNNING_BIN" = "$CUR_HOSTBIN" ]; then
-      die "serve is already running (pid $RUNNING_PID) from this build, but a clean UAT must install and exercise the launchd-managed service itself. Run 'pix serve stop', then re-run this script; it will install the current build reversibly and uninstall it during cleanup."
-    else
-      die "a serve is already running (pid $RUNNING_PID, binary $RUNNING_BIN) that is NOT the pix-host this run just built ($CUR_HOSTBIN); testing it would certify a stale daemon. Fix: pix serve stop (or, if it is unmanaged: kill $RUNNING_PID), then re-run this script so it starts the current build."
-    fi
-  else
-    die "serve pid $RUNNING_PID is live, but its executable or the current pix-host could not be resolved; cannot prove which binary would be tested. Stop it with 'pix serve stop' (or kill $RUNNING_PID if unmanaged), then re-run."
-  fi
-fi
-
-if ! serve_is_running; then
-  if pix serve install >/dev/null 2>&1; then
-    INSTALLED_SERVE=1; sleep 5
-    pass "installed and started serve from the current build ($CUR_HOSTBIN) — reversible: uninstalled on exit"
-  else
-    die "cannot start serve; the service checks cannot run"
-  fi
-fi
-
+# The launchd preflight + install already ran in section [2] — BEFORE any
+# sandbox in this run existed. This section CONSUMES that managed daemon
+# ($CUR_HOSTBIN, $INSTALLED_SERVE) rather than preflighting or installing it
+# again here: a second lazy-start attempt this late would just be re-running
+# the same gate after the lifecycle sections it was meant to precede have
+# already created and torn down sandboxes.
 UNITS="$(pix serve status --json 2>/dev/null)"
 if printf '%s' "$UNITS" | grep -q '"units"'; then
   pass "serve status --json publishes the supervision tree"
@@ -524,8 +639,8 @@ else
 fi
 fi
 
-# --- 8. external OAuth integrations (interactive, opt-in) ----------------------
-head1 "[8] External OAuth-backed MCP servers"
+# --- 9. external OAuth integrations (interactive, opt-in) ----------------------
+head1 "[9] External OAuth-backed MCP servers"
 if [ "$WITH_OAUTH" = 0 ]; then
   skip "remote OAuth servers" "--with-oauth not passed (this run is NOT a full release verdict)"
 else
