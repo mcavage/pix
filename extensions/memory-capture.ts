@@ -205,7 +205,8 @@ export function shouldCaptureUserText(text: string): boolean {
 	return true;
 }
 
-let lastSent = ""; // dedup so each exchange is processed once across both hooks
+let lastSent = ""; // last exchange the daemon positively accepted
+let inFlight = ""; // dedup agent_end vs. next-turn capture while one POST is pending
 
 async function capture(ctx: any, awaited: boolean): Promise<void> {
 	const ex = lastCompleteExchange(entries(ctx));
@@ -213,8 +214,8 @@ async function capture(ctx: any, awaited: boolean): Promise<void> {
 	const user = ex.user?.trim() ?? "";
 	if (!shouldCaptureUserText(user)) return;
 	const key = createHash("sha256").update(ex.user + " " + ex.assistant).digest("hex").slice(0, 16);
-	if (key === lastSent) return;
-	lastSent = key;
+	if (key === lastSent || key === inFlight) return;
+	inFlight = key;
 	const params = { user: ex.user, assistant: ex.assistant, project: currentProject(ctx), profile: ACTIVE_PROFILE };
 	// Observability: a failed observe POST (host daemon unreachable, timeout) used
 	// to be swallowed silently, so a broken capture pipe was invisible. Log it once
@@ -229,15 +230,19 @@ async function capture(ctx: any, awaited: boolean): Promise<void> {
 			}
 		}
 	};
-	if (awaited) {
+	const send = async () => {
 		try {
-			warnIfCaptureOff(await call("observe", params));
+			const response = await call("observe", params);
+			warnIfCaptureOff(response);
+			lastSent = key; // only a completed RPC earns deduplication
 		} catch (e) {
-			onErr(e);
+			onErr(e); // leave lastSent untouched so the next awaited hook retries
+		} finally {
+			if (inFlight === key) inFlight = "";
 		}
-	} else {
-		void call("observe", params).then(warnIfCaptureOff).catch(onErr);
-	}
+	};
+	if (awaited) await send();
+	else void send();
 }
 
 export default function (pi: any) {
