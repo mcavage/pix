@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"pix/host/sandbox"
+	"pix/host/workflow/launch"
 )
 
 // resolve_sandbox_name_test.go pins the U04c review fix: the ACTUAL sandbox
@@ -69,5 +70,42 @@ func TestResolveSandboxName_SameBasenameCollision(t *testing.T) {
 	// Both still calling twice for the SAME workspace must be stable.
 	if again := resolveSandboxName("", wsA); again != nameA {
 		t.Errorf("resolveSandboxName(%q) is not deterministic: %q vs %q", wsA, nameA, again)
+	}
+}
+
+// TestSessionKeyFor_IsTheFinalResolvedName: lease identity follows the
+// resolved sandbox name, not the raw workspace, in both the default (digest)
+// case and the explicit --name case.
+func TestSessionKeyFor_IsTheFinalResolvedName(t *testing.T) {
+	ws := t.TempDir()
+	defaultName := resolveSandboxName("", ws)
+	if got := sessionKeyFor(launch.RunOpts{Name: defaultName, Workspace: ws}); got != defaultName {
+		t.Errorf("sessionKeyFor(default) = %q, want the resolved digest name %q", got, defaultName)
+	}
+	explicitName := resolveSandboxName("my-custom-box", ws)
+	if got := sessionKeyFor(launch.RunOpts{Name: explicitName, Workspace: ws}); got != explicitName {
+		t.Errorf("sessionKeyFor(explicit) = %q, want %q", got, explicitName)
+	}
+}
+
+// TestSessionKeyFor_DifferentExplicitNamesOnOneWorkspaceNeverCollide: the
+// exact regression this fix closes. Section [3] and [4] of the host UAT
+// script launch multiple DIFFERENTLY NAMED sandboxes from the SAME workspace
+// directory; keying lease state by the workspace path (the old behavior)
+// would alias their lease directories onto one another the instant that
+// happens. Keying by the resolved sandbox name (what sbx itself treats as
+// the unique identity) cannot alias, because sbx names are unique by
+// construction.
+func TestSessionKeyFor_DifferentExplicitNamesOnOneWorkspaceNeverCollide(t *testing.T) {
+	ws := t.TempDir()
+	nameA := resolveSandboxName("pix-uat-one", ws)
+	nameB := resolveSandboxName("pix-uat-two", ws)
+	keyA := sessionKeyFor(launch.RunOpts{Name: nameA, Workspace: ws})
+	keyB := sessionKeyFor(launch.RunOpts{Name: nameB, Workspace: ws})
+	if keyA == keyB {
+		t.Fatalf("two differently-named sandboxes sharing workspace %q collided on lease key %q", ws, keyA)
+	}
+	if keyA != nameA || keyB != nameB {
+		t.Errorf("sessionKeyFor did not track the resolved name: keyA=%q nameA=%q keyB=%q nameB=%q", keyA, nameA, keyB, nameB)
 	}
 }

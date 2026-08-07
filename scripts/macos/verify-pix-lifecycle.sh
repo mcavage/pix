@@ -169,6 +169,123 @@ fifo_release() {
   return 0
 }
 
+# ls_json_lists NAME — the machine-readable answer to "does pix ls --json
+# positively list NAME right now", distinguishing a genuine ABSENCE (the
+# command ran fine, NAME just is not in it) from an ls FAILURE (the command
+# itself did not run cleanly). Echoes exactly one of LISTED / ABSENT /
+# ERROR:<stderr tail> — never collapses the latter into the former the way a
+# bare `pix ls | grep -q NAME` does (grep -q says "not found" for both an
+# empty/absent listing AND a totally failed command).
+ls_json_lists() {
+  local name="$1" out rc errfile
+  errfile="$(mktemp "${TMPDIR:-/tmp}/pix-uat-lsjson.XXXXXX")"
+  out="$(pix ls --json 2>"$errfile")"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf 'ERROR:%s\n' "$(tr '\n' ' ' <"$errfile")"
+    rm -f "$errfile"
+    return 0
+  fi
+  rm -f "$errfile"
+  if printf '%s' "$out" | grep -qE "\"name\": *\"${name}\""; then
+    printf 'LISTED\n'
+  else
+    printf 'ABSENT\n'
+  fi
+}
+
+# bounded_wait_listed NAME MAXSECS — polls ls_json_lists once a second, up to
+# MAXSECS, for a POSITIVE listing. A FIFO write end connecting only proves the
+# backgrounded shell opened stdin for reading — it says nothing about whether
+# pix itself has created or attached the sandbox yet, so callers must wait on
+# this (a real, machine-readable fact) rather than treat the FIFO connect
+# itself as "up". Returns 0 once LISTED, 1 on timeout while still ABSENT, 2
+# the instant ls_json_lists reports ERROR (never conflated with "still
+# absent" — a failing probe is a different fact than a genuinely empty one).
+bounded_wait_listed() {
+  local name="$1" max="${2:-30}" i=0 state
+  while [ "$i" -lt "$max" ]; do
+    state="$(ls_json_lists "$name")"
+    case "$state" in
+      LISTED) return 0 ;;
+      ERROR:*) printf '%s\n' "$state" >&2; return 2 ;;
+    esac
+    i=$((i+1))
+    sleep 1
+  done
+  return 1
+}
+
+# bounded_wait_attach_log LOG PID MAXSECS — polls once a second, up to
+# MAXSECS, for pix's own "attaching" evidence (run_cmd.go prints it to
+# stderr on every attach) to appear in LOG, AND for PID to still be alive at
+# that instant. A FIFO connect proves only that PID opened stdin, never that
+# a SECOND live RunSession reference actually attached — this is the real
+# observable proof of that second reference. Returns 0 once both hold
+# together, 1 on timeout, and 1 immediately if PID has already exited (a
+# dead process past this point can never become that live second reference,
+# no matter how much longer this waits).
+bounded_wait_attach_log() {
+  local log="$1" pid="$2" max="${3:-30}" i=0
+  while [ "$i" -lt "$max" ]; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      return 1
+    fi
+    if grep -qi "attaching" "$log" 2>/dev/null; then
+      kill -0 "$pid" 2>/dev/null && return 0
+      return 1
+    fi
+    i=$((i+1))
+    sleep 1
+  done
+  return 1
+}
+
+# bounded_wait_absent NAME MAXSECS — the teardown-side counterpart to
+# bounded_wait_listed: teardown is not necessarily synchronous with the last
+# holding shell's process exit, so this polls up to MAXSECS for a positive
+# ABSENT reading rather than trusting a single immediate probe. Same
+# ERROR-vs-absent distinction: return 0 once ABSENT, 1 on timeout while still
+# LISTED, 2 the instant ls_json_lists itself fails (never treated as proof of
+# teardown).
+bounded_wait_absent() {
+  local name="$1" max="${2:-30}" i=0 state
+  while [ "$i" -lt "$max" ]; do
+    state="$(ls_json_lists "$name")"
+    case "$state" in
+      ABSENT) return 0 ;;
+      ERROR:*) printf '%s\n' "$state" >&2; return 2 ;;
+    esac
+    i=$((i+1))
+    sleep 1
+  done
+  return 1
+}
+
+# assert_box_listed / assert_box_not_listed NAME LABEL — the pass/fail wrapper
+# around the bounded ls_json_lists waits that section [6] asserts through, so
+# every presence check there is both bounded (a wedged `pix ls` cannot hang
+# this script) and distinguishes an ls FAILURE from a genuine absence/
+# presence, instead of silently treating both the same way a bare `grep -q`
+# on a possibly-failed command would.
+assert_box_listed() {
+  local name="$1" label="$2" rc
+  bounded_wait_listed "$name" 15; rc=$?
+  case "$rc" in
+    0) pass "$label" ;;
+    2) fail "$label" "pix ls --json itself failed (not merely absent)" ;;
+    *) fail "$label" "pix ls --json ran fine but did not list $name within 15s" ;;
+  esac
+}
+assert_box_not_listed() {
+  local name="$1" label="$2" rc
+  bounded_wait_absent "$name" 15; rc=$?
+  case "$rc" in
+    0) pass "$label" ;;
+    2) fail "$label" "pix ls --json itself failed (cannot confirm teardown, not proof of it)" ;;
+    *) fail "$label" "$name is still listed after 15s" ;;
+  esac
+}
+
 # resolve_symlink_final PATH — follows a POSIX `readlink` chain for PATH's
 # final component only (macOS ships no `readlink -f`/`realpath` guarantee, so
 # neither can be assumed). This is the piece that makes a make-install
@@ -427,21 +544,35 @@ fi
 # --- 4. launch, instance identity, and the attach fingerprint ------------------
 head1 "[4] Launch, instance record, attach fingerprint"
 BOX1="${BOX_PREFIX}-one"
-if runbox "$BOX1" "$WORK/a/proj" -- -p 'print the single word ready' >"$WORK/run1.log" 2>&1; then
+LAUNCH1_OK=1
+if runbox "$BOX1" "$WORK/a/proj" -- -p 'print the single word ready' >"$WORK/run1.out" 2>"$WORK/run1.err"; then
   pass "pix run launched $BOX1 non-interactively"
 else
-  fail "pix run launched $BOX1" "$(tail -3 "$WORK/run1.log" | tr '\n' ' ')"
+  LAUNCH1_OK=0
+  fail "pix run launched $BOX1" "stderr: $(tail -5 "$WORK/run1.err" 2>/dev/null | tr '\n' ' ')"
 fi
 assert_contains "$BOX1" "pix ls lists $BOX1" pix ls
 
+# Lease state is keyed by the FINAL resolved sandbox name (o.Name in
+# run_cmd.go), and --name travels verbatim, so with an explicit --name (as
+# above) that name IS the key: the record path is deterministic, not a
+# guess. The `find -newer $WORK` this replaces was unsound on its own terms
+# on a host running ANY other concurrent pix activity: an unrelated pix run
+# elsewhere on the same machine could write a record.json newer than $WORK
+# under this SAME STATE_DIR, and `head -1` would happily pick up THAT one
+# instead of ours.
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/pix"
-REC="$(find "$STATE_DIR" -name record.json -newer "$WORK" 2>/dev/null | head -1)"
-if [ -n "$REC" ]; then
-  INSTANCE="$(sed -n 's/.*"instance_id"[: ]*"\([^"]*\)".*/\1/p' "$REC")"
-  if [ -n "$INSTANCE" ]; then pass "lease record carries an instance id ($INSTANCE)"
-  else fail "lease record instance id" "no instance_id in $REC"; fi
+REC="$STATE_DIR/sandboxes/$BOX1/record.json"
+if [ "$LAUNCH1_OK" = 1 ]; then
+  if [ -f "$REC" ]; then
+    INSTANCE="$(sed -n 's/.*"instance_id"[: ]*"\([^"]*\)".*/\1/p' "$REC")"
+    if [ -n "$INSTANCE" ]; then pass "lease record carries an instance id ($INSTANCE)"
+    else fail "lease record instance id" "no instance_id in $REC: $(tr '\n' ' ' <"$REC")"; fi
+  else
+    fail "lease instance record" "no record.json at exact path $REC; launch stderr: $(tail -5 "$WORK/run1.err" 2>/dev/null | tr '\n' ' ')"
+  fi
 else
-  skip "lease instance record" "no record.json written under $STATE_DIR"
+  skip "lease instance record" "pix run launched $BOX1 failed above; no record is expected — see its captured stderr"
 fi
 
 # An attach whose create-time MCP set no longer matches must be REFUSED, not
@@ -486,6 +617,7 @@ FIFO_DIR="$WORK/holds"
 mkdir -p "$FIFO_DIR" || die "cannot create the FIFO hold directory"
 FIFO1="$FIFO_DIR/shell1"; FIFO2="$FIFO_DIR/shell2"
 mkfifo "$FIFO1" "$FIFO2" || die "cannot create the multi-shell hold FIFOs"
+LOG1="$FIFO_DIR/shell1.log"; LOG2="$FIFO_DIR/shell2.log"
 
 # Each backgrounded job closes fds 5 and 6 for ITSELF first (`exec 5>&- 6>&-`
 # as its own first command, not a redirect merely attached to `pix run`):
@@ -494,35 +626,55 @@ mkfifo "$FIFO1" "$FIFO2" || die "cannot create the multi-shell hold FIFOs"
 # never execs it away and never closes it either — a silent extra writer that
 # would keep FIFO1 from ever reaching EOF no matter how deterministically we
 # close OUR fd 5 later. Order-independent: each job closes both, whichever it
-# does or does not yet need.
-(exec 5>&- 6>&-; cd "$WORK/b/proj" && pix run . --name "$BOX2" <"$FIFO1" >/dev/null 2>&1) &
+# does or does not yet need. Each job's own combined stdout+stderr goes to its
+# OWN log file (never /dev/null) so this script can later look for pix's own
+# evidence of what it did, not just infer it from a pipe connecting.
+(exec 5>&- 6>&-; cd "$WORK/b/proj" && pix run . --name "$BOX2" <"$FIFO1" >"$LOG1" 2>&1) &
 SH1=$!
 HOLD_PIDS+=("$SH1")
 exec 5>"$FIFO1" || die "cannot open the shell-1 hold FIFO for writing"
 
-(exec 5>&- 6>&-; cd "$WORK/b/proj" && pix run . --name "$BOX2" <"$FIFO2" >/dev/null 2>&1) &
+# The write-end open above only returned once shell 1's backgrounded `pix run`
+# connected its OWN read end — but that connect proves only that the shell
+# opened stdin for reading, the same thing an `exec <"$FIFO1"` with no pix
+# behind it at all would also prove. It says nothing about whether pix itself
+# has created $BOX2 yet. Wait for the real, machine-readable fact instead:
+# pix ls --json positively listing it, bounded so a wedged create cannot hang
+# this script, and never conflating an ls FAILURE with a still-absent box.
+WL1=$(bounded_wait_listed "$BOX2" 30; echo $?)
+case "$WL1" in
+  0) pass "$BOX2 observed via pix ls --json after the first shell's FIFO connected" ;;
+  2) fail "$BOX2 observed via pix ls --json" "pix ls --json itself failed (see stderr above) — not merely absent" ;;
+  *) fail "$BOX2 observed via pix ls --json" "not listed within 30s of the first shell's FIFO connecting: $(tail -3 "$LOG1" 2>/dev/null | tr '\n' ' ')" ;;
+esac
+
+(exec 5>&- 6>&-; cd "$WORK/b/proj" && pix run . --name "$BOX2" <"$FIFO2" >"$LOG2" 2>&1) &
 SH2=$!
 HOLD_PIDS+=("$SH2")
 exec 6>"$FIFO2" || die "cannot open the shell-2 hold FIFO for writing"
 
-# Both writer opens above only returned once their matching background
-# reader connected, so both sessions are genuinely up by this line already —
-# no sleep needed to "probably" be ready.
-if pix ls 2>/dev/null | grep -q "$BOX2"; then pass "$BOX2 is up with two shells attached"
-else fail "$BOX2 with two shells" "sandbox not listed while two shells hold it"; fi
+# Same caveat, sharper here: $BOX2 already exists (shell 1 created it), so
+# shell 2's FIFO connect proves only that ITS OWN stdin opened — never that a
+# SECOND live RunSession reference actually attached. The real proof is pix's
+# own "attaching" evidence in shell 2's OWN log (run_cmd.go prints it on
+# every attach) together with shell 2's process still being alive at that
+# instant — a dead process past this point could never be that second
+# reference no matter how long this waited.
+if bounded_wait_attach_log "$LOG2" "$SH2" 30; then
+  pass "$BOX2's second shell observably attached (log evidence + live process)"
+else
+  fail "$BOX2's second shell observably attached" "no 'attaching' evidence in $LOG2 with pid $SH2 still alive within 30s: $(tail -3 "$LOG2" 2>/dev/null | tr '\n' ' ')"
+fi
+
+assert_box_listed "$BOX2" "$BOX2 is up with two shells attached"
 
 fifo_release 5   # release shell 1's hold: it sees EOF now, deterministically
 if bounded_wait "$SH1" 60; then :; else fail "first shell exited" "background pix run (pid $SH1) did not exit within 60s and was killed"; fi
-sleep 3
-if pix ls 2>/dev/null | grep -q "$BOX2"; then pass "sandbox survives the FIRST shell leaving"
-else fail "sandbox survives the first shell leaving" "torn down while a second shell still held it"; fi
+assert_box_listed "$BOX2" "sandbox survives the FIRST shell leaving"
 
 fifo_release 6   # release shell 2's hold: the LAST reference goes with it
 if bounded_wait "$SH2" 60; then :; else fail "second shell exited" "background pix run (pid $SH2) did not exit within 60s and was killed"; fi
-sleep 8
-if pix ls 2>/dev/null | grep -q "$BOX2"; then
-  fail "teardown on last shell exit" "$BOX2 outlived every shell without --keep"
-else pass "teardown on last shell exit"; fi
+assert_box_not_listed "$BOX2" "teardown on last shell exit"
 
 # --- 7. --keep, and the orphan reaper that must respect it ---------------------
 head1 "[7] --keep marker and orphan reaping"

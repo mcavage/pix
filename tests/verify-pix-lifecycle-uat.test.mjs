@@ -524,6 +524,144 @@ test("current_bin_path (PATH symlink) and running_bin_path (lsof-reported real f
 	}
 });
 
+// --- section [4]: exact lease-record path, no more `find -newer $WORK` -------
+// The heuristic this replaces (`find "$STATE_DIR" -name record.json -newer
+// "$WORK" | head -1`) was unsound on its own terms even ignoring style: on a
+// host running ANY other concurrent pix activity, an unrelated pix run
+// elsewhere could write a record.json newer than $WORK under the SAME
+// STATE_DIR, and `head -1` would happily pick up THAT one instead of this
+// run's. Lease state is keyed by the FINAL resolved sandbox name (services/
+// host/cmd/pix/run_cmd.go's sessionKeyFor), and --name travels verbatim, so
+// with an explicit --name the record path is exact and deterministic.
+
+test("section [4] no longer uses `find ... -newer` to locate the lease record", () => {
+	const executable = script
+		.split("\n")
+		.filter((l) => !/^\s*#/.test(l))
+		.join("\n");
+	assert.doesNotMatch(executable, /-newer\s*"?\$WORK/);
+	assert.doesNotMatch(executable, /find\s+"\$STATE_DIR"/);
+});
+
+test("section [4] asserts the EXACT lease record path, keyed by the final sandbox name ($BOX1)", () => {
+	const section4 = script.slice(script.indexOf('head1 "[4]'), script.indexOf('head1 "[5]'));
+	assert.match(section4, /REC="\$STATE_DIR\/sandboxes\/\$BOX1\/record\.json"/);
+	assert.match(section4, /if \[ -f "\$REC" \]; then/);
+});
+
+test("section [4] captures pix run's stderr separately and surfaces it on BOTH a launch failure and a missing-record failure", () => {
+	const section4 = script.slice(script.indexOf('head1 "[4]'), script.indexOf('head1 "[5]'));
+	// stdout and stderr land in separate files (never merged into one
+	// combined log) so a later failure message can quote stderr specifically.
+	assert.match(section4, />"\$WORK\/run1\.out" 2>"\$WORK\/run1\.err"/);
+	assert.match(section4, /fail "pix run launched \$BOX1" "stderr: \$\(tail -5 "\$WORK\/run1\.err"/);
+	assert.match(section4, /fail "lease instance record" "no record\.json at exact path \$REC; launch stderr: \$\(tail -5 "\$WORK\/run1\.err"/);
+});
+
+test("section [4] skips (never double-fails) the record check when the launch itself already failed", () => {
+	const section4 = script.slice(script.indexOf('head1 "[4]'), script.indexOf('head1 "[5]'));
+	assert.match(section4, /LAUNCH1_OK=0/);
+	assert.match(section4, /if \[ "\$LAUNCH1_OK" = 1 \]; then/);
+	assert.match(section4, /skip "lease instance record" "pix run launched \$BOX1 failed above/);
+});
+
+// section4RecordBlock — the literal BOX1/LAUNCH1_OK/REC block from section
+// [4], so the behavioral tests below run the ACTUAL shipped logic against a
+// fabricated STATE_DIR/pix run outcome, not a reimplementation of it.
+function section4RecordBlock() {
+	const start = script.indexOf('BOX1="${BOX_PREFIX}-one"');
+	assert.ok(start !== -1, "could not find the BOX1 launch in section [4]");
+	const endMarker = 'skip "lease instance record" "pix run launched $BOX1 failed above; no record is expected — see its captured stderr"\nfi';
+	const end = script.indexOf(endMarker, start);
+	assert.ok(end !== -1, "could not find the end of the section [4] record block");
+	return script.slice(start, end + endMarker.length);
+}
+
+// runSection4RecordBlock — runs the ACTUAL extracted block under a stub `pix`
+// and a real STATE_DIR/sandboxes/<name>/record.json fixture, so these tests
+// exercise the shipped bash, not a description of it.
+function runSection4RecordBlock({ launchOk, writeRecord, instanceId = "abc-123" }) {
+	const work = fs.mkdtempSync(path.join(os.tmpdir(), "pix-uat-rec-"));
+	try {
+		const binDir = path.join(work, "bin");
+		const projDir = path.join(work, "a", "proj");
+		const stateDir = path.join(work, "state");
+		fs.mkdirSync(binDir);
+		fs.mkdirSync(projDir, { recursive: true });
+		fs.mkdirSync(stateDir, { recursive: true });
+
+		const boxName = "pix-uat-rec-test-one";
+		if (writeRecord) {
+			// $STATE_DIR = $XDG_STATE_HOME/pix (the script appends /pix itself).
+			const recDir = path.join(stateDir, "pix", "sandboxes", boxName);
+			fs.mkdirSync(recDir, { recursive: true });
+			fs.writeFileSync(path.join(recDir, "record.json"), JSON.stringify({ instance_id: instanceId, created_pid: 1 }));
+		}
+
+		// A stub `pix`: `run . --name NAME` exits with the requested outcome,
+		// writing a distinguishing message to stderr either way. `ls` reports
+		// the box as present (the record write above already stands in for a
+		// real create having happened, or not, exactly as `launchOk` says).
+		const fakePix = path.join(binDir, "pix");
+		fs.writeFileSync(
+			fakePix,
+			[
+				"#!/bin/sh",
+				'if [ "$1" = "run" ] && [ "$2" = "." ]; then',
+				launchOk
+					? '  echo "ready"; exit 0'
+					: '  echo "boom: launch exploded" >&2; exit 1',
+				'elif [ "$1" = "ls" ]; then',
+				`  printf 'NAME\\n%s\\n' "${boxName}"`,
+				"  exit 0",
+				"fi",
+				"exit 1",
+				"",
+			].join("\n"),
+			{ mode: 0o755 },
+		);
+
+		const fns = [extractFn("runbox"), extractFn("newbox")].join("\n");
+		const harness = [
+			`PATH="${binDir}:$PATH"`,
+			`WORK="${work}"`,
+			`XDG_STATE_HOME="${stateDir}"`,
+			"CREATED_BOXES=()",
+			'pass() { printf "PASS:%s\\n" "$1"; }',
+			'fail() { printf "FAIL:%s:%s\\n" "$1" "${2:-}"; }',
+			'skip() { printf "SKIP:%s:%s\\n" "$1" "${2:-}"; }',
+			'assert_contains() { :; }', // section [4] also calls this; not under test here
+			fns,
+			section4RecordBlock().replace('BOX1="${BOX_PREFIX}-one"', `BOX1="${boxName}"`),
+		].join("\n");
+		return execFileSync("bash", ["-c", harness], { encoding: "utf8", timeout: 15000 });
+	} finally {
+		fs.rmSync(work, { recursive: true, force: true });
+	}
+}
+
+test("section [4] record check (behavioral): launch OK + record present at the exact path PASSes and reports the instance id", () => {
+	const out = runSection4RecordBlock({ launchOk: true, writeRecord: true, instanceId: "iid-42" });
+	assert.match(out, /PASS:pix run launched pix-uat-rec-test-one non-interactively/);
+	assert.match(out, /PASS:lease record carries an instance id \(iid-42\)/);
+	assert.doesNotMatch(out, /FAIL:/);
+	assert.doesNotMatch(out, /SKIP:/);
+});
+
+test("section [4] record check (behavioral): launch OK but no record at the exact path FAILs and surfaces the launch stderr, it never SKIPs a launch that reported success", () => {
+	const out = runSection4RecordBlock({ launchOk: true, writeRecord: false });
+	assert.match(out, /PASS:pix run launched pix-uat-rec-test-one non-interactively/);
+	assert.match(out, /FAIL:lease instance record:no record\.json at exact path .*sandboxes\/pix-uat-rec-test-one\/record\.json; launch stderr:/);
+	assert.doesNotMatch(out, /SKIP:/);
+});
+
+test("section [4] record check (behavioral): a failed launch SKIPs the record check (never asserts a record that could not exist) and captures the launch's stderr in its own FAIL", () => {
+	const out = runSection4RecordBlock({ launchOk: false, writeRecord: false });
+	assert.match(out, /FAIL:pix run launched pix-uat-rec-test-one:stderr: boom: launch exploded/);
+	assert.match(out, /SKIP:lease instance record:pix run launched pix-uat-rec-test-one failed above/);
+	assert.doesNotMatch(out, /FAIL:lease instance record/);
+});
+
 // --- multi-shell FIFO holds: behavioral proof -----------------------------
 // The false-hold this replaces: the old section [6] (then [5]) launched two
 // REAL `pix run` sessions with `-p '<sleep text>'` prompts and separated
@@ -536,7 +674,98 @@ test("current_bin_path (PATH symlink) and running_bin_path (lsof-reported real f
 // closing one fd ends exactly that one held session, in order — and (2) zero
 // bytes ever cross either pipe, so nothing sent could ever be mistaken for a
 // submitted prompt (a model call).
-test("multi-shell FIFO holds (behavioral): two real background sessions stay alive with zero bytes sent, released one then the other, deterministically", () => {
+// fakeMultiShellPix — a stub `pix` covering both commands section [6]'s
+// FIFO block calls: `run . --name X` (blocks reading stdin exactly like the
+// real interactive RunSession would, and records the exact byte count it
+// ever saw on EOF) and `ls`/`ls --json` (reports $BOX2 once — and only once —
+// a `created` marker exists). The FIRST `run` call simulates a CREATE: after
+// an optional CREATE_DELAY it drops the `created` marker (what makes it
+// listed) with no "attaching" line, exactly like a fresh create. Every
+// SUBSEQUENT call simulates an ATTACH: after an optional ATTACH_DELAY it
+// prints pix's own real attach line (run_cmd.go's literal wording) to its
+// OWN stdout before blocking on stdin. Both delays default to 0; setting
+// them lets a test PROVE the bounded waits actually wait, rather than merely
+// happening to pass because the marker/line was already there the instant
+// they first checked.
+function writeFakeMultiShellPix(binDir) {
+	const fakePix = path.join(binDir, "pix");
+	fs.writeFileSync(
+		fakePix,
+		[
+			"#!/bin/sh",
+			'if [ "$1" = "run" ] && [ "$2" = "." ]; then',
+			'  if [ -e "$MARK_DIR/created" ]; then',
+			'    sleep "${ATTACH_DELAY:-0}"',
+			'    printf \'pix run: attaching to running sandbox "%s"\\n\' "$BOX2"',
+			"  else",
+			'    sleep "${CREATE_DELAY:-0}"',
+			'    : > "$MARK_DIR/created"',
+			"  fi",
+			'  token="$$"',
+			'  : > "$MARK_DIR/started.$token"',
+			'  : > "$MARK_DIR/live.$token"',
+			"  n=$(wc -c | tr -d ' ')",
+			'  echo "$n" > "$MARK_DIR/bytes.$token"',
+			'  rm -f "$MARK_DIR/live.$token"',
+			// Simulate real teardown: the box stays "created" as long as ANY
+			// reference (started.*) remains, and disappears the instant the
+			// LAST one exits — never on the first of two references leaving.
+			'  rm -f "$MARK_DIR/started.$token"',
+			'  remaining=$(ls "$MARK_DIR"/started.* 2>/dev/null | wc -l | tr -d \' \')',
+			'  [ "$remaining" -eq 0 ] && rm -f "$MARK_DIR/created"',
+			"  exit 0",
+			'elif [ "$1" = "ls" ] && [ "$2" = "--json" ]; then',
+			'  if [ "${LS_FAIL:-0}" = "1" ]; then',
+			'    echo "stub pix ls --json: simulated failure" >&2',
+			"    exit 1",
+			"  fi",
+			'  if [ -e "$MARK_DIR/created" ]; then',
+			'    printf \'[{"name": "%s", "state": "running"}]\\n\' "$BOX2"',
+			"  else",
+			"    printf '[]\\n'",
+			"  fi",
+			"  exit 0",
+			'elif [ "$1" = "ls" ]; then',
+			'  if [ -e "$MARK_DIR/created" ]; then',
+			'    printf \'NAME\\n%s\\n\' "$BOX2"',
+			"  else",
+			"    printf 'NAME\\n'",
+			"  fi",
+			"  exit 0",
+			"fi",
+			"exit 1",
+			"",
+		].join("\n"),
+		{ mode: 0o755 },
+	);
+	return fakePix;
+}
+
+// multiShellSectionBlock — the literal section [6] FIFO body, from the FIFO
+// directory setup through the final teardown assertion, so every behavioral
+// test below runs the ACTUAL shipped logic.
+function multiShellSectionBlock() {
+	const startMarker = 'FIFO_DIR="$WORK/holds"';
+	const start = script.indexOf(startMarker);
+	assert.ok(start !== -1, "could not find the FIFO_DIR setup in section [6]");
+	const endMarker = 'assert_box_not_listed "$BOX2" "teardown on last shell exit"';
+	const end = script.indexOf(endMarker, start);
+	assert.ok(end !== -1, "could not find the end of the multi-shell FIFO block");
+	return script.slice(start, end + endMarker.length);
+}
+
+const multiShellHelperFns = [
+	"fifo_release",
+	"bounded_wait",
+	"ls_json_lists",
+	"bounded_wait_listed",
+	"bounded_wait_absent",
+	"bounded_wait_attach_log",
+	"assert_box_listed",
+	"assert_box_not_listed",
+].map(extractFn).join("\n");
+
+test("multi-shell FIFO holds (behavioral): two real background sessions stay alive with zero bytes sent, released one then the other, deterministically — even with a delayed create/attach, proving the waits actually wait rather than winning a timing race", () => {
 	const work = fs.mkdtempSync(path.join(os.tmpdir(), "pix-uat-fifo-"));
 	try {
 		const binDir = path.join(work, "bin");
@@ -545,55 +774,32 @@ test("multi-shell FIFO holds (behavioral): two real background sessions stay ali
 		fs.mkdirSync(binDir);
 		fs.mkdirSync(markDir);
 		fs.mkdirSync(projDir, { recursive: true });
+		writeFakeMultiShellPix(binDir);
 
-		// A stub `pix`: `run . --name X` blocks reading stdin (exactly like the
-		// real interactive RunSession would) and, on EOF, records the exact byte
-		// count it ever saw; `ls` reports the box as up while any hold is live.
-		const fakePix = path.join(binDir, "pix");
-		fs.writeFileSync(
-			fakePix,
-			"#!/bin/sh\n" +
-				'if [ "$1 $2" = "run ." ]; then\n' +
-				"  token=\"$$\"\n" +
-				'  : > "$MARK_DIR/live.$token"\n' +
-				"  n=$(wc -c | tr -d ' ')\n" +
-				'  echo "$n" > "$MARK_DIR/bytes.$token"\n' +
-				'  rm -f "$MARK_DIR/live.$token"\n' +
-				"  exit 0\n" +
-				'elif [ "$1" = "ls" ]; then\n' +
-				'  count=$(ls "$MARK_DIR"/live.* 2>/dev/null | wc -l | tr -d \' \')\n' +
-				'  if [ "$count" -gt 0 ]; then printf \'NAME\\n%s\\n\' "$BOX2"; else printf \'NAME\\n\'; fi\n' +
-				"  exit 0\n" +
-				"fi\n" +
-				"exit 1\n",
-			{ mode: 0o755 },
-		);
-
-		const startMarker = 'FIFO_DIR="$WORK/holds"';
-		const start = script.indexOf(startMarker);
-		assert.ok(start !== -1, "could not find the FIFO_DIR setup in section [6]");
-		const endMarker = 'else pass "teardown on last shell exit"; fi';
-		const end = script.indexOf(endMarker, start);
-		assert.ok(end !== -1, "could not find the end of the multi-shell FIFO block");
-		const block = script.slice(start, end + endMarker.length);
-
-		const fns = [extractFn("fifo_release"), extractFn("bounded_wait")].join("\n");
 		const harness = [
 			`PATH="${binDir}:$PATH"`,
 			`export MARK_DIR="${markDir}"`,
 			`WORK="${work}"`,
 			'export BOX2="test-box2-multi"',
+			// A DELAYED create and a DELAYED attach: the marker/line the bounded
+			// waits poll for is deliberately NOT there on their first check. If
+			// either wait were a single immediate probe instead of an actual
+			// bounded poll, this would FAIL every run, not flake occasionally.
+			'export CREATE_DELAY="1"',
+			'export ATTACH_DELAY="1"',
 			"HOLD_PIDS=()",
 			'die() { printf "DIE:%s\\n" "$1" >&2; exit 9; }',
 			'pass() { printf "PASS:%s\\n" "$1"; }',
 			'fail() { printf "FAIL:%s:%s\\n" "$1" "${2:-}"; }',
 			"head1() { :; }",
 			"newbox() { :; }",
-			fns,
-			block,
+			multiShellHelperFns,
+			multiShellSectionBlock(),
 		].join("\n");
 
-		const out = execFileSync("bash", ["-c", harness], { encoding: "utf8", timeout: 20000 });
+		const out = execFileSync("bash", ["-c", harness], { encoding: "utf8", timeout: 30000 });
+		assert.match(out, /PASS:test-box2-multi observed via pix ls --json after the first shell's FIFO connected/);
+		assert.match(out, /PASS:test-box2-multi's second shell observably attached \(log evidence \+ live process\)/);
 		assert.match(out, /PASS:test-box2-multi is up with two shells attached/);
 		assert.match(out, /PASS:sandbox survives the FIRST shell leaving/);
 		assert.match(out, /PASS:teardown on last shell exit/);
@@ -610,6 +816,84 @@ test("multi-shell FIFO holds (behavioral): two real background sessions stay ali
 	}
 });
 
+test("multi-shell FIFO holds (behavioral): a create that never gets listed within the bound FAILs with the log tail, it does not hang or silently pass", () => {
+	const work = fs.mkdtempSync(path.join(os.tmpdir(), "pix-uat-fifo-neverlisted-"));
+	try {
+		const binDir = path.join(work, "bin");
+		const markDir = path.join(work, "marks");
+		fs.mkdirSync(binDir);
+		fs.mkdirSync(markDir);
+		// A `pix` that blocks on `run` forever accepting stdin but NEVER marks
+		// itself created, and whose `ls --json` therefore always answers `[]`.
+		const fakePix = path.join(binDir, "pix");
+		fs.writeFileSync(
+			fakePix,
+			[
+				"#!/bin/sh",
+				'if [ "$1" = "run" ] && [ "$2" = "." ]; then',
+				"  cat >/dev/null",
+				"  exit 0",
+				'elif [ "$1" = "ls" ]; then',
+				"  printf '[]\\n'",
+				"  exit 0",
+				"fi",
+				"exit 1",
+				"",
+			].join("\n"),
+			{ mode: 0o755 },
+		);
+		const fns = [extractFn("ls_json_lists"), extractFn("bounded_wait_listed")].join("\n");
+		// bounded_wait_listed's own default is 30s; a dedicated short-bound test
+		// keeps this fast without editing the real function.
+		const harness = [`PATH="${binDir}:$PATH"`, `TMPDIR="${work}"`, fns, 'bounded_wait_listed "never-created-box" 2; echo "RC=$?"'].join("\n");
+		const out = execFileSync("bash", ["-c", harness], { encoding: "utf8", timeout: 15000 });
+		assert.match(out, /RC=1/, "a genuinely never-listed box must time out (rc 1), not hang and not report an ls failure (rc 2)");
+	} finally {
+		fs.rmSync(work, { recursive: true, force: true });
+	}
+});
+
+// --- ls_json_lists / bounded_wait_listed: a pix-ls FAILURE is never an ABSENCE ---
+// The exact false-negative this closes: `pix ls 2>/dev/null | grep -q NAME`
+// answers "not found" identically whether the sandbox is truly absent OR
+// `pix ls` itself crashed/errored — a broken `pix` binary would silently read
+// as "box not up yet" instead of the real, actionable fact that ls itself is
+// broken.
+test("ls_json_lists (behavioral): reports LISTED / ABSENT / ERROR as three distinct outcomes, never collapsing a failure into absence", () => {
+	const work = fs.mkdtempSync(path.join(os.tmpdir(), "pix-uat-lsjson-"));
+	try {
+		const binDir = path.join(work, "bin");
+		fs.mkdirSync(binDir);
+		const fakePix = path.join(binDir, "pix");
+		fs.writeFileSync(
+			fakePix,
+			[
+				"#!/bin/sh",
+				'if [ "$1 $2" = "ls --json" ]; then',
+				'  if [ "${LS_FAIL:-0}" = "1" ]; then echo "boom: sbx ls failed" >&2; exit 1; fi',
+				'  if [ "${LS_HAS_BOX:-0}" = "1" ]; then printf \'[{"name": "box-a", "state": "running"}]\\n\'; else printf \'[]\\n\'; fi',
+				"  exit 0",
+				"fi",
+				"exit 1",
+				"",
+			].join("\n"),
+			{ mode: 0o755 },
+		);
+		const fn = extractFn("ls_json_lists");
+		const run = (env) =>
+			execFileSync("bash", ["-c", `PATH="${binDir}:$PATH"\nTMPDIR="${work}"\n${fn}\nls_json_lists box-a`], {
+				encoding: "utf8",
+				env: { ...process.env, ...env },
+			}).trim();
+
+		assert.strictEqual(run({ LS_HAS_BOX: "1" }), "LISTED");
+		assert.strictEqual(run({ LS_HAS_BOX: "0" }), "ABSENT");
+		assert.match(run({ LS_FAIL: "1" }), /^ERROR:.*boom: sbx ls failed/, "a failed pix ls must report ERROR:<detail>, never ABSENT");
+	} finally {
+		fs.rmSync(work, { recursive: true, force: true });
+	}
+});
+
 test("multi-shell FIFO holds: no prompt (-p) or sleep-based timing gate remains in section [6]", () => {
 	const multiShell = script.slice(script.indexOf("[6] Multi-shell"), script.indexOf("[7] --keep"));
 	assert.doesNotMatch(multiShell, /-p 'sleep quietly'/);
@@ -617,6 +901,19 @@ test("multi-shell FIFO holds: no prompt (-p) or sleep-based timing gate remains 
 	assert.match(multiShell, /mkfifo "\$FIFO1" "\$FIFO2"/);
 	assert.match(multiShell, /fifo_release 5/);
 	assert.match(multiShell, /fifo_release 6/);
+});
+
+test("multi-shell FIFO holds: presence/absence of $BOX2 is asserted through pix ls --json, distinguishing an ls failure from a genuine absence, not a bare grep on possibly-failed output", () => {
+	const multiShell = script.slice(script.indexOf("[6] Multi-shell"), script.indexOf("[7] --keep"));
+	assert.match(multiShell, /bounded_wait_listed "\$BOX2" 30/);
+	assert.match(multiShell, /bounded_wait_attach_log "\$LOG2" "\$SH2" 30/);
+	assert.match(multiShell, /assert_box_listed "\$BOX2"/);
+	assert.match(multiShell, /assert_box_not_listed "\$BOX2" "teardown on last shell exit"/);
+	// Each backgrounded pix run now logs to its OWN file, never /dev/null, so
+	// this script can look for pix's real evidence instead of merely inferring
+	// readiness from the FIFO connect.
+	assert.match(multiShell, /LOG1="\$FIFO_DIR\/shell1\.log"; LOG2="\$FIFO_DIR\/shell2\.log"/);
+	assert.doesNotMatch(multiShell, />\/dev\/null 2>&1\) &/);
 });
 
 // --- verdict(): rc (die/abort) precedence over accumulated FAIL ----------------
