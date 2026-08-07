@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -306,14 +307,25 @@ func BundleAddArgsPositional(name, url string) []string {
 	return []string{"mcp", "bundle", "add", name, url}
 }
 
-// RunSbxGrammarFallback runs `sbx <primary...>`, captured. If that attempt
-// fails with a RECOGNIZED CLI grammar mismatch (sys.IsUsageMismatch) — an
-// unknown flag, unknown command, or wrong arity, i.e. sbx's own parser saying
-// it does not understand this argv — it retries EXACTLY ONCE with alt and
-// reports that attempt's outcome instead. Any other failure (auth, policy,
-// timeout, a crashed gateway) reports the primary attempt's own output
-// unchanged: retrying an operational failure with different flags cannot fix
-// it and would only hide the real cause behind a second, unrelated attempt.
+// RunSbxGrammarFallback runs `sbx <primary...>`, with stdout and stderr
+// captured SEPARATELY. If that attempt fails with a RECOGNIZED CLI grammar
+// mismatch (sys.IsUsageMismatch, judged against BOTH streams combined — a
+// parser mismatch may land on either) — an unknown flag, unknown command, or
+// wrong arity, i.e. sbx's own parser saying it does not understand this
+// argv — it retries EXACTLY ONCE with alt and reports ONLY that attempt's
+// streams: the primary attempt's output is pure grammar-parser noise once a
+// retry has fired, so it is discarded rather than mixed into the real
+// diagnostic. Any other failure (auth, policy, timeout, a crashed gateway)
+// reports the primary attempt's own streams unchanged: retrying an
+// operational failure with different flags cannot fix it and would only
+// hide the real cause behind a second, unrelated attempt.
+//
+// Whichever attempt is final — primary alone, or the alternate after a
+// retry — its stdout goes to out and its stderr goes to errW, on success OR
+// failure alike: a caller piping stdout (e.g. `pix mcp bundle add | jq`)
+// must never see a warning or usage line mixed into what looks like data,
+// and a caller reading stderr for a failure must never see the command's
+// real stdout output mixed in either.
 //
 // Like RunSbxMcpCore, an absent sbx never runs anything: it prints the
 // primary command a user would run by hand and returns ErrSbxUnavailable.
@@ -321,25 +333,27 @@ func RunSbxGrammarFallback(lookPath func(string) (string, error), out, errW io.W
 	if _, err := lookPath("sbx"); err != nil {
 		return McpWouldRun(errW, primary...)
 	}
-	text, runErr := runSbxCaptured(primary)
-	if runErr != nil && len(alt) > 0 && sys.IsUsageMismatch(text) {
-		text, runErr = runSbxCaptured(alt)
+	stdout, stderr, runErr := runSbxCaptured(primary)
+	if runErr != nil && len(alt) > 0 && sys.IsUsageMismatch(stdout+"\n"+stderr) {
+		stdout, stderr, runErr = runSbxCaptured(alt)
 	}
-	if runErr != nil {
-		fmt.Fprint(errW, text)
-		return runErr
-	}
-	fmt.Fprint(out, text)
-	return nil
+	fmt.Fprint(out, stdout)
+	fmt.Fprint(errW, stderr)
+	return runErr
 }
 
-// runSbxCaptured execs `sbx <args...>` with combined stdout+stderr captured
-// to a string, so RunSbxGrammarFallback can classify the failure before
-// deciding whether a retry is warranted.
-func runSbxCaptured(args []string) (string, error) {
+// runSbxCaptured execs `sbx <args...>` with stdout and stderr captured into
+// SEPARATE buffers, so RunSbxGrammarFallback can still classify a failure
+// from their combined text (sys.IsUsageMismatch does not care which stream a
+// parser wrote its complaint to) while reporting each stream to its own
+// destination once a final attempt is chosen.
+func runSbxCaptured(args []string) (stdout, stderr string, err error) {
 	cmd := exec.Command("sbx", args...)
-	out, err := cmd.CombinedOutput()
-	return string(out), err
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	err = cmd.Run()
+	return outBuf.String(), errBuf.String(), err
 }
 
 // ExecArgv returns the EXACT, literal command line the sbx gateway will exec to

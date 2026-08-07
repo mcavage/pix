@@ -40,25 +40,37 @@ func TestBundleAddArgsPositional(t *testing.T) {
 	}
 }
 
-// --- RunSbxGrammarFallback: real exec, real grammar mismatch ---------------
+// --- RunSbxGrammarFallback: real exec, real grammar mismatch, real streams -
+
+// sbxReply is one grammar-variant's canned response: SEPARATE stdout/stderr
+// text plus an exit code, so a fixture can pin exactly which stream a real
+// sbx build's message lands on — parser/usage complaints are conventionally
+// stderr, structured command output is conventionally stdout — and
+// RunSbxGrammarFallback's stream-separation contract can be exercised
+// against a real subprocess, not a CombinedOutput() string.
+type sbxReply struct {
+	stdout string
+	stderr string
+	exit   int
+}
 
 // installSbxGrammarFixture writes a real "sbx" shell script into a
-// PATH-isolated dir. It answers the OLD `--url`-flag grammar with rejectOld
-// (exit 1) and the NEW positional grammar with acceptNew (exit 0) — the exact
-// shape RunSbxGrammarFallback must retry through.
-func installSbxGrammarFixture(t *testing.T, oldReply, newReply string, oldExit, newExit int) string {
+// PATH-isolated dir. It answers the OLD `--url`-flag grammar's exact argv
+// with oldReply and the NEW positional grammar's exact argv with newReply —
+// the two invocations RunSbxGrammarFallback must choose between — each
+// writing its stdout/stderr text to the ACTUAL corresponding file
+// descriptor, not a single merged stream.
+func installSbxGrammarFixture(t *testing.T, oldReply, newReply sbxReply) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sbx")
 	script := "#!/bin/sh\n" +
 		"case \"$*\" in\n" +
 		"'mcp bundle add pix-catalog --url https://example.com/bundle.json')\n" +
-		"  printf %s " + shQuote(oldReply) + "\n" +
-		"  exit " + itoa(oldExit) + "\n" +
+		replyBody(oldReply) +
 		"  ;;\n" +
 		"'mcp bundle add pix-catalog https://example.com/bundle.json')\n" +
-		"  printf %s " + shQuote(newReply) + "\n" +
-		"  exit " + itoa(newExit) + "\n" +
+		replyBody(newReply) +
 		"  ;;\n" +
 		"*) echo \"fixture: unexpected argv: $*\" >&2; exit 99 ;;\n" +
 		"esac\n"
@@ -66,6 +78,21 @@ func installSbxGrammarFixture(t *testing.T, oldReply, newReply string, oldExit, 
 		t.Fatal(err)
 	}
 	return path
+}
+
+// replyBody renders one sbxReply's case-branch body: a stdout printf to fd 1
+// when non-empty, a SEPARATE stderr printf to fd 2 (`>&2`) when non-empty,
+// then the branch's exit code — never one printf covering both streams.
+func replyBody(r sbxReply) string {
+	body := ""
+	if r.stdout != "" {
+		body += "  printf %s " + shQuote(r.stdout) + "\n"
+	}
+	if r.stderr != "" {
+		body += "  printf %s " + shQuote(r.stderr) + " >&2\n"
+	}
+	body += "  exit " + itoa(r.exit) + "\n"
+	return body
 }
 
 func itoa(n int) string {
@@ -104,50 +131,70 @@ func runSbxGrammarFallbackAgainst(t *testing.T, bin string, primary, alt []strin
 }
 
 func TestRunSbxGrammarFallback_RetriesOnRecognizedUsageMismatch(t *testing.T) {
+	// The primary grammar's own parser rejects the argv on stderr (a real
+	// cobra parser writes usage complaints there, never stdout); the
+	// alternate grammar succeeds with warnings on stderr AND structured JSON
+	// on stdout — the two streams RunSbxGrammarFallback must keep apart, and
+	// only the alt attempt's streams (not the primary parser's noise) must
+	// reach the caller.
 	bin := installSbxGrammarFixture(t,
-		"Error: unknown flag: --url\nUsage:\n  sbx mcp bundle add NAME URL", "registered: pix-catalog",
-		1, 0)
+		sbxReply{stderr: "Error: unknown flag: --url\nUsage:\n  sbx mcp bundle add NAME URL", exit: 1},
+		sbxReply{stdout: `{"registered":"pix-catalog"}` + "\n", stderr: "warning: falling back to legacy positional grammar\n", exit: 0})
 	primary := BundleAddArgs("pix-catalog", "https://example.com/bundle.json")
 	alt := BundleAddArgsPositional("pix-catalog", "https://example.com/bundle.json")
 	out, errOut, err := runSbxGrammarFallbackAgainst(t, bin, primary, alt)
 	if err != nil {
 		t.Fatalf("RunSbxGrammarFallback = %v, want nil (fallback should have succeeded)", err)
 	}
-	if !strings.Contains(out.String(), "registered: pix-catalog") {
-		t.Errorf("stdout = %q, want the fallback attempt's own output", out.String())
+	if out.String() != `{"registered":"pix-catalog"}`+"\n" {
+		t.Errorf("stdout = %q, want ONLY the alt attempt's structured stdout", out.String())
 	}
-	if errOut.Len() != 0 {
-		t.Errorf("stderr = %q, want empty on eventual success", errOut.String())
+	if errOut.String() != "warning: falling back to legacy positional grammar\n" {
+		t.Errorf("stderr = %q, want ONLY the alt attempt's warning — no primary parser noise", errOut.String())
+	}
+	if strings.Contains(out.String()+errOut.String(), "unknown flag") {
+		t.Errorf("primary grammar's parser noise leaked through: out=%q errOut=%q", out.String(), errOut.String())
 	}
 }
 
 func TestRunSbxGrammarFallback_NeverRetriesOperationalFailure(t *testing.T) {
 	// The primary grammar fails for a REAL reason (an expired/missing auth
-	// token) — not a grammar mismatch. Even though the alternate grammar
-	// would succeed if tried (oldExit=1 with an auth message, newExit=0), the
-	// retry must never fire: a wrong retry here would silently mask an auth
-	// gap as success.
-	bin := installSbxGrammarFixture(t, "401 Unauthorized: token expired", "registered: pix-catalog", 1, 0)
+	// token), printed on stderr with a structured error body on stdout — not
+	// a grammar mismatch. Even though the alternate grammar would succeed if
+	// tried, the retry must never fire: a wrong retry here would silently
+	// mask an auth gap as success. No retry means no alt run at all: the
+	// primary's OWN stdout and stderr, kept separate, are the final report.
+	bin := installSbxGrammarFixture(t,
+		sbxReply{stdout: `{"error":"unauthorized"}` + "\n", stderr: "401 Unauthorized: token expired\n", exit: 1},
+		sbxReply{stdout: `{"registered":"pix-catalog"}` + "\n", exit: 0})
 	primary := BundleAddArgs("pix-catalog", "https://example.com/bundle.json")
 	alt := BundleAddArgsPositional("pix-catalog", "https://example.com/bundle.json")
-	_, errOut, err := runSbxGrammarFallbackAgainst(t, bin, primary, alt)
+	out, errOut, err := runSbxGrammarFallbackAgainst(t, bin, primary, alt)
 	if err == nil {
 		t.Fatal("RunSbxGrammarFallback = nil, want the primary attempt's own error (no grammar retry for an auth failure)")
 	}
 	if !strings.Contains(errOut.String(), "401 Unauthorized") {
 		t.Errorf("stderr = %q, want the ORIGINAL auth failure, not a retried/rewritten one", errOut.String())
 	}
+	if !strings.Contains(out.String(), `"unauthorized"`) {
+		t.Errorf("stdout = %q, want the primary attempt's own structured stdout preserved separately from stderr", out.String())
+	}
+	if strings.Contains(out.String(), "registered") {
+		t.Errorf("stdout = %q, must not contain the untried alt attempt's output", out.String())
+	}
 }
 
 func TestRunSbxGrammarFallback_BothGrammarsFailingReportsTheRetry(t *testing.T) {
 	// A recognized usage mismatch DOES license one retry; if the alternate
 	// grammar also fails (for whatever reason), the bounded retry stops there
-	// — no further guessing — and reports that final attempt.
+	// — no further guessing — and reports THAT final attempt's streams only,
+	// never the primary parser's rejected-argv noise.
 	bin := installSbxGrammarFixture(t,
-		"Error: unknown flag: --url", "fixture: something went wrong", 1, 1)
+		sbxReply{stderr: "Error: unknown flag: --url\n", exit: 1},
+		sbxReply{stdout: `{"error":"gateway unreachable"}` + "\n", stderr: "fixture: something went wrong\n", exit: 1})
 	primary := BundleAddArgs("pix-catalog", "https://example.com/bundle.json")
 	alt := BundleAddArgsPositional("pix-catalog", "https://example.com/bundle.json")
-	_, errOut, err := runSbxGrammarFallbackAgainst(t, bin, primary, alt)
+	out, errOut, err := runSbxGrammarFallbackAgainst(t, bin, primary, alt)
 	if err == nil {
 		t.Fatal("RunSbxGrammarFallback = nil, want an error (both grammars failed)")
 	}
@@ -157,6 +204,12 @@ func TestRunSbxGrammarFallback_BothGrammarsFailingReportsTheRetry(t *testing.T) 
 	}
 	if !strings.Contains(errOut.String(), "something went wrong") {
 		t.Errorf("stderr = %q, want the retried (alt-grammar) attempt's own failure", errOut.String())
+	}
+	if !strings.Contains(out.String(), "gateway unreachable") {
+		t.Errorf("stdout = %q, want the retried attempt's own stdout, kept separate from stderr", out.String())
+	}
+	if strings.Contains(out.String()+errOut.String(), "unknown flag") {
+		t.Errorf("primary grammar's parser noise leaked through: out=%q errOut=%q", out.String(), errOut.String())
 	}
 }
 
