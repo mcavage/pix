@@ -6,6 +6,7 @@ package doctor
 
 import (
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -29,6 +30,9 @@ func TestReadSupervisorSnapshot_SharedContract(t *testing.T) {
 			}
 			if len(got.Units) != sc.WantUnitsLen {
 				t.Errorf("units = %+v, want len %d", got.Units, sc.WantUnitsLen)
+			}
+			if want := sc.WantUnits(); !reflect.DeepEqual(got.Units, want) {
+				t.Errorf("units = %+v, want exactly %+v", got.Units, want)
 			}
 			if got.Available != sc.WantHealthy {
 				t.Errorf("available = %v (detail=%q), want %v", got.Available, got.Detail, sc.WantHealthy)

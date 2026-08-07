@@ -52,12 +52,16 @@ func readSupervisorSnapshot() SupervisorJSON {
 		return out
 	}
 	out.PID, out.GeneratedUnix = rep.PID, rep.GeneratedUnix
-	if len(rep.Units) > 0 {
-		out.Units = rep.Units
-	}
+	// Staleness is checked BEFORE the units are attached, same as the
+	// unreadable/missing/schema-mismatch cases above: a stale snapshot's
+	// units are refused, not shown alongside Available=false, so a reader
+	// never mistakes a dead tree's last known rows for current state.
 	if age := time.Since(time.Unix(rep.GeneratedUnix, 0)); age > supervisorStaleAfter {
 		out.Detail = fmt.Sprintf("supervision snapshot is %ds stale", int(age.Seconds()))
 		return out
+	}
+	if len(rep.Units) > 0 {
+		out.Units = rep.Units
 	}
 	out.Available = true
 	return out
