@@ -38,11 +38,11 @@
 // pin is silently skipped (pending, gate-green) with activation.json's
 // shipped (empty) content.
 export default [
-	// --- ACTIVE: force is scoped to the ONE explicit user seam --------------
+	// --- ACTIVE: forced argv is centralized; Pix proof remains authority -----
 	{
 		id: "lifecycle.rm.force-scoped-to-explicit-seams",
 		description:
-			"`sbx rm -f` fires in exactly ONE seam, and it is explicit: RemovePixSandbox, reachable only from a named `pix rm --force`. U04e deleted the second one (ApplyReplaceRm, gated on --replace): it removed with no zero-holder proof and outside the lifecycle lock, so it could destroy a sandbox another shell was live in. AGENTS.md safety invariant #7 now depends on there being no other caller. sbx v0.38 (docs/upstream/sbx-0.38-noninteractive-rm.md) made `-f` a confirmation bypass every non-interactive removal needs, so RemovePixSandbox now composes it through the SAME shared planner (sandbox.PlanForceRemove) every other forced-argv caller uses — still the ONE seam, just no longer a literal argv this file hand-rolls.",
+			"sbx v0.38 requires `rm -f` merely to skip its own TTY confirmation. Pix centralizes that transport argv in sandbox.PlanForceRemove, which repeats the pix-* scope/name validation. Authority remains outside the flag: automatic removal reaches the planner only after lease.TryReapProof proves zero holders; a named explicit removal carries direct user intent. U04e's unsafe `pix run --replace` path remains retired, and no call site may hand-roll another forced sbx-rm argv.",
 		checks: [
 			{
 				file: "services/host/workflow/launch/sandbox.go",
@@ -261,11 +261,11 @@ export default [
 		],
 	},
 
-	// --- ACTIVE (U04d): reaper — no force, keep-absence required ------------
+	// --- ACTIVE (U04d): reaper — proof authority, keep-absence required -----
 	{
 		id: "lifecycle.reaper.no-force-requires-absence",
 		description:
-			"U04d (Story04) landed the automatic last-shell/orphan reaper in services/host/workflow/launch/reap.go, and it must stay this shape: (a) it NEVER force-removes — only lease.TryExclusive()'s kernel-verified zero-holder proof (reached via lease.TryReapProof) authorizes destroying sandbox state, never a bulk `sbx rm -f` sweep — and (b) a KeepState BLOCKS the automatic path: auto-remove requires its ABSENCE, never removing while a keep is held by any identity.",
+			"U04d's automatic last-shell/orphan reaper must keep Pix's authority checks independent of sbx's confirmation-bypass flag: lease.TryExclusive() through lease.TryReapProof proves zero live holders before removal, and a KeepState blocks the automatic path. The final argv uses centralized PlanForceRemove only because sbx v0.38 otherwise refuses non-interactive stdin; no bulk listing or flag may bypass the proof.",
 		checks: [
 			{
 				file: "services/host/workflow/launch/reap.go",
