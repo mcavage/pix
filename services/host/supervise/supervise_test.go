@@ -214,6 +214,25 @@ func waitFor(t *testing.T, what string, d time.Duration, fn func() bool) {
 
 func alive(pid int) bool { return pid > 0 && syscall.Kill(pid, 0) == nil }
 
+// shortSocketDir returns a short-lived directory rooted directly under /tmp
+// — never through t.TempDir(), which nests under $TMPDIR — for a test that
+// binds a REAL unix socket. On Darwin, $TMPDIR is a long per-process path
+// (/var/folders/<hash>/T/), and t.TempDir() nests a subtest path under that
+// (…/T/TestName/001), so joined with even a short filename like "live.sock"
+// it reliably blows past the 104-byte sun_path limit in a unix sockaddr:
+// net.Listen/net.Dial("unix", …) then fails with "invalid argument", not a
+// clear "path too long". Rooting at /tmp keeps the whole path well under
+// that limit on every platform; cleanup mirrors t.TempDir()'s.
+func shortSocketDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "pixsock")
+	if err != nil {
+		t.Fatalf("shortSocketDir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir
+}
+
 // must fails the test on any error the assertion is not about.
 func must(t *testing.T, err error) {
 	t.Helper()
@@ -729,7 +748,7 @@ func TestReattachRefusesReusedPid(t *testing.T) {
 		t.Skip("pid 1 is signalable from this uid; cannot stand in for a reused pid")
 	}
 	bin, sha := buildFixture(t)
-	dir := t.TempDir()
+	dir := shortSocketDir(t)
 	state := filepath.Join(dir, "state")
 	spec := fixtureUnit("reused", bin, sha, "FIXTURE_TAG=fresh")
 	sock := filepath.Join(dir, "live.sock")
@@ -774,7 +793,7 @@ func TestReattachRefusesForeignSockets(t *testing.T) {
 			return &net.UnixAddr{Name: path, Net: "unix"}
 		}},
 		{"imposter unix socket", func(t *testing.T, dir string) net.Addr {
-			path := filepath.Join(dir, "imposter.sock")
+			path := filepath.Join(shortSocketDir(t), "imposter.sock")
 			l, err := net.Listen("unix", path)
 			must(t, err)
 			go func() { // accepts and hangs up: never speaks our protocol
@@ -792,6 +811,8 @@ func TestReattachRefusesForeignSockets(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			// dir stays a plain t.TempDir(): only the "imposter unix socket" case
+			// binds a real socket, and it allocates its own shortSocketDir.
 			dir := t.TempDir()
 			state := filepath.Join(dir, "state")
 			spec := fixtureUnit("sockets", bin, sha, "FIXTURE_TAG=fresh")
@@ -833,7 +854,7 @@ func TestReattachKillsAVerifiedOrphanThatStoppedAnsweringItsSocket(t *testing.T)
 		t.Skip("real process spawn + socket reattach timing; covered by the untimed race/metrics CI jobs")
 	}
 	bin, sha := buildFixture(t)
-	dir := t.TempDir()
+	dir := shortSocketDir(t)
 	state := filepath.Join(dir, "state")
 	spec := fixtureUnit("stuck", bin, sha, "FIXTURE_TAG=orig")
 

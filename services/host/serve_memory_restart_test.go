@@ -37,17 +37,30 @@ import (
 // ephemeral port rather than failing for a reason that is not about the code —
 // the across-restart property is identical on any port, and the fallback is
 // reported so a green run is never silently a weaker run.
-func memoryListenAddr(t *testing.T) net.Listener {
+//
+// It also returns the chosen port as a string, so the CALLER can propagate
+// the SAME value into MEMORY_PORT before launching anything — both t.Setenv,
+// which is what memoryIdentity()'s os.Getenv("MEMORY_PORT") read actually
+// answers from, and the memory unit's own child env (inherited through
+// pluginEnvAllow at spawn, see supervise.FilterEnv). Picking the listener
+// port here but leaving MEMORY_PORT at its stale "11435" default anywhere
+// downstream is exactly the split-brain this helper exists to prevent: the
+// identity RPC would report a port nothing is actually listening on.
+func memoryListenAddr(t *testing.T) (net.Listener, string) {
 	t.Helper()
 	if ln, err := net.Listen("tcp", "127.0.0.1:11435"); err == nil {
-		return ln
+		return ln, "11435"
 	}
 	t.Logf("127.0.0.1:11435 is busy on this host; running the same assertions on an ephemeral port")
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	return ln
+	_, port, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("split listener addr %q: %v", ln.Addr().String(), err)
+	}
+	return ln, port
 }
 
 // rpcTry POSTs one JSON-RPC call and returns (result, rpcErrorText, transportErr).
@@ -82,15 +95,23 @@ func TestMemoryListenerSurvivesUnitRestart(t *testing.T) {
 	t.Setenv("MEMORY_DB", filepath.Join(dir, "memory.db"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 
+	// `serve` owns the listener; the holder-backed mux is what it serves. The
+	// port is picked, and MEMORY_PORT set to match, BEFORE the unit launches:
+	// the child inherits today's env through the allowlist (supervise.FilterEnv
+	// reads os.Environ() at spawn time), and memoryIdentity()'s own
+	// os.Getenv("MEMORY_PORT") read — answered in-process by memoryStoreMux —
+	// must see the SAME port the listener actually bound, not the stale 11435
+	// default, whichever branch memoryListenAddr took.
+	ln, port := memoryListenAddr(t)
+	t.Setenv("MEMORY_PORT", port)
+
 	sup := &supervisor{}
 	defer sup.shutdown()
-	h, err := sup.launch("memory", "memory", config.PluginSpec{Impl: config.BuiltinImpl}, self, nil)
+	h, err := sup.launch("memory", "memory", config.PluginSpec{Impl: config.BuiltinImpl}, self, []string{"MEMORY_PORT=" + port})
 	if err != nil {
 		t.Fatalf("launch memory unit: %v", err)
 	}
 
-	// `serve` owns the listener; the holder-backed mux is what it serves.
-	ln := memoryListenAddr(t)
 	addr := ln.Addr().String()
 	url := "http://" + addr
 	srv := &http.Server{Handler: memoryProxyMux(h)}
