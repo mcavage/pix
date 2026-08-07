@@ -153,17 +153,26 @@ type mcpBundleCmd struct {
 }
 
 func (c *mcpBundleCmd) Run(d *cli.Deps) error {
-	if len(c.Args) == 0 || (len(c.Args) == 1 && c.Args[0] == "add") {
+	switch {
+	case len(c.Args) == 0 || (len(c.Args) == 1 && c.Args[0] == "add"):
 		// The default add is a fixed, non-interactive registration (the shipped
 		// catalog bundle, no user-supplied URL to authorize), so a bounded
 		// failed-attempt retry is safe here: a wrong grammar fails at argv
-		// parse time, before any registration side effect. Try the current
-		// --url grammar first, fall back to the positional grammar ONLY on a
-		// recognized CLI usage mismatch (see RunSbxGrammarFallback).
+		// parse time, before any registration side effect. RunBundleAdd tries
+		// the current --url grammar first, falls back to the positional
+		// grammar on a recognized mismatch, and — ONLY when sbx has no `mcp
+		// bundle` subcommand at all (sbx v0.38+) — falls back further to
+		// registering the three shipped catalog entries individually via
+		// direct `sbx mcp add`.
 		name, url := mcp.McpCatalogBundleName, mcp.McpCatalogBundleURL(version)
-		primary := mcp.BundleAddArgs(name, url)
-		alt := mcp.BundleAddArgsPositional(name, url)
-		return mcpFailed(d, "bundle", mcp.RunSbxGrammarFallback(exec.LookPath, d.Out, d.Err, primary, alt))
+		return mcpFailed(d, "bundle", mcp.RunBundleAdd(exec.LookPath, d.Out, d.Err, name, url, mcp.McpCatalog))
+	case len(c.Args) == 2 && c.Args[0] == "rm" && c.Args[1] == mcp.McpCatalogBundleName:
+		// The one rm shape this host knows how to repair on a bundle-less sbx:
+		// removing exactly the shipped bundle name. Any other rm target forwards
+		// verbatim below — there is nothing this host can substitute for it.
+		return mcpFailed(d, "bundle", mcp.RunBundleRm(exec.LookPath, d.Out, d.Err, mcp.McpCatalogBundleName, mcp.McpCatalog))
+	case len(c.Args) >= 1 && c.Args[0] == "ls":
+		return mcpFailed(d, "bundle", mcp.RunBundleLs(exec.LookPath, d.Out, d.In, d.Err, mcp.McpCatalog, c.Args[1:]))
 	}
 	sbxArgs := append([]string{"mcp", "bundle"}, c.Args...)
 	return mcpFailed(d, "bundle", mcp.RunSbxMcpCore(exec.LookPath, d.Out, d.In, d.Err, sbxArgs))
