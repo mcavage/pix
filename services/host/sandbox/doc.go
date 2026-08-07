@@ -7,11 +7,12 @@
 //     always intact) to fit the RFC1123 label cap. Two different directories
 //     that share a basename get different names; the same directory always
 //     gets the same name.
-//   - list.go        — a tolerant JSON parser for an `sbx`-style sandbox
-//     listing: a tri-state State (Running/Stopped/Unknown — never guessed)
-//     per row, and an optional, immutable InstanceID. See "Schema posture"
-//     below for why it accepts documented ALIASES rather than one pinned
-//     shape, and how it flags a row whose identity it cannot vouch for.
+//   - list.go        — a JSON parser for an `sbx`-style sandbox listing,
+//     against one of two pinned canonical profiles (legacy bare-array,
+//     v0.38 `{"sandboxes": [...]}`): a tri-state State (Running/Stopped/
+//     Unknown — never guessed) per row, and an optional (v0.38: required,
+//     UUID-shaped), immutable InstanceID. See "Schema posture" below for
+//     the two profiles and how a row flags identity it cannot vouch for.
 //   - argv.go        — pure create-vs-exec argv planning: `-it` when a TTY is
 //     wanted, `-i` otherwise, and a fail-closed PlanLaunch that refuses to
 //     guess when List's parse could not verify identity or state.
@@ -35,18 +36,42 @@
 // CLI and no config (see docs/design/architecture.md's L1-capability
 // contract: "one domain each; MAY NOT import each other").
 //
-// # Schema posture: no ground truth, so degrade honestly
+// # Schema posture: two pinned profiles, everything else degrades honestly
 //
-// There is no authoritative schema for what an installed `sbx` emits for a
-// sandbox listing, and different sbx versions plausibly differ, so list.go
-// accepts a documented set of ALIAS field names (nameKeys/stateKeys/idKeys)
-// instead of refusing anything that isn't one exact shape. But leniency does
-// not imply trust: a row is IdentityVerified only when every field it supplied
-// used the CANONICAL key (not a fallback alias) and carried no key outside the
-// fully documented set. A row that had to lean on an alias, or came with a key
-// this package has never heard of, parses successfully but reports
-// IdentityVerified=false — the same "fail closed on uncertainty, never guess"
-// posture this package's own State four-state and workflow/launch's
+// There is no single authoritative schema for what an installed `sbx` emits
+// for a sandbox listing across versions, so list.go recognizes exactly two
+// CANONICAL top-level/row profiles, selected once from the top-level shape
+// (unwrapRows) and applied to every row in a listing:
+//
+//   - legacy: a bare JSON array, rows keyed name/state/instance_id (with a
+//     documented set of ALIAS field names — nameKeys/stateKeys/idKeys — for
+//     sbx versions or callers this package has seen use a different spelling).
+//   - v0.38 (`sbx ls --json` on the pinned version — see
+//     docs/upstream/sbx-0.38-noninteractive-rm.md for the other v0.38
+//     behavior change this repo already accounts for): the OBJECT
+//     `{"sandboxes": [...]}`, rows keyed EXACTLY name/id/agent/status/
+//     workspaces/workspace_missing — captured verbatim from a real v0.38
+//     install (see list_test.go's testdata/list_v38_canonical.json), so this
+//     shape is trusted as fully as the legacy bare array, not treated as a
+//     lesser alias. It has NO key aliases of its own: a row using a legacy
+//     alias under this wrapper (e.g. "instance_id" for "id") is a key
+//     outside the SELECTED profile, handled the same as any other
+//     undocumented key.
+//
+// Leniency does not imply trust. Under the legacy profile, a row is
+// IdentityVerified only when every field it supplied used the CANONICAL key
+// (not a fallback alias) and carried no key outside the fully documented
+// set; a row that had to lean on an alias, or came with a key this package
+// has never heard of, parses successfully but reports IdentityVerified=false.
+// Under the v0.38 profile, the pinned evidence is stronger, so the bar is
+// higher in one direction and lower in another: id/status/agent/workspaces/
+// workspace_missing are each REQUIRED with the documented type (missing or
+// mistyped fails the WHOLE parse, not just this row — see parseRowV38), id
+// must be shaped like a UUID, and status must be a recognized value; but an
+// undocumented EXTRA key or an unrecognized-but-well-typed status value still
+// only downgrades IdentityVerified, exactly like the legacy profile. Either
+// way, this is the same "fail closed on uncertainty, never guess" posture
+// this package's own State four-state and workflow/launch's
 // PlanSandboxLaunch already use for sandbox liveness. PlanLaunch (argv.go)
 // enforces this: it refuses to plan create-vs-exec against an unverified row.
 package sandbox

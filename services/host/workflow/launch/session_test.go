@@ -135,6 +135,49 @@ exit 1
 	}
 }
 
+// TestRecordSessionCreation_RecordsVerifiedInstance_V38Schema is the same
+// explicit-named-create-record regression as
+// TestRecordSessionCreation_RecordsVerifiedInstance, but against the sbx
+// v0.38 `sbx ls --json` schema (object-wrapped `{"sandboxes": [...]}`, rows
+// keyed name/id/agent/status/workspaces/workspace_missing) rather than the
+// legacy bare array — proving sandbox.ParseList's v0.38 profile flows all the
+// way through sbxEntry/FindByName into a real lease.Record with the UUID as
+// InstanceID, not just that the pure parser accepts the shape.
+func TestRecordSessionCreation_RecordsVerifiedInstance_V38Schema(t *testing.T) {
+	isolateState(t)
+	installFakeSbx(t, `
+if [ "$1" = "ls" ] && [ "$2" = "--json" ]; then
+  echo '{"sandboxes":[{"name":"pix-demo","id":"5c2b6e0a-1f3d-4a9b-8e21-7d4f2b6c9a10","agent":"pi","status":"running","workspaces":["/workspace"],"workspace_missing":false}]}'
+  exit 0
+fi
+exit 1
+`)
+	key := SessionName(t.TempDir())
+	fp := sandbox.Fingerprint{"static_mcp": "slack", "template": "local-1"}
+	recorded, err := RecordSessionCreation(realEnv(), key, "pix-demo", fp, []string{"--model", "m"})
+	if err != nil || !recorded {
+		t.Fatalf("RecordSessionCreation = (%v, %v), want (true, nil)", recorded, err)
+	}
+	dir, err := leaseDirFor(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := lease.ReadRecord(dir)
+	if err != nil || rec.InstanceID != "5c2b6e0a-1f3d-4a9b-8e21-7d4f2b6c9a10" {
+		t.Fatalf("record = %+v (err %v), want the v0.38 UUID instance id", rec, err)
+	}
+	if diverged, found := CheckSessionFingerprint(key, fp); !found || len(diverged) > 0 {
+		t.Errorf("fingerprint round-trip: found=%v diverged=%v", found, diverged)
+	}
+	inv, found := readSessionInvocation(key)
+	if !found || strings.Join(inv, " ") != "--model m" {
+		t.Errorf("invocation round-trip = %v (found %v)", inv, found)
+	}
+	if !SessionRecorded(key) {
+		t.Error("SessionRecorded = false after a verified v0.38 record")
+	}
+}
+
 // TestRecordSessionCreation_UnverifiedRecordsNothing: an unverified row, or
 // one with no instance id, records NOTHING and reports recorded=false — an
 // invented identity is what would authorize a teardown nobody can justify.
@@ -262,6 +305,43 @@ func TestRunSession_FingerprintDivergence_RefusesAttach(t *testing.T) {
 	installFakeSbx(t, `
 if [ "$1" = "ls" ]; then
   if [ "$2" = "--json" ]; then echo '[{"name":"pix-demo","state":"running","instance_id":"inst-1"}]'
+  else echo "pix-demo  x  running"; fi
+  exit 0
+fi
+exit 0
+`)
+	ws := t.TempDir()
+	key := SessionName(ws)
+	if err := writeSessionState(key, sessionFingerprintFileName, sandbox.Fingerprint{"static_mcp": "slack"}); err != nil {
+		t.Fatal(err)
+	}
+	err := RunSession(SessionSpec{
+		Key: key, Name: "pix-demo", AttachExec: true,
+		Fingerprint: sandbox.Fingerprint{"static_mcp": "slack,notion"},
+		CreateArgs:  []string{"run", "--name", "pix-demo"},
+	}, SessionDeps{Env: realEnv(), Poll: SbxCreatePoll(realEnv()), Warn: io.Discard, Spawn: fixtureSpawn(t)})
+
+	var refused *SessionRefused
+	if !errors.As(err, &refused) {
+		t.Fatalf("RunSession = %v, want a *SessionRefused", err)
+	}
+	if !strings.Contains(refused.Error(), "static_mcp") {
+		t.Errorf("refusal %q must name the diverged key", refused.Error())
+	}
+}
+
+// TestRunSession_FingerprintDivergence_RefusesAttach_V38Schema is the same
+// changed-MCP attach-refusal regression as
+// TestRunSession_FingerprintDivergence_RefusesAttach, but against the sbx
+// v0.38 `sbx ls --json` schema. A stored fingerprint that no longer matches
+// must still refuse the attach even though the probe finding it came back
+// through the v0.38 object-wrapped row shape rather than the legacy bare
+// array.
+func TestRunSession_FingerprintDivergence_RefusesAttach_V38Schema(t *testing.T) {
+	isolateState(t)
+	installFakeSbx(t, `
+if [ "$1" = "ls" ]; then
+  if [ "$2" = "--json" ]; then echo '{"sandboxes":[{"name":"pix-demo","id":"5c2b6e0a-1f3d-4a9b-8e21-7d4f2b6c9a10","agent":"pi","status":"running","workspaces":["/workspace"],"workspace_missing":false}]}'
   else echo "pix-demo  x  running"; fi
   exit 0
 fi
