@@ -107,7 +107,18 @@ func needsHostProof(cfg *config.Config, b config.InferenceModelBinding) bool {
 	if !ok {
 		return false
 	}
-	if b.Source != "" && backend.Auth != "1password" {
+	return HostProofRequired(backend, b.Source)
+}
+
+// HostProofRequired is needsHostProof's decision, taken on a bare backend +
+// source pair rather than a binding already sitting in cfg. Pack projection
+// (workflow/pack.ApplyPackInference) calls this at the moment a binding is
+// CREATED, before it exists in cfg.Inference.Models, to decide whether
+// Available may be asserted immediately or must wait on an actual probe: the
+// same two backends (1Password, and Ollama's local/cloud daemon) that
+// needsHostProof gates are the only two this reports true for.
+func HostProofRequired(backend config.InferenceBackend, source string) bool {
+	if source != "" && backend.Auth != "1password" {
 		return false
 	}
 	return backend.Auth == "1password" || backend.Driver == "ollama"

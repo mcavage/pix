@@ -10,11 +10,17 @@ import (
 
 	"pix/host/config"
 	"pix/host/hostenv"
+	"pix/host/inference"
 	"pix/host/sys/systest"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/pack"
 )
 
+// TestPackInferenceValidationIsGenericAndFailClosed: a sbx-session backend has
+// no host-reachable endpoint to probe, so Available is asserted the moment the
+// (already Tier-1-gated) projection runs — that IS what "structurally
+// injectable" means, not a health observation. Verified stays false: no probe
+// ran, and none ever will for this auth mode.
 func TestPackInferenceValidationIsGenericAndFailClosed(t *testing.T) {
 	root := t.TempDir()
 	m := packinfo.Manifest{Name: "team", Schema: 1, Inference: &packinfo.Inference{
@@ -36,35 +42,115 @@ func TestPackInferenceValidationIsGenericAndFailClosed(t *testing.T) {
 	if cfg.Inference.ExclusiveSource != root || cfg.Inference.Backends["gateway"].Auth != "sbx-session" {
 		t.Fatalf("inference projection = %+v", cfg.Inference)
 	}
-	if len(cfg.Inference.Models) != 1 || cfg.Inference.Models[0].Available {
-		t.Fatalf("pack binding must begin unverified: %+v", cfg.Inference.Models)
+	if len(cfg.Inference.Models) != 1 || !cfg.Inference.Models[0].Available || cfg.Inference.Models[0].Verified {
+		t.Fatalf("sbx-session pack binding must be available-but-unverified: %+v", cfg.Inference.Models)
+	}
+	if !inference.Callable(cfg, cfg.Inference.Models[0]) {
+		t.Fatalf("an accepted sbx-session binding must be callable: %+v", cfg.Inference.Models[0])
 	}
 }
 
+// TestPackInferenceReapplyPreservesOnlyMatchingEvidence covers the ONE auth
+// mode where Available really is probe evidence: 1Password. sbx-session has no
+// evidence to preserve or drop — it is recomputed structurally on every apply
+// (see TestPackInferenceSbxSessionAcceptedPackYieldsCallableBindingAndRoute).
 func TestPackInferenceReapplyPreservesOnlyMatchingEvidence(t *testing.T) {
 	source := "/packs/work"
 	inf := &packinfo.Inference{
-		Backends: map[string]packinfo.InferenceBack{"gateway": {Driver: "openai-compatible", Protocol: "openai-responses", Auth: "sbx-session", BaseURL: "https://models.example.test/v1"}},
+		Backends: map[string]packinfo.InferenceBack{"gateway": {Driver: "native", Auth: "1password", KeyEnv: "GATEWAY_KEY"}},
 		Models:   []packinfo.InferenceModel{{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "prod"}},
 	}
 	cfg := &config.Config{}
 	if err := pack.ApplyPackInference(cfg, inf, source); err != nil {
 		t.Fatal(err)
 	}
-	cfg.Inference.Models[0].Available = true
+	if cfg.Inference.Models[0].Available {
+		t.Fatal("a 1password pack binding must begin unavailable pending an actual probe")
+	}
+	// Simulate a probe earning the evidence.
+	cfg.Inference.Models[0].Available, cfg.Inference.Models[0].Verified = true, true
 	if err := pack.ApplyPackInference(cfg, inf, source); err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.Inference.Models[0].Available {
-		t.Fatal("unchanged pack reapply erased availability evidence")
+	if !cfg.Inference.Models[0].Available || !cfg.Inference.Models[0].Verified {
+		t.Fatal("unchanged pack reapply erased probe evidence")
 	}
 	changed := *inf
-	changed.Backends = map[string]packinfo.InferenceBack{"gateway": {Driver: "openai-compatible", Protocol: "openai-responses", Auth: "sbx-session", BaseURL: "https://new.example.test/v1"}}
+	changed.Backends = map[string]packinfo.InferenceBack{"gateway": {Driver: "native", Auth: "1password", KeyEnv: "GATEWAY_KEY_V2"}}
 	if err := pack.ApplyPackInference(cfg, &changed, source); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Inference.Models[0].Available {
-		t.Fatal("changed backend retained stale availability evidence")
+	if cfg.Inference.Models[0].Available || cfg.Inference.Models[0].Verified {
+		t.Fatal("changed backend retained stale probe evidence")
+	}
+}
+
+// TestPackInferenceSbxSessionAcceptedPackYieldsCallableBindingAndRoute is the
+// regression for the reported bug: an accepted sbx-session pack binding used to
+// stay Available:false forever (needsHostProof's exemption was never reached
+// because Callable rejects on !Available first), so `pix models ls` showed 0
+// callable models and `pix run` refused to launch. It must now be callable AND
+// survive into the compiled runtime route.
+func TestPackInferenceSbxSessionAcceptedPackYieldsCallableBindingAndRoute(t *testing.T) {
+	source := "/packs/team"
+	inf := &packinfo.Inference{
+		Backends: map[string]packinfo.InferenceBack{"gateway": {
+			Driver: "openai-compatible", Protocol: "openai-responses", Auth: "sbx-session", BaseURL: "https://models.example.test/v1",
+			CredentialService: "sbx-login", KeyEnv: "SESSION_TOKEN", CredentialHeader: "Authorization", CredentialFormat: "Bearer %s",
+		}},
+		Models: []packinfo.InferenceModel{{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "reasoner"}},
+	}
+	cfg := &config.Config{}
+	if err := pack.ApplyPackInference(cfg, inf, source); err != nil {
+		t.Fatal(err)
+	}
+	binding := cfg.Inference.Models[0]
+	if !binding.Available || binding.Verified {
+		t.Fatalf("binding = %+v, want available-but-unverified", binding)
+	}
+	if !inference.Callable(cfg, binding) {
+		t.Fatalf("binding must be callable: %+v", binding)
+	}
+	bound := inference.Bindings(cfg)
+	if len(bound) != 1 || bound[0].Model != binding.Model {
+		t.Fatalf("inference.Bindings = %+v, want the sbx-session binding", bound)
+	}
+	ids, err := inference.CallableRuntimeModels(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantID := inference.RuntimeID(bound[0])
+	found := false
+	for _, id := range ids {
+		if id == wantID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("CallableRuntimeModels = %v, want %q in the create-time route", ids, wantID)
+	}
+}
+
+// TestPackInference1PasswordBindingRemainsUnavailableUntilProbe: unlike
+// sbx-session, a pack's 1Password backend IS a host-reachable endpoint Pix can
+// dispatch a probe against, so trust acceptance alone must never make it
+// callable — only a real, later-run probe (never exercised here) may.
+func TestPackInference1PasswordBindingRemainsUnavailableUntilProbe(t *testing.T) {
+	source := "/packs/direct"
+	inf := &packinfo.Inference{
+		Backends: map[string]packinfo.InferenceBack{"direct": {Driver: "native", Auth: "1password", KeyEnv: "GATEWAY_KEY"}},
+		Models:   []packinfo.InferenceModel{{Model: "anthropic/claude-sonnet-5", Backend: "direct", Upstream: "anthropic/claude-sonnet-5"}},
+	}
+	cfg := &config.Config{}
+	if err := pack.ApplyPackInference(cfg, inf, source); err != nil {
+		t.Fatal(err)
+	}
+	binding := cfg.Inference.Models[0]
+	if binding.Available || binding.Verified {
+		t.Fatalf("binding = %+v, want unavailable and unverified pending a probe", binding)
+	}
+	if inference.Callable(cfg, binding) {
+		t.Fatalf("an unprobed 1password pack binding must not be callable: %+v", binding)
 	}
 }
 
@@ -151,6 +237,17 @@ func TestPackInferenceCredentialRoutingIsReverifiedAtLaunch(t *testing.T) {
 	if _, err := packApplyForTest(cfg, &launch.RunOpts{Pack: root}, hostenv.Env{System: &systest.Fake{}}, io.Discard); err != nil {
 		t.Fatalf("accepted inference launch rejected: %v", err)
 	}
+	// An accepted sbx-session binding is callable right away — THIS is the fix
+	// under test — but the mutation guard below must still catch a pack that
+	// changes its endpoint out from under a stale trust acceptance; Available
+	// being structural must never be read as "mutation-proof."
+	if len(cfg.Inference.Models) != 1 || !cfg.Inference.Models[0].Available || cfg.Inference.Models[0].Verified {
+		t.Fatalf("accepted sbx-session binding = %+v, want available-but-unverified", cfg.Inference.Models)
+	}
+	if !inference.Callable(cfg, cfg.Inference.Models[0]) {
+		t.Fatalf("accepted sbx-session binding must be callable: %+v", cfg.Inference.Models[0])
+	}
+	acceptedBackend := cfg.Inference.Backends["gateway"]
 
 	backend := manifest.Inference.Backends["gateway"]
 	backend.BaseURL = "https://attacker.example.test/v1"
@@ -160,6 +257,11 @@ func TestPackInferenceCredentialRoutingIsReverifiedAtLaunch(t *testing.T) {
 	}
 	if _, err := packApplyForTest(cfg, &launch.RunOpts{Pack: root}, hostenv.Env{System: &systest.Fake{}}, io.Discard); err == nil || !strings.Contains(err.Error(), "changed since acceptance") {
 		t.Fatalf("mutated credential endpoint was not rejected: %v", err)
+	}
+	// The rejected re-gate must never have reached ApplyPackInference: the
+	// config still carries the ORIGINALLY accepted backend, not the attacker's.
+	if got := cfg.Inference.Backends["gateway"]; got != acceptedBackend {
+		t.Fatalf("rejected mutation leaked into config: %+v, want %+v", got, acceptedBackend)
 	}
 }
 

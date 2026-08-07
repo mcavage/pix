@@ -19,6 +19,7 @@ import (
 	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/hostenv"
+	"pix/host/inference"
 	"pix/host/launcher"
 	"pix/host/packinfo"
 	"pix/host/secret"
@@ -29,8 +30,16 @@ import (
 )
 
 // ApplyPackInference projects a pack's inference contract into launcher config:
-// public wiring metadata only (the schema cannot carry a secret); probe
-// evidence starts false and is earned later by setup.
+// public wiring metadata only (the schema cannot carry a secret). Available is
+// NOT probe evidence — it means "this pack's schema passed validation and its
+// host-exec surface cleared the Tier-1 trust gate" (every call site runs this
+// AFTER that gate: packUse via gatePackHostSurface, launch via
+// VerifyPackLaunchTrust), which is exactly what a proxy-injected sbx-session
+// credential needs: there is no host-reachable endpoint to probe, so
+// inference.HostProofRequired already exempts it. A backend inference CAN
+// probe from the host (1Password, Ollama) starts and stays Available:false
+// until setup actually earns it; Verified is reserved for that probe and is
+// never set here.
 func ApplyPackInference(cfg *config.Config, inf *packinfo.Inference, source string) error {
 	if cfg == nil || inf == nil {
 		return nil
@@ -74,6 +83,13 @@ func ApplyPackInference(cfg *config.Config, inf *packinfo.Inference, source stri
 		if backend, ok := cfg.Inference.Backends[b.Backend]; ok {
 			if ev, found := prior[inferenceEvidenceKey(binding, backend)]; found {
 				binding.Available, binding.Verified = ev.available, ev.verified
+			} else if !inference.HostProofRequired(backend, source) {
+				// Structurally injectable the moment this pack cleared trust: the
+				// backend has no host-reachable endpoint to probe (sbx-session, or
+				// any other mode needsHostProof already exempts), so "unavailable
+				// pending a probe that can never run" is not a real intermediate
+				// state — it only ever produced a permanently unwired binding.
+				binding.Available = true
 			}
 		}
 		cfg.Inference.Models = append(cfg.Inference.Models, binding)
