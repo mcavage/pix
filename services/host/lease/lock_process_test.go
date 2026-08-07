@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // These tests exercise REAL kernel flock semantics across REAL OS processes:
@@ -130,17 +132,13 @@ func helperCheckFDs() {
 }
 
 // fdOpenInThisProcess reports whether fd currently names an open descriptor
-// in THIS process, via fcntl(fd, F_GETFD): the kernel answers EBADF for a
-// closed or never-opened fd number and the descriptor's flags word
-// otherwise. syscall.SYS_FCNTL and syscall.F_GETFD are both POSIX and both
-// defined by the syscall package on every unix this file builds for (linux
-// and darwin), so this one function needs no platform split at all — unlike
-// the abandoned Darwin scan-all-fds approach, which had to walk the entire
-// numeric fd space and read each one back out via fcntl(fd, F_GETPATH, ...)
-// because it did not yet know which fd number it was looking for.
+// in THIS process. x/sys/unix supplies the supported libc trampoline on Darwin;
+// raw syscall.Syscall(SYS_FCNTL, ...) may return ENOSYS on modern macOS even
+// though fcntl is available. The parent already knows the exact fd numbers, so
+// direct F_GETFD is stronger and more portable than scanning /dev/fd.
 func fdOpenInThisProcess(fd int) bool {
-	_, _, errno := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), uintptr(syscall.F_GETFD), 0)
-	return errno == 0
+	_, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0)
+	return !errors.Is(err, syscall.EBADF)
 }
 
 // readAcquired reads exactly one line from r, bounded by timeout so a stuck

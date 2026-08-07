@@ -2,7 +2,7 @@
   "schema": 1,
   "packages": {
     "pix/host": {
-      "prod_loc": 4055,
+      "prod_loc": 4058,
       "exports": 0,
       "globals": 39,
       "edges": 11,

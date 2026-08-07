@@ -490,8 +490,11 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 		// which would misorder "newest" if it were the sort key. rowid is an
 		// autoincrementing counter that only ever reflects insertion order, so
 		// it is used alone; created_at is still returned in the row for display.
+		// Push the bounded caller limit into SQLite too: list-all must not scan
+		// and materialize the entire visible store only to truncate it in Go.
 		// Scored queries are ordered by score below instead.
-		where += " ORDER BY rowid DESC"
+		where += " ORDER BY rowid DESC LIMIT ?"
+		args = append(args, limit)
 	}
 	rows, err := s.db.Query(where, args...)
 	if err != nil {
