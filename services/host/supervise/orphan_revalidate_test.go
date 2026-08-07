@@ -43,7 +43,7 @@ func TestProcessStartTimeRefusesDeadPid(t *testing.T) {
 // dispense and killVerifiedOrphan actually signaling an OS process. Every
 // way it can go stale must refuse to kill, never proceed on ambiguity.
 func TestRevalidateOrphanRefusesOnAnyStalenessOrAmbiguity(t *testing.T) {
-	dir := t.TempDir()
+	dir := shortSocketDir(t)
 	sock := filepath.Join(dir, "live.sock")
 	l, err := net.Listen("unix", sock)
 	must(t, err)
