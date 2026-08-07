@@ -6,6 +6,7 @@ package service
 
 import (
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +30,9 @@ func TestResolveServeUnits_SharedContract(t *testing.T) {
 			}
 			if len(units) != sc.WantUnitsLen {
 				t.Errorf("units = %+v, want len %d", units, sc.WantUnitsLen)
+			}
+			if want := sc.WantUnits(); !reflect.DeepEqual(units, want) {
+				t.Errorf("units = %+v, want exactly %+v", units, want)
 			}
 			healthy := detail == ""
 			if healthy != sc.WantHealthy {

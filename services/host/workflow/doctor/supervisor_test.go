@@ -45,8 +45,10 @@ func TestSupervisorSnapshotAvailability(t *testing.T) {
 	stale := live
 	stale.GeneratedUnix = time.Now().Add(-5 * time.Minute).Unix()
 	st := snapshotFrom(t, stale, true)
-	if st.Available || !strings.Contains(st.Detail, "stale") || len(st.Units) != 1 {
-		t.Fatalf("a stale snapshot shows its units but is NOT available: %+v", st)
+	// A stale snapshot is refused the same as a missing or schema-mismatched
+	// one: its units must not render as current rows next to Available=false.
+	if st.Available || !strings.Contains(st.Detail, "stale") || len(st.Units) != 0 {
+		t.Fatalf("a stale snapshot must hide its units, not just flag them: %+v", st)
 	}
 
 	future := live

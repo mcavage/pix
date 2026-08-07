@@ -413,7 +413,12 @@ func resolveServeUnits(path string, running bool, pid int, now time.Time) ([]uni
 		units = emptyUnits
 	}
 	if age := now.Sub(time.Unix(rep.GeneratedUnix, 0)); age > unitsStaleAfter {
-		return units, fmt.Sprintf("supervision snapshot is %ds stale", int(age.Seconds()))
+		// A stale snapshot's units are refused the same as a wrong-pid or
+		// schema-mismatched one: they describe a tree that may no longer
+		// exist, so they must never render as current rows alongside the
+		// "units: unknown" line — that combination reads as "fine except for
+		// this one thing" when it is really "we cannot vouch for any of it".
+		return emptyUnits, fmt.Sprintf("supervision snapshot is %ds stale", int(age.Seconds()))
 	}
 	return units, ""
 }

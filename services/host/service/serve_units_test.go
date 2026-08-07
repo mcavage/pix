@@ -71,12 +71,45 @@ func TestResolveServeUnits(t *testing.T) {
 			t.Fatalf("units=%+v detail=%q", units, detail)
 		}
 	})
-	t.Run("an old snapshot still shows units but is flagged stale", func(t *testing.T) {
+	t.Run("an old snapshot hides its units, not just flags them stale", func(t *testing.T) {
 		units, detail := resolveServeUnits(writeSnap(t, freshRep(now, 100)), true, 100, now.Add(2*time.Minute))
-		if len(units) != 1 || !strings.Contains(detail, "stale") {
+		if len(units) != 0 || !strings.Contains(detail, "stale") {
 			t.Fatalf("units=%+v detail=%q", units, detail)
 		}
 	})
+}
+
+// TestPrintServeStatusNeverShowsStaleUnitsAlongsideUnknown pins the actual
+// user-visible bug: a stale snapshot must render as "units: unknown (...)"
+// with NO unit rows underneath, in both the human text and the JSON, not
+// "unknown" plus a list of rows the reader can no longer vouch for.
+func TestPrintServeStatusNeverShowsStaleUnitsAlongsideUnknown(t *testing.T) {
+	now := time.Unix(1700000000, 0)
+	units, detail := resolveServeUnits(writeSnap(t, freshRep(now, 100)), true, 100, now.Add(2*time.Minute))
+	st := serveState{Running: true, PID: 100, MemoryPort: 11435, Units: units, UnitsDetail: detail}
+
+	var human bytes.Buffer
+	printServeStatus(st, &human, false)
+	if !strings.Contains(human.String(), "units: unknown") {
+		t.Errorf("stale snapshot must render as unknown:\n%s", human.String())
+	}
+	if strings.Contains(human.String(), "unit memory") {
+		t.Errorf("stale snapshot must not also list its unit rows:\n%s", human.String())
+	}
+
+	var js bytes.Buffer
+	printServeStatus(st, &js, true)
+	var got map[string]any
+	if err := json.Unmarshal(js.Bytes(), &got); err != nil {
+		t.Fatalf("status --json is not json: %v", err)
+	}
+	gotUnits, ok := got["units"].([]any)
+	if !ok {
+		t.Fatalf("units is not a JSON array: %s", js.String())
+	}
+	if len(gotUnits) != 0 {
+		t.Fatalf("stale snapshot must publish an empty units array, got %v", gotUnits)
+	}
 }
 
 func TestPrintServeStatusRendersUnitsAndJSON(t *testing.T) {

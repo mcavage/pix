@@ -49,6 +49,18 @@ type Scenario struct {
 	WantDetailSubstr string
 }
 
+// WantUnits is the exact slice both readers must produce, not merely a
+// length: WantUnitsLen alone would pass a reader that returns the right
+// COUNT of units with the wrong content (e.g. a stale copy that happened to
+// keep the same length). Zero units always means the empty (non-nil) slice;
+// otherwise it is the scenario's own published Report.Units, unmodified.
+func (sc Scenario) WantUnits() []unitreport.Unit {
+	if sc.WantUnitsLen == 0 {
+		return []unitreport.Unit{}
+	}
+	return sc.Report.Units
+}
+
 func baseReport(generated time.Time) unitreport.Report {
 	return unitreport.Report{
 		SchemaVersion: unitreport.SchemaVersion, PID: PID, GeneratedUnix: generated.Unix(),
@@ -89,9 +101,12 @@ func Scenarios() []Scenario {
 			WantUnitsLen: 0, WantHealthy: false, WantDetailSubstr: "no supervision snapshot",
 		},
 		{
-			Name: "snapshot aged past the stale budget still shows its units",
+			// A stale snapshot is refused the same as an unreadable, missing,
+			// or schema-mismatched one: its units must NOT render as current
+			// rows next to an "unknown"/unavailable verdict.
+			Name: "snapshot aged past the stale budget hides its units, not just flags them",
 			Report: stale, Write: true,
-			WantUnitsLen: 1, WantHealthy: false, WantDetailSubstr: "stale",
+			WantUnitsLen: 0, WantHealthy: false, WantDetailSubstr: "stale",
 		},
 		{
 			Name: "snapshot on a schema this build does not read",
