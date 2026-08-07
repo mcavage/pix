@@ -83,11 +83,15 @@ What it asserts, and why each one is in a RELEASE gate rather than a unit test
    `pix doctor --json` carries the same `supervisor` object, and neither leaks
    anything credential-shaped. Before any of this, the script PREFLIGHTS an
    already-running serve: it resolves the running pid's executable and
-   compares it to the `pix-host` this run just built. Any pre-existing daemon
-   stops the run with the exact `pix serve stop`/`kill <pid>` remedy: even a
-   matching unmanaged daemon cannot prove launchd install/respawn semantics.
-   With a clear host, the script installs and starts the current build itself,
-   reversibly, then uninstalls it on exit.
+   compares it to the `pix-host` this run just built. Both paths are resolved
+   through their FINAL symlink component (`resolve_symlink_final`, a portable
+   readlink loop — macOS has no `readlink -f`/`realpath` guarantee), so a
+   make-install symlink and the real executable `lsof` reports for the
+   running pid compare equal instead of false-mismatching. Any pre-existing
+   daemon stops the run with the exact `pix serve stop`/`kill <pid>` remedy:
+   even a matching unmanaged daemon cannot prove launchd install/respawn
+   semantics. With a clear host, the script installs and starts the current
+   build itself, reversibly, then uninstalls it on exit.
 9. **Memory unit restart.** The memory CHILD is SIGKILLed: `:11435` must never
    stop accepting connections, the unit's generation must advance, and `pix
    memory stats` must answer again.
@@ -100,7 +104,11 @@ What it asserts, and why each one is in a RELEASE gate rather than a unit test
     --all`'s own exit code (never just fires it and hopes), and completion is
     then CERTIFIED against a machine-readable probe (`pix doctor --json`'s
     per-server registered/authenticated evidence) rather than an operator's
-    say-so. An operator confirmation is optional and additive: it reads a
+    say-so: a PASS requires the exact registered-and-authenticated evidence
+    line, "not registered" and "registered, not authenticated" are each their
+    own explicit FAIL, and anything else (unclassified, unknown, or no
+    evidence line at all) is an honest SKIP, never a silent PASS. An operator
+    confirmation is optional and additive: it reads a
     bounded `read -t` from `/dev/tty` specifically (never the script's own
     stdin). A closed, absent, silent, or declined optional confirmation is only
     an informational note, never FAIL or SKIP; the machine probe is the real
