@@ -25,7 +25,7 @@ CLI reference of its own.
 | `secret` | manage the 1Password `op://` refs (never the values) | §8 |
 | `config` | `show`/`path`/`get`/`set`/`unset` the single runtime config | §1 |
 | `task` | isolated parallel-work clones + sandboxes | `docs/design/worktree-tasks.md` |
-| `monitor` | live-follow a sandbox's out-of-sandbox traffic | `docs/design/monitor.md` |
+| `monitor` | one-shot read of a sandbox's stored out-of-sandbox traffic (`--follow`/`-f` to stream) | `docs/design/monitor.md` |
 | `models` | which models pix can use, and the model router: ls/show/pick/route | `docs/design/routing.md`, `docs/design/models-cli.md` |
 | `agent` | the subagent roster, read-only: `ls` only (`new`/`edit`/`rm`/`reassess` are RETIRED) | §4 |
 | `version`, `help` | stamped version; tiered help | (none) |

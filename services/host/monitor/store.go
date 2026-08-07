@@ -68,6 +68,23 @@ func NewStore(cfg StoreConfig) (*Store, error) {
 	return &Store{cfg: cfg}, nil
 }
 
+// OpenStore roots a READ-ONLY Store at root without creating anything: no
+// MkdirAll, no side effect at all. A reader (`pix monitor`) must not
+// fabricate empty store state just by looking — NewStore's ensureDir0700
+// would turn "no store yet" (missing root, an actionable signal) into "an
+// empty store exists" (indistinguishable from real, later emptiness) on
+// every read, which is exactly the distinction a one-shot reader needs to
+// report honestly. List and Tail already treat a missing root as "no
+// streams / no events, no error", so nothing here needs to exist yet; a
+// caller that wants to know whether the root itself is present checks that
+// separately (os.Stat), OpenStore does not.
+func OpenStore(root string) (*Store, error) {
+	if root == "" {
+		return nil, fmt.Errorf("monitor: OpenStore: root is required")
+	}
+	return &Store{cfg: StoreConfig{Root: root, MaxEvents: 4000, MaxBytes: 8 << 20}}, nil
+}
+
 // validID reports whether an id is safe verbatim in a directory name:
 // 1..96 bytes, leading alphanumeric (no ".", "..", or dotfile), thereafter
 // only [A-Za-z0-9._-] (no separator, NUL, control byte, or idSep). Strict

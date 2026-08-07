@@ -24,82 +24,100 @@ type FollowConfig struct {
 	Out    io.Writer
 }
 
-// Follow prints every stored event, then each new one until ctx is done.
-// Read errors are transient by nature (a file trimmed under us), so they are
-// skipped, not fatal.
-func Follow(ctx context.Context, store *Store, cfg FollowConfig) {
-	const pollInterval = 150 * time.Millisecond
-	// cursors tracks, per stream directory, the canonical wire bytes of the
-	// LAST event this loop has printed. A byte identity survives the store's
-	// own drop-oldest trim() (an atomic rename to a shorter file) and any
-	// external truncate/rotate of the file underneath it, which a plain
-	// "count already printed" cursor does not: once the file shrinks, an
-	// index-based cursor either re-prints everything before it (duplicates)
-	// or silently adopts the new, shorter length as "already printed" and
-	// never emits the events that are actually new (drops). Anchoring on the
-	// last event's own bytes instead means every poll re-locates that exact
-	// event in the current file — wherever it now sits, or its absence — and
-	// only the events strictly after it (by position) are new.
-	cursors := map[string]string{}
-	poll := func() {
-		metas, err := store.List()
-		if err != nil {
-			return
+// emitNew lists store's streams and prints whatever comes after cursors for
+// each one it keeps (cfg.Filter applied), advancing cursors in place. It is
+// the one pass both Follow (repeatedly, tolerating a transient error) and
+// Once (a single time, surfacing that same error) build on, so the two never
+// drift on what "new" means.
+//
+// cursors tracks, per stream directory, the canonical wire bytes of the LAST
+// event this loop has printed. A byte identity survives the store's own
+// drop-oldest trim() (an atomic rename to a shorter file) and any external
+// truncate/rotate of the file underneath it, which a plain "count already
+// printed" cursor does not: once the file shrinks, an index-based cursor
+// either re-prints everything before it (duplicates) or silently adopts the
+// new, shorter length as "already printed" and never emits the events that
+// are actually new (drops). Anchoring on the last event's own bytes instead
+// means every poll re-locates that exact event in the current file —
+// wherever it now sits, or its absence — and only the events strictly after
+// it (by position) are new.
+func emitNew(store *Store, cfg FollowConfig, cursors map[string]string) error {
+	metas, err := store.List()
+	if err != nil {
+		return err
+	}
+	seen := map[string]bool{}
+	for _, m := range metas {
+		seen[m.Dir] = true
+		if f := cfg.Filter; f != "" && !strings.Contains(m.SandboxID, f) && !strings.Contains(m.SessionID, f) {
+			continue
 		}
-		seen := map[string]bool{}
-		for _, m := range metas {
-			seen[m.Dir] = true
-			if f := cfg.Filter; f != "" && !strings.Contains(m.SandboxID, f) && !strings.Contains(m.SessionID, f) {
-				continue
-			}
-			events, err := store.Tail(m.SandboxID, m.SessionID, 0)
+		events, err := store.Tail(m.SandboxID, m.SessionID, 0)
+		if err != nil {
+			continue
+		}
+		lines := make([]string, len(events))
+		for i, e := range events {
+			line, err := Encode(e)
 			if err != nil {
 				continue
 			}
-			lines := make([]string, len(events))
-			for i, e := range events {
-				line, err := Encode(e)
-				if err != nil {
-					continue
+			lines[i] = string(line)
+		}
+		start := 0
+		if last, ok := cursors[m.Dir]; ok {
+			// Anchor found: only what comes after it is new. Anchor gone
+			// (evicted by trim, or the file was replaced outright): every
+			// event now present was appended after our anchor — drop-oldest
+			// is the only way lines disappear, so nothing left can predate
+			// what we already printed — so all of it is new, start stays 0.
+			for i := len(lines) - 1; i >= 0; i-- {
+				if lines[i] == last {
+					start = i + 1
+					break
 				}
-				lines[i] = string(line)
-			}
-			start := 0
-			if last, ok := cursors[m.Dir]; ok {
-				// Anchor found: only what comes after it is new. Anchor gone
-				// (evicted by trim, or the file was replaced outright): every
-				// event now present was appended after our anchor — drop-oldest
-				// is the only way lines disappear, so nothing left can predate
-				// what we already printed — so all of it is new, start stays 0.
-				for i := len(lines) - 1; i >= 0; i-- {
-					if lines[i] == last {
-						start = i + 1
-						break
-					}
-				}
-			}
-			for i := start; i < len(events); i++ {
-				e := events[i]
-				if !cfg.JSON {
-					fmt.Fprintln(cfg.Out, concise(e, cfg.TTY))
-				} else if lines[i] != "" {
-					fmt.Fprintln(cfg.Out, lines[i])
-				}
-			}
-			if len(lines) > 0 {
-				cursors[m.Dir] = lines[len(lines)-1]
 			}
 		}
-		// A stream that fell out of List() (evicted for good) can never come
-		// back under the same directory, so its cursor is dead weight; drop it
-		// rather than let a long session accumulate one entry per churned
-		// short-lived stream forever.
-		for dir := range cursors {
-			if !seen[dir] {
-				delete(cursors, dir)
+		for i := start; i < len(events); i++ {
+			e := events[i]
+			if !cfg.JSON {
+				fmt.Fprintln(cfg.Out, concise(e, cfg.TTY))
+			} else if lines[i] != "" {
+				fmt.Fprintln(cfg.Out, lines[i])
 			}
+		}
+		if len(lines) > 0 {
+			cursors[m.Dir] = lines[len(lines)-1]
 		}
 	}
+	// A stream that fell out of List() (evicted for good) can never come back
+	// under the same directory, so its cursor is dead weight; drop it rather
+	// than let a long session accumulate one entry per churned short-lived
+	// stream forever.
+	for dir := range cursors {
+		if !seen[dir] {
+			delete(cursors, dir)
+		}
+	}
+	return nil
+}
+
+// Once prints whatever is already stored, exactly once, and returns — the
+// one-shot half of the reader (`pix monitor --json | head -5` must
+// terminate). Unlike Follow it does NOT tolerate a List failure: there is no
+// next poll to self-correct on, so the caller needs to know.
+func Once(store *Store, cfg FollowConfig) error {
+	return emitNew(store, cfg, map[string]string{})
+}
+
+// Follow prints every stored event, then each new one until ctx is done.
+// Read errors are transient by nature (a file trimmed under us, or a stream
+// briefly missing mid-rotation), so — unlike Once — they are skipped here,
+// not fatal: the next poll tries again.
+func Follow(ctx context.Context, store *Store, cfg FollowConfig) {
+	const pollInterval = 150 * time.Millisecond
+	cursors := map[string]string{}
+	poll := func() { _ = emitNew(store, cfg, cursors) }
 	poll() // whatever is already there, before the first sleep
 	for {
 		select {

@@ -63,9 +63,22 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   front from a read-only `sbx mcp add --help` probe, never from a failed
   attempt, because a remote registration can open an interactive OAuth grant
   a retry must not repeat. New `sys.IsUsageMismatch` is the one shared
-  classifier every one of these call sites gates its retry on — an
+  classifier every one of these call sites gates its retry on: an
   unknown-flag/unknown-command/wrong-arity signature from the invoked CLI's
   own parser, never an auth/policy/operational failure.
+- **`pix monitor` no longer blocks forever on an empty or absent store.**
+  `pix monitor --json | head -5` used to hang indefinitely, because `Run`
+  always ran the polling `Follow` loop and `NewStore` silently created the
+  (empty) store root just by being asked to read it. Fixed: a new read-only
+  `monitor.OpenStore` never creates the root, and a non-interactive run (a
+  pipe, a script) now defaults to one-shot (`monitor.Once`: print whatever
+  is already stored and exit) instead of live-follow. Nothing stored AND no
+  `pix-host serve` running now exits 3 with an actionable message instead of
+  hanging or printing nothing; nothing stored while an ingest listener IS up
+  is still quiet, honest success. An interactive terminal keeps the old
+  live-follow default but now prints an honest banner first. New
+  `--follow`/`-f` flag forces streaming explicitly either way. See
+  `docs/design/monitor.md`.
 - `lib/recall-message.ts` no longer documents the deleted knowledge store
   (`:11436`, `KNOWLEDGE_CHAR_BUDGET`, `/knowledge`) as live behaviour; the
   per-channel budget rationale is restated for the store that actually exists.
