@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"time"
 
 	"pix/host/config"
 	"pix/host/health"
@@ -21,11 +22,26 @@ import (
 // ProbeModelKeys runs the ONE launch-gate probe: does the key store list at
 // least one model provider key. bin/args default to `sbx secret ls`; a test
 // points them at a fixture executable so the real exec path still runs.
+// Production always pays health.StatusBudget (2s); ProbeModelKeysBudget is the
+// seam a test uses to prove the TIMEOUT arm of the tri-state WITHOUT waiting
+// out that real production window.
 func ProbeModelKeys(ctx context.Context, bin string, args ...string) health.Result {
+	return ProbeModelKeysBudget(ctx, health.StatusBudget, bin, args...)
+}
+
+// ProbeModelKeysBudget is ProbeModelKeys with an explicit per-probe budget. It
+// exists for exactly one caller outside this file: a test that must prove a
+// timed-out key store reads as unknown (never a refusal) without depending on
+// a real subprocess actually surviving the full production health.StatusBudget
+// — a dependency that is both slow (every CI run pays the full timeout) and
+// environment-sensitive (a loaded box can blow past it before the process is
+// even killed). Production has exactly one caller of this budget knob:
+// ProbeModelKeys itself, always with health.StatusBudget.
+func ProbeModelKeysBudget(ctx context.Context, budget time.Duration, bin string, args ...string) health.Result {
 	if bin == "" {
 		bin, args = "sbx", []string{"secret", "ls"}
 	}
-	snap := health.Run(ctx, health.StatusBudget, health.ProviderKeyProbe{
+	snap := health.Run(ctx, budget, health.ProviderKeyProbe{
 		Bin: bin, Args: args, Want: secret.ModelProviders, AnyOf: true, Label: "providers",
 	})
 	return snap.Results[0]
