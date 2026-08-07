@@ -1,0 +1,12 @@
+{
+  "sandboxes": [
+    {
+      "name": "pix-demo",
+      "id": "not-a-uuid",
+      "agent": "pi",
+      "status": "running",
+      "workspaces": ["/workspace"],
+      "workspace_missing": false
+    }
+  ]
+}
