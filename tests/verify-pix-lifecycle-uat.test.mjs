@@ -283,7 +283,7 @@ test("the launchd preflight + reversible install runs BEFORE this script's first
 	assert.ok(installIdx < firstRunIdx, "'pix serve install' must run before the first pix run");
 });
 
-test("section [8] host services CONSUMES the already-installed daemon; it does not re-preflight or reinstall it", () => {
+test("section [8] Host services CONSUMES the already-installed daemon; it does not re-preflight or reinstall it", () => {
 	// Section7-was-[7]-is-now-[8]: after the reorder, the host-services check
 	// section must read $CUR_HOSTBIN/$INSTALLED_SERVE set by section [2], never
 	// call current_bin_path/running_bin_path or `pix serve install` itself —
@@ -1477,4 +1477,233 @@ test("verdict (behavioral): a fully clean run (rc=0, no FAIL, PASS>0, no SKIP) r
 	const { code, out } = runVerdict({ pass: 5, fail: 0, skip: 0, rc: 0 });
 	assert.strictEqual(code, 0);
 	assert.match(out, /UAT PASSED/);
+});
+
+// --- section [7]: the orphan-reaper false failure — `pix ls` vs raw `sbx ls
+// --json` ------------------------------------------------------------------
+// The false failure this closes: `pix rm --orphans` genuinely KEPT $BOX3 (its
+// own TeardownResult verdict was "kept-keep"), but the old check asked
+// `pix ls | grep -q "$BOX3"` — and `pix ls`/`pix ls --json` both parse the
+// PLAIN `sbx ls` human table (services/host/workflow/launch/sandbox.go's Ls
+// calls `sbx ls`, never `sbx ls --json`), which can OMIT a STOPPED sandbox.
+// A --keep box that survived --orphans is very often stopped at that point,
+// so the human table's gap read as "--orphans removed a --keep box" even
+// though it did not. The fix: (1) capture `pix rm --orphans`'s own verdict
+// line and require the exact "kept-keep" string, and (2) independently
+// corroborate via `sbx ls --json` directly (never through `pix ls`), reading
+// the canonical v0.38 `{"sandboxes": [...]}` wrapper.
+
+test("section [7] no longer asserts the orphan-reaper verdict or the post-rm absence through a bare `pix ls | grep`", () => {
+	const section7 = script.slice(script.indexOf('[7] --keep marker'), script.indexOf('[8] Host services'));
+	// The exact false-failure shape this replaces, both instances gone.
+	assert.doesNotMatch(section7, /pix rm --orphans >\/dev\/null 2>&1\nif pix ls/);
+	assert.doesNotMatch(section7, /pix rm "\$BOX3" >\/dev\/null 2>&1 && ! pix ls/);
+	// The ONE surviving bare `pix ls` check in this section is the unrelated,
+	// unchanged "--keep survived the last shell exiting" assertion — it must
+	// stay exactly as it was; this fix only touches the orphan-reaper verdict
+	// and the explicit-rm confirmation that follow it.
+	const bareLsChecks = section7.match(/pix ls 2>\/dev\/null \| grep -q "\$BOX3"/g) || [];
+	assert.strictEqual(bareLsChecks.length, 1, `expected exactly one surviving bare 'pix ls' check (the unchanged --keep-survived assertion), found ${bareLsChecks.length}`);
+});
+
+test("section [7] captures pix rm --orphans's own output and requires the exact kept-keep verdict for $BOX3", () => {
+	const section7 = script.slice(script.indexOf('[7] --keep marker'), script.indexOf('[8] Host services'));
+	assert.match(section7, /ORPHAN_OUT="\$\(pix rm --orphans 2>&1\)"/);
+	assert.match(section7, /grep -qF "\$BOX3: kept-keep"/);
+	assert.match(section7, /pass "pix rm --orphans's own verdict for \$BOX3 is kept-keep"/);
+});
+
+test("section [7] independently verifies $BOX3 via raw `sbx ls --json` (never `pix ls`/`pix ls --json`), both after --orphans and after the explicit rm, distinguishing a failed sbx probe from genuine absence", () => {
+	const section7 = script.slice(script.indexOf('[7] --keep marker'), script.indexOf('[8] Host services'));
+	assert.match(section7, /bounded_wait_sbx_listed "\$BOX3" 15/);
+	assert.match(section7, /bounded_wait_sbx_absent "\$BOX3" "\$UAT_CREATE_WAIT_SECS"/);
+	// Both waits are scored 0/2/other, the ERROR case (2) never conflated with
+	// a genuine timeout/absence (the wildcard *).
+	assert.match(section7, /2\) fail "raw 'sbx ls --json' independently confirms \$BOX3 remains after --orphans" "sbx ls --json itself failed/);
+	assert.match(section7, /2\) fail "an explicit 'pix rm' still removes a kept sandbox" "sbx ls --json itself failed after rm/);
+});
+
+// extractSection7OrphanBlock — the literal, executable text from capturing
+// `pix rm --orphans`'s output through the post-explicit-rm sbx confirmation,
+// so the behavioral tests below run the ACTUAL shipped bash, not a
+// reimplementation of it.
+function extractSection7OrphanBlock() {
+	const start = script.indexOf('ORPHAN_OUT="$(pix rm --orphans 2>&1)"');
+	assert.ok(start !== -1, "could not find the section [7] ORPHAN_OUT capture");
+	const endMarker =
+		'*) fail "an explicit \'pix rm\' still removes a kept sandbox" "$BOX3 still present in sbx\'s own canonical .sandboxes listing ${UAT_CREATE_WAIT_SECS}s after rm" ;;\nesac';
+	const end = script.indexOf(endMarker, start);
+	assert.ok(end !== -1, "could not find the end of the section [7] orphan block");
+	return script.slice(start, end + endMarker.length);
+}
+
+// runSection7OrphanBlock — runs the ACTUAL extracted block against stub
+// `pix` and `sbx` binaries. `pix ls`/`pix ls --json` deliberately NEVER
+// mention $BOX3 even while it exists — modeling the real human-table gap a
+// stopped sandbox can hit — while `sbx ls --json` (the raw, canonical probe)
+// DOES report it, exactly as the object-wrapped v0.38 schema does. If this
+// block regressed to consulting `pix ls` anywhere, this stub would turn that
+// into an immediate, loud FAIL; the whole point of these tests is that it no
+// longer can.
+function runSection7OrphanBlock({ sbxLsFails = false, orphansReallyRemovedIt = false } = {}) {
+	const work = fs.mkdtempSync(path.join(os.tmpdir(), "pix-uat-orphan7-"));
+	try {
+		const binDir = path.join(work, "bin");
+		fs.mkdirSync(binDir);
+		const boxFlag = path.join(work, "box3-exists");
+		fs.writeFileSync(boxFlag, ""); // $BOX3 exists (created + kept) before this block runs
+
+		const boxName = "pix-uat-orphan7-test-keep";
+
+		// Stub `pix`: `rm --orphans` reports the real kept-keep verdict line and,
+		// only if orphansReallyRemovedIt, actually deletes the flag (modeling a
+		// real regression in the reaper itself, not the check). `rm $BOX3` is the
+		// later EXPLICIT removal and always deletes the flag. `ls`/`ls --json`
+		// NEVER mention $BOX3, present or not — the human-table gap this test
+		// exists to make irrelevant.
+		const fakePix = path.join(binDir, "pix");
+		fs.writeFileSync(
+			fakePix,
+			[
+				"#!/bin/sh",
+				'if [ "$1" = "rm" ] && [ "$2" = "--orphans" ]; then',
+				orphansReallyRemovedIt ? `  rm -f "${boxFlag}"` : "  :",
+				orphansReallyRemovedIt
+					? `  printf '%s: removed (zero live references, no keep)\\n' "${boxName}"`
+					: `  printf '%s: kept-keep (created with --keep; only an explicit '"'"'pix rm'"'"' removes it)\\n' "${boxName}"`,
+				'  exit 0',
+				'elif [ "$1" = "rm" ]; then',
+				`  [ "$2" = "${boxName}" ] && rm -f "${boxFlag}"`,
+				'  exit 0',
+				'elif [ "$1" = "ls" ]; then',
+				'  printf \'NAME\\n\'', // never mentions $BOX3, present or not
+				'  exit 0',
+				'fi',
+				'exit 2',
+				"",
+			].join("\n"),
+			{ mode: 0o755 },
+		);
+
+		// Stub `sbx`: `ls --json` reports the canonical object-wrapped schema,
+		// reading $BOX3's real existence off boxFlag (or fails outright when
+		// sbxLsFails).
+		const fakeSbx = path.join(binDir, "sbx");
+		fs.writeFileSync(
+			fakeSbx,
+			[
+				"#!/bin/sh",
+				'if [ "$1" = "ls" ] && [ "$2" = "--json" ]; then',
+				sbxLsFails ? '  echo "boom: sbx daemon unreachable" >&2; exit 1' : "  :",
+				sbxLsFails ? "" : `  if [ -f "${boxFlag}" ]; then`,
+				sbxLsFails ? "" : `    printf '{"sandboxes": [{"name": "%s", "id": "1", "agent": "pi", "status": "exited", "workspaces": [], "workspace_missing": false}]}\\n' "${boxName}"`,
+				sbxLsFails ? "" : "  else",
+				sbxLsFails ? "" : '    printf \'{"sandboxes": []}\\n\'',
+				sbxLsFails ? "" : "  fi",
+				sbxLsFails ? "" : "  exit 0",
+				'fi',
+				'exit 2',
+				"",
+			]
+				.filter((l) => l !== "")
+				.join("\n"),
+			{ mode: 0o755 },
+		);
+
+		const fns = [extractFn("sbx_json_lists"), extractFn("bounded_wait_sbx_listed"), extractFn("bounded_wait_sbx_absent")].join("\n");
+		const harness = [
+			`PATH="${binDir}:$PATH"`,
+			`TMPDIR="${work}"`,
+			`BOX3="${boxName}"`,
+			'UAT_POLL_INTERVAL="0"',
+			'UAT_CREATE_WAIT_SECS="2"',
+			'PASS=0; FAIL=0',
+			'pass() { PASS=$((PASS+1)); printf "PASS:%s\\n" "$1"; }',
+			'fail() { FAIL=$((FAIL+1)); printf "FAIL:%s:%s\\n" "$1" "${2:-}"; }',
+			fns,
+			extractSection7OrphanBlock(),
+			'printf "TOTAL_PASS=%s TOTAL_FAIL=%s\\n" "$PASS" "$FAIL"',
+		].join("\n");
+		return execFileSync("bash", ["-c", harness], { encoding: "utf8", timeout: 15000 });
+	} finally {
+		fs.rmSync(work, { recursive: true, force: true });
+	}
+}
+
+test("section [7] orphan block (behavioral): $BOX3 stopped and omitted from `pix ls`, but present in `sbx ls --json` — every check PASSes, proving no false failure", () => {
+	const out = runSection7OrphanBlock();
+	assert.match(out, /PASS:pix rm --orphans's own verdict for pix-uat-orphan7-test-keep is kept-keep/);
+	assert.match(out, /PASS:raw 'sbx ls --json' independently confirms pix-uat-orphan7-test-keep remains after --orphans/);
+	assert.match(out, /PASS:explicit 'pix rm pix-uat-orphan7-test-keep' exited 0/);
+	assert.match(out, /PASS:an explicit 'pix rm' still removes a kept sandbox \(raw 'sbx ls --json' confirms absence\)/);
+	assert.doesNotMatch(out, /FAIL:/);
+	assert.match(out, /TOTAL_PASS=4 TOTAL_FAIL=0/);
+});
+
+test("section [7] orphan block (behavioral): a REAL orphan-reaper regression (it actually removed the --keep box) still FAILs both the verdict grep and the raw sbx confirmation — the fix does not paper over a genuine bug", () => {
+	const out = runSection7OrphanBlock({ orphansReallyRemovedIt: true });
+	assert.match(out, /FAIL:pix rm --orphans's own verdict for pix-uat-orphan7-test-keep is kept-keep/);
+	assert.match(out, /FAIL:raw 'sbx ls --json' independently confirms pix-uat-orphan7-test-keep remains after --orphans:pix-uat-orphan7-test-keep not found/);
+});
+
+test("section [7] orphan block (behavioral): a failed `sbx ls --json` is reported as a command failure, never silently read as absence", () => {
+	const out = runSection7OrphanBlock({ sbxLsFails: true });
+	assert.match(out, /PASS:pix rm --orphans's own verdict for pix-uat-orphan7-test-keep is kept-keep/);
+	assert.match(out, /FAIL:raw 'sbx ls --json' independently confirms pix-uat-orphan7-test-keep remains after --orphans:sbx ls --json itself failed/);
+	assert.doesNotMatch(out, /not found in sbx's own canonical/);
+});
+
+// --- sbx_json_lists: the raw-sbx counterpart to ls_json_lists ------------------
+test("sbx_json_lists (behavioral): reports LISTED / ABSENT / ERROR from sbx's own canonical {\"sandboxes\": [...]} schema, never collapsing a failure into absence", () => {
+	const work = fs.mkdtempSync(path.join(os.tmpdir(), "pix-uat-sbxjson-"));
+	try {
+		const binDir = path.join(work, "bin");
+		fs.mkdirSync(binDir);
+		const fakeSbx = path.join(binDir, "sbx");
+		fs.writeFileSync(
+			fakeSbx,
+			[
+				"#!/bin/sh",
+				'if [ "$1 $2" = "ls --json" ]; then',
+				'  if [ "${SBX_LS_FAIL:-0}" = "1" ]; then echo "boom: sbx daemon down" >&2; exit 1; fi',
+				'  if [ "${SBX_HAS_BOX:-0}" = "1" ]; then printf \'{"sandboxes": [{"name": "box-a", "status": "exited"}]}\\n\'; else printf \'{"sandboxes": []}\\n\'; fi',
+				"  exit 0",
+				"fi",
+				"exit 1",
+				"",
+			].join("\n"),
+			{ mode: 0o755 },
+		);
+		const fn = extractFn("sbx_json_lists");
+		const run = (env) =>
+			execFileSync("bash", ["-c", `PATH="${binDir}:$PATH"\nTMPDIR="${work}"\n${fn}\nsbx_json_lists box-a`], {
+				encoding: "utf8",
+				env: { ...process.env, ...env },
+			}).trim();
+
+		assert.strictEqual(run({ SBX_HAS_BOX: "1" }), "LISTED");
+		assert.strictEqual(run({ SBX_HAS_BOX: "0" }), "ABSENT");
+		assert.match(run({ SBX_LS_FAIL: "1" }), /^ERROR:.*boom: sbx daemon down/, "a failed sbx ls --json must report ERROR:<detail>, never ABSENT");
+	} finally {
+		fs.rmSync(work, { recursive: true, force: true });
+	}
+});
+
+test("sbx_json_lists (behavioral): a response that is not the canonical object-wrapped {\"sandboxes\": [...]} shape is an ERROR, never silently read as absence", () => {
+	const work = fs.mkdtempSync(path.join(os.tmpdir(), "pix-uat-sbxjson-shape-"));
+	try {
+		const binDir = path.join(work, "bin");
+		fs.mkdirSync(binDir);
+		const fakeSbx = path.join(binDir, "sbx");
+		// A bare array — the pre-v0.38 shape, or simply a broken response — never
+		// the {"sandboxes": [...]} wrapper this probe requires.
+		fs.writeFileSync(fakeSbx, '#!/bin/sh\nprintf \'[{"name": "box-a"}]\\n\'\nexit 0\n', { mode: 0o755 });
+		const fn = extractFn("sbx_json_lists");
+		const out = execFileSync("bash", ["-c", `PATH="${binDir}:$PATH"\nTMPDIR="${work}"\n${fn}\nsbx_json_lists box-a`], {
+			encoding: "utf8",
+		}).trim();
+		assert.match(out, /^ERROR:.*canonical/);
+	} finally {
+		fs.rmSync(work, { recursive: true, force: true });
+	}
 });

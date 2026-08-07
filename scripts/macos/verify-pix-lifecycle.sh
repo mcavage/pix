@@ -277,6 +277,72 @@ bounded_wait_absent() {
   return 1
 }
 
+# sbx_json_lists NAME — the RAW-sbx counterpart to ls_json_lists, deliberately
+# bypassing pix entirely. `pix ls`/`pix ls --json` both parse the PLAIN `sbx
+# ls` human table (services/host/workflow/launch/sandbox.go's Ls calls `sbx
+# ls`, never `sbx ls --json`) — and that human table can OMIT a STOPPED
+# sandbox, which is exactly the false failure this closes: `pix rm --orphans`
+# genuinely kept a --keep box, but `pix ls` no longer showed it. This asks
+# `sbx ls --json` directly and reads the canonical v0.38 object-wrapped
+# `{"sandboxes": [...]}` schema (sandbox/doc.go), so the verification does not
+# route back through the very code path whose human-table gap caused the false
+# failure. Same three-way contract as ls_json_lists: LISTED / ABSENT /
+# ERROR:<detail> — a failed or unrecognizable `sbx ls --json` is never read as
+# "absent".
+sbx_json_lists() {
+  local name="$1" out rc errfile
+  errfile="$(mktemp "${TMPDIR:-/tmp}/pix-uat-sbxjson.XXXXXX")"
+  out="$(sbx ls --json 2>"$errfile")"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf 'ERROR:sbx ls --json exited %d: %s\n' "$rc" "$(tr '\n' ' ' <"$errfile")"
+    rm -f "$errfile"
+    return 0
+  fi
+  rm -f "$errfile"
+  if ! printf '%s' "$out" | grep -q '"sandboxes"'; then
+    printf 'ERROR:sbx ls --json did not return the canonical {"sandboxes": [...]} wrapper: %s\n' "$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-200)"
+    return 0
+  fi
+  if printf '%s' "$out" | grep -qE "\"name\": *\"${name}\""; then
+    printf 'LISTED\n'
+  else
+    printf 'ABSENT\n'
+  fi
+}
+
+# bounded_wait_sbx_listed / bounded_wait_sbx_absent NAME MAXSECS — poll
+# sbx_json_lists once a second up to MAXSECS for the requested state. Same
+# return contract as bounded_wait_listed/bounded_wait_absent: 0 on the
+# positive reading, 1 on timeout still in the other state, 2 the instant
+# sbx_json_lists reports ERROR (a raw sbx command failure is never conflated
+# with a genuine absence or presence).
+bounded_wait_sbx_listed() {
+  local name="$1" max="${2:-30}" i=0 state
+  while [ "$i" -lt "$max" ]; do
+    state="$(sbx_json_lists "$name")"
+    case "$state" in
+      LISTED) return 0 ;;
+      ERROR:*) printf '%s\n' "$state" >&2; return 2 ;;
+    esac
+    i=$((i+1))
+    sleep "$UAT_POLL_INTERVAL"
+  done
+  return 1
+}
+bounded_wait_sbx_absent() {
+  local name="$1" max="${2:-30}" i=0 state
+  while [ "$i" -lt "$max" ]; do
+    state="$(sbx_json_lists "$name")"
+    case "$state" in
+      ABSENT) return 0 ;;
+      ERROR:*) printf '%s\n' "$state" >&2; return 2 ;;
+    esac
+    i=$((i+1))
+    sleep "$UAT_POLL_INTERVAL"
+  done
+  return 1
+}
+
 # assert_box_listed / assert_box_not_listed NAME LABEL — the pass/fail wrapper
 # around the bounded ls_json_lists waits that section [6] asserts through, so
 # every presence check there is both bounded (a wedged `pix ls` cannot hang
@@ -757,14 +823,38 @@ newbox "$BOX3"
 sleep 3
 if pix ls 2>/dev/null | grep -q "$BOX3"; then pass "--keep survived the last shell exiting"
 else fail "--keep survived the last shell exiting" "$BOX3 was torn down despite --keep"; fi
-pix rm --orphans >/dev/null 2>&1
-if pix ls 2>/dev/null | grep -q "$BOX3"; then pass "orphan reaper refuses a kept sandbox"
-else fail "orphan reaper refuses a kept sandbox" "--orphans removed a --keep box"; fi
-if pix rm "$BOX3" >/dev/null 2>&1 && ! pix ls 2>/dev/null | grep -q "$BOX3"; then
-  pass "an explicit 'pix rm' still removes a kept sandbox"
+# `pix rm --orphans` prints one line per sandbox it considered, in
+# TeardownResult.String()'s stable "$sandbox: $verdict ($detail)" shape
+# (services/host/workflow/launch/reap.go); a --keep box's verdict is the
+# literal string "kept-keep". Capture that output and require the EXACT
+# verdict for $BOX3, rather than inferring "still kept" indirectly from
+# whether some later listing happens to mention it.
+ORPHAN_OUT="$(pix rm --orphans 2>&1)"
+if printf '%s' "$ORPHAN_OUT" | grep -qF "$BOX3: kept-keep"; then
+  pass "pix rm --orphans's own verdict for $BOX3 is kept-keep"
 else
-  fail "explicit rm of a kept sandbox" "$BOX3 is still listed"
+  fail "pix rm --orphans's own verdict for $BOX3 is kept-keep" "no '$BOX3: kept-keep' line in: $(printf '%s' "$ORPHAN_OUT" | tr '\n' ' ')"
 fi
+# Independently corroborate that verdict against sbx's OWN canonical state —
+# never through `pix ls`/`pix ls --json`, which parse the plain `sbx ls`
+# human table and can OMIT a stopped sandbox (the false failure this
+# closes): a --keep box that survived --orphans is very often STOPPED, not
+# running, at this point.
+case "$(bounded_wait_sbx_listed "$BOX3" 15; echo $?)" in
+  0) pass "raw 'sbx ls --json' independently confirms $BOX3 remains after --orphans" ;;
+  2) fail "raw 'sbx ls --json' independently confirms $BOX3 remains after --orphans" "sbx ls --json itself failed — not merely absent" ;;
+  *) fail "raw 'sbx ls --json' independently confirms $BOX3 remains after --orphans" "$BOX3 not found in sbx's own canonical .sandboxes listing" ;;
+esac
+if pix rm "$BOX3" >/dev/null 2>&1; then
+  pass "explicit 'pix rm $BOX3' exited 0"
+else
+  fail "explicit 'pix rm $BOX3' exited 0" "pix rm $BOX3 exited nonzero"
+fi
+case "$(bounded_wait_sbx_absent "$BOX3" "$UAT_CREATE_WAIT_SECS"; echo $?)" in
+  0) pass "an explicit 'pix rm' still removes a kept sandbox (raw 'sbx ls --json' confirms absence)" ;;
+  2) fail "an explicit 'pix rm' still removes a kept sandbox" "sbx ls --json itself failed after rm — cannot confirm absence" ;;
+  *) fail "an explicit 'pix rm' still removes a kept sandbox" "$BOX3 still present in sbx's own canonical .sandboxes listing ${UAT_CREATE_WAIT_SECS}s after rm" ;;
+esac
 
 # --- 8. host services: consume the ALREADY-installed managed daemon -----------
 if [ "$WITH_SERVICES" = 0 ]; then
