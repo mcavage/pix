@@ -82,6 +82,23 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 - `lib/recall-message.ts` no longer documents the deleted knowledge store
   (`:11436`, `KNOWLEDGE_CHAR_BUDGET`, `/knowledge`) as live behaviour; the
   per-channel budget rationale is restated for the store that actually exists.
+- **`scripts/macos/verify-pix-lifecycle.sh` false failures.** The OAuth pass no
+  longer reads its confirmation prompt from the script's own stdin (a
+  background/CI run with stdin closed hung or reported a false FAIL); it now
+  asserts `pix mcp auth --all`'s own exit code, certifies completion against a
+  machine-readable probe (`pix doctor --json`'s per-server
+  registered/authenticated evidence), and treats an optional human
+  confirmation — bounded, `/dev/tty`-only — as SKIP, never FAIL, when no TTY
+  answers. The `mcp ls` "registration, not attachment" check no longer greps
+  for the bare substring `attached`, which always matched `mcp ls`'s own
+  honest disclaimer ("not what's attached to...") and so could never pass; it
+  now asserts the disclaimer positively and checks for a precise present-tense
+  attachment claim instead. The script tracks and restores any MCP catalog
+  bundle it registers, redirects every backgrounded `pix run`'s stdin from
+  `/dev/null`, bounds every `wait` on one (`bounded_wait`), and preflights
+  WHICH `pix-host` binary an already-running `serve` is before trusting it —
+  refusing with the exact repair command on a stale/unmanaged mismatch instead
+  of silently certifying it.
 
 ### Legal / release
 

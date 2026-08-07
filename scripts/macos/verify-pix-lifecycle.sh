@@ -22,8 +22,15 @@
 #   * It never changes your working directory out from under you: all work
 #     happens in a temp tree, and the final check asserts $PWD is what it was.
 #   * It restores host state it changed (a serve it installed is uninstalled,
-#     which also covers a serve it stopped mid-run) in a trap that runs on
-#     every exit path.
+#     which also covers a serve it stopped mid-run; an MCP catalog bundle it
+#     registered is removed again) in a trap that runs on every exit path.
+#   * It never certifies a stale daemon: host-service checks preflight WHICH
+#     pix-host binary an already-running serve is, and refuse rather than
+#     silently test one that does not match this build.
+#   * The optional interactive OAuth confirmation reads only from /dev/tty,
+#     with a bound, and a missing TTY is SKIP, never FAIL — the real verdict
+#     comes from a machine-readable probe (pix doctor --json), not a human's
+#     say-so.
 #
 # Exit codes: 0 all checks passed, 1 a check failed, 2 the run was incomplete
 # (missing prerequisite, refused to start, cleanup could not finish).
@@ -39,6 +46,8 @@ PASS=0; FAIL=0; SKIP=0
 CREATED_BOXES=()
 EXTRA_BOXES=()   # digest-named boxes this run created (names discovered, not chosen)
 INSTALLED_SERVE=0
+MCP_BUNDLE_ADDED=0        # this run registered the catalog bundle; restore it in cleanup
+MCP_CATALOG_BUNDLE="pix-catalog" # mcp.McpCatalogBundleName — keep in lockstep
 WORK=""
 
 for arg in "$@"; do
@@ -76,15 +85,6 @@ assert_contains() {
   else fail "$name" "output did not contain '$needle': $(printf '%s' "$out" | tail -3 | tr '\n' ' ')"; fi
 }
 
-# assert_not_contains "needle" "name" cmd...
-assert_not_contains() {
-  local needle="$1" name="$2"; shift 2
-  local out; out="$("$@" 2>&1)"
-  if printf '%s' "$out" | grep -qF -- "$needle"; then
-    fail "$name" "output unexpectedly contained '$needle'"
-  else pass "$name"; fi
-}
-
 # unit_num JSON FIELD — the numeric FIELD of the memory unit inside a
 # `serve status --json` payload (indented JSON, one field per line). Reading it
 # with awk beats a regex over the whole document, which would happily return
@@ -99,6 +99,54 @@ unit_num() {
 port_open() {
   if command -v nc >/dev/null 2>&1; then nc -z "$1" "$2" >/dev/null 2>&1
   else (exec 3<>"/dev/tcp/$1/$2") >/dev/null 2>&1; fi
+}
+
+# bounded_wait PID MAXSECS — polls once a second for PID to exit, up to
+# MAXSECS. A background `pix run` that wedges must never hang the whole UAT
+# run on a bare `wait`: past the bound it is killed and `wait` still reaps it
+# (avoiding a zombie), and the caller gets a definite answer either way.
+# Returns 0 if the process exited on its own, 1 if it had to be killed.
+bounded_wait() {
+  local pid="$1" max="${2:-60}" i=0
+  while kill -0 "$pid" 2>/dev/null; do
+    i=$((i+1))
+    if [ "$i" -ge "$max" ]; then
+      kill -9 "$pid" 2>/dev/null
+      wait "$pid" 2>/dev/null
+      return 1
+    fi
+    sleep 1
+  done
+  wait "$pid" 2>/dev/null
+  return 0
+}
+
+# abs_path PATH — realpath of an existing file without touching $PWD (a `cd`
+# in a subshell), so callers can compare two binaries by path even when one
+# arrived as a relative/symlinked name. Empty in, empty out.
+abs_path() {
+  local p="$1"
+  [ -n "$p" ] && [ -e "$p" ] || return 0
+  (cd "$(dirname "$p")" 2>/dev/null && printf '%s/%s\n' "$(pwd -P)" "$(basename "$p")")
+}
+
+# current_bin_path NAME — the absolute, symlink-resolved path NAME would run
+# as right now (empty if NAME is not on PATH).
+current_bin_path() { abs_path "$(command -v "$1" 2>/dev/null)"; }
+
+# running_bin_path PID — best-effort absolute path of PID's executable, so the
+# host-services section can tell an already-running serve APART from the
+# pix-host this run just built, instead of silently trusting whatever answers
+# :11435. Empty means "could not tell" — never treat that as a match.
+running_bin_path() {
+  local pid="$1" p=""
+  if command -v lsof >/dev/null 2>&1; then
+    p="$(lsof -p "$pid" 2>/dev/null | awk '$4=="txt"{print $NF; exit}')"
+  fi
+  if [ -z "$p" ]; then
+    p="$(ps -p "$pid" -o comm= 2>/dev/null | awk '{$1=$1; print; exit}')"
+  fi
+  abs_path "$p"
 }
 
 # --- guards --------------------------------------------------------------------
@@ -144,6 +192,11 @@ cleanup() {
     pix serve uninstall >/dev/null 2>&1 \
       && printf '  launchd service uninstalled\n' \
       || printf '  %s could not uninstall the launchd service; run: pix serve uninstall\n' "$(red '!')"
+  fi
+  if [ "$MCP_BUNDLE_ADDED" = 1 ]; then
+    pix mcp bundle rm "$MCP_CATALOG_BUNDLE" >/dev/null 2>&1 \
+      && printf '  %s MCP bundle removed (restored pre-run state)\n' "$MCP_CATALOG_BUNDLE" \
+      || printf '  %s could not remove the %s MCP bundle; run: pix mcp bundle rm %s\n' "$(red '!')" "$MCP_CATALOG_BUNDLE" "$MCP_CATALOG_BUNDLE"
   fi
   [ -n "$WORK" ] && rm -rf "$WORK"
   # cwd safety is an ASSERTION, not a hope.
@@ -267,19 +320,25 @@ assert_exit 2 "bare 'pix <not-a-dir>' refuses" pix definitely-not-a-directory-"$
 head1 "[5] Multi-shell references: the LAST shell tears down"
 BOX2="${BOX_PREFIX}-multi"
 newbox "$BOX2"
-(cd "$WORK/b/proj" && pix run . --name "$BOX2" -- -p 'sleep quietly' >/dev/null 2>&1) &
+# Background shells read from /dev/null, never this script's own stdin: an
+# inherited terminal fd would let a hung pi prompt block on human input that
+# will never come, and an inherited /dev/null (a backgrounded UAT run itself)
+# must not become an accidental EOF loop either. Both waits below are bounded
+# (bounded_wait): a wedged background pix run gets killed and reported, it
+# never hangs the rest of this script.
+(cd "$WORK/b/proj" && pix run . --name "$BOX2" -- -p 'sleep quietly' </dev/null >/dev/null 2>&1) &
 SH1=$!
 sleep 5
-(cd "$WORK/b/proj" && pix run . --name "$BOX2" -- -p 'second shell' >/dev/null 2>&1) &
+(cd "$WORK/b/proj" && pix run . --name "$BOX2" -- -p 'second shell' </dev/null >/dev/null 2>&1) &
 SH2=$!
 sleep 5
 if pix ls 2>/dev/null | grep -q "$BOX2"; then pass "$BOX2 is up with two shells attached"
 else fail "$BOX2 with two shells" "sandbox not listed while two shells hold it"; fi
-wait $SH1 2>/dev/null
+if bounded_wait "$SH1" 60; then :; else fail "first shell exited" "background pix run (pid $SH1) did not exit within 60s and was killed"; fi
 sleep 3
 if pix ls 2>/dev/null | grep -q "$BOX2"; then pass "sandbox survives the FIRST shell leaving"
 else fail "sandbox survives the first shell leaving" "torn down while a second shell still held it"; fi
-wait $SH2 2>/dev/null
+if bounded_wait "$SH2" 60; then :; else fail "second shell exited" "background pix run (pid $SH2) did not exit within 60s and was killed"; fi
 sleep 8
 if pix ls 2>/dev/null | grep -q "$BOX2"; then
   fail "teardown on last shell exit" "$BOX2 outlived every shell without --keep"
@@ -310,8 +369,34 @@ head1 "[7] Host services: serve status, launchd restart, memory unit restart"
 assert_exit 0 "pix serve status" pix serve status
 assert_contains "schema_version" "pix doctor --json is machine-readable" pix doctor --json
 
+# Preflight: never silently test whatever daemon happens to answer :11435. If
+# a serve is already running, prove it is THIS build's pix-host before any
+# check below relies on it — a stale, unmanaged daemon from before this
+# rebuild would otherwise pass every check below for a binary this run never
+# touched.
+CUR_HOSTBIN="$(current_bin_path pix-host)"
+printf '  testing pix-host binary: %s\n' "${CUR_HOSTBIN:-<pix-host not found on PATH>}"
+RUNNING_PID="$(pix serve status --json 2>/dev/null | sed -n 's/.*"pid"[: ]*\([0-9]*\).*/\1/p' | head -1)"
+if [ -n "$RUNNING_PID" ] && kill -0 "$RUNNING_PID" 2>/dev/null; then
+  RUNNING_BIN="$(running_bin_path "$RUNNING_PID")"
+  if [ -n "$CUR_HOSTBIN" ] && [ -n "$RUNNING_BIN" ]; then
+    if [ "$RUNNING_BIN" = "$CUR_HOSTBIN" ]; then
+      pass "an already-running serve (pid $RUNNING_PID) is this build's pix-host — testing the current binary, not a stale one"
+    else
+      die "a serve is already running (pid $RUNNING_PID, binary $RUNNING_BIN) that is NOT the pix-host this run just built ($CUR_HOSTBIN); testing it would certify a stale daemon. Fix: pix serve stop (or, if it is unmanaged: kill $RUNNING_PID), then re-run this script so it starts the current build."
+    fi
+  else
+    skip "which binary the running serve is" "could not resolve pid $RUNNING_PID's executable (no lsof/ps comm output) or pix-host is not on PATH — cannot prove the daemon under test matches this build"
+  fi
+fi
+
 if ! pix serve status 2>/dev/null | grep -q "running"; then
-  if pix serve install >/dev/null 2>&1; then INSTALLED_SERVE=1; sleep 5; else die "cannot start serve; the service checks cannot run"; fi
+  if pix serve install >/dev/null 2>&1; then
+    INSTALLED_SERVE=1; sleep 5
+    pass "installed and started serve from the current build ($CUR_HOSTBIN) — reversible: uninstalled on exit"
+  else
+    die "cannot start serve; the service checks cannot run"
+  fi
 fi
 
 UNITS="$(pix serve status --json 2>/dev/null)"
@@ -394,22 +479,73 @@ head1 "[8] External OAuth-backed MCP servers"
 if [ "$WITH_OAUTH" = 0 ]; then
   skip "remote OAuth servers" "--with-oauth not passed (this run is NOT a full release verdict)"
 else
-  assert_exit 0 "pix mcp bundle registers the public catalog" pix mcp bundle
+  PRE_MCP_LS="$(pix mcp ls 2>&1)"
+  if printf '%s' "$PRE_MCP_LS" | grep -qF "$MCP_CATALOG_BUNDLE"; then
+    skip "mcp bundle registration" "$MCP_CATALOG_BUNDLE was already registered before this run — not ours to add or remove"
+  elif pix mcp bundle >/dev/null 2>&1; then
+    MCP_BUNDLE_ADDED=1
+    pass "pix mcp bundle registers the public catalog"
+  else
+    fail "pix mcp bundle registers the public catalog" "pix mcp bundle exited non-zero"
+  fi
   assert_exit 0 "pix mcp ls" pix mcp ls
   for s in notion atlassian granola; do
     assert_contains "$s" "catalog server $s is registered" pix mcp ls
   done
-  printf '\n  A browser will open per server. Complete each OAuth flow, then return here.\n'
-  pix mcp auth --all
-  printf '  Did every OAuth flow complete without an error? [y/N] '
-  read -r ans
-  case "$ans" in
-    y|Y|yes) pass "operator confirmed every remote OAuth flow completed" ;;
-    *) fail "remote OAuth flows" "operator did not confirm completion" ;;
-  esac
-  # Registration is host state; a session sees tools only if attached. Prove the
-  # distinction is still reported honestly rather than as "attached".
-  assert_not_contains "attached" "mcp ls reports registration, not session attachment" pix mcp ls
+
+  printf '\n  A browser will open per server to complete each OAuth flow.\n'
+  assert_exit 0 "pix mcp auth --all completed" pix mcp auth --all
+
+  # Completion is CERTIFIED by a machine-readable probe, never by an operator's
+  # say-so: pix doctor --json runs health/mcp.go's own registered+authenticated
+  # check for every configured remote, in the exact same words doctor always
+  # uses. A nervous or absent operator can never manufacture a PASS this way,
+  # and a truthful gap can never be waved through by a hopeful click either.
+  DOCTOR_JSON="$(pix doctor --json 2>/dev/null)"
+  for s in notion atlassian granola; do
+    if printf '%s' "$DOCTOR_JSON" | grep -qF "$s: registered, not authenticated"; then
+      fail "catalog server $s authenticated" "pix doctor --json still reports it unauthenticated after 'pix mcp auth --all'"
+    elif printf '%s' "$DOCTOR_JSON" | grep -qF "$s:"; then
+      pass "catalog server $s authenticated (pix doctor --json evidence)"
+    else
+      skip "catalog server $s auth" "pix doctor --json carries no evidence line for $s"
+    fi
+  done
+
+  # Optional human confirmation. It can only ADD a pass on top of the machine
+  # verdict above, never substitute for it: read from /dev/tty specifically
+  # (never this script's own stdin — a background/CI run may have that pointed
+  # at /dev/null), bounded with `read -t` so a silent terminal can never hang
+  # the run, and a closed/absent/timed-out TTY is SKIP, not FAIL, since the
+  # machine probe above already rendered the real verdict.
+  if [ -r /dev/tty ] && [ -w /dev/tty ] 2>/dev/null; then
+    printf '  Optional: did every OAuth browser flow look right to you? [y/N] ' >/dev/tty
+    if read -r -t 30 ans </dev/tty; then
+      case "$ans" in
+        y|Y|yes) pass "operator confirmed the OAuth flows looked right" ;;
+        *) skip "operator confirmation" "operator answered '$ans' — the machine probe above is the actual verdict" ;;
+      esac
+    else
+      skip "operator confirmation" "no answer on /dev/tty within 30s — the machine probe above is the actual verdict"
+    fi
+  else
+    skip "operator confirmation" "no controlling TTY available — the machine probe above is the actual verdict"
+  fi
+
+  # Registration is host state; a session sees tools only if attached. The
+  # disclaimer must say so HONESTLY (a positive claim) — and mcp ls must never
+  # assert present-tense session attachment (a precise negative claim). A bare
+  # `grep attached` check is wrong on its own terms here: the honest
+  # disclaimer's own prose says "not what's attached to..." and "attaches a
+  # registered server to a running sandbox now", both containing the substring
+  # "attached"/"attaches" while asserting exactly the fact this check wants.
+  assert_contains "not what's attached to" "mcp ls prints the honest host-registration disclaimer" pix mcp ls
+  MCP_LS_OUT="$(pix mcp ls 2>&1)"
+  if printf '%s' "$MCP_LS_OUT" | grep -qE "[Ii]s (now |currently )?attached to (your|this|the running) sandbox|[Ss]ession (is )?attached"; then
+    fail "mcp ls reports registration, not session attachment" "output made a present-tense attachment claim: $(printf '%s' "$MCP_LS_OUT" | grep -E '[Ii]s (now |currently )?attached|[Ss]ession (is )?attached' | head -1)"
+  else
+    pass "mcp ls reports registration, not session attachment"
+  fi
 fi
 
 head1 "Done — see the verdict below"

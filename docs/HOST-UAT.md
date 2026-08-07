@@ -81,16 +81,34 @@ What it asserts, and why each one is in a RELEASE gate rather than a unit test
 8. **Host services.** `pix serve status --json` publishes the supervision tree
    (identity, state, restarts, generation, reattached, last probe latency),
    `pix doctor --json` carries the same `supervisor` object, and neither leaks
-   anything credential-shaped.
+   anything credential-shaped. Before any of this, the script PREFLIGHTS an
+   already-running serve: it resolves the running pid's executable and
+   compares it to the `pix-host` this run just built. A mismatch dies with
+   the exact `pix serve stop`/`kill <pid>` command rather than silently
+   grading a stale unmanaged daemon; an unresolvable pid is SKIP (unproven),
+   never a silent pass. When nothing is running, it installs and starts the
+   current build itself — reversibly, uninstalled again on exit.
 9. **Memory unit restart.** The memory CHILD is SIGKILLed: `:11435` must never
    stop accepting connections, the unit's generation must advance, and `pix
    memory stats` must answer again.
 10. **launchd restart + mode-aware stop.** A managed serve killed with -9 is
     respawned by launchd; `pix serve stop` then actually stops it and it stays
     stopped (a bare SIGTERM would be undone by `KeepAlive` — invariant #3).
-11. **External OAuth hooks** (`--with-oauth`): the catalog bundle registers,
-    `pix mcp auth --all` completes per server, and `pix mcp ls` still reports
-    host REGISTRATION rather than claiming session attachment.
+11. **External OAuth hooks** (`--with-oauth`): the catalog bundle registers
+    (only if it was not already registered — the script tracks and restores
+    exactly the bundle state it added), the script ASSERTS `pix mcp auth
+    --all`'s own exit code (never just fires it and hopes), and completion is
+    then CERTIFIED against a machine-readable probe (`pix doctor --json`'s
+    per-server registered/authenticated evidence) rather than an operator's
+    say-so. An operator confirmation is optional and additive: it reads a
+    bounded `read -t` from `/dev/tty` specifically (never the script's own
+    stdin), and a closed, absent, or silent TTY is SKIP, never FAIL — the
+    machine probe is the real verdict either way. Finally, `pix mcp ls` is
+    checked for the honest host-registration disclaimer (a POSITIVE claim it
+    must contain) and for the absence of any present-tense session-attachment
+    claim (a precise NEGATIVE regex) — not a bare substring search for
+    "attached", which the disclaimer's own honest prose ("not what's attached
+    to...") would always trip.
 
 Safety properties of the script itself, asserted or enforced:
 
@@ -101,7 +119,15 @@ Safety properties of the script itself, asserted or enforced:
   and no `--force`, and greps ITSELF for those shapes before doing anything.
 - It works in a temp tree and asserts `$PWD` is unchanged at exit.
 - It uninstalls a launchd service it installed (which also covers a serve it
-  stopped mid-run) in a trap that runs on every exit path.
+  stopped mid-run), and removes an MCP catalog bundle it registered, in a trap
+  that runs on every exit path.
+- Every backgrounded `pix run` reads from `/dev/null`, never an inherited
+  terminal or the script's own stdin, and every `wait` on one is bounded
+  (`bounded_wait`): a wedged background run is killed and reported, never left
+  to hang the rest of the script.
+- Host-service checks preflight WHICH `pix-host` binary an already-running
+  `serve` is before trusting it, so the checks can never silently grade a
+  stale, unmanaged daemon left over from before this build.
 
 **Exit codes:** `0` every check passed · `1` a check failed · `2` incomplete
 (missing prerequisite, refused to start, or any SKIP — an incomplete run is not
