@@ -59,9 +59,17 @@ func TestAttachRef_BlocksBehindLifecycleHolderThenSucceeds(t *testing.T) {
 		t.Fatalf("lc.TryExclusive: %v", err)
 	}
 
+	// `start` before context.WithTimeout, not after: WithTimeout is what
+	// anchors the deadline, so sampling the clock afterwards measures only the
+	// tail of the window and silently subtracts any scheduling gap (GC or
+	// preemption under -race on a loaded runner) from the measurement instead
+	// of from the wait. That is the same defect that made the sibling test in
+	// lifecycle_test.go fail CI at 87ms against a 100ms deadline. A context
+	// deadline timer never fires early, so anchoring first makes the assertion
+	// below sound by construction rather than by 10ms of luck.
+	start := time.Now()
 	shortCtx, shortCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer shortCancel()
-	start := time.Now()
 	if _, err := AttachRefUnderLifecycle(shortCtx, dir, nil); !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("AttachRef while lifecycle held = %v, want wrapping context.DeadlineExceeded", err)
 	}

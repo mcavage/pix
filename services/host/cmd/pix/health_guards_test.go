@@ -284,6 +284,14 @@ func TestLaunchGateProbeModelKeysUsesTheProductionBudget(t *testing.T) {
 	bin := keyStore(t, "keystore", "#!/bin/sh\necho anthropic\n")
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	// Warm the fixture first, and throw the result away. The FIRST exec of a
+	// just-written executable pays a one-time cost the second does not (on
+	// macOS, Gatekeeper/XProtect inspection plus a cold page-in); under load
+	// that cost has exceeded the 2s production budget. Without this, `want`
+	// pays it and `got` does not, so the two disagree on a cold-vs-warm
+	// artifact rather than on the wiring this test exists to pin -- observed
+	// as want=unknown/"probe timed out" (2.001s) vs got=ready (86ms).
+	_ = launch.ProbeModelKeysBudget(ctx, health.StatusBudget, bin, "secret", "ls")
 	want := launch.ProbeModelKeysBudget(ctx, health.StatusBudget, bin, "secret", "ls")
 	got := launch.ProbeModelKeys(ctx, bin, "secret", "ls")
 	if got.Effective() != want.Effective() || got.Detail != want.Detail {
