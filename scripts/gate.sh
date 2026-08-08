@@ -105,7 +105,13 @@
 # Env knobs:
 #   GATE_BUDGET_MS  absolute hard-fail ceiling in ms (default 0 = off locally;
 #                   CI sets 75000 explicitly)
-#   GATE_TARGET_MS  soft warn line in ms (default 30000)
+#   GATE_TARGET_MS  soft warn line in ms (default 120000). Raised from 30000:
+#                   the suite runs ~55 s, so the old target fired on EVERY run.
+#                   A warning that is always on is not a warning, it is noise
+#                   that teaches you to skim past the gate's output -- which is
+#                   the one place a real finding would appear. 2 min leaves real
+#                   headroom above today's number, so when it does fire it means
+#                   something.
 #   GATE_SLOW_MS    per-test "reviewable finding" line (default 1000)
 #   GATE_OUT_DIR    where the timing artifact is written (default out/gate)
 set -uo pipefail
@@ -114,7 +120,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 GATE_BUDGET_MS="${GATE_BUDGET_MS:-0}"
-GATE_TARGET_MS="${GATE_TARGET_MS:-30000}"
+GATE_TARGET_MS="${GATE_TARGET_MS:-120000}"
 GATE_SLOW_MS="${GATE_SLOW_MS:-1000}"
 GATE_OUT_DIR="${GATE_OUT_DIR:-$ROOT/out/gate}"
 
