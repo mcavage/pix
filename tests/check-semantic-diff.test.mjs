@@ -651,7 +651,10 @@ test("post-merge on THIS repo: resolveDefaultBase does not silently degrade to t
 
 	const resolved = resolveDefaultBase(REPO_ROOT);
 	assert.notEqual(resolved, staleMergeBase, "must not use a merge-base that cannot see the rules directory at all");
-	assert.equal(resolved, "HEAD~1", "falls through to the literal HEAD~1, the next meaningful candidate on this long-lived branch");
+	assert.ok(
+		resolved === "HEAD~1" || resolved === "HEAD^2",
+		`expected a meaningful rules-bearing parent (ordinary branch HEAD~1 or GitHub synthetic-merge PR head HEAD^2), got ${resolved}`,
+	);
 
 	const drift = execFileSync("node", [CLI, "--root", REPO_ROOT, "--base", resolved, "--json"], { encoding: "utf8" });
 	const parsed = JSON.parse(drift);

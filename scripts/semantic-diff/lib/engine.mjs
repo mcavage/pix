@@ -477,7 +477,11 @@ function candidateHasRules(root, rulesDir, base) {
  */
 export function resolveDefaultBase(root, rulesDir = path.join(root, "scripts", "semantic-diff", "rules")) {
 	const envBase = process.env.SEMANTIC_DIFF_BASE_SHA;
-	if (envBase && gitOk(root, ["rev-parse", "--verify", "-q", `${envBase}^{commit}`])) return envBase;
+	if (
+		envBase &&
+		gitOk(root, ["rev-parse", "--verify", "-q", `${envBase}^{commit}`]) &&
+		candidateHasRules(root, rulesDir, envBase)
+	) return envBase;
 
 	// Deliberately remote-tracking refs ONLY (never bare "main"/"master"): a
 	// local repo whose current branch IS main/master would otherwise merge-base
@@ -489,7 +493,18 @@ export function resolveDefaultBase(root, rulesDir = path.join(root, "scripts", "
 		if (base && candidateHasRules(root, rulesDir, base)) return base;
 	}
 
-	if (gitOk(root, ["rev-parse", "--verify", "-q", "HEAD~1"])) return "HEAD~1";
+	// GitHub pull_request jobs check out a synthetic merge commit: HEAD^1 is
+	// the base branch and HEAD^2 is the PR head. When the base predates the
+	// rules directory, HEAD^2 is the meaningful prior rules-bearing lineage;
+	// checking it before HEAD~1 avoids silently selecting the useless base
+	// parent. In an ordinary one-parent local branch HEAD^2 simply does not
+	// resolve and this falls through unchanged.
+	for (const parent of ["HEAD^2", "HEAD~1"]) {
+		if (
+			gitOk(root, ["rev-parse", "--verify", "-q", `${parent}^{commit}`]) &&
+			candidateHasRules(root, rulesDir, parent)
+		) return parent;
+	}
 
 	return "HEAD";
 }

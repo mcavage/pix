@@ -20,7 +20,19 @@ const DIGEST_A = "sha256:" + "a".repeat(64);
 const DIGEST_B = "sha256:" + "b".repeat(64);
 
 function run(script, args, opts = {}) {
-	return spawnSync("bash", [script, ...args], { encoding: "utf8", ...opts });
+	// Absolute bash keeps tests free to replace PATH when proving a dependency
+	// is absent; resolving `bash` through that deliberately-empty PATH would test
+	// the harness instead of the script.
+	return spawnSync("/bin/bash", [script, ...args], { encoding: "utf8", ...opts });
+}
+
+function runWithoutDocker(script, args) {
+	const emptyBin = fs.mkdtempSync(path.join(os.tmpdir(), "no-docker-path-"));
+	try {
+		return run(script, args, { env: { ...process.env, PATH: emptyBin } });
+	} finally {
+		fs.rmSync(emptyBin, { recursive: true, force: true });
+	}
 }
 
 test("resolve-base-digest.sh --parse extracts the digest from an imagetools inspect JSON fixture", () => {
@@ -55,11 +67,7 @@ test("resolve-base-digest.sh --parse fails closed on a fixture with no digest", 
 });
 
 test("resolve-base-digest.sh live mode fails closed (not fabricated) when docker is unavailable", () => {
-	// Keep enough PATH for bash/mktemp/grep/sed to resolve, but exclude any
-	// directory that might contain a real `docker` binary.
-	const res = run(resolveScript, ["dhi.io/node:25-debian13-dev"], {
-		env: { ...process.env, PATH: "/usr/bin:/bin" },
-	});
+	const res = runWithoutDocker(resolveScript, ["dhi.io/node:25-debian13-dev"]);
 	assert.notEqual(res.status, 0);
 	assert.match(res.stdout + res.stderr, /docker is not installed|refusing to fabricate/);
 });
@@ -178,9 +186,7 @@ test("tag-availability.sh: FAILS CLOSED on auth/network/unknown — never 'free'
 });
 
 test("tag-availability.sh live mode fails closed (not fabricated) when docker is unavailable", () => {
-	const res = run(tagScript, ["docker.io/mcavage/pix", "1.2.3"], {
-		env: { ...process.env, PATH: "/usr/bin:/bin" },
-	});
+	const res = runWithoutDocker(tagScript, ["docker.io/mcavage/pix", "1.2.3"]);
 	assert.equal(res.status, 2);
 	assert.match(res.stdout + res.stderr, /docker is not installed|refusing to fabricate/);
 	assert.doesNotMatch(res.stdout, /free/);
