@@ -66,8 +66,9 @@ const SAFETY_INVARIANTS = [
 	},
 	{
 		id: "existing-sandbox-untouched",
-		invariant: "An existing sandbox is never force-removed or replayed into; unknown sandbox state fails closed.",
-		phrases: ["never force-removed", "--replace", "FAILS CLOSED"],
+		invariant:
+			"An existing sandbox is never force-removed or replayed into; nothing recreates one implicitly (--replace is retired); unknown sandbox state fails closed.",
+		phrases: ["never force-removed", "`--replace` is RETIRED", "proof-gated `pix rm BOX`", "FAILS CLOSED"],
 	},
 	{
 		id: "pack-trust-gate",
@@ -77,8 +78,8 @@ const SAFETY_INVARIANTS = [
 	},
 	{
 		id: "host-mode-off-by-default",
-		invariant: "Host mode is off by default behind `host.enabled` and is never enabled by `pix setup`.",
-		phrases: ["host.enabled", "OFF by default", "host setup"],
+		invariant: "Host mode is retired outright (deleted, not merely off by default); `host.enabled` gates no real code path.",
+		phrases: ["Host mode is RETIRED", "host.enabled", "no code path"],
 	},
 	{
 		id: "secret-never-writes-values",

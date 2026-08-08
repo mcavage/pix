@@ -14,37 +14,38 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/hostenv"
+	"pix/host/inference"
+	"pix/host/secret"
+	"pix/host/sys/systest"
+	"pix/host/workflow/doctor"
+	"pix/host/workflow/models"
 )
 
 // reconcileEnv fakes a host where the named providers have resolvable 1Password
 // refs and every model answers its probe.
-func modelsAddEnv(t *testing.T, providers ...string) shellEnv {
+func modelsAddEnv(t *testing.T, providers ...string) hostenv.Env {
 	t.Helper()
 	var lines []string
 	for _, p := range providers {
-		for _, r := range providerKeyRefOrder {
-			if r.name == p {
-				lines = append(lines, r.envVar+"=op://v/i/f")
+		for _, r := range secret.ProviderKeyRefOrder {
+			if r.Name == p {
+				lines = append(lines, r.EnvVar+"=op://v/i/f")
 			}
 		}
 	}
 	body := strings.Join(lines, "\n") + "\n"
-	return shellEnv{
-		lookPath: func(n string) (string, error) { return "/usr/bin/" + n, nil },
-		readFile: func(path string) (string, error) {
-			if strings.HasSuffix(path, "hostmode.env") || strings.HasSuffix(path, "op-refs.env") {
-				return body, nil
-			}
-			return "", os.ErrNotExist
-		},
-		run: func(name string, args ...string) (string, error) {
-			if name == "op" {
-				return "sk-test\n", nil
-			}
-			return "", nil
-		},
-		directInferenceProbe: func(provider, model, key string) error { return nil },
-	}
+	return hostenv.Env{System: &systest.Fake{LookPathFn: func(n string) (string, error) { return "/usr/bin/" + n, nil }, ReadFileFn: func(path string) (string, error) {
+		if strings.HasSuffix(path, "hostmode.env") || strings.HasSuffix(path, "op-refs.env") {
+			return body, nil
+		}
+		return "", os.ErrNotExist
+	}, RunFn: func(name string, args ...string) (string, error) {
+		if name == "op" {
+			return "sk-test\n", nil
+		}
+		return "", nil
+	}}, DirectInference: func(provider, model, key string) error { return nil }}
 }
 
 func rosterProviders(cfg *config.Config) string {
@@ -70,9 +71,9 @@ func modelProvidersIn(ids []string) map[string]bool {
 // because it predates that field.
 //
 // The first design computed "which providers have I seen" from the live
-// bindings AFTER configureDirectInference had already bound google. Google
+// bindings AFTER models.ConfigureDirectInference had already bound google. Google
 // therefore counted as seen, widening skipped it, the roster stayed
-// anthropic-only, verifyDirectInference skipped its bindings (they were not in
+// anthropic-only, models.VerifyDirectInference skipped its bindings (they were not in
 // the roster), and the command printed success — reproducing the dead end
 // behind a green message. The baseline has to be captured PRE-mutation.
 func TestReconcileWidensRosterForNewProviderOnLegacyConfig(t *testing.T) {
@@ -88,7 +89,7 @@ func TestReconcileWidensRosterForNewProviderOnLegacyConfig(t *testing.T) {
 		// RosterProviders deliberately absent: this is a pre-feature config.
 	}}
 
-	res, err := reconcileDirectInference(cfg, modelsAddEnv(t, "anthropic", "google"), strings.NewReader(""), io.Discard, false, "")
+	res, err := models.ReconcileDirectInference(cfg, modelsAddEnv(t, "anthropic", "google"), strings.NewReader(""), io.Discard, false, "", "")
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -107,7 +108,7 @@ func TestReconcileWidensRosterForNewProviderOnLegacyConfig(t *testing.T) {
 	// wired" actually means. A roster entry that never got probed is the bug.
 	callable := false
 	for _, b := range cfg.Inference.Models {
-		if b.Backend == "google" && inferenceBindingCallable(cfg, b) {
+		if b.Backend == "google" && inference.Callable(cfg, b) {
 			callable = true
 		}
 	}
@@ -137,7 +138,7 @@ func TestReconcileWithNoNewProviderLeavesRosterAlone(t *testing.T) {
 		RosterProviders: []string{"anthropic"},
 	}}
 
-	if _, err := reconcileDirectInference(cfg, modelsAddEnv(t, "anthropic"), strings.NewReader(""), io.Discard, false, ""); err != nil {
+	if _, err := models.ReconcileDirectInference(cfg, modelsAddEnv(t, "anthropic"), strings.NewReader(""), io.Discard, false, "", ""); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 	if len(cfg.Inference.AllowedModels) != 1 || cfg.Inference.AllowedModels[0] != "anthropic/claude-sonnet-5" {
@@ -150,9 +151,9 @@ func TestReconcileWithNoNewProviderLeavesRosterAlone(t *testing.T) {
 // behind it.
 func TestReconcileRefusesUnderMandatoryPack(t *testing.T) {
 	cfg := &config.Config{Inference: config.InferenceConfig{ExclusiveSource: "/packs/work"}}
-	_, err := reconcileDirectInference(cfg, modelsAddEnv(t, "anthropic"), strings.NewReader(""), io.Discard, false, "")
-	if err != errInferenceExclusive {
-		t.Fatalf("want errInferenceExclusive, got %v", err)
+	_, err := models.ReconcileDirectInference(cfg, modelsAddEnv(t, "anthropic"), strings.NewReader(""), io.Discard, false, "", "")
+	if err != models.ErrInferenceExclusive {
+		t.Fatalf("want models.ErrInferenceExclusive, got %v", err)
 	}
 	if len(cfg.Inference.Models) != 0 || len(cfg.Inference.Backends) != 0 {
 		t.Fatalf("the refusal must happen before any mutation, got %+v", cfg.Inference)
@@ -173,7 +174,7 @@ func TestUnwiredProviderKeysReportsOnlyTheGap(t *testing.T) {
 			{Model: "anthropic/claude-sonnet-5", Backend: "anthropic", Upstream: "anthropic/claude-sonnet-5", Available: true, Verified: true},
 		},
 	}}
-	if gaps := unwiredProviderKeys(base, env); len(gaps) != 1 || gaps[0] != "google" {
+	if gaps := doctor.UnwiredProviderKeys(base, env); len(gaps) != 1 || gaps[0] != "google" {
 		t.Fatalf("google's key is set with no bindings; want [google], got %v", gaps)
 	}
 
@@ -185,7 +186,7 @@ func TestUnwiredProviderKeysReportsOnlyTheGap(t *testing.T) {
 	}
 	bound.Inference.Models = append(append([]config.InferenceModelBinding{}, base.Inference.Models...),
 		config.InferenceModelBinding{Model: "google/gemini-3.6-flash", Backend: "google", Upstream: "google/gemini-3.6-flash", Available: true})
-	if gaps := unwiredProviderKeys(&bound, env); len(gaps) != 0 {
+	if gaps := doctor.UnwiredProviderKeys(&bound, env); len(gaps) != 0 {
 		t.Fatalf("a bound-but-unverified provider is not a wiring gap, got %v", gaps)
 	}
 
@@ -193,35 +194,8 @@ func TestUnwiredProviderKeysReportsOnlyTheGap(t *testing.T) {
 	packed := bound
 	packed.Inference = base.Inference
 	packed.Inference.ExclusiveSource = "/packs/work"
-	if gaps := unwiredProviderKeys(&packed, env); len(gaps) != 0 {
+	if gaps := doctor.UnwiredProviderKeys(&packed, env); len(gaps) != 0 {
 		t.Fatalf("no gap should be reported while a pack owns inference, got %v", gaps)
-	}
-}
-
-// TestDoctorGapCheckIsOptionalAndActionable: it must be reported (a user has to
-// learn the key is doing nothing) without blocking a launch, since one wired
-// provider is enough to run.
-func TestDoctorGapCheckIsOptionalAndActionable(t *testing.T) {
-	cfg := &config.Config{Inference: config.InferenceConfig{
-		Backends: map[string]config.InferenceBackend{
-			"anthropic": {Driver: "native", Auth: "1password", KeyEnv: "ANTHROPIC_API_KEY"},
-		},
-		Models: []config.InferenceModelBinding{
-			{Model: "anthropic/claude-sonnet-5", Backend: "anthropic", Upstream: "anthropic/claude-sonnet-5", Available: true, Verified: true},
-		},
-	}}
-	c := inferenceBindingGapCheck(cfg)
-	if c == nil {
-		t.Skip("no gap detectable in this environment")
-	}
-	if c.requirement != requirementOptional {
-		t.Errorf("the gap must not block a launch; one wired provider is enough: %+v", c)
-	}
-	if c.note {
-		t.Errorf("the gap is actionable, so it must count in outstanding (note must be false): %+v", c)
-	}
-	if !strings.Contains(c.todo, "pix models add") {
-		t.Errorf("the gap's fix must be the command that closes it, got %q", c.todo)
 	}
 }
 
@@ -231,25 +205,22 @@ func TestDoctorGapCheckIsOptionalAndActionable(t *testing.T) {
 func TestSecretSetNudgesTowardWiring(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "op-refs.env")
-	env := shellEnv{
-		readFile:  func(string) (string, error) { return "", nil },
-		writeFile: func(string, []byte, os.FileMode) error { return nil },
-	}
-	env.readFile = func(p string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "", nil }, WriteFileFn: func(string, []byte, os.FileMode) error { return nil }}}
+	systest.Of(env.System).ReadFileFn = func(p string) (string, error) {
 		if p == path {
 			return "", nil
 		}
 		return "", os.ErrNotExist
 	}
 	var out bytes.Buffer
-	_ = runSecretSetLocked(env, &out, "ANTHROPIC_API_KEY", "op://v/i/f")
+	_ = secret.RunSecretSetLocked(env, &out, "ANTHROPIC_API_KEY", "op://v/i/f")
 	if !strings.Contains(out.String(), "pix models add anthropic") {
 		t.Errorf("setting a provider key must name the command that wires it, got:\n%s", out.String())
 	}
 
 	// A non-provider key has nothing to wire, so it must stay quiet.
 	out.Reset()
-	_ = runSecretSetLocked(env, &out, "SLACK_BOT_TOKEN", "op://v/i/f")
+	_ = secret.RunSecretSetLocked(env, &out, "SLACK_BOT_TOKEN", "op://v/i/f")
 	if strings.Contains(out.String(), "pix models add") {
 		t.Errorf("a non-provider secret must not suggest wiring a model provider, got:\n%s", out.String())
 	}

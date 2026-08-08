@@ -1,0 +1,47 @@
+{
+  "verb": "agent",
+  "cases": [
+    {
+      "name": "help",
+      "args": [
+        "agent",
+        "--help"
+      ],
+      "exitCode": 0,
+      "stream": "stdout",
+      "contains": [
+        "Usage: pix agent"
+      ]
+    },
+    {
+      "name": "bad-invocation",
+      "args": [
+        "agent",
+        "--this-is-not-a-real-flag-9x7z"
+      ],
+      "exitCode": 2,
+      "stream": "stderr",
+      "contains": [
+        "unknown flag"
+      ]
+    },
+    {
+      "name": "ls-json-key-contract",
+      "args": [
+        "agent",
+        "ls",
+        "--json"
+      ],
+      "exitCode": 0,
+      "stream": "stdout",
+      "jsonKeys": [
+        "Name",
+        "Model",
+        "Why",
+        "Intent",
+        "Tools",
+        "Budget"
+      ]
+    }
+  ]
+}

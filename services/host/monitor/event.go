@@ -1,14 +1,28 @@
+// Package monitor is the host-side half of `pix monitor`: a debug wiretap
+// that records a running sandbox's out-of-sandbox traffic (model
+// requests/responses, tool + MCP calls, context/control events) to bounded,
+// redacted, file-backed storage and reads it back out.
+//
+// event.go is the wire contract plus the redaction pass every write goes
+// through; store.go the bounded NDJSON store and its filesystem safety
+// layer; ingest.go the loopback-only writer and follow.go the reader, which
+// share no state, only files.
 package monitor
+
+// The wire form is one flat JSON object per line discriminated by "kind",
+// field-for-field identical to the in-VM tap (extensions/monitor.ts;
+// tests/fixtures/monitor is the shared regression). An unrecognized kind
+// decodes to UnknownEvent, not an error, so a newer tap against an older
+// host loses nothing. Ingest bounds a whole line; this bounds each RETAINED
+// field — each type carries its own cap() and redacted() next to its fields.
 
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 )
 
-// Kind discriminates the flat wire event shape. See architecture.md Section
-// 2.3 — the wire encoding is a flat JSON object with a "kind" field, not a
-// nested {envelope,data}, so Go can unmarshal into one concrete struct per
-// kind after a cheap first pass on "kind".
+// Kind discriminates the flat wire event shape.
 type Kind string
 
 const (
@@ -21,7 +35,16 @@ const (
 	KindBlob             Kind = "blob"
 )
 
-// Envelope holds the common fields present on every event.
+const (
+	// maxFieldBytes caps free-form LONG fields, maxIDBytes short id/label/
+	// hash fields, and maxListEntries decoded slice LENGTH — which per-entry
+	// caps alone do not (a huge array of tiny strings is the same attack).
+	maxFieldBytes  = 64 << 10
+	maxIDBytes     = 512
+	maxListEntries = 512
+)
+
+// Envelope holds the fields present on every event.
 type Envelope struct {
 	Kind      Kind   `json:"kind"`
 	SandboxID string `json:"sandboxId"`
@@ -31,28 +54,25 @@ type Envelope struct {
 	TS        int64  `json:"ts"`
 }
 
-// env is an alias for Envelope used ONLY as the anonymous-embedding field name
-// in each concrete event struct below. Anonymous embedding is what gives us
-// automatic encoding/json flattening (the envelope fields land at the top
-// level of the wire JSON, matching the frozen flat-object schema) without
-// hand-written MarshalJSON per kind. It has to be a distinct identifier from
-// "Envelope" because every concrete type also implements the Event interface
-// method `Envelope() Envelope` — Go disallows a field and a method of the
-// same name on the same type ("field and method with the same name"), so the
-// embedded field can't literally be named Envelope. The alias keeps the
-// underlying type identical (same struct, same JSON tags) so behavior is
-// unaffected; only the field's selector name differs.
+// Envelope returns e: embedding one satisfies Event with no per-type
+// method and flattens the envelope into the wire object.
+func (e Envelope) Envelope() Envelope { return e }
+
+// env is Envelope under a second name — Go forbids a field and a method sharing one.
 type env = Envelope
 
-// Event is implemented by every concrete event kind that flows through
-// /ingest and Subscribe(). Blob is data-only (sent via POST /blob, never
-// inline on the event stream) and does NOT implement Event.
+// Event is implemented by every concrete kind carried on /ingest.
 type Event interface {
 	Envelope() Envelope
-	Kind() Kind
 }
 
-// RequestSummary is the "summary" field of a provider_request event.
+// capEnvelope caps the ids on every event. A free function, not a method:
+// a type that forgets its own cap() cannot silently inherit this one and
+// leave its payload uncapped.
+func capEnvelope(e *Envelope) { capIDs(&e.SandboxID, &e.SessionID, &e.TurnID) }
+
+// RequestSummary is a provider_request's "summary"; its two hashes name
+// bodies the tap POSTs once each to /blob.
 type RequestSummary struct {
 	SystemPromptHash  string           `json:"systemPromptHash"`
 	SystemPromptBytes int              `json:"systemPromptBytes"`
@@ -61,12 +81,8 @@ type RequestSummary struct {
 	ToolCount         int              `json:"toolCount"`
 	ToolNames         []string         `json:"toolNames"`
 	McpToolNames      []string         `json:"mcpToolNames"`
-	// ToolSchemaHash is the content hash of the full tool-schema blob (the
-	// JSON schemas behind ToolNames/McpToolNames) that the extension posts
-	// separately via POST /blob (R2-6). It lets the TUI resolve the schema
-	// on demand instead of inlining it on every provider_request event.
-	ToolSchemaHash string `json:"toolSchemaHash"`
-	EstTokens      int    `json:"estTokens"`
+	ToolSchemaHash    string           `json:"toolSchemaHash"`
+	EstTokens         int              `json:"estTokens"`
 }
 
 // MessageSummary describes one message added since the previous request.
@@ -77,7 +93,7 @@ type MessageSummary struct {
 	Preview string `json:"preview"`
 }
 
-// UsageSummary is the "usage" field of a provider_response event.
+// UsageSummary is the "usage" field of a provider_response.
 type UsageSummary struct {
 	InputTokens  int `json:"inputTokens"`
 	OutputTokens int `json:"outputTokens"`
@@ -91,52 +107,66 @@ type TurnStart struct {
 	Trigger string `json:"trigger"`
 }
 
-func (e TurnStart) Envelope() Envelope { return e.env }
-func (e TurnStart) Kind() Kind         { return e.env.Kind }
+func (e *TurnStart) cap()           { capEnvelope(&e.env); capIDs(&e.Model, &e.Trigger) }
+func (e TurnStart) redacted() Event { e.Model = redactText(e.Model); return e }
 
-// ProviderRequest summarizes the plaintext request body sent to the model
-// provider for this turn.
+// ProviderRequest summarizes the request sent to the provider. Trigger
+// ("user" | "tool_result" | "compaction" | "unknown") is duplicated from
+// the paired turn_start so a reader never cross-references.
 type ProviderRequest struct {
 	env
 	Model        string         `json:"model"`
 	Summary      RequestSummary `json:"summary"`
 	ChangedBlobs []string       `json:"changedBlobs"`
-	// Trigger classifies why this turn started: "user" | "tool_result" |
-	// "compaction" | "unknown" — the same value the paired turn_start event
-	// carries (extensions/monitor.ts computes it once and sets it on both),
-	// so the TUI can hide a tool-result continuation turn from the feed
-	// without cross-referencing turn_start. Short identifier, capped with
-	// capID on decode like every other id/label field.
-	Trigger string `json:"trigger"`
+	Trigger      string         `json:"trigger"`
 }
 
-func (e ProviderRequest) Envelope() Envelope { return e.env }
-func (e ProviderRequest) Kind() Kind         { return e.env.Kind }
+func (e *ProviderRequest) cap() {
+	capEnvelope(&e.env)
+	s := &e.Summary
+	capIDs(&e.Model, &e.Trigger, &s.SystemPromptHash, &s.ToolSchemaHash)
+	s.ToolNames, s.McpToolNames = capIDList(s.ToolNames), capIDList(s.McpToolNames)
+	e.ChangedBlobs = capIDList(e.ChangedBlobs)
+	s.NewMessages = capLen(s.NewMessages)
+	for i := range s.NewMessages {
+		m := &s.NewMessages[i]
+		capIDs(&m.Role, &m.Hash)
+		capFields(&m.Preview)
+	}
+}
+func (e ProviderRequest) redacted() Event {
+	e.Model = redactText(e.Model)
+	for i := range e.Summary.NewMessages {
+		e.Summary.NewMessages[i].Preview = redactText(e.Summary.NewMessages[i].Preview)
+	}
+	return e
+}
 
-// ProviderResponse summarizes the provider's response for this turn.
+// ProviderResponse summarizes the response; TextHash names the full reply.
 type ProviderResponse struct {
 	env
-	Status     int           `json:"status"`
-	StopReason string        `json:"stopReason"`
-	Usage      *UsageSummary `json:"usage"`
-	// TextBytes/TextPreview/TextHash/ToolCalls capture what the assistant
-	// actually GENERATED this turn (R6-1) — previously this event only ever
-	// recorded status/usage, so the model's own reply was lost and only
-	// reappeared a turn later as a message in the NEXT provider_request.
-	// TextHash is the content hash of the full assistant text, which the
-	// extension POSTs separately via POST /blob (same first-seen-blob pattern
-	// as ToolSchemaHash/ArgsHash/ResultHash) so the TUI can resolve the full
-	// reply on demand instead of inlining it on every event.
-	TextBytes   int      `json:"textBytes"`
-	TextPreview string   `json:"textPreview"`
-	TextHash    string   `json:"textHash"`
-	ToolCalls   []string `json:"toolCalls"`
+	Status      int           `json:"status"`
+	StopReason  string        `json:"stopReason"`
+	Usage       *UsageSummary `json:"usage"`
+	TextBytes   int           `json:"textBytes"`
+	TextPreview string        `json:"textPreview"`
+	TextHash    string        `json:"textHash"`
+	ToolCalls   []string      `json:"toolCalls"`
 }
 
-func (e ProviderResponse) Envelope() Envelope { return e.env }
-func (e ProviderResponse) Kind() Kind         { return e.env.Kind }
+func (e *ProviderResponse) cap() {
+	capEnvelope(&e.env)
+	capIDs(&e.StopReason, &e.TextHash)
+	capFields(&e.TextPreview)
+	e.ToolCalls = capIDList(e.ToolCalls)
+}
+func (e ProviderResponse) redacted() Event {
+	e.StopReason, e.TextPreview = redactText(e.StopReason), redactText(e.TextPreview)
+	return e
+}
 
-// ToolStart marks the start of a tool (builtin, skill, or MCP) invocation.
+// ToolStart marks a tool (builtin, skill, or MCP) invocation. InvokesPi is
+// computed by the tap from the FULL command text, not from ArgsSummary.
 type ToolStart struct {
 	env
 	ToolID      string `json:"toolId"`
@@ -144,20 +174,15 @@ type ToolStart struct {
 	Name        string `json:"name"`
 	ArgsSummary string `json:"argsSummary"`
 	ArgsHash    string `json:"argsHash"`
-	// InvokesPi is computed by the extension from the FULL, untruncated
-	// command text (never from ArgsSummary, which truncatePreview caps to
-	// 200 chars — see extensions/monitor.ts commandInvokesPi). A long bash
-	// command (e.g. a multi-line for-loop spawning several `pi --print`
-	// children) can carry its `pi`/`pix` invocation well past char 200,
-	// past where ArgsSummary is cut off, which broke the TUI's
-	// spawn-correlation heuristic for any child spawned late in such a
-	// command. Shipping the flag pre-computed on the full text sidesteps
-	// that truncation entirely. Plain bool: no decode cap needed.
-	InvokesPi bool `json:"invokesPi"`
+	InvokesPi   bool   `json:"invokesPi"`
 }
 
-func (e ToolStart) Envelope() Envelope { return e.env }
-func (e ToolStart) Kind() Kind         { return e.env.Kind }
+func (e *ToolStart) cap() {
+	capEnvelope(&e.env)
+	capIDs(&e.ToolID, &e.Source, &e.Name, &e.ArgsHash)
+	capFields(&e.ArgsSummary)
+}
+func (e ToolStart) redacted() Event { e.ArgsSummary = redactText(e.ArgsSummary); return e }
 
 // ToolEnd marks the completion of a tool invocation.
 type ToolEnd struct {
@@ -170,240 +195,194 @@ type ToolEnd struct {
 	DurationMs    int    `json:"durationMs"`
 }
 
-func (e ToolEnd) Envelope() Envelope { return e.env }
-func (e ToolEnd) Kind() Kind         { return e.env.Kind }
+func (e *ToolEnd) cap() {
+	capEnvelope(&e.env)
+	capIDs(&e.ToolID, &e.ResultHash)
+	capFields(&e.ResultSummary)
+}
+func (e ToolEnd) redacted() Event { e.ResultSummary = redactText(e.ResultSummary); return e }
 
 // ContextEvent covers control-plane signals: skill loads, compaction, model
-// changes, thinking-level changes, etc.
+// and thinking-level changes.
 type ContextEvent struct {
 	env
 	CtxKind string `json:"ctxKind"`
 	Detail  string `json:"detail"`
 }
 
-func (e ContextEvent) Envelope() Envelope { return e.env }
-func (e ContextEvent) Kind() Kind         { return e.env.Kind }
+func (e *ContextEvent) cap()           { capEnvelope(&e.env); capIDs(&e.CtxKind); capFields(&e.Detail) }
+func (e ContextEvent) redacted() Event { e.Detail = redactText(e.Detail); return e }
 
-// Blob is a content-addressed payload body: system prompt, message text,
-// tool args/result, etc. It is data-only — sent via POST /blob, never inline
-// on the /ingest or /stream event feed — so it does not implement Event.
-type Blob struct {
-	Hash  string `json:"hash"`
-	Bytes int    `json:"bytes"`
-	Text  string `json:"text"`
+// UnknownEvent carries a well-formed event of an unrecognized kind: Raw is
+// the whole original line, kept (scrubbed) so nothing is lost.
+type UnknownEvent struct {
+	env
+	Raw []byte
 }
 
-// maxFieldBytes caps individual free-form LONG string fields on decode
-// (detail, previews, summaries) — R2-7. hub.go's maxIngestLine already
-// bounds the whole line, but a single field this large, retained for as
-// long as its event sits in the ring, is still a meaningful chunk of
-// memory on its own (2000 ring slots x a field near maxIngestLine adds up
-// fast). Truncation happens here, on decode, so it bounds RETAINED memory;
-// the wire bytes were already read off the socket regardless.
-const maxFieldBytes = 64 << 10 // 64KB
-
-// maxIdBytes caps short identifier/label fields on decode (model, trigger,
-// stopReason, source, name, role, ctxKind, turnId/sessionId/sandboxId, and
-// individual tool-name entries) — R3-2a. maxFieldBytes alone left every
-// OTHER decoded string bounded only by maxIngestLine (1MB): a single
-// event's model/name/id field has no business being anywhere near that
-// large, so it gets a much tighter, purpose-appropriate cap. 512 bytes is
-// generous headroom over any real identifier while still bounding retained
-// memory per field to something negligible.
-const maxIdBytes = 512
-
-// maxHashBytes caps hash fields defensively. Hashes are fixed-length
-// (sha256 hex = 64 chars) by construction, so this should never bind in
-// practice — R3-2a is explicit that capping a hash must never happen based
-// on content (a truncated preview next to the REAL hash of the full blob is
-// fine and expected), only defensively bounds a malformed/oversized value
-// arriving under a field name that looks safe.
-const maxHashBytes = 128
-
-// maxListEntries caps the LENGTH of decoded string slices (tool-name lists,
-// new-message lists, changed-blob-hash lists) — R3-2a. Per-entry field caps
-// don't stop an attacker/bug from sending a huge ARRAY of small strings
-// instead of one huge string; this bounds that independently.
-const maxListEntries = 512
-
-// capField truncates s to maxFieldBytes if it's longer, leaving shorter
-// strings (the overwhelming majority) untouched. Truncation is a plain byte
-// slice: it can land mid multi-byte UTF-8 rune (producing a possibly-invalid
-// trailing rune), which is a deliberate tradeoff — it never panics, and a
-// half-rune tail on a preview/detail field that already tells the reader
-// it's a truncated preview is cheap to accept versus rune-scanning every
-// decoded field.
-func capField(s string) string {
-	if len(s) <= maxFieldBytes {
-		return s
+// MarshalJSON returns Raw verbatim; empty Raw (a hand-built zero value —
+// decodeUnknown always sets it) falls back to the envelope.
+func (e UnknownEvent) MarshalJSON() ([]byte, error) {
+	if len(e.Raw) == 0 {
+		return json.Marshal(e.env)
 	}
-	return s[:maxFieldBytes]
+	return e.Raw, nil
 }
 
-// capID truncates s to maxIdBytes if it's longer. Same byte-slice tradeoff
-// as capField, just a much tighter bound for fields that are expected to be
-// tiny (model names, tool names, session/turn/sandbox ids, ...).
-func capID(s string) string {
-	if len(s) <= maxIdBytes {
-		return s
+// redacted has no known field shape, so it scrubs the WHOLE raw line. Safe
+// because every pattern replaces only the secret VALUE, never the JSON
+// key/colon/quotes around it (see TestRedactTextReplacesValueOnly).
+func (e UnknownEvent) redacted() Event { e.Raw = []byte(redactText(string(e.Raw))); return e }
+
+// capIDs and capFields truncate each target in place to its bound. Slicing
+// bytes can land mid-rune, accepted deliberately: it never panics, and a
+// half-rune preview tail beats rune-scanning every field.
+func capIDs(ss ...*string)    { capEach(maxIDBytes, ss) }
+func capFields(ss ...*string) { capEach(maxFieldBytes, ss) }
+func capEach(limit int, ss []*string) {
+	for _, p := range ss {
+		if len(*p) > limit {
+			*p = (*p)[:limit]
+		}
 	}
-	return s[:maxIdBytes]
 }
 
-// capHash truncates s to maxHashBytes if it's longer. Only a defensive
-// backstop (see maxHashBytes) — real hashes never hit this.
-func capHash(s string) string {
-	if len(s) <= maxHashBytes {
-		return s
-	}
-	return s[:maxHashBytes]
-}
-
-// capStringSlice caps list to at most maxListEntries entries, then applies
-// capFn to every remaining entry in place. Shared by every capped
-// string-slice field (tool names, mcp tool names, changed-blob hashes).
-func capStringSlice(list []string, capFn func(string) string) []string {
+// capLen caps a decoded slice's length; capIDList also caps each entry.
+func capLen[T any](list []T) []T {
 	if len(list) > maxListEntries {
-		list = list[:maxListEntries]
+		return list[:maxListEntries]
 	}
+	return list
+}
+func capIDList(list []string) []string {
+	list = capLen(list)
 	for i := range list {
-		list[i] = capFn(list[i])
+		capIDs(&list[i])
 	}
 	return list
 }
 
-// capEnvelopeIDs caps the free-text id fields carried on every event's
-// envelope (R3-2a) — sandboxId/sessionId/turnId are attacker-influenced
-// (they originate in the sandbox, not the host) and, like every other
-// decoded string, were previously bounded only by maxIngestLine.
-func capEnvelopeIDs(e *Envelope) {
-	e.SandboxID = capID(e.SandboxID)
-	e.SessionID = capID(e.SessionID)
-	e.TurnID = capID(e.TurnID)
+// capper is the pointer form of a decodable event: it caps itself in place.
+type capper[T any] interface {
+	*T
+	cap()
 }
 
-// eventSize estimates e's retained memory footprint for Ring's byte budget
-// (R2-7): the size of e's own wire encoding. That's the exact number of
-// bytes e's largest fields (context_event.detail, tool previews, etc.) would
-// occupy if retained in the ring, and it's cheap — one json.Marshal per
-// Ring.Add, dwarfed by the HTTP handling already happening around it. Every
-// concrete Event type here marshals cleanly (plain structs, no channels or
-// funcs), so the error path is essentially unreachable; it falls back to a
-// small constant rather than under-counting (and thus under-evicting) if it
-// ever does trip.
-func eventSize(e Event) int {
-	b, err := Encode(e)
-	if err != nil {
-		return 256
-	}
-	return len(b)
-}
-
-// Decode parses one NDJSON line into its concrete Event type, reading "kind"
-// first to pick the target struct. It returns an error for malformed JSON or
-// an unrecognized kind (including "blob", which is data-only and never
-// appears on the event stream). Every decoded field is capped after
-// unmarshal (R2-7, extended by R3-2a): long free-form fields (detail,
-// previews, summaries) to maxFieldBytes, short id/label fields (model,
-// trigger, stopReason, source, name, role, ctxKind, and every envelope id)
-// to maxIdBytes, hash fields defensively to maxHashBytes, and string-slice
-// fields (tool-name lists, new-message lists, changed-blob-hash lists) to
-// maxListEntries. The line itself is already bounded by hub.go's
-// maxIngestLine, but capping every field individually bounds what actually
-// stays resident once the event lands in the ring — without this, any
-// field NOT explicitly capped was bounded only by the 1MB line limit.
+// Decode parses one NDJSON line into its concrete Event and caps every
+// decoded string. Errors on malformed JSON, a missing kind, or data-only
+// "blob"; an unrecognized kind is forward compat (see decodeUnknown).
 func Decode(line []byte) (Event, error) {
 	var probe struct {
 		Kind Kind `json:"kind"`
 	}
-	if err := json.Unmarshal(line, &probe); err != nil {
+	switch err := json.Unmarshal(line, &probe); {
+	case err != nil:
 		return nil, fmt.Errorf("monitor: decode envelope: %w", err)
+	case probe.Kind == "":
+		return nil, fmt.Errorf("monitor: missing event kind")
+	case probe.Kind == KindBlob:
+		return nil, fmt.Errorf("monitor: %q is data-only and never appears on the event stream", probe.Kind)
 	}
 	switch probe.Kind {
 	case KindTurnStart:
-		var e TurnStart
-		if err := json.Unmarshal(line, &e); err != nil {
-			return nil, fmt.Errorf("monitor: decode %s: %w", probe.Kind, err)
-		}
-		capEnvelopeIDs(&e.env)
-		e.Model = capID(e.Model)
-		e.Trigger = capID(e.Trigger)
-		return e, nil
+		return decodeAs[TurnStart, *TurnStart](line, probe.Kind)
 	case KindProviderRequest:
-		var e ProviderRequest
-		if err := json.Unmarshal(line, &e); err != nil {
-			return nil, fmt.Errorf("monitor: decode %s: %w", probe.Kind, err)
-		}
-		capEnvelopeIDs(&e.env)
-		e.Model = capID(e.Model)
-		e.Trigger = capID(e.Trigger)
-		e.Summary.SystemPromptHash = capHash(e.Summary.SystemPromptHash)
-		e.Summary.ToolSchemaHash = capHash(e.Summary.ToolSchemaHash)
-		e.Summary.ToolNames = capStringSlice(e.Summary.ToolNames, capID)
-		e.Summary.McpToolNames = capStringSlice(e.Summary.McpToolNames, capID)
-		e.ChangedBlobs = capStringSlice(e.ChangedBlobs, capHash)
-		if len(e.Summary.NewMessages) > maxListEntries {
-			e.Summary.NewMessages = e.Summary.NewMessages[:maxListEntries]
-		}
-		for i := range e.Summary.NewMessages {
-			e.Summary.NewMessages[i].Role = capID(e.Summary.NewMessages[i].Role)
-			e.Summary.NewMessages[i].Hash = capHash(e.Summary.NewMessages[i].Hash)
-			e.Summary.NewMessages[i].Preview = capField(e.Summary.NewMessages[i].Preview)
-		}
-		return e, nil
+		return decodeAs[ProviderRequest, *ProviderRequest](line, probe.Kind)
 	case KindProviderResponse:
-		var e ProviderResponse
-		if err := json.Unmarshal(line, &e); err != nil {
-			return nil, fmt.Errorf("monitor: decode %s: %w", probe.Kind, err)
-		}
-		capEnvelopeIDs(&e.env)
-		e.StopReason = capID(e.StopReason)
-		e.TextPreview = capField(e.TextPreview)
-		e.TextHash = capHash(e.TextHash)
-		e.ToolCalls = capStringSlice(e.ToolCalls, capID)
-		return e, nil
+		return decodeAs[ProviderResponse, *ProviderResponse](line, probe.Kind)
 	case KindToolStart:
-		var e ToolStart
-		if err := json.Unmarshal(line, &e); err != nil {
-			return nil, fmt.Errorf("monitor: decode %s: %w", probe.Kind, err)
-		}
-		capEnvelopeIDs(&e.env)
-		e.ToolID = capID(e.ToolID)
-		e.Source = capID(e.Source)
-		e.Name = capID(e.Name)
-		e.ArgsSummary = capField(e.ArgsSummary)
-		e.ArgsHash = capHash(e.ArgsHash)
-		return e, nil
+		return decodeAs[ToolStart, *ToolStart](line, probe.Kind)
 	case KindToolEnd:
-		var e ToolEnd
-		if err := json.Unmarshal(line, &e); err != nil {
-			return nil, fmt.Errorf("monitor: decode %s: %w", probe.Kind, err)
-		}
-		capEnvelopeIDs(&e.env)
-		e.ToolID = capID(e.ToolID)
-		e.ResultSummary = capField(e.ResultSummary)
-		e.ResultHash = capHash(e.ResultHash)
-		return e, nil
+		return decodeAs[ToolEnd, *ToolEnd](line, probe.Kind)
 	case KindContextEvent:
-		var e ContextEvent
-		if err := json.Unmarshal(line, &e); err != nil {
-			return nil, fmt.Errorf("monitor: decode %s: %w", probe.Kind, err)
-		}
-		capEnvelopeIDs(&e.env)
-		e.CtxKind = capID(e.CtxKind)
-		e.Detail = capField(e.Detail)
-		return e, nil
-	default:
-		return nil, fmt.Errorf("monitor: unknown event kind %q", probe.Kind)
+		return decodeAs[ContextEvent, *ContextEvent](line, probe.Kind)
 	}
+	return decodeUnknown(line, probe.Kind)
 }
 
-// Encode marshals an Event back to its flat NDJSON-line wire form (no
-// trailing newline; the caller appends one per architecture.md 2.2).
+// decodeAs unmarshals line into T and applies T's own capping pass.
+func decodeAs[T Event, P capper[T]](line []byte, kind Kind) (Event, error) {
+	var e T
+	if err := json.Unmarshal(line, &e); err != nil {
+		return nil, fmt.Errorf("monitor: decode %s: %w", kind, err)
+	}
+	P(&e).cap()
+	return e, nil
+}
+
+// decodeUnknown builds an UnknownEvent: envelope best-effort, Raw bounded.
+func decodeUnknown(line []byte, kind Kind) (Event, error) {
+	var e Envelope
+	_ = json.Unmarshal(line, &e)
+	e.Kind = kind
+	capEnvelope(&e)
+	// No individual field shape to cap: bound the whole line as one blob.
+	raw := append([]byte(nil), line...)
+	if maxRaw := maxFieldBytes * 4; len(raw) > maxRaw {
+		raw = raw[:maxRaw]
+	}
+	return UnknownEvent{env: e, Raw: raw}, nil
+}
+
+// Encode marshals an Event to its flat wire line, newline excluded.
 func Encode(e Event) ([]byte, error) {
 	b, err := json.Marshal(e)
 	if err != nil {
-		return nil, fmt.Errorf("monitor: encode %s: %w", e.Kind(), err)
+		return nil, fmt.Errorf("monitor: encode %s: %w", e.Envelope().Kind, err)
 	}
 	return b, nil
+}
+
+// ─── redaction ──────────────────────────────────────────────────────────────
+//
+// The host-side line of defense against a secret landing on disk: every
+// byte this package writes (previews, blob bodies, whole unknown-kind raw
+// lines) is written redacted. Pattern matching, not a security boundary.
+
+// redactionMarker replaces a matched span; free of '"' and '\\' so it can
+// never corrupt the JSON it sits inside.
+const redactionMarker = "[REDACTED]"
+
+// secretPatterns are recognizable secret shapes, each applied in order with
+// its own replacement; a contextual shape keeps its group-1 prefix ("${1}"
+// expands empty for bare shapes) so only the VALUE is ever replaced.
+var secretPatterns = []struct {
+	re   *regexp.Regexp
+	repl string
+}{
+	{regexp.MustCompile(`AKIA[0-9A-Z]{16}`), redactionMarker},                                                                // AWS access key id
+	{regexp.MustCompile(`gh[oprsu]_[A-Za-z0-9]{20,}`), redactionMarker},                                                      // GitHub tokens
+	{regexp.MustCompile(`xox[baprs]-[0-9A-Za-z-]{10,}`), redactionMarker},                                                    // Slack tokens
+	{regexp.MustCompile(`sk-[A-Za-z0-9_-]{20,}`), redactionMarker},                                                           // OpenAI/Anthropic keys
+	{regexp.MustCompile(`AIza[0-9A-Za-z_-]{35}`), redactionMarker},                                                           // Google API key
+	{regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]+`), redactionMarker},                      // JWT (header.payload.signature)
+	{regexp.MustCompile(`(?i)(authorization["']?\s*[:=]\s*["']?bearer\s+)[A-Za-z0-9._~+/=-]{8,}`), "${1}" + redactionMarker}, // Authorization: Bearer <token>, token replaced
+	{regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----`), redactionMarker},
+	// Secret-named, double-quoted JSON key with an UNQUOTED (numeric) value:
+	// the marker must land as a JSON string. Ordered before the catch-all.
+	{regexp.MustCompile(`(?i)((?:api[_-]?key|secret|token|password|passwd)"\s*:\s*)[A-Za-z0-9/_.+-]{12,}`), `${1}"` + redactionMarker + `"`},
+	// Catch-all `key = value` / `"token": "value"` assignment shape: a
+	// secret-shaped NAME + operator (kept, group 1), then a long opaque VALUE.
+	{regexp.MustCompile(`(?i)((?:api[_-]?key|secret|token|password|passwd)["']?\s*[:=]\s*["']?)[A-Za-z0-9/_.+-]{12,}`), "${1}" + redactionMarker},
+}
+
+// redactText replaces every secret-shaped substring with its pattern's
+// replacement. Value-only replacement is load-bearing: this also runs over
+// whole raw JSON lines (unknown kinds, blob bodies), where consuming the
+// quotes or colon around a secret would corrupt the stored line.
+func redactText(s string) string {
+	for _, p := range secretPatterns {
+		s = p.re.ReplaceAllString(s, p.repl)
+	}
+	return s
+}
+
+// redact returns a scrubbed copy of e from the type's own redacted() (value
+// receiver: the caller's event is not replaced). Short labels are scrubbed
+// too (a hostile tap can hide a secret in one); hashes are content-addresses.
+func redact(e Event) Event {
+	if r, ok := e.(interface{ redacted() Event }); ok {
+		return r.redacted()
+	}
+	return e
 }

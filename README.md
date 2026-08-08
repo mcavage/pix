@@ -45,62 +45,44 @@ declare optional setup hooks. Run one explicitly with `--with`, for example:
 pix setup --pack 'git+https://github.com/your-org/work-pack.git#ref=main' --with hr
 ```
 
-`--pack` is repeatable; packs compose in command order. Without `--with`, every
-pack is still activated and all required hooks run. Only
-the named optional hook is skipped. Repeat `--with` to select more than one.
+`--pack` is repeatable; packs compose in command order. A pack's required
+setup hooks always run once it is activated; an optional hook runs only when
+named with `--with <id>` (leaving `--with` off runs no optional hooks at
+all). Repeat `--with` to select more than one, across the whole composed
+stack.
 
 <!-- PIX_PRIMARY_PATH_END -->
 
-## Optional: Google Workspace
+## Retired surfaces
 
-Google Workspace is not part of default setup. After Pix works normally, install
-the implementation dependency and opt in:
-
-```bash
-brew install openclaw/tap/gogcli
-pix gworkspace setup --account you@example.com
-pix gworkspace status
-```
-
-By default this is read-only. A trusted pack may opt into the narrower
-`--create-docs` profile: agents can create new Docs, but cannot edit existing
-Docs or send Gmail/Slack messages.
-
-Setup guides Google Cloud project/API/OAuth configuration, proves the exact
-headless read-only MCP process can authenticate and list tools, and only then
-saves the Pix configuration. Remove only Pix-owned registration and config with:
+The Google Workspace and Slack launcher verbs are retired. Google Workspace is
+a local stdio MCP server registered like any other one:
 
 ```bash
-pix gworkspace disable
+pix mcp register
 ```
 
-Your Google OAuth credentials are left untouched.
+Slack is different: pix ships no built-in Slack MCP server to register. It
+runs as an external container the sbx gateway manages, registered by manifest
+instead: `sbx mcp add slack --local --url <manifest>` (see
+[docs/design/slack-setup.md](docs/design/slack-setup.md)).
 
-## Optional: Slack
-
-Slack integration is optional and absent by default. Configure your Slack App's Client ID with:
-
-```bash
-pix config set slack.client_id <client_id>
-```
-
-Then run guided setup to authorize access via local PKCE OAuth (public client, no client secret required):
-
-```bash
-pix slack setup
-```
-
-This opens the OAuth grant in your browser, verifies your identity, and stores the rotating credential in a 1Password document (`Private` vault by default). Twelve-hour access tokens refresh automatically on use; you do not authorize every 12 hours. Renew the roughly monthly interactive grant with `pix slack auth`. Verify health with `pix slack status` and revoke access with `pix slack disable`. A static fallback (`pix slack setup --token-ref op://...`) is also available for pre-issued tokens.
+Typing a retired command prints a `PIX_RETIRED` line naming the replacement and
+exits 2: it never half-runs the old behavior. The full list of retired verbs
+and flags, with the replacement for each, is
+`services/host/cmd/pix/corpus/retirement.jsonl`.
 
 ## Daily use
 
 ```bash
 pix                         # fast status dashboard
 pix run [DIR]               # create or reattach a sandbox
+pix run -k                  # keep the sandbox alive when the last shell exits
 pix doctor                  # full readiness evidence
 pix task new <name>         # isolated parallel task sandbox
 pix task ls                 # list parallel tasks
-pix task harvest <name>     # collect a task's artifacts
+pix task path <name>        # where a task's clone lives (git does the rest)
+pix models add <provider>   # wire a model provider in, proven with a live request
 pix help --all              # complete command map
 ```
 

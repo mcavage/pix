@@ -1,0 +1,9 @@
+{
+  "_comment": "Fail-closed license-class gate (AC-REL-01). A dependency class not in allowedClasses fails the gate. weak-copyleft is allowed ONLY for modules explicitly named in weakCopyleftAllowlist — anything else classed weak-copyleft, or anything stronger (copyleft/network-copyleft/proprietary/unknown), fails closed even if it were somehow added to dependencies.json.",
+  "allowedClasses": ["permissive", "weak-copyleft"],
+  "weakCopyleftAllowlist": [
+    "github.com/hashicorp/go-plugin",
+    "github.com/hashicorp/yamux"
+  ],
+  "disallowedClasses": ["copyleft", "network-copyleft", "proprietary", "unknown"]
+}

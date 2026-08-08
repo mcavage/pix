@@ -1,84 +1,137 @@
 // `serve` is the plugin supervisor. It runs the long-running HTTP host services
-// (memory :11435, knowledge :11436, plus the dormant broker slot), resolving each
-// capability slot from config: a "builtin" impl runs IN-PROCESS exactly as
-// before (memoryMux()); a non-builtin impl is launched ONCE at
-// startup as a go-plugin subprocess and the HTTP shim proxies to it. Plugins
-// never bind ports — the supervisor owns the listeners and the stable host
-// surface every sandbox already depends on. The MCP servers (e.g. slack) are
-// stdio and spawned on demand by the sbx gateway (`mcp <name>`), not here.
-
+// (memory :11435, monitor ingest :11437), resolving each capability slot from
+// config. Plugins never bind ports — the supervisor owns the listeners and the
+// stable host surface every sandbox depends on. MCP servers are stdio and
+// spawned on demand by the sbx gateway, not here.
+//
+// monitor ingest is composed directly rather than as a supervised unit: it is one
+// loopback listener over a file-backed store, and it already owns both its
+// net.Listener (bound eagerly, so a port conflict is a startup error) and its
+// context-based Serve/shutdown. `ctx` is threaded through so cancelling it on
+// shutdown drains monitor the way SIGINT drains everything else. See
+// docs/design/monitor.md.
+//
+// Startup is two strict phases, in order (bindFrontDoors, then
+// spawnChildren): every built-in HTTP front door binds FIRST — before a
+// single pack/plugin child is spawned or the pidfile is written — so a port
+// conflict fails with zero subprocesses ever launched. Shutdown mirrors that
+// (performShutdown): drain every front door first with a bounded context,
+// then tear down the supervised backend, then wait for monitor's own drain —
+// and no exit path calls os.Exit until that full sequence has returned, so
+// exit-1 semantics on a fatal error are preserved but never early.
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"maps"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
+	"pix/host/cli"
 	"pix/host/config"
-	"pix/host/plugin"
+	"pix/host/monitor"
+	"pix/host/packinfo"
+	"pix/host/sys"
+	"pix/host/workflow/pack"
 )
 
+// hostService is one mux-based listener `serve` owns: a name for the log line,
+// the address it binds, the ALREADY-BOUND listener behind that address (see
+// bindFrontDoors: every front door binds before anything spawns), and the
+// handler behind it. There is no preflight hook by design — memory degrades
+// rather than refusing to serve (a missing Ollama must not stop the store from
+// answering).
 type hostService struct {
-	name  string
-	addr  string
-	mux   http.Handler
-	check func() error // optional serve-preflight; if non-nil it MUST pass or `serve` barfs
+	name string
+	addr string
+	ln   net.Listener
+	mux  http.Handler
 }
 
-// runServe starts the long-running HTTP host services. `enabled` is the list
-// from `services` in config.toml (config-friendly aliases: memory, knowledge,
-// broker); empty means "all". The MCP servers (e.g. slack) are stdio commands
-// run by the sbx gateway via `sbx mcp add`, not HTTP daemons.
-func runServe(enabled []string) {
+// frontDoorShutdownTimeout bounds how long a front-door http.Server is given to
+// drain its in-flight requests once shutdown starts, before Close() forces it —
+// the same ceiling monitor ingest's own Serve(ctx) already uses (see
+// monitor/ingest.go), so no front door can wedge shutdown past that.
+const frontDoorShutdownTimeout = 5 * time.Second
+
+// serveUsage documents the flags runServe parses (--bind/--port are
+// monitor-only; memory's bind/port stay env-only via MEMORY_BIND/MEMORY_PORT)
+// plus the enabled-service positionals. `pix serve` intercepts -h/--help and
+// prints service.Usage instead; this text is for a direct `pix-host serve -h`.
+const serveUsage = `usage: pix-host serve [service...] [--bind ADDR] [--port N]
+
+  Run the long-running host services: memory (:11435), monitor ingest
+  (:11437). No service names given: run every service in ` + "`services`" + `
+  (config.toml), or all of them if that is also unset.
+
+  --bind ADDR   monitor ingest listen address (default 127.0.0.1,
+                loopback-only). A non-loopback bind exposes the ingest
+                endpoint — no auth, full agent context and tool output — to
+                your local network; the process WARNS loudly when it does.
+  --port N      monitor ingest port (default 11437)
+`
+
+// serveServiceAliases is the config name -> internal service name table: the
+// WHOLE set of capabilities `serve` composes. A retired capability leaves here,
+// which is what makes `serve <retired>` a usage error, not a started daemon.
+func serveServiceAliases() map[string]string {
+	return map[string]string{"memory": "memory", "monitor": "monitor"}
+}
+
+func runServe(argv []string) {
+	fs := cli.NewFlagSet()
+	monitorPort := fs.Int("port", monitor.DefaultPort)
+	monitorBind := fs.Str("bind", monitor.DefaultBindAddr)
+	enabled, ferr := fs.Parse(argv)
+	if ferr != nil {
+		fmt.Fprintf(os.Stderr, "pix-host serve: %v\n\n%s", ferr, serveUsage)
+		os.Exit(2)
+	}
+	if fs.Help {
+		fmt.Print(serveUsage)
+		return
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("serve: load config: %v", err)
 	}
 
 	sup := &supervisor{}
-	// fatalf routes every fatal exit through plugin cleanup (F4). A plain
-	// log.Fatalf calls os.Exit and skips the signal-handler shutdown, orphaning
-	// any launched plugin subprocess; sup.shutdown() is a no-op with none running,
-	// so this is always safe. Use it for every fatal after `sup` exists.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// fatalf routes every fatal exit through plugin cleanup: a plain log.Fatalf
+	// skips the signal-handler shutdown and orphans a launched plugin subprocess.
+	// sup.shutdown() is a no-op with none running, so use it for EVERY fatal below.
 	fatalf := func(format string, a ...any) {
 		log.Printf("serve: "+format, a...)
+		cancel()
 		sup.shutdown()
 		os.Exit(1)
 	}
 
-	// The default path has NO built-in credential broker and mints NO bearer
-	// (memory/knowledge need no auth). The generic broker seam is dormant: a
-	// broker materializes only when an operator configures an external
-	// [plugins.broker] binary, which owns its own bearer through the retained
-	// plugin path — never the process-global env (see pluginEnv, F2).
 	selfPath, err := os.Executable()
 	if err != nil {
 		fatalf("locate self: %v", err)
 	}
 
-	// Resolve the enabled set FIRST (F1): CLI args win; else config's `services`;
-	// else empty == "all". Only enabled services are constructed, launched, and
-	// preflighted below — so `serve memory` never launches or preflights knowledge.
+	// Resolve the enabled set FIRST: CLI args win, else config's `services`, else
+	// empty == "all". Only enabled services are bound and launched.
 	effective := resolveServices(enabled, cfg.Services)
 	// config-friendly aliases -> internal service name.
-	alias := map[string]string{
-		"memory":    "memory",
-		"knowledge": "knowledge",
-		"broker":    "broker",
-	}
-	valid := make([]string, 0, len(alias))
-	for k := range alias {
-		valid = append(valid, k)
-	}
-	sort.Strings(valid)
+	alias := serveServiceAliases()
+	valid := slices.Sorted(maps.Keys(alias))
 	want := map[string]bool{}
 	for _, e := range effective {
 		if strings.TrimSpace(e) == "" {
@@ -92,188 +145,79 @@ func runServe(enabled []string) {
 	}
 	enabledSvc := func(name string) bool { return len(want) == 0 || want[name] }
 
-	var all []hostService
-	// Released on graceful shutdown (below), alongside the pidfile. Nil unless the
-	// built-in memory store runs in-process and took the store lock.
-	var memLockRelease func()
-
-	// memory: the built-in store runs IN-PROCESS (fast path — recall is per-turn);
-	// only a non-builtin impl is spawned as a plugin. memory degrades gracefully
-	// (recall -> keyword, capture off) and logs its own status, so no fatal
-	// preflight in either path.
-	if enabledSvc("memory") {
-		// Wire the configured model names into the in-process build (F6). An
-		// explicit env override still wins; otherwise the config value (or its
-		// default) applies.
-		applyMemoryModelEnv(cfg)
-		memSvc := hostService{name: "memory", addr: env("MEMORY_BIND", "127.0.0.1") + ":" + env("MEMORY_PORT", "11435")}
-		if spec := cfg.Plugin("memory"); spec.Impl == config.BuiltinImpl {
-			// Take the shared advisory store lock BEFORE opening the db — the
-			// correctness primitive that makes `restore`, this daemon, and every
-			// other live-serving entry point mutually exclusive, closing the
-			// port-probe TOCTOU (the store opens before the port binds). Held for the
-			// process lifetime; released on graceful shutdown. NON-BLOCKING: a held
-			// lock means another serve/holder owns the db, so fail loudly rather than
-			// deadlock (the port-in-use path guards double-serve; the lock is the
-			// correctness guarantee). fatalf routes the failure through supervisor
-			// cleanup so no already-launched plugin is orphaned.
-			memLockRelease = lockMemoryStoreOrFatal(fatalf)
-			// Build the store with error handling and route a failure through fatalf
-			// (F3): a bare log.Fatalf here would skip sup.shutdown() and orphan an
-			// already-launched external plugin subprocess.
-			store, hasEmb, berr := buildMemStore()
-			if berr != nil {
-				fatalf("%v", berr)
-			}
-			memSvc.mux = newMemoryMux(store, hasEmb)
-		} else {
-			h, lerr := sup.launch("memory", "memory", spec, selfPath, spec.ExtraEnv)
-			if lerr != nil {
-				fatalf("launch memory plugin: %v", lerr)
-			}
-			memSvc.mux = memoryProxyMux(h)
-		}
-		all = append(all, memSvc)
+	// Phase 1: bind every built-in HTTP front door EAGERLY — before a single
+	// pack/plugin child is spawned or the pidfile is claimed. bindFrontDoors has
+	// no access to `sup`/packinfo at all, so a bind failure here is
+	// STRUCTURALLY incapable of having spawned anything: a losing second
+	// `serve` racing an already-running daemon for the same port dies right
+	// here, on a plain "address already in use", with zero subprocesses to
+	// clean up.
+	fd, berr := bindFrontDoors(enabledSvc, *monitorBind, *monitorPort)
+	if berr != nil {
+		fatalf("%v", berr)
 	}
-
-	// knowledge: the OKF retrieval index. Opt-in (NOT in DefaultServices) — it only
-	// runs when named in SERVICES/config, so a fresh install pays nothing for it.
-	// Like memory, the built-in store runs IN-PROCESS (fast path); only a
-	// non-builtin impl is spawned as a plugin. The configured bundles are indexed
-	// at startup and it degrades loudly (empty index / keyword-only) rather than
-	// failing, so no fatal preflight in either path.
-	if enabledSvc("knowledge") {
-		// The knowledge embedder reuses the memory embed model knob (MEMORY_EMBED_MODEL);
-		// wire it in for the case where knowledge runs without memory enabled.
-		applyMemoryModelEnv(cfg)
-		knSvc := hostService{name: "knowledge", addr: env("KNOWLEDGE_BIND", "127.0.0.1") + ":" + env("KNOWLEDGE_PORT", "11436")}
-		if spec := cfg.Plugin("knowledge"); spec.Impl == config.BuiltinImpl {
-			// Route a build failure through fatalf (F3) so cleanup runs and any
-			// already-launched plugin subprocess is not orphaned.
-			store, _, kerr := buildKnowledgeStore()
-			if kerr != nil {
-				fatalf("%v", kerr)
-			}
-			bundles := knowledgeBundles(cfg)
-			if len(bundles) == 0 {
-				log.Print("knowledge: no bundles configured (set knowledge_bundles in config or KNOWLEDGE_BUNDLES); serving an empty index")
-			} else if n, indexed, rerr := store.reindex(bundles); rerr != nil {
-				log.Printf("knowledge: reindex failed (serving whatever was already indexed): %v", rerr)
-			} else {
-				log.Printf("knowledge: indexed %d concept(s) from %d bundle(s)", n, len(indexed))
-			}
-			knSvc.mux = knowledgeMux(store)
-		} else {
-			h, lerr := sup.launch("knowledge", "knowledge", spec, selfPath, spec.ExtraEnv)
-			if lerr != nil {
-				fatalf("launch knowledge plugin: %v", lerr)
-			}
-			// F2: the built-in path indexes the configured bundles at startup; the
-			// PLUGIN path must do the same or an external/self-exec knowledge plugin
-			// serves an EMPTY index. Reindex the freshly dispensed store with the same
-			// bundles + degrade behavior as the built-in branch.
-			ks, _ := h.get().(plugin.KnowledgeStore)
-			reindexKnowledgePlugin(ks, knowledgeBundles(cfg))
-			knSvc.mux = knowledgeProxyMux(h)
-		}
-		all = append(all, knSvc)
+	if len(fd.all) == 0 && fd.monitorSrv == nil {
+		fatalf("no services enabled (run: pix config set services %s)", strings.Join(valid, ","))
 	}
+	all, monitorSrv := fd.all, fd.monitorSrv
 
-	// broker: the DORMANT credential-broker slot. There is NO built-in broker, so
-	// with the default builtin impl this starts NOTHING (brokerService returns
-	// nil). It only materializes when an operator configures an external broker
-	// ([plugins.broker] with impl != builtin): then it is launched ONCE through the
-	// shared supervisor (sha-verified + env-isolated, F2), the dispensed
-	// CredentialBroker backs the stable /token shim, and it participates in
-	// shutdown — mirroring the memory/knowledge non-builtin path.
-	if enabledSvc("broker") {
-		brSvc, berr := brokerService(cfg, sup, selfPath)
-		if berr != nil {
-			fatalf("launch broker plugin: %v", berr)
-		}
-		if brSvc != nil {
-			all = append(all, *brSvc)
-		}
-	}
+	// Phase 2: only once EVERY front door above is bound do we spawn pack units
+	// and the memory plugin child — the one place either is ever launched.
+	spawnChildren(cfg, sup, selfPath, all, fatalf)
 
-	if len(all) == 0 {
-		fatalf("no services enabled (run: pix config set services memory)")
-	}
-
-	// Preflight: every enabled service validates its host dependency UP FRONT, and
-	// the whole `serve` barfs if any is broken — so you fix it now instead of
-	// discovering mid-session that a capability was dark the whole time (the service
-	// bound its port but couldn't actually serve). Services that degrade gracefully
-	// (memory) set no check. `all` already holds only enabled services.
-	var failures []string
-	for _, s := range all {
-		if s.check == nil {
-			continue
-		}
-		if err := s.check(); err != nil {
-			failures = append(failures, "  ✗ "+s.name+": "+err.Error())
-		} else {
-			log.Printf("preflight ok: %s", s.name)
-		}
-	}
-	if len(failures) > 0 {
-		fatalf("host service preflight FAILED — not starting:\n%s\nFix the above, then re-run `make serve`.", strings.Join(failures, "\n"))
-	}
-
-	// Record our pid so the launcher's `serve stop` / `serve status` can find and
-	// signal us safely (no blind pkill). A stale pidfile from a previous crash is
-	// overwritten — the new pid is authoritative. Best-effort: a failure only logs,
-	// and we remove the file again on graceful shutdown (below) and normal return.
+	// Record our pid so the launcher's `serve stop`/`serve status` can find and
+	// signal us safely (no blind pkill).
 	writeServePidFile()
 	defer removeServePidFile()
 	defer removeServeLazyMarker()
 
 	// fatalCh carries service-goroutine errors (e.g. port already in use) back to
-	// the main goroutine so deferred cleanup (pidfile, lazy marker) runs before
-	// exit rather than being skipped by a direct os.Exit in a side goroutine (M-4).
-	fatalCh := make(chan error, len(all)+1)
-
-	// sigCh receives SIGINT/SIGTERM for graceful shutdown. Handling it in the main
-	// goroutine's select (instead of a side goroutine calling os.Exit) ensures the
-	// deferred cleanup runs on normal signal handling (M-4).
+	// the main goroutine, and sigCh carries SIGINT/SIGTERM: both are handled in the
+	// select below rather than by a side goroutine calling os.Exit, so the deferred
+	// cleanup (pidfile, lazy marker) actually runs.
+	fatalCh := make(chan error, len(all)+2)
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
+	httpServers := make([]*http.Server, 0, len(all))
 	for _, s := range all {
 		s := s
-		// Bound HTTP servers: ReadTimeout prevents slow-loris header floods;
-		// WriteTimeout caps long-running handlers. Synthesis is the ceiling at ~60s,
-		// so 90s gives comfortable headroom. (M-1)
+		// Bound HTTP servers: ReadTimeout prevents slow-loris header floods,
+		// WriteTimeout caps long-running handlers. Synthesis is the ~60s ceiling.
 		srv := &http.Server{
 			Addr:         s.addr,
 			Handler:      s.mux,
 			ReadTimeout:  30 * time.Second,
 			WriteTimeout: 90 * time.Second,
 		}
+		httpServers = append(httpServers, srv)
 		log.Printf("starting %s on http://%s", s.name, s.addr)
 		go func() {
-			if err := srv.ListenAndServe(); err != nil {
+			if err := srv.Serve(s.ln); err != nil && err != http.ErrServerClosed {
 				fatalCh <- fmt.Errorf("%s: %v", s.name, err)
 			}
 		}()
 	}
 
-	// Block until a signal or a service failure. The select here (vs the former
-	// goroutine calling os.Exit directly) lets deferred cleanup run for both paths.
+	// monitor ingest runs its own Serve(ctx): cancelling ctx (inside
+	// shutdownFrontDoors, alongside every mux-based front door) is what stops
+	// it — there is no http.Server here for THIS process to Shutdown directly.
+	waitMonitor := serveMonitorAndWait(monitorSrv, ctx, fatalCh)
+
+	// Block until a signal or a service failure. Both paths run the SAME fixed
+	// shutdown order: drain every front door first, then the supervised
+	// backend, then wait for monitor's own graceful drain to finish. Neither
+	// path calls os.Exit until that full sequence has actually returned, so a
+	// fatal exit never skips the joined cleanup — exit 1 is preserved, just
+	// never early.
 	select {
 	case sig := <-sigCh:
 		log.Printf("serve: received %v; shutting down", sig)
-		sup.shutdown()
-		if memLockRelease != nil {
-			memLockRelease()
-		}
+		performShutdown(httpServers, cancel, sup.shutdown, waitMonitor)
 		// defers (removeServePidFile, removeServeLazyMarker) run on return
 	case err := <-fatalCh:
 		log.Printf("serve: fatal: %v", err)
-		sup.shutdown()
-		if memLockRelease != nil {
-			memLockRelease()
-		}
+		performShutdown(httpServers, cancel, sup.shutdown, waitMonitor)
 		// Explicitly run deferred cleanup before os.Exit since defers don't run
 		// when Exit is called (defers only run on return from runServe).
 		removeServePidFile()
@@ -282,84 +226,331 @@ func runServe(enabled []string) {
 	}
 }
 
+// serveFrontDoors is bindFrontDoors' result: every built-in HTTP front door,
+// already bound, plus the monitor ingest server (which owns its own listener).
+type serveFrontDoors struct {
+	all        []hostService
+	monitorSrv *monitor.IngestServer
+}
+
+// bindFrontDoors binds every built-in HTTP front door — memory's :11435
+// listener, monitor ingest's own loopback listener — and nothing else: it has
+// no `*supervisor`, no packinfo, no way to spawn a subprocess. That is the
+// whole point: a port conflict fails here, before runServe has any chance to
+// spawn a pack unit or the memory plugin child, so the failure can never
+// leave one orphaned. Called with a NON-nil error, the returned
+// serveFrontDoors is always the zero value — every listener bound during THIS
+// call is closed first, so a later failure (e.g. monitor, after memory
+// already bound) never leaks the earlier winner's socket.
+func bindFrontDoors(enabledSvc func(string) bool, monitorBind string, monitorPort int) (serveFrontDoors, error) {
+	var fd serveFrontDoors
+	// memory ALWAYS runs as a supervised go-plugin unit — the built-in impl as a
+	// self-exec of this binary (`pix-host plugin memory`), a configured impl as its
+	// own sha-pinned executable. One path, one lifecycle: the store (and its
+	// advisory lock, taken by servePluginMemory) lives in a child the supervision
+	// tree can restart, health-probe and reattach to, while THIS process keeps
+	// owning the :11435 listener the sandbox depends on — bound here, well before
+	// that child is ever spawned.
+	if enabledSvc("memory") {
+		addr := env("MEMORY_BIND", "127.0.0.1") + ":" + env("MEMORY_PORT", "11435")
+		ln, lerr := net.Listen("tcp", addr)
+		if lerr != nil {
+			return serveFrontDoors{}, fmt.Errorf("bind memory (%s): %w", addr, lerr)
+		}
+		fd.all = append(fd.all, hostService{name: "memory", addr: addr, ln: ln})
+	}
+
+	// monitor ingest: a loopback HTTP listener over a bounded, file-backed store,
+	// receiving NDJSON events + blob bodies from the in-sandbox tap. It spawns no
+	// child of its own, but binding it here — before pack/memory-child spawn —
+	// keeps every front door's bind attempt in the same, spawn-free phase.
+	if enabledSvc("monitor") {
+		root, rerr := config.MonitorStoreRoot()
+		if rerr != nil {
+			closeFrontDoorListeners(fd.all)
+			return serveFrontDoors{}, fmt.Errorf("resolve monitor store root: %w", rerr)
+		}
+		if !isLoopbackAddr(monitorBind) {
+			log.Printf("WARNING: monitor ingest is bound to %s, exposed on your local network with NO AUTHENTICATION — anyone on the network can send this sandbox's full agent context and tool output into the store. Use a firewall, or bind loopback (drop --bind) unless you specifically need this.", monitorBind)
+		}
+		srv, merr := buildMonitorIngest(monitorBind, monitorPort, root)
+		if merr != nil {
+			closeFrontDoorListeners(fd.all)
+			return serveFrontDoors{}, fmt.Errorf("launch monitor ingest: %w", merr)
+		}
+		fd.monitorSrv = srv
+		log.Printf("starting monitor on http://%s (store %s)", srv.Addr(), root)
+	}
+
+	return fd, nil
+}
+
+// closeFrontDoorListeners closes every listener already bound in `all` — used
+// when a LATER front door in the same bindFrontDoors call fails, so the
+// earlier winner's socket is never leaked into the fatalf/os.Exit that follows.
+func closeFrontDoorListeners(all []hostService) {
+	for _, s := range all {
+		if s.ln != nil {
+			_ = s.ln.Close()
+		}
+	}
+}
+
+// spawnChildren launches every pack/plugin child process — each active pack's
+// Tier-1-accepted [[services]] units, then the memory plugin unit — and is the
+// ONLY place either is spawned. runServe calls it exactly once, and only AFTER
+// bindFrontDoors has already succeeded, so a bind failure can never leave one
+// of these orphaned. It attaches the memory unit's proxy mux onto the
+// already-bound hostService in `all`, in place.
+func spawnChildren(cfg *config.Config, sup *supervisor, selfPath string, all []hostService, fatalf func(string, ...any)) {
+	// Every active pack's Tier-1-accepted [[services]] view, collected across ALL
+	// active packs and reconciled against the tree in exactly ONE call: no
+	// `plugins.*` shortcut, and one bad pack's load/export failure only logs,
+	// never blocking serve or a sibling pack. reconcilePackUnits treats its views
+	// argument as the FULL desired state, so calling it once per pack (the prior
+	// shape of this loop) made each pack's call remove every earlier pack's
+	// units; mergePackServices flattens every pack's views into the one
+	// argument this single call takes, and fails a colliding unit name closed
+	// (naming both packs) instead of one pack's view silently overwriting
+	// another's.
+	var packSets []packServiceSet
+	for _, root := range packinfo.ActivePackRoots(cfg, "") {
+		p, perr := packinfo.LoadPack(root)
+		if perr != nil {
+			log.Printf("serve: pack %s: %v", root, perr)
+			continue
+		}
+		views, verr := pack.AcceptedGoPluginServicesForSelf(p, cfg.GogAccount, selfPath)
+		if verr != nil {
+			log.Printf("serve: pack %s services: %v", root, verr)
+			continue
+		}
+		if len(views) == 0 {
+			continue
+		}
+		packSets = append(packSets, packServiceSet{packName: p.Manifest.Name, views: views})
+	}
+	merged, mergeErr := mergePackServices(packSets)
+	if mergeErr != nil {
+		log.Printf("serve: pack services: %v", mergeErr)
+	}
+	units, rerr := sup.reconcilePackUnits(selfPath, merged)
+	if rerr != nil {
+		log.Printf("serve: pack services: %v", rerr)
+	}
+	if len(units) > 0 {
+		log.Printf("serve: supervising %d pack service(s): %s", len(units), strings.Join(slices.Sorted(maps.Keys(units)), ", "))
+	}
+
+	for i := range all {
+		if all[i].name != "memory" {
+			continue
+		}
+		// Wire the configured model names into the env the unit inherits; an explicit
+		// env override still wins.
+		applyMemoryModelEnv(cfg)
+		spec := cfg.Plugin("memory")
+		h, lerr := sup.launch("memory", "memory", spec, selfPath, spec.ExtraEnv)
+		if lerr != nil {
+			fatalf("launch memory unit: %v", lerr)
+			return
+		}
+		all[i].mux = memoryProxyMux(h)
+	}
+}
+
+// performShutdown is the ONE shutdown sequence every exit path — signal,
+// fatal service error — runs, in a fixed order: drain every front door FIRST
+// (stop accepting new connections immediately, then wait out any in-flight
+// request bounded by frontDoorShutdownTimeout — see shutdownFrontDoors), THEN
+// tear down the supervised backend (pack units + the memory plugin), THEN
+// wait for monitor ingest's own graceful drain to actually finish. Getting
+// this backwards — tearing the backend down while a front door still accepts
+// — lets a brand-new request land on a backend that is already mid-teardown.
+func performShutdown(httpServers []*http.Server, cancelMonitor context.CancelFunc, shutdownBackend func(), waitMonitor func()) {
+	shutdownFrontDoors(httpServers, cancelMonitor)
+	shutdownBackend()
+	waitMonitor()
+}
+
+// shutdownFrontDoors stops accepting new connections and drains every
+// mux-based front-door http.Server, bounded by frontDoorShutdownTimeout so a
+// stuck handler cannot hang shutdown forever, and cancels ctx so monitor
+// ingest's own Serve(ctx) begins its matching bounded drain at the same time.
+// It returns once every http.Server's Shutdown call has returned; the caller
+// waits on monitor separately (waitMonitor), so a slow monitor drain never
+// blocks the backend teardown that follows.
+func shutdownFrontDoors(servers []*http.Server, cancelMonitor context.CancelFunc) {
+	cancelMonitor()
+	var wg sync.WaitGroup
+	for _, srv := range servers {
+		srv := srv
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), frontDoorShutdownTimeout)
+			defer cancel()
+			if err := srv.Shutdown(shutdownCtx); err != nil {
+				_ = srv.Close()
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+// buildMonitorIngest constructs the monitor store + ingest server, split out
+// from runServe so a test can build one against a t.TempDir() root without the
+// signal handling, pidfile and plugin supervision around it.
+func buildMonitorIngest(bind string, port int, root string) (*monitor.IngestServer, error) {
+	store, err := monitor.NewStore(monitor.StoreConfig{Root: root})
+	if err != nil {
+		return nil, fmt.Errorf("monitor store: %w", err)
+	}
+	srv, err := monitor.NewIngestServer(monitor.IngestConfig{Port: port, BindAddr: bind, Store: store})
+	if err != nil {
+		return nil, fmt.Errorf("monitor ingest: %w", err)
+	}
+	return srv, nil
+}
+
+// serveMonitorAndWait runs monitorSrv.Serve(ctx) in the background and
+// returns a wait func that blocks until that call has ACTUALLY returned —
+// monitor's own graceful shutdown (bounded to 5s, see monitor/ingest.go)
+// having already completed, not merely started. runServe calls wait() before
+// it returns OR os.Exit(1)s, on every shutdown path, so a fatal failure
+// elsewhere in `serve` can never cut monitor off mid-drain the way an
+// unwaited background goroutine would. A nil monitorSrv (monitor not
+// enabled) returns a no-op wait.
+func serveMonitorAndWait(monitorSrv *monitor.IngestServer, ctx context.Context, fatalCh chan<- error) (wait func()) {
+	if monitorSrv == nil {
+		return func() {}
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := monitorSrv.Serve(ctx); err != nil {
+			fatalCh <- fmt.Errorf("monitor: %v", err)
+		}
+	}()
+	return func() { <-done }
+}
+
+// isLoopbackAddr reports whether host (no port) is the loopback interface: the
+// warn-on-LAN-bind classification for monitor ingest (docs/design/monitor.md).
+func isLoopbackAddr(host string) bool {
+	switch host {
+	case "", "localhost":
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 // writeServePidFile records the current pid at config.ServePidPath() (0600, dir
-// 0700) so the launcher's `serve stop` / `serve status` can find and signal this
-// supervisor safely. Best-effort: a failed MkdirAll/write only logs — it never
-// crashes serve. A stale pidfile from a previous crash is overwritten, since the
-// live pid is authoritative.
+// 0700). Best-effort: a failed MkdirAll/write only logs, never crashes serve. A
+// stale pidfile from a previous crash is overwritten — the live pid is authority.
+// The write is taken under the SAME sys.Lock as removeOwnedPidFile's
+// compare-and-delete (config.PidFileLockPath), so a just-exiting old owner's
+// cleanup and this respawn's write can never interleave: see removeOwnedPidFile.
 func writeServePidFile() {
-	path := config.ServePidPath()
+	writeServePidFileAt(config.ServePidPath(), os.Getpid())
+}
+
+// writeServePidFileAt is writeServePidFile's real body, parameterized so a
+// test can point it at a temp path and a synthetic pid (standing in for a
+// different, respawned process) without touching config.ServePidPath().
+func writeServePidFileAt(path string, pid int) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		log.Printf("serve: could not create pidfile dir %s: %v", filepath.Dir(path), err)
 		return
 	}
-	if err := os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
+	lockPath := config.PidFileLockPath(path)
+	if err := sys.Lock(lockPath, func() error {
+		return os.WriteFile(path, []byte(strconv.Itoa(pid)+"\n"), 0o600)
+	}); err != nil {
 		log.Printf("serve: could not write pidfile %s: %v", path, err)
 	}
 }
 
-// removeServePidFile deletes the pidfile on shutdown. Best-effort: a missing file
-// is fine and any other remove error only logs.
+// removeServePidFile deletes the pidfile on shutdown — but ONLY if it still
+// names OUR pid. See removeOwnedPidFile.
 func removeServePidFile() {
-	path := config.ServePidPath()
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		log.Printf("serve: could not remove pidfile %s: %v", path, err)
-	}
+	removeOwnedPidFile(config.ServePidPath())
 }
 
 // removeServeLazyMarker clears the launcher-written serve.lazy marker on a
 // clean exit (belt + suspenders with `serve stop`'s own removal), so a lazily
 // started daemon that shuts down gracefully never leaves a stale "lazy" flag.
 // A hard kill leaves it behind — harmless, since lifecycle-mode detection also
-// requires a live, verified-ours pidfile.
+// requires a live, verified-ours pidfile. Same ownership guard as the pidfile:
+// the marker is written carrying the SAME pid (service/start.go's markLazy),
+// so the check is identical.
 func removeServeLazyMarker() {
-	if err := os.Remove(config.ServeLazyMarkerPath()); err != nil && !os.IsNotExist(err) {
-		log.Printf("serve: could not remove lazy marker: %v", err)
+	removeOwnedPidFile(config.ServeLazyMarkerPath())
+}
+
+// removeOwnedPidFile deletes path ONLY when it currently names OUR pid: two
+// `serve` processes can race to write the SAME pidfile/lazy-marker path (a
+// loser starts, binds nothing — see the eager listener binds above — but can
+// still reach this cleanup on its way out through fatalf), and the loser's
+// own deferred cleanup must never delete a file the WINNER (or any other,
+// currently-running daemon) just wrote for itself.
+//
+// The read-compare-delete runs INSIDE one sys.Lock hold on
+// config.PidFileLockPath(path) — a STABLE sibling path, never the pidfile
+// inode itself (which gets removed and recreated across a respawn, so
+// locking it directly would be the exact TOCTOU this function used to have:
+// a compare that reads true, then a respawned daemon overwrites the file,
+// then a stale Remove deletes the NEW owner's file out from under it).
+// writeServePidFile/writeServePidFileAt and the launcher's
+// recordSpawnedServePid/markLazy take the SAME lock around their writes, so
+// the two sides can never interleave: whichever gets the lock first runs its
+// whole compare-delete or whole write to completion before the other even
+// starts. A missing file is fine; any other read/remove/lock error only logs
+// (best-effort — cleanup must never crash serve on its way out).
+func removeOwnedPidFile(path string) {
+	removeOwnedPidFileWithHook(path, nil)
+}
+
+// removeOwnedPidFileWithHook is removeOwnedPidFile's real body. afterOwnershipConfirmed,
+// when non-nil, runs AFTER the ownership check succeeds but BEFORE os.Remove —
+// while the lock is STILL held. Production always calls removeOwnedPidFile,
+// which passes nil; the only other caller is
+// TestRemoveOwnedPidFileSerializesAgainstConcurrentWrite, which uses the hook
+// to deterministically pause an "old owner" mid-critical-section and prove a
+// concurrent respawn's write genuinely blocks on the same lock rather than
+// racing it.
+func removeOwnedPidFileWithHook(path string, afterOwnershipConfirmed func()) {
+	lockPath := config.PidFileLockPath(path)
+	if err := sys.Lock(lockPath, func() error {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				log.Printf("serve: could not read %s before removing: %v", path, err)
+			}
+			return nil
+		}
+		pid, perr := strconv.Atoi(strings.TrimSpace(string(raw)))
+		if perr != nil || pid != os.Getpid() {
+			// Not ours (unparseable, or another process's pid): leave it exactly
+			// alone. Whoever it belongs to is responsible for its own cleanup.
+			return nil
+		}
+		if afterOwnershipConfirmed != nil {
+			afterOwnershipConfirmed()
+		}
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			log.Printf("serve: could not remove %s: %v", path, err)
+		}
+		return nil
+	}); err != nil {
+		log.Printf("serve: could not acquire lock %s: %v", lockPath, err)
 	}
 }
 
-// brokerService builds the DORMANT credential-broker slot. It returns
-// (nil, nil) when the broker impl is builtin — the default PUBLIC case, where NO
-// built-in broker exists, so nothing starts. When an operator configures an
-// external broker ([plugins.broker] with impl != builtin), it launches that
-// binary ONCE through the shared supervisor (goplugin.NewClient + verifyPluginSHA
-// + pluginEnv isolation), dispenses the CredentialBroker, and returns a
-// hostService that serves the stable /token shim (brokerProxyMux). The broker is
-// the ONLY plugin granted the bearer back (pluginEnv strips PIX_BROKER_AUTH
-// from every other subprocess; F2), and the same bearer gates the /token shim.
-func brokerService(cfg *config.Config, sup *supervisor, selfPath string) (*hostService, error) {
-	spec := cfg.Plugin("broker")
-	if spec.Impl == config.BuiltinImpl {
-		return nil, nil // dormant seam: no built-in broker in the public tree
-	}
-	// The broker gets its bearer back (and only the broker) via a granted extraEnv;
-	// the same value gates the /token shim. FAIL CLOSED: an enabled broker with no
-	// bearer would serve /token unauthenticated (mint a real access token to any
-	// process that can reach the listener — and BROKER_BIND can widen that past
-	// localhost). Refuse to start rather than expose an open token endpoint.
-	bearer := os.Getenv("PIX_BROKER_AUTH")
-	if bearer == "" {
-		return nil, fmt.Errorf("broker plugin is enabled but PIX_BROKER_AUTH is empty: refusing to serve an unauthenticated /token endpoint")
-	}
-	grant := []string{"PIX_BROKER_AUTH=" + bearer}
-	// Append any per-plugin extra env vars from config (ExtraEnv is wired here so
-	// an operator's [plugins.broker] extra_env entries are actually passed through).
-	grant = append(grant, spec.ExtraEnv...)
-	h, err := sup.launch("broker", "broker", spec, selfPath, grant)
-	if err != nil {
-		return nil, err
-	}
-	return &hostService{
-		name:  "broker",
-		addr:  env("BROKER_BIND", "127.0.0.1") + ":" + env("BROKER_PORT", "11437"),
-		mux:   brokerProxyMux(h, bearer),
-		check: func() error { return brokerCheck(h) },
-	}, nil
-}
-
-// resolveServices picks the effective service list for `serve` (F1): the CLI
-// args win if any is non-empty; otherwise config's `services`; an empty result
-// means "all". CLI wins so `serve memory` overrides a broader config set.
+// resolveServices picks the effective service list for `serve`: the CLI args win
+// if any is non-empty (so `serve memory` overrides a broader config set), else
+// config's `services`; an empty result means "all".
 func resolveServices(cli, cfgServices []string) []string {
 	for _, s := range cli {
 		if strings.TrimSpace(s) != "" {
@@ -369,11 +560,10 @@ func resolveServices(cli, cfgServices []string) []string {
 	return cfgServices
 }
 
-// applyMemoryModelEnv wires the configured memory model names into the
-// in-process memory build (F6). memembed.go reads these from the env, so an
-// explicit env override wins; otherwise the config value (or its default)
-// applies. Set only in the memory branch so it never leaks into an unrelated
-// plugin subprocess (they also get a filtered Cmd.Env — see pluginEnv).
+// applyMemoryModelEnv wires the configured memory model names into the env the
+// memory unit inherits (memembed.go reads them there), so an explicit env
+// override wins and the config value applies otherwise. Set only in the memory
+// branch so it never leaks into an unrelated plugin subprocess.
 func applyMemoryModelEnv(cfg *config.Config) {
 	if os.Getenv("MEMORY_WATCHER_MODEL") == "" && cfg.MemoryWatcherModel != "" {
 		os.Setenv("MEMORY_WATCHER_MODEL", cfg.MemoryWatcherModel)
@@ -381,52 +571,4 @@ func applyMemoryModelEnv(cfg *config.Config) {
 	if os.Getenv("MEMORY_EMBED_MODEL") == "" && cfg.MemoryEmbedModel != "" {
 		os.Setenv("MEMORY_EMBED_MODEL", cfg.MemoryEmbedModel)
 	}
-}
-
-// reindexKnowledgePlugin indexes the configured bundles into a freshly launched
-// EXTERNAL knowledge plugin (F2). Without this the plugin path only installs the
-// proxy shim and never calls Reindex, so the external/self-exec plugin serves an
-// EMPTY index. It mirrors the built-in branch's logging + degrade behavior: no
-// bundles logs an empty-index notice, a reindex failure is logged loudly (a bad
-// OPTIONAL bundle must NOT crash serve), and success reports the counts. Factored
-// out of runServe so it is unit-testable with an injected/stubbed store.
-func reindexKnowledgePlugin(store plugin.KnowledgeStore, bundles []string) {
-	if store == nil {
-		log.Print("knowledge: plugin unavailable at startup — skipping reindex (will index on demand)")
-		return
-	}
-	if len(bundles) == 0 {
-		log.Print("knowledge: no bundles configured (set knowledge_bundles in config or KNOWLEDGE_BUNDLES); serving an empty index")
-		return
-	}
-	if res, err := store.Reindex(plugin.ReindexArgs{BundlePaths: bundles}); err != nil {
-		log.Printf("knowledge: reindex failed (serving whatever was already indexed): %v", err)
-	} else {
-		log.Printf("knowledge: indexed %d concept(s) from %d bundle(s)", res.Indexed, len(res.Bundles))
-	}
-}
-
-// knowledgeBundles resolves the OKF bundle paths to index at startup: the
-// configured knowledge_bundles win; otherwise the KNOWLEDGE_BUNDLES env is
-// split on the OS path-list separator or a comma (a convenience for `serve
-// knowledge` smoke runs without a config file). Empty means no bundles.
-func knowledgeBundles(cfg *config.Config) []string {
-	// Index the UNION across the base config and every profile so a `serve`
-	// started under one context still serves the bundles another profile scopes
-	// to (per-profile scoping happens at query time, not at index time).
-	if all := cfg.AllKnowledgeBundles(); len(all) > 0 {
-		return all
-	}
-	raw := strings.TrimSpace(os.Getenv("KNOWLEDGE_BUNDLES"))
-	if raw == "" {
-		return nil
-	}
-	split := func(r rune) bool { return r == os.PathListSeparator || r == ',' }
-	var out []string
-	for _, p := range strings.FieldsFunc(raw, split) {
-		if p = strings.TrimSpace(p); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
 }

@@ -629,7 +629,7 @@ export function clarifyRoutedModelFailure(r: SingleResult, agent: AgentConfig): 
 	const route = agent.intent ? `intent "${agent.intent}"` : "explicit model route";
 	r.errorMessage =
 		`Agent "${agent.name}" ${route} resolved to "${agent.model}", but that model is not registered in this sandbox. ` +
-		`Run \`pix run --replace\` to recreate it from the current inference config. Original: ${readableFailure(r)}`;
+		`Recreate the sandbox to pick up the current inference config: \`pix rm <box> && pix run\`. Original: ${readableFailure(r)}`;
 }
 
 function resultOutput(r: SingleResult): string {

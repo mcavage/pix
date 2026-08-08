@@ -1,6 +1,6 @@
 ---
 name: analyze
-description: Strategic analysis — financial model, legal review, market sizing, build/buy/partner, pricing, or decision one-pager. Use for "model the economics of X", "review this contract", or "build vs buy X".
+description: Strategic analysis (financial model, legal review, market sizing, build/buy/partner, pricing, or decision one-pager). Use for "model the economics of X", "review this contract", or "build vs buy X".
 ---
 # analyze
 

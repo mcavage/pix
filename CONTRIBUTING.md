@@ -65,6 +65,17 @@ cd services/host && go build ./... && go test ./...   # host code
 3. Run the `code-review` skill (or ask a second model) over your diff.
 4. Fill in the PR template. Say what changed, why, and how you verified it.
 
+## License of contributions (inbound = outbound)
+
+pix is a Docker, Inc. project distributed under the MIT license in
+[LICENSE](LICENSE), and contributions come in on those same terms: **by
+opening a pull request you license your contribution under the MIT license,
+and you represent that you have the right to do so** (that it is your own
+work, or that your employer has authorized it). There is no separate CLA and
+no copyright assignment — inbound license equals outbound license. See
+[NOTICE.md](NOTICE.md) and
+[docs/legal/AUTHORIZATIONS.md](docs/legal/AUTHORIZATIONS.md).
+
 ## Reporting bugs and asking for features
 
 Use the issue templates. For anything security-sensitive, follow

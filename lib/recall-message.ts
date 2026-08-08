@@ -56,11 +56,12 @@ export const RECALL_CUSTOM_TYPE = "pix-recalled-context";
 /**
  * Net-new bytes one recall channel may append per user turn.
  *
- * PER CHANNEL, not per process: memory (`:11435`) and knowledge (`:11436`) are
- * independent stores with independent budgets — that is pre-existing, deliberate
- * behavior (`KNOWLEDGE_CHAR_BUDGET` is documented as "its OWN budget,
- * independent of memory"), and collapsing them into one shared ledger would let
- * whichever extension pi happens to load first starve the other.
+ * PER CHANNEL, not per process. Today the only channel is memory (`:11435`);
+ * the knowledge store (`:11436`) it used to share this budget with was DELETED,
+ * not merely disabled, so there is nothing left to starve. The per-channel shape
+ * stays because the reason it existed still holds: a second recall channel must
+ * arrive with its OWN budget, never a shared ledger where whichever extension pi
+ * loads first spends the other's bytes.
  */
 export const RECALL_BYTE_CAP = 1024;
 
@@ -76,7 +77,7 @@ export interface RecallMessage {
 	customType: string;
 	/**
 	 * false: the model must see recall, the user must not be spammed with it
-	 * every turn. `/recall` and `/knowledge` remain the visible surfaces.
+	 * every turn. `/recall` remains the visible surface.
 	 */
 	display: false;
 	content: string;

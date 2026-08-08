@@ -70,6 +70,7 @@ const KNOWN_COMMANDS = [
 	"/model",
 	"/reload",
 	"/help",
+	"/getting-started",
 ];
 
 const NUDGE_MARKER = ".pix-help-nudged";
@@ -430,6 +431,23 @@ function buildDetail(pi: any, ctx: any, query: string): string {
 
 
 // Fire the first-turn nudge at most once per machine, gated by a marker file.
+function gettingStartedText(): string {
+	return [
+		"PIX: GETTING STARTED",
+		"",
+		"  /help                 live map of loaded skills, agents, and commands",
+		"  /skill:<name>         run a workflow directly (try /skill:healthcheck)",
+		"  /model                inspect or switch the active model",
+		"  /status               session, context, tools, and host-service health",
+		"  /recall <query>       inspect relevant persistent memory",
+		"",
+		"Ask normally for ordinary work. For a rigorous feature, say ‘plan this’,",
+		"‘build this’, or ‘ship this’; Pix selects the matching workflow and crew.",
+		"Host commands such as pix run, pix task, and pix monitor run in your terminal,",
+		"not as slash commands inside this agent.",
+	].join("\n");
+}
+
 function maybeNudge(ctx: any): void {
 	safe(() => {
 		const fs = require("node:fs");
@@ -462,6 +480,14 @@ function maybeNudge(ctx: any): void {
 export default function (pi: any) {
 	const on = (name: string, fn: (e: any, ctx: any) => any) =>
 		safe(() => pi.on(name, async (e: any, ctx: any) => safe(() => fn(e, ctx))));
+
+	safe(() =>
+		pi.registerCommand("getting-started", {
+			description: "Short first-session tour: core slash commands and how to invoke workflows",
+			handler: async (_args: any, ctx: any) =>
+				safe(() => ctx?.ui?.notify?.(gettingStartedText(), "info")),
+		}),
+	);
 
 	safe(() =>
 		pi.registerCommand("help", {

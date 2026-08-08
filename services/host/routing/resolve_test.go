@@ -72,17 +72,74 @@ func TestResolve_MinAccuracyFloor(t *testing.T) {
 	}
 }
 
-func TestResolve_ProviderAllowlist(t *testing.T) {
-	// Review-style: exclude anthropic. Among openai/gpt (0.86) and ollama/local
-	// (0.45), accuracy picks openai/gpt.
+// TestResolve_ProviderPreferenceOutranksObjective: a preference reorders the
+// feasible set, so the best model from a preferred vendor beats a more accurate
+// one elsewhere. Among openai/gpt (0.86) and ollama/local (0.45), accuracy picks
+// openai/gpt over the (unpreferred) more accurate anthropic/opus.
+func TestResolve_ProviderPreferenceOutranksObjective(t *testing.T) {
 	it := in("review", "code", "accuracy")
-	it.Providers = []string{"openai", "ollama"}
+	it.PreferProviders = []string{"openai", "ollama"}
 	d := Resolve(testReg(), testSc(), testPol(), it)
 	if d.Model != "openai/gpt" {
 		t.Fatalf("model = %q, want openai/gpt", d.Model)
 	}
-	if d.Chosen == nil || d.Chosen.Provider == "anthropic" {
-		t.Fatal("must not choose anthropic under the allowlist")
+	if !d.PreferenceMet {
+		t.Fatal("a preference that WAS honored must report PreferenceMet")
+	}
+	// Honoring a preference is not a constraint violation.
+	if !d.ConstraintsMet || len(d.Relaxed) > 0 {
+		t.Fatalf("preference must not touch constraint reporting: %+v", d)
+	}
+	// Unpreferred models stay in the running, ranked behind — never filtered out.
+	var sawAnthropic bool
+	for _, c := range d.Alternatives {
+		if c.Provider == "anthropic" {
+			sawAnthropic = true
+		}
+	}
+	if !sawAnthropic {
+		t.Fatal("a preference must RANK, not exclude: anthropic should still be an alternative")
+	}
+}
+
+// TestResolve_UnreachablePreferenceIsNotAFailure is the bug this replaced a
+// hard allowlist to fix. The shipped policy prefers OpenAI for `overlord` (the
+// default run_intent) while `pix setup` wires Anthropic, so the DEFAULT install
+// could never satisfy its DEFAULT route. Under the old allowlist that install
+// reported FALLBACK on its most important route while working perfectly.
+func TestResolve_UnreachablePreferenceIsNotAFailure(t *testing.T) {
+	it := in("overlord", "code", "accuracy")
+	it.PreferProviders = []string{"provider-with-no-models-here"}
+	d := Resolve(testReg(), testSc(), testPol(), it)
+	if !d.ConstraintsMet {
+		t.Fatalf("an unreachable PREFERENCE is not a constraint violation: %+v", d)
+	}
+	if len(d.Relaxed) > 0 {
+		t.Fatalf("nothing was relaxed; a preference is not on the ladder: %v", d.Relaxed)
+	}
+	if d.PreferenceMet {
+		t.Fatal("PreferenceMet must report the miss even though the route is valid")
+	}
+	if d.Model != "anthropic/opus" {
+		t.Fatalf("model = %q, want the best model overall once the preference cannot apply", d.Model)
+	}
+}
+
+// TestResolve_LegacyProvidersKeyStillPreferred: an existing hand-written
+// policy.json spells the field `providers`. It must keep working — as a
+// PREFERENCE now — and it must do so for an Intent built in code, not only one
+// that happened to come through LoadPolicy.
+func TestResolve_LegacyProvidersKeyStillPreferred(t *testing.T) {
+	it := in("review", "code", "accuracy")
+	it.Providers = []string{"openai"}
+	d := Resolve(testReg(), testSc(), testPol(), it)
+	if d.Model != "openai/gpt" || !d.PreferenceMet {
+		t.Fatalf("legacy `providers` must still steer the choice: model=%q met=%v", d.Model, d.PreferenceMet)
+	}
+	// The new spelling wins when both are present.
+	it.PreferProviders = []string{"anthropic"}
+	if d := Resolve(testReg(), testSc(), testPol(), it); d.Chosen.Provider != "anthropic" {
+		t.Fatalf("prefer_providers must win over the legacy key, got %q", d.Chosen.Provider)
 	}
 }
 

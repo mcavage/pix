@@ -4,21 +4,29 @@
 #
 #   brew install mcavage/tap/pix
 #
-# This script remains for legacy `pix upgrade` and release compatibility. It
-# fetches the two host binaries (pix + pix-host) from a GitHub release and drops
-# them in ~/.local/bin. No repo checkout, no sudo.
+# This script remains for existing non-Homebrew installations. It fetches the
+# release's notice-bearing tarball (the SAME artifact Homebrew installs),
+# verifies its sha256, and drops pix + pix-host in ~/.local/bin with the
+# licenses and notices alongside them. No repo checkout, no sudo.
 #
 #   curl -fsSL https://raw.githubusercontent.com/mcavage/pix/main/install.sh | sh
 #
-# Inspect before you pipe to a shell — the source is right here:
+# Inspect before you pipe to a shell: the source is right here:
 #   https://github.com/mcavage/pix/blob/main/install.sh
 #
 # What it does:
-#   - detects your OS (darwin/linux) + arch (amd64/arm64)
+#   - detects your OS (darwin only: pix's host lifecycle is macOS-only) +
+#     arch (amd64/arm64)
 #   - resolves the latest release (or PIX_VERSION if you set one)
-#   - downloads pix-<os>-<arch>, pix-host-<os>-<arch>, and SHA256SUMS
-#   - verifies each binary's sha256 against SHA256SUMS (aborts on mismatch)
-#   - installs both to ~/.local/bin (chmod +x), never touching an existing config
+#   - downloads pix_<ver>_<os>_<arch>.tar.gz and SHA256SUMS
+#   - verifies the tarball's sha256 against SHA256SUMS (aborts on mismatch)
+#   - installs pix + pix-host to ~/.local/bin (chmod +x), and the notices
+#     (THIRD_PARTY_NOTICES.md, NOTICE.md, LICENSE, licenses/) to
+#     ~/.local/share/pix. The licenses that must travel with the binaries
+#     (MIT s2, MPL-2.0 s3.1) are part of the artifact, not an optional extra.
+#     The loose pix-<os>-<arch> assets this script used to fetch are no longer
+#     published: they were the same binaries with none of those notices.
+#   - never touches an existing config
 #
 # Env knobs:
 #   PIX_VERSION   pin a version (e.g. 0.0.42); default resolves 'latest'
@@ -35,9 +43,15 @@ GH="https://github.com/${REPO}"
 PREFIX="${PIX_PREFIX:-${HOME}/.local/bin}"
 CONFIG_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/pix"
 CONFIG_FILE="${CONFIG_DIR}/config.toml"
+DOC_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/pix"
 SOURCE_URL="${GH}/blob/main/install.sh"
 
 BINARIES="pix pix-host"
+# Every path the release tarball must contain. Missing any one of them means
+# the artifact is not a complete distribution (pix's own MIT terms, the
+# third-party attributions, and the verbatim MPL-2.0 text for the go-plugin /
+# yamux code linked into pix-host), so we refuse to install it.
+NOTICES="THIRD_PARTY_NOTICES.md NOTICE.md LICENSE licenses/MPL-2.0.txt"
 
 log()  { printf '%s\n' "$*"; }
 info() { printf '  %s\n' "$*"; }
@@ -45,15 +59,17 @@ err()  { printf 'install.sh: %s\n' "$*" >&2; }
 die()  { err "$*"; exit 1; }
 
 # --- OS/arch detection ------------------------------------------------------
-# Emits "<os> <arch>" using the Go convention (darwin/linux, amd64/arm64).
+# Emits "<os> <arch>" using the Go convention (darwin, amd64/arm64). pix's
+# host lifecycle (launchd-managed serve, the pix/pix-host binaries) is
+# macOS-only: there is no linux release asset to fetch any more.
 detect_platform() {
 	os_raw="$(uname -s)"
 	arch_raw="$(uname -m)"
 
 	case "$os_raw" in
 		Darwin) os="darwin" ;;
-		Linux)  os="linux" ;;
-		*) die "unsupported OS '$os_raw' (need Darwin or Linux)" ;;
+		Linux)  die "pix's host is macOS-only; there is no Linux release of pix/pix-host. Run pix inside a Linux sandbox instead of installing the host binaries there." ;;
+		*) die "unsupported OS '$os_raw' (need Darwin)" ;;
 	esac
 
 	case "$arch_raw" in
@@ -111,7 +127,7 @@ else
 	DL=""
 fi
 
-# fetch URL OUTFILE — download URL to OUTFILE, failing loudly on HTTP errors.
+# fetch URL OUTFILE: download URL to OUTFILE, failing loudly on HTTP errors.
 fetch() {
 	case "$DL" in
 		curl) curl -fsSL "$1" -o "$2" ;;
@@ -120,7 +136,7 @@ fetch() {
 	esac
 }
 
-# resolve_latest — follow the /releases/latest redirect and read the version out
+# resolve_latest: follow the /releases/latest redirect and read the version out
 # of the resulting .../tag/v<VER> URL. Works with curl or wget.
 resolve_latest() {
 	url="${GH}/releases/latest"
@@ -139,7 +155,7 @@ resolve_latest() {
 }
 
 # --- sha256 -----------------------------------------------------------------
-# sha256_of FILE — print the hex digest, portable across linux/darwin.
+# sha256_of FILE: print the hex digest, portable across linux/darwin.
 sha256_of() {
 	if have sha256sum; then
 		sha256sum "$1" | awk '{print $1}'
@@ -150,7 +166,7 @@ sha256_of() {
 	fi
 }
 
-# verify FILE NAME SUMSFILE — compare FILE's digest to the NAME entry in SUMSFILE.
+# verify FILE NAME SUMSFILE: compare FILE's digest to the NAME entry in SUMSFILE.
 verify() {
 	file="$1"; name="$2"; sums="$3"
 	want="$(awk -v n="$name" '$2 == n || $2 == "*"n {print $1}' "$sums" | head -1)"
@@ -182,18 +198,19 @@ do_install() {
 
 	base="${GH}/releases/download/v${ver}"
 	sums_url="${base}/SHA256SUMS"
+	tarball="pix_${ver}_${os}_${arch}.tar.gz"
 
 	if [ "${PIX_DRYRUN:-}" = "1" ]; then
-		log "DRY RUN — nothing will be downloaded or written."
+		log "DRY RUN: nothing will be downloaded or written."
 		log "Source: ${SOURCE_URL}"
 		log "Platform: ${os}/${arch}"
 		log "Version:  ${ver}"
 		log "SHA256SUMS: ${sums_url}"
+		log "Download:  ${base}/${tarball}"
 		for b in $BINARIES; do
-			asset="${b}-${os}-${arch}"
-			log "Download:  ${base}/${asset}"
 			log "Install:   ${PREFIX}/${b}"
 		done
+		log "Notices:   ${DOC_DIR} (${NOTICES})"
 		log "Config:    ${CONFIG_FILE} (seeded by 'pix setup', left untouched here)"
 		return 0
 	fi
@@ -206,46 +223,71 @@ do_install() {
 	tmp="$(mktemp -d "${TMPDIR:-/tmp}/pix-install.XXXXXX")"
 	trap 'rm -rf "$tmp"' EXIT INT TERM
 
-	# Verify-all-then-install-all: a partial install (new pix + stale
-	# pix-host, or vice versa) is a mismatched pair that can misbehave subtly.
-	# So stage EVERYTHING in the temp dir and verify EVERY checksum first; only
-	# once all binaries are downloaded, verified, and made executable do we move
-	# any into place. Any failure before that point installs nothing (the temp dir
-	# is cleaned by the EXIT trap and ${PREFIX} is left untouched).
+	# Verify-then-install: the release ships ONE tarball per platform (the same
+	# artifact Homebrew installs), so pix, pix-host and the notices are a single
+	# checksummed unit. A mismatched pair (new pix + stale pix-host) is not
+	# even expressible any more. Stage and verify EVERYTHING in the temp dir
+	# first; only then move anything into place. Any failure before that point
+	# installs nothing (the temp dir is cleaned by the EXIT trap and ${PREFIX} is
+	# left untouched).
 	log "Downloading SHA256SUMS..."
 	fetch "$sums_url" "${tmp}/SHA256SUMS"
 
+	log "Downloading ${tarball}..."
+	fetch "${base}/${tarball}" "${tmp}/${tarball}"
+	verify "${tmp}/${tarball}" "$tarball" "${tmp}/SHA256SUMS"
+
+	stage="${tmp}/stage"
+	mkdir -p "$stage"
+	tar -xzf "${tmp}/${tarball}" -C "$stage" || die "could not unpack ${tarball}"
+
+	# An artifact missing a binary, or missing the notices that legally have to
+	# travel with it, is not one we install.
 	for b in $BINARIES; do
-		asset="${b}-${os}-${arch}"
-		log "Downloading ${asset}..."
-		fetch "${base}/${asset}" "${tmp}/${b}"
-		verify "${tmp}/${b}" "$asset" "${tmp}/SHA256SUMS"
-		chmod +x "${tmp}/${b}"
+		[ -f "${stage}/${b}" ] || die "${tarball} does not contain ${b}"
+		chmod +x "${stage}/${b}"
+	done
+	for n in $NOTICES; do
+		[ -f "${stage}/${n}" ] || die "${tarball} does not contain ${n}; refusing to install a distribution with no notices"
 	done
 
 	# Compare verified bytes, never execute an existing untrusted installation.
 	all_current=1
 	for b in $BINARIES; do
-		if [ ! -f "${PREFIX}/${b}" ] || [ "$(sha256_of "${PREFIX}/${b}")" != "$(sha256_of "${tmp}/${b}")" ]; then
+		if [ ! -f "${PREFIX}/${b}" ] || [ "$(sha256_of "${PREFIX}/${b}")" != "$(sha256_of "${stage}/${b}")" ]; then
 			all_current=0
 		fi
 	done
 	if [ "$all_current" -eq 1 ]; then
 		log "install: Pix ${ver} is already current at ${PREFIX}"
+		# Still (re)place the notices: an older install.sh put none there.
+		install_notices "$stage"
 		return 0
 	fi
 
-	# Everything verified — now install. These moves are the only writes to
+	# Everything verified: now install. These moves are the only writes to
 	# ${PREFIX}; they happen last so a failed/mismatched download never lands.
 	mkdir -p "$PREFIX"
 	for b in $BINARIES; do
-		mv -f "${tmp}/${b}" "${PREFIX}/${b}"
+		mv -f "${stage}/${b}" "${PREFIX}/${b}"
 	done
+	install_notices "$stage"
 
 	report "$os" "$arch" "$ver"
 }
 
-# report — the first-run summary: where it landed, PATH status, next command.
+# install_notices STAGE: copy the license/notice set out of the unpacked
+# tarball into ${DOC_DIR}. MIT s2 ("included in all copies") and MPL-2.0 s3.1
+# are about the copy the user ends up with, not about what was in the archive.
+install_notices() {
+	stage="$1"
+	mkdir -p "${DOC_DIR}/licenses"
+	for n in $NOTICES; do
+		cp -f "${stage}/${n}" "${DOC_DIR}/${n}"
+	done
+}
+
+# report: the first-run summary: where it landed, PATH status, next command.
 report() {
 	os="$1"; arch="$2"; ver="$3"
 	log ""
@@ -253,6 +295,7 @@ report() {
 	for b in $BINARIES; do
 		info "${PREFIX}/${b}"
 	done
+	info "${DOC_DIR}/ (LICENSE, NOTICE.md, THIRD_PARTY_NOTICES.md, licenses/)"
 
 	case ":${PATH}:" in
 		*":${PREFIX}:"*)
@@ -337,6 +380,11 @@ do_uninstall() {
 			info "not found: ${PREFIX}/${b}"
 		fi
 	done
+
+	if [ -d "$DOC_DIR" ]; then
+		rm -rf "$DOC_DIR"
+		info "removed ${DOC_DIR}"
+	fi
 
 	if [ -e "$CONFIG_FILE" ] || [ -d "$CONFIG_DIR" ]; then
 		log ""

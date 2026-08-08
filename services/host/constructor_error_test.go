@@ -23,17 +23,6 @@ func TestBuildStoresReturnErrorNotFatal(t *testing.T) {
 	}
 	bad := filepath.Join(blocker, "store.db")
 
-	t.Run("knowledge", func(t *testing.T) {
-		t.Setenv("KNOWLEDGE_DB", bad)
-		store, _, err := buildKnowledgeStore()
-		if err == nil {
-			t.Fatalf("buildKnowledgeStore(%q) = nil error, want a returned error (must not fatal)", bad)
-		}
-		if store != nil {
-			t.Errorf("expected nil store on error, got %v", store)
-		}
-	})
-
 	t.Run("memory", func(t *testing.T) {
 		t.Setenv("MEMORY_DB", bad)
 		store, _, err := buildMemStore()

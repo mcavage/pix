@@ -55,40 +55,6 @@ func TestClampInt(t *testing.T) {
 	}
 }
 
-func TestMcpDispatcher(t *testing.T) {
-	tools := []mcpTool{{Name: "echo", Description: "echo", Properties: jsonObj{}, Required: nil}}
-	handlers := map[string]func(jsonObj) (any, error){
-		"echo": func(a jsonObj) (any, error) { return jsonObj{"said": a["msg"]}, nil },
-	}
-	h := mcpDispatcher("test", tools, handlers)
-
-	// initialize
-	rep, ok := h(jsonObj{"jsonrpc": "2.0", "id": float64(1), "method": "initialize"})
-	if !ok || rep["result"].(jsonObj)["serverInfo"].(jsonObj)["name"] != "test" {
-		t.Fatalf("initialize bad reply: %v", rep)
-	}
-	// tools/list
-	rep, ok = h(jsonObj{"id": float64(2), "method": "tools/list"})
-	if !ok || len(rep["result"].(jsonObj)["tools"].([]jsonObj)) != 1 {
-		t.Fatalf("tools/list bad reply: %v", rep)
-	}
-	// tools/call
-	rep, _ = h(jsonObj{"id": float64(3), "method": "tools/call", "params": map[string]any{"name": "echo", "arguments": map[string]any{"msg": "hi"}}})
-	txt := rep["result"].(jsonObj)["content"].([]jsonObj)[0]["text"].(string)
-	if !strings.Contains(txt, "hi") {
-		t.Fatalf("tools/call result missing payload: %q", txt)
-	}
-	// notification -> no reply
-	if _, ok := h(jsonObj{"method": "notifications/initialized"}); ok {
-		t.Fatal("notification should produce no reply")
-	}
-	// unknown tool -> error
-	rep, _ = h(jsonObj{"id": float64(4), "method": "tools/call", "params": map[string]any{"name": "nope"}})
-	if _, isErr := rep["error"]; !isErr {
-		t.Fatal("unknown tool should error")
-	}
-}
-
 func TestMemStoreRememberRecall(t *testing.T) {
 	st, err := newMemStore(":memory:", nil) // nil embedder -> FTS-only, no Ollama needed
 	if err != nil {

@@ -1,6 +1,6 @@
 ---
 name: onboarding
-description: First-run onboarding — one thorough, opinionated message naming the right workflow, stating only grounded setup gaps, then handing the wheel back. Use on first run or "onboard me".
+description: First-run onboarding via one thorough, opinionated message that names the right workflow, states only grounded setup gaps, then hands the wheel back. Use on first run or "onboard me".
 ---
 # onboarding
 
@@ -135,11 +135,13 @@ One message, in this order:
    - `pack.active` false: do NOT claim any pack is active. If `pack.exists`
      is true, say the default pack exists but is not active, and
      `pix pack use default` activates it. If `pack.exists` is false,
-     say `pix pack new <path>` creates one. Ordinary `pix setup` does not.
+     say creating one is a `pack.toml` (plus `skills/`) written by hand at
+     `<path>`, then `pix pack use <path>` to activate it. Ordinary `pix
+     setup` does not.
    These are commands they run on their HOST, not in this session. `pack use`
    changes the active host configuration; the current sandbox keeps its
    creation-time skills, MCP, wrappers, and config until they run `pix
-   run --replace`.
+   rm BOX && pix run`.
 7. **What to set up next**, only if the trusted payload shows a real gap
    (see below). Omit this block entirely if there's nothing to say.
 8. **Close with exactly one question:** `What are we doing in <repo>?` (use
@@ -164,12 +166,14 @@ exist, keep the top 3 by this order and drop the rest.
    call it broken. If this repo has durable docs or team conventions worth
    indexing: `pix knowledge init`.
 4. **`gog.enabled` is false**: optional. If they want Gmail, Calendar, or
-   Drive access: `pix gworkspace setup` (guided: installs check, OAuth import,
-   read-only authorization, and gateway registration in one command), then
-   `pix run --replace` to attach it to a running sandbox.
+   Drive access: install `gog` (`brew install openclaw/tap/gogcli`), authorize
+   an account with its own auth command, `pix config set
+   google_workspace_account <email>`, `pix config set mcp google-workspace`,
+   `pix mcp register` (no guided wizard — see docs/gworkspace.md), then
+   `pix rm BOX && pix run` to attach it to a fresh sandbox.
 5. **`mcp.enabled` is false and they need some other external tool** (not
    gog, don't duplicate that line): configure the MCP provider they need,
-   then `pix mcp register`, then `pix run --replace`.
+   then `pix mcp register`, then `pix rm BOX && pix run`.
 6. **Host mode**, only when they mention a device or system-level install
    (not general dev work), and only the step that is actually missing. Use
    `host.provisioned` and `host.enabled` separately, never just `host.ready`:
@@ -181,7 +185,8 @@ exist, keep the top 3 by this order and drop the rest.
    - `host.ready` true: skip this line entirely, nothing to do.
 7. **`pack.active` is false**: if `pack.exists` is true, the default pack
    just isn't active: `pix pack use default` activates it. If
-   `pack.exists` is false, `pix pack new <path>` creates one. If
+   `pack.exists` is false, say creating one is a `pack.toml` (plus
+   `skills/`) written by hand, then `pix pack use <path>` to activate it. If
    **`pack.active` is true but `pack.git_initialized` is
    false**, say plainly that the pack needs to be a git repo to be portable
    or shared, without assuming a specific fix command (don't invent an
@@ -219,7 +224,7 @@ worth wiring up next, but the 3-line cap still applies.
 > Your pack (skills, knowledge, MCP, config) is portable: the default pack is
 > active (this example's trusted payload has `pack.active` and `pack.default`
 > true), and `pix pack use <path|git-url>` on your host switches the
-> active pack. Run `pix run --replace` to load it into a new sandbox.
+> active pack. Run `pix rm BOX && pix run` to load it into a new sandbox.
 >
 > What to set up next:
 > - No model key resolved yet: run `pix setup` on your host first.

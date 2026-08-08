@@ -3,10 +3,10 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 func TestLoadAbsentReturnsDefaults(t *testing.T) {
@@ -86,45 +86,36 @@ port = 9000
 	if len(c.Skills.Paths) != 1 || c.Skills.Paths[0] != "/tmp/skills" {
 		t.Errorf("Skills.Paths = %v", c.Skills.Paths)
 	}
+	// [plugins.*] is RETIRED (U07d): the declarations above decode without
+	// error but are swept INERT — every slot answers builtin (no path, no sha,
+	// nothing launchable), and each declared slot surfaces through
 	mem := c.Plugin("memory")
-	if mem.Impl != "external" || mem.Path != "/opt/mem" || mem.SHA != "deadbeef" || mem.Port != 9000 {
-		t.Errorf("Plugin(memory) = %+v", mem)
+	if mem.Impl != BuiltinImpl || mem.Path != "" || mem.SHA != "" || mem.Port != 0 {
+		t.Errorf("Plugin(memory) = %+v, want inert builtin (plugins.* is retired)", mem)
 	}
-	// A slot with no impl set defaults to builtin.
 	if got := c.Plugin("slack"); got.Impl != BuiltinImpl {
 		t.Errorf("Plugin(slack).Impl = %q, want %q", got.Impl, BuiltinImpl)
 	}
-}
-
-// TestSlackOAuthAbsentHasNoDefaults: with no client_id configured, neither the
-// client id nor the redirect uri resolve to anything — there is deliberately
-// NO baked-in default client id (no "Docker" client id shipped in core), and
-// the redirect uri default only ever kicks in once a client id IS set.
-func TestSlackOAuthAbsentHasNoDefaults(t *testing.T) {
-	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "nope.toml"))
-	c, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.Slack.ClientID != "" {
-		t.Errorf("Slack.ClientID = %q, want empty (no baked-in default)", c.Slack.ClientID)
-	}
-	if c.Slack.RedirectURI != "" {
-		t.Errorf("Slack.RedirectURI = %q, want empty when no client id is set", c.Slack.RedirectURI)
-	}
-	if c.Slack.OAuthVaultID != "" || c.Slack.OAuthDocumentID != "" {
-		t.Errorf("Slack oauth vault/document = %q/%q, want empty", c.Slack.OAuthVaultID, c.Slack.OAuthDocumentID)
-	}
-	if !c.Slack.OAuthGrantExpiresAt.IsZero() {
-		t.Errorf("Slack.OAuthGrantExpiresAt = %v, want zero", c.Slack.OAuthGrantExpiresAt)
+	retired := c.RetiredKeys()
+	for _, want := range []string{"plugins.memory", "plugins.slack"} {
+		found := false
+		for _, k := range retired {
+			if k == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("RetiredKeys() = %v, want it to include %q (the inert notice)", retired, want)
+		}
 	}
 }
 
-// TestSlackOAuthRedirectDefaultsOnlyWhenClientIDSet: a configured client_id
-// with no explicit redirect_uri resolves to DefaultSlackOAuthRedirectURI.
-func TestSlackOAuthRedirectDefaultsOnlyWhenClientIDSet(t *testing.T) {
+// TestRetiredSlackTableTolerated: a leftover `[slack]` table from a
+// pre-externalization config.toml (client_id/redirect_uri/oauth_* fields)
+// decodes without error and reports as a RETIRED key, not an unknown one —
+func TestRetiredSlackTableTolerated(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
-	const toml = "[slack]\nclient_id = \"123.456\"\n"
+	const toml = "[slack]\nclient_id = \"123.456\"\nredirect_uri = \"https://example.com/cb\"\n"
 	if err := os.WriteFile(path, []byte(toml), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -132,147 +123,10 @@ func TestSlackOAuthRedirectDefaultsOnlyWhenClientIDSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFrom: %v", err)
 	}
-	if c.Slack.ClientID != "123.456" {
-		t.Errorf("Slack.ClientID = %q, want 123.456", c.Slack.ClientID)
-	}
-	if c.Slack.RedirectURI != DefaultSlackOAuthRedirectURI {
-		t.Errorf("Slack.RedirectURI = %q, want default %q", c.Slack.RedirectURI, DefaultSlackOAuthRedirectURI)
+	if !slices.Contains(c.RetiredKeys(), "slack") {
+		t.Errorf("RetiredKeys() = %v, want it to include the retired slack table", c.RetiredKeys())
 	}
 }
-
-// TestSlackOAuthExplicitRedirectPreserved: an explicit redirect_uri in the
-// file is never overridden by the default, even with a client_id set.
-func TestSlackOAuthExplicitRedirectPreserved(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.toml")
-	const toml = "[slack]\nclient_id = \"123.456\"\nredirect_uri = \"https://example.com/cb\"\noauth_vault_id = \"Private\"\noauth_document_id = \"itemid123\"\noauth_grant_expires_at = 2025-06-01T00:00:00Z\n"
-	if err := os.WriteFile(path, []byte(toml), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	c, err := LoadFrom(path)
-	if err != nil {
-		t.Fatalf("LoadFrom: %v", err)
-	}
-	if c.Slack.RedirectURI != "https://example.com/cb" {
-		t.Errorf("Slack.RedirectURI = %q, want the explicit value", c.Slack.RedirectURI)
-	}
-	if c.Slack.OAuthVaultID != "Private" || c.Slack.OAuthDocumentID != "itemid123" {
-		t.Errorf("Slack oauth vault/document = %q/%q", c.Slack.OAuthVaultID, c.Slack.OAuthDocumentID)
-	}
-	want := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
-	if !c.Slack.OAuthGrantExpiresAt.Equal(want) {
-		t.Errorf("Slack.OAuthGrantExpiresAt = %v, want %v", c.Slack.OAuthGrantExpiresAt, want)
-	}
-}
-
-// TestSlackOAuthSetters exercises the mutators the launcher/runtime call,
-// including the trim-on-set behavior shared with SetGogAccount et al.
-func TestSlackOAuthSetters(t *testing.T) {
-	c := &Config{}
-	c.SetSlackClientID("  abc.def  ")
-	c.SetSlackRedirectURI("  https://example.com/cb  ")
-	c.SetSlackOAuthVaultID("  Private  ")
-	c.SetSlackOAuthDocumentID("  itemid123  ")
-	if c.Slack.ClientID != "abc.def" {
-		t.Errorf("ClientID = %q, want trimmed abc.def", c.Slack.ClientID)
-	}
-	if c.Slack.RedirectURI != "https://example.com/cb" {
-		t.Errorf("RedirectURI = %q, want trimmed", c.Slack.RedirectURI)
-	}
-	if c.Slack.OAuthVaultID != "Private" {
-		t.Errorf("OAuthVaultID = %q, want trimmed Private", c.Slack.OAuthVaultID)
-	}
-	if c.Slack.OAuthDocumentID != "itemid123" {
-		t.Errorf("OAuthDocumentID = %q, want trimmed itemid123", c.Slack.OAuthDocumentID)
-	}
-
-	stamp := time.Date(2025, 7, 1, 12, 0, 0, 0, time.UTC)
-	c.SetSlackOAuthGrantExpiresAt(stamp)
-	if !c.Slack.OAuthGrantExpiresAt.Equal(stamp) {
-		t.Errorf("OAuthGrantExpiresAt = %v, want %v", c.Slack.OAuthGrantExpiresAt, stamp)
-	}
-	c.SetSlackOAuthGrantExpiresAt(time.Time{})
-	if !c.Slack.OAuthGrantExpiresAt.IsZero() {
-		t.Errorf("OAuthGrantExpiresAt after clear = %v, want zero", c.Slack.OAuthGrantExpiresAt)
-	}
-
-	// Clearing ClientID also clears whatever RedirectURI a prior default
-	// resolution had set, so a subsequent Load never resurrects a stale one.
-	c.SetSlackClientID("")
-	if c.Slack.ClientID != "" {
-		t.Errorf("ClientID after clear = %q, want empty", c.Slack.ClientID)
-	}
-}
-
-// TestClearSlackOAuthManaged proves disable's OAuth-mode cleanup clears
-// exactly the fields a rotating grant OWNS (the 1Password locators and the
-// cached expiry) while RETAINING the public client_id/redirect_uri, so a
-// later `pix slack setup` re-authorization is a one-step operation instead
-// of asking for the app's client id all over again.
-func TestClearSlackOAuthManaged(t *testing.T) {
-	c := &Config{}
-	c.SetSlackClientID("abc.def")
-	c.SetSlackRedirectURI("http://localhost:17373/slack/callback")
-	c.SetSlackOAuthVaultID("vault-xyz")
-	c.SetSlackOAuthDocumentID("item-abc")
-	c.SetSlackOAuthGrantExpiresAt(time.Date(2025, 7, 1, 0, 0, 0, 0, time.UTC))
-
-	c.ClearSlackOAuthManaged()
-
-	if c.Slack.ClientID != "abc.def" {
-		t.Errorf("ClientID = %q, want retained", c.Slack.ClientID)
-	}
-	if c.Slack.RedirectURI != "http://localhost:17373/slack/callback" {
-		t.Errorf("RedirectURI = %q, want retained", c.Slack.RedirectURI)
-	}
-	if c.Slack.OAuthVaultID != "" {
-		t.Errorf("OAuthVaultID = %q, want cleared", c.Slack.OAuthVaultID)
-	}
-	if c.Slack.OAuthDocumentID != "" {
-		t.Errorf("OAuthDocumentID = %q, want cleared", c.Slack.OAuthDocumentID)
-	}
-	if !c.Slack.OAuthGrantExpiresAt.IsZero() {
-		t.Errorf("OAuthGrantExpiresAt = %v, want cleared", c.Slack.OAuthGrantExpiresAt)
-	}
-}
-
-func TestSeedCreatesThenRefuses(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "sub", "config.toml")
-
-	created, err := Seed(path)
-	if err != nil {
-		t.Fatalf("Seed() first: %v", err)
-	}
-	if !created {
-		t.Errorf("Seed() first: created = false, want true")
-	}
-	if _, err := os.Stat(path); err != nil {
-		t.Errorf("Seed() did not write file: %v", err)
-	}
-
-	// Second call must not clobber.
-	before, _ := os.ReadFile(path)
-	created, err = Seed(path)
-	if err != nil {
-		t.Fatalf("Seed() second: %v", err)
-	}
-	if created {
-		t.Errorf("Seed() second: created = true, want false (must not clobber)")
-	}
-	after, _ := os.ReadFile(path)
-	if string(before) != string(after) {
-		t.Errorf("Seed() second: file was modified")
-	}
-
-	// The seeded file must decode cleanly.
-	t.Setenv("PIX_CONFIG", path)
-	if _, err := Load(); err != nil {
-		t.Errorf("Load() seeded file: %v", err)
-	}
-}
-
-// TestSeedOpRefsAtNoClobberAndDirPerms covers F5: SeedOpRefsAt is atomic
-// no-clobber (an existing file is never truncated) and it tightens an existing
-// 0755 config dir to 0700.
 func TestSeedOpRefsAtNoClobberAndDirPerms(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "cfg")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -369,10 +223,6 @@ func TestOpRefsTemplateHasNoActiveRefs(t *testing.T) {
 // TestRetiredKeysReportedAndNeverReemitted covers S01: mcp_static/mcp_dynamic
 // were retired (all configured/pack MCP servers now preload at sandbox
 // CREATE — no more eager/lazy split), but a config.toml written by an older
-// pix still has them. Load must not hard-fail, must surface them via
-// RetiredKeys (not silently swallow them into UnknownKeys, which would read
-// as "you made a typo"), and Save must never re-emit them — there is no
-// field for them to round-trip through.
 func TestRetiredKeysReportedAndNeverReemitted(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	src := `
@@ -389,9 +239,6 @@ mcp_dynamic = ["notion"]
 	}
 	if got, want := c.RetiredKeys(), []string{"mcp_dynamic", "mcp_static"}; !stringSlicesEqual(got, want) {
 		t.Errorf("RetiredKeys() = %v, want %v", got, want)
-	}
-	if got := c.UnknownKeys(); len(got) != 0 {
-		t.Errorf("UnknownKeys() = %v, want none (retired keys are not unknown)", got)
 	}
 	if len(c.MCP) != 1 || c.MCP[0] != "slack" {
 		t.Errorf("MCP = %v, want [slack] (live key still decodes)", c.MCP)
@@ -418,33 +265,6 @@ mcp_dynamic = ["notion"]
 		t.Errorf("reloaded RetiredKeys() = %v, want none", got)
 	}
 }
-
-// TestUnknownKeysSeparateFromRetired: a genuinely unrecognized key (typo or a
-// field from a future version) is reported via UnknownKeys, not RetiredKeys —
-// the two must never be conflated.
-func TestUnknownKeysSeparateFromRetired(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.toml")
-	src := `
-mcp_static = ["slack"]
-totally_made_up_key = "oops"
-`
-	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	c, err := LoadFrom(path)
-	if err != nil {
-		t.Fatalf("LoadFrom: %v", err)
-	}
-	if got, want := c.RetiredKeys(), []string{"mcp_static"}; !stringSlicesEqual(got, want) {
-		t.Errorf("RetiredKeys() = %v, want %v", got, want)
-	}
-	if got, want := c.UnknownKeys(), []string{"totally_made_up_key"}; !stringSlicesEqual(got, want) {
-		t.Errorf("UnknownKeys() = %v, want %v", got, want)
-	}
-}
-
-// TestLoadAbsentReportsNoRetiredOrUnknownKeys: a fresh install (no file) has
-// nothing undecoded to report.
 func TestLoadAbsentReportsNoRetiredOrUnknownKeys(t *testing.T) {
 	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "nope.toml"))
 	c, err := Load()
@@ -454,17 +274,11 @@ func TestLoadAbsentReportsNoRetiredOrUnknownKeys(t *testing.T) {
 	if got := c.RetiredKeys(); len(got) != 0 {
 		t.Errorf("RetiredKeys() = %v, want none", got)
 	}
-	if got := c.UnknownKeys(); len(got) != 0 {
-		t.Errorf("UnknownKeys() = %v, want none", got)
-	}
 }
 
 // TestSaveAtomic_WriteFailureLeavesPriorFileIntact (packs-v2 review finding
 // #4): Save writes to a temp file + atomic rename rather than truncating
 // config.toml in place, so a failed write never leaves the prior file
-// half-written. Simulate a write failure by revoking write access to the
-// config dir AFTER a first successful save, so the temp-file create itself
-// fails.
 func TestSaveAtomic_WriteFailureLeavesPriorFileIntact(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
@@ -529,8 +343,8 @@ func TestSaveAndMutators(t *testing.T) {
 	if c.AddMCP("gog") {
 		t.Error("AddMCP(gog) twice: want changed=false (no duplicate)")
 	}
-	if !c.AddService("knowledge") {
-		t.Error("AddService(knowledge): want changed=true")
+	if !c.AddService("broker") {
+		t.Error("AddService(broker): want changed=true")
 	}
 	if err := c.Save(); err != nil {
 		t.Fatalf("Save(): %v", err)
@@ -556,8 +370,8 @@ func TestSaveAndMutators(t *testing.T) {
 	if len(got.MCP) != 1 || got.MCP[0] != "gog" {
 		t.Errorf("MCP = %v, want [gog]", got.MCP)
 	}
-	if !contains(got.Services, "knowledge") {
-		t.Errorf("Services = %v, want it to contain knowledge", got.Services)
+	if !contains(got.Services, "broker") {
+		t.Errorf("Services = %v, want it to contain broker", got.Services)
 	}
 
 	// Remove mutators.
@@ -567,116 +381,27 @@ func TestSaveAndMutators(t *testing.T) {
 	if got.RemoveMCP("gog") {
 		t.Error("RemoveMCP(gog) twice: want changed=false")
 	}
-	if !got.RemoveService("knowledge") {
-		t.Error("RemoveService(knowledge): want changed=true")
+	if !got.RemoveService("broker") {
+		t.Error("RemoveService(broker): want changed=true")
 	}
 }
 
-// TestKnowledgeBundleMutators covers add/remove: idempotent, deduped,
-// canonicalized to an absolute path, and preserved across a Save/Load round-trip.
-func TestKnowledgeBundleMutators(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "sub", "config.toml")
+// TestKnowledgeBundlesKeyIsRetired: an older config.toml carrying
+// knowledge_bundles (the built-in OKF knowledge service, retired W2 U03A)
+// must still Load cleanly — tolerated, never a hard error — and be reported
+func TestKnowledgeBundlesKeyIsRetired(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("knowledge_bundles = [\"/kb/acme\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("PIX_CONFIG", path)
 
-	c, err := Load()
+	c, err := LoadFrom(path)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Load must tolerate a retired knowledge_bundles key, got: %v", err)
 	}
-
-	// A relative path is canonicalized to an absolute one.
-	if !c.AddKnowledgeBundle("bundles/okf") {
-		t.Error("AddKnowledgeBundle: want changed=true")
-	}
-	if len(c.KnowledgeBundles) != 1 || !filepath.IsAbs(c.KnowledgeBundles[0]) {
-		t.Errorf("KnowledgeBundles = %v, want a single abs path", c.KnowledgeBundles)
-	}
-	abs, _ := filepath.Abs("bundles/okf")
-	if c.KnowledgeBundles[0] != abs {
-		t.Errorf("KnowledgeBundles[0] = %q, want %q", c.KnowledgeBundles[0], abs)
-	}
-
-	// Adding the same bundle (relative or with surrounding space) is a no-op.
-	if c.AddKnowledgeBundle("bundles/okf") {
-		t.Error("AddKnowledgeBundle twice: want changed=false (dedupe)")
-	}
-	if c.AddKnowledgeBundle("  bundles/okf  ") {
-		t.Error("AddKnowledgeBundle trimmed dup: want changed=false")
-	}
-	if c.AddKnowledgeBundle("") {
-		t.Error("AddKnowledgeBundle empty: want changed=false")
-	}
-	if len(c.KnowledgeBundles) != 1 {
-		t.Errorf("KnowledgeBundles = %v, want exactly one entry", c.KnowledgeBundles)
-	}
-
-	if err := c.Save(); err != nil {
-		t.Fatalf("Save(): %v", err)
-	}
-	got, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got.KnowledgeBundles) != 1 || got.KnowledgeBundles[0] != abs {
-		t.Errorf("round-trip KnowledgeBundles = %v, want [%q]", got.KnowledgeBundles, abs)
-	}
-
-	// Remove by the same relative path the bundle was added with.
-	if !got.RemoveKnowledgeBundle("bundles/okf") {
-		t.Error("RemoveKnowledgeBundle: want changed=true")
-	}
-	if got.RemoveKnowledgeBundle("bundles/okf") {
-		t.Error("RemoveKnowledgeBundle twice: want changed=false")
-	}
-	if len(got.KnowledgeBundles) != 0 {
-		t.Errorf("KnowledgeBundles = %v, want empty after remove", got.KnowledgeBundles)
-	}
-}
-
-// TestKnowledgeBundleCanonicalizationMatchesStore is the F6 guard: config's
-// canonicalizeBundlePath must resolve a symlinked spelling to the SAME id as the
-// real path (abs -> EvalSymlinks -> Clean), so a bundle added via a symlink
-// dedupes against the real path and can be removed by either spelling.
-func TestKnowledgeBundleCanonicalizationMatchesStore(t *testing.T) {
-	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
-
-	real := t.TempDir()
-	link := filepath.Join(t.TempDir(), "link-to-bundle")
-	if err := os.Symlink(real, link); err != nil {
-		t.Skipf("symlink unsupported: %v", err)
-	}
-
-	// The real path and the symlinked spelling must canonicalize identically.
-	resolved, err := filepath.EvalSymlinks(real)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := canonicalizeBundlePath(link); got != resolved {
-		t.Fatalf("canonicalizeBundlePath(symlink) = %q, want %q (real path)", got, resolved)
-	}
-	if got := canonicalizeBundlePath(real); got != resolved {
-		t.Fatalf("canonicalizeBundlePath(real) = %q, want %q", got, resolved)
-	}
-
-	c, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Add via the real path, then adding via the symlink must dedupe (same id).
-	if !c.AddKnowledgeBundle(real) {
-		t.Fatal("AddKnowledgeBundle(real): want changed=true")
-	}
-	if c.AddKnowledgeBundle(link) {
-		t.Fatal("AddKnowledgeBundle(symlink): want changed=false (dedupe against real path)")
-	}
-	if len(c.KnowledgeBundles) != 1 || c.KnowledgeBundles[0] != resolved {
-		t.Fatalf("KnowledgeBundles = %v, want [%q]", c.KnowledgeBundles, resolved)
-	}
-	// Remove by the OTHER spelling (symlink) still removes the entry.
-	if !c.RemoveKnowledgeBundle(link) {
-		t.Fatal("RemoveKnowledgeBundle(symlink): want changed=true (remove by either spelling)")
-	}
-	if len(c.KnowledgeBundles) != 0 {
-		t.Fatalf("KnowledgeBundles = %v, want empty after remove", c.KnowledgeBundles)
+	if !slices.Contains(c.RetiredKeys(), "knowledge_bundles") {
+		t.Errorf("RetiredKeys() = %v, want knowledge_bundles reported", c.RetiredKeys())
 	}
 }
 
@@ -689,105 +414,9 @@ func contains(list []string, s string) bool {
 	return false
 }
 
-func TestEnsureToken(t *testing.T) {
-	dir := t.TempDir()
-	// TokenPath derives from configDir; PIX_CONFIG's parent is the dir.
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-
-	tok1, err := EnsureToken()
-	if err != nil {
-		t.Fatalf("EnsureToken() first: %v", err)
-	}
-	if tok1 == "" {
-		t.Fatal("EnsureToken() minted empty token")
-	}
-
-	tok2, err := EnsureToken()
-	if err != nil {
-		t.Fatalf("EnsureToken() second: %v", err)
-	}
-	if tok1 != tok2 {
-		t.Errorf("EnsureToken() not idempotent: %q != %q", tok1, tok2)
-	}
-
-	info, err := os.Stat(TokenPath())
-	if err != nil {
-		t.Fatalf("stat token: %v", err)
-	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Errorf("token file mode = %o, want 600", perm)
-	}
-
-	// ReadToken returns the same value.
-	got, err := ReadToken()
-	if err != nil {
-		t.Fatalf("ReadToken(): %v", err)
-	}
-	if got != tok1 {
-		t.Errorf("ReadToken() = %q, want %q", got, tok1)
-	}
-}
-
-// TestEnsureTokenConcurrent proves the first-run race is closed: N goroutines
-// racing on a fresh config dir must all return the SAME token. Before the
-// O_CREATE|O_EXCL election, concurrent first-runs could each mint a different
-// value and the last writer would win, so the host and the VM could end up with
-// different tokens and auth would fail.
-func TestEnsureTokenConcurrent(t *testing.T) {
-	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
-
-	const n = 32
-	var wg sync.WaitGroup
-	start := make(chan struct{})
-	toks := make([]string, n)
-	errs := make([]error, n)
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			<-start // release all goroutines at once to maximize the race
-			toks[i], errs[i] = EnsureToken()
-		}(i)
-	}
-	close(start)
-	wg.Wait()
-
-	for i, err := range errs {
-		if err != nil {
-			t.Fatalf("EnsureToken() goroutine %d: %v", i, err)
-		}
-		if toks[i] == "" {
-			t.Fatalf("EnsureToken() goroutine %d: empty token", i)
-		}
-	}
-	want := toks[0]
-	for i, got := range toks {
-		if got != want {
-			t.Fatalf("EnsureToken() goroutine %d = %q, want %q (tokens diverged under concurrency)", i, got, want)
-		}
-	}
-
-	// The persisted file must match the agreed token.
-	got, err := ReadToken()
-	if err != nil {
-		t.Fatalf("ReadToken() after race: %v", err)
-	}
-	if got != want {
-		t.Errorf("ReadToken() = %q, want %q", got, want)
-	}
-}
-
-func TestReadTokenAbsent(t *testing.T) {
-	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
-	if _, err := ReadToken(); err == nil {
-		t.Error("ReadToken() absent: got nil err, want error")
-	}
-}
-
 // TestServePidPath resolves serve.pid under the STATE dir (ephemeral runtime
 // state, a sibling of serve.log), honoring $XDG_STATE_HOME, so the host writer
-// and the launcher reader always agree on the location — and so `pix reset`
-// (which moves the CONFIG dir aside) never orphans a running daemon's pidfile.
+// and the launcher reader always agree on the location.
 func TestServePidPath(t *testing.T) {
 	xdg := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", xdg)
@@ -804,13 +433,31 @@ func TestServePidPath(t *testing.T) {
 	}
 }
 
+// TestMonitorStoreRoot resolves <state-dir>/monitor, honoring $XDG_STATE_HOME,
+// so `pix-host serve` (writer) and `pix monitor` (reader) always agree.
+func TestMonitorStoreRoot(t *testing.T) {
+	xdg := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", xdg)
+	want := filepath.Join(xdg, "pix", "monitor")
+	got, err := MonitorStoreRoot()
+	if err != nil {
+		t.Fatalf("MonitorStoreRoot: %v", err)
+	}
+	if got != want {
+		t.Errorf("MonitorStoreRoot() = %q, want %q", got, want)
+	}
+	// A sibling of serve.pid/serve.log (the state dir), NOT the config dir.
+	if filepath.Dir(got) != filepath.Dir(ServePidPath()) {
+		t.Errorf("MonitorStoreRoot dir %q != state dir %q", filepath.Dir(got), filepath.Dir(ServePidPath()))
+	}
+}
+
 // TestDataDirLayout locks the XDG data-root resolution: $XDG_DATA_HOME wins,
 // else ~/.local/share/pix, and every durable default derives from it.
 func TestDataDirLayout(t *testing.T) {
 	xdg := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", xdg)
 	t.Setenv("MEMORY_DB", "")
-	t.Setenv("KNOWLEDGE_DB", "")
 
 	d, err := DataDir()
 	if err != nil {
@@ -821,12 +468,6 @@ func TestDataDirLayout(t *testing.T) {
 	}
 	if got, want := MemoryDBPath(), filepath.Join(xdg, "pix", "memory", "memory.db"); got != want {
 		t.Errorf("MemoryDBPath = %q, want %q", got, want)
-	}
-	if got, want := KnowledgeDBPath(), filepath.Join(xdg, "pix", "knowledge", "knowledge.db"); got != want {
-		t.Errorf("KnowledgeDBPath = %q, want %q", got, want)
-	}
-	if got, want := BackupsDir(), filepath.Join(xdg, "pix", "backups"); got != want {
-		t.Errorf("BackupsDir = %q, want %q", got, want)
 	}
 
 	// Env overrides win over the derived default.

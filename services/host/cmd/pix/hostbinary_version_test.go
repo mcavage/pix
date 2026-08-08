@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"pix/host/launcher"
 	"runtime"
 	"strings"
 	"testing"
@@ -24,12 +25,15 @@ func TestFindHostBinaryRejectsVersionSkew(t *testing.T) {
 	dir := t.TempDir()
 	writeFakeHostBinary(t, dir, "0.0.9")
 	t.Setenv("PATH", dir)
-	old := version
-	version = "0.1.0"
-	t.Cleanup(func() { version = old })
-	_, err := findHostBinary()
+	// Swap launcher.Version, which is what FindHostBinary reads. main's
+	// `version` is the -ldflags stamp and is pushed down once in init(), so
+	// assigning it here would be a no-op the test could not see.
+	old := launcher.Version
+	launcher.Version = "0.1.0"
+	t.Cleanup(func() { launcher.Version = old })
+	_, err := launcher.FindHostBinary()
 	if err == nil || !strings.Contains(err.Error(), `does not match pix version "0.1.0"`) {
-		t.Fatalf("findHostBinary error = %v, want explicit version mismatch", err)
+		t.Fatalf("launcher.FindHostBinary error = %v, want explicit version mismatch", err)
 	}
 }
 
@@ -37,10 +41,13 @@ func TestFindHostBinaryAcceptsExactVersion(t *testing.T) {
 	dir := t.TempDir()
 	writeFakeHostBinary(t, dir, "0.1.0")
 	t.Setenv("PATH", dir)
-	old := version
-	version = "0.1.0"
-	t.Cleanup(func() { version = old })
-	got, err := findHostBinary()
+	// Swap launcher.Version, which is what FindHostBinary reads. main's
+	// `version` is the -ldflags stamp and is pushed down once in init(), so
+	// assigning it here would be a no-op the test could not see.
+	old := launcher.Version
+	launcher.Version = "0.1.0"
+	t.Cleanup(func() { launcher.Version = old })
+	got, err := launcher.FindHostBinary()
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,7 +8,366 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## Unreleased
 
+### Added
+
+- **Supervision-tree observability, end to end.** `pix-host serve` now publishes
+  a typed snapshot of the Suture tree (`~/.local/state/pix/serve.units.json`,
+  atomic + 0600, republished every 5 s and on every supervision event), and both
+  reader surfaces consume it instead of guessing: `pix serve status [--json]`
+  gains a `units[]` array and a per-unit human line, and `pix doctor --json` /
+  `pix status --json` gain a `supervisor` object. Each unit reports identity (the
+  sha256 admission fingerprint — env grant VALUES enter it only as digests),
+  state, pid, health, reattached, restarts, generation, scrubbed last error, and
+  last health-probe latency in microseconds. Every published error goes through
+  `unitreport.ScrubError`, which redacts `*_TOKEN=`/`Bearer `/`op://` shapes. A
+  missing, foreign-pid, schema-mismatched or >20 s stale snapshot renders as
+  UNKNOWN, never as healthy. New L0 package `services/host/unitreport` owns the
+  shared shape (supervise at L2 writes it; service at L1 and workflow/doctor at
+  L3 read it).
+- **`scripts/macos/verify-pix-lifecycle.sh`** — the machine-checkable half of
+  host UAT, with real assertions and no unconditional PASS: command/flag surface,
+  digest-suffixed sandbox naming, lease instance identity, attach fingerprint
+  refusal, exit-code propagation, multi-shell teardown, `--keep` vs the orphan
+  reaper, serve/doctor supervision JSON (including a no-secrets assertion),
+  memory-unit restart across a SIGKILL with `:11435` never dropping, launchd
+  respawn + mode-aware `serve stop`, and an opt-in external-OAuth pass. It greps
+  itself for blast-radius removal flags, removes only sandboxes it created,
+  asserts `$PWD` is unchanged, and reports SKIPs as an INCOMPLETE run (exit 2).
+- **`docs/runbooks/host-services.md`** — the on-call runbook: golden-signal SLIs
+  with SLOs and an error-budget policy, unit-field reference, alert-to-response
+  table, recovery order, a toil ledger, and the postmortem trigger.
+- **`TestMemoryListenerSurvivesUnitRestart`** (`services/host`) — a real
+  process/socket/SQLite test that SIGKILLs the memory child and proves the three
+  properties the design exists for: the listener stays bound, calls fail fast
+  while no unit is dispensed (never hang), and the unit recovers with its data
+  and a counted restart.
+
 ### Changed
+
+- **doctor/status JSON is schema_version 5.** v5 adds the required top-level
+  `supervisor` object; `RetiredSchemas[4]` records the migration (a v4 consumer
+  keeps every field it knows). Corpus contract cases updated.
+- `docs/HOST-UAT.md` rewritten around the script: what the machine proves, what
+  only a human can judge, and the exit-code contract.
+
+### Fixed
+
+- **sbx v0.38 CLI-grammar compatibility.** `pix doctor`/`pix status`'s sbx probe
+  now falls back from `sbx --version` to `sbx version` when a newer sbx build
+  rejects the root `--version` flag with a recognized usage error (evidence
+  says so explicitly); a denied, timed-out, or otherwise-failed probe never
+  retries. `pix mcp bundle`'s default `add` now tries the current `NAME --url
+  URL` grammar and falls back to the positional `NAME URL` form on the same
+  narrow signal. `pix mcp register`'s manifest/remote-URL container
+  registrations instead decide their `--url`-flag-vs-positional grammar up
+  front from a read-only `sbx mcp add --help` probe, never from a failed
+  attempt, because a remote registration can open an interactive OAuth grant
+  a retry must not repeat. New `sys.IsUsageMismatch` is the one shared
+  classifier every one of these call sites gates its retry on: an
+  unknown-flag/unknown-command/wrong-arity signature from the invoked CLI's
+  own parser, never an auth/policy/operational failure.
+- **`pix monitor` no longer blocks forever on an empty or absent store.**
+  `pix monitor --json | head -5` used to hang indefinitely, because `Run`
+  always ran the polling `Follow` loop and `NewStore` silently created the
+  (empty) store root just by being asked to read it. Fixed: a new read-only
+  `monitor.OpenStore` never creates the root, and a non-interactive run (a
+  pipe, a script) now defaults to one-shot (`monitor.Once`: print whatever
+  is already stored and exit) instead of live-follow. Nothing stored AND no
+  `pix-host serve` running now exits 3 with an actionable message instead of
+  hanging or printing nothing; nothing stored while an ingest listener IS up
+  is still quiet, honest success. An interactive terminal keeps the old
+  live-follow default but now prints an honest banner first. New
+  `--follow`/`-f` flag forces streaming explicitly either way. See
+  `docs/design/monitor.md`.
+- `lib/recall-message.ts` no longer documents the deleted knowledge store
+  (`:11436`, `KNOWLEDGE_CHAR_BUDGET`, `/knowledge`) as live behaviour; the
+  per-channel budget rationale is restated for the store that actually exists.
+- **`scripts/macos/verify-pix-lifecycle.sh` false failures.** The OAuth pass no
+  longer reads its confirmation prompt from the script's own stdin (a
+  background/CI run with stdin closed hung or reported a false FAIL); it now
+  asserts `pix mcp auth --all`'s own exit code, certifies completion against a
+  machine-readable probe (`pix doctor --json`'s per-server
+  registered/authenticated evidence), and treats an optional human
+  confirmation — bounded, `/dev/tty`-only — as SKIP, never FAIL, when no TTY
+  answers. The `mcp ls` "registration, not attachment" check no longer greps
+  for the bare substring `attached`, which always matched `mcp ls`'s own
+  honest disclaimer ("not what's attached to...") and so could never pass; it
+  now asserts the disclaimer positively and checks for a precise present-tense
+  attachment claim instead. The script tracks and restores any MCP catalog
+  bundle it registers, redirects every backgrounded `pix run`'s stdin from
+  `/dev/null`, bounds every `wait` on one (`bounded_wait`), and preflights
+  WHICH `pix-host` binary an already-running `serve` is before trusting it —
+  refusing with the exact repair command on a stale/unmanaged mismatch instead
+  of silently certifying it.
+
+### Legal / release
+
+- **Phase10 legal blockers closed (B1–B4).** MPL-2.0 disclosure is now real,
+  not asserted: `licenses/MPL-2.0.txt` ships the full verbatim text in the
+  image and the Homebrew tarball, each MPL component records a Source Code
+  Form URL pinned to the exact linked version (go-plugin v1.8.0, yamux
+  v0.1.2), and the notices no longer both claim and deny that license texts
+  are reproduced. `LICENSE` now names **Docker, Inc. and the pix
+  contributors**, with the DHI-redistribution and employer-IP basis recorded
+  durably in `docs/legal/AUTHORIZATIONS.md` (A-1/A-2, each listing what it
+  explicitly does NOT cover) and `CONTRIBUTING.md`/`NOTICE.md` stating
+  inbound = outbound MIT. `LICENSE` + `licenses/` now ship in the image and
+  the tarball (MIT s2, MPL-2.0 s3.1). `publish.yml` exports the published
+  manifest digest, runs `verify-provenance.sh` against it in a **blocking**
+  `provenance` job, and generates the SBOM against that published digest;
+  `continue-on-error` is gone from `legal.yml` (SBOM *diffing* remains
+  explicitly ungated in `docs/legal/FINDINGS.md` #7). New
+  `docs/legal/PRIVACY.md`. All of it gated by
+  `scripts/check-third-party-notices.sh` +
+  `tests/legal-authorizations-and-privacy.test.mjs`.
+
+### Docs
+
+- **U12: final public docs/release sync against delivered code.** `AGENTS.md`'s
+  repo-layout table, go-plugin host architecture section, and the agent/model
+  bullets described a stale shape (knowledge (:11436) + a credential broker as
+  live `serve` slots, `pix agent new/edit/rm/reassess` as a live CLI, host mode
+  gated by `host.enabled` rather than deleted) that no longer matches the code
+  — corrected in place, with safety invariant #9 rewritten from "off by
+  default" to "retired outright" (`tests/agents-md-invariants.test.mjs`
+  updated to match, same stable id). Added `docs/getting-started.md` (first
+  session, end to end), `docs/design/lifecycle-trust.md` (sandbox lifecycle +
+  pack trust in one place), `docs/MIGRATION.md` (retired-verb table +
+  upgrade/host-mode/knowledge migration notes), and `docs/HOST-UAT.md` (the
+  exact host-side verification script + in-sandbox prompt, since an agent
+  cannot run `make load`/`make run` from inside a sandbox). Marked
+  `docs/design/rearchitecture.md` and `docs/design/host-mode.md` superseded
+  in place (banner only — the historical prose is unedited). `NOTICE.md` now
+  states explicitly that a DHI entitlement is the operator's own, never
+  requested or recorded by pix. No application logic changed.
+
+### Changed
+
+- **U11m: `pix agent` cut to `ls` only — `new`/`edit`/`rm`/`reassess` retired.**
+  Interactive authoring (`launchInteractiveAuthoring`, a `pi` re-exec), YAML
+  frontmatter mutation (`agentNew`/`agentEdit`/`agentRm`, nine flags across two
+  handlers, a yaml.Node round-trip), and the reassess host-exec wrapper
+  (`repoRoutingTarget`/`readCompiledRoutes`/`resolveRoster`, a `route compile`
+  passthrough duplicating what `pix models route` already does directly) are
+  gone. `pix agent ls` (table + `--json`) is the entire surviving surface —
+  same resolved-model-and-WHY roster read `subagents.ts` depends on
+  independently (it reads `agents/*.md` itself and never shelled out to this
+  command). Authoring/editing/removing an agent is now a hand-edit of its
+  `agents/<name>.md` frontmatter, same as always for its prompt body; a new
+  intent's scores go in `scorecard.json` by hand, then `pix models route`
+  recompiles `routing.json` and a sandbox relaunch picks it up. Typing
+  `new`/`edit`/`rm`/`remove`/`reassess` answers with the standard
+  `PIX_RETIRED` notice (exit 2, no side effect) naming that path — five new
+  entries in `retired.go` + `corpus/retirement.jsonl`, proved end to end by
+  the existing real-binary retirement harness
+  (`corpus/retired_dispatch_test.go`), no shard changes needed. Net: `agent.go`
+  580 -> 225 prod LOC, `agent_cmd.go` 74 -> 33; two now-obsolete redrive
+  regression tests (`TestAgentNew_NextStepsPointAtLiveScorecardPath`,
+  `TestAgentReassessModel_PointsAtLiveScorecardPath`) removed with the
+  surfaces they pinned. Shrink-only: no budget ceiling raised.
+
+- **U11k: `cmd/pix/corpus` reclassified as test-only support (588 -> 0
+  production LOC).** The golden CLI corpus + retirement-manifest harness had
+  no runtime caller — it exists solely to be driven by `go test
+  ./cmd/pix/corpus`, exercising the real compiled `pix` binary as a
+  subprocess — so its four implementation files (`loader.go`, `regen.go`,
+  `retirement.go`, `runner.go`, plus `types.go`) are folded into their
+  matching `*_test.go` files (`types.go` simply renamed to `types_test.go`,
+  no collision). Every `.go` file under the package is now a `_test.go` file:
+  `go test ./cmd/pix/corpus` and the full golden-corpus run (CI's `metrics`
+  job) are unchanged and still green, including the sharded corpus, the
+  append-only retirement-manifest checks, and the real-binary behavioral
+  tests. Folding in the duplicate `buildPixBinary`/`BuildPixBinary` wrapper
+  pair into one `sync.Once`-cached test helper avoided growing total test
+  LOC while merging: the package's combined line count actually shrank
+  588+863=1,451 -> 1,421. `arch_test.go`'s `pkgLayer` map and
+  `scanPackages` now skip packages with zero non-test `.go` files (a
+  package that is only tests has no layer to place), and
+  `scripts/arch-metrics/main.go`'s `scan()` mirrors that rule for the same
+  reason, so `cmd/pix/corpus` is gone from both the architecture layer map
+  and `scripts/arch-metrics/budgets.json` — not zeroed, removed. Both
+  changes are shrink-only: `pix/host` and every other package's recorded
+  budget ceiling is unchanged.
+
+- **U07b: `pix-host backup`/`restore` collapse into `pix-host memory
+  snapshot`/`memory restore`.** The multi-component hot archive (a versioned
+  `tar.gz` carrying `memory.db` + `config.toml` + `op-refs.env` + a
+  `manifest.json`, with retention/pruning, tar-bomb guards, a plain-file
+  install/rollback stack and its own atomic-write helper — 1,610 lines across
+  `memory_backup.go`/`memory_restore.go`) is gone. What replaces it is ONE
+  artifact: a snapshot is a plain sqlite file written with `VACUUM INTO`
+  through a read-only handle (`pix-host memory snapshot PATH`, hot, verified,
+  `0600`, never clobbering), and the restore primitive
+  (`pix-host memory restore PATH [--force]`) installs one with the service
+  STOPPED — enforced by the same advisory store flock the daemon holds, taken
+  first and held across the commit, with the previous db and its sidecars kept
+  in a reversible `.bak-<ts>-<rand>` set. `config.toml` is reproducible with
+  `pix config set` and `op-refs.env` holds `op://` pointers, not values, so
+  neither needed an archive format. The DB path, schema and `0600` mode are
+  unchanged; the retired top-level `backup`/`restore` verbs answer with
+  `PIX_RETIRED` naming the new commands. Documented in `docs/memory.md`.
+
+- **U05b: monitor ingest ownership moved under `pix-host serve`; `pix
+  monitor` is now a pure offline reader.** The loopback ingest listener that
+  receives NDJSON events from the in-VM monitor tap (`services/host/monitor`,
+  `:11437`) used to be started only by `pix monitor` itself. It now composes
+  directly inside `runServe` (`services/host/serve.go`), alongside memory,
+  gated by the same `services` config/CLI mechanism (`serveServiceAliases`
+  gained a `monitor` entry) — `pix config set services monitor`, or the
+  existing "empty config means all" default, enables it. `--bind`/`--port`
+  moved down with it: they are `pix serve`/`pix-host serve` flags now, not
+  `pix monitor` flags. `pix monitor` (`services/host/cmd/pix/monitor.go`)
+  lost its listener entirely — `[name] [--path DIR] [--json]` only — and
+  tails the new `config.MonitorStoreRoot()` (`<state-dir>/monitor`), the same
+  root `serve` writes to, so a reader works whether or not serve is running
+  right now. `pix status`/`doctor` still see ingest via the existing
+  `monitor.DefaultPort` dial, unchanged by who started it. The wire schema,
+  the `:11437` loopback-only bind default, and the kit's `PIX_MONITOR`/
+  `PIX_MONITOR_URL` env contract and network allowlist entries are untouched.
+  See `docs/design/monitor.md`.
+
+### Removed
+
+- **pix's host is macOS-only now.** Deleted the `systemd --user` managed-
+  service implementation (`serve_install_linux.go`, the `pix-serve.service`
+  unit generator + template + tests), the Windows lock/process/service/
+  credential shims (`lock_windows.go`, `service/ctl_windows.go`,
+  `service/start_windows.go`, `slackoauth/*_windows.go`, `sys/lock_windows.go`,
+  `workflow/gworkspace/gog_credentials_snapshot_windows.go`), and every
+  install/upgrade/release path that shipped a Linux `pix`/`pix-host` binary
+  (`install.sh`, the `publish.yml` release-binaries matrix). launchd-managed
+  `pix serve install`/`stop`/PID ownership/spawn-lock/plist validation are
+  unchanged. `services/host` still `go build`/`go test`s under `GOOS=linux` —
+  the pix sandbox IMAGE stays a Linux container and devs hack on this repo
+  from inside one — via a single non-darwin compile stub
+  (`service.ErrUnsupportedHost`) with no lifecycle behavior. See
+  `docs/design/serve-lifecycle.md`.
+
+### Fixed
+
+- **`pix reset` asked a PORT whether the daemon was running, and got it wrong
+  in both directions.** The pre-stop "was it up" answer and the post-stop "is it
+  down" proof were both a `MEMORY_PORT` health dial, so a daemon whose memory
+  service was disabled (monitor-only) or had crashed read as DOWN: reset stopped
+  it and never restarted it, and — worse — it moved `~/.local/share/pix` out from
+  under that still-live process and deleted the pidfile that was `pix serve
+  stop`'s only handle on it. A stop that FAILED or refused an unverifiable pid
+  was equally invisible: its error was printed and the destructive steps ran
+  anyway. Both questions are now asked of the daemon's IDENTITY
+  (`service.ServeIdentityUp`: a loaded managed unit, or a pidfile naming a live
+  process that is not provably a stranger's), the same ownership answer
+  `serve stop`/`serve status` already share. A daemon that cannot be PROVEN dead
+  blocks the data move, keeps its pid/lock files, and is not "restarted" behind
+  its own back; `--force` still overrides the data move, but never the runtime
+  files. Reproduced by real-process/real-pidfile tests
+  (`workflow/reset/reset_process_test.go`) that fail against the old probe.
+
+- **The model router described the shipped catalog, not your host.** `pix
+  models show|ls|pick|route` (i.e. the whole `pix-host route` tree) loaded
+  `models.json` and nothing else, so its `AVAIL` column reported "Pix ships
+  support for this" under a name every user reads as "you can call this" — and
+  every intent resolved against it. On a host with no OpenAI key, `pix models
+  show` reported the default intent routing to `openai/gpt-5.6-sol`, and `pix
+  models route` WROTE that into `routing.json`, which host-mode subagents read.
+  The binding-aware resolve already existed but lived in the launcher, out of
+  the host binary's reach. It is now `services/host/inference` and both
+  binaries share it. `AVAIL` becomes `STATUS` (`wired` / `unwired` /
+  `retired`), an intent with no callable model is DROPPED from the compiled map
+  and named rather than pointed at an unreachable provider, and `--catalog`
+  restores the host-independent view for baking the image default.
+- **A declined model download made `pix setup` exit non-zero.** Choosing Ollama
+  local and answering "no" to the multi-gigabyte pull bound a candidate,
+  probed it, and — since the weights were not on disk — hard-failed with
+  "ollama models are bound, but none answered a request", contradicting the
+  documented contract that declining is a decision, not a failure. The consent
+  check now precedes that error. It was invisible because the covering test
+  wired no probe at all (see below).
+- **Verification could be silently switched off.** `verifyDirectInference` /
+  `verifyOllamaInference` returned `0 attempted, 0 verified, no failures` when
+  handed a `shellEnv` with no probe function — a value indistinguishable from a
+  clean pass, so callers printed "0 model(s) answered a live request" and
+  exited 0. They now return `(probeOutcome, error)` with an explicit
+  `errNoProbeSeam`, which is what surfaced the setup bug above.
+- **Three `pix doctor` tests failed on a clean checkout** because they read the
+  developer's real `~/.config/pix/op-refs.env`. A `TestMain` guard now points
+  the launcher package's config resolution at a temp dir.
+
+### Added
+
+- **Trusted pack `[[services]]` now wire into the supervisor (U07d).** The
+  pack side exports exactly one seam, `pack.AcceptedGoPluginServices`: the
+  minimal normalized view (name, activation, absolute path, sha pin, argv,
+  env reference names, loopback front door) of a pack's go-plugin services —
+  and ONLY after the pack's current host-exec surface matches the fingerprint
+  accepted at the Tier-1 gate, so consent strictly precedes any staging or
+  start. The supervisor side (`pack_units.go`) is the integrator hook:
+  `packUnitSpec` (view → `supervise.NewExternalUnit`, dispense kinds limited
+  to the closed `plugin.PluginMap` set) and `supervisor.reconcilePackUnits`
+  (add-only, collision-safe; never replaces a running unit). Root `serve`
+  composition is untouched — nothing calls the hook yet. Reserved-port,
+  reserved-name, loopback-only, and env-names-only rules are re-validated at
+  export, and the staged binary is re-hashed against the consented pin on
+  every start, so a binary swapped after acceptance is refused at launch.
+
+- **`pix models add ollama`** — the keyless half of `models add`. `models add`
+  derived its provider list from `providerKeyRefOrder`
+  (anthropic/openai/google), so the one backend that needs no credential had no
+  post-setup path at all: pulling a new local model or gaining a cloud
+  entitlement meant re-running `pix setup`. It reads what the daemon lists,
+  proves each with a real generate, and widens the roster. `--local` /
+  `--cloud` narrow it; the default is both. Downloads nothing — it names a tag
+  worth pulling and leaves the decision to you. An explicit `models add
+  <provider>` now also widens the roster for a provider already recorded in
+  `roster_providers`, without which the SECOND add of any provider bound and
+  probed models that then sat outside the roster while the command reported
+  success.
+- **Sandbox sessions no longer warn `No models match pattern "ollama/…"`.**
+  `pix run` passes pi a `--models` cycle built from every callable binding,
+  but `extensions/ollama-bridge.ts` registered exactly one hardcoded model. It
+  now registers what the host's generated `inference.json` declares, with the
+  configured bridge tag guaranteed present.
+
+### Retired
+
+- **The direct `[plugins.*]` config declaration is retired and inert (U07d).**
+  A config.toml can no longer name an executable for `pix-host` to launch:
+  every declared `plugins.<slot>` is swept at load into the same
+  `RetiredKeys` notice surface as other stale keys (shown by `doctor`/
+  `config show`), `Config.Plugin()` always answers builtin, and the
+  `[plugins.mcp]` MCP-bridge override path is gone. External service units
+  are pack-trust-admitted `[[services]]` declarations only (AC-SUP-05).
+
+### Changed
+
+- **`shellEnv` is gone; OS seams live in `services/host/sys`.** It was 22
+  nullable function pointers threaded through 254 functions and guarded by 125
+  hand-written nil checks that disagreed with each other — for `env.run == nil`
+  alone the package held fourteen distinct behaviours, and three shipped bugs
+  came out of the gap. `sys` splits the seams into four interfaces by what they
+  touch (`Exec`, `FS`, `Env`, `Net`), so a signature says what a function can
+  reach; `sys.Real` holds no nullable state, which is what let the guards be
+  deleted rather than rewritten (**125 -> 11**, all 11 on domain probes that
+  leave in a later phase). Nullability survives only in `sys/systest.Fake`,
+  where an unwired method fails loudly instead of returning a zero value that
+  reads like an answer. Net **-623 lines**. No user-visible behaviour change,
+  but several fixtures were found to have been testing paths no user took —
+  see docs/design/rearchitecture.md.
+
+- **An intent's `providers` list is a PREFERENCE, not an allowlist**, and is
+  spelled `prefer_providers` in `policy.json` (the old key still loads, with
+  the new semantics). The resolver ranks by objective and then floats preferred
+  vendors to the front, so a preference can reorder the feasible set but never
+  exclude the last usable model, and an unreachable vendor is reported via
+  `Decision.PreferenceMet` instead of `ConstraintsMet: false`. The relaxation
+  ladder loses its provider rung — the code implementing it already said
+  "vendor diversity is a PREFERENCE encoded as a constraint". This mattered
+  because the shipped policy pins `overlord` (the interactive orchestrator and
+  the default `run_intent`) to OpenAI while `pix setup` wires Anthropic: every
+  default install resolved through the ladder and reported `FALLBACK` on its
+  most important route while working perfectly. A genuinely hard vendor rule
+  belongs in `inference.exclusive_backend` / `exclusive_source`, which enforce
+  it at the binding layer where an excluded vendor is uncallable rather than
+  merely outranked.
 
 - **Renamed `pix route` to `pix models`** (docs/design/models-cli.md): the
   noun a user actually wants ("what models can pix use, and which are wired
@@ -25,6 +384,30 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   <provider>` and `pix models setup` — the fix for "I can't find how to add a
   second provider key later" — land in a follow-up change; this rename only
   builds the verb tree and leaves the extension point.
+
+### Removed
+
+- **The pre-public pack-directory migration is gone** (`~/.local/share/pix/pack`
+  / `.../personal` -> `.../default`, its manifest `name` rewrite, its
+  trust-path migration, and the stale-state repair pass that cleaned up after
+  an older non-transactional version of itself). Those two directory names were
+  only ever written by pre-0.1.0 builds under the OLD product name, and 0.1.0
+  was a clean pre-launch cutover with no legacy-path discovery — so on every
+  released build the migration probed for directories no pix build creates,
+  and `DefaultPackRoot()` did a stat, a flock, a config load and a trust-store
+  load to decide "nothing to do". It now returns the path. What is kept, and
+  tested: the bare `pix pack use personal` token remains a deprecated alias for
+  the default pack (a CLI spelling, not a path probe), and a directory that
+  happens to be named `personal` or `pack` is now left strictly alone —
+  never renamed, never rewritten, never repointed. -525 lines of production
+  code, and the pack package is back under its pre-`[[services]]` budget.
+- The `[[services]] UnitSpec` vocabulary (runtime/activation constants, the
+  reserved name+port sets, and the value-shape patterns) is one internal value
+  instead of ten package-level names, and `packService`/`packServiceResources`
+  are unexported: no supervisor consumes a service declaration yet, so the
+  exported surface it will need is the supervisor story's to earn. Manifest
+  syntax, every rejection, the consent screen, and the fingerprint are
+  unchanged.
 
 ## 0.1.0 - 2026-07-25
 

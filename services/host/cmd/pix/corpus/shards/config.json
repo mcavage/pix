@@ -1,0 +1,75 @@
+{
+  "verb": "config",
+  "cases": [
+    {
+      "name": "help",
+      "args": [
+        "config",
+        "--help"
+      ],
+      "exitCode": 0,
+      "stream": "stdout",
+      "contains": [
+        "Usage: pix config"
+      ]
+    },
+    {
+      "name": "bad-invocation",
+      "args": [
+        "config",
+        "--this-is-not-a-real-flag-9x7z"
+      ],
+      "exitCode": 2,
+      "stream": "stderr",
+      "contains": [
+        "unknown flag"
+      ]
+    },
+    {
+      "name": "show-safe-read-only-shape",
+      "args": [
+        "config",
+        "show"
+      ],
+      "exitCode": 0,
+      "stream": "stdout",
+      "contains": [
+        "# path: ",
+        "config.toml",
+        "memory_watcher_model = \"qwen3.5:9b\"",
+        "memory_embed_model = \"nomic-embed-text\"",
+        "ollama_bridge_model = \"qwen3.5:9b\"",
+        "run_intent = \"overlord\"",
+        "google_workspace_account = \"\"",
+        "[kits]",
+        "[skills]",
+        "[plugins]"
+      ]
+    },
+    {
+      "name": "path-safe-read-only-shape",
+      "args": [
+        "config",
+        "path"
+      ],
+      "exitCode": 0,
+      "stream": "stdout",
+      "contains": [
+        ".config/pix/config.toml"
+      ]
+    },
+    {
+      "name": "get-safe-read-only-scalar",
+      "args": [
+        "config",
+        "get",
+        "run_intent"
+      ],
+      "exitCode": 0,
+      "stream": "stdout",
+      "contains": [
+        "overlord"
+      ]
+    }
+  ]
+}

@@ -5,12 +5,12 @@ displayName: Pix
 description: "Multi-model pi coding agent on a Docker Hardened (DHI) Debian base"
 
 sandbox:
-  # Published image — consumers pull this by name (sbx auto-pulls it). For local
+  # Published image: consumers pull this by name (sbx auto-pulls it). For local
   # dev, `make load` builds + loads the image under this same name, so sbx uses
   # your local build instead of pulling. Change the namespace to match your
   # Docker Hub handle (must match Makefile DOCKER_USER).
   #
-  # MUST be a pinned tag, never `:latest` — Docker re-pulls `:latest` on every
+  # MUST be a pinned tag, never `:latest`: Docker re-pulls `:latest` on every
   # run even when the image is already loaded, defeating `make load`. A pinned
   # tag means "use the loaded build if present, else pull once." Keep in sync
   # with VERSION in the Makefile and `version` in package.json.
@@ -28,7 +28,7 @@ sandbox:
       ]
 
 # Provider keys are read by the host proxy and swapped into the outbound auth
-# header — the agent inside the VM only ever sees the "proxy-managed" sentinel
+# header: the agent inside the VM only ever sees the "proxy-managed" sentinel
 # (credentials[].apiKey.proxyManaged below). The real key never enters the VM:
 # the proxy holds it, sourced from the sbx secret store, which pix seeds
 # from 1Password (`pix setup`; op is required). See docs/CREDENTIALS.md.
@@ -38,7 +38,7 @@ sandbox:
 # apiKey.inject[] tells the proxy which outbound domains to rewrite and with
 # which header/format. Egress is separate: a domain the proxy injects into must
 # ALSO be allowed for egress under permissions.network.allow, so the credential API
-# hosts are listed there too. The per-credential `service:` is required — without
+# hosts are listed there too. The per-credential `service:` is required: without
 # it `sbx run` panics ("invalid identifier ... credentials/<sandbox>/").
 permissions:
   network:
@@ -81,28 +81,24 @@ permissions:
       # own host-daemon integration uses to reach host services on host.docker.internal.
       - host.docker.internal:11435
       - localhost:11435
-      # Host knowledge service (:11436). Same pattern as memory above: the recall
-      # extension calls it over JSON-RPC; the host store indexes a git-mounted OKF
-      # bundle (we ship the pointer to the bundle, not its content) and answers
-      # lookups. Host-internal, bypasses the proxy MITM; skipped if not running.
-      - host.docker.internal:11436
-      - localhost:11436
-      # Host monitor hub (:11437). Same pattern as memory/knowledge above: the
+      # Host monitor ingest (:11437). Same pattern as memory above: the
       # in-sandbox monitor extension POSTs NDJSON events (model requests/
       # responses, tool + MCP calls) and blob bodies to it over plain HTTP.
-      # Host-internal, bypasses the proxy MITM; the extension no-ops if the hub
-      # isn't running (monitor IS the service, started on demand by `pix
-      # monitor`, not by `pix serve`).
+      # Host-internal, bypasses the proxy MITM; the extension no-ops if
+      # nothing is listening. The ingest listener is now composed inside
+      # `pix-host serve` (alongside memory), NOT started by `pix monitor`:
+      # that verb is a pure offline reader over the on-disk store with no
+      # listener of its own. See docs/design/monitor.md.
       - host.docker.internal:11437
       - localhost:11437
       # A pack that needs a host service (e.g. a CLI exec-proxy) adds its own
-      # domain to permissions.network.allow from its own synthesized mixin kit — the
+      # domain to permissions.network.allow from its own synthesized mixin kit: the
       # public kit stays free of company-specific host services. See
       # docs/design/packs.md.
-      # Note: local stdio MCP servers (e.g. slack) are NOT here. They're registered
-      # with sbx (`sbx mcp add … --command pix-host --args slack`), run by the
-      # MCP gateway and reached through it — not over host.docker.internal — so they
-      # need no allowlist entry.
+      # Note: local stdio MCP servers (e.g. google-workspace) are NOT here.
+      # They're registered with sbx (`sbx mcp add … --command pix-host --args
+      # <name>`), run by the MCP gateway and reached through it (not over
+      # host.docker.internal), so they need no allowlist entry.
 
 # Each provider key: `service` is the sbx secret-store identifier (pix seeds
 # it from 1Password); apiKey.name is the in-VM env var, set to the proxy-managed
@@ -167,13 +163,13 @@ setup:
       user: "0"
       description: Trust the sandbox proxy's TLS-intercepting CA
     # Register the sandbox MCP gateway with pi. pi isn't a native sbx agent
-    # integration, so nothing auto-wires the gateway — the pi-mcp-adapter reads
+    # integration, so nothing auto-wires the gateway: the pi-mcp-adapter reads
     # ~/.pi/agent/mcp.json, so we write the gateway there (HTTP StreamableHTTP +
     # the sentinel bearer the egress proxy swaps for the real token). Without this
     # pi sees ZERO MCP: no MCP tools until configured servers are statically
     # preloaded (at sandbox create) or explicitly loaded (`pix mcp load`).
     # Guarded on MCP_GATEWAY_URL so a non-Docker host (no gateway) stays MCP-empty.
-    # (Mirrors the claude/codex/gemini/kiro/opencode kits — see the sandboxes repo
+    # (Mirrors the claude/codex/gemini/kiro/opencode kits: see the sandboxes repo
     # docs/runbooks/mcp-gateway-registration.md.)
     - command: '[ -n "$MCP_GATEWAY_URL" ] || exit 0; mkdir -p "$HOME/.pi/agent"; printf ''{"mcpServers":{"mcp-gateway":{"url":"%s","headers":{"Authorization":"Bearer %s"}}}}\n'' "$MCP_GATEWAY_URL" "$MCP_SENTINEL_TOKEN_NAME" > "$HOME/.pi/agent/mcp.json"'
       description: Register the sbx MCP gateway with pi (pi-mcp-adapter)
@@ -207,7 +203,7 @@ agentInstructions:
     extension). Switch with /model or --model. Use a stronger model (Opus, Gemini Pro)
     for synthesis and hard problems, and a cheap fast one (a small local Ollama model, a haiku/flash)
     for mechanical passes. For review, switch to a different vendor than wrote the code
-    and re-read it (or fan out a `review` subagent — see below).
+    and re-read it (or fan out a `review` subagent: see below).
 
     ## Subagents
     Fan-out works, via our own extensions/subagents.ts (the off-the-shelf
@@ -215,7 +211,7 @@ agentInstructions:
     `subagent` tool with single / parallel / chain modes and depth-capped trees,
     each child spawned with an inactivity + wall-clock watchdog so a stuck one is
     killed and reported, never left hanging. Call it with {agent, task} (single),
-    {tasks:[...]} (parallel), or {chain:[...]} with a {previous} placeholder —
+    {tasks:[...]} (parallel), or {chain:[...]} with a {previous} placeholder:
     agent = a preset in ~/.pi/agent/agents:
       - fanout (haiku, read-only): spawn many for breadth.
       - deep (opus): one genuinely hard sub-problem.
@@ -225,7 +221,7 @@ agentInstructions:
         growth-marketing, ux-copywriter, enterprise-admin.
     Fan a task across the right roles, then synthesize. Use review before shipping.
     Run /subagents to list agents/config and /subagents doctor for a self-check.
-    (Older skills say the Agent tool with subagent_type=…; that API is not present —
+    (Older skills say the Agent tool with subagent_type=…; that API is not present:
     use the subagent tool with agent=… instead. Explore/Plan are not installed.)
 
     ## Skills
@@ -241,10 +237,10 @@ agentInstructions:
     ## CLIs and MCP
     `gh` is installed; GitHub auth is routed through sbx credentials. Google
     Workspace runs host-side as the `gog` MCP server (spawned by the MCP gateway,
-    authed with the host's own gog credentials, read-only by default) — the same
-    pattern as Slack (the `chat` capability). The VM never talks to Google
-    directly. Run the host services with `make serve`. Use sbx Cloud MCP Gateway
-    profiles for catalog servers (notion, atlassian, granola, …).
+    authed with the host's own gog credentials, read-only by default). The VM
+    never talks to Google directly. Run the host services with `make serve`.
+    Use sbx Cloud MCP Gateway profiles for catalog servers (notion, atlassian,
+    granola, …).
 
     ## Posture
     Full-auto: no permission prompts. The sandbox isolation is the safety boundary.

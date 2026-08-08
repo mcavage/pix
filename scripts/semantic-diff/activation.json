@@ -1,0 +1,7 @@
+[
+	{
+		"key": "story04",
+		"rationale": "U04d landed Story04's last-shell teardown and orphan reaper (services/host/workflow/launch/reap.go), the non-interactive bare-`pix rm` refusal (launch.validateRmShape) and `pix rm`'s -k/--keep spelling. The three pins staged behind this key describe behavior that now EXISTS, so they are evaluated for real from this commit on \u2014 landed together with the change, which is the sequence lifecycle.rules.mjs' header requires.",
+		"evidence": "services/host/workflow/launch/reap.go (TeardownSandbox: lease.TryReapProof zero-holder proof, keep refusal, non-force sandbox.PlanRemove argv, bounded rm + absent confirmation, 0600 bounded journal); services/host/workflow/launch/sandbox.go (validateRmShape: \"refusing bare `pix rm` on a non-interactive terminal\"); services/host/cmd/pix/root.go (rmCmd.Keep `short:\"k\"`); tests: workflow/launch/reap_test.go + reap_process_test.go, lease/clear_test.go"
+	}
+]

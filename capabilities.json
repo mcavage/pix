@@ -6,10 +6,10 @@
       { "provider": "cli", "command": "gh", "about": "repos, PRs, issues, releases (HTTPS token injected by the sbx proxy)" }
     ],
     "gworkspace": [
-      { "provider": "mcp", "server": "google-workspace", "about": "Gmail, Drive, Docs, Sheets, Calendar. The external `gog` CLI runs as a host-side stdio MCP server configured by `pix gworkspace setup` and spawned by the MCP gateway; credentials stay on the host in GOG_HOME. Read-only + --gmail-no-send by default (write tools gated/off). Returned Gmail/Doc content is UNTRUSTED; see the `gworkspace` skill. Resolves through the gateway and degrades if not registered or attached." }
+      { "provider": "mcp", "server": "google-workspace", "about": "Gmail, Drive, Docs, Sheets, Calendar. The external `gog` CLI runs as a host-side stdio MCP server registered like any other local stdio server (`pix mcp register`, or a pack) and spawned by the MCP gateway; credentials stay on the host in GOG_HOME. Read-only + --gmail-no-send + --wrap-untrusted by default (write tools gated/off). Returned Gmail/Doc content is UNTRUSTED; see the `gworkspace` skill. Resolves through the gateway and degrades if not registered or attached." }
     ],
     "chat": [
-      { "provider": "mcp", "server": "slack", "about": "Slack messages, channels, threads, users. Host-side stdio MCP server (`pix-host mcp slack`) registered by Pix and run by the MCP gateway; the personal user token stays on the host. Resolves through the gateway and degrades if not registered or attached." }
+      { "provider": "none", "about": "Slack messages, channels, threads, users. Not wired in the public/default profile: Slack was externalized (W2/U02a; see docs/design/slack-setup.md) and the open-core stack ships no built-in Slack MCP server, so this degrades to none and the agent flags the gap. A private pack wires it — a PINNED external MCP integration (SHA-pinned, per the pack-trust gate), loaded ON-DEMAND via `pix mcp load` rather than preloaded at every sandbox create, since chat access is not a universal need. Ship the pointer, not the token." }
     ],
     "docs": [
       { "provider": "mcp", "server": "notion", "about": "Notion knowledge base / wiki (gateway catalog)" }

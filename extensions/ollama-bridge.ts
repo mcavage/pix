@@ -23,6 +23,8 @@
 
 import { createServer, request } from "node:http";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 // The bridge model is configured on the HOST (`pix config set
 // ollama_bridge_model <tag>`); `pix run` writes the resolved value into
@@ -82,8 +84,117 @@ function posInt(v: string | undefined, fallback: number): number {
 }
 const MODEL_CTX = posInt(process.env.OLLAMA_BRIDGE_CONTEXT, 32768);
 
+// One entry in the provider's model list.
+type BridgeModel = {
+	id: string;
+	name: string;
+	reasoning: boolean;
+	input: string[];
+	cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
+	contextWindow: number;
+	maxTokens: number;
+};
+
+// The single model this bridge has always exposed: the configured bridge tag.
+// It stays the FALLBACK, and on a stack with no generated manifest it is still
+// the whole answer.
+function bridgeTagModel(): BridgeModel {
+	return {
+		id: MODEL_ID,
+		name: MODEL_NAME,
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: MODEL_CTX,
+		maxTokens: 8192,
+	};
+}
+
+// manifestModels reads the ollama models the HOST decided this sandbox can
+// call, from the inference.json the launcher generates beside routing.json.
+//
+// Why this exists: `pix run` passes pi a `--models` cycle built from every
+// callable binding in config, which today includes each probed Ollama model —
+// local and `:cloud` alike. This extension used to register exactly ONE, the
+// bridge tag. Every other ollama id in that cycle therefore matched no
+// registered model, and pi opened the session with
+//
+//     Warning: No models match pattern "ollama/glm-5.2:cloud"
+//
+// for each one. The models were genuinely reachable — the reverse proxy below
+// forwards anything to the host daemon, which serves cloud tags too — so the
+// warning was not protecting anyone from a broken route. It was the two halves
+// of the stack disagreeing about what "callable" meant, and the fix is to read
+// the host's answer instead of hardcoding a second one.
+//
+// Best-effort by design: a missing, unreadable, or malformed manifest is the
+// pre-manifest world, and falling back to the bridge tag is exactly right there.
+// modelsFromManifest is the PURE half: parsed manifest in, provider model list
+// out, with the configured bridge tag guaranteed present. The tag must survive
+// a manifest that omits it — it is what `pix config set ollama_bridge_model`
+// promises and what the interactive cycle offers. Exported for tests.
+export function modelsFromManifest(
+	parsed: any,
+	bridgeTag: BridgeModel,
+): BridgeModel[] {
+	const out: BridgeModel[] = [];
+	const models = parsed && Array.isArray(parsed.models) ? parsed.models : [];
+	for (const m of models) {
+		if (!m || m.backend !== "ollama" || typeof m.id !== "string") continue;
+		// The manifest id is backend-qualified ("ollama/glm-5.2:cloud"); pi
+		// qualifies with the PROVIDER name it was registered under, so strip the
+		// prefix or the model ends up as "ollama/ollama/glm-5.2:cloud".
+		const id = m.id.startsWith("ollama/") ? m.id.slice("ollama/".length) : m.id;
+		if (!id || out.some((o) => o.id === id)) continue;
+		out.push({
+			id,
+			name: typeof m.name === "string" && m.name ? m.name : `${id} (ollama)`,
+			reasoning: m.reasoning !== false,
+			input: ["text"],
+			// Ollama is unmetered through the local daemon; a cloud tag bills on the
+			// ollama.com subscription, not per token here.
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow:
+				typeof m.context_window === "number" && m.context_window > 0
+					? m.context_window
+					: bridgeTag.contextWindow,
+			maxTokens:
+				typeof m.max_tokens === "number" && m.max_tokens > 0
+					? m.max_tokens
+					: bridgeTag.maxTokens,
+		});
+	}
+	if (!out.some((m) => m.id === bridgeTag.id)) out.unshift(bridgeTag);
+	return out;
+}
+
+// bridgeModels is the impure half: read the manifest, hand it to the pure one.
+// Best-effort by design — a missing, unreadable, or malformed manifest is the
+// pre-manifest world, where the bridge tag alone is exactly right.
+function bridgeModels(): BridgeModel[] {
+	const manifestPath = join(getAgentDir(), "inference.json");
+	let raw: string | undefined;
+	try {
+		raw = readFileSync(manifestPath, "utf8");
+	} catch {
+		/* absent -> bridge tag only, the expected pre-manifest world */
+	}
+	let parsed: any = null;
+	if (raw !== undefined) {
+		// Present but unparseable is loud: this is the failure mode that let
+		// the "json" vs. "inference.json" filename bug ship silently (see
+		// extensions/inference.ts's readManifest for the same guard).
+		try {
+			parsed = JSON.parse(raw);
+		} catch (err) {
+			process.stderr.write(`[ollama-bridge] ${manifestPath} is present but failed to parse as JSON: ${err}\n`);
+		}
+	}
+	return modelsFromManifest(parsed, bridgeTagModel());
+}
+
 export default async function (pi: any): Promise<void> {
-	// 1) Register the provider + model up front (no endpoint probe). In host
+	// 1) Register the provider + models up front (no endpoint probe). In host
 	// mode point baseUrl straight at the real ollama (OLLAMA_URL); in the
 	// sandbox keep pointing at our own localhost listener (started below).
 	try {
@@ -92,17 +203,7 @@ export default async function (pi: any): Promise<void> {
 			baseUrl: HOST_MODE ? HOST_MODE_URL : `http://localhost:${LISTEN_PORT}/v1`,
 			api: "openai-completions",
 			apiKey: "ollama", // placeholder; Ollama ignores it, but pi wants auth present
-			models: [
-				{
-					id: MODEL_ID,
-					name: MODEL_NAME,
-					reasoning: true,
-					input: ["text"],
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-					contextWindow: MODEL_CTX,
-					maxTokens: 8192,
-				},
-			],
+			models: bridgeModels(),
 		});
 	} catch {
 		/* best-effort; must not break the agent */

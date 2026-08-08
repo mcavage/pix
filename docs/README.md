@@ -24,8 +24,10 @@ tutorials.
 
 - [onboarding-v3.md](design/onboarding-v3.md) — the proposed one-path setup,
   dependency, OAuth, pack, doctor, and provider-routing design.
-- [slack-setup.md](design/slack-setup.md) — the accepted per-user Slack
-  credential model and proposed guided setup flow.
+- [slack-setup.md](design/slack-setup.md) — MERGE-BLOCKED migration reference:
+  Slack's built-in implementation was deleted (W2/U02a); this names the
+  required pinned/on-demand posture for an external pack replacement and the
+  per-user credential rules it must keep. Not evidence anything external works.
 - [routing.md](design/routing.md) — the model router: registry, scorecard,
   policy, and how `models route` bakes `routing.json`.
 - [models-cli.md](design/models-cli.md) — the `pix models` noun rename and the
@@ -38,9 +40,10 @@ tutorials.
   recall loop.
 - [serve-lifecycle.md](design/serve-lifecycle.md) — the `pix serve` daemon
   lifecycle: lazy auto-start, the managed login service, and the hardening addendum.
-- [host-mode.md](design/host-mode.md) — `pix host`, the unsandboxed escape
-  hatch for developing pix itself (Phase 1 built, gated off by default).
-  Its guardrails reduce accidents; they are NOT a security boundary.
+- [host-mode.md](design/host-mode.md) — **SUPERSEDED/RETIRED.** `pix host`,
+  the unsandboxed escape hatch this once proposed, was deleted outright, not
+  merely gated off (AGENTS.md safety invariant #9); `pix host` now answers
+  `PIX_RETIRED` (replacement: `pix run`). Kept for history only.
 - [worktree-tasks.md](design/worktree-tasks.md) and
   [task-ux-decisions.md](design/task-ux-decisions.md) — the `pix task`
   parallel-work workflow.

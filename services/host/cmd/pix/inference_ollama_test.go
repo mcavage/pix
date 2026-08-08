@@ -7,6 +7,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"pix/host/hostenv"
+	"pix/host/workflow/doctor"
+	"pix/host/workflow/models"
 	"runtime"
 	"strings"
 	"sync"
@@ -15,34 +18,63 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/inference"
+	"pix/host/sys/systest"
 )
 
 // ollamaListEnv fakes a healthy daemon whose `ollama list` prints tags, plus a
 // memory reading. BOTH platform seams are wired (sysctl and /proc/meminfo) so
 // the fixture works whatever GOOS the test binary runs on; every RAM figure the
 // tests use resolves to the same rung under the darwin AND linux fractions.
-func ollamaListEnv(tags []string, _ string, totalGB float64) shellEnv {
-	env := shellEnv{
-		lookPath: func(string) (string, error) { return "/usr/local/bin/ollama", nil },
-	}
+func ollamaListEnv(tags []string, _ string, totalGB float64) hostenv.Env {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/local/bin/ollama", nil }}}
 	rows := "NAME ID SIZE MODIFIED\n"
 	for _, tag := range tags {
 		rows += tag + " abc 1GB - now\n"
 	}
-	env.probe = func(name string, args ...string) (string, bool, error) {
+	systest.Of(env.System).RunTimedFn = func(name string, args ...string) (string, bool, error) {
 		switch name {
 		case "ollama":
 			return rows, false, nil
 		case "sysctl":
-			return fmt.Sprintf("%d\n", int64(totalGB*bytesPerGB)), false, nil
+			return fmt.Sprintf("%d\n", int64(totalGB*inference.BytesPerGB)), false, nil
 		}
 		return "", false, fmt.Errorf("unexpected command %s", name)
 	}
-	env.readFile = func(path string) (string, error) {
+	systest.Of(env.System).ReadFileFn = func(path string) (string, error) {
 		if path == "/proc/meminfo" {
-			return fmt.Sprintf("MemTotal: %d kB\n", int64(totalGB*bytesPerGB/1024)), nil
+			return fmt.Sprintf("MemTotal: %d kB\n", int64(totalGB*inference.BytesPerGB/1024)), nil
 		}
 		return "", fmt.Errorf("unexpected file %s", path)
+	}
+	return env
+}
+
+// pullModelsFix is the ONE remediation for "bound but not pulled". The
+// workflows spell it in their own refusals; the tests assert they all name the
+// same command.
+const pullModelsFix = "pix setup --pull-models"
+
+// hwMemEnv wires the real memory readers at their platform seams (both, so the
+// fixture works whatever GOOS the test binary runs on).
+func hwMemEnv(t *testing.T, goos string, totalGB float64) hostenv.Env {
+	t.Helper()
+	env := hostenv.Env{System: &systest.Fake{}}
+	switch goos {
+	case "darwin":
+		systest.Of(env.System).RunFn = func(name string, args ...string) (string, error) {
+			if name == "sysctl" {
+				return fmt.Sprintf("%d\n", int64(totalGB*inference.BytesPerGB)), nil
+			}
+			return "", fmt.Errorf("unexpected command %s", name)
+		}
+	case "linux":
+		systest.Of(env.System).ReadFileFn = func(path string) (string, error) {
+			if path != "/proc/meminfo" {
+				return "", fmt.Errorf("unexpected file %s", path)
+			}
+			return fmt.Sprintf("MemFree:  1024 kB\nMemTotal:       %d kB\nSwapTotal: 0 kB\n", int64(totalGB*inference.BytesPerGB/1024)), nil
+		}
 	}
 	return env
 }
@@ -57,7 +89,7 @@ func ollamaCfgWith(bindings ...config.InferenceModelBinding) *config.Config {
 }
 
 func binding(model string) config.InferenceModelBinding {
-	return config.InferenceModelBinding{Model: model, Backend: "ollama", Upstream: ollamaTagFor(model), Available: true}
+	return config.InferenceModelBinding{Model: model, Backend: "ollama", Upstream: inference.OllamaTagFor(model), Available: true}
 }
 
 // TestConfigureOllamaInferenceBindsUnverifiedCandidates: a listing is not
@@ -65,7 +97,7 @@ func binding(model string) config.InferenceModelBinding {
 func TestConfigureOllamaInferenceBindsUnverifiedCandidates(t *testing.T) {
 	cfg := &config.Config{}
 	env := ollamaListEnv([]string{"qwen3.5:9b", "glm-5.2:cloud"}, "darwin", 32)
-	plan, err := configureOllamaInference(cfg, env, ollamaSelection{Local: true, Cloud: true}, io.Discard)
+	plan, err := models.ConfigureOllamaInference(cfg, env, models.OllamaSelection{Local: true, Cloud: true}, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +126,7 @@ func TestConfigureOllamaInferenceBindsUnverifiedCandidates(t *testing.T) {
 func TestOllamaLocalSelectionBindsNoCloudModel(t *testing.T) {
 	cfg := &config.Config{}
 	env := ollamaListEnv([]string{"qwen3.5:9b", "glm-5.2:cloud", "deepseek-v4-pro:cloud"}, "darwin", 32)
-	if _, err := configureOllamaInference(cfg, env, ollamaSelection{Local: true}, io.Discard); err != nil {
+	if _, err := models.ConfigureOllamaInference(cfg, env, models.OllamaSelection{Local: true}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	for _, b := range cfg.Inference.Models {
@@ -110,7 +142,7 @@ func TestOllamaLocalSelectionBindsNoCloudModel(t *testing.T) {
 func TestOllamaLocalWithNoCatalogModelPulledSucceeds(t *testing.T) {
 	cfg := &config.Config{}
 	env := ollamaListEnv(nil, "darwin", 32)
-	plan, err := configureOllamaInference(cfg, env, ollamaSelection{Local: true}, io.Discard)
+	plan, err := models.ConfigureOllamaInference(cfg, env, models.OllamaSelection{Local: true}, io.Discard)
 	if err != nil {
 		t.Fatalf("a local-only user who has pulled nothing must not be hard-failed: %v", err)
 	}
@@ -126,7 +158,7 @@ func TestOllamaLocalWithNoCatalogModelPulledSucceeds(t *testing.T) {
 func TestOllamaLocalSkipsRungsThisMachineCannotRun(t *testing.T) {
 	cfg := &config.Config{}
 	env := ollamaListEnv([]string{"qwen3.5:9b", "qwen3.5:35b"}, "darwin", 24)
-	plan, err := configureOllamaInference(cfg, env, ollamaSelection{Local: true}, io.Discard)
+	plan, err := models.ConfigureOllamaInference(cfg, env, models.OllamaSelection{Local: true}, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,8 +217,10 @@ func TestVerifyOllamaInferencePromotesOnlyAnsweringModels(t *testing.T) {
 		binding("ollama/deepseek-v4-pro:cloud"),
 	)
 	f := &fakeProber{fail: map[string]error{"deepseek-v4-pro:cloud": fmt.Errorf("endpoint rejected the request (HTTP 401)")}}
-	env := shellEnv{ollamaInferenceProbe: f.probe}
-	attempted, verified, failures, notProbed := verifyOllamaInference(cfg, env, io.Discard)
+	env := hostenv.Env{System: &systest.Fake{}, OllamaInference: f.probe}
+	probe, probeErr := models.VerifyOllamaInference(cfg, env, io.Discard)
+	mustNoProbeErr(t, probeErr)
+	attempted, verified, failures, notProbed := probe.Attempted, probe.Verified, probe.Failures, probe.NotProbed
 	if attempted != 3 || verified != 2 || len(failures) != 1 || len(notProbed) != 0 {
 		t.Fatalf("attempted=%d verified=%d failures=%v notProbed=%v", attempted, verified, failures, notProbed)
 	}
@@ -206,8 +240,8 @@ func TestVerifyOllamaInferencePromotesOnlyAnsweringModels(t *testing.T) {
 func TestVerifiedBindingRecordsProbeProvenance(t *testing.T) {
 	cfg := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
 	f := &fakeProber{}
-	env := shellEnv{ollamaInferenceProbe: f.probe}
-	if _, verified, _, _ := verifyOllamaInference(cfg, env, io.Discard); verified != 1 {
+	env := hostenv.Env{System: &systest.Fake{}, OllamaInference: f.probe}
+	if probe, _ := models.VerifyOllamaInference(cfg, env, io.Discard); probe.Verified != 1 {
 		t.Fatal("probe succeeded but nothing was promoted")
 	}
 	got := cfg.Inference.Models[0]
@@ -216,7 +250,7 @@ func TestVerifiedBindingRecordsProbeProvenance(t *testing.T) {
 	}
 	// Now demote: the same binding, a refusing prober.
 	f2 := &fakeProber{fail: map[string]error{"qwen3.5:9b": fmt.Errorf("endpoint rejected the request (HTTP 500)")}}
-	if _, verified, _, _ := verifyOllamaInference(cfg, shellEnv{ollamaInferenceProbe: f2.probe}, io.Discard); verified != 0 {
+	if probe, _ := models.VerifyOllamaInference(cfg, hostenv.Env{System: &systest.Fake{}, OllamaInference: f2.probe}, io.Discard); probe.Verified != 0 {
 		t.Fatal("a refused probe must not verify")
 	}
 	got = cfg.Inference.Models[0]
@@ -225,13 +259,22 @@ func TestVerifiedBindingRecordsProbeProvenance(t *testing.T) {
 	}
 }
 
-// TestNilOllamaProbeSeamLeavesBindingsUnverified: a test-mode default that
-// fabricates success, or a real network call leaking out of a hermetic test.
+// TestNilOllamaProbeSeamLeavesBindingsUnverified guards the thing that must
+// never happen with a missing prober: a test-mode default that fabricates
+// success, or a real network call leaking out of a hermetic test.
+//
+// It used to also assert the RETURN was a clean zero. That assertion was the
+// bug in miniature — it pinned "no probe configured" as indistinguishable from
+// "probed nothing" — so the return contract is now an error, and what remains
+// here is the part that was always right: nothing gets marked verified.
 func TestNilOllamaProbeSeamLeavesBindingsUnverified(t *testing.T) {
 	cfg := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
-	attempted, verified, failures, notProbed := verifyOllamaInference(cfg, shellEnv{}, io.Discard)
-	if attempted != 0 || verified != 0 || failures != nil || notProbed != nil {
-		t.Fatalf("a nil prober must probe nothing: %d %d %v %v", attempted, verified, failures, notProbed)
+	probe, err := models.VerifyOllamaInference(cfg, hostenv.Env{System: &systest.Fake{}}, io.Discard)
+	if err == nil {
+		t.Fatal("a nil prober must be reported, not silently treated as nothing to do")
+	}
+	if probe.Attempted != 0 || probe.Verified != 0 {
+		t.Fatalf("a nil prober must probe nothing: %+v", probe)
 	}
 	if cfg.Inference.Models[0].Verified {
 		t.Fatal("a nil prober must never produce a verified binding")
@@ -243,19 +286,16 @@ func TestNilOllamaProbeSeamLeavesBindingsUnverified(t *testing.T) {
 func TestVerifyOllamaInferenceUsesResolvedEndpoint(t *testing.T) {
 	cfg := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
 	var seen string
-	env := shellEnv{
-		getenv: func(name string) string {
-			if name == "OLLAMA_HOST" {
-				return "10.0.0.5:11500"
-			}
-			return ""
-		},
-		ollamaInferenceProbe: func(endpoint, model string, numCtx int, timeout time.Duration) error {
-			seen = endpoint
-			return nil
-		},
-	}
-	verifyOllamaInference(cfg, env, io.Discard)
+	env := hostenv.Env{System: &systest.Fake{GetenvFn: func(name string) string {
+		if name == "OLLAMA_HOST" {
+			return "10.0.0.5:11500"
+		}
+		return ""
+	}}, OllamaInference: func(endpoint, model string, numCtx int, timeout time.Duration) error {
+		seen = endpoint
+		return nil
+	}}
+	_, _ = models.VerifyOllamaInference(cfg, env, io.Discard)
 	if seen != "http://10.0.0.5:11500" {
 		t.Fatalf("probe endpoint = %q, want the resolved OLLAMA_HOST", seen)
 	}
@@ -278,7 +318,7 @@ func TestLocalOllamaProbesAreSerialized(t *testing.T) {
 	}
 	var cloudInFlight, maxCloud int32
 	base := f.probe
-	env := shellEnv{ollamaInferenceProbe: func(endpoint, model string, numCtx int, timeout time.Duration) error {
+	env := hostenv.Env{System: &systest.Fake{}, OllamaInference: func(endpoint, model string, numCtx int, timeout time.Duration) error {
 		if strings.Contains(model, "cloud") {
 			n := atomic.AddInt32(&cloudInFlight, 1)
 			if n > atomic.LoadInt32(&maxCloud) {
@@ -288,7 +328,7 @@ func TestLocalOllamaProbesAreSerialized(t *testing.T) {
 		}
 		return base(endpoint, model, numCtx, timeout)
 	}}
-	verifyOllamaInference(cfg, env, io.Discard)
+	_, _ = models.VerifyOllamaInference(cfg, env, io.Discard)
 	if got := atomic.LoadInt32(&f.maxLocal); got != 1 {
 		t.Fatalf("max concurrent LOCAL probes = %d, want 1 (two resident models is a budget nobody computed)", got)
 	}
@@ -306,7 +346,7 @@ func TestLocalProbeOrderIsLargestRungFirst(t *testing.T) {
 		binding("ollama/qwen3.5:9b"),
 	)
 	f := &fakeProber{}
-	verifyOllamaInference(cfg, shellEnv{ollamaInferenceProbe: f.probe}, io.Discard)
+	_, _ = models.VerifyOllamaInference(cfg, hostenv.Env{System: &systest.Fake{}, OllamaInference: f.probe}, io.Discard)
 	want := []string{"qwen3.5:27b", "qwen3.5:9b", "qwen3.5:4b"}
 	if strings.Join(f.order, ",") != strings.Join(want, ",") {
 		t.Fatalf("probe order = %v, want %v", f.order, want)
@@ -320,9 +360,9 @@ func TestLocalProbeOrderIsLargestRungFirst(t *testing.T) {
 // healthy model reported as broken, and a decline turned into a non-zero exit
 // by a budget.
 func TestLocalProbeBudgetMarksRemainderNotProbedNotFailed(t *testing.T) {
-	oldTimeout, oldBudget := ollamaLocalProbeTimeout, ollamaLocalProbeBudget
-	ollamaLocalProbeTimeout, ollamaLocalProbeBudget = 50*time.Millisecond, 120*time.Millisecond
-	defer func() { ollamaLocalProbeTimeout, ollamaLocalProbeBudget = oldTimeout, oldBudget }()
+	oldTimeout, oldBudget := models.OllamaLocalProbeTimeout, models.OllamaLocalProbeBudget
+	models.OllamaLocalProbeTimeout, models.OllamaLocalProbeBudget = 50*time.Millisecond, 120*time.Millisecond
+	defer func() { models.OllamaLocalProbeTimeout, models.OllamaLocalProbeBudget = oldTimeout, oldBudget }()
 
 	cfg := ollamaCfgWith(
 		binding("ollama/qwen3.5:35b"),
@@ -332,7 +372,9 @@ func TestLocalProbeBudgetMarksRemainderNotProbedNotFailed(t *testing.T) {
 	)
 	f := &fakeProber{delay: 70 * time.Millisecond}
 	var out bytes.Buffer
-	attempted, verified, failures, notProbed := verifyOllamaInference(cfg, shellEnv{ollamaInferenceProbe: f.probe}, &out)
+	probe, probeErr := models.VerifyOllamaInference(cfg, hostenv.Env{System: &systest.Fake{}, OllamaInference: f.probe}, &out)
+	mustNoProbeErr(t, probeErr)
+	attempted, verified, failures, notProbed := probe.Attempted, probe.Verified, probe.Failures, probe.NotProbed
 	if len(notProbed) == 0 {
 		t.Fatal("the budget must leave a remainder unprobed rather than running forever")
 	}
@@ -371,7 +413,7 @@ func TestLocalProbeSendsKeepAliveZeroAndRungContext(t *testing.T) {
 		_, _ = w.Write([]byte(`{"response":"OK"}`))
 	}))
 	defer srv.Close()
-	if err := liveOllamaInferenceProbe(srv.URL, "qwen3.5:9b", 16384, 5*time.Second); err != nil {
+	if err := inference.LiveOllamaInferenceProbe(srv.URL, "qwen3.5:9b", 16384, 5*time.Second); err != nil {
 		t.Fatal(err)
 	}
 	if path != "/api/generate" {
@@ -390,7 +432,7 @@ func TestLocalProbeSendsKeepAliveZeroAndRungContext(t *testing.T) {
 	if _, ok := opts["num_ctx"]; ok {
 		// A cloud probe carries no num_ctx: its context is not RAM-gated here.
 		body = nil
-		if err := liveOllamaInferenceProbe(srv.URL, "glm-5.2:cloud", 0, 5*time.Second); err != nil {
+		if err := inference.LiveOllamaInferenceProbe(srv.URL, "glm-5.2:cloud", 0, 5*time.Second); err != nil {
 			t.Fatal(err)
 		}
 		cloudOpts, _ := body["options"].(map[string]any)
@@ -407,7 +449,7 @@ func TestLiveOllamaProbeRejectsUnauthorized(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
 	}))
 	defer srv.Close()
-	err := liveOllamaInferenceProbe(srv.URL, "kimi-k3:cloud", 0, 5*time.Second)
+	err := inference.LiveOllamaInferenceProbe(srv.URL, "kimi-k3:cloud", 0, 5*time.Second)
 	if err == nil || !strings.Contains(err.Error(), "HTTP 401") {
 		t.Fatalf("error = %v, want an HTTP 401 refusal", err)
 	}
@@ -418,13 +460,13 @@ func TestLiveOllamaProbeRejectsUnauthorized(t *testing.T) {
 // `Auth != "1password"` shortcut fails here in three places at once.
 func TestUnverifiedOllamaBindingIsNotCallable(t *testing.T) {
 	cfg := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
-	if inferenceBindingCallable(cfg, cfg.Inference.Models[0]) {
+	if inference.Callable(cfg, cfg.Inference.Models[0]) {
 		t.Fatal("an unverified ollama binding must not be callable")
 	}
-	if ids, err := callableRuntimeModels(cfg); err != nil || len(ids) != 0 {
+	if ids, err := inference.CallableRuntimeModels(cfg); err != nil || len(ids) != 0 {
 		t.Fatalf("callable runtime models = %v (%v)", ids, err)
 	}
-	_, manifest, err := compileInferenceRuntime(cfg, time.Unix(1, 0))
+	_, manifest, err := inference.CompileInferenceRuntime(cfg, time.Unix(1, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -432,7 +474,7 @@ func TestUnverifiedOllamaBindingIsNotCallable(t *testing.T) {
 		t.Fatalf("an unproven binding reached the compiled manifest: %+v", manifest.Models)
 	}
 	cfg.Inference.Models[0].Verified = true
-	if !inferenceBindingCallable(cfg, cfg.Inference.Models[0]) {
+	if !inference.Callable(cfg, cfg.Inference.Models[0]) {
 		t.Fatal("a probe-verified ollama binding must be callable")
 	}
 }
@@ -448,13 +490,13 @@ func TestPackDeclaredOllamaBindingStaysCallableWithoutHostProof(t *testing.T) {
 			{Model: "ollama/qwen3.5:9b", Backend: "ollama", Upstream: "qwen3.5:9b", Available: true, Source: "/packs/work"},
 		},
 	}}
-	if !inferenceBindingCallable(cfg, cfg.Inference.Models[0]) {
+	if !inference.Callable(cfg, cfg.Inference.Models[0]) {
 		t.Fatal("a pack-declared ollama binding must stay callable without a host probe")
 	}
 	// And a host probe must not even try to demote it.
 	f := &fakeProber{}
-	if attempted, _, _, _ := verifyOllamaInference(cfg, shellEnv{ollamaInferenceProbe: f.probe}, io.Discard); attempted != 0 {
-		t.Fatalf("a pack binding was probed (%d attempts): %v", attempted, f.order)
+	if probe, _ := models.VerifyOllamaInference(cfg, hostenv.Env{System: &systest.Fake{}, OllamaInference: f.probe}, io.Discard); probe.Attempted != 0 {
+		t.Fatalf("a pack binding was probed (%d attempts): %v", probe.Attempted, f.order)
 	}
 }
 
@@ -464,11 +506,11 @@ func TestPackDeclaredOllamaBindingStaysCallableWithoutHostProof(t *testing.T) {
 func TestNonInteractiveModelsFlagRejectsUnprobedModel(t *testing.T) {
 	cfg := ollamaCfgWith(binding("ollama/qwen3.5:27b"), binding("ollama/qwen3.5:9b"))
 	cfg.Inference.Models[1].Verified = true
-	err := configureModelRoster(cfg, strings.NewReader(""), &bytes.Buffer{}, false, "ollama/qwen3.5:27b")
+	err := models.ConfigureModelRoster(cfg, strings.NewReader(""), &bytes.Buffer{}, false, "ollama/qwen3.5:27b")
 	if err == nil {
 		t.Fatal("a scripted setup naming a model that cannot answer must fail loudly")
 	}
-	if !strings.Contains(err.Error(), "has not passed a probe") || !strings.Contains(err.Error(), pullModelsFixCmd) {
+	if !strings.Contains(err.Error(), "has not passed a probe") || !strings.Contains(err.Error(), pullModelsFix) {
 		t.Fatalf("error = %v; it must name the reason and the fix", err)
 	}
 }
@@ -476,46 +518,12 @@ func TestNonInteractiveModelsFlagRejectsUnprobedModel(t *testing.T) {
 // TestSynthesizeInferenceKitErrorNamesTheFix (S5): a dead-end refusal.
 func TestSynthesizeInferenceKitErrorNamesTheFix(t *testing.T) {
 	cfg := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
-	_, err := synthesizeInferenceKit(cfg)
+	_, err := inference.SynthesizeInferenceKit(cfg)
 	if err == nil {
 		t.Fatal("a config with no callable binding must refuse to build a kit")
 	}
-	if !strings.Contains(err.Error(), pullModelsFixCmd) {
+	if !strings.Contains(err.Error(), pullModelsFix) {
 		t.Fatalf("refusal = %v; it must carry the remediation", err)
-	}
-}
-
-// TestUnverifiedOllamaCandidateRemediatesWithPullNotProviderKey (S3): the
-// fall-through to modelKeyCoreCheck told a pure-Ollama user to buy a key.
-func TestUnverifiedOllamaCandidateRemediatesWithPullNotProviderKey(t *testing.T) {
-	cfg := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
-	c := inferenceCoreCheck(cfg, "", true)
-	if c.verdict != verdictTodo || c.todo != pullModelsFixCmd {
-		t.Fatalf("core check = %+v, want a todo remediated by %q", c, pullModelsFixCmd)
-	}
-	if strings.Contains(c.todo+c.detail+c.evidence, "ANTHROPIC_API_KEY") {
-		t.Fatalf("a not-pulled model must never be remediated with a cloud key: %+v", c)
-	}
-	// With no ollama candidates at all, the key fix is still correct.
-	empty := &config.Config{}
-	if got := inferenceCoreCheck(empty, "", true); got.todo != modelKeyFixCmd {
-		t.Fatalf("a host with no ollama candidates still needs a key: %+v", got)
-	}
-}
-
-// TestRunIntentRowNamesThePullForUnverifiedOllamaBinding is S3's second caller.
-func TestRunIntentRowNamesThePullForUnverifiedOllamaBinding(t *testing.T) {
-	cfg := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
-	cfg.RunIntent = "breadth"
-	model, err := resolveSessionModel("breadth")
-	if err != nil {
-		t.Skipf("breadth does not resolve here: %v", err)
-	}
-	cfg.Inference.Models[0].Model = model
-	cfg.Inference.Models[0].Upstream = ollamaTagFor(model)
-	c := runIntentKeyCheck(cfg, "", true)
-	if c.todo != pullModelsFixCmd {
-		t.Fatalf("run_intent row = %+v, want the pull remediation", c)
 	}
 }
 
@@ -524,18 +532,18 @@ func TestRunIntentRowNamesThePullForUnverifiedOllamaBinding(t *testing.T) {
 func TestLegacyVerifiedOllamaBindingFlaggedOnceThenClears(t *testing.T) {
 	cfg := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
 	cfg.Inference.Models[0].Verified = true // pre-upgrade: claimed from a listing
-	if got := legacyVerifiedOllamaBindings(cfg); len(got) != 1 {
+	if got := doctor.LegacyVerifiedOllamaBindings(cfg); len(got) != 1 {
 		t.Fatalf("a listing-derived claim must be flagged: %v", got)
 	}
-	if !inferenceBindingCallable(cfg, cfg.Inference.Models[0]) {
+	if !inference.Callable(cfg, cfg.Inference.Models[0]) {
 		t.Fatal("legacy bindings are grandfathered as callable, not demoted at load")
 	}
 	// Promote path: the next setup re-probes and earns it.
 	promoted := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
 	promoted.Inference.Models[0].Verified = true
 	f := &fakeProber{}
-	verifyOllamaInference(promoted, shellEnv{ollamaInferenceProbe: f.probe}, io.Discard)
-	if got := legacyVerifiedOllamaBindings(promoted); len(got) != 0 {
+	_, _ = models.VerifyOllamaInference(promoted, hostenv.Env{System: &systest.Fake{}, OllamaInference: f.probe}, io.Discard)
+	if got := doctor.LegacyVerifiedOllamaBindings(promoted); len(got) != 0 {
 		t.Fatalf("the row must clear once a probe earns the claim: %v", got)
 	}
 	// Demote path: the probe refuses. The row clears there too, replaced by the
@@ -543,98 +551,12 @@ func TestLegacyVerifiedOllamaBindingFlaggedOnceThenClears(t *testing.T) {
 	demoted := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
 	demoted.Inference.Models[0].Verified = true
 	f2 := &fakeProber{fail: map[string]error{"qwen3.5:9b": fmt.Errorf("endpoint rejected the request (HTTP 500)")}}
-	verifyOllamaInference(demoted, shellEnv{ollamaInferenceProbe: f2.probe}, io.Discard)
-	if got := legacyVerifiedOllamaBindings(demoted); len(got) != 0 {
+	_, _ = models.VerifyOllamaInference(demoted, hostenv.Env{System: &systest.Fake{}, OllamaInference: f2.probe}, io.Discard)
+	if got := doctor.LegacyVerifiedOllamaBindings(demoted); len(got) != 0 {
 		t.Fatalf("the row must clear on demotion too: %v", got)
 	}
-	if len(unverifiedOllamaCandidates(demoted)) != 1 {
-		t.Fatal("a demoted binding becomes the candidate row that names the real problem")
-	}
-}
-
-// TestInferenceStepPrintsNothingOnFullSuccess (N2/AC-P0-302): a mutation must
-// not render a success claim; that is the post-mutation probe's job.
-func TestInferenceStepPrintsNothingOnFullSuccess(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	cfg := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
-	f := &fakeProber{}
-	var out bytes.Buffer
-	if err := runSetupInferenceStep(cfg, shellEnv{ollamaInferenceProbe: f.probe}, strings.NewReader(""), &out, false, setupModelsOutcome{consent: "none"}); err != nil {
-		t.Fatal(err)
-	}
-	s := out.String()
-	if strings.Contains(s, "verified;") || strings.Contains(s, "✓") || strings.Contains(s, "Core ready") {
-		t.Fatalf("the mutation printed a success claim:\n%s", s)
-	}
-	if !cfg.Inference.Models[0].Verified {
-		t.Fatal("the step must still promote what answered")
-	}
-}
-
-// TestDeclinedPullLeavesNoCallableModelAndExitsZero: declining a multi-gigabyte
-// download is a decision, not a failure.
-func TestDeclinedPullLeavesNoCallableModelAndExitsZero(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	cfg := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
-	cfg.OllamaBridgeModel = "qwen3.5:9b"
-	var out bytes.Buffer
-	// No prober wired: nothing was pulled, so nothing can be probed.
-	err := runSetupInferenceStep(cfg, shellEnv{}, strings.NewReader(""), &out, false, setupModelsOutcome{consent: "prompt-no"})
-	if err != nil {
-		t.Fatalf("a declined pull must not fail setup: %v", err)
-	}
-	if !strings.Contains(out.String(), pullModelsFixCmd) {
-		t.Fatalf("the honest note must name the fix:\n%s", out.String())
-	}
-	if callable, _ := configuredInferenceSummary(cfg); callable != 0 {
-		t.Fatal("nothing may be callable after a declined pull")
-	}
-}
-
-// TestOllamaCloudSelectedWithZeroVerifiedFailsSetup: a silent "configured" for
-// an account that can call nothing.
-func TestOllamaCloudSelectedWithZeroVerifiedFailsSetup(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	cfg := ollamaCfgWith(binding("ollama/glm-5.2:cloud"), binding("ollama/deepseek-v4-pro:cloud"))
-	f := &fakeProber{fail: map[string]error{
-		"glm-5.2:cloud":         fmt.Errorf("endpoint rejected the request (HTTP 401)"),
-		"deepseek-v4-pro:cloud": fmt.Errorf("endpoint rejected the request (HTTP 401)"),
-	}}
-	var out bytes.Buffer
-	err := runSetupInferenceStep(cfg, shellEnv{ollamaInferenceProbe: f.probe}, strings.NewReader(""), &out, false, setupModelsOutcome{consent: "none"})
-	if err == nil {
-		t.Fatal("cloud selected with zero verified models must fail setup")
-	}
-	if !strings.Contains(err.Error(), "ollama signin") || !strings.Contains(err.Error(), "HTTP 401") {
-		t.Fatalf("error = %v; it must name the refusal and the command the USER runs", err)
-	}
-}
-
-// TestPullPromptNamesTheBridgeAsRequiredOnPureLocalBox (N3): the static
-// "optional" header surviving the change.
-func TestPullPromptNamesTheBridgeAsRequiredOnPureLocalBox(t *testing.T) {
-	cfg := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
-	cfg.OllamaBridgeModel = "qwen3.5:9b"
-	cfg.MemoryWatcherModel = "qwen3.5:9b"
-	cfg.MemoryEmbedModel = "nomic-embed-text"
-	w := &ollamaWorld{}
-	env := modelsSetupEnv(t, w)
-	var out bytes.Buffer
-	o := setupLocalModels(cfg, env, strings.NewReader("n\n"), &out, true, false)
-	if o.consent != "prompt-no" {
-		t.Fatalf("consent = %q, want prompt-no", o.consent)
-	}
-	s := out.String()
-	header := s[:strings.Index(s, "\n[y/N]")+1]
-	if idx := strings.Index(s, "Missing local Ollama models"); idx >= 0 {
-		header = s[idx:]
-		header = header[:strings.Index(header, "\n")]
-	}
-	if strings.Contains(header, "optional") {
-		t.Fatalf("the header must not call the only callable model optional: %q", header)
-	}
-	if !strings.Contains(s, "REQUIRED") {
-		t.Fatalf("the bridge rung is the only model Pix can call here; say so:\n%s", s)
+	if inference.Callable(demoted, demoted.Inference.Models[0]) {
+		t.Fatal("a demoted binding must stop being callable — that is what makes the row clear honest")
 	}
 }
 
@@ -642,7 +564,7 @@ func TestPullPromptNamesTheBridgeAsRequiredOnPureLocalBox(t *testing.T) {
 // pack-ollama exemption above, and the regression test for scoping it.
 //
 // Packs may legally declare an `auth = "1password"` native backend, and
-// verifyDirectInference already probes those with no Source check and demotes
+// models.VerifyDirectInference already probes those with no Source check and demotes
 // the ones that fail. An exemption keyed on `Source != ""` alone therefore let
 // a binding whose probe was DISPATCHED AND REFUSED stay callable, flowing on
 // into the compiled manifest, the sandbox kit, and doctor's "N callable
@@ -657,13 +579,13 @@ func TestPackOnePasswordBindingStillNeedsHostProof(t *testing.T) {
 			{Model: "anthropic/claude-sonnet-5", Backend: "anthropic", Upstream: "anthropic/claude-sonnet-5", Available: true, Source: "/packs/work"},
 		},
 	}}
-	if inferenceBindingCallable(cfg, cfg.Inference.Models[0]) {
+	if inference.Callable(cfg, cfg.Inference.Models[0]) {
 		t.Fatal("an unverified pack 1password binding must NOT be callable: the host can probe that auth, so it must")
 	}
 	// Earning it the honest way makes it callable, so the rule gates on proof,
 	// not on origin.
 	cfg.Inference.Models[0].Verified = true
-	if !inferenceBindingCallable(cfg, cfg.Inference.Models[0]) {
+	if !inference.Callable(cfg, cfg.Inference.Models[0]) {
 		t.Fatal("a probe-verified pack 1password binding must be callable")
 	}
 }
@@ -671,13 +593,10 @@ func TestPackOnePasswordBindingStillNeedsHostProof(t *testing.T) {
 // TestEmptyOllamaSelectionPersistsNothing is the regression test for the dead
 // end that deleting the old hard error opened up.
 //
-// configureOllamaInference writes the ollama backend before it knows whether
+// models.ConfigureOllamaInference writes the ollama backend before it knows whether
 // anything will bind. With the hard error gone it returned nil with an empty
-// plan, so setup's keys step reached cfg.Save() and persisted a backend with no
-// models — and the NEXT `pix setup` early-returns into
-// enableDeclaredInferenceBindings ("configured but declares no models"), which
-// is fatal. Setup was then bricked until `pix state reset`, with config.toml
-// hand-editing forbidden by design.
+// plan, so a caller that reached cfg.Save() would persist a backend with no
+// models — an inert half-state no later reconcile can widen out of.
 //
 // Reachable two ways, both covered here: choosing Ollama Cloud while signed out
 // (no :cloud rows in the listing), and choosing local on a machine under the
@@ -685,21 +604,21 @@ func TestPackOnePasswordBindingStillNeedsHostProof(t *testing.T) {
 func TestEmptyOllamaSelectionPersistsNothing(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
-		sel      ollamaSelection
+		sel      models.OllamaSelection
 		listing  string
 		totalGB  float64
 		wantWord string
 	}{
 		{
 			name:     "cloud selected while signed out",
-			sel:      ollamaSelection{Cloud: true},
+			sel:      models.OllamaSelection{Cloud: true},
 			listing:  "NAME ID SIZE MODIFIED\n",
 			totalGB:  64,
 			wantWord: "ollama signin",
 		},
 		{
 			name:     "local selected on a machine under the floor",
-			sel:      ollamaSelection{Local: true},
+			sel:      models.OllamaSelection{Local: true},
 			listing:  "NAME ID SIZE MODIFIED\n",
 			totalGB:  16,
 			wantWord: "below the 24 GB",
@@ -707,12 +626,12 @@ func TestEmptyOllamaSelectionPersistsNothing(t *testing.T) {
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			// runtime.GOOS, not a fixed OS: probeHostMemory dispatches on the real
+			// runtime.GOOS, not a fixed OS: inference.ProbeHostMemory dispatches on the real
 			// one, and the 24 GB floor is a TOTAL-RAM rule, so it fires identically
 			// whichever usable-fraction applies.
 			env := hwMemEnv(t, runtime.GOOS, tc.totalGB)
-			base := env.run
-			env.run = func(name string, args ...string) (string, error) {
+			base := systest.Of(env.System).RunFn
+			systest.Of(env.System).RunFn = func(name string, args ...string) (string, error) {
 				if name == "ollama" && len(args) == 1 && args[0] == "list" {
 					return tc.listing, nil
 				}
@@ -722,7 +641,7 @@ func TestEmptyOllamaSelectionPersistsNothing(t *testing.T) {
 				return "", nil
 			}
 			cfg := &config.Config{}
-			_, err := configureOllamaInference(cfg, env, tc.sel, io.Discard)
+			_, err := models.ConfigureOllamaInference(cfg, env, tc.sel, io.Discard)
 			if err == nil {
 				t.Fatal("an Ollama selection that binds nothing must fail, not persist an empty backend")
 			}
@@ -735,14 +654,6 @@ func TestEmptyOllamaSelectionPersistsNothing(t *testing.T) {
 			}
 			if len(cfg.Inference.Models) != 0 {
 				t.Errorf("bindings were persisted despite the failure: %+v", cfg.Inference.Models)
-			}
-			// And prove the dead end really was a dead end: a config in the state we
-			// just refused to write is exactly what bricks the next run.
-			bricked := &config.Config{Inference: config.InferenceConfig{
-				Backends: map[string]config.InferenceBackend{"ollama": {Driver: "ollama", BaseURL: "http://x/v1", Auth: "none"}},
-			}}
-			if err := enableDeclaredInferenceBindings(bricked); err == nil {
-				t.Fatal("expected the empty-backend config to be the fatal state; if this stops being true, revisit the rollback")
 			}
 		})
 	}

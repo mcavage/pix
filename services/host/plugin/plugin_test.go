@@ -1,11 +1,9 @@
 package plugin
 
 import (
-	"encoding/json"
 	"errors"
 	"net"
 	"net/rpc"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -23,43 +21,18 @@ func (noopMemory) Forget(ForgetReq) (ForgetResp, error)             { return For
 func (noopMemory) Synthesize(SynthesizeReq) (SynthesizeResp, error) { return SynthesizeResp{}, nil }
 func (noopMemory) Promotable(PromotableReq) (PromotableResp, error) { return PromotableResp{}, nil }
 func (noopMemory) Observe(ObserveReq) (ObserveResp, error)          { return ObserveResp{}, nil }
-func (noopMemory) Stats() (Stats, error)                            { return Stats{}, nil }
+func (noopMemory) Stats(string) (Stats, error)                      { return Stats{}, nil }
 func (noopMemory) Health() (Health, error)                          { return Health{}, nil }
 
-type noopKnowledge struct{}
-
-func (noopKnowledge) Query(QueryArgs) (QueryResult, error)       { return QueryResult{}, nil }
-func (noopKnowledge) Reindex(ReindexArgs) (ReindexResult, error) { return ReindexResult{}, nil }
-func (noopKnowledge) Health() (KnowledgeHealth, error)           { return KnowledgeHealth{}, nil }
-
-type noopBroker struct{}
-
-func (noopBroker) Mint(string, []string) (Token, error) { return Token{}, nil }
-func (noopBroker) Check() error                         { return nil }
-func (noopBroker) Describe() (BrokerInfo, error)        { return BrokerInfo{}, nil }
-
-type noopMcp struct{}
-
-func (noopMcp) Info() (ServerInfo, error)      { return ServerInfo{}, nil }
-func (noopMcp) ListTools() ([]ToolSpec, error) { return nil, nil }
-func (noopMcp) CallTool(string, json.RawMessage) (json.RawMessage, error) {
-	return json.RawMessage("null"), nil
-}
-
-// Compile-time proof the trivial impls satisfy the interfaces.
-var (
-	_ MemoryStore      = noopMemory{}
-	_ KnowledgeStore   = noopKnowledge{}
-	_ CredentialBroker = noopBroker{}
-	_ McpServer        = noopMcp{}
-)
+// Compile-time proof the trivial impl satisfies the interface.
+var _ MemoryStore = noopMemory{}
 
 func TestHandshakeProtocolVersion(t *testing.T) {
-	if ProtocolVersion != 1 {
-		t.Fatalf("ProtocolVersion = %d, want 1", ProtocolVersion)
+	if ProtocolVersion != 2 {
+		t.Fatalf("ProtocolVersion = %d, want 2", ProtocolVersion)
 	}
-	if Handshake.ProtocolVersion != 1 {
-		t.Fatalf("Handshake.ProtocolVersion = %d, want 1", Handshake.ProtocolVersion)
+	if Handshake.ProtocolVersion != 2 {
+		t.Fatalf("Handshake.ProtocolVersion = %d, want 2", Handshake.ProtocolVersion)
 	}
 	if Handshake.MagicCookieKey != "PIX_PLUGIN" {
 		t.Fatalf("MagicCookieKey = %q, want PIX_PLUGIN", Handshake.MagicCookieKey)
@@ -78,9 +51,6 @@ func TestRPCPlugins(t *testing.T) {
 		p    goplugin.Plugin
 	}{
 		{"memory", &MemoryPlugin{Impl: noopMemory{}}},
-		{"knowledge", &KnowledgePlugin{Impl: noopKnowledge{}}},
-		{"broker", &BrokerPlugin{Impl: noopBroker{}}},
-		{"mcp", &McpPlugin{Impl: noopMcp{}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -95,14 +65,15 @@ func TestRPCPlugins(t *testing.T) {
 	}
 }
 
-// TestPluginMap asserts the client-side map covers the three capabilities with
-// the matching adapter types (nil Impl is correct for the client side).
+// TestPluginMap asserts the client-side map covers the dispensable capability
+// with the matching adapter type (nil Impl is correct for the client side).
+// The set is CLOSED: memory is the only capability this binary dispenses now
+// that the MCP plugin transport is retired (the bridge served zero built-in
+// servers, and an external MCP server ships as a container the sbx gateway
+// runs).
 func TestPluginMap(t *testing.T) {
 	wants := map[string]interface{}{
-		"memory":    &MemoryPlugin{},
-		"knowledge": &KnowledgePlugin{},
-		"broker":    &BrokerPlugin{},
-		"mcp":       &McpPlugin{},
+		"memory": &MemoryPlugin{},
 	}
 	if len(PluginMap) != len(wants) {
 		t.Fatalf("PluginMap has %d entries, want %d", len(PluginMap), len(wants))
@@ -119,18 +90,6 @@ func TestPluginMap(t *testing.T) {
 		case *MemoryPlugin:
 			if _, ok := got.(*MemoryPlugin); !ok {
 				t.Fatalf("PluginMap[%q] is %T, want *MemoryPlugin", k, got)
-			}
-		case *KnowledgePlugin:
-			if _, ok := got.(*KnowledgePlugin); !ok {
-				t.Fatalf("PluginMap[%q] is %T, want *KnowledgePlugin", k, got)
-			}
-		case *BrokerPlugin:
-			if _, ok := got.(*BrokerPlugin); !ok {
-				t.Fatalf("PluginMap[%q] is %T, want *BrokerPlugin", k, got)
-			}
-		case *McpPlugin:
-			if _, ok := got.(*McpPlugin); !ok {
-				t.Fatalf("PluginMap[%q] is %T, want *McpPlugin", k, got)
 			}
 		}
 	}
@@ -186,8 +145,8 @@ func (echoMemory) Promotable(r PromotableReq) (PromotableResp, error) {
 func (echoMemory) Observe(r ObserveReq) (ObserveResp, error) {
 	return ObserveResp{Accepted: true, Reason: r.User}, nil
 }
-func (echoMemory) Stats() (Stats, error)   { return Stats{Active: 11, Durable: 22}, nil }
-func (echoMemory) Health() (Health, error) { return Health{OK: true, WatcherModel: "m"}, nil }
+func (echoMemory) Stats(string) (Stats, error) { return Stats{Active: 11, Durable: 22}, nil }
+func (echoMemory) Health() (Health, error)     { return Health{OK: true, WatcherModel: "m"}, nil }
 
 func TestRPCRoundTripMemory(t *testing.T) {
 	client := newRPCPair(t, &memoryRPCServer{Impl: echoMemory{}})
@@ -212,7 +171,7 @@ func TestRPCRoundTripMemory(t *testing.T) {
 		t.Fatalf("Observe round trip: got %+v err %v", got, err)
 	}
 	// Zero-arg method — the exact shape net/rpc would drop with an unexported arg.
-	if got, err := c.Stats(); err != nil || got.Active != 11 || got.Durable != 22 {
+	if got, err := c.Stats(""); err != nil || got.Active != 11 || got.Durable != 22 {
 		t.Fatalf("Stats round trip: got %+v err %v", got, err)
 	}
 	// Zero-arg method.
@@ -221,80 +180,17 @@ func TestRPCRoundTripMemory(t *testing.T) {
 	}
 }
 
-// echoBroker mirrors args into its results.
-type echoBroker struct{}
-
-func (echoBroker) Mint(audience string, scopes []string) (Token, error) {
-	return Token{AccessToken: audience, TokenType: "Bearer", ExpiresIn: len(scopes)}, nil
-}
-func (echoBroker) Check() error { return nil }
-func (echoBroker) Describe() (BrokerInfo, error) {
-	return BrokerInfo{Name: "example", DefaultPort: 12345, RequiresHostCLI: true}, nil
-}
-
-func TestRPCRoundTripBroker(t *testing.T) {
-	client := newRPCPair(t, &brokerRPCServer{Impl: echoBroker{}})
-	c := &brokerRPCClient{client: client}
-
-	if got, err := c.Mint("aud", []string{"a", "b"}); err != nil || got.AccessToken != "aud" || got.ExpiresIn != 2 {
-		t.Fatalf("Mint round trip: got %+v err %v", got, err)
-	}
-	// Zero-arg method (empty reply too).
-	if err := c.Check(); err != nil {
-		t.Fatalf("Check round trip: err %v", err)
-	}
-	// Zero-arg method.
-	if got, err := c.Describe(); err != nil || got.Name != "example" || got.DefaultPort != 12345 || !got.RequiresHostCLI {
-		t.Fatalf("Describe round trip: got %+v err %v", got, err)
-	}
-}
-
-// echoMcp mirrors args into its results.
-type echoMcp struct{}
-
-func (echoMcp) Info() (ServerInfo, error) {
-	return ServerInfo{Name: "slack", Version: "1", ProtocolVersion: "2024"}, nil
-}
-func (echoMcp) ListTools() ([]ToolSpec, error) {
-	return []ToolSpec{{Name: "post", Description: "d", InputSchema: json.RawMessage(`{"type":"object"}`)}}, nil
-}
-func (echoMcp) CallTool(name string, args json.RawMessage) (json.RawMessage, error) {
-	return json.RawMessage(`{"tool":"` + name + `"}`), nil
-}
-
-func TestRPCRoundTripMcp(t *testing.T) {
-	client := newRPCPair(t, &mcpRPCServer{Impl: echoMcp{}})
-	c := &mcpRPCClient{client: client}
-
-	// Zero-arg method.
-	if got, err := c.Info(); err != nil || got.Name != "slack" || got.ProtocolVersion != "2024" {
-		t.Fatalf("Info round trip: got %+v err %v", got, err)
-	}
-	// Zero-arg method.
-	got, err := c.ListTools()
-	if err != nil || len(got) != 1 || got[0].Name != "post" {
-		t.Fatalf("ListTools round trip: got %+v err %v", got, err)
-	}
-	if !reflect.DeepEqual([]byte(got[0].InputSchema), []byte(`{"type":"object"}`)) {
-		t.Fatalf("ListTools schema round trip: got %s", got[0].InputSchema)
-	}
-	out, err := c.CallTool("post", json.RawMessage(`{"a":1}`))
-	if err != nil || string(out) != `{"tool":"post"}` {
-		t.Fatalf("CallTool round trip: got %s err %v", out, err)
-	}
-}
-
 // errMemory returns a distinctive error from a zero-arg method so we can assert
 // the error string survives the rpc.ServerError round trip.
 type errMemory struct{ echoMemory }
 
-func (errMemory) Stats() (Stats, error) { return Stats{}, errors.New("boom: stats failed") }
+func (errMemory) Stats(string) (Stats, error) { return Stats{}, errors.New("boom: stats failed") }
 
 func TestRPCRoundTripError(t *testing.T) {
 	client := newRPCPair(t, &memoryRPCServer{Impl: errMemory{}})
 	c := &memoryRPCClient{client: client}
 
-	_, err := c.Stats()
+	_, err := c.Stats("")
 	if err == nil {
 		t.Fatal("Stats: expected non-nil error from impl, got nil")
 	}

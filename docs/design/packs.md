@@ -9,6 +9,15 @@ Locked: name = `pack`; single active pack (no multi-pack) in v1; packs are
 with `op://` credential solicitation; pack-shipped executables + trust gate +
 signing shipped in v2; personal pack is local-only by default.
 
+**U08f (retired the authoring surface):** `pack new` and `pack add` are gone
+from the CLI. A `pack.toml` and its `skills/*/SKILL.md`, `bin/<name>`, and
+`[[integrations]]`/`[[proxy]]` stanzas are created and edited by hand — a
+pack is a plain directory a text editor and `git` already know how to work
+with, so a scaffolding verb bought little. Everything below describing `pack
+new`/`pack add` is the historical record of why the schema looks the way it
+does; `use`/`ls`/`show`/`rm`, git-ref adoption, the active pack, and the
+Tier-1 trust gate are unchanged and still exactly as described.
+
 ## 1. The idea
 
 > A **pack** is the one folder, in git, that makes your setup yours and
@@ -104,10 +113,15 @@ Stacking is additive, like kits (`--pack A --pack B`); no resolver in v1.
 Packs are runtime-swappable for the common cases, NO recompile:
 - **in-sandbox wrapper scripts** (`bin/`, kit `files/`) — fenced.
 - **stdio MCP servers** registered with the sbx gateway — run on the HOST.
-- **external SHA-pinned go-plugin binaries** for host capability slots
-  (memory/knowledge/broker/mcp) — `serve` hashes-and-refuses on mismatch,
-  fail closed, `sha` mandatory (the mechanism already exists in
-  `services/host/plugin`).
+- **external SHA-pinned go-plugin binaries** for a host capability slot —
+  `serve` hashes-and-refuses on mismatch, fail closed, `sha` mandatory (the
+  mechanism already exists in `services/host/plugin`). **As shipped, `memory`
+  is the only such slot.** The knowledge service and the credential-broker
+  plugin slot this bullet once named were deleted outright, not merely left
+  unused — no `config.toml` key, no supervised unit, no code path dispenses
+  either (`hostmode_gone_test.go` is the permanent sentinel); a private pack
+  wires `knowledge` as a `files`/`http` capability instead, not through
+  `pix-host serve`.
 
 For a PACK AUTHOR this means: **packs are 100% runtime, no build, ever.**
 The only host-side extension point in `pix-host` is the generic,

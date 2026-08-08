@@ -1,0 +1,29 @@
+{
+  "verb": "pack",
+  "cases": [
+    {
+      "name": "help",
+      "args": [
+        "pack",
+        "--help"
+      ],
+      "exitCode": 0,
+      "stream": "stdout",
+      "contains": [
+        "Usage: pix pack"
+      ]
+    },
+    {
+      "name": "bad-invocation",
+      "args": [
+        "pack",
+        "--this-is-not-a-real-flag-9x7z"
+      ],
+      "exitCode": 2,
+      "stream": "stderr",
+      "contains": [
+        "unknown flag"
+      ]
+    }
+  ]
+}

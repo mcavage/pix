@@ -7,7 +7,7 @@ This doc does. Read the section you need, run the command, move on.
 ## 0. Command map
 
 The authoritative verb/flag list is `pix help --all` (and `pix help
-<verb>`, `pix help --man`) — it is generated from the dispatch tree, so it
+<verb>`): it is generated from the dispatch tree, so it
 cannot drift. This table says what each verb is FOR and where the reasoning
 lives. It is the pointer target for `AGENTS.md`, which deliberately carries no
 CLI reference of its own.
@@ -18,22 +18,27 @@ CLI reference of its own.
 | `status` / `ls` / `rm` | read-only control panel; list and remove `pix-*` sandboxes | §9 |
 | `doctor` | probe host + sandbox health and print exact fixes | §9 |
 | `setup` | the guided host+agent setup path (keys, memory, pack, identity) | `docs/design/onboarding.md` |
-| `serve` | the long-running host services (memory :11435, knowledge :11436) | `docs/design/serve-lifecycle.md` |
+| `serve` | the long-running host services (memory :11435) | `docs/design/serve-lifecycle.md` |
 | `memory` (`mem`) | recall/remember/forget/learnings/stats from the host | §2, `docs/memory.md` |
-| `knowledge` (`kb`) | OKF bundles: init/use/ls/query/sync/remote | §6 |
-| `pack` | the portable capability context: new/add/ls/show/use/rm | §5, `docs/design/packs-v2.md` |
-| `mcp` | register/list/load MCP servers through the sbx gateway | §8, `docs/design/slack-setup.md` (Slack credential model) |
-| `gworkspace` | Google Workspace (Gmail/Drive/Docs/Sheets/Calendar) | `docs/gworkspace.md` |
-| `slack` | Slack (search/read messages, channels, users) via a personal `xoxp-` token | `docs/design/slack-setup.md` |
+| `pack` | the portable capability context: ls/show/use/rm (no authoring verb, edit `pack.toml`/`skills/` by hand) | §5, `docs/design/packs-v2.md` |
+| `mcp` | register/list/load MCP servers through the sbx gateway (the one door integrations come through) | §8 |
 | `secret` | manage the 1Password `op://` refs (never the values) | §8 |
 | `config` | `show`/`path`/`get`/`set`/`unset` the single runtime config | §1 |
-| `host` | the unsandboxed escape hatch, off by default | §7, `docs/design/host-mode.md` |
 | `task` | isolated parallel-work clones + sandboxes | `docs/design/worktree-tasks.md` |
-| `monitor` | live-follow a sandbox's out-of-sandbox traffic | `docs/design/monitor.md` |
+| `monitor` | one-shot read of a sandbox's stored out-of-sandbox traffic (`--follow`/`-f` to stream) | `docs/design/monitor.md` |
 | `models` | which models pix can use, and the model router: ls/show/pick/route | `docs/design/routing.md`, `docs/design/models-cli.md` |
-| `agent` | the subagent roster: ls/new/edit/rm/reassess | §4 |
-| `state` | backup/restore/reset/uninstall on-disk state | §9 |
-| `version`, `help` | stamped version; tiered help | — |
+| `agent` | the subagent roster, read-only: `ls` only (`new`/`edit`/`rm`/`reassess` are RETIRED) | §4 |
+| `version`, `help` | stamped version; tiered help | (none) |
+
+Retired verbs (`slack`, `gworkspace`, `knowledge`, `host`, `upgrade`, `man`,
+`backup`, `restore`, `reset`, `state backup|restore|reset`, `task harvest|gc`,
+`route`, `onboard`, `evals`) answer with a `PIX_RETIRED` line naming the
+replacement and exit 2, doing nothing else. `reset`/`state reset` moved state
+aside as a reversible clean-slate; ephemeral sandboxes plus `setup`/`doctor` do
+that job now, so recovery is manual and evidence-first: run `doctor` first,
+back up whatever `config path` / `status --json` show, then `setup`: there is
+no automated wipe. Every retirement is recorded, with its reason and
+replacement, in `services/host/cmd/pix/corpus/retirement.jsonl`.
 
 ## 1. What pix is
 
@@ -133,6 +138,7 @@ The spine you'll use most:
 | `ship` | working tree to open PR: rebase, tests, lint, review, version bump, push |
 | `debug` | root-cause-first: reproduce, form a falsifiable hypothesis, verify it, then fix |
 | `code-review` | review the current diff, then get a cross-vendor second opinion |
+| `architecture-audit` | map and stress-test a whole system or major refactor with the full crew |
 | `tdd` | failing test first, watch it fail, minimal code to pass, refactor |
 | `verify` | prove a claim by running the command before you say "done" |
 | `qa` | drive a running app in the browser, report bugs with screenshots |
@@ -142,13 +148,15 @@ The spine you'll use most:
 
 Example: say "let's fix this bug" and `debug` loads on its own; you don't
 type `/skill:debug`. Say "review my diff before I push" and `code-review`
-loads and hands off to a cross-vendor subagent automatically.
+loads and hands off to a cross-vendor subagent automatically. Use
+`architecture-audit` when the question is whether the system or a major
+refactor is sound, not whether one diff has a defect.
 
 **Limits.** Skills are mechanism, not your personal config. A skill never
 hardcodes your channel names or account IDs; that data lives in memory or a
 pack (§5) and the skill reads it at runtime. A skill baked into the image is
-read-only in a running sandbox; edit and version your own by adding it to a
-pack instead (`pack add skill`).
+read-only in a running sandbox; edit and version your own by adding a
+`skills/<name>/SKILL.md` file to a pack directly.
 
 ## 4. The crew
 
@@ -174,6 +182,12 @@ pix agent ls                 # roster with each agent's resolved model and WHY
 pix models pick <intent>     # what the router would resolve for that intent
 ```
 
+`pix agent ls` is the only `agent` subcommand. `new`/`edit`/`rm`/`reassess`
+are RETIRED (each answers `PIX_RETIRED` and exits 2, doing nothing else): an
+agent is a hand-edited `agents/*.md` file, not a CLI mutation surface. To
+change one, edit its frontmatter (or add a new file) directly, then run
+`pix models route` to re-resolve intents and recompile `routing.json`.
+
 Example: `code-review` finishes its own pass, then dispatches the `review`
 subagent, which the router resolves to GPT if your code was written by Claude.
 You get an adversarial second opinion, not an echo.
@@ -195,34 +209,33 @@ the thing you'd `git diff`, as opposed to memory, which you'd only see in a
 
 ```
 pix pack use <path|git-url> # switch to another pack (config, knowledge, MCP set)
-pix pack new [PATH]         # adopt an existing repo, or git-init a fresh one
-pix pack add skill <name> [PACK]
-pix pack add knowledge <name> [PACK] [--ref <git-url|path>] [--private]
-pix pack add proxy <name> [PACK] [--host]
-pix pack add mcp <name> [PACK] [--env VAR]
 pix pack ls                 # show the active pack
 pix pack show [PATH]        # inspect a pack's full facet inventory
 pix pack rm                 # detach the active pack (files untouched)
 ```
 
-Adding a capability is one command and one file. `pack add proxy warehouse`
-scaffolds `bin/warehouse`, a wrapper script that lands on PATH inside the
-sandbox. `pack add mcp fastmail --env FASTMAIL_TOKEN` declares an MCP server
-the pack needs plus the env var name it'll ask you to fill via 1Password;
-the value never touches the pack or the VM.
+There is no authoring verb. A pack is a directory you create and edit by
+hand: a `pack.toml` (name + facets) plus `skills/`, `knowledge/`, and `bin/`
+as needed: see docs/design/packs.md for the schema. Adding a capability is
+one file and one `pack.toml` stanza: a `bin/warehouse` wrapper script plus a
+`[[proxy]]` entry lands it on PATH inside the sandbox; an `[[integrations]]`
+stanza with `mcp = "fastmail"` and `env = "FASTMAIL_TOKEN"` declares an MCP
+server the pack needs plus the env var name `pack use` will ask you to fill
+via 1Password: the value never touches the pack or the VM.
 
 **MCP servers and `bin/` wrappers attach at sandbox CREATE, not live.** If you
 switch packs or add an MCP inside a running sandbox, it's registered on the
 host but the running sandbox doesn't have it yet:
 
 ```
-pix run --replace     # recreate the sandbox to pick up the new MCP/bin set
+pix rm BOX && pix run # recreate the sandbox to pick up the new MCP/bin set
 ```
 
-**Host-mode wrappers** (`pack add proxy platformio --host`) are for tools that
-need something the sandbox structurally can't reach, a `/dev/tty*` serial
+**Host-mode wrappers** (a `[[proxy]]` entry with `host = true`) are for tools
+that need something the sandbox structurally can't reach, a `/dev/tty*` serial
 device is the canonical case. They install to the host, not the sandbox, and
-only run under `pix host` (§7), never inside the VM.
+run on the host, not in the sandbox (§7), so a sandboxed session cannot use
+them at all.
 
 **Sharing a pack:** push the git repo, a teammate runs `pix pack use
 <url>` and supplies their own `op://` credential refs at adoption. Credentials
@@ -257,16 +270,10 @@ MCP or knowledge bundle you added by hand outside any pack.
 
 ## 6. Knowledge
 
-A knowledge bundle is an OKF (Open Knowledge Format) directory of domain
-facts: markdown, indexed with SQLite FTS5 and embeddings, searchable
-independent of any pack.
-
-```
-pix knowledge init [DIR]      # scaffold a bundle
-pix knowledge use <path|url>  # point at one
-pix knowledge query <text>    # search it (from the host, no sandbox needed)
-pix knowledge sync            # commit + push, opens a PR branch by default
-```
+Knowledge is pack-delivered context: an OKF (Open Knowledge Format) directory
+of domain facts a pack points at. There is no launcher verb for it and no
+corpus shipped in the public stack: the `knowledge` capability resolves to
+`none` until a pack wires one, and `pix pack use <path|url>` is how it arrives.
 
 A pack references bundles rather than only embedding them, and the reference
 carries a `shared` flag:
@@ -274,82 +281,27 @@ carries a `shared` flag:
 - `shared = true`, a git URL: the reference travels with the pack. An
   adopter pulls the same bundle.
 - `shared = false`, a local path: it does not travel. When you share the
-  pack, your private knowledge is simply absent from what the teammate gets,
-  and it still works for you because the bundle is standalone.
+  pack, your private knowledge is simply absent from what the teammate gets.
 
-Example: your `work` pack references `shared=true`
-`https://github.com/acme/runbooks.git` (the team bundle everyone gets) and
-`shared=false ~/notes/okf` (your own scratch notes, which stay yours even if
-you hand the pack to a teammate).
+A bundle is markdown, not executable, so it never triggers the pack trust gate
+(§5), even when it's part of a pack that does.
 
-**Limits.** `knowledge` resolves to `none` in the public stack by default;
-there's no corpus shipped. It only has content once you `init` or `use` one.
-A bundle is markdown, not executable, so it never triggers the pack trust
-gate (§5), even when it's part of a pack that does.
+## 7. Leaving the sandbox
 
-## 7. Host mode
-
-`pix host` execs pi directly on your host machine, no sandbox, no
-network fence. It exists for the two things a Docker sandbox structurally
-cannot do: reach a real device (`/dev/tty*` for platformio) and rebuild the
-pix image itself (you can't `make load` from inside the VM you're
-building).
-
-```
-pix host setup   # provisions the host agent dir AND enables the gate (off by default)
-pix host [DIR]   # launch; disable again with: pix config set host.enabled false
-```
-
-Setup and launch require the same pinned pi version as the sandbox image, and
-launch requires the matching curated extensions installed by `host setup`. A
-missing or stale core is rejected with the exact `npm install -g` command;
-stale extensions point back to `pix host setup`.
-
-**Say this plainly: host mode is not a security boundary.** pi has no
-built-in sandbox or permission prompts of its own; the sandbox *is* pix's
-safety model, and host mode steps outside it. What you get instead is a set
-of guardrails against accidents, not against a compromised session:
-subagents are disabled entirely (no headless child can run unsandboxed),
-credentials are sourced just-in-time via 1Password and never persisted to
-disk, and the session prints a visible red banner so you can't mistake it for
-a normal run. Use it narrowly, for the two cases above, not as a default
-runtime.
-
-`pix setup` sources direct cloud API keys from 1Password. The `op` CLI must be
-installed and signed in only for that path; a keyless gateway or verified
-Ollama-only setup does not invoke it. The old `--use-sbx-keys` /
-`--use-1password` flags and the persisted `provider_key_mode` are gone (both
-flags now error). setup validates one `op://` ref per provider, mirrors them
-into `hostmode.env`, and reconciles them into `sbx`. `pix setup --no-agent` never
-provisions provider keys.
-
-Host mode reaches cloud models through the same `op://` refs in `hostmode.env`
-that setup writes; real validation happens again at every `pix host`
-launch via `op run --env-file`. Cloud keys are reported "validated this run"
-because setup just resolved them via `op read`.
-
-**Limits.** No sandbox means no network fence, no throwaway teardown, and no
-subagent fan-out. If you find yourself reaching for `pix host` as your
-everyday driver, that's the failure mode the design explicitly warns against.
+There is no unsandboxed run mode. The sandbox is the boundary the whole design
+rests on, so the two things it structurally cannot do (reach a real device and
+rebuild the pix image itself) are done from your own shell, not through pix.
 
 ## 8. MCP and capabilities
 
 External tools and data (Slack, GitHub, Google Workspace, a company wiki) wire
 in as MCP servers, run through the sbx gateway.
 
-**Slack's `SLACK_TOKEN` is always a single named person's `xoxp-` user
-token** — never a shared "employee"/team/bot token, and never handed to a
-second person to reuse. Every call the `slack` server makes runs AS that
-token's owner. `pix slack setup` supports a local PKCE OAuth flow (`pix config
-set slack.client_id <id>`, public client with no client secret) as well as a
-static `--token-ref` fallback. The PKCE flow stores the rotating credential
-document in 1Password (`Private` vault by default), refreshes rotating 12-hour
-access tokens automatically without an interactive command. The roughly
-monthly browser grant is renewed with `pix slack auth` before it expires.
-`pix slack status` verifies live access/identity through
-`auth.test` and checks gateway registration. `pix slack disable` revokes the
-token at Slack, archives the 1Password document, and clears registration.
-See `docs/design/slack-setup.md`.
+A credential an MCP server needs is a 1Password `op://` reference resolved at
+spawn (§8 below, `pix secret`), never a value on disk and never baked into the
+gateway registration. Where a server needs a user identity (a Slack `xoxp-`
+user token is the canonical case), that identity is one named person's, never a
+shared team token and never handed to a second person to reuse.
 
 ```
 pix config set mcp <name>     # add a local stdio server to the launch set
@@ -372,13 +324,44 @@ host-side), `--url` (a remote endpoint, OAuth'd host-side), or `--local --url
 <manifest>` (a container the gateway runs from an OCI manifest). `sbx mcp get
 <name>` shows you exactly what's registered.
 
+**pix tolerates one sbx CLI grammar change at a time, never blindly.**
+`pix mcp bundle`'s default `add` and `pix mcp register`'s container (manifest/
+remote-URL) registrations each know a CURRENT grammar and exactly one KNOWN
+alternate. `mcp bundle add` tries the current `NAME --url URL` form and
+retries with the positional `NAME URL` form ONLY when sbx's own parser
+rejects the first with a recognized usage error (an unknown flag/command or
+wrong arity); never on an auth or policy failure, which would fail
+identically either way. A manifest/remote container instead runs a read-only
+`sbx mcp add --help` once, up front, and picks the grammar that help text
+documents; chosen there instead of after a failed attempt because a
+remote-URL registration can open an interactive OAuth grant, and retrying
+that after a failure risks a second, unwanted grant. Neither path loops or
+guesses past its one known alternate; an unresolvable case reports the real
+failure, not an invented one.
+
+**sbx v0.38 dropped `mcp bundle` entirely, so `pix mcp bundle` degrades to
+direct adds, not a hard failure.** When BOTH the current and positional
+`mcp bundle add` grammars are rejected with a recognized "unknown command"
+error (not merely an unrecognized flag on an existing `bundle` command), pix
+concludes this sbx build has no `mcp bundle` at all and falls back to
+registering `mcp-catalog.bundle.json`'s three entries (notion/atlassian/
+granola) one at a time via direct `sbx mcp add NAME --url URL`, stopping at
+the first real failure and never touching a pre-existing registration.
+`pix mcp bundle rm pix-catalog` mirrors this with direct `sbx mcp rm NAME`
+calls for the same three names; `pix mcp bundle ls` prints an honest note and
+maps the request onto `sbx mcp ls` (the gateway's one remaining registration
+view) instead of fabricating a bundle listing sbx no longer has a concept
+of. The three names + URLs live in exactly one place in code
+(`mcp.McpCatalog`), checked against the shipped `config/mcp-catalog.bundle.json`
+by an anti-drift test so the two can never disagree.
+
 **Static preload, or explicit load, nothing else.** Every server in your
 configured `mcp` list, and every integration an active or transient pack
 carries, is passed to sbx as `--static-mcp <name>` when the sandbox is
 CREATED, so its tools are in context from the start. There is no dynamic
 discovery and no on-demand attach: a server you add or register after a
 sandbox exists is not visible to it until you either recreate
-(`pix run --replace`, which re-sends the full `--static-mcp` set) or
+(`pix rm BOX && pix run`, which re-sends the full `--static-mcp` set) or
 attach it live:
 
 ```
@@ -390,27 +373,33 @@ pix mcp bundle                 # register the shipped catalog (notion/
                                     # atlassian/granola) in one step
 ```
 
-`pix mcp load` resolves to `sbx mcp load <name> --sandbox <box>` and
-records a receipt only after that attach succeeds; `pix status` and
-`pix doctor` read that receipt back, they do not poll the gateway live
-(see §9).
+`pix mcp load` resolves to `sbx mcp load <name> --sandbox <box>`. It writes
+no receipt: the launcher-side MCP receipt store was deleted (U04e), because
+"attached once" is not the state of a live session, and rendering it as
+`attached` was a lie by the time you read it. `pix status` and `pix doctor`
+never poll a sandbox and never claim to know what it has attached; they
+report what the HOST can check (see §9).
 
 ## 9. Status and doctor
 
-`pix status` is a fast, read-only dashboard: services, provider keys,
-knowledge bundles, and, per configured MCP server per running sandbox, one of
-five states drawn from launcher receipts, not a live gateway probe:
+`pix status` is a fast, read-only dashboard: services, provider keys, the
+active pack, and, per configured MCP server, the two things the host can
+actually check, each tri-state (yes / no / unknown: never guessed):
 
-- **preloaded**: the sandbox's create receipt says this server shipped as
-  `--static-mcp`, and it's still registered
-- **loaded**: a later `pix mcp load` receipt attached it, and it's
-  still registered
-- **registered-not-attached**: registered, but neither receipt covers this
-  sandbox; the fix is `pix mcp load <name> <dir>`
-- **not-registered**: `sbx mcp ls` positively lacks the server
-- **unverifiable**: an old or externally created sandbox with no launcher
-  receipt, or the registration/sandbox listing itself failed; status never
-  guesses a state it can't back with a receipt
+- **registration**: `sbx mcp ls` says the server is known to the gateway
+- **auth**: for a remote/OAuth server only (catalog or pack-remote), the
+  hosted control plane's login state; a local stdio server has no
+  control-plane auth to check
+
+**Attachment is deliberately not a third truth.** Nothing pix can run from
+the host answers whether a RUNNING sandbox currently has a server's tools
+loaded, so a registered server's note always carries the same caveat:
+"host registration; attachment to a live session is not checkable from
+here", instead of guessing `attached`/`not attached`. `pix mcp ls` prints
+the identical caveat. The fix for a server that's registered but not (yet)
+in your session is always the same regardless of history:
+`pix mcp load <name> [DIR]` to attach it live, or `pix rm BOX && pix run` to
+recreate and pick up the full `--static-mcp` set.
 
 `pix doctor` runs the same evidence through four verdicts per check:
 **ready** (verified working), **todo** (a verified, fixable gap, with the
@@ -418,11 +407,38 @@ exact command), **unverifiable** (a probe timed out or the tool needed to
 check isn't available; never treated as broken), and **denied** (an explicit
 policy or permission refusal, distinct from a setup gap). `doctor --json`
 emits `schema_version` so a script can tell the shape apart from an older
-run. Exit codes: **2** on a usage error, **1** only when a core requirement
-(a model provider key, or the config file itself) is a positively verified
-failure, **0** otherwise, including every optional or unverifiable gap. A
-single resolved key for any one of Anthropic, OpenAI, or Google satisfies the
-provider check; you don't need all three.
+run. Exit codes: **2** on a usage error, **1** only when a REQUIRED check is a
+positively verified failure, **0** otherwise, including every optional or
+unverifiable gap. Required, always: the **sbx CLI** being installed and at
+least one resolved **provider key** (a single key for any one of Anthropic,
+OpenAI, or Google satisfies it; you don't need all three): either one
+failing alone is enough to fail doctor. Required only when configured:
+**memory** and **monitor**, once listed in `services`. Never required:
+**launchd** and **pack** (a host with neither configured is a perfectly good
+host). A config file that fails to load entirely is its own separate
+required gap: nothing else can be probed without one, so it is reported
+alone.
+
+**sbx-missing exit codes are unified across every surface that shells to
+sbx.** `pix ls`, `pix rm`, and every `pix mcp` verb that promises an operation
+(`register`/`load`/`auth`/`bundle`, and read-only `ls`) all return the SAME
+detectable error when `sbx` is not on PATH, so they exit and message this
+identically instead of drifting into four different "sbx is missing" stories:
+
+| surface | sbx absent -> exit | message names |
+| --- | --- | --- |
+| `pix ls` | 3 (`rpc.ExitServiceDown`) | the exact install fix (`brew install docker/tap/sbx@nightly`) |
+| `pix rm` | 3 (`rpc.ExitServiceDown`) | the exact install fix |
+| `pix mcp ls/register/load/auth/bundle` | 3 (`rpc.ExitServiceDown`) | `would run: sbx ...` on **stderr**, so a script piping stdout never sees it |
+| `pix doctor` | 1 (`ExitNotReady`) only if a REQUIRED check is a verified gap; sbx's own gap is `todo` with the exact install fix as its `Fix` | the exact install fix (`health.SbxInstallFix`) |
+
+The shared plumbing: `mcp.ErrSbxUnavailable` is the one sentinel every mutating
+mcp verb and `ls`/`rm` wrap (`errors.Is`-detectable); the command layer maps it
+to exit 3 (`sbxAwareFail` in `cmd/pix/root.go`, `mcpFailed` in
+`cmd/pix/mcp_cmd.go`) and the install fix text is the ONE constant
+(`health.SbxInstallFix`) doctor, ls, and rm all quote verbatim, never a
+second paraphrase of "go install the CLI" that can drift out of sync with the
+first.
 
 ## 10. Your first hour
 
@@ -434,10 +450,10 @@ provider check; you don't need all three.
 3. Let the crew show up uninvited. If you ask for a code review, a
    cross-vendor subagent checks it without you naming a model.
 4. When you catch yourself repeating a preference or a wrapper script across
-   sessions, that's the trigger, not before: `pix pack new` to make it a
-   pack, `pack add skill <name>` to save what worked as a reusable flow. Run
-   `/learnings` first if you want to know what the watcher already noticed
-   repeating.
+   sessions, that's the trigger, not before: write a `pack.toml` and a
+   `skills/<name>/SKILL.md` by hand to save what worked as a reusable flow,
+   then `pix pack use <path>` to activate it. Run `/learnings` first if you
+   want to know what the watcher already noticed repeating.
 
 That's the whole loop: run, work, let the parts introduce themselves, save
 the repeat.

@@ -7,7 +7,7 @@
 // without ever linking into the public tree.
 //
 // This package is intentionally ADDITIVE: it defines the shared handshake, the
-// three capability interfaces (MemoryStore, CredentialBroker, McpServer) derived
+// capability interface (MemoryStore) derived
 // from the real services (../memory.go, ../slack.go), and the
 // net/rpc go-plugin wiring for each. A later unit wires the existing services
 // onto these interfaces; nothing here imports or mutates package main.
@@ -21,9 +21,11 @@ package plugin
 import goplugin "github.com/hashicorp/go-plugin"
 
 // ProtocolVersion gates host <-> plugin compatibility. Bump it on ANY breaking
-// change to an interface below; go-plugin then refuses a skewed plugin at launch
-// with a clear error instead of failing mysteriously at call time.
-const ProtocolVersion = 1
+// interface change; go-plugin then refuses a skewed plugin at launch.
+// v2 (U07): Stats takes a profile, Hit carries CreatedAt, Health carries
+// CaptureReason — fields :11435 has always returned, now that memory is always
+// plugin-backed.
+const ProtocolVersion = 2
 
 // Handshake is the single shared handshake for every pix plugin kind.
 //
@@ -44,8 +46,5 @@ var Handshake = goplugin.HandshakeConfig{
 // never calls. A plugin binary serving an implementation builds its own map with
 // a populated Impl (see Serve).
 var PluginMap = map[string]goplugin.Plugin{
-	"memory":    &MemoryPlugin{},
-	"knowledge": &KnowledgePlugin{},
-	"broker":    &BrokerPlugin{},
-	"mcp":       &McpPlugin{},
+	"memory": &MemoryPlugin{},
 }

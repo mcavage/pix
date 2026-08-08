@@ -13,25 +13,38 @@ package main
 //  3: `pix mcp register/load/auth/bundle` (and, by the same policy,
 //     read-only `mcp ls`) printed "would run: ..." and exited 0 when sbx
 //     isn't on PATH — a command that PROMISES an operation must not report a
-//     silent success. They now return/exit with errSbxUnavailable ->
-//     exitServiceDown (3), the SAME "dependency unavailable" code
+//     silent success. They now return/exit with mcp.ErrSbxUnavailable ->
+//     rpc.ExitServiceDown (3), the SAME "dependency unavailable" code
 //     `pix memory`/`secret` already use, while still printing the exact
 //     recovery command verbatim and never mutating a receipt or config file.
-//  4: the same embedded-repo-path mistake as finding 1 also leaked into
-//     `pix agent new`'s next-steps, `pix agent reassess --model`'s
-//     guidance, and the removed `pix evals` message.
+//  4: the same embedded-repo-path mistake as finding 1 also leaked into the
+//     (now retired) `pix agent new`'s next-steps and `pix agent reassess
+//     --model`'s guidance, and the removed `pix evals` message; the sweep test
+//     below still guards the source it flagged.
 
 import (
 	"bytes"
-	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"pix/host/cli"
 	"pix/host/routing"
+	"pix/host/rpc"
+	"pix/host/sys"
 )
+
+// modelsHelp renders `pix models --help` the way a user reads it: through the
+// root parser, off the same tags that parse the verb.
+func modelsHelp(t *testing.T) string {
+	t.Helper()
+	d, out, _ := rootDeps()
+	if err := runRootParse([]string{"models", "--help"}, d); err != nil {
+		t.Fatalf("models --help: %v", err)
+	}
+	return out.String()
+}
 
 // --- finding 1: route/models help is repo-less for the consumer -----------
 
@@ -44,7 +57,7 @@ func TestRouteUsage_ConsumerPathsAreLiveOverrideDir(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("ROUTING_DIR", dir)
 
-	usage := modelsUsage()
+	usage := modelsHelp(t)
 
 	wantModels := filepath.Join(dir, "models.json")
 	wantScorecard := filepath.Join(dir, "scorecard.json")
@@ -64,7 +77,7 @@ func TestRouteUsage_ConsumerPathsAreLiveOverrideDir(t *testing.T) {
 // editing shipped defaults, not a personal override) must be explicitly
 // labeled — never presented as if it were the consumer's recovery path.
 func TestRouteUsage_EmbeddedRepoSourceIsLabeledMaintainerOnly(t *testing.T) {
-	usage := modelsUsage()
+	usage := modelsHelp(t)
 	idx := strings.Index(usage, "services/host/routing/defaults")
 	if idx < 0 {
 		return // no mention at all is also fine
@@ -119,166 +132,63 @@ func TestNoUnlabeledRepoRoutingDefaultsInSource(t *testing.T) {
 	}
 }
 
-// TestAgentNew_NextStepsPointAtLiveScorecardPath: `agent new`'s "hand-add its
-// scores to ..." next-step must be the live override path, not the repo's
-// embedded defaults file (which doesn't exist outside a checkout).
-func TestAgentNew_NextStepsPointAtLiveScorecardPath(t *testing.T) {
-	dir := t.TempDir()
-	t.Chdir(dir)
-	t.Setenv("ROUTING_DIR", t.TempDir())
-	if err := os.MkdirAll("agents", 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	old := os.Stdout
-	rp, wp, _ := os.Pipe()
-	os.Stdout = wp
-	agentNew([]string{"redrive-dx-probe"})
-	_ = wp.Close()
-	os.Stdout = old
-	var buf bytes.Buffer
-	_, _ = buf.ReadFrom(rp)
-
-	out := buf.String()
-	if !strings.Contains(out, routing.ScorecardPath()) {
-		t.Errorf("agent new next-steps must point at %s, got:\n%s", routing.ScorecardPath(), out)
-	}
-	if strings.Contains(out, "services/host/routing/defaults") {
-		t.Errorf("agent new next-steps must not point at the embedded repo source, got:\n%s", out)
-	}
-}
-
-// TestAgentReassessModel_PointsAtLiveScorecardPath: `agent reassess --model X`
-// exits 2 with guidance (measurement was removed); that guidance must be the
-// live override path, not the repo's embedded defaults file. Run in a
-// subprocess since agentReassess calls os.Exit(2) on this path.
-func TestAgentReassessModel_PointsAtLiveScorecardPath(t *testing.T) {
-	if os.Getenv("PIX_DXFIX_REASSESS") == "1" {
-		agentReassess([]string{"--model", "anthropic/claude-haiku-4-5"})
-		return
-	}
-	dir := t.TempDir()
-	cmd := exec.Command(os.Args[0], "-test.run", "TestAgentReassessModel_PointsAtLiveScorecardPath")
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
-		"PIX_DXFIX_REASSESS=1",
-		"ROUTING_DIR="+filepath.Join(dir, "routing"),
-	)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	runErr := cmd.Run()
-
-	var ee *exec.ExitError
-	if !errors.As(runErr, &ee) {
-		t.Fatalf("expected an ExitError, got %v (output: %s)", runErr, out.String())
-	}
-	if ee.ExitCode() != 2 {
-		t.Errorf("exit code = %d, want 2; output:\n%s", ee.ExitCode(), out.String())
-	}
-	wantPath := filepath.Join(dir, "routing", "scorecard.json")
-	if !strings.Contains(out.String(), wantPath) {
-		t.Errorf("expected the live scorecard path %q in guidance, got:\n%s", wantPath, out.String())
-	}
-	if strings.Contains(out.String(), "services/host/routing/defaults") {
-		t.Errorf("agent reassess guidance must not point at the embedded repo source, got:\n%s", out.String())
-	}
-}
-
 // --- finding 3: mcp verbs that promise an operation must not exit 0 --------
 
+// runTypedMcp drives one `pix mcp` subcommand through its typed tree with sbx
+// absent from PATH, and returns the exit code the launcher would produce plus
+// the combined output. These cases used to re-exec the test binary because the
+// seam called os.Exit deep inside itself; the command returns an error now, so
+// the exit code is an ordinary assertion.
+func runTypedMcp(t *testing.T, argv []string, extraEnv map[string]string) (int, string) {
+	t.Helper()
+	t.Setenv("PATH", t.TempDir()) // nothing on PATH, including no sbx
+	for k, v := range extraEnv {
+		t.Setenv(k, v)
+	}
+	var out bytes.Buffer
+	d := &cli.Deps{Sys: sys.Real{}, Out: &out, Err: &out, In: strings.NewReader("")}
+	err := cli.RunRoot[mcpCmd]("pix mcp", "", "", argv, d)
+	return cli.ExitCode(err), out.String()
+}
+
+// wantServiceDown asserts the honest-unknown contract shared by every mcp verb
+// that promises an operation: exit 3, and the exact command to run by hand.
+func wantServiceDown(t *testing.T, code int, out, wantCmd string) {
+	t.Helper()
+	if code != rpc.ExitServiceDown {
+		t.Errorf("exit code = %d, want %d (rpc.ExitServiceDown); output:\n%s", code, rpc.ExitServiceDown, out)
+	}
+	if !strings.Contains(out, wantCmd) {
+		t.Errorf("expected the exact recovery command %q, got:\n%s", wantCmd, out)
+	}
+}
+
 // TestRunMcpLs_AbsentSbxExitsServiceDown: read-only `mcp ls` also exits 3 when
-// sbx is unreachable — the documented policy decision (see errSbxUnavailable)
+// sbx is unreachable — the documented policy decision (see mcp.ErrSbxUnavailable)
 // so a caller can tell "zero servers" from "couldn't ask".
 func TestRunMcpLs_AbsentSbxExitsServiceDown(t *testing.T) {
-	if os.Getenv("PIX_DXFIX_MCP_LS") == "1" {
-		runMcpLs()
-		return
-	}
-	cmd := exec.Command(os.Args[0], "-test.run", "TestRunMcpLs_AbsentSbxExitsServiceDown")
-	cmd.Env = append(envWithout(os.Environ(), "PATH"),
-		"PIX_DXFIX_MCP_LS=1",
-		"PATH="+t.TempDir(),
-	)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	runErr := cmd.Run()
-
-	var ee *exec.ExitError
-	if !errors.As(runErr, &ee) {
-		t.Fatalf("expected an ExitError, got %v (output: %s)", runErr, out.String())
-	}
-	if ee.ExitCode() != exitServiceDown {
-		t.Errorf("exit code = %d, want %d (exitServiceDown); output:\n%s", ee.ExitCode(), exitServiceDown, out.String())
-	}
-	if !strings.Contains(out.String(), "would run: sbx mcp ls") {
-		t.Errorf("expected the exact recovery command, got:\n%s", out.String())
-	}
+	code, out := runTypedMcp(t, []string{"ls"}, nil)
+	wantServiceDown(t, code, out, "would run: sbx mcp ls")
 }
 
 // TestRunMcpAuth_AbsentSbxExitsServiceDown: `mcp auth` promises an OAuth
 // operation; sbx-absent must not exit 0.
 func TestRunMcpAuth_AbsentSbxExitsServiceDown(t *testing.T) {
-	if os.Getenv("PIX_DXFIX_MCP_AUTH") == "1" {
-		runMcpAuth([]string{"--all"})
-		return
-	}
-	cmd := exec.Command(os.Args[0], "-test.run", "TestRunMcpAuth_AbsentSbxExitsServiceDown")
-	cmd.Env = append(envWithout(os.Environ(), "PATH"),
-		"PIX_DXFIX_MCP_AUTH=1",
-		"PATH="+t.TempDir(),
-	)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	runErr := cmd.Run()
-
-	var ee *exec.ExitError
-	if !errors.As(runErr, &ee) {
-		t.Fatalf("expected an ExitError, got %v (output: %s)", runErr, out.String())
-	}
-	if ee.ExitCode() != exitServiceDown {
-		t.Errorf("exit code = %d, want %d (exitServiceDown); output:\n%s", ee.ExitCode(), exitServiceDown, out.String())
-	}
-	if !strings.Contains(out.String(), "would run: sbx mcp auth --all") {
-		t.Errorf("expected the exact recovery command, got:\n%s", out.String())
-	}
+	code, out := runTypedMcp(t, []string{"auth", "--all"}, nil)
+	wantServiceDown(t, code, out, "would run: sbx mcp auth --all")
 }
 
 // TestRunMcpBundle_AbsentSbxExitsServiceDown: `mcp bundle` promises registering
 // the catalog bundle; sbx-absent must not exit 0.
 func TestRunMcpBundle_AbsentSbxExitsServiceDown(t *testing.T) {
-	if os.Getenv("PIX_DXFIX_MCP_BUNDLE") == "1" {
-		runMcpBundle(nil)
-		return
-	}
-	cmd := exec.Command(os.Args[0], "-test.run", "TestRunMcpBundle_AbsentSbxExitsServiceDown")
-	cmd.Env = append(envWithout(os.Environ(), "PATH"),
-		"PIX_DXFIX_MCP_BUNDLE=1",
-		"PATH="+t.TempDir(),
-	)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	runErr := cmd.Run()
-
-	var ee *exec.ExitError
-	if !errors.As(runErr, &ee) {
-		t.Fatalf("expected an ExitError, got %v (output: %s)", runErr, out.String())
-	}
-	if ee.ExitCode() != exitServiceDown {
-		t.Errorf("exit code = %d, want %d (exitServiceDown); output:\n%s", ee.ExitCode(), exitServiceDown, out.String())
-	}
-	if !strings.Contains(out.String(), "would run: sbx mcp bundle add") {
-		t.Errorf("expected the exact recovery command, got:\n%s", out.String())
-	}
+	code, out := runTypedMcp(t, []string{"bundle"}, nil)
+	wantServiceDown(t, code, out, "would run: sbx mcp bundle add")
 }
 
 // TestRunMcpRegister_AbsentSbxExitsServiceDownNoConfigMutation: `mcp register`
 // promises to register servers with the gateway; sbx-absent must exit 3, print
 // the exact would-run commands, and leave config.toml byte-for-byte untouched
-// (registerServers never writes config — only `pix config set` may).
+// (mcp.RegisterServers never writes config — only `pix config set` may).
 func TestRunMcpRegister_AbsentSbxExitsServiceDownNoConfigMutation(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.toml")
@@ -300,38 +210,17 @@ func TestRunMcpRegister_AbsentSbxExitsServiceDownNoConfigMutation(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	if os.Getenv("PIX_DXFIX_MCP_REGISTER") == "1" {
-		runMcpRegister(nil)
-		return
-	}
-
-	cmd := exec.Command(os.Args[0], "-test.run", "TestRunMcpRegister_AbsentSbxExitsServiceDownNoConfigMutation")
-	cmd.Env = append(envWithout(os.Environ(), "PATH"),
-		"PIX_DXFIX_MCP_REGISTER=1",
-		"PIX_CONFIG="+cfgPath,
-		"PATH="+binDir, // pix-host resolvable; sbx is not
-	)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	runErr := cmd.Run()
-
-	var ee *exec.ExitError
-	if !errors.As(runErr, &ee) {
-		t.Fatalf("expected an ExitError, got %v (output: %s)", runErr, out.String())
-	}
-	if ee.ExitCode() != exitServiceDown {
-		t.Errorf("exit code = %d, want %d (exitServiceDown); output:\n%s", ee.ExitCode(), exitServiceDown, out.String())
-	}
-	if !strings.Contains(out.String(), "sbx mcp add slack") {
-		t.Errorf("expected the exact would-run registration command, got:\n%s", out.String())
-	}
+	code, out := runTypedMcp(t, []string{"register"}, map[string]string{
+		"PIX_CONFIG": cfgPath,
+		"PATH":       binDir, // pix-host resolvable; sbx is not
+	})
+	wantServiceDown(t, code, out, "sbx mcp add slack")
 
 	after, err := os.ReadFile(cfgPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(after) != cfgContent {
-		t.Errorf("config.toml was mutated by a failed `mcp register`:\nbefore:\n%s\nafter:\n%s", cfgContent, after)
+		t.Errorf("config.toml mutated by `mcp register`:\n got: %q\nwant: %q", string(after), cfgContent)
 	}
 }

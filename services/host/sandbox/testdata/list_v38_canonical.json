@@ -1,0 +1,19 @@
+{
+  "sandboxes": [
+    {
+      "name": "pix-demo",
+      "id": "5c2b6e0a-1f3d-4a9b-8e21-7d4f2b6c9a10",
+      "agent": "pi",
+      "status": "running",
+      "workspaces": ["/workspace"],
+      "workspace_missing": false
+    },
+    {
+      "name": "pix-other",
+      "id": "9d1e4f2a-8b3c-4d5e-9f6a-1b2c3d4e5f60",
+      "agent": "pi",
+      "status": "exited",
+      "workspaces": []
+    }
+  ]
+}

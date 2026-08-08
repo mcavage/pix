@@ -1,7 +1,5 @@
 package plugin
 
-import "encoding/json"
-
 // The three capability interfaces below are derived from the real host services.
 // They deliberately use plain Go structs (no context.Context, no maps of any) so
 // their arguments and results are trivially gob-compatible for the net/rpc
@@ -10,10 +8,9 @@ import "encoding/json"
 
 // --- MemoryStore -------------------------------------------------------------
 //
-// Mirrors the JSON-RPC surface of ../memory.go (the `methods` map in
-// memoryMux(): remember, recall, forget, synthesize, promotable, observe, stats,
-// health). The kernel keeps the JSON-RPC front-end on :11435 and turns each
-// method into a typed call on this interface.
+// Mirrors the JSON-RPC surface of ../memory.go (memoryMux()'s `methods` map).
+// This process keeps the JSON-RPC front-end on :11435 and turns each method
+// into a typed call on this interface.
 
 type MemoryStore interface {
 	Remember(RememberReq) (RememberResp, error)
@@ -22,7 +19,7 @@ type MemoryStore interface {
 	Synthesize(SynthesizeReq) (SynthesizeResp, error)
 	Promotable(PromotableReq) (PromotableResp, error)
 	Observe(ObserveReq) (ObserveResp, error)
-	Stats() (Stats, error)
+	Stats(profile string) (Stats, error)
 	Health() (Health, error)
 }
 
@@ -67,6 +64,7 @@ type Hit struct {
 	Kind       string
 	Durability string
 	Project    string
+	CreatedAt  string // RFC3339; the recall extension renders it
 }
 
 // RecallResp wraps the hit list ({"hits": [...]}).
@@ -105,6 +103,7 @@ type Candidate struct {
 	Content   string
 	Frequency int
 	Project   string
+	CreatedAt string // RFC3339; `pix memory learnings` renders it
 }
 
 type PromotableResp struct {
@@ -136,126 +135,9 @@ type Stats struct {
 
 // Health mirrors the health method ({ok, vector, capture, watcherModel}).
 type Health struct {
-	OK           bool
-	Vector       bool
-	Capture      bool
-	WatcherModel string
-}
-
-// --- KnowledgeStore ----------------------------------------------------------
-//
-// A retrieval-augmented knowledge base over one or more concept "bundles".
-// Query returns cited concepts ranked by relevance; Reindex (re)ingests bundle
-// paths; Health reports index status. Like MemoryStore, it uses plain Go structs
-// so arguments and results are trivially gob-compatible for the net/rpc
-// transport.
-
-type KnowledgeStore interface {
-	Query(QueryArgs) (QueryResult, error)
-	Reindex(ReindexArgs) (ReindexResult, error)
-	Health() (KnowledgeHealth, error)
-}
-
-// QueryArgs parameterizes a knowledge query. Bundles is a SET of bundle-path
-// filters: empty means all bundles, non-empty scopes the search to those
-// bundles (so recall can restrict to e.g. {global, this-project}).
-type QueryArgs struct {
-	Query   string
-	Bundles []string
-	Limit   int
-}
-
-// CitedConcept is a single ranked, cited result concept.
-type CitedConcept struct {
-	ID          string
-	Type        string
-	Title       string
-	Description string
-	Path        string
-	Snippet     string
-	Score       float64
-	Citations   []string
-	Bundle      string
-}
-
-// QueryResult wraps the ranked concept list.
-type QueryResult struct {
-	Concepts []CitedConcept
-}
-
-// ReindexArgs lists the bundle paths to (re)index.
-type ReindexArgs struct {
-	BundlePaths []string
-}
-
-// ReindexResult reports the number of concepts indexed and the bundles touched.
-type ReindexResult struct {
-	Indexed int
-	Bundles []string
-}
-
-// KnowledgeHealth reports index status ({ok, vector, bundles, concepts}).
-type KnowledgeHealth struct {
-	OK       bool
-	Vector   bool
-	Bundles  []string
-	Concepts int
-}
-
-// --- CredentialBroker --------------------------------------------------------
-//
-// The "keep the long-lived credential on the host, mint a short-lived one, run
-// the real CLI in the VM" pattern as one interface any provider can implement.
-// The public tree ships no built-in broker (the seam is dormant); an external
-// warehouse/CRM broker plugin would honour Audience and scopes.
-
-type CredentialBroker interface {
-	Mint(audience string, scopes []string) (Token, error)
-	Check() error
-	Describe() (BrokerInfo, error)
-}
-
-// Token is a short-lived bearer a broker mints (access token + type + TTL).
-type Token struct {
-	AccessToken string
-	TokenType   string
-	ExpiresIn   int
-}
-
-// BrokerInfo describes a broker to the supervisor (port, auth header shape,
-// whether it shells out to a host CLI).
-type BrokerInfo struct {
-	Name            string
-	DefaultPort     int
-	AuthHeader      string
-	RequiresHostCLI bool
-}
-
-// --- McpServer ---------------------------------------------------------------
-//
-// Mirrors ../slack.go + the MCP scaffolding in ../util.go (mcpDispatcher:
-// initialize / tools/list / tools/call). The registered sbx-gateway stdio
-// command becomes a thin compiled bridge that forwards ListTools/CallTool to an
-// McpServer plugin, keeping the "compiled Go spawns from network input" EDR
-// property the arch doc requires.
-
-type McpServer interface {
-	Info() (ServerInfo, error)
-	ListTools() ([]ToolSpec, error)
-	CallTool(name string, args json.RawMessage) (json.RawMessage, error)
-}
-
-// ServerInfo mirrors the initialize result's serverInfo + protocolVersion.
-type ServerInfo struct {
-	Name            string
-	Version         string
-	ProtocolVersion string
-}
-
-// ToolSpec mirrors util.go's mcpTool.schema() output. InputSchema is carried as
-// raw JSON so arbitrary schemas stay gob-compatible.
-type ToolSpec struct {
-	Name        string
-	Description string
-	InputSchema json.RawMessage
+	OK            bool
+	Vector        bool
+	Capture       bool
+	WatcherModel  string
+	CaptureReason string // explains a false Capture (JSON-RPC `captureReason`)
 }

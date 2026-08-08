@@ -8,6 +8,12 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/hostenv"
+	"pix/host/inference"
+	"pix/host/sys/systest"
+	"pix/host/workflow/launch"
+	"pix/host/workflow/models"
+	"pix/host/workflow/provision"
 )
 
 func TestCompileInferenceRuntimeNoModelAndExclusiveFiltering(t *testing.T) {
@@ -22,7 +28,7 @@ func TestCompileInferenceRuntimeNoModelAndExclusiveFiltering(t *testing.T) {
 			{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "reasoner", Available: true},
 		},
 	}}
-	routes, manifest, err := compileInferenceRuntime(cfg, time.Unix(1, 0))
+	routes, manifest, err := inference.CompileInferenceRuntime(cfg, time.Unix(1, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +60,7 @@ func TestCompileInferenceRuntimeCarriesAdaptiveThinkingFromCatalog(t *testing.T)
 			{Model: "anthropic/claude-opus-5", Backend: "gateway", Upstream: "claude-opus-5", Available: true},
 		},
 	}}
-	_, manifest, err := compileInferenceRuntime(cfg, time.Unix(1, 0))
+	_, manifest, err := inference.CompileInferenceRuntime(cfg, time.Unix(1, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +71,7 @@ func TestCompileInferenceRuntimeCarriesAdaptiveThinkingFromCatalog(t *testing.T)
 
 func TestConfigureDirectInferenceUsesCatalog(t *testing.T) {
 	cfg := &config.Config{}
-	if err := configureDirectInference(cfg, []string{"anthropic"}); err != nil {
+	if err := models.ConfigureDirectInference(cfg, []string{"anthropic"}); err != nil {
 		t.Fatal(err)
 	}
 	if cfg.Inference.Backends["anthropic"].KeyEnv != "ANTHROPIC_API_KEY" {
@@ -83,22 +89,22 @@ func TestConfigureDirectInferenceUsesCatalog(t *testing.T) {
 
 func TestConfigureModelRosterRestrictsRuntimeAndRoutes(t *testing.T) {
 	cfg := &config.Config{}
-	if err := configureDirectInference(cfg, []string{"anthropic", "openai"}); err != nil {
+	if err := models.ConfigureDirectInference(cfg, []string{"anthropic", "openai"}); err != nil {
 		t.Fatal(err)
 	}
 	// The roster runs AFTER verification now, and only offers what answered a
-	// request — so a probed roster is the only shape it ever sees in setup.
+	// request — so a probed roster is the only shape it ever sees in models.
 	for i := range cfg.Inference.Models {
 		cfg.Inference.Models[i].Verified = true
 		cfg.Inference.Models[i].VerifiedBy = config.VerifiedByProbe
 	}
-	if err := configureModelRoster(cfg, strings.NewReader(""), &bytes.Buffer{}, false, "openai/gpt-5.6-sol"); err != nil {
+	if err := models.ConfigureModelRoster(cfg, strings.NewReader(""), &bytes.Buffer{}, false, "openai/gpt-5.6-sol"); err != nil {
 		t.Fatal(err)
 	}
 	if got := strings.Join(cfg.Inference.AllowedModels, ","); got != "openai/gpt-5.6-sol" {
 		t.Fatalf("allowed models = %q", got)
 	}
-	routes, manifest, err := compileInferenceRuntime(cfg, time.Unix(1, 0))
+	routes, manifest, err := inference.CompileInferenceRuntime(cfg, time.Unix(1, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +123,7 @@ func TestConfigureModelRosterPreservesPersonalChoiceUnderExclusivePack(t *testin
 		AllowedModels:   []string{"ollama/kimi-k3:cloud"},
 		ExclusiveSource: "/packs/work",
 	}}
-	if err := configureModelRoster(cfg, strings.NewReader(""), &bytes.Buffer{}, true, ""); err != nil {
+	if err := models.ConfigureModelRoster(cfg, strings.NewReader(""), &bytes.Buffer{}, true, ""); err != nil {
 		t.Fatal(err)
 	}
 	if got := strings.Join(cfg.Inference.AllowedModels, ","); got != "ollama/kimi-k3:cloud" {
@@ -127,14 +133,14 @@ func TestConfigureModelRosterPreservesPersonalChoiceUnderExclusivePack(t *testin
 
 func TestConfigureModelRosterRejectsUnavailableChoice(t *testing.T) {
 	cfg := &config.Config{}
-	if err := configureDirectInference(cfg, []string{"openai"}); err != nil {
+	if err := models.ConfigureDirectInference(cfg, []string{"openai"}); err != nil {
 		t.Fatal(err)
 	}
 	for i := range cfg.Inference.Models {
 		cfg.Inference.Models[i].Verified = true
 		cfg.Inference.Models[i].VerifiedBy = config.VerifiedByProbe
 	}
-	err := configureModelRoster(cfg, strings.NewReader(""), &bytes.Buffer{}, false, "ollama/kimi-k3:cloud")
+	err := models.ConfigureModelRoster(cfg, strings.NewReader(""), &bytes.Buffer{}, false, "ollama/kimi-k3:cloud")
 	if err == nil || !strings.Contains(err.Error(), "not available") {
 		t.Fatalf("error = %v", err)
 	}
@@ -145,25 +151,23 @@ func TestDirectInferenceProbeDoesNotVerifyRejectedOrUnavailableKey(t *testing.T)
 	for _, probeFailure := range []string{"provider rejected model request (HTTP 401)", "probe unavailable"} {
 		t.Run(probeFailure, func(t *testing.T) {
 			cfg := &config.Config{}
-			if err := configureDirectInference(cfg, []string{"openai"}); err != nil {
+			if err := models.ConfigureDirectInference(cfg, []string{"openai"}); err != nil {
 				t.Fatal(err)
 			}
-			env := shellEnv{
-				readFile: func(string) (string, error) { return "OPENAI_API_KEY=op://vault/openai/key\n", nil },
-				run: func(name string, args ...string) (string, error) {
-					if name == "op" && len(args) == 2 && args[0] == "read" {
-						return key + "\n", nil
-					}
-					return "", fmt.Errorf("unexpected command")
-				},
-				directInferenceProbe: func(provider, model, gotKey string) error {
-					if provider != "openai" || model == "" || gotKey != key {
-						return fmt.Errorf("bad probe args provider=%q model=%q key-match=%v", provider, model, gotKey == key)
-					}
-					return fmt.Errorf("%s", probeFailure)
-				},
-			}
-			attempted, verified, failures := verifyDirectInference(cfg, env)
+			env := hostenv.Env{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "OPENAI_API_KEY=op://vault/openai/key\n", nil }, RunFn: func(name string, args ...string) (string, error) {
+				if name == "op" && len(args) == 2 && args[0] == "read" {
+					return key + "\n", nil
+				}
+				return "", fmt.Errorf("unexpected command")
+			}}, DirectInference: func(provider, model, gotKey string) error {
+				if provider != "openai" || model == "" || gotKey != key {
+					return fmt.Errorf("bad probe args provider=%q model=%q key-match=%v", provider, model, gotKey == key)
+				}
+				return fmt.Errorf("%s", probeFailure)
+			}}
+			probe, probeErr := models.VerifyDirectInference(cfg, env)
+			mustNoProbeErr(t, probeErr)
+			attempted, verified, failures := probe.Attempted, probe.Verified, probe.Failures
 			if attempted != len(cfg.Inference.Models) || verified != 0 || len(failures) != attempted {
 				t.Fatalf("attempted=%d verified=%d failures=%v", attempted, verified, failures)
 			}
@@ -171,11 +175,11 @@ func TestDirectInferenceProbeDoesNotVerifyRejectedOrUnavailableKey(t *testing.T)
 				t.Fatal("probe failure leaked the resolved key")
 			}
 			for _, binding := range cfg.Inference.Models {
-				if binding.Verified || inferenceBindingCallable(cfg, binding) {
+				if binding.Verified || inference.Callable(cfg, binding) {
 					t.Fatalf("unverified binding became callable: %+v", binding)
 				}
 			}
-			models, err := callableRuntimeModels(cfg)
+			models, err := inference.CallableRuntimeModels(cfg)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -188,138 +192,24 @@ func TestDirectInferenceProbeDoesNotVerifyRejectedOrUnavailableKey(t *testing.T)
 
 func TestDirectInferenceProbeVerifiesOnlySuccessfulModel(t *testing.T) {
 	cfg := &config.Config{}
-	if err := configureDirectInference(cfg, []string{"openai"}); err != nil {
+	if err := models.ConfigureDirectInference(cfg, []string{"openai"}); err != nil {
 		t.Fatal(err)
 	}
-	env := shellEnv{
-		readFile: func(string) (string, error) { return "OPENAI_API_KEY=op://vault/openai/key\n", nil },
-		run:      func(string, ...string) (string, error) { return "secret\n", nil },
-		directInferenceProbe: func(provider, model, key string) error {
-			return nil
-		},
-	}
-	attempted, verified, failures := verifyDirectInference(cfg, env)
+	env := hostenv.Env{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "OPENAI_API_KEY=op://vault/openai/key\n", nil }, RunFn: func(string, ...string) (string, error) { return "secret\n", nil }}, DirectInference: func(provider, model, key string) error {
+		return nil
+	}}
+	probe, probeErr := models.VerifyDirectInference(cfg, env)
+	mustNoProbeErr(t, probeErr)
+	attempted, verified, failures := probe.Attempted, probe.Verified, probe.Failures
 	if attempted != len(cfg.Inference.Models) || verified != attempted || len(failures) != 0 {
 		t.Fatalf("attempted=%d verified=%d failures=%v", attempted, verified, failures)
 	}
-	models, err := callableRuntimeModels(cfg)
+	models, err := inference.CallableRuntimeModels(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(models) != attempted {
 		t.Fatalf("callable models = %v, want all %d successfully probed models", models, attempted)
-	}
-}
-
-func TestDirectInferenceProbePromotesBindingsIndependently(t *testing.T) {
-	cfg := &config.Config{}
-	if err := configureDirectInference(cfg, []string{"openai"}); err != nil {
-		t.Fatal(err)
-	}
-	env := shellEnv{
-		readFile: func(string) (string, error) { return "OPENAI_API_KEY=op://vault/openai/key\n", nil },
-		run:      func(string, ...string) (string, error) { return "secret\n", nil },
-		directInferenceProbe: func(provider, model, key string) error {
-			if strings.Contains(model, "sol") {
-				return fmt.Errorf("provider rejected model request (HTTP 403)")
-			}
-			return nil
-		},
-	}
-	attempted, verified, failures := verifyDirectInference(cfg, env)
-	if attempted != len(cfg.Inference.Models) || verified != attempted-1 || len(failures) != 1 {
-		t.Fatalf("attempted=%d verified=%d failures=%v", attempted, verified, failures)
-	}
-	for _, binding := range cfg.Inference.Models {
-		want := !strings.Contains(binding.Upstream, "sol")
-		if binding.Verified != want || inferenceBindingCallable(cfg, binding) != want {
-			t.Fatalf("binding verification was not independent: %+v want-callable=%v", binding, want)
-		}
-	}
-	checks := setupProvidersAxis(cfg, shellEnv{})
-	if len(checks) != 1 || checks[0].verdict != verdictReady || !strings.Contains(checks[0].detail, "did not pass live verification") {
-		t.Fatalf("partial verification summary = %+v", checks)
-	}
-}
-
-func TestSetupChooseInferenceOffersDetectedOllamaAndNeedsNoOnePassword(t *testing.T) {
-	env := shellEnv{
-		lookPath: func(name string) (string, error) {
-			if name == "ollama" {
-				return "/usr/local/bin/ollama", nil
-			}
-			return "", fmt.Errorf("missing")
-		},
-		run: func(name string, args ...string) (string, error) {
-			if name == "ollama" && len(args) == 1 && args[0] == "list" {
-				// Every AVAILABLE Ollama catalog model is present in this listing, so a
-				// catalog id that no real `ollama list` could ever print (the class of
-				// bug that shipped `qwen3.5:397b:cloud`, a two-colon reference) shows up
-				// here as a missing binding rather than as a model that silently never
-				// binds on a user's machine.
-				return "NAME ID SIZE MODIFIED\n" +
-					"qwen3.5:9b abc 6GB now\n" +
-					"glm-5.2:cloud def - now\n" +
-					"kimi-k3:cloud ghi - now\n" +
-					"deepseek-v4-flash:cloud jkl - now\n" +
-					"deepseek-v4-pro:cloud mno - now\n" +
-					"kimi-k2.7-code:cloud pqr - now\n" +
-					"qwen3.5:397b-cloud stu - now\n", nil
-			}
-			return "", fmt.Errorf("unexpected command")
-		},
-	}
-	cfg := &config.Config{}
-	var out bytes.Buffer
-	// "2,4" is local AND cloud. Token 2 alone now means Ollama LOCAL only: the
-	// un-asked-for cloud binding was the gated-model delivery mechanism.
-	selected, err := setupChooseInference(cfg, env, strings.NewReader("2,4\n"), &out, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !selected || inferenceNeedsOnePassword(cfg) {
-		t.Fatalf("selected=%v inference=%+v", selected, cfg.Inference)
-	}
-	if !strings.Contains(out.String(), "2. Ollama local") || len(cfg.Inference.Models) != 6 {
-		t.Fatalf("output=%q models=%+v", out.String(), cfg.Inference.Models)
-	}
-	got := map[string]bool{}
-	for _, b := range cfg.Inference.Models {
-		got[b.Model] = true
-	}
-	// kimi-k3:cloud is still listed by `ollama list` above, but the catalog
-	// retires it (available=false: "extra usage only", 401s on default plans),
-	// so configureOllamaInference must skip it and bind only the callable six.
-	for _, want := range []string{
-		"ollama/qwen3.5:9b",
-		"ollama/glm-5.2:cloud",
-		"ollama/deepseek-v4-flash:cloud",
-		"ollama/deepseek-v4-pro:cloud",
-		"ollama/kimi-k2.7-code:cloud",
-		"ollama/qwen3.5:397b-cloud",
-	} {
-		if !got[want] {
-			t.Fatalf("missing Ollama binding %s: %+v", want, cfg.Inference.Models)
-		}
-	}
-	if got["ollama/kimi-k3:cloud"] {
-		t.Fatalf("retired kimi-k3:cloud should not be bound: %+v", cfg.Inference.Models)
-	}
-}
-
-func TestSetupChooseInferenceConfiguresKeylessGateway(t *testing.T) {
-	cfg := &config.Config{}
-	var out bytes.Buffer
-	input := "3\nhttps://models.example.test/v1\n\nanthropic/claude-sonnet-5=sonnet-prod\n"
-	selected, err := setupChooseInference(cfg, shellEnv{}, strings.NewReader(input), &out, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !selected || inferenceNeedsOnePassword(cfg) || len(cfg.Inference.Models) != 1 {
-		t.Fatalf("selected=%v inference=%+v", selected, cfg.Inference)
-	}
-	if got := cfg.Inference.Backends["gateway"]; got.Auth != "sbx-session" || got.BaseURL != "https://models.example.test/v1" || got.CredentialService != "sbx-login" || got.KeyEnv != "DOCKER_TOKEN" || got.CredentialHeader != "Authorization" || got.CredentialFormat != "Bearer %s" {
-		t.Fatalf("gateway = %+v", got)
 	}
 }
 
@@ -335,7 +225,7 @@ func TestExclusiveKeylessInferenceIgnoresDormantOnePasswordBackend(t *testing.T)
 		},
 		ExclusiveSource: "/packs/work",
 	}}
-	if inferenceNeedsOnePassword(cfg) {
+	if inference.InferenceNeedsOnePassword(cfg) {
 		t.Fatal("a dormant direct backend outside the exclusive runtime must not force 1Password")
 	}
 }
@@ -352,7 +242,7 @@ func TestExclusiveBackendKeylessInferenceIgnoresDormantOnePasswordBackend(t *tes
 		},
 		ExclusiveBackend: "gateway",
 	}}
-	if inferenceNeedsOnePassword(cfg) {
+	if inference.InferenceNeedsOnePassword(cfg) {
 		t.Fatal("a dormant direct backend outside the exclusive backend must not force 1Password")
 	}
 }
@@ -366,13 +256,13 @@ func TestActiveUnverifiedOnePasswordBindingStillNeedsOnePassword(t *testing.T) {
 			{Model: "anthropic/claude-sonnet-5", Backend: "direct", Upstream: "anthropic/claude-sonnet-5", Available: false},
 		},
 	}}
-	if !inferenceNeedsOnePassword(cfg) {
+	if !inference.InferenceNeedsOnePassword(cfg) {
 		t.Fatal("an allowed direct binding needs 1Password before availability is verified")
 	}
 }
 
 func TestBuildSbxArgsConstrainsModelCycleToCallableBindings(t *testing.T) {
-	args := buildSbxArgs(&config.Config{}, runOpts{
+	args := launch.BuildSbxArgs(&config.Config{}, launch.RunOpts{
 		Workspace: ".",
 		Model:     "gateway/reasoner",
 		Models:    []string{"gateway/fast", "gateway/reasoner"},
@@ -388,20 +278,20 @@ func TestInferenceAllowsOnlyMaterializedRuntimeID(t *testing.T) {
 		Backends: map[string]config.InferenceBackend{"gateway": {Driver: "openai-compatible", Auth: "none", BaseURL: "http://127.0.0.1:9000/v1"}},
 		Models:   []config.InferenceModelBinding{{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "reasoner", Available: true}},
 	}}
-	if !inferenceAllowsModel(cfg, "gateway/reasoner") {
+	if !inference.AllowsModel(cfg, "gateway/reasoner") {
 		t.Fatal("materialized id should be allowed")
 	}
-	if inferenceAllowsModel(cfg, "openai/gpt-5.6-sol") {
+	if inference.AllowsModel(cfg, "openai/gpt-5.6-sol") {
 		t.Fatal("canonical catalog id must not bypass its configured backend")
 	}
 }
 
 func TestSetupPackFlagIsRepeatableAndOrdered(t *testing.T) {
-	o, err := parseOnboardArgs([]string{"--pack", "one", "--pack=two", "--with", "optional"})
+	o, err := provision.ParseSetupArgs([]string{"--pack", "one", "--pack=two", "--with", "optional"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(o.packs, ","); got != "one,two" {
+	if got := strings.Join(o.Packs, ","); got != "one,two" {
 		t.Fatalf("packs = %q", got)
 	}
 }
@@ -418,7 +308,7 @@ func TestInferenceKitSpecGeneratesSessionCredentialAndEgress(t *testing.T) {
 		Models:          []config.InferenceModelBinding{{Model: "openai/gpt-5.6-sol", Backend: "work-openai", Upstream: "reasoner", Available: true, Source: "/packs/work"}},
 		ExclusiveSource: "/packs/work",
 	}}
-	spec, err := inferenceKitSpec(cfg)
+	spec, err := inference.InferenceKitSpec(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,7 +330,7 @@ func TestInferenceKitSpecPreservesAPIKeyHeaderWithoutBearerPrefix(t *testing.T) 
 		},
 		Models: []config.InferenceModelBinding{{Model: "openai/gpt-5.6-sol", Backend: "work", Upstream: "reasoner", Available: true}},
 	}}
-	spec, err := inferenceKitSpec(cfg)
+	spec, err := inference.InferenceKitSpec(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -465,7 +355,7 @@ func TestInferenceKitSpecUsesAmbientDockerSessionContract(t *testing.T) {
 		},
 		Models: []config.InferenceModelBinding{{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "reasoner", Available: true}},
 	}}
-	spec, err := inferenceKitSpec(cfg)
+	spec, err := inference.InferenceKitSpec(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -473,5 +363,241 @@ func TestInferenceKitSpecUsesAmbientDockerSessionContract(t *testing.T) {
 		if !strings.Contains(spec, want) {
 			t.Fatalf("spec missing %q:\n%s", want, spec)
 		}
+	}
+}
+
+// TestInferenceKitSpecRejectsSbxSessionBackendMissingBothCredentialFields
+// covers a hand-edited ~/.config/pix/config.toml: the pack loader
+// (packinfo.Load) rejects a pack that ships this shape, but nothing enforced
+// the same rule for a directly-authored config, so InferenceKitSpec used to
+// happily emit `service: ""` / `name: ""` into the kit YAML instead of failing.
+func TestInferenceKitSpecRejectsSbxSessionBackendMissingBothCredentialFields(t *testing.T) {
+	cfg := &config.Config{Inference: config.InferenceConfig{
+		Backends: map[string]config.InferenceBackend{
+			"gateway": {Driver: "openai-compatible", BaseURL: "https://gateway.example.test/v1", Auth: "sbx-session"},
+		},
+		Models: []config.InferenceModelBinding{{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "reasoner", Available: true}},
+	}}
+	_, err := inference.InferenceKitSpec(cfg)
+	if err == nil {
+		t.Fatal("want error for sbx-session backend missing credential_service and key_env, got nil")
+	}
+	if !strings.Contains(err.Error(), "gateway") || !strings.Contains(err.Error(), "credential_service") || !strings.Contains(err.Error(), "key_env") {
+		t.Fatalf("error %q does not name the backend and both missing fields", err.Error())
+	}
+}
+
+func TestInferenceKitSpecRejectsSbxSessionBackendMissingKeyEnvOnly(t *testing.T) {
+	cfg := &config.Config{Inference: config.InferenceConfig{
+		Backends: map[string]config.InferenceBackend{
+			"gateway": {
+				Driver: "openai-compatible", BaseURL: "https://gateway.example.test/v1", Auth: "sbx-session",
+				CredentialService: "session-login",
+			},
+		},
+		Models: []config.InferenceModelBinding{{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "reasoner", Available: true}},
+	}}
+	_, err := inference.InferenceKitSpec(cfg)
+	if err == nil {
+		t.Fatal("want error for sbx-session backend missing key_env, got nil")
+	}
+	if !strings.Contains(err.Error(), "gateway") {
+		t.Fatalf("error %q does not name the backend", err.Error())
+	}
+}
+
+func TestInferenceKitSpecRejectsSbxSessionBackendMissingCredentialServiceOnly(t *testing.T) {
+	cfg := &config.Config{Inference: config.InferenceConfig{
+		Backends: map[string]config.InferenceBackend{
+			"gateway": {
+				Driver: "openai-compatible", BaseURL: "https://gateway.example.test/v1", Auth: "sbx-session",
+				KeyEnv: "SESSION_TOKEN",
+			},
+		},
+		Models: []config.InferenceModelBinding{{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "reasoner", Available: true}},
+	}}
+	_, err := inference.InferenceKitSpec(cfg)
+	if err == nil {
+		t.Fatal("want error for sbx-session backend missing credential_service, got nil")
+	}
+	if !strings.Contains(err.Error(), "gateway") {
+		t.Fatalf("error %q does not name the backend", err.Error())
+	}
+}
+
+// TestInferenceKitSpecMergesTwoHeadersUnderOneCredentialIdentity covers the
+// dedupe bug directly: two backends share one credential identity
+// (service+key_env) but disagree on header/format for the SAME domain. The
+// old dedupe key was service+key_env+hostname, so the second backend's rule
+// was silently dropped instead of surviving as its own inject rule.
+func TestInferenceKitSpecMergesTwoHeadersUnderOneCredentialIdentity(t *testing.T) {
+	cfg := &config.Config{Inference: config.InferenceConfig{
+		Backends: map[string]config.InferenceBackend{
+			"one": {
+				Driver: "openai-compatible", BaseURL: "https://gateway.example.test/v1", Auth: "sbx-session",
+				KeyEnv: "TOKEN", CredentialService: "svc", CredentialHeader: "Authorization", CredentialFormat: "Bearer %s",
+			},
+			"two": {
+				Driver: "openai-compatible", BaseURL: "https://gateway.example.test/v2", Auth: "sbx-session",
+				KeyEnv: "TOKEN", CredentialService: "svc", CredentialHeader: "x-api-key", CredentialFormat: "%s",
+			},
+		},
+		Models: []config.InferenceModelBinding{
+			{Model: "openai/gpt-5.6-sol", Backend: "one", Upstream: "reasoner-one", Available: true},
+			{Model: "anthropic/claude-sonnet-5", Backend: "two", Upstream: "reasoner-two", Available: true},
+		},
+	}}
+	spec, err := inference.InferenceKitSpec(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(spec, "- service:"); n != 1 {
+		t.Fatalf("want exactly one credential entry for the shared service+name identity, got %d:\n%s", n, spec)
+	}
+	want := "credentials:\n" +
+		"  - service: \"svc\"\n" +
+		"    apiKey:\n" +
+		"      name: \"TOKEN\"\n" +
+		"      proxyManaged: true\n" +
+		"      inject:\n" +
+		"        - domain: \"gateway.example.test\"\n" +
+		"          header: \"Authorization\"\n" +
+		"          format: \"Bearer %s\"\n" +
+		"        - domain: \"gateway.example.test\"\n" +
+		"          header: \"x-api-key\"\n" +
+		"          format: \"%s\"\n"
+	if !strings.HasSuffix(spec, want) {
+		t.Fatalf("spec =\n%s\nwant suffix:\n%s", spec, want)
+	}
+}
+
+// TestInferenceKitSpecCollapsesIdenticalInjectRule covers the opposite edge:
+// two backends land on the exact same (domain, header, format) for a shared
+// identity — that must dedupe to ONE inject rule, not two identical ones.
+func TestInferenceKitSpecCollapsesIdenticalInjectRule(t *testing.T) {
+	cfg := &config.Config{Inference: config.InferenceConfig{
+		Backends: map[string]config.InferenceBackend{
+			"one": {
+				Driver: "openai-compatible", BaseURL: "https://gateway.example.test/v1", Auth: "sbx-session",
+				KeyEnv: "TOKEN", CredentialService: "svc", CredentialHeader: "Authorization", CredentialFormat: "Bearer %s",
+			},
+			"two": {
+				Driver: "openai-compatible", BaseURL: "https://gateway.example.test/v2", Auth: "sbx-session",
+				KeyEnv: "TOKEN", CredentialService: "svc", CredentialHeader: "Authorization", CredentialFormat: "Bearer %s",
+			},
+		},
+		Models: []config.InferenceModelBinding{
+			{Model: "openai/gpt-5.6-sol", Backend: "one", Upstream: "reasoner-one", Available: true},
+			{Model: "anthropic/claude-sonnet-5", Backend: "two", Upstream: "reasoner-two", Available: true},
+		},
+	}}
+	spec, err := inference.InferenceKitSpec(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(spec, "- service:"); n != 1 {
+		t.Fatalf("want exactly one credential entry, got %d:\n%s", n, spec)
+	}
+	if n := strings.Count(spec, "- domain:"); n != 1 {
+		t.Fatalf("want exactly one inject rule (identical rule must dedupe), got %d:\n%s", n, spec)
+	}
+	want := "credentials:\n" +
+		"  - service: \"svc\"\n" +
+		"    apiKey:\n" +
+		"      name: \"TOKEN\"\n" +
+		"      proxyManaged: true\n" +
+		"      inject:\n" +
+		"        - domain: \"gateway.example.test\"\n" +
+		"          header: \"Authorization\"\n" +
+		"          format: \"Bearer %s\"\n"
+	if !strings.HasSuffix(spec, want) {
+		t.Fatalf("spec =\n%s\nwant suffix:\n%s", spec, want)
+	}
+}
+
+// TestInferenceKitSpecCoversTwoDomainsUnderOneCredentialIdentitySorted covers
+// the other real shape (see the hand-authored anthropic block in
+// pi-kit/spec.yaml): one identity legitimately used against two different
+// domains. Both must survive as separate inject rules under ONE credential
+// entry, sorted by domain regardless of backend map iteration order.
+func TestInferenceKitSpecCoversTwoDomainsUnderOneCredentialIdentitySorted(t *testing.T) {
+	cfg := &config.Config{Inference: config.InferenceConfig{
+		Backends: map[string]config.InferenceBackend{
+			"z-backend": {
+				Driver: "openai-compatible", BaseURL: "https://z-gateway.example.test/v1", Auth: "sbx-session",
+				KeyEnv: "TOKEN", CredentialService: "svc", CredentialHeader: "Authorization", CredentialFormat: "Bearer %s",
+			},
+			"a-backend": {
+				Driver: "openai-compatible", BaseURL: "https://a-gateway.example.test/v1", Auth: "sbx-session",
+				KeyEnv: "TOKEN", CredentialService: "svc", CredentialHeader: "Authorization", CredentialFormat: "Bearer %s",
+			},
+		},
+		Models: []config.InferenceModelBinding{
+			{Model: "openai/gpt-5.6-sol", Backend: "z-backend", Upstream: "reasoner-z", Available: true},
+			{Model: "anthropic/claude-sonnet-5", Backend: "a-backend", Upstream: "reasoner-a", Available: true},
+		},
+	}}
+	spec, err := inference.InferenceKitSpec(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(spec, "- service:"); n != 1 {
+		t.Fatalf("want exactly one credential entry for the shared identity, got %d:\n%s", n, spec)
+	}
+	want := "credentials:\n" +
+		"  - service: \"svc\"\n" +
+		"    apiKey:\n" +
+		"      name: \"TOKEN\"\n" +
+		"      proxyManaged: true\n" +
+		"      inject:\n" +
+		"        - domain: \"a-gateway.example.test\"\n" +
+		"          header: \"Authorization\"\n" +
+		"          format: \"Bearer %s\"\n" +
+		"        - domain: \"z-gateway.example.test\"\n" +
+		"          header: \"Authorization\"\n" +
+		"          format: \"Bearer %s\"\n"
+	if !strings.HasSuffix(spec, want) {
+		t.Fatalf("spec =\n%s\nwant suffix (domains sorted a- before z-):\n%s", spec, want)
+	}
+}
+
+// TestInferenceKitSpecOrdersCredentialsByServiceThenNameDeterministically
+// covers determinism across the whole `credentials:` block: two UNRELATED
+// identities (different service+name pairs, so no merge happens) must always
+// emit in the same service-then-name order, independent of
+// cfg.Inference.Backends map iteration order (Go map ranges are randomized
+// per run), so re-synthesizing the kit never produces a spurious diff.
+func TestInferenceKitSpecOrdersCredentialsByServiceThenNameDeterministically(t *testing.T) {
+	cfg := &config.Config{Inference: config.InferenceConfig{
+		Backends: map[string]config.InferenceBackend{
+			"zsvc-backend": {
+				Driver: "openai-compatible", BaseURL: "https://gateway-z.example.test/v1", Auth: "sbx-session",
+				KeyEnv: "ZTOKEN", CredentialService: "zsvc", CredentialHeader: "Authorization", CredentialFormat: "Bearer %s",
+			},
+			"asvc-backend": {
+				Driver: "openai-compatible", BaseURL: "https://gateway-a.example.test/v1", Auth: "sbx-session",
+				KeyEnv: "ATOKEN", CredentialService: "asvc", CredentialHeader: "Authorization", CredentialFormat: "Bearer %s",
+			},
+		},
+		Models: []config.InferenceModelBinding{
+			{Model: "openai/gpt-5.6-sol", Backend: "zsvc-backend", Upstream: "reasoner-z", Available: true},
+			{Model: "anthropic/claude-sonnet-5", Backend: "asvc-backend", Upstream: "reasoner-a", Available: true},
+		},
+	}}
+	var prior string
+	for i := 0; i < 20; i++ {
+		spec, err := inference.InferenceKitSpec(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if prior != "" && spec != prior {
+			t.Fatalf("InferenceKitSpec is not deterministic across runs:\nrun N-1:\n%s\nrun N:\n%s", prior, spec)
+		}
+		prior = spec
+		aSvcIdx, zSvcIdx := strings.Index(spec, `service: "asvc"`), strings.Index(spec, `service: "zsvc"`)
+		if aSvcIdx < 0 || zSvcIdx < 0 || aSvcIdx > zSvcIdx {
+			t.Fatalf("want asvc before zsvc regardless of map order, got:\n%s", spec)
+		}
+		prior = spec
 	}
 }

@@ -1,0 +1,243 @@
+package main
+
+// config_cmd_test.go proves configCmd (config_cmd.go) end to end through the
+// SAME kong entry point production uses (cli.RunRoot), against a scratch
+// $PIX_CONFIG so a run never touches a real user's config. configCmd is not
+// wired into rootCmd yet (see config_cmd.go's integration note), so these
+// tests parse a small root local to this file rather than rootCmd — exactly
+// the shape rootCmd itself will take once the field is swapped in.
+
+import (
+	"bytes"
+	"strings"
+	"testing"
+
+	"pix/host/cli"
+	"pix/host/config"
+)
+
+// runConfigParse drives the SHIPPED root, so every case below exercises the
+// wired verb (`Config configCmd` in rootCmd) rather than a stand-in struct.
+func runConfigParse(argv []string, d *cli.Deps) error {
+	return cli.RunRoot[rootCmd]("pix", "", "", argv, d)
+}
+
+func configDeps(t *testing.T) (*cli.Deps, *bytes.Buffer, *bytes.Buffer) {
+	t.Helper()
+	t.Setenv("PIX_CONFIG", t.TempDir()+"/config.toml")
+	var out, errb bytes.Buffer
+	return &cli.Deps{Out: &out, Err: &errb, In: strings.NewReader("")}, &out, &errb
+}
+
+// ── show ─────────────────────────────────────────────────────────────────
+
+func TestConfigCmd_Show(t *testing.T) {
+	d, out, _ := configDeps(t)
+	if err := runConfigParse([]string{"config", "show"}, d); err != nil {
+		t.Fatalf("config show: %v", err)
+	}
+	got := out.String()
+	for _, want := range []string{"# path: ", "config.toml", "run_intent = "} {
+		if !strings.Contains(got, want) {
+			t.Errorf("config show missing %q, got:\n%s", want, got)
+		}
+	}
+}
+
+// TestConfigCmd_ShowIsDefault: bare `pix config` is `show`, matching the
+// legacy dispatcher's `sub := "show"` fallback.
+func TestConfigCmd_ShowIsDefault(t *testing.T) {
+	d, out, _ := configDeps(t)
+	if err := runConfigParse([]string{"config"}, d); err != nil {
+		t.Fatalf("bare config: %v", err)
+	}
+	if !strings.Contains(out.String(), "# path: ") {
+		t.Errorf("bare config should behave like show, got:\n%s", out.String())
+	}
+}
+
+// ── path ─────────────────────────────────────────────────────────────────
+
+func TestConfigCmd_Path(t *testing.T) {
+	d, out, _ := configDeps(t)
+	if err := runConfigParse([]string{"config", "path"}, d); err != nil {
+		t.Fatalf("config path: %v", err)
+	}
+	if got := strings.TrimSpace(out.String()); got != config.Path() {
+		t.Errorf("config path = %q, want %q", got, config.Path())
+	}
+}
+
+func TestConfigCmd_PathOpRefs(t *testing.T) {
+	d, out, _ := configDeps(t)
+	if err := runConfigParse([]string{"config", "path", "op-refs"}, d); err != nil {
+		t.Fatalf("config path op-refs: %v", err)
+	}
+	if got := strings.TrimSpace(out.String()); got != config.OpRefsPath() {
+		t.Errorf("config path op-refs = %q, want %q", got, config.OpRefsPath())
+	}
+}
+
+// TestConfigCmd_PathBadArgument: any other trailing token is a typo, not a
+// silently-ignored arg — exit 2 (usage), matching the legacy dispatcher.
+func TestConfigCmd_PathBadArgument(t *testing.T) {
+	d, _, _ := configDeps(t)
+	err := runConfigParse([]string{"config", "path", "bogus"}, d)
+	if err == nil {
+		t.Fatal("expected an error for `config path bogus`")
+	}
+	if cli.ExitCode(err) != 2 {
+		t.Errorf("exit code = %d, want 2 (usage)", cli.ExitCode(err))
+	}
+	if !strings.Contains(err.Error(), "op-refs") {
+		t.Errorf("error should mention op-refs, got %v", err)
+	}
+}
+
+// ── get ──────────────────────────────────────────────────────────────────
+
+// TestConfigCmd_GetStdoutIsClean is the contract the Makefile's operational
+// targets depend on ($(shell pix config get mcp)): stdout carries ONLY the
+// resolved value, no decoration, no trailing blank line beyond the one
+// newline a shell command substitution strips anyway.
+func TestConfigCmd_GetStdoutIsClean(t *testing.T) {
+	d, out, errb := configDeps(t)
+	if err := runConfigParse([]string{"config", "get", "run_intent"}, d); err != nil {
+		t.Fatalf("config get run_intent: %v", err)
+	}
+	if got := out.String(); got != "overlord\n" {
+		t.Errorf("stdout = %q, want exactly \"overlord\\n\" (script-clean)", got)
+	}
+	if errb.String() != "" {
+		t.Errorf("stderr = %q, want empty", errb.String())
+	}
+}
+
+func TestConfigCmd_GetUnknownKey(t *testing.T) {
+	d, _, _ := configDeps(t)
+	err := runConfigParse([]string{"config", "get", "nope"}, d)
+	if err == nil || cli.ExitCode(err) != 2 {
+		t.Fatalf("config get nope: err=%v, want a usage (exit 2) error", err)
+	}
+	if !strings.Contains(err.Error(), "unknown key") {
+		t.Errorf("error should say unknown key, got %v", err)
+	}
+}
+
+// TestConfigCmd_GetRetiredKey: knowledge_bundles is a distinct refusal (the
+// built-in OKF knowledge service was retired), not a plain "unknown key" —
+// the retired-key notice provision.ConfigValue owns must survive the CLI
+// migration unchanged.
+func TestConfigCmd_GetRetiredKey(t *testing.T) {
+	d, out, _ := configDeps(t)
+	err := runConfigParse([]string{"config", "get", "knowledge_bundles"}, d)
+	if err == nil {
+		t.Fatal("expected config get knowledge_bundles to refuse (retired key)")
+	}
+	if cli.ExitCode(err) != 2 {
+		t.Errorf("exit code = %d, want 2", cli.ExitCode(err))
+	}
+	if !strings.Contains(err.Error(), "retired") {
+		t.Errorf("error should say retired, got %v", err)
+	}
+	if out.String() != "" {
+		t.Errorf("stdout must stay clean on a refusal, got %q", out.String())
+	}
+}
+
+// ── set / unset ──────────────────────────────────────────────────────────
+
+func TestConfigCmd_SetAndUnset(t *testing.T) {
+	d, out, _ := configDeps(t)
+	if err := runConfigParse([]string{"config", "set", "google_workspace_account", "me@x.com"}, d); err != nil {
+		t.Fatalf("config set: %v", err)
+	}
+	if !strings.Contains(out.String(), `google_workspace_account = "me@x.com"`) {
+		t.Errorf("set output missing new value, got:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "# saved to "+config.Path()) {
+		t.Errorf("set output missing save path, got:\n%s", out.String())
+	}
+
+	// The write round-trips through disk: a fresh load sees it.
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.GogAccount != "me@x.com" {
+		t.Errorf("GogAccount after set = %q, want me@x.com", cfg.GogAccount)
+	}
+
+	out.Reset()
+	if err := runConfigParse([]string{"config", "unset", "google_workspace_account"}, d); err != nil {
+		t.Fatalf("config unset: %v", err)
+	}
+	cfg, err = config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.GogAccount != "" {
+		t.Errorf("GogAccount after unset = %q, want empty", cfg.GogAccount)
+	}
+}
+
+// TestConfigCmd_SetArityError proves the arity contract stays
+// provision.ApplyConfigChange's: the CLI layer does not re-validate it, so
+// mapping its error to a usage (exit 2) failure is the whole job.
+func TestConfigCmd_SetArityError(t *testing.T) {
+	d, _, _ := configDeps(t)
+	err := runConfigParse([]string{"config", "set", "google_workspace_account"}, d)
+	if err == nil {
+		t.Fatal("expected an arity error for set with no value")
+	}
+	if cli.ExitCode(err) != 2 {
+		t.Errorf("exit code = %d, want 2 (usage)", cli.ExitCode(err))
+	}
+}
+
+// TestConfigCmd_SetRetiredKey: host.enabled (the removed `pix host` escape
+// hatch) must refuse rather than silently no-op.
+func TestConfigCmd_SetRetiredKey(t *testing.T) {
+	d, _, _ := configDeps(t)
+	err := runConfigParse([]string{"config", "set", "host.enabled", "true"}, d)
+	if err == nil || !strings.Contains(err.Error(), "retired") {
+		t.Errorf("config set host.enabled: err=%v, want a retired-key refusal", err)
+	}
+}
+
+func TestConfigCmd_SetUnknownKey(t *testing.T) {
+	d, _, _ := configDeps(t)
+	err := runConfigParse([]string{"config", "set", "nope", "x"}, d)
+	if err == nil || cli.ExitCode(err) != 2 {
+		t.Errorf("config set nope: err=%v, want a usage (exit 2) error", err)
+	}
+}
+
+// ── help / bad flag (the usage/exit corpus contract) ────────────────────
+
+func TestConfigCmd_Help(t *testing.T) {
+	d, out, _ := configDeps(t)
+	if err := runConfigParse([]string{"config", "--help"}, d); err != nil {
+		t.Fatalf("config --help: %v", err)
+	}
+	got := out.String()
+	for _, want := range []string{"Usage: pix config", "show", "path", "get", "set", "unset"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("config --help missing %q, got:\n%s", want, got)
+		}
+	}
+}
+
+func TestConfigCmd_BadFlag(t *testing.T) {
+	d, _, _ := configDeps(t)
+	err := runConfigParse([]string{"config", "--this-is-not-a-real-flag-9x7z"}, d)
+	if err == nil {
+		t.Fatal("expected an error for an unknown flag")
+	}
+	if cli.ExitCode(err) != 2 {
+		t.Errorf("exit code = %d, want 2", cli.ExitCode(err))
+	}
+	if !strings.Contains(err.Error(), "unknown flag") {
+		t.Errorf("error should say unknown flag, got %v", err)
+	}
+}

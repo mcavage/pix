@@ -143,14 +143,15 @@ function extensionSnippets(root) {
 
 /**
  * Net-new recall bytes per user turn: the ceiling the transport enforces, not
- * an observation. Two independent channels (memory :11435, knowledge :11436),
- * each capped by lib/recall-message.ts.
+ * an observation. One channel (memory :11435), capped by lib/recall-message.ts.
+ * The built-in knowledge service's recall channel was retired (W2 U03A) along
+ * with knowledge-recall.ts.
  */
 function recallCeiling(root) {
 	const src = readIf(path.join(root, "lib/recall-message.ts")) ?? "";
 	const m = /RECALL_BYTE_CAP\s*=\s*(\d+)/.exec(src);
 	const cap = m ? Number(m[1]) : 0;
-	return { perChannel: cap, channels: 2, bytes: cap * 2 };
+	return { perChannel: cap, channels: 1, bytes: cap };
 }
 
 /** Everything, attributed. */

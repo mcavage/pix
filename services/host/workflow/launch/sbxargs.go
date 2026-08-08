@@ -1,0 +1,252 @@
+package launch
+
+import (
+	"fmt"
+	"path/filepath"
+	"strings"
+
+	"pix/host/config"
+	"pix/host/launcher"
+	"pix/host/sandbox"
+	"pix/host/sys"
+)
+
+const kitRepo = "git+https://github.com/mcavage/pix.git"
+
+// DockerImageRepo is the published image repo. A local build pins a locally
+// loaded tag from <repo>/out/.local-image-tag via --template.
+const DockerImageRepo = "docker.io/mcavage/pix"
+
+type RunOpts struct {
+	Workspace     string   // positional DIR (default ".")
+	Dev           bool     // --dev: Mode B, skills load live from a repo checkout
+	DevRoot       string   // resolved repo root when Dev is set (caller resolves)
+	LocalKit      string   // resolved local checkout kit dir (<repo>/pi-kit); replaces the git pin
+	LocalImageTag string   // <repo>/out/.local-image-tag; pins --template to the locally loaded image
+	Template      string   // --template REF: explicit image override; works from ANY directory and beats LocalImageTag
+	Skills        []string // --skills DIR: extra live skill trees
+	Kits          []string // --kit K: escape hatch. When present they REPLACE the auto git/local pin, then the config stack applies.
+	KitRef        string
+	MCP           []string // --mcp M: extra servers on top of config.MCP (folded into StaticMCP by the caller)
+	StaticMCP     []string // RESOLVED create-time set, emitted as --static-mcp (mcp.AllPreloadedMCP of cfg.MCP+MCP)
+	Name          string   // --name N: sandbox name
+	Model         string   // --model M: active pi model (passed through to pi)
+	Models        []string // create-time callable model cycle, derived from probed bindings
+	Intent        string   // --intent NAME: resolve the session model via the router (unless --model overrides)
+	Pack          string   // --pack PATH: active pack for this run (overrides config.Pack)
+	// Keep is -k/--keep: bind a sticky, identity-bound keep marker to this
+	// session — what the teardown and the orphan sweep refuse on.
+	Keep        bool
+	PackKits    []string
+	Passthrough []string // args after `--`, handed straight to pi
+	Token       string
+}
+
+func gitKitURLRef(ref, version string) string {
+	if ref == "" {
+		ref = launcher.KitRef(version)
+	}
+	return kitRepo + "#ref=" + ref + "&dir=pi-kit"
+}
+
+func TemplateTag(ref string) string {
+	i := strings.LastIndexByte(ref, ':')
+	if i < 0 || strings.IndexByte(ref[i:], '/') >= 0 {
+		return ""
+	}
+	return ref[i+1:]
+}
+
+// BuildSbxArgs composes the full argv for `sbx <args...>` (everything AFTER the
+// program name, starting with "run"). Pure: no exec, no filesystem, no token
+// minting — the caller does all of that and feeds the results in via cfg + o.
+func BuildSbxArgs(cfg *config.Config, o RunOpts, version string) []string {
+	args := []string{"run", "pix"}
+
+	if o.Name != "" {
+		args = append(args, "--name", o.Name)
+	}
+
+	// --kit is an escape hatch: when present it REPLACES the auto git/local pin
+	// (so a user can work around an unresolvable release tag).
+	kitOverride := len(o.Kits) > 0
+
+	// Image pin. An explicit --template REF wins over everything: it needs no
+	// checkout and is orthogonal to kit selection, so it is NOT gated on
+	// kitOverride. Otherwise mirror `make run`: pin the locally loaded image
+	// when the resolved checkout carries out/.local-image-tag.
+	if o.Template != "" {
+		args = append(args, "--template", o.Template)
+	} else if !kitOverride && o.LocalKit != "" && o.LocalImageTag != "" {
+		args = append(args, "--template", DockerImageRepo+":"+o.LocalImageTag)
+	}
+
+	if !kitOverride {
+		if o.LocalKit != "" {
+			args = append(args, "--kit", o.LocalKit)
+		} else {
+			args = append(args, "--kit", gitKitURLRef(o.KitRef, version))
+		}
+	}
+	// User --kit flags are the base when present; pack-synthesized kits ALWAYS
+	// stack (they are an additive mixin, never the base image kit); config
+	// kits always apply on top.
+	for _, k := range o.Kits {
+		args = append(args, "--kit", k)
+	}
+	for _, k := range o.PackKits {
+		args = append(args, "--kit", k)
+	}
+	for _, k := range cfg.Kits.Stack {
+		args = append(args, "--kit", k)
+	}
+
+	// --static-mcp is the fixed set chosen at CREATE (it cannot change on a
+	// re-attach); the local data-plane gateway serves them. Attach one to an
+	// already-running sandbox with `pix mcp load`.
+	for _, m := range o.StaticMCP {
+		args = append(args, "--static-mcp", m)
+	}
+
+	// Workspace (first non-flag positional).
+	args = append(args, o.Workspace)
+
+	// Live skill trees: config paths + personal dir + --skills flags. Each is
+	// mounted as an extra workspace so pi can read it inside the sandbox.
+	liveSkills := LiveSkillDirs(cfg, o)
+	args = append(args, liveSkills...)
+	if o.Dev {
+		args = append(args, filepath.Join(o.DevRoot, "skills"))
+	}
+
+	// pi passthrough args (after `--`), from the SAME builder a later attach's
+	// stored (or freshly recomputed) invocation reuses.
+	if piArgs := BuildPiInvocation(liveSkills, o); len(piArgs) > 0 {
+		args = append(args, "--")
+		args = append(args, piArgs...)
+	}
+	return args
+}
+
+// LiveSkillDirs is the ordered set of extra skill trees a launch mounts:
+func LiveSkillDirs(cfg *config.Config, o RunOpts) []string {
+	liveSkills := append([]string(nil), cfg.Skills.Paths...)
+	if personal := filepath.Join(config.ContextDir(), "skills"); sys.DirHasEntries(personal) {
+		liveSkills = append(liveSkills, personal)
+	}
+	liveSkills = append(liveSkills, o.Skills...)
+	return liveSkills
+}
+
+func BuildPiInvocation(liveSkills []string, o RunOpts) []string {
+	var piArgs []string
+	if o.Dev {
+		// Mode B: turn off baked skills and load the repo tree live.
+		piArgs = append(piArgs, "--no-skills", "--skill", filepath.Join(o.DevRoot, "skills"))
+	}
+	for _, s := range liveSkills {
+		piArgs = append(piArgs, "--skill", s)
+	}
+	if o.Model != "" {
+		piArgs = append(piArgs, "--model", o.Model)
+	}
+	if len(o.Models) > 0 {
+		piArgs = append(piArgs, "--models", strings.Join(o.Models, ","))
+	}
+	piArgs = append(piArgs, o.Passthrough...)
+	return piArgs
+}
+
+// BuildAttachArgv composes `sbx exec` argv to re-attach to an existing,
+// POSITIVELY IDENTIFIED, RUNNING sandbox by re-invoking pi directly with
+// invocation — replacing `sbx run --name`, which asks sbx to re-derive a pi
+// command from the container's own spec, with an explicit exec pix fully
+// controls. tty selects "-it" (interactive) vs "-i" (piped/scripted), the
+// same convention sandbox.ExecOpts/CreateOpts already use everywhere else.
+func BuildAttachArgv(name string, tty bool, invocation []string) ([]string, error) {
+	return sandbox.ExecArgv(sandbox.ExecOpts{
+		Name:    name,
+		TTY:     tty,
+		Command: append([]string{"pi"}, invocation...),
+	})
+}
+
+type RunLaunchPlan struct {
+	Args     []string // sbx argv (after "sbx")
+	Reattach bool     // Args is the thin re-attach form, not a full create
+	Err      error
+}
+
+// PlanSandboxLaunch is the pure decision at the heart of `pix run`'s lifecycle,
+// matching sbx's own re-attach model: a create-only flag (--kit/--template/
+// --static-mcp) only makes sense when the sandbox does not already exist.
+func PlanSandboxLaunch(state SbxState, cfg *config.Config, o RunOpts, version string) RunLaunchPlan {
+	if state == SbxUnknown {
+		return RunLaunchPlan{Err: fmt.Errorf("could not determine whether sandbox %q exists (`sbx ls` failed or sbx is unavailable); refusing to create or attach blind — fix sbx and retry", o.Name)}
+	}
+	if !WillCreate(state) {
+		return RunLaunchPlan{Args: BuildReattachArgs(o), Reattach: true}
+	}
+	return RunLaunchPlan{Args: BuildSbxArgs(cfg, o, version)}
+}
+
+// WillCreate is THE create-vs-attach predicate: a POSITIVE "not present" probe,
+// and nothing else. Unknown is false — an indeterminate read never authorizes
+// create-only work, exactly as PlanSandboxLaunch refuses to plan one.
+func WillCreate(state SbxState) bool { return state == SbxAbsent }
+
+// BuildReattachArgs composes the argv for ATTACHING: `run --name <name>`,
+// deliberately WITHOUT any create-only flag — sbx reads the agent from the
+// existing sandbox's own spec, so reapplying them would be a no-op at best and
+// a lie about what's running at worst. --model is NOT create-only: it is a pi
+// RUNTIME arg, so a resolved o.Model (from --model or --intent) still reaches
+// the session, exactly as on a fresh create.
+func BuildReattachArgs(o RunOpts) []string {
+	args := []string{"run", "--name", o.Name}
+	var piArgs []string
+	if o.Model != "" {
+		piArgs = append(piArgs, "--model", o.Model)
+	}
+	piArgs = append(piArgs, o.Passthrough...)
+	if len(piArgs) > 0 {
+		args = append(args, "--")
+		args = append(args, piArgs...)
+	}
+	return args
+}
+
+func PinnedGitKit(args []string) string {
+	for _, a := range args {
+		if strings.HasPrefix(a, kitRepo) && strings.Contains(a, "#ref=") {
+			return a
+		}
+	}
+	return ""
+}
+
+// KitResolveFailureMsg formats an actionable error for when `sbx run` fails and
+// the composed kit used a git #ref; "" when none was pinned.
+func KitResolveFailureMsg(pinnedKit string) string {
+	if pinnedKit == "" {
+		return ""
+	}
+	ref := "main"
+	if i := strings.Index(pinnedKit, "#ref="); i >= 0 {
+		rest := pinnedKit[i+len("#ref="):]
+		if amp := strings.IndexByte(rest, '&'); amp >= 0 {
+			rest = rest[:amp]
+		}
+		ref = rest
+	}
+	return fmt.Sprintf("pix: sbx could not resolve the kit at ref %q.", ref) + `
+Check the error above first — it is the actual failure. Common causes:
+  - the shell's working directory no longer exists (git cannot start there):
+    "fatal: Unable to read current working directory" — cd somewhere real
+  - no network / GitHub unreachable
+  - the ref genuinely is not published yet
+Options:
+  - pick another ref:                          pix run --kit-ref <tag-or-branch>
+  - run a local build from your pix checkout:  pix run --dev
+  - override the kit entirely:                 pix run --kit <path-or-git-url>
+See ` + "`pix help run`" + ` for the released-vs-local behavior.`
+}

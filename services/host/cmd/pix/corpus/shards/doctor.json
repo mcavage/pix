@@ -1,0 +1,66 @@
+{
+  "verb": "doctor",
+  "cases": [
+    {
+      "name": "help",
+      "args": [
+        "doctor",
+        "--help"
+      ],
+      "exitCode": 0,
+      "stream": "stdout",
+      "contains": [
+        "Usage: pix doctor"
+      ]
+    },
+    {
+      "name": "bad-invocation",
+      "args": [
+        "doctor",
+        "--this-is-not-a-real-flag-9x7z"
+      ],
+      "exitCode": 2,
+      "stream": "stderr",
+      "contains": [
+        "unknown flag"
+      ]
+    },
+    {
+      "name": "help-names-the-schema-version",
+      "args": [
+        "doctor",
+        "--help"
+      ],
+      "exitCode": 0,
+      "stream": "stdout",
+      "contains": [
+        "schema_version 5"
+      ]
+    },
+    {
+      "name": "json-schema-v5",
+      "args": [
+        "doctor",
+        "--json"
+      ],
+      "exitCode": 1,
+      "stream": "stdout",
+      "contains": [
+        "\"schema_version\": 5"
+      ],
+      "jsonKeys": [
+        "schema_version",
+        "version",
+        "config_path",
+        "profile",
+        "verdict",
+        "ready",
+        "checks",
+        "fixes",
+        "exit",
+        "elapsed_ms",
+        "supervisor"
+      ]
+    }
+  ]
+}

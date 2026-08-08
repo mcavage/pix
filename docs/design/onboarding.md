@@ -11,11 +11,13 @@
 > the file mechanism, or the `Files`/`Fitness functions` sections below, which
 > describe a design that was not built.
 >
-> It also predates the `gog` -> `gworkspace` rename: every `gog_account` /
+> It also predates the `gog` -> `gworkspace` rename, and both the rename and
+> that guided CLI are now themselves retired: every `gog_account` /
 > `mcp "gog"` reference below is the OLD naming. The shipped config key is
-> `google_workspace_account`, the shipped MCP server name is `google-workspace`,
-> and the shipped CLI is `pix gworkspace setup|status|disable`
-> (`services/host/cmd/pix/gworkspace.go`).
+> `google_workspace_account`, the shipped MCP server name is
+> `google-workspace`, and there is no guided CLI at all anymore — `gog` is
+> registered the same generic way every other local stdio MCP server is
+> (`pix mcp register`). See docs/design/gworkspace-externalization.md.
 
 Status: PROPOSED (awaiting owner gate before the teardown) — the gate never
 happened; see the historical notice above.

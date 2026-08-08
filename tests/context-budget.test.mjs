@@ -35,13 +35,15 @@ const segment = (id) => result.segments.find((s) => s.id === id);
 const KNOWN_OVER_BUDGET = [
 	{
 		id: "project-context",
-		ceiling: 42_000,
+		ceiling: 42_300,
 		why:
-			"AGENTS.md (36.8 KB) + the kit agentInstructions (3.9 KB) against an 8 KB budget. " +
+			"AGENTS.md (37.5 KB) + the kit agentInstructions (3.9 KB) against an 8 KB budget. " +
 			"U-W0b.08 removed the 15 KB launcher CLI reference; the remainder is repo layout, build/load/run, " +
 			"extension and skill authoring rules, and the hard-won gotchas — all of it load-bearing prose that a " +
 			"byte trim cannot delete, only RESTRUCTURE into always/on-demand/reference tiers. That restructuring is " +
-			"`pix context compile` (AC-P1-701), and this miss is the D7 condition that promotes it back to P0.",
+			"`pix context compile` (AC-P1-701), and this miss is the D7 condition that promotes it back to P0. " +
+			"Ratcheted +300 B for sbx v0.38's noninteractive-rm safety invariant #7 update (a genuine, reviewed " +
+			"content addition, not drift — see docs/upstream/sbx-0.38-noninteractive-rm.md).",
 	},
 	{
 		id: "project-owned-total",
@@ -138,10 +140,11 @@ test("an unmeasured ancestor AGENTS.md reports as unmeasured, not as zero", () =
 	assert.equal(a.gated, false, "an ancestor AGENTS.md is host-owned; this repo cannot rewrite it");
 });
 
-test("recall net-new is the enforced ceiling, both channels", () => {
+test("recall net-new is the enforced ceiling, the one remaining channel", () => {
 	const recall = segment("recall-net-new");
-	assert.equal(recall.bytes, 2 * KB, "two channels x the 1 KB per-turn cap in lib/recall-message.ts");
-	assert.match(recall.label, /2 channels x 1024 B/);
+	// The knowledge-recall channel was retired (W2 U03A); memory is the only one left.
+	assert.equal(recall.bytes, 1 * KB, "one channel x the 1 KB per-turn cap in lib/recall-message.ts");
+	assert.match(recall.label, /1 channels x 1024 B/);
 });
 
 test("the measurement is deterministic", () => {

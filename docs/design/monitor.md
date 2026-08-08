@@ -1,6 +1,104 @@
 # pix monitor — live wiretap of the agent's back-and-forth
 
-Status: shipped (MVP). Owner: Mark.
+Status: shipped (MVP), REPLACED by Story05, ingest ownership moved by U05b,
+reader made fail-fast/one-shot by the hostfix-monitor fix.
+Owner: Mark.
+
+**hostfix-monitor update — the reader no longer blocks forever by default.**
+`pix monitor --json | head -5` used to hang indefinitely against an empty or
+never-created store, because `Run` always called the polling `Follow` loop
+and `NewStore` silently created the (empty) root just by being asked to read
+it. Fixed on both counts:
+
+* **Read-only open never creates the root.** `monitor.OpenStore(root)`
+  replaces `NewStore` on the reader path: no `ensureDir0700` side effect, so
+  "no store yet" (an actionable signal) never gets silently turned into "an
+  empty store exists" (indistinguishable from later, real emptiness) just by
+  looking.
+* **One-shot is the non-interactive default.** With no `--follow`/`-f` and
+  not run at a TTY, `pix monitor` now calls the new `monitor.Once` (prints
+  whatever is already stored, once, and returns — no polling, no context
+  needed) instead of `monitor.Follow`. An interactive terminal keeps the old
+  live-follow default (equivalent to `--follow`) but now prints one honest
+  banner line to stderr first (what's already stored, whether an ingest
+  listener was even detected) so a TTY run is never a silent, indefinite
+  wait with no explanation.
+* **Empty + down is an error, not silent success.** The one-shot path checks
+  `service.ServeIdentityUp` (the same process-identity check `serve
+  stop`/`status` use, never a bare port probe) before treating zero stored
+  streams as fine. Nothing stored AND no `pix-host serve` running exits 3
+  (`rpc.ExitServiceDown`) with the fix command named on stderr. Nothing
+  stored while an ingest listener IS running is genuinely empty success
+  (nothing has arrived yet) — the two are never conflated.
+* **List errors are surfaced, not swallowed.** `Follow`'s poll loop still
+  treats a `Store.List` failure as transient (there's always a next poll to
+  self-correct on) and keeps going. `Once` has no next poll, so the same
+  failure now comes back as a real error instead of silently printing
+  nothing.
+
+See `services/host/monitor/follow.go` (`Once`, `emitNew`, `Follow`),
+`services/host/monitor/store.go` (`OpenStore`), and
+`services/host/cmd/pix/root.go` (`monitorCmd.follow`/`.once`/`monitorBanner`).
+
+**U05b update — ingest ownership moved under `pix-host serve`.** The
+"unchanged on purpose" bullet below (from Story05) predicted exactly this
+move; it has now happened. `services/host/serve.go`'s `runServe` composes a
+`monitor.NewIngestServer` directly (constructed via `buildMonitorIngest`,
+alongside memory, gated by the same `services` config/`serveServiceAliases`
+mechanism — `pix config set services monitor` or a bare `services=[]`
+"all" default enables it). `--bind`/`--port` moved down with it: they are now
+`pix serve` flags (`pix-host serve --bind ADDR --port N`), not `pix monitor`
+flags. `pix monitor` (`cmd/pix/monitor.go`) is now a PURE offline reader —
+`[name] [--path DIR] [--json]` only, no listener, ever — that tails
+`config.MonitorStoreRoot()` (`<state-dir>/monitor`, the same root `serve`
+writes to) or an explicit `--path DIR`. The wire schema, the `:11437`
+loopback-only bind default, and the eager-bind-at-construction-time
+`NewIngestServer` contract are all unchanged, exactly as predicted — this
+was a wiring move, not a domain change.
+
+**Story05 update — what the host side actually is now.** The bubbletea TUI
+(`services/host/monitor/tui`, 3,150 LOC), the in-memory ring buffer, the
+content-addressed in-memory blob cache, and the SSE `/stream` +
+`/blob/{hash}` endpoints described below are DELETED. What replaces them is
+deliberately small:
+
+* **One store, no second subsystem.** `services/host/monitor` is a single
+  bounded, redacted, file-backed domain: one `events.ndjson` per
+  `(sandboxId, sessionId)` stream under a 0700 root, 0600 files, trimmed
+  drop-oldest by both event count and bytes, with the number of retained
+  streams capped too. Full payload bodies (`POST /blob`) are NOT a separate
+  content-addressed store — they are one more bounded NDJSON file
+  (`blobs.ndjson`) under the same root, appended by the same code path and
+  trimmed by the same pass.
+* **Strict ids, never repaired.** A wire-supplied `sandboxId`/`sessionId`
+  becomes a path component only if it passes a strict allowlist (1..96 bytes,
+  leading alphanumeric, then `[A-Za-z0-9._-]`). Traversal, separators, control
+  bytes, dotfiles and over-long ids are REFUSED and the event is dropped with
+  a log line. An earlier draft slugified them instead; that silently accepts
+  hostile input and collapses distinct ids onto one directory, so it is gone.
+  The one exception is an EMPTY id, which the tap legitimately sends outside a
+  sandbox: it maps to the fixed constant `unattributed`.
+* **Blob content vs its hash.** A blob is stored REDACTED, so its bytes are
+  not always the preimage of the hash events reference it by. The record says
+  so: `bytes` is always `len(text)`, and `redacted:false` implies
+  `sha256(text) == hash`. Redaction wins over content-addressing purity
+  because this is raw tool output, the highest-risk text in the pipeline.
+* **The reader is a poll loop, not a bus.** `monitor.Follow` tails the files
+  and prints one concise line per event (`--json` prints the raw stored
+  event). Writer and reader share nothing but the filesystem, which is what
+  makes `pix monitor` (with no serve running, or pointed at an explicit
+  `--path DIR`) work with no listener of its own. `cmd/pix/monitor.go` is
+  argv parsing plus wiring, ~100 lines.
+* **Unchanged on purpose (as of U05b):** the event wire schema (Section 2
+  below) and the `:11437` loopback-only bind default. `NewIngestServer` BINDS
+  eagerly, so a port conflict is a constructor error instead of an
+  asynchronous one every caller had to poll for — true whether the caller is
+  `pix-host serve` (now) or the old standalone `pix monitor` (before).
+
+The rest of this document (problem statement, event model, wire protocol) is
+still accurate; the "Resolved decisions" and "TUI (live follow + toggles)"
+sections below describe the DELETED design and are kept for history, not as
+the current contract.
 
 ## Problem
 

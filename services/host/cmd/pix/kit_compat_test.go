@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"pix/host/workflow/launch"
 	"reflect"
 	"strings"
 	"testing"
@@ -10,14 +11,14 @@ import (
 func TestLocalKitArgs(t *testing.T) {
 	args := []string{"run", "pix", "--kit", "/tmp/base", "--kit", "git+https://example.test/repo#dir=kit", "--kit", "./mixin", "."}
 	want := []string{"/tmp/base", "./mixin"}
-	if got := localKitArgs(args); !reflect.DeepEqual(got, want) {
-		t.Fatalf("localKitArgs = %v, want %v", got, want)
+	if got := launch.LocalKitArgs(args); !reflect.DeepEqual(got, want) {
+		t.Fatalf("launch.LocalKitArgs = %v, want %v", got, want)
 	}
 }
 
 func TestValidateCreateKitsFailsBeforeLaunchWithUpgrade(t *testing.T) {
 	var seen []string
-	err := validateCreateKits([]string{"run", "pix", "--kit", "/tmp/pix/pi-kit", "."}, func(ref string) (string, error) {
+	err := launch.ValidateCreateKits([]string{"run", "pix", "--kit", "/tmp/pix/pi-kit", "."}, func(ref string) (string, error) {
 		seen = append(seen, ref)
 		return "INVALID: artifact: invalid spec.yaml\nraw decoder noise", errors.New("exit status 1")
 	})
@@ -40,7 +41,7 @@ func TestValidateCreateKitsFailsBeforeLaunchWithUpgrade(t *testing.T) {
 
 func TestValidateCreateKitsSkipsRemoteRefs(t *testing.T) {
 	called := false
-	err := validateCreateKits([]string{"run", "pix", "--kit", "git+https://example.test/repo#dir=kit", "."}, func(string) (string, error) {
+	err := launch.ValidateCreateKits([]string{"run", "pix", "--kit", "git+https://example.test/repo#dir=kit", "."}, func(string) (string, error) {
 		called = true
 		return "", nil
 	})
@@ -51,11 +52,11 @@ func TestValidateCreateKitsSkipsRemoteRefs(t *testing.T) {
 
 func TestValidateSetupKitChecksUnreleasedCheckout(t *testing.T) {
 	var got string
-	err := validateSetupKit("0.1.14+local", func() (string, error) { return "/src/pix", nil }, func(ref string) (string, error) {
+	err := launch.ValidateSetupKit("0.1.14+local", func() (string, error) { return "/src/pix", nil }, func(ref string) (string, error) {
 		got = ref
 		return "", nil
 	})
 	if err != nil || got != "/src/pix/pi-kit" {
-		t.Fatalf("validateSetupKit = ref %q, err %v", got, err)
+		t.Fatalf("launch.ValidateSetupKit = ref %q, err %v", got, err)
 	}
 }

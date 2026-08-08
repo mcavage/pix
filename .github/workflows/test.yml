@@ -6,18 +6,39 @@
 #   gate  — the FAST gate: build, go vet, NON-race `go test`, node --test,
 #           tsc --noEmit, the open-core boundary, and (once it exists) the
 #           rename guard. This job IS TIMED: scripts/gate.sh enforces an
-#           local `make gate` keeps the ABSOLUTE 12 s ceiling (10 s target).
+#           local `make gate` keeps the ABSOLUTE 34 s ceiling (30 s target).
 #           GitHub's shared x86 runner is measured separately with a fixed 75 s
-#           ceiling because the same uncached Go suite takes ~44 s there. Both
-#           are absolute, reviewable budgets, never "last run x 2".
+#           ceiling (60 s target) because the same uncached Go suite runs
+#           slower there. Both are absolute, reviewable budgets, never "last
+#           run x 2".
 #
 #   race  — gofmt + `go test -race ./...`. NO TIMING BUDGET APPLIES HERE, at
 #           all. The race detector multiplies wall time by design, so timing it
-#           would either make the 12 s number meaningless or make the job
+#           would either make the 34 s number meaningless or make the job
 #           flaky. It is a correctness job; it takes as long as it takes.
 #
+#   metrics — the FULL corpus/coverage/LOC report (AC-GATE-03/04): `go test
+#           -cover ./...` merged into scripts/arch-metrics' derived-metrics
+#           report. This is deliberately the expensive half — running the
+#           whole suite with coverage — kept OUT of the timed `gate` job so it
+#           can never blow the 34 s/75 s budget. The CHEAP half (per-package
+#           LOC/exports/globals/edges/exits, shrink-only ratchet against the
+#           committed budgets.json) runs inside `gate` itself. Non-blocking:
+#           it uploads the report as a build artifact rather than failing the
+#           build, since a coverage percentage is a floor to watch, not yet a
+#           gated ratchet.
+#
+#   macos — a REQUIRED build+test job on macos-latest. Every other job here
+#           runs on ubuntu-latest; this is the only CI signal for macOS before
+#           the host's launchd-based service management (scripts/macos/,
+#           `pix serve install`) can be deleted in favor of whatever replaces
+#           it — deleting the only macOS-specific code path with zero macOS CI
+#           coverage would be flying blind. Mark it required in branch
+#           protection alongside `gate` and `race`.
+#
 # So: if CI is red on "budget", the fast gate got slower and that is the
-# finding. If CI is red on `race`, something is actually broken.
+# finding. If CI is red on `race`, something is actually broken. If CI is red
+# on `macos`, the host build/test broke on the one platform launchd targets.
 name: test
 
 on:
@@ -30,7 +51,23 @@ jobs:
     name: fast gate (CI, 75s budget)
     runs-on: ubuntu-latest
     steps:
+      # fetch-depth: 0 (full history, not the default shallow single commit) is
+      # required so tests/check-semantic-diff.test.mjs's rule-drift-vs-git check
+      # (scripts/semantic-diff/lib/engine.mjs resolveDefaultBase) can compute a
+      # MEANINGFUL comparison base: a shallow clone has no ancestor commits to
+      # merge-base against at all, which would silently degrade every run back
+      # to the same no-op "compare HEAD to itself" bug this fixed.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+      # actions/checkout only fetches the ref under test (the PR merge ref, or
+      # the pushed branch) even with fetch-depth: 0 — it does not also create a
+      # local origin/main. Fetch it explicitly so resolveDefaultBase's
+      # merge-base(HEAD, origin/main) fallback has something to compare
+      # against; best-effort, since a push directly to main has nothing else to
+      # fetch and SEMANTIC_DIFF_BASE_SHA below already covers that case exactly.
+      - name: fetch main (best-effort, for the semantic-diff rule-drift base)
+        run: git fetch --no-tags --quiet origin +refs/heads/main:refs/remotes/origin/main || true
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "1.26"
@@ -50,11 +87,17 @@ jobs:
       - name: gate
         run: bash scripts/gate.sh
         env:
-          # Local steady-state remains 12s/10s. GitHub's shared x86 runner
-          # takes ~42s for the uncached Go suite despite a warmed build cache.
+          # Local steady-state remains 34s/30s (scripts/gate.sh defaults).
+          # GitHub's shared x86 runner is slower for the uncached Go suite
+          # despite a warmed build cache, so CI gets its own wider budget.
           GATE_BUDGET_MS: "75000"
           GATE_TARGET_MS: "60000"
           GATE_SLOW_MS: "1000"
+          # The exact base commit a PR (or a direct push) actually started
+          # from — precise, and preferred over the origin/main merge-base
+          # fallback above, which only approximates it. Empty/unset on any
+          # other event; resolveDefaultBase then falls through cleanly.
+          SEMANTIC_DIFF_BASE_SHA: "${{ github.event.pull_request.base.sha || github.event.before }}"
       # The total (plus every segment and every slow-test finding) is kept as a
       # build artifact even when the gate fails — that is the run you most want
       # the numbers from.
@@ -84,3 +127,48 @@ jobs:
       - name: test (race detector — no timing budget)
         working-directory: services/host
         run: go test -race ./...
+
+  # Untimed on purpose (see the header comment): full corpus `go test -cover`
+  # plus the derived architecture-metrics report, including per-package
+  # coverage. Never blocks on a metric value; it is diagnostic + an artifact.
+  metrics:
+    name: full corpus + coverage + LOC (untimed)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.26"
+          cache-dependency-path: services/host/go.sum
+      - name: full corpus with coverage (untimed — this is the point of the split)
+        run: |
+          mkdir -p out/metrics
+          (cd services/host && go test -cover ./...) | tee out/metrics/coverage.log
+      - name: derived architecture-metrics report (LOC, exports, globals, edges, exits, coverage)
+        run: |
+          (cd scripts/arch-metrics && go build -o /tmp/arch-metrics .)
+          /tmp/arch-metrics -root services/host -coverage out/metrics/coverage.log -out out/metrics/full.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: arch-metrics-full
+          path: out/metrics/
+          if-no-files-found: error
+          retention-days: 30
+
+  # REQUIRED. See the header comment: this is the only macOS CI signal, and it
+  # gates any future deletion of the launchd-based service management.
+  macos:
+    name: macOS build + test (required)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.26"
+          cache-dependency-path: services/host/go.sum
+      - name: build
+        working-directory: services/host
+        run: go build ./...
+      - name: test
+        working-directory: services/host
+        run: go test ./...

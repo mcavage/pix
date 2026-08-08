@@ -1,0 +1,118 @@
+# AC-REL-01..04 — legal/release safeguards.
+#
+# This is BOTH a standalone workflow (PRs and pushes to main) AND the
+# pre-publish gate: `workflow_call` makes it reusable, and publish.yml calls it
+# as the `legal-gate` job that `build` and `merge` both `needs`. That wiring is
+# the point. When this only ran as a SEPARATE workflow it raced publish.yml:
+# GitHub does not order two workflows against each other, so a push could
+# publish `pix:<version>` while the secret scan / license gate / SBOM were
+# still running — or after they had already failed. One definition, two entry
+# points, and the publish path cannot start pushing until it passes.
+#
+# See docs/legal/RELEASE-SAFEGUARDS.md for what each job proves and why, and
+# docs/legal/FINDINGS.md for the open items that need a human, not an agent.
+name: legal
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_call: {}
+  workflow_dispatch: {}
+
+jobs:
+  # AC-REL-01/02: generated THIRD_PARTY_NOTICES.md stays in sync with the
+  # curated ledger, the live Go module set passes the fail-closed
+  # license-class gate, and the notices actually ship (image + tarball).
+  third-party-notices:
+    name: third-party notices + license-class gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.26"
+          cache-dependency-path: services/host/go.sum
+      - name: warm the Go build cache
+        working-directory: services/host
+        run: go build ./...
+      - name: check-third-party-notices
+        run: bash scripts/check-third-party-notices.sh
+      - name: node --test (notices + inclusion + provenance + secret-scan pattern unit tests)
+        run: |
+          node --test --test-force-exit \
+            tests/legal-third-party-notices.test.mjs \
+            tests/legal-inclusion-and-docker-base.test.mjs \
+            tests/legal-provenance.test.mjs \
+            tests/legal-authorizations-and-privacy.test.mjs \
+            tests/legal-secret-scan.test.mjs
+
+  # AC-REL-01: full-history secret scan over EVERY ref, not just the current
+  # branch tip — fetch-depth 0 AND fetch all refs, or this only proves HEAD is
+  # clean (the exact gap a full-history scan exists to close).
+  secret-scan:
+    name: full-history secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+      - name: fetch every remote ref (not just the default branch)
+        run: git fetch origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*' --prune
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "25.9.0"
+      - name: check-secret-history (fail-closed)
+        run: bash scripts/check-secret-history.sh
+      # tests/slow/legal-secret-scan-full-history.test.mjs asserts the SAME
+      # full-history scan (once driving scripts/legal/secret-scan.mjs
+      # directly, once through this script) with real, checkable assertions
+      # (findings_count === 0, the report artifact actually exists) instead of
+      # just a shell exit code — it lives under tests/slow/ specifically so it
+      # never counts against scripts/gate.sh's timed fast-gate budget (see its
+      # own header comment), which means THIS is the only job that can run it.
+      # Run it for real here, or its assertions never execute anywhere.
+      - name: tests/slow/legal-secret-scan-full-history.test.mjs (the same scan, with real assertions)
+        run: node --test --test-force-exit tests/slow/legal-secret-scan-full-history.test.mjs
+      - name: upload secret-scan report (always, even on failure)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: secret-scan-report
+          path: out/secret-scan/
+          if-no-files-found: warn
+          retention-days: 30
+
+  # AC-REL-04: SBOM of the REPO TREE, on every PR. BLOCKING for generation: if
+  # an SBOM cannot be produced, or comes back empty, this job fails — a
+  # "non-blocking SBOM" that silently produced nothing was a claim nobody was
+  # checking. What is still NOT gated is SBOM *diffing* (failing a release
+  # because the component set changed); that policy is open in
+  # docs/legal/FINDINGS.md #7 and is not asserted anywhere.
+  #
+  # This job scans the source tree, NOT the published image (pulling the DHI
+  # base needs the dhi.io login only the publish workflow's secrets have). The
+  # SBOM of the artifact users actually run is produced by the `provenance`
+  # job in publish.yml, against the published manifest digest.
+  sbom:
+    name: SBOM of the repo tree (blocking generation; no diff gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Anchore SBOM scan of the repo tree (SPDX)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: "."
+          format: spdx-json
+          output-file: sbom.spdx.json
+      - name: Assert the SBOM is non-empty (a generated-but-empty SBOM proves nothing)
+        run: |
+          set -euo pipefail
+          test -s sbom.spdx.json
+          jq -e '.packages | length > 0' sbom.spdx.json >/dev/null
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom
+          path: sbom.spdx.json
+          if-no-files-found: error
+          retention-days: 30

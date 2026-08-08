@@ -159,6 +159,56 @@ A daemon-affecting `pix config set` (e.g. `memory_embed_model`) already
 restarts a managed or lazy daemon for you; only a foreground `pix serve` must
 be restarted by hand.
 
+## Backing it up, and putting it back
+
+`memory.db` is the one artifact here you cannot regenerate. It has exactly two
+commands, both on the host binary:
+
+```bash
+pix-host memory snapshot ~/pix-memory-2026-08-10.db   # hot: safe while serve runs
+pix-host memory restore  ~/pix-memory-2026-08-10.db   # cold: service must be stopped
+```
+
+**A snapshot is just a sqlite file.** It is written with `VACUUM INTO` through a
+read-only handle, so it is a consistent, defragmented single file even while the
+daemon is writing (the `-wal`/`-shm` sidecars are folded in, never copied). It
+is verified before it lands (integrity check, schema version, and the real
+`memories`/`memories_fts` queries), created `0600`, and never written over an
+existing path. Retention, rotation and naming are yours: keep it wherever you
+keep backups, and copy it like any other file. Nothing else rides along —
+`config.toml` is reproducible with `pix config set`, and `op-refs.env` holds
+`op://` pointers, not secrets.
+
+**Restore is the stopped-service primitive.** Stop the daemon first:
+
+```bash
+pix serve stop
+pix-host memory restore ~/pix-memory-2026-08-10.db --force
+pix serve
+```
+
+It takes the same advisory lock the daemon holds, so if anything is still
+serving the store it refuses and tells you to stop it — the lock, not a port
+probe, is the authority, because the daemon opens the db before it binds. Then
+it validates the snapshot, moves the current db and any `-wal`/`-shm` sidecars
+aside to a kept `memory.db.bak-<ts>-<rand>` set (never deleted, so a restore is
+reversible by hand), and renames the validated copy into place. Without
+`--force` it refuses to touch an existing live db. The FTS index travels inside
+the file, so keyword recall works the moment the daemon comes back — there is
+nothing to rebuild.
+
+**Migrating off an old `pix backup` archive.** Before U07b, `pix backup`
+wrote a versioned `tar.gz` bundling `memory.db` + `config.toml` +
+`op-refs.env` + a manifest. That top-level verb is retired now (it answers
+`PIX_RETIRED`); it was never something you could "restore" back into a
+running install anyway, since `config.toml`/`op-refs.env` don't need
+restoring. If you're holding one of those old archives: untar it, take just
+the `memory.db` inside, and hand it to `pix-host memory restore`. Recreate
+`config.toml` with `pix config set` (or copy it back by hand if you trust its
+provenance) and re-seed `op-refs.env` with `pix secret` — it only ever held
+`op://` pointers, so there was nothing secret to lose. Nothing else in the old
+archive is worth keeping.
+
 ## Memory scope (packs)
 
 Memory is **one shared store by default**, every sandbox reads and writes the
@@ -189,20 +239,26 @@ you launch may read and write it. Do not bind it to a routable interface
 
 ## Optional authentication
 
-By default the memory (`:11435`) and knowledge (`:11436`) services are
-**loopback-only and unauthenticated**, the trust boundary is the `127.0.0.1`
-bind, nothing more. The built-in daemons do **not** check a bearer token today
-(the JSON-RPC mux is served directly), so for a shared or multi-user host the
-correct control is an **authenticating reverse proxy in front of the service**, or
-keeping it strictly loopback.
+By default the memory service (`:11435`) is **loopback-only and
+unauthenticated**, the trust boundary is the `127.0.0.1` bind, nothing more.
+The built-in daemon does **not** check a bearer token today (the JSON-RPC mux
+is served directly), so for a shared or multi-user host the correct control
+is an **authenticating reverse proxy in front of the service**, or keeping it
+strictly loopback.
 
-The `MEMORY_AUTH` / `KNOWLEDGE_AUTH` env vars are the intended shared-secret hook:
-the design is that, when set, the service requires the matching token as an
-`Authorization: Bearer <token>` header on every JSON-RPC request and the in-sandbox
-wrapper sends it. **Note:** the daemon-side enforcement of these vars is not wired
-in the built-in services yet, setting them alone does not lock the port. Until it
-lands, rely on the loopback bind (and an auth proxy for shared hosts), and treat
-`MEMORY_AUTH` / `KNOWLEDGE_AUTH` as reserved.
+(There is no separate knowledge service to reason about here — the built-in
+host knowledge daemon and its `:11436` port were deleted outright, not merely
+turned off; `knowledge` is a capability a pack wires directly, `files` or
+`http`, never through `pix-host serve`. See AGENTS.md's go-plugin + Suture
+architecture note and `hostmode_gone_test.go`.)
+
+The `MEMORY_AUTH` env var is the intended shared-secret hook: the design is
+that, when set, the service requires the matching token as an
+`Authorization: Bearer <token>` header on every JSON-RPC request and the
+in-sandbox wrapper sends it. **Note:** the daemon-side enforcement of this var
+is not wired in the built-in service yet, setting it alone does not lock the
+port. Until it lands, rely on the loopback bind (and an auth proxy for shared
+hosts), and treat `MEMORY_AUTH` as reserved.
 
 ## Environment knobs
 

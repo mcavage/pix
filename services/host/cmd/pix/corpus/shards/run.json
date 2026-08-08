@@ -1,0 +1,29 @@
+{
+  "verb": "run",
+  "cases": [
+    {
+      "name": "help",
+      "args": [
+        "run",
+        "--help"
+      ],
+      "exitCode": 0,
+      "stream": "stdout",
+      "contains": [
+        "Usage: pix run"
+      ]
+    },
+    {
+      "name": "bad-invocation",
+      "args": [
+        "run",
+        "--this-is-not-a-real-flag-9x7z"
+      ],
+      "exitCode": 2,
+      "stream": "stderr",
+      "contains": [
+        "unknown flag"
+      ]
+    }
+  ]
+}

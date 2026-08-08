@@ -1,0 +1,329 @@
+// Package supervise is the host's supervision tree: ONE root supervisor with a child supervisor per unit (Suture v4), running go-plugin subprocesses as its units. Suture owns restart policy; this package owns what Suture cannot know — what a unit IS (staged, sha-pinned, env-isolated, health-probed, reattachable) and what pix-host must SEE (typed status and events). One child supervisor per unit: a unit returning ErrDoNotRestart takes out only its own subtree.
+package supervise
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	goplugin "github.com/hashicorp/go-plugin"
+)
+
+// Budgets are the time/failure budgets every unit runs under.
+type Budgets struct {
+	Handshake      time.Duration // go-plugin start + first dispense
+	HealthInterval time.Duration // how often a running unit is probed
+	HealthTimeout  time.Duration // one probe (MUST be < interval, or probes stack)
+	HealthFailures int           // consecutive failed probes that evict a unit
+	Drain          time.Duration // in-flight calls may finish before the kill
+	Stop           time.Duration // whole-unit stop budget (drain + kill)
+
+	FailureBackoff   time.Duration // Suture's restart policy
+	FailureThreshold float64
+	FailureDecay     float64
+}
+
+// DefaultBudgets are the production values, PINNED in code (not config) so nobody widens the stop budget past what launchd will wait for.
+func DefaultBudgets() Budgets {
+	return Budgets{
+		Handshake:        30 * time.Second,
+		HealthInterval:   5 * time.Second,
+		HealthTimeout:    3 * time.Second,
+		HealthFailures:   3,
+		Drain:            5 * time.Second,
+		Stop:             15 * time.Second,
+		FailureBackoff:   2 * time.Second,
+		FailureThreshold: 5,
+		FailureDecay:     30,
+	}
+}
+
+// UnitSpec is the SINGLE shape the supervisor consumes — built-in self-exec, [plugins.*] override, pack [[services]] entry — so no path skips Validate.
+type UnitSpec struct {
+	Name string // unit name (also the reattach state key)
+	Kind string // go-plugin map key to dispense (memory, broker, ...)
+	// Exactly one of SelfExec or Path. SelfExec re-execs THIS binary as `<self> plugin <kind>` (no third-party bytes, nothing to pin); Path is an external executable, which MUST carry a full sha256 pin.
+	SelfExec bool
+	Path     string
+	SHA      string
+
+	Argv     []string // arguments passed to the unit (uninterpreted)
+	EnvAllow []string // env REFERENCE NAMES inherited from the parent
+	EnvGrant []string // explicit KEY=VALUE grants for THIS unit only
+}
+
+var envNameRe, shaHexRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`), regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
+
+// Validate fails closed. Every rejection here is a launch that does not happen.
+func (s UnitSpec) Validate() error {
+	switch {
+	case strings.TrimSpace(s.Name) == "":
+		return fmt.Errorf("unit: empty name")
+	case strings.TrimSpace(s.Kind) == "":
+		return fmt.Errorf("unit %s: empty kind", s.Name)
+	case s.SelfExec == (s.Path != ""):
+		return fmt.Errorf("unit %s: exactly one of self-exec or an external path is required", s.Name)
+	}
+	if s.Path != "" {
+		switch {
+		case s.SHA == "":
+			return fmt.Errorf("unit %s: refusing an unpinned external executable %s (external units must be sha256-pinned)", s.Name, s.Path)
+		case !shaHexRe.MatchString(strings.TrimSpace(s.SHA)):
+			return fmt.Errorf("unit %s: sha256 pin must be 64 hex chars, got %q", s.Name, s.SHA)
+		case !filepath.IsAbs(s.Path):
+			return fmt.Errorf("unit %s: external path %q must be absolute", s.Name, s.Path)
+		}
+	}
+	for _, n := range s.EnvAllow {
+		// Names only: an '=' assignment, an op:// ref or a pasted token is a VALUE, and values never travel in a unit declaration.
+		if !envNameRe.MatchString(n) {
+			return fmt.Errorf("unit %s: env %q is not a bare reference name (names only, never values)", s.Name, n)
+		}
+	}
+	for _, kv := range s.EnvGrant {
+		i := strings.IndexByte(kv, '=')
+		if i <= 0 || !envNameRe.MatchString(kv[:i]) {
+			return fmt.Errorf("unit %s: env grant %q must be KEY=VALUE", s.Name, redactKV(kv))
+		}
+	}
+	return nil
+}
+
+// identity is the admission fingerprint a reattach must match: change the executable, pin, kind, argv or the ENV SURFACE and the surviving process is NOT this unit. EnvAllow is hashed sorted (a reordered allowlist is the same grant); EnvGrant enters as per-entry sha256 digests, so a secret VALUE never leaves the process — not in the reattach state, not even as this hash's on-disk preimage. Sections are length-framed AND separated, so an argv element can never collide with an allow name.
+func (s UnitSpec) identity() string {
+	allow := append([]string(nil), s.EnvAllow...)
+	sort.Strings(allow)
+	grants := make([]string, 0, len(s.EnvGrant))
+	for _, kv := range s.EnvGrant {
+		grants = append(grants, fmt.Sprintf("%x", sha256.Sum256([]byte(kv))))
+	}
+	sort.Strings(grants)
+	h := sha256.New()
+	for _, sec := range [][]string{{s.Name, s.Kind, s.Path, strings.ToLower(s.SHA), fmt.Sprint(s.SelfExec)}, s.Argv, allow, grants} {
+		for _, part := range sec {
+			fmt.Fprintf(h, "%d:%s\x00", len(part), part)
+		}
+		fmt.Fprint(h, "|")
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// redactKV keeps a grant's key but never echoes its value into an error.
+func redactKV(kv string) string {
+	if i := strings.IndexByte(kv, '='); i > 0 {
+		return kv[:i] + "=<redacted>"
+	}
+	return "<redacted>"
+}
+
+// NewExternalUnit is the constructor every EXTERNAL unit is wired through (an operator's [plugins.*] block, a pack-admitted [[services]] entry), so a pack can never obtain a unit the config path could not.
+func NewExternalUnit(name, kind, path, sha string, argv, envAllow []string) (UnitSpec, error) {
+	u := UnitSpec{Name: name, Kind: kind, Path: path, SHA: strings.ToLower(strings.TrimSpace(sha)), Argv: argv, EnvAllow: envAllow}
+	if err := u.Validate(); err != nil {
+		return UnitSpec{}, err
+	}
+	return u, nil
+}
+
+// FilterEnv builds a child environment from an allowlist of names plus explicit grants; nothing else crosses the process boundary (cloud creds, agent sockets, a bearer exactly one unit may see).
+func FilterEnv(allow []string, grant []string) []string {
+	allowed := make(map[string]bool, len(allow))
+	for _, n := range allow {
+		allowed[n] = true
+	}
+	out := make([]string, 0, len(allow)+len(grant))
+	for _, kv := range os.Environ() {
+		if i := strings.IndexByte(kv, '='); i > 0 && allowed[kv[:i]] {
+			out = append(out, kv)
+		}
+	}
+	return append(out, grant...)
+}
+
+// FileSHA256 is the hex sha256 of a file.
+func FileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	sum := sha256.New()
+	if _, err := io.Copy(sum, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(sum.Sum(nil)), nil
+}
+
+// unitStageDir returns THIS unit's own, exclusive subdirectory of the stage dir — every staged/temp file for a unit lives ONLY there, so a sweep can never even LIST a sibling's files, let alone match one by a string-prefix coincidence (R1-1: "a", "a-", and "a.stage-x" used to collide under one flat stage dir); unit must already be non-empty (UnitSpec.Validate) and is rejected here if it is not a bare, traversal-free path component.
+func unitStageDir(stageDir, unit string) (string, error) {
+	if unit == "" || unit != filepath.Base(unit) || unit == "." || unit == ".." || strings.ContainsRune(unit, filepath.Separator) {
+		return "", fmt.Errorf("unit %q: not a valid stage directory name", unit)
+	}
+	return filepath.Join(stageDir, unit), nil
+}
+
+// StageExecutable copies an external unit's binary into the supervisor-owned staging dir, verifies the pin against the bytes it copied, and returns the STAGED path. Execing that copy (never the original) closes the verify-then-exec TOCTOU; a mismatch leaves nothing behind.
+func StageExecutable(stageDir, unit, src, sha string) (string, error) {
+	want := strings.ToLower(strings.TrimSpace(sha))
+	if !shaHexRe.MatchString(want) {
+		return "", fmt.Errorf("unit %s: sha256 pin must be 64 hex chars", unit)
+	}
+	unitDir, err := unitStageDir(stageDir, unit)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(unitDir, 0o700); err != nil {
+		return "", fmt.Errorf("stage dir: %w", err)
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return "", fmt.Errorf("open unit binary: %w", err)
+	}
+	defer in.Close()
+	tmp, err := os.CreateTemp(unitDir, "stage-*")
+	if err != nil {
+		return "", fmt.Errorf("stage unit binary: %w", err)
+	}
+	defer os.Remove(tmp.Name())
+	sum := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(tmp, sum), in); err != nil {
+		tmp.Close()
+		return "", fmt.Errorf("stage unit binary: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return "", fmt.Errorf("stage unit binary: %w", err)
+	}
+	if got := hex.EncodeToString(sum.Sum(nil)); got != want {
+		return "", fmt.Errorf("unit %s: %s sha256 mismatch: got %s, want %s (refusing to launch)", unit, src, got, want)
+	}
+	// 0500: executable by the owner, writable by nobody — including us.
+	if err := os.Chmod(tmp.Name(), 0o500); err != nil {
+		return "", fmt.Errorf("stage unit binary: %w", err)
+	}
+	dst := filepath.Join(unitDir, want[:12])
+	if err := os.Rename(tmp.Name(), dst); err != nil {
+		return "", fmt.Errorf("stage unit binary: %w", err)
+	}
+	sweepStaged(unitDir, filepath.Base(dst))
+	return dst, nil
+}
+
+// sweepStaged removes every OTHER file in THIS unit's stage directory — a superseded pin's "<12 hex>" bytes and orphaned "stage-*" temp files — safe by CONSTRUCTION (unitStageDir's exclusive per-unit directory means this ReadDir can never even see a sibling's files, regardless of how the two names relate as strings), not by pattern-matching a sibling's name out of a shared one. Best-effort, only after a successful stage; a sweep failure never blocks a launch.
+func sweepStaged(unitDir, current string) {
+	ents, err := os.ReadDir(unitDir)
+	if err != nil {
+		return
+	}
+	for _, e := range ents {
+		if name := e.Name(); name != current && !e.IsDir() {
+			_ = os.Remove(filepath.Join(unitDir, name))
+		}
+	}
+}
+
+// Holder carries the dispensed client for one unit. A restart swaps it under
+// the readers, so an HTTP shim never learns its backing process changed; Use
+// tracks in-flight calls with a plain atomic counter, not a sync.WaitGroup: a
+// WaitGroup requires every Add(1) that starts from a zero counter to
+// happen-before any concurrent Wait, a guarantee this Holder cannot make —
+// it is reused across every restart generation of the unit, so a NEW
+// generation's first Use call can legitimately land the instant the
+// PREVIOUS generation's last call finishes, exactly when a concurrent
+// Drain's Wait() might be mid-return. Violating that WaitGroup invariant
+// panics at runtime ("WaitGroup is reused before previous Wait has
+// returned"); a plain counter has no such constraint.
+type Holder struct {
+	mu       sync.RWMutex
+	impl     any
+	client   *goplugin.Client
+	inflight atomic.Int64
+
+	// afterCheckBeforeRegister, when non-nil, runs inside Use between
+	// confirming impl is live and registering the drain reference — still
+	// holding the read lock. It exists ONLY so a test can deterministically
+	// force a concurrent Clear to attempt to run right at that instant,
+	// proving the read lock actually excludes it (the property that closes
+	// the missed-call race), instead of hoping a scheduler happens to
+	// preempt inside a several-instruction-wide window. Nil on every real
+	// call path: one predictable, always-false nil check.
+	afterCheckBeforeRegister func()
+}
+
+// Get returns the dispensed impl, or nil when the unit is down.
+func (h *Holder) Get() any { h.mu.RLock(); defer h.mu.RUnlock(); return h.impl }
+
+// Set installs a newly dispensed impl.
+func (h *Holder) Set(impl any, c *goplugin.Client) {
+	h.mu.Lock()
+	h.impl, h.client = impl, c
+	h.mu.Unlock()
+}
+
+// Clear takes the unit out of service (callers see "unavailable" immediately).
+func (h *Holder) Clear() { h.Set(nil, nil) }
+
+// Use runs fn against the dispensed impl holding a drain reference, so a shutdown waits for it (up to the drain budget) instead of killing it midway.
+//
+// The nil-check and the inflight.Add(1) MUST happen under the SAME RLock
+// section: Clear takes the write lock to swap impl to nil, so as long as Add
+// runs before RUnlock, Clear cannot complete (and let a concurrent Drain
+// start waiting on inflight) until every Use call that observed a non-nil
+// impl has already registered itself. Splitting Get() and Add() into two
+// separate critical sections (the earlier shape) leaves a window where Clear
+// + Drain can run entirely in between: Drain sees an inflight count of zero
+// and reports "drained" while this call is still about to invoke fn against a
+// unit that is seconds from being killed. Add is never called outside a lock
+// section that also holds off Clear, so no Add(1) can ever race a Wait() that
+// has already been satisfied at zero (the WaitGroup misuse this guards against).
+func (h *Holder) Use(fn func(impl any) error) error {
+	h.mu.RLock()
+	impl := h.impl
+	if impl == nil {
+		h.mu.RUnlock()
+		return fmt.Errorf("unit unavailable")
+	}
+	if h.afterCheckBeforeRegister != nil {
+		h.afterCheckBeforeRegister()
+	}
+	h.inflight.Add(1)
+	h.mu.RUnlock()
+	defer h.inflight.Add(-1)
+	return fn(impl)
+}
+
+// drainPoll is how often Drain re-checks the in-flight count. Short enough
+// that Drain never meaningfully overshoots its budget, without busy-spinning.
+const drainPoll = 2 * time.Millisecond
+
+// Drain waits for in-flight Use calls, bounded by the drain budget. A plain
+// poll of the atomic counter, not a goroutine blocked on a WaitGroup: this
+// spawns NOTHING, so a unit whose one call never returns costs Drain's own
+// call stack and nothing more — never one leaked goroutine per restart that
+// times out draining it (unbounded over the process's lifetime with a
+// goroutine-per-call design).
+func (h *Holder) Drain(budget time.Duration) bool {
+	deadline := time.Now().Add(budget)
+	for {
+		if h.inflight.Load() == 0 {
+			return true
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return false
+		}
+		sleep := drainPoll
+		if remaining < sleep {
+			sleep = remaining
+		}
+		time.Sleep(sleep)
+	}
+}

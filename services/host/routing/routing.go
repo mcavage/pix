@@ -194,25 +194,63 @@ func (s *Scorecard) Upsert(in Score) {
 	s.Scores = append(s.Scores, in)
 }
 
-// Intent is a declared need: the hard-constraint form of "pick me a model". The
-// resolver filters models by the ceilings/floor + provider allowlist, then
-// optimizes Objective among the survivors.
+// Intent is a declared need: "pick me a model, subject to these limits". The
+// resolver filters models by the hard ceilings/floor, then optimizes Objective
+// among the survivors, preferring PreferProviders where that is possible.
 type Intent struct {
-	Name         string   `json:"name"`
-	TaskType     string   `json:"task_type"`
-	Objective    string   `json:"objective,omitempty"`      // accuracy|cost|latency|balanced (default accuracy)
-	MaxCostUSD   float64  `json:"max_cost_usd,omitempty"`   // hard ceiling, 0 = none
-	MaxLatencyMs float64  `json:"max_latency_ms,omitempty"` // hard ceiling, 0 = none
-	MinAccuracy  float64  `json:"min_accuracy,omitempty"`   // floor, 0 = none
-	Providers    []string `json:"providers,omitempty"`      // allowlist, empty = any
-	Fallback     string   `json:"fallback,omitempty"`       // model id when nothing is feasible
-	About        string   `json:"about,omitempty"`
+	Name         string  `json:"name"`
+	TaskType     string  `json:"task_type"`
+	Objective    string  `json:"objective,omitempty"`      // accuracy|cost|latency|balanced (default accuracy)
+	MaxCostUSD   float64 `json:"max_cost_usd,omitempty"`   // hard ceiling, 0 = none
+	MaxLatencyMs float64 `json:"max_latency_ms,omitempty"` // hard ceiling, 0 = none
+	MinAccuracy  float64 `json:"min_accuracy,omitempty"`   // floor, 0 = none
+
+	// PreferProviders ranks a vendor ahead of the objective without excluding
+	// anyone: the best model from a preferred vendor wins if there is one, and
+	// otherwise the best model overall wins, unflagged.
+	//
+	// It used to be a hard allowlist, and the code that implemented it said so in
+	// its own comment — "vendor diversity is a PREFERENCE encoded as a
+	// constraint". That mismatch shipped a stack whose DEFAULT install could not
+	// satisfy its DEFAULT route: the shipped policy pins `overlord` (the
+	// interactive orchestrator, and the default run_intent) to OpenAI, while
+	// `pix setup` wires Anthropic. Every such install resolved through the
+	// relaxation ladder and reported FALLBACK on its most important route —
+	// correct behavior, described as a failure, on a stack that was working.
+	//
+	// A genuinely HARD vendor rule is a different requirement with a better home:
+	// inference.exclusive_backend / exclusive_source in config.toml enforce it at
+	// the BINDING layer, where an excluded vendor is not merely outranked but
+	// uncallable. That is what a pack uses, and it cannot be relaxed by a ladder.
+	PreferProviders []string `json:"prefer_providers,omitempty"`
+	// Providers is the pre-rename spelling of PreferProviders, kept so an
+	// existing hand-written policy.json keeps resolving. Read it through
+	// Prefers(), never directly. Its SEMANTICS changed with the rename
+	// (allowlist -> preference), which is the point: the old meaning is the bug.
+	Providers []string `json:"providers,omitempty"`
+
+	Fallback string `json:"fallback,omitempty"` // model id when nothing is feasible
+	About    string `json:"about,omitempty"`
 }
 
 // Policy is the set of intents plus a global fallback model.
 type Policy struct {
 	DefaultFallback string   `json:"default_fallback"`
 	Intents         []Intent `json:"intents"`
+}
+
+// Prefers is the ONE reader of the two provider spellings, folding the legacy
+// one in at the point of use.
+//
+// Normalizing on LOAD instead would make correctness depend on HOW the Intent
+// was obtained: an Intent built in code (a test, an ad-hoc `route pick
+// <task-type>`) would silently lose its preference while an identical one read
+// from disk kept it. Fold where it is read; there is exactly one such place.
+func (in Intent) Prefers() []string {
+	if len(in.PreferProviders) > 0 {
+		return in.PreferProviders
+	}
+	return in.Providers
 }
 
 // Intent returns the named intent and whether it exists.

@@ -1,0 +1,29 @@
+{
+  "verb": "models",
+  "cases": [
+    {
+      "name": "help",
+      "args": [
+        "models",
+        "--help"
+      ],
+      "exitCode": 0,
+      "stream": "stdout",
+      "contains": [
+        "Usage: pix models"
+      ]
+    },
+    {
+      "name": "bad-invocation",
+      "args": [
+        "models",
+        "--this-is-not-a-real-flag-9x7z"
+      ],
+      "exitCode": 2,
+      "stream": "stderr",
+      "contains": [
+        "unknown flag"
+      ]
+    }
+  ]
+}

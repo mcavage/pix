@@ -1,0 +1,29 @@
+{
+  "verb": "task",
+  "cases": [
+    {
+      "name": "help",
+      "args": [
+        "task",
+        "--help"
+      ],
+      "exitCode": 0,
+      "stream": "stdout",
+      "contains": [
+        "Usage: pix task"
+      ]
+    },
+    {
+      "name": "bad-invocation",
+      "args": [
+        "task",
+        "--this-is-not-a-real-flag-9x7z"
+      ],
+      "exitCode": 2,
+      "stream": "stderr",
+      "contains": [
+        "unknown flag"
+      ]
+    }
+  ]
+}

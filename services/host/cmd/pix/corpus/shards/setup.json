@@ -1,0 +1,29 @@
+{
+  "verb": "setup",
+  "cases": [
+    {
+      "name": "help",
+      "args": [
+        "setup",
+        "--help"
+      ],
+      "exitCode": 0,
+      "stream": "stdout",
+      "contains": [
+        "Usage: pix setup"
+      ]
+    },
+    {
+      "name": "bad-invocation",
+      "args": [
+        "setup",
+        "--this-is-not-a-real-flag-9x7z"
+      ],
+      "exitCode": 2,
+      "stream": "stderr",
+      "contains": [
+        "unknown flag"
+      ]
+    }
+  ]
+}

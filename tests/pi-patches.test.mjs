@@ -22,7 +22,6 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // thrown error for the fail-fast todo patch), not silently ignored.
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const dockerfile = fs.readFileSync(path.join(repoRoot, "Dockerfile"), "utf8");
 const fixturesRoot = path.join(repoRoot, "tests/fixtures/pi-patches");
 
 function run(command, args, env) {
@@ -74,26 +73,19 @@ function copyTuiFixture(from, to) {
 	}
 }
 
-test("Dockerfile and host pin the same pi + curated packages", () => {
-	const piPackage = dockerfile.match(/^ARG PI_PACKAGE=(\S+)$/m)?.[1];
-	const dockerPackagesBlock = dockerfile.match(
-		/RUN set -eux; for p in \\\n([\s\S]*?); do \\\n\s+pi install/,
-	)?.[1];
-	assert.ok(dockerPackagesBlock, "Dockerfile must contain the curated pi package loop");
-	const dockerPackages = dockerPackagesBlock.replaceAll("\\", "").trim().split(/\s+/);
-	const todoPackage = dockerPackages.find((entry) => entry.startsWith("pi-manage-todo-list@"));
-	assert.equal(piPackage, "@earendil-works/pi-coding-agent@0.83.0");
-	assert.ok(todoPackage, "Dockerfile must pin pi-manage-todo-list");
-
-	const hostRun = fs.readFileSync(
-		path.join(repoRoot, "services/host/cmd/pix/hostrun.go"),
-		"utf8",
-	);
-	const hostPackagesBlock = hostRun.match(/var hostPiPackages = \[\]string\{([\s\S]*?)\n\}/)?.[1];
-	assert.ok(hostPackagesBlock, "hostrun.go must declare hostPiPackages");
-	const hostPackages = [...hostPackagesBlock.matchAll(/"([^"]+)"/g)].map((match) => match[1]);
-	assert.deepEqual(hostPackages, dockerPackages, "host and Docker curated package pins must match");
-});
+// The former "Dockerfile and host pin the same pi + curated packages" test
+// lived here to catch drift between the Dockerfile's curated pi package loop
+// (ARG PI_PACKAGE + the `pi install` list) and services/host/workflow/launch/
+// hostrun.go's HostPiPackages, which `pix host setup` used to provision the
+// SAME curated set on a bare-metal host. W2/U03B (commit cfd4522) deleted
+// host mode entirely — hostrun.go, HostPiPackages, and every caller — so
+// there is no longer a second pin for the Dockerfile's to drift against
+// (`grep -r HostPiPackages services/` and `grep -r hostrun.go services/`
+// both come up empty). The assertion has no current owner to point at; it is
+// removed rather than left reading a deleted file. The Dockerfile's own
+// PI_PACKAGE/todo-package pins are exercised implicitly by the patch tests
+// below, which run the real patch scripts against fixtures vendored from
+// those exact pinned versions.
 
 test("tui bottom-pin patch applies to a fixture pi-tui and passes the render harness", (t) => {
 	const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pix-patches-tui-"));

@@ -1,34 +1,17 @@
-// pix-host — the single compiled binary for everything that runs on the
-// HOST (outside the sandbox). Convention: host code is Go (one static binary, no
-// interpreter spawning child processes — the shape EDR trusts); in-sandbox code
-// (pi extensions, in-box MCP) is TypeScript.
+// pix-host — the single compiled binary for everything that runs on the HOST
+// (outside the sandbox). Convention: host code is Go, in-sandbox code (pi extensions, in-box MCP) is TypeScript — see AGENTS.md.
 //
-// Subcommands (one per host service):
+// Subcommands: memory (:11435 JSON-RPC store + snapshot/restore), route (model
+// router CLI), mcp --list (local stdio servers: NONE), plugin memory (built-in
+// go-plugin server, self-exec via `serve`), serve (the long-running services).
 //
-//	memory         self-learning memory store  (:11435, JSON-RPC)
-//	knowledge      OKF knowledge retrieval idx (:11436, JSON-RPC)
-//	backup         hot FULL backup (memory + config + op-refs) -> tar.gz
-//	restore        restore a FULL backup tar.gz (safe swap)
-//	mcp <name>     stdio MCP bridge            (run by the sbx gateway)
-//	slack          alias for `mcp slack`       (stdio; run by the sbx gateway)
-//	plugin <kind>  built-in go-plugin server   (self-exec, launched by `serve`)
-//	serve          run the long-running HTTP services together (memory, knowledge)
+// Company-specific integrations are never compiled in: they ship as a pack, as
+// a container MCP server the sbx gateway runs, or as a standalone host daemon
+// (docs/design/packs.md). The only host-side extension point is the generic,
+// SHA-pinned [plugins.*] external-process mechanism (serve_plugin.go).
 //
-// The MCP servers are stdio and spawned by the sbx gateway via `sbx mcp add`
-// (see `make mcp-register`), not by `serve`; the gateway now runs `mcp <name>`
-// (the generic bridge), of which `slack` is a back-compatible alias.
-//
-// `plugin <kind>` is the self-exec entry `serve` launches when config selects a
-// non-builtin implementation for a capability slot; it is not meant to be run
-// by hand (go-plugin refuses without the handshake cookie).
-//
-// Company-specific integrations (a data-warehouse exec proxy, an HR-directory MCP)
-// are never compiled into this binary. They ship as a **pack** (skills/knowledge/
-// config), a **container** MCP server the sbx gateway runs, or a standalone host
-// daemon — see docs/design/packs.md. The only host-side extension point that
-// remains is the generic, SHA-pinned [plugins.*] external-process mechanism
-// (serve_plugin.go): an operator points a capability slot at an external binary
-// (path + sha256), and the supervisor launches it as a go-plugin subprocess.
+// Cross-cutting rationale (lock ordering, readiness identity, restore commit
+// ordering): docs/design/runtime-invariants.md.
 
 package main
 
@@ -37,12 +20,12 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 )
 
 // version is stamped at build time via -ldflags "-X main.version=..." for both
-// release and local builds. Used for launcher/host compatibility checks and in
-// the backup manifest (pix_version).
+// release and local builds. Used for launcher/host compatibility checks.
 var version = "dev"
 
 func main() {
@@ -53,79 +36,115 @@ func main() {
 	switch os.Args[1] {
 	case "version", "--version", "-v":
 		fmt.Println(version)
-	case "slack":
-		// Back-compat alias: the Slack MCP is now served through the generic
-		// stdio bridge (behaviourally identical to the old runSlack()).
-		runMcpBridge("slack")
 	case "mcp":
-		runMcpSubcommand(os.Args[2:])
+		runMcpNames(os.Args[2:])
 	case "plugin":
 		runPlugin(os.Args[2:])
 	case "memory":
 		runMemoryHost(os.Args[2:])
 	case "route":
 		runRouteHost(os.Args[2:])
-	case "backup":
-		runBackupCLI(os.Args[2:])
-	case "restore":
-		runRestoreCLI(os.Args[2:])
 	case "serve":
 		runServe(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 	default:
-		fmt.Fprintf(os.Stderr, "pix-host: unknown subcommand %q\n\n", os.Args[1])
-		usage()
-		os.Exit(2)
-	}
-}
-
-// runPlugin is the self-exec entry `serve` launches for a non-builtin capability
-// slot: it serves the selected built-in implementation as a go-plugin over the
-// shared handshake. kind is memory|knowledge|broker|mcp (mcp also needs a <name>).
-func runPlugin(args []string) {
-	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "pix-host plugin: missing <kind> (memory|knowledge|broker|mcp)")
-		os.Exit(2)
-	}
-	switch args[0] {
-	case "memory":
-		servePluginMemory()
-	case "knowledge":
-		servePluginKnowledge()
-	case "broker":
-		servePluginBroker("broker")
-	case "mcp":
-		if len(args) < 2 {
-			fmt.Fprintln(os.Stderr, "pix-host plugin mcp: missing <name>")
-			os.Exit(2)
+		// A retired subcommand answers here (already exit 2) with its replacement.
+		if notice, retired := retiredHostNotice(os.Args[1:]); retired {
+			fmt.Fprint(os.Stderr, notice)
+		} else {
+			fmt.Fprintf(os.Stderr, "pix-host: unknown subcommand %q\n\n", os.Args[1])
+			usage()
 		}
-		servePluginMcp(args[1])
-	default:
-		fmt.Fprintf(os.Stderr, "pix-host plugin: unknown kind %q (memory|knowledge|broker|mcp)\n", args[0])
 		os.Exit(2)
 	}
 }
 
-func usage() {
-	fmt.Fprint(os.Stderr, `pix-host — host-side services for pix
+// runMcpNames answers `pix-host mcp --list` (alias `list`): the names this
+// binary serves as a local stdio MCP server, one per line. That set is EMPTY
+// and printing it is the whole point — the launcher/doctor partition servers
+// into local-vs-remote from this output. Exit 0 with no lines is honest;
+// exit 2 would make every remote catalog server look host-executing.
+func runMcpNames(args []string) {
+	if len(args) == 1 && (args[0] == "--list" || args[0] == "list") {
+		return // the empty set, exit 0
+	}
+	fmt.Fprintln(os.Stderr, "pix-host mcp: this binary serves no built-in MCP server (only `mcp --list`).")
+	fmt.Fprintln(os.Stderr, "An MCP server ships as a container the sbx gateway runs, or as a pack [[services]] unit.")
+	os.Exit(2)
+}
+
+// runPlugin is the self-exec entry `serve` launches for a capability slot: it
+// serves the built-in implementation as a go-plugin over the shared handshake.
+// memory is the only dispensable kind (plugin.PluginMap is the closed set).
+func runPlugin(args []string) {
+	if len(args) == 1 && args[0] == "memory" {
+		servePluginMemory()
+		return
+	}
+	fmt.Fprintln(os.Stderr, "pix-host plugin: usage: pix-host plugin memory")
+	os.Exit(2)
+}
+
+func usage() { fmt.Fprint(os.Stderr, usageText()) }
+
+// usageText is the host binary's whole discoverable surface, split out so the
+// retirement test can assert a retired subcommand is not advertised here.
+func usageText() string {
+	return `pix-host — host-side services for pix
 
 usage: pix-host <subcommand>
 
 subcommands:
   version        print the stamped host-binary version
   memory         self-learning memory store, JSON-RPC (:11435)
-  backup         hot FULL backup (memory + config + op-refs) -> tar.gz
-  restore        restore a FULL backup tar.gz (safe swap)
   route <cmd>    model router: pick | compile | show | models
-  mcp <name>     stdio MCP bridge (run by the sbx gateway); slack is an alias
-  slack          alias for "mcp slack"
-  plugin <kind>  built-in go-plugin server, self-exec (memory|knowledge|broker|mcp)
-  serve          run the long-running HTTP services (memory, knowledge)
-`)
+  mcp --list     local stdio MCP servers this binary serves (none)
+  plugin memory  built-in go-plugin server, self-exec
+  serve          run the long-running HTTP services (memory)
+`
 }
 
-// --- small shared helpers ----------------------------------------------------
+// --- small shared helpers: the params/JSON helpers the memory JSON-RPC
+// surface reads ---------------------------------------------------------------
+
+// jsonObj is the JSON-RPC wire shape: an unmarshalled object.
+type jsonObj = map[string]any
+
+// getStr reads a string param, "" when absent or another type.
+func getStr(m jsonObj, key string) string {
+	if m == nil {
+		return ""
+	}
+	if s, ok := m[key].(string); ok {
+		return s
+	}
+	return ""
+}
+
+// clampInt reads a numeric param (JSON number, int or numeric string) and
+// clamps it into [lo,hi], falling back to def when absent or unparseable. Every
+// caller is a store query bound, so out-of-range is clamped, not refused.
+func clampInt(v any, def, lo, hi int) int {
+	n := def
+	switch x := v.(type) {
+	case float64:
+		n = int(x)
+	case int:
+		n = x
+	case string:
+		if p, err := strconv.Atoi(x); err == nil {
+			n = p
+		}
+	}
+	if n < lo {
+		n = lo
+	}
+	if n > hi {
+		n = hi
+	}
+	return n
+}
 
 func env(key, def string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {

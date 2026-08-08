@@ -11,16 +11,24 @@ nobody toggles models by hand.
 
 **v2 reshape (agent lifecycle).** v1 shipped the engine but read as "a
 router." v2 reframes it as what it is for: **agents are first-class objects
-you create and manage** (`pix agent ls|new|edit|rm|reassess`), and routing
-is the engine that makes each one pick its model. The concrete change from v1:
-an `agent` CLI makes the default-with-override behavior legible (`agent ls`
-shows each agent's resolved model and why). The resolver, data model, and
-`routing.json` contract are unchanged from v1. An earlier revision of this
-system ran an automated harness to re-measure scores by calling every candidate
-model; it was torn out as a fragile host dependency the router never needed —
-the resolver only reads the scorecard, regardless of how its numbers got there.
-See the PR/FAQ + arch review in `.pi-agent/plan/agent-lifecycle/` for the full
-rationale.
+you create and manage** (`agents/<name>.md`), and routing is the engine that
+makes each one pick its model. The concrete change from v1: `pix agent ls`
+makes the default-with-override behavior legible (each agent's resolved model
+and why). The resolver, data model, and `routing.json` contract are unchanged
+from v1. An earlier revision of this system ran an automated harness to
+re-measure scores by calling every candidate model; it was torn out as a
+fragile host dependency the router never needed — the resolver only reads the
+scorecard, regardless of how its numbers got there. See the PR/FAQ + arch
+review in `.pi-agent/plan/agent-lifecycle/` for the full rationale.
+
+**v3 cut (mutation surface).** `agent new|edit|rm|reassess` were retired:
+authoring, YAML-frontmatter mutation, and reassess's host-exec `route compile`
+wrapper all did less than they looked like they did — an agent file is a few
+lines of frontmatter, editing it directly is not harder than nine CLI flags,
+and reassess only ever re-resolved + recompiled, which `pix models route`
+already does. `agent ls` (table + `--json`) is the entire surviving surface;
+typing a retired subcommand answers with `PIX_RETIRED` guidance to edit
+`agents/*.md` and run `pix models route` (see retired.go).
 
 ## The problem
 
@@ -156,15 +164,69 @@ ever reads the scorecard, never the harness that produced it. After editing
 `scorecard.json`, run `pix models route` to bake the change into
 `routing.json`.
 
+## Two different facts: the catalog and your host
+
+The catalog (`models.json`) says what a model **is** — its limits, its prices,
+and whether Pix routes to it at all (`available: false` means RETIRED). It says
+nothing about whether *you* can call it. That second fact is a **binding**: a
+backend in `config.toml` that has been probed with a real request and marked
+`verified`, surviving the topology filter (an exclusive pack) and the personal
+roster (`allowed_models`).
+
+`services/host/inference` is the single definition of that intersection
+(`Callable`, `Bindings`, `BoundRegistry`), imported by BOTH binaries. It exists
+because the two facts were once conflated, and the failure was silent: the whole
+`route` tree loaded the catalog and nothing else, so a host with no OpenAI key
+was told its default intent resolved to `openai/gpt-5.6-sol` — and `route
+compile` wrote that into `routing.json`, which host-mode subagents read. The
+binding-aware resolve already existed; it just lived in the launcher where the
+host binary could not reach it.
+
+Consequences that are now load-bearing:
+
+- `route show` / `models` render a **STATUS** column, not a boolean `AVAIL`:
+  `wired` (a probed binding can call it here), `unwired` (in the catalog, not
+  wired on this host), `retired` (Pix no longer routes to it). One bit could not
+  say which of those was true, so it said the wrong one.
+- `route compile` **drops** an intent with no callable model instead of pointing
+  it at an unwired provider, and prints what it dropped. A dropped intent makes
+  subagents inherit the parent model — a working degradation. A retained one is
+  a guaranteed call-time failure.
+- `--catalog` on any subcommand restores the host-independent view. It has ONE
+  job: baking the image's default `routing.json` in a maintainer checkout, where
+  filtering by the maintainer's personal keys would be exactly wrong.
+
+## Wiring a provider (`pix models add`)
+
+`pix models add <provider>` is the post-setup path from "I have a key / I pulled
+a model" to "the router can choose it". It binds, probes with a live request,
+widens the roster, and reports only what was PROVEN.
+
+- **`anthropic` / `openai` / `google`** — keyed. Stores the 1Password ref if
+  missing, then reconciles the key into sbx so the sandbox gets it too.
+- **`ollama`** — keyless, and therefore a genuinely different path
+  (`reconcileOllamaInference`): evidence is `ollama list` plus a model-specific
+  generate through the resolved endpoint, not a credential plus a provider API
+  call. `--local` / `--cloud` narrow it; the default is both, because they are
+  separate products but a user typing the provider's name means "take everything
+  you can prove". It downloads nothing — it names a tag worth pulling and leaves
+  the decision to you.
+
+An explicit `add <provider>` widens the roster for that provider even when
+`roster_providers` already records it (`widenRosterForProvider`). The stamp
+exists to protect a considered narrowing from an unrelated reconcile; a user
+typing the name is not that.
+
 ## CLI
 
 Host (`pix-host`): `route pick <intent>`, `route compile`, `route show`,
-`route models` (this subcommand tree is unchanged by the launcher rename
-below).
-Launcher (`pix`): `agent ls|new|edit|rm|reassess`, `models ls|show|pick|route`
-(thin passthroughs to the host binary above; `models` was `route` — see
-`docs/design/models-cli.md`), and `run --intent <name>` resolves the
-interactive session model.
+`route models`, each host-narrowed by default and each accepting `--catalog`
+(this subcommand tree is unchanged by the launcher rename below).
+Launcher (`pix`): `agent ls` (roster only — new/edit/rm/reassess retired),
+`models ls|show|pick|route` (thin passthroughs to the host binary above;
+`models` was `route` — see `docs/design/models-cli.md`), `models add
+<provider>`, bare `pix models` (a read-only host status screen), and `run
+--intent <name>` to resolve the interactive session model.
 
 ## Agent lifecycle
 
@@ -174,15 +236,15 @@ pinned model), an optional provider constraint, and an advisory `budget_usd`.
 
 - **`agent ls`** shows each agent's resolved model and WHY (its intent, and
   whether the resolver fell back). This is what makes "sensible default with
-  override" legible — you never pick a model per task.
-- **`agent new`** scaffolds the md; **`agent new --interactive`** runs the
-  `agent-new` skill (powered by the `authoring` intent → Opus) to author the
-  prompt conversationally and set the default.
-- **`agent edit` / `agent rm`** manage an agent without hand-editing frontmatter.
-- **`agent reassess`** re-resolves the roster under the current policy/scorecard
-  (zero spend) and recompiles. `--model NEW` no longer measures anything
-  automatically — it points you at hand-editing `scorecard.json` and re-running
-  without `--model`. Prints the routing diff either way.
+  override" legible — you never pick a model per task. It is the entire
+  surviving `agent` surface.
+- Authoring, editing and removing an agent is a hand-edit of its
+  `agents/<name>.md` frontmatter (`intent`, `description`, `tools`,
+  `budget_usd`, an optional pinned `model`) — add, change, or delete the file
+  directly; if a new `intent` needs scores, hand-add them to `scorecard.json`.
+  Then run `pix models route` to recompile `routing.json` and relaunch the
+  sandbox to pick it up. `agent new|edit|rm|reassess` are retired; typing one
+  answers with a `PIX_RETIRED` notice naming this path.
 
 ## Sandbox integration
 

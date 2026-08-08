@@ -1,11 +1,19 @@
 # Packs v2 — portable capability context (DELIVERY PRD)
 
-Status: BUILD TARGET. North star is `docs/design/packs.md` (the locked design);
-this is the delivery spec for the facets v1 deferred, with a concrete owner use
-case as the acceptance test. v1 shipped a Tier-0 slice (skills + knowledge +
-reference-only integrations, one auto-created personal pack). This closes the gap
-that IS the job-to-be-done: **flip work↔personal as one portable context carrying
-my MCPs, my CLI wrappers, and my config.**
+Status: BUILD TARGET (facets shipped; historical below — see note). North star is
+`docs/design/packs.md` (the locked design); this is the delivery spec for the
+facets v1 deferred, with a concrete owner use case as the acceptance test. v1
+shipped a Tier-0 slice (skills + knowledge + reference-only integrations, one
+auto-created personal pack). This closes the gap that IS the job-to-be-done:
+**flip work↔personal as one portable context carrying my MCPs, my CLI wrappers,
+and my config.**
+
+**U08f note:** the facets below (MCP attach, `bin/` wrappers, knowledge
+bundles) shipped and still work exactly as described; only the authoring UX
+changed. `pix pack add mcp|proxy|knowledge <name>` cited throughout as HOW you
+author a facet is retired — you write the `pack.toml` stanza (and any
+`bin/<name>` script) by hand instead. See `docs/design/packs.md`'s retirement
+callout for the full record.
 
 ## The job-to-be-done (owner, verbatim intent)
 

@@ -5,42 +5,43 @@
 //
 // Every OTHER *_test.go file in this package already unit-tests one marker's
 // writer or reader in isolation (pack_v2_test.go for profile,
-// run_knowledge_test.go for knowledge/knowledge.scope, workspacestate_test.go
-// for the symlink-safety seam, onboard_test.go for onboarding.json,
-// hoststate_test.go for host-state.json's absence). What none of them do is
-// enumerate the FULL current marker set in one place and pin the EXACT bytes
-// each production writer emits — the contract the TS-side readers
+// workspacestate_test.go for the symlink-safety seam, onboard_test.go for
+// onboarding.json, hoststate_test.go for host-state.json's absence). What none
+// of them do is enumerate the FULL current marker set in one place and pin the
+// EXACT bytes each production writer emits — the contract the TS-side readers
 // (extensions/memory-recall.ts, extensions/memory-capture.ts,
-// extensions/knowledge-recall.ts, extensions/ollama-bridge.ts, exercised from
-// tests/workspace-markers.test.mjs) depend on byte-for-byte. This file is that
-// single inventory, so a change to trailing-newline/whitespace/format on
-// either side of the boundary is caught here instead of silently drifting.
+// extensions/ollama-bridge.ts, exercised from tests/workspace-markers.test.mjs)
+// depend on byte-for-byte. This file is that single inventory, so a change to
+// trailing-newline/whitespace/format on either side of the boundary is caught
+// here instead of silently drifting. (.pix/knowledge.scope and .pix/knowledge,
+// and their writers/readers, were retired along with the built-in OKF
+// knowledge service, W2 U03A.)
 //
 // THE MEASURED SET (shards.md U-W0b.05's row), and where each one actually
 // lives:
 //
-//	.pix/profile               — Go writes (pack.go writeMemoryScope),
+//	.pix/profile               — Go writes (pack.go packinfo.WriteMemoryScope),
 //	                                   TS reads (memory-recall.ts,
 //	                                   memory-capture.ts)
-//	.pix/knowledge.scope        — Go writes (run.go writeKnowledgeScope),
-//	                                   TS reads (knowledge-recall.ts)
-//	.pix/ollama-bridge.model    — Go writes (run.go writeOllamaBridgeFile),
+//	.pix/ollama-bridge.model    — Go writes (run.go launch.WriteOllamaBridgeFile),
 //	                                   TS reads (ollama-bridge.ts)
-//	.pix/sandbox.pack           — Go writes AND reads
-//	                                   (writeSandboxPackMarker /
-//	                                   readSandboxPackMarker); no TS reader
-//	.pix/knowledge               — Go writes AND reads
-//	                                   (knowledgeUseProject / readProjectPointer
-//	                                   / projectBundle); no TS reader
+//	(.pix/sandbox.pack           — RETIRED, U04e: it recorded the pack root a
+//	                                   sandbox was created with, so a later
+//	                                   re-attach could warn that the active
+//	                                   pack had changed. The create-time
+//	                                   session FINGERPRINT decides that now,
+//	                                   under the lifecycle lock, and REFUSES
+//	                                   rather than warning. No writer, no
+//	                                   reader, no file.)
 //	.pix/onboarding.json         — the IN-SANDBOX AGENT writes it (not Go);
-//	                                   Go reads + removes it (reconcileOnboarding)
+//	                                   Go reads + removes it (provision.ReconcileOnboarding)
 //	.pix/host-state.json         — NEVER a file on EITHER side, by design
 //	                                   (hoststate.go); this file's job is to
 //	                                   prove that stays true even after every
 //	                                   OTHER marker above has been written into
 //	                                   the same workspace
 //	routing, artifacts, custom-memory.db — NOT workspace ".pix" markers at
-//	                                   all: routing.Dir()/taskArtifactRoot()
+//	                                   all: routing.Dir()/workspace.TaskArtifactRoot()
 //	                                   resolve under the HOST's
 //	                                   XDG_DATA_HOME/pix tree, never under
 //	                                   any workspace's .pix; TestRoutingAnd
@@ -55,11 +56,18 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"pix/host/packinfo"
+	"slices"
 	"strings"
 	"testing"
 
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/routing"
+	"pix/host/sys"
+	"pix/host/workflow/launch"
+	"pix/host/workflow/provision"
+	"pix/host/workspace"
 )
 
 // workspaceMarkerFiles is the literal, enumerated set of REAL files a
@@ -68,20 +76,16 @@ import (
 // stale — that is the whole point of a named list instead of a comment.
 var workspaceMarkerFiles = []string{
 	"profile",
-	"knowledge.scope",
 	"ollama-bridge.model",
 	"sandbox.pack",
-	"knowledge",
 	"onboarding.json",
 }
 
 func TestWorkspaceMarkerInventory_MatchesEnumeratedSet(t *testing.T) {
 	want := map[string]bool{
 		"profile":             true,
-		"knowledge.scope":     true,
 		"ollama-bridge.model": true,
 		"sandbox.pack":        true,
-		"knowledge":           true,
 		"onboarding.json":     true,
 	}
 	if len(workspaceMarkerFiles) != len(want) {
@@ -98,7 +102,7 @@ func TestWorkspaceMarkerInventory_MatchesEnumeratedSet(t *testing.T) {
 
 func TestMarkerRoundTrip_Profile(t *testing.T) {
 	ws := t.TempDir()
-	writeMemoryScope(ws, &packInfo{Manifest: packManifest{MemoryScope: "work"}})
+	packinfo.WriteMemoryScope(ws, &packinfo.Info{Manifest: packinfo.Manifest{MemoryScope: "work"}})
 
 	got := readFile(t, filepath.Join(ws, ".pix", "profile"))
 	if got != "work\n" {
@@ -108,23 +112,9 @@ func TestMarkerRoundTrip_Profile(t *testing.T) {
 	// nil pack (or a default/unscoped one) removes the marker entirely — the TS
 	// side's readFileSync then throws ENOENT and both readers fall back to
 	// "default", which is the documented un-scoped case.
-	writeMemoryScope(ws, nil)
+	packinfo.WriteMemoryScope(ws, nil)
 	if _, err := os.Stat(filepath.Join(ws, ".pix", "profile")); !os.IsNotExist(err) {
 		t.Errorf("profile marker should be removed for a nil pack, stat err=%v", err)
-	}
-}
-
-// ── knowledge.scope ──────────────────────────────────────────────────────
-
-func TestMarkerRoundTrip_KnowledgeScope(t *testing.T) {
-	ws := t.TempDir()
-	if err := writeKnowledgeScope(ws, []string{"/global/bundle", "/project/bundle"}); err != nil {
-		t.Fatalf("writeKnowledgeScope: %v", err)
-	}
-	got := readFile(t, filepath.Join(ws, ".pix", "knowledge.scope"))
-	want := "/global/bundle\n/project/bundle\n"
-	if got != want {
-		t.Errorf("knowledge.scope = %q, want %q (knowledge-recall.ts splits on [\\n,] and trims each line)", got, want)
 	}
 }
 
@@ -132,7 +122,7 @@ func TestMarkerRoundTrip_KnowledgeScope(t *testing.T) {
 
 func TestMarkerRoundTrip_OllamaBridgeModel(t *testing.T) {
 	ws := t.TempDir()
-	writeOllamaBridgeFile(ws, "qwen3.5:9b")
+	launch.WriteOllamaBridgeFile(ws, "qwen3.5:9b")
 	got := readFile(t, filepath.Join(ws, ".pix", "ollama-bridge.model"))
 	if got != "qwen3.5:9b\n" {
 		t.Errorf("ollama-bridge.model = %q, want %q (ollama-bridge.ts .trim()s this)", got, "qwen3.5:9b\n")
@@ -142,63 +132,10 @@ func TestMarkerRoundTrip_OllamaBridgeModel(t *testing.T) {
 	// ollama-bridge.ts treats an empty trimmed read as "absent" and uses its
 	// own "qwen3.5:9b" default, so the two defaults must actually agree.
 	ws2 := t.TempDir()
-	writeOllamaBridgeFile(ws2, "  ")
+	launch.WriteOllamaBridgeFile(ws2, "  ")
 	got2 := readFile(t, filepath.Join(ws2, ".pix", "ollama-bridge.model"))
 	if strings.TrimSpace(got2) != "qwen3.5:9b" {
 		t.Errorf("blank model wrote %q, want the default qwen3.5:9b (must match ollama-bridge.ts's own hardcoded default)", got2)
-	}
-}
-
-// ── sandbox.pack ─────────────────────────────────────────────────────────
-
-func TestMarkerRoundTrip_SandboxPack(t *testing.T) {
-	ws := t.TempDir()
-	packRoot := filepath.Join(t.TempDir(), "mypack")
-	if err := os.MkdirAll(packRoot, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeSandboxPackMarker(ws, packRoot)
-
-	want := canonicalizePackRoot(packRoot)
-	got := readSandboxPackMarker(ws)
-	if got != want {
-		t.Errorf("readSandboxPackMarker = %q, want %q", got, want)
-	}
-	raw := readFile(t, sandboxPackMarkerPath(ws))
-	if raw != want+"\n" {
-		t.Errorf("sandbox.pack file = %q, want %q", raw, want+"\n")
-	}
-
-	// Pack-less creation removes any prior marker.
-	writeSandboxPackMarker(ws, "")
-	if got := readSandboxPackMarker(ws); got != "" {
-		t.Errorf("readSandboxPackMarker after pack-less write = %q, want empty", got)
-	}
-}
-
-// ── knowledge (project pointer) ──────────────────────────────────────────
-
-func TestMarkerRoundTrip_KnowledgeProjectPointer(t *testing.T) {
-	repo := t.TempDir()
-	bundle := t.TempDir()
-
-	var out bytes.Buffer
-	if err := knowledgeUseProject(bundle, repo, &out); err != nil {
-		t.Fatalf("knowledgeUseProject: %v", err)
-	}
-
-	// readProjectPointer sees the portable (repo-relative-or-absolute) ref...
-	pointer := readProjectPointer(repo)
-	if pointer == "" {
-		t.Fatal("readProjectPointer returned empty after knowledgeUseProject wrote the pointer")
-	}
-	// ...and projectBundle re-resolves that ref back to the SAME canonical id
-	// the store keys its `bundle` column on — the round trip
-	// wireKnowledgeScope actually depends on every real run.
-	want := canonicalizeKnowledgeBundle(bundle)
-	got := projectBundle(repo)
-	if got != want {
-		t.Errorf("projectBundle round-trip = %q, want %q (pointer was %q)", got, want, pointer)
 	}
 }
 
@@ -206,31 +143,32 @@ func TestMarkerRoundTrip_KnowledgeProjectPointer(t *testing.T) {
 //
 // Unlike every marker above, this file is written by the IN-SANDBOX AGENT,
 // not by Go — Go is the READER here. The round trip under test is therefore
-// "the exact JSON shape the agent is documented to write" -> reconcileOnboarding
+// "the exact JSON shape the agent is documented to write" -> provision.ReconcileOnboarding
 // consumes it -> the marker is gone and config reflects it exactly once.
 
 func TestMarkerRoundTrip_OnboardingJSON(t *testing.T) {
 	ws := t.TempDir()
 	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
 	t.Setenv("PIX_PROFILE", "")
+	t.Setenv("PATH", t.TempDir()) // no MCP-relevant binary present
 
 	dir := filepath.Join(ws, ".pix")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	proposal := onboardingResult{Version: 1, MCP: []string{gwServerName}}
+	proposal := provision.OnboardingResult{Version: 1, MCP: []string{config.GWServerName}}
 	data, err := json.Marshal(proposal)
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, onboardingFileName)
+	path := filepath.Join(dir, provision.OnboardingFileName)
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	env := fakeEnv{present: map[string]bool{}}.env()
+	env := hostenv.Env{System: sys.Real{}}
 	var out bytes.Buffer
-	reconcileOnboarding(ws, env, strings.NewReader(""), &out, true, false)
+	provision.ReconcileOnboarding(ws, env, strings.NewReader(""), &out, true, false)
 
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("onboarding.json must be removed once applied, stat err=%v", err)
@@ -242,8 +180,8 @@ func TestMarkerRoundTrip_OnboardingJSON(t *testing.T) {
 	// onboarding has deliberately NO account writer (Google Workspace
 	// authorization needs a browser); the marker's mcp entry is what should
 	// round-trip into config.
-	if !containsStr(cfg.MCP, gwServerName) {
-		t.Errorf("cfg.MCP = %v, want %s round-tripped from the marker", cfg.MCP, gwServerName)
+	if !slices.Contains(cfg.MCP, config.GWServerName) {
+		t.Errorf("cfg.MCP = %v, want %s round-tripped from the marker", cfg.MCP, config.GWServerName)
 	}
 }
 
@@ -254,21 +192,17 @@ func TestMarkerRoundTrip_HostStateNeverBecomesAWorkspaceFile(t *testing.T) {
 	ws := t.TempDir()
 	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
 	t.Setenv("PIX_PROFILE", "")
+	t.Setenv("PATH", t.TempDir()) // no MCP-relevant binary present
 
 	// Write every OTHER real marker into the same workspace...
-	writeMemoryScope(ws, &packInfo{Manifest: packManifest{MemoryScope: "work"}})
-	if err := writeKnowledgeScope(ws, []string{"/a"}); err != nil {
-		t.Fatal(err)
-	}
-	writeOllamaBridgeFile(ws, "qwen3.5:9b")
-	writeSandboxPackMarker(ws, filepath.Join(ws, "pack"))
+	packinfo.WriteMemoryScope(ws, &packinfo.Info{Manifest: packinfo.Manifest{MemoryScope: "work"}})
+	launch.WriteOllamaBridgeFile(ws, "qwen3.5:9b")
 	var out bytes.Buffer
-	_ = knowledgeUseProject(t.TempDir(), ws, &out)
-	if err := os.WriteFile(filepath.Join(ws, ".pix", onboardingFileName), []byte(`{"version":1}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(ws, ".pix", provision.OnboardingFileName), []byte(`{"version":1}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	env := fakeEnv{present: map[string]bool{}}.env()
-	reconcileOnboarding(ws, env, strings.NewReader(""), &out, true, false)
+	env := hostenv.Env{System: sys.Real{}}
+	provision.ReconcileOnboarding(ws, env, strings.NewReader(""), &out, true, false)
 
 	// ...and confirm host-state.json never appeared. See hoststate.go's own
 	// package comment + hoststate_test.go's
@@ -276,7 +210,7 @@ func TestMarkerRoundTrip_HostStateNeverBecomesAWorkspaceFile(t *testing.T) {
 	// rationale (trusted facts travel only inside the generated prompt, never
 	// a workspace file a hostile clone could also write).
 	if _, err := os.Stat(filepath.Join(ws, ".pix", "host-state.json")); !os.IsNotExist(err) {
-		t.Errorf("host-state.json must never exist in a workspace, stat err=%v", err)
+		t.Errorf("host-state.json must never exist in a ws, stat err=%v", err)
 	}
 }
 
@@ -290,7 +224,7 @@ func TestRoutingAndArtifactsAreHostDataRootNotWorkspaceMarkers(t *testing.T) {
 	t.Setenv("ROUTING_DIR", "")
 
 	routingDir := routing.Dir()
-	artifactsDir := taskArtifactRoot()
+	artifactsDir := workspace.TaskArtifactRoot()
 
 	for _, p := range []struct{ name, dir string }{
 		{"routing", routingDir},
@@ -300,10 +234,10 @@ func TestRoutingAndArtifactsAreHostDataRootNotWorkspaceMarkers(t *testing.T) {
 			t.Errorf("%s dir %q must resolve under XDG_DATA_HOME (%q), not somewhere workspace-relative", p.name, p.dir, dataHome)
 		}
 		if strings.Contains(p.dir, ".pix") {
-			t.Errorf("%s dir %q must never contain a .pix path component — it is host data, not a workspace marker", p.name, p.dir)
+			t.Errorf("%s dir %q must never contain a .pix path component — it is host data, not a ws marker", p.name, p.dir)
 		}
 		if strings.HasPrefix(p.dir, ws) {
-			t.Errorf("%s dir %q must never live inside the workspace %q", p.name, p.dir, ws)
+			t.Errorf("%s dir %q must never live inside the ws %q", p.name, p.dir, ws)
 		}
 	}
 }

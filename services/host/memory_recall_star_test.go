@@ -186,6 +186,79 @@ func TestRecallStar_KindFilter(t *testing.T) {
 	}
 }
 
+// TestRecallStar_OrdersByRowidNotCreatedAt proves the fix directly: rowid
+// (the sqlite autoincrement counter, which only ever tracks insertion order)
+// is the authoritative "newest" sort key for "*", NOT created_at. A wall-clock
+// read can regress (NTP step-back) or tie (coarse clock resolution, two
+// inserts landing in the same tick), so this test inserts rows in a known
+// order via remember() (fixing their rowid sequence) and then overwrites
+// created_at directly to a NONMONOTONIC, partially-EQUAL sequence that
+// contradicts insertion order. If recall("*") ordered by created_at (as it
+// used to), this would return the rows in the wrong order; ordering by rowid
+// alone must still return them in true insertion order regardless.
+func TestRecallStar_OrdersByRowidNotCreatedAt(t *testing.T) {
+	st, err := newMemStore(":memory:", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Insertion order (and therefore rowid order): first, second, third, fourth.
+	ids := make([]string, 0, 4)
+	for _, c := range []string{"first fact", "second fact", "third fact", "fourth fact"} {
+		res, err := st.remember(rememberInput{content: c})
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, _ := res["id"].(string)
+		if id == "" {
+			t.Fatalf("remember(%q) did not return an id: %+v", c, res)
+		}
+		ids = append(ids, id)
+	}
+
+	// Rewrite created_at so wall-clock order contradicts insertion order:
+	// first+second tie at the SAME timestamp, third regresses BEHIND them,
+	// and fourth (last inserted, highest rowid) is stamped with the OLDEST
+	// timestamp of all — the worst case for a created_at-ordered query.
+	stamps := map[string]string{
+		ids[0]: "2024-01-05T00:00:00Z", // first: tied with second
+		ids[1]: "2024-01-05T00:00:00Z", // second: tied with first
+		ids[2]: "2024-01-01T00:00:00Z", // third: regressed behind first/second
+		ids[3]: "2023-01-01T00:00:00Z", // fourth: last inserted, oldest stamp
+	}
+	for id, ts := range stamps {
+		if _, err := st.db.Exec("UPDATE memories SET created_at = ? WHERE id = ?", ts, id); err != nil {
+			t.Fatalf("failed to rewrite created_at for %s: %v", id, err)
+		}
+	}
+
+	hits, err := st.recall("*", 0, 0, "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 4 {
+		t.Fatalf("recall(\"*\") returned %d hits, want 4: %+v", len(hits), hits)
+	}
+
+	// True insertion order, newest first: fourth, third, second, first —
+	// the OPPOSITE of what created_at-ordering would produce (which would put
+	// the tied first/second ahead of the older-stamped fourth).
+	want := []string{"fourth fact", "third fact", "second fact", "first fact"}
+	got := make([]string, len(hits))
+	for i, h := range hits {
+		got[i] = h.content
+	}
+	if got[0] != want[0] || got[1] != want[1] || got[2] != want[2] || got[3] != want[3] {
+		t.Fatalf("recall(\"*\") order = %v, want %v (rowid/insertion order, not created_at)", got, want)
+	}
+	// createdAt is still returned in the output for display, just not used
+	// as the sort key.
+	for i, h := range hits {
+		if h.createdAt == "" {
+			t.Errorf("hit %d missing createdAt in output: %+v", i, h)
+		}
+	}
+}
+
 // TestMemoryMux_RecallStar_EndToEnd is the RPC-level end-to-end gate: a
 // JSON-RPC "recall" call with query "*" against a store with no embedder
 // returns every visible row over the wire, with normal hit fields.

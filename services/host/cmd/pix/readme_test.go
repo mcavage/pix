@@ -91,16 +91,3 @@ func TestReadmePrimaryPathCommandsExist(t *testing.T) {
 		}
 	}
 }
-
-func TestDocumentedExitCodesMatchImplementation(t *testing.T) {
-	man := readRepoFile(t, "services/host/cmd/pix/pix.1")
-	for _, code := range []int{exitReady, exitNotReady, exitUsage, exitUnverifiable} {
-		needle := ".B " + string(rune('0'+code))
-		if !strings.Contains(man, needle) {
-			t.Errorf("man page missing exit status %d", code)
-		}
-	}
-	if !strings.Contains(man, "cannot be verified from the\ncurrent environment") {
-		t.Error("exit 3 documentation must mean unverifiable, not a positively observed failure")
-	}
-}

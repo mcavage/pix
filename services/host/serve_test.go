@@ -1,18 +1,24 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"pix/host/config"
 	"pix/host/plugin"
+	"pix/host/supervise"
 )
 
 // --- F1: enabled-set resolution honors cfg.Services and CLI override ---------
@@ -28,6 +34,7 @@ func TestResolveServices(t *testing.T) {
 		{"cli of empty strings falls back", []string{"", " "}, []string{"memory"}, []string{"memory"}},
 		{"cli overrides config", []string{"knowledge"}, []string{"memory"}, []string{"knowledge"}},
 		{"both empty means all (nil)", nil, nil, nil},
+		{"cli monitor overrides a memory-only config", []string{"monitor"}, []string{"memory"}, []string{"monitor"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -44,147 +51,53 @@ func TestResolveServices(t *testing.T) {
 	}
 }
 
-// --- F2: the broker slot is reachable through `serve` ------------------------
+// --- F5: an external plugin unit refuses to launch unless the bytes match -----
 
-// TestServeBrokerSlot proves serve's DORMANT broker slot: with the default
-// builtin impl NOTHING starts (no built-in broker in the public tree); with
-// [plugins.broker] pointing at the sha-pinned example broker binary, the slot
-// launches it through the shared supervisor and serves the stable /token shim.
-func TestServeBrokerSlot(t *testing.T) {
-	// builtin impl (the default public case) => the slot starts nothing.
-	sup := &supervisor{}
-	defer sup.shutdown()
-	svc, err := brokerService(&config.Config{}, sup, "")
-	if err != nil {
-		t.Fatalf("brokerService(builtin): %v", err)
-	}
-	if svc != nil {
-		t.Fatalf("builtin broker must start nothing, got %+v", svc)
-	}
-
-	// external impl => launched + served through serve's shared supervisor.
-	bin, sha := buildExampleBroker(t)
-	cfg := &config.Config{Plugins: map[string]config.PluginSpec{
-		"broker": {Impl: "example", Path: bin, SHA: sha},
-	}}
-
-	// FAIL CLOSED: an enabled broker with no bearer must be refused, not served
-	// unauthenticated.
-	t.Setenv("PIX_BROKER_AUTH", "")
-	supNoAuth := &supervisor{}
-	defer supNoAuth.shutdown()
-	if _, err := brokerService(cfg, supNoAuth, ""); err == nil {
-		t.Fatal("brokerService(external, empty bearer) must refuse to start")
-	}
-
-	t.Setenv("PIX_BROKER_AUTH", "shim-secret")
-	sup2 := &supervisor{}
-	defer sup2.shutdown()
-	svc2, err := brokerService(cfg, sup2, "")
-	if err != nil {
-		t.Fatalf("brokerService(external): %v", err)
-	}
-	if svc2 == nil {
-		t.Fatal("external broker must produce a host service")
-	}
-	if svc2.name != "broker" {
-		t.Errorf("service name = %q, want broker", svc2.name)
-	}
-	// Preflight must pass (the dispensed broker's Check succeeds).
-	if svc2.check == nil {
-		t.Fatal("broker slot must set a preflight check")
-	}
-	if err := svc2.check(); err != nil {
-		t.Errorf("broker preflight: %v", err)
-	}
-	// The served /token shim proxies to the dispensed external broker, gated by
-	// the configured bearer.
-	srv := httptest.NewServer(svc2.mux)
-	defer srv.Close()
-	// Without the bearer, the shim rejects (fail closed).
-	if unauth, err := http.Get(srv.URL + "/token"); err == nil {
-		unauth.Body.Close()
-		if unauth.StatusCode != http.StatusUnauthorized {
-			t.Fatalf("/token without bearer = %d, want 401", unauth.StatusCode)
-		}
-	}
-	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/token", nil)
-	req.Header.Set("Authorization", "Bearer shim-secret")
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		t.Fatalf("/token status = %d, want 200", res.StatusCode)
-	}
-	var bearer brokerToken
-	if err := json.NewDecoder(res.Body).Decode(&bearer); err != nil {
-		t.Fatal(err)
-	}
-	if bearer.AccessToken != "example-token-" || bearer.ExpiresIn != 300 {
-		t.Errorf("shim minted %+v, want AccessToken=example-token- ExpiresIn=300", bearer)
-	}
-}
-
-// --- F5: an external plugin with a mismatched SHA refuses to launch ----------
-
-func TestVerifyPluginSHA(t *testing.T) {
-	dir := t.TempDir()
-	bin := filepath.Join(dir, "fake-plugin")
-	content := []byte("#!/bin/sh\nexit 0\n")
-	if err := os.WriteFile(bin, content, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	// Compute the correct SHA-256 of the binary content.
-	sum := sha256.Sum256(content)
-	correctSHA := hex.EncodeToString(sum[:])
-
-	// Empty SHA is a hard refusal (F-C): external plugins MUST be sha-pinned.
-	if err := verifyPluginSHA(config.PluginSpec{Path: bin}); err == nil || !strings.Contains(err.Error(), "unpinned") {
-		t.Errorf("empty SHA should be refused as unpinned, got %v", err)
-	}
-
-	// Wrong SHA is a hard refusal.
-	err := verifyPluginSHA(config.PluginSpec{Path: bin, SHA: "0000deadbeef"})
-	if err == nil || !strings.Contains(err.Error(), "mismatch") {
-		t.Fatalf("wrong SHA should refuse with a mismatch error, got %v", err)
-	}
-
-	// Correct SHA passes (M-8).
-	if err := verifyPluginSHA(config.PluginSpec{Path: bin, SHA: correctSHA}); err != nil {
-		t.Errorf("correct SHA should be accepted, got %v", err)
-	}
-
-	// Uppercase SHA is accepted (case-insensitive match) (M-8).
-	if err := verifyPluginSHA(config.PluginSpec{Path: bin, SHA: strings.ToUpper(correctSHA)}); err != nil {
-		t.Errorf("uppercase SHA should be accepted, got %v", err)
-	}
-}
-
-// TestLaunchRefusesOnSHAMismatch proves the refusal is enforced at launch time
-// (before any subprocess is spawned) — hermetic, no real go-plugin handshake.
-func TestLaunchRefusesOnSHAMismatch(t *testing.T) {
+// TestLaunchRefusesUnpinnedAndMismatchedExternal drives the REAL refusal path:
+// `launch` no longer pre-hashes the configured path (supervise owns that gate at
+// both ends), so this proves the two refusals still happen through it — an
+// unpinned external path dies at spec validation, before anything is spawned,
+// and a pinned path whose bytes do not match dies in the stager, which is the
+// check that actually precedes exec.
+func TestLaunchRefusesUnpinnedAndMismatchedExternal(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "fake-plugin")
 	if err := os.WriteFile(bin, []byte("not a real plugin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+
 	sup := &supervisor{}
-	h, err := sup.launch("test", "memory", config.PluginSpec{Path: bin, SHA: "wrongsha"}, "", nil)
-	if err == nil {
-		t.Fatal("launch with a mismatched SHA should refuse, got nil error")
+	t.Cleanup(sup.shutdown)
+
+	// Unpinned: refused at spec time, no subprocess, no staging.
+	h, err := sup.launch("unpinned", "memory", config.PluginSpec{Path: bin}, "", nil)
+	if err == nil || !strings.Contains(err.Error(), "unpinned") {
+		t.Fatalf("unpinned external plugin: err = %v, want an unpinned refusal", err)
 	}
 	if h != nil {
-		t.Errorf("launch should not return a holder on SHA refusal, got %v", h)
+		t.Errorf("launch returned a holder for a refused unit: %v", h)
 	}
-	if !strings.Contains(err.Error(), "mismatch") {
-		t.Errorf("expected a sha256 mismatch error, got %v", err)
+
+	// Pinned to the WRONG bytes: the stager re-hashes and refuses.
+	wrong := hex.EncodeToString(sha256.New().Sum(nil)) // sha256 of the empty input
+	h, err = sup.launch("mismatch", "memory", config.PluginSpec{Path: bin, SHA: wrong}, "", nil)
+	if err == nil || !strings.Contains(err.Error(), "mismatch") {
+		t.Fatalf("mismatched external plugin: err = %v, want a sha256 mismatch refusal", err)
+	}
+	if h != nil {
+		t.Errorf("launch returned a holder for a refused unit: %v", h)
 	}
 }
 
 // --- F2: a plugin subprocess env never contains the broker bearer ------------
+
+// pluginEnv is the exact composition prod uses: every unit is launched with
+// EnvAllow: pluginEnvAllow, which supervise.FilterEnv applies to the child's
+// environment.
+func pluginEnv(extra []string) []string {
+	return supervise.FilterEnv(pluginEnvAllow, extra)
+}
 
 func TestPluginEnvStripsBearer(t *testing.T) {
 	t.Setenv("PIX_BROKER_AUTH", "super-secret-bearer")
@@ -271,7 +184,7 @@ func (stubStore) Promotable(plugin.PromotableReq) (plugin.PromotableResp, error)
 func (stubStore) Observe(plugin.ObserveReq) (plugin.ObserveResp, error) {
 	return plugin.ObserveResp{Accepted: true}, nil
 }
-func (stubStore) Stats() (plugin.Stats, error) {
+func (stubStore) Stats(string) (plugin.Stats, error) {
 	return plugin.Stats{Active: 3, Durable: 2, Perishable: 1}, nil
 }
 func (stubStore) Health() (plugin.Health, error) {
@@ -295,7 +208,7 @@ func rpcCall(t *testing.T, srv *httptest.Server, method string) map[string]any {
 
 func TestMemoryProxyMuxContract(t *testing.T) {
 	h := &pluginHolder{}
-	h.set(stubStore{}, nil)
+	h.Set(stubStore{}, nil)
 	srv := httptest.NewServer(memoryProxyMux(h))
 	defer srv.Close()
 
@@ -333,50 +246,315 @@ func TestMemoryProxyMuxContract(t *testing.T) {
 	}
 }
 
-// --- F7(c/d): brokerProxyMux enforces the bearer over a stub broker --------
+// --- R1: a losing second `serve` must never delete the WINNER's pidfile -----
 
-type stubBroker struct{}
+// TestRemoveOwnedPidFileOnlyDeletesOurOwnPid is the regression for the
+// compare-and-delete contract removeServePidFile/removeServeLazyMarker both
+// run through: the file is deleted ONLY when it currently names THIS
+// process's pid — never whatever pid happens to be sitting there, which is
+// what a bare os.Remove (the old behavior) did regardless of content.
+func TestRemoveOwnedPidFileOnlyDeletesOurOwnPid(t *testing.T) {
+	t.Run("a foreign pid is left untouched", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "serve.pid")
+		foreign := os.Getpid() + 1 // guaranteed != os.Getpid(); need not exist
+		if err := os.WriteFile(path, []byte(strconv.Itoa(foreign)+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		removeOwnedPidFile(path)
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("a foreign-owned pidfile was deleted: %v", err)
+		}
+		if strings.TrimSpace(string(raw)) != strconv.Itoa(foreign) {
+			t.Fatalf("pidfile content changed: %q", raw)
+		}
+	})
 
-func (stubBroker) Mint(string, []string) (plugin.Token, error) {
-	return plugin.Token{AccessToken: "at-123", TokenType: "Bearer", ExpiresIn: 3600}, nil
+	t.Run("our own pid is deleted", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "serve.pid")
+		if err := os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		removeOwnedPidFile(path)
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("our own pidfile was not removed: err=%v", err)
+		}
+	})
+
+	t.Run("a missing file is a silent no-op", func(t *testing.T) {
+		removeOwnedPidFile(filepath.Join(t.TempDir(), "does-not-exist"))
+	})
+
+	t.Run("garbage content is left untouched", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "serve.pid")
+		if err := os.WriteFile(path, []byte("not-a-pid\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		removeOwnedPidFile(path)
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("unparseable pidfile content was still deleted: %v", err)
+		}
+	})
 }
-func (stubBroker) Check() error { return nil }
-func (stubBroker) Describe() (plugin.BrokerInfo, error) {
-	return plugin.BrokerInfo{Name: "stub"}, nil
+
+// TestServeCleanupDoesNotClobberARunningWinner reproduces the race at the
+// config-path level runServe's deferred cleanup actually runs under: a
+// WINNER writes serve.pid/serve.lazy naming its own (different) pid, then a
+// LOSER runs the exact cleanup sequence runServe defers on its way out
+// (removeServePidFile, removeServeLazyMarker, called as this test process).
+// The winner's files must survive.
+func TestServeCleanupDoesNotClobberARunningWinner(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	if err := os.MkdirAll(filepath.Dir(config.ServePidPath()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	winner := os.Getpid() + 1000 // stands in for a DIFFERENT, still-running process
+	if err := os.WriteFile(config.ServePidPath(), []byte(strconv.Itoa(winner)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(config.ServeLazyMarkerPath(), []byte(strconv.Itoa(winner)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// The LOSER's own cleanup — exactly what runServe's defers/exit path call.
+	removeServePidFile()
+	removeServeLazyMarker()
+
+	raw, err := os.ReadFile(config.ServePidPath())
+	if err != nil {
+		t.Fatalf("winner's pidfile was deleted by a losing serve's cleanup: %v", err)
+	}
+	if strings.TrimSpace(string(raw)) != strconv.Itoa(winner) {
+		t.Fatalf("winner's pidfile content changed: %q", raw)
+	}
+	if _, err := os.Stat(config.ServeLazyMarkerPath()); err != nil {
+		t.Fatalf("winner's lazy marker was deleted by a losing serve's cleanup: %v", err)
+	}
 }
 
-func TestBrokerProxyMuxAuth(t *testing.T) {
+// TestRemoveOwnedPidFileSerializesAgainstConcurrentWrite is the deterministic
+// regression for the TOCTOU removeOwnedPidFile used to have: read-compare then
+// remove, with nothing stopping a respawned daemon from writing a NEW pid into
+// the same path between the read and the remove — which would delete the new
+// owner's file right out from under it.
+//
+// The test drives the exact interleaving by hand rather than racing a timing
+// window: an "old owner" goroutine runs the real cleanup
+// (removeOwnedPidFileWithHook) and, via the hook, pauses AFTER its ownership
+// read succeeds but BEFORE it removes the file — while still holding
+// config.PidFileLockPath's lock. A "new owner" goroutine concurrently attempts
+// the real write path (writeServePidFileAt) for a DIFFERENT pid, standing in
+// for a respawned daemon. Because both sides take the SAME sys.Lock, the new
+// owner's write cannot even begin running until the old owner's paused
+// critical section (read-through-remove) has fully released the lock — this
+// is an OS-guaranteed exclusion, not a timing assumption, so the outcome is
+// deterministic regardless of goroutine scheduling. Covers both serve.pid and
+// serve.lazy, since both route through the same shared helpers.
+func TestRemoveOwnedPidFileSerializesAgainstConcurrentWrite(t *testing.T) {
+	for _, name := range []string{"serve.pid", "serve.lazy"} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), name)
+			oldPid := os.Getpid()
+			if err := os.WriteFile(path, []byte(strconv.Itoa(oldPid)+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			paused := make(chan struct{})  // old owner: ownership confirmed, about to pause
+			proceed := make(chan struct{}) // test: old owner may now resume and remove
+			oldDone := make(chan struct{})
+			go func() {
+				defer close(oldDone)
+				removeOwnedPidFileWithHook(path, func() {
+					close(paused)
+					<-proceed
+				})
+			}()
+
+			select {
+			case <-paused:
+			case <-time.After(5 * time.Second):
+				t.Fatal("old owner never reached its post-read pause")
+			}
+
+			// The new owner (a respawned daemon) attempts its write WHILE the old
+			// owner is paused, still holding the lock. Started only after `paused`
+			// closes, so this genuinely races the held lock rather than a fast
+			// write that finishes before the old owner even starts.
+			newPid := oldPid + 424242
+			newDone := make(chan struct{})
+			go func() {
+				defer close(newDone)
+				writeServePidFileAt(path, newPid)
+			}()
+
+			// The new owner cannot have finished yet: it is blocked in the kernel
+			// on the same flock the old owner still holds. This is not a sleep
+			// racing a window — it is a bounded sanity check that the write
+			// genuinely did not complete while excluded.
+			select {
+			case <-newDone:
+				t.Fatal("new owner's write completed while the old owner still held the lock")
+			case <-time.After(100 * time.Millisecond):
+			}
+
+			close(proceed) // old owner resumes: removes its own entry, releases the lock
+			select {
+			case <-oldDone:
+			case <-time.After(5 * time.Second):
+				t.Fatal("old owner never finished after being allowed to proceed")
+			}
+			select {
+			case <-newDone:
+			case <-time.After(5 * time.Second):
+				t.Fatal("new owner never finished its write after the old owner released the lock")
+			}
+
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("final path is absent, want the new owner's pid: %v", err)
+			}
+			got, perr := strconv.Atoi(strings.TrimSpace(string(raw)))
+			if perr != nil || got != newPid {
+				t.Fatalf("final path contains %q, want the new owner's pid %d", raw, newPid)
+			}
+		})
+	}
+}
+
+// --- R2: every real memory RPC runs through Holder.Use, so Drain sees it ----
+
+// blockingStore wraps stubStore, blocking inside Recall (closing `started`
+// once the handler is actually running, so the test knows the call is truly
+// in flight) until `unblock` is closed.
+type blockingStore struct {
+	stubStore
+	started chan struct{}
+	unblock chan struct{}
+}
+
+func (b blockingStore) Recall(r plugin.RecallReq) (plugin.RecallResp, error) {
+	close(b.started)
+	<-b.unblock
+	return b.stubStore.Recall(r)
+}
+
+// TestMemoryProxyMuxRoutesRPCsThroughHolderUse is the regression for routing
+// every real memory RPC through Holder.Use rather than a bare Get(): before
+// that fix, memoryProxyMux resolved the dispensed client and returned
+// immediately, so Holder's in-flight accounting (what Drain waits on before a
+// stop kills the child) never saw an HTTP call that was still running — a
+// shutdown's drain could report "clean" with a sandbox request still
+// in-flight. This blocks a real call inside the handler and proves Drain
+// (given a short budget) reports NOT clean while it is still running, then
+// clean once it actually finishes.
+func TestMemoryProxyMuxRoutesRPCsThroughHolderUse(t *testing.T) {
 	h := &pluginHolder{}
-	h.set(stubBroker{}, nil)
-	srv := httptest.NewServer(brokerProxyMux(h, "the-secret"))
+	started, unblock := make(chan struct{}), make(chan struct{})
+	h.Set(blockingStore{started: started, unblock: unblock}, nil)
+	srv := httptest.NewServer(memoryProxyMux(h))
 	defer srv.Close()
 
-	// Missing bearer -> 401.
-	res, err := http.Get(srv.URL + "/token")
-	if err != nil {
-		t.Fatal(err)
-	}
-	res.Body.Close()
-	if res.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("missing bearer should be 401, got %d", res.StatusCode)
+	done := make(chan struct{})
+	var postErr error
+	go func() {
+		defer close(done)
+		body := `{"jsonrpc":"2.0","id":1,"method":"recall"}`
+		res, err := http.Post(srv.URL, "application/json", strings.NewReader(body))
+		if err != nil {
+			postErr = err
+			return
+		}
+		res.Body.Close()
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("recall handler never started")
 	}
 
-	// Correct bearer -> 200 with the minted token.
-	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/token", nil)
-	req.Header.Set("Authorization", "Bearer the-secret")
-	res2, err := http.DefaultClient.Do(req)
+	if h.Drain(200 * time.Millisecond) {
+		t.Fatal("Drain reported clean with a memory RPC still in flight — memoryProxyMux is not routing through Holder.Use")
+	}
+
+	close(unblock)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the in-flight recall never completed")
+	}
+	if postErr != nil {
+		t.Fatalf("POST /recall: %v", postErr)
+	}
+
+	if !h.Drain(2 * time.Second) {
+		t.Fatal("Drain did not report clean once the in-flight call finished")
+	}
+}
+
+// --- R3: runServe must WAIT for monitor's graceful shutdown, not race it ----
+
+// TestServeMonitorAndWaitBlocksUntilGracefulShutdownActuallyCompletes proves
+// serveMonitorAndWait's wait() reflects monitor.IngestServer.Serve's REAL
+// completion, not just "the goroutine got scheduled": it holds a genuinely
+// in-flight /ingest request open across the cancel, so monitor's own
+// graceful shutdown (Server.Shutdown, monitor/ingest.go) has real work to
+// wait for, and asserts wait() does not return while that work is still
+// outstanding, only once the request actually unblocks and Serve(ctx) itself
+// returns. Before this wait existed, runServe raced this window: a fatal
+// failure elsewhere called os.Exit(1) without ever waiting on it.
+func TestServeMonitorAndWaitBlocksUntilGracefulShutdownActuallyCompletes(t *testing.T) {
+	root := t.TempDir()
+	srv, err := buildMonitorIngest("127.0.0.1", 0, root)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("buildMonitorIngest: %v", err)
 	}
-	defer res2.Body.Close()
-	if res2.StatusCode != http.StatusOK {
-		t.Fatalf("correct bearer should be 200, got %d", res2.StatusCode)
+	ctx, cancel := context.WithCancel(context.Background())
+	fatalCh := make(chan error, 1)
+	wait := serveMonitorAndWait(srv, ctx, fatalCh)
+
+	// A real, incomplete request: full headers (so net/http hands it to the
+	// handler) declaring a body it never finishes sending, so handleIngest is
+	// genuinely blocked reading r.Body when we cancel below.
+	conn, err := net.Dial("tcp", srv.Addr())
+	if err != nil {
+		t.Fatalf("dial monitor ingest: %v", err)
 	}
-	var bearer brokerToken
-	if err := json.NewDecoder(res2.Body).Decode(&bearer); err != nil {
-		t.Fatal(err)
+	defer conn.Close()
+	if _, err := fmt.Fprintf(conn, "POST /ingest HTTP/1.1\r\nHost: %s\r\nContent-Length: 4096\r\nContent-Type: application/x-ndjson\r\n\r\n{\"partial\":true", srv.Addr()); err != nil {
+		t.Fatalf("write partial request: %v", err)
 	}
-	if bearer.AccessToken != "at-123" || bearer.TokenType != "Bearer" {
-		t.Errorf("token response shape mismatch: %+v", bearer)
+	// Give net/http time to parse the headers and hand the request to the
+	// handler (handleIngest, now blocked reading the rest of the declared
+	// body) BEFORE cancelling — otherwise Shutdown's very first idle-conn
+	// sweep can close an accepted-but-not-yet-dispatched connection as idle,
+	// which would race this test rather than exercise the wait.
+	time.Sleep(100 * time.Millisecond)
+
+	cancel()
+
+	// wait() must NOT return while the handler is still blocked on the
+	// in-flight (never completed) request.
+	waitDone := make(chan struct{})
+	go func() { wait(); close(waitDone) }()
+	select {
+	case <-waitDone:
+		t.Fatal("wait() returned before monitor's Serve(ctx) actually finished shutting down — an in-flight request was still open")
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	// Let the handler's blocked read fail (EOF), which lets Serve's own
+	// graceful shutdown proceed and return.
+	conn.Close()
+
+	select {
+	case <-waitDone:
+	case <-time.After(6 * time.Second):
+		t.Fatal("wait() never returned after the in-flight request ended")
+	}
+	select {
+	case err := <-fatalCh:
+		t.Fatalf("monitor reported a fatal error on what should be a clean shutdown: %v", err)
+	default:
 	}
 }

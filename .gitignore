@@ -54,6 +54,7 @@ out/
 skills/*
 !skills/analyze/
 !skills/anti-slop/
+!skills/architecture-audit/
 !skills/api-conventions/
 !skills/brainstorm/
 !skills/build/

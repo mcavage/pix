@@ -27,7 +27,7 @@ DEV_SKILLS = --no-skills --skill $(CURDIR)/skills
 # managed by `pix config set` and read here via `pix config get`
 # (profile-aware, list keys space-separated). The `?=` assignments are DEFERRED:
 # they only shell out when a target actually expands the value, and a
-# command-line/env override (`make run MCP=slack`) still wins. Targets that need
+# command-line/env override (`make run MCP=google-workspace`) still wins. Targets that need
 # these values depend on `require-launcher`, which fails loudly if
 # $(PIX_BIN) isn't built — never silently runs with empty config.
 PIX_BIN ?= $(CURDIR)/out/pix
@@ -44,10 +44,12 @@ PIX_BIN ?= $(CURDIR)/out/pix
 MCP         ?= $(shell "$(PIX_BIN)" config get mcp 2>/dev/null)
 MCP_FLAGS   = $(foreach server,$(MCP),--static-mcp $(server))
 # The local stdio MCP servers `make mcp-register` can register (the ones you
-# actually use — i.e. those listed in MCP). `slack` is a pix-host subcommand;
-# `google-workspace` is the host-side Google Workspace CLI's MCP mode. Additional integrations
-# are packs: remote catalog servers, or containers the gateway runs.
-LOCAL_STDIO_MCP = slack google-workspace
+# actually use — i.e. those listed in MCP). `google-workspace` is the
+# host-side Google Workspace CLI's MCP mode. Slack was externalized (W2/U02a;
+# see docs/design/slack-setup.md) — it is no longer a pix-host subcommand, and
+# ships (if at all) as a pinned, on-demand pack integration instead. Additional
+# integrations are packs: remote catalog servers, or containers the gateway runs.
+LOCAL_STDIO_MCP = google-workspace
 REGISTER        = $(filter $(LOCAL_STDIO_MCP),$(MCP))
 
 # Host MCP server credentials all come from 1Password via one file of op:// refs
@@ -244,9 +246,11 @@ mcp-register: require-launcher ## Register the local stdio MCP servers you use (
 	for s in $(REGISTER); do \
 		case "$$s" in \
 		google-workspace) \
-			: 'Google Workspace has ONE writer: the launcher transaction. It authorizes,'; \
-			: 'proves the headless spawn, then registers. Never hand-rolled here.'; \
-			echo "  google-workspace: run 'pix gworkspace setup' (it registers after proving the spawn)" ;; \
+			: 'gog has no built-in guided setup (that wizard is retired); it registers'; \
+			: 'the same generic way every other local stdio server does, via pix mcp'; \
+			: 'register (mcp.GogHardenedArgv bakes in --readonly/--gmail-no-send/'; \
+			: '--wrap-untrusted). Delegate instead of hand-rolling the sbx add here.'; \
+			"$(PIX_BIN)" mcp register google-workspace && echo "  registered: google-workspace" || echo "  FAILED to register: google-workspace" ;; \
 		*) \
 			sbx mcp add $$s --command "$(OP_BIN)" \
 				--args run --args --no-masking --args "--env-file=$(OP_REFS)" --args -- --args "$$BIN" --args mcp --args "$$s" \
@@ -259,7 +263,7 @@ mcp-register: require-launcher ## Register the local stdio MCP servers you use (
 	@echo "        To attach one to an ALREADY-RUNNING sandbox live (no recreate): pix mcp load <name>"
 	@echo "Note: each server resolves its creds from config/op-refs.env via op run when the gateway spawns it — make sure those refs are filled + valid."
 
-serve: require-launcher ## Start the host services named in SERVICES (config.toml `services`): memory :11435. MCP servers (slack, google-workspace) are run by the sbx gateway — see `make mcp-register`. Ctrl-C stops all.
+serve: require-launcher ## Start the host services named in SERVICES (config.toml `services`): memory :11435. MCP servers (e.g. google-workspace) are run by the sbx gateway — see `make mcp-register`. Ctrl-C stops all.
 	@echo "Host services [$(SERVICES)] — sandboxes reach these on host.docker.internal. Ctrl-C stops all."
 	@(cd services/host && go build -ldflags "-X main.version=$(LAUNCHER_VERSION)" -o $(CURDIR)/out/pix-host .) || { echo "go build failed (pix-host)"; exit 1; }
 	@exec env $(SERVE_ENV) MEMORY_WATCHER_MODEL=$(MEMORY_WATCHER_MODEL) MEMORY_EMBED_MODEL=$(MEMORY_EMBED_MODEL) out/pix-host serve $(SERVICES)
@@ -310,14 +314,14 @@ doctor: require-launcher ## Show models + each optional integration: set up? ser
 	echo ""; \
 	echo "Data tools (host side):"; \
 	printf "  %-7s setup: %-30s serving: %s\n" "gh"    "$$(sset github)" "proxy-injected (no service)"; \
-	printf "  %-7s setup: %-30s serving: %s\n" "gwork" "$$(command -v gog >/dev/null 2>&1 && echo 'dependency installed' || echo 'TODO: pix gworkspace setup')" "MCP via gateway (pix gworkspace setup)"; \
+	printf "  %-7s setup: %-30s serving: %s\n" "gwork" "$$(command -v gog >/dev/null 2>&1 && echo 'dependency installed' || echo 'TODO: brew install openclaw/tap/gogcli, then pix mcp register')" "MCP via gateway (pix mcp register)"; \
 	printf "  %-7s setup: %-30s serving: %s\n" "memory" "watcher+embed above" ":11435 $$(port 11435) (capture needs the watcher model)"; \
 	echo ""; \
 	echo "MCP servers (local stdio, run by the sbx gateway — register with 'make mcp-register', attach with 'make run'):"; \
 	reg() { sbx mcp ls 2>/dev/null | grep -qw "$$1" && echo "registered" || echo "TODO: make mcp-register"; }; \
-	printf "  %-7s %-14s %s\n" "slack"  "$$(reg slack)"    "$(if $(filter slack,$(MCP)),auto-attached on make run,NOT in MCP — 'pix config set mcp slack' to use)"; \
-	printf "  %-7s %-14s %s\n" "gwork" "$$(reg google-workspace)" "$(if $(filter google-workspace,$(MCP)),auto-attached on make run,NOT set up — 'pix gworkspace setup' to use)"; \
+	printf "  %-7s %-14s %s\n" "gwork" "$$(reg google-workspace)" "$(if $(filter google-workspace,$(MCP)),auto-attached on make run,NOT set up — 'pix config set mcp google-workspace' then 'pix mcp register' to use)"; \
 	echo "  gateway catalog (atlassian/notion/granola/linear/...): sbx mcp add … then pix config set mcp <name>"; \
+	echo "  slack: externalized (W2/U02a) — not a pix-host subcommand; wired only via a pinned, on-demand pack integration if your pack ships one (see docs/design/slack-setup.md)"; \
 	echo ""; \
 	echo "All of the above is configured in ~/.config/pix/config.toml (pix config set). Start it: make serve (host) + make run (sandbox)."
 
@@ -330,13 +334,8 @@ install: launcher ## Build + put the Go binaries (out/pix launcher + out/pix-hos
 	ln -sf $(CURDIR)/out/pix-host $(HOME)/.local/bin/pix-host
 	@echo "Installed: pix -> $(CURDIR)/out/pix"
 	@echo "Installed: pix-host -> $(CURDIR)/out/pix-host"
-	@# Drop the man page on the user manpath too (bonus; the binary embed is the
-	@# guarantee, so `pix man` works with or without this). No sudo.
-	mkdir -p $(HOME)/.local/share/man/man1
-	cp services/host/cmd/pix/pix.1 $(HOME)/.local/share/man/man1/pix.1
-	@echo "Installed: man page -> $(HOME)/.local/share/man/man1/pix.1"
-	@manpath 2>/dev/null | tr ':' '\n' | grep -qx "$(HOME)/.local/share/man" \
-		|| echo "Tip: add ~/.local/share/man to MANPATH for \`man pix\` (or just use \`pix man\`)."
+	@# The man page is RETIRED (W1 U01a): `pix help --all` is the one verb map,
+	@# so install drops nothing on the manpath.
 	@echo "Runtime config lives in ~/.config/pix/config.toml — manage it with"
 	@echo "'pix config set <key> <value>' (or 'pix setup' for the guided flow)."
 	@echo "Ensure ~/.local/bin is on your PATH, then: cd <any project> && pix"
