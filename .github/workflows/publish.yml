@@ -422,7 +422,33 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Makefile package.json pi-kit/spec.yaml
           git commit -m "chore: publish $V [skip ci]"
-          git push
+          # A plain `git push` here races any merge that lands while this run was
+          # building. `concurrency: group: publish` serializes publish RUNS but
+          # cannot stop a human merging a PR into main mid-run -- which is
+          # exactly what rejected this push on 2026-08-08 ("! [rejected] main ->
+          # main (fetch first)") when two PRs were merged a few minutes apart.
+          # The cost was a half-published version: the image and its registry tag
+          # went out, then bump died and took release-binaries and bump-tap with
+          # it, so 0.1.31 had no git tag, no GitHub release, no binaries and no
+          # Homebrew bump.
+          #
+          # Rebase and retry. This commit touches ONLY the three version files,
+          # which nothing else in the repo writes, so replaying it onto a moved
+          # main is safe. A genuine conflict is reported and fails the job rather
+          # than looping or being force-pushed over.
+          pushed=""
+          for attempt in 1 2 3; do
+            if git push; then pushed=yes; break; fi
+            echo "push rejected (main moved under this run); rebasing and retrying ($attempt/3)"
+            if ! git pull --rebase origin main; then
+              echo "::error::version bump could not rebase onto main: conflict in Makefile, package.json or pi-kit/spec.yaml"
+              exit 1
+            fi
+          done
+          if [ -z "$pushed" ]; then
+            echo "::error::version bump could not be pushed after 3 attempts; main is moving faster than this job can rebase"
+            exit 1
+          fi
 
       # Tag the stamped commit so the launcher's kit pin resolves. The `pix`
       # launcher pins the kit to its own release via
