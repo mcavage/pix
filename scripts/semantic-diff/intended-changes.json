@@ -1,1 +1,14 @@
-[]
+[
+	{
+		"id": "lifecycle.rm.force-scoped-to-explicit-seams",
+		"rationale": "The pin's second witness was a RETIREMENT TABLE ENTRY proving `pix run --replace` answered with a recovery path instead of force-removing. The whole retirement mechanism is deleted (pix has no released users, so a removed surface is simply removed rather than politely archived), which takes retired.go with it. The invariant itself is unchanged and in fact strengthened: the unproven forced-removal path used to exist-but-decline, and now does not exist at all. The witness moves from 'the retirement table lists it' to 'run's flag struct declares no Replace field', which notContains states directly.",
+		"evidence": "services/host/cmd/pix/run_cmd.go declares no `Replace bool` field, and TestRunHasNoReplaceFlag asserts `pix run --replace` fails to parse. AGENTS.md safety invariant 7 is unaffected: automatic removal still reaches sandbox.PlanForceRemove only behind lease.TryReapProof, which the pin's FIRST check still witnesses unchanged.",
+		"changes": [
+			{
+				"file": "services/host/cmd/pix/run_cmd.go",
+				"kind": "notContains",
+				"to": ["Replace bool"]
+			}
+		]
+	}
+]

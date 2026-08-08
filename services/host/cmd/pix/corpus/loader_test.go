@@ -238,18 +238,24 @@ func TestValidateShard_RejectsBadJSONKeysWithoutStream(t *testing.T) {
 	}
 }
 
-// --- deletion guard: every known verb is either covered or retired ---------
+// --- deletion guard: every known verb is corpus-covered --------------------
 
-// TestCoverage_EveryKnownVerbHasShardOrRetirement used to skip under
-// testing.Short() because it built and exec'd the real pix binary just to
-// read off the verb list — which meant it never ran in the fast gate
-// (`go test -short ./...`) at all, only in the untimed race/metrics CI jobs.
-// It now reads root.go's rootCmd struct directly (ExtractKnownVerbsFromSource,
-// no build, no exec), so the deletion guard runs on every fast-gate pass;
+// TestCoverage_EveryKnownVerbHasShard used to skip under testing.Short()
+// because it built and exec'd the real pix binary just to read off the verb
+// list — which meant it never ran in the fast gate (`go test -short ./...`) at
+// all, only in the untimed race/metrics CI jobs. It now reads root.go's
+// rootCmd struct directly (ExtractKnownVerbsFromSource, no build, no exec), so
+// the deletion guard runs on every fast-gate pass;
 // TestExtractKnownVerbsFromSource_MatchesTheRealBinary is the (still Short-
 // skipped, still binary-building) proof that source parsing and the real
 // dispatcher agree.
-func TestCoverage_EveryKnownVerbHasShardOrRetirement(t *testing.T) {
+//
+// This used to have a second escape hatch: a verb could be absent from the
+// corpus if it appeared in an approved retirement manifest. The whole
+// retirement mechanism is gone (pix has no released users to keep a recovery
+// path for, so a removed verb is simply removed), which makes the rule
+// stricter and simpler: every verb the kong root dispatches needs a shard.
+func TestCoverage_EveryKnownVerbHasShard(t *testing.T) {
 	verbs, err := ExtractKnownVerbsFromSource(realRootGoPath(t))
 	if err != nil {
 		t.Fatalf("ExtractKnownVerbsFromSource: %v", err)
@@ -267,21 +273,15 @@ func TestCoverage_EveryKnownVerbHasShardOrRetirement(t *testing.T) {
 		covered[s.Verb] = true
 	}
 
-	entries, err := LoadRetirement(realRetirementPath(t))
-	if err != nil {
-		t.Fatalf("LoadRetirement: %v", err)
-	}
-	retired := RetiredVerbs(entries)
-
 	var missing []string
 	for v := range verbs {
-		if !covered[v] && !retired[v] {
+		if !covered[v] {
 			missing = append(missing, v)
 		}
 	}
 	if len(missing) > 0 {
-		t.Errorf("verbs dispatched by the kong root but neither corpus-covered nor retired: %v\n"+
-			"Add a shard (corpus/shards/<verb>.json) or an approved retirement entry (corpus/retirement.jsonl).", missing)
+		t.Errorf("verbs dispatched by the kong root but not corpus-covered: %v\n"+
+			"Add a shard (corpus/shards/<verb>.json), or delete the verb.", missing)
 	}
 }
 
@@ -323,24 +323,3 @@ func TestExtractKnownVerbsFromSource_MatchesTheRealBinary(t *testing.T) {
 	}
 }
 
-func TestCoverage_RetiredVerbsAreNotAlsoShards(t *testing.T) {
-	// A verb that is retired should not simultaneously carry a live corpus
-	// shard: that would mean the verb still exists in the CLI (so it isn't
-	// really retired) or the retirement entry is stale (so it should be
-	// removed) — either way it is a signal worth catching, not silently
-	// tolerating two contradictory sources of truth.
-	shards, err := LoadShards(realShardsDir(t))
-	if err != nil {
-		t.Fatalf("LoadShards: %v", err)
-	}
-	entries, err := LoadRetirement(realRetirementPath(t))
-	if err != nil {
-		t.Fatalf("LoadRetirement: %v", err)
-	}
-	retired := RetiredVerbs(entries)
-	for _, s := range shards {
-		if retired[s.Verb] {
-			t.Errorf("verb %q has both a live shard and an approved verb-level retirement entry", s.Verb)
-		}
-	}
-}

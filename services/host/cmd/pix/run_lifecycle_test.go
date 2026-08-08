@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/sandbox"
@@ -216,33 +215,17 @@ func TestRunDevResolution_SkippedOnAttach(t *testing.T) {
 	}
 }
 
-// TestRunReplaceIsRetiredAndInert: `pix run --replace` was a forced `sbx rm -f`
-// with no zero-holder proof — it could destroy a sandbox another shell was live
-// in, which is exactly what U04d's proof-gated teardown exists to prevent. It is
-// retired, and a retirement has three obligations: it still PARSES (a stale
-// script gets a recovery path, not a syntax error), it answers with the
-// machine-greppable marker and the replacement, and it is INERT — this runs
-// before any config load, probe or exec.
-func TestRunReplaceIsRetiredAndInert(t *testing.T) {
-	if _, ok := retiredSurfaces()[retiredKey("run", "--replace")]; !ok {
-		t.Fatal("run --replace must be in the retirement table so typing it answers")
-	}
-	o, err := parseRunOpts([]string{"--replace"})
-	if err != nil {
-		t.Fatalf("--replace must still parse, got: %v", err)
-	}
-	_ = o
-	var errOut strings.Builder
-	rerr := retiredFlag(&errOut, "run", "--replace")
-	if got := cli.ExitCode(rerr); got != 2 {
-		t.Errorf("exit code = %d, want 2", got)
-	}
-	msg := errOut.String()
-	if !strings.HasPrefix(msg, "PIX_RETIRED") || !strings.Contains(msg, "pix rm") {
-		t.Errorf("notice = %q, want the PIX_RETIRED marker and the pix rm replacement", msg)
-	}
-	if strings.Contains(msg, "rm -f") {
-		t.Errorf("the replacement must not be a forced removal: %q", msg)
+// TestRunHasNoReplaceFlag is the sentinel for AGENTS.md safety invariant 7.
+// `pix run --replace` was a forced `sbx rm -f` issued with no zero-holder
+// proof: it could destroy a sandbox another shell was live in, which is exactly
+// what the proof-gated teardown exists to prevent. The flag is DELETED, not
+// hidden and not merely answered with a notice, so the forced-removal path is
+// unreachable rather than politely declined. Recreating is an explicit `pix rm
+// BOX` followed by `pix run`. This fails if any future edit reintroduces a flag
+// that short-circuits the proof.
+func TestRunHasNoReplaceFlag(t *testing.T) {
+	if _, err := parseRunOpts([]string{"--replace"}); err == nil {
+		t.Fatal("`pix run --replace` must not parse: the unproven forced-removal path is deleted, not hidden")
 	}
 }
 

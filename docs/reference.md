@@ -27,18 +27,18 @@ CLI reference of its own.
 | `task` | isolated parallel-work clones + sandboxes | `docs/design/worktree-tasks.md` |
 | `monitor` | one-shot read of a sandbox's stored out-of-sandbox traffic (`--follow`/`-f` to stream) | `docs/design/monitor.md` |
 | `models` | which models pix can use, and the model router: ls/show/pick/route | `docs/design/routing.md`, `docs/design/models-cli.md` |
-| `agent` | the subagent roster, read-only: `ls` only (`new`/`edit`/`rm`/`reassess` are RETIRED) | §4 |
+| `agent` | the subagent roster, read-only: `ls` only (`new`/`edit`/`rm`/`reassess` were removed) | §4 |
 | `version`, `help` | stamped version; tiered help | (none) |
 
-Retired verbs (`slack`, `gworkspace`, `knowledge`, `host`, `upgrade`, `man`,
-`backup`, `restore`, `reset`, `state backup|restore|reset`, `task harvest|gc`,
-`route`, `onboard`, `evals`) answer with a `PIX_RETIRED` line naming the
-replacement and exit 2, doing nothing else. `reset`/`state reset` moved state
-aside as a reversible clean-slate; ephemeral sandboxes plus `setup`/`doctor` do
-that job now, so recovery is manual and evidence-first: run `doctor` first,
-back up whatever `config path` / `status --json` show, then `setup`: there is
-no automated wipe. Every retirement is recorded, with its reason and
-replacement, in `services/host/cmd/pix/corpus/retirement.jsonl`.
+Removed verbs are simply gone: pix has no released users to keep a recovery
+path for, so a deleted surface gets the ordinary unknown-command answer rather
+than a curated migration notice. The live verb set is whatever `pix help --all`
+lists. Note one behavior that did NOT move somewhere else: `reset`/`state
+reset` used to move state aside as a reversible clean-slate, and nothing
+replaces it. Ephemeral sandboxes plus `setup`/`doctor` do that job now, so
+recovery is manual and evidence-first: run `doctor` first, back up whatever
+`config path` / `status --json` show, then `setup`. There is no automated
+wipe.
 
 ## 1. What pix is
 
@@ -183,7 +183,7 @@ pix models pick <intent>     # what the router would resolve for that intent
 ```
 
 `pix agent ls` is the only `agent` subcommand. `new`/`edit`/`rm`/`reassess`
-are RETIRED (each answers `PIX_RETIRED` and exits 2, doing nothing else): an
+were removed: an
 agent is a hand-edited `agents/*.md` file, not a CLI mutation surface. To
 change one, edit its frontmatter (or add a new file) directly, then run
 `pix models route` to re-resolve intents and recompile `routing.json`.

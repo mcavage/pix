@@ -67,11 +67,6 @@ runs as an external container the sbx gateway manages, registered by manifest
 instead: `sbx mcp add slack --local --url <manifest>` (see
 [docs/design/slack-setup.md](docs/design/slack-setup.md)).
 
-Typing a retired command prints a `PIX_RETIRED` line naming the replacement and
-exits 2: it never half-runs the old behavior. The full list of retired verbs
-and flags, with the replacement for each, is
-`services/host/cmd/pix/corpus/retirement.jsonl`.
-
 ## Daily use
 
 ```bash

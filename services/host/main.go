@@ -49,13 +49,8 @@ func main() {
 	case "-h", "--help", "help":
 		usage()
 	default:
-		// A retired subcommand answers here (already exit 2) with its replacement.
-		if notice, retired := retiredHostNotice(os.Args[1:]); retired {
-			fmt.Fprint(os.Stderr, notice)
-		} else {
-			fmt.Fprintf(os.Stderr, "pix-host: unknown subcommand %q\n\n", os.Args[1])
-			usage()
-		}
+		fmt.Fprintf(os.Stderr, "pix-host: unknown subcommand %q\n\n", os.Args[1])
+		usage()
 		os.Exit(2)
 	}
 }
@@ -88,8 +83,7 @@ func runPlugin(args []string) {
 
 func usage() { fmt.Fprint(os.Stderr, usageText()) }
 
-// usageText is the host binary's whole discoverable surface, split out so the
-// retirement test can assert a retired subcommand is not advertised here.
+// usageText is the host binary's whole discoverable surface.
 func usageText() string {
 	return `pix-host — host-side services for pix
 
