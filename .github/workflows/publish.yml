@@ -570,6 +570,13 @@ jobs:
     needs: [version, release-binaries]
     runs-on: ubuntu-latest
     steps:
+      # FIRST, before anything writes into the workspace: actions/checkout
+      # cleans the path it checks out, so a root checkout after the curl below
+      # would delete the SHA256SUMS this job just downloaded. This checkout is
+      # what makes packaging/homebrew/pix.rb available to copy over the tap's.
+      - name: Check out pix (for the vendored formula)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
       - name: Download this release's checksum manifest
         env:
           V: ${{ needs.version.outputs.version }}
@@ -596,6 +603,16 @@ jobs:
           repository: mcavage/homebrew-tap
           token: ${{ secrets.TAP_PUSH_TOKEN }}
           path: tap
+
+      # packaging/homebrew/pix.rb is the SOURCE OF TRUTH for the formula, not
+      # the tap's copy. Copying it out on every release is what makes the
+      # `def install` block reviewable in the same PR that changes what the
+      # tarball contains -- the drift that shipped a broken v0.1.27, where the
+      # tarball dropped pix.1 and the tap's formula kept installing it.
+      # tests/homebrew-formula.test.mjs asserts this copy exists AND that the
+      # formula only installs paths the tarball actually stages.
+      - name: Copy the vendored formula over the tap's
+        run: cp "$GITHUB_WORKSPACE/packaging/homebrew/pix.rb" tap/Formula/pix.rb
 
       - name: Update formula version, release URLs, and hashes
         env:
@@ -643,6 +660,7 @@ jobs:
           grep -q '${{ steps.sha.outputs.amd64 }}' tap/Formula/pix.rb
 
       - name: Push bump branch and open PR
+        id: tap_pr
         working-directory: tap
         env:
           GH_TOKEN: ${{ secrets.TAP_PUSH_TOKEN }}
@@ -661,3 +679,45 @@ jobs:
             --body "Automated bump from mcavage/pix release v${V}." \
             --base main --head "$branch")"
           gh pr merge "$pr_url" --repo mcavage/homebrew-tap --auto --squash
+          echo "pr_url=$pr_url" >> "$GITHUB_OUTPUT"
+
+      # Auto-merge means a RED tap PR does not merge -- it just sits there,
+      # silently, and Homebrew users keep getting the previous version with no
+      # signal anywhere that the release only half-landed. v0.1.27 sat broken
+      # for ~14 hours exactly this way: `publish` was green end to end while
+      # `brew install` was failing with ENOENT.
+      #
+      # So: wait for the tap's checks and fail THIS run if they go red. Nothing
+      # is rolled back (the image and tags are long since public by now) -- the
+      # point is that the release run's own status tells the truth about
+      # whether the artifact users install actually installs.
+      - name: Wait for the tap PR's checks, and fail loudly if they go red
+        env:
+          GH_TOKEN: ${{ secrets.TAP_PUSH_TOKEN }}
+          PR_URL: ${{ steps.tap_pr.outputs.pr_url }}
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 40); do   # 40 x 30s = 20 min ceiling
+            # `gh pr checks` exits 0 when all checks succeeded, 8 while any are
+            # still pending, and 1 on failure. It ALSO exits 1 with "no checks
+            # reported" in the window between opening the PR and the tap's
+            # workflow registering, so that case is matched explicitly and
+            # treated as pending -- otherwise this races PR creation and fails
+            # every release. Anything else that is not a clean 0 is a failure:
+            # "no signal" must never read as "passed".
+            set +e
+            out="$(gh pr checks "$PR_URL" --repo mcavage/homebrew-tap 2>&1)"
+            rc=$?
+            set -e
+            if [ "$rc" -eq 0 ]; then
+              echo "$out"; echo "tap PR checks are green"; exit 0
+            fi
+            if [ "$rc" -eq 8 ] || printf '%s' "$out" | grep -qi "no checks reported"; then
+              sleep 30; continue
+            fi
+            echo "$out"
+            echo "::error::tap PR $PR_URL has failing checks -- brew install is broken for v${{ needs.version.outputs.version }}"
+            exit 1
+          done
+          echo "::error::tap PR $PR_URL checks did not conclude within 20 minutes: $PR_URL"
+          exit 1
