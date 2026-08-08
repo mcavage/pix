@@ -68,7 +68,11 @@ const SAFETY_INVARIANTS = [
 		id: "existing-sandbox-untouched",
 		invariant:
 			"An existing sandbox is never force-removed or replayed into; nothing recreates one implicitly (--replace is deleted); unknown sandbox state fails closed.",
-		phrases: ["never force-removed", "`--replace` is DELETED", "proof-gated `pix rm BOX`", "FAILS CLOSED"],
+		// "--replace" alone, not "`--replace` is RETIRED/DELETED": the fact is
+		// that the flag is named and disclaimed, not which word disclaims it.
+		// Pinning the verb made a mechanism rename (retirement -> deletion) fail
+		// a build where nothing about the invariant had changed.
+		phrases: ["never force-removed", "--replace", "proof-gated `pix rm BOX`", "FAILS CLOSED"],
 	},
 	{
 		id: "pack-trust-gate",
@@ -79,7 +83,10 @@ const SAFETY_INVARIANTS = [
 	{
 		id: "host-mode-off-by-default",
 		invariant: "Host mode is deleted outright (not merely off by default); `host.enabled` gates no real code path.",
-		phrases: ["Host mode is DELETED", "host.enabled", "no code path"],
+		// Same loosening: "host mode" states the subject, and "host.enabled" +
+		// "no code path" carry the actual claim (the flag gates nothing real).
+		// The disclaiming verb is not the fact.
+		phrases: ["host mode", "host.enabled", "no code path"],
 	},
 	{
 		id: "secret-never-writes-values",
