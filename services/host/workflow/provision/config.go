@@ -19,8 +19,6 @@ func ConfigValue(cfg *config.Config, key string) (string, error) {
 		return strings.Join(cfg.MCP, " "), nil
 	case "services":
 		return strings.Join(cfg.Services, " "), nil
-	case "knowledge_bundles":
-		return "", fmt.Errorf("knowledge_bundles was retired (W2 U03A removed the built-in knowledge service); no replacement key")
 	case "memory_watcher_model":
 		return cfg.MemoryWatcherModel, nil
 	case "memory_embed_model":
@@ -31,8 +29,6 @@ func ConfigValue(cfg *config.Config, key string) (string, error) {
 		return cfg.RunIntent, nil
 	case "pack":
 		return cfg.Pack, nil
-	case "host.enabled", "host.autonomy":
-		return "", fmt.Errorf("%s is retired: `pix host` (the unsandboxed escape hatch) was removed — the sandbox is the only supported execution boundary now; this key does nothing", key)
 	case "host.autoserve":
 		return strconv.FormatBool(cfg.AutoserveEnabled()), nil
 	default:
@@ -111,9 +107,6 @@ func ApplyConfigChange(cfg *config.Config, unset bool, key string, args []string
 		}
 		return fmt.Sprintf("services = %v", cfg.Services), nil
 
-	case "knowledge_bundles":
-		return "", fmt.Errorf("config %s knowledge_bundles: retired (W2 U03A removed the built-in knowledge service); no replacement key", verb)
-
 	case "memory_watcher_model":
 		if unset {
 			cfg.MemoryWatcherModel = config.DefaultMemoryWatcherModel
@@ -168,12 +161,6 @@ func ApplyConfigChange(cfg *config.Config, unset bool, key string, args []string
 			cfg.Pack = args[0]
 		}
 		return fmt.Sprintf("pack = %q", cfg.Pack), nil
-
-	case "host.enabled", "host.autonomy":
-		// RETIRED: `pix host` (the unsandboxed escape hatch) was deleted — the
-		// sandbox is the only supported execution boundary now. Neither key does
-		// anything; refuse rather than silently accept a no-op set/unset.
-		return "", fmt.Errorf("%s is retired: `pix host` was removed; this key does nothing (nothing was changed)", key)
 
 	case "host.autoserve":
 		// Opt-out flag for lazy auto-start (service.Ensure). Unset = nil = inherit the

@@ -96,7 +96,7 @@ port = 9000
 	if got := c.Plugin("slack"); got.Impl != BuiltinImpl {
 		t.Errorf("Plugin(slack).Impl = %q, want %q", got.Impl, BuiltinImpl)
 	}
-	retired := c.RetiredKeys()
+	retired := c.UnknownKeys()
 	for _, want := range []string{"plugins.memory", "plugins.slack"} {
 		found := false
 		for _, k := range retired {
@@ -105,15 +105,15 @@ port = 9000
 			}
 		}
 		if !found {
-			t.Errorf("RetiredKeys() = %v, want it to include %q (the inert notice)", retired, want)
+			t.Errorf("UnknownKeys() = %v, want it to include %q (a silently discarded plugin declaration)", retired, want)
 		}
 	}
 }
 
-// TestRetiredSlackTableTolerated: a leftover `[slack]` table from a
-// pre-externalization config.toml (client_id/redirect_uri/oauth_* fields)
-// decodes without error and reports as a RETIRED key, not an unknown one —
-func TestRetiredSlackTableTolerated(t *testing.T) {
+// TestUnknownSlackTableTolerated: a leftover `[slack]` table from a
+// pre-externalization config.toml decodes without error, does not fail the
+// load, and is REPORTED as an unknown key so a caller can surface it -
+func TestUnknownSlackTableTolerated(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	const toml = "[slack]\nclient_id = \"123.456\"\nredirect_uri = \"https://example.com/cb\"\n"
 	if err := os.WriteFile(path, []byte(toml), 0o644); err != nil {
@@ -123,8 +123,8 @@ func TestRetiredSlackTableTolerated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFrom: %v", err)
 	}
-	if !slices.Contains(c.RetiredKeys(), "slack") {
-		t.Errorf("RetiredKeys() = %v, want it to include the retired slack table", c.RetiredKeys())
+	if !slices.Contains(c.UnknownKeys(), "slack") {
+		t.Errorf("UnknownKeys() = %v, want it to include the ignored slack table", c.UnknownKeys())
 	}
 }
 func TestSeedOpRefsAtNoClobberAndDirPerms(t *testing.T) {
@@ -237,8 +237,8 @@ mcp_dynamic = ["notion"]
 	if err != nil {
 		t.Fatalf("LoadFrom: %v", err)
 	}
-	if got, want := c.RetiredKeys(), []string{"mcp_dynamic", "mcp_static"}; !stringSlicesEqual(got, want) {
-		t.Errorf("RetiredKeys() = %v, want %v", got, want)
+	if got, want := c.UnknownKeys(), []string{"mcp_dynamic", "mcp_static"}; !stringSlicesEqual(got, want) {
+		t.Errorf("UnknownKeys() = %v, want %v", got, want)
 	}
 	if len(c.MCP) != 1 || c.MCP[0] != "slack" {
 		t.Errorf("MCP = %v, want [slack] (live key still decodes)", c.MCP)
@@ -261,8 +261,8 @@ mcp_dynamic = ["notion"]
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := reloaded.RetiredKeys(); len(got) != 0 {
-		t.Errorf("reloaded RetiredKeys() = %v, want none", got)
+	if got := reloaded.UnknownKeys(); len(got) != 0 {
+		t.Errorf("reloaded UnknownKeys() = %v, want none", got)
 	}
 }
 func TestLoadAbsentReportsNoRetiredOrUnknownKeys(t *testing.T) {
@@ -271,8 +271,8 @@ func TestLoadAbsentReportsNoRetiredOrUnknownKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := c.RetiredKeys(); len(got) != 0 {
-		t.Errorf("RetiredKeys() = %v, want none", got)
+	if got := c.UnknownKeys(); len(got) != 0 {
+		t.Errorf("UnknownKeys() = %v, want none", got)
 	}
 }
 
@@ -400,8 +400,8 @@ func TestKnowledgeBundlesKeyIsRetired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load must tolerate a retired knowledge_bundles key, got: %v", err)
 	}
-	if !slices.Contains(c.RetiredKeys(), "knowledge_bundles") {
-		t.Errorf("RetiredKeys() = %v, want knowledge_bundles reported", c.RetiredKeys())
+	if !slices.Contains(c.UnknownKeys(), "knowledge_bundles") {
+		t.Errorf("UnknownKeys() = %v, want knowledge_bundles reported", c.UnknownKeys())
 	}
 }
 
@@ -489,5 +489,46 @@ func TestDataDirDefaultHome(t *testing.T) {
 	}
 	if want := filepath.Join(home, ".local", "share", "pix"); d != want {
 		t.Errorf("DataDir = %q, want %q", d, want)
+	}
+}
+
+// TestUnknownKeysReportsATypo is the case the old retired-key allowlist could
+// never cover: a MISTYPED key. It is not in any curated list, it decodes into
+// nothing, and before this it was dropped in silence — so the setting simply
+// never took effect and pix said nothing about why.
+func TestUnknownKeysReportsATypo(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	// One real key (so the file is otherwise valid), one typo, one nested typo.
+	const body = "run_intent = \"code\"\nmemory_watchr_model = \"x\"\n\n[inference]\nbackendz = 1\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err) // an unknown key must never fail the load
+	}
+	if c.RunIntent != "code" {
+		t.Errorf("RunIntent = %q, want the recognized key to still apply", c.RunIntent)
+	}
+	for _, want := range []string{"memory_watchr_model", "inference.backendz"} {
+		if !slices.Contains(c.UnknownKeys(), want) {
+			t.Errorf("UnknownKeys() = %v, want it to include %q", c.UnknownKeys(), want)
+		}
+	}
+}
+
+// TestUnknownKeysEmptyForACleanConfig: the warning must stay silent on a file
+// that is entirely understood, or it becomes noise everyone learns to ignore.
+func TestUnknownKeysEmptyForACleanConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("run_intent = \"code\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if got := c.UnknownKeys(); len(got) != 0 {
+		t.Errorf("UnknownKeys() = %v, want none for a fully recognized config", got)
 	}
 }

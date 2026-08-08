@@ -107,12 +107,18 @@ type Config struct {
 	// never per-profile: leaving the sandbox is a machine-level decision.
 	Host HostMode `toml:"host,omitempty"`
 
-	// retiredKeys are the top-level TOML keys in the file that map to no field
-	// above (BurntSushi's MetaData.Undecoded()) AND are in retiredConfigKeys: a
-	// key that once meant something, tolerated so an old config.toml still
-	// loads, and reported via RetiredKeys so a caller can say "this no longer
-	// does anything" instead of nothing at all.
-	retiredKeys []string
+	// unknownKeys are the keys in the file that this binary does nothing with:
+	// everything BurntSushi reports as undecoded (MetaData.Undecoded()), plus
+	// any [plugins.*] slot, which decodes into a real field and is then
+	// deliberately discarded (see applyDefaults).
+	//
+	// This used to be a curated allowlist of keys that "once meant something",
+	// reported so a caller could say "this no longer does anything". Nothing
+	// ever called the reporter, and an allowlist by construction says nothing
+	// about the one case that actually costs time: a TYPO. `memory_watchr_model`
+	// was silently ignored, doing nothing and saying nothing. Every unrecognized
+	// key is now recorded, so a caller can surface all of them.
+	unknownKeys []string
 }
 
 // InferenceConfig is deliberately small: setup and packs author it. A non-empty
@@ -168,42 +174,30 @@ type InferenceModelBinding struct {
 // provenance can never outlive the claim it describes.
 const VerifiedByProbe = "probe"
 
-// retiredConfigKeys is the allowlist of top-level (or dotted-nested) config keys
-// that once had meaning and are now tolerated but inert (reported by RetiredKeys).
-var retiredConfigKeys = map[string]bool{
-	"mcp_static":    true,
-	"mcp_dynamic":   true,
-	"host.enabled":  true,
-	"host.autonomy": true,
-	// knowledge_bundles: the built-in OKF knowledge service (:11436) is retired, so
-	// a still-present key from an older config.toml does nothing.
-	"knowledge_bundles": true,
-	// slack: the built-in Slack OAuth/token table, retired when Slack was
-	// externalized (see docs/design/slack-setup.md).
-	"slack": true,
-}
+// UnknownKeys returns every key in the loaded file this binary does nothing
+// with, sorted and deduplicated — a copy, so callers cannot mutate the stored
+// slice. A caller should SURFACE these: silently ignoring a key the user
+// deliberately wrote is how a typo turns into an afternoon.
+//
+// Deliberately not an error. A config that names something unrecognized is
+// still a usable config, and failing the load would turn a cosmetic mistake
+// into an unusable pix.
+func (c *Config) UnknownKeys() []string { return append([]string(nil), c.unknownKeys...) }
 
-// RetiredKeys returns the retired top-level config keys found in the loaded file,
-// sorted and deduplicated — a copy, so callers cannot mutate the stored slice.
-func (c *Config) RetiredKeys() []string { return append([]string(nil), c.retiredKeys...) }
-
-// retiredIn returns the retired keys (see retiredConfigKeys) among BurntSushi's
-// undecoded keys, sorted + deduplicated. A toml.Key's String() joins its path
-// with dots, so a nested unknown key renders dotted and can never collide with
-// the top-level names retiredConfigKeys holds. Anything else is tolerated
-// silently — an unknown key is either a typo or a field only a newer pix knows.
-func retiredIn(keys []toml.Key) []string {
+// unknownIn renders BurntSushi's undecoded keys, sorted + deduplicated. A
+// toml.Key's String() joins its path with dots, so a nested unknown key renders
+// dotted ("inference.typo") and reads the way a user would write it.
+func unknownIn(keys []toml.Key) []string {
 	seen := map[string]bool{}
-	var retired []string
+	var unknown []string
 	for _, k := range keys {
-		s := k.String()
-		if retiredConfigKeys[s] && !seen[s] {
+		if s := k.String(); !seen[s] {
 			seen[s] = true
-			retired = append(retired, s)
+			unknown = append(unknown, s)
 		}
 	}
-	sort.Strings(retired)
-	return retired
+	sort.Strings(unknown)
+	return unknown
 }
 
 // configDir resolves the directory that holds config.toml and the broker token.
@@ -430,21 +424,25 @@ func (c *Config) applyDefaults() {
 	if c.Plugins == nil {
 		c.Plugins = map[string]PluginSpec{}
 	}
-	// The ENTIRE [plugins.*] table is RETIRED: a config file can no longer name an
-	// executable for the supervisor to run.
+	// The ENTIRE [plugins.*] table is INERT BY DESIGN: a config file can no
+	// longer name an executable for the supervisor to run. This is a security
+	// boundary, not a deprecation courtesy — it stays whatever else is trimmed.
+	// The slots decode into a real field, so they are not "undecoded"; they are
+	// recorded here explicitly because a silently-discarded request to run a
+	// binary is exactly the thing a user must be told about.
 	if len(c.Plugins) > 0 {
 		seen := map[string]bool{}
-		for _, k := range c.retiredKeys {
+		for _, k := range c.unknownKeys {
 			seen[k] = true
 		}
 		for slot := range c.Plugins {
 			if key := "plugins." + slot; !seen[key] {
-				c.retiredKeys = append(c.retiredKeys, key)
+				c.unknownKeys = append(c.unknownKeys, key)
 				seen[key] = true
 			}
 		}
 		c.Plugins = map[string]PluginSpec{}
-		sort.Strings(c.retiredKeys)
+		sort.Strings(c.unknownKeys)
 	}
 }
 
@@ -470,7 +468,7 @@ func LoadFrom(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	c.retiredKeys = retiredIn(md.Undecoded())
+	c.unknownKeys = unknownIn(md.Undecoded())
 	c.applyDefaults()
 	return c, nil
 }
