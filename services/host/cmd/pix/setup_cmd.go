@@ -29,10 +29,6 @@ type setupCmd struct {
 	Dir string `arg:"" optional:"" default:"." help:"Workspace to provision and launch in (default: .)."`
 
 	NoAgent bool `help:"Run the HOST phase only: no sandbox, no handoff. The scripted/CI path."`
-	// Replace is RETIRED with run's: recreating meant a forced, unproven `sbx rm
-	// -f`. Parsed hidden so a stale script gets the recovery path, not "unknown
-	// flag".
-	Replace bool `hidden:"" help:"Retired: remove the sandbox explicitly (pix rm BOX), then pix setup."`
 	Verbose bool `help:"Show underlying sbx, Git, Docker and setup output, not just actions/results."`
 	Apply   bool `help:"Apply a pending .pix/onboarding.json in DIR, under a confirmation gate."`
 
@@ -46,12 +42,6 @@ type setupCmd struct {
 
 	GoogleWorkspace bool   `hidden:"" help:"Route setup through the Google Workspace transaction."`
 	Credentials     string `hidden:"" help:"OAuth client path for --google-workspace."`
-
-	// The retired spellings stay DECLARED so they keep answering with the sentence
-	// naming their replacement, rather than degrading to "unknown flag".
-	UseSbxKeys   bool   `hidden:"" name:"use-sbx-keys"`
-	Use1Password bool   `hidden:"" name:"use-1password"`
-	Knowledge    string `hidden:""`
 }
 
 // hostArgs recomposes the host phase's argv. Order is fixed so one invocation
@@ -91,23 +81,7 @@ func (c *setupCmd) hostArgs() []string {
 	return a
 }
 
-// retired answers a removed flag with the sentence that says what replaced it.
-func (c *setupCmd) retired() error {
-	switch {
-	case c.UseSbxKeys:
-		return cli.Usagef("--use-sbx-keys has been removed: 1Password (op) is now the only provider-key source; run `pix setup` with op installed + signed in")
-	case c.Use1Password:
-		return cli.Usagef("--use-1password has been removed: 1Password is now the only provider-key source, so `pix setup` always uses it")
-	case c.Knowledge != "":
-		return cli.Usagef("--knowledge was retired with the built-in OKF knowledge service (W2 U03A); use `pix pack use` for a pack's embedded knowledge/ dir")
-	}
-	return nil
-}
-
 func (c *setupCmd) Run(d *cli.Deps) error {
-	if err := c.retired(); err != nil {
-		return err
-	}
 	hostArgs := c.hostArgs()
 
 	env := defaultShellEnv()
@@ -152,11 +126,6 @@ func (c *setupCmd) Run(d *cli.Deps) error {
 	// installed sbx parser before any mutation, so schema skew fails once.
 	if err := launch.ValidateSetupKit(version, launch.ResolveRepoRoot, launch.ValidateSbxKit); err != nil {
 		return err
-	}
-
-	// The retired flag answers before the host phase runs: inert, exit 2.
-	if c.Replace {
-		return retiredFlag(d.Err, "setup", "--replace")
 	}
 
 	// The host phase: check, apply the verified gaps, check again.

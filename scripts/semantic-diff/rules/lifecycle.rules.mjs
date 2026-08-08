@@ -42,7 +42,7 @@ export default [
 	{
 		id: "lifecycle.rm.force-scoped-to-explicit-seams",
 		description:
-			"sbx v0.38 requires `rm -f` merely to skip its own TTY confirmation. Pix centralizes that transport argv in sandbox.PlanForceRemove, which repeats the pix-* scope/name validation. Authority remains outside the flag: automatic removal reaches the planner only after lease.TryReapProof proves zero holders; a named explicit removal carries direct user intent. U04e's unsafe `pix run --replace` path remains retired, and no call site may hand-roll another forced sbx-rm argv.",
+			"sbx v0.38 requires `rm -f` merely to skip its own TTY confirmation. Pix centralizes that transport argv in sandbox.PlanForceRemove, which repeats the pix-* scope/name validation. Authority remains outside the flag: automatic removal reaches the planner only after lease.TryReapProof proves zero holders; a named explicit removal carries direct user intent. U04e's unsafe `pix run --replace` path is DELETED, and no call site may hand-roll another forced sbx-rm argv.",
 		checks: [
 			{
 				file: "services/host/workflow/launch/sandbox.go",
@@ -50,12 +50,17 @@ export default [
 				values: ["argv, err := sandbox.PlanForceRemove(name)", 'env.Run("sbx", argv...)'],
 			},
 			{
-				// The retired flag must stay retired: a table entry is what makes
-				// `pix run --replace` answer with the recovery path instead of
-				// quietly force-removing again.
-				file: "services/host/cmd/pix/retired.go",
-				kind: "contains",
-				values: ['retiredKey("run", "--replace"):'],
+				// `pix run --replace` was the unproven forced-removal path. It used
+				// to be witnessed here as a RETIREMENT TABLE ENTRY, which proved
+				// only that typing it answered politely. The retirement mechanism
+				// is gone (pix has no released users to keep a recovery path for),
+				// so the flag is now simply absent -- a strictly stronger property,
+				// and one notContains can state directly: run's flag struct must
+				// declare no Replace field at all. TestRunHasNoReplaceFlag is the
+				// behavioral half of the same guarantee.
+				file: "services/host/cmd/pix/run_cmd.go",
+				kind: "notContains",
+				values: ["Replace bool"],
 			},
 		],
 	},

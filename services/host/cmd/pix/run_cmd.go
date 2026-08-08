@@ -89,12 +89,8 @@ type runCmd struct {
 	Name     string   `help:"Sandbox name." placeholder:"N"`
 	Model    string   `help:"Active pi model (passed through to pi)." placeholder:"M"`
 	Intent   string   `help:"Resolve the session model via the router; --model overrides it. Intents: pix models show." placeholder:"NAME"`
-	// Replace is RETIRED, but still parsed (hidden) so typing it answers with the
-	// PIX_RETIRED notice and the two-step replacement instead of kong's "unknown
-	// flag": a stale script gets a recovery path, not a syntax error.
-	Replace bool   `hidden:"" help:"Retired: remove the sandbox explicitly (pix rm BOX), then run."`
-	Task    string `help:"Launch an existing task's sandbox (same as 'pix task run NAME')." placeholder:"NAME"`
-	Keep    bool   `short:"k" help:"Keep the sandbox when the last shell exits: a sticky, identity-bound marker the teardown/orphan reaper refuses on (an explicit 'pix rm' still removes it)."`
+	Task     string   `help:"Launch an existing task's sandbox (same as 'pix task run NAME')." placeholder:"NAME"`
+	Keep     bool     `short:"k" help:"Keep the sandbox when the last shell exits: a sticky, identity-bound marker the teardown/orphan reaper refuses on (an explicit 'pix rm' still removes it)."`
 
 	// PiArg is the `--` tail, rewritten by rewriteRunPassthrough. Hidden because a
 	// user never types it: they type `-- <pi args>`, documented above.
@@ -160,11 +156,6 @@ func (c *runCmd) opts() (launch.RunOpts, error) {
 }
 
 func (c *runCmd) Run(d *cli.Deps) error {
-	// The retired flag answers before ANY resolution, probe or mutation — the inert
-	// contract every retired surface holds (retired.go).
-	if c.Replace {
-		return retiredFlag(d.Err, "run", "--replace")
-	}
 	o, err := c.opts()
 	if err != nil {
 		return err

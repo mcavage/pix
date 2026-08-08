@@ -67,8 +67,8 @@ const SAFETY_INVARIANTS = [
 	{
 		id: "existing-sandbox-untouched",
 		invariant:
-			"An existing sandbox is never force-removed or replayed into; nothing recreates one implicitly (--replace is retired); unknown sandbox state fails closed.",
-		phrases: ["never force-removed", "`--replace` is RETIRED", "proof-gated `pix rm BOX`", "FAILS CLOSED"],
+			"An existing sandbox is never force-removed or replayed into; nothing recreates one implicitly (--replace is deleted); unknown sandbox state fails closed.",
+		phrases: ["never force-removed", "`--replace` is DELETED", "proof-gated `pix rm BOX`", "FAILS CLOSED"],
 	},
 	{
 		id: "pack-trust-gate",
@@ -78,8 +78,8 @@ const SAFETY_INVARIANTS = [
 	},
 	{
 		id: "host-mode-off-by-default",
-		invariant: "Host mode is retired outright (deleted, not merely off by default); `host.enabled` gates no real code path.",
-		phrases: ["Host mode is RETIRED", "host.enabled", "no code path"],
+		invariant: "Host mode is deleted outright (not merely off by default); `host.enabled` gates no real code path.",
+		phrases: ["Host mode is DELETED", "host.enabled", "no code path"],
 	},
 	{
 		id: "secret-never-writes-values",
@@ -167,7 +167,11 @@ test("docs/reference.md carries the command map AGENTS.md defers to", () => {
 	const ref = fs.readFileSync(path.join(repoRoot, "docs/reference.md"), "utf8");
 	const map = section(ref, "## 0. Command map");
 	assert.ok(map, "docs/reference.md must have a `## 0. Command map` section");
-	for (const verb of ["run", "status", "doctor", "setup", "serve", "pack", "mcp", "config", "host", "task"]) {
+	// LIVE verbs only. `host` used to be in this list, but it only ever appeared
+	// in the command map via the retired-verbs paragraph; the verb itself has
+	// not existed since host mode was deleted (safety invariant 9). Requiring a
+	// non-verb here made the map's own removal notice load-bearing.
+	for (const verb of ["run", "status", "doctor", "setup", "serve", "pack", "mcp", "config", "task"]) {
 		assert.ok(new RegExp(`\`${verb}[ \`]`).test(map), `command map is missing \`${verb}\``);
 	}
 });

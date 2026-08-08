@@ -11,7 +11,6 @@ const PRIMARY_SURFACES = [
 	"README.md",
 	"AGENTS.md",
 	"docs/getting-started.md",
-	"docs/MIGRATION.md",
 	"docs/reference.md",
 	"pi-kit/spec.yaml",
 	"install.sh",
