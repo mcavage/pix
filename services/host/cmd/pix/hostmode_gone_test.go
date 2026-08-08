@@ -249,14 +249,18 @@ func TestHostGuardExtensionDeleted(t *testing.T) {
 	}
 }
 
-// TestRunHostAnswersRetiredAndExecutesNothing is the end-to-end proof: the
-// compiled binary, invoked with the exact argv a user would type, prints the
-// PIX_RETIRED marker, exits 2, and — the part a pure string check on
-// retired.go can't prove — never got far enough to touch a config file,
-// spawn pi, or do anything else. It is a real subprocess, not a call into the
-// retirement table, so it also proves no OTHER dispatch path (an alias, a
-// forgotten case) reaches host execution.
-func TestRunHostAnswersRetiredAndExecutesNothing(t *testing.T) {
+// TestRunHostRefusesAndExecutesNothing is the end-to-end proof: the compiled
+// binary, invoked with the exact argv a user would type, refuses with exit 2
+// and — the part no source-level string check can prove — never got far enough
+// to touch a config file, spawn pi, or do anything else. It is a real
+// subprocess, so it also proves no OTHER dispatch path (an alias, a forgotten
+// case) reaches host execution.
+//
+// It used to additionally require the PIX_RETIRED marker. That assertion went
+// with the retirement mechanism: `host` is now simply not a verb, so it gets
+// the ordinary unknown-command answer. The SAFETY half is what mattered and it
+// is unchanged — refuses, and does nothing on the way out.
+func TestRunHostRefusesAndExecutesNothing(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the real pix binary for a CLI roundtrip; TestNoHostModeExecutionSymbols and TestHostGuardExtensionDeleted keep the sentinel cheap in the fast gate; this one is covered by the untimed race/metrics CI jobs")
 	}
@@ -272,9 +276,6 @@ func TestRunHostAnswersRetiredAndExecutesNothing(t *testing.T) {
 	}
 	if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != 2 {
 		t.Errorf("`pix host` exit code = %v, want 2", err)
-	}
-	if !strings.Contains(string(out), "PIX_RETIRED") {
-		t.Errorf("`pix host` output missing the PIX_RETIRED marker:\n%s", out)
 	}
 	if _, statErr := os.Stat(cfgPath); !os.IsNotExist(statErr) {
 		t.Errorf("`pix host` must never write config.toml; stat err = %v", statErr)

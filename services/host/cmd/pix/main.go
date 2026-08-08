@@ -6,7 +6,7 @@
 //
 // The verb tree is root.go's rootCmd — the one parser, the one dispatcher, and (via
 // `pix help --all`) the one listing. main owns only what comes BEFORE a parse: the
-// retired table, the bare-`pix` status screen, and the exit code.
+// bare-`pix` status screen and the exit code.
 package main
 
 import (
@@ -31,12 +31,6 @@ func init() { launcher.Version = version }
 func main() {
 	args := os.Args[1:]
 
-	// The retired global `--man` is checked before any dispatch, so `pix run
-	// --man` answers with the notice instead of launching.
-	if hasGlobalManFlag(args) {
-		retiredExit(retiredKey("pix", "--man"))
-	}
-
 	if len(args) == 0 {
 		// Bare `pix` shows STATUS — it never launches a sandbox (launching is explicit,
 		// behind `run`). On a fresh host with no config, offer onboarding.
@@ -44,14 +38,6 @@ func main() {
 			return
 		}
 		args = []string{"status"}
-	}
-
-	// A retired surface answers before anything else: no config read, no probe, no
-	// side effect. Both granularities are checked, because a retired SUBCOMMAND
-	// (`task gc`) must answer before its group's parser rejects the name.
-	retiredIfRetired(args[0], "")
-	if len(args) > 1 {
-		retiredIfRetired(args[0], args[1])
 	}
 
 	// Everything else is the root's: one parser, one dispatch, one exit map.
