@@ -47,6 +47,13 @@ on:
   push:
     branches: ["main"]
   pull_request:
+  # Reusable, so publish.yml can call this as a job IN ITS OWN GRAPH rather
+  # than hoping GitHub orders two independent workflows. Same one-definition,
+  # two-entry-points wiring legal.yml already uses, and for the same reason:
+  # without it a push could publish an immutable version while these tests
+  # were still running, or after they had already gone red. See the gate
+  # comment in publish.yml.
+  workflow_call: {}
 
 jobs:
   gate:
