@@ -92,7 +92,7 @@ func Scenarios() []Scenario {
 			WantUnitsLen: 1, WantHealthy: true,
 		},
 		{
-			Name: "fresh snapshot with zero supervised units is healthy, not unknown",
+			Name:   "fresh snapshot with zero supervised units is healthy, not unknown",
 			Report: zero, Write: true,
 			WantUnitsLen: 0, WantHealthy: true,
 		},
@@ -104,12 +104,12 @@ func Scenarios() []Scenario {
 			// A stale snapshot is refused the same as an unreadable, missing,
 			// or schema-mismatched one: its units must NOT render as current
 			// rows next to an "unknown"/unavailable verdict.
-			Name: "snapshot aged past the stale budget hides its units, not just flags them",
+			Name:   "snapshot aged past the stale budget hides its units, not just flags them",
 			Report: stale, Write: true,
 			WantUnitsLen: 0, WantHealthy: false, WantDetailSubstr: "stale",
 		},
 		{
-			Name: "snapshot on a schema this build does not read",
+			Name:   "snapshot on a schema this build does not read",
 			Report: future, Write: true,
 			WantUnitsLen: 0, WantHealthy: false, WantDetailSubstr: "schema",
 		},
