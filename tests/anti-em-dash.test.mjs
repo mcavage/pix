@@ -16,15 +16,22 @@ const PRIMARY_SURFACES = [
 	"install.sh",
 ];
 
+// A primary surface that no longer exists is a STALE LIST, not a style
+// violation. Conflating the two made deleting docs/MIGRATION.md report as "this
+// file contains em dashes", which is both false and a confusing thing to debug.
+// Kept as its own assertion so the list stays honest, with a message that says
+// what to actually do.
+test("the primary-surface list has no stale entries", () => {
+	const missing = PRIMARY_SURFACES.filter((p) => !fs.existsSync(path.join(repoRoot, p)));
+	assert.deepEqual(missing, [], `PRIMARY_SURFACES names file(s) that no longer exist: ${missing.join(", ")}. Remove them from the list, or restore the files.`);
+});
+
 test("primary surfaces carry no em dashes (—)", () => {
 	const violations = [];
 
 	for (const relPath of PRIMARY_SURFACES) {
 		const fullPath = path.join(repoRoot, relPath);
-		if (!fs.existsSync(fullPath)) {
-			violations.push(`File missing: ${relPath}`);
-			continue;
-		}
+		if (!fs.existsSync(fullPath)) continue; // covered by the stale-list test above
 		const content = fs.readFileSync(fullPath, "utf8");
 		const lines = content.split("\n");
 		for (let i = 0; i < lines.length; i++) {

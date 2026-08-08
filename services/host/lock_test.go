@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +10,25 @@ import (
 	"testing"
 	"time"
 )
+
+// freePort returns a port number nothing is listening on, by binding an
+// ephemeral port and releasing it immediately. Used to keep subprocess tests
+// off the real default (:11435), which a developer's own running pix-host
+// daemon would otherwise occupy -- turning a code assertion into a question
+// about what happens to be running on the machine.
+func freePort(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve an ephemeral port: %v", err)
+	}
+	defer l.Close()
+	_, port, err := net.SplitHostPort(l.Addr().String())
+	if err != nil {
+		t.Fatalf("split %s: %v", l.Addr(), err)
+	}
+	return port
+}
 
 // TestAcquireLockExclusive proves the primitive: a second acquire of the SAME
 // path fails while the first is held, and succeeds once released.
@@ -119,7 +139,16 @@ func TestServingEntryPointsRefuseWhenLockHeld(t *testing.T) {
 			cmd := exec.Command(bin, tc.args...)
 			// MEMORY_DB fixes both the store path and (its dir) the lock path; HOME
 			// isolates any config the `serve` branch reads.
-			cmd.Env = append(os.Environ(), "MEMORY_DB="+dbPath, "HOME="+dir)
+			//
+			// MEMORY_PORT is pinned to a FREE ephemeral port rather than left at the
+			// default 11435. The `serve memory` branch binds its front door on the
+			// way to the lock check, so on any machine already running a real
+			// pix-host daemon the child refused with "address already in use"
+			// instead of the lock message this test asserts -- a failure caused by
+			// the developer's environment, not by the code under test. Leaving the
+			// default made the test's verdict depend on whether the person running
+			// it happened to have pix serving.
+			cmd.Env = append(os.Environ(), "MEMORY_DB="+dbPath, "HOME="+dir, "MEMORY_PORT="+freePort(t))
 
 			var out []byte
 			var runErr error
