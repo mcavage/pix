@@ -106,9 +106,17 @@ func TestLifecycleLock_AcquireExclusive_DeadlineExceededWhileHeld(t *testing.T) 
 	}
 	defer waiter.Close()
 
+	// `start` must be sampled BEFORE context.WithTimeout, because that call is
+	// what anchors the deadline. Sampling it afterwards measures only the tail
+	// of the window: any scheduling gap in between (a GC pause or preemption
+	// under -race on a loaded CI runner) is subtracted from the measurement
+	// rather than from the wait, and the assertion below fails while the code
+	// under test behaved correctly. A ~13ms gap is exactly what made this flake
+	// at 87ms in CI. Since a context deadline timer never fires early, anchoring
+	// `start` first makes elapsed >= the full deadline by construction.
+	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	start := time.Now()
 	err = waiter.AcquireExclusive(ctx)
 	elapsed := time.Since(start)
 	if !errors.Is(err, context.DeadlineExceeded) {

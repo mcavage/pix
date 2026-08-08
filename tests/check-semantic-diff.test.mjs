@@ -638,16 +638,29 @@ test("resolveDefaultBase rejects a resolvable origin/main merge-base that predat
 	assert.equal(drift.ok, false, "and it is genuinely undocumented drift");
 });
 
-test("post-merge on THIS repo: resolveDefaultBase does not silently degrade to the stale origin/main merge-base (the real long-lived-branch case this fix targets)", () => {
+test("post-merge on THIS repo: resolveDefaultBase does not silently degrade to the stale origin/main merge-base (the real long-lived-branch case this fix targets)", (t) => {
 	const staleMergeBase = execFileSync("git", ["merge-base", "HEAD", "origin/main"], { cwd: REPO_ROOT, encoding: "utf8" }).trim();
 
-	// Sanity: prove the scenario this fix targets is real in THIS checkout —
-	// the tracked origin/main genuinely predates the semantic-diff rules
-	// directory, so its merge-base with HEAD cannot see any rules file at all.
-	assert.throws(
-		() => execFileSync("git", ["cat-file", "-e", `${staleMergeBase}:scripts/semantic-diff/rules`], { cwd: REPO_ROOT, stdio: "ignore" }),
-		"origin/main's merge-base must genuinely predate the rules directory for this sentinel to mean anything",
-	);
+	// The degradation guarded here only EXISTS while a long-lived branch is
+	// unlanded: the merge-base predates the rules directory precisely because
+	// that branch is what introduced it. Once the branch merges, origin/main
+	// carries the rules directory and the merge-base IS HEAD, so there is no
+	// stale base left to reject and nothing here to prove. Asserting that as a
+	// precondition rather than skipping on it encoded a property of being
+	// UNMERGED as a repo invariant, which made this test fail on every push to
+	// main. The synthetic-repo test above pins the same engine behavior
+	// deterministically, independent of where this checkout sits in history,
+	// so skipping here costs no coverage of the rule itself.
+	let mergeBaseSeesRules = true;
+	try {
+		execFileSync("git", ["cat-file", "-e", `${staleMergeBase}:scripts/semantic-diff/rules`], { cwd: REPO_ROOT, stdio: "ignore" });
+	} catch {
+		mergeBaseSeesRules = false;
+	}
+	if (mergeBaseSeesRules) {
+		t.skip("origin/main's merge-base already carries the rules directory (this checkout is level with, or merged into, main), so no stale base exists to degrade to");
+		return;
+	}
 
 	const resolved = resolveDefaultBase(REPO_ROOT);
 	assert.notEqual(resolved, staleMergeBase, "must not use a merge-base that cannot see the rules directory at all");

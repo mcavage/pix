@@ -10,12 +10,15 @@ name: publish
 # :<version> + :latest, then commits the selected version into all lockstep
 # files ([skip ci] prevents recursion).
 #
-# NOTHING is pushed before the legal gate passes: `legal-gate` calls
+# NOTHING is pushed before the legal AND test gates pass: `legal-gate` calls
 # .github/workflows/legal.yml (full-history secret scan, third-party/license
-# class gate, repo SBOM) as a job IN THIS GRAPH, and both `build` and `merge`
-# `needs` it. It used to run only as a separate workflow, which GitHub does not
-# order against this one — so the gate could still be running, or already red,
-# while a versioned image went out.
+# class gate, repo SBOM) and `test-gate` calls .github/workflows/test.yml
+# (fast gate, race, corpus/coverage, macOS) as jobs IN THIS GRAPH, and both
+# `build` and `merge` `needs` them. Each used to run only as a separate
+# workflow, which GitHub does not order against this one — so a gate could
+# still be running, or already red, while a versioned image went out. That is
+# not hypothetical for the test half: v0.1.27 published an image, tags, release
+# binaries and a Homebrew tap PR while `test` was red on the very same commit.
 #
 # Why: sbx caches materialized templates PER TAG NAME and won't re-pull a tag it
 # already has. A moving tag (:edge/:latest) therefore goes stale until you evict
@@ -55,6 +58,10 @@ jobs:
   legal-gate:
     name: pre-publish legal gate
     uses: ./.github/workflows/legal.yml
+
+  test-gate:
+    name: pre-publish test gate
+    uses: ./.github/workflows/test.yml
 
   version:
     name: compute version
@@ -209,9 +216,12 @@ jobs:
 
   build:
     name: build ${{ matrix.arch }}
-    # legal-gate FIRST: this job pushes layers by digest, so it must not run
-    # before the secret scan / license gate / SBOM have passed.
-    needs: [version, patch-smoke, legal-gate]
+    # legal-gate AND test-gate FIRST: this job pushes layers by digest, so it
+    # must not run before the secret scan / license gate / SBOM have passed,
+    # nor before the suite is green. v0.1.27 published a complete release --
+    # image, tags, binaries, tap PR -- while `test` was red on the same commit,
+    # because the two workflows were independent and nothing ordered them.
+    needs: [version, patch-smoke, legal-gate, test-gate]
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -273,10 +283,10 @@ jobs:
 
   merge:
     name: merge manifest + push tags
-    # The one job that creates the VERSIONED tag. legal-gate is named again
-    # (not just inherited through `build`) so the ordering is explicit at the
-    # step that mutates a public tag.
-    needs: [version, build, legal-gate]
+    # The one job that creates the VERSIONED tag. legal-gate and test-gate are
+    # named again (not just inherited through `build`) so the ordering is
+    # explicit at the step that mutates a public tag.
+    needs: [version, build, legal-gate, test-gate]
     runs-on: ubuntu-latest
     outputs:
       digest: ${{ steps.manifest.outputs.digest }}
