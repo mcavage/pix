@@ -7,29 +7,50 @@
 #         -> rename guard (once it exists)
 #
 # WHICH BUDGET APPLIES TO WHAT (this is the whole point of the split):
-#   * THIS script is the timed one. It runs the NON-race Go suite and is
-#     budgeted at GATE_BUDGET_MS (default 34000 ms) absolute.
+#   * THIS script is the timed one. It runs the NON-race Go suite and reports
+#     wall time against GATE_BUDGET_MS. That ceiling is ADVISORY BY DEFAULT
+#     (0 = off) and is enforced only where it is set explicitly, which today
+#     means CI (75000 ms, see .github/workflows/test.yml). A local `make gate`
+#     still prints the total and the slow-test list; it no longer fails a
+#     correct suite for being slow. See "WHY THE LOCAL CEILING IS OFF" below.
 #   * `go test -race ./...` is NOT run here. The race detector costs a
 #     multiple of wall time by design, so it lives in its own CI job with NO
 #     timing gate at all (.github/workflows/test.yml, job `race`). Timing a
 #     race run would either make the budget meaningless or make the gate flaky.
 #
-# WHY 34 s, AND WHY IT IS A FIXED NUMBER:
-#   Measured steady-state on a warm checkout, three consecutive runs
-#   (2026-08-02): 30.2 / 29.9 / 29.2 s wall. Segment breakdown of the middle
-#   run:
-#     go-build 0.8s + go-vet 0.4s + go-test 24.2s + node-test 0.9s
-#     + typecheck 0.7s + open-core 1.8s + recall-xport 0.1s + rename-guard 0.3s
-#     ~= 29.2 s wall.
-#   34 s = that measurement plus ~15% headroom for a slower runner. It is a
-#   CEILING DERIVED FROM A RECORDED BASELINE, never "previous run x 2": a
-#   relative budget ratchets upward one slow PR at a time and can only ever
-#   catch a single-commit cliff, never the slow slide that actually kills a
-#   suite. GATE_TARGET_MS (30 s) is the soft line: between target and budget
-#   the gate warns and still passes.
+# WHY THE LOCAL CEILING IS OFF (2026-08-08):
+#   The old default was 34000 ms, derived from a recorded baseline of three
+#   consecutive warm runs (2026-08-02): 30.2 / 29.9 / 29.2 s wall, broken down
+#   as go-build 0.8s + go-vet 0.4s + go-test 24.2s + node-test 0.9s +
+#   typecheck 0.7s + open-core 1.8s + recall-xport 0.1s + rename-guard 0.3s.
 #
-#   Raising the budget is a deliberate, reviewable edit to this line -- not
-#   something a slow PR can do to itself.
+#   That baseline stopped describing the suite. Re-measured on the same
+#   machine after the lifecycle rearchitecture landed, three consecutive warm
+#   runs: 53.8 / 54.6 / 54.9 s wall, broken down as go-test 32.8s +
+#   node-test 16.1s + open-core 2.2s + typecheck 0.7s + go-build 0.7s +
+#   rename-guard 0.4s + arch-metrics 0.4s + go-vet 0.3s + recall-xport 0.1s.
+#   The growth is real work, not a regression to hunt: node-test went 0.9s ->
+#   16.1s when the legal, semantic-diff, and lifecycle-UAT suites landed, and
+#   go-test 24.2s -> 32.8s alongside them.
+#
+#   So the ceiling was failing correct suites on wall time alone. Rather than
+#   re-derive a number that the next honest batch of tests invalidates again,
+#   the local default is now 0 (OFF): the gate still measures, still prints
+#   the total, and still reports every test over GATE_SLOW_MS as a reviewable
+#   finding, but a slow-yet-passing suite no longer fails a developer's build.
+#   ENFORCEMENT MOVED TO ONE PLACE: CI sets GATE_BUDGET_MS explicitly (75000
+#   ms, .github/workflows/test.yml), so a genuine cliff is still caught before
+#   merge, by the runner whose timing is actually comparable run to run.
+#
+#   To enforce locally again, set it per-invocation or in your environment:
+#     GATE_BUDGET_MS=60000 make gate
+#
+#   If the total needs to come DOWN rather than the ceiling up, the lever is
+#   the node-test segment: scripts/gate.sh globs `tests/*.test.mjs` only, so a
+#   slow behavioral suite can move to `tests/slow/` -- but note that directory
+#   has no generic runner today (its one file is invoked by name in
+#   legal.yml), so moving a test there without also wiring it into a CI job
+#   silently stops running it.
 #
 #   HISTORY, because the number moved and the reason matters:
 #   The previous ceiling was 12 s, from a baseline of `go test` at 7.4 s. That
@@ -82,7 +103,8 @@
 #   gate on its own; only the total budget does.
 #
 # Env knobs:
-#   GATE_BUDGET_MS  absolute hard-fail ceiling in ms (default 34000; 0 = off)
+#   GATE_BUDGET_MS  absolute hard-fail ceiling in ms (default 0 = off locally;
+#                   CI sets 75000 explicitly)
 #   GATE_TARGET_MS  soft warn line in ms (default 30000)
 #   GATE_SLOW_MS    per-test "reviewable finding" line (default 1000)
 #   GATE_OUT_DIR    where the timing artifact is written (default out/gate)
@@ -91,7 +113,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-GATE_BUDGET_MS="${GATE_BUDGET_MS:-34000}"
+GATE_BUDGET_MS="${GATE_BUDGET_MS:-0}"
 GATE_TARGET_MS="${GATE_TARGET_MS:-30000}"
 GATE_SLOW_MS="${GATE_SLOW_MS:-1000}"
 GATE_OUT_DIR="${GATE_OUT_DIR:-$ROOT/out/gate}"
@@ -343,10 +365,14 @@ elif [ "$GATE_BUDGET_MS" -gt 0 ] && [ "$TOTAL_MS" -gt "$GATE_BUDGET_MS" ]; then
 	echo "budget: FAIL — $(fmt_ms "$TOTAL_MS") > $(fmt_ms "$GATE_BUDGET_MS") absolute ceiling"
 	annotate error "fast gate took $(fmt_ms "$TOTAL_MS"), over the $(fmt_ms "$GATE_BUDGET_MS") absolute budget"
 	FAILED=1
-elif [ "$TOTAL_MS" -gt "$GATE_TARGET_MS" ]; then
+elif [ "$TOTAL_MS" -gt "$GATE_TARGET_MS" ] && [ "$GATE_BUDGET_MS" -gt 0 ]; then
 	BUDGET_NOTE="over target, under budget"
 	echo "budget: ok — over the $(fmt_ms "$GATE_TARGET_MS") target but under the $(fmt_ms "$GATE_BUDGET_MS") ceiling"
 	annotate warning "fast gate took $(fmt_ms "$TOTAL_MS"), over the $(fmt_ms "$GATE_TARGET_MS") target"
+elif [ "$TOTAL_MS" -gt "$GATE_TARGET_MS" ]; then
+	# No ceiling set (the local default): report the number, judge nothing.
+	BUDGET_NOTE="over target, no ceiling enforced"
+	echo "budget: advisory — $(fmt_ms "$TOTAL_MS"), over the $(fmt_ms "$GATE_TARGET_MS") target; no ceiling enforced (set GATE_BUDGET_MS to enforce one)"
 else
 	BUDGET_NOTE="under target"
 	echo "budget: ok — under the $(fmt_ms "$GATE_TARGET_MS") target"

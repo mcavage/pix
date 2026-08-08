@@ -13,8 +13,14 @@ test("Node test workers cannot strand CI after results complete", () => {
 	assert.match(gate, /node --test --test-force-exit --test-concurrency=4/);
 });
 
-test("local and CI timing budgets remain explicit", () => {
-	assert.match(gate, /GATE_BUDGET_MS="\$\{GATE_BUDGET_MS:-34000\}"/);
+test("the timing ceiling is advisory locally and enforced in exactly one place: CI", () => {
+	// The local default is 0 (off): a correct-but-slow suite must not fail a
+	// developer's build on wall time alone, which is what the stale 34000 ms
+	// ceiling had started doing. The gate still measures and still reports
+	// every over-GATE_SLOW_MS test, so the signal survives the un-gating.
+	assert.match(gate, /GATE_BUDGET_MS="\$\{GATE_BUDGET_MS:-0\}"/);
+	// CI remains the one place a genuine cliff is caught before merge, and it
+	// must stay an explicit number rather than inheriting the off-by-default.
 	assert.match(workflow, /GATE_BUDGET_MS: "75000"/);
 });
 

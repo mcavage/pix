@@ -5,16 +5,18 @@
 #
 #   gate  — the FAST gate: build, go vet, NON-race `go test`, node --test,
 #           tsc --noEmit, the open-core boundary, and (once it exists) the
-#           rename guard. This job IS TIMED: scripts/gate.sh enforces an
-#           local `make gate` keeps the ABSOLUTE 34 s ceiling (30 s target).
-#           GitHub's shared x86 runner is measured separately with a fixed 75 s
-#           ceiling (60 s target) because the same uncached Go suite runs
-#           slower there. Both are absolute, reviewable budgets, never "last
-#           run x 2".
+#           rename guard. This job IS TIMED, and it is the ONLY place the
+#           timing ceiling is enforced: GitHub's shared x86 runner gets a fixed
+#           75 s ceiling (60 s target), set explicitly below. A local
+#           `make gate` measures and reports the same numbers but enforces no
+#           ceiling (scripts/gate.sh defaults GATE_BUDGET_MS to 0), because a
+#           correct-but-slow suite should not fail a developer's build; see the
+#           rationale block in scripts/gate.sh. The CI number is absolute and
+#           reviewable, never "last run x 2".
 #
 #   race  — gofmt + `go test -race ./...`. NO TIMING BUDGET APPLIES HERE, at
 #           all. The race detector multiplies wall time by design, so timing it
-#           would either make the 34 s number meaningless or make the job
+#           would either make the gate's number meaningless or make the job
 #           flaky. It is a correctness job; it takes as long as it takes.
 #
 #   metrics — the FULL corpus/coverage/LOC report (AC-GATE-03/04): `go test
@@ -87,9 +89,9 @@ jobs:
       - name: gate
         run: bash scripts/gate.sh
         env:
-          # Local steady-state remains 34s/30s (scripts/gate.sh defaults).
-          # GitHub's shared x86 runner is slower for the uncached Go suite
-          # despite a warmed build cache, so CI gets its own wider budget.
+          # This is the ONLY enforced ceiling: scripts/gate.sh defaults
+          # GATE_BUDGET_MS to 0 (advisory) so a local run never hard-fails on
+          # wall time, and CI opts back in explicitly here.
           GATE_BUDGET_MS: "75000"
           GATE_TARGET_MS: "60000"
           GATE_SLOW_MS: "1000"
