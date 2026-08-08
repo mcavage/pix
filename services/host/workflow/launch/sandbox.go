@@ -195,9 +195,14 @@ func Rm(env hostenv.Env, out, errOut io.Writer, opts RmOptions) error {
 			fmt.Fprintf(out, "removed %s (forced)\n", n)
 			continue
 		}
-		// The session key IS the default sandbox name, so a default-named box's
-		// lease state is found and cleared; a --name'd box has none and is simply
-		// removed (bounded, non-force) with nothing to clear.
+		// The final sandbox name is also its session key, so default and explicit
+		// names both find and clear their own lease state. TriggerExplicit is
+		// deliberate for both individually named arguments and `--all`: each is a
+		// direct user removal request, so it may remove an unrecorded pix-* box and
+		// ignores a keep marker. The bulk boundary is still strict: discovery is
+		// filtered to pix-* names, --force cannot combine with --all, and a live
+		// reference still returns kept-busy unless the user names one box with
+		// explicit --force.
 		res := TeardownSandbox(env, n, n, TriggerExplicit, opts.Teardown)
 		switch {
 		case res.Removed():
