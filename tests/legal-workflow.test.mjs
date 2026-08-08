@@ -127,6 +127,45 @@ test("the legal gate itself waits on nothing in publish (it cannot be gated by t
 	assert.deepEqual(publishJobs.get("legal-gate").needs, []);
 });
 
+// The SAME reasoning, for the functional suite. This half was missing, and its
+// absence is not hypothetical: v0.1.27 published an image, git tags, release
+// binaries and a Homebrew tap PR while the `test` workflow was red on the very
+// same commit, because publish.yml and test.yml were independent workflows and
+// GitHub ordered neither against the other. `test-gate` now closes that, and
+// these assertions are what stop a future edit from quietly reopening it --
+// dropping one `needs:` entry would otherwise restore the exact 0.1.27 shape
+// with nothing complaining.
+test("test.yml is callable as a reusable workflow AND still runs on PRs", () => {
+	assert.match(testWorkflow, /^\s*workflow_call:/m, "test.yml must declare `on: workflow_call` or publish.yml cannot call it in-graph");
+	assert.match(testWorkflow, /^\s*pull_request:/m, "test.yml must still run on PRs in its own right");
+});
+
+test("publish.yml calls test.yml as an in-graph job (not a workflow racing it)", () => {
+	const gate = publishJobs.get("test-gate");
+	assert.ok(gate, "publish.yml lost its test-gate job: the functional suite would stop gating the release");
+	assert.match(gate.uses ?? "", /\.github\/workflows\/test\.yml$/);
+});
+
+test("NOTHING is pushed before the test gate: build and merge both depend on it", () => {
+	for (const job of ["build", "merge"]) {
+		assert.ok(
+			publishJobs.get(job).needs.includes("test-gate"),
+			`${job} must name test-gate directly: it is the first job that pushes ${job === "build" ? "layers by digest" : "a versioned tag"}`,
+		);
+	}
+});
+
+test("every publish job that can push, tag, or release is downstream of test-gate", () => {
+	for (const job of ["build", "merge", "provenance", "bump", "release-binaries", "bump-tap"]) {
+		assert.ok(publishJobs.has(job), `publish.yml lost its ${job} job`);
+		assert.ok(ancestors(publishJobs, job).has("test-gate"), `${job} is not transitively gated by test-gate`);
+	}
+});
+
+test("the test gate itself waits on nothing in publish (it cannot be gated by the thing it gates)", () => {
+	assert.deepEqual(publishJobs.get("test-gate").needs, []);
+});
+
 test("legal.yml's secret-scan job fetches FULL history, not just the checked-out tip", () => {
 	const secretScan = legalJobs.get("secret-scan").body;
 	assert.match(secretScan, /fetch-depth: 0/);
