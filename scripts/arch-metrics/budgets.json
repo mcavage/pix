@@ -9,7 +9,8 @@
       "exits": 15
     },
     "pix/host/cli": {
-      "prod_loc": 475,
+      "_prod_loc_note": "475 -> 502: Deps.Config() now warns about config keys this build ignores, so a typo is surfaced instead of silently doing nothing. A deliberate, reviewed raise of a shrink-only budget, which is the only way this number is allowed to move.",
+      "prod_loc": 502,
       "exports": 21,
       "globals": 2,
       "edges": 2,

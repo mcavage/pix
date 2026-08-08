@@ -124,21 +124,21 @@ func TestConfigCmd_GetUnknownKey(t *testing.T) {
 	}
 }
 
-// TestConfigCmd_GetRetiredKey: knowledge_bundles is a distinct refusal (the
-// built-in OKF knowledge service was retired), not a plain "unknown key" —
-// the retired-key notice provision.ConfigValue owns must survive the CLI
-// migration unchanged.
-func TestConfigCmd_GetRetiredKey(t *testing.T) {
+// TestConfigCmd_GetRemovedKey: a key that no longer exists must still REFUSE
+// with exit 2 and a clean stdout. It used to carry a bespoke "retired" notice
+// naming what replaced it; that courtesy is gone (pix has no released users to
+// keep recovery paths for) and these now fall through to the generic
+// unknown-key error. The refusal and the clean stdout are the parts that
+// mattered -- `pix config get` is what the Makefile shells out to, so a
+// refusal that printed to stdout would be read as a value.
+func TestConfigCmd_GetRemovedKey(t *testing.T) {
 	d, out, _ := configDeps(t)
 	err := runConfigParse([]string{"config", "get", "knowledge_bundles"}, d)
 	if err == nil {
-		t.Fatal("expected config get knowledge_bundles to refuse (retired key)")
+		t.Fatal("expected config get knowledge_bundles to refuse: the key does not exist")
 	}
 	if cli.ExitCode(err) != 2 {
 		t.Errorf("exit code = %d, want 2", cli.ExitCode(err))
-	}
-	if !strings.Contains(err.Error(), "retired") {
-		t.Errorf("error should say retired, got %v", err)
 	}
 	if out.String() != "" {
 		t.Errorf("stdout must stay clean on a refusal, got %q", out.String())
@@ -195,13 +195,16 @@ func TestConfigCmd_SetArityError(t *testing.T) {
 	}
 }
 
-// TestConfigCmd_SetRetiredKey: host.enabled (the removed `pix host` escape
-// hatch) must refuse rather than silently no-op.
-func TestConfigCmd_SetRetiredKey(t *testing.T) {
+// TestConfigCmd_SetRemovedKey: host.enabled (the deleted `pix host` escape
+// hatch) must REFUSE rather than silently no-op. Silently accepting a set for a
+// key nothing reads is the failure mode worth guarding: the user walks away
+// believing they configured something. The wording no longer matters, the
+// non-zero exit does.
+func TestConfigCmd_SetRemovedKey(t *testing.T) {
 	d, _, _ := configDeps(t)
 	err := runConfigParse([]string{"config", "set", "host.enabled", "true"}, d)
-	if err == nil || !strings.Contains(err.Error(), "retired") {
-		t.Errorf("config set host.enabled: err=%v, want a retired-key refusal", err)
+	if err == nil || cli.ExitCode(err) != 2 {
+		t.Errorf("config set host.enabled: err=%v, want a refusal (exit 2), never a silent no-op", err)
 	}
 }
 

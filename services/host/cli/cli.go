@@ -61,11 +61,38 @@ type Deps struct {
 
 // Config loads config.toml once per command. The error is returned rather than
 // fatal so a command can decide whether it can proceed without one.
+//
+// It also warns, ONCE per command (the memoization below is what bounds it),
+// about any key in the file this build does nothing with. Unrecognized keys
+// used to be dropped in silence, which made a typo the worst-behaved mistake
+// available: `memory_watchr_model` parsed fine, did nothing, and said nothing,
+// so the only symptom was a setting that would not take effect.
 func (d *Deps) Config() (*config.Config, error) {
 	if d.cfg == nil && d.cfgErr == nil {
 		d.cfg, d.cfgErr = config.Load()
+		d.warnUnknownConfigKeys()
 	}
 	return d.cfg, d.cfgErr
+}
+
+// warnUnknownConfigKeys reports ignored config keys on stderr. Deliberately
+// stderr and never Out: `pix config get` is what the Makefile shells out to, so
+// a warning on stdout would be read as the value.
+//
+// A warning, not an error: an unrecognized key leaves a perfectly usable
+// config, and refusing to start over one would turn a cosmetic mistake into an
+// unusable pix.
+func (d *Deps) warnUnknownConfigKeys() {
+	if d.cfg == nil || d.Err == nil {
+		return
+	}
+	unknown := d.cfg.UnknownKeys()
+	if len(unknown) == 0 {
+		return
+	}
+	fmt.Fprintf(d.Err, "pix: config.toml has %d key(s) this build does nothing with: %s\n",
+		len(unknown), strings.Join(unknown, ", "))
+	fmt.Fprintf(d.Err, "     Check for a typo, or delete them (`pix config path` to find the file).\n")
 }
 
 // SetConfig injects a config, for tests and for commands that have already
