@@ -75,23 +75,22 @@ func TestMemoryHostHelpDescribesSnapshotRestoreOnly(t *testing.T) {
 	}
 }
 
-// TestHostBackupRestoreRetireToMemorySnapshot is a REAL BINARY test of the
-// out-of-process retirement contract (retired_host_test.go only exercises
-// retiredHostMessage in-process): the actual compiled pix-host, invoked the
-// way a stale script or launchd plist would, must exit 2, print a
-// PIX_RETIRED marker naming the live `memory snapshot`/`memory restore`
-// primitives on stderr, write nothing to stdout, and must NOT start a daemon
-// or touch the filesystem under MEMORY_DB.
-func TestHostBackupRestoreRetireToMemorySnapshot(t *testing.T) {
+// TestHostRemovedSubcommandsAreInert is a REAL BINARY test of the
+// out-of-process refusal: the actual compiled pix-host, invoked the way a
+// stale script or launchd plist would, must exit 2, write nothing to stdout,
+// and must NOT start a daemon or touch the filesystem under MEMORY_DB.
+//
+// `backup`/`restore` used to answer with a PIX_RETIRED marker naming the live
+// `memory snapshot`/`memory restore` primitives. That courtesy went with the
+// retirement mechanism — they are now ordinary unknown subcommands. What is
+// asserted here is the half that was always the point: a subcommand pix-host
+// does not implement must be INERT, not partially executed.
+func TestHostRemovedSubcommandsAreInert(t *testing.T) {
 	if testing.Short() {
-		t.Skip("builds the real pix-host binary for a retirement-chain roundtrip; covered by the untimed race/metrics CI jobs")
+		t.Skip("builds the real pix-host binary for a CLI roundtrip; covered by the untimed race/metrics CI jobs")
 	}
 	bin := buildHostBinary(t)
-	cases := map[string]string{
-		"backup":  "pix-host memory snapshot PATH",
-		"restore": "pix-host memory restore PATH",
-	}
-	for sub, replacement := range cases {
+	for _, sub := range []string{"backup", "restore"} {
 		t.Run(sub, func(t *testing.T) {
 			dbPath := filepath.Join(t.TempDir(), "memory.db")
 			cmd := exec.Command(bin, sub)
@@ -107,17 +106,11 @@ func TestHostBackupRestoreRetireToMemorySnapshot(t *testing.T) {
 			if exit.ExitCode() != 2 {
 				t.Errorf("pix-host %s exit = %d, want 2", sub, exit.ExitCode())
 			}
-			if !strings.HasPrefix(stderr.String(), "PIX_RETIRED") {
-				t.Errorf("pix-host %s stderr = %q, want it to start with PIX_RETIRED", sub, stderr.String())
-			}
-			if !strings.Contains(stderr.String(), replacement) {
-				t.Errorf("pix-host %s stderr = %q, want it to name %q", sub, stderr.String(), replacement)
-			}
 			if strings.TrimSpace(stdout.String()) != "" {
 				t.Errorf("pix-host %s wrote to stdout: %q", sub, stdout.String())
 			}
 			if _, err := os.Stat(dbPath); err == nil {
-				t.Errorf("pix-host %s created %s; a retired surface must have no side effects", sub, dbPath)
+				t.Errorf("pix-host %s created %s; an unimplemented subcommand must have no side effects", sub, dbPath)
 			}
 		})
 	}

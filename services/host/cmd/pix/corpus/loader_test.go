@@ -322,4 +322,3 @@ func TestExtractKnownVerbsFromSource_MatchesTheRealBinary(t *testing.T) {
 		t.Errorf("ExtractKnownVerbsFromSource disagrees with the real `pix help --all` binary: only-in-binary=%v only-in-source=%v", onlyBinary, onlySource)
 	}
 }
-
