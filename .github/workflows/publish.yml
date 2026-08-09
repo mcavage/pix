@@ -164,9 +164,25 @@ jobs:
           mkdir -p "$HOME" "$HOME/.pi/agent/npm"
           npm install --global --ignore-scripts "$PI_PACKAGE"
           npm install --prefix "$HOME/.pi/agent/npm" --ignore-scripts "$TODO_PACKAGE"
+          # DISCOVER the renderer file, never hardcode its name: pi-tui 0.84.0
+          # moved the main-screen doRender() out of dist/tui.js into
+          # dist/tui-main-screen.js, and a pinned path silently pointed this smoke
+          # at a file with no anchor in it — the patch correctly warned, and the
+          # "assert patched" step failed the release instead of the drift being
+          # visible. Prefer the new name, fall back to the old one, and FAIL LOUD
+          # if neither exists rather than exporting an empty path.
+          tui_dist="$NPM_CONFIG_PREFIX/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/dist"
+          tui_js=""
+          for candidate in tui-main-screen.js tui.js; do
+            if [ -f "$tui_dist/$candidate" ]; then tui_js="$tui_dist/$candidate"; break; fi
+          done
+          if [ -z "$tui_js" ]; then
+            echo "::error::no pi-tui renderer found in $tui_dist (looked for tui-main-screen.js, tui.js)"; exit 1
+          fi
+          echo "patch smoke will target renderer: $tui_js"
           {
-            echo "TUI_JS=$NPM_CONFIG_PREFIX/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/dist/tui.js"
-            echo "TUI_INDEX=$NPM_CONFIG_PREFIX/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/dist/index.js"
+            echo "TUI_JS=$tui_js"
+            echo "TUI_INDEX=$tui_dist/index.js"
             echo "TODO_DIST=$HOME/.pi/agent/npm/node_modules/pi-manage-todo-list/dist"
           } >> "$GITHUB_ENV"
 

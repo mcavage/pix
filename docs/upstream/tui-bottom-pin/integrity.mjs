@@ -5,7 +5,16 @@ import { pathToFileURL } from "node:url";
 import { TerminalEmulator } from "./emulator.mjs";
 
 const tuiIndex = process.env.PI_TUI_INDEX ?? "/usr/local/share/npm-global/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/dist/index.js";
-const { TUI, CURSOR_MARKER } = await import(pathToFileURL(tuiIndex).href);
+// pi-tui 0.84.0 split the renderer and RENAMED the class: the main-screen
+// renderer (the one this harness drives, and the one the bottom-pin patch
+// targets) is now exported as `TuiMainScreen`, with `TuiAltScreen` alongside it
+// for the new fullscreen mode. Accept either name so the harness runs against a
+// pre-0.84 and post-0.84 install without a second copy.
+const { TuiMainScreen, TUI, CURSOR_MARKER } = await import(pathToFileURL(tuiIndex).href);
+const MainScreen = TuiMainScreen ?? TUI;
+if (typeof MainScreen !== "function") {
+	throw new Error(`pi-tui at ${tuiIndex} exports neither TuiMainScreen nor TUI; the renderer moved again`);
+}
 
 let failures = 0;
 const check = (cond, msg) => { console.log((cond ? "  PASS  " : "  FAIL  ") + msg); if (!cond) failures++; };
@@ -14,7 +23,7 @@ const ROWS = 12, COLS = 80;
 function harness() {
 	const emu = new TerminalEmulator(COLS, ROWS);
 	const term = { columns: COLS, rows: ROWS, write: (s) => emu.write(s), hideCursor() {}, showCursor() {}, start() {}, stop() {} };
-	const tui = new TUI(term);
+	const tui = new MainScreen(term);
 	const src = { lines: [], render() { return this.lines.slice(); } };
 	tui.addChild(src);
 	return { emu, tui, src };
