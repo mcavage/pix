@@ -8,7 +8,16 @@ import { pathToFileURL } from "node:url";
 import { TerminalEmulator } from "./emulator.mjs";
 
 const tuiIndex = process.env.PI_TUI_INDEX ?? "/usr/local/share/npm-global/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/dist/index.js";
-const { TUI, CURSOR_MARKER } = await import(pathToFileURL(tuiIndex).href);
+// pi-tui 0.84.0 split the renderer and RENAMED the class: the main-screen
+// renderer (the one this harness drives, and the one the bottom-pin patch
+// targets) is now exported as `TuiMainScreen`, with `TuiAltScreen` alongside it
+// for the new fullscreen mode. Accept either name so the harness runs against a
+// pre-0.84 and post-0.84 install without a second copy.
+const { TuiMainScreen, TUI, CURSOR_MARKER } = await import(pathToFileURL(tuiIndex).href);
+const MainScreen = TuiMainScreen ?? TUI;
+if (typeof MainScreen !== "function") {
+	throw new Error(`pi-tui at ${tuiIndex} exports neither TuiMainScreen nor TUI; the renderer moved again`);
+}
 
 const COLUMNS = 80;
 const ROWS = 12; // visible height -> buffer (19 lines) is taller -> bottom-anchored
@@ -80,7 +89,7 @@ function check(cond, msg) {
 console.log("=== pi-tui bottom-block jitter test (ROWS=%d) ===", ROWS);
 
 const { term, emu } = makeTerminal();
-const tui = new TUI(term);
+const tui = new MainScreen(term);
 // 15 chat lines (CHAT_00..CHAT_14) -> total 19 lines > 12 => viewport scrolled
 const src = makeSource(buildBuffer(chat(15)));
 tui.addChild(src);
