@@ -178,18 +178,19 @@ func TestRunMcpAuth_AbsentSbxExitsServiceDown(t *testing.T) {
 	wantServiceDown(t, code, out, "would run: sbx mcp auth --all")
 }
 
-// TestRunMcpBundle_AbsentSbxExitsServiceDown: `mcp bundle` promises registering
-// the catalog bundle; sbx-absent must not exit 0.
-func TestRunMcpBundle_AbsentSbxExitsServiceDown(t *testing.T) {
-	code, out := runTypedMcp(t, []string{"bundle"}, nil)
-	wantServiceDown(t, code, out, "would run: sbx mcp bundle add")
+// TestRunMcpAddURL_AbsentSbxExitsServiceDown: `mcp add --url` promises to
+// register a hosted server; sbx-absent must not exit 0.
+func TestRunMcpAddURL_AbsentSbxExitsServiceDown(t *testing.T) {
+	code, out := runTypedMcp(t, []string{"add", "acme", "--url", "https://mcp.acme.test/mcp"}, nil)
+	wantServiceDown(t, code, out, "would run: sbx mcp add acme --url https://mcp.acme.test/mcp")
 }
 
-// TestRunMcpRegister_AbsentSbxExitsServiceDownNoConfigMutation: `mcp register`
-// promises to register servers with the gateway; sbx-absent must exit 3, print
-// the exact would-run commands, and leave config.toml byte-for-byte untouched
-// (mcp.RegisterServers never writes config — only `pix config set` may).
-func TestRunMcpRegister_AbsentSbxExitsServiceDownNoConfigMutation(t *testing.T) {
+// TestRunMcpAdd_AbsentSbxExitsServiceDownNoConfigMutation: `mcp add` (bare, the
+// builder path) promises to register servers with the gateway; sbx-absent must
+// exit 3, print the exact would-run commands, and leave config.toml
+// byte-for-byte untouched (mcp.RegisterServers never writes config — only `pix
+// config set` may).
+func TestRunMcpAdd_AbsentSbxExitsServiceDownNoConfigMutation(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.toml")
 	const cfgContent = "mcp = [\"slack\"]\n"
@@ -210,7 +211,7 @@ func TestRunMcpRegister_AbsentSbxExitsServiceDownNoConfigMutation(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	code, out := runTypedMcp(t, []string{"register"}, map[string]string{
+	code, out := runTypedMcp(t, []string{"add"}, map[string]string{
 		"PIX_CONFIG": cfgPath,
 		"PATH":       binDir, // pix-host resolvable; sbx is not
 	})
@@ -221,6 +222,6 @@ func TestRunMcpRegister_AbsentSbxExitsServiceDownNoConfigMutation(t *testing.T) 
 		t.Fatal(err)
 	}
 	if string(after) != cfgContent {
-		t.Errorf("config.toml mutated by `mcp register`:\n got: %q\nwant: %q", string(after), cfgContent)
+		t.Errorf("config.toml mutated by `mcp add`:\n got: %q\nwant: %q", string(after), cfgContent)
 	}
 }

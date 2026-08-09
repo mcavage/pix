@@ -24,7 +24,6 @@ import (
 
 	"pix/host/config"
 	"pix/host/hostenv"
-	"pix/host/mcp"
 	"pix/host/secret"
 	"pix/host/sys"
 	"pix/host/sys/systest"
@@ -66,7 +65,7 @@ func TestVerifyCatalogMCPReady_Ready(t *testing.T) {
 	}
 }
 
-func TestVerifyCatalogMCPReady_UnregisteredNamesBundleAndAuth(t *testing.T) {
+func TestVerifyCatalogMCPReady_UnregisteredNamesAddAndAuth(t *testing.T) {
 	env := catalogGateEnv(t, map[string]string{
 		"sbx mcp ls": "atlassian\n", // notion positively missing
 	})
@@ -74,7 +73,7 @@ func TestVerifyCatalogMCPReady_UnregisteredNamesBundleAndAuth(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unregistered catalog server must fail the gate")
 	}
-	if !strings.Contains(err.Error(), "pix mcp bundle") || !strings.Contains(err.Error(), "pix mcp auth notion") {
+	if !strings.Contains(err.Error(), "pix mcp add notion") || !strings.Contains(err.Error(), "pix mcp auth notion") {
 		t.Errorf("error must carry the exact repair commands, got: %v", err)
 	}
 }
@@ -160,7 +159,7 @@ func TestReconcileOnboarding_CatalogGateLeavesFileAndConfig(t *testing.T) {
 	if slices.Contains(cfg.MCP, "notion") {
 		t.Errorf("notion must NOT be persisted while unregistered: %v", cfg.MCP)
 	}
-	if !strings.Contains(out.String(), "pix mcp bundle") {
+	if !strings.Contains(out.String(), "pix mcp add notion") {
 		t.Errorf("refusal must name the exact repair command, got:\n%s", out.String())
 	}
 }
@@ -232,44 +231,6 @@ func TestSbxModelKeyState_HangingProbeUnknownProceeds(t *testing.T) {
 
 // --- finding 13: mcp load argument validation --------------------------------
 
-func TestParseMcpLoadArgs(t *testing.T) {
-	dir := t.TempDir()
-	file := filepath.Join(dir, "f")
-	if err := os.WriteFile(file, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	ok := []struct {
-		argv     []string
-		name, ws string
-	}{
-		{[]string{"slack"}, "slack", "."},
-		{[]string{"slack", dir}, "slack", dir},
-	}
-	for _, tc := range ok {
-		name, ws, err := mcp.ParseMcpLoadArgs(tc.argv)
-		if err != nil || name != tc.name || ws != tc.ws {
-			t.Errorf("mcp.ParseMcpLoadArgs(%v) = (%q,%q,%v), want (%q,%q,nil)", tc.argv, name, ws, err, tc.name, tc.ws)
-		}
-	}
-
-	bad := map[string][]string{
-		"no args":            {},
-		"blank name":         {"   "},
-		"empty name":         {""},
-		"flag as name":       {"--sandbox"},
-		"flag as dir":        {"slack", "--dir"},
-		"extra arg":          {"slack", dir, "extra"},
-		"nonexistent dir":    {"slack", filepath.Join(dir, "missing")},
-		"file not directory": {"slack", file},
-	}
-	for label, argv := range bad {
-		if _, _, err := mcp.ParseMcpLoadArgs(argv); err == nil {
-			t.Errorf("%s: mcp.ParseMcpLoadArgs(%v) must fail", label, argv)
-		}
-	}
-}
-
 // TestMcpLoadSandbox_IsRunsOwnDefaultName: `pix mcp load NAME [DIR]` must
 // target the SAME box `pix run DIR` would, and it derives that name rather than
 // looking it up — U04e deleted the receipt store the old resolver scanned, and
@@ -286,22 +247,5 @@ func TestMcpLoadSandbox_IsRunsOwnDefaultName(t *testing.T) {
 	}
 	if !strings.HasPrefix(got, "pix-") {
 		t.Errorf("derived sandbox %q must be in the pix-* scope pix rm owns", got)
-	}
-}
-
-// TestParseMcpLoadArgs_FailureIsInertOnDisk: a usage failure returns before any
-// sandbox name is derived and before sbx is consulted, so nothing downstream
-// can run or write.
-func TestParseMcpLoadArgs_FailureIsInertOnDisk(t *testing.T) {
-	sd := t.TempDir()
-	if _, _, err := mcp.ParseMcpLoadArgs([]string{"slack", filepath.Join(sd, "nope")}); err == nil {
-		t.Fatal("expected a usage failure")
-	}
-	entries, err := os.ReadDir(sd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 0 {
-		t.Errorf("usage failure must write nothing to launcher state, found %v", entries)
 	}
 }

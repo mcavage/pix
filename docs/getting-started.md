@@ -111,7 +111,7 @@ Both are **external** integrations, not built into `pix-host`. Register
 either the same way as any other MCP server:
 
 ```bash
-pix mcp register
+pix mcp add
 pix mcp ls
 ```
 

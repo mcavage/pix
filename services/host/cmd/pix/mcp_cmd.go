@@ -13,7 +13,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 
 	"pix/host/cli"
@@ -27,24 +26,34 @@ import (
 // mcpCmd is a child of the kong root. There is no default subcommand: a bare `pix
 // mcp` is an incomplete invocation, exit 2.
 func (c *mcpCmd) Help() string {
-	return `Wire MCP servers into the sbx gateway, and into a running sandbox.
+	return `Wire MCP servers into the sbx gateway.
 
 Registration is HOST state: it makes a server known to the gateway, which is
-not the same as a sandbox seeing its tools. A session sees a server's tools
-only once it was preloaded at create or attached live ('pix mcp load'). Neither
-'pix status' nor 'pix doctor' can see inside a session, so they report host
-registration and say so.
+not the same as a sandbox seeing its tools. A sandbox picks up registered
+servers when it launches, so add first, then start (or restart) the sandbox.
+Neither 'pix status' nor 'pix doctor' can see inside a running session, so they
+report host registration and say so.
 
-Remote catalog servers (notion/atlassian/granola) come from 'pix mcp bundle',
-then 'pix mcp auth --all'.`
+'add' takes three shapes:
+  pix mcp add <name> --url <url>   a hosted server, by URL
+  pix mcp add <name>               a server pix already knows how to build,
+                                   including its 1Password credential wrapper
+  pix mcp add                      every server in your config's mcp list
+
+A hosted server usually needs 'pix mcp auth <name>' after it is added.`
 }
 
+// The surface is deliberately three verbs. It was six, and the extra three
+// taught more than they did: `register` vs a native `sbx mcp add` was a
+// distinction only the implementation cared about (both register a server; one
+// happens to build the command for you), `bundle` was a shortcut for three
+// named SaaS vendors that has no business in a public CLI, and `load` attached
+// a server to a running sandbox, which is a recreate away in a stack whose
+// sandboxes are disposable.
 type mcpCmd struct {
-	Register mcpRegisterCmd `cmd:"" help:"Register local stdio MCP servers with the gateway. (WRITES)"`
-	Ls       mcpLsCmd       `cmd:"" help:"List servers registered with the gateway (host state, not your sandbox)."`
-	Load     mcpLoadCmd     `cmd:"" help:"Attach a registered server to the RUNNING sandbox — live, no recreate. (WRITES)"`
-	Auth     mcpAuthCmd     `cmd:"" passthrough:"" help:"Authorize remote OAuth servers (sbx mcp auth; e.g. --all)."`
-	Bundle   mcpBundleCmd   `cmd:"" passthrough:"" help:"Register the shipped public catalog bundle. (WRITES)"`
+	Add  mcpAddCmd  `cmd:"" help:"Register a server with the gateway. (WRITES)"`
+	Ls   mcpLsCmd   `cmd:"" help:"List servers registered with the gateway (host state, not your sandbox)."`
+	Auth mcpAuthCmd `cmd:"" passthrough:"" help:"Authorize remote OAuth servers (sbx mcp auth; e.g. --all)."`
 }
 
 // mcpFailed is the ONE mapping from an mcp failure to an exit code: it prints
@@ -67,19 +76,54 @@ func mcpFailed(d *cli.Deps, sub string, err error) error {
 	return cli.SilentError{Code: 1}
 }
 
-// mcpRegisterCmd registers the requested local stdio servers (default: the local
-// ones in cfg.MCP) — `make mcp-register` without the repo.
-type mcpRegisterCmd struct {
-	Names []string `arg:"" optional:"" help:"Servers to register (default: every local server in the resolved mcp list)."`
+// mcpAddCmd is the ONE registration verb. It covers what used to be three:
+// a hosted server by URL, a server pix knows how to build (config's mcp list,
+// an active pack's integrations, google-workspace), and the previously
+// hardcoded hosted names. "Which verb registers my server" is not a question a
+// user should have to answer.
+type mcpAddCmd struct {
+	Names []string `arg:"" optional:"" help:"Server name(s). Omit to register every server in the config mcp list."`
+	URL   string   `help:"Register NAME as a hosted server at this URL." placeholder:"URL"`
 }
 
-func (c *mcpRegisterCmd) Run(d *cli.Deps) error {
+func (c *mcpAddCmd) Run(d *cli.Deps) error {
+	// --url describes exactly one server, so it cannot pair with a name list or
+	// with the bare "everything in config" form. Caught here rather than
+	// silently registering the first name at that URL.
+	if c.URL != "" {
+		if len(c.Names) != 1 {
+			return cli.Usagef("mcp add --url: needs exactly one server name")
+		}
+		return mcpFailed(d, "add", mcp.AddRemoteServers(d.Out, d.Err,
+			[]mcp.CatalogServer{{Name: c.Names[0], URL: c.URL}}))
+	}
+	// A name pix already has a URL for registers without making the user go
+	// find it again. Any remaining name falls through to the builder path,
+	// which is the one that can construct a credentialed local command.
+	var known []mcp.CatalogServer
+	var rest []string
+	for _, n := range c.Names {
+		if url, ok := mcp.KnownRemoteURL(n); ok {
+			known = append(known, mcp.CatalogServer{Name: n, URL: url})
+			continue
+		}
+		rest = append(rest, n)
+	}
+	if len(known) > 0 {
+		if err := mcp.AddRemoteServers(d.Out, d.Err, known); err != nil {
+			return mcpFailed(d, "add", err)
+		}
+		fmt.Fprintln(d.Out, "Authorize it with: pix mcp auth "+known[0].Name)
+		if len(rest) == 0 {
+			return nil
+		}
+	}
 	cfg, _, err := workspace.LoadResolvedConfig()
 	if err != nil {
-		return mcpFailed(d, "register", fmt.Errorf("loading config: %w", err))
+		return mcpFailed(d, "add", fmt.Errorf("loading config: %w", err))
 	}
 	env := defaultShellEnv()
-	return mcpFailed(d, "register", registerServers(cfg, env, d.Out, c.Names, launcher.FindHostBinary, packinfo.ActiveContainerMCP(cfg)))
+	return mcpFailed(d, "add", registerServers(cfg, env, d.Out, rest, launcher.FindHostBinary, packinfo.ActiveContainerMCP(cfg)))
 }
 
 // mcpLsCmd shells `sbx mcp ls`, degrading honestly when sbx is absent (e.g. inside
@@ -95,47 +139,6 @@ func (c *mcpLsCmd) Run(d *cli.Deps) error {
 	return mcpFailed(d, "ls", mcp.RunMcpLsCore(exec.LookPath, d.Out, d.In, d.Err, c.Args...))
 }
 
-// mcpLoadCmd attaches an ALREADY-REGISTERED server to the RUNNING sandbox for DIR.
-// Connected agents see the new tools at once (MCP tools/list_changed).
-type mcpLoadCmd struct {
-	Name string `arg:"" help:"A server already registered with the gateway."`
-	Dir  string `arg:"" optional:"" default:"." help:"Workspace whose sandbox to attach to (default: cwd). A --name'd sandbox: sbx mcp load NAME --sandbox BOX."`
-}
-
-func (c *mcpLoadCmd) Run(d *cli.Deps) error {
-	// Arity is kong's; this is the VALIDATION a parser cannot do — a blank name, and
-	// a workspace `pix run` would refuse.
-	name, ws, err := mcp.ParseMcpLoadArgs(mcpLoadArgs(c.Name, c.Dir))
-	if err != nil {
-		return cli.Usagef("mcp load: %v", err)
-	}
-	// The sandbox is DERIVED from the validated workspace through the SAME helper
-	// `pix run` defaults its name with, so the two can never disagree about which box
-	// a workspace owns. A `--name`d sandbox is addressed directly instead.
-	sandbox := resolveSandboxName("", ws)
-	if _, err := exec.LookPath("sbx"); err != nil {
-		// A command that promises to attach a server must not exit 0 having done
-		// nothing (mcp.ErrSbxUnavailable); McpWouldRun prints the recovery command
-		// to stderr, since this is an error report, not output.
-		return mcpFailed(d, "load", mcp.McpWouldRun(d.Err, "mcp", "load", name, "--sandbox", sandbox))
-	}
-	cmd := exec.Command("sbx", "mcp", "load", name, "--sandbox", sandbox)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, d.Out, d.Err
-	// The load either happened or it did not, and `sbx mcp load`'s own exit is the
-	// whole answer: this command records nothing about it, because "pix loaded this
-	// once" is not the state of a live session.
-	return mcpFailed(d, "load", mcp.ExecSbxMcpLoad(cmd))
-}
-
-// mcpLoadArgs rebuilds the pair ParseMcpLoadArgs validates: the shared statement
-// of the load contract, of which kong took only the counting.
-func mcpLoadArgs(name, dir string) []string {
-	if dir == "" || dir == "." {
-		return []string{name}
-	}
-	return []string{name, dir}
-}
-
 // mcpAuthCmd is a thin passthrough to `sbx mcp auth <args...>`: the hosted
 // control-plane OAuth flow, without the Makefile.
 type mcpAuthCmd struct {
@@ -144,36 +147,4 @@ type mcpAuthCmd struct {
 
 func (c *mcpAuthCmd) Run(d *cli.Deps) error {
 	return mcpFailed(d, "auth", mcp.RunSbxMcpCore(exec.LookPath, d.Out, d.In, d.Err, append([]string{"mcp", "auth"}, c.Args...)))
-}
-
-// mcpBundleCmd manages the shipped public MCP catalog bundle. Bare (or `add`)
-// registers the pinned set matching this build; anything else forwards verbatim.
-type mcpBundleCmd struct {
-	Args []string `arg:"" optional:"" passthrough:"all" help:"add (default) | ls | rm ... — forwarded to 'sbx mcp bundle'."`
-}
-
-func (c *mcpBundleCmd) Run(d *cli.Deps) error {
-	switch {
-	case len(c.Args) == 0 || (len(c.Args) == 1 && c.Args[0] == "add"):
-		// The default add is a fixed, non-interactive registration (the shipped
-		// catalog bundle, no user-supplied URL to authorize), so a bounded
-		// failed-attempt retry is safe here: a wrong grammar fails at argv
-		// parse time, before any registration side effect. RunBundleAdd tries
-		// the current --url grammar first, falls back to the positional
-		// grammar on a recognized mismatch, and — ONLY when sbx has no `mcp
-		// bundle` subcommand at all (sbx v0.38+) — falls back further to
-		// registering the three shipped catalog entries individually via
-		// direct `sbx mcp add`.
-		name, url := mcp.McpCatalogBundleName, mcp.McpCatalogBundleURL(version)
-		return mcpFailed(d, "bundle", mcp.RunBundleAdd(exec.LookPath, d.Out, d.Err, name, url, mcp.McpCatalog))
-	case len(c.Args) == 2 && c.Args[0] == "rm" && c.Args[1] == mcp.McpCatalogBundleName:
-		// The one rm shape this host knows how to repair on a bundle-less sbx:
-		// removing exactly the shipped bundle name. Any other rm target forwards
-		// verbatim below — there is nothing this host can substitute for it.
-		return mcpFailed(d, "bundle", mcp.RunBundleRm(exec.LookPath, d.Out, d.Err, mcp.McpCatalogBundleName, mcp.McpCatalog))
-	case len(c.Args) >= 1 && c.Args[0] == "ls":
-		return mcpFailed(d, "bundle", mcp.RunBundleLs(exec.LookPath, d.Out, d.In, d.Err, mcp.McpCatalog, c.Args[1:]))
-	}
-	sbxArgs := append([]string{"mcp", "bundle"}, c.Args...)
-	return mcpFailed(d, "bundle", mcp.RunSbxMcpCore(exec.LookPath, d.Out, d.In, d.Err, sbxArgs))
 }

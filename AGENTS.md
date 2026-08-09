@@ -21,7 +21,7 @@ read it before changing things, and keep it current as you learn.
 | `skills/<name>/SKILL.md` | Agent Skills. The image bakes the generic `.dockerignore` allowlist; company-specific skills live in a private pack. Dev spine: plan · build · ship · code-review · architecture-audit · debug · tdd · verify · qa · enrich · healthcheck · onboarding · design-review |
 | pack `pack.toml` `[[setup]]` | Packs extend `pix setup --pack <path\|owner/repo\|git-url>` with typed, resumable host setup hooks. Each hook declares a repo-relative executable, `check_args`, `apply_args`, and `required`; Pix probes before apply and again afterward. Hook bytes plus argv are included in the Tier-1 host trust fingerprint. Optional hooks run with repeated `--with <id>`. An integration can set `setup = "<id>"` to defer its credential prompt to that hook. |
 | `extensions/*.ts` | local TypeScript extensions (`status.ts`, `timestamps.ts`, `compaction-continuation.ts`, and the rest of the harness) |
-| `services/host/` | **`pix-host`**: the single compiled **Go** binary for everything that runs on the HOST. Subcommands: `memory` (:11435, JSON-RPC store + snapshot/restore), `route <cmd>` (model router: pick\|compile\|show\|models), `mcp --list` (local stdio MCP servers this binary serves: **none**, every integration is external now), `plugin memory` (go-plugin self-exec), `serve` (the Suture tree: see the host-architecture section below). Host mode, the credential-broker slot and knowledge (:11436) were DELETED, not hidden: no code path reaches them (`hostmode_gone_test.go` is the sentinel). Private context is never compiled in: it ships as a **pack** (`docs/design/packs.md`) or a container/host-daemon integration, registered like any other server via `pix mcp register`. |
+| `services/host/` | **`pix-host`**: the single compiled **Go** binary for everything that runs on the HOST. Subcommands: `memory` (:11435, JSON-RPC store + snapshot/restore), `route <cmd>` (model router: pick\|compile\|show\|models), `mcp --list` (local stdio MCP servers this binary serves: **none**, every integration is external now), `plugin memory` (go-plugin self-exec), `serve` (the Suture tree: see the host-architecture section below). Host mode, the credential-broker slot and knowledge (:11436) were DELETED, not hidden: no code path reaches them (`hostmode_gone_test.go` is the sentinel). Private context is never compiled in: it ships as a **pack** (`docs/design/packs.md`) or a container/host-daemon integration, registered like any other server via `pix mcp add`. |
 | `services/host/cmd/pix/` | **`pix` launcher**: the user-facing binary. Install without cloning the repo (`make install` builds + symlinks `out/pix` and `out/pix-host`). `pix help --all` is the GENERATED source of truth for the verb tree; `docs/reference.md` §0 is the live command map. Verbs that no longer exist (`reset`/`state reset`/`host`/`upgrade`/`man`/`knowledge`/`kb`/`backup`/`restore`/`evals`/`route`(top-level)/`onboard`/`slack`/`gworkspace`, plus `agent new\|edit\|rm\|reassess` and `pack new\|add`) were DELETED outright, with no retirement notice or migration ledger: pix has no released users, so a removed surface gets the ordinary unknown-command answer. Runtime config: `~/.config/pix/config.toml`, managed by `pix config set <key> <value>` (never hand-edit). |
 | `~/.config/pix/config.toml` | the **single runtime config** (managed by `pix config set`/`get`: never hand-edit). Declares `services`, `mcp`, `google_workspace_account`, and the Ollama model names. The Makefile's operational targets (`run`, `serve`, `mcp-register`, `pull-models`, `doctor`) source these values by shelling out to `pix config get`, so make and the launcher can never drift. |
 | `themes/*.json` | `dracula` (default), `pix` |
@@ -153,23 +153,25 @@ pack repo: hand the user the diff to apply.
   daemon subprocess, so creds come from 1Password: the registered command is `op
   run --no-masking --env-file=config/op-refs.env -- pix-host <name>`, which
   resolves the op:// refs at spawn (`config/op-refs.env` is the single mechanism;
-  nothing stored in the registration or the VM). `pix mcp register` /
-  `make mcp-register` wire these. **Remote catalog** servers (notion/atlassian/
-  granola) are registered by URL: `pix mcp bundle` adds the shipped
-  `config/mcp-catalog.bundle.json` set in one step, then `pix mcp auth --all`
-  does the hosted-control-plane OAuth. **Every configured MCP server, and every
+  nothing stored in the registration or the VM). `pix mcp add` /
+  `make mcp-register` wire these. **Remote** servers are registered by URL:
+  `pix mcp add <name> --url <url>`, then `pix mcp auth <name>` for the
+  hosted-control-plane OAuth (`mcp.McpCatalog` is a small lookup table of
+  endpoints pix already knows, so those names need no `--url`). The CLI is
+  three verbs, `add`/`ls`/`auth`: `register` (a distinction only the
+  implementation cared about), `bundle` (three hardcoded SaaS vendors) and
+  `load` (live-attach) were DELETED. **Every configured MCP server, and every
   active or transient pack integration, is emitted as `--static-mcp <name>` at
   sandbox CREATE** (`--mcp` is gone; sbx rejects it). Registering a server
   (`sbx mcp add`) only makes it known to the gateway; a session sees its tools
-  only once it was preloaded at create or explicitly loaded. Servers come from
+  only once it was preloaded at create. Servers come from
   the `mcp` list in `~/.config/pix/config.toml` (via `pix config get
   mcp`, which also drives `serve`/`mcp-register`/`doctor`/`pull-models`).
-  Attach a server to an ALREADY-RUNNING sandbox with `pix mcp load <name>
-  [DIR]`: `sbx mcp load <name> --sandbox <box>`, the box DERIVED from DIR (the
-  name `pix run DIR` defaults to). It records nothing: U04e deleted the MCP
-  receipt store, because "pix loaded this once" is not the state of a live
+  A RUNNING sandbox catches up by being recreated: `pix rm BOX && pix run`
+  re-sends the full `--static-mcp` set. There is no live-attach and no receipt
+  store (U04e deleted it: "pix loaded this once" is not the state of a live
   session, yet `status`/`doctor` rendered it as `attached`; they report host
-  REGISTRATION only now. `pix rm BOX && pix run` also picks a new server up. Add a server = a tool
+  REGISTRATION only). Add a server = a tool
   table + handlers + `run<Name>()` using `mcpStdio` (newline-delimited JSON,
   what the gateway speaks; tolerates Content-Length on input). Transports live
   in `services/host/util.go`.
@@ -201,7 +203,7 @@ pack repo: hand the user the diff to apply.
   untrusted** (prompt-injection guard). No built-in guided setup remains: the
   old `pix gworkspace setup` wizard and its `--create-docs` companion MCP are
   retired (see `docs/design/gworkspace-externalization.md`). gog registers the
-  same generic way every other local stdio server does, `pix mcp register`
+  same generic way every other local stdio server does, `pix mcp add`
   (hardened flags baked into `mcp.GogHardenedArgv`), not a dedicated verb. See
   `docs/gworkspace.md` and the `gworkspace` skill.
 - **Private packs + host/container integrations (company-specific).** Open-core

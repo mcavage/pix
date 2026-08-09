@@ -304,9 +304,12 @@ user token is the canonical case), that identity is one named person's, never a
 shared team token and never handed to a second person to reuse.
 
 ```
-pix config set mcp <name>     # add a local stdio server to the launch set
-pix mcp register              # register configured stdio servers with the gateway
-pix mcp ls                    # list what's registered
+pix mcp add <name> --url <url>   # a hosted server, by URL
+pix mcp add <name>               # one pix knows how to build (config mcp list,
+                                 # a pack integration, google-workspace)
+pix mcp add                      # everything in the config mcp list
+pix mcp auth <name>              # hosted-control-plane OAuth
+pix mcp ls                       # list what's registered
 ```
 
 Skills never hardcode a vendor. They ask for a **capability** (`chat`, `docs`,
@@ -316,69 +319,44 @@ concrete provider: an `mcp` server, a `cli` on PATH, an `http` service, a
 every skill that reads that capability retargets at once. See the
 `capability-routing` skill for the resolution and fan-out rules.
 
-**Registration is not the same as being usable.** `sbx mcp add` (or `pix
-mcp register`) makes a server known to the gateway. It does not put that
+**Registration is not the same as being usable.** `pix mcp add` (or native
+`sbx mcp add`) makes a server known to the gateway. It does not put that
 server's tools in front of any running session. A native server is added one
 of three ways: `--command`/`--args` (a local process the gateway spawns
 host-side), `--url` (a remote endpoint, OAuth'd host-side), or `--local --url
 <manifest>` (a container the gateway runs from an OCI manifest). `sbx mcp get
 <name>` shows you exactly what's registered.
 
-**pix tolerates one sbx CLI grammar change at a time, never blindly.**
-`pix mcp bundle`'s default `add` and `pix mcp register`'s container (manifest/
-remote-URL) registrations each know a CURRENT grammar and exactly one KNOWN
-alternate. `mcp bundle add` tries the current `NAME --url URL` form and
-retries with the positional `NAME URL` form ONLY when sbx's own parser
-rejects the first with a recognized usage error (an unknown flag/command or
-wrong arity); never on an auth or policy failure, which would fail
-identically either way. A manifest/remote container instead runs a read-only
-`sbx mcp add --help` once, up front, and picks the grammar that help text
-documents; chosen there instead of after a failed attempt because a
-remote-URL registration can open an interactive OAuth grant, and retrying
-that after a failure risks a second, unwanted grant. Neither path loops or
-guesses past its one known alternate; an unresolvable case reports the real
-failure, not an invented one.
+**pix tolerates one sbx CLI grammar change at a time, never blindly.** A
+container (manifest/remote-URL) registration runs a read-only `sbx mcp add
+--help` once, up front, and picks the grammar that help text documents. It is
+chosen there rather than after a failed attempt because a remote-URL
+registration can open an interactive OAuth grant, and retrying that after a
+failure risks a second, unwanted grant. It never loops or guesses past its one
+known alternate; an unresolvable case reports the real failure, not an invented
+one.
 
-**sbx v0.38 dropped `mcp bundle` entirely, so `pix mcp bundle` degrades to
-direct adds, not a hard failure.** When BOTH the current and positional
-`mcp bundle add` grammars are rejected with a recognized "unknown command"
-error (not merely an unrecognized flag on an existing `bundle` command), pix
-concludes this sbx build has no `mcp bundle` at all and falls back to
-registering `mcp-catalog.bundle.json`'s three entries (notion/atlassian/
-granola) one at a time via direct `sbx mcp add NAME --url URL`, stopping at
-the first real failure and never touching a pre-existing registration.
-`pix mcp bundle rm pix-catalog` mirrors this with direct `sbx mcp rm NAME`
-calls for the same three names; `pix mcp bundle ls` prints an honest note and
-maps the request onto `sbx mcp ls` (the gateway's one remaining registration
-view) instead of fabricating a bundle listing sbx no longer has a concept
-of. The three names + URLs live in exactly one place in code
-(`mcp.McpCatalog`), checked against the shipped `config/mcp-catalog.bundle.json`
-by an anti-drift test so the two can never disagree.
+**`pix mcp add` never overwrites a server it does not own.** It fetches
+registration evidence once (`sbx mcp ls`), classifies every name against it, and
+only then acts: absent means add, registered at the same endpoint means leave it
+alone, and registered under the same name at a DIFFERENT endpoint or kind fails
+closed. Your `notion` is never replaced by the URL pix happens to know for that
+name.
 
 **Static preload, or explicit load, nothing else.** Every server in your
 configured `mcp` list, and every integration an active or transient pack
 carries, is passed to sbx as `--static-mcp <name>` when the sandbox is
 CREATED, so its tools are in context from the start. There is no dynamic
 discovery and no on-demand attach: a server you add or register after a
-sandbox exists is not visible to it until you either recreate
-(`pix rm BOX && pix run`, which re-sends the full `--static-mcp` set) or
-attach it live:
+sandbox exists is not visible to it until you recreate: `pix rm BOX && pix run`
+re-sends the full `--static-mcp` set.
 
-```
-pix mcp load <name> [DIR]      # attach an already-registered server to the
-                                    # RUNNING sandbox for DIR (default cwd), no recreate
-pix mcp auth [args...]         # hosted-control-plane OAuth for remote catalog
-                                    # servers (auth --all, auth status --all, auth rm)
-pix mcp bundle                 # register the shipped catalog (notion/
-                                    # atlassian/granola) in one step
-```
-
-`pix mcp load` resolves to `sbx mcp load <name> --sandbox <box>`. It writes
-no receipt: the launcher-side MCP receipt store was deleted (U04e), because
-"attached once" is not the state of a live session, and rendering it as
-`attached` was a lie by the time you read it. `pix status` and `pix doctor`
-never poll a sandbox and never claim to know what it has attached; they
-report what the HOST can check (see §9).
+The live-attach verb (`pix mcp load`) was removed. It existed to avoid a
+recreate in a stack whose sandboxes are disposable and whose bare `pix`
+recreates one in a second, and it wrote no receipt anyway, because "attached
+once" is not the state of a live session. `pix status` and `pix doctor` never
+poll a sandbox and never claim to know what it has attached; they report what
+the HOST can check (see §9).
 
 ## 9. Status and doctor
 
@@ -397,9 +375,8 @@ loaded, so a registered server's note always carries the same caveat:
 "host registration; attachment to a live session is not checkable from
 here", instead of guessing `attached`/`not attached`. `pix mcp ls` prints
 the identical caveat. The fix for a server that's registered but not (yet)
-in your session is always the same regardless of history:
-`pix mcp load <name> [DIR]` to attach it live, or `pix rm BOX && pix run` to
-recreate and pick up the full `--static-mcp` set.
+in your session is always the same regardless of history: `pix rm BOX && pix
+run` to recreate and pick up the full `--static-mcp` set.
 
 `pix doctor` runs the same evidence through four verdicts per check:
 **ready** (verified working), **todo** (a verified, fixable gap, with the

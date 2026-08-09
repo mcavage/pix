@@ -705,15 +705,17 @@ func TestRunMcpLsCore_SbxAbsentWritesRecoveryToStderr(t *testing.T) {
 // `pix doctor` cannot see inside a running session either (health/mcp.go's
 // own attachmentCaveat says so), so the note must not send a reader there to
 // learn "what's live" — that would just relocate the same unanswerable
-// question. It must instead name the two commands that actually DO something:
-// `pix mcp load` (attach now) and recreating the sandbox (preload at create).
+// question. It must instead name the thing that actually DOES something:
+// recreating the sandbox, which preloads everything registered. (It used to
+// also name `pix mcp load`, the live-attach verb, which was cut: recreating is
+// the answer in a stack whose sandboxes are disposable.)
 func TestMcpLsAttachmentNote_NeverClaimsStatusOrDoctorShowLiveness(t *testing.T) {
 	for _, bad := range []string{"for what's live", "see `pix status`", "see `pix doctor`"} {
 		if strings.Contains(mcpLsAttachmentNote, bad) {
 			t.Errorf("mcpLsAttachmentNote contains %q, implying status/doctor are an attachment authority they are not", bad)
 		}
 	}
-	for _, want := range []string{"pix status", "pix doctor", "pix mcp load <name>", "pix rm <box>", "pix run"} {
+	for _, want := range []string{"pix status", "pix doctor", "pix rm <box>", "pix run"} {
 		if !strings.Contains(mcpLsAttachmentNote, want) {
 			t.Errorf("mcpLsAttachmentNote missing %q:\n%s", want, mcpLsAttachmentNote)
 		}

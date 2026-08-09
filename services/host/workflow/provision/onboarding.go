@@ -60,7 +60,7 @@ func validateOnboarding(r *OnboardingResult, env hostenv.Env, hostResolver func(
 			return fmt.Errorf("empty mcp name")
 		}
 		// The accepted remotes ARE mcp.McpCatalogNames — the single source of
-		// truth for what `pix mcp bundle` registers — read directly, never
+		// truth for the hosted endpoints pix knows — read directly, never
 		// copied, so the list cannot drift into a name pix cannot register.
 		if m == config.GWServerName || mcp.McpCatalogNames[m] {
 			continue
@@ -187,7 +187,7 @@ func ReconcileOnboarding(ws string, env hostenv.Env, in io.Reader, out io.Writer
 			regErr = Injected.Register(cfg, env, out, nil, HostBinary, packinfo.ActiveContainerMCP(cfg))
 		}
 		if regErr != nil {
-			fmt.Fprintf(out, "  mcp register skipped: %v (finish later: pix mcp register)\n", regErr)
+			fmt.Fprintf(out, "  mcp add skipped: %v (finish later: pix mcp add)\n", regErr)
 		}
 	}
 	_ = workspace.RemoveStateFile(ws, OnboardingFileName)

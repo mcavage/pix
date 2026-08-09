@@ -52,6 +52,23 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   IMPLICIT launch requires a TTY, so with non-interactive stdin plain `pix`
   still prints status and `pix DIR` still refuses. `pix status` is the explicit
   spelling. Safety invariant 2 in AGENTS.md was rewritten, not deleted.
+- **`pix mcp` is three verbs: `add`, `ls`, `auth`.** It was six, and the extra
+  three taught more than they did. `register` vs a native `sbx mcp add` was a
+  distinction only the implementation cared about (both register a server; one
+  builds the command for you, including the `op run` credential wrapper), so
+  they are now one verb with three shapes: `pix mcp add <name> --url <url>`,
+  `pix mcp add <name>` (a name pix knows how to build, or whose endpoint it
+  already knows), and bare `pix mcp add` (everything in the config mcp list).
+  `bundle` registered three hardcoded SaaS vendors and is DELETED, along with
+  the whole sbx `mcp bundle` grammar-compatibility layer it existed to drive
+  (~700 lines of code and tests). `load` (live-attach to a running sandbox) is
+  DELETED: recreating is `pix rm BOX && pix run` in a stack whose sandboxes are
+  disposable, and it wrote no receipt anyway. `mcp.McpCatalog` survives as what
+  it always really was, a lookup table of endpoints pix knows, so `pix mcp add
+  notion` needs no URL. The safety property that outlives the bundle: `add`
+  fetches registration evidence once, classifies every name against it, and
+  fails closed rather than overwrite a server registered at a different
+  endpoint. Your `notion` is never replaced by ours.
 - **`pix models route` is gone from the CLI.** Recompiling the intent map was
   never a user action (every `pix run` recompiles from current bindings), and
   the only real caller is a maintainer baking the image default. That is now
