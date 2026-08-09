@@ -31,7 +31,8 @@
       "exits": 0
     },
     "pix/host/health": {
-      "prod_loc": 1215,
+      "_prod_loc_note": "raised together for ONE change: `pix doctor` reported model keys from the sbx secret store as if they were routable, so a host with three keys but one probed binding showed three green providers while every intent that preferred another vendor silently fell back. ProviderKeyProbe.Callable + inference.CallableProviders make key-present-but-unrouted visible (nil = not computed, which preserves the old report). A deliberate, reviewed raise of a shrink-only budget.",
+      "prod_loc": 1262,
       "exports": 41,
       "globals": 29,
       "edges": 3,
@@ -45,8 +46,9 @@
       "exits": 0
     },
     "pix/host/inference": {
-      "prod_loc": 876,
-      "exports": 31,
+      "_prod_loc_note": "raised together for ONE change: `pix doctor` reported model keys from the sbx secret store as if they were routable, so a host with three keys but one probed binding showed three green providers while every intent that preferred another vendor silently fell back. ProviderKeyProbe.Callable + inference.CallableProviders make key-present-but-unrouted visible (nil = not computed, which preserves the old report). A deliberate, reviewed raise of a shrink-only budget.",
+      "prod_loc": 902,
+      "exports": 32,
       "globals": 8,
       "edges": 3,
       "exits": 0
@@ -158,7 +160,8 @@
       "exits": 0
     },
     "pix/host/workflow/doctor": {
-      "prod_loc": 690,
+      "_prod_loc_note": "raised together for ONE change: `pix doctor` reported model keys from the sbx secret store as if they were routable, so a host with three keys but one probed binding showed three green providers while every intent that preferred another vendor silently fell back. ProviderKeyProbe.Callable + inference.CallableProviders make key-present-but-unrouted visible (nil = not computed, which preserves the old report). A deliberate, reviewed raise of a shrink-only budget.",
+      "prod_loc": 695,
       "exports": 23,
       "globals": 10,
       "edges": 14,
@@ -172,7 +175,8 @@
       "exits": 0
     },
     "pix/host/workflow/models": {
-      "prod_loc": 1084,
+      "_prod_loc_note": "1084 -> 1091: `models add` no longer tells the user to run `pix models route`. That was busywork presented as a required step: every `pix run` already recompiles the intent map from current bindings. The line now states that routing updates itself. A deliberate, reviewed raise of a shrink-only budget.",
+      "prod_loc": 1091,
       "exports": 19,
       "globals": 6,
       "edges": 6,

@@ -9,11 +9,18 @@ import (
 	"pix/host/secret"
 )
 
-const secretDescription = `Provider credentials, as 1Password references.
+const secretDescription = `API keys, as 1Password references.
 
 Pix never stores a secret value: op-refs.env maps ENV_VAR to an op:// reference,
 and the value is resolved just-in-time when a host MCP server is spawned. The
-secret never touches disk or the sandbox.`
+secret never touches disk or the sandbox.
+
+Two kinds of key live here, handled identically and used differently:
+  model keys  ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY. Wire one to
+              actual models with 'pix models add <provider>'.
+  tool keys   a capability the agent calls, not a model. PARALLEL_API_KEY buys
+              the web-search backend. Nothing routes to it, 'pix models add'
+              does not take it, and its absence never blocks a launch.`
 
 // SecretCmd is a child of the kong root; the verb tree, its arities and its
 // usage are these tags, and the behaviour lives in pix/host/secret.
@@ -24,7 +31,7 @@ type SecretCmd struct {
 	Set   SecretSetCmd   `cmd:"" help:"Point an environment variable at a 1Password reference. (WRITES)"`
 	Rm    SecretRmCmd    `cmd:"" help:"Remove a reference. (WRITES)"`
 	Check SecretCheckCmd `cmd:"" help:"Resolve every reference and report which fail."`
-	Sync  SecretSyncCmd  `cmd:"" help:"Reconcile provider keys into sbx. (WRITES)"`
+	Sync  SecretSyncCmd  `cmd:"" help:"Reconcile keys into sbx. (WRITES)"`
 }
 
 type SecretLsCmd struct{}

@@ -115,8 +115,15 @@ func renderAdd(out io.Writer, provider string, res reconcileResult, plan *ollama
 			fmt.Fprintf(out, "Too large for this machine (%0.f GB usable): %s\n", plan.Memory.UsableGB, strings.Join(plan.SkippedRAM, ", "))
 		}
 	}
+	// Deliberately does NOT tell anyone to run `pix models route`. It used to,
+	// and that was busywork masquerading as a required step: every `pix run`
+	// already recompiles the intent->model map from the current bindings
+	// (inference.SynthesizeInferenceKit -> CompileInferenceRuntime) and ships the
+	// result into the sandbox. Adding a provider is therefore COMPLETE here; the
+	// next session routes to it with no further command. `models route` writes
+	// the repo's BAKED default map and is a maintainer verb.
 	fmt.Fprintln(out, "Next: pix models        (see the roster)")
-	fmt.Fprintln(out, "      pix models route  (re-resolve intents onto it)")
+	fmt.Fprintln(out, "Routing updates itself: the next `pix run` re-resolves every role onto the new roster.")
 }
 
 // ProviderNames is what `models add` accepts — NOT secret.ProviderKeyRefOrder:

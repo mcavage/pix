@@ -148,3 +148,29 @@ func BoundNativeProviders(cfg *config.Config) map[string]bool {
 	}
 	return out
 }
+
+// CallableProviders returns the distinct providers this host has at least one
+// CALLABLE binding for, in first-seen config order, or nil when this host has
+// made no inference decision at all.
+//
+// nil is load-bearing and is not the same as an empty slice. A host that never
+// ran `pix models add` has no bindings, routes through the image's baked map,
+// and works: reporting "no provider is callable" there would be a fabricated
+// fault. Only once bindings EXIST does their absence for a given vendor mean
+// that vendor is unrouted. Callers must treat nil as "unknown", not "none".
+func CallableProviders(cfg *config.Config) []string {
+	if !Configured(cfg) {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := []string{}
+	for _, b := range Bindings(cfg) {
+		provider, _, ok := strings.Cut(b.Model, "/")
+		if !ok || seen[provider] {
+			continue
+		}
+		seen[provider] = true
+		out = append(out, provider)
+	}
+	return out
+}

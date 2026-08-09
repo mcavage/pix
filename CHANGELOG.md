@@ -52,6 +52,22 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   IMPLICIT launch requires a TTY, so with non-interactive stdin plain `pix`
   still prints status and `pix DIR` still refuses. `pix status` is the explicit
   spelling. Safety invariant 2 in AGENTS.md was rewritten, not deleted.
+- **`pix models add` no longer tells you to run `pix models route`.** It never
+  needed to: every `pix run` recompiles the intent-to-model map from the current
+  bindings and ships it into the sandbox, so adding a provider is complete when
+  the command returns. `models route` writes the repo's baked default map and is
+  a maintainer verb.
+- **`pix doctor`'s `providers` line distinguishes a key from a callable model.**
+  Keys live in the sbx secret store; routing resolves over probed bindings. A
+  host with three keys and one binding reported three ready providers while
+  every intent preferring another vendor silently fell back, which is how a
+  fresh install ended up with a session model nobody chose and a fully green
+  doctor. The line now reads `anthropic (openai, google: key set, no model wired
+  - pix models add openai)`. Still READY: one callable provider is all a launch
+  needs.
+- **`pix secret` help names the two kinds of key.** Model keys wire to models
+  with `pix models add`; tool keys (`PARALLEL_API_KEY`) buy a capability, route
+  nowhere, and never block a launch.
 - **Web-search backend keys are first-class.** `PARALLEL_API_KEY` is seeded,
   checked and mirrored into the sbx secret store exactly like a model key
   (`pix secret set PARALLEL_API_KEY op://vault/item/field` then `pix secret
