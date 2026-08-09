@@ -60,7 +60,7 @@ func TestHelpListsEveryTopLevelVerb(t *testing.T) {
 func TestEveryDispatchedSubcommandAppearsInItsUsage(t *testing.T) {
 	for verb, subs := range map[string][]string{
 		"config": {"show", "path", "get", "set", "unset"},
-		"mcp":    {"register", "ls", "load", "auth", "bundle"},
+		"mcp":    {"add", "ls", "auth"},
 		"secret": {"ls", "set", "rm", "check", "sync"},
 		// "add" and "setup" join this list once the reconcile seam lands
 		// (docs/design/models-cli.md); this rename-only change only wires

@@ -237,9 +237,19 @@ func TestMCPHelpListsEverySubcommand(t *testing.T) {
 	if err := cli.RunRoot[mcpCmd]("pix mcp", "", "", []string{"--help"}, d); err != nil {
 		t.Fatalf("mcp --help: %v", err)
 	}
-	for _, sub := range []string{"register", "ls", "load", "auth", "bundle"} {
+	for _, sub := range []string{"add", "ls", "auth"} {
 		if !strings.Contains(out.String(), sub) {
 			t.Errorf("mcp --help missing %q:\n%s", sub, out.String())
+		}
+	}
+	// The three verbs that were cut. `register` vs a native add was a
+	// distinction only the implementation cared about, `bundle` hardcoded three
+	// SaaS vendors, and `load` attached to a running sandbox, which a recreate
+	// does in a stack whose sandboxes are disposable. A user should not have to
+	// pick between six verbs to register one server.
+	for _, gone := range []string{"register", "bundle", "load"} {
+		if strings.Contains(out.String(), gone+" ") {
+			t.Errorf("mcp --help still offers the removed verb %q:\n%s", gone, out.String())
 		}
 	}
 }

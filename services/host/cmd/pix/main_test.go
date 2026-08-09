@@ -475,8 +475,15 @@ func TestBuildSbxArgs_NameModelPassthrough(t *testing.T) {
 	if !contains(args, []string{"--model", "openai/gpt-5.6-sol"}) {
 		t.Errorf("--model should be passed through to pi, got %v", args)
 	}
-	if !contains(args, []string{"--", "--model", "openai/gpt-5.6-sol", "--resume"}) {
+	// The personal skill tree is ALWAYS loaded now (an empty one is a valid
+	// "nothing yet"), so it precedes the model in the pi tail.
+	if !contains(args, []string{"--skill", launch.PersonalSkillsDir(), "--model", "openai/gpt-5.6-sol", "--resume"}) {
 		t.Errorf("pi args should follow -- in order, got %v", args)
+	}
+	// The MOUNT is the context ROOT, not its skills/ subdir: AGENTS.md beside
+	// the skills has to be editable and committable from inside the sandbox.
+	if !contains(args, []string{"/work", config.ContextDir(), "--"}) {
+		t.Errorf("personal context root should be mounted after the workspace, got %v", args)
 	}
 	if !contains(args, []string{"--name", "t", "--kit"}) {
 		t.Errorf("--name should precede the kit, got %v", args)
@@ -646,4 +653,29 @@ func equalSlice(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// TestBareInvocationLaunchesOnlyAtATerminal pins what plain `pix` means.
+//
+// It used to be a hard invariant that bare `pix` NEVER launched: it printed
+// status, and launching was always explicit. That was one guarantee doing two
+// jobs. The half worth keeping is that an IMPLICIT launch needs a human present;
+// the half that was pure toll was making every interactive session type a second
+// command to start working. So bare `pix` at a terminal is now `run`, and the
+// non-interactive answer stays read-only status: a script, pipe or CI step that
+// runs `pix` gets a status line, never a created or attached sandbox.
+func TestBareInvocationLaunchesOnlyAtATerminal(t *testing.T) {
+	if got := bareArgs(true); len(got) != 1 || got[0] != "run" {
+		t.Errorf("bare `pix` at a TTY = %v, want [run] (attach-or-create here)", got)
+	}
+	got := bareArgs(false)
+	if len(got) != 1 || got[0] != "status" {
+		t.Fatalf("bare `pix` with non-interactive stdin = %v, want [status]", got)
+	}
+	// The degraded answer must be a READ-ONLY verb. If `status` ever grows a
+	// side effect, or this is repointed at a mutating verb, that is the
+	// regression: a pipe would silently start spending money on a sandbox.
+	if got[0] == "run" || got[0] == "setup" || got[0] == "rm" {
+		t.Fatalf("non-interactive bare `pix` resolved to the mutating verb %q", got[0])
+	}
 }

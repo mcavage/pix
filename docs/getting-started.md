@@ -40,7 +40,7 @@ place. See `docs/design/lifecycle-trust.md` for the full lifecycle.
 ## 3. Check what's there
 
 ```bash
-pix                # fast status dashboard: never launches anything
+pix                # at a terminal: `pix run` here. Piped/non-interactive: status.
 pix ls              # every pix-* sandbox: name, state, dir
 pix doctor          # full readiness evidence + exact fix commands
 ```
@@ -111,7 +111,7 @@ Both are **external** integrations, not built into `pix-host`. Register
 either the same way as any other MCP server:
 
 ```bash
-pix mcp register
+pix mcp add
 pix mcp ls
 ```
 

@@ -5,8 +5,8 @@
 // location.
 //
 // The verb tree is root.go's rootCmd — the one parser, the one dispatcher, and (via
-// `pix help --all`) the one listing. main owns only what comes BEFORE a parse: the
-// bare-`pix` status screen and the exit code.
+// `pix help --all`) the one listing. main owns only what comes BEFORE a parse: what
+// bare `pix` means, and the exit code.
 package main
 
 import (
@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"pix/host/cli"
 	"pix/host/launcher"
 	"pix/host/workflow/provision"
 )
@@ -32,18 +33,37 @@ func main() {
 	args := os.Args[1:]
 
 	if len(args) == 0 {
-		// Bare `pix` shows STATUS — it never launches a sandbox (launching is explicit,
-		// behind `run`). On a fresh host with no config, offer onboarding.
+		// On a fresh host with no config, onboarding comes before anything else.
 		if provision.MaybeFirstRun(os.Stdout) {
 			return
 		}
-		args = []string{"status"}
+		args = bareArgs(cli.IsTTY(os.Stdin))
 	}
 
 	// Everything else is the root's: one parser, one dispatch, one exit map.
 	if code := dispatch(args, newRootDeps()); code != 0 {
 		os.Exit(code)
 	}
+}
+
+// bareArgs decides what plain `pix` means. At a terminal it is the thing you
+// almost always wanted: `run` here, which attaches to this directory's sandbox if
+// one is already up and creates it otherwise. Typing the tool's name to be told
+// what is up, and then having to type a second command to actually work, is a
+// toll on every single session.
+//
+// It stays STATUS when stdin is not a terminal, and that half is load-bearing: an
+// implicit launch is only ever safe when a human is sitting there to have meant
+// it. `pix` in a script, a pipe, a CI step, or an editor task must never create or
+// attach a sandbox as a side effect of someone asking for a status line, so the
+// non-interactive answer stays the read-only one. This mirrors the identical rule
+// on a bare positional (`pix DIR`, see dispatch): bare launches need a TTY, the
+// explicit `pix run` never does.
+func bareArgs(interactive bool) []string {
+	if interactive {
+		return []string{"run"}
+	}
+	return []string{"status"}
 }
 
 // looksLikePath reports whether a non-flag token is meant as a filesystem path (so
@@ -102,10 +122,10 @@ Usage:  pix <command> [args]
 New here?   pix setup      one-time guided setup (a few minutes, resumable)
 
 Workflow
-  run [DIR]        launch the sandbox in DIR (default: .). This is the main one.
+  run [DIR]        launch or re-attach DIR's sandbox (default: .) — plain "pix"
   ls               list your pix sandboxes;  rm <name>  removes one
   serve            start the host services (memory, monitor); ` + "`serve stop|status`" + `
-  status           what is up, what is down, what is next   (also the bare command)
+  status           what is up, what is down, what is next
 
 Setup & health
   setup            guided setup: keys, memory, pack (integrations optional)

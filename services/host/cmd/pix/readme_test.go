@@ -60,13 +60,26 @@ func TestReadmeHasNoLegacyInstallerPath(t *testing.T) {
 	}
 }
 
+// TestReadmePackExamplesStayPublic guards the OPEN-CORE boundary: whatever pack
+// example the README shows must be the placeholder, never a real organization's
+// repository.
+//
+// It used to also require that an example be PRESENT, which conflated two
+// different things. How much pack detail the front door carries is an editorial
+// call (it was cut back hard once, for being evaluate-stage material dumped on a
+// first-time reader); which repository an example names is a leak. Only the
+// second is a test's business, so the check is conditional on there being an
+// example at all.
 func TestReadmePackExamplesStayPublic(t *testing.T) {
 	s := readRepoFile(t, "README.md")
-	if !strings.Contains(s, "git+https://github.com/your-org/work-pack.git#ref=main") {
-		t.Fatal("README pack examples must use the public placeholder repository")
-	}
 	if strings.Contains(s, "pix setup --pack docker/") {
 		t.Fatal("README pack examples must not name an organization-specific repository")
+	}
+	if !strings.Contains(s, "--pack") {
+		return // no pack example to police
+	}
+	if !strings.Contains(s, "your-org") {
+		t.Fatal("README shows a --pack example that is not the public your-org placeholder")
 	}
 }
 

@@ -76,7 +76,7 @@ type rootCmd struct {
 
 	Task taskCmd `cmd:"" group:"Parallel work" help:"Parallel task checkouts of one repo."`
 
-	Mcp    mcpCmd    `cmd:"" group:"Integrations & credentials" help:"register | ls | load | auth | bundle."`
+	Mcp    mcpCmd    `cmd:"" group:"Integrations & credentials" help:"add | ls | auth."`
 	Secret SecretCmd `cmd:"" group:"Integrations & credentials" help:"ls | set | rm | check | sync the op-refs."`
 
 	Version versionCmd `cmd:"" group:"Meta" help:"Print the stamped launcher version."`

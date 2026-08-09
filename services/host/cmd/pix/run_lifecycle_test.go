@@ -8,9 +8,7 @@ import (
 	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/sandbox"
-	"pix/host/sys"
 	"pix/host/sys/systest"
-	"pix/host/workflow/doctor"
 	"pix/host/workflow/launch"
 )
 
@@ -100,28 +98,6 @@ func TestPlanSandboxLaunch_UnknownFailsClosed(t *testing.T) {
 	}
 	if !strings.Contains(plan.Err.Error(), o.Name) {
 		t.Errorf("error should name the sandbox, got: %v", plan.Err)
-	}
-}
-
-// TestMcpLoadCommand_QuotesWorkspaceAndName pins closure finding #3: every
-// generated copy-paste `mcp load` repair command shell-quotes BOTH the
-// server name and the workspace via the shared sys.ShellQuote, so a workspace
-// with spaces/apostrophe/shell metacharacters round-trips safely.
-func TestMcpLoadCommand_QuotesWorkspaceAndName(t *testing.T) {
-	for _, ws := range []string{
-		"/home/mark/my repo's checkout",
-		"/tmp/a;b",
-		"/tmp/$HOME/proj",
-	} {
-		got := doctor.McpLoadCommand("slack", ws)
-		want := "pix mcp load " + sys.ShellQuote("slack") + " " + sys.ShellQuote(ws)
-		if got != want {
-			t.Errorf("doctor.McpLoadCommand(%q) = %q, want %q", ws, got, want)
-		}
-	}
-	// Bare form (no workspace) still quotes the name.
-	if got := doctor.McpLoadCommand("slack", ""); got != "pix mcp load slack" {
-		t.Errorf("doctor.McpLoadCommand bare = %q, want %q", got, "pix mcp load slack")
 	}
 }
 

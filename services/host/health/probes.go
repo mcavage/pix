@@ -447,8 +447,16 @@ func classifyStatErr(err error) string {
 
 // --- providers / model keys -------------------------------------------------
 
-// ProviderKeyProbe answers "can this host call a model" from the key store,
-// and it is TRI-STATE on purpose: only a store that ANSWERED and did not list
+// ProviderKeyProbe answers "does this host HAVE a model key" from the key
+// store. Note what that is not: a key in the store is not proof the router can
+// call that vendor, because routing resolves over probed BINDINGS (`pix models
+// add <provider>`), not over the key store. A host with all three keys but only
+// Anthropic bound reads as three ready providers while every intent that
+// prefers OpenAI silently falls back, which is exactly how the default session
+// model became a vendor nobody chose. Set Callable to close that gap in the
+// report.
+//
+// It is TRI-STATE on purpose: only a store that ANSWERED and did not list
 // the key is a no-key verdict. A store that failed, crashed or hung is
 // unknown, so a transient `sbx secret ls` failure can never be mistaken for a
 // missing key (and can never refuse a launch).
@@ -464,6 +472,15 @@ type ProviderKeyProbe struct {
 	// Label names what this probe is checking when a host runs more than one
 	// of them (model keys vs infrastructure keys). Defaults to "providers".
 	Label string
+	// Callable is the subset of Want the ROUTER can actually reach: providers
+	// with a probed, callable binding. A key present here but absent from
+	// Callable is reported as wired-but-unrouted, because that state is invisible
+	// otherwise and produces surprising model choices.
+	//
+	// nil means "not computed" and preserves the original key-only report, so a
+	// caller that cannot cheaply answer callability (or is checking
+	// infrastructure keys, which route nowhere by definition) is unaffected.
+	Callable []string
 }
 
 func (p ProviderKeyProbe) Name() string {
@@ -504,8 +521,17 @@ func (p ProviderKeyProbe) Check(ctx context.Context) Result {
 	}
 	if p.AnyOf {
 		if len(present) > 0 {
-			return Result{Name: p.Name(), Status: StatusReady, Detail: strings.Join(present, ", "),
-				Evidence: "key store lists " + strings.Join(present, ", ")}
+			detail, evidence := strings.Join(present, ", "), "key store lists "+strings.Join(present, ", ")
+			if unrouted := p.unrouted(present); len(unrouted) > 0 {
+				// Still READY: one callable provider is all a launch needs, and an
+				// unrouted key is a smaller roster, not a fault. But say it, because
+				// the alternative is a user watching roles resolve to models they did
+				// not pick with every line on this screen green.
+				detail += fmt.Sprintf(" (%s: key set, no model wired \u2014 `pix models add %s`)",
+					strings.Join(unrouted, ", "), unrouted[0])
+				evidence += "; no callable binding for " + strings.Join(unrouted, ", ")
+			}
+			return Result{Name: p.Name(), Status: StatusReady, Detail: detail, Evidence: evidence}
 		}
 		return Result{Name: p.Name(), Status: StatusAbsent,
 			Detail: "none of " + strings.Join(p.Want, ", ") + " is set", Fix: ModelKeyFix,
@@ -525,3 +551,24 @@ const (
 	StatusBudget = 2 * time.Second
 	DoctorBudget = 8 * time.Second
 )
+
+// unrouted returns the providers whose key is present but which the router has
+// no callable binding for, preserving Want's order. A nil Callable means the
+// caller did not compute callability, which reports nothing rather than
+// reporting everything as unrouted.
+func (p ProviderKeyProbe) unrouted(present []string) []string {
+	if p.Callable == nil {
+		return nil
+	}
+	callable := make(map[string]bool, len(p.Callable))
+	for _, c := range p.Callable {
+		callable[c] = true
+	}
+	var out []string
+	for _, name := range present {
+		if !callable[name] {
+			out = append(out, name)
+		}
+	}
+	return out
+}

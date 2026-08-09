@@ -279,8 +279,16 @@ func RunSecretSetLocked(env hostenv.Env, out io.Writer, key, value string) error
 	// credential write. But saying nothing is what produced "I set the key and
 	// nothing happened, and I could not find where to finish", so name the next
 	// command here, where the user actually is.
-	if p, isProviderKey := providerKeyRefs[key]; isProviderKey {
-		fmt.Fprintf(out, "%s is stored but not yet wired to any model. Finish with: pix models add %s\n", key, p)
+	if p, known := providerKeyRefs[key]; known {
+		if isModelProviderKey(key) {
+			fmt.Fprintf(out, "%s is stored but not yet wired to any model. Finish with: pix models add %s\n", key, p)
+		} else {
+			// A TOOL key has no `models add` step: it is wired the moment it reaches
+			// the sbx secret store, and the sandbox picks it up on its next launch.
+			// Saying "pix models add parallel" here would send the user to a command
+			// that rejects the name.
+			fmt.Fprintf(out, "%s is stored. Mirror it with: pix secret sync   (then a fresh `pix run` picks it up)\n", key)
+		}
 	}
 	return nil
 }

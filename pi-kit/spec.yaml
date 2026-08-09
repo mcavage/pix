@@ -61,12 +61,17 @@ permissions:
       - raw.githubusercontent.com
       - pi.dev
       # pi-web-access web_search backends (else the call is blocked → hangs). Exa
-      # is the zero-config default; the rest are its fallbacks. Add a provider key
-      # (EXA_API_KEY / GEMINI_API_KEY / PERPLEXITY_API_KEY) for reliable results.
+      # is the zero-config default; the rest are its fallbacks. A backend with a
+      # real key beats the keyless ones: wire one with `pix secret set
+      # <VAR> op://...` + `pix secret sync`.
       - api.exa.ai
       - mcp.exa.ai
       - generativelanguage.googleapis.com
       - api.perplexity.ai
+      # Parallel (parallel.ai) search + extract. Its key is proxy-injected as
+      # x-api-key (see credentials[] below), so this host MUST be allowed here
+      # too: injection and egress are separate gates.
+      - api.parallel.ai
       # Host Ollama (:11434), the fourth inference provider. The in-sandbox
       # ollama-bridge extension forwards localhost:11434 here over node:http (pi's
       # fetch can't reach host.docker.internal through the sbx proxy; see the
@@ -135,6 +140,19 @@ credentials:
         # (no Bearer prefix), unlike OpenAI's Authorization header.
         - domain: generativelanguage.googleapis.com
           header: x-goog-api-key
+          format: "%s"
+  # Parallel is a TOOL key, not a model provider: it buys pi-web-access's
+  # search/extract backend, nothing routes to it, and its absence degrades web
+  # search rather than blocking a launch. Same credential mechanics as the model
+  # keys though: the real value stays on the host and only the sentinel enters
+  # the VM. parallel.ts sends the key as a bare x-api-key header (no Bearer).
+  - service: parallel
+    apiKey:
+      name: PARALLEL_API_KEY
+      proxyManaged: true
+      inject:
+        - domain: api.parallel.ai
+          header: x-api-key
           format: "%s"
   - service: github
     apiKey:

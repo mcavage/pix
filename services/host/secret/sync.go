@@ -25,15 +25,37 @@ import (
 	"strings"
 )
 
-// ProviderKeyRefOrder is the deterministic provider list for prompting (env var
-// used in op-refs.env -> sbx secret name).
+// ProviderKeyRefOrder is the deterministic MODEL-provider list for prompting
+// (env var used in op-refs.env -> sbx secret name).
+//
+// Membership here means "a provider you can route a model to": it is what
+// `pix models add` offers and what setup prompts for. A key that buys a TOOL
+// rather than a model does NOT belong here, or the CLI starts offering `pix
+// models add parallel` for something that serves no models. Those live in
+// ToolKeyRefOrder.
 var ProviderKeyRefOrder = []ProviderKeyRef{
 	{"ANTHROPIC_API_KEY", "anthropic"},
 	{"OPENAI_API_KEY", "openai"},
 	{"GEMINI_API_KEY", "google"},
 }
 
-// ProviderKeyRef pairs a provider's op-refs.env variable with its short name.
+// ToolKeyRefOrder is the same mechanism for keys that buy a CAPABILITY instead
+// of a model: today, the web-search backends pi-web-access can call from inside
+// the sandbox. They are seeded, checked and mirrored into the sbx secret store
+// exactly like a model key (same op:// discipline, same `pix secret` verbs, the
+// value never touches the VM), but they are deliberately invisible to `models
+// add` and to the router, and their absence is never a launch blocker: no web
+// search key means degraded search, not a dead agent.
+//
+// The env var names are pi-web-access's, not ours (parallel.ts reads
+// PARALLEL_API_KEY and sends it as the x-api-key header). The kit must carry a
+// matching credentials[] entry plus an egress allowlist entry for the API host,
+// or the sentinel reaches the VM with nowhere to be swapped.
+var ToolKeyRefOrder = []ProviderKeyRef{
+	{"PARALLEL_API_KEY", "parallel"},
+}
+
+// ProviderKeyRef pairs a key's op-refs.env variable with its short name.
 type ProviderKeyRef struct{ EnvVar, Name string }
 
 // OpReadNonEmpty resolves ref via `op read` and reports whether it succeeded
@@ -204,12 +226,32 @@ func WriteOpRefQuietLocked(env hostenv.Env, key, value string) error {
 	return env.WriteFile(path, []byte(upsertOpRef(content, key, value)), 0o600)
 }
 
-// providerKeyRefs maps each cloud model provider's op-refs.env ENV var to its
-// sbx secret name. Extend here to add a provider.
-var providerKeyRefs = map[string]string{
-	"ANTHROPIC_API_KEY": "anthropic",
-	"OPENAI_API_KEY":    "openai",
-	"GEMINI_API_KEY":    "google",
+// providerKeyRefs maps every op-refs.env ENV var pix mirrors into the sbx secret
+// store to its secret name: model providers AND capability/tool keys. This is
+// the SYNC set, deliberately wider than ProviderKeyRefOrder (the routing set),
+// because a tool key needs the same seeding, checking and mirroring that a model
+// key does. Derived from the two ordered lists so a new entry cannot be added to
+// one and forgotten in the other.
+var providerKeyRefs = func() map[string]string {
+	m := make(map[string]string, len(ProviderKeyRefOrder)+len(ToolKeyRefOrder))
+	for _, p := range ProviderKeyRefOrder {
+		m[p.EnvVar] = p.Name
+	}
+	for _, p := range ToolKeyRefOrder {
+		m[p.EnvVar] = p.Name
+	}
+	return m
+}()
+
+// isModelProviderKey reports whether an op-refs.env key buys a MODEL (and so has
+// a `pix models add` follow-up) rather than a tool capability.
+func isModelProviderKey(envVar string) bool {
+	for _, p := range ProviderKeyRefOrder {
+		if p.EnvVar == envVar {
+			return true
+		}
+	}
+	return false
 }
 
 // firstProviderKeyRefs scans content and returns, for each provider-key op-refs

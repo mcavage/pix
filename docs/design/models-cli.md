@@ -157,7 +157,7 @@ read-only status (CLI-redesign taste rule #5: the bare command is safe).
 | `pix models ls [--json]` | list the model registry (id, label, provider, context, price) | `pix-host route models` |
 | `pix models show [--json]` | registry + scorecard + the resolved intent table | `pix-host route show` |
 | `pix models pick <intent> [--json]` | resolve one intent to a model, with the rationale | `pix-host route pick` |
-| `pix models route [--out PATH]` | resolve **every** intent and write the intent→model map (`routing.json`) that the sandbox reads | `pix-host route compile` |
+| `make routing [--out PATH]` | resolve **every** intent and write the intent→model map (`routing.json`) that the sandbox reads | `pix-host route compile` |
 | `pix models add [provider...] [--models ids] [--no-verify] [--yes]` | **Problem A.** Collect the 1Password ref for a provider, reconcile it into sbx, derive its backend + model bindings, widen the roster, live-probe, save. With no provider argument: reconcile whatever refs already exist. | none (launcher-local; see the reconcile seam) |
 | `pix models setup` | re-ask *only* the inference question (`setupChooseInference` + `configureModelRoster` + verify), without a full `pix setup` | none (launcher-local) |
 
@@ -219,7 +219,7 @@ Session      run_intent=overlord -> openai/gpt-5.6-sol
 
 Next:  pix models add google     wire the google key in
        pix models show           the full registry + resolved intents
-       pix models route          rewrite routing.json (the only one here that writes)
+       make routing          rewrite routing.json (the only one here that writes)
 ```
 
 That block is the entire fix for Problem A on the discovery axis. The user who
@@ -821,7 +821,7 @@ New: `--model overrides it. Intents: pix models show`
 ### 9. `main.go:117` — the retired `evals` verb message
 
 Old: `fmt.Fprintf(os.Stderr, "  %s; run \`pix route compile\`\n", routing.ScorecardPath())`
-New: `fmt.Fprintf(os.Stderr, "  %s; run \`pix models route\`\n", routing.ScorecardPath())`
+New: `fmt.Fprintf(os.Stderr, "  %s; run \`make routing\`\n", routing.ScorecardPath())`
 
 ### 10. `route.go` `routeUsage()` → `modelsUsage()`
 
@@ -849,7 +849,7 @@ repo's embedded default source") is load-bearing and must survive the rename.
 ### 11. NEW — `pix route` deprecation line (stderr, one release)
 
 ```
-pix route is now pix models (pix models route compiles the intent map).
+pix route is now pix models (make routing compiles the intent map).
 ```
 
 stderr only, so `--json` and piped stdout are unaffected (test 21). Drop this
@@ -951,9 +951,9 @@ Three strings, all in the `agent` verb, all naming the old spelling:
 
 | line | old | new |
 |---|---|---|
-| `agent.go:333` | ``"`route show`). Tune the tradeoffs in policy.json, then `pix route compile`."`` | ``"`pix models show`). Tune the tradeoffs in policy.json, then `pix models route`."`` |
+| `agent.go:333` | ``"`route show`). Tune the tradeoffs in policy.json, then `pix route compile`."`` | ``"`pix models show`). Tune the tradeoffs in policy.json, then `make routing`."`` |
 | `agent.go:358` | `"… will inherit the parent model until you add it (pix route show).\n"` | `"… will inherit the parent model until you add it (pix models show).\n"` |
-| `agent.go:395` | `"  3. pix route compile                     # route it\n"` | `"  3. pix models route                      # route it\n"` |
+| `agent.go:395` | `"  3. pix route compile                     # route it\n"` | `"  3. make routing                      # route it\n"` |
 
 Note `:333` carries a bare `` `route show` `` as well as `pix route compile`;
 both halves change, which is why the row shows the whole fragment. `agent` is
@@ -989,13 +989,13 @@ reads comments too.
 | `services/host/cmd/pix/verbcoverage_test.go` | `hiddenVerbs["route"] = "deprecated alias of models; removed after one release"`. Add `"models": {"ls","show","pick","route","add","setup"}` to `TestEveryDispatchedSubcommandAppearsInItsUsage`'s table. |
 | `services/host/cmd/pix/copy_guard_test.go` | **two new guards**, same shape as `TestNoRawGogAuthLoginInProductionSource` (`copy_guard_test.go:30`): (a) ban `\bpix route\b` in production `.go` source — `pix-host route` does not contain that substring, so no allowlist is needed; (b) ban a literal `pix secret set (ANTHROPIC\|OPENAI\|GEMINI)_API_KEY`. Guard (b) has a stated blind spot; see the test plan. |
 | `Makefile` | `route:` target → `models:` (`.PHONY`, the `@echo` at line 128, the maintainer comment at 267–276). It still invokes `./out/pix-host route`, which does not move. Keep `route:` as a `.PHONY` alias that prints a one-liner and delegates. |
-| `extensions/subagents.ts` | line ~300 error text `pix route compile` → `pix models route`. Requires `make load` to reach a baked image; the host rename works without it. |
+| `extensions/subagents.ts` | line ~300 error text `pix route compile` → `make routing`. Requires `make load` to reach a baked image; the host rename works without it. |
 | `docs/reference.md` | the `| route |` capability-map row → `| models |`; the `pix route pick <intent>` example at line ~174. |
 | `docs/design/routing.md` | every `pix route <sub>` → `pix models <sub>`; add a pointer to this doc. |
 | `docs/design/onboarding-v3.md` | the "route compiler" mention; the later-path sentence. |
 | `docs/README.md` | index entry. |
 | `skills/model-refresh/SKILL.md` | frontmatter description (`route show`), lines 20, 100, 101, 116. |
-| `AGENTS.md` | the `routing.json` repo-layout row, the `pix-host` row (`route` stays as the host subcommand — say so), the Models & subagents bullet (`pix route compile` → `pix models route`), and a new sentence: adding a provider later is `pix models add <provider>`. |
+| `AGENTS.md` | the `routing.json` repo-layout row, the `pix-host` row (`route` stays as the host subcommand — say so), the Models & subagents bullet (`pix route compile` → `make routing`), and a new sentence: adding a provider later is `pix models add <provider>`. |
 | `CHANGELOG.md` | one entry covering both fixes and the deprecation window. |
 
 ### Deprecation: alias for one release as a courtesy, not a constraint
@@ -1258,7 +1258,7 @@ important test in this document.
    provider changes what every intent can resolve to, so arguably yes. Against:
    `routing.json` in a dev checkout is written with `--out ./routing.json` and
    then baked, so an implicit compile could write the wrong file. Proposed:
-   do **not** auto-compile; print `Next: pix models route` when the bound
+   do **not** auto-compile; print `Next: make routing` when the bound
    provider set changed. Wants a decision before implementation.
 3. **Should `pix models` bare status be folded into `pix status`?** The
    inference block would be four more lines on the bare `pix` screen. Proposed:

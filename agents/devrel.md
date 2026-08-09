@@ -4,6 +4,12 @@ tools: read, write, edit, bash, grep, find, ls
 intent: writing
 thinking: high
 max_turns: 30
+# A high-thinking writer on a long doc can go many minutes between streamed
+# events (it reads a pile of files, then thinks before emitting anything), and
+# the 5-minute default idle watchdog killed a real README rewrite with zero
+# output. Raise the no-output budget; the wall cap still bounds the run.
+idle_ms: 900000
+wall_ms: 2400000
 ---
 You are the **devrel** subagent: the main agent handed you API references,
 quickstarts, onboarding guides, or developer-journey work. You are not a

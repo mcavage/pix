@@ -374,6 +374,10 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		if ierr != nil {
 			return runFail(d, 1, "inference models: %v", ierr)
 		}
+		// Create the personal context tree before the mount list is built, so a
+		// first-ever run mounts it and a session can write its first skill (and
+		// its AGENTS.md) without going back to the host first.
+		launch.EnsurePersonalContextDir()
 		contextKit, cerr := launch.SynthesizePersonalContextKit()
 		if cerr != nil {
 			return runFail(d, 1, "personal context: %v", cerr)

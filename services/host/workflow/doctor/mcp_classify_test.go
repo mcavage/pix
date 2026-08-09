@@ -12,14 +12,13 @@ import (
 // --list` deliberately excludes it), and W2/U02B deleted the bespoke
 // gworkspace doctor group that used to state its registration for it — so
 // without the special case in classifyMCPServer, doctor would tell a user to
-// go read `sbx mcp add --help` for the one server `pix mcp register`
-// registers itself.
+// go find a URL for the one server `pix mcp add` builds itself.
 func TestClassifyMCPServer_Gog(t *testing.T) {
 	// The realistic post-U02B inventory: a known-but-empty local set (no
 	// built-in stdio servers remain in the public tree).
 	got := classifyMCPServer(config.GWServerName, nil, map[string]bool{}, true)
-	if got.RegisterFix != "pix mcp register "+config.GWServerName {
-		t.Errorf("RegisterFix = %q, want the generic register command", got.RegisterFix)
+	if got.RegisterFix != "pix mcp add "+config.GWServerName {
+		t.Errorf("RegisterFix = %q, want the plain add command", got.RegisterFix)
 	}
 	if got.Remote {
 		t.Errorf("gog classified Remote=%v; it is host-registered, so there is no control-plane auth to probe", got.Remote)
@@ -54,8 +53,15 @@ func TestClassifyMCPServer_NonGogUnchanged(t *testing.T) {
 	if catalog == "" {
 		t.Fatal("the shipped MCP catalog is empty; this test has nothing to check")
 	}
-	if got := classifyMCPServer(catalog, nil, map[string]bool{}, true); !got.Remote || got.RegisterFix != "pix mcp bundle" {
-		t.Errorf("catalog server %q = %+v, want remote + `pix mcp bundle`", catalog, got)
+	// A name pix knows the URL for repairs with a plain `pix mcp add <name>`:
+	// no --url, because it does not need one from the user.
+	if got := classifyMCPServer(catalog, nil, map[string]bool{}, true); !got.Remote || got.RegisterFix != "pix mcp add "+catalog {
+		t.Errorf("known-endpoint server %q = %+v, want remote + `pix mcp add %s`", catalog, got, catalog)
+	}
+	// A confirmed-remote name pix does NOT know must ask for the URL, since
+	// that is the one part only the user has.
+	if got := classifyMCPServer("linear", nil, map[string]bool{}, true); !got.Remote || got.RegisterFix != "pix mcp add linear --url <url>" {
+		t.Errorf("unknown remote = %+v, want a repair naming --url", got)
 	}
 	if got := classifyMCPServer("invented", nil, nil, false); got.RegisterFix != "" || got.Remote {
 		t.Errorf("unknown server under an unusable inventory = %+v, want no repair command (fail closed)", got)

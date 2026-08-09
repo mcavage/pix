@@ -6,7 +6,6 @@ import (
 	"pix/host/hostenv"
 	"pix/host/mcp"
 	"pix/host/packinfo"
-	"pix/host/sys"
 )
 
 // mcp.go is the MCP diagnosis, and it is two halves in two places: the
@@ -18,24 +17,6 @@ import (
 // ls`) and auth (the control plane) are probes, and nothing here can check
 // what a live session has attached.
 //
-// McpLoadCommand stays a plain exported helper because
-// workflow/launch prints the same one when a sandbox comes up without a server
-// attached, and two spellings of one copy-paste command is how a user learns
-// to distrust both.
-
-// McpLoadCommand returns the exact `pix mcp load NAME [WORKSPACE]`
-// command for name, workspace-qualified the same way runReplaceCommand is
-// (bare for ".", quoted otherwise) so the two recovery commands read
-// consistently. Both name and workspace are shell-quoted via the shared
-// sys.ShellQuote (closure finding #3) — a server name is ordinarily a plain
-// token, but quoting it too costs nothing and keeps every generated
-// copy-paste command uniformly safe.
-func McpLoadCommand(name, ws string) string {
-	if ws == "" || ws == "." {
-		return "pix mcp load " + sys.ShellQuote(name)
-	}
-	return "pix mcp load " + sys.ShellQuote(name) + " " + sys.ShellQuote(ws)
-}
 
 // MCPServers classifies every configured MCP server into the shape
 // health.MCPProbe checks. Classification decides which repair command is
@@ -66,35 +47,37 @@ func classifyMCPServer(name string, containers map[string]config.MCPContainer, l
 	if c, ok := containers[name]; ok {
 		switch {
 		case c.RemoteURL != "":
-			return health.MCPServer{Name: name, Remote: true, RegisterFix: "pix mcp register " + name}
+			return health.MCPServer{Name: name, Remote: true, RegisterFix: "pix mcp add " + name}
 		case c.Manifest != "" || c.Image != "":
 			// The gateway runs the container on the host; there is no hosted
 			// control-plane OAuth to ask about.
-			return health.MCPServer{Name: name, RegisterFix: "pix mcp register " + name}
+			return health.MCPServer{Name: name, RegisterFix: "pix mcp add " + name}
 		}
 	}
 	// gog is the documented local special case (mcp.LocalMCPNames): the bridge
 	// NEVER lists it — it is the external Google Workspace CLI, not a `pix-host
-	// mcp <name>` subcommand — but `pix mcp register` registers it with the
+	// mcp <name>` subcommand — but `pix mcp add` registers it with the
 	// gateway exactly like a local stdio server, hardened argv and all
 	// (mcp.GogHardenedArgv). Classifying it off the bridge list alone would
 	// print `sbx mcp add --help` for a server pix registers itself, and this is
 	// the only place that fact is stated to a user.
 	if name == config.GWServerName {
-		return health.MCPServer{Name: name, RegisterFix: "pix mcp register " + name}
+		return health.MCPServer{Name: name, RegisterFix: "pix mcp add " + name}
 	}
 	if localKnown && localSet[name] {
-		return health.MCPServer{Name: name, RegisterFix: "pix mcp register " + name}
+		return health.MCPServer{Name: name, RegisterFix: "pix mcp add " + name}
 	}
+	// A name pix knows the endpoint for: `pix mcp add <name>` looks the URL up,
+	// so the user does not need it. (This used to say `pix mcp bundle`, which
+	// registered three vendors at once; that verb is gone.)
 	if mcp.McpCatalogNames[name] {
-		return health.MCPServer{Name: name, Remote: true, RegisterFix: "pix mcp bundle"}
+		return health.MCPServer{Name: name, Remote: true, RegisterFix: "pix mcp add " + name}
 	}
 	if !localKnown {
 		// Unknown kind: no repair is safe. The probe renders this unknown.
 		return health.MCPServer{Name: name}
 	}
-	// Confirmed non-local, not pack-declared, not in the shipped catalog: pix
-	// has no command that can register it, so the honest pointer is native sbx
-	// with the server's own URL — which only the user has.
-	return health.MCPServer{Name: name, Remote: true, RegisterFix: "sbx mcp add --help"}
+	// Confirmed non-local, not pack-declared, and pix does not know its
+	// endpoint: only the user has the URL, so name the shape they must supply.
+	return health.MCPServer{Name: name, Remote: true, RegisterFix: "pix mcp add " + name + " --url <url>"}
 }

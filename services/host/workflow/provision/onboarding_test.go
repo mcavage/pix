@@ -133,7 +133,7 @@ func TestReconcileOnboarding_AppliesFromFile(t *testing.T) {
 	if !slices.Contains(cfg.MCP, config.GWServerName) {
 		t.Errorf("config not applied: mcp=%v", cfg.MCP)
 	}
-	if !strings.Contains(out.String(), "mcp register skipped") {
+	if !strings.Contains(out.String(), "mcp add skipped") {
 		t.Errorf("an unperformed registration must say so, got:\n%s", out.String())
 	}
 }

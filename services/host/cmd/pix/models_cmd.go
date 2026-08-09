@@ -45,13 +45,17 @@ baked map is compiled with ` + "`--catalog --out ./routing.json`" + `.)`
 func (c *ModelsCmd) Help() string { return modelsDescription() }
 
 type ModelsCmd struct {
-	Status  ModelsStatusCmd `cmd:"" default:"1" hidden:""`
-	Ls      ModelsLsCmd     `cmd:"" help:"One row per model: wired / unwired / retired."`
-	Show    ModelsShowCmd   `cmd:"" help:"ls, plus the scorecard and the resolved intent table."`
-	Pick    ModelsPickCmd   `cmd:"" help:"Resolve one intent to a model, with the rationale."`
-	Route   ModelsRouteCmd  `cmd:"" help:"Resolve every intent and write the intent->model map. (WRITES)"`
-	Add     ModelsAddCmd    `cmd:"" help:"Wire a provider in and prove it with a live request. (WRITES)"`
-	Compile ModelsRouteCmd  `cmd:"" hidden:"" help:"Undocumented alias for route (muscle memory in skills + the Makefile)."`
+	Status ModelsStatusCmd `cmd:"" default:"1" hidden:""`
+	Ls     ModelsLsCmd     `cmd:"" help:"One row per model: wired / unwired / retired."`
+	Show   ModelsShowCmd   `cmd:"" help:"ls, plus the scorecard and the resolved intent table."`
+	Pick   ModelsPickCmd   `cmd:"" help:"Resolve one intent to a model, with the rationale."`
+	Add    ModelsAddCmd    `cmd:"" help:"Wire a provider in and prove it with a live request. (WRITES)"`
+	// `route`/`compile` are GONE from the user CLI. Recompiling the intent map
+	// was never a step a user had to take: every `pix run` recompiles from the
+	// current bindings. The only real caller is the maintainer baking the image
+	// default, which is `make routing` in the repo, over `pix-host route compile`.
+	// Leaving it on the launcher taught users a command whose honest answer to
+	// "when do I run this?" is "never".
 }
 
 // ModelsStatusCmd is the read-only screen: no probe, no mutation.
@@ -101,23 +105,6 @@ type ModelsPickCmd struct {
 
 func (c *ModelsPickCmd) Run(d *cli.Deps) error {
 	return execHostRoute(d, "pick", append([]string{c.Intent}, c.flags()...))
-}
-
-// ModelsRouteCmd writes the compiled intent->model map.
-type ModelsRouteCmd struct {
-	Out     string `help:"Write to PATH instead of the routing override dir." placeholder:"PATH"`
-	Catalog bool   `help:"Compile the host-independent map (maintainer-only: baking the image default)."`
-}
-
-func (c *ModelsRouteCmd) Run(d *cli.Deps) error {
-	var argv []string
-	if c.Out != "" {
-		argv = append(argv, "--out", c.Out)
-	}
-	if c.Catalog {
-		argv = append(argv, "--catalog")
-	}
-	return execHostRoute(d, "compile", argv)
 }
 
 // ModelsAddCmd wires a provider end to end. `enum` does real work: the provider

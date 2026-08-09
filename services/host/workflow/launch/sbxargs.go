@@ -8,7 +8,6 @@ import (
 	"pix/host/config"
 	"pix/host/launcher"
 	"pix/host/sandbox"
-	"pix/host/sys"
 )
 
 const kitRepo = "git+https://github.com/mcavage/pix.git"
@@ -113,8 +112,14 @@ func BuildSbxArgs(cfg *config.Config, o RunOpts, version string) []string {
 
 	// Live skill trees: config paths + personal dir + --skills flags. Each is
 	// mounted as an extra workspace so pi can read it inside the sandbox.
+	//
+	// The MOUNT set is not the SKILL set. For personal context, pi is pointed at
+	// <context>/skills while the mount is <context> itself, so AGENTS.md next to
+	// it is editable and committable from inside the sandbox too (see
+	// MountDirs). Mounting the parent also means the skills dir needs no separate
+	// mount: it is inside it.
 	liveSkills := LiveSkillDirs(cfg, o)
-	args = append(args, liveSkills...)
+	args = append(args, MountDirs(cfg, o)...)
 	if o.Dev {
 		args = append(args, filepath.Join(o.DevRoot, "skills"))
 	}
@@ -128,14 +133,38 @@ func BuildSbxArgs(cfg *config.Config, o RunOpts, version string) []string {
 	return args
 }
 
-// LiveSkillDirs is the ordered set of extra skill trees a launch mounts:
+// LiveSkillDirs is the ordered set of extra skill trees pi is told to LOAD
+// (`--skill DIR`). The personal tree is included unconditionally, not only when
+// it already has entries: an empty dir is a valid "nothing yet", and gating on
+// content is what made the first skill impossible to write from inside a
+// sandbox (nothing was mounted, so there was nowhere to write it). pi ignores a
+// skill dir with no skills in it.
 func LiveSkillDirs(cfg *config.Config, o RunOpts) []string {
 	liveSkills := append([]string(nil), cfg.Skills.Paths...)
-	if personal := filepath.Join(config.ContextDir(), "skills"); sys.DirHasEntries(personal) {
-		liveSkills = append(liveSkills, personal)
-	}
+	liveSkills = append(liveSkills, PersonalSkillsDir())
 	liveSkills = append(liveSkills, o.Skills...)
 	return liveSkills
+}
+
+// PersonalSkillsDir is the one spelling of the personal skill tree's path,
+// shared by the loader and the mount so they can never point at different dirs.
+func PersonalSkillsDir() string { return filepath.Join(config.ContextDir(), "skills") }
+
+// MountDirs is the ordered set of extra host dirs to bind into the sandbox as
+// additional workspaces (read-write, at their host path).
+//
+// It differs from LiveSkillDirs in exactly one place, deliberately: personal
+// context mounts the CONTEXT ROOT rather than its skills/ subdir, so a session
+// can edit both the skills AND the standing AGENTS.md beside them, and a user
+// can keep the whole directory in git. Editing AGENTS.md mid-session does not
+// change the CURRENT session's instructions (they were inlined into a kit at
+// launch, the same way Claude Code reads CLAUDE.md once at start); the next
+// sandbox picks it up.
+func MountDirs(cfg *config.Config, o RunOpts) []string {
+	mounts := append([]string(nil), cfg.Skills.Paths...)
+	mounts = append(mounts, config.ContextDir())
+	mounts = append(mounts, o.Skills...)
+	return mounts
 }
 
 func BuildPiInvocation(liveSkills []string, o RunOpts) []string {

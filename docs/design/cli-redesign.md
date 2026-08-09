@@ -44,14 +44,19 @@ Terraform, Vagrant, Packer, Ghostty share a shape:
    next step. Errors say what happened AND what to do.
 4. **Opinionated defaults, explicit escape hatches.** Optional things are
    clearly optional and deferrable, never blocking.
-5. **No surprises.** The bare command is safe and read-only; destructive things
-   are explicit and reversible. (pix already gets this right.)
+5. **No surprises.** Destructive things are explicit and reversible. The bare
+   command is safe: at a terminal it does the one thing you came to do (`run`,
+   which attaches to an existing sandbox rather than replacing it), and with
+   non-interactive stdin it degrades to read-only status, so nothing in a script
+   or pipe launches by accident.
 6. **Jargon is defined the first time it appears, or hidden until needed.**
 
 ## What does NOT change
 
-- The bare `pix` command stays read-only status, never launches. Correct
-  and Hashimoto-consistent; keep it.
+- (SUPERSEDED) This doc originally kept bare `pix` as read-only status that
+  never launches. In practice that charged every interactive session a second
+  command to start working, for a guarantee only scripts needed. Bare `pix` is
+  now `pix run` AT A TERMINAL; the non-interactive path keeps the guarantee.
 - Every mechanic: idempotent config writes, `--json` shapes, exit codes (2 usage,
   3 daemon-down), reversible `reset`, the `--man` global, ports.
 - **Full back-compat.** Every one of the ~19 current verb spellings keeps
@@ -98,7 +103,7 @@ or stuck human reaches for. Default help is organized by intent, not frequency:
 | Section | Verb | Job |
 |---------|------|-----|
 | Work | `run [DIR]` | Launch a sandbox and enter the agent. The main event. |
-| Work | `status` (`st`) | Read-only: what is up, down, next. Also the bare command. |
+| Work | `status` (`st`) | Read-only: what is up, down, next. The bare command when stdin is not a TTY. |
 | Getting started | `setup` | Guided first-run; re-run to fix anything missing. |
 | Getting started | `serve` | Start the host services (memory, knowledge). |
 | Troubleshooting | `doctor` | Diagnose and print the exact fix commands. **Stays visible.** |
@@ -180,7 +185,7 @@ New here?   pix setup      one-time guided setup (a few minutes, resumable)
 Workflow
   run [DIR]        launch the sandbox in DIR (default: .). This is the main one.
   serve            start the host services (memory, knowledge); `serve stop|status`
-  status           what is up, what is down, what is next   (also the bare command)
+  status           what is up, what is down, what is next
 
 Setup & health
   setup            guided setup: keys, memory, knowledge, integrations

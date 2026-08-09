@@ -44,6 +44,115 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **Plain `pix` now launches.** It is `pix run` in the current directory:
+  attach to that directory's sandbox if one is up, create it otherwise. The old
+  behavior (always print status, never launch) charged every interactive session
+  a second command to start working, for a guarantee only non-interactive
+  callers needed. That half is kept and is now the stated invariant: an
+  IMPLICIT launch requires a TTY, so with non-interactive stdin plain `pix`
+  still prints status and `pix DIR` still refuses. `pix status` is the explicit
+  spelling. Safety invariant 2 in AGENTS.md was rewritten, not deleted.
+- **Personal context is editable from inside the sandbox, from a cold start.**
+  `~/.local/share/pix/context` is now mounted read-write at its host path
+  UNCONDITIONALLY (created if absent), and the mount is the context ROOT rather
+  than its `skills/` subdir. Two bugs fell out of the old shape: the dir was
+  mounted only when it already had entries, so the FIRST skill could never be
+  written from inside a sandbox (nothing was mounted, so there was nowhere to
+  write it), and mounting only `skills/` left the standing `AGENTS.md` invisible
+  in-session. The mount set (`launch.MountDirs`) is now deliberately distinct
+  from the skill set (`launch.LiveSkillDirs`): pi is pointed at
+  `<context>/skills`, sbx mounts `<context>`. Net effect: the agent can write
+  your skills for you, you can edit them mid-session, and the whole directory
+  can be a git repo you commit from either side. `skills/` is live (`/reload`);
+  `AGENTS.md` is inlined into a kit at launch, so edits to it apply to the next
+  sandbox, matching how Claude Code reads `CLAUDE.md`.
+- **Documented that instructions are context, not a fence.** README and
+  `docs/reference.md` now state plainly that `AGENTS.md`, skills and pack context
+  are guidance a model reads and can edit, and that enforcement is the sandbox
+  boundary, the kit's network allowlist, and a `tool_call` extension returning
+  `{block: true, reason}`. Pix ships no such extension, and the `guard` skill is
+  explicitly a reminder rather than a gate, so neither is claimed as one.
+- **`pix mcp` is three verbs: `add`, `ls`, `auth`.** It was six, and the extra
+  three taught more than they did. `register` vs a native `sbx mcp add` was a
+  distinction only the implementation cared about (both register a server; one
+  builds the command for you, including the `op run` credential wrapper), so
+  they are now one verb with three shapes: `pix mcp add <name> --url <url>`,
+  `pix mcp add <name>` (a name pix knows how to build, or whose endpoint it
+  already knows), and bare `pix mcp add` (everything in the config mcp list).
+  `bundle` registered three hardcoded SaaS vendors and is DELETED, along with
+  the whole sbx `mcp bundle` grammar-compatibility layer it existed to drive
+  (~700 lines of code and tests). `load` (live-attach to a running sandbox) is
+  DELETED: recreating is `pix rm BOX && pix run` in a stack whose sandboxes are
+  disposable, and it wrote no receipt anyway. `mcp.McpCatalog` survives as what
+  it always really was, a lookup table of endpoints pix knows, so `pix mcp add
+  notion` needs no URL. The safety property that outlives the bundle: `add`
+  fetches registration evidence once, classifies every name against it, and
+  fails closed rather than overwrite a server registered at a different
+  endpoint. Your `notion` is never replaced by ours.
+- **`pix models route` is gone from the CLI.** Recompiling the intent map was
+  never a user action (every `pix run` recompiles from current bindings), and
+  the only real caller is a maintainer baking the image default. That is now
+  `make routing`. Keeping a verb whose honest answer to "when do I run this?"
+  is "never" taught a step that does nothing.
+- **Web search defaults to Parallel.** The image bakes
+  `~/.pi/web-search.json` with `provider: "parallel"`, so a host with
+  `PARALLEL_API_KEY` set uses it without being asked. Pinning is safe unkeyed:
+  pi-web-access falls through to the first available backend when the named one
+  has no key, so an unwired host keeps the keyless providers.
+- **`pix secret` help is generated from the key registries** instead of naming
+  one key in prose. It describes the two CATEGORIES (model keys, tool keys) and
+  lists the members from data, so adding a key cannot make the help stale and no
+  single key reads as a special case. It also points at `sbx secret set` for
+  keys the sandbox runtime holds directly, like GitHub.
+- **`pix models add` no longer tells you to run `pix models route`.** It never
+  needed to: every `pix run` recompiles the intent-to-model map from the current
+  bindings and ships it into the sandbox, so adding a provider is complete when
+  the command returns. `models route` writes the repo's baked default map and is
+  a maintainer verb.
+- **`pix doctor`'s `providers` line distinguishes a key from a callable model.**
+  Keys live in the sbx secret store; routing resolves over probed bindings. A
+  host with three keys and one binding reported three ready providers while
+  every intent preferring another vendor silently fell back, which is how a
+  fresh install ended up with a session model nobody chose and a fully green
+  doctor. The line now reads `anthropic (openai, google: key set, no model wired
+  - pix models add openai)`. Still READY: one callable provider is all a launch
+  needs.
+- **`pix secret` help names the two kinds of key.** Model keys wire to models
+  with `pix models add`; tool keys (`PARALLEL_API_KEY`) buy a capability, route
+  nowhere, and never block a launch.
+- **Web-search backend keys are first-class.** `PARALLEL_API_KEY` is seeded,
+  checked and mirrored into the sbx secret store exactly like a model key
+  (`pix secret set PARALLEL_API_KEY op://vault/item/field` then `pix secret
+  sync`; the value stays in 1Password). The kit injects it as the `x-api-key`
+  header on `api.parallel.ai` and allows that host for egress, so only the proxy
+  sentinel enters the VM. A new `secret.ToolKeyRefOrder` keeps capability keys
+  OUT of `ProviderKeyRefOrder` and `ModelProviders`, so `pix models add` never
+  offers a name it would reject and a missing search key can never refuse a
+  launch.
+- **README rewritten** around the current surface: no retired-verb section, pack
+  detail cut to one example plus a link, and the daily-use commands re-verified
+  against `pix help`.
+- **pi bumped to 0.84.1**, and the interactive TUI now defaults to pi's
+  `fullscreen` mode (`settings.json`: `tuiMode: "fullscreen"`). 0.84 splits the
+  renderer into a main-screen and an alt-screen implementation; fullscreen owns
+  its own scroll region, so the transcript scrolls with the mouse/`pageUp` while
+  the editor and widgets stay docked, instead of the whole terminal snapping to
+  the bottom on every repaint whenever a subagent streams. Flip it back per
+  session or permanently from `/settings`.
+- **`scripts/patches/apply-tui-bottom-pin.mjs` follows the 0.84 renderer split.**
+  The main-screen `doRender()` moved from `dist/tui.js` to
+  `dist/tui-main-screen.js` with its anchor and guards byte-identical, so the
+  script now looks for the new filename first and falls back to the old one.
+  Still idempotent, still non-fatal.
+- **`jq`, `procps` (`ps`/`top`) and `file` are installed in the image.** `jq` is
+  load-bearing, not a convenience: sbx injects its own `/usr/local/bin/xdg-open`
+  that builds its JSON body with `jq -nc` before POSTing to the host's
+  `_sbx/browser-open` endpoint. On a DHI base with no `jq` the shim died on that
+  line and fell back to printing the URL, which is why links were never
+  clickable from inside the sandbox. `BROWSER=xdg-open` is set so link-openers
+  route through the same shim.
+- **`overlord` carries a `max_cost_usd` of 0.30**, matching `strategy`. See
+  Fixed.
 - **doctor/status JSON is schema_version 5.** v5 adds the required top-level
   `supervisor` object; `RetiredSchemas[4]` records the migration (a v4 consumer
   keeps every field it knows). Corpus contract cases updated.
@@ -52,6 +161,27 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **The default session model silently became Fable 5 on any host where OpenAI
+  is not wired.** `overlord` is the shipped `run_intent`, so whatever it
+  resolves to is the interactive model. Its `prefer_providers: [openai]` is a
+  PREFERENCE, not an allowlist, so an Anthropic-only host correctly falls back
+  to the best model overall — and with no cost ceiling that was Fable 5
+  (reasoning accuracy 0.94 vs Opus 5's 0.93), the frontier model deliberately
+  reserved for `red-team`, installed as the default at roughly twice Opus's
+  per-task price without anyone choosing it. `overlord` now carries the same
+  0.30 per-task cap `strategy` uses, which excludes Fable (~$0.50) and lands the
+  fallback on Opus 5 (~$0.25). The preferred OpenAI route on a fully wired host
+  is unchanged. Pinned by `routing/overlord_fallback_test.go` in both
+  directions.
+- **Subagent children could outlive the session and keep burning CPU.** Every
+  child is spawned `detached` so a watchdog can signal the whole process group,
+  but that group also survives its parent, and both watchdogs are `setTimeout`s
+  that die with the session. A subagent still running at exit therefore became
+  an orphan with no wall-clock cap left to stop it, and sessions accumulated
+  them — the "CPU climbs after a long session" symptom. `extensions/subagents.ts`
+  now tracks every live process group and reaps it from both `session_shutdown`
+  and a synchronous `process.on("exit")` hook. Covered by
+  `tests/subagent-child-reaper.test.mjs`, including the grandchild case.
 - **sbx v0.38 CLI-grammar compatibility.** `pix doctor`/`pix status`'s sbx probe
   now falls back from `sbx --version` to `sbx version` when a newer sbx build
   rejects the root `--version` flag with a recognized usage error (evidence

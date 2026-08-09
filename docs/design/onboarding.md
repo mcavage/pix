@@ -35,7 +35,7 @@ Onboarding today is two disjoint things that never hand off to each other:
    persist host state, and nothing tells you it exists.
 
 First run nudges you to the wizard from bare `pix` (the one command that
-never launches). `pix run` (the command you actually type) has no
+launches only at a TTY). `pix run` (the command you actually type) has no
 onboarding awareness at all. The result is a broken *shape*, not broken code.
 
 ## Constraints (owner-fixed, not up for debate)
