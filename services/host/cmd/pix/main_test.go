@@ -475,8 +475,15 @@ func TestBuildSbxArgs_NameModelPassthrough(t *testing.T) {
 	if !contains(args, []string{"--model", "openai/gpt-5.6-sol"}) {
 		t.Errorf("--model should be passed through to pi, got %v", args)
 	}
-	if !contains(args, []string{"--", "--model", "openai/gpt-5.6-sol", "--resume"}) {
+	// The personal skill tree is ALWAYS loaded now (an empty one is a valid
+	// "nothing yet"), so it precedes the model in the pi tail.
+	if !contains(args, []string{"--skill", launch.PersonalSkillsDir(), "--model", "openai/gpt-5.6-sol", "--resume"}) {
 		t.Errorf("pi args should follow -- in order, got %v", args)
+	}
+	// The MOUNT is the context ROOT, not its skills/ subdir: AGENTS.md beside
+	// the skills has to be editable and committable from inside the sandbox.
+	if !contains(args, []string{"/work", config.ContextDir(), "--"}) {
+		t.Errorf("personal context root should be mounted after the workspace, got %v", args)
 	}
 	if !contains(args, []string{"--name", "t", "--kit"}) {
 		t.Errorf("--name should precede the kit, got %v", args)

@@ -137,7 +137,11 @@ exit 1
 	if err != nil {
 		t.Fatalf("BuildAttachArgv: %v", err)
 	}
-	argvEqual(t, execArgs, []string{"exec", "-it", "pix-legacy", "pi", "--model", "anthropic/claude-sonnet-5"})
+	// The personal skill tree is always loaded, so the safe default carries it
+	// too: a re-attach must load the same skill layer the original launch did,
+	// or a resumed session quietly loses the user's own skills.
+	argvEqual(t, execArgs, []string{"exec", "-it", "pix-legacy", "pi",
+		"--skill", PersonalSkillsDir(), "--model", "anthropic/claude-sonnet-5"})
 }
 
 // TestFindPositivelyIdentifiedRunning_Stopped_RefusesExec: a STOPPED sandbox

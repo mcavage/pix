@@ -69,6 +69,18 @@ host and load into every session:
 
 Create the file, start a session, it is there. Nothing to register or rebuild.
 
+That directory is **mounted read-write at the same path inside the sandbox**, so
+the agent can write skills for you, you can edit them mid-session, and the
+result is already on your host. Put it in git and commit it from either side:
+
+```bash
+cd ~/.local/share/pix/context && git init && git add . && git commit -m "my setup"
+```
+
+Skills reload with `/reload`. `AGENTS.md` is read once when the sandbox starts
+(the same way Claude Code reads `CLAUDE.md`), so edits to it apply to your next
+session, not the current one.
+
 **MCP servers** are registered once on the host:
 
 ```bash
@@ -104,6 +116,33 @@ Reach for this when you are handing your setup to someone else. For your own
 machine, section 3 is enough. Adopting a pack that runs code on your host stops
 for a reviewable bill of materials first. See
 [docs/design/packs.md](docs/design/packs.md).
+
+## Instructions are context, not a fence
+
+Everything above (`AGENTS.md`, skills, a pack's context) is guidance the model
+reads. It is not enforcement, and treating it as enforcement is the mistake
+that matters here: the agent can edit those files, and a model can decline to
+follow an instruction it read. Do not write a rule there and consider a
+dangerous action blocked.
+
+The things that actually hold:
+
+- **The sandbox.** The agent cannot touch your host except through the
+  directories you mounted. That is why it needs no permission prompts.
+- **The network allowlist.** A domain absent from the kit's
+  `permissions.network.allow` is unreachable from inside, whatever the agent
+  decides. Credentials never enter the sandbox at all; the proxy swaps a
+  sentinel for the real key on the way out.
+- **A `tool_call` gate**, if you write one. A pi extension that hooks
+  `tool_call` and returns `{block: true, reason}` refuses an action before it
+  runs, which is the only way to make a refusal certain. Pix ships no such
+  extension; pi's `docs/extensions.md` has `permission-gate.ts` and
+  `protected-paths.ts` examples, and an extension is a single `.ts` file in
+  `~/.pi/agent/extensions`. Note that the `guard` skill is NOT this: it is a
+  reminder the agent is asked to honor, and it says so itself.
+
+So: use `AGENTS.md` for how you want work done. Use the sandbox boundary, the
+allowlist, and a tool gate for what must not happen.
 
 ## What you get
 

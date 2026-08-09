@@ -199,6 +199,37 @@ Subagents run headless (`pi --no-extensions`), so a child that gets stuck has
 no UI to show you; a watchdog kills it after an idle or wall-clock timeout and
 reports the failure instead of hanging forever.
 
+## 4b. Your own skills and standing instructions
+
+Personal context lives in one directory on the host, `~/.local/share/pix/context`
+(`$XDG_DATA_HOME/pix/context`), and needs no pack:
+
+```
+~/.local/share/pix/context/
+  AGENTS.md               # standing instructions, injected into every session
+  skills/<name>/SKILL.md  # your own skills, alongside the baked ones
+```
+
+That directory is **bind-mounted read-write at the same path inside the
+sandbox**, and it is mounted unconditionally, created if absent, so a session can
+author its FIRST skill without going back to the host. Edits land on the host
+immediately, so the whole directory can be a git repo you commit from either
+side.
+
+The two files have different lifecycles, deliberately:
+
+- `skills/` is read live. Add or edit a `SKILL.md` and `/reload` picks it up in
+  the running session.
+- `AGENTS.md` is read ONCE at launch and inlined into a generated kit as
+  `agentInstructions`. Editing it mid-session changes the file, not the session.
+  The next sandbox picks it up. (Claude Code's `CLAUDE.md` behaves the same way.)
+
+**None of this is enforcement.** Instructions are context a model reads and can
+edit; a rule in `AGENTS.md` is not a fence. Enforcement is the sandbox boundary,
+the kit's `permissions.network.allow`, and, for a certain refusal, a pi extension
+hooking `tool_call` to return `{block: true, reason}`. The `guard` skill is a
+reminder the agent is asked to honor, not a gate, and says so in its own text.
+
 ## 5. Packs
 
 A pack is an explicit git repo containing portable capability context: skills,

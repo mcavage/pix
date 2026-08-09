@@ -168,8 +168,9 @@
       "exits": 0
     },
     "pix/host/workflow/launch": {
-      "prod_loc": 2458,
-      "exports": 109,
+      "_prod_loc_note": "2458 -> 2503, exports 109 -> 112: personal context (skills + standing AGENTS.md) is now mounted unconditionally at the context ROOT, so a session can write its FIRST skill from inside the sandbox and keep the whole dir in git. Previously the mount was gated on the dir already having entries, which made the first skill impossible to author in-sandbox, and only skills/ was mounted, so AGENTS.md was invisible. New exports: MountDirs (the mount set, now distinct from the skill set), PersonalSkillsDir (one spelling shared by loader and mount), EnsurePersonalContextDir. A deliberate, reviewed raise of a shrink-only budget.",
+      "prod_loc": 2503,
+      "exports": 112,
       "globals": 42,
       "edges": 14,
       "exits": 0

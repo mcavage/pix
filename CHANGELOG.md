@@ -52,6 +52,26 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   IMPLICIT launch requires a TTY, so with non-interactive stdin plain `pix`
   still prints status and `pix DIR` still refuses. `pix status` is the explicit
   spelling. Safety invariant 2 in AGENTS.md was rewritten, not deleted.
+- **Personal context is editable from inside the sandbox, from a cold start.**
+  `~/.local/share/pix/context` is now mounted read-write at its host path
+  UNCONDITIONALLY (created if absent), and the mount is the context ROOT rather
+  than its `skills/` subdir. Two bugs fell out of the old shape: the dir was
+  mounted only when it already had entries, so the FIRST skill could never be
+  written from inside a sandbox (nothing was mounted, so there was nowhere to
+  write it), and mounting only `skills/` left the standing `AGENTS.md` invisible
+  in-session. The mount set (`launch.MountDirs`) is now deliberately distinct
+  from the skill set (`launch.LiveSkillDirs`): pi is pointed at
+  `<context>/skills`, sbx mounts `<context>`. Net effect: the agent can write
+  your skills for you, you can edit them mid-session, and the whole directory
+  can be a git repo you commit from either side. `skills/` is live (`/reload`);
+  `AGENTS.md` is inlined into a kit at launch, so edits to it apply to the next
+  sandbox, matching how Claude Code reads `CLAUDE.md`.
+- **Documented that instructions are context, not a fence.** README and
+  `docs/reference.md` now state plainly that `AGENTS.md`, skills and pack context
+  are guidance a model reads and can edit, and that enforcement is the sandbox
+  boundary, the kit's network allowlist, and a `tool_call` extension returning
+  `{block: true, reason}`. Pix ships no such extension, and the `guard` skill is
+  explicitly a reminder rather than a gate, so neither is claimed as one.
 - **`pix mcp` is three verbs: `add`, `ls`, `auth`.** It was six, and the extra
   three taught more than they did. `register` vs a native `sbx mcp add` was a
   distinction only the implementation cared about (both register a server; one

@@ -182,3 +182,19 @@ func CleanupGeneratedKitDirs(paths []string) error {
 	}
 	return errors.Join(errs...)
 }
+
+// EnsurePersonalContextDir creates the personal context tree (<context>/skills)
+// if it does not exist, so the mount is always there.
+//
+// This exists because of a genuine chicken-and-egg: the dir used to be mounted
+// only when it already had entries, which meant the FIRST skill could never be
+// written from inside a sandbox. There was nowhere to write it, and the fix ("go
+// create it on the host, then relaunch") contradicts the whole point of doing
+// work in the sandbox.
+//
+// Best-effort by design: a failure here must never block a launch. The worst
+// case is the previous behavior, an unmounted personal dir, which is a missing
+// convenience and not a broken session.
+func EnsurePersonalContextDir() {
+	_ = os.MkdirAll(PersonalSkillsDir(), 0o700)
+}
