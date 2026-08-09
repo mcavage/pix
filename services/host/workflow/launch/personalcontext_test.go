@@ -13,13 +13,13 @@ import (
 // make "edit your own skills inside the sandbox, then commit that directory"
 // actually work.
 //
-// 1. The personal tree is mounted UNCONDITIONALLY. It used to be gated on the
-//    dir already having entries, which made the first skill impossible to write
-//    from inside a sandbox: nothing was mounted, so there was nowhere to write
-//    it, and the only fix was to go back to the host and relaunch.
-// 2. The MOUNT is the context ROOT while pi is pointed at its skills/ subdir, so
-//    the standing AGENTS.md beside the skills is editable and the whole
-//    directory can live in git. Mounting only skills/ hid AGENTS.md entirely.
+//  1. The personal tree is mounted UNCONDITIONALLY. It used to be gated on the
+//     dir already having entries, which made the first skill impossible to write
+//     from inside a sandbox: nothing was mounted, so there was nowhere to write
+//     it, and the only fix was to go back to the host and relaunch.
+//  2. The MOUNT is the context ROOT while pi is pointed at its skills/ subdir, so
+//     the standing AGENTS.md beside the skills is editable and the whole
+//     directory can live in git. Mounting only skills/ hid AGENTS.md entirely.
 func TestPersonalContextIsMountedWritableFromColdStart(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", dir)
