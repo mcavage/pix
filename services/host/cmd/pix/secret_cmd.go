@@ -5,26 +5,52 @@ package main
 // named in generated help, with kong producing the arity error.
 
 import (
+	"fmt"
+	"strings"
+
 	"pix/host/cli"
 	"pix/host/secret"
 )
 
-const secretDescription = `API keys, as 1Password references.
+// secretDescription is GENERATED from the key registries, never hand-listed.
+// Naming one key in prose ("PARALLEL_API_KEY buys web search") makes that key
+// look like a special case and goes stale the moment a second one is added; the
+// distinction that actually matters is the CATEGORY, and the members are data.
+func secretDescription() string {
+	var b strings.Builder
+	b.WriteString(`API keys, as 1Password references.
 
 Pix never stores a secret value: op-refs.env maps ENV_VAR to an op:// reference,
-and the value is resolved just-in-time when a host MCP server is spawned. The
-secret never touches disk or the sandbox.
+and the value is resolved just-in-time. The secret never touches disk or the
+sandbox.
 
-Two kinds of key live here, handled identically and used differently:
-  model keys  ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY. Wire one to
-              actual models with 'pix models add <provider>'.
-  tool keys   a capability the agent calls, not a model. PARALLEL_API_KEY buys
-              the web-search backend. Nothing routes to it, 'pix models add'
-              does not take it, and its absence never blocks a launch.`
+Two categories live here. They are stored and resolved identically; what differs
+is what they buy.
+
+`)
+	fmt.Fprintf(&b, "  model keys  %s\n", strings.Join(envVarsOf(secret.ProviderKeyRefOrder), ", "))
+	b.WriteString("              A vendor you can route models to. Wire one with\n")
+	b.WriteString("              'pix models add <provider>'; at least one is needed to launch.\n\n")
+	fmt.Fprintf(&b, "  tool keys   %s\n", strings.Join(envVarsOf(secret.ToolKeyRefOrder), ", "))
+	b.WriteString("              A capability the agent calls. Nothing routes to these,\n")
+	b.WriteString("              'pix models add' does not take them, and a missing one\n")
+	b.WriteString("              degrades that capability instead of blocking a launch.\n\n")
+	b.WriteString("Keys held directly by the sandbox runtime (GitHub, for example) are set with\n")
+	b.WriteString("'sbx secret set', not here.")
+	return b.String()
+}
+
+func envVarsOf(refs []secret.ProviderKeyRef) []string {
+	out := make([]string, 0, len(refs))
+	for _, r := range refs {
+		out = append(out, r.EnvVar)
+	}
+	return out
+}
 
 // SecretCmd is a child of the kong root; the verb tree, its arities and its
 // usage are these tags, and the behaviour lives in pix/host/secret.
-func (c *SecretCmd) Help() string { return secretDescription }
+func (c *SecretCmd) Help() string { return secretDescription() }
 
 type SecretCmd struct {
 	Ls    SecretLsCmd    `cmd:"" default:"1" help:"List configured references and whether they resolve."`

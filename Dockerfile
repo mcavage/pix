@@ -207,6 +207,14 @@ RUN printf 'agent:x:1000:1000::/home/agent:/bin/bash\n' >> /etc/passwd \
 # --- bake the harness (pi auto-discovers ~/.pi/agent/{skills,extensions})
 COPY --chown=agent:agent settings.json    /home/agent/.pi/agent/settings.json
 COPY --chown=agent:agent keybindings.json  /home/agent/.pi/agent/keybindings.json
+# Web search: pin Parallel as the default backend. pi-web-access resolves this
+# file from ~/.pi (getWebSearchConfigDir: PI_CODING_AGENT_DIR, else
+# $XDG_CONFIG_HOME/pi, else ~/.pi), NOT from ~/.pi/agent. Pinning is safe with
+# no key: resolveProvider falls through to the first AVAILABLE backend when the
+# named one is unavailable, so an unkeyed host silently gets the keyless
+# providers instead of an error. Wire the key with `pix secret set
+# PARALLEL_API_KEY op://...` + `pix secret sync`.
+COPY --chown=agent:agent web-search.json   /home/agent/.pi/web-search.json
 # mcp.json registers the sbx Cloud MCP Gateway (atlassian/notion/granola/linear/…).
 # The gateway DNS name is stable; lifecycle:lazy means sandboxes without a
 # gateway profile attached just never connect it (no eager-connect failure).

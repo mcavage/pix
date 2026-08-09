@@ -1,15 +1,14 @@
 # Pix
 
-Pix is an opinionated, Docker-sandboxed distribution of the
-[pi coding agent](https://www.npmjs.com/package/@earendil-works/pi-coding-agent).
-You type `pix`, enter an agent session isolated to your current directory, and
-exit with your host machine untouched.
+Pix runs the [pi coding agent](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
+inside a disposable Docker sandbox. You type `pix`, you get an agent session
+scoped to the current directory, you exit, and your machine is untouched.
 
-Because the sandbox is the safety boundary, the agent does not stop to ask
-permission for each shell command. It can build, test, review, and open a pull
-request in one run.
+Because the sandbox is the boundary, the agent does not stop to ask permission
+for each command. It can build, test, review its own work with a second model,
+and open a pull request in one run.
 
-## Install and setup
+## 1. Install
 
 <!-- PIX_PRIMARY_PATH_START -->
 
@@ -18,86 +17,125 @@ brew install mcavage/tap/pix
 pix setup
 ```
 
-Do not use bare `brew install pix`: Homebrew does not know a formula by that
-name and may suggest `pixi` instead. The `mcavage/tap/` qualifier is required.
-`pix setup` configures model providers and launches your first sandbox. Private
-skills, knowledge, and integrations are added as git-backed packs, never as
-edits to this repo:
+`pix setup` walks you through model keys, starts the host services, and launches
+your first sandbox. It checks each thing, fixes only what it found broken, then
+checks again, so nothing reports ready because a step claimed success.
 
-```bash
-pix setup --pack 'git+https://github.com/your-org/work-pack.git#ref=main'
-```
-
-See [docs/design/packs.md](docs/design/packs.md) for what a pack can carry and
-how host-executing hooks are reviewed before they run.
+Use the `mcavage/tap/` prefix. Bare `brew install pix` finds no such formula and
+Homebrew will suggest `pixi`, which is a different tool.
 
 <!-- PIX_PRIMARY_PATH_END -->
 
-## Daily use
+You need one model provider key to start. Add more later, and Pix will use
+different vendors for different jobs (see Models below).
+
+## 2. Use it
 
 ```bash
-pix                  # launch or reattach the sandbox for this directory
-pix run [DIR]        # the same thing, said explicitly
-pix status           # what is up, what is down, what is next
-pix ls               # list your sandboxes;  pix rm <name>  removes one
-pix doctor           # readiness evidence and the exact fix commands
-pix task new <name>  # an isolated clone plus sandbox for parallel work
-pix memory           # recall, remember, forget, learnings, stats
-pix help --all       # complete command map
+cd ~/code/my-project
+pix
 ```
 
-Plain `pix` launches or reattaches the sandbox for the current directory. When
-stdin is not a terminal (scripts, pipes, CI) it prints status instead, so
-nothing launches by accident. `pix status` is the explicit spelling.
+That is the whole loop. `pix` launches the sandbox for this directory, or
+reattaches if one is already running. Exit the shell and the sandbox is torn
+down.
 
-Host services start lazily. Install them as a login service with `pix serve
-install`. Runtime config is managed with `pix config`, not by editing TOML.
+```bash
+pix status     # what is up, what is down, what is next
+pix doctor     # the same, with evidence and the exact fix commands
+pix ls         # your sandboxes;  pix rm <name>  removes one
+```
 
-## In the sandbox
+In a script, a pipe, or CI, plain `pix` prints status instead of launching, so
+nothing starts a sandbox by accident. `pix run` is the explicit spelling when
+you want a launch regardless.
 
-pi runs in fullscreen TUI mode:
+Inside the session: the transcript scrolls on its own (mouse wheel, PageUp),
+drag-selecting text copies it to your clipboard, printed links open in your host
+browser, and `/help` lists the skills available.
 
-- The transcript scrolls on its own (mouse wheel, PageUp) instead of the
-  terminal snapping to the bottom while output streams.
-- Drag-selecting text copies it to the system clipboard.
-- Printed links are clickable and open in your host browser.
+## 3. Make it yours
+
+Three things you will actually want. None of them require a pack.
+
+**Your own skills and standing instructions** live in one directory on your
+host and load into every session:
+
+```
+~/.local/share/pix/context/
+  AGENTS.md              # always-on instructions, in every session
+  skills/<name>/SKILL.md # a named workflow, run with /skill:<name>
+```
+
+Create the file, start a session, it is there. Nothing to register or rebuild.
+
+**MCP servers** are registered once on the host and attached to sandboxes:
+
+```bash
+pix mcp bundle       # add the catalog servers (notion, atlassian, granola)
+pix mcp auth --all   # OAuth the ones that need it
+pix mcp ls           # what the gateway knows about
+```
+
+Registration is host state. A running sandbox picks up a newly registered
+server with `pix mcp load <name>`, and any new sandbox gets it at launch.
+
+**API keys** are 1Password references, never values on disk:
+
+```bash
+pix secret set PARALLEL_API_KEY op://vault/item/field
+pix secret sync
+```
+
+`pix secret` explains the two kinds of key it holds and what each one buys.
+
+## 4. Share it (advanced)
+
+A pack is the redistribution mechanism: one git repo carrying skills, knowledge,
+MCP integrations and config, so a team or a second machine gets your whole setup
+in one command.
+
+```bash
+pix pack use git+https://github.com/your-org/work-pack.git#ref=main
+```
+
+Reach for this when you are handing your setup to someone else. For your own
+machine, section 3 is enough. Adopting a pack that runs code on your host stops
+for a reviewable bill of materials first. See
+[docs/design/packs.md](docs/design/packs.md).
 
 ## What you get
 
-- **Isolation.** A disposable Docker Sandbox per directory. Setup starts with
-  open outbound networking, which you can tighten later with `sbx policy`.
-- **Models by intent.** Sessions and subagent roles resolve through a router by
-  intent (code, review, strategy) rather than a pinned model name, so you never
-  pick a model per task. See [docs/design/routing.md](docs/design/routing.md).
-- **Cross-vendor review.** Code-producing workflows are reviewed by a different
-  vendor than wrote the code. Different training, different blind spots.
+- **Isolation.** One disposable Docker Sandbox per directory. Networking starts
+  open and can be tightened with `sbx policy`.
+- **Models by intent.** Every role (the session itself, the reviewer, the
+  researcher) resolves through a router by intent, not by a model name you
+  pinned. Wire a vendor with `pix models add <provider>`; see `pix models` for
+  the roster and [docs/design/routing.md](docs/design/routing.md) for how it
+  picks.
+- **Cross-vendor review.** Code gets reviewed by a different vendor than wrote
+  it. Different training, different blind spots.
+- **Web search, built in.** `web_search` and `fetch_content` work out of the
+  box. Adding a `PARALLEL_API_KEY` upgrades the backend to Parallel, which Pix
+  then prefers automatically.
 - **Memory.** A host service keeps durable facts in SQLite with full-text and
-  vector search, and recalls them into context without rewriting the provider
-  cache prefix.
-- **Parallel work.** Each `pix task` gets its own clone and sandbox, so two
-  agents never race in one working tree.
-- **Web search.** Backends work with no key. Adding one improves results, and
-  keys live in 1Password as references, never on disk:
+  vector search and recalls them into context. `pix memory` to inspect it.
+- **Parallel work.** `pix task new <name>` gets its own clone and sandbox, so
+  two agents never race in one working tree.
 
-  ```bash
-  pix secret set PARALLEL_API_KEY op://vault/item/field
-  pix secret sync
-  ```
+## Working on Pix itself
 
-## Build from source
-
-Install with Homebrew unless you are working on Pix itself. Building the image
-needs a DHI-entitled Docker account:
+Anything that maintains Pix is a `make` target, not a CLI command:
 
 ```bash
-make gate    # the fast test gate
-make build
+make gate      # the fast test gate
+make build     # build the image (needs a DHI-entitled Docker account)
+make load      # build and load it into the sandbox image store
+make routing   # recompile the baked default model map
 ```
 
-Image changes must then be loaded into the Docker Sandboxes image store from
-the host. See [AGENTS.md](AGENTS.md) and
-[docs/reference.md](docs/reference.md) for the maintainer architecture and the
-full command reference.
+See [AGENTS.md](AGENTS.md) for the architecture and
+[docs/reference.md](docs/reference.md) for the full command reference.
 
 ## License
 

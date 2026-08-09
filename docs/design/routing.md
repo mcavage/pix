@@ -25,10 +25,10 @@ review in `.pi-agent/plan/agent-lifecycle/` for the full rationale.
 authoring, YAML-frontmatter mutation, and reassess's host-exec `route compile`
 wrapper all did less than they looked like they did — an agent file is a few
 lines of frontmatter, editing it directly is not harder than nine CLI flags,
-and reassess only ever re-resolved + recompiled, which `pix models route`
+and reassess only ever re-resolved + recompiled, which `make routing`
 already does. `agent ls` (table + `--json`) is the entire surviving surface;
 typing a retired subcommand answers with `PIX_RETIRED` guidance to edit
-`agents/*.md` and run `pix models route` (see retired.go).
+`agents/*.md` and run `make routing` (see retired.go).
 
 ## The problem
 
@@ -81,7 +81,7 @@ the leverage of the role — not a wall of one model. Vendor spread after the
 code/strategy/advisory/security, **Google** does review/writing/verify/breadth. The registry/scorecard are
 seeded from LIVE model cards + pricing (see the `model-refresh` skill), not from
 training-data guesses; retarget any of it by editing `policy.json`/`scorecard.json`
-and re-running `pix models route`; no agent files change. `pix agent ls` prints
+and re-running `make routing`; no agent files change. `pix agent ls` prints
 a WHY for each pick (objective, the winner's accuracy/$/latency, and what it beat
 or whether a constraint left a sole fit).
 
@@ -111,7 +111,7 @@ HOST (Go, tested, owns the truth)            SANDBOX (TS, reads one file)
 
 The sandbox never calls the host at spawn time (that path can hang a subagent).
 It reads a precompiled `routing.json` — deterministic, offline, auditable. The
-host regenerates that file with `pix models route`, and the user bakes it
+host regenerates that file with `make routing`, and the user bakes it
 (`make load`) on a new-model release. This matches the "on new model release,
 manual, easy to plug a model in" cadence the feature was scoped to.
 
@@ -161,7 +161,7 @@ model cards rather than training-data guesses). This replaced an earlier harness
 that called every candidate model to re-measure scores automatically — useful
 in principle, but a fragile external host dependency for a router that only
 ever reads the scorecard, never the harness that produced it. After editing
-`scorecard.json`, run `pix models route` to bake the change into
+`scorecard.json`, run `make routing` to bake the change into
 `routing.json`.
 
 ## Two different facts: the catalog and your host
@@ -242,7 +242,7 @@ pinned model), an optional provider constraint, and an advisory `budget_usd`.
   `agents/<name>.md` frontmatter (`intent`, `description`, `tools`,
   `budget_usd`, an optional pinned `model`) — add, change, or delete the file
   directly; if a new `intent` needs scores, hand-add them to `scorecard.json`.
-  Then run `pix models route` to recompile `routing.json` and relaunch the
+  Then run `make routing` to recompile `routing.json` and relaunch the
   sandbox to pick it up. `agent new|edit|rm|reassess` are retired; typing one
   answers with a `PIX_RETIRED` notice naming this path.
 
@@ -278,7 +278,7 @@ is baked at `~/.pi/agent/routing.json` next to `capabilities.json`.
    model-name substring.
 2. Hand-add its scores to `scorecard.json` (from published benchmarks/model
    cards).
-3. `pix models route` and `make load`.
+3. `make routing` and `make load`.
 
 No agent files change. The router reconsiders every intent against the new model
 automatically.

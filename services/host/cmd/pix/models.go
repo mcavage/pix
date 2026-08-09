@@ -124,7 +124,7 @@ func renderModelsStatus(cfg *config.Config, out io.Writer) {
 	fmt.Fprintf(out, "Session      %s\n", modelsSessionLine(cfg))
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "Next:  pix models show           the full registry + resolved intents")
-	fmt.Fprintln(out, "       pix models route          rewrite routing.json (the only one here that writes)")
+	fmt.Fprintln(out, "       pix models add <provider>  wire one in (the only one here that writes)")
 	// A key that is set but wired to nothing is the failure this screen exists to
 	// surface, so name it here rather than making the user run doctor to find out.
 	for _, p := range doctor.UnwiredProviderKeys(cfg, defaultShellEnv()) {

@@ -97,7 +97,7 @@ SERVE_ENV ?=
 # at parse time so every target can rely on it.
 $(shell mkdir -p out)
 
-.PHONY: help build load publish validate inspect run run-published run-no-mcp serve doctor memory-serve mcp-register mcp-auth pull-models secrets pack install clean launcher models route require-launcher gate
+.PHONY: help build load publish validate inspect run run-published run-no-mcp serve doctor memory-serve mcp-register mcp-auth pull-models secrets pack install clean launcher models routing require-launcher gate
 
 # Bare `make` builds the launcher binaries (the one thing require-launcher
 # demands as a prerequisite for run/serve/doctor), so a dev iterating on the
@@ -127,7 +127,7 @@ help: ## Show this help
 		awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "Runtime, routing, agent, and parallel-task commands live in the launcher,"
-	@echo "not make:  pix help --all  (e.g. pix models route,"
+	@echo "not make:  pix help --all  (e.g. pix models add,"
 	@echo "pix agent ls, pix task new)."
 
 build: ## Build the pix image from the DHI base
@@ -276,18 +276,21 @@ serve: require-launcher ## Start the host services named in SERVICES (config.tom
 # models` for muscle memory. See the `model-refresh` skill +
 # docs/design/routing.md. Scores are hand-maintained in
 # services/host/routing/defaults/scorecard.json — edit it, then `make models
-# ARGS=compile` (or `pix models route`).
+# ARGS=compile` (or, for the baked default map, `make routing`).
 # Bare `make models` defaults to the safe, read-only `show` (the scorecard /
 # resolved table) so it never errors without ARGS.
 models: ## Model router (maintainer): make models ARGS="show" | "models" | "compile" | "pick <intent>"
 	@(cd services/host && go build -ldflags "-X main.version=$(LAUNCHER_VERSION)" -o $(CURDIR)/out/pix-host .) && ./out/pix-host route $(if $(strip $(ARGS)),$(ARGS),show)
 
-# route: kept as a one-release alias so muscle memory (`make route
-# ARGS=compile`) still works; delegates straight to `models`. Delete alongside
-# the launcher's `case "route"` alias in cmd/pix/main.go.
-route: ## Deprecated alias of `make models` (renamed to match `pix models`)
-	@echo "make route is now make models — running that instead."
-	@$(MAKE) models ARGS="$(ARGS)"
+# routing: bake the image's DEFAULT intent->model map into ./routing.json. This
+# is the only reason anyone compiles routing by hand, and it is a maintainer
+# action, not a user one: a real host recompiles its own map from its own
+# bindings on every `pix run`. `pix models route` used to exist for this and was
+# deleted from the launcher, because a user could only ever run it to no effect.
+# Run this after editing services/host/routing/defaults/*.json, then `make load`.
+routing: ## Recompile the BAKED default routing.json (after editing routing/defaults/*.json)
+	@$(MAKE) models ARGS="compile --catalog --out routing.json"
+	@echo "routing.json rebuilt. Bake it into the image with: make load"
 
 pull-models: require-launcher ## Pull the local Ollama models the stack uses (memory watcher + embed, and the bridge/router local model)
 	@command -v ollama >/dev/null 2>&1 || { echo "ollama not installed — see https://ollama.com (optional: enables semantic recall + fact capture + the local model)"; exit 1; }

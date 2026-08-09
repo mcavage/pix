@@ -186,7 +186,7 @@ pix models pick <intent>     # what the router would resolve for that intent
 were removed: an
 agent is a hand-edited `agents/*.md` file, not a CLI mutation surface. To
 change one, edit its frontmatter (or add a new file) directly, then run
-`pix models route` to re-resolve intents and recompile `routing.json`.
+`make routing` to re-resolve intents and recompile `routing.json`.
 
 Example: `code-review` finishes its own pass, then dispatches the `review`
 subagent, which the router resolves to GPT if your code was written by Claude.

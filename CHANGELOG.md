@@ -52,6 +52,21 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   IMPLICIT launch requires a TTY, so with non-interactive stdin plain `pix`
   still prints status and `pix DIR` still refuses. `pix status` is the explicit
   spelling. Safety invariant 2 in AGENTS.md was rewritten, not deleted.
+- **`pix models route` is gone from the CLI.** Recompiling the intent map was
+  never a user action (every `pix run` recompiles from current bindings), and
+  the only real caller is a maintainer baking the image default. That is now
+  `make routing`. Keeping a verb whose honest answer to "when do I run this?"
+  is "never" taught a step that does nothing.
+- **Web search defaults to Parallel.** The image bakes
+  `~/.pi/web-search.json` with `provider: "parallel"`, so a host with
+  `PARALLEL_API_KEY` set uses it without being asked. Pinning is safe unkeyed:
+  pi-web-access falls through to the first available backend when the named one
+  has no key, so an unwired host keeps the keyless providers.
+- **`pix secret` help is generated from the key registries** instead of naming
+  one key in prose. It describes the two CATEGORIES (model keys, tool keys) and
+  lists the members from data, so adding a key cannot make the help stale and no
+  single key reads as a special case. It also points at `sbx secret set` for
+  keys the sandbox runtime holds directly, like GitHub.
 - **`pix models add` no longer tells you to run `pix models route`.** It never
   needed to: every `pix run` recompiles the intent-to-model map from the current
   bindings and ships it into the sandbox, so adding a provider is complete when

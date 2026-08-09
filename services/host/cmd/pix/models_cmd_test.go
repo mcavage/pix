@@ -114,13 +114,19 @@ func kongParseInto(t *testing.T, _ *ModelsAddCmd, argv []string) error {
 	return err
 }
 
-// TestModelsRoute_BuildsTheHostArgv: flags become the host invocation without a
-// hand-written translation table.
-func TestModelsRoute_BuildsTheHostArgv(t *testing.T) {
-	c := ModelsRouteCmd{Out: "/tmp/routing.json", Catalog: true}
-	if c.Out != "/tmp/routing.json" || !c.Catalog {
-		t.Fatal("struct tags must populate the fields")
+// TestModelsHasNoRouteVerb: recompiling the intent map is not a user action.
+// Every `pix run` recompiles it from the current bindings, so a `route` verb on
+// the launcher could only ever teach a step whose honest answer to "when do I
+// run this?" is "never". Baking the image default is a maintainer job and lives
+// in `make routing` / `pix-host route compile`.
+func TestModelsHasNoRouteVerb(t *testing.T) {
+	for _, verb := range []string{"route", "compile"} {
+		d, _, _ := testDeps(&config.Config{})
+		if err := runRootParse([]string{"models", verb}, d); err == nil {
+			t.Errorf("`pix models %s` parsed; it must not exist on the user CLI", verb)
+		}
 	}
+	// The read-only and wiring verbs are untouched.
 	q := hostQuery{JSON: true, Catalog: true}
 	if got := strings.Join(q.flags(), " "); got != "--json --catalog" {
 		t.Errorf("hostQuery.flags() = %q", got)
