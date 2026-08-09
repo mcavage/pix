@@ -69,16 +69,22 @@ host and load into every session:
 
 Create the file, start a session, it is there. Nothing to register or rebuild.
 
-**MCP servers** are registered once on the host and attached to sandboxes:
+**MCP servers** are registered once on the host, then attached to sandboxes.
+Registering is `sbx`, because the gateway that runs them is sbx's:
 
 ```bash
-pix mcp bundle       # add the catalog servers (notion, atlassian, granola)
-pix mcp auth --all   # OAuth the ones that need it
-pix mcp ls           # what the gateway knows about
+sbx mcp add <name> --url <url>   # a hosted server
+pix mcp auth <name>              # OAuth it, if it needs that
+pix mcp ls                       # what the gateway knows about
 ```
 
-Registration is host state. A running sandbox picks up a newly registered
-server with `pix mcp load <name>`, and any new sandbox gets it at launch.
+Registration is host state, which is not the same as a session seeing the
+tools. A new sandbox picks a server up at launch; attach one to the sandbox
+you are already in with `pix mcp load <name>`.
+
+If you use Notion, Jira or Granola, `pix mcp bundle` registers those three in
+one step, and `pix mcp auth --all` authorizes them. That is all it does: it is
+a shortcut for three specific vendors, not a general install path.
 
 **API keys** are 1Password references, never values on disk:
 
