@@ -6,9 +6,10 @@
       "name": "overlord",
       "task_type": "reasoning",
       "objective": "accuracy",
+      "max_cost_usd": 0.30,
       "prefer_providers": ["openai"],
       "fallback": "openai/gpt-5.6-sol",
-      "about": "The TOP-LEVEL interactive orchestrator (the 'overlord' that directs the whole subagent crew and does little itself). Steered OFF Anthropic on purpose: Claude is the weak writer/communicator and a same-vendor orchestrator shares its authors' blind spots. Best OpenAI reasoner. -> GPT-5.6 Sol."
+      "about": "The TOP-LEVEL interactive orchestrator (the 'overlord' that directs the whole subagent crew and does little itself). Steered OFF Anthropic on purpose: Claude is the weak writer/communicator and a same-vendor orchestrator shares its authors' blind spots. Best OpenAI reasoner. -> GPT-5.6 Sol. The cost cap is what makes the RELAXED path sane: prefer_providers is a preference, not an allowlist, so on a host where OpenAI is not wired this intent falls back to the best model overall — and with no ceiling that was FABLE 5, the frontier model deliberately reserved for red-team, silently made the default session model at 2x Opus price. The same 0.30 cap `strategy` uses excludes Fable (~$0.50/task) and lands the fallback on Opus 5 (~$0.25), which is what an Anthropic-only host should get."
     },
     {
       "name": "strategy",

@@ -1077,7 +1077,62 @@ function maybeStopTicker(): void {
 	}
 }
 
+// ─── Live-child reaper ───────────────────────────────────────────────────────
+// Every child is spawned detached (its own process group) so a watchdog can
+// signal the WHOLE tree — child pi plus any grandchildren it spawned. The cost
+// of detaching is that the group SURVIVES its parent: nothing in the OS kills it
+// when this pi exits. Both watchdogs are plain setTimeout()s living in this
+// process, so when the session ends they die with it and stop being able to kill
+// anything. A subagent still running at exit therefore becomes an orphan that
+// keeps calling its provider, with no wall-clock cap left to stop it — and every
+// later session adds more. That is the "CPU climbs after a long session" leak:
+// the load is orphaned child pi trees, not this process.
+//
+// So keep a registry of every live process GROUP and reap it on the way out.
+// Registered on spawn, dropped the moment the child settles, and drained by
+// teardown() (session_shutdown) plus a synchronous process-exit hook for the
+// paths session_shutdown never reaches. SIGKILL is deliberate: at exit there is
+// no one left to run a SIGTERM grace timer, and a polite signal a dying process
+// cannot follow up on is how the orphan survives in the first place.
+export const LIVE_CHILD_PGIDS = new Set<number>();
+
+export function reapLiveChildren(sig: NodeJS.Signals = "SIGKILL"): number {
+	let reaped = 0;
+	for (const pid of LIVE_CHILD_PGIDS) {
+		try {
+			if (process.platform !== "win32") process.kill(-pid, sig);
+			else process.kill(pid, sig);
+			reaped++;
+		} catch {
+			/* already gone; that is the goal state */
+		}
+	}
+	LIVE_CHILD_PGIDS.clear();
+	return reaped;
+}
+
+// Registered ONCE at module load, not per-run: 'exit' handlers accumulate
+// otherwise. 'exit' must stay synchronous, which process.kill is. We do not hook
+// SIGINT/SIGTERM — pi owns those, and stealing them would change how the agent
+// itself shuts down; Node still fires 'exit' on its way out of those paths.
+try {
+	process.once("exit", () => {
+		try {
+			reapLiveChildren();
+		} catch {
+			/* best-effort; must not throw during exit */
+		}
+	});
+} catch {
+	/* best-effort; must not break the agent at load */
+}
+
 function teardown(): void {
+	try {
+		reapLiveChildren();
+	} catch {
+		/* best-effort; the UI teardown below must still run */
+	}
 	try {
 		if (tracker.ticker) {
 			clearInterval(tracker.ticker);
@@ -1474,6 +1529,10 @@ async function runSingle(
 				env: { ...process.env, PI_SUBAGENT_DEPTH: String(CURRENT_DEPTH + 1) },
 			});
 
+			// Track this process GROUP so session teardown can reap it if the run is
+			// still going when the session ends (see LIVE_CHILD_PGIDS).
+			if (child.pid) LIVE_CHILD_PGIDS.add(child.pid);
+
 			let settled = false;
 			let postSettled = false; // turn finished; watchdogs no longer apply
 			let idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1485,6 +1544,10 @@ async function runSingle(
 			const done = (code: number) => {
 				if (settled) return;
 				settled = true;
+				// Deregister BEFORE anything that can throw: a pid left in the set
+				// after the process is gone gets signalled at exit, which at best is a
+				// no-op and at worst hits a recycled pid.
+				if (child.pid) LIVE_CHILD_PGIDS.delete(child.pid);
 				clearTimers();
 				if (buffer.trim()) processLine(buffer);
 				resolve(code);

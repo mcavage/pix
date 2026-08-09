@@ -12,7 +12,7 @@
 # nag (pi checks npm at runtime, so a new release always nags until you rebump).
 # When bumping, re-check the vendored tui patch still applies (build logs print
 # "[apply-tui-bottom-pin] patched" vs an "anchor not found" warning).
-ARG PI_PACKAGE=@earendil-works/pi-coding-agent@0.83.0
+ARG PI_PACKAGE=@earendil-works/pi-coding-agent@0.84.1
 
 # Hardened Node, maintained by Docker (DHI). Debian/glibc, so our entire apt
 # toolchain (clangd, chromium, gh, ruff, build-essential) keeps working — we just
@@ -47,10 +47,24 @@ USER root
 # `which`: trixie dropped it from debianutils into its own package. Scripts
 # should prefer POSIX `command -v`, but some third-party tooling still shells
 # out to `which`, so keep it on PATH.
+#
+# `jq` is NOT a convenience: sbx injects its own /usr/local/bin/xdg-open shim at
+# runtime, and that shim builds its JSON body with `jq -nc` before POSTing to
+# gateway.docker.internal:3128/_sbx/browser-open. On a DHI base with no jq the
+# shim dies at that line and silently degrades to its "Open this URL in your
+# browser:" fallback, which is exactly the "links are never clickable in the
+# sandbox" symptom. The browser-open door itself works (it answers 200); we were
+# just failing to knock. `procps` (ps/top) and `file` are the other three tools
+# that are reliably missing the moment you try to diagnose anything in-box.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates git gh ripgrep hostname gzip curl which \
+      jq procps file \
  && rm -rf /var/lib/apt/lists/*
+
+# Tools that respect $BROWSER (and pi's own link-open path) route through the sbx
+# shim instead of guessing at a GUI that does not exist in here.
+ENV BROWSER=xdg-open
 
 # Note: Google Workspace access is NOT in this image. It runs host-side as the
 # `gog` MCP server, spawned by the sbx gateway and reached through it. The VM
@@ -270,6 +284,13 @@ USER agent
 # set that was current when the pinned PI_PACKAGE shipped. When you bump
 # PI_PACKAGE, re-pin this list to the versions current at that release
 # (newest published on/before the release date).
+# EXCEPTION, deliberate: pi-web-access stays at 0.13.0 across the 0.84.1 bump.
+# 0.19.0 upstreamed our gateway seams under DIFFERENT config keys
+# (openaiResponsesUrl / openaiSearchModel vs. our openaiBaseUrl / openaiModel)
+# and dropped the anchors apply-web-access-gateway.mjs matches. That patch is
+# fatal-on-mismatch by design, so bumping it fails the image build, and moving
+# to the upstream seams renames config keys a private pack reads. Migrate that
+# deliberately, in its own change, with the pack in hand.
 # NOTE: @tintinweb/pi-subagents stays DISABLED (it hung the event loop forever on
 # pi 0.80.x; full trace in docs/upstream/pi-subagents-hang-pi-0.80.md). It is
 # REPLACED by our own extensions/subagents.ts, which spawns each child as
@@ -279,7 +300,7 @@ USER agent
 # a plain baked extension (no npm install line), so nothing to add here; see
 # docs/design/subagents-extension.md. Do NOT restore the @tintinweb line.
 RUN set -eux; for p in \
-      pi-plan@0.1.1 pi-mcp-adapter@2.13.0 \
+      pi-plan@0.1.1 pi-mcp-adapter@2.21.1 \
       pi-manage-todo-list@0.4.0 pi-simplify@0.2.3 pi-web-access@0.13.0 \
       @juanibiapina/pi-extension-settings@0.9.1 \
       pi-usage@0.3.0; do \

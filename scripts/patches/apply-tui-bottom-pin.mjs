@@ -60,21 +60,32 @@ function findTuiJs() {
 				return "/usr/local/share/npm-global";
 			}
 		})();
-	const rel = "node_modules/@earendil-works/pi-tui/dist/tui.js";
-	const candidates = [
-		join(prefix, "lib/node_modules/@earendil-works/pi-coding-agent", rel),
-		join(prefix, "lib/node_modules/@earendil-works/pi-tui/dist/tui.js"),
-	];
-	for (const c of candidates) if (existsSync(c)) return c;
+	// pi-tui 0.84.0 split the renderer in two: the main-screen (terminal-owned
+	// scrollback) differential renderer moved out of `tui.js` into
+	// `tui-main-screen.js`, and a new alt-screen renderer took the fullscreen
+	// path. The jitter this patch fixes lives in the MAIN-screen renderer, whose
+	// doRender() carried over byte-identical, so try the new filename FIRST and
+	// fall back to the pre-0.84 one.
+	const names = ["tui-main-screen.js", "tui.js"];
+	for (const name of names) {
+		const rel = `node_modules/@earendil-works/pi-tui/dist/${name}`;
+		const candidates = [
+			join(prefix, "lib/node_modules/@earendil-works/pi-coding-agent", rel),
+			join(prefix, `lib/node_modules/@earendil-works/pi-tui/dist/${name}`),
+		];
+		for (const c of candidates) if (existsSync(c)) return c;
+	}
 	// Fallback: search under the prefix.
-	try {
-		const found = execSync(
-			`find ${JSON.stringify(prefix)} -path '*@earendil-works/pi-tui/dist/tui.js' 2>/dev/null | head -1`,
-			{ encoding: "utf8" },
-		).trim();
-		if (found && existsSync(found)) return found;
-	} catch {
-		/* fall through */
+	for (const name of names) {
+		try {
+			const found = execSync(
+				`find ${JSON.stringify(prefix)} -path '*@earendil-works/pi-tui/dist/${name}' 2>/dev/null | head -1`,
+				{ encoding: "utf8" },
+			).trim();
+			if (found && existsSync(found)) return found;
+		} catch {
+			/* fall through */
+		}
 	}
 	return null;
 }

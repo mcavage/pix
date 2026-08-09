@@ -2,5 +2,7 @@
   "defaultProjectTrust": "always",
   "enableInstallTelemetry": false,
   "theme": "dracula",
-  "hideThinkingBlock": true
+  "hideThinkingBlock": true,
+  "tuiMode": "fullscreen",
+  "fullscreenScrollbar": "auto"
 }

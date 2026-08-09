@@ -44,6 +44,27 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **pi bumped to 0.84.1**, and the interactive TUI now defaults to pi's
+  `fullscreen` mode (`settings.json`: `tuiMode: "fullscreen"`). 0.84 splits the
+  renderer into a main-screen and an alt-screen implementation; fullscreen owns
+  its own scroll region, so the transcript scrolls with the mouse/`pageUp` while
+  the editor and widgets stay docked, instead of the whole terminal snapping to
+  the bottom on every repaint whenever a subagent streams. Flip it back per
+  session or permanently from `/settings`.
+- **`scripts/patches/apply-tui-bottom-pin.mjs` follows the 0.84 renderer split.**
+  The main-screen `doRender()` moved from `dist/tui.js` to
+  `dist/tui-main-screen.js` with its anchor and guards byte-identical, so the
+  script now looks for the new filename first and falls back to the old one.
+  Still idempotent, still non-fatal.
+- **`jq`, `procps` (`ps`/`top`) and `file` are installed in the image.** `jq` is
+  load-bearing, not a convenience: sbx injects its own `/usr/local/bin/xdg-open`
+  that builds its JSON body with `jq -nc` before POSTing to the host's
+  `_sbx/browser-open` endpoint. On a DHI base with no `jq` the shim died on that
+  line and fell back to printing the URL, which is why links were never
+  clickable from inside the sandbox. `BROWSER=xdg-open` is set so link-openers
+  route through the same shim.
+- **`overlord` carries a `max_cost_usd` of 0.30**, matching `strategy`. See
+  Fixed.
 - **doctor/status JSON is schema_version 5.** v5 adds the required top-level
   `supervisor` object; `RetiredSchemas[4]` records the migration (a v4 consumer
   keeps every field it knows). Corpus contract cases updated.
@@ -52,6 +73,27 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **The default session model silently became Fable 5 on any host where OpenAI
+  is not wired.** `overlord` is the shipped `run_intent`, so whatever it
+  resolves to is the interactive model. Its `prefer_providers: [openai]` is a
+  PREFERENCE, not an allowlist, so an Anthropic-only host correctly falls back
+  to the best model overall — and with no cost ceiling that was Fable 5
+  (reasoning accuracy 0.94 vs Opus 5's 0.93), the frontier model deliberately
+  reserved for `red-team`, installed as the default at roughly twice Opus's
+  per-task price without anyone choosing it. `overlord` now carries the same
+  0.30 per-task cap `strategy` uses, which excludes Fable (~$0.50) and lands the
+  fallback on Opus 5 (~$0.25). The preferred OpenAI route on a fully wired host
+  is unchanged. Pinned by `routing/overlord_fallback_test.go` in both
+  directions.
+- **Subagent children could outlive the session and keep burning CPU.** Every
+  child is spawned `detached` so a watchdog can signal the whole process group,
+  but that group also survives its parent, and both watchdogs are `setTimeout`s
+  that die with the session. A subagent still running at exit therefore became
+  an orphan with no wall-clock cap left to stop it, and sessions accumulated
+  them — the "CPU climbs after a long session" symptom. `extensions/subagents.ts`
+  now tracks every live process group and reaps it from both `session_shutdown`
+  and a synchronous `process.on("exit")` hook. Covered by
+  `tests/subagent-child-reaper.test.mjs`, including the grandchild case.
 - **sbx v0.38 CLI-grammar compatibility.** `pix doctor`/`pix status`'s sbx probe
   now falls back from `sbx --version` to `sbx version` when a newer sbx build
   rejects the root `--version` flag with a recognized usage error (evidence

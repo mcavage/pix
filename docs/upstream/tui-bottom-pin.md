@@ -1,8 +1,17 @@
 # pi-tui: bottom jitter and duplicate scrollback lines during streaming
 
 **Repo:** `earendil-works/pi` · **Package:** `packages/tui` (`@earendil-works/pi-tui`)
-**Affected:** `0.79.8` through `0.82.1` (`0.82.1` reverified) · **Type:** rendering
+**Affected:** `0.79.8` through `0.84.1` (`0.84.1` reverified) · **Type:** rendering
 bug + fix (tested)
+
+> **0.84.0 moved the code, not the bug.** The renderer was split into
+> `dist/tui-main-screen.js` (main screen, terminal-owned scrollback) and
+> `dist/tui-alt-screen.js` (the new experimental `--tui-mode fullscreen`).
+> `doRender()` moved to the former with the anchor, both preceding
+> `fullRender(true)` guards, and the differential loop byte-identical, so the
+> patch applies unchanged — `apply-tui-bottom-pin.mjs` just looks for the new
+> filename first. The alt-screen renderer is a different implementation and does
+> not have this bug; in `fullscreen` mode the patch is inert.
 
 > 0.79.9 fixes two *related but distinct* chat-component things — Markdown streaming
 > **code-fence** shrink/flicker (#5846) and clearing stale lines when content shrinks **to zero** —
