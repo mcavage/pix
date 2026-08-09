@@ -40,9 +40,12 @@ const SAFETY_INVARIANTS = [
 		phrases: ["config.toml", "never hand-edit", "config set"],
 	},
 	{
-		id: "bare-invocation-never-launches",
-		invariant: "`pix` with no args prints status and never launches a sandbox.",
-		phrases: ["no args never launches a sandbox"],
+		id: "implicit-launch-needs-a-tty",
+		invariant:
+			"An IMPLICIT launch (bare `pix`, or `pix DIR`) requires an interactive " +
+			"terminal; non-interactive stdin degrades to read-only status and never " +
+			"creates or attaches a sandbox.",
+		phrases: ["implicit launch", "non-interactive", "read-only status"],
 	},
 	{
 		id: "serve-stop-through-supervisor",

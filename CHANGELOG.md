@@ -44,6 +44,26 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **Plain `pix` now launches.** It is `pix run` in the current directory:
+  attach to that directory's sandbox if one is up, create it otherwise. The old
+  behavior (always print status, never launch) charged every interactive session
+  a second command to start working, for a guarantee only non-interactive
+  callers needed. That half is kept and is now the stated invariant: an
+  IMPLICIT launch requires a TTY, so with non-interactive stdin plain `pix`
+  still prints status and `pix DIR` still refuses. `pix status` is the explicit
+  spelling. Safety invariant 2 in AGENTS.md was rewritten, not deleted.
+- **Web-search backend keys are first-class.** `PARALLEL_API_KEY` is seeded,
+  checked and mirrored into the sbx secret store exactly like a model key
+  (`pix secret set PARALLEL_API_KEY op://vault/item/field` then `pix secret
+  sync`; the value stays in 1Password). The kit injects it as the `x-api-key`
+  header on `api.parallel.ai` and allows that host for egress, so only the proxy
+  sentinel enters the VM. A new `secret.ToolKeyRefOrder` keeps capability keys
+  OUT of `ProviderKeyRefOrder` and `ModelProviders`, so `pix models add` never
+  offers a name it would reject and a missing search key can never refuse a
+  launch.
+- **README rewritten** around the current surface: no retired-verb section, pack
+  detail cut to one example plus a link, and the daily-use commands re-verified
+  against `pix help`.
 - **pi bumped to 0.84.1**, and the interactive TUI now defaults to pi's
   `fullscreen` mode (`settings.json`: `tuiMode: "fullscreen"`). 0.84 splits the
   renderer into a main-screen and an alt-screen implementation; fullscreen owns

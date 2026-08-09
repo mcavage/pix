@@ -51,7 +51,7 @@ the host, so it survives even though the sandbox doesn't.
 
 ```
 pix run [DIR]      # launch (default: current dir)
-pix                # status only, never launches
+pix                # same as `pix run` at a terminal; status when piped
 ```
 
 ## 2. Memory
