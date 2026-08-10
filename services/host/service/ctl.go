@@ -244,7 +244,51 @@ func Stop(ctl serveCtl, out io.Writer) (stopped bool, err error) {
 		_ = ctl.removePid(path)
 		clearServeLazyMarker(ctl)
 	}
+	// The pidfile names ONE daemon; it is not proof there is only one. A second
+	// `pix-host serve` can outlive its pidfile (a crash before cleanup, a config
+	// dir moved aside, a lazy spawn that raced) and keep holding :11435 after the
+	// pidfile's process is gone. Stopping only the recorded pid then reports
+	// success while the port stays held by the OLD build, which is why `serve
+	// stop` had to be run twice: the second call found no pidfile, fell into
+	// discovery, and killed the one that actually mattered.
+	//
+	// So sweep AFTER the recorded stop, every time. Discovery only ever signals
+	// pids positively verified as our live serve (cmdlineIsServe), so a sweep
+	// that finds nothing is the normal case and costs one pgrep.
+	if swept := sweepOrphanServeProcs(ctl, pr.pid, out); swept {
+		stopped = true
+		clearServeLazyMarker(ctl)
+	}
 	return stopped, nil
+}
+
+// sweepOrphanServeProcs stops every VERIFIED-ours `pix-host serve` other than
+// skipPID, which the caller has already dealt with. It is the second half of a
+// complete stop: see Stop's call site for why one pidfile is not proof of one
+// daemon. Best-effort by design, a sweep failure must not turn a successful
+// recorded stop into an error, since the recorded daemon really did stop.
+func sweepOrphanServeProcs(ctl serveCtl, skipPID int, out io.Writer) bool {
+	if ctl.discover == nil {
+		return false
+	}
+	pids, err := ctl.discover()
+	if err != nil {
+		return false
+	}
+	swept := false
+	for _, pid := range pids {
+		if pid <= 0 || pid == skipPID || ctl.kill(pid, 0) != nil {
+			continue
+		}
+		if ours, known := ctl.verify(pid); !known || !ours {
+			continue
+		}
+		fmt.Fprintf(out, "also stopping an orphaned 'pix-host serve' (pid %d) that no pidfile recorded\n", pid)
+		if s, e := signalServeToExit(ctl, pid, "", out); e == nil && s {
+			swept = true
+		}
+	}
+	return swept
 }
 
 // stopServeByDiscovery handles the missing-pidfile case: of ctl.discover's

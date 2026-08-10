@@ -328,7 +328,7 @@ export default [
 				values: [
 					"werr := child.Wait()",
 					"if cerr := ref.Close(); cerr != nil {",
-					"reportTeardown(deps.Warn, TeardownSandbox(deps.Env, spec.Key, spec.Name, TriggerSession, deps.Teardown))",
+					"reportTeardown(deps.Warn, TeardownSandbox(deps.Env, spec.Key, spec.Name, TriggerSession, deps.Teardown), spec.Workspace)",
 				],
 			},
 		],
