@@ -282,6 +282,50 @@ arch_metrics() {
 		"$ARCH_METRICS_BIN" -root services/host -budgets scripts/arch-metrics/budgets.json
 }
 
+# AC-GATE-05: no unreachable production code. The audit that deleted 18 dead
+# functions found two whose deaths were mechanical -- closeFrontDoorListeners
+# lost both call sites when the monitor block went, ExecSbxMcpLoad was the
+# implementation of a verb that had been removed -- so nothing but a tool was
+# ever going to notice them. `deadcode` costs ~2s and the baseline is ZERO, which
+# is the only baseline worth gating: any number above zero has to be curated, and
+# a curated list of "known dead code" is just the vestigial surface with extra
+# steps.
+#
+# PINNED and run through `go run`, deliberately NOT a `tool` directive in
+# services/host/go.mod: deadcode pulls golang.org/x/telemetry and bumps three
+# more modules, and putting a linter's dependencies into the SHIPPED module graph
+# would drag them through the notices and SBOM gates for no benefit. The module
+# cache makes the second run free.
+#
+# It SKIPS (never fails) when the tool cannot be fetched, so an offline laptop
+# gets a gate that still runs everything else. CI always has the network, so the
+# guard is real where it has to be.
+DEADCODE_PKG="golang.org/x/tools/cmd/deadcode@v0.48.0"
+deadcode_guard() {
+	local out rc
+	out="$(cd services/host && go run "$DEADCODE_PKG" -test ./... 2>&1)"
+	rc=$?
+	# A non-zero exit is NOT automatically "skip". Only an inability to OBTAIN the
+	# tool is (offline laptop, proxy down); anything else -- a tool crash, a
+	# package that does not typecheck -- is a real failure this must report, or
+	# the guard would quietly disarm itself exactly when something is wrong.
+	if [ $rc -ne 0 ]; then
+		case "$out" in
+		*"module lookup disabled"* | *"dial tcp"* | *"no such host"* | *"i/o timeout"* | *"connection refused"* | *"proxyconnect"* | *"certificate"*)
+			printf 'deadcode: SKIPPED, could not fetch %s (offline?):\n%s\n' "$DEADCODE_PKG" "$out"
+			return 0
+			;;
+		esac
+		printf 'deadcode: FAILED to run (%s):\n%s\n' "$DEADCODE_PKG" "$out"
+		return 1
+	fi
+	if [ -n "$out" ]; then
+		printf 'deadcode: unreachable code (delete it, or wire it up):\n%s\n' "$out"
+		return 1
+	fi
+	printf 'deadcode: no unreachable funcs\n'
+}
+
 run_segment "go-build" "go-build" go_build
 run_segment "go-vet" "go-vet" go_vet
 run_segment "go-test" "go-test" go_test
@@ -290,6 +334,7 @@ run_segment "typecheck" "typecheck" typecheck
 run_segment "open-core" "open-core" open_core
 run_segment "recall-xport" "recall-xport" recall_transport
 run_segment "arch-metrics" "arch-metrics" arch_metrics
+run_segment "deadcode" "deadcode" deadcode_guard
 
 # The rename guard lands with the W3 cutover (U-W3.04). Wiring it in
 # CONDITIONALLY means this gate ships now and picks the guard up the moment the

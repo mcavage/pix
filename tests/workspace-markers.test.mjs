@@ -203,14 +203,16 @@ test("memory-capture.ts stamps captured exchanges with the SAME .pix/profile mar
 
 // ── .pix/ollama-bridge.model → ollama-bridge.ts (matches run.go's
 // writeOllamaBridgeFile output: "<model>\n", see
-// TestMarkerRoundTrip_OllamaBridgeModel). OLLAMA_HOSTMODE=1 is the documented
-// seam that skips binding the reverse-proxy listener, so this stays a pure,
-// side-effect-free read of the marker. ──────────────────────────────────────
+// TestMarkerRoundTrip_OllamaBridgeModel). OLLAMA_BRIDGE_PORT=0 keeps this from
+// binding the real 11434 (where a developer's own ollama lives): the listener is
+// best-effort, so an ephemeral port makes this a side-effect-free read of the
+// marker. It used to use OLLAMA_HOSTMODE=1 for that, which stopped meaning
+// anything when `pix host` was deleted. ─────────────────────────────────────
 
 test("ollama-bridge.ts registers the model id from the exact .pix/ollama-bridge.model bytes writeOllamaBridgeFile produces", async (t) => {
 	const workspace = makeWorkspace("ollama-bridge.model", "qwen3.5:9b\n");
 	const mod = await importFromWorkspace("../extensions/ollama-bridge.ts", workspace, {
-		OLLAMA_HOSTMODE: "1",
+		OLLAMA_BRIDGE_PORT: "0",
 		OLLAMA_BRIDGE_MODEL: undefined,
 	});
 	const { hooks } = capturePi(mod);
@@ -229,7 +231,7 @@ test("ollama-bridge.ts registers the model id from the exact .pix/ollama-bridge.
 test("ollama-bridge.ts falls back to its own default model when .pix/ollama-bridge.model is absent", async (t) => {
 	const workspace = makeWorkspace(null, "");
 	const mod = await importFromWorkspace("../extensions/ollama-bridge.ts", workspace, {
-		OLLAMA_HOSTMODE: "1",
+		OLLAMA_BRIDGE_PORT: "0",
 		OLLAMA_BRIDGE_MODEL: undefined,
 	});
 	const hooks = new Map();
