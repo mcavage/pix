@@ -19,6 +19,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/health"
+	"pix/host/inference"
 	"pix/host/rpc"
 )
 
@@ -279,6 +280,105 @@ func TestDoctor_VerifiedGapsFailWithTheExactFix(t *testing.T) {
 		if !strings.Contains(b.String(), fix) {
 			t.Errorf("doctor omitted the exact fix %q:\n%s", fix, b.String())
 		}
+	}
+}
+
+// keylessPackConfig is the shape a pack with its own gateway backends writes:
+// every model is reached over a Docker login session the sbx proxy injects
+// inside the sandbox, so no anthropic/openai/google key is ever read.
+func keylessPackConfig(packRoot string) *config.Config {
+	backend := func(name string) config.InferenceBackend {
+		return config.InferenceBackend{Driver: "openai-compatible", BaseURL: "https://gw.example.com/" + name,
+			Auth: "sbx-session", KeyEnv: "DOCKER_TOKEN", CredentialService: "sbx-login", Source: packRoot}
+	}
+	return &config.Config{
+		Services: []string{"memory"}, Pack: packRoot,
+		Inference: config.InferenceConfig{
+			ExclusiveSource: packRoot,
+			Backends:        map[string]config.InferenceBackend{"gw-anthropic": backend("anthropic"), "gw-openai": backend("openai")},
+			Models: []config.InferenceModelBinding{
+				{Model: "anthropic/claude-opus-5", Backend: "gw-anthropic", Upstream: "claude-opus-5", Available: true, Source: packRoot},
+				{Model: "openai/gpt-5.6-sol", Backend: "gw-openai", Upstream: "gpt-5.6-sol", Available: true, Source: packRoot},
+			},
+		},
+	}
+}
+
+// A host whose models need no provider key must not be told it has none. This
+// is the exact host a private inference pack produces: `pix run` launches it
+// (its gate skips the key probe on keyless inference), and doctor used to call
+// the same host broken and prescribe `pix models add anthropic` — a key that,
+// once added, nothing would read.
+func TestDoctor_KeylessInferenceIsNotAMissingKey(t *testing.T) {
+	bin := buildFixture(t)
+	pack := packDir(t)
+	cfg := keylessPackConfig(pack)
+	// The key store ANSWERS, and lists no model key: the strongest possible
+	// no-key evidence. It still must not decide this axis.
+	o := Options{Budget: 5 * time.Second, SbxBin: bin, SbxArgs: []string{"healthy"},
+		KeyStoreBin: bin, KeyStoreArgs: []string{"nokeys"}, LaunchctlBin: bin, LaunchctlArgs: []string{"healthy"},
+		MemoryPort: memoryUnit(t, rpc.MemoryName, true), MonitorPort: deadPort(t), UID: 501}
+
+	s := run(t, cfg, o)
+	r := result(t, s, "providers")
+	if !r.OK() {
+		t.Errorf("providers = %s (%s / %s), want ready on a keyless host", r.Effective(), r.Detail, r.Evidence)
+	}
+	if r.Fix != "" {
+		t.Errorf("providers fix = %q, want none: there is no key to add", r.Fix)
+	}
+	// The evidence must NAME what answers instead, or the green is unfalsifiable.
+	for _, want := range []string{"gw-anthropic", "gw-openai", "sbx-session"} {
+		if !strings.Contains(r.Evidence, want) {
+			t.Errorf("evidence %q omits %q", r.Evidence, want)
+		}
+	}
+	if s.ExitCode() != health.ExitOK {
+		t.Errorf("exit = %d, want %d: nothing required is missing", s.ExitCode(), health.ExitOK)
+	}
+	var b strings.Builder
+	if code := RunDoctor(context.Background(), cfg, "default", &b, o, false, false); code != health.ExitOK {
+		t.Fatalf("RunDoctor exit = %d, want %d:\n%s", code, health.ExitOK, b.String())
+	}
+	if strings.Contains(b.String(), health.ModelKeyFix) {
+		t.Errorf("doctor prescribed %q on a host that reads no provider key:\n%s", health.ModelKeyFix, b.String())
+	}
+}
+
+// The evidence doctor renders and the predicate `pix run`'s gate decides on
+// are one question, so they must answer together on every config shape —
+// including the ones where a provider key IS this host's credential. A
+// KeylessBackends non-empty where the gate is false would be doctor greening
+// an axis the same host would be refused a launch over.
+func TestKeylessInference_AgreesWithTheLaunchGate(t *testing.T) {
+	pack := packDir(t)
+	keyed := keylessPackConfig(pack)
+	keyed.Inference.Backends["gw-anthropic"] = config.InferenceBackend{Driver: "openai-compatible",
+		BaseURL: "https://api.anthropic.com", Auth: "1password", KeyEnv: "ANTHROPIC_API_KEY", Source: pack}
+
+	cases := map[string]*config.Config{
+		"keyless pack":      keylessPackConfig(pack),
+		"1password backend": keyed,
+		"no inference":      {Services: []string{"memory"}},
+		"nil":               nil,
+	}
+	for name, cfg := range cases {
+		gate := inference.Configured(cfg) && !inference.InferenceNeedsOnePassword(cfg)
+		if got := inference.KeylessBackends(cfg) != ""; got != gate {
+			t.Errorf("%s: keyless evidence = %v, launch gate = %v", name, got, gate)
+		}
+	}
+}
+
+// A binding whose backend the config never defines resolves to nothing. That
+// is not a keyless host, and must fall through to the key store rather than
+// green-light the axis on an empty set.
+func TestKeylessInference_EmptyBackendSetIsNotKeyless(t *testing.T) {
+	pack := packDir(t)
+	cfg := keylessPackConfig(pack)
+	cfg.Inference.Backends = map[string]config.InferenceBackend{}
+	if got := inference.KeylessBackends(cfg); got != "" {
+		t.Errorf("KeylessBackends = %q, want empty when no backend backs a binding", got)
 	}
 }
 

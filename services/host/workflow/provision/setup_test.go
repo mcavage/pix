@@ -310,6 +310,68 @@ func TestNeutralHostSteps_LaunchdGapNeverReachesTheRealInstaller(t *testing.T) {
 
 // --- the provider key probe stays tri-state ---------------------------------
 
+// providersProbe pulls the providers step out of the REAL step table, and
+// asserts on the way past that setup still cannot repair a key.
+func providersProbe(t *testing.T) health.Probe {
+	t.Helper()
+	for _, s := range setupSteps(&config.Config{}, realEnv(), Opts{}, io.Discard) {
+		if s.Name == "providers" {
+			if s.Apply != nil {
+				t.Fatal("setup must never carry an apply for provider keys")
+			}
+			return s.Probe
+		}
+	}
+	t.Fatal("no providers step in the setup table")
+	return nil
+}
+
+// A host whose backends carry their own credential has no key to add, so setup
+// must not open a row against it — and must read that from the config as it is
+// AT THE CHECK, since the pack step's own apply is what writes those backends.
+func TestSetupSteps_KeylessInferenceNeedsNoProviderKey(t *testing.T) {
+	fixtureBin(t, "sbx", "echo GITHUB_TOKEN") // answers, lists no model key
+	path := filepath.Join(t.TempDir(), "config.toml")
+	t.Setenv("PIX_CONFIG", path)
+
+	probe := providersProbe(t)
+	// Built against a config with no inference at all: the row is a real gap.
+	if r := probe.Check(context.Background()); r.Effective() != health.StatusAbsent {
+		t.Fatalf("status = %q (%s), want absent before the pack lands", r.Effective(), r.Evidence)
+	}
+	// Now the pack lands, exactly as the pack step's apply would leave it.
+	if err := os.WriteFile(path, []byte(`
+[inference]
+  exclusive_source = "/packs/gw"
+  [inference.backends.gw-anthropic]
+    driver = "openai-compatible"
+    base_url = "https://gw.example.com/anthropic"
+    auth = "sbx-session"
+    key_env = "DOCKER_TOKEN"
+    credential_service = "sbx-login"
+    source = "/packs/gw"
+  [[inference.models]]
+    model = "anthropic/claude-opus-5"
+    backend = "gw-anthropic"
+    upstream_id = "claude-opus-5"
+    available = true
+    source = "/packs/gw"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The SAME probe value, re-checked: this is the second check setup grades.
+	r := probe.Check(context.Background())
+	if r.Effective() != health.StatusReady {
+		t.Fatalf("status = %q (%s), want ready once the keyless backends are on disk", r.Effective(), r.Evidence)
+	}
+	if r.Fix != "" {
+		t.Errorf("fix = %q, want none: there is no key to add", r.Fix)
+	}
+	if !strings.Contains(r.Evidence, "gw-anthropic") {
+		t.Errorf("evidence = %q, must name what answers instead", r.Evidence)
+	}
+}
+
 // The tri-state classification itself is health.ProviderKeyProbe's (proven in
 // health/probes_test.go, in both any-of and all-of modes). What setup owns is
 // the WIRING: any-of over the env vars a launch needs, so the row that would
@@ -329,16 +391,14 @@ func TestSetupSteps_ProviderKeysAreAnyOfAndTriState(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fixtureBin(t, "sbx", tc.script)
-			var probe health.Probe
-			for _, s := range setupSteps(&config.Config{}, realEnv(), Opts{}, io.Discard) {
-				if s.Name == "providers" {
-					probe = s.Probe
-					if s.Apply != nil {
-						t.Fatal("setup must never carry an apply for provider keys")
-					}
-				}
-			}
-			r := probe.Check(context.Background())
+			// The providers row reads the LIVE config (its keyless answer must
+			// see a pack adopted by this same run), so pin it — otherwise the
+			// key store's verdict is graded against whatever inference the
+			// developer's own ~/.config/pix/config.toml happens to declare, and
+			// a laptop running a keyless pack classifies this row differently
+			// than CI. Same seam, same reason as neutralHostSteps.
+			t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
+			r := providersProbe(t).Check(context.Background())
 			if r.Effective() != tc.want {
 				t.Fatalf("status = %q (%s), want %q", r.Effective(), r.Evidence, tc.want)
 			}
@@ -434,6 +494,9 @@ esac`)
 // proven, and the verdict comes from the second check alone.
 func TestSetupSteps_UnprovableWorldIsNotReady(t *testing.T) {
 	fixtureBin(t, "sbx", "exit 4")
+	// Unprovable means unprovable: pin the config the pack and providers rows
+	// re-read, so this world is the fixture's, not the developer's.
+	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
 	o := Run(context.Background(), Options{Budget: setupBudget},
 		setupSteps(&config.Config{}, realEnv(), Opts{}, os.Stderr)...)
 	if o.Verified("providers") {

@@ -22,6 +22,7 @@ import (
 	"pix/host/config"
 	"pix/host/health"
 	"pix/host/hostenv"
+	"pix/host/inference"
 	"pix/host/launcher"
 	"pix/host/packinfo"
 	"pix/host/sandbox"
@@ -161,10 +162,15 @@ func setupSteps(cfg *config.Config, env hostenv.Env, opts Opts, out io.Writer) [
 		// solicited is `pix models add`, so setup can neither prompt for one nor
 		// claim to have written one. ANY-OF, because one key is enough to launch —
 		// the same probe `pix doctor` reports from, never a second implementation
-		// of the same classification.
+		// of the same classification. Keyless is part of that classification: a
+		// host whose backends carry their own credential is not missing a key, and
+		// setup must not open a row whose only repair is a key nothing reads.
+		// ResolveKeyless for the same reason PackProbe resolves its root — the
+		// pack step's Apply is what writes those backends to disk, so only a
+		// fresh read sees the host the second check is actually grading.
 		Name: "providers",
 		Probe: health.ProviderKeyProbe{Bin: "sbx", Args: []string{"secret", "ls"},
-			Want: providerKeyEnvVars(), AnyOf: true},
+			Want: providerKeyEnvVars(), AnyOf: true, ResolveKeyless: currentKeylessBackends},
 	}}
 }
 
@@ -178,6 +184,18 @@ func currentPackRoot() string {
 		return ""
 	}
 	return packinfo.Resolve(c, "").Path
+}
+
+// currentKeylessBackends is currentPackRoot's twin for the providers row, and
+// reloads for the same reason: an adopted pack's inference backends land on
+// disk, not in the cfg captured when the steps were built. An unreadable config
+// resolves to "" — no claim of keylessness — so the key store still answers.
+func currentKeylessBackends() string {
+	c, err := config.Load()
+	if err != nil {
+		return ""
+	}
+	return inference.KeylessBackends(c)
 }
 
 // packApply is the `--pack` step, and it is deliberately thin: with no --pack it
