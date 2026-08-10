@@ -17,10 +17,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"golang.org/x/term"
 
@@ -91,13 +93,15 @@ type legacyArgs struct {
 	Args []string `arg:"" optional:"" passthrough:"" help:"Passed to the verb unchanged."`
 }
 
-// testSeams are the two indirections the root's tests need — legacy proves a
+// testSeams are the indirections the root's tests need — legacy proves a
 // passthrough command gets its argv verbatim without running the seam behind it,
-// monitor supplies a context + store root without a signal handler. Never set in
-// production.
+// monitor supplies a context + store root without a signal handler, ingestUp
+// pins the one answer a test cannot isolate (whether THIS machine happens to be
+// running an ingest listener on the shared port). Never set in production.
 var testSeams struct {
-	legacy  func(verb string, args []string)
-	monitor func(*monitorCmd, *cli.Deps) error
+	legacy   func(verb string, args []string)
+	monitor  func(*monitorCmd, *cli.Deps) error
+	ingestUp func() bool
 }
 
 // legacyForward hands a passthrough seam its argv verbatim, or to the test seam
@@ -304,15 +308,29 @@ func (c *monitorCmd) once(store *monitor.Store, cfg monitor.FollowConfig, d *cli
 	return monitor.Once(store, cfg)
 }
 
-// ingestUp reports whether a `pix-host serve` daemon (the only process that
-// ever writes to the monitor store) appears to be running, so an empty
-// one-shot read can tell "nothing has happened yet" apart from "nothing ever
-// will". A false negative just makes the error message fire when serve
-// happens to be reachable some OTHER way (e.g. a still-warming managed
-// unit); it never blocks a real read, since it only gates the error path.
+// ingestUp reports whether the monitor INGEST LISTENER is reachable, so an
+// empty one-shot read can tell "nothing has happened yet" apart from "nothing
+// ever will".
+//
+// It dials the ingest port rather than asking whether a `pix-host serve` is
+// running, because those are different facts: `serve` starts only the services
+// named in config's `services`, so a host with `services = ["memory"]` has a
+// live, healthy serve and NO ingest listener at all. Reading "serve is up" as
+// "events may still arrive" made `pix monitor` print nothing and exit 0 there
+// — forever, since nothing will ever fill that store — which is precisely the
+// "ran fine, there's just nothing to see" ambiguity this whole path exists to
+// remove. A dial can only be fooled by something else holding the port, and
+// that direction is the safe one: it suppresses a nag, never a read.
 func ingestUp() bool {
-	up, _ := service.ServeIdentityUp(service.ManagedActive, config.ServePidPath(), 0)
-	return up
+	if testSeams.ingestUp != nil {
+		return testSeams.ingestUp()
+	}
+	c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", monitor.DefaultPort), 250*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = c.Close()
+	return true
 }
 
 // monitorBanner is the one honest line an interactive follow prints to

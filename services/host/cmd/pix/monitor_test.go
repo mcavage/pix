@@ -5,10 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"pix/host/monitor"
+	"pix/host/service"
 	"strconv"
 	"strings"
 	"sync"
@@ -262,6 +266,46 @@ func TestMonitorOneShotIsTheNonTTYDefault(t *testing.T) {
 	}
 }
 
+// pinIngest fixes the one input these tests cannot isolate: the ingest
+// listener lives on a fixed, machine-wide port, so without this a developer
+// running `pix serve` with monitor enabled and a CI box running nothing grade
+// the same code differently.
+func pinIngest(t *testing.T, up bool) {
+	t.Helper()
+	testSeams.ingestUp = func() bool { return up }
+	t.Cleanup(func() { testSeams.ingestUp = nil })
+}
+
+// TestIngestUp_AnswersTheListenerNotTheServeProcess is the regression. `serve`
+// starts only the services named in config's `services`, so `services =
+// ["memory"]` is a live, healthy serve with NO ingest listener — and reading
+// "serve is up" as "events may still arrive" made `pix monitor` print nothing
+// and exit 0 on that host, forever, which is the exact ambiguity the one-shot
+// error path exists to remove.
+func TestIngestUp_AnswersTheListenerNotTheServeProcess(t *testing.T) {
+	if c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", monitor.DefaultPort), 250*time.Millisecond); err == nil {
+		_ = c.Close()
+		t.Skipf("something is already listening on :%d — the premise (no ingest) cannot be established here", monitor.DefaultPort)
+	}
+	isolateServeState(t)
+	// A pid that ACTUALLY verifies as `pix-host serve` (argv[0] base "pix-host",
+	// argv[1] "serve") — the same identity check ServeIdentityUp uses. Under the
+	// old definition this alone made ingestUp() true.
+	pid := startFakeServeProc(t)
+	if err := os.MkdirAll(filepath.Dir(config.ServePidPath()), 0o700); err != nil {
+		t.Fatalf("mkdir state dir: %v", err)
+	}
+	if err := os.WriteFile(config.ServePidPath(), []byte(strconv.Itoa(pid)), 0o600); err != nil {
+		t.Fatalf("write fake pidfile: %v", err)
+	}
+	if up, _ := service.ServeIdentityUp(service.ManagedActive, config.ServePidPath(), 0); !up {
+		t.Fatal("premise not established: the fake serve must read as a running serve")
+	}
+	if ingestUp() {
+		t.Error("ingestUp() = true from a serve process alone; it must answer the ingest LISTENER")
+	}
+}
+
 // TestMonitorOneShotErrorsOnAbsentStoreWithIngestDown is the OTHER half of
 // the fix: a one-shot read against a store that was never created, with no
 // `pix-host serve` running to ever fill it, must fail loudly and
@@ -269,6 +313,7 @@ func TestMonitorOneShotIsTheNonTTYDefault(t *testing.T) {
 // from "ran fine, there's just nothing to see".
 func TestMonitorOneShotErrorsOnAbsentStoreWithIngestDown(t *testing.T) {
 	isolateServeState(t)
+	pinIngest(t, false)
 	absent := filepath.Join(t.TempDir(), "never-created")
 
 	var out bytes.Buffer
@@ -293,16 +338,10 @@ func TestMonitorOneShotErrorsOnAbsentStoreWithIngestDown(t *testing.T) {
 // not an error, and must not be confused with the down case above.
 func TestMonitorOneShotEmptyStoreWithIngestUpIsQuietSuccess(t *testing.T) {
 	isolateServeState(t)
-	// A pid that ACTUALLY verifies as `pix-host serve` (argv[0] base "pix-host",
-	// argv[1] "serve") — the same identity check ServeIdentityUp uses to refuse
-	// signalling a stranger, so this test proves the real path, not a stub.
-	pid := startFakeServeProc(t)
-	if err := os.MkdirAll(filepath.Dir(config.ServePidPath()), 0o700); err != nil {
-		t.Fatalf("mkdir state dir: %v", err)
-	}
-	if err := os.WriteFile(config.ServePidPath(), []byte(strconv.Itoa(pid)), 0o600); err != nil {
-		t.Fatalf("write fake pidfile: %v", err)
-	}
+	// "Up" now means the INGEST LISTENER answers, not that some serve process
+	// exists — see ingestUp. Pinned rather than dialled, because the real port
+	// is shared with whatever this machine happens to be running.
+	pinIngest(t, true)
 
 	absent := filepath.Join(t.TempDir(), "never-created")
 	var out bytes.Buffer
