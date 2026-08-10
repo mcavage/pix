@@ -251,7 +251,11 @@ func (p MCPProbe) reduce(findings []mcpFinding) Result {
 			unknowns++
 		}
 	}
-	ev := strings.Join(notes, "; ")
+	// Newline-joined, not "; ": a note contains its own semicolons ("registered
+	// (host registration; attachment ... not checkable)"), so any in-band
+	// separator the renderer could split on also splits the notes themselves --
+	// which is exactly what turned 8 servers into 16 half-sentences.
+	ev := strings.Join(notes, "\n")
 	total := len(findings)
 	switch {
 	case gaps > 0:

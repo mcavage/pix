@@ -9,7 +9,7 @@
       "exits": 15
     },
     "pix/host/cli": {
-      "_prod_loc_note": "475 -\u003e 502: Deps.Config() now warns about config keys this build ignores, so a typo is surfaced instead of silently doing nothing. A deliberate, reviewed raise of a shrink-only budget, which is the only way this number is allowed to move.",
+      "_prod_loc_note": "475 -> 502: Deps.Config() now warns about config keys this build ignores, so a typo is surfaced instead of silently doing nothing. A deliberate, reviewed raise of a shrink-only budget, which is the only way this number is allowed to move.",
       "prod_loc": 485,
       "exports": 20,
       "globals": 2,
@@ -24,7 +24,7 @@
       "exits": 1
     },
     "pix/host/config": {
-      "_prod_loc_note": "prod_loc 796 -\u003e 804: ServiceEnabled now resolves `services` the way `pix-host serve` does, and the load-bearing half is that EMPTY MEANS ALL (resolveServices: \"an empty result means all\"). Reading empty as none made doctor call memory OPTIONAL on a config where serve starts it -- the commonest config there is -- so a memory unit that was genuinely down could not fail readiness. A deliberate, reviewed raise.",
+      "_prod_loc_note": "prod_loc 796 -> 804: ServiceEnabled now resolves `services` the way `pix-host serve` does, and the load-bearing half is that EMPTY MEANS ALL (resolveServices: \"an empty result means all\"). Reading empty as none made doctor call memory OPTIONAL on a config where serve starts it -- the commonest config there is -- so a memory unit that was genuinely down could not fail readiness. A deliberate, reviewed raise.",
       "prod_loc": 804,
       "exports": 40,
       "globals": 13,
@@ -32,8 +32,8 @@
       "exits": 0
     },
     "pix/host/health": {
-      "_prod_loc_note": "raised together for ONE change: `pix doctor` and `pix setup` demanded an anthropic/openai/google key from hosts whose models need none. A pack's sbx-session backends carry their own credential (a Docker login session the sbx proxy injects inside the sandbox, unreplayable from the host by design), so the key store lists nothing and the required row went red prescribing `pix models add anthropic` -- a key nothing would read. `pix run`'s launch gate already skipped the key check on exactly this host (inference.ConfiguredKeylessInference); ProviderKeyProbe.Keyless + inference.KeylessBackends give the same carve-out to the two verbs that lacked it, so all three stop disagreeing about one host. Distinct from Callable, which answers \"this key routes nowhere\"; Keyless answers \"no key was ever the credential\". provision's new edge is importing inference for that one predicate rather than re-deriving a second opinion. A deliberate, reviewed raise of a shrink-only budget.",
-      "prod_loc": 1254,
+      "_prod_loc_note": "prod_loc 1254 -> 1277: the mcp row's evidence was ONE run-on line -- eight servers, each with its own parenthetical, joined into several hundred characters that no one can read in a terminal or skim anywhere. A reader could not tell how many servers there were, which one was theirs, or where one note ended. writeEvidence now gives a set-valued evidence string one line per item under a count, and the notes are joined with newlines because \"; \" cannot be the separator: the notes contain semicolons, and splitting on those turned 8 servers into 16 half-sentences. Single-item evidence is untouched, so every other row reads exactly as before. A deliberate, reviewed raise of a shrink-only budget.",
+      "prod_loc": 1277,
       "exports": 40,
       "globals": 29,
       "edges": 3,
@@ -118,7 +118,7 @@
       "exits": 0
     },
     "pix/host/secret": {
-      "_prod_loc_note": "1240 -\u003e 1290, exports 42 -\u003e 43, globals 8 -\u003e 9: web-search TOOL keys (ToolKeyRefOrder) are now seeded/checked/mirrored like model-provider keys, but held OUT of ProviderKeyRefOrder and ModelProviders so `pix models add` never offers a name it would reject and a missing search key can never refuse a launch. The new export is the list itself; the new global is the sync map, now DERIVED from both lists so an entry cannot be added to one and forgotten in the other. A deliberate, reviewed raise of a shrink-only budget.",
+      "_prod_loc_note": "1240 -> 1290, exports 42 -> 43, globals 8 -> 9: web-search TOOL keys (ToolKeyRefOrder) are now seeded/checked/mirrored like model-provider keys, but held OUT of ProviderKeyRefOrder and ModelProviders so `pix models add` never offers a name it would reject and a missing search key can never refuse a launch. The new export is the list itself; the new global is the sync map, now DERIVED from both lists so an entry cannot be added to one and forgotten in the other. A deliberate, reviewed raise of a shrink-only budget.",
       "prod_loc": 1290,
       "exports": 43,
       "globals": 9,
@@ -126,7 +126,7 @@
       "exits": 0
     },
     "pix/host/service": {
-      "_prod_loc_note": "1664 -\u003e 1708: `serve stop` now sweeps for orphaned `pix-host serve` processes AFTER stopping the pid its pidfile recorded. A pidfile names one daemon and is not proof there is only one, so a second daemon outliving its own pidfile kept holding :11435 while stop reported success. That is why `pix serve stop` had to be run twice. The sweep only ever signals pids that positively verify as our live serve. A deliberate, reviewed raise of a shrink-only budget.",
+      "_prod_loc_note": "1664 -> 1708: `serve stop` now sweeps for orphaned `pix-host serve` processes AFTER stopping the pid its pidfile recorded. A pidfile names one daemon and is not proof there is only one, so a second daemon outliving its own pidfile kept holding :11435 while stop reported success. That is why `pix serve stop` had to be run twice. The sweep only ever signals pids that positively verify as our live serve. A deliberate, reviewed raise of a shrink-only budget.",
       "prod_loc": 1706,
       "exports": 24,
       "globals": 16,
@@ -177,7 +177,7 @@
       "exits": 0
     },
     "pix/host/workflow/launch": {
-      "_prod_loc_note": "2458 -\u003e 2503, exports 109 -\u003e 112: personal context (skills + standing AGENTS.md) is now mounted unconditionally at the context ROOT, so a session can write its FIRST skill from inside the sandbox and keep the whole dir in git. Previously the mount was gated on the dir already having entries, which made the first skill impossible to author in-sandbox, and only skills/ was mounted, so AGENTS.md was invisible. New exports: MountDirs (the mount set, now distinct from the skill set), PersonalSkillsDir (one spelling shared by loader and mount), EnsurePersonalContextDir. A deliberate, reviewed raise of a shrink-only budget. Then 2503 -\u003e 2543, globals 42 -\u003e 43: teardown now translates pi's parting \"To resume this session: pi --session-dir ...\" into the host command that actually works (`pix run -- -c`), and only when a session file provably exists. Suppressing pi's line would have been wrong: .pi-sessions is in the workspace mount, so the session genuinely outlives the sandbox; only the dialect was unusable.",
+      "_prod_loc_note": "2458 -> 2503, exports 109 -> 112: personal context (skills + standing AGENTS.md) is now mounted unconditionally at the context ROOT, so a session can write its FIRST skill from inside the sandbox and keep the whole dir in git. Previously the mount was gated on the dir already having entries, which made the first skill impossible to author in-sandbox, and only skills/ was mounted, so AGENTS.md was invisible. New exports: MountDirs (the mount set, now distinct from the skill set), PersonalSkillsDir (one spelling shared by loader and mount), EnsurePersonalContextDir. A deliberate, reviewed raise of a shrink-only budget. Then 2503 -> 2543, globals 42 -> 43: teardown now translates pi's parting \"To resume this session: pi --session-dir ...\" into the host command that actually works (`pix run -- -c`), and only when a session file provably exists. Suppressing pi's line would have been wrong: .pi-sessions is in the workspace mount, so the session genuinely outlives the sandbox; only the dialect was unusable.",
       "prod_loc": 2543,
       "exports": 112,
       "globals": 43,
@@ -185,7 +185,7 @@
       "exits": 0
     },
     "pix/host/workflow/models": {
-      "_prod_loc_note": "1084 -\u003e 1091: `models add` no longer tells the user to run `pix models route`. That was busywork presented as a required step: every `pix run` already recompiles the intent map from current bindings. The line now states that routing updates itself. A deliberate, reviewed raise of a shrink-only budget.",
+      "_prod_loc_note": "1084 -> 1091: `models add` no longer tells the user to run `pix models route`. That was busywork presented as a required step: every `pix run` already recompiles the intent map from current bindings. The line now states that routing updates itself. A deliberate, reviewed raise of a shrink-only budget.",
       "prod_loc": 1091,
       "exports": 19,
       "globals": 6,
@@ -193,7 +193,7 @@
       "exits": 0
     },
     "pix/host/workflow/pack": {
-      "_prod_loc_note": "prod_loc 3049 -\u003e 3062, globals 4 -\u003e 5: ONE seam, paying for itself many times over. propagateConfig's real implementation runs `launchctl kickstart -k` against the developer's own pix LaunchAgent, and every test here that adopts a pack went through it -- so a test run restarted the live daemon on the machine running it, serially, blocking on each. That was 507s of a 578s `go test ./...` locally against a fast gate whose own documented go-test baseline is 32.8s; CI never saw it because there is no agent there to kick. Behind the var, this package is 2.8s and the whole gate is 47s instead of 9.5 minutes. The new global IS the seam. A deliberate, reviewed raise.",
+      "_prod_loc_note": "prod_loc 3049 -> 3062, globals 4 -> 5: ONE seam, paying for itself many times over. propagateConfig's real implementation runs `launchctl kickstart -k` against the developer's own pix LaunchAgent, and every test here that adopts a pack went through it -- so a test run restarted the live daemon on the machine running it, serially, blocking on each. That was 507s of a 578s `go test ./...` locally against a fast gate whose own documented go-test baseline is 32.8s; CI never saw it because there is no agent there to kick. Behind the var, this package is 2.8s and the whole gate is 47s instead of 9.5 minutes. The new global IS the seam. A deliberate, reviewed raise.",
       "prod_loc": 3062,
       "exports": 28,
       "globals": 5,
