@@ -10,10 +10,9 @@ package main
 //     reached once every bind in Phase 1 has already succeeded.
 //  2. drain-before-teardown: on shutdown, every front door stops accepting
 //     and drains its in-flight work FIRST, bounded, before the supervised
-//     backend is torn down and before runServe waits on monitor.
+//     backend is torn down.
 
 import (
-	"context"
 	"net"
 	"net/http"
 	"os"
@@ -45,15 +44,15 @@ func TestBindFrontDoorsReturnsErrorWithoutSpawningAnything(t *testing.T) {
 	t.Setenv("MEMORY_PORT", port)
 
 	enabledSvc := func(name string) bool { return name == "memory" }
-	fd, berr := bindFrontDoors(enabledSvc, "127.0.0.1", 0)
+	all, berr := bindFrontDoors(enabledSvc)
 	if berr == nil {
 		t.Fatal("bindFrontDoors: want an error on an occupied memory port, got nil")
 	}
 	if !strings.Contains(berr.Error(), "bind memory") {
 		t.Errorf("bindFrontDoors error = %q, want it to name the memory front door", berr)
 	}
-	if len(fd.all) != 0 || fd.monitorSrv != nil {
-		t.Fatalf("bindFrontDoors returned a non-zero result on failure: %+v", fd)
+	if len(all) != 0 {
+		t.Fatalf("bindFrontDoors returned front doors on failure: %+v", all)
 	}
 }
 
@@ -107,15 +106,13 @@ func TestServeProcessSpawnsNoChildOnMemoryPortConflict(t *testing.T) {
 
 // --- drain-before-teardown ----------------------------------------------
 
-// TestPerformShutdownOrdersFrontDoorsBeforeBackendBeforeMonitorWait drives a
-// REAL http.Server with a genuinely in-flight, blocked request, then calls
-// performShutdown with recording stand-ins for the backend teardown and the
-// monitor wait. It asserts: the in-flight front-door request is drained to
-// completion BEFORE the backend teardown runs, which runs BEFORE the monitor
-// wait — and that performShutdown cancelled the monitor context so monitor's
-// own Serve(ctx) begins draining at the same time as the front doors, not
-// after the backend is already gone.
-func TestPerformShutdownOrdersFrontDoorsBeforeBackendBeforeMonitorWait(t *testing.T) {
+// TestPerformShutdownDrainsFrontDoorsBeforeBackend drives a REAL http.Server
+// with a genuinely in-flight, blocked request, then calls performShutdown with
+// a recording stand-in for the backend teardown. It asserts the in-flight
+// front-door request is drained to completion BEFORE the backend teardown runs
+// — tearing the backend down while a front door still accepts lets a brand-new
+// request land on a backend that is already mid-teardown.
+func TestPerformShutdownDrainsFrontDoorsBeforeBackend(t *testing.T) {
 	var mu sync.Mutex
 	var order []string
 	record := func(tag string) {
@@ -160,16 +157,10 @@ func TestPerformShutdownOrdersFrontDoorsBeforeBackendBeforeMonitorWait(t *testin
 		t.Fatal("the /slow handler never started — not genuinely in-flight")
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
 	backendDone := make(chan struct{})
 	shutdownBackend := func() {
 		record("backend")
 		close(backendDone)
-	}
-	monitorWaitDone := make(chan struct{})
-	waitMonitor := func() {
-		record("monitor-wait")
-		close(monitorWaitDone)
 	}
 
 	// Unblock the handler shortly after shutdown starts, from a side
@@ -182,7 +173,7 @@ func TestPerformShutdownOrdersFrontDoorsBeforeBackendBeforeMonitorWait(t *testin
 
 	shutdownDone := make(chan struct{})
 	go func() {
-		performShutdown([]*http.Server{srv}, cancel, shutdownBackend, waitMonitor)
+		performShutdown([]*http.Server{srv}, shutdownBackend)
 		close(shutdownDone)
 	}()
 
@@ -196,14 +187,10 @@ func TestPerformShutdownOrdersFrontDoorsBeforeBackendBeforeMonitorWait(t *testin
 		t.Fatalf("in-flight request failed instead of draining cleanly: %v", reqErr)
 	}
 
-	if ctx.Err() == nil {
-		t.Fatal("performShutdown did not cancel the monitor context — monitor's own Serve(ctx) would never start draining")
-	}
-
 	mu.Lock()
 	got := append([]string(nil), order...)
 	mu.Unlock()
-	want := []string{"frontdoor-drained", "backend", "monitor-wait"}
+	want := []string{"frontdoor-drained", "backend"}
 	if len(got) != len(want) {
 		t.Fatalf("shutdown order = %v, want %v", got, want)
 	}
@@ -239,9 +226,7 @@ func TestShutdownFrontDoorsStopsAcceptingImmediately(t *testing.T) {
 		resp.Body.Close()
 	}
 
-	_, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	shutdownFrontDoors([]*http.Server{srv}, cancel)
+	shutdownFrontDoors([]*http.Server{srv})
 
 	// A NEW connection attempt after shutdownFrontDoors has returned must be
 	// refused — the listener is closed, not merely draining old work.

@@ -443,7 +443,7 @@ function gettingStartedText(): string {
 		"",
 		"Ask normally for ordinary work. For a rigorous feature, say ‘plan this’,",
 		"‘build this’, or ‘ship this’; Pix selects the matching workflow and crew.",
-		"Host commands such as pix run, pix task, and pix monitor run in your terminal,",
+		"Host commands such as pix run and pix task run in your terminal,",
 		"not as slash commands inside this agent.",
 	].join("\n");
 }

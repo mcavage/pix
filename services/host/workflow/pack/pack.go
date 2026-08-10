@@ -998,8 +998,21 @@ func packUse(env hostenv.Env, out io.Writer, rest []string, register RegisterFn)
 	solicitPackCredentials(env, os.Stdin, out, cli.IsTTY(os.Stdin), p)
 	// A knowledge change is daemon-affecting: advise the running serve so the new
 	// bundle is indexed — on THIS writer now, so --quiet silences the restart too.
-	service.PropagateConfig(service.DefaultReloader(quietly(out, env)), quietly(out, env))
+	propagateConfig(quietly(out, env))
 	return nil
+}
+
+// propagateConfig advises a running serve that daemon-affecting config changed.
+// It is a VARIABLE for the same reason provision's installLaunchd is one: the
+// real implementation resolves to `launchctl kickstart -k` against the
+// developer's OWN LaunchAgent, so a test that adopts a pack was restarting the
+// live pix daemon on the machine running the test — repeatedly, serially, and
+// blocking on each one. That is what made this package ~507s of a ~578s
+// `go test ./...` locally while CI (no agent loaded, so the kickstart fails
+// instantly) stayed fast, and it is why the fast gate's own documented 32.8s
+// baseline stopped describing anybody's laptop.
+var propagateConfig = func(out io.Writer) {
+	service.PropagateConfig(service.DefaultReloader(out), out)
 }
 
 // quietly resolves the stream a best-effort side effect may narrate on.

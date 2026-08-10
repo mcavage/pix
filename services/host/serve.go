@@ -1,24 +1,17 @@
 // `serve` is the plugin supervisor. It runs the long-running HTTP host services
-// (memory :11435, monitor ingest :11437), resolving each capability slot from
-// config. Plugins never bind ports — the supervisor owns the listeners and the
-// stable host surface every sandbox depends on. MCP servers are stdio and
-// spawned on demand by the sbx gateway, not here.
-//
-// monitor ingest is composed directly rather than as a supervised unit: it is one
-// loopback listener over a file-backed store, and it already owns both its
-// net.Listener (bound eagerly, so a port conflict is a startup error) and its
-// context-based Serve/shutdown. `ctx` is threaded through so cancelling it on
-// shutdown drains monitor the way SIGINT drains everything else. See
-// docs/design/monitor.md.
+// (memory :11435), resolving each capability slot from config. Plugins never
+// bind ports — the supervisor owns the listeners and the stable host surface
+// every sandbox depends on. MCP servers are stdio and spawned on demand by the
+// sbx gateway, not here.
 //
 // Startup is two strict phases, in order (bindFrontDoors, then
 // spawnChildren): every built-in HTTP front door binds FIRST — before a
 // single pack/plugin child is spawned or the pidfile is written — so a port
 // conflict fails with zero subprocesses ever launched. Shutdown mirrors that
-// (performShutdown): drain every front door first with a bounded context,
-// then tear down the supervised backend, then wait for monitor's own drain —
-// and no exit path calls os.Exit until that full sequence has returned, so
-// exit-1 semantics on a fatal error are preserved but never early.
+// (performShutdown): drain every front door first with a bounded context, then
+// tear down the supervised backend — and no exit path calls os.Exit until that
+// full sequence has returned, so exit-1 semantics on a fatal error are
+// preserved but never early.
 package main
 
 import (
@@ -40,7 +33,6 @@ import (
 
 	"pix/host/cli"
 	"pix/host/config"
-	"pix/host/monitor"
 	"pix/host/packinfo"
 	"pix/host/sys"
 	"pix/host/workflow/pack"
@@ -60,39 +52,32 @@ type hostService struct {
 }
 
 // frontDoorShutdownTimeout bounds how long a front-door http.Server is given to
-// drain its in-flight requests once shutdown starts, before Close() forces it —
-// the same ceiling monitor ingest's own Serve(ctx) already uses (see
-// monitor/ingest.go), so no front door can wedge shutdown past that.
+// drain its in-flight requests once shutdown starts, before Close() forces it,
+// so no front door can wedge shutdown.
 const frontDoorShutdownTimeout = 5 * time.Second
 
-// serveUsage documents the flags runServe parses (--bind/--port are
-// monitor-only; memory's bind/port stay env-only via MEMORY_BIND/MEMORY_PORT)
-// plus the enabled-service positionals. `pix serve` intercepts -h/--help and
-// prints service.Usage instead; this text is for a direct `pix-host serve -h`.
-const serveUsage = `usage: pix-host serve [service...] [--bind ADDR] [--port N]
+// serveUsage documents the enabled-service positionals runServe parses.
+// memory's bind/port stay env-only via MEMORY_BIND/MEMORY_PORT, so there are no
+// flags left: --bind/--port belonged to the retired monitor ingest and are now a
+// usage error, like every other retired capability. `pix serve` intercepts
+// -h/--help and prints service.Usage instead; this text is for a direct
+// `pix-host serve -h`.
+const serveUsage = `usage: pix-host serve [service...]
 
-  Run the long-running host services: memory (:11435), monitor ingest
-  (:11437). No service names given: run every service in ` + "`services`" + `
-  (config.toml), or all of them if that is also unset.
-
-  --bind ADDR   monitor ingest listen address (default 127.0.0.1,
-                loopback-only). A non-loopback bind exposes the ingest
-                endpoint — no auth, full agent context and tool output — to
-                your local network; the process WARNS loudly when it does.
-  --port N      monitor ingest port (default 11437)
+  Run the long-running host services: memory (:11435). No service names
+  given: run every service in ` + "`services`" + ` (config.toml), or all of
+  them if that is also unset.
 `
 
 // serveServiceAliases is the config name -> internal service name table: the
 // WHOLE set of capabilities `serve` composes. A retired capability leaves here,
 // which is what makes `serve <retired>` a usage error, not a started daemon.
 func serveServiceAliases() map[string]string {
-	return map[string]string{"memory": "memory", "monitor": "monitor"}
+	return map[string]string{"memory": "memory"}
 }
 
 func runServe(argv []string) {
 	fs := cli.NewFlagSet()
-	monitorPort := fs.Int("port", monitor.DefaultPort)
-	monitorBind := fs.Str("bind", monitor.DefaultBindAddr)
 	enabled, ferr := fs.Parse(argv)
 	if ferr != nil {
 		fmt.Fprintf(os.Stderr, "pix-host serve: %v\n\n%s", ferr, serveUsage)
@@ -109,14 +94,11 @@ func runServe(argv []string) {
 	}
 
 	sup := &supervisor{}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	// fatalf routes every fatal exit through plugin cleanup: a plain log.Fatalf
 	// skips the signal-handler shutdown and orphans a launched plugin subprocess.
 	// sup.shutdown() is a no-op with none running, so use it for EVERY fatal below.
 	fatalf := func(format string, a ...any) {
 		log.Printf("serve: "+format, a...)
-		cancel()
 		sup.shutdown()
 		os.Exit(1)
 	}
@@ -152,14 +134,13 @@ func runServe(argv []string) {
 	// `serve` racing an already-running daemon for the same port dies right
 	// here, on a plain "address already in use", with zero subprocesses to
 	// clean up.
-	fd, berr := bindFrontDoors(enabledSvc, *monitorBind, *monitorPort)
+	all, berr := bindFrontDoors(enabledSvc)
 	if berr != nil {
 		fatalf("%v", berr)
 	}
-	if len(fd.all) == 0 && fd.monitorSrv == nil {
+	if len(all) == 0 {
 		fatalf("no services enabled (run: pix config set services %s)", strings.Join(valid, ","))
 	}
-	all, monitorSrv := fd.all, fd.monitorSrv
 
 	// Phase 2: only once EVERY front door above is bound do we spawn pack units
 	// and the memory plugin child — the one place either is ever launched.
@@ -199,25 +180,19 @@ func runServe(argv []string) {
 		}()
 	}
 
-	// monitor ingest runs its own Serve(ctx): cancelling ctx (inside
-	// shutdownFrontDoors, alongside every mux-based front door) is what stops
-	// it — there is no http.Server here for THIS process to Shutdown directly.
-	waitMonitor := serveMonitorAndWait(monitorSrv, ctx, fatalCh)
-
 	// Block until a signal or a service failure. Both paths run the SAME fixed
 	// shutdown order: drain every front door first, then the supervised
-	// backend, then wait for monitor's own graceful drain to finish. Neither
-	// path calls os.Exit until that full sequence has actually returned, so a
-	// fatal exit never skips the joined cleanup — exit 1 is preserved, just
-	// never early.
+	// backend. Neither path calls os.Exit until that full sequence has actually
+	// returned, so a fatal exit never skips the joined cleanup — exit 1 is
+	// preserved, just never early.
 	select {
 	case sig := <-sigCh:
 		log.Printf("serve: received %v; shutting down", sig)
-		performShutdown(httpServers, cancel, sup.shutdown, waitMonitor)
+		performShutdown(httpServers, sup.shutdown)
 		// defers (removeServePidFile, removeServeLazyMarker) run on return
 	case err := <-fatalCh:
 		log.Printf("serve: fatal: %v", err)
-		performShutdown(httpServers, cancel, sup.shutdown, waitMonitor)
+		performShutdown(httpServers, sup.shutdown)
 		// Explicitly run deferred cleanup before os.Exit since defers don't run
 		// when Exit is called (defers only run on return from runServe).
 		removeServePidFile()
@@ -226,24 +201,15 @@ func runServe(argv []string) {
 	}
 }
 
-// serveFrontDoors is bindFrontDoors' result: every built-in HTTP front door,
-// already bound, plus the monitor ingest server (which owns its own listener).
-type serveFrontDoors struct {
-	all        []hostService
-	monitorSrv *monitor.IngestServer
-}
-
 // bindFrontDoors binds every built-in HTTP front door — memory's :11435
-// listener, monitor ingest's own loopback listener — and nothing else: it has
-// no `*supervisor`, no packinfo, no way to spawn a subprocess. That is the
-// whole point: a port conflict fails here, before runServe has any chance to
-// spawn a pack unit or the memory plugin child, so the failure can never
-// leave one orphaned. Called with a NON-nil error, the returned
-// serveFrontDoors is always the zero value — every listener bound during THIS
-// call is closed first, so a later failure (e.g. monitor, after memory
-// already bound) never leaks the earlier winner's socket.
-func bindFrontDoors(enabledSvc func(string) bool, monitorBind string, monitorPort int) (serveFrontDoors, error) {
-	var fd serveFrontDoors
+// listener — and nothing else: it has no `*supervisor`, no packinfo, no way to
+// spawn a subprocess. That is the whole point: a port conflict fails here,
+// before runServe has any chance to spawn a pack unit or the memory plugin
+// child, so the failure can never leave one orphaned. Called with a NON-nil
+// error the result is always nil, so a caller can never act on a half-bound
+// set.
+func bindFrontDoors(enabledSvc func(string) bool) ([]hostService, error) {
+	var all []hostService
 	// memory ALWAYS runs as a supervised go-plugin unit — the built-in impl as a
 	// self-exec of this binary (`pix-host plugin memory`), a configured impl as its
 	// own sha-pinned executable. One path, one lifecycle: the store (and its
@@ -255,34 +221,12 @@ func bindFrontDoors(enabledSvc func(string) bool, monitorBind string, monitorPor
 		addr := env("MEMORY_BIND", "127.0.0.1") + ":" + env("MEMORY_PORT", "11435")
 		ln, lerr := net.Listen("tcp", addr)
 		if lerr != nil {
-			return serveFrontDoors{}, fmt.Errorf("bind memory (%s): %w", addr, lerr)
+			return nil, fmt.Errorf("bind memory (%s): %w", addr, lerr)
 		}
-		fd.all = append(fd.all, hostService{name: "memory", addr: addr, ln: ln})
+		all = append(all, hostService{name: "memory", addr: addr, ln: ln})
 	}
 
-	// monitor ingest: a loopback HTTP listener over a bounded, file-backed store,
-	// receiving NDJSON events + blob bodies from the in-sandbox tap. It spawns no
-	// child of its own, but binding it here — before pack/memory-child spawn —
-	// keeps every front door's bind attempt in the same, spawn-free phase.
-	if enabledSvc("monitor") {
-		root, rerr := config.MonitorStoreRoot()
-		if rerr != nil {
-			closeFrontDoorListeners(fd.all)
-			return serveFrontDoors{}, fmt.Errorf("resolve monitor store root: %w", rerr)
-		}
-		if !isLoopbackAddr(monitorBind) {
-			log.Printf("WARNING: monitor ingest is bound to %s, exposed on your local network with NO AUTHENTICATION — anyone on the network can send this sandbox's full agent context and tool output into the store. Use a firewall, or bind loopback (drop --bind) unless you specifically need this.", monitorBind)
-		}
-		srv, merr := buildMonitorIngest(monitorBind, monitorPort, root)
-		if merr != nil {
-			closeFrontDoorListeners(fd.all)
-			return serveFrontDoors{}, fmt.Errorf("launch monitor ingest: %w", merr)
-		}
-		fd.monitorSrv = srv
-		log.Printf("starting monitor on http://%s (store %s)", srv.Addr(), root)
-	}
-
-	return fd, nil
+	return all, nil
 }
 
 // closeFrontDoorListeners closes every listener already bound in `all` — used
@@ -363,25 +307,19 @@ func spawnChildren(cfg *config.Config, sup *supervisor, selfPath string, all []h
 // fatal service error — runs, in a fixed order: drain every front door FIRST
 // (stop accepting new connections immediately, then wait out any in-flight
 // request bounded by frontDoorShutdownTimeout — see shutdownFrontDoors), THEN
-// tear down the supervised backend (pack units + the memory plugin), THEN
-// wait for monitor ingest's own graceful drain to actually finish. Getting
+// tear down the supervised backend (pack units + the memory plugin). Getting
 // this backwards — tearing the backend down while a front door still accepts
 // — lets a brand-new request land on a backend that is already mid-teardown.
-func performShutdown(httpServers []*http.Server, cancelMonitor context.CancelFunc, shutdownBackend func(), waitMonitor func()) {
-	shutdownFrontDoors(httpServers, cancelMonitor)
+func performShutdown(httpServers []*http.Server, shutdownBackend func()) {
+	shutdownFrontDoors(httpServers)
 	shutdownBackend()
-	waitMonitor()
 }
 
 // shutdownFrontDoors stops accepting new connections and drains every
 // mux-based front-door http.Server, bounded by frontDoorShutdownTimeout so a
-// stuck handler cannot hang shutdown forever, and cancels ctx so monitor
-// ingest's own Serve(ctx) begins its matching bounded drain at the same time.
-// It returns once every http.Server's Shutdown call has returned; the caller
-// waits on monitor separately (waitMonitor), so a slow monitor drain never
-// blocks the backend teardown that follows.
-func shutdownFrontDoors(servers []*http.Server, cancelMonitor context.CancelFunc) {
-	cancelMonitor()
+// stuck handler cannot hang shutdown forever. It returns once every
+// http.Server's Shutdown call has returned.
+func shutdownFrontDoors(servers []*http.Server) {
 	var wg sync.WaitGroup
 	for _, srv := range servers {
 		srv := srv
@@ -396,54 +334,6 @@ func shutdownFrontDoors(servers []*http.Server, cancelMonitor context.CancelFunc
 		}()
 	}
 	wg.Wait()
-}
-
-// buildMonitorIngest constructs the monitor store + ingest server, split out
-// from runServe so a test can build one against a t.TempDir() root without the
-// signal handling, pidfile and plugin supervision around it.
-func buildMonitorIngest(bind string, port int, root string) (*monitor.IngestServer, error) {
-	store, err := monitor.NewStore(monitor.StoreConfig{Root: root})
-	if err != nil {
-		return nil, fmt.Errorf("monitor store: %w", err)
-	}
-	srv, err := monitor.NewIngestServer(monitor.IngestConfig{Port: port, BindAddr: bind, Store: store})
-	if err != nil {
-		return nil, fmt.Errorf("monitor ingest: %w", err)
-	}
-	return srv, nil
-}
-
-// serveMonitorAndWait runs monitorSrv.Serve(ctx) in the background and
-// returns a wait func that blocks until that call has ACTUALLY returned —
-// monitor's own graceful shutdown (bounded to 5s, see monitor/ingest.go)
-// having already completed, not merely started. runServe calls wait() before
-// it returns OR os.Exit(1)s, on every shutdown path, so a fatal failure
-// elsewhere in `serve` can never cut monitor off mid-drain the way an
-// unwaited background goroutine would. A nil monitorSrv (monitor not
-// enabled) returns a no-op wait.
-func serveMonitorAndWait(monitorSrv *monitor.IngestServer, ctx context.Context, fatalCh chan<- error) (wait func()) {
-	if monitorSrv == nil {
-		return func() {}
-	}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		if err := monitorSrv.Serve(ctx); err != nil {
-			fatalCh <- fmt.Errorf("monitor: %v", err)
-		}
-	}()
-	return func() { <-done }
-}
-
-// isLoopbackAddr reports whether host (no port) is the loopback interface: the
-// warn-on-LAN-bind classification for monitor ingest (docs/design/monitor.md).
-func isLoopbackAddr(host string) bool {
-	switch host {
-	case "", "localhost":
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 // writeServePidFile records the current pid at config.ServePidPath() (0600, dir

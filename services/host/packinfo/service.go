@@ -48,13 +48,11 @@ var serviceRules = struct {
 	activations: map[string]bool{"always": true, "on-demand": true},
 	reservedPorts: map[int]string{
 		11435: "pix-host memory",
-		11437: "pix monitor",
 	},
 	reservedNames: map[string]bool{
 		"memory":    true,
 		"knowledge": true,
 		"broker":    true,
-		"monitor":   true,
 		"serve":     true,
 	},
 	envName:     regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`),

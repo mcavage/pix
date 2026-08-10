@@ -22,7 +22,7 @@ package main
 // sys IS the OS seam, and its Real exec may hand the terminal to a child
 // process — see streamSeams and the test that pins what that exemption covers.
 //
-// Not in scope, deliberately: log.Printf in the daemon-side packages (monitor's
+// Not in scope, deliberately: log.Printf in the daemon-side packages (the
 // ingest loop, supervise's tree). That is the standard logger, whose
 // destination the daemon's own main sets; it is a logging-configuration
 // question, not a command writing over a user's stdout. log.Fatal/Fatalf/

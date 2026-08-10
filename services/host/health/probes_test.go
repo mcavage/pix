@@ -363,27 +363,3 @@ func writeScript(t *testing.T, name, body string) string {
 	}
 	return p
 }
-
-// --- monitor ----------------------------------------------------------------
-
-func TestMonitorProbe_RealListener(t *testing.T) {
-	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }))
-	t.Cleanup(up.Close)
-	wantStatus(t, check(t, MonitorProbe{Port: portOf(t, up.URL), Enabled: true}, 3*time.Second), StatusReady)
-
-	sick := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusInternalServerError) }))
-	t.Cleanup(sick.Close)
-	bad := check(t, MonitorProbe{Port: portOf(t, sick.URL), Enabled: true}, 3*time.Second)
-	if bad.OK() {
-		t.Error("a monitor answering 500 must never render ready")
-	}
-
-	down := check(t, MonitorProbe{Port: deadPort(t), Enabled: true}, 3*time.Second)
-	wantStatus(t, down, StatusAbsent)
-	if down.Fix == "" {
-		t.Error("a down monitor must carry an exact fix")
-	}
-	if check(t, MonitorProbe{Port: deadPort(t)}, 3*time.Second).Blocking() {
-		t.Error("a monitor nobody enabled must never block")
-	}
-}

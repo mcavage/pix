@@ -57,7 +57,7 @@ func RunDoctor(ctx context.Context, cfg *config.Config, profile string, out io.W
 // what its exit codes mean. The flag list is not here — the command struct's
 // tags are the flag list, and a second copy could only disagree with it.
 const Description = `Diagnose host health: the sbx CLI, the active pack, provider keys, the memory
-unit, the monitor, and the LaunchAgent. Every check reports what it PROVED,
+unit and the LaunchAgent. Every check reports what it PROVED,
 with the exact command that repairs a verified gap.
 
 --json emits the machine-readable snapshot (schema_version 5).

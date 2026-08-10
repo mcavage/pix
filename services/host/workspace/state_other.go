@@ -4,7 +4,7 @@
 // open(2) (Windows): the same Lstat-then-open check state.go always used,
 // kept here for platforms that cannot refuse the symlink atomically. The
 // residual check-to-open TOCTOU window is an accepted tradeoff on this path
-// only — the same posture monitor/store.go documents for staying portable.
+// only — the posture this package documents for staying portable.
 package workspace
 
 import (
