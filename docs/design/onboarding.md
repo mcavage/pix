@@ -133,11 +133,17 @@ file can never make the host spawn an attacker-chosen command); any
 The host must NOT gate `run` on onboarding, but the in-sandbox agent needs to
 know it is a first run. `run` writes a one-shot marker into the mounted
 workspace when `!configExists()` AND no identity is recalled:
-`<workspace>/.pix/onboarding.offer`. A tiny `extensions/onboarding.ts`
-reads it on session start and, ONLY on an interactive TTY (never under `-p` /
-non-interactive), injects the first-turn offer (`deliverAs:"nextTurn"`, stripped
-in the `context` hook, the `timestamps.ts` pattern). CI and `pix run -- -p
-"..."` never see a prompt. The marker is deleted once handled so it offers once.
+`<workspace>/.pix/onboarding.offer`.
+
+SUPERSEDED, and this is what actually ships: there is no offer marker and no
+`extensions/onboarding.ts`. `pix setup` execs `run` with the kickoff message
+composed as generated input (`launch.GeneratedInputMarker` +
+`provision.OnboardingKickoff`, see `cmd/pix/setup_cmd.go`), and the
+`onboarding` skill owns the flow from there. `.pix/onboarding.json` survived
+but changed job: it is the PROPOSAL the skill writes, reconciled by
+`pix setup --apply` / `provision.ReconcileOnboarding` under a confirmation
+gate. Nothing injects a first turn behind the user's back, so the TTY-gating
+that guarded CI has nothing left to guard.
 
 ## Files
 
@@ -156,11 +162,12 @@ Added:
   batched question, confirm-before-write) plus a terminal step that `/remember`s
   identity (data plane) and writes `.pix/onboarding.json` (control plane),
   then runs one real first task.
-- `extensions/onboarding.ts`: first-turn offer injector (TTY-gated).
-- `onboard.go`: `runOnboardNonInteractive` (the CI path), `onboardingResult`,
-  `applyOnboardingResult`, `validateOnboardingResult`.
-- `run.go`: write the `onboarding.offer` marker; read + reconcile
-  `onboarding.json` before launch.
+- `cmd/pix/setup_cmd.go`: composes the kickoff as generated input and execs
+  `run` (there is no offer marker and no `extensions/onboarding.ts`).
+- `workflow/provision`: `OnboardingKickoff`, `ReconcileOnboarding`,
+  `applyOnboarding` — the proposal read/confirm/write path.
+- `cmd/pix/run_cmd.go`: reconciles a pending `.pix/onboarding.json` before
+  `LoadResolvedConfig`, so a fresh create picks it up.
 
 Config keys touched: `gog_account`, `mcp`, `knowledge_bundles` (+ `services`
 knowledge), `ollama_bridge_model`, `memory_watcher_model`.

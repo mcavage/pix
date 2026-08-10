@@ -12,18 +12,7 @@ import (
 	"pix/host/packinfo"
 	"runtime"
 	"testing"
-	"time"
 )
-
-// fixedClock is a deterministic clock for receipt tests. It moved here with the
-// tests that use it; the workspace package has its own copy for its own tests,
-// which is the correct amount of duplication for a three-line test helper.
-func fixedClock(ts string) func() time.Time {
-	return func() time.Time {
-		t, _ := time.Parse(time.RFC3339, ts)
-		return t
-	}
-}
 
 // End-to-end through a real caller: packinfo.WriteMemoryScope must not truncate the
 // target of a symlinked .pix/profile (the launcher-write clobber).

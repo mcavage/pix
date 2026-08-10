@@ -2,7 +2,7 @@
   "schema": 1,
   "packages": {
     "pix/host": {
-      "prod_loc": 3905,
+      "prod_loc": 3894,
       "exports": 0,
       "globals": 39,
       "edges": 10,
@@ -10,8 +10,8 @@
     },
     "pix/host/cli": {
       "_prod_loc_note": "475 -\u003e 502: Deps.Config() now warns about config keys this build ignores, so a typo is surfaced instead of silently doing nothing. A deliberate, reviewed raise of a shrink-only budget, which is the only way this number is allowed to move.",
-      "prod_loc": 502,
-      "exports": 21,
+      "prod_loc": 485,
+      "exports": 20,
       "globals": 2,
       "edges": 2,
       "exits": 0
@@ -33,7 +33,7 @@
     },
     "pix/host/health": {
       "_prod_loc_note": "raised together for ONE change: `pix doctor` reported model keys from the sbx secret store as if they were routable, so a host with three keys but one probed binding showed three green providers while every intent that preferred another vendor silently fell back. ProviderKeyProbe.Callable + inference.CallableProviders make key-present-but-unrouted visible (nil = not computed, which preserves the old report). A deliberate, reviewed raise of a shrink-only budget.",
-      "prod_loc": 1233,
+      "prod_loc": 1225,
       "exports": 40,
       "globals": 29,
       "edges": 3,
@@ -69,8 +69,8 @@
       "exits": 0
     },
     "pix/host/mcp": {
-      "prod_loc": 1054,
-      "exports": 29,
+      "prod_loc": 1033,
+      "exports": 28,
       "globals": 18,
       "edges": 4,
       "exits": 0
@@ -104,7 +104,7 @@
       "exits": 0
     },
     "pix/host/rpc": {
-      "prod_loc": 212,
+      "prod_loc": 201,
       "exports": 12,
       "globals": 6,
       "edges": 0,
@@ -141,8 +141,8 @@
       "exits": 0
     },
     "pix/host/sys": {
-      "prod_loc": 528,
-      "exports": 25,
+      "prod_loc": 489,
+      "exports": 22,
       "globals": 12,
       "edges": 1,
       "exits": 0

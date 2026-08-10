@@ -27,20 +27,6 @@ type argvReply struct {
 	exit   int
 }
 
-// installSbxScript writes a real "sbx" shell script into a PATH-isolated dir
-// answering exactly the argvs in cases (each on its own stdout/stderr, never
-// merged — see replyBody); any OTHER argv is a hard test failure (exit 99),
-// which is how these tests also prove a fallback never runs a command beyond
-// the ones it is entitled to (e.g. AddRemoteServers never issuing `mcp
-// rm`, or stopping after the first real failure instead of trying every
-// catalog entry regardless).
-func withSbxOnPath(t *testing.T, bin string) func(string) (string, error) {
-	t.Helper()
-	oldPath := os.Getenv("PATH")
-	t.Setenv("PATH", filepath.Dir(bin)+string(os.PathListSeparator)+oldPath)
-	return lookPathIn(filepath.Dir(bin))
-}
-
 func installSbxScript(t *testing.T, cases []argvReply) string {
 	t.Helper()
 	dir := t.TempDir()

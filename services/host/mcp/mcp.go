@@ -104,15 +104,6 @@ func RunSbxMcpCore(lookPath func(string) (string, error), out io.Writer, in io.R
 	return cmd.Run()
 }
 
-// ExecSbxMcpLoad runs cmd (the already-composed `sbx mcp load ...`
-// invocation): the load either succeeded or it did not, and the child's own
-// error is the whole answer.
-//
-// Nothing records a "load receipt": a one-time record of a past load is not the
-// state of a live session. The sandbox this targets is DERIVED by the caller
-// from the workspace — the same deterministic name `pix run` gives it.
-func ExecSbxMcpLoad(cmd *exec.Cmd) error { return cmd.Run() }
-
 // RunMcpLsCore is runMcpLs's testable core (see RunSbxMcpCore). It exits 3 when
 // the listing is unavailable, per the ErrSbxUnavailable policy above: a caller
 // cannot tell "zero servers" from "couldn't ask" otherwise.

@@ -172,24 +172,3 @@ const (
 	f2Gog  = "/usr/local/bin/gog"
 	f2Host = "/usr/local/bin/pix-host"
 )
-
-// f2Env is a hostenv.Env where resolveOpRefs answers f2Refs (via PIX_CONFIG)
-// and op/gog/pix-host all resolve canonically.
-func f2Env() hostenv.Env {
-	return hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
-		switch name {
-		case "op":
-			return f2Op, nil
-		case "gog":
-			return f2Gog, nil
-		case "sbx":
-			return "/usr/bin/sbx", nil
-		}
-		return "", fmt.Errorf("%q not found", name)
-	}, GetenvFn: func(k string) string {
-		if k == "PIX_CONFIG" {
-			return "/fake/pix/config.toml"
-		}
-		return ""
-	}, IsFileFn: func(p string) bool { return p == f2Refs }}, HostBinary: func() (string, error) { return f2Host, nil }}
-}

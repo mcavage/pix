@@ -155,7 +155,7 @@ memory_scope = "work"                # → .pix/profile; default = pack name; "d
   env    = "FASTMAIL_TOKEN"      # op:// ref var name solicited at adoption; value NEVER in pack
   static = true                  # preloaded at sandbox CREATE (--static-mcp) so the pack's
                                  # skills have its tools in context from turn one. A server not
-                                 # preloaded is reachable via `pix mcp load <name>` on an
+                                 # not preloaded means: register with `pix mcp add`, then it is
                                  # existing sandbox, or by recreating with `run --replace`.
 
 # ── F2 in-sandbox proxy wrappers (bin/, fenced) ──

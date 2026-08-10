@@ -297,7 +297,7 @@ function loadAgentsFromDir(
 				model = routed;
 			} else {
 				warnings.push(
-					`intent "${intent}" not found in routing.json — inheriting the parent model. Run \`pix models route\` on the host (then \`make load\`).`,
+					`intent "${intent}" not found in routing.json — inheriting the parent model. Routing is compiled from the host's current bindings at sandbox create, so recreate the sandbox on the host to pick up a new intent.`,
 				);
 			}
 		}

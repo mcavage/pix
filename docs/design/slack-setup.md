@@ -12,7 +12,7 @@ should be read as evidence that an external Slack MCP integration exists, has
 been built, or has been round-tripped.** No such artifact ships in this repo.
 Do not merge a claim of "Slack works" against this document alone — merge only
 once a real external artifact (a pack manifest, a container image, an actual
-`sbx mcp add`/`pix mcp load` registration) has been built and proven end to end
+`sbx mcp add`/`pix mcp add` registration) has been built and proven end to end
 (tool list at minimum; one real call for confidence) by whoever owns it.
 
 ## Why it moved
@@ -43,7 +43,7 @@ ship it as:
 2. **ON-DEMAND, not preloaded.** Slack is not a universal need the way
    `github`/`gworkspace` arguably are for this stack; it should NOT be added to
    every sandbox's `--static-mcp` preload set by default. Wire it so a
-   workspace/pack opts in explicitly and attaches it live with `pix mcp load
+   workspace/pack opts in explicitly and registers it with `pix mcp add
    slack` (or the pack's own on-demand hook), rather than `pix config set mcp
    slack` on every install. `capabilities.json`'s `chat` capability stays
    `"provider": "none"` in the public/default profile for exactly this reason

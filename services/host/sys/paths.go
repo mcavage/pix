@@ -9,12 +9,6 @@ func IsRegularFile(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
-// PathExists reports whether anything exists at path, file or directory.
-func PathExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
-
 // DirHasEntries reports whether path is a directory with at least one entry.
 func DirHasEntries(path string) bool {
 	ents, err := os.ReadDir(path)

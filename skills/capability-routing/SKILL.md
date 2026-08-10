@@ -15,10 +15,9 @@ when `PI_CODING_AGENT_DIR` is unset — the default config dir) maps each
 capability to an **ordered list of providers**. Project override:
 `.pi/capabilities.json`.
 
-Always resolve the config dir through `PI_CODING_AGENT_DIR` first. `pix
-host` (docs/design/host-mode.md) points that env var at a dedicated host-agent
-dir, not `~/.pi/agent` — hardcoding the latter would read stale/wrong config
-in host-mode sessions.
+Always resolve the config dir through `PI_CODING_AGENT_DIR` first, never a
+hardcoded `~/.pi/agent`: the session sets it, and reading the hardcoded path
+instead picks up stale or wrong config whenever it points elsewhere.
 
 | provider | how to use it |
 |---|---|

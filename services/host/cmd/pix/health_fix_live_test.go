@@ -14,10 +14,11 @@ package main
 // launchd unit, stop a live daemon, etc).
 
 import (
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
-
-	"pix/host/health"
 )
 
 // liveVerb reports whether "pix <cmd>" resolves to a real subcommand of the
@@ -50,14 +51,55 @@ func eachPixCommand(t *testing.T, fix string) []string {
 	return cmds
 }
 
-func TestServeRestartFix_IsALiveCommand(t *testing.T) {
-	cmds := eachPixCommand(t, health.ServeRestartFix)
-	if len(cmds) == 0 {
-		t.Fatalf("health.ServeRestartFix = %q has no pix invocations", health.ServeRestartFix)
+// TestEveryHealthFix_IsALiveCommand enumerates health's `*Fix` constants FROM
+// ITS SOURCE rather than listing them here.
+//
+// This test used to check exactly one constant, ServeRestartFix, by hand — so
+// the property it claims to hold ("a repair command doctor prints is a real
+// pix invocation") was only ever proven for one of them, and a fix naming a
+// deleted verb passed. That is not hypothetical: `pix models route` was
+// deleted while three surfaces still told users to run it, and `pix mcp
+// bundle`/`load` outlived the verbs too. Deriving the list from the source is
+// what makes a NEW fix constant covered the moment it is written, with nothing
+// to remember.
+func TestEveryHealthFix_IsALiveCommand(t *testing.T) {
+	fixes := healthFixConstants(t)
+	if len(fixes) < 4 {
+		t.Fatalf("found only %d Fix constants in health/probes.go (%v); the extractor has drifted from the source", len(fixes), fixes)
 	}
-	for _, cmd := range cmds {
-		if !liveVerb(t, cmd) {
-			t.Errorf("health.ServeRestartFix = %q names %q, which is not a real pix subcommand", health.ServeRestartFix, cmd)
+	for name, fix := range fixes {
+		// A %s-templated fix (SecretSetFix, ServiceEnableFix) carries a
+		// placeholder the caller fills; substitute something harmless so the
+		// VERB is what gets parsed, which is all this test is about.
+		concrete := strings.ReplaceAll(fix, "%s", "placeholder")
+		cmds := eachPixCommand(t, concrete)
+		if len(cmds) == 0 {
+			t.Errorf("health.%s = %q has no pix invocations", name, fix)
+			continue
+		}
+		for _, cmd := range cmds {
+			if !liveVerb(t, cmd) {
+				t.Errorf("health.%s = %q names %q, which is not a real pix subcommand", name, fix, cmd)
+			}
 		}
 	}
+}
+
+// healthFixConstants reads health/probes.go and returns every `<Name>Fix = "pix
+// ..."` constant in it. Source-derived on purpose: a hand-written list in a
+// test is the thing that went stale here in the first place.
+func healthFixConstants(t *testing.T) map[string]string {
+	t.Helper()
+	src, err := os.ReadFile(filepath.Join("..", "..", "health", "probes.go"))
+	if err != nil {
+		t.Fatalf("read health/probes.go: %v", err)
+	}
+	re := regexp.MustCompile(`(?m)^\s*([A-Za-z]+Fix)\s*=\s*"([^"]*)"`)
+	out := map[string]string{}
+	for _, m := range re.FindAllStringSubmatch(string(src), -1) {
+		if strings.HasPrefix(m[2], "pix ") {
+			out[m[1]] = m[2]
+		}
+	}
+	return out
 }
