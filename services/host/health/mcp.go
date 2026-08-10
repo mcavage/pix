@@ -186,6 +186,10 @@ func (p MCPProbe) checkServer(ctx context.Context, bin, listOut string, s MCPSer
 		case mcpAuthUnknown:
 			return mcpFinding{name: s.Name, unknown: true,
 				note: s.Name + ": registered, auth not checkable from here"}
+		case mcpAuthNotRequired:
+			// Answered, not unproven: this server carries no OAuth, so there is
+			// nothing left to establish beyond registration.
+			return mcpFinding{name: s.Name, note: s.Name + ": registered, no OAuth required" + attachmentCaveat}
 		}
 	}
 
@@ -213,6 +217,9 @@ const (
 	mcpAuthUnknown mcpAuth = iota
 	mcpAuthYes
 	mcpAuthNo
+	// mcpAuthNotRequired: sbx said the server has no OAuth. An ANSWER, not a
+	// gap in what we could find out.
+	mcpAuthNotRequired
 )
 
 func (p MCPProbe) checkAuth(ctx context.Context, bin, name string) mcpAuth {
@@ -228,6 +235,8 @@ func (p MCPProbe) checkAuth(ctx context.Context, bin, name string) mcpAuth {
 		return mcpAuthYes
 	case mcp.McpAuthFailed:
 		return mcpAuthNo
+	case mcp.McpAuthNotRequired:
+		return mcpAuthNotRequired
 	}
 	return mcpAuthUnknown
 }

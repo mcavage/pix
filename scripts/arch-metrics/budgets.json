@@ -32,10 +32,10 @@
       "exits": 0
     },
     "pix/host/health": {
-      "_prod_loc_note": "prod_loc 1254 -> 1277: the mcp row's evidence was ONE run-on line -- eight servers, each with its own parenthetical, joined into several hundred characters that no one can read in a terminal or skim anywhere. A reader could not tell how many servers there were, which one was theirs, or where one note ended. writeEvidence now gives a set-valued evidence string one line per item under a count, and the notes are joined with newlines because \"; \" cannot be the separator: the notes contain semicolons, and splitting on those turned 8 servers into 16 half-sentences. Single-item evidence is untouched, so every other row reads exactly as before. A deliberate, reviewed raise of a shrink-only budget.",
-      "prod_loc": 1277,
+      "_prod_loc_note": "prod_loc 1277 -> 1286, globals 29 -> 30: the probe half of McpAuthNotRequired (see pix/host/mcp's note) -- a server that needs no OAuth is now reported as ANSWERED rather than counted against the row as unproven, which is what made the mcp row a permanent `?`. Carried with the earlier raise in this package: prod_loc 1254 -> 1277: the mcp row's evidence was ONE run-on line -- eight servers, each with its own parenthetical, joined into several hundred characters that no one can read in a terminal or skim anywhere. A reader could not tell how many servers there were, which one was theirs, or where one note ended. writeEvidence now gives a set-valued evidence string one line per item under a count, and the notes are joined with newlines because \"; \" cannot be the separator: the notes contain semicolons, and splitting on those turned 8 servers into 16 half-sentences. Single-item evidence is untouched, so every other row reads exactly as before. A deliberate, reviewed raise of a shrink-only budget.",
+      "prod_loc": 1286,
       "exports": 40,
-      "globals": 29,
+      "globals": 30,
       "edges": 3,
       "exits": 0
     },
@@ -69,9 +69,10 @@
       "exits": 0
     },
     "pix/host/mcp": {
-      "prod_loc": 1033,
-      "exports": 28,
-      "globals": 18,
+      "_prod_loc_note": "prod_loc 1033 -> 1050, exports 28 -> 29, globals 18 -> 19: ONE outcome, McpAuthNotRequired. `sbx mcp auth status` answers \"does not require OAuth\" for a server whose credentials come from the gateway's op-refs injection rather than an OAuth broker (slack, google-docs-create). The parser had buckets only for authorized and failed, so a DEFINITE answer fell through to unknown and `pix doctor` carried a permanent `?` that no action could ever clear -- which teaches a reader to stop reading the glyph, the same way a fix that cannot fix anything teaches them to stop reading fixes. The new case is matched BEFORE the negatives, because \"does not require oauth\" contains \"not\". A deliberate, reviewed raise of a shrink-only budget.",
+      "prod_loc": 1050,
+      "exports": 29,
+      "globals": 19,
       "edges": 4,
       "exits": 0
     },
