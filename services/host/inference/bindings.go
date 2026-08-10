@@ -10,6 +10,7 @@
 package inference
 
 import (
+	"maps"
 	"slices"
 	"strings"
 
@@ -158,6 +159,39 @@ func BoundNativeProviders(cfg *config.Config) map[string]bool {
 // and works: reporting "no provider is callable" there would be a fabricated
 // fault. Only once bindings EXIST does their absence for a given vendor mean
 // that vendor is unrouted. Callers must treat nil as "unknown", not "none".
+// KeylessBackends names the backends this host reaches a model through WITHOUT
+// a provider key — e.g. "docker-anthropic, docker-openai (auth: sbx-session)"
+// — and is "" when a 1Password-held API key IS the credential.
+//
+// Non-empty is the launch gate's own condition (ConfiguredKeylessInference), so
+// a surface that must SHOW why a key is not missing and a surface that merely
+// decides cannot drift apart. Also "" when no allowed binding resolves to a
+// backend the config defines: that is a host with no inference, not a host that
+// needs no key, and a caller must fall back to the key store rather than
+// green-light an axis on the empty set.
+func KeylessBackends(cfg *config.Config) string {
+	if !Configured(cfg) || InferenceNeedsOnePassword(cfg) {
+		return ""
+	}
+	backends, auths := map[string]bool{}, map[string]bool{}
+	for _, b := range cfg.Inference.Models {
+		backend, ok := cfg.Inference.Backends[b.Backend]
+		if !ok || !Allowed(cfg, b) || !BackendAllowed(cfg, backend, b.Backend) {
+			continue
+		}
+		auth := backend.Auth
+		if auth == "" {
+			auth = "none"
+		}
+		backends[b.Backend], auths[auth] = true, true
+	}
+	if len(backends) == 0 {
+		return ""
+	}
+	return strings.Join(slices.Sorted(maps.Keys(backends)), ", ") +
+		" (auth: " + strings.Join(slices.Sorted(maps.Keys(auths)), ", ") + ")"
+}
+
 func CallableProviders(cfg *config.Config) []string {
 	if !Configured(cfg) {
 		return nil

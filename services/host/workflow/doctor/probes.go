@@ -94,8 +94,10 @@ func Probes(cfg *config.Config, o Options) []health.Probe {
 		// Callable closes the gap between "the key store has a key" and "the router
 		// can call that vendor": those are different facts, and only reporting the
 		// first is how a host with three green providers routes every role to one.
+		// Keyless is the prior question to both: whether a key is this host's
+		// credential at all. A pack's sbx-session backends need none.
 		health.ProviderKeyProbe{Bin: keyBin, Args: keyArgs, Want: secret.ModelProviders, AnyOf: true,
-			Label: "providers", Callable: inference.CallableProviders(cfg)},
+			Label: "providers", Callable: inference.CallableProviders(cfg), Keyless: inference.KeylessBackends(cfg)},
 		health.MemoryUnitProbe{Port: portOr(o.MemoryPort, rpc.PortFromEnv("MEMORY_PORT", rpc.MemoryPortDefault)),
 			Enabled: config.ServiceEnabled(cfg, "memory")},
 		health.LaunchdProbe{Bin: o.LaunchctlBin, Label: orElse(o.LaunchdLabel, service.LaunchdLabel), UID: uid, Args: o.LaunchctlArgs},

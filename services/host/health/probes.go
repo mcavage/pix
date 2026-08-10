@@ -452,6 +452,25 @@ type ProviderKeyProbe struct {
 	// caller that cannot cheaply answer callability (or is checking
 	// infrastructure keys, which route nowhere by definition) is unaffected.
 	Callable []string
+	// Keyless names the configured inference that reaches a model WITHOUT any
+	// provider key (a pack's sbx-session backends, whose credential the sbx
+	// proxy injects inside the sandbox and which by design cannot be replayed
+	// from the host). Set means ready without asking the key store: here "no
+	// anthropic key" is not a gap, and `pix models add anthropic` would add a
+	// key nothing reads. It is the carve-out `pix run`'s launch gate already
+	// applies (inference.ConfiguredKeylessInference) — a host told it is broken
+	// by one verb and started by the other teaches you to ignore both.
+	//
+	// Distinct from Callable, which answers "this key routes nowhere". Keyless
+	// answers "no key was ever the credential", so it is decided before the
+	// store is consulted rather than against what the store returned.
+	//
+	// Resolve WINS over the static value and is called fresh on every Check,
+	// same seam and reason as PackProbe.Resolve: a probe built before setup
+	// adopts a pack would otherwise grade the post-adoption host on the
+	// pre-adoption answer.
+	Keyless        string
+	ResolveKeyless func() string
 }
 
 func (p ProviderKeyProbe) Name() string {
@@ -463,6 +482,16 @@ func (p ProviderKeyProbe) Name() string {
 func (ProviderKeyProbe) Required() bool { return true }
 
 func (p ProviderKeyProbe) Check(ctx context.Context) Result {
+	// Answered from config, before any exec: a key store that lists nothing is
+	// not evidence of a gap on a host whose models need no key.
+	keyless := p.Keyless
+	if p.ResolveKeyless != nil {
+		keyless = p.ResolveKeyless()
+	}
+	if k := strings.TrimSpace(keyless); k != "" {
+		return Result{Name: p.Name(), Status: StatusReady, Detail: "no provider key needed",
+			Evidence: "configured inference reaches a model without one: " + k}
+	}
 	if len(p.Want) == 0 {
 		return Result{Name: p.Name(), Status: StatusUnknown, Detail: "no provider keys declared",
 			Evidence: "nothing to check"}
