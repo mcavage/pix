@@ -169,10 +169,10 @@
       "exits": 0
     },
     "pix/host/workflow/launch": {
-      "_prod_loc_note": "2458 -> 2503, exports 109 -> 112: personal context (skills + standing AGENTS.md) is now mounted unconditionally at the context ROOT, so a session can write its FIRST skill from inside the sandbox and keep the whole dir in git. Previously the mount was gated on the dir already having entries, which made the first skill impossible to author in-sandbox, and only skills/ was mounted, so AGENTS.md was invisible. New exports: MountDirs (the mount set, now distinct from the skill set), PersonalSkillsDir (one spelling shared by loader and mount), EnsurePersonalContextDir. A deliberate, reviewed raise of a shrink-only budget.",
-      "prod_loc": 2503,
+      "_prod_loc_note": "2458 -> 2503, exports 109 -> 112: personal context (skills + standing AGENTS.md) is now mounted unconditionally at the context ROOT, so a session can write its FIRST skill from inside the sandbox and keep the whole dir in git. Previously the mount was gated on the dir already having entries, which made the first skill impossible to author in-sandbox, and only skills/ was mounted, so AGENTS.md was invisible. New exports: MountDirs (the mount set, now distinct from the skill set), PersonalSkillsDir (one spelling shared by loader and mount), EnsurePersonalContextDir. A deliberate, reviewed raise of a shrink-only budget. Then 2503 -> 2543, globals 42 -> 43: teardown now translates pi's parting \"To resume this session: pi --session-dir ...\" into the host command that actually works (`pix run -- -c`), and only when a session file provably exists. Suppressing pi's line would have been wrong: .pi-sessions is in the workspace mount, so the session genuinely outlives the sandbox; only the dialect was unusable.",
+      "prod_loc": 2543,
       "exports": 112,
-      "globals": 42,
+      "globals": 43,
       "edges": 14,
       "exits": 0
     },

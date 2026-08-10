@@ -485,6 +485,7 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	spec := launch.SessionSpec{
 		Key:               sessionKey,
 		Name:              o.Name,
+		Workspace:         o.Workspace,
 		Creating:          creating,
 		Keep:              o.Keep,
 		CreateArgs:        args,
