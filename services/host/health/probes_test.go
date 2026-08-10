@@ -355,6 +355,63 @@ func TestProviderKeyProbe_TriStateNoKeyIsUnchanged(t *testing.T) {
 	})
 }
 
+// Keyless is a config answer that OUTRANKS the key store, so it must hold even
+// against the store's strongest no-key evidence — and against a store that
+// cannot be reached at all, which is the state inside a sandbox.
+func TestProviderKeyProbe_KeylessNeverAsksForAKeyNothingReads(t *testing.T) {
+	bin := buildFixture(t)
+	keyless := "gw-anthropic, gw-openai (auth: sbx-session)"
+	for name, args := range map[string][]string{
+		"store lists no key": {"nokeys"},
+		"store is broken":    {"broken"},
+		"store hangs":        {"hang"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := check(t, ProviderKeyProbe{Bin: bin, Args: args, Want: []string{"anthropic", "openai"},
+				AnyOf: true, Keyless: keyless}, 300*time.Millisecond)
+			wantStatus(t, r, StatusReady)
+			if r.Fix != "" {
+				t.Errorf("fix = %q, want none: there is no key to add", r.Fix)
+			}
+			if !strings.Contains(r.Evidence, keyless) {
+				t.Errorf("evidence = %q, must name what answers instead", r.Evidence)
+			}
+		})
+	}
+	// "hang" proving ready in a 300ms budget is also the proof the exec never
+	// happened: the fixture outlives that window.
+}
+
+// The resolver is read at CHECK time, so a probe built before a pack adoption
+// grades the host that adoption produced — not the one it was built from.
+func TestProviderKeyProbe_KeylessResolvesAtCheckTime(t *testing.T) {
+	bin := buildFixture(t)
+	adopted := false
+	p := ProviderKeyProbe{Bin: bin, Args: []string{"nokeys"}, Want: []string{"anthropic"}, AnyOf: true,
+		Keyless: "stale-at-build-time",
+		ResolveKeyless: func() string {
+			if !adopted {
+				return ""
+			}
+			return "gw-anthropic (auth: sbx-session)"
+		}}
+
+	// The resolver WINS: its "" must not fall back to a static value built
+	// before the config that value described was written.
+	before := check(t, p, 5*time.Second)
+	wantStatus(t, before, StatusAbsent)
+	if strings.Contains(before.Evidence, "stale-at-build-time") {
+		t.Errorf("the static Keyless outranked the resolver: %q", before.Evidence)
+	}
+
+	adopted = true
+	after := check(t, p, 5*time.Second)
+	wantStatus(t, after, StatusReady)
+	if !strings.Contains(after.Evidence, "gw-anthropic") {
+		t.Errorf("evidence = %q, want the post-adoption backends", after.Evidence)
+	}
+}
+
 func writeScript(t *testing.T, name, body string) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), name)
