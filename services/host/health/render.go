@@ -13,6 +13,25 @@ import (
 // and the exact command that fixes it).
 
 // Glyph is the one-character presentation of a status.
+// writeEvidence prints a row's evidence. A probe that reports on a SET (mcp: one
+// note per server) produced a single run-on line hundreds of characters wide,
+// which is unreadable in a terminal and unskimmable anywhere: the reader cannot
+// tell how many items there are, which one is theirs, or where one note ends and
+// the next begins. Semicolon-separated notes therefore get one line each, under
+// a count. A single-item evidence string is unchanged, so every other row reads
+// exactly as before.
+func writeEvidence(w io.Writer, ev string) {
+	parts := strings.Split(ev, "\n")
+	if len(parts) < 3 {
+		fmt.Fprintf(w, "    evidence: %s\n", ev)
+		return
+	}
+	fmt.Fprintf(w, "    evidence: %d items\n", len(parts))
+	for _, part := range parts {
+		fmt.Fprintf(w, "      - %s\n", strings.TrimSpace(part))
+	}
+}
+
 func Glyph(s Status) string {
 	switch s {
 	case StatusReady:
@@ -136,7 +155,7 @@ func RenderDoctorWith(w io.Writer, s Snapshot, o DoctorOpts) {
 		}
 		fmt.Fprintf(w, "%s %-10s %-8s %s\n", Glyph(r.Effective()), r.Name, req, r.Detail)
 		if ev := strings.TrimSpace(r.Evidence); ev != "" && (o.Verbose || !r.OK()) {
-			fmt.Fprintf(w, "    evidence: %s\n", ev)
+			writeEvidence(w, ev)
 		}
 	}
 	if fixes := s.Fixes(); len(fixes) > 0 {
