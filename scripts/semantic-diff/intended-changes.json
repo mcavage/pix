@@ -1,1 +1,15 @@
-[]
+[
+  {
+    "id": "lifecycle.teardown.ref-closed-before-the-proof",
+    "rationale": "The pinned ORDERING is unchanged and still what this rule protects: the last shell out closes its own SHARED reference before TeardownSandbox attempts the reaper's EXCLUSIVE proof. Only reportTeardown's signature moved, gaining the session's workspace, so teardown can translate pi's parting 'To resume this session: pi --session-dir .pi-sessions --session <id>' into a command that works where the user now is (`pix run -- -c`). That line was correct inside the sandbox and unusable outside it: the sandbox is gone, pi is not on the host, and the path was relative to a directory that no longer exists. Suppressing it would have been the wrong fix, because .pi-sessions lives in the workspace bind-mount and the session genuinely outlives the sandbox.",
+    "evidence": "docs/design/serve-lifecycle.md; kit entrypoint passes --session-dir .pi-sessions (pi-kit/spec.yaml); workflow/launch/resumehint_test.go",
+    "changes": [
+      {
+        "file": "services/host/workflow/launch/session.go",
+        "kind": "contains",
+        "from": "reportTeardown(deps.Warn, TeardownSandbox(deps.Env, spec.Key, spec.Name, TriggerSession, deps.Teardown))",
+        "to": "reportTeardown(deps.Warn, TeardownSandbox(deps.Env, spec.Key, spec.Name, TriggerSession, deps.Teardown), spec.Workspace)"
+      }
+    ]
+  }
+]
