@@ -286,44 +286,58 @@ arch_metrics() {
 # functions found two whose deaths were mechanical -- closeFrontDoorListeners
 # lost both call sites when the monitor block went, ExecSbxMcpLoad was the
 # implementation of a verb that had been removed -- so nothing but a tool was
-# ever going to notice them. `deadcode` costs ~2s and the baseline is ZERO, which
-# is the only baseline worth gating: any number above zero has to be curated, and
-# a curated list of "known dead code" is just the vestigial surface with extra
-# steps.
+# ever going to notice them. The baseline is ZERO, which is the only baseline
+# worth gating: any number above zero needs a curated exception list, and a
+# curated list of known-dead code is the vestigial surface with extra steps.
 #
-# PINNED and run through `go run`, deliberately NOT a `tool` directive in
-# services/host/go.mod: deadcode pulls golang.org/x/telemetry and bumps three
-# more modules, and putting a linter's dependencies into the SHIPPED module graph
-# would drag them through the notices and SBOM gates for no benefit. The module
-# cache makes the second run free.
+# DEAD ON EVERY PLATFORM, not just this one. `deadcode` answers per-GOOS, and
+# this repo has build-tagged pairs (install_darwin.go / install_other.go): on
+# linux, realCmdRunner and resolvedHostBinary are genuinely unreachable, and on
+# darwin they are the launchd path. Reporting either as dead would be wrong, and
+# is exactly what a naive single-GOOS run did -- green on a Mac, red in CI, for
+# CORRECT code. So both platforms are analysed and only the INTERSECTION counts:
+# reachable anywhere means alive.
 #
-# It SKIPS (never fails) when the tool cannot be fetched, so an offline laptop
-# gets a gate that still runs everything else. CI always has the network, so the
-# guard is real where it has to be.
+# `go install` into the gate's own dir, not `go run`, because `go run` with GOOS
+# set cross-compiles the TOOL and then cannot execute it. And not a `tool`
+# directive in services/host/go.mod either: deadcode pulls golang.org/x/telemetry
+# and bumps three more modules, and putting a linter's dependencies into the
+# SHIPPED module graph would drag them through the notices and SBOM gates for no
+# benefit.
 DEADCODE_PKG="golang.org/x/tools/cmd/deadcode@v0.48.0"
+DEADCODE_BIN="$GATE_OUT_DIR/deadcode"
 deadcode_guard() {
-	local out rc
-	out="$(cd services/host && go run "$DEADCODE_PKG" -test ./... 2>&1)"
-	rc=$?
-	# A non-zero exit is NOT automatically "skip". Only an inability to OBTAIN the
-	# tool is (offline laptop, proxy down); anything else -- a tool crash, a
-	# package that does not typecheck -- is a real failure this must report, or
-	# the guard would quietly disarm itself exactly when something is wrong.
-	if [ $rc -ne 0 ]; then
-		case "$out" in
+	local install_log
+	if ! install_log="$(GOBIN="$GATE_OUT_DIR" go install "$DEADCODE_PKG" 2>&1)"; then
+		# Only an inability to OBTAIN the tool skips (offline laptop, proxy down).
+		# Anything else is a real failure this must report, or the guard would
+		# quietly disarm itself exactly when something is wrong.
+		case "$install_log" in
 		*"module lookup disabled"* | *"dial tcp"* | *"no such host"* | *"i/o timeout"* | *"connection refused"* | *"proxyconnect"* | *"certificate"*)
-			printf 'deadcode: SKIPPED, could not fetch %s (offline?):\n%s\n' "$DEADCODE_PKG" "$out"
+			printf 'deadcode: SKIPPED, could not fetch %s (offline?):\n%s\n' "$DEADCODE_PKG" "$install_log"
 			return 0
 			;;
 		esac
-		printf 'deadcode: FAILED to run (%s):\n%s\n' "$DEADCODE_PKG" "$out"
+		printf 'deadcode: FAILED to install %s:\n%s\n' "$DEADCODE_PKG" "$install_log"
 		return 1
 	fi
-	if [ -n "$out" ]; then
-		printf 'deadcode: unreachable code (delete it, or wire it up):\n%s\n' "$out"
+	local goos out rc
+	for goos in darwin linux; do
+		out="$(cd services/host && GOOS="$goos" "$DEADCODE_BIN" -test ./... 2>/dev/null)"
+		rc=$?
+		if [ $rc -ne 0 ]; then
+			printf 'deadcode: FAILED to analyse GOOS=%s (exit %d):\n%s\n' "$goos" "$rc" "$out"
+			return 1
+		fi
+		printf '%s\n' "$out" | sed '/^$/d' | sort >"$GATE_OUT_DIR/deadcode.$goos"
+	done
+	local both
+	both="$(comm -12 "$GATE_OUT_DIR/deadcode.darwin" "$GATE_OUT_DIR/deadcode.linux")"
+	if [ -n "$both" ]; then
+		printf 'deadcode: unreachable on EVERY platform (delete it, or wire it up):\n%s\n' "$both"
 		return 1
 	fi
-	printf 'deadcode: no unreachable funcs\n'
+	printf 'deadcode: no funcs unreachable on both darwin and linux\n'
 }
 
 run_segment "go-build" "go-build" go_build
