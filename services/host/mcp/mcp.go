@@ -893,6 +893,19 @@ type mcpAuthResult int
 // present at all is unknown rather than a guess.
 func McpAuthStatus(out string) mcpAuthResult {
 	lower := strings.ToLower(out)
+	// "does not require OAuth" is a DEFINITE answer, and it must be read before
+	// the negatives below -- it contains "not", and a server that needs no OAuth
+	// is not an unauthenticated one. Without this case the answer fell through to
+	// unknown, which is how `pix doctor` reported a permanent `?` for two servers
+	// sbx had described perfectly clearly: slack and google-docs-create take
+	// their credentials from the gateway's op-refs injection, so there is no
+	// OAuth to have. A row that can only ever be `?` teaches you to stop reading
+	// the glyph.
+	for _, na := range []string{"does not require oauth", "no oauth required", "oauth not required"} {
+		if strings.Contains(lower, na) {
+			return McpAuthNotRequired
+		}
+	}
 	for _, neg := range []string{"not authenticated", "unauthenticated", "not authorized", "unauthorized", "needs auth", "not logged in", "expired", "no token", "401"} {
 		if strings.Contains(lower, neg) {
 			return McpAuthFailed
@@ -913,6 +926,10 @@ const (
 	mcpAuthUnknown mcpAuthResult = iota
 	McpAuthOK
 	McpAuthFailed
+	// McpAuthNotRequired is "asked and answered: this server has no OAuth".
+	// Distinct from McpAuthOK because it is a different FACT, and distinct from
+	// unknown because it is not an absence of information.
+	McpAuthNotRequired
 )
 
 // catalogMCPReadiness classifies one catalog remote's launch readiness.
