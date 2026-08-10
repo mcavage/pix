@@ -41,7 +41,13 @@ const (
 	// `restart` subcommand kong has never answered to.
 	ServeRestartFix = "pix serve stop && pix serve start"
 	PackUseFix      = "pix pack use <path|owner/repo>"
-	SecretSetFix    = "pix secret set %s op://vault/item/field"
+	// ServiceEnableFix repairs "the host has not enabled this service". `pix
+	// serve start` cannot: serve starts only what `services` names, so telling
+	// someone to run it for a service their config leaves out is a fix that
+	// provably does nothing. This is the command serve itself names when it
+	// finds nothing enabled.
+	ServiceEnableFix = "pix config set services %s"
+	SecretSetFix     = "pix secret set %s op://vault/item/field"
 	// ModelKeyFix repairs the ANY-OF gap: pix launches a model with one
 	// provider key, so the repair names one provider rather than listing three
 	// commands a user must choose between.
@@ -262,6 +268,16 @@ func (MemoryUnitProbe) Name() string     { return "memory" }
 func (p MemoryUnitProbe) Required() bool { return p.Enabled }
 
 func (p MemoryUnitProbe) Check(ctx context.Context) Result {
+	// A service the host has not enabled is not a service that is DOWN. Dialing
+	// it anyway reported "unit down (:11435 refused)" with `pix serve start` as
+	// the repair — a command that would not start it, because `serve` starts
+	// only what `services` names. That row could never be cleared by the fix it
+	// printed, which is exactly the trap the retired monitor row sat in.
+	if !p.Enabled {
+		return Result{Name: p.Name(), Status: StatusAbsent, Required: false,
+			Detail: "not enabled", Fix: fmt.Sprintf(ServiceEnableFix, p.Name()),
+			Evidence: "not in the configured `services` set; nothing was dialed"}
+	}
 	id, err := identityAt(ctx, p.Port)
 	if err != nil {
 		if refused(err) {

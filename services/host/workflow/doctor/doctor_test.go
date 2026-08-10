@@ -168,18 +168,38 @@ func TestProbes_CoverTheWholeHostSurface(t *testing.T) {
 
 // A capability the host did not enable is OPTIONAL, not absent from the
 // report: a line a reader cannot see is a fact they cannot act on.
+//
+// "Enabled" is serve's OWN resolution, and the load-bearing half of it is that
+// an EMPTY `services` means ALL, not none (resolveServices: "an empty result
+// means all"). Reading empty as none is how doctor came to call memory OPTIONAL
+// on a config where serve starts it — so a memory unit that was genuinely down
+// could not fail readiness on the commonest config there is.
 func TestProbes_RequirementFollowsTheConfiguredServices(t *testing.T) {
-	off := Probes(&config.Config{}, Options{})
-	on := Probes(&config.Config{Services: []string{"memory"}}, Options{})
-	for i, p := range off {
-		if p.Name() == "memory" {
-			if p.Required() {
-				t.Errorf("%s is required on a host that did not enable it", p.Name())
-			}
-			if !on[i].Required() {
-				t.Errorf("%s is optional on a host that DID enable it", p.Name())
+	required := func(cfg *config.Config, name string) bool {
+		t.Helper()
+		for _, p := range Probes(cfg, Options{}) {
+			if p.Name() == name {
+				return p.Required()
 			}
 		}
+		t.Fatalf("no %q probe in the set", name)
+		return false
+	}
+	if !required(&config.Config{Services: []string{"memory"}}, "memory") {
+		t.Error("memory is optional on a host that explicitly enabled it")
+	}
+	// The regression: no `services` key at all is every service, because that is
+	// what `pix-host serve` does with it.
+	if !required(&config.Config{}, "memory") {
+		t.Error("memory is optional on a host with no `services` key, but serve starts it there")
+	}
+	if !required(&config.Config{Services: []string{"  "}}, "memory") {
+		t.Error("a whitespace-only services entry must resolve like empty (all), not like a named set")
+	}
+	// And a config that names a DIFFERENT service is the one case where memory
+	// is genuinely not enabled.
+	if required(&config.Config{Services: []string{"something-else"}}, "memory") {
+		t.Error("memory is required on a host whose services name something else")
 	}
 }
 
@@ -214,7 +234,11 @@ func TestDoctor_UnknownAloneIsNotAFailure(t *testing.T) {
 		SbxBin: bin, SbxArgs: []string{"broken"},
 		KeyStoreBin: bin, KeyStoreArgs: []string{"crash"},
 		LaunchctlBin: bin, LaunchctlArgs: []string{"malformed"},
-		MemoryPort: deadPort(t), UID: 501,
+		// A LIVE memory unit, deliberately: this test is about unknowns, and a
+		// refused port is not one. It is a verified gap, and on a host that runs
+		// memory (no `services` key = all) failing over it is correct — so a dead
+		// port here would prove something other than what the name claims.
+		MemoryPort: memoryUnit(t, rpc.MemoryName, true), UID: 501,
 	}
 	s := run(t, cfg, o)
 	for _, name := range []string{"sbx", "providers"} {

@@ -24,17 +24,18 @@
       "exits": 1
     },
     "pix/host/config": {
-      "prod_loc": 784,
+      "_prod_loc_note": "config prod_loc 784 -> 804; health prod_loc 1217 -> 1233, exports 39 -> 40, globals 28 -> 29: ONE change, two probes that reported on a service the host had not enabled and prescribed a repair that could not perform it. `pix serve start` starts only what `services` names, so a row for an unnamed service could never be cleared by the fix it printed -- the exact trap the retired monitor row sat in. MemoryUnitProbe now has a disabled arm that dials nothing and names the command that actually enables the service (ServiceEnableFix, the new export + the string const). config's growth is ServiceEnabled, which now resolves `services` the way `serve` does: EMPTY MEANS ALL. Reading empty as none made doctor call memory optional on the commonest config there is, so a memory unit that was genuinely down could not fail readiness. A deliberate, reviewed raise of a shrink-only budget.",
+      "prod_loc": 804,
       "exports": 40,
       "globals": 13,
       "edges": 0,
       "exits": 0
     },
     "pix/host/health": {
-      "_prod_loc_note": "raised together for ONE change: `pix doctor` reported model keys from the sbx secret store as if they were routable, so a host with three keys but one probed binding showed three green providers while every intent that preferred another vendor silently fell back. ProviderKeyProbe.Callable + inference.CallableProviders make key-present-but-unrouted visible (nil = not computed, which preserves the old report). A deliberate, reviewed raise of a shrink-only budget.",
-      "prod_loc": 1217,
-      "exports": 39,
-      "globals": 28,
+      "_prod_loc_note": "config prod_loc 784 -> 804; health prod_loc 1217 -> 1233, exports 39 -> 40, globals 28 -> 29: ONE change, two probes that reported on a service the host had not enabled and prescribed a repair that could not perform it. `pix serve start` starts only what `services` names, so a row for an unnamed service could never be cleared by the fix it printed -- the exact trap the retired monitor row sat in. MemoryUnitProbe now has a disabled arm that dials nothing and names the command that actually enables the service (ServiceEnableFix, the new export + the string const). config's growth is ServiceEnabled, which now resolves `services` the way `serve` does: EMPTY MEANS ALL. Reading empty as none made doctor call memory optional on the commonest config there is, so a memory unit that was genuinely down could not fail readiness. A deliberate, reviewed raise of a shrink-only budget.",
+      "prod_loc": 1233,
+      "exports": 40,
+      "globals": 29,
       "edges": 3,
       "exits": 0
     },

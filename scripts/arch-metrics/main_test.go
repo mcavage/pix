@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -231,6 +232,79 @@ func TestWriteBudgetsFile_RatchetsDownOnShrink(t *testing.T) {
 	current := toBudget(report.Packages["fixture/alpha"])
 	if alpha != current {
 		t.Errorf("ratcheted budget = %+v, want it pulled down to current %+v", alpha, current)
+	}
+}
+
+// A ratchet pass must not destroy the one thing in this file a human wrote.
+// `-write-budgets` used to drop every `_prod_loc_note` on its way past, because
+// Budget had no field for it — so ratcheting ANY package down silently deleted
+// the recorded reason a DIFFERENT package's ceiling had been raised. The notes
+// are the only audit trail a shrink-only budget has for its own exceptions.
+func TestWriteBudgetsFile_PreservesTheHandWrittenNote(t *testing.T) {
+	root := writeFixture(t)
+	report, err := scan(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	budgetsPath := filepath.Join(t.TempDir(), "budgets.json")
+
+	const reason = "raised for ONE change: see commit abc123. A deliberate, reviewed raise."
+	seeded := Budgets{Schema: 1, Packages: map[string]Budget{
+		// Loose on purpose, so this pass genuinely RATCHETS (the case that used
+		// to eat the note) rather than being a no-op write.
+		"fixture/alpha": {Note: reason, ProdLOC: 999, Exports: 999, Globals: 999, Edges: 999, Exits: 999},
+	}}
+	writeJSON(t, budgetsPath, seeded)
+
+	if err := writeBudgetsFile(report, budgetsPath); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadBudgets(budgetsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alpha := got.Packages["fixture/alpha"]
+	if alpha.Note != reason {
+		t.Errorf("note after ratchet = %q, want it carried verbatim: %q", alpha.Note, reason)
+	}
+	// And the ratchet still happened — preserving the note must not preserve slack.
+	if alpha.ProdLOC != report.Packages["fixture/alpha"].ProdLOC {
+		t.Errorf("prod_loc = %d, want it ratcheted to current %d", alpha.ProdLOC, report.Packages["fixture/alpha"].ProdLOC)
+	}
+	// The note must also survive a raw round-trip through the file on disk,
+	// under the exact key budgets.json uses.
+	raw, err := os.ReadFile(budgetsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "_prod_loc_note") {
+		t.Errorf("the written file lost the _prod_loc_note key:\n%s", raw)
+	}
+}
+
+// A growth error must stay readable: it used to %+v both Budgets, which now
+// would quote a paragraph-long note back at whoever hit the ceiling.
+func TestWriteBudgetsFile_GrowthErrorDoesNotDumpTheNote(t *testing.T) {
+	root := writeFixture(t)
+	report, err := scan(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	budgetsPath := filepath.Join(t.TempDir(), "budgets.json")
+	const reason = "a very long hand-written rationale that has no business being in an error message"
+	writeJSON(t, budgetsPath, Budgets{Schema: 1, Packages: map[string]Budget{
+		"fixture/alpha": {Note: reason, ProdLOC: 1}, // tighter than current: growth
+	}})
+
+	err = writeBudgetsFile(report, budgetsPath)
+	if err == nil {
+		t.Fatal("want a growth error")
+	}
+	if strings.Contains(err.Error(), reason) {
+		t.Errorf("growth error quotes the note back:\n%v", err)
+	}
+	if !strings.Contains(err.Error(), "prod_loc=") {
+		t.Errorf("growth error should name the counters, got:\n%v", err)
 	}
 }
 
