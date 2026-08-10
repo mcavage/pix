@@ -76,12 +76,21 @@ type Report struct {
 
 // Budget is the shrink-only-gated SUBSET of PkgMetrics. See the file doc
 // comment for which fields these are and why.
+//
+// Note is the hand-written rationale for a deliberate raise. It is DATA on this
+// struct, not a stray key the JSON round-trip is free to discard: it used to be
+// neither, so `-write-budgets` — the command this file's own doc comment tells
+// you to run to ratchet — silently deleted every recorded reason on its way
+// past. Ratcheting a package down destroyed the explanation of why a DIFFERENT
+// package's ceiling was ever raised. The note is not gated and never compared;
+// it only has to survive.
 type Budget struct {
-	ProdLOC int `json:"prod_loc"`
-	Exports int `json:"exports"`
-	Globals int `json:"globals"`
-	Edges   int `json:"edges"`
-	Exits   int `json:"exits"`
+	Note    string `json:"_prod_loc_note,omitempty"`
+	ProdLOC int    `json:"prod_loc"`
+	Exports int    `json:"exports"`
+	Globals int    `json:"globals"`
+	Edges   int    `json:"edges"`
+	Exits   int    `json:"exits"`
 }
 
 // Budgets is the committed, tracked ratchet file.
@@ -491,6 +500,13 @@ func parseCoverage(path string) (map[string]float64, error) {
 
 // --- budgets -------------------------------------------------------------------
 
+// numbers renders just the gated counters, so a growth error stays readable
+// instead of quoting a paragraph-long Note back at the reader.
+func numbers(b Budget) string {
+	return fmt.Sprintf("prod_loc=%d exports=%d globals=%d edges=%d exits=%d",
+		b.ProdLOC, b.Exports, b.Globals, b.Edges, b.Exits)
+}
+
 func toBudget(m PkgMetrics) Budget {
 	return Budget{ProdLOC: m.ProdLOC, Exports: m.Exports, Globals: m.Globals, Edges: m.Edges, Exits: m.Exits}
 }
@@ -570,6 +586,9 @@ func writeBudgetsFile(report *Report, path string) error {
 		cur := toBudget(report.Packages[pkg])
 		if existing, ok := budgets.Packages[pkg]; ok {
 			next[pkg] = Budget{
+				// Carried, not recomputed: this tool has no way to author a reason
+				// and no business dropping one.
+				Note:    existing.Note,
 				ProdLOC: minInt(existing.ProdLOC, cur.ProdLOC),
 				Exports: minInt(existing.Exports, cur.Exports),
 				Globals: minInt(existing.Globals, cur.Globals),
@@ -580,9 +599,9 @@ func writeBudgetsFile(report *Report, path string) error {
 			// (i.e. the current tree genuinely grew) must not silently ratchet up.
 			if cur.ProdLOC > existing.ProdLOC || cur.Exports > existing.Exports ||
 				cur.Globals > existing.Globals || cur.Edges > existing.Edges || cur.Exits > existing.Exits {
-				return fmt.Errorf("%s grew past its recorded budget (%+v -> %+v); "+
+				return fmt.Errorf("%s grew past its recorded budget (%s -> %s); "+
 					"shrink the code, or edit budgets.json by hand with a reason in the commit message — "+
-					"this tool will not raise a ceiling silently", pkg, existing, cur)
+					"this tool will not raise a ceiling silently", pkg, numbers(existing), numbers(cur))
 			}
 		} else {
 			next[pkg] = cur

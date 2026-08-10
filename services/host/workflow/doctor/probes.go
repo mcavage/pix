@@ -9,7 +9,6 @@ import (
 	"pix/host/health"
 	"pix/host/hostenv"
 	"pix/host/inference"
-	"pix/host/monitor"
 	"pix/host/packinfo"
 	"pix/host/rpc"
 	"pix/host/secret"
@@ -44,9 +43,8 @@ type Options struct {
 	SbxArgs       []string
 	KeyStoreArgs  []string
 	LaunchctlArgs []string
-	// MemoryPort and MonitorPort override the service ports.
-	MemoryPort  int
-	MonitorPort int
+	// MemoryPort overrides the memory service port.
+	MemoryPort int
 	// LaunchdLabel and UID address the LaunchAgent. Zero UID means this
 	// process's own.
 	LaunchdLabel string
@@ -69,8 +67,8 @@ type Options struct {
 
 // Probes builds the host's probe set, in the order a report reads best:
 // the CLI everything else needs, the pack that shapes the session, the keys
-// that let a model answer, then the two host services and the agent that keeps
-// them alive.
+// that let a model answer, then the host service and the agent that keeps it
+// alive.
 //
 // Every probe is included unconditionally. A capability the host has not
 // enabled is reported as OPTIONAL, never omitted: a missing line is a fact a
@@ -102,8 +100,6 @@ func Probes(cfg *config.Config, o Options) []health.Probe {
 			Label: "providers", Callable: inference.CallableProviders(cfg), Keyless: inference.KeylessBackends(cfg)},
 		health.MemoryUnitProbe{Port: portOr(o.MemoryPort, rpc.PortFromEnv("MEMORY_PORT", rpc.MemoryPortDefault)),
 			Enabled: config.ServiceEnabled(cfg, "memory")},
-		health.MonitorProbe{Port: portOr(o.MonitorPort, monitor.DefaultPort),
-			Enabled: config.ServiceEnabled(cfg, "monitor")},
 		health.LaunchdProbe{Bin: o.LaunchctlBin, Label: orElse(o.LaunchdLabel, service.LaunchdLabel), UID: uid, Args: o.LaunchctlArgs},
 		mcpProbe(cfg, o, sbxBin),
 	}

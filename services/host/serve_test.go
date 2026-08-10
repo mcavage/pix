@@ -1,12 +1,9 @@
 package main
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -34,7 +31,6 @@ func TestResolveServices(t *testing.T) {
 		{"cli of empty strings falls back", []string{"", " "}, []string{"memory"}, []string{"memory"}},
 		{"cli overrides config", []string{"knowledge"}, []string{"memory"}, []string{"knowledge"}},
 		{"both empty means all (nil)", nil, nil, nil},
-		{"cli monitor overrides a memory-only config", []string{"monitor"}, []string{"memory"}, []string{"monitor"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -489,72 +485,5 @@ func TestMemoryProxyMuxRoutesRPCsThroughHolderUse(t *testing.T) {
 
 	if !h.Drain(2 * time.Second) {
 		t.Fatal("Drain did not report clean once the in-flight call finished")
-	}
-}
-
-// --- R3: runServe must WAIT for monitor's graceful shutdown, not race it ----
-
-// TestServeMonitorAndWaitBlocksUntilGracefulShutdownActuallyCompletes proves
-// serveMonitorAndWait's wait() reflects monitor.IngestServer.Serve's REAL
-// completion, not just "the goroutine got scheduled": it holds a genuinely
-// in-flight /ingest request open across the cancel, so monitor's own
-// graceful shutdown (Server.Shutdown, monitor/ingest.go) has real work to
-// wait for, and asserts wait() does not return while that work is still
-// outstanding, only once the request actually unblocks and Serve(ctx) itself
-// returns. Before this wait existed, runServe raced this window: a fatal
-// failure elsewhere called os.Exit(1) without ever waiting on it.
-func TestServeMonitorAndWaitBlocksUntilGracefulShutdownActuallyCompletes(t *testing.T) {
-	root := t.TempDir()
-	srv, err := buildMonitorIngest("127.0.0.1", 0, root)
-	if err != nil {
-		t.Fatalf("buildMonitorIngest: %v", err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	fatalCh := make(chan error, 1)
-	wait := serveMonitorAndWait(srv, ctx, fatalCh)
-
-	// A real, incomplete request: full headers (so net/http hands it to the
-	// handler) declaring a body it never finishes sending, so handleIngest is
-	// genuinely blocked reading r.Body when we cancel below.
-	conn, err := net.Dial("tcp", srv.Addr())
-	if err != nil {
-		t.Fatalf("dial monitor ingest: %v", err)
-	}
-	defer conn.Close()
-	if _, err := fmt.Fprintf(conn, "POST /ingest HTTP/1.1\r\nHost: %s\r\nContent-Length: 4096\r\nContent-Type: application/x-ndjson\r\n\r\n{\"partial\":true", srv.Addr()); err != nil {
-		t.Fatalf("write partial request: %v", err)
-	}
-	// Give net/http time to parse the headers and hand the request to the
-	// handler (handleIngest, now blocked reading the rest of the declared
-	// body) BEFORE cancelling — otherwise Shutdown's very first idle-conn
-	// sweep can close an accepted-but-not-yet-dispatched connection as idle,
-	// which would race this test rather than exercise the wait.
-	time.Sleep(100 * time.Millisecond)
-
-	cancel()
-
-	// wait() must NOT return while the handler is still blocked on the
-	// in-flight (never completed) request.
-	waitDone := make(chan struct{})
-	go func() { wait(); close(waitDone) }()
-	select {
-	case <-waitDone:
-		t.Fatal("wait() returned before monitor's Serve(ctx) actually finished shutting down — an in-flight request was still open")
-	case <-time.After(300 * time.Millisecond):
-	}
-
-	// Let the handler's blocked read fail (EOF), which lets Serve's own
-	// graceful shutdown proceed and return.
-	conn.Close()
-
-	select {
-	case <-waitDone:
-	case <-time.After(6 * time.Second):
-		t.Fatal("wait() never returned after the in-flight request ended")
-	}
-	select {
-	case err := <-fatalCh:
-		t.Fatalf("monitor reported a fatal error on what should be a clean shutdown: %v", err)
-	default:
 	}
 }

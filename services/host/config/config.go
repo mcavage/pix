@@ -288,16 +288,6 @@ func PidFileLockPath(path string) string {
 	return path + ".lock"
 }
 
-// MonitorStoreRoot is <state-dir>/monitor: the on-disk root monitor ingest (inside
-// `pix-host serve`, see serve.go) writes and `pix monitor` reads back offline.
-func MonitorStoreRoot() (string, error) {
-	dir, err := StateDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "monitor"), nil
-}
-
 // StateDir resolves the per-user state dir: $XDG_STATE_HOME/pix, else
 // ~/.local/state/pix. Runtime state and serve.log live here, never config.
 func StateDir() (string, error) {

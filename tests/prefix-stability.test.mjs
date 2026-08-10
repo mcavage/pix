@@ -167,9 +167,16 @@ test("a mutated earlier message is caught even though it is not a new message", 
 	assert.ok(a.divergences.some((d) => d.at === 3));
 });
 
-test("the fixtures are the real tap's output, regenerable from the committed script", () => {
+test("the fixtures are the real tap's output, in the shapes summarizeRequest produced", () => {
 	// Guards against a hand-edited fixture: every record must carry the fields
-	// summarizeRequest() produces, in the monitor's own shapes.
+	// the tap's summarizeRequest() produced.
+	//
+	// These are now FROZEN recordings. The tap and its regeneration script were
+	// deleted with the monitor subsystem, so there is no longer anything to
+	// regenerate them from -- which is fine for what this gate measures (prefix
+	// stability across a recorded request sequence, including the negative
+	// control) but does mean a NEW fixture cannot be recorded without a new
+	// recorder.
 	for (const name of ["session-append-only.ndjson", "session-systemprompt-mutation.ndjson", "session-compaction.ndjson"]) {
 		const records = load(name);
 		assert.ok(records.length >= 20, `${name} must record >=20 provider requests`);
@@ -182,5 +189,4 @@ test("the fixtures are the real tap's output, regenerable from the committed scr
 			for (const h of r.summary.messageHashes) assert.match(h, /^[0-9a-f]{64}$/);
 		}
 	}
-	assert.ok(fs.existsSync(path.join(repoRoot, "scripts/dev/make-monitor-fixtures.mjs")));
 });

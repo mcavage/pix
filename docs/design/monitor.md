@@ -1,276 +1,64 @@
-# pix monitor — live wiretap of the agent's back-and-forth
+# monitor — REMOVED. What is left is a jsonl file.
 
-Status: shipped (MVP), REPLACED by Story05, ingest ownership moved by U05b,
-reader made fail-fast/one-shot by the hostfix-monitor fix.
+Status: **removed.** The subsystem this document used to specify — an
+in-sandbox tap POSTing NDJSON to a host ingest listener on `:11437`, a
+file-backed store, an eviction pass, and a `pix monitor` reader verb — is gone.
 Owner: Mark.
 
-**hostfix-monitor update — the reader no longer blocks forever by default.**
-`pix monitor --json | head -5` used to hang indefinitely against an empty or
-never-created store, because `Run` always called the polling `Follow` loop
-and `NewStore` silently created the (empty) root just by being asked to read
-it. Fixed on both counts:
+## What remains
 
-* **Read-only open never creates the root.** `monitor.OpenStore(root)`
-  replaces `NewStore` on the reader path: no `ensureDir0700` side effect, so
-  "no store yet" (an actionable signal) never gets silently turned into "an
-  empty store exists" (indistinguishable from later, real emptiness) just by
-  looking.
-* **One-shot is the non-interactive default.** With no `--follow`/`-f` and
-  not run at a TTY, `pix monitor` now calls the new `monitor.Once` (prints
-  whatever is already stored, once, and returns — no polling, no context
-  needed) instead of `monitor.Follow`. An interactive terminal keeps the old
-  live-follow default (equivalent to `--follow`) but now prints one honest
-  banner line to stderr first (what's already stored, whether an ingest
-  listener was even detected) so a TTY run is never a silent, indefinite
-  wait with no explanation.
-* **Empty + down is an error, not silent success.** The one-shot path checks
-  `service.ServeIdentityUp` (the same process-identity check `serve
-  stop`/`status` use, never a bare port probe) before treating zero stored
-  streams as fine. Nothing stored AND no `pix-host serve` running exits 3
-  (`rpc.ExitServiceDown`) with the fix command named on stderr. Nothing
-  stored while an ingest listener IS running is genuinely empty success
-  (nothing has arrived yet) — the two are never conflated.
-* **List errors are surfaced, not swallowed.** `Follow`'s poll loop still
-  treats a `Store.List` failure as transient (there's always a next poll to
-  self-correct on) and keeps going. `Once` has no next poll, so the same
-  failure now comes back as a real error instead of silently printing
-  nothing.
+`extensions/monitor.ts` taps pi's turn/tool/model hooks and **appends NDJSON to
+a file**. Nothing in pix reads it. There is no listener, no host service, no
+store, no reader verb, and no doctor row.
 
-See `services/host/monitor/follow.go` (`Once`, `emitNew`, `Follow`),
-`services/host/monitor/store.go` (`OpenStore`), and
-`services/host/cmd/pix/root.go` (`monitorCmd.follow`/`.once`/`monitorBanner`).
+    <dir>/<sandboxId>=<sessionId>/events.ndjson   one event per line
+    <dir>/<sandboxId>=<sessionId>/blobs.ndjson    {hash,bytes,text} per line
 
-**U05b update — ingest ownership moved under `pix-host serve`.** The
-"unchanged on purpose" bullet below (from Story05) predicted exactly this
-move; it has now happened. `services/host/serve.go`'s `runServe` composes a
-`monitor.NewIngestServer` directly (constructed via `buildMonitorIngest`,
-alongside memory, gated by the same `services` config/`serveServiceAliases`
-mechanism — `pix config set services monitor` or a bare `services=[]`
-"all" default enables it). `--bind`/`--port` moved down with it: they are now
-`pix serve` flags (`pix-host serve --bind ADDR --port N`), not `pix monitor`
-flags. `pix monitor` (`cmd/pix/monitor.go`) is now a PURE offline reader —
-`[name] [--path DIR] [--json]` only, no listener, ever — that tails
-`config.MonitorStoreRoot()` (`<state-dir>/monitor`, the same root `serve`
-writes to) or an explicit `--path DIR`. The wire schema, the `:11437`
-loopback-only bind default, and the eager-bind-at-construction-time
-`NewIngestServer` contract are all unchanged, exactly as predicted — this
-was a wiring move, not a domain change.
+`<dir>` is `$PIX_MONITOR_DIR`, default `<cwd>/.pix/monitor`. The workspace is
+bind-mounted from the host, which is what makes those files readable outside the
+sandbox at all. `PIX_MONITOR=0` disables the tap.
 
-**Story05 update — what the host side actually is now.** The bubbletea TUI
-(`services/host/monitor/tui`, 3,150 LOC), the in-memory ring buffer, the
-content-addressed in-memory blob cache, and the SSE `/stream` +
-`/blob/{hash}` endpoints described below are DELETED. What replaces them is
-deliberately small:
+The layout and the event schema are **unchanged** from what the retired ingest
+store wrote, so anything that could read the old store reads this. Be the
+monitor with `tail -f`, `jq`, or a tool of your choosing.
 
-* **One store, no second subsystem.** `services/host/monitor` is a single
-  bounded, redacted, file-backed domain: one `events.ndjson` per
-  `(sandboxId, sessionId)` stream under a 0700 root, 0600 files, trimmed
-  drop-oldest by both event count and bytes, with the number of retained
-  streams capped too. Full payload bodies (`POST /blob`) are NOT a separate
-  content-addressed store — they are one more bounded NDJSON file
-  (`blobs.ndjson`) under the same root, appended by the same code path and
-  trimmed by the same pass.
-* **Strict ids, never repaired.** A wire-supplied `sandboxId`/`sessionId`
-  becomes a path component only if it passes a strict allowlist (1..96 bytes,
-  leading alphanumeric, then `[A-Za-z0-9._-]`). Traversal, separators, control
-  bytes, dotfiles and over-long ids are REFUSED and the event is dropped with
-  a log line. An earlier draft slugified them instead; that silently accepts
-  hostile input and collapses distinct ids onto one directory, so it is gone.
-  The one exception is an EMPTY id, which the tap legitimately sends outside a
-  sandbox: it maps to the fixed constant `unattributed`.
-* **Blob content vs its hash.** A blob is stored REDACTED, so its bytes are
-  not always the preimage of the hash events reference it by. The record says
-  so: `bytes` is always `len(text)`, and `redacted:false` implies
-  `sha256(text) == hash`. Redaction wins over content-addressing purity
-  because this is raw tool output, the highest-risk text in the pipeline.
-* **The reader is a poll loop, not a bus.** `monitor.Follow` tails the files
-  and prints one concise line per event (`--json` prints the raw stored
-  event). Writer and reader share nothing but the filesystem, which is what
-  makes `pix monitor` (with no serve running, or pointed at an explicit
-  `--path DIR`) work with no listener of its own. `cmd/pix/monitor.go` is
-  argv parsing plus wiring, ~100 lines.
-* **Unchanged on purpose (as of U05b):** the event wire schema (Section 2
-  below) and the `:11437` loopback-only bind default. `NewIngestServer` BINDS
-  eagerly, so a port conflict is a constructor error instead of an
-  asynchronous one every caller had to poll for — true whether the caller is
-  `pix-host serve` (now) or the old standalone `pix monitor` (before).
+## Why it went
 
-The rest of this document (problem statement, event model, wire protocol) is
-still accurate; the "Resolved decisions" and "TUI (live follow + toggles)"
-sections below describe the DELETED design and are kept for history, not as
-the current contract.
+The storage layer had already been simplified to NDJSON (`13c4989` replaced a
+content-addressed sharded blobstore with `blobs.ndjson`), and the live TUI plus
+the in-memory hub and ring buffer were already deleted (`bce2b1b`, ~3,150 LOC).
+What survived was the part with no remaining justification: a network hop
+between two processes on the same machine, and a reader for a format `jq`
+already reads.
 
-## Problem
+Everything the hop cost is now visible in what its removal deleted:
 
-Skills, turns, hooks, MCP servers, and recall all inject into the agent's flow
-before anything crosses the sandbox boundary. From the host you currently can't
-see the assembled result: what context actually got built, what the model was
-sent, what it sent back, which tools/MCPs fired with what args and results.
+* **The transport.** `httpPostRaw`, plus `node:http`/`node:https`, plus the
+  `:11437` entry in `pi-kit/spec.yaml`'s network allowlist — a hole in the
+  sandbox's egress policy that existed only to reach it.
+* **The delivery machinery.** A bounded queue with drop-oldest overflow,
+  exponential backoff with a cap, a `disabledUntil` window, a retry timer, an
+  abort-the-in-flight-request-on-shutdown dance, a bounded quit-flush that
+  raced `drainAll()` against a deadline, and an injectable `RetryClock` seam
+  built to make all of that testable. An append to a local file cannot be
+  down, so none of it has anything left to do. `session_shutdown` needs no
+  hook at all: every event is already on disk the moment it is emitted.
+* **The host side.** `services/host/monitor/` (ingest, store, follow, event —
+  ~1,200 prod LOC), the `pix monitor` verb, `health.MonitorProbe`, the
+  `monitor` entry in `serveServiceAliases`, `config.MonitorStoreRoot`, and
+  `serve`'s whole third shutdown phase: the ingest was a front door with its
+  own drain, so `performShutdown` carried a `cancelMonitor` and a
+  `waitMonitor`, and `runServe` held a `context.WithCancel` that existed for
+  nothing else.
+* **A permanently red row.** `pix doctor` probed `:11437` unconditionally, and
+  `serve` only starts services named in `services`. A host with
+  `services = ["memory"]` therefore reported `✗ monitor not running` forever,
+  with `pix serve start` as the prescribed fix — a command that would not start
+  it, because the config did not ask for it.
 
-We want `pix monitor` on the host: a live, one-way mirror into a running
-sandbox showing the real traffic between the agent and everything outside it.
+## If you want a monitor
 
-Goal is **debugging / observability**, not security audit. We tap what *pi*
-sends, at the source, in the clear, not what physically leaves the box.
-
-## Chosen approach: tap 1 (in-VM pi extension)
-
-Of the three physical tap points (in-VM extension, host TLS-intercepting proxy,
-persisted session JSONL), we pick the in-VM extension. It has the highest
-fidelity and needs no cooperation from the sbx proxy.
-
-pi already exposes the exact hooks:
-
-- `before_provider_request` → `event.payload` is the **full plaintext provider
-  request body right before send**: system prompt, every injected skill, all
-  tool + MCP tool schemas, the whole conversation, every prior tool result. This
-  is the single richest event. Everything the user asked about is visible here
-  because it has all been baked into one payload by this point.
-- `after_provider_response` → HTTP status + headers.
-- `tool_execution_start` / `tool_call` / `tool_execution_end` → tool name, args,
-  results, duration, directly (including in-VM bash and MCP tools).
-- `model_select`, `session_compact`, `thinking_level_select` → control plane.
-
-Explicitly out of scope (accepted): a compromised sandbox shelling out with raw
-`curl` bypasses this tap. That is the proxy's job, not this tool's.
-
-Secrets note: provider keys are proxy-managed, so request bodies carry the
-`proxy-managed` sentinel, not real keys. Tool results / bash output can still
-contain workspace secrets, so the TUI is host-local and treated as sensitive.
-
-## Architecture
-
-Follows the house split (HOST = Go, SANDBOX = TypeScript):
-
-```
-sandbox: extensions/monitor.ts
-   taps before_provider_request / after_provider_response / tool_* / model_select
-   computes per-turn SUMMARIES in-VM, content-addresses big blobs by hash
-   → ships NDJSON events to host.docker.internal:11437  (node:http, NO_PROXY-safe)
-
-host: pix monitor   (launcher verb; hub + TUI in one process for the MVP)
-   binds :11437, keeps a bounded in-memory ring + blob cache (no sqlite, no serve)
-   renders the live delta view with per-stream toggles + full-payload-on-demand
-```
-
-The VM → `host.docker.internal:<port>` over `node:http` plumbing is already
-proven by `extensions/memory-recall.ts` and `knowledge-recall.ts` (must use
-`node:http`, not `fetch`, because sbx's `NO_PROXY` excludes
-`host.docker.internal`). Reuse that verbatim.
-
-### Why single-process for the MVP
-
-Live-follow only, no durable store, so no `serve` integration and no daemon.
-`pix monitor` binds the port and runs the TUI. The in-VM extension connects
-to `host.docker.internal:11437`; if nothing is listening it silently no-ops and
-retries occasionally (best-effort, never blocks or throws — per the extension
-gotchas in AGENTS.md). Start the TUI = wiretap on; quit = wiretap off. Zero
-config.
-
-Every event carries `sandboxId` (`$SANDBOX_VM_ID`) + `sessionId` so one hub can
-host several sandboxes; `pix monitor [name]` filters to one.
-
-## Event model (delta-first)
-
-Model requests re-send the entire growing context every turn. Logging raw
-payloads buries the signal, so the extension summarizes in-VM and
-content-addresses large blobs (system prompt, each tool schema, each message) by
-hash. The wire normally carries the hash; the TUI fetches full text by hash only
-when the user toggles a payload open. Deltas come for free (same hash = "no
-change").
-
-Event kinds:
-
-- `turn_start` `{turnId, sessionId, model, trigger}`
-- `provider_request` `{turnId, model, summary:{systemPromptHash, systemPromptBytes,
-  messageCount, newMessages[], toolCount, toolNames[], mcpToolNames[], estTokens},
-  changedBlobs[]}`
-- `provider_response` `{turnId, status, stopReason, usage, headers?}`
-- `tool_start` `{turnId, toolId, source:"builtin"|"mcp:<server>"|..., name, argsSummary, argsHash}`
-- `tool_end` `{turnId, toolId, ok, resultBytes, resultSummary, resultHash, durationMs}`
-- `context_event` `{turnId, kind:"skill_loaded"|"compaction"|"model_change"|..., detail}`
-- `blob` `{hash, bytes, text}` — sent lazily on TUI request, cached host-side.
-
-MCP calls need no separate kind: pi surfaces MCP tools as tools, so `tool_*`
-covers them; the `source` tag distinguishes `mcp:<server>` from builtin/skill.
-
-Streaming tokens (`message_update`) are available via the hook but noisy and
-**not wired in the MVP** — the extension emits no stream events, so there is no
-stream toggle in the TUI (a `s:stream` toggle that flipped state while doing
-nothing would just lie to the user).
-
-## TUI (live follow + toggles)
-
-Turn-by-turn scroll, newest at bottom, current turn pinned. Each row is a
-one-line summary; expand for detail.
-
-Per-stream toggles (the user's #3 ask):
-
-- `f` full payloads on/off (off = summaries; on = fetch + show full text by hash)
-- `m` model requests/responses · `t` tools · `p` MCP · `x` thinking/reasoning ·
-  `c` context/control events
-- `/` text filter · `space` expand row · `q` quit
-
-Delta view example (payloads off):
-
-```
-turn 12  opus-4-8  ▲ req  sys=41KB(unchanged) msgs=+1 tools=14 (+enrich skill) ~38k tok
-              ▼ resp 200  stop=tool_use  in 37.9k out 512
-   tool  bash        source=builtin   `go test ./...`            → ok 2.1KB 4.3s
-   tool  slack_post  source=mcp:slack {channel:#eng, ...}        → ok 118B 0.6s
-```
-
-Toggle `f` on any row to expand the literal system prompt / tool schema / args /
-result.
-
-## Build order
-
-1. `extensions/monitor.ts`: tap the four hook families, build summaries + blob
-   hashes in-VM, ship NDJSON over `node:http` to `:11437`. Best-effort,
-   bounded queue, never blocks the agent, guarded at load.
-2. `pix monitor` (Go, `cmd/pix`): hub on `:11437` (POST ingest / event
-   stream + blob-by-hash fetch) with a bounded ring + blob cache, plus the TUI.
-3. Toggles + delta rendering + full-payload-on-demand.
-4. Multi-sandbox filter (`pix monitor [name]`).
-
-MVP is 1 + 2 with summaries only; toggles land in 3.
-
-## Resolved decisions
-
-- **TUI stack:** bubbletea. Shipped as a real TUI in the host module
-  (`services/host/cmd/pix/monitor_tui.go`), not a plain ANSI scroll
-  renderer.
-- **Process shape:** single-process hub + TUI in one binary, wired as the
-  `pix monitor` launcher verb. No `serve` integration, no daemon, no
-  sqlite. Start the TUI = wiretap on; quit = wiretap off.
-- **Event model:** delta-first summaries. The extension content-addresses big
-  blobs (system prompt, tool schemas, messages) by hash and sends each blob
-  body exactly once, hash-only thereafter. The host cache is the source of
-  truth for full text; the TUI resolves a blob on demand when the user
-  expands a row.
-- **Bind default:** `127.0.0.1`, opt in to LAN exposure with `--bind`. There
-  is no auth token in the MVP, so a non-loopback bind prints a loud runtime
-  warning naming exactly what's exposed (full agent context and tool
-  output). This is the security-sensitive default done right, not an open
-  question.
-- **No host-to-VM reverse channel.** If the extension elided a blob and the
-  host never captured its body (for example the TUI started mid-session),
-  there is no way to ask the VM to resend it in the MVP. Accepted limitation,
-  not a bug: the extension sends every blob body once, and that's the only
-  chance to capture it.
-- **Streaming token deltas are NOT emitted in the MVP.** The extension never
-  wires `message_update`, so there is no `s`/stream toggle in the TUI. It was
-  cut on purpose rather than shipped as a toggle that would silently do
-  nothing.
-- **MCP classification:** derived from pi's tool `sourceInfo` (the
-  pi-mcp-adapter package is the positive signal for "this tool came from an
-  MCP server"), tagging each tool call `source:"mcp:<server>"` vs.
-  `"builtin"`. No separate event kind for MCP; it rides the same `tool_*`
-  events as everything else.
-
-**Known limitation, still accepted:** the real VM<->host wire only works
-against a monitor-enabled sandbox image. `extensions/monitor.ts` has to be
-baked in and `pi-kit/spec.yaml`'s `host.docker.internal:11437` allowlist entry
-has to exist, which means `make load` on the host plus a fresh (or recreated)
-sandbox. A sandbox created before this shipped will never phone the hub, and
-the TUI has no way to distinguish that from "nothing has happened yet."
+Read the jsonl. `pi` also writes its own full session transcript to
+`.pi-sessions/*.jsonl` in the same host-mounted workspace; between the two you
+have the conversation and the provider/tool-level trace, in the same place, in
+the same format, with nothing running.

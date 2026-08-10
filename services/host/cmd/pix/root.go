@@ -14,22 +14,13 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
-	"net"
 	"os"
-	"os/signal"
 	"strings"
-	"syscall"
-	"time"
-
-	"golang.org/x/term"
 
 	"pix/host/cli"
-	"pix/host/config"
 	"pix/host/mcp"
-	"pix/host/monitor"
 	"pix/host/rpc"
 	"pix/host/service"
 	"pix/host/sys"
@@ -69,8 +60,6 @@ type rootCmd struct {
 	Memory memoryCmd `cmd:"" group:"Data" aliases:"mem" help:"recall | remember | forget | learnings | stats."`
 	Pack   packCmd   `cmd:"" group:"Data" help:"ls | show | use | rm."`
 
-	Monitor monitorCmd `cmd:"" group:"Observability" help:"Follow a sandbox's out-of-sandbox traffic."`
-
 	Models ModelsCmd `cmd:"" group:"Models & agents" help:"Which models pix can use, and which are wired."`
 	Agent  AgentCmd  `cmd:"" group:"Models & agents" help:"List the roster: resolved model + WHY (new/edit/rm/reassess retired; edit agents/*.md)."`
 
@@ -93,15 +82,11 @@ type legacyArgs struct {
 	Args []string `arg:"" optional:"" passthrough:"" help:"Passed to the verb unchanged."`
 }
 
-// testSeams are the indirections the root's tests need — legacy proves a
-// passthrough command gets its argv verbatim without running the seam behind it,
-// monitor supplies a context + store root without a signal handler, ingestUp
-// pins the one answer a test cannot isolate (whether THIS machine happens to be
-// running an ingest listener on the shared port). Never set in production.
+// testSeams is the one indirection the root's tests need: legacy proves a
+// passthrough command gets its argv verbatim without running the seam behind
+// it. Never set in production.
 var testSeams struct {
-	legacy   func(verb string, args []string)
-	monitor  func(*monitorCmd, *cli.Deps) error
-	ingestUp func() bool
+	legacy func(verb string, args []string)
 }
 
 // legacyForward hands a passthrough seam its argv verbatim, or to the test seam
@@ -192,162 +177,6 @@ func isTaskKnownVerb(v string) bool {
 		return true
 	}
 	return false
-}
-
-// ── monitor ─────────────────────────────────────────────────────────────────
-
-// monitorDescription is the verb's long help: the operational facts (reader, not
-// listener; where the store comes from; the env the in-VM tap reads) that
-// generated usage cannot infer from a struct tag.
-const monitorDescription = `Concisely follow a sandbox's out-of-sandbox traffic (model requests,
-responses, tool + MCP calls, context/control events), as captured on disk.
-
-This is a PURE READER: it never binds a port or starts a listener. The
-ingest listener that receives events from the in-VM tap runs inside
-'pix serve' (:11437, loopback-only by default: see 'pix serve --help'
-for its --bind/--port flags). With no --path, monitor tails the same store
-root serve writes to; run 'pix serve' first (or already have it running)
-for there to be anything to follow.
-
-DEFAULT IS ONE-SHOT: with no --follow and not run at an interactive
-terminal (a pipe, 'pix monitor --json | head -5', a script), monitor prints
-whatever is ALREADY stored and exits — it never blocks waiting for more. If
-nothing is stored AND no ingest listener is running, that is reported as an
-actionable error (exit 3), not silent empty output: run 'pix serve', or pass
---path at a store that already has something in it. Nothing stored while an
-ingest listener IS running is reported as empty success (there is genuinely
-nothing yet).
-
-An interactive terminal keeps the old live-follow default (equivalent to
---follow) and prints one banner line to stderr naming what it found before
-it starts waiting, so a TTY run is never a silent, indefinite hang.
-
-NOTE: live events only flow from a sandbox created with an image that
-includes the monitor extension + the :11437 network allowlist entry (baked
-via 'make load' on the host). A stale sandbox predates that and shows no
-events — rebuild/reload the image, then recreate the sandbox.
-
-ENV (read by the in-VM extension, documented here for discoverability):
-  PIX_MONITOR=0        disable the in-VM tap entirely (no events sent)
-  PIX_MONITOR_URL      override the host ingest URL
-                       (default http://host.docker.internal:11437)`
-
-// monitorCmd is a pure offline reader over the on-disk event store — hence a
-// --path and no --bind.
-func (c *monitorCmd) Help() string { return monitorDescription }
-
-type monitorCmd struct {
-	Name   string `arg:"" optional:"" help:"Filter to one sandbox/session by id substring, CASE-SENSITIVE."`
-	Path   string `help:"Read this store directory instead of <state-dir>/monitor." placeholder:"DIR"`
-	JSON   bool   `help:"Print the raw stored event JSON (one object per line, pipe to jq)."`
-	Follow bool   `short:"f" help:"Keep streaming as new events land instead of the one-shot default. Implied at an interactive terminal."`
-}
-
-func (c *monitorCmd) Run(d *cli.Deps) error {
-	if testSeams.monitor != nil {
-		return testSeams.monitor(c, d)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() { <-sigCh; cancel() }()
-
-	tty := false
-	if f, ok := d.Out.(*os.File); ok {
-		tty = term.IsTerminal(int(f.Fd()))
-	}
-	return c.follow(ctx, d, tty)
-}
-
-// follow is the testable core: ctx governs the run so a test cancels
-// deterministically instead of signalling.
-func (c *monitorCmd) follow(ctx context.Context, d *cli.Deps, tty bool) error {
-	root := c.Path
-	if root == "" {
-		var err error
-		if root, err = config.MonitorStoreRoot(); err != nil {
-			return fmt.Errorf("resolve monitor store root: %w", err)
-		}
-	}
-	// OpenStore is read-only: a one-shot run must not fabricate an empty
-	// store just by looking, which would turn "no store yet" (actionable)
-	// into indistinguishable real emptiness.
-	store, err := monitor.OpenStore(root)
-	if err != nil {
-		return err
-	}
-	cfg := monitor.FollowConfig{Filter: c.Name, JSON: c.JSON, TTY: tty, Out: d.Out}
-
-	if !c.Follow && !tty {
-		return c.once(store, cfg, d)
-	}
-	if tty {
-		fmt.Fprintln(d.Err, monitorBanner(store))
-	}
-	monitor.Follow(ctx, store, cfg)
-	return nil
-}
-
-// once prints whatever is already stored and returns, per DEFAULT IS
-// ONE-SHOT above. Empty output is honest success only when a live ingest
-// listener could plausibly still fill the store in; with nothing stored AND
-// no listener running, empty output would be indistinguishable from broken,
-// so that combination is reported instead as an actionable, nonzero error.
-func (c *monitorCmd) once(store *monitor.Store, cfg monitor.FollowConfig, d *cli.Deps) error {
-	metas, err := store.List()
-	if err != nil {
-		return fmt.Errorf("monitor: list stored streams: %w", err)
-	}
-	if len(metas) == 0 && !ingestUp() {
-		fmt.Fprintln(d.Err, "pix monitor: no stored events, and no ingest listener is running.")
-		fmt.Fprintln(d.Err, "  Start it with `pix serve` (or point --path at a store that already has data), then re-run.")
-		fmt.Fprintln(d.Err, "  `pix monitor --follow` keeps this command open and waits for events instead of exiting.")
-		return cli.SilentError{Code: rpc.ExitServiceDown}
-	}
-	return monitor.Once(store, cfg)
-}
-
-// ingestUp reports whether the monitor INGEST LISTENER is reachable, so an
-// empty one-shot read can tell "nothing has happened yet" apart from "nothing
-// ever will".
-//
-// It dials the ingest port rather than asking whether a `pix-host serve` is
-// running, because those are different facts: `serve` starts only the services
-// named in config's `services`, so a host with `services = ["memory"]` has a
-// live, healthy serve and NO ingest listener at all. Reading "serve is up" as
-// "events may still arrive" made `pix monitor` print nothing and exit 0 there
-// — forever, since nothing will ever fill that store — which is precisely the
-// "ran fine, there's just nothing to see" ambiguity this whole path exists to
-// remove. A dial can only be fooled by something else holding the port, and
-// that direction is the safe one: it suppresses a nag, never a read.
-func ingestUp() bool {
-	if testSeams.ingestUp != nil {
-		return testSeams.ingestUp()
-	}
-	c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", monitor.DefaultPort), 250*time.Millisecond)
-	if err != nil {
-		return false
-	}
-	_ = c.Close()
-	return true
-}
-
-// monitorBanner is the one honest line an interactive follow prints to
-// stderr before it starts waiting, so a TTY run is never a silent hang: it
-// says what is already stored and whether an ingest listener was even found
-// to feed it anything more.
-func monitorBanner(store *monitor.Store) string {
-	metas, _ := store.List()
-	up := ingestUp()
-	switch {
-	case len(metas) == 0 && !up:
-		return "pix monitor: no stored events and no ingest listener detected — following anyway, but nothing will arrive until `pix serve` is running. Ctrl-C to stop."
-	case len(metas) == 0:
-		return "pix monitor: no stored events yet — following live, waiting for the first one. Ctrl-C to stop."
-	default:
-		return fmt.Sprintf("pix monitor: following %d stored stream(s) live. Ctrl-C to stop.", len(metas))
-	}
 }
 
 // ── lifecycle: ls / rm ──────────────────────────────────────────────────────

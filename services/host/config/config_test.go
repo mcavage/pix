@@ -433,25 +433,6 @@ func TestServePidPath(t *testing.T) {
 	}
 }
 
-// TestMonitorStoreRoot resolves <state-dir>/monitor, honoring $XDG_STATE_HOME,
-// so `pix-host serve` (writer) and `pix monitor` (reader) always agree.
-func TestMonitorStoreRoot(t *testing.T) {
-	xdg := t.TempDir()
-	t.Setenv("XDG_STATE_HOME", xdg)
-	want := filepath.Join(xdg, "pix", "monitor")
-	got, err := MonitorStoreRoot()
-	if err != nil {
-		t.Fatalf("MonitorStoreRoot: %v", err)
-	}
-	if got != want {
-		t.Errorf("MonitorStoreRoot() = %q, want %q", got, want)
-	}
-	// A sibling of serve.pid/serve.log (the state dir), NOT the config dir.
-	if filepath.Dir(got) != filepath.Dir(ServePidPath()) {
-		t.Errorf("MonitorStoreRoot dir %q != state dir %q", filepath.Dir(got), filepath.Dir(ServePidPath()))
-	}
-}
-
 // TestDataDirLayout locks the XDG data-root resolution: $XDG_DATA_HOME wins,
 // else ~/.local/share/pix, and every durable default derives from it.
 func TestDataDirLayout(t *testing.T) {

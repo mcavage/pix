@@ -25,7 +25,6 @@ CLI reference of its own.
 | `secret` | manage the 1Password `op://` refs (never the values) | §8 |
 | `config` | `show`/`path`/`get`/`set`/`unset` the single runtime config | §1 |
 | `task` | isolated parallel-work clones + sandboxes | `docs/design/worktree-tasks.md` |
-| `monitor` | one-shot read of a sandbox's stored out-of-sandbox traffic (`--follow`/`-f` to stream) | `docs/design/monitor.md` |
 | `models` | which models pix can use, and the model router: ls/show/pick/route | `docs/design/routing.md`, `docs/design/models-cli.md` |
 | `agent` | the subagent roster, read-only: `ls` only (`new`/`edit`/`rm`/`reassess` were removed) | §4 |
 | `version`, `help` | stamped version; tiered help | (none) |
@@ -421,7 +420,7 @@ unverifiable gap. Required, always: the **sbx CLI** being installed and at
 least one resolved **provider key** (a single key for any one of Anthropic,
 OpenAI, or Google satisfies it; you don't need all three): either one
 failing alone is enough to fail doctor. Required only when configured:
-**memory** and **monitor**, once listed in `services`. Never required:
+**memory**, once listed in `services`. Never required:
 **launchd** and **pack** (a host with neither configured is a perfectly good
 host). A config file that fails to load entirely is its own separate
 required gap: nothing else can be probed without one, so it is reported

@@ -97,11 +97,6 @@ const SAFETY_INVARIANTS = [
 		phrases: ["never writes a secret value to disk"],
 	},
 	{
-		id: "monitor-loopback-default",
-		invariant: "`pix monitor` binds loopback by default; LAN exposure is an explicit opt-in.",
-		phrases: ["binds loopback by default", "--bind 0.0.0.0"],
-	},
-	{
 		id: "rm-scoped-to-pix",
 		invariant: "`pix rm` only ever removes `pix-*` sandboxes.",
 		phrases: ["scoped to `pix-*` sandboxes"],
@@ -126,7 +121,12 @@ test("the invariant enumeration itself is not silently shrunk", () => {
 	// Deleting a row from SAFETY_INVARIANTS is the easy way to make the test
 	// above pass while losing the invariant. Removing one now has to also edit
 	// this number, which shows up in review.
-	assert.equal(SAFETY_INVARIANTS.length, 13);
+	//
+	// 13 -> 12: "monitor ingest binds loopback by default" was retired with the
+	// monitor itself. The invariant is not weakened, it is VACUOUS -- there is no
+	// listener left to bind, and the :11437 network-allowlist entry that reached
+	// it is gone from pi-kit/spec.yaml too.
+	assert.equal(SAFETY_INVARIANTS.length, 12);
 	assert.equal(new Set(SAFETY_INVARIANTS.map((i) => i.id)).size, SAFETY_INVARIANTS.length);
 });
 

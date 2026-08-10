@@ -88,24 +88,7 @@ capability bundles you activate with `pix setup --pack <url>` or `pix pack
 use`; models resolve by **intent**, not a pinned name: see
 `docs/design/routing.md`.
 
-## 7. Watching a sandbox from outside
-
-```bash
-pix monitor             # print what's already stored, once, and exit
-pix monitor --json      # raw stored events, one JSON object per line: pipe to jq
-pix monitor --follow    # keep streaming as new events land (-f)
-```
-
-`monitor` is a pure reader over an on-disk, append-only NDJSON store; the
-listener that receives events runs inside `pix serve` (loopback-only by
-default). Without `--follow`, a non-interactive run (a pipe, a script, `|
-head -5`) reads what's already there and exits: it never blocks waiting for
-more. An interactive terminal still defaults to live-follow (with a banner
-saying so); `--follow`/`-f` forces streaming either way. If nothing is
-stored and no ingest listener is running, the one-shot default fails loudly
-(exit 3) rather than printing nothing. See `docs/design/monitor.md`.
-
-## 8. Slack and Google Workspace
+## 7. Slack and Google Workspace
 
 Both are **external** integrations, not built into `pix-host`. Register
 either the same way as any other MCP server:

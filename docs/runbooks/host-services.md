@@ -16,7 +16,6 @@ Everything here is grounded in code you can read:
 | unit | owner | listener | blast radius when it dies |
 | --- | --- | --- | --- |
 | `memory` | Suture tree, go-plugin subprocess (`pix-host plugin memory`) | none of its own — `serve` owns `:11435` and proxies (`memoryProxyMux`) | recall/remember in EVERY sandbox session fails fast; the session keeps working without memory |
-| monitor ingest | composed directly in `serve` (not a supervised unit) | `:11437`, loopback by default | in-sandbox tap events are dropped; nothing else notices |
 | pack `[[services]]` units | Suture tree, one go-plugin subprocess each | per pack | only that pack's capability |
 
 The load-bearing property: **the child can die, the listener cannot.** `serve`
@@ -37,7 +36,7 @@ below is readable from `pix serve status --json` or `pix doctor --json`
 | --- | --- | --- | --- |
 | **Errors** | fraction of `:11435` JSON-RPC calls returning an RPC error, measured as: unit `state == running && health_ok` sampled every 5s | ≥ 99% of 5s samples healthy over 7 days (≈ 100 min/week of budget) | `units[].state`, `units[].health_ok` |
 | **Latency** | health-probe wall time, `last_probe_us` | p95 < 250 ms; a probe over the 3 s `HealthTimeout` counts as a failure | `units[].last_probe_us` |
-| **Traffic** | recall/remember calls per session — proxied by monitor ingest event counts | no target; it is the denominator for the error rate | `pix monitor --json` |
+| **Traffic** | recall/remember calls per session | no target; it is the denominator for the error rate | the memory unit's own stats (`pix mem stats`) |
 | **Saturation** | restarts per hour, `units[].restarts` deltas; plus generation churn | < 1 restart/day; 3 restarts in 10 min is the flap threshold | `units[].restarts`, `units[].generation` |
 
 Supporting availability SLI: **snapshot freshness.** `serve` republishes the
