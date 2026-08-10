@@ -50,7 +50,7 @@ func TestRootOwnsEveryVerb(t *testing.T) {
 	for _, want := range []string{
 		"run", "status", "st", "ls", "rm", "version", "config", "serve",
 		"doctor", "setup", "mcp", "pack", "secret", "memory", "mem",
-		"monitor", "models", "agent", "task", "help",
+		"models", "agent", "task", "help",
 	} {
 		if !got[want] {
 			t.Errorf("verb %q is not a child of the kong root (got %v)", want, rootVerbs())
@@ -117,12 +117,12 @@ func verbGroups() map[string]string {
 // TestTieredHelpTiersMatchGeneratedGroups is the anti-drift guard DX finding
 // 4's short-help curation needed: helpText hand-curates its own tier headings
 // (deliberately merging some generated groups for brevity, e.g. "Data, models
-// & observability" folds root.go's Data/Models & agents/Observability
+// & observability" folds root.go's Data and Models & agents
 // groups into one heading), but a heading whose text is a VERBATIM match for
 // one of rootCmd's real `group:` names must not silently list a verb from a
 // DIFFERENT group under it — that is not curation, it is drift (exactly the
-// bug this test was added to catch: `monitor` sat under the literal
-// "Setup & health" heading while rootCmd tags it `group:"Observability"`).
+// bug this test was added to catch: a verb sat under the literal
+// "Setup & health" heading while rootCmd tags it a different group).
 // A heading whose text does not literally match any real group name is a
 // deliberate multi-group merge or the "More" overflow line and is skipped.
 func TestTieredHelpTiersMatchGeneratedGroups(t *testing.T) {
@@ -304,18 +304,17 @@ func TestDispatch_BareInteractive_NeverTouchesARealSandbox(t *testing.T) {
 // struct tags (kong's "Usage:"), goes to STDOUT, and exits 0.
 func TestMigratedVerbHelpIsGenerated(t *testing.T) {
 	for verb, want := range map[string]string{
-		"ls":      "Usage: pix ls",
-		"models":  "Usage: pix models",
-		"agent":   "Usage: pix agent",
-		"secret":  "Usage: pix secret",
-		"rm":      "Usage: pix rm",
-		"serve":   "Usage: pix serve",
-		"task":    "Usage: pix task",
-		"monitor": "Usage: pix monitor",
-		"run":     "Usage: pix run",
-		"status":  "Usage: pix status",
-		"doctor":  "Usage: pix doctor",
-		"setup":   "Usage: pix setup",
+		"ls":     "Usage: pix ls",
+		"models": "Usage: pix models",
+		"agent":  "Usage: pix agent",
+		"secret": "Usage: pix secret",
+		"rm":     "Usage: pix rm",
+		"serve":  "Usage: pix serve",
+		"task":   "Usage: pix task",
+		"run":    "Usage: pix run",
+		"status": "Usage: pix status",
+		"doctor": "Usage: pix doctor",
+		"setup":  "Usage: pix setup",
 	} {
 		d, out, errb := rootDeps()
 		if code := dispatch([]string{verb, "--help"}, d); code != 0 {
@@ -333,7 +332,6 @@ func TestExitMapper(t *testing.T) {
 	for _, argv := range [][]string{
 		{"ls", "--this-is-not-a-real-flag-9x7z"},
 		{"rm", "--this-is-not-a-real-flag-9x7z"},
-		{"monitor", "--this-is-not-a-real-flag-9x7z"},
 		{"task", "--this-is-not-a-real-flag-9x7z"},
 		{"run", "--this-is-not-a-real-flag-9x7z"},
 		{"status", "--this-is-not-a-real-flag-9x7z"},

@@ -199,30 +199,20 @@ test("PRIVACY.md enumerates the DEFAULT network destinations, not just 'what you
 	assert.doesNotMatch(privacy, /\| Nothing else \|/);
 });
 
-test("PRIVACY.md discloses that monitor PERSISTS a transcript, where, and with what bounds", () => {
+// The monitor persisted a transcript, and PRIVACY.md used to have to disclose
+// where and with what bounds. The subsystem is gone, so the disclosure now has
+// the opposite job: say plainly that pix writes no transcript of its own, and
+// do NOT let the old data quietly disappear from the document — anyone who ran
+// an earlier version still has it on disk, and nothing will ever evict it.
+test("PRIVACY.md discloses that pix writes no transcript of its own, and how to delete the old one", () => {
 	const privacy = read("docs/legal/PRIVACY.md");
-	assert.match(privacy, /state\/pix\/monitor/);
-	assert.match(privacy, /events\.ndjson/);
-	assert.match(privacy, /blobs\.ndjson/);
-	// Bounds are caps, NOT a retention schedule — say so rather than implying one.
-	assert.match(privacy, /4000 events/);
-	assert.match(privacy, /8 MB/);
-	assert.match(privacy, /200/);
-	assert.match(privacy, /Nothing is deleted on a\s+schedule or by age/);
-	// Redaction is about credentials, and must not be sold as anonymization.
-	assert.match(privacy, /Redaction targets credentials, not personal data/);
-	// How to delete it and how to turn it off.
+	assert.match(privacy, /No transcript of its own/);
+	assert.match(privacy, /REMOVED/);
+	// What DOES remain on disk, named, so "no transcript" is not read as "no files".
+	assert.match(privacy, /\.pi-sessions/);
+	// The orphaned store from an earlier version, and the exact command.
 	assert.match(privacy, /rm -rf ~\/\.local\/state\/pix\/monitor/);
-	assert.match(privacy, /pix config set services memory/);
+	// And it must not still claim a live monitor service exists.
+	assert.doesNotMatch(privacy, /Monitor ingest\*\* \(`:11437`\)/);
 });
 
-test("the monitor disclosure matches the code's actual bounds and root", () => {
-	// If someone re-tunes the store, this fails instead of leaving PRIVACY.md
-	// quietly wrong about how much of your transcript is on disk.
-	const store = read("services/host/monitor/store.go");
-	assert.match(store, /maxStreams = 200/);
-	assert.match(store, /cfg\.MaxEvents = 4000/);
-	assert.match(store, /cfg\.MaxBytes = 8 << 20/);
-	assert.match(store, /eventsFile = "events\.ndjson"/);
-	assert.match(read("services/host/config/config.go"), /filepath\.Join\(dir, "monitor"\)/);
-});

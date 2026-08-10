@@ -133,7 +133,7 @@ func TestPackServices_RejectsValueShapedEnv(t *testing.T) {
 }
 
 func TestPackServices_RejectsReservedPorts(t *testing.T) {
-	for _, port := range []int{11435, 11437} {
+	for _, port := range []int{11435} {
 		requireLoadError(t, mutateValid(t, "port", fmt.Sprintf("port = %d", port)), "reserved")
 	}
 	requireLoadError(t, mutateValid(t, "port", "port = 70000"), "port")
@@ -188,7 +188,7 @@ func TestPackServices_NameHygiene(t *testing.T) {
 	// duplicate names
 	requireLoadError(t, validGoPluginService+validGoPluginService, "duplicate")
 	// reserved built-in unit names can never be shadowed by a pack
-	for _, reserved := range []string{"memory", "knowledge", "broker", "monitor"} {
+	for _, reserved := range []string{"memory", "knowledge", "broker"} {
 		requireLoadError(t, mutateValid(t, "name", fmt.Sprintf("name = %q", reserved)), "reserved")
 	}
 }

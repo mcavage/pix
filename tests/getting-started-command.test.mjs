@@ -24,7 +24,7 @@ test("/getting-started renders the core agent workflow without triggering a mode
 		ui: { notify(text, level) { notification = { text, level }; } },
 	});
 	assert.equal(notification.level, "info");
-	for (const expected of ["/help", "/skill:<name>", "/model", "/status", "/recall", "pix task", "pix monitor"]) {
+	for (const expected of ["/help", "/skill:<name>", "/model", "/status", "/recall", "pix task"]) {
 		assert.match(notification.text, new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 	}
 });

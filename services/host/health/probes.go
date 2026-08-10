@@ -41,10 +41,6 @@ const (
 	// `restart` subcommand kong has never answered to.
 	ServeRestartFix = "pix serve stop && pix serve start"
 	PackUseFix      = "pix pack use <path|owner/repo>"
-	// MonitorStartFix: `pix monitor` is a pure offline reader over the
-	// on-disk event store (see monitorCmd) — it starts nothing. The thing
-	// that actually starts the monitor ingest listener is `pix serve start`.
-	MonitorStartFix = "pix serve start"
 	SecretSetFix    = "pix secret set %s op://vault/item/field"
 	// ModelKeyFix repairs the ANY-OF gap: pix launches a model with one
 	// provider key, so the repair names one provider rather than listing three
@@ -342,47 +338,6 @@ func classifyNetErr(ctx context.Context, err error) string {
 		return "unreadable answer"
 	}
 	return "no usable answer"
-}
-
-// --- monitor ----------------------------------------------------------------
-
-// MonitorProbe proves the monitor's HTTP surface is alive. Liveness is the
-// question here, so ANY HTTP answer below 500 counts (the monitor mux serves a
-// narrow route set and 404s the rest); a 5xx is a verified gap, and a refused
-// connection means it is simply not running.
-type MonitorProbe struct {
-	Port    int
-	Enabled bool
-}
-
-func (MonitorProbe) Name() string     { return "monitor" }
-func (p MonitorProbe) Required() bool { return p.Enabled }
-
-func (p MonitorProbe) Check(ctx context.Context) Result {
-	url := fmt.Sprintf("http://127.0.0.1:%d/", p.Port)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return Result{Name: p.Name(), Status: StatusUnknown, Required: p.Enabled, Detail: "could not build probe"}
-	}
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		if refused(err) {
-			return Result{Name: p.Name(), Status: StatusAbsent, Required: p.Enabled,
-				Detail: fmt.Sprintf("not running (:%d refused)", p.Port), Fix: MonitorStartFix,
-				Evidence: fmt.Sprintf("connection refused on :%d", p.Port)}
-		}
-		return Result{Name: p.Name(), Status: StatusUnknown, Required: p.Enabled, Detail: "no answer",
-			Evidence: fmt.Sprintf(":%d: %s", p.Port, classifyNetErr(ctx, err))}
-	}
-	defer res.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 4<<10))
-	if res.StatusCode >= 500 {
-		return Result{Name: p.Name(), Status: StatusAbsent, Required: p.Enabled,
-			Detail: fmt.Sprintf("unhealthy (HTTP %d)", res.StatusCode), Fix: MonitorStartFix,
-			Evidence: fmt.Sprintf(":%d answered %d", p.Port, res.StatusCode)}
-	}
-	return Result{Name: p.Name(), Status: StatusReady, Required: p.Enabled,
-		Detail: fmt.Sprintf("serving (:%d)", p.Port), Evidence: fmt.Sprintf(":%d answered %d", p.Port, res.StatusCode)}
 }
 
 // --- pack -------------------------------------------------------------------

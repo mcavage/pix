@@ -24,7 +24,7 @@ enumerated below rather than left to the phrase "only what you configured".
 | **A version check**: pi asks the npm registry whether a newer `@earendil-works/pi-coding-agent` exists (this is what the in-sandbox "Update available" banner is) | `registry.npmjs.org` | Update notification | npm's terms; pix stores no result |
 | **Package + toolchain downloads**: pi extensions and npm packages, the pinned `fd`/`ruff`/Go binaries at image build, git fetches, release assets fetched by `install.sh`/`brew` | `registry.npmjs.org`, `nodejs.org`, `pi.dev`, `github.com`, `codeload.github.com`, `objects.githubusercontent.com`, `raw.githubusercontent.com`, `go.dev` | Install what the sandbox runs | Those hosts' terms |
 | GitHub API calls you make (`gh`, PRs, issues) | `api.github.com`, `uploads.github.com` | Commands you ran | GitHub's terms |
-| Loopback traffic to host services you started (`memory` :11435, `monitor` ingest :11437, `ollama` :11434) | Your own machine, over `host.docker.internal`/`localhost` | Recall, the wiretap, local inference | Local only — see below |
+| Loopback traffic to host services you started (`memory` :11435, `ollama` :11434) | Your own machine, over `host.docker.internal`/`localhost` | Recall, local inference | Local only — see below |
 
 Those are all the destinations, not a sample: sandbox egress is allowlisted in
 `pi-kit/spec.yaml` (`permissions.network.allow`), a destination not on that
@@ -37,34 +37,15 @@ pix depends on it.
 
 - **Memory** (`pix-host memory`, `:11435`): the self-learning store. Binds
   loopback, file-backed on your machine, never synced anywhere.
-- **Monitor ingest** (`:11437`): loopback by default. `--bind 0.0.0.0` is an
-  explicit LAN opt-in with a warning and no auth token — do not use it on an
-  untrusted network.
-  **It persists a transcript, and that is the point of it.** The wiretap is
-  not in-memory: when the monitor service is running (it is part of the
-  default `services` set that `pix serve` starts), every event the in-sandbox
-  tap ships is appended to a file on your machine under
-  `~/.local/state/pix/monitor/`, one `events.ndjson` per
-  (sandbox, session) plus a `blobs.ndjson` for full payload bodies. That
-  content is your prompts, the model's replies, and raw tool output.
-  Concretely:
-  - **Location/permissions**: `<state-dir>/monitor/` (`$XDG_STATE_HOME/pix`,
-    else `~/.local/state/pix`), directories `0700`, files `0600`, no symlink
-    followed.
-  - **Redaction**: every event and every blob is passed through the
-    secret-redaction pass before it is written (a stored blob can therefore
-    differ from the hash it is referenced by; the record marks that with
-    `redacted`). Redaction targets credentials, not personal data.
-  - **Bounds, not a retention schedule**: each stream is trimmed
-    drop-oldest at 4000 events / 8 MB, and the number of retained streams is
-    capped at 200 (oldest by mtime evicted). Nothing is deleted on a
-    schedule or by age — a stream that stays under those caps stays on disk
-    until you remove it.
-  - **Deleting it**: `rm -rf ~/.local/state/pix/monitor`. Turning it off:
-    `pix config set services memory` (any explicit `services` list that
-    omits `monitor`), then restart `pix serve`.
-  - It is never uploaded, and `pix monitor` reads it offline from the same
-    files.
+- **No transcript of its own.** pix used to ship a monitor: an in-sandbox tap
+  POSTed every model request, reply and raw tool result to a loopback ingest
+  listener, which appended them under `~/.local/state/pix/monitor/`. That whole
+  subsystem was REMOVED, tap included, so pix no longer writes any transcript
+  anywhere. What remains on disk is what `pi` itself writes: its session
+  transcripts under `.pi-sessions/*.jsonl` in your workspace.
+  **If you ran an earlier version, that data is still there and nothing will
+  ever touch it again** — no reader, no eviction pass, no bounds. Delete it:
+  `rm -rf ~/.local/state/pix/monitor` (or `$XDG_STATE_HOME/pix/monitor`).
 - **Session transcripts / todos / provenance records**: files under your home
   and `out/`, never uploaded by pix.
 - **Config**: `~/.config/pix/config.toml`, `~/.local/state/pix/`.

@@ -4,9 +4,7 @@ package service
 // in a central help file, so a change to what serve does and a change to what
 // serve says are the same edit.
 const Description = `Run the long-running host services (execs the sibling pix-host serve):
-memory (:11435, when enabled) and the monitor ingest listener (:11437, when
-enabled) that the in-VM monitor tap POSTs to — 'pix monitor' is a pure offline
-reader with no listener of its own. Positional args are the service list;
+memory (:11435, when enabled). Positional args are the service list;
 anything after -- is passed to pix-host serve unchanged.
 
 You usually do NOT need to run this yourself: pix run / memory auto-start a

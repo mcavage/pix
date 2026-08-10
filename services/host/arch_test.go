@@ -98,7 +98,6 @@ var pkgLayer = map[string]int{
 	// exists on disk is a GHOST — see TestArchitecture_NoGhostPlacements below,
 	// which fails the day one lingers instead of relying on someone noticing.
 	"inference": layerCapability,
-	"monitor":   layerCapability,
 	"plugin":    layerCapability,
 	"service":   layerCapability,
 	"memory":    layerCapability,
@@ -204,7 +203,7 @@ var pkgLayer = map[string]int{
 	// "." is the pix-host daemon binary's own root package — a separate program
 	// from cmd/pix, but the same shape: argv/RPC in, dispatch out. It was
 	// exempted (-1) as a placeholder; it earns L4 honestly — its production
-	// imports (config, cli, routing, inference, monitor, plugin, supervise,
+	// imports (config, cli, routing, inference, plugin, supervise,
 	// workflow/pack) are all L0-L3, so it satisfies the down-only rule without
 	// help. Its examples/ tree is gone with the MCP plugin transport it
 	// demonstrated (U11j).

@@ -124,7 +124,7 @@ New here?   pix setup      one-time guided setup (a few minutes, resumable)
 Workflow
   run [DIR]        launch or re-attach DIR's sandbox (default: .) — plain "pix"
   ls               list your pix sandboxes;  rm <name>  removes one
-  serve            start the host services (memory, monitor); ` + "`serve stop|status`" + `
+  serve            start the host services (memory); ` + "`serve stop|status`" + `
   status           what is up, what is down, what is next
 
 Setup & health
@@ -135,7 +135,6 @@ Data, models & observability
   memory           recall | remember | forget | learnings | stats
   models           which models pix can use, and which are wired up
   agent            the subagent roster: each agent's resolved model, and why
-  monitor [name]   live-follow a sandbox's out-of-sandbox traffic (:11437)
 
 More             config, pack, mcp, secret, task, version   (see ` + "`pix help --all`" + `)
 

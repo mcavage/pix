@@ -2,10 +2,10 @@
   "schema": 1,
   "packages": {
     "pix/host": {
-      "prod_loc": 4058,
+      "prod_loc": 3905,
       "exports": 0,
       "globals": 39,
-      "edges": 11,
+      "edges": 10,
       "exits": 15
     },
     "pix/host/cli": {
@@ -17,24 +17,24 @@
       "exits": 0
     },
     "pix/host/cmd/pix": {
-      "prod_loc": 3452,
-      "exports": 15,
-      "globals": 13,
-      "edges": 23,
-      "exits": 2
+      "prod_loc": 3035,
+      "exports": 14,
+      "globals": 8,
+      "edges": 22,
+      "exits": 1
     },
     "pix/host/config": {
-      "prod_loc": 796,
-      "exports": 41,
-      "globals": 14,
+      "prod_loc": 784,
+      "exports": 40,
+      "globals": 13,
       "edges": 0,
       "exits": 0
     },
     "pix/host/health": {
       "_prod_loc_note": "raised together for ONE change: `pix doctor` reported model keys from the sbx secret store as if they were routable, so a host with three keys but one probed binding showed three green providers while every intent that preferred another vendor silently fell back. ProviderKeyProbe.Callable + inference.CallableProviders make key-present-but-unrouted visible (nil = not computed, which preserves the old report). A deliberate, reviewed raise of a shrink-only budget.",
-      "prod_loc": 1262,
-      "exports": 41,
-      "globals": 29,
+      "prod_loc": 1217,
+      "exports": 39,
+      "globals": 28,
       "edges": 3,
       "exits": 0
     },
@@ -68,10 +68,10 @@
       "exits": 0
     },
     "pix/host/mcp": {
-      "prod_loc": 1292,
-      "exports": 38,
-      "globals": 19,
-      "edges": 6,
+      "prod_loc": 1054,
+      "exports": 29,
+      "globals": 18,
+      "edges": 4,
       "exits": 0
     },
     "pix/host/memory": {
@@ -81,15 +81,8 @@
       "edges": 2,
       "exits": 0
     },
-    "pix/host/monitor": {
-      "prod_loc": 1195,
-      "exports": 35,
-      "globals": 20,
-      "edges": 0,
-      "exits": 0
-    },
     "pix/host/packinfo": {
-      "prod_loc": 944,
+      "prod_loc": 942,
       "exports": 32,
       "globals": 4,
       "edges": 4,
@@ -132,7 +125,7 @@
       "exits": 0
     },
     "pix/host/service": {
-      "prod_loc": 1664,
+      "prod_loc": 1662,
       "exports": 24,
       "globals": 16,
       "edges": 6,
@@ -159,12 +152,26 @@
       "edges": 1,
       "exits": 0
     },
+    "pix/host/unitreport": {
+      "prod_loc": 137,
+      "exports": 6,
+      "globals": 2,
+      "edges": 0,
+      "exits": 0
+    },
+    "pix/host/unitreport/unitreporttest": {
+      "prod_loc": 117,
+      "exports": 3,
+      "globals": 1,
+      "edges": 1,
+      "exits": 0
+    },
     "pix/host/workflow/doctor": {
       "_prod_loc_note": "raised together for ONE change: `pix doctor` reported model keys from the sbx secret store as if they were routable, so a host with three keys but one probed binding showed three green providers while every intent that preferred another vendor silently fell back. ProviderKeyProbe.Callable + inference.CallableProviders make key-present-but-unrouted visible (nil = not computed, which preserves the old report). A deliberate, reviewed raise of a shrink-only budget.",
-      "prod_loc": 695,
-      "exports": 23,
+      "prod_loc": 674,
+      "exports": 22,
       "globals": 10,
-      "edges": 14,
+      "edges": 12,
       "exits": 0
     },
     "pix/host/workflow/launch": {
@@ -184,14 +191,15 @@
       "exits": 0
     },
     "pix/host/workflow/pack": {
-      "prod_loc": 3049,
+      "_prod_loc_note": "prod_loc 3049 -> 3062, globals 4 -> 5: ONE seam, paying for itself many times over. propagateConfig's real implementation runs `launchctl kickstart -k` against the developer's own pix LaunchAgent, and every test here that adopts a pack went through it \u2014 so a test run restarted the live daemon on the machine running it, serially, blocking on each. That was 507s of a 578s `go test ./...` locally, against a fast gate whose own documented go-test baseline is 32.8s; CI never saw it because there is no agent there to kick. Behind the var, the package is 2.8s and the whole gate is 47s instead of 9.5 minutes. The new global IS the seam. A deliberate, reviewed raise of a shrink-only budget.",
+      "prod_loc": 3062,
       "exports": 28,
-      "globals": 4,
+      "globals": 5,
       "edges": 11,
       "exits": 0
     },
     "pix/host/workflow/provision": {
-      "prod_loc": 1301,
+      "prod_loc": 1288,
       "exports": 30,
       "globals": 11,
       "edges": 11,
@@ -209,20 +217,6 @@
       "exports": 14,
       "globals": 2,
       "edges": 2,
-      "exits": 0
-    },
-    "pix/host/unitreport": {
-      "prod_loc": 137,
-      "exports": 6,
-      "globals": 2,
-      "edges": 0,
-      "exits": 0
-    },
-    "pix/host/unitreport/unitreporttest": {
-      "prod_loc": 117,
-      "exports": 3,
-      "globals": 1,
-      "edges": 1,
       "exits": 0
     }
   }
