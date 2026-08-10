@@ -28,18 +28,6 @@ const (
 	McpRegNo
 )
 
-// String renders the tri-state for JSON/report rows.
-func (r McpRegEvidence) String() string {
-	switch r {
-	case McpRegYes:
-		return "yes"
-	case McpRegNo:
-		return "no"
-	default:
-		return "unknown"
-	}
-}
-
 // McpRegEvidenceFrom derives the registration tri-state from a bounded `sbx
 // mcp ls` listing's own success/failure and content — the ONE definition every
 // surface builds its reg evidence from, so they can never diverge on what

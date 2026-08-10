@@ -55,7 +55,7 @@ pi is pinned via `ARG PI_PACKAGE=@earendil-works/pi-coding-agent@<version>` in t
 
 - **`pix help --all`** (or `help <verb>`, `help --man`): the live verb tree, generated from the dispatch switch. This is the source of truth.
 - **`docs/reference.md`**: the capability map: what each verb is FOR and which design doc owns it.
-- **`docs/design/`**: the reasoning: `serve-lifecycle.md`, `packs.md` + `packs-v2.md` + `packs-v2-impl.md`, `worktree-tasks.md`, `monitor.md`, `routing.md`, `onboarding.md`, `cli-redesign.md`, `lifecycle-trust.md`, `HANDOFF.md` (current state; `rearchitecture.md`/`host-mode.md` are superseded). New: `docs/getting-started.md`.
+- **`docs/design/`**: the reasoning: `serve-lifecycle.md`, `packs.md` + `packs-v2.md` + `packs-v2-impl.md`, `worktree-tasks.md`, `monitor.md`, `routing.md`, `onboarding.md`, `cli-redesign.md`, `lifecycle-trust.md`, `HANDOFF.md` (current state). New: `docs/getting-started.md`.
 
 ### Safety invariants (never relearn these, never violate them)
 

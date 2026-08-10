@@ -2,8 +2,6 @@ package mcp
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -33,32 +31,6 @@ type sbxReply struct {
 	exit   int
 }
 
-// installSbxGrammarFixture writes a real "sbx" shell script into a
-// PATH-isolated dir. It answers the OLD `--url`-flag grammar's exact argv
-// with oldReply and the NEW positional grammar's exact argv with newReply —
-// the two invocations RunSbxGrammarFallback must choose between — each
-// writing its stdout/stderr text to the ACTUAL corresponding file
-// descriptor, not a single merged stream.
-func installSbxGrammarFixture(t *testing.T, oldReply, newReply sbxReply) string {
-	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "sbx")
-	script := "#!/bin/sh\n" +
-		"case \"$*\" in\n" +
-		"'mcp bundle add pix-catalog --url https://example.com/bundle.json')\n" +
-		replyBody(oldReply) +
-		"  ;;\n" +
-		"'mcp bundle add pix-catalog https://example.com/bundle.json')\n" +
-		replyBody(newReply) +
-		"  ;;\n" +
-		"*) echo \"fixture: unexpected argv: $*\" >&2; exit 99 ;;\n" +
-		"esac\n"
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
 // replyBody renders one sbxReply's case-branch body: a stdout printf to fd 1
 // when non-empty, a SEPARATE stderr printf to fd 2 (`>&2`) when non-empty,
 // then the branch's exit code — never one printf covering both streams.
@@ -84,16 +56,6 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return digits
-}
-
-func lookPathIn(dir string) func(string) (string, error) {
-	return func(name string) (string, error) {
-		p := filepath.Join(dir, name)
-		if _, err := os.Stat(p); err != nil {
-			return "", err
-		}
-		return p, nil
-	}
 }
 
 // --- detectLegacyPositionalURL: bounded, read-only help-output detection ---

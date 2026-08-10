@@ -280,6 +280,6 @@ func agentLs(d *cli.Deps, jsonOut bool) error {
 	fmt.Fprintln(d.Out)
 	fmt.Fprintln(d.Out, "WHY explains the pick: what the winner beat, or the constraints that left it the only")
 	fmt.Fprintln(d.Out, "fit. The accuracy/cost/latency behind it are hand-maintained in scorecard.json (see")
-	fmt.Fprintln(d.Out, "`pix models show`). Tune the tradeoffs in policy.json, then `pix models route`.")
+	fmt.Fprintln(d.Out, "`pix models show`). Tune policy.json; routing recompiles itself on the next `pix run`.")
 	return nil
 }

@@ -19,7 +19,7 @@ prints exactly what to set.
 
 new/edit/rm/reassess are retired: edit agents/*.md directly (add/change/remove
 the file), hand-score a new intent's models in scorecard.json if needed, then
-run 'pix models route' to recompile and relaunch the sandbox to pick it up.`
+launch a new sandbox -- routing recompiles itself on every 'pix run'.`
 
 // AgentCmd is the verb tree. `list` is a kong alias, so it appears in
 // generated help instead of hiding in a dispatcher.

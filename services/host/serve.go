@@ -229,17 +229,6 @@ func bindFrontDoors(enabledSvc func(string) bool) ([]hostService, error) {
 	return all, nil
 }
 
-// closeFrontDoorListeners closes every listener already bound in `all` — used
-// when a LATER front door in the same bindFrontDoors call fails, so the
-// earlier winner's socket is never leaked into the fatalf/os.Exit that follows.
-func closeFrontDoorListeners(all []hostService) {
-	for _, s := range all {
-		if s.ln != nil {
-			_ = s.ln.Close()
-		}
-	}
-}
-
 // spawnChildren launches every pack/plugin child process — each active pack's
 // Tier-1-accepted [[services]] units, then the memory plugin unit — and is the
 // ONLY place either is spawned. runServe calls it exactly once, and only AFTER

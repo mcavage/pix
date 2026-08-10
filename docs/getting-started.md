@@ -105,5 +105,4 @@ See `docs/gworkspace.md` and the `gworkspace` skill.
 - `docs/reference.md`: the full capability reference, one section per verb.
 - `docs/design/lifecycle-trust.md`: how a sandbox's lifecycle and a pack's
   trust gate actually work, in one place.
-- `docs/MIGRATION.md`: upgrading from an older `pix`, or from raw `sbx run`.
 - `AGENTS.md`: the harness's own memory; read it before extending pix itself.

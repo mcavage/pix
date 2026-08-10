@@ -23,7 +23,6 @@ package health
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -233,13 +232,6 @@ func (s Snapshot) Names() []string {
 	for _, r := range s.Results {
 		out = append(out, r.Name)
 	}
-	return out
-}
-
-// SortedNames lists the probes alphabetically — for stable machine output.
-func (s Snapshot) SortedNames() []string {
-	out := s.Names()
-	sort.Strings(out)
 	return out
 }
 

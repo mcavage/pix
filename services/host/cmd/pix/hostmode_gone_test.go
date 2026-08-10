@@ -232,6 +232,41 @@ func TestForbiddenSymbolSentinelDetectsAPlantedViolation(t *testing.T) {
 	}
 }
 
+// TestNoExtensionBranchesOnHostMode is the half the suite above missed. It
+// proved host-guard.ts was deleted, but not that the ENV VAR it armed on stopped
+// being read: status.ts still pinned a permanent "HOST -- no sandbox, real
+// machine, real credentials" badge, and ollama-bridge.ts still had a branch that
+// skipped starting its reverse proxy, both keyed on OLLAMA_HOSTMODE=1. Nothing
+// in production Go has set that variable since `pix host` was deleted, so both
+// were permanently-false branches describing a mode that cannot exist -- exactly
+// the residue a deletion leaves on the OTHER side of a process boundary, where
+// `deadcode` (Go-only) cannot see it.
+func TestNoExtensionBranchesOnHostMode(t *testing.T) {
+	root := hostModeRoot(t)
+	extDir := filepath.Join(root, "..", "..", "extensions")
+	entries, err := os.ReadDir(extDir)
+	if err != nil {
+		t.Fatalf("read extensions dir: %v", err)
+	}
+	seen := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".ts") {
+			continue
+		}
+		seen++
+		b, rerr := os.ReadFile(filepath.Join(extDir, e.Name()))
+		if rerr != nil {
+			t.Fatalf("read %s: %v", e.Name(), rerr)
+		}
+		if strings.Contains(string(b), "OLLAMA_HOSTMODE") {
+			t.Errorf("extensions/%s still branches on OLLAMA_HOSTMODE; `pix host` is deleted and nothing sets it", e.Name())
+		}
+	}
+	if seen == 0 {
+		t.Fatal("scanned no extensions; the path has drifted and this guard proves nothing")
+	}
+}
+
 // TestHostGuardExtensionDeleted proves the sandbox-side half of the deletion:
 // extensions/host-guard.ts (the tool_call guard that ONLY ever armed itself
 // under OLLAMA_HOSTMODE=1, and whose mere presence on disk was what convinced

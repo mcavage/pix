@@ -2,7 +2,7 @@
   "schema": 1,
   "packages": {
     "pix/host": {
-      "prod_loc": 3905,
+      "prod_loc": 3894,
       "exports": 0,
       "globals": 39,
       "edges": 10,
@@ -10,8 +10,8 @@
     },
     "pix/host/cli": {
       "_prod_loc_note": "475 -\u003e 502: Deps.Config() now warns about config keys this build ignores, so a typo is surfaced instead of silently doing nothing. A deliberate, reviewed raise of a shrink-only budget, which is the only way this number is allowed to move.",
-      "prod_loc": 502,
-      "exports": 21,
+      "prod_loc": 485,
+      "exports": 20,
       "globals": 2,
       "edges": 2,
       "exits": 0
@@ -33,7 +33,7 @@
     },
     "pix/host/health": {
       "_prod_loc_note": "raised together for ONE change: `pix doctor` and `pix setup` demanded an anthropic/openai/google key from hosts whose models need none. A pack's sbx-session backends carry their own credential (a Docker login session the sbx proxy injects inside the sandbox, unreplayable from the host by design), so the key store lists nothing and the required row went red prescribing `pix models add anthropic` -- a key nothing would read. `pix run`'s launch gate already skipped the key check on exactly this host (inference.ConfiguredKeylessInference); ProviderKeyProbe.Keyless + inference.KeylessBackends give the same carve-out to the two verbs that lacked it, so all three stop disagreeing about one host. Distinct from Callable, which answers \"this key routes nowhere\"; Keyless answers \"no key was ever the credential\". provision's new edge is importing inference for that one predicate rather than re-deriving a second opinion. A deliberate, reviewed raise of a shrink-only budget.",
-      "prod_loc": 1262,
+      "prod_loc": 1254,
       "exports": 40,
       "globals": 29,
       "edges": 3,
@@ -69,8 +69,8 @@
       "exits": 0
     },
     "pix/host/mcp": {
-      "prod_loc": 1054,
-      "exports": 29,
+      "prod_loc": 1033,
+      "exports": 28,
       "globals": 18,
       "edges": 4,
       "exits": 0
@@ -104,7 +104,7 @@
       "exits": 0
     },
     "pix/host/rpc": {
-      "prod_loc": 212,
+      "prod_loc": 201,
       "exports": 12,
       "globals": 6,
       "edges": 0,
@@ -141,8 +141,8 @@
       "exits": 0
     },
     "pix/host/sys": {
-      "prod_loc": 528,
-      "exports": 25,
+      "prod_loc": 489,
+      "exports": 22,
       "globals": 12,
       "edges": 1,
       "exits": 0

@@ -14,11 +14,6 @@ func realShardsDir(t *testing.T) string {
 	return filepath.Join(".", "shards")
 }
 
-func realRetirementPath(t *testing.T) string {
-	t.Helper()
-	return filepath.Join(".", "retirement.jsonl")
-}
-
 // realRootGoPath points at cmd/pix's own root.go — one directory up from this
 // test-only package, which deliberately does not (and, being package main,
 // cannot) import cmd/pix. TestCoverage_EveryKnownVerbHasShardOrRetirement

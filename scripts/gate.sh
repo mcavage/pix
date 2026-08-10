@@ -282,6 +282,64 @@ arch_metrics() {
 		"$ARCH_METRICS_BIN" -root services/host -budgets scripts/arch-metrics/budgets.json
 }
 
+# AC-GATE-05: no unreachable production code. The audit that deleted 18 dead
+# functions found two whose deaths were mechanical -- closeFrontDoorListeners
+# lost both call sites when the monitor block went, ExecSbxMcpLoad was the
+# implementation of a verb that had been removed -- so nothing but a tool was
+# ever going to notice them. The baseline is ZERO, which is the only baseline
+# worth gating: any number above zero needs a curated exception list, and a
+# curated list of known-dead code is the vestigial surface with extra steps.
+#
+# DEAD ON EVERY PLATFORM, not just this one. `deadcode` answers per-GOOS, and
+# this repo has build-tagged pairs (install_darwin.go / install_other.go): on
+# linux, realCmdRunner and resolvedHostBinary are genuinely unreachable, and on
+# darwin they are the launchd path. Reporting either as dead would be wrong, and
+# is exactly what a naive single-GOOS run did -- green on a Mac, red in CI, for
+# CORRECT code. So both platforms are analysed and only the INTERSECTION counts:
+# reachable anywhere means alive.
+#
+# `go install` into the gate's own dir, not `go run`, because `go run` with GOOS
+# set cross-compiles the TOOL and then cannot execute it. And not a `tool`
+# directive in services/host/go.mod either: deadcode pulls golang.org/x/telemetry
+# and bumps three more modules, and putting a linter's dependencies into the
+# SHIPPED module graph would drag them through the notices and SBOM gates for no
+# benefit.
+DEADCODE_PKG="golang.org/x/tools/cmd/deadcode@v0.48.0"
+DEADCODE_BIN="$GATE_OUT_DIR/deadcode"
+deadcode_guard() {
+	local install_log
+	if ! install_log="$(GOBIN="$GATE_OUT_DIR" go install "$DEADCODE_PKG" 2>&1)"; then
+		# Only an inability to OBTAIN the tool skips (offline laptop, proxy down).
+		# Anything else is a real failure this must report, or the guard would
+		# quietly disarm itself exactly when something is wrong.
+		case "$install_log" in
+		*"module lookup disabled"* | *"dial tcp"* | *"no such host"* | *"i/o timeout"* | *"connection refused"* | *"proxyconnect"* | *"certificate"*)
+			printf 'deadcode: SKIPPED, could not fetch %s (offline?):\n%s\n' "$DEADCODE_PKG" "$install_log"
+			return 0
+			;;
+		esac
+		printf 'deadcode: FAILED to install %s:\n%s\n' "$DEADCODE_PKG" "$install_log"
+		return 1
+	fi
+	local goos out rc
+	for goos in darwin linux; do
+		out="$(cd services/host && GOOS="$goos" "$DEADCODE_BIN" -test ./... 2>/dev/null)"
+		rc=$?
+		if [ $rc -ne 0 ]; then
+			printf 'deadcode: FAILED to analyse GOOS=%s (exit %d):\n%s\n' "$goos" "$rc" "$out"
+			return 1
+		fi
+		printf '%s\n' "$out" | sed '/^$/d' | sort >"$GATE_OUT_DIR/deadcode.$goos"
+	done
+	local both
+	both="$(comm -12 "$GATE_OUT_DIR/deadcode.darwin" "$GATE_OUT_DIR/deadcode.linux")"
+	if [ -n "$both" ]; then
+		printf 'deadcode: unreachable on EVERY platform (delete it, or wire it up):\n%s\n' "$both"
+		return 1
+	fi
+	printf 'deadcode: no funcs unreachable on both darwin and linux\n'
+}
+
 run_segment "go-build" "go-build" go_build
 run_segment "go-vet" "go-vet" go_vet
 run_segment "go-test" "go-test" go_test
@@ -290,6 +348,7 @@ run_segment "typecheck" "typecheck" typecheck
 run_segment "open-core" "open-core" open_core
 run_segment "recall-xport" "recall-xport" recall_transport
 run_segment "arch-metrics" "arch-metrics" arch_metrics
+run_segment "deadcode" "deadcode" deadcode_guard
 
 # The rename guard lands with the W3 cutover (U-W3.04). Wiring it in
 # CONDITIONALLY means this gate ships now and picks the guard up the moment the

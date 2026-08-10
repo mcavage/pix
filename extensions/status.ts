@@ -7,32 +7,6 @@
 //
 // Defensive by design: every pi API touch is guarded so a payload/shape
 // mismatch degrades gracefully and never breaks startup.
-// HOST MODE (docs/design/host-mode.md): the Go launcher sets OLLAMA_HOSTMODE=1
-// ONLY for `pix host` sessions (never in the sandbox). When set, this
-// extension pins a permanent, unmissable HOST badge for the whole session —
-// the persistent in-session signal the design doc calls for (a banner scrolls
-// away; this doesn't). Detected once at load so it can't flap mid-session.
-const HOST_MODE =
-	typeof process !== "undefined" && process.env?.OLLAMA_HOSTMODE === "1";
-const HOST_BADGE_ID = "host-mode-badge";
-
-function pinHostBadge(ui: any): void {
-	if (!HOST_MODE || !ui) return;
-	try {
-		const text = (() => {
-			try {
-				const red = ui.theme?.fg ? (s: string) => ui.theme.fg("error", s) : (s: string) => s;
-				return red("■ HOST — no sandbox, real machine, real credentials");
-			} catch {
-				return "■ HOST — no sandbox, real machine, real credentials";
-			}
-		})();
-		ui.setWidget?.(HOST_BADGE_ID, [text]);
-		ui.setStatus?.(HOST_BADGE_ID, text);
-	} catch {
-		/* best-effort; must not break the agent */
-	}
-}
 
 export default function (pi: any) {
 	let turnStart: number | null = null;
@@ -156,7 +130,6 @@ export default function (pi: any) {
 	const start = (ctx: any) => {
 		ui = ctx?.ui ?? ui;
 		ctxRef = ctx ?? ctxRef;
-		pinHostBadge(ui); // re-assert every turn: persistent for the WHOLE session
 		turnStart = Date.now();
 		phaseStart = Date.now();
 		lastActivity = Date.now();
@@ -223,7 +196,6 @@ export default function (pi: any) {
 		lastActivity = Date.now();
 	});
 	on("session_shutdown", () => stop());
-	on("session_start", (_e, ctx) => pinHostBadge(ctx?.ui ?? ui));
 
 	const report = (ctx: any) => {
 		const now = Date.now();

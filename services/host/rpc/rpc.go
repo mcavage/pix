@@ -12,7 +12,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -57,16 +56,6 @@ func PortFromEnv(name string, def int) int {
 		}
 	}
 	return def
-}
-
-// Up reports whether the daemon is reachable within a short dial timeout.
-func (c Client) Up() bool {
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", c.Port), 300*time.Millisecond)
-	if err != nil {
-		return false
-	}
-	_ = conn.Close()
-	return true
 }
 
 // Call POSTs a JSON-RPC request and returns the decoded `result` object. A
