@@ -503,3 +503,103 @@ func TestPidfileFormat(t *testing.T) {
 		t.Fatalf("pidfile parse mismatch: %q", got)
 	}
 }
+
+// TestStopServe_SweepsOrphanBesideTheRecordedPid is the "I had to run `pix serve
+// stop` twice" bug.
+//
+// The pidfile names ONE daemon; that is not proof there is only one. A second
+// `pix-host serve` can outlive its own pidfile (crash before cleanup, config dir
+// moved aside, a lazy spawn that raced) and keep holding :11435 after the
+// recorded pid is gone. Stop used to signal only the recorded pid and report
+// success, leaving the OLD build still holding the port. The user then hit the
+// version-drift warning again on the next launch, ran `serve stop` a second
+// time, and only then did the missing-pidfile path fall into discovery and kill
+// the one that actually mattered.
+//
+// One stop must be complete.
+func TestStopServe_SweepsOrphanBesideTheRecordedPid(t *testing.T) {
+	recorded := &fakeProc{pid: 4242, alive: true}
+	orphan := &fakeProc{pid: 4343, alive: true}
+	removed := false
+
+	ctl := ctlFor("4242", nil, recorded, &removed, nil)
+	// One kill switch over both fakes, so each pid's liveness is tracked
+	// independently the way two real processes would be.
+	ctl.kill = func(pid int, sig syscall.Signal) error {
+		switch pid {
+		case recorded.pid:
+			return recorded.kill(pid, sig)
+		case orphan.pid:
+			return orphan.kill(pid, sig)
+		}
+		return syscall.ESRCH
+	}
+	ctl.discover = func() ([]int, error) { return []int{recorded.pid, orphan.pid}, nil }
+
+	var buf bytes.Buffer
+	stopped, err := Stop(ctl, &buf)
+	if err != nil || !stopped {
+		t.Fatalf("stopped=%v err=%v, want true,nil", stopped, err)
+	}
+	if recorded.alive {
+		t.Error("the recorded pid must be stopped")
+	}
+	if orphan.alive {
+		t.Errorf("the orphaned serve was left running; a second `serve stop` would be needed:\n%s", buf.String())
+	}
+	if !strings.Contains(buf.String(), "orphaned 'pix-host serve' (pid 4343)") {
+		t.Errorf("the sweep must say what it stopped and why, got %q", buf.String())
+	}
+}
+
+// TestStopServe_SweepNeverTouchesAnotherProcess: discovery is not authority. A
+// pid it returns that does not VERIFY as our live serve is never signalled, so a
+// recycled pid or an unrelated `pix-host` invocation is safe.
+func TestStopServe_SweepNeverTouchesAnotherProcess(t *testing.T) {
+	recorded := &fakeProc{pid: 500, alive: true}
+	stranger := &fakeProc{pid: 501, alive: true}
+	removed := false
+
+	ctl := ctlFor("500", nil, recorded, &removed, func(pid int) (bool, bool) {
+		if pid == stranger.pid {
+			return false, true // known, and known NOT to be ours
+		}
+		return true, true
+	})
+	ctl.kill = func(pid int, sig syscall.Signal) error {
+		switch pid {
+		case recorded.pid:
+			return recorded.kill(pid, sig)
+		case stranger.pid:
+			return stranger.kill(pid, sig)
+		}
+		return syscall.ESRCH
+	}
+	ctl.discover = func() ([]int, error) { return []int{recorded.pid, stranger.pid}, nil }
+
+	var buf bytes.Buffer
+	if _, err := Stop(ctl, &buf); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if !stranger.alive {
+		t.Fatal("the sweep signalled a process that did not verify as ours")
+	}
+}
+
+// TestStopServe_SweepFailureDoesNotUndoTheRecordedStop: the recorded daemon
+// really did stop, so a discovery error must not turn that into a failure.
+func TestStopServe_SweepFailureDoesNotUndoTheRecordedStop(t *testing.T) {
+	recorded := &fakeProc{pid: 700, alive: true}
+	removed := false
+	ctl := ctlFor("700", nil, recorded, &removed, nil)
+	ctl.discover = func() ([]int, error) { return nil, syscall.EPERM }
+
+	var buf bytes.Buffer
+	stopped, err := Stop(ctl, &buf)
+	if err != nil || !stopped {
+		t.Fatalf("stopped=%v err=%v, want true,nil (the recorded stop succeeded)", stopped, err)
+	}
+	if recorded.alive {
+		t.Error("recorded pid should be stopped")
+	}
+}

@@ -132,7 +132,8 @@
       "exits": 0
     },
     "pix/host/service": {
-      "prod_loc": 1664,
+      "_prod_loc_note": "1664 -> 1708: `serve stop` now sweeps for orphaned `pix-host serve` processes AFTER stopping the pid its pidfile recorded. A pidfile names one daemon and is not proof there is only one, so a second daemon outliving its own pidfile kept holding :11435 while stop reported success. That is why `pix serve stop` had to be run twice. The sweep only ever signals pids that positively verify as our live serve. A deliberate, reviewed raise of a shrink-only budget.",
+      "prod_loc": 1708,
       "exports": 24,
       "globals": 16,
       "edges": 6,
