@@ -181,7 +181,13 @@ func RunSecretLs(env hostenv.Env, out io.Writer, nonSecret NonSecret) {
 		default:
 			// Any other non-ref, non-allowlisted value: refs-only policy => flag it
 			// WITHOUT printing the value.
-			fmt.Fprintf(out, "    ✗ %s = not an op:// ref — this file is refs-only; use op://vault/item/field, or have your pack declare %s as env_keys if it is genuinely not a secret\n", r.Key, r.Key)
+			// Offer BOTH remedies. "Have your pack declare it" is a dead end for
+			// the common case — a leftover from an integration that is gone —
+			// and a permanent red line with unactionable advice is how a report
+			// teaches people to stop reading it.
+			fmt.Fprintf(out, "    ✗ %s = not an op:// ref. Either point it at 1Password "+
+				"(pix secret set %s op://vault/item/field), or if nothing uses it any more, "+
+				"drop it (pix secret rm %s).\n", r.Key, r.Key, r.Key)
 		}
 	}
 }

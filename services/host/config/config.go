@@ -674,8 +674,8 @@ func (s MCPServer) HostExec() bool { return s.Command != "" || s.Image != "" }
 // VERBATIM in `pix setup`, the `secret` help, and the template header.
 const OpRefsMentalModel = `op-refs.env maps ENV_VAR = op://vault/item/field. When the gateway spawns a
 host MCP server it resolves those refs from 1Password and injects them as env
-vars — the secret never touches disk or the sandbox. A server with no creds
-(pio) needs no entry.`
+vars — the secret never touches disk or the sandbox. A server that needs no
+credentials needs no entry here at all.`
 
 // OpRefsTemplate is the seed content for a fresh op-refs.env: op:// references
 // ONLY, every example line COMMENTED OUT. There are no vendor examples here on
@@ -687,8 +687,8 @@ const OpRefsTemplate = `# pix op-refs.env — 1Password refs the sbx gateway res
 #
 # op-refs.env maps ENV_VAR = op://vault/item/field. When the gateway spawns a
 # host MCP server it resolves those refs from 1Password and injects them as env
-# vars — the secret never touches disk or the sandbox. A server with no creds
-# (pio) needs no entry.
+# vars — the secret never touches disk or the sandbox. A server that needs no
+# credentials needs no entry here at all.
 #
 # This file holds op://vault/item/field REFERENCES only. Everything secret
 # (tokens, keyring passwords) is an op:// ref resolved from 1Password at spawn
