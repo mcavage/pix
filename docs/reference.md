@@ -15,6 +15,7 @@ CLI reference of its own.
 | Verb | For | Detail |
 | --- | --- | --- |
 | `run [DIR]` | launch (or re-attach to) the sandbox for a directory | §1, `docs/design/cli-redesign.md` |
+| `resume SESSION [DIR]` | reopen the exact saved session named when pix exited | §1 |
 | `status` / `ls` / `rm` | read-only control panel; list and remove `pix-*` sandboxes | §9 |
 | `doctor` | probe host + sandbox health and print exact fixes | §9 |
 | `setup` | the guided host+agent setup path (keys, memory, pack, identity) | `docs/design/onboarding.md` |
@@ -49,8 +50,9 @@ State that should persist (memory, packs, config) lives outside the sandbox on
 the host, so it survives even though the sandbox doesn't.
 
 ```
-pix run [DIR]      # launch (default: current dir)
-pix                # same as `pix run` at a terminal; status when piped
+pix run [DIR]               # launch (default: current dir)
+pix resume SESSION [DIR]    # resume the exact session named on exit
+pix                         # same as `pix run` at a terminal; status when piped
 ```
 
 ## 2. Memory

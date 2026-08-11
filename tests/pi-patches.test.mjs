@@ -163,6 +163,106 @@ test("tui bottom-pin patch catches upstream drift instead of silently applying",
 	assert.equal(markerCount(tuiPath, "Bottom-block pin"), 0);
 });
 
+test("pi resume patch emits an exact host-runnable pix command", async (t) => {
+	const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pix-patches-resume-"));
+	t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+
+	const target = path.join(temp, "interactive-mode.js");
+	fs.copyFileSync(path.join(fixturesRoot, "pi-resume/interactive-mode.js"), target);
+	const env = { ...process.env, PI_INTERACTIVE_MODE: target };
+	const patch = path.join(repoRoot, "scripts/patches/apply-pix-resume-command.mjs");
+
+	assert.match(run(process.execPath, [patch], env), /patched/);
+	assert.match(run(process.execPath, [patch], env), /already patched/);
+	const source = fs.readFileSync(target, "utf8");
+	assert.match(source, /PIX_RESUME_COMMAND/);
+	assert.match(source, /hostResumeCommand && !sessionManager\.usesDefaultSessionDir\(\)/);
+	assert.match(source, /process\.cwd\(\)/);
+	assert.equal(markerCount(target, "pix host resume command"), 1);
+
+	const oldCommand = process.env.PIX_RESUME_COMMAND;
+	const tty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+	process.env.PIX_RESUME_COMMAND = "pix resume";
+	Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
+	t.after(() => {
+		if (oldCommand === undefined) delete process.env.PIX_RESUME_COMMAND;
+		else process.env.PIX_RESUME_COMMAND = oldCommand;
+		if (tty) Object.defineProperty(process.stdout, "isTTY", tty);
+		else delete process.stdout.isTTY;
+	});
+	const { formatResumeCommand } = await import(`${pathToFileURL(target).href}?patched=1`);
+	const sessionManager = {
+		isPersisted: () => true,
+		getSessionFile: () => target,
+		getSessionId: () => "019fd77b-0295-79d5-8411-ef30ac524994",
+		usesDefaultSessionDir: () => false,
+	};
+	assert.equal(
+		formatResumeCommand(sessionManager),
+		`pix resume 019fd77b-0295-79d5-8411-ef30ac524994 ${process.cwd()}`,
+	);
+	assert.equal(
+		formatResumeCommand({ ...sessionManager, usesDefaultSessionDir: () => true }),
+		"pi --session 019fd77b-0295-79d5-8411-ef30ac524994",
+		"a manually launched pi with sandbox-local sessions must keep pi's own hint",
+	);
+});
+
+test("pi resume patch fails when upstream command formatting drifts", (t) => {
+	const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pix-patches-resume-broken-"));
+	t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+
+	const target = path.join(temp, "interactive-mode.js");
+	fs.copyFileSync(path.join(fixturesRoot, "pi-resume-broken/interactive-mode.js"), target);
+	const env = { ...process.env, PI_INTERACTIVE_MODE: target };
+	const patch = path.join(repoRoot, "scripts/patches/apply-pix-resume-command.mjs");
+	const { status, stderr } = runCapture(process.execPath, [patch], env);
+
+	assert.notEqual(status, 0);
+	assert.match(stderr, /anchor not found/);
+});
+
+test("MCP status patch adds a problems-only mode", (t) => {
+	const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pix-patches-mcp-status-"));
+	t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+	const target = path.join(temp, "pi-mcp-adapter");
+	copyDir(path.join(fixturesRoot, "pi-mcp-status"), target);
+	const env = { ...process.env, PI_MCP_ADAPTER_DIR: target };
+	const patch = path.join(repoRoot, "scripts/patches/apply-mcp-problems-status.mjs");
+
+	assert.match(run(process.execPath, [patch], env), /patched/);
+	assert.match(run(process.execPath, [patch], env), /already patched/);
+	assert.match(fs.readFileSync(path.join(target, "types.ts"), "utf8"), /"problems"/);
+	const source = fs.readFileSync(path.join(target, "init.ts"), "utf8");
+	assert.match(source, /footerStatus === "problems" && connectedCount === enabledCount/);
+	assert.match(source, /disconnected/);
+});
+
+test("MCP status patch fails when adapter status rendering drifts", (t) => {
+	const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pix-patches-mcp-status-broken-"));
+	t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+	const target = path.join(temp, "pi-mcp-adapter");
+	copyDir(path.join(fixturesRoot, "pi-mcp-status-broken"), target);
+	const env = { ...process.env, PI_MCP_ADAPTER_DIR: target };
+	const patch = path.join(repoRoot, "scripts/patches/apply-mcp-problems-status.mjs");
+	const { status, stderr } = runCapture(process.execPath, [patch], env);
+
+	assert.notEqual(status, 0);
+	assert.match(stderr, /anchor not found/);
+});
+
+test("baked and gateway MCP configs show only connection problems", () => {
+	const config = JSON.parse(fs.readFileSync(path.join(repoRoot, "mcp.json"), "utf8"));
+	assert.equal(config.settings?.mcpFooterStatus, "problems");
+	const kit = fs.readFileSync(path.join(repoRoot, "pi-kit/spec.yaml"), "utf8");
+	assert.match(kit, /\{"settings":\{"mcpFooterStatus":"problems"\}/);
+	assert.match(
+		kit,
+		/"--session-dir",\s*"\.pi-sessions"/,
+		"the printed workspace must own pi's relative session directory",
+	);
+});
+
 test("todo durable-clear patch applies to a fixture pi-manage-todo-list", async (t) => {
 	const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pix-patches-todo-"));
 	t.after(() => fs.rmSync(temp, { recursive: true, force: true }));

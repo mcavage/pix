@@ -49,6 +49,7 @@ func sbxAwareFail(d *cli.Deps, err error) error {
 // cannot be dispatchable and undocumented at once.
 type rootCmd struct {
 	Run    runCmd    `cmd:"" group:"Workflow" help:"Launch the sandbox in DIR (default: .). This is the main one."`
+	Resume resumeCmd `cmd:"" group:"Workflow" help:"Resume the exact session printed when pix exited."`
 	Ls     lsCmd     `cmd:"" group:"Workflow" help:"List your pix sandboxes (name, state, dir)."`
 	Rm     rmCmd     `cmd:"" group:"Workflow" help:"Remove pix sandboxes (scoped to pix-* names)."`
 	Serve  serveCmd  `cmd:"" group:"Workflow" help:"Run the host services; serve stop|status|start."`

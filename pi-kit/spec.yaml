@@ -17,7 +17,7 @@ sandbox:
   image: "docker.io/mcavage/pix:0.1.39"
   entrypoint:
     # --session-dir persists sessions on the host-mounted workspace so they
-    # survive sandbox recreation (resume with `pi -c` / `pi -r`); --models sets
+    # survive sandbox recreation (`pix resume SESSION DIR`); --models sets
     # the Alt+P cycle squad (Ctrl+P is remapped to emacs cursor-up).
     [
         pi,
@@ -183,7 +183,7 @@ setup:
     # Guarded on MCP_GATEWAY_URL so a non-Docker host (no gateway) stays MCP-empty.
     # (Mirrors the claude/codex/gemini/kiro/opencode kits: see the sandboxes repo
     # docs/runbooks/mcp-gateway-registration.md.)
-    - command: '[ -n "$MCP_GATEWAY_URL" ] || exit 0; mkdir -p "$HOME/.pi/agent"; printf ''{"mcpServers":{"mcp-gateway":{"url":"%s","headers":{"Authorization":"Bearer %s"}}}}\n'' "$MCP_GATEWAY_URL" "$MCP_SENTINEL_TOKEN_NAME" > "$HOME/.pi/agent/mcp.json"'
+    - command: '[ -n "$MCP_GATEWAY_URL" ] || exit 0; mkdir -p "$HOME/.pi/agent"; printf ''{"settings":{"mcpFooterStatus":"problems"},"mcpServers":{"mcp-gateway":{"url":"%s","headers":{"Authorization":"Bearer %s"}}}}\n'' "$MCP_GATEWAY_URL" "$MCP_SENTINEL_TOKEN_NAME" > "$HOME/.pi/agent/mcp.json"'
       description: Register the sbx MCP gateway with pi (pi-mcp-adapter)
 
 agentInstructions:

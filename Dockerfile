@@ -82,6 +82,15 @@ RUN mkdir -p "$NPM_CONFIG_PREFIX"
 RUN npm install -g --ignore-scripts "${PI_PACKAGE}" \
  && pi --version
 
+# pi runs inside the sandbox, but its terminal belongs to the host launcher.
+# Rewrite the shutdown hint to one exact host command instead of printing an
+# unusable in-sandbox command and making pix append a second, ambiguous `-c` hint.
+ENV PIX_RESUME_COMMAND="pix resume"
+
+# --- vendored pi patches -------------------------------------------------------
+COPY scripts/patches/ /usr/local/share/pix/patches/
+RUN node /usr/local/share/pix/patches/apply-pix-resume-command.mjs
+
 # --- vendored renderer patch: "bottom-block pin" ------------------------------
 # pi-tui's doRender() doesn't re-anchor the viewport on a bottom-anchored buffer
 # SHRINK, so the input box + powerbar drift up by a row while streaming. There's
@@ -89,7 +98,6 @@ RUN npm install -g --ignore-scripts "${PI_PACKAGE}" \
 # installed renderer at build time. The script is idempotent and NON-FATAL: if a
 # future pi version moves the anchor it warns and leaves the file unpatched
 # rather than failing the build. Full writeup: docs/upstream/tui-bottom-pin.md.
-COPY scripts/patches/ /usr/local/share/pix/patches/
 RUN node /usr/local/share/pix/patches/apply-tui-bottom-pin.mjs
 
 # --- build toolchain (native npm modules + dev typecheck) ---------------------
@@ -314,6 +322,11 @@ RUN set -eux; for p in \
       pi-usage@0.3.0; do \
       pi install "npm:$p"; \
     done; pi list
+
+# Keep healthy MCP quiet. The adapter's stock footer modes are always-on or
+# always-off; this adds a problems-only mode that remains visible after a
+# connection drops and preserves the existing per-server failure notifications.
+RUN node /usr/local/share/pix/patches/apply-mcp-problems-status.mjs
 
 # `/todos clear` in pi-manage-todo-list 0.4.0 clears only live memory. Persist
 # the clear marker so session resume and compaction continuation respect it.
