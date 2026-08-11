@@ -897,8 +897,59 @@ func showIntegration(env hostenv.Env, out io.Writer, p *packinfo.Info, ig packin
 // solicitPackCredentials, on a TTY, prompts for any pack integration whose op://
 // credential ref is missing and writes each accepted ref. No-op off-TTY or
 // without op. The pack ships no secret — only the user's own op:// reference.
+// packHintForEnv finds the pack's own guidance for one credential.
+//
+// The hint is authored on the setup step's `op-ref` requirement, and until now it
+// was rendered ONLY on the adoption screen — dozens of lines above the prompt
+// that asks for the value, and (since the screen was summarised) behind the
+// detail key. So the guidance existed and a new user never met it at the moment
+// they had to act.
+//
+// Matched by ENV NAME, which is the same identifier the integration and the
+// requirement both use, so a pack gets this for free by authoring one hint.
+func packHintForEnv(p *packinfo.Info, env string) string {
+	for _, step := range p.Manifest.Setup {
+		for _, r := range step.Require {
+			if r.Kind == "op-ref" && r.Env == env {
+				return strings.TrimSpace(r.Hint)
+			}
+		}
+	}
+	return ""
+}
+
+// solicitOpMissing explains what cannot happen, instead of nothing happening.
+//
+// This function used to return silently when the 1Password CLI was absent. A user
+// without `op` was therefore never asked for a credential, never told why, and
+// then met a setup failure naming `pix secret set` — a command that also needs
+// `op`. Every message they got pointed at a tool nobody had mentioned.
+func solicitOpMissing(out io.Writer, missing []string) {
+	fmt.Fprintf(out, "\nThis pack needs %d 1Password %s: %s\n",
+		len(missing), plural(len(missing), "reference", "references"), strings.Join(missing, ", "))
+	fmt.Fprintln(out, "  The 1Password CLI (`op`) is not on PATH, so pix cannot store them yet.")
+	fmt.Fprintln(out, "  Install it and run `op signin`, then re-run this command. Or set each by hand:")
+	for _, env := range missing {
+		fmt.Fprintf(out, "    pix secret set %s op://<vault>/<item>/<field>\n", env)
+	}
+}
+
 func solicitPackCredentials(env hostenv.Env, in io.Reader, out io.Writer, tty bool, p *packinfo.Info) {
-	if !tty || in == nil || !secret.OpInstalled(env) {
+	if !tty || in == nil {
+		return
+	}
+	if !secret.OpInstalled(env) {
+		// Still say WHAT is needed. Which credentials a pack wants does not depend
+		// on whether the tool that stores them happens to be installed.
+		var names []string
+		for _, ig := range p.Manifest.Integrations {
+			if ig.Env != "" && secret.EnvVarNameRe.MatchString(ig.Env) && !secret.OpRefFilled(env, ig.Env) {
+				names = append(names, ig.Env)
+			}
+		}
+		if len(names) > 0 {
+			solicitOpMissing(out, names)
+		}
 		return
 	}
 	var missing []packinfo.Integration
@@ -928,6 +979,18 @@ func solicitPackCredentials(env hostenv.Env, in io.Reader, out io.Writer, tty bo
 	fmt.Fprintf(out, "\nThis pack uses %d integration(s) needing a 1Password credential.\n", len(missing))
 	sc := bufio.NewScanner(in)
 	for _, ig := range missing {
+		// The pack's guidance goes HERE, immediately before the prompt, because
+		// this is the moment the user has to do something. Printed above the
+		// question rather than below it, so the question is the last thing on
+		// screen when the cursor stops.
+		if hint := packHintForEnv(p, ig.Env); hint != "" {
+			fmt.Fprintf(out, "\n  %s needs %s:\n", ig.Name, ig.Env)
+			for _, line := range strings.Split(hint, "\n") {
+				if line = strings.TrimSpace(line); line != "" {
+					fmt.Fprintf(out, "    %s\n", line)
+				}
+			}
+		}
 		fmt.Fprintf(out, "  %s -> op:// ref for %s (Enter to skip): ", ig.Name, ig.Env)
 		if !sc.Scan() {
 			return
