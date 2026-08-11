@@ -181,3 +181,35 @@ coverage" — which is the outcome that mattered for the delegation.
   works. Honest but weak.
 - `pix setup` aborts on the FIRST unmet requirement rather than listing all of
   them, so a fresh laptop needs three passes to learn two facts.
+
+### Iteration 3 — adversarial verification (in progress)
+
+`6127bb2` + `7eef572` closed the last of iteration 2's UX debt (every remedy is
+listed, not just the first kind; `secret ls` no longer prints advice that leads
+nowhere). A fourth clean-slate agent is now re-proving each iteration-2 fix
+claim by running it, rather than reading it, and hunting for regressions the
+fixes introduced.
+
+State at the time of writing, all verified by running:
+
+```
+go build ./... && go vet ./...      clean
+gofmt -l .                          empty
+go test -race ./...                 clean
+bash scripts/gate.sh                exit 0
+pack guard (gm-pix-pack)            OK
+pix pack show <pack>                loads
+```
+
+## If you are picking this up cold
+
+1. `git log --oneline c67a09d~1..HEAD` in both repos — five commits in pix, two
+   in gm-pix-pack.
+2. **Re-sign every commit** (see the warning above). Nothing is pushed.
+3. `docs/design/integrations-remediation.md` is the spec and the audit;
+   `docs/design/UAT-integrations.md` is the acceptance criteria;
+   `docs/design/CHANGE-BRIEF.md` is the symbol-level diff summary and can be
+   DELETED once this lands (it is scaffolding).
+4. The four deferred items above are the honest remaining gaps. None of them
+   makes anything claim to work when it does not — that property is the whole
+   point and it holds.
