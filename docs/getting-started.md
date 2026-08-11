@@ -111,7 +111,7 @@ See `docs/gworkspace.md` for the Workspace case worked through, and the
 **Is Ollama required?** No. Without it, memory still works but *degraded*: recall
 falls back to FTS5 keyword search (no vector ranking) and automatic capture is
 off, because there is no watcher model to extract facts from. `/remember` is
-unaffected — it is an explicit store, not an extraction. `pix doctor` reports the
+unaffected: it is an explicit store, not an extraction. `pix doctor` reports the
 `models` row as optional. Install Ollama and pull the two models to get the full
 loop; see `docs/memory.md`.
 
@@ -122,7 +122,7 @@ sbx run pix --kit "git+https://github.com/mcavage/pix.git#dir=pi-kit"
 ```
 
 That is the supported consumer path and what `make run-published` runs. Note it
-is `sbx run pix` — the agent name from the kit, which pins the image version —
+is `sbx run pix`, the agent name from the kit (which pins the image version),
 not an image reference.
 
 What you give up by skipping `pix run` is everything the launcher does on the
