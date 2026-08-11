@@ -1,6 +1,7 @@
 package health
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -341,5 +342,34 @@ func TestMCPProbe_RunStripsAFixFromAnUnknown(t *testing.T) {
 	}
 	if s.ExitCode() != ExitOK {
 		t.Errorf("an unknown optional probe must not fail the process, exit = %d", s.ExitCode())
+	}
+}
+
+// TestMCPProbe_UnmanagedRegistrationIsReportedButNotAGap covers the blind spot
+// that let two dead servers sit at "ready" for months: everything else here
+// iterates the CONFIGURED set, so a registration with no config entry was
+// invisible.
+//
+// It is information, not a gap. An unmanaged registration is frequently
+// deliberate (a hand-registered tool), and calling it a gap would hand out
+// `sbx mcp rm` advice for a working server — the same mistake this probe made
+// for composed pack stacks. It must also not inflate the denominator.
+func TestMCPProbe_UnmanagedRegistrationIsReportedButNotAGap(t *testing.T) {
+	listing := "  configured   local  stdio   ready\n  stranger     local  stdio   ready\n"
+	p := MCPProbe{
+		Bin:      "printf",
+		ListArgs: []string{"%s", listing},
+		Servers:  []MCPServer{{Name: "configured", RegisterFix: "pix mcp add configured"}},
+	}
+	r := p.Check(context.Background())
+	if !strings.Contains(r.Evidence, "stranger: registered with the gateway but not in your pix config") {
+		t.Errorf("an unmanaged registration must be surfaced; nothing else looks for it:\n%s", r.Evidence)
+	}
+	if r.Status == StatusAbsent {
+		t.Errorf("an unmanaged registration is not a verified gap — recommending removal of a "+
+			"working server is the failure this wording exists to avoid; got %v (%s)", r.Status, r.Detail)
+	}
+	if strings.Contains(r.Detail, "of 2") {
+		t.Errorf("the denominator must count CONFIGURED servers, not extras found in the listing; got %q", r.Detail)
 	}
 }

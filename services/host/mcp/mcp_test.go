@@ -300,12 +300,23 @@ func TestRegisterServers_UndeclaredNameStillFailsAlongsideASuccess(t *testing.T)
 	}
 }
 
-// TestRegisterServers_CommandNotOnPathRegistersNothing pins new behaviour (3):
-// a Command server whose binary does not resolve is a HARD failure naming the
-// server, the binary and where the fix lives — and NOTHING is registered, not
-// even the servers that would have worked. Registering a command that does not
-// exist is exactly the defect that let dead servers sit at "ready" for months.
-func TestRegisterServers_CommandNotOnPathRegistersNothing(t *testing.T) {
+// TestRegisterServers_CommandNotOnPathSkipsOnlyThatServer pins the CORRECTED
+// behaviour. An earlier version of this test asserted the opposite — that a
+// single unresolvable command registers NOTHING, "not even the servers that
+// would have worked" — and clean-slate QA showed that guard was worse than the
+// defect it guarded against.
+//
+// A pack's first adoption is exactly the state where a command is not installed
+// yet; installing it is what the pack's setup step exists for. Aborting the
+// batch meant one missing binary silently prevented every OTHER server from
+// registering, including remote and container transports that had nothing to do
+// with it — while `pix pack use` printed a success summary naming them all.
+//
+// So: the unresolvable server is skipped and named, everything else registers,
+// and the command still exits non-zero. Registering a command that does not
+// exist is still refused; that refusal is now per-server, not per-batch.
+func TestRegisterServers_CommandNotOnPathSkipsOnlyThatServer(t *testing.T) {
+	var ran []string
 	env := hostenv.Env{System: &systest.Fake{
 		LookPathFn: func(name string) (string, error) {
 			if name == credentialed {
@@ -314,7 +325,7 @@ func TestRegisterServers_CommandNotOnPathRegistersNothing(t *testing.T) {
 			return "/usr/bin/" + name, nil // sbx IS installed
 		},
 		RunTimedFn: func(name string, args ...string) (string, bool, error) {
-			t.Fatalf("nothing may be exec'd when a command does not resolve: %s %s", name, strings.Join(args, " "))
+			ran = append(ran, name+" "+strings.Join(args, " "))
 			return "", false, nil
 		},
 	}}
@@ -322,15 +333,25 @@ func TestRegisterServers_CommandNotOnPathRegistersNothing(t *testing.T) {
 	var buf bytes.Buffer
 	err := RegisterServers(cfg, env, &buf, []string{credFree, credentialed}, packServers(), Credentials{})
 	if err == nil {
-		t.Fatal("expected a hard failure for an unresolvable command, got nil")
+		t.Fatal("expected a non-zero outcome for an unresolvable command, got nil")
 	}
-	for _, want := range []string{credentialed, `"` + credentialed + `"`, "not on PATH", "pack"} {
+	for _, want := range []string{credentialed, "required command is missing"} {
 		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q missing %q (server, binary, install hint)", err, want)
+			t.Errorf("the error must name the server and why, missing %q: %v", want, err)
 		}
 	}
-	if strings.Contains(buf.String(), "registered") {
-		t.Errorf("nothing may be registered when a command does not resolve, got:\n%s", buf.String())
+	// The healthy server registered.
+	if !strings.Contains(buf.String(), "registered: "+credFree) {
+		t.Errorf("a server whose command resolves must still register, got:\n%s", buf.String())
+	}
+	// The broken one did not, and was said so.
+	for _, cmd := range ran {
+		if strings.Contains(cmd, credentialed) {
+			t.Errorf("an unresolvable server must NOT be registered, but ran: %s", cmd)
+		}
+	}
+	if !strings.Contains(buf.String(), credentialed+": needs the") {
+		t.Errorf("the skipped server must be named on stdout too, got:\n%s", buf.String())
 	}
 }
 

@@ -187,8 +187,8 @@ func TestPackActivation_ReportsRegisteredDeregisteredNeverAttachedDetached(t *te
 
 	var out bytes.Buffer
 	RunPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerOK)
-	if !strings.Contains(out.String(), "registered mcp: fastmail") {
-		t.Errorf("pack use report = %q, want a %q line", out.String(), "registered mcp: fastmail")
+	if !strings.Contains(out.String(), "added to your mcp list: fastmail") {
+		t.Errorf("pack use report = %q, want a %q line", out.String(), "added to your mcp list: fastmail")
 	}
 	for _, bad := range []string{"attached mcp", "detached mcp"} {
 		if strings.Contains(out.String(), bad) {

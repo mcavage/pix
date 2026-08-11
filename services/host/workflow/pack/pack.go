@@ -1098,7 +1098,13 @@ func reportPackActivation(out io.Writer, cfg *config.Config, root string, remove
 		fmt.Fprintf(out, "deregistered mcp (previous activation): %s\n", strings.Join(deregistered, ", "))
 	}
 	if len(addedMCP) > 0 {
-		fmt.Fprintf(out, "registered mcp: %s\n", strings.Join(addedMCP, ", "))
+		// "added to your mcp list", not "registered". This runs BEFORE
+		// registration and knows only what went into the config; registration
+		// reports itself, per server, and can legitimately skip one whose
+		// command is not installed yet. Claiming otherwise here announced
+		// success for servers that had not been registered and, when a command
+		// was missing, for servers that never would be on that run.
+		fmt.Fprintf(out, "added to your mcp list: %s\n", strings.Join(addedMCP, ", "))
 	}
 	// --mcp/--kit are create-only, so the recreate line is UNCONDITIONAL: the
 	// sandbox-facet-changing case is never silently skipped.

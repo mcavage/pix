@@ -202,6 +202,27 @@ func (p MCPProbe) Check(ctx context.Context) Result {
 		}(i, s)
 	}
 	wg.Wait()
+	// Registrations with NO config entry are invisible to everything above,
+	// because everything above iterates the configured set. That blind spot is
+	// how two servers pointing at deleted commands sat at "ready" for months, so
+	// the listing we already have is checked for names nobody configured.
+	//
+	// Reported as INFORMATION, never as a gap. An unmanaged registration is not
+	// broken — it is something pix did not put there and cannot vouch for, often
+	// deliberately (a hand-registered tool). Calling it a gap would hand out
+	// `sbx mcp rm` advice for a working server, which is the exact mistake this
+	// probe made for composed pack stacks.
+	configured := map[string]bool{}
+	for _, s := range p.Servers {
+		configured[s.Name] = true
+	}
+	for _, name := range mcp.RegisteredNamesFrom(o.out) {
+		if !configured[name] {
+			findings = append(findings, mcpFinding{name: name,
+				note: name + ": registered with the gateway but not in your pix config — " +
+					"pix did not put it there and cannot vouch for it, though a new sandbox will still attach it"})
+		}
+	}
 	return p.reduce(findings)
 }
 
@@ -462,7 +483,10 @@ func (p MCPProbe) reduce(findings []mcpFinding) Result {
 	// separator the renderer could split on also splits the notes themselves --
 	// which is exactly what turned 8 servers into 16 half-sentences.
 	ev := strings.Join(notes, "\n")
-	total := len(findings)
+	// Count only what the user CONFIGURED. Unmanaged extras appear in the
+	// evidence but must not inflate the denominator: "2 of 8 not usable" over a
+	// 6-server config claims six are fine when four are not.
+	total := len(p.Servers)
 	switch {
 	case gaps > 0:
 		// Report BOTH counts. Reporting only gaps hid the unknowns behind them,

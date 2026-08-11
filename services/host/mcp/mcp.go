@@ -552,24 +552,47 @@ func RegisterServers(cfg *config.Config, env hostenv.Env, out io.Writer,
 		reg.OpRefs = OpRefs
 	}
 
-	// Resolve every host COMMAND to an absolute path before registering
-	// anything. A missing binary is an operator problem with a known fix, and
-	// the pack is the only thing that knows how to install it — so we name the
-	// server, the binary and the pack's own install hint rather than guessing.
-	// This is a hard failure: registering a command that does not exist is
-	// exactly the defect that let two dead servers sit at "ready" for months.
+	// Resolve each host COMMAND to an absolute path. A server whose binary is
+	// missing is SKIPPED and reported; it does not abort the batch.
+	//
+	// This used to return immediately, which was a worse bug than the one it
+	// was guarding against. A pack's very first adoption is the normal case
+	// where a command is not installed yet — installing it is what the pack's
+	// own setup step is for — and one missing binary then prevented every OTHER
+	// server from registering, including remote and container transports that
+	// had nothing to do with it. Registering a command that does not exist is
+	// still refused; that is per-server, not per-batch.
+	var unresolved []string
+	resolvable := make([]string, 0, len(hostServers))
 	for _, n := range hostServers {
 		s := servers[n]
 		if s.Command == "" {
-			continue // Image server: docker is resolved by the gateway, not here
+			resolvable = append(resolvable, n) // Image: docker is the gateway's to resolve
+			continue
 		}
 		path, err := lookPath(s.Command)
 		if err != nil {
-			return fmt.Errorf("%s needs the %q command, which is not on PATH; "+
-				"install it (see the pack's setup instructions), then re-run `pix mcp add %s`",
-				n, s.Command, n)
+			fmt.Fprintf(out, "  %s: needs the %q command, which is not on PATH — not registered\n", n, s.Command)
+			unresolved = append(unresolved, fmt.Sprintf("%s (needs %q)", n, s.Command))
+			continue
 		}
 		reg.resolved[n] = path
+		resolvable = append(resolvable, n)
+	}
+	var unresolvedErr error
+	if len(unresolved) > 0 {
+		unresolvedErr = fmt.Errorf("not registered because a required command is missing: %s — "+
+			"install it (the pack's setup step does this: `pix setup --pack <pack> --with <step>`), "+
+			"then re-run `pix mcp add`", strings.Join(unresolved, ", "))
+	}
+	// Rebuild the work list from what actually resolved, so nothing below can
+	// claim to have registered a server that was skipped here.
+	hostServers = resolvable
+	finalNames = finalNames[:0]
+	finalNames = append(finalNames, hostServers...)
+	finalNames = append(finalNames, gatewayServers...)
+	if len(finalNames) == 0 {
+		return errors.Join(unresolvedErr, unknownErr)
 	}
 
 	// Credential-declaring servers need op-refs to actually work. Registering
@@ -681,16 +704,16 @@ func RegisterServers(cfg *config.Config, env hostenv.Env, out io.Writer,
 		fmt.Fprintln(out, "note: install Docker Sandboxes (sbx) to register: https://docs.docker.com/ai/sandboxes")
 	}
 	if len(regErrs) > 0 {
-		return errors.Join(fmt.Errorf("%d server(s) failed to register: %w", len(regErrs), errors.Join(regErrs...)), unknownErr)
+		return errors.Join(fmt.Errorf("%d server(s) failed to register: %w", len(regErrs), errors.Join(regErrs...)), unresolvedErr, unknownErr)
 	}
 	if !sbxOK {
 		// `register` PROMISED to register these servers and did not (nothing was
 		// exec'd, nothing is registered with the gateway) — exit non-zero
 		// (ErrSbxUnavailable -> rpc.ExitServiceDown) rather than a silent success
 		// just because the would-run lines above printed cleanly.
-		return errors.Join(ErrSbxUnavailable, unknownErr)
+		return errors.Join(ErrSbxUnavailable, unresolvedErr, unknownErr)
 	}
-	return unknownErr
+	return errors.Join(unresolvedErr, unknownErr)
 }
 
 // runInteractiveSbx runs an sbx mutation that may open a browser and keep a

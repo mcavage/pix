@@ -1,6 +1,10 @@
 package mcp
 
-import "pix/host/cli"
+import (
+	"strings"
+
+	"pix/host/cli"
+)
 
 // evidence.go — the ONE pure question the MCP surfaces ask about a server:
 // what host registration a bounded `sbx mcp ls` can prove. Nothing here
@@ -42,4 +46,30 @@ func McpRegEvidenceFrom(mcpOut string, mcpOK bool, name string) McpRegEvidence {
 		return McpRegYes
 	}
 	return McpRegNo
+}
+
+// RegisteredNamesFrom lists the server names a successful `sbx mcp ls` reported.
+//
+// Deliberately CONSERVATIVE and fail-quiet. sbx has no machine-readable listing
+// (`--json` and `-o json` are both rejected), so this reads its human table, and
+// a table format is not a contract. Every line must look like
+// `<name> <local|remote> …` before a name is believed; anything else is skipped
+// silently. The only consumer reports EXTRA registrations as information, so
+// under-reading degrades to saying nothing — which is the safe direction, and
+// the reason this may not be used to decide that something is absent.
+func RegisteredNamesFrom(mcpOut string) []string {
+	var names []string
+	for _, line := range strings.Split(mcpOut, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		switch fields[1] {
+		case "local", "remote":
+			// A header row would have to be literally "<word> local" to fool
+			// this; sbx's is "LOCAL · managed by you · ✓ on", which is not.
+			names = append(names, fields[0])
+		}
+	}
+	return names
 }

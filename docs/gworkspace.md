@@ -25,7 +25,7 @@ the gateway OAuths):
              "mcp", "--allow-tool", "read"]   # LITERAL argv, never templated
   env      = "GOG_KEYRING_PASSWORD"           # the op:// secret
   env_keys = ["GOG_ACCOUNT"]                  # extra env NAMES forwarded
-  probe    = ["gog", "auth", "doctor"]        # health probe
+  probe    = ["gog", "--readonly", "gmail", "labels", "list"]  # a REAL read; see below
   setup    = "google-workspace"               # a [[setup]] block, declarative
 ```
 
@@ -56,9 +56,13 @@ fails here, which is the point. A server with no declared probe is reported as
 *unverified*, never as healthy. A registered server no active pack declares is
 reported as a gap even though the gateway lists it.
 
-For gog itself the probe is `gog auth doctor`: it checks the keyring backend,
-the password, and the stored tokens, and exits non-zero when any of that is
-broken.
+For gog itself the probe has to be a real READ — `gog --readonly gmail labels
+list`, which exits 0 when the keyring opens and a token is readable and 2 when
+it cannot. Two obvious-looking alternatives verify nothing, both measured on gog
+v0.35.0: its MCP tool-listing flag prints the full tool list with no credentials
+at all, and its auth self-diagnosis prints `status error` on a dead keyring and
+still exits 0. Pix judges a probe by its exit code, so either would pass on a
+completely broken install.
 
 **`gog mcp --list-tools` proves nothing.** It dumps a static tool registry
 without touching the keyring: it prints the full list and exits 0 with no

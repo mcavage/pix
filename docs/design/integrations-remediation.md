@@ -106,8 +106,13 @@ env -u GOG_KEYRING_PASSWORD gog --account you@x --readonly gmail labels list
 
 ### 1.5 The probe that was missing all along
 
-`gog auth doctor` is machine-readable, exits 0/non-zero correctly, and checks
-exactly the thing that breaks:
+`gog auth doctor` is machine-readable and checks exactly the thing that breaks
+— but it **exits 0 even when it reports `status error`**, which makes it useless
+as a probe (pix judges a probe by its exit code). That was found by an
+independent reviewer AFTER this document first prescribed it; the working probe
+is a real read, `gog --readonly gmail labels list` (0 working, 2 broken). Left
+here with the correction rather than quietly rewritten, because prescribing a
+check that cannot fail is the exact mistake §1.4 documents:
 
 ```
 ok    keyring.backend   file (source: config)
@@ -526,7 +531,7 @@ Independent of everything else; hours of work; ship early.
 
 - Rewrite all four setup hooks declaratively (Phase 4 contract)
 - Carry gog as `[[bin]]` + local-command integration; carry the `gworkspace`
-  skill; replace the `--list-tools` guidance with `gog auth doctor`
+  skill; replace the `--list-tools` guidance with a real read
 - Ship Slack as an OCI image (D2)
 - Move Snowflake's daemon to `[[services]] runtime = "go-plugin"` with a SHA
   pin — a long-running host daemon installed by an unpinned shell script into a
@@ -603,8 +608,11 @@ pix config get google_workspace_access; pix gworkspace status; pix slack status
 env -u GOG_KEYRING_PASSWORD gog --account "$ACCT" --readonly mcp --list-tools | head
 env -u GOG_KEYRING_PASSWORD gog --account "$ACCT" --readonly gmail labels list
 
-# §1.5 the probe that should have been used
-gog auth doctor
+# §1.5 the probe that should have been used — and the two that must NOT be.
+# Both of these exit 0 on a completely broken install; only the read call fails.
+gog auth doctor                                  # exits 0 even on `status error`
+gog --readonly mcp --list-tools                  # exits 0 with no credentials
+gog --readonly gmail labels list                 # 0 working, 2 broken  <-- use this
 
 # §1.6 / §1.7 what is actually registered
 sbx mcp ls
