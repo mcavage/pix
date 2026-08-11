@@ -21,6 +21,8 @@ import (
 	"net"
 	"net/url"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -48,6 +50,19 @@ const ServiceRuntimeContainer = "container"
 // UNPINNED on the Tier-1 consent screen, so the weaker guarantee is a thing the
 // user sees rather than a thing the schema quietly permits.
 const ServiceRuntimeDaemon = "daemon"
+
+// sortedRuntimes renders the closed runtime set for an error message, DERIVED
+// from serviceRules so a new runtime cannot be added without the message that
+// lists the options learning about it — which is how "want go-plugin or
+// container" outlived the arrival of a third one.
+func sortedRuntimes() []string {
+	out := make([]string, 0, len(serviceRules.runtimes))
+	for r := range serviceRules.runtimes {
+		out = append(out, strconv.Quote(r))
+	}
+	sort.Strings(out)
+	return out
+}
 
 // serviceRules is the whole [[services]] vocabulary — closed sets, reserved
 // names/ports, value shapes — as ONE immutable package value, since they are
@@ -199,7 +214,7 @@ func ValidateServices(root string, m *Manifest) error {
 		}
 		seen[s.Name] = true
 		if !serviceRules.runtimes[s.Runtime] {
-			return bad("invalid runtime %q (want %q or %q)", m.Services[i].Runtime, "go-plugin", ServiceRuntimeContainer)
+			return bad("invalid runtime %q (want %s)", m.Services[i].Runtime, strings.Join(sortedRuntimes(), ", "))
 		}
 		if s.Runtime == ServiceRuntimeContainer {
 			if s.Path != "" || s.SHA != "" {

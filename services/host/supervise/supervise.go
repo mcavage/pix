@@ -59,6 +59,13 @@ type UnitSpec struct {
 	Argv     []string // arguments passed to the unit (uninterpreted)
 	EnvAllow []string // env REFERENCE NAMES inherited from the parent
 	EnvGrant []string // explicit KEY=VALUE grants for THIS unit only
+	// Command is a bare binary name resolved on PATH at launch — the THIRD
+	// launch form, alongside self-exec and a pinned external path. It exists for
+	// a daemon built from source on this machine, which has no SHA a shared
+	// manifest could carry. It is deliberately the only form with no pin, and
+	// the Tier-1 consent screen renders it as UNPINNED so that is the user's
+	// call rather than a silent property.
+	Command string
 }
 
 var envNameRe, shaHexRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`), regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
@@ -70,8 +77,12 @@ func (s UnitSpec) Validate() error {
 		return fmt.Errorf("unit: empty name")
 	case strings.TrimSpace(s.Kind) == "":
 		return fmt.Errorf("unit %s: empty kind", s.Name)
-	case s.SelfExec == (s.Path != ""):
-		return fmt.Errorf("unit %s: exactly one of self-exec or an external path is required", s.Name)
+	case countTrue(s.SelfExec, s.Path != "", s.Command != "") != 1:
+		return fmt.Errorf("unit %s: exactly one of self-exec, an external path, or a PATH command is required", s.Name)
+	case s.Command != "" && s.SHA != "":
+		// A pin on a PATH-resolved command would describe a file this spec never
+		// reads, which is worse than no pin: it reads as a guarantee.
+		return fmt.Errorf("unit %s: a PATH command must not carry a sha pin", s.Name)
 	}
 	if s.Path != "" {
 		switch {
@@ -108,7 +119,9 @@ func (s UnitSpec) identity() string {
 	}
 	sort.Strings(grants)
 	h := sha256.New()
-	for _, sec := range [][]string{{s.Name, s.Kind, s.Path, strings.ToLower(s.SHA), fmt.Sprint(s.SelfExec)}, s.Argv, allow, grants} {
+	// Command joins the identity section: two daemons differing only by which
+	// binary they run are not the same unit, and a reattach must not confuse them.
+	for _, sec := range [][]string{{s.Name, s.Kind, s.Path, strings.ToLower(s.SHA), fmt.Sprint(s.SelfExec), s.Command}, s.Argv, allow, grants} {
 		for _, part := range sec {
 			fmt.Fprintf(h, "%d:%s\x00", len(part), part)
 		}
@@ -132,6 +145,17 @@ func NewExternalUnit(name, kind, path, sha string, argv, envAllow []string) (Uni
 		return UnitSpec{}, err
 	}
 	return u, nil
+}
+
+// countTrue is how Validate expresses "exactly one of these launch forms".
+func countTrue(bs ...bool) int {
+	n := 0
+	for _, b := range bs {
+		if b {
+			n++
+		}
+	}
+	return n
 }
 
 // FilterEnv builds a child environment from an allowlist of names plus explicit grants; nothing else crosses the process boundary (cloud creds, agent sockets, a bearer exactly one unit may see).

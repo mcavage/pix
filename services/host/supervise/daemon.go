@@ -34,9 +34,6 @@ import (
 // never reads a manifest.
 type DaemonSpec struct {
 	Unit UnitSpec
-	// Command is a bare binary name resolved on PATH, used when Unit.Path is
-	// empty. Exactly one of the two is set (enforced at manifest load).
-	Command string
 	// Listen defaults to 127.0.0.1. Loopback only — a daemon that binds a
 	// routable interface is a service on the network, which is a different
 	// consent conversation than the one a pack's adoption screen had.
@@ -180,10 +177,10 @@ func (s *DaemonService) command() (*exec.Cmd, error) {
 			return nil, err
 		}
 		path = staged
-	case s.spec.Command != "":
-		resolved, err := exec.LookPath(s.spec.Command)
+	case u.Command != "":
+		resolved, err := exec.LookPath(u.Command)
 		if err != nil {
-			return nil, fmt.Errorf("unit %s: %q is not on PATH (the pack's setup step installs it)", u.Name, s.spec.Command)
+			return nil, fmt.Errorf("unit %s: %q is not on PATH (the pack's setup step installs it)", u.Name, u.Command)
 		}
 		path = resolved
 	default:

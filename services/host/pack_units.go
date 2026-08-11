@@ -116,13 +116,16 @@ func (s *supervisor) reconcileDaemons(selfPath string, views []pack.AcceptedServ
 				continue
 			}
 			unit = supervise.UnitSpec{
-				Name: v.Name, Kind: packinfo.ServiceRuntimeDaemon, SelfExec: false,
+				Name: v.Name, Kind: packinfo.ServiceRuntimeDaemon, Command: v.Command,
 				Argv: append([]string(nil), v.Argv...), EnvAllow: append([]string(nil), v.Env...),
+			}
+			if verr := unit.Validate(); verr != nil {
+				errs = append(errs, verr)
+				continue
 			}
 		}
 		if derr := tree.AddDaemon(supervise.DaemonSpec{
-			Unit: unit, Command: v.Command,
-			Listen: v.Listen, Port: v.Port, Health: v.Health,
+			Unit: unit, Listen: v.Listen, Port: v.Port, Health: v.Health,
 		}); derr != nil {
 			errs = append(errs, fmt.Errorf("daemon %s: %w", v.Name, derr))
 		}

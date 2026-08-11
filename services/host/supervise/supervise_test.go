@@ -294,6 +294,27 @@ func TestDefaultBudgetsPinned(t *testing.T) {
 	}
 }
 
+// TestUnitSpecAcceptsAPathCommand pins the THIRD launch form. A daemon a user
+// builds from source on their own Mac has no SHA any shared manifest could
+// carry, so it is resolved on PATH at launch. Validate rejecting it is exactly
+// the bug that kept snow-proxy from ever starting under the supervisor: the
+// pack accepted the manifest, the tree accepted the daemon, and then the unit
+// it was handed could not describe itself.
+func TestUnitSpecAcceptsAPathCommand(t *testing.T) {
+	u := UnitSpec{Name: "snow-proxy", Kind: "daemon", Command: "snow-proxy",
+		Argv: []string{"--connection", "pix", "--port", "11442"}}
+	if err := u.Validate(); err != nil {
+		t.Fatalf("a PATH-command daemon must validate: %v", err)
+	}
+	// And it must be part of the identity, or a reattach would treat two daemons
+	// that differ only by which binary they run as the same unit.
+	other := u
+	other.Command = "other-proxy"
+	if u.identity() == other.identity() {
+		t.Error("two units differing only by Command share an identity; a reattach could confuse them")
+	}
+}
+
 func TestUnitSpecValidateFailsClosed(t *testing.T) {
 	ok := UnitSpec{Name: "memory", Kind: "memory", SelfExec: true}
 	if err := ok.Validate(); err != nil {
@@ -315,6 +336,9 @@ func TestUnitSpecValidateFailsClosed(t *testing.T) {
 		{"env value", UnitSpec{Name: "x", Kind: "memory", SelfExec: true, EnvAllow: []string{"FOO=bar"}}, "reference name"},
 		{"env secret ref", UnitSpec{Name: "x", Kind: "memory", SelfExec: true, EnvAllow: []string{"op://vault/i/f"}}, "reference name"},
 		{"grant shape", UnitSpec{Name: "x", Kind: "memory", SelfExec: true, EnvGrant: []string{"NOEQUALS"}}, "KEY=VALUE"},
+		{"command and path", UnitSpec{Name: "x", Kind: "daemon", Command: "snow-proxy", Path: "/bin/true", SHA: sha}, "exactly one"},
+		{"command and self-exec", UnitSpec{Name: "x", Kind: "daemon", Command: "snow-proxy", SelfExec: true}, "exactly one"},
+		{"command with a sha", UnitSpec{Name: "x", Kind: "daemon", Command: "snow-proxy", SHA: sha}, "must not carry a sha pin"},
 	}
 	for _, c := range bad {
 		err := c.spec.Validate()
