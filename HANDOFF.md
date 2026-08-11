@@ -42,11 +42,11 @@ rejected and why.
 | 2 | Generic local-command MCP integration | ✅ prod code done |
 | 3 | Doctor honesty (registered ≠ working) | ✅ prod code done |
 | 4 | Declarative setup steps | ✅ prod code done |
-| 5 | Docs + skills truth pass | ☐ NOT STARTED |
-| 6 | gm-pix-pack rewrite | 🔶 pack.toml + capabilities.json done; README/tests left |
-| 7 | CI guards | ☐ NOT STARTED |
+| 5 | Docs + skills truth pass | ✅ done |
+| 6 | gm-pix-pack rewrite | ✅ done |
+| 7 | CI guards | ✅ done (the verb guard now scans all of skills/ + docs/, which is where the last round of dead verbs survived — it found ten on its first run) |
 | X | Flaky test fix | ✅ done (mutation-verified both directions) |
-| T | Go test suite green | 🔶 3 agents working; config/secret/mcp done |
+| T | Whole suite green | ✅ go build/vet/gofmt/test/-race, 417 JS tests, `scripts/gate.sh` exit 0 |
 
 ## Verified on the real host
 
@@ -65,6 +65,20 @@ and a server working only by accident. After:
 `sbx mcp inspect google-workspace` is now op-run wrapped (it was bare, working
 only because ~/.bashrc exported the keyring password into the gateway's env).
 
+Final state of that same command after three review rounds — note that the two
+`⚠`-worthy findings (an expired grant, a locked vault) were both invisible
+before, and the headline no longer claims ready:
+
+```
+⚠ core ready; mcp not usable
+✗ mcp   optional 2 of 6 not usable, 2 not checkable
+  - google-workspace: registered; its health probe did not answer in time;
+      it runs through 1Password (`op run`), so unlock your vault and re-run
+  - notion / atlassian: registered, its authorization expired
+  - acme / pix-qa: registered with the gateway but not in your pix config
+Fix:  pix mcp auth notion / pix mcp auth atlassian / op signin
+```
+
 ## Verification commands
 
 ```bash
@@ -72,7 +86,7 @@ cd /Users/mcavage/dev/pix
 go build ./... && go vet ./...        # from services/host
 bash scripts/gate.sh                  # the fast PR gate CI runs
 go test ./...                         # from services/host
-node --test tests/                    # JS suite
+node --test --test-force-exit tests/*.test.mjs   # JS suite (the glob is required)
 ```
 
 ## Decisions made during the run
