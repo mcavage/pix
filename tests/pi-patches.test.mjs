@@ -349,3 +349,90 @@ test("todo durable-clear patch catches upstream drift instead of silently applyi
 	assert.notEqual(status, 0, "a context mismatch must fail the process, not silently skip");
 	assert.match(stderr, /anchor not found in .*state-manager\.js/);
 });
+
+// --- hide the trusted host-state block ---------------------------------------
+//
+// The [pix-trusted-host-state] block has to be IN the generated onboarding
+// prompt — that is the entire mechanism by which host facts reach the fenced
+// agent — but it must not be the first thing a new user reads. Mark reported the
+// raw JSON twice, the second time as "again this goofy json".
+//
+// These tests run the PATCHED code rather than grepping it, because the whole
+// risk of a display-only strip is that it also eats something it should not.
+
+test("host-state patch hides the block from display but keeps it for the model", async (t) => {
+	const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pix-patches-hoststate-"));
+	t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+	const target = path.join(temp, "interactive-mode.js");
+	fs.copyFileSync(
+		path.join(fixturesRoot, "pi-hoststate/interactive-mode.js"),
+		target,
+	);
+	const env = { ...process.env, PI_INTERACTIVE_MODE: target };
+	const patch = path.join(repoRoot, "scripts/patches/apply-hide-host-state.mjs");
+
+	assert.match(run(process.execPath, [patch], env), /patched/);
+	assert.match(run(process.execPath, [patch], env), /already patched/);
+
+	const { InteractiveMode } = await import(`file://${target}`);
+	const state = '{"provisioned":true,"keys":{"anthropic":false,"openai":false}}';
+	const generated =
+		"[pix-generated:onboarding] I just ran pix setup. Give me the upfront guide.\n\n" +
+		`[pix-trusted-host-state]\n${state}\n[/pix-trusted-host-state]`;
+
+	const m = new InteractiveMode(generated);
+	m.addMessageToChat({ role: "user" }, { populateHistory: true });
+	assert.equal(
+		m.rendered,
+		"[pix-generated:onboarding] I just ran pix setup. Give me the upfront guide.",
+		"the JSON block must not reach the chat component",
+	);
+	assert.ok(
+		!m.history.some((h) => h.includes("provisioned")),
+		"and it must not land in the editor history either — nobody wants to arrow up into a JSON blob",
+	);
+
+	// An ordinary prompt is untouched.
+	const plain = new InteractiveMode("what does snow do?");
+	plain.addMessageToChat({ role: "user" });
+	assert.equal(plain.rendered, "what does snow do?");
+
+	// A user who TYPES the tag while asking about it keeps their whole message.
+	// Stripping on the tag alone silently truncated this to "why does".
+	const asking = new InteractiveMode(
+		"why does [pix-trusted-host-state] show up? [/pix-trusted-host-state]",
+	);
+	asking.addMessageToChat({ role: "user" });
+	assert.equal(
+		asking.rendered,
+		"why does [pix-trusted-host-state] show up? [/pix-trusted-host-state]",
+		"only pix's own generated prompt may be stripped",
+	);
+
+	// A block with no closing tag stays VISIBLE: truncating there would hide a
+	// malformed payload instead of surfacing it.
+	const broken = new InteractiveMode(
+		'[pix-generated:onboarding] hi\n\n[pix-trusted-host-state]\n{"a":1',
+	);
+	broken.addMessageToChat({ role: "user" });
+	assert.ok(
+		broken.rendered.includes('{"a":1'),
+		"an unterminated block must not be silently swallowed",
+	);
+});
+
+test("host-state patch catches upstream drift instead of silently applying", (t) => {
+	const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pix-patches-hoststate-broken-"));
+	t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+	const target = path.join(temp, "interactive-mode.js");
+	fs.copyFileSync(
+		path.join(fixturesRoot, "pi-hoststate-broken/interactive-mode.js"),
+		target,
+	);
+	const env = { ...process.env, PI_INTERACTIVE_MODE: target };
+	const patch = path.join(repoRoot, "scripts/patches/apply-hide-host-state.mjs");
+
+	// FATAL, not a warning. The failure mode of a silent skip is the blob coming
+	// back on a pi upgrade, which is the exact thing this patch exists to stop.
+	assert.throws(() => run(process.execPath, [patch], env), /anchor not found/);
+});

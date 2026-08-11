@@ -109,9 +109,15 @@ func TestPackBinary_Tier1NonTTYFailsClosed(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("a Tier-1 pack must fail closed on a non-TTY without --yes, got exit %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
 	}
+	// The refusal must SHOW the host surface it is refusing, and name the facet
+	// by which the user would recognise it. Asserted on the fact (the wrapper
+	// name and its bin/ path), not on column alignment — the previous spelling
+	// pinned "Host wrapper:        platformio" with its exact padding, so it broke
+	// on a screen that still disclosed the same wrapper.
 	for _, want := range []string{
-		"This pack adds these integrations to Pix:",
-		"Host wrapper:        platformio",
+		"This pack adds to Pix:",
+		"platformio",
+		"bin/platformio",
 		"refusing to adopt it non-interactively (fail closed)",
 		"--yes",
 	} {

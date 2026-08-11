@@ -562,7 +562,7 @@ func (t packTxn) abort(restoreLock func() error, format string, a ...any) error 
 // any commit. Tier-0 returns ("", "", nil) and adopts silently; Tier-1 halts at the BoM
 // screen unless HOST trust state already holds this identity's acceptance of
 // the EXACT current surface. A non-nil error means the caller commits NOTHING.
-func gatePackHostSurface(env hostenv.Env, out io.Writer, store *PackTrustStore, p *packinfo.Info, root string, yes bool) (fingerprint, key string, err error) {
+func gatePackHostSurface(env hostenv.Env, out io.Writer, store *PackTrustStore, p *packinfo.Info, root string, yes, details bool) (fingerprint, key string, err error) {
 	bom := ComputeHostBoM(p)
 	if !bom.Tier1() {
 		return "", "", nil
@@ -573,7 +573,7 @@ func gatePackHostSurface(env hostenv.Env, out io.Writer, store *PackTrustStore, 
 	}
 	key = store.TrustKey(root)
 	if got, ok := store.acceptedFingerprint(key); !ok || got != fp {
-		if gerr := packTrustGate(os.Stdin, out, cli.IsTTY(os.Stdin), yes, p.Manifest.Name, bom); gerr != nil {
+		if gerr := packTrustGateWith(os.Stdin, out, cli.IsTTY(os.Stdin), yes, details, p.Manifest.Name, bom); gerr != nil {
 			return "", "", gerr
 		}
 	}
@@ -696,6 +696,7 @@ func usagef(format string, a ...any) error { return cli.Usagef(format, a...) }
 type packFlags struct {
 	positionals []string
 	yes         bool
+	details     bool
 }
 
 func parsePackFlags(rest []string) (packFlags, error) {
@@ -704,6 +705,12 @@ func parsePackFlags(rest []string) (packFlags, error) {
 		switch {
 		case a == "--yes", a == "-y":
 			f.yes = true
+		case a == "--details":
+			// The full bill of materials without answering the prompt first. `d`
+			// at the prompt does the same for an interactive run; this is for a
+			// non-TTY review — reading a pack's whole host surface in CI, a script
+			// or a doc, where there is no prompt to press a key at.
+			f.details = true
 		case strings.HasPrefix(a, "-"):
 			return f, fmt.Errorf("unknown flag %q", a)
 		default:
@@ -955,7 +962,7 @@ func packUse(env hostenv.Env, out io.Writer, rest []string, register RegisterFn)
 		return usagef("pix pack use: %v", err)
 	}
 	if len(flags.positionals) == 0 {
-		return usagef("usage: pix pack use [--yes] <path|git-url|default>")
+		return usagef("usage: pix pack use [--yes] [--details] <path|git-url|default>")
 	}
 	root, remote, commit, err := resolveUseTarget(env, out, flags.positionals[0])
 	if err != nil {
@@ -992,7 +999,7 @@ func packUse(env hostenv.Env, out io.Writer, rest []string, register RegisterFn)
 	if err != nil {
 		return err
 	}
-	fingerprint, key, err := gatePackHostSurface(env, out, store, p, root, flags.yes)
+	fingerprint, key, err := gatePackHostSurface(env, out, store, p, root, flags.yes, flags.details)
 	if err != nil {
 		return err
 	}

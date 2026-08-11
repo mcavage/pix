@@ -252,7 +252,7 @@ func TestHostExecFingerprint_ProbeIsExecutableIntent(t *testing.T) {
 // never wrapped, and a probe that was executed but never shown.
 func TestRenderHostBoM_ShowsEveryCommandThatRuns(t *testing.T) {
 	var buf bytes.Buffer
-	renderHostBoM(&buf, hostBoM{MCP: []hostBoMMCP{
+	renderHostBoMDetails(&buf, hostBoM{MCP: []hostBoMMCP{
 		{Name: "credfree", Argv: []string{"pio", "serve"}},
 		{Name: "credful", Argv: []string{"gog", "mcp"}, EnvKeys: []string{"GOG_KEYRING_PASSWORD"}, Probe: []string{"gog", "auth", "doctor"}},
 	}})

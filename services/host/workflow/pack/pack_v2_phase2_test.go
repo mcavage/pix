@@ -136,7 +136,7 @@ func TestComputeHostBoM_DisclosesContainerAndRemoteIntegrations(t *testing.T) {
 		t.Fatalf("remote disclosure = %+v", b.RemoteMCP)
 	}
 	var out bytes.Buffer
-	renderHostBoM(&out, b)
+	renderHostBoMDetails(&out, b)
 	text := out.String()
 	for _, want := range []string{"HR", "hr-mcp:0.0.1", "HR_API_KEY", "Meetings", "https://app.trymeetings.com/mcp"} {
 		if !strings.Contains(strings.ToLower(text), strings.ToLower(want)) {
@@ -161,7 +161,7 @@ func TestComputeHostBoM_Tier0(t *testing.T) {
 		t.Fatalf("sandbox proxy disclosure = %+v", b.SandboxProxies)
 	}
 	var out bytes.Buffer
-	renderHostBoM(&out, b)
+	renderHostBoMDetails(&out, b)
 	for _, want := range []string{"Sandbox command:", "warehouse", "warehouse.example.test"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("trust screen omitted %q:\n%s", want, out.String())
@@ -178,7 +178,7 @@ func TestRenderHostBoM_UsesExecutionBoundariesAndSetupDescriptions(t *testing.T)
 		Prerequisites: []string{"Your VPN is connected"},
 	}
 	var out bytes.Buffer
-	renderHostBoM(&out, b)
+	renderHostBoMDetails(&out, b)
 	text := out.String()
 	for _, want := range []string{"Host MCP:", "people (image people-mcp:1)", "Remote MCP:", "Ensures:", "Authorize chat", "Before continuing", "Your VPN is connected"} {
 		if !strings.Contains(text, want) {

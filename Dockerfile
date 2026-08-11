@@ -91,6 +91,14 @@ ENV PIX_RESUME_COMMAND="pix resume"
 COPY scripts/patches/ /usr/local/share/pix/patches/
 RUN node /usr/local/share/pix/patches/apply-pix-resume-command.mjs
 
+# --- vendored renderer patch: hide the trusted host-state block ---------------
+# The [pix-trusted-host-state] block must be IN the generated onboarding prompt
+# (it is the whole mechanism by which host facts reach the fenced agent), but it
+# must not be the first thing a new user reads. This strips it from the display
+# text and the editor history only; message.content, and therefore what the model
+# receives, is untouched.
+RUN node /usr/local/share/pix/patches/apply-hide-host-state.mjs
+
 # --- vendored renderer patch: "bottom-block pin" ------------------------------
 # pi-tui's doRender() doesn't re-anchor the viewport on a bottom-anchored buffer
 # SHRINK, so the input box + powerbar drift up by a row while streaming. There's

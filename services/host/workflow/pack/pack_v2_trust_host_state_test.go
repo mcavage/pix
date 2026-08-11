@@ -230,7 +230,7 @@ func TestHostLaunch_MutatedProxyScriptRefusesUntilReaccepted(t *testing.T) {
 	// Re-accept: the gate fires again and, once accepted, launch works.
 	out.Reset()
 	RunPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerOK)
-	if !strings.Contains(out.String(), "adds these integrations to Pix") {
+	if !strings.Contains(out.String(), "This pack adds to Pix:") {
 		t.Errorf("the mutated script must have re-fired the gate:\n%s", out.String())
 	}
 	if _, rerr := refreshHostPackWrappers(&out, cfg, true); rerr != nil {

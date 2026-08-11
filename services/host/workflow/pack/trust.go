@@ -391,8 +391,6 @@ func hashHostExecFile(path, label string) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// renderHostBoM prints the review screen: exactly what would run on the host,
-// what it reaches, and which credential names are solicited (never values).
 // renderRequireHint prints a requirement's pack-authored guidance on the
 // consent screen. This is where a user decides whether they can satisfy the
 // pack at all, so "you need a 1Password reference" without "and here is how to
@@ -415,7 +413,17 @@ func renderProbe(out io.Writer, probe []string) {
 	}
 }
 
-func renderHostBoM(out io.Writer, b hostBoM) {
+// renderHostBoMDetails prints EVERY field of the bill of materials: exactly what
+// would run on the host, what it reaches, and which credential names are
+// solicited (never values).
+//
+// This is the `--details` view, and it is what the default screen used to be. It
+// is unchanged and still complete — the summary above it exists because a
+// seventy-line wall is not read, and a consent screen nobody reads is not
+// consent. Nothing here is hidden; it is one keypress away, and everything the
+// FINGERPRINT covers is visible on the default screen so a re-gate is always
+// explainable by something the user saw.
+func renderHostBoMDetails(out io.Writer, b hostBoM) {
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "This pack adds these integrations to Pix:")
 	fmt.Fprintln(out)
@@ -616,7 +624,18 @@ func renderHostBoM(out io.Writer, b hostBoM) {
 // non-TTY FAILS CLOSED, and on a TTY the answer defaults to No. A non-nil error
 // means NOT adopted: the caller aborts before anything registers or commits.
 func packTrustGate(in io.Reader, out io.Writer, tty, yes bool, packName string, b hostBoM) error {
-	renderHostBoM(out, b)
+	return packTrustGateWith(in, out, tty, yes, false, packName, b)
+}
+
+// packTrustGateWith is the gate with the detail level chosen by the caller
+// (`--details`), and it lets the user change their mind at the prompt.
+//
+// `d` re-renders in full and asks again rather than accepting. A user who cannot
+// answer the question from the summary must be able to get the rest WITHOUT
+// answering it first — the alternative is saying no, re-running with a flag, and
+// reading the screen twice.
+func packTrustGateWith(in io.Reader, out io.Writer, tty, yes, details bool, packName string, b hostBoM) error {
+	renderHostBoM(out, b, details)
 	if yes {
 		fmt.Fprintln(out, "\naccepted via --yes")
 		return nil
@@ -624,14 +643,27 @@ func packTrustGate(in io.Reader, out io.Writer, tty, yes bool, packName string, 
 	if !tty || in == nil {
 		return fmt.Errorf("pack %q would run the above on your host; refusing to adopt it non-interactively (fail closed) — re-run with --yes to accept", packName)
 	}
-	fmt.Fprint(out, "\nActivate this pack and allow these integrations? [y/N] ")
 	sc := bufio.NewScanner(in)
-	if !sc.Scan() {
-		return fmt.Errorf("pack %q not adopted (no answer; default is No)", packName)
+	for {
+		prompt := "\nActivate this pack and allow these integrations? [y/N, d = every detail] "
+		if details {
+			// Already showing everything; offering `d` again would be a dead key.
+			prompt = "\nActivate this pack and allow these integrations? [y/N] "
+		}
+		fmt.Fprint(out, prompt)
+		if !sc.Scan() {
+			return fmt.Errorf("pack %q not adopted (no answer; default is No)", packName)
+		}
+		switch strings.ToLower(strings.TrimSpace(sc.Text())) {
+		case "y", "yes":
+			return nil
+		case "d", "details":
+			if !details {
+				details = true
+				renderHostBoMDetails(out, b)
+				continue
+			}
+		}
+		return fmt.Errorf("pack %q not adopted (you said no)", packName)
 	}
-	switch strings.ToLower(strings.TrimSpace(sc.Text())) {
-	case "y", "yes":
-		return nil
-	}
-	return fmt.Errorf("pack %q not adopted (you said no)", packName)
 }

@@ -269,7 +269,7 @@ func TestPackServices_ConsentDisclosesAnUnpinnedDaemon(t *testing.T) {
 		t.Fatal("a daemon that execs a host binary must be Tier-1")
 	}
 	var out bytes.Buffer
-	renderHostBoM(&out, bom)
+	renderHostBoMDetails(&out, bom)
 	screen := out.String()
 
 	// Every fact the user is consenting to: what runs, with which arguments,
@@ -305,7 +305,7 @@ func TestPackServices_ConsentRendersEveryField(t *testing.T) {
 	}
 	bom := ComputeHostBoM(p)
 	var out bytes.Buffer
-	renderHostBoM(&out, bom)
+	renderHostBoMDetails(&out, bom)
 	screen := out.String()
 	for _, want := range []string{
 		"telemetry", "go-plugin", "on-demand",

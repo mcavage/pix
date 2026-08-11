@@ -325,7 +325,13 @@ func TestPackUse_RemoteMCPReferenceRequiresYes(t *testing.T) {
 
 	var out bytes.Buffer
 	RunPackUse(fakeGitEnv(nil), &out, []string{"--yes", root}, registerOK)
-	if !strings.Contains(out.String(), "Remote MCP:") {
+	// The ENDPOINT, not the label that used to precede it. This test read
+	// `strings.Contains(out, "Remote MCP:")` while its own message said the screen
+	// must disclose the endpoint — so it would have passed on a screen that printed
+	// the heading and no URL. Assert the thing that matters: a remote MCP is where
+	// conversation content goes, and the URL is fingerprinted, so a pack that
+	// repointed it must show the new destination on the screen it re-gates with.
+	if !strings.Contains(out.String(), "https://docs.example.test/mcp") {
 		t.Errorf("the consent screen must disclose the endpoint, got:\n%s", out.String())
 	}
 	cfg, err := config.Load()
