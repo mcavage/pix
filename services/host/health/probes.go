@@ -75,6 +75,12 @@ func runBounded(ctx context.Context, bin string, args ...string) execOutcome {
 		return execOutcome{notFound: true}
 	}
 	cmd := exec.CommandContext(ctx, bin, args...)
+	// WaitDelay makes the budget REAL. Without it, killing the process still
+	// blocks until every descendant holding our stdout/stderr pipe exits, so a
+	// probe could outlive its deadline indefinitely — and this package now runs
+	// probes through `op run -- <cmd>`, which always has such a descendant. Same
+	// value and same reason as sys.Real's runner.
+	cmd.WaitDelay = 2 * time.Second
 	var buf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &buf
 	err := cmd.Run()

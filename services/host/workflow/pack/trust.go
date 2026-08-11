@@ -514,7 +514,12 @@ func renderHostBoM(out io.Writer, b hostBoM) {
 			label = s.ID
 		}
 		if !s.Declarative() {
-			fmt.Fprintf(out, "  %-20s %s — %s (%s %s)\n", kind, s.ID, label, s.Path, strings.Join(s.ApplyArgs, " "))
+			// BOTH argv, because both execute: check runs first and runs every
+			// time, apply only when check fails. Showing one implied the other
+			// did not exist.
+			fmt.Fprintf(out, "  %-20s %s — %s\n", kind, s.ID, label)
+			fmt.Fprintf(out, "                       Checks: %s %s\n", s.Path, strings.Join(s.CheckArgs, " "))
+			fmt.Fprintf(out, "                       Runs on this Mac: %s %s\n", s.Path, strings.Join(s.ApplyArgs, " "))
 			continue
 		}
 		// A declarative step runs no pack-supplied code, but it DOES name
@@ -555,13 +560,18 @@ func renderHostBoM(out io.Writer, b hostBoM) {
 	if len(extraEgress) > 0 {
 		fmt.Fprintf(out, "  Network access:      %s\n", strings.Join(extraEgress, ", "))
 	}
+	// These were an else-if, so a pack with ANY prerequisite never showed which
+	// credentials it solicits. They answer different questions — "what must you
+	// have done" and "what will this be handed" — and the second is the one that
+	// belongs on a consent screen. Independent facts, printed independently.
+	if len(b.Creds) > 0 {
+		fmt.Fprintf(out, "  1Password references needed: %s\n", strings.Join(b.Creds, ", "))
+	}
 	if len(b.Prerequisites) > 0 {
 		fmt.Fprintln(out, "\nBefore continuing, make sure:")
 		for _, item := range b.Prerequisites {
 			fmt.Fprintf(out, "  • %s\n", item)
 		}
-	} else if len(b.Creds) > 0 {
-		fmt.Fprintf(out, "  1Password references needed: %s\n", strings.Join(b.Creds, ", "))
 	}
 }
 

@@ -84,6 +84,11 @@ type MCPServer struct {
 	// do its job". Empty means the pack declared none, which is reported as
 	// unverified — never as healthy, because absence of a check is not a pass.
 	Probe []string
+	// Unreadable is set when the caller could not establish what any pack
+	// declares (a manifest that exists but will not load). It is NOT the same
+	// as Undeclared: one says "nothing provides this", the other says "we could
+	// not find out", and only the first has a safe repair.
+	Unreadable string
 }
 
 // MCPProbe checks every configured MCP server's registration, attachment and
@@ -211,6 +216,10 @@ func (p MCPProbe) checkServer(ctx context.Context, bin, listOut string, s MCPSer
 	// better one: it is a live host command nothing can vouch for, typically
 	// left behind by a pack that was changed or deactivated. Reporting it as
 	// "registered ✓" is exactly the lie this probe exists to stop telling.
+	if s.Unreadable != "" {
+		return mcpFinding{name: s.Name, unknown: true,
+			note: s.Name + ": cannot tell what your pack declares (" + s.Unreadable + ")"}
+	}
 	if s.Undeclared {
 		if registered == mcp.McpRegYes {
 			return mcpFinding{name: s.Name, gap: true,
@@ -254,7 +263,8 @@ func (p MCPProbe) checkServer(ctx context.Context, bin, listOut string, s MCPSer
 	// attached and still useless.
 	authenticated := false
 	if s.Remote {
-		switch a := p.checkAuth(ctx, bin, s.Name); a {
+		a, authOut := p.checkAuth(ctx, bin, s.Name)
+		switch a {
 		case mcpAuthYes:
 			// Real evidence of working order for a remote server: the control
 			// plane says this grant is live. Recorded so the no-probe case
@@ -262,8 +272,12 @@ func (p MCPProbe) checkServer(ctx context.Context, bin, listOut string, s MCPSer
 			// can fail for this kind of server was checked, and passed".
 			authenticated = true
 		case mcpAuthNo:
+			why := "not authenticated"
+			if mcp.McpAuthExpired(authOut) {
+				why = "its authorization expired"
+			}
 			return mcpFinding{name: s.Name, gap: true, fix: fmt.Sprintf(MCPAuthFix, s.Name),
-				note: s.Name + ": registered, not authenticated"}
+				note: s.Name + ": registered, " + why}
 		case mcpAuthUnknown:
 			return mcpFinding{name: s.Name, unknown: true,
 				note: s.Name + ": registered, auth not checkable from here"}
@@ -305,14 +319,18 @@ func (p MCPProbe) checkServer(ctx context.Context, bin, listOut string, s MCPSer
 		// Match the BASE NAME exactly. A suffix test here would tell the owner
 		// of `hadoop` or `develop` to go unlock a vault their probe never
 		// touches, which is its own small lie.
-		hint := ""
+		hint, unknownFix := "", ""
 		if len(s.Probe) > 0 && filepath.Base(s.Probe[0]) == "op" {
 			hint = "; it runs through 1Password (`op run`), so unlock your vault and re-run"
+			// A locked vault is the NORMAL state on a fresh laptop, which makes
+			// this the most likely thing a new user hits — so it gets a real
+			// fix line, not just an explanation buried in the evidence.
+			unknownFix = "op signin   # then re-run pix doctor"
 		}
 		// The three unanswerable causes are genuinely different, and "did not
 		// answer in time" is false for two of them: a probe binary that does
 		// not exist answered instantly, it just is not there.
-		return mcpFinding{name: s.Name, unknown: true,
+		return mcpFinding{name: s.Name, unknown: true, fix: unknownFix,
 			note: s.Name + ": registered; " + probeUnknownReason(o) + hint}
 	}
 
@@ -390,23 +408,26 @@ const (
 	mcpAuthNotRequired
 )
 
-func (p MCPProbe) checkAuth(ctx context.Context, bin, name string) mcpAuth {
+// checkAuth returns the verdict AND the raw output it was read from, so a
+// caller can word the finding more precisely (expired vs never authorized)
+// without running the probe a second time.
+func (p MCPProbe) checkAuth(ctx context.Context, bin, name string) (mcpAuth, string) {
 	o := runBounded(ctx, bin, p.authArgv(name)...)
 	if o.notFound || o.timedOut {
-		return mcpAuthUnknown
+		return mcpAuthUnknown, o.out
 	}
 	// A non-zero exit is NOT itself an answer: sbx exits non-zero both for
 	// "you are not logged in" and for "I fell over". Only the wording decides,
 	// and only when it is unambiguous.
 	switch mcp.McpAuthStatus(o.out) {
 	case mcp.McpAuthOK:
-		return mcpAuthYes
+		return mcpAuthYes, o.out
 	case mcp.McpAuthFailed:
-		return mcpAuthNo
+		return mcpAuthNo, o.out
 	case mcp.McpAuthNotRequired:
-		return mcpAuthNotRequired
+		return mcpAuthNotRequired, o.out
 	}
-	return mcpAuthUnknown
+	return mcpAuthUnknown, o.out
 }
 
 // reduce turns the per-server findings into the one Result the report shows.
@@ -414,7 +435,7 @@ func (p MCPProbe) checkAuth(ctx context.Context, bin, name string) mcpAuth {
 // unproven; only an all-clear reports ready.
 func (p MCPProbe) reduce(findings []mcpFinding) Result {
 	var gaps, unknowns int
-	fix := ""
+	fix, unknownFix := "", ""
 	notes := make([]string, 0, len(findings))
 	for _, f := range findings {
 		notes = append(notes, f.note)
@@ -423,9 +444,17 @@ func (p MCPProbe) reduce(findings []mcpFinding) Result {
 			gaps++
 			if fix == "" {
 				fix = f.fix
+			} else if f.fix != "" && f.fix != fix {
+				// More than one server needs a DIFFERENT remedy. Printing only
+				// the first turns repair into a guessing loop: fix, re-run,
+				// discover the next one, repeat. Collect them instead.
+				fix += "\n" + f.fix
 			}
 		case f.unknown:
 			unknowns++
+			if unknownFix == "" {
+				unknownFix = f.fix
+			}
 		}
 	}
 	// Newline-joined, not "; ": a note contains its own semicolons ("registered
@@ -436,10 +465,20 @@ func (p MCPProbe) reduce(findings []mcpFinding) Result {
 	total := len(findings)
 	switch {
 	case gaps > 0:
-		return Result{Name: p.Name(), Status: StatusAbsent,
-			Detail: fmt.Sprintf("%d of %d not usable", gaps, total), Fix: fix, Evidence: ev}
+		// Report BOTH counts. Reporting only gaps hid the unknowns behind them,
+		// and on the host this was built for the hidden two were the two host
+		// commands the whole change is about — a reader saw "2 of 6 not usable"
+		// and reasonably assumed the other four were fine.
+		detail := fmt.Sprintf("%d of %d not usable", gaps, total)
+		if unknowns > 0 {
+			detail += fmt.Sprintf(", %d not checkable", unknowns)
+		}
+		if fix == "" {
+			fix = unknownFix
+		}
+		return Result{Name: p.Name(), Status: StatusAbsent, Detail: detail, Fix: fix, Evidence: ev}
 	case unknowns > 0:
-		return Result{Name: p.Name(), Status: StatusUnknown,
+		return Result{Name: p.Name(), Status: StatusUnknown, Fix: unknownFix,
 			Detail: fmt.Sprintf("%d of %d not checkable from here", unknowns, total), Evidence: ev}
 	}
 	return Result{Name: p.Name(), Status: StatusReady,

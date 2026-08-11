@@ -122,8 +122,15 @@ func (c *mcpAddCmd) Run(d *cli.Deps) error {
 	if err != nil {
 		return mcpFailed(d, "add", fmt.Errorf("loading config: %w", err))
 	}
+	// A pack that will not load must not be read as a pack that declares
+	// nothing: that would turn every configured server into "no active pack
+	// declares it" and refuse to register a host that is actually fine.
+	declared, derr := packinfo.ActiveServerMCP(cfg)
+	if derr != nil {
+		return mcpFailed(d, "add", fmt.Errorf("cannot read your active pack, so its servers cannot be registered: %w", derr))
+	}
 	env := defaultShellEnv()
-	return mcpFailed(d, "add", registerServers(cfg, env, d.Out, rest, packinfo.ActiveServerMCP(cfg)))
+	return mcpFailed(d, "add", registerServers(cfg, env, d.Out, rest, declared))
 }
 
 // mcpLsCmd shells `sbx mcp ls`, degrading honestly when sbx is absent (e.g. inside

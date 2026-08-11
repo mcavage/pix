@@ -150,7 +150,12 @@ func ReconcileOnboarding(ws string, env hostenv.Env, in io.Reader, out io.Writer
 		fmt.Fprintf(out, "pix: refusing onboarding proposal in %s: %v\n", path, err)
 		fmt.Fprintln(out, tail)
 	}
-	if err := validateOnboarding(&r, packinfo.ActiveServerMCP(cfg)); err != nil {
+	declared, derr := packinfo.ActiveServerMCP(cfg)
+	if derr != nil {
+		refuse(derr, "  The active pack does not load, so its declared servers cannot be established.")
+		return
+	}
+	if err := validateOnboarding(&r, declared); err != nil {
 		refuse(err, "  Inspect and remove it by hand if it is not what you intended.")
 		return
 	}
@@ -194,7 +199,7 @@ func ReconcileOnboarding(ws string, env hostenv.Env, in io.Reader, out io.Writer
 		// of this line is that pix never claims a registration it did not do.
 		regErr := fmt.Errorf("no MCP registrar wired")
 		if Injected.Register != nil {
-			regErr = Injected.Register(cfg, env, out, nil, packinfo.ActiveServerMCP(cfg))
+			regErr = Injected.Register(cfg, env, out, nil, declared)
 		}
 		if regErr != nil {
 			fmt.Fprintf(out, "  mcp add skipped: %v (finish later: pix mcp add)\n", regErr)

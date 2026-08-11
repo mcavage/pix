@@ -496,7 +496,7 @@ func RunSecretCheck(env hostenv.Env, out io.Writer) error {
 		return exitCode(3)
 	}
 	refs := ParseOpRefs(content, nil)
-	var checked, failed int
+	var checked, failed, unknown int
 	for _, r := range refs {
 		if !r.IsRef {
 			continue
@@ -509,10 +509,24 @@ func RunSecretCheck(env hostenv.Env, out io.Writer) error {
 		}
 		// op read resolves the ref; we discard the value (stdout) and only look
 		// at the exit status, so no secret is ever printed.
-		if _, err := env.Run("op", "read", r.Value); err != nil {
+		//
+		// BOUNDED, and the tri-state matters. A LOCKED vault is the normal state
+		// of a fresh laptop: unbounded, this waited forever for an
+		// authorization prompt nobody was going to answer, and the guard above
+		// (OpSignedIn) only proves an account is configured, not unlocked.
+		// Worse, a timeout used to print FAIL — sending a user to re-check a
+		// reference that was perfectly correct. "Could not check" is a third
+		// answer and it needs saying.
+		_, timedOut, err := env.RunTimed("op", "read", r.Value)
+		switch {
+		case timedOut:
+			fmt.Fprintf(out, "  ? %s: could not check — 1Password did not answer in time "+
+				"(is your vault locked? run: op signin)\n", r.Key)
+			unknown++
+		case err != nil:
 			fmt.Fprintf(out, "  ✗ %s: FAIL\n", r.Key)
 			failed++
-		} else {
+		default:
 			fmt.Fprintf(out, "  ✓ %s: OK\n", r.Key)
 		}
 	}
@@ -521,8 +535,19 @@ func RunSecretCheck(env hostenv.Env, out io.Writer) error {
 		return nil
 	}
 	if failed > 0 {
-		fmt.Fprintf(out, "%d of %d refs failed to resolve.\n", failed, checked)
+		fmt.Fprintf(out, "%d of %d refs failed to resolve", failed, checked)
+		if unknown > 0 {
+			fmt.Fprintf(out, ", %d could not be checked", unknown)
+		}
+		fmt.Fprintln(out, ".")
 		return exitCode(1)
+	}
+	if unknown > 0 {
+		// Not a pass and not a failure: nothing was disproven. Exit 3 is this
+		// tree's "could not be answered", the same code used when op or the
+		// refs file is missing entirely.
+		fmt.Fprintf(out, "%d of %d refs could not be checked — 1Password did not answer; run: op signin\n", unknown, checked)
+		return exitCode(3)
 	}
 	fmt.Fprintf(out, "all %d refs resolve.\n", checked)
 	return nil

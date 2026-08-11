@@ -125,7 +125,11 @@ type SetupRequire struct {
 	// Kind is one of:
 	//   bin     — Name must resolve on PATH; Install is the hint shown when it
 	//             does not (the pack knows how its dependency is installed;
-	//             pix must never guess a package manager).
+	//             pix must never guess a package manager). NOT auto-fixable:
+	//             setup stops and prints the hint, because installing software
+	//             is the user's decision — and because running the step's
+	//             applies anyway would invoke the missing binary and bury the
+	//             hint under an exec error.
 	//   op-ref  — Env must be a FILLED op:// reference in op-refs.env.
 	//   probe   — Argv must exit 0. This is the only kind that proves a thing
 	//             WORKS rather than merely exists, so it is the one a pack
@@ -147,9 +151,10 @@ type SetupRequire struct {
 // which condition — so re-installing an already-installed tool, or re-running
 // an already-satisfied configuration, has to be safe and quiet.
 //
-// One exception is built in: an unmet `op-ref` requirement never triggers
-// applies at all, because no command pix could run will put a secret in a
-// user's 1Password vault.
+// Two exceptions are built in. An unmet `op-ref` requirement never triggers
+// applies, because no command pix could run will put a secret in a user's
+// 1Password vault; nor does an unmet `bin`, because installing software is the
+// user's decision and the applies would only fail on the missing binary.
 type SetupApply struct {
 	Kind    string   `toml:"kind"`
 	Argv    []string `toml:"argv"`
@@ -396,6 +401,16 @@ func validatePackFacets(root string, m *Manifest) error {
 		if name == "" {
 			continue
 		}
+		// Every sibling identifier (proxy, bin, setup id, command, argv[0],
+		// service name) is name-gated; this one was not. It reaches a user as
+		// text they are told to paste into a shell — `sbx mcp rm <name>`,
+		// `pix config unset mcp <name>` — and it is the key of the newline-joined
+		// evidence format, so a name containing `;` or a newline is both a shell
+		// hazard and a way to forge report lines.
+		if !SafeArtifactName(name) {
+			return fmt.Errorf("pack %s: [[integrations]] mcp %q is invalid (letters, digits, -, _, . only; "+
+				"no spaces, separators or shell metacharacters — this name appears in commands users run)", root, name)
+		}
 		if seenMCP[name] {
 			return fmt.Errorf("pack %s: duplicate [[integrations]] mcp %q; each server name must be declared exactly once", root, name)
 		}
@@ -446,6 +461,22 @@ func validatePackFacets(root string, m *Manifest) error {
 					return fmt.Errorf("pack %s: integration %q has an argv entry containing a control character", root, name)
 				}
 			}
+		}
+		// A probe EXECUTES on the host, so its binary is held to exactly the
+		// same standard as `command` and as every setup argv: a bare name
+		// resolved on PATH. Without this, `probe = ["/bin/sh","-c","..."]` was
+		// an arbitrary shell command with none of the review a `command` gets.
+		if len(ig.Probe) > 0 && !SafeArtifactName(ig.Probe[0]) {
+			return fmt.Errorf("pack %s: integration %q probe must start with a bare binary name resolved on "+
+				"PATH (got %q); a probe runs on the host and is held to the same standard as command", root, name, ig.Probe[0])
+		}
+		for _, k := range ig.EnvKeys {
+			if !EnvVarName(strings.TrimSpace(k)) {
+				return fmt.Errorf("pack %s: integration %q env_keys entry %q is not an environment variable name", root, name, k)
+			}
+		}
+		if e := strings.TrimSpace(ig.Env); e != "" && !EnvVarName(e) {
+			return fmt.Errorf("pack %s: integration %q env %q is not an environment variable name", root, name, e)
 		}
 		for key, value := range ig.EnvValues {
 			if strings.TrimSpace(key) == "" || strings.ContainsAny(key+value, "\x00\r\n") {
@@ -711,10 +742,21 @@ func NonSecretEnvNames(p *Info) map[string]bool {
 	if p == nil {
 		return nil
 	}
+	// Collect every declared SECRET first. The exclusion has to be
+	// pack-wide, not per-integration: with a per-integration check, integration
+	// A could declare env = "ACME_TOKEN" while integration B listed the same
+	// name in env_keys, and the name came out allowlisted — which let a literal
+	// secret be written to op-refs.env in plaintext with no warning at all.
+	secrets := map[string]bool{}
+	for _, ig := range p.Manifest.Integrations {
+		if e := strings.TrimSpace(ig.Env); e != "" {
+			secrets[e] = true
+		}
+	}
 	out := map[string]bool{}
 	for _, ig := range p.Manifest.Integrations {
 		for _, k := range ig.EnvKeys {
-			if k = strings.TrimSpace(k); k != "" && k != strings.TrimSpace(ig.Env) {
+			if k = strings.TrimSpace(k); k != "" && !secrets[k] {
 				out[k] = true
 			}
 		}
@@ -727,29 +769,58 @@ func NonSecretEnvNames(p *Info) map[string]bool {
 
 // ActiveNonSecretEnvNames resolves NonSecretEnvNames for the active pack.
 func ActiveNonSecretEnvNames(cfg *config.Config) map[string]bool {
-	root := ActivePackRoot(cfg.Pack, "")
-	if root == "" {
+	// Every active pack, for the same reason ActiveServerMCP reads them all: a
+	// stacked pack's non-secret variables are just as declared as the last
+	// one's. Best-effort here (unlike ActiveServerMCP) because the consequence
+	// of missing one is a refused literal, which is the SAFE direction.
+	out := map[string]bool{}
+	for _, root := range ActivePackRoots(cfg, "") {
+		p, err := LoadPack(root)
+		if err != nil {
+			continue
+		}
+		for k := range NonSecretEnvNames(p) {
+			out[k] = true
+		}
+	}
+	if len(out) == 0 {
 		return nil
 	}
-	p, err := LoadPack(root)
-	if err != nil {
-		return nil
-	}
-	return NonSecretEnvNames(p)
+	return out
 }
 
 // ActiveServerMCP resolves ServerMCP for the active pack, or nil when
 // there is none or it won't load (other registrations proceed regardless).
-func ActiveServerMCP(cfg *config.Config) map[string]config.MCPServer {
-	root := ActivePackRoot(cfg.Pack, "")
-	if root == "" {
-		return nil
+func ActiveServerMCP(cfg *config.Config) (map[string]config.MCPServer, error) {
+	// EVERY active pack, not just cfg.Pack. A composed stack (`pix setup --pack A
+	// --pack B`) puts every pack's servers into cfg.MCP and registers them all,
+	// so reading only the last-activated pack made half a working stack look
+	// undeclared — and "undeclared" is now a gap whose repair is `sbx mcp rm`.
+	// Doctor would have told users to delete servers it had just registered.
+	out := map[string]config.MCPServer{}
+	for _, root := range ActivePackRoots(cfg, "") {
+		if strings.TrimSpace(root) == "" {
+			continue
+		}
+		p, err := LoadPack(root)
+		if err != nil {
+			// A pack that EXISTS but will not load is not a pack that declares
+			// nothing. Conflating the two makes every registration on the host
+			// look orphaned because one manifest has a typo. Fail closed: the
+			// caller must report "could not establish", never "undeclared".
+			if errors.Is(err, ErrNotAPack) {
+				continue
+			}
+			return nil, fmt.Errorf("pack %s: %w", root, err)
+		}
+		for name, spec := range ServerMCP(p) {
+			out[name] = spec
+		}
 	}
-	p, err := LoadPack(root)
-	if err != nil {
-		return nil
+	if len(out) == 0 {
+		return nil, nil
 	}
-	return ServerMCP(p)
+	return out, nil
 }
 
 // McpNames returns the de-duplicated `integration.mcp` names a pack declares,

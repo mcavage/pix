@@ -100,7 +100,13 @@ func checkRequires(env hostenv.Env, step packinfo.SetupStep) (ok bool, why strin
 		switch r.Kind {
 		case "bin":
 			if _, err := env.LookPath(r.Name); err != nil {
-				return false, fmt.Sprintf("%s is not installed — %s", r.Name, r.Install), true
+				// NOT fixable, for the same reason an op-ref is not: installing
+				// software is the user's decision, and pix must not run a
+				// package manager on their behalf. It also failed badly — the
+				// applies ran anyway and the first one invoked the very binary
+				// that is missing, so a correct install hint was immediately
+				// buried under a raw `executable file not found in $PATH`.
+				return false, fmt.Sprintf("%s is not installed — %s", r.Name, r.Install), false
 			}
 		case "op-ref":
 			if !secret.OpRefFilled(env, r.Env) {

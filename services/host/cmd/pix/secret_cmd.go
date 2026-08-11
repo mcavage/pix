@@ -55,7 +55,7 @@ func envVarsOf(refs []secret.ProviderKeyRef) []string {
 func (c *SecretCmd) Help() string { return secretDescription() }
 
 type SecretCmd struct {
-	Ls    SecretLsCmd    `cmd:"" default:"1" help:"List configured references and whether they resolve."`
+	Ls    SecretLsCmd    `cmd:"" default:"1" help:"List configured references and whether each is well-formed. Use 'secret check' to actually resolve them."`
 	Set   SecretSetCmd   `cmd:"" help:"Point an environment variable at a 1Password reference. (WRITES)"`
 	Rm    SecretRmCmd    `cmd:"" help:"Remove a reference. (WRITES)"`
 	Check SecretCheckCmd `cmd:"" help:"Resolve every reference and report which fail."`

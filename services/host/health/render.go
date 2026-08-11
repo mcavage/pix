@@ -64,7 +64,7 @@ func RenderStatus(w io.Writer, s Snapshot) {
 			gaps = append(gaps, r.Name)
 		}
 	}
-	fmt.Fprintf(w, "%s %s\n", Glyph(headlineStatus(s)), headline(s))
+	fmt.Fprintf(w, "%s %s\n", headlineGlyph(s), headline(s))
 	if len(ready) > 0 {
 		fmt.Fprintf(w, "  ready    %s\n", strings.Join(ready, " "))
 	}
@@ -98,11 +98,34 @@ func plural(n int, word string) string {
 	return fmt.Sprintf("%d %ss", n, word)
 }
 
+// headlineGlyph is the headline's marker. It needs one distinction the four
+// status glyphs cannot make: something is definitively BROKEN, and you can
+// still work. A ✓ would be false (an integration proved itself unusable), a ✗
+// reads as "nothing works" and would send someone debugging a healthy core, and
+// a ? claims we could not find out when we did. ⚠ says both true things at
+// once, and the exit code stays 0.
+func headlineGlyph(s Snapshot) string {
+	if len(s.Blocking()) == 0 && len(s.OptionalGaps()) > 0 {
+		return "⚠"
+	}
+	return Glyph(headlineStatus(s))
+}
+
 // headlineStatus reduces a snapshot to the single status its headline claims:
-// a verified required gap dominates, then anything unproven, then ready.
+// a verified required gap dominates, then a verified OPTIONAL gap, then
+// anything unproven, then ready.
+//
+// An optional gap must not render as ✓. The glyph is the only part of this
+// report some people read, and a ✓ over a row that proved an integration broken
+// is the same lie — in one character — that this whole report was rebuilt to
+// stop telling. It stays non-blocking for the exit code; it does not stay
+// invisible.
 func headlineStatus(s Snapshot) Status {
 	if len(s.Blocking()) > 0 {
 		return StatusAbsent
+	}
+	if len(s.OptionalGaps()) > 0 {
+		return StatusUnknown
 	}
 	if s.Ready() {
 		return StatusReady
@@ -114,6 +137,14 @@ func headline(s Snapshot) string {
 	switch {
 	case len(s.Blocking()) > 0:
 		return fmt.Sprintf("%d of %d required checks failed", len(s.Blocking()), requiredCount(s))
+	case len(s.OptionalGaps()) > 0:
+		// A plain "ready" over a red row is the bug this whole report exists to
+		// stop telling. An OPTIONAL check that verified a gap is still a
+		// verified gap: the integration does not work. Someone who reads the
+		// first line and stops must not walk away believing otherwise, so the
+		// headline names the failing check. The exit code stays unchanged —
+		// optional means it does not fail a script, not that it is invisible.
+		return fmt.Sprintf("core ready; %s not usable", strings.Join(s.OptionalGaps(), ", "))
 	case s.Ready() && len(s.Unknown()) == 0:
 		return "ready"
 	case s.Ready():
@@ -147,7 +178,7 @@ type DoctorOpts struct{ Verbose bool }
 // RenderDoctorWith is RenderDoctor with the verbosity decision made by the
 // caller.
 func RenderDoctorWith(w io.Writer, s Snapshot, o DoctorOpts) {
-	fmt.Fprintf(w, "%s %s\n\n", Glyph(headlineStatus(s)), headline(s))
+	fmt.Fprintf(w, "%s %s\n\n", headlineGlyph(s), headline(s))
 	for _, r := range s.Results {
 		req := "optional"
 		if r.Required {
@@ -161,7 +192,12 @@ func RenderDoctorWith(w io.Writer, s Snapshot, o DoctorOpts) {
 	if fixes := s.Fixes(); len(fixes) > 0 {
 		fmt.Fprintf(w, "\nFix:\n")
 		for _, f := range fixes {
-			fmt.Fprintf(w, "    %s\n", f)
+			// A probe may hand back several commands when several servers need
+			// different remedies; indent each so the block reads as a list
+			// rather than one wrapped line.
+			for _, line := range strings.Split(f, "\n") {
+				fmt.Fprintf(w, "    %s\n", line)
+			}
 		}
 	}
 	if usesMCP(s) {

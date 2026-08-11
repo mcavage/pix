@@ -30,9 +30,17 @@ func MCPServers(cfg *config.Config, creds mcp.Credentials) []health.MCPServer {
 	if cfg == nil || len(cfg.MCP) == 0 {
 		return nil
 	}
-	declared := packinfo.ActiveServerMCP(cfg)
+	declared, err := packinfo.ActiveServerMCP(cfg)
 	out := make([]health.MCPServer, 0, len(cfg.MCP))
 	for _, name := range cfg.MCP {
+		if err != nil {
+			// An active pack exists but will not load, so we cannot say what is
+			// declared. FAIL CLOSED: report each server unclassified rather than
+			// accusing it of being undeclared, whose repair is `sbx mcp rm`. One
+			// manifest typo must not produce advice to delete a working host.
+			out = append(out, health.MCPServer{Name: name, Unreadable: err.Error()})
+			continue
+		}
 		out = append(out, classifyMCPServer(name, declared, creds))
 	}
 	return out

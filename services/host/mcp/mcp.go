@@ -127,10 +127,13 @@ func RunMcpLsCore(lookPath func(string) (string, error), out io.Writer, in io.Re
 // session either (health/mcp.go's attachmentCaveat says so in its own words),
 // so sending a reader there to learn "what's live" would just relocate the
 // same unanswerable question. The two REAL options are named instead.
-const mcpLsAttachmentNote = "\nNote: this is the gateway's HOST registration list, not what's attached to\n" +
-	"your current sandbox — `pix status`/`pix doctor` can't see inside a live\n" +
-	"session either. A sandbox picks up everything registered when it starts, so\n" +
-	"`pix rm <box>` then `pix run` is how a running one catches up.\n"
+const mcpLsAttachmentNote = "\nNote: this is the gateway's HOST registration list. A ✓ here means REGISTERED,\n" +
+	"not working — the gateway does not check whether a server can authenticate or\n" +
+	"even whether its command still exists. `pix doctor` checks that.\n" +
+	"\nIt is also not what's attached to your current sandbox. Neither `pix status`\n" +
+	"nor `pix doctor` can see inside a live session, so neither can answer that. A\n" +
+	"sandbox picks up everything registered when it starts, so `pix rm <box>` then\n" +
+	"`pix run` is how a running one catches up.\n"
 
 // McpRegistrar carries the resolved ABSOLUTE paths needed to build a
 // `sbx mcp add` command. The gateway daemon's PATH is not the user's, so every
@@ -883,6 +886,18 @@ func McpAuthStatus(out string) mcpAuthResult {
 		return McpAuthOK
 	}
 	return mcpAuthUnknown
+}
+
+// McpAuthExpired reports whether a FAILED auth status is specifically an
+// EXPIRED grant rather than one that was never established. Both are repaired
+// by the same command, but they are different user stories: "expired" says this
+// worked and needs renewing, which is routine; "not authenticated" reads as a
+// setup that failed, which during onboarding sends someone hunting a problem
+// they do not have. sbx already draws the distinction; this stops us discarding
+// it. Kept as a predicate over the raw output rather than a fourth tri-state
+// value, so no existing caller's exhaustive switch changes meaning.
+func McpAuthExpired(out string) bool {
+	return strings.Contains(strings.ToLower(out), "expired")
 }
 
 const (

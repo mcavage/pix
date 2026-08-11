@@ -190,6 +190,20 @@ func (s Snapshot) Unknown() []Result {
 // Gaps returns every verified gap, required or not, in probe order.
 func (s Snapshot) Gaps() []Result { return s.filter(func(r Result) bool { return r.Missing() }) }
 
+// OptionalGaps names the OPTIONAL checks that verified a gap. Optional means
+// "does not fail the process" — it must not come to mean "is not mentioned".
+// An optional check that proved something is broken proved it just as hard as a
+// required one, and the headline is the only line some people read.
+func (s Snapshot) OptionalGaps() []string {
+	var out []string
+	for _, r := range s.Results {
+		if !r.Required && r.Missing() {
+			out = append(out, r.Name)
+		}
+	}
+	return out
+}
+
 func (s Snapshot) filter(keep func(Result) bool) []Result {
 	var out []Result
 	for _, r := range s.Results {
