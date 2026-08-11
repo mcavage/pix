@@ -123,9 +123,13 @@ One message, in this order:
    stored. `/remember <fact>` is the explicit, reliable way to pin something.
    A best-effort watcher may capture useful context, but you don't control or
    predict it: never claim a specific statement will or won't be caught.
-6. **Packs, one line.** Their portable context (skills, knowledge, MCP tools,
-   wrappers, config) lives in a pack. Branch on `pack.*` from the trusted
-   payload, never say any of this unconditionally:
+6. **Packs, one line.** A pack CAN carry skills, knowledge, MCP tools, wrappers
+   and config — but say only what THIS pack actually has, read from the payload
+   (`pack.skills`, `pack.knowledge`, and the `mcp.servers` list). Reciting the
+   full list as though the active pack supplied all of it promises a capability
+   it may not have: a pack with `knowledge: false` has no knowledge bundle, and
+   an agent that claimed otherwise would go looking for one. Branch on `pack.*`
+   from the trusted payload, and never say any of this unconditionally:
    - `pack.active` true and `pack.default` true: say the default pack is
      active, and `pix pack use <path|git-url>` switches to another one.
    - `pack.active` true and `pack.default` false: name the actual pack by

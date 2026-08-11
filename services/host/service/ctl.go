@@ -123,7 +123,23 @@ func probeServePid(ctl serveCtl) pidProbe {
 // instant as "still up" would refuse a stop that in fact worked.
 func ServeIdentityUp(managedActive func() bool, pidPath string, settle time.Duration) (up bool, pid int) {
 	if managedActive != nil && managedActive() {
-		return true, 0
+		// settle applies HERE too. This used to return "up" the instant the
+		// unit looked active, ignoring the caller's grace period entirely — so
+		// a caller that had just asked launchd to stop the unit was told it was
+		// still up before launchd had any chance to act on it. Poll, and answer
+		// the moment the unit is actually inactive.
+		if settle > 0 {
+			deadline := time.Now().Add(settle)
+			for time.Now().Before(deadline) {
+				time.Sleep(100 * time.Millisecond)
+				if !managedActive() {
+					break
+				}
+			}
+		}
+		if managedActive() {
+			return true, 0
+		}
 	}
 	if pidPath == "" {
 		return false, 0

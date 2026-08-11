@@ -129,8 +129,8 @@
       "exits": 0
     },
     "pix/host/service": {
-      "_prod_loc_note": "1664 -> 1708: `serve stop` now sweeps for orphaned `pix-host serve` processes AFTER stopping the pid its pidfile recorded. A pidfile names one daemon and is not proof there is only one, so a second daemon outliving its own pidfile kept holding :11435 while stop reported success. That is why `pix serve stop` had to be run twice. The sweep only ever signals pids that positively verify as our live serve. A deliberate, reviewed raise of a shrink-only budget.",
-      "prod_loc": 1706,
+      "_prod_loc_note": "1664 -> 1708: `serve stop` now sweeps for orphaned `pix-host serve` processes AFTER stopping the pid its pidfile recorded. A pidfile names one daemon and is not proof there is only one, so a second daemon outliving its own pidfile kept holding :11435 while stop reported success. That is why `pix serve stop` had to be run twice. The sweep only ever signals pids that positively verify as our live serve. A deliberate, reviewed raise of a shrink-only budget. Then reset's post-stop settle: a launchd boot-out returns when the unit is unloaded, not when the process has exited, and this daemon closes a sqlite writer and reaps a supervised child on the way out. Two seconds was not enough on a real machine, so reset refused to move the data directory and left a HALF reset (config moved aside, data and state kept, every MCP registration removed) for a pid that was gone moments later.",
+      "prod_loc": 1722,
       "exports": 24,
       "globals": 16,
       "edges": 6,
@@ -212,11 +212,12 @@
       "exits": 0
     },
     "pix/host/workflow/reset": {
-      "prod_loc": 790,
+      "prod_loc": 805,
       "exports": 10,
       "globals": 6,
       "edges": 4,
-      "exits": 0
+      "exits": 0,
+      "_prod_loc_note": " Then reset's post-stop settle: a launchd boot-out returns when the unit is unloaded, not when the process has exited, and this daemon closes a sqlite writer and reaps a supervised child on the way out. Two seconds was not enough on a real machine, so reset refused to move the data directory and left a HALF reset (config moved aside, data and state kept, every MCP registration removed) for a pid that was gone moments later."
     },
     "pix/host/workflow/task": {
       "prod_loc": 833,

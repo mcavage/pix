@@ -1,14 +1,19 @@
 package reset
 
 import (
+	"bytes"
 	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"pix/host/cli"
 )
 
 // ── the plan (pure) ─────────────────────────────────────────────────────────
@@ -533,5 +538,46 @@ func TestRun_CleanMachine_SaysSo(t *testing.T) {
 	}
 	if !strings.Contains(s.out.String(), "already clean") {
 		t.Errorf("want the already-clean summary:\n%s", s.out.String())
+	}
+}
+
+// TestExecute_PostStopSettleIsGenerousEnoughForALaunchdBootOut pins the race
+// that made a real `pix reset` come out HALF done.
+//
+// A launchd boot-out returns when the unit is unloaded, not when the process has
+// exited, and this daemon closes a sqlite writer and reaps a supervised child on
+// the way out. With a 2s ceiling, reset printed "serve is STILL running (pid N)",
+// refused to move the data directory — and the pid was gone moments later. The
+// host was left with config moved aside, data and state kept, and every MCP
+// registration removed: a state no single command produces on purpose.
+//
+// The probe POLLS and returns the instant the process is gone, so a generous
+// ceiling costs nothing when the exit is quick. This asserts execute() asks for
+// one, which is the part a future tightening would undo.
+func TestExecute_PostStopSettleIsGenerousEnoughForALaunchdBootOut(t *testing.T) {
+	restoreProbe, restoreStop := probeServeUp, stopServeForReset
+	defer func() { probeServeUp, stopServeForReset = restoreProbe, restoreStop }()
+
+	stopServeForReset = func(io.Writer) (bool, error) { return true, nil }
+	var settles []time.Duration
+	probeServeUp = func(_ string, settle time.Duration) (bool, int) {
+		settles = append(settles, settle)
+		// Up before the stop; down once a real settle window is honoured.
+		return settle == 0, 4242
+	}
+
+	var buf bytes.Buffer
+	execute(actions{PidFile: filepath.Join(t.TempDir(), "serve.pid")}, Runtime{FS: DefaultResetFS(), IO: cli.IO{Out: &buf}, ErrW: &buf, Now: time.Now}, &buf)
+
+	if len(settles) < 2 {
+		t.Fatalf("expected a pre-stop and a post-stop probe, got %d: %v", len(settles), settles)
+	}
+	post := settles[len(settles)-1]
+	if post < 10*time.Second {
+		t.Errorf("post-stop settle is %v — too short for a launchd boot-out plus a sqlite close "+
+			"and a child reap; 2s is what produced the half-reset", post)
+	}
+	if out := buf.String(); strings.Contains(out, "STILL running") {
+		t.Errorf("a daemon that exits within the settle window must not be reported as still running:\n%s", out)
 	}
 }

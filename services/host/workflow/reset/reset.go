@@ -484,7 +484,17 @@ func execute(a actions, rt Runtime, out io.Writer) ([]string, error) {
 	//
 	// A stop returns once the signal is delivered / the unit is booted out, not
 	// once the process is reaped, so give it a bounded moment to actually exit.
-	const stopSettle = 2 * time.Second
+	// A launchd boot-out returns once the unit is unloaded, NOT once the process
+	// has exited — and this daemon has a sqlite writer to close and a supervised
+	// go-plugin child to reap, so it can outlive the stop by several seconds. Two
+	// seconds was not enough on a real machine: reset refused to move the data
+	// directory, printed "serve is STILL running (pid N)", and the pid was gone
+	// moments later — leaving a HALF reset (config moved, data and state kept).
+	//
+	// The probe POLLS at 100ms and returns the instant the process is gone, so a
+	// generous ceiling costs nothing when the exit is quick; it is only ever paid
+	// by the case that would otherwise fail.
+	const stopSettle = 15 * time.Second
 	stillUp, stillPid := probeServeUp(a.PidFile, stopSettle)
 	serveDown := !stillUp && stopErr == nil
 	dataBlocked := !serveDown && !a.Force
@@ -497,7 +507,12 @@ func execute(a actions, rt Runtime, out io.Writer) ([]string, error) {
 			}
 		}
 		if dataBlocked {
-			msg := why + ": refusing to move the data directory (a live sqlite writer would be split from its db/wal). Stop it with 'pix serve stop', or re-run with --force"
+			// Name the WHOLE command. "or re-run with --force" reads as a flag
+			// on the command just named, and the first person to hit this typed
+			// `pix serve stop --force` twice — which is not a flag that exists.
+			msg := why + ": refusing to move the data directory (a live sqlite writer would be" +
+				" split from its db/wal). Run `pix serve stop`, then `pix reset` again — or" +
+				" `pix reset --force` to move it anyway"
 			fmt.Fprintf(out, "  x %s\n", msg)
 			errs = append(errs, errors.New(msg))
 		} else {
