@@ -399,6 +399,20 @@ func validatePackFacets(root string, m *Manifest) error {
 	for _, ig := range m.Integrations {
 		name := strings.TrimSpace(ig.MCP)
 		if name == "" {
+			// An integration with no server name is legitimate: it declares a
+			// credential the pack needs and nothing else (Tier-0, no host exec).
+			// But a TRANSPORT with no name is unregistrable — the mirror of the
+			// name-with-no-transport case below, and wrong for the same reason.
+			// Declaring something nothing can start is worse than declaring
+			// nothing, because it reads on the screen as a working integration.
+			for field, value := range map[string]string{
+				"command": ig.Command, "image": ig.Image, "manifest": ig.Manifest, "url": ig.URL,
+			} {
+				if strings.TrimSpace(value) != "" {
+					return fmt.Errorf("pack %s: integration %q sets %s but no mcp name; a transport with "+
+						"no server name can never be registered", root, ig.Name, field)
+				}
+			}
 			continue
 		}
 		// Every sibling identifier (proxy, bin, setup id, command, argv[0],

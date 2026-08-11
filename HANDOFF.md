@@ -210,6 +210,57 @@ pix pack show <pack>                loads
    `docs/design/UAT-integrations.md` is the acceptance criteria;
    `docs/design/CHANGE-BRIEF.md` is the symbol-level diff summary and can be
    DELETED once this lands (it is scaffolding).
-4. The four deferred items above are the honest remaining gaps. None of them
-   makes anything claim to work when it does not — that property is the whole
-   point and it holds.
+4. The remaining gaps are listed below. None of them makes anything claim to
+   work when it does not — that property is the whole point and it holds.
+
+### Iteration 3 — clean-slate QA (complete)
+
+A fourth agent executed the full UAT with no context. **60 of 66 criteria PASS,
+1 FAIL, 3 BLOCKED, plus 6 findings outside the spec.** It found the single worst
+defect of the whole effort, and it was mine:
+
+> **`pix pack use` printed `registered mcp: <every server>` and exited 0 having
+> registered NONE of them.** My own "hard failure" guard: registration resolved
+> every declared command up front and returned on the first one missing from
+> PATH. A pack's FIRST adoption is exactly the state where a command is not
+> installed yet — installing it is what the setup step is for — so one absent
+> binary silently blocked every other server, including remote and container
+> transports unrelated to it. On gm-pix-pack, a machine without `gog` gets no
+> BambooHR, Opine, Granola, Notion or Atlassian either, while being told it got
+> all six.
+
+Fixed in `22ffad5`: a missing command skips that server, names it, and still
+exits non-zero. Everything resolvable registers. Also fixed there: the two stale
+docs it caught, including `config/op-refs.env.example` — the file `make serve`
+tells you to copy — which still carried the deleted `google_workspace_account`
+key and the wrong `GOG_HOME` path.
+
+It also independently verified the things that mattered most, empirically rather
+than by reading:
+
+- **Fingerprint compatibility**: it built the PRE-change binary from `7218978`
+  and compared. Same pack, same fingerprint
+  (`2b36ed51…`), and the new binary reading the old binary's `pack-trust.json`
+  adopted with **zero** re-consent prompts.
+- **All 9 invalid-pack cases refused**, plus 7 bypasses it invented itself
+  (`command`+`image`, `../../bin/thing`, `thing; rm -rf /`, `mcp = "a; rm -rf ~"`,
+  a shell-injected probe, `env` on a `url` transport, a dangling `setup` ref) —
+  every one refused with a specific message. Only the empty-`mcp`-name case got
+  through; closed in `4a52b95`.
+- **One doctor run, six servers, six different honest answers**, and the
+  hanging-probe server (`sleep 600`) did not starve the other five: 8s total.
+- **The probe really does use the gateway's wrapper** — it sampled the process
+  table and matched the prefix byte-for-byte against `sbx mcp inspect`.
+
+## Still open — deliberately, and recorded rather than hidden
+
+| what | why it is acceptable for now |
+|---|---|
+| **Declarative setup has never actually RUN.** Only `pix setup` executes `[[setup.require]]`/`[[setup.apply]]`; the QA was forbidden from running it on this host. Rejection of bad setup blocks and their display are both verified; execution is not. | This is the biggest unverified claim in the change. **Run `pix setup --pack ~/dev/gm-pix-pack` on a machine you don't mind, with the vault unlocked, before onboarding anyone.** |
+| No `command`-transport server was proven to serve a real tool call. Every "working" verdict is a probe exit code, and the vault stayed locked all night. | The probe is now a real read, so the exit code means something — but end-to-end Gmail was never exercised. |
+| `pix pack use` prints "restarted managed pix services" where the QA measured no pid change. | Pre-existing in `service/reload.go`, untouched by this work, and the QA ran with an isolated `PIX_CONFIG` where the observed daemon may not be the managed one. Not diagnosed; not guessed at. |
+| Snowflake has no doctor row (it is a proxy, not an MCP server), so a dead `snow-proxy` degrades silently. | Honest gap. A pack cannot yet contribute a health check for a `[[proxy]]`. |
+| BambooHR's probe checks that a Docker image exists, not that the API key works. | Weak but honest; doctor does not overclaim. |
+| `pix setup` aborts on the FIRST unmet requirement instead of listing all of them. | Three passes to learn two facts. Annoying, not misleading. |
+| `pix secret ls` shows two red lines for stale `SLACK_TEAM_ID`/`SLACK_USER_ID`. | Left in place deliberately — they are IDs the operator may want when Slack returns. The message now offers removal. |
+| A stray `acme` MCP registration exists on this host from a test agent. | `sbx mcp rm acme` if unwanted. Doctor now names it as unmanaged rather than ignoring it. |
