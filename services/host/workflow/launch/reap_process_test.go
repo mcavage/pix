@@ -58,8 +58,7 @@ ls)
 	exit 0
 	;;
 run)
-	touch "$d/created"
-	while [ ! -f "$d/release" ]; do sleep 0.02; done
+	touch "$d/created"` + awaitRelease + `
 	exit 0
 	;;
 rm)

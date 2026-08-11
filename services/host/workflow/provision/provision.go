@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 	"time"
 
 	"pix/host/health"
@@ -176,5 +177,16 @@ func (o Outcome) Render(w io.Writer) {
 		fmt.Fprintf(w, "  failed   %-12s %v\n", f.Name, f.Err)
 	}
 	fmt.Fprintln(w)
-	health.RenderDoctor(w, o.After)
+	// A failed PHASE must not be headlined `✓ ready`. The probe snapshot below
+	// grades required capabilities and is right about them, but setup promised
+	// to apply something and did not, so the report's first line says that.
+	opts := health.DoctorOpts{Verbose: true}
+	if len(o.Failed) > 0 {
+		names := make([]string, 0, len(o.Failed))
+		for _, f := range o.Failed {
+			names = append(names, f.Name)
+		}
+		opts.Headline = "setup did not finish: " + strings.Join(names, ", ") + " failed (details above)"
+	}
+	health.RenderDoctorWith(w, o.After, opts)
 }

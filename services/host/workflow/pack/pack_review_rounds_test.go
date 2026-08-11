@@ -1083,3 +1083,49 @@ func TestPackTxnCommit_SaveFailureRemovesFirstLock(t *testing.T) {
 }
 
 // --- FIX B: broken active pack fails the launch closed -------------------------
+
+// TestSolicitPackCredentials_AsksForSetupLinkedIntegrations pins the deletion of
+// a skip that guaranteed a failure.
+//
+// The solicitor used to `continue` on any integration with `setup != ""`,
+// reasoning that the setup hook would handle the credential. Nothing pix runs
+// can put a secret into someone's 1Password vault, so the hook could only ever
+// fail on it — and since every integration that needs a credential also has a
+// setup step, nothing was ever asked for. `pix setup` then died on the first
+// missing reference having offered no way to supply it, which is exactly what
+// happened on the first real run.
+func TestSolicitPackCredentials_AsksForSetupLinkedIntegrations(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, packinfo.PackManifestName), []byte(`name = "p"
+schema = 1
+
+[[integrations]]
+  name    = "Acme"
+  mcp     = "acme"
+  command = "acme-mcp"
+  env     = "ACME_TOKEN"
+  setup   = "acme"
+
+[[setup]]
+  id = "acme"
+  required = true
+  [[setup.require]]
+    kind = "op-ref"
+    env  = "ACME_TOKEN"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, err := packinfo.LoadPack(root)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	var buf bytes.Buffer
+	// Empty answer declines, so this exercises only whether it ASKS.
+	solicitPackCredentials(hostenv.Env{System: &systest.Fake{
+		LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		RunFn:      func(string, ...string) (string, error) { return "acct", nil },
+	}}, strings.NewReader("\n"), &buf, true, p)
+	if !strings.Contains(buf.String(), "ACME_TOKEN") {
+		t.Errorf("an integration with a setup hook still needs its credential asked for; got:\n%s", buf.String())
+	}
+}

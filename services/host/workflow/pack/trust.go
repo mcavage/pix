@@ -393,6 +393,18 @@ func hashHostExecFile(path, label string) (string, error) {
 
 // renderHostBoM prints the review screen: exactly what would run on the host,
 // what it reaches, and which credential names are solicited (never values).
+// renderRequireHint prints a requirement's pack-authored guidance on the
+// consent screen. This is where a user decides whether they can satisfy the
+// pack at all, so "you need a 1Password reference" without "and here is how to
+// make one" sends them away to guess.
+func renderRequireHint(out io.Writer, hint string) {
+	for _, line := range strings.Split(strings.TrimSpace(hint), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			fmt.Fprintf(out, "                         %s\n", line)
+		}
+	}
+}
+
 // renderProbe shows a server's health probe. It is not a passive declaration:
 // `pix doctor` EXECUTES this argv on the host, so it belongs on the screen that
 // lists what a pack runs here — and, being executable intent, it is
@@ -531,10 +543,13 @@ func renderHostBoM(out io.Writer, b hostBoM) {
 			switch r.Kind {
 			case "bin":
 				fmt.Fprintf(out, "                       Needs: %s on PATH (install: %s)\n", r.Name, r.Install)
+				renderRequireHint(out, r.Hint)
 			case "op-ref":
 				fmt.Fprintf(out, "                       Needs: %s as a 1Password reference\n", r.Env)
+				renderRequireHint(out, r.Hint)
 			case "probe":
 				fmt.Fprintf(out, "                       Checks: %s\n", strings.Join(r.Argv, " "))
+				renderRequireHint(out, r.Hint)
 			}
 		}
 		for _, a := range s.Apply {

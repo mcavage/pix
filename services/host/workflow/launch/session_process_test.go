@@ -39,6 +39,33 @@ import (
 	"pix/host/sys"
 )
 
+// awaitRelease is how every fixture that holds a "session" open waits for the
+// test to let it go. Both guards exist because these shells are DESIGNED to be
+// orphaned — the kill tests SIGKILL the process that spawned them — and an
+// orphan that waits forever forks `sleep` ~50x/sec for the life of the machine.
+// That is not a theoretical cost: on macOS each exec writes a BSM audit record,
+// and enough leaked fixtures will pin a core in whatever daemon tails the audit
+// trail. The two interrupted-run shapes need different guards:
+//
+//   - test binary exits without running cleanup (Ctrl-C, `go test` timeout):
+//     TempDir cleanup DID run, so $d is gone and no release can ever arrive.
+//   - test binary is SIGKILLed: cleanup did NOT run, so $d survives with no
+//     release in it and the dir check alone would never fire — hence the count.
+//
+// The bound is 6000 iterations, not a duration: each one forks `sleep`, so it
+// costs ~34ms rather than the nominal 20ms and the ceiling lands near 200s
+// (measured). That is deliberately loose — far above any legitimate wait here
+// (the longest is waitForRecordedCreateState's 20s) and far below "until
+// reboot", which is the only bound this loop used to have.
+const awaitRelease = `
+	i=0
+	while [ ! -f "$d/release" ]; do
+		[ -d "$d" ] || exit 0
+		i=$((i + 1))
+		if [ "$i" -gt 6000 ]; then exit 0; fi
+		sleep 0.02
+	done`
+
 // sessionFixture is the fixture sbx: a real script that records argv, becomes
 // visible to `ls` only after `run` has started, and keeps a "session" alive
 // until the test releases it.
@@ -57,13 +84,11 @@ ls)
 	exit 0
 	;;
 run)
-	touch "$d/created"
-	while [ ! -f "$d/release" ]; do sleep 0.02; done
+	touch "$d/created"` + awaitRelease + `
 	exit 0
 	;;
 exec)
-	touch "$d/attached"
-	while [ ! -f "$d/release" ]; do sleep 0.02; done
+	touch "$d/attached"` + awaitRelease + `
 	exit 0
 	;;
 esac
@@ -631,8 +656,7 @@ ls)
 	exit 0
 	;;
 run)
-	touch "$d/created"
-	while [ ! -f "$d/release" ]; do sleep 0.02; done
+	touch "$d/created"` + awaitRelease + `
 	exit 0
 	;;
 rm)

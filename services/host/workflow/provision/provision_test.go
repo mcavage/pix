@@ -1,6 +1,7 @@
 package provision
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -102,6 +103,14 @@ func TestAlreadyReadyIsNeverMutated(t *testing.T) {
 
 // unknownProbe is a probe that could not reach its boundary — exactly the state a
 // real timeout produces, and the one answer provisioning must refuse to act on.
+type readyProbe struct{ name string }
+
+func (p readyProbe) Name() string   { return p.name }
+func (p readyProbe) Required() bool { return true }
+func (p readyProbe) Check(context.Context) health.Result {
+	return health.Result{Name: p.name, Status: health.StatusReady, Detail: "fine"}
+}
+
 type unknownProbe struct{ name string }
 
 func (p unknownProbe) Name() string   { return p.name }
@@ -238,4 +247,28 @@ func (slowProbe) Required() bool { return true }
 func (slowProbe) Check(ctx context.Context) health.Result {
 	<-ctx.Done()
 	return health.Result{Name: "slow", Status: health.StatusUnknown, Detail: "gave up"}
+}
+
+// TestOutcomeRender_FailedPhaseIsNotHeadlinedReady: `pix setup` prints a probe
+// snapshot, and that snapshot grades REQUIRED CAPABILITIES. A setup PHASE can
+// fail while every required capability still passes — which printed a literal
+// `✓ ready` two lines above "setup could not apply pack". The snapshot was not
+// wrong; the report was claiming something narrower than it had checked.
+func TestOutcomeRender_FailedPhaseIsNotHeadlinedReady(t *testing.T) {
+	after := health.Run(context.Background(), time.Second, readyProbe{"sbx"})
+	var buf bytes.Buffer
+	Outcome{After: after, Failed: []Failure{{Name: "pack", Err: errors.New("boom")}}}.Render(&buf)
+	out := buf.String()
+	if strings.Contains(out, "✓ ready") {
+		t.Errorf("a failed phase must not be headlined ready:\n%s", out)
+	}
+	if !strings.Contains(out, "setup did not finish") || !strings.Contains(out, "pack") {
+		t.Errorf("the headline must name what failed:\n%s", out)
+	}
+	// And with nothing failed, the snapshot's own verdict stands.
+	var clean bytes.Buffer
+	Outcome{After: after}.Render(&clean)
+	if !strings.Contains(clean.String(), "ready") {
+		t.Errorf("with no failures the snapshot headline must be used:\n%s", clean.String())
+	}
 }

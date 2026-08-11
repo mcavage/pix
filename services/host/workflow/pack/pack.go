@@ -896,7 +896,15 @@ func solicitPackCredentials(env hostenv.Env, in io.Reader, out io.Writer, tty bo
 	}
 	var missing []packinfo.Integration
 	for _, ig := range p.Manifest.Integrations {
-		if ig.Env == "" || ig.Setup != "" {
+		// The `ig.Setup != ""` skip that used to be here is GONE, and its
+		// absence is the fix. The reasoning was "the setup hook will handle
+		// this credential" — but no command pix can run will put a secret into
+		// someone's 1Password vault, so the hook could only ever fail on it.
+		// The skip therefore guaranteed the failure: every integration that
+		// needs a credential also has a setup step, so nothing was ever asked
+		// for, and `pix setup` died on the first missing ref having offered no
+		// way to supply it.
+		if ig.Env == "" {
 			continue
 		}
 		if !secret.EnvVarNameRe.MatchString(ig.Env) {
@@ -1014,14 +1022,19 @@ func packUse(env hostenv.Env, out io.Writer, rest []string, register RegisterFn)
 	if !env.Quiet {
 		reportPackActivation(out, cfg, root, removedMCP, lock.MCP)
 	}
+	// Credentials FIRST, before anything is registered. A server registered
+	// before its credentials exist is registered BARE — the gateway gets a
+	// command with no `op run` wrapper, which is exactly the broken state this
+	// whole surface was rebuilt to eliminate, and the old order produced it on
+	// every clean machine. Asking first also means the answer is available to
+	// the setup steps that run after this.
+	solicitPackCredentials(env, os.Stdin, out, cli.IsTTY(os.Stdin), p)
 	regErr := registerPackMCP(register, cfg, env, out, p, packinfo.McpNames(p))
 	// Swap the host-exec wrappers NOW: clear the previous activation's, then
 	// stage+verify+swap this pack's ACCEPTED set.
 	if _, werr := refreshHostPackWrappers(quietly(out, env), cfg, false); werr != nil {
 		fmt.Fprintf(out, "note: host wrappers not refreshed: %v\n", werr)
 	}
-	// Solicit any 1Password creds this pack's reference-only integrations need.
-	solicitPackCredentials(env, os.Stdin, out, cli.IsTTY(os.Stdin), p)
 	// A knowledge change is daemon-affecting: advise the running serve so the new
 	// bundle is indexed — on THIS writer now, so --quiet silences the restart too.
 	propagateConfig(quietly(out, env))

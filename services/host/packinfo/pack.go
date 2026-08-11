@@ -139,6 +139,14 @@ type SetupRequire struct {
 	Install string   `toml:"install,omitempty"`
 	Env     string   `toml:"env,omitempty"`
 	Argv    []string `toml:"argv,omitempty"`
+	// Hint is pack-authored guidance shown when this requirement is unmet.
+	//
+	// `bin` has always had `install` for exactly this, and `op-ref` had no
+	// equivalent — which was backwards, because a binary can be installed by a
+	// command anyone can copy, while an op-ref value is something the USER has
+	// to go and create. Pix can name the variable; only the pack knows what the
+	// value is supposed to be and where it comes from.
+	Hint string `toml:"hint,omitempty"`
 }
 
 // SetupApply is one remediation. Kind is "interactive" (inherits the terminal:

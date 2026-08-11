@@ -2,6 +2,7 @@ package pack
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -530,5 +531,36 @@ func TestRunPackSetup_ExecAppliesRunNonInteractively(t *testing.T) {
 	}
 	if !stepNeedsTerminal(packinfo.SetupStep{ID: "legacy", Path: "hook", ApplyArgs: []string{"apply"}}) {
 		t.Error("an executable hook's behaviour is not visible to pix, so it must be assumed to need a terminal")
+	}
+}
+
+// TestCheckRequires_ReportsEveryUnmetRequirement: aborting on the FIRST unmet
+// requirement made a fresh laptop discover its prerequisites one round-trip at
+// a time — run setup, learn one missing reference, supply it, run setup, learn
+// the next. A user can only act on what they have been told.
+//
+// Also pins that a pack's `hint` reaches the message. `bin` always had
+// `install` for this; `op-ref` had nothing, which was backwards — a binary is
+// installed by a command anyone can copy, while an op-ref value is something
+// the user has to go and create, and only the pack knows what it is.
+func TestCheckRequires_ReportsEveryUnmetRequirement(t *testing.T) {
+	env := hostenv.Env{System: &systest.Fake{
+		LookPathFn: func(string) (string, error) { return "", errors.New("absent") },
+	}}
+	step := packinfo.SetupStep{ID: "s", Required: true, Require: []packinfo.SetupRequire{
+		{Kind: "op-ref", Env: "ACME_TOKEN", Hint: "Make it in 1Password."},
+		{Kind: "bin", Name: "acme-cli", Install: "brew install acme"},
+	}}
+	ok, why, _ := checkRequires(env, step)
+	if ok {
+		t.Fatal("both requirements are unmet; checkRequires said ok")
+	}
+	for _, want := range []string{
+		"ACME_TOKEN", "Make it in 1Password.", "pix secret set ACME_TOKEN",
+		"acme-cli", "brew install acme",
+	} {
+		if !strings.Contains(why, want) {
+			t.Errorf("every unmet requirement and its guidance must be reported; missing %q in:\n%s", want, why)
+		}
 	}
 }

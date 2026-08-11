@@ -173,12 +173,24 @@ func RenderDoctor(w io.Writer, s Snapshot) { RenderDoctorWith(w, s, DoctorOpts{V
 // DoctorOpts tunes the full report. Concise (the default for `pix doctor`)
 // prints the evidence only for what is NOT ready: a green line's proof is
 // noise until someone doubts it, and --verbose is that doubt.
-type DoctorOpts struct{ Verbose bool }
+type DoctorOpts struct {
+	Verbose bool
+	// Headline replaces the computed one. It exists for a caller that knows
+	// something this snapshot cannot: `pix setup` runs PHASES, and a phase can
+	// fail while every required probe still passes — which printed `✓ ready`
+	// directly above "setup could not apply pack". The snapshot is not wrong;
+	// it is answering a narrower question than the report was claiming to.
+	Headline string
+}
 
 // RenderDoctorWith is RenderDoctor with the verbosity decision made by the
 // caller.
 func RenderDoctorWith(w io.Writer, s Snapshot, o DoctorOpts) {
-	fmt.Fprintf(w, "%s %s\n\n", headlineGlyph(s), headline(s))
+	if o.Headline != "" {
+		fmt.Fprintf(w, "✗ %s\n\n", o.Headline)
+	} else {
+		fmt.Fprintf(w, "%s %s\n\n", headlineGlyph(s), headline(s))
+	}
 	for _, r := range s.Results {
 		req := "optional"
 		if r.Required {

@@ -117,6 +117,13 @@ func stepNeedsTerminal(step packinfo.SetupStep) bool {
 // that binary means a user missing the tool is told to install it rather than
 // shown a confusing exec failure.
 func checkRequires(env hostenv.Env, step packinfo.SetupStep) (ok bool, why string, fixable bool) {
+	// EVERY unmet requirement, not just the first. Aborting on the first one
+	// meant a fresh laptop needed three passes to learn two facts: run setup,
+	// be told about one missing reference, supply it, run setup, be told about
+	// the next. The user can only act on what they have been told, so tell them
+	// all of it at once.
+	var unmet []string
+	allFixable := true
 	for _, r := range step.Require {
 		switch r.Kind {
 		case "bin":
@@ -127,7 +134,8 @@ func checkRequires(env hostenv.Env, step packinfo.SetupStep) (ok bool, why strin
 				// applies ran anyway and the first one invoked the very binary
 				// that is missing, so a correct install hint was immediately
 				// buried under a raw `executable file not found in $PATH`.
-				return false, fmt.Sprintf("%s is not installed — %s", r.Name, r.Install), false
+				unmet = append(unmet, fmt.Sprintf("%s is not installed — %s%s", r.Name, r.Install, hintOf(r)))
+				allFixable = false
 			}
 		case "op-ref":
 			if !secret.OpRefFilled(env, r.Env) {
@@ -136,15 +144,38 @@ func checkRequires(env hostenv.Env, step packinfo.SetupStep) (ok bool, why strin
 				// only they can, and then only they can name the reference. So
 				// this reports the exact command and stops, instead of running
 				// an unrelated remediation that cannot possibly help.
-				return false, fmt.Sprintf("%s is not set — run: pix secret set %s op://<vault>/<item>/<field>", r.Env, r.Env), false
+				unmet = append(unmet, fmt.Sprintf("%s is not set%s\n      run: pix secret set %s op://<vault>/<item>/<field>",
+					r.Env, hintOf(r), r.Env))
+				allFixable = false
 			}
 		case "probe":
 			if _, timedOut, err := env.RunTimed(r.Argv[0], r.Argv[1:]...); err != nil || timedOut {
-				return false, fmt.Sprintf("`%s` does not pass", strings.Join(r.Argv, " ")), true
+				unmet = append(unmet, fmt.Sprintf("`%s` does not pass%s", strings.Join(r.Argv, " "), hintOf(r)))
 			}
 		}
 	}
-	return true, "", false
+	if len(unmet) == 0 {
+		return true, "", false
+	}
+	if len(unmet) == 1 {
+		return false, unmet[0], allFixable
+	}
+	return false, "\n    - " + strings.Join(unmet, "\n    - "), allFixable
+}
+
+// hintOf renders a requirement's pack-authored guidance, indented to sit under
+// the requirement it explains. Pix knows the variable; only the pack knows what
+// the value is and where it comes from.
+func hintOf(r packinfo.SetupRequire) string {
+	h := strings.TrimSpace(r.Hint)
+	if h == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, line := range strings.Split(h, "\n") {
+		b.WriteString("\n      " + strings.TrimSpace(line))
+	}
+	return b.String()
 }
 
 // applySteps runs a declarative step's remediations in order. An interactive
