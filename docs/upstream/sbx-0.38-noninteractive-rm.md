@@ -1,6 +1,6 @@
 # `sbx rm` prompts for confirmation and refuses outright with no TTY attached
 
-**Version:** `sbx v0.38` (the version this repo currently pins/documents against; see `docs/reference.md`'s `mcp bundle` note for the other v0.38 behavior change)
+**Version:** `sbx v0.38` (the version this repo currently pins/documents against)
 
 ## Summary
 

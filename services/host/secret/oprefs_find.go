@@ -82,7 +82,7 @@ func OpRefFilled(env hostenv.Env, key string) bool {
 	if !exists {
 		return false
 	}
-	for _, r := range ParseOpRefs(content) {
+	for _, r := range ParseOpRefs(content, nil) {
 		if r.Key == key && r.IsRef && !r.Placeholder {
 			return true
 		}

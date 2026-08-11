@@ -151,7 +151,7 @@ func acceptSurface(t *testing.T, root string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fp, _, err := pack.ComputeHostExecFingerprint(root, pack.ComputeHostBoM(p, "", pack.PackLocalMCP()))
+	fp, _, err := pack.ComputeHostExecFingerprint(root, pack.ComputeHostBoM(p))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func acceptSurfaces(t *testing.T, roots ...string) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		fp, _, err := pack.ComputeHostExecFingerprint(root, pack.ComputeHostBoM(p, "", pack.PackLocalMCP()))
+		fp, _, err := pack.ComputeHostExecFingerprint(root, pack.ComputeHostBoM(p))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -193,7 +193,7 @@ func acceptedViews(t *testing.T, root string) []pack.AcceptedService {
 	if err != nil {
 		t.Fatal(err)
 	}
-	views, err := pack.AcceptedGoPluginServicesForSelf(p, "", "")
+	views, err := pack.AcceptedGoPluginServices(p)
 	if err != nil {
 		t.Fatalf("AcceptedGoPluginServices: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestPackUnitWiring_RejectedStagesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	views, err := pack.AcceptedGoPluginServicesForSelf(p, "", "")
+	views, err := pack.AcceptedGoPluginServices(p)
 	if err == nil || views != nil {
 		t.Fatalf("unaccepted pack exported %+v (err=%v)", views, err)
 	}

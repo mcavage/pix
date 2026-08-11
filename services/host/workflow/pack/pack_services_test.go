@@ -216,7 +216,7 @@ func TestPackServices_ServiceAloneIsTier1AndFailsClosedNonTTY(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bom := ComputeHostBoM(p, "", func(string) bool { return false })
+	bom := ComputeHostBoM(p)
 	if len(bom.Services) != 1 {
 		t.Fatalf("service missing from BoM: %+v", bom)
 	}
@@ -235,7 +235,7 @@ func TestPackServices_ConsentRendersEveryField(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bom := ComputeHostBoM(p, "", func(string) bool { return false })
+	bom := ComputeHostBoM(p)
 	var out bytes.Buffer
 	renderHostBoM(&out, bom)
 	screen := out.String()
@@ -335,7 +335,7 @@ func serviceFingerprint(t *testing.T, body string) string {
 	if err != nil {
 		t.Fatalf("LoadPack: %v\n%s", err, body)
 	}
-	bom := ComputeHostBoM(p, "", func(string) bool { return false })
+	bom := ComputeHostBoM(p)
 	fp, _, err := ComputeHostExecFingerprint(root, bom)
 	if err != nil {
 		t.Fatal(err)
@@ -399,7 +399,7 @@ func TestPackServices_ChangeReGatesAgainstTrustStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bom := ComputeHostBoM(p, "", func(string) bool { return false })
+	bom := ComputeHostBoM(p)
 	fp, _, err := ComputeHostExecFingerprint(root, bom)
 	if err != nil {
 		t.Fatal(err)
@@ -429,7 +429,7 @@ func TestPackServices_ChangeReGatesAgainstTrustStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bom2 := ComputeHostBoM(p2, "", func(string) bool { return false })
+	bom2 := ComputeHostBoM(p2)
 	fp2, _, err := ComputeHostExecFingerprint(root, bom2)
 	if err != nil {
 		t.Fatal(err)

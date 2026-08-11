@@ -45,37 +45,46 @@ type OnboardingResult struct {
 // consumes on the next run.
 const OnboardingFileName = "onboarding.json"
 
-// validateOnboarding rejects anything outside the allowlist BEFORE it touches
-// config. env/hostResolver resolve the locally-known MCP set; when that probe
-// fails we fail CLOSED on any non-gog/non-catalog name.
-func validateOnboarding(r *OnboardingResult, env hostenv.Env, hostResolver func() (string, error)) error {
+// validateOnboardingShape checks only what is true regardless of which pack is
+// active: the schema version and the syntactic form of each name. It exists
+// because `pix setup` must validate its own flags BEFORE the first pack is
+// adopted — at that moment no pack has declared anything, so rejecting an
+// undeclared name would reject exactly the case setup is there to enable.
+// Name admissibility is checked later, by validateOnboarding, once a pack is
+// present to answer the question.
+func validateOnboardingShape(r *OnboardingResult) error {
 	if r.Version != 1 {
 		return fmt.Errorf("unsupported onboarding schema version %d (want 1)", r.Version)
 	}
-	var localSet map[string]bool
-	localKnown, localLoaded := false, false
 	for _, m := range r.MCP {
-		m = strings.TrimSpace(m)
-		if m == "" {
+		if strings.TrimSpace(m) == "" {
 			return fmt.Errorf("empty mcp name")
 		}
+		if strings.ContainsAny(m, " \t\n\r") {
+			return fmt.Errorf("mcp %q must not contain whitespace", m)
+		}
+	}
+	return nil
+}
+
+// validateOnboarding rejects anything outside the allowlist BEFORE it touches
+// config. The allowlist is exactly two things: a name the ACTIVE PACK declares,
+// and a curated catalog endpoint pix already knows the URL for. Both are pure
+// data, so an in-sandbox agent's proposal is checked without running anything.
+func validateOnboarding(r *OnboardingResult, declared map[string]config.MCPServer) error {
+	if err := validateOnboardingShape(r); err != nil {
+		return err
+	}
+	for _, m := range r.MCP {
+		m = strings.TrimSpace(m)
 		// The accepted remotes ARE mcp.McpCatalogNames — the single source of
 		// truth for the hosted endpoints pix knows — read directly, never
 		// copied, so the list cannot drift into a name pix cannot register.
-		if m == config.GWServerName || mcp.McpCatalogNames[m] {
+		if _, ok := declared[m]; ok || mcp.McpCatalogNames[m] {
 			continue
 		}
-		// Resolve the local inventory LAZILY: a mistake unrelated to MCP (a
-		// malformed model value) must fail without paying for, or hanging on,
-		// an irrelevant host-binary probe.
-		if !localLoaded {
-			localSet, localKnown = mcp.LocalMCPNames(env, hostResolver)
-			localLoaded = true
-		}
-		if localKnown && localSet[m] {
-			continue
-		}
-		return fmt.Errorf("mcp %q is not an allowlisted server (gog, a locally-known host server, or a curated catalog name); configure it with `pix mcp` instead", m)
+		return fmt.Errorf("mcp %q is not declared by the active pack and is not a known catalog server; "+
+			"activate the pack that provides it, or configure it explicitly with `pix mcp add %s --url <url>`", m, m)
 	}
 	for label, v := range map[string]string{
 		"ollama_bridge_model":  r.OllamaBridgeModel,
@@ -92,9 +101,10 @@ func validateOnboarding(r *OnboardingResult, env hostenv.Env, hostResolver func(
 // the CLI uses and returns the human-readable changes. It does NOT save: the
 // caller picks preview (a copy) or commit. Idempotent.
 //
-// There is deliberately NO account writer. Setting google_workspace_account
-// without an authorized gog installation is what produced a config that claimed
-// Google Workspace while nothing worked; that write is manual.
+// There is deliberately NO per-server credential writer. A config that claims
+// an integration works while nothing behind it is authorized is the failure
+// mode this whole surface was rebuilt to prevent: declaring a server is not
+// the same as it working, and only its own probe can say which.
 func applyOnboarding(r *OnboardingResult, cfg *config.Config) []string {
 	var changes []string
 	for _, m := range r.MCP {
@@ -140,7 +150,7 @@ func ReconcileOnboarding(ws string, env hostenv.Env, in io.Reader, out io.Writer
 		fmt.Fprintf(out, "pix: refusing onboarding proposal in %s: %v\n", path, err)
 		fmt.Fprintln(out, tail)
 	}
-	if err := validateOnboarding(&r, env, HostBinary); err != nil {
+	if err := validateOnboarding(&r, packinfo.ActiveServerMCP(cfg)); err != nil {
 		refuse(err, "  Inspect and remove it by hand if it is not what you intended.")
 		return
 	}
@@ -184,7 +194,7 @@ func ReconcileOnboarding(ws string, env hostenv.Env, in io.Reader, out io.Writer
 		// of this line is that pix never claims a registration it did not do.
 		regErr := fmt.Errorf("no MCP registrar wired")
 		if Injected.Register != nil {
-			regErr = Injected.Register(cfg, env, out, nil, HostBinary, packinfo.ActiveContainerMCP(cfg))
+			regErr = Injected.Register(cfg, env, out, nil, packinfo.ActiveServerMCP(cfg))
 		}
 		if regErr != nil {
 			fmt.Fprintf(out, "  mcp add skipped: %v (finish later: pix mcp add)\n", regErr)
@@ -208,11 +218,16 @@ type Opts struct {
 	WithSetup  []string
 }
 
-// ParseSetupArgs parses the host phase's argv. --models, --google-workspace and
-// --credentials are ACCEPTED AND DISCARDED: kong still declares them, so refusing
-// them here would turn a no-op into "unknown flag", but nothing reads them (`pix
-// models` owns roster restriction; Google Workspace was externalized to the gog
-// CLI in W2/U02B) — so they get no field to pretend otherwise.
+// ParseSetupArgs parses the host phase's argv. --models is ACCEPTED AND
+// DISCARDED: kong still declares it, so refusing it here would turn a no-op
+// into "unknown flag", but nothing reads it (`pix models` owns roster
+// restriction) — so it gets no field to pretend otherwise.
+//
+// --google-workspace and --credentials are gone entirely, along with the kong
+// flags that fed them. They named a vendor transaction that no longer exists in
+// core: Google Workspace is an ordinary pack-declared MCP server now, so a
+// hidden flag promising to "route setup through the Google Workspace
+// transaction" was an offer pix could not honour.
 func ParseSetupArgs(argv []string) (Opts, error) {
 	var o Opts
 	for i := 0; i < len(argv); i++ {
@@ -232,10 +247,9 @@ func ParseSetupArgs(argv []string) (Opts, error) {
 			o.AssumeYes = true
 		case a == "--pull-models":
 			o.PullModels = true
-		case a == "--google-workspace":
-		case a == "--models" || a == "--credentials":
+		case a == "--models":
 			_, err = next()
-		case strings.HasPrefix(a, "--models=") || strings.HasPrefix(a, "--credentials="):
+		case strings.HasPrefix(a, "--models="):
 		case a == "--mcp":
 			var v string
 			if v, err = next(); err == nil {

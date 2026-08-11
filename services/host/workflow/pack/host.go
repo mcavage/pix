@@ -299,7 +299,7 @@ func refreshHostPackWrappersLocked(out io.Writer, cfg *config.Config, strict boo
 		fmt.Fprintf(out, "note: active pack unavailable (%v); host wrappers not refreshed\n", err)
 		return nil, nil
 	}
-	bom := ComputeHostBoM(p, cfg.GogAccount, PackLocalMCP())
+	bom := ComputeHostBoM(p)
 	if !bom.Tier1() {
 		// Tier-0 for host purposes: nothing to install; clear stale leftovers.
 		cerr := clearOrFail("stale pack host wrappers could not be cleared")

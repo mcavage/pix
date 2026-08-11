@@ -23,7 +23,7 @@ read it before changing things, and keep it current as you learn.
 | `extensions/*.ts` | local TypeScript extensions (`status.ts`, `timestamps.ts`, `compaction-continuation.ts`, and the rest of the harness) |
 | `services/host/` | **`pix-host`**: the single compiled **Go** binary for everything that runs on the HOST. Subcommands: `memory` (:11435, JSON-RPC store + snapshot/restore), `route <cmd>` (model router: pick\|compile\|show\|models), `mcp --list` (local stdio MCP servers this binary serves: **none**, every integration is external now), `plugin memory` (go-plugin self-exec), `serve` (the Suture tree: see the host-architecture section below). Host mode, the credential-broker slot and knowledge (:11436) were DELETED, not hidden: no code path reaches them (`hostmode_gone_test.go` is the sentinel). Private context is never compiled in: it ships as a **pack** (`docs/design/packs.md`) or a container/host-daemon integration, registered like any other server via `pix mcp add`. |
 | `services/host/cmd/pix/` | **`pix` launcher**: the user-facing binary. Install without cloning the repo (`make install` builds + symlinks `out/pix` and `out/pix-host`). `pix help --all` is the GENERATED source of truth for the verb tree; `docs/reference.md` §0 is the live command map. Verbs that no longer exist (`state`/`host`/`upgrade`/`man`/`knowledge`/`kb`/`backup`/`restore`/`evals`/`route`(top-level)/`onboard`/`slack`/`gworkspace`, plus `agent new\|edit\|rm\|reassess` and `pack new\|add`) were DELETED outright, no retirement notice or migration ledger: pix has no released users, so a removed surface gets the ordinary unknown-command answer. `pix reset` (top-level; `state` stayed dead) came BACK: the clean slate, and it contains NO delete. It RENAMES config/data/state to `.bak-<ts>` (`<state>/tasks/*/co/*` is real git checkouts) and sweeps sandboxes through an injected `pix rm --all`. Runtime config: `~/.config/pix/config.toml`, managed by `pix config set <key> <value>` (never hand-edit). |
-| `~/.config/pix/config.toml` | the **single runtime config** (managed by `pix config set`/`get`: never hand-edit). Declares `services`, `mcp`, `google_workspace_account`, and the Ollama model names. The Makefile's operational targets (`run`, `serve`, `mcp-register`, `pull-models`, `doctor`) source these values by shelling out to `pix config get`, so make and the launcher can never drift. |
+| `~/.config/pix/config.toml` | the **single runtime config** (managed by `pix config set`/`get`: never hand-edit). Declares `services`, `mcp`, `pack` and the Ollama model names (no vendor account: per-integration values travel as pack `env_keys` + `op-refs.env`). The Makefile's operational targets (`run`, `serve`, `mcp-register`, `pull-models`, `doctor`) source these values by shelling out to `pix config get`, so make and the launcher can never drift. |
 | `themes/*.json` | `dracula` (default), `pix` |
 
 ## Build → load → run (read this before iterating)
@@ -147,14 +147,15 @@ pack repo: hand the user the diff to apply.
 - **Full-auto:** no permission prompts: the sandbox isolation is the safety boundary.
 - **MCP runs through sbx's LOCAL data-plane gateway**: always available, **no
   `SBX_MCP_URL`** (nightly serves remotes directly; `sbx mcp status` shows mode
-  `local`). Two kinds of server: **local stdio** subcommands of `pix-host`
-  (`slack`; a pack can add host-executing MCP servers as containers instead (e.g. `hr`), registered with `sbx mcp add
-  <name> --command … --args …` (**no `--env`**); the command runs on the HOST as a
-  daemon subprocess, so creds come from 1Password: the registered command is `op
-  run --no-masking --env-file=config/op-refs.env -- pix-host <name>`, which
-  resolves the op:// refs at spawn (`config/op-refs.env` is the single mechanism;
-  nothing stored in the registration or the VM). `pix mcp add` /
-  `make mcp-register` wire these. **Remote** servers are registered by URL:
+  `local`). Every server comes from a pack (see the transport bullet below), one
+  transport per sbx grammar. A **host command** (`command`, or `image` via `docker
+  run`) registers as `sbx mcp add <name> --command … --args …` (**no `--env`**) and
+  runs on the HOST as a daemon subprocess; when it declares `env_keys` the
+  registered command is `op run --no-masking --env-file=~/.config/pix/op-refs.env
+  -- <declared argv>`, resolving op:// refs at spawn (op-refs.env is the single
+  mechanism; nothing stored in the registration or the VM). A **`manifest`** server
+  registers `--local --url <manifest>`, creds Docker-side.
+  **Remote** servers are registered by URL:
   `pix mcp add <name> --url <url>`, then `pix mcp auth <name>` for the
   hosted-control-plane OAuth (`mcp.McpCatalog` is a small lookup table of
   endpoints pix already knows, so those names need no `--url`). The CLI is
@@ -170,10 +171,11 @@ pack repo: hand the user the diff to apply.
   A RUNNING sandbox catches up by being recreated: `pix rm BOX && pix run`
   re-sends the full `--static-mcp` set. There is no live-attach and no receipt
   store (U04e deleted it: "pix loaded this once" is not the state of a live
-  session, yet `status`/`doctor` rendered it as `attached`; they report host
-  REGISTRATION only). Add a server = a tool table + handlers +
-  `run<Name>()` using `mcpStdio` (newline-delimited JSON, what the gateway
-  speaks). Transports live in `services/host/util.go`.
+  session, yet `status`/`doctor` rendered it as `attached`). `doctor` reports more
+  than registration now: declared-by-a-pack, command-resolves-on-PATH, and the
+  pack's `probe` run through the SAME `op run` wrapper the gateway uses. Adding a
+  server is a `pack.toml` edit, never a `pix-host` subcommand: `pix-host mcp
+  --list` is permanently empty and `pix-host mcp <name>` serves nothing.
   - **Do NOT** hand-bake `url`/`command` entries into `mcp.json` pointing at
     `host.docker.internal`: that's a non-native bypass (and a `command` server hits
     pi's stdio client, which speaks newline-delimited JSON). Register with `sbx mcp
@@ -192,19 +194,18 @@ pack repo: hand the user the diff to apply.
   trips endpoint security / EDR**. A compiled Go binary doing the same work runs
   unflagged. So when you add a host service,
   add a subcommand to `pix-host`, don't write another `node …/server.ts`.
-- **Google Workspace = the external `gog` CLI run as a host MCP server**,
-  spawned by the sbx gateway exactly like `slack`: NOT an HTTP daemon, NOT in
-  `make serve`. Creds stay on the host in `GOG_HOME` (never in the VM); the sandbox
-  reaches Gmail/Drive/Docs/Sheets/Calendar through the gateway. It is **read-only +
-  `--gmail-no-send` by default** (write tools gated/off), exposes typed read tools
-  (`gmail_search`, `gmail_get_message`, `drive_search`, `drive_get`, `docs_get`,
-  `sheets_read_range`, `calendar_events`), and **wraps returned Gmail/Doc content as
-  untrusted** (prompt-injection guard). No built-in guided setup remains: the
-  old `pix gworkspace setup` wizard and its `--create-docs` companion MCP are
-  retired (see `docs/design/gworkspace-externalization.md`). gog registers the
-  same generic way every other local stdio server does, `pix mcp add`
-  (hardened flags baked into `mcp.GogHardenedArgv`), not a dedicated verb. See
-  `docs/gworkspace.md` and the `gworkspace` skill.
+- **Pix ships NO MCP servers and special-cases NO vendor.** Every server comes
+  from the active pack's `pack.toml`: an `[[integrations]]` stanza with **exactly
+  one** transport (`command` host binary, `image` container, `manifest` OCI, `url`
+  remote), `env`/`env_keys` for credential NAMES, optional `probe` for health.
+  No transport is refused at LOAD; a `command` off PATH is refused at register; a
+  requested name no active pack declares is an error, not a skip. `op run
+  --env-file` wraps iff op-refs exists AND the server declares `env_keys`, so a
+  credential-free server never shares fate with unrelated refs. Setup is
+  declarative (`[[setup.require]]`/`[[setup.apply]]`), so a pack can never call a
+  deleted verb: it never names one. The `gworkspace` and `slack` verbs are deleted,
+  as are `mcp.GogHardenedArgv` and `google_workspace_account`. Google Workspace is
+  just a pack-declared `command` server now: `docs/gworkspace.md`.
 - **Private packs + host/container integrations (company-specific).** Open-core
   boundary: nothing company-specific is in the public repo, and **no `pix-host`
   recompile is ever needed.** Private context ships three ways: a **pack**

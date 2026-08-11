@@ -213,14 +213,14 @@ func TestSecretSetNudgesTowardWiring(t *testing.T) {
 		return "", os.ErrNotExist
 	}
 	var out bytes.Buffer
-	_ = secret.RunSecretSetLocked(env, &out, "ANTHROPIC_API_KEY", "op://v/i/f")
+	_ = secret.RunSecretSetLocked(env, &out, "ANTHROPIC_API_KEY", "op://v/i/f", nil)
 	if !strings.Contains(out.String(), "pix models add anthropic") {
 		t.Errorf("setting a provider key must name the command that wires it, got:\n%s", out.String())
 	}
 
 	// A non-provider key has nothing to wire, so it must stay quiet.
 	out.Reset()
-	_ = secret.RunSecretSetLocked(env, &out, "SLACK_BOT_TOKEN", "op://v/i/f")
+	_ = secret.RunSecretSetLocked(env, &out, "SLACK_BOT_TOKEN", "op://v/i/f", nil)
 	if strings.Contains(out.String(), "pix models add") {
 		t.Errorf("a non-provider secret must not suggest wiring a model provider, got:\n%s", out.String())
 	}

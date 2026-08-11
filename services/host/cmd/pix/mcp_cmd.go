@@ -16,7 +16,6 @@ import (
 	"os/exec"
 
 	"pix/host/cli"
-	"pix/host/launcher"
 	"pix/host/mcp"
 	"pix/host/packinfo"
 	"pix/host/rpc"
@@ -36,8 +35,9 @@ report host registration and say so.
 
 'add' takes three shapes:
   pix mcp add <name> --url <url>   a hosted server, by URL
-  pix mcp add <name>               a server pix already knows how to build,
-                                   including its 1Password credential wrapper
+  pix mcp add <name>               a server your active pack declares, built
+                                   from its manifest (including the 1Password
+                                   wrapper, when it declares credentials)
   pix mcp add                      every server in your config's mcp list
 
 A hosted server usually needs 'pix mcp auth <name>' after it is added.`
@@ -77,9 +77,9 @@ func mcpFailed(d *cli.Deps, sub string, err error) error {
 }
 
 // mcpAddCmd is the ONE registration verb. It covers what used to be three:
-// a hosted server by URL, a server pix knows how to build (config's mcp list,
-// an active pack's integrations, google-workspace), and the previously
-// hardcoded hosted names. "Which verb registers my server" is not a question a
+// a hosted server by URL, a server the ACTIVE PACK declares (config's mcp list
+// resolved against its integrations), and the shipped catalog names pix already
+// knows an endpoint for. "Which verb registers my server" is not a question a
 // user should have to answer.
 type mcpAddCmd struct {
 	Names []string `arg:"" optional:"" help:"Server name(s). Omit to register every server in the config mcp list."`
@@ -123,7 +123,7 @@ func (c *mcpAddCmd) Run(d *cli.Deps) error {
 		return mcpFailed(d, "add", fmt.Errorf("loading config: %w", err))
 	}
 	env := defaultShellEnv()
-	return mcpFailed(d, "add", registerServers(cfg, env, d.Out, rest, launcher.FindHostBinary, packinfo.ActiveContainerMCP(cfg)))
+	return mcpFailed(d, "add", registerServers(cfg, env, d.Out, rest, packinfo.ActiveServerMCP(cfg)))
 }
 
 // mcpLsCmd shells `sbx mcp ls`, degrading honestly when sbx is absent (e.g. inside

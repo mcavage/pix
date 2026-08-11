@@ -3,11 +3,13 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
 	"pix/host/packinfo"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -20,8 +22,7 @@ import (
 
 func TestBuildHostState(t *testing.T) {
 	cfg := &config.Config{
-		GogAccount:         "me@acme.com",
-		MCP:                []string{config.GWServerName},
+		MCP:                []string{testMCPServer},
 		MemoryWatcherModel: "gemma4:e4b-mlx",
 		MemoryEmbedModel:   "nomic-embed-text",
 	}
@@ -47,21 +48,29 @@ func TestBuildHostState(t *testing.T) {
 	if !hs.Memory.Up || hs.Memory.Port != rpc.MemoryPortDefault {
 		t.Errorf("memory up/port wrong: %+v", hs.Memory)
 	}
-	if !hs.Gog.Enabled {
-		t.Errorf("gog wrong: %+v", hs.Gog)
+	if !hs.MCP.Enabled || len(hs.MCP.Servers) != 1 || hs.MCP.Servers[0] != testMCPServer {
+		t.Errorf("mcp wrong: %+v", hs.MCP)
 	}
-	// The configured account email must NEVER be copied into the model-visible
-	// payload: hostStateGog carries only `enabled`. Assert this both at the Go
-	// struct level and by round-tripping through the actual encoder, so a
-	// future field re-added to the struct without updating this test still
-	// gets caught by the JSON-content check below.
+	// The model-visible payload is a CLOSED set of facts, not a config dump:
+	// whatever a pack or a future config key adds, only the reviewed keys reach
+	// the agent. (This replaces the old "must not leak the configured Google
+	// account email" check — no config field carries an account any more.)
 	if b, err := json.Marshal(hs); err != nil {
 		t.Fatalf("marshal launch.HostState: %v", err)
-	} else if strings.Contains(string(b), "me@acme.com") {
-		t.Errorf("host-state JSON must never contain the configured gog account email, got: %s", b)
-	}
-	if !hs.MCP.Enabled || len(hs.MCP.Servers) != 1 {
-		t.Errorf("mcp wrong: %+v", hs.MCP)
+	} else {
+		var keyed map[string]json.RawMessage
+		if err := json.Unmarshal(b, &keyed); err != nil {
+			t.Fatalf("host-state JSON is not an object: %v", err)
+		}
+		want := []string{"provisioned", "keys", "memory", "mcp", "models", "pack", "identity"}
+		if len(keyed) != len(want) {
+			t.Errorf("host-state JSON keys = %v, want exactly %v", slices.Sorted(maps.Keys(keyed)), want)
+		}
+		for _, k := range want {
+			if _, ok := keyed[k]; !ok {
+				t.Errorf("host-state JSON is missing %q: %s", k, b)
+			}
+		}
 	}
 	if !hs.Provisioned {
 		t.Error("keys resolved + active pack present => provisioned")
@@ -313,41 +322,35 @@ func TestEncodeTrustedHostState_EncodingFailureReturnsError(t *testing.T) {
 // touching disk. This exercises it directly (rather than only through
 // launch.InjectTrustedHostState) so the seam has its own focused coverage.
 func TestBuildTrustedHostState_MatchesBuildHostStateShape(t *testing.T) {
-	cfg := &config.Config{MemoryWatcherModel: "x", MemoryEmbedModel: "y", MCP: []string{config.GWServerName}, GogAccount: "me@acme.com"}
+	cfg := &config.Config{MemoryWatcherModel: "x", MemoryEmbedModel: "y", MCP: []string{testMCPServer}}
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("no sbx") }, DialLocalFn: func(int) bool { return true }}}
 	hs := launch.BuildTrustedHostState(cfg, env, "")
 	if !hs.Memory.Up {
 		t.Error("dial stub says up; launch.BuildTrustedHostState must reflect it")
 	}
-	if !hs.Gog.Enabled {
-		t.Errorf("gog config must carry through: %+v", hs.Gog)
+	if !hs.MCP.Enabled || !slices.Contains(hs.MCP.Servers, testMCPServer) {
+		t.Errorf("configured mcp servers must carry through: %+v", hs.MCP)
 	}
-	b, err := launch.EncodeTrustedHostState(hs)
-	if err != nil {
+	if _, err := launch.EncodeTrustedHostState(hs); err != nil {
 		t.Fatalf("launch.EncodeTrustedHostState: %v", err)
-	}
-	if strings.Contains(string(b), "me@acme.com") {
-		t.Errorf("trusted host-state JSON must never contain the configured gog account email, got: %s", b)
 	}
 }
 
-// The configured gog account email must never appear ANYWHERE in the actual
-// injected prompt arg — the end-to-end path a real launch takes, not just the
-// in-memory launch.HostState struct. gog.enabled is sufficient for onboarding; the
-// email is PII with no onboarding use.
-func TestInjectTrustedHostState_NeverLeaksGogAccountEmail(t *testing.T) {
-	cfg := &config.Config{MemoryWatcherModel: "x", MemoryEmbedModel: "y", MCP: []string{config.GWServerName}, GogAccount: "secret-owner@acme.com"}
+// The injected payload reports MCP servers by NAME AND NOTHING ELSE about them —
+// the end-to-end path a real launch takes, not just the in-memory
+// launch.HostState struct. The name is what onboarding needs; a server's
+// transport, argv and credential VAR names are host-side detail the fenced agent
+// has no use for and must not be handed.
+func TestInjectTrustedHostState_ReportsMCPNamesOnly(t *testing.T) {
+	cfg := &config.Config{MemoryWatcherModel: "x", MemoryEmbedModel: "y", MCP: []string{testMCPServer}}
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("no sbx") }}}
 	args := []string{"run", "pix", ".", "--", launch.GeneratedInputMarker + "hi"}
 	out, err := launch.InjectTrustedHostState(args, cfg, env, "")
 	if err != nil {
 		t.Fatalf("launch.InjectTrustedHostState: %v", err)
 	}
-	if !strings.Contains(out[4], `"gog":{"enabled":true}`) {
-		t.Errorf("gog.enabled must still be reported, got %q", out[4])
-	}
-	if strings.Contains(out[4], "secret-owner@acme.com") || strings.Contains(out[4], "acme.com") {
-		t.Errorf("the configured gog account email must never be injected into the prompt, got %q", out[4])
+	if !strings.Contains(out[4], `"mcp":{"enabled":true,"servers":["`+testMCPServer+`"]}`) {
+		t.Errorf("mcp state must be reported as enabled + names, got %q", out[4])
 	}
 }
 

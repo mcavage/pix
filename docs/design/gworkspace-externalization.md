@@ -1,7 +1,12 @@
 # Google Workspace externalization (W2/U02B)
 
-Status: **implemented, merge-blocked**. See "What this change does NOT prove"
-below before treating this as shippable.
+Status: **SUPERSEDED — historical record only.** This unit shipped while still
+marked merge-blocked, and the half-finished rip it left behind is the subject of
+`docs/design/integrations-remediation.md`, which is the state of record now. Read
+this only for what was deleted and why; do not follow any command in it. In
+particular the successor to the deleted wizard is `pix mcp add`, not the verb
+named below, and gog is no longer known to pix at all: it is declared by a pack
+like any other MCP server (`docs/gworkspace.md`).
 
 ## What this deletes
 

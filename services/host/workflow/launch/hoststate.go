@@ -1,5 +1,5 @@
 // hoststate.go builds the host-visible facts the fenced in-VM agent CANNOT see
-// for itself (keys resolved, services up, gog/mcp state, models, pack) ENTIRELY
+// for itself (keys resolved, services up, mcp state, models, pack) ENTIRELY
 // IN MEMORY; run.go injects the JSON into the launcher-generated initial prompt.
 package launch
 
@@ -34,10 +34,6 @@ type hostStateSvc struct {
 	Port    int  `json:"port"`
 }
 
-type hostStateGog struct {
-	Enabled bool `json:"enabled"`
-}
-
 type hostStateMCP struct {
 	Enabled bool     `json:"enabled"`
 	Servers []string `json:"servers"`
@@ -56,7 +52,6 @@ type HostState struct {
 	Provisioned bool              `json:"provisioned"`
 	Keys        hostStateKeys     `json:"keys"`
 	Memory      hostStateSvc      `json:"memory"`
-	Gog         hostStateGog      `json:"gog"`
 	MCP         hostStateMCP      `json:"mcp"`
 	Models      hostStateModels   `json:"models"`
 	Pack        packinfo.State    `json:"pack"`
@@ -114,12 +109,10 @@ func BuildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial f
 	}
 
 	mcpServers := append([]string(nil), cfg.MCP...)
-	gogEnabled := slices.Contains(mcpServers, config.GWServerName)
 
 	hs := HostState{
 		Keys:   keys,
 		Memory: hostStateSvc{Enabled: slices.Contains(cfg.Services, "memory"), Up: dialer(rpc.MemoryPortDefault), Port: rpc.MemoryPortDefault},
-		Gog:    hostStateGog{Enabled: gogEnabled},
 		MCP:    hostStateMCP{Enabled: len(mcpServers) > 0, Servers: mcpServers},
 		Models: hostStateModels{Watcher: cfg.MemoryWatcherModel, Embed: cfg.MemoryEmbedModel},
 		Pack:   pack,

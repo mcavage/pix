@@ -23,11 +23,11 @@ CLI reference of its own.
 | `serve` | the long-running host services (memory :11435) | `docs/design/serve-lifecycle.md` |
 | `memory` (`mem`) | recall/remember/forget/learnings/stats from the host | §2, `docs/memory.md` |
 | `pack` | the portable capability context: ls/show/use/rm (no authoring verb, edit `pack.toml`/`skills/` by hand) | §5, `docs/design/packs-v2.md` |
-| `mcp` | register/list/load MCP servers through the sbx gateway (the one door integrations come through) | §8 |
+| `mcp` | `add`/`ls`/`auth` the MCP servers your pack declares, through the sbx gateway (the one door integrations come through) | §8 |
 | `secret` | manage the 1Password `op://` refs (never the values) | §8 |
 | `config` | `show`/`path`/`get`/`set`/`unset` the single runtime config | §1 |
 | `task` | isolated parallel-work clones + sandboxes | `docs/design/worktree-tasks.md` |
-| `models` | which models pix can use, and the model router: ls/show/pick/route | `docs/design/routing.md`, `docs/design/models-cli.md` |
+| `models` | which models pix can use, and what the router resolves: ls/show/pick/add | `docs/design/routing.md`, `docs/design/models-cli.md` |
 | `agent` | the subagent roster, read-only: `ls` only (`new`/`edit`/`rm`/`reassess` were removed) | §4 |
 | `version`, `help` | stamped version; tiered help | (none) |
 
@@ -233,10 +233,10 @@ reminder the agent is asked to honor, not a gate, and says so in its own text.
 ## 5. Packs
 
 A pack is an explicit git repo containing portable capability context: skills,
-an OKF knowledge bundle, MCP servers, CLI wrappers,
-you're wired to, and config (which Google account, which model prefs). It's
-the thing you'd `git diff`, as opposed to memory, which you'd only see in a
-`/recall`. Packs are opt-in and may be composed in order during setup.
+an OKF knowledge bundle, the MCP servers and CLI wrappers you're wired to, and
+config (model prefs, a memory scope, an inference gateway). It's the thing you'd
+`git diff`, as opposed to memory, which you'd only see in a `/recall`. Packs are
+opt-in and may be composed in order during setup.
 
 ```
 pix pack use <path|git-url> # switch to another pack (config, knowledge, MCP set)
@@ -249,10 +249,35 @@ There is no authoring verb. A pack is a directory you create and edit by
 hand: a `pack.toml` (name + facets) plus `skills/`, `knowledge/`, and `bin/`
 as needed: see docs/design/packs.md for the schema. Adding a capability is
 one file and one `pack.toml` stanza: a `bin/warehouse` wrapper script plus a
-`[[proxy]]` entry lands it on PATH inside the sandbox; an `[[integrations]]`
-stanza with `mcp = "fastmail"` and `env = "FASTMAIL_TOKEN"` declares an MCP
-server the pack needs plus the env var name `pack use` will ask you to fill
-via 1Password: the value never touches the pack or the VM.
+`[[proxy]]` entry lands it on PATH inside the sandbox.
+
+An MCP server is an `[[integrations]]` stanza, and it must declare **exactly
+one transport**: `command` (a host binary the gateway spawns over stdio),
+`image` (a container the gateway runs), `manifest` (an OCI server manifest), or
+`url` (a remote endpoint the gateway OAuths). Pix ships no MCP servers of its
+own and special-cases no vendor, so a name with no transport behind it is
+refused at load rather than registering nothing: that shape is what left a dead
+registration the gateway went on reporting as ready.
+
+```toml
+[[integrations]]
+  name    = "Fastmail"
+  mcp     = "fastmail"
+  command = "fastmail-mcp"
+  args    = ["serve", "--readonly"]   # LITERAL argv, never templated
+  env     = "FASTMAIL_TOKEN"          # the op:// secret to solicit
+  probe   = ["fastmail-mcp", "check"] # what doctor runs to prove it works
+```
+
+A remote server is the same stanza with `url = "https://..."` and no argv.
+`env` names the credential `pack use` asks you to fill via 1Password; the value
+never touches the pack or the VM. `env_keys` forwards additional env NAMES
+(non-secret per-user values like an account id travel here, not in `args`), and
+`probe` is the read-only argv `pix doctor` runs to establish the server can
+actually do its job. Onboarding is declarative too: a `[[setup]]` block states
+`[[setup.require]]` conditions (`bin`, `op-ref`, `probe`) and
+`[[setup.apply]]` remediations (`interactive`, `exec`), so a pack can never
+call a pix verb that no longer exists, because it never names one.
 
 **MCP servers and `bin/` wrappers attach at sandbox CREATE, not live.** If you
 switch packs or add an MCP inside a running sandbox, it's registered on the
@@ -280,13 +305,17 @@ bill-of-materials screen:
 ```
 This pack runs code on your host (not just in the sandbox):
 
-  MCP servers (host):   fastmail   -> op run -- pix-host mcp fastmail
-  Host wrappers:        platformio (bin/platformio)
-  Network egress:       api.fastmail.com
-  Credentials (op://):  FASTMAIL_TOKEN   (you supply your own; never in the pack)
+  MCP server (host):   fastmail → fastmail-mcp serve --readonly
+                       Credential (name only, value stays in 1Password): FASTMAIL_TOKEN
+  Host wrapper:        platformio (bin/platformio)
+  Network access:      api.fastmail.com
 
-Adopt this pack and allow the above to run on your machine? [y/N]
+Activate this pack and allow these integrations? [y/N]
 ```
+
+The reviewed argv is exactly what the pack declared: the bare command plus its
+literal args. Resolving that command to an absolute path is a property of *your*
+PATH and deliberately not part of what you consent to.
 
 Default is No. On a non-TTY (CI, a script), it fails closed unless you pass
 `--yes`. A pack that ships only skills and knowledge, nothing that executes,
@@ -325,8 +354,12 @@ rebuild the pix image itself) are done from your own shell, not through pix.
 
 ## 8. MCP and capabilities
 
-External tools and data (Slack, GitHub, Google Workspace, a company wiki) wire
-in as MCP servers, run through the sbx gateway.
+External tools and data (a mailbox, a company wiki, an HR directory) wire in as
+MCP servers, run through the sbx gateway. **Pix ships none of them.** Every
+server pix can register is declared by the active pack (§5), in one of four
+transports, and pix special-cases no vendor: there is no built-in Google
+Workspace, no built-in Slack, and no `pix-host` subcommand that serves an MCP
+server.
 
 A credential an MCP server needs is a 1Password `op://` reference resolved at
 spawn (§8 below, `pix secret`), never a value on disk and never baked into the
@@ -336,8 +369,8 @@ shared team token and never handed to a second person to reuse.
 
 ```
 pix mcp add <name> --url <url>   # a hosted server, by URL
-pix mcp add <name>               # one pix knows how to build (config mcp list,
-                                 # a pack integration, google-workspace)
+pix mcp add <name>               # one the active pack declares, with its
+                                 # 1Password credential wrapper
 pix mcp add                      # everything in the config mcp list
 pix mcp auth <name>              # hosted-control-plane OAuth
 pix mcp ls                       # list what's registered
@@ -352,11 +385,23 @@ every skill that reads that capability retargets at once. See the
 
 **Registration is not the same as being usable.** `pix mcp add` (or native
 `sbx mcp add`) makes a server known to the gateway. It does not put that
-server's tools in front of any running session. A native server is added one
-of three ways: `--command`/`--args` (a local process the gateway spawns
-host-side), `--url` (a remote endpoint, OAuth'd host-side), or `--local --url
-<manifest>` (a container the gateway runs from an OCI manifest). `sbx mcp get
-<name>` shows you exactly what's registered.
+server's tools in front of any running session. Each pack transport lands on one
+sbx grammar: `command` and `image` become `--command`/`--args` (a host process
+the gateway spawns, wrapped in `op run --env-file` when the server declares
+credential names), `manifest` becomes `--local --url <manifest>` (a container the
+gateway runs from an OCI manifest, credentials Docker-side), and `url` becomes
+`--url` (a remote endpoint, OAuth'd host-side). `sbx mcp get <name>` shows you
+exactly what's registered.
+
+Two failures here are hard, not warnings, because both used to register
+something broken and leave the gateway calling it ready:
+
+- **A name no active pack declares** is an error naming the server, not a skip.
+- **A `command` whose binary is not on PATH** is an error naming the server, the
+  binary and the pack's install hint. It does not register.
+
+A credential-free server is never wrapped in `op run`, deliberately: it must not
+share fate with unrelated refs in your op-refs file.
 
 **pix tolerates one sbx CLI grammar change at a time, never blindly.** A
 container (manifest/remote-URL) registration runs a read-only `sbx mcp add
@@ -392,13 +437,24 @@ the HOST can check (see §9).
 ## 9. Status and doctor
 
 `pix status` is a fast, read-only dashboard: services, provider keys, the
-active pack, and, per configured MCP server, the two things the host can
-actually check, each tri-state (yes / no / unknown: never guessed):
+active pack, and, per configured MCP server, the things the host can actually
+check, each tri-state (yes / no / unknown: never guessed):
 
+- **declared**: some active pack says what this server *is*. A name nothing
+  declares is a gap even when the gateway lists it as ready. That is a live host
+  command nothing can vouch for, and the usual cause is a registration outliving
+  the pack that created it.
 - **registration**: `sbx mcp ls` says the server is known to the gateway
+- **resolvable**: a declared `command` still exists on PATH. A registration
+  pointing at a deleted binary lists exactly like a healthy one.
 - **auth**: for a remote/OAuth server only (catalog or pack-remote), the
   hosted control plane's login state; a local stdio server has no
   control-plane auth to check
+- **working**: the pack's declared `probe` argv exits clean, run through the
+  same `op run` wrapper the gateway uses to spawn the server. Probing any other
+  way inherits whatever you happen to have exported in your shell, which is
+  exactly how a broken credential setup passes every check and then fails on
+  first use.
 
 **Attachment is deliberately not a third truth.** Nothing pix can run from
 the host answers whether a RUNNING sandbox currently has a server's tools
@@ -408,6 +464,13 @@ here", instead of guessing `attached`/`not attached`. `pix mcp ls` prints
 the identical caveat. The fix for a server that's registered but not (yet)
 in your session is always the same regardless of history: `pix rm BOX && pix
 run` to recreate and pick up the full `--static-mcp` set.
+
+**Registered is not working, and doctor says which it proved.** A pack that
+declared no `probe` gets "registered; no health probe declared, so working order
+is unverified", not a tick. Absence of a check is never reported as a pass, and
+a probe that cannot answer in time is `unverifiable`, not broken (if it runs
+through `op run`, a locked 1Password vault is the usual reason, and doctor says
+so, because a bare "could not run" sends people hunting the wrong problem).
 
 `pix doctor` runs the same evidence through four verdicts per check:
 **ready** (verified working), **todo** (a verified, fixable gap, with the
@@ -429,15 +492,15 @@ alone.
 
 **sbx-missing exit codes are unified across every surface that shells to
 sbx.** `pix ls`, `pix rm`, and every `pix mcp` verb that promises an operation
-(`register`/`load`/`auth`/`bundle`, and read-only `ls`) all return the SAME
-detectable error when `sbx` is not on PATH, so they exit and message this
-identically instead of drifting into four different "sbx is missing" stories:
+(`add`/`auth`, and read-only `ls`) all return the SAME detectable error when
+`sbx` is not on PATH, so they exit and message this identically instead of
+drifting into four different "sbx is missing" stories:
 
 | surface | sbx absent -> exit | message names |
 | --- | --- | --- |
 | `pix ls` | 3 (`rpc.ExitServiceDown`) | the exact install fix (`brew install docker/tap/sbx@nightly`) |
 | `pix rm` | 3 (`rpc.ExitServiceDown`) | the exact install fix |
-| `pix mcp ls/register/load/auth/bundle` | 3 (`rpc.ExitServiceDown`) | `would run: sbx ...` on **stderr**, so a script piping stdout never sees it |
+| `pix mcp ls/add/auth` | 3 (`rpc.ExitServiceDown`) | `would run: sbx ...` on **stderr**, so a script piping stdout never sees it |
 | `pix doctor` | 1 (`ExitNotReady`) only if a REQUIRED check is a verified gap; sbx's own gap is `todo` with the exact install fix as its `Fix` | the exact install fix (`health.SbxInstallFix`) |
 
 The shared plumbing: `mcp.ErrSbxUnavailable` is the one sentinel every mutating

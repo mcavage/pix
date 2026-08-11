@@ -40,7 +40,7 @@
         "memory_embed_model = \"nomic-embed-text\"",
         "ollama_bridge_model = \"qwen3.5:9b\"",
         "run_intent = \"overlord\"",
-        "google_workspace_account = \"\"",
+        "version_pin = \"\"",
         "[kits]",
         "[skills]",
         "[plugins]"

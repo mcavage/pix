@@ -1,6 +1,7 @@
 package health
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -226,6 +227,103 @@ func TestMCPProbe_AGapDominatesAnUnknown(t *testing.T) {
 		if !containsAny(r.Evidence, []string{want}) {
 			t.Errorf("evidence dropped %q: %q", want, r.Evidence)
 		}
+	}
+}
+
+// TestMCPProbe_UndeclaredIsAGapEvenWhenTheGatewayListsIt is the
+// registration-outlived-its-pack case, and the direction of the assertion is
+// the whole point: a server the gateway HAS registered but no active pack
+// declares is the WORSE state, not the better one — it is a live host command
+// nothing can vouch for. Reporting it "registered ✓" is exactly the lie this
+// probe exists to stop telling.
+func TestMCPProbe_UndeclaredIsAGapEvenWhenTheGatewayListsIt(t *testing.T) {
+	// "slack" IS in the mcpls listing, so registration answered YES.
+	r := check(t, mcpProbe(t, "mcpls", MCPServer{Name: "slack", Undeclared: true}), mcpBudget)
+	if r.Status != StatusAbsent {
+		t.Fatalf("status = %s, want absent — a registered-but-undeclared server is a gap (%+v)", r.Status, r)
+	}
+	if !strings.Contains(r.Evidence, "no active pack declares it") {
+		t.Errorf("evidence must say WHY it is a gap, got %q", r.Evidence)
+	}
+	if !strings.Contains(r.Fix, "sbx mcp rm slack") {
+		t.Errorf("fix = %q, want the removal of the orphaned registration", r.Fix)
+	}
+	// The un-registered half of the same case: still a gap, different repair.
+	r2 := check(t, mcpProbe(t, "mcpnone", MCPServer{Name: "slack", Undeclared: true}), mcpBudget)
+	if r2.Status != StatusAbsent || !strings.Contains(r2.Fix, "pix config unset mcp slack") {
+		t.Fatalf("unregistered undeclared server = %+v, want absent with the config repair", r2)
+	}
+}
+
+// TestMCPProbe_RegisteredCommandNotOnPATHIsAGap: a gateway lists a
+// REGISTRATION, not a working server, so a `command` server whose binary was
+// removed lists exactly like a healthy one. The binary is therefore resolved
+// before anything else is believed about the server — LookPath is injected so
+// the case is pinned without touching the real PATH.
+func TestMCPProbe_RegisteredCommandNotOnPATHIsAGap(t *testing.T) {
+	p := mcpProbe(t, "mcpls", MCPServer{Name: "slack", Command: "slack-mcp", RegisterFix: "pix mcp add slack"})
+	p.LookPath = func(string) (string, error) { return "", errors.New("not found in $PATH") }
+	r := check(t, p, mcpBudget)
+	if r.Status != StatusAbsent {
+		t.Fatalf("status = %s, want absent — a registration naming a missing binary is a verified gap (%+v)", r.Status, r)
+	}
+	if !strings.Contains(r.Evidence, "not on PATH") || !strings.Contains(r.Evidence, "slack-mcp") {
+		t.Errorf("evidence must name the unresolvable binary, got %q", r.Evidence)
+	}
+	// The same server with a resolvable binary is not a gap.
+	p.LookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
+	if ok := check(t, p, mcpBudget); ok.Status != StatusReady {
+		t.Fatalf("a resolvable command server = %+v, want ready", ok)
+	}
+}
+
+// TestMCPProbe_NoDeclaredProbeIsUnverifiedNotHealthy: registration is real
+// evidence, it is just not evidence of HEALTH. A pack that declares no probe
+// gets "working order is unverified" — never "answering", which would claim a
+// check that never ran.
+func TestMCPProbe_NoDeclaredProbeIsUnverifiedNotHealthy(t *testing.T) {
+	r := check(t, mcpProbe(t, "mcpls", local("slack")), mcpBudget)
+	if !strings.Contains(r.Evidence, "no health probe declared, so working order is unverified") {
+		t.Errorf("a server with no probe must be reported unverified, got %q", r.Evidence)
+	}
+	if strings.Contains(r.Evidence, "registered and answering") {
+		t.Errorf("silence is not evidence: %q", r.Evidence)
+	}
+}
+
+// TestMCPProbe_DeclaredProbeDecidesWorkingOrder: the pack-declared probe is the
+// only thing that can answer "does this server actually work". A non-zero exit
+// is a verified gap; a clean exit upgrades the note to "answering"; a probe that
+// could not run at all is unknown, never a gap.
+func TestMCPProbe_DeclaredProbeDecidesWorkingOrder(t *testing.T) {
+	fixture := buildFixture(t)
+	for _, tc := range []struct {
+		name     string
+		probe    []string
+		want     Status
+		evidence string
+	}{
+		{"clean exit", []string{fixture, "healthy"}, StatusReady, "registered and answering"},
+		{"non-zero exit", []string{fixture, "broken"}, StatusAbsent, "its own health probe fails"},
+		// A probe that could not run at all is UNKNOWN, never a gap: pix learned
+		// nothing about the server, and a repair command for an unverified gap is
+		// the thing this whole model exists to refuse.
+		{"probe not runnable", []string{"/nonexistent/probe-9x7z"}, StatusUnknown, "health probe"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := local("slack")
+			s.Probe = tc.probe
+			r := check(t, mcpProbe(t, "mcpls", s), mcpBudget)
+			if r.Status != tc.want {
+				t.Fatalf("status = %s, want %s (%+v)", r.Status, tc.want, r)
+			}
+			if !strings.Contains(r.Evidence, tc.evidence) {
+				t.Errorf("evidence = %q, want it to contain %q", r.Evidence, tc.evidence)
+			}
+			if tc.want == StatusUnknown && r.Fix != "" {
+				t.Errorf("an unknown must carry no repair command, got %q", r.Fix)
+			}
+		})
 	}
 }
 

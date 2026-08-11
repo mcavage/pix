@@ -148,15 +148,16 @@ memory_scope = "work"                # → .pix/profile; default = pack name; "d
   policy    = "routing/policy.json"      # repo-relative; recompiled to routing.json when active
   scorecard = "routing/scorecard.json"
 
-# ── F1 reference-only integrations (v1 shape, now ATTACHES) ──
+# ── F1 reference-only integrations (v1 shape — SUPERSEDED, see below) ──
+# HISTORICAL. This stanza no longer loads: an `mcp` name must declare exactly one
+# transport (command/image/manifest/url). `gog_account` and `static` are gone too.
+# Current shape: docs/reference.md §5. Why: docs/design/integrations-remediation.md.
 [[integrations]]
   name   = "Fastmail"
   mcp    = "fastmail"            # MCP server name to attach (registered host-side)
   env    = "FASTMAIL_TOKEN"      # op:// ref var name solicited at adoption; value NEVER in pack
   static = true                  # preloaded at sandbox CREATE (--static-mcp) so the pack's
-                                 # skills have its tools in context from turn one. A server not
-                                 # not preloaded means: register with `pix mcp add`, then it is
-                                 # existing sandbox, or by recreating with `run --replace`.
+                                 # skills have its tools in context from turn one.
 
 # ── F2 in-sandbox proxy wrappers (bin/, fenced) ──
 [[proxy]]

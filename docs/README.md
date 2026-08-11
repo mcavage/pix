@@ -5,11 +5,12 @@ harness, [AGENTS.md](../AGENTS.md). This folder holds the deeper references.
 
 ## For adopters
 
-- [gworkspace.md](gworkspace.md) — set up the host-side Google Workspace (`gog`)
-  MCP server, read-only by default.
 - [design/packs.md](design/packs.md) — the pack design: private company context
   ships as a **pack** (plus container/host MCP integrations), never a
   forked/recompiled tree.
+- [gworkspace.md](gworkspace.md) — why Google Workspace is **not** a pix
+  feature, what a pack has to declare to provide it, and how to check it is
+  actually working rather than merely registered.
 - [memory.md](memory.md) — the memory service: what it stores, how recall and
   capture work, the commands, and the trust model.
 - [../SECURITY.md](../SECURITY.md) — the trust boundary, what the sandbox does
@@ -29,7 +30,7 @@ tutorials.
   required pinned/on-demand posture for an external pack replacement and the
   per-user credential rules it must keep. Not evidence anything external works.
 - [routing.md](design/routing.md) — the model router: registry, scorecard,
-  policy, and how `models route` bakes `routing.json`.
+  policy, and how `pix-host route compile` (`make routing`) bakes `routing.json`.
 - [models-cli.md](design/models-cli.md) — the `pix models` noun rename and the
   first-run "add a second provider key" fix.
 - [subagents-extension.md](design/subagents-extension.md) — the `subagent` tool

@@ -1,9 +1,8 @@
 // trust.go — the Tier-1 pack trust gate (docs/design/packs.md §9).
 //
 // The model splits on whether the pack EXECUTES code on the host. Tier-0 —
-// skills / knowledge / config / sandbox-only wrappers, plus REFERENCE-ONLY
-// integrations contributing only a NAME to launcher-built argv — adopts with NO
-// prompt, non-TTY fine. Tier-1 is ANY host-exec facet (see hostBoM.Tier1): it
+// skills / knowledge / config / sandbox-only wrappers — adopts with NO prompt,
+// non-TTY fine. Tier-1 is ANY host-exec facet (see hostBoM.Tier1): it
 // halts at the bill-of-materials screen and requires an explicit yes; non-TTY
 // FAILS CLOSED unless --yes.
 //
@@ -22,9 +21,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"pix/host/config"
 	"pix/host/hostenv"
-	"pix/host/mcp"
 	"pix/host/packinfo"
 	"sort"
 	"strconv"
@@ -98,15 +95,17 @@ func (b hostBoM) Tier1() bool {
 // [[proxy]] scripts, [[bin]] pins, [[setup]] hooks, [[services]] units, or
 // inference endpoint/service/header policy), recompute the COMPLETE host-exec
 // fingerprint and require an exact launcher-owned trust-store match. Tier-0
-// (skills / knowledge / sandbox-only wrappers / reference-only integrations)
-// passes with no store lookup, exactly as adoption promised. Nothing here
+// (skills / knowledge / sandbox-only wrappers) passes with no store lookup,
+// exactly as adoption promised. "Reference-only integrations" used to be a
+// Tier-0 case and no longer can be: every integration declares a transport, and
+// all four are host-exec or third-party egress. Nothing here
 // executes pack code: setup hooks and wrapper scripts are only HASHED
 // (hashHostExecFile), never run.
-func VerifyPackLaunchTrust(p *packinfo.Info, cfgGogAccount string, env hostenv.Env) error {
+func VerifyPackLaunchTrust(p *packinfo.Info, env hostenv.Env) error {
 	if p == nil {
 		return nil
 	}
-	bom := ComputeHostBoM(p, cfgGogAccount, LocalMCPClassifier(env, env.HostBinary))
+	bom := ComputeHostBoM(p)
 	if !bom.Tier1() {
 		return nil // Tier-0: no host-exec surface, nothing to re-verify
 	}
@@ -117,48 +116,23 @@ func VerifyPackLaunchTrust(p *packinfo.Info, cfgGogAccount string, env hostenv.E
 	return requireAcceptedFingerprint(p, fp, "host-exec surfaces")
 }
 
-// LocalMCPClassifier resolves the registrar's local-vs-gateway partition into a
-// predicate: TRUE for a name this host runs as a LOCAL stdio server (its attach
-// spawns a host command); anything else is reference-only Tier-0. UNKNOWN FAILS
-// CLOSED — an unestablished set treats every non-gog name as host-exec, because
-// a name already registered in the gateway would otherwise run with NO gate.
-func LocalMCPClassifier(env hostenv.Env, hostResolver func() (string, error)) func(string) bool {
-	set, known := mcp.LocalMCPNames(env, hostResolver)
-	return func(name string) bool {
-		if !known {
-			return name != config.GWServerName // fail closed: unknown ⇒ gate (except Google Workspace)
-		}
-		return set[name]
-	}
-}
-
-// PackLocalMCP builds the classifier for callers without an injected env
-// (refreshHostPackWrappers). A package var so tests can pin the partition and
-// the composition root can supply the real env.
-var PackLocalMCP = func() func(string) bool { return func(string) bool { return false } }
-
-// ComputeHostBoM enumerates a pack's host bill-of-materials (pure, testable):
-// MCP commands (resolved argv), host=true wrappers and [[bin]]s, [[services]],
-// setup hooks, inference gateways, the egress union and credential VAR names.
-// Bare binary names keep the reviewed SHAPE identical to what registration
-// resolves. cfgGogAccount is the RESOLVED fallback account, so a later
-// gog_account change re-gates; isLocalMCP nil FAILS CLOSED like an unknown
-// probe; a [[bin]] enters ONLY with host=true, so flipping an inert bin is a
-// NEW surface.
-func ComputeHostBoM(p *packinfo.Info, cfgGogAccount string, isLocalMCP func(string) bool) hostBoM {
+// ComputeHostBoM enumerates a pack's host bill-of-materials: MCP commands
+// (declared argv), host=true wrappers and [[bin]]s, [[services]], setup hooks,
+// inference gateways, the egress union and credential VAR names.
+//
+// It is a PURE FUNCTION OF THE MANIFEST — no subprocess, no PATH lookup, no
+// ambient host state. That property is load-bearing, not incidental: this
+// computes what a user consents to, so the same pack must produce the same
+// bill of materials on every machine and at every moment. The previous version
+// asked a host binary at runtime which servers were "local", which meant the
+// answer could change without the pack changing, and every caller had to carry
+// a fail-closed guess for when the probe could not answer at all.
+//
+// Bare binary names (never PATH-resolved paths) keep the reviewed SHAPE
+// identical to what registration resolves. A [[bin]] enters ONLY with
+// host=true, so flipping an inert bin is a NEW surface.
+func ComputeHostBoM(p *packinfo.Info) hostBoM {
 	var b hostBoM
-	account := strings.TrimSpace(p.Manifest.GogAccount)
-	if account == "" {
-		account = strings.TrimSpace(cfgGogAccount)
-	}
-	if account == "" {
-		account = "<gog_account>"
-	}
-	reg := mcp.McpRegistrar{Gog: "gog", Account: account, HostBin: "pix-host"}
-	if isLocalMCP == nil {
-		// No partition at all: same fail-closed posture as an unknown probe.
-		isLocalMCP = func(name string) bool { return name != config.GWServerName }
-	}
 	seenMCP := map[string]bool{}
 	for _, ig := range p.Manifest.Integrations {
 		name := strings.TrimSpace(ig.MCP)
@@ -177,8 +151,15 @@ func ComputeHostBoM(p *packinfo.Info, cfgGogAccount string, isLocalMCP func(stri
 			})
 		case strings.TrimSpace(ig.URL) != "":
 			b.RemoteMCP = append(b.RemoteMCP, hostBoMRemote{Name: name, URL: strings.TrimSpace(ig.URL)})
-		case isLocalMCP(name):
-			b.MCP = append(b.MCP, hostBoMMCP{Name: name, Argv: reg.ServerCmd(name)})
+		case strings.TrimSpace(ig.Command) != "":
+			// The reviewed argv is exactly what the pack declared: the bare
+			// command plus its literal args. Registration resolves the command
+			// to an absolute path at spawn time, which is a property of THIS
+			// machine's PATH and deliberately not part of what you consent to.
+			b.MCP = append(b.MCP, hostBoMMCP{
+				Name: name,
+				Argv: append([]string{strings.TrimSpace(ig.Command)}, ig.Args...),
+			})
 		}
 	}
 	egress := map[string]bool{}
@@ -264,14 +245,22 @@ func computeHostExecFingerprintWithSetup(root string, b hostBoM, setupBytes map[
 		SHA  string `json:"sha"`
 		Host bool   `json:"host"`
 	}
+	// Require/Apply are ADDITIVE with omitempty, exactly like Services above: a
+	// pack using the executable form encodes byte-identically to before, so
+	// every already-accepted fingerprint stays valid. They are fingerprinted at
+	// all because they are EXECUTABLE INTENT — a declarative step names binaries
+	// and argv that will run on this host, so changing one has to re-gate just
+	// as editing a hook script does.
 	type fpSetup struct {
-		ID          string   `json:"id"`
-		Path        string   `json:"path"`
-		SHA         string   `json:"sha"`
-		CheckArgs   []string `json:"check_args"`
-		ApplyArgs   []string `json:"apply_args"`
-		Required    bool     `json:"required"`
-		Description string   `json:"description"`
+		ID          string                  `json:"id"`
+		Path        string                  `json:"path"`
+		SHA         string                  `json:"sha"`
+		CheckArgs   []string                `json:"check_args"`
+		ApplyArgs   []string                `json:"apply_args"`
+		Required    bool                    `json:"required"`
+		Description string                  `json:"description"`
+		Require     []packinfo.SetupRequire `json:"require,omitempty"`
+		Apply       []packinfo.SetupApply   `json:"apply,omitempty"`
 	}
 	type fpDoc struct {
 		V             int                `json:"v"`
@@ -317,6 +306,11 @@ func computeHostExecFingerprintWithSetup(root string, b hostBoM, setupBytes map[
 	doc.Prerequisites = append([]string(nil), b.Prerequisites...)
 	for _, s := range b.Setup {
 		sha, ok := "", false
+		if s.Declarative() {
+			// No file to hash: the step IS the manifest data, which the
+			// Require/Apply fields below carry into the fingerprint directly.
+			ok = true
+		}
 		if data, snapshotted := setupBytes[s.ID]; snapshotted {
 			sum := sha256.Sum256(data)
 			sha, ok = hex.EncodeToString(sum[:]), true
@@ -331,6 +325,8 @@ func computeHostExecFingerprintWithSetup(root string, b hostBoM, setupBytes map[
 			ID: s.ID, Path: filepath.Clean(s.Path), SHA: sha,
 			CheckArgs: append([]string(nil), s.CheckArgs...), ApplyArgs: append([]string(nil), s.ApplyArgs...),
 			Required: s.Required, Description: s.Description,
+			Require: append([]packinfo.SetupRequire(nil), s.Require...),
+			Apply:   append([]packinfo.SetupApply(nil), s.Apply...),
 		})
 	}
 	doc.Setup = sortedByKey(doc.Setup, func(s fpSetup) string { return s.ID })
@@ -476,7 +472,32 @@ func renderHostBoM(out io.Writer, b hostBoM) {
 		if label == "" {
 			label = s.ID
 		}
-		fmt.Fprintf(out, "  %-20s %s — %s (%s %s)\n", kind, s.ID, label, s.Path, strings.Join(s.ApplyArgs, " "))
+		if !s.Declarative() {
+			fmt.Fprintf(out, "  %-20s %s — %s (%s %s)\n", kind, s.ID, label, s.Path, strings.Join(s.ApplyArgs, " "))
+			continue
+		}
+		// A declarative step runs no pack-supplied code, but it DOES name
+		// binaries and argv that execute on this Mac. Consent means seeing
+		// them, so every condition and every remediation is printed — never
+		// summarised as a count.
+		fmt.Fprintf(out, "  %-20s %s — %s\n", kind, s.ID, label)
+		for _, r := range s.Require {
+			switch r.Kind {
+			case "bin":
+				fmt.Fprintf(out, "                       Needs: %s on PATH (install: %s)\n", r.Name, r.Install)
+			case "op-ref":
+				fmt.Fprintf(out, "                       Needs: %s as a 1Password reference\n", r.Env)
+			case "probe":
+				fmt.Fprintf(out, "                       Checks: %s\n", strings.Join(r.Argv, " "))
+			}
+		}
+		for _, a := range s.Apply {
+			note := ""
+			if a.Kind == "interactive" {
+				note = "  [interactive; may open a browser]"
+			}
+			fmt.Fprintf(out, "                       Runs on this Mac: %s%s\n", strings.Join(a.Argv, " "), note)
+		}
 	}
 	coveredEgress := map[string]bool{}
 	for _, proxy := range b.SandboxProxies {

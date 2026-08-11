@@ -38,16 +38,6 @@ func packRun(d *cli.Deps, verb string, err error) error {
 	return cli.SilentError{Code: 1}
 }
 
-// init supplies the real classifier PackLocalMCP defaults to a safe no-op for:
-// only the composition root can build a real env, so only it can answer "is
-// this MCP server local" — pack asks, cmd/pix answers.
-func init() {
-	pack.PackLocalMCP = func() func(string) bool {
-		env := defaultShellEnv()
-		return pack.LocalMCPClassifier(env, env.HostBinary)
-	}
-}
-
 // packCmd is a child of the kong root; bare `pix pack` is `pack ls`.
 func (c *packCmd) Help() string {
 	return `A pack is your context: a git-backed bundle of skills, knowledge, MCP

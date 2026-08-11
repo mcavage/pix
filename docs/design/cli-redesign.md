@@ -13,6 +13,9 @@ Authors: pi + crew (dx-consultant, product-manager, architect, ux-copywriter), r
 > pre-externalization. Read every `knowledge`/`gog setup`/`state reset` line
 > in the mockups as the historical shape being redesigned, not a current
 > screen; `docs/reference.md` is the current, accurate command reference.
+> Same for the MCP verb: every `pix mcp register` below is now `pix mcp add`,
+> and there is no built-in gog or Slack to register at all (a pack declares
+> them: `docs/design/integrations-remediation.md`).
 
 ## The problem
 

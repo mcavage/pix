@@ -13,14 +13,7 @@ import (
 	"pix/host/packinfo"
 	"strings"
 	"testing"
-
-	"pix/host/hostenv"
-	"pix/host/sys/systest"
 )
-
-func viewEnv() hostenv.Env {
-	return hostenv.Env{System: &systest.Fake{}}
-}
 
 // TestAcceptedServices_RejectedBeforeAcceptance: a freshly loaded pack whose
 // surface was NEVER accepted exports nothing — the error names the re-review
@@ -32,7 +25,7 @@ func TestAcceptedServices_RejectedBeforeAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	views, err := AcceptedGoPluginServices(p, "", viewEnv())
+	views, err := AcceptedGoPluginServices(p)
 	if err == nil {
 		t.Fatal("unaccepted pack exported services; want a fail-closed error")
 	}
@@ -51,12 +44,12 @@ func TestAcceptedServices_RejectedBeforeAcceptance(t *testing.T) {
 func TestAcceptedServices_AcceptedExportsMinimalView(t *testing.T) {
 	isolatePackHost(t)
 	root := writeServicePack(t, validGoPluginService+validContainerService)
-	acceptPackSurface(t, root, "")
+	acceptPackSurface(t, root)
 	p, err := packinfo.LoadPack(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	views, err := AcceptedGoPluginServices(p, "", viewEnv())
+	views, err := AcceptedGoPluginServices(p)
 	if err != nil {
 		t.Fatalf("AcceptedGoPluginServices after acceptance: %v", err)
 	}
@@ -92,7 +85,7 @@ func TestAcceptedServices_AcceptedExportsMinimalView(t *testing.T) {
 func TestAcceptedServices_ChangeSinceAcceptanceRegates(t *testing.T) {
 	isolatePackHost(t)
 	root := writeServicePack(t, validGoPluginService)
-	acceptPackSurface(t, root, "")
+	acceptPackSurface(t, root)
 
 	changed := strings.Replace(validGoPluginService, `argv = ["--dir", "data"]`, `argv = ["--dir", "data", "--exfiltrate"]`, 1)
 	if changed == validGoPluginService {
@@ -106,7 +99,7 @@ func TestAcceptedServices_ChangeSinceAcceptanceRegates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	views, err := AcceptedGoPluginServices(p, "", viewEnv())
+	views, err := AcceptedGoPluginServices(p)
 	if err == nil || views != nil {
 		t.Fatalf("changed surface exported views %+v (err=%v); want fail-closed re-gate", views, err)
 	}
@@ -123,13 +116,13 @@ func TestAcceptedServices_ChangeSinceAcceptanceRegates(t *testing.T) {
 func TestAcceptedServices_RevalidatesMutatedInfo(t *testing.T) {
 	isolatePackHost(t)
 	root := writeServicePack(t, validGoPluginService)
-	acceptPackSurface(t, root, "")
+	acceptPackSurface(t, root)
 	p, err := packinfo.LoadPack(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	p.Manifest.Services[0].Port = 11435 // pix-host memory's reserved front door
-	if _, err := AcceptedGoPluginServices(p, "", viewEnv()); err == nil || !strings.Contains(err.Error(), "reserved") {
+	if _, err := AcceptedGoPluginServices(p); err == nil || !strings.Contains(err.Error(), "reserved") {
 		t.Fatalf("mutated packinfo.Info exported (err=%v); want the reserved-port refusal", err)
 	}
 }
@@ -143,7 +136,7 @@ func TestAcceptedServices_NoServicesIsQuietlyEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	views, err := AcceptedGoPluginServices(p, "", viewEnv())
+	views, err := AcceptedGoPluginServices(p)
 	if err != nil || views != nil {
 		t.Fatalf("no-services pack = (%+v, %v), want (nil, nil)", views, err)
 	}

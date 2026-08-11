@@ -387,16 +387,16 @@ func TestAllPreloadedMCP(t *testing.T) {
 // per-integration `static` field — every pack integration's MCP server is now
 // in the preload set unconditionally. A --pack OVERRIDE (never `pack use`d, so
 // its integration is not yet in cfg.MCP) still gets folded in, in memory only,
-// for this launch. The partition is pinned KNOWN with neither name local, so
-// both integrations are reference-only Tier-0 and no acceptance is required;
-// an UNKNOWN partition now fails closed at launch too (see
-// TestLaunchTrust_UnknownMCPPartitionFailsClosedAtLaunch).
+// for this launch. Both integrations are REMOTE endpoints the gateway OAuths,
+// so the pack has no host-exec surface and needs no acceptance; a host command
+// is Tier-1 and fails closed until accepted (see
+// TestLaunchTrust_HostCommandMCPIsGatedAtLaunch).
 func TestApplyPackToLaunch_IntegrationMCPAlwaysPreloaded(t *testing.T) {
 	dir := t.TempDir()
 	root := filepath.Join(dir, "override-pack")
 	mustWritePack(t, root, packinfo.Manifest{Name: "override", Schema: 1, Integrations: []packinfo.Integration{
-		{Name: "Fastmail", MCP: "fastmail"},
-		{Name: "Notion", MCP: "notion"},
+		{Name: "Fastmail", MCP: "fastmail", URL: "https://mcp.fastmail.test/mcp"},
+		{Name: "Notion", MCP: "notion", URL: "https://mcp.notion.test/mcp"},
 		{Name: "NoServer"}, // no mcp -> ignored
 	}})
 
@@ -406,14 +406,20 @@ func TestApplyPackToLaunch_IntegrationMCPAlwaysPreloaded(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PIX_CONFIG", cfgPath)
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(dir, "data"))
+	// Declaring a transport of ANY kind is a host-exec surface now, so the
+	// launch re-verifies the pack's fingerprint before folding anything in:
+	// accept it first, or the refusal (not the preload set) is what this test
+	// would be measuring.
+	acceptTrustMatrixPack(t, root)
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	// KNOWN, empty local set: both MCP names are gateway references (Tier-0).
 	env := hostenv.Env{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
 		return "", nil
-	}}, HostBinary: func() (string, error) { return "pix-host", nil }}
+	}}}
 	o := launch.RunOpts{Pack: root}
 	if _, err := packApplyForTest(cfg, &o, env, io.Discard); err != nil {
 		t.Fatalf("launch.ApplyPackToLaunch: %v", err)

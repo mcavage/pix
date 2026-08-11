@@ -81,7 +81,7 @@ func ApplyToLaunch(cfg *config.Config, override string, env hostenv.Env, warn io
 		}
 		return "", fmt.Errorf("active pack %s: %v (refusing to launch without the pack's declared context; fix the pack or `pix pack rm` to detach it)", packRoot, err)
 	}
-	if err := VerifyPackLaunchTrust(p, cfg.GogAccount, env); err != nil {
+	if err := VerifyPackLaunchTrust(p, env); err != nil {
 		return "", err
 	}
 	// Apply the exact manifest snapshot whose trust surface was just verified.

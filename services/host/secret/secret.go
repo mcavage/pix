@@ -56,11 +56,26 @@ type OpRef struct {
 	NonSecret   bool // KEY is on the documented non-secret allowlist
 }
 
+// NonSecret is the set of env var names allowed to carry a LITERAL value in
+// op-refs.env instead of an op:// reference.
+//
+// Pix allowlists NOTHING of its own. This set is exactly what the active pack
+// declares as `env_keys` on its integrations, so the pack that needs a
+// plain-text variable is the thing that authorizes it — and deactivating that
+// pack takes its allowances with it. A nil set means "every value here must be
+// a ref", which is the correct posture for a host with no pack.
+type NonSecret map[string]bool
+
+// Allows reports whether key may be a literal. Nil-safe by design: callers
+// that only care whether a value parses as a ref pass nil rather than
+// inventing an allowlist.
+func (n NonSecret) Allows(key string) bool { return n[key] }
+
 // ParseOpRefs parses op-refs.env content into its non-comment KEY=VALUE lines,
 // classifying each value as a filled op:// ref, an unfilled placeholder, or a
-// documented non-secret literal. It NEVER surfaces the raw value to callers that
-// print — classification only.
-func ParseOpRefs(content string) []OpRef {
+// pack-authorized non-secret literal. It NEVER surfaces the raw value to
+// callers that print — classification only.
+func ParseOpRefs(content string, nonSecret NonSecret) []OpRef {
 	var refs []OpRef
 	for _, ln := range strings.Split(content, "\n") {
 		t := strings.TrimSpace(ln)
@@ -78,7 +93,7 @@ func ParseOpRefs(content string) []OpRef {
 			Value:       val,
 			IsRef:       strings.HasPrefix(val, "op://"),
 			Placeholder: HasPlaceholder(val),
-			NonSecret:   config.NonSecretOpRefsKeys[key],
+			NonSecret:   nonSecret.Allows(key),
 		})
 	}
 	return refs
@@ -127,7 +142,7 @@ func OpRefsContent(env hostenv.Env) (path, content string, exists bool) {
 // RunSecretLs prints op install/sign-in state + op-refs.env presence and, per
 // configured ref, filled-vs-placeholder-vs-pasted-secret. It NEVER prints a
 // secret value. This is the default `secret` action (no subcommand).
-func RunSecretLs(env hostenv.Env, out io.Writer) {
+func RunSecretLs(env hostenv.Env, out io.Writer, nonSecret NonSecret) {
 	fmt.Fprintln(out, "Secrets (1Password):")
 	fmt.Fprintln(out, indent(config.OpRefsMentalModel))
 	fmt.Fprintln(out)
@@ -147,7 +162,7 @@ func RunSecretLs(env hostenv.Env, out io.Writer) {
 		return
 	}
 	fmt.Fprintf(out, "  op-refs.env: ✓ %s\n", path)
-	refs := ParseOpRefs(content)
+	refs := ParseOpRefs(content, nonSecret)
 	if len(refs) == 0 {
 		fmt.Fprintln(out, "  refs: (none set yet — add ENV_VAR=op://vault/item/field lines)")
 		return
@@ -166,14 +181,15 @@ func RunSecretLs(env hostenv.Env, out io.Writer) {
 		default:
 			// Any other non-ref, non-allowlisted value: refs-only policy => flag it
 			// WITHOUT printing the value.
-			fmt.Fprintf(out, "    ✗ %s = not an op:// ref — this file is refs-only; use op://vault/item/field or move it to the non-secret allowlist\n", r.Key)
+			fmt.Fprintf(out, "    ✗ %s = not an op:// ref — this file is refs-only; use op://vault/item/field, or have your pack declare %s as env_keys if it is genuinely not a secret\n", r.Key, r.Key)
 		}
 	}
 }
 
 // RunSecretSet is the ONE authoring primitive: it upserts ENV_VAR=value into
 // op-refs.env, no editor involved. It enforces the refs-only policy — value
-// must be an op:// ref unless ENV_VAR is on config.NonSecretOpRefsKeys — and
+// must be an op:// ref unless the ACTIVE PACK authorized ENV_VAR as a
+// non-secret (nonSecret) — and
 // normalizes any %20 in a ref to a literal space (op read/op run --env-file
 // both require one and reject a percent-encoded one), seeds the file via the
 // ONE seeder (config.SeedOpRefs) if absent, upserts preserving every other
@@ -185,7 +201,7 @@ func RunSecretLs(env hostenv.Env, out io.Writer) {
 // is one transaction under the provider-refs lock (WithProviderRefsLock), so a
 // concurrent `secret set`/`secret rm`/setup cannot interleave; failures inside
 // it return errors too, so the lock's deferred release always runs.
-func RunSecretSet(env hostenv.Env, out io.Writer, key, value string) error {
+func RunSecretSet(env hostenv.Env, out io.Writer, key, value string, nonSecret NonSecret) error {
 	if !EnvVarNameRe.MatchString(key) {
 		fmt.Fprintf(out, "pix secret set: %q does not look like an env var name (want %s)\n", key, EnvVarNameRe.String())
 		return exitCode(2)
@@ -207,7 +223,7 @@ func RunSecretSet(env hostenv.Env, out io.Writer, key, value string) error {
 	}
 
 	isRef := strings.HasPrefix(value, "op://")
-	if !isRef && !config.NonSecretOpRefsKeys[key] {
+	if !isRef && !nonSecret.Allows(key) {
 		if config.LooksSecretShaped(key, value) {
 			fmt.Fprintf(out, "pix secret set: %s looks like a pasted secret — this file is refs-only; pass op://vault/item/field, or your secret would land on disk\n", key)
 		} else {
@@ -221,7 +237,7 @@ func RunSecretSet(env hostenv.Env, out io.Writer, key, value string) error {
 	// acquisition failure fails the command honestly — never write unlocked.
 	var txErr error
 	if lerr := WithProviderRefsLock(env, func() error {
-		txErr = RunSecretSetLocked(env, out, key, value)
+		txErr = RunSecretSetLocked(env, out, key, value, nonSecret)
 		return nil
 	}); lerr != nil {
 		fmt.Fprintf(out, "pix secret set: could not lock provider refs (%s): %v\n", ProviderRefsLockPath(env), lerr)
@@ -233,7 +249,7 @@ func RunSecretSet(env hostenv.Env, out io.Writer, key, value string) error {
 // RunSecretSetLocked is RunSecretSet's file transaction (read/seed/upsert
 // op-refs.env). Caller MUST hold the provider-refs lock; every failure returns
 // an error, so the lock is always released.
-func RunSecretSetLocked(env hostenv.Env, out io.Writer, key, value string) error {
+func RunSecretSetLocked(env hostenv.Env, out io.Writer, key, value string, nonSecret NonSecret) error {
 	// %20 -> literal space BEFORE writing: op 2.35.0's `op read` AND `op run
 	// --env-file` both require a literal space in a ref (a spaced 1Password
 	// field name, e.g. "Anthropic API Key") and reject a percent-encoded one.
@@ -479,7 +495,7 @@ func RunSecretCheck(env hostenv.Env, out io.Writer) error {
 		fmt.Fprintln(out, "op is installed but no account configured — run: op signin, then retry")
 		return exitCode(3)
 	}
-	refs := ParseOpRefs(content)
+	refs := ParseOpRefs(content, nil)
 	var checked, failed int
 	for _, r := range refs {
 		if !r.IsRef {
@@ -525,7 +541,7 @@ func indent(s string) string {
 // from op-refs.env, the single refs file. Pure/read-only — it never writes.
 func CurrentOpRef(env hostenv.Env, envVar string) (string, bool) {
 	if _, content, exists := OpRefsContent(env); exists {
-		for _, r := range ParseOpRefs(content) {
+		for _, r := range ParseOpRefs(content, nil) {
 			if r.Key == envVar && r.IsRef && !r.Placeholder {
 				return r.Value, true
 			}

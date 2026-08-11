@@ -185,7 +185,7 @@ func TestPackInferenceCredentialRoutingIsTrustGatedAndValidated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bom := pack.ComputeHostBoM(p, "", func(string) bool { return false })
+	bom := pack.ComputeHostBoM(p)
 	if !bom.Tier1() || len(bom.Inference) != 1 {
 		t.Fatalf("inference credential routing must be trust-gated: %+v", bom)
 	}
@@ -223,7 +223,7 @@ func TestPackInferenceCredentialRoutingIsReverifiedAtLaunch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bom := pack.ComputeHostBoM(p, "", func(string) bool { return false })
+	bom := pack.ComputeHostBoM(p)
 	fp, _, err := pack.ComputeHostExecFingerprint(root, bom)
 	if err != nil {
 		t.Fatal(err)

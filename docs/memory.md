@@ -197,11 +197,11 @@ reversible by hand), and renames the validated copy into place. Without
 the file, so keyword recall works the moment the daemon comes back — there is
 nothing to rebuild.
 
-**Migrating off an old `pix backup` archive.** Before U07b, `pix backup`
-wrote a versioned `tar.gz` bundling `memory.db` + `config.toml` +
-`op-refs.env` + a manifest. That top-level verb is retired now (it answers
-`PIX_RETIRED`); it was never something you could "restore" back into a
-running install anyway, since `config.toml`/`op-refs.env` don't need
+**Migrating off an old backup archive.** Before U07b there was a top-level
+backup verb, and it wrote a versioned `tar.gz` bundling `memory.db` +
+`config.toml` + `op-refs.env` + a manifest. The verb is gone — it now gets the
+ordinary unknown-command answer — and it was never something you could "restore"
+back into a running install anyway, since `config.toml`/`op-refs.env` don't need
 restoring. If you're holding one of those old archives: untar it, take just
 the `memory.db` inside, and hand it to `pix-host memory restore`. Recreate
 `config.toml` with `pix config set` (or copy it back by hand if you trust its

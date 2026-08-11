@@ -39,9 +39,6 @@ type setupCmd struct {
 	Models     string   `help:"Restrict agents to these canonical catalog models." placeholder:"ID,ID"`
 	PullModels bool     `help:"Pull any CONFIRMED-missing configured local Ollama model. The only download consent setup honors."`
 	Yes        bool     `short:"y" aliases:"non-interactive" help:"Never prompt (CI)."`
-
-	GoogleWorkspace bool   `hidden:"" help:"Route setup through the Google Workspace transaction."`
-	Credentials     string `hidden:"" help:"OAuth client path for --google-workspace."`
 }
 
 // hostArgs recomposes the host phase's argv. Order is fixed so one invocation
@@ -63,10 +60,6 @@ func (c *setupCmd) hostArgs() []string {
 	if c.PullModels {
 		a = append(a, "--pull-models")
 	}
-	if c.GoogleWorkspace {
-		a = append(a, "--google-workspace")
-	}
-	add("--credentials", c.Credentials)
 	add("--model", c.Model)
 	add("--models", c.Models)
 	for _, v := range c.Mcp {
@@ -95,7 +88,7 @@ func (c *setupCmd) Run(d *cli.Deps) error {
 	}
 	// Validate every semantic flag/value before pack adoption or any mutation; the
 	// host phase repeats the same pure validator.
-	if err := provision.ValidateSetupSemantics(parsed, env, hostBinaryResolver); err != nil {
+	if err := provision.ValidateSetupSemantics(parsed); err != nil {
 		return cli.UsageError{Err: err}
 	}
 

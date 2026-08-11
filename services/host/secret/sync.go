@@ -166,7 +166,7 @@ func ProviderKeyNames(env hostenv.Env) ([]string, error) {
 	}
 	var names []string
 	seen := map[string]bool{}
-	for _, r := range ParseOpRefs(content) {
+	for _, r := range ParseOpRefs(content, nil) {
 		if name, ok := providerKeyRefs[r.Key]; ok && r.IsRef && !r.Placeholder && !seen[name] {
 			seen[name] = true
 			names = append(names, name)
@@ -265,7 +265,7 @@ func isModelProviderKey(envVar string) bool {
 // they can never disagree with setup/CurrentOpRef.
 func firstProviderKeyRefs(content string) map[string]OpRef {
 	best := map[string]OpRef{}
-	for _, r := range ParseOpRefs(content) {
+	for _, r := range ParseOpRefs(content, nil) {
 		if _, ok := providerKeyRefs[r.Key]; !ok || !r.IsRef {
 			continue
 		}
@@ -288,7 +288,7 @@ func ProviderKeyRefsPresent(env hostenv.Env) bool {
 	if !exists {
 		return false
 	}
-	for _, r := range ParseOpRefs(content) {
+	for _, r := range ParseOpRefs(content, nil) {
 		if _, ok := providerKeyRefs[r.Key]; ok && r.IsRef && !r.Placeholder {
 			return true
 		}

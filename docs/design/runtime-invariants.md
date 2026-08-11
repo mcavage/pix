@@ -74,18 +74,24 @@ warning, and a bare positional launch (never the explicit `run` verb) on a
 non-interactive terminal refuses before the parser runs — no create, no attach, no
 side effect.
 
-## 7. Retirement is an answer, not silence (`retired.go`, both binaries)
+## 7. A deleted verb gets the ordinary unknown-command answer (both binaries)
 
-An unknown verb guesses by edit distance and cannot guess `mcp register` from
-`slack`. A retired surface therefore keeps exactly one behaviour: print a
-machine-greppable `PIX_RETIRED` line naming its replacement, exit 2, and do nothing
-else — no config read, no daemon, no sandbox, no file. That is what makes hitting
-one from a stale script or shell history safe. Every entry has an append-only record
-in `cmd/pix/corpus/retirement.jsonl`.
+**This invariant was inverted.** There used to be a retirement seam — a
+`retired.go`, a machine-greppable `PIX_RETIRED` line naming a replacement, exit 2,
+and an append-only `cmd/pix/corpus/retirement.jsonl`. None of it exists now. Pix
+has no released users, so a removed surface is simply not a verb: dispatch answers
+`no command named "x"` plus an edit-distance suggestion, and does nothing else — no
+config read, no daemon, no sandbox, no file. What survives from the original
+reasoning is the *and does nothing else* half, which is what makes hitting a
+deleted verb from a stale script safe. `pix help --all` is the whole verb set;
+`tests/verb-references.test.mjs` is what keeps prose from naming anything outside
+it.
 
 ## 8. Registration is host state, not session state (`cmd/pix/mcp_cmd.go`)
 
 Registering an MCP server makes it known to the gateway; a session sees its tools
-only once it was preloaded at create or attached live. `pix mcp load` records
-nothing, because "pix loaded this once" is not the state of a live session — status
-and doctor report host REGISTRATION and say so.
+only once it was preloaded at create. There is no live-attach verb and no receipt,
+because "pix loaded this once" is not the state of a live session. Status and
+doctor report host state and say so — and doctor now reports more of it than
+registration alone: whether an active pack declares the server, whether a declared
+command resolves on PATH, and whether the pack's own health probe passes.

@@ -3,8 +3,12 @@ package health
 import (
 	"context"
 	"fmt"
+	"os/exec"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 
 	"pix/host/mcp"
 )
@@ -55,11 +59,9 @@ const MCPHostTrustNotice = "Note: local/container MCP servers run on the host, o
 // MCPServer is one configured MCP server, already CLASSIFIED by the caller.
 //
 // RegisterFix is empty when the caller could not establish what kind of
-// server this is (the local-name set was unreadable, and it is not a
-// pack/catalog name). That case FAILS CLOSED: an unclassified server is
-// reported as unknown and gets no repair command, because recommending
-// `pix mcp register` for a remote name — or `pix mcp bundle` for a local one
-// — is a broken repair that costs a user more time than silence.
+// server this is. That case FAILS CLOSED: an unclassified server is reported
+// as unknown and gets no repair command, because a repair command that cannot
+// work costs a user more time than silence does.
 type MCPServer struct {
 	Name string
 	// Remote marks a server authenticated through the hosted control plane
@@ -68,6 +70,20 @@ type MCPServer struct {
 	// RegisterFix is the exact command that registers THIS server, or empty
 	// when the server's kind could not be established.
 	RegisterFix string
+	// Undeclared marks a name in the config that no active pack provides and
+	// pix does not know an endpoint for. It is not merely unregistered: even
+	// if the gateway lists it, nothing here can say what it runs, and the most
+	// common cause is a registration outliving the pack that created it.
+	Undeclared bool
+	// Command is the host binary a Command-transport server spawns, empty for
+	// every other kind. A registration naming a binary that is not on PATH is
+	// a server that will fail on first use while the gateway reports it ready,
+	// so this is checked before anything else is believed about it.
+	Command string
+	// Probe is the pack-declared argv that answers "can this server actually
+	// do its job". Empty means the pack declared none, which is reported as
+	// unverified — never as healthy, because absence of a check is not a pass.
+	Probe []string
 }
 
 // MCPProbe checks every configured MCP server's registration, attachment and
@@ -84,6 +100,18 @@ type MCPProbe struct {
 	// REAL process, just one that can be made to fail on purpose.
 	ListArgs []string
 	AuthArgs []string
+	// LookPath resolves a server's declared command. Injected so a test can
+	// pin "this binary is missing" without touching the real PATH. Nil means
+	// the real exec.LookPath.
+	LookPath func(string) (string, error)
+}
+
+// lookPath is the resolver this probe should use, defaulting to the real one.
+func (p MCPProbe) lookPath() func(string) (string, error) {
+	if p.LookPath != nil {
+		return p.LookPath
+	}
+	return exec.LookPath
 }
 
 func (MCPProbe) Name() string { return "mcp" }
@@ -150,10 +178,25 @@ func (p MCPProbe) Check(ctx context.Context) Result {
 		return r
 	}
 
-	findings := make([]mcpFinding, 0, len(p.Servers))
-	for _, s := range p.Servers {
-		findings = append(findings, p.checkServer(ctx, bin, o.out, s))
+	// Per-server checks run CONCURRENTLY, each on the shared deadline. They are
+	// independent — different servers, different subprocesses — and running
+	// them in sequence means one slow check starves every check after it. That
+	// is not hypothetical: a health probe wrapped in `op run` blocks until
+	// 1Password authorizes, so a locked vault would turn one unanswerable
+	// server into six, and report five gaps that were never actually checked.
+	//
+	// Order is preserved by index, because the report reads in config order and
+	// a report that reshuffles between runs is one nobody can diff.
+	findings := make([]mcpFinding, len(p.Servers))
+	var wg sync.WaitGroup
+	for i, s := range p.Servers {
+		wg.Add(1)
+		go func(i int, s MCPServer) {
+			defer wg.Done()
+			findings[i] = p.checkServer(ctx, bin, o.out, s)
+		}(i, s)
 	}
+	wg.Wait()
 	return p.reduce(findings)
 }
 
@@ -161,7 +204,25 @@ func (p MCPProbe) Check(ctx context.Context) Result {
 // makes sense: an unregistered server has nothing to be attached or
 // authenticated.
 func (p MCPProbe) checkServer(ctx context.Context, bin, listOut string, s MCPServer) mcpFinding {
-	switch mcp.McpRegEvidenceFrom(listOut, true, s.Name) {
+	registered := mcp.McpRegEvidenceFrom(listOut, true, s.Name)
+
+	// Undeclared comes FIRST, and it is a gap whether or not the gateway lists
+	// the name. A registered-but-undeclared server is the worse case, not the
+	// better one: it is a live host command nothing can vouch for, typically
+	// left behind by a pack that was changed or deactivated. Reporting it as
+	// "registered ✓" is exactly the lie this probe exists to stop telling.
+	if s.Undeclared {
+		if registered == mcp.McpRegYes {
+			return mcpFinding{name: s.Name, gap: true,
+				fix:  "sbx mcp rm " + s.Name + "   # or re-activate the pack that provides it",
+				note: s.Name + ": registered, but no active pack declares it — it runs a command nothing can vouch for"}
+		}
+		return mcpFinding{name: s.Name, gap: true,
+			fix:  "pix config unset mcp " + s.Name + "   # or activate the pack that provides it",
+			note: s.Name + ": in your config, but no active pack declares it"}
+	}
+
+	switch registered {
 	case mcp.McpRegNo:
 		if strings.TrimSpace(s.RegisterFix) == "" {
 			// Fail closed: we do not know what kind of server this is, so we
@@ -176,10 +237,30 @@ func (p MCPProbe) checkServer(ctx context.Context, bin, listOut string, s MCPSer
 		return mcpFinding{name: s.Name, unknown: true, note: s.Name + ": registration unknown"}
 	}
 
+	// Registered. Before believing anything else about it: does the binary it
+	// names still exist? A gateway lists a registration, not a working server,
+	// and a `--command` pointing at a deleted binary lists exactly like a
+	// healthy one.
+	if s.Command != "" {
+		if _, err := p.lookPath()(s.Command); err != nil {
+			return mcpFinding{name: s.Name, gap: true,
+				fix: s.RegisterFix,
+				note: s.Name + ": registered, but its command " + strconv.Quote(s.Command) +
+					" is not on PATH — it will fail on first use"}
+		}
+	}
+
 	// Registered. Auth next, because an unauthenticated remote server is
 	// attached and still useless.
+	authenticated := false
 	if s.Remote {
 		switch a := p.checkAuth(ctx, bin, s.Name); a {
+		case mcpAuthYes:
+			// Real evidence of working order for a remote server: the control
+			// plane says this grant is live. Recorded so the no-probe case
+			// below can distinguish "nothing was checked" from "the thing that
+			// can fail for this kind of server was checked, and passed".
+			authenticated = true
 		case mcpAuthNo:
 			return mcpFinding{name: s.Name, gap: true, fix: fmt.Sprintf(MCPAuthFix, s.Name),
 				note: s.Name + ": registered, not authenticated"}
@@ -193,12 +274,99 @@ func (p MCPProbe) checkServer(ctx context.Context, bin, listOut string, s MCPSer
 		}
 	}
 
-	// Registered and (if remote) authenticated is everything this host can
-	// establish. Whether a running session has the server ATTACHED is not
-	// checkable from here, so the note says exactly that instead of claiming
-	// either way — and it is not counted as unknown, because the checkable
-	// facts all came back clean.
-	return mcpFinding{name: s.Name, note: s.Name + ": registered" + attachmentCaveat}
+	// Everything above establishes that the server is WIRED. Whether it can
+	// actually do its job is a different question, and only the server can
+	// answer it — so run the probe the pack declared for exactly this.
+	res, o := p.runProbe(ctx, s)
+	switch res {
+	case probeFailed:
+		return mcpFinding{name: s.Name, gap: true, fix: s.RegisterFix,
+			note: s.Name + ": registered, but its own health probe fails — see `" +
+				strings.Join(s.Probe, " ") + "`"}
+	case probeNotDeclared:
+		if authenticated {
+			// A remote server's failure mode IS its grant, and that was
+			// checked. Calling this "unverified" would be its own kind of
+			// dishonesty — the check that matters for this kind ran and passed.
+			return mcpFinding{name: s.Name, note: s.Name + ": registered and authenticated" + attachmentCaveat}
+		}
+		// Not a gap and not a pass. Registration is real evidence; it is just
+		// not evidence of health, and saying so is the whole point.
+		return mcpFinding{name: s.Name,
+			note: s.Name + ": registered; no health probe declared, so working order is unverified" + attachmentCaveat}
+	case probeUnknown:
+		// Say WHY this is unanswerable, because the usual cause is fixable and
+		// invisible: the probe runs through `op run`, exactly as the gateway
+		// will, so a locked 1Password vault stops it. That is the same thing
+		// that would stop the server itself — which is the point of probing
+		// this way — but a bare "could not run" sends people hunting the wrong
+		// problem.
+		//
+		// Match the BASE NAME exactly. A suffix test here would tell the owner
+		// of `hadoop` or `develop` to go unlock a vault their probe never
+		// touches, which is its own small lie.
+		hint := ""
+		if len(s.Probe) > 0 && filepath.Base(s.Probe[0]) == "op" {
+			hint = "; it runs through 1Password (`op run`), so unlock your vault and re-run"
+		}
+		// The three unanswerable causes are genuinely different, and "did not
+		// answer in time" is false for two of them: a probe binary that does
+		// not exist answered instantly, it just is not there.
+		return mcpFinding{name: s.Name, unknown: true,
+			note: s.Name + ": registered; " + probeUnknownReason(o) + hint}
+	}
+
+	// Registered, resolvable, (if remote) authenticated, and its own probe
+	// passes. Whether a running session has the server ATTACHED is still not
+	// checkable from here, so the note says exactly that rather than claiming
+	// either way.
+	return mcpFinding{name: s.Name, note: s.Name + ": registered and answering" + attachmentCaveat}
+}
+
+// probeResult is what a declared health probe established, kept separate from
+// the finding vocabulary so "the pack declared no probe" can never be silently
+// folded into "the probe passed".
+type probeResult int
+
+const (
+	probeNotDeclared probeResult = iota
+	probePassed
+	probeFailed
+	probeUnknown
+)
+
+// probeUnknownReason names WHICH way a probe failed to answer. Collapsing the
+// three into one sentence sends a reader looking for a timeout that never
+// happened.
+func probeUnknownReason(o execOutcome) string {
+	switch {
+	case o.notFound:
+		return "its health probe command was not found"
+	case o.denied:
+		return "its health probe was refused by the system"
+	default:
+		return "its health probe did not answer in time"
+	}
+}
+
+// runProbe executes the pack-declared probe argv, bounded like every other
+// check here. A probe is a READ-ONLY question a server answers about itself
+// (`gog auth doctor`, a `--version`, a status subcommand); pix neither
+// interprets its output nor cares what it prints, only whether it exits clean.
+// That keeps the contract something a pack author can satisfy without pix
+// knowing anything about their vendor.
+func (p MCPProbe) runProbe(ctx context.Context, s MCPServer) (probeResult, execOutcome) {
+	if len(s.Probe) == 0 {
+		return probeNotDeclared, execOutcome{}
+	}
+	o := runBounded(ctx, s.Probe[0], s.Probe[1:]...)
+	switch {
+	case o.notFound || o.timedOut || o.denied:
+		return probeUnknown, o
+	case o.failed:
+		return probeFailed, o
+	}
+	return probePassed, o
 }
 
 // attachmentCaveat is the one phrase every registered server's note carries:

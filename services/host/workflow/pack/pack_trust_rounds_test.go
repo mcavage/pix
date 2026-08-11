@@ -7,47 +7,20 @@ import (
 	"os"
 	"path/filepath"
 	"pix/host/packinfo"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 
 	"pix/host/config"
-	"pix/host/hostenv"
-	"pix/host/sys/systest"
 )
 
-// --- from pack_v2_trust_round2_test.go ---
-// localMCPEnv returns a hostenv.Env whose `pix-host mcp --list` reports the
-// given names as LOCAL stdio servers (every other command pretends to
-// succeed, like fakeGitEnv).
-func localMCPEnv(names ...string) hostenv.Env {
-	list := strings.Join(names, "\n")
-	// HostBinary is wired here rather than by reassigning a package var: the env
-	// is the seam, and LocalMCPClassifier reads it off the env now.
-	return hostenv.Env{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
-		if len(args) >= 2 && args[0] == "mcp" && args[1] == "--list" {
-			return list, nil
-		}
-		return "", nil
-	}}, HostBinary: func() (string, error) { return "pix-host", nil }}
-}
-
-// pinLocalMCP pins the local-vs-gateway partition for the duration of a test:
-// launcher.FindHostBinary resolves, and PackLocalMCP classifies exactly the given
-// names as local. Restored on cleanup.
-func pinLocalMCP(t *testing.T, names ...string) {
-	t.Helper()
-	prevClassifier := PackLocalMCP
-	set := map[string]bool{}
-	for _, n := range names {
-		set[n] = true
-	}
-	PackLocalMCP = func() func(string) bool {
-		return func(n string) bool { return set[n] }
-	}
-	t.Cleanup(func() { PackLocalMCP = prevClassifier })
-}
+// localMCPEnv and pinLocalMCP are GONE with the local-vs-gateway probe they
+// wired. A pack's MCP servers are classified by the TRANSPORT its manifest
+// declares (command / image / manifest / url), so there is no ambient host
+// question left to fake: every test below states the transport in the pack it
+// writes, and fakeGitEnv is the only env any of them needs.
 
 // --- A: activation provenance in HOST state ----------------------------------
 
@@ -67,7 +40,7 @@ func TestPackUse_SamePackLockForgeryCannotDeleteUserConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.AddMCP(config.GWServerName)
+	cfg.AddMCP(usersOwnMCP)
 	if err := cfg.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +55,7 @@ func TestPackUse_SamePackLockForgeryCannotDeleteUserConfig(t *testing.T) {
 
 	// Simulate the pull-forgery: the ACTIVE pack's lock now claims the user's
 	// own entry as this pack's contribution.
-	forged := "mcp = [\"gog\"]\n"
+	forged := "mcp = [\"" + usersOwnMCP + "\"]\n"
 	if err := os.WriteFile(PackLockPath(root), []byte(forged), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +67,7 @@ func TestPackUse_SamePackLockForgeryCannotDeleteUserConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(cfg2.MCP, config.GWServerName) {
+	if !slices.Contains(cfg2.MCP, usersOwnMCP) {
 		t.Fatalf("CRITICAL: same-pack reactivation honored a forged pack.lock; mcp=%v", cfg2.MCP)
 	}
 
@@ -108,7 +81,7 @@ func TestPackUse_SamePackLockForgeryCannotDeleteUserConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(cfg3.MCP, config.GWServerName) {
+	if !slices.Contains(cfg3.MCP, usersOwnMCP) {
 		t.Fatalf("CRITICAL: switch-away honored a forged pack.lock; mcp=%v", cfg3.MCP)
 	}
 }
@@ -231,7 +204,7 @@ func TestComputeHostBoM_InertBinNeverInSurface(t *testing.T) {
 	inert := packinfo.Manifest{Name: "w", Schema: 1,
 		Proxies: []packinfo.PackProxy{{Name: "w", Host: true}},
 		Bins:    []packinfo.Bin{{Name: "fm", Path: "bin/fm", SHA: "aaaa", Host: false}}}
-	b := ComputeHostBoM(&packinfo.Info{Root: root, Manifest: inert}, "", nil)
+	b := ComputeHostBoM(&packinfo.Info{Root: root, Manifest: inert})
 	if len(b.Bins) != 0 {
 		t.Fatalf("a host=false [[bin]] must never enter the BoM, got %+v", b.Bins)
 	}
@@ -241,7 +214,7 @@ func TestComputeHostBoM_InertBinNeverInSurface(t *testing.T) {
 	}
 	flipped := inert
 	flipped.Bins = []packinfo.Bin{{Name: "fm", Path: "bin/fm", SHA: "aaaa", Host: true}}
-	b2 := ComputeHostBoM(&packinfo.Info{Root: root, Manifest: flipped}, "", nil)
+	b2 := ComputeHostBoM(&packinfo.Info{Root: root, Manifest: flipped})
 	if len(b2.Bins) != 1 {
 		t.Fatalf("a host=true [[bin]] must enter the BoM, got %+v", b2.Bins)
 	}
@@ -255,44 +228,89 @@ func TestComputeHostBoM_InertBinNeverInSurface(t *testing.T) {
 	// A pack whose ONLY facet is an inert bin is Tier-0 outright.
 	onlyInert := packinfo.Manifest{Name: "w", Schema: 1,
 		Bins: []packinfo.Bin{{Name: "fm", Path: "bin/fm", SHA: "aaaa", Host: false}}}
-	if ComputeHostBoM(&packinfo.Info{Root: root, Manifest: onlyInert}, "", nil).Tier1() {
+	if ComputeHostBoM(&packinfo.Info{Root: root, Manifest: onlyInert}).Tier1() {
 		t.Error("an inert (host=false) [[bin]] alone must not raise the tier")
 	}
 }
 
 // --- C: MCP integration trust classification ----------------------------------
 
-// TestComputeHostBoM_RemoteMCPReferenceRequiresConsent: the local-vs-gateway partition
-// decides the tier — a name NOT in the local set (a remote gateway-catalog
-// server, or gog, which the bridge never lists) is reference-only. An explicit
-// pack-selected URL still requires consent because tools can send conversation
-// data there; a name the host serves locally is Tier-1. An UNKNOWN partition
-// (pix-host unresolved / probe failed) now FAILS CLOSED (round-3 #3):
-// every non-gog name classifies as host-exec so the gate fires — the name
-// still lands in cfg.MCP and attaches via --mcp, so an already-registered
-// local server would otherwise run its host command ungated.
-func TestComputeHostBoM_RemoteMCPReferenceRequiresConsent(t *testing.T) {
-	p := &packinfo.Info{Root: "/p", Manifest: packinfo.Manifest{
+// TestComputeHostBoM_TransportDecidesHostExecClassification: the DECLARED
+// TRANSPORT decides which host-exec surface an MCP integration contributes, and
+// every one of the four is Tier-1 — there is no reference-only MCP left to be
+// wrong about. `command` is a host binary spawned over stdio, so the reviewed
+// argv is the bare command plus the pack's LITERAL args (never a PATH-resolved
+// path, which is a property of this machine and not of what you consent to);
+// `image`/`manifest` are containers the gateway runs; `url` still requires
+// consent because tools can send conversation data to a pack-selected third
+// party.
+//
+// This replaces the old local-vs-gateway probe, whose answer could change
+// without the pack changing — so every caller had to carry a fail-closed guess
+// for the case where the probe could not answer at all.
+func TestComputeHostBoM_TransportDecidesHostExecClassification(t *testing.T) {
+	remote := &packinfo.Info{Root: "/p", Manifest: packinfo.Manifest{
 		Name:         "personal",
 		Integrations: []packinfo.Integration{{Name: "Docs", MCP: "docs", URL: "https://docs.example.test/mcp"}},
 	}}
-	resolver := func() (string, error) { return "pix-host", nil }
-	remoteOnly := LocalMCPClassifier(localMCPEnv("fastmail"), resolver)
-	if b := ComputeHostBoM(p, "", remoteOnly); !b.Tier1() || len(b.RemoteMCP) != 1 || len(b.MCP) != 0 {
-		t.Errorf("an explicit remote endpoint must require consent, got %+v", b)
+	if b := ComputeHostBoM(remote); !b.Tier1() || len(b.RemoteMCP) != 1 || len(b.MCP) != 0 || len(b.Containers) != 0 {
+		t.Errorf("an explicit remote endpoint must require consent as a remote, got %+v", b)
 	}
-	localRef := &packinfo.Info{Root: "/p", Manifest: packinfo.Manifest{
-		Name: "personal", Integrations: []packinfo.Integration{{Name: "Notion", MCP: "notion"}},
+	command := &packinfo.Info{Root: "/p", Manifest: packinfo.Manifest{
+		Name: "personal", Integrations: []packinfo.Integration{
+			{Name: "Notes", MCP: "notes", Command: "notes-mcp", Args: []string{"--readonly", "mcp"}},
+		},
 	}}
-	unknown := LocalMCPClassifier(hostenv.Env{System: &systest.Fake{}}, nil)
-	if b := ComputeHostBoM(localRef, "", unknown); !b.Tier1() {
-		t.Errorf("an unknown local partition must FAIL CLOSED as host-exec (round-3 #3), got %+v", b)
+	if b := ComputeHostBoM(command); !b.Tier1() || len(b.MCP) != 1 || len(b.RemoteMCP) != 0 {
+		t.Errorf("a host command MCP must be Tier-1 host-exec, got %+v", b)
+	} else if got := strings.Join(b.MCP[0].Argv, " "); got != "notes-mcp --readonly mcp" {
+		t.Errorf("reviewed argv = %q, want the bare command plus its declared literal args", got)
 	}
-	local := LocalMCPClassifier(localMCPEnv("notion"), resolver)
-	if b := ComputeHostBoM(localRef, "", local); !b.Tier1() || len(b.MCP) != 1 {
-		t.Errorf("a LOCAL stdio MCP command must be Tier-1, got %+v", b)
-	} else if got := strings.Join(b.MCP[0].Argv, " "); got != "pix-host mcp notion" {
-		t.Errorf("local argv = %q", got)
+	container := &packinfo.Info{Root: "/p", Manifest: packinfo.Manifest{
+		Name: "personal", Integrations: []packinfo.Integration{
+			{Name: "HR", MCP: "hr", Image: "hr-mcp:1"},
+			{Name: "Meet", MCP: "meet", Manifest: "https://example.test/server.json"},
+		},
+	}}
+	if b := ComputeHostBoM(container); !b.Tier1() || len(b.Containers) != 2 || len(b.MCP) != 0 {
+		t.Errorf("image/manifest servers must disclose as containers, got %+v", b)
+	}
+}
+
+// TestComputeHostBoM_IsAPureFunctionOfTheManifest is the invariant that
+// REPLACED the fail-closed local-MCP guess: the BoM asks the host nothing, so
+// there is no "unknown classification" state to fail closed on. The same
+// manifest must produce the same bill of materials — and the same fingerprint —
+// on every machine and at every moment, which is what makes an acceptance
+// recorded on one day still valid on the next.
+func TestComputeHostBoM_IsAPureFunctionOfTheManifest(t *testing.T) {
+	root := t.TempDir()
+	p := &packinfo.Info{Root: root, Manifest: packinfo.Manifest{Name: "p", Integrations: []packinfo.Integration{
+		{Name: "N", MCP: "notes", Command: "notes-mcp", Args: []string{"mcp"}, Env: "NOTES_TOKEN"},
+		{Name: "D", MCP: "docs", URL: "https://docs.example.test/mcp"},
+	}}}
+	first, second := ComputeHostBoM(p), ComputeHostBoM(p)
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("ComputeHostBoM is not deterministic:\n%+v\n%+v", first, second)
+	}
+	fp1, _, err := ComputeHostExecFingerprint(root, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp2, _, err := ComputeHostExecFingerprint(root, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fp1 != fp2 {
+		t.Errorf("the same manifest must fingerprint identically, got %s and %s", fp1, fp2)
+	}
+	// A declared MCP server can never be Tier-0, so the gate cannot be skipped
+	// for one: the non-interactive gate still fails closed without --yes.
+	if !first.Tier1() {
+		t.Fatal("a pack declaring MCP servers must be Tier-1")
+	}
+	if err := packTrustGate(strings.NewReader(""), io.Discard, false, false, "p", first); err == nil {
+		t.Error("non-TTY without --yes must fail closed for a pack with host-exec MCP")
 	}
 }
 
@@ -301,13 +319,12 @@ func TestComputeHostBoM_RemoteMCPReferenceRequiresConsent(t *testing.T) {
 // the in-process test can cross the same gate without an os.Exit.
 func TestPackUse_RemoteMCPReferenceRequiresYes(t *testing.T) {
 	dir := isolatePackHost(t)
-	pinLocalMCP(t, "fastmail") // notion is NOT local
 	root := filepath.Join(dir, "pack")
 	mustWritePack(t, root, packinfo.Manifest{Name: "personal", Schema: 1,
 		Integrations: []packinfo.Integration{{Name: "Docs", MCP: "docs", URL: "https://docs.example.test/mcp"}}})
 
 	var out bytes.Buffer
-	RunPackUse(localMCPEnv("fastmail"), &out, []string{"--yes", root}, registerOK)
+	RunPackUse(fakeGitEnv(nil), &out, []string{"--yes", root}, registerOK)
 	if !strings.Contains(out.String(), "Remote MCP:") {
 		t.Errorf("the consent screen must disclose the endpoint, got:\n%s", out.String())
 	}
@@ -320,28 +337,35 @@ func TestPackUse_RemoteMCPReferenceRequiresYes(t *testing.T) {
 	}
 }
 
-// TestPackUse_GogReferenceStaysTier0: gog is host-provided (the launcher
-// builds its hardened argv; the pack contributes only the name) and is never
-// in the local stdio list — a gog reference is Tier-0 (packs.md §9 names it
-// as the canonical reference-only case).
-func TestPackUse_GogReferenceStaysTier0(t *testing.T) {
+// TestPackUse_ReferenceOnlyIntegrationStaysTier0 is what remains of the old
+// "a gog reference stays Tier-0" case: the vendor special case is gone (a pack
+// that wants that server declares a transport like any other, and every
+// transport is Tier-1), but the Tier-0 half of the gate still needs an
+// end-to-end witness. An integration that names NO mcp server contributes only
+// a credential NAME, which is solicited rather than executed — so it adopts
+// silently on a non-TTY with no --yes.
+func TestPackUse_ReferenceOnlyIntegrationStaysTier0(t *testing.T) {
 	dir := isolatePackHost(t)
-	pinLocalMCP(t) // empty local set — gog is never listed
 	root := filepath.Join(dir, "pack")
 	mustWritePack(t, root, packinfo.Manifest{Name: "personal", Schema: 1,
-		Integrations: []packinfo.Integration{{Name: "gog", MCP: config.GWServerName, Env: "GOG_KEYRING"}}})
+		Integrations: []packinfo.Integration{{Name: "Vendor CLI", Env: "VENDOR_TOKEN"}}})
 
 	var out bytes.Buffer
-	RunPackUse(localMCPEnv(), &out, []string{root}, registerOK) // no --yes, non-TTY
+	if err := RunPackUse(fakeGitEnv(nil), &out, []string{root}, registerOK); err != nil {
+		t.Fatalf("a credential-only integration must adopt silently: %v\n%s", err, out.String())
+	}
 	if strings.Contains(out.String(), "adds these integrations to Pix") {
-		t.Errorf("a gog reference must adopt silently (Tier-0), got:\n%s", out.String())
+		t.Errorf("a credential-only integration must not render the Tier-1 screen, got:\n%s", out.String())
 	}
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(cfg.MCP, config.GWServerName) {
-		t.Errorf("gog must still attach, mcp=%v", cfg.MCP)
+	if cfg.Pack != root {
+		t.Errorf("the pack must still activate, cfg.Pack=%q", cfg.Pack)
+	}
+	if len(cfg.MCP) != 0 {
+		t.Errorf("an integration with no mcp name must register no server, mcp=%v", cfg.MCP)
 	}
 }
 
@@ -510,7 +534,6 @@ func TestPackUse_PayloadLockIsNeverAReversibilitySource(t *testing.T) {
 	}{{"local", false}, {"adopted", true}} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := isolatePackHost(t)
-			pinLocalMCP(t)
 
 			rootA := filepath.Join(dir, "a")
 			mustWritePack(t, rootA, packinfo.Manifest{Name: "a", Schema: 1})
@@ -548,50 +571,18 @@ func TestPackUse_PayloadLockIsNeverAReversibilitySource(t *testing.T) {
 	}
 }
 
-// --- #3: unknown MCP classification fails closed --------------------------------
-
-// TestLocalMCPClassifier_UnknownFailsClosed: when the local set cannot be
-// established (no probe at all, or a failing probe), a non-gog name classifies
-// as HOST-EXEC — the pack is Tier-1 and the gate fails closed on a non-TTY
-// without --yes. gog stays reference-only Tier-0.
-func TestLocalMCPClassifier_UnknownFailsClosed(t *testing.T) {
-	// No probe available at all.
-	unknown := LocalMCPClassifier(hostenv.Env{System: &systest.Fake{}}, nil)
-	if !unknown("fastmail") {
-		t.Error("unknown classification must treat a non-gog name as host-exec (fail closed)")
-	}
-	if unknown(config.GWServerName) {
-		t.Error("gog stays the reference-only Tier-0 special case even when the partition is unknown")
-	}
-	// Probe resolves but errors.
-	failEnv := hostenv.Env{System: &systest.Fake{RunFn: func(string, ...string) (string, error) { return "", fmt.Errorf("probe failed") }}}
-	resolver := func() (string, error) { return "pix-host", nil }
-	unknown2 := LocalMCPClassifier(failEnv, resolver)
-	if !unknown2("notion") {
-		t.Error("a failing `mcp --list` probe must classify a non-gog name as host-exec")
-	}
-
-	p := &packinfo.Info{Root: "/p", Manifest: packinfo.Manifest{Name: "p",
-		Integrations: []packinfo.Integration{{Name: "N", MCP: "notion"}}}}
-	b := ComputeHostBoM(p, "", unknown2)
-	if !b.Tier1() {
-		t.Fatalf("a pack whose MCP cannot be classified must be Tier-1 (gated), got %+v", b)
-	}
-	// The gate itself fails closed non-interactively without --yes.
-	if err := packTrustGate(strings.NewReader(""), io.Discard, false, false, "p", b); err == nil {
-		t.Error("non-TTY without --yes must fail closed for an unclassifiable MCP")
-	}
-	// A nil classifier (no partition available) fails closed the same way.
-	if bn := ComputeHostBoM(p, "", nil); !bn.Tier1() {
-		t.Errorf("a nil classifier must fail closed too, got %+v", bn)
-	}
-	// gog-only packs stay Tier-0 under an unknown partition.
-	pg := &packinfo.Info{Root: "/p", Manifest: packinfo.Manifest{Name: "g",
-		Integrations: []packinfo.Integration{{Name: "gog", MCP: config.GWServerName}}}}
-	if ComputeHostBoM(pg, "", unknown2).Tier1() {
-		t.Error("a gog-only reference must stay Tier-0 even when the partition is unknown")
-	}
-}
+// --- #3: classification has no unknown state left to fail closed on -------------
+//
+// TestLocalMCPClassifier_UnknownFailsClosed is GONE, and the reason is the whole
+// point of the change it guarded: the classifier it tested asked a host binary
+// at runtime which servers were "local", so the answer had an UNKNOWN state and
+// every caller had to carry a fail-closed guess for it. Classification is now a
+// pure map lookup over the manifest's declared transports, so the unknown state
+// does not exist and cannot be mis-handled. What that test actually protected —
+// "a pack contributing a host-exec MCP server is always Tier-1, and the gate
+// fails closed on a non-TTY without --yes" — is asserted directly by
+// TestComputeHostBoM_IsAPureFunctionOfTheManifest and
+// TestComputeHostBoM_TransportDecidesHostExecClassification above.
 
 // --- #4: a clear failure is an honest failure ------------------------------------
 

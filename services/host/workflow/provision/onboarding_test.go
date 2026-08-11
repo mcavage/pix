@@ -2,7 +2,6 @@ package provision
 
 import (
 	"bytes"
-	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,14 +12,36 @@ import (
 )
 
 // The onboarding half of provision, tested against REAL boundaries like the rest
-// of this package: a real config file on disk, a real `pix-host mcp --list`
-// fixture for the locally-known MCP probe, and the package's own composition
-// (HostBinary/Register/VerifyCatalogMCPReady) rather than a Deps struct built for
-// the test. Nothing here stubs an answer.
+// of this package: a real config file on disk, a real pack.toml the allowlist is
+// read from, and the package's own composition (Register/VerifyCatalogMCPReady)
+// rather than a Deps struct built for the test. Nothing here stubs an answer.
+//
+// The allowlist has exactly two members now — a name the ACTIVE PACK declares
+// and a curated catalog endpoint pix knows the URL for — so there is no local
+// stdio probe to fake and no vendor with a standing exemption.
 
-// noHostBinary makes mcp.LocalMCPNames report the local set as UNKNOWN, so
-// validation fails closed on any non-gog/non-catalog mcp name.
-func noHostBinary() (string, error) { return "", fmt.Errorf("no host binary in test") }
+// declaredPack writes a real pack declaring one command-transport MCP server,
+// points cfg.Pack at it, and returns the declared server name. It is the
+// boundary the allowlist is read through: packinfo.ActiveServerMCP loads this
+// very file.
+func declaredPack(t *testing.T, mcpName string) string {
+	t.Helper()
+	root := t.TempDir()
+	manifest := "name = \"work\"\nschema = 1\n\n[[integrations]]\nname = \"Notes\"\nmcp = \"" +
+		mcpName + "\"\ncommand = \"notes-mcp\"\n"
+	if err := os.WriteFile(filepath.Join(root, "pack.toml"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Pack = root
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	return mcpName
+}
 
 // writeProposal writes <ws>/.pix/onboarding.json against a temp config file.
 func writeProposal(t *testing.T, ws, body string) string {
@@ -38,11 +59,12 @@ func writeProposal(t *testing.T, ws, body string) string {
 }
 
 func TestValidateOnboarding_Allowlist(t *testing.T) {
+	declared := map[string]config.MCPServer{"notes": {Command: "notes-mcp"}}
 	for i, r := range []*OnboardingResult{
-		{Version: 1, MCP: []string{config.GWServerName}},
+		{Version: 1, MCP: []string{"notes"}},
 		{Version: 1, MCP: []string{"notion", "atlassian", "granola"}},
 	} {
-		if err := validateOnboarding(r, realEnv(), noHostBinary); err != nil {
+		if err := validateOnboarding(r, declared); err != nil {
 			t.Errorf("ok[%d] rejected: %v", i, err)
 		}
 	}
@@ -50,31 +72,92 @@ func TestValidateOnboarding_Allowlist(t *testing.T) {
 		"bad version": {Version: 2},
 		"unknown mcp": {Version: 1, MCP: []string{"evil-server"}},
 		// "linear" is the drift reading mcp.McpCatalogNames directly removes: it
-		// looks like a plausible catalog name, but `pix mcp bundle` cannot
-		// register it, so accepting it would persist a server that never comes up.
+		// looks like a plausible catalog name, but pix knows no endpoint for it,
+		// so accepting it would persist a server that never comes up.
 		"unshipped catalog-looking mcp": {Version: 1, MCP: []string{"linear"}},
 		"model whitespace":              {Version: 1, OllamaBridgeModel: "bad model"},
 	}
 	for name, r := range bad {
-		if err := validateOnboarding(r, realEnv(), noHostBinary); err == nil {
+		if err := validateOnboarding(r, declared); err == nil {
 			t.Errorf("%s: expected rejection, got nil", name)
 		}
 	}
 }
 
-// A locally-known host server is accepted only because a REAL `pix-host mcp
-// --list` said so: the fixture below is the boundary, so the fail-closed rule
-// above and the accept rule here are one code path with a different world.
-func TestValidateOnboarding_LocallyKnownServerComesFromTheRealProbe(t *testing.T) {
-	dir := binDir(t)
-	fixtureBin(t, "pix-host", `[ "$1" = "mcp" ] && echo slack`)
-	resolver := func() (string, error) { return filepath.Join(dir, "pix-host"), nil }
+// The pack declaration IS the allowlist, read from a REAL pack.toml on disk
+// through the same ReconcileOnboarding path production uses: a name the active
+// pack declares is accepted, and one it does not is refused with a message
+// naming the two ways to fix it. This replaces the old `pix-host mcp --list`
+// probe — nothing is asked of a subprocess any more, because the answer is pure
+// manifest data.
+func TestValidateOnboarding_PackDeclarationIsTheAllowlist(t *testing.T) {
+	ws := t.TempDir()
+	name := "notes"
+	writeProposal(t, ws, `{"version":1,"mcp":["`+name+`"]}`)
+	declaredPack(t, name)
 
-	if err := validateOnboarding(&OnboardingResult{Version: 1, MCP: []string{"slack"}}, realEnv(), resolver); err != nil {
-		t.Errorf("a server the local host binary lists must be accepted: %v", err)
+	var out bytes.Buffer
+	ReconcileOnboarding(ws, realEnv(), strings.NewReader(""), &out, true, false)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := validateOnboarding(&OnboardingResult{Version: 1, MCP: []string{"warehouse"}}, realEnv(), resolver); err == nil {
-		t.Error("a server the local host binary does NOT list must be rejected")
+	if !slices.Contains(cfg.MCP, name) {
+		t.Errorf("a server the active pack declares must be accepted; mcp=%v out:\n%s", cfg.MCP, out.String())
+	}
+
+	// The same host, a name the pack does NOT declare: refused, nothing applied.
+	ws2 := t.TempDir()
+	path := writeProposal(t, ws2, `{"version":1,"mcp":["warehouse"]}`)
+	declaredPack(t, name)
+	out.Reset()
+	ReconcileOnboarding(ws2, realEnv(), strings.NewReader(""), &out, true, false)
+	if !strings.Contains(out.String(), "not declared by the active pack") {
+		t.Errorf("refusal must say the pack does not declare it, got:\n%s", out.String())
+	}
+	if _, serr := os.Stat(path); serr != nil {
+		t.Errorf("a refused proposal must be left for review: %v", serr)
+	}
+	after, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(after.MCP, "warehouse") {
+		t.Errorf("an undeclared name must never be persisted: %v", after.MCP)
+	}
+}
+
+// validateOnboardingShape is the PRE-ADOPTION half, and the reason it exists at
+// all: `pix setup --pack X --mcp Y` must validate its own flags before X is
+// adopted, and at that moment no pack has declared anything. Checking
+// admissibility there would reject exactly the case setup is for. So the shape
+// check accepts a syntactically valid undeclared name, and the admissibility
+// check (validateOnboarding, run once a pack is present) is what refuses it.
+func TestValidateOnboardingShape_PreAdoptionAcceptsUndeclaredNames(t *testing.T) {
+	r := &OnboardingResult{Version: 1, MCP: []string{"not-yet-declared"}}
+	if err := validateOnboardingShape(r); err != nil {
+		t.Errorf("shape validation must not require a declaration: %v", err)
+	}
+	if err := ValidateSetupSemantics(Opts{Packs: []string{"/some/pack"}, Mcp: []string{"not-yet-declared"}}); err != nil {
+		t.Errorf("`pix setup --pack ... --mcp <undeclared>` must pass pre-adoption validation: %v", err)
+	}
+	// But it is still SHAPE: version and syntax are refused here, not later.
+	for name, bad := range map[string]*OnboardingResult{
+		"bad version": {Version: 2},
+		"empty name":  {Version: 1, MCP: []string{"  "}},
+		"whitespace":  {Version: 1, MCP: []string{"two names"}},
+	} {
+		if err := validateOnboardingShape(bad); err == nil {
+			t.Errorf("%s: expected a shape rejection", name)
+		}
+	}
+	// And admissibility still bites once a pack is present to answer.
+	if err := validateOnboarding(r, map[string]config.MCPServer{"other": {Command: "x"}}); err == nil {
+		t.Error("post-adoption validation must refuse a name no pack declares")
+	}
+	// --with without --pack is a usage error, not a shape one.
+	if err := ValidateSetupSemantics(Opts{WithSetup: []string{"account"}}); err == nil {
+		t.Error("--with without --pack must be refused")
 	}
 }
 
@@ -83,18 +166,13 @@ func TestValidateOnboarding_LocallyKnownServerComesFromTheRealProbe(t *testing.T
 func TestApplyOnboarding_FieldsThenIdempotent(t *testing.T) {
 	cfg := &config.Config{Services: []string{"memory"}}
 	r := &OnboardingResult{
-		Version: 1, MCP: []string{config.GWServerName, "notion"},
+		Version: 1, MCP: []string{"notes", "notion"},
 		OllamaBridgeModel: "qwen3.5:9b", MemoryWatcherModel: "qwen3.5:9b",
 	}
 	if first := applyOnboarding(r, cfg); len(first) == 0 {
 		t.Fatal("first apply made no changes")
 	}
-	// Google Workspace authorization needs a browser, so applying a proposal
-	// must never set google_workspace_account (that write is manual).
-	if cfg.GogAccount != "" {
-		t.Errorf("onboarding must never set google_workspace_account, got %q", cfg.GogAccount)
-	}
-	if !slices.Contains(cfg.MCP, config.GWServerName) || !slices.Contains(cfg.MCP, "notion") {
+	if !slices.Contains(cfg.MCP, "notes") || !slices.Contains(cfg.MCP, "notion") {
 		t.Errorf("mcp = %v", cfg.MCP)
 	}
 	if !slices.Contains(cfg.Services, "memory") {
@@ -113,9 +191,23 @@ func TestApplyOnboarding_FieldsThenIdempotent(t *testing.T) {
 // command layer supplies, unwired here).
 func TestReconcileOnboarding_AppliesFromFile(t *testing.T) {
 	ws := t.TempDir()
-	// google_workspace_account is a field OnboardingResult deliberately does not
-	// have: the typed unmarshal must drop it, never apply it.
-	path := writeProposal(t, ws, `{"version":1,"google_workspace_account":"me@x.com","mcp":["`+config.GWServerName+`"]}`)
+	// `pack` is a field OnboardingResult deliberately does not have: an
+	// in-sandbox agent must not be able to propose adopting a pack (that is a
+	// Tier-1 trust decision), so the typed unmarshal must drop it silently.
+	path := writeProposal(t, ws, `{"version":1,"pack":"/evil/pack","packs":["/evil/pack"],"mcp":["notes"]}`)
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "pack.toml"),
+		[]byte("name = \"work\"\nschema = 1\n\n[[integrations]]\nname = \"Notes\"\nmcp = \"notes\"\ncommand = \"notes-mcp\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	seed, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed.Pack = root
+	if err := seed.Save(); err != nil {
+		t.Fatal(err)
+	}
 
 	var out bytes.Buffer
 	ReconcileOnboarding(ws, realEnv(), strings.NewReader(""), &out, true, false)
@@ -127,10 +219,10 @@ func TestReconcileOnboarding_AppliesFromFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.GogAccount != "" {
-		t.Errorf("onboarding must never apply google_workspace_account from the file, got %q", cfg.GogAccount)
+	if cfg.Pack != root {
+		t.Errorf("onboarding must never repoint the active pack, got %q", cfg.Pack)
 	}
-	if !slices.Contains(cfg.MCP, config.GWServerName) {
+	if !slices.Contains(cfg.MCP, "notes") {
 		t.Errorf("config not applied: mcp=%v", cfg.MCP)
 	}
 	if !strings.Contains(out.String(), "mcp add skipped") {
@@ -145,14 +237,18 @@ func TestReconcileOnboarding_LeavesFileWhenNotApplied(t *testing.T) {
 	for _, tc := range []struct {
 		name, body string
 		assumeYes  bool
+		declare    bool
 		want       string
 	}{
-		{"no consent", `{"version":1,"mcp":["` + config.GWServerName + `"]}`, false, "Not a terminal"},
-		{"refused name", `{"version":1,"mcp":["evil-server"]}`, true, "refusing onboarding proposal"},
+		{"no consent", `{"version":1,"mcp":["notes"]}`, false, true, "Not a terminal"},
+		{"refused name", `{"version":1,"mcp":["evil-server"]}`, true, false, "refusing onboarding proposal"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ws := t.TempDir()
 			path := writeProposal(t, ws, tc.body)
+			if tc.declare {
+				declaredPack(t, "notes")
+			}
 			var out bytes.Buffer
 			ReconcileOnboarding(ws, realEnv(), strings.NewReader(""), &out, tc.assumeYes, false)
 			if _, err := os.Stat(path); err != nil {
@@ -169,17 +265,17 @@ func TestReconcileOnboarding_LeavesFileWhenNotApplied(t *testing.T) {
 }
 
 func TestParseSetupArgs(t *testing.T) {
-	o, err := ParseSetupArgs([]string{"--mcp", config.GWServerName, "--mcp=notion", "--model", "m",
+	o, err := ParseSetupArgs([]string{"--mcp", "notes", "--mcp=notion", "--model", "m",
 		"--pack", "one", "--pack=two", "--with", "optional", "--pull-models", "--yes",
-		// accepted and discarded: kong still declares them, nothing reads them
-		"--models=a,b", "--google-workspace", "--credentials", "/tmp/x.json"})
+		// accepted and discarded: kong still declares it, nothing reads it
+		"--models=a,b"})
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 	if o.Model != "m" || !o.AssumeYes || !o.PullModels {
 		t.Errorf("parsed = %+v", o)
 	}
-	if got := strings.Join(o.Mcp, ","); got != config.GWServerName+",notion" {
+	if got := strings.Join(o.Mcp, ","); got != "notes,notion" {
 		t.Errorf("mcp = %q", got)
 	}
 	if got := strings.Join(o.Packs, ","); got != "one,two" {
@@ -190,6 +286,14 @@ func TestParseSetupArgs(t *testing.T) {
 	}
 	if _, err := ParseSetupArgs([]string{"--model"}); err == nil {
 		t.Error("a value flag without its value should error")
+	}
+	// The retired vendor flags must now be REJECTED, not silently swallowed.
+	// They named a Google Workspace transaction that no longer exists, and
+	// quietly accepting them would let a stale script look like it worked.
+	for _, retired := range []string{"--google-workspace", "--credentials"} {
+		if _, err := ParseSetupArgs([]string{retired}); err == nil {
+			t.Errorf("%s is retired and must be rejected, not accepted-and-discarded", retired)
+		}
 	}
 	if _, err := ParseSetupArgs([]string{"--bogus"}); err == nil {
 		t.Error("an unknown flag should error")

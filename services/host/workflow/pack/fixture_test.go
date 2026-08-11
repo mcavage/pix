@@ -11,13 +11,32 @@ import (
 	"pix/host/hostenv"
 )
 
+// usersOwnMCP is a server name the USER configured by hand, which no pack in
+// these tests declares. It stands in for what used to be spelled
+// config.GWServerName: pix special-cases no vendor any more, so the only thing
+// these tests need is a name whose provenance is "the user, not a pack".
+const usersOwnMCP = "users-own-mcp"
+
 // registerOK is the RegisterFn for tests that are not about registration.
 // Activating a pack registers its MCP servers through an injected function
 // now, so a test that does not care says so in one word instead of faking an
 // sbx gateway.
-func registerOK(*config.Config, hostenv.Env, io.Writer, []string,
-	func() (string, error), map[string]config.MCPContainer) error {
+func registerOK(*config.Config, hostenv.Env, io.Writer, []string, map[string]config.MCPServer) error {
 	return nil
+}
+
+// recordRegistrations returns a RegisterFn that captures what activation asked
+// it to register — the seam itself, which is the only honest witness now that
+// registration is injected rather than probed out of a fake env.
+func recordRegistrations(names *[]string, servers *map[string]config.MCPServer) RegisterFn {
+	return func(_ *config.Config, _ hostenv.Env, _ io.Writer, requested []string,
+		declared map[string]config.MCPServer) error {
+		*names = append(*names, requested...)
+		if servers != nil {
+			*servers = declared
+		}
+		return nil
+	}
 }
 
 // readFile is this package's own copy of a three-line test read. cmd/pix has

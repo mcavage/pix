@@ -53,7 +53,7 @@ func Resolve(cfg *config.Config, override string) State {
 // two halves of the job are owned by different layers: workflow/pack verifies
 // the trust surface and produces this; workflow/launch folds it into a launch.
 // Neither may import the other, so the thing they exchange has a lower home —
-// the same inversion `mcp.Credentials` and `config.MCPContainer` already use.
+// the same inversion `mcp.Credentials` and `config.MCPServer` already use.
 type LaunchContribution struct {
 	Root     string
 	Skills   []string

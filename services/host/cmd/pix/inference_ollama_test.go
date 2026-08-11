@@ -13,7 +13,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -174,14 +173,11 @@ func TestOllamaLocalSkipsRungsThisMachineCannotRun(t *testing.T) {
 
 // fakeProber records every probe call and can fail chosen tags.
 type fakeProber struct {
-	mu       sync.Mutex
-	order    []string
-	ctx      map[string]int
-	fail     map[string]error
-	delay    time.Duration
-	inFlight int32
-	maxLocal int32
-	localSet map[string]bool
+	mu    sync.Mutex
+	order []string
+	ctx   map[string]int
+	fail  map[string]error
+	delay time.Duration
 }
 
 func (f *fakeProber) probe(endpoint, model string, numCtx int, timeout time.Duration) error {
@@ -192,16 +188,6 @@ func (f *fakeProber) probe(endpoint, model string, numCtx int, timeout time.Dura
 	}
 	f.ctx[model] = numCtx
 	f.mu.Unlock()
-	if f.localSet[model] {
-		n := atomic.AddInt32(&f.inFlight, 1)
-		for {
-			cur := atomic.LoadInt32(&f.maxLocal)
-			if n <= cur || atomic.CompareAndSwapInt32(&f.maxLocal, cur, n) {
-				break
-			}
-		}
-		defer atomic.AddInt32(&f.inFlight, -1)
-	}
 	if f.delay > 0 {
 		time.Sleep(f.delay)
 	}
@@ -301,6 +287,156 @@ func TestVerifyOllamaInferenceUsesResolvedEndpoint(t *testing.T) {
 	}
 }
 
+// probeSeam is the fixture behind TestLocalOllamaProbesAreSerialized. It
+// ESTABLISHES concurrency instead of sampling it.
+//
+// The fixture it replaces slept 30ms inside every probe and then asked whether
+// two cloud sleeps had happened to intersect. That is a scheduling bet, not an
+// assertion: on a loaded CI box the second cloud goroutine can easily not run
+// until the first has already returned, and the test failed for a reason that
+// had nothing to do with the code under test (it flaked on #80 and #81). The
+// same fixture also raced its own high-water mark with a load-then-store, which
+// could drop a real overlap on the floor.
+//
+// So: no sleeps and no elapsed time here. Cloud probes RENDEZVOUS — each blocks
+// inside the seam until every cloud probe is also inside it — which makes "they
+// overlapped" a fact no scheduler can withhold. Local probes are recorded as an
+// ordered enter/exit log under one mutex, so serialization is read off the
+// record rather than inferred from a clock.
+type probeSeam struct {
+	localTags  map[string]bool
+	cloudWidth int
+
+	mu       sync.Mutex
+	events   []string // "enter <tag>" / "exit <tag>", local probes only
+	inFlight int
+	maxLocal int
+	partner  chan struct{} // closed the instant two local probes are in flight
+	paired   bool
+
+	cloudMu      sync.Mutex
+	cloudGate    chan struct{} // closed once cloudWidth probes are in flight
+	cloudOpen    bool
+	cloudFlight  int
+	maxCloud     int
+	cloudStalled string // set when a probe gave up waiting for its partners
+}
+
+// localPartnerWindow is how long a local probe holds the seam open waiting for
+// a second one to join it. It is a sensitivity knob, NOT a deadline: a
+// serialized implementation has no partner to find, so it always leaves on the
+// window and always passes. Shrinking it only makes a fan-out regression harder
+// to catch; it can never turn a correct run red.
+const localPartnerWindow = 10 * time.Millisecond
+
+// cloudRendezvousLimit is the safety valve for a rendezvous that cannot
+// complete — i.e. the cloud probes were dispatched one at a time. Only a
+// FAILING run ever waits this long; a correct one is released as soon as its
+// partners arrive.
+const cloudRendezvousLimit = 30 * time.Second
+
+func newProbeSeam(cloudWidth int, localTags ...string) *probeSeam {
+	s := &probeSeam{
+		localTags:  map[string]bool{},
+		cloudWidth: cloudWidth,
+		partner:    make(chan struct{}),
+		cloudGate:  make(chan struct{}),
+	}
+	for _, tag := range localTags {
+		s.localTags[tag] = true
+	}
+	return s
+}
+
+func (s *probeSeam) probe(_, model string, _ int, _ time.Duration) error {
+	if s.localTags[model] {
+		s.enterLocal(model)
+		return nil
+	}
+	s.enterCloud(model)
+	return nil
+}
+
+func (s *probeSeam) enterLocal(tag string) {
+	s.mu.Lock()
+	s.inFlight++
+	if s.inFlight > s.maxLocal {
+		s.maxLocal = s.inFlight
+	}
+	s.events = append(s.events, "enter "+tag)
+	if s.inFlight > 1 && !s.paired {
+		s.paired = true
+		close(s.partner) // a second local probe: report it now, don't wait it out
+	}
+	partner := s.partner
+	s.mu.Unlock()
+
+	select {
+	case <-partner:
+	case <-time.After(localPartnerWindow):
+	}
+
+	s.mu.Lock()
+	s.inFlight--
+	s.events = append(s.events, "exit "+tag)
+	s.mu.Unlock()
+}
+
+func (s *probeSeam) enterCloud(tag string) {
+	s.cloudMu.Lock()
+	s.cloudFlight++
+	if s.cloudFlight > s.maxCloud {
+		s.maxCloud = s.cloudFlight
+	}
+	if s.cloudFlight >= s.cloudWidth && !s.cloudOpen {
+		s.cloudOpen = true
+		close(s.cloudGate)
+	}
+	gate := s.cloudGate
+	s.cloudMu.Unlock()
+
+	select {
+	case <-gate:
+	case <-time.After(cloudRendezvousLimit):
+		s.cloudMu.Lock()
+		if s.cloudStalled == "" {
+			s.cloudStalled = fmt.Sprintf("%s waited %s alone (%d of %d cloud probes ever in flight at once)",
+				tag, cloudRendezvousLimit, s.maxCloud, s.cloudWidth)
+		}
+		s.cloudMu.Unlock()
+	}
+
+	s.cloudMu.Lock()
+	s.cloudFlight--
+	s.cloudMu.Unlock()
+}
+
+// overlap returns the two high-water marks and the local enter/exit log.
+func (s *probeSeam) overlap() (local, cloud int, log []string, stalled string) {
+	s.mu.Lock()
+	local, log = s.maxLocal, append([]string(nil), s.events...)
+	s.mu.Unlock()
+	s.cloudMu.Lock()
+	cloud, stalled = s.maxCloud, s.cloudStalled
+	s.cloudMu.Unlock()
+	return local, cloud, log, stalled
+}
+
+// interleaved names the first place the local log is not strict
+// enter/exit/enter/exit, which is what serialization MEANS in the record.
+func interleaved(log []string) string {
+	for i, ev := range log {
+		want := "enter"
+		if i%2 == 1 {
+			want = "exit"
+		}
+		if !strings.HasPrefix(ev, want) {
+			return fmt.Sprintf("event %d is %q, want a %s", i, ev, want)
+		}
+	}
+	return ""
+}
+
 // TestLocalOllamaProbesAreSerialized is review blocker B1: a shared errgroup
 // across the whole binding set co-loads local weights, so a good model reports
 // a timeout it never got a turn to spend and gets un-bound.
@@ -312,28 +448,28 @@ func TestLocalOllamaProbesAreSerialized(t *testing.T) {
 		binding("ollama/glm-5.2:cloud"),
 		binding("ollama/deepseek-v4-pro:cloud"),
 	)
-	f := &fakeProber{
-		delay:    30 * time.Millisecond,
-		localSet: map[string]bool{"qwen3.5:4b": true, "qwen3.5:9b": true, "qwen3.5:27b": true},
+	seam := newProbeSeam(2, "qwen3.5:4b", "qwen3.5:9b", "qwen3.5:27b")
+	env := hostenv.Env{System: &systest.Fake{}, OllamaInference: seam.probe}
+	_, probeErr := models.VerifyOllamaInference(cfg, env, io.Discard)
+	mustNoProbeErr(t, probeErr)
+
+	maxLocal, maxCloud, log, stalled := seam.overlap()
+	if got := maxLocal; got != 1 {
+		t.Fatalf("max concurrent LOCAL probes = %d, want 1 (two resident models is a budget nobody computed): %v", got, log)
 	}
-	var cloudInFlight, maxCloud int32
-	base := f.probe
-	env := hostenv.Env{System: &systest.Fake{}, OllamaInference: func(endpoint, model string, numCtx int, timeout time.Duration) error {
-		if strings.Contains(model, "cloud") {
-			n := atomic.AddInt32(&cloudInFlight, 1)
-			if n > atomic.LoadInt32(&maxCloud) {
-				atomic.StoreInt32(&maxCloud, n)
-			}
-			defer atomic.AddInt32(&cloudInFlight, -1)
-		}
-		return base(endpoint, model, numCtx, timeout)
-	}}
-	_, _ = models.VerifyOllamaInference(cfg, env, io.Discard)
-	if got := atomic.LoadInt32(&f.maxLocal); got != 1 {
-		t.Fatalf("max concurrent LOCAL probes = %d, want 1 (two resident models is a budget nobody computed)", got)
+	if bad := interleaved(log); bad != "" {
+		t.Fatalf("the local probe log is not one-at-a-time: %s (%v)", bad, log)
 	}
-	if got := atomic.LoadInt32(&maxCloud); got < 2 {
+	if stalled != "" {
+		t.Fatalf("max concurrent CLOUD probes = %d, want >= 2 (network round trips hold no local resource): %s", maxCloud, stalled)
+	}
+	if got := maxCloud; got < 2 {
 		t.Fatalf("max concurrent CLOUD probes = %d, want >= 2 (network round trips hold no local resource)", got)
+	}
+	// Fixture rot guard: the invariant is only under test while the binding set
+	// actually splits three local rungs from two cloud models.
+	if len(log) != 6 {
+		t.Fatalf("expected 3 local probes (6 enter/exit events), got %v", log)
 	}
 }
 

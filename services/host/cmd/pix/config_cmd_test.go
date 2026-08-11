@@ -149,10 +149,10 @@ func TestConfigCmd_GetRemovedKey(t *testing.T) {
 
 func TestConfigCmd_SetAndUnset(t *testing.T) {
 	d, out, _ := configDeps(t)
-	if err := runConfigParse([]string{"config", "set", "google_workspace_account", "me@x.com"}, d); err != nil {
+	if err := runConfigParse([]string{"config", "set", "run_intent", "strategy"}, d); err != nil {
 		t.Fatalf("config set: %v", err)
 	}
-	if !strings.Contains(out.String(), `google_workspace_account = "me@x.com"`) {
+	if !strings.Contains(out.String(), `run_intent = "strategy"`) {
 		t.Errorf("set output missing new value, got:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), "# saved to "+config.Path()) {
@@ -164,20 +164,20 @@ func TestConfigCmd_SetAndUnset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.GogAccount != "me@x.com" {
-		t.Errorf("GogAccount after set = %q, want me@x.com", cfg.GogAccount)
+	if cfg.RunIntent != "strategy" {
+		t.Errorf("RunIntent after set = %q, want strategy", cfg.RunIntent)
 	}
 
 	out.Reset()
-	if err := runConfigParse([]string{"config", "unset", "google_workspace_account"}, d); err != nil {
+	if err := runConfigParse([]string{"config", "unset", "run_intent"}, d); err != nil {
 		t.Fatalf("config unset: %v", err)
 	}
 	cfg, err = config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.GogAccount != "" {
-		t.Errorf("GogAccount after unset = %q, want empty", cfg.GogAccount)
+	if cfg.RunIntent != config.DefaultRunIntent {
+		t.Errorf("RunIntent after unset = %q, want the default %q", cfg.RunIntent, config.DefaultRunIntent)
 	}
 }
 
@@ -186,7 +186,7 @@ func TestConfigCmd_SetAndUnset(t *testing.T) {
 // mapping its error to a usage (exit 2) failure is the whole job.
 func TestConfigCmd_SetArityError(t *testing.T) {
 	d, _, _ := configDeps(t)
-	err := runConfigParse([]string{"config", "set", "google_workspace_account"}, d)
+	err := runConfigParse([]string{"config", "set", "run_intent"}, d)
 	if err == nil {
 		t.Fatal("expected an arity error for set with no value")
 	}

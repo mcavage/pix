@@ -9,47 +9,40 @@ import (
 	"pix/host/workflow/provision"
 )
 
-// TestApplyConfigChange_GogAccount: set writes the value, unset clears it.
-func TestApplyConfigChange_GogAccount(t *testing.T) {
+// TestApplyConfigChange_GoogleWorkspaceAccountRetired: the per-vendor account
+// key is gone — an integration's extra environment now comes from the pack's
+// `env_keys`, resolved through op-refs.env, and core names no vendor. Both set
+// and unset must REFUSE rather than silently no-op: a caller who is told
+// nothing walks away believing they configured an account somebody reads.
+func TestApplyConfigChange_GoogleWorkspaceAccountRetired(t *testing.T) {
 	cfg := defaultCfg()
-	sum, err := provision.ApplyConfigChange(cfg, false, "google_workspace_account", []string{"me@x.com"})
-	if err != nil {
-		t.Fatal(err)
+	if _, err := provision.ApplyConfigChange(cfg, false, "google_workspace_account", []string{"me@x.com"}); err == nil {
+		t.Error("expected config set google_workspace_account to refuse (retired key)")
 	}
-	if cfg.GogAccount != "me@x.com" || !strings.Contains(sum, "me@x.com") {
-		t.Errorf("set gog_account: cfg=%q summary=%q", cfg.GogAccount, sum)
-	}
-	if _, err := provision.ApplyConfigChange(cfg, true, "google_workspace_account", nil); err != nil {
-		t.Fatal(err)
-	}
-	if cfg.GogAccount != "" {
-		t.Errorf("unset gog_account: cfg=%q, want empty", cfg.GogAccount)
-	}
-	// set with the wrong arity errors.
-	if _, err := provision.ApplyConfigChange(cfg, false, "google_workspace_account", nil); err == nil {
-		t.Error("expected an arity error for set gog_account with no value")
+	if _, err := provision.ApplyConfigChange(cfg, true, "google_workspace_account", nil); err == nil {
+		t.Error("expected config unset google_workspace_account to refuse (retired key)")
 	}
 }
 
 // TestApplyConfigChange_MCP: set adds (idempotent), unset removes.
 func TestApplyConfigChange_MCP(t *testing.T) {
 	cfg := defaultCfg()
-	if _, err := provision.ApplyConfigChange(cfg, false, "mcp", []string{config.GWServerName}); err != nil {
+	if _, err := provision.ApplyConfigChange(cfg, false, "mcp", []string{testMCPServer}); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(cfg.MCP, config.GWServerName) {
-		t.Errorf("MCP = %v, want gog added", cfg.MCP)
+	if !slices.Contains(cfg.MCP, testMCPServer) {
+		t.Errorf("MCP = %v, want %s added", cfg.MCP, testMCPServer)
 	}
 	// Adding again is a no-op (no duplicate).
-	_, _ = provision.ApplyConfigChange(cfg, false, "mcp", []string{config.GWServerName})
-	if n := countStr(cfg.MCP, config.GWServerName); n != 1 {
-		t.Errorf("MCP should contain gog exactly once, got %d in %v", n, cfg.MCP)
+	_, _ = provision.ApplyConfigChange(cfg, false, "mcp", []string{testMCPServer})
+	if n := countStr(cfg.MCP, testMCPServer); n != 1 {
+		t.Errorf("MCP should contain %s exactly once, got %d in %v", testMCPServer, n, cfg.MCP)
 	}
-	if _, err := provision.ApplyConfigChange(cfg, true, "mcp", []string{config.GWServerName}); err != nil {
+	if _, err := provision.ApplyConfigChange(cfg, true, "mcp", []string{testMCPServer}); err != nil {
 		t.Fatal(err)
 	}
-	if slices.Contains(cfg.MCP, config.GWServerName) {
-		t.Errorf("MCP = %v, want gog removed", cfg.MCP)
+	if slices.Contains(cfg.MCP, testMCPServer) {
+		t.Errorf("MCP = %v, want %s removed", cfg.MCP, testMCPServer)
 	}
 	if _, err := provision.ApplyConfigChange(cfg, false, "mcp", nil); err == nil {
 		t.Error("expected an error for mcp with no server name")
@@ -126,10 +119,11 @@ func TestConfigSaveRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := provision.ApplyConfigChange(cfg, false, "google_workspace_account", []string{"round@trip.com"}); err != nil {
+	// One scalar key and one list key, so both write paths are covered.
+	if _, err := provision.ApplyConfigChange(cfg, false, "run_intent", []string{"strategy"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := provision.ApplyConfigChange(cfg, false, "mcp", []string{config.GWServerName}); err != nil {
+	if _, err := provision.ApplyConfigChange(cfg, false, "mcp", []string{testMCPServer}); err != nil {
 		t.Fatal(err)
 	}
 	if err := cfg.Save(); err != nil {
@@ -139,7 +133,7 @@ func TestConfigSaveRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.GogAccount != "round@trip.com" || !slices.Contains(got.MCP, config.GWServerName) {
+	if got.RunIntent != "strategy" || !slices.Contains(got.MCP, testMCPServer) {
 		t.Errorf("round-trip lost data: %+v", got)
 	}
 }

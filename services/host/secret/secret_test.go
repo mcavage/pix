@@ -66,29 +66,57 @@ func installOp(t *testing.T, output map[string]string) {
 // leak out of the literal string a test declared.
 func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
-func TestParseOpRefsClassification(t *testing.T) {
-	content := `# a comment
+// parseOpRefsFixture is the classification corpus: a filled ref, an unfilled
+// placeholder, a literal a pack may authorize, and a pasted secret.
+const parseOpRefsFixture = `# a comment
 SLACK_TOKEN=op://Private/Slack/credential
 UNFILLED=op://<vault>/<item>/credential
 GOG_ACCOUNT=me@example.com
 PASTED=xoxb-123-secret
 `
-	refs := ParseOpRefs(content)
-	byKey := map[string]OpRef{}
+
+func byKey(refs []OpRef) map[string]OpRef {
+	m := map[string]OpRef{}
 	for _, r := range refs {
-		byKey[r.Key] = r
+		m[r.Key] = r
 	}
-	if r := byKey["SLACK_TOKEN"]; !r.IsRef || r.Placeholder {
+	return m
+}
+
+func TestParseOpRefsClassification(t *testing.T) {
+	// The allowlist is the CALLER's (the active pack's `env_keys`), not a global
+	// pix map: GOG_ACCOUNT is a non-secret literal here only because this caller
+	// declared it one.
+	refs := byKey(ParseOpRefs(parseOpRefsFixture, NonSecret{"GOG_ACCOUNT": true}))
+	if r := refs["SLACK_TOKEN"]; !r.IsRef || r.Placeholder {
 		t.Errorf("SLACK_TOKEN: isRef=%v placeholder=%v, want filled ref", r.IsRef, r.Placeholder)
 	}
-	if r := byKey["UNFILLED"]; !r.IsRef || !r.Placeholder {
+	if r := refs["UNFILLED"]; !r.IsRef || !r.Placeholder {
 		t.Errorf("UNFILLED: isRef=%v placeholder=%v, want unfilled placeholder", r.IsRef, r.Placeholder)
 	}
-	if r := byKey["GOG_ACCOUNT"]; !r.NonSecret {
-		t.Errorf("GOG_ACCOUNT should be on the non-secret allowlist")
+	if r := refs["GOG_ACCOUNT"]; !r.NonSecret {
+		t.Errorf("GOG_ACCOUNT should be non-secret when the caller's allowlist says so")
 	}
-	if r := byKey["PASTED"]; r.IsRef || r.NonSecret {
+	if r := refs["PASTED"]; r.IsRef || r.NonSecret {
 		t.Errorf("PASTED literal: isRef=%v nonSecret=%v, want neither", r.IsRef, r.NonSecret)
+	}
+}
+
+// TestParseOpRefsNilAllowlistAllowsNothing is the other half of the new
+// mechanism: with a nil allowlist (no active pack, or a caller that only asks
+// "is this a ref"), the SAME literal that a pack could authorize is classified
+// as not-non-secret. Pix allowlists nothing of its own, so a key is only ever
+// a permitted literal because a caller passed it in.
+func TestParseOpRefsNilAllowlistAllowsNothing(t *testing.T) {
+	refs := byKey(ParseOpRefs(parseOpRefsFixture, nil))
+	for _, key := range []string{"GOG_ACCOUNT", "PASTED"} {
+		if r := refs[key]; r.NonSecret {
+			t.Errorf("%s: NonSecret = true under a nil allowlist; pix allowlists nothing of its own", key)
+		}
+	}
+	// The ref classification is unaffected by the allowlist.
+	if r := refs["SLACK_TOKEN"]; !r.IsRef {
+		t.Errorf("SLACK_TOKEN: isRef=%v, want a ref regardless of the allowlist", r.IsRef)
 	}
 }
 
@@ -108,7 +136,7 @@ func TestSeededOpRefsHasNoActiveEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read seeded file: %v", err)
 	}
-	if refs := ParseOpRefs(string(content)); len(refs) != 0 {
+	if refs := ParseOpRefs(string(content), nil); len(refs) != 0 {
 		t.Errorf("freshly seeded op-refs.env has %d active entries, want 0: %+v", len(refs), refs)
 	}
 	for i, line := range strings.Split(string(content), "\n") {
@@ -142,13 +170,40 @@ func TestSecretLsShortLiteralFlagged(t *testing.T) {
 	const val = "correcthorsebattery"
 	env, _ := realFixture(t, "SLACK_TOKEN="+val+"\n")
 	var out bytes.Buffer
-	RunSecretLs(env, &out)
+	RunSecretLs(env, &out, nil)
 	s := out.String()
 	if strings.Contains(s, val) {
 		t.Errorf("secret ls LEAKED the literal value:\n%s", s)
 	}
 	if !strings.Contains(s, "SLACK_TOKEN") || !strings.Contains(s, "not an op:// ref") {
 		t.Errorf("ls should flag the short literal as not-a-ref:\n%s", s)
+	}
+}
+
+// TestSecretLsAllowlistIsTheCallers: `secret ls` classifies a literal against
+// the allowlist it was HANDED, not a global map. The same file reads as a
+// pack-authorized non-secret with an allowlist and as a refs-only violation
+// without one — so deactivating the pack that authorized a variable takes the
+// allowance with it, visibly, in the listing.
+func TestSecretLsAllowlistIsTheCallers(t *testing.T) {
+	env, _ := realFixture(t, "GOG_ACCOUNT=me@example.com\n")
+
+	var allowed bytes.Buffer
+	RunSecretLs(env, &allowed, NonSecret{"GOG_ACCOUNT": true})
+	if !strings.Contains(allowed.String(), "GOG_ACCOUNT (non-secret env)") {
+		t.Errorf("an allowlisted key should be reported as a non-secret env:\n%s", allowed.String())
+	}
+	if strings.Contains(allowed.String(), "not an op:// ref") {
+		t.Errorf("an allowlisted key must not be flagged refs-only:\n%s", allowed.String())
+	}
+
+	var bare bytes.Buffer
+	RunSecretLs(env, &bare, nil)
+	if !strings.Contains(bare.String(), "not an op:// ref") {
+		t.Errorf("without an allowlist the SAME literal must be flagged refs-only:\n%s", bare.String())
+	}
+	if strings.Contains(bare.String(), "non-secret env") {
+		t.Errorf("nothing is non-secret without a caller saying so:\n%s", bare.String())
 	}
 }
 
@@ -167,7 +222,7 @@ func TestSecretLsNeverLeaksValue(t *testing.T) {
 	const pasted = "xoxb-THIS-MUST-NOT-BE-PRINTED"
 	env, _ := realFixture(t, "SLACK_TOKEN="+pasted+"\n") // op not installed
 	var out bytes.Buffer
-	RunSecretLs(env, &out)
+	RunSecretLs(env, &out, nil)
 	s := out.String()
 	if strings.Contains(s, pasted) {
 		t.Errorf("secret ls LEAKED the pasted value:\n%s", s)
@@ -185,7 +240,7 @@ func TestSecretLsStates(t *testing.T) {
 		"OTHER=op://<vault>/<item>/credential\n")
 	installOp(t, map[string]string{"account list": "me@example.com\n"})
 	var out bytes.Buffer
-	RunSecretLs(env, &out)
+	RunSecretLs(env, &out, nil)
 	s := out.String()
 	if !strings.Contains(s, "installed + account configured") {
 		t.Errorf("want op installed+account-configured state:\n%s", s)
@@ -202,7 +257,7 @@ func TestSecretLsOpNotSignedIn(t *testing.T) {
 	env, _ := realFixture(t, "")
 	installOp(t, nil) // present, but no "account list" answer => not signed in
 	var out bytes.Buffer
-	RunSecretLs(env, &out)
+	RunSecretLs(env, &out, nil)
 	s := out.String()
 	if !strings.Contains(s, "no account configured") {
 		t.Errorf("want no-account-configured state:\n%s", s)
@@ -283,7 +338,7 @@ const fakeRefsPath = "/fake/config/op-refs.env"
 func TestSecretSetUpsertsNewKey(t *testing.T) {
 	files := map[string]string{fakeRefsPath: "# header\nSLACK_TOKEN=op://Private/Slack/credential\n"}
 	var out bytes.Buffer
-	RunSecretSet(memEnv(files), &out, "GITHUB_TOKEN", "op://Private/GitHub/credential")
+	RunSecretSet(memEnv(files), &out, "GITHUB_TOKEN", "op://Private/GitHub/credential", nil)
 	got := files[fakeRefsPath]
 	want := "# header\nSLACK_TOKEN=op://Private/Slack/credential\nGITHUB_TOKEN=op://Private/GitHub/credential\n"
 	if got != want {
@@ -296,7 +351,7 @@ func TestSecretSetUpsertsNewKey(t *testing.T) {
 
 func TestSecretSetReplacesExistingKeyPreservingOthers(t *testing.T) {
 	files := map[string]string{fakeRefsPath: "# a comment\nSLACK_TOKEN=op://Private/Slack/old\n\nGOG_ACCOUNT=me@example.com\n"}
-	RunSecretSet(memEnv(files), &bytes.Buffer{}, "SLACK_TOKEN", "op://Private/Slack/new")
+	RunSecretSet(memEnv(files), &bytes.Buffer{}, "SLACK_TOKEN", "op://Private/Slack/new", nil)
 	got := files[fakeRefsPath]
 	want := "# a comment\nSLACK_TOKEN=op://Private/Slack/new\n\nGOG_ACCOUNT=me@example.com\n"
 	if got != want {
@@ -310,7 +365,7 @@ func TestSecretSetReplacesExistingKeyPreservingOthers(t *testing.T) {
 func TestSecretSetRejectsNonRefForSecretKey(t *testing.T) {
 	files := map[string]string{fakeRefsPath: "X=1\n"}
 	var out bytes.Buffer
-	err := RunSecretSet(memEnv(files), &out, "SLACK_TOKEN", "xoxb-pasted-secret-value")
+	err := RunSecretSet(memEnv(files), &out, "SLACK_TOKEN", "xoxb-pasted-secret-value", nil)
 	if got := cli.ExitCode(err); got != 2 {
 		t.Errorf("exit code = %d, want 2 (err = %v)", got, err)
 	}
@@ -333,7 +388,7 @@ func TestSecretSetRejectsNonRefForSecretKey(t *testing.T) {
 func TestSecretSetRejectsControlChars(t *testing.T) {
 	files := map[string]string{fakeRefsPath: "X=1\n"}
 	var out bytes.Buffer
-	err := RunSecretSet(memEnv(files), &out, "GITHUB_TOKEN", "op://V/I/f\nSLACK_TOKEN=xoxb-injected")
+	err := RunSecretSet(memEnv(files), &out, "GITHUB_TOKEN", "op://V/I/f\nSLACK_TOKEN=xoxb-injected", nil)
 	if got := cli.ExitCode(err); got != 2 {
 		t.Errorf("exit code = %d, want 2 (err = %v)", got, err)
 	}
@@ -348,16 +403,47 @@ func TestSecretSetRejectsControlChars(t *testing.T) {
 	}
 }
 
+// TestSecretSetAllowsNonSecretAllowlistLiteral: the CALLER-supplied allowlist
+// (the active pack's `env_keys`) is what authorizes a plain literal. The global
+// config.NonSecretOpRefsKeys map is gone, so the permission travels as an
+// argument from the thing that declared it.
 func TestSecretSetAllowsNonSecretAllowlistLiteral(t *testing.T) {
 	files := map[string]string{fakeRefsPath: "X=1\n"}
 	var out bytes.Buffer
-	RunSecretSet(memEnv(files), &out, "GOG_ACCOUNT", "me@example.com")
-	got := files[fakeRefsPath]
-	if !strings.Contains(got, "GOG_ACCOUNT=me@example.com") {
+	if err := RunSecretSet(memEnv(files), &out, "GOG_ACCOUNT", "me@example.com",
+		NonSecret{"GOG_ACCOUNT": true}); err != nil {
+		t.Fatalf("a pack-authorized literal must be accepted: %v (out=%q)", err, out.String())
+	}
+	if got := files[fakeRefsPath]; !strings.Contains(got, "GOG_ACCOUNT=me@example.com") {
 		t.Errorf("content after set = %q, want GOG_ACCOUNT set to the literal", got)
 	}
-	if !config.NonSecretOpRefsKeys["GOG_ACCOUNT"] {
-		t.Fatal("sanity: GOG_ACCOUNT must be on the non-secret allowlist for this test to prove anything")
+}
+
+// TestSecretSetRejectsLiteralWithoutAllowlist is the negative half, and the
+// whole point of making the allowlist a parameter: the SAME key/value pair that
+// the test above accepts is REFUSED (exit 2, nothing written) when no caller
+// authorizes it. A nil allowlist means "must be an op:// ref" — which is the
+// correct posture for a host with no active pack.
+func TestSecretSetRejectsLiteralWithoutAllowlist(t *testing.T) {
+	for name, allow := range map[string]NonSecret{
+		"nil allowlist":        nil,
+		"other key allowed":    {"SOME_OTHER_VAR": true},
+		"key explicitly false": {"GOG_ACCOUNT": false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			files := map[string]string{fakeRefsPath: "X=1\n"}
+			var out bytes.Buffer
+			err := RunSecretSet(memEnv(files), &out, "GOG_ACCOUNT", "me@example.com", allow)
+			if got := cli.ExitCode(err); got != 2 {
+				t.Errorf("exit code = %d, want 2 (err = %v)", got, err)
+			}
+			if !strings.Contains(out.String(), "not an op:// ref") {
+				t.Errorf("rejection should explain the refs-only policy: %s", out.String())
+			}
+			if files[fakeRefsPath] != "X=1\n" {
+				t.Errorf("an unauthorized literal must never reach op-refs.env, got %q", files[fakeRefsPath])
+			}
+		})
 	}
 }
 
@@ -376,7 +462,7 @@ func TestUpsertOpRefCanonicalizesConflictingDuplicates(t *testing.T) {
 func TestSecretSetKeepsLiteralSpacedField(t *testing.T) {
 	files := map[string]string{fakeRefsPath: "X=1\n"}
 	var out bytes.Buffer
-	RunSecretSet(memEnv(files), &out, "OPENAI_API_KEY", "op://Docker/OPENAI_API_KEY/api key")
+	RunSecretSet(memEnv(files), &out, "OPENAI_API_KEY", "op://Docker/OPENAI_API_KEY/api key", nil)
 	got := files[fakeRefsPath]
 	if !strings.Contains(got, "OPENAI_API_KEY=op://Docker/OPENAI_API_KEY/api key") {
 		t.Errorf("content after set = %q, want the space kept literal", got)
@@ -397,7 +483,7 @@ func TestSecretSetNormalizesPercentEncodedSpaceToLiteral(t *testing.T) {
 	files := map[string]string{fakeRefsPath: ""}
 	env := memEnv(files)
 	var out bytes.Buffer
-	RunSecretSet(env, &out, "ANTHROPIC_API_KEY", "op://Vault/Item/api%20key")
+	RunSecretSet(env, &out, "ANTHROPIC_API_KEY", "op://Vault/Item/api%20key", nil)
 
 	opRefs := files[fakeRefsPath]
 	if !strings.Contains(opRefs, "ANTHROPIC_API_KEY=op://Vault/Item/api key") {
@@ -413,7 +499,7 @@ func TestSecretSetSeedsFileWhenAbsent(t *testing.T) {
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 	env := hostenv.Env{System: sys.Real{}}
 	var out bytes.Buffer
-	RunSecretSet(env, &out, "SLACK_TOKEN", "op://Private/Slack/credential")
+	RunSecretSet(env, &out, "SLACK_TOKEN", "op://Private/Slack/credential", nil)
 
 	path := config.OpRefsPath()
 	content, err := os.ReadFile(path)
@@ -468,7 +554,7 @@ func TestSecretSetAndRmFailOnUnreadableOpRefs(t *testing.T) {
 	systest.Of(env.System).ReadFileFn = func(string) (string, error) { return "", os.ErrPermission }
 
 	var setOut bytes.Buffer
-	if err := RunSecretSet(env, &setOut, "SLACK_TOKEN", "op://v/slack/token"); err == nil {
+	if err := RunSecretSet(env, &setOut, "SLACK_TOKEN", "op://v/slack/token", nil); err == nil {
 		t.Fatal("secret set must fail when op-refs.env cannot be read")
 	}
 	if !strings.Contains(setOut.String(), "could not read") {
@@ -492,7 +578,7 @@ func TestSecretSetThenRm_FullLifecycle(t *testing.T) {
 	env := memEnv(files)
 
 	var setOut bytes.Buffer
-	if err := RunSecretSet(env, &setOut, "OPENAI_API_KEY", "op://v/openai/key"); err != nil {
+	if err := RunSecretSet(env, &setOut, "OPENAI_API_KEY", "op://v/openai/key", nil); err != nil {
 		t.Fatalf("set: unexpected error: %v", err)
 	}
 	if !strings.Contains(files[fakeRefsPath], "OPENAI_API_KEY") {

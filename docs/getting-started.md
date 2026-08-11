@@ -91,17 +91,20 @@ capability bundles you activate with `pix setup --pack <url>` or `pix pack
 use`; models resolve by **intent**, not a pinned name: see
 `docs/design/routing.md`.
 
-## 7. Slack and Google Workspace
+## 7. Slack, Google Workspace, and every other integration
 
-Both are **external** integrations, not built into `pix-host`. Register
-either the same way as any other MCP server:
+Pix ships **no** MCP servers. Each one is declared by the active pack, so the
+order is: adopt a pack that declares it, then register what it declared.
 
 ```bash
+pix pack use <path|git-url>   # Tier-1 review of what runs on your host
 pix mcp add
 pix mcp ls
+pix doctor                    # registered vs actually working
 ```
 
-See `docs/gworkspace.md` and the `gworkspace` skill.
+See `docs/gworkspace.md` for the Workspace case worked through, and the
+`gworkspace` skill for its tools and the untrusted-content rule.
 
 ## Where to go next
 

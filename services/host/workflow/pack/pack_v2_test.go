@@ -23,17 +23,22 @@ func TestLoadPack_ParsesV2Facets(t *testing.T) {
 	toml := `name = "work"
 schema = 1
 ollama_bridge_model = "qwen3.5:9b"
-gog_account = "me@company.com"
 memory_scope = "work"
 
-# An unknown/legacy facet must never fail the load.
+# An unknown/legacy facet must never fail the load. gog_account was a real key
+# once; a pack still carrying it must load, with the value simply never read.
+gog_account = "me@company.com"
+
 [routing]
 policy = "routing/policy.json"
 
 [[integrations]]
-name = "Fastmail"
-mcp  = "fastmail"
-env  = "FASTMAIL_TOKEN"
+name    = "Fastmail"
+mcp     = "fastmail"
+env     = "FASTMAIL_TOKEN"
+command = "fastmail-mcp"
+args    = ["--readonly", "mcp"]
+probe   = ["fastmail-mcp", "--version"]
 
 [[proxy]]
 name = "warehouse"
@@ -64,8 +69,20 @@ host = true
 		t.Fatalf("LoadPack: %v", err)
 	}
 	m := p.Manifest
-	if m.GogAccount != "me@company.com" || m.MemoryScope != "work" {
-		t.Errorf("gog/memory_scope not parsed: %+v", m)
+	if m.MemoryScope != "work" || m.OllamaBridgeModel != "qwen3.5:9b" {
+		t.Errorf("scalars not parsed: %+v", m)
+	}
+	// The transport triple is what registration and the trust screen both read,
+	// so all three round-trip or neither does.
+	if len(m.Integrations) != 1 {
+		t.Fatalf("integrations = %+v", m.Integrations)
+	}
+	ig := m.Integrations[0]
+	if ig.Command != "fastmail-mcp" || strings.Join(ig.Args, " ") != "--readonly mcp" {
+		t.Errorf("command transport not parsed: %+v", ig)
+	}
+	if strings.Join(ig.Probe, " ") != "fastmail-mcp --version" {
+		t.Errorf("probe not parsed: %+v", ig)
 	}
 	if len(m.Proxies) != 2 || m.Proxies[0].Name != "warehouse" || m.Proxies[0].Host {
 		t.Errorf("sandbox proxy not parsed: %+v", m.Proxies)
@@ -174,8 +191,8 @@ func TestPackUse_ReversibleSwitch(t *testing.T) {
 
 	rootA := filepath.Join(dir, "a")
 	rootB := filepath.Join(dir, "b")
-	mustWritePack(t, rootA, packinfo.Manifest{Name: "a", Schema: 1, Integrations: []packinfo.Integration{{Name: "A", MCP: "a-mcp"}}})
-	mustWritePack(t, rootB, packinfo.Manifest{Name: "b", Schema: 1, Integrations: []packinfo.Integration{{Name: "B", MCP: "b-mcp"}}})
+	mustWritePack(t, rootA, packinfo.Manifest{Name: "a", Schema: 1, Integrations: []packinfo.Integration{{Name: "A", MCP: "a-mcp", Command: "a-mcp-bin"}}})
+	mustWritePack(t, rootB, packinfo.Manifest{Name: "b", Schema: 1, Integrations: []packinfo.Integration{{Name: "B", MCP: "b-mcp", URL: "https://b.example.test/mcp"}}})
 
 	// A pre-existing, user-added MCP that no pack ever declared.
 	cfg, err := config.Load()

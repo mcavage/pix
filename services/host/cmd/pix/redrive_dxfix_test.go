@@ -26,10 +26,12 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"pix/host/cli"
+	"pix/host/packinfo"
 	"pix/host/routing"
 	"pix/host/rpc"
 	"pix/host/sys"
@@ -192,28 +194,31 @@ func TestRunMcpAddURL_AbsentSbxExitsServiceDown(t *testing.T) {
 // config set` may).
 func TestRunMcpAdd_AbsentSbxExitsServiceDownNoConfigMutation(t *testing.T) {
 	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "config.toml")
-	const cfgContent = "mcp = [\"slack\"]\n"
-	if err := os.WriteFile(cfgPath, []byte(cfgContent), 0o600); err != nil {
-		t.Fatal(err)
-	}
 
-	// A fake pix-host next to nothing real: `mcp --list` reports slack as
-	// locally servable, so registration reaches the sbx-absent branch instead
-	// of failing closed on an unresolvable local-name set.
+	// A server only exists because a pack declares it, so the fixture activates
+	// a pack declaring slack as a host command. Its binary IS on PATH (an
+	// unresolvable command is its own hard failure, tested elsewhere), leaving
+	// the missing sbx as the only thing that can go wrong.
+	packRoot := filepath.Join(dir, "pack")
+	mustWritePack(t, packRoot, packinfo.Manifest{Name: "acme", Schema: 1,
+		Integrations: []packinfo.Integration{{Name: "Slack", MCP: "slack", Command: "slackmcp"}}})
 	binDir := filepath.Join(dir, "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	fakeHost := filepath.Join(binDir, "pix-host")
-	script := "#!/bin/sh\nif [ \"$1\" = version ]; then echo dev; exit 0; fi\nif [ \"$1\" = \"mcp\" ] && [ \"$2\" = \"--list\" ]; then echo slack; exit 0; fi\nexit 1\n"
-	if err := os.WriteFile(fakeHost, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(binDir, "slackmcp"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfgPath := filepath.Join(dir, "config.toml")
+	cfgContent := "mcp = [\"slack\"]\npack = " + strconv.Quote(packRoot) + "\n"
+	if err := os.WriteFile(cfgPath, []byte(cfgContent), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	code, out := runTypedMcp(t, []string{"add"}, map[string]string{
 		"PIX_CONFIG": cfgPath,
-		"PATH":       binDir, // pix-host resolvable; sbx is not
+		"PATH":       binDir, // the server's command resolves; sbx does not
 	})
 	wantServiceDown(t, code, out, "sbx mcp add slack")
 

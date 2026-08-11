@@ -16,19 +16,23 @@ func TestPersistPackStackComposesAllFacetsAndKeepsPerPackOwnership(t *testing.T)
 	t.Setenv("XDG_STATE_HOME", filepath.Join(state, "state"))
 
 	baseline := &config.Config{MCP: []string{"manual-mcp"}, OllamaBridgeModel: "manual-model"}
-	baseline.SetGogAccount("manual@example.com")
 	if err := baseline.Save(); err != nil {
 		t.Fatal(err)
 	}
 
+	// ollama_bridge_model is the ONE pack-declared config scalar left (gog_account
+	// went with the built-in Google Workspace surface), so it carries the whole
+	// last-writer-wins + per-pack-prior-value contract on its own: `first` sets
+	// it, `second` overwrites it, and each activation records the value it
+	// displaced so a reverse unwind lands exactly back on the baseline.
 	first, second := t.TempDir(), t.TempDir()
 	mustWritePack(t, first, packinfo.Manifest{
-		Name: "first", Schema: 1, GogAccount: "first@example.com", OllamaBridgeModel: "first-model",
-		Integrations: []packinfo.Integration{{Name: "first", MCP: "first-mcp"}},
+		Name: "first", Schema: 1, OllamaBridgeModel: "first-model",
+		Integrations: []packinfo.Integration{{Name: "first", MCP: "first-mcp", Command: "first-mcp-bin"}},
 	})
 	mustWritePack(t, second, packinfo.Manifest{
-		Name: "second", Schema: 1, GogAccount: "second@example.com",
-		Integrations: []packinfo.Integration{{Name: "second", MCP: "second-mcp"}},
+		Name: "second", Schema: 1, OllamaBridgeModel: "second-model",
+		Integrations: []packinfo.Integration{{Name: "second", MCP: "second-mcp", URL: "https://second.example.test/mcp"}},
 	})
 
 	if err := PersistPackStack([]string{first, second}); err != nil {
@@ -40,8 +44,8 @@ func TestPersistPackStackComposesAllFacetsAndKeepsPerPackOwnership(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if cfg.GogAccount != "second@example.com" || cfg.OllamaBridgeModel != "first-model" {
-			t.Fatalf("last-writer scalar composition failed: gog=%q ollama=%q", cfg.GogAccount, cfg.OllamaBridgeModel)
+		if cfg.OllamaBridgeModel != "second-model" {
+			t.Fatalf("last-writer scalar composition failed: ollama=%q", cfg.OllamaBridgeModel)
 		}
 		for _, name := range []string{"manual-mcp", "first-mcp", "second-mcp"} {
 			if !slices.Contains(cfg.MCP, name) {
@@ -58,8 +62,8 @@ func TestPersistPackStackComposesAllFacetsAndKeepsPerPackOwnership(t *testing.T)
 	if len(store.Activations) != 2 {
 		t.Fatalf("activation ledger = %+v", store.Activations)
 	}
-	if store.Activations[0].PriorGogAccount != "manual@example.com" ||
-		store.Activations[1].PriorGogAccount != "first@example.com" {
+	if store.Activations[0].PriorOllamaBridgeModel != "manual-model" ||
+		store.Activations[1].PriorOllamaBridgeModel != "first-model" {
 		t.Fatalf("scalar restore chain = %+v", store.Activations)
 	}
 
@@ -80,8 +84,8 @@ func TestPersistPackStackComposesAllFacetsAndKeepsPerPackOwnership(t *testing.T)
 	for i := len(store.Activations) - 1; i >= 0; i-- {
 		revertPackPriorContribution(cfg, store.activationFor(store.Activations[i].Path))
 	}
-	if cfg.GogAccount != "manual@example.com" || cfg.OllamaBridgeModel != "manual-model" {
-		t.Fatalf("reverse removal did not restore baseline scalars: gog=%q ollama=%q", cfg.GogAccount, cfg.OllamaBridgeModel)
+	if cfg.OllamaBridgeModel != "manual-model" {
+		t.Fatalf("reverse removal did not restore the baseline scalar: ollama=%q", cfg.OllamaBridgeModel)
 	}
 	if !slices.Contains(cfg.MCP, "manual-mcp") || slices.Contains(cfg.MCP, "first-mcp") || slices.Contains(cfg.MCP, "second-mcp") {
 		t.Fatalf("reverse removal violated MCP ownership: %v", cfg.MCP)

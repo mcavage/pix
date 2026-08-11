@@ -45,7 +45,7 @@ func AddKeyedProvider(d *cli.Deps, cfg *config.Config, env hostenv.Env, provider
 		if !ok {
 			return cli.SilentError{Code: 1}
 		}
-		if err := secret.RunSecretSet(env, d.Out, p.EnvVar, ref); err != nil {
+		if err := secret.RunSecretSet(env, d.Out, p.EnvVar, ref, nil); err != nil {
 			return cli.SilentError{Code: 1}
 		}
 	}

@@ -12,26 +12,31 @@ import (
 // here breaks `make run`/`make serve` sourcing.
 func TestConfigValue(t *testing.T) {
 	cfg := defaultCfg()
-	cfg.GogAccount = "me@x.com"
-	cfg.MCP = []string{"gog", "slack"}
+	cfg.MCP = []string{testMCPServer, "slack"}
 	cfg.Services = []string{"memory", "knowledge"}
 	cfg.MemoryWatcherModel = "qwen3.5:9b"
 	cfg.MemoryEmbedModel = "nomic-embed-text"
 	cfg.OllamaBridgeModel = "qwen3.5:9b"
+	cfg.RunIntent = "overlord"
+	cfg.Pack = "/packs/work"
 
 	tests := []struct {
 		key     string
 		want    string
 		wantErr bool
 	}{
-		{key: "google_workspace_account", want: "me@x.com"},
-		{key: "mcp", want: "gog slack"},
+		{key: "mcp", want: testMCPServer + " slack"},
 		{key: "services", want: "memory knowledge"},
 		{key: "memory_watcher_model", want: "qwen3.5:9b"},
 		{key: "memory_embed_model", want: "nomic-embed-text"},
 		{key: "ollama_bridge_model", want: "qwen3.5:9b"},
+		{key: "run_intent", want: "overlord"},
+		{key: "pack", want: "/packs/work"},
+		{key: "host.autoserve", want: "true"},
 		{key: "nope", wantErr: true},
 		{key: "", wantErr: true},
+		// The retired per-vendor account key reads as any other unknown key.
+		{key: "google_workspace_account", wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.key, func(t *testing.T) {

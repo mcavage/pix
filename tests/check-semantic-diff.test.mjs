@@ -29,6 +29,14 @@ import { test } from "node:test";
 
 import { activationKeySet, checkRuleDrift, entriesExplainingDrift, evaluateCheck, evaluatePins, extractRegion, extractSet, loadActivation, loadManifest, loadRules, resolveDefaultBase, staleManifestEntries } from "../scripts/semantic-diff/lib/engine.mjs";
 
+// Fixture repos must not inherit the developer's ~/.gitconfig. A machine that
+// signs commits with a hardware/1Password key makes every fixture commit block
+// on an authorization prompt that never comes in a test run — the suite then
+// hangs for a minute per commit and times out, with nothing in the output to
+// say why. Signing proves nothing about a throwaway repo, so it is turned off
+// explicitly rather than left to whatever the host happens to be configured for.
+const GIT_HERMETIC = ["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"];
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
 const REAL_RULES_DIR = path.join(REPO_ROOT, "scripts", "semantic-diff", "rules");
@@ -309,7 +317,7 @@ test("checkRuleDrift treats flipping a pin's `activation` field alone (no check 
 // --- rule-drift-vs-git -------------------------------------------------------
 
 function git(cwd, ...args) {
-	return execFileSync("git", args, { cwd, encoding: "utf8" });
+	return execFileSync("git", [...GIT_HERMETIC, ...args], { cwd, encoding: "utf8" });
 }
 
 function makeScratchRepo() {

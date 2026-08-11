@@ -9,6 +9,7 @@ import (
 	"pix/host/health"
 	"pix/host/hostenv"
 	"pix/host/inference"
+	"pix/host/mcp"
 	"pix/host/packinfo"
 	"pix/host/rpc"
 	"pix/host/secret"
@@ -49,6 +50,10 @@ type Options struct {
 	// process's own.
 	LaunchdLabel string
 	UID          int
+	// Credentials is the host's 1Password setup, used to wrap a server's
+	// health probe in the SAME op-run command the gateway will spawn it with.
+	// Zero means no 1Password, which leaves probes unwrapped.
+	Credentials mcp.Credentials
 	// Env and HostResolver are how the MCP probe learns what kind of server
 	// each configured name is (the pack's declarations plus `pix-host mcp
 	// --list`). A zero Env means the real host; a nil HostResolver means the
@@ -110,7 +115,7 @@ func Probes(cfg *config.Config, o Options) []health.Probe {
 // is honest. An unclassifiable server degrades to "unknown", never to a guess.
 func mcpProbe(cfg *config.Config, o Options, sbxBin string) health.MCPProbe {
 	return health.MCPProbe{
-		Servers:  MCPServers(cfg, o.Env, o.HostResolver),
+		Servers:  MCPServers(cfg, o.Credentials),
 		Bin:      orElse(o.MCPBin, sbxBin),
 		ListArgs: o.MCPListArgs,
 		AuthArgs: o.MCPAuthArgs,

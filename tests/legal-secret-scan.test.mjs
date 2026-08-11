@@ -6,6 +6,14 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+// Fixture repos must not inherit the developer's ~/.gitconfig. A machine that
+// signs commits with a hardware/1Password key makes every fixture commit block
+// on an authorization prompt that never comes in a test run — the suite then
+// hangs for a minute per commit and times out, with nothing in the output to
+// say why. Signing proves nothing about a throwaway repo, so it is turned off
+// explicitly rather than left to whatever the host happens to be configured for.
+const GIT_HERMETIC = ["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"];
+
 // AC-REL-01: secret-scan pattern rules + a small-fixture proof that a
 // full-history scan catches a secret buried in an amended-away commit (the
 // exact case a HEAD-only scan misses). Kept FAST on purpose (< 1s total) so
@@ -36,7 +44,7 @@ test("secret-scan.mjs --self-test exits 0", () => {
 
 test("full-history scan catches a secret buried in an amended-away commit", () => {
 	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "secret-scan-fixture-"));
-	const git = (args) => execFileSync("git", args, { cwd: tmp, encoding: "utf8" });
+	const git = (args) => execFileSync("git", [...GIT_HERMETIC, ...args], { cwd: tmp, encoding: "utf8" });
 	git(["init", "-q"]);
 	git(["config", "user.email", "test@example.com"]);
 	git(["config", "user.name", "Test"]);
@@ -73,7 +81,7 @@ test("parseBatchOutput() parses a blob record and a missing record from a raw Bu
 
 test("batchCheck() and batchContent() report the same type/size/content as per-object `git cat-file`", () => {
 	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "secret-scan-batch-"));
-	const git = (args) => execFileSync("git", args, { cwd: tmp, encoding: "utf8" });
+	const git = (args) => execFileSync("git", [...GIT_HERMETIC, ...args], { cwd: tmp, encoding: "utf8" });
 	git(["init", "-q"]);
 	git(["config", "user.email", "test@example.com"]);
 	git(["config", "user.name", "Test"]);
@@ -98,7 +106,7 @@ test("batchCheck() and batchContent() report the same type/size/content as per-o
 test("scanRepo() makes a FIXED, small number of git invocations regardless of history size (no per-object spawnSync loop)", () => {
 	function makeRepo(fileCount) {
 		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "secret-scan-scale-"));
-		const git = (args) => execFileSync("git", args, { cwd: tmp, encoding: "utf8" });
+		const git = (args) => execFileSync("git", [...GIT_HERMETIC, ...args], { cwd: tmp, encoding: "utf8" });
 		git(["init", "-q"]);
 		git(["config", "user.email", "test@example.com"]);
 		git(["config", "user.name", "Test"]);
@@ -137,7 +145,7 @@ test("scanRepo() makes a FIXED, small number of git invocations regardless of hi
 
 test("the allowlist file's own path is excluded from the scan (self-referential fixed-point guard)", () => {
 	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "secret-scan-selfexclude-"));
-	const git = (args) => execFileSync("git", args, { cwd: tmp, encoding: "utf8" });
+	const git = (args) => execFileSync("git", [...GIT_HERMETIC, ...args], { cwd: tmp, encoding: "utf8" });
 	git(["init", "-q"]);
 	git(["config", "user.email", "test@example.com"]);
 	git(["config", "user.name", "Test"]);
@@ -159,7 +167,7 @@ test("the allowlist file's own path is excluded from the scan (self-referential 
 
 test("full-history scan passes clean on a fixture repo with no secrets", () => {
 	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "secret-scan-clean-"));
-	const git = (args) => execFileSync("git", args, { cwd: tmp, encoding: "utf8" });
+	const git = (args) => execFileSync("git", [...GIT_HERMETIC, ...args], { cwd: tmp, encoding: "utf8" });
 	git(["init", "-q"]);
 	git(["config", "user.email", "test@example.com"]);
 	git(["config", "user.name", "Test"]);

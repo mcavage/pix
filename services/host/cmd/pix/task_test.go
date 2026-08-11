@@ -55,10 +55,16 @@ func captureStdout(t *testing.T, fn func()) string {
 
 func mustGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	// gpgsign=false: a throwaway fixture repo must not inherit the developer's
+	// global commit-signing setup. An agent-backed signing key (1Password, a
+	// hardware token) either prompts or blocks until it times out, which turns
+	// `git commit` in a t.TempDir() into a minute-long failure that has nothing
+	// to do with what the test is checking.
+	argv := []string{"-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"}
 	if dir != "" {
-		cmd.Args = append([]string{"git", "-C", dir}, args...)
+		argv = append(argv, "-C", dir)
 	}
+	cmd := exec.Command("git", append(argv, args...)...)
 	cmd.Env = append(os.Environ(),
 		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t.test",
 		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t.test")

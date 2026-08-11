@@ -20,12 +20,11 @@ import (
 // legacy op-refs.env, resolve credentials, register. All three stay in one
 // function so no caller can get two of the three.
 func registerServers(cfg *config.Config, env hostenv.Env, out io.Writer,
-	requested []string, hostResolver func() (string, error),
-	containers map[string]config.MCPContainer) error {
+	requested []string, servers map[string]config.MCPServer) error {
 	if err := repairLegacyOpRefs(env); err != nil {
 		return fmt.Errorf("repairing op-refs.env: %w", err)
 	}
-	return mcp.RegisterServers(cfg, env, out, requested, hostResolver, containers, mcpCredentials(env))
+	return mcp.RegisterServers(cfg, env, out, requested, servers, mcpCredentials(env))
 }
 
 func mcpCredentials(env hostenv.Env) mcp.Credentials {
@@ -33,15 +32,10 @@ func mcpCredentials(env hostenv.Env) mcp.Credentials {
 	if err != nil {
 		opPath = ""
 	}
-	refs := secret.FindOpRefs(env)
-	// Only READ op-refs.env when one was actually found: a host with no refs file
-	// must not touch the disk here (gog setup is tested not to perform that read).
-	gogKeyring := refs != "" && secret.OpRefFilled(env, "GOG_KEYRING_PASSWORD")
 	return mcp.Credentials{
 		OpPath:     opPath,
-		OpRefsPath: refs,
+		OpRefsPath: secret.FindOpRefs(env),
 		SeedPath:   secret.DefaultOpRefsPath(env),
-		GogKeyring: gogKeyring,
 	}
 }
 

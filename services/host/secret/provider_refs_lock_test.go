@@ -61,7 +61,7 @@ func TestSecretSetHoldsLockAcrossFileTransaction(t *testing.T) {
 	systest.Of(env.System).LockFn = systest.NewLockRecorder(t.Fatalf, &events).Lock
 
 	var out bytes.Buffer
-	if err := RunSecretSet(env, &out, "ANTHROPIC_API_KEY", "op://v/anthropic/key"); err != nil {
+	if err := RunSecretSet(env, &out, "ANTHROPIC_API_KEY", "op://v/anthropic/key", nil); err != nil {
 		t.Fatalf("RunSecretSet: %v (out=%q)", err, out.String())
 	}
 
@@ -402,7 +402,7 @@ func TestConcurrentSecretSetSerializedByRealFlock(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			var out bytes.Buffer
-			errs[i] = RunSecretSet(env, &out, fmt.Sprintf("TEST_REF_%d", i), fmt.Sprintf("op://v/item%d/field", i))
+			errs[i] = RunSecretSet(env, &out, fmt.Sprintf("TEST_REF_%d", i), fmt.Sprintf("op://v/item%d/field", i), nil)
 		}(i)
 	}
 	wg.Wait()
@@ -440,7 +440,7 @@ func TestProviderKeySetAndRmNoDeadlockUnderRealFlock(t *testing.T) {
 	go func() {
 		defer close(done)
 		var out bytes.Buffer
-		if err := RunSecretSet(env, &out, "ANTHROPIC_API_KEY", "op://v/anthropic/key"); err != nil {
+		if err := RunSecretSet(env, &out, "ANTHROPIC_API_KEY", "op://v/anthropic/key", nil); err != nil {
 			t.Errorf("RunSecretSet: %v (out=%q)", err, out.String())
 			return
 		}
@@ -467,7 +467,7 @@ func TestLockAcquisitionErrorFailsSecretSetAndRm(t *testing.T) {
 	systest.Of(env.System).LockFn = func(string, func() error) error { return errors.New("lock dir unwritable") }
 
 	var out bytes.Buffer
-	if err := RunSecretSet(env, &out, "ANTHROPIC_API_KEY", "op://v/anthropic/new"); err == nil {
+	if err := RunSecretSet(env, &out, "ANTHROPIC_API_KEY", "op://v/anthropic/new", nil); err == nil {
 		t.Fatal("secret set must fail when the lock cannot be acquired")
 	}
 	if !strings.Contains(out.String(), "could not lock provider refs") {

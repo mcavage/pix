@@ -61,7 +61,6 @@ type Credentials struct {
 	OpPath     string // resolved `op` binary ("" = not installed)
 	OpRefsPath string // an EXISTING op-refs.env ("" = none found)
 	SeedPath   string // where a template op-refs.env would be seeded
-	GogKeyring bool   // GOG_KEYRING_PASSWORD is present as a FILLED op:// ref
 }
 
 // ErrSbxUnavailable is the sentinel every mcp subcommand that PROMISES an
@@ -133,27 +132,22 @@ const mcpLsAttachmentNote = "\nNote: this is the gateway's HOST registration lis
 	"session either. A sandbox picks up everything registered when it starts, so\n" +
 	"`pix rm <box>` then `pix run` is how a running one catches up.\n"
 
-// McpRegistrar carries the resolved ABSOLUTE paths + account needed to build a
-// `sbx mcp add` command. The gateway daemon's PATH may not include op/gog, so
-// every binary is registered by absolute path (matching the Makefile).
+// McpRegistrar carries the resolved ABSOLUTE paths needed to build a
+// `sbx mcp add` command. The gateway daemon's PATH is not the user's, so every
+// binary is registered by absolute path.
 type McpRegistrar struct {
-	Op      string // absolute op (1Password CLI)
-	OpRefs  string // absolute config/op-refs.env
-	Gog     string // absolute gog (only needed to register gog)
-	Account string // gog --account value
-	HostBin string // absolute pix-host (for slack + other host subcommands)
-	// GogUseOp is true only for gog's explicit file-keyring topology, where
-	// GOG_KEYRING_PASSWORD is an op:// ref. Normal macOS OAuth lives in gog's
-	// own keychain and must stay bare even when unrelated pack servers use op.
-	GogUseOp bool
-	// containers maps a server name to its pack CONTAINER/REMOTE spec (Manifest,
-	// Image, or RemoteURL). A Manifest name registers via `--local --url` (gateway
-	// resolves the OCI image; creds Docker-side; never op-run wrapped). An Image
-	// name registers as an op-run-wrapped `docker run <image>` (creds from op-refs
-	// forwarded via -e), exactly like a local stdio server otherwise. A RemoteURL
-	// name registers via `--url` (a remote MCP endpoint the gateway OAuths
-	// host-side; no op-run wrap).
-	containers map[string]config.MCPContainer
+	Op     string // absolute op (1Password CLI)
+	OpRefs string // absolute config/op-refs.env
+	// resolved maps a server COMMAND name to its absolute path, looked up once
+	// at registration. A pack declares `command = "gog"`; the gateway is handed
+	// `/opt/homebrew/bin/gog`, because its PATH need not contain Homebrew.
+	resolved map[string]string
+	// servers maps a server name to its pack-declared spec. A Command or Image
+	// server registers as an op-run-wrapped host command (creds from op-refs).
+	// A Manifest name registers via `--local --url` (gateway resolves the OCI
+	// image; creds Docker-side). A RemoteURL name registers via `--url` (the
+	// gateway OAuths it host-side). Neither of the last two is op-run wrapped.
+	servers map[string]config.MCPServer
 	// LegacyPositionalURL flips a manifest/remote container's URL argument
 	// from the current --url FLAG grammar to the legacy POSITIONAL grammar
 	// (`mcp add name --local <manifest>` / `mcp add name <url>`, no --url).
@@ -164,69 +158,56 @@ type McpRegistrar struct {
 	LegacyPositionalURL bool
 }
 
-// GogHardenedArgv builds the EXACT hardened gog invocation used both when
-// registering gog with the sbx gateway (McpRegistrar.ServerCmd) and when
-// probing it directly — a single definition so a direct probe can never
-// silently drift from what actually gets registered. gogBin is normally the
-// canonical PATH-resolved gog binary.
-func GogHardenedArgv(gogBin, account string) []string {
-	return []string{
-		gogBin,
-		"--account", account,
-		"--gmail-no-send",
-		"--wrap-untrusted",
-		"--readonly",
-		"mcp",
-		"--allow-tool", "read",
-	}
-}
-
-// serverCmd is the bare command+args the gateway must ultimately spawn for one
-// server (before any op-run wrapping): gog with its hardened flags, or a
-// pix-host subcommand (slack + friends).
+// ServerCmd is the bare command+args the gateway must ultimately spawn for one
+// server, before any op-run wrapping. There are exactly two shapes, and BOTH
+// come from the pack manifest — pix contributes no flags of its own, so the
+// argv a reviewer approved in the pack's bill of materials is the argv that
+// runs. A Manifest/RemoteURL server has no host command at all and returns nil.
 func (m McpRegistrar) ServerCmd(name string) []string {
-	// Image container: the bare command is `docker run -i --rm -e <KEY>… <image>`.
-	// AddArgs op-run wraps it (when op-refs is present), so op resolves each KEY
-	// from 1Password and `-e KEY` forwards it into the container.
-	if c := m.containers[name]; c.Image != "" {
+	s := m.servers[name]
+	switch {
+	case s.Command != "":
+		// Host command: the resolved absolute binary plus the pack's LITERAL
+		// args. Per-user values reach it as environment variables (EnvKeys),
+		// never by templating this argv.
+		bin := m.resolved[name]
+		if bin == "" {
+			bin = s.Command
+		}
+		return append([]string{bin}, s.Args...)
+	case s.Image != "":
+		// Container: `docker run -i --rm -e <KEY>… <image>`. AddArgs op-run
+		// wraps it (when op-refs is present), so op resolves each KEY from
+		// 1Password and `-e KEY` forwards it into the container.
 		argv := []string{"docker", "run", "-i", "--rm"}
-		for _, k := range c.EnvKeys {
+		for _, k := range s.EnvKeys {
 			argv = append(argv, "-e", k)
 		}
-		keys := make([]string, 0, len(c.EnvValues))
-		for key := range c.EnvValues {
+		keys := make([]string, 0, len(s.EnvValues))
+		for key := range s.EnvValues {
 			keys = append(keys, key)
 		}
 		sort.Strings(keys)
 		for _, key := range keys {
-			argv = append(argv, "-e", key+"="+c.EnvValues[key])
+			argv = append(argv, "-e", key+"="+s.EnvValues[key])
 		}
-		return append(argv, c.Image)
+		return append(argv, s.Image)
 	}
-	switch name {
-	case config.GWServerName:
-		return GogHardenedArgv(m.Gog, m.Account)
-	default:
-		// slack + any other local stdio server is a pix-host subcommand.
-		return []string{m.HostBin, "mcp", name}
-	}
+	return nil
 }
 
-// AddArgs builds the `sbx mcp add <name> …` argv for one server. When op-refs is
-// present (m.opRefs != "") the command is wrapped in
-// `op run --no-masking --env-file=<refs> -- <cmd…>` so creds resolve from
-// 1Password at gateway spawn time (needed for slack's token + gog's headless
-// keyring password). When op-refs is ABSENT every local server is registered
-// DIRECTLY as a bare command — 1Password is optional, so a no-creds server (a
-// future `pio`) still registers, and a creds server just runs without injected
-// creds until an op-refs.env is added (harmless: the op-run wrapper is a no-op
-// for a server that needs no creds).
+// AddArgs builds the `sbx mcp add <name> …` argv for one server. A host
+// command (Command or Image) is wrapped in `op run --no-masking
+// --env-file=<refs> -- <cmd…>` whenever op-refs is present, so its declared
+// credentials resolve from 1Password at gateway spawn time. When op-refs is
+// ABSENT it registers bare — 1Password is optional, and a server that declares
+// no credentials needs nothing injected.
 func (m McpRegistrar) AddArgs(name string) []string {
 	// Manifest container: register the OCI server by manifest, run locally by the
 	// gateway via Docker. No op-run wrap — its creds are provided Docker-side
 	// (declared in the server's server.json), never through op-refs. (Image
-	// containers fall through to serverCmd + the op-run wrapper below.)
-	if c := m.containers[name]; c.Manifest != "" {
+	// containers fall through to ServerCmd + the op-run wrapper below.)
+	if c := m.servers[name]; c.Manifest != "" {
 		if m.LegacyPositionalURL {
 			return []string{"mcp", "add", name, "--local", c.Manifest}
 		}
@@ -235,13 +216,20 @@ func (m McpRegistrar) AddArgs(name string) []string {
 	// Remote container: register the remote MCP endpoint by URL. No --local (it's a
 	// remote HTTP server, not an OCI image the gateway runs) and no op-run wrap —
 	// OAuth is discovered + handled host-side by the gateway on first use.
-	if c := m.containers[name]; c.RemoteURL != "" {
+	if c := m.servers[name]; c.RemoteURL != "" {
 		if m.LegacyPositionalURL {
 			return []string{"mcp", "add", name, c.RemoteURL}
 		}
 		return []string{"mcp", "add", name, "--url", c.RemoteURL}
 	}
 	argv := m.ExecArgv(name)
+	if len(argv) == 0 {
+		// No transport: nothing to register. Callers filter these out before
+		// getting here, but AddArgs used to be total and losing that quietly
+		// turned a caller's mistake into a panic. Returning nil keeps the
+		// mistake visible as "registered nothing" instead.
+		return nil
+	}
 	args := []string{"mcp", "add", name, "--command", argv[0]}
 	for _, c := range argv[1:] {
 		args = append(args, "--args", c)
@@ -418,29 +406,50 @@ func AddRemoteServers(out, errW io.Writer, catalog []CatalogServer) error {
 // creds resolve from 1Password at gateway spawn time, or returned bare when
 // m.opRefs is empty (1Password is optional). This is the single source of
 // truth for "what will actually run": AddArgs re-encodes it into sbx's
-// --command/--args form, and GogRegisteredArgv calls it directly so a probe of
-// the real headless path can never drift from what gets registered. Container
-// (manifest/remote) servers never route through here — AddArgs short-circuits
-// them above.
+// --command/--args form, so a probe of the real spawn path can never drift
+// from what gets registered. Container (manifest/remote) servers never route
+// through here — AddArgs short-circuits them above.
 func (m McpRegistrar) ExecArgv(name string) []string {
 	cmd := m.ServerCmd(name)
-	if m.OpRefs == "" || (name == config.GWServerName && !m.GogUseOp) {
+	// A server that declares NO credentials is never wrapped, even when
+	// op-refs.env exists. `op run --env-file` resolves EVERY ref in the file,
+	// so wrapping a credential-free server would make it share fate with every
+	// unrelated ref: one stale entry elsewhere in the file would stop a server
+	// that needs nothing from 1Password at all.
+	if len(m.servers[name].EnvKeys) == 0 {
 		return cmd
 	}
-	// The ONE op-run wrapper grammar pix generates.
-	return append([]string{m.Op, "run", "--no-masking", "--env-file=" + m.OpRefs, "--"}, cmd...)
+	return OpRunWrap(m.Op, m.OpRefs, cmd)
+}
+
+// OpRunWrap is the ONE op-run wrapper grammar pix generates. It exists as a
+// shared function, not an inline string, because two callers must produce
+// byte-identical commands: registration (what the gateway will spawn) and
+// doctor's health probe (what we claim to have verified).
+//
+// That equality is the whole point. The failure this codebase was rebuilt
+// around is a credential that works in your terminal and not in the gateway's
+// environment — so a probe that does not go through this wrapper proves
+// nothing about the thing it claims to check. Returns argv unchanged when
+// 1Password is not configured, which is a legitimate no-credential setup.
+func OpRunWrap(opPath, opRefs string, argv []string) []string {
+	if opPath == "" || opRefs == "" || len(argv) == 0 {
+		return argv
+	}
+	return append([]string{opPath, "run", "--no-masking", "--env-file=" + opRefs, "--"}, argv...)
 }
 
 // RegisterServers resolves + guards + builds + runs the `sbx mcp add` commands
-// for the requested local stdio servers. With no requested names it registers
-// every entry in the resolved profile's cfg.MCP (gog via its special path, every
-// other name as `pix-host mcp <name>`). It fails with a clear, actionable
-// message rather than registering a junk command (op/gog missing, gog account
-// unset). When sbx is absent it prints exactly what it WOULD run instead of
-// crashing. hostResolver locates pix-host (injected so tests stay
-// hermetic).
+// for the requested servers. With no requested names it registers every entry
+// in the resolved profile's cfg.MCP.
+//
+// Every server pix can register comes from the ACTIVE PACK's manifest. Pix
+// ships none of its own and special-cases no vendor: `servers` is the whole
+// vocabulary, so a name that is neither pack-declared nor a known catalog
+// endpoint is an error naming what to do about it, never a guess. When sbx is
+// absent it prints exactly what it WOULD run instead of crashing.
 func RegisterServers(cfg *config.Config, env hostenv.Env, out io.Writer,
-	requested []string, hostResolver func() (string, error), containers map[string]config.MCPContainer,
+	requested []string, servers map[string]config.MCPServer,
 	creds Credentials) error {
 
 	names := requested
@@ -448,8 +457,8 @@ func RegisterServers(cfg *config.Config, env hostenv.Env, out io.Writer,
 		names = append(names, cfg.MCP...)
 	}
 	if len(names) == 0 {
-		fmt.Fprintln(out, "Nothing to register: no local stdio servers requested or in config mcp.")
-		fmt.Fprintln(out, "Enable one first, e.g.:  pix config set mcp "+config.GWServerName)
+		fmt.Fprintln(out, "Nothing to register: no servers requested and none in the config mcp list.")
+		fmt.Fprintln(out, "MCP servers come from a pack. Activate one with:  pix pack use <path>")
 		return nil
 	}
 
@@ -458,93 +467,75 @@ func RegisterServers(cfg *config.Config, env hostenv.Env, out io.Writer,
 	// precondition to check here anymore.
 
 	// Nil-safe lookPath: a partially-populated hostenv.Env (some tests set only
-	// env.Run) must degrade to "binary not found" rather than panic — the same
-	// posture LocalMCPNames takes for a nil env.Run. Every op/gog/sbx lookup below
-	// goes through this.
+	// env.Run) must degrade to "binary not found" rather than panic. Every
+	// op/command/sbx lookup below goes through this.
 	lookPath := env.LookPath
 
-	// The set of names this host can serve locally is the source of truth
-	// (`pix-host mcp --list`). gog is always a valid local special case even
-	// though the bridge never lists it. Partition the requested names into gog,
-	// confirmed-local servers, and remote gateway-catalog servers to SKIP.
-	localSet, localKnown := LocalMCPNames(env, hostResolver)
-	wantGog := false
-	var localServers []string
-	var containerServers []string // pack CONTAINER/REMOTE integrations (--local --url manifest, or --url remote)
-	var skippedUnknown []string   // non-gog names skipped because the local set is unknown
+	// Partition by what the PACK declared. This is pure data — no subprocess, no
+	// ambient host state, no fallback guess. A name pix cannot place is named as
+	// unknown rather than registered as something it might not be.
+	var hostServers []string    // Command + Image: an op-run-wrappable host command
+	var gatewayServers []string // Manifest + RemoteURL: the gateway resolves and runs it
+	var unknown []string
+	// servers is the pack's map and must not be mutated; a catalog fallback
+	// below needs to add to it, so work on a copy.
+	resolvedServers := make(map[string]config.MCPServer, len(servers)+len(names))
+	for k, v := range servers {
+		resolvedServers[k] = v
+	}
 	for _, n := range names {
+		s, declared := servers[n]
 		switch {
-		case n == config.GWServerName:
-			wantGog = true
-		case containers[n].Manifest != "":
-			// Manifest container: registered by --local --url, not a host --command,
-			// so it doesn't depend on the pix-host local-name set.
-			containerServers = append(containerServers, n)
-		case containers[n].RemoteURL != "":
-			// Remote container: the pack carries the endpoint URL, so we register it
-			// ourselves via `sbx mcp add --url` (OAuth'd host-side). Previously these
-			// gateway-catalog names were SKIPPED — the pack now wires them directly.
-			containerServers = append(containerServers, n)
-		case containers[n].Image != "":
-			// Image container: an op-run-wrapped `docker run` — behaves like a local
-			// stdio server (host-registered, op-refs-backed), just a different cmd.
-			localServers = append(localServers, n)
-		case !localKnown:
-			// FAIL CLOSED: the local-name list could NOT be established
-			// (pix-host unresolved or `mcp --list` failed). We must NOT assume
-			// an unknown name is local — that would register a gateway-catalog name
-			// (e.g. notion) as `pix-host mcp notion`. Skip every non-gog name
-			// with an actionable warning and fail the command below.
-			fmt.Fprintf(out, "  %s: cannot determine local MCP servers "+
-				"(pix-host mcp --list failed); skipping %s; re-run after building pix-host\n", n, n)
-			skippedUnknown = append(skippedUnknown, n)
-		case !localSet[n]:
-			// Not gog and not a local stdio server -> a remote gateway-catalog
-			// server. It is attached a different way; do not register it as local.
-			fmt.Fprintf(out, "  %s: gateway-catalog server, not locally registered\n", n)
+		case declared && s.HostExec():
+			hostServers = append(hostServers, n)
+		case declared:
+			gatewayServers = append(gatewayServers, n)
+		case McpCatalogNames[n]:
+			// A curated catalog name is registerable with no pack at all: pix
+			// already knows its endpoint. Treating it as undeclared would break
+			// a host that registered one directly (`pix mcp add notion --url …`)
+			// and has it in the config — nobody declared it, and nobody needs to.
+			url, _ := KnownRemoteURL(n)
+			resolvedServers[n] = config.MCPServer{RemoteURL: url}
+			gatewayServers = append(gatewayServers, n)
 		default:
-			// Confirmed local: it is in the pix-host `mcp --list` set.
-			localServers = append(localServers, n)
+			unknown = append(unknown, n)
+			fmt.Fprintf(out, "  %s: not declared by the active pack\n", n)
 		}
 	}
+	servers = resolvedServers
 
-	// skippedErr is non-nil when a requested non-gog name was skipped because the
-	// local set could not be established. It is folded into the final error so the
-	// command exits non-zero rather than reporting a silent success.
-	var skippedErr error
-	if len(skippedUnknown) > 0 {
-		skippedErr = fmt.Errorf("could not determine local MCP servers "+
-			"(pix-host mcp --list failed); skipped %s; build pix-host, then re-run",
-			strings.Join(skippedUnknown, ", "))
+	// unknownErr makes an unplaceable name a non-zero exit rather than a silent
+	// success. A user whose config lists a server nobody declares has a real
+	// problem — most often a pack that was deactivated, or a stale config entry.
+	var unknownErr error
+	if len(unknown) > 0 {
+		unknownErr = fmt.Errorf("no active pack declares %s — activate the pack that provides it "+
+			"(pix pack use <path>), or drop it (pix config unset mcp %s)",
+			strings.Join(unknown, ", "), unknown[0])
 	}
 
-	// The final registration order: local servers, then container servers, then
-	// gog (if requested).
+	// Host commands first, then gateway-run servers: a remote registration can
+	// open a browser, and doing the silent work before the interactive work
+	// means a user is never left staring at a consent screen wondering whether
+	// the rest succeeded.
 	var finalNames []string
-	finalNames = append(finalNames, localServers...)
-	finalNames = append(finalNames, containerServers...)
-	if wantGog {
-		finalNames = append(finalNames, config.GWServerName)
-	}
+	finalNames = append(finalNames, hostServers...)
+	finalNames = append(finalNames, gatewayServers...)
 	if len(finalNames) == 0 {
-		if skippedErr != nil {
-			return skippedErr
-		}
-		fmt.Fprintln(out, "Nothing to register locally: every configured mcp name is a remote gateway-catalog server.")
-		return nil
+		return unknownErr
 	}
 
-	// op-refs is the file of op:// refs the wrapper resolves at spawn; when both
-	// op and op-refs are present we wrap credentialed local servers in `op run`.
-	// Normal gog OAuth remains bare unless the refs file explicitly contains
-	// GOG_KEYRING_PASSWORD. When either is absent we register BARE: a no-creds
-	// server registers fine, and a creds server runs uncredentialed until an
-	// op-refs.env is added — never a hard failure.
+	// op-refs is the file of op:// refs the wrapper resolves at spawn. When both
+	// op and op-refs are present, a server that DECLARES credentials is wrapped
+	// in `op run`; one that declares none never is (see ExecArgv). When either
+	// is absent every server registers BARE — 1Password is optional, and a
+	// credential-free server is fully functional without it.
 	OpPath, OpRefs := creds.OpPath, creds.OpRefsPath
 	opReady := OpPath != "" && OpRefs != ""
 
-	reg := McpRegistrar{containers: containers}
-	if len(containerServers) > 0 {
+	reg := McpRegistrar{servers: servers, resolved: map[string]string{}}
+	if len(gatewayServers) > 0 {
 		// Decide the manifest/remote URL grammar ONCE, up front, by a read-only
 		// help probe — never by retrying a failed registration. A remote
 		// container's `mcp add` can trigger an interactive OAuth grant, and
@@ -557,57 +548,49 @@ func RegisterServers(cfg *config.Config, env hostenv.Env, out io.Writer,
 		reg.Op = OpPath
 		reg.OpRefs = OpRefs
 	}
-	if wantGog {
-		reg.GogUseOp = opReady && creds.GogKeyring
+
+	// Resolve every host COMMAND to an absolute path before registering
+	// anything. A missing binary is an operator problem with a known fix, and
+	// the pack is the only thing that knows how to install it — so we name the
+	// server, the binary and the pack's own install hint rather than guessing.
+	// This is a hard failure: registering a command that does not exist is
+	// exactly the defect that let two dead servers sit at "ready" for months.
+	for _, n := range hostServers {
+		s := servers[n]
+		if s.Command == "" {
+			continue // Image server: docker is resolved by the gateway, not here
+		}
+		path, err := lookPath(s.Command)
+		if err != nil {
+			return fmt.Errorf("%s needs the %q command, which is not on PATH; "+
+				"install it (see the pack's setup instructions), then re-run `pix mcp add %s`",
+				n, s.Command, n)
+		}
+		reg.resolved[n] = path
 	}
 
+	// Credential-declaring servers need op-refs to actually work. Registering
+	// them bare is legitimate (1Password is optional) but must be SAID, because
+	// a bare registration of a credentialed server is a server that will start
+	// and then fail its first real call.
 	if !opReady {
-		if len(localServers) > 0 {
-			// A confirmed non-gog local stdio server (slack, or another registered
-			// local name) can actually use op-refs. Best-effort: seed a template op-refs.env at
-			// the absolute XDG path so the user has a concrete file to fill in later,
-			// and note that we registered bare rather than failing.
+		var needCreds []string
+		for _, n := range hostServers {
+			if len(servers[n].EnvKeys) > 0 {
+				needCreds = append(needCreds, n)
+			}
+		}
+		if len(needCreds) > 0 {
 			refsPath := creds.SeedPath
 			// ONE seeder: route through config.SeedOpRefsAt so the template + 0700 dir
 			// / 0600 file + no-clobber rule is identical to `pix setup`'s seeding.
 			if created, err := config.SeedOpRefsAt(refsPath); err == nil && created {
 				fmt.Fprintf(out, "seeded a template op-refs.env at %s\n", refsPath)
 			}
-			fmt.Fprintf(out, "note: no op-refs.env found; registered %s directly (bare, no 1Password); "+
-				"add creds to %s if a server needs them\n",
-				strings.Join(finalNames, ", "), refsPath)
-		} else if wantGog {
-			// gog-only: gog authenticates via its own OAuth grant, never op-refs, so
-			// do NOT seed op-refs.env or mention it. Register bare. gog is a LOCAL
-			// stdio MCP with no built-in guided setup (that wizard was retired —
-			// see docs/design/gworkspace-externalization.md): authorize the account
-			// with the external `gog` CLI directly, never native `sbx mcp auth`
-			// (remote catalog OAuth) or a raw legacy direct-login recipe.
-			fmt.Fprintln(out, "note: registered gog directly (bare); gog authenticates via its own OAuth grant — run the gog CLI's own auth command if it needs (re)authorizing")
+			fmt.Fprintf(out, "note: no op-refs.env found, so %s registered WITHOUT credentials "+
+				"and will fail its first authenticated call; add them to %s and re-run `pix mcp add`\n",
+				strings.Join(needCreds, ", "), refsPath)
 		}
-		// container-only: nothing to seed — container creds are Docker-side, not op-refs.
-	}
-
-	if wantGog {
-		gogPath, err := lookPath("gog")
-		if err != nil {
-			return fmt.Errorf("gog is requested but gog not found — " + config.GWInstallCmd)
-		}
-		account := strings.TrimSpace(cfg.GogAccount)
-		if account == "" {
-			return fmt.Errorf("gog is requested but no account is set — " +
-				"run: pix config set google_workspace_account <you@example.com>")
-		}
-		reg.Gog = gogPath
-		reg.Account = account
-	}
-
-	if len(localServers) > 0 {
-		hb, err := hostResolver()
-		if err != nil {
-			return fmt.Errorf("pix-host not found (needed for non-gog servers): %v", err)
-		}
-		reg.HostBin = hb
 	}
 
 	_, sbxErr := lookPath("sbx")
@@ -625,7 +608,7 @@ func RegisterServers(cfg *config.Config, env hostenv.Env, out io.Writer,
 			fmt.Fprintf(out, "  sbx %s\n", strings.Join(args, " "))
 			continue
 		}
-		if remoteURL := containers[n].RemoteURL; remoteURL != "" && remoteMCPRegistrationCurrent(env, n, remoteURL) {
+		if remoteURL := servers[n].RemoteURL; remoteURL != "" && remoteMCPRegistrationCurrent(env, n, remoteURL) {
 			switch remoteMCPAuthorizationState(env, n) {
 			case CatalogMCPReady:
 				if !env.Quiet {
@@ -651,7 +634,7 @@ func RegisterServers(cfg *config.Config, env hostenv.Env, out io.Writer,
 			}
 		}
 		var err error
-		if containers[n].RemoteURL != "" {
+		if servers[n].RemoteURL != "" {
 			// Remote MCP registration is an explicitly interactive mutation (see
 			// runInteractiveSbx); read-only status checks stay bounded.
 			if env.Quiet {
@@ -695,16 +678,16 @@ func RegisterServers(cfg *config.Config, env hostenv.Env, out io.Writer,
 		fmt.Fprintln(out, "note: install Docker Sandboxes (sbx) to register: https://docs.docker.com/ai/sandboxes")
 	}
 	if len(regErrs) > 0 {
-		return errors.Join(fmt.Errorf("%d server(s) failed to register: %w", len(regErrs), errors.Join(regErrs...)), skippedErr)
+		return errors.Join(fmt.Errorf("%d server(s) failed to register: %w", len(regErrs), errors.Join(regErrs...)), unknownErr)
 	}
 	if !sbxOK {
 		// `register` PROMISED to register these servers and did not (nothing was
 		// exec'd, nothing is registered with the gateway) — exit non-zero
 		// (ErrSbxUnavailable -> rpc.ExitServiceDown) rather than a silent success
 		// just because the would-run lines above printed cleanly.
-		return errors.Join(ErrSbxUnavailable, skippedErr)
+		return errors.Join(ErrSbxUnavailable, unknownErr)
 	}
-	return skippedErr
+	return unknownErr
 }
 
 // runInteractiveSbx runs an sbx mutation that may open a browser and keep a
@@ -848,35 +831,15 @@ func AllPreloadedMCP(servers []string) []string {
 	return out
 }
 
-// LocalMCPNames asks the pix-host binary which MCP servers it can serve
-// locally (`pix-host mcp --list`), the source of truth for local vs remote
-// registration. It returns the set of names and whether the list was obtained.
-// A missing binary or a failed call returns (nil,false); the caller then FAILS
-// CLOSED — it registers only gog (a known special case) and SKIPS every other
-// requested name rather than risk registering a remote gateway-catalog name as a
-// local pix-host subcommand.
-func LocalMCPNames(env hostenv.Env, hostResolver func() (string, error)) (map[string]bool, bool) {
-	if hostResolver == nil {
-		return nil, false
-	}
-	hb, err := hostResolver()
-	if err != nil || hb == "" {
-		return nil, false
-	}
-	// BOUNDED: a hung `pix-host mcp --list` degrades to an unknown local
-	// set (callers fail closed), never a wedged caller.
-	out, timedOut, err := env.RunTimed(hb, "mcp", "--list")
-	if err != nil || timedOut {
-		return nil, false
-	}
-	set := map[string]bool{}
-	for _, ln := range strings.Split(out, "\n") {
-		if n := strings.TrimSpace(ln); n != "" {
-			set[n] = true
-		}
-	}
-	return set, true
-}
+// LocalMCPNames is GONE, and its absence is the point. It asked `pix-host mcp
+// --list` which servers this binary could serve, so that a name could be
+// classified local-vs-remote at runtime. That list has been empty since the
+// last built-in server was externalized, which made the classifier an
+// unanswerable question every caller then had to fail closed around — a whole
+// subsystem (the bridge, the resolver threading, the unknown-set fallbacks)
+// serving a set that is always empty. Servers are declared by the active
+// pack's manifest now, so classification is a map lookup on data a reviewer
+// already consented to, with no subprocess and no ambient host state.
 
 // mcpAuthResult is the outcome McpAuthStatus classifies a `sbx mcp auth
 // status <name>` probe into. mcpAuthUnknown covers output doctor cannot

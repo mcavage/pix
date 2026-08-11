@@ -104,11 +104,11 @@ func TestDetectLegacyPositionalURL_UnknownStaysCurrent(t *testing.T) {
 // --- AddArgs respects LegacyPositionalURL -----------------------------------
 
 func TestAddArgs_LegacyPositionalURL(t *testing.T) {
-	containers := map[string]config.MCPContainer{
+	servers := map[string]config.MCPServer{
 		"notion-ish": {Manifest: "https://example.com/mcp/x/server.json"},
 		"meetings":   {RemoteURL: "https://app.trymeetings.com/mcp"},
 	}
-	reg := McpRegistrar{containers: containers, LegacyPositionalURL: true}
+	reg := McpRegistrar{servers: servers, LegacyPositionalURL: true}
 
 	manifest := strings.Join(reg.AddArgs("notion-ish"), " ")
 	if manifest != "mcp add notion-ish --local https://example.com/mcp/x/server.json" {

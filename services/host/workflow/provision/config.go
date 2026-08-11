@@ -13,8 +13,6 @@ import (
 // testable; the key set mirrors ConfigKeysHelp exactly.
 func ConfigValue(cfg *config.Config, key string) (string, error) {
 	switch key {
-	case "google_workspace_account":
-		return cfg.GogAccount, nil
 	case "mcp":
 		return strings.Join(cfg.MCP, " "), nil
 	case "services":
@@ -38,8 +36,6 @@ func ConfigValue(cfg *config.Config, key string) (string, error) {
 
 // ConfigKeysHelp lists the supported keys for set/unset.
 const ConfigKeysHelp = `keys:
-  google_workspace_account <email>
-                           Google Workspace account for the google-workspace MCP server
   mcp <server>              add/remove an MCP server in the mcp list; every
                             configured server preloads at sandbox create
   services <name>           add/remove a host service in the services list
@@ -67,27 +63,14 @@ func ApplyConfigChange(cfg *config.Config, unset bool, key string, args []string
 		verb = "unset"
 	}
 	switch key {
-	case "google_workspace_account":
-		if unset {
-			cfg.SetGogAccount("")
-		} else {
-			if len(args) != 1 {
-				return "", fmt.Errorf("config set google_workspace_account <email>: needs exactly one value")
-			}
-			cfg.SetGogAccount(args[0])
-		}
-		return fmt.Sprintf("google_workspace_account = %q", cfg.GogAccount), nil
-
 	case "mcp":
 		if len(args) != 1 {
-			// google-workspace (config.GWServerName) is the one example cited here on
-			// purpose: it is the only server this generic set/register path actually
-			// carries end to end (pix mcp register -> the op-run wrapper). Slack was
-			// externalized (W2/U02a, docs/design/slack-setup.md): it registers through
-			// a pack's own container manifest (`sbx mcp add --local --url <manifest>`),
-			// not this key, so it must not be cited here as if the two paths were
-			// interchangeable — that reads as "just works" and it does not.
-			return "", fmt.Errorf("config %s mcp <server>: needs a server name (e.g. %s)", verb, config.GWServerName)
+			// No example server is named here on purpose. Pix ships none, so any
+			// name in this message would be one particular pack's — which reads
+			// as "this works out of the box" to a user whose pack does not
+			// declare it. The names a host can actually use are the ones its
+			// active pack declares, and `pix doctor` lists them.
+			return "", fmt.Errorf("config %s mcp <server>: needs a server name (the names your active pack declares; see pix doctor)", verb)
 		}
 		if unset {
 			cfg.RemoveMCP(args[0])

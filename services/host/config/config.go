@@ -84,9 +84,6 @@ type Config struct {
 	// backend wiring and model-id bindings only, never model identity or secrets.
 	Inference InferenceConfig `toml:"inference,omitempty"`
 
-	// GogAccount is the Google Workspace account the gog host-MCP server serves.
-	GogAccount string `toml:"google_workspace_account"`
-
 	Kits struct {
 		Stack []string `toml:"stack"`
 	} `toml:"kits"`
@@ -576,10 +573,6 @@ func stringSlicesEqual(a, b []string) bool {
 	return true
 }
 
-// SetGogAccount sets the Google Workspace account (trimmed). An empty value
-// clears it.
-func (c *Config) SetGogAccount(account string) { c.GogAccount = strings.TrimSpace(account) }
-
 // AddMCP adds name to the MCP set if absent, returning true when it changed.
 func (c *Config) AddMCP(name string) bool { return addUnique(&c.MCP, name) }
 
@@ -637,21 +630,45 @@ func OpRefsPath() string {
 	return filepath.Join(dir, "op-refs.env")
 }
 
-// GWServerName is the google-workspace MCP server's registration + display name. It
-// lives here because five unrelated callers must recognise the same name.
-type MCPContainer struct {
-	Manifest  string
+// MCPServer is one pack-declared MCP server, resolved to everything pix needs
+// to register it with the gateway. Exactly one TRANSPORT is set, and that
+// choice decides both the argv and whether credentials are injected at all:
+//
+//	Command   a host binary the gateway spawns over stdio (creds via op-refs)
+//	Image     a container run by the gateway            (creds via op-refs, -e)
+//	Manifest  an OCI server manifest the gateway resolves (creds Docker-side)
+//	RemoteURL a hosted endpoint                           (OAuth host-side)
+//
+// Pix ships NO built-in servers: every one of these comes from a pack. There
+// is no special case for any particular vendor — a server that needs hardened
+// flags declares them as Args, where a reviewer can see them.
+type MCPServer struct {
+	// Command + Args are the host binary and its LITERAL argv. Pix never
+	// templates Args, so what a reviewer reads in the pack manifest is
+	// character-for-character what the gateway spawns. Anything that varies
+	// per user travels as an environment variable instead (EnvKeys).
+	Command string
+	Args    []string
+
 	Image     string
-	EnvKeys   []string          // env var names to forward into an Image container (-e KEY)
+	EnvKeys   []string          // env var NAMES forwarded to a Command/Image server (-e KEY)
 	EnvValues map[string]string // non-secret literals forwarded as -e KEY=VALUE
-	RemoteURL string            // remote MCP endpoint URL (`sbx mcp add <name> --url <url>`)
+
+	Manifest  string
+	RemoteURL string // remote MCP endpoint URL (`sbx mcp add <name> --url <url>`)
+
+	// Probe is the argv that answers "can this server actually do its job",
+	// as distinct from "is it registered". Registration is not health: a
+	// server can be registered and unable to authenticate. Doctor runs this
+	// and shows its output; nothing else does. Empty means the pack declared
+	// no probe, which doctor reports as unverifiable rather than as healthy.
+	Probe []string
 }
 
-const GWServerName = "google-workspace"
-
-// GWInstallCmd is the ONE place the external binary's package name may reach
-// a user; it crosses domain boundaries for the same reason GWServerName does.
-const GWInstallCmd = "brew install openclaw/tap/gogcli"
+// HostExec reports whether this server runs a command on the HOST — the
+// distinction that decides whether it enters a pack's Tier-1 trust surface.
+// Manifest and RemoteURL servers do not: the gateway resolves and runs them.
+func (s MCPServer) HostExec() bool { return s.Command != "" || s.Image != "" }
 
 // OpRefsMentalModel is the ≤4-line plain explanation of what op-refs.env is, reused
 // VERBATIM in `pix setup`, the `secret` help, and the template header.
@@ -660,16 +677,11 @@ host MCP server it resolves those refs from 1Password and injects them as env
 vars — the secret never touches disk or the sandbox. A server with no creds
 (pio) needs no entry.`
 
-// NonSecretOpRefsKeys is the documented allowlist of NON-secret env vars that may
-// appear in op-refs.env with a literal value; everything else must be an op:// ref.
-var NonSecretOpRefsKeys = map[string]bool{
-	"GOG_ACCOUNT":         true,
-	"GOG_HOME":            true,
-	"GOG_KEYRING_BACKEND": true,
-}
-
-// OpRefsTemplate is the seed content for a fresh op-refs.env: op:// references ONLY
-// (plus the non-secret allowlist), every example line COMMENTED OUT.
+// OpRefsTemplate is the seed content for a fresh op-refs.env: op:// references
+// ONLY, every example line COMMENTED OUT. There are no vendor examples here on
+// purpose — pix ships no built-in MCP server, so the only thing that can tell
+// you which ENV_VARs to add is the pack you activate, and it says so in its
+// own docs. A template that named vendors would go stale the moment one moved.
 const OpRefsTemplate = `# pix op-refs.env — 1Password refs the sbx gateway resolves via
 # ` + "`op run --env-file`" + ` when it spawns each host MCP server.
 #
@@ -678,30 +690,18 @@ const OpRefsTemplate = `# pix op-refs.env — 1Password refs the sbx gateway res
 # vars — the secret never touches disk or the sandbox. A server with no creds
 # (pio) needs no entry.
 #
-# This file holds op://vault/item/field REFERENCES only, plus the documented
-# non-secret env allowlist (GOG_ACCOUNT, GOG_HOME, GOG_KEYRING_BACKEND).
-# Everything secret (tokens, keyring passwords) is an op:// ref resolved from
-# 1Password at spawn time — never a pasted secret.
+# This file holds op://vault/item/field REFERENCES only. Everything secret
+# (tokens, keyring passwords) is an op:// ref resolved from 1Password at spawn
+# time — never a pasted secret. A NON-secret value (an account name, a home
+# directory) may be a plain literal, but only when the active pack declares
+# that variable as env_keys on the integration that needs it.
 #
-# Every line below is COMMENTED OUT: a freshly-seeded file has zero active
-# entries. Uncomment + fill in a line only when you wire that server.
+# A freshly-seeded file has zero entries: you add one when you wire a server,
+# and your pack's docs name the variable.
 #
-# Verify:  op read "op://<vault>/<item>/<field>" >/dev/null && echo OK
-# Tip:     1Password app -> right-click a field -> "Copy Secret Reference".
-
-# Slack is no longer a built-in host MCP server (see docs/design/
-# slack-setup.md, W2/U02a): a pinned external pack now owns registering it.
-# If your active pack's Slack MCP server needs a token, it documents its own
-# ENV_VAR here (still an op:// ref, same mechanism) — nothing to seed by
-# default.
-
-# gog (Google Workspace) MCP server. gog only needs op to inject a headless
-# keyring password; a keyring reachable without a password does not need this.
-# Uncomment + fill in only if the gateway can't unlock gog's keyring headlessly.
-# GOG_ACCOUNT=you@example.com
-# GOG_HOME=$HOME/.config/gog
-# GOG_KEYRING_BACKEND=file
-# GOG_KEYRING_PASSWORD=op://<vault>/<item>/<field>
+# Add one:  pix secret set ENV_VAR op://<vault>/<item>/<field>
+# Verify:   pix secret check
+# Tip:      1Password app -> right-click a field -> "Copy Secret Reference".
 `
 
 // SeedOpRefs writes OpRefsTemplate to OpRefsPath() 0600 only if the file is absent,

@@ -1,0 +1,99 @@
+# HANDOFF — integrations remediation (overnight run, 2026-08-10/11)
+
+**Read this first, then `docs/design/integrations-remediation.md` (the spec).**
+This file is the live state of the run. Update it at every phase boundary.
+
+## Mission
+
+Take `pix` + `../gm-pix-pack` from "setup is impossible" to end-user ready.
+Mark onboards new users tomorrow morning. He is asleep and unreachable for the
+duration — **do not stop to ask questions; decide, record the decision here, and
+keep going.**
+
+## Standing constraints (from Mark, all confirmed)
+
+| | |
+|---|---|
+| Git | Commit directly to **local `main`**. **Never push.** No PRs. |
+| Baseline | `7218978` (= `origin/main` at run start). Local was 4 behind; fast-forwarded. |
+| Stash | `stash@{0}` holds a pre-run WIP snapshot that was an OLDER draft of merged #80/#81. Nothing of value. Do not restore. |
+| Host state | **Cleaning it is authorized**, including destroying the running sandbox. |
+| gog | Rip out of pix core entirely. Not public. Moves to the pack. |
+| Slack | Pack-owned, PKCE, **never in core**. Do LAST. If the night runs out it must degrade honestly, not half-work. |
+| Slack re-auth | 30-day grant expiry: **let it fail and say why**, with the exact re-auth command. No proactive nagging, no prompts in `pix run`. |
+| Plugin kinds | Stay at one (`memory`). Do NOT restore `McpServer`/`CredentialBroker`. |
+| Credentials | One home: `~/.config/pix/op-refs.env`, 1Password assumed present. |
+| Also owed | Fix flaky `TestLocalOllamaProbesAreSerialized` (flaked on two PRs). |
+
+## Ralph loop protocol
+
+Each iteration: **build → clean-slate QA → clean-slate review → triage → fix →
+update this file → next loop.** QA and review agents get NO context from the
+implementer beyond the spec and acceptance criteria — that is the point. Expect
+3+ iterations. Record every iteration's findings below, including the ones
+rejected and why.
+
+## Phase status
+
+| phase | what | status |
+|---|---|---|
+| 0 | Host cleanup (dead registrations, sandbox) | ✅ done |
+| 1 | Rip gog from pix core | ✅ prod code done |
+| 2 | Generic local-command MCP integration | ✅ prod code done |
+| 3 | Doctor honesty (registered ≠ working) | ✅ prod code done |
+| 4 | Declarative setup steps | ✅ prod code done |
+| 5 | Docs + skills truth pass | ☐ NOT STARTED |
+| 6 | gm-pix-pack rewrite | 🔶 pack.toml + capabilities.json done; README/tests left |
+| 7 | CI guards | ☐ NOT STARTED |
+| X | Flaky test fix | ✅ done (mutation-verified both directions) |
+| T | Go test suite green | 🔶 3 agents working; config/secret/mcp done |
+
+## Verified on the real host
+
+`pix doctor` before: `✓ mcp optional 8 registered` — with two dead registrations
+and a server working only by accident. After:
+
+```
+✗ mcp        optional 1 of 6 not usable
+  - google-workspace: registered and answering
+  - slack: in your config, but no active pack declares it
+  - bamboohr: registered and answering
+  - opine/granola/notion: registered and authenticated
+  - atlassian: registered, not authenticated        ← real gap, previously hidden
+```
+
+`sbx mcp inspect google-workspace` is now op-run wrapped (it was bare, working
+only because ~/.bashrc exported the keyring password into the gateway's env).
+
+## Verification commands
+
+```bash
+cd /Users/mcavage/dev/pix
+go build ./... && go vet ./...        # from services/host
+bash scripts/gate.sh                  # the fast PR gate CI runs
+go test ./...                         # from services/host
+node --test tests/                    # JS suite
+```
+
+## Decisions made during the run
+
+_(append; never rewrite history here — a reversed decision gets a new row saying so)_
+
+| # | decision | why |
+|---|---|---|
+| R1 | Fast-forwarded to `origin/main` instead of committing the local WIP. | The WIP was 22 files / 8 insertions / **2003 deletions** vs origin/main — an older draft of already-merged #80+#81. Committing it would have been a regression. Stashed, not discarded. |
+| R2 | Deleted the whole local-MCP bridge (`pix-host mcp --list`, `LocalMCPNames`, `HostBin`, `hostResolver` threading, `LocalMCPClassifier`, `PackLocalMCP`). | The bridge returned the EMPTY SET unconditionally (`main.go:63`), yet a large fail-closed subsystem existed to handle its unanswerable cases. Servers come from the pack manifest now, so classification is a map lookup. |
+| R3 | `ComputeHostBoM` is a pure function of the manifest. | It computes what a user CONSENTS to. It previously ran a subprocess, so the same pack could produce different bills of materials on different machines or moments. |
+| R4 | op-run wrapping is decided by whether a server declares `EnvKeys`, not by a vendor special case. | `op run --env-file` resolves EVERY ref in the file; wrapping a credential-free server made it share fate with unrelated refs. |
+| R5 | Doctor's health probe runs through the SAME `mcp.OpRunWrap` the gateway uses. | This is the original bug class: a credential that works in your terminal and not in the gateway. A probe in doctor's own shell proves nothing. Cost: a locked 1Password vault makes probes report "did not answer" — which is honest, and the message says so. |
+| R6 | Per-server doctor checks run CONCURRENTLY. | The budget is per-probe, not per-exec. One `op run` blocking on biometrics starved every check after it and reported five gaps that were never checked. Measured before/after on the real host. |
+| R7 | `env_values` is REFUSED at load for a `command` transport. | Found by an agent: it was copied into the spec and shown on the consent screen but never materialized — a host command has no `-e`. Consenting to a value that never reaches the server is worse than not supporting it. |
+| R8 | Snowflake keeps its executable setup hook. | Installing a vendor daemon + LaunchAgent is genuinely bespoke; that is what the escape hatch is for, and the script is content-hashed into the fingerprint. Encoding it as a `bash -lc` one-liner in the manifest would have smuggled opaque shell back in. |
+| R9 | Slack is NOT declared in the pack at all. | Its PKCE grant is a ROTATING token pair that op-refs (read-only resolution, no write-back) cannot hold. Declaring a name with no transport is what produced the dead `pix-host mcp slack` registration. `capabilities.json` routes chat → none so the agent says so instead of pretending. |
+| R10 | **REVERSES the design doc's Phase 1:** `skills/gworkspace/SKILL.md` STAYS in pix; it does not move to the pack. | The skill is not about gog. It is the untrusted-content rule for Gmail/Doc text — the prompt-injection guard — and it belongs wherever the `gworkspace` CAPABILITY is declared, which is pix's `capabilities.json`. The pack supplies the server; pix supplies the safety rule, so a public user who wires their own Workspace server inherits it. Its false claims (registration verb, `GOG_HOME`, pix-owned flags) were corrected instead. |
+| R11 | `scripts/macos/verify-pix-lifecycle.sh` asserted a `PIX_RETIRED` seam that does not exist. | Measured: `pix host` prints `no command named "host"` and exits 0, while the release gate demanded exit 2 and the string `PIX_RETIRED`. The gate itself could not pass. Fixed to assert the real contract. |
+| R12 | Test fixtures (Go and JS) now force `commit.gpgsign=false`. | Fixture repos inherited the developer's `~/.gitconfig`. On a machine signing with 1Password, every fixture commit blocked on an authorization prompt that never comes in a test run — the suite hung ~60s per commit and timed out with nothing explaining why. Found independently by two agents; it is why the suite could not complete tonight. |
+
+## Iteration log
+
+_(append one section per loop)_

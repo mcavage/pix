@@ -4,6 +4,16 @@ Status: SHIPPED (v1 + v2). This is the design rationale behind the pack
 architecture described for users in `docs/reference.md` §5 and built out
 further in `docs/design/packs-v2.md` / `packs-v2-impl.md`.
 
+> **Schema note (supersedes the v1 text below).** An `[[integrations]]` stanza
+> naming an `mcp` server must declare **exactly one transport** — `command`,
+> `image`, `manifest` or `url` — plus `env`/`env_keys` for credential NAMES and
+> an optional `probe`. The v1 "reference-only integration" (an `mcp` name with
+> only an `env`, describing a server something else provides) is now REFUSED at
+> load: it registered nothing while the gateway could still list a stale entry as
+> ready. Setup is declarative too (`[[setup.require]]` / `[[setup.apply]]`). The
+> current stanza is in `docs/reference.md` §5; the rationale for the change is
+> `docs/design/integrations-remediation.md`.
+
 Locked: name = `pack`; single active pack (no multi-pack) in v1; packs are
 100% runtime (no compile-in); v1 shipped Tier-0 + reference-only integrations
 with `op://` credential solicitation; pack-shipped executables + trust gate +
@@ -27,8 +37,9 @@ Tier-1 trust gate are unchanged and still exactly as described.
 
 Five things are facets of one: authored **skills**, an OKF **knowledge**
 bundle (`knowledge_bundles`), **MCP servers**, **CLI proxies** (e.g. `snow`
-wrappers), and **context config** (`gog_account`, routing/model prefs,
-memory scope). A pack unifies them into ONE portable, git-backed unit.
+wrappers), and **context config** (routing/model prefs, memory scope; per-vendor
+values travel as `env_keys` names, never as a pix config key). A pack unifies
+them into ONE portable, git-backed unit.
 
 ## 2. The three-way split (keep these distinct)
 
@@ -137,8 +148,8 @@ a pack can carry.
 With a single active pack, the pack IS your context — switching
 work<->personal is switching the active pack, not editing several config
 keys. Everything that makes up "which context am I in" lives in the pack:
-`gog_account`, mcp/integration refs, knowledge, routing + model prefs (§8a),
-and the memory scope.
+mcp/integration declarations, credential NAMES, knowledge, routing + model prefs
+(§8a), and the memory scope.
 
 A pack **binds a memory scope tag** (written to `.pix/profile`,
 wire-compatible with the `Profile` field in `plugin/interfaces.go`), so

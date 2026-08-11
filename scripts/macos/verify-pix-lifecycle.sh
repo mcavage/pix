@@ -549,9 +549,12 @@ assert_contains "--name" "pix run declares --name" pix help run
 assert_contains "--json" "pix ls declares --json" pix help ls
 assert_contains "--orphans" "pix rm declares --orphans" pix help rm
 assert_contains "serve status" "pix serve declares status" pix help serve
-# A retired verb must answer PIX_RETIRED and do nothing else.
-assert_exit 2 "pix host is retired (exit 2)" pix host
-assert_contains "PIX_RETIRED" "pix host names its replacement" pix host
+# A deleted verb gets the ordinary unknown-command answer. There is no
+# PIX_RETIRED seam -- this script asserted one for months after it was removed,
+# which meant the release gate itself could not pass. Deleted surfaces are not
+# announced (AGENTS.md: pix has no released users to migrate), so the contract
+# is simply that the verb is gone and the CLI says so.
+assert_contains 'no command named "host"' "a deleted verb says so plainly" pix host
 
 # --- 2. host services: launchd preflight + install, BEFORE any pix run --------
 # This runs before section [3]'s first `pix run`, on purpose: once a sandbox

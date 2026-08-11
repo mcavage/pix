@@ -42,9 +42,14 @@ func TestMcpHostTrustNotice_StatesBothFacts(t *testing.T) {
 // surface): the gworkspace skill must state, before "using" returned content,
 // that Google Workspace content is returned into the agent conversation and
 // therefore sent to the selected model provider, plus that credentials stay
-// host-side and write/send is disabled by default. Anti-drift: pins the
-// facts, not the exact prose, so the skill can be reworded without silently
-// dropping a fact.
+// host-side and that writing/sending takes an explicit host-side act.
+// Anti-drift: pins the facts, not the exact prose, so the skill can be reworded
+// without silently dropping a fact.
+//
+// The write fact used to be pinned as the phrase "disabled by default", which
+// was a claim about a flag pix passed. Pix passes no argv now — the PACK
+// declares it — so there is no pix-owned default to appeal to; the surviving
+// fact is that a write happens only because the host operator declared it.
 func TestGworkspaceSkill_DisclosesConversationExposure(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "skills", "gworkspace", "SKILL.md"))
 	if err != nil {
@@ -58,7 +63,7 @@ func TestGworkspaceSkill_DisclosesConversationExposure(t *testing.T) {
 		"credentials",
 		"host-side",
 		"write",
-		"disabled by default",
+		"unless the host operator",
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("gworkspace SKILL.md missing disclosure fact %q", want)

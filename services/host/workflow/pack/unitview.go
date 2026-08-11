@@ -12,9 +12,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"pix/host/packinfo"
-
-	"pix/host/hostenv"
-	"pix/host/sys"
 )
 
 // AcceptedService is the minimal accepted, normalized view of ONE go-plugin
@@ -37,10 +34,10 @@ type AcceptedService struct {
 // after proving its current host-exec surface is the exact one accepted at the
 // Tier-1 gate. Every other answer fails closed: a re-validation failure, an
 // unreadable store, an unaccepted pack, a stale fingerprint. Container services
-// are declared/consented but have no consumer yet. cfgGogAccount and env mirror
-// VerifyPackLaunchTrust so the fingerprint covers the SAME resolved surface
-// the acceptance was recorded over.
-func AcceptedGoPluginServices(p *packinfo.Info, cfgGogAccount string, env hostenv.Env) ([]AcceptedService, error) {
+// are declared/consented but have no consumer yet. It fingerprints the SAME
+// surface VerifyPackLaunchTrust does, so acceptance recorded there is the
+// acceptance checked here.
+func AcceptedGoPluginServices(p *packinfo.Info) ([]AcceptedService, error) {
 	if p == nil || len(p.Manifest.Services) == 0 {
 		return nil, nil
 	}
@@ -49,7 +46,7 @@ func AcceptedGoPluginServices(p *packinfo.Info, cfgGogAccount string, env hosten
 	if err := packinfo.ValidateServices(p.Root, &p.Manifest); err != nil {
 		return nil, err
 	}
-	bom := ComputeHostBoM(p, cfgGogAccount, LocalMCPClassifier(env, env.HostBinary))
+	bom := ComputeHostBoM(p)
 	fp, _, err := ComputeHostExecFingerprint(p.Root, bom)
 	if err != nil {
 		return nil, fmt.Errorf("pack %s services trust surface: %w", p.Manifest.Name, err)
@@ -82,11 +79,7 @@ func AcceptedGoPluginServices(p *packinfo.Info, cfgGogAccount string, env hosten
 	return out, nil
 }
 
-// AcceptedGoPluginServicesForSelf is AcceptedGoPluginServices for pix-host's
-// OWN process: selfPath (its own os.Executable()) stands in for the launcher's
-// HostBinary resolver, so `serve` needs no hostenv import of its own to ask
-// the one seam this package already exposes.
-func AcceptedGoPluginServicesForSelf(p *packinfo.Info, cfgGogAccount, selfPath string) ([]AcceptedService, error) {
-	env := hostenv.Env{System: sys.Real{}, HostBinary: func() (string, error) { return selfPath, nil }}
-	return AcceptedGoPluginServices(p, cfgGogAccount, env)
-}
+// AcceptedGoPluginServicesForSelf is GONE. It existed only to fabricate a
+// hostenv.Env so the bill of materials could run its local-MCP probe against
+// pix-host's own executable. The BoM is pure data now, so `serve` calls
+// AcceptedGoPluginServices directly and needs no stand-in resolver at all.

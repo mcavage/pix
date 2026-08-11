@@ -1,5 +1,5 @@
 // W0 pin: the top-level ~/.config/pix/config.toml key surface (AGENTS.md's
-// config.toml row: "Declares `services`, `mcp`, `google_workspace_account`,
+// config.toml row: "Declares `services`, `mcp`,
 // and the Ollama model names"). config.toml is managed exclusively through
 // `pix config set`/`unset` (safety invariant #1) — the Go struct's `toml:"…"`
 // tags ARE the on-disk contract, so a rename here is a silent breaking change
@@ -34,8 +34,14 @@ export default [
 				// wizard wrote for the separate google-docs-create MCP. Both the
 				// wizard and that MCP are retired — see
 				// docs/design/gworkspace-externalization.md and the matching
-				// scripts/semantic-diff/intended-changes.json entry. google_workspace_account
-				// stays: gog is still registered generically via `pix mcp register`.
+				// scripts/semantic-diff/intended-changes.json entry.
+				//
+				// google_workspace_account then followed it out. Pix ships no MCP
+				// servers and names no vendor: Google Workspace is an ordinary
+				// pack-declared server, and a per-user value like an account email
+				// travels as that integration's env_keys in op-refs.env. A core
+				// config key for one vendor's account was the last piece of the
+				// special case — see docs/design/integrations-remediation.md.
 				expected: [
 					"services",
 					"mcp",
@@ -44,7 +50,6 @@ export default [
 					"ollama_bridge_model",
 					"run_intent",
 					"inference",
-					"google_workspace_account",
 				],
 			},
 		],

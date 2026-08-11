@@ -10,6 +10,7 @@ import (
 	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/packinfo"
+	"pix/host/secret"
 	"pix/host/service"
 )
 
@@ -44,27 +45,102 @@ func RunPackSetup(env hostenv.Env, out io.Writer, root string, requested []strin
 		if !step.Required && !wanted[step.ID] {
 			continue
 		}
-		path := snapshots[step.ID]
 		label := strings.TrimSpace(step.Description)
 		if label == "" {
 			label = step.ID
 		}
-		if packSetupCheck(env, path, step.CheckArgs) {
+		check := func() (bool, string, bool) {
+			return packSetupCheck(env, snapshots[step.ID], step.CheckArgs), "", true
+		}
+		apply := func() error { return env.RunInteractive(snapshots[step.ID], step.ApplyArgs...) }
+		if step.Declarative() {
+			check = func() (bool, string, bool) { return checkRequires(env, step) }
+			apply = func() error { return applySteps(env, out, step) }
+		}
+
+		ok, why, fixable := check()
+		if ok {
 			fmt.Fprintf(out, "  ✓ %s: ready\n", label)
 			continue
 		}
+		// A requirement nothing can fix for you is reported the same way
+		// whether or not this is an interactive run: the answer is identical,
+		// and it is a command the user runs, not a prompt they answer.
+		if !fixable || len(step.Apply) == 0 && step.Declarative() {
+			return fmt.Errorf("pack setup %s: %s", step.ID, why)
+		}
 		if !interactive {
-			return fmt.Errorf("pack setup %s is not ready and may require interactive authorization; re-run without --yes/--non-interactive", step.ID)
+			return fmt.Errorf("pack setup %s is not ready (%s) and may require interactive authorization; "+
+				"re-run without --yes/--non-interactive", step.ID, why)
 		}
 		fmt.Fprintf(out, "\npack setup: %s\n", label)
-
-		if err := env.RunInteractive(path, step.ApplyArgs...); err != nil {
+		if why != "" {
+			fmt.Fprintf(out, "  needed: %s\n", why)
+		}
+		if err := apply(); err != nil {
 			return fmt.Errorf("pack setup %s failed: %w", step.ID, err)
 		}
-		if !packSetupCheck(env, path, step.CheckArgs) {
-			return fmt.Errorf("pack setup %s did not pass its verification probe after apply", step.ID)
+		if ok, after, _ := check(); !ok {
+			return fmt.Errorf("pack setup %s ran, but its own check still fails (%s)", step.ID, after)
 		}
 		fmt.Fprintf(out, "  ✓ %s: verified\n", label)
+	}
+	return nil
+}
+
+// checkRequires evaluates a declarative step's conditions in order, returning
+// the FIRST unmet one, a plain description of it, and whether running the
+// step's apply steps could plausibly fix it.
+//
+// Order is the pack's, and it matters: a `bin` check before a `probe` that runs
+// that binary means a user missing the tool is told to install it rather than
+// shown a confusing exec failure.
+func checkRequires(env hostenv.Env, step packinfo.SetupStep) (ok bool, why string, fixable bool) {
+	for _, r := range step.Require {
+		switch r.Kind {
+		case "bin":
+			if _, err := env.LookPath(r.Name); err != nil {
+				return false, fmt.Sprintf("%s is not installed — %s", r.Name, r.Install), true
+			}
+		case "op-ref":
+			if !secret.OpRefFilled(env, r.Env) {
+				// NOT fixable by any apply, and saying otherwise wastes a user's
+				// time. Pix cannot put a secret into someone's 1Password vault:
+				// only they can, and then only they can name the reference. So
+				// this reports the exact command and stops, instead of running
+				// an unrelated remediation that cannot possibly help.
+				return false, fmt.Sprintf("%s is not set — run: pix secret set %s op://<vault>/<item>/<field>", r.Env, r.Env), false
+			}
+		case "probe":
+			if _, timedOut, err := env.RunTimed(r.Argv[0], r.Argv[1:]...); err != nil || timedOut {
+				return false, fmt.Sprintf("`%s` does not pass", strings.Join(r.Argv, " ")), true
+			}
+		}
+	}
+	return true, "", false
+}
+
+// applySteps runs a declarative step's remediations in order. An interactive
+// apply inherits the terminal because it may open a browser and hold a
+// localhost callback; a bounded one must not, so it cannot hang setup.
+func applySteps(env hostenv.Env, out io.Writer, step packinfo.SetupStep) error {
+	for _, a := range step.Apply {
+		if e := strings.TrimSpace(a.Explain); e != "" {
+			fmt.Fprintf(out, "  %s\n", e)
+		}
+		switch a.Kind {
+		case "interactive":
+			if err := env.RunInteractive(a.Argv[0], a.Argv[1:]...); err != nil {
+				return fmt.Errorf("`%s`: %w", strings.Join(a.Argv, " "), err)
+			}
+		default: // "exec"
+			if _, timedOut, err := env.RunTimed(a.Argv[0], a.Argv[1:]...); err != nil || timedOut {
+				if timedOut {
+					return fmt.Errorf("`%s` timed out", strings.Join(a.Argv, " "))
+				}
+				return fmt.Errorf("`%s`: %w", strings.Join(a.Argv, " "), err)
+			}
+		}
 	}
 	return nil
 }
@@ -79,19 +155,21 @@ func snapshotAcceptedPackSetup(env hostenv.Env, p *packinfo.Info, wanted map[str
 	if p == nil {
 		return paths, cleanup, nil
 	}
+	// Only an EXECUTABLE step has bytes to snapshot. A declarative step is
+	// data in the manifest, already covered by the fingerprint below, with no
+	// file to copy and nothing to exec.
 	allBytes := map[string][]byte{}
 	for _, step := range p.Manifest.Setup {
+		if step.Declarative() {
+			continue
+		}
 		data, err := service.ReadFileNoSymlink(filepath.Join(p.Root, step.Path))
 		if err != nil {
 			return nil, cleanup, fmt.Errorf("setup hook %q could not be snapshotted safely: %w", step.ID, err)
 		}
 		allBytes[step.ID] = data
 	}
-	cfg, err := config.Load()
-	if err != nil {
-		return nil, cleanup, fmt.Errorf("loading config for setup trust verification: %w", err)
-	}
-	bom := ComputeHostBoM(p, cfg.GogAccount, LocalMCPClassifier(env, env.HostBinary))
+	bom := ComputeHostBoM(p)
 	fp, _, err := computeHostExecFingerprintWithSetup(p.Root, bom, allBytes)
 	if err != nil {
 		return nil, cleanup, err
@@ -113,7 +191,7 @@ func snapshotAcceptedPackSetup(env hostenv.Env, p *packinfo.Info, wanted map[str
 	}
 	cleanup = func() { _ = os.RemoveAll(dir) }
 	for _, step := range p.Manifest.Setup {
-		if !step.Required && !wanted[step.ID] {
+		if step.Declarative() || (!step.Required && !wanted[step.ID]) {
 			continue
 		}
 		path := filepath.Join(dir, step.ID)

@@ -57,7 +57,7 @@ func acceptTrustMatrixPack(t *testing.T, root string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bom := pack.ComputeHostBoM(p, "", nil) // nil classifier: same fail-closed partition the launch env resolves
+	bom := pack.ComputeHostBoM(p) // pure: the same bill of materials the launch recomputes
 	if !bom.Tier1() {
 		t.Fatalf("matrix pack must be Tier-1, got %+v", bom)
 	}
@@ -127,6 +127,19 @@ func TestLaunchTrust_Tier1MutationAfterAcceptanceMatrix(t *testing.T) {
 				Integrations: []packinfo.Integration{{Name: "HR", MCP: "hr", Image: "ghcr.io/example/hr:1.2.3"}}},
 			mutate: func(t *testing.T, root string, m packinfo.Manifest) {
 				m.Integrations[0].Image = "ghcr.io/attacker/hr:1.2.3"
+				if err := pack.WriteManifest(root, m); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "host command argv",
+			manifest: packinfo.Manifest{Name: "m", Schema: 1,
+				Integrations: []packinfo.Integration{{Name: "Docs", MCP: "docs", Command: "docsmcp", Args: []string{"--readonly", "mcp"}}}},
+			mutate: func(t *testing.T, root string, m packinfo.Manifest) {
+				// Same binary, different argv: the reviewed argv IS the surface, so
+				// dropping --readonly must re-gate.
+				m.Integrations[0].Args = []string{"mcp"}
 				if err := pack.WriteManifest(root, m); err != nil {
 					t.Fatal(err)
 				}
@@ -236,7 +249,7 @@ func TestLaunchTrust_Tier0PackNeedsNoAcceptance(t *testing.T) {
 	m := packinfo.Manifest{Name: "zero", Schema: 1,
 		Proxies: []packinfo.PackProxy{{Name: "wrap", Host: false, Egress: []string{"api.example.test"}}}}
 	p := writeTrustMatrixPack(t, root, m, map[string]string{"bin/wrap": "#!/bin/sh\nexit 0\n"})
-	if bom := pack.ComputeHostBoM(p, "", nil); bom.Tier1() {
+	if bom := pack.ComputeHostBoM(p); bom.Tier1() {
 		t.Fatalf("fixture must be Tier-0, got %+v", bom)
 	}
 	if err := launchTrustMatrixPack(t, root); err != nil {
@@ -251,13 +264,17 @@ func TestLaunchTrust_Tier0PackNeedsNoAcceptance(t *testing.T) {
 	}
 }
 
-// TestLaunchTrust_UnknownMCPPartitionFailsClosedAtLaunch: a bare integration
-// MCP name under an UNKNOWN local-vs-gateway partition classifies as host-exec
-// (fail closed) — the launch, like adoption, must refuse it without an exact
-// accepted fingerprint. This was the previously-ungated path: an
-// already-registered local server named by a mutable pack would have run its
+// TestLaunchTrust_HostCommandMCPIsGatedAtLaunch: an MCP server declared as a
+// HOST COMMAND is host-exec, so the launch — like adoption — must refuse it
+// without an exact accepted fingerprint. This was the previously-ungated path:
+// an already-registered local server named by a mutable pack would have run its
 // host command with no launch-time gate.
-func TestLaunchTrust_UnknownMCPPartitionFailsClosedAtLaunch(t *testing.T) {
+//
+// The classification is now a pure property of the manifest (which transport the
+// integration declares), not a runtime probe of the host: there is no longer an
+// "unknown partition" to fail closed on, and an integration that declares NO
+// transport is refused at LOAD, before trust is ever consulted.
+func TestLaunchTrust_HostCommandMCPIsGatedAtLaunch(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
@@ -267,14 +284,32 @@ func TestLaunchTrust_UnknownMCPPartitionFailsClosedAtLaunch(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeTrustMatrixPack(t, root, packinfo.Manifest{Name: "m", Schema: 1,
-		Integrations: []packinfo.Integration{{Name: "Notion", MCP: "notion"}}}, nil)
-	// launchTrustMatrixPack's env has no HostBinary — the partition is unknown.
+		Integrations: []packinfo.Integration{{Name: "Notion", MCP: "notion", Command: "notionmcp"}}}, nil)
 	if err := launchTrustMatrixPack(t, root); err == nil || !strings.Contains(err.Error(), "not accepted") {
-		t.Fatalf("unknown-partition MCP name must fail closed at launch, got: %v", err)
+		t.Fatalf("a host-command MCP server must fail closed at launch, got: %v", err)
 	}
-	// Accepted under the same fail-closed classification: launches.
+	// Accepted: launches.
 	acceptTrustMatrixPack(t, root)
 	if err := launchTrustMatrixPack(t, root); err != nil {
 		t.Fatalf("accepted pack refused: %v", err)
+	}
+}
+
+// TestLaunchTrust_TransportlessIntegrationRefusedAtLoad: the shape the test
+// above used to cover (a bare `mcp` name with nothing behind it) is now refused
+// where it becomes wrong — at LOAD. Nothing can start such a server, so it must
+// never reach the trust gate, a registration attempt, or a launch.
+func TestLaunchTrust_TransportlessIntegrationRefusedAtLoad(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "pack")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := pack.WriteManifest(root, packinfo.Manifest{Name: "m", Schema: 1,
+		Integrations: []packinfo.Integration{{Name: "Notion", MCP: "notion"}}}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := packinfo.LoadPack(root)
+	if err == nil || !strings.Contains(err.Error(), "declares no transport") {
+		t.Fatalf("an integration with no transport must be refused at load, got: %v", err)
 	}
 }

@@ -129,7 +129,6 @@ func auditHostWrapperInvariant(stop <-chan struct{}) (<-chan string, *sync.WaitG
 // pack's wrappers under the other's attribution.
 func TestRefreshHostPackWrappers_ConcurrentRefreshesNoOrphan(t *testing.T) {
 	dir := isolatePackHost(t)
-	pinLocalMCP(t)
 	rootA := hostExecPack(t, dir, "a", "proxy", "a-tool")
 	rootB := hostExecPack(t, dir, "b", "proxy", "b-tool")
 
@@ -190,7 +189,6 @@ func TestRefreshHostPackWrappers_ConcurrentRefreshesNoOrphan(t *testing.T) {
 // reported "detached", store cleared).
 func TestPackRm_RacingRefreshNeverOrphans(t *testing.T) {
 	dir := isolatePackHost(t)
-	pinLocalMCP(t)
 	root := hostExecPack(t, dir, "work", "proxy", "platformio")
 
 	var out bytes.Buffer

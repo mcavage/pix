@@ -18,10 +18,11 @@ import (
 //
 // RegisterServers only ever touches env.LookPath, env.RunTimed, env.
 // RunInteractive(Quiet) and env.Quiet (verified against mcp.go directly — it
-// never calls Getenv/IsFile/HomeDir/ReadFile), so a fixture here needs only
-// two primitives: a PATH-isolated bin dir a test can drop a real "sbx"/"gog"
-// executable into, and a real file a hostResolver can point at for pix-host.
-// Every probe below execs the real thing; nothing is a call-keyed double.
+// never calls Getenv/IsFile/HomeDir/ReadFile), so a fixture here needs only ONE
+// primitive: a PATH-isolated bin dir a test can drop a real "sbx", "op" or
+// pack-declared server executable into. (The pix-host resolver this fixture
+// used to need is gone with the local MCP bridge.) Every probe below execs the
+// real thing; nothing is a call-keyed double.
 
 // binDir returns a fresh, PATH-isolated directory: with PATH replaced (not
 // appended) an unwritten binary is genuinely ABSENT, regardless of what the
@@ -61,184 +62,169 @@ func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) 
 // realEnv is the real System every fixture above wires into.
 func realEnv() hostenv.Env { return hostenv.Env{System: sys.Real{}} }
 
-// hostStub is a hostResolver that returns a fixed path (or an error).
-func hostStub(path string, err error) func() (string, error) {
-	return func() (string, error) { return path, err }
+// --- the pack IS the vocabulary ---------------------------------------------
+//
+// Pix ships no MCP server and names no vendor, so every spec below is ordinary
+// PACK MANIFEST data. The hardened-argv coverage the retired gog special case
+// used to carry now lives on `credentialed`: a Command server whose Args are
+// declared LITERALLY by the pack, which is where a reviewer can see them.
+const (
+	// credentialed declares creds (EnvKeys), so it is op-run wrapped whenever
+	// op-refs.env exists — the "hardened argv" case.
+	credentialed = "acme-cal"
+	// credFree declares NO creds, so it must NEVER be wrapped (it must not
+	// share fate with unrelated refs in the file).
+	credFree = "pio"
+)
+
+// packServers is what an ACTIVE PACK's manifest declares for the two host
+// commands above: literal argv, plus the env var NAMES each needs.
+func packServers() map[string]config.MCPServer {
+	return map[string]config.MCPServer{
+		credentialed: {Command: credentialed, Args: []string{"--readonly", "mcp"}, EnvKeys: []string{"ACME_TOKEN"}},
+		credFree:     {Command: credFree, Args: []string{"serve"}},
+	}
 }
 
-// gogRegistrar returns a registrar with fixed absolutes for builder tests.
-func gogRegistrar() McpRegistrar {
+// packRegistrar returns a registrar with fixed absolutes for builder tests: the
+// pack's specs in .servers and the PATH lookups RegisterServers would have done
+// in .resolved (the gateway's PATH is not the user's, so every binary is
+// registered by absolute path).
+func packRegistrar() McpRegistrar {
 	return McpRegistrar{
-		Op:       "/usr/bin/op",
-		OpRefs:   "/abs/config/op-refs.env",
-		Gog:      "/usr/bin/gog",
-		Account:  "me@x.com",
-		HostBin:  "/usr/bin/pix-host",
-		GogUseOp: true,
+		Op:     "/usr/bin/op",
+		OpRefs: "/abs/config/op-refs.env",
+		resolved: map[string]string{
+			credentialed: "/opt/acme/bin/acme-cal",
+			credFree:     "/usr/local/bin/pio",
+		},
+		servers: packServers(),
 	}
 }
 
-// TestAddArgs_gog builds the hardened gog `sbx mcp add` command (mirrors the
-// Makefile mcp-register line).
-func TestAddArgs_Gog(t *testing.T) {
-	args := gogRegistrar().AddArgs(config.GWServerName)
-	if !contains(args, []string{"mcp", "add", config.GWServerName, "--command", "/usr/bin/op"}) {
-		t.Errorf("missing add-command prefix in %v", args)
+// TestAddArgs_PackDeclaredArgvIsLiteral is the successor to the gog
+// hardened-argv test: a pack-declared Command+Args produces EXACTLY that argv,
+// with the command resolved to its absolute path, wrapped in the one op-run
+// grammar pix generates. Pix contributes no flags of its own, so what a
+// reviewer approved in the manifest is character-for-character what runs.
+func TestAddArgs_PackDeclaredArgvIsLiteral(t *testing.T) {
+	reg := packRegistrar()
+
+	if got, want := reg.ExecArgv(credentialed), []string{
+		"/usr/bin/op", "run", "--no-masking", "--env-file=/abs/config/op-refs.env", "--",
+		"/opt/acme/bin/acme-cal", "--readonly", "mcp",
+	}; !match(got, want) || len(got) != len(want) {
+		t.Errorf("ExecArgv(%s) = %v, want %v", credentialed, got, want)
 	}
-	// op-run wrapper.
-	if !contains(args, []string{"--args", "run", "--args", "--no-masking",
-		"--args", "--env-file=/abs/config/op-refs.env", "--args", "--"}) {
-		t.Errorf("missing op-run wrapper in %v", args)
+
+	got := strings.Join(reg.AddArgs(credentialed), " ")
+	want := "mcp add " + credentialed + " --command /usr/bin/op" +
+		" --args run --args --no-masking --args --env-file=/abs/config/op-refs.env --args --" +
+		" --args /opt/acme/bin/acme-cal --args --readonly --args mcp"
+	if got != want {
+		t.Errorf("AddArgs(%s):\n got: %s\nwant: %s", credentialed, got, want)
 	}
-	// gog binary + hardened flags.
-	if !contains(args, []string{"--args", "/usr/bin/gog", "--args", "--account", "--args", "me@x.com"}) {
-		t.Errorf("missing gog account args in %v", args)
-	}
-	for _, flag := range []string{"--gmail-no-send", "--wrap-untrusted", "--readonly", "read"} {
-		if !contains(args, []string{"--args", flag}) {
-			t.Errorf("missing hardened flag %q in %v", flag, args)
-		}
+	// The RESOLVED absolute path is what the gateway is handed, never the bare
+	// command name the pack wrote.
+	if contains(reg.AddArgs(credentialed), []string{"--args", credentialed}) {
+		t.Errorf("argv carries the unresolved command name: %v", reg.AddArgs(credentialed))
 	}
 }
 
-// TestAddArgs_Slack builds the pix-host subcommand form (op-run wrapped).
-func TestAddArgs_Slack(t *testing.T) {
-	args := gogRegistrar().AddArgs("slack")
-	if !contains(args, []string{"--args", "/usr/bin/pix-host", "--args", "mcp", "--args", "slack"}) {
-		t.Errorf("slack should register pix-host mcp slack, got %v", args)
-	}
-}
-
-// TestAddArgs_LocalServer builds the pix-host subcommand form for an
-// arbitrary local stdio server like "pio": it registers as
-// `pix-host mcp pio`, exactly like slack, via the serverCmd default.
-func TestAddArgs_LocalServer(t *testing.T) {
-	args := gogRegistrar().AddArgs("pio")
-	if !contains(args, []string{"mcp", "add", "pio", "--command", "/usr/bin/op"}) {
-		t.Errorf("missing add-command prefix for pio in %v", args)
-	}
-	if !contains(args, []string{"--args", "/usr/bin/pix-host", "--args", "mcp", "--args", "pio"}) {
-		t.Errorf("pio should register pix-host mcp pio, got %v", args)
-	}
-}
-
-// TestAddArgs_GogBare: with NO op-refs (opRefs=""), gog registers DIRECTLY as a
-// bare command — no `op run` wrapper. 1Password is optional for gog.
-func TestAddArgs_GogBare(t *testing.T) {
-	reg := gogRegistrar()
+// TestAddArgs_BareWhenNoOpRefs: with NO op-refs (OpRefs=""), a credentialed
+// command registers DIRECTLY as a bare command — no `op run` wrapper.
+// 1Password is optional; the pack's literal args survive either way.
+func TestAddArgs_BareWhenNoOpRefs(t *testing.T) {
+	reg := packRegistrar()
 	reg.OpRefs = "" // no op-refs -> bare
-	args := reg.AddArgs(config.GWServerName)
-	if !contains(args, []string{"mcp", "add", config.GWServerName, "--command", "/usr/bin/gog"}) {
-		t.Errorf("bare gog should register --command /usr/bin/gog, got %v", args)
+	got := strings.Join(reg.AddArgs(credentialed), " ")
+	want := "mcp add " + credentialed + " --command /opt/acme/bin/acme-cal --args --readonly --args mcp"
+	if got != want {
+		t.Errorf("bare AddArgs:\n got: %s\nwant: %s", got, want)
 	}
-	for _, a := range args {
+	for _, a := range reg.AddArgs(credentialed) {
 		if a == "/usr/bin/op" || a == "run" {
-			t.Errorf("bare gog must not wrap in op run, got %v", args)
-		}
-	}
-	// Hardened flags survive in the bare form.
-	if !contains(args, []string{"--args", "--account", "--args", "me@x.com"}) {
-		t.Errorf("bare gog missing account args in %v", args)
-	}
-	for _, flag := range []string{"--gmail-no-send", "--wrap-untrusted", "--readonly", "read"} {
-		if !contains(args, []string{"--args", flag}) {
-			t.Errorf("bare gog missing hardened flag %q in %v", flag, args)
+			t.Errorf("a bare registration must not wrap in op run, got %v", reg.AddArgs(credentialed))
 		}
 	}
 }
 
-// TestRegisterServers_GogNoOpRefsBare: gateway on, op + op-refs ABSENT, gog
-// present + account set -> gog registers DIRECTLY (bare command, no op wrapper)
-// with the OAuth note. gog authenticates via its own OAuth grant, never
-// op-refs, so the note must NOT mention op-refs.
-func TestRegisterServers_GogNoOpRefsBare(t *testing.T) {
-	dir := binDir(t)
-	installBin(t, dir, "gog", nil) // present, never executed by RegisterServers
-	cfg := defaultCfg()
-	cfg.GogAccount = "me@x.com"
-	var buf bytes.Buffer
-	if err := RegisterServers(cfg, realEnv(), &buf, []string{config.GWServerName}, hostStub("", nil), nil, Credentials{}); !errors.Is(err, ErrSbxUnavailable) {
-		t.Fatalf("expected ErrSbxUnavailable, got: %v", err)
+// TestExecArgv_CredentialFreeServerIsNeverWrapped pins new behaviour (1): the
+// op-run wrap is decided by DECLARATION, not by the presence of op-refs.env.
+// `op run --env-file` resolves EVERY ref in the file, so wrapping a server that
+// declares no credentials would make it share fate with every unrelated ref —
+// one stale entry elsewhere would stop a server that needs nothing from
+// 1Password at all.
+func TestExecArgv_CredentialFreeServerIsNeverWrapped(t *testing.T) {
+	reg := packRegistrar() // op-refs IS present
+	if reg.OpRefs == "" {
+		t.Fatal("fixture must have op-refs present for this test to prove anything")
 	}
-	out := buf.String()
-	if !strings.Contains(out, "registered gog directly") {
-		t.Errorf("expected the bare-gog note, got:\n%s", out)
+
+	bare := reg.ExecArgv(credFree)
+	if want := []string{"/usr/local/bin/pio", "serve"}; !match(bare, want) || len(bare) != len(want) {
+		t.Errorf("ExecArgv(%s) = %v, want the bare pack argv %v even though op-refs exists", credFree, bare, want)
 	}
-	if strings.Contains(out, "op-refs.env") {
-		t.Errorf("gog-only note must NOT mention op-refs (gog uses OAuth), got:\n%s", out)
+	if got := strings.Join(reg.AddArgs(credFree), " "); got != "mcp add "+credFree+" --command /usr/local/bin/pio --args serve" {
+		t.Errorf("AddArgs(%s) = %q, want a bare registration", credFree, got)
 	}
-	// The would-run command must be the bare gog command, not an op wrapper.
-	if !strings.Contains(out, "sbx mcp add google-workspace --command "+filepath.Join(dir, "gog")) {
-		t.Errorf("expected a bare gog would-run command, got:\n%s", out)
+
+	// The same registrar DOES wrap the server that declares EnvKeys, so the
+	// difference is the declaration and nothing else.
+	if argv := reg.ExecArgv(credentialed); len(argv) < 2 || argv[0] != reg.Op || argv[1] != "run" {
+		t.Errorf("ExecArgv(%s) = %v, want an op-run wrap (it declares EnvKeys)", credentialed, argv)
 	}
 }
 
-// TestRegisterServers_GogOnlyNoSeed (R5-1/R5-2): a gog-only clean state with op
-// NOT resolvable must NOT create op-refs.env at the XDG path and must NOT print a
-// "seeded" line. gog authenticates via its own OAuth grant, never op-refs, so
-// seeding one would be actively wrong.
-func TestRegisterServers_GogOnlyNoSeed(t *testing.T) {
+// TestRegisterServers_CredentialFreeServerIsNotSeededFor: a server that declares
+// NO credentials must not cause op-refs.env to be seeded, and must not be warned
+// about — there is nothing for 1Password to supply it. (This is the generic
+// successor to the gog-authenticates-itself case: the deciding fact is now the
+// DECLARATION, not the vendor.)
+func TestRegisterServers_CredentialFreeServerIsNotSeededFor(t *testing.T) {
 	dir := binDir(t)
-	installBin(t, dir, "gog", nil) // op absent -> not resolvable
-	home := t.TempDir()
+	installBin(t, dir, credFree, nil) // present; never executed by RegisterServers
+	seed := filepath.Join(t.TempDir(), "cfg", "op-refs.env")
 	cfg := defaultCfg()
-	cfg.MCP = []string{config.GWServerName}
-	cfg.GogAccount = "me@x.com"
+	cfg.MCP = []string{credFree}
 	var buf bytes.Buffer
-	if err := RegisterServers(cfg, realEnv(), &buf, nil, hostStub("/usr/bin/pix-host", nil), nil, Credentials{}); !errors.Is(err, ErrSbxUnavailable) {
+	// op absent -> not resolvable, so nothing is op-run wrapped.
+	if err := RegisterServers(cfg, realEnv(), &buf, nil, packServers(),
+		Credentials{SeedPath: seed}); !errors.Is(err, ErrSbxUnavailable) {
 		t.Fatalf("expected ErrSbxUnavailable, got: %v", err)
 	}
-	seeded := filepath.Join(home, ".config", "pix", "op-refs.env")
-	if _, err := os.Stat(seeded); !os.IsNotExist(err) {
-		t.Errorf("gog-only must NOT seed op-refs.env at %s (err=%v)", seeded, err)
+	if _, err := os.Stat(seed); !os.IsNotExist(err) {
+		t.Errorf("a credential-free server must NOT seed op-refs.env at %s (err=%v)", seed, err)
 	}
 	out := buf.String()
-	if strings.Contains(out, "seeded") {
-		t.Errorf("gog-only must NOT print a seeded line, got:\n%s", out)
+	if strings.Contains(out, "seeded") || strings.Contains(out, "WITHOUT credentials") {
+		t.Errorf("a credential-free server must not be warned about creds, got:\n%s", out)
 	}
-	if strings.Contains(out, "op-refs.env") {
-		t.Errorf("gog-only note must NOT mention op-refs, got:\n%s", out)
+	// The would-run command is the bare pack argv, not an op wrapper.
+	if !strings.Contains(out, "sbx mcp add "+credFree+" --command "+filepath.Join(dir, credFree)+" --args serve") {
+		t.Errorf("expected the bare pack argv as the would-run command, got:\n%s", out)
+	}
+	if strings.Contains(out, "run --no-masking") {
+		t.Errorf("a credential-free server must not wrap in op run, got:\n%s", out)
 	}
 }
 
-// TestRegisterServers_SlackNoOpRefsBare: slack with op absent + op-refs absent no
-// longer errors — it registers BARE (no op-run wrapper), so a no-creds server
-// registers without 1Password. sbx absent -> the would-run command is printed.
-func TestRegisterServers_SlackNoOpRefsBare(t *testing.T) {
-	dir := binDir(t) // no op, no sbx
-	hostBin := installBin(t, dir, "pix-host", map[string]string{"mcp --list": "slack\n"})
-	cfg := defaultCfg()
-	var buf bytes.Buffer
-	if err := RegisterServers(cfg, realEnv(), &buf, []string{"slack"}, hostStub(hostBin, nil), nil, Credentials{}); !errors.Is(err, ErrSbxUnavailable) {
-		t.Fatalf("expected ErrSbxUnavailable, got: %v", err)
-	}
-	out := buf.String()
-	if !strings.Contains(out, "registered slack directly (bare, no 1Password)") {
-		t.Errorf("expected the bare-registration note for slack, got:\n%s", out)
-	}
-	// Bare command: --command <pix-host>, no op-run wrapper.
-	if !strings.Contains(out, "sbx mcp add slack --command "+hostBin+" --args mcp --args slack") {
-		t.Errorf("expected a bare slack would-run command, got:\n%s", out)
-	}
-	if strings.Contains(out, "op") && strings.Contains(out, "run --no-masking") {
-		t.Errorf("bare slack must not wrap in op run, got:\n%s", out)
-	}
-}
-
-// TestRegisterServers_SlackOpRefsAbsentSeeds: slack with op present but op-refs
-// ABSENT -> seed a template at the absolute XDG path (via the ONE seeder,
-// config.SeedOpRefsAt) and register BARE (no error), noting the seeded path.
-func TestRegisterServers_SlackOpRefsAbsentSeeds(t *testing.T) {
+// TestRegisterServers_CredentialedServerWithoutOpRefsSeedsAndWarns: a server
+// that DOES declare credentials, with op-refs ABSENT -> seed a template at the
+// absolute path the caller named (via the ONE seeder, config.SeedOpRefsAt) and
+// register BARE, SAYING so: a bare registration of a credentialed server is a
+// server that will start and then fail its first real call.
+func TestRegisterServers_CredentialedServerWithoutOpRefsSeedsAndWarns(t *testing.T) {
 	dir := binDir(t)
-	hostBin := installBin(t, dir, "pix-host", map[string]string{"mcp --list": "slack\n"})
-	home := t.TempDir()
+	bin := installBin(t, dir, credentialed, nil)
+	seeded := filepath.Join(t.TempDir(), "cfg", "op-refs.env")
 	cfg := defaultCfg()
 	var buf bytes.Buffer
 	// op present, no op-refs found: the caller still says where one WOULD go,
 	// which is what makes seeding possible without this package resolving paths.
-	seeded := filepath.Join(home, ".config", "pix", "op-refs.env")
 	creds := Credentials{OpPath: "/usr/bin/op", SeedPath: seeded}
-	if err := RegisterServers(cfg, realEnv(), &buf, []string{"slack"}, hostStub(hostBin, nil), nil, creds); !errors.Is(err, ErrSbxUnavailable) {
+	if err := RegisterServers(cfg, realEnv(), &buf, []string{credentialed}, packServers(),
+		creds); !errors.Is(err, ErrSbxUnavailable) {
 		t.Fatalf("expected ErrSbxUnavailable, got: %v", err)
 	}
 	info, err := os.Stat(seeded)
@@ -249,58 +235,123 @@ func TestRegisterServers_SlackOpRefsAbsentSeeds(t *testing.T) {
 	if info.Mode().Perm() != 0o600 {
 		t.Errorf("seeded op-refs.env mode = %o, want 600", info.Mode().Perm())
 	}
-	if !strings.Contains(buf.String(), "seeded a template op-refs.env") {
-		t.Errorf("expected the seeded-template note, got:\n%s", buf.String())
+	out := buf.String()
+	if !strings.Contains(out, "seeded a template op-refs.env") {
+		t.Errorf("expected the seeded-template note, got:\n%s", out)
+	}
+	if !strings.Contains(out, credentialed+" registered WITHOUT credentials") {
+		t.Errorf("expected the bare-registration warning naming the server, got:\n%s", out)
+	}
+	// Registered bare: the pack's literal argv, no op-run wrapper.
+	if !strings.Contains(out, "sbx mcp add "+credentialed+" --command "+bin+" --args --readonly --args mcp") {
+		t.Errorf("expected the bare pack argv as the would-run command, got:\n%s", out)
 	}
 }
 
-// TestRegisterServers_RemoteSkipped: a cfg.MCP entry that is NEITHER gog NOR a
-// local stdio server (per `pix-host mcp --list`) is a remote gateway-
-// catalog server: it is SKIPPED with an info line, never registered as local.
-// This gate fails if the local-vs-remote guard is removed (notion would then be
-// wrongly registered).
-func TestRegisterServers_RemoteSkipped(t *testing.T) {
-	dir := binDir(t)                                                                      // no sbx -> would-run printed
-	hostBin := installBin(t, dir, "pix-host", map[string]string{"mcp --list": "slack\n"}) // notion is NOT local
+// TestRegisterServers_UndeclaredNameIsAnErrorNotASkip pins new behaviour (2),
+// and replaces the retired local-vs-remote classifier tests: a name no active
+// pack declares is not silently skipped and not guessed at as a local stdio
+// bridge — it is an ERROR naming the server and what to do about it, so a config
+// that lists a server nobody declares exits non-zero.
+func TestRegisterServers_UndeclaredNameIsAnErrorNotASkip(t *testing.T) {
+	binDir(t) // no sbx
 	cfg := defaultCfg()
-	cfg.MCP = []string{"slack", "notion"}
+	// A plausible name that NO pack declares and pix knows no endpoint for.
+	// Deliberately not a curated catalog name (notion/atlassian/granola):
+	// those are registerable with no pack at all, so they are not undeclared.
+	cfg.MCP = []string{"fastmail"}
 	var buf bytes.Buffer
-	if err := RegisterServers(cfg, realEnv(), &buf, nil, hostStub(hostBin, nil), nil, Credentials{}); !errors.Is(err, ErrSbxUnavailable) {
-		t.Fatalf("expected ErrSbxUnavailable, got: %v", err)
+	err := RegisterServers(cfg, realEnv(), &buf, nil, packServers(), Credentials{})
+	if err == nil {
+		t.Fatal("expected a non-nil error for an undeclared server, got nil (silent success)")
+	}
+	if !strings.Contains(err.Error(), "fastmail") || !strings.Contains(err.Error(), "no active pack declares") {
+		t.Errorf("error must name the undeclared server and the fix, got: %v", err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "notion: gateway-catalog server, not locally registered") {
-		t.Errorf("expected notion to be skipped as a gateway-catalog server, got:\n%s", out)
+	if !strings.Contains(out, "fastmail: not declared by the active pack") {
+		t.Errorf("expected the undeclared-name line, got:\n%s", out)
 	}
-	if strings.Contains(out, "sbx mcp add notion") {
-		t.Errorf("notion (remote) must NOT be registered as local, got:\n%s", out)
-	}
-	if !strings.Contains(out, "sbx mcp add slack") {
-		t.Errorf("slack (local) should still be registered, got:\n%s", out)
+	if strings.Contains(out, "sbx mcp add fastmail") {
+		t.Errorf("an undeclared name must NEVER be registered, got:\n%s", out)
 	}
 }
 
-// TestRegisterServers_RemoteWithURLRegistered: a remote gateway-catalog name that
-// the pack carries a URL for (containers[name].RemoteURL set) is NOT skipped — it
-// is registered via `sbx mcp add <name> --url <url>`, with no --local and no
-// op-run wrapper. This is the pack-self-registers-remotes path; it fails if the
-// RemoteURL branch is dropped and meetings/notion/etc. fall back to the skip line.
+// TestRegisterServers_UndeclaredNameStillFailsAlongsideASuccess: the unknown-name
+// error survives a partially successful run — a declared server registers, and
+// the command STILL exits non-zero for the name nobody declares.
+func TestRegisterServers_UndeclaredNameStillFailsAlongsideASuccess(t *testing.T) {
+	dir := binDir(t)
+	bin := installBin(t, dir, credFree, nil)
+	reg := McpRegistrar{servers: packServers(), resolved: map[string]string{credFree: bin}}
+	installBin(t, dir, "sbx", map[string]string{strings.Join(reg.AddArgs(credFree), " "): "ok"})
+	cfg := defaultCfg()
+	// Not a catalog name — see the sibling test. A catalog name here would
+	// still have produced an error (the fake sbx has no recipe for it), so this
+	// would have passed for the wrong reason rather than proving anything.
+	cfg.MCP = []string{credFree, "fastmail"}
+	var buf bytes.Buffer
+	err := RegisterServers(cfg, realEnv(), &buf, nil, packServers(), Credentials{})
+	if err == nil || !strings.Contains(err.Error(), "no active pack declares fastmail") {
+		t.Fatalf("expected an error naming the undeclared server, got: %v", err)
+	}
+	if !strings.Contains(buf.String(), "registered: "+credFree) {
+		t.Errorf("the declared server should still register, got:\n%s", buf.String())
+	}
+}
+
+// TestRegisterServers_CommandNotOnPathRegistersNothing pins new behaviour (3):
+// a Command server whose binary does not resolve is a HARD failure naming the
+// server, the binary and where the fix lives — and NOTHING is registered, not
+// even the servers that would have worked. Registering a command that does not
+// exist is exactly the defect that let dead servers sit at "ready" for months.
+func TestRegisterServers_CommandNotOnPathRegistersNothing(t *testing.T) {
+	env := hostenv.Env{System: &systest.Fake{
+		LookPathFn: func(name string) (string, error) {
+			if name == credentialed {
+				return "", errors.New("not found")
+			}
+			return "/usr/bin/" + name, nil // sbx IS installed
+		},
+		RunTimedFn: func(name string, args ...string) (string, bool, error) {
+			t.Fatalf("nothing may be exec'd when a command does not resolve: %s %s", name, strings.Join(args, " "))
+			return "", false, nil
+		},
+	}}
+	cfg := defaultCfg()
+	var buf bytes.Buffer
+	err := RegisterServers(cfg, env, &buf, []string{credFree, credentialed}, packServers(), Credentials{})
+	if err == nil {
+		t.Fatal("expected a hard failure for an unresolvable command, got nil")
+	}
+	for _, want := range []string{credentialed, `"` + credentialed + `"`, "not on PATH", "pack"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing %q (server, binary, install hint)", err, want)
+		}
+	}
+	if strings.Contains(buf.String(), "registered") {
+		t.Errorf("nothing may be registered when a command does not resolve, got:\n%s", buf.String())
+	}
+}
+
+// TestRegisterServers_RemoteWithURLRegistered: a name the pack declares with a
+// RemoteURL is registered via `sbx mcp add <name> --url <url>`, with no --local
+// and no op-run wrapper — the gateway OAuths it host-side.
 func TestRegisterServers_RemoteWithURLRegistered(t *testing.T) {
-	dir := binDir(t)                                                                      // no sbx -> would-run printed
-	hostBin := installBin(t, dir, "pix-host", map[string]string{"mcp --list": "slack\n"}) // meetings is NOT a local server
+	binDir(t) // no sbx -> would-run printed
 	cfg := defaultCfg()
 	cfg.MCP = []string{"meetings"}
-	containers := map[string]config.MCPContainer{"meetings": {RemoteURL: "https://app.trymeetings.com/mcp"}}
+	servers := map[string]config.MCPServer{"meetings": {RemoteURL: "https://app.trymeetings.com/mcp"}}
 	var buf bytes.Buffer
-	if err := RegisterServers(cfg, realEnv(), &buf, nil, hostStub(hostBin, nil), containers, Credentials{}); !errors.Is(err, ErrSbxUnavailable) {
+	if err := RegisterServers(cfg, realEnv(), &buf, nil, servers, Credentials{}); !errors.Is(err, ErrSbxUnavailable) {
 		t.Fatalf("expected ErrSbxUnavailable, got: %v", err)
 	}
 	out := buf.String()
 	if !strings.Contains(out, "sbx mcp add meetings --url https://app.trymeetings.com/mcp") {
 		t.Errorf("expected meetings registered via --url, got:\n%s", out)
 	}
-	if strings.Contains(out, "gateway-catalog server, not locally registered") {
-		t.Errorf("meetings with a pack URL must NOT be skipped, got:\n%s", out)
+	if strings.Contains(out, "not declared by the active pack") {
+		t.Errorf("a pack-declared remote must NOT be treated as undeclared, got:\n%s", out)
 	}
 	if strings.Contains(out, "--local") || strings.Contains(out, "--command") {
 		t.Errorf("remote-url server must not use --local/--command, got:\n%s", out)
@@ -340,9 +391,9 @@ func TestRegisterServers_RemoteURLUsesInteractiveRunner(t *testing.T) {
 	}}
 	cfg := defaultCfg()
 	cfg.MCP = []string{"meetings"}
-	containers := map[string]config.MCPContainer{"meetings": {RemoteURL: "https://app.trymeetings.com/mcp"}}
+	servers := map[string]config.MCPServer{"meetings": {RemoteURL: "https://app.trymeetings.com/mcp"}}
 	var out bytes.Buffer
-	if err := RegisterServers(cfg, env, &out, nil, hostStub("/usr/bin/pix-host", nil), containers, Credentials{}); err != nil {
+	if err := RegisterServers(cfg, env, &out, nil, servers, Credentials{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := strings.Join(interactive, " "); got != "sbx mcp add meetings --url https://app.trymeetings.com/mcp" {
@@ -371,8 +422,8 @@ func TestRegisterServers_CurrentRemoteDoesNotReopenOAuth(t *testing.T) {
 	}}
 	cfg := defaultCfg()
 	cfg.MCP = []string{"meetings"}
-	if err := RegisterServers(cfg, env, &bytes.Buffer{}, nil, hostStub("/usr/bin/pix-host", nil),
-		map[string]config.MCPContainer{"meetings": {RemoteURL: endpoint}}, Credentials{}); err != nil {
+	if err := RegisterServers(cfg, env, &bytes.Buffer{}, nil,
+		map[string]config.MCPServer{"meetings": {RemoteURL: endpoint}}, Credentials{}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -404,8 +455,8 @@ func TestRegisterServers_CurrentUnauthorizedRemoteRepairsOAuthOnce(t *testing.T)
 	}}
 	cfg := defaultCfg()
 	cfg.MCP = []string{"meetings"}
-	if err := RegisterServers(cfg, env, &bytes.Buffer{}, nil, hostStub("/usr/bin/pix-host", nil),
-		map[string]config.MCPContainer{"meetings": {RemoteURL: endpoint}}, Credentials{}); err != nil {
+	if err := RegisterServers(cfg, env, &bytes.Buffer{}, nil,
+		map[string]config.MCPServer{"meetings": {RemoteURL: endpoint}}, Credentials{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := strings.Join(interactive, " "); got != "sbx mcp auth meetings" {
@@ -461,73 +512,21 @@ func TestRemoteMCPRegistrationCurrentCanonicalExactMatch(t *testing.T) {
 	}
 }
 
-// TestRegisterServers_LocalSetUnknownFailClosed: when the local-name list can't
-// be established (pix-host unresolved / `mcp --list` fails), a non-gog name
-// must FAIL CLOSED — NOT be registered as a local pix-host subcommand — and
-// RegisterServers must return a non-nil error so the command exits non-zero.
-// This gate fails if the old fall-back-to-local behavior returns.
-func TestRegisterServers_LocalSetUnknownFailClosed(t *testing.T) {
-	cfg := defaultCfg()
-	cfg.MCP = []string{"notion"} // a gateway-catalog name, NOT a local server
-	var buf bytes.Buffer
-	// hostStub fails: pix-host cannot be resolved, so the local set is unknown.
-	err := RegisterServers(cfg, realEnv(), &buf, nil, hostStub("", errors.New("pix-host not found")), nil, Credentials{})
-	if err == nil {
-		t.Fatal("expected a non-nil error when the local set is unknown, got nil (silent success)")
-	}
-	if !strings.Contains(err.Error(), "could not determine local MCP servers") {
-		t.Errorf("expected a fail-closed error, got %v", err)
-	}
-	out := buf.String()
-	if strings.Contains(out, "sbx mcp add notion") {
-		t.Errorf("notion must NOT be registered as local when the local set is unknown, got:\n%s", out)
-	}
-	if !strings.Contains(out, "cannot determine local MCP servers") {
-		t.Errorf("expected the fail-closed skip warning, got:\n%s", out)
-	}
-}
-
 // TestRegisterServers_FailuresReturnError: when `sbx mcp add` fails for a
 // server, register attempts it, prints the failure, AND returns a non-nil error
 // so `pix mcp register` exits non-zero.
 func TestRegisterServers_FailuresReturnError(t *testing.T) {
 	dir := binDir(t)
-	installBin(t, dir, "gog", nil)
+	installBin(t, dir, credentialed, nil)
 	installBin(t, dir, "sbx", nil) // present but no matching output -> every add "fails"
 	cfg := defaultCfg()
-	cfg.GogAccount = "me@x.com"
 	var buf bytes.Buffer
-	err := RegisterServers(cfg, realEnv(), &buf, []string{config.GWServerName}, hostStub("", nil), nil, Credentials{})
-	if err == nil || !strings.Contains(err.Error(), "failed to register") || !strings.Contains(err.Error(), config.GWServerName) {
-		t.Errorf("expected a joined registration error mentioning gog, got %v", err)
+	err := RegisterServers(cfg, realEnv(), &buf, []string{credentialed}, packServers(), Credentials{})
+	if err == nil || !strings.Contains(err.Error(), "failed to register") || !strings.Contains(err.Error(), credentialed) {
+		t.Errorf("expected a joined registration error naming the server, got %v", err)
 	}
-	if !strings.Contains(buf.String(), "FAILED to register: "+config.GWServerName) {
+	if !strings.Contains(buf.String(), "FAILED to register: "+credentialed) {
 		t.Errorf("expected the per-server failure line, got:\n%s", buf.String())
-	}
-}
-
-// TestRegisterServers_GogNotFound: op present, gog requested but absent.
-func TestRegisterServers_GogNotFound(t *testing.T) {
-	binDir(t) // op present is irrelevant here (never LookPath'd); gog stays absent
-	cfg := defaultCfg()
-	cfg.GogAccount = "me@x.com"
-	var buf bytes.Buffer
-	err := RegisterServers(cfg, realEnv(), &buf, []string{config.GWServerName}, hostStub("", nil), nil, Credentials{})
-	if err == nil || !strings.Contains(err.Error(), "brew install openclaw/tap/gogcli") {
-		t.Errorf("expected a gog-not-found guard, got %v", err)
-	}
-}
-
-// TestRegisterServers_GogAccountUnset: op+gog present but no account -> guide the
-// config-set command (never file editing).
-func TestRegisterServers_GogAccountUnset(t *testing.T) {
-	dir := binDir(t)
-	installBin(t, dir, "gog", nil)
-	cfg := defaultCfg() // GogAccount empty
-	var buf bytes.Buffer
-	err := RegisterServers(cfg, realEnv(), &buf, []string{config.GWServerName}, hostStub("", nil), nil, Credentials{})
-	if err == nil || !strings.Contains(err.Error(), "pix config set google_workspace_account") {
-		t.Errorf("expected the config-set google_workspace_account guide, got %v", err)
 	}
 }
 
@@ -535,15 +534,15 @@ func TestRegisterServers_GogAccountUnset(t *testing.T) {
 // absent -> print the would-run command instead of crashing.
 func TestRegisterServers_SbxAbsentPrintsWouldRun(t *testing.T) {
 	dir := binDir(t) // no sbx
-	installBin(t, dir, "gog", nil)
+	bin := installBin(t, dir, credentialed, nil)
 	cfg := defaultCfg()
-	cfg.GogAccount = "me@x.com"
 	var buf bytes.Buffer
-	if err := RegisterServers(cfg, realEnv(), &buf, []string{config.GWServerName}, hostStub("", nil), nil, Credentials{}); !errors.Is(err, ErrSbxUnavailable) {
+	if err := RegisterServers(cfg, realEnv(), &buf, []string{credentialed}, packServers(),
+		Credentials{}); !errors.Is(err, ErrSbxUnavailable) {
 		t.Fatalf("expected ErrSbxUnavailable, got: %v", err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "sbx mcp add google-workspace") || !strings.Contains(out, "me@x.com") {
+	if !strings.Contains(out, "sbx mcp add "+credentialed+" --command "+bin) {
 		t.Errorf("expected a would-run command, got:\n%s", out)
 	}
 	if !strings.Contains(out, "install Docker Sandboxes") {
@@ -552,63 +551,98 @@ func TestRegisterServers_SbxAbsentPrintsWouldRun(t *testing.T) {
 }
 
 // TestRegisterServers_Registers: everything present + sbx runs -> registered.
+// With no op/op-refs (Credentials{}) the registration is BARE, so the summary
+// must not claim an op wrapper it never generated.
 func TestRegisterServers_Registers(t *testing.T) {
 	dir := binDir(t)
-	gogBin := installBin(t, dir, "gog", nil)
-	cfg := defaultCfg()
-	cfg.GogAccount = "me@x.com"
-	// Provide success output for the exact sbx call the registrar builds. GogUseOp
-	// stays false (Credentials{} below -> opReady false), so this is the bare form
-	// regardless of OpRefs — mirrored here by leaving it unset too.
-	reg := McpRegistrar{Gog: gogBin, Account: "me@x.com"}
-	key := strings.Join(reg.AddArgs(config.GWServerName), " ")
-	if strings.Contains(key, "--command "+gogBin+" --command") || strings.HasPrefix(key, "run") {
-		t.Fatalf("unrelated op-refs must not wrap normal gog OAuth: %s", key)
+	bin := installBin(t, dir, credentialed, nil)
+	// Provide success output for the exact sbx call the registrar builds.
+	reg := McpRegistrar{servers: packServers(), resolved: map[string]string{credentialed: bin}}
+	key := strings.Join(reg.AddArgs(credentialed), " ")
+	if strings.Contains(key, "--args run") {
+		t.Fatalf("unrelated op-refs must not wrap a bare registration: %s", key)
 	}
 	installBin(t, dir, "sbx", map[string]string{key: "ok"})
+	cfg := defaultCfg()
 	var buf bytes.Buffer
-	if err := RegisterServers(cfg, realEnv(), &buf, []string{config.GWServerName}, hostStub("", nil), nil, Credentials{}); err != nil {
+	if err := RegisterServers(cfg, realEnv(), &buf, []string{credentialed}, packServers(), Credentials{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(buf.String(), "registered: google-workspace") {
-		t.Errorf("expected registered: google-workspace, got:\n%s", buf.String())
+	if !strings.Contains(buf.String(), "registered: "+credentialed) {
+		t.Errorf("expected registered: %s, got:\n%s", credentialed, buf.String())
 	}
 	if strings.Contains(buf.String(), "Each wrapped server") {
-		t.Errorf("bare gog registration claimed to use an op wrapper:\n%s", buf.String())
+		t.Errorf("a bare registration claimed to use an op wrapper:\n%s", buf.String())
 	}
 }
 
-// TestRegisterServers_DefaultsToConfigMCP: with no names, every entry in cfg.MCP
-// is registered as a local stdio server. A non-gog name like "pio" registers as
-// `pix-host mcp pio` (sbx absent -> would-run is printed).
-func TestRegisterServers_DefaultsToConfigMCP(t *testing.T) {
-	dir := binDir(t) // no sbx -> would-run printed
-	hostBin := installBin(t, dir, "pix-host", map[string]string{"mcp --list": "pio\n"})
+// TestRegisterServers_WrappedRegistrationSaysSo: op AND op-refs present plus a
+// server that DECLARES EnvKeys -> the registration is op-run wrapped and the
+// summary says where the creds come from. The mirror image of the assertion
+// above: the note must appear exactly when the wrapper does.
+func TestRegisterServers_WrappedRegistrationSaysSo(t *testing.T) {
+	dir := binDir(t)
+	bin := installBin(t, dir, credentialed, nil)
+	opBin := installBin(t, dir, "op", nil)
+	refs := filepath.Join(t.TempDir(), "op-refs.env")
+	if err := os.WriteFile(refs, []byte("ACME_TOKEN=op://v/acme/token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reg := McpRegistrar{
+		Op: opBin, OpRefs: refs,
+		servers:  packServers(),
+		resolved: map[string]string{credentialed: bin},
+	}
+	key := strings.Join(reg.AddArgs(credentialed), " ")
+	installBin(t, dir, "sbx", map[string]string{key: "ok"})
 	cfg := defaultCfg()
-	cfg.MCP = []string{"pio"} // an arbitrary local stdio server
 	var buf bytes.Buffer
-	if err := RegisterServers(cfg, realEnv(), &buf, nil, hostStub(hostBin, nil), nil, Credentials{}); !errors.Is(err, ErrSbxUnavailable) {
-		t.Fatalf("expected ErrSbxUnavailable, got: %v", err)
+	if err := RegisterServers(cfg, realEnv(), &buf, []string{credentialed}, packServers(),
+		Credentials{OpPath: opBin, OpRefsPath: refs}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "sbx mcp add pio") ||
-		!strings.Contains(out, hostBin+" --args mcp --args pio") {
-		t.Errorf("expected pio registered as pix-host mcp pio, got:\n%s", out)
+	if !strings.Contains(out, "registered: "+credentialed) {
+		t.Errorf("expected registered: %s, got:\n%s", credentialed, out)
+	}
+	if !strings.Contains(out, "resolves its creds from "+refs+" via op run") {
+		t.Errorf("expected the op-run summary naming op-refs, got:\n%s", out)
+	}
+}
+
+// TestRegisterServers_DefaultsToConfigMCP: with no requested names, every entry
+// in cfg.MCP is registered from its pack declaration (sbx absent -> would-run is
+// printed).
+func TestRegisterServers_DefaultsToConfigMCP(t *testing.T) {
+	dir := binDir(t) // no sbx -> would-run printed
+	bin := installBin(t, dir, credFree, nil)
+	cfg := defaultCfg()
+	cfg.MCP = []string{credFree}
+	var buf bytes.Buffer
+	if err := RegisterServers(cfg, realEnv(), &buf, nil, packServers(),
+		Credentials{}); !errors.Is(err, ErrSbxUnavailable) {
+		t.Fatalf("expected ErrSbxUnavailable, got: %v", err)
+	}
+	if out := buf.String(); !strings.Contains(out, "sbx mcp add "+credFree+" --command "+bin+" --args serve") {
+		t.Errorf("expected %s registered from its pack declaration, got:\n%s", credFree, out)
 	}
 }
 
 // TestRegisterServers_EmptyConfig: with no names and an empty cfg.MCP, there is
-// nothing to register.
+// nothing to register — and the message points at where servers come from.
 func TestRegisterServers_EmptyConfig(t *testing.T) {
 	binDir(t)
 	cfg := defaultCfg()
 	cfg.MCP = nil
 	var buf bytes.Buffer
-	if err := RegisterServers(cfg, realEnv(), &buf, nil, hostStub("", nil), nil, Credentials{}); err != nil {
+	if err := RegisterServers(cfg, realEnv(), &buf, nil, nil, Credentials{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(buf.String(), "Nothing to register") {
 		t.Errorf("expected nothing-to-register for an empty mcp set, got:\n%s", buf.String())
+	}
+	if !strings.Contains(buf.String(), "MCP servers come from a pack") {
+		t.Errorf("expected the pack pointer, got:\n%s", buf.String())
 	}
 }
 
@@ -618,13 +652,14 @@ func TestRegisterServers_EmptyConfig(t *testing.T) {
 // gets the op-run wrapper when op-refs is present.
 func TestMcpRegistrar_ContainerAddArgs(t *testing.T) {
 	reg := McpRegistrar{
-		Op:      "/usr/bin/op",
-		OpRefs:  "/abs/op-refs.env",
-		HostBin: "/usr/local/bin/pix-host",
-		containers: map[string]config.MCPContainer{
+		Op:       "/usr/bin/op",
+		OpRefs:   "/abs/op-refs.env",
+		resolved: map[string]string{credentialed: "/opt/acme/bin/acme-cal"},
+		servers: map[string]config.MCPServer{
 			"notion-ish": {Manifest: "https://example.com/mcp/x/server.json"},
 			"hr":         {Image: "hr-mcp:0.0.1", EnvKeys: []string{"HR_API_KEY"}, EnvValues: map[string]string{"HR_COMPANY_DOMAIN": "acme"}},
 			"meetings":   {RemoteURL: "https://app.trymeetings.com/mcp"},
+			credentialed: packServers()[credentialed],
 		},
 	}
 
@@ -662,22 +697,24 @@ func TestMcpRegistrar_ContainerAddArgs(t *testing.T) {
 		t.Fatalf("image container must not use --local, got:\n%s", img)
 	}
 
-	// A non-container name (slack) must still be op-run wrapped, not --local.
-	slack := reg.AddArgs("slack")
-	if len(slack) < 5 || slack[3] != "--command" || slack[4] != "/usr/bin/op" {
-		t.Fatalf("non-container server must be op-run wrapped, got: %v", slack)
+	// A host COMMAND server in the same registrar must still be op-run wrapped,
+	// not --local: the transport the pack declared is the only thing that decides.
+	cmdServer := reg.AddArgs(credentialed)
+	if len(cmdServer) < 5 || cmdServer[3] != "--command" || cmdServer[4] != "/usr/bin/op" {
+		t.Fatalf("a credentialed command server must be op-run wrapped, got: %v", cmdServer)
 	}
-	if strings.Contains(strings.Join(slack, " "), "--local") {
-		t.Fatalf("non-container server must not use --local, got: %v", slack)
+	if strings.Contains(strings.Join(cmdServer, " "), "--local") {
+		t.Fatalf("a command server must not use --local, got: %v", cmdServer)
 	}
 }
 
 // The gog-only-wraps-for-an-explicit-keyring-ref behavior (BuildGogRegistrar)
 // used to back the built-in `pix gworkspace setup` wizard's pre-registration
-// snapshot and had its own test here. That wizard is retired; the same gate
-// (opReady && creds.GogKeyring) is now inlined directly in RegisterServers
-// and exercised through it — see TestRegisterServers_GogNoOpRefsBare and
-// TestRegisterServers_Registers below.
+// snapshot and had its own test here. That wizard is retired, and so is the
+// vendor special case: op-run wrapping is now decided solely by whether the
+// pack-declared server carries EnvKeys, which
+// TestExecArgv_CredentialFreeServerIsNeverWrapped and
+// TestRegisterServers_WrappedRegistrationSaysSo cover end to end.
 
 // --- DX finding 6: sbx-absent errors go to stderr, not stdout --------------
 
@@ -719,5 +756,51 @@ func TestMcpLsAttachmentNote_NeverClaimsStatusOrDoctorShowLiveness(t *testing.T)
 		if !strings.Contains(mcpLsAttachmentNote, want) {
 			t.Errorf("mcpLsAttachmentNote missing %q:\n%s", want, mcpLsAttachmentNote)
 		}
+	}
+}
+
+// TestRegisterServers_CatalogNameNeedsNoPack pins the ONE exception to
+// "every server comes from the active pack": a curated catalog name is
+// registerable with no pack at all, because pix already knows its endpoint.
+//
+// Without this, a host that registered a hosted server directly
+// (`pix mcp add notion --url …`) and left it in the config would start failing
+// `pix mcp add` outright — the name is in nobody's manifest, so the undeclared
+// path would claim no pack provides it, which is true and useless.
+func TestRegisterServers_CatalogNameNeedsNoPack(t *testing.T) {
+	binDir(t) // no sbx: we only care what it WOULD run, and that it does not error
+	cfg := defaultCfg()
+	cfg.MCP = []string{"notion"}
+	var buf bytes.Buffer
+	// No pack at all — the empty server map is the point.
+	err := RegisterServers(cfg, realEnv(), &buf, nil, nil, Credentials{})
+	if err == nil || !errors.Is(err, ErrSbxUnavailable) {
+		t.Fatalf("want only the sbx-absent error (never an undeclared-name error), got: %v", err)
+	}
+	out := buf.String()
+	if strings.Contains(out, "not declared by the active pack") {
+		t.Errorf("a catalog name must not be reported as undeclared, got:\n%s", out)
+	}
+	if !strings.Contains(out, "sbx mcp add notion --url https://mcp.notion.com/mcp") {
+		t.Errorf("expected the catalog endpoint to be resolved without a pack, got:\n%s", out)
+	}
+}
+
+// TestRegisterServers_PackOutranksTheCatalog: when a pack DOES declare a name
+// that also exists in the catalog, the pack's declaration wins. The catalog is
+// a fallback for hosts with no pack, not an override of one.
+func TestRegisterServers_PackOutranksTheCatalog(t *testing.T) {
+	binDir(t)
+	cfg := defaultCfg()
+	cfg.MCP = []string{"notion"}
+	servers := map[string]config.MCPServer{"notion": {RemoteURL: "https://notion.internal.example/mcp"}}
+	var buf bytes.Buffer
+	_ = RegisterServers(cfg, realEnv(), &buf, nil, servers, Credentials{})
+	out := buf.String()
+	if !strings.Contains(out, "https://notion.internal.example/mcp") {
+		t.Errorf("the pack's endpoint must win over the catalog's, got:\n%s", out)
+	}
+	if strings.Contains(out, "mcp.notion.com") {
+		t.Errorf("the catalog endpoint must not override the pack's, got:\n%s", out)
 	}
 }

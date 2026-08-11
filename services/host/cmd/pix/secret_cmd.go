@@ -9,7 +9,9 @@ import (
 	"strings"
 
 	"pix/host/cli"
+	"pix/host/packinfo"
 	"pix/host/secret"
+	"pix/host/workspace"
 )
 
 // secretDescription is GENERATED from the key registries, never hand-listed.
@@ -63,7 +65,7 @@ type SecretCmd struct {
 type SecretLsCmd struct{}
 
 func (c *SecretLsCmd) Run(d *cli.Deps) error {
-	secret.RunSecretLs(defaultShellEnv(), d.Out)
+	secret.RunSecretLs(defaultShellEnv(), d.Out, packNonSecretEnv())
 	return nil
 }
 
@@ -76,7 +78,7 @@ type SecretSetCmd struct {
 func (c *SecretSetCmd) Run(d *cli.Deps) error {
 	// A returned error is exit 1: a mirror failure must never leave the CLI
 	// exiting 0 while quietly reporting a shortfall.
-	return secret.RunSecretSet(defaultShellEnv(), d.Out, c.EnvVar, c.Ref)
+	return secret.RunSecretSet(defaultShellEnv(), d.Out, c.EnvVar, c.Ref, packNonSecretEnv())
 }
 
 type SecretRmCmd struct {
@@ -99,4 +101,17 @@ type SecretSyncCmd struct{}
 
 func (c *SecretSyncCmd) Run(d *cli.Deps) error {
 	return secret.RunSecretSync(defaultShellEnv(), d.Out)
+}
+
+// packNonSecretEnv resolves which env vars the ACTIVE PACK authorized to carry
+// a literal value in op-refs.env. Composition, not policy: only this layer can
+// load config and the pack, and secret must not reach for either. A host with
+// no pack gets nil, which means "everything here must be an op:// ref" — the
+// right default, and the one that cannot be widened by accident.
+func packNonSecretEnv() secret.NonSecret {
+	cfg, _, err := workspace.LoadResolvedConfig()
+	if err != nil {
+		return nil
+	}
+	return packinfo.ActiveNonSecretEnvNames(cfg)
 }

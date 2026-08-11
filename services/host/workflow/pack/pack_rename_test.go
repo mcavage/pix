@@ -76,7 +76,7 @@ func TestWritePackManifest_RefusesSymlinkedManifest(t *testing.T) {
 // write round-trips every field via packinfo.LoadPack.
 func TestWritePackManifest_AtomicRoundTrip(t *testing.T) {
 	root := t.TempDir()
-	m := packinfo.Manifest{Name: "default", Schema: 1, OllamaBridgeModel: "llama3", GogAccount: "me@example.com"}
+	m := packinfo.Manifest{Name: "default", Schema: 1, OllamaBridgeModel: "llama3", MemoryScope: "work"}
 	if err := WriteManifest(root, m); err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestWritePackManifest_AtomicRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	if p.Manifest.Name != m.Name || p.Manifest.Schema != m.Schema ||
-		p.Manifest.OllamaBridgeModel != m.OllamaBridgeModel || p.Manifest.GogAccount != m.GogAccount {
+		p.Manifest.OllamaBridgeModel != m.OllamaBridgeModel || p.Manifest.MemoryScope != m.MemoryScope {
 		t.Errorf("round-tripped manifest = %+v, want %+v", p.Manifest, m)
 	}
 }

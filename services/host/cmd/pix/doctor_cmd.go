@@ -69,7 +69,9 @@ func (c *statusCmd) Run(d *cli.Deps) error {
 // empty, reported as "attachment unknown" rather than guessed.
 func doctorOptions() doctor.Options {
 	env := defaultShellEnv()
-	o := doctor.Options{Env: env, HostResolver: env.HostBinary}
+	// Same credentials registration uses, so a probe tests the command the
+	// gateway will really spawn rather than whatever doctor's own shell holds.
+	o := doctor.Options{Env: env, HostResolver: env.HostBinary, Credentials: mcpCredentials(env)}
 	if ws, err := os.Getwd(); err == nil {
 		o.Workspace = ws
 	}

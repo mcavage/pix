@@ -90,15 +90,20 @@ present-but-erroring on its cheapest read-only probe IS a failure. Wrapper CLIs
 often reject `--help`/`--version`, so probe a real read-only subcommand, not the
 flag.
 
-Google Workspace uses the read-only `google-workspace` MCP server, whose
-external `gog` CLI implementation the sbx gateway spawns. Confirm it two ways:
-`sbx mcp ls` lists `google-workspace` as registered (skip this host-only check
-when `sbx` is absent), and the gateway exposes Gmail/Drive tools in A3. Call one
-cheap read-only tool, such as `gmail_search` or `drive_search`, with a tiny
-limit. Registered-but-0-tools is a failure; it usually means attachment or the
-headless OAuth/keyring setup is wrong. Run `pix doctor` on the host, then use
-`pix mcp load google-workspace [DIR]` or `pix rm BOX && pix run` when registration
-is healthy but the current sandbox lacks the tools.
+A pack-provided MCP server that the gateway spawns on the host (Google Workspace
+via `google-workspace` is the usual one) is checked the same way as any other
+backend in A3, and **a tool LIST is not evidence.** Most such servers can
+enumerate their tools with no credentials at all and exit clean, so a non-empty
+list proves only that the process starts. Call one cheap read-only tool with a
+tiny limit — `gmail_search` or `drive_search` for Workspace — and read what comes
+back. A credential or keyring failure shows up on the CALL, never on the list.
+
+If the tools are missing from this session entirely, that is host state, not a
+sandbox problem you can fix from in here: the user runs `pix doctor` on the host,
+which reports whether the server is declared by an active pack, registered,
+resolvable on PATH, and passing its own health probe. When registration is
+healthy but this sandbox lacks the tools, `pix rm BOX && pix run` recreates it
+with the full preload set. There is no live-attach.
 
 ### A5. Agent roster
 ```bash

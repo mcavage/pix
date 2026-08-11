@@ -1,114 +1,96 @@
-# Google Workspace via `gog` (host MCP)
+# Google Workspace comes from a pack
 
-Google Workspace runs as **`gog mcp`, a host-side MCP server** the sbx gateway
-spawns, the same way it spawns `slack`. Your OAuth creds stay in `GOG_HOME` on
-the host; only typed, read-only tool results cross into the sandbox. No token
-service, no in-VM wrapper, no bearer forwarding.
+Google Workspace is **not a pix feature**. Pix ships no MCP servers, installs
+no `gog`, stores no Google account, and special-cases no vendor. The
+`gworkspace` verb is deleted and is not coming back.
 
-There is **no built-in guided setup** for this integration. The `pix
-gworkspace setup|status|disable` wizard that used to drive the whole flow
-(installed-CLI check, OAuth import, headless verification, then gateway
-registration) is retired, along with the separate `google-docs-create`
-write-scoped companion MCP it could provision. gog is registered the SAME
-generic way every other local stdio MCP server is: `pix mcp register`, or a
-pack that carries the account. See `docs/design/gworkspace-externalization.md`
-for what changed and why.
+What pix has is the `gworkspace` **capability** (`capabilities.json`) and the
+`gworkspace` **skill** (read tools, the untrusted-content rule). Both resolve to
+an MCP server named `google-workspace`. Something has to *provide* that server,
+and the only thing that can is the active pack.
 
-> **Note:** the sbx Cloud MCP Gateway is not yet publicly released. `gog` runs
-> through it, so without gateway access the `gworkspace` capability is
-> unavailable regardless of gog setup.
+## What the pack declares
 
-## Manual setup
+One `[[integrations]]` stanza in the pack's `pack.toml`, with exactly ONE
+transport — `command` (a host binary over stdio), `image` (a container the
+gateway runs), `manifest` (an OCI server manifest), or `url` (a remote endpoint
+the gateway OAuths):
+
+```toml
+[[integrations]]
+  name    = "Google Workspace"
+  mcp     = "google-workspace"
+  command = "gog"
+  args    = ["--gmail-no-send", "--wrap-untrusted", "--readonly",
+             "mcp", "--allow-tool", "read"]   # LITERAL argv, never templated
+  env      = "GOG_KEYRING_PASSWORD"           # the op:// secret
+  env_keys = ["GOG_ACCOUNT"]                  # extra env NAMES forwarded
+  probe    = ["gog", "auth", "doctor"]        # health probe
+  setup    = "google-workspace"               # a [[setup]] block, declarative
+```
+
+The pack owns the hardened flags, the credential names, the health probe, and
+the install/authorize steps (`[[setup.require]]` / `[[setup.apply]]`). Pix
+registers what the pack declared and probes it; it contributes no flags of its
+own. Full schema: `docs/reference.md` §5.
+
+Adopting a pack that declares a host command halts at the Tier-1
+bill-of-materials review, which prints that exact argv before anything runs.
+
+## Wiring it up
 
 ```bash
-brew install openclaw/tap/gogcli   # or see https://gogcli.sh/install.html
+pix pack use <path|git-url>   # Tier-1 review, then it registers what it declared
+pix mcp add google-workspace  # re-register by hand (after rotating a credential)
+pix doctor                    # registered, or actually working?
+pix rm BOX && pix run         # a registration reaches a session at CREATE only
 ```
 
-1. **Install gog and authorize your account.** Minimal read-only scopes
-   (`gmail.readonly`, `calendar.readonly`, `drive.readonly`, ...). Follow the
-   installed `gog` version's own auth command (`gog auth` or equivalent —
-   consult its `--help`; pix does not drive this step).
+## Verifying it
 
-2. **Supply the keyring password, if you need one.** Skip this on macOS with
-   the system keychain. On a file keyring, or when 1Password should hold the
-   password, add it to your op-refs file at the XDG config path:
+`pix doctor` distinguishes **registered** from **working**. For a declared
+command it checks the binary resolves on PATH, then runs the pack's `probe`
+through the same `op run` wrapper the gateway will use to spawn the server — so
+a credential that only works because it happens to be exported in your shell
+fails here, which is the point. A server with no declared probe is reported as
+*unverified*, never as healthy. A registered server no active pack declares is
+reported as a gap even though the gateway lists it.
 
-   ```bash
-   mkdir -p ~/.config/pix
-   cat >> ~/.config/pix/op-refs.env <<'EOF'
-   GOG_ACCOUNT=you@example.com
-   GOG_HOME=/Users/you/.config/gog
-   GOG_KEYRING_BACKEND=file
-   GOG_KEYRING_PASSWORD=op://Private/gog-keyring/password
-   EOF
-   ```
+For gog itself the probe is `gog auth doctor`: it checks the keyring backend,
+the password, and the stored tokens, and exits non-zero when any of that is
+broken.
 
-3. **Verify the headless path directly** — the exact non-interactive
-   environment the gateway spawns `gog mcp` with. A `gog auth` command working
-   in your terminal proves nothing about the gateway: if the keyring password
-   isn't in the env it inherits, the server starts and returns **zero tools,
-   silently**. It must print a non-empty tool list:
+**`gog mcp --list-tools` proves nothing.** It dumps a static tool registry
+without touching the keyring: it prints the full list and exits 0 with no
+credentials at all. It passes on a completely broken install. Do not use it as
+a check, and do not trust a doc that tells you to.
 
-   ```bash
-   op run --env-file=~/.config/pix/op-refs.env -- gog --account you@example.com mcp --list-tools
-   # system keychain, no op-refs needed:
-   gog --account you@example.com mcp --list-tools
-   ```
+**Do not copy a `GOG_HOME` out of any document, including this one.** gog's root
+is platform-dependent, so no path written down here can be right for you. Run
+`gog auth status`; it prints the home it is actually using. Setting the variable
+to a path you read somewhere points gog at an empty, unauthorized home — which is
+exactly what the guidance this file replaced did.
 
-4. **Register with the gateway and enable it in config:**
+## Security posture
 
-   ```bash
-   pix config set google_workspace_account you@example.com
-   pix config set mcp google-workspace
-   pix mcp register
-   ```
+A `command`-transport MCP server runs **on the host, outside the sandbox, with
+your host-user privileges**, and everything it returns lands in the
+conversation sent to your model provider. That is the trade for reaching your
+real mailbox at all.
 
-Confirm it worked:
+- **Prompt injection through returned content.** Anyone can send you an email or
+  share a doc. A read-only server stops writes, not reads: an injected agent can
+  still read your Google data and try to exfiltrate it elsewhere. gog's
+  `--wrap-untrusted` fences returned bodies as data rather than instructions —
+  a mitigation, not a guarantee. The `gworkspace` skill carries the rule the
+  agent is asked to hold.
+- **The keyring password unlocks standing OAuth.** Whatever process env holds
+  it can read your mail. Keep gog's home and keyring file owner-only and the
+  host single-user; if the password leaks, treat the OAuth grant as compromised.
+- **Revoking** is a Google-side action: your account's
+  [third-party access page](https://myaccount.google.com/permissions), then
+  re-authorize through the pack's setup step. Rotating the password means
+  updating the `op://` item and re-running `pix mcp add google-workspace` so the
+  next spawn picks it up.
 
-```bash
-pix doctor    # Google Workspace group should read ready
-pix run       # or: pix rm BOX && pix run, to attach google-workspace to a fresh sandbox
-```
-
-The registered server is locked down by default (baked into every
-registration by `mcp.GogHardenedArgv`, not something you need to pass):
-
-```
-gog --account <you> --gmail-no-send --wrap-untrusted --readonly mcp --allow-tool read
-```
-
-Read-only, can't send mail, and returned Gmail/Doc bodies are fenced as
-untrusted data. There is no built-in write-scoped or document-creation
-profile; a pack can add one as its own MCP server if it needs one.
-
-## Security posture (why this is safe for full-auto)
-
-Runs as **your** account (a throwaway account would be useless), hardened
-with minimal read-only OAuth scopes plus gog's
-`--readonly`/`--gmail-no-send`/`--wrap-untrusted` flags and a revocable OAuth
-client. Two residual risks worth knowing:
-
-- **Prompt injection through returned content.** A prompt-injected agent can
-  still *read* your Google data and try to exfiltrate it through some other
-  channel. Read-only stops writes, not reads. `--wrap-untrusted` fences
-  returned Gmail/Doc bodies so the agent treats them as data, not
-  instructions, but that's a mitigation, not a guarantee.
-- **Data transit to model providers.** Returned Google content is sent to the configured/selected model provider as part of the conversation. While OAuth credentials remain strictly host-side in `GOG_HOME` and tool access is limited to read-only, any retrieved Google content is sent to the external model provider to be processed as part of the LLM context.
-- **The keyring password in the gateway's process env unlocks standing
-  OAuth.** Keep `GOG_HOME` at `0700`, the keyring file at `0600`, and the host
-  single-user. If that password or `GOG_HOME` is ever exposed, treat the
-  OAuth grant as compromised.
-
-To revoke or rotate access: revoke the grant from your Google Account's
-[third-party access page](https://myaccount.google.com/permissions), then
-either delete and recreate the OAuth client and re-authorize (step 1 above),
-or run the `gog` CLI's own re-auth command. Rotating the keyring password
-means updating `GOG_KEYRING_PASSWORD` in 1Password (or your op-refs file) and
-re-running `pix mcp register` so the gateway picks up the change on its next
-spawn.
-
-## Migrating off an old `pix gworkspace setup` install
-
-If a host was set up before this externalization, clean up the stale pieces
-the retired wizard could leave behind — see
-`docs/design/gworkspace-externalization.md` for the full list.
+See `../SECURITY.md` for the trust boundary this sits outside of.

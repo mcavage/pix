@@ -26,19 +26,20 @@ import (
 func TestPackUse_LockOnlyRecordsWhatThisActivationAdded(t *testing.T) {
 	dir := isolatePackHost(t)
 
-	// The user already has config.GWServerName configured, BEFORE any pack use.
+	// The user already has usersOwnMCP configured, BEFORE any pack use.
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.AddMCP(config.GWServerName)
+	cfg.AddMCP(usersOwnMCP)
 	if err := cfg.Save(); err != nil {
 		t.Fatal(err)
 	}
 
 	rootA := filepath.Join(dir, "a")
 	mustWritePack(t, rootA, packinfo.Manifest{Name: "a", Schema: 1, Integrations: []packinfo.Integration{
-		{Name: "gog", MCP: config.GWServerName}, // overlapping name the pack merely re-declares
+		// The overlapping name the pack merely re-declares, transport and all.
+		{Name: "Notes", MCP: usersOwnMCP, Command: "notes-mcp"},
 	}})
 	rootB := filepath.Join(dir, "b")
 	mustWritePack(t, rootB, packinfo.Manifest{Name: "b", Schema: 1})
@@ -48,7 +49,7 @@ func TestPackUse_LockOnlyRecordsWhatThisActivationAdded(t *testing.T) {
 	RunPackUse(fakeGitEnv(nil), &out, []string{rootA, "--yes"}, registerOK)
 
 	lockA := readPackLock(rootA)
-	if slices.Contains(lockA.MCP, config.GWServerName) {
+	if slices.Contains(lockA.MCP, usersOwnMCP) {
 		t.Fatalf("pack.lock must not claim a pre-existing mcp as its own contribution, lock.MCP = %v", lockA.MCP)
 	}
 
@@ -59,8 +60,8 @@ func TestPackUse_LockOnlyRecordsWhatThisActivationAdded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(cfgAfterB.MCP, config.GWServerName) {
-		t.Errorf("switching away from A must NOT remove the user's pre-existing gog mcp, cfg.MCP = %v", cfgAfterB.MCP)
+	if !slices.Contains(cfgAfterB.MCP, usersOwnMCP) {
+		t.Errorf("switching away from A must NOT remove the user's pre-existing mcp, cfg.MCP = %v", cfgAfterB.MCP)
 	}
 }
 
@@ -89,11 +90,13 @@ func TestReadPackLock_CorruptFileReturnsSafeDefault(t *testing.T) {
 // --- finding #5 [BLOCK]: F4 must switch ALL config, and pack rm must undo
 // contributions ---------------------------------------------------------------
 
-// TestPackUse_RestoresGogAccountToPriorValueOnSwitchAway: a pack that declares
-// gog_account overwrites cfg.GogAccount; switching to a pack that does NOT
-// declare it must restore whatever cfg held before (not leak the value across
-// packs, and not just leave it stuck).
-func TestPackUse_RestoresGogAccountToPriorValueOnSwitchAway(t *testing.T) {
+// TestPackUse_RestoresScalarToPriorValueOnSwitchAway: a pack that declares a
+// config scalar overwrites cfg; switching to a pack that does NOT declare it
+// must restore whatever cfg held before (not leak the value across packs, and
+// not just leave it stuck). This used to be written against gog_account, which
+// went with the built-in Google Workspace surface; ollama_bridge_model is the
+// same mechanism and the scalar that remains.
+func TestPackUse_RestoresScalarToPriorValueOnSwitchAway(t *testing.T) {
 	dir := isolatePackHost(t)
 
 	// A manual value set before any pack was ever active.
@@ -101,50 +104,50 @@ func TestPackUse_RestoresGogAccountToPriorValueOnSwitchAway(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.SetGogAccount("manual@example.com")
+	cfg.OllamaBridgeModel = "manual-model"
 	if err := cfg.Save(); err != nil {
 		t.Fatal(err)
 	}
 
 	rootWork := filepath.Join(dir, "work")
-	mustWritePack(t, rootWork, packinfo.Manifest{Name: "work", Schema: 1, GogAccount: "work@company.com"})
+	mustWritePack(t, rootWork, packinfo.Manifest{Name: "work", Schema: 1, OllamaBridgeModel: "work-model"})
 	rootPersonal := filepath.Join(dir, "personal")
 	mustWritePack(t, rootPersonal, packinfo.Manifest{Name: "personal", Schema: 1})
 
 	var out bytes.Buffer
 	RunPackUse(fakeGitEnv(nil), &out, []string{rootWork}, registerOK)
 	cfgWork, _ := config.Load()
-	if cfgWork.GogAccount != "work@company.com" {
-		t.Fatalf("pack use work should set gog_account, got %q", cfgWork.GogAccount)
+	if cfgWork.OllamaBridgeModel != "work-model" {
+		t.Fatalf("pack use work should set ollama_bridge_model, got %q", cfgWork.OllamaBridgeModel)
 	}
 
 	out.Reset()
 	RunPackUse(fakeGitEnv(nil), &out, []string{rootPersonal}, registerOK)
 	cfgPersonal, _ := config.Load()
-	if cfgPersonal.GogAccount != "manual@example.com" {
-		t.Errorf("switching to a pack with no gog_account should restore the PRIOR value, got %q, want %q", cfgPersonal.GogAccount, "manual@example.com")
+	if cfgPersonal.OllamaBridgeModel != "manual-model" {
+		t.Errorf("switching to a pack with no ollama_bridge_model should restore the PRIOR value, got %q, want %q", cfgPersonal.OllamaBridgeModel, "manual-model")
 	}
 }
 
 // TestPackRm_RemovesActivePackContributions (finding #5): `pack rm` must undo
-// the active pack's mcp + gog_account contributions, not just clear cfg.Pack —
+// the active pack's mcp + config-scalar contributions, not just clear cfg.Pack —
 // otherwise "detached" is a lie about what happened.
 func TestPackRm_RemovesActivePackContributions(t *testing.T) {
 	dir := isolatePackHost(t)
 
 	root := filepath.Join(dir, "work")
 	mustWritePack(t, root, packinfo.Manifest{
-		Name:         "work",
-		Schema:       1,
-		GogAccount:   "work@company.com",
-		Integrations: []packinfo.Integration{{Name: "Fastmail", MCP: "fastmail"}},
+		Name:              "work",
+		Schema:            1,
+		OllamaBridgeModel: "work-model",
+		Integrations:      []packinfo.Integration{{Name: "Fastmail", MCP: "fastmail", Command: "fastmail-mcp"}},
 	})
 
 	var out bytes.Buffer
 	// --yes: Tier-1 pack (declares an mcp); tests have no TTY (Phase-2 gate).
 	RunPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerOK)
 	cfgActive, _ := config.Load()
-	if !slices.Contains(cfgActive.MCP, "fastmail") || cfgActive.GogAccount != "work@company.com" {
+	if !slices.Contains(cfgActive.MCP, "fastmail") || cfgActive.OllamaBridgeModel != "work-model" {
 		t.Fatalf("setup: pack use did not attach as expected: %+v", cfgActive)
 	}
 
@@ -161,8 +164,9 @@ func TestPackRm_RemovesActivePackContributions(t *testing.T) {
 	if slices.Contains(cfgAfter.MCP, "fastmail") {
 		t.Errorf("pack rm should remove the active pack's mcp contribution, cfg.MCP = %v", cfgAfter.MCP)
 	}
-	if cfgAfter.GogAccount != "" {
-		t.Errorf("pack rm should revert gog_account to its prior (empty) value, got %q", cfgAfter.GogAccount)
+	if cfgAfter.OllamaBridgeModel != config.DefaultOllamaBridgeModel {
+		t.Errorf("pack rm should revert ollama_bridge_model to its prior (default) value %q, got %q",
+			config.DefaultOllamaBridgeModel, cfgAfter.OllamaBridgeModel)
 	}
 }
 
@@ -178,7 +182,7 @@ func TestPackActivation_ReportsRegisteredDeregisteredNeverAttachedDetached(t *te
 	mustWritePack(t, root, packinfo.Manifest{
 		Name:         "work",
 		Schema:       1,
-		Integrations: []packinfo.Integration{{Name: "Fastmail", MCP: "fastmail"}},
+		Integrations: []packinfo.Integration{{Name: "Fastmail", MCP: "fastmail", Command: "fastmail-mcp"}},
 	})
 
 	var out bytes.Buffer
@@ -365,7 +369,7 @@ func TestPackUse_EmptyLockSwitchRemovesNothing(t *testing.T) {
 	dir := isolatePackHost(t)
 
 	rootA := filepath.Join(dir, "a")
-	mustWritePack(t, rootA, packinfo.Manifest{Name: "a", Schema: 1, Integrations: []packinfo.Integration{{Name: "A", MCP: "a-mcp"}}})
+	mustWritePack(t, rootA, packinfo.Manifest{Name: "a", Schema: 1, Integrations: []packinfo.Integration{{Name: "A", MCP: "a-mcp", Command: "a-mcp-bin"}}})
 	rootB := filepath.Join(dir, "b")
 	mustWritePack(t, rootB, packinfo.Manifest{Name: "b", Schema: 1})
 
@@ -409,7 +413,7 @@ func TestPackUse_SamePackReactivationPreservesAttribution(t *testing.T) {
 	dir := isolatePackHost(t)
 
 	rootA := filepath.Join(dir, "a")
-	mustWritePack(t, rootA, packinfo.Manifest{Name: "a", Schema: 1, Integrations: []packinfo.Integration{{Name: "A", MCP: "a-mcp"}}})
+	mustWritePack(t, rootA, packinfo.Manifest{Name: "a", Schema: 1, Integrations: []packinfo.Integration{{Name: "A", MCP: "a-mcp", Command: "a-mcp-bin"}}})
 	rootB := filepath.Join(dir, "b")
 	mustWritePack(t, rootB, packinfo.Manifest{Name: "b", Schema: 1})
 
@@ -435,9 +439,9 @@ func TestPackUse_SamePackReactivationPreservesAttribution(t *testing.T) {
 }
 
 // TestPackUse_SamePackReactivationReconcilesRemovedFields: a config field
-// (gog_account, ollama_bridge_model) REMOVED from the manifest between
-// activations reverts to its prior value on the next `pack use` of the same
-// pack, instead of staying live forever.
+// (ollama_bridge_model) REMOVED from the manifest between activations reverts to
+// its prior value on the next `pack use` of the same pack, instead of staying
+// live forever. Its MCP contribution reconciles the same way.
 func TestPackUse_SamePackReactivationReconcilesRemovedFields(t *testing.T) {
 	dir := isolatePackHost(t)
 
@@ -445,7 +449,6 @@ func TestPackUse_SamePackReactivationReconcilesRemovedFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.SetGogAccount("manual@example.com")
 	cfg.OllamaBridgeModel = "manual-model"
 	if err := cfg.Save(); err != nil {
 		t.Fatal(err)
@@ -453,26 +456,27 @@ func TestPackUse_SamePackReactivationReconcilesRemovedFields(t *testing.T) {
 
 	root := filepath.Join(dir, "work")
 	mustWritePack(t, root, packinfo.Manifest{Name: "work", Schema: 1,
-		GogAccount: "work@company.com", OllamaBridgeModel: "work-model"})
+		OllamaBridgeModel: "work-model",
+		Integrations:      []packinfo.Integration{{Name: "Notes", MCP: "notes", Command: "notes-mcp"}}})
 
 	env := fakeGitEnv(nil)
 	var out bytes.Buffer
-	RunPackUse(env, &out, []string{root}, registerOK)
+	RunPackUse(env, &out, []string{root, "--yes"}, registerOK)
 	cfg1, _ := config.Load()
-	if cfg1.GogAccount != "work@company.com" || cfg1.OllamaBridgeModel != "work-model" {
+	if cfg1.OllamaBridgeModel != "work-model" || !slices.Contains(cfg1.MCP, "notes") {
 		t.Fatalf("setup: pack did not layer config: %+v", cfg1)
 	}
 
-	// The author drops both fields from the manifest, then re-uses the pack.
+	// The author drops both facets from the manifest, then re-uses the pack.
 	mustWritePack(t, root, packinfo.Manifest{Name: "work", Schema: 1})
 	out.Reset()
 	RunPackUse(env, &out, []string{root}, registerOK)
 	cfg2, _ := config.Load()
-	if cfg2.GogAccount != "manual@example.com" {
-		t.Errorf("removed gog_account must revert to prior on re-use, got %q", cfg2.GogAccount)
-	}
 	if cfg2.OllamaBridgeModel != "manual-model" {
 		t.Errorf("removed ollama_bridge_model must revert to prior on re-use, got %q", cfg2.OllamaBridgeModel)
+	}
+	if slices.Contains(cfg2.MCP, "notes") {
+		t.Errorf("a removed integration must stop being registered on re-use, got %v", cfg2.MCP)
 	}
 }
 
@@ -481,9 +485,10 @@ func TestPackUse_SamePackReactivationReconcilesRemovedFields(t *testing.T) {
 
 // TestPackUse_RegistersMcpAlreadyPresentInConfig: a pack MCP already in cfg.MCP
 // (a retry after a failed gateway registration, or a user-preexisting name the
-// pack redeclares) is still handed to mcp.RegisterServers — observable here as the
-// registration note from the fake (gateway-less) env, which the old
-// only-newly-added gate never produced.
+// pack redeclares) is still handed to the registrar, not skipped by an
+// only-newly-added gate. The registrar IS the seam now (RegisterFn is injected),
+// so the witness is what it was asked to register — and it must arrive with the
+// pack's declared server spec, or registration could not resolve the transport.
 func TestPackUse_RegistersMcpAlreadyPresentInConfig(t *testing.T) {
 	dir := isolatePackHost(t)
 
@@ -498,16 +503,19 @@ func TestPackUse_RegistersMcpAlreadyPresentInConfig(t *testing.T) {
 
 	root := filepath.Join(dir, "work")
 	mustWritePack(t, root, packinfo.Manifest{Name: "work", Schema: 1,
-		Integrations: []packinfo.Integration{{Name: "Fastmail", MCP: "fastmail"}}})
+		Integrations: []packinfo.Integration{{Name: "Fastmail", MCP: "fastmail", Command: "fastmail-mcp", Args: []string{"mcp"}}}})
 
 	var out bytes.Buffer
+	var registered []string
+	var servers map[string]config.MCPServer
 	// --yes: Tier-1 pack (declares an mcp); tests have no TTY (Phase-2 gate).
-	RunPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerOK)
-	// mcp.RegisterServers must be INVOKED for an already-present pack MCP (retry
-	// recovery), not skipped by an only-newly-added gate — observable as its own
-	// per-server line for fastmail (here classified remote in the fake env).
-	if !strings.Contains(out.String(), "fastmail") {
-		t.Errorf("mcp.RegisterServers must run for an already-present pack MCP (retry recovery), got:\n%s", out.String())
+	RunPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, recordRegistrations(&registered, &servers))
+	if !slices.Contains(registered, "fastmail") {
+		t.Errorf("registration must run for an already-present pack MCP (retry recovery), asked for %v", registered)
+	}
+	spec, ok := servers["fastmail"]
+	if !ok || spec.Command != "fastmail-mcp" || !slices.Equal(spec.Args, []string{"mcp"}) {
+		t.Errorf("the registrar must receive the pack's declared spec, got %+v", servers)
 	}
 }
 
@@ -733,10 +741,10 @@ func TestClonePack_ScrubsCheckedInRegularPackLock(t *testing.T) {
 // contributions cfg.Save never committed). Reverting such a lock must be a
 // clean no-op: nothing removed, nothing clobbered, no error.
 func TestRevertPackPriorContribution_ToleratesOverclaimingLock(t *testing.T) {
-	cfg := &config.Config{MCP: []string{"users-own"}, GogAccount: "user@home"}
+	cfg := &config.Config{MCP: []string{"users-own"}, OllamaBridgeModel: "users-own-model"}
 	lock := packLock{
-		MCP:        []string{"never-committed"},
-		GogAccount: "pack@corp", PriorGogAccount: "stale@old",
+		MCP:               []string{"never-committed"},
+		OllamaBridgeModel: "pack-model", PriorOllamaBridgeModel: "stale-model",
 	}
 	removedMCP := revertPackPriorContribution(cfg, lock)
 	if len(removedMCP) != 0 {
@@ -745,9 +753,10 @@ func TestRevertPackPriorContribution_ToleratesOverclaimingLock(t *testing.T) {
 	if !slices.Contains(cfg.MCP, "users-own") {
 		t.Errorf("a user's own MCP must survive, got %v", cfg.MCP)
 	}
-	// cfg.GogAccount != lock.GogAccount => the guarded revert must not fire.
-	if cfg.GogAccount != "user@home" {
-		t.Errorf("gog_account must not be clobbered by an over-claiming lock, got %q", cfg.GogAccount)
+	// cfg.OllamaBridgeModel != lock.OllamaBridgeModel => the guarded revert must
+	// not fire.
+	if cfg.OllamaBridgeModel != "users-own-model" {
+		t.Errorf("a scalar must not be clobbered by an over-claiming lock, got %q", cfg.OllamaBridgeModel)
 	}
 }
 
@@ -891,7 +900,7 @@ func TestPackUse_LockWriteFailureAbortsWithoutCommit(t *testing.T) {
 	cfgPath := filepath.Join(dir, "config.toml")
 	root := filepath.Join(dir, "pack")
 	mustWritePack(t, root, packinfo.Manifest{Name: "work", Schema: 1, Integrations: []packinfo.Integration{
-		{Name: "fastmail", MCP: "fastmail"},
+		{Name: "fastmail", MCP: "fastmail", Command: "fastmail-mcp"},
 	}})
 	brokenPackLock(t, root)
 

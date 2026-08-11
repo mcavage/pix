@@ -83,14 +83,14 @@ func TestPackUse_ForgedLockAttributionScrubbed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.AddMCP(config.GWServerName)
+	cfg.AddMCP(usersOwnMCP)
 	if err := cfg.Save(); err != nil {
 		t.Fatal(err)
 	}
-	// A Tier-0 pack (no gate) shipping a forged lock claiming config.GWServerName.
+	// A Tier-0 pack (no gate) shipping a forged lock claiming the user's own MCP.
 	root := filepath.Join(dir, "evil")
 	mustWritePack(t, root, packinfo.Manifest{Name: "evil", Schema: 1})
-	if err := os.WriteFile(PackLockPath(root), []byte("mcp = [\"gog\"]\n"), 0o644); err != nil {
+	if err := os.WriteFile(PackLockPath(root), []byte("mcp = [\""+usersOwnMCP+"\"]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	other := filepath.Join(dir, "other")
@@ -98,7 +98,7 @@ func TestPackUse_ForgedLockAttributionScrubbed(t *testing.T) {
 
 	var out bytes.Buffer
 	RunPackUse(fakeGitEnv(nil), &out, []string{root}, registerOK)
-	if l := readPackLock(root); slices.Contains(l.MCP, config.GWServerName) {
+	if l := readPackLock(root); slices.Contains(l.MCP, usersOwnMCP) {
 		t.Fatalf("forged attribution survived adoption: %+v (must be scrubbed + regenerated fresh)", l)
 	}
 	// Switch away: the user's own MCP must survive.
@@ -108,7 +108,7 @@ func TestPackUse_ForgedLockAttributionScrubbed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(cfg2.MCP, config.GWServerName) {
+	if !slices.Contains(cfg2.MCP, usersOwnMCP) {
 		t.Errorf("CRITICAL: switching away removed the user's own MCP (forged attribution honored); cfg.MCP=%v", cfg2.MCP)
 	}
 }
@@ -137,63 +137,54 @@ func TestPackUse_ForgedSymlinkLockScrubbedNotFollowed(t *testing.T) {
 	}
 }
 
-// --- fingerprint re-gating: gog_account + mutated proxy script ---------------
+// --- fingerprint re-gating: declared MCP argv + mutated proxy script ---------
 
-// TestPackUse_ChangedGogAccountRegates: acceptance is over the RESOLVED MCP
-// argv, so changing config gog_account after adoption changes what the
-// gateway would spawn — the next `pack use` re-gates (non-TTY fails closed)
-// and a strict host launch refuses until re-accepted. gog is pinned as a
-// LOCAL host-spawned server here (round-2 C: an unlisted gog is a
-// reference-only Tier-0 fact — see TestPackUse_GogReferenceStaysTier0); this
-// test pins the account→argv→fingerprint machinery for the local case.
-func TestPackUse_ChangedGogAccountRegates(t *testing.T) {
+// TestPackUse_ChangedMCPArgvRegates: acceptance is over the argv the pack
+// DECLARES for each host-command MCP server, so editing that argv after adoption
+// changes what the gateway would spawn — the next `pack use` re-gates (non-TTY
+// fails closed) and a strict host launch refuses until re-accepted.
+//
+// This used to be written against cfg.GogAccount, a per-user config value the
+// launcher resolved INTO the argv. That is exactly what the refactor removed:
+// the reviewed argv is now pack data, so the same machinery
+// (argv → fingerprint → re-gate) is pinned here against the manifest instead of
+// against ambient host config.
+func TestPackUse_ChangedMCPArgvRegates(t *testing.T) {
 	dir := isolatePackHost(t)
-	pinLocalMCP(t, config.GWServerName)
 	root := filepath.Join(dir, "pack")
-	mustWritePack(t, root, packinfo.Manifest{Name: "work", Schema: 1,
-		Integrations: []packinfo.Integration{{Name: "gog", MCP: config.GWServerName}}})
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatal(err)
+	declare := func(args ...string) {
+		t.Helper()
+		mustWritePack(t, root, packinfo.Manifest{Name: "work", Schema: 1,
+			Integrations: []packinfo.Integration{{Name: "Workspace", MCP: "workspace", Command: "gog", Args: args}}})
 	}
-	cfg.SetGogAccount("a@example.com")
-	if err := cfg.Save(); err != nil {
-		t.Fatal(err)
-	}
+	declare("--readonly", "mcp")
 
 	var out bytes.Buffer
-	RunPackUse(localMCPEnv(config.GWServerName), &out, []string{root, "--yes"}, registerOK) // accept with a@
-	// Same account: re-activation must NOT re-prompt.
+	RunPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerOK) // accept --readonly
+	// Same argv: re-activation must NOT re-prompt.
 	out.Reset()
-	RunPackUse(localMCPEnv(config.GWServerName), &out, []string{root}, registerOK)
+	RunPackUse(fakeGitEnv(nil), &out, []string{root}, registerOK)
 	if strings.Contains(out.String(), "adds these integrations to Pix") {
 		t.Errorf("unchanged surface must not re-gate:\n%s", out.String())
 	}
 
-	// Change the account: the resolved argv changes → re-gate.
-	cfg2, err := config.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg2.SetGogAccount("b@example.com")
-	if err := cfg2.Save(); err != nil {
-		t.Fatal(err)
-	}
+	// Drop the hardening flag: the reviewed argv changes → re-gate.
+	declare("mcp")
 	out.Reset()
-	cerr := RunPackUse(localMCPEnv(config.GWServerName), &out, []string{root}, registerOK)
+	cerr := RunPackUse(fakeGitEnv(nil), &out, []string{root}, registerOK)
 	if cerr == nil {
-		t.Fatalf("a changed gog_account must re-trigger the gate (fail closed non-TTY); output:\n%s", out.String())
+		t.Fatalf("a changed declared argv must re-trigger the gate (fail closed non-TTY); output:\n%s", out.String())
 	}
-	if got := out.String() + cerr.Error(); !strings.Contains(got, "b@example.com") {
-		t.Errorf("the re-fired BoM must show the NEW resolved argv, got:\n%s", got)
+	if got := out.String() + cerr.Error(); !strings.Contains(got, "gog mcp") {
+		t.Errorf("the re-fired BoM must show the NEW argv, got:\n%s", got)
 	}
 	// And the strict host launch refuses too (the surface is not accepted).
-	cfg3, err := config.Load()
+	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, rerr := refreshHostPackWrappers(&out, cfg3, true); rerr == nil {
-		t.Error("strict refresh must refuse a surface changed since acceptance (gog_account)")
+	if _, rerr := refreshHostPackWrappers(&out, cfg, true); rerr == nil {
+		t.Error("strict refresh must refuse a surface changed since acceptance (declared argv)")
 	}
 }
 

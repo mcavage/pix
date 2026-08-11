@@ -94,6 +94,11 @@ Registration is host state, which is not the same as a session seeing the
 tools. A sandbox picks up everything registered when it launches, so add
 first, then start it. To catch a running one up: `pix rm <box>` then `pix`.
 
+Anything other than a hosted URL (a local binary, a container) comes from a
+pack (section 4). Pix ships no MCP servers of its own, so `pix mcp add <name>`
+with no URL registers what the active pack declared. `pix doctor` then tells you
+whether it is merely registered or actually working.
+
 **API keys** are 1Password references, never values on disk:
 
 ```bash

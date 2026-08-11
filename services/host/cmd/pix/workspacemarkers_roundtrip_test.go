@@ -152,11 +152,26 @@ func TestMarkerRoundTrip_OnboardingJSON(t *testing.T) {
 	t.Setenv("PIX_PROFILE", "")
 	t.Setenv("PATH", t.TempDir()) // no MCP-relevant binary present
 
+	// An mcp name is only accepted when the ACTIVE PACK declares it (or it is a
+	// shipped catalog remote): the allowlist is pack data now, so the fixture
+	// activates a pack that declares one server.
+	packRoot := filepath.Join(t.TempDir(), "pack")
+	mustWritePack(t, packRoot, packinfo.Manifest{Name: "acme", Schema: 1,
+		Integrations: []packinfo.Integration{{Name: "Acme Docs", MCP: testMCPServer, Command: "acmedocs"}}})
+	seed, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed.Pack = packRoot
+	if err := seed.Save(); err != nil {
+		t.Fatal(err)
+	}
+
 	dir := filepath.Join(ws, ".pix")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	proposal := provision.OnboardingResult{Version: 1, MCP: []string{config.GWServerName}}
+	proposal := provision.OnboardingResult{Version: 1, MCP: []string{testMCPServer}}
 	data, err := json.Marshal(proposal)
 	if err != nil {
 		t.Fatal(err)
@@ -177,11 +192,11 @@ func TestMarkerRoundTrip_OnboardingJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// onboarding has deliberately NO account writer (Google Workspace
-	// authorization needs a browser); the marker's mcp entry is what should
-	// round-trip into config.
-	if !slices.Contains(cfg.MCP, config.GWServerName) {
-		t.Errorf("cfg.MCP = %v, want %s round-tripped from the marker", cfg.MCP, config.GWServerName)
+	// onboarding has deliberately NO per-server credential writer (declaring a
+	// server is not the same as it being authorized); the marker's mcp entry is
+	// what should round-trip into config.
+	if !slices.Contains(cfg.MCP, testMCPServer) {
+		t.Errorf("cfg.MCP = %v, want %s round-tripped from the marker", cfg.MCP, testMCPServer)
 	}
 }
 

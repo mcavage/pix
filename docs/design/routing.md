@@ -27,8 +27,9 @@ wrapper all did less than they looked like they did — an agent file is a few
 lines of frontmatter, editing it directly is not harder than nine CLI flags,
 and reassess only ever re-resolved + recompiled, which `make routing`
 already does. `agent ls` (table + `--json`) is the entire surviving surface;
-typing a retired subcommand answers with `PIX_RETIRED` guidance to edit
-`agents/*.md` and run `make routing` (see retired.go).
+a deleted subcommand gets the ordinary unknown-command answer (the `PIX_RETIRED`
+seam and `retired.go` this doc described are themselves gone): edit `agents/*.md`
+by hand, then run `make routing`.
 
 ## The problem
 
@@ -243,8 +244,8 @@ pinned model), an optional provider constraint, and an advisory `budget_usd`.
   `budget_usd`, an optional pinned `model`) — add, change, or delete the file
   directly; if a new `intent` needs scores, hand-add them to `scorecard.json`.
   Then run `make routing` to recompile `routing.json` and relaunch the
-  sandbox to pick it up. `agent new|edit|rm|reassess` are retired; typing one
-  answers with a `PIX_RETIRED` notice naming this path.
+  sandbox to pick it up. `agent new|edit|rm|reassess` are deleted; typing one
+  gets the ordinary unknown-command answer, not a notice naming this path.
 
 ## Sandbox integration
 

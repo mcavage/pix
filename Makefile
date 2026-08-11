@@ -236,7 +236,7 @@ mcp-auth: ## (Re)authorize all registered remote OAuth MCP servers. Opens a brow
 	@echo "  pix mcp load <server>   # or: sbx mcp load <server> --sandbox pix-pix"
 	@echo "A fresh 'make run' also picks them up."
 
-mcp-register: require-launcher ## Register the local stdio MCP servers you use (the mcp list in config.toml) with sbx's local data-plane gateway (no SBX_MCP_URL needed). The gateway runs each as `op run --no-masking --env-file=config/op-refs.env -- pix-host <name>`, so creds come from 1Password at spawn (nothing stored in the registration). Needs op + config/op-refs.env.
+mcp-register: require-launcher ## Register the local stdio MCP servers you use (the mcp list in config.toml) with sbx's local data-plane gateway (no SBX_MCP_URL needed). Servers come from your active pack; the gateway runs each as the pack declared it, wrapped in `op run --no-masking --env-file=<op-refs.env>` when that server declares credentials, so creds come from 1Password at spawn (nothing stored in the registration). Needs op + config/op-refs.env.
 	@command -v sbx >/dev/null 2>&1 || { echo "ERROR: sbx not found"; exit 1; }
 	@[ -n "$(strip $(REGISTER))" ] || { echo "Nothing to register: no local stdio servers ($(LOCAL_STDIO_MCP)) are in MCP. Run: pix config set mcp <name>."; exit 0; }
 	@[ -n "$(OP_BIN)" ] || { echo "ERROR: 1Password CLI 'op' not found on PATH."; exit 1; }

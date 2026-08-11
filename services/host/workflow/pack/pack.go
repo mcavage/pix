@@ -20,7 +20,6 @@ import (
 	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/inference"
-	"pix/host/launcher"
 	"pix/host/packinfo"
 	"pix/host/secret"
 	"pix/host/service"
@@ -186,11 +185,6 @@ func applyPackFacets(cfg *config.Config, p *packinfo.Info) (packLock, error) {
 		if cfg.AddMCP(name) {
 			lock.MCP = append(lock.MCP, name)
 		}
-	}
-	if v := strings.TrimSpace(p.Manifest.GogAccount); v != "" {
-		lock.PriorGogAccount = cfg.GogAccount
-		lock.GogAccount = v
-		cfg.SetGogAccount(v)
 	}
 	if v := strings.TrimSpace(p.Manifest.OllamaBridgeModel); v != "" {
 		lock.PriorOllamaBridgeModel = cfg.OllamaBridgeModel
@@ -424,11 +418,16 @@ type packLock struct {
 	// use` at the already-cloned local directory.
 	Remote string `toml:"remote,omitempty"`
 	Commit string `toml:"commit,omitempty"`
-	// GogAccount/OllamaBridgeModel record the value THIS pack's last activation
-	// set on cfg. Prior* is whatever cfg held immediately BEFORE this pack
-	// overwrote it, so reverting on switch-away restores exactly that.
-	GogAccount             string `toml:"gog_account,omitempty"`
-	PriorGogAccount        string `toml:"prior_gog_account,omitempty"`
+	// OllamaBridgeModel records the value THIS pack's last activation set on
+	// cfg. Prior* is whatever cfg held immediately BEFORE this pack overwrote
+	// it, so reverting on switch-away restores exactly that.
+	//
+	// gog_account/prior_gog_account used to live here too. They are gone with
+	// the rest of the built-in Google Workspace surface: a pack that needs a
+	// per-user account for a server now forwards it as that integration's
+	// env_keys, which needs no config key and therefore no revert-on-switch.
+	// An OLD lock file may still carry those keys; TOML ignores unknown fields,
+	// so it loads and the stale values are simply never read again.
 	OllamaBridgeModel      string `toml:"ollama_bridge_model,omitempty"`
 	PriorOllamaBridgeModel string `toml:"prior_ollama_bridge_model,omitempty"`
 }
@@ -563,8 +562,8 @@ func (t packTxn) abort(restoreLock func() error, format string, a ...any) error 
 // any commit. Tier-0 returns ("", "", nil) and adopts silently; Tier-1 halts at the BoM
 // screen unless HOST trust state already holds this identity's acceptance of
 // the EXACT current surface. A non-nil error means the caller commits NOTHING.
-func gatePackHostSurface(env hostenv.Env, out io.Writer, store *PackTrustStore, p *packinfo.Info, root, cfgGogAccount string, yes bool) (fingerprint, key string, err error) {
-	bom := ComputeHostBoM(p, cfgGogAccount, LocalMCPClassifier(env, env.HostBinary))
+func gatePackHostSurface(env hostenv.Env, out io.Writer, store *PackTrustStore, p *packinfo.Info, root string, yes bool) (fingerprint, key string, err error) {
+	bom := ComputeHostBoM(p)
 	if !bom.Tier1() {
 		return "", "", nil
 	}
@@ -669,9 +668,6 @@ func revertPackPriorContribution(cfg *config.Config, prevLock packLock) (removed
 	}
 	// Only revert if cfg still holds exactly what THIS pack set — never clobber
 	// a value something else changed in the meantime.
-	if prevLock.GogAccount != "" && cfg.GogAccount == prevLock.GogAccount {
-		cfg.SetGogAccount(prevLock.PriorGogAccount)
-	}
 	if prevLock.OllamaBridgeModel != "" && cfg.OllamaBridgeModel == prevLock.OllamaBridgeModel {
 		cfg.OllamaBridgeModel = prevLock.PriorOllamaBridgeModel
 	}
@@ -729,7 +725,7 @@ func packTarget(rest []string) string {
 // RegisterFn registers the named servers with the sbx gateway: pack may not
 // call mcp (both are capabilities), so the caller supplies this seam.
 type RegisterFn func(cfg *config.Config, env hostenv.Env, out io.Writer, names []string,
-	hostResolver func() (string, error), containers map[string]config.MCPContainer) error
+	servers map[string]config.MCPServer) error
 
 // registerPackMCP registers names with the sbx gateway. Idempotent, and it runs
 // even for a name ALREADY in cfg.MCP: a retry after a failed registration must
@@ -738,7 +734,7 @@ func registerPackMCP(register RegisterFn, cfg *config.Config, env hostenv.Env, o
 	if len(names) == 0 {
 		return
 	}
-	if err := register(cfg, env, out, names, launcher.FindHostBinary, packinfo.ContainerMCP(p)); err != nil {
+	if err := register(cfg, env, out, names, packinfo.ServerMCP(p)); err != nil {
 		fmt.Fprintf(out, "note: mcp registration: %v\n", err)
 	}
 }
@@ -787,7 +783,6 @@ func packShow(env hostenv.Env, out io.Writer, rest []string) error {
 		{"skills", present(p.SkillsDir)},
 		{"knowledge", present(p.KnowledgeDir) + " (inert; not indexed by any service)"},
 		{"ollama", p.Manifest.OllamaBridgeModel},
-		{"gog", p.Manifest.GogAccount},
 		{"memory", p.Manifest.MemoryScope},
 		{"capabilities", labelIf(p.CapabilitiesFile, "yes (mounts to ~/.pi/agent/capabilities.json)")},
 		{"web search", labelIf(p.WebSearchFile, "yes (mounts to ~/.pi/web-search.json)")},
@@ -803,7 +798,25 @@ func packShow(env hostenv.Env, out io.Writer, rest []string) error {
 			if s.Required {
 				kind = "required"
 			}
-			fmt.Fprintf(out, "  - %s (%s; %s)\n", s.ID, kind, s.Path)
+			// A declarative step has no file; describe it by what it REQUIRES,
+			// which is the useful fact anyway ("needs gog, a 1Password ref, and
+			// a passing probe" beats a path nobody will open).
+			detail := s.Path
+			if s.Declarative() {
+				var needs []string
+				for _, r := range s.Require {
+					switch r.Kind {
+					case "bin":
+						needs = append(needs, r.Name)
+					case "op-ref":
+						needs = append(needs, r.Env)
+					case "probe":
+						needs = append(needs, strings.Join(r.Argv, " "))
+					}
+				}
+				detail = "needs " + strings.Join(needs, ", ")
+			}
+			fmt.Fprintf(out, "  - %s (%s; %s)\n", s.ID, kind, detail)
 		}
 	}
 	if len(p.Manifest.Proxies) > 0 {
@@ -842,6 +855,11 @@ func showIntegration(env hostenv.Env, out io.Writer, p *packinfo.Info, ig packin
 		fmt.Fprintf(out, " (mcp: %s)", ig.MCP)
 	}
 	switch {
+	case ig.Command != "":
+		// Show the WHOLE argv, not just the binary: the flags are the security
+		// posture (read-only, no-send), and a reader skimming `pack show`
+		// should see them without opening the manifest.
+		fmt.Fprintf(out, " — runs: %s", strings.Join(append([]string{ig.Command}, ig.Args...), " "))
 	case ig.Manifest != "":
 		fmt.Fprintf(out, " — manifest: %s (creds Docker-side)", ig.Manifest)
 	case ig.Image != "":
@@ -958,7 +976,7 @@ func packUse(env hostenv.Env, out io.Writer, rest []string, register RegisterFn)
 	if err != nil {
 		return err
 	}
-	fingerprint, key, err := gatePackHostSurface(env, out, store, p, root, cfg.GogAccount, flags.yes)
+	fingerprint, key, err := gatePackHostSurface(env, out, store, p, root, flags.yes)
 	if err != nil {
 		return err
 	}

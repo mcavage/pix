@@ -65,7 +65,7 @@ var (
 // hand every caller a second name for the command layer's own registrar.
 type Composition struct {
 	Register func(cfg *config.Config, env hostenv.Env, out io.Writer, names []string,
-		hostResolver func() (string, error), containers map[string]config.MCPContainer) error
+		servers map[string]config.MCPServer) error
 	PackApply func(env hostenv.Env, out io.Writer, packs, with []string, assumeYes bool) error
 }
 
@@ -98,7 +98,7 @@ func RunSetup(env hostenv.Env, flags []string, out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
-	if err := ValidateSetupSemantics(opts, env, HostBinary); err != nil {
+	if err := ValidateSetupSemantics(opts); err != nil {
 		return err
 	}
 	// The DECLARED half: --mcp/--model are host configuration the user stated,
@@ -271,11 +271,12 @@ func setupProposal(opts Opts) *OnboardingResult {
 // ValidateSetupSemantics checks only built-in argument meaning. It performs no
 // writes and opens no authorization flow, so the command layer can call it
 // before the first pack is adopted.
-func ValidateSetupSemantics(opts Opts, env hostenv.Env, hostResolver func() (string, error)) error {
+func ValidateSetupSemantics(opts Opts) error {
 	if len(opts.WithSetup) > 0 && len(opts.Packs) == 0 {
 		return ErrUsage{fmt.Errorf("--with requires --pack")}
 	}
-	if err := validateOnboarding(setupProposal(opts), env, hostResolver); err != nil {
+	// Shape only: no pack has been adopted yet, so no server name is knowable.
+	if err := validateOnboardingShape(setupProposal(opts)); err != nil {
 		return ErrUsage{err}
 	}
 	return nil

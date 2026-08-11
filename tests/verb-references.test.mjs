@@ -78,13 +78,41 @@ function unresolvedVerb(types, words) {
 }
 
 // The surfaces a wrong verb actually hurts someone from.
+//
+// SKILLS AND docs/ ARE IN THIS LIST FOR A REASON. They were not, and that is
+// precisely where the next round of this bug landed: `pix mcp register` and
+// `pix mcp load` sat in four SKILL.md files and docs/gworkspace.md for months
+// after both verbs were deleted. A skill is the WORST place for a dead verb —
+// the agent reads it as instruction, runs it, gets "no command named", and has
+// no way to know the documentation was wrong rather than its own reasoning.
+//
+// Enumerated dynamically, so a new skill or doc is covered the day it is
+// written rather than the day someone remembers to add it here.
+const listFiles = (dir, pred) =>
+	fs.existsSync(path.join(repoRoot, dir))
+		? fs.readdirSync(path.join(repoRoot, dir), { withFileTypes: true }).flatMap((e) => {
+				const rel = `${dir}/${e.name}`;
+				if (e.isDirectory()) return listFiles(rel, pred);
+				return pred(rel) ? [rel] : [];
+			})
+		: [];
+
 const SURFACES = [
 	"capabilities.json",
 	"README.md",
 	"AGENTS.md",
-	"docs/getting-started.md",
-	"docs/reference.md",
-	...fs.readdirSync(path.join(repoRoot, "extensions")).filter((f) => f.endsWith(".ts")).map((f) => `extensions/${f}`),
+	// Every skill: the agent-facing surface, where a dead verb is acted on.
+	...listFiles("skills", (f) => f.endsWith(".md")),
+	// Every user-facing doc. Two subtrees stay out because they are RECORDS,
+	// not instructions, and a record of a removal necessarily names the removed
+	// thing: docs/design/** (what changed and why) and docs/legal/** (release
+	// and compliance history, which also quotes prose like "pix is an
+	// independent project" that is not an invocation at all).
+	...listFiles(
+		"docs",
+		(f) => f.endsWith(".md") && !f.startsWith("docs/design/") && !f.startsWith("docs/legal/"),
+	),
+	...listFiles("extensions", (f) => f.endsWith(".ts")),
 	...fs
 		.readdirSync(path.join(repoRoot, "services/host/cmd/pix"))
 		.filter((f) => f.endsWith(".go") && !f.endsWith("_test.go"))

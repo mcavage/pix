@@ -33,10 +33,10 @@
       "exits": 0
     },
     "pix/host/health": {
-      "_prod_loc_note": "prod_loc 1277 -> 1286, globals 29 -> 30: the probe half of McpAuthNotRequired (see pix/host/mcp's note) -- a server that needs no OAuth is now reported as ANSWERED rather than counted against the row as unproven, which is what made the mcp row a permanent `?`. Carried with the earlier raise in this package: prod_loc 1254 -> 1277: the mcp row's evidence was ONE run-on line -- eight servers, each with its own parenthetical, joined into several hundred characters that no one can read in a terminal or skim anywhere. A reader could not tell how many servers there were, which one was theirs, or where one note ended. writeEvidence now gives a set-valued evidence string one line per item under a count, and the notes are joined with newlines because \"; \" cannot be the separator: the notes contain semicolons, and splitting on those turned 8 servers into 16 half-sentences. Single-item evidence is untouched, so every other row reads exactly as before. A deliberate, reviewed raise of a shrink-only budget.",
-      "prod_loc": 1286,
+      "_prod_loc_note": "prod_loc 1277 -> 1286, globals 29 -> 30: the probe half of McpAuthNotRequired (see pix/host/mcp's note) -- a server that needs no OAuth is now reported as ANSWERED rather than counted against the row as unproven, which is what made the mcp row a permanent `?`. Carried with the earlier raise in this package: prod_loc 1254 -> 1277: the mcp row's evidence was ONE run-on line -- eight servers, each with its own parenthetical, joined into several hundred characters that no one can read in a terminal or skim anywhere. A reader could not tell how many servers there were, which one was theirs, or where one note ended. writeEvidence now gives a set-valued evidence string one line per item under a count, and the notes are joined with newlines because \"; \" cannot be the separator: the notes contain semicolons, and splitting on those turned 8 servers into 16 half-sentences. Single-item evidence is untouched, so every other row reads exactly as before. A deliberate, reviewed raise of a shrink-only budget. Then prod_loc 1286 -> 1456, globals 30 -> 34: doctor stopped treating \"registered with the gateway\" as \"working\". MCPServer gained Undeclared/Command/Probe and a LookPath seam, and checkServer gained four real questions it never asked: does the declared command still resolve, does any active pack still declare this name, does the server's own probe pass, and did the probe actually get to run. Per-server checks also became concurrent, because the budget is per-probe and one `op run` blocking on a locked vault used to starve every check after it and report gaps that were never measured. This is the change: the previous cheapness WAS the bug — an eight-server host read `✓ 8 registered` while two of those registrations pointed at commands that no longer existed.",
+      "prod_loc": 1456,
       "exports": 40,
-      "globals": 30,
+      "globals": 34,
       "edges": 3,
       "exits": 0
     },
@@ -85,11 +85,12 @@
       "exits": 0
     },
     "pix/host/packinfo": {
-      "prod_loc": 942,
-      "exports": 32,
-      "globals": 4,
+      "prod_loc": 1215,
+      "exports": 37,
+      "globals": 6,
       "edges": 4,
-      "exits": 0
+      "exits": 0,
+      "_prod_loc_note": "prod_loc 942 -> 1215, exports 32 -> 37, globals 4 -> 6: the pack manifest grew the two things that make a pack checkable. Integrations gained a transport (command/args/probe alongside image/manifest/url) so every declared server names something that can actually be started, and setup steps gained a declarative require/apply vocabulary with fail-closed validation. Most of the added lines are that validation. It buys the defect class outright: the previous shell hooks called `pix` verbs that had been deleted, so a pack's setup could never pass, and nothing detected it until a user tried to onboard. A pack that names no commands cannot be broken by a CLI change."
     },
     "pix/host/plugin": {
       "prod_loc": 388,
@@ -120,9 +121,9 @@
       "exits": 0
     },
     "pix/host/secret": {
-      "_prod_loc_note": "1240 -> 1290, exports 42 -> 43, globals 8 -> 9: web-search TOOL keys (ToolKeyRefOrder) are now seeded/checked/mirrored like model-provider keys, but held OUT of ProviderKeyRefOrder and ModelProviders so `pix models add` never offers a name it would reject and a missing search key can never refuse a launch. The new export is the list itself; the new global is the sync map, now DERIVED from both lists so an entry cannot be added to one and forgotten in the other. A deliberate, reviewed raise of a shrink-only budget.",
-      "prod_loc": 1290,
-      "exports": 43,
+      "_prod_loc_note": "1240 -> 1290, exports 42 -> 43, globals 8 -> 9: web-search TOOL keys (ToolKeyRefOrder) are now seeded/checked/mirrored like model-provider keys, but held OUT of ProviderKeyRefOrder and ModelProviders so `pix models add` never offers a name it would reject and a missing search key can never refuse a launch. The new export is the list itself; the new global is the sync map, now DERIVED from both lists so an entry cannot be added to one and forgotten in the other. A deliberate, reviewed raise of a shrink-only budget. Then prod_loc 1290 -> 1306, exports 43 -> 44: the non-secret allowlist became a parameter (secret.NonSecret) instead of a hardcoded map of one vendor's three GOG_* variables. Pix now allowlists nothing of its own; the set is exactly what the active pack declares as env_keys, so a pack that needs a plain-text variable is the thing that authorizes it and deactivating that pack takes its allowances with it.",
+      "prod_loc": 1306,
+      "exports": 44,
       "globals": 9,
       "edges": 3,
       "exits": 0
@@ -195,8 +196,8 @@
       "exits": 0
     },
     "pix/host/workflow/pack": {
-      "_prod_loc_note": "prod_loc 3049 -> 3062, globals 4 -> 5: ONE seam, paying for itself many times over. propagateConfig's real implementation runs `launchctl kickstart -k` against the developer's own pix LaunchAgent, and every test here that adopts a pack went through it -- so a test run restarted the live daemon on the machine running it, serially, blocking on each. That was 507s of a 578s `go test ./...` locally against a fast gate whose own documented go-test baseline is 32.8s; CI never saw it because there is no agent there to kick. Behind the var, this package is 2.8s and the whole gate is 47s instead of 9.5 minutes. The new global IS the seam. A deliberate, reviewed raise.",
-      "prod_loc": 3062,
+      "_prod_loc_note": "prod_loc 3049 -> 3062, globals 4 -> 5: ONE seam, paying for itself many times over. propagateConfig's real implementation runs `launchctl kickstart -k` against the developer's own pix LaunchAgent, and every test here that adopts a pack went through it -- so a test run restarted the live daemon on the machine running it, serially, blocking on each. That was 507s of a 578s `go test ./...` locally against a fast gate whose own documented go-test baseline is 32.8s; CI never saw it because there is no agent there to kick. Behind the var, this package is 2.8s and the whole gate is 47s instead of 9.5 minutes. The new global IS the seam. A deliberate, reviewed raise. Then prod_loc 3062 -> 3166: the declarative setup runner (checkRequires/applySteps) plus rendering require/apply on the Tier-1 consent screen. The screen is not optional detail — a declarative step still names binaries and argv that run on this Mac, so consenting means seeing them, and summarising them as a count would be the same failure as the registration that read \"ready\" for a command that did not exist.",
+      "prod_loc": 3166,
       "exports": 28,
       "globals": 5,
       "edges": 11,

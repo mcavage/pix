@@ -62,9 +62,12 @@ func TestLoadPackTrustStore_LegacyActivationMigration(t *testing.T) {
 				if len(got.MCP) != 1 || got.MCP[0] != "slack" {
 					t.Errorf("migrated record dropped MCP attribution: %+v", got)
 				}
-				if got.GogAccount != "me@example.com" {
-					t.Errorf("migrated record dropped gog_account attribution: %+v", got)
-				}
+				// The gog_account/prior_gog_account keys in the fixture above are
+				// RETIRED (they went with the built-in Google Workspace surface),
+				// so there is no field left to assert on. They stay in the fixture
+				// on purpose: an existing user's file still carries them, and the
+				// migration must load it anyway rather than failing on a key it no
+				// longer knows.
 				// activationFor must resolve through the migrated record — the
 				// actual behavior the migration exists to preserve:
 				// revertPackPriorContribution still finds this pack's

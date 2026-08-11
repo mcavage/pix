@@ -30,8 +30,11 @@ func rawFile(t *testing.T, path string) string {
 }
 
 // (a) Setting an UNRELATED key must not petrify untouched defaults: after
-// `config set google_workspace_account x` the raw file contains google_workspace_account but NOT the
-// resolved memory_watcher_model / memory_embed_model / ollama_bridge_model /
+// setting a scalar with no default (`pack`) the raw file contains pack but NOT
+// the resolved memory_watcher_model / memory_embed_model / ollama_bridge_model /
+// services. `pack` replaces the retired google_workspace_account as this file's
+// "explicit scalar" subject: it is the surviving non-defaulted, omitempty
+// string field, so its presence in the file is unambiguous evidence of a write.
 func TestSaveDoesNotPetrifyUntouchedDefaults(t *testing.T) {
 	path := tempConfig(t)
 
@@ -39,14 +42,14 @@ func TestSaveDoesNotPetrifyUntouchedDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.SetGogAccount("x@example.com")
+	cfg.Pack = "acme"
 	if err := cfg.Save(); err != nil {
 		t.Fatal(err)
 	}
 
 	raw := rawFile(t, path)
-	if !strings.Contains(raw, `google_workspace_account = "x@example.com"`) {
-		t.Errorf("raw file missing the explicit google_workspace_account:\n%s", raw)
+	if !strings.Contains(raw, `pack = "acme"`) {
+		t.Errorf("raw file missing the explicit pack:\n%s", raw)
 	}
 	for _, key := range []string{"memory_watcher_model", "memory_embed_model", "ollama_bridge_model"} {
 		if strings.Contains(raw, key) {
@@ -65,8 +68,8 @@ func TestSaveDoesNotPetrifyUntouchedDefaults(t *testing.T) {
 	if got.MemoryWatcherModel != DefaultMemoryWatcherModel {
 		t.Errorf("MemoryWatcherModel = %q, want default %q", got.MemoryWatcherModel, DefaultMemoryWatcherModel)
 	}
-	if got.GogAccount != "x@example.com" {
-		t.Errorf("GogAccount = %q, want the explicit value", got.GogAccount)
+	if got.Pack != "acme" {
+		t.Errorf("Pack = %q, want the explicit value", got.Pack)
 	}
 }
 
@@ -145,7 +148,7 @@ func TestSaveValueEqualToDefaultIsOmittedButResolves(t *testing.T) {
 // future default bumps propagate to saved configs.
 func TestLoadResolvesCurrentDefaultWhenKeyAbsent(t *testing.T) {
 	path := tempConfig(t)
-	if err := os.WriteFile(path, []byte("google_workspace_account = \"y@example.com\"\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("pack = \"acme\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -160,8 +163,8 @@ func TestLoadResolvesCurrentDefaultWhenKeyAbsent(t *testing.T) {
 	if got.MemoryEmbedModel != DefaultMemoryEmbedModel || got.OllamaBridgeModel != DefaultOllamaBridgeModel {
 		t.Errorf("embed/bridge models = %q/%q, want current defaults", got.MemoryEmbedModel, got.OllamaBridgeModel)
 	}
-	if got.GogAccount != "y@example.com" {
-		t.Errorf("GogAccount = %q, want the explicit value", got.GogAccount)
+	if got.Pack != "acme" {
+		t.Errorf("Pack = %q, want the explicit value", got.Pack)
 	}
 }
 
@@ -174,7 +177,7 @@ func TestSaveLoadSaveStaysSparse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.SetGogAccount("z@example.com")
+	cfg.Pack = "acme"
 	if err := cfg.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +226,7 @@ func TestRemoveLastServiceRoundTripsExplicitEmpty(t *testing.T) {
 	}
 
 	// Save again (e.g. an unrelated `config set`) -> still resolves empty.
-	again.SetGogAccount("x@example.com")
+	again.Pack = "acme"
 	if err := again.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +283,7 @@ func TestRetiredSlackTableOmittedFromFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.SetGogAccount("x@example.com") // force a write, unrelated to slack
+	cfg.Pack = "acme" // force a write, unrelated to slack
 	if err := cfg.Save(); err != nil {
 		t.Fatal(err)
 	}

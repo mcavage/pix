@@ -63,7 +63,9 @@ What it asserts, and why each one is in a RELEASE gate rather than a unit test
 1. **Command + flag surface.** `pix help --all` and every verb's help exit 0,
    and each flag the script itself uses is declared by that verb — a UAT script
    passing because it typed a flag that no longer exists is the failure mode
-   this closes. A retired verb (`pix host`) exits 2 with `PIX_RETIRED`.
+   this closes. A deleted verb gets the ordinary unknown-command answer: pix has
+   no released users, so there is no retirement notice and no `PIX_RETIRED`
+   sentinel to assert on.
 2. **Digest naming.** Two workspaces sharing a basename produce two DISTINCT
    `pix-<basename>-<digest>` sandboxes. Aliasing here would let one repo's
    sandbox answer for another's.
@@ -198,13 +200,9 @@ pix run --name pix-uat-manual
 - [ ] `pix task new uat-check` creates an isolated checkout + branch; `pix task
       ls` shows it; `pix task rm uat-check` persists the branch and tears the
       checkout down.
-- [ ] `pix monitor --json | head -5` prints valid NDJSON for the session just
-      run (needs monitor enabled in `pix serve`) and EXITS on its own — it
-      must not hang even with no events yet; `pix monitor --follow --json`
-      is the explicit streaming form that keeps running.
 - [ ] `pix mcp ls` shows the configured servers; `pix-host mcp --list` prints
-      nothing (Slack/Google Workspace are external, gateway-run, never
-      host-binary-served).
+      nothing (pix ships no MCP server: every one is pack-declared and
+      gateway-run, never host-binary-served).
 - [ ] `/help` and `/getting-started` render the capability map.
 - [ ] Exit every shell attached to the test sandbox; it tears itself down
       (`pix ls` no longer lists it) with no `pix rm` call.
@@ -217,15 +215,13 @@ a second opinion that assumes nothing from your own session:
 
 ```
 Run the healthcheck skill. Then, without assuming anything from this
-conversation, verify from scratch: (1) `pix help --all` lists no retired verb —
-cross-check against services/host/cmd/pix/corpus/retirement.jsonl; (2) `pix
+conversation, verify from scratch: (1) `pix help --all` is the whole verb set, and
+every command string in docs/ and skills/ resolves against it (`node --test
+tests/verb-references.test.mjs` is the mechanical form of this); (2) `pix
 task new`, `pix task ls`, `pix task rm` complete cleanly against this checkout;
-(3) `pix monitor --json | head -5` prints valid NDJSON and returns to the
-prompt on its own (no hang); if the store is empty and no `pix serve` is
-running, it instead fails with an actionable nonzero exit rather than
-hanging or printing nothing; (4) `pix mcp ls` and
-`pix-host mcp --list` agree that Slack/Google Workspace are gateway-registered,
-not host-binary-served. Report each as pass/fail with the exact command and
+(3) `pix mcp ls` and `pix-host mcp --list` agree that every registered server is
+gateway-run from a pack declaration, not host-binary-served — `pix-host mcp
+--list` must be empty. Report each as pass/fail with the exact command and
 output, not a summary claim.
 ```
 

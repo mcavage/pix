@@ -253,7 +253,7 @@ func spawnChildren(cfg *config.Config, sup *supervisor, selfPath string, all []h
 			log.Printf("serve: pack %s: %v", root, perr)
 			continue
 		}
-		views, verr := pack.AcceptedGoPluginServicesForSelf(p, cfg.GogAccount, selfPath)
+		views, verr := pack.AcceptedGoPluginServices(p)
 		if verr != nil {
 			log.Printf("serve: pack %s services: %v", root, verr)
 			continue

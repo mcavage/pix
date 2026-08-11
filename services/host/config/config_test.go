@@ -40,7 +40,7 @@ services = ["memory", "warehouse"]
 mcp = ["slack"]
 memory_watcher_model = "custom-watcher"
 memory_embed_model = "custom-embed"
-google_workspace_account = "you@example.com"
+pack = "acme"
 
 [kits]
 stack = ["mixin-a", "mixin-b"]
@@ -77,8 +77,8 @@ port = 9000
 	if c.MemoryWatcherModel != "custom-watcher" || c.MemoryEmbedModel != "custom-embed" {
 		t.Errorf("models = %q/%q", c.MemoryWatcherModel, c.MemoryEmbedModel)
 	}
-	if c.GogAccount != "you@example.com" {
-		t.Errorf("GogAccount = %q, want you@example.com", c.GogAccount)
+	if c.Pack != "acme" {
+		t.Errorf("Pack = %q, want acme", c.Pack)
 	}
 	if len(c.Kits.Stack) != 2 || c.Kits.Stack[1] != "mixin-b" {
 		t.Errorf("Kits.Stack = %v", c.Kits.Stack)
@@ -288,7 +288,7 @@ func TestSaveAtomic_WriteFailureLeavesPriorFileIntact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.SetGogAccount("first@example.com")
+	c.Pack = "first"
 	if err := c.Save(); err != nil {
 		t.Fatalf("first Save(): %v", err)
 	}
@@ -303,7 +303,7 @@ func TestSaveAtomic_WriteFailureLeavesPriorFileIntact(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) }) // let TempDir clean up
 
-	c.SetGogAccount("second@example.com")
+	c.Pack = "second"
 	if err := c.Save(); err == nil {
 		t.Fatal("expected Save() to fail with a read-only config dir")
 	}
@@ -336,12 +336,15 @@ func TestSaveAndMutators(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.SetGogAccount("  you@example.com ") // trimmed
-	if !c.AddMCP("gog") {
-		t.Error("AddMCP(gog): want changed=true")
+	c.Pack = "acme"
+	// addUnique is the surviving mutator that TRIMS its argument (the retired
+	// SetGogAccount used to be this file's trimming subject), so the padded name
+	// must land as the bare one.
+	if !c.AddMCP("  acme-mcp ") {
+		t.Error("AddMCP(acme-mcp): want changed=true")
 	}
-	if c.AddMCP("gog") {
-		t.Error("AddMCP(gog) twice: want changed=false (no duplicate)")
+	if c.AddMCP("acme-mcp") {
+		t.Error("AddMCP(acme-mcp) twice: want changed=false (no duplicate)")
 	}
 	if !c.AddService("broker") {
 		t.Error("AddService(broker): want changed=true")
@@ -364,22 +367,22 @@ func TestSaveAndMutators(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.GogAccount != "you@example.com" {
-		t.Errorf("GogAccount = %q, want you@example.com", got.GogAccount)
+	if got.Pack != "acme" {
+		t.Errorf("Pack = %q, want acme", got.Pack)
 	}
-	if len(got.MCP) != 1 || got.MCP[0] != "gog" {
-		t.Errorf("MCP = %v, want [gog]", got.MCP)
+	if len(got.MCP) != 1 || got.MCP[0] != "acme-mcp" {
+		t.Errorf("MCP = %v, want [acme-mcp] (the padded name must be trimmed)", got.MCP)
 	}
 	if !contains(got.Services, "broker") {
 		t.Errorf("Services = %v, want it to contain broker", got.Services)
 	}
 
 	// Remove mutators.
-	if !got.RemoveMCP("gog") {
-		t.Error("RemoveMCP(gog): want changed=true")
+	if !got.RemoveMCP("acme-mcp") {
+		t.Error("RemoveMCP(acme-mcp): want changed=true")
 	}
-	if got.RemoveMCP("gog") {
-		t.Error("RemoveMCP(gog) twice: want changed=false")
+	if got.RemoveMCP("acme-mcp") {
+		t.Error("RemoveMCP(acme-mcp) twice: want changed=false")
 	}
 	if !got.RemoveService("broker") {
 		t.Error("RemoveService(broker): want changed=true")

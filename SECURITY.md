@@ -44,9 +44,11 @@ Be clear-eyed about these:
 
 ## Host-side MCP servers run with your trust, not the sandbox's
 
-A local-command MCP server (Slack, `gog`, a pack's host wrapper) is a process
-the sbx gateway spawns on your **host**, not inside the sandbox. Registering
-one (`sbx mcp add`, `pix mcp register`) is a host-level trust decision:
+A local-command MCP server (a mail bridge, `gog`, a pack's host wrapper) is a
+process the sbx gateway spawns on your **host**, not inside the sandbox. Pix
+ships none of them: every server is declared by the active pack, which is why
+adoption is gated. Registering one (`sbx mcp add`, `pix mcp add`) is a host-level
+trust decision:
 the command you register runs with whatever access the gateway's spawn
 environment has, resolved credentials included. Review a server's registered
 command before trusting it (`sbx mcp get <name>`), and treat a pack that ships
@@ -60,19 +62,19 @@ the gateway; the sandbox never sees the token.
 from the outside world, an email body, a Slack message, a doc, a wiki
 page, becomes part of the prompt sent to your model provider once it's
 recalled or returned. A server that fences its results as untrusted (`gog`'s
-`--wrap-untrusted`, Slack's message guard) reduces the odds the agent treats
+`--wrap-untrusted` is the canonical case) reduces the odds the agent treats
 that text as an instruction, but it is a mitigation, not a guarantee: assume
 fetched content can attempt prompt injection and keep write-capable tools off
 by default.
 
 **Revoking and rotating access.** An OAuth grant (Google Workspace, a remote
 catalog server) is revoked from that provider's own account security page,
-not from pix; re-authorize with the `gog` CLI's own auth command afterward if
-you need the integration back, then `pix mcp register` again. A 1Password-backed MCP credential (a Slack token,
-a keyring password) is rotated in 1Password itself; the gateway only resolves
-an `op://` ref at spawn time, so the new value takes effect once you
-re-register the server (`pix mcp register`), which triggers a fresh
-spawn. `pix secret sync` is the equivalent for the cloud model provider
+not from pix; re-authorize through the pack's own setup step afterward if you
+need the integration back, then `pix mcp add <name>` again. A 1Password-backed
+MCP credential (an API token, a keyring password) is rotated in 1Password itself;
+the gateway only resolves an `op://` ref at spawn time, so the new value takes
+effect once you re-register the server (`pix mcp add <name>`), which triggers a
+fresh spawn. `pix secret sync` is the equivalent for the cloud model provider
 keys (Anthropic/OpenAI/Google), not MCP credentials.
 
 ## Provider-key process exposure

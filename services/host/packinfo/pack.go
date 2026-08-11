@@ -41,7 +41,6 @@ type Manifest struct {
 	Name              string `toml:"name"`
 	Schema            int    `toml:"schema"`
 	OllamaBridgeModel string `toml:"ollama_bridge_model,omitempty"`
-	GogAccount        string `toml:"gog_account,omitempty"` // layered into cfg.GogAccount on `pack use`
 	// MemoryScope tags in-VM memory recall/capture; "" or "default" is shared.
 	MemoryScope string `toml:"memory_scope,omitempty"`
 	// Prerequisites are external state the user must bring, shown on the
@@ -88,14 +87,83 @@ type InferenceModel struct {
 	Upstream string `toml:"upstream_id"`
 }
 
+// SetupStep is one resumable onboarding step. It has two forms, and the
+// DECLARATIVE one is the form to write:
+//
+//	[[setup.require]]  what must be true, in a closed vocabulary pix implements
+//	[[setup.apply]]    what to run when it is not
+//
+// The declarative form exists because the executable form could not be kept
+// honest. A `path` hook is opaque shell that pix hands control to, and every
+// one ever written called back into the pix CLI — so a deleted verb turned a
+// pack's setup into a step that could never pass, with the failure surfacing
+// as a shell exit code nobody could act on. A pack that only DECLARES what it
+// needs cannot name a command that does not exist, because it names no
+// commands at all: pix owns every verb in the vocabulary.
+//
+// Path/CheckArgs/ApplyArgs remain for genuinely bespoke work no vocabulary
+// will cover (installing a vendor daemon, say). They are fingerprinted by
+// CONTENT hash exactly as before, so an existing pack's acceptance is
+// unaffected by the new fields being available.
 type SetupStep struct {
 	ID          string   `toml:"id"`
 	Description string   `toml:"description,omitempty"`
-	Path        string   `toml:"path"`
+	Path        string   `toml:"path,omitempty"`
 	CheckArgs   []string `toml:"check_args,omitempty"`
 	ApplyArgs   []string `toml:"apply_args,omitempty"`
 	Required    bool     `toml:"required,omitempty"`
+
+	Require []SetupRequire `toml:"require,omitempty"`
+	Apply   []SetupApply   `toml:"apply,omitempty"`
 }
+
+// SetupRequire is one condition, in a CLOSED vocabulary. Pix implements every
+// kind; a pack chooses among them and supplies data. Unknown kinds are refused
+// at load, so a typo is a startup error rather than a step that silently never
+// passes.
+type SetupRequire struct {
+	// Kind is one of:
+	//   bin     — Name must resolve on PATH; Install is the hint shown when it
+	//             does not (the pack knows how its dependency is installed;
+	//             pix must never guess a package manager).
+	//   op-ref  — Env must be a FILLED op:// reference in op-refs.env.
+	//   probe   — Argv must exit 0. This is the only kind that proves a thing
+	//             WORKS rather than merely exists, so it is the one a pack
+	//             should reach for last and rely on most.
+	Kind    string   `toml:"kind"`
+	Name    string   `toml:"name,omitempty"`
+	Install string   `toml:"install,omitempty"`
+	Env     string   `toml:"env,omitempty"`
+	Argv    []string `toml:"argv,omitempty"`
+}
+
+// SetupApply is one remediation. Kind is "interactive" (inherits the terminal:
+// browser grants, prompts, anything a user must answer) or "exec" (bounded,
+// no terminal). Explain is shown BEFORE it runs, because a user about to be
+// sent to a browser deserves to know what for.
+//
+// Apply steps MUST be idempotent. All of a step's applies run whenever ANY of
+// its requirements is unmet, because pix cannot know which remediation maps to
+// which condition — so re-installing an already-installed tool, or re-running
+// an already-satisfied configuration, has to be safe and quiet.
+//
+// One exception is built in: an unmet `op-ref` requirement never triggers
+// applies at all, because no command pix could run will put a secret in a
+// user's 1Password vault.
+type SetupApply struct {
+	Kind    string   `toml:"kind"`
+	Argv    []string `toml:"argv"`
+	Explain string   `toml:"explain,omitempty"`
+}
+
+// Setup vocabularies, closed on purpose. See SetupStep.
+var (
+	setupRequireKinds = map[string]bool{"bin": true, "op-ref": true, "probe": true}
+	setupApplyKinds   = map[string]bool{"interactive": true, "exec": true}
+)
+
+// Declarative reports whether this step is written in the require/apply form.
+func (s SetupStep) Declarative() bool { return len(s.Require) > 0 }
 
 // PackProxy is one [[proxy]] entry: a bin/<name> wrapper script. Host=false is
 // an in-sandbox wrapper (mounted via SynthesizePackKit); Host=true is host-mode.
@@ -114,14 +182,30 @@ type Bin struct {
 	Host bool   `toml:"host,omitempty"`
 }
 
-// Integration is REFERENCE-ONLY: the pack says "I use <mcp> and need the
-// credential <env>", shipping NO executable code — the server is host-provided
-// and the credential an op:// ref the user owns. Manifest, Image and URL are
-// the three MUTUALLY EXCLUSIVE registration modes (validatePackFacets).
+// Integration is REFERENCE-ONLY: the pack says "I use <mcp>, start it like
+// THIS, and it needs the credential <env>", shipping NO executable code of its
+// own — the binary or image is something the user installs and the credential
+// is an op:// ref the user owns. Command, Image, Manifest and URL are the four
+// MUTUALLY EXCLUSIVE registration modes (validatePackFacets).
 type Integration struct {
 	Name string `toml:"name"`          // human label
 	Env  string `toml:"env,omitempty"` // op-refs.env ENV VAR the credential lives under
 	MCP  string `toml:"mcp,omitempty"` // MCP server name to attach (host-provided)
+
+	// Command + Args run a HOST BINARY over stdio: the pack names a command
+	// that must be on PATH (its setup hook installs it) and the LITERAL argv to
+	// start it with. Pix adds no flags of its own, so hardening a server —
+	// read-only, no-send, whatever it supports — is stated here where a
+	// reviewer sees it in the pack's bill of materials and re-consents when it
+	// changes. Nothing here is templated; per-user values travel as env_keys.
+	Command string   `toml:"command,omitempty"`
+	Args    []string `toml:"args,omitempty"`
+
+	// Probe is the argv that answers "can this server actually do its job",
+	// which is NOT the same question as "is it registered". `pix doctor` runs
+	// it and shows the output. A pack that declares no probe gets reported as
+	// unverifiable rather than healthy — silence is not evidence.
+	Probe []string `toml:"probe,omitempty"`
 	// Manifest runs a CONTAINER by server-manifest URL (`sbx mcp add --local
 	// --url`); its creds are Docker-side, never op-refs.
 	Manifest string `toml:"manifest,omitempty"`
@@ -317,17 +401,51 @@ func validatePackFacets(root string, m *Manifest) error {
 		}
 		seenMCP[name] = true
 		kinds := 0
-		for _, value := range []string{ig.Manifest, ig.Image, ig.URL} {
+		for _, value := range []string{ig.Command, ig.Manifest, ig.Image, ig.URL} {
 			if strings.TrimSpace(value) != "" {
 				kinds++
 			}
 		}
 		if kinds > 1 {
-			return fmt.Errorf("pack %s: integration %q sets more than one of manifest, image, and url; choose exactly one", root, name)
+			return fmt.Errorf("pack %s: integration %q sets more than one of command, manifest, image, and url; choose exactly one", root, name)
+		}
+		if kinds == 0 {
+			// A reference-only integration cannot be registered by anything:
+			// pix ships no built-in servers, so a name with no transport is a
+			// server nobody can start. Caught here, at load, rather than as a
+			// mystery "not declared" at registration time.
+			return fmt.Errorf("pack %s: integration %q declares no transport; set exactly one of command, image, manifest or url", root, name)
 		}
 		if (strings.TrimSpace(ig.Manifest) != "" || strings.TrimSpace(ig.URL) != "") &&
 			(strings.TrimSpace(ig.Env) != "" || len(ig.EnvKeys) > 0 || len(ig.EnvValues) > 0) {
 			return fmt.Errorf("pack %s: integration %q cannot use env/env_keys with manifest or url; those registration modes do not forward pack environment variables", root, name)
+		}
+		// A host command gets its environment from op-refs.env, which is the
+		// only channel `op run --env-file` has. There is no `-e` to carry a
+		// literal, so honouring env_values here is impossible — and a consent
+		// screen that shows a value which never reaches the server is worse
+		// than not supporting it. Non-secret literals belong in op-refs.env,
+		// declared via env_keys.
+		if strings.TrimSpace(ig.Command) != "" && len(ig.EnvValues) > 0 {
+			return fmt.Errorf("pack %s: integration %q sets env_values with command; a host command receives its "+
+				"environment from op-refs.env only — put the value there and list it in env_keys", root, name)
+		}
+		if strings.TrimSpace(ig.Command) == "" && len(ig.Args) > 0 {
+			return fmt.Errorf("pack %s: integration %q sets args without command; args are the argv of a host command", root, name)
+		}
+		// A command must be a BARE binary name, resolved on PATH at
+		// registration. An absolute path in a manifest would pin one machine's
+		// filesystem layout into a git-shared pack, and a relative path would
+		// resolve against whatever directory the gateway happened to start in.
+		if c := strings.TrimSpace(ig.Command); c != "" && !SafeArtifactName(c) {
+			return fmt.Errorf("pack %s: integration %q command %q must be a bare binary name resolved on PATH (letters, digits, -, _, . only; no path separators)", root, name, c)
+		}
+		for _, argv := range [][]string{ig.Args, ig.Probe} {
+			for _, a := range argv {
+				if strings.ContainsAny(a, "\x00\r\n") {
+					return fmt.Errorf("pack %s: integration %q has an argv entry containing a control character", root, name)
+				}
+			}
 		}
 		for key, value := range ig.EnvValues {
 			if strings.TrimSpace(key) == "" || strings.ContainsAny(key+value, "\x00\r\n") {
@@ -368,6 +486,19 @@ func validatePackFacets(root string, m *Manifest) error {
 			return fmt.Errorf("pack %s: duplicate [[setup]] id %q", root, s.ID)
 		}
 		seenSetup[s.ID] = true
+		if s.Declarative() {
+			if strings.TrimSpace(s.Path) != "" {
+				return fmt.Errorf("pack %s: [[setup]] %q sets both a path hook and declarative require/apply; choose one", root, s.ID)
+			}
+			if err := validateDeclarativeSetup(root, s); err != nil {
+				return err
+			}
+			continue
+		}
+		if strings.TrimSpace(s.Path) == "" {
+			return fmt.Errorf("pack %s: [[setup]] %q declares nothing: add [[setup.require]] conditions "+
+				"(kind = bin | op-ref | probe), or a path hook for bespoke work", root, s.ID)
+		}
 		if err := validateRepoRelativePath(root, s.Path); err != nil {
 			return fmt.Errorf("pack %s: [[setup]] %q: %w", root, s.ID, err)
 		}
@@ -515,31 +646,55 @@ func ExpandUser(p string) string {
 // Resolution only: it creates nothing and never rewrites cfg.Pack.
 func DefaultPackRoot() string { return config.PackDir() }
 
-// ContainerMCP returns {integration.mcp: config.MCPContainer} for a pack's
+// ServerMCP returns {integration.mcp: config.MCPServer} for a pack's
 // CONTAINER/REMOTE integrations, which `pix mcp register` adds specially rather
 // than as plain host subcommands. nil when there are none.
-func ContainerMCP(p *Info) map[string]config.MCPContainer {
-	out := map[string]config.MCPContainer{}
+func ServerMCP(p *Info) map[string]config.MCPServer {
+	out := map[string]config.MCPServer{}
 	for _, ig := range p.Manifest.Integrations {
 		if ig.MCP == "" {
 			continue
 		}
-		switch {
-		case strings.TrimSpace(ig.Manifest) != "":
-			out[ig.MCP] = config.MCPContainer{Manifest: strings.TrimSpace(ig.Manifest)}
-		case strings.TrimSpace(ig.Image) != "":
+		// envKeys is the set of variable NAMES forwarded into the server, the
+		// declared secret first. Order is stable (secret, then the pack's own
+		// list) because it lands in a registered argv that a reviewer compares
+		// against the bill of materials they approved.
+		envKeys := func() []string {
 			var keys []string
 			if ig.Env != "" {
 				keys = append(keys, ig.Env) // the op-refs secret, forwarded too
 			}
-			keys = append(keys, ig.EnvKeys...)
+			return append(keys, ig.EnvKeys...)
+		}
+		envValues := func() map[string]string {
 			values := make(map[string]string, len(ig.EnvValues))
 			for key, value := range ig.EnvValues {
 				values[key] = value
 			}
-			out[ig.MCP] = config.MCPContainer{Image: strings.TrimSpace(ig.Image), EnvKeys: keys, EnvValues: values}
+			return values
+		}
+		switch {
+		case strings.TrimSpace(ig.Command) != "":
+			// No EnvValues: a host command has no channel for a literal (see
+			// the load-time refusal), so carrying one here would be dead state
+			// that reads like a supported feature.
+			out[ig.MCP] = config.MCPServer{
+				Command: strings.TrimSpace(ig.Command),
+				Args:    append([]string(nil), ig.Args...),
+				EnvKeys: envKeys(),
+				Probe:   append([]string(nil), ig.Probe...),
+			}
+		case strings.TrimSpace(ig.Manifest) != "":
+			out[ig.MCP] = config.MCPServer{Manifest: strings.TrimSpace(ig.Manifest), Probe: append([]string(nil), ig.Probe...)}
+		case strings.TrimSpace(ig.Image) != "":
+			out[ig.MCP] = config.MCPServer{
+				Image:     strings.TrimSpace(ig.Image),
+				EnvKeys:   envKeys(),
+				EnvValues: envValues(),
+				Probe:     append([]string(nil), ig.Probe...),
+			}
 		case strings.TrimSpace(ig.URL) != "":
-			out[ig.MCP] = config.MCPContainer{RemoteURL: strings.TrimSpace(ig.URL)}
+			out[ig.MCP] = config.MCPServer{RemoteURL: strings.TrimSpace(ig.URL), Probe: append([]string(nil), ig.Probe...)}
 		}
 	}
 	if len(out) == 0 {
@@ -548,9 +703,30 @@ func ContainerMCP(p *Info) map[string]config.MCPContainer {
 	return out
 }
 
-// ActiveContainerMCP resolves ContainerMCP for the active pack, or nil when
-// there is none or it won't load (other registrations proceed regardless).
-func ActiveContainerMCP(cfg *config.Config) map[string]config.MCPContainer {
+// NonSecretEnvNames is the union of every declared integration's env_keys: the
+// variable names this pack authorizes to carry a LITERAL value in op-refs.env.
+// The integration's own `env` secret is deliberately NOT in this set — a pack
+// can never allowlist its own credential into plaintext.
+func NonSecretEnvNames(p *Info) map[string]bool {
+	if p == nil {
+		return nil
+	}
+	out := map[string]bool{}
+	for _, ig := range p.Manifest.Integrations {
+		for _, k := range ig.EnvKeys {
+			if k = strings.TrimSpace(k); k != "" && k != strings.TrimSpace(ig.Env) {
+				out[k] = true
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// ActiveNonSecretEnvNames resolves NonSecretEnvNames for the active pack.
+func ActiveNonSecretEnvNames(cfg *config.Config) map[string]bool {
 	root := ActivePackRoot(cfg.Pack, "")
 	if root == "" {
 		return nil
@@ -559,7 +735,21 @@ func ActiveContainerMCP(cfg *config.Config) map[string]config.MCPContainer {
 	if err != nil {
 		return nil
 	}
-	return ContainerMCP(p)
+	return NonSecretEnvNames(p)
+}
+
+// ActiveServerMCP resolves ServerMCP for the active pack, or nil when
+// there is none or it won't load (other registrations proceed regardless).
+func ActiveServerMCP(cfg *config.Config) map[string]config.MCPServer {
+	root := ActivePackRoot(cfg.Pack, "")
+	if root == "" {
+		return nil
+	}
+	p, err := LoadPack(root)
+	if err != nil {
+		return nil
+	}
+	return ServerMCP(p)
 }
 
 // McpNames returns the de-duplicated `integration.mcp` names a pack declares,
@@ -623,6 +813,89 @@ func SafeArtifactName(name string) bool {
 	}
 	for _, r := range name {
 		if !SafeArtifactRune(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// validateDeclarativeSetup fails closed on the require/apply vocabulary. Every
+// rejection here is a pack that would otherwise have shipped a step which
+// cannot pass — the exact failure the declarative form exists to make
+// impossible, so it is caught at LOAD rather than at 2am during onboarding.
+func validateDeclarativeSetup(root string, s SetupStep) error {
+	bad := func(format string, a ...any) error {
+		return fmt.Errorf("pack %s: [[setup]] %q: "+format, append([]any{root, s.ID}, a...)...)
+	}
+	noCtrl := func(argv []string) bool {
+		for _, a := range argv {
+			if strings.ContainsAny(a, "\x00\r\n") {
+				return false
+			}
+		}
+		return true
+	}
+	for _, r := range s.Require {
+		if !setupRequireKinds[r.Kind] {
+			return bad("require kind %q is not one of bin, op-ref, probe", r.Kind)
+		}
+		switch r.Kind {
+		case "bin":
+			if !SafeArtifactName(r.Name) {
+				return bad("require bin needs a bare binary name (got %q)", r.Name)
+			}
+			if strings.TrimSpace(r.Install) == "" {
+				// A missing binary with no install hint is a dead end for the
+				// user: pix cannot guess a package manager, and the pack is the
+				// only thing that knows how its own dependency is obtained.
+				return bad("require bin %q needs an install hint (how a user obtains it)", r.Name)
+			}
+		case "op-ref":
+			if !EnvVarName(r.Env) {
+				return bad("require op-ref needs an env var name (got %q)", r.Env)
+			}
+		case "probe":
+			if len(r.Argv) == 0 {
+				return bad("require probe needs an argv")
+			}
+			if !SafeArtifactName(r.Argv[0]) {
+				return bad("require probe argv[0] must be a bare binary name (got %q)", r.Argv[0])
+			}
+			if !noCtrl(r.Argv) {
+				return bad("require probe argv contains a control character")
+			}
+		}
+	}
+	for _, a := range s.Apply {
+		if !setupApplyKinds[a.Kind] {
+			return bad("apply kind %q is not one of interactive, exec", a.Kind)
+		}
+		if len(a.Argv) == 0 {
+			return bad("apply needs an argv")
+		}
+		if !SafeArtifactName(a.Argv[0]) {
+			return bad("apply argv[0] must be a bare binary name (got %q)", a.Argv[0])
+		}
+		if !noCtrl(a.Argv) {
+			return bad("apply argv contains a control character")
+		}
+	}
+	return nil
+}
+
+// EnvVarName reports whether s is a plausible environment variable name. It is
+// here, beside the manifest schema, because a pack declares env var NAMES in
+// three places and all three must agree on what one looks like.
+func EnvVarName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		switch {
+		case r >= 'A' && r <= 'Z', r == '_':
+		case r >= 'a' && r <= 'z':
+		case i > 0 && r >= '0' && r <= '9':
+		default:
 			return false
 		}
 	}
