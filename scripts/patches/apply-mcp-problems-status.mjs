@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // pi-mcp-adapter's footer is either always visible or always hidden. Add a
-// problems-only mode: healthy connections stay quiet, while a failed or dropped
-// connection remains visible. Also suppress the healthy startup toast in this
-// mode; per-server failures keep their existing error notifications.
+// problems-only mode: healthy, cached, and intentionally idle lazy connections
+// stay quiet, while an actual connection failure or auth problem remains visible.
+// Also suppress the healthy startup toast in this mode; per-server failures keep
+// their existing error notifications.
 
 import fs from "node:fs";
 import os from "node:os";
@@ -36,12 +37,11 @@ const startupAfter = `  // ${marker}: a healthy startup needs no toast.\n  if (u
 const initWithStartup = fs.readFileSync(initPath, "utf8");
 let initChanged = false;
 let next = initWithStartup;
-if (!next.includes(marker)) {
-	if (!next.includes(startupBefore)) {
-		throw new Error(`anchor not found in ${initPath}; refresh apply-mcp-problems-status.mjs`);
-	}
+if (next.includes(startupBefore)) {
 	next = next.replace(startupBefore, startupAfter);
 	initChanged = true;
+} else if (!next.includes(startupAfter)) {
+	throw new Error(`startup anchor not found in ${initPath}; refresh apply-mcp-problems-status.mjs`);
 }
 
 const statusBefore = `  if (footerStatus === "off") {
@@ -56,7 +56,7 @@ const statusBefore = `  if (footerStatus === "off") {
     if (connectedCount > 0) status += \` (\${connectedCount} connected)\`;
     if (disabledCount > 0) status += \` (\${disabledCount} disabled)\`;
   }`;
-const statusAfter = `  if (footerStatus === "off" || (footerStatus === "problems" && connectedCount === enabledCount)) {
+const legacyStatusAfter = `  if (footerStatus === "off" || (footerStatus === "problems" && connectedCount === enabledCount)) {
     ui.setStatus("mcp", undefined);
     return;
   }
@@ -71,13 +71,35 @@ const statusAfter = `  if (footerStatus === "off" || (footerStatus === "problems
     if (connectedCount > 0) status += \` (\${connectedCount} connected)\`;
     if (disabledCount > 0) status += \` (\${disabledCount} disabled)\`;
   }`;
-if (initChanged) {
-	if (!next.includes(statusBefore)) {
-		throw new Error(`anchor not found in ${initPath}; refresh apply-mcp-problems-status.mjs`);
-	}
+const statusAfter = `  const problemCount = entries.filter(([name, definition]) => {
+    if (isServerDisabled(definition)) return false;
+    const connection = state.manager.getConnection(name);
+    return getFailureAgeSeconds(state, name) !== null || connection?.status === "needs-auth";
+  }).length;
+  if (footerStatus === "off" || (footerStatus === "problems" && problemCount === 0)) {
+    ui.setStatus("mcp", undefined);
+    return;
+  }
+
+  let status = footerStatus === "compact"
+    ? \`MCP \${connectedCount}/\${enabledCount}\`
+    : footerStatus === "problems"
+      ? \`\${problemCount} \${problemCount === 1 ? "server problem" : "server problems"}\`
+      : \`\${enabledCount} \${enabledCount === 1 ? "server" : "servers"} enabled\`;
+  if (footerStatus === "full") {
+    if (connectedCount > 0) status += \` (\${connectedCount} connected)\`;
+    if (disabledCount > 0) status += \` (\${disabledCount} disabled)\`;
+  }`;
+if (next.includes(statusBefore)) {
 	next = next.replace(statusBefore, statusAfter);
-	fs.writeFileSync(initPath, next);
+	initChanged = true;
+} else if (next.includes(legacyStatusAfter)) {
+	next = next.replace(legacyStatusAfter, statusAfter);
+	initChanged = true;
+} else if (!next.includes(statusAfter)) {
+	throw new Error(`status anchor not found in ${initPath}; refresh apply-mcp-problems-status.mjs`);
 }
+if (initChanged) fs.writeFileSync(initPath, next);
 
 console.log(
 	typesChanged || initChanged

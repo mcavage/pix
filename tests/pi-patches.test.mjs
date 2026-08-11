@@ -234,8 +234,30 @@ test("MCP status patch adds a problems-only mode", (t) => {
 	assert.match(run(process.execPath, [patch], env), /already patched/);
 	assert.match(fs.readFileSync(path.join(target, "types.ts"), "utf8"), /"problems"/);
 	const source = fs.readFileSync(path.join(target, "init.ts"), "utf8");
-	assert.match(source, /footerStatus === "problems" && connectedCount === enabledCount/);
-	assert.match(source, /disconnected/);
+	assert.match(source, /footerStatus === "problems" && problemCount === 0/);
+	assert.match(source, /getFailureAgeSeconds\(state, name\) !== null/);
+	assert.match(source, /connection\?\.status === "needs-auth"/);
+	assert.match(source, /problemCount.*server.*problem/, "the footer must report actual failures, not idle lazy servers");
+	assert.doesNotMatch(
+		source,
+		/footerStatus === "problems" && connectedCount === enabledCount/,
+		"a normal lazy or idle connection must not be treated as disconnected",
+	);
+});
+
+test("MCP status patch upgrades the old disconnected-count behavior", (t) => {
+	const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pix-patches-mcp-status-v1-"));
+	t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+	const target = path.join(temp, "pi-mcp-adapter");
+	copyDir(path.join(fixturesRoot, "pi-mcp-status-v1"), target);
+	const env = { ...process.env, PI_MCP_ADAPTER_DIR: target };
+	const patch = path.join(repoRoot, "scripts/patches/apply-mcp-problems-status.mjs");
+
+	assert.match(run(process.execPath, [patch], env), /patched/);
+	assert.match(run(process.execPath, [patch], env), /already patched/);
+	const source = fs.readFileSync(path.join(target, "init.ts"), "utf8");
+	assert.match(source, /footerStatus === "problems" && problemCount === 0/);
+	assert.doesNotMatch(source, /servers? disconnected/);
 });
 
 test("MCP status patch fails when adapter status rendering drifts", (t) => {
