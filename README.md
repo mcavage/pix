@@ -38,7 +38,8 @@ pix
 
 That is the whole loop. `pix` launches the sandbox for this directory, or
 reattaches if one is already running. Exit the shell and the sandbox is torn
-down.
+down. The final line names the exact saved session and a `pix resume` command
+that works from the host.
 
 ```bash
 pix status     # what is up, what is down, what is next

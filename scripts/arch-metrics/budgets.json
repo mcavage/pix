@@ -17,7 +17,8 @@
       "exits": 0
     },
     "pix/host/cmd/pix": {
-      "prod_loc": 3036,
+      "_prod_loc_note": "3036 -> 3071: `pix resume SESSION [DIR]` turns pi's exact exit receipt into a host command without exposing `run -- --session`. A deliberate, reviewed raise of a shrink-only budget.",
+      "prod_loc": 3071,
       "exports": 14,
       "globals": 8,
       "edges": 22,

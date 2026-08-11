@@ -1,0 +1,30 @@
+{
+  "verb": "resume",
+  "cases": [
+    {
+      "name": "help",
+      "args": [
+        "resume",
+        "--help"
+      ],
+      "exitCode": 0,
+      "stream": "stdout",
+      "contains": [
+        "Usage: pix resume"
+      ]
+    },
+    {
+      "name": "bad-invocation",
+      "args": [
+        "resume",
+        "session-id",
+        "--this-is-not-a-real-flag-9x7z"
+      ],
+      "exitCode": 2,
+      "stream": "stderr",
+      "contains": [
+        "unknown flag"
+      ]
+    }
+  ]
+}

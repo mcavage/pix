@@ -369,52 +369,16 @@ func killUnreferencedAndTeardown(spec SessionSpec, deps SessionDeps, child *Sess
 	reportTeardown(deps.Warn, TeardownSandbox(deps.Env, spec.Key, spec.Name, TriggerSession, deps.Teardown), spec.Workspace)
 }
 
-// reportTeardown prints the one line a last-shell teardown may say, on the
-// caller's warn stream — never stdout, which belonged to the session.
-func reportTeardown(warn io.Writer, res TeardownResult, workspace string) {
+// reportTeardown reports only exceptional last-shell outcomes on the caller's
+// warn stream. pi prints the exact host-runnable resume command before exiting,
+// and routine automatic removal is expected, so adding a removal confirmation
+// here would turn one useful line into three noisy ones.
+func reportTeardown(warn io.Writer, res TeardownResult, _ string) {
 	switch res.Verdict {
-	case TeardownKeptUnowned:
+	case TeardownKeptUnowned, TeardownRemoved, TeardownAlreadyAbsent:
 		return
-	case TeardownRemoved, TeardownAlreadyAbsent:
-		fmt.Fprintf(warn, "pix: %s\n", res.Detail)
-		printResumeHint(warn, workspace)
 	default:
 		fmt.Fprintf(warn, "pix: kept %s: %s\n", res.Sandbox, res.Detail)
-	}
-}
-
-// sessionDirName is the session dir the kit's entrypoint passes to pi
-// (--session-dir), relative to the workspace. It lives in the WORKSPACE, which
-// is a host bind-mount, so sessions outlive the sandbox on purpose.
-const sessionDirName = ".pi-sessions"
-
-// printResumeHint translates pi's own parting line into one that works where
-// the user now is.
-//
-// On exit pi prints "To resume this session: pi --session-dir .pi-sessions
-// --session <id>". Every word of that is true INSIDE the sandbox and useless
-// outside it: the sandbox is gone, `pi` is not installed on the host, and the
-// path is relative to a working directory that no longer exists. The tempting
-// fix is to suppress it, but the information is not the problem: .pi-sessions
-// is in the workspace mount, so the session really did survive. Only the dialect
-// is wrong.
-//
-// So print the host command instead, and only when there is provably something
-// to resume. `-c` (continue the most recent session) needs no id, which keeps
-// this to one short line and cannot name a session that does not exist.
-func printResumeHint(warn io.Writer, workspace string) {
-	if workspace == "" {
-		return
-	}
-	ents, err := os.ReadDir(filepath.Join(workspace, sessionDirName))
-	if err != nil {
-		return // no session dir: nothing was persisted, so say nothing
-	}
-	for _, e := range ents {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".jsonl") {
-			fmt.Fprintf(warn, "pix: the session is on your host and outlived the sandbox — resume it with: pix run -- -c\n")
-			return
-		}
 	}
 }
 

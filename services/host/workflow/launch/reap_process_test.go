@@ -236,8 +236,8 @@ func TestRunSession_LastShellOut_RemovesWhenAlone(t *testing.T) {
 		t.Errorf("journal verdict = %q (%s), want %q", entry.Verdict, entry.Detail, TeardownRemoved)
 	}
 	assertLeaseStateCleared(t, leaseDir)
-	if !strings.Contains(warn.String(), "removed \"pix-demo\"") {
-		t.Errorf("warn stream = %q, want the removal reported once", warn.String())
+	if warn.Len() != 0 {
+		t.Errorf("warn stream = %q, routine removal must stay silent", warn.String())
 	}
 }
 
