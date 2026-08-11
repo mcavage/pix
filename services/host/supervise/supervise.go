@@ -20,7 +20,12 @@ import (
 
 // Budgets are the time/failure budgets every unit runs under.
 type Budgets struct {
-	Handshake      time.Duration // go-plugin start + first dispense
+	// Handshake is how long a unit of ANY kind may take to become USABLE: a
+	// go-plugin's start + first dispense, or a daemon's start + first passing
+	// health check. It is deliberately much larger than HealthTimeout — a cold
+	// start does real work (loading config, resolving a connection, binding),
+	// while a steady-state probe on an already-serving daemon should be instant.
+	Handshake      time.Duration
 	HealthInterval time.Duration // how often a running unit is probed
 	HealthTimeout  time.Duration // one probe (MUST be < interval, or probes stack)
 	HealthFailures int           // consecutive failed probes that evict a unit

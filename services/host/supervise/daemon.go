@@ -110,7 +110,12 @@ func (s *DaemonService) Serve(ctx context.Context) error {
 	// A unit that cannot pass its FIRST health check is not started, it is
 	// broken, and `serve` must say so at startup rather than reporting a running
 	// pid for a process that never became usable.
-	if err := s.waitHealthy(ctx, b.HealthTimeout); err != nil {
+	// The STARTUP budget, not the per-probe one. snow-proxy takes ~1.5s warm and
+	// ~3.5s cold on a normal Mac, so probing it against the 3s HealthTimeout made
+	// a perfectly healthy daemon lose a coin flip — and a lost flip removed it
+	// from the tree entirely, which a user meets as "the warehouse is down" on
+	// their first `pix serve` after install.
+	if err := s.waitHealthy(ctx, b.Handshake); err != nil {
 		s.stopChild()
 		<-exited
 		s.tree.fail(name, err)

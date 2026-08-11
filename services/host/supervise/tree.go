@@ -251,11 +251,12 @@ func (t *Tree) AddDaemon(spec DaemonSpec) error {
 	t.units[name].token = token
 	t.mu.Unlock()
 
-	// No handshake for a daemon; the wait is binding a port and answering a
-	// probe. Doubled because waitHealthy already spends up to HealthTimeout
-	// polling, and this outer wait must not fire while that is still legitimately
-	// in progress.
-	wait := 2 * t.budgets.HealthTimeout
+	// No go-plugin handshake for a daemon; the wait is binding a port and
+	// answering a probe. It hangs off the SAME budget waitHealthy uses, plus a
+	// margin — derive it from HealthTimeout instead and this outer wait fires
+	// while the inner poll is still legitimately in progress, killing a daemon
+	// that was going to come up.
+	wait := t.budgets.Handshake + t.budgets.HealthTimeout
 	select {
 	case err := <-svc.ready:
 		if err == nil {
