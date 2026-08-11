@@ -57,6 +57,7 @@ type rootCmd struct {
 
 	Setup  setupCmd  `cmd:"" group:"Setup & health" help:"Guided setup: keys, memory, pack."`
 	Doctor doctorCmd `cmd:"" group:"Setup & health" help:"Diagnose problems and print the fix commands."`
+	Reset  resetCmd  `cmd:"" group:"Setup & health" help:"Clean slate: move config+data aside, clear runtime state, remove sandboxes."`
 
 	Memory memoryCmd `cmd:"" group:"Data" aliases:"mem" help:"recall | remember | forget | learnings | stats."`
 	Pack   packCmd   `cmd:"" group:"Data" help:"ls | show | use | rm."`

@@ -33,9 +33,12 @@ pix run
   sandbox; a script needs the explicit verb: `pix run DIR`.
 
 A sandbox is **ephemeral**: nothing you do inside it touches your host except
-through explicit mounts, git, and the sandbox kit's network allowlist. There is
-no `pix reset`: a broken sandbox is thrown away and recreated, not repaired in
-place. See `docs/design/lifecycle-trust.md` for the full lifecycle.
+through explicit mounts, git, and the sandbox kit's network allowlist. A broken
+sandbox is thrown away and recreated (`pix rm <box>`, then `pix run`), never
+repaired in place. `pix reset` is the bigger hammer for the HOST side of the
+stack (config, memory, packs, runtime state and every sandbox at once), and it
+moves things aside rather than deleting them, so it is reversible. See
+`docs/design/lifecycle-trust.md` for the full lifecycle.
 
 ## 3. Check what's there
 
