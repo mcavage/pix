@@ -25,6 +25,9 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { RECALL_CUSTOM_TYPE } from "../lib/recall-message.ts";
+import { OUTPUT_STYLE_CUSTOM_TYPE } from "../lib/output-style.ts";
+
+const PROTECTED_CUSTOM_TYPES = [RECALL_CUSTOM_TYPE, OUTPUT_STYLE_CUSTOM_TYPE];
 
 register("./stub-loader.mjs", import.meta.url);
 
@@ -37,6 +40,7 @@ function messageList() {
 		{ role: "user", content: "do the thing" },
 		{ role: "assistant", content: "on it" },
 		{ role: "user", customType: RECALL_CUSTOM_TYPE, display: false, content: "## From memory (recalled for this task)\n- a fact" },
+		{ role: "user", customType: OUTPUT_STYLE_CUSTOM_TYPE, display: false, content: "## Active output style: plain" },
 		{ role: "user", customType: "pi-stack-todo-cleared", content: "cleared" },
 		{ role: "user", content: "next" },
 	];
@@ -47,11 +51,11 @@ function messageList() {
  * Mirrors pi's contract: the handler gets `{ messages }` and may return
  * `{ messages }` to replace the list, or nothing to leave it alone.
  */
-async function survivesHook(handler) {
+async function survivesHook(handler, customType = RECALL_CUSTOM_TYPE) {
 	const before = messageList();
 	const result = await handler({ messages: before.map((m) => ({ ...m })) }, fakeCtx());
 	const after = Array.isArray(result?.messages) ? result.messages : before;
-	return after.some((m) => m?.customType === RECALL_CUSTOM_TYPE);
+	return after.some((m) => m?.customType === customType);
 }
 
 function fakeCtx() {
@@ -98,7 +102,7 @@ function extensionsWithContextHook() {
 		.sort();
 }
 
-test("every extension `context` hook leaves the recall message in place", async () => {
+test("every extension `context` hook leaves protected append-only messages in place", async () => {
 	const files = extensionsWithContextHook();
 	const stripped = [];
 	for (const file of files) {
@@ -106,32 +110,41 @@ test("every extension `context` hook leaves the recall message in place", async 
 		const pi = fakePi();
 		await mod.default(pi);
 		for (const [i, handler] of (pi.hooks.get("context") ?? []).entries()) {
-			if (!(await survivesHook(handler))) stripped.push(`${file} (context handler #${i})`);
+			for (const customType of PROTECTED_CUSTOM_TYPES) {
+				if (!(await survivesHook(handler, customType))) stripped.push(`${file} (context handler #${i}) stripped ${customType}`);
+			}
 		}
 	}
 	assert.deepEqual(
 		stripped,
 		[],
-		`extension(s) strip ${RECALL_CUSTOM_TYPE} from the message list: ${stripped.join(", ")}.\n` +
-			"Recall is append-only. Removing an already-sent message moves the provider's prefix-cache\n" +
-			"divergence point BACKWARDS, which costs more than the system-prompt rewrite it replaced.\n" +
-			"AGENTS.md's strip-by-customType guidance for display-only annotations does NOT apply here.",
+		`extension(s) strip protected messages: ${stripped.join(", ")}.\n` +
+			"Recall and output styles are append-only. Removing an already-sent message moves the provider's\n" +
+			"prefix-cache divergence point backwards. AGENTS.md's strip-by-customType guidance for display-only\n" +
+			"annotations does not apply to these protected messages.",
 	);
 });
 
 test("the harness catches a hook that does strip it (so a clean pass means something)", async () => {
 	// The naive application of AGENTS.md's display-only-annotation pattern.
 	const hostile = (event) => ({ messages: event.messages.filter((m) => !m.customType) });
-	assert.equal(await survivesHook(hostile), false);
+	for (const customType of PROTECTED_CUSTOM_TYPES) {
+		assert.equal(await survivesHook(hostile, customType), false);
+	}
 
 	// And the shapes that must still count as surviving.
 	assert.equal(await survivesHook(() => undefined), true, "a hook that returns nothing must not be read as stripping");
 	assert.equal(await survivesHook((e) => ({ messages: e.messages })), true);
-	assert.equal(
-		await survivesHook((e) => ({ messages: e.messages.filter((m) => m.customType !== "pi-stack-todo-cleared") })),
-		true,
-		"filtering a DIFFERENT customType is fine",
-	);
+	for (const customType of PROTECTED_CUSTOM_TYPES) {
+		assert.equal(
+			await survivesHook(
+				(e) => ({ messages: e.messages.filter((m) => m.customType !== "pi-stack-todo-cleared") }),
+				customType,
+			),
+			true,
+			"filtering a different customType is fine",
+		);
+	}
 });
 
 test("the set of extensions with a context hook is pinned", async () => {
@@ -140,8 +153,9 @@ test("the set of extensions with a context hook is pinned", async () => {
 	assert.deepEqual(extensionsWithContextHook(), []);
 });
 
-test("the recall custom type is the new name, and the frozen legacy ones are untouched", () => {
+test("protected custom types are pinned, and the frozen legacy ones are untouched", () => {
 	assert.equal(RECALL_CUSTOM_TYPE, "pix-recalled-context");
+	assert.equal(OUTPUT_STYLE_CUSTOM_TYPE, "pix-output-style");
 	// AC-P0-409: persisted customType values already written into .pi-sessions/
 	// are frozen forever. Renaming pi-stack-todo-cleared silently resurrects
 	// cleared todos after compaction or resume.

@@ -242,6 +242,13 @@ agentInstructions:
     healthcheck, and many more. They are forcing functions, not manuals.
     Auto-loaded when relevant.
 
+    ## Output styles
+    When Pix personal context is mounted, the `output_style` tool creates,
+    activates, lists, or disables durable personal writing styles after a direct
+    user request. `/output-style` lists or switches saved styles. A style controls
+    prose form, never facts, task scope, tool permissions, verbatim technical
+    content, or project rules.
+
     ## Installed harness
     plan mode (pi-plan), pi-mcp-adapter, todo list, pi-simplify, pi-web-access,
     usage HUD, and the baked status + subagents extensions.

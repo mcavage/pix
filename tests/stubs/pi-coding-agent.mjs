@@ -12,3 +12,6 @@ export function getPackageDir() {
 export function parseFrontmatter(content) {
 	return { frontmatter: {}, body: content };
 }
+export async function withFileMutationQueue(_path, fn) {
+	return fn();
+}

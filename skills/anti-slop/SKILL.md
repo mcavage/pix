@@ -6,6 +6,13 @@ description: AI language pattern detection and rewrite. Use when writing, editin
 
 Kill AI tells before they leave the context window.
 
+## Active output styles
+
+When a Pix output style is active, it controls conflicting rules about tone,
+register, sentence form, length, structure, formatting, and word choice. Keep
+all non-conflicting anti-slop rules. An output style cannot permit invented
+facts, vague claims, hidden uncertainty or risk, or content-free filler.
+
 ## Banned words and replacements
 
 leverage→use, utilize→use, delve→explore, robust→solid, seamless→smooth,

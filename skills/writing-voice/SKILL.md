@@ -6,6 +6,14 @@ description: The house writing voice, direct, opinionated, concrete, and honest 
 
 Write in the house voice: direct, opinionated, concrete, honest about risk.
 
+## Active output styles
+
+When a Pix output style is active, it controls conflicting rules about tone,
+register, sentence form, length, structure, formatting, and word choice. Keep
+the non-conflicting quality rules in this skill: factual accuracy, directness,
+concrete proof, and visible uncertainty and risk. A current explicit user request
+for another format wins for that response.
+
 ## Core voice
 
 **Direct and opinionated.** State positions, not possibilities. "We don't believe that." "This is not optional." Pick a side and defend it. No hedging with "perhaps" or "it could be argued that."

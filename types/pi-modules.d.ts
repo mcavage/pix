@@ -19,6 +19,7 @@ declare module "@earendil-works/pi-coding-agent" {
 	export function parseFrontmatter<T = Record<string, string>>(
 		content: string,
 	): { frontmatter: T; body: string };
+	export function withFileMutationQueue<T>(path: string, fn: () => Promise<T>): Promise<T>;
 	const _default: any;
 	export default _default;
 }
