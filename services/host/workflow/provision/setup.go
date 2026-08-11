@@ -115,6 +115,12 @@ func RunSetup(env hostenv.Env, flags []string, out io.Writer) error {
 	if len(o.Failed) > 0 {
 		// A failed apply is a hard abort even for an optional probe (pack): a
 		// pack the user asked for and setup failed to adopt is never success.
+		//
+		// The cause is carried, so nothing is lost and errors.Is still works.
+		// The duplication that made this unreadable is fixed in Render, which now
+		// prints only the first line of a multi-line failure — the full block
+		// appears exactly once, here, at the end, which is where the exit code
+		// points and the last thing a user sees.
 		return fmt.Errorf("setup could not apply %s: %w", o.Failed[0].Name, o.Failed[0].Err)
 	}
 	if o.ExitCode() != health.ExitOK {

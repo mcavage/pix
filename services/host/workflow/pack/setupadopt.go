@@ -10,8 +10,10 @@ package pack
 import (
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
+	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/packinfo"
@@ -54,13 +56,35 @@ func adoptForSetup(env hostenv.Env, out io.Writer, register RegisterFn, packs, w
 	if err != nil {
 		return err
 	}
+	// Interactivity is MEASURED, exactly as the trust gate and the credential
+	// solicitor in this same flow measure it. It used to be hardcoded false, and
+	// the cost fell entirely on new users: a step whose remediation needs a
+	// terminal — `slack-mcp auth login`, `gog auth setup --login`, any browser
+	// authorization — was refused on a run that had just prompted the user for a
+	// y/N and two 1Password references. The refusal then said to "re-run without
+	// --yes/--non-interactive", flags the user had not passed, so there was no
+	// next step to take. A new user has no Slack grant by definition, so that
+	// step could never pass and its fix could never run.
+	interactive := setupInteractivity(assumeYes, cli.IsTTY(os.Stdin))
 	for _, root := range activated {
-		if err := RunPackSetup(env, out, root, requests[root], false); err != nil {
+		if err := RunPackSetup(env, out, root, requests[root], interactive); err != nil {
 			return err
 		}
 	}
 	return nil
 }
+
+// setupInteractivity decides whether a pack's setup hooks may run a remediation
+// that needs a terminal. It is a function, not an expression inline above,
+// because it was a hardcoded `false` and nothing could observe that.
+//
+// Both conditions are load-bearing:
+//   - --yes means "ask me nothing", and a browser authorization is a question.
+//   - No TTY means there is nobody to answer, so prompting would hang a CI job.
+//
+// Neither alone is sufficient: measuring only the TTY would let --yes open a
+// browser, and honouring only --yes would prompt into a pipe.
+func setupInteractivity(assumeYes, tty bool) bool { return !assumeYes && tty }
 
 // NormalizeSetupPackArg expands the `owner/repo` shorthand to a clone URL.
 func NormalizeSetupPackArg(arg string) string {

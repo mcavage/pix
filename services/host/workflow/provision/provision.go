@@ -195,7 +195,16 @@ func (o Outcome) Render(w io.Writer) {
 		fmt.Fprintf(w, "  skipped  %-12s %s\n", s.Name, s.Reason)
 	}
 	for _, f := range o.Failed {
-		fmt.Fprintf(w, "  failed   %-12s %v\n", f.Name, f.Err)
+		// FIRST LINE ONLY. A pack's failure carries the pack's own guidance,
+		// which is a paragraph — printed in full here it appeared twice, since
+		// the command's final error carries the same cause. Two copies of an
+		// eight-line block read as two different problems. The full text belongs
+		// at the end, where the exit code points.
+		msg := f.Err.Error()
+		if i := strings.IndexByte(msg, '\n'); i >= 0 {
+			msg = msg[:i] + " …"
+		}
+		fmt.Fprintf(w, "  failed   %-12s %s\n", f.Name, msg)
 	}
 	fmt.Fprintln(w)
 	// A failed PHASE must not be headlined `✓ ready`. The probe snapshot below

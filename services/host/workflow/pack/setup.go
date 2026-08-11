@@ -67,7 +67,7 @@ func RunPackSetup(env hostenv.Env, out io.Writer, root string, requested []strin
 		// whether or not this is an interactive run: the answer is identical,
 		// and it is a command the user runs, not a prompt they answer.
 		if !fixable || len(step.Apply) == 0 && step.Declarative() {
-			return fmt.Errorf("pack setup %s: %s", step.ID, why)
+			return fmt.Errorf("pack setup %s is not ready%s", step.ID, reasonBlock(why))
 		}
 		// Only refuse non-interactively if a remediation actually NEEDS a
 		// terminal. `exec` applies are bounded and answer to nobody — that is
@@ -76,8 +76,13 @@ func RunPackSetup(env hostenv.Env, out io.Writer, root string, requested []strin
 		// perfectly capable of completing. An executable hook is opaque, so it
 		// keeps the conservative treatment.
 		if !interactive && stepNeedsTerminal(step) {
-			return fmt.Errorf("pack setup %s is not ready (%s) and needs interactive authorization; "+
-				"re-run without --yes/--non-interactive", step.ID, why)
+			// `why` is a REPORT block: multi-line, indented, carrying the pack's
+			// own guidance. Interpolated into a parenthetical it produced an
+			// eight-line sentence with the closing paren stranded on the last
+			// line, and the user's eye had nowhere to land. So the reason is a
+			// block, and the action is its own line.
+			return fmt.Errorf("pack setup %s needs interactive authorization%s\n    run `pix setup --pack %s` in a terminal, without --yes",
+				step.ID, reasonBlock(why), root)
 		}
 		fmt.Fprintf(out, "\npack setup: %s\n", label)
 		if why != "" {
@@ -161,6 +166,22 @@ func checkRequires(env hostenv.Env, step packinfo.SetupStep) (ok bool, why strin
 		return false, unmet[0], allFixable
 	}
 	return false, "\n    - " + strings.Join(unmet, "\n    - "), allFixable
+}
+
+// reasonBlock formats a check's reason as an indented BLOCK under the heading
+// that introduces it, or as nothing at all when there is no reason to give.
+//
+// The reason is multi-line by design: it carries every unmet requirement plus
+// the pack's own guidance for each. Interpolated into a parenthetical it produced
+// an eight-line sentence with the closing paren stranded at the end, and a reader
+// had nowhere to land. An executable hook reports no reason at all, so the naive
+// fix left a heading followed by a blank line.
+func reasonBlock(why string) string {
+	why = strings.TrimRight(strings.TrimLeft(why, "\n "), "\n ")
+	if why == "" {
+		return ""
+	}
+	return ":\n      " + why
 }
 
 // hintOf renders a requirement's pack-authored guidance, indented to sit under
