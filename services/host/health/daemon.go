@@ -87,7 +87,7 @@ func (p DaemonProbe) Check(ctx context.Context) Result {
 func (p DaemonProbe) checkOne(ctx context.Context, d DaemonServer) mcpFinding {
 	unpinned := ""
 	if d.Unpinned {
-		unpinned = " (unpinned: resolved on PATH)"
+		unpinned = " (unpinned: found by name at launch)"
 	}
 	err := p.ask(ctx, d)
 	if err == nil {

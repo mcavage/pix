@@ -67,6 +67,21 @@ license = "Apache-2.0"
 source = "https://github.com/example/indexer"
 `
 
+const validDaemonService = `
+[[services]]
+name = "vendor-proxy"
+runtime = "daemon"
+activation = "always"
+command = "vendor-proxy"
+argv = ["--connection", "prod", "--port", "12200"]
+env = ["PATH"]
+port = 12200
+listen = "127.0.0.1"
+health = "/health"
+license = "MIT"
+source = "https://github.com/example/vendor-proxy"
+`
+
 // --- parse + normalize --------------------------------------------------------
 
 func TestPackServices_ValidManifestLoads(t *testing.T) {
@@ -226,6 +241,59 @@ func TestPackServices_ServiceAloneIsTier1AndFailsClosedNonTTY(t *testing.T) {
 	var out bytes.Buffer
 	if err := packTrustGate(nil, &out, false, false, p.Manifest.Name, bom); err == nil {
 		t.Fatal("non-TTY adoption of a pack service must fail closed")
+	}
+}
+
+// TestPackServices_ConsentDisclosesAnUnpinnedDaemon covers the ONE fact on this
+// screen that is a weaker guarantee than the others.
+//
+// A `command` daemon is resolved by name at launch, so pix cannot verify which
+// build it runs — there is no SHA a shared manifest could carry for a binary each
+// user compiles themselves. That is defensible, but only because it is DISCLOSED:
+// the whole Tier-1 gate is the user deciding what may exec on their Mac, and a
+// screen that quietly presented an unpinned binary alongside pinned ones would be
+// asking for consent to something it had not described.
+//
+// It was untested until this. The wording had also drifted to "resolved on PATH",
+// which stopped being true once resolution searched the standard user bin
+// directories as well — a consent screen that misstates where a binary comes from
+// is worse than one that says less.
+func TestPackServices_ConsentDisclosesAnUnpinnedDaemon(t *testing.T) {
+	root := writeServicePack(t, validDaemonService)
+	p, err := packinfo.LoadPack(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bom := ComputeHostBoM(p)
+	if !bom.Tier1() {
+		t.Fatal("a daemon that execs a host binary must be Tier-1")
+	}
+	var out bytes.Buffer
+	renderHostBoM(&out, bom)
+	screen := out.String()
+
+	// Every fact the user is consenting to: what runs, with which arguments,
+	// where it listens, and how it is checked.
+	for _, want := range []string{
+		"vendor-proxy", "daemon", "always",
+		"--connection", "prod", "--port",
+		"12200", "127.0.0.1", "/health",
+	} {
+		if !strings.Contains(screen, want) {
+			t.Errorf("the consent screen omits %q:\n%s", want, screen)
+		}
+	}
+	// And the disclosure itself.
+	if !strings.Contains(screen, "UNPINNED") {
+		t.Errorf("an unpinned daemon must be marked UNPINNED:\n%s", screen)
+	}
+	if !strings.Contains(screen, "cannot verify which build") {
+		t.Errorf("the screen must say what UNPINNED costs the user:\n%s", screen)
+	}
+	// It must not claim PATH alone: resolution also searches the standard user
+	// bin directories, and a screen that names the wrong source is misleading.
+	if strings.Contains(screen, "resolved on PATH at launch") {
+		t.Errorf("stale disclosure: resolution is no longer PATH-only:\n%s", screen)
 	}
 }
 

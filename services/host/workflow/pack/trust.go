@@ -495,7 +495,7 @@ func renderHostBoM(out io.Writer, b hostBoM) {
 					line += " " + strings.Join(svc.Argv, " ")
 				}
 				fmt.Fprintf(out, "                       Runs on this Mac: %s\n", line)
-				fmt.Fprintf(out, "                       UNPINNED — resolved on PATH at launch, so pix cannot verify which build this is\n")
+				fmt.Fprintf(out, "                       UNPINNED — found by name at launch (PATH, then the standard user bin dirs),\n                       so pix cannot verify which build this is\n")
 			} else {
 				line := svc.Path
 				if len(svc.Argv) > 0 {

@@ -183,16 +183,18 @@ func (s *DaemonService) command() (*exec.Cmd, error) {
 		}
 		path = staged
 	case u.Command != "":
-		resolved, err := exec.LookPath(u.Command)
+		resolved, err := resolveHostCommand(u.Command)
 		if err != nil {
-			return nil, fmt.Errorf("unit %s: %q is not on PATH (the pack's setup step installs it)", u.Name, u.Command)
+			return nil, fmt.Errorf("unit %s: %w (the pack's setup step installs it)", u.Name, err)
 		}
 		path = resolved
 	default:
 		return nil, fmt.Errorf("unit %s: no executable (neither a pinned path nor a command)", u.Name)
 	}
 	cmd := exec.Command(path, u.Argv...)
-	cmd.Env = FilterEnv(u.EnvAllow, u.EnvGrant)
+	// The child gets the same widened PATH, or it starts, binds, answers health,
+	// and still cannot find the vendor CLI it exists to shell out to.
+	cmd.Env = withHostBinPath(FilterEnv(u.EnvAllow, u.EnvGrant))
 	// Its own process group, so stopChild can signal the daemon AND anything it
 	// spawned. snow-proxy execs the vendor CLI per request; leaving those behind
 	// would keep the port bound and make the next start fail to bind.
