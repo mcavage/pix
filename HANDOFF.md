@@ -295,19 +295,128 @@ than by reading:
 - **The probe really does use the gateway's wrapper** — it sampled the process
   table and matched the prefix byte-for-byte against `sbx mcp inspect`.
 
+## Round 5 — snow-proxy under the supervisor, and what the managed path found
+
+The `runtime = "daemon"` feature had landed, been reviewed, been gated and been
+committed. It had never started a daemon. Four separate defects sat between
+"accepted" and "running", and each one was invisible to the check before it.
+
+1. **`UnitSpec.Validate` refused the launch form the whole feature exists for.**
+   It knew self-exec and a SHA-pinned path; a pack daemon is a binary the user
+   compiled on their own Mac, which no shared manifest can carry a SHA for. The
+   pack was accepted, packinfo validated the entry, `Tree.AddDaemon` took it, and
+   the unit it was handed could not describe itself. `UnitSpec.Command` closes
+   it, joins `identity()`, and is refused alongside a sha pin.
+2. **The first health check used the per-probe budget.** snow-proxy binds in
+   ~1.5s warm and ~3.5s cold; `HealthTimeout` is 3s. A correct install passed or
+   failed by luck, and a failed start removes the unit from the tree entirely.
+   `Handshake` already meant "how long may a unit take to become usable", so it
+   now covers both unit kinds rather than the runtime growing a fourth timeout.
+3. **`exec.LookPath` under launchd finds nothing a user installed.** launchd
+   hands a login service `PATH=/usr/bin:/bin:/usr/sbin:/sbin`. Every host binary
+   here lives elsewhere. The daemon worked in my foreground shell and failed
+   permanently under the managed service — the only way real users run it.
+4. **The same gap hit the child, and that half is worse.** A daemon inheriting
+   launchd's PATH starts, binds, and answers health while unable to find the
+   vendor CLI it shells out to. Green row, dead capability.
+
+I found (3) and (4) only because I installed the managed service to leave the
+machine in the state a user would have. Everything before that was verified
+against a foreground process, which is not the product.
+
+### The reason all four shipped
+
+`supervise.DaemonService` had **no tests**. The manifest had validation tests,
+the health probe had probe tests, the tree had an Add test — and the code that
+execs the binary was covered by nothing. `daemon_test.go` and `hostpath_test.go`
+now drive real child processes, because every one of these was a shape error in
+the launch contract that a mock would have agreed with.
+
+### Two of my own tests were vacuous, and I only knew because I checked
+
+Every test here was verified by REINTRODUCING the bug it claims to catch. Two
+passed against code with the behaviour deleted:
+
+- the wedge test used `nc -l`, which serves one connection and exits — so the
+  fixture "wedged" by dying, the supervisor caught it on the process-exited path,
+  and deleting eviction entirely still passed. The fixture is python now: it
+  holds its pid and its listening socket and answers nothing, which is the
+  failure launchd cannot see and the only reason this runtime beats a LaunchAgent.
+- the process-group test used `os.FindProcess` + `Process.Signal(nil)`. On Unix
+  `FindProcess` never fails and `Signal(nil)` returns "unsupported signal type"
+  for every pid alive or dead, so it reported "reaped" on the first poll.
+  Liveness is `syscall.Kill(pid, 0)`.
+
+This is the third time this session that a check I wrote could not fail. It is
+the failure mode to assume, not to rule out.
+
+### Verified end to end, under launchd, not a foreground process
+
+- `pix doctor` → `✓ ready`, all seven rows green, including `daemons 1 answering`
+- a real query: `CURRENT_USER()` = `MARK_CAVAGE`, exit 0
+- the daemon's actual child PATH, read off the process: homebrew and
+  `~/.local/bin` appended, not duplicated
+- three consecutive cold `serve` restarts, each healthy
+- `kill -9` on the pid → replaced, `restarts=1`
+- `pix serve status` → `probe=571us`, a real measurement
+- full gate: 10/10 segments
+
+### Also closed in this round
+
+- **The MCP footer called an idle lazy server a problem.** It decided by counting
+  (`connectedCount != enabledCount`), which equates "not connected" with
+  "broken"; a lazy or cached server is neither. Same defect as reporting
+  "registered" as "working", one layer up. It now asks whether a server has a
+  recorded failure or needs auth. The patch also applied its second anchor only
+  `if (initChanged)`, so re-running it left the adapter half-patched with no
+  error.
+- **`setup/snowflake`'s check was `curl /health`.** Fair when `install.sh` loaded
+  a LaunchAgent; nothing there starts anything now, and the daemon does not exist
+  until `pix serve` next reads the accepted pack. With `required = true` that
+  would have blocked the whole of `pix setup` for a new user — a first-day
+  onboarding path. It checks the two binaries and the `[pix]` connection, and all
+  three failure paths were run by hand.
+- **The consent screen said "resolved on PATH at launch"**, which stopped being
+  true, and had **no test** — the one fact on that screen representing a weaker
+  guarantee than its neighbours was unverified. It has one, and it fails when the
+  disclosure is weakened.
+- **`pix serve --help` described only memory.** Corrected, but only after
+  running `serve status` to confirm it really does list pack daemons.
+- **Slack shipped** (`pix-integrations/slack`): read-only, PKCE with token
+  rotation, credential in a 0600 file under `~/.local/state/pix/slack/`, atomic
+  writes with validation before any filesystem work. Live: `auth login`
+  authorized, `auth status` exits 0, doctor says "registered and answering".
+- Two QA leftovers (`acme`, `pix-qa`) were polluting the real gateway. Removed.
+- `pix pack use`'s "restarted managed pix services" claim — **verified this
+  round**: the daemon is up and answering after that auto-restart.
+
+### State of the three repos
+
+All commits are **UNSIGNED** — the 1Password SSH agent cannot authorize
+unattended — and **none are pushed**. Re-sign before pushing:
+
+    git -C ~/dev/pix              rebase --exec 'git commit --amend --no-edit -S' origin/main
+    git -C ~/dev/gm-pix-pack      rebase --exec 'git commit --amend --no-edit -S' origin/main
+    git -C ~/dev/pix-integrations rebase --exec 'git commit --amend --no-edit -S' origin/main
+
+At the time of writing that is 22 commits in pix (base 7218978), 5 in
+gm-pix-pack (b5a6594) and 1 in pix-integrations (89e3f1d). `origin/main` is
+written rather than those shas so the command stays correct if anything lands
+first.
+
 ## Still open — deliberately, and recorded rather than hidden
 
 | what | why it is acceptable for now |
 |---|---|
 | ~~Declarative setup has never actually RUN.~~ **CLOSED** — I ran it against isolated `PIX_CONFIG`s and it immediately found a bug (`82a9ce9`): under `--yes` the runner refused even `exec` remediations, which need no terminal, so the scripted path could not complete a step it was capable of completing. Three behaviours are now confirmed by running, not claimed: a satisfied requirement runs nothing; a failing probe runs its exec apply, prints its explain and re-verifies; an unmet `op-ref` reports the exact `pix secret set` command and runs NOTHING. | Still worth one real `pix setup --pack ~/dev/gm-pix-pack` with the vault unlocked, since the gm-pix-pack path specifically (gog install + browser OAuth) was never exercised. |
 | ~~No `command`-transport server was proven to serve a real tool call.~~ **CLOSED by Mark's own in-sandbox healthcheck**, which is the only place this could be proven: **live Gmail search returned successfully** through `google-workspace`, a live BambooHR health call, a live Snowflake `SELECT 1`, 173 MCP tools, and all four remote servers authenticated. Also proved subagent dispatch across all three provider families. | Nothing left to verify here. |
-| `pix pack use` prints "restarted managed pix services" where the QA measured no pid change. | Pre-existing in `service/reload.go`. Now MORE suspicious: `pix reset` hit the same class of bug — a launchd stop returns before the process exits — so this claim is probably true-but-early rather than false. Worth a look, undiagnosed. |
+| ~~`pix pack use` prints "restarted managed pix services" where the QA measured no pid change.~~ **Verified true this round**: the daemon is running and answering after that auto-restart. | Pre-existing in `service/reload.go`. Now MORE suspicious: `pix reset` hit the same class of bug — a launchd stop returns before the process exits — so this claim is probably true-but-early rather than false. Worth a look, undiagnosed. |
 | **Memory recall precision**: Mark's healthcheck found 1 of 5 recalled records clearly off-topic, and some older project learnings possibly stale. | Not this work's area (memory ranking), but it is the only WARNING in an otherwise all-clear live probe, so it is the next real thing. |
-| Snowflake has no doctor row (it is a proxy, not an MCP server), so a dead `snow-proxy` degrades silently. | Honest gap. A pack cannot yet contribute a health check for a `[[proxy]]`. |
+| ~~Snowflake has no doctor row.~~ **CLOSED** — `runtime = "daemon"` plus the `daemons` probe. snow-proxy is supervised, health-checked, evicted when wedged, and shown in `pix doctor` and `pix serve status`. | Nothing left here. The remaining gap is narrower: a `[[proxy]]` with no accompanying `[[services]]` daemon still contributes no health check. |
 | BambooHR's probe checks that a Docker image exists, not that the API key works. | Weak but honest; doctor does not overclaim. |
 | `pix setup` aborts on the FIRST unmet requirement instead of listing all of them. | Three passes to learn two facts. Annoying, not misleading. |
 | `pix secret ls` shows two red lines for stale `SLACK_TEAM_ID`/`SLACK_USER_ID`. | Left in place deliberately — they are IDs the operator may want when Slack returns. The message now offers removal. |
-| A stray `acme` MCP registration existed on this host from a test agent; the verifier cleaned it up along with its own. `sbx mcp ls` is back to its original 7. | Doctor now names any unmanaged registration as information rather than ignoring it. |
+| Stray `acme` and `pix-qa` MCP registrations from test agents. **Removed this round** — doctor named both as unmanaged, which is how I found them. | Doctor names any unmanaged registration as information rather than ignoring it. That row earned its keep. |
 | **`pack-trust.json` is 86 KB / 370 adoption records, 369 of them test temp dirs recording adoption of `https://example.com/attacker/pack.git`.** `TestClonePack_MarksAdoptionDurablyBeforeReturn` sets `XDG_DATA_HOME` but not `PIX_CONFIG`/`XDG_CONFIG_HOME`, and the trust-store path derives from `config.Path()`. | **Pre-existing** (from `bce2b1b`), not caused by this work, and `accepted` is unaffected. But a security boundary the test suite can write to is not a boundary — worth its own fix. |
 | `pix secret check` is bounded per-ref (5s) but not overall, and does not bail early: 14 refs on a locked vault take 70s, all failing for the identical reason. | Terminates honestly, which was the bug. Early-bail is a refinement. |
 | `PIX_CONFIG` isolates config but NOT host side effects — `pix pack use` with an isolated config still mutates the real sbx gateway. | Worth knowing before anyone assumes `PIX_CONFIG` makes a run safe. |
