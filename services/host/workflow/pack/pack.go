@@ -730,13 +730,21 @@ type RegisterFn func(cfg *config.Config, env hostenv.Env, out io.Writer, names [
 // registerPackMCP registers names with the sbx gateway. Idempotent, and it runs
 // even for a name ALREADY in cfg.MCP: a retry after a failed registration must
 // re-register, and a changed declaration must re-resolve. Best-effort.
-func registerPackMCP(register RegisterFn, cfg *config.Config, env hostenv.Env, out io.Writer, p *packinfo.Info, names []string) {
+// It returns the registration error rather than only printing it. "Best-effort"
+// used to mean the error became a `note:` line and `pix pack use` exited 0 —
+// so adopting a pack on a machine missing one of its commands (the normal first
+// run) reported success for servers that had not been registered. The pack IS
+// still activated either way, which is the part that must not be undone; the
+// caller decides the exit code.
+func registerPackMCP(register RegisterFn, cfg *config.Config, env hostenv.Env, out io.Writer, p *packinfo.Info, names []string) error {
 	if len(names) == 0 {
-		return
+		return nil
 	}
 	if err := register(cfg, env, out, names, packinfo.ServerMCP(p)); err != nil {
 		fmt.Fprintf(out, "note: mcp registration: %v\n", err)
+		return err
 	}
+	return nil
 }
 
 func RunPackLs(out io.Writer) error {
@@ -1006,7 +1014,7 @@ func packUse(env hostenv.Env, out io.Writer, rest []string, register RegisterFn)
 	if !env.Quiet {
 		reportPackActivation(out, cfg, root, removedMCP, lock.MCP)
 	}
-	registerPackMCP(register, cfg, env, out, p, packinfo.McpNames(p))
+	regErr := registerPackMCP(register, cfg, env, out, p, packinfo.McpNames(p))
 	// Swap the host-exec wrappers NOW: clear the previous activation's, then
 	// stage+verify+swap this pack's ACCEPTED set.
 	if _, werr := refreshHostPackWrappers(quietly(out, env), cfg, false); werr != nil {
@@ -1017,7 +1025,11 @@ func packUse(env hostenv.Env, out io.Writer, rest []string, register RegisterFn)
 	// A knowledge change is daemon-affecting: advise the running serve so the new
 	// bundle is indexed — on THIS writer now, so --quiet silences the restart too.
 	propagateConfig(quietly(out, env))
-	return nil
+	// The pack IS activated and everything above is committed — that must not be
+	// undone by a server that could not register. But the command must not exit
+	// 0 having listed servers it did not register, so the failure is returned
+	// here, last, after every side effect has run.
+	return regErr
 }
 
 // propagateConfig advises a running serve that daemon-affecting config changed.

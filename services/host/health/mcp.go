@@ -340,18 +340,21 @@ func (p MCPProbe) checkServer(ctx context.Context, bin, listOut string, s MCPSer
 		// Match the BASE NAME exactly. A suffix test here would tell the owner
 		// of `hadoop` or `develop` to go unlock a vault their probe never
 		// touches, which is its own small lie.
-		hint, unknownFix := "", ""
+		// An UNKNOWN result may not emit a Fix — health.Snapshot.Fixes()
+		// deliberately draws only from verified gaps, because a repair command
+		// printed under something nobody could diagnose is a guess, and a green
+		// report with a TODO under it teaches people to ignore both. So the
+		// remedy goes where an unknown IS allowed to speak: its evidence, which
+		// the renderer always shows for a non-OK result. It is the exact command,
+		// copy-pasteable, not a description of one.
+		hint := ""
 		if len(s.Probe) > 0 && filepath.Base(s.Probe[0]) == "op" {
-			hint = "; it runs through 1Password (`op run`), so unlock your vault and re-run"
-			// A locked vault is the NORMAL state on a fresh laptop, which makes
-			// this the most likely thing a new user hits — so it gets a real
-			// fix line, not just an explanation buried in the evidence.
-			unknownFix = "op signin   # then re-run pix doctor"
+			hint = " — it runs through 1Password, so run `op signin` and re-run `pix doctor`"
 		}
 		// The three unanswerable causes are genuinely different, and "did not
 		// answer in time" is false for two of them: a probe binary that does
 		// not exist answered instantly, it just is not there.
-		return mcpFinding{name: s.Name, unknown: true, fix: unknownFix,
+		return mcpFinding{name: s.Name, unknown: true,
 			note: s.Name + ": registered; " + probeUnknownReason(o) + hint}
 	}
 
@@ -456,7 +459,7 @@ func (p MCPProbe) checkAuth(ctx context.Context, bin, name string) (mcpAuth, str
 // unproven; only an all-clear reports ready.
 func (p MCPProbe) reduce(findings []mcpFinding) Result {
 	var gaps, unknowns int
-	fix, unknownFix := "", ""
+	fix := ""
 	notes := make([]string, 0, len(findings))
 	for _, f := range findings {
 		notes = append(notes, f.note)
@@ -473,9 +476,6 @@ func (p MCPProbe) reduce(findings []mcpFinding) Result {
 			}
 		case f.unknown:
 			unknowns++
-			if unknownFix == "" {
-				unknownFix = f.fix
-			}
 		}
 	}
 	// Newline-joined, not "; ": a note contains its own semicolons ("registered
@@ -497,20 +497,9 @@ func (p MCPProbe) reduce(findings []mcpFinding) Result {
 		if unknowns > 0 {
 			detail += fmt.Sprintf(", %d not checkable", unknowns)
 		}
-		// Append rather than fall back. Gaps and unknowns are different servers
-		// with different remedies; showing only the gaps' fix left a user with
-		// no way to act on the unknowns, which on a fresh laptop (locked vault)
-		// are the majority.
-		if unknownFix != "" && unknownFix != fix {
-			if fix == "" {
-				fix = unknownFix
-			} else {
-				fix += "\n" + unknownFix
-			}
-		}
 		return Result{Name: p.Name(), Status: StatusAbsent, Detail: detail, Fix: fix, Evidence: ev}
 	case unknowns > 0:
-		return Result{Name: p.Name(), Status: StatusUnknown, Fix: unknownFix,
+		return Result{Name: p.Name(), Status: StatusUnknown,
 			Detail: fmt.Sprintf("%d of %d not checkable from here", unknowns, total), Evidence: ev}
 	}
 	return Result{Name: p.Name(), Status: StatusReady,

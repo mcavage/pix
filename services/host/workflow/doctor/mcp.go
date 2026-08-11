@@ -65,10 +65,18 @@ func classifyMCPServer(name string, declared map[string]config.MCPServer, creds 
 		RegisterFix: "pix mcp add " + name,
 	}
 	// The probe runs through the SAME op-run wrapper the gateway will use to
-	// spawn this server. A probe run in doctor's own shell would inherit
-	// whatever the operator happens to have exported, which is precisely how a
-	// broken credential setup passes every check and then fails on first use.
-	if len(s.Probe) > 0 && len(s.EnvKeys) > 0 {
+	// spawn this server — but ONLY when the probe actually invokes that server's
+	// own binary, and so needs that server's environment. A probe run in
+	// doctor's own shell would inherit whatever the operator happens to have
+	// exported, which is precisely how a broken credential setup passes every
+	// check and then fails on first use.
+	//
+	// Wrapping every probe was wrong in the other direction: BambooHR's probe is
+	// `docker image inspect <image>`, which needs no credential and answers in
+	// milliseconds. Wrapped, it inherited the server's 1Password dependency, so a
+	// locked vault turned a determinable answer into "not checkable" — and made
+	// `pix doctor`, a read-only diagnostic, provoke an authorization prompt.
+	if len(s.Probe) > 0 && len(s.EnvKeys) > 0 && s.Command != "" && s.Probe[0] == s.Command {
 		out.Probe = mcp.OpRunWrap(creds.OpPath, creds.OpRefsPath, s.Probe)
 	} else {
 		out.Probe = s.Probe
