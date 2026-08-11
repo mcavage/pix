@@ -61,6 +61,30 @@ func RunPackSetup(env hostenv.Env, out io.Writer, root string, requested []strin
 		ok, why, fixable := check()
 		if ok {
 			fmt.Fprintf(out, "  ✓ %s: ready\n", label)
+			// SAY WHAT PROVED IT. "ready" alone cannot be told apart from
+			// "skipped", and Mark hit exactly that: after a reset he was asked for
+			// the gog 1Password reference but never asked to authorize gog, and had
+			// no way to see whether setup had done the authorization, decided not
+			// to, or quietly passed over it.
+			//
+			// It had done none of those — gog's own keyring lives outside the two
+			// directories `pix reset` moves aside, so it was still authorized and
+			// the probe passed. That is the right outcome and it was invisible.
+			//
+			// Only what PROVES the step: a declarative step's `probe` requirements,
+			// or an executable hook's check argv. `bin` and `op-ref` show that
+			// something exists, not that it works, so their passing is not evidence
+			// worth a line. The hook is included so Snowflake does not look less
+			// verified than its neighbours when it is equally verified.
+			if !step.Declarative() {
+				fmt.Fprintf(out, "      verified by: %s\n",
+					strings.TrimSpace(step.Path+" "+strings.Join(step.CheckArgs, " ")))
+			}
+			for _, r := range step.Require {
+				if r.Kind == "probe" && len(r.Argv) > 0 {
+					fmt.Fprintf(out, "      verified by: %s\n", strings.Join(r.Argv, " "))
+				}
+			}
 			continue
 		}
 		// A requirement nothing can fix for you is reported the same way
