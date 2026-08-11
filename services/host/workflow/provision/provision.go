@@ -30,6 +30,27 @@ type Step struct {
 	Name  string
 	Probe health.Probe
 	Apply func(ctx context.Context) error
+	// ProbeProvesSubset marks a step whose Probe verifies LESS than its Apply
+	// performs, so `before.OK()` is not proof that the Apply has nothing left to
+	// do. Such a step is applied on every run.
+	//
+	// It exists for `pack`, where the mismatch was silently costing users a
+	// command that appears to work. PackProbe answers "is a pack active"; the
+	// apply adopts the pack AND runs its required setup hooks. So on any host
+	// where the pack was already active, `pix setup --pack X` skipped the hooks
+	// entirely and reported ready — a user re-running setup to repair a broken
+	// integration got a no-op with a green screen, which is the one outcome
+	// setup exists to prevent.
+	//
+	// This does NOT weaken "applies only the gaps it verified". The apply here is
+	// an explicit request: the user typed --pack, and every underlying operation
+	// is idempotent and reports per-step (`✓ <step>: ready`). The second check
+	// still decides readiness, so nothing is called ready because a step said so.
+	//
+	// Prefer strengthening the Probe. Use this only when the Probe cannot
+	// reasonably cover the Apply — for `pack` that would mean running every
+	// pack's host requirement checks inside every `pix doctor`.
+	ProbeProvesSubset bool
 }
 
 // Options tunes the loop. The zero value is the normal one.
@@ -84,7 +105,7 @@ func Run(ctx context.Context, opts Options, steps ...Step) Outcome {
 			continue
 		}
 		switch {
-		case before.OK():
+		case before.OK() && !s.ProbeProvesSubset:
 			// Already proven. Touching it can only make things worse.
 			continue
 		case before.Effective() == health.StatusUnknown:

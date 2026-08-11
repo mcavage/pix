@@ -152,6 +152,10 @@ func setupSteps(cfg *config.Config, env hostenv.Env, opts Opts, out io.Writer) [
 		// actually wrote.
 		Probe: health.PackProbe{Resolve: func() string { return currentPackRoot() }},
 		Apply: packApply(env, opts, out),
+		// PackProbe proves the pack is active; the apply also runs the pack's
+		// required setup hooks, which the probe never looks at. See
+		// Step.ProbeProvesSubset.
+		ProbeProvesSubset: true,
 	}, {
 		Name:  "models",
 		Probe: ollamaModelsProbe{Env: env, Tags: localModelTags(cfg)},

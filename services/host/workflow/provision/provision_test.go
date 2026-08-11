@@ -101,6 +101,54 @@ func TestAlreadyReadyIsNeverMutated(t *testing.T) {
 	}
 }
 
+// TestProbeProvesSubsetStillApplies is the `pack` defect.
+//
+// PackProbe answers one question: is a pack active. The pack step's apply does
+// two things: adopt the pack, and run its REQUIRED setup hooks. So on any host
+// where the pack was already active, `before.OK()` skipped an apply that still
+// had every hook left to run — and `pix setup --pack X` reported ready having
+// checked none of that pack's integrations.
+//
+// That is the worst shape a setup command can have. A user re-running it to
+// repair a broken integration got a no-op and a green screen, and the output
+// gave them no way to tell the difference. Measured on the real pack: four
+// required steps, zero of them run.
+//
+// The rule the harness keeps is unchanged — do not touch what the probe PROVED.
+// This flag says the probe proves less than the apply does, so there is nothing
+// to skip on the strength of.
+func TestProbeProvesSubsetStillApplies(t *testing.T) {
+	applied := 0
+	step := Step{
+		Name:              "pack",
+		Probe:             readyProbe{name: "pack"},
+		Apply:             func(context.Context) error { applied++; return nil },
+		ProbeProvesSubset: true,
+	}
+	o := Run(context.Background(), Options{}, step)
+	if applied != 1 {
+		t.Errorf("apply ran %d times, want 1: a probe that proves a SUBSET of its apply cannot authorize skipping it", applied)
+	}
+	if !o.Verified("pack") {
+		t.Error("the step is still verified by the second check")
+	}
+}
+
+// TestProbeProvesSubsetIsOptIn: every other step keeps the original guarantee.
+// Without the flag an already-proven capability is never touched, which is what
+// stops setup reinstalling launchd or re-pulling models on every run.
+func TestProbeProvesSubsetIsOptIn(t *testing.T) {
+	applied := 0
+	step := Step{
+		Name:  "launchd",
+		Probe: readyProbe{name: "launchd"},
+		Apply: func(context.Context) error { applied++; return nil },
+	}
+	if o := Run(context.Background(), Options{}, step); applied != 0 {
+		t.Errorf("apply ran %d times on an already-proven step, want 0 (Applied=%v)", applied, o.Applied)
+	}
+}
+
 // unknownProbe is a probe that could not reach its boundary — exactly the state a
 // real timeout produces, and the one answer provisioning must refuse to act on.
 type readyProbe struct{ name string }
