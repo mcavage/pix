@@ -1,18 +1,1 @@
-[
-  {
-    "id": "config-keys.top-level.surface",
-    "rationale": "google_workspace_account leaves the config surface. Pix ships no MCP servers and special-cases no vendor: Google Workspace is now an ordinary pack-declared server like any other, and a per-user value such as an account email travels as that integration's env_keys through op-refs.env. A core config key existing for one vendor's account was the last structural piece of the built-in Google Workspace support, and keeping it would have meant keeping the special case it fed. Removing it is the point of the change, not a side effect of it.",
-    "evidence": "docs/design/integrations-remediation.md (Phase 1). config.Config.GogAccount, SetGogAccount, config.GWServerName, config.GWInstallCmd, mcp.GogHardenedArgv and packinfo.Manifest.GogAccount are deleted in the same change; `pix config get google_workspace_account` now reports an unknown key, and workflow/provision.ConfigKeysHelp lists only the surviving keys. Covered by cmd/pix TestApplyConfigChange_GoogleWorkspaceAccountRetired (set AND unset must refuse, never silently no-op) and the config_get_test key table.",
-    "changes": [
-      "config-keys.top-level.surface"
-    ]
-  },
-  {
-    "id": "argv.op-run-wrapper.exact-grammar",
-    "rationale": "The op-run wrapper GRAMMAR is unchanged — `<op> run --no-masking --env-file=<refs> --` is still exactly what gets generated. What changed is where it is built: it moved out of McpRegistrar.ExecArgv into the exported mcp.OpRunWrap, because a second caller must now produce a byte-identical command. `pix doctor` runs each server's health probe through the same wrapper the gateway uses to spawn that server. That equality is the entire point of the remediation: the original defect was a credential that worked in the operator's terminal and not in the gateway's environment, so a probe that does not go through this wrapper proves nothing about the thing it claims to verify. Two copies of the grammar would let that gap reopen silently, so the rule now pins the shared function and additionally pins that the doctor path calls it.",
-    "evidence": "docs/design/integrations-remediation.md (Phase 3, decision R5). mcp.OpRunWrap in services/host/mcp/mcp.go is the sole definition; McpRegistrar.ExecArgv delegates to it, and workflow/doctor/mcp.go calls mcp.OpRunWrap(creds.OpPath, creds.OpRefsPath, s.Probe) for any server declaring credentials. The rule gained a second check pinning that call site. Covered by doctor TestClassifyMCPServer_ProbeRunsThroughTheSameOpRunWrapper (credentialed probes are wrapped; credential-free probes are never wrapped) and mcp TestExecArgv_CredentialFreeServerIsNeverWrapped.",
-    "changes": [
-      "argv.op-run-wrapper.exact-grammar"
-    ]
-  }
-]
+[]
