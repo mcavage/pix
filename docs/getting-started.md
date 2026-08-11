@@ -106,6 +106,36 @@ pix doctor                    # registered vs actually working
 See `docs/gworkspace.md` for the Workspace case worked through, and the
 `gworkspace` skill for its tools and the untrusted-content rule.
 
+## Common questions
+
+**Is Ollama required?** No. Without it, memory still works but *degraded*: recall
+falls back to FTS5 keyword search (no vector ranking) and automatic capture is
+off, because there is no watcher model to extract facts from. `/remember` is
+unaffected — it is an explicit store, not an extraction. `pix doctor` reports the
+`models` row as optional. Install Ollama and pull the two models to get the full
+loop; see `docs/memory.md`.
+
+**Can I still launch the image with sbx directly?** Yes, through the kit:
+
+```bash
+sbx run pix --kit "git+https://github.com/mcavage/pix.git#dir=pi-kit"
+```
+
+That is the supported consumer path and what `make run-published` runs. Note it
+is `sbx run pix` — the agent name from the kit, which pins the image version —
+not an image reference.
+
+What you give up by skipping `pix run` is everything the launcher does on the
+HOST: MCP servers registered from your config, the trusted host-state handed to
+the agent, memory autostarted, and the active pack's `bin/` wrappers and skills.
+A raw kit run gets you the sandbox and pi; it does not get you your integrations.
+
+**Do I need a provider API key?** Only if your inference is not already
+credentialed. On a host whose configured backends carry their own auth (a pack
+with an authenticated gateway, for example), `pix doctor` says `no provider key
+needed` and means it. Keys are added with `pix models add <provider>`, which is
+the one place a 1Password reference is solicited.
+
 ## Where to go next
 
 - `docs/reference.md`: the full capability reference, one section per verb.
