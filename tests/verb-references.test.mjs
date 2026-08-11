@@ -110,10 +110,12 @@ const NOT_A_VERB = new Set(["--help", "--version", "--all", "-h", "dir", "name",
 const RETIRED_ON_PURPOSE = [
 	{ file: "docs/reference.md", verb: "monitor", says: /was removed/ },
 	{ file: "docs/reference.md", verb: "load", says: /was removed/ },
+	// `state` grouped backup/restore/reset. All three went; only `reset` came
+	// back, and as a TOP-LEVEL verb, so the grouping noun stays dead.
+	{ file: "docs/reference.md", verb: "state", says: /is one of those removals/ },
 	{ file: "AGENTS.md", verb: "host", says: /DELETED|retired|PIX_RETIRED/ },
 	{ file: "AGENTS.md", verb: "gworkspace", says: /old|deleted|retired/ },
 	{ file: "AGENTS.md", verb: "loaded", says: /deleted it/ },
-	{ file: "docs/getting-started.md", verb: "reset", says: /^\s*no `pix reset`|there is no/ },
 ];
 
 test("every `pix <verb>` in a user- or agent-facing surface names a real verb", () => {

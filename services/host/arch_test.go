@@ -154,12 +154,18 @@ var pkgLayer = map[string]int{
 	// snapshot|restore` at root (memory_snapshot.go) — one sqlite file, not an
 	// archive format, and not this launcher package.
 	//
-	// workflow/reset (the launcher-side `pix reset`/`pix state reset` move-
-	// things-aside verb, 687 lines) is GONE too (U11r): ephemeral sandboxes plus
-	// setup/doctor do its job now, and recovering from a broken host is a manual,
-	// evidence-first walk (`pix doctor` -> `pix config path`/`pix status --json`
-	// -> `pix setup`), never an automated wipe. Both surfaces answer with the
-	// standard PIX_RETIRED notice (retired.go); nothing imports the package.
+	// workflow/reset is `pix reset`, BACK after U11r cut it: the manual,
+	// evidence-first walk that replaced it (`pix doctor` -> `pix config path` ->
+	// move things aside by hand -> `pix setup`) is the right RECOVERY story but
+	// was never a clean-slate story, and "start over" is a thing users ask for
+	// on its own. What U11r was actually right about is preserved in the shape,
+	// not the absence: nothing durable is hard-deleted, and the sandbox half is
+	// an INJECTED sweep (reset.Sweep) wired to `pix rm --all` by cmd/pix, so the
+	// L3-to-L3 import this file forbids never happens AND reset cannot become a
+	// second bulk force-removal seam beside the one explicitly-named one.
+	//
+	// `pix state reset` did NOT come back with it: `state` was a grouping noun
+	// for backup/restore/reset, and two of those three are still gone.
 	//
 	// slack (the OAuth/credential/MCP-registration workflow, plus the slackoauth
 	// L1 capability underneath it) was externalized in W2/U02a — see
@@ -189,6 +195,7 @@ var pkgLayer = map[string]int{
 	// health (L2) and the applies for the three things setup installs, and owns
 	// no domain knowledge of its own.
 	"workflow/provision": layerWorkflow,
+	"workflow/reset":     layerWorkflow,
 
 	// L4 — the command layer.
 	"cmd/pix": layerCommand,

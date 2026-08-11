@@ -19,6 +19,7 @@ CLI reference of its own.
 | `status` / `ls` / `rm` | read-only control panel; list and remove `pix-*` sandboxes | §9 |
 | `doctor` | probe host + sandbox health and print exact fixes | §9 |
 | `setup` | the guided host+agent setup path (keys, memory, pack, identity) | `docs/design/onboarding.md` |
+| `reset` | start over: config, data and runtime state moved aside, sandboxes removed | §9 |
 | `serve` | the long-running host services (memory :11435) | `docs/design/serve-lifecycle.md` |
 | `memory` (`mem`) | recall/remember/forget/learnings/stats from the host | §2, `docs/memory.md` |
 | `pack` | the portable capability context: ls/show/use/rm (no authoring verb, edit `pack.toml`/`skills/` by hand) | §5, `docs/design/packs-v2.md` |
@@ -33,12 +34,10 @@ CLI reference of its own.
 Removed verbs are simply gone: pix has no released users to keep a recovery
 path for, so a deleted surface gets the ordinary unknown-command answer rather
 than a curated migration notice. The live verb set is whatever `pix help --all`
-lists. Note one behavior that did NOT move somewhere else: `reset`/`state
-reset` used to move state aside as a reversible clean-slate, and nothing
-replaces it. Ephemeral sandboxes plus `setup`/`doctor` do that job now, so
-recovery is manual and evidence-first: run `doctor` first, back up whatever
-`config path` / `status --json` show, then `setup`. There is no automated
-wipe.
+lists. `pix state <backup|restore|reset>` is one of those removals and is not
+coming back: `reset` returned as a top-level verb (§9), and the archive format
+`backup`/`restore` spoke collapsed into `pix-host memory snapshot|restore`,
+which is one sqlite file rather than an archive.
 
 ## 1. What pix is
 
@@ -448,6 +447,49 @@ to exit 3 (`sbxAwareFail` in `cmd/pix/root.go`, `mcpFailed` in
 (`health.SbxInstallFix`) doctor, ls, and rm all quote verbatim, never a
 second paraphrase of "go install the CLI" that can drift out of sync with the
 first.
+
+### Starting over: `pix reset`
+
+`doctor` fixes a host. `reset` abandons one. It is the "I want to be back where
+I started" verb, and it is **reversible**: three directories are renamed to a
+timestamped `<path>.bak-<unixts>` sibling, and renaming one back is a complete
+undo.
+
+| moved aside | holds |
+| --- | --- |
+| `~/.config/pix` | `config.toml`, `op-refs.env`, `pack-trust.json` |
+| `~/.local/share/pix` | the memory store, adopted packs, personal context |
+| `~/.local/state/pix` | daemon pid/lock/log, sandbox leases, **`pix task` checkouts** |
+
+That last row is why `reset` contains no delete at all. The state dir looks like
+pure ephemera and is not: `state/pix/tasks/<repo>/co/<name>` holds real git
+checkouts, which can carry uncommitted work. A curated "these files are safe to
+delete" list would have to be re-audited every time something new starts writing
+under the state dir; a rename cannot eat anything, whatever ends up there.
+
+Sandboxes are removed the same way `pix rm --all` removes them (non-forced,
+each needing a kernel-verified zero-reference proof), because `reset` literally
+calls it. There is no bulk force path. The MCP servers the (now moved-aside)
+config declared are unregistered from the sbx gateway to match.
+
+Left alone, deliberately: your **provider keys** (`sbx secret` / 1Password) and
+your git repos. Re-entering keys is friction with no upside here.
+
+```bash
+pix reset                    # the whole stack, after a [y/N] confirmation
+pix reset --keep-memory      # everything except the captured-memory store
+pix reset --keep-sandboxes   # host state only; leave the pix-* boxes running
+pix reset --yes              # no prompt (required on a non-interactive terminal)
+```
+
+Two refusals are load-bearing. Without `--yes`, a non-interactive terminal is
+refused outright (exit 2, nothing touched) rather than reset by a script that
+did not mean it. And a `pix-host serve` that cannot be proven **down** blocks
+the data-dir move, because renaming a live sqlite writer's directory splits the
+db from its wal; `--force` overrides that one and deliberately does not
+override the state-dir move, since taking a live daemon's pidfile away orphans
+it from `pix serve stop`. A daemon that was running is restarted on the clean
+slate. Afterwards: `pix setup`.
 
 ## 10. Your first hour
 

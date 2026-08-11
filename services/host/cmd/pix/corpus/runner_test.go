@@ -307,11 +307,12 @@ var dangerousVerbs = map[string]bool{
 // groupedDangerousSubcommands maps a "grouping" verb (one whose subcommands
 // were once dangerous flat aliases, e.g. `pix state reset` ran the exact same
 // mutation as the top-level `pix reset`) to the set of its OWN subcommands
-// that stay classified as dangerous. reset/backup/restore are RETIRED now
-// (PIX_RETIRED, no side effect at all — see retired.go), but the set keeps
-// them: a corpus shard for a retired name is pointless regardless, and this
-// stays the one place that answers "was this ever a mutation" without a
-// second lookup at the retirement table. A grouping verb itself is safe to
+// that stay classified as dangerous. The `state` group itself is GONE — the
+// top-level `pix reset` came back but the grouping noun did not, and
+// backup/restore stayed deleted — yet the entry stays: a corpus shard for a
+// name that does not dispatch is pointless regardless, and this stays the one
+// place that answers "was this ever a mutation" without a second lookup
+// somewhere else. A grouping verb itself is safe to
 // invoke bare or with -h (it only prints group usage), so it is deliberately
 // absent from dangerousVerbs; only once the subcommand token resolves to a
 // dangerous one does the same safe-tail rule apply, starting one position
