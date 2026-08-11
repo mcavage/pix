@@ -107,7 +107,39 @@ func Probes(cfg *config.Config, o Options) []health.Probe {
 			Enabled: config.ServiceEnabled(cfg, "memory")},
 		health.LaunchdProbe{Bin: o.LaunchctlBin, Label: orElse(o.LaunchdLabel, service.LaunchdLabel), UID: uid, Args: o.LaunchctlArgs},
 		mcpProbe(cfg, o, sbxBin),
+		health.DaemonProbe{Servers: DaemonServers(cfg)},
 	}
+}
+
+// DaemonServers resolves the active pack's supervised daemons into the shape
+// health.DaemonProbe checks. Pure data from the manifest, like the MCP
+// classification beside it — a pack that declares none yields none, and a pack
+// that will not load yields none rather than a guess.
+func DaemonServers(cfg *config.Config) []health.DaemonServer {
+	if cfg == nil {
+		return nil
+	}
+	var out []health.DaemonServer
+	for _, root := range packinfo.ActivePackRoots(cfg, "") {
+		p, err := packinfo.LoadPack(root)
+		if err != nil {
+			continue
+		}
+		for _, svc := range p.Manifest.Services {
+			if svc.Runtime != packinfo.ServiceRuntimeDaemon || svc.Activation != "always" {
+				continue
+			}
+			out = append(out, health.DaemonServer{
+				Name: svc.Name, Listen: svc.Listen, Port: svc.Port, Health: svc.Health,
+				Unpinned: svc.Command != "",
+				// The supervisor owns the daemon's lifecycle, so the honest
+				// repair is to restart the thing that supervises it — not to
+				// go poking at the daemon directly.
+				Fix: "pix serve stop && pix serve   # the supervisor restarts a pack daemon",
+			})
+		}
+	}
+	return out
 }
 
 // mcpProbe assembles the MCP probe from the one thing only this layer can

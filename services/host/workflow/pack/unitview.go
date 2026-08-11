@@ -28,9 +28,16 @@ type AcceptedService struct {
 	Port       int      // 0 = no listener declared
 	Listen     string   // loopback only; "" when Port is 0
 	Health     string   // "tcp", an HTTP path, or ""
+	// Runtime distinguishes how the supervisor must LAUNCH this unit:
+	// "go-plugin" (handshake + dispense) or "daemon" (exec + probe its port).
+	Runtime string
+	// Command is a bare binary name on PATH, set only for a daemon identified
+	// that way instead of by a pinned Path. Exactly one of Path/Command is set.
+	Command string
 }
 
-// AcceptedGoPluginServices returns the go-plugin [[services]] views of p, ONLY
+// AcceptedGoPluginServices returns the SUPERVISABLE [[services]] views of p —
+// go-plugin and daemon runtimes, each tagged with which it is — ONLY
 // after proving its current host-exec surface is the exact one accepted at the
 // Tier-1 gate. Every other answer fails closed: a re-validation failure, an
 // unreadable store, an unaccepted pack, a stale fingerprint. Container services
@@ -56,8 +63,21 @@ func AcceptedGoPluginServices(p *packinfo.Info) ([]AcceptedService, error) {
 	}
 	var out []AcceptedService
 	for _, svc := range bom.Services { // normalized copies — the fingerprinted shape
-		if svc.Runtime != "go-plugin" {
-			continue // container: declaration-only, no runtime consumes it
+		if svc.Runtime == packinfo.ServiceRuntimeContainer {
+			continue // container: declaration-only, no runtime consumes it yet
+		}
+		// A daemon identified by a PATH command has no pack-relative file to
+		// resolve, and UnitSpec forbids an unpinned path — so it carries an
+		// empty Path and the supervisor resolves the command at launch.
+		if svc.Command != "" {
+			out = append(out, AcceptedService{
+				Name: svc.Name, Activation: svc.Activation, Runtime: svc.Runtime,
+				Command: svc.Command,
+				Argv:    append([]string(nil), svc.Argv...),
+				Env:     append([]string(nil), svc.Env...),
+				Port:    svc.Port, Listen: svc.Listen, Health: svc.Health,
+			})
+			continue
 		}
 		// Validated above; resolved absolute because UnitSpec requires that.
 		abs, aerr := filepath.Abs(filepath.Join(p.Root, svc.Path))
@@ -67,6 +87,7 @@ func AcceptedGoPluginServices(p *packinfo.Info) ([]AcceptedService, error) {
 		out = append(out, AcceptedService{
 			Name:       svc.Name,
 			Activation: svc.Activation,
+			Runtime:    svc.Runtime,
 			Path:       abs,
 			SHA:        svc.SHA,
 			Argv:       append([]string(nil), svc.Argv...),

@@ -483,6 +483,27 @@ func renderHostBoM(out io.Writer, b hostBoM) {
 		switch svc.Runtime {
 		case packinfo.ServiceRuntimeContainer:
 			fmt.Fprintf(out, "                       Runs a container on this Mac: %s\n", svc.Image)
+		case packinfo.ServiceRuntimeDaemon:
+			if svc.Command != "" {
+				// UNPINNED, said loudly. A daemon built from source on this
+				// machine has no SHA a shared manifest could carry, so the
+				// identity is "whatever is on PATH under this name". That is a
+				// genuinely weaker guarantee than every other host-exec facet
+				// here, and the screen is the only place a user can weigh it.
+				line := svc.Command
+				if len(svc.Argv) > 0 {
+					line += " " + strings.Join(svc.Argv, " ")
+				}
+				fmt.Fprintf(out, "                       Runs on this Mac: %s\n", line)
+				fmt.Fprintf(out, "                       UNPINNED — resolved on PATH at launch, so pix cannot verify which build this is\n")
+			} else {
+				line := svc.Path
+				if len(svc.Argv) > 0 {
+					line += " " + strings.Join(svc.Argv, " ")
+				}
+				fmt.Fprintf(out, "                       Runs on this Mac: %s\n", line)
+				fmt.Fprintf(out, "                       sha256:%s  [verified before every launch]\n", svc.SHA)
+			}
 		default:
 			line := svc.Path
 			if len(svc.Argv) > 0 {

@@ -267,6 +267,13 @@ func spawnChildren(cfg *config.Config, sup *supervisor, selfPath string, all []h
 	if mergeErr != nil {
 		log.Printf("serve: pack services: %v", mergeErr)
 	}
+	// Daemons first: a pack's daemon is what the SANDBOX reaches (snow-proxy on
+	// its loopback port), so a session that starts while it is still coming up
+	// gets connection-refused on its first query. Failures are logged, never
+	// fatal — one pack's broken daemon must not stop serve or its siblings.
+	if derr := sup.reconcileDaemons(selfPath, merged); derr != nil {
+		log.Printf("serve: pack daemons: %v", derr)
+	}
 	units, rerr := sup.reconcilePackUnits(selfPath, merged)
 	if rerr != nil {
 		log.Printf("serve: pack services: %v", rerr)

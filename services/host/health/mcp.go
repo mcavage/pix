@@ -458,6 +458,19 @@ func (p MCPProbe) checkAuth(ctx context.Context, bin, name string) (mcpAuth, str
 // Precedence: a verified gap dominates (it has an exact fix), then anything
 // unproven; only an all-clear reports ready.
 func (p MCPProbe) reduce(findings []mcpFinding) Result {
+	return reduceFindings(p.Name(), findings, len(p.Servers), "registered")
+}
+
+// reduceFindings turns per-item findings into the one Result a report shows.
+// Shared by the MCP and daemon probes: the precedence is the same question in
+// both cases — a VERIFIED gap dominates (it has an exact fix), then anything
+// unproven, then an all-clear — and having it once is what stops the two
+// reports disagreeing about what "not usable" counts as.
+//
+// total is the count of things the USER configured, which is not always
+// len(findings): the MCP probe appends informational findings for registrations
+// nobody configured, and those must not inflate the denominator.
+func reduceFindings(name string, findings []mcpFinding, total int, readyVerb string) Result {
 	var gaps, unknowns int
 	fix := ""
 	notes := make([]string, 0, len(findings))
@@ -483,10 +496,6 @@ func (p MCPProbe) reduce(findings []mcpFinding) Result {
 	// separator the renderer could split on also splits the notes themselves --
 	// which is exactly what turned 8 servers into 16 half-sentences.
 	ev := strings.Join(notes, "\n")
-	// Count only what the user CONFIGURED. Unmanaged extras appear in the
-	// evidence but must not inflate the denominator: "2 of 8 not usable" over a
-	// 6-server config claims six are fine when four are not.
-	total := len(p.Servers)
 	switch {
 	case gaps > 0:
 		// Report BOTH counts. Reporting only gaps hid the unknowns behind them,
@@ -497,13 +506,13 @@ func (p MCPProbe) reduce(findings []mcpFinding) Result {
 		if unknowns > 0 {
 			detail += fmt.Sprintf(", %d not checkable", unknowns)
 		}
-		return Result{Name: p.Name(), Status: StatusAbsent, Detail: detail, Fix: fix, Evidence: ev}
+		return Result{Name: name, Status: StatusAbsent, Detail: detail, Fix: fix, Evidence: ev}
 	case unknowns > 0:
-		return Result{Name: p.Name(), Status: StatusUnknown,
+		return Result{Name: name, Status: StatusUnknown,
 			Detail: fmt.Sprintf("%d of %d not checkable from here", unknowns, total), Evidence: ev}
 	}
-	return Result{Name: p.Name(), Status: StatusReady,
-		Detail: fmt.Sprintf("%d registered", total), Evidence: ev}
+	return Result{Name: name, Status: StatusReady,
+		Detail: fmt.Sprintf("%d %s", total, readyVerb), Evidence: ev}
 }
 
 func (p MCPProbe) serverNames() string {

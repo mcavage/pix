@@ -161,7 +161,7 @@ func TestProbes_CoverTheWholeHostSurface(t *testing.T) {
 	for _, p := range Probes(&config.Config{}, Options{}) {
 		names = append(names, p.Name())
 	}
-	want := []string{"sbx", "pack", "providers", "memory", "launchd", "mcp"}
+	want := []string{"sbx", "pack", "providers", "memory", "launchd", "mcp", "daemons"}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("probe set = %v, want %v", names, want)
 	}

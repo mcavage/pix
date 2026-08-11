@@ -28,6 +28,27 @@ import (
 // (trust.go renders container identity differently in the BoM).
 const ServiceRuntimeContainer = "container"
 
+// ServiceRuntimeDaemon is a long-running HOST process the supervisor owns: it
+// stages and launches it, health-probes the port it declares, and restarts it
+// under the same budgets every other unit gets.
+//
+// It exists because the go-plugin runtime is the wrong shape for a daemon that
+// already speaks a protocol. `snow-proxy` is the motivating case: the sandbox
+// reaches it over HTTP on a loopback port, so making it a go-plugin would mean
+// replacing that transport with net/rpc to gain a handshake nothing needs. The
+// Port/Listen/Health fields on Service were designed for exactly this and had
+// no runtime that read them.
+//
+// Unlike go-plugin, a daemon may be identified by a bare COMMAND resolved on
+// PATH instead of a repo-relative pinned executable. That is a weaker identity
+// and it is admitted deliberately: a daemon built from source on the user's own
+// machine has no SHA a git-shared manifest could know, and the alternative was
+// what snow does today — a shell installer, a LaunchAgent, and no supervision,
+// pin, health probe or doctor row at all. An unpinned daemon is rendered as
+// UNPINNED on the Tier-1 consent screen, so the weaker guarantee is a thing the
+// user sees rather than a thing the schema quietly permits.
+const ServiceRuntimeDaemon = "daemon"
+
 // serviceRules is the whole [[services]] vocabulary — closed sets, reserved
 // names/ports, value shapes — as ONE immutable package value, since they are
 // only ever read together. container is a DECLARATION-only runtime (validated,
@@ -44,7 +65,7 @@ var serviceRules = struct {
 	shaHex        *regexp.Regexp
 	networkHost   *regexp.Regexp
 }{
-	runtimes:    map[string]bool{"go-plugin": true, ServiceRuntimeContainer: true},
+	runtimes:    map[string]bool{"go-plugin": true, ServiceRuntimeContainer: true, ServiceRuntimeDaemon: true},
 	activations: map[string]bool{"always": true, "on-demand": true},
 	reservedPorts: map[int]string{
 		11435: "pix-host memory",
@@ -73,10 +94,15 @@ type Service struct {
 	// go-plugin identity: repo-relative executable + pinned sha256 of its bytes,
 	// verified at staging/launch. The file need not exist at declaration time —
 	// the pin IS the identity.
-	Path  string   `toml:"path,omitempty" json:"path,omitempty"`
-	SHA   string   `toml:"sha,omitempty" json:"sha,omitempty"`
-	Image string   `toml:"image,omitempty" json:"image,omitempty"` // container identity: digest-pinned OCI ref
-	Argv  []string `toml:"argv,omitempty" json:"argv,omitempty"`   // launch arguments, uninterpreted
+	Path  string `toml:"path,omitempty" json:"path,omitempty"`
+	SHA   string `toml:"sha,omitempty" json:"sha,omitempty"`
+	Image string `toml:"image,omitempty" json:"image,omitempty"` // container identity: digest-pinned OCI ref
+	// Command is a DAEMON identified by a bare binary name on PATH instead of a
+	// pinned repo-relative Path. Additive with omitempty, so no pack using the
+	// pinned form re-gates. See ServiceRuntimeDaemon for why the weaker identity
+	// is admitted, and renderHostBoM for how loudly it is disclosed.
+	Command string   `toml:"command,omitempty" json:"command,omitempty"`
+	Argv    []string `toml:"argv,omitempty" json:"argv,omitempty"` // launch arguments, uninterpreted
 	// Env is the allowlist of environment REFERENCE NAMES the unit receives
 	// (resolved elsewhere, e.g. op-refs.env). Names only, never values.
 	Env []string `toml:"env,omitempty" json:"env,omitempty"`
@@ -183,7 +209,45 @@ func ValidateServices(root string, m *Manifest) error {
 			if s.Image == "" || at < 1 || !serviceRules.shaHex.MatchString(s.Image[at+len("@sha256:"):]) {
 				return bad("runtime container requires a digest-pinned image (repo@sha256:<64 hex>), got %q", s.Image)
 			}
-		} else { // go-plugin: the only other member of the closed set
+		} else if s.Runtime == ServiceRuntimeDaemon {
+			if s.Image != "" {
+				return bad("runtime daemon must not set image (image identifies a container runtime)")
+			}
+			// EITHER a pinned repo-relative executable, OR a bare command on
+			// PATH — never both, and never neither.
+			hasPath, hasCmd := s.Path != "", s.Command != ""
+			switch {
+			case hasPath == hasCmd:
+				return bad("runtime daemon requires exactly one of path (repo-relative, sha-pinned) or command (a bare name on PATH)")
+			case hasPath:
+				if err := validateRepoRelativePath(root, s.Path); err != nil {
+					return bad("%v", err)
+				}
+				if !serviceRules.shaHex.MatchString(s.SHA) {
+					return bad("runtime daemon with a path requires a full sha256 hex pin in sha")
+				}
+			case hasCmd:
+				if s.SHA != "" {
+					return bad("runtime daemon with a command must not set sha: the binary is resolved on PATH at launch, so a pin recorded here would describe a file this manifest never reads")
+				}
+				if !SafeArtifactName(s.Command) {
+					return bad("runtime daemon command %q must be a bare binary name resolved on PATH", s.Command)
+				}
+			}
+			// A daemon with no health check is a process nothing can evict. The
+			// supervisor's whole value over a LaunchAgent is that "the process
+			// is up" is not accepted as health, so the check is required rather
+			// than optional.
+			if s.Port == 0 {
+				return bad("runtime daemon requires a port (the loopback port it listens on), so the supervisor can probe it")
+			}
+			if s.Health == "" {
+				return bad(`runtime daemon requires health: "tcp", or an HTTP path like "/healthz"`)
+			}
+			if s.Health != "tcp" && !strings.HasPrefix(s.Health, "/") {
+				return bad(`runtime daemon health must be "tcp" or an absolute HTTP path (got %q)`, s.Health)
+			}
+		} else { // go-plugin: the remaining member of the closed set
 			if s.Image != "" {
 				return bad("runtime go-plugin must not set image (image identifies a container runtime)")
 			}

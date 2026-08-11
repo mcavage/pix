@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 
+	"pix/host/packinfo"
 	"pix/host/plugin"
 	"pix/host/supervise"
 	"pix/host/workflow/pack"
@@ -84,6 +85,51 @@ func packUnitSpec(v pack.AcceptedService, kind string) (supervise.UnitSpec, erro
 		append([]string(nil), v.Argv...), append([]string(nil), v.Env...))
 }
 
+// reconcileDaemons starts every accepted `runtime = "daemon"` view the tree is
+// not already supervising.
+//
+// It is ADD-only on purpose, unlike reconcilePackUnits' full desired-state diff.
+// A daemon binds a port, so removing and re-adding one on any manifest change
+// means a window where the sandbox's wrapper gets connection-refused — and the
+// tree already restarts a daemon whose health fails, which covers the case that
+// actually matters. Changing a daemon's declaration re-gates the pack (its
+// [[services]] entry is fingerprinted), and takes effect on the next `serve`.
+func (s *supervisor) reconcileDaemons(selfPath string, views []pack.AcceptedService) error {
+	tree := s.ensure(selfPath)
+	var errs []error
+	for _, v := range views {
+		if v.Runtime != packinfo.ServiceRuntimeDaemon || v.Activation != "always" {
+			continue
+		}
+		if tree.Has(v.Name) {
+			continue
+		}
+		unit, err := supervise.NewExternalUnit(v.Name, packinfo.ServiceRuntimeDaemon, v.Path, v.SHA,
+			append([]string(nil), v.Argv...), append([]string(nil), v.Env...))
+		if err != nil {
+			// A PATH-resolved daemon has no path or pin, which NewExternalUnit
+			// refuses by design (it exists to stop an unpinned EXECUTABLE path).
+			// Build the spec directly for that case; the weaker identity is
+			// disclosed on the consent screen rather than smuggled past a guard.
+			if v.Command == "" {
+				errs = append(errs, err)
+				continue
+			}
+			unit = supervise.UnitSpec{
+				Name: v.Name, Kind: packinfo.ServiceRuntimeDaemon, SelfExec: false,
+				Argv: append([]string(nil), v.Argv...), EnvAllow: append([]string(nil), v.Env...),
+			}
+		}
+		if derr := tree.AddDaemon(supervise.DaemonSpec{
+			Unit: unit, Command: v.Command,
+			Listen: v.Listen, Port: v.Port, Health: v.Health,
+		}); derr != nil {
+			errs = append(errs, fmt.Errorf("daemon %s: %w", v.Name, derr))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // reconcilePackUnits diffs views against s.packUnits (units THIS supervisor
 // previously admitted from a pack, never a built-in slot): ADD a new view,
 // REMOVE one dropped or gone on-demand, RESTART (remove+add) a changed spec.
@@ -98,6 +144,12 @@ func (s *supervisor) reconcilePackUnits(selfPath string, views []pack.AcceptedSe
 	var errs []error
 	for _, v := range views {
 		if v.Activation != "always" {
+			continue
+		}
+		// A DAEMON is launched and probed, never dispensed, so it does not go
+		// through packUnitSpec's plugin-kind check at all: there is no capability
+		// to dispense. It is reconciled separately below.
+		if v.Runtime == packinfo.ServiceRuntimeDaemon {
 			continue
 		}
 		// "memory" is the only dispensable capability a pack unit can be today.

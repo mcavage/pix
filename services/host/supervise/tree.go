@@ -208,6 +208,66 @@ func (t *Tree) Add(spec UnitSpec, health HealthFunc) (*Holder, error) {
 	}
 }
 
+// Has reports whether a unit of this name is already supervised. It exists for
+// an ADD-only reconciler: a daemon binds a port, so re-adding one that is
+// already serving would fight it for the bind.
+func (t *Tree) Has(name string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	_, ok := t.units[name]
+	return ok
+}
+
+// AddDaemon supervises a long-running host process that speaks its own protocol
+// on a loopback port, rather than go-plugin's RPC. It shares every guarantee Add
+// gives — one child supervisor per unit, its own restart accounting and backoff,
+// a permanent failure that stops this subtree without touching its siblings, and
+// abandonment when a unit never comes up — because those are the reasons to be in
+// this tree at all. What it does not share is a dispensed client, so there is no
+// Holder to return: callers reach a daemon over its port, exactly as the sandbox
+// already does.
+func (t *Tree) AddDaemon(spec DaemonSpec) error {
+	if err := spec.Unit.Validate(); err != nil {
+		return err
+	}
+	name := spec.Unit.Name
+	t.mu.Lock()
+	if !t.started {
+		t.mu.Unlock()
+		return fmt.Errorf("supervise: tree not started")
+	}
+	if _, dup := t.units[name]; dup {
+		t.mu.Unlock()
+		return fmt.Errorf("supervise: unit %q already supervised", name)
+	}
+	t.units[name] = &UnitStatus{Name: name, Kind: spec.Unit.Kind, Identity: spec.Unit.identity(), State: UnitStarting, Since: time.Now()}
+	t.mu.Unlock()
+
+	svc := &DaemonService{spec: spec, tree: t, ready: make(chan error, 1)}
+	child := suture.New("unit."+name, t.spec(name))
+	child.Add(svc)
+	token := t.root.Add(child)
+	t.mu.Lock()
+	t.units[name].token = token
+	t.mu.Unlock()
+
+	// No handshake for a daemon; the wait is binding a port and answering a
+	// probe. Doubled because waitHealthy already spends up to HealthTimeout
+	// polling, and this outer wait must not fire while that is still legitimately
+	// in progress.
+	wait := 2 * t.budgets.HealthTimeout
+	select {
+	case err := <-svc.ready:
+		if err == nil {
+			return nil
+		}
+		return t.abandon(name, token, err)
+	case <-time.After(wait):
+		return t.abandon(name, token,
+			fmt.Errorf("daemon %s did not become healthy within %v", name, wait))
+	}
+}
+
 // abandon takes a unit that never came up back OUT of the tree — without it the child supervisor keeps restarting a unit whose caller already gave up forever.
 func (t *Tree) abandon(name string, token suture.ServiceToken, cause error) error {
 	if err := t.root.RemoveAndWait(token, t.budgets.Stop); err != nil {
