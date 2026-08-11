@@ -404,6 +404,48 @@ gm-pix-pack (b5a6594) and 1 in pix-integrations (89e3f1d). `origin/main` is
 written rather than those shas so the command stays correct if anything lands
 first.
 
+## Round 6 — onboarding, read as a new user
+
+Mark ran `pix reset` and then `pix setup --pack` deliberately, to see what his
+peers will get. Three defects only a new user could hit:
+
+- **Slack setup was unreachable for everyone.** `adoptForSetup` passed
+  `interactive=false` as a constant, so any remediation needing a terminal was
+  refused on a fully interactive run — and the refusal said to drop
+  `--yes/--non-interactive`, flags he had never passed. A new user has no Slack
+  grant by definition, so the step could never pass and its fix could never run.
+- **The consent screen was 70 lines.** "My god this is an overwhelming wall of
+  text." Not cosmetic: a consent screen nobody reads is not consent. Most of the
+  length was repetition, and grouping by integration scattered the one question a
+  user has. It is a summary plus one flat "runs on this Mac" list now, with `d`
+  and `--details` for the rest. The rule that kept it honest — everything the
+  FINGERPRINT covers stays visible by DEFAULT — is a test, and it caught two of
+  my own omissions mid-change.
+- **The guidance for a credential was never where it was needed.** The pack
+  authors it; it rendered only on the adoption screen. It prints at the prompt
+  now. And with no `op` installed, the solicitor returned SILENTLY, then setup
+  failed pointing at `pix secret set`, which also needs `op`.
+
+The pack gained the three prerequisites that were missing entirely (Homebrew, a
+RUNNING Docker daemon, and the 1Password CLI as distinct from the app) plus a
+day-one README section. Deliberately prose, not checks: a browser sign-in cannot
+be verified without credentials pix should not hold.
+
+### Worth doing next: deliver host state the way output styles do
+
+`[pix-trusted-host-state]` is appended to the generated prompt STRING, so pi
+renders it and a new user's first screen is JSON. It is hidden now by a
+build-time pi patch (`apply-hide-host-state.mjs`), which works and is tested —
+but it is a patch on someone else's renderer.
+
+The output-styles extension landed in this round shows the right shape: a
+`before_agent_start` message with `display: false`, which is pi's own supported
+way to send the model context the user never sees. Moving host state to that
+mechanism would delete the patch and remove the drift risk entirely. It is a real
+change to the trust path (`InjectTrustedHostState` is currently the ENTIRE
+mechanism by which host facts reach the fenced agent), so it wants its own
+review rather than being folded into a UI fix.
+
 ## Still open — deliberately, and recorded rather than hidden
 
 | what | why it is acceptable for now |
