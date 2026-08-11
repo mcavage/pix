@@ -94,7 +94,7 @@ func TestRunPackSetup_DeclarativeRequireWithoutApplyReportsWhatIsMissing(t *test
 		},
 	}}
 	var out bytes.Buffer
-	err := RunPackSetup(env, &out, root, nil, true)
+	err := RunPackSetup(env, &out, root, nil, true, nil)
 	if err == nil {
 		t.Fatalf("a requirement with no remediation must fail, not report success; transcript:\n%s", out.String())
 	}
@@ -124,7 +124,7 @@ func TestRunPackSetup_DeclarativeRequireSatisfiedNeedsNoApply(t *testing.T) {
 		RunInteractiveFn: func(string, ...string) error { t.Fatal("a satisfied requirement must run nothing"); return nil },
 	}}
 	var out bytes.Buffer
-	if err := RunPackSetup(env, &out, root, nil, true); err != nil {
+	if err := RunPackSetup(env, &out, root, nil, true, nil); err != nil {
 		t.Fatalf("a satisfied declarative step must pass: %v\n%s", err, out.String())
 	}
 	if !strings.Contains(out.String(), "ready") {
@@ -162,7 +162,7 @@ func TestRunPackSetup_DeclarativeApplyRunsThenRechecks(t *testing.T) {
 		},
 	}}
 	var out bytes.Buffer
-	if err := RunPackSetup(env, &out, root, nil, true); err != nil {
+	if err := RunPackSetup(env, &out, root, nil, true, nil); err != nil {
 		t.Fatalf("RunPackSetup: %v\n%s", err, out.String())
 	}
 	if applies != 1 {
@@ -194,7 +194,7 @@ func TestRunPackSetup_DeclarativeOpRefIsNotFixableByAnApply(t *testing.T) {
 		IsFileFn:         func(string) bool { return false },
 		RunInteractiveFn: func(string, ...string) error { t.Fatal("an op-ref is not fixable by an apply"); return nil },
 	}}
-	err := RunPackSetup(env, &bytes.Buffer{}, root, nil, true)
+	err := RunPackSetup(env, &bytes.Buffer{}, root, nil, true, nil)
 	if err == nil {
 		t.Fatal("a missing op:// reference must fail the step")
 	}
@@ -249,7 +249,7 @@ func TestRunRequiredPackSetupProbesAppliesAndReprobes(t *testing.T) {
 		return nil
 	}}}
 	var out bytes.Buffer
-	if err := RunPackSetup(env, &out, root, nil, true); err != nil {
+	if err := RunPackSetup(env, &out, root, nil, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	if checks != 2 || applies != 1 {
@@ -274,7 +274,7 @@ func TestRunPackSetupRejectsHookChangedAfterAcceptance(t *testing.T) {
 		probes++
 		return "", false, nil
 	}, RunInteractiveFn: func(string, ...string) error { applies++; return nil }}}
-	err := RunPackSetup(env, &bytes.Buffer{}, root, nil, true)
+	err := RunPackSetup(env, &bytes.Buffer{}, root, nil, true, nil)
 	if err == nil || !strings.Contains(err.Error(), "changed since acceptance") {
 		t.Fatalf("mutated hook error = %v", err)
 	}
@@ -311,7 +311,7 @@ func TestRunPackSetupExecutesSnapshotWhenSourceChangesAfterCheck(t *testing.T) {
 		ready = true
 		return nil
 	}}}
-	if err := RunPackSetup(env, &bytes.Buffer{}, root, nil, true); err != nil {
+	if err := RunPackSetup(env, &bytes.Buffer{}, root, nil, true, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -329,7 +329,7 @@ func TestRunRequiredPackSetupSkipsOptionalSteps(t *testing.T) {
 		}
 		return "", false, fmt.Errorf("nothing else is available in this fixture")
 	}, RunInteractiveFn: func(string, ...string) error { t.Fatal("optional hook was run"); return nil }}}
-	if err := RunPackSetup(env, &bytes.Buffer{}, root, nil, true); err != nil {
+	if err := RunPackSetup(env, &bytes.Buffer{}, root, nil, true, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -343,13 +343,13 @@ func TestRunPackSetupRunsRequestedOptionalStep(t *testing.T) {
 		}
 		return "", false, fmt.Errorf("not ready")
 	}, RunInteractiveFn: func(string, ...string) error { ready = true; return nil }}}
-	if err := RunPackSetup(env, &bytes.Buffer{}, root, []string{"account"}, true); err != nil {
+	if err := RunPackSetup(env, &bytes.Buffer{}, root, []string{"account"}, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !ready {
 		t.Fatal("requested optional setup hook was not run")
 	}
-	if err := RunPackSetup(env, &bytes.Buffer{}, root, []string{"missing"}, true); err == nil {
+	if err := RunPackSetup(env, &bytes.Buffer{}, root, []string{"missing"}, true, nil); err == nil {
 		t.Fatal("unknown requested setup id must fail")
 	}
 }
@@ -364,7 +364,7 @@ func TestRunPackSetupRejectsUnknownBeforeAnyHook(t *testing.T) {
 		probes++
 		return "", false, nil
 	}, RunInteractiveFn: func(string, ...string) error { applies++; return nil }}}
-	if err := RunPackSetup(env, &bytes.Buffer{}, root, []string{"typo"}, true); err == nil {
+	if err := RunPackSetup(env, &bytes.Buffer{}, root, []string{"typo"}, true, nil); err == nil {
 		t.Fatal("unknown hook should fail")
 	}
 	if probes != 0 || applies != 0 {
@@ -376,7 +376,7 @@ func TestRunPackSetupNonInteractiveNeverAppliesUnreadyHook(t *testing.T) {
 	root := writeSetupPack(t, true)
 	applies := 0
 	env := hostenv.Env{System: &systest.Fake{RunTimedFn: func(string, ...string) (string, bool, error) { return "", false, fmt.Errorf("not ready") }, RunInteractiveFn: func(string, ...string) error { applies++; return nil }}}
-	err := RunPackSetup(env, &bytes.Buffer{}, root, nil, false)
+	err := RunPackSetup(env, &bytes.Buffer{}, root, nil, false, nil)
 	if err == nil || !strings.Contains(err.Error(), "interactive authorization") {
 		t.Fatalf("error = %v", err)
 	}
@@ -489,7 +489,7 @@ func TestPackSetupPlanRunsOptionalHookOnlyForItsOwner(t *testing.T) {
 	}}}
 	var out bytes.Buffer
 	for _, root := range []string{first, second} {
-		if err := RunPackSetup(env, &out, root, plan[root], true); err != nil {
+		if err := RunPackSetup(env, &out, root, plan[root], true, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -551,7 +551,7 @@ func TestCheckRequires_ReportsEveryUnmetRequirement(t *testing.T) {
 		{Kind: "op-ref", Env: "ACME_TOKEN", Hint: "Make it in 1Password."},
 		{Kind: "bin", Name: "acme-cli", Install: "brew install acme"},
 	}}
-	ok, why, _ := checkRequires(env, step)
+	ok, why, _ := checkRequires(env, step, nil)
 	if ok {
 		t.Fatal("both requirements are unmet; checkRequires said ok")
 	}

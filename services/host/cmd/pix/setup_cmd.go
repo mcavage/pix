@@ -13,6 +13,7 @@ import (
 	"os"
 
 	"pix/host/cli"
+	"pix/host/mcp"
 	"pix/host/sandbox"
 	"pix/host/sys"
 	"pix/host/workflow/launch"
@@ -204,9 +205,29 @@ func runSetupHandoff(dir, name string, state sandbox.State, out io.Writer, runFn
 	return runFn(kickoffArgs())
 }
 
+// setupProbeWrap makes a pack's setup probe run the way the MCP gateway will
+// actually spawn the server: through `op run --env-file`, with the same argv
+// grammar registration uses. Without it, setup verified a command in a shell
+// that already had what it needed and reported ready for an integration the
+// gateway could not start.
+//
+// Returns argv unchanged when 1Password is not configured, which is exactly what
+// OpRunWrap does and a legitimate no-credential host.
+func setupProbeWrap(argv []string) []string {
+	env := defaultShellEnv()
+	creds := mcpCredentials(env)
+	return mcp.OpRunWrap(creds.OpPath, creds.OpRefsPath, argv)
+}
+
 // init supplies the composition provisioning declares but cannot perform.
 func init() {
 	provision.DefaultEnv = defaultShellEnv
 	provision.HostBinary = hostBinaryResolver
-	provision.Injected = provision.Composition{Register: registerServers, PackApply: pack.SetupAdopter(registerServers)}
+	// setupProbeWrap is the third caller of the one op-run grammar, alongside
+	// registration and doctor. It is supplied HERE because the composition root
+	// is the only place allowed to know both `pack` and `mcp`.
+	provision.Injected = provision.Composition{
+		Register:  registerServers,
+		PackApply: pack.SetupAdopter(registerServers, setupProbeWrap),
+	}
 }

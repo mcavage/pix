@@ -18,7 +18,12 @@ import (
 // through the normal Tier-1 trust gate. Every step is resumable: its bounded
 // check runs first, apply runs only when check fails, and the same check must
 // pass afterward before Pix reports readiness.
-func RunPackSetup(env hostenv.Env, out io.Writer, root string, requested []string, interactive bool) error {
+// ProbeWrapFn wraps a probe's argv the way the MCP gateway will actually spawn
+// the server it belongs to. It is a parameter rather than a package global so a
+// new caller cannot forget it and silently reintroduce the bug below.
+type ProbeWrapFn func(argv []string) []string
+
+func RunPackSetup(env hostenv.Env, out io.Writer, root string, requested []string, interactive bool, wrap ProbeWrapFn) error {
 	p, err := packinfo.LoadPack(root)
 	if err != nil {
 		return err
@@ -54,7 +59,17 @@ func RunPackSetup(env hostenv.Env, out io.Writer, root string, requested []strin
 		}
 		apply := func() error { return env.RunInteractive(snapshots[step.ID], step.ApplyArgs...) }
 		if step.Declarative() {
-			check = func() (bool, string, bool) { return checkRequires(env, step) }
+			// Only a step whose integration DECLARES credentials is wrapped, which
+			// is the same rule mcp.ExecArgv applies and for the same reason: `op
+			// run --env-file` resolves EVERY reference in the file, so wrapping a
+			// credential-free probe would make it share fate with every unrelated
+			// ref. That is not hypothetical — a stale BambooHR reference is what
+			// stopped gog from starting on this very host.
+			stepWrap := wrap
+			if !stepUsesCredentials(p, step) {
+				stepWrap = nil
+			}
+			check = func() (bool, string, bool) { return checkRequires(env, step, stepWrap) }
 			apply = func() error { return applySteps(env, out, step) }
 		}
 
@@ -145,7 +160,7 @@ func stepNeedsTerminal(step packinfo.SetupStep) bool {
 // Order is the pack's, and it matters: a `bin` check before a `probe` that runs
 // that binary means a user missing the tool is told to install it rather than
 // shown a confusing exec failure.
-func checkRequires(env hostenv.Env, step packinfo.SetupStep) (ok bool, why string, fixable bool) {
+func checkRequires(env hostenv.Env, step packinfo.SetupStep, wrap ProbeWrapFn) (ok bool, why string, fixable bool) {
 	// EVERY unmet requirement, not just the first. Aborting on the first one
 	// meant a fresh laptop needed three passes to learn two facts: run setup,
 	// be told about one missing reference, supply it, run setup, be told about
@@ -178,7 +193,29 @@ func checkRequires(env hostenv.Env, step packinfo.SetupStep) (ok bool, why strin
 				allFixable = false
 			}
 		case "probe":
-			if _, timedOut, err := env.RunTimed(r.Argv[0], r.Argv[1:]...); err != nil || timedOut {
+			// THROUGH THE SAME WRAPPER THE GATEWAY WILL USE. Run raw, this probe
+			// answers a question nobody asked: it proves the binary works in a
+			// shell that already has whatever it needs, while the MCP server is
+			// spawned by the gateway under `op run --env-file`.
+			//
+			// The two diverge exactly where it hurts. Mark moved his 1Password
+			// items to another vault; the references went stale; `gog` still
+			// worked directly because its keyring was already unlocked, so setup
+			// printed `✓ ready — verified by: gog --readonly gmail labels list`
+			// while the server could not start at all. `pix doctor`, which does
+			// wrap, called it broken in the same minute.
+			//
+			// mcp.OpRunWrap's own comment already says this is the rule: "a probe
+			// that does not go through this wrapper proves nothing about the thing
+			// it claims to check." It named two callers. This was the third.
+			argv := r.Argv
+			if wrap != nil {
+				argv = wrap(argv)
+			}
+			if _, timedOut, err := env.RunTimed(argv[0], argv[1:]...); err != nil || timedOut {
+				// The UNWRAPPED argv is what a human should see and can re-run;
+				// the wrapper is machinery, and printing it turns a one-line
+				// diagnosis into a paste of op flags.
 				unmet = append(unmet, fmt.Sprintf("`%s` does not pass%s", strings.Join(r.Argv, " "), hintOf(r)))
 			}
 		}
@@ -190,6 +227,21 @@ func checkRequires(env hostenv.Env, step packinfo.SetupStep) (ok bool, why strin
 		return false, unmet[0], allFixable
 	}
 	return false, "\n    - " + strings.Join(unmet, "\n    - "), allFixable
+}
+
+// stepUsesCredentials reports whether any integration this step provisions is
+// handed a credential. The link is the integration's `setup` field naming the
+// step id.
+func stepUsesCredentials(p *packinfo.Info, step packinfo.SetupStep) bool {
+	for _, ig := range p.Manifest.Integrations {
+		if ig.Setup != step.ID {
+			continue
+		}
+		if strings.TrimSpace(ig.Env) != "" || len(ig.EnvKeys) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // reasonBlock formats a check's reason as an indented BLOCK under the heading

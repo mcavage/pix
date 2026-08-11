@@ -80,6 +80,21 @@ func (s *DaemonService) Serve(ctx context.Context) error {
 	name := s.spec.Unit.Name
 	s.tree.transition(name, func(st *UnitStatus) { st.State = UnitStarting; st.HealthOK = false })
 
+	// PRE-FLIGHT. Nothing of ours is running yet, so anything already listening
+	// on this address belongs to someone else, and our child is guaranteed to
+	// fail to bind. Refusing here is deterministic; catching it afterwards is a
+	// race, because a child that exits in microseconds may not be reaped before
+	// the probe returns — which is exactly how 4,057 restarts happened.
+	if err := s.preflightAddr(); err != nil {
+		err = fmt.Errorf("%w: %w", err, suture.ErrDoNotRestart)
+		s.tree.transition(name, func(st *UnitStatus) {
+			st.State, st.PID, st.LastError = UnitFailed, 0, err.Error()
+		})
+		s.tree.emit(Event{Unit: name, Type: EventDoNotRestart, Message: "address unavailable", Err: err.Error()})
+		s.signal(err)
+		return err
+	}
+
 	cmd, err := s.command()
 	if err != nil {
 		// A stale pin, an invalid spec or a missing binary is OPERATOR state,
@@ -115,7 +130,7 @@ func (s *DaemonService) Serve(ctx context.Context) error {
 	// a perfectly healthy daemon lose a coin flip — and a lost flip removed it
 	// from the tree entirely, which a user meets as "the warehouse is down" on
 	// their first `pix serve` after install.
-	if err := s.waitHealthy(ctx, b.Handshake); err != nil {
+	if err := s.waitHealthy(ctx, b.Handshake, exited); err != nil {
 		s.stopChild()
 		<-exited
 		s.tree.fail(name, err)
@@ -202,22 +217,101 @@ func (s *DaemonService) command() (*exec.Cmd, error) {
 	return cmd, nil
 }
 
+// preflightAddr refuses to launch while something else is on the address.
+//
+// A plain TCP dial, not the declared health check: the question is "is anything
+// listening", and a foreign listener that does not speak our health protocol
+// would pass an HTTP probe's failure and still steal the bind.
+//
+// It waits, briefly, before concluding that. On a restart our own previous child
+// may be moments from releasing the socket, and permanently failing a unit for
+// that would trade one bad failure mode for another.
+func (s *DaemonService) preflightAddr() error {
+	if s.spec.Port == 0 {
+		return nil
+	}
+	addr := s.spec.addr()
+	deadline := time.Now().Add(s.tree.budgets.Stop)
+	for {
+		conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
+		if err != nil {
+			return nil // nobody is home, which is what we want
+		}
+		_ = conn.Close()
+		if time.Now().After(deadline) {
+			return fmt.Errorf("daemon %s cannot start: %s is already being served by another process, "+
+				"so this daemon would fail to bind while its health check answered from that process instead "+
+				"(stop whatever holds %s, then restart)", s.spec.Unit.Name, addr, addr)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 // waitHealthy polls until the declared check passes or the budget expires. A
 // daemon needs a moment to bind its port, so a single immediate probe would
 // reject every healthy start.
-func (s *DaemonService) waitHealthy(ctx context.Context, budget time.Duration) error {
+//
+// It watches the CHILD as well as the port, and that is the whole point. A probe
+// answers whoever is listening on an address; it cannot tell "my child is
+// serving" from "something else already owns this port". When another process
+// held :11442, every generation went: child starts, fails to bind, exits 1 —
+// while the probe cheerfully got the OTHER process's 200 and reported the unit
+// healthy. The supervisor restarted it 4,057 times over six hours, and
+// `pix doctor` said `daemons ✓ 1 answering` throughout, because something was.
+//
+// So a passing probe is only believed while the child is still alive.
+func (s *DaemonService) waitHealthy(ctx context.Context, budget time.Duration, exited chan error) error {
 	deadline := time.Now().Add(budget)
 	var last error
 	for time.Now().Before(deadline) {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		if err := s.childDied(exited); err != nil {
+			return err
+		}
 		if last = s.probe(time.Second); last == nil {
+			// Re-check AFTER the probe: the child may have exited while it was in
+			// flight, in which case that answer came from somebody else.
+			if err := s.childDied(exited); err != nil {
+				return err
+			}
 			return nil
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	return fmt.Errorf("daemon %s did not become healthy within %s: %w", s.spec.Unit.Name, budget, last)
+}
+
+// childDied reports a non-nil error if the child has already exited.
+//
+// The value is PUT BACK on the buffered channel, because Serve's error path
+// still does `<-exited` to reap, and a consumed value would deadlock it there.
+// The channel holds exactly one value, so the send cannot block.
+func (s *DaemonService) childDied(exited chan error) error {
+	select {
+	case werr := <-exited:
+		exited <- werr
+		return s.startupExit(werr)
+	default:
+		return nil
+	}
+}
+
+// startupExit names the cause, and distinguishes the case that is otherwise
+// impossible to diagnose from a log.
+//
+// If the address STILL answers once our child is gone, the listener is someone
+// else's, and no amount of restarting will change that. Saying so turns a silent
+// infinite loop into one sentence a user can act on.
+func (s *DaemonService) startupExit(werr error) error {
+	name, addr := s.spec.Unit.Name, s.spec.addr()
+	if s.probe(time.Second) == nil {
+		return fmt.Errorf("daemon %s exited during startup (%v), yet %s is still being served — "+
+			"another process owns that port, so the health check was answering from it and not from this daemon; "+
+			"stop whatever holds %s and let the supervisor own it", name, werr, addr, addr)
+	}
+	return fmt.Errorf("daemon %s exited during startup: %w", name, werr)
 }
 
 // probe answers the ONE question that counts: is this daemon serving? A dial for

@@ -21,9 +21,9 @@ import (
 
 // SetupAdopter binds the MCP registrar into setup's pack adoption, producing the
 // exact seam workflow/provision declares.
-func SetupAdopter(register RegisterFn) func(hostenv.Env, io.Writer, []string, []string, bool) error {
+func SetupAdopter(register RegisterFn, wrap ProbeWrapFn) func(hostenv.Env, io.Writer, []string, []string, bool) error {
 	return func(env hostenv.Env, out io.Writer, packs, with []string, assumeYes bool) error {
-		return adoptForSetup(env, out, register, packs, with, assumeYes)
+		return adoptForSetup(env, out, register, wrap, packs, with, assumeYes)
 	}
 }
 
@@ -32,7 +32,7 @@ func SetupAdopter(register RegisterFn) func(hostenv.Env, io.Writer, []string, []
 // composes the stack, and runs each pack's REQUIRED setup hooks — a pack that is
 // adopted but not set up is exactly the half-state setup's second check would
 // then report as a gap with no way to close it.
-func adoptForSetup(env hostenv.Env, out io.Writer, register RegisterFn, packs, with []string, assumeYes bool) error {
+func adoptForSetup(env hostenv.Env, out io.Writer, register RegisterFn, wrap ProbeWrapFn, packs, with []string, assumeYes bool) error {
 	var activated []string
 	for _, requested := range packs {
 		useArgs := []string{NormalizeSetupPackArg(requested)}
@@ -67,7 +67,7 @@ func adoptForSetup(env hostenv.Env, out io.Writer, register RegisterFn, packs, w
 	// step could never pass and its fix could never run.
 	interactive := setupInteractivity(assumeYes, cli.IsTTY(os.Stdin))
 	for _, root := range activated {
-		if err := RunPackSetup(env, out, root, requests[root], interactive); err != nil {
+		if err := RunPackSetup(env, out, root, requests[root], interactive, wrap); err != nil {
 			return err
 		}
 	}

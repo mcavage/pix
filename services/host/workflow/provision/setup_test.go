@@ -143,7 +143,7 @@ func TestPackApply_RefusedPackAbortsAndConfigUnchanged(t *testing.T) {
 	neutralHostSteps(t)
 	// The composition root binds pack adoption; this test is the REAL one, so it
 	// wires the same adopter cmd/pix does rather than a stand-in.
-	Injected.PackApply = pack.SetupAdopter(nil)
+	Injected.PackApply = pack.SetupAdopter(nil, nil)
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 
 	root := filepath.Join(dir, "work-pack")
@@ -221,7 +221,7 @@ func TestPackApply_SuccessIsVerifiedAgainstTheRootApplyJustWrote(t *testing.T) {
 	// outcome cannot depend on this host's real PATH or real launchd state.
 	neutralHostSteps(t)
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	Injected.PackApply = pack.SetupAdopter(nil)
+	Injected.PackApply = pack.SetupAdopter(nil, nil)
 
 	root := filepath.Join(dir, "quiet-pack")
 	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
