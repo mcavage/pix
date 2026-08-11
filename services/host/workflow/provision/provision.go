@@ -210,4 +210,15 @@ func (o Outcome) Render(w io.Writer) {
 		opts.Headline = "setup did not finish: " + strings.Join(names, ", ") + " failed (details above)"
 	}
 	health.RenderDoctorWith(w, o.After, opts)
+	// Setup grades only the capabilities it OWNS, which is right — it must not
+	// claim to have checked something it cannot install. But the rows it leaves
+	// out are the ones that say whether the work actually functions: the MCP
+	// servers, the pack's supervised daemons, and memory. Setup can install a
+	// launchd agent, verify the agent is loaded, and be entirely correct while a
+	// unit under it is dead.
+	//
+	// So the report names the command that covers the rest. Without this, `✓ ready`
+	// is the last thing a new user sees, and nothing tells them a fuller report
+	// exists.
+	fmt.Fprintln(w, "\nFor the full host report, including MCP servers and pack daemons: pix doctor")
 }
