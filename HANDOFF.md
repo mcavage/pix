@@ -227,6 +227,35 @@ pix pack show <pack>                loads
 4. The remaining gaps are listed below. None of them makes anything claim to
    work when it does not — that property is the whole point and it holds.
 
+### Iteration 4 — adversarial verification (complete)
+
+A fourth agent re-proved every iteration-2 fix **by running it** and caught two
+of my commit messages claiming more than the code did — the same failure this
+effort is about, so they were fixed rather than reworded (`45f88fa`):
+
+- `6127bb2` said `op signin` "was computed and then discarded" in the past tense.
+  It still was, whenever the mcp row had no verified gaps. Fixing it properly
+  meant respecting an invariant I had initially broken without reading the test
+  that explains it: an unknown result may never emit a copy-pasteable repair,
+  because a green report with a TODO under it teaches people to ignore both. The
+  remedy moved into the evidence line, as the exact command.
+- `22ffad5` said a missing command "still exits non-zero" — true of `pix mcp
+  add`, false of `pix pack use`, which is the verb a new employee runs.
+
+It also found that a probe was wrapped in `op run` based on the SERVER's
+credentials rather than the probe's own needs, so BambooHR's credential-free
+`docker image inspect` inherited a 1Password dependency it never had.
+
+And it independently confirmed, by building the pre-change binary in a worktree,
+that fingerprint compatibility holds (`ab7d322c…` == `ab7d322c…`) and that the
+cross-integration secret bypass is genuinely closed — **with a control** proving
+the pack-wide exclusion is the operative mechanism rather than a name heuristic.
+
+Its verdict: *"Yes — the nine claims substantively hold and nothing here breaks a
+legitimate setup."*
+
+Two findings from it are recorded below rather than fixed.
+
 ### Iteration 3 — clean-slate QA (complete)
 
 A fourth agent executed the full UAT with no context. **60 of 66 criteria PASS,
@@ -277,4 +306,7 @@ than by reading:
 | BambooHR's probe checks that a Docker image exists, not that the API key works. | Weak but honest; doctor does not overclaim. |
 | `pix setup` aborts on the FIRST unmet requirement instead of listing all of them. | Three passes to learn two facts. Annoying, not misleading. |
 | `pix secret ls` shows two red lines for stale `SLACK_TEAM_ID`/`SLACK_USER_ID`. | Left in place deliberately — they are IDs the operator may want when Slack returns. The message now offers removal. |
-| A stray `acme` MCP registration exists on this host from a test agent. | `sbx mcp rm acme` if unwanted. Doctor now names it as unmanaged rather than ignoring it. |
+| A stray `acme` MCP registration existed on this host from a test agent; the verifier cleaned it up along with its own. `sbx mcp ls` is back to its original 7. | Doctor now names any unmanaged registration as information rather than ignoring it. |
+| **`pack-trust.json` is 86 KB / 370 adoption records, 369 of them test temp dirs recording adoption of `https://example.com/attacker/pack.git`.** `TestClonePack_MarksAdoptionDurablyBeforeReturn` sets `XDG_DATA_HOME` but not `PIX_CONFIG`/`XDG_CONFIG_HOME`, and the trust-store path derives from `config.Path()`. | **Pre-existing** (from `bce2b1b`), not caused by this work, and `accepted` is unaffected. But a security boundary the test suite can write to is not a boundary — worth its own fix. |
+| `pix secret check` is bounded per-ref (5s) but not overall, and does not bail early: 14 refs on a locked vault take 70s, all failing for the identical reason. | Terminates honestly, which was the bug. Early-bail is a refinement. |
+| `PIX_CONFIG` isolates config but NOT host side effects — `pix pack use` with an isolated config still mutates the real sbx gateway. | Worth knowing before anyone assumes `PIX_CONFIG` makes a run safe. |
