@@ -69,8 +69,14 @@ func RunPackSetup(env hostenv.Env, out io.Writer, root string, requested []strin
 		if !fixable || len(step.Apply) == 0 && step.Declarative() {
 			return fmt.Errorf("pack setup %s: %s", step.ID, why)
 		}
-		if !interactive {
-			return fmt.Errorf("pack setup %s is not ready (%s) and may require interactive authorization; "+
+		// Only refuse non-interactively if a remediation actually NEEDS a
+		// terminal. `exec` applies are bounded and answer to nobody — that is
+		// the whole distinction between the two kinds — so refusing them under
+		// --yes made the scripted path unable to complete a step it was
+		// perfectly capable of completing. An executable hook is opaque, so it
+		// keeps the conservative treatment.
+		if !interactive && stepNeedsTerminal(step) {
+			return fmt.Errorf("pack setup %s is not ready (%s) and needs interactive authorization; "+
 				"re-run without --yes/--non-interactive", step.ID, why)
 		}
 		fmt.Fprintf(out, "\npack setup: %s\n", label)
@@ -86,6 +92,21 @@ func RunPackSetup(env hostenv.Env, out io.Writer, root string, requested []strin
 		fmt.Fprintf(out, "  ✓ %s: verified\n", label)
 	}
 	return nil
+}
+
+// stepNeedsTerminal reports whether fixing this step requires a TTY: any
+// `interactive` remediation, or an executable hook (whose behaviour pix cannot
+// see, so it must assume the worst).
+func stepNeedsTerminal(step packinfo.SetupStep) bool {
+	if !step.Declarative() {
+		return true
+	}
+	for _, a := range step.Apply {
+		if a.Kind == "interactive" {
+			return true
+		}
+	}
+	return false
 }
 
 // checkRequires evaluates a declarative step's conditions in order, returning

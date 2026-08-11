@@ -499,3 +499,36 @@ func TestPackSetupPlanRunsOptionalHookOnlyForItsOwner(t *testing.T) {
 		t.Fatalf("setup transcript did not reflect owner routing:\n%s", out.String())
 	}
 }
+
+// TestRunPackSetup_ExecAppliesRunNonInteractively pins a bug found by running
+// the real thing rather than reading it: under --yes, the runner refused EVERY
+// remediation with "may require interactive authorization", including `exec`
+// applies, which are by definition the bounded kind that answers to nobody.
+//
+// That made the scripted path unable to complete a step it was perfectly
+// capable of completing — `docker build`, a config flip, anything needing no
+// terminal. Only an `interactive` apply, or an opaque executable hook whose
+// behaviour pix cannot see, may force a TTY.
+func TestRunPackSetup_ExecAppliesRunNonInteractively(t *testing.T) {
+	base := packinfo.SetupStep{
+		ID:       "s",
+		Required: true,
+		Require:  []packinfo.SetupRequire{{Kind: "probe", Argv: []string{"probe-cmd"}}},
+	}
+	execOnly := base
+	execOnly.Apply = []packinfo.SetupApply{{Kind: "exec", Argv: []string{"fix-cmd"}}}
+	if stepNeedsTerminal(execOnly) {
+		t.Error("a step whose only remediation is a bounded exec must not demand a terminal")
+	}
+	mixed := base
+	mixed.Apply = []packinfo.SetupApply{
+		{Kind: "exec", Argv: []string{"fix-cmd"}},
+		{Kind: "interactive", Argv: []string{"login"}},
+	}
+	if !stepNeedsTerminal(mixed) {
+		t.Error("one interactive remediation is enough to require a terminal")
+	}
+	if !stepNeedsTerminal(packinfo.SetupStep{ID: "legacy", Path: "hook", ApplyArgs: []string{"apply"}}) {
+		t.Error("an executable hook's behaviour is not visible to pix, so it must be assumed to need a terminal")
+	}
+}
