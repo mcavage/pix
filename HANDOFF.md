@@ -139,9 +139,45 @@ cd /Users/mcavage/dev/pix          && git commit --amend --no-edit -S
 cd /Users/mcavage/dev/gm-pix-pack  && git commit --amend --no-edit -S
 ```
 
-### Iteration 2 — review (in progress)
+### Iteration 2 — independent review (complete)
 
-Three independent clean-slate agents running against `c67a09d`: a QA executing
-`docs/design/UAT-integrations.md`, a product/UX reviewer judging the onboarding
-story, and a Go/security reviewer attacking the trust fingerprint and credential
-handling. Findings and their dispositions get appended here.
+Landed as `5b138e7` + `60c70f4` (pix) and `5134530` (gm-pix-pack). Three
+clean-slate reviewers ran against `c67a09d` with no access to my reasoning.
+
+**They were right about the thing that mattered most, and I was wrong.**
+`gog auth doctor` — the probe I chose to replace the one the audit condemned —
+prints `status error` on an unopenable keyring and **exits 0**. Pix judges a
+probe by its exit code, so it verified exactly as much as `gog mcp
+--list-tools`: nothing. I asserted its exit-code behaviour in three documents
+without testing the failing case. That is the same defect as the original bug,
+committed by the fix, and no amount of self-review had caught it.
+
+| # | finding | who |
+|---|---|---|
+| P0 | `probe` argv executes on the host but was in neither the fingerprint nor the consent screen — a pack could change what pix runs without re-gating | security reviewer (and, in parallel, me) |
+| P0 | `gog auth doctor` exits 0 when broken; the replacement probe verified nothing | product reviewer |
+| P1 | `✓ ready` headline over a row that proved an integration unusable | product reviewer |
+| P1 | `ActiveServerMCP` read only the last pack → doctor told users to `sbx mcp rm` servers it had just registered on a composed stack; an unloadable pack read as "declares nothing" | security reviewer |
+| P1 | `pix secret check` hung forever on a locked vault, after printing FAIL for correct refs | product reviewer |
+| P2 | MCP names and `probe[0]` ungated while reaching shell-paste commands (`mcp = "a; rm -rf ~"` loaded) | security reviewer |
+| P2 | `NonSecretEnvNames` bypass: one integration could allowlist another's secret into plaintext | security reviewer |
+| P2 | probes could outrun the budget (no `WaitDelay`) | security reviewer |
+| P2 | consent screen hid credential names when a pack had prerequisites; showed apply argv but not check argv | security reviewer |
+| P2 | a missing `bin` was "fixable", so the install hint was buried under an exec error | product reviewer |
+| P2 | `pix mcp ls`'s ✓ means registered; `pix secret ls` claimed to resolve what it syntax-checks | product reviewer |
+
+All closed. The security reviewer also audited for **weakened assertions** in
+the rewritten tests and found none — "the gap is missing coverage, not weakened
+coverage" — which is the outcome that mattered for the delegation.
+
+**Open, deliberately deferred** (recorded so they are not lost):
+
+- Doctor still only inspects servers in `cfg.MCP`; it does not enumerate the
+  gateway, so a registration with no config entry stays invisible. On this host
+  that is `pix-qa`. The commit message no longer claims otherwise.
+- Snowflake has no doctor row at all (it is a proxy, not an MCP server), so a
+  dead `snow-proxy` degrades silently.
+- BambooHR's probe checks that a Docker image exists, not that the API key
+  works. Honest but weak.
+- `pix setup` aborts on the FIRST unmet requirement rather than listing all of
+  them, so a fresh laptop needs three passes to learn two facts.

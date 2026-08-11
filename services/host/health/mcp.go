@@ -473,8 +473,16 @@ func (p MCPProbe) reduce(findings []mcpFinding) Result {
 		if unknowns > 0 {
 			detail += fmt.Sprintf(", %d not checkable", unknowns)
 		}
-		if fix == "" {
-			fix = unknownFix
+		// Append rather than fall back. Gaps and unknowns are different servers
+		// with different remedies; showing only the gaps' fix left a user with
+		// no way to act on the unknowns, which on a fresh laptop (locked vault)
+		// are the majority.
+		if unknownFix != "" && unknownFix != fix {
+			if fix == "" {
+				fix = unknownFix
+			} else {
+				fix += "\n" + unknownFix
+			}
 		}
 		return Result{Name: p.Name(), Status: StatusAbsent, Detail: detail, Fix: fix, Evidence: ev}
 	case unknowns > 0:
