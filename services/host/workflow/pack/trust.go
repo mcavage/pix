@@ -51,11 +51,19 @@ type hostBoM struct {
 // names, order and omitempty are therefore load-bearing — changing one re-gates
 // every already-accepted pack.
 
-// hostBoMMCP is one host-spawned MCP server: its name plus the exact argv the
-// gateway will run, reused from the registrar so the screen shows the real one.
+// hostBoMMCP is one host-spawned MCP server: its name, the exact argv the
+// gateway will run, and the credential NAMES it receives (never values).
+//
+// EnvKeys is omitempty and additive. No already-accepted fingerprint can
+// contain a Command server — the transport did not exist before this field did
+// — so nothing re-gates by adding it. It is here because which credentials a
+// host command is handed is part of what you are consenting to, exactly as it
+// already was for a container.
 type hostBoMMCP struct {
-	Name string   `json:"name"`
-	Argv []string `json:"argv"`
+	Name    string   `json:"name"`
+	Argv    []string `json:"argv"`
+	EnvKeys []string `json:"env_keys,omitempty"`
+	Probe   []string `json:"probe,omitempty"`
 }
 
 type hostBoMContainer struct {
@@ -64,11 +72,13 @@ type hostBoMContainer struct {
 	Manifest  string            `json:"manifest,omitempty"`
 	EnvKeys   []string          `json:"env_keys,omitempty"`
 	EnvValues map[string]string `json:"env_values,omitempty"`
+	Probe     []string          `json:"probe,omitempty"`
 }
 
 type hostBoMRemote struct {
-	Name string `json:"name"`
-	URL  string `json:"url"`
+	Name  string   `json:"name"`
+	URL   string   `json:"url"`
+	Probe []string `json:"probe,omitempty"`
 }
 
 type hostBoMInference struct {
@@ -147,18 +157,27 @@ func ComputeHostBoM(p *packinfo.Info) hostBoM {
 				keys = append([]string{env}, keys...)
 			}
 			b.Containers = append(b.Containers, hostBoMContainer{
-				Name: name, Image: strings.TrimSpace(ig.Image), Manifest: strings.TrimSpace(ig.Manifest), EnvKeys: keys, EnvValues: ig.EnvValues,
+				Name: name, Image: strings.TrimSpace(ig.Image), Manifest: strings.TrimSpace(ig.Manifest),
+				EnvKeys: keys, EnvValues: ig.EnvValues, Probe: append([]string(nil), ig.Probe...),
 			})
 		case strings.TrimSpace(ig.URL) != "":
-			b.RemoteMCP = append(b.RemoteMCP, hostBoMRemote{Name: name, URL: strings.TrimSpace(ig.URL)})
+			b.RemoteMCP = append(b.RemoteMCP, hostBoMRemote{
+				Name: name, URL: strings.TrimSpace(ig.URL), Probe: append([]string(nil), ig.Probe...),
+			})
 		case strings.TrimSpace(ig.Command) != "":
 			// The reviewed argv is exactly what the pack declared: the bare
 			// command plus its literal args. Registration resolves the command
 			// to an absolute path at spawn time, which is a property of THIS
 			// machine's PATH and deliberately not part of what you consent to.
+			keys := append([]string(nil), ig.EnvKeys...)
+			if env := strings.TrimSpace(ig.Env); env != "" {
+				keys = append([]string{env}, keys...)
+			}
 			b.MCP = append(b.MCP, hostBoMMCP{
-				Name: name,
-				Argv: append([]string{strings.TrimSpace(ig.Command)}, ig.Args...),
+				Name:    name,
+				Argv:    append([]string{strings.TrimSpace(ig.Command)}, ig.Args...),
+				EnvKeys: keys,
+				Probe:   append([]string(nil), ig.Probe...),
 			})
 		}
 	}
@@ -374,13 +393,33 @@ func hashHostExecFile(path, label string) (string, error) {
 
 // renderHostBoM prints the review screen: exactly what would run on the host,
 // what it reaches, and which credential names are solicited (never values).
+// renderProbe shows a server's health probe. It is not a passive declaration:
+// `pix doctor` EXECUTES this argv on the host, so it belongs on the screen that
+// lists what a pack runs here — and, being executable intent, it is
+// fingerprinted, so changing it re-gates.
+func renderProbe(out io.Writer, probe []string) {
+	if len(probe) > 0 {
+		fmt.Fprintf(out, "                       Health check (run by `pix doctor`): %s\n", strings.Join(probe, " "))
+	}
+}
+
 func renderHostBoM(out io.Writer, b hostBoM) {
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "This pack adds these integrations to Pix:")
 	fmt.Fprintln(out)
 	for _, m := range b.MCP {
 		fmt.Fprintf(out, "  Host MCP:            %s\n", m.Name)
-		fmt.Fprintf(out, "                       Runs on this Mac: op run -- %s\n", strings.Join(m.Argv, " "))
+		// Only a server that DECLARES credentials is op-run wrapped. Printing
+		// the wrapper unconditionally would put a command on the consent screen
+		// that is not the one that runs — on the screen whose entire job is to
+		// show you the real thing.
+		if len(m.EnvKeys) > 0 {
+			fmt.Fprintf(out, "                       Runs on this Mac: op run -- %s\n", strings.Join(m.Argv, " "))
+			fmt.Fprintf(out, "                       Receives: %s\n", strings.Join(m.EnvKeys, ", "))
+		} else {
+			fmt.Fprintf(out, "                       Runs on this Mac: %s\n", strings.Join(m.Argv, " "))
+		}
+		renderProbe(out, m.Probe)
 	}
 	for _, c := range b.Containers {
 		source := "manifest " + c.Manifest
@@ -401,9 +440,11 @@ func renderHostBoM(out io.Writer, b hostBoM) {
 				fmt.Fprintf(out, "                       Uses: %s=%s\n", key, c.EnvValues[key])
 			}
 		}
+		renderProbe(out, c.Probe)
 	}
 	for _, r := range b.RemoteMCP {
 		fmt.Fprintf(out, "  Remote MCP:          %s → %s\n", r.Name, r.URL)
+		renderProbe(out, r.Probe)
 	}
 	for _, inf := range b.Inference {
 		auth := inf.Auth

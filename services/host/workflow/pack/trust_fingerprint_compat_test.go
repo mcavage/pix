@@ -23,12 +23,14 @@
 package pack
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"pix/host/packinfo"
+	"strings"
 	"testing"
 )
 
@@ -179,5 +181,95 @@ func TestHostExecFingerprint_SetupRequireApplyAreOmitEmpty(t *testing.T) {
 	changed.Apply = []packinfo.SetupApply{{Kind: "interactive", Argv: []string{"gog", "auth", "login", "--force"}}}
 	if fpOf(changed) == fpOf(declarative) {
 		t.Error("changing a declarative apply's argv must change the fingerprint")
+	}
+}
+
+// TestHostExecFingerprint_ProbeIsExecutableIntent closes a gap an independent
+// reviewer found in the first cut of this change: a pack's health `probe` is
+// EXECUTED on the host by `pix doctor`, but it was neither fingerprinted nor
+// rendered on the Tier-1 consent screen.
+//
+// That combination is the bad one. A pack could change a command pix runs on
+// your machine, and you would neither have seen the original when you consented
+// nor be re-asked when it changed. A probe is executable intent, exactly like a
+// setup apply, on every transport that can carry one.
+func TestHostExecFingerprint_ProbeIsExecutableIntent(t *testing.T) {
+	root := t.TempDir()
+	fpOf := func(b hostBoM) string {
+		t.Helper()
+		fp, _, err := ComputeHostExecFingerprint(root, b)
+		if err != nil {
+			t.Fatalf("fingerprint: %v", err)
+		}
+		return fp
+	}
+	for _, tc := range []struct {
+		name         string
+		without, wit hostBoM
+	}{
+		{
+			name:    "command",
+			without: hostBoM{MCP: []hostBoMMCP{{Name: "gw", Argv: []string{"gog", "mcp"}}}},
+			wit:     hostBoM{MCP: []hostBoMMCP{{Name: "gw", Argv: []string{"gog", "mcp"}, Probe: []string{"curl", "http://evil"}}}},
+		},
+		{
+			name:    "container",
+			without: hostBoM{Containers: []hostBoMContainer{{Name: "hr", Image: "hr:1"}}},
+			wit:     hostBoM{Containers: []hostBoMContainer{{Name: "hr", Image: "hr:1", Probe: []string{"curl", "http://evil"}}}},
+		},
+		{
+			name:    "remote",
+			without: hostBoM{RemoteMCP: []hostBoMRemote{{Name: "crm", URL: "https://x/mcp"}}},
+			wit:     hostBoM{RemoteMCP: []hostBoMRemote{{Name: "crm", URL: "https://x/mcp", Probe: []string{"curl", "http://evil"}}}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if fpOf(tc.without) == fpOf(tc.wit) {
+				t.Errorf("adding a %s probe did not change the fingerprint: a pack could introduce a "+
+					"command that `pix doctor` runs on this host without re-gating", tc.name)
+			}
+			// omitempty must hold, or every already-accepted pack re-gates.
+			nilVsEmpty := tc.without
+			switch tc.name {
+			case "command":
+				nilVsEmpty.MCP[0].Probe = []string{}
+			case "container":
+				nilVsEmpty.Containers[0].Probe = []string{}
+			case "remote":
+				nilVsEmpty.RemoteMCP[0].Probe = []string{}
+			}
+			if fpOf(nilVsEmpty) != fpOf(tc.without) {
+				t.Errorf("%s probe lost omitempty: an empty value encodes as [] instead of being "+
+					"omitted, which re-gates every accepted pack", tc.name)
+			}
+		})
+	}
+}
+
+// TestRenderHostBoM_ShowsEveryCommandThatRuns: the consent screen must print
+// the REAL command. Two ways it lied in the first cut — an unconditional
+// `op run --` prefix on a server that declares no credentials and is therefore
+// never wrapped, and a probe that was executed but never shown.
+func TestRenderHostBoM_ShowsEveryCommandThatRuns(t *testing.T) {
+	var buf bytes.Buffer
+	renderHostBoM(&buf, hostBoM{MCP: []hostBoMMCP{
+		{Name: "credfree", Argv: []string{"pio", "serve"}},
+		{Name: "credful", Argv: []string{"gog", "mcp"}, EnvKeys: []string{"GOG_KEYRING_PASSWORD"}, Probe: []string{"gog", "auth", "doctor"}},
+	}})
+	out := buf.String()
+	if strings.Contains(out, "op run -- pio serve") {
+		t.Errorf("a credential-free server is never op-run wrapped; the screen must not claim it is:\n%s", out)
+	}
+	if !strings.Contains(out, "Runs on this Mac: pio serve") {
+		t.Errorf("the bare command must be shown verbatim:\n%s", out)
+	}
+	if !strings.Contains(out, "op run -- gog mcp") {
+		t.Errorf("a credentialed server IS wrapped and the screen must show that:\n%s", out)
+	}
+	if !strings.Contains(out, "GOG_KEYRING_PASSWORD") {
+		t.Errorf("which credentials a host command receives is part of what you consent to:\n%s", out)
+	}
+	if !strings.Contains(out, "gog auth doctor") {
+		t.Errorf("`pix doctor` executes the probe on this host, so it must appear on the screen:\n%s", out)
 	}
 }

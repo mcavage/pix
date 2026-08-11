@@ -729,7 +729,7 @@ type RegisterFn func(cfg *config.Config, env hostenv.Env, out io.Writer, names [
 
 // registerPackMCP registers names with the sbx gateway. Idempotent, and it runs
 // even for a name ALREADY in cfg.MCP: a retry after a failed registration must
-// re-register, and a changed gog_account must re-resolve. Best-effort.
+// re-register, and a changed declaration must re-resolve. Best-effort.
 func registerPackMCP(register RegisterFn, cfg *config.Config, env hostenv.Env, out io.Writer, p *packinfo.Info, names []string) {
 	if len(names) == 0 {
 		return
