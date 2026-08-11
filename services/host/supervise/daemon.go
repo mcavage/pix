@@ -225,6 +225,16 @@ func (s *DaemonService) waitHealthy(ctx context.Context, budget time.Duration) e
 // reads a body — the status line is the whole answer, and a daemon that returns
 // a megabyte on /healthz should not be able to stall its own supervisor.
 func (s *DaemonService) probe(budget time.Duration) error {
+	// Time EVERY probe, failures included, exactly as a go-plugin unit does. A
+	// daemon left this unset, so `pix serve status` printed probe=0us for an HTTP
+	// GET over a socket — which reads as "instant" rather than "never measured",
+	// and the latency of the probe that timed out is the number that explains the
+	// eviction after it.
+	start := time.Now()
+	defer func() {
+		us := time.Since(start).Microseconds()
+		s.tree.transition(s.spec.Unit.Name, func(st *UnitStatus) { st.LastProbeUS = us })
+	}()
 	addr := s.spec.addr()
 	if s.spec.Health == "tcp" {
 		conn, err := net.DialTimeout("tcp", addr, budget)

@@ -174,6 +174,13 @@ func TestDaemonStartsFromAPathCommand(t *testing.T) {
 	if st.PID == 0 {
 		t.Error("a running daemon must report its pid")
 	}
+	// A real HTTP GET over a socket is never 0us. Leaving this unset made
+	// `pix serve status` print probe=0us, which reads as "instant" rather than
+	// "never measured" — and the latency of a probe that timed out is the number
+	// that explains the eviction after it.
+	if st.LastProbeUS <= 0 {
+		t.Errorf("probe latency is %dus; an HTTP health check cannot take zero time", st.LastProbeUS)
+	}
 }
 
 // TestDaemonSlowStartIsNotAFailure is the regression for bug (2), and it is the

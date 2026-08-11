@@ -225,7 +225,7 @@ func (c *serveCmd) Help() string { return service.Description }
 type serveCmd struct {
 	Exec      serveExecCmd      `cmd:"" default:"withargs" hidden:""`
 	Stop      serveStopCmd      `cmd:"" help:"Stop a running serve (mode-aware: managed services go through their supervisor)."`
-	Status    serveStatusCmd    `cmd:"" help:"Is serve running, and is the memory port up."`
+	Status    serveStatusCmd    `cmd:"" help:"Is serve running, and are its units healthy (memory, pack daemons)."`
 	Start     serveInstallCmd   `cmd:"" passthrough:"" help:"Alias for install: (re)start the managed service."`
 	Install   serveInstallCmd   `cmd:"" passthrough:"" help:"Install serve as a managed login service."`
 	Uninstall serveUninstallCmd `cmd:"" passthrough:"" help:"Remove the managed login service."`
