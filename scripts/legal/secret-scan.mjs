@@ -139,7 +139,23 @@ function loadAllowlist(path) {
 // its own inventory file). It is metadata ABOUT findings, not a place a real
 // secret would land, so every historical version of it is excluded from the
 // scan itself, by path.
-const SELF_EXCLUDED_PATHS = new Set(["scripts/legal/secret-scan-allowlist.txt"]);
+//
+// docs/legal/RELEASE-SAFEGUARDS.md is here for the SAME reason. It documents what
+// this scanner catches, so it quotes the shapes: AWS's published
+// AKIAIOSFODNN7EXAMPLE and Slack's xoxb-1234567890. Every edit to that doc
+// re-hashes its blob, both examples come back as findings, and the release stops
+// until someone allowlists a hash that did not exist until the commit was made.
+// That happened three times in one afternoon while writing up an unrelated
+// change, each time discovered only after CI had already failed.
+//
+// The cost is real and is why this set stays short: a genuine secret pasted into
+// that file would not be caught. It is prose ABOUT the scanner, not a place
+// credentials land, and the alternative is a gate that punishes editing its own
+// documentation.
+const SELF_EXCLUDED_PATHS = new Set([
+	"scripts/legal/secret-scan-allowlist.txt",
+	"docs/legal/RELEASE-SAFEGUARDS.md",
+]);
 
 // Objects larger than this are skipped (secrets live in text, not multi-MB
 // blobs; also caps how much content any single batch call has to move).

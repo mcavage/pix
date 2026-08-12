@@ -165,6 +165,46 @@ test("the allowlist file's own path is excluded from the scan (self-referential 
 	fs.rmSync(tmp, { recursive: true, force: true });
 });
 
+// The safeguards doc has the same fixed-point problem as the allowlist: it
+// quotes the shapes this scanner catches, so every edit re-hashes its blob and
+// both examples reappear as findings. That cost three CI failures and three
+// follow-up commits in one afternoon, each hash unknowable until after the push
+// that created it. Behavioural, not a check that a constant contains a string:
+// what matters is that a real scan over a repo containing that file finds
+// nothing.
+test("the release-safeguards doc is excluded from the scan (same fixed-point guard)", () => {
+	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "secret-scan-safeguards-"));
+	const git = (args) => execFileSync("git", [...GIT_HERMETIC, ...args], { cwd: tmp, encoding: "utf8" });
+	git(["init", "-q"]);
+	git(["config", "user.email", "test@example.com"]);
+	git(["config", "user.name", "Test"]);
+	fs.mkdirSync(path.join(tmp, "docs/legal"), { recursive: true });
+	// The two values the real doc quotes to explain what the scanner catches.
+	fs.writeFileSync(
+		path.join(tmp, "docs/legal/RELEASE-SAFEGUARDS.md"),
+		"Examples the scanner catches: AKIAIOSFODNN7EXAMPLE and xoxb-1234567890-abcdefghijkl\n"
+	);
+	git(["add", "."]);
+	git(["commit", "-q", "-m", "safeguards doc quoting example shapes"]);
+
+	const outPath = path.join(tmp, "report.json");
+	const res = execFileSync("node", [scanScript, "--scan", tmp, "--out", outPath], { encoding: "utf8" });
+	assert.match(res, /no secrets found/);
+	assert.equal(JSON.parse(fs.readFileSync(outPath, "utf8")).findings_count, 0);
+
+	// And the exclusion must be by PATH, not by those values: the same strings in
+	// any other file are still findings.
+	fs.writeFileSync(path.join(tmp, "notes.md"), "AKIAIOSFODNN7EXAMPLE\n");
+	git(["add", "."]);
+	git(["commit", "-q", "-m", "the same value somewhere it does not belong"]);
+	assert.throws(
+		() => execFileSync("node", [scanScript, "--scan", tmp, "--out", outPath], { encoding: "utf8" }),
+		/./,
+		"excluding the doc must not excuse the same secret elsewhere"
+	);
+	fs.rmSync(tmp, { recursive: true, force: true });
+});
+
 test("full-history scan passes clean on a fixture repo with no secrets", () => {
 	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "secret-scan-clean-"));
 	const git = (args) => execFileSync("git", [...GIT_HERMETIC, ...args], { cwd: tmp, encoding: "utf8" });
