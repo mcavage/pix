@@ -78,14 +78,18 @@ func (c *packShowCmd) Run(d *cli.Deps) error {
 // default pack root (not $PWD/default), "personal" a deprecated one; a git URL
 // is cloned to ~/.local/share/pix/packs/<name> (optional #ref pin).
 type packUseCmd struct {
-	Target string `arg:"" help:"path | git-url | default"`
-	Yes    bool   `short:"y" help:"Accept the Tier-1 host bill-of-materials review without prompting."`
+	Target  string `arg:"" help:"path | git-url | default"`
+	Yes     bool   `short:"y" help:"Accept the Tier-1 host bill-of-materials review without prompting."`
+	Details bool   `help:"Print every field of the host bill of materials instead of the summary."`
 }
 
 func (c *packUseCmd) Run(d *cli.Deps) error {
 	args := []string{c.Target}
 	if c.Yes {
 		args = append(args, "--yes")
+	}
+	if c.Details {
+		args = append(args, "--details")
 	}
 	return packRun(d, "use", pack.RunPackUse(defaultShellEnv(), d.Out, args, registerServers))
 }

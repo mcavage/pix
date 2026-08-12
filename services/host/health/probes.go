@@ -32,7 +32,7 @@ import (
 // different repair commands for the same gap is how a user learns to ignore
 // both.
 const (
-	SbxInstallFix   = "brew install docker/tap/sbx@nightly"
+	SbxInstallFix   = "brew install docker/tap/sbx"
 	ServeInstallFix = "pix serve install"
 	ServeStartFix   = "pix serve"
 	// ServeRestartFix composes two real, existing verbs — `serve stop` is

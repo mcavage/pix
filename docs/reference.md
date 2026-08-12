@@ -498,7 +498,7 @@ drifting into four different "sbx is missing" stories:
 
 | surface | sbx absent -> exit | message names |
 | --- | --- | --- |
-| `pix ls` | 3 (`rpc.ExitServiceDown`) | the exact install fix (`brew install docker/tap/sbx@nightly`) |
+| `pix ls` | 3 (`rpc.ExitServiceDown`) | the exact install fix (`brew install docker/tap/sbx`) |
 | `pix rm` | 3 (`rpc.ExitServiceDown`) | the exact install fix |
 | `pix mcp ls/add/auth` | 3 (`rpc.ExitServiceDown`) | `would run: sbx ...` on **stderr**, so a script piping stdout never sees it |
 | `pix doctor` | 1 (`ExitNotReady`) only if a REQUIRED check is a verified gap; sbx's own gap is `todo` with the exact install fix as its `Fix` | the exact install fix (`health.SbxInstallFix`) |

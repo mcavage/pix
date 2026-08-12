@@ -17,7 +17,7 @@ Pix installs none of these. Install them yourself, then check each one.
 | Thing | Required? | Install | Check |
 | --- | --- | --- | --- |
 | Homebrew | required | [brew.sh](https://brew.sh) | `brew --version` |
-| `sbx`, Docker Sandboxes, plus a signed-in Docker account | required | `brew install docker/tap/sbx@nightly` | `sbx diagnose` |
+| `sbx`, Docker Sandboxes, plus a signed-in Docker account | required | `brew install docker/tap/sbx` | `sbx diagnose` |
 | `op`, the 1Password CLI | required to add your own provider key | `brew install 1password-cli` | `op --version` |
 | Ollama | optional (see section 5) | [ollama.com](https://ollama.com) | `ollama --version` |
 
