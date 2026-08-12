@@ -336,8 +336,9 @@ RUN set -eux; for p in \
 # connection drops and preserves the existing per-server failure notifications.
 RUN node /usr/local/share/pix/patches/apply-mcp-problems-status.mjs
 
-# `/todos clear` in pi-manage-todo-list 0.4.0 clears only live memory. Persist
-# the clear marker so session resume and compaction continuation respect it.
+# pi-manage-todo-list 0.4.0 documents `/todos` as a toggle but only refreshes
+# the widget. Add toggle/hide/show controls, Alt+T, persisted visibility, and a
+# durable clear marker respected by session resume and compaction continuation.
 RUN node /usr/local/share/pix/patches/apply-todo-durable-clear.mjs
 
 # pi-web-access 0.13.0 hardcodes api.openai.com + gpt-5.4 for native Responses

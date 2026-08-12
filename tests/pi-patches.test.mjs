@@ -285,7 +285,7 @@ test("baked and gateway MCP configs show only connection problems", () => {
 	);
 });
 
-test("todo durable-clear patch applies to a fixture pi-manage-todo-list", async (t) => {
+test("todo controls patch applies to a fixture pi-manage-todo-list", async (t) => {
 	const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pix-patches-todo-"));
 	t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
 
@@ -303,8 +303,11 @@ test("todo durable-clear patch applies to a fixture pi-manage-todo-list", async 
 	assert.match(run(process.execPath, [todoPatch], env), /already patched/);
 	const indexPath = path.join(todoRoot, "dist/index.js");
 	const stateManagerPath = path.join(todoRoot, "dist/state-manager.js");
-	assert.equal(markerCount(indexPath, "pix-todo-cleared"), 1);
+	assert.equal(markerCount(indexPath, "pi-stack-todo-cleared"), 1);
+	assert.equal(markerCount(stateManagerPath, "pi-stack-todo-cleared"), 1);
+	assert.equal(markerCount(indexPath, "pix-todo-cleared"), 0);
 	assert.equal(markerCount(stateManagerPath, "pix-todo-cleared"), 1);
+	assert.equal(markerCount(indexPath, "pix-todo-widget-visibility"), 1);
 	run(process.execPath, ["--check", indexPath], env);
 	run(process.execPath, ["--check", stateManagerPath], env);
 
@@ -318,14 +321,81 @@ test("todo durable-clear patch applies to a fixture pi-manage-todo-list", async 
 			details: { todos: [todo(title)] },
 		},
 	});
-	const clear = { type: "custom", customType: "pix-todo-cleared" };
+	const clear = { type: "custom", customType: "pi-stack-todo-cleared" };
+	const legacyClear = { type: "custom", customType: "pix-todo-cleared" };
 	const manager = new TodoStateManager();
 	manager.loadFromSession({ sessionManager: { getBranch: () => [result("stale"), clear] } });
 	assert.deepEqual(manager.read(), []);
+	manager.loadFromSession({ sessionManager: { getBranch: () => [result("stale"), legacyClear] } });
+	assert.deepEqual(manager.read(), [], "sessions written by the old patch remain cleared");
 	manager.loadFromSession({
 		sessionManager: { getBranch: () => [result("stale"), clear, result("new")] },
 	});
 	assert.equal(manager.read()[0]?.title, "new");
+
+	const createRuntime = async (branch = [result("saved")]) => {
+		const handlers = new Map();
+		const commands = new Map();
+		const shortcuts = new Map();
+		const widgets = new Map();
+		const notifications = [];
+		const entries = [];
+		let tool;
+		const pi = {
+			on(event, handler) {
+				const list = handlers.get(event) ?? [];
+				list.push(handler);
+				handlers.set(event, list);
+			},
+			registerTool(value) { tool = value; },
+			registerCommand(name, value) { commands.set(name, value); },
+			registerShortcut(key, value) { shortcuts.set(key, value); },
+			appendEntry(customType, data) { entries.push({ type: "custom", customType, data }); },
+		};
+		const ctx = {
+			ui: {
+				setWidget(id, value) { value === undefined ? widgets.delete(id) : widgets.set(id, value); },
+				notify(message, level) { notifications.push({ message, level }); },
+			},
+			sessionManager: { getBranch: () => branch },
+		};
+		const { default: createExtension } = await import(`${pathToFileURL(indexPath).href}?runtime=${Math.random()}`);
+		createExtension(pi);
+		const fire = async (event) => {
+			for (const handler of handlers.get(event) ?? []) await handler({}, ctx);
+		};
+		return { commands, shortcuts, widgets, notifications, entries, ctx, fire, tool };
+	};
+
+	const runtime = await createRuntime();
+	await runtime.fire("session_start");
+	assert.ok(runtime.widgets.has("todo-list"));
+	assert.equal(runtime.shortcuts.has("alt+t"), true);
+
+	await runtime.commands.get("todos").handler("hide", runtime.ctx);
+	assert.equal(runtime.widgets.has("todo-list"), false);
+	assert.equal(runtime.entries.at(-1)?.customType, "pix-todo-widget-visibility");
+	assert.deepEqual(runtime.tool.read(), [todo("saved")]);
+	await runtime.fire("turn_end");
+	assert.equal(runtime.widgets.has("todo-list"), false, "turn_end must not resurrect a hidden widget");
+
+	await runtime.commands.get("todos").handler("show", runtime.ctx);
+	assert.ok(runtime.widgets.has("todo-list"));
+	await runtime.commands.get("todos").handler("", runtime.ctx);
+	assert.equal(runtime.widgets.has("todo-list"), false, "no arguments toggle visibility");
+	await runtime.shortcuts.get("alt+t").handler(runtime.ctx);
+	assert.ok(runtime.widgets.has("todo-list"), "Alt+T toggles visibility");
+
+	const restored = await createRuntime([
+		result("saved"),
+		{ type: "custom", customType: "pix-todo-widget-visibility", data: { visible: false } },
+	]);
+	await restored.fire("session_start");
+	assert.equal(restored.widgets.has("todo-list"), false, "hidden visibility survives reload");
+	assert.deepEqual(restored.tool.read(), [todo("saved")]);
+
+	await runtime.commands.get("todos").handler("clear", runtime.ctx);
+	assert.equal(runtime.entries.at(-1)?.customType, "pi-stack-todo-cleared");
 });
 
 test("todo durable-clear patch catches upstream drift instead of silently applying", (t) => {

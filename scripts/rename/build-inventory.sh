@@ -87,7 +87,7 @@ TOKENS=(
 #
 # literal <TAB> expected occurrences in the tracked tree <TAB> why
 FROZEN=(
-	$'pi-stack-todo-cleared\t7\tpersisted customType in .pi-sessions/ (PIX-ADR-0007, AC-P0-409): renaming it silently resurrects cleared todos after compaction or resume. Was 8 until docs/design/pix-migration.md was deleted with the retirement mechanism; that occurrence was PROSE describing the literal, not a producer or consumer of it. The load-bearing occurrences (extensions/compaction-continuation.ts and its two test files) are untouched.'
+	$'pi-stack-todo-cleared\t14\tpersisted customType in .pi-sessions/ (PIX-ADR-0007, AC-P0-409): renaming it silently resurrects cleared todos after compaction or resume. The build-time pi-manage-todo-list patch emits this canonical marker and still reads the one-release pix-todo-cleared mistake for compatibility. The load-bearing occurrences (producer, extensions/compaction-continuation.ts, and tests) are frozen.'
 	$'pi-stack-compaction-continuation\t3\tpersisted customType in .pi-sessions/ (PIX-ADR-0007, AC-P0-409): already written into session transcripts on disk'
 )
 
