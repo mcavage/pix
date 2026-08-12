@@ -340,6 +340,15 @@ deadcode_guard() {
 	printf 'deadcode: no funcs unreachable on both darwin and linux\n'
 }
 
+# The full-history secret scan, ~1.4s. It lives in CI's legal workflow, and NOT
+# having it here cost three consecutive red releases in one afternoon: each was
+# caught only after a push, because the allowlist is keyed by blob hash and every
+# edit to a file holding a reviewed fixture invalidates its entry. A gate that
+# does not run the check that blocks the release is not the gate CI runs.
+secret_scan() {
+	bash scripts/check-secret-history.sh
+}
+
 run_segment "go-build" "go-build" go_build
 run_segment "go-vet" "go-vet" go_vet
 run_segment "go-test" "go-test" go_test
@@ -347,6 +356,7 @@ run_segment "node-test" "node-test" node_test
 run_segment "typecheck" "typecheck" typecheck
 run_segment "open-core" "open-core" open_core
 run_segment "recall-xport" "recall-xport" recall_transport
+run_segment "secret-scan" "secret-scan" secret_scan
 run_segment "arch-metrics" "arch-metrics" arch_metrics
 run_segment "deadcode" "deadcode" deadcode_guard
 

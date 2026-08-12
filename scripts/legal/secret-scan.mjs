@@ -152,9 +152,17 @@ function loadAllowlist(path) {
 // that file would not be caught. It is prose ABOUT the scanner, not a place
 // credentials land, and the alternative is a gate that punishes editing its own
 // documentation.
+// THIS FILE and its test are here for the same reason, and they are the purest
+// case of it: a scanner's source must contain every pattern it detects (the
+// --self-test constants ARE example secrets), and its test must contain fixtures
+// for each. Editing either re-hashes the blob and every one of those constants
+// returns as a finding. Adding this very exclusion did exactly that: 19 findings
+// from two files whose entire job is to define what a finding looks like.
 const SELF_EXCLUDED_PATHS = new Set([
 	"scripts/legal/secret-scan-allowlist.txt",
 	"docs/legal/RELEASE-SAFEGUARDS.md",
+	"scripts/legal/secret-scan.mjs",
+	"tests/legal-secret-scan.test.mjs",
 ]);
 
 // Objects larger than this are skipped (secrets live in text, not multi-MB
