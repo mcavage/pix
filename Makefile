@@ -178,10 +178,10 @@ inspect: ## Inspect the kit
 
 secrets: ## Store provider keys + GitHub token as global sbx service secrets
 	@echo "Store once (read by the host proxy, never stored in the VM):"
-	@echo '  echo "$$ANTHROPIC_API_KEY" | sbx secret set -g anthropic'
-	@echo '  echo "$$OPENAI_API_KEY"    | sbx secret set -g openai'
-	@echo '  echo "$$GEMINI_API_KEY"    | sbx secret set -g google'
-	@echo '  gh auth token             | sbx secret set -g github   # gh in-sandbox, no GH_TOKEN export needed'
+	@echo '  echo "$$ANTHROPIC_API_KEY" | sbx secret set anthropic'
+	@echo '  echo "$$OPENAI_API_KEY"    | sbx secret set openai'
+	@echo '  echo "$$GEMINI_API_KEY"    | sbx secret set google'
+	@echo '  gh auth token             | sbx secret set github      # gh in-sandbox, no GH_TOKEN export needed'
 
 # NOTE: NAME must not contain spaces or shell metacharacters — the awk -v
 # assignment below is not quoted against them. The default naming convention

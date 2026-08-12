@@ -19,10 +19,25 @@ Pix installs none of these. Install them yourself, then check each one.
 | Homebrew | required | [brew.sh](https://brew.sh) | `brew --version` |
 | `sbx`, Docker Sandboxes, plus a signed-in Docker account | required | `brew install docker/tap/sbx` | `sbx diagnose` |
 | `op`, the 1Password CLI | required to add your own provider key | `brew install 1password-cli` | `op --version` |
+| `gh`, the GitHub CLI | required to push or open PRs from a sandbox | `brew install gh` | `gh auth status` |
 | Ollama | optional (see section 5) | [ollama.com](https://ollama.com) | `ollama --version` |
 
 `sbx diagnose` prints a checklist. Every line must be a green tick, including
 **Authentication**. If it is not authenticated, run `sbx login`.
+
+A sandbox has no GitHub credential of its own. Give every sandbox one, once:
+
+```bash
+gh auth token | sbx secret set github
+```
+
+Service secrets are global by default, so this covers sandboxes you create
+later. `sbx secret set github --sandbox <name>` scopes it to a single sandbox
+instead, which means doing it again for the next one. Check what you have with
+`sbx secret ls`: the `SCOPE` column shows `global` or a sandbox name.
+
+Without it the agent can commit inside the sandbox but cannot push or open a
+pull request.
 
 Pix stores provider keys as 1Password references, never as values on disk. That
 is the only reason `op` is on the required list. If a pack already supplies
