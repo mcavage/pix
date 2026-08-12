@@ -11,11 +11,14 @@ brew install mcavage/tap/pix
 pix setup
 ```
 
-`setup` installs `sbx` if it is missing, asks how models should run (a direct
-API key via 1Password is the default; an existing Ollama or a custom gateway
-work without it), and launches your first sandbox once one callable model is
-confirmed. It is resumable: if a host tool is missing, it prints the exact
-install command and picks back up after you run it.
+`setup` installs three things: the launchd agent for host services, any pack you
+asked for, and local Ollama weights (only with `--pull-models`). It does NOT
+install `sbx`. A missing host tool is reported with the exact install command to
+run, and setup is resumable, so you install it and run setup again.
+
+It also asks how models should run. A direct API key via 1Password is the
+default; an existing Ollama or a credentialed gateway work without one. Your
+first sandbox launches once a callable model is confirmed.
 
 ## 2. Your first sandbox
 
