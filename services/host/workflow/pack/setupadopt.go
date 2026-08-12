@@ -8,6 +8,7 @@
 package pack
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -34,12 +35,30 @@ func SetupAdopter(register RegisterFn, wrap ProbeWrapFn) func(hostenv.Env, io.Wr
 // then report as a gap with no way to close it.
 func adoptForSetup(env hostenv.Env, out io.Writer, register RegisterFn, wrap ProbeWrapFn, packs, with []string, assumeYes bool) error {
 	var activated []string
+	var deferred []error
 	for _, requested := range packs {
 		useArgs := []string{NormalizeSetupPackArg(requested)}
 		if assumeYes {
 			useArgs = append([]string{"--yes"}, useArgs...)
 		}
-		if err := RunPackUse(env, out, useArgs, register); err != nil {
+		err := RunPackUse(env, out, useArgs, register)
+		var regErr *mcpRegisterError
+		switch {
+		case err == nil:
+		case errors.As(err, &regErr):
+			// DEFERRED, not fatal. Registration is adoption's last post-commit
+			// step, so this pack IS adopted; what it could not do is resolve a
+			// command that is not installed yet. Installing it is precisely
+			// what the pack's setup hooks below do — and the error even says
+			// so, naming the very step that failing here made unreachable.
+			//
+			// That was the whole bug: a pack whose first adoption on a clean
+			// machine declares any host command it also knows how to install
+			// could never complete `pix setup`, and the advice printed was a
+			// command the user could not successfully run.
+			deferred = append(deferred, err)
+			fmt.Fprintln(out, "  (registration deferred: setup installs what is missing, then it is retried)")
+		default:
 			return fmt.Errorf("adopting pack %s: %w", requested, err)
 		}
 		if cfg, err := config.Load(); err == nil && strings.TrimSpace(cfg.Pack) != "" {
@@ -71,7 +90,28 @@ func adoptForSetup(env hostenv.Env, out io.Writer, register RegisterFn, wrap Pro
 			return err
 		}
 	}
-	return nil
+	if len(deferred) == 0 {
+		return nil
+	}
+	// Nothing to retry means nothing ran that could have fixed it, so the
+	// deferred failure is simply the answer. Without this, a pack that committed
+	// and then vanished from cfg would have its registration failure deferred
+	// into an empty retry loop and reported as success.
+	if len(activated) == 0 {
+		return errors.Join(deferred...)
+	}
+	// The setup hooks have run, so ask again — and only a failure that SURVIVES
+	// them is a real one. Retrying every activated pack rather than only the one
+	// that failed keeps this the same call adoption makes, and the registrar is
+	// idempotent, so a pack that registered cleanly the first time is unchanged.
+	fmt.Fprintln(out, "\nretrying mcp registration now that setup has run…")
+	var errs []error
+	for _, root := range activated {
+		if err := registerActivePackMCP(env, out, root, register); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // setupInteractivity decides whether a pack's setup hooks may run a remediation

@@ -161,6 +161,22 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`pix setup --pack` could be deadlocked by the pack it was setting up.**
+  Registering the pack's MCP servers is adoption's last post-commit step, and a
+  server whose host command is not installed yet cannot be registered — which is
+  the normal state of a FIRST adoption, because installing that command is what
+  the pack's own setup hooks do. Adoption's failure returned before those hooks
+  ran, so the remedy the error named ("the pack's setup step does this: `pix
+  setup --pack <pack> --with <step>`") was the one thing it had made
+  unreachable. Two people hit this on gm-pix-pack, on two different
+  integrations, and neither could get past it without hand-installing a binary.
+  That one post-commit failure is now typed, so `pix setup` can tell it apart
+  from a refusal that adopted NOTHING (a declined trust gate, an unreadable
+  manifest, a mismatched pin — all still fatal, exactly where they were): it
+  says the registration is deferred, runs the setup hooks, and asks again. A
+  failure that SURVIVES setup is still a non-zero exit and still names the
+  missing command, so nothing reports success over a server the sandbox will
+  never see. `pix pack use` is unchanged.
 - **`/todos` claimed to toggle the task widget but only refreshed it.** The
   build-time `pi-manage-todo-list@0.4.0` patch now makes bare `/todos` toggle,
   adds explicit `/todos hide` and `/todos show` controls, and binds `Alt+T` as a
