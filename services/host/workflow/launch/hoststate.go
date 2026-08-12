@@ -86,12 +86,21 @@ func SanitizeIdentity(s string) string {
 	return strings.TrimSpace(b.String())
 }
 
-func BuildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial func(int) bool, keysSource string, pack packinfo.State) HostState {
+func BuildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial func(int) bool, keysSource string, pack packinfo.State, githubGlobal bool) HostState {
 	dialer := func(p int) bool { return dial != nil && dial(p) }
 	// A key is OK only when the probe ANSWERED and named it. An unreadable
 	// `sbx secret ls` reports every key as not-set rather than inventing a
 	// green: the payload is read by an agent that cannot check for itself.
 	keyOK := func(name string) bool { return sbxOK && cli.GrepWord(sbxSecretsOut, name) }
+	// GitHub is asked a NARROWER question than the model keys, and the reason is
+	// a real failure: `sbx secret ls` lists global and sandbox-scoped secrets
+	// together, so a substring match reported github as available on a host where
+	// it was pinned to one sandbox. The agent believed that, committed, and could
+	// not push. A credential only one box can use is not a credential this
+	// payload may promise.
+	// githubGlobal is supplied by the caller, which asks sbx with its own
+	// `--global` filter. Parsing the combined listing here would mean inventing a
+	// literal for the SCOPE column, and the column is not ours to depend on.
 	if keysSource == "" {
 		keysSource = "sbx"
 	}
@@ -99,7 +108,7 @@ func BuildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial f
 		Anthropic: keyOK("anthropic"),
 		OpenAI:    keyOK("openai"),
 		Google:    keyOK("google"),
-		GitHub:    keyOK("github"),
+		GitHub:    githubGlobal,
 		Source:    keysSource,
 	}
 	keys.Resolved = keys.Anthropic || keys.OpenAI || keys.Google
@@ -152,7 +161,14 @@ func BuildTrustedHostState(cfg *config.Config, env hostenv.Env, packOverride str
 	if secret.ProviderKeyRefsPresent(env) {
 		source = "1password"
 	}
-	hs := BuildHostState(cfg, sbxOut, sbxOK, env.DialLocal, source, packinfo.Resolve(cfg, packOverride))
+	// GLOBAL only. `sbx secret ls` lists sandbox-scoped secrets too, and a
+	// substring match on it reported github as available on a host where it was
+	// pinned to a single sandbox: the agent believed that, committed, and could
+	// not push. A credential one box can use is not one this payload may promise
+	// to every box.
+	ghState, _ := secret.ProbeGitHubSecret(env)
+	hs := BuildHostState(cfg, sbxOut, sbxOK, env.DialLocal, source, packinfo.Resolve(cfg, packOverride),
+		ghState == secret.GitHubSecretGlobal)
 	hs.Identity = ReadGitIdentity(env)
 	return hs
 }

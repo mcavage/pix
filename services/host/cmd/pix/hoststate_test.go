@@ -31,7 +31,7 @@ func TestBuildHostState(t *testing.T) {
 	sbxOut := "anthropic\ngithub\n"
 	up := func(int) bool { return true }
 
-	hs := launch.BuildHostState(cfg, sbxOut, true, up, "1password", packinfo.State{Active: true, Path: "/kb/acme", GitInitialized: true, Skills: true})
+	hs := launch.BuildHostState(cfg, sbxOut, true, up, "1password", packinfo.State{Active: true, Path: "/kb/acme", GitInitialized: true, Skills: true}, false)
 	if !hs.Pack.Active || !hs.Pack.GitInitialized {
 		t.Errorf("pack facts not carried: %+v", hs.Pack)
 	}
@@ -82,7 +82,7 @@ func TestBuildHostState(t *testing.T) {
 
 func TestBuildHostState_NotProvisioned(t *testing.T) {
 	cfg := &config.Config{MemoryWatcherModel: "x", MemoryEmbedModel: "y"}
-	hs := launch.BuildHostState(cfg, "", false, func(int) bool { return false }, "", packinfo.State{})
+	hs := launch.BuildHostState(cfg, "", false, func(int) bool { return false }, "", packinfo.State{}, false)
 	if hs.Keys.Source != "sbx" {
 		t.Errorf("default keys source = %q, want sbx", hs.Keys.Source)
 	}
@@ -106,7 +106,7 @@ func TestBuildHostState_KeylessGatewayCountsAsResolvedInference(t *testing.T) {
 		Backends: map[string]config.InferenceBackend{"gateway": {Driver: "openai-compatible", Auth: "sbx-session", BaseURL: "https://models.example.test/v1"}},
 		Models:   []config.InferenceModelBinding{{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "reasoner", Available: true}},
 	}}
-	hs := launch.BuildHostState(cfg, "", true, func(int) bool { return false }, "sbx", packinfo.State{})
+	hs := launch.BuildHostState(cfg, "", true, func(int) bool { return false }, "sbx", packinfo.State{}, false)
 	if !hs.Keys.Resolved || hs.Keys.OpenAI || hs.Keys.Anthropic || hs.Keys.Google {
 		t.Fatalf("gateway inference should resolve without pretending direct keys exist: %+v", hs.Keys)
 	}
@@ -114,7 +114,7 @@ func TestBuildHostState_KeylessGatewayCountsAsResolvedInference(t *testing.T) {
 		t.Fatal("memory must not be reported enabled merely because its port is part of Pix")
 	}
 	cfg.Services = []string{"memory"}
-	hs = launch.BuildHostState(cfg, "", true, func(int) bool { return false }, "sbx", packinfo.State{})
+	hs = launch.BuildHostState(cfg, "", true, func(int) bool { return false }, "sbx", packinfo.State{}, false)
 	if !hs.Memory.Enabled || hs.Memory.Up {
 		t.Fatalf("enabled-but-stopped memory state is wrong: %+v", hs.Memory)
 	}

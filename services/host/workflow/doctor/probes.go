@@ -58,7 +58,9 @@ type Options struct {
 	// each configured name is (the pack's declarations plus `pix-host mcp
 	// --list`). A zero Env means the real host; a nil HostResolver means the
 	// local inventory is UNKNOWN, which the classification fails closed on.
-	Env          hostenv.Env
+	Env hostenv.Env
+	// GitHubScope overrides how the github row is answered. Nil means ask sbx.
+	GitHubScope  func() (int, []string)
 	HostResolver func() (string, error)
 	// Workspace is the directory whose sandbox the attachment answer is
 	// about. Empty means "no sandbox context", and attachment is unknown.
@@ -108,6 +110,23 @@ func Probes(cfg *config.Config, o Options) []health.Probe {
 		health.LaunchdProbe{Bin: o.LaunchctlBin, Label: orElse(o.LaunchdLabel, service.LaunchdLabel), UID: uid, Args: o.LaunchctlArgs},
 		mcpProbe(cfg, o, sbxBin),
 		health.DaemonProbe{Servers: DaemonServers(cfg)},
+		// A sandbox holds no GitHub credential of its own, so without a global
+		// secret the agent commits and then cannot push. Reported here rather
+		// than discovered at the end of a task.
+		health.GitHubSecretProbe{Fix: secret.GitHubSecretFix, Scope: githubScope(o)},
+	}
+}
+
+// githubScope resolves the GitHub credential's scope, through the Options seam
+// when a test supplies one. Tests cannot ask the real sbx: the answer would be
+// whatever the developer's own machine happens to hold.
+func githubScope(o Options) func() (int, []string) {
+	if o.GitHubScope != nil {
+		return o.GitHubScope
+	}
+	return func() (int, []string) {
+		state, boxes := secret.ProbeGitHubSecret(o.Env)
+		return int(state), boxes
 	}
 }
 

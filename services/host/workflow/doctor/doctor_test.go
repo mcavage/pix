@@ -137,6 +137,9 @@ func healthyHost(t *testing.T) (*config.Config, Options) {
 		LaunchctlArgs: []string{"healthy"},
 		MemoryPort:    memoryUnit(t, rpc.MemoryName, true),
 		UID:           501,
+		// A healthy host has a GLOBAL github secret. Left unset this would ask the
+		// real sbx and report whatever the developer's machine holds.
+		GitHubScope: func() (int, []string) { return health.GitHubGlobal, nil },
 	}
 }
 
@@ -161,7 +164,7 @@ func TestProbes_CoverTheWholeHostSurface(t *testing.T) {
 	for _, p := range Probes(&config.Config{}, Options{}) {
 		names = append(names, p.Name())
 	}
-	want := []string{"sbx", "pack", "providers", "memory", "launchd", "mcp", "daemons"}
+	want := []string{"sbx", "pack", "providers", "memory", "launchd", "mcp", "daemons", "github"}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("probe set = %v, want %v", names, want)
 	}
