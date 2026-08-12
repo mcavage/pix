@@ -58,6 +58,11 @@ jobs:
   legal-gate:
     name: pre-publish legal gate
     uses: ./.github/workflows/legal.yml
+    # A called workflow inherits NO secrets by default. The SBOM job needs the
+    # Docker Hub login for Scout's entitlement, and without this it fails with
+    # "Username and password required" even though the standalone run of the
+    # same workflow passes.
+    secrets: inherit
 
   test-gate:
     name: pre-publish test gate
