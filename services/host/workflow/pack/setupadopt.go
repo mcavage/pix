@@ -85,27 +85,37 @@ func adoptForSetup(env hostenv.Env, out io.Writer, register RegisterFn, wrap Pro
 	// next step to take. A new user has no Slack grant by definition, so that
 	// step could never pass and its fix could never run.
 	interactive := setupInteractivity(assumeYes, cli.IsTTY(os.Stdin))
+	var setupErr error
 	for _, root := range activated {
 		if err := RunPackSetup(env, out, root, requests[root], interactive, wrap); err != nil {
-			return err
+			setupErr = err
+			break
 		}
 	}
 	if len(deferred) == 0 {
-		return nil
+		return setupErr
 	}
 	// Nothing to retry means nothing ran that could have fixed it, so the
 	// deferred failure is simply the answer. Without this, a pack that committed
 	// and then vanished from cfg would have its registration failure deferred
 	// into an empty retry loop and reported as success.
 	if len(activated) == 0 {
-		return errors.Join(deferred...)
+		return errors.Join(append(deferred, setupErr)...)
 	}
 	// The setup hooks have run, so ask again — and only a failure that SURVIVES
 	// them is a real one. Retrying every activated pack rather than only the one
 	// that failed keeps this the same call adoption makes, and the registrar is
 	// idempotent, so a pack that registered cleanly the first time is unchanged.
+	//
+	// This runs even when a step FAILED, which is the difference between a run
+	// that half-works and one that has to be done twice. A pack's steps are
+	// independent: an unrelated step dying (a broken OAuth scope, an expired
+	// grant) says nothing about the command an EARLIER step just installed, and
+	// returning here would leave that command's server unregistered until
+	// someone thought to run `pix mcp add` by hand. Both failures are reported;
+	// neither hides the other.
 	fmt.Fprintln(out, "\nretrying mcp registration now that setup has run…")
-	var errs []error
+	errs := []error{setupErr}
 	for _, root := range activated {
 		if err := registerActivePackMCP(env, out, root, register); err != nil {
 			errs = append(errs, err)

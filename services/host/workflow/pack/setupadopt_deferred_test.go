@@ -145,3 +145,73 @@ func TestAdoptForSetup_NonRegistrationFailureIsStillFatal(t *testing.T) {
 		t.Errorf("a pre-commit failure keeps its own framing, got: %v", err)
 	}
 }
+
+// TestAdoptForSetup_DeferredRegistrationIsRetriedEvenWhenAStepFails: a pack's
+// steps are independent, so a step that dies says nothing about the command an
+// EARLIER step installed. Returning on the first failure left that command's
+// server unregistered until someone ran `pix mcp add` by hand — a run that
+// half-worked and had to be done twice. Both failures are reported.
+func TestAdoptForSetup_DeferredRegistrationIsRetriedEvenWhenAStepFails(t *testing.T) {
+	dir := isolatePackHost(t)
+	root := filepath.Join(dir, "chatpack")
+	mustWritePack(t, root, packinfo.Manifest{
+		Name: "chatpack", Schema: 1,
+		Integrations: []packinfo.Integration{
+			{Name: "Chat", MCP: "chat", Command: "chat-mcp", Setup: "chat"},
+		},
+		Setup: []packinfo.SetupStep{
+			{
+				ID: "chat", Description: "Chat", Required: true,
+				Require: []packinfo.SetupRequire{{Kind: "probe", Argv: []string{"chat-mcp", "status"}}},
+				Apply:   []packinfo.SetupApply{{Kind: "exec", Argv: []string{"install-chat-mcp"}}},
+			},
+			{
+				ID: "grant", Description: "Grant", Required: true,
+				Require: []packinfo.SetupRequire{{Kind: "probe", Argv: []string{"chat-mcp", "auth", "status"}}},
+				Apply:   []packinfo.SetupApply{{Kind: "exec", Argv: []string{"chat-mcp", "auth", "login"}}},
+			},
+		},
+	})
+
+	installed := false
+	fake := &systest.Fake{
+		RunFn: func(string, ...string) (string, error) { return "", nil },
+		RunTimedFn: func(name string, args ...string) (string, bool, error) {
+			switch {
+			case name == "install-chat-mcp":
+				installed = true
+				return "", false, nil
+			case name == "chat-mcp" && len(args) > 0 && args[0] == "auth":
+				// The broken half: an OAuth scope error no install can fix.
+				return "", false, errors.New("invalid_scope")
+			case name == "chat-mcp":
+				if !installed {
+					return "", false, errors.New("executable file not found in $PATH")
+				}
+				return "ok", false, nil
+			}
+			return "", false, nil
+		},
+	}
+
+	var attempts int
+	register := func(_ *config.Config, _ hostenv.Env, _ io.Writer, _ []string, _ map[string]config.MCPServer) error {
+		attempts++
+		if !installed {
+			return errors.New("not registered because a required command is missing: chat (needs \"chat-mcp\")")
+		}
+		return nil
+	}
+
+	var out bytes.Buffer
+	err := adoptForSetup(hostenv.Env{System: fake}, &out, register, nil, []string{root}, nil, true)
+	if err == nil {
+		t.Fatal("a failed required step must still fail the run")
+	}
+	if !strings.Contains(err.Error(), "grant") {
+		t.Errorf("the failing step must be named, got: %v", err)
+	}
+	if attempts != 2 {
+		t.Errorf("register called %d times, want 2 — the command the first step installed must still be registered", attempts)
+	}
+}

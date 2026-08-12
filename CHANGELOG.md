@@ -176,7 +176,10 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   says the registration is deferred, runs the setup hooks, and asks again. A
   failure that SURVIVES setup is still a non-zero exit and still names the
   missing command, so nothing reports success over a server the sandbox will
-  never see. `pix pack use` is unchanged.
+  never see. The retry also runs when a LATER step fails — a pack's steps are
+  independent, and an unrelated failure (a broken OAuth scope, an expired grant)
+  says nothing about the command an earlier step just installed; both failures
+  are reported, neither hides the other. `pix pack use` is unchanged.
 - **`/todos` claimed to toggle the task widget but only refreshed it.** The
   build-time `pi-manage-todo-list@0.4.0` patch now makes bare `/todos` toggle,
   adds explicit `/todos hide` and `/todos show` controls, and binds `Alt+T` as a
