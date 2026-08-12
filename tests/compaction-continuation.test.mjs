@@ -35,6 +35,14 @@ test("durable todo clear supersedes an older active snapshot", () => {
 	assert.deepEqual(latestTodoSnapshot(entries), []);
 });
 
+test("legacy durable todo clear remains compatible", () => {
+	const entries = [
+		todoResult([{ status: "in-progress" }]),
+		{ type: "custom", customType: "pix-todo-cleared", data: {} },
+	];
+	assert.deepEqual(latestTodoSnapshot(entries), []);
+});
+
 test("latestAssistantStoppedAtLength reads the newest assistant result", () => {
 	assert.equal(
 		latestAssistantStoppedAtLength([

@@ -6,6 +6,7 @@
 
 const TODO_TOOL = "manage_todo_list";
 const TODO_CLEARED_ENTRY = "pi-stack-todo-cleared";
+const LEGACY_TODO_CLEARED_ENTRY = "pix-todo-cleared";
 const CONTINUATION_TYPE = "pi-stack-compaction-continuation";
 
 export type TodoStatus = "not-started" | "in-progress" | "completed";
@@ -16,7 +17,10 @@ export type TodoSnapshot = Array<{ status?: TodoStatus }>;
 export function latestTodoSnapshot(entries: any[]): TodoSnapshot {
 	let latest: TodoSnapshot = [];
 	for (const entry of entries ?? []) {
-		if (entry?.type === "custom" && entry.customType === TODO_CLEARED_ENTRY) {
+		if (
+			entry?.type === "custom" &&
+			(entry.customType === TODO_CLEARED_ENTRY || entry.customType === LEGACY_TODO_CLEARED_ENTRY)
+		) {
 			latest = [];
 			continue;
 		}

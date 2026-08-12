@@ -161,6 +161,14 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`/todos` claimed to toggle the task widget but only refreshed it.** The
+  build-time `pi-manage-todo-list@0.4.0` patch now makes bare `/todos` toggle,
+  adds explicit `/todos hide` and `/todos show` controls, and binds `Alt+T` as a
+  safe shortcut (plain `t` would steal normal typing). Hiding never changes the
+  task list, hidden state survives reloads and session-tree navigation, later
+  writes stay hidden, and `/todos clear` remains durable across resume. New
+  clears use the canonical `pi-stack-todo-cleared` marker; both task restore and
+  compaction still honor the earlier `pix-todo-cleared` marker.
 - **The default session model silently became Fable 5 on any host where OpenAI
   is not wired.** `overlord` is the shipped `run_intent`, so whatever it
   resolves to is the interactive model. Its `prefer_providers: [openai]` is a

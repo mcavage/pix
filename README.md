@@ -226,6 +226,11 @@ that reopens it.
 | `pix task new <name>` | an isolated clone plus branch plus sandbox, for parallel work |
 | `pix reset` | move host config and data aside and remove every `pix-*` sandbox |
 
+Inside a session, `/todos` toggles the task widget without changing tasks.
+Use `/todos hide` or `/todos show` for an explicit state, `Alt+T` for the
+keyboard shortcut, and `/todos clear` only when you want to delete the list.
+Visibility survives `/reload` and session-tree navigation.
+
 `pix reset` is reversible. It renames three directories to timestamped `.bak-`
 siblings rather than deleting them, and it leaves your provider keys and your
 git repos alone.
