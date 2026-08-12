@@ -1,20 +1,33 @@
 {
-  "_comment": "AC-REL-04: pinned SBOM tooling for the published image + host binaries. Config only — CI wires it in two places, both BLOCKING for generation: .github/workflows/publish.yml (job `provenance`, scanning the PUBLISHED image by manifest digest and asserting the SBOM is non-empty and references that digest) and .github/workflows/legal.yml (job `sbom`, scanning the repo tree on every PR). What is still NOT implemented, and is claimed nowhere, is SBOM DIFFING as a release gate — see docs/legal/FINDINGS.md #7.",
-  "tool": "anchore/syft",
-  "action": "anchore/sbom-action",
-  "actionRef": "anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610",
-  "actionRefVersion": "v0.24.0",
-  "actionRefVerifiedVia": "github.com/anchore/sbom-action/commit/v0 (the `v0` moving tag's current commit, resolved 2026 via web lookup — not a live registry pull from inside this environment). Re-verify before your first real run; a moving major-version tag like `v0` can point to a newer commit by the time you build.",
+  "_comment": "AC-REL-04: pinned SBOM tooling for the published image + host binaries. Config only \u2014 CI wires it in two places, both BLOCKING for generation: .github/workflows/publish.yml (job `provenance`, scanning the PUBLISHED image by manifest digest and asserting the SBOM is non-empty and that the image it records is the published index or one of its platform children) and .github/workflows/legal.yml (job `sbom`, scanning the repo tree on every PR). What is still NOT implemented, and is claimed nowhere, is SBOM DIFFING as a release gate \u2014 see docs/legal/FINDINGS.md #7.",
+  "tool": "docker/scout",
+  "action": "docker/scout-action",
+  "actionRef": "docker/scout-action@5dae9c7571dd0f3de81f5b501240c593c13c3eb6",
+  "actionRefVersion": "v1.9.3",
+  "actionRefVerifiedVia": "resolved from the repo's own tag list via `gh api repos/docker/scout-action/commits/v1.9.3`, not a moving major tag. Replaced anchore/sbom-action, whose first act is to download the syft binary from a third-party release CDN: that download returned 503 twice in one afternoon, once in legal.yml and once in publish.yml, where it failed a release whose every other gate was green. Scout is Docker's own tool and ships in the Docker CLI.",
   "targets": [
-    { "type": "oci-image", "ref": "docker.io/<namespace>/pix@<published-manifest-digest>", "format": "spdx-json", "note": "pinned by digest, not tag: the tag is mutable, the digest is the artifact that was published" },
-    { "type": "go-binary", "ref": "services/host/cmd/pix", "format": "spdx-json" },
-    { "type": "go-binary", "ref": "services/host (pix-host)", "format": "spdx-json" }
+    {
+      "type": "oci-image",
+      "ref": "docker.io/<namespace>/pix@<published-manifest-digest>",
+      "format": "spdx",
+      "note": "pinned by digest, not tag: the tag is mutable, the digest is the artifact that was published. Scout resolves a multi-arch reference to the PLATFORM CHILD it analyzes and records THAT digest in the pkg:oci purl, so the assertion accepts the index digest or any of its children."
+    },
+    {
+      "type": "go-binary",
+      "ref": "services/host/cmd/pix",
+      "format": "spdx"
+    },
+    {
+      "type": "go-binary",
+      "ref": "services/host (pix-host)",
+      "format": "spdx"
+    }
   ],
-  "licensePolicyReuse": "scripts/legal/notices-policy.json — the SAME fail-closed allowedClasses/weakCopyleftAllowlist gate applies to whatever syft reports; no separate, drifting policy.",
+  "licensePolicyReuse": "scripts/legal/notices-policy.json \u2014 the SAME fail-closed allowedClasses/weakCopyleftAllowlist gate applies to whatever Scout reports; no separate, drifting policy.",
   "provenance": {
     "recordedBy": "scripts/release/verify-provenance.sh",
     "recordPath": "out/provenance/<version>.json",
-    "invariant": "a published version's image digest is immutable once recorded — verify-provenance.sh fails closed on any attempt to re-record a DIFFERENT digest for the same version. It is wired in publish.yml's `provenance` job, which runs AFTER the `merge` job assembles the multi-arch manifest and exports its digest (`docker buildx imagetools inspect`) as a job output.",
-    "scopeLimit": "the immutability check compares against a PRIOR record. In CI each run starts from a clean workspace and uploads the record as an artifact, so cross-run uniqueness comes from the `version` job only ever selecting an unused v<version> tag — see docs/legal/FINDINGS.md."
+    "invariant": "a published version's image digest is immutable once recorded \u2014 verify-provenance.sh fails closed on any attempt to re-record a DIFFERENT digest for the same version. It is wired in publish.yml's `provenance` job, which runs AFTER the `merge` job assembles the multi-arch manifest and exports its digest (`docker buildx imagetools inspect`) as a job output.",
+    "scopeLimit": "the immutability check compares against a PRIOR record. In CI each run starts from a clean workspace and uploads the record as an artifact, so cross-run uniqueness comes from the `version` job only ever selecting an unused v<version> tag \u2014 see docs/legal/FINDINGS.md."
   }
 }

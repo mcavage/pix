@@ -134,7 +134,15 @@ test("publish.yml exports the published manifest digest and records provenance a
 
 test("publish.yml generates the SBOM against the published image digest, not a rebuild", () => {
 	assert.match(publishWorkflow, /image: \$\{\{ env\.IMAGE \}\}@\$\{\{ needs\.merge\.outputs\.digest \}\}/);
-	assert.match(publishWorkflow, /SBOM does not reference the published digest/);
+	// The SBOM must be PROVEN to describe the published artifact. Scout records
+	// the image it analyzed as a pkg:oci purl, and for a multi-arch reference
+	// that is the platform child it resolved, so the check reads the published
+	// index's children and requires the recorded digest to be one of them.
+	// Asserting the old `grep "$DIGEST"` would have accepted a file that merely
+	// contained a string CI had supplied.
+	assert.match(publishWorkflow, /pkg:oci\//);
+	assert.match(publishWorkflow, /imagetools inspect "\$IMAGE@\$DIGEST" --raw/);
+	assert.match(publishWorkflow, /is not \$DIGEST nor any of its platform children/);
 });
 
 test("no legal/publish job passes silently (continue-on-error is gone)", () => {

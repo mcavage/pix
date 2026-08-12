@@ -181,13 +181,25 @@ dependency edges, so nobody can quietly drop the `needs` and keep the file.
   `verify-provenance.sh <version> <published-digest> <git-sha>` and uploads
   the record. A release cannot proceed without an immutable version→digest
   record of what was actually published.
-- `scripts/legal/sbom-config.json` — pins the SBOM tool (`anchore/sbom-action`,
+- `scripts/legal/sbom-config.json` — pins the SBOM tool (`docker/scout-action`,
   SHA-pinned) and states it reuses the SAME license-class policy as the
   notices gate, rather than drifting. It now runs in two places, both
   **blocking for generation**: the `provenance` job scans the **published
-  image by digest** (`IMAGE@sha256:…`) and asserts the SBOM is non-empty and
-  references that digest; `legal.yml`'s `sbom` job scans the repo tree on
-  every PR and asserts a non-empty result. `continue-on-error` is gone — the
+  image by digest** (`IMAGE@sha256:…`) and `legal.yml`'s `sbom` job scans the
+  repo tree (`fs://.`) on every PR, each asserting a non-empty result.
+
+  The published-image job additionally asserts the SBOM DESCRIBES that
+  artifact. Scout resolves a multi-arch reference to the platform child it
+  analyzes and records that digest in a `pkg:oci` purl, so the check is that
+  the recorded digest is the published index or one of its children, read from
+  `docker buildx imagetools inspect --raw`. That is stronger than the previous
+  `grep "$DIGEST"`, which only proved the string CI supplied appeared in the
+  file, never that the tool had scanned it.
+
+  Anchore's action was replaced because its first act is to download the syft
+  binary from a third-party release CDN. That download returned 503 twice in
+  one afternoon, once here and once in `publish.yml`, where it failed a release
+  whose every other gate was green. `continue-on-error` is gone — the
   gate asserts `legal.yml` contains none.
 - What is still **not** claimed: SBOM *diffing* (failing a release because
   the component set changed) is unimplemented and stated as such in

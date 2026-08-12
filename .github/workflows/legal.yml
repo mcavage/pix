@@ -99,12 +99,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - name: Anchore SBOM scan of the repo tree (SPDX)
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+      # Docker Scout, not Anchore. The Anchore action downloads the syft binary
+      # from a third-party release CDN as its first act, and that download 503'd
+      # twice in one afternoon: once here, once in publish, where it killed a
+      # release that had already passed every other gate. Scout is Docker's own
+      # tool and this is a Docker project.
+      - name: Docker Scout SBOM of the repo tree (SPDX)
+        uses: docker/scout-action@5dae9c7571dd0f3de81f5b501240c593c13c3eb6 # v1.9.3
         with:
-          path: "."
-          format: spdx-json
-          output-file: sbom.spdx.json
+          command: sbom
+          image: fs://.
+          format: spdx
+          output: sbom.spdx.json
       - name: Assert the SBOM is non-empty (a generated-but-empty SBOM proves nothing)
         run: |
           set -euo pipefail

@@ -395,22 +395,50 @@ jobs:
           bash scripts/release/verify-provenance.sh "$V" "$DIGEST" "$GITHUB_SHA"
           cat "out/provenance/$V.json"
 
+      # Docker Scout, not Anchore: see legal.yml. The syft download 503'd here and
+      # killed a release whose every other gate was green.
       - name: SBOM of the PUBLISHED image (by digest, SPDX)
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        uses: docker/scout-action@5dae9c7571dd0f3de81f5b501240c593c13c3eb6 # v1.9.3
         with:
+          command: sbom
           image: ${{ env.IMAGE }}@${{ needs.merge.outputs.digest }}
-          format: spdx-json
-          output-file: sbom.spdx.json
+          format: spdx
+          output: sbom.spdx.json
 
-      - name: Assert the SBOM is real and pinned to the published digest
+      # The SBOM must describe the artifact that was PUBLISHED, not some other
+      # build. Scout records the image it analyzed as an OCI purl, and for a
+      # multi-arch reference that is the PLATFORM CHILD it resolved, not the index
+      # digest we passed in. So the check is that the recorded digest is one of
+      # the children of the published index, which is a stronger claim than the
+      # old `grep "$DIGEST"`: that only proved the string we supplied appeared in
+      # the file, never that the tool had scanned it.
+      - name: Assert the SBOM is real and describes the published artifact
         env:
+          IMAGE: ${{ env.IMAGE }}
           DIGEST: ${{ needs.merge.outputs.digest }}
         run: |
           set -euo pipefail
           test -s sbom.spdx.json
           jq -e '.packages | length > 0' sbom.spdx.json >/dev/null
-          grep -q "$DIGEST" sbom.spdx.json \
-            || { echo "::error::SBOM does not reference the published digest $DIGEST"; exit 1; }
+
+          sbom_digest="$(jq -r '
+            [ .packages[]?.externalRefs[]?.referenceLocator
+              | select(startswith("pkg:oci/")) ]
+            | first // ""' sbom.spdx.json | sed -n 's/.*@\(sha256:[0-9a-f]*\).*/\1/p')"
+          [ -n "$sbom_digest" ] \
+            || { echo "::error::SBOM records no pkg:oci purl, so it names no image"; exit 1; }
+
+          # Every digest the published index legitimately covers: the index itself
+          # and each of its per-platform children.
+          docker buildx imagetools inspect "$IMAGE@$DIGEST" --raw \
+            | jq -r --arg d "$DIGEST" '$d, (.manifests[]?.digest // empty)' > /tmp/published-digests
+
+          grep -qx "$sbom_digest" /tmp/published-digests || {
+            echo "::error::SBOM describes $sbom_digest, which is not $DIGEST nor any of its platform children"
+            cat /tmp/published-digests
+            exit 1
+          }
+          echo "SBOM describes $sbom_digest, a published manifest under $DIGEST"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
