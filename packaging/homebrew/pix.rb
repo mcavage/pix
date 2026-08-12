@@ -30,6 +30,12 @@ class Pix < Formula
     strategy :github_latest
   end
 
+  # NO `depends_on` for sbx, deliberately. sbx ships as a CASK
+  # (docker/homebrew-tap Casks/sbx.rb), and a Homebrew formula cannot depend on a
+  # cask: the name would be resolved as a formula, not found, and every
+  # `brew install mcavage/tap/pix` would fail. The caveats name the install
+  # command instead, and `pix doctor` reports a missing sbx as a required gap
+  # with the same command.
   on_macos do
     on_arm do
       url "https://github.com/mcavage/pix/releases/download/v0.1.28/pix_0.1.28_darwin_arm64.tar.gz"
@@ -54,7 +60,15 @@ class Pix < Formula
 
   def caveats
     <<~EOS
-      Run `pix setup` to install prerequisites and finish onboarding.
+      Pix needs Docker Sandboxes, which is a cask and so is not installed
+      automatically:
+
+        brew install docker/tap/sbx
+
+      Use that mainline cask, not docker/tap/sbx@nightly. The two conflict, so
+      having one means uninstalling it before the other will install.
+
+      Then run `pix setup` to finish onboarding.
 
       Before uninstalling this formula, run `pix state uninstall` FIRST.
       Then run `brew uninstall mcavage/tap/pix`. Reversing that order leaves

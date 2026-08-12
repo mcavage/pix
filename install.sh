@@ -363,7 +363,7 @@ check_required_prereqs() {
 	fi
 	if ! have sbx; then
 		err "missing required dependency: sbx"
-		err "  fix: brew install docker/tap/sbx@nightly"
+		err "  fix: brew install docker/tap/sbx"
 		missing=1
 	fi
 	[ "$missing" -eq 0 ] || die "install required dependencies, then run the installer again"
