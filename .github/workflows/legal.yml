@@ -97,6 +97,16 @@ jobs:
   sbom:
     name: SBOM of the repo tree (blocking generation; no diff gate)
     runs-on: ubuntu-latest
+    # Scout is entitled per Docker account, so this job needs the Docker Hub
+    # secrets. A PR from a FORK gets none, and failing it there would block a
+    # contributor for a reason that has nothing to do with their change. So the
+    # job is skipped in that one case.
+    #
+    # What that costs, stated plainly: a fork PR gets no repo-tree SBOM. It is
+    # not a hole in the RELEASE gate, which is what this exists for. publish.yml
+    # calls this workflow on a push to main, where the secrets exist and the job
+    # runs, and the published-image SBOM in publish.yml is unaffected.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       # Docker Scout, not Anchore. The Anchore action downloads the syft binary
@@ -104,6 +114,15 @@ jobs:
       # twice in one afternoon: once here, once in publish, where it killed a
       # release that had already passed every other gate. Scout is Docker's own
       # tool and this is a Docker project.
+      # Scout is entitled per Docker account. Without this the runner is the
+      # anonymous "githubactions" user and the scan fails with
+      # "not entitled to use Docker Scout".
+      - name: Log in to Docker Hub (Scout is entitled per account)
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Docker Scout SBOM of the repo tree (SPDX)
         uses: docker/scout-action@5dae9c7571dd0f3de81f5b501240c593c13c3eb6 # v1.9.3
         with:
