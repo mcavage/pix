@@ -188,13 +188,20 @@ dependency edges, so nobody can quietly drop the `needs` and keep the file.
   image by digest** (`IMAGE@sha256:…`) and `legal.yml`'s `sbom` job scans the
   repo tree (`fs://.`) on every PR, each asserting a non-empty result.
 
-  The published-image job additionally asserts the SBOM DESCRIBES that
-  artifact. Scout resolves a multi-arch reference to the platform child it
-  analyzes and records that digest in a `pkg:oci` purl, so the check is that
-  the recorded digest is the published index or one of its children, read from
-  `docker buildx imagetools inspect --raw`. That is stronger than the previous
-  `grep "$DIGEST"`, which only proved the string CI supplied appeared in the
-  file, never that the tool had scanned it.
+  The published-image job additionally asserts the SBOM does not describe some
+  OTHER image. Scout resolves a multi-arch reference to the platform child it
+  analyzes and records that digest in a `pkg:oci` purl, so when a purl is
+  present the check is that its digest is the published index or one of its
+  children, read from `docker buildx imagetools inspect --raw`.
+
+  The purl is not always present: Scout emits it when it can read the image's
+  provenance attestation, and scanning a digest seconds after the push that
+  created it produced an SBOM with 652 packages and no purl, while the same
+  digest scanned later had one. A missing purl is therefore not a failure.
+  **The limit, stated rather than implied:** with no purl the binding between
+  the SBOM and the published digest rests on the workflow having passed
+  `IMAGE@DIGEST` to Scout, which is by construction and not independently
+  verified. A purl naming the WRONG image still fails the release.
 
   Anchore's action was replaced because its first act is to download the syft
   binary from a third-party release CDN. That download returned 503 twice in
