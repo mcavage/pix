@@ -19,9 +19,13 @@ func (c *captureExec) CommandContext(ctx context.Context, name string, args ...s
 type fakeCmd struct{}
 
 func (f *fakeCmd) Run() error                         { return nil }
+func (f *fakeCmd) Start() error                       { return nil }
+func (f *fakeCmd) Wait() error                        { return nil }
 func (f *fakeCmd) Output() ([]byte, error)            { return nil, nil }
 func (f *fakeCmd) StdoutPipe() (io.ReadCloser, error) { return nil, nil }
 func (f *fakeCmd) StderrPipe() (io.ReadCloser, error) { return nil, nil }
+func (f *fakeCmd) SetEnv(env []string)                {}
+func (f *fakeCmd) SetDir(dir string)                  {}
 
 func TestAdapters_GitShowArgv(t *testing.T) {
 	ce := &captureExec{}

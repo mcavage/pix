@@ -102,18 +102,13 @@ func UnmarshalScenario(data []byte) (*Scenario, error) {
 
 func validateStepWith(step *Step, index int) error {
 	allowedActions := map[string]bool{
-		"mcp_add":        true,
-		"mcp_auth":       true,
-		"mcp_status":     true,
-		"mcp_remove":     true,
-		"sandbox_create": true,
-		"sandbox_probe":  true,
-		"sandbox_remove": true,
-		"image_load":     true,
-		"image_probe":    true,
-		"clone":          true,
-		"build":          true,
-		"check":          true,
+		"mcp_add":          true,
+		"mcp_auth":         true,
+		"mcp_status":       true,
+		"mcp_remove":       true,
+		"candidate_smoke":  true,
+		"mcp_tool_present": true,
+		"check":            true,
 	}
 	if !allowedActions[step.Do] {
 		return fmt.Errorf("steps[%d]: unknown action: %s", index, step.Do)
@@ -130,13 +125,9 @@ func validateStepWith(step *Step, index int) error {
 		if !hasKey(&step.With, "name") {
 			return fmt.Errorf("steps[%d]: action '%s' requires 'name' in 'with'", index, step.Do)
 		}
-	case "image_load", "image_probe":
-		if !hasKey(&step.With, "tag") {
-			return fmt.Errorf("steps[%d]: action '%s' requires 'tag' in 'with'", index, step.Do)
-		}
-	case "clone":
-		if !hasKey(&step.With, "dest") {
-			return fmt.Errorf("steps[%d]: action '%s' requires 'dest' in 'with'", index, step.Do)
+	case "mcp_tool_present":
+		if !hasKey(&step.With, "tool") {
+			return fmt.Errorf("steps[%d]: action '%s' requires 'tool' in 'with'", index, step.Do)
 		}
 	}
 	return nil

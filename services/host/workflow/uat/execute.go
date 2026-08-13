@@ -3,7 +3,9 @@ package uat
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"time"
 
 	uattypes "pix/host/uat"
 )
@@ -64,7 +66,7 @@ func (r *Runner) executeAsync(ctx context.Context, runID, commit string, scenari
 
 		_ = evLog.Append(Event{Type: EventStepStart, Message: step.ID})
 
-		err := r.executeStep(ctx, runID, commit, step)
+		err := r.executeStep(ctx, runID, commit, scenario, step)
 		if err != nil {
 			failErr = err
 			_ = evLog.Append(Event{Type: EventStepDone, State: "fail", Message: err.Error()})
@@ -75,7 +77,133 @@ func (r *Runner) executeAsync(ctx context.Context, runID, commit string, scenari
 	}
 }
 
-func (r *Runner) executeStep(ctx context.Context, runID, commit string, step uattypes.Step) error {
+type RunResources struct {
+	SourceDir   string
+	OutDir      string
+	ImageTar    string
+	FixtureDir  string
+	ImageTag    string
+	SandboxName string
+}
+
+func (r *Runner) executeCandidateSmoke(ctx context.Context, runID, commit string, scenario *uattypes.Scenario) error {
+	res := RunResources{
+		SourceDir:   filepath.Join(r.stateDir, "runs", runID, "source"),
+		OutDir:      filepath.Join(r.stateDir, "runs", runID, "out"),
+		ImageTar:    filepath.Join(r.stateDir, "runs", runID, "image.tar"),
+		FixtureDir:  filepath.Join(r.stateDir, "runs", runID, "fixture"),
+		ImageTag:    "uat-" + runID,
+		SandboxName: "pix-uat-" + runID,
+	}
+
+	if err := r.lease.Acquire(ctx, runID, "sandbox_"+runID); err != nil {
+		return err
+	}
+	if err := r.lease.Acquire(ctx, runID, "image_uat-"+runID); err != nil {
+		return err
+	}
+
+	if err := r.git.Clone(ctx, commit, res.SourceDir); err != nil {
+		return fmt.Errorf("clone: %w", err)
+	}
+
+	err := func() error {
+		select {
+		case r.buildSem <- struct{}{}:
+			defer func() { <-r.buildSem }()
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		cmd := r.exec.CommandContext(ctx, "docker", "build", "-t", "docker.io/mcavage/pix:"+res.ImageTag, "--", res.SourceDir)
+		return cmd.Run()
+	}()
+	if err != nil {
+		return fmt.Errorf("build image: %w", err)
+	}
+
+	if err := os.MkdirAll(res.OutDir, 0755); err != nil {
+		return err
+	}
+
+	buildCandidatePixCmd := r.exec.CommandContext(ctx, "docker", "run", "--rm",
+		"-v", res.SourceDir+":/src",
+		"-v", res.OutDir+":/out",
+		"-w", "/src/services/host",
+		"-e", "CGO_ENABLED=0",
+		"-e", "GOOS=darwin",
+		"golang:1.22",
+		"go", "build", "-o", "/out/pix", "./cmd/pix",
+	)
+	if err := buildCandidatePixCmd.Run(); err != nil {
+		return fmt.Errorf("build candidate pix: %w", err)
+	}
+
+	buildCandidateHostCmd := r.exec.CommandContext(ctx, "docker", "run", "--rm",
+		"-v", res.SourceDir+":/src",
+		"-v", res.OutDir+":/out",
+		"-w", "/src/services/host",
+		"-e", "CGO_ENABLED=0",
+		"-e", "GOOS=darwin",
+		"golang:1.22",
+		"go", "build", "-o", "/out/pix-host", ".",
+	)
+	if err := buildCandidateHostCmd.Run(); err != nil {
+		return fmt.Errorf("build candidate pix-host: %w", err)
+	}
+
+	saveCmd := r.exec.CommandContext(ctx, "docker", "save", "docker.io/mcavage/pix:"+res.ImageTag, "-o", res.ImageTar)
+	if err := saveCmd.Run(); err != nil {
+		return fmt.Errorf("docker save: %w", err)
+	}
+
+	loadCmd := r.exec.CommandContext(ctx, "sbx", "template", "load", "--", "docker.io/mcavage/pix:"+res.ImageTag, res.ImageTar)
+	if err := loadCmd.Run(); err != nil {
+		return fmt.Errorf("template load: %w", err)
+	}
+
+	if err := r.image.Probe(ctx, "docker.io/mcavage/pix:"+res.ImageTag); err != nil {
+		return fmt.Errorf("image probe: %w", err)
+	}
+
+	if err := os.MkdirAll(res.FixtureDir, 0755); err != nil {
+		return err
+	}
+
+	args := []string{"run", "--name", res.SandboxName, "--template", "docker.io/mcavage/pix:"+res.ImageTag}
+	if scenario.Name == "self-uat-runner" || scenario.Name == "self-development-uat" {
+		args = append(args, "--dev")
+	}
+
+	pixCmd := r.exec.CommandContext(ctx, filepath.Join(res.OutDir, "pix"), args...)
+	pixCmd.SetEnv(append(os.Environ(), "PIX_UAT_RECURSION_DISABLE=1"))
+	pixCmd.SetDir(res.FixtureDir)
+
+	if err := pixCmd.Start(); err != nil {
+		return fmt.Errorf("start candidate pix: %w", err)
+	}
+
+	go func() {
+		// Wait to reap the zombie process, ignore error since it will be killed by context cancellation
+		_ = pixCmd.Wait()
+	}()
+
+	probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	for {
+		if err := r.sandbox.Probe(probeCtx, runID); err == nil {
+			break
+		}
+		select {
+		case <-probeCtx.Done():
+			return fmt.Errorf("sandbox probe timeout")
+		case <-time.After(1 * time.Second):
+		}
+	}
+
+	return nil
+}
+
+func (r *Runner) executeStep(ctx context.Context, runID, commit string, scenario *uattypes.Scenario, step uattypes.Step) error {
 	// Step executor based on fixed actions
 	switch step.Do {
 	case "mcp_add":
@@ -108,39 +236,23 @@ func (r *Runner) executeStep(ctx context.Context, runID, commit string, step uat
 	case "mcp_remove":
 		name := extractStringMap(step.With, "name")
 		return r.mcp.Remove(ctx, name)
-	case "sandbox_create":
-		if err := r.lease.Acquire(ctx, runID, "sandbox:"+runID); err != nil {
+	case "candidate_smoke":
+		return r.executeCandidateSmoke(ctx, runID, commit, scenario)
+	case "mcp_tool_present":
+		toolName := extractStringMap(step.With, "tool")
+		for _, c := range toolName {
+			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '_' && c != '-' {
+				return fmt.Errorf("invalid tool name: must be strict identifier")
+			}
+		}
+		status, err := r.mcp.Status(ctx, toolName)
+		if err != nil {
 			return err
 		}
-		return r.sandbox.Create(ctx, runID)
-	case "sandbox_probe":
-		return r.sandbox.Probe(ctx, runID)
-	case "sandbox_remove":
-		return r.sandbox.Remove(ctx, runID)
-	case "image_load":
-		tag := extractStringMap(step.With, "tag")
-		if err := r.lease.Acquire(ctx, runID, "image:"+tag); err != nil {
-			return err
+		if status == "" || status == "not found" { // maybe depends on how status is reported
+			return fmt.Errorf("mcp tool not present: %s", toolName)
 		}
-		return r.image.Load(ctx, tag, r.repoPath)
-	case "image_probe":
-		tag := extractStringMap(step.With, "tag")
-		return r.image.Probe(ctx, tag)
-	case "clone":
-		dest := filepath.Join(r.stateDir, "runs", runID, "repo")
-		return r.git.Clone(ctx, commit, dest)
-	case "build":
-		select {
-		case r.buildSem <- struct{}{}:
-			defer func() { <-r.buildSem }()
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-		dest := filepath.Join(r.stateDir, "runs", runID, "repo")
-		// Document residual Dockerfile container risk: Dockerfile instructions run in a container,
-		// so there is still a risk of malicious container breakout or resource abuse during build.
-		cmd := r.exec.CommandContext(ctx, "docker", "build", "-t", "pix:uat-"+runID, "--", dest)
-		return cmd.Run()
+		return nil
 	case "check":
 		// named check
 		return nil

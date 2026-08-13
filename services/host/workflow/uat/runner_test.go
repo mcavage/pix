@@ -3,10 +3,17 @@ package uat_test
 import (
 	"context"
 	"io"
+	"strings"
 	"testing"
 
 	"pix/host/workflow/uat"
 )
+
+type capturedExec struct {
+	args []string
+	env  []string
+	dir  string
+}
 
 type mockGit struct {
 	resolveCommit func(ctx context.Context, commit string) (string, error)
@@ -44,9 +51,13 @@ func (m *mockExec) CommandContext(ctx context.Context, name string, args ...stri
 type mockCmd struct{}
 
 func (m *mockCmd) Run() error                         { return nil }
+func (m *mockCmd) Start() error                       { return nil }
+func (m *mockCmd) Wait() error                        { return nil }
 func (m *mockCmd) Output() ([]byte, error)            { return nil, nil }
 func (m *mockCmd) StdoutPipe() (io.ReadCloser, error) { return nil, nil }
 func (m *mockCmd) StderrPipe() (io.ReadCloser, error) { return nil, nil }
+func (m *mockCmd) SetEnv(env []string)                {}
+func (m *mockCmd) SetDir(dir string)                  {}
 
 type mockSandbox struct{}
 
@@ -250,3 +261,129 @@ steps:
 		t.Errorf("expected cancelled, got %s", lastStatus.State)
 	}
 }
+
+func TestCandidateSmoke(t *testing.T) {
+	stateDir := t.TempDir()
+	mg := &mockGit{
+		readTreeFile: func(ctx context.Context, commit, path string) ([]byte, error) {
+			return []byte(`schema: pix.uat/1
+name: self-uat-runner
+timeout: 1m
+steps:
+  - id: smoke
+    do: candidate_smoke`), nil
+		},
+	}
+	
+	
+	var execs []capturedExec
+	
+	me := &captureExecHelper{
+		onCommand: func(name string, args ...string) uat.ExecCmd {
+			return &mockCmdHelper{
+				args: append([]string{name}, args...),
+				record: func(ce capturedExec) {
+					execs = append(execs, ce)
+				},
+			}
+		},
+	}
+
+	runner := uat.NewRunner("/repo", stateDir, mg, me, &mockSandbox{}, &mockMCP{}, &mockImage{}, &mockLease{}, 1)
+
+	resp, err := runner.Submit(context.Background(), uat.SubmitRequest{
+		Commit:       "main",
+		ScenarioPath: "test.yaml",
+		DryRun:       false,
+	})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	statusReq := uat.StatusRequest{RunID: resp.RunID, Cursor: 0}
+	var lastStatus *uat.StatusResponse
+	var allEvents []uat.Event
+
+	for i := 0; i < 50; i++ {
+		st, err := runner.Status(context.Background(), statusReq)
+		if err != nil {
+			t.Fatalf("unexpected status error: %v", err)
+		}
+		if len(st.Events) > 0 {
+			allEvents = append(allEvents, st.Events...)
+			statusReq.Cursor += int64(len(st.Events))
+		}
+		if st.State != "running" {
+			lastStatus = st
+			lastStatus.Events = allEvents
+			break
+		}
+		statusReq.WaitMs = 100
+	}
+
+	if lastStatus == nil || lastStatus.State != "pass" {
+		t.Fatalf("expected pass, got %v", lastStatus)
+	}
+	
+	if len(execs) < 6 {
+		t.Errorf("expected at least 6 commands, got %d: %v", len(execs), execs)
+	} else {
+		if execs[0].args[0] != "docker" || execs[0].args[1] != "build" { t.Errorf("expected docker build, got %v", execs[0].args) }
+		if execs[1].args[0] != "docker" || execs[1].args[1] != "run" { t.Errorf("expected docker run pix, got %v", execs[1].args) }
+		if execs[2].args[0] != "docker" || execs[2].args[1] != "run" { t.Errorf("expected docker run pix-host, got %v", execs[2].args) }
+		if execs[3].args[0] != "docker" || execs[3].args[1] != "save" { t.Errorf("expected docker save, got %v", execs[3].args) }
+		if execs[4].args[0] != "sbx" || execs[4].args[1] != "template" { t.Errorf("expected sbx template, got %v", execs[4].args) }
+		
+		lastCmd := execs[5]
+		if !strings.HasSuffix(lastCmd.args[0], "pix") || lastCmd.args[1] != "run" {
+			t.Errorf("expected pix run, got %v", lastCmd.args)
+		}
+		expectedSandboxName := "pix-uat-" + resp.RunID
+		hasName := false
+		hasDev := false
+		for i, a := range lastCmd.args {
+			if a == "--name" && lastCmd.args[i+1] == expectedSandboxName { hasName = true }
+			if a == "--dev" { hasDev = true }
+		}
+		if !hasName { t.Errorf("expected --name %s", expectedSandboxName) }
+		if !hasDev { t.Errorf("expected --dev (self-uat-runner)") }
+		
+		hasEnv := false
+		for _, e := range lastCmd.env {
+			if e == "PIX_UAT_RECURSION_DISABLE=1" { hasEnv = true }
+		}
+		if !hasEnv { t.Errorf("expected PIX_UAT_RECURSION_DISABLE=1") }
+		if lastCmd.dir == "" { t.Errorf("expected dir to be set") }
+	}
+}
+
+type captureExecHelper struct {
+	onCommand func(name string, args ...string) uat.ExecCmd
+}
+
+func (c *captureExecHelper) CommandContext(ctx context.Context, name string, args ...string) uat.ExecCmd {
+	return c.onCommand(name, args...)
+}
+
+type mockCmdHelper struct {
+	args   []string
+	env    []string
+	dir    string
+	record func(ce capturedExec)
+}
+
+func (m *mockCmdHelper) Run() error {
+	m.record(capturedExec{args: m.args, env: m.env, dir: m.dir})
+	return nil
+}
+func (m *mockCmdHelper) Start() error {
+	m.record(capturedExec{args: m.args, env: m.env, dir: m.dir})
+	return nil
+}
+func (m *mockCmdHelper) Wait() error { return nil }
+func (m *mockCmdHelper) Output() ([]byte, error) { return nil, nil }
+func (m *mockCmdHelper) StdoutPipe() (io.ReadCloser, error) { return nil, nil }
+func (m *mockCmdHelper) StderrPipe() (io.ReadCloser, error) { return nil, nil }
+func (m *mockCmdHelper) SetEnv(env []string) { m.env = env }
+func (m *mockCmdHelper) SetDir(dir string) { m.dir = dir }

@@ -60,17 +60,24 @@ func (g *realGit) Clone(ctx context.Context, commit, destPath string) error {
 	return cmd2.Run()
 }
 
-type realSandbox struct{}
+type realSandbox struct {
+	exec Exec
+}
 
-func NewRealSandbox() Sandbox { return &realSandbox{} }
+func NewRealSandbox(e Exec) Sandbox {
+	if e == nil {
+		e = NewRealExec()
+	}
+	return &realSandbox{exec: e}
+}
 
 func (s *realSandbox) Create(ctx context.Context, runID string) error {
-	cmd := exec.CommandContext(ctx, "sbx", "run", "--name", "pix-uat-"+runID, "-d")
+	cmd := s.exec.CommandContext(ctx, "sbx", "run", "--name", "pix-uat-"+runID, "-d")
 	return cmd.Run()
 }
 
 func (s *realSandbox) Probe(ctx context.Context, runID string) error {
-	cmd := exec.CommandContext(ctx, "sbx", "ls", "--format", "json")
+	cmd := s.exec.CommandContext(ctx, "sbx", "ls", "--format", "json")
 	out, err := cmd.Output()
 	if err != nil {
 		return err
@@ -86,7 +93,7 @@ func (s *realSandbox) Remove(ctx context.Context, runID string) error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, "sbx", argv...)
+	cmd := s.exec.CommandContext(ctx, "sbx", argv...)
 	return cmd.Run()
 }
 
@@ -125,37 +132,49 @@ func (m *realMCP) Remove(ctx context.Context, name string) error {
 	return cmd.Run()
 }
 
-type realImage struct{}
+type realImage struct {
+	exec Exec
+}
 
-func NewRealImage() Image { return &realImage{} }
+func NewRealImage(e Exec) Image {
+	if e == nil {
+		e = NewRealExec()
+	}
+	return &realImage{exec: e}
+}
 
 func (i *realImage) Load(ctx context.Context, tag, workspacePath string) error {
-	cmd := exec.CommandContext(ctx, "sbx", "template", "load", "--", tag, workspacePath)
+	// If workspacePath is a tar file, we load it. (We changed executeCandidateSmoke to pass ImageTar as second arg).
+	cmd := i.exec.CommandContext(ctx, "sbx", "template", "load", "--", workspacePath)
 	return cmd.Run()
 }
 
 func (i *realImage) Probe(ctx context.Context, tag string) error {
-	cmd := exec.CommandContext(ctx, "docker", "image", "inspect", "--", tag)
+	cmd := i.exec.CommandContext(ctx, "docker", "image", "inspect", "--", tag)
 	return cmd.Run()
 }
 
 type realLease struct {
 	stateDir string
+	exec     Exec
 }
 
-func NewRealLease(stateDir string) Lease { return &realLease{stateDir: stateDir} }
+func NewRealLease(stateDir string, e Exec) Lease {
+	if e == nil {
+		e = NewRealExec()
+	}
+	return &realLease{stateDir: stateDir, exec: e}
+}
 
 func (l *realLease) Acquire(ctx context.Context, runID string, resource string) error {
 	dir := filepath.Join(l.stateDir, "leases", runID)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
-	// Sanitize resource name
 	safeRes := strings.ReplaceAll(resource, ":", "_")
 	safeRes = strings.ReplaceAll(safeRes, "/", "_")
 	path := filepath.Join(dir, safeRes)
 
-	// Create the file with 0600
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		if os.IsExist(err) {
@@ -196,24 +215,29 @@ func (l *realLease) Cleanup(ctx context.Context, runID string) error {
 		var cleanupErr error
 		if strings.HasPrefix(res, "mcp_") {
 			name := strings.TrimPrefix(res, "mcp_")
-			cleanupErr = exec.CommandContext(ctx, "sbx", "mcp", "rm", "--", name).Run()
+			cleanupErr = l.exec.CommandContext(ctx, "sbx", "mcp", "rm", "--", name).Run()
 		} else if strings.HasPrefix(res, "sandbox_") {
 			name := strings.TrimPrefix(res, "sandbox_")
 			if argv, planErr := sandbox.PlanForceRemove("pix-uat-" + name); planErr == nil {
-				cleanupErr = exec.CommandContext(ctx, "sbx", argv...).Run()
+				cleanupErr = l.exec.CommandContext(ctx, "sbx", argv...).Run()
 			} else {
 				cleanupErr = planErr
 			}
 		} else if strings.HasPrefix(res, "image_") {
 			tag := strings.TrimPrefix(res, "image_")
-			cleanupErr = exec.CommandContext(ctx, "docker", "image", "rm", "-f", "--", tag).Run()
+			if strings.HasPrefix(tag, "uat-") {
+				tag = "docker.io/mcavage/pix:" + tag
+			} else {
+				// Revert standard replacing if needed, but for now we just handle uat- prefix
+				tag = strings.ReplaceAll(tag, "_", "/") // Best effort for others
+			}
+			cleanupErr = l.exec.CommandContext(ctx, "docker", "image", "rm", "-f", "--", tag).Run()
 		}
 
 		if cleanupErr != nil {
 			errs = append(errs, fmt.Errorf("failed to cleanup %s: %w", res, cleanupErr))
 			continue
 		}
-		// Confirm absence could be checked but here we just remove the lease file if cleanup succeeded
 		if err := os.Remove(filepath.Join(dir, res)); err != nil {
 			errs = append(errs, err)
 		}
@@ -234,5 +258,17 @@ type realExec struct{}
 func NewRealExec() Exec { return &realExec{} }
 
 func (e *realExec) CommandContext(ctx context.Context, name string, args ...string) ExecCmd {
-	return exec.CommandContext(ctx, name, args...)
+	return &realExecCmd{Cmd: exec.CommandContext(ctx, name, args...)}
+}
+
+type realExecCmd struct {
+	*exec.Cmd
+}
+
+func (c *realExecCmd) SetEnv(env []string) {
+	c.Cmd.Env = env
+}
+
+func (c *realExecCmd) SetDir(dir string) {
+	c.Cmd.Dir = dir
 }

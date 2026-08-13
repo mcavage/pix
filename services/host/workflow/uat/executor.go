@@ -7,9 +7,13 @@ import (
 
 type ExecCmd interface {
 	Run() error
+	Start() error
+	Wait() error
 	Output() ([]byte, error)
 	StdoutPipe() (io.ReadCloser, error)
 	StderrPipe() (io.ReadCloser, error)
+	SetEnv(env []string)
+	SetDir(dir string)
 }
 
 type Exec interface {
