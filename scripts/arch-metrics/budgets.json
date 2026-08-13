@@ -236,6 +236,20 @@
       "globals": 2,
       "edges": 2,
       "exits": 0
+    },
+    "pix/host/uat": {
+      "prod_loc": 815,
+      "exports": 23,
+      "globals": 3,
+      "edges": 1,
+      "exits": 0
+    },
+    "pix/host/workflow/uat": {
+      "prod_loc": 1971,
+      "exports": 51,
+      "globals": 10,
+      "edges": 10,
+      "exits": 0
     }
   }
 }

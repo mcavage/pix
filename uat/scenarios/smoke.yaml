@@ -1,0 +1,12 @@
+schema: pix.uat/1
+name: smoke
+timeout: 5m
+needs:
+  - sbx
+  - docker
+steps:
+  - id: smoke_test
+    do: candidate_smoke
+    with: {}
+    expect:
+      verdict: pass

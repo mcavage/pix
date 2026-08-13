@@ -201,14 +201,24 @@ pix run --name pix-uat-manual
       ls` shows it; `pix task rm uat-check` persists the branch and tears the
       checkout down.
 - [ ] `pix mcp ls` shows the configured servers; `pix-host mcp --list` prints
-      nothing (pix ships no MCP server: every one is pack-declared and
-      gateway-run, never host-binary-served).
+      nothing (pix ships no general/vendor MCP server: every one is pack-declared and
+      gateway-run, never host-binary-served. uat-mcp is the ephemeral exception).
 - [ ] `/help` and `/getting-started` render the capability map.
 - [ ] Exit every shell attached to the test sandbox; it tears itself down
       (`pix ls` no longer lists it) with no `pix rm` call.
 - [ ] `pix rm pix-uat-manual` if anything survived.
 
-## Step 4 — independent in-sandbox verification pass
+## Step 4 — self-UAT and browser bootstrap
+
+Run the new automated self-UAT locally to verify Chrome/profile integration:
+
+```bash
+pix uat status
+pix uat browser bootstrap
+```
+(Wait for the browser to launch on the persistent 0700 profile, then Ctrl-C to stop).
+
+## Step 5 — independent in-sandbox verification pass (legacy oracle)
 
 Paste this into a fresh session in the loaded sandbox once steps 1-3 pass, for
 a second opinion that assumes nothing from your own session:

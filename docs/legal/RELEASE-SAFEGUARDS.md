@@ -29,7 +29,7 @@ dependency edges, so nobody can quietly drop the `needs` and keep the file.
 
 - `scripts/legal/dependencies.json` — hand-maintained ledger (same convention
   as `scripts/arch-metrics/budgets.json` / `services/host/routing/scorecard.json`):
-  every Go module actually reachable from `services/host`'s build graph (**27**,
+  every Go module actually reachable from `services/host`'s build graph (**34**,
   derived via `go list -deps` across the release GOOS/GOARCH set, see
   `scripts/legal/list-go-modules.sh`), every
   npm package baked into the image, the **MPL-2.0** entries for

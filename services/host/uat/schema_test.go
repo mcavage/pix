@@ -121,6 +121,33 @@ steps:
 `,
 			wantErr: true,
 		},
+		{
+			name: "Candidate smoke valid",
+			data: `
+schema: pix.uat/1
+name: test
+timeout: "5s"
+steps:
+  - id: step1
+    do: candidate_smoke
+    with: {}
+`,
+			wantErr: false,
+		},
+		{
+			name: "Candidate smoke invalid with fields",
+			data: `
+schema: pix.uat/1
+name: test
+timeout: "5s"
+steps:
+  - id: step1
+    do: candidate_smoke
+    with:
+      name: invalid_here
+`,
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {

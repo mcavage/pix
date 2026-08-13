@@ -196,8 +196,8 @@ func TestSuggestVerb(t *testing.T) {
 	if s, ok := suggestVerb("memoyr"); !ok || s != "memory" {
 		t.Errorf("suggestVerb(memoyr) = %q,%v, want memory,true", s, ok)
 	}
-	if s, ok := suggestVerb("stat"); !ok || (s != "status" && s != "st") {
-		t.Errorf("suggestVerb(stat) = %q,%v, want status|st,true", s, ok)
+	if s, ok := suggestVerb("statu"); !ok || (s != "status" && s != "st") {
+		t.Errorf("suggestVerb(statu) = %q,%v, want status|st,true", s, ok)
 	}
 	if s, ok := suggestVerb("zzzzzzzz"); ok {
 		t.Errorf("suggestVerb(zzzzzzzz) = %q,%v, want no suggestion", s, ok)

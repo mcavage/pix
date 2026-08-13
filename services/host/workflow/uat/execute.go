@@ -25,7 +25,7 @@ func (r *Runner) executeAsync(ctx context.Context, runID, commit string, scenari
 				state = "timed-out"
 			} else if ctx.Err() == context.Canceled {
 				state = "cancelled"
-			} else if failErr == ErrNotFound || failErr == ErrQuotaExceeded || IsHostFailure(failErr) || failErr.Error() == "incomplete" { // mapping host unknown absence as incomplete
+			} else if failErr == ErrNotFound || failErr == ErrQuotaExceeded || failErr.Error() == "incomplete" { // mapping host unknown absence as incomplete
 				state = "incomplete"
 			} else {
 				state = "fail"
