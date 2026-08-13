@@ -55,7 +55,7 @@ func runUatMcp(args []string) error {
 	execAdapter := uat.NewRealExec()
 	gitAdapter := uat.NewRealGit(*repo, execAdapter)
 	sandboxAdapter := uat.NewRealSandbox(execAdapter)
-	
+
 	hostBin, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("uat-mcp: failed to get executable path: %w", err)

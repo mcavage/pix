@@ -40,5 +40,3 @@ func BootstrapProviderKeys(env hostenv.Env, in io.Reader, out io.Writer, tty boo
 	}
 	return AnyModelKeyPresent(env)
 }
-
-
