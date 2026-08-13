@@ -20,7 +20,7 @@ func TestBrowserMethodsRace(t *testing.T) {
 	b.clickables["test"] = ClickableRef{ID: "test"}
 
 	var wg sync.WaitGroup
-	
+
 	// Click
 	for i := 0; i < 5; i++ {
 		wg.Add(1)

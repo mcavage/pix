@@ -355,7 +355,7 @@ func (w *blockingWriter) Write(p []byte) (n int, err error) {
 
 func TestMCPServer_ShutdownWithBlockedWriter(t *testing.T) {
 	inReader, inWriter := io.Pipe()
-	
+
 	bw := &blockingWriter{
 		writeBlock: make(chan struct{}),
 	}
@@ -453,13 +453,13 @@ func TestMCPServer_ConcurrentOneFactory(t *testing.T) {
 	req1 := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"uat_browser_action","arguments":{"run_id":"run_same","action":"snapshot"}}}` + "\n"
 	req2 := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"uat_browser_action","arguments":{"run_id":"run_same","action":"read_visible_text"}}}` + "\n"
 	req3 := `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"uat_browser_action","arguments":{"run_id":"run_same","action":"snapshot"}}}` + "\n"
-	
+
 	inWriter.Write([]byte(req1))
 	inWriter.Write([]byte(req2))
 	inWriter.Write([]byte(req3))
 
 	time.Sleep(50 * time.Millisecond)
-	
+
 	// Unblock factory
 	close(bf.blockChan)
 
@@ -611,4 +611,3 @@ func TestMCPServer_ShutdownRacingFactory(t *testing.T) {
 	// Since we can't easily assert on `entry.err`, verifying that the browser was correctly closed
 	// AND that no race condition happens under `go test -race` is sufficient.
 }
-
