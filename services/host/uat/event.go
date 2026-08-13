@@ -3,7 +3,10 @@ package uat
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"syscall"
 )
@@ -19,9 +22,42 @@ type EventStore struct {
 	mu   sync.Mutex
 }
 
+func validatePath(path string) error {
+	parent := filepath.Dir(path)
+	parentInfo, err := os.Stat(parent)
+	if err != nil {
+		return err
+	}
+	if parentInfo.Mode().Perm() != 0700 {
+		return fmt.Errorf("parent directory %s must have 0700 permissions", parent)
+	}
+
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	if info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("event file cannot be a symlink")
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("event file must be a regular file")
+	}
+	if info.Mode().Perm() != 0600 {
+		return fmt.Errorf("event file %s must have 0600 permissions", path)
+	}
+	return nil
+}
+
 func NewEventStore(path string) (*EventStore, error) {
-	// Ensure file exists with 0600 permissions
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err := validatePath(path); err != nil {
+		return nil, err
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, err
 	}
@@ -33,7 +69,7 @@ func (s *EventStore) Append(eventType string, data []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	f, err := os.OpenFile(s.path, os.O_RDWR, 0600)
+	f, err := os.OpenFile(s.path, os.O_RDWR|os.O_APPEND, 0600)
 	if err != nil {
 		return 0, err
 	}
@@ -45,16 +81,21 @@ func (s *EventStore) Append(eventType string, data []byte) (int, error) {
 	}
 	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 
-	// Read last sequence
+	// Validate existing content and find last sequence
 	scanner := bufio.NewScanner(f)
 	lastSeq := 0
 	for scanner.Scan() {
 		var evt Event
-		if err := json.Unmarshal(scanner.Bytes(), &evt); err == nil {
-			if evt.Sequence > lastSeq {
-				lastSeq = evt.Sequence
-			}
+		if err := json.Unmarshal(scanner.Bytes(), &evt); err != nil {
+			return 0, fmt.Errorf("malformed JSONL or invalid event: %w", err)
 		}
+		if evt.Sequence <= lastSeq {
+			return 0, errors.New("non-monotonic sequence detected")
+		}
+		lastSeq = evt.Sequence
+	}
+	if err := scanner.Err(); err != nil {
+		return 0, err
 	}
 	newSeq := lastSeq + 1
 
@@ -64,12 +105,47 @@ func (s *EventStore) Append(eventType string, data []byte) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if _, err := f.Seek(0, 2); err != nil {
-		return 0, err
-	}
 	if _, err := f.Write(append(b, '\n')); err != nil {
 		return 0, err
 	}
 
+	// fsync
+	if err := f.Sync(); err != nil {
+		return 0, err
+	}
+
 	return newSeq, nil
+}
+
+func (s *EventStore) Replay(limit int) ([]Event, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	f, err := os.OpenFile(s.path, os.O_RDONLY, 0600)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer f.Close()
+
+	var events []Event
+	scanner := bufio.NewScanner(f)
+	count := 0
+	lastSeq := 0
+	for scanner.Scan() {
+		var evt Event
+		if err := json.Unmarshal(scanner.Bytes(), &evt); err != nil {
+			return nil, 0, fmt.Errorf("malformed JSONL: %w", err)
+		}
+		events = append(events, evt)
+		lastSeq = evt.Sequence
+		count++
+		if limit > 0 && count >= limit {
+			break
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	return events, lastSeq, nil
 }
