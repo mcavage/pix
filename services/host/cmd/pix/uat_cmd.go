@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -96,10 +97,38 @@ type uatBrowserCmd struct {
 
 type uatBrowserBootstrapCmd struct{}
 
+const uatBrowserBootstrapPage = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pix UAT browser setup</title>
+<style>
+body{font:16px system-ui,sans-serif;max-width:680px;margin:64px auto;padding:0 24px;color:#202124}h1{font-size:28px}p{line-height:1.5}a{display:block;margin:12px 0;padding:12px 16px;border:1px solid #dadce0;border-radius:8px;color:#1967d2;text-decoration:none}small{color:#5f6368}
+</style>
+</head>
+<body>
+<h1>Dedicated pix UAT browser</h1>
+<p>Sign in to the providers that self-UAT will exercise. These sessions stay in this dedicated profile and never use your normal Chrome profile.</p>
+<a href="https://accounts.google.com/">Sign in to Google</a>
+<a href="https://id.atlassian.com/">Sign in to Atlassian</a>
+<a href="https://www.notion.so/login">Sign in to Notion</a>
+<a href="https://github.com/login">Sign in to GitHub</a>
+<p><small>OAuth consent happens later during a UAT run. Close this window or return to the terminal and press Ctrl-C when sign-in is complete.</small></p>
+</body>
+</html>`
+
+func uatBrowserBootstrapURL() string {
+	return "data:text/html;base64," + base64.StdEncoding.EncodeToString([]byte(uatBrowserBootstrapPage))
+}
+
 func (c *uatBrowserBootstrapCmd) Run(d *cli.Deps) error {
 	factory := workflowUat.NewRealBrowserFactory()
-	initialURL, _ := url.Parse("about:blank")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	initialURL, err := url.Parse(uatBrowserBootstrapURL())
+	if err != nil {
+		return fmt.Errorf("bootstrap page: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	browser, err := factory.NewOAuthContext(ctx, &workflowUat.ValidatedURL{URL: initialURL}, nil)
 	if err != nil {
@@ -107,7 +136,7 @@ func (c *uatBrowserBootstrapCmd) Run(d *cli.Deps) error {
 	}
 	defer browser.Close()
 
-	fmt.Fprintln(d.Out, "UAT Chrome profile bootstrapped. Waiting (press Ctrl-C to stop)...")
+	fmt.Fprintln(d.Out, "UAT Chrome opened its dedicated sign-in page. Sign in, then press Ctrl-C here when finished.")
 	<-ctx.Done()
 	return nil
 }
