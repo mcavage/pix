@@ -11,6 +11,20 @@ import (
 	"time"
 )
 
+func TestBuildNavigateActions(t *testing.T) {
+	// Test nil policy (bootstrap browser)
+	actionsNil := buildNavigateActions(nil, "about:blank")
+	if len(actionsNil) != 1 {
+		t.Errorf("expected 1 action for nil policy, got %d", len(actionsNil))
+	}
+
+	// Test non-nil policy (e.g. OAuth)
+	actionsPolicy := buildNavigateActions(&OAuthPolicy{}, "https://github.com/login")
+	if len(actionsPolicy) != 2 {
+		t.Errorf("expected 2 actions for non-nil policy, got %d", len(actionsPolicy))
+	}
+}
+
 func TestBrowserAllocatorArgv(t *testing.T) {
 
 	tmpDir := t.TempDir()

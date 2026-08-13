@@ -88,6 +88,7 @@ func (p *OAuthPolicy) Validate(rawURL string) (*ValidatedURL, error) {
 		return nil, fmt.Errorf("invalid URL: %v", err)
 	}
 
+	// Dynamic query is allowed for state/code, but userinfo and fragments remain refused as a security invariant
 	if u.User != nil {
 		return nil, fmt.Errorf("userinfo not allowed")
 	}

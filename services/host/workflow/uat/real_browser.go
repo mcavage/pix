@@ -40,6 +40,14 @@ func NewRealBrowserFactory() BrowserFactory {
 	return &realFactory{}
 }
 
+func buildNavigateActions(policy URLValidator, u string) []chromedp.Action {
+	var actions []chromedp.Action
+	if policy != nil {
+		actions = append(actions, fetch.Enable())
+	}
+	return append(actions, chromedp.Navigate(u))
+}
+
 func (f *realFactory) NewContext(ctx context.Context, runID string, initialURL *ValidatedURL, policy URLValidator) (Browser, error) {
 	bin, err := findChrome()
 	if err != nil {
@@ -82,7 +90,9 @@ func (f *realFactory) NewContext(ctx context.Context, runID string, initialURL *
 		}
 	})
 
-	if err := chromedp.Run(c, fetch.Enable(), chromedp.Navigate(initialURL.URL.String())); err != nil {
+	actions := buildNavigateActions(policy, initialURL.URL.String())
+
+	if err := chromedp.Run(c, actions...); err != nil {
 		cancelCtx()
 		cancelAlloc()
 		return nil, err
@@ -152,7 +162,9 @@ func (f *realFactory) NewOAuthContext(ctx context.Context, initialURL *Validated
 		}
 	})
 
-	if err = chromedp.Run(c, fetch.Enable(), chromedp.Navigate(initialURL.URL.String())); err != nil {
+	actions := buildNavigateActions(policy, initialURL.URL.String())
+
+	if err = chromedp.Run(c, actions...); err != nil {
 		cancelCtx()
 		cancelAlloc()
 		return nil, err
