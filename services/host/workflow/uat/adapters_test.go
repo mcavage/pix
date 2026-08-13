@@ -480,7 +480,7 @@ func TestAdapters_LeaseRecords(t *testing.T) {
 func TestMCPAuthCaptureErrorImmediate(t *testing.T) {
 	origRead := readCaptureFileFunc
 	defer func() { readCaptureFileFunc = origRead }()
-	
+
 	readCaptureFileFunc = func(path string) (string, error) {
 		return "", os.ErrPermission
 	}

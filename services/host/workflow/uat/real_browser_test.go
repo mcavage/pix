@@ -21,7 +21,7 @@ func TestBrowserAllocatorArgv(t *testing.T) {
 	defer os.Unsetenv("PIX_CHROME_BIN")
 
 	factory := NewRealBrowserFactory()
-	
+
 	u, _ := url.Parse("https://public.com/test")
 	valU := &ValidatedURL{
 		URL:        u,
@@ -89,11 +89,11 @@ func TestOAuthBrowserConcurrency(t *testing.T) {
 
 func TestOAuthBrowserLockHeldDuringLifetime(t *testing.T) {
 	os.Unsetenv("PIX_CHROME_BIN") // Use real chrome if available
-	
+
 	factory := NewRealBrowserFactory()
 	u, _ := url.Parse("data:text/html,<html><body>ok</body></html>")
 	valU := &ValidatedURL{URL: u}
-	
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -101,7 +101,7 @@ func TestOAuthBrowserLockHeldDuringLifetime(t *testing.T) {
 	if err != nil {
 		t.Skipf("skipping because real chrome failed to start: %v", err)
 	}
-	
+
 	// The lock should currently be HELD by the browser.
 	// If we try to lock it now, it should block.
 	acquired := make(chan struct{})
@@ -110,7 +110,7 @@ func TestOAuthBrowserLockHeldDuringLifetime(t *testing.T) {
 		ProfileLock.Unlock()
 		close(acquired)
 	}()
-	
+
 	select {
 	case <-acquired:
 		t.Fatal("ProfileLock was unlocked before Close() was called")
@@ -133,7 +133,7 @@ func TestOAuthBrowserLockHeldDuringLifetime(t *testing.T) {
 func TestOAuthBrowserCloseIdempotent(t *testing.T) {
 	// We will manually construct a realBrowser to test its Close method
 	// since we can't easily start a real chrome.
-	
+
 	ProfileLock.Lock()
 	unlockOnce := &sync.Once{}
 	unlock := func() {
@@ -141,16 +141,16 @@ func TestOAuthBrowserCloseIdempotent(t *testing.T) {
 			ProfileLock.Unlock()
 		})
 	}
-	
+
 	b := &realBrowser{
 		cancelCtx:   func() {},
 		cancelAlloc: func() {},
 		unlock:      unlock,
 	}
-	
+
 	// Close once
 	b.Close()
-	
+
 	// Lock should be available
 	acquired := make(chan struct{})
 	go func() {
@@ -158,13 +158,13 @@ func TestOAuthBrowserCloseIdempotent(t *testing.T) {
 		ProfileLock.Unlock()
 		close(acquired)
 	}()
-	
+
 	select {
 	case <-acquired:
 	case <-time.After(1 * time.Second):
 		t.Fatal("Lock not released on Close")
 	}
-	
+
 	// Close again shouldn't panic or unlock a lock we don't hold
 	ProfileLock.Lock() // Grab it again
 	defer ProfileLock.Unlock()
