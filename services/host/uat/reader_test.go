@@ -14,22 +14,44 @@ func TestReadArtifact(t *testing.T) {
 	os.Mkdir(root, 0755)
 
 	artifact := filepath.Join(root, "artifact.txt")
-	os.WriteFile(artifact, []byte("content"), 0644)
+	content := "line1\nline2\nline3\nAPIKEY: secret123"
+	os.WriteFile(artifact, []byte(content), 0644)
 
 	t.Run("valid", func(t *testing.T) {
-		content, err := ReadArtifact(root, "artifact.txt", 1024)
+		res, err := ReadArtifact(root, "artifact.txt", 1024, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if string(content) != "content" {
-			t.Errorf("expected content, got %s", string(content))
+		// Check redaction
+		if string(res) != "line1\nline2\nline3\nAPIKEY: [REDACTED]" {
+			t.Errorf("expected redacted, got %s", string(res))
 		}
 	})
 
-	t.Run("max-size", func(t *testing.T) {
-		_, err := ReadArtifact(root, "artifact.txt", 5)
+	t.Run("tail", func(t *testing.T) {
+		res, err := ReadArtifact(root, "artifact.txt", 1024, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		expected := "line3\nAPIKEY: [REDACTED]"
+		if string(res) != expected {
+			t.Errorf("expected tail %s, got %s", expected, string(res))
+		}
+	})
+
+	t.Run("symlink-fail", func(t *testing.T) {
+		symlink := filepath.Join(root, "symlink.txt")
+		os.Symlink(artifact, symlink)
+		_, err := ReadArtifact(root, "symlink.txt", 1024, 0)
 		if err == nil {
-			t.Error("expected error due to max size")
+			t.Error("expected error for symlink")
+		}
+	})
+
+	t.Run("oversize", func(t *testing.T) {
+		_, err := ReadArtifact(root, "artifact.txt", 2, 0)
+		if err == nil {
+			t.Error("expected error for oversize file")
 		}
 	})
 }

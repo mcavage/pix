@@ -6,6 +6,12 @@ import (
 	"testing"
 )
 
+type mockGitVerifier struct{}
+
+func (m *mockGitVerifier) FileExistsAtCommit(repoPath, commitSHA, filePath string) (bool, error) {
+	return true, nil
+}
+
 func TestValidateScenarioPath(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "uat-test")
 	if err != nil {
@@ -25,7 +31,10 @@ func TestValidateScenarioPath(t *testing.T) {
 	os.Symlink(outsideFile, symlink)
 
 	// Create valid scenario file
-	os.WriteFile(filepath.Join(root, "scenario.yaml"), []byte("test"), 0644)
+	scenarioFile := filepath.Join(root, "scenario.yaml")
+	os.WriteFile(scenarioFile, []byte("test"), 0644)
+
+	verifier := &mockGitVerifier{}
 
 	tests := []struct {
 		name    string
@@ -39,7 +48,7 @@ func TestValidateScenarioPath(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := ValidateScenarioPath(root, tt.path)
+			_, err := ValidateScenarioPath(root, tt.path, verifier, "repo", "sha")
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ValidateScenarioPath() error = %v, wantErr %v", err, tt.wantErr)
 			}

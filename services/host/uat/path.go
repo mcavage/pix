@@ -3,41 +3,64 @@ package uat
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 )
 
-func ValidateScenarioPath(root, path string) (string, error) {
+type GitVerifier interface {
+	FileExistsAtCommit(repoPath, commitSHA, filePath string) (bool, error)
+}
+
+func isSymlink(path string) bool {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeSymlink != 0
+}
+
+func ValidateScenarioPath(root string, path string, verifier GitVerifier, repoPath, commitSHA string) (string, error) {
 	if filepath.IsAbs(path) {
 		return "", errors.New("absolute path not allowed")
 	}
 
-	// 1. Join with root to get absolute path
-	// 2. EvalSymlinks to resolve any symlinks and get the true path
-	fullPath := filepath.Join(root, path)
-
-	// We need the root to be absolute to compare
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return "", err
 	}
 
-	// EvalSymlinks requires the path to exist, which might not be the case for all UAT scenarios
-	// But for artifact/scenario reading, it should exist.
-	// If it doesn't exist, we might have to be more careful.
-	// Let's assume it exists for now based on the prompt's focus on "artifact reader".
-	realPath, err := filepath.EvalSymlinks(fullPath)
-	if err != nil {
-		// If the file doesn't exist, we can't eval symlinks.
-		// As a fallback, we can check if the directory part exists.
-		// For now, let's assume it should exist.
-		return "", fmt.Errorf("could not evaluate path: %w", err)
-	}
+	fullPath := filepath.Join(absRoot, path)
 
-	// Ensure realPath is inside absRoot
-	if !strings.HasPrefix(realPath, absRoot) {
+	// Check containment
+	rel, err := filepath.Rel(absRoot, fullPath)
+	if err != nil {
+		return "", err
+	}
+	if strings.HasPrefix(rel, "..") || rel == ".." {
 		return "", errors.New("path escapes root")
 	}
 
-	return realPath, nil
+	// Component-by-component symlink check
+	curr := absRoot
+	parts := strings.Split(rel, string(filepath.Separator))
+	for _, part := range parts {
+		curr = filepath.Join(curr, part)
+		if isSymlink(curr) {
+			return "", fmt.Errorf("symlink encountered at component: %s", part)
+		}
+	}
+
+	// Check if file exists at commit
+	if verifier != nil {
+		exists, err := verifier.FileExistsAtCommit(repoPath, commitSHA, rel)
+		if err != nil {
+			return "", err
+		}
+		if !exists {
+			return "", errors.New("file does not exist at commit")
+		}
+	}
+
+	return fullPath, nil
 }
