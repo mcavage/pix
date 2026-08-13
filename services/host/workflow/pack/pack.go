@@ -754,32 +754,17 @@ func registerPackMCP(register RegisterFn, cfg *config.Config, env hostenv.Env, o
 	}
 	if err := register(cfg, env, out, names, packinfo.ServerMCP(p)); err != nil {
 		fmt.Fprintf(out, "note: mcp registration: %v\n", err)
-		return &mcpRegisterError{err: err}
+		return err
 	}
 	return nil
 }
 
-// mcpRegisterError marks the ONE failure a pack adoption can report while the
-// pack is nonetheless fully adopted: registration is the last post-commit side
-// effect, so everything above it is committed and nothing is rolled back.
-//
-// The type exists so a caller can tell that apart from a refusal that adopted
-// nothing (a declined trust gate, an unreadable manifest, a mismatched pin).
-// `pix pack use` still treats both the same and exits non-zero; `pix setup` must
-// not, because the commands registration could not resolve are exactly what the
-// pack's own setup hooks install. This is a pack-local type on purpose: pack may
-// not import mcp (both are capabilities), and the distinction being made here is
-// about this package's own commit ordering, not about anything mcp knows.
-type mcpRegisterError struct{ err error }
-
-func (e *mcpRegisterError) Error() string { return e.err.Error() }
-func (e *mcpRegisterError) Unwrap() error { return e.err }
-
-// registerActivePackMCP re-runs registration for an already-adopted pack. Same
-// call packUse makes after committing, so a retry cannot register a different
-// set than the adoption would have; the registrar itself is idempotent and skips
-// a remote server that is already registered and authorized, so this cannot
-// trigger a second browser grant.
+// registerActivePackMCP registers an already-adopted pack's MCP servers. It is
+// the same call packUse makes after committing, so `pix setup` — which defers
+// registration until its hooks have installed the commands — cannot register a
+// different set than a plain adoption would have. The registrar is idempotent
+// and skips a remote server that is already registered and authorized, so
+// running it here cannot trigger a second browser grant.
 func registerActivePackMCP(env hostenv.Env, out io.Writer, root string, register RegisterFn) error {
 	p, err := packinfo.LoadPack(root)
 	if err != nil {

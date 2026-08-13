@@ -30,35 +30,25 @@ func SetupAdopter(register RegisterFn, wrap ProbeWrapFn) func(hostenv.Env, io.Wr
 
 // adoptForSetup adopts each requested pack through the ordinary pack trust
 // transaction (same BoM review, fingerprint and rollback as `pix pack use`),
-// composes the stack, and runs each pack's REQUIRED setup hooks — a pack that is
-// adopted but not set up is exactly the half-state setup's second check would
-// then report as a gap with no way to close it.
+// composes the stack, runs each pack's REQUIRED setup hooks, and only THEN
+// registers its MCP servers.
+//
+// That order is the whole point. A pack's setup hooks install the commands its
+// MCP servers are, so on a first install the binaries do not exist until the
+// hooks have run — registering before them cannot work, and no amount of
+// retrying makes it work any better. This used to register first and then talk
+// about it: "needs the X command, which is not on PATH", a note about a step
+// the user had not reached yet, and a retry twenty seconds later. All of that
+// was pix narrating an ordering mistake instead of not making it. Nobody
+// running `pix setup` needs to know any of it; they need the thing to work.
 func adoptForSetup(env hostenv.Env, out io.Writer, register RegisterFn, wrap ProbeWrapFn, packs, with []string, assumeYes bool) error {
 	var activated []string
-	var deferred []error
 	for _, requested := range packs {
 		useArgs := []string{NormalizeSetupPackArg(requested)}
 		if assumeYes {
 			useArgs = append([]string{"--yes"}, useArgs...)
 		}
-		err := RunPackUse(env, out, useArgs, register)
-		var regErr *mcpRegisterError
-		switch {
-		case err == nil:
-		case errors.As(err, &regErr):
-			// DEFERRED, not fatal. Registration is adoption's last post-commit
-			// step, so this pack IS adopted; what it could not do is resolve a
-			// command that is not installed yet. Installing it is precisely
-			// what the pack's setup hooks below do — and the error even says
-			// so, naming the very step that failing here made unreachable.
-			//
-			// That was the whole bug: a pack whose first adoption on a clean
-			// machine declares any host command it also knows how to install
-			// could never complete `pix setup`, and the advice printed was a
-			// command the user could not successfully run.
-			deferred = append(deferred, err)
-			fmt.Fprintln(out, "  (registration deferred: setup installs what is missing, then it is retried)")
-		default:
+		if err := RunPackUse(env, out, useArgs, skipRegistration); err != nil {
 			return fmt.Errorf("adopting pack %s: %w", requested, err)
 		}
 		if cfg, err := config.Load(); err == nil && strings.TrimSpace(cfg.Pack) != "" {
@@ -92,29 +82,12 @@ func adoptForSetup(env hostenv.Env, out io.Writer, register RegisterFn, wrap Pro
 			break
 		}
 	}
-	if len(deferred) == 0 {
-		return setupErr
-	}
-	// Nothing to retry means nothing ran that could have fixed it, so the
-	// deferred failure is simply the answer. Without this, a pack that committed
-	// and then vanished from cfg would have its registration failure deferred
-	// into an empty retry loop and reported as success.
-	if len(activated) == 0 {
-		return errors.Join(append(deferred, setupErr)...)
-	}
-	// The setup hooks have run, so ask again — and only a failure that SURVIVES
-	// them is a real one. Retrying every activated pack rather than only the one
-	// that failed keeps this the same call adoption makes, and the registrar is
-	// idempotent, so a pack that registered cleanly the first time is unchanged.
-	//
-	// This runs even when a step FAILED, which is the difference between a run
-	// that half-works and one that has to be done twice. A pack's steps are
-	// independent: an unrelated step dying (a broken OAuth scope, an expired
-	// grant) says nothing about the command an EARLIER step just installed, and
-	// returning here would leave that command's server unregistered until
-	// someone thought to run `pix mcp add` by hand. Both failures are reported;
-	// neither hides the other.
-	fmt.Fprintln(out, "\nretrying mcp registration now that setup has run…")
+	// Register even when a hook FAILED. A pack's steps are independent: an
+	// unrelated step dying (a broken OAuth scope, an expired grant) says nothing
+	// about the command an earlier step just installed, and skipping
+	// registration would leave that command's server — and every remote server
+	// that needed no setup at all — unregistered until someone ran `pix mcp add`
+	// by hand. Both failures are reported; neither hides the other.
 	errs := []error{setupErr}
 	for _, root := range activated {
 		if err := registerActivePackMCP(env, out, root, register); err != nil {
@@ -122,6 +95,15 @@ func adoptForSetup(env hostenv.Env, out io.Writer, register RegisterFn, wrap Pro
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// skipRegistration is the registrar adoption is handed inside `pix setup`: it
+// registers nothing, because registration happens after the setup hooks have
+// installed what it needs (see adoptForSetup). `pix pack use` on its own still
+// registers inline — it runs no hooks, so there is nothing to wait for, and a
+// missing command there is a real answer rather than a stage in a sequence.
+func skipRegistration(*config.Config, hostenv.Env, io.Writer, []string, map[string]config.MCPServer) error {
+	return nil
 }
 
 // setupInteractivity decides whether a pack's setup hooks may run a remediation

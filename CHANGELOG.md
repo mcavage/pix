@@ -177,25 +177,21 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   bounded wait that prints nothing is still indistinguishable from a hang — a
   real `pix setup` sat silent for ten seconds while working correctly. An
   uncontended lock stays quiet.
-- **`pix setup --pack` could be deadlocked by the pack it was setting up.**
-  Registering the pack's MCP servers is adoption's last post-commit step, and a
-  server whose host command is not installed yet cannot be registered — which is
-  the normal state of a FIRST adoption, because installing that command is what
-  the pack's own setup hooks do. Adoption's failure returned before those hooks
-  ran, so the remedy the error named ("the pack's setup step does this: `pix
-  setup --pack <pack> --with <step>`") was the one thing it had made
-  unreachable. Two people hit this on gm-pix-pack, on two different
-  integrations, and neither could get past it without hand-installing a binary.
-  That one post-commit failure is now typed, so `pix setup` can tell it apart
-  from a refusal that adopted NOTHING (a declined trust gate, an unreadable
-  manifest, a mismatched pin — all still fatal, exactly where they were): it
-  says the registration is deferred, runs the setup hooks, and asks again. A
-  failure that SURVIVES setup is still a non-zero exit and still names the
-  missing command, so nothing reports success over a server the sandbox will
-  never see. The retry also runs when a LATER step fails — a pack's steps are
-  independent, and an unrelated failure (a broken OAuth scope, an expired grant)
-  says nothing about the command an earlier step just installed; both failures
-  are reported, neither hides the other. `pix pack use` is unchanged.
+- **`pix setup` registered a pack's MCP servers before running the setup hooks
+  that install them.** A pack's hooks build the very commands its servers are,
+  so on a first install those binaries do not exist yet and registration cannot
+  work. The first attempt at this failed outright, telling the user to run the
+  setup step that its own failure had just made unreachable. The second
+  registered anyway, warned that a command was "not on PATH", noted a step the
+  user had not reached, and retried twenty seconds later — which worked, and
+  made every first install read a warning about a missing binary during the run
+  whose whole job was to install it. Neither is a fix; the order was. `pix
+  setup` now adopts, runs the hooks, and registers once, at the end, with
+  nothing to say about it. `pix pack use` on its own still registers inline —
+  it runs no hooks, so a missing command there is a real answer rather than a
+  stage in a sequence. Registration still happens when a hook FAILS, so an
+  unrelated broken step (an expired grant, a bad OAuth scope) does not cost a
+  pack the servers that were ready.
 - **`/todos` claimed to toggle the task widget but only refreshed it.** The
   build-time `pi-manage-todo-list@0.4.0` patch now makes bare `/todos` toggle,
   adds explicit `/todos hide` and `/todos show` controls, and binds `Alt+T` as a
