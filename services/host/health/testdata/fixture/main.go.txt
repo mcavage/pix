@@ -67,6 +67,13 @@ func main() {
 	case "denied":
 		fmt.Fprintln(os.Stderr, "operation not permitted: blocked by organization policy")
 		os.Exit(1)
+	case "staleprogram":
+		// A loaded agent whose executable a package upgrade deleted: launchctl
+		// answers happily, the job can never spawn, and every kickstart against
+		// it blocks. Real output shape, from the host this was found on.
+		fmt.Println("\tstate = spawn scheduled")
+		fmt.Println("\tprogram = /opt/homebrew/Cellar/pix/0.1.44/bin/pix-host")
+		fmt.Println("\tlast exit code = 78: EX_CONFIG")
 	case "broken":
 		fmt.Fprintln(os.Stderr, "fixture: something went wrong")
 		os.Exit(1)

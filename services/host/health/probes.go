@@ -214,6 +214,31 @@ type LaunchdProbe struct {
 	Label string
 	UID   int
 	Args  []string // overrides the launchctl argv (tests point this at a fixture)
+	// Exists reports whether the program launchd would spawn is on disk. A
+	// FIELD, not a package var: this is a seam a test fills, and a leaf may not
+	// hold a function-valued global.
+	Exists func(string) bool
+}
+
+// programOnDisk answers whether launchd's configured executable is still there.
+func (p LaunchdProbe) programOnDisk(path string) bool {
+	if p.Exists != nil {
+		return p.Exists(path)
+	}
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// launchdProgram reads the executable out of `launchctl print`, which reports it
+// as `program = <path>`. Empty when launchctl said nothing about it — an answer
+// that must never be read as "missing".
+func launchdProgram(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "program = "); ok {
+			return strings.TrimSpace(rest)
+		}
+	}
+	return ""
 }
 
 func (LaunchdProbe) Name() string   { return "launchd" }
@@ -245,6 +270,21 @@ func (p LaunchdProbe) Check(ctx context.Context) Result {
 			Evidence: "launchctl print: " + p.Label + " not in domain"}
 	case o.timedOut || o.failed:
 		return unknownExec(p.Name(), o, "launchctl print")
+	}
+	// LOADED IS NOT THE SAME AS ABLE TO START. `pix serve install` used to
+	// resolve the binary through its symlink, so a Homebrew install wrote a
+	// versioned Cellar path into the plist and the next `brew upgrade` deleted
+	// it. launchd keeps such a job, reports it perfectly happily, and can never
+	// spawn it — so this row said `✓ agent loaded` across three days of a user
+	// chasing "pix setup hangs" whose actual cause was that every `launchctl
+	// kickstart -k` was blocking on a job with no executable.
+	//
+	// The row now says what it can prove: the agent is loaded AND the program it
+	// would run is on disk.
+	if prog := launchdProgram(o.out); prog != "" && !p.programOnDisk(prog) {
+		return Result{Name: p.Name(), Status: StatusAbsent,
+			Detail: "agent loaded but its program is missing", Fix: ServeInstallFix,
+			Evidence: "launchctl print: program = " + prog + " (not on disk — likely a package upgrade removed it)"}
 	}
 	return Result{Name: p.Name(), Status: StatusReady, Detail: "agent loaded", Evidence: "launchctl print: " + p.Label}
 }

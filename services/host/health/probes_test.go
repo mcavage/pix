@@ -420,3 +420,44 @@ func writeScript(t *testing.T, name, body string) string {
 	}
 	return p
 }
+
+// TestLaunchdProbe_LoadedButProgramMissing: "loaded" and "able to start" are
+// different questions, and this row only ever asked the first one.
+//
+// `pix serve install` resolved the binary through its symlink, so a Homebrew
+// install wrote a versioned Cellar path into the plist and the next `brew
+// upgrade` deleted it. launchd keeps that job and reports it cheerfully, while
+// every `launchctl kickstart -k` — which pix runs after every pack change —
+// blocks on a job that can never spawn. A user spent three days on "pix setup
+// hangs" with this row printing `✓ agent loaded` throughout.
+func TestLaunchdProbe_LoadedButProgramMissing(t *testing.T) {
+	bin := buildFixture(t)
+	p := LaunchdProbe{Bin: bin, Label: "com.pix.serve", Args: []string{"staleprogram"},
+		Exists: func(string) bool { return false }}
+	r := check(t, p, 5*time.Second)
+
+	wantStatus(t, r, StatusAbsent)
+	if r.Fix != ServeInstallFix {
+		t.Errorf("fix = %q, want %q — reinstalling the agent is what rewrites the path", r.Fix, ServeInstallFix)
+	}
+	if !strings.Contains(r.Evidence, "Cellar") {
+		t.Errorf("evidence must NAME the missing program, got %q", r.Evidence)
+	}
+
+	// The same agent, with its program present, is ready. A row that cannot tell
+	// these apart is the row that was there before.
+	ok := check(t, LaunchdProbe{Bin: bin, Label: "com.pix.serve", Args: []string{"staleprogram"},
+		Exists: func(string) bool { return true }}, 5*time.Second)
+	wantStatus(t, ok, StatusReady)
+}
+
+// TestLaunchdProbe_SilenceAboutTheProgramIsNotAMissingProgram: launchctl output
+// that never mentions a program says nothing about one. Reading that as absent
+// would turn every unfamiliar launchctl format into a false alarm with a repair
+// attached.
+func TestLaunchdProbe_SilenceAboutTheProgramIsNotAMissingProgram(t *testing.T) {
+	bin := buildFixture(t)
+	r := check(t, LaunchdProbe{Bin: bin, Label: "com.pix.serve", Args: []string{"healthy"},
+		Exists: func(string) bool { return false }}, 5*time.Second)
+	wantStatus(t, r, StatusReady)
+}

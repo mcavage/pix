@@ -161,6 +161,14 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`pix doctor`'s launchd row said `✓ agent loaded` about an agent that could
+  never start.** Loaded and able-to-start are different questions and it only
+  asked the first, so the one surface that could have named the stale-plist bug
+  above reported green throughout three days of chasing it. The row now reads
+  `program =` out of the launchctl output it already had and checks that file
+  exists, reporting a gap with `pix serve install` and naming the missing path
+  when it does not. launchctl output that never mentions a program stays READY:
+  silence is not evidence of absence.
 - **A `brew upgrade` permanently broke the pix LaunchAgent, and every pack
   change then stalled on it.** `pix serve install` resolved the binary through
   its symlink before writing the plist, so a Homebrew install baked
