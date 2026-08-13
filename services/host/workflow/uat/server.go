@@ -160,18 +160,16 @@ func (s *MCPServer) getOrCreateBrowser(ctx context.Context, runID string) (Brows
 	b, err := s.browserFactory.NewContext(ctx, runID, &ValidatedURL{URL: u}, &OAuthPolicy{Resolver: &realResolver{}})
 	
 	s.browsersMu.Lock()
+	if s.done.Load() && b != nil {
+		b.Close()
+		b = nil
+		err = fmt.Errorf("server shutting down")
+	}
 	entry.b = b
 	entry.err = err
 	close(entry.ready)
-	
-	if s.done.Load() && b != nil {
-		b.Close()
-		entry.b = nil
-		entry.err = fmt.Errorf("server shutting down")
-		b = nil
-		err = entry.err
-	}
 	s.browsersMu.Unlock()
+
 	
 	return b, err
 }

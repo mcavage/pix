@@ -516,3 +516,99 @@ func TestMCPServer_HungStartupShutdown(t *testing.T) {
 		t.Errorf("Expected 1 factory call, got %d", calls)
 	}
 }
+
+type singleflightRaceBrowser struct {
+	mockBrowser
+	mu     sync.Mutex
+	closed bool
+}
+
+func (b *singleflightRaceBrowser) Close() error {
+	b.mu.Lock()
+	b.closed = true
+	b.mu.Unlock()
+	return nil
+}
+
+func (b *singleflightRaceBrowser) isClosed() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.closed
+}
+
+type singleflightRaceFactory struct {
+	readyChan chan struct{}
+	mu        sync.Mutex
+	b         *singleflightRaceBrowser
+}
+
+func (f *singleflightRaceFactory) NewContext(ctx context.Context, runID string, initialURL *uat.ValidatedURL, policy uat.URLValidator) (uat.Browser, error) {
+	<-f.readyChan
+	f.mu.Lock()
+	f.b = &singleflightRaceBrowser{}
+	b := f.b
+	f.mu.Unlock()
+	return b, nil
+}
+
+func (f *singleflightRaceFactory) getB() *singleflightRaceBrowser {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.b
+}
+
+func (f *singleflightRaceFactory) NewOAuthContext(ctx context.Context, initialURL *uat.ValidatedURL, policy uat.URLValidator) (uat.Browser, error) {
+	return nil, nil
+}
+
+func TestMCPServer_ShutdownRacingFactory(t *testing.T) {
+	inReader, inWriter := io.Pipe()
+	var out bytes.Buffer
+
+	bf := &singleflightRaceFactory{
+		readyChan: make(chan struct{}),
+	}
+	mg := &mockGit{}
+	tmpDir := t.TempDir()
+	pixHost := filepath.Join(tmpDir, "pix-host")
+	os.WriteFile(pixHost, []byte(""), 0755)
+
+	runner, _ := uat.NewRunner(pixHost, "/repo", tmpDir, mg, &mockExec{}, &mockSandbox{}, &mockMCP{}, &mockImage{}, &mockLease{}, 1)
+
+	s := uat.NewMCPServer(runner, bf, "", inReader, &out, nil)
+	s.ShutdownTimeout = 10 * time.Millisecond
+
+	go s.Serve(context.Background())
+
+	// 1. Kick off a browser creation that will block
+	req := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"uat_browser_action","arguments":{"run_id":"run_race","action":"snapshot"}}}` + "\n"
+	inWriter.Write([]byte(req))
+
+	// 2. Wait for it to enter the factory
+	time.Sleep(50 * time.Millisecond)
+
+	// 3. Kick off a second request that will block on <-entry.ready
+	req2 := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"uat_browser_action","arguments":{"run_id":"run_race","action":"snapshot"}}}` + "\n"
+	inWriter.Write([]byte(req2))
+	time.Sleep(50 * time.Millisecond)
+
+	// 4. Trigger shutdown
+	inWriter.Close()
+	time.Sleep(50 * time.Millisecond) // let done.Store(true) execute
+
+	// 5. Unblock factory, returning a valid browser while shutting down
+	close(bf.readyChan)
+	time.Sleep(100 * time.Millisecond) // let it process
+
+	// 6. Ensure the browser got closed and singleflight returned error
+	b := bf.getB()
+	if b == nil || !b.isClosed() {
+		t.Errorf("browser not closed during shutdown race")
+	}
+
+	// Wait, we can test singleflight state by reading the entry directly since it's unexported?
+	// The problem was mutating it after closing readyChan.
+	// Since we can't easily assert on `entry.err`, verifying that the browser was correctly closed
+	// AND that no race condition happens under `go test -race` is sufficient.
+}
+
