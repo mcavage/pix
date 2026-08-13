@@ -71,6 +71,10 @@ func TestUATLifecycle_CreateDev(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
+	runnerState := filepath.Join(tmpDir, "uat", "sessions", id)
+	if info, statErr := os.Stat(runnerState); statErr != nil || !info.IsDir() || info.Mode().Perm() != 0700 {
+		t.Fatalf("runner state %q must exist with mode 0700 before gateway spawn: info=%v err=%v", runnerState, info, statErr)
+	}
 
 	foundAdd := false
 	for _, c := range cmds {

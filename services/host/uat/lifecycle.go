@@ -98,6 +98,19 @@ func RegisterMCP(env hostenv.Env, rec *Registration, repoPath, statePath string)
 		return err
 	}
 	runnerStatePath := filepath.Join(statePath, "sessions", rec.SessionID)
+	if err := os.MkdirAll(runnerStatePath, 0700); err != nil {
+		return fmt.Errorf("create UAT runner state: %w", err)
+	}
+	info, err := os.Lstat(runnerStatePath)
+	if err != nil {
+		return fmt.Errorf("inspect UAT runner state: %w", err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("UAT runner state %s is not a real directory", runnerStatePath)
+	}
+	if err := os.Chmod(runnerStatePath, 0700); err != nil {
+		return fmt.Errorf("secure UAT runner state: %w", err)
+	}
 	planner, err := NewMCPPlanner(hostBin, repoPath, runnerStatePath, rec.SessionID)
 	if err != nil {
 		return err
@@ -105,6 +118,7 @@ func RegisterMCP(env hostenv.Env, rec *Registration, repoPath, statePath string)
 	args := planner.PlanRegistrationAdd(rec.MCPName)
 	out, err := env.Run("sbx", args...)
 	if err != nil {
+		_ = os.RemoveAll(runnerStatePath)
 		return fmt.Errorf("sbx mcp add failed: %v, output: %s", err, out)
 	}
 	return nil
