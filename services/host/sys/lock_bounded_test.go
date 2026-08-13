@@ -122,13 +122,12 @@ func TestLock_SaysItIsWaiting(t *testing.T) {
 	}
 	defer syscall.Flock(int(holder.Fd()), syscall.LOCK_UN)
 
-	prevWait, prevNotice, prevAfter := flockWait, flockNotice, flockNoticeAfter
+	prevWait, prevAfter := flockWait, flockNoticeAfter
 	var said []string
 	flockWait, flockNoticeAfter = 300*time.Millisecond, 50*time.Millisecond
-	flockNotice = func(m string) { said = append(said, m) }
-	defer func() { flockWait, flockNotice, flockNoticeAfter = prevWait, prevNotice, prevAfter }()
+	defer func() { flockWait, flockNoticeAfter = prevWait, prevAfter }()
 
-	_ = Lock(path, func() error { return nil })
+	_ = LockNotifying(path, func(m string) { said = append(said, m) }, func() error { return nil })
 
 	if len(said) != 1 {
 		t.Fatalf("expected exactly one waiting notice, got %d: %v", len(said), said)
@@ -142,12 +141,9 @@ func TestLock_SaysItIsWaiting(t *testing.T) {
 // every lock. An uncontended section must stay silent, or every pix command
 // grows a line of noise.
 func TestLock_SaysNothingWhenTheLockIsFree(t *testing.T) {
-	prev := flockNotice
 	var said []string
-	flockNotice = func(m string) { said = append(said, m) }
-	defer func() { flockNotice = prev }()
-
-	if err := Lock(filepath.Join(t.TempDir(), "quiet.lock"), func() error { return nil }); err != nil {
+	if err := LockNotifying(filepath.Join(t.TempDir(), "quiet.lock"),
+		func(m string) { said = append(said, m) }, func() error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if len(said) != 0 {

@@ -76,4 +76,18 @@ func AtomicWriteInDir(dir, name string, data []byte, perm os.FileMode) error {
 // Lock is the package-level form of FS.Lock, for the few callers that hold a
 // lock without holding a System (the serve supervisor takes its spawn lock
 // before any command context exists).
-func Lock(lockPath string, fn func() error) error { return withFlock(lockPath, fn) }
+func Lock(lockPath string, fn func() error) error { return withFlock(lockPath, nil, fn) }
+
+// LockNotifying is Lock for a caller that has somewhere to narrate: notify is
+// called ONCE if the lock is not available promptly, with a line naming it.
+//
+// The notifier is a PARAMETER rather than a package var because this is a leaf:
+// a function-valued global here is a dependency seam, which is an L3/L4
+// technique and not a leaf's to own (wiring_test.go enforces it), and printing
+// from here would put a terminal stream in a package whose only sanctioned
+// stream use is handing a terminal to a child process (processboundary_test.go
+// enforces that one). Both rules point the same way — the layer that owns a
+// writer owns the message.
+func LockNotifying(lockPath string, notify func(string), fn func() error) error {
+	return withFlock(lockPath, notify, fn)
+}

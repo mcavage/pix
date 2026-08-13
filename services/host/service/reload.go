@@ -117,6 +117,13 @@ func relazyServe(rl serveReloader) serveRelazyResult {
 func PropagateConfig(rl serveReloader, out io.Writer) {
 	switch rl.mode() {
 	case serveManaged:
+		// SAY IT FIRST. kickManaged kills the daemon and waits for it to die,
+		// which is up to its whole budget of silence at the end of a command
+		// that has otherwise been narrating every step — and a user watching
+		// `pix setup` stop dead after "note: mcp registration…" reasonably reads
+		// that as a hang and Ctrl-Cs a run that was about to finish. Someone
+		// did.
+		fmt.Fprintln(out, "restarting pix services to apply the change…")
 		if err := rl.kickManaged(); err != nil {
 			fmt.Fprintf(out, "warning: could not restart the managed pix service (%v) — restart it manually to apply the change.\n", err)
 			return

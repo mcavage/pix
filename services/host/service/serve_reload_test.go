@@ -244,3 +244,28 @@ func TestPropagateServeConfig_DownTouchesNothing(t *testing.T) {
 		t.Errorf("down message = %q", out.String())
 	}
 }
+
+// TestPropagateServeConfig_AnnouncesBeforeItBlocks: the restart kills the
+// daemon and WAITS for it to die, so the message has to come first. Printing
+// only on success meant a whole budget of silence at the end of an otherwise
+// chatty command, and a real `pix setup` run was Ctrl-C'd there by someone who
+// reasonably read it as a hang. The failure path must say it too — that is the
+// case where the silence used to be longest.
+func TestPropagateServeConfig_AnnouncesBeforeItBlocks(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		kickErr error
+	}{
+		{"restart succeeds", nil},
+		{"restart fails", os.ErrPermission},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := &reloadRec{}
+			var out bytes.Buffer
+			PropagateConfig(rec.reloader(serveManaged, tc.kickErr, nil), &out)
+			if !strings.Contains(out.String(), "restarting pix services") {
+				t.Errorf("nothing announced the wait; output was %q", out.String())
+			}
+		})
+	}
+}

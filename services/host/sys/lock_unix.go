@@ -29,11 +29,6 @@ const flockPoll = 25 * time.Millisecond
 // so a test can shrink it; nothing else may write it.
 var flockNoticeAfter = time.Second
 
-// flockNotice announces a wait that has gone on long enough to look like
-// nothing is happening. Stderr, because it is progress about the command rather
-// than the command's output, and a VARIABLE so tests are not noisy.
-var flockNotice = func(msg string) { fmt.Fprintln(os.Stderr, msg) }
-
 // withFlock takes an advisory exclusive lock on lockPath for the duration of fn:
 // every caller serializes a short section it must actually perform.
 //
@@ -47,7 +42,7 @@ var flockNotice = func(msg string) { fmt.Fprintln(os.Stderr, msg) }
 //
 // The error names the lock file, because the useful next step is finding out
 // who holds it (`lsof <path>`).
-func withFlock(lockPath string, fn func() error) error {
+func withFlock(lockPath string, notify func(string), fn func() error) error {
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
 		return fmt.Errorf("create lock dir: %w", err)
 	}
@@ -56,7 +51,7 @@ func withFlock(lockPath string, fn func() error) error {
 		return fmt.Errorf("open lock %s: %w", lockPath, err)
 	}
 	defer f.Close()
-	if err := acquireFlock(f, flockWait); err != nil {
+	if err := acquireFlock(f, flockWait, notify); err != nil {
 		return err
 	}
 	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
@@ -68,7 +63,7 @@ func withFlock(lockPath string, fn func() error) error {
 // all: syscall.Flock has no timeout, and the alternative — a blocking Flock on
 // a goroutine plus a select — leaks that goroutine for as long as the holder
 // lives, still holding the fd.
-func acquireFlock(f *os.File, budget time.Duration) error {
+func acquireFlock(f *os.File, budget time.Duration, notify func(string)) error {
 	start := time.Now()
 	deadline := start.Add(budget)
 	announced := false
@@ -80,9 +75,9 @@ func acquireFlock(f *os.File, budget time.Duration) error {
 		if err != syscall.EWOULDBLOCK {
 			return fmt.Errorf("acquire lock %s: %w", f.Name(), err)
 		}
-		if !announced && time.Since(start) >= flockNoticeAfter {
+		if notify != nil && !announced && time.Since(start) >= flockNoticeAfter {
 			announced = true
-			flockNotice(fmt.Sprintf("waiting for another pix process to finish (lock: %s)…", f.Name()))
+			notify(fmt.Sprintf("waiting for another pix process to finish (lock: %s)…", f.Name()))
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("timed out after %s waiting for the lock %s — another pix process is holding it "+

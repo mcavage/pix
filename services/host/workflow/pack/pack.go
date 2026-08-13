@@ -486,6 +486,11 @@ type packTxn struct {
 	records  []packActivationRecord
 	lockRoot string   // pack whose pack.lock hint to write ("" writes none)
 	lock     packLock // the hint itself; only meaningful with lockRoot
+	// out is where a WAIT gets narrated, and nothing else. The commit takes the
+	// cross-process trust lock, so a concurrent pix is a silent pause right at
+	// the point the user is watching for "active pack ->"; nil is fine and means
+	// no narration.
+	out io.Writer
 }
 
 func (t packTxn) commit(cfg *config.Config) error {
@@ -493,7 +498,7 @@ func (t packTxn) commit(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	return withPackTrustLock(func() error {
+	return withPackTrustLockOn(t.out, func() error {
 		fresh, lerr := loadPackTrustStore()
 		if lerr != nil {
 			return t.abort(restoreLock, "pack trust state unreadable: %v", lerr)
@@ -1115,7 +1120,7 @@ func packUse(env hostenv.Env, out io.Writer, rest []string, register RegisterFn)
 		// (a local-path re-activation must not un-adopt it).
 		lock.Remote, lock.Commit = adoptionMarker(store, root, hint)
 	}
-	if err := (packTxn{records: records, lockRoot: root, lock: lock}).commit(cfg); err != nil {
+	if err := (packTxn{records: records, lockRoot: root, lock: lock, out: out}).commit(cfg); err != nil {
 		return err
 	}
 	recordPackAcceptance(out, key, root, fingerprint, remote, commit)

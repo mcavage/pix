@@ -165,7 +165,7 @@ func (Real) WriteFile(path string, data []byte, perm os.FileMode) error {
 	return AtomicWriteInDir(dir, filepath.Base(path), data, perm)
 }
 
-func (Real) Lock(lockPath string, fn func() error) error { return withFlock(lockPath, fn) }
+func (Real) Lock(lockPath string, fn func() error) error { return withFlock(lockPath, nil, fn) }
 
 func (Real) RunTimed(name string, args ...string) (string, bool, error) {
 	return RunTimed(ProbeTimeout, name, args...)

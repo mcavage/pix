@@ -15,6 +15,7 @@ package pack
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,6 +45,20 @@ func packTrustLockPath() string {
 // already holding the lock uses the *Locked variants.
 func withPackTrustLock(fn func() error) error {
 	return sys.Lock(packTrustLockPath(), fn)
+}
+
+// withPackTrustLockOn is withPackTrustLock for a caller that has somewhere to
+// narrate. A contended lock is a wait the user cannot otherwise see: `pix
+// setup` printed a registration note and then stopped dead, and the run was
+// Ctrl-C'd for looking hung when it was working. The message belongs to this
+// layer because this is the layer holding a writer — sys is a leaf and may
+// neither own a stream nor a function-valued global (both are enforced).
+func withPackTrustLockOn(out io.Writer, fn func() error) error {
+	notify := func(string) {}
+	if out != nil {
+		notify = func(msg string) { fmt.Fprintln(out, msg) }
+	}
+	return sys.LockNotifying(packTrustLockPath(), notify, fn)
 }
 
 // mutatePackTrustStore is the sanctioned way to WRITE the trust store: under

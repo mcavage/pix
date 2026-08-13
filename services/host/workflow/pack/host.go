@@ -243,7 +243,7 @@ func installHostPackWrappersStaged(p *packinfo.Info, proxySHA map[string]string)
 // always a SUPERSET of what is live — never a wrapper owned by nobody.
 func refreshHostPackWrappers(out io.Writer, cfg *config.Config, strict bool) (*packinfo.Info, error) {
 	var p *packinfo.Info
-	err := withPackTrustLock(func() error {
+	err := withPackTrustLockOn(out, func() error {
 		var rerr error
 		p, rerr = refreshHostPackWrappersLocked(out, cfg, strict)
 		return rerr
