@@ -250,7 +250,7 @@ func (r *Runner) executeCandidateSmoke(ctx context.Context, runID, commit string
 		return err
 	}
 
-	args := []string{"run", res.FixtureDir, "--name", res.SandboxName, "--template", "docker.io/mcavage/pix:" + res.ImageTag}
+	args := []string{"run", res.FixtureDir, "--name", res.SandboxName, "--template", "docker.io/mcavage/pix:" + res.ImageTag, "--keep"}
 	if scenario.Name == "self-uat-runner" || scenario.Name == "self-development-uat" {
 		args = append(args, "--dev")
 	}

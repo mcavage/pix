@@ -402,7 +402,7 @@ steps:
 		expectedSandboxName := "pix-uat-" + resp.RunID
 		expectedTemplate := "docker.io/mcavage/pix:uat-" + resp.RunID
 
-		expectedArgs := []string{lastCmd.args[0], "run", fixtureDir, "--name", expectedSandboxName, "--template", expectedTemplate, "--dev"}
+		expectedArgs := []string{lastCmd.args[0], "run", fixtureDir, "--name", expectedSandboxName, "--template", expectedTemplate, "--keep", "--dev"}
 		for i, arg := range expectedArgs {
 			if i >= len(lastCmd.args) || lastCmd.args[i] != arg {
 				t.Errorf("expected arg %d to be %q, got %q", i, arg, lastCmd.args)
