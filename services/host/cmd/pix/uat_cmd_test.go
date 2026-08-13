@@ -22,13 +22,17 @@ func TestUatBrowserBootstrapURLIsUseful(t *testing.T) {
 		t.Fatalf("decode bootstrap page: %v", err)
 	}
 	text := string(page)
-	for _, want := range []string{"Dedicated pix UAT browser", "accounts.google.com", "id.atlassian.com", "notion.so/login", "github.com/login"} {
+	for _, want := range []string{"Dedicated pix UAT browser", "actual OAuth flow", "profile is ready"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("bootstrap page missing %q", want)
 		}
 	}
-	if strings.Contains(strings.ToLower(text), "<script") {
+	lower := strings.ToLower(text)
+	if strings.Contains(lower, "<script") {
 		t.Error("bootstrap page must not execute script")
+	}
+	if strings.Contains(lower, "href=\"http") {
+		t.Error("bootstrap must not guess which providers the user needs")
 	}
 }
 

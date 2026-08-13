@@ -104,17 +104,14 @@ const uatBrowserBootstrapPage = `<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Pix UAT browser setup</title>
 <style>
-body{font:16px system-ui,sans-serif;max-width:680px;margin:64px auto;padding:0 24px;color:#202124}h1{font-size:28px}p{line-height:1.5}a{display:block;margin:12px 0;padding:12px 16px;border:1px solid #dadce0;border-radius:8px;color:#1967d2;text-decoration:none}small{color:#5f6368}
+body{font:16px system-ui,sans-serif;max-width:680px;margin:64px auto;padding:0 24px;color:#202124}h1{font-size:28px}p{line-height:1.5}small{color:#5f6368}
 </style>
 </head>
 <body>
 <h1>Dedicated pix UAT browser</h1>
-<p>Sign in to the providers that self-UAT will exercise. These sessions stay in this dedicated profile and never use your normal Chrome profile.</p>
-<a href="https://accounts.google.com/">Sign in to Google</a>
-<a href="https://id.atlassian.com/">Sign in to Atlassian</a>
-<a href="https://www.notion.so/login">Sign in to Notion</a>
-<a href="https://github.com/login">Sign in to GitHub</a>
-<p><small>OAuth consent happens later during a UAT run. Close this window or return to the terminal and press Ctrl-C when sign-in is complete.</small></p>
+<p>This dedicated browser profile is ready. It never uses your normal Chrome profile.</p>
+<p>There is nothing to sign in to yet. When self-UAT authorizes an MCP server, the actual OAuth flow for that server will open here.</p>
+<p><small>Close this window or return to the terminal and press Ctrl-C. The profile will be reused by later UAT runs.</small></p>
 </body>
 </html>`
 
@@ -136,7 +133,7 @@ func (c *uatBrowserBootstrapCmd) Run(d *cli.Deps) error {
 	}
 	defer browser.Close()
 
-	fmt.Fprintln(d.Out, "UAT Chrome opened its dedicated sign-in page. Sign in, then press Ctrl-C here when finished.")
+	fmt.Fprintln(d.Out, "UAT Chrome opened its dedicated profile. Press Ctrl-C here when ready.")
 	<-ctx.Done()
 	return nil
 }
