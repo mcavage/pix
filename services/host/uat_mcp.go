@@ -53,10 +53,10 @@ func runUatMcp(args []string) error {
 
 	execAdapter := uat.NewRealExec()
 	gitAdapter := uat.NewRealGit(*repo, execAdapter)
-	sandboxAdapter := uat.NewRealSandbox()
+	sandboxAdapter := uat.NewRealSandbox(execAdapter)
 	mcpAdapter := uat.NewRealMCP(execAdapter)
-	imageAdapter := uat.NewRealImage()
-	leaseAdapter := uat.NewRealLease(*state)
+	imageAdapter := uat.NewRealImage(execAdapter)
+	leaseAdapter := uat.NewRealLease(*state, execAdapter)
 
 	runner := uat.NewRunner(*repo, *state, gitAdapter, execAdapter, sandboxAdapter, mcpAdapter, imageAdapter, leaseAdapter, 1)
 	runner.RetryCleanups()

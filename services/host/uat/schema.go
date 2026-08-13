@@ -125,6 +125,10 @@ func validateStepWith(step *Step, index int) error {
 		if !hasKey(&step.With, "name") {
 			return fmt.Errorf("steps[%d]: action '%s' requires 'name' in 'with'", index, step.Do)
 		}
+	case "candidate_smoke":
+		if step.With.Kind == yaml.MappingNode && len(step.With.Content) > 0 {
+			return fmt.Errorf("steps[%d]: action 'candidate_smoke' does not accept 'with' keys", index)
+		}
 	case "mcp_tool_present":
 		if !hasKey(&step.With, "tool") {
 			return fmt.Errorf("steps[%d]: action '%s' requires 'tool' in 'with'", index, step.Do)

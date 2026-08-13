@@ -57,6 +57,7 @@ func (r *Runner) RetryCleanups() {
 
 type runContext struct {
 	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 func NewRunner(repoPath, stateDir string, git Git, exec Exec, sandbox Sandbox, mcp MCP, image Image, lease Lease, buildConcurrency int) *Runner {

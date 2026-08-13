@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	uattypes "pix/host/uat"
@@ -48,8 +49,13 @@ func (r *Runner) executeAsync(ctx context.Context, runID, commit string, scenari
 		}
 
 		r.mu.Lock()
+		rc := r.activeRuns[runID]
 		delete(r.activeRuns, runID)
 		r.mu.Unlock()
+		if rc != nil {
+			rc.cancel()
+			rc.wg.Wait()
+		}
 	}()
 
 	// Acquire initial lease for run runID
@@ -96,10 +102,13 @@ func (r *Runner) executeCandidateSmoke(ctx context.Context, runID, commit string
 		SandboxName: "pix-uat-" + runID,
 	}
 
-	if err := r.lease.Acquire(ctx, runID, "sandbox_"+runID); err != nil {
+	if err := r.lease.Acquire(ctx, runID, "sandbox_"+res.SandboxName); err != nil {
 		return err
 	}
 	if err := r.lease.Acquire(ctx, runID, "image_uat-"+runID); err != nil {
+		return err
+	}
+	if err := r.lease.Acquire(ctx, runID, "template_docker.io/mcavage/pix:"+res.ImageTag); err != nil {
 		return err
 	}
 
@@ -125,13 +134,25 @@ func (r *Runner) executeCandidateSmoke(ctx context.Context, runID, commit string
 		return err
 	}
 
+	goVersion := "1.22"
+	goModPath := filepath.Join(res.SourceDir, "services", "host", "go.mod")
+	if b, err := os.ReadFile(goModPath); err == nil {
+		for _, line := range strings.Split(string(b), "\n") {
+			if strings.HasPrefix(line, "go ") {
+				goVersion = strings.TrimSpace(strings.TrimPrefix(line, "go "))
+				break
+			}
+		}
+	}
+	golangImage := fmt.Sprintf("golang:%s", goVersion)
+
 	buildCandidatePixCmd := r.exec.CommandContext(ctx, "docker", "run", "--rm",
 		"-v", res.SourceDir+":/src",
 		"-v", res.OutDir+":/out",
 		"-w", "/src/services/host",
 		"-e", "CGO_ENABLED=0",
 		"-e", "GOOS=darwin",
-		"golang:1.22",
+		golangImage,
 		"go", "build", "-o", "/out/pix", "./cmd/pix",
 	)
 	if err := buildCandidatePixCmd.Run(); err != nil {
@@ -144,7 +165,7 @@ func (r *Runner) executeCandidateSmoke(ctx context.Context, runID, commit string
 		"-w", "/src/services/host",
 		"-e", "CGO_ENABLED=0",
 		"-e", "GOOS=darwin",
-		"golang:1.22",
+		golangImage,
 		"go", "build", "-o", "/out/pix-host", ".",
 	)
 	if err := buildCandidateHostCmd.Run(); err != nil {
@@ -156,7 +177,7 @@ func (r *Runner) executeCandidateSmoke(ctx context.Context, runID, commit string
 		return fmt.Errorf("docker save: %w", err)
 	}
 
-	loadCmd := r.exec.CommandContext(ctx, "sbx", "template", "load", "--", "docker.io/mcavage/pix:"+res.ImageTag, res.ImageTar)
+	loadCmd := r.exec.CommandContext(ctx, "sbx", "template", "load", res.ImageTar)
 	if err := loadCmd.Run(); err != nil {
 		return fmt.Errorf("template load: %w", err)
 	}
@@ -169,23 +190,33 @@ func (r *Runner) executeCandidateSmoke(ctx context.Context, runID, commit string
 		return err
 	}
 
-	args := []string{"run", "--name", res.SandboxName, "--template", "docker.io/mcavage/pix:"+res.ImageTag}
+	args := []string{"run", res.FixtureDir, "--name", res.SandboxName, "--template", "docker.io/mcavage/pix:" + res.ImageTag}
 	if scenario.Name == "self-uat-runner" || scenario.Name == "self-development-uat" {
 		args = append(args, "--dev")
 	}
 
 	pixCmd := r.exec.CommandContext(ctx, filepath.Join(res.OutDir, "pix"), args...)
-	pixCmd.SetEnv(append(os.Environ(), "PIX_UAT_RECURSION_DISABLE=1"))
-	pixCmd.SetDir(res.FixtureDir)
+	env := os.Environ()
+	env = append(env, "PIX_UAT_RECURSION_DISABLE=1")
+	pixCmd.SetEnv(env)
+	pixCmd.SetDir(res.SourceDir)
 
 	if err := pixCmd.Start(); err != nil {
 		return fmt.Errorf("start candidate pix: %w", err)
 	}
 
-	go func() {
-		// Wait to reap the zombie process, ignore error since it will be killed by context cancellation
-		_ = pixCmd.Wait()
-	}()
+	r.mu.Lock()
+	if rc, ok := r.activeRuns[runID]; ok {
+		rc.wg.Add(1)
+		go func() {
+			defer rc.wg.Done()
+			_ = pixCmd.Wait()
+		}()
+	} else {
+		// shouldn't happen, but just in case
+		go func() { _ = pixCmd.Wait() }()
+	}
+	r.mu.Unlock()
 
 	probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -245,14 +276,8 @@ func (r *Runner) executeStep(ctx context.Context, runID, commit string, scenario
 				return fmt.Errorf("invalid tool name: must be strict identifier")
 			}
 		}
-		status, err := r.mcp.Status(ctx, toolName)
-		if err != nil {
-			return err
-		}
-		if status == "" || status == "not found" { // maybe depends on how status is reported
-			return fmt.Errorf("mcp tool not present: %s", toolName)
-		}
-		return nil
+		// mcp_tool_present must not misuse sbx mcp auth status as tool discovery.
+		return fmt.Errorf("mcp_tool_present: host seam incomplete (cannot probe candidate tools from host)")
 	case "check":
 		// named check
 		return nil

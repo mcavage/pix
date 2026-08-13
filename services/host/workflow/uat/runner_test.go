@@ -3,7 +3,7 @@ package uat_test
 import (
 	"context"
 	"io"
-	"strings"
+	"path/filepath"
 	"testing"
 
 	"pix/host/workflow/uat"
@@ -77,9 +77,14 @@ type mockImage struct{}
 func (m *mockImage) Load(ctx context.Context, tag, ws string) error { return nil }
 func (m *mockImage) Probe(ctx context.Context, tag string) error    { return nil }
 
-type mockLease struct{}
+type mockLease struct {
+	acquires []string
+}
 
-func (m *mockLease) Acquire(ctx context.Context, runID string, res string) error { return nil }
+func (m *mockLease) Acquire(ctx context.Context, runID string, res string) error {
+	m.acquires = append(m.acquires, res)
+	return nil
+}
 func (m *mockLease) Release(ctx context.Context, runID string, res string) error { return nil }
 func (m *mockLease) Cleanup(ctx context.Context, runID string) error             { return nil }
 
@@ -289,7 +294,8 @@ steps:
 		},
 	}
 
-	runner := uat.NewRunner("/repo", stateDir, mg, me, &mockSandbox{}, &mockMCP{}, &mockImage{}, &mockLease{}, 1)
+	ml := &mockLease{}
+	runner := uat.NewRunner("/repo", stateDir, mg, me, &mockSandbox{}, &mockMCP{}, &mockImage{}, ml, 1)
 
 	resp, err := runner.Submit(context.Background(), uat.SubmitRequest{
 		Commit:       "main",
@@ -333,28 +339,53 @@ steps:
 		if execs[1].args[0] != "docker" || execs[1].args[1] != "run" { t.Errorf("expected docker run pix, got %v", execs[1].args) }
 		if execs[2].args[0] != "docker" || execs[2].args[1] != "run" { t.Errorf("expected docker run pix-host, got %v", execs[2].args) }
 		if execs[3].args[0] != "docker" || execs[3].args[1] != "save" { t.Errorf("expected docker save, got %v", execs[3].args) }
-		if execs[4].args[0] != "sbx" || execs[4].args[1] != "template" { t.Errorf("expected sbx template, got %v", execs[4].args) }
+
+		if len(execs[4].args) != 4 || execs[4].args[0] != "sbx" || execs[4].args[1] != "template" || execs[4].args[2] != "load" || execs[4].args[3] != filepath.Join(stateDir, "runs", resp.RunID, "image.tar") {
+			t.Errorf("expected sbx template load <tar>, got %v", execs[4].args)
+		}
 		
 		lastCmd := execs[5]
-		if !strings.HasSuffix(lastCmd.args[0], "pix") || lastCmd.args[1] != "run" {
-			t.Errorf("expected pix run, got %v", lastCmd.args)
-		}
+		fixtureDir := filepath.Join(stateDir, "runs", resp.RunID, "fixture")
 		expectedSandboxName := "pix-uat-" + resp.RunID
-		hasName := false
-		hasDev := false
-		for i, a := range lastCmd.args {
-			if a == "--name" && lastCmd.args[i+1] == expectedSandboxName { hasName = true }
-			if a == "--dev" { hasDev = true }
+		expectedTemplate := "docker.io/mcavage/pix:uat-" + resp.RunID
+
+		expectedArgs := []string{lastCmd.args[0], "run", fixtureDir, "--name", expectedSandboxName, "--template", expectedTemplate, "--dev"}
+		for i, arg := range expectedArgs {
+			if i >= len(lastCmd.args) || lastCmd.args[i] != arg {
+				t.Errorf("expected arg %d to be %q, got %q", i, arg, lastCmd.args)
+			}
 		}
-		if !hasName { t.Errorf("expected --name %s", expectedSandboxName) }
-		if !hasDev { t.Errorf("expected --dev (self-uat-runner)") }
 		
 		hasEnv := false
 		for _, e := range lastCmd.env {
 			if e == "PIX_UAT_RECURSION_DISABLE=1" { hasEnv = true }
 		}
 		if !hasEnv { t.Errorf("expected PIX_UAT_RECURSION_DISABLE=1") }
-		if lastCmd.dir == "" { t.Errorf("expected dir to be set") }
+
+		expectedDir := filepath.Join(stateDir, "runs", resp.RunID, "source")
+		if lastCmd.dir != expectedDir {
+			t.Errorf("expected dir %s, got %s", expectedDir, lastCmd.dir)
+		}
+	}
+
+	// Check leases
+	expectedLeases := []string{
+		"run",
+		"sandbox_pix-uat-" + resp.RunID,
+		"image_uat-" + resp.RunID,
+		"template_docker.io/mcavage/pix:uat-" + resp.RunID,
+	}
+	for _, el := range expectedLeases {
+		found := false
+		for _, l := range ml.acquires {
+			if l == el {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected lease %s, got %v", el, ml.acquires)
+		}
 	}
 }
 
