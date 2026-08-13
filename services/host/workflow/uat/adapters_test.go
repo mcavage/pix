@@ -14,47 +14,103 @@ import (
 )
 
 type captureExec struct {
-	lastArgs []string
+	lastArgs  []string
+	output    []byte
+	outputErr error
 }
 
 func (c *captureExec) CommandContext(ctx context.Context, name string, args ...string) ExecCmd {
 	c.lastArgs = append([]string{name}, args...)
-	return &fakeCmd{}
+	return &fakeCmd{output: c.output, outputErr: c.outputErr}
 }
 
-type fakeCmd struct{}
+type scriptedExec struct {
+	commands [][]string
+	outputs  [][]byte
+}
+
+func (s *scriptedExec) CommandContext(ctx context.Context, name string, args ...string) ExecCmd {
+	command := append([]string{name}, args...)
+	s.commands = append(s.commands, command)
+	var output []byte
+	if len(s.outputs) > 0 {
+		output = s.outputs[0]
+		s.outputs = s.outputs[1:]
+	}
+	return &fakeCmd{output: output}
+}
+
+type fakeCmd struct {
+	output    []byte
+	outputErr error
+}
 
 func (f *fakeCmd) Run() error                         { return nil }
 func (f *fakeCmd) Start() error                       { return nil }
 func (f *fakeCmd) Wait() error                        { return nil }
-func (f *fakeCmd) Output() ([]byte, error)            { return nil, nil }
+func (f *fakeCmd) Output() ([]byte, error)            { return f.output, f.outputErr }
 func (f *fakeCmd) StdoutPipe() (io.ReadCloser, error) { return nil, nil }
 func (f *fakeCmd) StderrPipe() (io.ReadCloser, error) { return nil, nil }
 func (f *fakeCmd) SetEnv(env []string)                {}
 func (f *fakeCmd) SetDir(dir string)                  {}
 
+func TestAdapters_SandboxProbeUsesCanonicalJSON(t *testing.T) {
+	const name = "pix-uat-run-1"
+	ce := &captureExec{output: []byte(`{"sandboxes":[{"name":"pix-uat-run-1","id":"123e4567-e89b-12d3-a456-426614174000","agent":"pix","status":"running","workspaces":[]}]}`)}
+	if err := NewRealSandbox(ce).Probe(context.Background(), "run-1"); err != nil {
+		t.Fatalf("Probe() error: %v", err)
+	}
+	if got := strings.Join(ce.lastArgs, " "); got != "sbx ls --json" {
+		t.Fatalf("probe argv = %q, want %q", got, "sbx ls --json")
+	}
+
+	ce.output = []byte(`{"sandboxes":[]}`)
+	if err := NewRealSandbox(ce).Probe(context.Background(), "run-1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("absent Probe() error = %v, want ErrNotFound", err)
+	}
+}
+
 func TestAdapters_LeaseCleanupSandboxRemoveArgv(t *testing.T) {
-	ce := &captureExec{}
+	const running = `{"sandboxes":[{"name":"pix-uat-testrun123","id":"123e4567-e89b-12d3-a456-426614174000","agent":"pix","status":"running","workspaces":[]}]}`
+	const absent = `{"sandboxes":[]}`
+	execer := &scriptedExec{outputs: [][]byte{[]byte(running), nil, []byte(absent)}}
 	stateDir := t.TempDir()
 
-	// Create a run and a sandbox lease
 	runID := "testrun123"
 	leaseDir := filepath.Join(stateDir, "leases", runID)
 	os.MkdirAll(leaseDir, 0700)
-	l := NewRealLease(stateDir, ce)
+	l := NewRealLease(stateDir, execer)
 	if err := l.Acquire(context.Background(), runID, "sandbox_pix-uat-"+runID); err != nil {
 		t.Fatalf("acquire error: %v", err)
 	}
 
-	err := l.Cleanup(context.Background(), runID)
-	if err != nil {
+	if err := l.Cleanup(context.Background(), runID); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	joined := strings.Join(ce.lastArgs, " ")
-	expected := "sbx rm -f pix-uat-" + runID
-	if joined != expected {
-		t.Errorf("expected %q, got %q", expected, joined)
+	var got []string
+	for _, command := range execer.commands {
+		got = append(got, strings.Join(command, " "))
+	}
+	want := []string{"sbx ls --json", "sbx rm -f pix-uat-" + runID, "sbx ls --json"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("cleanup commands:\n got: %v\nwant: %v", got, want)
+	}
+}
+
+func TestAdapters_LeaseCleanupAcceptsAlreadyAbsentSandbox(t *testing.T) {
+	execer := &scriptedExec{outputs: [][]byte{[]byte(`{"sandboxes":[]}`)}}
+	stateDir := t.TempDir()
+	runID := "testrun123"
+	l := NewRealLease(stateDir, execer)
+	if err := l.Acquire(context.Background(), runID, "sandbox_pix-uat-"+runID); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Cleanup(context.Background(), runID); err != nil {
+		t.Fatalf("already absent cleanup: %v", err)
+	}
+	if len(execer.commands) != 1 || strings.Join(execer.commands[0], " ") != "sbx ls --json" {
+		t.Fatalf("commands = %v, want one read-only probe", execer.commands)
 	}
 }
 

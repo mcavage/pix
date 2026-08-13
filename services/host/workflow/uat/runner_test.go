@@ -1,11 +1,11 @@
 package uat_test
 
 import (
-	"os"
-	"time"
 	"fmt"
-	"sync"
+	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"context"
 	"io"
@@ -49,9 +49,9 @@ func (m *mockGit) Clone(ctx context.Context, commit, dest string) error {
 }
 
 type mockExec struct {
-	mu           sync.Mutex
-	cmds         []*mockCmd
-	block        chan struct{}
+	mu    sync.Mutex
+	cmds  []*mockCmd
+	block chan struct{}
 }
 
 func (m *mockExec) CommandContext(ctx context.Context, name string, args ...string) uat.ExecCmd {
@@ -367,6 +367,14 @@ steps:
 
 	if lastStatus == nil || lastStatus.State != "pass" {
 		t.Fatalf("expected pass, got %v", lastStatus)
+	}
+	stepLog := filepath.Join(stateDir, "runs", resp.RunID, "steps", "smoke.log")
+	logBytes, err := os.ReadFile(stepLog)
+	if err != nil {
+		t.Fatalf("read candidate step log: %v", err)
+	}
+	if !strings.Contains(string(logBytes), " run ") || !strings.Contains(string(logBytes), "pix-uat-"+resp.RunID) {
+		t.Fatalf("candidate step log does not identify the command and sandbox: %q", logBytes)
 	}
 
 	if len(execs) < 6 {

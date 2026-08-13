@@ -79,7 +79,7 @@ func TestCandidateSmokeFailures(t *testing.T) {
 		{"template load fail", failInjector{failTemplateLoad: true}, "fail"},
 		{"image probe fail", failInjector{failImageProbe: true}, "incomplete"},
 		{"candidate spawn fail", failInjector{failCandidateRun: true}, "fail"},
-		{"sandbox probe fail", failInjector{failSandboxProbe: true}, "timed-out"},
+		{"sandbox probe fail", failInjector{failSandboxProbe: true}, "incomplete"},
 	}
 
 	for _, tc := range cases {

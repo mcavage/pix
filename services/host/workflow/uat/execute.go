@@ -2,10 +2,13 @@ package uat
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	uattypes "pix/host/uat"
@@ -32,6 +35,25 @@ func (r *Runner) executeAsync(ctx context.Context, runID, commit string, scenari
 			}
 		}
 
+		r.mu.Lock()
+		rc := r.activeRuns[runID]
+		r.mu.Unlock()
+
+		var reapErr error
+		if rc != nil {
+			rc.cancel()
+			waitDone := make(chan struct{})
+			go func() {
+				rc.wg.Wait()
+				close(waitDone)
+			}()
+			select {
+			case <-waitDone:
+			case <-time.After(5 * time.Second):
+				reapErr = errors.New("candidate pix process did not exit within 5s")
+			}
+		}
+
 		cleanupErr := r.lease.Cleanup(context.Background(), runID)
 
 		_ = evLog.Append(Event{
@@ -45,18 +67,16 @@ func (r *Runner) executeAsync(ctx context.Context, runID, commit string, scenari
 			}(),
 		})
 
+		if reapErr != nil {
+			_ = evLog.Append(Event{Type: EventStatus, State: "process_reap_fail", Message: reapErr.Error()})
+		}
 		if cleanupErr != nil {
 			_ = evLog.Append(Event{Type: EventStatus, State: "cleanup_fail", Message: cleanupErr.Error()})
 		}
 
 		r.mu.Lock()
-		rc := r.activeRuns[runID]
 		delete(r.activeRuns, runID)
 		r.mu.Unlock()
-		if rc != nil {
-			rc.cancel()
-			rc.wg.Wait()
-		}
 	}()
 
 	// Acquire initial lease for run runID
@@ -84,6 +104,41 @@ func (r *Runner) executeAsync(ctx context.Context, runID, commit string, scenari
 	}
 }
 
+const candidateLogMaxBytes = 1024 * 1024
+
+type cappedLogWriter struct {
+	mu        sync.Mutex
+	file      *os.File
+	remaining int
+	truncated bool
+}
+
+func (w *cappedLogWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	originalLen := len(p)
+	if w.remaining <= 0 {
+		if !w.truncated {
+			_, _ = w.file.WriteString("\n[output truncated at 1 MiB]\n")
+			w.truncated = true
+		}
+		return originalLen, nil
+	}
+	toWrite := p
+	if len(toWrite) > w.remaining {
+		toWrite = toWrite[:w.remaining]
+	}
+	written, err := w.file.Write(toWrite)
+	w.remaining -= written
+	if err != nil {
+		return written, err
+	}
+	if written < len(toWrite) {
+		return written, fmt.Errorf("short candidate log write: %d of %d", written, len(toWrite))
+	}
+	return originalLen, nil
+}
+
 type RunResources struct {
 	SourceDir   string
 	OutDir      string
@@ -93,7 +148,7 @@ type RunResources struct {
 	SandboxName string
 }
 
-func (r *Runner) executeCandidateSmoke(ctx context.Context, runID, commit string, scenario *uattypes.Scenario) error {
+func (r *Runner) executeCandidateSmoke(ctx context.Context, runID, commit string, scenario *uattypes.Scenario, stepID string) error {
 	res := RunResources{
 		SourceDir:   filepath.Join(r.stateDir, "runs", runID, "source"),
 		OutDir:      filepath.Join(r.stateDir, "runs", runID, "out"),
@@ -254,32 +309,76 @@ func (r *Runner) executeCandidateSmoke(ctx context.Context, runID, commit string
 	pixCmd.SetEnv(newEnv)
 	pixCmd.SetDir(res.SourceDir)
 
-	if err := pixCmd.Start(); err != nil {
-		return fmt.Errorf("start candidate pix: %w", err)
+	stepsDir := filepath.Join(r.stateDir, "runs", runID, "steps")
+	if err := os.MkdirAll(stepsDir, 0700); err != nil {
+		return fmt.Errorf("create step artifacts: %w", err)
+	}
+	logPath := filepath.Join(stepsDir, stepID+".log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return fmt.Errorf("create candidate log: %w", err)
+	}
+	logWriter := &cappedLogWriter{file: logFile, remaining: candidateLogMaxBytes}
+	_, _ = fmt.Fprintf(logWriter, "$ %s %s\n", filepath.Join(res.OutDir, "pix"), strings.Join(args, " "))
+	stdout, err := pixCmd.StdoutPipe()
+	if err != nil {
+		_ = logFile.Close()
+		return fmt.Errorf("capture candidate stdout: %w", err)
+	}
+	stderr, err := pixCmd.StderrPipe()
+	if err != nil {
+		_ = logFile.Close()
+		return fmt.Errorf("capture candidate stderr: %w", err)
 	}
 
+	if err := pixCmd.Start(); err != nil {
+		_ = logFile.Close()
+		return fmt.Errorf("start candidate pix: %w (log: steps/%s.log)", err, stepID)
+	}
+
+	pixExit := make(chan error, 1)
 	r.mu.Lock()
 	if rc, ok := r.activeRuns[runID]; ok {
 		rc.wg.Add(1)
 		go func() {
 			defer rc.wg.Done()
-			_ = pixCmd.Wait()
+			var copies sync.WaitGroup
+			for _, reader := range []io.Reader{stdout, stderr} {
+				if reader == nil {
+					continue
+				}
+				copies.Add(1)
+				go func(reader io.Reader) {
+					defer copies.Done()
+					_, _ = io.Copy(logWriter, reader)
+				}(reader)
+			}
+			waitErr := pixCmd.Wait()
+			copies.Wait()
+			_ = logFile.Close()
+			pixExit <- waitErr
 		}()
 	} else {
-		// shouldn't happen, but just in case
-		go func() { _ = pixCmd.Wait() }()
+		_ = logFile.Close()
+		r.mu.Unlock()
+		return errors.New("candidate run lost its active-run record")
 	}
 	r.mu.Unlock()
 
 	probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	var lastProbeErr error
 	for {
 		if err := r.sandbox.Probe(probeCtx, runID); err == nil {
 			break
+		} else {
+			lastProbeErr = err
 		}
 		select {
+		case waitErr := <-pixExit:
+			return fmt.Errorf("candidate pix exited before sandbox became visible: %v (log: steps/%s.log; last probe: %v)", waitErr, stepID, lastProbeErr)
 		case <-probeCtx.Done():
-			return fmt.Errorf("sandbox probe timeout")
+			return fmt.Errorf("sandbox probe timeout (log: steps/%s.log; last probe: %v)", stepID, lastProbeErr)
 		case <-time.After(1 * time.Second):
 		}
 	}
@@ -323,7 +422,7 @@ func (r *Runner) executeStep(ctx context.Context, runID, commit string, scenario
 		uatName := "uat-" + runID + "-" + name
 		return r.mcp.Remove(ctx, uatName)
 	case "candidate_smoke":
-		return r.executeCandidateSmoke(ctx, runID, commit, scenario)
+		return r.executeCandidateSmoke(ctx, runID, commit, scenario, step.ID)
 
 	case "browser_check":
 		urlStr := extractStringMap(step.With, "url")

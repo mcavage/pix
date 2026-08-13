@@ -112,14 +112,39 @@ func (s *realSandbox) Create(ctx context.Context, runID string) error {
 	return cmd.Run()
 }
 
-func (s *realSandbox) Probe(ctx context.Context, runID string) error {
-	cmd := s.exec.CommandContext(ctx, "sbx", "ls", "--format", "json")
+func probeSandboxState(ctx context.Context, execer Exec, name string) (sandbox.State, error) {
+	cmd := execer.CommandContext(ctx, "sbx", "ls", "--json")
 	out, err := cmd.Output()
+	if err != nil {
+		return sandbox.StateUnknown, fmt.Errorf("sbx ls --json: %w", err)
+	}
+	parsed, err := sandbox.ParseList(out)
+	if err != nil {
+		return sandbox.StateUnknown, err
+	}
+	if !parsed.SchemaVerified {
+		return sandbox.StateUnknown, errors.New("sbx ls --json returned an unverified schema")
+	}
+	for _, entry := range parsed.Entries {
+		if entry.Name != name {
+			continue
+		}
+		if !entry.IdentityVerified || entry.State == sandbox.StateUnknown {
+			return sandbox.StateUnknown, fmt.Errorf("sandbox %q has unverified identity or state", name)
+		}
+		return entry.State, nil
+	}
+	return sandbox.StateAbsent, nil
+}
+
+func (s *realSandbox) Probe(ctx context.Context, runID string) error {
+	name := "pix-uat-" + runID
+	state, err := probeSandboxState(ctx, s.exec, name)
 	if err != nil {
 		return err
 	}
-	if !strings.Contains(string(out), "pix-uat-"+runID) {
-		return errors.New("incomplete")
+	if state == sandbox.StateAbsent {
+		return ErrNotFound
 	}
 	return nil
 }
@@ -508,10 +533,30 @@ func (l *realLease) Cleanup(ctx context.Context, runID string) error {
 		case "mcp":
 			cleanupErr = l.exec.CommandContext(ctx, "sbx", "mcp", "rm", "--", record.Name).Run()
 		case "sandbox":
-			if argv, planErr := sandbox.PlanForceRemove(record.Name); planErr == nil {
-				cleanupErr = l.exec.CommandContext(ctx, "sbx", argv...).Run()
-			} else {
-				cleanupErr = planErr
+			state, probeErr := probeSandboxState(ctx, l.exec, record.Name)
+			switch {
+			case probeErr != nil:
+				cleanupErr = probeErr
+			case state == sandbox.StateAbsent:
+				// The candidate pix process may have completed its own last-shell teardown.
+			case state == sandbox.StateRunning || state == sandbox.StateStopped:
+				argv, planErr := sandbox.PlanForceRemove(record.Name)
+				if planErr != nil {
+					cleanupErr = planErr
+					break
+				}
+				if removeErr := l.exec.CommandContext(ctx, "sbx", argv...).Run(); removeErr != nil {
+					cleanupErr = removeErr
+					break
+				}
+				confirmed, confirmErr := probeSandboxState(ctx, l.exec, record.Name)
+				if confirmErr != nil {
+					cleanupErr = confirmErr
+				} else if confirmed != sandbox.StateAbsent {
+					cleanupErr = fmt.Errorf("sandbox %q still present after removal", record.Name)
+				}
+			default:
+				cleanupErr = fmt.Errorf("sandbox %q has unknown state", record.Name)
 			}
 		case "image":
 			tag := record.Name
