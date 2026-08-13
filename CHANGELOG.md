@@ -161,6 +161,16 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`pix ls` says who is holding a sandbox.** A new HELD BY column reads the
+  live-reference lock — `shell` when a session is still attached, `—` when
+  nothing holds it, `?` when the lease state could not be read (never `—`,
+  because the free value promises teardown will remove the box). Without it, a
+  host with several surviving sandboxes reads as "teardown-on-exit is broken"
+  when the truth is usually the opposite: teardown ran, found a live reference,
+  and correctly kept the box. That evidence existed only in
+  `~/.local/state/pix/teardown.jsonl` and a lock nobody could see. The column
+  answers from the LOCK, never from a PID, because a PID is reused the instant
+  its owner exits.
 - **`pix doctor` no longer prints the MCP host-trust footer.** It appeared on
   every run, and a paragraph a user reads once and then skims forever is not a
   control — it is the thing that teaches people to stop reading the bottom of

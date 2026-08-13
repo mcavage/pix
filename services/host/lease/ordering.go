@@ -90,3 +90,35 @@ func TryReapProof(dir string, fn func() error) error {
 	defer rl.Unlock()
 	return fn()
 }
+
+// ReferencesHeld reports whether any shell currently holds a live reference to
+// this sandbox — the same question teardown asks, asked read-only.
+//
+// It exists because `pix ls` could not answer "why is this box still here". A
+// user watching six sandboxes survive concluded that teardown-on-exit was
+// broken; it was working perfectly and reporting kept-busy, because four of
+// them had shells that never exited. The evidence was in a journal nobody reads
+// and a lock nobody could see.
+//
+// The LOCK is the answer, never a PID: a pid is reused the instant its owner
+// exits, and this package's threat model says nothing may treat CreatedPID as
+// proof of liveness (see doc.go). Detecting shared holders requires trying the
+// exclusive side, so this takes the ref lock for the microseconds it takes to
+// fail or succeed. A teardown that races that window sees ErrHeld and KEEPS the
+// sandbox — the fail-closed direction, so the worst case of asking is a box
+// that survives one extra exit.
+func ReferencesHeld(dir string) (held bool, err error) {
+	rl, err := OpenRefLease(dir)
+	if err != nil {
+		return false, err
+	}
+	defer rl.Close()
+	if terr := rl.TryExclusive(); terr != nil {
+		if errors.Is(terr, ErrHeld) {
+			return true, nil
+		}
+		return false, terr
+	}
+	defer rl.Unlock()
+	return false, nil
+}

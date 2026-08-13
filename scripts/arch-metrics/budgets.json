@@ -64,11 +64,12 @@
       "exits": 0
     },
     "pix/host/lease": {
-      "prod_loc": 736,
-      "exports": 18,
+      "prod_loc": 768,
+      "exports": 19,
       "globals": 12,
       "edges": 0,
-      "exits": 0
+      "exits": 0,
+      "_prod_loc_note": "Then 736 -> 768, exports 18 -> 19: ReferencesHeld, the READ-ONLY form of the question teardown asks. `pix ls` could not say why a sandbox was still there, so six surviving boxes read as 'teardown is broken' when four of them simply had shells that had never exited \u2014 the evidence sat in a journal nobody reads and a lock nobody could see. It answers from the LOCK, never a pid, because doc.go is explicit that a pid is reused the instant its owner exits. A deliberate, reviewed raise of a shrink-only budget."
     },
     "pix/host/mcp": {
       "_prod_loc_note": "prod_loc 1033 -> 1050, exports 28 -> 29, globals 18 -> 19: ONE outcome, McpAuthNotRequired. `sbx mcp auth status` answers \"does not require OAuth\" for a server whose credentials come from the gateway's op-refs injection rather than an OAuth broker (slack, google-docs-create). The parser had buckets only for authorized and failed, so a DEFINITE answer fell through to unknown and `pix doctor` carried a permanent `?` that no action could ever clear -- which teaches a reader to stop reading the glyph, the same way a fix that cannot fix anything teaches them to stop reading fixes. The new case is matched BEFORE the negatives, because \"does not require oauth\" contains \"not\". A deliberate, reviewed raise of a shrink-only budget. Then the review round: `pix secret check` was UNBOUNDED, so a locked 1Password vault (the normal state of a fresh laptop) hung it forever after printing FAIL for references that were perfectly correct, sending users to re-check something that was fine. It is bounded now, with 'could not check' as a third answer, and the stale-key line offers removal instead of advice that leads nowhere. Then the review round: `pix secret check` was UNBOUNDED, so a locked 1Password vault (the normal state of a fresh laptop) hung it forever after printing FAIL for references that were perfectly correct, sending users to re-check something that was fine. It is bounded now, with 'could not check' as a third answer, and the stale-key line offers removal instead of advice that leads nowhere.",
@@ -183,10 +184,10 @@
       "exits": 0
     },
     "pix/host/workflow/launch": {
-      "_prod_loc_note": "2458 -> 2503, exports 109 -> 112: personal context (skills + standing AGENTS.md) is now mounted unconditionally at the context ROOT, so a session can write its FIRST skill from inside the sandbox and keep the whole dir in git. Previously the mount was gated on the dir already having entries, which made the first skill impossible to author in-sandbox, and only skills/ was mounted, so AGENTS.md was invisible. New exports: MountDirs (the mount set, now distinct from the skill set), PersonalSkillsDir (one spelling shared by loader and mount), EnsurePersonalContextDir. A deliberate, reviewed raise of a shrink-only budget. Then 2503 -> 2543, globals 42 -> 43: teardown now translates pi's parting \"To resume this session: pi --session-dir ...\" into the host command that actually works (`pix run -- -c`), and only when a session file provably exists. Suppressing pi's line would have been wrong: .pi-sessions is in the workspace mount, so the session genuinely outlives the sandbox; only the dialect was unusable.",
-      "prod_loc": 2543,
+      "_prod_loc_note": "2458 -> 2503, exports 109 -> 112: personal context (skills + standing AGENTS.md) is now mounted unconditionally at the context ROOT, so a session can write its FIRST skill from inside the sandbox and keep the whole dir in git. Previously the mount was gated on the dir already having entries, which made the first skill impossible to author in-sandbox, and only skills/ was mounted, so AGENTS.md was invisible. New exports: MountDirs (the mount set, now distinct from the skill set), PersonalSkillsDir (one spelling shared by loader and mount), EnsurePersonalContextDir. A deliberate, reviewed raise of a shrink-only budget. Then 2503 -> 2543, globals 42 -> 43: teardown now translates pi's parting \"To resume this session: pi --session-dir ...\" into the host command that actually works (`pix run -- -c`), and only when a session file provably exists. Suppressing pi's line would have been wrong: .pi-sessions is in the workspace mount, so the session genuinely outlives the sandbox; only the dialect was unusable. Then 2543 -> 2560, globals 43 -> 45: `pix ls` grows a HELD BY column. A held box is one a shell is still attached to and teardown correctly refuses to remove; an unheld one is what `pix rm --orphans` sweeps. Unreadable lease state renders '?', never '\u2014', because the free value is a PROMISE that teardown will remove the box. A deliberate, reviewed raise of a shrink-only budget.",
+      "prod_loc": 2560,
       "exports": 112,
-      "globals": 43,
+      "globals": 45,
       "edges": 14,
       "exits": 0
     },

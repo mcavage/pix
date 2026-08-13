@@ -413,3 +413,64 @@ func TestAttachRefUnderLifecycle_LifecycleTimeoutNamesAnotherTransition(t *testi
 		t.Errorf("error %q must identify another create/attach in progress", err.Error())
 	}
 }
+
+// TestReferencesHeld_AnswersFromTheLockNotAPid: `pix ls` could not say why a
+// sandbox was still there, so six surviving boxes read as "teardown is broken"
+// when four of them simply had shells that had never exited. This is the
+// read-only form of the question teardown asks, and it must answer from the
+// LOCK — doc.go is explicit that a pid is reused the instant its owner exits
+// and may never stand in for liveness.
+func TestReferencesHeld_AnswersFromTheLockNotAPid(t *testing.T) {
+	dir := t.TempDir()
+
+	held, err := ReferencesHeld(dir)
+	if err != nil {
+		t.Fatalf("free lease: %v", err)
+	}
+	if held {
+		t.Error("a lease nobody holds must report free — that is the box teardown removes")
+	}
+
+	// A second open file description is a genuinely independent holder: flock is
+	// per-fd, so this is the same situation as another shell on the host.
+	rl, err := OpenRefLease(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rl.Close()
+	if err := rl.AcquireShared(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	held, err = ReferencesHeld(dir)
+	if err != nil {
+		t.Fatalf("held lease: %v", err)
+	}
+	if !held {
+		t.Error("a shared reference must report held, or ls tells a user to expect a teardown that cannot happen")
+	}
+
+	// Releasing must flip it back: this is what makes the column track reality
+	// rather than a one-time observation.
+	if err := rl.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	if held, err = ReferencesHeld(dir); err != nil || held {
+		t.Errorf("after release: held=%v err=%v, want free", held, err)
+	}
+}
+
+// TestReferencesHeld_DoesNotConsumeTheReference: asking must not become taking.
+// If this probe left the exclusive side held, one `pix ls` would block every
+// attach and teardown on the host.
+func TestReferencesHeld_DoesNotConsumeTheReference(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < 3; i++ {
+		if held, err := ReferencesHeld(dir); err != nil || held {
+			t.Fatalf("call %d: held=%v err=%v — the probe is holding its own lock", i, held, err)
+		}
+	}
+	if err := TryReapProof(dir, func() error { return nil }); err != nil {
+		t.Errorf("teardown could not prove zero references after ls asked: %v", err)
+	}
+}

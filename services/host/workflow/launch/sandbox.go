@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"pix/host/cli"
 	"pix/host/health"
 	"pix/host/hostenv"
+	"pix/host/lease"
 	"pix/host/mcp"
 	"pix/host/sandbox"
 	"pix/host/workspace"
@@ -78,6 +80,38 @@ func classifySbxListing(out, name string) SbxState {
 	return SbxAbsent
 }
 
+// The HELD BY column's three answers. A sandbox with no live reference is one
+// teardown WILL remove; "?" is reserved for state that could not be read, which
+// must never render as free.
+const (
+	heldByShell = "shell"
+	heldByNone  = "—"
+	heldUnknown = "?"
+)
+
+// heldByColumn asks the lock, never a PID. lease/doc.go is explicit that a PID
+// is reused the instant its owner exits and may not be treated as proof of
+// liveness, so "who holds it" is answerable only as "someone does".
+func heldByColumn(name string) string {
+	dir, err := existingLeaseDir(name)
+	if err != nil {
+		// No lease state at all: nothing claims it. That is the orphan case,
+		// and saying "—" is exactly right — `pix rm --orphans` sweeps it.
+		if os.IsNotExist(err) {
+			return heldByNone
+		}
+		return heldUnknown
+	}
+	held, err := lease.ReferencesHeld(dir)
+	if err != nil {
+		return heldUnknown
+	}
+	if held {
+		return heldByShell
+	}
+	return heldByNone
+}
+
 func Ls(env hostenv.Env, out io.Writer, jsonOut bool) error {
 	if _, err := env.LookPath("sbx"); err != nil {
 		return SbxUnavailableErr("list sandboxes")
@@ -104,12 +138,22 @@ func Ls(env hostenv.Env, out io.Writer, jsonOut bool) error {
 		return nil
 	}
 	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tSTATE\tDIR")
+	fmt.Fprintln(tw, "NAME\tSTATE\tHELD BY\tDIR")
+	anyHeld := false
 	for _, b := range boxes {
-		fmt.Fprintf(tw, "%s\t%s\t%s\n", b.Name, b.State, b.Dir)
+		held := heldByColumn(b.Name)
+		anyHeld = anyHeld || held == heldByShell
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", b.Name, b.State, held, b.Dir)
 	}
 	tw.Flush()
 	fmt.Fprintln(out)
+	if anyHeld {
+		// The question this column exists to answer. A sandbox that outlives its
+		// session looks like teardown is broken; usually it means a shell never
+		// exited, and until now the only way to learn that was a journal nobody
+		// reads and a lock nobody can see.
+		fmt.Fprintln(out, "A held box is one a shell is still attached to; it is removed when that shell exits.")
+	}
 	fmt.Fprintln(out, "Remove one:  pix rm <name>   (or `sbx rm -f <name>` for non-pix boxes)")
 	return nil
 }
