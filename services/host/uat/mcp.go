@@ -4,8 +4,6 @@ type ToolDescriptor struct {
 	Name        string                 `json:"name"`
 	Description string                 `json:"description"`
 	InputSchema map[string]interface{} `json:"inputSchema"`
-	ReadOnly    bool                   `json:"readOnly,omitempty"`
-	Destructive bool                   `json:"destructive,omitempty"`
 }
 
 type Request struct {
@@ -27,12 +25,11 @@ func GetToolDescriptors() []ToolDescriptor {
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
-					"results": map[string]interface{}{"type": "string"},
+					"results":          map[string]interface{}{"type": "string"},
+					"uat_capabilities": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
 				},
-				"required": []string{"results"},
+				"required": []string{"results", "uat_capabilities"},
 			},
-			ReadOnly:    false,
-			Destructive: false,
 		},
 		{
 			Name:        "status",
@@ -40,8 +37,6 @@ func GetToolDescriptors() []ToolDescriptor {
 			InputSchema: map[string]interface{}{
 				"type": "object",
 			},
-			ReadOnly:    true,
-			Destructive: false,
 		},
 		{
 			Name:        "artifact",
@@ -53,8 +48,6 @@ func GetToolDescriptors() []ToolDescriptor {
 				},
 				"required": []string{"id"},
 			},
-			ReadOnly:    true,
-			Destructive: false,
 		},
 		{
 			Name:        "browser_action",
@@ -66,8 +59,6 @@ func GetToolDescriptors() []ToolDescriptor {
 				},
 				"required": []string{"action"},
 			},
-			ReadOnly:    false,
-			Destructive: false,
 		},
 		{
 			Name:        "abort",
@@ -75,8 +66,6 @@ func GetToolDescriptors() []ToolDescriptor {
 			InputSchema: map[string]interface{}{
 				"type": "object",
 			},
-			ReadOnly:    false,
-			Destructive: true,
 		},
 	}
 }

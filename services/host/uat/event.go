@@ -1,10 +1,10 @@
 package uat
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -82,20 +82,20 @@ func (s *EventStore) Append(eventType string, data []byte) (int, error) {
 	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 
 	// Validate existing content and find last sequence
-	scanner := bufio.NewScanner(f)
+	decoder := json.NewDecoder(f)
 	lastSeq := 0
-	for scanner.Scan() {
+	for {
 		var evt Event
-		if err := json.Unmarshal(scanner.Bytes(), &evt); err != nil {
+		if err := decoder.Decode(&evt); err != nil {
+			if err == io.EOF {
+				break
+			}
 			return 0, fmt.Errorf("malformed JSONL or invalid event: %w", err)
 		}
 		if evt.Sequence <= lastSeq {
 			return 0, errors.New("non-monotonic sequence detected")
 		}
 		lastSeq = evt.Sequence
-	}
-	if err := scanner.Err(); err != nil {
-		return 0, err
 	}
 	newSeq := lastSeq + 1
 
@@ -117,7 +117,7 @@ func (s *EventStore) Append(eventType string, data []byte) (int, error) {
 	return newSeq, nil
 }
 
-func (s *EventStore) Replay(limit int) ([]Event, int, error) {
+func (s *EventStore) Replay(cursor int, limit int) ([]Event, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -128,13 +128,19 @@ func (s *EventStore) Replay(limit int) ([]Event, int, error) {
 	defer f.Close()
 
 	var events []Event
-	scanner := bufio.NewScanner(f)
+	decoder := json.NewDecoder(f)
 	count := 0
-	lastSeq := 0
-	for scanner.Scan() {
+	lastSeq := cursor
+	for {
 		var evt Event
-		if err := json.Unmarshal(scanner.Bytes(), &evt); err != nil {
+		if err := decoder.Decode(&evt); err != nil {
+			if err == io.EOF {
+				break
+			}
 			return nil, 0, fmt.Errorf("malformed JSONL: %w", err)
+		}
+		if evt.Sequence <= cursor {
+			continue
 		}
 		events = append(events, evt)
 		lastSeq = evt.Sequence
@@ -142,9 +148,6 @@ func (s *EventStore) Replay(limit int) ([]Event, int, error) {
 		if limit > 0 && count >= limit {
 			break
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, 0, err
 	}
 
 	return events, lastSeq, nil

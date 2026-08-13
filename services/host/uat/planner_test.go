@@ -82,11 +82,14 @@ func TestTagPlanner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	
-	cmd := planner.PlanTag()
-	
+
+	cmd, err := planner.PlanTag("sha256:abc")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
 	expected := []string{
-		"docker", "tag", "/repo", "uat-session-id",
+		"docker", "tag", "sha256:abc", "pix:uat-session-id",
 	}
 
 	if len(cmd) != len(expected) {
@@ -97,5 +100,10 @@ func TestTagPlanner(t *testing.T) {
 		if cmd[i] != v {
 			t.Errorf("at index %d: expected %s, got %s", i, v, cmd[i])
 		}
+	}
+
+	_, err = planner.PlanTag("-flag")
+	if err == nil {
+		t.Errorf("expected error for flag sourceRef")
 	}
 }

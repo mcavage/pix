@@ -14,9 +14,6 @@ func TestGetToolDescriptors(t *testing.T) {
 	for _, d := range descriptors {
 		if d.Name == "submit" {
 			foundSubmit = true
-			if d.ReadOnly {
-				t.Errorf("submit should not be readOnly")
-			}
 		}
 	}
 	if !foundSubmit {

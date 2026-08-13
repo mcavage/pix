@@ -18,9 +18,12 @@ func TestReadArtifact(t *testing.T) {
 	os.WriteFile(artifact, []byte(content), 0644)
 
 	t.Run("valid", func(t *testing.T) {
-		res, err := ReadArtifact(root, "artifact.txt", 1024, 0)
+		res, cursor, err := ReadArtifact(root, "artifact.txt", 1024, 0, 0)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if cursor != int64(len(content)) {
+			t.Errorf("expected cursor %d, got %d", len(content), cursor)
 		}
 		// Check redaction
 		if string(res) != "line1\nline2\nline3\nAPIKEY: [REDACTED]" {
@@ -29,7 +32,7 @@ func TestReadArtifact(t *testing.T) {
 	})
 
 	t.Run("tail", func(t *testing.T) {
-		res, err := ReadArtifact(root, "artifact.txt", 1024, 2)
+		res, _, err := ReadArtifact(root, "artifact.txt", 1024, 2, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -42,16 +45,29 @@ func TestReadArtifact(t *testing.T) {
 	t.Run("symlink-fail", func(t *testing.T) {
 		symlink := filepath.Join(root, "symlink.txt")
 		os.Symlink(artifact, symlink)
-		_, err := ReadArtifact(root, "symlink.txt", 1024, 0)
+		_, _, err := ReadArtifact(root, "symlink.txt", 1024, 0, 0)
 		if err == nil {
 			t.Error("expected error for symlink")
 		}
 	})
 
 	t.Run("oversize", func(t *testing.T) {
-		_, err := ReadArtifact(root, "artifact.txt", 2, 0)
+		_, _, err := ReadArtifact(root, "artifact.txt", 2, 0, 0)
 		if err == nil {
 			t.Error("expected error for oversize file")
+		}
+	})
+
+	t.Run("cursor", func(t *testing.T) {
+		res, cursor, err := ReadArtifact(root, "artifact.txt", 1024, 0, 6)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cursor != int64(len(content)) {
+			t.Errorf("expected cursor %d, got %d", len(content), cursor)
+		}
+		if string(res) != "line2\nline3\nAPIKEY: [REDACTED]" {
+			t.Errorf("expected redacted cursor, got %q", string(res))
 		}
 	})
 }

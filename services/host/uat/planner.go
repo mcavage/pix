@@ -50,8 +50,11 @@ func (p *MCPPlanner) PlanRegistrationRemove(name string) []string {
 	}
 }
 
-func (p *MCPPlanner) PlanTag() []string {
-	return []string{
-		"docker", "tag", p.repoPath, "uat-" + p.sessionID,
+func (p *MCPPlanner) PlanTag(sourceRef string) ([]string, error) {
+	if sourceRef == "" || sourceRef[0] == '-' {
+		return nil, fmt.Errorf("invalid source image ref: %q", sourceRef)
 	}
+	return []string{
+		"docker", "tag", sourceRef, "pix:uat-" + p.sessionID,
+	}, nil
 }

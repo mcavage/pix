@@ -15,10 +15,10 @@ func TestUnmarshalScenario_Validation(t *testing.T) {
 			data: `
 schema: pix.uat/1
 name: valid-scenario
-timeout: 5s
+timeout: "5s"
 steps:
   - id: step1
-    do: action
+    do: mcp_add
     with:
       key: value
 `,
@@ -29,8 +29,51 @@ steps:
 			data: `
 schema: pix.uat/1
 name: test
+timeout: "5s"
 unknown: field
 steps: []
+`,
+			wantErr: true,
+		},
+		{
+			name: "Forbidden action",
+			data: `
+schema: pix.uat/1
+name: test
+timeout: "5s"
+steps:
+  - id: step1
+    do: hack_the_mainframe
+    with:
+      key: value
+`,
+			wantErr: true,
+		},
+		{
+			name: "Forbidden need",
+			data: `
+schema: pix.uat/1
+name: test
+timeout: "5s"
+needs:
+  - internet
+steps:
+  - id: step1
+    do: mcp_add
+`,
+			wantErr: true,
+		},
+		{
+			name: "Forbidden assertion",
+			data: `
+schema: pix.uat/1
+name: test
+timeout: "5s"
+steps:
+  - id: step1
+    do: mcp_add
+    expect:
+      unknown_assertion: true
 `,
 			wantErr: true,
 		},
@@ -48,10 +91,10 @@ steps: []
 			data: `
 schema: pix.uat/1
 name: test
-timeout: 5s
+timeout: "5s"
 steps:
   - id: step1
-    do: action
+    do: mcp_add
     with:
       shell: /bin/sh
 `,
@@ -62,10 +105,10 @@ steps:
 			data: `
 schema: pix.uat/1
 name: test
-timeout: 5s
+timeout: "5s"
 steps:
   - id: step1
-    do: action
+    do: mcp_add
     with:
       nested:
         command: ls

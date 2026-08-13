@@ -89,7 +89,7 @@ func TestEventStore_ConcurrentAppend(t *testing.T) {
 	wg.Wait()
 
 	// Validate count
-	events, _, err := store.Replay(0)
+	events, _, err := store.Replay(0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestEventStore_Replay(t *testing.T) {
 		store.Append("t", []byte(`{}`))
 	}
 
-	events, lastSeq, err := store.Replay(2)
+	events, lastSeq, err := store.Replay(0, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,6 +152,18 @@ func TestEventStore_Replay(t *testing.T) {
 	}
 	if lastSeq != 2 {
 		t.Errorf("expected lastSeq 2, got %d", lastSeq)
+	}
+
+	// Test cursor
+	events2, lastSeq2, err := store.Replay(2, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events2) != 3 {
+		t.Errorf("expected 3 events from cursor 2, got %d", len(events2))
+	}
+	if lastSeq2 != 5 {
+		t.Errorf("expected lastSeq 5, got %d", lastSeq2)
 	}
 }
 
