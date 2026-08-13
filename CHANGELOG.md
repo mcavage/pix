@@ -162,7 +162,8 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 ### Fixed
 
 - **`pix ls` says who is holding a sandbox.** A new HELD BY column reads the
-  live-reference lock — `shell` when a session is still attached, `—` when
+  live-reference lock — `session` when a `pix` process on this host is still
+  attached, `—` when
   nothing holds it, `?` when the lease state could not be read (never `—`,
   because the free value promises teardown will remove the box). Without it, a
   host with several surviving sandboxes reads as "teardown-on-exit is broken"

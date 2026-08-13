@@ -84,9 +84,9 @@ func classifySbxListing(out, name string) SbxState {
 // teardown WILL remove; "?" is reserved for state that could not be read, which
 // must never render as free.
 const (
-	heldByShell = "shell"
-	heldByNone  = "—"
-	heldUnknown = "?"
+	heldBySession = "session"
+	heldByNone    = "—"
+	heldUnknown   = "?"
 )
 
 // heldByColumn asks the lock, never a PID. lease/doc.go is explicit that a PID
@@ -107,7 +107,7 @@ func heldByColumn(name string) string {
 		return heldUnknown
 	}
 	if held {
-		return heldByShell
+		return heldBySession
 	}
 	return heldByNone
 }
@@ -142,7 +142,7 @@ func Ls(env hostenv.Env, out io.Writer, jsonOut bool) error {
 	anyHeld := false
 	for _, b := range boxes {
 		held := heldByColumn(b.Name)
-		anyHeld = anyHeld || held == heldByShell
+		anyHeld = anyHeld || held == heldBySession
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", b.Name, b.State, held, b.Dir)
 	}
 	tw.Flush()
@@ -152,7 +152,11 @@ func Ls(env hostenv.Env, out io.Writer, jsonOut bool) error {
 		// session looks like teardown is broken; usually it means a shell never
 		// exited, and until now the only way to learn that was a journal nobody
 		// reads and a lock nobody can see.
-		fmt.Fprintln(out, "A held box is one a shell is still attached to; it is removed when that shell exits.")
+		// "session" and not "shell": the holder is a `pix` process ON THIS HOST,
+		// and a shell EXEC'D INSIDE the sandbox holds no lease at all. The first
+		// reader of this column asked which one it meant, which is the whole
+		// answer to whether the word was right.
+		fmt.Fprintln(out, "A held box has a live `pix` session on this host; it is removed when the last one exits.")
 	}
 	fmt.Fprintln(out, "Remove one:  pix rm <name>   (or `sbx rm -f <name>` for non-pix boxes)")
 	return nil

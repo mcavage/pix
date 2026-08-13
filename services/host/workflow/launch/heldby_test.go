@@ -21,7 +21,7 @@ func TestHeldByColumn_UnknownStateNeverRendersAsFree(t *testing.T) {
 // go read a journal to learn why a box survived.
 func TestHeldByColumn_ValuesAreDistinct(t *testing.T) {
 	seen := map[string]bool{}
-	for _, v := range []string{heldByShell, heldByNone, heldUnknown} {
+	for _, v := range []string{heldBySession, heldByNone, heldUnknown} {
 		if v == "" {
 			t.Error("an empty column reads as a missing value, not an answer")
 		}
