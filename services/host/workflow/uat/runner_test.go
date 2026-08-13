@@ -279,10 +279,10 @@ steps:
     do: candidate_smoke`), nil
 		},
 	}
-	
-	
+
+
 	var execs []capturedExec
-	
+
 	me := &captureExecHelper{
 		onCommand: func(name string, args ...string) uat.ExecCmd {
 			return &mockCmdHelper{
@@ -331,7 +331,7 @@ steps:
 	if lastStatus == nil || lastStatus.State != "pass" {
 		t.Fatalf("expected pass, got %v", lastStatus)
 	}
-	
+
 	if len(execs) < 6 {
 		t.Errorf("expected at least 6 commands, got %d: %v", len(execs), execs)
 	} else {
@@ -343,7 +343,7 @@ steps:
 		if len(execs[4].args) != 4 || execs[4].args[0] != "sbx" || execs[4].args[1] != "template" || execs[4].args[2] != "load" || execs[4].args[3] != filepath.Join(stateDir, "runs", resp.RunID, "image.tar") {
 			t.Errorf("expected sbx template load <tar>, got %v", execs[4].args)
 		}
-		
+
 		lastCmd := execs[5]
 		fixtureDir := filepath.Join(stateDir, "runs", resp.RunID, "fixture")
 		expectedSandboxName := "pix-uat-" + resp.RunID
@@ -355,7 +355,7 @@ steps:
 				t.Errorf("expected arg %d to be %q, got %q", i, arg, lastCmd.args)
 			}
 		}
-		
+
 		hasEnv := false
 		for _, e := range lastCmd.env {
 			if e == "PIX_UAT_RECURSION_DISABLE=1" { hasEnv = true }

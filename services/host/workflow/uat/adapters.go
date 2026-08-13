@@ -24,8 +24,32 @@ func NewRealGit(repoPath string, e Exec) Git {
 	return &realGit{repoPath: repoPath, exec: e}
 }
 
+func validateRevision(rev string) error {
+	if rev == "" {
+		return errors.New("empty revision")
+	}
+	if strings.HasPrefix(rev, "-") {
+		return errors.New("revision cannot start with '-'")
+	}
+	if strings.Contains(rev, "..") {
+		return errors.New("revision cannot contain '..'")
+	}
+	if strings.Contains(rev, "@{") {
+		return errors.New("revision cannot contain reflog syntax '@{'")
+	}
+	for _, c := range rev {
+		if c <= 32 || c == 127 {
+			return errors.New("revision cannot contain whitespace or control characters")
+		}
+	}
+	return nil
+}
+
 func (g *realGit) ResolveCommit(ctx context.Context, commit string) (string, error) {
-	cmd := g.exec.CommandContext(ctx, "git", "-C", g.repoPath, "rev-parse", "--verify", "--", commit+"^{commit}")
+	if err := validateRevision(commit); err != nil {
+		return "", err
+	}
+	cmd := g.exec.CommandContext(ctx, "git", "-C", g.repoPath, "rev-parse", "--verify", "--end-of-options", commit+"^{commit}")
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("resolve commit: %w", err)
@@ -34,6 +58,9 @@ func (g *realGit) ResolveCommit(ctx context.Context, commit string) (string, err
 }
 
 func (g *realGit) ReadTreeFile(ctx context.Context, commit, path string) ([]byte, error) {
+	if err := validateRevision(commit); err != nil {
+		return nil, err
+	}
 	if filepath.IsAbs(path) {
 		return nil, errors.New("absolute path not allowed")
 	}
@@ -42,7 +69,7 @@ func (g *realGit) ReadTreeFile(ctx context.Context, commit, path string) ([]byte
 		return nil, errors.New("path escapes root")
 	}
 	target := fmt.Sprintf("%s:%s", commit, clean)
-	cmd := g.exec.CommandContext(ctx, "git", "-C", g.repoPath, "show", "--", target)
+	cmd := g.exec.CommandContext(ctx, "git", "-C", g.repoPath, "show", "--end-of-options", target)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("read tree file: %w", err)
@@ -51,12 +78,15 @@ func (g *realGit) ReadTreeFile(ctx context.Context, commit, path string) ([]byte
 }
 
 func (g *realGit) Clone(ctx context.Context, commit, destPath string) error {
+	if err := validateRevision(commit); err != nil {
+		return err
+	}
 	// local clone
 	cmd := g.exec.CommandContext(ctx, "git", "clone", "--no-checkout", "--", g.repoPath, destPath)
 	if err := cmd.Run(); err != nil {
 		return err
 	}
-	cmd2 := g.exec.CommandContext(ctx, "git", "-C", destPath, "checkout", "--", commit)
+	cmd2 := g.exec.CommandContext(ctx, "git", "-C", destPath, "switch", "--detach", "--end-of-options", commit)
 	return cmd2.Run()
 }
 

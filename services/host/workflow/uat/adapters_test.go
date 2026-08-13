@@ -3,6 +3,9 @@ package uat
 import (
 	"context"
 	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -36,7 +39,7 @@ func TestAdapters_GitShowArgv(t *testing.T) {
 	}
 
 	joined := strings.Join(ce.lastArgs, " ")
-	expected := "git -C /repo show -- abc1234:dir/file.txt"
+	expected := "git -C /repo show --end-of-options abc1234:dir/file.txt"
 	if joined != expected {
 		t.Errorf("expected %q, got %q", expected, joined)
 	}
@@ -54,5 +57,86 @@ func TestAdapters_MCPAddArgv(t *testing.T) {
 	expected := "sbx mcp add my-mcp --command host"
 	if joined != expected {
 		t.Errorf("expected %q, got %q", expected, joined)
+	}
+}
+
+func TestAdapters_Integration(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found")
+	}
+
+	repoPath := t.TempDir()
+	
+	runGit := func(dir string, args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v, output: %s", args, err, out)
+		}
+	}
+
+	runGit(repoPath, "init")
+	runGit(repoPath, "config", "user.name", "test")
+	runGit(repoPath, "config", "user.email", "test@test.com")
+	
+	err := os.WriteFile(filepath.Join(repoPath, "hello.txt"), []byte("world\n"), 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runGit(repoPath, "add", "hello.txt")
+	runGit(repoPath, "commit", "-m", "init")
+
+	g := NewRealGit(repoPath, nil)
+	
+	// Test ResolveCommit(HEAD)
+	headSHA, err := g.ResolveCommit(context.Background(), "HEAD")
+	if err != nil {
+		t.Fatalf("ResolveCommit failed: %v", err)
+	}
+	if len(headSHA) != 40 {
+		t.Fatalf("Expected full SHA, got: %q", headSHA)
+	}
+
+	// Test ReadTreeFile
+	content, err := g.ReadTreeFile(context.Background(), headSHA, "hello.txt")
+	if err != nil {
+		t.Fatalf("ReadTreeFile failed: %v", err)
+	}
+	if string(content) != "world\n" {
+		t.Fatalf("Expected 'world\\n', got %q", content)
+	}
+
+	// Test Clone
+	destPath := t.TempDir()
+	os.RemoveAll(destPath)
+	err = g.Clone(context.Background(), headSHA, destPath)
+	if err != nil {
+		t.Fatalf("Clone failed: %v", err)
+	}
+	
+	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = destPath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("Failed to get HEAD in cloned repo: %v", err)
+	}
+	clonedSHA := strings.TrimSpace(string(out))
+	if clonedSHA != headSHA {
+		t.Fatalf("Expected cloned HEAD to be %q, got %q", headSHA, clonedSHA)
+	}
+
+	badRevs := []string{
+		"-HEAD",
+		"HEAD..main",
+		"HEAD@{1}",
+		"HEAD ",
+		"HEAD\t",
+	}
+	for _, bad := range badRevs {
+		_, err := g.ResolveCommit(context.Background(), bad)
+		if err == nil {
+			t.Errorf("expected error for bad revision %q", bad)
+		}
 	}
 }
