@@ -2,12 +2,15 @@ package uat
 
 import (
 	"context"
+	"errors"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 type captureExec struct {
@@ -71,7 +74,7 @@ func TestAdapters_GitShowArgv(t *testing.T) {
 
 func TestAdapters_MCPAddArgv(t *testing.T) {
 	ce := &captureExec{}
-	m := NewRealMCP(ce)
+	m := NewRealMCP("/pix-host", "/state", ce, &mockBrowserFactory{})
 	err := m.Add(context.Background(), "my-mcp", []string{"mcp", "add", "my-mcp", "--command", "host"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -164,3 +167,132 @@ func TestAdapters_Integration(t *testing.T) {
 		}
 	}
 }
+
+type authCaptureExec struct {
+	cmds [][]string
+	env  []string
+	waitFunc func() error
+}
+
+func (c *authCaptureExec) CommandContext(ctx context.Context, name string, args ...string) ExecCmd {
+	c.cmds = append(c.cmds, append([]string{name}, args...))
+	return &authFakeCmd{exec: c}
+}
+
+type authFakeCmd struct {
+	exec *authCaptureExec
+}
+
+func (f *authFakeCmd) Run() error                         { return nil }
+func (f *authFakeCmd) Start() error                       { 
+	if f.exec.waitFunc != nil {
+		go f.exec.waitFunc()
+	}
+	return nil
+}
+func (f *authFakeCmd) Wait() error { return nil }
+func (f *authFakeCmd) Output() ([]byte, error)            { return nil, nil }
+func (f *authFakeCmd) StdoutPipe() (io.ReadCloser, error) { return nil, nil }
+func (f *authFakeCmd) StderrPipe() (io.ReadCloser, error) { return nil, nil }
+func (f *authFakeCmd) SetEnv(env []string) {
+	f.exec.env = env
+}
+func (f *authFakeCmd) SetDir(dir string)                  {}
+
+func TestAdapters_MCPAuthCaptureSuccess(t *testing.T) {
+	stateDir := t.TempDir()
+	runID := "testrun-auth-123"
+	
+	pixHost := filepath.Join(stateDir, "fake-pix-host")
+	os.WriteFile(pixHost, []byte("#!/bin/sh\n"), 0755)
+
+	factory := &mockBrowserFactory{}
+	ce := &authCaptureExec{}
+	
+	m := NewRealMCP(pixHost, stateDir, ce, factory)
+
+	// Simulate sbx writing to the capture path
+	ce.waitFunc = func() error {
+		capturePath := filepath.Join(stateDir, "runs", runID, "browser_capture")
+		os.MkdirAll(filepath.Dir(capturePath), 0700)
+		os.WriteFile(capturePath, []byte("https://github.com/login?redirect_uri=http%3A%2F%2Flocalhost%3A8080%2Fcb"), 0600)
+		return nil
+	}
+
+	err := m.Auth(context.Background(), runID, "some-mcp")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify env
+	foundBrowser := false
+	foundCapture := false
+	for _, e := range ce.env {
+		if strings.HasPrefix(e, "BROWSER=") {
+			foundBrowser = true
+			expectedShim := filepath.Join(stateDir, "runs", runID, "bin", "pix-uat-browser")
+			if e != "BROWSER="+expectedShim {
+				t.Errorf("unexpected BROWSER: %s", e)
+			}
+		}
+		if strings.HasPrefix(e, "PIX_UAT_BROWSER_CAPTURE=") {
+			foundCapture = true
+		}
+	}
+	if !foundBrowser || !foundCapture {
+		t.Errorf("missing env vars. env: %v", ce.env)
+	}
+}
+
+func TestAdapters_MCPAuthCaptureTimeout(t *testing.T) {
+	stateDir := t.TempDir()
+	runID := "testrun-auth-456"
+	
+	pixHost := filepath.Join(stateDir, "fake-pix-host")
+	os.WriteFile(pixHost, []byte("#!/bin/sh\n"), 0755)
+
+	factory := &mockBrowserFactory{}
+	ce := &authCaptureExec{}
+	
+	m := NewRealMCP(pixHost, stateDir, ce, factory)
+
+	// Simulate sbx ignoring BROWSER and not writing to capture path
+	ce.waitFunc = func() error {
+		// Do nothing, wait for context to cancel
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	err := m.Auth(ctx, runID, "some-mcp")
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	if !errors.Is(err, ErrIncomplete) {
+		t.Errorf("expected ErrIncomplete, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "host bootstrap") {
+		t.Errorf("expected host bootstrap evidence, got %v", err)
+	}
+}
+
+type mockBrowserFactory struct{}
+
+func (m *mockBrowserFactory) NewContext(ctx context.Context, runID string, initialURL *url.URL, policy URLValidator) (Browser, error) {
+	return nil, nil
+}
+
+func (m *mockBrowserFactory) NewOAuthContext(ctx context.Context, initialURL *url.URL, policy URLValidator) (Browser, error) {
+	return &mockBrowser{}, nil
+}
+
+// Using the same fakeBrowser pattern from oauth_test.go
+type mockBrowser struct{}
+func (f *mockBrowser) Snapshot(ctx context.Context) (*Snapshot, error) { return nil, nil }
+func (f *mockBrowser) Click(ctx context.Context, refID string) error { return nil }
+func (f *mockBrowser) WaitForURL(ctx context.Context, expectedURL *url.URL) error { return nil }
+func (f *mockBrowser) CurrentURL(ctx context.Context) (*url.URL, error) { return nil, nil }
+func (f *mockBrowser) Title(ctx context.Context) (string, error) { return "", nil }
+func (f *mockBrowser) VisibleText(ctx context.Context) (string, error) { return "", nil }
+func (f *mockBrowser) Close() error { return nil }

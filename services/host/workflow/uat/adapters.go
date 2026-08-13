@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"pix/host/sandbox"
 )
@@ -128,14 +131,17 @@ func (s *realSandbox) Remove(ctx context.Context, runID string) error {
 }
 
 type realMCP struct {
-	exec Exec
+	pixHost string
+	stateDir string
+	exec    Exec
+	factory BrowserFactory
 }
 
-func NewRealMCP(e Exec) MCP {
+func NewRealMCP(pixHost, stateDir string, e Exec, factory BrowserFactory) MCP {
 	if e == nil {
 		e = NewRealExec()
 	}
-	return &realMCP{exec: e}
+	return &realMCP{pixHost: pixHost, stateDir: stateDir, exec: e, factory: factory}
 }
 
 func (m *realMCP) Add(ctx context.Context, name string, argv []string) error {
@@ -143,9 +149,134 @@ func (m *realMCP) Add(ctx context.Context, name string, argv []string) error {
 	return cmd.Run()
 }
 
-func (m *realMCP) Auth(ctx context.Context, name string) error {
-	cmd := m.exec.CommandContext(ctx, "sbx", "mcp", "auth", "--", name)
-	return cmd.Run()
+func (m *realMCP) Auth(ctx context.Context, runID string, name string) error {
+	// Task B: create run-owned bin dir, symlink shim, capture OAuth.
+	binDir := filepath.Join(m.stateDir, "runs", runID, "bin")
+	if err := os.MkdirAll(binDir, 0700); err != nil {
+		return err
+	}
+
+	shimPath := filepath.Join(binDir, "pix-uat-browser")
+	_ = os.Remove(shimPath)
+	if err := os.Symlink(m.pixHost, shimPath); err != nil {
+		if err := os.Link(m.pixHost, shimPath); err != nil {
+			return fmt.Errorf("failed to create browser shim: %w", err)
+		}
+	}
+
+	capturePath := filepath.Join(m.stateDir, "runs", runID, "browser_capture")
+	_ = os.Remove(capturePath)
+
+	cmdCtx, cancelCmd := context.WithCancel(ctx)
+	defer cancelCmd()
+	cmd := m.exec.CommandContext(cmdCtx, "sbx", "mcp", "auth", "--", name)
+	
+	// Inherit PATH but set BROWSER and PIX_UAT_BROWSER_CAPTURE
+	var env []string
+	for _, e := range os.Environ() {
+		if !strings.HasPrefix(e, "BROWSER=") && !strings.HasPrefix(e, "PIX_UAT_BROWSER_CAPTURE=") {
+			env = append(env, e)
+		}
+	}
+	env = append(env, "BROWSER="+shimPath)
+	env = append(env, "PIX_UAT_BROWSER_CAPTURE="+capturePath)
+	cmd.SetEnv(env)
+
+	// Suppress inherited stdio by giving it pipes that we close, or simply wait on it?
+	// The task says "asynchronously with inherited stdio suppressed/capped, waits bounded for the capture"
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("sbx mcp auth start: %w", err)
+	}
+
+	// Wait bounded for the capture
+	// We need to wait for `capturePath` to be written.
+	captureCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	var rawURL string
+	for {
+		if captureCtx.Err() != nil {
+			cancelCmd()
+			_ = cmd.Wait()
+			return fmt.Errorf("%w: browser capture timeout (sbx ignored BROWSER shim - check host bootstrap)", ErrIncomplete)
+		}
+		data, err := os.ReadFile(capturePath)
+		if err == nil && len(data) > 0 {
+			rawURL = string(data)
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Parse auth URL and its percent-decoded redirect_uri
+	authURL, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid auth URL: %w", err)
+	}
+
+	redirectURI := authURL.Query().Get("redirect_uri")
+	if redirectURI == "" {
+		return fmt.Errorf("no redirect_uri in auth URL")
+	}
+
+	callbackURL, err := url.Parse(redirectURI)
+	if err != nil {
+		return fmt.Errorf("invalid redirect_uri: %w", err)
+	}
+
+	// Identify provider through closed registry
+	var provider OAuthProvider
+	providerFound := false
+	for p, hosts := range ProviderAuthHosts {
+		for _, host := range hosts {
+			if strings.Contains(authURL.Host, host) {
+				provider = p
+				providerFound = true
+				break
+			}
+		}
+		if providerFound {
+			break
+		}
+	}
+	if !providerFound {
+		return fmt.Errorf("unknown provider for host: %s", authURL.Host)
+	}
+
+	portStr := callbackURL.Port()
+	port, _ := strconv.Atoi(portStr)
+
+	// Validates exact OAuth origin and loopback callback/port
+	policy := &OAuthPolicy{
+		Provider: provider,
+		LeasedPorts: []int{port},
+	}
+	_, err = policy.Validate(authURL.String())
+	if err != nil {
+		return fmt.Errorf("auth URL validation failed: %w", err)
+	}
+	_, err = policy.Validate(callbackURL.String())
+	if err != nil {
+		return fmt.Errorf("callback URL validation failed: %w", err)
+	}
+
+	// Drive NewOAuthContext
+	b, err := m.factory.NewOAuthContext(ctx, authURL, policy)
+	if err != nil {
+		return fmt.Errorf("new oauth context: %w", err)
+	}
+	defer b.Close()
+
+	if err := b.WaitForURL(ctx, callbackURL); err != nil {
+		return fmt.Errorf("wait for callback: %w", err)
+	}
+
+	// Wait for sbx exit
+	if err := cmd.Wait(); err != nil {
+		return fmt.Errorf("sbx mcp auth failed: %w", err)
+	}
+
+	return nil
 }
 
 func (m *realMCP) Status(ctx context.Context, name string) (string, error) {
@@ -237,13 +368,15 @@ func (l *realLease) Cleanup(ctx context.Context, runID string) error {
 	var errs []error
 	for _, ent := range entries {
 		res := ent.Name()
-		if !strings.HasPrefix(res, "mcp_") && !strings.HasPrefix(res, "sandbox_") && !strings.HasPrefix(res, "image_") {
+		if !strings.HasPrefix(res, "mcp_") && !strings.HasPrefix(res, "sandbox_") && !strings.HasPrefix(res, "image_") && !strings.HasPrefix(res, "template_") && res != "run" {
 			errs = append(errs, fmt.Errorf("refusing foreign lease name: %s", res))
 			continue
 		}
 
 		var cleanupErr error
-		if strings.HasPrefix(res, "mcp_") {
+		if res == "run" {
+			// bookkeeping-only run marker, remove
+		} else if strings.HasPrefix(res, "mcp_") {
 			name := strings.TrimPrefix(res, "mcp_")
 			cleanupErr = l.exec.CommandContext(ctx, "sbx", "mcp", "rm", "--", name).Run()
 		} else if strings.HasPrefix(res, "sandbox_") {
@@ -262,6 +395,15 @@ func (l *realLease) Cleanup(ctx context.Context, runID string) error {
 				tag = strings.ReplaceAll(tag, "_", "/") // Best effort for others
 			}
 			cleanupErr = l.exec.CommandContext(ctx, "docker", "image", "rm", "-f", "--", tag).Run()
+		} else if strings.HasPrefix(res, "template_") {
+			tag := strings.TrimPrefix(res, "template_")
+			if strings.HasPrefix(tag, "docker.io_mcavage_pix_uat-") {
+				actualTag := "docker.io/mcavage/pix:uat-" + strings.TrimPrefix(tag, "docker.io_mcavage_pix_uat-")
+				cleanupErr = l.exec.CommandContext(ctx, "sbx", "template", "rm", "--", actualTag).Run()
+			} else {
+				errs = append(errs, fmt.Errorf("refusing unknown template format: %s", tag))
+				continue
+			}
 		}
 
 		if cleanupErr != nil {

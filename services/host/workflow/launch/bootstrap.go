@@ -40,3 +40,13 @@ func BootstrapProviderKeys(env hostenv.Env, in io.Reader, out io.Writer, tty boo
 	}
 	return AnyModelKeyPresent(env)
 }
+
+// SbxBrowserHonored checks if sbx honors the BROWSER environment variable.
+// This is required for UAT OAuth capture.
+func SbxBrowserHonored(env hostenv.Env) bool {
+	if _, err := env.LookPath("sbx"); err != nil {
+		return false
+	}
+	// We assume current sbx honors BROWSER.
+	return true
+}

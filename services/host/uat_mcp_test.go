@@ -34,7 +34,7 @@ func (f *fakeSandbox) Remove(ctx context.Context, runID string) error { return n
 type fakeMCP struct{}
 
 func (f *fakeMCP) Add(ctx context.Context, name string, argv []string) error { return nil }
-func (f *fakeMCP) Auth(ctx context.Context, name string) error               { return nil }
+func (f *fakeMCP) Auth(ctx context.Context, runID string, name string) error               { return nil }
 func (f *fakeMCP) Status(ctx context.Context, name string) (string, error)   { return "ready", nil }
 func (f *fakeMCP) Remove(ctx context.Context, name string) error             { return nil }
 

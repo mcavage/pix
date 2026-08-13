@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -29,6 +30,15 @@ import (
 var version = "dev"
 
 func main() {
+	// Task B: UAT Browser capture shim
+	if filepath.Base(os.Args[0]) == "pix-uat-browser" {
+		if err := runUatBrowserCaptureShim(os.Args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1) // must exit non-zero on failure
+		}
+		os.Exit(0)
+	}
+
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)
@@ -47,11 +57,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(2)
 		}
-	case "uat-browser-open":
-		if err := runUatBrowserOpen(os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(2)
-		}
+
 	case "route":
 		runRouteHost(os.Args[2:])
 	case "serve":

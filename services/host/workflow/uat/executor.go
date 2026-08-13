@@ -28,7 +28,7 @@ type Sandbox interface {
 
 type MCP interface {
 	Add(ctx context.Context, name string, argv []string) error
-	Auth(ctx context.Context, name string) error
+	Auth(ctx context.Context, runID string, name string) error
 	Status(ctx context.Context, name string) (string, error)
 	Remove(ctx context.Context, name string) error
 }

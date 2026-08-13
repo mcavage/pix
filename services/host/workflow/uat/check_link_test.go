@@ -53,3 +53,40 @@ func TestCheckLink(t *testing.T) {
 		})
 	}
 }
+type fakeBrowser struct {
+	currURL *url.URL
+	waitErr error
+}
+
+func (f *fakeBrowser) Snapshot(ctx context.Context) (*Snapshot, error) {
+	return &Snapshot{Screenshot: []byte("fake-screenshot")}, nil
+}
+func (f *fakeBrowser) Click(ctx context.Context, refID string) error {
+	return nil
+}
+func (f *fakeBrowser) WaitForURL(ctx context.Context, expectedURL *url.URL) error {
+	return f.waitErr
+}
+func (f *fakeBrowser) CurrentURL(ctx context.Context) (*url.URL, error) {
+	return f.currURL, nil
+}
+func (f *fakeBrowser) Title(ctx context.Context) (string, error) {
+	return "Title", nil
+}
+func (f *fakeBrowser) VisibleText(ctx context.Context) (string, error) {
+	return "", nil
+}
+func (f *fakeBrowser) Close() error {
+	return nil
+}
+
+type fakeFactory struct {
+	b *fakeBrowser
+}
+
+func (f *fakeFactory) NewContext(ctx context.Context, runID string, initialURL *url.URL, policy URLValidator) (Browser, error) {
+	return f.b, nil
+}
+func (f *fakeFactory) NewOAuthContext(ctx context.Context, initialURL *url.URL, policy URLValidator) (Browser, error) {
+	return f.b, nil
+}

@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 
@@ -54,21 +55,22 @@ func runUatMcp(args []string) error {
 	execAdapter := uat.NewRealExec()
 	gitAdapter := uat.NewRealGit(*repo, execAdapter)
 	sandboxAdapter := uat.NewRealSandbox(execAdapter)
-	mcpAdapter := uat.NewRealMCP(execAdapter)
-	imageAdapter := uat.NewRealImage(execAdapter)
-	leaseAdapter := uat.NewRealLease(*state, execAdapter)
-
+	
 	hostBin, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("uat-mcp: failed to get executable path: %w", err)
 	}
+
+	browserFactory := uat.NewRealBrowserFactory()
+	mcpAdapter := uat.NewRealMCP(hostBin, *state, execAdapter, browserFactory)
+	imageAdapter := uat.NewRealImage(execAdapter)
+	leaseAdapter := uat.NewRealLease(*state, execAdapter)
 
 	runner, err := uat.NewRunner(hostBin, *repo, *state, gitAdapter, execAdapter, sandboxAdapter, mcpAdapter, imageAdapter, leaseAdapter, 1)
 	if err != nil {
 		return fmt.Errorf("uat-mcp: failed to initialize runner: %w", err)
 	}
 	retryReport := runner.RetryCleanups()
-	browserFactory := uat.NewRealBrowserFactory()
 
 	mcpServer := uat.NewMCPServer(runner, browserFactory, *state, os.Stdin, os.Stdout, retryReport)
 	if err := mcpServer.Serve(context.Background()); err != nil {
@@ -77,36 +79,36 @@ func runUatMcp(args []string) error {
 	return nil
 }
 
-func runUatBrowserOpen(args []string) error {
-	fs := flag.NewFlagSet("uat-browser-open", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
 
-	runID := fs.String("run-id", "", "run id")
-	authURL := fs.String("auth-url", "", "auth URL")
-	callbackURL := fs.String("callback-url", "", "callback URL")
-	providerStr := fs.String("provider", "", "oauth provider (github, gitlab, etc)")
-	outPath := fs.String("out", "", "output file path")
 
-	if err := fs.Parse(args); err != nil {
+
+func runUatBrowserCaptureShim(args []string) error {
+	capturePath := os.Getenv("PIX_UAT_BROWSER_CAPTURE")
+	if capturePath == "" {
+		return fmt.Errorf("PIX_UAT_BROWSER_CAPTURE is not set")
+	}
+
+	if len(args) != 1 {
+		return fmt.Errorf("expected exactly 1 argument (URL), got %d", len(args))
+	}
+
+	rawURL := args[0]
+	if len(rawURL) > 8192 {
+		return fmt.Errorf("URL too long")
+	}
+
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("invalid scheme: %s", u.Scheme)
+	}
+
+	tmpPath := capturePath + ".tmp"
+	if err := os.WriteFile(tmpPath, []byte(rawURL), 0600); err != nil {
 		return err
 	}
-
-	if *runID == "" || *authURL == "" || *callbackURL == "" || *providerStr == "" || *outPath == "" {
-		return fmt.Errorf("uat-browser-open: missing required arguments")
-	}
-
-	cfg := uat.OAuthConfig{
-		RunID:       *runID,
-		AuthURL:     *authURL,
-		CallbackURL: *callbackURL,
-		Provider:    uat.OAuthProvider(*providerStr),
-		Policy:      &uat.OAuthPolicy{Provider: uat.OAuthProvider(*providerStr), LeasedPorts: []int{}},
-	}
-
-	factory := uat.NewRealBrowserFactory()
-
-	if err := uat.CaptureOAuth(context.Background(), factory, cfg, *outPath); err != nil {
-		return fmt.Errorf("uat-browser-open: capture failed")
-	}
-	return nil
+	return os.Rename(tmpPath, capturePath)
 }

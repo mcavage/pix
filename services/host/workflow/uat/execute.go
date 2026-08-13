@@ -301,7 +301,7 @@ func (r *Runner) executeStep(ctx context.Context, runID, commit string, scenario
 	case "mcp_auth":
 		name := extractStringMap(step.With, "name")
 		uatName := "uat-" + runID + "-" + name
-		return r.mcp.Auth(ctx, uatName)
+		return r.mcp.Auth(ctx, runID, uatName)
 	case "mcp_status": // maybe check?
 		// check expect
 		name := extractStringMap(step.With, "name")
