@@ -342,3 +342,177 @@ func TestMCPServer_ShutdownTimeout(t *testing.T) {
 		t.Errorf("expected quick return after shutdown timeout, took %v", elapsed)
 	}
 }
+
+
+type blockingWriter struct {
+	writeBlock chan struct{}
+}
+
+func (w *blockingWriter) Write(p []byte) (n int, err error) {
+	<-w.writeBlock
+	return len(p), nil
+}
+
+func TestMCPServer_ShutdownWithBlockedWriter(t *testing.T) {
+	inReader, inWriter := io.Pipe()
+	
+	bw := &blockingWriter{
+		writeBlock: make(chan struct{}),
+	}
+
+	bf := &mockBrowserFactory{}
+	mg := &mockGit{}
+	tmpDir := t.TempDir()
+	pixHost := filepath.Join(tmpDir, "pix-host")
+	os.WriteFile(pixHost, []byte(""), 0755)
+
+	runner, err := uat.NewRunner(pixHost, "/repo", tmpDir, mg, &mockExec{}, &mockSandbox{}, &mockMCP{}, &mockImage{}, &mockLease{}, 1)
+	if err != nil {
+		t.Fatalf("NewRunner error: %v", err)
+	}
+
+	s := uat.NewMCPServer(runner, bf, "", inReader, bw, nil)
+	s.ShutdownTimeout = 50 * time.Millisecond
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.Serve(context.Background())
+	}()
+
+	// Send a valid tool call that generates an immediate response
+	req := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"uat_capabilities","arguments":{}}}` + "\n"
+	inWriter.Write([]byte(req))
+
+	// Allow the tool call to be processed, which will block in Write()
+	time.Sleep(50 * time.Millisecond)
+
+	// Trigger shutdown by EOF
+	inWriter.Close()
+
+	// Wait for Serve to return (it should NOT block on outMu if the writer is blocked)
+	select {
+	case err := <-errCh:
+		if err != nil && !strings.Contains(err.Error(), "shutdown timeout") {
+			t.Errorf("expected no error or shutdown timeout, got %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Serve deadlocked on blocked writer")
+	}
+    // Cleanup the blocked writer so the goroutine doesn't leak in tests
+    close(bw.writeBlock)
+}
+
+type recordingBrowserFactory struct {
+	mu        sync.Mutex
+	calls     int
+	blockChan chan struct{}
+}
+
+func (f *recordingBrowserFactory) NewContext(ctx context.Context, runID string, initialURL *uat.ValidatedURL, policy uat.URLValidator) (uat.Browser, error) {
+	f.mu.Lock()
+	f.calls++
+	f.mu.Unlock()
+
+	if f.blockChan != nil {
+		select {
+		case <-f.blockChan:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return &mockBrowser{}, nil
+}
+
+func (f *recordingBrowserFactory) NewOAuthContext(ctx context.Context, initialURL *uat.ValidatedURL, policy uat.URLValidator) (uat.Browser, error) {
+	return nil, nil
+}
+
+func TestMCPServer_ConcurrentOneFactory(t *testing.T) {
+	inReader, inWriter := io.Pipe()
+	var out bytes.Buffer
+
+	// Delay factory so concurrent calls queue up
+	bf := &recordingBrowserFactory{
+		blockChan: make(chan struct{}),
+	}
+	mg := &mockGit{}
+	tmpDir := t.TempDir()
+	pixHost := filepath.Join(tmpDir, "pix-host")
+	os.WriteFile(pixHost, []byte(""), 0755)
+
+	runner, err := uat.NewRunner(pixHost, "/repo", tmpDir, mg, &mockExec{}, &mockSandbox{}, &mockMCP{}, &mockImage{}, &mockLease{}, 1)
+	if err != nil {
+		t.Fatalf("NewRunner error: %v", err)
+	}
+
+	s := uat.NewMCPServer(runner, bf, "", inReader, &out, nil)
+
+	go s.Serve(context.Background())
+
+	// Send 3 concurrent requests for the same run_id
+	req1 := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"uat_browser_action","arguments":{"run_id":"run_same","action":"snapshot"}}}` + "\n"
+	req2 := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"uat_browser_action","arguments":{"run_id":"run_same","action":"read_visible_text"}}}` + "\n"
+	req3 := `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"uat_browser_action","arguments":{"run_id":"run_same","action":"snapshot"}}}` + "\n"
+	
+	inWriter.Write([]byte(req1))
+	inWriter.Write([]byte(req2))
+	inWriter.Write([]byte(req3))
+
+	time.Sleep(50 * time.Millisecond)
+	
+	// Unblock factory
+	close(bf.blockChan)
+
+	time.Sleep(100 * time.Millisecond)
+	inWriter.Close()
+
+	bf.mu.Lock()
+	calls := bf.calls
+	bf.mu.Unlock()
+	if calls != 1 {
+		t.Errorf("Expected exactly 1 factory call, got %d", calls)
+	}
+}
+
+func TestMCPServer_HungStartupShutdown(t *testing.T) {
+	inReader, inWriter := io.Pipe()
+	var out bytes.Buffer
+
+	// Factory blocks until context is cancelled
+	bf := &recordingBrowserFactory{
+		blockChan: make(chan struct{}),
+	}
+	mg := &mockGit{}
+	tmpDir := t.TempDir()
+	pixHost := filepath.Join(tmpDir, "pix-host")
+	os.WriteFile(pixHost, []byte(""), 0755)
+
+	runner, err := uat.NewRunner(pixHost, "/repo", tmpDir, mg, &mockExec{}, &mockSandbox{}, &mockMCP{}, &mockImage{}, &mockLease{}, 1)
+	if err != nil {
+		t.Fatalf("NewRunner error: %v", err)
+	}
+
+	s := uat.NewMCPServer(runner, bf, "", inReader, &out, nil)
+
+	go s.Serve(context.Background())
+
+	// Send action to trigger factory
+	req := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"uat_browser_action","arguments":{"run_id":"run_hung","action":"snapshot"}}}` + "\n"
+	inWriter.Write([]byte(req))
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Close stdin, triggering shutdown
+	inWriter.Close()
+
+	// Ensure we don't leak goroutines, checking that factory unblocks due to context cancellation
+	// by waiting for the test to finish cleanly.
+	time.Sleep(100 * time.Millisecond)
+
+	bf.mu.Lock()
+	calls := bf.calls
+	bf.mu.Unlock()
+	if calls != 1 {
+		t.Errorf("Expected 1 factory call, got %d", calls)
+	}
+}

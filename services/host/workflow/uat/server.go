@@ -9,10 +9,17 @@ import (
 	"net/url"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	hostuat "pix/host/uat"
 )
+
+type browserEntry struct {
+	ready chan struct{}
+	b     Browser
+	err   error
+}
 
 type toolDescriptor struct {
 	Name        string                 `json:"name"`
@@ -103,10 +110,10 @@ type MCPServer struct {
 	in             io.Reader
 	out            io.Writer
 	outMu          sync.Mutex
-	done           bool
+	done           atomic.Bool
 
 	browsersMu sync.Mutex
-	browsers   map[string]Browser
+	browsers   map[string]*browserEntry
 
 	retryReport map[string]string
 
@@ -120,7 +127,7 @@ func NewMCPServer(runner *Runner, bf BrowserFactory, stateDir string, in io.Read
 		stateDir:       stateDir,
 		in:             in,
 		out:            out,
-		browsers:       make(map[string]Browser),
+		browsers:       make(map[string]*browserEntry),
 		retryReport:    retryReport,
 		ShutdownTimeout: 5 * time.Second,
 	}
@@ -128,17 +135,45 @@ func NewMCPServer(runner *Runner, bf BrowserFactory, stateDir string, in io.Read
 
 func (s *MCPServer) getOrCreateBrowser(ctx context.Context, runID string) (Browser, error) {
 	s.browsersMu.Lock()
-	defer s.browsersMu.Unlock()
-	if b, ok := s.browsers[runID]; ok {
-		return b, nil
+	if s.done.Load() {
+		s.browsersMu.Unlock()
+		return nil, fmt.Errorf("server shutting down")
 	}
+
+	entry, exists := s.browsers[runID]
+	if !exists {
+		entry = &browserEntry{ready: make(chan struct{})}
+		s.browsers[runID] = entry
+	}
+	s.browsersMu.Unlock()
+
+	if exists {
+		select {
+		case <-entry.ready:
+			return entry.b, entry.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+
 	u, _ := url.Parse("about:blank")
 	b, err := s.browserFactory.NewContext(ctx, runID, &ValidatedURL{URL: u}, &OAuthPolicy{Resolver: &realResolver{}})
-	if err != nil {
-		return nil, err
+	
+	s.browsersMu.Lock()
+	entry.b = b
+	entry.err = err
+	close(entry.ready)
+	
+	if s.done.Load() && b != nil {
+		b.Close()
+		entry.b = nil
+		entry.err = fmt.Errorf("server shutting down")
+		b = nil
+		err = entry.err
 	}
-	s.browsers[runID] = b
-	return b, nil
+	s.browsersMu.Unlock()
+	
+	return b, err
 }
 
 type mcpRequest struct {
@@ -234,15 +269,19 @@ func (s *MCPServer) Serve(ctx context.Context) error {
 		scanErr = fmt.Errorf("shutdown timeout: pending tool calls did not finish")
 	}
 
+	s.done.Store(true)
+
 	s.browsersMu.Lock()
-	for _, b := range s.browsers {
-		b.Close()
+	for _, entry := range s.browsers {
+		select {
+		case <-entry.ready:
+			if entry.b != nil {
+				entry.b.Close()
+			}
+		default:
+		}
 	}
 	s.browsersMu.Unlock()
-
-	s.outMu.Lock()
-	s.done = true
-	s.outMu.Unlock()
 
 	return scanErr
 }
@@ -254,11 +293,13 @@ func (s *MCPServer) sendResponse(id interface{}, result interface{}) {
 		Result:  result,
 	}
 	b, _ := json.Marshal(resp)
-	s.outMu.Lock()
-	if !s.done {
-		fmt.Fprintf(s.out, "%s\n", b)
+	if !s.done.Load() {
+		s.outMu.Lock()
+		if !s.done.Load() {
+			fmt.Fprintf(s.out, "%s\n", b)
+		}
+		s.outMu.Unlock()
 	}
-	s.outMu.Unlock()
 }
 
 func (s *MCPServer) sendError(id interface{}, code int, message string) {
@@ -271,11 +312,13 @@ func (s *MCPServer) sendError(id interface{}, code int, message string) {
 		},
 	}
 	b, _ := json.Marshal(resp)
-	s.outMu.Lock()
-	if !s.done {
-		fmt.Fprintf(s.out, "%s\n", b)
+	if !s.done.Load() {
+		s.outMu.Lock()
+		if !s.done.Load() {
+			fmt.Fprintf(s.out, "%s\n", b)
+		}
+		s.outMu.Unlock()
 	}
-	s.outMu.Unlock()
 }
 
 func (s *MCPServer) handleToolCall(ctx context.Context, id interface{}, params json.RawMessage) {

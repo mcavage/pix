@@ -68,7 +68,7 @@ func (f *realFactory) NewContext(ctx context.Context, runID string, initialURL *
 	if initialURL.ResolvedIP != "" {
 		opts = append(opts, chromedp.Flag("host-resolver-rules", fmt.Sprintf("MAP %s %s", initialURL.URL.Hostname(), initialURL.ResolvedIP)))
 	}
-	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), opts...)
+	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, opts...)
 
 	c, cancelCtx := chromedp.NewContext(allocCtx)
 
@@ -134,7 +134,7 @@ func (f *realFactory) NewOAuthContext(ctx context.Context, initialURL *Validated
 	if initialURL.ResolvedIP != "" {
 		opts = append(opts, chromedp.Flag("host-resolver-rules", fmt.Sprintf("MAP %s %s", initialURL.URL.Hostname(), initialURL.ResolvedIP)))
 	}
-	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), opts...)
+	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, opts...)
 
 	c, cancelCtx := chromedp.NewContext(allocCtx)
 
