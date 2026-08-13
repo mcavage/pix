@@ -73,38 +73,14 @@ func (f *realFactory) NewContext(ctx context.Context, runID string, initialURL *
 	c, cancelCtx := chromedp.NewContext(allocCtx)
 
 	b := &realBrowser{
-		ctx:         c,
-		cancelCtx:   cancelCtx,
-		cancelAlloc: cancelAlloc,
-		clickables:  make(map[string]ClickableRef),
+		ctx:          c,
+		cancelCtx:    cancelCtx,
+		cancelAlloc:  cancelAlloc,
+		clickables:   make(map[string]ClickableRef),
+		activeOrigin: initialURL.URL,
 	}
 
-	chromedp.ListenTarget(c, func(ev interface{}) {
-		if policy == nil {
-			return
-		}
-		if evReq, ok := ev.(*fetch.EventRequestPaused); ok {
-			u := evReq.Request.URL
-			if strings.HasPrefix(u, "about:") || strings.HasPrefix(u, "data:") || strings.HasPrefix(u, "blob:") {
-				go chromedp.Run(c, fetch.ContinueRequest(evReq.RequestID))
-				return
-			}
-			
-			var errPolicy error
-			if evReq.ResourceType == network.ResourceTypeDocument {
-				_, errPolicy = policy.Validate(u)
-			} else {
-				errPolicy = validateSubresource(u, initialURL.URL, policy)
-			}
-			
-			if errPolicy != nil {
-				b.setPolicyErr(errPolicy)
-				go chromedp.Run(c, fetch.FailRequest(evReq.RequestID, network.ErrorReasonAccessDenied))
-			} else {
-				go chromedp.Run(c, fetch.ContinueRequest(evReq.RequestID))
-			}
-		}
-	})
+	chromedp.ListenTarget(c, b.requestHandler(policy, chromedp.Run))
 
 	actions := buildNavigateActions(policy, initialURL.URL.String())
 
@@ -163,14 +139,15 @@ func (f *realFactory) NewOAuthContext(ctx context.Context, initialURL *Validated
 	c, cancelCtx := chromedp.NewContext(allocCtx)
 
 	b := &realBrowser{
-		ctx:         c,
-		cancelCtx:   cancelCtx,
-		cancelAlloc: cancelAlloc,
-		clickables:  make(map[string]ClickableRef),
-		unlock:      unlock,
+		ctx:          c,
+		cancelCtx:    cancelCtx,
+		cancelAlloc:  cancelAlloc,
+		clickables:   make(map[string]ClickableRef),
+		unlock:       unlock,
+		activeOrigin: initialURL.URL,
 	}
 
-	chromedp.ListenTarget(c, b.requestHandler(policy, initialURL.URL, chromedp.Run))
+	chromedp.ListenTarget(c, b.requestHandler(policy, chromedp.Run))
 
 	actions := buildNavigateActions(policy, initialURL.URL.String())
 
@@ -201,6 +178,21 @@ type realBrowser struct {
 
 	policyErrMu sync.Mutex
 	policyErr   error
+
+	originMu     sync.RWMutex
+	activeOrigin *url.URL
+}
+
+func (b *realBrowser) setActiveOrigin(u *url.URL) {
+	b.originMu.Lock()
+	defer b.originMu.Unlock()
+	b.activeOrigin = u
+}
+
+func (b *realBrowser) getActiveOrigin() *url.URL {
+	b.originMu.RLock()
+	defer b.originMu.RUnlock()
+	return b.activeOrigin
 }
 
 func (b *realBrowser) setPolicyErr(err error) {
@@ -217,7 +209,7 @@ func (b *realBrowser) getPolicyErr() error {
 	return b.policyErr
 }
 
-func (b *realBrowser) requestHandler(policy URLValidator, initialURL *url.URL, runCmd func(context.Context, ...chromedp.Action) error) func(ev interface{}) {
+func (b *realBrowser) requestHandler(policy URLValidator, runCmd func(context.Context, ...chromedp.Action) error) func(ev interface{}) {
 	return func(ev interface{}) {
 		if policy == nil {
 			return
@@ -228,24 +220,33 @@ func (b *realBrowser) requestHandler(policy URLValidator, initialURL *url.URL, r
 				go runCmd(b.ctx, fetch.ContinueRequest(evReq.RequestID))
 				return
 			}
-			var errPolicy error
-			if evReq.ResourceType == network.ResourceTypeDocument {
-				_, errPolicy = policy.Validate(u)
-			} else {
-				errPolicy = validateSubresource(u, initialURL, policy)
-			}
+			go func() {
+				ctx, cancel := context.WithTimeout(b.ctx, 5*time.Second)
+				defer cancel()
+				var errPolicy error
+				if evReq.ResourceType == network.ResourceTypeDocument {
+					_, errPolicy = policy.Validate(ctx, u)
+					if errPolicy == nil {
+						if parsedU, err := url.Parse(u); err == nil {
+							b.setActiveOrigin(parsedU)
+						}
+					}
+				} else {
+					errPolicy = validateSubresource(ctx, u, b.getActiveOrigin(), policy)
+				}
 
-			if errPolicy != nil {
-				b.setPolicyErr(errPolicy)
-				go runCmd(b.ctx, fetch.FailRequest(evReq.RequestID, network.ErrorReasonAccessDenied))
-			} else {
-				go runCmd(b.ctx, fetch.ContinueRequest(evReq.RequestID))
-			}
+				if errPolicy != nil {
+					b.setPolicyErr(errPolicy)
+					runCmd(b.ctx, fetch.FailRequest(evReq.RequestID, network.ErrorReasonAccessDenied))
+				} else {
+					runCmd(b.ctx, fetch.ContinueRequest(evReq.RequestID))
+				}
+			}()
 		}
 	}
 }
 
-func validateSubresource(rawURL string, initialURL *url.URL, policy URLValidator) error {
+func validateSubresource(ctx context.Context, rawURL string, activeOrigin *url.URL, policy URLValidator) error {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return fmt.Errorf("invalid subresource URL: %v", err)
@@ -253,7 +254,7 @@ func validateSubresource(rawURL string, initialURL *url.URL, policy URLValidator
 
 	switch p := policy.(type) {
 	case *PublicLinkPolicy:
-		if u.Scheme != initialURL.Scheme || u.Hostname() != initialURL.Hostname() || u.Port() != initialURL.Port() {
+		if u.Scheme != activeOrigin.Scheme || u.Hostname() != activeOrigin.Hostname() || u.Port() != activeOrigin.Port() {
 			return fmt.Errorf("cross-origin subresource not allowed: %s", rawURL)
 		}
 		return nil
@@ -275,13 +276,16 @@ func validateSubresource(rawURL string, initialURL *url.URL, policy URLValidator
 			}
 		}
 
-		ips, err := net.LookupIP(host)
+		if p.Resolver == nil {
+			p.Resolver = &realResolver{}
+		}
+		ips, err := p.Resolver.LookupIPAddr(ctx, host)
 		if err != nil || len(ips) == 0 {
-			return fmt.Errorf("dns resolution failed for subresource %s", host)
+			return fmt.Errorf("dns resolution failed for subresource %s: %v", host, err)
 		}
 		for _, ip := range ips {
-			if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalMulticast() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || ip.IsMulticast() {
-				return fmt.Errorf("resolved to non-public IP: %v", ip)
+			if ip.IP.IsLoopback() || ip.IP.IsPrivate() || ip.IP.IsLinkLocalMulticast() || ip.IP.IsLinkLocalUnicast() || ip.IP.IsUnspecified() || ip.IP.IsMulticast() {
+				return fmt.Errorf("resolved to non-public IP: %v", ip.IP)
 			}
 		}
 		return nil

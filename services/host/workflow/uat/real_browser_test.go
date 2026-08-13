@@ -2,6 +2,7 @@ package uat
 
 import (
 	"context"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -16,11 +17,12 @@ import (
 )
 
 func TestBrowserPolicyHandler(t *testing.T) {
+	initialURL, _ := url.Parse("https://github.com/login")
 	b := &realBrowser{
-		ctx: context.Background(),
+		ctx:          context.Background(),
+		activeOrigin: initialURL,
 	}
 
-	initialURL, _ := url.Parse("https://github.com/login")
 	policy := &OAuthPolicy{Provider: ProviderGitHub}
 
 	type actionRec struct {
@@ -43,7 +45,7 @@ func TestBrowserPolicyHandler(t *testing.T) {
 		return nil
 	}
 
-	handler := b.requestHandler(policy, initialURL, runCmd)
+	handler := b.requestHandler(policy, runCmd)
 
 	// 1. simulate document request (allowed)
 	handler(&fetch.EventRequestPaused{
@@ -295,5 +297,167 @@ func TestOAuthBrowserPanicRecovery(t *testing.T) {
 		// success, the lock was released during the panic!
 	case <-time.After(1 * time.Second):
 		t.Fatal("ProfileLock deadlocked after constructor panic")
+	}
+}
+
+type delayedResolver struct {
+	delay time.Duration
+	fake  Resolver
+}
+func (d *delayedResolver) LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error) {
+	select {
+	case <-time.After(d.delay):
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return d.fake.LookupIPAddr(ctx, host)
+}
+
+func TestBrowserPolicyRedirectTracking(t *testing.T) {
+	initialURL, _ := url.Parse("http://example.com")
+	b := &realBrowser{
+		ctx:          context.Background(),
+		activeOrigin: initialURL,
+	}
+
+	policy := &PublicLinkPolicy{Resolver: &fakeResolver{
+		ips: map[string][]net.IPAddr{
+			"example.com":      {{IP: net.ParseIP("93.184.216.34")}},
+			"www.example.com":  {{IP: net.ParseIP("93.184.216.34")}},
+		},
+	}}
+
+	type actionRec struct {
+		id     string
+		isFail bool
+	}
+	actions := make(chan actionRec, 10)
+	runCmd := func(ctx context.Context, acts ...chromedp.Action) error {
+		for _, a := range acts {
+			switch a.(type) {
+			case *fetch.ContinueRequestParams:
+				actions <- actionRec{"", false}
+			case *fetch.FailRequestParams:
+				actions <- actionRec{"", true}
+			}
+		}
+		return nil
+	}
+
+	handler := b.requestHandler(policy, runCmd)
+
+	// 1. Redirect http -> https document
+	handler(&fetch.EventRequestPaused{
+		ResourceType: network.ResourceTypeDocument,
+		Request:      &network.Request{URL: "https://example.com"},
+		RequestID:    "1",
+	})
+	if r := <-actions; r.isFail {
+		t.Errorf("expected ContinueRequest for https redirect")
+	}
+
+	// Active origin should now be https://example.com
+	if b.getActiveOrigin().Scheme != "https" {
+		t.Errorf("expected active origin scheme https, got %s", b.getActiveOrigin().Scheme)
+	}
+
+	// 2. Subresource on https://example.com (allowed)
+	handler(&fetch.EventRequestPaused{
+		ResourceType: network.ResourceTypeScript,
+		Request:      &network.Request{URL: "https://example.com/app.js"},
+		RequestID:    "2",
+	})
+	if r := <-actions; r.isFail {
+		t.Errorf("expected ContinueRequest for subresource on https origin")
+	}
+
+	// 3. Subresource on http://example.com (denied, as active origin is https)
+	handler(&fetch.EventRequestPaused{
+		ResourceType: network.ResourceTypeScript,
+		Request:      &network.Request{URL: "http://example.com/app.js"},
+		RequestID:    "3",
+	})
+	if r := <-actions; !r.isFail {
+		t.Errorf("expected FailRequest for http subresource under https active origin")
+	}
+	// clear policy err
+	b.policyErr = nil
+
+	// 4. Redirect apex -> www
+	handler(&fetch.EventRequestPaused{
+		ResourceType: network.ResourceTypeDocument,
+		Request:      &network.Request{URL: "https://www.example.com"},
+		RequestID:    "4",
+	})
+	if r := <-actions; r.isFail {
+		t.Errorf("expected ContinueRequest for www redirect")
+	}
+
+	if b.getActiveOrigin().Hostname() != "www.example.com" {
+		t.Errorf("expected active origin host www.example.com, got %s", b.getActiveOrigin().Hostname())
+	}
+
+	// 5. Subresource on www.example.com (allowed)
+	handler(&fetch.EventRequestPaused{
+		ResourceType: network.ResourceTypeScript,
+		Request:      &network.Request{URL: "https://www.example.com/app.js"},
+		RequestID:    "5",
+	})
+	if r := <-actions; r.isFail {
+		t.Errorf("expected ContinueRequest for www asset")
+	}
+}
+
+func TestDelayedResolverNonBlocking(t *testing.T) {
+	initialURL, _ := url.Parse("https://github.com/login")
+	b := &realBrowser{
+		ctx:          context.Background(),
+		activeOrigin: initialURL,
+	}
+
+	policy := &OAuthPolicy{
+		Provider: ProviderGitHub,
+		Resolver: &delayedResolver{
+			delay: 200 * time.Millisecond,
+			fake: &fakeResolver{
+				ips: map[string][]net.IPAddr{
+					"unknown.com": {{IP: net.ParseIP("93.184.216.34")}},
+				},
+			},
+		},
+	}
+
+	actions := make(chan bool, 10)
+	runCmd := func(ctx context.Context, acts ...chromedp.Action) error {
+		for _, a := range acts {
+			switch a.(type) {
+			case *fetch.ContinueRequestParams:
+				actions <- false
+			case *fetch.FailRequestParams:
+				actions <- true
+			}
+		}
+		return nil
+	}
+
+	handler := b.requestHandler(policy, runCmd)
+
+	start := time.Now()
+	// trigger an unknown subresource that hits the resolver
+	handler(&fetch.EventRequestPaused{
+		ResourceType: network.ResourceTypeScript,
+		Request:      &network.Request{URL: "https://unknown.com/script.js"},
+		RequestID:    "1",
+	})
+	duration := time.Since(start)
+
+	if duration > 50*time.Millisecond {
+		t.Errorf("handler blocked for %v, should return immediately", duration)
+	}
+
+	// Eventually it continues because unknown.com resolves to public IP
+	isFail := <-actions
+	if isFail {
+		t.Errorf("expected ContinueRequest for public asset")
 	}
 }

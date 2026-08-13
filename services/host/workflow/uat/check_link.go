@@ -11,7 +11,7 @@ type CheckLinkConfig struct {
 }
 
 func CheckLink(ctx context.Context, factory BrowserFactory, cfg CheckLinkConfig, rawURL string) (*LinkCheckResult, error) {
-	valU, err := cfg.Policy.Validate(rawURL)
+	valU, err := cfg.Policy.Validate(ctx, rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid url: %w", err)
 	}
@@ -33,7 +33,7 @@ func CheckLink(ctx context.Context, factory BrowserFactory, cfg CheckLinkConfig,
 	}
 
 	// Validate final URL against policy (redirects to disallowed origins)
-	valFinal, err := cfg.Policy.Validate(finalU.String())
+	valFinal, err := cfg.Policy.Validate(ctx, finalU.String())
 	if err != nil {
 		return nil, fmt.Errorf("redirected to disallowed url %q: %w", finalU.String(), err)
 	}

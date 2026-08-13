@@ -81,15 +81,16 @@ type ValidatedURL struct {
 }
 
 type URLValidator interface {
-	Validate(rawURL string) (*ValidatedURL, error)
+	Validate(ctx context.Context, rawURL string) (*ValidatedURL, error)
 }
 
 type OAuthPolicy struct {
 	Provider    OAuthProvider
 	LeasedPorts []int
+	Resolver    Resolver
 }
 
-func (p *OAuthPolicy) Validate(rawURL string) (*ValidatedURL, error) {
+func (p *OAuthPolicy) Validate(ctx context.Context, rawURL string) (*ValidatedURL, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid URL: %v", err)
@@ -154,7 +155,7 @@ type PublicLinkPolicy struct {
 	Resolver Resolver
 }
 
-func (p *PublicLinkPolicy) Validate(rawURL string) (*ValidatedURL, error) {
+func (p *PublicLinkPolicy) Validate(ctx context.Context, rawURL string) (*ValidatedURL, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid URL: %v", err)
@@ -172,7 +173,7 @@ func (p *PublicLinkPolicy) Validate(rawURL string) (*ValidatedURL, error) {
 		return nil, fmt.Errorf("localhost not allowed")
 	}
 
-	ips, err := p.Resolver.LookupIPAddr(context.Background(), host)
+	ips, err := p.Resolver.LookupIPAddr(ctx, host)
 	if err != nil {
 		return nil, fmt.Errorf("dns resolution failed: %v", err)
 	}

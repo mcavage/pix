@@ -313,11 +313,11 @@ func (m *realMCP) Auth(ctx context.Context, runID string, name string) (err erro
 		Provider:    provider,
 		LeasedPorts: []int{port},
 	}
-	_, parseErr := policy.Validate(authURL.String())
+	_, parseErr := policy.Validate(ctx, authURL.String())
 	if parseErr != nil {
 		return fmt.Errorf("auth URL validation failed: %w", parseErr)
 	}
-	_, parseErr = policy.Validate(callbackURL.String())
+	_, parseErr = policy.Validate(ctx, callbackURL.String())
 	if parseErr != nil {
 		return fmt.Errorf("callback URL validation failed: %w", parseErr)
 	}
@@ -338,7 +338,7 @@ func (m *realMCP) Auth(ctx context.Context, runID string, name string) (err erro
 	if finalErr != nil {
 		return fmt.Errorf("get final URL: %w", finalErr)
 	}
-	if _, valErr := policy.Validate(finalURL.String()); valErr != nil {
+	if _, valErr := policy.Validate(ctx, finalURL.String()); valErr != nil {
 		return fmt.Errorf("returned callback policy validation failed: %w", valErr)
 	}
 

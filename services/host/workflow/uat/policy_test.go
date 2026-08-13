@@ -36,7 +36,7 @@ func TestPublicLinkPolicy(t *testing.T) {
 	}
 
 	for _, v := range valid {
-		res, err := policy.Validate(v)
+		res, err := policy.Validate(context.Background(), v)
 		if err != nil {
 			t.Errorf("expected %q to be valid, got %v", v, err)
 		} else if res.ResolvedIP != "93.184.216.34" {
@@ -58,7 +58,7 @@ func TestPublicLinkPolicy(t *testing.T) {
 	}
 
 	for _, inv := range invalid {
-		if _, err := policy.Validate(inv); err == nil {
+		if _, err := policy.Validate(context.Background(), inv); err == nil {
 			t.Errorf("expected %q to be invalid", inv)
 		}
 	}
@@ -123,7 +123,7 @@ func TestOAuthPolicy(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		_, err := policy.Validate(tt.url)
+		_, err := policy.Validate(context.Background(), tt.url)
 		if (err != nil) != tt.wantErr {
 			t.Errorf("Validate(%q) with github provider error = %v, wantErr %v", tt.url, err, tt.wantErr)
 		}
@@ -148,20 +148,20 @@ func TestOAuthPolicy(t *testing.T) {
 
 	for _, pt := range providers {
 		p := OAuthPolicy{Provider: pt.provider, LeasedPorts: []int{}}
-		if _, err := p.Validate(pt.url); err != nil {
+		if _, err := p.Validate(context.Background(), pt.url); err != nil {
 			t.Errorf("Validate(%q) for provider %q unexpected error: %v", pt.url, pt.provider, err)
 		}
 	}
 
 	// Test unknown refusal
 	p := OAuthPolicy{Provider: "unknown", LeasedPorts: []int{}}
-	if _, err := p.Validate("https://github.com/login"); err == nil {
+	if _, err := p.Validate(context.Background(), "https://github.com/login"); err == nil {
 		t.Errorf("Expected error for unknown provider")
 	}
 
 	// Test empty provider refusal
 	pEmpty := OAuthPolicy{Provider: "", LeasedPorts: []int{}}
-	if _, err := pEmpty.Validate("https://github.com/login"); err == nil {
+	if _, err := pEmpty.Validate(context.Background(), "https://github.com/login"); err == nil {
 		t.Errorf("Expected error for empty provider on https url")
 	}
 }
