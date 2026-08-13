@@ -3,10 +3,11 @@ package uat
 import (
 	"context"
 	"fmt"
-	"os"
 	"net/url"
+	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chromedp/cdproto/fetch"
@@ -106,9 +107,18 @@ func (f *realFactory) NewOAuthContext(ctx context.Context, initialURL *Validated
 		return nil, err
 	}
 
-	// serialize OAuth use with a host lock
 	ProfileLock.Lock()
-	defer ProfileLock.Unlock()
+	unlockOnce := &sync.Once{}
+	unlock := func() {
+		unlockOnce.Do(func() {
+			ProfileLock.Unlock()
+		})
+	}
+	defer func() {
+		if err != nil {
+			unlock()
+		}
+	}()
 
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.ExecPath(bin),
@@ -132,7 +142,7 @@ func (f *realFactory) NewOAuthContext(ctx context.Context, initialURL *Validated
 				go chromedp.Run(c, fetch.ContinueRequest(evReq.RequestID))
 				return
 			}
-			if _, err := policy.Validate(u); err != nil {
+			if _, errPolicy := policy.Validate(u); errPolicy != nil {
 				go chromedp.Run(c, fetch.FailRequest(evReq.RequestID, network.ErrorReasonAccessDenied))
 				cancelCtx()
 			} else {
@@ -141,7 +151,7 @@ func (f *realFactory) NewOAuthContext(ctx context.Context, initialURL *Validated
 		}
 	})
 
-	if err := chromedp.Run(c, fetch.Enable(), chromedp.Navigate(initialURL.URL.String())); err != nil {
+	if err = chromedp.Run(c, fetch.Enable(), chromedp.Navigate(initialURL.URL.String())); err != nil {
 		cancelCtx()
 		cancelAlloc()
 		return nil, err
@@ -152,6 +162,7 @@ func (f *realFactory) NewOAuthContext(ctx context.Context, initialURL *Validated
 		cancelCtx:   cancelCtx,
 		cancelAlloc: cancelAlloc,
 		clickables:  make(map[string]ClickableRef),
+		unlock:      unlock,
 	}, nil
 }
 
@@ -160,6 +171,7 @@ type realBrowser struct {
 	cancelCtx   context.CancelFunc
 	cancelAlloc context.CancelFunc
 	clickables  map[string]ClickableRef
+	unlock      func()
 }
 
 func (b *realBrowser) Snapshot(ctx context.Context) (*Snapshot, error) {
@@ -271,5 +283,8 @@ func (b *realBrowser) VisibleText(ctx context.Context) (string, error) {
 func (b *realBrowser) Close() error {
 	b.cancelCtx()
 	b.cancelAlloc()
+	if b.unlock != nil {
+		b.unlock()
+	}
 	return nil
 }

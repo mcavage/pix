@@ -152,6 +152,8 @@ func (m *realMCP) Add(ctx context.Context, name string, argv []string) error {
 	return cmd.Run()
 }
 
+var readCaptureFileFunc = readCaptureFileNoFollow
+
 func (m *realMCP) Auth(ctx context.Context, runID string, name string) (err error) {
 	// Task B: create run-owned bin dir, symlink shim, capture OAuth.
 	binDir := filepath.Join(m.stateDir, "runs", runID, "bin")
@@ -238,7 +240,11 @@ func (m *realMCP) Auth(ctx context.Context, runID string, name string) (err erro
 				returnedFromWait = true
 				return fmt.Errorf("sbx mcp auth failed before capture: %w", wErr)
 			}
-			urlStr, _ := readCaptureFileNoFollow(capturePath)
+			urlStr, err := readCaptureFileFunc(capturePath)
+			if err != nil && !os.IsNotExist(err) {
+				returnedFromWait = true
+				return fmt.Errorf("%w: security or platform error reading capture: %v", ErrIncomplete, err)
+			}
 			if urlStr != "" {
 				rawURL = urlStr
 				os.Remove(capturePath)
@@ -249,7 +255,10 @@ func (m *realMCP) Auth(ctx context.Context, runID string, name string) (err erro
 		case <-captureCtx.Done():
 			return fmt.Errorf("%w: browser capture timeout (sbx ignored BROWSER shim - check host bootstrap)", ErrIncomplete)
 		case <-ticker.C:
-			urlStr, _ := readCaptureFileNoFollow(capturePath)
+			urlStr, err := readCaptureFileFunc(capturePath)
+			if err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("%w: security or platform error reading capture: %v", ErrIncomplete, err)
+			}
 			if urlStr != "" {
 				rawURL = urlStr
 				os.Remove(capturePath)

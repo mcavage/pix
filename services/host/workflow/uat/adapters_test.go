@@ -476,3 +476,28 @@ func TestAdapters_LeaseRecords(t *testing.T) {
 		t.Fatalf("expected unknown kind error, got: %v", err)
 	}
 }
+
+func TestMCPAuthCaptureErrorImmediate(t *testing.T) {
+	origRead := readCaptureFileFunc
+	defer func() { readCaptureFileFunc = origRead }()
+	
+	readCaptureFileFunc = func(path string) (string, error) {
+		return "", os.ErrPermission
+	}
+
+	stateDir := t.TempDir()
+	ce := &captureExec{}
+	factory := &mockBrowserFactory{}
+	m := NewRealMCP("localhost", stateDir, ce, factory)
+
+	err := m.Auth(context.Background(), "run2", "test-srv")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "security or platform error") {
+		t.Fatalf("expected security error, got %v", err)
+	}
+	if !errors.Is(err, ErrIncomplete) {
+		t.Fatalf("expected ErrIncomplete, got %v", err)
+	}
+}

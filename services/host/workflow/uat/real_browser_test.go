@@ -6,11 +6,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
 func TestBrowserAllocatorArgv(t *testing.T) {
+
 	tmpDir := t.TempDir()
 	fakeBin := filepath.Join(tmpDir, "fake-chrome")
 	os.WriteFile(fakeBin, []byte("#!/bin/sh\necho \"$@\" > "+filepath.Join(tmpDir, "args.txt")+"\nsleep 1\n"), 0755)
@@ -47,4 +49,124 @@ func TestBrowserAllocatorArgv(t *testing.T) {
 	if !strings.Contains(args, "--host-resolver-rules=MAP public.com 93.184.216.34") {
 		t.Errorf("expected host-resolver-rules in argv, got: %s", args)
 	}
+}
+
+func TestOAuthBrowserConcurrency(t *testing.T) {
+	tmpDir := t.TempDir()
+	fakeBin := filepath.Join(tmpDir, "fake-chrome")
+	os.WriteFile(fakeBin, []byte("#!/bin/sh\nexit 1\n"), 0755)
+
+	os.Setenv("PIX_CHROME_BIN", fakeBin)
+	defer os.Unsetenv("PIX_CHROME_BIN")
+
+	factory := NewRealBrowserFactory()
+	u, _ := url.Parse("https://github.com/login")
+	valU := &ValidatedURL{URL: u}
+
+	// 1. Failure case unlocks immediately
+	// fakeBin exits immediately, chromedp.Run fails to start browser.
+	// This acquires the lock and then releases it on error.
+	_, err := factory.NewOAuthContext(context.Background(), valU, nil)
+	if err == nil {
+		t.Fatal("expected error from fake chrome")
+	}
+
+	// If it deadlocked, this test would hang. We prove it unlocked by grabbing it.
+	acquired := make(chan struct{})
+	go func() {
+		ProfileLock.Lock()
+		ProfileLock.Unlock()
+		close(acquired)
+	}()
+
+	select {
+	case <-acquired:
+		// success
+	case <-time.After(1 * time.Second):
+		t.Fatal("ProfileLock deadlocked after constructor failure")
+	}
+}
+
+func TestOAuthBrowserLockHeldDuringLifetime(t *testing.T) {
+	os.Unsetenv("PIX_CHROME_BIN") // Use real chrome if available
+	
+	factory := NewRealBrowserFactory()
+	u, _ := url.Parse("data:text/html,<html><body>ok</body></html>")
+	valU := &ValidatedURL{URL: u}
+	
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	b, err := factory.NewOAuthContext(ctx, valU, nil)
+	if err != nil {
+		t.Skipf("skipping because real chrome failed to start: %v", err)
+	}
+	
+	// The lock should currently be HELD by the browser.
+	// If we try to lock it now, it should block.
+	acquired := make(chan struct{})
+	go func() {
+		ProfileLock.Lock()
+		ProfileLock.Unlock()
+		close(acquired)
+	}()
+	
+	select {
+	case <-acquired:
+		t.Fatal("ProfileLock was unlocked before Close() was called")
+	case <-time.After(500 * time.Millisecond):
+		// Expected: it is blocked
+	}
+
+	// Now close the browser
+	b.Close()
+
+	// It should now unlock
+	select {
+	case <-acquired:
+		// success
+	case <-time.After(1 * time.Second):
+		t.Fatal("ProfileLock did not unlock after Close()")
+	}
+}
+
+func TestOAuthBrowserCloseIdempotent(t *testing.T) {
+	// We will manually construct a realBrowser to test its Close method
+	// since we can't easily start a real chrome.
+	
+	ProfileLock.Lock()
+	unlockOnce := &sync.Once{}
+	unlock := func() {
+		unlockOnce.Do(func() {
+			ProfileLock.Unlock()
+		})
+	}
+	
+	b := &realBrowser{
+		cancelCtx:   func() {},
+		cancelAlloc: func() {},
+		unlock:      unlock,
+	}
+	
+	// Close once
+	b.Close()
+	
+	// Lock should be available
+	acquired := make(chan struct{})
+	go func() {
+		ProfileLock.Lock()
+		ProfileLock.Unlock()
+		close(acquired)
+	}()
+	
+	select {
+	case <-acquired:
+	case <-time.After(1 * time.Second):
+		t.Fatal("Lock not released on Close")
+	}
+	
+	// Close again shouldn't panic or unlock a lock we don't hold
+	ProfileLock.Lock() // Grab it again
+	defer ProfileLock.Unlock()
+	b.Close() // Should do nothing because of sync.Once
 }
