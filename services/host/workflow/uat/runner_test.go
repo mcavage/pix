@@ -143,18 +143,23 @@ steps:
 	statusReq := uat.StatusRequest{RunID: resp.RunID, Cursor: 0}
 	var lastStatus *uat.StatusResponse
 
+	var allEvents []uat.Event
 	// simplistic wait loop
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 50; i++ {
 		st, err := runner.Status(context.Background(), statusReq)
 		if err != nil {
 			t.Fatalf("unexpected status error: %v", err)
 		}
+		if len(st.Events) > 0 {
+			allEvents = append(allEvents, st.Events...)
+			statusReq.Cursor += int64(len(st.Events))
+		}
 		if st.State != "running" {
 			lastStatus = st
+			lastStatus.Events = allEvents
 			break
 		}
-		// sleep for a tiny bit not to thrash
-		// time.Sleep(10 * time.Millisecond)
+		statusReq.WaitMs = 100
 	}
 
 	if lastStatus == nil {

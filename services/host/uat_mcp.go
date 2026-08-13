@@ -4,64 +4,74 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
+	hostuat "pix/host/uat"
 	"pix/host/workflow/uat"
 )
 
-func runUatMcp(args []string) {
-	fs := flag.NewFlagSet("uat-mcp", flag.ExitOnError)
+func runUatMcp(args []string) error {
+	fs := flag.NewFlagSet("uat-mcp", flag.ContinueOnError)
+	// We want to return an error instead of exiting, but ContinueOnError will just return err.
+	// But usage should not os.Exit either.
+	fs.SetOutput(io.Discard) // Handle usage manually or don't print
+
 	repo := fs.String("repo", "", "absolute path to the repo")
 	state := fs.String("state", "", "absolute path to the state directory")
 	session := fs.String("session", "", "strict session identifier")
 
-	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: pix-host uat-mcp --repo <path> --state <path> --session <id>\n")
-		fs.PrintDefaults()
-	}
-
 	if err := fs.Parse(args); err != nil {
-		os.Exit(2)
+		return err
 	}
 
 	if *repo == "" || !filepath.IsAbs(*repo) {
-		fmt.Fprintf(os.Stderr, "pix-host uat-mcp: --repo is required and must be absolute\n")
-		os.Exit(2)
+		return fmt.Errorf("uat-mcp: --repo is required and must be absolute")
 	}
 	if *state == "" || !filepath.IsAbs(*state) {
-		fmt.Fprintf(os.Stderr, "pix-host uat-mcp: --state is required and must be absolute\n")
-		os.Exit(2)
+		return fmt.Errorf("uat-mcp: --state is required and must be absolute")
 	}
 	if *session == "" {
-		fmt.Fprintf(os.Stderr, "pix-host uat-mcp: --session is required\n")
-		os.Exit(2)
+		return fmt.Errorf("uat-mcp: --session is required")
+	}
+
+	if err := hostuat.ValidateID(*session); err != nil {
+		return fmt.Errorf("uat-mcp: invalid session: %w", err)
+	}
+
+	if st, err := os.Stat(*repo); err != nil || !st.IsDir() {
+		return fmt.Errorf("uat-mcp: repo must be an existing directory")
+	}
+	if st, err := os.Stat(*state); err != nil || !st.IsDir() {
+		return fmt.Errorf("uat-mcp: state must be an existing directory")
 	}
 
 	if fs.NArg() > 0 {
-		fmt.Fprintf(os.Stderr, "pix-host uat-mcp: unknown arguments: %v\n", fs.Args())
-		os.Exit(2)
+		return fmt.Errorf("uat-mcp: unknown arguments: %v", fs.Args())
 	}
 
-	gitAdapter := uat.NewRealGit(*repo)
-	sandboxAdapter := uat.NewRealSandbox()
-	mcpAdapter := uat.NewRealMCP()
-	imageAdapter := uat.NewRealImage()
 	execAdapter := uat.NewRealExec()
+	gitAdapter := uat.NewRealGit(*repo, execAdapter)
+	sandboxAdapter := uat.NewRealSandbox()
+	mcpAdapter := uat.NewRealMCP(execAdapter)
+	imageAdapter := uat.NewRealImage()
 	leaseAdapter := uat.NewRealLease(*state)
 
 	runner := uat.NewRunner(*repo, *state, gitAdapter, execAdapter, sandboxAdapter, mcpAdapter, imageAdapter, leaseAdapter, 1)
 	browserFactory := uat.NewRealBrowserFactory()
-	
+
 	mcpServer := uat.NewMCPServer(runner, browserFactory, *state, os.Stdin, os.Stdout)
 	if err := mcpServer.Serve(context.Background()); err != nil {
-		fmt.Fprintf(os.Stderr, "pix-host uat-mcp server failed: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("uat-mcp server failed: %w", err)
 	}
+	return nil
 }
 
-func runUatBrowserOpen(args []string) {
-	fs := flag.NewFlagSet("uat-browser-open", flag.ExitOnError)
+func runUatBrowserOpen(args []string) error {
+	fs := flag.NewFlagSet("uat-browser-open", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
 	runID := fs.String("run-id", "", "run id")
 	authURL := fs.String("auth-url", "", "auth URL")
 	callbackURL := fs.String("callback-url", "", "callback URL")
@@ -69,12 +79,11 @@ func runUatBrowserOpen(args []string) {
 	outPath := fs.String("out", "", "output file path")
 
 	if err := fs.Parse(args); err != nil {
-		os.Exit(2)
+		return err
 	}
 
 	if *runID == "" || *authURL == "" || *callbackURL == "" || *origin == "" || *outPath == "" {
-		fmt.Fprintf(os.Stderr, "pix-host uat-browser-open: missing required arguments\n")
-		os.Exit(2)
+		return fmt.Errorf("uat-browser-open: missing required arguments")
 	}
 
 	cfg := uat.OAuthConfig{
@@ -86,10 +95,9 @@ func runUatBrowserOpen(args []string) {
 	}
 
 	factory := uat.NewRealBrowserFactory()
-	
+
 	if err := uat.CaptureOAuth(context.Background(), factory, cfg, *outPath); err != nil {
-		// Log the error but don't print secrets
-		fmt.Fprintf(os.Stderr, "pix-host uat-browser-open: capture failed\n")
-		os.Exit(1)
+		return fmt.Errorf("uat-browser-open: capture failed")
 	}
+	return nil
 }

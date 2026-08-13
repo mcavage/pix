@@ -40,10 +40,10 @@ type fakeFactory struct {
 	b *fakeBrowser
 }
 
-func (f *fakeFactory) NewContext(ctx context.Context, initialURL *url.URL) (Browser, error) {
+func (f *fakeFactory) NewContext(ctx context.Context, runID string, initialURL *url.URL, policy *URLPolicy) (Browser, error) {
 	return f.b, nil
 }
-func (f *fakeFactory) NewOAuthContext(ctx context.Context, initialURL *url.URL) (Browser, error) {
+func (f *fakeFactory) NewOAuthContext(ctx context.Context, initialURL *url.URL, policy *URLPolicy) (Browser, error) {
 	return f.b, nil
 }
 

@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"os"
 	"path/filepath"
-	"strings"
 	"sync"
+
+	hostuat "pix/host/uat"
 )
 
 type toolDescriptor struct {
@@ -96,24 +96,24 @@ func getTools() []toolDescriptor {
 }
 
 type MCPServer struct {
-	runner *Runner
+	runner         *Runner
 	browserFactory BrowserFactory
-	stateDir string
-	in     io.Reader
-	out    io.Writer
-	
+	stateDir       string
+	in             io.Reader
+	out            io.Writer
+
 	browsersMu sync.Mutex
 	browsers   map[string]Browser
 }
 
 func NewMCPServer(runner *Runner, bf BrowserFactory, stateDir string, in io.Reader, out io.Writer) *MCPServer {
 	return &MCPServer{
-		runner: runner, 
-		browserFactory: bf, 
-		stateDir: stateDir, 
-		in: in, 
-		out: out,
-		browsers: make(map[string]Browser),
+		runner:         runner,
+		browserFactory: bf,
+		stateDir:       stateDir,
+		in:             in,
+		out:            out,
+		browsers:       make(map[string]Browser),
 	}
 }
 
@@ -124,7 +124,7 @@ func (s *MCPServer) getOrCreateBrowser(ctx context.Context, runID string) (Brows
 		return b, nil
 	}
 	u, _ := url.Parse("about:blank")
-	b, err := s.browserFactory.NewContext(ctx, u)
+	b, err := s.browserFactory.NewContext(ctx, runID, u, &URLPolicy{})
 	if err != nil {
 		return nil, err
 	}
@@ -241,36 +241,48 @@ func (s *MCPServer) handleToolCall(ctx context.Context, id interface{}, params j
 
 	var textResult string
 	var err error
-	
+
 	getString := func(k string) string {
 		v, ok := p.Arguments[k].(string)
-		if !ok { return "" }
+		if !ok {
+			return ""
+		}
 		return v
 	}
 	getBool := func(k string) bool {
 		v, ok := p.Arguments[k].(bool)
-		if !ok { return false }
+		if !ok {
+			return false
+		}
 		return v
 	}
 	getInt64 := func(k string) int64 {
 		v, ok := p.Arguments[k].(float64)
-		if !ok { return 0 }
+		if !ok {
+			return 0
+		}
 		return int64(v)
 	}
 
 	switch p.Name {
 	case "uat_capabilities":
-		textResult = "uat_runner=1.0\nuat_browser=1.0\nuat_sandbox=1.0"
+		respMap := map[string]interface{}{
+			"runner":  true,
+			"browser": true,
+			"sandbox": true,
+		}
+		respBytes, _ := json.Marshal(respMap)
+		textResult = string(respBytes)
 	case "uat_submit":
 		commit := getString("commit")
 		scenarioPath := getString("scenario_path")
 		dryRun := getBool("dry_run")
-		
+
 		if commit == "" || scenarioPath == "" {
 			err = fmt.Errorf("missing required args")
 			break
 		}
-		
+
 		req := SubmitRequest{
 			Commit:       commit,
 			ScenarioPath: scenarioPath,
@@ -279,20 +291,33 @@ func (s *MCPServer) handleToolCall(ctx context.Context, id interface{}, params j
 		var resp *SubmitResponse
 		resp, err = s.runner.Submit(ctx, req)
 		if err == nil {
-			textResult = fmt.Sprintf("run_id=%s\nplan=%s", resp.RunID, resp.Plan)
+			b, _ := json.Marshal(resp)
+			textResult = string(b)
 		}
 	case "uat_status":
 		runID := getString("run_id")
 		cursor := getInt64("cursor")
-		
+		waitMs := getInt64("wait_ms")
+
 		if runID == "" {
 			err = fmt.Errorf("missing run_id")
 			break
 		}
-		
+		if err = hostuat.ValidateID(runID); err != nil {
+			err = fmt.Errorf("invalid run_id: %w", err)
+			break
+		}
+		if waitMs < 0 {
+			waitMs = 0
+		}
+		if waitMs > 30000 {
+			waitMs = 30000
+		}
+
 		req := StatusRequest{
 			RunID:  runID,
 			Cursor: cursor,
+			WaitMs: waitMs,
 		}
 		var resp *StatusResponse
 		resp, err = s.runner.Status(ctx, req)
@@ -305,47 +330,48 @@ func (s *MCPServer) handleToolCall(ctx context.Context, id interface{}, params j
 		artifactPath := getString("path")
 		cursor := getInt64("cursor")
 		tail := getInt64("tail")
-		
+
 		if runID == "" || artifactPath == "" {
 			err = fmt.Errorf("missing run_id or path")
 			break
 		}
-		
-		fullPath := filepath.Join(s.stateDir, "runs", runID, filepath.Clean(artifactPath))
-		if !strings.HasPrefix(fullPath, filepath.Join(s.stateDir, "runs", runID)) {
-			err = fmt.Errorf("invalid path")
+
+		if err = hostuat.ValidateID(runID); err != nil {
+			err = fmt.Errorf("invalid run_id: %w", err)
 			break
 		}
-		
-		b, readErr := os.ReadFile(fullPath)
+
+		// Use safe ReadArtifact
+		runDir := filepath.Join(s.stateDir, "runs", runID)
+		b, nextCursor, readErr := hostuat.ReadArtifact(runDir, artifactPath, 1<<20, int(tail), cursor)
 		if readErr != nil {
 			err = fmt.Errorf("read artifact: %w", readErr)
 			break
 		}
-		// simple cursor/tail implementation
-		if cursor > 0 && cursor < int64(len(b)) {
-			b = b[cursor:]
+
+		// Return structured JSON
+		respMap := map[string]interface{}{
+			"content":     string(b),
+			"next_cursor": nextCursor,
 		}
-		if tail > 0 && tail < int64(len(b)) {
-			b = b[len(b)-int(tail):]
-		}
-		textResult = string(b)
+		respBytes, _ := json.Marshal(respMap)
+		textResult = string(respBytes)
 	case "uat_browser_action":
 		runID := getString("run_id")
 		action := getString("action")
 		ref := getString("ref")
 		// value := getString("value") // unused right now
-		
+
 		if runID == "" || action == "" {
 			err = fmt.Errorf("missing run_id or action")
 			break
 		}
-		
+
 		// Get or create browser context
 		// Assuming we just instantiate for simplicity, but state says "using active run state"
-		// The prompt says "Browser action has only snapshot/click/wait_for_url/read_visible_text using active run state."
+		// The prompt says "never accept URL in browser_action"
 		// How to associate Browser with RunID? A simple map in MCPServer.
-		
+
 		bCtx, createErr := s.getOrCreateBrowser(ctx, runID)
 		if createErr != nil {
 			err = fmt.Errorf("browser: %w", createErr)
@@ -358,7 +384,12 @@ func (s *MCPServer) handleToolCall(ctx context.Context, id interface{}, params j
 			if e != nil {
 				err = e
 			} else {
-				textResult = fmt.Sprintf("DOM length: %d\nScreenshot size: %d", len(snap.DOM), len(snap.Screenshot))
+				respMap := map[string]interface{}{
+					"dom_length": len(snap.DOM),
+					"screenshot_size": len(snap.Screenshot),
+				}
+				respBytes, _ := json.Marshal(respMap)
+				textResult = string(respBytes)
 			}
 		case "click":
 			if ref == "" {
@@ -367,24 +398,17 @@ func (s *MCPServer) handleToolCall(ctx context.Context, id interface{}, params j
 			}
 			err = bCtx.Click(ctx, ref)
 			if err == nil {
-				textResult = "clicked"
-			}
-		case "wait_for_url":
-			if ref == "" {
-				err = fmt.Errorf("missing ref (url)")
-				break
-			}
-			u, e := url.Parse(ref)
-			if e != nil {
-				err = e
-				break
-			}
-			err = bCtx.WaitForURL(ctx, u)
-			if err == nil {
-				textResult = "url reached"
+				respMap := map[string]interface{}{"status": "clicked"}
+				respBytes, _ := json.Marshal(respMap)
+				textResult = string(respBytes)
 			}
 		case "read_visible_text":
 			textResult, err = bCtx.VisibleText(ctx)
+			if err == nil {
+				respMap := map[string]interface{}{"text": textResult}
+				respBytes, _ := json.Marshal(respMap)
+				textResult = string(respBytes)
+			}
 		default:
 			err = fmt.Errorf("unknown browser action: %s", action)
 		}
@@ -396,9 +420,15 @@ func (s *MCPServer) handleToolCall(ctx context.Context, id interface{}, params j
 			err = fmt.Errorf("missing run_id")
 			break
 		}
+		if err = hostuat.ValidateID(runID); err != nil {
+			err = fmt.Errorf("invalid run_id: %w", err)
+			break
+		}
 		err = s.runner.Abort(ctx, runID)
 		if err == nil {
-			textResult = "aborted"
+			respMap := map[string]interface{}{"status": "aborted"}
+			respBytes, _ := json.Marshal(respMap)
+			textResult = string(respBytes)
 		}
 	default:
 		s.sendError(id, -32601, "Tool not found")

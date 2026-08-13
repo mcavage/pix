@@ -42,7 +42,7 @@ func CaptureOAuth(ctx context.Context, factory BrowserFactory, cfg OAuthConfig, 
 		return fmt.Errorf("auth URL origin %q does not match expected %q", authU.Hostname(), cfg.Origin)
 	}
 
-	b, err := factory.NewOAuthContext(ctx, authU)
+	b, err := factory.NewOAuthContext(ctx, authU, cfg.Policy)
 	if err != nil {
 		return fmt.Errorf("new oauth context: %w", err)
 	}

@@ -43,9 +43,15 @@ func main() {
 	case "memory":
 		runMemoryHost(os.Args[2:])
 	case "uat-mcp":
-		runUatMcp(os.Args[2:])
+		if err := runUatMcp(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
 	case "uat-browser-open":
-		runUatBrowserOpen(os.Args[2:])
+		if err := runUatBrowserOpen(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
 	case "route":
 		runRouteHost(os.Args[2:])
 	case "serve":

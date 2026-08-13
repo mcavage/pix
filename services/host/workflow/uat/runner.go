@@ -144,6 +144,7 @@ func (r *Runner) Abort(ctx context.Context, runID string) error {
 type StatusRequest struct {
 	RunID  string
 	Cursor int64
+	WaitMs int64
 }
 
 type StatusResponse struct {
@@ -157,29 +158,48 @@ func (r *Runner) Status(ctx context.Context, req StatusRequest) (*StatusResponse
 		return nil, ErrNotFound
 	}
 
-	r.mu.Lock()
-	_, active := r.activeRuns[req.RunID]
-	r.mu.Unlock()
-
 	eventsPath := filepath.Join(runDir, "events.log")
 	evLog := NewEventLog(eventsPath)
-	events, err := evLog.ReadSince(req.Cursor)
-	if err != nil {
-		return nil, fmt.Errorf("read events: %w", err)
-	}
 
-	state := "running"
-	if !active {
-		state = "incomplete"
-		for _, e := range events {
-			if e.Type == EventRunDone {
-				state = e.State
+	var events []Event
+	var err error
+	deadline := time.Now().Add(time.Duration(req.WaitMs) * time.Millisecond)
+
+	for {
+		events, err = evLog.ReadSince(req.Cursor)
+		if err != nil {
+			return nil, fmt.Errorf("read events: %w", err)
+		}
+
+		r.mu.Lock()
+		_, active := r.activeRuns[req.RunID]
+		r.mu.Unlock()
+
+		if len(events) > 0 || !active || req.WaitMs <= 0 || time.Now().After(deadline) {
+			state := "running"
+			if !active {
+				state = "incomplete"
+				// Re-read all to find EventRunDone if not active, or just look at all we have?
+				// Wait, the cursor might mean we don't see EventRunDone if it happened before the cursor.
+				// Better read all to find final state.
+				allEvents, _ := evLog.ReadSince(0)
+				for _, e := range allEvents {
+					if e.Type == EventRunDone {
+						state = e.State
+					}
+				}
 			}
+			return &StatusResponse{
+				Events: events,
+				State:  state,
+			}, nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+			// retry
 		}
 	}
-
-	return &StatusResponse{
-		Events: events,
-		State:  state,
-	}, nil
 }

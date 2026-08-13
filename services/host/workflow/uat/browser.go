@@ -42,7 +42,7 @@ type LinkCheckResult struct {
 
 type BrowserFactory interface {
 	// NewContext creates a new incognito/fresh context starting at initialURL.
-	NewContext(ctx context.Context, initialURL *url.URL) (Browser, error)
+	NewContext(ctx context.Context, runID string, initialURL *url.URL, policy *URLPolicy) (Browser, error)
 	// NewOAuthContext creates a context using the persistent 0700 UAT profile starting at initialURL.
-	NewOAuthContext(ctx context.Context, initialURL *url.URL) (Browser, error)
+	NewOAuthContext(ctx context.Context, initialURL *url.URL, policy *URLPolicy) (Browser, error)
 }

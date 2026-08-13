@@ -14,14 +14,18 @@ import (
 
 type realGit struct {
 	repoPath string
+	exec     Exec
 }
 
-func NewRealGit(repoPath string) Git {
-	return &realGit{repoPath: repoPath}
+func NewRealGit(repoPath string, e Exec) Git {
+	if e == nil {
+		e = NewRealExec()
+	}
+	return &realGit{repoPath: repoPath, exec: e}
 }
 
 func (g *realGit) ResolveCommit(ctx context.Context, commit string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", "-C", g.repoPath, "rev-parse", "--verify", commit+"^{commit}")
+	cmd := g.exec.CommandContext(ctx, "git", "-C", g.repoPath, "rev-parse", "--verify", commit+"^{commit}")
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("resolve commit: %w", err)
@@ -30,9 +34,15 @@ func (g *realGit) ResolveCommit(ctx context.Context, commit string) (string, err
 }
 
 func (g *realGit) ReadTreeFile(ctx context.Context, commit, path string) ([]byte, error) {
-	// Prepend commit sha
-	target := fmt.Sprintf("%s:%s", commit, path)
-	cmd := exec.CommandContext(ctx, "git", "-C", g.repoPath, "show", "--", target)
+	if filepath.IsAbs(path) {
+		return nil, errors.New("absolute path not allowed")
+	}
+	clean := filepath.Clean(path)
+	if strings.HasPrefix(clean, "..") || clean == ".." {
+		return nil, errors.New("path escapes root")
+	}
+	target := fmt.Sprintf("%s:%s", commit, clean)
+	cmd := g.exec.CommandContext(ctx, "git", "-C", g.repoPath, "show", target)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("read tree file: %w", err)
@@ -42,11 +52,11 @@ func (g *realGit) ReadTreeFile(ctx context.Context, commit, path string) ([]byte
 
 func (g *realGit) Clone(ctx context.Context, commit, destPath string) error {
 	// local clone
-	cmd := exec.CommandContext(ctx, "git", "clone", "--no-checkout", "--", g.repoPath, destPath)
+	cmd := g.exec.CommandContext(ctx, "git", "clone", "--no-checkout", "--", g.repoPath, destPath)
 	if err := cmd.Run(); err != nil {
 		return err
 	}
-	cmd2 := exec.CommandContext(ctx, "git", "-C", destPath, "checkout", commit)
+	cmd2 := g.exec.CommandContext(ctx, "git", "-C", destPath, "checkout", commit)
 	return cmd2.Run()
 }
 
@@ -80,23 +90,29 @@ func (s *realSandbox) Remove(ctx context.Context, runID string) error {
 	return cmd.Run()
 }
 
-type realMCP struct{}
+type realMCP struct {
+	exec Exec
+}
 
-func NewRealMCP() MCP { return &realMCP{} }
+func NewRealMCP(e Exec) MCP {
+	if e == nil {
+		e = NewRealExec()
+	}
+	return &realMCP{exec: e}
+}
 
 func (m *realMCP) Add(ctx context.Context, name string, argv []string) error {
-	args := append([]string{"mcp", "add", name, "--"}, argv...)
-	cmd := exec.CommandContext(ctx, "pix-host", args...)
+	cmd := m.exec.CommandContext(ctx, "sbx", argv...)
 	return cmd.Run()
 }
 
 func (m *realMCP) Auth(ctx context.Context, name string) error {
-	cmd := exec.CommandContext(ctx, "pix-host", "mcp", "auth", name)
+	cmd := m.exec.CommandContext(ctx, "sbx", "mcp", "auth", name)
 	return cmd.Run()
 }
 
 func (m *realMCP) Status(ctx context.Context, name string) (string, error) {
-	cmd := exec.CommandContext(ctx, "pix-host", "mcp", "status", name)
+	cmd := m.exec.CommandContext(ctx, "sbx", "mcp", "status", name)
 	out, err := cmd.Output()
 	if err != nil {
 		return "", err
@@ -105,7 +121,7 @@ func (m *realMCP) Status(ctx context.Context, name string) (string, error) {
 }
 
 func (m *realMCP) Remove(ctx context.Context, name string) error {
-	cmd := exec.CommandContext(ctx, "pix-host", "mcp", "rm", name)
+	cmd := m.exec.CommandContext(ctx, "sbx", "mcp", "rm", name)
 	return cmd.Run()
 }
 
@@ -123,7 +139,7 @@ func (i *realImage) Probe(ctx context.Context, tag string) error {
 	return cmd.Run()
 }
 
-type realLease struct{
+type realLease struct {
 	stateDir string
 }
 
@@ -138,7 +154,7 @@ func (l *realLease) Acquire(ctx context.Context, runID string, resource string) 
 	safeRes := strings.ReplaceAll(resource, ":", "_")
 	safeRes = strings.ReplaceAll(safeRes, "/", "_")
 	path := filepath.Join(dir, safeRes)
-	
+
 	// Create the file with 0600
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
@@ -168,21 +184,42 @@ func (l *realLease) Cleanup(ctx context.Context, runID string) error {
 		}
 		return err
 	}
+
+	var errs []error
 	for _, ent := range entries {
 		res := ent.Name()
-		// cleanup specific types based on prefix
+		if !strings.HasPrefix(res, "mcp_") && !strings.HasPrefix(res, "sandbox_") {
+			errs = append(errs, fmt.Errorf("refusing foreign lease name: %s", res))
+			continue
+		}
+
+		var cleanupErr error
 		if strings.HasPrefix(res, "mcp_") {
 			name := strings.TrimPrefix(res, "mcp_")
-			_ = exec.CommandContext(ctx, "pix-host", "mcp", "rm", name).Run()
+			cleanupErr = exec.CommandContext(ctx, "sbx", "mcp", "rm", name).Run()
 		} else if strings.HasPrefix(res, "sandbox_") {
 			name := strings.TrimPrefix(res, "sandbox_")
-			argv, err := sandbox.PlanForceRemove(name)
-			if err == nil {
-				_ = exec.CommandContext(ctx, "sbx", argv...).Run()
+			if argv, planErr := sandbox.PlanForceRemove(name); planErr == nil {
+				cleanupErr = exec.CommandContext(ctx, "sbx", argv...).Run()
+			} else {
+				cleanupErr = planErr
 			}
 		}
-		os.Remove(filepath.Join(dir, res))
+
+		if cleanupErr != nil {
+			errs = append(errs, fmt.Errorf("failed to cleanup %s: %w", res, cleanupErr))
+			continue
+		}
+		// Confirm absence could be checked but here we just remove the lease file if cleanup succeeded
+		if err := os.Remove(filepath.Join(dir, res)); err != nil {
+			errs = append(errs, err)
+		}
 	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("cleanup errors: %v", errs)
+	}
+
 	return os.Remove(dir)
 }
 

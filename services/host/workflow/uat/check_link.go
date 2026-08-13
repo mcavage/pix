@@ -11,7 +11,7 @@ func CheckLink(ctx context.Context, factory BrowserFactory, cfg OAuthConfig, raw
 		return nil, fmt.Errorf("invalid url: %w", err)
 	}
 
-	b, err := factory.NewContext(ctx, u)
+	b, err := factory.NewContext(ctx, cfg.RunID, u, cfg.Policy)
 	if err != nil {
 		return nil, fmt.Errorf("new context: %w", err)
 	}
