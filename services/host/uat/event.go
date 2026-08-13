@@ -126,6 +126,11 @@ func (s *EventStore) Replay(cursor int, limit int) ([]Event, int, error) {
 	}
 	defer f.Close()
 
+	if err := lockFile(f.Fd()); err != nil {
+		return nil, 0, err
+	}
+	defer unlockFile(f.Fd())
+
 	var events []Event
 	decoder := json.NewDecoder(f)
 	count := 0

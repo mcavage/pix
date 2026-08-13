@@ -2,6 +2,8 @@ package uat
 
 import (
 	"os"
+	"fmt"
+	"path/filepath"
 	"sync"
 	"testing"
 )
@@ -216,5 +218,49 @@ func TestEventStore_Permissions(t *testing.T) {
 	_, err = NewEventStore(eventFile)
 	if err == nil {
 		t.Error("expected error for symlink, got none")
+	}
+}
+
+func TestEventStore_ConcurrentReadWriteTwoInstances(t *testing.T) {
+	tmpDir := setupTestDir(t)
+	path := filepath.Join(tmpDir, "events.jsonl")
+
+	store1, err := NewEventStore(path)
+	if err != nil {
+		t.Fatalf("NewEventStore 1: %v", err)
+	}
+
+	store2, err := NewEventStore(path)
+	if err != nil {
+		t.Fatalf("NewEventStore 2: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 50; i++ {
+			store1.Append("test", []byte(fmt.Sprintf(`{"msg": "1-%d"}`, i)))
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 50; i++ {
+			store2.Append("test", []byte(fmt.Sprintf(`{"msg": "2-%d"}`, i)))
+			store1.Replay(0, 0)
+			store2.Replay(0, 0)
+		}
+	}()
+
+	wg.Wait()
+
+	evts, _, err := store1.Replay(0, 0)
+	if err != nil {
+		t.Fatalf("Replay failed: %v", err)
+	}
+	if len(evts) != 100 {
+		t.Fatalf("expected 100 events, got %d", len(evts))
 	}
 }

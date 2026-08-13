@@ -3,6 +3,7 @@ package uat
 import (
 	"context"
 	"fmt"
+	"os"
 	"net/url"
 	"os/exec"
 	"strings"
@@ -14,6 +15,9 @@ import (
 )
 
 func findChrome() (string, error) {
+	if override := os.Getenv("PIX_CHROME_BIN"); override != "" {
+		return override, nil
+	}
 	candidates := []string{
 		"google-chrome",
 		"google-chrome-stable",
@@ -35,7 +39,7 @@ func NewRealBrowserFactory() BrowserFactory {
 	return &realFactory{}
 }
 
-func (f *realFactory) NewContext(ctx context.Context, runID string, initialURL *url.URL, policy URLValidator) (Browser, error) {
+func (f *realFactory) NewContext(ctx context.Context, runID string, initialURL *ValidatedURL, policy URLValidator) (Browser, error) {
 	bin, err := findChrome()
 	if err != nil {
 		return nil, err
@@ -51,6 +55,9 @@ func (f *realFactory) NewContext(ctx context.Context, runID string, initialURL *
 		chromedp.Flag("headless", true),
 		chromedp.UserDataDir(profile),
 	)
+	if initialURL.ResolvedIP != "" {
+		opts = append(opts, chromedp.Flag("host-resolver-rules", fmt.Sprintf("MAP %s %s", initialURL.URL.Hostname(), initialURL.ResolvedIP)))
+	}
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), opts...)
 
 	c, cancelCtx := chromedp.NewContext(allocCtx)
@@ -74,7 +81,7 @@ func (f *realFactory) NewContext(ctx context.Context, runID string, initialURL *
 		}
 	})
 
-	if err := chromedp.Run(c, fetch.Enable(), chromedp.Navigate(initialURL.String())); err != nil {
+	if err := chromedp.Run(c, fetch.Enable(), chromedp.Navigate(initialURL.URL.String())); err != nil {
 		cancelCtx()
 		cancelAlloc()
 		return nil, err
@@ -88,7 +95,7 @@ func (f *realFactory) NewContext(ctx context.Context, runID string, initialURL *
 	}, nil
 }
 
-func (f *realFactory) NewOAuthContext(ctx context.Context, initialURL *url.URL, policy URLValidator) (Browser, error) {
+func (f *realFactory) NewOAuthContext(ctx context.Context, initialURL *ValidatedURL, policy URLValidator) (Browser, error) {
 	bin, err := findChrome()
 	if err != nil {
 		return nil, err
@@ -108,6 +115,9 @@ func (f *realFactory) NewOAuthContext(ctx context.Context, initialURL *url.URL, 
 		chromedp.Flag("headless", false), // non-headless for OAuth
 		chromedp.UserDataDir(profile),
 	)
+	if initialURL.ResolvedIP != "" {
+		opts = append(opts, chromedp.Flag("host-resolver-rules", fmt.Sprintf("MAP %s %s", initialURL.URL.Hostname(), initialURL.ResolvedIP)))
+	}
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), opts...)
 
 	c, cancelCtx := chromedp.NewContext(allocCtx)
@@ -131,7 +141,7 @@ func (f *realFactory) NewOAuthContext(ctx context.Context, initialURL *url.URL, 
 		}
 	})
 
-	if err := chromedp.Run(c, fetch.Enable(), chromedp.Navigate(initialURL.String())); err != nil {
+	if err := chromedp.Run(c, fetch.Enable(), chromedp.Navigate(initialURL.URL.String())); err != nil {
 		cancelCtx()
 		cancelAlloc()
 		return nil, err

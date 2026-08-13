@@ -101,7 +101,7 @@ func (c *uatBrowserBootstrapCmd) Run(d *cli.Deps) error {
 	initialURL, _ := url.Parse("about:blank")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	browser, err := factory.NewOAuthContext(ctx, initialURL, nil)
+	browser, err := factory.NewOAuthContext(ctx, &workflowUat.ValidatedURL{URL: initialURL}, nil)
 	if err != nil {
 		return fmt.Errorf("bootstrap failed: %w", err)
 	}

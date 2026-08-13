@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -20,27 +21,30 @@ import (
 
 type mockBrowser struct{}
 
-func (m *mockBrowser) Snapshot(ctx context.Context) (*uat.Snapshot, error) { return nil, nil }
-func (m *mockBrowser) Click(ctx context.Context, selector string) error    { return nil }
-func (m *mockBrowser) WaitForURL(ctx context.Context, u *url.URL) error    { return nil }
-func (m *mockBrowser) CurrentURL(ctx context.Context) (*url.URL, error)    { return nil, nil }
-func (m *mockBrowser) Title(ctx context.Context) (string, error)           { return "", nil }
-func (m *mockBrowser) VisibleText(ctx context.Context) (string, error)     { return "", nil }
-func (m *mockBrowser) Close() error                                        { return nil }
+func (m *mockBrowser) Snapshot(ctx context.Context) (*uat.Snapshot, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+func (m *mockBrowser) Click(ctx context.Context, selector string) error { return nil }
+func (m *mockBrowser) WaitForURL(ctx context.Context, u *url.URL) error { return nil }
+func (m *mockBrowser) CurrentURL(ctx context.Context) (*url.URL, error) { return nil, nil }
+func (m *mockBrowser) Title(ctx context.Context) (string, error)        { return "", nil }
+func (m *mockBrowser) VisibleText(ctx context.Context) (string, error)  { return "", nil }
+func (m *mockBrowser) Close() error                                     { return nil }
 
 type mockBrowserFactory struct {
 	mu    sync.Mutex
 	count int
 }
 
-func (m *mockBrowserFactory) NewContext(ctx context.Context, runID string, url *url.URL, policy uat.URLValidator) (uat.Browser, error) {
+func (m *mockBrowserFactory) NewContext(ctx context.Context, runID string, initialURL *uat.ValidatedURL, policy uat.URLValidator) (uat.Browser, error) {
 	m.mu.Lock()
 	m.count++
 	m.mu.Unlock()
 	time.Sleep(50 * time.Millisecond) // artificially slow down browser creation
 	return &mockBrowser{}, nil
 }
-func (m *mockBrowserFactory) NewOAuthContext(ctx context.Context, url *url.URL, policy uat.URLValidator) (uat.Browser, error) {
+func (m *mockBrowserFactory) NewOAuthContext(ctx context.Context, initialURL *uat.ValidatedURL, policy uat.URLValidator) (uat.Browser, error) {
 	return &mockBrowser{}, nil
 }
 
@@ -210,5 +214,53 @@ func TestMCPServerIsolation(t *testing.T) {
 	resp = scanner1.Text()
 	if !strings.Contains(resp, "no such file") && !strings.Contains(resp, "not found") {
 		t.Errorf("expected file not found error for artifact %q in r1, got %s", resp2.RunID, resp)
+	}
+}
+
+func TestMCPServer_EOF_CancelsInFlight(t *testing.T) {
+	inReader, inWriter := io.Pipe()
+	var out bytes.Buffer
+
+	bf := &mockBrowserFactory{}
+	mg := &mockGit{}
+	tmpDir := t.TempDir()
+	pixHost := filepath.Join(tmpDir, "pix-host")
+	os.WriteFile(pixHost, []byte(""), 0755)
+
+	runner, err := uat.NewRunner(pixHost, "/repo", tmpDir, mg, &mockExec{}, &slowSandbox{}, &mockMCP{}, &mockImage{}, &mockLease{}, 1)
+	if err != nil {
+		t.Fatalf("NewRunner error: %v", err)
+	}
+
+	s := uat.NewMCPServer(runner, bf, "", inReader, &out, nil)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.Serve(context.Background())
+	}()
+
+	// Send a slow tool call (uat_execute with empty plan should just do the acquire, which takes time in slowSandbox)
+	req := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"uat_browser_action","arguments":{"run_id":"run1","action":"snapshot"}}}` + "\n"
+	inWriter.Write([]byte(req))
+
+	// Wait a moment for it to start
+	time.Sleep(100 * time.Millisecond)
+
+	// Close stdin mid-call
+	inWriter.Close()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Errorf("expected nil error, got %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Serve did not exit quickly after EOF")
+	}
+
+	// The response should be an error because it got canceled
+	outStr := out.String()
+	if !strings.Contains(strings.ToLower(outStr), "error") || !strings.Contains(outStr, "canceled") {
+		t.Errorf("expected cancellation error in response, got: %s", outStr)
 	}
 }

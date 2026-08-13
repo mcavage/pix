@@ -2,6 +2,9 @@ package uat
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -311,7 +314,7 @@ func (m *realMCP) Auth(ctx context.Context, runID string, name string) (err erro
 	}
 
 	// Drive NewOAuthContext
-	b, parseErr := m.factory.NewOAuthContext(ctx, authURL, policy)
+	b, parseErr := m.factory.NewOAuthContext(ctx, &ValidatedURL{URL: authURL}, policy)
 	if parseErr != nil {
 		return fmt.Errorf("new oauth context: %w", parseErr)
 	}
@@ -330,7 +333,24 @@ func (m *realMCP) Auth(ctx context.Context, runID string, name string) (err erro
 		return fmt.Errorf("returned callback policy validation failed: %w", valErr)
 	}
 
-	return nil
+	if waitDone {
+		return nil
+	}
+
+	settleCtx, cancelSettle := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelSettle()
+
+	select {
+	case wErr := <-waitErrCh:
+		waitDone = true
+		waitErr = wErr
+		if wErr != nil {
+			return fmt.Errorf("sbx mcp auth failed during settle: %w", wErr)
+		}
+		return nil
+	case <-settleCtx.Done():
+		return fmt.Errorf("%w: sbx mcp auth did not settle in time", ErrIncomplete)
+	}
 }
 
 func (m *realMCP) Status(ctx context.Context, name string) (string, error) {
@@ -381,14 +401,53 @@ func NewRealLease(stateDir string, e Exec) Lease {
 	return &realLease{stateDir: stateDir, exec: e}
 }
 
+type leaseRecord struct {
+	Kind string `json:"kind"`
+	Name string `json:"name"`
+}
+
+func parseResource(res string) (string, string) {
+	if res == "run" {
+		return "run", ""
+	}
+	if strings.HasPrefix(res, "sandbox_") {
+		return "sandbox", strings.TrimPrefix(res, "sandbox_")
+	}
+	if strings.HasPrefix(res, "image_") {
+		return "image", strings.TrimPrefix(res, "image_")
+	}
+	if strings.HasPrefix(res, "template_") {
+		return "template", strings.TrimPrefix(res, "template_")
+	}
+	if strings.HasPrefix(res, "mcp:") {
+		return "mcp", strings.TrimPrefix(res, "mcp:")
+	}
+	return "", ""
+}
+
+func hashResource(res string) string {
+	h := sha256.Sum256([]byte(res))
+	return hex.EncodeToString(h[:])
+}
+
 func (l *realLease) Acquire(ctx context.Context, runID string, resource string) error {
 	dir := filepath.Join(l.stateDir, "leases", runID)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
-	safeRes := strings.ReplaceAll(resource, ":", "_")
-	safeRes = strings.ReplaceAll(safeRes, "/", "_")
-	path := filepath.Join(dir, safeRes)
+
+	kind, name := parseResource(resource)
+	if kind == "" {
+		return fmt.Errorf("unknown lease resource format: %s", resource)
+	}
+
+	record := leaseRecord{Kind: kind, Name: name}
+	data, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+
+	path := filepath.Join(dir, hashResource(resource))
 
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
@@ -397,15 +456,14 @@ func (l *realLease) Acquire(ctx context.Context, runID string, resource string) 
 		}
 		return err
 	}
-	f.Close()
-	return nil
+	defer f.Close()
+	_, err = f.Write(data)
+	return err
 }
 
 func (l *realLease) Release(ctx context.Context, runID string, resource string) error {
 	dir := filepath.Join(l.stateDir, "leases", runID)
-	safeRes := strings.ReplaceAll(resource, ":", "_")
-	safeRes = strings.ReplaceAll(safeRes, "/", "_")
-	path := filepath.Join(dir, safeRes)
+	path := filepath.Join(dir, hashResource(resource))
 	return os.Remove(path)
 }
 
@@ -421,51 +479,49 @@ func (l *realLease) Cleanup(ctx context.Context, runID string) error {
 
 	var errs []error
 	for _, ent := range entries {
-		res := ent.Name()
-		if !strings.HasPrefix(res, "mcp_") && !strings.HasPrefix(res, "sandbox_") && !strings.HasPrefix(res, "image_") && !strings.HasPrefix(res, "template_") && res != "run" {
-			errs = append(errs, fmt.Errorf("refusing foreign lease name: %s", res))
+		path := filepath.Join(dir, ent.Name())
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			errs = append(errs, fmt.Errorf("read lease %s: %w", ent.Name(), readErr))
+			continue
+		}
+		var record leaseRecord
+		if unmarshalErr := json.Unmarshal(data, &record); unmarshalErr != nil {
+			errs = append(errs, fmt.Errorf("malformed lease record %s", ent.Name()))
 			continue
 		}
 
 		var cleanupErr error
-		if res == "run" {
-			// bookkeeping-only run marker, remove
-		} else if strings.HasPrefix(res, "mcp_") {
-			name := strings.TrimPrefix(res, "mcp_")
-			cleanupErr = l.exec.CommandContext(ctx, "sbx", "mcp", "rm", "--", name).Run()
-		} else if strings.HasPrefix(res, "sandbox_") {
-			name := strings.TrimPrefix(res, "sandbox_")
-			if argv, planErr := sandbox.PlanForceRemove(name); planErr == nil {
+		switch record.Kind {
+		case "run":
+			// bookkeeping-only run marker
+		case "mcp":
+			cleanupErr = l.exec.CommandContext(ctx, "sbx", "mcp", "rm", "--", record.Name).Run()
+		case "sandbox":
+			if argv, planErr := sandbox.PlanForceRemove(record.Name); planErr == nil {
 				cleanupErr = l.exec.CommandContext(ctx, "sbx", argv...).Run()
 			} else {
 				cleanupErr = planErr
 			}
-		} else if strings.HasPrefix(res, "image_") {
-			tag := strings.TrimPrefix(res, "image_")
+		case "image":
+			tag := record.Name
 			if strings.HasPrefix(tag, "uat-") {
 				tag = "docker.io/mcavage/pix:" + tag
-			} else {
-				// Revert standard replacing if needed, but for now we just handle uat- prefix
-				tag = strings.ReplaceAll(tag, "_", "/") // Best effort for others
 			}
 			cleanupErr = l.exec.CommandContext(ctx, "docker", "image", "rm", "-f", "--", tag).Run()
-		} else if strings.HasPrefix(res, "template_") {
-			tag := strings.TrimPrefix(res, "template_")
-			if strings.HasPrefix(tag, "docker.io_mcavage_pix_uat-") {
-				actualTag := "docker.io/mcavage/pix:uat-" + strings.TrimPrefix(tag, "docker.io_mcavage_pix_uat-")
-				cleanupErr = l.exec.CommandContext(ctx, "sbx", "template", "rm", "--", actualTag).Run()
-			} else {
-				errs = append(errs, fmt.Errorf("refusing unknown template format: %s", tag))
-				continue
-			}
+		case "template":
+			cleanupErr = l.exec.CommandContext(ctx, "sbx", "template", "rm", "--", record.Name).Run()
+		default:
+			errs = append(errs, fmt.Errorf("refusing foreign lease kind: %s", record.Kind))
+			continue
 		}
 
 		if cleanupErr != nil {
-			errs = append(errs, fmt.Errorf("failed to cleanup %s: %w", res, cleanupErr))
+			errs = append(errs, fmt.Errorf("cleanup %s %s: %w", record.Kind, record.Name, cleanupErr))
 			continue
 		}
-		if err := os.Remove(filepath.Join(dir, res)); err != nil {
-			errs = append(errs, err)
+		if removeErr := os.Remove(path); removeErr != nil {
+			errs = append(errs, removeErr)
 		}
 	}
 

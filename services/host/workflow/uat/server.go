@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"sync"
+	"time"
 
 	hostuat "pix/host/uat"
 )
@@ -128,7 +129,7 @@ func (s *MCPServer) getOrCreateBrowser(ctx context.Context, runID string) (Brows
 		return b, nil
 	}
 	u, _ := url.Parse("about:blank")
-	b, err := s.browserFactory.NewContext(ctx, runID, u, &OAuthPolicy{})
+	b, err := s.browserFactory.NewContext(ctx, runID, &ValidatedURL{URL: u}, &OAuthPolicy{})
 	if err != nil {
 		return nil, err
 	}
@@ -160,6 +161,10 @@ func (s *MCPServer) Serve(ctx context.Context) error {
 	// Max frame size: e.g., 10MB
 	buf := make([]byte, 1024*1024*10)
 	scanner.Buffer(buf, 1024*1024*10)
+
+	var wg sync.WaitGroup
+	serveCtx, cancelServe := context.WithCancel(ctx)
+	defer cancelServe()
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -196,18 +201,42 @@ func (s *MCPServer) Serve(ctx context.Context) error {
 				"tools": getTools(),
 			})
 		case "tools/call":
-			go s.handleToolCall(ctx, req.ID, req.Params)
+			wg.Add(1)
+			go func(req mcpRequest) {
+				defer wg.Done()
+				s.handleToolCall(serveCtx, req.ID, req.Params)
+			}(req)
 		default:
 			s.sendError(req.ID, -32601, "Method not found")
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		if err == io.EOF {
-			return nil
-		}
-		return err
+
+	var scanErr error
+	if err := scanner.Err(); err != nil && err != io.EOF {
+		scanErr = err
 	}
-	return nil
+
+	cancelServe()
+
+	waitCh := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(waitCh)
+	}()
+
+	select {
+	case <-waitCh:
+	case <-time.After(5 * time.Second):
+		<-waitCh
+	}
+
+	s.browsersMu.Lock()
+	for _, b := range s.browsers {
+		b.Close()
+	}
+	s.browsersMu.Unlock()
+
+	return scanErr
 }
 
 func (s *MCPServer) sendResponse(id interface{}, result interface{}) {

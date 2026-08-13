@@ -11,18 +11,18 @@ type CheckLinkConfig struct {
 }
 
 func CheckLink(ctx context.Context, factory BrowserFactory, cfg CheckLinkConfig, rawURL string) (*LinkCheckResult, error) {
-	u, err := cfg.Policy.Validate(rawURL)
+	valU, err := cfg.Policy.Validate(rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid url: %w", err)
 	}
 
-	b, err := factory.NewContext(ctx, cfg.RunID, u, cfg.Policy)
+	b, err := factory.NewContext(ctx, cfg.RunID, valU, cfg.Policy)
 	if err != nil {
 		return nil, fmt.Errorf("new context: %w", err)
 	}
 	defer b.Close()
 
-	err = b.WaitForURL(ctx, u)
+	err = b.WaitForURL(ctx, valU.URL)
 	if err != nil {
 		return nil, fmt.Errorf("wait for url: %w", err)
 	}
@@ -33,8 +33,12 @@ func CheckLink(ctx context.Context, factory BrowserFactory, cfg CheckLinkConfig,
 	}
 
 	// Validate final URL against policy (redirects to disallowed origins)
-	if _, err := cfg.Policy.Validate(finalU.String()); err != nil {
+	valFinal, err := cfg.Policy.Validate(finalU.String())
+	if err != nil {
 		return nil, fmt.Errorf("redirected to disallowed url %q: %w", finalU.String(), err)
+	}
+	if valFinal.URL.Hostname() != valU.URL.Hostname() || valFinal.URL.Port() != valU.URL.Port() || valFinal.URL.Scheme != valU.URL.Scheme {
+		return nil, fmt.Errorf("cross-origin redirect not allowed: original %s://%s, final %s://%s", valU.URL.Scheme, valU.URL.Host, valFinal.URL.Scheme, valFinal.URL.Host)
 	}
 
 	text, err := b.VisibleText(ctx)

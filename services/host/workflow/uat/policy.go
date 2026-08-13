@@ -68,8 +68,13 @@ func TempProfilePath(runID string) (string, error) {
 	return p, nil
 }
 
+type ValidatedURL struct {
+	URL        *url.URL
+	ResolvedIP string
+}
+
 type URLValidator interface {
-	Validate(rawURL string) (*url.URL, error)
+	Validate(rawURL string) (*ValidatedURL, error)
 }
 
 type OAuthPolicy struct {
@@ -77,7 +82,7 @@ type OAuthPolicy struct {
 	LeasedPorts []int
 }
 
-func (p *OAuthPolicy) Validate(rawURL string) (*url.URL, error) {
+func (p *OAuthPolicy) Validate(rawURL string) (*ValidatedURL, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid URL: %v", err)
@@ -134,14 +139,14 @@ func (p *OAuthPolicy) Validate(rawURL string) (*url.URL, error) {
 		return nil, fmt.Errorf("scheme %q not allowed", u.Scheme)
 	}
 
-	return u, nil
+	return &ValidatedURL{URL: u}, nil
 }
 
 type PublicLinkPolicy struct {
 	Resolver Resolver
 }
 
-func (p *PublicLinkPolicy) Validate(rawURL string) (*url.URL, error) {
+func (p *PublicLinkPolicy) Validate(rawURL string) (*ValidatedURL, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid URL: %v", err)
@@ -175,5 +180,5 @@ func (p *PublicLinkPolicy) Validate(rawURL string) (*url.URL, error) {
 		}
 	}
 
-	return u, nil
+	return &ValidatedURL{URL: u, ResolvedIP: ips[0].IP.String()}, nil
 }

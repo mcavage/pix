@@ -71,10 +71,10 @@ func (f *fakeBrowser) Close() error                                    { return 
 
 type fakeFactory struct{}
 
-func (f *fakeFactory) NewContext(ctx context.Context, runID string, initialURL *url.URL, policy uat.URLValidator) (uat.Browser, error) {
+func (f *fakeFactory) NewContext(ctx context.Context, runID string, initialURL *uat.ValidatedURL, policy uat.URLValidator) (uat.Browser, error) {
 	return &fakeBrowser{}, nil
 }
-func (f *fakeFactory) NewOAuthContext(ctx context.Context, initialURL *url.URL, policy uat.URLValidator) (uat.Browser, error) {
+func (f *fakeFactory) NewOAuthContext(ctx context.Context, initialURL *uat.ValidatedURL, policy uat.URLValidator) (uat.Browser, error) {
 	return &fakeBrowser{}, nil
 }
 

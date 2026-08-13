@@ -36,8 +36,11 @@ func TestPublicLinkPolicy(t *testing.T) {
 	}
 
 	for _, v := range valid {
-		if _, err := policy.Validate(v); err != nil {
+		res, err := policy.Validate(v)
+		if err != nil {
 			t.Errorf("expected %q to be valid, got %v", v, err)
+		} else if res.ResolvedIP != "93.184.216.34" {
+			t.Errorf("expected IP %s, got %s", "93.184.216.34", res.ResolvedIP)
 		}
 	}
 

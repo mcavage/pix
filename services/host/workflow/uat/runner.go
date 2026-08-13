@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -45,20 +46,77 @@ type Runner struct {
 
 func (r *Runner) RetryCleanups() map[string]string {
 	report := make(map[string]string)
+
+	// 1. Clean leases
 	entries, err := os.ReadDir(filepath.Join(r.stateDir, "leases"))
-	if err != nil {
-		return report
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			runID := entry.Name()
-			if err := r.lease.Cleanup(context.Background(), runID); err != nil {
-				report[runID] = err.Error()
-			} else {
-				report[runID] = "success"
+	if err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() {
+				runID := entry.Name()
+				if err := r.lease.Cleanup(context.Background(), runID); err != nil {
+					report["lease_"+runID] = err.Error()
+				} else {
+					report["lease_"+runID] = "success"
+				}
 			}
 		}
 	}
+
+	// 2. Janitor run dirs
+	runsDir := filepath.Join(r.stateDir, "runs")
+	runEntries, err := os.ReadDir(runsDir)
+	if err == nil {
+		type runInfo struct {
+			id      string
+			modTime time.Time
+			path    string
+		}
+		var completedRuns []runInfo
+		now := time.Now()
+
+		for _, entry := range runEntries {
+			if !entry.IsDir() {
+				continue
+			}
+			runID := entry.Name()
+			runPath := filepath.Join(runsDir, runID)
+
+			// Confinement check: no symlinks escaping root
+			info, err := os.Lstat(runPath)
+			if err != nil || info.Mode()&os.ModeSymlink != 0 {
+				report["janitor_"+runID] = "skip: symlink or stat error"
+				continue
+			}
+
+			// Active run check: if a lease dir still exists, skip
+			leaseDir := filepath.Join(r.stateDir, "leases", runID)
+			if _, err := os.Stat(leaseDir); err == nil {
+				continue // active
+			}
+
+			completedRuns = append(completedRuns, runInfo{
+				id:      runID,
+				modTime: info.ModTime(),
+				path:    runPath,
+			})
+		}
+
+		// Sort by newest first
+		sort.Slice(completedRuns, func(i, j int) bool {
+			return completedRuns[i].modTime.After(completedRuns[j].modTime)
+		})
+
+		for i, run := range completedRuns {
+			if i >= 8 || now.Sub(run.modTime) > 24*time.Hour {
+				if err := os.RemoveAll(run.path); err != nil {
+					report["janitor_"+run.id] = err.Error()
+				} else {
+					report["janitor_"+run.id] = "removed"
+				}
+			}
+		}
+	}
+
 	return report
 }
 

@@ -41,10 +41,11 @@ func TestAdapters_LeaseCleanupSandboxRemoveArgv(t *testing.T) {
 	runID := "testrun123"
 	leaseDir := filepath.Join(stateDir, "leases", runID)
 	os.MkdirAll(leaseDir, 0700)
-	// lease name must be sandbox_pix-uat-<runID>
-	os.WriteFile(filepath.Join(leaseDir, "sandbox_pix-uat-"+runID), []byte(""), 0600)
-
 	l := NewRealLease(stateDir, ce)
+	if err := l.Acquire(context.Background(), runID, "sandbox_pix-uat-"+runID); err != nil {
+		t.Fatalf("acquire error: %v", err)
+	}
+
 	err := l.Cleanup(context.Background(), runID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -180,7 +181,7 @@ func (c *authCaptureExec) CommandContext(ctx context.Context, name string, args 
 }
 
 type authFakeCmd struct {
-	exec *authCaptureExec
+	exec   *authCaptureExec
 	waitCh chan error
 }
 
@@ -195,7 +196,7 @@ func (f *authFakeCmd) Start() error {
 	}
 	return nil
 }
-func (f *authFakeCmd) Wait() error { return <-f.waitCh }
+func (f *authFakeCmd) Wait() error                        { return <-f.waitCh }
 func (f *authFakeCmd) Output() ([]byte, error)            { return nil, nil }
 func (f *authFakeCmd) StdoutPipe() (io.ReadCloser, error) { return nil, nil }
 func (f *authFakeCmd) StderrPipe() (io.ReadCloser, error) { return nil, nil }
@@ -363,11 +364,11 @@ type mockBrowserFactory struct {
 	browser *mockBrowser
 }
 
-func (m *mockBrowserFactory) NewContext(ctx context.Context, runID string, initialURL *url.URL, policy URLValidator) (Browser, error) {
+func (m *mockBrowserFactory) NewContext(ctx context.Context, runID string, initialURL *ValidatedURL, policy URLValidator) (Browser, error) {
 	return nil, nil
 }
 
-func (m *mockBrowserFactory) NewOAuthContext(ctx context.Context, initialURL *url.URL, policy URLValidator) (Browser, error) {
+func (m *mockBrowserFactory) NewOAuthContext(ctx context.Context, initialURL *ValidatedURL, policy URLValidator) (Browser, error) {
 	if m.browser == nil {
 		m.browser = &mockBrowser{}
 	}
@@ -397,3 +398,81 @@ func (f *mockBrowser) CurrentURL(ctx context.Context) (*url.URL, error) { return
 func (f *mockBrowser) Title(ctx context.Context) (string, error)        { return "", nil }
 func (f *mockBrowser) VisibleText(ctx context.Context) (string, error)  { return "", nil }
 func (f *mockBrowser) Close() error                                     { return nil }
+func TestAdapters_MCPAuthCaptureSuccessWaitSettle(t *testing.T) {
+	stateDir := t.TempDir()
+	runID := "testrun-auth-settle"
+
+	pixHost := filepath.Join(stateDir, "fake-pix-host")
+	os.WriteFile(pixHost, []byte("#!/bin/sh\n"), 0755)
+
+	factory := &mockBrowserFactory{
+		browser: &mockBrowser{
+			currURL: &url.URL{
+				Scheme:   "http",
+				Host:     "localhost:8080",
+				Path:     "/cb",
+				RawQuery: "code=123&state=xyz",
+			},
+		},
+	}
+	ce := &authCaptureExec{}
+	m := NewRealMCP(pixHost, stateDir, ce, factory)
+
+	ce.waitFunc = func() error {
+		capturePath := filepath.Join(stateDir, "runs", runID, "browser_capture")
+		os.MkdirAll(filepath.Dir(capturePath), 0700)
+		os.WriteFile(capturePath, []byte("https://github.com/login?redirect_uri=http%3A%2F%2Flocalhost%3A8080%2Fcb"), 0600)
+		// Don't return immediately, simulate waiting for browser
+		time.Sleep(100 * time.Millisecond)
+		return nil
+	}
+
+	err := m.Auth(context.Background(), runID, "some-mcp")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+func TestAdapters_LeaseRecords(t *testing.T) {
+	stateDir := t.TempDir()
+	ce := &authCaptureExec{}
+	l := NewRealLease(stateDir, ce)
+	ctx := context.Background()
+	runID := "run-special-chars"
+
+	// acquire with slashes, colons, underscores
+	resNames := []string{
+		"sandbox_my-sandbox_1",
+		"image_uat-some/image:v1",
+		"template_docker.io/mcavage/pix:uat-123",
+		"mcp:uat-run1-gworkspace",
+	}
+	for _, res := range resNames {
+		if err := l.Acquire(ctx, runID, res); err != nil {
+			t.Fatalf("Acquire(%s) error: %v", res, err)
+		}
+	}
+
+	// add a malformed record manually
+	leaseDir := filepath.Join(stateDir, "leases", runID)
+	os.WriteFile(filepath.Join(leaseDir, "malformed_hash123"), []byte("not-json"), 0600)
+
+	err := l.Cleanup(ctx, runID)
+	if err == nil {
+		t.Fatal("expected cleanup to return error for malformed record")
+	}
+	if !strings.Contains(err.Error(), "malformed lease record") {
+		t.Fatalf("expected malformed error, got: %v", err)
+	}
+
+	// write unknown kind manually
+	os.Remove(filepath.Join(leaseDir, "malformed_hash123")) // clean it
+	os.WriteFile(filepath.Join(leaseDir, "unknown_hash123"), []byte(`{"kind":"magic","name":"wand"}`), 0600)
+
+	err = l.Cleanup(ctx, runID)
+	if err == nil {
+		t.Fatal("expected cleanup to return error for unknown kind")
+	}
+	if !strings.Contains(err.Error(), "refusing foreign lease kind: magic") {
+		t.Fatalf("expected unknown kind error, got: %v", err)
+	}
+}

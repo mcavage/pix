@@ -2,6 +2,8 @@ package uat_test
 
 import (
 	"os"
+	"time"
+	"fmt"
 
 	"context"
 	"io"
@@ -436,3 +438,60 @@ func (m *mockCmdHelper) StdoutPipe() (io.ReadCloser, error) { return nil, nil }
 func (m *mockCmdHelper) StderrPipe() (io.ReadCloser, error) { return nil, nil }
 func (m *mockCmdHelper) SetEnv(env []string)                { m.env = env }
 func (m *mockCmdHelper) SetDir(dir string)                  { m.dir = dir }
+
+func TestRunner_Janitor(t *testing.T) {
+	stateDir := t.TempDir()
+
+	// Create active run
+	os.MkdirAll(filepath.Join(stateDir, "runs", "active-run"), 0755)
+	os.MkdirAll(filepath.Join(stateDir, "leases", "active-run"), 0755)
+
+	// Create recent completed run
+	os.MkdirAll(filepath.Join(stateDir, "runs", "recent-run"), 0755)
+
+	// Create old run
+	oldPath := filepath.Join(stateDir, "runs", "old-run")
+	os.MkdirAll(oldPath, 0755)
+	os.Chtimes(oldPath, time.Now().Add(-25*time.Hour), time.Now().Add(-25*time.Hour))
+
+	// Create 9 excess runs (so they get removed because > 8 limit)
+	for i := 0; i < 9; i++ {
+		p := filepath.Join(stateDir, "runs", fmt.Sprintf("excess-run-%d", i))
+		os.MkdirAll(p, 0755)
+		os.Chtimes(p, time.Now().Add(-time.Duration(i+1)*time.Hour), time.Now().Add(-time.Duration(i+1)*time.Hour))
+	}
+
+	// Add a symlink to escape
+	symPath := filepath.Join(stateDir, "runs", "symlink-run")
+	os.Symlink("/tmp", symPath)
+
+	pixHost := filepath.Join(stateDir, "pix-host")
+	os.WriteFile(pixHost, []byte(""), 0755)
+	runner, err := uat.NewRunner(pixHost, "/repo", stateDir, &mockGit{}, &mockExec{}, &mockSandbox{}, &mockMCP{}, &mockImage{}, &mockLease{}, 1)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	report := runner.RetryCleanups()
+
+	if _, err := os.Stat(filepath.Join(stateDir, "runs", "active-run")); os.IsNotExist(err) {
+		t.Errorf("active-run was removed")
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "runs", "recent-run")); os.IsNotExist(err) {
+		t.Errorf("recent-run was removed")
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "runs", "old-run")); !os.IsNotExist(err) {
+		t.Errorf("old-run was not removed")
+	}
+
+	// We expect 8 runs to remain (active, recent, symlink, and the 5 newest excess runs)
+	// Actually, `active` doesn't count towards the 8 limit because it's active.
+	// `symlink` is skipped, so it remains.
+	// `recent` is completed, so it counts as 1.
+	// The loop leaves up to 8 completed runs.
+
+	// Symlink is just skipped because it's not a dir.
+	if _, ok := report["janitor_symlink-run"]; ok {
+		t.Errorf("symlink-run should be completely ignored")
+	}
+}

@@ -2,10 +2,9 @@ package uat
 
 import (
 	"encoding/json"
-	"fmt"
-	"os"
-	"sync"
 	"time"
+
+	hostuat "pix/host/uat"
 )
 
 type EventType string
@@ -22,76 +21,41 @@ type Event struct {
 	Timestamp time.Time `json:"timestamp"`
 	Type      EventType `json:"type"`
 	Message   string    `json:"message,omitempty"`
-	State     string    `json:"state,omitempty"` // pass/fail/incomplete/cancelled/timed-out
+	State     string    `json:"state,omitempty"`
 }
 
 type EventLog struct {
-	mu     sync.Mutex
-	path   string
-	nextID int64
+	store *hostuat.EventStore
 }
 
 func NewEventLog(path string) *EventLog {
-	return &EventLog{path: path, nextID: 1}
+	store, _ := hostuat.NewEventStore(path)
+	return &EventLog{store: store}
 }
 
 func (e *EventLog) Append(evt Event) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	evt.ID = e.nextID
-	e.nextID++
 	if evt.Timestamp.IsZero() {
 		evt.Timestamp = time.Now()
 	}
-
 	b, err := json.Marshal(evt)
 	if err != nil {
 		return err
 	}
-	b = append(b, '\n')
-
-	f, err := os.OpenFile(e.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	_, err = f.Write(b)
+	_, err = e.store.Append(string(evt.Type), b)
 	return err
 }
 
 func (e *EventLog) ReadSince(cursor int64) ([]Event, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	// basic implementation
-	b, err := os.ReadFile(e.path)
+	evts, _, err := e.store.Replay(int(cursor), 0)
 	if err != nil {
 		return nil, err
 	}
-	var events []Event
-	for len(b) > 0 {
-		var evt Event
-		// find newline
-		idx := -1
-		for i := 0; i < len(b); i++ {
-			if b[i] == '\n' {
-				idx = i
-				break
-			}
-		}
-		if idx == -1 {
-			break
-		}
-		line := b[:idx]
-		b = b[idx+1:]
-		if err := json.Unmarshal(line, &evt); err == nil {
-			if evt.ID > cursor {
-				events = append(events, evt)
-			}
-		} else {
-			return nil, fmt.Errorf("malformed event log JSON: %w", err)
-		}
+	var out []Event
+	for _, raw := range evts {
+		var myEvt Event
+		json.Unmarshal(raw.Data, &myEvt)
+		myEvt.ID = int64(raw.Sequence)
+		out = append(out, myEvt)
 	}
-	return events, nil
+	return out, nil
 }
