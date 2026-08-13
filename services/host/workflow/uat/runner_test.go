@@ -1,6 +1,8 @@
 package uat_test
 
 import (
+	"os"
+
 	"context"
 	"io"
 	"path/filepath"
@@ -103,7 +105,9 @@ steps:
 		},
 	}
 
-	runner := uat.NewRunner("/repo", stateDir, mg, &mockExec{}, &mockSandbox{}, &mockMCP{}, &mockImage{}, &mockLease{}, 1)
+	pixHost := filepath.Join(stateDir, "pix-host")
+	os.WriteFile(pixHost, []byte(""), 0755)
+	runner, _ := uat.NewRunner(pixHost, "/repo", stateDir, mg, &mockExec{}, &mockSandbox{}, &mockMCP{}, &mockImage{}, &mockLease{}, 1)
 
 	resp, err := runner.Submit(context.Background(), uat.SubmitRequest{
 		Commit:       "main",
@@ -139,7 +143,9 @@ steps:
 		},
 	}
 
-	runner := uat.NewRunner("/repo", stateDir, mg, &mockExec{}, &mockSandbox{}, &mockMCP{}, &mockImage{}, &mockLease{}, 1)
+	pixHost := filepath.Join(stateDir, "pix-host")
+	os.WriteFile(pixHost, []byte(""), 0755)
+	runner, _ := uat.NewRunner(pixHost, "/repo", stateDir, mg, &mockExec{}, &mockSandbox{}, &mockMCP{}, &mockImage{}, &mockLease{}, 1)
 
 	resp, err := runner.Submit(context.Background(), uat.SubmitRequest{
 		Commit:       "main",
@@ -232,7 +238,9 @@ steps:
 
 	blockingMCP := &mockBlockingMCP{}
 
-	runner := uat.NewRunner("/repo", stateDir, mg, &mockExec{}, &mockSandbox{}, blockingMCP, &mockImage{}, &mockLease{}, 1)
+	pixHost := filepath.Join(stateDir, "pix-host")
+	os.WriteFile(pixHost, []byte(""), 0755)
+	runner, _ := uat.NewRunner(pixHost, "/repo", stateDir, mg, &mockExec{}, &mockSandbox{}, blockingMCP, &mockImage{}, &mockLease{}, 1)
 
 	resp, err := runner.Submit(context.Background(), uat.SubmitRequest{
 		Commit:       "main",
@@ -294,7 +302,9 @@ steps:
 	}
 
 	ml := &mockLease{}
-	runner := uat.NewRunner("/repo", stateDir, mg, me, &mockSandbox{}, &mockMCP{}, &mockImage{}, ml, 1)
+	pixHost := filepath.Join(stateDir, "pix-host")
+	os.WriteFile(pixHost, []byte(""), 0755)
+	runner, _ := uat.NewRunner(pixHost, "/repo", stateDir, mg, me, &mockSandbox{}, &mockMCP{}, &mockImage{}, ml, 1)
 
 	resp, err := runner.Submit(context.Background(), uat.SubmitRequest{
 		Commit:       "main",
@@ -365,12 +375,12 @@ steps:
 
 		hasEnv := false
 		for _, e := range lastCmd.env {
-			if e == "PIX_UAT_RECURSION_DISABLE=1" {
+			if e == "PIX_UAT_RECURSION=1" {
 				hasEnv = true
 			}
 		}
 		if !hasEnv {
-			t.Errorf("expected PIX_UAT_RECURSION_DISABLE=1")
+			t.Errorf("expected PIX_UAT_RECURSION=1")
 		}
 
 		expectedDir := filepath.Join(stateDir, "runs", resp.RunID, "source")

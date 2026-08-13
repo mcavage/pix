@@ -1,6 +1,7 @@
 package uat
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"os"
@@ -28,7 +29,6 @@ func ProfilePath() (string, error) {
 	if err := os.MkdirAll(p, 0700); err != nil {
 		return "", fmt.Errorf("create uat browser profile: %w", err)
 	}
-	// Ensure permissions in case it existed
 	os.Chmod(p, 0700)
 	return p, nil
 }
@@ -46,11 +46,15 @@ func TempProfilePath(runID string) (string, error) {
 	return p, nil
 }
 
-type URLPolicy struct {
+type URLValidator interface {
+	Validate(rawURL string) (*url.URL, error)
+}
+
+type OAuthPolicy struct {
 	LeasedPorts []int
 }
 
-func (p *URLPolicy) Validate(rawURL string) (*url.URL, error) {
+func (p *OAuthPolicy) Validate(rawURL string) (*url.URL, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid URL: %v", err)
@@ -94,6 +98,47 @@ func (p *URLPolicy) Validate(rawURL string) (*url.URL, error) {
 		}
 	} else {
 		return nil, fmt.Errorf("scheme %q not allowed", u.Scheme)
+	}
+
+	return u, nil
+}
+
+type PublicLinkPolicy struct {
+	Resolver Resolver
+}
+
+func (p *PublicLinkPolicy) Validate(rawURL string) (*url.URL, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid URL: %v", err)
+	}
+
+	if u.User != nil {
+		return nil, fmt.Errorf("userinfo not allowed")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("scheme %q not allowed", u.Scheme)
+	}
+
+	host := u.Hostname()
+	if host == "localhost" {
+		return nil, fmt.Errorf("localhost not allowed")
+	}
+
+	ips, err := p.Resolver.LookupIPAddr(context.Background(), host)
+	if err != nil {
+		return nil, fmt.Errorf("dns resolution failed: %v", err)
+	}
+
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("no IPs resolved")
+	}
+
+	for _, ip := range ips {
+		parsed := ip.IP
+		if parsed.IsLoopback() || parsed.IsPrivate() || parsed.IsLinkLocalMulticast() || parsed.IsLinkLocalUnicast() || parsed.IsUnspecified() || parsed.IsMulticast() {
+			return nil, fmt.Errorf("resolved to non-public IP: %v", parsed)
+		}
 	}
 
 	return u, nil

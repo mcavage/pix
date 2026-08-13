@@ -35,7 +35,7 @@ func NewRealBrowserFactory() BrowserFactory {
 	return &realFactory{}
 }
 
-func (f *realFactory) NewContext(ctx context.Context, runID string, initialURL *url.URL, policy *URLPolicy) (Browser, error) {
+func (f *realFactory) NewContext(ctx context.Context, runID string, initialURL *url.URL, policy URLValidator) (Browser, error) {
 	bin, err := findChrome()
 	if err != nil {
 		return nil, err
@@ -88,7 +88,7 @@ func (f *realFactory) NewContext(ctx context.Context, runID string, initialURL *
 	}, nil
 }
 
-func (f *realFactory) NewOAuthContext(ctx context.Context, initialURL *url.URL, policy *URLPolicy) (Browser, error) {
+func (f *realFactory) NewOAuthContext(ctx context.Context, initialURL *url.URL, policy URLValidator) (Browser, error) {
 	bin, err := findChrome()
 	if err != nil {
 		return nil, err

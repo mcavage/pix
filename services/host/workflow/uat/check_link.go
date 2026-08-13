@@ -5,7 +5,12 @@ import (
 	"fmt"
 )
 
-func CheckLink(ctx context.Context, factory BrowserFactory, cfg OAuthConfig, rawURL string) (*LinkCheckResult, error) {
+type CheckLinkConfig struct {
+	RunID  string
+	Policy URLValidator
+}
+
+func CheckLink(ctx context.Context, factory BrowserFactory, cfg CheckLinkConfig, rawURL string) (*LinkCheckResult, error) {
 	u, err := cfg.Policy.Validate(rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid url: %w", err)
@@ -17,8 +22,6 @@ func CheckLink(ctx context.Context, factory BrowserFactory, cfg OAuthConfig, raw
 	}
 	defer b.Close()
 
-	// Wait for the URL to settle (this might just wait for idle in a real implementation)
-	// For CheckLink, we probably just want to wait until it's loaded, then get info.
 	err = b.WaitForURL(ctx, u)
 	if err != nil {
 		return nil, fmt.Errorf("wait for url: %w", err)
@@ -39,9 +42,20 @@ func CheckLink(ctx context.Context, factory BrowserFactory, cfg OAuthConfig, raw
 		return nil, fmt.Errorf("visible text: %w", err)
 	}
 
+	// Cap text
+	if len(text) > 100000 {
+		text = text[:100000]
+	}
+
 	snap, err := b.Snapshot(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("snapshot: %w", err)
+	}
+
+	screenshot := snap.Screenshot
+	// Cap screenshot (10MB for example)
+	if len(screenshot) > 10*1024*1024 {
+		screenshot = screenshot[:10*1024*1024]
 	}
 
 	title, err := b.Title(ctx)
@@ -53,6 +67,6 @@ func CheckLink(ctx context.Context, factory BrowserFactory, cfg OAuthConfig, raw
 		Title:      title,
 		Text:       text,
 		FinalURL:   finalU.String(),
-		Screenshot: snap.Screenshot,
+		Screenshot: screenshot,
 	}, nil
 }

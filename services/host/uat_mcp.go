@@ -58,7 +58,15 @@ func runUatMcp(args []string) error {
 	imageAdapter := uat.NewRealImage(execAdapter)
 	leaseAdapter := uat.NewRealLease(*state, execAdapter)
 
-	runner := uat.NewRunner(*repo, *state, gitAdapter, execAdapter, sandboxAdapter, mcpAdapter, imageAdapter, leaseAdapter, 1)
+	hostBin, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("uat-mcp: failed to get executable path: %w", err)
+	}
+
+	runner, err := uat.NewRunner(hostBin, *repo, *state, gitAdapter, execAdapter, sandboxAdapter, mcpAdapter, imageAdapter, leaseAdapter, 1)
+	if err != nil {
+		return fmt.Errorf("uat-mcp: failed to initialize runner: %w", err)
+	}
 	retryReport := runner.RetryCleanups()
 	browserFactory := uat.NewRealBrowserFactory()
 
@@ -92,7 +100,7 @@ func runUatBrowserOpen(args []string) error {
 		AuthURL:     *authURL,
 		CallbackURL: *callbackURL,
 		Origin:      *origin,
-		Policy:      &uat.URLPolicy{LeasedPorts: []int{}},
+		Policy:      &uat.OAuthPolicy{LeasedPorts: []int{}},
 	}
 
 	factory := uat.NewRealBrowserFactory()

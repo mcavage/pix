@@ -1,9 +1,65 @@
 package uat
 
 import (
+	"context"
+	"net"
 	"os"
 	"testing"
 )
+
+type fakeResolver struct {
+	ips map[string][]net.IPAddr
+}
+
+func (r *fakeResolver) LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error) {
+	if ips, ok := r.ips[host]; ok {
+		return ips, nil
+	}
+	return nil, &net.DNSError{Err: "no such host", Name: host}
+}
+
+func TestPublicLinkPolicy(t *testing.T) {
+	resolver := &fakeResolver{
+		ips: map[string][]net.IPAddr{
+			"public.com":      {{IP: net.ParseIP("93.184.216.34")}},
+			"private.com":     {{IP: net.ParseIP("192.168.1.1")}},
+			"loopback.com":    {{IP: net.ParseIP("127.0.0.1")}},
+			"multicast.com":   {{IP: net.ParseIP("224.0.0.1")}},
+			"unspecified.com": {{IP: net.ParseIP("0.0.0.0")}},
+		},
+	}
+	policy := &PublicLinkPolicy{Resolver: resolver}
+
+	valid := []string{
+		"http://public.com",
+		"https://public.com/path?q=1",
+	}
+
+	for _, v := range valid {
+		if _, err := policy.Validate(v); err != nil {
+			t.Errorf("expected %q to be valid, got %v", v, err)
+		}
+	}
+
+	invalid := []string{
+		"http://localhost",
+		"http://private.com",
+		"http://loopback.com",
+		"http://multicast.com",
+		"http://unspecified.com",
+		"http://unknown.com",
+		"file:///etc/passwd",
+		"chrome://settings",
+		"http://user:pass@public.com",
+		"ftp://public.com",
+	}
+
+	for _, inv := range invalid {
+		if _, err := policy.Validate(inv); err == nil {
+			t.Errorf("expected %q to be invalid", inv)
+		}
+	}
+}
 
 func TestProfilePath(t *testing.T) {
 	p, err := ProfilePath()
@@ -42,8 +98,8 @@ func TestTempProfilePath(t *testing.T) {
 	}
 }
 
-func TestURLPolicy(t *testing.T) {
-	policy := URLPolicy{LeasedPorts: []int{8080, 9090}}
+func TestOAuthPolicy(t *testing.T) {
+	policy := OAuthPolicy{LeasedPorts: []int{8080, 9090}}
 
 	tests := []struct {
 		url     string

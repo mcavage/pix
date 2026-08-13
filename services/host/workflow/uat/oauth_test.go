@@ -40,15 +40,15 @@ type fakeFactory struct {
 	b *fakeBrowser
 }
 
-func (f *fakeFactory) NewContext(ctx context.Context, runID string, initialURL *url.URL, policy *URLPolicy) (Browser, error) {
+func (f *fakeFactory) NewContext(ctx context.Context, runID string, initialURL *url.URL, policy URLValidator) (Browser, error) {
 	return f.b, nil
 }
-func (f *fakeFactory) NewOAuthContext(ctx context.Context, initialURL *url.URL, policy *URLPolicy) (Browser, error) {
+func (f *fakeFactory) NewOAuthContext(ctx context.Context, initialURL *url.URL, policy URLValidator) (Browser, error) {
 	return f.b, nil
 }
 
 func TestCaptureOAuth(t *testing.T) {
-	policy := &URLPolicy{LeasedPorts: []int{8080}}
+	policy := &OAuthPolicy{LeasedPorts: []int{8080}}
 
 	tests := []struct {
 		name    string

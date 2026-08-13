@@ -108,12 +108,16 @@ func validateStepWith(step *Step, index int) error {
 		"mcp_remove":      true,
 		"candidate_smoke": true,
 		"check":           true,
+		"browser_check":   true,
 	}
 	if !allowedActions[step.Do] {
 		return fmt.Errorf("steps[%d]: unknown action: %s", index, step.Do)
 	}
 
-	forbidden := []string{"shell", "command", "argv", "env", "url"}
+	forbidden := []string{"shell", "command", "argv", "env"}
+	if step.Do != "browser_check" {
+		forbidden = append(forbidden, "url")
+	}
 	if err := validateForbiddenKeys(&step.With, forbidden, fmt.Sprintf("steps[%d].with", index)); err != nil {
 		return err
 	}
@@ -128,7 +132,10 @@ func validateStepWith(step *Step, index int) error {
 		if step.With.Kind == yaml.MappingNode && len(step.With.Content) > 0 {
 			return fmt.Errorf("steps[%d]: action 'candidate_smoke' does not accept 'with' keys", index)
 		}
-
+	case "browser_check":
+		if !hasKey(&step.With, "url") {
+			return fmt.Errorf("steps[%d]: action 'browser_check' requires 'url' in 'with'", index)
+		}
 	}
 	return nil
 }
@@ -163,7 +170,10 @@ func validateStepExpect(step *Step, index int) error {
 		}
 	}
 
-	forbidden := []string{"shell", "command", "argv", "env", "url"}
+	forbidden := []string{"shell", "command", "argv", "env"}
+	if step.Do != "browser_check" {
+		forbidden = append(forbidden, "url")
+	}
 	return validateForbiddenKeys(&step.Expect, forbidden, fmt.Sprintf("steps[%d].expect", index))
 }
 

@@ -7,8 +7,8 @@ import (
 )
 
 func TestCheckLink(t *testing.T) {
-	policy := &URLPolicy{LeasedPorts: []int{8080}}
-	cfg := OAuthConfig{Policy: policy}
+	policy := &OAuthPolicy{LeasedPorts: []int{8080}}
+	cfg := CheckLinkConfig{Policy: policy}
 
 	tests := []struct {
 		name    string

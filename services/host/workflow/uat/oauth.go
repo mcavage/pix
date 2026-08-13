@@ -20,7 +20,7 @@ type OAuthConfig struct {
 	AuthURL     string
 	CallbackURL string
 	Origin      string
-	Policy      *URLPolicy
+	Policy      URLValidator
 }
 
 func CaptureOAuth(ctx context.Context, factory BrowserFactory, cfg OAuthConfig, outPath string) error {

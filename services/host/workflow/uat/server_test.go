@@ -1,12 +1,16 @@
 package uat_test
 
 import (
+	"os"
+	"path/filepath"
+
 	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -29,14 +33,14 @@ type mockBrowserFactory struct {
 	count int
 }
 
-func (m *mockBrowserFactory) NewContext(ctx context.Context, runID string, url *url.URL, policy *uat.URLPolicy) (uat.Browser, error) {
+func (m *mockBrowserFactory) NewContext(ctx context.Context, runID string, url *url.URL, policy uat.URLValidator) (uat.Browser, error) {
 	m.mu.Lock()
 	m.count++
 	m.mu.Unlock()
 	time.Sleep(50 * time.Millisecond) // artificially slow down browser creation
 	return &mockBrowser{}, nil
 }
-func (m *mockBrowserFactory) NewOAuthContext(ctx context.Context, url *url.URL, policy *uat.URLPolicy) (uat.Browser, error) {
+func (m *mockBrowserFactory) NewOAuthContext(ctx context.Context, url *url.URL, policy uat.URLValidator) (uat.Browser, error) {
 	return &mockBrowser{}, nil
 }
 
@@ -60,7 +64,9 @@ func TestMCPServerConcurrency(t *testing.T) {
 
 	slowSb := &slowSandbox{}
 
-	runner := uat.NewRunner("/repo", stateDir, mg, &mockExec{}, slowSb, &mockMCP{}, &mockImage{}, &mockLease{}, 1)
+	pixHost := filepath.Join(stateDir, "pix-host")
+	os.WriteFile(pixHost, []byte(""), 0755)
+	runner, _ := uat.NewRunner(pixHost, "/repo", stateDir, mg, &mockExec{}, slowSb, &mockMCP{}, &mockImage{}, &mockLease{}, 1)
 
 	resp, _ := runner.Submit(context.Background(), uat.SubmitRequest{
 		Commit:       "main",
@@ -148,4 +154,61 @@ func TestMCPServerConcurrency(t *testing.T) {
 		t.Errorf("expected 1 browser context creation, got %d", bf.count)
 	}
 	bf.mu.Unlock()
+}
+
+func TestMCPServerIsolation(t *testing.T) {
+	state1 := t.TempDir()
+	state2 := t.TempDir()
+
+	mg := &mockGit{
+		readTreeFile: func(ctx context.Context, commit, path string) ([]byte, error) {
+			return []byte("schema: pix.uat/1\nname: test\ntimeout: 1m\nsteps:\n  - id: smoke\n    do: check"), nil
+		},
+	}
+
+	pixHost1 := filepath.Join(state1, "pix-host")
+	os.WriteFile(pixHost1, []byte(""), 0755)
+	r1, _ := uat.NewRunner(pixHost1, "/repo", state1, mg, &mockExec{}, &mockSandbox{}, &mockMCP{}, &mockImage{}, &mockLease{}, 1)
+	pixHost2 := filepath.Join(state2, "pix-host")
+	os.WriteFile(pixHost2, []byte(""), 0755)
+	r2, _ := uat.NewRunner(pixHost2, "/repo", state2, mg, &mockExec{}, &mockSandbox{}, &mockMCP{}, &mockImage{}, &mockLease{}, 1)
+
+	resp1, _ := r1.Submit(context.Background(), uat.SubmitRequest{Commit: "main", ScenarioPath: "test.yaml", DryRun: false})
+	resp2, _ := r2.Submit(context.Background(), uat.SubmitRequest{Commit: "main", ScenarioPath: "test.yaml", DryRun: false})
+
+	inR1, inW1 := io.Pipe()
+	outR1, outW1 := io.Pipe()
+
+	bf := &mockBrowserFactory{}
+	s1 := uat.NewMCPServer(r1, bf, state1, inR1, outW1, nil)
+	go s1.Serve(context.Background())
+
+	scanner1 := bufio.NewScanner(outR1)
+
+	// Try to abort run2 from server1
+	reqAbort := fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"uat_abort","arguments":{"run_id":%q}}}`, resp2.RunID)
+	inW1.Write([]byte(reqAbort + "\n"))
+
+	if !scanner1.Scan() {
+		t.Fatalf("expected response")
+	}
+	resp := scanner1.Text()
+	if !strings.Contains(resp, "not found") {
+		t.Errorf("expected not found error for abort %q in r1, got %s", resp2.RunID, resp)
+	}
+
+	// ensure r1.Submit didn't fail (ignoring resp1 warning otherwise)
+	_ = resp1
+
+	// Try to read artifact from run2 via server1
+	reqArtifact := fmt.Sprintf(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"uat_artifact","arguments":{"run_id":%q,"path":"events.log"}}}`, resp2.RunID)
+	inW1.Write([]byte(reqArtifact + "\n"))
+
+	if !scanner1.Scan() {
+		t.Fatalf("expected response")
+	}
+	resp = scanner1.Text()
+	if !strings.Contains(resp, "no such file") && !strings.Contains(resp, "not found") {
+		t.Errorf("expected file not found error for artifact %q in r1, got %s", resp2.RunID, resp)
+	}
 }

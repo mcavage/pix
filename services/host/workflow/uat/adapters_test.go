@@ -30,6 +30,30 @@ func (f *fakeCmd) StderrPipe() (io.ReadCloser, error) { return nil, nil }
 func (f *fakeCmd) SetEnv(env []string)                {}
 func (f *fakeCmd) SetDir(dir string)                  {}
 
+func TestAdapters_LeaseCleanupSandboxRemoveArgv(t *testing.T) {
+	ce := &captureExec{}
+	stateDir := t.TempDir()
+
+	// Create a run and a sandbox lease
+	runID := "testrun123"
+	leaseDir := filepath.Join(stateDir, "leases", runID)
+	os.MkdirAll(leaseDir, 0700)
+	// lease name must be sandbox_pix-uat-<runID>
+	os.WriteFile(filepath.Join(leaseDir, "sandbox_pix-uat-"+runID), []byte(""), 0600)
+
+	l := NewRealLease(stateDir, ce)
+	err := l.Cleanup(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	joined := strings.Join(ce.lastArgs, " ")
+	expected := "sbx rm -f pix-uat-" + runID
+	if joined != expected {
+		t.Errorf("expected %q, got %q", expected, joined)
+	}
+}
+
 func TestAdapters_GitShowArgv(t *testing.T) {
 	ce := &captureExec{}
 	g := NewRealGit("/repo", ce)

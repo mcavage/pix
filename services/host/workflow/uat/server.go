@@ -128,7 +128,7 @@ func (s *MCPServer) getOrCreateBrowser(ctx context.Context, runID string) (Brows
 		return b, nil
 	}
 	u, _ := url.Parse("about:blank")
-	b, err := s.browserFactory.NewContext(ctx, runID, u, &URLPolicy{})
+	b, err := s.browserFactory.NewContext(ctx, runID, u, &OAuthPolicy{})
 	if err != nil {
 		return nil, err
 	}

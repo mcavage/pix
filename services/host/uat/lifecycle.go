@@ -97,7 +97,8 @@ func RegisterMCP(env hostenv.Env, rec *Registration, repoPath, statePath string)
 	if err != nil {
 		return err
 	}
-	planner, err := NewMCPPlanner(hostBin, repoPath, statePath, rec.SessionID)
+	runnerStatePath := filepath.Join(statePath, "sessions", rec.SessionID)
+	planner, err := NewMCPPlanner(hostBin, repoPath, runnerStatePath, rec.SessionID)
 	if err != nil {
 		return err
 	}

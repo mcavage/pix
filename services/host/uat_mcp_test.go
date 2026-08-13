@@ -71,10 +71,10 @@ func (f *fakeBrowser) Close() error                                    { return 
 
 type fakeFactory struct{}
 
-func (f *fakeFactory) NewContext(ctx context.Context, runID string, initialURL *url.URL, policy *uat.URLPolicy) (uat.Browser, error) {
+func (f *fakeFactory) NewContext(ctx context.Context, runID string, initialURL *url.URL, policy uat.URLValidator) (uat.Browser, error) {
 	return &fakeBrowser{}, nil
 }
-func (f *fakeFactory) NewOAuthContext(ctx context.Context, initialURL *url.URL, policy *uat.URLPolicy) (uat.Browser, error) {
+func (f *fakeFactory) NewOAuthContext(ctx context.Context, initialURL *url.URL, policy uat.URLValidator) (uat.Browser, error) {
 	return &fakeBrowser{}, nil
 }
 
@@ -82,7 +82,9 @@ func TestMCPServer_EndToEnd(t *testing.T) {
 	stateDir := t.TempDir()
 	repoDir := t.TempDir()
 
-	runner := uat.NewRunner(repoDir, stateDir, &fakeGit{}, &fakeExec{}, &fakeSandbox{}, &fakeMCP{}, &fakeImage{}, &fakeLease{}, 1)
+	pixHost := filepath.Join(stateDir, "pix-host")
+	os.WriteFile(pixHost, []byte(""), 0755)
+	runner, _ := uat.NewRunner(pixHost, repoDir, stateDir, &fakeGit{}, &fakeExec{}, &fakeSandbox{}, &fakeMCP{}, &fakeImage{}, &fakeLease{}, 1)
 	bf := &fakeFactory{}
 
 	runID := "run-12345"

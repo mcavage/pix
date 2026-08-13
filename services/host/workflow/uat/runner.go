@@ -28,6 +28,7 @@ type Git interface {
 type Runner struct {
 	repoPath string
 	stateDir string
+	pixHost  string
 
 	git     Git
 	exec    Exec
@@ -66,11 +67,24 @@ type runContext struct {
 	wg     sync.WaitGroup
 }
 
-func NewRunner(repoPath, stateDir string, git Git, exec Exec, sandbox Sandbox, mcp MCP, image Image, lease Lease, buildConcurrency int) *Runner {
+func NewRunner(pixHost, repoPath, stateDir string, git Git, exec Exec, sandbox Sandbox, mcp MCP, image Image, lease Lease, buildConcurrency int) (*Runner, error) {
 	if buildConcurrency <= 0 {
 		buildConcurrency = 1
 	}
+
+	if !filepath.IsAbs(pixHost) {
+		return nil, fmt.Errorf("pixHost must be absolute: %s", pixHost)
+	}
+	info, err := os.Stat(pixHost)
+	if err != nil {
+		return nil, fmt.Errorf("pixHost not found: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("pixHost must be a regular file")
+	}
+
 	return &Runner{
+		pixHost:    pixHost,
 		repoPath:   repoPath,
 		stateDir:   stateDir,
 		git:        git,
@@ -81,7 +95,7 @@ func NewRunner(repoPath, stateDir string, git Git, exec Exec, sandbox Sandbox, m
 		lease:      lease,
 		activeRuns: make(map[string]*runContext),
 		buildSem:   make(chan struct{}, buildConcurrency),
-	}
+	}, nil
 }
 
 type SubmitRequest struct {

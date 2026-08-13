@@ -248,7 +248,7 @@ func (l *realLease) Cleanup(ctx context.Context, runID string) error {
 			cleanupErr = l.exec.CommandContext(ctx, "sbx", "mcp", "rm", "--", name).Run()
 		} else if strings.HasPrefix(res, "sandbox_") {
 			name := strings.TrimPrefix(res, "sandbox_")
-			if argv, planErr := sandbox.PlanForceRemove("pix-uat-" + name); planErr == nil {
+			if argv, planErr := sandbox.PlanForceRemove(name); planErr == nil {
 				cleanupErr = l.exec.CommandContext(ctx, "sbx", argv...).Run()
 			} else {
 				cleanupErr = planErr

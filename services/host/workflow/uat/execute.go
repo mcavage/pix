@@ -197,9 +197,58 @@ func (r *Runner) executeCandidateSmoke(ctx context.Context, runID, commit string
 	}
 
 	pixCmd := r.exec.CommandContext(ctx, filepath.Join(res.OutDir, "pix"), args...)
-	env := os.Environ()
-	env = append(env, "PIX_UAT_RECURSION_DISABLE=1")
-	pixCmd.SetEnv(env)
+	// 1) Candidate pix environment: isolate from host pix paths
+	fakeHome := filepath.Join(r.stateDir, "runs", runID, "home")
+	fakeConfig := filepath.Join(r.stateDir, "runs", runID, "config")
+	fakeData := filepath.Join(r.stateDir, "runs", runID, "data")
+	fakeState := filepath.Join(r.stateDir, "runs", runID, "state")
+	fakeCache := filepath.Join(r.stateDir, "runs", runID, "cache")
+
+	for _, d := range []string{fakeHome, fakeConfig, fakeData, fakeState, fakeCache} {
+		if err := os.MkdirAll(d, 0700); err != nil {
+			return err
+		}
+	}
+	pixConfigFile := filepath.Join(fakeConfig, "config.toml")
+	if err := os.WriteFile(pixConfigFile, []byte(""), 0600); err != nil {
+		return err
+	}
+
+	envVars := []string{
+		"PATH", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "TERM",
+		"DOCKER_HOST", "DOCKER_CONFIG", // for sbx auth
+	}
+	hasDockerConfig := false
+	var newEnv []string
+	for _, ev := range os.Environ() {
+		for _, allow := range envVars {
+			if strings.HasPrefix(ev, allow+"=") {
+				newEnv = append(newEnv, ev)
+				if allow == "DOCKER_CONFIG" {
+					hasDockerConfig = true
+				}
+				break
+			}
+		}
+	}
+	if !hasDockerConfig {
+		// Record host sbx auth compatibility as bootstrap proof
+		hostHome, _ := os.UserHomeDir()
+		if hostHome != "" {
+			newEnv = append(newEnv, "DOCKER_CONFIG="+filepath.Join(hostHome, ".docker"))
+		}
+	}
+	newEnv = append(newEnv, 
+		"HOME="+fakeHome,
+		"XDG_CONFIG_HOME="+fakeConfig,
+		"XDG_DATA_HOME="+fakeData,
+		"XDG_STATE_HOME="+fakeState,
+		"XDG_CACHE_HOME="+fakeCache,
+		"PIX_CONFIG="+pixConfigFile,
+		"PIX_UAT_RECURSION=1",
+	)
+
+	pixCmd.SetEnv(newEnv)
 	pixCmd.SetDir(res.SourceDir)
 
 	if err := pixCmd.Start(); err != nil {
@@ -240,24 +289,25 @@ func (r *Runner) executeStep(ctx context.Context, runID, commit string, scenario
 	switch step.Do {
 	case "mcp_add":
 		name := extractStringMap(step.With, "name")
-		if err := r.lease.Acquire(ctx, runID, "mcp:"+name); err != nil {
+		uatName := "uat-" + runID + "-" + name
+		if err := r.lease.Acquire(ctx, runID, "mcp:"+uatName); err != nil {
 			return err
 		}
-		// Candidate Makefile is never executed.
-		// "Every external call uses exec.CommandContext-style argv with no shell and capped output/time."
-		planner, err := uattypes.NewMCPPlanner("/usr/local/bin/pix-host", r.repoPath, r.stateDir, runID)
+		planner, err := uattypes.NewMCPPlanner(r.pixHost, r.repoPath, r.stateDir, runID)
 		if err != nil {
 			return err
 		}
-		argv := planner.PlanRegistrationAdd(name)
-		return r.mcp.Add(ctx, name, argv)
+		argv := planner.PlanRegistrationAdd(uatName)
+		return r.mcp.Add(ctx, uatName, argv)
 	case "mcp_auth":
 		name := extractStringMap(step.With, "name")
-		return r.mcp.Auth(ctx, name)
+		uatName := "uat-" + runID + "-" + name
+		return r.mcp.Auth(ctx, uatName)
 	case "mcp_status": // maybe check?
 		// check expect
 		name := extractStringMap(step.With, "name")
-		status, err := r.mcp.Status(ctx, name)
+		uatName := "uat-" + runID + "-" + name
+		status, err := r.mcp.Status(ctx, uatName)
 		if err != nil {
 			return err
 		}
@@ -267,9 +317,28 @@ func (r *Runner) executeStep(ctx context.Context, runID, commit string, scenario
 		}
 	case "mcp_remove":
 		name := extractStringMap(step.With, "name")
-		return r.mcp.Remove(ctx, name)
+		uatName := "uat-" + runID + "-" + name
+		return r.mcp.Remove(ctx, uatName)
 	case "candidate_smoke":
 		return r.executeCandidateSmoke(ctx, runID, commit, scenario)
+
+	case "browser_check":
+		urlStr := extractStringMap(step.With, "url")
+		if urlStr == "" {
+			return fmt.Errorf("missing url for browser_check")
+		}
+
+		cfg := CheckLinkConfig{
+			RunID:  runID,
+			Policy: &PublicLinkPolicy{Resolver: &realResolver{}},
+		}
+
+		factory := NewRealBrowserFactory()
+		_, err := CheckLink(ctx, factory, cfg, urlStr)
+		if err != nil {
+			return fmt.Errorf("browser_check failed: %w", err)
+		}
+		return nil
 
 	case "check":
 		// named check
