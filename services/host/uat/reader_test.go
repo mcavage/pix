@@ -31,6 +31,23 @@ func TestReadArtifact(t *testing.T) {
 		}
 	})
 
+	t.Run("nested path keeps final descriptor open", func(t *testing.T) {
+		nestedDir := filepath.Join(root, "steps")
+		if err := os.Mkdir(nestedDir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(nestedDir, "smoke_test.log"), []byte("candidate output"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		res, _, err := ReadArtifact(root, "steps/smoke_test.log", 1024, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(res) != "candidate output" {
+			t.Fatalf("nested artifact = %q", res)
+		}
+	})
+
 	t.Run("tail", func(t *testing.T) {
 		res, _, err := ReadArtifact(root, "artifact.txt", 1024, 2, 0)
 		if err != nil {

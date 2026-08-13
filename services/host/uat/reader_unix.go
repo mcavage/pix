@@ -17,7 +17,6 @@ func openSafeNoSymlink(root string, relPath string) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer unix.Close(fd)
 
 	for i, part := range parts {
 		if part == "" || part == "." {
@@ -31,13 +30,16 @@ func openSafeNoSymlink(root string, relPath string) (*os.File, error) {
 
 		nextFd, err := unix.Openat(fd, part, flags, 0)
 		if err != nil {
+			_ = unix.Close(fd)
 			return nil, err
 		}
 
-		unix.Close(fd)
+		_ = unix.Close(fd)
 		fd = nextFd
 	}
 
-	// Create os.File from fd
+	// Ownership of the final descriptor transfers to os.File. Do not defer a
+	// close on the original integer: openat may reuse that descriptor number for
+	// the final file after an intermediate close.
 	return os.NewFile(uintptr(fd), relPath), nil
 }
