@@ -101,12 +101,15 @@ type MCPServer struct {
 	stateDir       string
 	in             io.Reader
 	out            io.Writer
+	outMu          sync.Mutex
 
 	browsersMu sync.Mutex
 	browsers   map[string]Browser
+
+	retryReport map[string]string
 }
 
-func NewMCPServer(runner *Runner, bf BrowserFactory, stateDir string, in io.Reader, out io.Writer) *MCPServer {
+func NewMCPServer(runner *Runner, bf BrowserFactory, stateDir string, in io.Reader, out io.Writer, retryReport map[string]string) *MCPServer {
 	return &MCPServer{
 		runner:         runner,
 		browserFactory: bf,
@@ -114,6 +117,7 @@ func NewMCPServer(runner *Runner, bf BrowserFactory, stateDir string, in io.Read
 		in:             in,
 		out:            out,
 		browsers:       make(map[string]Browser),
+		retryReport:    retryReport,
 	}
 }
 
@@ -192,7 +196,7 @@ func (s *MCPServer) Serve(ctx context.Context) error {
 				"tools": getTools(),
 			})
 		case "tools/call":
-			s.handleToolCall(ctx, req.ID, req.Params)
+			go s.handleToolCall(ctx, req.ID, req.Params)
 		default:
 			s.sendError(req.ID, -32601, "Method not found")
 		}
@@ -213,7 +217,9 @@ func (s *MCPServer) sendResponse(id interface{}, result interface{}) {
 		Result:  result,
 	}
 	b, _ := json.Marshal(resp)
+	s.outMu.Lock()
 	fmt.Fprintf(s.out, "%s\n", b)
+	s.outMu.Unlock()
 }
 
 func (s *MCPServer) sendError(id interface{}, code int, message string) {
@@ -226,7 +232,9 @@ func (s *MCPServer) sendError(id interface{}, code int, message string) {
 		},
 	}
 	b, _ := json.Marshal(resp)
+	s.outMu.Lock()
 	fmt.Fprintf(s.out, "%s\n", b)
+	s.outMu.Unlock()
 }
 
 func (s *MCPServer) handleToolCall(ctx context.Context, id interface{}, params json.RawMessage) {
@@ -267,9 +275,10 @@ func (s *MCPServer) handleToolCall(ctx context.Context, id interface{}, params j
 	switch p.Name {
 	case "uat_capabilities":
 		respMap := map[string]interface{}{
-			"runner":  true,
-			"browser": true,
-			"sandbox": true,
+			"runner":       true,
+			"browser":      true,
+			"sandbox":      true,
+			"retry_report": s.retryReport,
 		}
 		respBytes, _ := json.Marshal(respMap)
 		textResult = string(respBytes)

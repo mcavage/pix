@@ -25,12 +25,14 @@ func (r *Runner) executeAsync(ctx context.Context, runID, commit string, scenari
 				state = "timed-out"
 			} else if ctx.Err() == context.Canceled {
 				state = "cancelled"
-			} else if failErr == ErrNotFound || failErr == ErrQuotaExceeded || failErr.Error() == "incomplete" { // mapping host unknown absence as incomplete
+			} else if failErr == ErrNotFound || failErr == ErrQuotaExceeded || strings.Contains(failErr.Error(), "incomplete") { // mapping host unknown absence as incomplete
 				state = "incomplete"
 			} else {
 				state = "fail"
 			}
 		}
+
+		cleanupErr := r.lease.Cleanup(context.Background(), runID)
 
 		_ = evLog.Append(Event{
 			Type:  EventRunDone,
@@ -43,7 +45,6 @@ func (r *Runner) executeAsync(ctx context.Context, runID, commit string, scenari
 			}(),
 		})
 
-		cleanupErr := r.lease.Cleanup(context.Background(), runID)
 		if cleanupErr != nil {
 			_ = evLog.Append(Event{Type: EventStatus, State: "cleanup_fail", Message: cleanupErr.Error()})
 		}
@@ -269,15 +270,7 @@ func (r *Runner) executeStep(ctx context.Context, runID, commit string, scenario
 		return r.mcp.Remove(ctx, name)
 	case "candidate_smoke":
 		return r.executeCandidateSmoke(ctx, runID, commit, scenario)
-	case "mcp_tool_present":
-		toolName := extractStringMap(step.With, "tool")
-		for _, c := range toolName {
-			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '_' && c != '-' {
-				return fmt.Errorf("invalid tool name: must be strict identifier")
-			}
-		}
-		// mcp_tool_present must not misuse sbx mcp auth status as tool discovery.
-		return fmt.Errorf("mcp_tool_present: host seam incomplete (cannot probe candidate tools from host)")
+
 	case "check":
 		// named check
 		return nil

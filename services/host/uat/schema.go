@@ -102,13 +102,12 @@ func UnmarshalScenario(data []byte) (*Scenario, error) {
 
 func validateStepWith(step *Step, index int) error {
 	allowedActions := map[string]bool{
-		"mcp_add":          true,
-		"mcp_auth":         true,
-		"mcp_status":       true,
-		"mcp_remove":       true,
-		"candidate_smoke":  true,
-		"mcp_tool_present": true,
-		"check":            true,
+		"mcp_add":         true,
+		"mcp_auth":        true,
+		"mcp_status":      true,
+		"mcp_remove":      true,
+		"candidate_smoke": true,
+		"check":           true,
 	}
 	if !allowedActions[step.Do] {
 		return fmt.Errorf("steps[%d]: unknown action: %s", index, step.Do)
@@ -129,10 +128,7 @@ func validateStepWith(step *Step, index int) error {
 		if step.With.Kind == yaml.MappingNode && len(step.With.Content) > 0 {
 			return fmt.Errorf("steps[%d]: action 'candidate_smoke' does not accept 'with' keys", index)
 		}
-	case "mcp_tool_present":
-		if !hasKey(&step.With, "tool") {
-			return fmt.Errorf("steps[%d]: action '%s' requires 'tool' in 'with'", index, step.Do)
-		}
+
 	}
 	return nil
 }

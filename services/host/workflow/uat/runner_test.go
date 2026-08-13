@@ -280,7 +280,6 @@ steps:
 		},
 	}
 
-
 	var execs []capturedExec
 
 	me := &captureExecHelper{
@@ -335,10 +334,18 @@ steps:
 	if len(execs) < 6 {
 		t.Errorf("expected at least 6 commands, got %d: %v", len(execs), execs)
 	} else {
-		if execs[0].args[0] != "docker" || execs[0].args[1] != "build" { t.Errorf("expected docker build, got %v", execs[0].args) }
-		if execs[1].args[0] != "docker" || execs[1].args[1] != "run" { t.Errorf("expected docker run pix, got %v", execs[1].args) }
-		if execs[2].args[0] != "docker" || execs[2].args[1] != "run" { t.Errorf("expected docker run pix-host, got %v", execs[2].args) }
-		if execs[3].args[0] != "docker" || execs[3].args[1] != "save" { t.Errorf("expected docker save, got %v", execs[3].args) }
+		if execs[0].args[0] != "docker" || execs[0].args[1] != "build" {
+			t.Errorf("expected docker build, got %v", execs[0].args)
+		}
+		if execs[1].args[0] != "docker" || execs[1].args[1] != "run" {
+			t.Errorf("expected docker run pix, got %v", execs[1].args)
+		}
+		if execs[2].args[0] != "docker" || execs[2].args[1] != "run" {
+			t.Errorf("expected docker run pix-host, got %v", execs[2].args)
+		}
+		if execs[3].args[0] != "docker" || execs[3].args[1] != "save" {
+			t.Errorf("expected docker save, got %v", execs[3].args)
+		}
 
 		if len(execs[4].args) != 4 || execs[4].args[0] != "sbx" || execs[4].args[1] != "template" || execs[4].args[2] != "load" || execs[4].args[3] != filepath.Join(stateDir, "runs", resp.RunID, "image.tar") {
 			t.Errorf("expected sbx template load <tar>, got %v", execs[4].args)
@@ -358,9 +365,13 @@ steps:
 
 		hasEnv := false
 		for _, e := range lastCmd.env {
-			if e == "PIX_UAT_RECURSION_DISABLE=1" { hasEnv = true }
+			if e == "PIX_UAT_RECURSION_DISABLE=1" {
+				hasEnv = true
+			}
 		}
-		if !hasEnv { t.Errorf("expected PIX_UAT_RECURSION_DISABLE=1") }
+		if !hasEnv {
+			t.Errorf("expected PIX_UAT_RECURSION_DISABLE=1")
+		}
 
 		expectedDir := filepath.Join(stateDir, "runs", resp.RunID, "source")
 		if lastCmd.dir != expectedDir {
@@ -401,20 +412,27 @@ type mockCmdHelper struct {
 	args   []string
 	env    []string
 	dir    string
+	err    error
 	record func(ce capturedExec)
 }
 
 func (m *mockCmdHelper) Run() error {
+	if m.err != nil {
+		return m.err
+	}
 	m.record(capturedExec{args: m.args, env: m.env, dir: m.dir})
 	return nil
 }
 func (m *mockCmdHelper) Start() error {
+	if m.err != nil {
+		return m.err
+	}
 	m.record(capturedExec{args: m.args, env: m.env, dir: m.dir})
 	return nil
 }
-func (m *mockCmdHelper) Wait() error { return nil }
-func (m *mockCmdHelper) Output() ([]byte, error) { return nil, nil }
+func (m *mockCmdHelper) Wait() error                        { return nil }
+func (m *mockCmdHelper) Output() ([]byte, error)            { return nil, nil }
 func (m *mockCmdHelper) StdoutPipe() (io.ReadCloser, error) { return nil, nil }
 func (m *mockCmdHelper) StderrPipe() (io.ReadCloser, error) { return nil, nil }
-func (m *mockCmdHelper) SetEnv(env []string) { m.env = env }
-func (m *mockCmdHelper) SetDir(dir string) { m.dir = dir }
+func (m *mockCmdHelper) SetEnv(env []string)                { m.env = env }
+func (m *mockCmdHelper) SetDir(dir string)                  { m.dir = dir }

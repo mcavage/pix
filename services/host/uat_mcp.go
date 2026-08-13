@@ -59,10 +59,10 @@ func runUatMcp(args []string) error {
 	leaseAdapter := uat.NewRealLease(*state, execAdapter)
 
 	runner := uat.NewRunner(*repo, *state, gitAdapter, execAdapter, sandboxAdapter, mcpAdapter, imageAdapter, leaseAdapter, 1)
-	runner.RetryCleanups()
+	retryReport := runner.RetryCleanups()
 	browserFactory := uat.NewRealBrowserFactory()
 
-	mcpServer := uat.NewMCPServer(runner, browserFactory, *state, os.Stdin, os.Stdout)
+	mcpServer := uat.NewMCPServer(runner, browserFactory, *state, os.Stdin, os.Stdout, retryReport)
 	if err := mcpServer.Serve(context.Background()); err != nil {
 		return fmt.Errorf("uat-mcp server failed: %w", err)
 	}

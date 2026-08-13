@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"pix/host/workflow/uat"
 )
@@ -138,15 +140,22 @@ func TestMCPServer_EndToEnd(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			in := bytes.NewBufferString(tt.req + "\n")
-			var out bytes.Buffer
-			server := uat.NewMCPServer(runner, bf, stateDir, in, &out)
+			out := &safeBuffer{}
+			server := uat.NewMCPServer(runner, bf, stateDir, in, out, nil)
 
 			err := server.Serve(context.Background())
 			if err != nil {
 				t.Fatalf("Serve error: %v", err)
 			}
 
-			res := out.String()
+			var res string
+			for i := 0; i < 50; i++ {
+				res = out.String()
+				if tt.expectSubstr == "" || strings.Contains(res, tt.expectSubstr) {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
 			if tt.expectSubstr == "" {
 				if res != "" {
 					t.Errorf("expected no output, got %q", res)
@@ -168,4 +177,20 @@ func TestMCPServer_EndToEnd(t *testing.T) {
 			}
 		})
 	}
+}
+
+type safeBuffer struct {
+	bytes.Buffer
+	sync.Mutex
+}
+
+func (s *safeBuffer) Write(p []byte) (n int, err error) {
+	s.Lock()
+	defer s.Unlock()
+	return s.Buffer.Write(p)
+}
+func (s *safeBuffer) String() string {
+	s.Lock()
+	defer s.Unlock()
+	return s.Buffer.String()
 }

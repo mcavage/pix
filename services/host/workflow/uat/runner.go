@@ -42,17 +42,23 @@ type Runner struct {
 	buildSem chan struct{}
 }
 
-func (r *Runner) RetryCleanups() {
+func (r *Runner) RetryCleanups() map[string]string {
+	report := make(map[string]string)
 	entries, err := os.ReadDir(filepath.Join(r.stateDir, "leases"))
 	if err != nil {
-		return
+		return report
 	}
 	for _, entry := range entries {
 		if entry.IsDir() {
 			runID := entry.Name()
-			_ = r.lease.Cleanup(context.Background(), runID)
+			if err := r.lease.Cleanup(context.Background(), runID); err != nil {
+				report[runID] = err.Error()
+			} else {
+				report[runID] = "success"
+			}
 		}
 	}
+	return report
 }
 
 type runContext struct {
