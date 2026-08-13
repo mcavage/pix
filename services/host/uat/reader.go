@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -34,25 +33,9 @@ func ReadArtifact(root, path string, maxSize int64, tailLines int, cursor int64)
 		return nil, 0, errors.New("path escapes root")
 	}
 
-	curr := absRoot
-	parts := strings.Split(rel, string(filepath.Separator))
-	for _, part := range parts {
-		if part == "" {
-			continue
-		}
-		curr = filepath.Join(curr, part)
-		info, err := os.Lstat(curr)
-		if err != nil {
-			return nil, 0, fmt.Errorf("failed to stat component %s: %w", part, err)
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return nil, 0, fmt.Errorf("symlink encountered at component: %s", part)
-		}
-	}
-
-	f, err := os.OpenFile(fullPath, os.O_RDONLY, 0)
+	f, err := openSafeNoSymlink(absRoot, rel)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to open file: %w", err)
+		return nil, 0, fmt.Errorf("failed to open file safely: %w", err)
 	}
 	defer f.Close()
 

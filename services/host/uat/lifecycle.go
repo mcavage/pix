@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"pix/host/hostenv"
-	"pix/host/sys"
 )
 
 type Registration struct {
@@ -18,8 +17,8 @@ type Registration struct {
 	MCPName   string `json:"mcp_name"`
 }
 
-func stateDir(env sys.Getenver, fs sys.FS) (string, error) {
-	if srv, ok := env.(interface{ StateDir() (string, error) }); ok {
+func StateDir(env hostenv.Env) (string, error) {
+	if srv, ok := env.System.(interface{ StateDir() (string, error) }); ok {
 		d, err := srv.StateDir()
 		if err != nil {
 			return "", err
@@ -30,11 +29,22 @@ func stateDir(env sys.Getenver, fs sys.FS) (string, error) {
 }
 
 func ReadRegistration(env hostenv.Env, sandboxName string) (*Registration, error) {
-	dir, err := stateDir(env, env)
+	dir, err := StateDir(env)
 	if err != nil {
 		return nil, err
 	}
 	path := filepath.Join(dir, sandboxName+".json")
+
+	if info, err := os.Lstat(path); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("registration file %s cannot be a symlink", path)
+		}
+	} else if os.IsNotExist(err) {
+		return nil, nil
+	} else {
+		return nil, err
+	}
+
 	data, err := env.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -50,7 +60,7 @@ func ReadRegistration(env hostenv.Env, sandboxName string) (*Registration, error
 }
 
 func WriteRegistration(env hostenv.Env, sandboxName string, rec *Registration) error {
-	dir, err := stateDir(env, env)
+	dir, err := StateDir(env)
 	if err != nil {
 		return err
 	}
@@ -63,7 +73,7 @@ func WriteRegistration(env hostenv.Env, sandboxName string, rec *Registration) e
 }
 
 func DeleteRegistration(env hostenv.Env, sandboxName string) error {
-	dir, err := stateDir(env, env)
+	dir, err := StateDir(env)
 	if err != nil {
 		return err
 	}
@@ -76,7 +86,9 @@ func DeleteRegistration(env hostenv.Env, sandboxName string) error {
 
 func GenerateSessionID() string {
 	b := make([]byte, 4)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
 	return hex.EncodeToString(b)
 }
 
@@ -91,29 +103,40 @@ func RegisterMCP(env hostenv.Env, rec *Registration, repoPath, statePath string)
 	}
 	args := planner.PlanRegistrationAdd(rec.MCPName)
 	out, err := env.Run("sbx", args...)
-	if err != nil && !strings.Contains(out, "already exists") { // Ignore if it exists maybe? No, we should fail if it fails.
+	if err != nil {
 		return fmt.Errorf("sbx mcp add failed: %v, output: %s", err, out)
 	}
 	return nil
+}
+
+func hasMCPExact(out, mcpName string) bool {
+	lines := strings.Split(out, "\n")
+	for _, line := range lines {
+		parts := strings.Fields(line)
+		if len(parts) > 0 && parts[0] == mcpName {
+			return true
+		}
+	}
+	return false
 }
 
 func UnregisterMCP(env hostenv.Env, mcpName string) error {
 	// First check if it exists using ls
 	out, err := env.Run("sbx", "mcp", "ls")
 	if err != nil {
-		return err // Or ignore?
+		return err
 	}
-	if !strings.Contains(out, mcpName) {
+	if !hasMCPExact(out, mcpName) {
 		// Not there, considered absent
 		return nil
 	}
-	out, err = env.Run("sbx", "mcp", "rm", mcpName)
+	out, err = env.Run("sbx", "mcp", "rm", "--", mcpName)
 	if err != nil {
 		return fmt.Errorf("sbx mcp rm failed: %v, output: %s", err, out)
 	}
 	// Confirm absent
 	out, err = env.Run("sbx", "mcp", "ls")
-	if err == nil && strings.Contains(out, mcpName) {
+	if err == nil && hasMCPExact(out, mcpName) {
 		return fmt.Errorf("sbx mcp rm succeeded but %s is still in ls", mcpName)
 	}
 	return nil

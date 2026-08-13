@@ -2,6 +2,7 @@ package uat
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"sync"
 	"time"
@@ -61,6 +62,8 @@ func (e *EventLog) Append(evt Event) error {
 }
 
 func (e *EventLog) ReadSince(cursor int64) ([]Event, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	// basic implementation
 	b, err := os.ReadFile(e.path)
 	if err != nil {
@@ -86,6 +89,8 @@ func (e *EventLog) ReadSince(cursor int64) ([]Event, error) {
 			if evt.ID > cursor {
 				events = append(events, evt)
 			}
+		} else {
+			return nil, fmt.Errorf("malformed event log JSON: %w", err)
 		}
 	}
 	return events, nil

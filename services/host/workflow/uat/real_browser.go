@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 )
@@ -58,18 +59,22 @@ func (f *realFactory) NewContext(ctx context.Context, runID string, initialURL *
 		if policy == nil {
 			return
 		}
-		if evReq, ok := ev.(*network.EventRequestWillBeSent); ok {
+		if evReq, ok := ev.(*fetch.EventRequestPaused); ok {
 			u := evReq.Request.URL
 			if strings.HasPrefix(u, "about:") || strings.HasPrefix(u, "data:") {
+				go chromedp.Run(c, fetch.ContinueRequest(evReq.RequestID))
 				return
 			}
 			if _, err := policy.Validate(u); err != nil {
+				go chromedp.Run(c, fetch.FailRequest(evReq.RequestID, network.ErrorReasonAccessDenied))
 				cancelCtx()
+			} else {
+				go chromedp.Run(c, fetch.ContinueRequest(evReq.RequestID))
 			}
 		}
 	})
 
-	if err := chromedp.Run(c, chromedp.Navigate(initialURL.String())); err != nil {
+	if err := chromedp.Run(c, fetch.Enable(), chromedp.Navigate(initialURL.String())); err != nil {
 		cancelCtx()
 		cancelAlloc()
 		return nil, err
@@ -94,6 +99,10 @@ func (f *realFactory) NewOAuthContext(ctx context.Context, initialURL *url.URL, 
 		return nil, err
 	}
 
+	// serialize OAuth use with a host lock
+	ProfileLock.Lock()
+	defer ProfileLock.Unlock()
+
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.ExecPath(bin),
 		chromedp.Flag("headless", false), // non-headless for OAuth
@@ -107,18 +116,22 @@ func (f *realFactory) NewOAuthContext(ctx context.Context, initialURL *url.URL, 
 		if policy == nil {
 			return
 		}
-		if evReq, ok := ev.(*network.EventRequestWillBeSent); ok {
+		if evReq, ok := ev.(*fetch.EventRequestPaused); ok {
 			u := evReq.Request.URL
 			if strings.HasPrefix(u, "about:") || strings.HasPrefix(u, "data:") {
+				go chromedp.Run(c, fetch.ContinueRequest(evReq.RequestID))
 				return
 			}
 			if _, err := policy.Validate(u); err != nil {
+				go chromedp.Run(c, fetch.FailRequest(evReq.RequestID, network.ErrorReasonAccessDenied))
 				cancelCtx()
+			} else {
+				go chromedp.Run(c, fetch.ContinueRequest(evReq.RequestID))
 			}
 		}
 	})
 
-	if err := chromedp.Run(c, chromedp.Navigate(initialURL.String())); err != nil {
+	if err := chromedp.Run(c, fetch.Enable(), chromedp.Navigate(initialURL.String())); err != nil {
 		cancelCtx()
 		cancelAlloc()
 		return nil, err
@@ -189,11 +202,12 @@ func (b *realBrowser) Click(ctx context.Context, refID string) error {
 	if !ok {
 		return fmt.Errorf("invalid or unknown ref ID: %s", refID)
 	}
+	// Clear click refs on action that might navigate
+	b.clickables = make(map[string]ClickableRef)
 	return chromedp.Run(b.ctx, chromedp.Click(fmt.Sprintf("[data-uat-ref='%s']", ref.ID), chromedp.ByQuery))
 }
 
 func (b *realBrowser) WaitForURL(ctx context.Context, expectedURL *url.URL) error {
-	expected := expectedURL.String()
 	// Polling for URL
 	deadline := time.Now().Add(10 * time.Second)
 	if dl, ok := ctx.Deadline(); ok {
@@ -202,7 +216,10 @@ func (b *realBrowser) WaitForURL(ctx context.Context, expectedURL *url.URL) erro
 	for time.Now().Before(deadline) {
 		var u string
 		if err := chromedp.Run(b.ctx, chromedp.Evaluate("window.location.href", &u)); err == nil {
-			if strings.HasPrefix(u, expected) {
+			parsedU, parseErr := url.Parse(u)
+			if parseErr == nil && parsedU.String() == expectedURL.String() {
+				// Clear clickables on navigation
+				b.clickables = make(map[string]ClickableRef)
 				return nil
 			}
 		}

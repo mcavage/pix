@@ -411,17 +411,10 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	var uatRec *uat.Registration
 	if creating && o.Dev {
 		id := uat.GenerateSessionID()
+		// Make MCPName strictly pix-uat-ID to avoid length issues if o.Name is long
 		uatRec = &uat.Registration{
 			SessionID: id,
-			MCPName:   "pix-uat-" + o.Name + "-" + id,
-		}
-		if err := uat.WriteRegistration(defaultShellEnv(), o.Name, uatRec); err != nil {
-			return runFail(d, 1, "failed to record UAT session: %v", err)
-		}
-		uatState, _ := defaultShellEnv().StateDir()
-		if err := uat.RegisterMCP(defaultShellEnv(), uatRec, o.DevRoot, filepath.Join(uatState, "uat")); err != nil {
-			_ = uat.DeleteRegistration(defaultShellEnv(), o.Name)
-			return runFail(d, 1, "failed to register UAT MCP: %v", err)
+			MCPName:   "pix-uat-" + id,
 		}
 		o.StaticMCP = composeStaticMCP(o.StaticMCP, nil, []string{uatRec.MCPName})
 	} else {
@@ -429,6 +422,7 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		rec, err := uat.ReadRegistration(defaultShellEnv(), o.Name)
 		if err == nil && rec != nil {
 			o.StaticMCP = composeStaticMCP(o.StaticMCP, nil, []string{rec.MCPName})
+			uatRec = rec
 		}
 	}
 
@@ -494,6 +488,25 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	if perr != nil {
 		return runFail(d, 1, "could not build trusted host state: %v", perr)
 	}
+
+	if creating && o.Dev && uatRec != nil {
+		if err := uat.WriteRegistration(defaultShellEnv(), o.Name, uatRec); err != nil {
+			return runFail(d, 1, "failed to record UAT session: %v", err)
+		}
+		uatState, _ := defaultShellEnv().StateDir()
+		if err := uat.RegisterMCP(defaultShellEnv(), uatRec, o.DevRoot, filepath.Join(uatState, "uat")); err != nil {
+			_ = uat.DeleteRegistration(defaultShellEnv(), o.Name)
+			return runFail(d, 1, "failed to register UAT MCP: %v", err)
+		}
+	}
+
+	launched := false
+	defer func() {
+		if !launched && creating && o.Dev && uatRec != nil {
+			_ = uat.UnregisterMCP(defaultShellEnv(), uatRec.MCPName)
+			_ = uat.DeleteRegistration(defaultShellEnv(), o.Name)
+		}
+	}()
 
 	if os.Getenv("PIX_DEBUG") != "" {
 		fmt.Fprintln(d.Err, "+ sbx "+strings.Join(args, " "))

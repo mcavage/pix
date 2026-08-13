@@ -42,6 +42,19 @@ type Runner struct {
 	buildSem chan struct{}
 }
 
+func (r *Runner) RetryCleanups() {
+	entries, err := os.ReadDir(filepath.Join(r.stateDir, "leases"))
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			runID := entry.Name()
+			_ = r.lease.Cleanup(context.Background(), runID)
+		}
+	}
+}
+
 type runContext struct {
 	cancel context.CancelFunc
 }
@@ -96,7 +109,9 @@ func (r *Runner) Submit(ctx context.Context, req SubmitRequest) (*SubmitResponse
 	}
 
 	b := make([]byte, 4)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		return nil, fmt.Errorf("generate id: %w", err)
+	}
 	runID := fmt.Sprintf("run-%s-%s", time.Now().Format("20060102-150405"), hex.EncodeToString(b))
 
 	runDir := filepath.Join(r.stateDir, "runs", runID)
@@ -118,6 +133,9 @@ func (r *Runner) Submit(ctx context.Context, req SubmitRequest) (*SubmitResponse
 	timeoutDur, _ := time.ParseDuration(scenario.Timeout)
 	if timeoutDur == 0 {
 		timeoutDur = 10 * time.Minute
+	}
+	if timeoutDur > 60*time.Minute {
+		timeoutDur = 60 * time.Minute
 	}
 	runCtx, cancel := context.WithTimeout(context.Background(), timeoutDur)
 

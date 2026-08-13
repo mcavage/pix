@@ -25,7 +25,7 @@ func NewRealGit(repoPath string, e Exec) Git {
 }
 
 func (g *realGit) ResolveCommit(ctx context.Context, commit string) (string, error) {
-	cmd := g.exec.CommandContext(ctx, "git", "-C", g.repoPath, "rev-parse", "--verify", commit+"^{commit}")
+	cmd := g.exec.CommandContext(ctx, "git", "-C", g.repoPath, "rev-parse", "--verify", "--", commit+"^{commit}")
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("resolve commit: %w", err)
@@ -42,7 +42,7 @@ func (g *realGit) ReadTreeFile(ctx context.Context, commit, path string) ([]byte
 		return nil, errors.New("path escapes root")
 	}
 	target := fmt.Sprintf("%s:%s", commit, clean)
-	cmd := g.exec.CommandContext(ctx, "git", "-C", g.repoPath, "show", target)
+	cmd := g.exec.CommandContext(ctx, "git", "-C", g.repoPath, "show", "--", target)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("read tree file: %w", err)
@@ -56,7 +56,7 @@ func (g *realGit) Clone(ctx context.Context, commit, destPath string) error {
 	if err := cmd.Run(); err != nil {
 		return err
 	}
-	cmd2 := g.exec.CommandContext(ctx, "git", "-C", destPath, "checkout", commit)
+	cmd2 := g.exec.CommandContext(ctx, "git", "-C", destPath, "checkout", "--", commit)
 	return cmd2.Run()
 }
 
@@ -107,12 +107,12 @@ func (m *realMCP) Add(ctx context.Context, name string, argv []string) error {
 }
 
 func (m *realMCP) Auth(ctx context.Context, name string) error {
-	cmd := m.exec.CommandContext(ctx, "sbx", "mcp", "auth", name)
+	cmd := m.exec.CommandContext(ctx, "sbx", "mcp", "auth", "--", name)
 	return cmd.Run()
 }
 
 func (m *realMCP) Status(ctx context.Context, name string) (string, error) {
-	cmd := m.exec.CommandContext(ctx, "sbx", "mcp", "status", name)
+	cmd := m.exec.CommandContext(ctx, "sbx", "mcp", "status", "--", name)
 	out, err := cmd.Output()
 	if err != nil {
 		return "", err
@@ -121,7 +121,7 @@ func (m *realMCP) Status(ctx context.Context, name string) (string, error) {
 }
 
 func (m *realMCP) Remove(ctx context.Context, name string) error {
-	cmd := m.exec.CommandContext(ctx, "sbx", "mcp", "rm", name)
+	cmd := m.exec.CommandContext(ctx, "sbx", "mcp", "rm", "--", name)
 	return cmd.Run()
 }
 
@@ -130,12 +130,12 @@ type realImage struct{}
 func NewRealImage() Image { return &realImage{} }
 
 func (i *realImage) Load(ctx context.Context, tag, workspacePath string) error {
-	cmd := exec.CommandContext(ctx, "sbx", "template", "load", tag, workspacePath)
+	cmd := exec.CommandContext(ctx, "sbx", "template", "load", "--", tag, workspacePath)
 	return cmd.Run()
 }
 
 func (i *realImage) Probe(ctx context.Context, tag string) error {
-	cmd := exec.CommandContext(ctx, "docker", "image", "inspect", tag)
+	cmd := exec.CommandContext(ctx, "docker", "image", "inspect", "--", tag)
 	return cmd.Run()
 }
 
@@ -188,7 +188,7 @@ func (l *realLease) Cleanup(ctx context.Context, runID string) error {
 	var errs []error
 	for _, ent := range entries {
 		res := ent.Name()
-		if !strings.HasPrefix(res, "mcp_") && !strings.HasPrefix(res, "sandbox_") {
+		if !strings.HasPrefix(res, "mcp_") && !strings.HasPrefix(res, "sandbox_") && !strings.HasPrefix(res, "image_") {
 			errs = append(errs, fmt.Errorf("refusing foreign lease name: %s", res))
 			continue
 		}
@@ -196,14 +196,17 @@ func (l *realLease) Cleanup(ctx context.Context, runID string) error {
 		var cleanupErr error
 		if strings.HasPrefix(res, "mcp_") {
 			name := strings.TrimPrefix(res, "mcp_")
-			cleanupErr = exec.CommandContext(ctx, "sbx", "mcp", "rm", name).Run()
+			cleanupErr = exec.CommandContext(ctx, "sbx", "mcp", "rm", "--", name).Run()
 		} else if strings.HasPrefix(res, "sandbox_") {
 			name := strings.TrimPrefix(res, "sandbox_")
-			if argv, planErr := sandbox.PlanForceRemove(name); planErr == nil {
+			if argv, planErr := sandbox.PlanForceRemove("pix-uat-" + name); planErr == nil {
 				cleanupErr = exec.CommandContext(ctx, "sbx", argv...).Run()
 			} else {
 				cleanupErr = planErr
 			}
+		} else if strings.HasPrefix(res, "image_") {
+			tag := strings.TrimPrefix(res, "image_")
+			cleanupErr = exec.CommandContext(ctx, "docker", "image", "rm", "-f", "--", tag).Run()
 		}
 
 		if cleanupErr != nil {
@@ -219,6 +222,9 @@ func (l *realLease) Cleanup(ctx context.Context, runID string) error {
 	if len(errs) > 0 {
 		return fmt.Errorf("cleanup errors: %v", errs)
 	}
+
+	tempProfileDir := filepath.Join(l.stateDir, "uat", "browser", "temp", runID)
+	_ = os.RemoveAll(tempProfileDir)
 
 	return os.Remove(dir)
 }

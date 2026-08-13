@@ -40,8 +40,10 @@ func (r *Runner) executeAsync(ctx context.Context, runID, commit string, scenari
 			}(),
 		})
 
-		// Best effort idempotent cleanup of leased resources
-		_ = r.lease.Cleanup(context.Background(), runID)
+		cleanupErr := r.lease.Cleanup(context.Background(), runID)
+		if cleanupErr != nil {
+			_ = evLog.Append(Event{Type: EventStatus, State: "cleanup_fail", Message: cleanupErr.Error()})
+		}
 
 		r.mu.Lock()
 		delete(r.activeRuns, runID)
@@ -117,12 +119,15 @@ func (r *Runner) executeStep(ctx context.Context, runID, commit string, step uat
 		return r.sandbox.Remove(ctx, runID)
 	case "image_load":
 		tag := extractStringMap(step.With, "tag")
+		if err := r.lease.Acquire(ctx, runID, "image:"+tag); err != nil {
+			return err
+		}
 		return r.image.Load(ctx, tag, r.repoPath)
 	case "image_probe":
 		tag := extractStringMap(step.With, "tag")
 		return r.image.Probe(ctx, tag)
 	case "clone":
-		dest := extractStringMap(step.With, "dest")
+		dest := filepath.Join(r.stateDir, "runs", runID, "repo")
 		return r.git.Clone(ctx, commit, dest)
 	case "build":
 		select {
@@ -131,7 +136,10 @@ func (r *Runner) executeStep(ctx context.Context, runID, commit string, step uat
 		case <-ctx.Done():
 			return ctx.Err()
 		}
-		cmd := r.exec.CommandContext(ctx, "docker", "build", "-t", "pix:uat-"+runID, r.repoPath)
+		dest := filepath.Join(r.stateDir, "runs", runID, "repo")
+		// Document residual Dockerfile container risk: Dockerfile instructions run in a container,
+		// so there is still a risk of malicious container breakout or resource abuse during build.
+		cmd := r.exec.CommandContext(ctx, "docker", "build", "-t", "pix:uat-"+runID, "--", dest)
 		return cmd.Run()
 	case "check":
 		// named check

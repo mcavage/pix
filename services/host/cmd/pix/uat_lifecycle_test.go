@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -11,8 +12,13 @@ import (
 )
 
 func TestUATLifecycle_CreateDev(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "pix-test-uat-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
 	var cmds []string
-	fsMap := make(map[string]string)
 
 	var mcpList string
 	sys := &systest.Fake{
@@ -31,17 +37,17 @@ func TestUATLifecycle_CreateDev(t *testing.T) {
 			return "", nil
 		},
 		WriteFileFn: func(path string, data []byte, perm os.FileMode) error {
-			fsMap[path] = string(data)
-			return nil
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				return err
+			}
+			return os.WriteFile(path, data, perm)
 		},
 		ReadFileFn: func(path string) (string, error) {
-			if v, ok := fsMap[path]; ok {
-				return v, nil
-			}
-			return "", os.ErrNotExist
+			b, err := os.ReadFile(path)
+			return string(b), err
 		},
 		StateDirFn: func() (string, error) {
-			return "/state", nil
+			return tmpDir, nil
 		},
 	}
 	env := hostenv.Env{System: sys, HostBinary: func() (string, error) { return "/bin/pix-host", nil }}
@@ -49,13 +55,16 @@ func TestUATLifecycle_CreateDev(t *testing.T) {
 	// Creating Dev:
 	id := uat.GenerateSessionID()
 	rec := &uat.Registration{SessionID: id, MCPName: "pix-uat-test-" + id}
-	uat.WriteRegistration(env, "test", rec)
+	if err := uat.WriteRegistration(env, "test", rec); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
-	if len(fsMap) == 0 {
+	b, _ := os.ReadFile(filepath.Join(tmpDir, "uat", "test.json"))
+	if len(b) == 0 {
 		t.Error("expected state to be written")
 	}
 
-	err := uat.RegisterMCP(env, rec, "/repo", "/state/uat")
+	err = uat.RegisterMCP(env, rec, "/repo", filepath.Join(tmpDir, "uat"))
 	if err != nil {
 		t.Error(err)
 	}

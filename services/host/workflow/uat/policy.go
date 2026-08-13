@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 
 	"pix/host/config"
 )
@@ -15,6 +16,8 @@ var OAuthOrigins = map[string]bool{
 	"gitlab.com":          true,
 	"accounts.google.com": true,
 }
+
+var ProfileLock sync.Mutex
 
 func ProfilePath() (string, error) {
 	state, err := config.StateDir()

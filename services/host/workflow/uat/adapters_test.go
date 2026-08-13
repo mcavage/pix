@@ -26,10 +26,13 @@ func (f *fakeCmd) StderrPipe() (io.ReadCloser, error) { return nil, nil }
 func TestAdapters_GitShowArgv(t *testing.T) {
 	ce := &captureExec{}
 	g := NewRealGit("/repo", ce)
-	_, _ = g.ReadTreeFile(context.Background(), "abc1234", "dir/file.txt")
+	_, err := g.ReadTreeFile(context.Background(), "abc1234", "dir/file.txt")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	joined := strings.Join(ce.lastArgs, " ")
-	expected := "git -C /repo show abc1234:dir/file.txt"
+	expected := "git -C /repo show -- abc1234:dir/file.txt"
 	if joined != expected {
 		t.Errorf("expected %q, got %q", expected, joined)
 	}
@@ -38,7 +41,10 @@ func TestAdapters_GitShowArgv(t *testing.T) {
 func TestAdapters_MCPAddArgv(t *testing.T) {
 	ce := &captureExec{}
 	m := NewRealMCP(ce)
-	_ = m.Add(context.Background(), "my-mcp", []string{"mcp", "add", "my-mcp", "--command", "host"})
+	err := m.Add(context.Background(), "my-mcp", []string{"mcp", "add", "my-mcp", "--command", "host"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	joined := strings.Join(ce.lastArgs, " ")
 	expected := "sbx mcp add my-mcp --command host"

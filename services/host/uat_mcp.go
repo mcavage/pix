@@ -59,6 +59,7 @@ func runUatMcp(args []string) error {
 	leaseAdapter := uat.NewRealLease(*state)
 
 	runner := uat.NewRunner(*repo, *state, gitAdapter, execAdapter, sandboxAdapter, mcpAdapter, imageAdapter, leaseAdapter, 1)
+	runner.RetryCleanups()
 	browserFactory := uat.NewRealBrowserFactory()
 
 	mcpServer := uat.NewMCPServer(runner, browserFactory, *state, os.Stdin, os.Stdout)

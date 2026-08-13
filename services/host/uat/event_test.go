@@ -120,7 +120,10 @@ func TestEventStore_Validation(t *testing.T) {
 
 	// Malformed
 	os.Truncate(tmpFile, 0)
-	f, _ = os.OpenFile(tmpFile, os.O_WRONLY, 0600)
+	f, err = os.OpenFile(tmpFile, os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatalf("failed to open file: %v", err)
+	}
 	f.WriteString("malformed" + "\n")
 	f.Close()
 	_, err = store.Append("t", []byte(`{}`))
