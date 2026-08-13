@@ -385,7 +385,7 @@ func (s *MCPServer) handleToolCall(ctx context.Context, id interface{}, params j
 				err = e
 			} else {
 				respMap := map[string]interface{}{
-					"dom_length": len(snap.DOM),
+					"dom_length":      len(snap.DOM),
 					"screenshot_size": len(snap.Screenshot),
 				}
 				respBytes, _ := json.Marshal(respMap)
@@ -415,7 +415,7 @@ func (s *MCPServer) handleToolCall(ctx context.Context, id interface{}, params j
 
 	case "uat_abort":
 		runID := getString("run_id")
-		
+
 		if runID == "" {
 			err = fmt.Errorf("missing run_id")
 			break

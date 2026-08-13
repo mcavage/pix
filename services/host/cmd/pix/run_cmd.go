@@ -28,6 +28,7 @@ import (
 	"pix/host/sandbox"
 	"pix/host/secret"
 	"pix/host/service"
+	"pix/host/uat"
 	"pix/host/workflow/doctor"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/pack"
@@ -407,6 +408,30 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		o.StaticMCP = composeStaticMCP(o.StaticMCP, cfg.MCP, o.MCP)
 	}
 
+	var uatRec *uat.Registration
+	if creating && o.Dev {
+		id := uat.GenerateSessionID()
+		uatRec = &uat.Registration{
+			SessionID: id,
+			MCPName:   "pix-uat-" + o.Name + "-" + id,
+		}
+		if err := uat.WriteRegistration(defaultShellEnv(), o.Name, uatRec); err != nil {
+			return runFail(d, 1, "failed to record UAT session: %v", err)
+		}
+		uatState, _ := defaultShellEnv().StateDir()
+		if err := uat.RegisterMCP(defaultShellEnv(), uatRec, o.DevRoot, filepath.Join(uatState, "uat")); err != nil {
+			_ = uat.DeleteRegistration(defaultShellEnv(), o.Name)
+			return runFail(d, 1, "failed to register UAT MCP: %v", err)
+		}
+		o.StaticMCP = composeStaticMCP(o.StaticMCP, nil, []string{uatRec.MCPName})
+	} else {
+		// Attach reconstructs without mutation
+		rec, err := uat.ReadRegistration(defaultShellEnv(), o.Name)
+		if err == nil && rec != nil {
+			o.StaticMCP = composeStaticMCP(o.StaticMCP, nil, []string{rec.MCPName})
+		}
+	}
+
 	plan := launch.PlanSandboxLaunch(state, cfg, o, version)
 	if plan.Err != nil {
 		// Fail closed BEFORE any output claims a create or attach is happening,
@@ -509,6 +534,10 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		},
 	}
 	if xerr := launch.RunSession(spec, deps); xerr != nil {
+		if creating && o.Dev && uatRec != nil {
+			_ = uat.UnregisterMCP(defaultShellEnv(), uatRec.MCPName)
+			_ = uat.DeleteRegistration(defaultShellEnv(), o.Name)
+		}
 		var refused *launch.SessionRefused
 		if errors.As(xerr, &refused) {
 			// Decided under the lifecycle lock, before anything started: no create, no

@@ -55,6 +55,7 @@ import (
 	"pix/host/hostenv"
 	"pix/host/lease"
 	"pix/host/sandbox"
+	"pix/host/uat"
 )
 
 // The teardown budget, as three bounds that compose to one ceiling:
@@ -170,6 +171,17 @@ func TeardownSandbox(env hostenv.Env, key, name string, trigger TeardownTrigger,
 	o := opts.withDefaults()
 	res := decideTeardown(env, key, name, trigger, o)
 	res.Sandbox, res.Key, res.Trigger = name, key, trigger
+
+	if res.Removed() {
+		if uatRec, err := uat.ReadRegistration(env, name); err == nil && uatRec != nil {
+			if uerr := uat.UnregisterMCP(env, uatRec.MCPName); uerr == nil {
+				_ = uat.DeleteRegistration(env, name)
+			} else {
+				// Cleanup failure retains state, visible for retry.
+			}
+		}
+	}
+
 	if err := appendTeardownJournal(o, res); err != nil {
 		// A journal that cannot be written must not change what happened to the
 		// sandbox; it is reported through the result so the caller can warn.
