@@ -312,6 +312,7 @@ func (m *realMCP) Auth(ctx context.Context, runID string, name string) (err erro
 	policy := &OAuthPolicy{
 		Provider:    provider,
 		LeasedPorts: []int{port},
+		Resolver:    &realResolver{},
 	}
 	_, parseErr := policy.Validate(ctx, authURL.String())
 	if parseErr != nil {

@@ -23,7 +23,7 @@ func TestBrowserPolicyHandler(t *testing.T) {
 		activeOrigin: initialURL,
 	}
 
-	policy := &OAuthPolicy{Provider: ProviderGitHub}
+	policy := &OAuthPolicy{Provider: ProviderGitHub, Resolver: &realResolver{}}
 
 	type actionRec struct {
 		id string
@@ -91,7 +91,7 @@ func TestBuildNavigateActions(t *testing.T) {
 	}
 
 	// Test non-nil policy (e.g. OAuth)
-	actionsPolicy := buildNavigateActions(&OAuthPolicy{}, "https://github.com/login")
+	actionsPolicy := buildNavigateActions(&OAuthPolicy{Resolver: &realResolver{}}, "https://github.com/login")
 	if len(actionsPolicy) != 2 {
 		t.Errorf("expected 2 actions for non-nil policy, got %d", len(actionsPolicy))
 	}
@@ -117,7 +117,7 @@ func TestBrowserAllocatorArgv(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	b, err := factory.NewContext(ctx, "testrun1", valU, &PublicLinkPolicy{})
+	b, err := factory.NewContext(ctx, "testrun1", valU, &PublicLinkPolicy{Resolver: &realResolver{}})
 	if b != nil {
 		defer b.Close()
 	}

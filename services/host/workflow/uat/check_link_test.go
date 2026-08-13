@@ -7,7 +7,7 @@ import (
 )
 
 func TestCheckLink(t *testing.T) {
-	policy := &OAuthPolicy{LeasedPorts: []int{8080}}
+	policy := &OAuthPolicy{LeasedPorts: []int{8080}, Resolver: &realResolver{}}
 	cfg := CheckLinkConfig{Policy: policy}
 
 	tests := []struct {

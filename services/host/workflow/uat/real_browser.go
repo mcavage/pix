@@ -173,8 +173,11 @@ type realBrowser struct {
 	ctx         context.Context
 	cancelCtx   context.CancelFunc
 	cancelAlloc context.CancelFunc
-	clickables  map[string]ClickableRef
-	unlock      func()
+
+	clickablesMu sync.Mutex
+	clickables   map[string]ClickableRef
+
+	unlock func()
 
 	policyErrMu sync.Mutex
 	policyErr   error
@@ -277,7 +280,7 @@ func validateSubresource(ctx context.Context, rawURL string, activeOrigin *url.U
 		}
 
 		if p.Resolver == nil {
-			p.Resolver = &realResolver{}
+			return fmt.Errorf("OAuthPolicy.Resolver not initialized")
 		}
 		ips, err := p.Resolver.LookupIPAddr(ctx, host)
 		if err != nil || len(ips) == 0 {
@@ -333,7 +336,9 @@ func (b *realBrowser) Snapshot(ctx context.Context) (*Snapshot, error) {
 		text, _ := m["text"].(string)
 		clickables[id] = ClickableRef{ID: id, Tag: tag, Text: text}
 	}
+	b.clickablesMu.Lock()
 	b.clickables = clickables
+	b.clickablesMu.Unlock()
 
 	return &Snapshot{
 		DOM:        html,
@@ -346,12 +351,16 @@ func (b *realBrowser) Click(ctx context.Context, refID string) error {
 	if err := b.getPolicyErr(); err != nil {
 		return err
 	}
+	b.clickablesMu.Lock()
 	ref, ok := b.clickables[refID]
+	if ok {
+		// Clear click refs on action that might navigate
+		b.clickables = make(map[string]ClickableRef)
+	}
+	b.clickablesMu.Unlock()
 	if !ok {
 		return fmt.Errorf("invalid or unknown ref ID: %s", refID)
 	}
-	// Clear click refs on action that might navigate
-	b.clickables = make(map[string]ClickableRef)
 	return chromedp.Run(b.ctx, chromedp.Click(fmt.Sprintf("[data-uat-ref='%s']", ref.ID), chromedp.ByQuery))
 }
 
@@ -378,7 +387,9 @@ func (b *realBrowser) WaitForURL(ctx context.Context, expectedURL *url.URL) erro
 					parsedU.User == nil &&
 					parsedU.Fragment == "" {
 					// Clear clickables on navigation
+					b.clickablesMu.Lock()
 					b.clickables = make(map[string]ClickableRef)
+					b.clickablesMu.Unlock()
 					return nil
 				}
 			}
