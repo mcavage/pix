@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"syscall"
 )
 
 type Event struct {
@@ -76,10 +75,10 @@ func (s *EventStore) Append(eventType string, data []byte) (int, error) {
 	defer f.Close()
 
 	// Lock the file for cross-process safety
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+	if err := lockFile(f.Fd()); err != nil {
 		return 0, err
 	}
-	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	defer unlockFile(f.Fd())
 
 	// Validate existing content and find last sequence
 	decoder := json.NewDecoder(f)

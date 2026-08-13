@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"pix/host/sandbox"
@@ -194,15 +193,24 @@ func (m *realMCP) Auth(ctx context.Context, runID string, name string) (err erro
 		waitErrCh <- cmd.Wait()
 	}()
 
+	var waitErr error
+	var waitDone bool
+	var returnedFromWait bool
+
 	defer func() {
-		if err != nil {
+		if !waitDone {
 			cancelCmd()
-			waitErr := <-waitErrCh
+			waitErr = <-waitErrCh
+			waitDone = true
+		}
+		if returnedFromWait {
+			return
+		}
+		if err != nil {
 			if waitErr != nil {
 				err = fmt.Errorf("%w (reap status: %v)", err, waitErr)
 			}
 		} else {
-			waitErr := <-waitErrCh
 			if waitErr != nil {
 				err = fmt.Errorf("sbx mcp auth failed: %w", waitErr)
 			}
@@ -215,23 +223,39 @@ func (m *realMCP) Auth(ctx context.Context, runID string, name string) (err erro
 	defer cancel()
 
 	var rawURL string
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
 	for {
-		if captureCtx.Err() != nil {
+		select {
+		case wErr := <-waitErrCh:
+			waitErr = wErr
+			waitDone = true
+			if wErr != nil {
+				returnedFromWait = true
+				return fmt.Errorf("sbx mcp auth failed before capture: %w", wErr)
+			}
+			urlStr, _ := readCaptureFileNoFollow(capturePath)
+			if urlStr != "" {
+				rawURL = urlStr
+				os.Remove(capturePath)
+				break
+			}
+			returnedFromWait = true
+			return fmt.Errorf("%w: sbx exited without writing capture URL", ErrIncomplete)
+		case <-captureCtx.Done():
 			return fmt.Errorf("%w: browser capture timeout (sbx ignored BROWSER shim - check host bootstrap)", ErrIncomplete)
-		}
-		// Open with O_NOFOLLOW to avoid symlink attacks, read bounded
-		f, errF := os.OpenFile(capturePath, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
-		if errF == nil {
-			data := make([]byte, 8192)
-			n, _ := f.Read(data)
-			f.Close()
-			if n > 0 {
-				rawURL = string(data[:n])
+		case <-ticker.C:
+			urlStr, _ := readCaptureFileNoFollow(capturePath)
+			if urlStr != "" {
+				rawURL = urlStr
 				os.Remove(capturePath)
 				break
 			}
 		}
-		time.Sleep(100 * time.Millisecond)
+		if rawURL != "" {
+			break
+		}
 	}
 
 	// Parse auth URL and its percent-decoded redirect_uri

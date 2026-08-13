@@ -176,21 +176,26 @@ type authCaptureExec struct {
 
 func (c *authCaptureExec) CommandContext(ctx context.Context, name string, args ...string) ExecCmd {
 	c.cmds = append(c.cmds, append([]string{name}, args...))
-	return &authFakeCmd{exec: c}
+	return &authFakeCmd{exec: c, waitCh: make(chan error, 1)}
 }
 
 type authFakeCmd struct {
 	exec *authCaptureExec
+	waitCh chan error
 }
 
 func (f *authFakeCmd) Run() error { return nil }
 func (f *authFakeCmd) Start() error {
 	if f.exec.waitFunc != nil {
-		go f.exec.waitFunc()
+		go func() {
+			f.waitCh <- f.exec.waitFunc()
+		}()
+	} else {
+		f.waitCh <- nil
 	}
 	return nil
 }
-func (f *authFakeCmd) Wait() error                        { return nil }
+func (f *authFakeCmd) Wait() error { return <-f.waitCh }
 func (f *authFakeCmd) Output() ([]byte, error)            { return nil, nil }
 func (f *authFakeCmd) StdoutPipe() (io.ReadCloser, error) { return nil, nil }
 func (f *authFakeCmd) StderrPipe() (io.ReadCloser, error) { return nil, nil }
@@ -265,14 +270,14 @@ func TestAdapters_MCPAuthCaptureTimeout(t *testing.T) {
 
 	m := NewRealMCP(pixHost, stateDir, ce, factory)
 
-	// Simulate sbx ignoring BROWSER and not writing to capture path
-	ce.waitFunc = func() error {
-		// Do nothing, wait for context to cancel
-		return nil
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
+
+	// Simulate sbx ignoring BROWSER and not writing to capture path but hanging open
+	ce.waitFunc = func() error {
+		<-ctx.Done()
+		return nil
+	}
 
 	err := m.Auth(ctx, runID, "some-mcp")
 	if err == nil {
@@ -283,6 +288,74 @@ func TestAdapters_MCPAuthCaptureTimeout(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "host bootstrap") {
 		t.Errorf("expected host bootstrap evidence, got %v", err)
+	}
+}
+
+func TestAdapters_MCPAuthExitZeroBeforeCapture(t *testing.T) {
+	stateDir := t.TempDir()
+	runID := "testrun-auth-exitzero"
+
+	pixHost := filepath.Join(stateDir, "fake-pix-host")
+	os.WriteFile(pixHost, []byte("#!/bin/sh\n"), 0755)
+
+	factory := &mockBrowserFactory{}
+	ce := &authCaptureExec{}
+
+	m := NewRealMCP(pixHost, stateDir, ce, factory)
+
+	// Make it exit 0 instantly but NO capture written
+	ce.waitFunc = func() error {
+		return nil
+	}
+
+	// NO timeout here
+	ctx := context.Background()
+
+	err := m.Auth(ctx, runID, "some-mcp")
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+
+	if !errors.Is(err, ErrIncomplete) {
+		t.Errorf("expected ErrIncomplete, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "exited without writing capture") {
+		t.Errorf("expected exited without writing capture message, got %v", err)
+	}
+}
+
+func TestAdapters_MCPAuthExitBeforeCapture(t *testing.T) {
+	stateDir := t.TempDir()
+	runID := "testrun-auth-exit"
+
+	pixHost := filepath.Join(stateDir, "fake-pix-host")
+	os.WriteFile(pixHost, []byte("#!/bin/sh\n"), 0755)
+
+	factory := &mockBrowserFactory{}
+	ce := &authCaptureExec{}
+
+	m := NewRealMCP(pixHost, stateDir, ce, factory)
+
+	exitErr := errors.New("simulated sbx failure")
+	// Make it fail instantly
+	ce.waitFunc = func() error {
+		return exitErr
+	}
+
+	// NO timeout here, proving it doesn't wait 30 seconds
+	ctx := context.Background()
+
+	err := m.Auth(ctx, runID, "some-mcp")
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+
+	// Should contain the simulated error
+	if !strings.Contains(err.Error(), "simulated sbx failure") {
+		t.Errorf("expected simulated failure, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "failed before capture") {
+		t.Errorf("expected failed before capture message, got %v", err)
 	}
 }
 
