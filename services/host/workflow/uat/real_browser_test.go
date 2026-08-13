@@ -170,3 +170,46 @@ func TestOAuthBrowserCloseIdempotent(t *testing.T) {
 	defer ProfileLock.Unlock()
 	b.Close() // Should do nothing because of sync.Once
 }
+
+func TestOAuthBrowserPanicRecovery(t *testing.T) {
+	// Provide a fake chrome so findChrome doesn't fail before locking
+	tmpDir := t.TempDir()
+	fakeBin := filepath.Join(tmpDir, "fake-chrome")
+	os.WriteFile(fakeBin, []byte("#!/bin/sh\nexit 1\n"), 0755)
+	os.Setenv("PIX_CHROME_BIN", fakeBin)
+	defer os.Unsetenv("PIX_CHROME_BIN")
+
+	factory := NewRealBrowserFactory()
+
+	// Cause a nil pointer dereference panic after lock is acquired
+	// initialURL.URL is nil, but initialURL.ResolvedIP is set
+	// This will panic at initialURL.URL.Hostname()
+	valU := &ValidatedURL{
+		URL:        nil,
+		ResolvedIP: "1.2.3.4",
+	}
+
+	func() {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatal("expected panic, got none")
+			}
+		}()
+		_, _ = factory.NewOAuthContext(context.Background(), valU, nil)
+	}()
+
+	// If the lock was not released by the deferred unlock(), this will deadlock
+	acquired := make(chan struct{})
+	go func() {
+		ProfileLock.Lock()
+		ProfileLock.Unlock()
+		close(acquired)
+	}()
+
+	select {
+	case <-acquired:
+		// success, the lock was released during the panic!
+	case <-time.After(1 * time.Second):
+		t.Fatal("ProfileLock deadlocked after constructor panic")
+	}
+}

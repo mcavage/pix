@@ -43,4 +43,15 @@ func TestReadCaptureFileNoFollow_Unix(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for missing file, got nil")
 	}
+
+	// Test read error (directory)
+	dirPath := filepath.Join(tmpDir, "dir")
+	err = os.Mkdir(dirPath, 0755)
+	if err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+	_, err = readCaptureFileNoFollow(dirPath)
+	if err == nil {
+		t.Error("expected error when reading a directory, got nil")
+	}
 }

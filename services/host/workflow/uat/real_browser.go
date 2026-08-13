@@ -114,8 +114,9 @@ func (f *realFactory) NewOAuthContext(ctx context.Context, initialURL *Validated
 			ProfileLock.Unlock()
 		})
 	}
+	handedOff := false
 	defer func() {
-		if err != nil {
+		if !handedOff {
 			unlock()
 		}
 	}()
@@ -157,6 +158,7 @@ func (f *realFactory) NewOAuthContext(ctx context.Context, initialURL *Validated
 		return nil, err
 	}
 
+	handedOff = true
 	return &realBrowser{
 		ctx:         c,
 		cancelCtx:   cancelCtx,

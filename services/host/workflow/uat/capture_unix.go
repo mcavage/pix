@@ -3,6 +3,7 @@
 package uat
 
 import (
+	"io"
 	"os"
 	"syscall"
 )
@@ -15,7 +16,10 @@ func readCaptureFileNoFollow(path string) (string, error) {
 	defer f.Close()
 
 	data := make([]byte, 8192)
-	n, _ := f.Read(data)
+	n, err := f.Read(data)
+	if err != nil && err != io.EOF {
+		return "", err
+	}
 	if n > 0 {
 		return string(data[:n]), nil
 	}
