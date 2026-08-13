@@ -8,6 +8,7 @@ package service
 
 import (
 	"bytes"
+	"context"
 	_ "embed"
 	"encoding/xml"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"text/template"
 	"time"
 
@@ -352,9 +354,31 @@ func RunUninstall(out, errW io.Writer, argv []string) error {
 	return runManagedVerb("uninstall", argv, out, errW, func() error { return platformServeUninstall(out) })
 }
 
+// ctlTimeout bounds every service-control child. A VARIABLE so a test can
+// shrink it; nothing else may write it.
+var ctlTimeout = 20 * time.Second
+
 // realCmdRunner is the concrete exec shim; the argv sequences around it are what
 // the tests prove.
+//
+// BOUNDED, deliberately. `launchctl kickstart -k` kills the running daemon and
+// waits for it to die, so a `pix-host serve` that is itself wedged shutting down
+// takes the caller with it — and the caller is `propagateConfig`, a post-commit
+// side effect whose whole contract is to warn and move on. `pix pack use` hung
+// there with nothing printed after registration.
+//
+// WaitDelay matters as much as the deadline: without it, killing the child
+// still leaves CombinedOutput blocked on a pipe an inherited grandchild holds
+// open, which is the same hang wearing a different hat.
 func realCmdRunner(name string, args ...string) (string, error) {
-	out, err := exec.Command(name, args...).CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), ctlTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.WaitDelay = 2 * time.Second
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return string(out), fmt.Errorf("`%s %s` did not finish within %s",
+			name, strings.Join(args, " "), ctlTimeout)
+	}
 	return string(out), err
 }

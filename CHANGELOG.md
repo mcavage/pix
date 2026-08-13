@@ -161,6 +161,18 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`pix pack use` could hang forever after registering, printing nothing.**
+  Two unbounded waits, both in the post-commit side effects — the one part of
+  that command explicitly allowed to fail with a note rather than take the
+  terminal with it. The cross-process flock (`sys.Lock`) was a plain blocking
+  `LOCK_EX`, so a lock another pix process held or leaked stopped the wrapper
+  refresh dead; it now polls `LOCK_NB` to a 30s deadline and fails with an error
+  naming the lock file, while ordinary contention still acquires as before. And
+  every service-control child (`launchctl kickstart -k`, which kills the daemon
+  and waits for it to die) now runs under a 20s budget with a `WaitDelay`, so a
+  `pix-host serve` wedged in shutdown produces the "could not restart the
+  managed pix service — restart it manually" warning `PropagateConfig` always
+  had ready and could never reach.
 - **`pix setup --pack` could be deadlocked by the pack it was setting up.**
   Registering the pack's MCP servers is adoption's last post-commit step, and a
   server whose host command is not installed yet cannot be registered — which is
