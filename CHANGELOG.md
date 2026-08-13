@@ -161,6 +161,19 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`TypeError: Math.sumPrecise is not a function`, repeatedly, in any session
+  that read a PDF.** pi reads PDFs through `unpdf`, which bundles a pdf.js
+  recent enough to call `Math.sumPrecise` when summing glyph and font-table
+  sizes; the sandbox runs Node v25.9, whose V8 does not expose it (and does not
+  behind `--harmony` either). `unpdf` is installed at RUNTIME into
+  `~/.pi/agent/npm`, so the build-time patching used for pi-manage-todo-list
+  cannot reach it — the fix is `extensions/math-sum-precise.ts`, which supplies
+  the method at pi startup, before any PDF is opened, and never replaces a
+  native implementation. Neumaier compensation, so the integer sums pdf.js
+  actually does are exact; non-finite inputs are tallied rather than summed,
+  because feeding an infinity through the compensation term returns NaN where
+  the real method returns Infinity.
+
 - **`pix ls` says who is holding a sandbox.** A new HELD BY column reads the
   live-reference lock — `session` when a `pix` process on this host is still
   attached, `—` when
