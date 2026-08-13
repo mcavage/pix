@@ -48,14 +48,6 @@ const (
 	MCPNoneConfigured = "none configured"
 )
 
-// MCPHostTrustNotice is the two-fact disclosure for local command/container
-// MCP servers: they run on the host, OUTSIDE sandbox isolation, with the
-// user's own privileges, and anything they return can end up in the
-// conversation sent to the model provider. It lives next to the probe that
-// knows whether any are configured, and it is printed by the doctor renderer
-// whenever at least one is.
-const MCPHostTrustNotice = "Note: local/container MCP servers run on the host, outside the sandbox, with your host-user privileges. Content they return can be included in the conversation sent to your model provider. Details: SECURITY.md."
-
 // MCPServer is one configured MCP server, already CLASSIFIED by the caller.
 //
 // RegisterFix is empty when the caller could not establish what kind of

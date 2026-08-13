@@ -212,16 +212,4 @@ func RenderDoctorWith(w io.Writer, s Snapshot, o DoctorOpts) {
 			}
 		}
 	}
-	if usesMCP(s) {
-		fmt.Fprintf(w, "\n%s\n", MCPHostTrustNotice)
-	}
-}
-
-// usesMCP reports whether this host has any MCP server configured, which is
-// the gate on the host-trust disclosure. A host that configured none has
-// taken no such risk, and telling it about one anyway is how a report teaches
-// its reader to skim the footer.
-func usesMCP(s Snapshot) bool {
-	r, ok := s.Find("mcp")
-	return ok && r.Detail != MCPNoneConfigured
 }

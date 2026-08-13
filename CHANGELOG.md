@@ -161,6 +161,14 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`pix doctor` no longer prints the MCP host-trust footer.** It appeared on
+  every run, and a paragraph a user reads once and then skims forever is not a
+  control — it is the thing that teaches people to stop reading the bottom of
+  the report. The property is unchanged and still documented in `SECURITY.md`:
+  local and container MCP servers run on the host, outside the sandbox, with
+  your privileges, and what they return can reach your model provider. The
+  constant, its render, and the tests pinning it to that surface are removed;
+  the gworkspace skill's own disclosure is untouched.
 - **`pix doctor`'s launchd row said `✓ agent loaded` about an agent that could
   never start.** Loaded and able-to-start are different questions and it only
   asked the first, so the one surface that could have named the stale-plist bug
