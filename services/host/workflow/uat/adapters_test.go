@@ -66,7 +66,7 @@ func TestAdapters_Integration(t *testing.T) {
 	}
 
 	repoPath := t.TempDir()
-	
+
 	runGit := func(dir string, args ...string) {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
@@ -78,7 +78,7 @@ func TestAdapters_Integration(t *testing.T) {
 	runGit(repoPath, "init")
 	runGit(repoPath, "config", "user.name", "test")
 	runGit(repoPath, "config", "user.email", "test@test.com")
-	
+
 	err := os.WriteFile(filepath.Join(repoPath, "hello.txt"), []byte("world\n"), 0644)
 	if err != nil {
 		t.Fatal(err)
@@ -88,7 +88,7 @@ func TestAdapters_Integration(t *testing.T) {
 	runGit(repoPath, "commit", "-m", "init")
 
 	g := NewRealGit(repoPath, nil)
-	
+
 	// Test ResolveCommit(HEAD)
 	headSHA, err := g.ResolveCommit(context.Background(), "HEAD")
 	if err != nil {
@@ -114,7 +114,7 @@ func TestAdapters_Integration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Clone failed: %v", err)
 	}
-	
+
 	cmd := exec.Command("git", "rev-parse", "HEAD")
 	cmd.Dir = destPath
 	out, err := cmd.CombinedOutput()

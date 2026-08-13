@@ -53,14 +53,14 @@ func TestURLPolicy(t *testing.T) {
 		{"https://gitlab.com/oauth/authorize", false},
 		{"http://localhost:8080/callback", false},
 		{"http://127.0.0.1:9090/callback", false},
-		{"https://evil.com/login", true},             // not in registry
-		{"http://localhost:8081/callback", true},     // port not leased
-		{"http://localhost/callback", true},          // no port
-		{"http://192.168.1.1:8080/callback", true},   // not localhost
-		{"https://github.com/login#hash", true},      // fragment not allowed
-		{"https://user@github.com/login", true}, // userinfo not allowed
-		{"file:///etc/passwd", true},                 // scheme not allowed
-		{"chrome://settings", true},                  // scheme not allowed
+		{"https://evil.com/login", true},           // not in registry
+		{"http://localhost:8081/callback", true},   // port not leased
+		{"http://localhost/callback", true},        // no port
+		{"http://192.168.1.1:8080/callback", true}, // not localhost
+		{"https://github.com/login#hash", true},    // fragment not allowed
+		{"https://user@github.com/login", true},    // userinfo not allowed
+		{"file:///etc/passwd", true},               // scheme not allowed
+		{"chrome://settings", true},                // scheme not allowed
 	}
 
 	for _, tt := range tests {
