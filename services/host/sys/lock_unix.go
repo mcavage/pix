@@ -22,6 +22,18 @@ var flockWait = 30 * time.Second
 // ordinary contention is invisible, long enough not to spin a core.
 const flockPoll = 25 * time.Millisecond
 
+// flockNoticeAfter is how long a wait may stay silent. Past this, a blank
+// terminal is indistinguishable from a hang — which is the confusion that made
+// the unbounded version so expensive to diagnose in the first place. Bounding
+// the wait fixed the hang; SAYING SO is what makes the wait legible. A VARIABLE
+// so a test can shrink it; nothing else may write it.
+var flockNoticeAfter = time.Second
+
+// flockNotice announces a wait that has gone on long enough to look like
+// nothing is happening. Stderr, because it is progress about the command rather
+// than the command's output, and a VARIABLE so tests are not noisy.
+var flockNotice = func(msg string) { fmt.Fprintln(os.Stderr, msg) }
+
 // withFlock takes an advisory exclusive lock on lockPath for the duration of fn:
 // every caller serializes a short section it must actually perform.
 //
@@ -57,7 +69,9 @@ func withFlock(lockPath string, fn func() error) error {
 // a goroutine plus a select — leaks that goroutine for as long as the holder
 // lives, still holding the fd.
 func acquireFlock(f *os.File, budget time.Duration) error {
-	deadline := time.Now().Add(budget)
+	start := time.Now()
+	deadline := start.Add(budget)
+	announced := false
 	for {
 		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 		if err == nil {
@@ -65,6 +79,10 @@ func acquireFlock(f *os.File, budget time.Duration) error {
 		}
 		if err != syscall.EWOULDBLOCK {
 			return fmt.Errorf("acquire lock %s: %w", f.Name(), err)
+		}
+		if !announced && time.Since(start) >= flockNoticeAfter {
+			announced = true
+			flockNotice(fmt.Sprintf("waiting for another pix process to finish (lock: %s)…", f.Name()))
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("timed out after %s waiting for the lock %s — another pix process is holding it "+

@@ -104,3 +104,53 @@ func TestLock_ReportsTheCriticalSectionsOwnError(t *testing.T) {
 		t.Errorf("Lock returned %v, want the section's own error", got)
 	}
 }
+
+// TestLock_SaysItIsWaiting: a bounded wait that prints nothing is still
+// indistinguishable from a hang, which is the confusion that made the
+// unbounded version expensive to diagnose. Ten silent seconds during a real
+// `pix setup` is what prompted this: the command was fine, and there was no way
+// to know that from the terminal.
+func TestLock_SaysItIsWaiting(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "noisy.lock")
+	holder, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	if err := syscall.Flock(int(holder.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Flock(int(holder.Fd()), syscall.LOCK_UN)
+
+	prevWait, prevNotice, prevAfter := flockWait, flockNotice, flockNoticeAfter
+	var said []string
+	flockWait, flockNoticeAfter = 300*time.Millisecond, 50*time.Millisecond
+	flockNotice = func(m string) { said = append(said, m) }
+	defer func() { flockWait, flockNotice, flockNoticeAfter = prevWait, prevNotice, prevAfter }()
+
+	_ = Lock(path, func() error { return nil })
+
+	if len(said) != 1 {
+		t.Fatalf("expected exactly one waiting notice, got %d: %v", len(said), said)
+	}
+	if !strings.Contains(said[0], path) {
+		t.Errorf("the notice must name the lock, got %q", said[0])
+	}
+}
+
+// TestLock_SaysNothingWhenTheLockIsFree: the notice is for a wait, not for
+// every lock. An uncontended section must stay silent, or every pix command
+// grows a line of noise.
+func TestLock_SaysNothingWhenTheLockIsFree(t *testing.T) {
+	prev := flockNotice
+	var said []string
+	flockNotice = func(m string) { said = append(said, m) }
+	defer func() { flockNotice = prev }()
+
+	if err := Lock(filepath.Join(t.TempDir(), "quiet.lock"), func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(said) != 0 {
+		t.Errorf("an uncontended lock must say nothing, got %v", said)
+	}
+}

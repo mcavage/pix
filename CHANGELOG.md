@@ -172,7 +172,11 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   and waits for it to die) now runs under a 20s budget with a `WaitDelay`, so a
   `pix-host serve` wedged in shutdown produces the "could not restart the
   managed pix service — restart it manually" warning `PropagateConfig` always
-  had ready and could never reach.
+  had ready and could never reach. A wait that lasts more than a second also
+  SAYS so now (`waiting for another pix process to finish (lock: …)`), because a
+  bounded wait that prints nothing is still indistinguishable from a hang — a
+  real `pix setup` sat silent for ten seconds while working correctly. An
+  uncontended lock stays quiet.
 - **`pix setup --pack` could be deadlocked by the pack it was setting up.**
   Registering the pack's MCP servers is adoption's last post-commit step, and a
   server whose host command is not installed yet cannot be registered — which is
