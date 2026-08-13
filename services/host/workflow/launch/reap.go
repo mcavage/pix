@@ -44,6 +44,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -443,7 +444,24 @@ func teardownJournalPath() (string, error) {
 // signal — it only serializes a fast local read-modify-write, the same
 // posture as lease's keepGuardTimeout — so a short, fixed bound is correct:
 // a caller stuck longer than this is stuck on something else entirely.
-const teardownJournalGuardTimeout = 2 * time.Second
+//
+// 2s was too tight for the CONTENTION this actually sees. A non-blocking poll
+// has no queue: 40 concurrent appenders (the shape the test exercises, and the
+// shape a sweep plus several session exits produce) all retry on the same
+// cadence, collide, and retry again, so the unluckiest writer can starve while
+// the file is never held for more than a moment. It failed exactly that way on
+// a loaded CI runner while passing on every developer laptop.
+const teardownJournalGuardTimeout = 15 * time.Second
+
+// journalGuardPoll is the retry cadence, and journalGuardJitter breaks the
+// lockstep that makes polling starve. Without jitter every waiter wakes on the
+// same 5ms boundary and the same loser loses repeatedly; with it, the retries
+// spread out and the queue drains. This is the fix — the longer budget above
+// only buys headroom for a pathological case.
+const (
+	journalGuardPoll   = 5 * time.Millisecond
+	journalGuardJitter = 4 * time.Millisecond
+)
 
 // withTeardownJournalGuard serializes the journal's read-modify-write across
 // PROCESSES: an orphan sweep and a session's own teardown are frequently two
@@ -476,7 +494,7 @@ func withTeardownJournalGuard(path string, fn func() error) error {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("launch: timed out waiting for the teardown journal lock at %s (another teardown is writing it)", lockPath)
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(journalGuardPoll + time.Duration(rand.Int64N(int64(journalGuardJitter))))
 	}
 	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 	return fn()
