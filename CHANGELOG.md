@@ -173,6 +173,12 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   actually does are exact; non-finite inputs are tallied rather than summed,
   because feeding an infinity through the compensation term returns NaN where
   the real method returns Infinity.
+  This also fixes the font warnings that FOLLOW it (`Cannot substitute the font
+  because of its name: DAAA+Gallix-Bold`), which look unrelated and are not:
+  the failing calls are in pdf.js's font writer, so a thrown TypeError there
+  makes it fall back to substitution, and a subsetted name (the `DAAA+` prefix)
+  matches no standard font, so that fails too. Measured on the real image
+  against a real PDF: six warnings without the polyfill, zero with it.
 
 - **`pix ls` says who is holding a sandbox.** A new HELD BY column reads the
   live-reference lock — `session` when a `pix` process on this host is still
