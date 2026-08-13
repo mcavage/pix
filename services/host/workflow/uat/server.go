@@ -103,11 +103,14 @@ type MCPServer struct {
 	in             io.Reader
 	out            io.Writer
 	outMu          sync.Mutex
+	done           bool
 
 	browsersMu sync.Mutex
 	browsers   map[string]Browser
 
 	retryReport map[string]string
+
+	ShutdownTimeout time.Duration
 }
 
 func NewMCPServer(runner *Runner, bf BrowserFactory, stateDir string, in io.Reader, out io.Writer, retryReport map[string]string) *MCPServer {
@@ -119,6 +122,7 @@ func NewMCPServer(runner *Runner, bf BrowserFactory, stateDir string, in io.Read
 		out:            out,
 		browsers:       make(map[string]Browser),
 		retryReport:    retryReport,
+		ShutdownTimeout: 5 * time.Second,
 	}
 }
 
@@ -226,8 +230,8 @@ func (s *MCPServer) Serve(ctx context.Context) error {
 
 	select {
 	case <-waitCh:
-	case <-time.After(5 * time.Second):
-		<-waitCh
+	case <-time.After(s.ShutdownTimeout):
+		scanErr = fmt.Errorf("shutdown timeout: pending tool calls did not finish")
 	}
 
 	s.browsersMu.Lock()
@@ -235,6 +239,10 @@ func (s *MCPServer) Serve(ctx context.Context) error {
 		b.Close()
 	}
 	s.browsersMu.Unlock()
+
+	s.outMu.Lock()
+	s.done = true
+	s.outMu.Unlock()
 
 	return scanErr
 }
@@ -247,7 +255,9 @@ func (s *MCPServer) sendResponse(id interface{}, result interface{}) {
 	}
 	b, _ := json.Marshal(resp)
 	s.outMu.Lock()
-	fmt.Fprintf(s.out, "%s\n", b)
+	if !s.done {
+		fmt.Fprintf(s.out, "%s\n", b)
+	}
 	s.outMu.Unlock()
 }
 
@@ -262,7 +272,9 @@ func (s *MCPServer) sendError(id interface{}, code int, message string) {
 	}
 	b, _ := json.Marshal(resp)
 	s.outMu.Lock()
-	fmt.Fprintf(s.out, "%s\n", b)
+	if !s.done {
+		fmt.Fprintf(s.out, "%s\n", b)
+	}
 	s.outMu.Unlock()
 }
 

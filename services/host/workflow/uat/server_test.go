@@ -264,3 +264,81 @@ func TestMCPServer_EOF_CancelsInFlight(t *testing.T) {
 		t.Errorf("expected cancellation error in response, got: %s", outStr)
 	}
 }
+
+type stuckSandbox struct {
+	mockSandbox
+}
+
+func (s *stuckSandbox) Probe(ctx context.Context, runID string) error {
+	<-context.Background().Done() // Block forever unconditionally (ignore ctx cancel)
+	return nil
+}
+
+type stuckBrowserFactory struct {
+	mockBrowserFactory
+}
+
+type stuckBrowser struct {
+	mockBrowser
+}
+
+func (s *stuckBrowser) Snapshot(ctx context.Context) (*uat.Snapshot, error) {
+	// Block forever unconditionally
+	select {}
+}
+
+func (s *stuckBrowserFactory) NewContext(ctx context.Context, runID string, initialURL *uat.ValidatedURL, policy uat.URLValidator) (uat.Browser, error) {
+	return &stuckBrowser{}, nil
+}
+
+func TestMCPServer_ShutdownTimeout(t *testing.T) {
+	inReader, inWriter := io.Pipe()
+	var out bytes.Buffer
+
+	bf := &stuckBrowserFactory{}
+	mg := &mockGit{}
+	tmpDir := t.TempDir()
+	pixHost := filepath.Join(tmpDir, "pix-host")
+	os.WriteFile(pixHost, []byte(""), 0755)
+
+	runner, err := uat.NewRunner(pixHost, "/repo", tmpDir, mg, &mockExec{}, &stuckSandbox{}, &mockMCP{}, &mockImage{}, &mockLease{}, 1)
+	if err != nil {
+		t.Fatalf("NewRunner error: %v", err)
+	}
+
+	s := uat.NewMCPServer(runner, bf, "", inReader, &out, nil)
+	s.ShutdownTimeout = 10 * time.Millisecond
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.Serve(context.Background())
+	}()
+
+	// Send a stuck tool call
+	req := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"uat_browser_action","arguments":{"run_id":"run1","action":"snapshot"}}}` + "\n"
+	inWriter.Write([]byte(req))
+
+	// Wait a moment for it to start
+	time.Sleep(50 * time.Millisecond)
+
+	// Close stdin mid-call to trigger EOF
+	inWriter.Close()
+
+	// Measure time to exit
+	start := time.Now()
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Errorf("expected timeout error, got nil")
+		} else if !strings.Contains(err.Error(), "shutdown timeout") {
+			t.Errorf("expected shutdown timeout error, got %v", err)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("Serve did not exit quickly after EOF")
+	}
+
+	elapsed := time.Since(start)
+	if elapsed > 100*time.Millisecond {
+		t.Errorf("expected quick return after shutdown timeout, took %v", elapsed)
+	}
+}

@@ -124,67 +124,71 @@ func (r *Runner) executeCandidateSmoke(ctx context.Context, runID, commit string
 		case <-ctx.Done():
 			return ctx.Err()
 		}
+
 		cmd := r.exec.CommandContext(ctx, "docker", "build", "-t", "docker.io/mcavage/pix:"+res.ImageTag, "--", res.SourceDir)
-		return cmd.Run()
-	}()
-	if err != nil {
-		return fmt.Errorf("build image: %w", err)
-	}
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("build image: %w", err)
+		}
 
-	if err := os.MkdirAll(res.OutDir, 0755); err != nil {
-		return err
-	}
+		if err := os.MkdirAll(res.OutDir, 0755); err != nil {
+			return err
+		}
 
-	goVersion := "1.22"
-	goModPath := filepath.Join(res.SourceDir, "services", "host", "go.mod")
-	if b, err := os.ReadFile(goModPath); err == nil {
-		for _, line := range strings.Split(string(b), "\n") {
-			if strings.HasPrefix(line, "go ") {
-				goVersion = strings.TrimSpace(strings.TrimPrefix(line, "go "))
-				break
+		goVersion := "1.22"
+		goModPath := filepath.Join(res.SourceDir, "services", "host", "go.mod")
+		if b, err := os.ReadFile(goModPath); err == nil {
+			for _, line := range strings.Split(string(b), "\n") {
+				if strings.HasPrefix(line, "go ") {
+					goVersion = strings.TrimSpace(strings.TrimPrefix(line, "go "))
+					break
+				}
 			}
 		}
-	}
-	golangImage := fmt.Sprintf("golang:%s", goVersion)
+		golangImage := fmt.Sprintf("golang:%s", goVersion)
 
-	buildCandidatePixCmd := r.exec.CommandContext(ctx, "docker", "run", "--rm",
-		"-v", res.SourceDir+":/src",
-		"-v", res.OutDir+":/out",
-		"-w", "/src/services/host",
-		"-e", "CGO_ENABLED=0",
-		"-e", "GOOS=darwin",
-		golangImage,
-		"go", "build", "-o", "/out/pix", "./cmd/pix",
-	)
-	if err := buildCandidatePixCmd.Run(); err != nil {
-		return fmt.Errorf("build candidate pix: %w", err)
-	}
+		buildCandidatePixCmd := r.exec.CommandContext(ctx, "docker", "run", "--rm",
+			"-v", res.SourceDir+":/src",
+			"-v", res.OutDir+":/out",
+			"-w", "/src/services/host",
+			"-e", "CGO_ENABLED=0",
+			"-e", "GOOS=darwin",
+			golangImage,
+			"go", "build", "-o", "/out/pix", "./cmd/pix",
+		)
+		if err := buildCandidatePixCmd.Run(); err != nil {
+			return fmt.Errorf("build candidate pix: %w", err)
+		}
 
-	buildCandidateHostCmd := r.exec.CommandContext(ctx, "docker", "run", "--rm",
-		"-v", res.SourceDir+":/src",
-		"-v", res.OutDir+":/out",
-		"-w", "/src/services/host",
-		"-e", "CGO_ENABLED=0",
-		"-e", "GOOS=darwin",
-		golangImage,
-		"go", "build", "-o", "/out/pix-host", ".",
-	)
-	if err := buildCandidateHostCmd.Run(); err != nil {
-		return fmt.Errorf("build candidate pix-host: %w", err)
-	}
+		buildCandidateHostCmd := r.exec.CommandContext(ctx, "docker", "run", "--rm",
+			"-v", res.SourceDir+":/src",
+			"-v", res.OutDir+":/out",
+			"-w", "/src/services/host",
+			"-e", "CGO_ENABLED=0",
+			"-e", "GOOS=darwin",
+			golangImage,
+			"go", "build", "-o", "/out/pix-host", ".",
+		)
+		if err := buildCandidateHostCmd.Run(); err != nil {
+			return fmt.Errorf("build candidate pix-host: %w", err)
+		}
 
-	saveCmd := r.exec.CommandContext(ctx, "docker", "save", "docker.io/mcavage/pix:"+res.ImageTag, "-o", res.ImageTar)
-	if err := saveCmd.Run(); err != nil {
-		return fmt.Errorf("docker save: %w", err)
-	}
+		saveCmd := r.exec.CommandContext(ctx, "docker", "save", "docker.io/mcavage/pix:"+res.ImageTag, "-o", res.ImageTar)
+		if err := saveCmd.Run(); err != nil {
+			return fmt.Errorf("docker save: %w", err)
+		}
 
-	loadCmd := r.exec.CommandContext(ctx, "sbx", "template", "load", res.ImageTar)
-	if err := loadCmd.Run(); err != nil {
-		return fmt.Errorf("template load: %w", err)
-	}
+		loadCmd := r.exec.CommandContext(ctx, "sbx", "template", "load", res.ImageTar)
+		if err := loadCmd.Run(); err != nil {
+			return fmt.Errorf("template load: %w", err)
+		}
 
-	if err := r.image.Probe(ctx, "docker.io/mcavage/pix:"+res.ImageTag); err != nil {
-		return fmt.Errorf("image probe: %w", err)
+		if err := r.image.Probe(ctx, "docker.io/mcavage/pix:"+res.ImageTag); err != nil {
+			return fmt.Errorf("image probe: %w", err)
+		}
+		return nil
+	}()
+	if err != nil {
+		return err
 	}
 
 	if err := os.MkdirAll(res.FixtureDir, 0755); err != nil {

@@ -4,6 +4,8 @@ import (
 	"os"
 	"time"
 	"fmt"
+	"sync"
+	"strings"
 
 	"context"
 	"io"
@@ -46,15 +48,39 @@ func (m *mockGit) Clone(ctx context.Context, commit, dest string) error {
 	return nil
 }
 
-type mockExec struct{}
-
-func (m *mockExec) CommandContext(ctx context.Context, name string, args ...string) uat.ExecCmd {
-	return &mockCmd{}
+type mockExec struct {
+	mu           sync.Mutex
+	cmds         []*mockCmd
+	block        chan struct{}
 }
 
-type mockCmd struct{}
+func (m *mockExec) CommandContext(ctx context.Context, name string, args ...string) uat.ExecCmd {
+	cmd := &mockCmd{
+		exec: m,
+		name: name,
+		args: args,
+	}
+	m.mu.Lock()
+	m.cmds = append(m.cmds, cmd)
+	m.mu.Unlock()
+	return cmd
+}
 
-func (m *mockCmd) Run() error                         { return nil }
+type mockCmd struct {
+	exec *mockExec
+	name string
+	args []string
+}
+
+func (m *mockCmd) Run() error {
+	if m.exec != nil && m.exec.block != nil {
+		// Block template load
+		if m.name == "sbx" && len(m.args) > 1 && m.args[0] == "template" {
+			<-m.exec.block
+		}
+	}
+	return nil
+}
 func (m *mockCmd) Start() error                       { return nil }
 func (m *mockCmd) Wait() error                        { return nil }
 func (m *mockCmd) Output() ([]byte, error)            { return nil, nil }
@@ -493,5 +519,101 @@ func TestRunner_Janitor(t *testing.T) {
 	// Symlink is just skipped because it's not a dir.
 	if _, ok := report["janitor_symlink-run"]; ok {
 		t.Errorf("symlink-run should be completely ignored")
+	}
+}
+
+func TestRunner_CandidateBuildConcurrency(t *testing.T) {
+	stateDir := t.TempDir()
+	pixHost := filepath.Join(stateDir, "pix-host")
+	os.WriteFile(pixHost, []byte(""), 0755)
+
+	mg := &mockGit{
+		readTreeFile: func(ctx context.Context, commit, path string) ([]byte, error) {
+			return []byte("schema: pix.uat/1\nname: test\ntimeout: 1m\nsteps:\n  - id: smoke\n    do: candidate_smoke"), nil
+		},
+	}
+
+	block := make(chan struct{})
+	exec := &mockExec{block: block}
+
+	// Create runner with concurrency = 1 for builds
+	runner, err := uat.NewRunner(pixHost, "/repo", stateDir, mg, exec, &mockSandbox{}, &mockMCP{}, &mockImage{}, &mockLease{}, 1)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	// Submit Run 1
+	resp1, err := runner.Submit(context.Background(), uat.SubmitRequest{
+		Commit:       "main",
+		ScenarioPath: "test.yaml",
+	})
+	if err != nil {
+		t.Fatalf("Submit 1: %v", err)
+	}
+
+	// Wait for Run 1 to reach template load (which will block)
+	time.Sleep(500 * time.Millisecond)
+
+	// Submit Run 2
+	resp2, err := runner.Submit(context.Background(), uat.SubmitRequest{
+		Commit:       "main",
+		ScenarioPath: "test.yaml",
+	})
+	if err != nil {
+		t.Fatalf("Submit 2: %v", err)
+	}
+
+	// Wait a bit to ensure Run 2 had time to try entering the build section
+	time.Sleep(500 * time.Millisecond)
+
+	// Run 2's build image command should NOT have been issued yet
+	exec.mu.Lock()
+	var run1Builds, run2Builds int
+	for _, cmd := range exec.cmds {
+		if cmd.name == "docker" && len(cmd.args) > 1 && cmd.args[0] == "build" {
+			if strings.Contains(cmd.args[2], resp1.RunID) {
+				run1Builds++
+			}
+			if strings.Contains(cmd.args[2], resp2.RunID) {
+				run2Builds++
+			}
+		}
+	}
+	exec.mu.Unlock()
+
+	if run1Builds != 1 {
+		t.Errorf("Expected 1 docker build for Run 1, got %d", run1Builds)
+	}
+	if run2Builds != 0 {
+		t.Errorf("Expected 0 docker builds for Run 2 (should be blocked), got %d", run2Builds)
+	}
+
+	// Unblock Run 1's template load
+	close(block)
+
+	// Wait for both runs to finish
+	for {
+		s1, _ := runner.Status(context.Background(), uat.StatusRequest{RunID: resp1.RunID})
+		s2, _ := runner.Status(context.Background(), uat.StatusRequest{RunID: resp2.RunID})
+		if s1 != nil && s2 != nil && s1.State != "running" && s2.State != "running" {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// Now Run 2 should have completed its build
+	exec.mu.Lock()
+	run2Builds = 0
+	for _, cmd := range exec.cmds {
+		if cmd.name == "docker" && len(cmd.args) > 1 && cmd.args[0] == "build" {
+			if strings.Contains(cmd.args[2], resp2.RunID) {
+				run2Builds++
+			}
+		}
+	}
+	exec.mu.Unlock()
+
+	if run2Builds != 1 {
+		t.Errorf("Expected 1 docker build for Run 2 after unblocking, got %d", run2Builds)
 	}
 }
