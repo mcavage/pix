@@ -84,14 +84,14 @@ func runUatBrowserOpen(args []string) error {
 	runID := fs.String("run-id", "", "run id")
 	authURL := fs.String("auth-url", "", "auth URL")
 	callbackURL := fs.String("callback-url", "", "callback URL")
-	origin := fs.String("origin", "", "expected origin hostname")
+	providerStr := fs.String("provider", "", "oauth provider (github, gitlab, etc)")
 	outPath := fs.String("out", "", "output file path")
 
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	if *runID == "" || *authURL == "" || *callbackURL == "" || *origin == "" || *outPath == "" {
+	if *runID == "" || *authURL == "" || *callbackURL == "" || *providerStr == "" || *outPath == "" {
 		return fmt.Errorf("uat-browser-open: missing required arguments")
 	}
 
@@ -99,8 +99,8 @@ func runUatBrowserOpen(args []string) error {
 		RunID:       *runID,
 		AuthURL:     *authURL,
 		CallbackURL: *callbackURL,
-		Origin:      *origin,
-		Policy:      &uat.OAuthPolicy{LeasedPorts: []int{}},
+		Provider:    uat.OAuthProvider(*providerStr),
+		Policy:      &uat.OAuthPolicy{Provider: uat.OAuthProvider(*providerStr), LeasedPorts: []int{}},
 	}
 
 	factory := uat.NewRealBrowserFactory()

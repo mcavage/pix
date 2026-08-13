@@ -410,7 +410,10 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 
 	var uatRec *uat.Registration
 	if creating && o.Dev {
-		id := uat.GenerateSessionID()
+		id, err := uat.GenerateSessionID()
+		if err != nil {
+			return err
+		}
 		// Make MCPName strictly pix-uat-ID to avoid length issues if o.Name is long
 		uatRec = &uat.Registration{
 			SessionID: id,

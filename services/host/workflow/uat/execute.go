@@ -238,14 +238,13 @@ func (r *Runner) executeCandidateSmoke(ctx context.Context, runID, commit string
 			newEnv = append(newEnv, "DOCKER_CONFIG="+filepath.Join(hostHome, ".docker"))
 		}
 	}
-	newEnv = append(newEnv, 
+	newEnv = append(newEnv,
 		"HOME="+fakeHome,
 		"XDG_CONFIG_HOME="+fakeConfig,
 		"XDG_DATA_HOME="+fakeData,
 		"XDG_STATE_HOME="+fakeState,
 		"XDG_CACHE_HOME="+fakeCache,
 		"PIX_CONFIG="+pixConfigFile,
-		"PIX_UAT_RECURSION=1",
 	)
 
 	pixCmd.SetEnv(newEnv)

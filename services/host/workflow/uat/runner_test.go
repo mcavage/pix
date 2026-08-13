@@ -373,16 +373,6 @@ steps:
 			}
 		}
 
-		hasEnv := false
-		for _, e := range lastCmd.env {
-			if e == "PIX_UAT_RECURSION=1" {
-				hasEnv = true
-			}
-		}
-		if !hasEnv {
-			t.Errorf("expected PIX_UAT_RECURSION=1")
-		}
-
 		expectedDir := filepath.Join(stateDir, "runs", resp.RunID, "source")
 		if lastCmd.dir != expectedDir {
 			t.Errorf("expected dir %s, got %s", expectedDir, lastCmd.dir)

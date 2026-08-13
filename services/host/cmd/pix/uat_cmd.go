@@ -58,7 +58,7 @@ func (c *uatStatusCmd) Run(d *cli.Deps) error {
 		status.ChromePresent = true
 	}
 
-	if p, err := workflowUat.ProfilePath(); err == nil {
+	if p, err := workflowUat.PeekProfilePath(); err == nil {
 		if info, err := os.Stat(p); err == nil && info.IsDir() && info.Mode().Perm() == 0700 {
 			status.ProfilePresent = true
 		}

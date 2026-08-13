@@ -99,30 +99,66 @@ func TestTempProfilePath(t *testing.T) {
 }
 
 func TestOAuthPolicy(t *testing.T) {
-	policy := OAuthPolicy{LeasedPorts: []int{8080, 9090}}
+	policy := OAuthPolicy{Provider: ProviderGitHub, LeasedPorts: []int{8080, 9090}}
 
 	tests := []struct {
 		url     string
 		wantErr bool
 	}{
 		{"https://github.com/login/oauth/authorize?client_id=123", false},
-		{"https://gitlab.com/oauth/authorize", false},
 		{"http://localhost:8080/callback", false},
 		{"http://127.0.0.1:9090/callback", false},
-		{"https://evil.com/login", true},           // not in registry
-		{"http://localhost:8081/callback", true},   // port not leased
-		{"http://localhost/callback", true},        // no port
-		{"http://192.168.1.1:8080/callback", true}, // not localhost
-		{"https://github.com/login#hash", true},    // fragment not allowed
-		{"https://user@github.com/login", true},    // userinfo not allowed
-		{"file:///etc/passwd", true},               // scheme not allowed
-		{"chrome://settings", true},                // scheme not allowed
+		{"https://gitlab.com/oauth/authorize", true},       // provider mismatch (policy is github)
+		{"https://evil.com/login", true},                   // not in registry
+		{"http://localhost:8081/callback", true},           // port not leased
+		{"http://localhost/callback", true},                // no port
+		{"http://192.168.1.1:8080/callback", true},         // not localhost
+		{"https://github.com/login#hash", true},            // fragment not allowed
+		{"https://user@github.com/login", true},            // userinfo not allowed
+		{"file:///etc/passwd", true},                       // scheme not allowed
+		{"chrome://settings", true},                        // scheme not allowed
 	}
 
 	for _, tt := range tests {
 		_, err := policy.Validate(tt.url)
 		if (err != nil) != tt.wantErr {
-			t.Errorf("Validate(%q) error = %v, wantErr %v", tt.url, err, tt.wantErr)
+			t.Errorf("Validate(%q) with github provider error = %v, wantErr %v", tt.url, err, tt.wantErr)
 		}
+	}
+
+	// Test all providers
+	providers := []struct {
+		provider OAuthProvider
+		url      string
+	}{
+		{ProviderGitHub, "https://github.com/login"},
+		{ProviderGitLab, "https://gitlab.com/login"},
+		{ProviderGoogle, "https://accounts.google.com/o/oauth2/v2/auth"},
+		{ProviderNotion, "https://api.notion.com/v1/oauth/authorize"},
+		{ProviderNotion, "https://www.notion.so/install-integration"},
+		{ProviderNotion, "https://notion.so/install-integration"},
+		{ProviderAtlassian, "https://auth.atlassian.com/authorize"},
+		{ProviderAtlassian, "https://api.atlassian.com/oauth2/authorize"},
+		{ProviderGranola, "https://api.granola.so/oauth/authorize"},
+		{ProviderGranola, "https://auth.granola.so/login"},
+	}
+
+	for _, pt := range providers {
+		p := OAuthPolicy{Provider: pt.provider, LeasedPorts: []int{}}
+		if _, err := p.Validate(pt.url); err != nil {
+			t.Errorf("Validate(%q) for provider %q unexpected error: %v", pt.url, pt.provider, err)
+		}
+	}
+
+	// Test unknown refusal
+	p := OAuthPolicy{Provider: "unknown", LeasedPorts: []int{}}
+	if _, err := p.Validate("https://github.com/login"); err == nil {
+		t.Errorf("Expected error for unknown provider")
+	}
+
+	// Test empty provider refusal
+	pEmpty := OAuthPolicy{Provider: "", LeasedPorts: []int{}}
+	if _, err := pEmpty.Validate("https://github.com/login"); err == nil {
+		t.Errorf("Expected error for empty provider on https url")
 	}
 }

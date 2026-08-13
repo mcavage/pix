@@ -84,12 +84,12 @@ func DeleteRegistration(env hostenv.Env, sandboxName string) error {
 	return nil
 }
 
-func GenerateSessionID() string {
+func GenerateSessionID() (string, error) {
 	b := make([]byte, 4)
 	if _, err := rand.Read(b); err != nil {
-		panic(err)
+		return "", err
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b), nil
 }
 
 func RegisterMCP(env hostenv.Env, rec *Registration, repoPath, statePath string) error {

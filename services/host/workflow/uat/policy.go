@@ -12,13 +12,35 @@ import (
 	"pix/host/config"
 )
 
-var OAuthOrigins = map[string]bool{
-	"github.com":          true,
-	"gitlab.com":          true,
-	"accounts.google.com": true,
+type OAuthProvider string
+
+const (
+	ProviderGitHub    OAuthProvider = "github"
+	ProviderGitLab    OAuthProvider = "gitlab"
+	ProviderGoogle    OAuthProvider = "google"
+	ProviderNotion    OAuthProvider = "notion"
+	ProviderAtlassian OAuthProvider = "atlassian"
+	ProviderGranola   OAuthProvider = "granola"
+)
+
+var ProviderAuthHosts = map[OAuthProvider][]string{
+	ProviderGitHub:    {"github.com"},
+	ProviderGitLab:    {"gitlab.com"},
+	ProviderGoogle:    {"accounts.google.com"},
+	ProviderNotion:    {"api.notion.com", "www.notion.so", "notion.so"},
+	ProviderAtlassian: {"auth.atlassian.com", "api.atlassian.com"},
+	ProviderGranola:   {"api.granola.so", "app.granola.so", "auth.granola.so", "granola.so"},
 }
 
 var ProfileLock sync.Mutex
+
+func PeekProfilePath() (string, error) {
+	state, err := config.StateDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve state dir: %w", err)
+	}
+	return filepath.Join(state, "uat", "browser", "profile"), nil
+}
 
 func ProfilePath() (string, error) {
 	state, err := config.StateDir()
@@ -51,6 +73,7 @@ type URLValidator interface {
 }
 
 type OAuthPolicy struct {
+	Provider    OAuthProvider
 	LeasedPorts []int
 }
 
@@ -70,8 +93,19 @@ func (p *OAuthPolicy) Validate(rawURL string) (*url.URL, error) {
 
 	if u.Scheme == "https" {
 		host := u.Hostname()
-		if !OAuthOrigins[host] {
-			return nil, fmt.Errorf("origin %q not in OAuth registry", host)
+		if p.Provider != "" {
+			allowed := false
+			for _, h := range ProviderAuthHosts[p.Provider] {
+				if host == h {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				return nil, fmt.Errorf("origin %q not in OAuth registry for provider %q", host, p.Provider)
+			}
+		} else {
+			return nil, fmt.Errorf("https origins are only allowed for specific providers, but no provider was set")
 		}
 	} else if u.Scheme == "http" {
 		host := u.Hostname()

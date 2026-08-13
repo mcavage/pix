@@ -48,7 +48,7 @@ func (f *fakeFactory) NewOAuthContext(ctx context.Context, initialURL *url.URL, 
 }
 
 func TestCaptureOAuth(t *testing.T) {
-	policy := &OAuthPolicy{LeasedPorts: []int{8080}}
+	policy := &OAuthPolicy{Provider: ProviderGitHub, LeasedPorts: []int{8080}}
 
 	tests := []struct {
 		name    string
@@ -63,7 +63,7 @@ func TestCaptureOAuth(t *testing.T) {
 				RunID:       "run123",
 				AuthURL:     "https://github.com/login",
 				CallbackURL: "http://localhost:8080/cb",
-				Origin:      "github.com",
+				Provider:    ProviderGitHub,
 				Policy:      policy,
 			},
 			b: &fakeBrowser{
@@ -71,7 +71,7 @@ func TestCaptureOAuth(t *testing.T) {
 			},
 			wantCap: OAuthCapture{
 				RunID:    "run123",
-				Origin:   "github.com",
+				Provider: ProviderGitHub,
 				Callback: "http://localhost:8080/cb?code=123",
 			},
 		},
@@ -81,7 +81,7 @@ func TestCaptureOAuth(t *testing.T) {
 				RunID:       "run123",
 				AuthURL:     "https://github.com/login",
 				CallbackURL: "http://localhost:8080/cb",
-				Origin:      "github.com",
+				Provider:    ProviderGitHub,
 				Policy:      policy,
 			},
 			b: &fakeBrowser{
@@ -89,7 +89,7 @@ func TestCaptureOAuth(t *testing.T) {
 			},
 			wantCap: OAuthCapture{
 				RunID:  "run123",
-				Origin: "github.com",
+				Provider: ProviderGitHub,
 				Error:  "incomplete",
 			},
 		},

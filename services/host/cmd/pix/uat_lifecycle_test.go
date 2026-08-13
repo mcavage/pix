@@ -53,7 +53,10 @@ func TestUATLifecycle_CreateDev(t *testing.T) {
 	env := hostenv.Env{System: sys, HostBinary: func() (string, error) { return "/bin/pix-host", nil }}
 
 	// Creating Dev:
-	id := uat.GenerateSessionID()
+	id, err := uat.GenerateSessionID()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	rec := &uat.Registration{SessionID: id, MCPName: "pix-uat-test-" + id}
 	if err := uat.WriteRegistration(env, "test", rec); err != nil {
 		t.Fatalf("unexpected error: %v", err)

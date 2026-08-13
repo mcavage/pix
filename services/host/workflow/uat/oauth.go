@@ -11,21 +11,25 @@ import (
 type OAuthCapture struct {
 	RunID    string `json:"run_id"`
 	Callback string `json:"callback,omitempty"`
-	Origin   string `json:"origin"`
-	Error    string `json:"error,omitempty"`
+	Provider    OAuthProvider
+	Error       string `json:"error,omitempty"`
 }
 
 type OAuthConfig struct {
 	RunID       string
 	AuthURL     string
 	CallbackURL string
-	Origin      string
+	Provider    OAuthProvider
 	Policy      URLValidator
 }
 
 func CaptureOAuth(ctx context.Context, factory BrowserFactory, cfg OAuthConfig, outPath string) error {
 	if cfg.RunID == "" {
 		return fmt.Errorf("missing run ID")
+	}
+
+	if cfg.Provider == "" {
+		return fmt.Errorf("provider is required")
 	}
 
 	authU, err := cfg.Policy.Validate(cfg.AuthURL)
@@ -38,10 +42,6 @@ func CaptureOAuth(ctx context.Context, factory BrowserFactory, cfg OAuthConfig, 
 		return fmt.Errorf("invalid callback URL: %w", err)
 	}
 
-	if authU.Hostname() != cfg.Origin {
-		return fmt.Errorf("auth URL origin %q does not match expected %q", authU.Hostname(), cfg.Origin)
-	}
-
 	b, err := factory.NewOAuthContext(ctx, authU, cfg.Policy)
 	if err != nil {
 		return fmt.Errorf("new oauth context: %w", err)
@@ -52,8 +52,8 @@ func CaptureOAuth(ctx context.Context, factory BrowserFactory, cfg OAuthConfig, 
 	err = b.WaitForURL(ctx, callbackU)
 
 	cap := OAuthCapture{
-		RunID:  cfg.RunID,
-		Origin: cfg.Origin,
+		RunID:    cfg.RunID,
+		Provider: cfg.Provider,
 	}
 
 	if err != nil {
