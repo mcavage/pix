@@ -169,8 +169,8 @@ func TestAdapters_Integration(t *testing.T) {
 }
 
 type authCaptureExec struct {
-	cmds [][]string
-	env  []string
+	cmds     [][]string
+	env      []string
 	waitFunc func() error
 }
 
@@ -183,32 +183,41 @@ type authFakeCmd struct {
 	exec *authCaptureExec
 }
 
-func (f *authFakeCmd) Run() error                         { return nil }
-func (f *authFakeCmd) Start() error                       { 
+func (f *authFakeCmd) Run() error { return nil }
+func (f *authFakeCmd) Start() error {
 	if f.exec.waitFunc != nil {
 		go f.exec.waitFunc()
 	}
 	return nil
 }
-func (f *authFakeCmd) Wait() error { return nil }
+func (f *authFakeCmd) Wait() error                        { return nil }
 func (f *authFakeCmd) Output() ([]byte, error)            { return nil, nil }
 func (f *authFakeCmd) StdoutPipe() (io.ReadCloser, error) { return nil, nil }
 func (f *authFakeCmd) StderrPipe() (io.ReadCloser, error) { return nil, nil }
 func (f *authFakeCmd) SetEnv(env []string) {
 	f.exec.env = env
 }
-func (f *authFakeCmd) SetDir(dir string)                  {}
+func (f *authFakeCmd) SetDir(dir string) {}
 
 func TestAdapters_MCPAuthCaptureSuccess(t *testing.T) {
 	stateDir := t.TempDir()
 	runID := "testrun-auth-123"
-	
+
 	pixHost := filepath.Join(stateDir, "fake-pix-host")
 	os.WriteFile(pixHost, []byte("#!/bin/sh\n"), 0755)
 
-	factory := &mockBrowserFactory{}
+	factory := &mockBrowserFactory{
+		browser: &mockBrowser{
+			currURL: &url.URL{
+				Scheme:   "http",
+				Host:     "localhost:8080",
+				Path:     "/cb",
+				RawQuery: "code=123&state=xyz",
+			},
+		},
+	}
 	ce := &authCaptureExec{}
-	
+
 	m := NewRealMCP(pixHost, stateDir, ce, factory)
 
 	// Simulate sbx writing to the capture path
@@ -247,13 +256,13 @@ func TestAdapters_MCPAuthCaptureSuccess(t *testing.T) {
 func TestAdapters_MCPAuthCaptureTimeout(t *testing.T) {
 	stateDir := t.TempDir()
 	runID := "testrun-auth-456"
-	
+
 	pixHost := filepath.Join(stateDir, "fake-pix-host")
 	os.WriteFile(pixHost, []byte("#!/bin/sh\n"), 0755)
 
 	factory := &mockBrowserFactory{}
 	ce := &authCaptureExec{}
-	
+
 	m := NewRealMCP(pixHost, stateDir, ce, factory)
 
 	// Simulate sbx ignoring BROWSER and not writing to capture path
@@ -277,22 +286,41 @@ func TestAdapters_MCPAuthCaptureTimeout(t *testing.T) {
 	}
 }
 
-type mockBrowserFactory struct{}
+type mockBrowserFactory struct {
+	browser *mockBrowser
+}
 
 func (m *mockBrowserFactory) NewContext(ctx context.Context, runID string, initialURL *url.URL, policy URLValidator) (Browser, error) {
 	return nil, nil
 }
 
 func (m *mockBrowserFactory) NewOAuthContext(ctx context.Context, initialURL *url.URL, policy URLValidator) (Browser, error) {
-	return &mockBrowser{}, nil
+	if m.browser == nil {
+		m.browser = &mockBrowser{}
+	}
+	return m.browser, nil
 }
 
 // Using the same fakeBrowser pattern from oauth_test.go
-type mockBrowser struct{}
+type mockBrowser struct {
+	currURL *url.URL
+}
+
 func (f *mockBrowser) Snapshot(ctx context.Context) (*Snapshot, error) { return nil, nil }
-func (f *mockBrowser) Click(ctx context.Context, refID string) error { return nil }
-func (f *mockBrowser) WaitForURL(ctx context.Context, expectedURL *url.URL) error { return nil }
-func (f *mockBrowser) CurrentURL(ctx context.Context) (*url.URL, error) { return nil, nil }
-func (f *mockBrowser) Title(ctx context.Context) (string, error) { return "", nil }
-func (f *mockBrowser) VisibleText(ctx context.Context) (string, error) { return "", nil }
-func (f *mockBrowser) Close() error { return nil }
+func (f *mockBrowser) Click(ctx context.Context, refID string) error   { return nil }
+func (f *mockBrowser) WaitForURL(ctx context.Context, expectedURL *url.URL) error {
+	if f.currURL != nil {
+		if f.currURL.Scheme != expectedURL.Scheme ||
+			f.currURL.Host != expectedURL.Host ||
+			f.currURL.Path != expectedURL.Path ||
+			f.currURL.User != nil ||
+			f.currURL.Fragment != "" {
+			return context.DeadlineExceeded
+		}
+	}
+	return nil
+}
+func (f *mockBrowser) CurrentURL(ctx context.Context) (*url.URL, error) { return f.currURL, nil }
+func (f *mockBrowser) Title(ctx context.Context) (string, error)        { return "", nil }
+func (f *mockBrowser) VisibleText(ctx context.Context) (string, error)  { return "", nil }
+func (f *mockBrowser) Close() error                                     { return nil }

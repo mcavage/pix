@@ -70,7 +70,7 @@ func (m *mockSandbox) Remove(ctx context.Context, runID string) error { return n
 type mockMCP struct{}
 
 func (m *mockMCP) Add(ctx context.Context, name string, argv []string) error { return nil }
-func (m *mockMCP) Auth(ctx context.Context, runID string, name string) error               { return nil }
+func (m *mockMCP) Auth(ctx context.Context, runID string, name string) error { return nil }
 func (m *mockMCP) Status(ctx context.Context, name string) (string, error)   { return "ok", nil }
 func (m *mockMCP) Remove(ctx context.Context, name string) error             { return nil }
 

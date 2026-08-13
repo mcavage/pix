@@ -53,6 +53,7 @@ func TestCheckLink(t *testing.T) {
 		})
 	}
 }
+
 type fakeBrowser struct {
 	currURL *url.URL
 	waitErr error
@@ -65,7 +66,19 @@ func (f *fakeBrowser) Click(ctx context.Context, refID string) error {
 	return nil
 }
 func (f *fakeBrowser) WaitForURL(ctx context.Context, expectedURL *url.URL) error {
-	return f.waitErr
+	if f.waitErr != nil {
+		return f.waitErr
+	}
+	if f.currURL != nil {
+		if f.currURL.Scheme != expectedURL.Scheme ||
+			f.currURL.Host != expectedURL.Host ||
+			f.currURL.Path != expectedURL.Path ||
+			f.currURL.User != nil ||
+			f.currURL.Fragment != "" {
+			return context.DeadlineExceeded
+		}
+	}
+	return nil
 }
 func (f *fakeBrowser) CurrentURL(ctx context.Context) (*url.URL, error) {
 	return f.currURL, nil

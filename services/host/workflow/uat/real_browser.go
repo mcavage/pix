@@ -217,10 +217,16 @@ func (b *realBrowser) WaitForURL(ctx context.Context, expectedURL *url.URL) erro
 		var u string
 		if err := chromedp.Run(b.ctx, chromedp.Evaluate("window.location.href", &u)); err == nil {
 			parsedU, parseErr := url.Parse(u)
-			if parseErr == nil && parsedU.String() == expectedURL.String() {
-				// Clear clickables on navigation
-				b.clickables = make(map[string]ClickableRef)
-				return nil
+			if parseErr == nil {
+				if parsedU.Scheme == expectedURL.Scheme &&
+					parsedU.Host == expectedURL.Host &&
+					parsedU.Path == expectedURL.Path &&
+					parsedU.User == nil &&
+					parsedU.Fragment == "" {
+					// Clear clickables on navigation
+					b.clickables = make(map[string]ClickableRef)
+					return nil
+				}
 			}
 		}
 		time.Sleep(100 * time.Millisecond)

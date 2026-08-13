@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"pix/host/sandbox"
@@ -131,10 +132,10 @@ func (s *realSandbox) Remove(ctx context.Context, runID string) error {
 }
 
 type realMCP struct {
-	pixHost string
+	pixHost  string
 	stateDir string
-	exec    Exec
-	factory BrowserFactory
+	exec     Exec
+	factory  BrowserFactory
 }
 
 func NewRealMCP(pixHost, stateDir string, e Exec, factory BrowserFactory) MCP {
@@ -149,7 +150,7 @@ func (m *realMCP) Add(ctx context.Context, name string, argv []string) error {
 	return cmd.Run()
 }
 
-func (m *realMCP) Auth(ctx context.Context, runID string, name string) error {
+func (m *realMCP) Auth(ctx context.Context, runID string, name string) (err error) {
 	// Task B: create run-owned bin dir, symlink shim, capture OAuth.
 	binDir := filepath.Join(m.stateDir, "runs", runID, "bin")
 	if err := os.MkdirAll(binDir, 0700); err != nil {
@@ -168,9 +169,8 @@ func (m *realMCP) Auth(ctx context.Context, runID string, name string) error {
 	_ = os.Remove(capturePath)
 
 	cmdCtx, cancelCmd := context.WithCancel(ctx)
-	defer cancelCmd()
 	cmd := m.exec.CommandContext(cmdCtx, "sbx", "mcp", "auth", "--", name)
-	
+
 	// Inherit PATH but set BROWSER and PIX_UAT_BROWSER_CAPTURE
 	var env []string
 	for _, e := range os.Environ() {
@@ -184,9 +184,30 @@ func (m *realMCP) Auth(ctx context.Context, runID string, name string) error {
 
 	// Suppress inherited stdio by giving it pipes that we close, or simply wait on it?
 	// The task says "asynchronously with inherited stdio suppressed/capped, waits bounded for the capture"
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("sbx mcp auth start: %w", err)
+	if errStart := cmd.Start(); errStart != nil {
+		cancelCmd()
+		return fmt.Errorf("sbx mcp auth start: %w", errStart)
 	}
+
+	waitErrCh := make(chan error, 1)
+	go func() {
+		waitErrCh <- cmd.Wait()
+	}()
+
+	defer func() {
+		if err != nil {
+			cancelCmd()
+			waitErr := <-waitErrCh
+			if waitErr != nil {
+				err = fmt.Errorf("%w (reap status: %v)", err, waitErr)
+			}
+		} else {
+			waitErr := <-waitErrCh
+			if waitErr != nil {
+				err = fmt.Errorf("sbx mcp auth failed: %w", waitErr)
+			}
+		}
+	}()
 
 	// Wait bounded for the capture
 	// We need to wait for `capturePath` to be written.
@@ -196,14 +217,19 @@ func (m *realMCP) Auth(ctx context.Context, runID string, name string) error {
 	var rawURL string
 	for {
 		if captureCtx.Err() != nil {
-			cancelCmd()
-			_ = cmd.Wait()
 			return fmt.Errorf("%w: browser capture timeout (sbx ignored BROWSER shim - check host bootstrap)", ErrIncomplete)
 		}
-		data, err := os.ReadFile(capturePath)
-		if err == nil && len(data) > 0 {
-			rawURL = string(data)
-			break
+		// Open with O_NOFOLLOW to avoid symlink attacks, read bounded
+		f, errF := os.OpenFile(capturePath, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+		if errF == nil {
+			data := make([]byte, 8192)
+			n, _ := f.Read(data)
+			f.Close()
+			if n > 0 {
+				rawURL = string(data[:n])
+				os.Remove(capturePath)
+				break
+			}
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -229,7 +255,7 @@ func (m *realMCP) Auth(ctx context.Context, runID string, name string) error {
 	providerFound := false
 	for p, hosts := range ProviderAuthHosts {
 		for _, host := range hosts {
-			if strings.Contains(authURL.Host, host) {
+			if authURL.Hostname() == host {
 				provider = p
 				providerFound = true
 				break
@@ -248,32 +274,36 @@ func (m *realMCP) Auth(ctx context.Context, runID string, name string) error {
 
 	// Validates exact OAuth origin and loopback callback/port
 	policy := &OAuthPolicy{
-		Provider: provider,
+		Provider:    provider,
 		LeasedPorts: []int{port},
 	}
-	_, err = policy.Validate(authURL.String())
-	if err != nil {
-		return fmt.Errorf("auth URL validation failed: %w", err)
+	_, parseErr := policy.Validate(authURL.String())
+	if parseErr != nil {
+		return fmt.Errorf("auth URL validation failed: %w", parseErr)
 	}
-	_, err = policy.Validate(callbackURL.String())
-	if err != nil {
-		return fmt.Errorf("callback URL validation failed: %w", err)
+	_, parseErr = policy.Validate(callbackURL.String())
+	if parseErr != nil {
+		return fmt.Errorf("callback URL validation failed: %w", parseErr)
 	}
 
 	// Drive NewOAuthContext
-	b, err := m.factory.NewOAuthContext(ctx, authURL, policy)
-	if err != nil {
-		return fmt.Errorf("new oauth context: %w", err)
+	b, parseErr := m.factory.NewOAuthContext(ctx, authURL, policy)
+	if parseErr != nil {
+		return fmt.Errorf("new oauth context: %w", parseErr)
 	}
 	defer b.Close()
 
-	if err := b.WaitForURL(ctx, callbackURL); err != nil {
-		return fmt.Errorf("wait for callback: %w", err)
+	if waitErr := b.WaitForURL(ctx, callbackURL); waitErr != nil {
+		return fmt.Errorf("wait for callback: %w", waitErr)
 	}
 
-	// Wait for sbx exit
-	if err := cmd.Wait(); err != nil {
-		return fmt.Errorf("sbx mcp auth failed: %w", err)
+	// Validate returned callback through OAuthPolicy before success
+	finalURL, finalErr := b.CurrentURL(ctx)
+	if finalErr != nil {
+		return fmt.Errorf("get final URL: %w", finalErr)
+	}
+	if _, valErr := policy.Validate(finalURL.String()); valErr != nil {
+		return fmt.Errorf("returned callback policy validation failed: %w", valErr)
 	}
 
 	return nil

@@ -108,15 +108,15 @@ func TestOAuthPolicy(t *testing.T) {
 		{"https://github.com/login/oauth/authorize?client_id=123", false},
 		{"http://localhost:8080/callback", false},
 		{"http://127.0.0.1:9090/callback", false},
-		{"https://gitlab.com/oauth/authorize", true},       // provider mismatch (policy is github)
-		{"https://evil.com/login", true},                   // not in registry
-		{"http://localhost:8081/callback", true},           // port not leased
-		{"http://localhost/callback", true},                // no port
-		{"http://192.168.1.1:8080/callback", true},         // not localhost
-		{"https://github.com/login#hash", true},            // fragment not allowed
-		{"https://user@github.com/login", true},            // userinfo not allowed
-		{"file:///etc/passwd", true},                       // scheme not allowed
-		{"chrome://settings", true},                        // scheme not allowed
+		{"https://gitlab.com/oauth/authorize", true}, // provider mismatch (policy is github)
+		{"https://evil.com/login", true},             // not in registry
+		{"http://localhost:8081/callback", true},     // port not leased
+		{"http://localhost/callback", true},          // no port
+		{"http://192.168.1.1:8080/callback", true},   // not localhost
+		{"https://github.com/login#hash", true},      // fragment not allowed
+		{"https://user@github.com/login", true},      // userinfo not allowed
+		{"file:///etc/passwd", true},                 // scheme not allowed
+		{"chrome://settings", true},                  // scheme not allowed
 	}
 
 	for _, tt := range tests {
