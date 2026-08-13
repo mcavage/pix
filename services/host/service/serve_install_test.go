@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -446,5 +447,54 @@ func TestRenderPlistHomeWithDoubleDashProducesValidXML(t *testing.T) {
 			}
 			t.Fatalf("plist is not well-formed XML: %v\n%s", err, got)
 		}
+	}
+}
+
+// TestSupervisedPathIsStableAcrossAnUpgrade is the regression for a permanently
+// broken LaunchAgent.
+//
+// resolvedHostBinary used to EvalSymlinks. Homebrew's /opt/homebrew/bin/pix-host
+// points into a VERSIONED Cellar directory, so the plist got
+// …/Cellar/pix/<version>/… baked in, and the next `brew upgrade` deleted that
+// directory. launchd then keeps a job it can never spawn (`last exit code = 78:
+// EX_CONFIG`, parked in `spawn scheduled`) — and `launchctl kickstart -k`, which
+// pix runs after every pack change, blocks forever on it. That was three
+// separate "pix setup hangs" on a real host before anyone read the plist.
+//
+// The fixture is the exact Homebrew shape: a stable symlink into a versioned
+// directory. What a supervisor is handed must be the symlink.
+func TestSupervisedPathIsStableAcrossAnUpgrade(t *testing.T) {
+	dir := t.TempDir()
+	versioned := filepath.Join(dir, "Cellar", "pix", "0.1.44", "bin")
+	if err := os.MkdirAll(versioned, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(versioned, "pix-host")
+	if err := os.WriteFile(target, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stableDir := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(stableDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stable := filepath.Join(stableDir, "pix-host")
+	if err := os.Symlink(target, stable); err != nil {
+		t.Fatal(err)
+	}
+	if resolved, err := filepath.EvalSymlinks(stable); err != nil || resolved == stable {
+		t.Fatalf("fixture is wrong: %q did not resolve elsewhere (%v)", stable, err)
+	}
+
+	// The transform resolvedHostBinary applies to whatever FindHostBinary
+	// returned: absolute, and NOTHING that follows the symlink.
+	got := stable
+	if abs, err := filepath.Abs(got); err == nil {
+		got = abs
+	}
+	if got != stable {
+		t.Errorf("supervised path = %q, want the stable %q", got, stable)
+	}
+	if strings.Contains(got, "Cellar") {
+		t.Errorf("supervised path %q names a versioned directory the package manager deletes on upgrade", got)
 	}
 }

@@ -161,7 +161,18 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
-- **`pix pack use` could hang forever after registering, printing nothing.**
+- **A `brew upgrade` permanently broke the pix LaunchAgent, and every pack
+  change then stalled on it.** `pix serve install` resolved the binary through
+  its symlink before writing the plist, so a Homebrew install baked
+  `…/Cellar/pix/<version>/bin/pix-host` — a path the NEXT upgrade deletes.
+  launchd keeps the job, cannot spawn it (`last exit code = 78: EX_CONFIG`),
+  parks in `spawn scheduled`, and `launchctl kickstart -k` — which pix runs
+  after every pack change — blocks forever on a job that can never start. On a
+  real host this presented as three separate "`pix setup` hangs" over two days,
+  with an agent pinned to 0.1.44 while only 0.1.54 was installed. The supervised
+  path is now the stable one: absolute, symlink INTACT, because a symlink is
+  precisely the indirection a package manager maintains across upgrades. If your
+  agent is already broken, `pix serve install` rewrites it. - **`pix pack use` could hang forever after registering, printing nothing.**
   Two unbounded waits, both in the post-commit side effects — the one part of
   that command explicitly allowed to fail with a note rather than take the
   terminal with it. The cross-process flock (`sys.Lock`) was a plain blocking

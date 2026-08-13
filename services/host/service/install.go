@@ -228,16 +228,29 @@ func launchdStop(run cmdRunner, uid int, out io.Writer) error {
 
 // --- shared entry points ------------------------------------------------------
 
-// resolvedHostBinary is launcher.FindHostBinary + EvalSymlinks: launchd has a
-// minimal PATH and needs the REAL absolute path (a ~/.local/bin symlink into a
-// repo's out/ dir would break when the repo moves).
+// resolvedHostBinary is the ABSOLUTE path a supervisor should launch, and it
+// deliberately does NOT resolve symlinks.
+//
+// It used to EvalSymlinks, on the theory that launchd's minimal PATH needs "the
+// REAL path". Launchd needs an absolute path, which a symlink already is — and
+// resolving one defeats the exact indirection package managers exist to
+// provide. Homebrew's /opt/homebrew/bin/pix-host points into a VERSIONED Cellar
+// directory, so resolving baked `…/Cellar/pix/0.1.44/bin/pix-host` into the
+// plist, and the next `brew upgrade` deleted that directory.
+//
+// The failure is silent and permanent. launchd keeps the job, cannot spawn it
+// (`last exit code = 78: EX_CONFIG`), and parks in `spawn scheduled` — while
+// `launchctl kickstart -k`, which pix runs after every pack change, BLOCKS
+// FOREVER on a job that can never start. Measured on a real host: an agent
+// pinned to 0.1.44 with only 0.1.54 installed, three separate "pix setup hangs"
+// over two days, and 22 seconds of silence per run once the wait was bounded.
+//
+// A dangling symlink is no worse unresolved: if the target moves, both forms
+// break, and only this one survives an upgrade that keeps the symlink correct.
 func resolvedHostBinary() (string, error) {
 	bin, err := launcher.FindHostBinary()
 	if err != nil {
 		return "", fmt.Errorf("pix-host not found — run `make install` first")
-	}
-	if resolved, rerr := filepath.EvalSymlinks(bin); rerr == nil {
-		bin = resolved
 	}
 	if abs, aerr := filepath.Abs(bin); aerr == nil {
 		bin = abs
