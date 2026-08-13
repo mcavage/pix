@@ -32,6 +32,13 @@ var ProviderAuthHosts = map[OAuthProvider][]string{
 	ProviderGranola:   {"api.granola.so", "app.granola.so", "auth.granola.so", "granola.so"},
 }
 
+var ProviderAssetHosts = map[OAuthProvider][]string{
+	ProviderGitHub:    {"github.githubassets.com", "avatars.githubusercontent.com"},
+	ProviderGitLab:    {"assets.gitlab-static.net"},
+	ProviderGoogle:    {"ssl.gstatic.com", "fonts.gstatic.com", "fonts.googleapis.com"},
+	ProviderNotion:    {"cdnjs.cloudflare.com"},
+}
+
 var ProfileLock sync.Mutex
 
 func PeekProfilePath() (string, error) {

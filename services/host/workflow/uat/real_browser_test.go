@@ -9,8 +9,78 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/chromedp/cdproto/fetch"
+	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/chromedp"
 )
 
+func TestBrowserPolicyHandler(t *testing.T) {
+	b := &realBrowser{
+		ctx: context.Background(),
+	}
+
+	initialURL, _ := url.Parse("https://github.com/login")
+	policy := &OAuthPolicy{Provider: ProviderGitHub}
+
+	type actionRec struct {
+		id string
+		isFail bool
+	}
+	actions := make(chan actionRec, 10)
+
+	runCmd := func(ctx context.Context, acts ...chromedp.Action) error {
+		for _, a := range acts {
+			switch a.(type) {
+			case *fetch.ContinueRequestParams:
+				// RequestId is private? Let's check cdproto.
+				// For test purposes we just record the type
+				actions <- actionRec{"", false}
+			case *fetch.FailRequestParams:
+				actions <- actionRec{"", true}
+			}
+		}
+		return nil
+	}
+
+	handler := b.requestHandler(policy, initialURL, runCmd)
+
+	// 1. simulate document request (allowed)
+	handler(&fetch.EventRequestPaused{
+		ResourceType: network.ResourceTypeDocument,
+		Request:      &network.Request{URL: "https://github.com/login"},
+		RequestID:    "1",
+	})
+	if r := <-actions; r.isFail {
+		t.Errorf("expected ContinueRequest for document")
+	}
+
+	// 2. simulate CDN asset (allowed)
+	handler(&fetch.EventRequestPaused{
+		ResourceType: network.ResourceTypeStylesheet,
+		Request:      &network.Request{URL: "https://github.githubassets.com/assets/frameworks.css"},
+		RequestID:    "2",
+	})
+	if r := <-actions; r.isFail {
+		t.Errorf("expected ContinueRequest for allowed CDN asset")
+	}
+
+	// 3. simulate private/cross-origin asset (denied)
+	handler(&fetch.EventRequestPaused{
+		ResourceType: network.ResourceTypeImage,
+		Request:      &network.Request{URL: "https://127.0.0.1/evil.png"},
+		RequestID:    "3",
+	})
+	if r := <-actions; !r.isFail {
+		t.Errorf("expected FailRequest for private asset")
+	}
+
+	// Policy error should be surfaced on the browser
+	err := b.getPolicyErr()
+	if err == nil || !strings.Contains(err.Error(), "localhost not allowed") {
+		t.Errorf("expected localhost error on browser context, got %v", err)
+	}
+}
 func TestBuildNavigateActions(t *testing.T) {
 	// Test nil policy (bootstrap browser)
 	actionsNil := buildNavigateActions(nil, "about:blank")

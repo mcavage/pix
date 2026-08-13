@@ -3,6 +3,7 @@ package uat
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -71,19 +72,34 @@ func (f *realFactory) NewContext(ctx context.Context, runID string, initialURL *
 
 	c, cancelCtx := chromedp.NewContext(allocCtx)
 
+	b := &realBrowser{
+		ctx:         c,
+		cancelCtx:   cancelCtx,
+		cancelAlloc: cancelAlloc,
+		clickables:  make(map[string]ClickableRef),
+	}
+
 	chromedp.ListenTarget(c, func(ev interface{}) {
 		if policy == nil {
 			return
 		}
 		if evReq, ok := ev.(*fetch.EventRequestPaused); ok {
 			u := evReq.Request.URL
-			if strings.HasPrefix(u, "about:") || strings.HasPrefix(u, "data:") {
+			if strings.HasPrefix(u, "about:") || strings.HasPrefix(u, "data:") || strings.HasPrefix(u, "blob:") {
 				go chromedp.Run(c, fetch.ContinueRequest(evReq.RequestID))
 				return
 			}
-			if _, err := policy.Validate(u); err != nil {
+			
+			var errPolicy error
+			if evReq.ResourceType == network.ResourceTypeDocument {
+				_, errPolicy = policy.Validate(u)
+			} else {
+				errPolicy = validateSubresource(u, initialURL.URL, policy)
+			}
+			
+			if errPolicy != nil {
+				b.setPolicyErr(errPolicy)
 				go chromedp.Run(c, fetch.FailRequest(evReq.RequestID, network.ErrorReasonAccessDenied))
-				cancelCtx()
 			} else {
 				go chromedp.Run(c, fetch.ContinueRequest(evReq.RequestID))
 			}
@@ -93,17 +109,20 @@ func (f *realFactory) NewContext(ctx context.Context, runID string, initialURL *
 	actions := buildNavigateActions(policy, initialURL.URL.String())
 
 	if err := chromedp.Run(c, actions...); err != nil {
+		if pErr := b.getPolicyErr(); pErr != nil {
+			err = pErr
+		}
 		cancelCtx()
 		cancelAlloc()
 		return nil, err
 	}
+	if pErr := b.getPolicyErr(); pErr != nil {
+		cancelCtx()
+		cancelAlloc()
+		return nil, pErr
+	}
 
-	return &realBrowser{
-		ctx:         c,
-		cancelCtx:   cancelCtx,
-		cancelAlloc: cancelAlloc,
-		clickables:  make(map[string]ClickableRef),
-	}, nil
+	return b, nil
 }
 
 func (f *realFactory) NewOAuthContext(ctx context.Context, initialURL *ValidatedURL, policy URLValidator) (Browser, error) {
@@ -143,41 +162,34 @@ func (f *realFactory) NewOAuthContext(ctx context.Context, initialURL *Validated
 
 	c, cancelCtx := chromedp.NewContext(allocCtx)
 
-	chromedp.ListenTarget(c, func(ev interface{}) {
-		if policy == nil {
-			return
-		}
-		if evReq, ok := ev.(*fetch.EventRequestPaused); ok {
-			u := evReq.Request.URL
-			if strings.HasPrefix(u, "about:") || strings.HasPrefix(u, "data:") {
-				go chromedp.Run(c, fetch.ContinueRequest(evReq.RequestID))
-				return
-			}
-			if _, errPolicy := policy.Validate(u); errPolicy != nil {
-				go chromedp.Run(c, fetch.FailRequest(evReq.RequestID, network.ErrorReasonAccessDenied))
-				cancelCtx()
-			} else {
-				go chromedp.Run(c, fetch.ContinueRequest(evReq.RequestID))
-			}
-		}
-	})
-
-	actions := buildNavigateActions(policy, initialURL.URL.String())
-
-	if err = chromedp.Run(c, actions...); err != nil {
-		cancelCtx()
-		cancelAlloc()
-		return nil, err
-	}
-
-	handedOff = true
-	return &realBrowser{
+	b := &realBrowser{
 		ctx:         c,
 		cancelCtx:   cancelCtx,
 		cancelAlloc: cancelAlloc,
 		clickables:  make(map[string]ClickableRef),
 		unlock:      unlock,
-	}, nil
+	}
+
+	chromedp.ListenTarget(c, b.requestHandler(policy, initialURL.URL, chromedp.Run))
+
+	actions := buildNavigateActions(policy, initialURL.URL.String())
+
+	if err = chromedp.Run(c, actions...); err != nil {
+		if pErr := b.getPolicyErr(); pErr != nil {
+			err = pErr
+		}
+		cancelCtx()
+		cancelAlloc()
+		return nil, err
+	}
+	if pErr := b.getPolicyErr(); pErr != nil {
+		cancelCtx()
+		cancelAlloc()
+		return nil, pErr
+	}
+
+	handedOff = true
+	return b, nil
 }
 
 type realBrowser struct {
@@ -186,9 +198,102 @@ type realBrowser struct {
 	cancelAlloc context.CancelFunc
 	clickables  map[string]ClickableRef
 	unlock      func()
+
+	policyErrMu sync.Mutex
+	policyErr   error
+}
+
+func (b *realBrowser) setPolicyErr(err error) {
+	b.policyErrMu.Lock()
+	defer b.policyErrMu.Unlock()
+	if b.policyErr == nil {
+		b.policyErr = err
+	}
+}
+
+func (b *realBrowser) getPolicyErr() error {
+	b.policyErrMu.Lock()
+	defer b.policyErrMu.Unlock()
+	return b.policyErr
+}
+
+func (b *realBrowser) requestHandler(policy URLValidator, initialURL *url.URL, runCmd func(context.Context, ...chromedp.Action) error) func(ev interface{}) {
+	return func(ev interface{}) {
+		if policy == nil {
+			return
+		}
+		if evReq, ok := ev.(*fetch.EventRequestPaused); ok {
+			u := evReq.Request.URL
+			if strings.HasPrefix(u, "about:") || strings.HasPrefix(u, "data:") || strings.HasPrefix(u, "blob:") {
+				go runCmd(b.ctx, fetch.ContinueRequest(evReq.RequestID))
+				return
+			}
+			var errPolicy error
+			if evReq.ResourceType == network.ResourceTypeDocument {
+				_, errPolicy = policy.Validate(u)
+			} else {
+				errPolicy = validateSubresource(u, initialURL, policy)
+			}
+
+			if errPolicy != nil {
+				b.setPolicyErr(errPolicy)
+				go runCmd(b.ctx, fetch.FailRequest(evReq.RequestID, network.ErrorReasonAccessDenied))
+			} else {
+				go runCmd(b.ctx, fetch.ContinueRequest(evReq.RequestID))
+			}
+		}
+	}
+}
+
+func validateSubresource(rawURL string, initialURL *url.URL, policy URLValidator) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid subresource URL: %v", err)
+	}
+
+	switch p := policy.(type) {
+	case *PublicLinkPolicy:
+		if u.Scheme != initialURL.Scheme || u.Hostname() != initialURL.Hostname() || u.Port() != initialURL.Port() {
+			return fmt.Errorf("cross-origin subresource not allowed: %s", rawURL)
+		}
+		return nil
+	case *OAuthPolicy:
+		if u.Scheme != "https" {
+			return fmt.Errorf("subresource scheme must be https: %s", rawURL)
+		}
+		host := u.Hostname()
+		if host == "localhost" || host == "127.0.0.1" {
+			return fmt.Errorf("localhost not allowed for subresources")
+		}
+		if net.ParseIP(host) != nil {
+			return fmt.Errorf("IP literals not allowed for subresources")
+		}
+
+		for _, h := range ProviderAssetHosts[p.Provider] {
+			if host == h {
+				return nil
+			}
+		}
+
+		ips, err := net.LookupIP(host)
+		if err != nil || len(ips) == 0 {
+			return fmt.Errorf("dns resolution failed for subresource %s", host)
+		}
+		for _, ip := range ips {
+			if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalMulticast() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || ip.IsMulticast() {
+				return fmt.Errorf("resolved to non-public IP: %v", ip)
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown policy type")
+	}
 }
 
 func (b *realBrowser) Snapshot(ctx context.Context) (*Snapshot, error) {
+	if err := b.getPolicyErr(); err != nil {
+		return nil, err
+	}
 	var html string
 	var buf []byte
 
@@ -234,6 +339,9 @@ func (b *realBrowser) Snapshot(ctx context.Context) (*Snapshot, error) {
 }
 
 func (b *realBrowser) Click(ctx context.Context, refID string) error {
+	if err := b.getPolicyErr(); err != nil {
+		return err
+	}
 	ref, ok := b.clickables[refID]
 	if !ok {
 		return fmt.Errorf("invalid or unknown ref ID: %s", refID)
@@ -244,12 +352,18 @@ func (b *realBrowser) Click(ctx context.Context, refID string) error {
 }
 
 func (b *realBrowser) WaitForURL(ctx context.Context, expectedURL *url.URL) error {
+	if err := b.getPolicyErr(); err != nil {
+		return err
+	}
 	// Polling for URL
 	deadline := time.Now().Add(10 * time.Second)
 	if dl, ok := ctx.Deadline(); ok {
 		deadline = dl
 	}
 	for time.Now().Before(deadline) {
+		if err := b.getPolicyErr(); err != nil {
+			return err
+		}
 		var u string
 		if err := chromedp.Run(b.ctx, chromedp.Evaluate("window.location.href", &u)); err == nil {
 			parsedU, parseErr := url.Parse(u)
@@ -271,6 +385,9 @@ func (b *realBrowser) WaitForURL(ctx context.Context, expectedURL *url.URL) erro
 }
 
 func (b *realBrowser) CurrentURL(ctx context.Context) (*url.URL, error) {
+	if err := b.getPolicyErr(); err != nil {
+		return nil, err
+	}
 	var u string
 	if err := chromedp.Run(b.ctx, chromedp.Evaluate("window.location.href", &u)); err != nil {
 		return nil, err
@@ -279,6 +396,9 @@ func (b *realBrowser) CurrentURL(ctx context.Context) (*url.URL, error) {
 }
 
 func (b *realBrowser) Title(ctx context.Context) (string, error) {
+	if err := b.getPolicyErr(); err != nil {
+		return "", err
+	}
 	var t string
 	if err := chromedp.Run(b.ctx, chromedp.Title(&t)); err != nil {
 		return "", err
@@ -287,6 +407,9 @@ func (b *realBrowser) Title(ctx context.Context) (string, error) {
 }
 
 func (b *realBrowser) VisibleText(ctx context.Context) (string, error) {
+	if err := b.getPolicyErr(); err != nil {
+		return "", err
+	}
 	var text string
 	if err := chromedp.Run(b.ctx, chromedp.Evaluate("document.body.innerText", &text)); err != nil {
 		return "", err
