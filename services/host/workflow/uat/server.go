@@ -1,0 +1,428 @@
+package uat
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+)
+
+type toolDescriptor struct {
+	Name        string                 `json:"name"`
+	Description string                 `json:"description"`
+	InputSchema map[string]interface{} `json:"inputSchema"`
+}
+
+func getTools() []toolDescriptor {
+	return []toolDescriptor{
+		{
+			Name:        "uat_capabilities",
+			Description: "List UAT capabilities",
+			InputSchema: map[string]interface{}{"type": "object"},
+		},
+		{
+			Name:        "uat_submit",
+			Description: "Submit a UAT scenario",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"commit":        map[string]interface{}{"type": "string"},
+					"scenario_path": map[string]interface{}{"type": "string"},
+					"dry_run":       map[string]interface{}{"type": "boolean"},
+				},
+				"required": []string{"commit", "scenario_path"},
+			},
+		},
+		{
+			Name:        "uat_status",
+			Description: "Check UAT run status",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"run_id":  map[string]interface{}{"type": "string"},
+					"cursor":  map[string]interface{}{"type": "number"},
+					"wait_ms": map[string]interface{}{"type": "number"},
+				},
+				"required": []string{"run_id", "cursor"},
+			},
+		},
+		{
+			Name:        "uat_artifact",
+			Description: "Read UAT artifact",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"run_id": map[string]interface{}{"type": "string"},
+					"path":   map[string]interface{}{"type": "string"},
+					"cursor": map[string]interface{}{"type": "number"},
+					"tail":   map[string]interface{}{"type": "number"},
+				},
+				"required": []string{"run_id", "path"},
+			},
+		},
+		{
+			Name:        "uat_browser_action",
+			Description: "Interact with browser",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"run_id": map[string]interface{}{"type": "string"},
+					"action": map[string]interface{}{"type": "string"},
+					"ref":    map[string]interface{}{"type": "string"},
+					"value":  map[string]interface{}{"type": "string"},
+				},
+				"required": []string{"run_id", "action"},
+			},
+		},
+		{
+			Name:        "uat_abort",
+			Description: "Abort a UAT run",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"run_id": map[string]interface{}{"type": "string"},
+					"reason": map[string]interface{}{"type": "string"},
+				},
+				"required": []string{"run_id"},
+			},
+		},
+	}
+}
+
+type MCPServer struct {
+	runner *Runner
+	browserFactory BrowserFactory
+	stateDir string
+	in     io.Reader
+	out    io.Writer
+	
+	browsersMu sync.Mutex
+	browsers   map[string]Browser
+}
+
+func NewMCPServer(runner *Runner, bf BrowserFactory, stateDir string, in io.Reader, out io.Writer) *MCPServer {
+	return &MCPServer{
+		runner: runner, 
+		browserFactory: bf, 
+		stateDir: stateDir, 
+		in: in, 
+		out: out,
+		browsers: make(map[string]Browser),
+	}
+}
+
+func (s *MCPServer) getOrCreateBrowser(ctx context.Context, runID string) (Browser, error) {
+	s.browsersMu.Lock()
+	defer s.browsersMu.Unlock()
+	if b, ok := s.browsers[runID]; ok {
+		return b, nil
+	}
+	u, _ := url.Parse("about:blank")
+	b, err := s.browserFactory.NewContext(ctx, u)
+	if err != nil {
+		return nil, err
+	}
+	s.browsers[runID] = b
+	return b, nil
+}
+
+type mcpRequest struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      interface{}     `json:"id"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params"`
+}
+
+type mcpResponse struct {
+	JSONRPC string      `json:"jsonrpc"`
+	ID      interface{} `json:"id"`
+	Result  interface{} `json:"result,omitempty"`
+	Error   *mcpError   `json:"error,omitempty"`
+}
+
+type mcpError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+func (s *MCPServer) Serve(ctx context.Context) error {
+	scanner := bufio.NewScanner(s.in)
+	// Max frame size: e.g., 10MB
+	buf := make([]byte, 1024*1024*10)
+	scanner.Buffer(buf, 1024*1024*10)
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		var req mcpRequest
+		if err := json.Unmarshal(line, &req); err != nil {
+			s.sendError(nil, -32700, "Parse error")
+			continue
+		}
+
+		if req.JSONRPC != "2.0" {
+			s.sendError(req.ID, -32600, "Invalid Request")
+			continue
+		}
+
+		if req.ID == nil {
+			// notification
+			continue
+		}
+
+		switch req.Method {
+		case "initialize":
+			s.sendResponse(req.ID, map[string]interface{}{
+				"protocolVersion": "2024-11-05",
+				"capabilities": map[string]interface{}{
+					"tools": map[string]interface{}{},
+				},
+				"serverInfo": map[string]interface{}{
+					"name":    "pix-host-uat",
+					"version": "1.0",
+				},
+			})
+		case "tools/list":
+			s.sendResponse(req.ID, map[string]interface{}{
+				"tools": getTools(),
+			})
+		case "tools/call":
+			s.handleToolCall(ctx, req.ID, req.Params)
+		default:
+			s.sendError(req.ID, -32601, "Method not found")
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		if err == io.EOF {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *MCPServer) sendResponse(id interface{}, result interface{}) {
+	resp := mcpResponse{
+		JSONRPC: "2.0",
+		ID:      id,
+		Result:  result,
+	}
+	b, _ := json.Marshal(resp)
+	fmt.Fprintf(s.out, "%s\n", b)
+}
+
+func (s *MCPServer) sendError(id interface{}, code int, message string) {
+	resp := mcpResponse{
+		JSONRPC: "2.0",
+		ID:      id,
+		Error: &mcpError{
+			Code:    code,
+			Message: message,
+		},
+	}
+	b, _ := json.Marshal(resp)
+	fmt.Fprintf(s.out, "%s\n", b)
+}
+
+func (s *MCPServer) handleToolCall(ctx context.Context, id interface{}, params json.RawMessage) {
+	var p struct {
+		Name      string                 `json:"name"`
+		Arguments map[string]interface{} `json:"arguments"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		s.sendError(id, -32602, "Invalid params")
+		return
+	}
+
+	var textResult string
+	var err error
+	
+	getString := func(k string) string {
+		v, ok := p.Arguments[k].(string)
+		if !ok { return "" }
+		return v
+	}
+	getBool := func(k string) bool {
+		v, ok := p.Arguments[k].(bool)
+		if !ok { return false }
+		return v
+	}
+	getInt64 := func(k string) int64 {
+		v, ok := p.Arguments[k].(float64)
+		if !ok { return 0 }
+		return int64(v)
+	}
+
+	switch p.Name {
+	case "uat_capabilities":
+		textResult = "uat_runner=1.0\nuat_browser=1.0\nuat_sandbox=1.0"
+	case "uat_submit":
+		commit := getString("commit")
+		scenarioPath := getString("scenario_path")
+		dryRun := getBool("dry_run")
+		
+		if commit == "" || scenarioPath == "" {
+			err = fmt.Errorf("missing required args")
+			break
+		}
+		
+		req := SubmitRequest{
+			Commit:       commit,
+			ScenarioPath: scenarioPath,
+			DryRun:       dryRun,
+		}
+		var resp *SubmitResponse
+		resp, err = s.runner.Submit(ctx, req)
+		if err == nil {
+			textResult = fmt.Sprintf("run_id=%s\nplan=%s", resp.RunID, resp.Plan)
+		}
+	case "uat_status":
+		runID := getString("run_id")
+		cursor := getInt64("cursor")
+		
+		if runID == "" {
+			err = fmt.Errorf("missing run_id")
+			break
+		}
+		
+		req := StatusRequest{
+			RunID:  runID,
+			Cursor: cursor,
+		}
+		var resp *StatusResponse
+		resp, err = s.runner.Status(ctx, req)
+		if err == nil {
+			b, _ := json.Marshal(resp)
+			textResult = string(b)
+		}
+	case "uat_artifact":
+		runID := getString("run_id")
+		artifactPath := getString("path")
+		cursor := getInt64("cursor")
+		tail := getInt64("tail")
+		
+		if runID == "" || artifactPath == "" {
+			err = fmt.Errorf("missing run_id or path")
+			break
+		}
+		
+		fullPath := filepath.Join(s.stateDir, "runs", runID, filepath.Clean(artifactPath))
+		if !strings.HasPrefix(fullPath, filepath.Join(s.stateDir, "runs", runID)) {
+			err = fmt.Errorf("invalid path")
+			break
+		}
+		
+		b, readErr := os.ReadFile(fullPath)
+		if readErr != nil {
+			err = fmt.Errorf("read artifact: %w", readErr)
+			break
+		}
+		// simple cursor/tail implementation
+		if cursor > 0 && cursor < int64(len(b)) {
+			b = b[cursor:]
+		}
+		if tail > 0 && tail < int64(len(b)) {
+			b = b[len(b)-int(tail):]
+		}
+		textResult = string(b)
+	case "uat_browser_action":
+		runID := getString("run_id")
+		action := getString("action")
+		ref := getString("ref")
+		// value := getString("value") // unused right now
+		
+		if runID == "" || action == "" {
+			err = fmt.Errorf("missing run_id or action")
+			break
+		}
+		
+		// Get or create browser context
+		// Assuming we just instantiate for simplicity, but state says "using active run state"
+		// The prompt says "Browser action has only snapshot/click/wait_for_url/read_visible_text using active run state."
+		// How to associate Browser with RunID? A simple map in MCPServer.
+		
+		bCtx, createErr := s.getOrCreateBrowser(ctx, runID)
+		if createErr != nil {
+			err = fmt.Errorf("browser: %w", createErr)
+			break
+		}
+
+		switch action {
+		case "snapshot":
+			snap, e := bCtx.Snapshot(ctx)
+			if e != nil {
+				err = e
+			} else {
+				textResult = fmt.Sprintf("DOM length: %d\nScreenshot size: %d", len(snap.DOM), len(snap.Screenshot))
+			}
+		case "click":
+			if ref == "" {
+				err = fmt.Errorf("missing ref")
+				break
+			}
+			err = bCtx.Click(ctx, ref)
+			if err == nil {
+				textResult = "clicked"
+			}
+		case "wait_for_url":
+			if ref == "" {
+				err = fmt.Errorf("missing ref (url)")
+				break
+			}
+			u, e := url.Parse(ref)
+			if e != nil {
+				err = e
+				break
+			}
+			err = bCtx.WaitForURL(ctx, u)
+			if err == nil {
+				textResult = "url reached"
+			}
+		case "read_visible_text":
+			textResult, err = bCtx.VisibleText(ctx)
+		default:
+			err = fmt.Errorf("unknown browser action: %s", action)
+		}
+
+	case "uat_abort":
+		runID := getString("run_id")
+		
+		if runID == "" {
+			err = fmt.Errorf("missing run_id")
+			break
+		}
+		err = s.runner.Abort(ctx, runID)
+		if err == nil {
+			textResult = "aborted"
+		}
+	default:
+		s.sendError(id, -32601, "Tool not found")
+		return
+	}
+
+	if err != nil {
+		s.sendResponse(id, map[string]interface{}{
+			"content": []interface{}{
+				map[string]interface{}{
+					"type": "text",
+					"text": err.Error(),
+				},
+			},
+			"isError": true,
+		})
+	} else {
+		s.sendResponse(id, map[string]interface{}{
+			"content": []interface{}{
+				map[string]interface{}{
+					"type": "text",
+					"text": textResult,
+				},
+			},
+		})
+	}
+}

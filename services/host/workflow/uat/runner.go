@@ -157,6 +157,10 @@ func (r *Runner) Status(ctx context.Context, req StatusRequest) (*StatusResponse
 		return nil, ErrNotFound
 	}
 
+	r.mu.Lock()
+	_, active := r.activeRuns[req.RunID]
+	r.mu.Unlock()
+
 	eventsPath := filepath.Join(runDir, "events.log")
 	evLog := NewEventLog(eventsPath)
 	events, err := evLog.ReadSince(req.Cursor)
@@ -164,13 +168,9 @@ func (r *Runner) Status(ctx context.Context, req StatusRequest) (*StatusResponse
 		return nil, fmt.Errorf("read events: %w", err)
 	}
 
-	r.mu.Lock()
-	_, active := r.activeRuns[req.RunID]
-	r.mu.Unlock()
-
 	state := "running"
 	if !active {
-		state = "pass"
+		state = "incomplete"
 		for _, e := range events {
 			if e.Type == EventRunDone {
 				state = e.State

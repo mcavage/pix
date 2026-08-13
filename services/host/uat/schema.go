@@ -104,23 +104,54 @@ func validateStepWith(step *Step, index int) error {
 	allowedActions := map[string]bool{
 		"mcp_add":        true,
 		"mcp_auth":       true,
+		"mcp_status":     true,
 		"mcp_remove":     true,
-		"mcp_call":       true,
-		"browser_link":   true,
-		"browser_action": true,
-		"dry_run":        true,
-		"submit":         true,
-		"status":         true,
-		"abort":          true,
-		"read_artifact":  true,
-		"status_probe":   true,
+		"sandbox_create": true,
+		"sandbox_probe":  true,
+		"sandbox_remove": true,
+		"image_load":     true,
+		"image_probe":    true,
+		"clone":          true,
+		"build":          true,
+		"check":          true,
 	}
 	if !allowedActions[step.Do] {
 		return fmt.Errorf("steps[%d]: unknown action: %s", index, step.Do)
 	}
 
 	forbidden := []string{"shell", "command", "argv", "env", "url"}
-	return validateForbiddenKeys(&step.With, forbidden, fmt.Sprintf("steps[%d].with", index))
+	if err := validateForbiddenKeys(&step.With, forbidden, fmt.Sprintf("steps[%d].with", index)); err != nil {
+		return err
+	}
+
+	// Validate action-specific fields
+	switch step.Do {
+	case "mcp_add", "mcp_auth", "mcp_status", "mcp_remove":
+		if !hasKey(&step.With, "name") {
+			return fmt.Errorf("steps[%d]: action '%s' requires 'name' in 'with'", index, step.Do)
+		}
+	case "image_load", "image_probe":
+		if !hasKey(&step.With, "tag") {
+			return fmt.Errorf("steps[%d]: action '%s' requires 'tag' in 'with'", index, step.Do)
+		}
+	case "clone":
+		if !hasKey(&step.With, "dest") {
+			return fmt.Errorf("steps[%d]: action '%s' requires 'dest' in 'with'", index, step.Do)
+		}
+	}
+	return nil
+}
+
+func hasKey(node *yaml.Node, targetKey string) bool {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return false
+	}
+	for i := 0; i < len(node.Content); i += 2 {
+		if node.Content[i].Value == targetKey {
+			return true
+		}
+	}
+	return false
 }
 
 func validateStepExpect(step *Step, index int) error {

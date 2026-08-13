@@ -20,7 +20,7 @@ steps:
   - id: step1
     do: mcp_add
     with:
-      key: value
+      name: test-mcp
 `,
 			wantErr: false,
 		},
@@ -45,7 +45,7 @@ steps:
   - id: step1
     do: hack_the_mainframe
     with:
-      key: value
+      name: test
 `,
 			wantErr: true,
 		},
@@ -60,6 +60,8 @@ needs:
 steps:
   - id: step1
     do: mcp_add
+    with:
+      name: test
 `,
 			wantErr: true,
 		},
@@ -72,6 +74,8 @@ timeout: "5s"
 steps:
   - id: step1
     do: mcp_add
+    with:
+      name: test
     expect:
       unknown_assertion: true
 `,
@@ -96,6 +100,7 @@ steps:
   - id: step1
     do: mcp_add
     with:
+      name: test
       shell: /bin/sh
 `,
 			wantErr: true,
@@ -110,6 +115,7 @@ steps:
   - id: step1
     do: mcp_add
     with:
+      name: test
       nested:
         command: ls
 `,

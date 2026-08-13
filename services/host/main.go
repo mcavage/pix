@@ -42,6 +42,10 @@ func main() {
 		runPlugin(os.Args[2:])
 	case "memory":
 		runMemoryHost(os.Args[2:])
+	case "uat-mcp":
+		runUatMcp(os.Args[2:])
+	case "uat-browser-open":
+		runUatBrowserOpen(os.Args[2:])
 	case "route":
 		runRouteHost(os.Args[2:])
 	case "serve":
