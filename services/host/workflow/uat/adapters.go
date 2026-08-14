@@ -584,8 +584,13 @@ func (l *realLease) Cleanup(ctx context.Context, runID string) error {
 		return fmt.Errorf("cleanup errors: %v", errs)
 	}
 
-	tempProfileDir := filepath.Join(l.stateDir, "uat", "browser", "temp", runID)
-	_ = os.RemoveAll(tempProfileDir)
+	tempProfileDir, pathErr := tempProfilePath(runID)
+	if pathErr != nil {
+		return fmt.Errorf("resolve temporary browser profile: %w", pathErr)
+	}
+	if err := os.RemoveAll(tempProfileDir); err != nil {
+		return fmt.Errorf("remove temporary browser profile: %w", err)
+	}
 
 	return os.Remove(dir)
 }

@@ -488,6 +488,31 @@ func TestAdapters_MCPAuthCaptureSuccessWaitSettle(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+func TestAdapters_LeaseCleanupRemovesGlobalTemporaryProfile(t *testing.T) {
+	globalState := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", globalState)
+	runID := "run-profile-cleanup"
+	profile, err := TempProfilePath(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(profile, "marker"), []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	sessionState := t.TempDir()
+	lease := NewRealLease(sessionState, &captureExec{})
+	if err := lease.Acquire(context.Background(), runID, "run"); err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.Cleanup(context.Background(), runID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(profile); !os.IsNotExist(err) {
+		t.Fatalf("temporary profile %q survived cleanup: %v", profile, err)
+	}
+}
+
 func TestAdapters_LeaseRecords(t *testing.T) {
 	stateDir := t.TempDir()
 	ce := &authCaptureExec{}

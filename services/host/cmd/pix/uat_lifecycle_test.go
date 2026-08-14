@@ -11,6 +11,18 @@ import (
 	"pix/host/uat"
 )
 
+func TestUATLifecycle_SuccessHandsRegistrationToSandboxTeardown(t *testing.T) {
+	source, err := os.ReadFile("run_cmd.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runSession := strings.Index(string(source), "if xerr := launch.RunSession(spec, deps); xerr != nil")
+	handoff := strings.Index(string(source), "launched = true")
+	if runSession < 0 || handoff < runSession {
+		t.Fatalf("successful RunSession must mark UAT registration handed off before the fallback defer")
+	}
+}
+
 func TestUATLifecycle_CreateDev(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "pix-test-uat-*")
 	if err != nil {

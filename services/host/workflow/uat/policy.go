@@ -33,10 +33,10 @@ var ProviderAuthHosts = map[OAuthProvider][]string{
 }
 
 var ProviderAssetHosts = map[OAuthProvider][]string{
-	ProviderGitHub:    {"github.githubassets.com", "avatars.githubusercontent.com"},
-	ProviderGitLab:    {"assets.gitlab-static.net"},
-	ProviderGoogle:    {"ssl.gstatic.com", "fonts.gstatic.com", "fonts.googleapis.com"},
-	ProviderNotion:    {"cdnjs.cloudflare.com"},
+	ProviderGitHub: {"github.githubassets.com", "avatars.githubusercontent.com"},
+	ProviderGitLab: {"assets.gitlab-static.net"},
+	ProviderGoogle: {"ssl.gstatic.com", "fonts.gstatic.com", "fonts.googleapis.com"},
+	ProviderNotion: {"cdnjs.cloudflare.com"},
 }
 
 var ProfileLock sync.Mutex
@@ -62,12 +62,19 @@ func ProfilePath() (string, error) {
 	return p, nil
 }
 
-func TempProfilePath(runID string) (string, error) {
+func tempProfilePath(runID string) (string, error) {
 	state, err := config.StateDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve state dir: %w", err)
 	}
-	p := filepath.Join(state, "uat", "browser", "temp", runID)
+	return filepath.Join(state, "uat", "browser", "temp", runID), nil
+}
+
+func TempProfilePath(runID string) (string, error) {
+	p, err := tempProfilePath(runID)
+	if err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(p, 0700); err != nil {
 		return "", fmt.Errorf("create temp profile: %w", err)
 	}

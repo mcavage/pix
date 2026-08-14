@@ -586,5 +586,9 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		}
 		return cli.SilentError{Code: code}
 	}
+	// RunSession now owns the sandbox lifecycle. A normal last-shell teardown
+	// already removed the registration; a kept sandbox must retain it for the
+	// next attachment. The fallback defer is only for failures before handoff.
+	launched = true
 	return nil
 }
