@@ -1,8 +1,8 @@
 package uat
 
 import (
-	"os"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"

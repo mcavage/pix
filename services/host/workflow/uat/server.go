@@ -122,13 +122,13 @@ type MCPServer struct {
 
 func NewMCPServer(runner *Runner, bf BrowserFactory, stateDir string, in io.Reader, out io.Writer, retryReport map[string]string) *MCPServer {
 	return &MCPServer{
-		runner:         runner,
-		browserFactory: bf,
-		stateDir:       stateDir,
-		in:             in,
-		out:            out,
-		browsers:       make(map[string]*browserEntry),
-		retryReport:    retryReport,
+		runner:          runner,
+		browserFactory:  bf,
+		stateDir:        stateDir,
+		in:              in,
+		out:             out,
+		browsers:        make(map[string]*browserEntry),
+		retryReport:     retryReport,
 		ShutdownTimeout: 5 * time.Second,
 	}
 }
@@ -169,7 +169,6 @@ func (s *MCPServer) getOrCreateBrowser(ctx context.Context, runID string) (Brows
 	entry.err = err
 	close(entry.ready)
 	s.browsersMu.Unlock()
-
 
 	return b, err
 }

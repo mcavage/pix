@@ -26,7 +26,7 @@ func TestBrowserPolicyHandler(t *testing.T) {
 	policy := &OAuthPolicy{Provider: ProviderGitHub, Resolver: &realResolver{}}
 
 	type actionRec struct {
-		id string
+		id     string
 		isFail bool
 	}
 	actions := make(chan actionRec, 10)
@@ -304,6 +304,7 @@ type delayedResolver struct {
 	delay time.Duration
 	fake  Resolver
 }
+
 func (d *delayedResolver) LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error) {
 	select {
 	case <-time.After(d.delay):
@@ -322,8 +323,8 @@ func TestBrowserPolicyRedirectTracking(t *testing.T) {
 
 	policy := &PublicLinkPolicy{Resolver: &fakeResolver{
 		ips: map[string][]net.IPAddr{
-			"example.com":      {{IP: net.ParseIP("93.184.216.34")}},
-			"www.example.com":  {{IP: net.ParseIP("93.184.216.34")}},
+			"example.com":     {{IP: net.ParseIP("93.184.216.34")}},
+			"www.example.com": {{IP: net.ParseIP("93.184.216.34")}},
 		},
 	}}
 

@@ -343,7 +343,6 @@ func TestMCPServer_ShutdownTimeout(t *testing.T) {
 	}
 }
 
-
 type blockingWriter struct {
 	writeBlock chan struct{}
 }
@@ -398,8 +397,8 @@ func TestMCPServer_ShutdownWithBlockedWriter(t *testing.T) {
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("Serve deadlocked on blocked writer")
 	}
-    // Cleanup the blocked writer so the goroutine doesn't leak in tests
-    close(bw.writeBlock)
+	// Cleanup the blocked writer so the goroutine doesn't leak in tests
+	close(bw.writeBlock)
 }
 
 type recordingBrowserFactory struct {

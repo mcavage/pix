@@ -79,9 +79,6 @@ func runUatMcp(args []string) error {
 	return nil
 }
 
-
-
-
 func runUatBrowserCaptureShim(args []string) error {
 	capturePath := os.Getenv("PIX_UAT_BROWSER_CAPTURE")
 	if capturePath == "" {
