@@ -306,6 +306,8 @@ steps:
 
 func TestCandidateSmoke(t *testing.T) {
 	stateDir := t.TempDir()
+	hostHome := filepath.Join(stateDir, "host-home")
+	t.Setenv("HOME", hostHome)
 	mg := &mockGit{
 		readTreeFile: func(ctx context.Context, commit, path string) ([]byte, error) {
 			return []byte(`schema: pix.uat/1
@@ -416,6 +418,12 @@ steps:
 		}
 		if !slices.Contains(lastCmd.env, "PIX_UAT_SMOKE=1") {
 			t.Errorf("candidate env must select the no-provider-key smoke path: %v", lastCmd.env)
+		}
+		if !slices.Contains(lastCmd.env, "HOME="+hostHome) {
+			t.Errorf("candidate env must retain host HOME for sbx runtime discovery: %v", lastCmd.env)
+		}
+		if slices.Contains(lastCmd.env, "HOME="+filepath.Join(stateDir, "runs", resp.RunID, "home")) {
+			t.Errorf("candidate env replaced HOME and hid the sbx runtime: %v", lastCmd.env)
 		}
 	}
 

@@ -257,13 +257,12 @@ func (r *Runner) executeCandidateSmoke(ctx context.Context, runID, commit string
 
 	pixCmd := r.exec.CommandContext(ctx, filepath.Join(res.OutDir, "pix"), args...)
 	// 1) Candidate pix environment: isolate from host pix paths
-	fakeHome := filepath.Join(r.stateDir, "runs", runID, "home")
 	fakeConfig := filepath.Join(r.stateDir, "runs", runID, "config")
 	fakeData := filepath.Join(r.stateDir, "runs", runID, "data")
 	fakeState := filepath.Join(r.stateDir, "runs", runID, "state")
 	fakeCache := filepath.Join(r.stateDir, "runs", runID, "cache")
 
-	for _, d := range []string{fakeHome, fakeConfig, fakeData, fakeState, fakeCache} {
+	for _, d := range []string{fakeConfig, fakeData, fakeState, fakeCache} {
 		if err := os.MkdirAll(d, 0700); err != nil {
 			return err
 		}
@@ -273,8 +272,11 @@ func (r *Runner) executeCandidateSmoke(ctx context.Context, runID, commit string
 		return err
 	}
 
+	// sbx discovers Docker Desktop's runtime socket beneath HOME on macOS. Keep
+	// HOME for that runtime lookup while PIX_CONFIG and every XDG pix root remain
+	// run-local, so the candidate cannot read or mutate normal pix state.
 	envVars := []string{
-		"PATH", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "TERM",
+		"PATH", "HOME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "TERM",
 		"DOCKER_HOST", "DOCKER_CONFIG", // for sbx auth
 	}
 	hasDockerConfig := false
@@ -298,7 +300,6 @@ func (r *Runner) executeCandidateSmoke(ctx context.Context, runID, commit string
 		}
 	}
 	newEnv = append(newEnv,
-		"HOME="+fakeHome,
 		"XDG_CONFIG_HOME="+fakeConfig,
 		"XDG_DATA_HOME="+fakeData,
 		"XDG_STATE_HOME="+fakeState,
