@@ -206,6 +206,10 @@ func sessionKeyFor(o launch.RunOpts) string { return o.Name }
 // runFail reports a launch failure in run's own words and hands the root the
 // exit code to use. The message is already complete, so it travels as a
 // SilentError rather than being re-prefixed by the root's renderer.
+func uatSmokeSkipsProviderKeyGate() bool {
+	return os.Getenv("PIX_UAT_SMOKE") == "1"
+}
+
 func runFail(d *cli.Deps, code int, format string, a ...any) error {
 	fmt.Fprintf(d.Err, "pix run: "+format+"\n", a...)
 	return cli.SilentError{Code: code}
@@ -268,7 +272,7 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	// answer — unprobeable means cannot verify, which proceeds. keyResult is kept for
 	// the readiness snapshot, so run pays for one `sbx secret ls`.
 	var keyResult health.Result
-	if _, lerr := defaultShellEnv().LookPath("sbx"); lerr == nil && !inference.ConfiguredKeylessInference() {
+	if _, lerr := defaultShellEnv().LookPath("sbx"); lerr == nil && !inference.ConfiguredKeylessInference() && !uatSmokeSkipsProviderKeyGate() {
 		env := defaultShellEnv()
 		launch.BootstrapProviderKeys(env, d.In, d.Err, d.Interactive)
 		keyResult = launch.ProbeModelKeys(context.Background(), "")

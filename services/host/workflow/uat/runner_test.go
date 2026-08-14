@@ -3,6 +3,7 @@ package uat_test
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -412,6 +413,9 @@ steps:
 		expectedDir := filepath.Join(stateDir, "runs", resp.RunID, "source")
 		if lastCmd.dir != expectedDir {
 			t.Errorf("expected dir %s, got %s", expectedDir, lastCmd.dir)
+		}
+		if !slices.Contains(lastCmd.env, "PIX_UAT_SMOKE=1") {
+			t.Errorf("candidate env must select the no-provider-key smoke path: %v", lastCmd.env)
 		}
 	}
 

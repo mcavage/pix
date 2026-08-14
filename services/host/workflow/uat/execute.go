@@ -304,6 +304,7 @@ func (r *Runner) executeCandidateSmoke(ctx context.Context, runID, commit string
 		"XDG_STATE_HOME="+fakeState,
 		"XDG_CACHE_HOME="+fakeCache,
 		"PIX_CONFIG="+pixConfigFile,
+		"PIX_UAT_SMOKE=1",
 	)
 
 	pixCmd.SetEnv(newEnv)
