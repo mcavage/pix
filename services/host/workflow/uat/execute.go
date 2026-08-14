@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -321,6 +322,19 @@ func (r *Runner) executeCandidateSmoke(ctx context.Context, runID, commit string
 		return fmt.Errorf("create candidate log: %w", err)
 	}
 	logWriter := &cappedLogWriter{file: logFile, remaining: candidateLogMaxBytes}
+	preflight := r.exec.CommandContext(ctx, "sbx", "ls", "--json")
+	preflight.SetEnv(newEnv)
+	preflight.SetDir(res.SourceDir)
+	preflightOut, preflightErr := preflight.Output()
+	_, _ = fmt.Fprintf(logWriter, "$ sbx ls --json\n%s\n", preflightOut)
+	if preflightErr != nil {
+		var exitErr *exec.ExitError
+		if errors.As(preflightErr, &exitErr) && len(exitErr.Stderr) > 0 {
+			_, _ = fmt.Fprintf(logWriter, "%s", exitErr.Stderr)
+		}
+		_ = logFile.Close()
+		return fmt.Errorf("candidate sbx preflight failed: %w (log: steps/%s.log)", preflightErr, stepID)
+	}
 	_, _ = fmt.Fprintf(logWriter, "$ %s %s\n", filepath.Join(res.OutDir, "pix"), strings.Join(args, " "))
 	stdout, err := pixCmd.StdoutPipe()
 	if err != nil {
