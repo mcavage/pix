@@ -8,6 +8,30 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## Unreleased
 
+### Fixed
+
+- **Subagents no longer die for running a long command.** The inactivity
+  watchdog killed a child that emitted nothing for 5 minutes. That is a sound
+  liveness proxy while the MODEL is working and an unsound one while a TOOL is:
+  a child running a single long bash command emits `tool_execution_start` and
+  then nothing at all until `tool_execution_end`. Measured against a real child,
+  a 45s `sleep` produced a 45s gap in the stream, because
+  `tool_execution_update` fires at the boundaries and does not stream progress.
+  So an `engineer` subagent running this repo's own required verification step,
+  `go test ./... -race`, went silent for minutes and was killed at 5 for doing
+  exactly what it was asked, leaving uncommitted work and no report. The
+  extension now tracks tool depth from those events (depth, not a boolean, since
+  a subagent tool can nest) and applies a separate `tool_idle_ms` budget while
+  any tool is in flight, default 15 min, overridable per agent and by
+  `PI_SUBAGENT_TOOL_IDLE_MS`. An agent that explicitly raised `idle_ms` past the
+  tool budget keeps its longer value. The wall cap is untouched, so a tool that
+  hangs forever is still bounded and no child can become unbounded.
+- **Agent frontmatter was untestable.** The test stub for `parseFrontmatter`
+  returned `{}` unconditionally, so every per-agent frontmatter behavior (model,
+  intent, thinking, max_turns, idle_ms, wall_ms, web) could be asserted by a test
+  that passed while the extension never saw the key. The stub now really parses
+  scalar frontmatter.
+
 ### Added
 
 - **Self-development UAT for `pix run --dev`.** Fresh dev sandboxes receive a unique, session-scoped host MCP with a closed tool set for committed scenario validation, candidate builds, disposable `pix-uat-*` sandboxes, bounded artifacts, and browser/OAuth checks through a dedicated Chrome profile. The runner owns typed leases, crash cleanup, concurrency limits, and per-step logs without exposing a host shell or changing normal pix configuration. `pix uat status`, `pix uat browser bootstrap`, and `uat/scenarios/smoke.yaml` provide the bootstrap path; the first real host smoke run passed end to end.
