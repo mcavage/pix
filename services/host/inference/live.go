@@ -241,13 +241,30 @@ func CompileInferenceRuntime(cfg *config.Config, now time.Time) (routing.Compile
 
 // manifestModels is the ONE place a callable binding becomes runtime metadata,
 // so --models and the manifest the bridge registers from can never disagree
-// about which ids exist or how they are spelled. A binding whose catalog row is
-// gone is dropped: the runtime needs its limits and prices.
+// about which ids exist or how they are spelled. A binding whose catalog row
+// is MISSING (an Ollama tag the user pulled that models.json has never heard
+// of — see workflow/models.ConfigureOllamaInference's second pass) is still
+// emitted, not dropped: dropping it here is exactly the dead-on-arrival bug —
+// the binding would sit in config.toml forever, provably bound, and never
+// reach CallableRuntimeModels or the bridge, so `pix run --model ollama/<tag>`
+// fails at the AllowsModel gate no matter how the binding got there. There is
+// no catalog row to draw a label, context window, or price from, and
+// inventing one would be a lie (a wrong number is worse than an absent one),
+// so the entry carries only what IS known — id, backend, upstream name — and
+// leaves limits/cost at their zero value; CatalogModel stays "" so this can
+// never be mistaken for a catalog row downstream. The bridge's own fallback
+// (extensions/ollama-bridge.ts modelsFromManifest: context/maxTokens default
+// when unset, cost always $0 for ollama) covers the gap on the runtime side.
+// Critically, a synthesized entry here can NEVER leak into routing:
+// routing.RegistryForBindings only ever flips Available on a catalog row that
+// ALREADY exists by ID, so an id with no catalog row is never added to the
+// registry and can never become a routing candidate, let alone win an intent.
 func manifestModels(cfg *config.Config, reg *routing.Registry) []runtimeModel {
 	var out []runtimeModel
 	for _, b := range Bindings(cfg) {
 		m, ok := reg.Get(b.Model)
 		if !ok {
+			out = append(out, runtimeModel{ID: RuntimeID(b), Backend: b.Backend, Name: b.UpstreamID})
 			continue
 		}
 		out = append(out, runtimeModel{

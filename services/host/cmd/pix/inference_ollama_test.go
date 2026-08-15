@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"pix/host/hostenv"
 	"pix/host/workflow/doctor"
 	"pix/host/workflow/models"
@@ -21,20 +22,55 @@ import (
 	"pix/host/sys/systest"
 )
 
-// ollamaListEnv fakes a healthy daemon whose `ollama list` prints tags, plus a
-// memory reading. BOTH platform seams are wired (sysctl and /proc/meminfo) so
-// the fixture works whatever GOOS the test binary runs on; every RAM figure the
-// tests use resolves to the same rung under the darwin AND linux fractions.
-func ollamaListEnv(tags []string, _ string, totalGB float64) hostenv.Env {
-	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/local/bin/ollama", nil }}}
-	rows := "NAME ID SIZE MODIFIED\n"
+// ollamaTagsBody renders a fake daemon's /api/tags response for tags: one row
+// per pulled tag, remote_host set and a manifest-sized (not zero) footprint
+// for anything the ":cloud"/"-cloud" naming convention marks as Ollama Cloud,
+// a real-weight-sized footprint otherwise. Numbers are pinned against a live
+// daemon capture (see inference.go's ollamaTagInfo doc comment): real Cloud
+// manifest stubs run a few hundred bytes, real local weights run into the GB.
+func ollamaTagsBody(tags []string) []byte {
+	type row struct {
+		Name       string `json:"name"`
+		RemoteHost string `json:"remote_host,omitempty"`
+		Size       int64  `json:"size"`
+	}
+	rows := []row{}
 	for _, tag := range tags {
-		rows += tag + " abc 1GB - now\n"
+		r := row{Name: tag, Size: 6_600_000_000}
+		if strings.HasSuffix(tag, ":cloud") || strings.HasSuffix(tag, "-cloud") {
+			r.RemoteHost, r.Size = "https://ollama.com", 300
+		}
+		rows = append(rows, r)
+	}
+	b, _ := json.Marshal(map[string]any{"models": rows})
+	return b
+}
+
+// ollamaListEnv fakes a healthy daemon: a real HTTP /api/tags (not `ollama
+// list` text, which ollamaListing no longer parses) plus a memory reading.
+// BOTH platform seams are wired (sysctl and /proc/meminfo) so the fixture
+// works whatever GOOS the test binary runs on; every RAM figure the tests use
+// resolves to the same rung under the darwin AND linux fractions.
+func ollamaListEnv(t *testing.T, tags []string, _ string, totalGB float64) hostenv.Env {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(ollamaTagsBody(tags))
+	}))
+	t.Cleanup(srv.Close)
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/local/bin/ollama", nil }}}
+	systest.Of(env.System).GetenvFn = func(name string) string {
+		if name == "OLLAMA_HOST" {
+			return u.Host
+		}
+		return ""
 	}
 	systest.Of(env.System).RunTimedFn = func(name string, args ...string) (string, bool, error) {
 		switch name {
-		case "ollama":
-			return rows, false, nil
 		case "sysctl":
 			return fmt.Sprintf("%d\n", int64(totalGB*inference.BytesPerGB)), false, nil
 		}
@@ -95,7 +131,7 @@ func binding(model string) config.InferenceModelBinding {
 // evidence. Re-introducing `Verified: true` at the bind site fails here.
 func TestConfigureOllamaInferenceBindsUnverifiedCandidates(t *testing.T) {
 	cfg := &config.Config{}
-	env := ollamaListEnv([]string{"qwen3.5:9b", "glm-5.2:cloud"}, "darwin", 32)
+	env := ollamaListEnv(t, []string{"qwen3.5:9b", "glm-5.2:cloud"}, "darwin", 32)
 	plan, err := models.ConfigureOllamaInference(cfg, env, models.OllamaSelection{Local: true, Cloud: true}, io.Discard)
 	if err != nil {
 		t.Fatal(err)
@@ -124,7 +160,7 @@ func TestConfigureOllamaInferenceBindsUnverifiedCandidates(t *testing.T) {
 // the gated model that 401'd.
 func TestOllamaLocalSelectionBindsNoCloudModel(t *testing.T) {
 	cfg := &config.Config{}
-	env := ollamaListEnv([]string{"qwen3.5:9b", "glm-5.2:cloud", "deepseek-v4-pro:cloud"}, "darwin", 32)
+	env := ollamaListEnv(t, []string{"qwen3.5:9b", "glm-5.2:cloud", "deepseek-v4-pro:cloud"}, "darwin", 32)
 	if _, err := models.ConfigureOllamaInference(cfg, env, models.OllamaSelection{Local: true}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +176,7 @@ func TestOllamaLocalSelectionBindsNoCloudModel(t *testing.T) {
 // offer it.
 func TestOllamaLocalWithNoCatalogModelPulledSucceeds(t *testing.T) {
 	cfg := &config.Config{}
-	env := ollamaListEnv(nil, "darwin", 32)
+	env := ollamaListEnv(t, nil, "darwin", 32)
 	plan, err := models.ConfigureOllamaInference(cfg, env, models.OllamaSelection{Local: true}, io.Discard)
 	if err != nil {
 		t.Fatalf("a local-only user who has pulled nothing must not be hard-failed: %v", err)
@@ -156,7 +192,7 @@ func TestOllamaLocalWithNoCatalogModelPulledSucceeds(t *testing.T) {
 // TestOllamaLocalSkipsRungsThisMachineCannotRun guards the offer filter.
 func TestOllamaLocalSkipsRungsThisMachineCannotRun(t *testing.T) {
 	cfg := &config.Config{}
-	env := ollamaListEnv([]string{"qwen3.5:9b", "qwen3.5:35b"}, "darwin", 24)
+	env := ollamaListEnv(t, []string{"qwen3.5:9b", "qwen3.5:35b"}, "darwin", 24)
 	plan, err := models.ConfigureOllamaInference(cfg, env, models.OllamaSelection{Local: true}, io.Discard)
 	if err != nil {
 		t.Fatal(err)
@@ -741,21 +777,18 @@ func TestEmptyOllamaSelectionPersistsNothing(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		sel      models.OllamaSelection
-		listing  string
 		totalGB  float64
 		wantWord string
 	}{
 		{
 			name:     "cloud selected while signed out",
 			sel:      models.OllamaSelection{Cloud: true},
-			listing:  "NAME ID SIZE MODIFIED\n",
 			totalGB:  64,
 			wantWord: "ollama signin",
 		},
 		{
 			name:     "local selected on a machine under the floor",
 			sel:      models.OllamaSelection{Local: true},
-			listing:  "NAME ID SIZE MODIFIED\n",
 			totalGB:  16,
 			wantWord: "below the 24 GB",
 		},
@@ -766,18 +799,26 @@ func TestEmptyOllamaSelectionPersistsNothing(t *testing.T) {
 			// one, and the 24 GB floor is a TOTAL-RAM rule, so it fires identically
 			// whichever usable-fraction applies.
 			env := hwMemEnv(t, runtime.GOOS, tc.totalGB)
-			base := systest.Of(env.System).RunFn
-			systest.Of(env.System).RunFn = func(name string, args ...string) (string, error) {
-				if name == "ollama" && len(args) == 1 && args[0] == "list" {
-					return tc.listing, nil
+			// An empty /api/tags: signed-out-of-cloud and pulled-nothing look identical
+			// to the daemon, so a real fake server answering an empty listing exercises
+			// both rows without hitting any real network.
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"models":[]}`))
+			}))
+			t.Cleanup(srv.Close)
+			u, err := url.Parse(srv.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			systest.Of(env.System).GetenvFn = func(name string) string {
+				if name == "OLLAMA_HOST" {
+					return u.Host
 				}
-				if base != nil {
-					return base(name, args...)
-				}
-				return "", nil
+				return ""
 			}
 			cfg := &config.Config{}
-			_, err := models.ConfigureOllamaInference(cfg, env, tc.sel, io.Discard)
+			_, err = models.ConfigureOllamaInference(cfg, env, tc.sel, io.Discard)
 			if err == nil {
 				t.Fatal("an Ollama selection that binds nothing must fail, not persist an empty backend")
 			}

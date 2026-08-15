@@ -187,15 +187,43 @@ func VerifyOllamaInference(cfg *config.Config, env hostenv.Env, out io.Writer) (
 	cands := eligible(cfg, func(b config.InferenceModelBinding, backend config.InferenceBackend) bool {
 		return backend.Driver == "ollama" && b.Source == ""
 	})
+	// A candidate with no catalog row (an unknown pulled tag — see
+	// ConfigureOllamaInference's second pass) carries NO stored local/cloud
+	// classification: reg.Get finds nothing for it. Without re-deriving that
+	// classification here, every such candidate fell into the CLOUD bucket below
+	// unconditionally — including ones ConfigureOllamaInference itself just
+	// classified and bound as LOCAL — so a big local model got probed
+	// CONCURRENTLY with N others at num_ctx 0 under a 20s cloud timeout: the exact
+	// RAM-exhaustion hazard the serialized local loop below exists to prevent,
+	// and a model that cannot cold-load that fast in that company never became
+	// callable. Re-reading the SAME signals (remote_host / :cloud-suffix / size)
+	// against a fresh listing carries the classification through. Best-effort: a
+	// listing failure here (the daemon answered during configure but not now) is
+	// this function's PRE-FIX behavior for that one edge case — fall through to
+	// the cloud bucket — not a new regression.
+	unknownTagInfo, _ := ollamaListing(env)
 	var local, cloud []candidate
 	for _, c := range cands {
 		// num_ctx is the rung's DECLARED context, so the probe allocates the same
 		// KV cache the RAM gate priced: a rung that cannot hold its own context
 		// fails here, which is exactly when we want to find out.
-		if m, found := reg.Get(c.label); found && m.Local {
+		m, found := reg.Get(c.label)
+		if found && m.Local {
 			c.numCtx, c.minRAM = m.ContextWindow, m.MinRAMGB
 			local = append(local, c)
 			continue
+		}
+		if !found {
+			if info, ok := unknownTagInfo[inference.OllamaTagFor(c.label)]; ok {
+				if cloudTag, classified := classifyOllamaTag(inference.OllamaTagFor(c.label), info); classified && !cloudTag {
+					// Unknown-but-classified-LOCAL: no declared context (nothing to price
+					// a KV cache from), so numCtx stays 0 — the same shape a cloud probe
+					// would send — but this candidate joins the SERIALIZED, budgeted local
+					// loop, never the concurrent cloud one.
+					local = append(local, c)
+					continue
+				}
+			}
 		}
 		cloud = append(cloud, c)
 	}
@@ -287,7 +315,7 @@ func ReconcileDirectInference(cfg *config.Config, env hostenv.Env, in io.Reader,
 
 // ReconcileOllamaInference is ReconcileDirectInference's counterpart for the
 // one backend with no key to store: same order, same honesty rules, but the
-// evidence is `ollama list` plus a generate through the resolved endpoint. It
+// evidence is the daemon's /api/tags plus a generate through the resolved endpoint. It
 // exists because `models add` was built around secret.ProviderKeyRefOrder, so
 // the one keyless backend had no post-setup path at all.
 //
