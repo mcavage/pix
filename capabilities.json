@@ -25,6 +25,9 @@
     ],
     "email": [
       { "provider": "none", "about": "Email — read/search a mailbox. Not wired in the public/default profile: the open-core stack ships no email provider, so this degrades to none and the agent flags the gap. A private pack wires it per profile — a personal profile points at its own mail MCP server; a work profile can reuse the `gworkspace` provider (google-workspace) for Gmail. Ship the pointer, not the account." }
+    ],
+    "docs-write": [
+      { "provider": "none", "about": "Generic capability to create or overwrite documents. Defaults to none. A private pack can provide a separate write server narrowly wired to create documents without altering existing gworkspace read-only boundaries." }
     ]
   }
 }

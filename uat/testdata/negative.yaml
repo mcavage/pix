@@ -1,0 +1,12 @@
+schema: pix.uat/1
+name: invalid
+timeout: 5m
+needs:
+  - sbx
+steps:
+  - id: smoke_test
+    do: candidate_smoke
+    with:
+      name: should_not_be_here
+    expect:
+      verdict: pass

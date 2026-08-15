@@ -10,6 +10,21 @@ import (
 // `--` pi passthrough (kong would otherwise feed the first pi arg to DIR) and
 // the bare-DIR alias.
 
+func TestUATSmokeProviderKeyGateBypassIsExplicit(t *testing.T) {
+	t.Setenv("PIX_UAT_SMOKE", "")
+	if uatSmokeSkipsProviderKeyGate() {
+		t.Fatal("empty PIX_UAT_SMOKE bypassed the provider-key gate")
+	}
+	t.Setenv("PIX_UAT_SMOKE", "true")
+	if uatSmokeSkipsProviderKeyGate() {
+		t.Fatal("non-canonical PIX_UAT_SMOKE bypassed the provider-key gate")
+	}
+	t.Setenv("PIX_UAT_SMOKE", "1")
+	if !uatSmokeSkipsProviderKeyGate() {
+		t.Fatal("PIX_UAT_SMOKE=1 did not select the isolated smoke path")
+	}
+}
+
 func TestRunPassthrough_TailReachesPiVerbatim(t *testing.T) {
 	dir := t.TempDir()
 	for _, tc := range []struct {

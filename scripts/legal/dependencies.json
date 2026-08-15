@@ -199,6 +199,55 @@
       "license": "BSD-3-Clause",
       "licenseFile": "LICENSE",
       "class": "permissive"
+    },
+    {
+      "module": "github.com/chromedp/cdproto",
+      "version": "v0.0.0-20260714215040-dc233986426f",
+      "license": "MIT",
+      "licenseFile": "LICENSE",
+      "class": "permissive"
+    },
+    {
+      "module": "github.com/chromedp/chromedp",
+      "version": "v0.16.0",
+      "license": "MIT",
+      "licenseFile": "LICENSE",
+      "class": "permissive"
+    },
+    {
+      "module": "github.com/chromedp/sysutil",
+      "version": "v1.1.0",
+      "license": "MIT",
+      "licenseFile": "LICENSE",
+      "class": "permissive"
+    },
+    {
+      "module": "github.com/gobwas/httphead",
+      "version": "v0.1.0",
+      "license": "MIT",
+      "licenseFile": "LICENSE",
+      "class": "permissive"
+    },
+    {
+      "module": "github.com/gobwas/pool",
+      "version": "v0.2.1",
+      "license": "MIT",
+      "licenseFile": "LICENSE",
+      "class": "permissive"
+    },
+    {
+      "module": "github.com/gobwas/ws",
+      "version": "v1.4.0",
+      "license": "MIT",
+      "licenseFile": "LICENSE",
+      "class": "permissive"
+    },
+    {
+      "module": "github.com/go-json-experiment/json",
+      "version": "v0.0.0-20260623181947-01eb4420fa68",
+      "license": "BSD-3-Clause",
+      "licenseFile": "LICENSE",
+      "class": "permissive"
     }
   ],
   "bakedTools": [

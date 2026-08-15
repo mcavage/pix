@@ -25,6 +25,7 @@ CLI reference of its own.
 | `pack` | the portable capability context: ls/show/use/rm (no authoring verb, edit `pack.toml`/`skills/` by hand) | §5, `docs/design/packs-v2.md` |
 | `mcp` | `add`/`ls`/`auth` the MCP servers your pack declares, through the sbx gateway (the one door integrations come through) | §8 |
 | `secret` | manage the 1Password `op://` refs (never the values) | §8 |
+| `uat` | `status`/`browser bootstrap` for self-UAT | `docs/HOST-UAT.md` |
 | `config` | `show`/`path`/`get`/`set`/`unset` the single runtime config | §1 |
 | `task` | isolated parallel-work clones + sandboxes | `docs/design/worktree-tasks.md` |
 | `models` | which models pix can use, and what the router resolves: ls/show/pick/add | `docs/design/routing.md`, `docs/design/models-cli.md` |

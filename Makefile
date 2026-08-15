@@ -5,7 +5,7 @@
 # else pull once. Keep in sync with `version` in package.json and `image:` in
 # pi-kit/spec.yaml.
 DOCKER_USER ?= mcavage
-VERSION     ?= 0.1.65
+VERSION     ?= 0.1.66
 # LAUNCHER_VERSION stamps the pix launcher binary. A LOCAL build marks the
 # version "+local" so the launcher knows it is UNRELEASED (no matching git tag
 # v$(VERSION) exists) and uses the local checkout kit instead of pinning a bogus
@@ -151,8 +151,8 @@ load: build ## Build + load the image into sbx under a UNIQUE tag, so `make run`
 	echo "Loaded image:  $$REF"; \
 	echo ""; \
 	echo "Run this exact build (recreates the sandbox so the new image takes effect):"; \
-	echo "  pix run --replace --template $$REF     # from ANY directory (5-worktree friendly)"; \
-	echo "  sbx rm -f $(NAME) && make run               # dev flow from this checkout (live skills + MCP)"
+	echo "  pix rm $(NAME) && pix run --template $$REF     # from ANY directory (5-worktree friendly)"; \
+	echo "  make run                                       # dev flow from this checkout (live skills + MCP)"
 
 publish: build ## Push the built image to the registry as :$(VERSION) and :latest (run `docker login` first)
 	docker push $(IMAGE)
@@ -190,16 +190,16 @@ NAME ?= pix-pix
 run: require-launcher ## Launch a pix sandbox NAME. If NAME is stopped it's recreated (workspace + .pi-sessions are host-mounted, so nothing is lost); if it's already running this refuses rather than clobber a live session. `make run NAME=pix-2` opens a second parallel sandbox in another window. (Kit-defined agents can't be re-attached, hence recreate.)
 	@status=$$(sbx ls 2>/dev/null | awk -v n="$(NAME)" '$$1==n{print $$3}'); \
 	if [ "$$status" = "running" ]; then \
-		echo "ERROR: sandbox $(NAME) is already running (a live pi). Use a different name (make run NAME=pix-2) or 'sbx rm -f $(NAME)' first."; exit 1; \
+		echo "ERROR: sandbox $(NAME) is already running (a live pi). Use a different name (make run NAME=pix-2) or 'pix rm $(NAME)' first."; exit 1; \
 	fi; \
 	if [ -n "$$status" ]; then \
 		echo "(sandbox $(NAME) exists [$$status] — recreating; workspace + .pi-sessions persist on the host)"; \
-		sbx rm -f $(NAME) >/dev/null 2>&1 || true; \
+		"$(PIX_BIN)" rm "$(NAME)" >/dev/null; \
 	fi; \
 	TAG=$$(cat out/.local-image-tag 2>/dev/null || true); \
 	[ -n "$$TAG" ] && echo "(new sandbox $(NAME), local build :$$TAG)" || echo "(new sandbox $(NAME), kit-pinned image)"; \
 	mkdir -p .pix && echo "$(OLLAMA_BRIDGE_MODEL)" > .pix/ollama-bridge.model; \
-	exec sbx run pix --name $(NAME) $${TAG:+--template docker.io/$(DOCKER_USER)/pix:$$TAG} --kit $(KIT) $(MCP_FLAGS) . -- $(DEV_SKILLS)
+	exec "$(PIX_BIN)" run --dev --name "$(NAME)" $${TAG:+--template docker.io/$(DOCKER_USER)/pix:$$TAG} .
 
 # Run the latest PUBLISHED image straight off the git-hosted kit — the true
 # consumer path, no local repo needed. Every push to main auto-publishes a NEW

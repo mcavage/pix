@@ -88,6 +88,7 @@ real mailbox at all.
   `--wrap-untrusted` fences returned bodies as data rather than instructions —
   a mitigation, not a guarantee. The `gworkspace` skill carries the rule the
   agent is asked to hold.
+- **Writing Documents.** The base capability is read-only. A private pack can provide a separate `docs-write` capability (defaulting to none in `capabilities.json`) that resolves to a narrowly wired write server without altering existing gworkspace read-only boundaries. If `docs-write` resolves to none, the agent will plainly state that writing docs is not wired.
 - **The keyring password unlocks standing OAuth.** Whatever process env holds
   it can read your mail. Keep gog's home and keyring file owner-only and the
   host single-user; if the password leaks, treat the OAuth grant as compromised.

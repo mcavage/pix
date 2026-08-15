@@ -36,8 +36,15 @@ from the source of truth.
 | --- | --- | --- |
 | github.com/alecthomas/kong | v1.16.0 | MIT |
 | github.com/BurntSushi/toml | v1.6.0 | MIT |
+| github.com/chromedp/cdproto | v0.0.0-20260714215040-dc233986426f | MIT |
+| github.com/chromedp/chromedp | v0.16.0 | MIT |
+| github.com/chromedp/sysutil | v1.1.0 | MIT |
 | github.com/dustin/go-humanize | v1.0.1 | MIT |
 | github.com/fatih/color | v1.13.0 | MIT |
+| github.com/go-json-experiment/json | v0.0.0-20260623181947-01eb4420fa68 | BSD-3-Clause |
+| github.com/gobwas/httphead | v0.1.0 | MIT |
+| github.com/gobwas/pool | v0.2.1 | MIT |
+| github.com/gobwas/ws | v1.4.0 | MIT |
 | github.com/golang/protobuf | v1.5.4 | BSD-3-Clause |
 | github.com/google/uuid | v1.6.0 | BSD-3-Clause |
 | github.com/hashicorp/go-hclog | v1.6.3 | MIT |

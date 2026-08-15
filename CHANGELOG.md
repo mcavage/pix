@@ -10,6 +10,8 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Self-development UAT for `pix run --dev`.** Fresh dev sandboxes receive a unique, session-scoped host MCP with a closed tool set for committed scenario validation, candidate builds, disposable `pix-uat-*` sandboxes, bounded artifacts, and browser/OAuth checks through a dedicated Chrome profile. The runner owns typed leases, crash cleanup, concurrency limits, and per-step logs without exposing a host shell or changing normal pix configuration. `pix uat status`, `pix uat browser bootstrap`, and `uat/scenarios/smoke.yaml` provide the bootstrap path; the first real host smoke run passed end to end.
+- **Optional document-write capability.** `docs-write` defaults to `none`, allowing private packs to attach a separate narrowly scoped writer while the existing `gworkspace` capability remains read-only.
 - **Supervision-tree observability, end to end.** `pix-host serve` now publishes
   a typed snapshot of the Suture tree (`~/.local/state/pix/serve.units.json`,
   atomic + 0600, republished every 5 s and on every supervision event), and both

@@ -28,6 +28,7 @@ import (
 	"pix/host/sandbox"
 	"pix/host/secret"
 	"pix/host/service"
+	"pix/host/uat"
 	"pix/host/workflow/doctor"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/pack"
@@ -205,6 +206,10 @@ func sessionKeyFor(o launch.RunOpts) string { return o.Name }
 // runFail reports a launch failure in run's own words and hands the root the
 // exit code to use. The message is already complete, so it travels as a
 // SilentError rather than being re-prefixed by the root's renderer.
+func uatSmokeSkipsProviderKeyGate() bool {
+	return os.Getenv("PIX_UAT_SMOKE") == "1"
+}
+
 func runFail(d *cli.Deps, code int, format string, a ...any) error {
 	fmt.Fprintf(d.Err, "pix run: "+format+"\n", a...)
 	return cli.SilentError{Code: code}
@@ -267,7 +272,7 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	// answer — unprobeable means cannot verify, which proceeds. keyResult is kept for
 	// the readiness snapshot, so run pays for one `sbx secret ls`.
 	var keyResult health.Result
-	if _, lerr := defaultShellEnv().LookPath("sbx"); lerr == nil && !inference.ConfiguredKeylessInference() {
+	if _, lerr := defaultShellEnv().LookPath("sbx"); lerr == nil && !inference.ConfiguredKeylessInference() && !uatSmokeSkipsProviderKeyGate() {
 		env := defaultShellEnv()
 		launch.BootstrapProviderKeys(env, d.In, d.Err, d.Interactive)
 		keyResult = launch.ProbeModelKeys(context.Background(), "")
@@ -407,6 +412,27 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		o.StaticMCP = composeStaticMCP(o.StaticMCP, cfg.MCP, o.MCP)
 	}
 
+	var uatRec *uat.Registration
+	if creating && o.Dev {
+		id, err := uat.GenerateSessionID()
+		if err != nil {
+			return err
+		}
+		// Make MCPName strictly pix-uat-ID to avoid length issues if o.Name is long
+		uatRec = &uat.Registration{
+			SessionID: id,
+			MCPName:   "pix-uat-" + id,
+		}
+		o.StaticMCP = composeStaticMCP(o.StaticMCP, nil, []string{uatRec.MCPName})
+	} else {
+		// Attach reconstructs without mutation
+		rec, err := uat.ReadRegistration(defaultShellEnv(), o.Name)
+		if err == nil && rec != nil {
+			o.StaticMCP = composeStaticMCP(o.StaticMCP, nil, []string{rec.MCPName})
+			uatRec = rec
+		}
+	}
+
 	plan := launch.PlanSandboxLaunch(state, cfg, o, version)
 	if plan.Err != nil {
 		// Fail closed BEFORE any output claims a create or attach is happening,
@@ -470,6 +496,25 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		return runFail(d, 1, "could not build trusted host state: %v", perr)
 	}
 
+	if creating && o.Dev && uatRec != nil {
+		if err := uat.WriteRegistration(defaultShellEnv(), o.Name, uatRec); err != nil {
+			return runFail(d, 1, "failed to record UAT session: %v", err)
+		}
+		uatState, _ := defaultShellEnv().StateDir()
+		if err := uat.RegisterMCP(defaultShellEnv(), uatRec, o.DevRoot, filepath.Join(uatState, "uat")); err != nil {
+			_ = uat.DeleteRegistration(defaultShellEnv(), o.Name)
+			return runFail(d, 1, "failed to register UAT MCP: %v", err)
+		}
+	}
+
+	launched := false
+	defer func() {
+		if !launched && creating && o.Dev && uatRec != nil {
+			_ = uat.UnregisterMCP(defaultShellEnv(), uatRec.MCPName)
+			_ = uat.DeleteRegistration(defaultShellEnv(), o.Name)
+		}
+	}()
+
 	if os.Getenv("PIX_DEBUG") != "" {
 		fmt.Fprintln(d.Err, "+ sbx "+strings.Join(args, " "))
 	}
@@ -509,6 +554,10 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		},
 	}
 	if xerr := launch.RunSession(spec, deps); xerr != nil {
+		if creating && o.Dev && uatRec != nil {
+			_ = uat.UnregisterMCP(defaultShellEnv(), uatRec.MCPName)
+			_ = uat.DeleteRegistration(defaultShellEnv(), o.Name)
+		}
 		var refused *launch.SessionRefused
 		if errors.As(xerr, &refused) {
 			// Decided under the lifecycle lock, before anything started: no create, no
@@ -537,5 +586,9 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		}
 		return cli.SilentError{Code: code}
 	}
+	// RunSession now owns the sandbox lifecycle. A normal last-shell teardown
+	// already removed the registration; a kept sandbox must retain it for the
+	// next attachment. The fallback defer is only for failures before handoff.
+	launched = true
 	return nil
 }

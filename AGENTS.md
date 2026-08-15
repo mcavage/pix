@@ -197,7 +197,7 @@ pack repo: hand the user the diff to apply.
   trips endpoint security / EDR**. A compiled Go binary doing the same work runs
   unflagged. So when you add a host service,
   add a subcommand to `pix-host`, don't write another `node …/server.ts`.
-- **Pix ships NO MCP servers and special-cases NO vendor.** Every server comes
+- **Pix ships NO general/vendor MCP servers (exception: uat-mcp).** Every server comes
   from the active pack's `pack.toml`: an `[[integrations]]` stanza with **exactly
   one** transport (`command` host binary, `image` container, `manifest` OCI, `url`
   remote), `env`/`env_keys` for credential NAMES, optional `probe` for health.
@@ -209,6 +209,7 @@ pack repo: hand the user the diff to apply.
   deleted verb: it never names one. The `gworkspace` and `slack` verbs are deleted,
   as are `mcp.GogHardenedArgv` and `google_workspace_account`. Google Workspace is
   just a pack-declared `command` server now: `docs/gworkspace.md`.
+  - The precise exception is `uat-mcp`: it is ephemeral, dev-only, launcher-created for UAT, and closed. It is not a vendor integration, and it is never returned by `pix-host mcp --list`.
 - **Private packs + host/container integrations (company-specific).** Open-core
   boundary: nothing company-specific is in the public repo, and **no `pix-host`
   recompile is ever needed.** Private context ships three ways: a **pack**

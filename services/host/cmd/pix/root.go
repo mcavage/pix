@@ -72,6 +72,8 @@ type rootCmd struct {
 	Mcp    mcpCmd    `cmd:"" group:"Integrations & credentials" help:"add | ls | auth."`
 	Secret SecretCmd `cmd:"" group:"Integrations & credentials" help:"ls | set | rm | check | sync the op-refs."`
 
+	Uat uatCmd `cmd:"" group:"Meta" help:"Self-UAT and browser bootstrap."`
+
 	Version versionCmd `cmd:"" group:"Meta" help:"Print the stamped launcher version."`
 	Help    helpCmd    `cmd:"" group:"Meta" passthrough:"" help:"Print this help (or a verb's usage)."`
 }

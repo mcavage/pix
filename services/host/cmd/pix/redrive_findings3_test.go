@@ -21,8 +21,6 @@ package main
 //     unverifiable for "cannot verify"/"not configured"/anything else) —
 //     result() must not blanket-override to ready just because note is set.
 
-import ()
-
 // --- finding 3: per-sandbox MCP rows with an empty current intent ----------
 
 // --- DX JSON finding 2: verdict=ready must mean verified working -----------

@@ -122,6 +122,7 @@ var pkgLayer = map[string]int{
 	// surface it backs, but it is a leaf capability, not a workflow: it composes
 	// nothing below it and orchestrates no other capability.
 	"workflow/task": layerCapability,
+	"uat":           layerCapability,
 
 	// supervise sits ABOVE the capabilities on purpose: it is the process
 	// lifecycle that RUNS one (plugin), not a domain of its own. Filing it at L1
@@ -196,6 +197,7 @@ var pkgLayer = map[string]int{
 	// no domain knowledge of its own.
 	"workflow/provision": layerWorkflow,
 	"workflow/reset":     layerWorkflow,
+	"workflow/uat":       layerWorkflow,
 
 	// L4 — the command layer.
 	"cmd/pix": layerCommand,
