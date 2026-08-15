@@ -25,13 +25,14 @@ func (r *Runner) executeAsync(ctx context.Context, runID, commit string, scenari
 
 	defer func() {
 		if failErr != nil {
-			if ctx.Err() == context.DeadlineExceeded {
+			switch {
+			case errors.Is(failErr, context.DeadlineExceeded):
 				state = "timed-out"
-			} else if ctx.Err() == context.Canceled {
+			case errors.Is(failErr, context.Canceled):
 				state = "cancelled"
-			} else if failErr == ErrNotFound || failErr == ErrQuotaExceeded || strings.Contains(failErr.Error(), "incomplete") { // mapping host unknown absence as incomplete
+			case errors.Is(failErr, ErrNotFound), errors.Is(failErr, ErrQuotaExceeded), strings.Contains(failErr.Error(), "incomplete"):
 				state = "incomplete"
-			} else {
+			default:
 				state = "fail"
 			}
 		}
