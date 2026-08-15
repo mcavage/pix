@@ -2,6 +2,8 @@ package uat
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"time"
 
 	hostuat "pix/host/uat"
@@ -26,14 +28,33 @@ type Event struct {
 
 type EventLog struct {
 	store *hostuat.EventStore
+	// err is why the store could not be opened. KEPT rather than dropped: the
+	// constructor has no error return its callers could act on, and handing back
+	// a nil store as if it were a working log is what turned an unopenable event
+	// file into a SIGSEGV — twice over, because executeAsync's deferred handler
+	// appends as well, so the panic it exists to record was replaced by an
+	// identical one it could not recover from.
+	err error
 }
 
 func NewEventLog(path string) *EventLog {
-	store, _ := hostuat.NewEventStore(path)
-	return &EventLog{store: store}
+	store, err := hostuat.NewEventStore(path)
+	return &EventLog{store: store, err: err}
+}
+
+// unavailable explains a log that was never opened. It tolerates a nil err so
+// the reason can never itself render as "%!w(<nil>)".
+func (e *EventLog) unavailable() error {
+	if e.err != nil {
+		return fmt.Errorf("event log unavailable: %w", e.err)
+	}
+	return errors.New("event log unavailable")
 }
 
 func (e *EventLog) Append(evt Event) error {
+	if e.store == nil {
+		return e.unavailable()
+	}
 	if evt.Timestamp.IsZero() {
 		evt.Timestamp = time.Now()
 	}
@@ -46,6 +67,9 @@ func (e *EventLog) Append(evt Event) error {
 }
 
 func (e *EventLog) ReadSince(cursor int64) ([]Event, error) {
+	if e.store == nil {
+		return nil, e.unavailable()
+	}
 	evts, _, err := e.store.Replay(int(cursor), 0)
 	if err != nil {
 		return nil, err

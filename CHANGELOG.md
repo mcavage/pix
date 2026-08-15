@@ -186,6 +186,18 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **UAT crashed the process instead of reporting a missing event log, and its
+  lease mocks raced.** `NewEventLog` dropped `NewEventStore`'s error and returned
+  a log with a nil store, so the first `Append` dereferenced nil — SIGSEGV, and
+  then a second identical one from `executeAsync`'s deferred handler, which
+  appends too, so the recover that exists to record a failure became the crash.
+  Every call site discards the `Append` error on purpose (the log is best-effort
+  evidence), and best-effort must mean "returns an error", never "kills the run
+  it was supposed to describe": the constructor's error is now kept and returned
+  by `Append`/`ReadSince`. Separately, `mockLease`/`trackLease` appended to
+  shared slices from the goroutine Submit spawns per run, which the race detector
+  failed the whole package for — intermittently. Both now lock, with snapshot
+  accessors so an assertion cannot race a still-running run.
 - **UAT's browser-capture timeout was diagnosed two different ways for the same
   hang, and turned `main` red.** When the capture window closes with nothing
   written, `realMCP.Auth` sits in a `select` on two cases that become ready at

@@ -108,13 +108,28 @@ type mockImage struct{}
 func (m *mockImage) Load(ctx context.Context, tag, ws string) error { return nil }
 func (m *mockImage) Probe(ctx context.Context, tag string) error    { return nil }
 
+// mockLease is written to from every run goroutine Submit spawns, so it needs
+// its own lock: TestRunner_CandidateBuildConcurrency submits concurrently on
+// purpose, and an unsynchronised append here is a real data race the detector
+// fails the whole package for — intermittently, which is the worst kind.
+// Snapshot() is the read side, so an assertion cannot race a still-running run
+// either.
 type mockLease struct {
+	mu       sync.Mutex
 	acquires []string
 }
 
 func (m *mockLease) Acquire(ctx context.Context, runID string, res string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.acquires = append(m.acquires, res)
 	return nil
+}
+
+func (m *mockLease) Snapshot() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.acquires...)
 }
 func (m *mockLease) Release(ctx context.Context, runID string, res string) error { return nil }
 func (m *mockLease) Cleanup(ctx context.Context, runID string) error             { return nil }
@@ -436,14 +451,14 @@ steps:
 	}
 	for _, el := range expectedLeases {
 		found := false
-		for _, l := range ml.acquires {
+		for _, l := range ml.Snapshot() {
 			if l == el {
 				found = true
 				break
 			}
 		}
 		if !found {
-			t.Errorf("expected lease %s, got %v", el, ml.acquires)
+			t.Errorf("expected lease %s, got %v", el, ml.Snapshot())
 		}
 	}
 }
