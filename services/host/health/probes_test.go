@@ -280,13 +280,24 @@ func TestMemoryUnitProbe_RealListenerOutcomes(t *testing.T) {
 			t.Errorf("fix = %q, want %q", r.Fix, ServeStartFix)
 		}
 	})
-	t.Run("a disabled unit is optional and never blocks", func(t *testing.T) {
+	t.Run("a disabled unit reads off, not absent, and never blocks", func(t *testing.T) {
 		p := MemoryUnitProbe{Port: deadPort(t), Enabled: false}
 		if p.Required() {
 			t.Error("a service that is not in the configured set must not be required")
 		}
-		if check(t, p, 3*time.Second).Blocking() {
+		r := check(t, p, 3*time.Second)
+		if r.Blocking() {
 			t.Error("a disabled unit must never block")
+		}
+		// Not in `services` is the USER'S OWN configuration choosing this
+		// capability off, not pix inferring an absence — the eligible case for
+		// StatusOff, and never a gap: nothing was dialed, so nothing failed.
+		wantStatus(t, r, StatusOff)
+		if r.Fix != "" {
+			t.Errorf("an off memory row must carry no fix, got %q", r.Fix)
+		}
+		if r.OK() || r.Missing() {
+			t.Errorf("off must be neither OK nor Missing, got OK=%v Missing=%v", r.OK(), r.Missing())
 		}
 	})
 }
@@ -311,13 +322,25 @@ func TestPackProbe_RealFilesystem(t *testing.T) {
 	bare := t.TempDir()
 	wantStatus(t, check(t, PackProbe{Root: bare}, time.Second), StatusAbsent)
 
-	// Nothing configured at all: absent, but optional — no pack is a valid host.
+	// Nothing configured at all: OFF, not absent — no pack is a fully supported
+	// end state the user chose, not something to repair.
 	none := PackProbe{}
 	if none.Required() {
 		t.Error("the pack axis must be optional")
 	}
-	if check(t, none, time.Second).Blocking() {
+	noneResult := check(t, none, time.Second)
+	if noneResult.Blocking() {
 		t.Error("no active pack must never block")
+	}
+	wantStatus(t, noneResult, StatusOff)
+	if noneResult.Fix != "" {
+		t.Errorf("an off pack row must carry no fix, got %q", noneResult.Fix)
+	}
+	if noneResult.Hint == "" {
+		t.Error("an off pack row must carry an invitation Hint")
+	}
+	if noneResult.OK() || noneResult.Missing() {
+		t.Errorf("off must be neither OK nor Missing, got OK=%v Missing=%v", noneResult.OK(), noneResult.Missing())
 	}
 }
 

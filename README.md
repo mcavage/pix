@@ -84,19 +84,24 @@ a real run against an empty config with no key and no pack:
 ✗ 1 of 3 required checks failed
 
 ✓ sbx        required 0.38
-✗ pack       optional no active pack
+· pack       optional no active pack
+    a pack carries skills, knowledge, MCP servers and config: pix pack use <path|owner/repo>
     evidence: no pack root configured
 ✗ providers  required none of anthropic, openai, google is set
     evidence: key store answered without anthropic, openai, google
 ✓ memory     required unit running (:11435)
 ✓ launchd    optional agent loaded
-✓ mcp        optional none configured
-✓ daemons    optional none declared
+· mcp        optional none configured
+· daemons    optional none declared
 
 Fix:
-    pix pack use <path|owner/repo>
     pix models add anthropic
 ```
+
+`·` is its own, fifth verdict: verified, optional, and intentionally not
+configured (no active pack, no MCP servers, no supervised daemons). It is
+neither a gap (nothing to fix) nor a pass (nothing was exercised), so it never
+appears in `Fix:` and never turns the headline red.
 
 What each row means:
 

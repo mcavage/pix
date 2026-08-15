@@ -473,11 +473,15 @@ a probe that cannot answer in time is `unverifiable`, not broken (if it runs
 through `op run`, a locked 1Password vault is the usual reason, and doctor says
 so, because a bare "could not run" sends people hunting the wrong problem).
 
-`pix doctor` runs the same evidence through four verdicts per check:
+`pix doctor` runs the same evidence through five verdicts per check:
 **ready** (verified working), **todo** (a verified, fixable gap, with the
 exact command), **unverifiable** (a probe timed out or the tool needed to
-check isn't available; never treated as broken), and **denied** (an explicit
-policy or permission refusal, distinct from a setup gap). `doctor --json`
+check isn't available; never treated as broken), **denied** (an explicit
+policy or permission refusal, distinct from a setup gap), and **off**
+(verified, optional, and intentionally not configured: no active pack, no
+MCP servers, no supervised daemons, a disabled memory unit, zero local models.
+Neither a gap nor a pass: no `Fix:` entry, never counted as an issue, and it
+never turns the headline red). `doctor --json`
 emits `schema_version` so a script can tell the shape apart from an older
 run. Exit codes: **2** on a usage error, **1** only when a REQUIRED check is a
 positively verified failure, **0** otherwise, including every optional or

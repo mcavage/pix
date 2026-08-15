@@ -40,6 +40,8 @@ func Glyph(s Status) string {
 		return "✗"
 	case StatusDenied:
 		return "⊘"
+	case StatusOff:
+		return "·"
 	default:
 		return "?"
 	}
@@ -60,6 +62,11 @@ func RenderStatus(w io.Writer, s Snapshot) {
 			ready = append(ready, r.Name)
 		case StatusUnknown:
 			unknown = append(unknown, r.Name)
+		case StatusOff:
+			// Off is neither ready (nothing was exercised) nor missing (there is
+			// nothing to repair): a verified, optional, intentional non-config.
+			// The glance omits it rather than filing it under a bucket that
+			// would misname it; `pix doctor` still shows every off row.
 		default:
 			gaps = append(gaps, r.Name)
 		}
@@ -197,6 +204,9 @@ func RenderDoctorWith(w io.Writer, s Snapshot, o DoctorOpts) {
 			req = "required"
 		}
 		fmt.Fprintf(w, "%s %-10s %-8s %s\n", Glyph(r.Effective()), r.Name, req, r.Detail)
+		if hint := strings.TrimSpace(r.Hint); hint != "" {
+			fmt.Fprintf(w, "    %s\n", hint)
+		}
 		if ev := strings.TrimSpace(r.Evidence); ev != "" && (o.Verbose || !r.OK()) {
 			writeEvidence(w, ev)
 		}

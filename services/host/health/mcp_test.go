@@ -46,16 +46,24 @@ func remote(name string) MCPServer {
 	return MCPServer{Name: name, Remote: true, RegisterFix: "pix mcp bundle"}
 }
 
-// TestMCPProbe_NothingConfiguredIsReady: MCP is opt-in. A host that never
+// TestMCPProbe_NothingConfiguredIsOff: MCP is opt-in. A host that never
 // wanted it is healthy, and it still gets a LINE (the report never drops a
-// capability just because it is unused).
-func TestMCPProbe_NothingConfiguredIsReady(t *testing.T) {
+// capability just because it is unused) — but the line reads off, not ready:
+// nothing was actually exercised, so a green check here would be the same
+// false verification an empty daemon set used to claim.
+func TestMCPProbe_NothingConfiguredIsOff(t *testing.T) {
 	r := check(t, MCPProbe{}, time.Second)
-	if r.Status != StatusReady || r.Detail != "none configured" {
-		t.Fatalf("got %+v, want ready/none configured", r)
+	if r.Status != StatusOff || r.Detail != "none configured" {
+		t.Fatalf("got %+v, want off/none configured", r)
 	}
 	if r.Fix != "" {
 		t.Errorf("a host with no MCP configured must not be handed a repair: %q", r.Fix)
+	}
+	if r.OK() {
+		t.Error("off must never report OK")
+	}
+	if r.Missing() {
+		t.Error("off must never report Missing")
 	}
 }
 

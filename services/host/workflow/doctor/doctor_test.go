@@ -287,7 +287,6 @@ func TestDoctor_VerifiedGapsFailWithTheExactFix(t *testing.T) {
 		"providers": health.ModelKeyFix,
 		"memory":    health.ServeStartFix,
 		"launchd":   health.ServeInstallFix,
-		"pack":      health.PackUseFix,
 	}
 	for name, fix := range want {
 		r := result(t, s, name)
@@ -296,6 +295,23 @@ func TestDoctor_VerifiedGapsFailWithTheExactFix(t *testing.T) {
 		}
 		if r.Fix != fix {
 			t.Errorf("%s fix = %q, want %q", name, r.Fix, fix)
+		}
+	}
+	// pack is NOT among the verified gaps: cfg names no pack at all, which is a
+	// supported end state (StatusOff), not something to repair. Before the off
+	// status existed this asserted the opposite — a pack-less host was handed
+	// PackUseFix as a "verified gap", which is the exact bug this pins against
+	// regressing back into.
+	packResult := result(t, s, "pack")
+	if packResult.Effective() != health.StatusOff {
+		t.Errorf("pack = %s, want off (no pack configured is not a gap)", packResult.Effective())
+	}
+	if packResult.Fix != "" {
+		t.Errorf("pack fix = %q, want none: an off row carries no repair", packResult.Fix)
+	}
+	for _, g := range s.Gaps() {
+		if g.Name == "pack" {
+			t.Error("pack must not appear among the verified gaps when no pack is configured")
 		}
 	}
 	if s.ExitCode() != health.ExitNotReady {
@@ -309,6 +325,12 @@ func TestDoctor_VerifiedGapsFailWithTheExactFix(t *testing.T) {
 		if !strings.Contains(b.String(), fix) {
 			t.Errorf("doctor omitted the exact fix %q:\n%s", fix, b.String())
 		}
+	}
+	// PackUseFix may still appear as pack's HINT (an invitation, indented under
+	// the row) — what must never happen is that command landing in the "Fix:"
+	// block, which is reserved for verified gaps.
+	if i := strings.Index(b.String(), "\nFix:\n"); i >= 0 && strings.Contains(b.String()[i:], health.PackUseFix) {
+		t.Errorf("doctor printed a repair for an off (unconfigured, not broken) pack in the Fix: block:\n%s", b.String())
 	}
 }
 

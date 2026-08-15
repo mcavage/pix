@@ -3,10 +3,10 @@
 // The model is the smallest one that still tells the truth:
 //
 //	Probe    one thing we can go and check, bounded by a context
-//	Result   what that check PROVED — ready, absent, denied, or unknown
+//	Result   what that check PROVED — ready, absent, denied, off, or unknown
 //	Snapshot the results of one invocation, and the exit code derived from them
 //
-// Three properties are load-bearing, and each one is a bug this package exists
+// Four properties are load-bearing, and each one is a bug this package exists
 // to make unrepresentable:
 //
 //  1. unknown is never ready and never absent. "I could not check" is its own
@@ -18,6 +18,18 @@
 //  3. a repair command is emitted only by a verified gap. Fixes are stripped
 //     from ready and unknown results in Run, centrally, so a green report can
 //     never print a TODO underneath itself.
+//  4. "optional and not configured" is not "missing", and it is not "ready"
+//     either — it is its own answer, StatusOff. Before this status existed,
+//     an optional probe with nothing to check had exactly two ways to lie:
+//     claim a fix for a gap that was never a gap (PackProbe handed out
+//     `pix pack use` to a host that never wanted a pack), or claim StatusReady
+//     for a capability nothing was actually verified about (an empty MCP set,
+//     an empty daemon set, a disabled memory unit, zero configured local
+//     models all read `✓`, inflating the ready count for something that was
+//     never checked). StatusOff is verified — the probe DID look — and it
+//     found an intentional, supported absence. See the ELIGIBILITY rule beside
+//     StatusOff below: a probe may answer off only for a gap the user's own
+//     configuration produced, never one pix merely inferred.
 package health
 
 import (
@@ -39,6 +51,29 @@ const (
 	// StatusDenied: positively refused by policy or permission. Blocks like
 	// absent when required, but the remedy is organizational.
 	StatusDenied Status = "denied"
+	// StatusOff: verified, OPTIONAL, and intentionally not configured. It is
+	// neither a gap (Missing() is false — there is nothing to repair) nor a
+	// success (OK() is false — nothing was actually exercised). A pack-less
+	// host, a disabled memory unit, an empty MCP or daemon set, and zero
+	// configured local models are all this: the probe looked, and what it
+	// found is a supported end state, not an unproven or broken one.
+	//
+	// ELIGIBILITY — the rule that keeps this from laundering a real gap into
+	// green: a probe may answer off ONLY when the capability is absent because
+	// of the USER'S OWN configuration, and that end state is one pix supports.
+	// Never when pix merely inferred an absence from the outside. A probe that
+	// cannot point at the specific setting the user left alone has no business
+	// claiming off — it must stay absent (or unknown), because absent still
+	// gets read and fixed, while off is read once and trusted forever after.
+	// GitHubSecretProbe is the test case that stays absent: nobody opts out of
+	// being able to push, the failure lands after an agent already committed,
+	// and pix has no configuration knob that means "I chose not to push" — so
+	// there is no user choice to point at, and it must keep asking to be fixed.
+	//
+	// A probe may only return StatusOff when its own Required() is false —
+	// off, by definition, can never be the thing that fails the process — and
+	// Run defensively catches a probe that violates this (see runOne).
+	StatusOff Status = "off"
 	// StatusUnknown: could not be determined from here — a timeout, an
 	// unreadable answer, a probe dependency that is itself missing. The zero
 	// value, so an unset Status can only ever fail safe.
@@ -53,8 +88,15 @@ type Result struct {
 	// Detail is the short human note rendered after the name.
 	Detail string
 	// Fix is the exact copy-pasteable repair command. Only ever surfaced for a
-	// verified gap; Run clears it otherwise.
+	// verified gap; Run clears it otherwise. A StatusOff result never carries
+	// one — there is nothing to repair — so Fix stays reserved for a verdict
+	// that means something is broken.
 	Fix string
+	// Hint is the non-repair invitation text for a StatusOff result: what the
+	// capability WOULD give you and the command that turns it on, worded as an
+	// offer, not a repair. Doctor renders it indented under the row and never
+	// folds it into the "Fix:" block, which is reserved for verified gaps.
+	Hint string
 	// Evidence is the concrete proof behind the status — the command that ran,
 	// the port that answered, the token that matched.
 	Evidence string
@@ -66,7 +108,7 @@ type Result struct {
 // zero value) as unknown.
 func (r Result) Effective() Status {
 	switch r.Status {
-	case StatusReady, StatusAbsent, StatusDenied:
+	case StatusReady, StatusAbsent, StatusDenied, StatusOff:
 		return r.Status
 	default:
 		return StatusUnknown
@@ -168,6 +210,17 @@ func runOne(ctx context.Context, budget time.Duration, p Probe) (res Result) {
 		}
 		res.Name = orDefault(res.Name, p.Name())
 		res.Required = p.Required()
+		// ELIGIBILITY, enforced defensively: StatusOff means "optional and
+		// intentionally not configured", which a REQUIRED probe can never be —
+		// something the process cannot launch without cannot also be an
+		// invitation to skip. A probe that violates this is a probe bug, exactly
+		// like a panic, and degrades to unknown rather than being trusted: never
+		// ready, never a silent gap, never blocking.
+		if res.Required && res.Effective() == StatusOff {
+			res = Result{Name: res.Name, Required: true, Status: StatusUnknown,
+				Detail:   "probe bug: a required probe reported off",
+				Evidence: fmt.Sprintf("%s.Required() is true but Check returned StatusOff, which the eligibility rule reserves for optional probes", res.Name)}
+		}
 		if res.Took == 0 {
 			res.Took = time.Since(began)
 		}

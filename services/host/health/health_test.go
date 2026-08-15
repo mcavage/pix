@@ -233,6 +233,103 @@ func TestRenderStatusIsShortAndFixFree(t *testing.T) {
 	}
 }
 
+// TestStatusOffIsNeitherGapNorSuccess pins the core of the fifth status:
+// verified, optional, intentionally not configured is its own answer, not a
+// gap laundered into ready and not a gap laundered into missing.
+func TestStatusOffIsNeitherGapNorSuccess(t *testing.T) {
+	r := Result{Name: "pack", Status: StatusOff, Required: false}
+	if r.Effective() != StatusOff {
+		t.Fatalf("Effective() = %q, want %q — off must not collapse into unknown", r.Effective(), StatusOff)
+	}
+	if r.OK() {
+		t.Error("an off result must never report OK: nothing was verified working")
+	}
+	if r.Missing() {
+		t.Error("an off result must never report Missing: there is nothing to repair")
+	}
+	if r.Blocking() {
+		t.Error("an off result must never block, even if (wrongly) marked required")
+	}
+	if Glyph(StatusOff) == "?" {
+		t.Error("Glyph(StatusOff) must not render as the unknown glyph")
+	}
+}
+
+// TestSnapshotNeverSeesOffAsAGapOrAFix: Gaps, OptionalGaps, Blocking and Fixes
+// all filter on Missing(), which off never satisfies — but this pins the
+// snapshot-level guarantee directly, so a future change to any one of those
+// filters is caught here even if it does not touch Missing() itself.
+func TestSnapshotNeverSeesOffAsAGapOrAFix(t *testing.T) {
+	s := Run(context.Background(), time.Second,
+		staticProbe{name: "core", required: true, res: Result{Status: StatusReady}},
+		staticProbe{name: "pack", required: false, res: Result{Status: StatusOff, Detail: "no active pack"}},
+	)
+	if len(s.Gaps()) != 0 {
+		t.Errorf("Gaps() = %v, want none: an off result is not a gap", s.Gaps())
+	}
+	if len(s.OptionalGaps()) != 0 {
+		t.Errorf("OptionalGaps() = %v, want none", s.OptionalGaps())
+	}
+	if len(s.Blocking()) != 0 {
+		t.Errorf("Blocking() = %v, want none", s.Blocking())
+	}
+	if len(s.Fixes()) != 0 {
+		t.Errorf("Fixes() = %v, want none: an off row carries no repair", s.Fixes())
+	}
+	if !s.Ready() {
+		t.Error("an optional off result must not make the host un-ready")
+	}
+	if s.ExitCode() != ExitOK {
+		t.Errorf("exit = %d, want %d", s.ExitCode(), ExitOK)
+	}
+}
+
+// TestRunCatchesARequiredProbeReportingOff pins the eligibility invariant at
+// the runner: StatusOff is reserved for OPTIONAL probes ("a required capability
+// cannot also be an invitation to skip"), and Run must not trust a probe that
+// violates it — it degrades to unknown, the same fail-safe treatment a panic
+// gets, rather than silently letting a required check disappear from both the
+// gap list and the ready list.
+func TestRunCatchesARequiredProbeReportingOff(t *testing.T) {
+	s := Run(context.Background(), time.Second,
+		staticProbe{name: "buggy", required: true, res: Result{Status: StatusOff, Fix: "should never be seen"}},
+	)
+	r := find(t, s, "buggy")
+	if r.Effective() != StatusUnknown {
+		t.Errorf("a required probe reporting off = %q, want unknown (the eligibility rule was violated)", r.Effective())
+	}
+	if r.Fix != "" {
+		t.Errorf("the downgraded result must carry no fix, got %q", r.Fix)
+	}
+	if s.ExitCode() != ExitOK {
+		t.Errorf("exit = %d, want %d — the eligibility violation degrades to unknown, which never fails the process", s.ExitCode(), ExitOK)
+	}
+}
+
+// TestRenderStatus_OffProducesNoIssueLine is the bug this whole change fixes,
+// pinned at the render layer: a host with an optional, unconfigured capability
+// (pack) reports zero gaps and prints no "N issue(s). Run pix doctor" line —
+// before StatusOff existed this same snapshot printed exactly that line and
+// listed pack under "missing".
+func TestRenderStatus_OffProducesNoIssueLine(t *testing.T) {
+	s := Run(context.Background(), time.Second,
+		staticProbe{name: "sbx", required: true, res: Result{Status: StatusReady, Detail: "1.2.3"}},
+		staticProbe{name: "pack", res: Result{Status: StatusOff, Detail: "no active pack"}},
+	)
+	if len(s.Gaps()) != 0 {
+		t.Fatalf("Gaps() = %v, want none", s.Gaps())
+	}
+	var b strings.Builder
+	RenderStatus(&b, s)
+	out := b.String()
+	if strings.Contains(out, "issue") {
+		t.Errorf("an off-only host must print no issue line:\n%s", out)
+	}
+	if strings.Contains(out, "missing") {
+		t.Errorf("pack must not be filed under missing:\n%s", out)
+	}
+}
+
 func TestRenderDoctorPrintsExactFixes(t *testing.T) {
 	s := Run(context.Background(), time.Second,
 		staticProbe{name: "memory", required: true, res: Result{Status: StatusAbsent, Detail: "unit failed", Fix: "pix serve restart", Evidence: "state=failed"}},
@@ -252,5 +349,29 @@ func TestRenderDoctorPrintsExactFixes(t *testing.T) {
 	}
 	if !strings.Contains(out, "probe timed out") {
 		t.Errorf("doctor must say WHY an axis is unknown:\n%s", out)
+	}
+}
+
+// TestRenderDoctorPrintsHintIndentedNeverInFixBlock: an off row's Hint is the
+// invitation text ("here is what turning this on would give you"), and it must
+// read as annotation under the row, never as a repair — the "Fix:" block is
+// reserved for verified gaps, and a Hint sitting there would claim pack is
+// broken when it is only unconfigured.
+func TestRenderDoctorPrintsHintIndentedNeverInFixBlock(t *testing.T) {
+	s := Run(context.Background(), time.Second,
+		staticProbe{name: "pack", res: Result{Status: StatusOff, Detail: "no active pack",
+			Hint: "a pack carries skills, knowledge, MCP servers and config — pix pack use <path|owner/repo>"}},
+	)
+	var b strings.Builder
+	RenderDoctor(&b, s)
+	out := b.String()
+	if !strings.Contains(out, "a pack carries skills") {
+		t.Errorf("doctor must render the Hint:\n%s", out)
+	}
+	if strings.Contains(out, "Fix:") {
+		t.Errorf("an off-only snapshot has no verified gap, so there must be no Fix: block:\n%s", out)
+	}
+	if len(s.Fixes()) != 0 {
+		t.Errorf("Fixes() = %v, want none", s.Fixes())
 	}
 }

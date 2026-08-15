@@ -41,10 +41,10 @@ const (
 	MCPGatewayFix = "sbx mcp status"
 	// MCPAuthFix authenticates one remote server.
 	MCPAuthFix = "pix mcp auth %s"
-	// MCPNoneConfigured is the detail for a host that uses no MCP. It is a
-	// constant because the doctor renderer reads it to decide whether the
-	// host-trust disclosure applies, and a report that discloses a risk the
-	// user has not taken is noise.
+	// MCPNoneConfigured is the Detail for a host that uses no MCP (Status is
+	// StatusOff, not a magic string a caller has to compare against — this is
+	// kept as a shared constant only so doctor and its tests quote the exact
+	// same words, never a second paraphrase of "nothing is configured here").
 	MCPNoneConfigured = "none configured"
 )
 
@@ -148,7 +148,11 @@ type mcpFinding struct {
 
 func (p MCPProbe) Check(ctx context.Context) Result {
 	if len(p.Servers) == 0 {
-		return Result{Name: p.Name(), Status: StatusReady, Detail: MCPNoneConfigured,
+		// ELIGIBLE for off: the user's own config lists no MCP server, and that
+		// is a supported end state, not a capability that was checked and found
+		// working. StatusReady here used to claim a green check over something
+		// nothing was ever asked about.
+		return Result{Name: p.Name(), Status: StatusOff, Detail: MCPNoneConfigured,
 			Evidence: "config lists no MCP servers"}
 	}
 	bin := p.Bin

@@ -476,6 +476,24 @@ func TestOllamaModelsProbe_ClassifiesTheListing(t *testing.T) {
 	}
 }
 
+// TestOllamaModelsProbe_ZeroTagsIsOff: a host that names no watcher/embed/
+// bridge model configured nothing to pull, and that is the user's own choice
+// not to run local models — a supported end state, not a capability that was
+// checked and passed. Before StatusOff existed this read StatusReady, a green
+// check over a probe that verified nothing.
+func TestOllamaModelsProbe_ZeroTagsIsOff(t *testing.T) {
+	r := ollamaModelsProbe{Env: realEnv(), Tags: nil}.Check(context.Background())
+	if r.Effective() != health.StatusOff {
+		t.Fatalf("status = %q, want off", r.Effective())
+	}
+	if r.OK() || r.Missing() {
+		t.Errorf("off must be neither OK nor Missing, got OK=%v Missing=%v", r.OK(), r.Missing())
+	}
+	if r.Fix != "" {
+		t.Errorf("an off models row must carry no fix, got %q", r.Fix)
+	}
+}
+
 // Ollama absent is unknown and optional: a host without it runs Pix fine.
 func TestOllamaModelsProbe_NoOllamaIsUnknownAndOptional(t *testing.T) {
 	binDir(t)
