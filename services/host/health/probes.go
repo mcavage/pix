@@ -314,14 +314,19 @@ func (MemoryUnitProbe) Name() string     { return "memory" }
 func (p MemoryUnitProbe) Required() bool { return p.Enabled }
 
 func (p MemoryUnitProbe) Check(ctx context.Context) Result {
-	// A service the host has not enabled is not a service that is DOWN. Dialing
-	// it anyway reported "unit down (:11435 refused)" with `pix serve start` as
-	// the repair — a command that would not start it, because `serve` starts
-	// only what `services` names. That row could never be cleared by the fix it
-	// printed, which is exactly the trap the retired monitor row sat in.
+	// A service the host has not enabled is not a service that is DOWN, and it
+	// is not a gap either — the ELIGIBLE case StatusOff exists for: the user's
+	// own `services` config is what makes memory absent, and running without it
+	// is a supported end state. Dialing it anyway used to report "unit down
+	// (:11435 refused)" with `pix serve start` as the fix — a command that
+	// would not start it, because `serve` starts only what `services` names.
+	// That row could never be cleared by the fix it printed, which is exactly
+	// the trap the retired monitor row sat in. It carries a Hint instead of a
+	// Fix: turning memory on is an invitation, not a repair.
 	if !p.Enabled {
-		return Result{Name: p.Name(), Status: StatusAbsent, Required: false,
-			Detail: "not enabled", Fix: fmt.Sprintf(ServiceEnableFix, p.Name()),
+		return Result{Name: p.Name(), Status: StatusOff, Required: false,
+			Detail:   "not enabled",
+			Hint:     fmt.Sprintf("memory gives the agent durable, cross-session recall — turn it on with `%s`", fmt.Sprintf(ServiceEnableFix, p.Name())),
 			Evidence: "not in the configured `services` set; nothing was dialed"}
 	}
 	id, err := identityAt(ctx, p.Port)
@@ -427,7 +432,13 @@ func (p PackProbe) Check(context.Context) Result {
 	}
 	p.Root = root
 	if strings.TrimSpace(p.Root) == "" {
-		return Result{Name: p.Name(), Status: StatusAbsent, Detail: "no active pack", Fix: PackUseFix,
+		// No pack CONFIGURED at all is ELIGIBLE for off: the user never named one,
+		// a pack-less host is a fully supported end state, and "you are missing
+		// this" was always false here — there was never anything to be missing. A
+		// pack that WAS configured and then went missing (below) stays a real,
+		// fixable gap: that absence is not something the user chose.
+		return Result{Name: p.Name(), Status: StatusOff, Detail: "no active pack",
+			Hint:     "a pack carries skills, knowledge, MCP servers and config — " + PackUseFix,
 			Evidence: "no pack root configured"}
 	}
 	info, err := os.Stat(p.Root)

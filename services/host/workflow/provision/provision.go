@@ -125,8 +125,10 @@ func Run(ctx context.Context, opts Options, steps ...Step) Outcome {
 			continue
 		}
 		switch {
-		case before.OK() && !s.ProbeProvesSubset:
-			// Already proven. Touching it can only make things worse.
+		case (before.OK() || before.Effective() == health.StatusOff) && !s.ProbeProvesSubset:
+			// Already proven ready, OR verified off — optional and intentionally
+			// not configured. Neither is a gap; touching either can only make
+			// things worse (an off row is not asking to be turned on).
 			continue
 		case before.Effective() == health.StatusUnknown:
 			o.Skipped = append(o.Skipped, Skip{stepName(s), "unknown: the probe could not verify this, so nothing was changed"})

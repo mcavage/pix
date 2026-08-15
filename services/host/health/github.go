@@ -38,6 +38,14 @@ func (GitHubSecretProbe) Name() string { return "github" }
 // be VISIBLE without failing the exit code of every script that runs doctor.
 func (GitHubSecretProbe) Required() bool { return false }
 
+// Check never answers StatusOff. Both non-ready states below are pix's own
+// INFERENCE from the outside (sbx has no global secret, or has one pinned to
+// the wrong scope) rather than a choice the user made about pushing — pix has
+// no "I opted out of pushing" setting to point at, and the failure this row
+// exists to catch lands only after an agent has already committed. The
+// eligibility rule for StatusOff (see health.go) requires exactly that kind of
+// user-owned setting; this probe has none, so it stays absent, keeps its Fix,
+// and keeps asking to be repaired rather than being trusted quietly forever.
 func (p GitHubSecretProbe) Check(context.Context) Result {
 	if p.Scope == nil {
 		return Result{Name: p.Name(), Status: StatusUnknown, Detail: "not wired",

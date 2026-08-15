@@ -64,12 +64,23 @@ func TestDaemonProbe_AnswersTheQuestionTheSandboxAsks(t *testing.T) {
 	})
 }
 
-// TestDaemonProbe_NoDaemonsIsHealthy: most hosts declare none, and a report that
-// nags about an absent optional facet teaches people to stop reading it.
+// TestDaemonProbe_NoDaemonsIsHealthy: most hosts declare none, and a report
+// that nags about an absent optional facet teaches people to stop reading it.
+// It reads off, not ready — nothing was actually checked, so claiming
+// StatusReady would be a green check over a capability nobody exercised.
 func TestDaemonProbe_NoDaemonsIsHealthy(t *testing.T) {
 	r := DaemonProbe{}.Check(context.Background())
-	if r.Effective() != StatusReady {
-		t.Errorf("no declared daemons is a healthy state, got %v", r.Effective())
+	if r.Effective() != StatusOff {
+		t.Errorf("no declared daemons must read off, got %v", r.Effective())
+	}
+	if r.OK() {
+		t.Error("off must never report OK: nothing was verified working")
+	}
+	if r.Missing() {
+		t.Error("off must never report Missing: there is nothing to repair")
+	}
+	if r.Fix != "" {
+		t.Errorf("an off result must carry no fix, got %q", r.Fix)
 	}
 }
 

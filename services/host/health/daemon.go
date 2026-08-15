@@ -71,7 +71,10 @@ func (DaemonProbe) Required() bool { return false }
 
 func (p DaemonProbe) Check(ctx context.Context) Result {
 	if len(p.Servers) == 0 {
-		return Result{Name: p.Name(), Status: StatusReady, Detail: "none declared",
+		// ELIGIBLE for off: no active pack declares a daemon, which is the user's
+		// own pack choice (or the choice to run no pack at all), and a perfectly
+		// supported end state — not a capability that was checked and passed.
+		return Result{Name: p.Name(), Status: StatusOff, Detail: "none declared",
 			Evidence: "the active pack declares no supervised daemons"}
 	}
 	findings := make([]mcpFinding, 0, len(p.Servers))

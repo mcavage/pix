@@ -66,3 +66,29 @@ func TestGitHubRowIsOptional(t *testing.T) {
 		t.Error("the github row must be optional")
 	}
 }
+
+// TestGitHubRowNeverReportsOff pins GitHubSecretProbe's behavior UNCHANGED by
+// the introduction of StatusOff. Every non-ready state it can answer is pix's
+// own inference from the outside (sbx has no global secret, or a scoped one),
+// never a setting the user chose — pix has no "I opted out of pushing" knob,
+// and the failure this row exists to catch surfaces only after an agent has
+// already committed. It must therefore always stay a real, fixable gap
+// (absent) or unknown, and must never launder into the quiet, trusted-forever
+// off state.
+func TestGitHubRowNeverReportsOff(t *testing.T) {
+	fix := "gh auth token | sbx secret set github"
+	for name, scope := range map[string]func() (int, []string){
+		"global":  func() (int, []string) { return GitHubGlobal, nil },
+		"scoped":  func() (int, []string) { return GitHubScoped, []string{"pix-x"} },
+		"absent":  func() (int, []string) { return GitHubAbsent, nil },
+		"unknown": func() (int, []string) { return GitHubUnknown, nil },
+		"unwired": nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := GitHubSecretProbe{Fix: fix, Scope: scope}
+			if r := p.Check(context.Background()); r.Effective() == StatusOff {
+				t.Errorf("github must never report off, got %+v", r)
+			}
+		})
+	}
+}

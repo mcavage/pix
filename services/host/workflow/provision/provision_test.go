@@ -159,6 +159,41 @@ func (p readyProbe) Check(context.Context) health.Result {
 	return health.Result{Name: p.name, Status: health.StatusReady, Detail: "fine"}
 }
 
+// offProbe answers a fixed StatusOff, so a test can drive the loop's
+// off-handling without depending on any real production probe's own logic.
+type offProbe struct{ name string }
+
+func (p offProbe) Name() string { return p.name }
+func (offProbe) Required() bool { return false }
+func (p offProbe) Check(context.Context) health.Result {
+	return health.Result{Name: p.name, Status: health.StatusOff, Detail: "intentionally not configured"}
+}
+
+// TestOffIsSkippedSilentlyLikeReady: a step whose probe verifies off is a
+// capability the user chose not to configure, not a gap — the loop must leave
+// it alone exactly as it leaves a ready step alone (never calling Apply, never
+// filing a Skip entry a reader would mistake for something outstanding).
+// Before provision.go treated off this way, an off step with an Apply present
+// fell through to the "no automatic fix" Skip branch and was recorded as if
+// something needed doing.
+func TestOffIsSkippedSilentlyLikeReady(t *testing.T) {
+	applied := false
+	step := Step{Name: "models", Probe: offProbe{"models"}, Apply: func(context.Context) error {
+		applied = true
+		return nil
+	}}
+	o := Run(context.Background(), Options{}, step)
+	if applied {
+		t.Error("an off step must never be applied")
+	}
+	if len(o.Skipped) != 0 {
+		t.Errorf("Skipped = %+v, want none: off is not outstanding work", o.Skipped)
+	}
+	if o.ExitCode() != health.ExitOK {
+		t.Errorf("exit = %d, want %d", o.ExitCode(), health.ExitOK)
+	}
+}
+
 type unknownProbe struct{ name string }
 
 func (p unknownProbe) Name() string   { return p.name }

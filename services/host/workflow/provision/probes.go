@@ -27,7 +27,10 @@ func (ollamaModelsProbe) Required() bool { return false }
 func (p ollamaModelsProbe) Check(ctx context.Context) health.Result {
 	name := p.Name()
 	if len(p.Tags) == 0 {
-		return health.Result{Name: name, Status: health.StatusReady, Detail: "no local models configured",
+		// ELIGIBLE for off: no watcher/embed/bridge model is named in config,
+		// which is the user's own choice not to run local models, and a fully
+		// supported end state — not a capability that was checked and passed.
+		return health.Result{Name: name, Status: health.StatusOff, Detail: "no local models configured",
 			Evidence: "config names no watcher/embed/bridge model"}
 	}
 	missing, err := missingLocalModels(ctx, p.Env, p.Tags)
