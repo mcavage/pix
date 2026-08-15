@@ -320,3 +320,63 @@ func TestOutcomeRender_FailedPhaseIsNotHeadlinedReady(t *testing.T) {
 		t.Errorf("with no failures the snapshot headline must be used:\n%s", clean.String())
 	}
 }
+
+// A declined prompt is a Skip, not a Failure. Both were wrong before ErrSkipped
+// existed: nil claims a repair that never happened and renders "applied … NOT
+// verified", and a plain error aborts the whole run over an answer the user is
+// entitled to give. The exit code must come from the second check either way.
+func TestApplyDecliningIsASkipNotAFailure(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "pack")
+	step := packStep(root)
+	step.Apply = func(context.Context) error { return ErrSkipped{"you chose to do this later"} }
+
+	o := Run(context.Background(), Options{}, step)
+
+	if len(o.Failed) != 0 {
+		t.Fatalf("Failed = %+v, want none — declining is not a failure", o.Failed)
+	}
+	if len(o.Applied) != 0 {
+		t.Fatalf("Applied = %v, want none — nothing was applied", o.Applied)
+	}
+	if len(o.Skipped) != 1 || o.Skipped[0].Name != "pack" {
+		t.Fatalf("Skipped = %+v, want one entry for pack", o.Skipped)
+	}
+	if want := "you chose to do this later"; o.Skipped[0].Reason != want {
+		t.Errorf("skip reason = %q, want %q", o.Skipped[0].Reason, want)
+	}
+	var buf bytes.Buffer
+	o.Render(&buf)
+	if !strings.Contains(buf.String(), "you chose to do this later") {
+		t.Errorf("the report must carry the reason it was skipped:\n%s", buf.String())
+	}
+	if strings.Contains(buf.String(), "applied") {
+		t.Errorf("a declined step must never render as applied:\n%s", buf.String())
+	}
+}
+
+// Progress is what stops a check round from being indistinguishable from a
+// hang: both rounds are narrated and every step is named as it answers. The
+// silent path is not asserted here because there is nothing to assert against —
+// a nil Progress has no writer — it is covered by every other test in this file,
+// none of which pass one and none of which see stray output.
+func TestProgressNarratesBothChecks(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "pack")
+	var buf bytes.Buffer
+
+	o := Run(context.Background(), Options{Progress: &buf}, packStep(root))
+	if !o.Verified("pack") {
+		t.Fatalf("precondition: the step should have gone green: %+v", o.After.Results)
+	}
+	got := buf.String()
+	for _, want := range []string{"checking 1 capabilities", "re-checking 1 capabilities", "pack"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("progress is missing %q:\n%s", want, got)
+		}
+	}
+	// The first check found a gap and the second proved the repair — the
+	// narration must show the change, or it is not reporting the loop.
+	absent, ready := health.Glyph(health.StatusAbsent), health.Glyph(health.StatusReady)
+	if strings.Count(got, absent) != 1 || strings.Count(got, ready) != 1 {
+		t.Errorf("want one failing then one passing line:\n%s", got)
+	}
+}

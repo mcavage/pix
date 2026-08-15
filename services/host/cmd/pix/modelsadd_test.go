@@ -185,7 +185,7 @@ func TestUnwiredProviderKeysReportsOnlyTheGap(t *testing.T) {
 		"google":    {Driver: "native", Auth: "1password", KeyEnv: "GEMINI_API_KEY"},
 	}
 	bound.Inference.Models = append(append([]config.InferenceModelBinding{}, base.Inference.Models...),
-		config.InferenceModelBinding{Model: "google/gemini-3.6-flash", Backend: "google", Upstream: "google/gemini-3.6-flash", Available: true})
+		config.InferenceModelBinding{Model: "google/gemini-3.7-flash", Backend: "google", Upstream: "google/gemini-3.7-flash", Available: true})
 	if gaps := doctor.UnwiredProviderKeys(&bound, env); len(gaps) != 0 {
 		t.Fatalf("a bound-but-unverified provider is not a wiring gap, got %v", gaps)
 	}

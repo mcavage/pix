@@ -41,7 +41,7 @@ func TestCallable(t *testing.T) {
 	}{
 		{"probed, in roster", cfgWith([]string{probed.Model}, nativeBackends, probed), probed, true},
 		{"probed, empty roster means no restriction", cfgWith(nil, nativeBackends, probed), probed, true},
-		{"outside the roster", cfgWith([]string{"google/gemini-3.6-flash"}, nativeBackends, probed), probed, false},
+		{"outside the roster", cfgWith([]string{"google/gemini-3.7-flash"}, nativeBackends, probed), probed, false},
 		{"unprobed 1password binding", cfgWith(nil, nativeBackends, unverified(probed)), unverified(probed), false},
 		{"backend no longer configured", cfgWith(nil, map[string]config.InferenceBackend{}, probed), probed, false},
 		{"not available", cfgWith(nil, nativeBackends, unavailable(probed)), unavailable(probed), false},

@@ -62,7 +62,7 @@ live map):
   enterprise-admin): high-leverage judgment where a wrong recommendation is
   expensive, so the Anthropic flagship, not the workhorse.
 - **Prose (Gemini)** — `writing` (`ux-copywriter`, `devrel`, `growth-marketing`,
-  `enrich`) → Gemini 3.6 Flash. Pinned OFF Anthropic because Claude is the weak
+  `enrich`) → Gemini 3.7 Flash. Pinned OFF Anthropic because Claude is the weak
   writer; cheapest Google model over a quality floor (bump to Gemini 3.1 Pro for
   higher-stakes prose).
 - **Cross-vendor reviewer** — `review` (`review`, `dx-impatient`) → Google
@@ -72,7 +72,7 @@ live map):
   role that earns the frontier model regardless of cost: getting a security review
   wrong is the most expensive miss in the crew.
 - **Cheap / high-volume** — `breadth` (`fanout`) → Gemini 3.1 Flash-Lite and
-  `verify` (`qa-lead`) → Gemini 3.6 Flash (Haiku was the dumb pick for fast QA).
+  `verify` (`qa-lead`) → Gemini 3.7 Flash (Haiku was the dumb pick for fast QA).
 - **Local** — `ollama/qwen3.5:9b` is registered and evaluable: a current Apache-2.0 all-rounder that fits a 16GB machine (~6.6GB), free + private,
   but slower, so it wins nothing by default and serves as an offline fallback.
 

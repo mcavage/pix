@@ -109,6 +109,19 @@
       "notes": "Google frontier + reasoning leader (GPQA ~94.1%), 1M+ context, cheapest of the frontier tier. A THIRD independent vendor for red-team/security."
     },
     {
+      "id": "google/gemini-3.7-flash",
+      "provider": "google",
+      "family": "gemini",
+      "label": "Gemini 3.7 Flash",
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "input_per_mtok": 0.75,
+      "output_per_mtok": 3.75,
+      "local": false,
+      "available": true,
+      "notes": "PRICE EXPIRES 2026-12-31. Shipped 2026-08-13, three weeks after 3.6, and better on every axis that decides a Flash role: Artificial Analysis index 56 (3.6: 52), 340 tok/s output (3.6: 225), TTFT 9.8s (3.6: 19.0s), Terminal-bench 2.1 85.8%. Coding, web dev and document reasoning are the headline gains. The $0.75/$3.75 here is Google's introductory HALF price; on 2027-01-01 it reverts to 3.6's $1.5/$7.5 permanently. RE-GROUND THIS ROW BEFORE THEN — every cost-objective intent is priced off it, so leaving it stale silently doubles what the router thinks a Flash turn costs. The Flash-tier workhorse for prose (writing), fast QA (verify), and snappy interactive (fast-balanced)."
+    },
+    {
       "id": "google/gemini-3.6-flash",
       "provider": "google",
       "family": "gemini",
@@ -118,8 +131,8 @@
       "input_per_mtok": 1.5,
       "output_per_mtok": 7.5,
       "local": false,
-      "available": true,
-      "notes": "Google price-performance middle, shipped 2026-07 as the insta-upgrade for 3.5 Flash: faster, stronger on internal evals, and CHEAPER output ($7.5 vs $9). The Flash-tier workhorse for prose (writing), fast QA (verify), and snappy interactive (fast-balanced)."
+      "available": false,
+      "notes": "RETIRED 2026-08: superseded by Gemini 3.7 Flash three weeks after shipping — faster, stronger, and half the price through year-end. Kept for audit; available=false hides it from routing."
     },
     {
       "id": "google/gemini-3.5-flash",

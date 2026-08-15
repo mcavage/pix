@@ -3,6 +3,7 @@ package uat_test
 import (
 	"os"
 	"path/filepath"
+	"sync"
 
 	"context"
 	"errors"
@@ -25,17 +26,37 @@ type failInjector struct {
 	failSandboxProbe bool
 }
 
+// trackLease is mockLease's twin here, and locks for the same reason: Submit
+// spawns a goroutine per run, so both slices are written from goroutines the
+// test does not join before asserting. Len/Cleanups are the read side.
 type trackLease struct {
+	mu       sync.Mutex
 	acquires []string
 	cleanups []string
 }
 
 func (m *trackLease) Acquire(ctx context.Context, runID string, res string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.acquires = append(m.acquires, res)
 	return nil
 }
+
+func (m *trackLease) AcquireCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.acquires)
+}
+
+func (m *trackLease) Cleanups() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.cleanups...)
+}
 func (m *trackLease) Release(ctx context.Context, runID string, res string) error { return nil }
 func (m *trackLease) Cleanup(ctx context.Context, runID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.cleanups = append(m.cleanups, runID)
 	return nil
 }
@@ -175,11 +196,11 @@ func TestCandidateSmokeFailures(t *testing.T) {
 				t.Errorf("expected %s, got %s", tc.expectedState, lastStatus.State)
 			}
 
-			if len(ml.cleanups) == 0 {
+			if len(ml.Cleanups()) == 0 {
 				t.Errorf("expected lease cleanup to be called")
 			}
 
-			if len(ml.acquires) == 0 {
+			if ml.AcquireCount() == 0 {
 				t.Errorf("expected at least some acquires before failure")
 			}
 		})

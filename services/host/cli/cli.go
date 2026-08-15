@@ -289,3 +289,19 @@ func ConfirmYN(in io.Reader, out io.Writer, prompt string, def bool) bool {
 	}
 	return ans == "y" || ans == "yes"
 }
+
+// AskLine reads one word-shaped answer, lowercased, with def for a bare Enter.
+// It is ConfirmYN's open-ended twin and reads the SAME way — straight off in,
+// never through a buffered reader. That is the whole reason it lives here: a
+// caller that wraps in with its own bufio.Reader steals input from every later
+// prompt on the same stream, and the flows that ask a question usually go on to
+// hand the same stream to something that asks another one.
+func AskLine(in io.Reader, out io.Writer, prompt, def string) string {
+	fmt.Fprint(out, prompt)
+	var line string
+	fmt.Fscanln(in, &line)
+	if ans := strings.ToLower(strings.TrimSpace(line)); ans != "" {
+		return ans
+	}
+	return def
+}

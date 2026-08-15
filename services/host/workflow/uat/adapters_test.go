@@ -3,6 +3,7 @@ package uat
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/url"
 	"os"
@@ -580,5 +581,54 @@ func TestMCPAuthCaptureErrorImmediate(t *testing.T) {
 	}
 	if !errors.Is(err, ErrIncomplete) {
 		t.Fatalf("expected ErrIncomplete, got %v", err)
+	}
+}
+
+// The deadline is the cause once it has passed, however the process reports
+// itself afterwards. A REAL sbx under an expired window is killed by cmdCtx and
+// its Wait returns "signal: killed" — this function's own teardown landing on
+// waitErrCh, not sbx giving up on its own.
+//
+// Reading it as the latter was a RACE. With the window already closed, the wait
+// case and the captureCtx.Done() case are BOTH ready, and Go picks between ready
+// select cases at random — so the identical hang was diagnosed one way on the
+// PR run and the other way on main. The loop is the test: it drives the choice
+// many times and asserts the answer never moves. One iteration proves nothing,
+// which is exactly why this shipped green.
+func TestAdapters_MCPAuthDeadlineOutranksTheKilledProcess(t *testing.T) {
+	for i := range 60 {
+		stateDir := t.TempDir()
+		pixHost := filepath.Join(stateDir, "fake-pix-host")
+		os.WriteFile(pixHost, []byte("#!/bin/sh\n"), 0755)
+
+		ce := &authCaptureExec{}
+		m := NewRealMCP(pixHost, stateDir, ce, &mockBrowserFactory{})
+
+		// The shape that actually races: Auth is already PARKED in its select
+		// when the deadline fires, and the same deadline both closes the capture
+		// window and releases the wait — so the two cases become ready together
+		// and the runtime is free to take either. Cancelling before the call
+		// instead makes captureCtx.Done() win every time and proves nothing.
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+		defer cancel()
+		// What CommandContext does to a real process when its context expires.
+		ce.waitFunc = func() error {
+			<-ctx.Done()
+			return errors.New("signal: killed")
+		}
+
+		err := m.Auth(ctx, fmt.Sprintf("testrun-auth-killed-%d", i), "some-mcp")
+		if !errors.Is(err, ErrIncomplete) {
+			t.Fatalf("run %d: expected ErrIncomplete, got %v", i, err)
+		}
+		if !strings.Contains(err.Error(), "host bootstrap") {
+			t.Fatalf("run %d: a closed capture window is a timeout, not a process verdict; got %v", i, err)
+		}
+		// "(reap status: signal: killed)" may follow, and should: it is labelled
+		// as the reap and is real detail. What must not happen is the process
+		// verdict becoming the HEADLINE, which is what the old code produced.
+		if strings.Contains(err.Error(), "failed before capture") {
+			t.Fatalf("run %d: the teardown this function performed reported as sbx's own verdict: %v", i, err)
+		}
 	}
 }

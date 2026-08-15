@@ -179,6 +179,14 @@ func (m *realMCP) Add(ctx context.Context, name string, argv []string) error {
 
 var readCaptureFileFunc = readCaptureFileNoFollow
 
+// errBrowserCaptureTimeout is the ONE diagnosis for "the capture window closed
+// with nothing written." Both routes out of that state share it — the deadline
+// firing, and the wait that only observes the deadline's own teardown — so the
+// two can never drift into describing the same failure differently.
+func errBrowserCaptureTimeout() error {
+	return fmt.Errorf("%w: browser capture timeout (sbx ignored BROWSER shim - check host bootstrap)", ErrIncomplete)
+}
+
 func (m *realMCP) Auth(ctx context.Context, runID string, name string) (err error) {
 	// Task B: create run-owned bin dir, symlink shim, capture OAuth.
 	binDir := filepath.Join(m.stateDir, "runs", runID, "bin")
@@ -261,6 +269,30 @@ func (m *realMCP) Auth(ctx context.Context, runID string, name string) (err erro
 		case wErr := <-waitErrCh:
 			waitErr = wErr
 			waitDone = true
+			// Once the capture window has closed, the DEADLINE is the cause and
+			// nothing Wait says afterwards is independent evidence. cmdCtx derives
+			// from the same ctx, so an expired window tears the process down
+			// itself — whatever arrives on waitErrCh next (a nil status from a
+			// stub, "signal: killed" from a real one) is the teardown this
+			// function just performed.
+			//
+			// Reading it as sbx's own verdict was a RACE, not just a wrong
+			// message: this case and captureCtx.Done() below become ready at the
+			// same instant, and select picks between ready cases at random. The
+			// identical hang was therefore diagnosed as "sbx exited without
+			// writing capture URL" on one run and as the timeout on the next,
+			// which is how CI went red on main after passing on the PR.
+			//
+			// BOTH contexts, and the parent is the load-bearing one. captureCtx
+			// is a CHILD of ctx, and cancellation reaches a child asynchronously
+			// — so at the instant the parent's deadline releases the wait, the
+			// child's Err() can still be nil. Checking only the child left a
+			// window that widened under `-race` and failed CI again. ctx is what
+			// the caller bounded the whole call by; once it is done, the capture
+			// window is closed whether or not the child has caught up.
+			if ctx.Err() != nil || captureCtx.Err() != nil {
+				return errBrowserCaptureTimeout()
+			}
 			if wErr != nil {
 				returnedFromWait = true
 				return fmt.Errorf("sbx mcp auth failed before capture: %w", wErr)
@@ -278,7 +310,7 @@ func (m *realMCP) Auth(ctx context.Context, runID string, name string) (err erro
 			returnedFromWait = true
 			return fmt.Errorf("%w: sbx exited without writing capture URL", ErrIncomplete)
 		case <-captureCtx.Done():
-			return fmt.Errorf("%w: browser capture timeout (sbx ignored BROWSER shim - check host bootstrap)", ErrIncomplete)
+			return errBrowserCaptureTimeout()
 		case <-ticker.C:
 			urlStr, err := readCaptureFileFunc(capturePath)
 			if err != nil && !os.IsNotExist(err) {
