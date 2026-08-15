@@ -287,7 +287,7 @@ func ReconcileDirectInference(cfg *config.Config, env hostenv.Env, in io.Reader,
 
 // ReconcileOllamaInference is ReconcileDirectInference's counterpart for the
 // one backend with no key to store: same order, same honesty rules, but the
-// evidence is `ollama list` plus a generate through the resolved endpoint. It
+// evidence is the daemon's /api/tags plus a generate through the resolved endpoint. It
 // exists because `models add` was built around secret.ProviderKeyRefOrder, so
 // the one keyless backend had no post-setup path at all.
 //

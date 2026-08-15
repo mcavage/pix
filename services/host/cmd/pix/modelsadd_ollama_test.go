@@ -22,7 +22,7 @@ import (
 // so models.ReconcileOllamaInference's probe reaches a server this test controls.
 func ollamaAddEnv(t *testing.T, tags []string, totalGB float64, endpoint string) hostenv.Env {
 	t.Helper()
-	env := ollamaListEnv(tags, "darwin", totalGB)
+	env := ollamaListEnv(t, tags, "darwin", totalGB)
 	u, err := url.Parse(endpoint)
 	if err != nil {
 		t.Fatal(err)
@@ -66,6 +66,11 @@ func TestModelsAddAcceptsOllama(t *testing.T) {
 func TestReconcileOllamaInference_BindsProbesAndWidens(t *testing.T) {
 	var probed []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/tags" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(ollamaTagsBody([]string{"qwen3.5:9b"}))
+			return
+		}
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		probed = append(probed, strings.TrimSpace(toStr(body["model"])))
@@ -123,7 +128,7 @@ func TestReconcileOllamaInference_BindsProbesAndWidens(t *testing.T) {
 // reporting success would be a success word with nothing behind it.
 func TestReconcileOllamaInference_RefusesUnderExclusivePack(t *testing.T) {
 	cfg := &config.Config{Inference: config.InferenceConfig{ExclusiveSource: "/packs/corp"}}
-	_, _, err := models.ReconcileOllamaInference(cfg, ollamaListEnv([]string{"qwen3.5:9b"}, "darwin", 32),
+	_, _, err := models.ReconcileOllamaInference(cfg, ollamaListEnv(t, []string{"qwen3.5:9b"}, "darwin", 32),
 		strings.NewReader(""), io.Discard, false, models.OllamaSelection{Local: true})
 	if err != models.ErrInferenceExclusive {
 		t.Fatalf("err = %v, want models.ErrInferenceExclusive", err)

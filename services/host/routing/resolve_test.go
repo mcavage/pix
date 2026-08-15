@@ -202,3 +202,40 @@ func TestResolve_Deterministic(t *testing.T) {
 		}
 	}
 }
+
+// TestResolve_UnscoredAvailableModelNeverChosen pins the precedent
+// overlord_fallback_test.go guards: a newly bound model with no scorecard
+// entry — exactly what workflow/models.ConfigureOllamaInference now produces
+// for a pulled Ollama tag outside the shipped catalog — must never win ANY
+// intent, cost-objective or otherwise. Binding is not routing: Resolve's
+// candidate loop already requires sc.Lookup to succeed, so an unscored model
+// is never even a candidate, let alone a winner. An unknown cost must never
+// default to $0 and win a cost objective the way Fable 5 once won `overlord`
+// by defaulting to the cheapest-looking, unconstrained route.
+func TestResolve_UnscoredAvailableModelNeverChosen(t *testing.T) {
+	reg := testReg()
+	reg.Models = append(reg.Models, Model{
+		ID: "ollama/pulled-unknown:9b", Provider: "ollama", Available: true, Local: true,
+		ContextWindow: 1000, MaxOutputTokens: 100,
+	})
+	sc := testSc() // deliberately carries NO score for the new model
+	pol := testPol()
+
+	for _, objective := range []string{"accuracy", "cost", "latency", "balanced"} {
+		d := Resolve(reg, sc, pol, in("t-"+objective, "code", objective))
+		if d.Model == "ollama/pulled-unknown:9b" {
+			t.Fatalf("objective=%s: an unscored model won: %+v", objective, d)
+		}
+		for _, c := range d.Alternatives {
+			if c.ID == "ollama/pulled-unknown:9b" {
+				t.Fatalf("objective=%s: an unscored model was even a candidate: %+v", objective, d)
+			}
+		}
+	}
+	// The cost objective specifically: ollama/local IS scored at $0 and must
+	// still win over the unscored newcomer, which must not appear at all.
+	d := Resolve(reg, sc, pol, in("cheap", "code", "cost"))
+	if d.Model != "ollama/local" {
+		t.Fatalf("model = %q, want ollama/local (the scored, actually-free local model)", d.Model)
+	}
+}
