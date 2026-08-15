@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -83,6 +84,26 @@ func bind(cfg *config.Config, model, backend, upstream string) {
 // says nothing about what the subscription may CALL.
 type OllamaSelection struct{ Local, Cloud bool }
 
+// ollamaTagNamePattern is Ollama's OWN legal name grammar — namespace/model:tag,
+// alphanumerics plus `. _ / : -`, never a leading `-` — and the ingestion
+// boundary for every tag this package ever renders or persists. A rogue
+// listener on the Ollama port, or a redirected OLLAMA_HOST, controls every
+// byte of m.Name in the /api/tags response; without this check a name
+// carrying \r, \n, or an ANSI erase sequence could forge a "bound ... as LOCAL
+// (free and private)" line or erase the "could not be classified, not bound"
+// refusal — defeating the exact honesty the fail-closed path exists to
+// provide. Checked ONCE, here, at the boundary: a non-conforming row is
+// dropped before any downstream renderer (terminal output, config.toml) ever
+// sees it, rather than trusting every renderer to re-derive the same check.
+var ollamaTagNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:-]*$`)
+
+// validOllamaTagName additionally caps length: a daemon has no reason to name a
+// tag anywhere near this long, and an unbounded name is its own small DoS
+// against every renderer downstream.
+func validOllamaTagName(name string) bool {
+	return name != "" && len(name) <= 256 && ollamaTagNamePattern.MatchString(name)
+}
+
 // ollamaTagInfo is what ONE row of the daemon's /api/tags response tells us
 // about a pulled tag that the shipped catalog does not know. RemoteHost is the
 // field docs.ollama.com/api/tags documents as "URL of the upstream Ollama host,
@@ -154,6 +175,26 @@ func classifyOllamaTag(tag string, info ollamaTagInfo) (cloud, classified bool) 
 	}
 }
 
+// ollamaTagFitsMemory estimates whether an unknown-catalog local tag's
+// on-disk weight size fits a USABLE-memory budget. It is deliberately WEAKER
+// than routing.Model.FitsMemory, not stronger: there is no catalog MinRAMGB
+// for a tag outside the registry — no declared context window means no
+// KV-cache term to price — so this prices ONLY the weights: the same 1.15
+// runtime-overhead factor and flat 1GB floor MinRAMGB itself is computed with
+// (see routing.Model's doc comment), applied to the on-disk size the listing
+// already reports. That undercounts a large-context load, so it is a real gate
+// against the case a "no gate at all" claim would always miss — raw weights
+// alone already exceeding usable RAM — without pretending to price a context
+// window nobody declared. sizeBytes<=0 never fits: an unsized tag has nothing
+// for this gate to measure, and the honest answer to "did we check" is no.
+func ollamaTagFitsMemory(sizeBytes int64, usableGB float64) bool {
+	if sizeBytes <= 0 {
+		return false
+	}
+	sizeGB := float64(sizeBytes) / inference.BytesPerGB
+	return sizeGB*1.15+1 <= usableGB
+}
+
 // ollamaPlan is what ConfigureOllamaInference decided, for the caller to render
 // and the models step to act on. It contains no success claims.
 type ollamaPlan struct {
@@ -200,6 +241,19 @@ func (p ollamaPlan) LocalBoundTags() []string {
 // failure would, so a user who has simply not started Ollama yet sees the one
 // message that tells them what to do, and nothing upstream (RequireOllamaReady,
 // ConfigureOllamaInference) has to know the transport changed.
+// ollamaTagsBodyCap bounds how much of the /api/tags response this package
+// will read. It still exists to bound memory against a wedged or malicious
+// listener (DoS: an unbounded read is an unbounded allocation), but it is sized
+// for real Ollama installs, not against them: a real row runs a few hundred
+// bytes (name, digest, modified_at, size, details{format,family,families,
+// parameter_size,quantization_level}), so this holds tens of thousands of
+// pulled tags before ever truncating a genuine listing. The 1 MiB cap this
+// replaces truncated comfortably inside four figures of tags — well within
+// reach for a real user with a large local library — and the decode failure
+// that truncation caused was reported by RequireOllamaReady as "the daemon did
+// not answer": a healthy, fully-responsive daemon relabeled as unreachable.
+const ollamaTagsBodyCap = 16 << 20 // 16 MiB
+
 func ollamaListing(env hostenv.Env) (map[string]ollamaTagInfo, error) {
 	endpoint := strings.TrimRight(inference.OllamaEndpointFor(env).URL, "/")
 	req, err := http.NewRequest(http.MethodGet, endpoint+"/api/tags", nil)
@@ -214,13 +268,26 @@ func ollamaListing(env hostenv.Env) (map[string]ollamaTagInfo, error) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("could not list Ollama models (HTTP %d)", resp.StatusCode)
 	}
+	// Read one byte past the cap so a body that is EXACTLY at the cap and a body
+	// that OVERFLOWS it are distinguishable: a plain io.LimitReader-into-Decoder
+	// can't tell "truncated, otherwise valid" from "actually malformed", which is
+	// exactly how a large-but-healthy daemon got relabeled unreachable before.
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, ollamaTagsBodyCap+1))
+	if err != nil {
+		return nil, fmt.Errorf("could not list Ollama models (could not read the response)")
+	}
+	if len(raw) > ollamaTagsBodyCap {
+		return nil, fmt.Errorf("the Ollama daemon answered, but its tag listing exceeded the %dMiB safety cap — this is a cap, not a sign the daemon is down", ollamaTagsBodyCap>>20)
+	}
 	var body ollamaTagsResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body); err != nil {
-		return nil, fmt.Errorf("could not list Ollama models")
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return nil, fmt.Errorf("the Ollama daemon answered, but its tag listing was not valid JSON")
 	}
 	seen := map[string]ollamaTagInfo{}
 	for _, m := range body.Models {
-		if m.Name != "" {
+		// The ingestion boundary: a name this daemon reports that fails Ollama's own
+		// grammar is dropped HERE, once — see ollamaTagNamePattern.
+		if validOllamaTagName(m.Name) {
 			seen[m.Name] = ollamaTagInfo{RemoteHost: m.RemoteHost, Size: m.Size}
 		}
 	}
@@ -236,7 +303,7 @@ func RequireOllamaReady(env hostenv.Env) error {
 		return fmt.Errorf("ollama is not installed or not on PATH — see https://ollama.com, then re-run")
 	}
 	if _, err := ollamaListing(env); err != nil {
-		return fmt.Errorf("the ollama binary is installed but the daemon did not answer at /api/tags — start Ollama, then re-run")
+		return fmt.Errorf("the ollama binary is installed but /api/tags did not succeed: %v — start Ollama, then re-run", err)
 	}
 	return nil
 }
@@ -339,19 +406,44 @@ func ConfigureOllamaInference(cfg *config.Config, env hostenv.Env, sel OllamaSel
 			plan.UnknownUnclassified = append(plan.UnknownUnclassified, tag)
 			fmt.Fprintf(out, "  %s was pulled but could not be classified local vs Ollama Cloud (no remote_host, no :cloud/-cloud tag, no on-disk size) — not bound\n", tag)
 		case cloud && sel.Cloud:
-			if !bound[catalogID] {
-				bound[catalogID] = true
-				bind(cfg, catalogID, "ollama", tag)
-			}
+			// The "bound" narration is a MUTATION claim, so it stays gated on the same
+			// !bound[...] check that guards the mutation itself — a re-run over an
+			// already-bound tag is a read-only pass and must say nothing new. The
+			// plan.UnknownCloud entry itself is NOT restricted to new binds: it mirrors
+			// plan.CloudBound's existing "currently classified and selected" meaning
+			// (see the catalog loop above), which the "did this selection produce
+			// anything callable" check below depends on holding on a repeat run too.
 			plan.UnknownCloud = append(plan.UnknownCloud, tag)
-			fmt.Fprintf(out, "  bound %s as Ollama CLOUD (not in the shipped catalog yet; metered by your Ollama subscription, not counted against local RAM)\n", catalogID)
-		case !cloud && sel.Local:
 			if !bound[catalogID] {
 				bound[catalogID] = true
 				bind(cfg, catalogID, "ollama", tag)
+				fmt.Fprintf(out, "  bound %s as Ollama CLOUD (not in the shipped catalog yet; metered by your Ollama subscription, not counted against local RAM)\n", catalogID)
+			}
+		case !cloud && sel.Local:
+			// classifyOllamaTag only ever returns cloud=false, classified=true via the
+			// on-disk-size signal (remote_host and the :cloud/-cloud suffix both force
+			// cloud=true), so info.Size here is ALWAYS >= ollamaLocalSizeFloor already —
+			// but this is where the RAM claim in the printed line has to be earned, not
+			// assumed: the catalog arm above only bypasses this model when it measured
+			// the machine AND the model does not fit (plan.Memory.OK gate), and an
+			// unknown tag deserves the identical treatment — it must never be waved
+			// through on a claim nothing checked.
+			sizeGB := float64(listed[tag].Size) / inference.BytesPerGB
+			if plan.Memory.OK && !ollamaTagFitsMemory(listed[tag].Size, plan.Memory.UsableGB) {
+				plan.SkippedRAM = append(plan.SkippedRAM, catalogID)
+				fmt.Fprintf(out, "  %s (%.1fGB on disk, not in the shipped catalog) does not fit this machine's %.1fGB usable RAM — not bound\n", catalogID, sizeGB, plan.Memory.UsableGB)
+				continue
 			}
 			plan.UnknownLocal = append(plan.UnknownLocal, tag)
-			fmt.Fprintf(out, "  bound %s as LOCAL (not in the shipped catalog yet; free and private, bounded by this machine's RAM)\n", catalogID)
+			if !bound[catalogID] {
+				bound[catalogID] = true
+				bind(cfg, catalogID, "ollama", tag)
+				if plan.Memory.OK {
+					fmt.Fprintf(out, "  bound %s as LOCAL (not in the shipped catalog yet; free and private; %.1fGB on disk fits this machine's %.1fGB usable RAM)\n", catalogID, sizeGB, plan.Memory.UsableGB)
+				} else {
+					fmt.Fprintf(out, "  bound %s as LOCAL (not in the shipped catalog yet; free and private; this machine's RAM could not be measured, so its size was not checked)\n", catalogID)
+				}
+			}
 		}
 	}
 
