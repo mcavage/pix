@@ -152,6 +152,45 @@ model can think for many minutes without emitting anything the parent can see (r
 thinking tokens are never streamed). Timeout messages report the effective budget
 the run actually used.
 
+**Tool silence is not model silence, and treating them alike killed real work.**
+The idle watchdog resets on any byte the child writes, which is a sound liveness
+proxy only while the MODEL is the thing working. It is not sound while a TOOL is.
+Measured against a real child pi (`--mode json -p`), one bash call running
+`sleep 45` produced this stream:
+
+```
+   2.40s  tool_execution_start
+   2.40s  tool_execution_update
+  47.41s  tool_execution_update
+  47.41s  tool_execution_end
+```
+
+A 45-second hole. `tool_execution_update` fires at the boundaries; it does not
+stream progress. So a child running this repo's own required verification step,
+`go test ./... -race` (minutes, silent), was indistinguishable from a dead SSE
+stream and was killed at the 5-minute default for doing exactly what it was asked.
+That is not hypothetical: it is how the engineer subagent on the Ollama binding
+fix died mid-task, leaving uncommitted edits and no report of intent.
+
+The fix is to ask the right question rather than to pick a bigger number. While a
+tool is in flight the child has PROVEN it is alive and said what it is doing, so
+silence is expected and the budget is `tool_idle_ms` (default 15 min,
+`PI_SUBAGENT_TOOL_IDLE_MS`). With no tool running, silence is still evidence of a
+dead stream and the short `idle_ms` applies. Three details are load-bearing:
+
+- **Depth, not a boolean.** `tool_execution_start`/`_end` nest (a subagent tool
+  spawning its own child), and a boolean would clear on the first inner `end`
+  while an outer tool is still running, silently restoring the short budget under
+  a long command.
+- **The tool budget never demotes an explicit `idle_ms`.** An agent that raised
+  `idle_ms` past the tool budget meant it; the effective tool budget is the max of
+  the two, so running a tool can never shorten an agent's own protection.
+- **The wall cap is untouched.** A tool that hangs forever is still bounded, so
+  none of this can reintroduce an unbounded child.
+
+Pinned by `tests/subagent-tool-idle.test.mjs`, whose headline case fails against
+the pre-fix extension.
+
 ## Risks / unknowns
 
 - **max_turns has no CLI flag** in pi 0.80.5, so it is advisory (injected into the

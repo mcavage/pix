@@ -64,6 +64,21 @@ const num = (name: string, dflt: number): number => {
 // env (which is read once at startup and often unwritable).
 const IDLE_MS = num("PI_SUBAGENT_IDLE_MS", 300_000); // no output for this long → dead (5m)
 const WALL_MS = num("PI_SUBAGENT_TIMEOUT_MS", 3_600_000); // hard per-child cap (1h)
+// TOOL_IDLE_MS is the SAME watchdog with a different question, and the
+// distinction is the whole point. The idle timer measures bytes on the child's
+// event stream, which is a proxy for "is this child alive" that holds only while
+// the MODEL is the thing working. It does not hold while a TOOL is working:
+// a child running one long bash command emits tool_execution_start and then
+// nothing at all until tool_execution_end (measured: a 45s sleep produced a 45s
+// gap; tool_execution_update fires at the boundaries, it does not stream). So a
+// perfectly healthy engineer running this repo's own required verification step
+// (`go test ./... -race`, minutes of silence) was indistinguishable from a dead
+// SSE stream, and got killed at 5 minutes for doing exactly what it was asked.
+// While a tool is in flight the child has PROVEN it is alive and told us what it
+// is doing, so silence is expected rather than evidence of death, and the budget
+// is the one for a slow command. The wall cap is unchanged and still bounds a
+// tool that hangs forever, so nothing here can reintroduce an unbounded child.
+const TOOL_IDLE_MS = num("PI_SUBAGENT_TOOL_IDLE_MS", 900_000); // silent tool (15m)
 // Node's setTimeout treats a delay above 2^31-1 ms (~24.8 days) as 1 ms — which
 // would fire the watchdog INSTANTLY. Clamp every resolved budget to that range
 // (floored to an int) so a fat-fingered env/frontmatter value (e.g.
@@ -229,6 +244,9 @@ interface AgentConfig {
 	// inherit IDLE_MS / WALL_MS.
 	idleMs?: number;
 	wallMs?: number;
+	// Frontmatter tool_idle_ms: the budget for silence while a TOOL is running,
+	// as distinct from silence while the MODEL is. See TOOL_IDLE_MS.
+	toolIdleMs?: number;
 	// Web access defaults ON, but a hermetic agent (e.g. a reviewer/auditor that
 	// sees sensitive diffs) can set `web: false` to keep repo context off the wire.
 	web?: boolean;
@@ -328,6 +346,7 @@ function loadAgentsFromDir(
 			return Number.isFinite(n) && n > 0 ? n : undefined;
 		};
 		const idleMs = posNum(frontmatter.idle_ms);
+		const toolIdleMs = posNum(frontmatter.tool_idle_ms);
 		const wallMs = posNum(frontmatter.wall_ms ?? frontmatter.timeout_ms);
 		// `web: false` opts an agent out of subagent web access (default on).
 		const webRaw = String(frontmatter.web ?? "")
@@ -349,6 +368,7 @@ function loadAgentsFromDir(
 				: undefined,
 			idleMs,
 			wallMs,
+			toolIdleMs,
 			systemPrompt: body,
 			source,
 			filePath,
@@ -1442,6 +1462,11 @@ async function runSingle(
 	// default. Captured on the result so timeout messages report the real numbers.
 	const effIdleMs = clampDelay(agent.idleMs ?? IDLE_MS);
 	const effWallMs = clampDelay(agent.wallMs ?? WALL_MS);
+	// An agent that raises idle_ms past the tool budget means it: never let the
+	// tool budget silently DEMOTE an explicit per-agent override.
+	const effToolIdleMs = clampDelay(
+		Math.max(agent.toolIdleMs ?? TOOL_IDLE_MS, effIdleMs),
+	);
 	const result: SingleResult = {
 		agent: agentName,
 		agentSource: agent.source,
@@ -1594,12 +1619,18 @@ async function runSingle(
 					graceTimer = setTimeout(() => done(137), 2000);
 				}, 5000);
 			};
+			// Depth, not a boolean: tool_execution_start/end can nest (a subagent tool
+			// spawning its own child), and a boolean would clear on the first inner end
+			// while an outer tool is still running, silently restoring the short budget
+			// under a long command.
+			let toolsInFlight = 0;
 			const bumpIdle = () => {
 				// Once the turn has settled the idle watchdog is retired — trailing stdout
 				// must not re-arm it and relabel a finished run as a timeout.
 				if (postSettled) return;
 				if (idleTimer) clearTimeout(idleTimer);
-				idleTimer = setTimeout(() => kill("idle"), effIdleMs);
+				const budget = toolsInFlight > 0 ? effToolIdleMs : effIdleMs;
+				idleTimer = setTimeout(() => kill("idle"), budget);
 			};
 			const clearTimers = () => {
 				for (const t of [
@@ -1622,6 +1653,18 @@ async function runSingle(
 				try {
 					event = JSON.parse(line);
 				} catch {
+					return;
+				}
+				// Tool lifecycle first: it decides which budget the NEXT silence is
+				// measured against, so it has to be applied before anything returns.
+				if (event.type === "tool_execution_start") {
+					toolsInFlight++;
+					bumpIdle(); // re-arm under the long budget immediately
+					return;
+				}
+				if (event.type === "tool_execution_end") {
+					if (toolsInFlight > 0) toolsInFlight--;
+					bumpIdle(); // back to the short budget once the model is working again
 					return;
 				}
 				if (event.type === "message_end" && event.message) {
