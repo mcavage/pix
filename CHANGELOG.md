@@ -46,6 +46,20 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **pi bumped to 0.84.2.** A patch release on top of 0.84.1; the bump exists to
+  clear the runtime "update available" nag and keep the baked agent current.
+  All three vendored pi-core patches were dry-run against a clean 0.84.2
+  install before the pin moved and all three still apply:
+  `apply-pix-resume-command`, `apply-hide-host-state`, and
+  `apply-tui-bottom-pin` (pi-tui 0.84.2, anchor still in
+  `dist/tui-main-screen.js`).
+  The pinned extension set is unchanged. Only `pi-mcp-adapter` had a newer
+  release in range (2.25.0, published 2026-08-13), and it is deliberately held
+  at 2.21.1: 2.25.0 moves the startup anchor
+  `scripts/patches/apply-mcp-problems-status.mjs` matches, so the patch throws
+  `startup anchor not found` and fails the image build. Refreshing that patch
+  is its own change, not a rider on a pi patch bump.
+
 - **The Flash tier moves to Gemini 3.7 Flash; 3.6 Flash is retired.** Google
   shipped 3.7 on 2026-08-13, three weeks after 3.6, better on every axis that
   decides a Flash role: Artificial Analysis index 56 (3.6: 52), 340 tok/s output

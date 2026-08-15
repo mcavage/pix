@@ -1,7 +1,7 @@
 # pi-tui: bottom jitter and duplicate scrollback lines during streaming
 
 **Repo:** `earendil-works/pi` · **Package:** `packages/tui` (`@earendil-works/pi-tui`)
-**Affected:** `0.79.8` through `0.84.1` (`0.84.1` reverified) · **Type:** rendering
+**Affected:** `0.79.8` through `0.84.2` (`0.84.2` reverified) · **Type:** rendering
 bug + fix (tested)
 
 > **0.84.0 moved the code, not the bug.** The renderer was split into
