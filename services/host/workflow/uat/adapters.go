@@ -282,7 +282,15 @@ func (m *realMCP) Auth(ctx context.Context, runID string, name string) (err erro
 			// identical hang was therefore diagnosed as "sbx exited without
 			// writing capture URL" on one run and as the timeout on the next,
 			// which is how CI went red on main after passing on the PR.
-			if captureCtx.Err() != nil {
+			//
+			// BOTH contexts, and the parent is the load-bearing one. captureCtx
+			// is a CHILD of ctx, and cancellation reaches a child asynchronously
+			// — so at the instant the parent's deadline releases the wait, the
+			// child's Err() can still be nil. Checking only the child left a
+			// window that widened under `-race` and failed CI again. ctx is what
+			// the caller bounded the whole call by; once it is done, the capture
+			// window is closed whether or not the child has caught up.
+			if ctx.Err() != nil || captureCtx.Err() != nil {
 				return errBrowserCaptureTimeout()
 			}
 			if wErr != nil {

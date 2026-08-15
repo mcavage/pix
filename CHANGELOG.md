@@ -197,9 +197,13 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   reported as "sbx exited without writing capture URL" on one run and the
   browser-capture timeout on the next. It passed on the PR and failed on the
   push to `main`, taking both `test` and `publish` with it (publish gates on the
-  same macOS job). The deadline now wins whenever it has passed, and both routes
-  out of that state share one `errBrowserCaptureTimeout()` so they cannot drift
-  again. The regression test drives the select 60 times per run — one iteration
+  same macOS job). The deadline now wins whenever it has passed — checked on the
+  PARENT `ctx` as well as `captureCtx`, because the latter is a child and
+  cancellation reaches a child asynchronously, so at the instant the parent's
+  deadline releases the wait the child's `Err()` can still be nil (a window that
+  widens under `-race`, and failed CI a second time when only the child was
+  checked). Both routes out of that state now share one
+  `errBrowserCaptureTimeout()` so they cannot drift again. The regression test drives the select 60 times per run — one iteration
   proves nothing here, which is exactly why this shipped green.
 - **`pix setup`'s required `providers` row could never go green — it asked the
   key store for names the store does not hold.** It passed `ProviderKeyProbe` its
