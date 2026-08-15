@@ -46,6 +46,29 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **The Flash tier moves to Gemini 3.7 Flash; 3.6 Flash is retired.** Google
+  shipped 3.7 on 2026-08-13, three weeks after 3.6, better on every axis that
+  decides a Flash role: Artificial Analysis index 56 (3.6: 52), 340 tok/s output
+  (3.6: 225), TTFT 9.8 s (3.6: 19.0 s), Terminal-bench 2.1 85.8%, with coding,
+  web dev and document reasoning the headline gains. The three Flash intents —
+  `writing`, `verify`, `fast-balanced` — repoint to it and NOTHING else moved:
+  `code` stays on Sonnet 5 and `breadth` stays on Flash-Lite. 3.6 is
+  `available: false` (kept for audit, hidden from routing) exactly as 3.5 was.
+
+  **The catalog carries Google's INTRODUCTORY price, $0.75/$3.75 per Mtok, which
+  expires 2026-12-31 and reverts to 3.6's $1.5/$7.5.** That is deliberate — it
+  is what a turn costs today — and it is a dated debt: every cost-objective
+  intent is priced off that row, so it must be re-grounded before 2027-01-01 or
+  the router will silently believe a Flash turn costs half what it does. The
+  expiry is recorded in the model's `notes`, in the scorecard `_note`, and here.
+
+  **Run `pix models add google` after upgrading.** Host availability is
+  `catalog.Available && binding.Available` (`routing.RegistryForBindings`), so
+  retiring 3.6 in the catalog drops it out of routing on a host that still has a
+  probed 3.6 binding — and 3.7 is not in that host's roster until the roster is
+  rebuilt. Until then the three Flash intents resolve off their preferred model
+  or onto the policy fallback, which names a model the host cannot yet call.
+
 - **Plain `pix` now launches.** It is `pix run` in the current directory:
   attach to that directory's sandbox if one is up, create it otherwise. The old
   behavior (always print status, never launch) charged every interactive session
@@ -162,6 +185,63 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   only a human can judge, and the exit-code contract.
 
 ### Fixed
+
+- **UAT's browser-capture timeout was diagnosed two different ways for the same
+  hang, and turned `main` red.** When the capture window closes with nothing
+  written, `realMCP.Auth` sits in a `select` on two cases that become ready at
+  the same instant: the deadline (`captureCtx.Done()`) and the process wait. The
+  command context derives from the same `ctx`, so an expired window tears the
+  process down itself — whatever lands on `waitErrCh` next (a nil status, or
+  `signal: killed` from a real sbx) is that teardown, not sbx giving up on its
+  own. Go picks between ready select cases at random, so the identical failure
+  reported as "sbx exited without writing capture URL" on one run and the
+  browser-capture timeout on the next. It passed on the PR and failed on the
+  push to `main`, taking both `test` and `publish` with it (publish gates on the
+  same macOS job). The deadline now wins whenever it has passed, and both routes
+  out of that state share one `errBrowserCaptureTimeout()` so they cannot drift
+  again. The regression test drives the select 60 times per run — one iteration
+  proves nothing here, which is exactly why this shipped green.
+- **`pix setup`'s required `providers` row could never go green — it asked the
+  key store for names the store does not hold.** It passed `ProviderKeyProbe` its
+  own `ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY` list, but `sbx secret
+  ls` lists a secret under the name it was STORED as, and the writer
+  (`secret.setSbxSecret`) stores a provider key by PROVIDER name — `anthropic`,
+  `openai`, `google`. Those two spellings never met, so setup reported "none of
+  ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY is set" and exited non-zero
+  on a host with all three keys wired, synced into sbx, and answering live
+  requests. `pix doctor` and `pix run`'s launch gate were already correct: both
+  pass `secret.ModelProviders`, which setup now passes too. Setup's own comment
+  claimed this was "the same probe `pix doctor` reports from, never a second
+  implementation of the same classification" — the second implementation was
+  that argument. The unit test agreed with the code (`echo ANTHROPIC_API_KEY` →
+  ready) and neither agreed with the store, which is why it shipped; the fixture
+  now speaks the store's vocabulary and a new test pins the real `sbx secret ls`
+  format.
+- **`pix setup` never asked for a provider key, so a host with no pack could not
+  finish it.** `providers` is a REQUIRED capability, and setup's only response to
+  a missing one was to print `pix models add anthropic` and exit non-zero — a
+  repair it knew exactly how to perform, described rather than offered. It read
+  as correct for as long as it did because a pack with managed inference
+  satisfies that row KEYLESSLY, so on the hosts being exercised the gap never
+  appeared; a vanilla `pix setup` in a pack-less checkout hit it every time. The
+  `providers` step now carries an Apply that runs the SAME `pix models add`
+  interview (injected through `provision.Composition`, like pack adoption —
+  provision still may not import the workflow that performs the step), so the
+  ref, the binding rebuild, the live probe and the sbx sync all stay in the one
+  command that owns a credential. Setup only asks WHICH provider, and the second
+  check is still the only thing that reports readiness. It is skipped entirely
+  with no terminal, under `--yes` (which suppresses questions, never answers
+  them), and on a keyless host — and a declined prompt is now a SKIP rather than
+  a failure, via the new `provision.ErrSkipped`, so "not now" reports as the
+  choice it was instead of aborting the run or claiming a repair that never
+  happened.
+- **`pix setup` sat silent for up to sixteen seconds.** Both check rounds are
+  concurrent and each probe gets the full 8 s budget, so a round costs as long as
+  its slowest probe and printed nothing until it was over — indistinguishable
+  from a hang. `health.RunWithProgress` reports each probe the moment it answers,
+  and the loop narrates both rounds to a terminal (name, verdict via the shared
+  `health.Glyph`, elapsed). A redirected stream still gets the report alone, so
+  nothing that parses setup's output has to learn a new preamble.
 
 - **`TypeError: Math.sumPrecise is not a function`, repeatedly, in any session
   that read a PDF.** pi reads PDFs through `unpdf`, which bundles a pdf.js

@@ -120,17 +120,37 @@ const DefaultBudget = 5 * time.Second
 // probe can leak a fix onto a ready or unknown answer, and a panicking probe
 // degrades to unknown instead of taking the command down with it.
 func Run(ctx context.Context, budget time.Duration, probes ...Probe) Snapshot {
+	return RunWithProgress(ctx, budget, nil, probes...)
+}
+
+// RunWithProgress is Run with a callback fired the moment each probe answers,
+// for a caller that must not go quiet while it waits. A round costs as long as
+// its SLOWEST probe — up to the full budget, twice over in `pix setup` — and a
+// terminal that prints nothing for that long is indistinguishable from a hang.
+//
+// done is called from each probe's own goroutine, serialized under a mutex, so
+// an implementation may write to a shared stream without its own locking. It is
+// called in COMPLETION order, never probe order: that is the point, and it is
+// why the ordered Snapshot is still what gets rendered at the end.
+func RunWithProgress(ctx context.Context, budget time.Duration, done func(Result), probes ...Probe) Snapshot {
 	if budget <= 0 {
 		budget = DefaultBudget
 	}
 	start := time.Now()
 	out := make([]Result, len(probes))
 	var wg sync.WaitGroup
+	var mu sync.Mutex
 	for i, p := range probes {
 		wg.Add(1)
 		go func(i int, p Probe) {
 			defer wg.Done()
-			out[i] = runOne(ctx, budget, p)
+			r := runOne(ctx, budget, p)
+			out[i] = r
+			if done != nil {
+				mu.Lock()
+				defer mu.Unlock()
+				done(r)
+			}
 		}(i, p)
 	}
 	wg.Wait()

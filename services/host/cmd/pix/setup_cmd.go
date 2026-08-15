@@ -13,10 +13,12 @@ import (
 	"os"
 
 	"pix/host/cli"
+	"pix/host/hostenv"
 	"pix/host/mcp"
 	"pix/host/sandbox"
 	"pix/host/sys"
 	"pix/host/workflow/launch"
+	"pix/host/workflow/models"
 	"pix/host/workflow/pack"
 	"pix/host/workflow/provision"
 )
@@ -123,7 +125,7 @@ func (c *setupCmd) Run(d *cli.Deps) error {
 	}
 
 	// The host phase: check, apply the verified gaps, check again.
-	if err := provision.RunSetup(env, hostArgs, d.Out); err != nil {
+	if err := provision.RunSetup(env, hostArgs, d.In, d.Out, d.Interactive); err != nil {
 		var usage provision.ErrUsage
 		if errors.As(err, &usage) {
 			// an argument mistake, caught before any probe or mutation
@@ -229,5 +231,15 @@ func init() {
 	provision.Injected = provision.Composition{
 		Register:  registerServers,
 		PackApply: pack.SetupAdopter(registerServers, setupProbeWrap),
+		// The SAME interview `pix models add <provider>` runs, reached through the
+		// same Deps shape, so setup cannot grow a second way to ask for a key.
+		AddProvider: func(env hostenv.Env, in io.Reader, out io.Writer, interactive bool, provider string) error {
+			d := &cli.Deps{In: in, Out: out, Err: out, Interactive: interactive}
+			cfg, err := d.Config()
+			if err != nil {
+				return err
+			}
+			return models.AddKeyedProvider(d, cfg, env, provider)
+		},
 	}
 }

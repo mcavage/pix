@@ -99,8 +99,8 @@
       "max_latency_ms": 20000,
       "min_accuracy": 0.70,
       "prefer_providers": ["google"],
-      "fallback": "google/gemini-3.6-flash",
-      "about": "Test/QA passes: fast + cheap, but Haiku was the dumb pick for it. Prefers Google for the best fast QA model (Pro excluded on the 20s latency cap, Flash-Lite on the accuracy floor). -> Gemini 3.6 Flash."
+      "fallback": "google/gemini-3.7-flash",
+      "about": "Test/QA passes: fast + cheap, but Haiku was the dumb pick for it. Prefers Google for the best fast QA model (Pro excluded on the 20s latency cap, Flash-Lite on the accuracy floor). -> Gemini 3.7 Flash."
     },
     {
       "name": "fast-balanced",
@@ -108,8 +108,8 @@
       "objective": "balanced",
       "max_latency_ms": 10000,
       "min_accuracy": 0.65,
-      "fallback": "google/gemini-3.6-flash",
-      "about": "Snappy interactive work that wants more smarts than the volume floor but can't wait on a frontier model: balanced accuracy/cost/latency within a hard sub-10s tier (excludes Pro/Sol/Terra/Sonnet on latency) above a 0.65 accuracy floor (excludes Flash-Lite). -> Gemini 3.6 Flash (fast, mid-accuracy, beats Haiku on the blend)."
+      "fallback": "google/gemini-3.7-flash",
+      "about": "Snappy interactive work that wants more smarts than the volume floor but can't wait on a frontier model: balanced accuracy/cost/latency within a hard sub-10s tier (excludes Pro/Sol/Terra/Sonnet on latency) above a 0.65 accuracy floor (excludes Flash-Lite). -> Gemini 3.7 Flash (fast, mid-accuracy, beats Haiku on the blend)."
     },
     {
       "name": "writing",
@@ -117,8 +117,8 @@
       "objective": "cost",
       "min_accuracy": 0.70,
       "prefer_providers": ["google"],
-      "fallback": "google/gemini-3.6-flash",
-      "about": "PROSE: product copy, docs, tutorials, marketing, knowledge writeups (ux-copywriter, devrel, growth-marketing, enrich). Steered OFF Anthropic because Claude is the weak writer; cheapest Google model clearing a 0.70 quality floor. -> Gemini 3.6 Flash. (Bump to Gemini 3.1 Pro for higher-stakes prose by setting objective:accuracy.)"
+      "fallback": "google/gemini-3.7-flash",
+      "about": "PROSE: product copy, docs, tutorials, marketing, knowledge writeups (ux-copywriter, devrel, growth-marketing, enrich). Steered OFF Anthropic because Claude is the weak writer; cheapest Google model clearing a 0.70 quality floor. -> Gemini 3.7 Flash. (Bump to Gemini 3.1 Pro for higher-stakes prose by setting objective:accuracy.)"
     }
   ]
 }

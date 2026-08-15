@@ -14,6 +14,7 @@ package provision
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -57,6 +58,12 @@ type Step struct {
 type Options struct {
 	// Budget bounds a single probe in both checks.
 	Budget time.Duration
+	// Progress, when set, receives a live line per probe as each CHECK runs.
+	// Both checks are concurrent and cost as long as their slowest probe, so
+	// with a setup-sized budget this is up to sixteen seconds during which the
+	// only honest thing to print is what is still outstanding. Nil keeps the
+	// loop silent, which is what every non-interactive caller wants.
+	Progress io.Writer
 }
 
 // Skip is a gap provisioning deliberately did not touch, and why.
@@ -70,6 +77,19 @@ type Failure struct {
 	Name string
 	Err  error
 }
+
+// ErrSkipped is an Apply reporting that it declined to act — the user said no
+// at a prompt, not "the repair was attempted and broke". The loop records it as
+// a Skip, so the report reads as the choice it was and the exit code is decided
+// by the second check alone.
+//
+// Without this an Apply had only two words available, and both lied about a
+// declined prompt: returning nil claims a repair that never happened (the row
+// then renders "applied … NOT verified by the second check"), and returning a
+// plain error aborts the whole run over an answer the user is allowed to give.
+type ErrSkipped struct{ Reason string }
+
+func (e ErrSkipped) Error() string { return e.Reason }
 
 // Unverified is the important one: the apply reported success and the second
 // check disagreed.
@@ -97,7 +117,7 @@ func Run(ctx context.Context, opts Options, steps ...Step) Outcome {
 	for _, s := range steps {
 		probes = append(probes, named{name: stepName(s), Probe: s.Probe})
 	}
-	o := Outcome{Before: health.Run(ctx, opts.Budget, probes...)}
+	o := Outcome{Before: opts.check(ctx, "checking", probes)}
 
 	for _, s := range steps {
 		before, ok := o.Before.Find(stepName(s))
@@ -122,6 +142,11 @@ func Run(ctx context.Context, opts Options, steps ...Step) Outcome {
 			continue
 		}
 		if err := s.Apply(ctx); err != nil {
+			var skipped ErrSkipped
+			if errors.As(err, &skipped) {
+				o.Skipped = append(o.Skipped, Skip{stepName(s), skipped.Reason})
+				continue
+			}
 			o.Failed = append(o.Failed, Failure{stepName(s), err})
 			continue
 		}
@@ -129,7 +154,7 @@ func Run(ctx context.Context, opts Options, steps ...Step) Outcome {
 	}
 
 	// The second check. This is the only thing that can call anything ready.
-	o.After = health.Run(ctx, opts.Budget, probes...)
+	o.After = opts.check(ctx, "re-checking", probes)
 	for _, s := range steps {
 		after, ok := o.After.Find(stepName(s))
 		if !ok || after.OK() {
@@ -141,6 +166,31 @@ func Run(ctx context.Context, opts Options, steps ...Step) Outcome {
 		}
 	}
 	return o
+}
+
+// check runs one round, narrating it when Progress is set. The narration is
+// deliberately not the report: it names what is being waited on and answers each
+// row with a verdict and how long it took, and says nothing about fixes or
+// evidence. Render still prints the authoritative table afterwards, from the
+// ORDERED snapshot — these lines arrive in completion order and are transcript,
+// not verdict.
+func (o Options) check(ctx context.Context, verb string, probes []health.Probe) health.Snapshot {
+	if o.Progress == nil {
+		return health.Run(ctx, o.Budget, probes...)
+	}
+	names := make([]string, 0, len(probes))
+	for _, p := range probes {
+		names = append(names, p.Name())
+	}
+	fmt.Fprintf(o.Progress, "%s %d capabilities: %s\n", verb, len(probes), strings.Join(names, ", "))
+	snap := health.RunWithProgress(ctx, o.Budget, func(r health.Result) {
+		// health.Glyph off Effective(), like every other renderer: a live line
+		// that spelled its own glyph could disagree with the row it turns into.
+		fmt.Fprintf(o.Progress, "  %s %-12s %s (%s)\n", health.Glyph(r.Effective()), r.Name, r.Detail,
+			r.Took.Round(100*time.Millisecond))
+	}, probes...)
+	fmt.Fprintln(o.Progress)
+	return snap
 }
 
 // named gives a step's results the STEP's identity rather than the probe's.
