@@ -35,11 +35,10 @@ neither needs a backup. Snapshot/restore live on the host binary:
 }
 
 type memoryCmd struct {
-	Recall    memoryRecallCmd    `cmd:"" help:"Search stored facts."`
-	Remember  memoryRememberCmd  `cmd:"" help:"Store a fact. (WRITES)"`
-	Forget    memoryForgetCmd    `cmd:"" help:"Delete a fact by id or id prefix. (WRITES)"`
-	Learnings memoryLearningsCmd `cmd:"" help:"Recurring learnings, promotable into a skill."`
-	Stats     memoryStatsCmd     `cmd:"" help:"Counts by kind and durability."`
+	Recall   memoryRecallCmd   `cmd:"" help:"Search stored facts."`
+	Remember memoryRememberCmd `cmd:"" help:"Store a fact. (WRITES)"`
+	Forget   memoryForgetCmd   `cmd:"" help:"Delete a fact by id or id prefix. (WRITES)"`
+	Stats    memoryStatsCmd    `cmd:"" help:"Counts by kind."`
 }
 
 // withMemory resolves what every subcommand needs (a live-enough daemon, a client,
@@ -110,15 +109,6 @@ type memoryForgetCmd struct {
 
 func (c *memoryForgetCmd) Run(d *cli.Deps) error {
 	return withMemory(d, "forget", func(m memory.CLI) error { return m.Forget(c.ID, c.JSON) })
-}
-
-type memoryLearningsCmd struct {
-	Min  int  `default:"3" help:"Only lessons seen at least N times." placeholder:"N"`
-	JSON bool `help:"Emit machine-readable JSON."`
-}
-
-func (c *memoryLearningsCmd) Run(d *cli.Deps) error {
-	return withMemory(d, "learnings", func(m memory.CLI) error { return m.Learnings(c.Min, c.JSON) })
 }
 
 type memoryStatsCmd struct {

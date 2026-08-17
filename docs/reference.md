@@ -21,7 +21,7 @@ CLI reference of its own.
 | `setup` | the guided host+agent setup path (keys, memory, pack, identity) | `docs/design/onboarding.md` |
 | `reset` | start over: config, data and runtime state moved aside, sandboxes removed | §9 |
 | `serve` | the long-running host services (memory :11435) | `docs/design/serve-lifecycle.md` |
-| `memory` (`mem`) | recall/remember/forget/learnings/stats from the host | §2, `docs/memory.md` |
+| `memory` (`mem`) | recall/remember/forget/stats from the host | §2, `docs/memory.md` |
 | `pack` | the portable capability context: ls/show/use/rm (no authoring verb, edit `pack.toml`/`skills/` by hand) | §5, `docs/design/packs-v2.md` |
 | `mcp` | `add`/`ls`/`auth` the MCP servers your pack declares, through the sbx gateway (the one door integrations come through) | §8 |
 | `secret` | manage the 1Password `op://` refs (never the values) | §8 |
@@ -66,7 +66,6 @@ acting differently next time, the same way you'd correct a person.
 /recall <query>       # what memory would surface for this query
 /remember <text>      # pin a fact immediately, no waiting on the watcher
 /forget <id|query>     # drop a memory; id from /recall, or a query to drop its top match
-/learnings [minFreq]  # recurring captured facts worth promoting into a skill (see the `promote` skill)
 ```
 
 The agent has read-only access via **typed tools** (`memory_recall`,
@@ -572,8 +571,8 @@ slate. Afterwards: `pix setup`.
 4. When you catch yourself repeating a preference or a wrapper script across
    sessions, that's the trigger, not before: write a `pack.toml` and a
    `skills/<name>/SKILL.md` by hand to save what worked as a reusable flow,
-   then `pix pack use <path>` to activate it. Run `/learnings` first if you
-   want to know what the watcher already noticed repeating.
+   then `pix pack use <path>` to activate it. Run `/recall` first if you
+   want to see what the watcher already captured on the topic.
 
 That's the whole loop: run, work, let the parts introduce themselves, save
 the repeat.

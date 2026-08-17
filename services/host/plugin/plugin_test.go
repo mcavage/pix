@@ -19,7 +19,6 @@ func (noopMemory) Remember(RememberReq) (RememberResp, error)       { return Rem
 func (noopMemory) Recall(RecallReq) (RecallResp, error)             { return RecallResp{}, nil }
 func (noopMemory) Forget(ForgetReq) (ForgetResp, error)             { return ForgetResp{}, nil }
 func (noopMemory) Synthesize(SynthesizeReq) (SynthesizeResp, error) { return SynthesizeResp{}, nil }
-func (noopMemory) Promotable(PromotableReq) (PromotableResp, error) { return PromotableResp{}, nil }
 func (noopMemory) Observe(ObserveReq) (ObserveResp, error)          { return ObserveResp{}, nil }
 func (noopMemory) Stats(string) (Stats, error)                      { return Stats{}, nil }
 func (noopMemory) Health() (Health, error)                          { return Health{}, nil }
@@ -139,9 +138,6 @@ func (echoMemory) Forget(r ForgetReq) (ForgetResp, error) { return ForgetResp{OK
 func (echoMemory) Synthesize(r SynthesizeReq) (SynthesizeResp, error) {
 	return SynthesizeResp{Merged: 3}, nil
 }
-func (echoMemory) Promotable(r PromotableReq) (PromotableResp, error) {
-	return PromotableResp{Candidates: []Candidate{{ID: "c1", Frequency: r.MinFrequency}}}, nil
-}
 func (echoMemory) Observe(r ObserveReq) (ObserveResp, error) {
 	return ObserveResp{Accepted: true, Reason: r.User}, nil
 }
@@ -163,9 +159,6 @@ func TestRPCRoundTripMemory(t *testing.T) {
 	}
 	if got, err := c.Synthesize(SynthesizeReq{Threshold: 0.9}); err != nil || got.Merged != 3 {
 		t.Fatalf("Synthesize round trip: got %+v err %v", got, err)
-	}
-	if got, err := c.Promotable(PromotableReq{MinFrequency: 5}); err != nil || len(got.Candidates) != 1 || got.Candidates[0].Frequency != 5 {
-		t.Fatalf("Promotable round trip: got %+v err %v", got, err)
 	}
 	if got, err := c.Observe(ObserveReq{User: "alice"}); err != nil || !got.Accepted || got.Reason != "alice" {
 		t.Fatalf("Observe round trip: got %+v err %v", got, err)

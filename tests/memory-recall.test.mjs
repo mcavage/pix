@@ -134,7 +134,7 @@ test("an explicit /recall query is passed through unchanged, keeping the daemon'
 });
 
 test("/recall on '*' appends a truncation notice when the daemon returns a full 100-hit page", async (t) => {
-	const hits = Array.from({ length: 100 }, (_, i) => ({ id: `id${i}`.padEnd(8, "0"), kind: "fact", durability: "durable", content: `fact ${i}` }));
+	const hits = Array.from({ length: 100 }, (_, i) => ({ id: `id${i}`.padEnd(8, "0"), kind: "fact", content: `fact ${i}` }));
 	const { server } = makeFakeDaemon(() => ({ hits }));
 	t.after(() => server.close());
 	const MEMORY_URL = await listen(server);
@@ -168,29 +168,36 @@ test("formatHitLine includes the timestamp when createdAt is valid, omits it whe
 	const withDate = mod.formatHitLine({
 		id: "abcdef1234567890",
 		kind: "fact",
-		durability: "durable",
 		content: "hello",
 		createdAt: "2026-07-22T10:59:34-07:00",
 	});
-	assert.equal(withDate, "• [abcdef12] (fact/durable) 2026-07-22T10:59:34-07:00 hello");
+	assert.equal(withDate, "• [abcdef12] (fact) 2026-07-22T10:59:34-07:00 hello");
 
 	const noDate = mod.formatHitLine({
 		id: "abcdef1234567890",
 		kind: "fact",
-		durability: "durable",
 		content: "hello",
 		createdAt: null,
 	});
-	assert.equal(noDate, "• [abcdef12] (fact/durable) hello");
+	assert.equal(noDate, "• [abcdef12] (fact) hello");
 
 	const badDate = mod.formatHitLine({
 		id: "abcdef1234567890",
 		kind: "fact",
-		durability: "durable",
 		content: "hello",
 		createdAt: "garbage",
 	});
-	assert.equal(badDate, "• [abcdef12] (fact/durable) hello");
+	assert.equal(badDate, "• [abcdef12] (fact) hello");
+});
+
+// formatHitLine used to also render a `/durability` segment; the write path
+// makes every row durable now (see extensions/memory-recall.ts), so the
+// per-hit annotation was deleted along with the perishable score filter
+// below. A hit that still carries a legacy durability field must not leak it
+// back into the line.
+test("formatHitLine no longer renders a durability segment, even if a hit still carries one", () => {
+	const line = pureMod.formatHitLine({ id: "abcdef1234567890", kind: "fact", durability: "perishable", content: "hello" });
+	assert.equal(line, "• [abcdef12] (fact) hello");
 });
 
 // ── (3) command errors notify a concise, actionable message, never vanish ──
@@ -328,6 +335,16 @@ test("buildRecallBlock itself rejects on a dead daemon (safe() is the hook's job
 	await assert.rejects(() => mod.buildRecallBlock("some prompt"));
 });
 
+test("buildRecallBlock returns null on a zero-hit response, never an empty header-only block", async (t) => {
+	const { server } = makeFakeDaemon(() => ({ hits: [] }));
+	t.after(() => server.close());
+	const MEMORY_URL = await listen(server);
+	const mod = await loadWithEnv({ MEMORY_URL });
+
+	const block = await mod.buildRecallBlock("some prompt");
+	assert.equal(block, null, "no hits must short-circuit to null, not the header rendered with zero rows");
+});
+
 // ── typed agent-facing tools (memory_recall/memory_stats, read-only) ───────
 
 test("only the two read-only memory tools are registered; write/delete stay human slash commands", async () => {
@@ -336,7 +353,7 @@ test("only the two read-only memory tools are registered; write/delete stay huma
 	assert.deepEqual([...tools.keys()].sort(), ["memory_recall", "memory_stats"]);
 	assert.ok(!tools.has("memory_remember"), "memory_remember must not be agent-callable");
 	assert.ok(!tools.has("memory_forget"), "memory_forget must not be agent-callable");
-	for (const name of ["recall", "remember", "forget", "learnings"]) {
+	for (const name of ["recall", "remember", "forget"]) {
 		assert.ok(commands.has(name), `/${name} command still registered`);
 	}
 });
@@ -344,7 +361,7 @@ test("only the two read-only memory tools are registered; write/delete stay huma
 test("memory_recall defaults query to '*', requests up to 100 rows with a large charBudget, and returns formatted hit lines", async (t) => {
 	const { server, requests } = makeFakeDaemon(() => ({
 		hits: [
-			{ id: "abcdef1234567890", kind: "fact", durability: "durable", content: "hello", createdAt: null },
+			{ id: "abcdef1234567890", kind: "fact", content: "hello", createdAt: null },
 		],
 	}));
 	t.after(() => server.close());
@@ -357,7 +374,7 @@ test("memory_recall defaults query to '*', requests up to 100 rows with a large 
 	assert.equal(requests[0].params.query, "*");
 	assert.equal(requests[0].params.limit, 100, "'*' defaults to the full 100-row cap, not the search default of 6");
 	assert.equal(requests[0].params.charBudget, 1_000_000, "'*' must not be truncated by the daemon's 1200-char default");
-	assert.equal(toolText(r), "• [abcdef12] (fact/durable) hello");
+	assert.equal(toolText(r), "• [abcdef12] (fact) hello");
 });
 
 test("memory_recall keeps a search default of 6 (and no charBudget override) for an explicit non-'*' query", async (t) => {
@@ -393,7 +410,7 @@ test("memory_recall passes an explicit query through and clamps limit to 1..100"
 });
 
 test("memory_recall appends a clear truncation line when hits.length equals the effective limit", async (t) => {
-	const hits = Array.from({ length: 3 }, (_, i) => ({ id: `id${i}`.padEnd(8, "0"), kind: "fact", durability: "durable", content: `fact ${i}` }));
+	const hits = Array.from({ length: 3 }, (_, i) => ({ id: `id${i}`.padEnd(8, "0"), kind: "fact", content: `fact ${i}` }));
 	const { server } = makeFakeDaemon(() => ({ hits }));
 	t.after(() => server.close());
 	const MEMORY_URL = await listen(server);
@@ -405,7 +422,7 @@ test("memory_recall appends a clear truncation line when hits.length equals the 
 });
 
 test("memory_recall does NOT append a truncation line when hits.length is below the limit", async (t) => {
-	const hits = [{ id: "id00000", kind: "fact", durability: "durable", content: "only one" }];
+	const hits = [{ id: "id00000", kind: "fact", content: "only one" }];
 	const { server } = makeFakeDaemon(() => ({ hits }));
 	t.after(() => server.close());
 	const MEMORY_URL = await listen(server);
@@ -422,6 +439,9 @@ test("memory_recall throws (does not swallow) when the daemon is unreachable", a
 	await assert.rejects(() => tools.get("memory_recall").execute("id", {}, undefined, undefined, noopCtx));
 });
 
+// memory_stats is a raw passthrough of whatever the host returns; it must
+// tolerate the durable/perishable fields the host still emits (inert until
+// the U5 schema work) without special-casing or stripping them client-side.
 test("memory_stats calls the stats RPC with the active profile and returns the raw counts", async (t) => {
 	const { server, requests } = makeFakeDaemon(() => ({ active: 3, durable: 2, perishable: 1 }));
 	t.after(() => server.close());
@@ -440,50 +460,28 @@ test("memory_stats throws when the daemon is unreachable", async () => {
 	await assert.rejects(() => tools.get("memory_stats").execute("id", {}, undefined, undefined, noopCtx));
 });
 
-// ── buildRecallBlock: perishable relevance floor (silent injection only) ───
+// ── buildRecallBlock: durability/perishable filtering deleted ─────────────
+//
+// The write path makes every row durable now (see AGENTS.md/CHANGELOG), so a
+// dedicated auto-inject score floor for "perishable" hits has nothing left to
+// filter; it was deleted along with the AUTO_INJECT_PERISHABLE_SCORE_FLOOR
+// constant. This is the sentinel: a low-score hit that still carries a legacy
+// `durability: "perishable"` field (e.g. a row an older binary wrote) must be
+// treated exactly like any other hit, never specially dropped.
 
-test("buildRecallBlock omits a low-score perishable hit but keeps a low-score durable one", async (t) => {
-	const hits = [
-		{ content: "low-score perishable status", durability: "perishable", score: 0.1 },
-		{ content: "low-score durable fact", durability: "durable", score: 0.05 },
-	];
+test("buildRecallBlock no longer filters hits by durability or score (the perishable floor was deleted)", async (t) => {
+	const hits = [{ content: "low-score legacy-perishable hit", durability: "perishable", score: 0.01 }];
 	const { server } = makeFakeDaemon(() => ({ hits }));
 	t.after(() => server.close());
 	const MEMORY_URL = await listen(server);
 	const mod = await loadWithEnv({ MEMORY_URL });
 
 	const block = await mod.buildRecallBlock("some prompt");
-	assert.ok(!block.includes("low-score perishable status"), "low-score perishable must be filtered from silent injection");
-	assert.ok(block.includes("low-score durable fact"), "durable hits are never filtered by score");
-});
-
-test("buildRecallBlock keeps a perishable hit at or above the 0.30 floor", async (t) => {
-	const hits = [
-		{ content: "boundary perishable", durability: "perishable", score: 0.3 },
-		{ content: "well above floor perishable", durability: "perishable", score: 0.9 },
-	];
-	const { server } = makeFakeDaemon(() => ({ hits }));
-	t.after(() => server.close());
-	const MEMORY_URL = await listen(server);
-	const mod = await loadWithEnv({ MEMORY_URL });
-
-	const block = await mod.buildRecallBlock("some prompt");
-	assert.ok(block.includes("boundary perishable"), "exactly 0.30 must be included, not excluded");
-	assert.ok(block.includes("well above floor perishable"));
-});
-
-test("buildRecallBlock returns null when every hit is filtered out", async (t) => {
-	const hits = [{ content: "dropped", durability: "perishable", score: 0.01 }];
-	const { server } = makeFakeDaemon(() => ({ hits }));
-	t.after(() => server.close());
-	const MEMORY_URL = await listen(server);
-	const mod = await loadWithEnv({ MEMORY_URL });
-
-	assert.equal(await mod.buildRecallBlock("some prompt"), null);
+	assert.ok(block?.includes("low-score legacy-perishable hit"), "a hit must never be dropped for a low score plus a durability field");
 });
 
 test("the injected block tells the model it's a relevance-filtered subset and to use memory_recall", async (t) => {
-	const hits = [{ content: "some fact", durability: "durable", score: 0.9 }];
+	const hits = [{ content: "some fact", score: 0.9 }];
 	const { server } = makeFakeDaemon(() => ({ hits }));
 	t.after(() => server.close());
 	const MEMORY_URL = await listen(server);

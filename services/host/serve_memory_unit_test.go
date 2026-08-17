@@ -82,9 +82,14 @@ func TestMemoryUnitIsSelfExecAndPreservesTheRPCSurface(t *testing.T) {
 		t.Fatalf("recall over the plugin unit found nothing: %v", rec)
 	}
 	top, _ := hits[0].(map[string]any)
+	// durability is asserted here for a different reason than its neighbors:
+	// plugin.Hit keeps the field READ-SIDE only, until the U5 schema work
+	// retires the column (memory_deletions_gone_test.go pins that). The sandbox
+	// extension no longer reads h.durability off a hit at all (that filtering
+	// and rendering was deleted this unit) — every OTHER key below still is.
 	for _, k := range []string{"id", "content", "score", "kind", "durability", "project", "createdAt"} {
 		if _, present := top[k]; !present {
-			t.Errorf("recall hit is missing %q (the extension reads it): %v", k, top)
+			t.Errorf("recall hit is missing %q: %v", k, top)
 		}
 	}
 	if ca, _ := top["createdAt"].(string); strings.TrimSpace(ca) == "" {
@@ -115,7 +120,7 @@ func TestMemoryUnitIsSelfExecAndPreservesTheRPCSurface(t *testing.T) {
 		}
 	}
 	// the remaining methods are all still routable.
-	for _, m := range []string{"synthesize", "promotable", "observe"} {
-		rpcPost(t, srv.URL, m, map[string]any{"user": "hello", "minFrequency": 3})
+	for _, m := range []string{"synthesize", "observe"} {
+		rpcPost(t, srv.URL, m, map[string]any{"user": "hello"})
 	}
 }

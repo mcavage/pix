@@ -27,6 +27,28 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   dead `expiresAt` placeholder variable in `remember()`, were deleted rather
   than kept around at a permanent zero. See docs/memory.md's Legacy data
   section.
+- **Memory sheds the sandbox/CLI surface that only made sense while rows could
+  still be perishable.** `extensions/memory-recall.ts` drops
+  `AUTO_INJECT_PERISHABLE_SCORE_FLOOR` and the durability-based filter in
+  `fetchRecallRows`, since every row the host now writes is durable (previous
+  entry) and there is nothing left for a perishable-only floor to catch;
+  `formatHitLine` and the `memory_stats` tool description stop rendering a
+  per-hit `/durability` annotation and enumerating durable/perishable counts.
+  `pix memory learnings`, `/learnings`, and the `promotable` JSON-RPC method
+  (plus `plugin.PromotableReq`/`PromotableResp`/`Candidate` and the memory
+  store's `promotable()` query) are deleted end to end: nothing in-tree called
+  them once the recurrence-ranked promotion surface itself was cut, and
+  `scripts/semantic-diff/rules/memory-rpc.rules.mjs`'s pinned method set drops
+  `promotable` to match (see `intended-changes.json`). `pix memory stats`'
+  plain-text line drops the durable/perishable split (every row is durable
+  now); `--json` is a raw passthrough and is unaffected, so the host response
+  can keep those fields until the U5 schema work retires the column. The
+  `promote` skill no longer assumes a dead verb: it pulls candidates through
+  `/recall` instead, noting that frequency-ranked promotion is deferred. The
+  `assistant` field is gone from `memory-capture.ts`'s `observe` RPC params
+  and from `lastCompleteExchange`'s return shape: the watcher only ever reads
+  the user's message (never the agent's reply), so the assistant text had no
+  consumer beyond a dedup-hash input, which now hashes the user text alone.
 
 ### Fixed
 

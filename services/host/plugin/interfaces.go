@@ -17,7 +17,6 @@ type MemoryStore interface {
 	Recall(RecallReq) (RecallResp, error)
 	Forget(ForgetReq) (ForgetResp, error)
 	Synthesize(SynthesizeReq) (SynthesizeResp, error)
-	Promotable(PromotableReq) (PromotableResp, error)
 	Observe(ObserveReq) (ObserveResp, error)
 	Stats(profile string) (Stats, error)
 	Health() (Health, error)
@@ -96,24 +95,6 @@ type SynthesizeReq struct {
 
 type SynthesizeResp struct {
 	Merged int
-}
-
-// PromotableReq / PromotableResp mirror promotable(minFrequency) -> {candidates}.
-type PromotableReq struct {
-	MinFrequency int
-	Profile      string
-}
-
-type Candidate struct {
-	ID        string
-	Content   string
-	Frequency int
-	Project   string
-	CreatedAt string // RFC3339; `pix memory learnings` renders it
-}
-
-type PromotableResp struct {
-	Candidates []Candidate
 }
 
 // ObserveReq / ObserveResp mirror the observe method (async memCapture).

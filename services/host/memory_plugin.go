@@ -72,19 +72,6 @@ func (a *memoryStoreAdapter) Synthesize(req plugin.SynthesizeReq) (plugin.Synthe
 	return plugin.SynthesizeResp{Merged: merged}, nil
 }
 
-func (a *memoryStoreAdapter) Promotable(req plugin.PromotableReq) (plugin.PromotableResp, error) {
-	cands := a.store.promotable(req.MinFrequency, req.Profile)
-	out := make([]plugin.Candidate, 0, len(cands))
-	for _, c := range cands {
-		id, _ := c["id"].(string)
-		content, _ := c["content"].(string)
-		freq, _ := c["frequency"].(int)
-		project, _ := c["project"].(string) // nil (no project) -> ""
-		out = append(out, plugin.Candidate{ID: id, Content: content, Frequency: freq, Project: project})
-	}
-	return plugin.PromotableResp{Candidates: out}, nil
-}
-
 // Observe and Health call the shared helpers (memObserve, memWatcherStatus).
 func (a *memoryStoreAdapter) Observe(req plugin.ObserveReq) (plugin.ObserveResp, error) {
 	accepted, reason := memObserve(a.store, req.User, req.Project, req.HasProject, req.Profile)

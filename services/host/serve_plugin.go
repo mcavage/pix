@@ -203,7 +203,9 @@ var pluginEnvAllow = []string{
 
 // --- HTTP shims backed by a plugin client -----------------------------------
 
-// projOrNil mirrors nullStr(): an empty project string surfaces as JSON null.
+// projOrNil: an empty project string surfaces as JSON null. (nullStr(), the
+// memStore-side twin this used to mirror, was deleted along with promotable(),
+// its only caller; projOrNil has its own callers here and stayed.)
 func projOrNil(p string) any {
 	if p == "" {
 		return nil
@@ -327,18 +329,6 @@ func memoryStoreMux(use memoryUse) http.Handler {
 				return nil, err
 			}
 			return jsonObj{"merged": r.Merged}, nil
-		}),
-		"promotable": with(func(s plugin.MemoryStore, p jsonObj) (any, error) {
-			r, err := s.Promotable(plugin.PromotableReq{MinFrequency: clampInt(p["minFrequency"], 3, 1, 1000000), Profile: profileFromParams(p)})
-			if err != nil {
-				return nil, err
-			}
-			list := []jsonObj{}
-			for _, c := range r.Candidates {
-				list = append(list, jsonObj{"id": c.ID, "content": c.Content, "frequency": c.Frequency,
-					"project": projOrNil(c.Project), "createdAt": c.CreatedAt})
-			}
-			return jsonObj{"candidates": list}, nil
 		}),
 		"observe": with(func(s plugin.MemoryStore, p jsonObj) (any, error) {
 			project, hasProj := projectFromParams(p)

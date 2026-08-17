@@ -113,3 +113,40 @@ test("a failed observe POST is retried on the next awaited hook instead of being
 		}
 	});
 });
+
+// Wire-level sentinel: the observe RPC params object must carry EXACTLY
+// profile/project/user, no more and no less. This pins the deletion of the
+// `assistant` field (memory-sandbox/cli unit): the watcher only ever reads
+// the user's message, so a resurrected `assistant` key (or any other field
+// added later without updating this test) is a regression, not a refactor.
+test("the observe RPC params object has exactly profile/project/user, never an assistant field", async () => {
+	let received;
+	await withServer((req, res) => {
+		let body = "";
+		req.on("data", (c) => (body += c));
+		req.on("end", () => {
+			received = JSON.parse(body);
+			res.writeHead(200, { "content-type": "application/json" });
+			res.end(JSON.stringify({ jsonrpc: "2.0", id: received.id, result: { accepted: true } }));
+		});
+	}, async (url) => {
+		const prior = process.env.MEMORY_URL;
+		process.env.MEMORY_URL = url;
+		try {
+			const mod = await import(`../extensions/memory-capture.ts?paramshape=${Date.now()}`);
+			let hook;
+			mod.default({ on(event, fn) { if (event === "before_agent_start") hook = fn; } });
+			const ctx = { sessionManager: { getBranch: () => [
+				{ message: { role: "user", content: "the observe payload shape must be pinned exactly right" } },
+				{ message: { role: "assistant", content: "acknowledged, noted, understood completely" } },
+			] } };
+			await hook({}, ctx);
+			assert.ok(received, "observe POST must have been sent");
+			assert.equal(received.method, "observe");
+			assert.deepEqual(Object.keys(received.params).sort(), ["profile", "project", "user"]);
+		} finally {
+			if (prior === undefined) delete process.env.MEMORY_URL;
+			else process.env.MEMORY_URL = prior;
+		}
+	});
+});

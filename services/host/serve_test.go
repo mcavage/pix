@@ -174,9 +174,6 @@ func (stubStore) Forget(r plugin.ForgetReq) (plugin.ForgetResp, error) {
 func (stubStore) Synthesize(plugin.SynthesizeReq) (plugin.SynthesizeResp, error) {
 	return plugin.SynthesizeResp{Merged: 1}, nil
 }
-func (stubStore) Promotable(plugin.PromotableReq) (plugin.PromotableResp, error) {
-	return plugin.PromotableResp{}, nil
-}
 func (stubStore) Observe(plugin.ObserveReq) (plugin.ObserveResp, error) {
 	return plugin.ObserveResp{Accepted: true}, nil
 }

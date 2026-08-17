@@ -98,32 +98,11 @@ func (m CLI) Forget(id string, asJSON bool) error {
 	return nil
 }
 
-// Learnings lists the recurring lessons seen at least min times — the
-// promotable set the `promote` skill reads.
-func (m CLI) Learnings(min int, asJSON bool) error {
-	res, err := m.Client.Call("promotable", map[string]any{"minFrequency": min, "profile": m.Profile})
-	if err != nil {
-		return err
-	}
-	cands := rpc.AsList(res["candidates"])
-	if asJSON {
-		return cli.WriteJSONOut(m.Out, map[string]any{"candidates": cands})
-	}
-	if len(cands) == 0 {
-		fmt.Fprintf(m.Out, "(no learnings seen %d+ times)\n", min)
-		return nil
-	}
-	for _, cn := range cands {
-		freq := 0
-		if f, ok := cn["frequency"].(float64); ok {
-			freq = int(f)
-		}
-		fmt.Fprintf(m.Out, "%s  %s  (%dx)  %s\n", memoryTimestamp(rpc.Str(cn, "createdAt")), shortID(rpc.Str(cn, "id")), freq, rpc.Str(cn, "content"))
-	}
-	return nil
-}
-
-// Stats prints the daemon's counts by kind and durability.
+// Stats prints the daemon's counts by kind. durable/perishable stay in the
+// host's JSON response (--json is a raw passthrough, so it tolerates the
+// extra fields until the U5 schema work retires the column); the plain-text
+// line drops them since every row this binary writes is durable now, so the
+// split is no longer a meaningful distinction to show by default.
 func (m CLI) Stats(asJSON bool) error {
 	res, err := m.Client.Call("stats", map[string]any{"profile": m.Profile})
 	if err != nil {
@@ -138,8 +117,8 @@ func (m CLI) Stats(asJSON bool) error {
 		}
 		return 0
 	}
-	fmt.Fprintf(m.Out, "active %d  (durable %d, perishable %d)  facts %d  learnings %d  deleted %d\n",
-		num("active"), num("durable"), num("perishable"), num("facts"), num("learnings"), num("deleted"))
+	fmt.Fprintf(m.Out, "active %d  facts %d  learnings %d  deleted %d\n",
+		num("active"), num("facts"), num("learnings"), num("deleted"))
 	return nil
 }
 

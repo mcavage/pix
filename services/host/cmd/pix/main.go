@@ -132,7 +132,7 @@ Setup & health
   doctor           diagnose problems and print the exact fix commands
 
 Data, models & observability
-  memory           recall | remember | forget | learnings | stats
+  memory           recall | remember | forget | stats
   models           which models pix can use, and which are wired up
   agent            the subagent roster: each agent's resolved model, and why
 

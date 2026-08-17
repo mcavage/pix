@@ -35,9 +35,6 @@ func (f fixture) Forget(plugin.ForgetReq) (plugin.ForgetResp, error) { return pl
 func (f fixture) Synthesize(plugin.SynthesizeReq) (plugin.SynthesizeResp, error) {
 	return plugin.SynthesizeResp{}, nil
 }
-func (f fixture) Promotable(plugin.PromotableReq) (plugin.PromotableResp, error) {
-	return plugin.PromotableResp{}, nil
-}
 func (f fixture) Observe(plugin.ObserveReq) (plugin.ObserveResp, error) {
 	return plugin.ObserveResp{}, nil
 }

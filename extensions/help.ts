@@ -65,7 +65,6 @@ const KNOWN_COMMANDS = [
 	"/recall",
 	"/remember",
 	"/forget",
-	"/learnings",
 	"/output-style",
 	"/timestamps",
 	"/model",

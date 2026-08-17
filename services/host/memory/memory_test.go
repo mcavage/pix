@@ -72,14 +72,13 @@ func capturingRPCServer(t *testing.T, results map[string]any, seen map[string]ma
 }
 
 // TestMemoryProfileForwarded checks the active profile is forwarded on the
-// profile-scoped verbs (recall, remember, learnings, stats).
+// profile-scoped verbs (recall, remember, stats).
 func TestMemoryProfileForwarded(t *testing.T) {
 	seen := map[string]map[string]any{}
 	c := capturingRPCServer(t, map[string]any{
-		"recall":     map[string]any{"hits": []any{}},
-		"remember":   map[string]any{"id": "x", "reaffirmed": false},
-		"promotable": map[string]any{"candidates": []any{}},
-		"stats":      map[string]any{"active": 0.0},
+		"recall":   map[string]any{"hits": []any{}},
+		"remember": map[string]any{"id": "x", "reaffirmed": false},
+		"stats":    map[string]any{"active": 0.0},
 	}, seen)
 
 	cases := []struct {
@@ -89,7 +88,6 @@ func TestMemoryProfileForwarded(t *testing.T) {
 	}{
 		{"recall", func() error { return (CLI{c, &bytes.Buffer{}, "work"}).Recall("q", 8, "", false) }, "recall"},
 		{"remember", func() error { return (CLI{c, &bytes.Buffer{}, "work"}).Remember("a fact", false) }, "remember"},
-		{"learnings", func() error { return (CLI{c, &bytes.Buffer{}, "work"}).Learnings(3, false) }, "promotable"},
 		{"stats", func() error { return (CLI{c, &bytes.Buffer{}, "work"}).Stats(false) }, "stats"},
 	}
 	for _, tc := range cases {
@@ -206,23 +204,11 @@ func TestMemoryForget(t *testing.T) {
 	}
 }
 
-func TestMemoryLearnings(t *testing.T) {
-	c := fakeRPCServer(t, map[string]any{"promotable": map[string]any{"candidates": []any{
-		map[string]any{"id": "aa11-bb", "content": "always run tests", "frequency": 5.0, "createdAt": "2026-07-22T16:15:03Z"},
-	}}})
-	var out bytes.Buffer
-	if err := (CLI{c, &out, "default"}).Learnings(3, false); err != nil {
-		t.Fatalf("learnings: %v", err)
-	}
-	if !strings.Contains(out.String(), "5x") || !strings.Contains(out.String(), "always run tests") {
-		t.Errorf("learnings output = %q", out.String())
-	}
-	wantLocal := time.Date(2026, 7, 22, 16, 15, 3, 0, time.UTC).Local().Format(time.RFC3339)
-	if !strings.HasPrefix(out.String(), wantLocal) {
-		t.Errorf("learnings output must lead with the local-time timestamp %q, got: %q", wantLocal, out.String())
-	}
-}
-
+// The daemon's stats response still carries durable/perishable counts (the
+// column survives until the U5 schema work), but the plain-text render must
+// not surface them: every row this binary writes is durable now, so the
+// split is no longer a meaningful default-view distinction. --json is a raw
+// passthrough and is untouched by this test.
 func TestMemoryStats(t *testing.T) {
 	c := fakeRPCServer(t, map[string]any{"stats": map[string]any{
 		"active": 10.0, "durable": 3.0, "perishable": 7.0, "facts": 8.0, "learnings": 2.0, "deleted": 1.0,
@@ -233,6 +219,9 @@ func TestMemoryStats(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "active 10") {
 		t.Errorf("stats output = %q", out.String())
+	}
+	if strings.Contains(out.String(), "durable") || strings.Contains(out.String(), "perishable") {
+		t.Errorf("stats output must drop the durable/perishable split, got: %q", out.String())
 	}
 }
 

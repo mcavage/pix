@@ -40,15 +40,11 @@ similarity with FTS5 keyword match, then adjusts for:
   forever.
 - **Project match.** Memories tagged with the current project are boosted;
   memories from other projects are down-weighted, not hidden.
-- **A perishable relevance floor.** A **perishable** hit scoring below 0.30
-  is dropped from this silent injection entirely, so it doesn't get to
-  compete for space in every relevant turn. **Durable** hits are never
-  filtered by score here. In practice this floor has nothing left to filter:
-  every row pix writes is durable now, and § Legacy data below retires any
-  perishable row a store had on disk from before that was true. It stays as
-  a defensive filter, not a currently-exercised one. This floor applies only
-  to the silent auto-injection path: an explicit `/recall`, or the agent
-  calling the `memory_recall` tool, skips this score filter entirely.
+The silent auto-injection path used to also drop a low-scoring **perishable**
+hit below a 0.30 floor. That filter was deleted along with the write-side
+perishable/TTL behavior it existed to police: every row pix writes is durable
+now (see Legacy data below for a store with rows written before that was
+true), so there was nothing left for a durability-based floor to filter.
 
 The injected block itself says as much: it tells the model this is a
 relevance-filtered subset from the host daemon, not the full store, and to use
@@ -130,8 +126,6 @@ Inside the sandbox, the write/delete operations are available as slash commands:
 - `/recall <query>`, search memory and show what matches (blank = everything).
 - `/remember <fact>`, store a fact now, explicitly.
 - `/forget <id|query>`, soft-delete a memory by id or its top query match.
-- `/learnings`, show what the watcher has captured repeatedly (the raw material
-  the `promote` skill graduates into skills or conventions).
 
 From the host, without launching a sandbox:
 
@@ -139,7 +133,6 @@ From the host, without launching a sandbox:
 pix memory recall "<query>"
 pix memory remember "<fact>"
 pix memory forget "<query>"
-pix memory learnings
 pix memory stats
 ```
 

@@ -151,21 +151,12 @@ export function formatMemoryIso(value: unknown): string | null {
 	return match ? `${match[1]}T${match[2]}${match[3].toUpperCase()}` : null;
 }
 
-// One rendered /recall line: id, kind/durability/project, an optional local
-// timestamp, then the content.
+// One rendered /recall line: id, kind/project, an optional local timestamp,
+// then the content.
 export function formatHitLine(h: any): string {
 	const ts = formatMemoryIso(h?.createdAt);
-	return `• [${String(h.id).slice(0, 8)}] (${h.kind}/${h.durability}${h.project ? "/" + h.project : ""})${ts ? ` ${ts}` : ""} ${h.content}`;
+	return `• [${String(h.id).slice(0, 8)}] (${h.kind}${h.project ? "/" + h.project : ""})${ts ? ` ${ts}` : ""} ${h.content}`;
 }
-
-// Below this score, a PERISHABLE hit is noisy enough that silently injecting
-// it into every relevant turn does more harm than good (the watcher's own
-// time-bound "status" rows are the least trustworthy long-term signal). This
-// floor applies ONLY to the silent auto-injection path (buildRecallBlock):
-// an explicit `/recall` or the memory_recall tool always shows everything, so
-// the user (or the model, when explicitly asked) can still see the full
-// picture. Durable hits are never filtered here.
-const AUTO_INJECT_PERISHABLE_SCORE_FLOOR = 0.3;
 
 // The block header, verbatim. The second line is the untrusted-content wrapper
 // and the third is the provenance label: they are what stop the model reading a
@@ -181,7 +172,7 @@ export const RECALL_HEADER = [
 /** One recalled hit as one line of the injected block. Pure. */
 export const renderRecallRow = (h: any): string => `- ${h.content}`;
 
-// Ask the store, then drop the perishable noise. Split out from
+// Ask the store for a small relevance-scored set. Split out from
 // buildRecallBlock so the per-turn hook can dedupe and cap ROWS (which it can
 // count and cut at a boundary) instead of a pre-rendered string.
 export async function fetchRecallRows(
@@ -191,9 +182,7 @@ export async function fetchRecallRows(
 ): Promise<any[]> {
 	if (!prompt || !prompt.trim()) return [];
 	const r = await rpc("recall", { query: prompt, project, profile, limit: 6, charBudget: 1000 });
-	return (r?.hits ?? []).filter(
-		(h: any) => h.durability !== "perishable" || typeof h.score !== "number" || h.score >= AUTO_INJECT_PERISHABLE_SCORE_FLOOR,
-	);
+	return r?.hits ?? [];
 }
 
 // Pure-ish and testable: prompt in, injected block out (or null). Hits come from
@@ -338,13 +327,13 @@ export default function (pi: any) {
 	pi.registerTool?.({
 		name: "memory_stats",
 		label: "Memory stats",
-		promptSnippet: "Read durable, perishable, active, and deleted memory counts",
+		promptSnippet: "Read active, facts, learnings, and deleted memory counts",
 		promptGuidelines: [
 			"Use memory_stats for memory-store counts instead of guessing or probing the daemon with shell commands.",
 			MEMORY_CAPTURE_HONESTY_GUIDELINE,
 		],
 		description: [
-			"Report counts from the memory store (active, durable, perishable, facts, learnings, deleted). Use this when the user asks how much memory there is, or what the current store looks like.",
+			"Report counts from the memory store (active, facts, learnings, deleted). Use this when the user asks how much memory there is, or what the current store looks like.",
 			MEMORY_TOOL_SEMANTICS,
 		].join(" "),
 		parameters: MemoryStatsParams as any,
@@ -417,20 +406,6 @@ export default function (pi: any) {
 				}
 				const r = await rpc("forget", { id, profile: ACTIVE_PROFILE });
 				ctx?.ui?.notify?.(r?.ok ? `forgot: ${content}` : "not found (use a full id from /recall)", "info");
-			}),
-	});
-
-	pi.registerCommand?.("learnings", {
-		description: "Show recurring captured learnings worth promoting into a skill or convention",
-		handler: async (args: any, ctx: any) =>
-			safe(async () => {
-				const min = Number(String(args ?? "").trim()) || 3;
-				const r = await rpc("promotable", { minFrequency: min, profile: ACTIVE_PROFILE });
-				const c = r?.candidates ?? [];
-				const text = c.length
-					? c.map((x: any) => `(${x.frequency}x) ${x.content}`).join("\n")
-					: "(nothing recurring yet)";
-				ctx?.ui?.notify?.(text, "info");
 			}),
 	});
 }

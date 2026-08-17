@@ -166,9 +166,12 @@ const textOf = (e: any): string => {
 	return "";
 };
 
-// The most recent complete exchange: the last assistant message and the user
-// message before it.
-function lastCompleteExchange(hist: any[]): { user: string; assistant: string } | null {
+// The user message from the most recent complete exchange (the last assistant
+// message, and the user message before it). The watcher only ever observes
+// the USER'S message (never the agent's reply, see the file header), and the
+// assistant text has no other consumer, so only the anchor position (is there
+// a completed assistant turn yet?) matters here, not its content.
+function lastCompleteExchange(hist: any[]): { user: string } | null {
 	let ai = -1;
 	for (let i = hist.length - 1; i >= 0; i--)
 		if (roleOf(hist[i]) === "assistant") {
@@ -183,7 +186,7 @@ function lastCompleteExchange(hist: any[]): { user: string; assistant: string } 
 			break;
 		}
 	if (ui < 0) return null;
-	return { user: textOf(hist[ui]), assistant: textOf(hist[ai]) };
+	return { user: textOf(hist[ui]) };
 }
 
 // Prefix for any user-role message pix itself synthesizes and hands to
@@ -213,10 +216,21 @@ async function capture(ctx: any, awaited: boolean): Promise<void> {
 	if (!ex) return;
 	const user = ex.user?.trim() ?? "";
 	if (!shouldCaptureUserText(user)) return;
-	const key = createHash("sha256").update(ex.user + " " + ex.assistant).digest("hex").slice(0, 16);
+	// The dedup key is the payload's identity, not the exchange's: it hashes the
+	// user text ALONE (assistant text was dropped as an input above, so hashing
+	// it here would only rehash something no longer sent). That is a deliberate
+	// trade-off, not an oversight: two genuinely identical prompts sent back to
+	// back in the same session collide on this key, so the second is skipped as
+	// a dup even though it is a distinct turn with a distinct (if repetitive)
+	// exchange. Accepted because a real duplicate observe — the
+	// before_agent_start retry racing agent_end for the SAME completed exchange,
+	// the case this key exists to catch — is far more common than a user
+	// deliberately repeating themselves verbatim, and the cost of misfiring on
+	// that rare case is one skipped watcher call, not a lost fact.
+	const key = createHash("sha256").update(ex.user).digest("hex").slice(0, 16);
 	if (key === lastSent || key === inFlight) return;
 	inFlight = key;
-	const params = { user: ex.user, assistant: ex.assistant, project: currentProject(ctx), profile: ACTIVE_PROFILE };
+	const params = { user: ex.user, project: currentProject(ctx), profile: ACTIVE_PROFILE };
 	// Observability: a failed observe POST (host daemon unreachable, timeout) used
 	// to be swallowed silently, so a broken capture pipe was invisible. Log it once
 	// per session to stderr so "memory didn't store" is diagnosable.

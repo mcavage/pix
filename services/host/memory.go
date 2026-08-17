@@ -715,23 +715,6 @@ func (s *memStore) synthesizeBucket(profile string, threshold float64) int {
 	return merged
 }
 
-func (s *memStore) promotable(minFreq int, profile string) []jsonObj {
-	if minFreq == 0 {
-		minFreq = 3
-	}
-	rows, _ := s.db.Query("SELECT id, content, frequency, project, created_at FROM memories WHERE deleted_at IS NULL AND kind='learning' AND frequency >= ? AND "+memProfileVisible+" ORDER BY frequency DESC", minFreq, memNormProfile(profile))
-	out := []jsonObj{}
-	for rows.Next() {
-		var id, content, createdAt string
-		var freq int
-		var proj sql.NullString
-		rows.Scan(&id, &content, &freq, &proj, &createdAt)
-		out = append(out, jsonObj{"id": id, "content": content, "frequency": freq, "project": nullStr(proj), "createdAt": createdAt})
-	}
-	rows.Close()
-	return out
-}
-
 func (s *memStore) stats(profile string) jsonObj {
 	active := memNormProfile(profile)
 	get := func(cond string) int {
@@ -976,12 +959,6 @@ func numOr(v any, def float64) float64 {
 		return f
 	}
 	return def
-}
-func nullStr(n sql.NullString) any {
-	if n.Valid {
-		return n.String
-	}
-	return nil
 }
 func truncate(s string, n int) string {
 	if len(s) > n {

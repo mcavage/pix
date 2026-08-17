@@ -59,7 +59,7 @@ type rootCmd struct {
 	Doctor doctorCmd `cmd:"" group:"Setup & health" help:"Diagnose problems and print the fix commands."`
 	Reset  resetCmd  `cmd:"" group:"Setup & health" help:"Clean slate: move config+data aside, clear runtime state, remove sandboxes."`
 
-	Memory memoryCmd `cmd:"" group:"Data" aliases:"mem" help:"recall | remember | forget | learnings | stats."`
+	Memory memoryCmd `cmd:"" group:"Data" aliases:"mem" help:"recall | remember | forget | stats."`
 	Pack   packCmd   `cmd:"" group:"Data" help:"ls | show | use | rm."`
 
 	Models ModelsCmd `cmd:"" group:"Models & agents" help:"Which models pix can use, and which are wired."`

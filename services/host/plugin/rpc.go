@@ -77,15 +77,6 @@ func (s *memoryRPCServer) Synthesize(req SynthesizeReq, resp *SynthesizeResp) er
 	return nil
 }
 
-func (s *memoryRPCServer) Promotable(req PromotableReq, resp *PromotableResp) error {
-	r, err := s.Impl.Promotable(req)
-	if err != nil {
-		return err
-	}
-	*resp = r
-	return nil
-}
-
 func (s *memoryRPCServer) Observe(req ObserveReq, resp *ObserveResp) error {
 	r, err := s.Impl.Observe(req)
 	if err != nil {
@@ -136,12 +127,6 @@ func (c *memoryRPCClient) Forget(req ForgetReq) (ForgetResp, error) {
 func (c *memoryRPCClient) Synthesize(req SynthesizeReq) (SynthesizeResp, error) {
 	var resp SynthesizeResp
 	err := c.client.Call("Plugin.Synthesize", req, &resp)
-	return resp, err
-}
-
-func (c *memoryRPCClient) Promotable(req PromotableReq) (PromotableResp, error) {
-	var resp PromotableResp
-	err := c.client.Call("Plugin.Promotable", req, &resp)
 	return resp, err
 }
 
