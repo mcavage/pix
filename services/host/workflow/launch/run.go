@@ -300,6 +300,19 @@ func WriteOllamaBridgeFile(ws, model string) {
 	_ = workspace.WriteStateFile(ws, "ollama-bridge.model", []byte(model+"\n"), 0o644)
 }
 
+// WriteMemoryCaptureFile writes <ws>/.pix/memory-capture: the marker the
+// sandbox capture extension reads once at load, exactly like .pix/profile,
+// so it can skip the wasted round trip in the common (explicit) case. Only
+// applies to NEW sandboxes; memObserve (memory_capture_mode.go) stays
+// authoritative regardless of what the marker says.
+func WriteMemoryCaptureFile(ws, mode string) {
+	mode = strings.TrimSpace(mode)
+	if !config.ValidMemoryCapture(mode) {
+		mode = config.DefaultMemoryCapture
+	}
+	_ = workspace.WriteStateFile(ws, "memory-capture", []byte(mode+"\n"), 0o644)
+}
+
 func PrintJSONLauncher(w io.Writer, v any) error {
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {

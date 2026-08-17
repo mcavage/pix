@@ -103,6 +103,28 @@ func TestApplyConfigChange_Models(t *testing.T) {
 	}
 }
 
+// TestApplyConfigChange_MemoryCapture: set validates the enum, unset resets
+// to the explicit default, and a bad value is refused as a usage error rather
+// than silently accepted.
+func TestApplyConfigChange_MemoryCapture(t *testing.T) {
+	cfg := defaultCfg()
+	if _, err := provision.ApplyConfigChange(cfg, false, "memory_capture", []string{"experimental-auto"}); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MemoryCapture != "experimental-auto" {
+		t.Errorf("memory_capture = %q, want experimental-auto", cfg.MemoryCapture)
+	}
+	if _, err := provision.ApplyConfigChange(cfg, true, "memory_capture", nil); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MemoryCapture != config.DefaultMemoryCapture {
+		t.Errorf("memory_capture after unset = %q, want default", cfg.MemoryCapture)
+	}
+	if _, err := provision.ApplyConfigChange(cfg, false, "memory_capture", []string{"review"}); err == nil {
+		t.Error("expected an invalid memory_capture value to be refused")
+	}
+}
+
 // TestApplyConfigChange_UnknownKey errors and lists the supported keys.
 func TestApplyConfigChange_UnknownKey(t *testing.T) {
 	_, err := provision.ApplyConfigChange(defaultCfg(), false, "nope", []string{"x"})

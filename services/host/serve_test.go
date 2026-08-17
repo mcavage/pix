@@ -47,6 +47,26 @@ func TestResolveServices(t *testing.T) {
 	}
 }
 
+// TestApplyMemoryModelEnvSetsCaptureMode proves standalone propagation: BOTH
+// `serve` and the bare `pix-host memory` daemon (runMemory) route through
+// this one function, so cfg.MemoryCapture reaches MEMORY_CAPTURE_MODE
+// without either caller needing its own translation, and an explicit env
+// override still wins.
+func TestApplyMemoryModelEnvSetsCaptureMode(t *testing.T) {
+	t.Setenv("MEMORY_CAPTURE_MODE", "")
+	os.Unsetenv("MEMORY_CAPTURE_MODE")
+	applyMemoryModelEnv(&config.Config{MemoryCapture: "experimental-auto"})
+	if got := os.Getenv("MEMORY_CAPTURE_MODE"); got != "experimental-auto" {
+		t.Fatalf("MEMORY_CAPTURE_MODE = %q, want experimental-auto", got)
+	}
+
+	t.Setenv("MEMORY_CAPTURE_MODE", "explicit")
+	applyMemoryModelEnv(&config.Config{MemoryCapture: "experimental-auto"})
+	if got := os.Getenv("MEMORY_CAPTURE_MODE"); got != "explicit" {
+		t.Fatalf("an explicit env override was clobbered: got %q, want explicit", got)
+	}
+}
+
 // --- F5: an external plugin unit refuses to launch unless the bytes match -----
 
 // TestLaunchRefusesUnpinnedAndMismatchedExternal drives the REAL refusal path:

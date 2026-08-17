@@ -1,6 +1,6 @@
 # Self-learning loop
 
-**Status:** built and working (steps 1 to 3). Remaining work in [Remaining (TODO)](#remaining-todo). The original design rationale is kept below the as-built summary; some details evolved during the build (JSON-RPC not MCP, capture on `before_agent_start` not `turn_end`, no staging area yet).
+**Status:** built and working (steps 1 to 3), plus `memory_capture`'s admission modes (see docs/memory.md's "How capture works"): capture is `explicit` by default (no automatic observation at all), with an opt-in `experimental-auto` (direct writes under one fixed daily budget). Automatic capture is the experiment; a review-before-store workflow is deferred until evidence says it's needed (see "Rejected" below). Remaining work in [Remaining (TODO)](#remaining-todo). The original design rationale is kept below the as-built summary; some details evolved during the build (JSON-RPC not MCP, capture on `before_agent_start` not `turn_end`, no staging area).
 
 The memory system we had didn't learn. It stored things when the model
 remembered to call a tool, which is almost never, so the same corrections came
@@ -40,6 +40,21 @@ one-time DATA sweep that reuses the store's EXISTING soft-delete
 automatic snapshot (an operator who wants a safety copy runs the
 already-existing `pix-host memory snapshot` themselves). See docs/memory.md's
 "Schema v2: a one-time source sweep" section for what shipped instead.
+
+## Rejected: a review/staging capture mode
+
+A `memory_capture=review` mode (staging watcher output in a separate,
+disposable `memory_proposals` table for a human to `admit`/`revoke` later,
+with its own TTL and live-queue cap) was drafted alongside `explicit` and
+`experimental-auto`. It was cut before shipping: automatic capture itself is
+the experiment worth running first, and a whole second table plus a
+review/admit/revoke RPC/CLI/slash-command surface is a bet on a workflow
+nobody has asked for yet. `explicit` and `experimental-auto` are the two
+modes that ship; a review workflow is deferred until evidence (real usage of
+`experimental-auto`) says it's needed. The feedback/undo mechanism for an
+auto-captured row that turns out wrong is the existing `/forget <id>` —
+`source` is exposed on a recall hit (an `auto` tag in the rendered line) so
+that row is visible in the first place, with no new verb and no bulk revoke.
 
 ## The problem, with evidence
 

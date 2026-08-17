@@ -19,6 +19,7 @@ var daemonAffectingKeys = map[string]bool{
 	"services":             true,
 	"memory_watcher_model": true,
 	"memory_embed_model":   true,
+	"memory_capture":       true,
 }
 
 // IsDaemonAffecting reports whether a config key change requires a serve

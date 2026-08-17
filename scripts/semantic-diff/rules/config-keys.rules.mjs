@@ -47,6 +47,7 @@ export default [
 					"mcp",
 					"memory_watcher_model",
 					"memory_embed_model",
+					"memory_capture",
 					"ollama_bridge_model",
 					"run_intent",
 					"inference",

@@ -25,6 +25,8 @@ func ConfigValue(cfg *config.Config, key string) (string, error) {
 		return cfg.OllamaBridgeModel, nil
 	case "run_intent":
 		return cfg.RunIntent, nil
+	case "memory_capture":
+		return cfg.MemoryCapture, nil
 	case "pack":
 		return cfg.Pack, nil
 	case "host.autoserve":
@@ -46,6 +48,11 @@ const ConfigKeysHelp = `keys:
                             session (the "overlord"); resolves the session model
                             when neither --model nor --intent is passed. Use
                             'none' to opt out to pi's own default model
+  memory_capture <mode>     watcher capture admission: explicit (default, no
+                            automatic observation) or experimental-auto (write
+                            straight to memories under a fixed daily budget).
+                            Applies to NEW sandboxes only; an already-running
+                            one keeps the mode it launched with
   pack <path>               active pack dir (run mounts its skills + knowledge);
                             usually set via 'pix pack use'
   host.autoserve true|false lazy auto-start of the services daemon on run/
@@ -133,6 +140,17 @@ func ApplyConfigChange(cfg *config.Config, unset bool, key string, args []string
 			cfg.RunIntent = args[0]
 		}
 		return fmt.Sprintf("run_intent = %q", cfg.RunIntent), nil
+
+	case "memory_capture":
+		if unset {
+			cfg.MemoryCapture = config.DefaultMemoryCapture
+		} else {
+			if len(args) != 1 || !config.ValidMemoryCapture(args[0]) {
+				return "", fmt.Errorf("config set memory_capture <mode>: needs exactly one of %s", strings.Join(config.MemoryCaptureModes, "|"))
+			}
+			cfg.MemoryCapture = args[0]
+		}
+		return fmt.Sprintf("memory_capture = %q (applies to new sandboxes; an already-running one keeps the mode it launched with)", cfg.MemoryCapture), nil
 
 	case "pack":
 		if unset {

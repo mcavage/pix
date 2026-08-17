@@ -77,6 +77,7 @@ import (
 var workspaceMarkerFiles = []string{
 	"profile",
 	"ollama-bridge.model",
+	"memory-capture",
 	"sandbox.pack",
 	"onboarding.json",
 }
@@ -85,6 +86,7 @@ func TestWorkspaceMarkerInventory_MatchesEnumeratedSet(t *testing.T) {
 	want := map[string]bool{
 		"profile":             true,
 		"ollama-bridge.model": true,
+		"memory-capture":      true,
 		"sandbox.pack":        true,
 		"onboarding.json":     true,
 	}
@@ -136,6 +138,27 @@ func TestMarkerRoundTrip_OllamaBridgeModel(t *testing.T) {
 	got2 := readFile(t, filepath.Join(ws2, ".pix", "ollama-bridge.model"))
 	if strings.TrimSpace(got2) != "qwen3.5:9b" {
 		t.Errorf("blank model wrote %q, want the default qwen3.5:9b (must match ollama-bridge.ts's own hardcoded default)", got2)
+	}
+}
+
+// ── memory-capture ───────────────────────────────────────────────────────
+
+func TestMarkerRoundTrip_MemoryCapture(t *testing.T) {
+	ws := t.TempDir()
+	launch.WriteMemoryCaptureFile(ws, "experimental-auto")
+	got := readFile(t, filepath.Join(ws, ".pix", "memory-capture"))
+	if got != "experimental-auto\n" {
+		t.Errorf("memory-capture = %q, want %q (memory-capture.ts .trim()s this)", got, "experimental-auto\n")
+	}
+
+	// An invalid/garbled mode falls back to the fail-closed default, never an
+	// empty file or the garbage verbatim -- the marker must never claim an
+	// opt-in mode is live when config didn't actually validate one.
+	ws2 := t.TempDir()
+	launch.WriteMemoryCaptureFile(ws2, "always-on-please")
+	got2 := readFile(t, filepath.Join(ws2, ".pix", "memory-capture"))
+	if strings.TrimSpace(got2) != config.DefaultMemoryCapture {
+		t.Errorf("garbled mode wrote %q, want the fail-closed default %q", got2, config.DefaultMemoryCapture)
 	}
 }
 

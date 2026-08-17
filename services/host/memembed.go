@@ -489,6 +489,12 @@ func extractJSONObject(s string) string {
 // which should be a JSON array of strings — but some models (observed: qwen) emit
 // an empty object {} for an empty list. Accepts a string array, null/absent, or
 // an empty object; any other shape is an error so the caller can fall back.
+//
+// Every error here reports SHAPE and LENGTH only, never the raw field content:
+// `trimmed` is the watcher's own JSON for this field, which is itself derived
+// from the user's original (possibly secret-shaped) message, and these errors
+// get logged by memWatch's caller on a parse failure -- exactly the raw-
+// watcher-output-in-logs leak the rest of this file guards against.
 func flexibleStringList(raw json.RawMessage) ([]string, error) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 || string(trimmed) == "null" {
@@ -503,9 +509,9 @@ func flexibleStringList(raw json.RawMessage) ([]string, error) {
 		if len(obj) == 0 {
 			return []string{}, nil
 		}
-		return nil, fmt.Errorf("list field is a non-empty object: %s", trimmed)
+		return nil, fmt.Errorf("list field is a non-empty object (%d byte(s))", len(trimmed))
 	}
-	return nil, fmt.Errorf("list field has unexpected shape: %s", trimmed)
+	return nil, fmt.Errorf("list field has unexpected shape (%d byte(s))", len(trimmed))
 }
 
 // parseWatchJSON decodes one candidate JSON object (the model's raw content, or
@@ -599,24 +605,21 @@ func memWatch(user string) *watchResult {
 		} `json:"message"`
 	}
 	if json.Unmarshal(rawBody, &chat) != nil || chat.Message.Content == "" {
-		raw := string(rawBody)
-		if len(raw) > 400 {
-			raw = raw[:400] + "..."
-		}
-		log.Printf("memory watcher: empty/undecodable chat response from model %q, raw: %q", model, raw)
+		// Never log the raw response: it is the user's own message, echoed or
+		// paraphrased by the watcher model, and may itself carry sensitive
+		// content the secret filter never saw (that filter runs on capture
+		// output, not on this transport-level parse failure). Length only.
+		log.Printf("memory watcher: empty/undecodable chat response from model %q (%d bytes)", model, len(rawBody))
 		return nil
 	}
 	// Primary: the content IS the JSON object. Fallback: a model that wraps it in
-	// prose or a fence gets salvaged. On total failure log the raw output, so
-	// "returned nil" is never a mystery about which model said what.
+	// prose or a fence gets salvaged. On total failure, log only the model, the
+	// error, and the content length -- never the raw watcher output, which may
+	// contain the user's own unfiltered text.
 	content := chat.Message.Content
 	p, err := parseWatchContent(content)
 	if err != nil || p == nil {
-		raw := content
-		if len(raw) > 300 {
-			raw = raw[:300] + "..."
-		}
-		log.Printf("memory watcher: model %q returned unparseable output (no JSON object), raw: %q", model, raw)
+		log.Printf("memory watcher: model %q returned unparseable output (no JSON object), %d bytes, error: %v", model, len(content), err)
 		return nil
 	}
 	clean := func(in []string) []string {

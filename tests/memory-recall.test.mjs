@@ -200,6 +200,17 @@ test("formatHitLine no longer renders a durability segment, even if a hit still 
 	assert.equal(line, "• [abcdef12] (fact) hello");
 });
 
+// A watcher-sourced (experimental-auto) row renders an "/auto" tag so it is
+// visibly distinct from an explicit one; anything else (or an absent source)
+// renders exactly as before.
+test("formatHitLine tags a watcher-sourced hit as auto, leaves an explicit hit untagged", () => {
+	const auto = pureMod.formatHitLine({ id: "abcdef1234567890", kind: "fact", content: "hello", source: "watcher" });
+	assert.equal(auto, "• [abcdef12] (fact/auto) hello");
+
+	const explicit = pureMod.formatHitLine({ id: "abcdef1234567890", kind: "fact", content: "hello", source: "user" });
+	assert.equal(explicit, "• [abcdef12] (fact) hello");
+});
+
 // ── (3) command errors notify a concise, actionable message, never vanish ──
 test("a transport error from a dead daemon surfaces a visible error notification", async () => {
 	// Nothing listening on this port: connection refused.

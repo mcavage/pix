@@ -68,6 +68,10 @@ type Hit struct {
 	Durability string
 	Project    string
 	CreatedAt  string // RFC3339; the recall extension renders it
+	// Source is the closed-vocabulary origin ("user"/"cli"/"watcher"/"unknown"),
+	// exposed so a caller can tell an auto-captured row (watcher) apart from an
+	// explicit one — /forget <id> is the only feedback/undo mechanism.
+	Source string
 }
 
 // RecallResp wraps the hit list ({"hits": [...]}).

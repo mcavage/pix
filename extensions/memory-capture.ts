@@ -4,6 +4,13 @@
 // watcher and decides what's worth remembering. The agent never chooses to
 // remember; this just forwards the turn.
 //
+// memory_capture (the host's config key) decides whether this happens AT
+// ALL: explicit is the shipped default and sends ZERO observe requests. The
+// live mode is read ONCE at load from <cwd>/.pix/memory-capture (written by
+// the launcher, launch.WriteMemoryCaptureFile) — no RPC round trip, and a
+// missing/garbled marker fails closed to explicit. The host's own memObserve
+// admission gate stays authoritative regardless of what this file says.
+//
 // Reliability: pi awaits before_agent_start (that's how recall injection lands),
 // but does NOT wait on agent_end, so a hand-off fired only at agent_end races
 // process teardown in print mode. So we capture the last COMPLETE exchange at
@@ -82,24 +89,36 @@ async function call(method: string, params: any): Promise<any> {
 	return response;
 }
 
-// Surface a disabled watcher ONCE per session instead of dropping captures in
-// silence. The daemon returns {result:{accepted:false, reason}} when the watcher
-// model isn't pulled/reachable; without this the whole capture half looks dead
-// with zero signal (the exact bug this guards).
-let warnedCaptureOff = false;
+// Surface a not-accepted observe ONCE per session instead of dropping captures
+// in silence — e.g. the watcher model isn't pulled/reachable, or the daily
+// budget is exhausted. This is informational, not an alarm: in the shipped
+// default (explicit) this never fires at all, because capture() never sends
+// observe in the first place.
+let warnedNotAccepted = false;
 let warnedPostErr = false; // one stderr line per session when the observe POST fails
-function warnIfCaptureOff(resp: any): void {
+function warnIfNotAccepted(resp: any): void {
 	try {
 		const r = resp?.result;
-		if (r && r.accepted === false && !warnedCaptureOff) {
-			warnedCaptureOff = true;
-			const reason = typeof r.reason === "string" ? r.reason : "watcher unavailable";
-			process.stderr.write(`[memory] automatic fact capture is OFF: ${reason}\n`);
+		if (r && r.accepted === false && !warnedNotAccepted) {
+			warnedNotAccepted = true;
+			const reason = typeof r.reason === "string" ? r.reason : "not accepted";
+			process.stderr.write(`[memory] capture not accepted: ${reason}\n`);
 		}
 	} catch {
 		/* best-effort; never break a turn over a warning */
 	}
 }
+
+// Read EXACTLY ONCE at load and frozen, same pattern as ACTIVE_PROFILE
+// below for .pix/profile. A missing/garbled marker fails closed to explicit.
+const CAPTURE_MODE: "explicit" | "experimental-auto" = (() => {
+	try {
+		const raw = readFileSync(join(process.cwd(), ".pix", "memory-capture"), "utf8").trim();
+		return raw === "experimental-auto" ? raw : "explicit";
+	} catch {
+		return "explicit"; // missing marker is the normal, un-launched/older-sandbox case
+	}
+})();
 
 // The active profile stamps captures (recall then scopes to {profile}∪{default}).
 // The launcher writes it to <cwd>/.pix/profile per run, mirroring the
@@ -216,6 +235,9 @@ async function capture(ctx: any, awaited: boolean): Promise<void> {
 	if (!ex) return;
 	const user = ex.user?.trim() ?? "";
 	if (!shouldCaptureUserText(user)) return;
+	// explicit (the default) sends ZERO observe requests — not even one the
+	// host would refuse.
+	if (CAPTURE_MODE === "explicit") return;
 	// The dedup key is the payload's identity, not the exchange's: it hashes the
 	// user text ALONE (assistant text was dropped as an input above, so hashing
 	// it here would only rehash something no longer sent). That is a deliberate
@@ -247,7 +269,7 @@ async function capture(ctx: any, awaited: boolean): Promise<void> {
 	const send = async () => {
 		try {
 			const response = await call("observe", params);
-			warnIfCaptureOff(response);
+			warnIfNotAccepted(response);
 			lastSent = key; // only a completed RPC earns deduplication
 		} catch (e) {
 			onErr(e); // leave lastSent untouched so the next awaited hook retries

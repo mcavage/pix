@@ -122,7 +122,11 @@ func (m CLI) Stats(asJSON bool) error {
 	return nil
 }
 
-// memoryMeta renders the trailing "[kind·durability·project score]" annotation.
+// memoryMeta renders the trailing "[kind·durability·project·auto score]" annotation.
+// "auto" only appears for a watcher-sourced (experimental-auto capture) row,
+// so an auto row is visibly distinguishable from an explicit one — the
+// existing `/forget <id>` is the feedback/undo mechanism, this is only the
+// visibility half.
 func memoryMeta(h map[string]any) string {
 	var parts []string
 	if k := rpc.Str(h, "kind"); k != "" {
@@ -133,6 +137,9 @@ func memoryMeta(h map[string]any) string {
 	}
 	if p := rpc.Str(h, "project"); p != "" {
 		parts = append(parts, p)
+	}
+	if rpc.Str(h, "source") == "watcher" {
+		parts = append(parts, "auto")
 	}
 	meta := strings.Join(parts, "·")
 	if sc, ok := h["score"].(float64); ok {

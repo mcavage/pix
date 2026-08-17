@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -106,6 +108,73 @@ func TestMemWatchTimeout(t *testing.T) {
 	}
 	if watcherDegradedUntil.Load() <= time.Now().UnixNano() {
 		t.Fatal("watcherDegradedUntil should be set in the future after a timeout")
+	}
+}
+
+// TestMemWatchNeverLogsRawOutput proves an unparseable/undecodable watcher
+// response never puts the raw content in a log line -- it may itself carry
+// unfiltered user text the secret filter never saw. Only model/length/error.
+func TestMemWatchNeverLogsRawOutput(t *testing.T) {
+	resetWatcherState()
+	t.Cleanup(resetWatcherState)
+	const secretLooking = "AKIASECRETSHAPEDCONTENTHERE12345 not valid json"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := json.Marshal(map[string]any{"message": map[string]any{"content": secretLooking}})
+		w.WriteHeader(200)
+		w.Write(b)
+	}))
+	defer srv.Close()
+	t.Setenv("OLLAMA_HOST", srv.URL)
+	t.Setenv("MEMORY_WATCHER_MODEL", "test-watcher")
+
+	var logbuf bytes.Buffer
+	prevOut := log.Writer()
+	log.SetOutput(&logbuf)
+	defer log.SetOutput(prevOut)
+
+	if got := memWatch("hello"); got != nil {
+		t.Fatalf("unparseable content should return nil, got %+v", got)
+	}
+	if strings.Contains(logbuf.String(), secretLooking) {
+		t.Fatalf("raw watcher output must never be logged, got: %s", logbuf.String())
+	}
+}
+
+// TestMemWatchNeverLogsRawOutputWrongShapedField is the
+// flexibleStringList-specific case: valid top-level JSON with a `facts` key
+// present but the WRONG SHAPE for a list field (a bare string instead of an
+// array/object/null). That value is itself the sentinel here -- before the
+// fix, flexibleStringList's error embedded it verbatim ("list field has
+// unexpected shape: %s"), and memWatch's caller logs that error on a parse
+// failure, so the sentinel would have reached the log unfiltered. Only
+// shape/length may appear now.
+func TestMemWatchNeverLogsRawOutputWrongShapedField(t *testing.T) {
+	resetWatcherState()
+	t.Cleanup(resetWatcherState)
+	const sentinel = "AKIASECRETSHAPEDSENTINELVALUE0001"
+	wrongShaped := `{"facts": "` + sentinel + `", "corrections": []}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := json.Marshal(map[string]any{"message": map[string]any{"content": wrongShaped}})
+		w.WriteHeader(200)
+		w.Write(b)
+	}))
+	defer srv.Close()
+	t.Setenv("OLLAMA_HOST", srv.URL)
+	t.Setenv("MEMORY_WATCHER_MODEL", "test-watcher")
+
+	var logbuf bytes.Buffer
+	prevOut := log.Writer()
+	log.SetOutput(&logbuf)
+	defer log.SetOutput(prevOut)
+
+	if got := memWatch("hello"); got != nil {
+		t.Fatalf("a wrong-shaped facts field should return nil, got %+v", got)
+	}
+	if strings.Contains(logbuf.String(), sentinel) {
+		t.Fatalf("a wrong-shaped list field's raw content must never be logged, got: %s", logbuf.String())
+	}
+	if !strings.Contains(logbuf.String(), "unexpected shape") {
+		t.Fatalf("expected the shape-only error to still be logged, got: %s", logbuf.String())
 	}
 }
 
@@ -216,6 +285,10 @@ func TestWatcherHealthState_UnknownDegradedHealthyRecovery(t *testing.T) {
 func TestObserveReturnsDegradedReason(t *testing.T) {
 	resetWatcherState()
 	t.Cleanup(resetWatcherState)
+	// The watcher-availability gate this test exercises only runs in a mode
+	// that actually invokes the watcher; the default (explicit) short-circuits
+	// before ever consulting it.
+	t.Setenv("MEMORY_CAPTURE_MODE", "experimental-auto")
 	store, err := newMemStore(":memory:", nil)
 	if err != nil {
 		t.Fatal(err)

@@ -53,7 +53,7 @@ func (a *memoryStoreAdapter) Recall(req plugin.RecallReq) (plugin.RecallResp, er
 		}
 		out = append(out, plugin.Hit{
 			CreatedAt: h.createdAt, ID: h.id, Content: h.content, Score: h.score,
-			Kind: h.kind, Durability: h.durability, Project: project,
+			Kind: h.kind, Durability: h.durability, Project: project, Source: h.source,
 		})
 	}
 	return plugin.RecallResp{Hits: out}, nil

@@ -109,6 +109,71 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`memory_capture`: two admission modes, explicit by default.** New `pix
+  config` key, `explicit` (the default) | `experimental-auto`, daemon-affecting
+  (`pix config set memory_capture <mode>` restarts serve to apply it, same as
+  `memory_watcher_model`; the standalone `pix-host memory` daemon now applies
+  the SAME config->env translation `serve` does, closing a gap where it
+  silently ignored `memory_capture`/the model names with no env override).
+  **`explicit`** turns automatic observation off entirely: the
+  `memory-capture` extension sends zero `observe` requests, deciding this from
+  a launch-scoped marker file (`.pix/memory-capture`, written by the launcher
+  from host config, read once at load exactly like `.pix/profile`) instead of
+  an RPC round trip. `memObserve` still refuses before ever consulting watcher
+  availability even if something calls `observe` anyway — no watcher
+  inference, no side-effect Ollama probe — so the host stays authoritative
+  regardless of what the marker says, and a config change applies to new
+  sandboxes (existing ones keep the marker they launched with). `/remember`,
+  `pix memory remember`, and the agent's own explicit tools are unaffected in
+  either mode.
+
+  **`experimental-auto`** writes straight to memories with internal
+  `source="watcher"` (pix's original always-on behavior), under ONE fixed
+  daily budget of at most 10 STORED rows/day, counted by a real
+  `SELECT COUNT(*)` over `memories` rows with `source='watcher'` created today
+  (UTC) — survives a daemon restart exactly, because it counts what actually
+  landed, not how many times `observe` was called. No session ids, maps, or
+  mutex: a SQLite COUNT is the whole mechanism, since this is UX policy on an
+  experimental feature, not a security boundary. The budget is peeked BEFORE
+  the watcher is ever invoked (both at `observe`-admission time and again,
+  fresh, immediately before the actual watcher call), so an exhausted day
+  costs zero inference, and a single watcher result whose extraction exceeds
+  the remaining budget stores only the remaining rows, dropping the rest
+  (logged as a count, never content). Only a genuinely NEW row counts toward
+  that total: a batch item that reaffirms via content-hash, or collapses
+  into an existing row via the embedding-similarity dedupe path (the same
+  "reaffirmed" outcome, so the same rule covers both), or fails to store
+  outright, is never counted — matching what the persisted
+  `SELECT COUNT(*)` itself would report. A `/forget`-ed (soft-deleted)
+  watcher row still counts against the day it was STORED: forgetting is
+  feedback on recall content, not a refund on capture volume, and only a new
+  UTC day resets the budget. A conservative, two-stage,
+  capture-only secret filter (`services/host/memory_secretfilter.go`) runs
+  before the watcher ever sees a message and again before any extracted
+  fact/correction is stored: a private-key block, a recognizable vendor token
+  shape (AWS/GitHub/Slack/OpenAI/Stripe/Google), a JWT, a labeled
+  secret-looking assignment (including a realistic `SCREAMING_SNAKE_CASE`
+  env-var shape like `AWS_SECRET_ACCESS_KEY=`, which a plain `\b` boundary
+  missed), or a long high-entropy run drops the content outright (fail
+  closed, no partial/redacted store) — this is a BEST-EFFORT heuristic, never
+  a guarantee, and docs/memory.md says so plainly. An all-hex run (a git
+  commit SHA, a content digest) is not treated as secret-shaped, since it is
+  indistinguishable from an ordinary hash by shape alone. The raw watcher
+  output is never logged, on a parse failure or otherwise — only the model,
+  the error, and the content length; the same rule now covers a
+  wrong-shaped `facts`/`corrections` field too (`flexibleStringList`'s own
+  parse errors report shape and byte length only, never the field's raw
+  content, closing the one place a malformed watcher response could still
+  have leaked it into a log line). External `remember` still cannot spoof
+  `source="watcher"` in either mode (pre-existing guard, now covered by
+  mode-parameterized tests). A recall hit now exposes `source`, and the
+  sandbox/CLI render an `auto` tag for a watcher-sourced row, so an
+  auto-captured row is visible — the existing `/forget <id>` is the
+  feedback/undo mechanism; no bulk revoke, no new verb. There is
+  deliberately no third (review/staging) mode: see docs/design/
+  self-learning-loop.md's "Rejected: a review/staging capture mode". See
+  docs/memory.md's "How capture works".
+
 - **Memory schema v2: a small, atomic one-time DATA sweep, not a new trust
   schema.** Upgrading a pre-v2 store, in ONE transaction
   (`migrateMemorySchema`, `services/host/memory.go`): adds the legacy

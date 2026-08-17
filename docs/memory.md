@@ -61,12 +61,96 @@ the smaller default (6 hits) tuned for relevance search.
 
 ## How capture works
 
-After a turn, the `memory-capture` extension sends the exchange to the watcher
-model, which extracts two things: durable **facts** (preferences, decisions,
-project conventions, no automatic expiry) and **corrections** (the agent got
-something wrong and you told it so; stored durably). Everything lands durable,
-with no expiry and no reward, and is stored with a confidence score,
-de-duplicated by content hash. You never call it directly.
+**Capture is explicit by default.** `memory_capture` (a `pix config` key) has
+two values:
+
+- **`explicit` (the default).** No automatic observation at all. The
+  `memory-capture` extension sends **zero** `observe` requests. It decides
+  this from a launch-scoped marker file, `.pix/memory-capture` — the
+  launcher writes it at launch from `memory_capture`, and the extension
+  reads it once, at load, exactly like `.pix/profile` — so there is no RPC
+  round trip involved in the decision at all. Even if something called
+  `observe` anyway, the daemon refuses it before ever touching the
+  watcher: no watcher inference, no side-effect Ollama probe. **The host
+  is always authoritative**: a config change takes effect for new
+  sandboxes (an already-running one keeps the marker it launched with),
+  but regardless of what the marker says, `memObserve` still refuses in
+  explicit mode. Facts still land the way they always could: `/remember`,
+  `pix memory remember`, or the agent's own explicit tools — a human or an
+  explicit command chose to store it, not an automatic listener.
+- **`experimental-auto` (opt-in).** The watcher extracts durable **facts**
+  (preferences, decisions, project conventions, no automatic expiry) and
+  **corrections** (the agent got something wrong and you told it so), and
+  writes them straight to memories with internal `source="watcher"`, under
+  **one fixed daily budget: at most 10 STORED rows/day** (UTC calendar
+  day), counted by a real `SELECT COUNT(*)` over `memories` rows with
+  `source='watcher'` created today — not by counting `observe` attempts, so
+  it survives a daemon restart exactly, and an empty/noise-filtered/
+  secret-filtered watcher call never costs anything against it. The budget
+  is peeked *before* the watcher is ever invoked (at `observe` admission,
+  and again fresh right before the actual watcher call), so an exhausted
+  day costs zero inference; if a single watcher result would extract more
+  items than remain, only the remaining rows are stored and the rest are
+  dropped (logged as a count, never content). **Only a row that actually
+  lands NEW counts against the budget**: an item that reaffirms an existing
+  row (same content hash) or collapses into one via the embedding-similarity
+  dedupe path — either way, the same `reaffirmed` outcome `remember` already
+  reports — or that fails to store, is never counted, matching exactly what
+  the persisted `SELECT COUNT(*)` would report; only a genuinely stored row
+  moves the needle. A row that is later `/forget`-ed (soft-deleted) still
+  counts against the day it was stored — forgetting is feedback on what's
+  recalled, not a refund on capture volume, and only a new UTC day resets
+  the count. Like the mode switch above, this budget lives on the host and
+  is unaffected by anything sandbox-side. Budget exhaustion is an
+  honest `{accepted:false, reason}`, not a silently dropped attempt. This is
+  UX policy on an experimental feature (a sane cap, not a security
+  boundary) — there are no session ids, maps, or per-session counters, just
+  a SQLite COUNT.
+
+Change it with `pix config set memory_capture <mode>`; it is daemon-affecting
+(the running `pix-host serve` gets restarted, per its lifecycle mode, to pick
+it up — the standalone `pix-host memory` daemon applies the same config->env
+translation, so it is never silently ignored there either). **Enabling or
+disabling the mode this way only reaches a *new* sandbox**: each sandbox
+reads the mode once, at launch, into its own `.pix/memory-capture` marker, so
+an already-running sandbox keeps whatever mode it launched with until it is
+recreated (`pix config set memory_capture <mode>` itself confirms this in its
+output). The host's own admission check (`memObserve`) is authoritative
+regardless, so a stale marker can only ever be MORE restrictive than the
+host's current config, never less. `pix config unset memory_capture` restores
+`explicit`, same new-sandboxes-only rule.
+
+There is no review/staging mode: automatic capture is the experiment, and a
+review-before-store workflow is deferred until evidence says it's needed. The
+feedback/undo mechanism today is the existing `/forget <id>` — a `/recall` hit
+names its `source`, and the sandbox/CLI render an `auto` tag when it's
+`watcher`, so an auto-captured row is visibly distinct from an explicit one.
+There is no bulk revoke and no new verb: `/forget` by id is it.
+
+External `remember` (the RPC/plugin surface, `/remember`, `pix memory
+remember`) is always explicit and can never claim `source="watcher"` — an
+external caller trying to spoof it is normalized to `"unknown"` instead,
+regardless of which capture mode is live.
+
+**A conservative, two-stage secret filter runs in capture only** (never on
+an explicit `remember`): once before the watcher ever sees your message, and
+again before any extracted fact/correction is stored. A match — a private
+key block, a recognizable vendor token shape (AWS, GitHub, Slack, OpenAI,
+Stripe, Google, a JWT, a labeled `api_key=`/`token=`/`password=` assignment,
+including a realistic `SCREAMING_SNAKE_CASE` env-var name like
+`AWS_SECRET_ACCESS_KEY=`), or a long unbroken high-entropy run — drops the
+content entirely (fails closed: never a partial or redacted store). An
+all-hex run (a git commit SHA, a content digest) is deliberately NOT
+treated as secret-shaped: it is indistinguishable from an ordinary hash by
+shape alone, and flagging every SHA a user types is a false positive this
+filter cannot tell apart from a real secret. Neither the matched text nor
+the raw watcher output is ever logged — a parse failure logs only the
+model, the error, and the content length.
+
+**This is a best-effort heuristic, never a guarantee.** A secret with no
+recognizable shape (no vendor prefix, no labeling keyword, not high-entropy
+enough) can still slip through. Do not rely on it as your only safeguard
+for anything sensitive.
 
 ## Legacy data
 
@@ -335,6 +419,7 @@ hosts), and treat `MEMORY_AUTH` as reserved.
 | `MEMORY_DB` | `~/.local/share/pix/memory/memory.db` | store path |
 | `MEMORY_EMBED_MODEL` | (config) | Ollama embedding model for recall ranking |
 | `MEMORY_WATCHER_MODEL` | (config) | Ollama model for capture extraction |
+| `MEMORY_CAPTURE_MODE` | `explicit` | capture admission mode (`explicit`\|`experimental-auto`); set via `pix config set memory_capture`, never by hand |
 | `OLLAMA_HOST` | Ollama default | where the daemon reaches Ollama |
 
 The design reasoning lives in

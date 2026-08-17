@@ -1,9 +1,20 @@
 [
 	{
+		"id": "config-keys.top-level.surface",
+		"rationale": "The memory_capture unit adds one new top-level config key, memory_capture (explicit|experimental-auto, default explicit), following the exact pattern of memory_watcher_model/memory_embed_model/run_intent: applyDefaults resolves it, sparseForSave omits the default, ConfigValue/ApplyConfigChange/ConfigKeysHelp wire get/set/unset. There is no third (review/staging) mode.",
+		"evidence": "unit/memory-capture-modes",
+		"changes": [
+			{
+				"file": "services/host/config/config.go",
+				"kind": "set",
+				"to": ["services", "mcp", "memory_watcher_model", "memory_embed_model", "memory_capture", "ollama_bridge_model", "run_intent", "inference"]
+			}
+		]
+	},
+	{
 		"id": "memory.rpc.methods.server",
 		"rationale": "U2 (delete-ts-cli) deletes the promotable RPC method end to end: /learnings, `pix memory learnings`, and the frequency-ranked promotable surface had no remaining in-tree consumer once both were removed, so the JSON-RPC method table drops \"promotable\" along with them.",
 		"evidence": "unit/memory-delete-ts-cli",
-		"_todo_remove": "NOT removable in this same commit (de3f7bc, amended) per README.md#landing-a-rule-change: same commit vs a subsequent commit — checkRuleDrift() diffs THIS commit's rules against a base ref that is still the PARENT of this commit, so the fingerprint change and this waiver must land together here. Delete this entry (it will no-op cleanly per staleManifestEntries) in the FIRST commit landed on top of this one, once this commit is the new base ref.",
 		"changes": [
 			{
 				"file": "services/host/serve_plugin.go",
@@ -16,7 +27,6 @@
 		"id": "memory.rpc.methods.client-witness",
 		"rationale": "extensions/memory-recall.ts's /learnings command was the only client caller of the \"promotable\" RPC method; deleting the command (see memory.rpc.methods.server) removes the call too.",
 		"evidence": "unit/memory-delete-ts-cli",
-		"_todo_remove": "Same same-commit constraint as memory.rpc.methods.server above: delete both entries together in the first follow-up commit, not here.",
 		"changes": [
 			{
 				"file": "extensions/memory-recall.ts",

@@ -388,12 +388,12 @@ func retireLegacyWatcherPerishableRows(db *sql.DB) error {
 }
 
 type memRow struct {
-	id, kind, content, durability string
-	confidence                    float64
-	frequency                     int
-	createdAt                     string
-	project                       sql.NullString
-	embedding                     sql.NullString
+	id, kind, content, durability, source string
+	confidence                            float64
+	frequency                             int
+	createdAt                             string
+	project                               sql.NullString
+	embedding                             sql.NullString
 }
 
 // bump reaffirms a row on a reaffirm/dedupe hit: bump its frequency (fed into
@@ -563,10 +563,10 @@ func (s *memStore) rememberSourced(in rememberInput, source string) (jsonObj, er
 }
 
 type scoredHit struct {
-	id, content, kind, durability string
-	project                       sql.NullString
-	score                         float64
-	createdAt                     string
+	id, content, kind, durability, source string
+	project                               sql.NullString
+	score                                 float64
+	createdAt                             string
 }
 
 func (s *memStore) recall(query string, limit, charBudget int, kind, project, profile string) ([]scoredHit, error) {
@@ -638,7 +638,11 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 	// the default bucket. An FTS-only hit on an invisible row is harmless — it
 	// lands in ftsScore but this query never scans the row, so it cannot become
 	// a candidate.
-	where := "SELECT id, kind, content, durability, confidence, frequency, created_at, project, embedding FROM memories WHERE deleted_at IS NULL"
+	// source is exposed so a caller (recall JSON, the TS extension's rendered
+	// line) can tell an auto-captured row (source=watcher) apart from an
+	// explicit one — the only feedback/undo mechanism is the existing
+	// `/forget <id>`, so a user has to be able to SEE which rows are auto.
+	where := "SELECT id, kind, content, durability, confidence, frequency, created_at, project, embedding, source FROM memories WHERE deleted_at IS NULL"
 	args := []any{}
 	if kind != "" {
 		where += " AND kind = ?"
@@ -673,7 +677,7 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 	dimMismatch := 0
 	for rows.Next() {
 		var r memRow
-		if err := rows.Scan(&r.id, &r.kind, &r.content, &r.durability, &r.confidence, &r.frequency, &r.createdAt, &r.project, &r.embedding); err != nil {
+		if err := rows.Scan(&r.id, &r.kind, &r.content, &r.durability, &r.confidence, &r.frequency, &r.createdAt, &r.project, &r.embedding, &r.source); err != nil {
 			continue
 		}
 		relevance := 1.0 // star: every visible row is equally "relevant"
@@ -724,7 +728,7 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 		// watcher's removed valence signal, and the column stays inert (still
 		// written by remember, never read here) until the schema work retires it.
 		score := relevance * r.confidence * recency * freqBoost * projectFactor
-		cands = append(cands, cand{scoredHit{r.id, r.content, r.kind, r.durability, r.project, score, r.createdAt}, score})
+		cands = append(cands, cand{scoredHit{r.id, r.content, r.kind, r.durability, r.source, r.project, score, r.createdAt}, score})
 	}
 	if dimMismatch > 0 {
 		log.Printf("memory: %d stored embeddings have a different dimension than the current model (%d dims), they degrade to keyword-only. The embedding model likely changed; re-embed to restore semantic recall.", dimMismatch, len(queryVec))
@@ -928,6 +932,18 @@ func runMemory() {
 	// process lifetime; fails fast if another holder owns the db.
 	release := lockMemoryStoreOrFatal(nil)
 	defer release()
+	// Apply config->env the SAME way `serve` does (applyMemoryModelEnv,
+	// serve.go): the standalone daemon used to read model/capture-mode env vars
+	// with no config.toml fallback at all, so `pix-host memory` silently
+	// ignored memory_watcher_model/memory_embed_model/memory_capture unless the
+	// caller set the env vars by hand. An explicit env override still wins; a
+	// config load failure just logs and falls back to env-only, it never
+	// blocks the daemon from starting.
+	if cfg, err := config.Load(); err == nil {
+		applyMemoryModelEnv(cfg)
+	} else {
+		log.Printf("memory: could not load config (%v); using env-only model/capture settings", err)
+	}
 	addr := env("MEMORY_BIND", "127.0.0.1") + ":" + env("MEMORY_PORT", "11435")
 	mux := memoryMux()
 	log.Printf("memory service (json-rpc) on http://%s", addr)
@@ -988,15 +1004,25 @@ func watcherHealthState() (state *bool, reason string) {
 	return &capture, reason
 }
 
-// memObserve is the ONE capture-admission path BOTH front ends use (the JSON-RPC
-// observe method and the plugin adapter's Observe): reject empty input, refuse
-// with a reason rather than claim a success the watcher model cannot deliver, and
-// otherwise capture in the background under bounded concurrency — honest
-// backpressure instead of a goroutine per entry (memCapture releases the slot).
+// memObserve is the ONE capture-admission path BOTH front ends use. explicit
+// (the default) refuses immediately, before memWatcherStatus is ever
+// consulted: zero watcher inference, zero side-effect Ollama probe.
+// experimental-auto peeks the daily budget (watcherBudgetRemaining) BEFORE
+// the watcher-availability gate, so an exhausted day is accepted:false at
+// zero inference cost; memCapture peeks it again right before the watcher
+// call. UX policy on an experimental feature, not a security boundary.
 func memObserve(store *memStore, user, project string, hasProject bool, profile string) (accepted bool, reason string) {
 	user = truncate(user, 8000)
 	if strings.TrimSpace(user) == "" {
 		return false, ""
+	}
+	if memCaptureMode() == config.MemoryCaptureExplicit {
+		return false, "automatic capture is off (memory_capture=explicit); use explicit remember"
+	}
+	if remaining, err := store.watcherBudgetRemaining(); err != nil {
+		return false, "capture budget check failed; try again shortly"
+	} else if remaining <= 0 {
+		return false, fmt.Sprintf("daily watcher capture budget exhausted (max %d stored rows/day); recall still works", memWatcherDailyBudget)
 	}
 	if capture, why := memWatcherStatus(); !capture {
 		if why == "" {
@@ -1069,10 +1095,27 @@ var memCaptureSem = make(chan struct{}, memCaptureMaxConcurrency)
 func memCapture(store *memStore, user, project string, hasProj bool, profile string) {
 	defer func() { recover() }()
 	defer func() { <-memCaptureSem }()
+	// Stage 1 (before the watcher): a secret-shaped message never reaches the
+	// watcher model. Fail closed, never logs the matched text.
+	if containsSecretShape(user) {
+		log.Printf("memory: capture input blocked by the secret filter (stage 1), watcher not invoked")
+		return
+	}
+	// Peek the daily budget again, fresh (memObserve already peeked it once at
+	// admission time; this catches a concurrent capture landing in between).
+	remaining, err := store.watcherBudgetRemaining()
+	if err != nil {
+		log.Printf("memory: watcher budget check failed, skipping this capture: %v", err)
+		return
+	}
+	if remaining <= 0 {
+		log.Printf("memory: daily watcher capture budget exhausted (max %d stored rows/day), watcher not invoked", memWatcherDailyBudget)
+		return
+	}
 	// Make every capture attempt visible: memWatch logs its own errors, but a 200
 	// with unparseable/empty content returns nil silently — the exact "capture on
 	// but 0 facts" black box.
-	log.Printf("memory: observe -> watcher (user %d chars, project %q, profile %q)", len(user), project, profile)
+	log.Printf("memory: observe -> watcher (user %d chars, project %q, profile %q, budget remaining %d)", len(user), project, profile, remaining)
 	w := memWatch(user)
 	if w == nil {
 		log.Printf("memory: watcher returned nil (no extraction), nothing captured")
@@ -1108,24 +1151,74 @@ func memCapture(store *memStore, user, project string, hasProj bool, profile str
 	}
 	w.Facts = dropNoise("fact", w.Facts)
 
-	// reward is never seeded from the watcher any more (it used to be Valence *
-	// 0.3; the watcher no longer reports a valence at all), so every watcher
-	// capture stores the zero-value reward. rememberWatcherCapture, not
-	// remember(): this is the ONE call site allowed to write source="watcher"
-	// (see its doc comment); the `source` field on this input is ignored.
-	rem := func(content, kind string, conf float64) {
-		store.rememberWatcherCapture(rememberInput{content: content, kind: kind,
-			confidence: conf, project: project, hasProject: hasProj,
-			profile: profile, dedupe: 0.9, hasDedupe: true})
+	// Stage 2 (before storing): a watcher that echoes a secret back into an
+	// extracted item must not get it stored either. Same fail-closed rule.
+	filterSecrets := func(label string, in []string) []string {
+		out := make([]string, 0, len(in))
+		dropped := 0
+		for _, s := range in {
+			if containsSecretShape(s) {
+				dropped++
+				continue
+			}
+			out = append(out, s)
+		}
+		if dropped > 0 {
+			log.Printf("memory: dropped %d watcher %s item(s), secret-shaped content (stage 2)", dropped, label)
+		}
+		return out
 	}
+	w.Facts = filterSecrets("fact", w.Facts)
+	w.Corrections = filterSecrets("correction", w.Corrections)
+
+	// rememberWatcherCapture is the ONE call site allowed to write
+	// source="watcher". One watcher result may store only the remaining budget
+	// rows: stop storing, don't re-invoke the watcher, once used up. `stored`
+	// tracks the daily budget ONLY against a row rememberWatcherCapture actually
+	// INSERTED: a hash reaffirm or a vector-dedupe collapse (either way,
+	// reaffirmed:true, see rememberSourced) touches an existing row, not a new
+	// one, and watcherBudgetRemaining's own COUNT(*) never sees it either — so
+	// counting it here would burn budget the persisted count agrees was never
+	// spent. A call that errors (nothing landed at all) is likewise not counted.
+	// This is what makes a batch that happens to include reaffirmed/semantic-
+	// duplicate/failed items store every genuinely NEW item the remaining
+	// budget allows, instead of stopping early on attempts that cost nothing.
+	type watchItem struct {
+		content, kind string
+		conf          float64
+	}
+	items := make([]watchItem, 0, len(w.Facts)+len(w.Corrections))
 	for _, f := range w.Facts {
-		rem(f, "fact", 0.65)
+		items = append(items, watchItem{f, "fact", 0.65})
 	}
 	for _, c := range w.Corrections {
-		rem(c, "learning", 0.75)
+		items = append(items, watchItem{c, "learning", 0.75})
 	}
-	if len(w.Facts)+len(w.Corrections) > 0 {
-		log.Printf("captured %d fact(s), %d correction(s)", len(w.Facts), len(w.Corrections))
+	stored := 0
+	for i, it := range items {
+		if stored >= remaining {
+			log.Printf("memory: daily watcher capture budget exhausted mid-capture, dropping %d item(s) (count only, no content logged)", len(items)-i)
+			break
+		}
+		res, err := store.rememberWatcherCapture(rememberInput{content: it.content, kind: it.kind,
+			confidence: it.conf, project: project, hasProject: hasProj,
+			profile: profile, dedupe: 0.9, hasDedupe: true})
+		if err != nil {
+			log.Printf("memory: watcher item failed to store, not counted against the daily budget: %v", err)
+			continue
+		}
+		if reaffirmed, _ := res["reaffirmed"].(bool); reaffirmed {
+			continue // hash or semantic dedupe collapsed into an existing row; no new row, no budget spent
+		}
+		stored++
+	}
+	// Truthful logging: "considered" (what the watcher extracted, post-filter)
+	// is not the same as "stored" (what actually landed a NEW row and consumed
+	// the daily budget — reaffirmed/deduped/failed items are excluded, matching
+	// what watcherBudgetRemaining's own COUNT(*) would report).
+	if len(items) > 0 {
+		log.Printf("memory: capture considered %d item(s) (%d fact(s), %d correction(s)), stored %d new row(s)",
+			len(items), len(w.Facts), len(w.Corrections), stored)
 	} else {
 		log.Printf("memory: watcher ran but extracted 0 items (nothing it judged worth keeping, or an empty result)")
 	}

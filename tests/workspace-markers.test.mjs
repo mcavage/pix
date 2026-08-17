@@ -10,7 +10,8 @@
 // either language having to shell out to the other.
 //
 // Covers every marker a TS extension actually reads today: .pix/profile
-// (memory-recall.ts, memory-capture.ts), .pix/ollama-bridge.model
+// (memory-recall.ts, memory-capture.ts), .pix/memory-capture
+// (memory-capture.ts), .pix/ollama-bridge.model
 // (ollama-bridge.ts). .pix/sandbox.pack and .pix/onboarding.json have no TS
 // reader (Go writes+reads sandbox.pack; the in-sandbox AGENT — not a TS
 // extension — writes onboarding.json), so they are only covered on the Go
@@ -168,7 +169,12 @@ test("memory-recall.ts falls back to 'default' when .pix/profile is absent (the 
 
 test("memory-capture.ts stamps captured exchanges with the SAME .pix/profile marker memory-recall.ts reads", async (t) => {
 	const workspace = makeWorkspace("profile", "work\n");
-	const { server, requests } = makeFakeDaemon(() => ({ result: { accepted: true } }));
+	// .pix/memory-capture must name the opt-in mode for this test to exercise
+	// the profile-stamping it cares about; explicit (the default, an absent
+	// marker) would send zero observe requests.
+	mkdirSync(join(workspace, ".pix"), { recursive: true });
+	writeFileSync(join(workspace, ".pix", "memory-capture"), "experimental-auto\n");
+	const { server, requests } = makeFakeDaemon(() => ({ accepted: true }));
 	t.after(() => server.close());
 	const MEMORY_URL = await listen(server);
 
@@ -195,6 +201,39 @@ test("memory-capture.ts stamps captured exchanges with the SAME .pix/profile mar
 	assert.equal(requests.length, 1, "one observe call for the completed exchange");
 	assert.equal(requests[0].method, "observe");
 	assert.equal(requests[0].params.profile, "work", "capture must stamp the same profile recall queries, or the two silently diverge");
+});
+
+// ── .pix/memory-capture → memory-capture.ts (matches run.go's
+// WriteMemoryCaptureFile output: "<mode>\n", see
+// TestMarkerRoundTrip_MemoryCapture). The explicit-default/garbled-marker
+// fail-closed cases are covered in memory-capture.test.mjs; this is only the
+// cross-language byte-exact contract. ────────────────────────────────────────
+
+test("memory-capture.ts resolves CAPTURE_MODE from the exact .pix/memory-capture bytes WriteMemoryCaptureFile produces", async (t) => {
+	const workspace = makeWorkspace("memory-capture", "experimental-auto\n");
+	const { server, requests } = makeFakeDaemon(() => ({ accepted: true }));
+	t.after(() => server.close());
+	const MEMORY_URL = await listen(server);
+
+	const mod = await importFromWorkspace("../extensions/memory-capture.ts", workspace, { MEMORY_URL });
+	let beforeAgentStart;
+	mod.default({
+		on(event, fn) {
+			if (event === "before_agent_start") beforeAgentStart = fn;
+		},
+	});
+	const ctx = {
+		cwd: workspace,
+		sessionManager: {
+			getBranch: () => [
+				{ type: "message", message: { role: "user", content: "a real user question about something" } },
+				{ type: "message", message: { role: "assistant", content: "a real assistant answer to that question" } },
+			],
+		},
+	};
+	await beforeAgentStart({}, ctx);
+
+	assert.equal(requests.length, 1, "experimental-auto mode (from the marker) must send exactly one observe call");
 });
 
 // .pix/knowledge.scope → knowledge-recall.ts coverage (bundle-scope

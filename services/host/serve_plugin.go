@@ -192,6 +192,7 @@ var pluginEnvAllow = []string{
 	// Memory service configuration
 	"MEMORY_BIND", "MEMORY_DB", "MEMORY_EMBED_MODEL", "MEMORY_EMBED_TIMEOUT_MS",
 	"MEMORY_PORT", "MEMORY_WATCHER_MODEL", "MEMORY_WATCHER_TIMEOUT_MS",
+	"MEMORY_CAPTURE_MODE",
 	// Shared Ollama endpoint
 	"OLLAMA_HOST",
 	// Dynamic linker paths for CGO-built external plugins that link shared
@@ -299,7 +300,7 @@ func memoryStoreMux(use memoryUse) http.Handler {
 			for _, hit := range r.Hits {
 				list = append(list, jsonObj{"id": hit.ID, "content": hit.Content, "score": hit.Score,
 					"kind": hit.Kind, "durability": hit.Durability, "project": projOrNil(hit.Project),
-					"createdAt": hit.CreatedAt})
+					"createdAt": hit.CreatedAt, "source": hit.Source})
 			}
 			return jsonObj{"hits": list}, nil
 		}),

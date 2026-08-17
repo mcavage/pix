@@ -151,11 +151,14 @@ export function formatMemoryIso(value: unknown): string | null {
 	return match ? `${match[1]}T${match[2]}${match[3].toUpperCase()}` : null;
 }
 
-// One rendered /recall line: id, kind/project, an optional local timestamp,
-// then the content.
+// One rendered /recall line: id, kind/project (plus an "auto" tag for a
+// watcher-sourced row, so an experimental-auto capture is visibly distinct
+// from an explicit one -- /forget <id> is the feedback/undo mechanism, this
+// is only the visibility half), an optional local timestamp, then the content.
 export function formatHitLine(h: any): string {
 	const ts = formatMemoryIso(h?.createdAt);
-	return `• [${String(h.id).slice(0, 8)}] (${h.kind}${h.project ? "/" + h.project : ""})${ts ? ` ${ts}` : ""} ${h.content}`;
+	const tag = h?.source === "watcher" ? "/auto" : "";
+	return `• [${String(h.id).slice(0, 8)}] (${h.kind}${h.project ? "/" + h.project : ""}${tag})${ts ? ` ${ts}` : ""} ${h.content}`;
 }
 
 // The block header, verbatim. The second line is the untrusted-content wrapper
