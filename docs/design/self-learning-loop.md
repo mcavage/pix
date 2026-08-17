@@ -22,6 +22,25 @@ Verified end-to-end in a real sbx sandbox: recall returns seeded facts to the mo
 - **Reward attribution.** Not wired. The `reward` column is inert (still in the schema, always 0, never read by recall). If this is revisited, it needs an actual "attach reward to what produced it" mechanism, not a proxy signal seeded from sentiment.
 - **Entities.** Deferred. Facts and learnings only for now.
 
+## Rejected: a trust-state/provenance schema
+
+U5's first cut at the schema-v2 upgrade added a full trust model:
+`trust_state` (admitted/proposed/quarantined) and `provenance`
+(explicit/review/auto/legacy) columns, one named SQL eligibility predicate
+ordinary recall/stats/dedupe/synthesis all filtered through, an automatic
+hardened pre-migration snapshot (a second, fixed-path copy of
+`memorySnapshot`'s own flow) before any DDL ran, and two new `stats` keys.
+On final review this was more machinery than the actual problem warranted:
+nothing yet reads `proposed` or a review queue (no capture mode or CLI
+verb creates one), so the eligibility predicate spent a whole extra concept
+(and a new file, `memory_schema.go`) buying a distinction nothing consumes.
+It shipped, then was walked back to what the upgrade actually needs: a
+one-time DATA sweep that reuses the store's EXISTING soft-delete
+(`deleted_at`) semantics instead of inventing a parallel one, with no
+automatic snapshot (an operator who wants a safety copy runs the
+already-existing `pix-host memory snapshot` themselves). See docs/memory.md's
+"Schema v2: a one-time source sweep" section for what shipped instead.
+
 ## The problem, with evidence
 
 The prior loop ran on the model's discretion. Capture, recall, and synthesis

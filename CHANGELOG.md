@@ -109,6 +109,29 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Memory schema v2: a small, atomic one-time DATA sweep, not a new trust
+  schema.** Upgrading a pre-v2 store, in ONE transaction
+  (`migrateMemorySchema`, `services/host/memory.go`): adds the legacy
+  `profile` column if still missing, soft-deletes every live row whose
+  recorded `source` is neither `user` nor `cli` (the watcher's past
+  captures, or a source this binary has never seen — an ADVISORY reading of
+  that pre-v2 free text, never a verified trust boundary), then stamps
+  `PRAGMA user_version = 2`. A crash or error anywhere rolls back the whole
+  transaction, so the sweep is judged (and runs) exactly once per store; a
+  row written after the stamp (a new watcher capture included) is never
+  swept. Reversibility is the store's EXISTING soft-delete semantics —
+  clear `deleted_at` for an id to bring a row back — and an operator who
+  wants a point-in-time copy first should run the already-existing
+  `pix-host memory snapshot` before upgrading; this migration does not take
+  one automatically. `source` stays normalized to a closed vocabulary
+  (`user`/`cli`/`watcher`, else `unknown`), and `remember` (the RPC/plugin
+  surface every external caller reaches) treats a caller-supplied
+  `source="watcher"` as spoofing, normalizing it to `unknown`: only the
+  watcher's own internal capture path (`rememberWatcherCapture`, unexported)
+  ever writes that value. See docs/memory.md's "Schema v2: a one-time source
+  sweep" section. (A trust-state/provenance/eligibility-predicate design was
+  built for this and rejected on review as more machinery than the problem
+  warranted; see docs/design/self-learning-loop.md.)
 - **Memory `health`/`identity` now report tri-state embed/watcher health,
   never a false "healthy".** `embedHealthState`/`watcherHealthState` return
   `nil` ("unknown") until the first real `/api/embed`/`/api/chat` attempt has

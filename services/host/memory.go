@@ -49,12 +49,10 @@ const (
 	memProjectOtherFactor  = 0.5
 )
 
-// access_count/last_accessed (below) are RESERVED/INERT: nothing writes or
-// reads either any more (recall used to bump both on every hit; deleted, see
-// recall's comment, since no reader ever consumed them). Left in the schema,
-// not dropped, for additive/legacy compatibility — an older binary's row (or
-// a future reader) still finds the columns present, just permanently 0/NULL
-// from any binary built after this change. Same posture as `reward` below.
+// access_count/last_accessed/reward (used elsewhere in this file) are
+// RESERVED/INERT, kept for additive/legacy compatibility; nothing writes or
+// reads them any more. Same posture applies to any column below no longer
+// written by every code path.
 const memSchema = `
 CREATE TABLE IF NOT EXISTS memories (
   rowid INTEGER PRIMARY KEY, id TEXT UNIQUE NOT NULL, kind TEXT NOT NULL, content TEXT NOT NULL,
@@ -64,8 +62,162 @@ CREATE TABLE IF NOT EXISTS memories (
   tags TEXT NOT NULL DEFAULT '[]', project TEXT, embedding TEXT, deleted_at TEXT, profile TEXT
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(content);
-PRAGMA user_version = 1;
 `
+
+// memSchemaVersion is the memory schema (PRAGMA user_version) THIS binary
+// understands and stamps on open; newMemStore refuses a db claiming a newer
+// one rather than silently downgrading it. Bumped from 1 to 2 by U5: a
+// one-time v2 DATA sweep (migrateMemorySchema, below), not a column change
+// (the table shape itself hasn't moved since v1). Shared with
+// memory_snapshot.go's verifyMemoryDB via memSnapshotSchemaVersion so the two
+// never drift.
+const memSchemaVersion = 2
+
+// memColumnExists reports whether table has a column named col, via
+// PRAGMA table_info. Used to gate the idempotent profile-column migration.
+func memColumnExists(db *sql.DB, table, col string) (bool, error) {
+	rows, err := db.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == col {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+// migrateMemorySchema brings a store whose PRAGMA user_version is below
+// memSchemaVersion up to it. This is a ONE-TIME DATA sweep, not a column
+// migration: v2 does not add or rename any column. Two things happen, both
+// inside a SINGLE transaction, so a crash or error anywhere leaves the store
+// fully at its old version or fully v2, never a hybrid — completion is
+// judged by user_version alone on the next open, never a partial column
+// probe (see TestSchemaV2_CrashMidTransactionStaysAtOldVersion):
+//
+//  1. The legacy profile column is added if a pre-profile-scoping db still
+//     lacks it (memColumnExists decides).
+//  2. Every LIVE row whose historical source is neither 'user' nor 'cli' —
+//     the watcher's past captures, or a source this binary has never seen —
+//     is SOFT-DELETED (deleted_at, the store's existing forget() mechanism,
+//     paired with dropping its FTS entry). This is an ADVISORY, one-time
+//     reading of that pre-v2 free-text history, never a verified trust
+//     boundary: pre-v2 `source` was operator-set text with no enforcement
+//     behind it at all. A row already soft-deleted is left exactly alone.
+//
+// Reversibility is the SAME soft-delete semantics as an ordinary forget():
+// clearing deleted_at for a specific id (directly in the db file, with the
+// service stopped) restores that row exactly as recall() reads it — nothing
+// new to learn. An operator who wants a point-in-time copy before upgrading
+// should run `pix-host memory snapshot` first (see docs/memory.md); this
+// migration does not take one automatically.
+//
+// A row written by the watcher (or anything else) AFTER this migration has
+// stamped user_version=2 is never touched by it again: the sweep is
+// keyed off curVersion alone and runs at most once per store.
+func migrateMemorySchema(db *sql.DB, curVersion int) error {
+	if curVersion >= memSchemaVersion {
+		return nil
+	}
+	hasProfile, err := memColumnExists(db, "memories", "profile")
+	if err != nil {
+		return err
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("schema migration: begin: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			if rbErr := tx.Rollback(); rbErr != nil && rbErr != sql.ErrTxDone {
+				log.Printf("memory: schema migration rollback failed: %v", rbErr)
+			}
+		}
+	}()
+
+	if !hasProfile {
+		// CREATE TABLE IF NOT EXISTS never alters an existing table, so a db
+		// created before profile-scoping lacks this column. Legacy rows get
+		// profile NULL = the default bucket.
+		if _, err := tx.Exec("ALTER TABLE memories ADD COLUMN profile TEXT"); err != nil {
+			return fmt.Errorf("schema migration (add profile column): %w", err)
+		}
+	}
+
+	// Collect rowids before the UPDATE so the paired FTS delete below doesn't
+	// need a second source-based scan (and stays exact even if source is
+	// later changed by the UPDATE... it isn't, but this is the same
+	// query-then-mutate shape softDelete/retireLegacyWatcherPerishableRows use).
+	rows, err := tx.Query("SELECT rowid FROM memories WHERE deleted_at IS NULL AND source NOT IN ('user','cli')")
+	if err != nil {
+		return fmt.Errorf("schema migration (select non-explicit rows): %w", err)
+	}
+	var rowids []int64
+	for rows.Next() {
+		var rowid int64
+		if err := rows.Scan(&rowid); err != nil {
+			rows.Close()
+			return fmt.Errorf("schema migration (scan non-explicit rowid): %w", err)
+		}
+		rowids = append(rowids, rowid)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("schema migration (iterate non-explicit rows): %w", err)
+	}
+	rows.Close()
+
+	if len(rowids) > 0 {
+		if _, err := tx.Exec("UPDATE memories SET deleted_at = ? WHERE deleted_at IS NULL AND source NOT IN ('user','cli')", memNowIso()); err != nil {
+			return fmt.Errorf("schema migration (soft-delete non-explicit rows): %w", err)
+		}
+		for _, rowid := range rowids {
+			if _, err := tx.Exec("DELETE FROM memories_fts WHERE rowid = ?", rowid); err != nil {
+				return fmt.Errorf("schema migration (drop fts entry for rowid %d): %w", rowid, err)
+			}
+		}
+	}
+
+	if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", memSchemaVersion)); err != nil {
+		return fmt.Errorf("schema migration (stamp user_version): %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("schema migration: commit: %w", err)
+	}
+	committed = true
+	log.Printf("memory: schema migration to v%d complete (%d row(s) soft-deleted, source not user/cli)", memSchemaVersion, len(rowids))
+	return nil
+}
+
+// memKnownSources is the CLOSED vocabulary for the free-text `source` column:
+// memNormSource maps anything outside it to "unknown" rather than storing
+// arbitrary caller-supplied text verbatim. `source` is descriptive metadata
+// only, but an unbounded free-text column is still worth pinning down: a
+// typo or a new sandbox extension inventing its own label would otherwise
+// silently fork the exact vocabulary migrateMemorySchema's (advisory)
+// historical classification reads.
+var memKnownSources = map[string]bool{"user": true, "cli": true, "watcher": true}
+
+// memNormSource maps an incoming source string to the closed vocabulary:
+// empty passes through (the caller applies its own default — "user" for an
+// ordinary remember), a known value passes through unchanged, anything else
+// normalizes to "unknown".
+func memNormSource(s string) string {
+	if s == "" || memKnownSources[s] {
+		return s
+	}
+	return "unknown"
+}
 
 // memDefaultProfile is the shared base bucket. A memory with a NULL/empty/
 // "default" profile lives here and is visible under every profile; a named
@@ -155,35 +307,26 @@ func newMemStore(path string, embedder func(string) []float64) (*memStore, error
 		return nil, err
 	}
 	// Schema-version guard: read the CURRENT user_version BEFORE memSchema (which
-	// unconditionally stamps 1). A db written by a NEWER binary (version > 1) must
-	// be refused loudly, never silently downgraded to the 1 marker, that would
-	// corrupt a forward-incompatible schema. Only proceed (and stamp 1) when the
-	// current version is <= 1.
+	// unconditionally creates the table). A db written by a NEWER binary (version
+	// > memSchemaVersion) must be refused loudly, never silently downgraded to
+	// this binary's marker, that would corrupt a forward-incompatible schema.
+	// Only proceed when the current version is already <= it.
 	var curVersion int
 	if err := db.QueryRow("PRAGMA user_version").Scan(&curVersion); err != nil {
 		return nil, err
 	}
-	if curVersion > 1 {
-		return nil, fmt.Errorf("database schema v%d is newer than this binary supports (1), upgrade pix", curVersion)
+	if curVersion > memSchemaVersion {
+		return nil, fmt.Errorf("database schema v%d is newer than this binary supports (%d), upgrade pix", curVersion, memSchemaVersion)
 	}
 	if _, err := db.Exec(memSchema); err != nil {
 		return nil, err
 	}
-	// CREATE TABLE IF NOT EXISTS never alters an existing table, so a DB created
-	// before profile-scoping lacks the column: probe with PRAGMA table_info and
-	// ALTER only when absent. Legacy rows get profile NULL = the default bucket.
-	hasProfile, err := memColumnExists(db, "memories", "profile")
-	if err != nil {
-		return nil, err
-	}
-	if !hasProfile {
-		if _, err := db.Exec("ALTER TABLE memories ADD COLUMN profile TEXT"); err != nil {
-			return nil, err
-		}
-	}
-	// Stamp the schema version explicitly: memSchema sets it for a fresh DB, but a
-	// migrated legacy DB predates the pragma and snapshot/restore reads it.
-	if _, err := db.Exec("PRAGMA user_version = 1"); err != nil {
+	// migrateMemorySchema is the ENTIRE story from here: it decides (from
+	// curVersion) whether the one-time v2 sweep still needs to run, and if so
+	// commits every ALTER, the classification UPDATE, and the user_version
+	// stamp in ONE transaction. Completion is judged by user_version alone on
+	// the NEXT open, never a column probe: see its doc comment.
+	if err := migrateMemorySchema(db, curVersion); err != nil {
 		return nil, err
 	}
 	if err := retireLegacyWatcherPerishableRows(db); err != nil {
@@ -242,28 +385,6 @@ func retireLegacyWatcherPerishableRows(db *sql.DB) error {
 		}
 	}
 	return nil
-}
-
-// memColumnExists reports whether table has a column named col, via
-// PRAGMA table_info. Used to gate the idempotent profile-column migration.
-func memColumnExists(db *sql.DB, table, col string) (bool, error) {
-	rows, err := db.Query("PRAGMA table_info(" + table + ")")
-	if err != nil {
-		return false, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var cid, notnull, pk int
-		var name, ctype string
-		var dflt sql.NullString
-		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
-			return false, err
-		}
-		if name == col {
-			return true, nil
-		}
-	}
-	return false, rows.Err()
 }
 
 type memRow struct {
@@ -335,7 +456,38 @@ type rememberInput struct {
 	hasDedupe                      bool
 }
 
+// remember is the ONLY entry point reachable from an external caller — the
+// JSON-RPC "remember" method and the go-plugin adapter's Remember both land
+// here (see rememberFromParams). The `source` a caller sends is closed-
+// vocabulary metadata (memNormSource), with one extra rule: a caller
+// claiming source="watcher" is spoofing the internal capture path's own
+// label (see rememberWatcherCapture, the ONLY other caller of
+// rememberSourced and the only place "watcher" may ever be written), so it
+// normalizes to "unknown" instead of being stored verbatim.
 func (s *memStore) remember(in rememberInput) (jsonObj, error) {
+	source := memNormSource(orDefault(in.source, "user"))
+	if source == "watcher" {
+		source = "unknown"
+	}
+	return s.rememberSourced(in, source)
+}
+
+// rememberWatcherCapture is the watcher's own internal capture path
+// (memCapture), an internal Go call with no externally reachable parameter
+// anywhere upstream of it — memCapture is reached from memObserve, which
+// itself takes only free-text user input, never a source value. Unexported:
+// nothing outside this package (and so nothing across the JSON-RPC or plugin
+// boundary) can call it, and it is the ONLY path that ever writes
+// source="watcher" to the store.
+func (s *memStore) rememberWatcherCapture(in rememberInput) (jsonObj, error) {
+	return s.rememberSourced(in, "watcher")
+}
+
+// rememberSourced is remember()'s (and rememberWatcherCapture's) shared
+// body, parameterized on a source value the CALLER (not the request)
+// supplies — see remember()'s doc comment for why an external caller cannot
+// simply put "watcher" in the request and get the same value.
+func (s *memStore) rememberSourced(in rememberInput, source string) (jsonObj, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -359,7 +511,6 @@ func (s *memStore) remember(in rememberInput) (jsonObj, error) {
 	if confidence == 0 {
 		confidence = 0.8
 	}
-	source := orDefault(in.source, "user")
 	tagsJSON, _ := json.Marshal(in.tags)
 	if in.tags == nil {
 		tagsJSON = []byte("[]")
@@ -483,9 +634,10 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 		queryVec = s.embedder(query)
 	}
 
-	// Candidates are the visible set for the active profile: its own rows UNION the
-	// default bucket. An FTS-only hit on an invisible row is harmless — it lands in
-	// ftsScore but this query never scans the row, so it cannot become a candidate.
+	// Candidates are the visible set for the active profile: its own rows UNION
+	// the default bucket. An FTS-only hit on an invisible row is harmless — it
+	// lands in ftsScore but this query never scans the row, so it cannot become
+	// a candidate.
 	where := "SELECT id, kind, content, durability, confidence, frequency, created_at, project, embedding FROM memories WHERE deleted_at IS NULL"
 	args := []any{}
 	if kind != "" {
@@ -729,6 +881,7 @@ func (s *memStore) synthesizeBucket(profile string, threshold float64) int {
 	return merged
 }
 
+// stats reports counts for the active profile's visible rows.
 func (s *memStore) stats(profile string) jsonObj {
 	active := memNormProfile(profile)
 	get := func(cond string) int {
@@ -957,10 +1110,12 @@ func memCapture(store *memStore, user, project string, hasProj bool, profile str
 
 	// reward is never seeded from the watcher any more (it used to be Valence *
 	// 0.3; the watcher no longer reports a valence at all), so every watcher
-	// capture stores the zero-value reward.
+	// capture stores the zero-value reward. rememberWatcherCapture, not
+	// remember(): this is the ONE call site allowed to write source="watcher"
+	// (see its doc comment); the `source` field on this input is ignored.
 	rem := func(content, kind string, conf float64) {
-		store.remember(rememberInput{content: content, kind: kind,
-			confidence: conf, source: "watcher", project: project, hasProject: hasProj,
+		store.rememberWatcherCapture(rememberInput{content: content, kind: kind,
+			confidence: conf, project: project, hasProject: hasProj,
 			profile: profile, dedupe: 0.9, hasDedupe: true})
 	}
 	for _, f := range w.Facts {

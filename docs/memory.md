@@ -101,6 +101,49 @@ Two precision guards run before anything is stored:
   legitimately be phrased exactly like a noise prefix ("the user requested
   the agent stop doing X" is a real, capturable rule, not narration).
 
+## Schema v2: a one-time source sweep
+
+Upgrading a pre-v2 store runs a small, one-time DATA migration — no new
+column, no new concept, just a sweep of what's already there. In ONE
+database transaction (`migrateMemorySchema`, `services/host/memory.go`): the
+legacy `profile` column is added if a pre-profile-scoping db still lacks it,
+every LIVE row whose recorded `source` is neither `user` nor `cli` (the
+watcher's past captures, or a source pix has never seen) is **soft-deleted**
+— the exact same `deleted_at` mechanism `/forget` already uses — and
+`PRAGMA user_version` is stamped to 2. A crash or error anywhere in that
+transaction rolls back everything, leaving the store fully at its old
+version; completion is judged by `user_version` alone, so the sweep runs
+exactly once per store, and a row written after the stamp (including a brand
+new watcher capture) is never touched by it again.
+
+This is an ADVISORY, one-time reading of pre-v2 free-text history, never a
+verified trust boundary: pre-v2 `source` was operator-set text with no
+enforcement behind it. `user`/`cli` (an explicit ask, from `/remember` or
+`pix memory remember`) survives outright; everything else predates any
+verification of where it came from, so it's swept. An already soft-deleted
+row is left exactly alone.
+
+**Reversibility is nothing new**: clearing `deleted_at` for a specific id
+directly in the database file (with the service stopped) restores that row
+exactly as recall() reads it — `UPDATE memories SET deleted_at = NULL WHERE
+id = '...'`. If you want a point-in-time copy before upgrading at all, run
+`pix-host memory snapshot` first (see "Backing it up, and putting it back"
+below); the migration itself does not take one automatically.
+
+**Keeping `source` closed and un-spoofable.** The free-text `source` column
+is normalized to a closed vocabulary (`user`/`cli`/`watcher`, else
+`unknown`). `remember` — the RPC/plugin surface every external caller
+reaches — additionally treats a caller-supplied `source="watcher"` as
+spoofing: it normalizes to `unknown` instead of being stored verbatim. Only
+the watcher's own internal capture path (`rememberWatcherCapture`, an
+unexported Go call no request can reach) ever writes `source="watcher"`.
+
+> A trust-state/provenance schema (admitted/proposed/quarantined rows, a
+> named eligibility predicate, an automatic pre-migration snapshot) was
+> designed and built for this upgrade, then rejected on review as more
+> machinery than the actual problem warranted — see
+> docs/design/self-learning-loop.md's "Rejected" note.
+
 ## Driving it by hand
 
 **The agent itself has direct, typed tools**, `memory_recall` and

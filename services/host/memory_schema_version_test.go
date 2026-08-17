@@ -9,15 +9,17 @@ package main
 
 import (
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"testing"
 )
 
 // TestMemStoreSchemaVersionStamp covers the OTHER half of opening an existing
-// db: a fresh store stamps user_version=1 (what a snapshot records and a
-// restore gates on), and a db written by a NEWER pix (user_version=2) is
-// refused rather than silently downgraded to the 1 marker, which would corrupt
-// a forward-incompatible schema.
+// db: a fresh store stamps user_version=memSchemaVersion (what a snapshot
+// records and a restore gates on), and a db written by a NEWER pix
+// (user_version > memSchemaVersion) is refused rather than silently
+// downgraded to this binary's marker, which would corrupt a
+// forward-incompatible schema.
 func TestMemStoreSchemaVersionStamp(t *testing.T) {
 	st, err := newMemStore(filepath.Join(t.TempDir(), "fresh.db"), nil)
 	if err != nil {
@@ -28,8 +30,8 @@ func TestMemStoreSchemaVersionStamp(t *testing.T) {
 		t.Fatalf("PRAGMA user_version: %v", err)
 	}
 	st.db.Close()
-	if uv != 1 {
-		t.Errorf("fresh store user_version = %d, want 1", uv)
+	if uv != memSchemaVersion {
+		t.Errorf("fresh store user_version = %d, want %d", uv, memSchemaVersion)
 	}
 
 	path := filepath.Join(t.TempDir(), "future.db")
@@ -37,7 +39,7 @@ func TestMemStoreSchemaVersionStamp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := future.Exec("PRAGMA user_version = 2"); err != nil {
+	if _, err := future.Exec(fmt.Sprintf("PRAGMA user_version = %d", memSchemaVersion+1)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := future.Exec("CREATE TABLE t(x)"); err != nil { // force the header to disk
@@ -45,6 +47,6 @@ func TestMemStoreSchemaVersionStamp(t *testing.T) {
 	}
 	future.Close()
 	if _, err := newMemStore(path, nil); err == nil {
-		t.Error("newMemStore accepted a db with user_version=2; want a version error")
+		t.Errorf("newMemStore accepted a db with user_version=%d; want a version error", memSchemaVersion+1)
 	}
 }

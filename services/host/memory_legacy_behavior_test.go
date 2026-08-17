@@ -120,11 +120,11 @@ CREATE VIRTUAL TABLE memories_fts USING fts5(content);`
 	if _, err := db.Exec(legacySchema); err != nil {
 		t.Fatalf("legacy schema: %v", err)
 	}
-	insert := func(id, content, durability, expiresAt string) {
+	insert := func(id, content, durability, source, expiresAt string) {
 		res, err := db.Exec(`INSERT INTO memories
 			(id, kind, content, content_hash, durability, confidence, source, tags, created_at, expires_at)
 			VALUES (?,?,?,?,?,?,?,?,?,?)`,
-			id, "fact", content, memHash(content), durability, 0.8, "watcher", "[]", memNowIso(), nullIfEmpty(expiresAt))
+			id, "fact", content, memHash(content), durability, 0.8, source, "[]", memNowIso(), nullIfEmpty(expiresAt))
 		if err != nil {
 			t.Fatalf("insert %s: %v", id, err)
 		}
@@ -135,9 +135,13 @@ CREATE VIRTUAL TABLE memories_fts USING fts5(content);`
 	}
 	past := memTimeAdd(t, -24) // already past its old expiry
 	future := memTimeAdd(t, 24)
-	insert("expired-perishable", "yesterday's status update", "perishable", past)
-	insert("live-perishable", "not-yet-due status update", "perishable", future)
-	insert("kept-durable", "the user prefers tabs over spaces", "durable", "")
+	insert("expired-perishable", "yesterday's status update", "perishable", "watcher", past)
+	insert("live-perishable", "not-yet-due status update", "perishable", "watcher", future)
+	// source "user" here (not "watcher"): this row must survive BOTH the
+	// perishable retirement below (it isn't perishable) AND the unrelated v2
+	// migration's source-based sweep (memory_schema_v2_test.go) that also runs
+	// on this same open — an explicit source is what that sweep looks for.
+	insert("kept-durable", "the user prefers tabs over spaces", "durable", "user", "")
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
