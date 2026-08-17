@@ -191,7 +191,7 @@ var pluginEnvAllow = []string{
 	"PIX_CONFIG", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME",
 	// Memory service configuration
 	"MEMORY_BIND", "MEMORY_DB", "MEMORY_EMBED_MODEL", "MEMORY_EMBED_TIMEOUT_MS",
-	"MEMORY_PORT", "MEMORY_SYNTH_MS", "MEMORY_WATCHER_MODEL", "MEMORY_WATCHER_TIMEOUT_MS",
+	"MEMORY_PORT", "MEMORY_WATCHER_MODEL", "MEMORY_WATCHER_TIMEOUT_MS",
 	// Shared Ollama endpoint
 	"OLLAMA_HOST",
 	// Dynamic linker paths for CGO-built external plugins that link shared
@@ -304,9 +304,9 @@ func memoryStoreMux(use memoryUse) http.Handler {
 		"remember": with(func(s plugin.MemoryStore, p jsonObj) (any, error) {
 			in := rememberFromParams(p)
 			r, err := s.Remember(plugin.RememberReq{
-				Content: in.content, Kind: in.kind, Durability: in.durability, Source: in.source,
-				Project: in.project, HasProject: in.hasProject, TTLDays: in.ttlDays,
-				Confidence: in.confidence, Reward: in.reward, Tags: in.tags,
+				Content: in.content, Kind: in.kind, Source: in.source,
+				Project: in.project, HasProject: in.hasProject,
+				Confidence: in.confidence, Tags: in.tags,
 				Dedupe: in.dedupe, HasDedupe: in.hasDedupe, Profile: in.profile,
 			})
 			if err != nil {
@@ -326,7 +326,7 @@ func memoryStoreMux(use memoryUse) http.Handler {
 			if err != nil {
 				return nil, err
 			}
-			return jsonObj{"merged": r.Merged, "expired": r.Expired}, nil
+			return jsonObj{"merged": r.Merged}, nil
 		}),
 		"promotable": with(func(s plugin.MemoryStore, p jsonObj) (any, error) {
 			r, err := s.Promotable(plugin.PromotableReq{MinFrequency: clampInt(p["minFrequency"], 3, 1, 1000000), Profile: profileFromParams(p)})

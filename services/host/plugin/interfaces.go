@@ -24,17 +24,21 @@ type MemoryStore interface {
 }
 
 // RememberReq mirrors memory.go's rememberInput / rememberFromParams.
+//
+// Durability, TTLDays, and Reward are all gone from the write path: every
+// row this binary writes is durable (the perishable/TTL behavior Durability/
+// TTLDays configured was removed along with the watcher's event channel),
+// and reward is no longer accepted as write-side input at all (it was never
+// read back into recall's score even before this). The `reward` column
+// stays in the schema, inert, defaulting to 0 on every row.
 type RememberReq struct {
 	Content    string
 	Kind       string
-	Durability string
 	Source     string
 	Project    string
 	Profile    string
 	HasProject bool
-	TTLDays    int
 	Confidence float64
-	Reward     float64
 	Tags       []string
 	Dedupe     float64
 	HasDedupe  bool
@@ -82,14 +86,16 @@ type ForgetResp struct {
 	OK bool
 }
 
-// SynthesizeReq / SynthesizeResp mirror synthesize(threshold) -> {merged, expired}.
+// SynthesizeReq / SynthesizeResp mirror synthesize(threshold) -> {merged}.
+// The response used to also carry an "expired" count from a background
+// TTL-expiry sweep; the sweep was deleted and the field had no remaining
+// caller, so it was dropped rather than pinned at a permanent 0.
 type SynthesizeReq struct {
 	Threshold float64
 }
 
 type SynthesizeResp struct {
-	Merged  int
-	Expired int64
+	Merged int
 }
 
 // PromotableReq / PromotableResp mirror promotable(minFrequency) -> {candidates}.

@@ -1,0 +1,262 @@
+// memory_deletions_gone_test.go — the sentinel for U1-delete-go: a durable,
+// regression-proof assertion that the host-side memory concepts deleted in
+// this unit (watcher `events`, watcher valence and the reward it seeded,
+// reward itself as write-path input, the legacy watcher-perishable TTL
+// migration, and perishable/TTL production behavior) cannot silently come
+// back.
+//
+// Two complementary techniques, mirroring cmd/pix/hostmode_gone_test.go:
+//
+//  1. reflection over the struct shapes involved (watchResult, rememberInput,
+//     plugin.RememberReq) — precise and immune to gofmt column-alignment
+//     noise, unlike a text grep over a struct declaration. Each check states
+//     a required/banned field explicitly rather than an exact field-set
+//     match, so a legitimate, unrelated field added later doesn't fail a
+//     test that has nothing to do with it (see watchResult below).
+//  2. a grep-based walk (LOCAL to this package, mirroring the hostmode
+//     sentinel's own "each package writes its own copy" convention) for a
+//     small set of literal, behavior-specific strings that reflection can't
+//     see: a deleted function's declaration, the exact TTL-expiry SQL
+//     predicate, and the exact perishable-durability behavioral gate.
+//
+// What this deliberately does NOT flag, so it stays precise instead of noisy:
+//   - plugin.Hit / scoredHit keep a Durability field: the sandbox recall
+//     extension (extensions/memory-recall.ts, not touched by this unit)
+//     still reads and renders it, and legacy on-disk perishable rows still
+//     report their real durability until the schema work in U5 retires the
+//     column. Read-side durability surviving is correct, not a regression.
+//   - the `reward` column stays in the schema (still gettable by direct SQL,
+//     still defaulted to 0 by the INSERT that no longer binds it); only its
+//     WRITE-PATH presence in rememberInput/plugin.RememberReq is banned here.
+//   - a live db can still hold LEGACY perishable rows across the exact
+//     startup that retires them (retireLegacyWatcherPerishableRows in
+//     memory.go): that's a one-time, idempotent SOFT delete of pre-existing
+//     data, not the deleted PER-CALL background sweep this file's grep half
+//     guards against, so it does not trip the exact SQL predicate below.
+//   - historical prose in comments and docs that NAMES a deleted symbol
+//     (e.g. this very file, or memory_schema_version_test.go's header) is
+//     fine: the grep half only walks non-test .go files, exactly like the
+//     hostmode sentinel it mirrors, so a test file explaining what was
+//     deleted can never trip over its own explanation.
+package main
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"sort"
+	"strings"
+	"testing"
+
+	"pix/host/plugin"
+)
+
+// fieldNames returns the sorted field names (exported and unexported alike —
+// reflect.Type.Field sees both, only .Interface()/.Set() are restricted) of a
+// struct type. Using reflection instead of a source-text check means this
+// keeps working across any gofmt re-alignment of the struct's declaration.
+func fieldNames(v any) []string {
+	t := reflect.TypeOf(v)
+	names := make([]string, 0, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		names = append(names, t.Field(i).Name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// TestWatchResultHasFactsAndCorrectionsButNotEventsOrValence proves the
+// watcher's Facts/Corrections fields are still there and its Events
+// (time-bound status) and Valence (sentiment) fields are gone, not just
+// unused. This checks required/banned fields individually rather than the
+// type's exact field set, so a legitimate future addition to watchResult
+// (an unrelated new field) does not also have to fail this test to be valid.
+func TestWatchResultHasFactsAndCorrectionsButNotEventsOrValence(t *testing.T) {
+	got := fieldNames(watchResult{})
+	for _, want := range []string{"Corrections", "Facts"} {
+		if !hasField(got, want) {
+			t.Errorf("watchResult is missing %q — got fields: %v", want, got)
+		}
+	}
+	for _, banned := range []string{"Events", "Valence"} {
+		if hasField(got, banned) {
+			t.Errorf("watchResult has a %q field; Events (watcher time-bound status) and Valence (watcher sentiment) were deleted from the watcher's prompt, parse, and capture path — got fields: %v", banned, got)
+		}
+	}
+}
+
+// hasField reports whether names contains name.
+func hasField(names []string, name string) bool {
+	for _, n := range names {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
+// TestRememberInputDroppedDurabilityTTLAndReward proves the WRITE-side
+// perishable/TTL/reward knobs (durability, ttlDays, reward) are all gone from
+// rememberInput: every row this binary writes is now durable, with no
+// expiry, and reward is no longer caller-configurable input at all (the
+// column stays in the schema, inert, defaulting to 0).
+func TestRememberInputDroppedDurabilityTTLAndReward(t *testing.T) {
+	got := fieldNames(rememberInput{})
+	for _, banned := range []string{"durability", "ttlDays", "reward"} {
+		if hasField(got, banned) {
+			t.Errorf("rememberInput has a %q field; durability/TTL/reward were deleted as write-path input — got fields: %v", banned, got)
+		}
+	}
+}
+
+// TestRememberReqDroppedDurabilityTTLAndReward is
+// TestRememberInputDroppedDurabilityTTLAndReward's sibling over the exported
+// plugin wire struct (plugin.RememberReq), which memory_plugin.go and
+// serve_plugin.go both build from rememberInput.
+func TestRememberReqDroppedDurabilityTTLAndReward(t *testing.T) {
+	got := fieldNames(plugin.RememberReq{})
+	for _, banned := range []string{"Durability", "TTLDays", "Reward"} {
+		if hasField(got, banned) {
+			t.Errorf("plugin.RememberReq has a %q field; durability/TTL/reward were deleted as write-path input — got fields: %v", banned, got)
+		}
+	}
+}
+
+// TestHitKeepsDurabilityForTheReadSide is the guard against over-deletion:
+// plugin.Hit (and scoredHit, which feeds it) is the RECALL/OUTPUT side, still
+// read by extensions/memory-recall.ts, and must keep Durability until the
+// schema work in U5 — this unit only removed the WRITE-side behavior above.
+func TestHitKeepsDurabilityForTheReadSide(t *testing.T) {
+	if !hasField(fieldNames(plugin.Hit{}), "Durability") {
+		t.Fatal("plugin.Hit lost its Durability field; the sandbox extension still reads h.durability off every hit — the read side must survive until the U5 schema migration, only the write-side perishable/TTL BEHAVIOR was deleted")
+	}
+}
+
+// forbiddenMemorySymbols are literal, behavior-specific strings that only
+// ever existed to implement the deleted legacy-TTL migration or the
+// perishable/TTL production behavior. None of them can appear in a non-test
+// .go file under this module without one of those behaviors having come
+// back. Each is chosen to be unambiguous: a function declaration (fixed,
+// gofmt-stable formatting), an exact SQL predicate, and an exact behavioral
+// gate — never a bare identifier like "Durability" or "TTLDays", both of
+// which legitimately still appear elsewhere (plugin.Hit.Durability on the
+// read side; this unit's own explanatory comments), so a bare-word check
+// would flag the very things this test file exists to protect.
+var forbiddenMemorySymbols = []string{
+	// migrateLegacyWatcherPerishableTTL (and its test) were deleted outright.
+	"func migrateLegacyWatcherPerishableTTL(",
+	// The TTL-expiry sweep recall() and synthesize() both used to run before
+	// every call ("no background deletion" now, and no expiry to sweep).
+	"expires_at IS NOT NULL AND expires_at < ? AND deleted_at IS NULL",
+	// The exact gate that turned a caller-supplied durability into TTL/expiry
+	// behavior in remember().
+	`if durability == "perishable"`,
+	// The periodic-synthesis-ticker's env knob; the ticker itself (the only
+	// reader) was deleted along with it — on-demand synthesize() stays.
+	"MEMORY_SYNTH_MS",
+}
+
+// memoryModuleRoot resolves the services/host module root: this test file
+// lives there directly (package main, not a subpackage), so it is simply the
+// absolute form of ".".
+func memoryModuleRoot(t *testing.T) string {
+	t.Helper()
+	root, err := filepath.Abs(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
+		t.Fatalf("resolved %s does not look like the services/host module root: %v", root, err)
+	}
+	return root
+}
+
+// memorySymbolViolations walks root for non-test .go files containing any of
+// symbols, returning one "relpath: symbol" string per hit. Pure — no
+// *testing.T — so TestMemorySymbolSentinelDetectsAPlantedViolation below can
+// prove it actually fires on a planted violation, not just that it has only
+// ever been observed passing.
+func memorySymbolViolations(root string, symbols []string) ([]string, error) {
+	var violations []string
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			if info.Name() == "testdata" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		b, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		content := string(b)
+		for _, sym := range symbols {
+			if strings.Contains(content, sym) {
+				rel, _ := filepath.Rel(root, path)
+				violations = append(violations, fmt.Sprintf("%s: %s", rel, sym))
+			}
+		}
+		return nil
+	})
+	return violations, err
+}
+
+// TestNoLegacyTTLOrPerishableProductionSymbols greps every non-test .go file
+// under services/host for the deleted TTL-migration/perishable symbols. This
+// is the sentinel: it fails loudly the moment any of them is reintroduced,
+// wherever in the module that happens.
+func TestNoLegacyTTLOrPerishableProductionSymbols(t *testing.T) {
+	root := memoryModuleRoot(t)
+	violations, err := memorySymbolViolations(root, forbiddenMemorySymbols)
+	if err != nil {
+		t.Fatalf("walk %s: %v", root, err)
+	}
+	for _, v := range violations {
+		t.Errorf("%s — the legacy watcher-perishable TTL migration and perishable/TTL production behavior were deleted (U1-delete-go); this must not come back", v)
+	}
+}
+
+// TestMemorySymbolSentinelDetectsAPlantedViolation is the plausibility
+// assertion for the sentinel above: it plants one forbidden symbol into a
+// throwaway tree and proves memorySymbolViolations actually reports it, then
+// proves the SAME symbol in a _test.go file is correctly ignored — so a
+// passing TestNoLegacyTTLOrPerishableProductionSymbols is evidence the code
+// is clean, not evidence the check forgot how to fail.
+func TestMemorySymbolSentinelDetectsAPlantedViolation(t *testing.T) {
+	dir := t.TempDir()
+	planted := filepath.Join(dir, "planted.go")
+	if err := os.WriteFile(planted, []byte("package x\n\nfunc migrateLegacyWatcherPerishableTTL() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	violations, err := memorySymbolViolations(dir, forbiddenMemorySymbols)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(violations) == 0 {
+		t.Fatal("expected memorySymbolViolations to catch the planted func migrateLegacyWatcherPerishableTTL(), but it found nothing — a sentinel that never fires has never been proven to work")
+	}
+
+	// The exact same symbol in a _test.go file (e.g. this file's own docstring,
+	// or memory_schema_version_test.go's header, both of which name the deleted
+	// function) must NOT be reported.
+	testFile := filepath.Join(dir, "planted_test.go")
+	if err := os.WriteFile(testFile, []byte("package x\n\nfunc migrateLegacyWatcherPerishableTTL() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(planted) // isolate: only the _test.go file remains
+	isolated, err := memorySymbolViolations(dir, forbiddenMemorySymbols)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(isolated) != 0 {
+		t.Fatalf("memorySymbolViolations must ignore _test.go files, got: %v", isolated)
+	}
+}

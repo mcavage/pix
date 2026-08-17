@@ -93,19 +93,20 @@ and remembers it without being asked. Next session, `/recall staging db` finds
 it, or it surfaces unprompted in the system prompt when it's relevant.
 
 **Durability.** A durable fact (preference, decision, convention) has no
-automatic expiry. A watcher-captured **event** (time-bound status: what you're
-doing right now) is perishable and expires after 7 days on its own. `/remember`
-is the reliable explicit write, driven by the human, not the agent, though a
-stable fact the watcher captures on its own can also land durable.
+automatic expiry, and every row pix writes is durable now, there is no
+perishable/TTL write path any more. `/remember` is the reliable explicit
+write, driven by the human, not the agent, though a stable fact the watcher
+captures on its own can also land durable. A store that predates this is
+retired once at startup rather than left holding rows nothing will ever
+expire; see docs/memory.md's Legacy data section.
 
 **What gets silently injected vs. what you can see.** Each turn, only a small
-relevance-filtered subset is silently added to context, low-scoring
-perishable hits are left out of that silent injection specifically, so a
-noisy time-bound status doesn't compete for space in every turn. Durable hits
-are never filtered by score. An explicit `/recall` or `memory_recall` skips
-that score filter, but is still capped: a blank query (or `*`) returns up to
-100 rows (with a truncation line if the store has more), not a true unbounded
-dump.
+relevance-filtered subset is silently added to context. Durable hits are
+never filtered by score; a legacy perishable hit scoring below 0.30 would be,
+but the startup retirement above means there is normally none left to filter.
+An explicit `/recall` or `memory_recall` skips that score filter regardless,
+but is still capped: a blank query (or `*`) returns up to 100 rows (with a
+truncation line if the store has more), not a true unbounded dump.
 
 **Limits.** Memory runs as a host service (`pix serve`, port 11435) and is
 per-machine, not shared across your laptop and your desktop, and not shared

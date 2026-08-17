@@ -137,7 +137,7 @@ serve: running (pid 60013)
   memory (:11435): up
 
 $ pix memory stats
-active 1  (durable 0, perishable 1)  facts 1  learnings 0  deleted 0
+active 1  (durable 1, perishable 0)  facts 1  learnings 0  deleted 0
 ```
 
 `pix doctor` and `pix status` read host state only. Neither can see inside a

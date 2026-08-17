@@ -137,7 +137,7 @@ func (echoMemory) Recall(r RecallReq) (RecallResp, error) {
 }
 func (echoMemory) Forget(r ForgetReq) (ForgetResp, error) { return ForgetResp{OK: r.ID != ""}, nil }
 func (echoMemory) Synthesize(r SynthesizeReq) (SynthesizeResp, error) {
-	return SynthesizeResp{Merged: 3, Expired: 7}, nil
+	return SynthesizeResp{Merged: 3}, nil
 }
 func (echoMemory) Promotable(r PromotableReq) (PromotableResp, error) {
 	return PromotableResp{Candidates: []Candidate{{ID: "c1", Frequency: r.MinFrequency}}}, nil
@@ -161,7 +161,7 @@ func TestRPCRoundTripMemory(t *testing.T) {
 	if got, err := c.Forget(ForgetReq{ID: "x"}); err != nil || !got.OK {
 		t.Fatalf("Forget round trip: got %+v err %v", got, err)
 	}
-	if got, err := c.Synthesize(SynthesizeReq{Threshold: 0.9}); err != nil || got.Merged != 3 || got.Expired != 7 {
+	if got, err := c.Synthesize(SynthesizeReq{Threshold: 0.9}); err != nil || got.Merged != 3 {
 		t.Fatalf("Synthesize round trip: got %+v err %v", got, err)
 	}
 	if got, err := c.Promotable(PromotableReq{MinFrequency: 5}); err != nil || len(got.Candidates) != 1 || got.Candidates[0].Frequency != 5 {

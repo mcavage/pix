@@ -532,14 +532,19 @@ test("memory_recall description tells the model when to use it and that it can r
 	assert.doesNotMatch(d, /the full store/i, "must not claim memory_recall sees the unbounded full store");
 });
 
-test("every memory tool description states direct-daemon access and never shelling out", async () => {
+test("every memory tool description states direct-daemon access, never shelling out, and no claim that anything expires", async () => {
 	const mod = await loadWithEnv({ MEMORY_URL: "http://127.0.0.1:1" });
 	const { tools } = capturePi(mod);
 	for (const name of ["memory_recall", "memory_stats"]) {
 		const d = tools.get(name).description;
 		assert.match(d, /never shell out to `pix` or `curl`/, `${name} description`);
-		assert.match(d, /durable memories have no automatic expiry/i, `${name} description`);
-		assert.match(d, /perishable and expire after 7 days/i, `${name} description`);
+		assert.match(d, /every memory is durable/i, `${name} description`);
+		assert.match(d, /no automatic expiry/i, `${name} description`);
+		// The watcher's perishable, 7-day-TTL "events" channel was removed
+		// host-side: nothing this tool surface can return expires any more, so
+		// the description must never claim otherwise.
+		assert.doesNotMatch(d, /expire/i, `${name} description must not claim anything expires`);
+		assert.doesNotMatch(d, /7 days/i, `${name} description must not reference the removed 7-day watcher-event TTL`);
 	}
 });
 

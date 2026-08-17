@@ -30,9 +30,9 @@ var _ plugin.MemoryStore = (*memoryStoreAdapter)(nil)
 
 func (a *memoryStoreAdapter) Remember(req plugin.RememberReq) (plugin.RememberResp, error) {
 	res, err := a.store.remember(rememberInput{
-		content: req.Content, kind: req.Kind, durability: req.Durability, source: req.Source,
-		project: req.Project, profile: req.Profile, hasProject: req.HasProject, ttlDays: req.TTLDays,
-		confidence: req.Confidence, reward: req.Reward, tags: req.Tags,
+		content: req.Content, kind: req.Kind, source: req.Source,
+		project: req.Project, profile: req.Profile, hasProject: req.HasProject,
+		confidence: req.Confidence, tags: req.Tags,
 		dedupe: req.Dedupe, hasDedupe: req.HasDedupe,
 	})
 	if err != nil {
@@ -69,8 +69,7 @@ func (a *memoryStoreAdapter) Forget(req plugin.ForgetReq) (plugin.ForgetResp, er
 func (a *memoryStoreAdapter) Synthesize(req plugin.SynthesizeReq) (plugin.SynthesizeResp, error) {
 	res := a.store.synthesize(req.Threshold)
 	merged, _ := res["merged"].(int)
-	expired, _ := res["expired"].(int64)
-	return plugin.SynthesizeResp{Merged: merged, Expired: expired}, nil
+	return plugin.SynthesizeResp{Merged: merged}, nil
 }
 
 func (a *memoryStoreAdapter) Promotable(req plugin.PromotableReq) (plugin.PromotableResp, error) {

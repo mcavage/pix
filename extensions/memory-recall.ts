@@ -212,9 +212,14 @@ export async function buildRecallBlock(
 // accurate picture of the capability instead of guessing: it reaches the host
 // daemon directly (no shelling out), auto-recall only injects a small filtered
 // subset each turn (this tool can return up to 100 rows, not the whole store),
-// durable memories never expire on their own, watcher-captured events are
-// perishable and expire after 7 days, and writes/deletes are human-driven
-// slash commands (`/remember`, `/forget`).
+// every memory is durable with no automatic expiry, and writes/deletes are
+// human-driven slash commands (`/remember`, `/forget`).
+//
+// The watcher used to also capture perishable, time-bound "events" that
+// expired after 7 days on their own; that channel was removed host-side (see
+// docs/memory.md), so nothing this tool surface can return today expires.
+// This description intentionally does not mention that legacy behavior: it
+// describes what memory does now, not what it used to do.
 //
 // IMPORTANT, this is a UX/safety posture, not a security boundary: the host
 // memory daemon is unauthenticated and reachable at host.docker.internal (see
@@ -225,7 +230,7 @@ export async function buildRecallBlock(
 const MEMORY_TOOL_SEMANTICS =
 	"Reaches the host memory daemon directly over host.docker.internal, never shell out to `pix` or `curl`. " +
 	"Only a small relevance-filtered subset of memory is silently injected into context each turn; this tool can return up to 100 rows visible to the active profile, not the whole store. " +
-	"Durable memories have no automatic expiry. Watcher-captured events are perishable and expire after 7 days. " +
+	"Every memory is durable, with no automatic expiry. " +
 	"This tool surface is read-only: it can inspect memory but cannot store or delete it. Writing (`/remember`) and deleting (`/forget`) are human-driven slash commands, not agent tools, " +
 	"that's a UX/safety design choice on this tool surface, not a security control.";
 

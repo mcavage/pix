@@ -12,7 +12,7 @@
 //
 // Env: MEMORY_PORT (11435), MEMORY_BIND (127.0.0.1), MEMORY_DB
 // (~/.local/share/pix/memory/memory.db), OLLAMA_HOST, MEMORY_EMBED_MODEL,
-// MEMORY_WATCHER_MODEL, MEMORY_SYNTH_MS.
+// MEMORY_WATCHER_MODEL.
 
 package main
 
@@ -180,54 +180,58 @@ func newMemStore(path string, embedder func(string) []float64) (*memStore, error
 	if _, err := db.Exec("PRAGMA user_version = 1"); err != nil {
 		return nil, err
 	}
-	if err := migrateLegacyWatcherPerishableTTL(db); err != nil {
+	if err := retireLegacyWatcherPerishableRows(db); err != nil {
 		return nil, err
 	}
 	return &memStore{db: db, embedder: embedder}, nil
 }
 
-// migrateLegacyWatcherPerishableTTL is an idempotent startup data migration (no
-// schema change): a db written by an older binary can hold watcher-captured
-// perishable rows with the former 21-day TTL. Shorten ONLY those (source
-// 'watcher', perishable, live, expiring after created_at+7d) to created_at+7d.
-// A user-created row, or one given a custom/shorter TTL, is left exactly as is.
-func migrateLegacyWatcherPerishableTTL(db *sql.DB) error {
-	rows, err := db.Query(
-		"SELECT id, created_at, expires_at FROM memories WHERE source = 'watcher' AND durability = 'perishable' AND deleted_at IS NULL AND expires_at IS NOT NULL",
-	)
+// retireLegacyWatcherPerishableRows is a one-time, idempotent startup state
+// retirement (no schema change, no periodic sweep): the watcher's perishable
+// event channel and the TTL-expiry sweep that used to garbage-collect it were
+// both deleted, so a db written by an older binary can be left holding live,
+// still-recallable perishable rows that were meant to eventually expire and
+// now never will (nothing sweeps them any more — without this, they would
+// become immortal instead of going away). It soft-deletes every remaining
+// live perishable row, once: idempotent because a row already soft-deleted
+// (deleted_at set) never matches the WHERE clause again, so every startup
+// after the first is a no-op SELECT.
+//
+// This is a SOFT delete (deleted_at, matching softDelete's own convention),
+// not a row purge, so it is reversible: clearing deleted_at for a specific id
+// directly in the db file restores that row exactly as recall() reads it.
+// Run before the store is handed out (no s.mu to take yet), operating on the
+// raw *sql.DB like the schema/profile migrations above it.
+func retireLegacyWatcherPerishableRows(db *sql.DB) error {
+	rows, err := db.Query("SELECT rowid FROM memories WHERE durability = 'perishable' AND deleted_at IS NULL")
 	if err != nil {
 		return err
 	}
-	type legacyRow struct{ id, createdAt, expiresAt string }
-	var candidates []legacyRow
+	var rowids []int64
 	for rows.Next() {
-		var r legacyRow
-		if err := rows.Scan(&r.id, &r.createdAt, &r.expiresAt); err != nil {
+		var rowid int64
+		if err := rows.Scan(&rowid); err != nil {
 			rows.Close()
 			return err
 		}
-		candidates = append(candidates, r)
+		rowids = append(rowids, rowid)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
 		return err
 	}
 	rows.Close()
-
-	for _, r := range candidates {
-		created, ok := parseTimeStrict(r.createdAt)
-		if !ok {
-			continue // unparseable created_at: leave the row alone rather than guess
-		}
-		expires, ok := parseTimeStrict(r.expiresAt)
-		if !ok {
-			continue
-		}
-		ttlCap := created.Add(7 * 24 * time.Hour)
-		if !expires.After(ttlCap) {
-			continue // already at or before the 7-day cap
-		}
-		if _, err := db.Exec("UPDATE memories SET expires_at = ? WHERE id = ?", ttlCap.UTC().Format(time.RFC3339Nano), r.id); err != nil {
+	if len(rowids) == 0 {
+		return nil
+	}
+	if _, err := db.Exec("UPDATE memories SET deleted_at = ? WHERE durability = 'perishable' AND deleted_at IS NULL", memNowIso()); err != nil {
+		return err
+	}
+	// Drop each retired row's FTS entry too, matching softDelete's own pairing:
+	// a soft-deleted row left in the index still answers keyword searches on an
+	// unfiltered scan, even though every read path here also joins deleted_at.
+	for _, rowid := range rowids {
+		if _, err := db.Exec("DELETE FROM memories_fts WHERE rowid = ?", rowid); err != nil {
 			return err
 		}
 	}
@@ -258,7 +262,7 @@ func memColumnExists(db *sql.DB, table, col string) (bool, error) {
 
 type memRow struct {
 	id, kind, content, durability string
-	confidence, reward            float64
+	confidence                    float64
 	frequency                     int
 	createdAt                     string
 	project                       sql.NullString
@@ -311,14 +315,13 @@ func (s *memStore) findSimilar(vec []float64, threshold float64, profile string)
 }
 
 type rememberInput struct {
-	content, kind, durability, source, project string
-	profile                                    string
-	hasProject                                 bool
-	ttlDays                                    int
-	confidence, reward                         float64
-	tags                                       []string
-	dedupe                                     float64
-	hasDedupe                                  bool
+	content, kind, source, project string
+	profile                        string
+	hasProject                     bool
+	confidence                     float64
+	tags                           []string
+	dedupe                         float64
+	hasDedupe                      bool
 }
 
 func (s *memStore) remember(in rememberInput) (jsonObj, error) {
@@ -335,7 +338,12 @@ func (s *memStore) remember(in rememberInput) (jsonObj, error) {
 	}
 
 	kind := orDefault(in.kind, "fact")
-	durability := orDefault(in.durability, "durable")
+	// durability is no longer caller-configurable: every row written by this
+	// binary is "durable" (the perishable/TTL behavior it used to gate was
+	// removed along with the watcher's event channel). The column itself stays
+	// in the schema, and legacy perishable rows already on disk are untouched,
+	// pending the schema work that retires it.
+	const durability = "durable"
 	confidence := in.confidence
 	if confidence == 0 {
 		confidence = 0.8
@@ -345,17 +353,7 @@ func (s *memStore) remember(in rememberInput) (jsonObj, error) {
 	if in.tags == nil {
 		tagsJSON = []byte("[]")
 	}
-	reward := math.Max(-1, math.Min(1, in.reward))
 	created := memNowIso()
-
-	var expiresAt any
-	if durability == "perishable" {
-		ttl := in.ttlDays
-		if ttl == 0 {
-			ttl = 14
-		}
-		expiresAt = time.Now().UTC().Add(time.Duration(ttl) * 24 * time.Hour).Format(time.RFC3339Nano)
-	}
 
 	var embJSON any
 	var vec []float64
@@ -381,10 +379,14 @@ func (s *memStore) remember(in rememberInput) (jsonObj, error) {
 	}
 	profile := memNormProfile(in.profile)
 	id := uuid.NewString()
+	// reward and expires_at are omitted here (not written at all): reward has no
+	// write-path input any more (the column defaults to 0, its schema default),
+	// and expiry was the perishable behavior removed above — every row written
+	// now lives until explicitly forgotten, so there is never a value to bind.
 	res, err := s.db.Exec(`INSERT INTO memories
-		(id, kind, content, content_hash, durability, confidence, reward, source, tags, project, created_at, expires_at, embedding, profile)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		id, kind, content, hash, durability, confidence, reward, source, string(tagsJSON), project, created, expiresAt, embJSON, profile)
+		(id, kind, content, content_hash, durability, confidence, source, tags, project, created_at, embedding, profile)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		id, kind, content, hash, durability, confidence, source, string(tagsJSON), project, created, embJSON, profile)
 	if err != nil {
 		return nil, err
 	}
@@ -415,8 +417,6 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 		charBudget = 1200
 	}
 	now := time.Now()
-
-	s.db.Exec("UPDATE memories SET deleted_at = ? WHERE expires_at IS NOT NULL AND expires_at < ? AND deleted_at IS NULL", memNowIso(), memNowIso())
 
 	// The literal query "*" is "list everything" (what `pix memory recall '*'` and
 	// a blank sandbox /recall send): relevance is pinned to 1 for every visible row
@@ -475,7 +475,7 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 	// Candidates are the visible set for the active profile: its own rows UNION the
 	// default bucket. An FTS-only hit on an invisible row is harmless — it lands in
 	// ftsScore but this query never scans the row, so it cannot become a candidate.
-	where := "SELECT id, kind, content, durability, confidence, frequency, reward, created_at, project, embedding FROM memories WHERE deleted_at IS NULL"
+	where := "SELECT id, kind, content, durability, confidence, frequency, created_at, project, embedding FROM memories WHERE deleted_at IS NULL"
 	args := []any{}
 	if kind != "" {
 		where += " AND kind = ?"
@@ -510,7 +510,7 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 	dimMismatch := 0
 	for rows.Next() {
 		var r memRow
-		if err := rows.Scan(&r.id, &r.kind, &r.content, &r.durability, &r.confidence, &r.frequency, &r.reward, &r.createdAt, &r.project, &r.embedding); err != nil {
+		if err := rows.Scan(&r.id, &r.kind, &r.content, &r.durability, &r.confidence, &r.frequency, &r.createdAt, &r.project, &r.embedding); err != nil {
 			continue
 		}
 		relevance := 1.0 // star: every visible row is equally "relevant"
@@ -549,7 +549,6 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 		ageDays := now.Sub(parseTime(r.createdAt)).Hours() / 24
 		recency := math.Pow(2, -ageDays/memRecencyHalflifeDays)
 		freqBoost := 1 + math.Log(float64(r.frequency))
-		rewardBoost := 1 + r.reward
 		projectFactor := 1.0
 		if project != "" {
 			if r.project.Valid && r.project.String == project {
@@ -558,7 +557,10 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 				projectFactor = memProjectOtherFactor
 			}
 		}
-		score := relevance * r.confidence * recency * freqBoost * rewardBoost * projectFactor
+		// reward no longer factors into score: it was only ever seeded from the
+		// watcher's removed valence signal, and the column stays inert (still
+		// written by remember, never read here) until the schema work retires it.
+		score := relevance * r.confidence * recency * freqBoost * projectFactor
 		cands = append(cands, cand{scoredHit{r.id, r.content, r.kind, r.durability, r.project, score, r.createdAt}, score})
 	}
 	if dimMismatch > 0 {
@@ -640,16 +642,18 @@ func (s *memStore) softDelete(id string, rowid int64, who string) {
 	}
 }
 
+// synthesize is the on-demand near-duplicate merge (JSON-RPC "synthesize"):
+// no longer run on a periodic ticker (removed background sweep), and no
+// longer sweeps TTL-expired rows (removed along with perishable/TTL
+// behavior; there is no more background deletion). The response used to also
+// report an "expired" count from that sweep; it had no caller left once the
+// sweep was deleted, so it was removed from the response shape rather than
+// kept around pinned at 0.
 func (s *memStore) synthesize(threshold float64) jsonObj {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if threshold == 0 {
 		threshold = 0.93
-	}
-	res, _ := s.db.Exec("UPDATE memories SET deleted_at = ? WHERE expires_at IS NOT NULL AND expires_at < ? AND deleted_at IS NULL", memNowIso(), memNowIso())
-	expired := int64(0)
-	if res != nil {
-		expired, _ = res.RowsAffected()
 	}
 	// Merge WITHIN each storage bucket only: a merge must never compare or collapse
 	// rows across profiles, and frequency must never move between buckets.
@@ -665,7 +669,7 @@ func (s *memStore) synthesize(threshold float64) jsonObj {
 	for _, bucket := range buckets {
 		merged += s.synthesizeBucket(bucket, threshold)
 	}
-	return jsonObj{"merged": merged, "expired": expired}
+	return jsonObj{"merged": merged}
 }
 
 // synthesizeBucket runs the pairwise near-duplicate merge over a SINGLE storage
@@ -777,7 +781,6 @@ func runMemory() {
 	addr := env("MEMORY_BIND", "127.0.0.1") + ":" + env("MEMORY_PORT", "11435")
 	mux := memoryMux()
 	log.Printf("memory service (json-rpc) on http://%s", addr)
-	// periodic synthesis is started inside buildMemStore via a goroutine
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatal(err)
 	}
@@ -805,20 +808,6 @@ func buildMemStore() (*memStore, bool, error) {
 	if err != nil {
 		return nil, false, fmt.Errorf("memory: %w", err)
 	}
-	// periodic self-synthesis
-	synthMs := 6 * 3600 * 1000
-	if v := strings.TrimSpace(os.Getenv("MEMORY_SYNTH_MS")); v != "" {
-		fmt.Sscanf(v, "%d", &synthMs)
-	}
-	go func() {
-		t := time.NewTicker(time.Duration(synthMs) * time.Millisecond)
-		for range t.C {
-			r := store.synthesize(0)
-			if m, _ := r["merged"].(int); m > 0 {
-				log.Printf("synthesis: merged %v, expired %v", r["merged"], r["expired"])
-			}
-		}
-	}()
 	return store, hasEmb, nil
 }
 
@@ -861,10 +850,14 @@ func memObserve(store *memStore, user, project string, hasProject bool, profile 
 }
 
 func rememberFromParams(p jsonObj) rememberInput {
+	// durability/ttlDays/reward are no longer read from an incoming request:
+	// durability/ttlDays configured the perishable/TTL behavior that was
+	// removed, and reward was never read back into recall's score even before
+	// this, so all three are silently ignored now (every row is durable, with
+	// the reward column defaulting to 0).
 	in := rememberInput{
-		content: getStr(p, "content"), kind: getStr(p, "kind"), durability: getStr(p, "durability"),
-		source: getStr(p, "source"), confidence: numOr(p["confidence"], 0), reward: numOr(p["reward"], 0),
-		ttlDays: clampInt(p["ttlDays"], 0, 0, 100000),
+		content: getStr(p, "content"), kind: getStr(p, "kind"),
+		source: getStr(p, "source"), confidence: numOr(p["confidence"], 0),
 	}
 	in.project, in.hasProject = projectFromParams(p)
 	in.profile = profileFromParams(p)
@@ -930,10 +923,10 @@ func memCapture(store *memStore, user, project string, hasProj bool, profile str
 		log.Printf("memory: dropping %d fact(s), user message was question-only, no assertions to extract", len(w.Facts))
 		w.Facts = nil
 	}
-	// Noise filter: facts and events are session narration about the user's
-	// activity ("user asked...", "user ran...") often enough that a conservative
-	// prefix match is worth the rare false drop. Corrections NEVER run through it:
-	// a legitimate correction can be phrased exactly like the noise patterns.
+	// Noise filter: facts are session narration about the user's activity ("user
+	// asked...", "user ran...") often enough that a conservative prefix match is
+	// worth the rare false drop. Corrections NEVER run through it: a legitimate
+	// correction can be phrased exactly like the noise patterns.
 	dropNoise := func(label string, in []string) []string {
 		out := make([]string, 0, len(in))
 		dropped := 0
@@ -950,27 +943,23 @@ func memCapture(store *memStore, user, project string, hasProj bool, profile str
 		return out
 	}
 	w.Facts = dropNoise("fact", w.Facts)
-	w.Events = dropNoise("event", w.Events)
 
-	rewardSeed := w.Valence * 0.3
-	rem := func(content, kind, durability string, ttl int, conf float64) {
-		store.remember(rememberInput{content: content, kind: kind, durability: durability, ttlDays: ttl,
-			confidence: conf, reward: rewardSeed, source: "watcher", project: project, hasProject: hasProj,
+	// reward is never seeded from the watcher any more (it used to be Valence *
+	// 0.3; the watcher no longer reports a valence at all), so every watcher
+	// capture stores the zero-value reward.
+	rem := func(content, kind string, conf float64) {
+		store.remember(rememberInput{content: content, kind: kind,
+			confidence: conf, source: "watcher", project: project, hasProject: hasProj,
 			profile: profile, dedupe: 0.9, hasDedupe: true})
 	}
 	for _, f := range w.Facts {
-		rem(f, "fact", "durable", 0, 0.65)
-	}
-	for _, e := range w.Events {
-		// 7-day TTL: watcher events are perishable session status, and a longer one
-		// let stale "currently doing X" rows get recalled after they went false.
-		rem(e, "fact", "perishable", 7, 0.6)
+		rem(f, "fact", 0.65)
 	}
 	for _, c := range w.Corrections {
-		rem(c, "learning", "durable", 0, 0.75)
+		rem(c, "learning", 0.75)
 	}
-	if len(w.Facts)+len(w.Events)+len(w.Corrections) > 0 {
-		log.Printf("captured %d fact(s), %d event(s), %d correction(s) (valence %v)", len(w.Facts), len(w.Events), len(w.Corrections), w.Valence)
+	if len(w.Facts)+len(w.Corrections) > 0 {
+		log.Printf("captured %d fact(s), %d correction(s)", len(w.Facts), len(w.Corrections))
 	} else {
 		log.Printf("memory: watcher ran but extracted 0 items (nothing it judged worth keeping, or an empty result)")
 	}

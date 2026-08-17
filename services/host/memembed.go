@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math"
 	"net"
 	"net/http"
 	"os"
@@ -288,34 +287,28 @@ func watcherCaptureAvailable() bool {
 
 type watchResult struct {
 	Facts       []string
-	Events      []string
 	Corrections []string
-	Valence     float64
 }
 
-const memWatcherSystem = `You read ONE message a user sent to their coding agent and extract only what is worth remembering for future sessions, plus the user's sentiment. You see ONLY the user's message, never the agent's reply, so everything must come from what the user themselves said.
+const memWatcherSystem = `You read ONE message a user sent to their coding agent and extract only what is worth remembering for future sessions. You see ONLY the user's message, never the agent's reply, so everything must come from what the user themselves said.
 
 Be very conservative. Most messages contain nothing worth saving. Saving noise is worse than saving nothing.
 
 Return JSON:
 - "facts": DURABLE things, true until the user changes their mind: preferences, identity, conventions, how they like to work, settled decisions. Each self-contained and still useful months from now.
-- "events": TIME-BOUND status that will go stale on its own: what they are doing right now, a current activity or transition ("migrating to X", "working on Y this week"), what is installed/pulled today, anything dated. Saved but short-lived.
 - "corrections": the user telling the agent to stop doing something or do it differently ("don't X", "always Y"). Phrase each as a durable rule.
-- "valence": -1 (frustrated) to 1 (pleased) reading the user's tone. 0 if neutral.
-
-The fact-vs-event test: if a statement could become false without the user changing their mind (a status, a current task, an installed thing, a date), it is an EVENT, not a fact. When a sentence mixes both, split it: keep the durable half as a fact, the perishable half as an event.
 
 Hard rules:
 - Only what the USER asserts. A QUESTION states nothing ("which branch do I use?" => all empty).
 - NEVER infer preferences, interests, or tool usage from a question. Asking ABOUT a capability is not evidence the user has it, wants it, or is using it. A question about memory itself, in particular, asserts nothing about the user, never record "user is interested in memory" or "user is using memory" from it. Examples that must produce all-empty output: "so are you using my memories?", "why do we think those are the right things to inject?", "can I see what you remember?", "is memory working right now?", "how does recall pick what to show me?".
-- NEVER record mood or feelings; that is what valence is for.
 - Acknowledgments ("thanks", "great", "cool") => all empty.
 - Code, file names, and one-off task details are not worth saving.
+- Time-bound status (what the user is doing right now, a current activity or transition, what's installed/pulled today) is not worth saving either: it goes stale on its own and this watcher does not track it.
 - When in doubt, leave it out. Empty arrays are the common, correct answer.
-- "facts", "events", and "corrections" are always JSON arrays of strings, never objects, even when empty. An empty list is [], not {}.
+- "facts" and "corrections" are always JSON arrays of strings, never objects, even when empty. An empty list is [], not {}.
 
 Output only the JSON, compact, no prose, no code fence. Exact shape:
-{"facts":[],"events":[],"corrections":[],"valence":0}`
+{"facts":[],"corrections":[]}`
 
 // fencedCodeBlockRE matches a ``` ... ``` fenced code block (any language tag,
 // any content, including newlines) so questionOnlyUserMessage can ignore code
@@ -412,7 +405,7 @@ func questionOnlyUserMessage(user string) bool {
 }
 
 // watcherNoisePrefixes are conservative, observed session-narration openers the
-// watcher model sometimes emits in place of a real fact/event. Prefix-only (not
+// watcher model sometimes emits in place of a real fact. Prefix-only (not
 // substring) so a legitimate fact mentioning "the user" mid-sentence survives.
 //
 // It deliberately excludes what the user "expects": "the user expects tests on
@@ -427,8 +420,8 @@ var watcherNoisePrefixes = []string{
 }
 
 // watcherNoise reports whether content opens with one of watcherNoisePrefixes
-// (case-insensitive). Apply it to the fact and event channels ONLY, never to
-// corrections: a real correction can be phrased exactly like these openers.
+// (case-insensitive). Apply it to the fact channel ONLY, never to corrections:
+// a real correction can be phrased exactly like these openers.
 func watcherNoise(content string) bool {
 	lower := strings.ToLower(strings.TrimSpace(content))
 	for _, p := range watcherNoisePrefixes {
@@ -476,7 +469,7 @@ func extractJSONObject(s string) string {
 	return ""
 }
 
-// flexibleStringList decodes a watcher list field (facts/events/corrections),
+// flexibleStringList decodes a watcher list field (facts/corrections),
 // which should be a JSON array of strings — but some models (observed: qwen) emit
 // an empty object {} for an empty list. Accepts a string array, null/absent, or
 // an empty object; any other shape is an error so the caller can fall back.
@@ -516,7 +509,7 @@ func parseWatchJSON(s string) (*watchResult, error) {
 		// must be rejected explicitly rather than read as an all-empty capture.
 		return nil, fmt.Errorf("top-level value is null, not a JSON object")
 	}
-	for _, key := range []string{"facts", "events", "corrections", "valence"} {
+	for _, key := range []string{"facts", "corrections"} {
 		if _, ok := top[key]; !ok {
 			return nil, fmt.Errorf("missing required key %q", key)
 		}
@@ -525,22 +518,11 @@ func parseWatchJSON(s string) (*watchResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("facts: %w", err)
 	}
-	events, err := flexibleStringList(top["events"])
-	if err != nil {
-		return nil, fmt.Errorf("events: %w", err)
-	}
 	corrections, err := flexibleStringList(top["corrections"])
 	if err != nil {
 		return nil, fmt.Errorf("corrections: %w", err)
 	}
-	var valence float64
-	if err := json.Unmarshal(top["valence"], &valence); err != nil {
-		return nil, fmt.Errorf("valence: %w", err)
-	}
-	return &watchResult{
-		Facts: facts, Events: events, Corrections: corrections,
-		Valence: math.Max(-1, math.Min(1, valence)),
-	}, nil
+	return &watchResult{Facts: facts, Corrections: corrections}, nil
 }
 
 func parseWatchContent(content string) (*watchResult, error) {
@@ -630,8 +612,5 @@ func memWatch(user string) *watchResult {
 		}
 		return out
 	}
-	return &watchResult{
-		Facts: clean(p.Facts), Events: clean(p.Events), Corrections: clean(p.Corrections),
-		Valence: p.Valence,
-	}
+	return &watchResult{Facts: clean(p.Facts), Corrections: clean(p.Corrections)}
 }

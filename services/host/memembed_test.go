@@ -150,7 +150,7 @@ func TestWatcherCaptureAvailableRecoversAfterBackoff(t *testing.T) {
 		case "/api/chat":
 			w.Header().Set("content-type", "application/json")
 			w.WriteHeader(200)
-			w.Write([]byte(`{"message":{"content":"{\"facts\":[],\"events\":[],\"corrections\":[],\"valence\":0}"}}`))
+			w.Write([]byte(`{"message":{"content":"{\"facts\":[],\"corrections\":[]}"}}`))
 		default: // /api/show
 			w.WriteHeader(200)
 		}
@@ -373,41 +373,40 @@ func TestFlexibleStringList(t *testing.T) {
 
 func TestParseWatchJSON(t *testing.T) {
 	cases := []struct {
-		name       string
-		in         string
-		wantFacts  []string
-		wantErr    bool
-		wantValNum float64
+		name      string
+		in        string
+		wantFacts []string
+		wantErr   bool
 	}{
 		{
 			name:      "proper arrays",
-			in:        `{"facts":["uses pnpm"],"events":[],"corrections":[],"valence":0.5}`,
-			wantFacts: []string{"uses pnpm"}, wantValNum: 0.5,
+			in:        `{"facts":["uses pnpm"],"corrections":[]}`,
+			wantFacts: []string{"uses pnpm"},
 		},
 		{
 			// observed qwen output: fenced JSON with facts as {} instead of [].
 			name:      "fenced JSON with empty object facts, salvaged via extractJSONObject",
-			in:        "here you go:\n```json\n{\"facts\":{},\"events\":[],\"corrections\":[],\"valence\":0}\n```",
-			wantFacts: []string{}, wantValNum: 0,
+			in:        "here you go:\n```json\n{\"facts\":{},\"corrections\":[]}\n```",
+			wantFacts: []string{},
 		},
 		{
 			name:      "empty object facts",
-			in:        `{"facts":{},"events":[],"corrections":[],"valence":0}`,
-			wantFacts: []string{}, wantValNum: 0,
+			in:        `{"facts":{},"corrections":[]}`,
+			wantFacts: []string{},
 		},
 		{
 			name:      "null facts",
-			in:        `{"facts":null,"events":[],"corrections":[],"valence":0}`,
-			wantFacts: []string{}, wantValNum: 0,
+			in:        `{"facts":null,"corrections":[]}`,
+			wantFacts: []string{},
 		},
 		{
 			name:    "non-empty object facts rejected",
-			in:      `{"facts":{"a":"b"},"events":[],"corrections":[],"valence":0}`,
+			in:      `{"facts":{"a":"b"},"corrections":[]}`,
 			wantErr: true,
 		},
 		{
 			name:    "wrong scalar facts rejected",
-			in:      `{"facts":"nope","events":[],"corrections":[],"valence":0}`,
+			in:      `{"facts":"nope","corrections":[]}`,
 			wantErr: true,
 		},
 		{
@@ -427,32 +426,22 @@ func TestParseWatchJSON(t *testing.T) {
 		},
 		{
 			name:    "missing facts key rejected",
-			in:      `{"events":[],"corrections":[],"valence":0}`,
-			wantErr: true,
-		},
-		{
-			name:    "missing events key rejected",
-			in:      `{"facts":[],"corrections":[],"valence":0}`,
+			in:      `{"corrections":[]}`,
 			wantErr: true,
 		},
 		{
 			name:    "missing corrections key rejected",
-			in:      `{"facts":[],"events":[],"valence":0}`,
-			wantErr: true,
-		},
-		{
-			name:    "missing valence key rejected",
-			in:      `{"facts":[],"events":[],"corrections":[]}`,
+			in:      `{"facts":[]}`,
 			wantErr: true,
 		},
 		{
 			name:    "top-level array rejected (wrong top-level type)",
-			in:      `["facts","events"]`,
+			in:      `["facts","corrections"]`,
 			wantErr: true,
 		},
 		{
 			name:    "top-level array containing otherwise-valid object is not salvaged",
-			in:      `[{"facts":[],"events":[],"corrections":[],"valence":0}]`,
+			in:      `[{"facts":[],"corrections":[]}]`,
 			wantErr: true,
 		},
 		{
@@ -490,9 +479,6 @@ func TestParseWatchJSON(t *testing.T) {
 				if got.Facts[i] != c.wantFacts[i] {
 					t.Fatalf("parseWatchContent(%q).Facts = %v, want %v", c.in, got.Facts, c.wantFacts)
 				}
-			}
-			if got.Valence != c.wantValNum {
-				t.Fatalf("parseWatchContent(%q).Valence = %v, want %v", c.in, got.Valence, c.wantValNum)
 			}
 		})
 	}
@@ -681,7 +667,7 @@ func watchServer(t *testing.T, content string) *memStore {
 // the observed incident: a question about memory itself must never land as a
 // stored fact, even when the watcher model wrongly extracted one.
 func TestMemCaptureDropsFactsForQuestionOnlyMessage(t *testing.T) {
-	st := watchServer(t, `{"facts":["user is using memory"],"events":[],"corrections":[],"valence":0}`)
+	st := watchServer(t, `{"facts":["user is using memory"],"corrections":[]}`)
 	memCaptureSem <- struct{}{}
 	memCapture(st, "so are you using my memories?", "", false, "default")
 
@@ -694,17 +680,14 @@ func TestMemCaptureDropsFactsForQuestionOnlyMessage(t *testing.T) {
 	}
 }
 
-// TestMemCaptureAppliesNoiseFilterToFactsAndEventsOnlyAndSevenDayEventTTL
-// proves the watcherNoise filter runs on facts and events but is NEVER
-// applied to corrections (a correction may legitimately be phrased exactly
-// like a noise prefix, e.g. "the user requested the agent stop doing X"),
-// that legitimate items in each channel still survive, and that a captured
-// event gets the 7-day TTL (not the old 21).
-func TestMemCaptureAppliesNoiseFilterToFactsAndEventsOnlyAndSevenDayEventTTL(t *testing.T) {
+// TestMemCaptureAppliesNoiseFilterToFactsOnly proves the watcherNoise filter
+// runs on facts but is NEVER applied to corrections (a correction may
+// legitimately be phrased exactly like a noise prefix, e.g. "the user
+// requested the agent stop doing X"), and that legitimate facts and
+// corrections still survive.
+func TestMemCaptureAppliesNoiseFilterToFactsOnly(t *testing.T) {
 	content := `{"facts":["user asked about the deploy process","user requested guidance","the user prefers tabs over spaces"],` +
-		`"events":["user ran the test suite twice","migrating the staging DB this week"],` +
-		`"corrections":["the user requested this be ignored","always confirm before deleting a branch"],` +
-		`"valence":0}`
+		`"corrections":["the user requested this be ignored","always confirm before deleting a branch"]}`
 	st := watchServer(t, content)
 	memCaptureSem <- struct{}{}
 	memCapture(st, "an assertion-bearing message, not a question.", "", false, "default")
@@ -720,7 +703,6 @@ func TestMemCaptureAppliesNoiseFilterToFactsAndEventsOnlyAndSevenDayEventTTL(t *
 	for _, noisy := range []string{
 		"user asked about the deploy process",
 		"user requested guidance",
-		"user ran the test suite twice",
 	} {
 		if seen[noisy] {
 			t.Errorf("noise item %q should have been dropped before storage, got %+v", noisy, seen)
@@ -728,23 +710,13 @@ func TestMemCaptureAppliesNoiseFilterToFactsAndEventsOnlyAndSevenDayEventTTL(t *
 	}
 	for _, legit := range []string{
 		"the user prefers tabs over spaces",
-		"migrating the staging DB this week",
 		"always confirm before deleting a branch",
 		// A correction is NEVER run through the noise filter, even though this
-		// phrasing would trip the "requested" prefix on the fact/event channels.
+		// phrasing would trip the "requested" prefix on the fact channel.
 		"the user requested this be ignored",
 	} {
 		if !seen[legit] {
 			t.Errorf("legitimate item %q should have survived the noise filter, got %+v", legit, seen)
 		}
-	}
-
-	var expiresAt string
-	if err := st.db.QueryRow("SELECT expires_at FROM memories WHERE content = ?", "migrating the staging DB this week").Scan(&expiresAt); err != nil {
-		t.Fatal(err)
-	}
-	days := time.Until(parseTime(expiresAt)).Hours() / 24
-	if days < 6.9 || days > 7.1 {
-		t.Fatalf("expected a ~7 day TTL on a captured event, got %.2f days (expiresAt=%s)", days, expiresAt)
 	}
 }

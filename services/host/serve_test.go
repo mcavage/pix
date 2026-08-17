@@ -172,7 +172,7 @@ func (stubStore) Forget(r plugin.ForgetReq) (plugin.ForgetResp, error) {
 	return plugin.ForgetResp{OK: r.ID != ""}, nil
 }
 func (stubStore) Synthesize(plugin.SynthesizeReq) (plugin.SynthesizeResp, error) {
-	return plugin.SynthesizeResp{Merged: 1, Expired: 2}, nil
+	return plugin.SynthesizeResp{Merged: 1}, nil
 }
 func (stubStore) Promotable(plugin.PromotableReq) (plugin.PromotableResp, error) {
 	return plugin.PromotableResp{}, nil

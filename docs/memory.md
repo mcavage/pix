@@ -40,13 +40,15 @@ similarity with FTS5 keyword match, then adjusts for:
   forever.
 - **Project match.** Memories tagged with the current project are boosted;
   memories from other projects are down-weighted, not hidden.
-- **A perishable relevance floor.** A **perishable** (watcher-captured event)
-  hit scoring below 0.30 is dropped from this silent injection entirely, it's
-  the least trustworthy long-term signal, so it doesn't get to compete for
-  space in every relevant turn. **Durable** hits are never filtered by score
-  here. This floor applies only to the silent auto-injection path: an explicit
-  `/recall`, or the agent calling the `memory_recall` tool, skips this score
-  filter entirely.
+- **A perishable relevance floor.** A **perishable** hit scoring below 0.30
+  is dropped from this silent injection entirely, so it doesn't get to
+  compete for space in every relevant turn. **Durable** hits are never
+  filtered by score here. In practice this floor has nothing left to filter:
+  every row pix writes is durable now, and § Legacy data below retires any
+  perishable row a store had on disk from before that was true. It stays as
+  a defensive filter, not a currently-exercised one. This floor applies only
+  to the silent auto-injection path: an explicit `/recall`, or the agent
+  calling the `memory_recall` tool, skips this score filter entirely.
 
 The injected block itself says as much: it tells the model this is a
 relevance-filtered subset from the host daemon, not the full store, and to use
@@ -64,13 +66,28 @@ the smaller default (6 hits) tuned for relevance search.
 ## How capture works
 
 After a turn, the `memory-capture` extension sends the exchange to the watcher
-model, which extracts three things: durable **facts** (preferences, decisions,
-project conventions, no automatic expiry), perishable **events**
-(time-bound status: what you're doing right now, what's installed today -
-these expire after **7 days**), and **corrections** (the agent got something
-wrong and you told it so; stored durably). Everything is stored with a
-durability class and a confidence score, de-duplicated by content hash. You
-never call it directly.
+model, which extracts two things: durable **facts** (preferences, decisions,
+project conventions, no automatic expiry) and **corrections** (the agent got
+something wrong and you told it so; stored durably). Everything lands durable,
+with no expiry and no reward, and is stored with a confidence score,
+de-duplicated by content hash. You never call it directly.
+
+## Legacy data
+
+An older pix watcher also extracted perishable, time-bound **events** ("doing
+X right now") that expired after 7 days, and seeded a small reward from a
+sentiment score. Both are gone: the watcher only emits facts and corrections
+now, and nothing it writes ever expires.
+
+That leaves one loose end for a store that predates the change: a live
+perishable row that was waiting to expire, with nothing left to ever expire
+it. On the first startup after upgrading, pix retires every such row once
+(soft-deletes it, the same operation `/forget` performs), so it does not sit
+forever as a memory nobody meant to keep. This is a **soft** delete: the row's
+data is still in the SQLite file with `deleted_at` set, not purged, so it can
+be restored by clearing that column directly in the database file if you ever
+need one back. The `reward` column itself is untouched by this: it stays in
+the schema, always 0, ignored by recall's scoring.
 
 Two precision guards run before anything is stored:
 
@@ -82,9 +99,9 @@ Two precision guards run before anything is stored:
   question.
 - **A conservative noise filter** drops watcher output that's session
   narration rather than a durable thing worth recalling ("user asked about
-  X", "user ran the tests"), applied to **facts and events only**, matched
-  by prefix so it never eats legitimate content that happens to mention "the
-  user" mid-sentence. **Corrections are never filtered**: a correction can
+  X", "user ran the tests"), applied to **facts only**, matched by prefix so
+  it never eats legitimate content that happens to mention "the user"
+  mid-sentence. **Corrections are never filtered**: a correction can
   legitimately be phrased exactly like a noise prefix ("the user requested
   the agent stop doing X" is a real, capturable rule, not narration).
 

@@ -8,6 +8,26 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## Unreleased
 
+### Removed
+
+- **Memory drops the watcher's perishable/TTL production and the reward it
+  used to seed.** `watchResult` now only ever carries `Facts`/`Corrections`;
+  the watcher's time-bound `events` channel and its sentiment/valence score
+  are gone from the prompt, parser, and capture path, so nothing it extracts
+  ever expires. `remember()` always writes `durable` with no expiry;
+  `durability`/`ttlDays` are gone from the write-side request shape
+  (`rememberInput`, `plugin.RememberReq`) and a caller still sending either is
+  silently ignored. `reward` is gone from that same write path too, not just
+  from recall's score: the column stays in the schema, inert, defaulting to
+  0, so a legacy reader of it keeps working. A store an older binary wrote
+  can still hold LIVE perishable rows nothing will ever sweep again; pix now
+  retires them once, idempotently, on the first startup after upgrading (a
+  soft delete, reversible by clearing `deleted_at` on the row directly). The
+  now-callerless `expired` count in the `synthesize` JSON-RPC response, and a
+  dead `expiresAt` placeholder variable in `remember()`, were deleted rather
+  than kept around at a permanent zero. See docs/memory.md's Legacy data
+  section.
+
 ### Fixed
 
 - **Subagents no longer die for running a long command.** The inactivity
