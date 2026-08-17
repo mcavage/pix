@@ -773,3 +773,104 @@ double-start risk). `knowledge init` / `knowledge use` save `knowledge_bundles`
 (daemon-affecting) and now run the same propagation as
 `config set knowledge_bundles` — the README/man no longer tell users to
 restart manually on those paths.
+
+### U3-lifecycle — version reconciliation moved off the read path
+
+A later addition (not in the original design above) let the read-side
+`EnsureUp` — the helper `run` and `memory` call on EVERY invocation — detect a
+running daemon reporting a different `launcher.Version` via its `identity` RPC
+(`staleServeVersion`) and restart it in place (`restartStaleServe`). The bug:
+that restart's "success" was only ever the MECHANICAL signal that TCP came back
+up or `launchctl kickstart` exited 0 — never a re-check that the daemon behind
+the port actually came up as the NEW version. A restart that could never
+converge (stale `PATH`, a symlink pinned at a deleted Cellar directory, a
+managed unit whose plist still points at the old binary, …) printed `updated
+pix services X → Y` and then repeated the exact same non-convergent restart on
+the NEXT invocation — `pix memory recall '*'` never returning, once per call,
+forever.
+
+**Fix.** `staleServeVersion` / `restartStaleServe` are deleted outright, not
+retired. `EnsureUp` (`service/start.go`) is READ-ONLY again: it starts a down
+daemon (unchanged capability 1 behavior) and never mutates an already-running
+one. `pix memory …` also gets a dedicated, SHORTER cold-start budget
+(`EnsureMemoryTimeout`, 3s vs the general `EnsureTimeout`'s 15s) since it is a
+foreground command a human is waiting on; a slow cold start degrades to the
+existing `rpc.ErrServiceDown` message instead of a long silent wait.
+
+Version reconciliation is NOT gone — it moved to the one place a user
+intentionally asks pix to bring the daemon current: `pix serve start` /
+`install` (`service/install.go`). `reportManagedServeHealth`'s existing bounded
+port-liveness poll now ALSO takes an `rpc.IdentityProber` and, once TCP is up
+on a given poll, makes exactly ONE identity probe per required port
+(`verifyServeIdentity`) comparing the reported name/version/readiness to
+`rpc.MemoryName` / `launcher.Version` / `Ready`. Success
+(`managed service is up (…)`) is printed ONLY when identity confirms a
+matching, READY unit.
+
+**Round 2 (architect findings).** The first cut of `verifyServeIdentity` made
+its one probe AFTER the TCP wait already succeeded, and treated any mismatch
+as an immediate, final failure — no retry, straight to the warning. That is
+wrong on its own terms: a `launchctl kickstart -k` mid-restart can leave the
+OUTGOING process still answering, stale, for a moment while the incoming one
+is binding the port (an old-then-new drain), and a freshly-started binary can
+answer with the CORRECT version before it has finished warming up
+(version-correct-but-not-ready). Both looked identical to a permanently
+nonconverging restart on the very first sample, so both false-warned instead
+of waiting out their own health-wait budget.
+
+Identity verification is now FOLDED INTO the same bounded poll as the TCP
+wait, not a one-shot check bolted on after it: a version mismatch, a probe
+error (e.g. an unreadable payload mid-restart), or a not-ready unit all mean
+KEEP POLLING, exactly like a port that has not opened yet. Only the DEADLINE
+may turn a mismatch into a warning, and that warning shows the LAST OBSERVED
+actual/expected state (`reportManagedServeHealth` tracks it across polls) —
+never a snap judgment off the first sample. A version-correct-but-not-ready
+timeout is worded with the unit's own `DegradedReason`, never as "did not
+update" (the version IS right; only readiness is not). The removed nil-prober
+seam went with it: `verifyServeIdentity` no longer treats `probe == nil` as
+"skip the check" — that was a production-reachable way to silently disable
+the one thing this file exists to do, even though no production caller ever
+exercised it. The one production call (`RunInstall`) always passes
+`rpc.IdentityProbe`; every test now injects a fake, matching probe (a test
+double) instead of nil (`TestNilProberSeamRemovedFromInstallGo` is the
+grep-based sentinel against it coming back).
+
+The SAME identity gap — a listening, even a Ready-answering port is not
+proof the CURRENT binary is behind it — is now also detected, READ-ONLY, on
+the status/doctor axis: `health.MemoryUnitProbe` compares the unit's reported
+version to `launcher.Version` (overridable via `WantVersion`, empty defaulting
+to the running binary's own stamp) and reports a verified `StatusAbsent` gap
+worded `degraded: running version X, host expects Y` with the EXACT fix
+`pix serve start` (`health.ServeVersionMismatchFix`) — the one command that
+both starts a down unit and reconciles a stale one, verifying convergence
+before it claims success. This is DETECTION ONLY: `MemoryUnitProbe.Check`
+never restarts or otherwise mutates anything, matching the read-side
+EnsureUp's own no-mutation rule above — it just tells `pix status`/`doctor`
+the truth so the human can run the fix themselves.
+
+A related but distinct honesty fix: `pix memory …`'s `EnsureMemoryTimeout`
+(3s) staying tight is fine, but the message printed when the RPC that follows
+still fails (`rpc.ErrServiceDown`, in `cmd/pix/memory_cmd.go`) used to flatly
+say "start it with `pix serve`" — which is wrong, not merely unhelpful, when
+the real cause is that `EnsureUp`, one line above, already tried exactly that
+and the daemon's cold start (sqlite init under an advisory flock) simply
+outran the 3s budget. Telling the user to start ANOTHER daemon in that case is
+active misdirection. The message now names both honest possibilities: "if it
+just started, wait a moment and retry — otherwise start it with `pix
+serve`". `TestEnsureMemoryTimeoutIsPinnedAt3s` pins the 3s value itself.
+
+See `service/serve_upgrade_test.go` (the read-side regression: 100 `EnsureUp`
+calls against an already-up port cause zero restarts, zero identity RPC
+traffic, and near-zero wall time; a grep-based sentinel keeps
+`staleServeVersion`/`restartStaleServe` out of `start.go` for good);
+`service/serve_install_test.go` (the reconciliation seam, folded into the
+health-wait: an old-then-new drain converges to exactly one verified success,
+an old-forever probe warns with actual/expected + the recovery command and
+never says "updated" across repeated calls without looping, a
+version-correct-but-not-ready timeout warns with the unit's own
+`DegradedReason` rather than "did not update", and a perpetual probe error
+keeps polling then warns with the LAST OBSERVED error rather than a generic
+port-timeout message); `health/probes_test.go` (the read-only status/doctor
+detection: a stale-version unit reads `StatusAbsent` with the exact
+`pix serve start` fix, never a mutation); and `cmd/pix/memory_cmd_test.go`
+(the honest ErrServiceDown wording, end to end through `cli.RunRoot`).

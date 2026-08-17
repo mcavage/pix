@@ -23,6 +23,7 @@ import (
 	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/launcher"
+	"pix/host/rpc"
 )
 
 // LaunchdLabel is the LaunchAgent label (and plist basename). Exported rather
@@ -279,27 +280,143 @@ func preInstallGuard(mode func() serveMode, stop func(io.Writer) (bool, error), 
 	return nil
 }
 
-// verifyManagedInstallHealth is the post-install verification step (round 2, H8):
-// a swallowed config.Load() failure used to let install report success for a unit
-// that could never start. Success words are earned by a probe, or not at all.
-func verifyManagedInstallHealth(cfg *config.Config, cfgErr error, st serveStarter, out io.Writer) bool {
+// verifyManagedInstallHealth is the post-install verification step (round 2, H8;
+// identity check added U3-lifecycle): a swallowed config.Load() failure used to
+// let install report success for a unit that could never start. Success words
+// are earned by a probe, or not at all. probe is rpc.IdentityProbe in
+// production, ALWAYS — there is no nil-skips-the-check seam here (architect
+// round 2): a nil probe was a production-reachable way to silently disable the
+// one thing this file exists to do, so it is gone; tests inject a fake probe
+// (a test double) instead.
+func verifyManagedInstallHealth(cfg *config.Config, cfgErr error, st serveStarter, probe rpc.IdentityProber, out io.Writer) bool {
 	if cfgErr != nil {
 		fmt.Fprintf(out, "warning: installed managed service, but could not verify it started: config.toml failed to load (%v). It will not start until this is fixed — edit config.toml, then check with `pix serve status`.\n", cfgErr)
 		return false
 	}
 	return reportManagedServeHealth(st.dial, requiredServePorts(st, cfg, nil),
-		time.Now, time.Sleep, 10*time.Second, out)
+		time.Now, time.Sleep, 10*time.Second, probe, out)
+}
+
+// serveIdentityNames maps a servePortSpec's name to the identity name that
+// service's `identity` RPC method answers with (rpc.identity.go). Only
+// services with a known identity are version-checked here; anything else stays
+// TCP-liveness-only, unchanged from before U3-lifecycle.
+var serveIdentityNames = map[string]string{"memory": rpc.MemoryName}
+
+// identityMismatch names ONE required service that is up on TCP but whose
+// application identity does not (yet) prove it is the CURRENT, READY binary —
+// the exact gap a listening port cannot close on its own. Exactly one of
+// {err set, notReady, a version mismatch} applies. String() is the message a
+// nonconverging repair must show: actual vs expected version (or the
+// unit's own not-ready reason), plus the exact recovery command, never the
+// word "updated" (U3-lifecycle).
+type identityMismatch struct {
+	service, want, got string
+	err                error // set when the identity call itself failed (down/unreachable/malformed name)
+	// notReady is the version-correct-but-not-ready case (architect round 2):
+	// the binary IS current, but the unit itself says it is not up yet (still
+	// warming up, or genuinely degraded) — a different gap from a stale
+	// version, and worded as such rather than folded into "did not update".
+	notReady       bool
+	degradedReason string
+}
+
+func (m identityMismatch) String() string {
+	switch {
+	case m.err != nil:
+		return fmt.Sprintf("%s answered its port but not its identity check (%v) — expected version %s. Run: pix serve stop && pix serve install",
+			m.service, m.err, m.want)
+	case m.notReady:
+		detail := "not ready"
+		if m.degradedReason != "" {
+			detail = "not ready: " + m.degradedReason
+		}
+		return fmt.Sprintf("%s is up and reports the current version (%s) but is %s. Run: pix serve stop && pix serve install",
+			m.service, m.want, detail)
+	default:
+		return fmt.Sprintf("%s is up but reports version %s, not %s — the running binary did not update. Run: pix serve stop && pix serve install",
+			m.service, m.got, m.want)
+	}
+}
+
+// verifyServeIdentity is the CONVERGENT reconciliation seam (U3-lifecycle): it
+// makes exactly ONE identity probe per required port PER CALL (no retry loop
+// of its own — that budget belongs to the caller's health-wait, which calls
+// this once per poll) and reports every service whose reported name, version,
+// or readiness does not (yet) prove it is the current, up binary. A listening
+// port is not evidence that the RIGHT binary is behind it, and a matching
+// version is not evidence it has finished starting; this is the check that
+// closes both gaps, called ONLY from the explicit start path
+// (verifyManagedInstallHealth / `pix serve start`⁄`install`), never from the
+// read-side EnsureUp every `pix run`/`pix memory …` call makes.
+//
+// probe must never be nil (architect round 2): there is no skip-the-check
+// seam here on purpose — a nil probe is a caller bug, not a supported way to
+// waive identity verification, so it panics loudly at the call site instead
+// of silently reporting success. Every production call passes
+// rpc.IdentityProbe; a test that wants TCP-liveness-only coverage injects a
+// fake probe answering the current name/version/ready, a test double, never
+// nil.
+func verifyServeIdentity(probe rpc.IdentityProber, ports []servePortSpec, wantVersion string) []identityMismatch {
+	var mismatches []identityMismatch
+	for _, p := range ports {
+		want, ok := serveIdentityNames[p.name]
+		if !ok {
+			continue
+		}
+		id, err := probe(p.port)
+		switch {
+		case err != nil:
+			mismatches = append(mismatches, identityMismatch{service: p.name, want: wantVersion, err: err})
+		case id.Name != want:
+			mismatches = append(mismatches, identityMismatch{service: p.name, want: wantVersion,
+				err: fmt.Errorf("port answers as %q, not %q", id.Name, want)})
+		case id.Version != wantVersion:
+			got := id.Version
+			if got == "" {
+				got = "unknown (pre-version daemon)"
+			}
+			mismatches = append(mismatches, identityMismatch{service: p.name, want: wantVersion, got: got})
+		case !id.Ready:
+			// Version-correct-but-not-ready (architect round 2): the binary IS
+			// current, so this is never worded as "did not update".
+			mismatches = append(mismatches, identityMismatch{service: p.name, want: wantVersion,
+				notReady: true, degradedReason: id.DegradedReason})
+		}
+	}
+	return mismatches
 }
 
 // reportManagedServeHealth verifies (bounded) that the freshly-installed managed
-// service actually came up — its required ports answer — and reports HONESTLY
-// when it did not (H5: "installed" must not paper over a crash-loop).
+// service actually came up — its required ports answer, AND (architect round
+// 2) its application identity confirms the CURRENT, READY binary is behind
+// them — and reports HONESTLY when it did not (H5: "installed" must not paper
+// over a crash-loop).
+//
+// Identity verification is FOLDED INTO the same bounded poll as the TCP wait,
+// not a one-shot check bolted on after it: a mismatch, a probe error, or a
+// not-ready unit all mean KEEP POLLING, exactly like a port that has not
+// opened yet — because both an old-then-new drain (the outgoing process keeps
+// answering, stale, for a moment while the incoming one binds the port) and a
+// brand-new binary that has not finished warming up look identical to a
+// nonconverging failure on the FIRST poll. Only the DEADLINE may turn a
+// mismatch into a warning, and that warning must show the LAST OBSERVED
+// actual/expected state, not force a snap judgment on the very first sample —
+// which is what let a launchd `kickstart -k` mid-restart print a false
+// "did not update" warning while the new process was still binding the port.
+// Success ("managed service is up") is earned only once BOTH Ready and a
+// matching name/version are true; a mechanically-successful restart that
+// still answers as the OLD version, or answers current-but-not-ready forever,
+// is a warning naming what was last seen + the exact recovery command, never
+// success and never the word "updated".
 func reportManagedServeHealth(dial func(int) bool, ports []servePortSpec,
-	now func() time.Time, sleep func(time.Duration), timeout time.Duration, out io.Writer) bool {
+	now func() time.Time, sleep func(time.Duration), timeout time.Duration,
+	probe rpc.IdentityProber, out io.Writer) bool {
 	if len(ports) == 0 {
 		return true // nothing enabled to probe
 	}
 	deadline := now().Add(timeout)
+	var lastMismatches []identityMismatch // last OBSERVED identity gap, for an honest deadline warning
 	for {
 		up := true
 		for _, p := range ports {
@@ -309,12 +426,22 @@ func reportManagedServeHealth(dial func(int) bool, ports []servePortSpec,
 			}
 		}
 		if up {
-			fmt.Fprintf(out, "managed service is up (%s)\n", describeServePorts(ports))
-			return true
+			if mismatches := verifyServeIdentity(probe, ports, launcher.Version); len(mismatches) > 0 {
+				lastMismatches = mismatches // keep polling; see the doc comment above
+			} else {
+				fmt.Fprintf(out, "managed service is up (%s)\n", describeServePorts(ports))
+				return true
+			}
 		}
 		if !now().Before(deadline) {
-			fmt.Fprintf(out, "warning: the managed service was installed but its services (%s) did not answer within %s — it may be failing to start; check the logs above and `pix serve status`.\n",
-				describeServePorts(ports), timeout)
+			if len(lastMismatches) > 0 {
+				for _, m := range lastMismatches {
+					fmt.Fprintf(out, "warning: %s\n", m)
+				}
+			} else {
+				fmt.Fprintf(out, "warning: the managed service was installed but its services (%s) did not answer within %s — it may be failing to start; check the logs above and `pix serve status`.\n",
+					describeServePorts(ports), timeout)
+			}
 			return false
 		}
 		sleep(200 * time.Millisecond)
@@ -351,9 +478,11 @@ func RunInstall(out, errW io.Writer, argv []string) error {
 		if err := platformServeInstall(out); err != nil {
 			return err
 		}
-		// Bounded post-install verification; the warning carries the next step.
+		// Bounded post-install verification, now including application identity
+		// (U3-lifecycle): the warning carries the next step, success is earned by
+		// a verified probe.
 		cfg, cfgErr := config.Load()
-		verifyManagedInstallHealth(cfg, cfgErr, DefaultStarter(errW), out)
+		verifyManagedInstallHealth(cfg, cfgErr, DefaultStarter(errW), rpc.IdentityProbe, out)
 		return nil // an unhealthy start is a warning, not a failed install
 	})
 }
