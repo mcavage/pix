@@ -154,20 +154,33 @@ the full loop.
 ### When semantic recall is silently keyword-only
 
 If recall has dropped to keyword-only even though Ollama is installed, the embed
-model was almost certainly unavailable when the daemon started (or an embed call
-failed once). The embedder **latches off on the first failure** and, unlike the
-capture watcher, which live re-probes every 30s and self-recovers, it does **not**
-retry, so semantic recall stays degraded for the life of the daemon process. Pull
-the embed model, then restart the daemon so it re-probes at startup:
+model was unavailable at the moment of a real recall/remember call (there is no
+startup probe: the store never blocks on Ollama just to construct itself).
+The embedder **latches off on that failure** and, like the capture watcher,
+re-probes automatically (once per `embedProbeInterval`, 60s) on the next
+real call, so semantic recall recovers on its own — **no daemon restart
+required**. `pix-memory identity`/`health` report the LIVE state (never a
+boot-time snapshot), so a degraded reading always reflects what's true right
+now.
+
+`health`'s `vector`/`capture` fields are **tri-state**: `null` means "not yet
+exercised" — a fresh daemon that has never actually attempted a real
+embed/capture call, which is the normal state right after `pix serve` starts,
+since construction makes no boot-time probe. It only becomes `true`/`false`
+once a real attempt has happened; a brand-new daemon reporting `true` before
+that would be a guess dressed up as a fact. `identity`'s `degraded_reason`
+follows the same rule: it is only set on a CONFIRMED `false`, never on
+`null`, so a daemon that simply hasn't been asked to embed anything yet is
+not reported as degraded.
+
+To restore a confirmed-degraded embedder immediately instead of waiting for
+the next call:
 
 ```bash
 ollama pull nomic-embed-text          # or whatever MEMORY_EMBED_MODEL names
-pix serve stop && pix serve  # restart so the embedder re-probes
 ```
 
-A daemon-affecting `pix config set` (e.g. `memory_embed_model`) already
-restarts a managed or lazy daemon for you; only a foreground `pix serve` must
-be restarted by hand.
+The next recall or remember re-probes and, on success, semantic recall is back.
 
 ## Backing it up, and putting it back
 

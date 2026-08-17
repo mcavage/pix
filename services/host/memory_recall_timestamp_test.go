@@ -53,7 +53,7 @@ func TestMemoryMux_RecallHitsIncludeCreatedAt(t *testing.T) {
 	if _, err := store.remember(rememberInput{content: "prod incidents page #ops-oncall"}); err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(newMemoryMux(store, false))
+	srv := httptest.NewServer(newMemoryMux(store))
 	defer srv.Close()
 
 	body := `{"jsonrpc":"2.0","id":1,"method":"recall","params":{"query":"incidents page"}}`

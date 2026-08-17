@@ -181,7 +181,7 @@ func (stubStore) Stats(string) (plugin.Stats, error) {
 	return plugin.Stats{Active: 3, Durable: 2, Perishable: 1}, nil
 }
 func (stubStore) Health() (plugin.Health, error) {
-	return plugin.Health{OK: true, Vector: true, Capture: true, WatcherModel: "stub-model"}, nil
+	return plugin.Health{OK: true, Vector: boolPtr(true), Capture: boolPtr(true), WatcherModel: "stub-model"}, nil
 }
 
 func rpcCall(t *testing.T, srv *httptest.Server, method string) map[string]any {

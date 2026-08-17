@@ -15,6 +15,7 @@ import (
 // atomics, not per-test fixtures).
 func resetWatcherState() {
 	watcherUnavailable.Store(false)
+	watcherExercised.Store(false)
 	setWatcherReason("")
 	watcherDegradedUntil.Store(0)
 	watcherLastProbe.Store(0)
@@ -180,6 +181,34 @@ func TestWatcherCaptureAvailableRecoversAfterBackoff(t *testing.T) {
 	}
 }
 
+// TestWatcherHealthState_UnknownDegradedHealthyRecovery is watcher health's
+// twin of TestEmbedHealthState_UnknownDegradedHealthyRecovery: a fresh
+// (unexercised) watcher must report unknown (nil), a real capture failure
+// must flip it to degraded (false), and a real recovery must flip it to
+// healthy (true).
+func TestWatcherHealthState_UnknownDegradedHealthyRecovery(t *testing.T) {
+	resetWatcherState()
+	t.Cleanup(resetWatcherState)
+
+	if got, reason := watcherHealthState(); got != nil || reason != "" {
+		t.Fatalf("fresh/unexercised watcher: watcherHealthState() = (%v, %q), want (nil, \"\")", got, reason)
+	}
+
+	watcherDegrade("simulated failure") // what a real memWatch() failure calls
+	got, reason := watcherHealthState()
+	if got == nil || *got {
+		t.Fatalf("after a real failure: watcherHealthState() = (%v, %q), want a non-nil false (degraded)", got, reason)
+	}
+	if reason == "" {
+		t.Error("degraded watcherHealthState() should carry a non-empty reason")
+	}
+
+	watcherHealthy() // what a real memWatch() success calls
+	if got, _ := watcherHealthState(); got == nil || !*got {
+		t.Fatalf("after a real recovery: watcherHealthState() = %v, want a non-nil true (healthy)", got)
+	}
+}
+
 // TestObserveReturnsDegradedReason proves the reason travels all the way to
 // the RPC client: observe() must return {accepted:false, reason:...} with the
 // LIVE reason (e.g. the timeout text), not just the generic
@@ -191,7 +220,7 @@ func TestObserveReturnsDegradedReason(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(newMemoryMux(store, false))
+	srv := httptest.NewServer(newMemoryMux(store))
 	defer srv.Close()
 
 	watcherUnavailable.Store(true)
@@ -225,8 +254,8 @@ func TestObserveReturnsDegradedReason(t *testing.T) {
 // wedged Ollama on /api/embed must return nil promptly (recall already falls
 // back to keyword search on a nil vector) rather than blocking a turn.
 func TestMemEmbedTimeout(t *testing.T) {
-	embedDisabled.Store(false)
-	t.Cleanup(func() { embedDisabled.Store(false) })
+	resetEmbedState()
+	t.Cleanup(resetEmbedState)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(300 * time.Millisecond) // >> the test's MEMORY_EMBED_TIMEOUT_MS
 		w.WriteHeader(200)
@@ -241,6 +270,32 @@ func TestMemEmbedTimeout(t *testing.T) {
 	}
 	if elapsed := time.Since(before); elapsed > 2*time.Second {
 		t.Fatalf("memEmbed should have returned promptly on timeout, took %v", elapsed)
+	}
+}
+
+// TestEmbedHealthState_UnknownDegradedHealthyRecovery is the direct,
+// network-free proof of the tri-state: a fresh (unexercised) embedder must
+// report unknown (nil), a real failure must flip it to degraded (false), and
+// a real success must flip it to healthy (true) — it must never read
+// "healthy" before something has actually confirmed that.
+func TestEmbedHealthState_UnknownDegradedHealthyRecovery(t *testing.T) {
+	resetEmbedState()
+	t.Cleanup(resetEmbedState)
+
+	if got := embedHealthState(); got != nil {
+		t.Fatalf("fresh/unexercised embedder: embedHealthState() = %v, want nil (unknown)", *got)
+	}
+
+	embedUnavailable("simulated failure") // what a real memEmbed failure calls
+	if got := embedHealthState(); got == nil || *got {
+		t.Fatalf("after a real failure: embedHealthState() = %v, want a non-nil false (degraded)", got)
+	}
+
+	// A real success clears the latch (mirrors memEmbed's own success path).
+	embedExercised.Store(true)
+	embedDisabled.Store(false)
+	if got := embedHealthState(); got == nil || !*got {
+		t.Fatalf("after a real success: embedHealthState() = %v, want a non-nil true (healthy)", got)
 	}
 }
 

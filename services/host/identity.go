@@ -55,9 +55,15 @@ func servicePort(envVar string, def int) int {
 
 // memoryIdentity answers "who holds :11435". ready is the service's own
 // judgement: the store is open and can serve recall. A degraded but serving
-// daemon (no embedder, so recall is keyword-only) is still ready, with the reason
-// stated — reporting not-ready for a working service trains users to ignore it.
-func memoryIdentity(hasEmbeddings bool) serviceIdentity {
+// daemon (Ollama's embed model unreachable, so recall is keyword-only) is
+// still ready, with the reason stated — reporting not-ready for a working
+// service trains users to ignore it. vector is the CURRENT tri-state embed
+// health (memembed.go's embedHealthState, read live by the caller's Health()
+// call): nil means "never exercised yet", not a value probed or cached at
+// startup, and — critically — NOT a confirmed failure, so it must not report
+// a degraded reason either. Only a confirmed false (a real /api/embed
+// failure) does.
+func memoryIdentity(vector *bool) serviceIdentity {
 	id := serviceIdentity{
 		Name:    identityMemory,
 		Version: version,
@@ -65,8 +71,8 @@ func memoryIdentity(hasEmbeddings bool) serviceIdentity {
 		DBPath:  config.MemoryDBPath(),
 		Ready:   true,
 	}
-	if !hasEmbeddings {
-		id.DegradedReason = "no embedder: recall is keyword-only"
+	if vector != nil && !*vector {
+		id.DegradedReason = "embed model unreachable: recall is keyword-only"
 	}
 	return id
 }

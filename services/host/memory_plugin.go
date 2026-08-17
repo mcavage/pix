@@ -15,15 +15,12 @@ import (
 )
 
 // memoryStoreAdapter wraps the real *memStore and satisfies plugin.MemoryStore.
-// hasVector is the `hasEmb` value health() reports, so the typed surface and the
-// JSON-RPC surface agree.
 type memoryStoreAdapter struct {
-	store     *memStore
-	hasVector bool
+	store *memStore
 }
 
-func newMemoryStoreAdapter(store *memStore, hasVector bool) *memoryStoreAdapter {
-	return &memoryStoreAdapter{store: store, hasVector: hasVector}
+func newMemoryStoreAdapter(store *memStore) *memoryStoreAdapter {
+	return &memoryStoreAdapter{store: store}
 }
 
 var _ plugin.MemoryStore = (*memoryStoreAdapter)(nil)
@@ -89,10 +86,16 @@ func (a *memoryStoreAdapter) Stats(profile string) (plugin.Stats, error) {
 	}, nil
 }
 
+// Health reports the CURRENT tri-state embed/capture health, both read live:
+// Vector comes from embedHealthState (memembed.go), Capture from
+// watcherHealthState (memory.go). Both are nil ("unknown") until a real
+// attempt has actually happened — never a boot-time snapshot, and never a
+// probe THIS call makes itself, though watcherHealthState's underlying check
+// can trigger its own throttled live re-probe (see watcherCaptureAvailable).
 func (a *memoryStoreAdapter) Health() (plugin.Health, error) {
-	capture, reason := memWatcherStatus()
+	capture, reason := watcherHealthState()
 	return plugin.Health{
-		OK: true, Vector: a.hasVector, Capture: capture,
+		OK: true, Vector: embedHealthState(), Capture: capture,
 		WatcherModel: memWatcherModel(), CaptureReason: reason,
 	}, nil
 }
@@ -105,10 +108,10 @@ func servePluginMemory() {
 	// Held for the process lifetime; fails fast if another holder owns the db.
 	release := lockMemoryStoreOrFatal(nil)
 	defer release()
-	store, hasEmb, err := buildMemStore()
+	store, err := buildMemStore()
 	if err != nil {
 		log.Fatalf("%v", err)
 	}
-	adapter := newMemoryStoreAdapter(store, hasEmb)
+	adapter := newMemoryStoreAdapter(store)
 	plugin.Serve(map[string]goplugin.Plugin{"memory": &plugin.MemoryPlugin{Impl: adapter}})
 }

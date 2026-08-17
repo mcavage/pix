@@ -25,7 +25,7 @@ func TestBuildStoresReturnErrorNotFatal(t *testing.T) {
 
 	t.Run("memory", func(t *testing.T) {
 		t.Setenv("MEMORY_DB", bad)
-		store, _, err := buildMemStore()
+		store, err := buildMemStore()
 		if err == nil {
 			t.Fatalf("buildMemStore(%q) = nil error, want a returned error (must not fatal)", bad)
 		}

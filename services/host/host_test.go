@@ -258,6 +258,11 @@ CREATE VIRTUAL TABLE memories_fts USING fts5(content);`
 	}
 }
 
+// boolPtr is the plumbing helper for plugin.Health's tri-state Vector/Capture
+// fields (nil = unknown, see embedHealthState/watcherHealthState) in tests
+// that need to assert a definite true/false, not the zero value.
+func boolPtr(b bool) *bool { return &b }
+
 // fakeKeywordEmbedder returns a one-hot vector indexed by a string's FIRST
 // token, so two strings that share a first token are cosine-identical (1.0)
 // while keeping distinct content hashes. Deterministic; no Ollama needed. Used

@@ -10,6 +10,28 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Removed
 
+- **Memory's boot-time `hasEmb`/`hasVector` snapshot is gone.** `buildMemStore`
+  used to synchronously probe Ollama (`memEmbedderAvailable`, a real
+  `/api/embed` round-trip) before the store could even be constructed, so a
+  slow or unreachable Ollama delayed the memory listener's startup. The store
+  now always attaches the live, self-retrying `memEmbed` as its embedder —
+  construction never calls Ollama — and `identity`/`health` read the embedder's
+  own live, now tri-state `embedHealthState` instead of a value captured once
+  at boot, so a degraded reading is always current (see "Added" below for the
+  tri-state itself). `hasEmb`/`hasVector` are deleted from `buildMemStore`,
+  `newMemoryMux`, `memoryStoreAdapter`, and every call site; `memoryIdentity`
+  now takes the live value straight from a `Health()` call. The boot-time
+  `go memWatcherProbe()` call is gone the same way: `watcherUnavailable` now
+  simply defaults to "available" and self-corrects on the first real capture
+  attempt, matching the embedder's posture, with no new capture modes
+  introduced. `memWatcherWarm()` (force the watcher model resident at boot) is
+  also deleted, for the same startup-latency reason — but it is a deliberate
+  simplification, not a dead idea: an opt-in capture mode still wants to avoid
+  a cold-model-load penalty on its first real capture, and the honest place
+  for that is lazy, behind whatever actually activates capture (a listener
+  starting, the mode flipping on), not unconditionally at process boot.
+  Tracked for a later unit; not implemented here.
+
 - **Memory drops the watcher's perishable/TTL production and the reward it
   used to seed.** `watchResult` now only ever carries `Facts`/`Corrections`;
   the watcher's time-bound `events` channel and its sentiment/valence score
@@ -52,6 +74,17 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`recall()` no longer writes `access_count`/`last_accessed` at all, star or
+  scored.** Listing the store (`pix memory recall '*'`, a blank sandbox
+  `/recall`) used to bump both columns on every visible row exactly like a
+  real relevance lookup, so merely browsing memory perturbed its own usage
+  signal; a first pass fixed that for `*` only, by adding one batched
+  `UPDATE ... WHERE id IN (...)` for a genuinely scored recall. That batched
+  write is now deleted too: nothing anywhere reads either column back (they
+  never fed scoring, same shape as the already-inert `reward` column), so the
+  write bought nothing but churn. `bump()` (the reaffirm/dedupe path) drops
+  its own `last_accessed` write for the same reason. Both columns stay in the
+  schema, reserved/inert, for additive/legacy compatibility.
 - **Subagents no longer die for running a long command.** The inactivity
   watchdog killed a child that emitted nothing for 5 minutes. That is a sound
   liveness proxy while the MODEL is working and an unsound one while a TOOL is:
@@ -76,6 +109,22 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Memory `health`/`identity` now report tri-state embed/watcher health,
+  never a false "healthy".** `embedHealthState`/`watcherHealthState` return
+  `nil` ("unknown") until the first real `/api/embed`/`/api/chat` attempt has
+  actually happened, tracked by new `embedExercised`/`watcherExercised`
+  latches alongside the existing `embedDisabled`/`watcherUnavailable` ones —
+  the boot-time-probe removal above means a fresh daemon's embedder/watcher
+  really is unconfirmed, and reporting "healthy" for a service that has never
+  been exercised would be a lie the very next request could contradict. Wire
+  shape: `plugin.Health.Vector`/`.Capture` are now `*bool` (JSON
+  `null`/`true`/`false`); `identity`'s `degraded_reason` only fires on a
+  CONFIRMED `false`, never on unknown. No new network calls: construction
+  still makes zero, and the only I/O involved is the pre-existing throttled
+  watcher re-probe (`watcherCaptureAvailable`), now called out explicitly in
+  its doc comment as a side effect a caller of `health`/`identity` should know
+  about. New tests cover the full unknown → degraded → healthy recovery cycle
+  for both.
 - **Self-development UAT for `pix run --dev`.** Fresh dev sandboxes receive a unique, session-scoped host MCP with a closed tool set for committed scenario validation, candidate builds, disposable `pix-uat-*` sandboxes, bounded artifacts, and browser/OAuth checks through a dedicated Chrome profile. The runner owns typed leases, crash cleanup, concurrency limits, and per-step logs without exposing a host shell or changing normal pix configuration. `pix uat status`, `pix uat browser bootstrap`, and `uat/scenarios/smoke.yaml` provide the bootstrap path; the first real host smoke run passed end to end.
 - **Optional document-write capability.** `docs-write` defaults to `none`, allowing private packs to attach a separate narrowly scoped writer while the existing `gworkspace` capability remains read-only.
 - **Supervision-tree observability, end to end.** `pix-host serve` now publishes

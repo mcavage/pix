@@ -49,6 +49,12 @@ const (
 	memProjectOtherFactor  = 0.5
 )
 
+// access_count/last_accessed (below) are RESERVED/INERT: nothing writes or
+// reads either any more (recall used to bump both on every hit; deleted, see
+// recall's comment, since no reader ever consumed them). Left in the schema,
+// not dropped, for additive/legacy compatibility — an older binary's row (or
+// a future reader) still finds the columns present, just permanently 0/NULL
+// from any binary built after this change. Same posture as `reward` below.
 const memSchema = `
 CREATE TABLE IF NOT EXISTS memories (
   rowid INTEGER PRIMARY KEY, id TEXT UNIQUE NOT NULL, kind TEXT NOT NULL, content TEXT NOT NULL,
@@ -269,9 +275,14 @@ type memRow struct {
 	embedding                     sql.NullString
 }
 
+// bump reaffirms a row on a reaffirm/dedupe hit: bump its frequency (fed into
+// recall's freqBoost) and confidence. It intentionally does NOT touch
+// last_accessed: that column has no reader (see recall's comment) and
+// reaffirm/dedupe is a WRITE-time event, unrelated to what last_accessed would
+// even mean (a READ/access timestamp) if something ever did read it.
 func (s *memStore) bump(id string, confidence float64) {
-	s.db.Exec("UPDATE memories SET frequency = frequency + 1, confidence = ?, last_accessed = ? WHERE id = ?",
-		math.Min(1, confidence+0.05), memNowIso(), id)
+	s.db.Exec("UPDATE memories SET frequency = frequency + 1, confidence = ? WHERE id = ?",
+		math.Min(1, confidence+0.05), id)
 }
 
 func (s *memStore) reaffirm(hash, profile string) string {
@@ -584,10 +595,13 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 		out = append(out, c.hit)
 		used += len(c.hit.content)
 	}
-	ts := memNowIso()
-	for _, h := range out {
-		s.db.Exec("UPDATE memories SET access_count = access_count + 1, last_accessed = ? WHERE id = ?", ts, h.id)
-	}
+	// recall performs NO access_count/last_accessed writes, star or scored: no
+	// reader anywhere consults either column (they never fed scoring — see the
+	// dead `reward` note above for the same shape of leftover), so a write here
+	// bought nothing but WAL churn on every read. The columns stay in the schema
+	// as RESERVED/INERT for additive compatibility (an older binary's row, or a
+	// future reader, still finds them present, just permanently 0/NULL from any
+	// binary built after this change).
 	return out, nil
 }
 
@@ -739,19 +753,19 @@ func (s *memStore) stats(profile string) jsonObj {
 // memoryMux is the standalone entry (runMemory): it builds the store and fatals
 // on failure.
 func memoryMux() http.Handler {
-	store, hasEmb, err := buildMemStore()
+	store, err := buildMemStore()
 	if err != nil {
 		log.Fatalf("%v", err)
 	}
-	return newMemoryMux(store, hasEmb)
+	return newMemoryMux(store)
 }
 
 // newMemoryMux serves :11435 over an already-constructed IN-PROCESS store: it is
 // memoryStoreMux (serve_plugin.go) over the same typed adapter the go-plugin
 // unit serves. There is ONE JSON-RPC surface, and both the bare daemon and the
 // supervised unit answer through it, so the two cannot drift.
-func newMemoryMux(store *memStore, hasEmb bool) http.Handler {
-	adapter := newMemoryStoreAdapter(store, hasEmb)
+func newMemoryMux(store *memStore) http.Handler {
+	adapter := newMemoryStoreAdapter(store)
 	return memoryStoreMux(func(fn func(plugin.MemoryStore) error) error { return fn(adapter) })
 }
 
@@ -773,25 +787,21 @@ func runMemory() {
 // log.Fatalf-ing: called after a plugin subprocess has launched, a bare os.Exit
 // would skip supervisor cleanup and orphan it. The caller routes the error
 // through its cleanup-aware fatal; standalone callers may still fatal on it.
-func buildMemStore() (*memStore, bool, error) {
+//
+// The embedder is always the live, self-retrying memEmbed: there is no
+// synchronous probe of Ollama here, so store construction (and therefore
+// listener/watcher startup) never waits on a network round-trip. memEmbed
+// itself latches semantic recall off on a real failure and re-probes on its
+// own schedule (embedProbeInterval), so a recovered Ollama restores it with no
+// daemon restart — see embedDisabled in memembed.go, which Health()/identity
+// read live for the truth, instead of a boot-time snapshot.
+func buildMemStore() (*memStore, error) {
 	dbPath := config.MemoryDBPath()
-	hasEmb := memEmbedderAvailable()
-	var embedder func(string) []float64
-	if hasEmb {
-		embedder = memEmbed
-	}
-	// Probe the capture-side watcher model so a missing/unpulled model is loud at
-	// startup (and reflected in `observe`/`health`) instead of silently dropping
-	// every captured fact. Async: don't block store init on an Ollama round-trip.
-	go memWatcherProbe()
-	// Warm the watcher model into Ollama's memory so the first real capture doesn't
-	// eat the cold-load latency (background, best-effort).
-	go memWatcherWarm()
-	store, err := newMemStore(dbPath, embedder)
+	store, err := newMemStore(dbPath, memEmbed)
 	if err != nil {
-		return nil, false, fmt.Errorf("memory: %w", err)
+		return nil, fmt.Errorf("memory: %w", err)
 	}
-	return store, hasEmb, nil
+	return store, nil
 }
 
 // --- helpers ---------------------------------------------------------------
@@ -799,12 +809,30 @@ func buildMemStore() (*memStore, bool, error) {
 // memWatcherStatus reports whether capture is live and, when not, why.
 // watcherCaptureAvailable re-probes (throttled) so a live recovery after
 // `ollama pull` shows up without a daemon restart, and `pix doctor` reads the
-// truth.
+// truth. Deliberately optimistic (see watcherCaptureAvailable): this is the
+// ADMISSION check memObserve gates on, so a never-exercised watcher still
+// gets to try its first real capture. For a HEALTH READING that must not lie
+// about a fresh, unconfirmed watcher, use watcherHealthState instead.
 func memWatcherStatus() (capture bool, reason string) {
 	if watcherCaptureAvailable() {
 		return true, ""
 	}
 	return false, getWatcherReason()
+}
+
+// watcherHealthState is memWatcherStatus's tri-state twin for `health`/
+// `identity`: nil ("unknown") until watcherExercised flips true on the first
+// real memWatch() attempt, so a store that has never actually captured
+// anything reports "we don't know", never "healthy". Once exercised it
+// reflects the SAME live watcherCaptureAvailable() check memWatcherStatus
+// uses — including that check's own throttled live re-probe side effect
+// (see watcherCaptureAvailable's doc comment).
+func watcherHealthState() (state *bool, reason string) {
+	capture, reason := memWatcherStatus()
+	if !watcherExercised.Load() {
+		return nil, ""
+	}
+	return &capture, reason
 }
 
 // memObserve is the ONE capture-admission path BOTH front ends use (the JSON-RPC

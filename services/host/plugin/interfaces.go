@@ -121,10 +121,16 @@ type Stats struct {
 }
 
 // Health mirrors the health method ({ok, vector, capture, watcherModel}).
+// Vector/Capture are tri-state: nil means "not yet exercised" (no real
+// embed/watcher attempt has happened since the process started), so a
+// pointer is used rather than a bool that could only ever say true/false and
+// would have to pick one of them to mean "don't actually know yet" — the
+// false-healthy gap this type closes. See embedHealthState/watcherHealthState
+// in the host's memembed.go/memory.go.
 type Health struct {
 	OK            bool
-	Vector        bool
-	Capture       bool
+	Vector        *bool
+	Capture       *bool
 	WatcherModel  string
 	CaptureReason string // explains a false Capture (JSON-RPC `captureReason`)
 }

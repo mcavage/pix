@@ -71,15 +71,39 @@ var modelProbeClient = &http.Client{Timeout: 10 * time.Second}
 
 var embedDisabled atomic.Bool
 
+// embedExercised is set true the moment a REAL /api/embed attempt (success or
+// failure) has actually happened. Health reporting (embedHealthState) must
+// never call the embedder "healthy" before this: buildMemStore attaches
+// memEmbed with no boot-time probe, so a fresh store has made zero network
+// calls and its true state is simply not known yet, not good. embedDisabled
+// alone can't tell unknown from healthy — both read as "false" — which is
+// exactly the false-healthy gap this flag closes.
+var embedExercised atomic.Bool
+
 // embedUnavailable latches semantic recall off and returns the nil vector
 // memEmbed answers with. It logs only on the FIRST latch (a wedged Ollama cannot
 // flood the log) and names the retry interval, so the degradation reads as
 // temporary.
 func embedUnavailable(why string) []float64 {
+	embedExercised.Store(true)
 	if !embedDisabled.Swap(true) {
 		log.Printf("memory embed: semantic recall DISABLED, %s; will retry automatically every %.0fs", why, embedProbeInterval.Seconds())
 	}
 	return nil
+}
+
+// embedHealthState reports the tri-state EMBED health `health`/`identity`
+// surface: nil ("unknown") until embedExercised flips true on the first real
+// attempt, then the SAME live embedDisabled latch this file has always
+// tracked. A pointer, not a bool, so nil is representable on the wire as
+// JSON null rather than a value that could be mistaken for "confirmed good"
+// or "confirmed bad".
+func embedHealthState() *bool {
+	if !embedExercised.Load() {
+		return nil
+	}
+	healthy := !embedDisabled.Load()
+	return &healthy
 }
 
 func memEmbed(text string) []float64 {
@@ -110,7 +134,9 @@ func memEmbed(text string) []float64 {
 	if res.StatusCode != 200 {
 		return embedUnavailable(fmt.Sprintf("embed HTTP %d", res.StatusCode))
 	}
-	// Success: if the flag was set (recovery path), announce the restoration.
+	// Success: mark exercised (a real call just completed) and, if the flag was
+	// set (recovery path), announce the restoration.
+	embedExercised.Store(true)
 	if embedDisabled.Swap(false) {
 		log.Printf("memory embed: embed model available again, semantic recall RE-ENABLED")
 	}
@@ -126,8 +152,6 @@ func memEmbed(text string) []float64 {
 	return parsed.Embeddings[0]
 }
 
-func memEmbedderAvailable() bool { return memEmbed("probe") != nil }
-
 func memWatcherModel() string {
 	if v := os.Getenv("MEMORY_WATCHER_MODEL"); v != "" {
 		return v
@@ -139,31 +163,15 @@ func memWatcherModel() string {
 	return "qwen3.5:9b"
 }
 
-// memWatcherWarm forces the watcher model resident in Ollama at startup so the
-// FIRST real capture doesn't pay the cold-load latency that caused watcher
-// timeouts. Best-effort and background; warming is priming, not a readiness
-// verdict, so it never touches the capture flags. No-op if the model isn't
-// pulled.
-func memWatcherWarm() {
-	m := memWatcherModel()
-	if !memOllamaHasModel(m) {
-		return
-	}
-	body, _ := json.Marshal(map[string]any{
-		"model": m, "stream": false,
-		"keep_alive": "10m", // stay resident so the first real capture isn't a cold reload
-		"messages":   []map[string]any{{"role": "user", "content": "ok"}},
-		"options":    map[string]any{"num_predict": 1},
-	})
-	client := &http.Client{Timeout: 5 * time.Minute} // generous: a cold load can be slow
-	res, err := client.Post(ollamaHost()+"/api/chat", "application/json", bytes.NewReader(body))
-	if err != nil {
-		return
-	}
-	io.Copy(io.Discard, io.LimitReader(res.Body, 1<<20))
-	res.Body.Close()
-	log.Printf("memory watcher: warmed model %q", m)
-}
+// memWatcherWarm (the boot-time "force the watcher model resident" call) was
+// deleted along with the boot-time probe (see watcherCaptureAvailable's doc
+// comment): warming at startup made every listener wait on Ollama again,
+// the exact cost this unit removed. That is a deliberate simplification, not
+// a verdict that priming is unwanted forever — an opt-in capture mode still
+// wants to avoid paying a cold-model-load penalty on its FIRST real capture.
+// The honest place for that is lazy: warm once whatever actually activates
+// capture (the listener starting, an opt-in mode flipping on) fires, not
+// unconditionally at process boot. Tracked for U7; not implemented here.
 
 // watcherUnavailable is set true once a capture attempt fails because the watcher
 // model isn't reachable/pulled, so `observe` tells the caller the truth instead
@@ -178,6 +186,13 @@ var watcherReason atomic.Pointer[string]
 // opens after a real memWatch() failure (timeout/transport error/non-200).
 var watcherDegradedUntil atomic.Int64
 
+// watcherExercised is embedExercised's twin for capture: set true the moment a
+// real memWatch() attempt (success or failure) has happened, so health
+// reporting (watcherHealthState) can tell "never actually tried" apart from
+// "tried and it's fine" — watcherUnavailable defaults to false either way, so
+// on its own it cannot distinguish unknown from healthy.
+var watcherExercised atomic.Bool
+
 func setWatcherReason(s string) { watcherReason.Store(&s) }
 
 // watcherDegrade is the ONE way capture goes off: record why, open the backoff
@@ -185,6 +200,7 @@ func setWatcherReason(s string) { watcherReason.Store(&s) }
 // /api/show probe, which succeeds while inference is wedged), and log once so a
 // dead capture half stays diagnosable. Recall works throughout.
 func watcherDegrade(reason string) {
+	watcherExercised.Store(true)
 	watcherUnavailable.Store(true)
 	setWatcherReason(reason)
 	watcherDegradedUntil.Store(time.Now().Add(watcherBackoff).UnixNano())
@@ -192,8 +208,12 @@ func watcherDegrade(reason string) {
 }
 
 // watcherHealthy is its inverse: capture is on, with no reason and no backoff
-// left over from an earlier failure.
+// left over from an earlier failure. Also reached on the FIRST ever successful
+// memWatch() call (no prior watcherDegrade), so it marks exercised too —
+// otherwise a store whose very first capture attempt succeeds would still
+// report "unknown" forever.
 func watcherHealthy() {
+	watcherExercised.Store(true)
 	watcherUnavailable.Store(false)
 	setWatcherReason("")
 	watcherDegradedUntil.Store(0)
@@ -228,20 +248,6 @@ func memOllamaHasModel(model string) bool {
 	return res.StatusCode == 200
 }
 
-// memWatcherProbe runs once at memory startup: is the configured watcher model
-// actually pulled? If not, log the exact fix and flip watcherUnavailable so the
-// self-learning capture half fails loudly instead of silently.
-func memWatcherProbe() {
-	m := memWatcherModel()
-	if memOllamaHasModel(m) {
-		watcherHealthy()
-		return
-	}
-	watcherUnavailable.Store(true)
-	setWatcherReason(fmt.Sprintf("model %q is not pulled (or Ollama is down), run `ollama pull %s`", m, m))
-	log.Printf("memory watcher: model %q is not pulled (or Ollama is down), fact capture is DISABLED until you run `ollama pull %s` (recall still works). Set MEMORY_WATCHER_MODEL to override.", m, m)
-}
-
 // watcherProbeInterval throttles the live re-probe so a disabled watcher does not
 // hammer Ollama /api/show on every captured turn.
 const watcherProbeInterval = 30 * time.Second
@@ -249,12 +255,22 @@ const watcherProbeInterval = 30 * time.Second
 // watcherLastProbe is the unix-nano time of the last live re-probe.
 var watcherLastProbe atomic.Int64
 
-// watcherCaptureAvailable reports whether fact capture can run RIGHT NOW, and
-// breaks the startup latch: memWatcherProbe() runs once at boot, so an Ollama
-// that was down then would otherwise keep capture off forever (observe
-// short-circuits before the watcher call that would clear the flag). When marked
-// unavailable it re-probes at most once per interval. Available is the common
-// path and returns at once.
+// watcherCaptureAvailable reports whether fact capture can run RIGHT NOW. There
+// is no boot-time probe: watcherUnavailable defaults to false (optimistic,
+// capture assumed live) and only latches true from a REAL memWatch() failure,
+// so a store never waits on Ollama at startup and a wrong initial guess simply
+// self-corrects on the first actual capture attempt. When marked unavailable it
+// re-probes at most once per interval. Available is the common path and returns
+// at once.
+//
+// SIDE EFFECT WORTH NAMING: when unavailable and the throttle window has
+// elapsed, this makes a REAL network call (memOllamaHasModel's /api/show).
+// memWatcherStatus/watcherHealthState both route through this, which means
+// something that reads as a passive health check (`health`, `identity`, even
+// `pix doctor`) can trigger live Ollama traffic as a side effect — bounded to
+// once per watcherProbeInterval, never more, but real. Not a bug: it's how
+// capture recovers with no daemon restart. Just don't assume a health read is
+// free of network I/O.
 func watcherCaptureAvailable() bool {
 	if time.Now().UnixNano() < watcherDegradedUntil.Load() {
 		// Backing off after a real inference failure: the metadata-only /api/show

@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"pix/host/plugin"
 )
@@ -12,17 +13,34 @@ var _ plugin.MemoryStore = (*memoryStoreAdapter)(nil)
 
 // newTestAdapter builds an adapter over an in-memory, FTS-only store (nil
 // embedder -> no Ollama needed), mirroring host_test.go's setup.
-func newTestAdapter(t *testing.T, hasVector bool) *memoryStoreAdapter {
+func newTestAdapter(t *testing.T) *memoryStoreAdapter {
 	t.Helper()
 	st, err := newMemStore(":memory:", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return newMemoryStoreAdapter(st, hasVector)
+	return newMemoryStoreAdapter(st)
+}
+
+// resetEmbedState clears the package-level embed atomics between tests, the
+// same rationale as memembed_test.go's resetWatcherState: these are shared
+// globals, not per-test fixtures.
+func resetEmbedState() {
+	embedDisabled.Store(false)
+	embedExercised.Store(false)
+	embedLastProbe.Store(0)
 }
 
 func TestAdapterStatsHealth(t *testing.T) {
-	a := newTestAdapter(t, true)
+	resetEmbedState()
+	resetWatcherState()
+	watcherExercised.Store(false)
+	t.Cleanup(func() {
+		resetEmbedState()
+		resetWatcherState()
+		watcherExercised.Store(false)
+	})
+	a := newTestAdapter(t)
 
 	// empty store
 	s, err := a.Stats("")
@@ -33,8 +51,9 @@ func TestAdapterStatsHealth(t *testing.T) {
 		t.Fatalf("empty store stats not zero: %+v", s)
 	}
 
-	// health reports the vector flag we constructed with, and reflects the
-	// live watcher availability the same way memoryMux() does.
+	// A fresh, never-exercised adapter must report UNKNOWN for both embed and
+	// capture health, never "healthy" — nothing has actually confirmed either
+	// works yet (buildMemStore/newMemStore make no boot-time probe).
 	h, err := a.Health()
 	if err != nil {
 		t.Fatal(err)
@@ -42,24 +61,44 @@ func TestAdapterStatsHealth(t *testing.T) {
 	if !h.OK {
 		t.Error("health.OK should be true")
 	}
-	if !h.Vector {
-		t.Error("health.Vector should mirror hasVector=true")
+	if h.Vector != nil {
+		t.Errorf("health.Vector should be nil (unknown) before any real embed attempt, got %v", *h.Vector)
+	}
+	if h.Capture != nil {
+		t.Errorf("health.Capture should be nil (unknown) before any real capture attempt, got %v", *h.Capture)
 	}
 	if h.WatcherModel != memWatcherModel() {
 		t.Errorf("health.WatcherModel = %q, want %q", h.WatcherModel, memWatcherModel())
 	}
-	if h.Capture == watcherUnavailable.Load() {
-		t.Error("health.Capture should be the negation of watcherUnavailable")
+
+	// Exercise embed: a real (simulated) success flips unknown -> healthy, then
+	// a real failure flips healthy -> degraded, live, on the SAME adapter.
+	embedExercised.Store(true)
+	embedDisabled.Store(false)
+	if hv, _ := a.Health(); hv.Vector == nil || !*hv.Vector {
+		t.Errorf("health.Vector should be true once exercised and not disabled, got %v", hv.Vector)
+	}
+	embedDisabled.Store(true)
+	if hv, _ := a.Health(); hv.Vector == nil || *hv.Vector {
+		t.Errorf("health.Vector should be false once exercised and disabled, got %v", hv.Vector)
 	}
 
-	// hasVector=false path
-	if hv, _ := newTestAdapter(t, false).Health(); hv.Vector {
-		t.Error("health.Vector should be false when constructed with hasVector=false")
+	// Exercise capture the same way: unknown -> degraded -> healthy recovery.
+	watcherUnavailable.Store(true)
+	watcherExercised.Store(true)
+	watcherDegradedUntil.Store(0)
+	watcherLastProbe.Store(time.Now().UnixNano()) // hold the reprobe throttle open, no network call
+	if hc, _ := a.Health(); hc.Capture == nil || *hc.Capture {
+		t.Errorf("health.Capture should be false once exercised and unavailable, got %v", hc.Capture)
+	}
+	watcherHealthy() // simulates the real recovery memWatch() success performs
+	if hc, _ := a.Health(); hc.Capture == nil || !*hc.Capture {
+		t.Errorf("health.Capture should be true after a real recovery, got %v", hc.Capture)
 	}
 }
 
 func TestAdapterRememberRecallForget(t *testing.T) {
-	a := newTestAdapter(t, false)
+	a := newTestAdapter(t)
 
 	const fact = "The user prefers Go for host services and TypeScript in the sandbox."
 	r, err := a.Remember(plugin.RememberReq{Content: fact})
@@ -110,7 +149,7 @@ func TestAdapterRememberRecallForget(t *testing.T) {
 }
 
 func TestAdapterObserveEmpty(t *testing.T) {
-	a := newTestAdapter(t, false)
+	a := newTestAdapter(t)
 	// Empty user is rejected without touching the watcher — deterministic and
 	// Ollama-free.
 	resp, err := a.Observe(plugin.ObserveReq{User: "   "})
