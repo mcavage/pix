@@ -10,67 +10,38 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Removed
 
-- **Memory's boot-time `hasEmb`/`hasVector` snapshot is gone.** `buildMemStore`
-  used to synchronously probe Ollama (`memEmbedderAvailable`, a real
-  `/api/embed` round-trip) before the store could even be constructed, so a
-  slow or unreachable Ollama delayed the memory listener's startup. The store
-  now always attaches the live, self-retrying `memEmbed` as its embedder —
-  construction never calls Ollama — and `identity`/`health` read the embedder's
-  own live, now tri-state `embedHealthState` instead of a value captured once
-  at boot, so a degraded reading is always current (see "Added" below for the
-  tri-state itself). `hasEmb`/`hasVector` are deleted from `buildMemStore`,
-  `newMemoryMux`, `memoryStoreAdapter`, and every call site; `memoryIdentity`
-  now takes the live value straight from a `Health()` call. The boot-time
-  `go memWatcherProbe()` call is gone the same way: `watcherUnavailable` now
-  simply defaults to "available" and self-corrects on the first real capture
-  attempt, matching the embedder's posture, with no new capture modes
-  introduced. `memWatcherWarm()` (force the watcher model resident at boot) is
-  also deleted, for the same startup-latency reason — but it is a deliberate
-  simplification, not a dead idea: an opt-in capture mode still wants to avoid
-  a cold-model-load penalty on its first real capture, and the honest place
-  for that is lazy, behind whatever actually activates capture (a listener
-  starting, the mode flipping on), not unconditionally at process boot.
-  Tracked for a later unit; not implemented here.
+- **Every memory write is durable, with no expiry, reward, or
+  perishable/valence production anywhere in the pipeline.** The watcher only
+  ever extracts `Facts`/`Corrections` (no time-bound `events`, no sentiment
+  score); `remember()` silently ignores a legacy caller's
+  `durability`/`ttlDays`/`reward` input; the `reward`/`durability` DB columns
+  stay, inert, for on-disk compatibility only. A pre-upgrade store's live
+  legacy-perishable rows are retired (soft-deleted) as part of the one-time
+  schema v2 migration (`migrateMemorySchema`), not a separate every-startup
+  sweep. See docs/memory.md's "Legacy data" and "Schema v2" sections.
 
-- **Memory drops the watcher's perishable/TTL production and the reward it
-  used to seed.** `watchResult` now only ever carries `Facts`/`Corrections`;
-  the watcher's time-bound `events` channel and its sentiment/valence score
-  are gone from the prompt, parser, and capture path, so nothing it extracts
-  ever expires. `remember()` always writes `durable` with no expiry;
-  `durability`/`ttlDays` are gone from the write-side request shape
-  (`rememberInput`, `plugin.RememberReq`) and a caller still sending either is
-  silently ignored. `reward` is gone from that same write path too, not just
-  from recall's score: the column stays in the schema, inert, defaulting to
-  0, so a legacy reader of it keeps working. A store an older binary wrote
-  can still hold LIVE perishable rows nothing will ever sweep again; pix now
-  retires them once, idempotently, on the first startup after upgrading (a
-  soft delete, reversible by clearing `deleted_at` on the row directly). The
-  now-callerless `expired` count in the `synthesize` JSON-RPC response, and a
-  dead `expiresAt` placeholder variable in `remember()`, were deleted rather
-  than kept around at a permanent zero. See docs/memory.md's Legacy data
-  section.
-- **Memory sheds the sandbox/CLI surface that only made sense while rows could
-  still be perishable.** `extensions/memory-recall.ts` drops
-  `AUTO_INJECT_PERISHABLE_SCORE_FLOOR` and the durability-based filter in
-  `fetchRecallRows`, since every row the host now writes is durable (previous
-  entry) and there is nothing left for a perishable-only floor to catch;
-  `formatHitLine` and the `memory_stats` tool description stop rendering a
-  per-hit `/durability` annotation and enumerating durable/perishable counts.
-  `pix memory learnings`, `/learnings`, and the `promotable` JSON-RPC method
-  (plus `plugin.PromotableReq`/`PromotableResp`/`Candidate` and the memory
-  store's `promotable()` query) are deleted end to end: nothing in-tree called
-  them once the recurrence-ranked promotion surface itself was cut, and
-  `scripts/semantic-diff/rules/memory-rpc.rules.mjs`'s pinned method set drops
-  `promotable` to match (see `intended-changes.json`). `pix memory stats`'
-  plain-text line drops the durable/perishable split (every row is durable
-  now); `--json` is a raw passthrough and is unaffected, so the host response
-  can keep those fields until the U5 schema work retires the column. The
-  `promote` skill no longer assumes a dead verb: it pulls candidates through
-  `/recall` instead, noting that frequency-ranked promotion is deferred. The
-  `assistant` field is gone from `memory-capture.ts`'s `observe` RPC params
-  and from `lastCompleteExchange`'s return shape: the watcher only ever reads
-  the user's message (never the agent's reply), so the assistant text had no
-  consumer beyond a dedup-hash input, which now hashes the user text alone.
+- **Every surface built around perishable/reward is gone end to end, not
+  just its production.** `extensions/memory-recall.ts` drops the perishable
+  score floor and durability-based recall filter, and no longer reads an
+  `assistant` field off `observe`'s RPC params (the watcher only ever read
+  the user's message); `formatHitLine`/`pix memory recall` stop rendering a
+  `/durability` annotation, because the read side — `scoredHit`/`memRow`/
+  `plugin.Hit` — no longer carries the field at all; `pix memory stats`/
+  `memory_stats` drop the durable/perishable counts entirely, host, plugin,
+  and CLI alike; `/learnings`, `pix memory learnings`, and the
+  `promotable`/`synthesize` JSON-RPC methods (plus their plugin request/
+  response types and store queries) are deleted, since nothing in-tree ever
+  called them once the recurrence-ranked promotion and near-duplicate-merge
+  surfaces were cut; the `promote` skill now sources candidates through
+  `/recall` instead.
+
+- **Startup no longer blocks on a synchronous readiness probe, and two
+  test-only seams are gone.** `buildMemStore` never round-trips Ollama
+  before constructing the store; `identity`/`health` read the embedder's and
+  watcher's live, tri-state health instead of a value captured once at boot
+  (`hasEmb`/`hasVector`/`memWatcherProbe`/`memWatcherWarm` are deleted).
+  `MemoryUnitProbe.WantVersion` — a seam no production caller ever set — is
+  deleted too; the probe always compares against `launcher.Version`.
 
 ### Fixed
 

@@ -186,19 +186,16 @@ func (stubStore) Remember(r plugin.RememberReq) (plugin.RememberResp, error) {
 	return plugin.RememberResp{ID: "id-1", Reaffirmed: false}, nil
 }
 func (stubStore) Recall(r plugin.RecallReq) (plugin.RecallResp, error) {
-	return plugin.RecallResp{Hits: []plugin.Hit{{ID: "id-1", Content: "hello", Score: 0.5, Kind: "fact", Durability: "durable", Project: ""}}}, nil
+	return plugin.RecallResp{Hits: []plugin.Hit{{ID: "id-1", Content: "hello", Score: 0.5, Kind: "fact", Project: ""}}}, nil
 }
 func (stubStore) Forget(r plugin.ForgetReq) (plugin.ForgetResp, error) {
 	return plugin.ForgetResp{OK: r.ID != ""}, nil
-}
-func (stubStore) Synthesize(plugin.SynthesizeReq) (plugin.SynthesizeResp, error) {
-	return plugin.SynthesizeResp{Merged: 1}, nil
 }
 func (stubStore) Observe(plugin.ObserveReq) (plugin.ObserveResp, error) {
 	return plugin.ObserveResp{Accepted: true}, nil
 }
 func (stubStore) Stats(string) (plugin.Stats, error) {
-	return plugin.Stats{Active: 3, Durable: 2, Perishable: 1}, nil
+	return plugin.Stats{Active: 3, Facts: 2, Learnings: 1}, nil
 }
 func (stubStore) Health() (plugin.Health, error) {
 	return plugin.Health{OK: true, Vector: boolPtr(true), Capture: boolPtr(true), WatcherModel: "stub-model"}, nil
@@ -245,7 +242,7 @@ func TestMemoryProxyMuxContract(t *testing.T) {
 
 	// stats: same fields the built-in mux emits.
 	sresult, _ := rpcCall(t, srv, "stats")["result"].(map[string]any)
-	for _, k := range []string{"active", "durable", "perishable", "facts", "learnings", "deleted"} {
+	for _, k := range []string{"active", "facts", "learnings", "deleted"} {
 		if _, present := sresult[k]; !present {
 			t.Errorf("stats result missing %q: %v", k, sresult)
 		}

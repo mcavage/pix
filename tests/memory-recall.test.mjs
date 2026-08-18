@@ -450,11 +450,11 @@ test("memory_recall throws (does not swallow) when the daemon is unreachable", a
 	await assert.rejects(() => tools.get("memory_recall").execute("id", {}, undefined, undefined, noopCtx));
 });
 
-// memory_stats is a raw passthrough of whatever the host returns; it must
-// tolerate the durable/perishable fields the host still emits (inert until
-// the U5 schema work) without special-casing or stripping them client-side.
+// memory_stats is a raw passthrough of whatever the host returns; the host's
+// durable/perishable split is gone end to end now, so this just pins the
+// remaining shape rather than special-casing or stripping anything client-side.
 test("memory_stats calls the stats RPC with the active profile and returns the raw counts", async (t) => {
-	const { server, requests } = makeFakeDaemon(() => ({ active: 3, durable: 2, perishable: 1 }));
+	const { server, requests } = makeFakeDaemon(() => ({ active: 3, facts: 2, learnings: 1 }));
 	t.after(() => server.close());
 	const MEMORY_URL = await listen(server);
 	const mod = await loadWithEnv({ MEMORY_URL });
@@ -462,33 +462,13 @@ test("memory_stats calls the stats RPC with the active profile and returns the r
 
 	const r = await tools.get("memory_stats").execute("id", {}, undefined, undefined, noopCtx);
 	assert.equal(requests[0].method, "stats");
-	assert.deepEqual(JSON.parse(toolText(r)), { active: 3, durable: 2, perishable: 1 });
+	assert.deepEqual(JSON.parse(toolText(r)), { active: 3, facts: 2, learnings: 1 });
 });
 
 test("memory_stats throws when the daemon is unreachable", async () => {
 	const mod = await loadWithEnv({ MEMORY_URL: "http://127.0.0.1:1", MEMORY_COMMAND_TIMEOUT_MS: "500" });
 	const { tools } = capturePi(mod);
 	await assert.rejects(() => tools.get("memory_stats").execute("id", {}, undefined, undefined, noopCtx));
-});
-
-// ── buildRecallBlock: durability/perishable filtering deleted ─────────────
-//
-// The write path makes every row durable now (see AGENTS.md/CHANGELOG), so a
-// dedicated auto-inject score floor for "perishable" hits has nothing left to
-// filter; it was deleted along with the AUTO_INJECT_PERISHABLE_SCORE_FLOOR
-// constant. This is the sentinel: a low-score hit that still carries a legacy
-// `durability: "perishable"` field (e.g. a row an older binary wrote) must be
-// treated exactly like any other hit, never specially dropped.
-
-test("buildRecallBlock no longer filters hits by durability or score (the perishable floor was deleted)", async (t) => {
-	const hits = [{ content: "low-score legacy-perishable hit", durability: "perishable", score: 0.01 }];
-	const { server } = makeFakeDaemon(() => ({ hits }));
-	t.after(() => server.close());
-	const MEMORY_URL = await listen(server);
-	const mod = await loadWithEnv({ MEMORY_URL });
-
-	const block = await mod.buildRecallBlock("some prompt");
-	assert.ok(block?.includes("low-score legacy-perishable hit"), "a hit must never be dropped for a low score plus a durability field");
 });
 
 test("the injected block tells the model it's a relevance-filtered subset and to use memory_recall", async (t) => {

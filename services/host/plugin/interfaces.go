@@ -16,7 +16,6 @@ type MemoryStore interface {
 	Remember(RememberReq) (RememberResp, error)
 	Recall(RecallReq) (RecallResp, error)
 	Forget(ForgetReq) (ForgetResp, error)
-	Synthesize(SynthesizeReq) (SynthesizeResp, error)
 	Observe(ObserveReq) (ObserveResp, error)
 	Stats(profile string) (Stats, error)
 	Health() (Health, error)
@@ -60,14 +59,17 @@ type RecallReq struct {
 }
 
 // Hit mirrors a scoredHit as surfaced by the recall JSON-RPC result.
+// Durability is deliberately absent: recall's read side dropped it (U9 —
+// every reader, host CLI and sandbox extension alike, had already stopped
+// consuming it). The `durability` DB column and its "durable" INSERT literal
+// stay for on-disk compatibility; only this read thread is gone.
 type Hit struct {
-	ID         string
-	Content    string
-	Score      float64
-	Kind       string
-	Durability string
-	Project    string
-	CreatedAt  string // RFC3339; the recall extension renders it
+	ID        string
+	Content   string
+	Score     float64
+	Kind      string
+	Project   string
+	CreatedAt string // RFC3339; the recall extension renders it
 	// Source is the closed-vocabulary origin ("user"/"cli"/"watcher"/"unknown"),
 	// exposed so a caller can tell an auto-captured row (watcher) apart from an
 	// explicit one — /forget <id> is the only feedback/undo mechanism.
@@ -89,18 +91,6 @@ type ForgetResp struct {
 	OK bool
 }
 
-// SynthesizeReq / SynthesizeResp mirror synthesize(threshold) -> {merged}.
-// The response used to also carry an "expired" count from a background
-// TTL-expiry sweep; the sweep was deleted and the field had no remaining
-// caller, so it was dropped rather than pinned at a permanent 0.
-type SynthesizeReq struct {
-	Threshold float64
-}
-
-type SynthesizeResp struct {
-	Merged int
-}
-
 // ObserveReq / ObserveResp mirror the observe method (async memCapture).
 type ObserveReq struct {
 	User       string
@@ -114,14 +104,13 @@ type ObserveResp struct {
 	Reason   string
 }
 
-// Stats mirrors stats().
+// Stats mirrors stats(). Durable/Perishable are gone end to end (every row
+// this binary writes is durable; schema v2 retires any legacy perishable row).
 type Stats struct {
-	Active     int
-	Durable    int
-	Perishable int
-	Facts      int
-	Learnings  int
-	Deleted    int
+	Active    int
+	Facts     int
+	Learnings int
+	Deleted   int
 }
 
 // Health mirrors the health method ({ok, vector, capture, watcherModel}).

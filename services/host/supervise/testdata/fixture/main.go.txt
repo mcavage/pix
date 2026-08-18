@@ -32,9 +32,6 @@ func (f fixture) Remember(plugin.RememberReq) (plugin.RememberResp, error) {
 }
 func (f fixture) Recall(plugin.RecallReq) (plugin.RecallResp, error) { return plugin.RecallResp{}, nil }
 func (f fixture) Forget(plugin.ForgetReq) (plugin.ForgetResp, error) { return plugin.ForgetResp{}, nil }
-func (f fixture) Synthesize(plugin.SynthesizeReq) (plugin.SynthesizeResp, error) {
-	return plugin.SynthesizeResp{}, nil
-}
 func (f fixture) Observe(plugin.ObserveReq) (plugin.ObserveResp, error) {
 	return plugin.ObserveResp{}, nil
 }

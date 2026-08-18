@@ -14,7 +14,7 @@ export default [
 				kind: "set",
 				region: { start: "return jsonrpcMux(map[string]func(jsonObj) (any, error){", end: "\n\t})\n}" },
 				pattern: '"([a-z]+)":\\s*with\\(func\\(',
-				expected: ["forget", "health", "identity", "observe", "recall", "remember", "stats", "synthesize"],
+				expected: ["forget", "health", "identity", "observe", "recall", "remember", "stats"],
 			},
 		],
 	},

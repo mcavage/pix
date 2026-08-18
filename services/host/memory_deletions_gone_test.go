@@ -5,39 +5,26 @@
 // migration, and perishable/TTL production behavior) cannot silently come
 // back.
 //
-// Two complementary techniques, mirroring cmd/pix/hostmode_gone_test.go:
+// Two complementary techniques, mirroring cmd/pix/hostmode_gone_test.go: (1)
+// reflection over the struct shapes involved (watchResult, rememberInput,
+// plugin.RememberReq) — precise and immune to gofmt column-alignment noise,
+// checking a required/banned field explicitly rather than an exact
+// field-set match, so an unrelated field added later doesn't also have to
+// fail; (2) a grep-based walk (LOCAL to this package, same "each package
+// writes its own copy" convention) for a small set of literal,
+// behavior-specific strings reflection can't see: a deleted function's
+// declaration, the exact TTL-expiry SQL predicate, and the exact
+// perishable-durability behavioral gate.
 //
-//  1. reflection over the struct shapes involved (watchResult, rememberInput,
-//     plugin.RememberReq) — precise and immune to gofmt column-alignment
-//     noise, unlike a text grep over a struct declaration. Each check states
-//     a required/banned field explicitly rather than an exact field-set
-//     match, so a legitimate, unrelated field added later doesn't fail a
-//     test that has nothing to do with it (see watchResult below).
-//  2. a grep-based walk (LOCAL to this package, mirroring the hostmode
-//     sentinel's own "each package writes its own copy" convention) for a
-//     small set of literal, behavior-specific strings that reflection can't
-//     see: a deleted function's declaration, the exact TTL-expiry SQL
-//     predicate, and the exact perishable-durability behavioral gate.
-//
-// What this deliberately does NOT flag, so it stays precise instead of noisy:
-//   - plugin.Hit / scoredHit keep a Durability field: the sandbox recall
-//     extension (extensions/memory-recall.ts, not touched by this unit)
-//     still reads and renders it, and legacy on-disk perishable rows still
-//     report their real durability until the schema work in U5 retires the
-//     column. Read-side durability surviving is correct, not a regression.
-//   - the `reward` column stays in the schema (still gettable by direct SQL,
-//     still defaulted to 0 by the INSERT that no longer binds it); only its
-//     WRITE-PATH presence in rememberInput/plugin.RememberReq is banned here.
-//   - a live db can still hold LEGACY perishable rows across the exact
-//     startup that retires them (retireLegacyWatcherPerishableRows in
-//     memory.go): that's a one-time, idempotent SOFT delete of pre-existing
-//     data, not the deleted PER-CALL background sweep this file's grep half
-//     guards against, so it does not trip the exact SQL predicate below.
-//   - historical prose in comments and docs that NAMES a deleted symbol
-//     (e.g. this very file, or memory_schema_version_test.go's header) is
-//     fine: the grep half only walks non-test .go files, exactly like the
-//     hostmode sentinel it mirrors, so a test file explaining what was
-//     deleted can never trip over its own explanation.
+// Deliberately NOT flagged, so this stays precise instead of noisy:
+// plugin.Hit/scoredHit keep a Durability field (the read side survives for
+// on-disk compatibility, U9); the `reward` column stays in the schema
+// (still gettable by direct SQL, only its WRITE-PATH presence is banned
+// here); a live db can still hold LEGACY perishable rows across the exact
+// startup that retires them (a one-time SOFT delete folded into
+// migrateMemorySchema, not the deleted PER-CALL sweep this file's grep
+// guards against); and historical prose in comments/docs naming a deleted
+// symbol is fine, since the grep half only walks non-test .go files.
 package main
 
 import (
@@ -123,13 +110,15 @@ func TestRememberReqDroppedDurabilityTTLAndReward(t *testing.T) {
 	}
 }
 
-// TestHitKeepsDurabilityForTheReadSide is the guard against over-deletion:
-// plugin.Hit (and scoredHit, which feeds it) is the RECALL/OUTPUT side, still
-// read by extensions/memory-recall.ts, and must keep Durability until the
-// schema work in U5 — this unit only removed the WRITE-side behavior above.
-func TestHitKeepsDurabilityForTheReadSide(t *testing.T) {
-	if !hasField(fieldNames(plugin.Hit{}), "Durability") {
-		t.Fatal("plugin.Hit lost its Durability field; the sandbox extension still reads h.durability off every hit — the read side must survive until the U5 schema migration, only the write-side perishable/TTL BEHAVIOR was deleted")
+// TestHitDroppedDurabilityReadSide proves the U9 schema retirement finished
+// the job memory_legacy_behavior_test.go started: plugin.Hit (and scoredHit,
+// which feeds it) no longer carries Durability at all. No reader — not the
+// sandbox extension, not the host CLI — ever consumed it after U4, so the
+// read thread is gone end-to-end; only the DB column and its "durable"
+// INSERT literal remain, for on-disk compatibility.
+func TestHitDroppedDurabilityReadSide(t *testing.T) {
+	if hasField(fieldNames(plugin.Hit{}), "Durability") {
+		t.Fatal("plugin.Hit still has a Durability field; the U9 schema retirement deleted this read thread end-to-end — only the DB column and its INSERT literal survive")
 	}
 }
 
@@ -146,15 +135,17 @@ func TestHitKeepsDurabilityForTheReadSide(t *testing.T) {
 var forbiddenMemorySymbols = []string{
 	// migrateLegacyWatcherPerishableTTL (and its test) were deleted outright.
 	"func migrateLegacyWatcherPerishableTTL(",
-	// The TTL-expiry sweep recall() and synthesize() both used to run before
-	// every call ("no background deletion" now, and no expiry to sweep).
+	// The TTL-expiry sweep recall() used to run before every call ("no
+	// background deletion" now, and no expiry to sweep).
 	"expires_at IS NOT NULL AND expires_at < ? AND deleted_at IS NULL",
 	// The exact gate that turned a caller-supplied durability into TTL/expiry
 	// behavior in remember().
 	`if durability == "perishable"`,
-	// The periodic-synthesis-ticker's env knob; the ticker itself (the only
-	// reader) was deleted along with it — on-demand synthesize() stays.
+	// The periodic-synthesis-ticker's env knob and the on-demand synthesize
+	// JSON-RPC/plugin surface it fed were both deleted outright (U9): no caller
+	// ever invoked "synthesize" outside this module's own tests.
 	"MEMORY_SYNTH_MS",
+	"func (s *memStore) synthesize(",
 }
 
 // memoryModuleRoot resolves the services/host module root: this test file

@@ -47,7 +47,7 @@ func TestAdapterStatsHealth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Active != 0 || s.Durable != 0 || s.Deleted != 0 {
+	if s.Active != 0 || s.Facts != 0 || s.Deleted != 0 {
 		t.Fatalf("empty store stats not zero: %+v", s)
 	}
 

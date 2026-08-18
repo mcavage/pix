@@ -204,14 +204,11 @@ func TestMemoryForget(t *testing.T) {
 	}
 }
 
-// The daemon's stats response still carries durable/perishable counts (the
-// column survives until the U5 schema work), but the plain-text render must
-// not surface them: every row this binary writes is durable now, so the
-// split is no longer a meaningful default-view distinction. --json is a raw
-// passthrough and is untouched by this test.
+// The durable/perishable split is gone end to end (host, plugin, CLI); this
+// only pins the plain-text render's remaining fields.
 func TestMemoryStats(t *testing.T) {
 	c := fakeRPCServer(t, map[string]any{"stats": map[string]any{
-		"active": 10.0, "durable": 3.0, "perishable": 7.0, "facts": 8.0, "learnings": 2.0, "deleted": 1.0,
+		"active": 10.0, "facts": 8.0, "learnings": 2.0, "deleted": 1.0,
 	}})
 	var out bytes.Buffer
 	if err := (CLI{c, &out, "default"}).Stats(false); err != nil {

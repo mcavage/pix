@@ -49,10 +49,10 @@ const (
 	memProjectOtherFactor  = 0.5
 )
 
-// access_count/last_accessed/reward (used elsewhere in this file) are
-// RESERVED/INERT, kept for additive/legacy compatibility; nothing writes or
-// reads them any more. Same posture applies to any column below no longer
-// written by every code path.
+// access_count/last_accessed/reward/durability (used elsewhere in this file)
+// are RESERVED/INERT, kept for additive/legacy/on-disk compatibility only:
+// nothing writes or reads them for any behavioral purpose any more. Cited by
+// name at each site below rather than re-explained.
 const memSchema = `
 CREATE TABLE IF NOT EXISTS memories (
   rowid INTEGER PRIMARY KEY, id TEXT UNIQUE NOT NULL, kind TEXT NOT NULL, content TEXT NOT NULL,
@@ -97,7 +97,7 @@ func memColumnExists(db *sql.DB, table, col string) (bool, error) {
 
 // migrateMemorySchema brings a store whose PRAGMA user_version is below
 // memSchemaVersion up to it. This is a ONE-TIME DATA sweep, not a column
-// migration: v2 does not add or rename any column. Two things happen, both
+// migration: v2 does not add or rename any column. Three things happen, all
 // inside a SINGLE transaction, so a crash or error anywhere leaves the store
 // fully at its old version or fully v2, never a hybrid — completion is
 // judged by user_version alone on the next open, never a partial column
@@ -112,6 +112,16 @@ func memColumnExists(db *sql.DB, table, col string) (bool, error) {
 //     reading of that pre-v2 free-text history, never a verified trust
 //     boundary: pre-v2 `source` was operator-set text with no enforcement
 //     behind it at all. A row already soft-deleted is left exactly alone.
+//  3. Every LIVE row with the legacy `durability = 'perishable'` marker is
+//     ALSO soft-deleted, same mechanism: the watcher's perishable event
+//     channel and the TTL-expiry sweep that used to garbage-collect it are
+//     both gone, so a db written by an older binary can be left holding
+//     live rows that were meant to eventually expire and now never will
+//     (nothing sweeps them any more). This used to run as its own
+//     every-startup query (retireLegacyWatcherPerishableRows); folding it in
+//     here means it runs at most once per store, gated by the SAME
+//     user_version check as the rest of this migration, instead of a no-op
+//     SELECT on every single start.
 //
 // Reversibility is the SAME soft-delete semantics as an ordinary forget():
 // clearing deleted_at for a specific id (directly in the db file, with the
@@ -121,8 +131,8 @@ func memColumnExists(db *sql.DB, table, col string) (bool, error) {
 // migration does not take one automatically.
 //
 // A row written by the watcher (or anything else) AFTER this migration has
-// stamped user_version=2 is never touched by it again: the sweep is
-// keyed off curVersion alone and runs at most once per store.
+// stamped user_version=2 is never touched by it again: both sweeps are
+// keyed off curVersion alone and run at most once per store.
 func migrateMemorySchema(db *sql.DB, curVersion int) error {
 	if curVersion >= memSchemaVersion {
 		return nil
@@ -154,38 +164,13 @@ func migrateMemorySchema(db *sql.DB, curVersion int) error {
 		}
 	}
 
-	// Collect rowids before the UPDATE so the paired FTS delete below doesn't
-	// need a second source-based scan (and stays exact even if source is
-	// later changed by the UPDATE... it isn't, but this is the same
-	// query-then-mutate shape softDelete/retireLegacyWatcherPerishableRows use).
-	rows, err := tx.Query("SELECT rowid FROM memories WHERE deleted_at IS NULL AND source NOT IN ('user','cli')")
+	nonExplicit, err := memSoftDeleteMatchingTx(tx, "deleted_at IS NULL AND source NOT IN ('user','cli')", "non-explicit rows")
 	if err != nil {
-		return fmt.Errorf("schema migration (select non-explicit rows): %w", err)
+		return err
 	}
-	var rowids []int64
-	for rows.Next() {
-		var rowid int64
-		if err := rows.Scan(&rowid); err != nil {
-			rows.Close()
-			return fmt.Errorf("schema migration (scan non-explicit rowid): %w", err)
-		}
-		rowids = append(rowids, rowid)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return fmt.Errorf("schema migration (iterate non-explicit rows): %w", err)
-	}
-	rows.Close()
-
-	if len(rowids) > 0 {
-		if _, err := tx.Exec("UPDATE memories SET deleted_at = ? WHERE deleted_at IS NULL AND source NOT IN ('user','cli')", memNowIso()); err != nil {
-			return fmt.Errorf("schema migration (soft-delete non-explicit rows): %w", err)
-		}
-		for _, rowid := range rowids {
-			if _, err := tx.Exec("DELETE FROM memories_fts WHERE rowid = ?", rowid); err != nil {
-				return fmt.Errorf("schema migration (drop fts entry for rowid %d): %w", rowid, err)
-			}
-		}
+	perishable, err := memSoftDeleteMatchingTx(tx, "deleted_at IS NULL AND durability = 'perishable'", "legacy perishable rows")
+	if err != nil {
+		return err
 	}
 
 	if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", memSchemaVersion)); err != nil {
@@ -195,8 +180,47 @@ func migrateMemorySchema(db *sql.DB, curVersion int) error {
 		return fmt.Errorf("schema migration: commit: %w", err)
 	}
 	committed = true
-	log.Printf("memory: schema migration to v%d complete (%d row(s) soft-deleted, source not user/cli)", memSchemaVersion, len(rowids))
+	log.Printf("memory: schema migration to v%d complete (%d row(s) soft-deleted, source not user/cli; %d row(s) soft-deleted, legacy perishable)", memSchemaVersion, nonExplicit, perishable)
 	return nil
+}
+
+// memSoftDeleteMatchingTx collects the rowids matching where (which must
+// itself scope to "deleted_at IS NULL" for an idempotent, already-retired
+// rows are left alone result), soft-deletes them, and drops each one's FTS
+// entry — all inside the caller's transaction. Shared by
+// migrateMemorySchema's two one-time classification sweeps so the
+// collect/soft-delete/fts-drop shape isn't duplicated between them.
+func memSoftDeleteMatchingTx(tx *sql.Tx, where, label string) (int, error) {
+	rows, err := tx.Query("SELECT rowid FROM memories WHERE " + where)
+	if err != nil {
+		return 0, fmt.Errorf("schema migration (select %s): %w", label, err)
+	}
+	var rowids []int64
+	for rows.Next() {
+		var rowid int64
+		if err := rows.Scan(&rowid); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("schema migration (scan %s): %w", label, err)
+		}
+		rowids = append(rowids, rowid)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, fmt.Errorf("schema migration (iterate %s): %w", label, err)
+	}
+	rows.Close()
+	if len(rowids) == 0 {
+		return 0, nil
+	}
+	if _, err := tx.Exec("UPDATE memories SET deleted_at = ? WHERE "+where, memNowIso()); err != nil {
+		return 0, fmt.Errorf("schema migration (soft-delete %s): %w", label, err)
+	}
+	for _, rowid := range rowids {
+		if _, err := tx.Exec("DELETE FROM memories_fts WHERE rowid = ?", rowid); err != nil {
+			return 0, fmt.Errorf("schema migration (drop fts entry for rowid %d, %s): %w", rowid, label, err)
+		}
+	}
+	return len(rowids), nil
 }
 
 // memKnownSources is the CLOSED vocabulary for the free-text `source` column:
@@ -301,8 +325,8 @@ func newMemStore(path string, embedder func(string) []float64) (*memStore, error
 	if _, err := db.Exec("PRAGMA journal_mode=WAL;"); err != nil {
 		return nil, err
 	}
-	// A busy timeout so a concurrent legacy open (or the periodic synthesis tick)
-	// waits briefly for the lock instead of returning SQLITE_BUSY immediately.
+	// A busy timeout so a concurrent legacy open waits briefly for the lock
+	// instead of returning SQLITE_BUSY immediately.
 	if _, err := db.Exec("PRAGMA busy_timeout=5000;"); err != nil {
 		return nil, err
 	}
@@ -326,74 +350,22 @@ func newMemStore(path string, embedder func(string) []float64) (*memStore, error
 	// commits every ALTER, the classification UPDATE, and the user_version
 	// stamp in ONE transaction. Completion is judged by user_version alone on
 	// the NEXT open, never a column probe: see its doc comment.
+	// Legacy watcher-perishable retirement is folded into migrateMemorySchema
+	// itself now (see its doc comment): both sweeps run at most once, gated
+	// by the SAME user_version check, instead of a separate every-startup call.
 	if err := migrateMemorySchema(db, curVersion); err != nil {
-		return nil, err
-	}
-	if err := retireLegacyWatcherPerishableRows(db); err != nil {
 		return nil, err
 	}
 	return &memStore{db: db, embedder: embedder}, nil
 }
 
-// retireLegacyWatcherPerishableRows is a one-time, idempotent startup state
-// retirement (no schema change, no periodic sweep): the watcher's perishable
-// event channel and the TTL-expiry sweep that used to garbage-collect it were
-// both deleted, so a db written by an older binary can be left holding live,
-// still-recallable perishable rows that were meant to eventually expire and
-// now never will (nothing sweeps them any more — without this, they would
-// become immortal instead of going away). It soft-deletes every remaining
-// live perishable row, once: idempotent because a row already soft-deleted
-// (deleted_at set) never matches the WHERE clause again, so every startup
-// after the first is a no-op SELECT.
-//
-// This is a SOFT delete (deleted_at, matching softDelete's own convention),
-// not a row purge, so it is reversible: clearing deleted_at for a specific id
-// directly in the db file restores that row exactly as recall() reads it.
-// Run before the store is handed out (no s.mu to take yet), operating on the
-// raw *sql.DB like the schema/profile migrations above it.
-func retireLegacyWatcherPerishableRows(db *sql.DB) error {
-	rows, err := db.Query("SELECT rowid FROM memories WHERE durability = 'perishable' AND deleted_at IS NULL")
-	if err != nil {
-		return err
-	}
-	var rowids []int64
-	for rows.Next() {
-		var rowid int64
-		if err := rows.Scan(&rowid); err != nil {
-			rows.Close()
-			return err
-		}
-		rowids = append(rowids, rowid)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
-	rows.Close()
-	if len(rowids) == 0 {
-		return nil
-	}
-	if _, err := db.Exec("UPDATE memories SET deleted_at = ? WHERE durability = 'perishable' AND deleted_at IS NULL", memNowIso()); err != nil {
-		return err
-	}
-	// Drop each retired row's FTS entry too, matching softDelete's own pairing:
-	// a soft-deleted row left in the index still answers keyword searches on an
-	// unfiltered scan, even though every read path here also joins deleted_at.
-	for _, rowid := range rowids {
-		if _, err := db.Exec("DELETE FROM memories_fts WHERE rowid = ?", rowid); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 type memRow struct {
-	id, kind, content, durability, source string
-	confidence                            float64
-	frequency                             int
-	createdAt                             string
-	project                               sql.NullString
-	embedding                             sql.NullString
+	id, kind, content, source string
+	confidence                float64
+	frequency                 int
+	createdAt                 string
+	project                   sql.NullString
+	embedding                 sql.NullString
 }
 
 // bump reaffirms a row on a reaffirm/dedupe hit: bump its frequency (fed into
@@ -563,10 +535,10 @@ func (s *memStore) rememberSourced(in rememberInput, source string) (jsonObj, er
 }
 
 type scoredHit struct {
-	id, content, kind, durability, source string
-	project                               sql.NullString
-	score                                 float64
-	createdAt                             string
+	id, content, kind, source string
+	project                   sql.NullString
+	score                     float64
+	createdAt                 string
 }
 
 func (s *memStore) recall(query string, limit, charBudget int, kind, project, profile string) ([]scoredHit, error) {
@@ -642,7 +614,8 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 	// line) can tell an auto-captured row (source=watcher) apart from an
 	// explicit one — the only feedback/undo mechanism is the existing
 	// `/forget <id>`, so a user has to be able to SEE which rows are auto.
-	where := "SELECT id, kind, content, durability, confidence, frequency, created_at, project, embedding, source FROM memories WHERE deleted_at IS NULL"
+	// durability is not selected — see memSchema's inert-column note above.
+	where := "SELECT id, kind, content, confidence, frequency, created_at, project, embedding, source FROM memories WHERE deleted_at IS NULL"
 	args := []any{}
 	if kind != "" {
 		where += " AND kind = ?"
@@ -677,7 +650,7 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 	dimMismatch := 0
 	for rows.Next() {
 		var r memRow
-		if err := rows.Scan(&r.id, &r.kind, &r.content, &r.durability, &r.confidence, &r.frequency, &r.createdAt, &r.project, &r.embedding, &r.source); err != nil {
+		if err := rows.Scan(&r.id, &r.kind, &r.content, &r.confidence, &r.frequency, &r.createdAt, &r.project, &r.embedding, &r.source); err != nil {
 			continue
 		}
 		relevance := 1.0 // star: every visible row is equally "relevant"
@@ -724,11 +697,9 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 				projectFactor = memProjectOtherFactor
 			}
 		}
-		// reward no longer factors into score: it was only ever seeded from the
-		// watcher's removed valence signal, and the column stays inert (still
-		// written by remember, never read here) until the schema work retires it.
+		// reward no longer factors into score — see memSchema's inert-column note above.
 		score := relevance * r.confidence * recency * freqBoost * projectFactor
-		cands = append(cands, cand{scoredHit{r.id, r.content, r.kind, r.durability, r.source, r.project, score, r.createdAt}, score})
+		cands = append(cands, cand{scoredHit{r.id, r.content, r.kind, r.source, r.project, score, r.createdAt}, score})
 	}
 	if dimMismatch > 0 {
 		log.Printf("memory: %d stored embeddings have a different dimension than the current model (%d dims), they degrade to keyword-only. The embedding model likely changed; re-embed to restore semantic recall.", dimMismatch, len(queryVec))
@@ -752,12 +723,8 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 		used += len(c.hit.content)
 	}
 	// recall performs NO access_count/last_accessed writes, star or scored: no
-	// reader anywhere consults either column (they never fed scoring — see the
-	// dead `reward` note above for the same shape of leftover), so a write here
-	// bought nothing but WAL churn on every read. The columns stay in the schema
-	// as RESERVED/INERT for additive compatibility (an older binary's row, or a
-	// future reader, still finds them present, just permanently 0/NULL from any
-	// binary built after this change).
+	// reader anywhere consults either column, so a write here bought nothing
+	// but WAL churn on every read — see memSchema's inert-column note above.
 	return out, nil
 }
 
@@ -812,79 +779,6 @@ func (s *memStore) softDelete(id string, rowid int64, who string) {
 	}
 }
 
-// synthesize is the on-demand near-duplicate merge (JSON-RPC "synthesize"):
-// no longer run on a periodic ticker (removed background sweep), and no
-// longer sweeps TTL-expired rows (removed along with perishable/TTL
-// behavior; there is no more background deletion). The response used to also
-// report an "expired" count from that sweep; it had no caller left once the
-// sweep was deleted, so it was removed from the response shape rather than
-// kept around pinned at 0.
-func (s *memStore) synthesize(threshold float64) jsonObj {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if threshold == 0 {
-		threshold = 0.93
-	}
-	// Merge WITHIN each storage bucket only: a merge must never compare or collapse
-	// rows across profiles, and frequency must never move between buckets.
-	buckets := []string{}
-	prows, _ := s.db.Query("SELECT DISTINCT COALESCE(NULLIF(profile,''),'default') FROM memories WHERE deleted_at IS NULL AND embedding IS NOT NULL")
-	for prows.Next() {
-		var p string
-		prows.Scan(&p)
-		buckets = append(buckets, p)
-	}
-	prows.Close()
-	merged := 0
-	for _, bucket := range buckets {
-		merged += s.synthesizeBucket(bucket, threshold)
-	}
-	return jsonObj{"merged": merged}
-}
-
-// synthesizeBucket runs the pairwise near-duplicate merge over a SINGLE storage
-// bucket (normalized profile). The caller (synthesize) already holds s.mu.
-func (s *memStore) synthesizeBucket(profile string, threshold float64) int {
-	rows, _ := s.db.Query("SELECT id, confidence, frequency, embedding FROM memories WHERE deleted_at IS NULL AND embedding IS NOT NULL AND "+memProfileStorage+" ORDER BY frequency DESC, confidence DESC", profile)
-	type rec struct {
-		id         string
-		confidence float64
-		frequency  int
-		vec        []float64
-	}
-	recs := []rec{}
-	for rows.Next() {
-		var r rec
-		var emb string
-		rows.Scan(&r.id, &r.confidence, &r.frequency, &emb)
-		json.Unmarshal([]byte(emb), &r.vec)
-		recs = append(recs, r)
-	}
-	rows.Close()
-	dead := map[string]bool{}
-	merged := 0
-	for i := range recs {
-		if dead[recs[i].id] || recs[i].vec == nil {
-			continue
-		}
-		for j := i + 1; j < len(recs); j++ {
-			if dead[recs[j].id] || recs[j].vec == nil {
-				continue
-			}
-			if memCosine(recs[i].vec, recs[j].vec) >= threshold {
-				if _, err := s.db.Exec("UPDATE memories SET frequency = frequency + ?, confidence = ? WHERE id = ?",
-					recs[j].frequency, math.Min(1, recs[i].confidence+0.05), recs[i].id); err != nil {
-					log.Printf("synthesizeBucket: update survivor frequency failed for %s: %v", recs[i].id, err)
-				}
-				s.softDelete(recs[j].id, 0, "synthesizeBucket") // merged into i
-				dead[recs[j].id] = true
-				merged++
-			}
-		}
-	}
-	return merged
-}
-
 // stats reports counts for the active profile's visible rows.
 func (s *memStore) stats(profile string) jsonObj {
 	active := memNormProfile(profile)
@@ -896,12 +790,10 @@ func (s *memStore) stats(profile string) jsonObj {
 		return n
 	}
 	return jsonObj{
-		"active":     get("deleted_at IS NULL"),
-		"durable":    get("deleted_at IS NULL AND durability='durable'"),
-		"perishable": get("deleted_at IS NULL AND durability='perishable'"),
-		"facts":      get("deleted_at IS NULL AND kind='fact'"),
-		"learnings":  get("deleted_at IS NULL AND kind='learning'"),
-		"deleted":    get("deleted_at IS NOT NULL"),
+		"active":    get("deleted_at IS NULL"),
+		"facts":     get("deleted_at IS NULL AND kind='fact'"),
+		"learnings": get("deleted_at IS NULL AND kind='learning'"),
+		"deleted":   get("deleted_at IS NOT NULL"),
 	}
 }
 

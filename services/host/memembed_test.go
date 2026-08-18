@@ -23,6 +23,22 @@ func resetWatcherState() {
 	watcherLastProbe.Store(0)
 }
 
+// newWatcherFakeServer spins an httptest server behind OLLAMA_HOST, resets the
+// package-level watcher atomics before AND after the test, and points
+// MEMORY_WATCHER_MODEL at a fixed test model — the exact boilerplate every
+// watcher latch/backoff/timeout test below repeats, so each test states only
+// its handler and its own state setup/assertions.
+func newWatcherFakeServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	resetWatcherState()
+	t.Cleanup(resetWatcherState)
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	t.Setenv("OLLAMA_HOST", srv.URL)
+	t.Setenv("MEMORY_WATCHER_MODEL", "test-watcher")
+	return srv
+}
+
 // TestWatcherCaptureAvailableBreaksLatch proves the fix for the silent-capture
 // bug: the startup probe used to latch watcherUnavailable=true forever (observe
 // short-circuited, so the watcher never ran to reset it), meaning capture stayed
@@ -30,16 +46,13 @@ func resetWatcherState() {
 // live re-probe must recover without a restart.
 func TestWatcherCaptureAvailableBreaksLatch(t *testing.T) {
 	var present bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	newWatcherFakeServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		if present {
 			w.WriteHeader(200)
 		} else {
 			w.WriteHeader(404)
 		}
-	}))
-	defer srv.Close()
-	t.Setenv("OLLAMA_HOST", srv.URL)
-	t.Setenv("MEMORY_WATCHER_MODEL", "test-watcher")
+	})
 
 	// Latched off, model absent, throttle window open (last probe = 0).
 	watcherUnavailable.Store(true)
@@ -78,19 +91,14 @@ func TestWatcherCaptureAvailableBreaksLatch(t *testing.T) {
 // a reason that says WHY (not just the generic "model not pulled" text), and
 // open a degraded-until backoff window.
 func TestMemWatchTimeout(t *testing.T) {
-	resetWatcherState()
-	t.Cleanup(resetWatcherState)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	newWatcherFakeServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/chat" {
 			time.Sleep(300 * time.Millisecond) // >> the test's MEMORY_WATCHER_TIMEOUT_MS
 			w.WriteHeader(200)
 			return
 		}
 		w.WriteHeader(200)
-	}))
-	defer srv.Close()
-	t.Setenv("OLLAMA_HOST", srv.URL)
-	t.Setenv("MEMORY_WATCHER_MODEL", "test-watcher")
+	})
 	t.Setenv("MEMORY_WATCHER_TIMEOUT_MS", "50")
 
 	before := time.Now()
@@ -113,68 +121,52 @@ func TestMemWatchTimeout(t *testing.T) {
 
 // TestMemWatchNeverLogsRawOutput proves an unparseable/undecodable watcher
 // response never puts the raw content in a log line -- it may itself carry
-// unfiltered user text the secret filter never saw. Only model/length/error.
+// unfiltered user text the secret filter never saw, across the two distinct
+// ways a watcher response reaches memWatch's log line: content that fails to
+// parse as JSON at all, and content that parses but has a `facts` field the
+// WRONG SHAPE for a list (a bare string instead of an array/object/null) --
+// flexibleStringList's error used to embed that value verbatim ("list field
+// has unexpected shape: %s"), so the sentinel would have reached the log
+// unfiltered. Only model/shape/length may ever appear, never raw content.
 func TestMemWatchNeverLogsRawOutput(t *testing.T) {
-	resetWatcherState()
-	t.Cleanup(resetWatcherState)
-	const secretLooking = "AKIASECRETSHAPEDCONTENTHERE12345 not valid json"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := json.Marshal(map[string]any{"message": map[string]any{"content": secretLooking}})
-		w.WriteHeader(200)
-		w.Write(b)
-	}))
-	defer srv.Close()
-	t.Setenv("OLLAMA_HOST", srv.URL)
-	t.Setenv("MEMORY_WATCHER_MODEL", "test-watcher")
-
-	var logbuf bytes.Buffer
-	prevOut := log.Writer()
-	log.SetOutput(&logbuf)
-	defer log.SetOutput(prevOut)
-
-	if got := memWatch("hello"); got != nil {
-		t.Fatalf("unparseable content should return nil, got %+v", got)
+	cases := []struct {
+		name       string
+		content    string
+		sentinel   string
+		wantLogged string // a substring that MUST still appear (shape-only, never raw)
+	}{
+		{name: "unparseable", content: "AKIASECRETSHAPEDCONTENTHERE12345 not valid json", sentinel: "AKIASECRETSHAPEDCONTENTHERE12345 not valid json"},
+		{
+			name:       "wrong-shaped facts field",
+			sentinel:   "AKIASECRETSHAPEDSENTINELVALUE0001",
+			wantLogged: "unexpected shape",
+		},
 	}
-	if strings.Contains(logbuf.String(), secretLooking) {
-		t.Fatalf("raw watcher output must never be logged, got: %s", logbuf.String())
-	}
-}
+	cases[1].content = `{"facts": "` + cases[1].sentinel + `", "corrections": []}`
 
-// TestMemWatchNeverLogsRawOutputWrongShapedField is the
-// flexibleStringList-specific case: valid top-level JSON with a `facts` key
-// present but the WRONG SHAPE for a list field (a bare string instead of an
-// array/object/null). That value is itself the sentinel here -- before the
-// fix, flexibleStringList's error embedded it verbatim ("list field has
-// unexpected shape: %s"), and memWatch's caller logs that error on a parse
-// failure, so the sentinel would have reached the log unfiltered. Only
-// shape/length may appear now.
-func TestMemWatchNeverLogsRawOutputWrongShapedField(t *testing.T) {
-	resetWatcherState()
-	t.Cleanup(resetWatcherState)
-	const sentinel = "AKIASECRETSHAPEDSENTINELVALUE0001"
-	wrongShaped := `{"facts": "` + sentinel + `", "corrections": []}`
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := json.Marshal(map[string]any{"message": map[string]any{"content": wrongShaped}})
-		w.WriteHeader(200)
-		w.Write(b)
-	}))
-	defer srv.Close()
-	t.Setenv("OLLAMA_HOST", srv.URL)
-	t.Setenv("MEMORY_WATCHER_MODEL", "test-watcher")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			newWatcherFakeServer(t, func(w http.ResponseWriter, r *http.Request) {
+				b, _ := json.Marshal(map[string]any{"message": map[string]any{"content": tc.content}})
+				w.WriteHeader(200)
+				w.Write(b)
+			})
 
-	var logbuf bytes.Buffer
-	prevOut := log.Writer()
-	log.SetOutput(&logbuf)
-	defer log.SetOutput(prevOut)
+			var logbuf bytes.Buffer
+			prevOut := log.Writer()
+			log.SetOutput(&logbuf)
+			defer log.SetOutput(prevOut)
 
-	if got := memWatch("hello"); got != nil {
-		t.Fatalf("a wrong-shaped facts field should return nil, got %+v", got)
-	}
-	if strings.Contains(logbuf.String(), sentinel) {
-		t.Fatalf("a wrong-shaped list field's raw content must never be logged, got: %s", logbuf.String())
-	}
-	if !strings.Contains(logbuf.String(), "unexpected shape") {
-		t.Fatalf("expected the shape-only error to still be logged, got: %s", logbuf.String())
+			if got := memWatch("hello"); got != nil {
+				t.Fatalf("%s: should return nil, got %+v", tc.name, got)
+			}
+			if strings.Contains(logbuf.String(), tc.sentinel) {
+				t.Fatalf("%s: raw watcher output must never be logged, got: %s", tc.name, logbuf.String())
+			}
+			if tc.wantLogged != "" && !strings.Contains(logbuf.String(), tc.wantLogged) {
+				t.Fatalf("%s: expected the shape-only error to still be logged, got: %s", tc.name, logbuf.String())
+			}
+		})
 	}
 }
 
@@ -184,18 +176,13 @@ func TestMemWatchNeverLogsRawOutputWrongShapedField(t *testing.T) {
 // watcherCaptureAvailable must NOT re-probe it (that would flip capture back to
 // "available" while inference is still hung).
 func TestWatcherCaptureAvailableDuringBackoffSkipsProbe(t *testing.T) {
-	resetWatcherState()
-	t.Cleanup(resetWatcherState)
 	var showHits int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	newWatcherFakeServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/show" {
 			atomic.AddInt32(&showHits, 1)
 		}
 		w.WriteHeader(200)
-	}))
-	defer srv.Close()
-	t.Setenv("OLLAMA_HOST", srv.URL)
-	t.Setenv("MEMORY_WATCHER_MODEL", "test-watcher")
+	})
 
 	watcherUnavailable.Store(true)
 	watcherLastProbe.Store(0)
@@ -213,9 +200,7 @@ func TestWatcherCaptureAvailableDuringBackoffSkipsProbe(t *testing.T) {
 // once the backoff window elapses: the throttled /api/show re-probe runs again,
 // and a subsequent successful memWatch clears every piece of degraded state.
 func TestWatcherCaptureAvailableRecoversAfterBackoff(t *testing.T) {
-	resetWatcherState()
-	t.Cleanup(resetWatcherState)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	newWatcherFakeServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/chat":
 			w.Header().Set("content-type", "application/json")
@@ -224,10 +209,7 @@ func TestWatcherCaptureAvailableRecoversAfterBackoff(t *testing.T) {
 		default: // /api/show
 			w.WriteHeader(200)
 		}
-	}))
-	defer srv.Close()
-	t.Setenv("OLLAMA_HOST", srv.URL)
-	t.Setenv("MEMORY_WATCHER_MODEL", "test-watcher")
+	})
 
 	watcherUnavailable.Store(true)
 	setWatcherReason(`model "test-watcher" is not pulled (or Ollama is down), run ` + "`ollama pull test-watcher`")

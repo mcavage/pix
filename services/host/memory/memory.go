@@ -98,11 +98,9 @@ func (m CLI) Forget(id string, asJSON bool) error {
 	return nil
 }
 
-// Stats prints the daemon's counts by kind. durable/perishable stay in the
-// host's JSON response (--json is a raw passthrough, so it tolerates the
-// extra fields until the U5 schema work retires the column); the plain-text
-// line drops them since every row this binary writes is durable now, so the
-// split is no longer a meaningful distinction to show by default.
+// Stats prints the daemon's counts by kind. The durable/perishable split is
+// gone end to end (host, plugin, and CLI): every row this binary writes is
+// durable, so it was never a meaningful distinction to show.
 func (m CLI) Stats(asJSON bool) error {
 	res, err := m.Client.Call("stats", map[string]any{"profile": m.Profile})
 	if err != nil {
@@ -122,18 +120,17 @@ func (m CLI) Stats(asJSON bool) error {
 	return nil
 }
 
-// memoryMeta renders the trailing "[kind·durability·project·auto score]" annotation.
+// memoryMeta renders the trailing "[kind·project·auto score]" annotation.
 // "auto" only appears for a watcher-sourced (experimental-auto capture) row,
 // so an auto row is visibly distinguishable from an explicit one — the
 // existing `/forget <id>` is the feedback/undo mechanism, this is only the
-// visibility half.
+// visibility half. durability is not rendered: the read side was retired
+// (U9) once every row this binary writes became durable; the DB column
+// stays, inert, for on-disk compatibility only.
 func memoryMeta(h map[string]any) string {
 	var parts []string
 	if k := rpc.Str(h, "kind"); k != "" {
 		parts = append(parts, k)
-	}
-	if d := rpc.Str(h, "durability"); d != "" {
-		parts = append(parts, d)
 	}
 	if p := rpc.Str(h, "project"); p != "" {
 		parts = append(parts, p)

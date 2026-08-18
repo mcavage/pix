@@ -53,7 +53,7 @@ func (a *memoryStoreAdapter) Recall(req plugin.RecallReq) (plugin.RecallResp, er
 		}
 		out = append(out, plugin.Hit{
 			CreatedAt: h.createdAt, ID: h.id, Content: h.content, Score: h.score,
-			Kind: h.kind, Durability: h.durability, Project: project, Source: h.source,
+			Kind: h.kind, Project: project, Source: h.source,
 		})
 	}
 	return plugin.RecallResp{Hits: out}, nil
@@ -61,12 +61,6 @@ func (a *memoryStoreAdapter) Recall(req plugin.RecallReq) (plugin.RecallResp, er
 
 func (a *memoryStoreAdapter) Forget(req plugin.ForgetReq) (plugin.ForgetResp, error) {
 	return plugin.ForgetResp{OK: a.store.forget(req.ID, req.Profile)}, nil
-}
-
-func (a *memoryStoreAdapter) Synthesize(req plugin.SynthesizeReq) (plugin.SynthesizeResp, error) {
-	res := a.store.synthesize(req.Threshold)
-	merged, _ := res["merged"].(int)
-	return plugin.SynthesizeResp{Merged: merged}, nil
 }
 
 // Observe and Health call the shared helpers (memObserve, memWatcherStatus).
@@ -81,8 +75,7 @@ func (a *memoryStoreAdapter) Stats(profile string) (plugin.Stats, error) {
 	s := a.store.stats(profile)
 	get := func(k string) int { n, _ := s[k].(int); return n }
 	return plugin.Stats{
-		Active: get("active"), Durable: get("durable"), Perishable: get("perishable"),
-		Facts: get("facts"), Learnings: get("learnings"), Deleted: get("deleted"),
+		Active: get("active"), Facts: get("facts"), Learnings: get("learnings"), Deleted: get("deleted"),
 	}, nil
 }
 

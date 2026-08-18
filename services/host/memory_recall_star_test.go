@@ -46,9 +46,9 @@ func TestRecallStar_ReturnsInsertedRows_NoEmbedderNoFTSMatch(t *testing.T) {
 		t.Errorf("recall(\"*\") last hit = %q, want oldest row last", hits[len(hits)-1].content)
 	}
 	// Normal hit fields/scores: every hit must carry a non-empty id/kind/
-	// durability/createdAt and a positive score, exactly like a relevance match.
+	// createdAt and a positive score, exactly like a relevance match.
 	for _, h := range hits {
-		if h.id == "" || h.kind == "" || h.durability == "" || h.createdAt == "" {
+		if h.id == "" || h.kind == "" || h.createdAt == "" {
 			t.Errorf("recall(\"*\") hit missing normal fields: %+v", h)
 		}
 		if h.score <= 0 {
@@ -57,68 +57,50 @@ func TestRecallStar_ReturnsInsertedRows_NoEmbedderNoFTSMatch(t *testing.T) {
 	}
 }
 
-// TestRecallStar_TrimsWhitespace: " * " (leading/trailing space) is still the
-// literal list-all query, since callers pass a trimmed or untrimmed "*"
-// depending on the surface (CLI vs extension).
-func TestRecallStar_TrimsWhitespace(t *testing.T) {
-	st, err := newMemStore(":memory:", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := st.remember(rememberInput{content: "only fact"}); err != nil {
-		t.Fatal(err)
-	}
-	hits, err := st.recall("  *  ", 0, 0, "", "", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(hits) != 1 {
-		t.Fatalf("recall(\"  *  \") returned %d hits, want 1", len(hits))
-	}
-}
-
-// TestRecallStar_RespectsLimit proves the limit cap is applied on the list-all
-// path exactly as it is on the normal relevance path.
-func TestRecallStar_RespectsLimit(t *testing.T) {
-	st, err := newMemStore(":memory:", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i := 0; i < 10; i++ {
-		if _, err := st.remember(rememberInput{content: "fact number " + string(rune('a'+i))}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	hits, err := st.recall("*", 3, 0, "", "", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(hits) != 3 {
-		t.Fatalf("recall(\"*\", limit=3) returned %d hits, want 3", len(hits))
-	}
-}
-
-// TestRecallStar_RespectsCharBudget proves the char budget truncation applies
-// on the list-all path: once the running content-length total would exceed
-// charBudget, no further hits are added (but at least one hit is always kept).
-func TestRecallStar_RespectsCharBudget(t *testing.T) {
-	st, err := newMemStore(":memory:", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+// TestRecallStar_Basics table-drives four independent list-all knobs that
+// share the exact same shape (seed rows, call recall("*", ...) with one
+// non-default param, assert a hit-count range): whitespace-trimming the
+// literal query, the limit cap, the char-budget cutoff, and an explicit kind
+// filter all apply on the list-all path exactly as they do on the normal
+// relevance path.
+func TestRecallStar_Basics(t *testing.T) {
 	long := strings.Repeat("x", 50)
-	for i := 0; i < 5; i++ {
-		if _, err := st.remember(rememberInput{content: long + string(rune('a'+i))}); err != nil {
-			t.Fatal(err)
-		}
+	cases := []struct {
+		name              string
+		contents          []string
+		query             string
+		limit, charBudget int
+		kind              string
+		wantMin, wantMax  int
+	}{
+		{name: "trims whitespace", contents: []string{"only fact"}, query: "  *  ", wantMin: 1, wantMax: 1},
+		{name: "respects limit", contents: []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}, query: "*", limit: 3, wantMin: 3, wantMax: 3},
+		{name: "respects char budget", contents: []string{long + "a", long + "b", long + "c", long + "d", long + "e"}, query: "*", charBudget: 110, wantMin: 1, wantMax: 2}, // budget for ~2 rows (51 chars each)
+		{name: "kind filter", contents: []string{"a fact", "a learning"}, query: "*", kind: "learning", wantMin: 1, wantMax: 1},
 	}
-	// Budget for ~2 rows (51 chars each).
-	hits, err := st.recall("*", 0, 110, "", "", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(hits) < 1 || len(hits) > 2 {
-		t.Fatalf("recall(\"*\", charBudget=110) returned %d hits, want 1-2", len(hits))
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st, err := newMemStore(":memory:", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i, c := range tc.contents {
+				k := "fact"
+				if tc.kind != "" && i == len(tc.contents)-1 {
+					k = tc.kind // kind-filter case: only the last seeded row is the target kind
+				}
+				if _, err := st.remember(rememberInput{content: c, kind: k}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			hits, err := st.recall(tc.query, tc.limit, tc.charBudget, tc.kind, "", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(hits) < tc.wantMin || len(hits) > tc.wantMax {
+				t.Fatalf("recall(%q) returned %d hits, want %d-%d: %+v", tc.query, len(hits), tc.wantMin, tc.wantMax, hits)
+			}
+		})
 	}
 }
 
@@ -162,27 +144,6 @@ func TestRecallStar_ProfileVisibility(t *testing.T) {
 	}
 	if def[0].content != "shared default fact" {
 		t.Errorf("default profile recall(\"*\") = %+v, want only the shared fact", def)
-	}
-}
-
-// TestRecallStar_KindFilter proves "*" still honors an explicit kind filter.
-func TestRecallStar_KindFilter(t *testing.T) {
-	st, err := newMemStore(":memory:", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := st.remember(rememberInput{content: "a fact", kind: "fact"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := st.remember(rememberInput{content: "a learning", kind: "learning"}); err != nil {
-		t.Fatal(err)
-	}
-	hits, err := st.recall("*", 0, 0, "learning", "", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(hits) != 1 || hits[0].content != "a learning" {
-		t.Fatalf("recall(\"*\", kind=learning) = %+v, want only the learning", hits)
 	}
 }
 

@@ -204,14 +204,9 @@ export async function buildRecallBlock(
 // accurate picture of the capability instead of guessing: it reaches the host
 // daemon directly (no shelling out), auto-recall only injects a small filtered
 // subset each turn (this tool can return up to 100 rows, not the whole store),
-// every memory is durable with no automatic expiry, and writes/deletes are
+// every memory is durable with no automatic expiry (see docs/memory.md's
+// Legacy data section for what that replaced), and writes/deletes are
 // human-driven slash commands (`/remember`, `/forget`).
-//
-// The watcher used to also capture perishable, time-bound "events" that
-// expired after 7 days on their own; that channel was removed host-side (see
-// docs/memory.md), so nothing this tool surface can return today expires.
-// This description intentionally does not mention that legacy behavior: it
-// describes what memory does now, not what it used to do.
 //
 // IMPORTANT, this is a UX/safety posture, not a security boundary: the host
 // memory daemon is unauthenticated and reachable at host.docker.internal (see

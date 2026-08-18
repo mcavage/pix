@@ -317,15 +317,6 @@ func containsAny(s string, needles []string) bool {
 type MemoryUnitProbe struct {
 	Port    int
 	Enabled bool // in the configured services set
-	// WantVersion is the version the unit must report to read as current.
-	// Empty (the production default) resolves to launcher.Version — THIS
-	// binary's own build stamp — at Check time, so a caller need not thread
-	// it through; a test overrides it to decouple from a real build stamp.
-	// This is READ-SIDE DETECTION ONLY: unlike verifyServeIdentity
-	// (service/install.go, the explicit `pix serve start`/`install` path),
-	// this probe never restarts or mutates anything — it only reports, so
-	// `pix status`/`doctor` can name the exact fix.
-	WantVersion string
 }
 
 func (MemoryUnitProbe) Name() string     { return "memory" }
@@ -357,10 +348,7 @@ func (p MemoryUnitProbe) Check(ctx context.Context) Result {
 		return Result{Name: p.Name(), Status: StatusUnknown, Required: p.Enabled,
 			Detail: "unit did not answer", Evidence: fmt.Sprintf("identity on :%d: %s", p.Port, classifyNetErr(ctx, err))}
 	}
-	want := p.WantVersion
-	if want == "" {
-		want = launcher.Version
-	}
+	want := launcher.Version
 	switch {
 	case id.Name != rpc.MemoryName:
 		return Result{Name: p.Name(), Status: StatusAbsent, Required: p.Enabled,

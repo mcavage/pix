@@ -269,10 +269,6 @@ func TestMemoryUnitProbe_RealListenerOutcomes(t *testing.T) {
 			t.Errorf("fix = %q, want %q (never a bare restart hint that cannot close a version gap)", r.Fix, ServeVersionMismatchFix)
 		}
 	})
-	t.Run("WantVersion overrides launcher.Version for the comparison", func(t *testing.T) {
-		r := check(t, MemoryUnitProbe{Port: memoryUnit(t, staleVersion, false), Enabled: true, WantVersion: "0.1.7"}, 3*time.Second)
-		wantStatus(t, r, StatusReady)
-	})
 	t.Run("a foreign process holding the port is never ready", func(t *testing.T) {
 		r := check(t, MemoryUnitProbe{Port: memoryUnit(t, foreign, false), Enabled: true}, 3*time.Second)
 		if r.OK() {

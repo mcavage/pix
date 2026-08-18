@@ -157,17 +157,12 @@ for anything sensitive.
 An older pix watcher also extracted perishable, time-bound **events** ("doing
 X right now") that expired after 7 days, and seeded a small reward from a
 sentiment score. Both are gone: the watcher only emits facts and corrections
-now, and nothing it writes ever expires.
-
-That leaves one loose end for a store that predates the change: a live
-perishable row that was waiting to expire, with nothing left to ever expire
-it. On the first startup after upgrading, pix retires every such row once
-(soft-deletes it, the same operation `/forget` performs), so it does not sit
-forever as a memory nobody meant to keep. This is a **soft** delete: the row's
-data is still in the SQLite file with `deleted_at` set, not purged, so it can
-be restored by clearing that column directly in the database file if you ever
-need one back. The `reward` column itself is untouched by this: it stays in
-the schema, always 0, ignored by recall's scoring.
+now, and nothing it writes ever expires. That leaves one loose end for a
+store that predates the change — a live perishable row waiting to expire,
+with nothing left to ever expire it — which the schema v2 migration below
+retires as part of its one-time sweep. The `reward` column itself is
+untouched by any of this: it stays in the schema, always 0, ignored by
+recall's scoring.
 
 Two precision guards run before anything is stored:
 
@@ -189,16 +184,20 @@ Two precision guards run before anything is stored:
 
 Upgrading a pre-v2 store runs a small, one-time DATA migration — no new
 column, no new concept, just a sweep of what's already there. In ONE
-database transaction (`migrateMemorySchema`, `services/host/memory.go`): the
-legacy `profile` column is added if a pre-profile-scoping db still lacks it,
-every LIVE row whose recorded `source` is neither `user` nor `cli` (the
-watcher's past captures, or a source pix has never seen) is **soft-deleted**
-— the exact same `deleted_at` mechanism `/forget` already uses — and
-`PRAGMA user_version` is stamped to 2. A crash or error anywhere in that
-transaction rolls back everything, leaving the store fully at its old
-version; completion is judged by `user_version` alone, so the sweep runs
-exactly once per store, and a row written after the stamp (including a brand
-new watcher capture) is never touched by it again.
+database transaction (`migrateMemorySchema`, `services/host/memory.go`),
+three things happen: (1) the legacy `profile` column is added if a
+pre-profile-scoping db still lacks it; (2) every LIVE row whose recorded
+`source` is neither `user` nor `cli` (the watcher's past captures, or a
+source pix has never seen) is **soft-deleted** — the exact same `deleted_at`
+mechanism `/forget` already uses; (3) every LIVE row still carrying the
+legacy `durability = 'perishable'` marker (see "Legacy data" above) is
+**also soft-deleted** the same way — this used to be its own every-startup
+query, now it's folded into this same one-time sweep. `PRAGMA user_version`
+is then stamped to 2. A crash or error anywhere in that transaction rolls
+back everything, leaving the store fully at its old version; completion is
+judged by `user_version` alone, so the sweep runs exactly once per store,
+and a row written after the stamp (including a brand new watcher capture) is
+never touched by it again.
 
 This is an ADVISORY, one-time reading of pre-v2 free-text history, never a
 verified trust boundary: pre-v2 `source` was operator-set text with no

@@ -284,8 +284,7 @@ func memoryStoreMux(use memoryUse) http.Handler {
 			if err != nil {
 				return nil, err
 			}
-			return jsonObj{"active": r.Active, "durable": r.Durable, "perishable": r.Perishable,
-				"facts": r.Facts, "learnings": r.Learnings, "deleted": r.Deleted}, nil
+			return jsonObj{"active": r.Active, "facts": r.Facts, "learnings": r.Learnings, "deleted": r.Deleted}, nil
 		}),
 		"recall": with(func(s plugin.MemoryStore, p jsonObj) (any, error) {
 			r, err := s.Recall(plugin.RecallReq{
@@ -299,7 +298,7 @@ func memoryStoreMux(use memoryUse) http.Handler {
 			list := []jsonObj{}
 			for _, hit := range r.Hits {
 				list = append(list, jsonObj{"id": hit.ID, "content": hit.Content, "score": hit.Score,
-					"kind": hit.Kind, "durability": hit.Durability, "project": projOrNil(hit.Project),
+					"kind": hit.Kind, "project": projOrNil(hit.Project),
 					"createdAt": hit.CreatedAt, "source": hit.Source})
 			}
 			return jsonObj{"hits": list}, nil
@@ -323,13 +322,6 @@ func memoryStoreMux(use memoryUse) http.Handler {
 				return nil, err
 			}
 			return jsonObj{"ok": r.OK}, nil
-		}),
-		"synthesize": with(func(s plugin.MemoryStore, _ jsonObj) (any, error) {
-			r, err := s.Synthesize(plugin.SynthesizeReq{})
-			if err != nil {
-				return nil, err
-			}
-			return jsonObj{"merged": r.Merged}, nil
 		}),
 		"observe": with(func(s plugin.MemoryStore, p jsonObj) (any, error) {
 			project, hasProj := projectFromParams(p)
