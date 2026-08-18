@@ -28,10 +28,13 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   caller to try `/recall`, and an id miss says the id may be absent, already
   forgotten, or in a different profile scope, instead of complaining about
   formatting. `docs/legal/PRIVACY.md` now asserts `api.parallel.ai` in the
-  regression test's disclosed-host list, and reframes Parallel from a
-  generic "fallback" to accurate: it is checked ahead of Perplexity/Gemini
-  in auto-select order, so a Parallel key alone makes it the *preferred*
-  keyed backend once Exa is unavailable. `docs/legal/RELEASE-SAFEGUARDS.md`'s
+  regression test's disclosed-host list, and reframes the `web_search` row
+  to match the baked `web-search.json` (`provider: "parallel"`) exactly:
+  with `PARALLEL_API_KEY` set, Parallel is the **pinned** backend for every
+  search, not merely a preferred fallback; without that key, resolution
+  falls through to OpenAI's search if wired, then the keyless Exa default,
+  then the remaining allowed/configured backends (Perplexity, Gemini) in
+  order. `docs/legal/RELEASE-SAFEGUARDS.md`'s
   privacy summary no longer implies pix only talks to providers/servers you
   configured; it now names the default destinations (web-search fallbacks,
   npm version check, package downloads) too.

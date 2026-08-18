@@ -389,16 +389,26 @@ export default function (pi: any) {
 	pi.registerCommand?.("remember", {
 		description: "Store a durable fact in memory (global)",
 		handler: async (args: any, ctx: any) => {
+			const content = String(args ?? "").trim();
+			// A blank /remember never reaches the daemon and never claims success:
+			// show usage and stop, matching /forget's own blank-arg guard above.
+			if (!content) return ctx?.ui?.notify?.("usage: /remember <fact>", "info");
 			// Deliberately NOT wrapped in safe(): this is a user-invoked command, so a
 			// dead/slow memory service must surface as a visible error, not vanish (see
 			// /recall above, whose try/catch this mirrors). The silent best-effort
 			// behavior stays on the before_agent_start hook only.
 			try {
-				const r = await rpc("remember", {
-					content: String(args ?? "").trim(),
-					source: "user",
-					profile: ACTIVE_PROFILE,
-				});
+				const r = await rpc("remember", { content, source: "user", profile: ACTIVE_PROFILE });
+				// The daemon can respond 200 with an empty id (e.g. content collapsed to
+				// "" after its own trim, or a budget/dedupe path returned nothing to
+				// store) — that is NOT success and must not be reported as "remembered"
+				// or "reaffirmed".
+				if (!r?.id) {
+					return ctx?.ui?.notify?.(
+						`/remember failed: memory service did not store this fact (empty id in response)`,
+						"error",
+					);
+				}
 				ctx?.ui?.notify?.(r?.reaffirmed ? "reaffirmed" : "remembered", "info");
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err);

@@ -193,6 +193,7 @@ test("PRIVACY.md enumerates the DEFAULT network destinations, not just 'what you
 		"generativelanguage.googleapis.com",
 		"api.perplexity.ai",
 		"api.parallel.ai",
+		"api.openai.com",
 		"registry.npmjs.org",
 		"objects.githubusercontent.com",
 		"codeload.github.com",
@@ -206,6 +207,50 @@ test("PRIVACY.md enumerates the DEFAULT network destinations, not just 'what you
 	assert.match(privacy, /version check|Update available/i);
 	// And the "nothing else" row, which papered over all of the above, is gone.
 	assert.doesNotMatch(privacy, /\| Nothing else \|/);
+});
+
+// The disclosed row must match the ACTUAL baked resolution order, not a
+// plausible-sounding paraphrase: web-search.json is the ground truth for what
+// pi-web-access resolves to, and the row must name Parallel as PINNED (not a
+// mere "fallback" or "checked ahead of" description) plus the real degrade
+// path when PARALLEL_API_KEY is absent — OpenAI first, then keyless Exa, then
+// the remaining allowed backends — so this test fails the moment the doc and
+// the baked config drift apart, not just when a hostname goes missing.
+test("PRIVACY.md's web_search row states the pinned provider and fallback order from the baked web-search.json, not just host presence", () => {
+	const privacy = read("docs/legal/PRIVACY.md");
+	const webSearchConfig = JSON.parse(read("web-search.json"));
+	assert.equal(webSearchConfig.provider, "parallel", "web-search.json no longer pins parallel — update this test AND the PRIVACY.md row together");
+
+	const rowMatch = privacy.match(/\|\s*\*\*Your `web_search` query text\*\*.*\|/);
+	assert.ok(rowMatch, "PRIVACY.md's web_search row not found");
+	const row = rowMatch[0];
+
+	// Parallel is stated as PINNED (the config literally sets provider:
+	// "parallel"), not vague "fallback"/"checked ahead of" language that a
+	// reader could mistake for auto-select ranking rather than a hard pin.
+	assert.match(row, /pins?\s+`?api\.parallel\.ai`?/i, "row must say the config PINS parallel, not merely lists it as a fallback");
+	assert.match(row, /PARALLEL_API_KEY/, "row must name the env var that gates the pin");
+	assert.doesNotMatch(row, /not a last-resort fallback/i, "stale phrasing from before the pin was documented correctly");
+
+	// The unkeyed degrade path, in the real order resolveProvider() falls
+	// through: OpenAI (if wired) before the keyless Exa default, then the
+	// remaining allowed/configured backends.
+	const openaiIdx = row.search(/api\.openai\.com/);
+	const exaIdx = row.search(/api\.exa\.ai/);
+	const perplexityIdx = row.search(/api\.perplexity\.ai/);
+	const geminiIdx = row.search(/generativelanguage\.googleapis\.com/);
+	for (const [name, idx] of [
+		["api.openai.com", openaiIdx],
+		["api.exa.ai", exaIdx],
+		["api.perplexity.ai", perplexityIdx],
+		["generativelanguage.googleapis.com", geminiIdx],
+	]) {
+		assert.ok(idx >= 0, `web_search row must name ${name} in the fallback chain`);
+	}
+	assert.ok(openaiIdx < exaIdx, "OpenAI must be named ahead of Exa: it is checked first in the unkeyed fallback order");
+	assert.ok(exaIdx < perplexityIdx, "Exa (keyless default) must be named ahead of Perplexity in the fallback order");
+	assert.ok(perplexityIdx < geminiIdx, "Perplexity must be named ahead of Gemini, matching resolveProvider()'s fallback order");
+	assert.match(row, /keyless/i, "row must note Exa is the keyless fallback, not just another keyed backend");
 });
 
 // The monitor persisted a transcript, and PRIVACY.md used to have to disclose

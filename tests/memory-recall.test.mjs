@@ -331,6 +331,33 @@ test("/remember: a JSON-RPC error surfaces a visible error instead of silently v
 	assert.match(notes[0].msg, /database unavailable/);
 });
 
+test("/remember: blank args show usage and never call the daemon or claim success", async (t) => {
+	const { server, requests } = makeFakeDaemon(() => ({ id: "should-not-be-reached", reaffirmed: false }));
+	t.after(() => server.close());
+	const mod = await loadWithEnv({ MEMORY_URL: await listen(server) });
+	const handler = getCommandHandler(mod, "remember");
+	for (const blank of ["", "   ", undefined, null]) {
+		const notes = [];
+		await handler(blank, fakeCtx(notes));
+		assert.equal(requests.length, 0, "blank /remember must never reach the daemon");
+		assert.equal(notes.length, 1);
+		assert.match(notes[0].msg, /usage: \/remember/i);
+		assert.doesNotMatch(notes[0].msg, /remembered|reaffirmed/i);
+	}
+});
+
+test("/remember: a daemon response with an empty id is a visible error, never 'remembered'", async (t) => {
+	const { server } = makeFakeDaemon(() => ({ id: "", reaffirmed: false }));
+	t.after(() => server.close());
+	const mod = await loadWithEnv({ MEMORY_URL: await listen(server) });
+	const handler = getCommandHandler(mod, "remember");
+	const notes = [];
+	await handler("docker sandboxes are great", fakeCtx(notes));
+	assert.equal(notes.length, 1);
+	assert.equal(notes[0].level, "error");
+	assert.doesNotMatch(notes[0].msg, /^remembered$|^reaffirmed$/i);
+});
+
 test("/forget: a transport error from a dead daemon surfaces a visible error notification", async () => {
 	const mod = await loadWithEnv({ MEMORY_URL: "http://127.0.0.1:1", MEMORY_COMMAND_TIMEOUT_MS: "500" });
 	const handler = getCommandHandler(mod, "forget");

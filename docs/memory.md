@@ -312,9 +312,15 @@ From the host, without launching a sandbox:
 ```bash
 pix memory recall "<query>"
 pix memory remember "<fact>"
-pix memory forget "<query>"
+pix memory forget <id>   # id or unique id-prefix only, from `pix memory recall` — no query fallback on the host
 pix memory stats
 ```
+
+The query-fallback convenience (drop the top match for a free-text query with
+no id) is a **sandbox slash-command-only** feature — `/forget <query>` inside
+a sandbox does that lookup for you. The host `pix memory forget` CLI takes
+only a fact id or a unique prefix of one (get it from `pix memory recall`
+first); it has no query form.
 
 If the daemon is down, the host commands and the agent's tools/slash commands
 all surface a clear error, they do not fail silently. Only the silent
