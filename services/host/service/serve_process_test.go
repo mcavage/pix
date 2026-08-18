@@ -10,6 +10,7 @@ package service
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -396,18 +397,77 @@ func TestLaunchdStop_BootsOutAndKeepsThePlist(t *testing.T) {
 	}
 }
 
-// StopAnyMode routes a managed daemon to the supervisor and NEVER to the pid
-// path: the ctl here fails the test if any signal is attempted.
-func TestStopAnyMode_ManagedNeverSignalsAPid(t *testing.T) {
+// StopAnyMode routes a managed daemon to the supervisor and NEVER delivers a
+// signal itself. It still waits for the verified managed pid to terminate
+// before publishing the supervisor's success line, then clears lifecycle state.
+// That convergence closes the immediate stop -> start race: launchctl bootout
+// can return while the outgoing process is still awaiting reap.
+func TestStopAnyMode_ManagedWaitsForExitWithoutSignallingPid(t *testing.T) {
+	alive := true
+	removedPid, removedLazy := false, false
 	ctl := DefaultCtl()
-	ctl.kill = func(int, syscall.Signal) error { t.Fatal("managed stop must not signal a pid"); return nil }
-	ctl.readPid = func(string) (string, error) { t.Fatal("managed stop must not read the pidfile"); return "", nil }
+	ctl.pidPath = func() string { return "/state/serve.pid" }
+	ctl.readPid = func(string) (string, error) { return "60822\n", nil }
+	ctl.removePid = func(string) error { removedPid = true; return nil }
+	ctl.removeLazy = func() { removedLazy = true }
+	ctl.kill = func(_ int, sig syscall.Signal) error {
+		if sig != 0 {
+			t.Fatalf("managed stop delivered signal %v instead of using the supervisor", sig)
+		}
+		if alive {
+			return nil
+		}
+		return syscall.ESRCH
+	}
+	ctl.verify = func(int) (bool, bool) { return true, true }
+	ctl.sleep = func(time.Duration) {}
 	managedCalled := false
+	var out bytes.Buffer
 	stopped, err := StopAnyMode(
 		func() bool { return true },
-		func(io.Writer) error { managedCalled = true; return nil },
-		ctl, &bytes.Buffer{})
+		func(w io.Writer) error {
+			managedCalled = true
+			alive = false
+			fmt.Fprintln(w, "stopped the managed pix service")
+			return nil
+		},
+		ctl, &out)
 	if err != nil || !stopped || !managedCalled {
 		t.Fatalf("StopAnyMode(managed) = (%v,%v), managedCalled=%v", stopped, err, managedCalled)
+	}
+	if !removedPid || !removedLazy {
+		t.Fatalf("managed convergence did not clear lifecycle state: pid=%v lazy=%v", removedPid, removedLazy)
+	}
+	if !strings.Contains(out.String(), "stopped the managed") {
+		t.Fatalf("verified supervisor success was not published: %q", out.String())
+	}
+}
+
+func TestStopAnyMode_ManagedDoesNotPublishStoppedWhilePidLives(t *testing.T) {
+	ctl := DefaultCtl()
+	ctl.pidPath = func() string { return "/state/serve.pid" }
+	ctl.readPid = func(string) (string, error) { return "60822\n", nil }
+	ctl.kill = func(_ int, sig syscall.Signal) error {
+		if sig != 0 {
+			t.Fatalf("managed stop delivered signal %v instead of using the supervisor", sig)
+		}
+		return nil
+	}
+	ctl.exited = func(int) bool { return false }
+	ctl.verify = func(int) (bool, bool) { return true, true }
+	ctl.sleep = func(time.Duration) {}
+	var out bytes.Buffer
+	stopped, err := StopAnyMode(
+		func() bool { return true },
+		func(w io.Writer) error {
+			fmt.Fprintln(w, "stopped the managed pix service")
+			return nil
+		},
+		ctl, &out)
+	if stopped || err == nil {
+		t.Fatalf("StopAnyMode = (%v,%v), want false,error while managed pid lives", stopped, err)
+	}
+	if strings.Contains(out.String(), "stopped") {
+		t.Fatalf("unverified success escaped before process convergence: %q", out.String())
 	}
 }

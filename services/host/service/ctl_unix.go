@@ -15,6 +15,22 @@ import (
 // killProcess sends sig to pid (sig 0 = liveness probe).
 func killProcess(pid int, sig syscall.Signal) error { return syscall.Kill(pid, sig) }
 
+// processExited closes the Unix zombie gap in kill(pid, 0): a terminated child
+// continues to answer signal 0 until its parent reaps it, even though it has
+// released its ports and cannot handle another signal. launchd can expose that
+// state briefly after bootout. Treat only ps's explicit zombie state as exited;
+// any missing or ambiguous answer remains live and preserves fail-closed signal
+// escalation.
+func processExited(pid int) bool {
+	out, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
+	return err == nil && processStatExited(string(out))
+}
+
+func processStatExited(stat string) bool {
+	stat = strings.TrimSpace(stat)
+	return stat != "" && stat[0] == 'Z'
+}
+
 // discoverServeProcs finds candidate `pix-host serve` pids when the pidfile is
 // gone (e.g. the config dir was moved out from under a running daemon by hand).
 // It is deliberately LOOSE — every candidate is verified before it is signalled,

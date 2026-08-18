@@ -6,6 +6,7 @@
 package service
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -31,6 +32,7 @@ type serveCtl struct {
 	readPid    func(path string) (string, error)       // read the pidfile's raw contents
 	removePid  func(path string) error                 // remove the pidfile
 	kill       func(pid int, sig syscall.Signal) error // send a signal (sig 0 = liveness probe)
+	exited     func(pid int) bool                      // true for a terminated process awaiting reap (zombie)
 	verify     func(pid int) (ours bool, known bool)   // is pid our `pix-host serve`? known=false => can't tell
 	sleep      func(d time.Duration)                   // poll delay (injected so tests don't wait)
 	removeLazy func()                                  // clear the serve.lazy marker (optional; nil = skip)
@@ -43,7 +45,8 @@ func DefaultCtl() serveCtl {
 		pidPath:    config.ServePidPath,
 		readPid:    func(path string) (string, error) { b, err := os.ReadFile(path); return string(b), err },
 		removePid:  os.Remove,
-		kill:       killProcess, // platform shim (ctl_unix.go)
+		kill:       killProcess,   // platform shim (ctl_unix.go)
+		exited:     processExited, // platform shim: zombies have exited despite kill(pid, 0) succeeding
 		verify:     verifyServeProc,
 		sleep:      time.Sleep,
 		removeLazy: func() { _ = os.Remove(config.ServeLazyMarkerPath()) },
@@ -412,12 +415,12 @@ func serveProcGone(ctl serveCtl, pid int, timeout time.Duration) bool {
 	const interval = 100 * time.Millisecond
 	attempts := int(timeout/interval) + 1
 	for i := 0; i < attempts; i++ {
-		if ctl.kill(pid, 0) != nil {
-			return true // gone
+		if ctl.kill(pid, 0) != nil || (ctl.exited != nil && ctl.exited(pid)) {
+			return true // gone, or terminated and only awaiting parent reap
 		}
 		ctl.sleep(interval)
 	}
-	return ctl.kill(pid, 0) != nil
+	return ctl.kill(pid, 0) != nil || (ctl.exited != nil && ctl.exited(pid))
 }
 
 // serveState is the resolved `serve status` snapshot: is the supervisor running
@@ -576,9 +579,32 @@ func printServeUnits(st serveState, out io.Writer) {
 // KeepAlive — the classic "I stopped it but it came right back" bug (invariant #3).
 func StopAnyMode(managedActive func() bool, stopManaged func(io.Writer) error, ctl serveCtl, out io.Writer) (bool, error) {
 	if managedActive() {
-		if err := stopManaged(out); err != nil {
+		// Capture the pid before bootout: once launchd unloads the unit it no
+		// longer tells us which outgoing process still needs to drain. This is
+		// observation only. The supervisor remains the sole stop authority.
+		pr := probeServePid(ctl)
+
+		// Buffer the platform's success wording until the verified managed pid
+		// has actually terminated. launchctl bootout can return while that pid is
+		// a zombie (kill(pid, 0) still succeeds), which used to let an immediate
+		// `serve start` race stale pid/lazy state and the old memory listener.
+		var managedOut bytes.Buffer
+		if err := stopManaged(&managedOut); err != nil {
+			_, _ = io.Copy(out, &managedOut)
 			return false, err
 		}
+		if pr.isOurs() && !serveProcGone(ctl, pr.pid, 5*time.Second) {
+			return false, fmt.Errorf("managed service was unloaded, but verified 'pix-host serve' pid %d did not exit within 5s; wait, then retry `pix serve stop`", pr.pid)
+		}
+
+		// A successful managed stop makes every lazy marker stale. Remove the
+		// pidfile only when it named our process (now gone) or was already dead;
+		// never erase an alive foreign/unverifiable pid's evidence.
+		clearServeLazyMarker(ctl)
+		if pr.pid > 0 && (!pr.alive || pr.isOurs()) {
+			_ = ctl.removePid(ctl.pidPath())
+		}
+		_, _ = io.Copy(out, &managedOut)
 		return true, nil
 	}
 	return Stop(ctl, out)
