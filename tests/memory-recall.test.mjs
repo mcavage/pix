@@ -75,6 +75,20 @@ function getRecallHandler(mod, pi) {
 	return handler;
 }
 
+// Generic sibling of getRecallHandler for /remember and /forget, used by the
+// dead-daemon/RPC-error and miss-severity tests below.
+function getCommandHandler(mod, commandName) {
+	let handler = null;
+	mod.default({
+		on() {},
+		registerCommand(name, cfg) {
+			if (name === commandName) handler = cfg.handler;
+		},
+	});
+	assert.ok(handler, `/${commandName} command registered`);
+	return handler;
+}
+
 // Captures every registered slash command and tool so tool tests can exercise
 // memory_recall/memory_stats directly.
 function capturePi(mod) {
@@ -280,6 +294,90 @@ test("a JSON-RPC error surfaces a visible error instead of '(nothing)'", async (
 	assert.equal(notes.length, 1);
 	assert.equal(notes[0].level, "error");
 	assert.match(notes[0].msg, /database unavailable/);
+});
+
+// ── /remember and /forget mirror /recall's try/catch: a dead daemon or an
+// RPC error must surface as a visible ctx.ui.notify error, never vanish into
+// safe()'s undefined. These commands used to be wrapped in safe(), which
+// swallowed exactly this failure mode.
+
+test("/remember: a transport error from a dead daemon surfaces a visible error notification", async () => {
+	const mod = await loadWithEnv({ MEMORY_URL: "http://127.0.0.1:1", MEMORY_COMMAND_TIMEOUT_MS: "500" });
+	const handler = getCommandHandler(mod, "remember");
+	const notes = [];
+	await handler("docker sandboxes are great", fakeCtx(notes));
+	assert.equal(notes.length, 1, "an error must be reported, not swallowed");
+	assert.equal(notes[0].level, "error");
+	assert.match(notes[0].msg, /\/remember failed/i);
+});
+
+test("/remember: a JSON-RPC error surfaces a visible error instead of silently vanishing", async (t) => {
+	const server = http.createServer((req, res) => {
+		let body = "";
+		req.on("data", (c) => (body += c));
+		req.on("end", () => {
+			const parsed = JSON.parse(body);
+			res.writeHead(200, { "content-type": "application/json" });
+			res.end(JSON.stringify({ jsonrpc: "2.0", id: parsed.id, error: { code: -32000, message: "database unavailable" } }));
+		});
+	});
+	t.after(() => server.close());
+	const mod = await loadWithEnv({ MEMORY_URL: await listen(server) });
+	const handler = getCommandHandler(mod, "remember");
+	const notes = [];
+	await handler("docker sandboxes are great", fakeCtx(notes));
+	assert.equal(notes.length, 1);
+	assert.equal(notes[0].level, "error");
+	assert.match(notes[0].msg, /database unavailable/);
+});
+
+test("/forget: a transport error from a dead daemon surfaces a visible error notification", async () => {
+	const mod = await loadWithEnv({ MEMORY_URL: "http://127.0.0.1:1", MEMORY_COMMAND_TIMEOUT_MS: "500" });
+	const handler = getCommandHandler(mod, "forget");
+	const notes = [];
+	await handler("abcdef1234567890", fakeCtx(notes));
+	assert.equal(notes.length, 1, "an error must be reported, not swallowed");
+	assert.equal(notes[0].level, "error");
+	assert.match(notes[0].msg, /\/forget failed/i);
+});
+
+test("/forget: a JSON-RPC error surfaces a visible error instead of silently vanishing", async (t) => {
+	const server = http.createServer((req, res) => {
+		let body = "";
+		req.on("data", (c) => (body += c));
+		req.on("end", () => {
+			const parsed = JSON.parse(body);
+			res.writeHead(200, { "content-type": "application/json" });
+			res.end(JSON.stringify({ jsonrpc: "2.0", id: parsed.id, error: { code: -32000, message: "database unavailable" } }));
+		});
+	});
+	t.after(() => server.close());
+	const mod = await loadWithEnv({ MEMORY_URL: await listen(server) });
+	const handler = getCommandHandler(mod, "forget");
+	const notes = [];
+	// A hex-ish id skips the /forget lookup recall() and goes straight to
+	// forget(), which is the RPC that errors here.
+	await handler("abcdef1234567890", fakeCtx(notes));
+	assert.equal(notes.length, 1);
+	assert.equal(notes[0].level, "error");
+	assert.match(notes[0].msg, /database unavailable/);
+});
+
+// A forget MISS (the daemon responds, but {ok:false} because the id/query
+// didn't match anything) is a distinct case from a transport/RPC error: it's
+// not swallowed either way, but it must notify at "error" severity, not
+// "info" — the caller asked to delete something specific and nothing happened.
+test("/forget: a miss (daemon responds ok:false) notifies at error severity, not info", async (t) => {
+	const { server } = makeFakeDaemon((req) => (req.method === "forget" ? { ok: false } : { hits: [] }));
+	t.after(() => server.close());
+	const MEMORY_URL = await listen(server);
+	const mod = await loadWithEnv({ MEMORY_URL });
+	const handler = getCommandHandler(mod, "forget");
+	const notes = [];
+	await handler("abcdef1234567890", fakeCtx(notes));
+	assert.equal(notes.length, 1);
+	assert.equal(notes[0].level, "error", "a forget miss must be a visible error, not an info-level no-op");
+	assert.match(notes[0].msg, /not found/i);
 });
 
 // The command-timeout MAGNITUDE (200ms here vs. the real 10s production

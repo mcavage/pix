@@ -388,21 +388,32 @@ export default function (pi: any) {
 
 	pi.registerCommand?.("remember", {
 		description: "Store a durable fact in memory (global)",
-		handler: async (args: any, ctx: any) =>
-			safe(async () => {
+		handler: async (args: any, ctx: any) => {
+			// Deliberately NOT wrapped in safe(): this is a user-invoked command, so a
+			// dead/slow memory service must surface as a visible error, not vanish (see
+			// /recall above, whose try/catch this mirrors). The silent best-effort
+			// behavior stays on the before_agent_start hook only.
+			try {
 				const r = await rpc("remember", {
 					content: String(args ?? "").trim(),
 					source: "user",
 					profile: ACTIVE_PROFILE,
 				});
 				ctx?.ui?.notify?.(r?.reaffirmed ? "reaffirmed" : "remembered", "info");
-			}),
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				ctx?.ui?.notify?.(`/remember failed: ${msg} (is the memory service reachable?)`, "error");
+			}
+		},
 	});
 
 	pi.registerCommand?.("forget", {
 		description: "Forget a memory. Pass an 8+ char id (from /recall) or a query to drop its top match.",
-		handler: async (args: any, ctx: any) =>
-			safe(async () => {
+		handler: async (args: any, ctx: any) => {
+			// Deliberately NOT wrapped in safe(): same reasoning as /remember and
+			// /recall above, a dead/slow memory service must surface as a visible
+			// error, not vanish.
+			try {
 				const arg = String(args ?? "").trim();
 				if (!arg) return ctx?.ui?.notify?.("usage: /forget <id|query>", "info");
 				// A bare hex-ish token is treated as an id; otherwise recall the top match.
@@ -416,7 +427,18 @@ export default function (pi: any) {
 					content = hit.content;
 				}
 				const r = await rpc("forget", { id, profile: ACTIVE_PROFILE });
-				ctx?.ui?.notify?.(r?.ok ? `forgot: ${content}` : "not found (use a full id from /recall)", "info");
-			}),
+				if (r?.ok) {
+					ctx?.ui?.notify?.(`forgot: ${content}`, "info");
+				} else {
+					// A miss is a visible error, not info: the id/query the caller
+					// supplied did not match anything in the store, worth flagging as a
+					// failure rather than a quiet no-op.
+					ctx?.ui?.notify?.("not found (use a full id from /recall)", "error");
+				}
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				ctx?.ui?.notify?.(`/forget failed: ${msg} (is the memory service reachable?)`, "error");
+			}
+		},
 	});
 }

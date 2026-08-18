@@ -16,15 +16,17 @@
 // declaration, the exact TTL-expiry SQL predicate, and the exact
 // perishable-durability behavioral gate.
 //
-// Deliberately NOT flagged, so this stays precise instead of noisy:
-// plugin.Hit/scoredHit keep a Durability field (the read side survives for
-// on-disk compatibility, U9); the `reward` column stays in the schema
-// (still gettable by direct SQL, only its WRITE-PATH presence is banned
-// here); a live db can still hold LEGACY perishable rows across the exact
-// startup that retires them (a one-time SOFT delete folded into
-// migrateMemorySchema, not the deleted PER-CALL sweep this file's grep
-// guards against); and historical prose in comments/docs naming a deleted
-// symbol is fine, since the grep half only walks non-test .go files.
+// Deliberately NOT flagged, so this stays precise instead of noisy: the
+// `reward` column stays in the schema (still gettable by direct SQL, only
+// its WRITE-PATH presence is banned here); a live db can still hold LEGACY
+// perishable rows across the exact startup that retires them (a one-time
+// SOFT delete folded into migrateMemorySchema, not the deleted PER-CALL
+// sweep this file's grep guards against); and historical prose in
+// comments/docs naming a deleted symbol is fine, since the grep half only
+// walks non-test .go files. plugin.Hit, scoredHit, and memRow no longer
+// carry a Durability field at all — the read side finished the U9
+// retirement described below; that absence is reflection-checked, not
+// grepped, since grep can't see a field that was removed.
 package main
 
 import (
@@ -111,14 +113,21 @@ func TestRememberReqDroppedDurabilityTTLAndReward(t *testing.T) {
 }
 
 // TestHitDroppedDurabilityReadSide proves the U9 schema retirement finished
-// the job memory_legacy_behavior_test.go started: plugin.Hit (and scoredHit,
-// which feeds it) no longer carries Durability at all. No reader — not the
+// the job memory_legacy_behavior_test.go started: plugin.Hit, scoredHit
+// (which feeds it), and memRow (the row this package scans out of SQL before
+// scoring) no longer carry a Durability field at all. No reader — not the
 // sandbox extension, not the host CLI — ever consumed it after U4, so the
 // read thread is gone end-to-end; only the DB column and its "durable"
 // INSERT literal remain, for on-disk compatibility.
 func TestHitDroppedDurabilityReadSide(t *testing.T) {
-	if hasField(fieldNames(plugin.Hit{}), "Durability") {
-		t.Fatal("plugin.Hit still has a Durability field; the U9 schema retirement deleted this read thread end-to-end — only the DB column and its INSERT literal survive")
+	for name, v := range map[string]any{
+		"plugin.Hit": plugin.Hit{},
+		"scoredHit":  scoredHit{},
+		"memRow":     memRow{},
+	} {
+		if hasField(fieldNames(v), "Durability") {
+			t.Fatalf("%s still has a Durability field; the U9 schema retirement deleted this read thread end-to-end — only the DB column and its INSERT literal survive", name)
+		}
 	}
 }
 
