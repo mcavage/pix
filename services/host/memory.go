@@ -507,6 +507,25 @@ func (s *memStore) rememberSourced(in rememberInput, source string) (jsonObj, er
 		}
 	}
 
+	// The daily watcher budget's exact enforcement point: reaffirm/dedupe above
+	// (neither counts against the budget) have already had their shot, so
+	// anything reaching here is a genuinely NEW row. s.mu is held for this
+	// entire function, the same lock every other store read/write already
+	// serializes through, so this COUNT and the INSERT below happen as one
+	// atomic unit with respect to every other concurrent call — the smallest
+	// change that closes the race: a source=="watcher" caller can no longer
+	// slip past 10 stored rows/day by having several captures each peek a
+	// stale watcherBudgetRemaining() before any of them writes.
+	if source == "watcher" {
+		used, err := s.watcherUsedToday()
+		if err != nil {
+			return nil, err
+		}
+		if used >= memWatcherDailyBudget {
+			return jsonObj{"id": "", "reaffirmed": false, "budgetExceeded": true}, nil
+		}
+	}
+
 	var project any
 	if in.hasProject && in.project != "" {
 		project = in.project
@@ -904,7 +923,10 @@ func watcherHealthState() (state *bool, reason string) {
 // zero inference cost; memCapture peeks it again right before the watcher
 // call. UX policy on an experimental feature, not a security boundary.
 func memObserve(store *memStore, user, project string, hasProject bool, profile string) (accepted bool, reason string) {
-	user = truncate(user, 8000)
+	// NOT truncated here: memCapture's stage-1 secret filter must see the FULL
+	// message first (see its doc comment). Truncating before that check could
+	// push a secret past the cutoff and out of the filter's view entirely.
+	// memCapture truncates for the watcher call only after that check passes.
 	if strings.TrimSpace(user) == "" {
 		return false, ""
 	}
@@ -988,11 +1010,17 @@ func memCapture(store *memStore, user, project string, hasProj bool, profile str
 	defer func() { recover() }()
 	defer func() { <-memCaptureSem }()
 	// Stage 1 (before the watcher): a secret-shaped message never reaches the
-	// watcher model. Fail closed, never logs the matched text.
+	// watcher model. This MUST run on the full, untruncated user text: a
+	// secret sitting past the 8000-char cutoff below would never be seen by
+	// this check if the truncation happened first (a fail-open gap). Fail
+	// closed, never logs the matched text.
 	if containsSecretShape(user) {
 		log.Printf("memory: capture input blocked by the secret filter (stage 1), watcher not invoked")
 		return
 	}
+	// Truncate only now, for the watcher-model call itself; the secret filter
+	// above already saw the untruncated text.
+	user = truncate(user, 8000)
 	// Peek the daily budget again, fresh (memObserve already peeked it once at
 	// admission time; this catches a concurrent capture landing in between).
 	remaining, err := store.watcherBudgetRemaining()
@@ -1065,14 +1093,20 @@ func memCapture(store *memStore, user, project string, hasProj bool, profile str
 
 	// rememberWatcherCapture is the ONE call site allowed to write
 	// source="watcher". One watcher result may store only the remaining budget
-	// rows: stop storing, don't re-invoke the watcher, once used up. `stored`
-	// tracks the daily budget ONLY against a row rememberWatcherCapture actually
-	// INSERTED: a hash reaffirm or a vector-dedupe collapse (either way,
-	// reaffirmed:true, see rememberSourced) touches an existing row, not a new
-	// one, and watcherBudgetRemaining's own COUNT(*) never sees it either — so
-	// counting it here would burn budget the persisted count agrees was never
-	// spent. A call that errors (nothing landed at all) is likewise not counted.
-	// This is what makes a batch that happens to include reaffirmed/semantic-
+	// rows: stop storing, don't re-invoke the watcher, once used up. The actual
+	// stop signal is rememberWatcherCapture's own budgetExceeded result, not a
+	// locally precomputed `remaining` count — that count can go stale the
+	// moment ANOTHER concurrent capture (memCaptureMaxConcurrency allows up to
+	// 8 in flight) stores a row in between, so trusting it here could let this
+	// loop keep writing past the real, already-exhausted budget. `stored` (the
+	// local tally, used only for the truthful log line below) tracks the daily
+	// budget ONLY against a row rememberWatcherCapture actually INSERTED: a
+	// hash reaffirm or a vector-dedupe collapse (either way, reaffirmed:true,
+	// see rememberSourced) touches an existing row, not a new one, and
+	// watcherBudgetRemaining's own COUNT(*) never sees it either — so counting
+	// it here would burn budget the persisted count agrees was never spent. A
+	// call that errors (nothing landed at all) is likewise not counted. This is
+	// what makes a batch that happens to include reaffirmed/semantic-
 	// duplicate/failed items store every genuinely NEW item the remaining
 	// budget allows, instead of stopping early on attempts that cost nothing.
 	type watchItem struct {
@@ -1088,16 +1122,16 @@ func memCapture(store *memStore, user, project string, hasProj bool, profile str
 	}
 	stored := 0
 	for i, it := range items {
-		if stored >= remaining {
-			log.Printf("memory: daily watcher capture budget exhausted mid-capture, dropping %d item(s) (count only, no content logged)", len(items)-i)
-			break
-		}
 		res, err := store.rememberWatcherCapture(rememberInput{content: it.content, kind: it.kind,
 			confidence: it.conf, project: project, hasProject: hasProj,
 			profile: profile, dedupe: 0.9, hasDedupe: true})
 		if err != nil {
 			log.Printf("memory: watcher item failed to store, not counted against the daily budget: %v", err)
 			continue
+		}
+		if exceeded, _ := res["budgetExceeded"].(bool); exceeded {
+			log.Printf("memory: daily watcher capture budget exhausted mid-capture, dropping %d item(s) (count only, no content logged)", len(items)-i)
+			break
 		}
 		if reaffirmed, _ := res["reaffirmed"].(bool); reaffirmed {
 			continue // hash or semantic dedupe collapsed into an existing row; no new row, no budget spent

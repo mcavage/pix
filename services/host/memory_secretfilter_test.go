@@ -23,6 +23,13 @@ func TestContainsSecretShapeMatchesKnownShapes(t *testing.T) {
 		"AWS_SECRET_ACCESS_KEY=abcdefghijklmnopqrstuvwx",
 		"export SLACK_BOT_TOKEN=xoxb-1234567890-abcdefghijklmnop",
 		"DATABASE_PASSWORD=SuperSecretValue123",
+		// op:// 1Password references: a LOCATOR, not the secret value, but still
+		// treated as secret-shaped (SEC-1) since it names exactly where to fetch
+		// one from.
+		"op://vault/item/field",
+		"the anthropic ref is op://Docker/ANTHROPIC_API_KEY/credential, use that",
+		"set it to op://Private/Slack/token please",
+		"op://Vault/Item/api%20key", // a pasted URL with an encoded spaced field name
 	}
 	for _, c := range cases {
 		if !containsSecretShape(c) {
@@ -43,6 +50,8 @@ func TestContainsSecretShapeAvoidsFalsePositives(t *testing.T) {
 		"the image digest is sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 		"9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e", // 48 hex chars, no prefix
 		strings.Repeat("deadbeef", 5),                      // all-hex, well over 32 chars
+		"op://",                                            // the bare scheme with nothing after it is not a locator
+		"we use 1Password (op) for all our secrets",
 	}
 	for _, c := range cases {
 		if containsSecretShape(c) {

@@ -115,10 +115,20 @@ disabling the mode this way only reaches a *new* sandbox**: each sandbox
 reads the mode once, at launch, into its own `.pix/memory-capture` marker, so
 an already-running sandbox keeps whatever mode it launched with until it is
 recreated (`pix config set memory_capture <mode>` itself confirms this in its
-output). The host's own admission check (`memObserve`) is authoritative
-regardless, so a stale marker can only ever be MORE restrictive than the
-host's current config, never less. `pix config unset memory_capture` restores
-`explicit`, same new-sandboxes-only rule.
+output). That marker can go stale in EITHER direction once the host config
+changes after launch — stuck on `explicit` after the host moves to
+`experimental-auto`, or stuck on `experimental-auto` after the host moves
+back to `explicit`. Either way, EFFECTIVE capture behavior never drifts from
+what the host's *live* config allows today: the marker only decides whether
+the sandbox extension bothers sending an `observe` call at all, while the
+host's own admission check (`memObserve`) re-reads its live config on every
+call and is authoritative regardless. So a marker stuck on
+`experimental-auto` can cause a harmless `observe` attempt the host then
+refuses, and a marker stuck on `explicit` can suppress an attempt the host
+would have accepted — but no combination of a stale marker and the current
+host config ever stores a row the host's live setting would not have
+allowed. `pix config unset memory_capture` restores `explicit`, same
+new-sandboxes-only rule.
 
 There is no review/staging mode: automatic capture is the experiment, and a
 review-before-store workflow is deferred until evidence says it's needed. The
@@ -138,8 +148,11 @@ again before any extracted fact/correction is stored. A match — a private
 key block, a recognizable vendor token shape (AWS, GitHub, Slack, OpenAI,
 Stripe, Google, a JWT, a labeled `api_key=`/`token=`/`password=` assignment,
 including a realistic `SCREAMING_SNAKE_CASE` env-var name like
-`AWS_SECRET_ACCESS_KEY=`), or a long unbroken high-entropy run — drops the
-content entirely (fails closed: never a partial or redacted store). An
+`AWS_SECRET_ACCESS_KEY=`), a 1Password reference (`op://vault/item/field`,
+treated as secret-shaped even though it's a LOCATOR rather than the value
+itself — it still names exactly where to go fetch one), or a long unbroken
+high-entropy run — drops the content entirely (fails closed: never a
+partial or redacted store). An
 all-hex run (a git commit SHA, a content digest) is deliberately NOT
 treated as secret-shaped: it is indistinguishable from an ordinary hash by
 shape alone, and flagging every SHA a user types is a false positive this
@@ -206,12 +219,28 @@ enforcement behind it. `user`/`cli` (an explicit ask, from `/remember` or
 verification of where it came from, so it's swept. An already soft-deleted
 row is left exactly alone.
 
-**Reversibility is nothing new**: clearing `deleted_at` for a specific id
-directly in the database file (with the service stopped) restores that row
-exactly as recall() reads it — `UPDATE memories SET deleted_at = NULL WHERE
-id = '...'`. If you want a point-in-time copy before upgrading at all, run
-`pix-host memory snapshot` first (see "Backing it up, and putting it back"
-below); the migration itself does not take one automatically.
+**Reversibility is nothing new, but it's two statements, not one.** Soft-delete
+(`/forget`, and this sweep) always drops the row's FTS index entry alongside
+stamping `deleted_at` — the pair that must always happen together, since a
+row left in the index would still answer keyword searches after being
+"deleted". So reviving it needs the same pair run backwards: clearing
+`deleted_at` alone puts the row back in the active set (visible to `pix
+memory recall '*'` and to vector-similarity recall if it still has an
+embedding), but it stays invisible to plain keyword search until its FTS
+entry is rebuilt too. Directly in the database file, with the service
+stopped:
+
+```sql
+UPDATE memories SET deleted_at = NULL WHERE id = '...';
+INSERT INTO memories_fts (rowid, content)
+  SELECT rowid, content FROM memories WHERE id = '...';
+```
+
+There is no live undelete verb; this is a manual, service-stopped edit of
+the db file, on purpose. If you want a point-in-time copy
+before upgrading at all, run `pix-host memory snapshot` first (see "Backing
+it up, and putting it back" below); the migration itself does not take one
+automatically.
 
 **Keeping `source` closed and un-spoofable.** The free-text `source` column
 is normalized to a closed vocabulary (`user`/`cli`/`watcher`, else

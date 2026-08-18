@@ -8,6 +8,45 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## Unreleased
 
+### Fixed
+
+- **The daily watcher capture budget (10 stored rows/day) now holds exactly
+  under concurrent captures.** Each in-flight `memCapture` used to peek
+  `watcherBudgetRemaining()` once and then store against its own stale local
+  count, so several of the up to 8 concurrently allowed captures could each
+  believe there was still budget left and collectively store well past the
+  cap. The exact enforcement point moved to `rememberSourced`'s own atomic,
+  mutex-held check-then-insert (the same `s.mu` every store read/write
+  already serializes through), so a `source="watcher"` row is only ever
+  inserted if today's count is still under budget at that instant — closing
+  the race with no new locking primitive.
+- **The capture secret filter now sees the full message before truncation,
+  not after.** `memObserve` used to truncate a user message to 8000 chars
+  before the stage-1 secret filter ever ran, so a secret sitting past that
+  cutoff in a long message could reach the watcher model and, if echoed
+  back, get stored. The filter now runs on the untruncated text; truncation
+  happens only afterward, to bound the watcher-model call itself.
+- **The capture secret filter also blocks a 1Password reference
+  (`op://vault/item/field`).** It's a locator rather than the secret value
+  itself, but it still names exactly where to go fetch one, so it's treated
+  as secret-shaped and dropped like any other match.
+- **`docs/memory.md`'s undelete recipe was incomplete.** It said clearing
+  `deleted_at` for a soft-deleted row "restores that row exactly as
+  recall() reads it", but forget() always drops the row's FTS entry
+  alongside stamping `deleted_at`, so a bare `deleted_at` clear leaves the
+  row invisible to keyword search until its FTS entry is rebuilt too. The
+  doc now gives the correct two-statement recipe (there is still no live
+  undelete verb — this is a manual, service-stopped edit of the db file).
+- **The marker-staleness note in `docs/memory.md` was backwards.** It claimed
+  a stale `.pix/memory-capture` marker "can only ever be MORE restrictive
+  than the host's current config, never less", which isn't true — a marker
+  frozen on `experimental-auto` after the host moves back to `explicit` is
+  the less-restrictive side of that comparison. Reworded around what's
+  actually guaranteed: the host's live `memObserve` check re-reads its
+  config on every call and is authoritative regardless, so effective capture
+  behavior never drifts from what the host's current config allows, even
+  though the marker itself can go stale in either direction.
+
 ### Removed
 
 - **Every memory write is durable, with no expiry, reward, or

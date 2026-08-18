@@ -32,26 +32,41 @@ func memCaptureMode() string {
 // and it survives a daemon restart exactly.
 const memWatcherDailyBudget = 10
 
-// watcherBudgetRemaining reports how many more rows may be stored today
-// (UTC), never negative. Callers PEEK this before invoking the watcher
-// (memObserve, then again in memCapture), and cap how many of a single
-// watcher result's items may be stored to whatever remains.
-//
-// The COUNT deliberately does NOT filter deleted_at: a watcher row that was
-// later `/forget`-ed (soft-deleted, deleted_at set) still STORED today and
-// still cost a real watcher-model call plus a row write, so it keeps
-// consuming today's budget exactly like a live one. This is not an oversight
-// -- forgetting a row is feedback on content the caller no longer wants
+// watcherUsedToday is the raw COUNT `watcherBudgetRemaining` and
+// `rememberSourced`'s enforcement check both build on. The COUNT
+// deliberately does NOT filter deleted_at: a watcher row that was later
+// `/forget`-ed (soft-deleted, deleted_at set) still STORED today and still
+// cost a real watcher-model call plus a row write, so it keeps consuming
+// today's budget exactly like a live one. This is not an oversight --
+// forgetting a row is feedback on content the caller no longer wants
 // recalled, not a refund on capture volume; a caller could otherwise launder
 // unlimited watcher writes by immediately forgetting each one. Only a NEW
 // calendar day (UTC) resets the count, never a delete.
-func (s *memStore) watcherBudgetRemaining() (int, error) {
+//
+// Callers needing this atomic with a following write (rememberSourced) must
+// hold s.mu themselves; this method takes no lock of its own so it composes
+// under one already held instead of deadlocking.
+func (s *memStore) watcherUsedToday() (int, error) {
 	today := time.Now().UTC().Format("2006-01-02")
 	var used int
 	err := s.db.QueryRow(
 		"SELECT COUNT(*) FROM memories WHERE source = 'watcher' AND substr(created_at, 1, 10) = ?",
 		today,
 	).Scan(&used)
+	return used, err
+}
+
+// watcherBudgetRemaining reports how many more rows may be stored today
+// (UTC), never negative. Callers PEEK this before invoking the watcher
+// (memObserve, then again in memCapture) to skip an already-exhausted day at
+// zero inference cost. This peek is advisory, not the enforcement: it takes
+// no lock, so a concurrent write can land between this read and whatever the
+// caller does next. The actual cap is enforced exactly once, atomically
+// under s.mu, at the point a watcher row would be INSERTed — see
+// rememberSourced's budget check — so a racy peek here can only ever cause a
+// wasted watcher call, never an over-stored day.
+func (s *memStore) watcherBudgetRemaining() (int, error) {
+	used, err := s.watcherUsedToday()
 	if err != nil {
 		return 0, err
 	}

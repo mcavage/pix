@@ -487,6 +487,60 @@ func TestMemForgetIsolation(t *testing.T) {
 	}
 }
 
+// TestForgetThenBareDeletedAtClearMissesKeywordRecall is the SEC-3
+// regression: docs/memory.md used to say clearing deleted_at BY ITSELF
+// "restores that row exactly as recall() reads it", which is not true for
+// keyword (FTS) recall -- forget() always drops the row's FTS entry
+// alongside stamping deleted_at (see softDelete), so a bare `UPDATE memories
+// SET deleted_at = NULL` leaves the row un-searchable by keyword until its
+// FTS entry is rebuilt too. Uses a no-embedder store so FTS is the only
+// recall signal, isolating exactly what the corrected docs call out.
+func TestForgetThenBareDeletedAtClearMissesKeywordRecall(t *testing.T) {
+	st, err := newMemStore(":memory:", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := st.remember(rememberInput{content: "the roadmap review is postponed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := res["id"].(string)
+	if !st.forget(id, "default") {
+		t.Fatal("forget should succeed")
+	}
+
+	// The bare, docs-used-to-say-this-is-enough recipe: clear deleted_at only.
+	if _, err := st.db.Exec("UPDATE memories SET deleted_at = NULL WHERE id = ?", id); err != nil {
+		t.Fatal(err)
+	}
+
+	// Visible in the unbounded listing (deleted_at IS NULL is the only gate there)...
+	starHits, err := st.recall("*", 50, 100000, "", "", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, h := range starHits {
+		if h.id == id {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("clearing deleted_at should restore the row to the unbounded '*' listing")
+	}
+
+	// ...but NOT found by an ordinary keyword search: its FTS entry is still gone.
+	kwHits, err := st.recall("roadmap", 50, 100000, "", "", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range kwHits {
+		if h.id == id {
+			t.Fatal("a bare deleted_at clear must NOT be keyword-searchable (its FTS entry was never rebuilt) -- this is exactly why the docs correction exists, and why the correct recipe is the two-statement one below, not this one")
+		}
+	}
+}
+
 // TestMemFtsSaturationIsolation proves the FTS pre-limit is applied AFTER the
 // visible-profile filter: a flood of matching sibling rows must not evict a
 // visible match from the top-50 FTS pre-limit. Seed many strong `personal`

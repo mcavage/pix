@@ -6,7 +6,7 @@
 //
 // Best-effort, not a guarantee: known secret SHAPES only (private key
 // blocks, vendor token prefixes, a JWT, a labeled assignment, an unbroken
-// high-entropy run). docs/memory.md says so.
+// high-entropy run, an op:// 1Password locator). docs/memory.md says so.
 package main
 
 import "regexp"
@@ -26,6 +26,13 @@ var memSecretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{35}\b`),                                         // Google API key
 	regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b`), // JWT
 	regexp.MustCompile(`(?i)(^|[^A-Za-z])(api[_-]?key|secret|token|password|passwd|bearer)(?:[_-][A-Za-z]+){0,3}\s*[:=]\s*['"]?[A-Za-z0-9/_+.=-]{12,}`),
+	// A 1Password reference (op://vault/item/field, an optional 4th `section`
+	// segment). This is a LOCATOR, not the secret value itself, but it still
+	// names exactly which vault/item/field to go fetch it from, so it's
+	// treated the same as a real secret: fail closed, never stored. Segment
+	// chars are kept permissive (vault/item names are free text; a pasted URL
+	// may carry %20 for a spaced field name like "api key").
+	regexp.MustCompile(`\bop://[A-Za-z0-9_.%-]+/[A-Za-z0-9_.%-]+/[A-Za-z0-9_.%-]+(?:/[A-Za-z0-9_.%-]+)?\b`),
 }
 
 // memHighEntropyRun: a long unbroken alnum run (32+) — the shape of a pasted
