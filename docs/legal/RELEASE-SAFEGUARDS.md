@@ -225,7 +225,8 @@ dependency edges, so nobody can quietly drop the `needs` and keep the file.
   employment agreements).
 - `docs/legal/PRIVACY.md` — what data leaves the machine and to whom (model
   providers and MCP servers you configured; no pix backend, no telemetry),
-  what stays loopback-local (memory, monitor), how credentials are handled
+  what stays loopback-local (memory; the monitor transcript tap was removed
+  outright, not merely made local), how credentials are handled
   (`op://` refs, never written to disk), and the honest limit: the real
   exposure is the data you route through it, and lawful basis/retention for
   that data is the operator's obligation, not pix's.

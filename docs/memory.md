@@ -56,8 +56,16 @@ up to 100 rows (with a large enough `charBudget` that the daemon's normal
 1200-character response cap doesn't cut it short first), not a true
 unbounded dump of the store. If the store has more than 100 visible rows, the
 response says so with a truncation line rather than silently showing a
-partial page as if it were everything. An explicit non-`*` search query keeps
-the smaller default (6 hits) tuned for relevance search.
+partial page as if it were everything. An explicit non-`*` search query's
+default is **not the same number everywhere**: the `memory_recall` agent
+tool defaults to 6 hits (tuned for the silent per-turn injection path, which
+uses the same small number); the `/recall` slash command sends no explicit
+`limit` for a non-`*` query, so it falls through to the daemon's own default
+of 8; and `pix memory recall <query>` (the host CLI) has its own `--limit`
+flag defaulted to 8, landing on the same number by a different route. Neither
+is a security boundary, just a relevance tuning choice, and each is
+overridable (`memory_recall`'s `limit` param, or `pix memory recall --limit
+N`).
 
 ## How capture works
 
@@ -81,7 +89,14 @@ two values:
 - **`experimental-auto` (opt-in).** The watcher extracts durable **facts**
   (preferences, decisions, project conventions, no automatic expiry) and
   **corrections** (the agent got something wrong and you told it so), and
-  writes them straight to memories with internal `source="watcher"`, under
+  writes them straight to memories with internal `source="watcher"`. A
+  correction is stored with the row `kind` set to `learning`, not
+  `correction` — that reuses the schema's pre-existing `kind` vocabulary
+  (the same one the now-deleted pix memory learnings / /learnings command
+  once read) rather than adding a new one. This is naming, not a leftover of
+  that deleted command: `pix memory stats`'s `learnings` count **is** the
+  count of captured corrections, and `/recall`'s per-hit `kind` annotation
+  reads `learning` for one, never the user-facing word "correction". Under
   **one fixed daily budget: at most 10 STORED rows/day** (UTC calendar
   day), counted by a real `SELECT COUNT(*)` over `memories` rows with
   `source='watcher'` created today — not by counting `observe` attempts, so

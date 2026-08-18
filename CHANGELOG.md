@@ -87,6 +87,45 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   The host CLI rendered `[fact·project·auto]` while the sandbox's `/recall`
   rendered `(fact/project/auto)`; both use `/` now.
 
+### Docs
+
+- **`docs/reference.md`'s Memory section still described the pre-explicit
+  model** ("a background watcher looks at each exchange... you don't call a
+  save function") and a deleted 0.30 perishable score floor. Rewritten
+  around the shipped default: capture is explicit, `experimental-auto` is an
+  opt-in `pix config set memory_capture` value, and a watcher-captured row is
+  tagged `auto` and undone with `/forget`, same as any other row.
+- **README's `pix memory stats` example still showed the deleted
+  durable/perishable split**, and its Ollama capability table implied
+  automatic capture turns on whenever Ollama is present. Both corrected:
+  the real output is `active N  facts N  learnings N  deleted N`, and the
+  table states capture stays `explicit` (off) either way — Ollama only
+  decides whether an opted-in `experimental-auto` has a watcher model to run.
+- **`docs/getting-started.md`'s "Is Ollama required?" answer made the same
+  implication** (no Ollama -> "automatic capture is off", read as: Ollama
+  present -> capture on). Reworded so Ollama availability and the
+  `memory_capture` mode are stated as the two independent switches they are.
+- **`docs/legal/RELEASE-SAFEGUARDS.md` still listed "monitor" among what
+  stays loopback-local.** The monitor transcript tap was removed outright
+  (see `docs/legal/PRIVACY.md`'s "What stays local"), not merely kept local;
+  the pointer no longer implies a live local feature that doesn't exist.
+- **`docs/legal/PRIVACY.md` didn't say what happens to a recalled row, or
+  who else can reach the store.** Added: recalled content leaves the
+  machine in the prompt sent to the active model provider (extraction and
+  embedding are the only local-only part), and the memory daemon is
+  unauthenticated by design, so any sandbox you launch can read and write it
+  directly, not just the agent's read-only tools. Links to `docs/memory.md`
+  for the full trust model.
+- **`docs/memory.md` understated how much the query defaults vary, and left
+  a correction's internal storage kind unstated.** The non-`*` search
+  default is 6 hits for the `memory_recall` tool but 8 for `/recall` and the
+  `pix memory recall` host CLI, not one number as written. And a captured
+  correction is stored with `kind="learning"` (reusing the schema's
+  pre-existing vocabulary, the same one the deleted `pix memory
+  learnings`/`/learnings` command read) rather than a `kind="correction"`
+  that doesn't exist — so `pix memory stats`'s `learnings` count is the
+  count of captured corrections, not a leftover of that deleted command.
+
 ### Removed
 
 - **Every memory write is durable, with no expiry, reward, or

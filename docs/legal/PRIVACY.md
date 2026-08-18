@@ -36,7 +36,17 @@ pix depends on it.
 ## What stays local
 
 - **Memory** (`pix-host memory`, `:11435`): the self-learning store. Binds
-  loopback, file-backed on your machine, never synced anywhere.
+  loopback, file-backed on your machine, never synced anywhere. "Local"
+  describes the store and its extraction/embedding path, not everything
+  memory touches: once a row is **recalled** (auto-injected each turn, or via
+  `/recall`/`memory_recall`), its content goes into the prompt sent to
+  whichever model provider is active — the same row that never left this
+  machine to get stored now leaves it to get answered. And the daemon itself
+  is **unauthenticated by design** (loopback bind is the only boundary), so
+  any sandbox you launch, not just the agent's intended read-only tools, can
+  read and write it directly over `host.docker.internal`. See
+  [../memory.md](../memory.md) for the full trust model and how capture and
+  recall actually work.
 - **No transcript of its own.** pix used to ship a monitor: an in-sandbox tap
   POSTed every model request, reply and raw tool result to a loopback ingest
   listener, which appended them under `~/.local/state/pix/monitor/`. That whole

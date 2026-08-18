@@ -57,16 +57,28 @@ pix                         # same as `pix run` at a terminal; status when piped
 
 ## 2. Memory
 
-pix learns from what you do, without you telling it to. A background
-watcher looks at each exchange and decides what's worth keeping: durable facts,
-preferences, corrections. You don't call a save function. You correct it by
-acting differently next time, the same way you'd correct a person.
+pix remembers durable facts, preferences, and conventions across sessions,
+so you don't re-teach the agent every time you open a new sandbox.
+**Capture is explicit by default**: nothing is written unless a human or an
+explicit command asks for it (`/remember`, `pix memory remember`, or the
+agent's own explicit tools). There is no background watcher writing memory
+out of the box.
 
 ```
 /recall <query>       # what memory would surface for this query
-/remember <text>      # pin a fact immediately, no waiting on the watcher
+/remember <text>      # pin a fact immediately
 /forget <id|query>     # drop a memory; id from /recall, or a query to drop its top match
 ```
+
+**Opt in to automatic capture** with `pix config set memory_capture
+experimental-auto` if you want a background watcher to extract facts and
+corrections from what you say, under one fixed daily budget (10 stored
+rows/day). This only reaches a *new* sandbox: an already-running one keeps
+the mode it launched with. A watcher-captured row is tagged with an `auto`
+annotation on `/recall`/`memory_recall`, visibly distinct from an explicit
+one, and `/forget <id>` is the feedback/undo mechanism for it, same as any
+other row. See `docs/memory.md`'s "How capture works" for the full
+admission rules, the secret filter, and the budget accounting.
 
 The agent has read-only access via **typed tools** (`memory_recall`,
 `memory_stats`) that reach the host daemon directly, it never shells out to
@@ -86,10 +98,11 @@ row is recalled, its content goes into the prompt sent to whichever model is
 active (Claude, OpenAI, Gemini, or local Ollama). Never store secrets, tokens,
 or credentials in memory.
 
-Example: you tell pi three times across different sessions that your staging
-DB is `postgres://staging.internal:5432`. The watcher notices the repetition
-and remembers it without being asked. Next session, `/recall staging db` finds
-it, or it surfaces unprompted in the system prompt when it's relevant.
+Example: you tell pi your staging DB is `postgres://staging.internal:5432` and
+say `/remember`. Next session, `/recall staging db` finds it, or it surfaces
+unprompted in the system prompt when it's relevant. With `experimental-auto`
+capture opted in, the watcher can extract and store the same kind of fact on
+its own, without an explicit `/remember`.
 
 **Durability.** A durable fact (preference, decision, convention) has no
 automatic expiry, and every row pix writes is durable now, there is no
@@ -100,11 +113,12 @@ retired once at startup rather than left holding rows nothing will ever
 expire; see docs/memory.md's Legacy data section.
 
 **What gets silently injected vs. what you can see.** Each turn, only a small
-relevance-filtered subset is silently added to context. Durable hits are
-never filtered by score; a legacy perishable hit scoring below 0.30 would be,
-but the startup retirement above means there is normally none left to filter.
-An explicit `/recall` or `memory_recall` skips that score filter regardless,
-but is still capped: a blank query (or `*`) returns up to 100 rows (with a
+relevance-filtered subset is silently added to context; every row is durable,
+so there is no score-based durability floor filtering anything out (a legacy
+perishable-scoring floor existed here once, deleted along with the write-side
+perishable/TTL path it policed). An explicit `/recall` or `memory_recall`
+skips that ranking filter entirely, but is still capped: a blank query (or
+`*`) returns up to 100 rows (with a
 truncation line if the store has more), not a true unbounded dump.
 
 **Limits.** Memory runs as a host service (`pix serve`, port 11435) and is
