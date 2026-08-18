@@ -49,12 +49,14 @@ lifecycle (matches sbx's own re-attach model):
   no sandbox named N          -> create it (the flags below apply).
   a sandbox named N exists    -> ATTACH to it as-is (running or stopped); sbx
                                  reads the agent from its own spec, so
-                                 --kit/--mcp/--template, --dev, and the
-                                 create-only skill flags are NOT re-sent (--dev
-                                 is create-only and is ignored, with a note, on
-                                 an attach). --model/--intent are NOT create-
-                                 only: they are pi runtime args, so they still
-                                 reach the pi session on an attach too.
+                                 --kit/--mcp/--template and create-only skill
+                                 flags are NOT re-sent. --dev attaches only when
+                                 the sandbox has its create-time session UAT
+                                 record; otherwise it refuses with the recreate
+                                 command, because static MCP cannot be added
+                                 later. --model/--intent are NOT create-only:
+                                 they are pi runtime args, so they still reach
+                                 the pi session on an attach too.
                                  An attach whose create-time MCP set or image
                                  no longer matches is REFUSED, not silently
                                  attached; to recreate, remove it first:
@@ -311,9 +313,6 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	// marker and the memory scope from disagreeing. --pack applies at create only,
 	// since a re-attach keeps what it was made with.
 	effectivePack := packinfo.ActivePackRoot(cfg.Pack, o.Pack)
-	if !creating && o.Dev {
-		fmt.Fprintf(d.Err, "pix: --dev is create-only; attaching to the existing sandbox as-is (to get --dev, %s)\n", launch.RecreateGuidance(o.Name))
-	}
 	if creating {
 		// Kit selection. A CLEAN released version pins the matching git tag; anything
 		// else (unstamped "dev", "0.0.16+local", non-semver) is UNRELEASED and its tag
@@ -425,9 +424,15 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		}
 		o.StaticMCP = composeStaticMCP(o.StaticMCP, nil, []string{uatRec.MCPName})
 	} else {
-		// Attach reconstructs without mutation
-		rec, err := uat.ReadRegistration(defaultShellEnv(), o.Name)
-		if err == nil && rec != nil {
+		// Attach reconstructs without mutation. An explicit --dev request is a
+		// hard requirement, not a hint: without this create-time record the
+		// sandbox cannot have the ephemeral static MCP, and attaching anyway is
+		// exactly how a session claimed dev mode while uat_capabilities was absent.
+		rec, err := uat.ResolveAttachRegistration(defaultShellEnv(), o.Name, o.Dev)
+		if err != nil {
+			return runFail(d, 1, "%v", err)
+		}
+		if rec != nil {
 			o.StaticMCP = composeStaticMCP(o.StaticMCP, nil, []string{rec.MCPName})
 			uatRec = rec
 		}

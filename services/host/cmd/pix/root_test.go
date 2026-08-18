@@ -393,6 +393,25 @@ func TestVersionIsTyped(t *testing.T) {
 	}
 }
 
+func TestBareDevFlagMeansRunDev(t *testing.T) {
+	got := strings.Join(normalizeArgv([]string{"--dev"}), " ")
+	if got != "run --dev" {
+		t.Errorf("normalizeArgv(--dev) = %q, want %q", got, "run --dev")
+	}
+
+	// Like bare `pix` and `pix DIR`, the shorthand is implicit and therefore
+	// must not launch from a script or pipe. The explicit spelling stays the
+	// non-interactive escape hatch.
+	d, _, errOut := rootDeps()
+	d.Interactive = false
+	if code := dispatch([]string{"--dev"}, d); code != 2 {
+		t.Fatalf("non-interactive pix --dev exit = %d, want 2", code)
+	}
+	if got := errOut.String(); !strings.Contains(got, "pix run --dev") || !strings.Contains(got, "non-interactive") {
+		t.Fatalf("non-interactive refusal = %q, want explicit recovery", got)
+	}
+}
+
 // TestTaskNameThenVerbRewrite: `pix task foo path` is an argv-SHAPE decision
 // (it reads naturally in `cd "$(pix task foo path)"`), normalized before the
 // parser sees it, and never fired for a real subcommand.

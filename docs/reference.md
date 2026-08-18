@@ -53,7 +53,12 @@ the host, so it survives even though the sandbox doesn't.
 pix run [DIR]               # launch (default: current dir)
 pix resume SESSION [DIR]    # resume the exact session named on exit
 pix                         # same as `pix run` at a terminal; status when piped
+pix --dev                   # at a terminal: `pix run --dev`; scripts must use the explicit form
 ```
+
+Dev mode's UAT MCP is fixed at sandbox creation. If that sandbox already exists
+without its session UAT registration, `pix --dev` refuses rather than attaching
+a session with missing tools. Run the exact recreate command it prints.
 
 ## 2. Memory
 
