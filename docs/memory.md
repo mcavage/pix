@@ -101,8 +101,12 @@ two values:
   (the same one the now-deleted pix memory learnings / /learnings command
   once read) rather than adding a new one. This is naming, not a leftover of
   that deleted command: `pix memory stats`'s `learnings` count **is** the
-  count of captured corrections, and `/recall`'s per-hit `kind` annotation
-  reads `learning` for one, never the user-facing word "correction". Under
+  count of captured corrections, and the row's `kind` is stored, and any
+  `--json` output emits it, as `learning` verbatim, never `correction`.
+  `/recall` and `pix memory recall` render that same stored `learning` kind
+  as `correction` for a person reading the line (a render-only alias, no
+  schema migration: see DX-6a) — so the internal/JSON value and the
+  human-facing label are deliberately different words for one row. Under
   **one fixed daily budget: at most 10 STORED rows/day** (UTC calendar
   day), counted by a real `SELECT COUNT(*)` over `memories` rows with
   `source='watcher'` created today — not by counting `observe` attempts, so

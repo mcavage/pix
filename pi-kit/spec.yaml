@@ -87,9 +87,10 @@ permissions:
       - host.docker.internal:11435
       - localhost:11435
       # NOTE: :11437 used to be allowlisted here for the monitor ingest
-      # listener. The monitor's transport is gone: the in-sandbox tap appends
-      # NDJSON under the workspace instead of POSTing anywhere, so the hole in
-      # the network policy went with it. Nothing in the sandbox needs :11437.
+      # listener. The whole monitor subsystem is gone, tap included: nothing
+      # in the sandbox POSTs a transcript anywhere, or writes one to disk
+      # under any other name, so the hole in the network policy went with it.
+      # Nothing in the sandbox needs :11437.
       # A pack that needs a host service (e.g. a CLI exec-proxy) adds its own
       # domain to permissions.network.allow from its own synthesized mixin kit: the
       # public kit stays free of company-specific host services. See
@@ -198,16 +199,18 @@ agentInstructions:
     minimal and ships none). You cannot install system packages (`apt-get` needs
     root), so do not try, and do not tell the user to `sudo`. Anything that needs a
     system-level install or a real device (e.g. platformio + `/dev/tty*`) is a HOST
-    operation the sandbox structurally cannot do; that is what `pix host` (the
-    unsandboxed escape hatch) or a host-side capability MCP is for. Use pip
-    `--user`, language-local package managers, or prebuilt static binaries when you
-    need a tool in-VM.
+    operation the sandbox structurally cannot do, with no escape hatch: pix has
+    no `pix host` verb. Only a wired host-side capability MCP can reach it; else
+    tell the user it must happen on their host. Use pip `--user`, language-local
+    package managers, or static binaries in-VM.
 
-    ## Memory (automatic)
-    A host memory service recalls relevant facts into your context before every
-    turn, and quietly captures durable facts and corrections after. You never call
-    it. To see or steer it: /recall, /remember, /forget, /learnings. If recall is
-    empty, the user needs to run `make serve` (or `pix serve`) on the host.
+    ## Memory (automatic recall, explicit capture)
+    A host memory service silently recalls relevant facts before every turn;
+    you never call it. Capture is explicit by default: stored only via
+    /remember, unless the user opts into `experimental-auto` (quiet capture of
+    durable facts/corrections, capped daily). Steer it with /recall, /remember,
+    /forget. Empty recall means the user needs `make serve` (or `pix serve`)
+    running on the host.
 
     ## Multi-model
     Four providers in the cycle: Claude, GPT, and Gemini (cloud, keys injected by the

@@ -128,9 +128,10 @@ with teammates. It's SQLite plus FTS5 and embeddings on disk at
 is down, the commands and tools above surface a clear error rather than
 failing silently; only the silent per-turn auto-injection degrades quietly (no
 memory gets added that turn, so a dead daemon never blocks the conversation).
-Nothing here is a pack: memory is what pix learned by watching, not what
-you deliberately taught it (that's a pack, see §5); a pack can still scope
-memory to itself via `memory_scope` (see [memory.md](memory.md)).
+Nothing here is a pack: memory is personal, per-machine storage with no
+versioning and no sharing (see Limits above); a pack is versioned, shared
+capability context you'd `git diff` (see §5). A pack can still scope memory
+to itself via `memory_scope` (see [memory.md](memory.md)).
 
 ## 3. Skills (the flows)
 

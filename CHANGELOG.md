@@ -10,6 +10,28 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Docs/kit/legal closeout: last stale memory claims fixed.** The kit's
+  `agentInstructions` (`pi-kit/spec.yaml`) no longer tells the agent `pix
+  host` is an unsandboxed escape hatch (that verb is deleted); its memory
+  section is retitled "automatic recall, explicit capture", explains the
+  opt-in `experimental-auto` capture mode, and drops the deleted
+  `/learnings` command. Its stale monitor comment now says the tap
+  subsystem is gone outright, not repurposed to write NDJSON. `docs/memory.md`
+  and `docs/reference.md` correct two more stale claims: a captured
+  correction is stored internally as `kind: "learning"` (verbatim in
+  `--json`) but rendered to a person as `correction`; and the pack/memory
+  contrast is now scope-based (personal, unversioned, per-machine memory vs.
+  versioned, shared pack context) instead of the stale "learned by
+  watching" line, which stopped matching capture's explicit-by-default
+  default. `docs/legal/PRIVACY.md` adds `api.parallel.ai` to the `web_search`
+  recipient row (it was missing from an otherwise exhaustive list) and
+  softens its egress-allowlist claim from an exact bijection to "every
+  sandbox-egress destination is disclosed", calling out the build-time
+  (`go.dev`) and loopback host-service destinations the table also lists
+  that never traverse that allowlist. `scripts/arch-metrics/budgets.json`'s
+  `pix/host/health` note is reworded to end "a deliberate, reviewed raise of
+  a shrink-only budget", matching every other package's note instead of the
+  stray "reviewed shrink." it had been left with.
 - **A stored `learning` now reads as `correction` everywhere it's rendered
   for a person, DX-6a.** Sandbox `/recall` (`formatHitLine`) and the host
   `pix memory recall` CLI (`memoryMeta`) both display `correction` instead

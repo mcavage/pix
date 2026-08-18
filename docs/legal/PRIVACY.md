@@ -20,18 +20,24 @@ enumerated below rather than left to the phrase "only what you configured".
 | Prompts, file contents, tool output the agent reads | The model provider you selected (Anthropic / OpenAI / Google), or nowhere for a local Ollama model | Inference | Governed by that provider's terms, not by pix |
 | Prompts routed to an MCP server | That server (local stdio subprocess, or a remote catalog server you registered) | Tool calls you invoked | Governed by that server |
 | Image pulls/pushes | The registry in your config (`docker.io`, `dhi.io`) | Build/run the sandbox | Registry's terms |
-| **Your `web_search` query text** (and the fetched pages' contents come back through it) | `api.exa.ai` / `mcp.exa.ai` — the **zero-config default** backend. Fallbacks, used when you supply their key: `generativelanguage.googleapis.com` (Gemini), `api.perplexity.ai` | The `web_search`/`fetch_content` tools in `pi-web-access` | Governed by that search provider |
+| **Your `web_search` query text** (and the fetched pages' contents come back through it) | `api.exa.ai` / `mcp.exa.ai` — the **zero-config default** backend. Fallbacks, used when you supply their key: `generativelanguage.googleapis.com` (Gemini), `api.perplexity.ai`, `api.parallel.ai` (Parallel search/extract) | The `web_search`/`fetch_content` tools in `pi-web-access` | Governed by that search provider |
 | **A version check**: pi asks the npm registry whether a newer `@earendil-works/pi-coding-agent` exists (this is what the in-sandbox "Update available" banner is) | `registry.npmjs.org` | Update notification | npm's terms; pix stores no result |
 | **Package + toolchain downloads**: pi extensions and npm packages, the pinned `fd`/`ruff`/Go binaries at image build, git fetches, release assets fetched by `install.sh`/`brew` | `registry.npmjs.org`, `nodejs.org`, `pi.dev`, `github.com`, `codeload.github.com`, `objects.githubusercontent.com`, `raw.githubusercontent.com`, `go.dev` | Install what the sandbox runs | Those hosts' terms |
 | GitHub API calls you make (`gh`, PRs, issues) | `api.github.com`, `uploads.github.com` | Commands you ran | GitHub's terms |
 | Loopback traffic to host services you started (`memory` :11435, `ollama` :11434) | Your own machine, over `host.docker.internal`/`localhost` | Recall, local inference | Local only — see below |
 
-Those are all the destinations, not a sample: sandbox egress is allowlisted in
-`pi-kit/spec.yaml` (`permissions.network.allow`), a destination not on that
-list cannot be reached from inside the sandbox, and the table above is the
-same set. If you need the default search backend or the update check off,
-remove its host from that allowlist and recreate the sandbox; nothing else in
-pix depends on it.
+Every sandbox-egress destination is disclosed above: sandbox egress is
+allowlisted in `pi-kit/spec.yaml` (`permissions.network.allow`), and a
+destination not on that list cannot be reached from inside the sandbox. The
+table is not limited to sandbox egress, though — it also names a few
+host-side and build-time destinations that never go through that allowlist
+at all: `go.dev` (the Go toolchain, fetched while the image is built, not at
+sandbox runtime) and the loopback host services (`memory`, `ollama`), which
+the sandbox reaches over `host.docker.internal`, a route the egress
+allowlist governs but that never leaves your machine. If you need the
+default search backend or the update check off, remove its host from the
+sandbox egress allowlist and recreate the sandbox; nothing else in pix
+depends on it.
 
 ## What stays local
 
