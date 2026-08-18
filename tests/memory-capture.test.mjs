@@ -196,3 +196,86 @@ test("experimental-auto mode sends exactly one observe call for a completed exch
 	});
 	assert.equal(observeCalls, 1, "experimental-auto mode must call observe");
 });
+
+// ── not-accepted capture reasons reach the USER, once ──────────────────────
+// The host answers {accepted:false, reason} when it refuses a capture (no
+// watcher model pulled, daily budget exhausted, capture saturated). That
+// reason used to go to raw stderr, which in the shipped fullscreen TUI is
+// where messages go to die — so the one line explaining "capture is on but
+// nothing is being stored" was invisible. It goes through ctx.ui.notify now,
+// still exactly once per session.
+function notifyCtx(user, assistant, notes) {
+	return { ...exchangeCtx(user, assistant), ui: { notify: (msg, level) => notes.push({ msg, level }) } };
+}
+
+test("a not-accepted observe surfaces its reason through ctx.ui.notify, once per session", async () => {
+	await withServer((req, res) => {
+		let body = "";
+		req.on("data", (c) => (body += c));
+		req.on("end", () => {
+			const parsed = JSON.parse(body);
+			res.writeHead(200, { "content-type": "application/json" });
+			res.end(
+				JSON.stringify({
+					jsonrpc: "2.0",
+					id: parsed.id,
+					result: { accepted: false, reason: "daily watcher capture budget exhausted (max 10 stored rows/day); recall still works" },
+				}),
+			);
+		});
+	}, async (url) => {
+		const hook = await loadCaptureHook("experimental-auto", url);
+		const notes = [];
+		const write = process.stderr.write;
+		let stderrLines = 0;
+		process.stderr.write = () => (stderrLines++, true);
+		try {
+			await hook({}, notifyCtx("the first exchange the host refuses to capture", "ok", notes));
+			await hook({}, notifyCtx("a second, different exchange it also refuses", "ok", notes));
+		} finally {
+			process.stderr.write = write;
+		}
+		assert.equal(notes.length, 1, "the refusal reason must be surfaced exactly once per session");
+		assert.match(notes[0].msg, /capture not accepted: daily watcher capture budget exhausted/);
+		assert.equal(stderrLines, 0, "with a ui present nothing may go to raw stderr");
+	});
+});
+
+test("a failed observe POST notifies through ctx.ui.notify too", async () => {
+	await withServer((_req, res) => {
+		res.writeHead(502, { "content-type": "text/plain" });
+		res.end("dial tcp: connection refused");
+	}, async (url) => {
+		const hook = await loadCaptureHook("experimental-auto", url);
+		const notes = [];
+		await hook({}, notifyCtx("an exchange the daemon never answers properly", "ok", notes));
+		assert.equal(notes.length, 1);
+		assert.match(notes[0].msg, /capture POST to .* failed/);
+	});
+});
+
+// Print mode / tests have no ctx.ui: the message must still go somewhere
+// rather than being dropped on the floor.
+test("without a ctx.ui the not-accepted reason falls back to stderr", async () => {
+	await withServer((req, res) => {
+		let body = "";
+		req.on("data", (c) => (body += c));
+		req.on("end", () => {
+			const parsed = JSON.parse(body);
+			res.writeHead(200, { "content-type": "application/json" });
+			res.end(JSON.stringify({ jsonrpc: "2.0", id: parsed.id, result: { accepted: false, reason: "watcher model unavailable" } }));
+		});
+	}, async (url) => {
+		const hook = await loadCaptureHook("experimental-auto", url);
+		const lines = [];
+		const write = process.stderr.write;
+		process.stderr.write = (chunk) => (lines.push(String(chunk)), true);
+		try {
+			await hook({}, exchangeCtx("an exchange sent from a ctx with no ui at all", "ok"));
+		} finally {
+			process.stderr.write = write;
+		}
+		assert.equal(lines.length, 1);
+		assert.match(lines[0], /capture not accepted: watcher model unavailable/);
+	});
+});

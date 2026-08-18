@@ -111,6 +111,13 @@ func (m CLI) Forget(id string, asJSON bool) error {
 // Stats prints the daemon's counts by kind. The durable/perishable split is
 // gone end to end (host, plugin, and CLI): every row this binary writes is
 // durable, so it was never a meaningful distinction to show.
+//
+// The kind the watcher writes for a rule the user stated ("stop using em
+// dashes") is stored under the JSON key "learnings", which reads to a user
+// as "things the agent learned" — vague, and easy to confuse with facts. The
+// LABEL is therefore "corrections", which is what those rows actually are.
+// The key is deliberately NOT renamed: it is the wire contract shared with
+// the plugin, the RPC and --json consumers.
 func (m CLI) Stats(asJSON bool) error {
 	res, err := m.Client.Call("stats", map[string]any{"profile": m.Profile})
 	if err != nil {
@@ -125,18 +132,21 @@ func (m CLI) Stats(asJSON bool) error {
 		}
 		return 0
 	}
-	fmt.Fprintf(m.Out, "active %d  facts %d  learnings %d  deleted %d\n",
+	fmt.Fprintf(m.Out, "active %d  facts %d  corrections %d  deleted %d\n",
 		num("active"), num("facts"), num("learnings"), num("deleted"))
 	return nil
 }
 
-// memoryMeta renders the trailing "[kind·project·auto score]" annotation.
+// memoryMeta renders the trailing "[kind/project/auto score]" annotation.
 // "auto" only appears for a watcher-sourced (experimental-auto capture) row,
 // so an auto row is visibly distinguishable from an explicit one — the
 // existing `/forget <id>` is the feedback/undo mechanism, this is only the
-// visibility half. durability is not rendered: the read side was retired
-// (U9) once every row this binary writes became durable; the DB column
-// stays, inert, for on-disk compatibility only.
+// visibility half. The separator is "/", matching the sandbox's own
+// `/recall` render (extensions/memory-recall.ts's formatHitLine): the same
+// row seen through two surfaces should not wear two different punctuations.
+// durability is not rendered: the read side was retired (U9) once every row
+// this binary writes became durable; the DB column stays, inert, for on-disk
+// compatibility only.
 func memoryMeta(h map[string]any) string {
 	var parts []string
 	if k := rpc.Str(h, "kind"); k != "" {
@@ -148,7 +158,7 @@ func memoryMeta(h map[string]any) string {
 	if rpc.Str(h, "source") == "watcher" {
 		parts = append(parts, "auto")
 	}
-	meta := strings.Join(parts, "·")
+	meta := strings.Join(parts, "/")
 	if sc, ok := h["score"].(float64); ok {
 		if meta != "" {
 			meta += " "

@@ -409,3 +409,36 @@ func TestFlagSetTerminator(t *testing.T) {
 		t.Errorf("pos = %v, want [a --not-a-flag b]", pos)
 	}
 }
+
+// TestMemoryMeta is the direct table test for the ONE annotation that tells a
+// user where a row came from: a watcher-sourced (experimental-auto) row must
+// render "auto", and an explicit one must render nothing of the sort. The
+// existing coverage only reached memoryMeta THROUGH Recall's rendered line,
+// so an "auto" that stopped appearing (or started appearing for user/cli
+// rows, the worse direction: it would misattribute a fact the user typed to
+// the watcher) was only ever asserted indirectly.
+func TestMemoryMeta(t *testing.T) {
+	cases := []struct {
+		name string
+		hit  map[string]any
+		want string
+	}{
+		{"watcher row is tagged auto", map[string]any{"kind": "fact", "source": "watcher"}, "  [fact/auto]"},
+		{"user row is not tagged", map[string]any{"kind": "fact", "source": "user"}, "  [fact]"},
+		{"cli row is not tagged", map[string]any{"kind": "fact", "source": "cli"}, "  [fact]"},
+		{"unknown source is not tagged", map[string]any{"kind": "fact", "source": "unknown"}, "  [fact]"},
+		{"absent source is not tagged", map[string]any{"kind": "fact"}, "  [fact]"},
+		{"a source that merely contains watcher is not tagged", map[string]any{"kind": "fact", "source": "not-watcher"}, "  [fact]"},
+		{"kind, project and auto share one separator", map[string]any{"kind": "learning", "project": "pix", "source": "watcher"}, "  [learning/pix/auto]"},
+		{"score follows the tags", map[string]any{"kind": "fact", "source": "watcher", "score": 0.59}, "  [fact/auto 0.59]"},
+		{"a score alone still renders", map[string]any{"score": 0.5}, "  [0.50]"},
+		{"nothing to say renders nothing", map[string]any{}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := memoryMeta(tc.hit); got != tc.want {
+				t.Errorf("memoryMeta(%v) = %q, want %q", tc.hit, got, tc.want)
+			}
+		})
+	}
+}

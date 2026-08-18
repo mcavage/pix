@@ -32,6 +32,18 @@ func memCaptureMode() string {
 // and it survives a daemon restart exactly.
 const memWatcherDailyBudget = 10
 
+// memWatcherUsedTodaySQL is the daily-budget COUNT, written down ONCE. The
+// EXPLAIN QUERY PLAN test that proves it is served by
+// idx_memories_source_created_at (rather than degrading to a full table
+// scan) runs THIS string, not a hand-copied twin: a copy could drift into a
+// shape the index no longer covers while the test kept happily explaining
+// the old one.
+//
+// Neither deleted_at nor profile is filtered, on purpose — see
+// watcherUsedToday's doc comment for why (and rememberSourced's enforcement
+// comment, which restates it at the point it bites).
+const memWatcherUsedTodaySQL = "SELECT COUNT(*) FROM memories WHERE source = 'watcher' AND created_at >= ? AND created_at < ?"
+
 // watcherUsedToday is the raw COUNT `watcherBudgetRemaining` and
 // `rememberSourced`'s enforcement check both build on. The COUNT
 // deliberately does NOT filter deleted_at: a watcher row that was later
@@ -43,16 +55,17 @@ const memWatcherDailyBudget = 10
 // unlimited watcher writes by immediately forgetting each one. Only a NEW
 // calendar day (UTC) resets the count, never a delete.
 //
+// It does not filter `profile` either, for the same reason: the budget meters
+// how much the WATCHER wrote on this host today, and a per-profile count
+// would hand every new profile a fresh 10 rows.
+//
 // Callers needing this atomic with a following write (rememberSourced) must
 // hold s.mu themselves; this method takes no lock of its own so it composes
 // under one already held instead of deadlocking.
 func (s *memStore) watcherUsedToday() (int, error) {
 	start, end := watcherDayBoundsUTC(time.Now())
 	var used int
-	err := s.db.QueryRow(
-		"SELECT COUNT(*) FROM memories WHERE source = 'watcher' AND created_at >= ? AND created_at < ?",
-		start, end,
-	).Scan(&used)
+	err := s.db.QueryRow(memWatcherUsedTodaySQL, start, end).Scan(&used)
 	return used, err
 }
 

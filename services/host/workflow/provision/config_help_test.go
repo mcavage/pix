@@ -25,3 +25,36 @@ func TestConfigKeysHelp_NoDeletedKnowledgeSurface(t *testing.T) {
 		}
 	}
 }
+
+// TestMemoryCaptureSummaryIsAsymmetric pins the DX fix: the two modes do not
+// take effect the same way, and the confirmation line must not flatten that.
+// Turning capture OFF is a HOST-side refusal that binds already-running
+// sandboxes; turning it ON only reaches a sandbox launched after the change,
+// and even then only if a watcher model is actually reachable — which this
+// command does not verify, so it must name a check rather than report
+// success.
+func TestMemoryCaptureSummaryIsAsymmetric(t *testing.T) {
+	off := memoryCaptureSummary("explicit")
+	if !strings.Contains(off, "immediately") || !strings.Contains(off, "already-running") {
+		t.Errorf("explicit summary must say the host refusal is immediate for running sandboxes, got: %q", off)
+	}
+	if strings.Contains(off, "NEW sandboxes only") {
+		t.Errorf("explicit summary must NOT claim new-sandboxes-only, got: %q", off)
+	}
+
+	on := memoryCaptureSummary("experimental-auto")
+	if !strings.Contains(on, "NEW sandboxes only") {
+		t.Errorf("experimental-auto summary must say it reaches new sandboxes only, got: %q", on)
+	}
+	if !strings.Contains(on, "watcher model") || !strings.Contains(on, "ollama list") {
+		t.Errorf("experimental-auto summary must warn that a watcher model is required and name the verification command, got: %q", on)
+	}
+	// Success words a probe would have to earn (AGENTS.md invariant 12).
+	// "ready" is checked as a whole word only: "already-running" legitimately
+	// contains it.
+	for _, claim := range []string{"enabled", " ready", "verified", "working"} {
+		if strings.Contains(on, claim) {
+			t.Errorf("experimental-auto summary must not claim %q: nothing here probed the watcher, got: %q", claim, on)
+		}
+	}
+}

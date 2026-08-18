@@ -467,15 +467,50 @@ func (s *memStore) rememberWatcherCapture(in rememberInput) (jsonObj, error) {
 // body, parameterized on a source value the CALLER (not the request)
 // supplies — see remember()'s doc comment for why an external caller cannot
 // simply put "watcher" in the request and get the same value.
+//
+// It is deliberately THREE phases, because the embed is a NETWORK call to
+// Ollama that can take many seconds while s.mu is the one lock every recall
+// also serializes through: holding it across the embed head-of-line blocks
+// every concurrent recall/remember for the whole round trip.
+//
+//  1. locked: exact-hash reaffirm, so "same fact again" never pays for an embed.
+//  2. UNLOCKED: the embed. It reads and writes nothing.
+//  3. locked: REVALIDATE the hash (a concurrent remember of the same content
+//     may have inserted it meanwhile — that re-check is what makes concurrent
+//     duplicate rows impossible), then dedupe, budget and INSERT under ONE
+//     uninterrupted hold, so those stay atomic with the write.
 func (s *memStore) rememberSourced(in rememberInput, source string) (jsonObj, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	content := strings.TrimSpace(in.content)
 	if content == "" {
 		return jsonObj{"id": "", "reaffirmed": false}, nil
 	}
 	hash := memHash(content)
+
+	// Phase 1: exact-hash reaffirm, before any embed.
+	s.mu.Lock()
+	if id := s.reaffirm(hash, in.profile); id != "" {
+		s.mu.Unlock()
+		return jsonObj{"id": id, "reaffirmed": true}, nil
+	}
+	s.mu.Unlock()
+
+	// Phase 2: the embed, with NO lock held (see the doc comment above).
+	var embJSON any
+	var vec []float64
+	if s.embedder != nil {
+		vec = s.embedder(content)
+		if vec != nil {
+			b, _ := json.Marshal(vec)
+			embJSON = string(b)
+		}
+	}
+
+	// Phase 3: revalidate, then dedupe + budget + insert atomically.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Revalidation, not a redundant repeat of phase 1: another remember of the
+	// SAME content may have landed while this one was embedding, and reaffirming
+	// it here is what keeps that race from writing a second identical row.
 	if id := s.reaffirm(hash, in.profile); id != "" {
 		return jsonObj{"id": id, "reaffirmed": true}, nil
 	}
@@ -497,15 +532,6 @@ func (s *memStore) rememberSourced(in rememberInput, source string) (jsonObj, er
 	}
 	created := memNowIso()
 
-	var embJSON any
-	var vec []float64
-	if s.embedder != nil {
-		vec = s.embedder(content)
-		if vec != nil {
-			b, _ := json.Marshal(vec)
-			embJSON = string(b)
-		}
-	}
 	if in.hasDedupe && vec != nil {
 		if id, ok := s.findSimilar(vec, in.dedupe, in.profile); ok {
 			var conf float64
@@ -517,13 +543,19 @@ func (s *memStore) rememberSourced(in rememberInput, source string) (jsonObj, er
 
 	// The daily watcher budget's exact enforcement point: reaffirm/dedupe above
 	// (neither counts against the budget) have already had their shot, so
-	// anything reaching here is a genuinely NEW row. s.mu is held for this
-	// entire function, the same lock every other store read/write already
-	// serializes through, so this COUNT and the INSERT below happen as one
-	// atomic unit with respect to every other concurrent call — the smallest
-	// change that closes the race: a source=="watcher" caller can no longer
-	// slip past 10 stored rows/day by having several captures each peek a
-	// stale watcherBudgetRemaining() before any of them writes.
+	// anything reaching here is a genuinely NEW row. s.mu is held unbroken from
+	// phase 3's revalidation through the INSERT below — the same lock every
+	// other store read/write already serializes through — so this COUNT and
+	// that INSERT happen as one atomic unit with respect to every other
+	// concurrent call: a source=="watcher" caller can no longer slip past 10
+	// stored rows/day by having several captures each peek a stale
+	// watcherBudgetRemaining() before any of them writes. (The phase-2 embed
+	// happens BEFORE this hold, so a slow Ollama cannot stretch it.)
+	//
+	// The COUNT covers ALL watcher rows written today — soft-deleted ones
+	// included, every profile included: the budget meters capture VOLUME on
+	// this host, not per-profile visible inventory, so neither a `/forget` nor
+	// a profile switch buys back budget. See watcherUsedToday.
 	if source == "watcher" {
 		used, err := s.watcherUsedToday()
 		if err != nil {
@@ -569,8 +601,6 @@ type scoredHit struct {
 }
 
 func (s *memStore) recall(query string, limit, charBudget int, kind, project, profile string) ([]scoredHit, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if limit == 0 {
 		limit = 8
 	}
@@ -585,6 +615,18 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 	// Ollama down. Everything downstream is the SAME path; only relevance and the
 	// ordering differ.
 	star := strings.TrimSpace(query) == "*"
+
+	// The query embed is a NETWORK call to Ollama (seconds when it is slow),
+	// so it happens BEFORE the lock is taken: embedding under s.mu would make
+	// one slow embed head-of-line block every concurrent recall and remember.
+	// It reads nothing from the store, so nothing here depends on the lock.
+	var queryVec []float64
+	if s.embedder != nil && !star {
+		queryVec = s.embedder(query)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	// FTS candidates → normalized [0,1] per id.
 	ftsScore := map[string]float64{}
@@ -626,11 +668,6 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 				ftsScore[h.id] = norm
 			}
 		}
-	}
-
-	var queryVec []float64
-	if s.embedder != nil && !star {
-		queryVec = s.embedder(query)
 	}
 
 	// Candidates are the visible set for the active profile: its own rows UNION

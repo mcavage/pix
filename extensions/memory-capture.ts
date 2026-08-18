@@ -94,15 +94,33 @@ async function call(method: string, params: any): Promise<any> {
 // budget is exhausted. This is informational, not an alarm: in the shipped
 // default (explicit) this never fires at all, because capture() never sends
 // observe in the first place.
+//
+// It goes through ctx.ui.notify, NOT process.stderr: in the TUI a raw stderr
+// write lands wherever the renderer happens to be painting (or nowhere at
+// all in fullscreen mode, the shipped default), so the one message that
+// explains "capture is on but nothing is being stored" was the one message
+// the user could not see. stderr stays the fallback for a ctx with no ui
+// (print mode, tests).
 let warnedNotAccepted = false;
-let warnedPostErr = false; // one stderr line per session when the observe POST fails
-function warnIfNotAccepted(resp: any): void {
+let warnedPostErr = false; // one notice per session when the observe POST fails
+function notify(ctx: any, text: string): void {
+	try {
+		if (typeof ctx?.ui?.notify === "function") {
+			ctx.ui.notify(text, "info");
+			return;
+		}
+		process.stderr.write(`${text}\n`);
+	} catch {
+		/* best-effort; never break a turn over a notice */
+	}
+}
+function warnIfNotAccepted(ctx: any, resp: any): void {
 	try {
 		const r = resp?.result;
 		if (r && r.accepted === false && !warnedNotAccepted) {
 			warnedNotAccepted = true;
 			const reason = typeof r.reason === "string" ? r.reason : "not accepted";
-			process.stderr.write(`[memory] capture not accepted: ${reason}\n`);
+			notify(ctx, `[memory] capture not accepted: ${reason}`);
 		}
 	} catch {
 		/* best-effort; never break a turn over a warning */
@@ -254,22 +272,19 @@ async function capture(ctx: any, awaited: boolean): Promise<void> {
 	inFlight = key;
 	const params = { user: ex.user, project: currentProject(ctx), profile: ACTIVE_PROFILE };
 	// Observability: a failed observe POST (host daemon unreachable, timeout) used
-	// to be swallowed silently, so a broken capture pipe was invisible. Log it once
-	// per session to stderr so "memory didn't store" is diagnosable.
+	// to be swallowed silently, so a broken capture pipe was invisible. Surface it
+	// once per session (notify: the TUI when there is one, stderr otherwise) so
+	// "memory didn't store" is diagnosable.
 	const onErr = (e: any) => {
 		if (!warnedPostErr) {
 			warnedPostErr = true;
-			try {
-				process.stderr.write(`[memory] capture POST to ${MEMORY_URL} failed: ${e?.message ?? e}\n`);
-			} catch {
-				/* best-effort */
-			}
+			notify(ctx, `[memory] capture POST to ${MEMORY_URL} failed: ${e?.message ?? e}`);
 		}
 	};
 	const send = async () => {
 		try {
 			const response = await call("observe", params);
-			warnIfNotAccepted(response);
+			warnIfNotAccepted(ctx, response);
 			lastSent = key; // only a completed RPC earns deduplication
 		} catch (e) {
 			onErr(e); // leave lastSent untouched so the next awaited hook retries

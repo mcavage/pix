@@ -10,6 +10,31 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **A slow Ollama embed no longer blocks every other memory call.** The
+  embed is a network round trip that can take many seconds, and it used to
+  run with the memory store's single mutex held, so ONE slow embed
+  head-of-line blocked every concurrent recall and remember on the host.
+  `remember` is three phases now (exact-hash reaffirm under the lock, the
+  embed with no lock held, then a revalidating re-check plus semantic
+  dedupe, budget check and INSERT under one uninterrupted hold), and
+  `recall` embeds its query before it takes the lock. The phase-3
+  revalidation is what keeps two concurrent remembers of the same content
+  from each writing their own row; reaffirm, dedupe and the exact daily
+  watcher budget all still hold, now proven by dedicated concurrency tests
+  (including under `-race`).
+- **`pix config set memory_capture` said the same thing for both modes, and
+  one of them was wrong.** Turning capture OFF (`explicit`) is a HOST-side
+  refusal that takes effect immediately, including for sandboxes already
+  running; only turning it ON reaches new sandboxes only. The confirmation
+  line now says which, and enabling `experimental-auto` warns that a
+  reachable watcher model is required and names the command to check it,
+  instead of implying capture is now working.
+- **A refused capture now reaches the user.** The host's
+  `{accepted:false, reason}` (watcher model missing, daily budget exhausted,
+  capture saturated) went to raw stderr, which the fullscreen TUI does not
+  show — so the one message explaining "capture is on but nothing is being
+  stored" was invisible. It goes through the UI notification channel now,
+  still exactly once per session, with stderr as the fallback for print mode.
 - **The daily watcher capture budget (10 stored rows/day) now holds exactly
   under concurrent captures.** Each in-flight `memCapture` used to peek
   `watcherBudgetRemaining()` once and then store against its own stale local
@@ -46,6 +71,21 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   config on every call and is authoritative regardless, so effective capture
   behavior never drifts from what the host's current config allows, even
   though the marker itself can go stale in either direction.
+
+### Changed
+
+- **Memory counts say "corrections", not "learnings".** The rows the watcher
+  writes for a rule you stated ("stop using em dashes") are corrections;
+  "learnings" read as vague and was easily confused with facts. `pix memory
+  stats` and the `memory_stats` tool description use the accurate word. The
+  JSON/RPC key stays `learnings`, so `--json` consumers are unaffected.
+- **`pix memory --help` now states the capture-mode mental model** — what
+  `explicit` and `experimental-auto` each actually store, which direction of
+  a mode change binds an already-running sandbox, and that `/forget <id>` is
+  the undo — instead of leaving it to be discovered from the docs.
+- **A recalled row wears the same `auto` tag punctuation on both surfaces.**
+  The host CLI rendered `[fact·project·auto]` while the sandbox's `/recall`
+  rendered `(fact/project/auto)`; both use `/` now.
 
 ### Removed
 

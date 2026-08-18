@@ -567,3 +567,36 @@ test("the capture-honesty guideline never claims a statement is off-topic for co
 		"must not claim something 'won't help code so won't save'",
 	);
 });
+
+// ── retired surface sentinels ──────────────────────────────────────────────
+// `/learnings` (and the `promotable` RPC behind it) was deleted along with the
+// durable/perishable split: every row the host writes is durable, so "recurring
+// learnings worth promoting" had no distinct set left to draw from. A
+// command-registration absence test is the honest check — grepping the source
+// would pass just as happily on a command registered under a computed name,
+// while this drives the REAL factory and asserts the command is not there.
+test("no /learnings command is registered (the promotable surface is deleted)", async () => {
+	const mod = await loadWithEnv({ MEMORY_URL: "http://127.0.0.1:1" });
+	const { commands } = capturePi(mod);
+	assert.ok(commands.size > 0, "the extension must register its commands for this absence check to mean anything");
+	assert.equal(commands.has("learnings"), false, "/learnings was deleted and must not come back");
+	// The living surface, asserted in the same breath so a factory that stopped
+	// registering ANYTHING cannot make the line above pass vacuously.
+	for (const name of ["recall", "remember", "forget"]) {
+		assert.ok(commands.has(name), `/${name} must still be registered`);
+	}
+});
+
+// The perishable-only relevance floor that used to filter auto-injected rows
+// is gone with the split it depended on. Source-level sentinel (the constant
+// was module-private, so there is nothing to observe at runtime): its return
+// would silently drop rows from the injected block again.
+test("memory-recall.ts carries no AUTO_INJECT_PERISHABLE score floor", async () => {
+	const { readFileSync } = await import("node:fs");
+	const src = readFileSync(new URL("../extensions/memory-recall.ts", import.meta.url), "utf8");
+	assert.equal(
+		src.includes("AUTO_INJECT_PERISHABLE"),
+		false,
+		"the perishable auto-inject score floor was deleted; every row is durable now",
+	);
+});

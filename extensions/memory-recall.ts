@@ -325,13 +325,16 @@ export default function (pi: any) {
 	pi.registerTool?.({
 		name: "memory_stats",
 		label: "Memory stats",
-		promptSnippet: "Read active, facts, learnings, and deleted memory counts",
+		promptSnippet: "Read active, facts, corrections, and deleted memory counts",
 		promptGuidelines: [
 			"Use memory_stats for memory-store counts instead of guessing or probing the daemon with shell commands.",
 			MEMORY_CAPTURE_HONESTY_GUIDELINE,
 		],
 		description: [
-			"Report counts from the memory store (active, facts, learnings, deleted). Use this when the user asks how much memory there is, or what the current store looks like.",
+			// "corrections" is what those rows are (a rule the user stated, e.g. "stop using em dashes"); "learnings" is only the
+			// wire key the host has always returned, kept as-is so --json/RPC consumers don't break. Both are named so the model
+			// can read the raw JSON this tool returns without inventing a fourth category.
+			"Report counts from the memory store: active, facts, corrections (the JSON key for these is `learnings`), deleted. Use this when the user asks how much memory there is, or what the current store looks like.",
 			MEMORY_TOOL_SEMANTICS,
 		].join(" "),
 		parameters: MemoryStatsParams as any,

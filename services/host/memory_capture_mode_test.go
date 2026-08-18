@@ -355,16 +355,18 @@ func drainMemCaptureSem(t *testing.T) {
 // predicate). EXPLAIN QUERY PLAN is the proof: sqlite's planner reports a
 // SEARCH using idx_memories_source_created_at, never a SCAN of the whole
 // table.
+//
+// It EXPLAINs memWatcherUsedTodaySQL, the same production const
+// watcherUsedToday executes, so the plan proven here is the plan that runs:
+// a hand-copied query string could drift out of the index's reach while this
+// test went on explaining the old one.
 func TestWatcherBudgetQueryUsesSourceCreatedAtIndex(t *testing.T) {
 	st, err := newMemStore(":memory:", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	start, end := watcherDayBoundsUTC(time.Now())
-	rows, err := st.db.Query(
-		"EXPLAIN QUERY PLAN SELECT COUNT(*) FROM memories WHERE source = 'watcher' AND created_at >= ? AND created_at < ?",
-		start, end,
-	)
+	rows, err := st.db.Query("EXPLAIN QUERY PLAN "+memWatcherUsedTodaySQL, start, end)
 	if err != nil {
 		t.Fatal(err)
 	}

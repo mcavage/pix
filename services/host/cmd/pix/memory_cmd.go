@@ -27,6 +27,19 @@ auto-start it if it is down (up to 3s), and exit 3 if it cannot be reached.
 They never restart an already-running daemon; run 'pix serve start' to move
 it to a newer version.
 
+What gets stored depends on the capture mode ('pix config get memory_capture'):
+  explicit (default)  nothing is stored unless YOU store it: 'pix memory
+                      remember', or /remember in a sandbox. Turning the mode
+                      back to explicit stops capture at once, for sandboxes
+                      already running too.
+  experimental-auto   a local watcher model also reads your side of each
+                      exchange and stores what it judges worth keeping, up to
+                      10 new rows/UTC day. It reaches sandboxes launched after
+                      the change, and needs a reachable watcher model. Rows it
+                      wrote are tagged 'auto' in recall output; '/forget <id>'
+                      (or 'pix memory forget') is the undo.
+Recall reads the same store in either mode.
+
 The only unreproducible artifact is memory.db; config.toml is recreated with
 "pix config set" and op-refs.env holds op:// references, not secrets, so
 neither needs a backup. Snapshot/restore live on the host binary:
