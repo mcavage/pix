@@ -80,10 +80,16 @@ two values:
   round trip involved in the decision at all. Even if something called
   `observe` anyway, the daemon refuses it before ever touching the
   watcher: no watcher inference, no side-effect Ollama probe. **The host
-  is always authoritative**: a config change takes effect for new
-  sandboxes (an already-running one keeps the marker it launched with),
-  but regardless of what the marker says, `memObserve` still refuses in
-  explicit mode. Facts still land the way they always could: `/remember`,
+  is always authoritative, but the two directions take effect on different
+  schedules**: setting `explicit` takes effect *immediately*, even for an
+  already-running sandbox — `memObserve` re-reads the live host config on
+  every call and refuses there regardless of what the sandbox's marker
+  says. Enabling `experimental-auto` only reaches a sandbox's marker at
+  launch: an already-running sandbox's `memory-capture` extension still
+  checks the marker it launched with before ever placing the `observe`
+  call, so a marker stuck on `explicit` goes on sending zero requests
+  until that sandbox is recreated, even though the host would now accept
+  them. Facts still land the way they always could: `/remember`,
   `pix memory remember`, or the agent's own explicit tools — a human or an
   explicit command chose to store it, not an automatic listener.
 - **`experimental-auto` (opt-in).** The watcher extracts durable **facts**
