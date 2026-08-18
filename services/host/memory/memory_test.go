@@ -417,6 +417,32 @@ func TestFlagSetTerminator(t *testing.T) {
 // so an "auto" that stopped appearing (or started appearing for user/cli
 // rows, the worse direction: it would misattribute a fact the user typed to
 // the watcher) was only ever asserted indirectly.
+// TestDisplayKind is the direct table test for the DX-6a render-only alias:
+// a stored "learning" kind must render as "correction", and every other kind
+// (including one that merely contains the substring "learning") must pass
+// through unchanged. No schema migration backs this: the alias lives only at
+// render time.
+func TestDisplayKind(t *testing.T) {
+	cases := []struct {
+		name string
+		kind string
+		want string
+	}{
+		{"learning renders as correction", "learning", "correction"},
+		{"fact passes through unchanged", "fact", "fact"},
+		{"empty kind passes through unchanged", "", ""},
+		{"a kind that merely contains learning is not aliased", "learnings", "learnings"},
+		{"unknown kind passes through unchanged", "preference", "preference"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := displayKind(tc.kind); got != tc.want {
+				t.Errorf("displayKind(%q) = %q, want %q", tc.kind, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestMemoryMeta(t *testing.T) {
 	cases := []struct {
 		name string
@@ -429,7 +455,9 @@ func TestMemoryMeta(t *testing.T) {
 		{"unknown source is not tagged", map[string]any{"kind": "fact", "source": "unknown"}, "  [fact]"},
 		{"absent source is not tagged", map[string]any{"kind": "fact"}, "  [fact]"},
 		{"a source that merely contains watcher is not tagged", map[string]any{"kind": "fact", "source": "not-watcher"}, "  [fact]"},
-		{"kind, project and auto share one separator", map[string]any{"kind": "learning", "project": "pix", "source": "watcher"}, "  [learning/pix/auto]"},
+		{"a bare learning kind renders as correction", map[string]any{"kind": "learning"}, "  [correction]"},
+		{"a kind that merely contains learning is not aliased", map[string]any{"kind": "learnings"}, "  [learnings]"},
+		{"kind, project and auto share one separator", map[string]any{"kind": "learning", "project": "pix", "source": "watcher"}, "  [correction/pix/auto]"},
 		{"score follows the tags", map[string]any{"kind": "fact", "source": "watcher", "score": 0.59}, "  [fact/auto 0.59]"},
 		{"a score alone still renders", map[string]any{"score": 0.5}, "  [0.50]"},
 		{"nothing to say renders nothing", map[string]any{}, ""},

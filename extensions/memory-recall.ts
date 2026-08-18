@@ -151,6 +151,16 @@ export function formatMemoryIso(value: unknown): string | null {
 	return match ? `${match[1]}T${match[2]}${match[3].toUpperCase()}` : null;
 }
 
+// DX-6a: render-only alias. The stored/JSON kind stays "learning" (no schema
+// migration, and --json output keeps emitting "learning" for compatibility);
+// only the human-facing line renders it as "correction", which is what a
+// learning actually is from the user's side of the interaction. Every other
+// kind renders unchanged. Mirrored in services/host/memory/memory.go's
+// memoryMeta so the two surfaces never wear different labels for one row.
+export function displayKind(kind: unknown): string {
+	return kind === "learning" ? "correction" : String(kind);
+}
+
 // One rendered /recall line: id, kind/project (plus an "auto" tag for a
 // watcher-sourced row, so an experimental-auto capture is visibly distinct
 // from an explicit one -- /forget <id> is the feedback/undo mechanism, this
@@ -158,7 +168,7 @@ export function formatMemoryIso(value: unknown): string | null {
 export function formatHitLine(h: any): string {
 	const ts = formatMemoryIso(h?.createdAt);
 	const tag = h?.source === "watcher" ? "/auto" : "";
-	return `• [${String(h.id).slice(0, 8)}] (${h.kind}${h.project ? "/" + h.project : ""}${tag})${ts ? ` ${ts}` : ""} ${h.content}`;
+	return `• [${String(h.id).slice(0, 8)}] (${displayKind(h.kind)}${h.project ? "/" + h.project : ""}${tag})${ts ? ` ${ts}` : ""} ${h.content}`;
 }
 
 // The block header, verbatim. The second line is the untrusted-content wrapper

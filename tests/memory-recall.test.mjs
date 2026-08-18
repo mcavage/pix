@@ -200,6 +200,32 @@ test("formatHitLine no longer renders a durability segment, even if a hit still 
 	assert.equal(line, "• [abcdef12] (fact) hello");
 });
 
+// DX-6a: displayKind is a render-only alias, no schema migration. A stored
+// "learning" kind renders as "correction"; every other kind, including one
+// that merely contains the substring "learning", passes through unchanged.
+test("displayKind aliases learning to correction and leaves everything else unchanged", () => {
+	const cases = [
+		["learning", "correction"],
+		["fact", "fact"],
+		["", ""],
+		["learnings", "learnings"],
+		["preference", "preference"],
+	];
+	for (const [kind, want] of cases) {
+		assert.equal(pureMod.displayKind(kind), want, `displayKind(${JSON.stringify(kind)})`);
+	}
+});
+
+// The alias applies only to the rendered line; a hit's raw kind field (as
+// would be re-serialized to JSON) is untouched by formatHitLine.
+test("formatHitLine renders a learning hit's kind as correction, other kinds unchanged", () => {
+	const learning = pureMod.formatHitLine({ id: "abcdef1234567890", kind: "learning", content: "hello" });
+	assert.equal(learning, "• [abcdef12] (correction) hello");
+
+	const fact = pureMod.formatHitLine({ id: "abcdef1234567890", kind: "fact", content: "hello" });
+	assert.equal(fact, "• [abcdef12] (fact) hello");
+});
+
 // A watcher-sourced (experimental-auto) row renders an "/auto" tag so it is
 // visibly distinct from an explicit one; anything else (or an absent source)
 // renders exactly as before.

@@ -137,6 +137,20 @@ func (m CLI) Stats(asJSON bool) error {
 	return nil
 }
 
+// displayKind is the DX-6a render-only alias: the stored/JSON kind stays
+// "learning" (no schema migration, and --json output keeps emitting
+// "learning" for compatibility); only the human-facing render calls this to
+// show "correction" instead, since that's what a learning actually is from
+// the user's side. Every other kind renders unchanged. Mirrored in the
+// sandbox's extensions/memory-recall.ts's displayKind so the two surfaces
+// never wear different labels for one row.
+func displayKind(kind string) string {
+	if kind == "learning" {
+		return "correction"
+	}
+	return kind
+}
+
 // memoryMeta renders the trailing "[kind/project/auto score]" annotation.
 // "auto" only appears for a watcher-sourced (experimental-auto capture) row,
 // so an auto row is visibly distinguishable from an explicit one — the
@@ -146,11 +160,12 @@ func (m CLI) Stats(asJSON bool) error {
 // row seen through two surfaces should not wear two different punctuations.
 // durability is not rendered: the read side was retired (U9) once every row
 // this binary writes became durable; the DB column stays, inert, for on-disk
-// compatibility only.
+// compatibility only. kind is rendered through displayKind (DX-6a): "learning"
+// shows as "correction", everything else passes through.
 func memoryMeta(h map[string]any) string {
 	var parts []string
 	if k := rpc.Str(h, "kind"); k != "" {
-		parts = append(parts, k)
+		parts = append(parts, displayKind(k))
 	}
 	if p := rpc.Str(h, "project"); p != "" {
 		parts = append(parts, p)

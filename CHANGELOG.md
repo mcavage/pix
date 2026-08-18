@@ -10,6 +10,12 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **A stored `learning` now reads as `correction` everywhere it's rendered
+  for a person, DX-6a.** Sandbox `/recall` (`formatHitLine`) and the host
+  `pix memory recall` CLI (`memoryMeta`) both display `correction` instead
+  of the internal `learning` kind; every other kind is unchanged. This is a
+  render-only alias, not a schema migration: the stored row and any
+  `--json` output still carry `kind: "learning"` for compatibility.
 - **A slow Ollama embed no longer blocks every other memory call.** The
   embed is a network round trip that can take many seconds, and it used to
   run with the memory store's single mutex held, so ONE slow embed
