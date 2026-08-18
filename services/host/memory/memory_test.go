@@ -204,6 +204,54 @@ func TestMemoryForget(t *testing.T) {
 	}
 }
 
+// QA-2: a miss must be an honest FAILURE, not a silent success dressed up as
+// one. `pix memory forget <missing>` returns a non-nil, non-usage error (so
+// dispatch maps it to exit 1) and writes NOTHING to Out in plain-text mode
+// — the diagnostic belongs on stderr, which is dispatch's job once an error
+// comes back, not this layer's.
+func TestMemoryForget_MissIsAFailure(t *testing.T) {
+	c := fakeRPCServer(t, map[string]any{"forget": map[string]any{"ok": false}})
+	var out bytes.Buffer
+	err := (CLI{c, &out, "default"}).Forget("missing123", false)
+	if err == nil {
+		t.Fatal("forget of a missing id must return an error, got nil")
+	}
+	if cli.IsUsage(err) {
+		t.Errorf("a miss is not a usage error, got %v", err)
+	}
+	if cli.ExitCode(err) != 1 {
+		t.Errorf("forget miss exit code = %d, want 1", cli.ExitCode(err))
+	}
+	if !strings.Contains(err.Error(), "missing123") {
+		t.Errorf("error must name the id that missed, got %v", err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("plain-text forget miss must write nothing to Out (stdout), got %q", out.String())
+	}
+}
+
+// A --json miss still emits the parseable {"ok":false} result to Out — a
+// script piping `pix memory forget --json` never has to special-case a miss
+// to get valid JSON — but the call still fails, so the exit code is honest.
+func TestMemoryForget_MissJSONStillParseableButFails(t *testing.T) {
+	c := fakeRPCServer(t, map[string]any{"forget": map[string]any{"ok": false}})
+	var out bytes.Buffer
+	err := (CLI{c, &out, "default"}).Forget("missing123", true)
+	if err == nil {
+		t.Fatal("forget --json of a missing id must still return an error")
+	}
+	if cli.ExitCode(err) != 1 {
+		t.Errorf("forget --json miss exit code = %d, want 1", cli.ExitCode(err))
+	}
+	var parsed map[string]any
+	if jerr := json.Unmarshal(out.Bytes(), &parsed); jerr != nil {
+		t.Fatalf("--json miss output is not valid JSON: %v\n%s", jerr, out.String())
+	}
+	if ok, _ := parsed["ok"].(bool); ok {
+		t.Errorf("--json miss result must report ok:false, got %v", parsed)
+	}
+}
+
 // The durable/perishable split is gone end to end (host, plugin, CLI); this
 // only pins the plain-text render's remaining fields.
 func TestMemoryStats(t *testing.T) {

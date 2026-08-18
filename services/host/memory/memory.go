@@ -75,8 +75,16 @@ func (m CLI) Remember(content string, asJSON bool) error {
 	return nil
 }
 
-// Forget deletes one fact by id (or id prefix). A miss is reported as a miss,
-// never as a deletion.
+// Forget deletes one fact by id (or id prefix). A miss is a FAILURE (exit 1,
+// diagnostic on stderr), never a silent no-op dressed up as success: a caller
+// who asked to delete a specific id and got nothing needs that distinguishable
+// from an actual deletion, by both exit code and stream.
+//
+// --json still prints the {"ok":false} result to Out (stdout stays parseable
+// either way — a script piping `pix memory forget --json` never has to
+// special-case a miss to get valid JSON), but the command still returns the
+// error: dispatch's single exit mapper turns that into the honest exit 1, and
+// its "pix: …" line lands on stderr same as the plain-text path.
 func (m CLI) Forget(id string, asJSON bool) error {
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -88,12 +96,14 @@ func (m CLI) Forget(id string, asJSON bool) error {
 	}
 	ok, _ := res["ok"].(bool)
 	if asJSON {
-		return cli.WriteJSONOut(m.Out, res)
-	}
-	if ok {
+		if err := cli.WriteJSONOut(m.Out, res); err != nil {
+			return err
+		}
+	} else if ok {
 		fmt.Fprintf(m.Out, "forgot %s\n", id)
-	} else {
-		fmt.Fprintf(m.Out, "no fact matched %q\n", id)
+	}
+	if !ok {
+		return fmt.Errorf("no fact matched %q", id)
 	}
 	return nil
 }
