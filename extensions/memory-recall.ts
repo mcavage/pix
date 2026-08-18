@@ -422,7 +422,14 @@ export default function (pi: any) {
 				if (!id) {
 					const r = await rpc("recall", { query: arg, limit: 1, project: currentProject(ctx), profile: ACTIVE_PROFILE });
 					const hit = r?.hits?.[0];
-					if (!hit) return ctx?.ui?.notify?.("no match to forget", "info");
+					// A no-match query is a visible error, not info: nothing was forgotten,
+					// so a quiet "info" reads as success. Actionable, not just a fact: tell
+					// the caller what to try next.
+					if (!hit)
+						return ctx?.ui?.notify?.(
+							`no memory matched "${arg}" — nothing was forgotten. Try /recall ${arg} to see what is actually stored, or narrow/broaden the query.`,
+							"error",
+						);
 					id = hit.id;
 					content = hit.content;
 				}
@@ -430,10 +437,14 @@ export default function (pi: any) {
 				if (r?.ok) {
 					ctx?.ui?.notify?.(`forgot: ${content}`, "info");
 				} else {
-					// A miss is a visible error, not info: the id/query the caller
-					// supplied did not match anything in the store, worth flagging as a
-					// failure rather than a quiet no-op.
-					ctx?.ui?.notify?.("not found (use a full id from /recall)", "error");
+					// A miss is a visible error, not info: the id the caller supplied did
+					// not match anything IN THE ACTIVE PROFILE. Name the actual reasons
+					// (absent, already forgotten, or a different profile scope), not a
+					// formatting complaint, since the id shape was already accepted above.
+					ctx?.ui?.notify?.(
+						`no memory with id "${id}" in this scope — it may not exist, may already be forgotten, or may belong to a different profile. Run /recall to check.`,
+						"error",
+					);
 				}
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err);

@@ -192,6 +192,7 @@ test("PRIVACY.md enumerates the DEFAULT network destinations, not just 'what you
 		"api.exa.ai",
 		"generativelanguage.googleapis.com",
 		"api.perplexity.ai",
+		"api.parallel.ai",
 		"registry.npmjs.org",
 		"objects.githubusercontent.com",
 		"codeload.github.com",

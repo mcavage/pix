@@ -410,13 +410,6 @@ func TestFlagSetTerminator(t *testing.T) {
 	}
 }
 
-// TestMemoryMeta is the direct table test for the ONE annotation that tells a
-// user where a row came from: a watcher-sourced (experimental-auto) row must
-// render "auto", and an explicit one must render nothing of the sort. The
-// existing coverage only reached memoryMeta THROUGH Recall's rendered line,
-// so an "auto" that stopped appearing (or started appearing for user/cli
-// rows, the worse direction: it would misattribute a fact the user typed to
-// the watcher) was only ever asserted indirectly.
 // TestDisplayKind is the direct table test for the DX-6a render-only alias:
 // a stored "learning" kind must render as "correction", and every other kind
 // (including one that merely contains the substring "learning") must pass
@@ -443,6 +436,13 @@ func TestDisplayKind(t *testing.T) {
 	}
 }
 
+// TestMemoryMeta is the direct table test for the ONE annotation that tells a
+// user where a row came from: a watcher-sourced (experimental-auto) row must
+// render "auto", and an explicit one must render nothing of the sort. The
+// existing coverage only reached memoryMeta THROUGH Recall's rendered line,
+// so an "auto" that stopped appearing (or started appearing for user/cli
+// rows, the worse direction: it would misattribute a fact the user typed to
+// the watcher) was only ever asserted indirectly.
 func TestMemoryMeta(t *testing.T) {
 	cases := []struct {
 		name string

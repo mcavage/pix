@@ -10,6 +10,32 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Final shipping-review findings closed.** A stale comment in
+  `memory_deletions_gone_test.go` claimed `plugin.Hit.Durability` still
+  legitimately appears on the read side, contradicting the very test
+  (`TestHitDroppedDurabilityReadSide`) that proves it does not; it now
+  points at the actual surviving lowercase examples (the inert `durability`
+  DB column and its `const durability = "durable"` write). `memory_test.go`
+  had `TestMemoryMeta`'s doc comment sitting above the wrong function
+  (`TestDisplayKind`); moved back to its own test. `pi-kit/spec.yaml`'s
+  subagent roster named vendor/model nicknames (`haiku`, `opus`) that go
+  stale the moment routing policy changes; it now names the INTENT each
+  preset resolves through (`fanout` = breadth, `deep` = max-accuracy,
+  `review` = review) and points at `pix agent ls` for the live model, with a
+  new drift test (`tests/kit-subagent-roster-intents.test.mjs`) failing if a
+  nickname creeps back in. `/forget`'s no-match paths now both notify at
+  `error` severity with an actionable message: a query with no hit tells the
+  caller to try `/recall`, and an id miss says the id may be absent, already
+  forgotten, or in a different profile scope, instead of complaining about
+  formatting. `docs/legal/PRIVACY.md` now asserts `api.parallel.ai` in the
+  regression test's disclosed-host list, and reframes Parallel from a
+  generic "fallback" to accurate: it is checked ahead of Perplexity/Gemini
+  in auto-select order, so a Parallel key alone makes it the *preferred*
+  keyed backend once Exa is unavailable. `docs/legal/RELEASE-SAFEGUARDS.md`'s
+  privacy summary no longer implies pix only talks to providers/servers you
+  configured; it now names the default destinations (web-search fallbacks,
+  npm version check, package downloads) too.
+
 - **Docs/kit/legal closeout: last stale memory claims fixed.** The kit's
   `agentInstructions` (`pi-kit/spec.yaml`) no longer tells the agent `pix
   host` is an unsandboxed escape hatch (that verb is deleted); its memory

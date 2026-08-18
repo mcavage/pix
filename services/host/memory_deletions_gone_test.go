@@ -138,9 +138,12 @@ func TestHitDroppedDurabilityReadSide(t *testing.T) {
 // back. Each is chosen to be unambiguous: a function declaration (fixed,
 // gofmt-stable formatting), an exact SQL predicate, and an exact behavioral
 // gate — never a bare identifier like "Durability" or "TTLDays", both of
-// which legitimately still appear elsewhere (plugin.Hit.Durability on the
-// read side; this unit's own explanatory comments), so a bare-word check
-// would flag the very things this test file exists to protect.
+// which legitimately still appear elsewhere in lowercase, inert form:
+// memory.go's CREATE TABLE schema still declares a `durability` column,
+// remember() still writes the fixed literal `const durability = "durable"`
+// into it, and this unit's own explanatory comments name the column in
+// prose — so a bare-word check would flag the very things this test file
+// exists to protect.
 var forbiddenMemorySymbols = []string{
 	// migrateLegacyWatcherPerishableTTL (and its test) were deleted outright.
 	"func migrateLegacyWatcherPerishableTTL(",

@@ -367,7 +367,10 @@ test("/forget: a JSON-RPC error surfaces a visible error instead of silently van
 // didn't match anything) is a distinct case from a transport/RPC error: it's
 // not swallowed either way, but it must notify at "error" severity, not
 // "info" — the caller asked to delete something specific and nothing happened.
-test("/forget: a miss (daemon responds ok:false) notifies at error severity, not info", async (t) => {
+// The message must also name the actual reasons an id can miss (absent, already
+// forgotten, or a different profile scope), not complain about formatting —
+// the id shape was already accepted before this RPC ever fired.
+test("/forget: an id miss (daemon responds ok:false) notifies at error severity with an actionable, non-formatting message", async (t) => {
 	const { server } = makeFakeDaemon((req) => (req.method === "forget" ? { ok: false } : { hits: [] }));
 	t.after(() => server.close());
 	const MEMORY_URL = await listen(server);
@@ -377,7 +380,26 @@ test("/forget: a miss (daemon responds ok:false) notifies at error severity, not
 	await handler("abcdef1234567890", fakeCtx(notes));
 	assert.equal(notes.length, 1);
 	assert.equal(notes[0].level, "error", "a forget miss must be a visible error, not an info-level no-op");
-	assert.match(notes[0].msg, /not found/i);
+	assert.match(notes[0].msg, /absent|already forgotten|different profile/i, "must name a concrete reason, not just complain about id formatting");
+	assert.doesNotMatch(notes[0].msg, /use a full id from \/recall/i, "must not reduce to a formatting complaint");
+});
+
+// A QUERY miss (no id given, and /recall found nothing to resolve it to) is a
+// distinct path from the id-miss above: the lookup recall() itself came back
+// empty, so /forget never even reached the daemon's forget RPC. This must
+// also be an error, not an info no-op, and must tell the caller what to try.
+test("/forget: a query with no match notifies at error severity with an actionable message", async (t) => {
+	const { server } = makeFakeDaemon(() => ({ hits: [] }));
+	t.after(() => server.close());
+	const MEMORY_URL = await listen(server);
+	const mod = await loadWithEnv({ MEMORY_URL });
+	const handler = getCommandHandler(mod, "forget");
+	const notes = [];
+	await handler("some query that matches nothing", fakeCtx(notes));
+	assert.equal(notes.length, 1);
+	assert.equal(notes[0].level, "error", "a forget query miss must be a visible error, not an info-level no-op");
+	assert.match(notes[0].msg, /no memory matched/i);
+	assert.match(notes[0].msg, /\/recall/, "must point the caller at /recall as the actionable next step");
 });
 
 // The command-timeout MAGNITUDE (200ms here vs. the real 10s production

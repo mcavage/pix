@@ -227,10 +227,10 @@ agentInstructions:
     each child spawned with an inactivity + wall-clock watchdog so a stuck one is
     killed and reported, never left hanging. Call it with {agent, task} (single),
     {tasks:[...]} (parallel), or {chain:[...]} with a {previous} placeholder:
-    agent = a preset in ~/.pi/agent/agents:
-      - fanout (haiku, read-only): spawn many for breadth.
-      - deep (opus): one genuinely hard sub-problem.
-      - review (cross-vendor): an adversarial second opinion before you ship.
+    agent = a preset in ~/.pi/agent/agents (see `pix agent ls`):
+      - fanout (intent breadth, cheap/read-only): spawn many for breadth.
+      - deep (intent max-accuracy): one genuinely hard sub-problem.
+      - review (intent review, cross-vendor): adversarial second opinion.
       - specialists: architect, engineer, designer, product-manager, qa-lead,
         security-lead, sre-lead, devrel, dx-consultant, legal, finance-analyst,
         growth-marketing, ux-copywriter, enterprise-admin.
