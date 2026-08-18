@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -344,6 +347,175 @@ func drainMemCaptureSem(t *testing.T) {
 // extract nothing. memObserve spawns memCapture in its own goroutine, so
 // drainMemCaptureSem stands in for the sleep a timing-dependent test would
 // otherwise need.
+// TestWatcherBudgetQueryUsesSourceCreatedAtIndex proves REV2-1's whole point:
+// watcherUsedToday's COUNT is a plain indexable range (created_at >= ? AND
+// created_at < ?) against source='watcher', not the old
+// substr(created_at,1,10)=? equality that forced sqlite to evaluate a
+// function against every row (no index can serve a function-of-column
+// predicate). EXPLAIN QUERY PLAN is the proof: sqlite's planner reports a
+// SEARCH using idx_memories_source_created_at, never a SCAN of the whole
+// table.
+func TestWatcherBudgetQueryUsesSourceCreatedAtIndex(t *testing.T) {
+	st, err := newMemStore(":memory:", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start, end := watcherDayBoundsUTC(time.Now())
+	rows, err := st.db.Query(
+		"EXPLAIN QUERY PLAN SELECT COUNT(*) FROM memories WHERE source = 'watcher' AND created_at >= ? AND created_at < ?",
+		start, end,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan string
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan += detail + "\n"
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plan, "USING COVERING INDEX idx_memories_source_created_at") && !strings.Contains(plan, "USING INDEX idx_memories_source_created_at") {
+		t.Fatalf("watcherUsedToday's query plan does not use idx_memories_source_created_at, got:\n%s", plan)
+	}
+	if strings.Contains(plan, "SCAN memories") {
+		t.Fatalf("watcherUsedToday's query plan falls back to a full table SCAN, got:\n%s", plan)
+	}
+}
+
+// TestWatcherDayBoundsUTC_HalfOpenRangeAtExactMidnight proves the UTC
+// boundary math is correct at the exact instant it is most fragile: a row
+// timestamped precisely at day-start (whole second, no fractional digits,
+// as memNowIso's RFC3339Nano formatter writes it) must land in that day's
+// count, and a row one nanosecond into the NEXT day must not — the classic
+// off-by-one a half-open range gets wrong when boundaries are computed
+// carelessly. It also proves a row a fraction of a second after midnight
+// (variable-length trailing digits, per watcherDayBoundsUTC's doc comment)
+// still compares as inside the day, not before it.
+func TestWatcherDayBoundsUTC_HalfOpenRangeAtExactMidnight(t *testing.T) {
+	st, err := newMemStore(":memory:", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	day := time.Date(2024, 3, 15, 0, 0, 0, 0, time.UTC)
+	insert := func(createdAt string) {
+		if _, err := st.rememberWatcherCapture(rememberInput{content: "fact @ " + createdAt, kind: "fact"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.db.Exec("UPDATE memories SET created_at = ? WHERE content = ?", createdAt, "fact @ "+createdAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Exactly at day-start, whole second (no fractional component at all,
+	// the shape memNowIso() writes for an exact-second timestamp): must count.
+	insert(day.Format(time.RFC3339Nano))
+	// A fraction of a second after day-start: must still count as this day,
+	// not sort before the (Z-less) lower bound.
+	insert(day.Add(1 * time.Millisecond).Format(time.RFC3339Nano))
+	// The last nanosecond of THIS day: must count.
+	insert(day.Add(24*time.Hour - time.Nanosecond).Format(time.RFC3339Nano))
+	// One nanosecond into the NEXT day: must NOT count.
+	insert(day.Add(24 * time.Hour).Format(time.RFC3339Nano))
+	// The last instant of the PREVIOUS day: must NOT count.
+	insert(day.Add(-time.Nanosecond).Format(time.RFC3339Nano))
+
+	today := func() time.Time { return day }
+	start, end := watcherDayBoundsUTC(today())
+	var used int
+	if err := st.db.QueryRow(
+		"SELECT COUNT(*) FROM memories WHERE source = 'watcher' AND created_at >= ? AND created_at < ?",
+		start, end,
+	).Scan(&used); err != nil {
+		t.Fatal(err)
+	}
+	if used != 3 {
+		t.Fatalf("watcher rows counted for the day = %d, want 3 (day-start exact, day-start+1ms, and day-end-1ns; excluding the two rows that fall on adjacent days)", used)
+	}
+}
+
+// TestSourceCreatedAtIndex_BackfillsOnAnExistingV2DatabaseNoNewMigration
+// proves the index reaches a database that was already at memSchemaVersion
+// BEFORE this fix shipped (so migrateMemorySchema's one-time sweep, gated on
+// user_version, never runs again for it) without bumping the schema version:
+// CREATE INDEX IF NOT EXISTS lives in memSchema itself, which newMemStore
+// executes unconditionally on every open, the same way the CREATE TABLE
+// statement beside it already reaches every db regardless of version.
+func TestSourceCreatedAtIndex_BackfillsOnAnExistingV2DatabaseNoNewMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "existing-v2.db")
+	// Hand-build a v2 database shaped exactly like memSchema minus the index
+	// this fix adds — i.e. what every real db on disk looks like today.
+	preFixSchema := `
+CREATE TABLE memories (
+  rowid INTEGER PRIMARY KEY, id TEXT UNIQUE NOT NULL, kind TEXT NOT NULL, content TEXT NOT NULL,
+  content_hash TEXT NOT NULL, durability TEXT NOT NULL, confidence REAL NOT NULL,
+  frequency INTEGER NOT NULL DEFAULT 1, reward REAL NOT NULL DEFAULT 0, access_count INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL, last_accessed TEXT, expires_at TEXT, source TEXT NOT NULL,
+  tags TEXT NOT NULL DEFAULT '[]', project TEXT, embedding TEXT, deleted_at TEXT, profile TEXT
+);
+CREATE VIRTUAL TABLE memories_fts USING fts5(content);`
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(preFixSchema); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("PRAGMA user_version = " + strconv.Itoa(memSchemaVersion)); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	indexExists := func() bool {
+		check, err := sql.Open("sqlite", path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer check.Close()
+		var name string
+		err = check.QueryRow("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_memories_source_created_at'").Scan(&name)
+		if err == sql.ErrNoRows {
+			return false
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return true
+	}
+	if indexExists() {
+		t.Fatal("precondition: the hand-built pre-fix fixture already has the index")
+	}
+
+	st, err := newMemStore(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var uv int
+	if err := st.db.QueryRow("PRAGMA user_version").Scan(&uv); err != nil {
+		t.Fatal(err)
+	}
+	if uv != memSchemaVersion {
+		t.Fatalf("user_version = %d after opening an already-v2 db, want unchanged at %d (no new migration version)", uv, memSchemaVersion)
+	}
+	st.db.Close()
+
+	if !indexExists() {
+		t.Fatal("idx_memories_source_created_at was not backfilled onto the existing v2 database")
+	}
+
+	// Reopening again (the index now present) must be a no-op, not an error.
+	st2, err := newMemStore(path, nil)
+	if err != nil {
+		t.Fatalf("reopen with the index already present: %v", err)
+	}
+	st2.db.Close()
+}
+
 func TestMemCaptureSecretFilterRunsOnUntruncatedText(t *testing.T) {
 	st := watchServer(t, `{"facts":["should never be seen"],"corrections":[]}`)
 	t.Setenv("MEMORY_CAPTURE_MODE", "experimental-auto")

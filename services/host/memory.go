@@ -62,6 +62,14 @@ CREATE TABLE IF NOT EXISTS memories (
   tags TEXT NOT NULL DEFAULT '[]', project TEXT, embedding TEXT, deleted_at TEXT, profile TEXT
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(content);
+-- Composite index backing the watcher daily-budget COUNT (source='watcher'
+-- AND created_at range) and any other per-source/time-window query. CREATE
+-- INDEX IF NOT EXISTS runs unconditionally on every open (same as the CREATE
+-- TABLE above), so this reaches an existing v2 database exactly the same way
+-- it reaches a brand-new one: no migration-version bump needed, since adding
+-- an index changes no data and re-running the statement against a db that
+-- already has it is a no-op.
+CREATE INDEX IF NOT EXISTS idx_memories_source_created_at ON memories(source, created_at);
 `
 
 // memSchemaVersion is the memory schema (PRAGMA user_version) THIS binary
