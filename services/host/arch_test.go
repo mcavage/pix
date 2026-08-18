@@ -123,6 +123,10 @@ var pkgLayer = map[string]int{
 	// nothing below it and orchestrates no other capability.
 	"workflow/task": layerCapability,
 	"uat":           layerCapability,
+	// uatmatrix is the host-backed candidate-memory probe: subprocess, RPC and
+	// fixture mechanics only. workflow/uat supplies run-local paths and invokes
+	// it; the probe imports no capability sibling and owns no orchestration.
+	"uatmatrix": layerCapability,
 
 	// supervise sits ABOVE the capabilities on purpose: it is the process
 	// lifecycle that RUNS one (plugin), not a domain of its own. Filing it at L1

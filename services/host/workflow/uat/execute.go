@@ -248,6 +248,25 @@ func (r *Runner) executeCandidateSmoke(ctx context.Context, runID, commit string
 		return err
 	}
 
+	stepsDir := filepath.Join(r.stateDir, "runs", runID, "steps")
+	if err := os.MkdirAll(stepsDir, 0700); err != nil {
+		return fmt.Errorf("create step artifacts: %w", err)
+	}
+
+	// The memory UAT matrix runs the candidate pix/pix-host binaries directly,
+	// in run-local isolation, against a deterministic fake Ollama — entirely
+	// before the sandbox launches below. It never touches port 11435 or the
+	// normal pix config/store (uatmatrix). memoryMatrix is nil only if
+	// a caller constructed a Runner some other way than NewRunner; that is a
+	// caller bug, not a supported way to skip this coverage, so it fails
+	// closed rather than silently proceeding to the sandbox launch.
+	if r.memoryMatrix == nil {
+		return errors.New("candidate_smoke: no memory matrix wired (Runner must be built by NewRunner)")
+	}
+	if err := r.memoryMatrix(ctx, res, stepsDir); err != nil {
+		return fmt.Errorf("memory matrix: %w", err)
+	}
+
 	if err := os.MkdirAll(res.FixtureDir, 0755); err != nil {
 		return err
 	}
@@ -313,10 +332,6 @@ func (r *Runner) executeCandidateSmoke(ctx context.Context, runID, commit string
 	pixCmd.SetEnv(newEnv)
 	pixCmd.SetDir(res.SourceDir)
 
-	stepsDir := filepath.Join(r.stateDir, "runs", runID, "steps")
-	if err := os.MkdirAll(stepsDir, 0700); err != nil {
-		return fmt.Errorf("create step artifacts: %w", err)
-	}
 	logPath := filepath.Join(stepsDir, stepID+".log")
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {

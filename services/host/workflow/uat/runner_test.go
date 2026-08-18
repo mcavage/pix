@@ -16,6 +16,14 @@ import (
 	"pix/host/workflow/uat"
 )
 
+// matrixSkippingExec is the narrow NewRunner test seam for candidate_smoke
+// orchestration tests whose mock Exec does not produce runnable binaries.
+type matrixSkippingExec struct{ uat.Exec }
+
+func (matrixSkippingExec) RunCandidateMemoryMatrix(context.Context, uat.RunResources, string) error {
+	return nil
+}
+
 type capturedExec struct {
 	args []string
 	env  []string
@@ -350,7 +358,7 @@ steps:
 	ml := &mockLease{}
 	pixHost := filepath.Join(stateDir, "pix-host")
 	os.WriteFile(pixHost, []byte(""), 0755)
-	runner, _ := uat.NewRunner(pixHost, "/repo", stateDir, mg, me, &mockSandbox{}, &mockMCP{}, &mockImage{}, ml, 1)
+	runner, _ := uat.NewRunner(pixHost, "/repo", stateDir, mg, matrixSkippingExec{me}, &mockSandbox{}, &mockMCP{}, &mockImage{}, ml, 1)
 
 	resp, err := runner.Submit(context.Background(), uat.SubmitRequest{
 		Commit:       "main",
@@ -463,6 +471,60 @@ steps:
 	}
 }
 
+// TestCandidateSmoke_DefaultMemoryMatrixFailsClosed proves NewRunner wires
+// RealMemoryMatrix by default (not a no-op): a candidate_smoke run built
+// entirely on mocks never produces real pix/pix-host binaries in OutDir, so
+// the default matrix must fail the run rather than silently pass it — the
+// exact fail-closed contract the real matrix documents for a missing binary.
+// Every other candidate_smoke test in this package uses matrixSkippingExec to
+// opt out of this.
+func TestCandidateSmoke_DefaultMemoryMatrixFailsClosed(t *testing.T) {
+	stateDir := t.TempDir()
+	hostHome := filepath.Join(stateDir, "host-home")
+	t.Setenv("HOME", hostHome)
+	mg := &mockGit{
+		readTreeFile: func(ctx context.Context, commit, path string) ([]byte, error) {
+			return []byte("schema: pix.uat/1\nname: test\ntimeout: 1m\nsteps:\n  - id: smoke\n    do: candidate_smoke"), nil
+		},
+	}
+	me := &captureExecHelper{
+		onCommand: func(name string, args ...string) uat.ExecCmd {
+			return &mockCmdHelper{args: append([]string{name}, args...), record: func(capturedExec) {}}
+		},
+	}
+	pixHost := filepath.Join(stateDir, "pix-host")
+	os.WriteFile(pixHost, []byte(""), 0755)
+	runner, _ := uat.NewRunner(pixHost, "/repo", stateDir, mg, me, &mockSandbox{}, &mockMCP{}, &mockImage{}, &mockLease{}, 1)
+	// Deliberately NOT wrapping the Exec: this test is the one place the
+	// production default must run.
+
+	resp, err := runner.Submit(context.Background(), uat.SubmitRequest{
+		Commit:       "main",
+		ScenarioPath: "test.yaml",
+		DryRun:       false,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	statusReq := uat.StatusRequest{RunID: resp.RunID, Cursor: 0, WaitMs: 100}
+	var lastStatus *uat.StatusResponse
+	for i := 0; i < 100; i++ {
+		st, err := runner.Status(context.Background(), statusReq)
+		if err != nil {
+			t.Fatalf("unexpected status error: %v", err)
+		}
+		statusReq.Cursor += int64(len(st.Events))
+		if st.State != "running" {
+			lastStatus = st
+			break
+		}
+	}
+	if lastStatus == nil || lastStatus.State == "pass" {
+		t.Fatalf("expected the default memory matrix to fail closed on fake binaries, got %v", lastStatus)
+	}
+}
+
 type captureExecHelper struct {
 	onCommand func(name string, args ...string) uat.ExecCmd
 }
@@ -572,7 +634,7 @@ func TestRunner_CandidateBuildConcurrency(t *testing.T) {
 	exec := &mockExec{block: block}
 
 	// Create runner with concurrency = 1 for builds
-	runner, err := uat.NewRunner(pixHost, "/repo", stateDir, mg, exec, &mockSandbox{}, &mockMCP{}, &mockImage{}, &mockLease{}, 1)
+	runner, err := uat.NewRunner(pixHost, "/repo", stateDir, mg, matrixSkippingExec{exec}, &mockSandbox{}, &mockMCP{}, &mockImage{}, &mockLease{}, 1)
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	uattypes "pix/host/uat"
+	"pix/host/uatmatrix"
 )
 
 var (
@@ -42,6 +43,12 @@ type Runner struct {
 	activeRuns map[string]*runContext
 
 	buildSem chan struct{}
+
+	// memoryMatrix is the isolated, host-backed memory UAT coverage run against
+	// the just-built candidate binaries before sandbox launch. NewRunner wires
+	// the real matrix unless the injected Exec supplies the narrow test-only
+	// override method described there.
+	memoryMatrix func(context.Context, RunResources, string) error
 }
 
 func (r *Runner) RetryCleanups() map[string]string {
@@ -141,18 +148,32 @@ func NewRunner(pixHost, repoPath, stateDir string, git Git, exec Exec, sandbox S
 		return nil, fmt.Errorf("pixHost must be a regular file")
 	}
 
+	memoryMatrix := func(ctx context.Context, res RunResources, stepsDir string) error {
+		return uatmatrix.Run(ctx, uatmatrix.Inputs{OutDir: res.OutDir, StepsDir: stepsDir})
+	}
+	// Mock command executors do not produce runnable candidate binaries. Tests
+	// that exercise candidate_smoke's orchestration may implement this optional
+	// method to replace only the host-backed matrix; production's realExec does
+	// not implement it, so production cannot silently skip the checks.
+	if override, ok := exec.(interface {
+		RunCandidateMemoryMatrix(context.Context, RunResources, string) error
+	}); ok {
+		memoryMatrix = override.RunCandidateMemoryMatrix
+	}
+
 	return &Runner{
-		pixHost:    pixHost,
-		repoPath:   repoPath,
-		stateDir:   stateDir,
-		git:        git,
-		exec:       exec,
-		sandbox:    sandbox,
-		mcp:        mcp,
-		image:      image,
-		lease:      lease,
-		activeRuns: make(map[string]*runContext),
-		buildSem:   make(chan struct{}, buildConcurrency),
+		pixHost:      pixHost,
+		repoPath:     repoPath,
+		stateDir:     stateDir,
+		git:          git,
+		exec:         exec,
+		sandbox:      sandbox,
+		mcp:          mcp,
+		image:        image,
+		lease:        lease,
+		activeRuns:   make(map[string]*runContext),
+		buildSem:     make(chan struct{}, buildConcurrency),
+		memoryMatrix: memoryMatrix,
 	}, nil
 }
 

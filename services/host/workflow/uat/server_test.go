@@ -70,7 +70,7 @@ func TestMCPServerConcurrency(t *testing.T) {
 
 	pixHost := filepath.Join(stateDir, "pix-host")
 	os.WriteFile(pixHost, []byte(""), 0755)
-	runner, _ := uat.NewRunner(pixHost, "/repo", stateDir, mg, &mockExec{}, slowSb, &mockMCP{}, &mockImage{}, &mockLease{}, 1)
+	runner, _ := uat.NewRunner(pixHost, "/repo", stateDir, mg, matrixSkippingExec{&mockExec{}}, slowSb, &mockMCP{}, &mockImage{}, &mockLease{}, 1)
 
 	resp, _ := runner.Submit(context.Background(), uat.SubmitRequest{
 		Commit:       "main",

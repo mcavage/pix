@@ -166,7 +166,7 @@ func TestCandidateSmokeFailures(t *testing.T) {
 			ml := &trackLease{}
 			pixHost := filepath.Join(stateDir, "pix-host")
 			os.WriteFile(pixHost, []byte(""), 0755)
-			runner, _ := uat.NewRunner(pixHost, "/repo", stateDir, mg, me, &trackSandbox{failProbe: tc.injector.failSandboxProbe}, &mockMCP{}, &trackImage{failProbe: tc.injector.failImageProbe}, ml, 1)
+			runner, _ := uat.NewRunner(pixHost, "/repo", stateDir, mg, matrixSkippingExec{me}, &trackSandbox{failProbe: tc.injector.failSandboxProbe}, &mockMCP{}, &trackImage{failProbe: tc.injector.failImageProbe}, ml, 1)
 
 			resp, err := runner.Submit(context.Background(), uat.SubmitRequest{
 				Commit:       "main",
