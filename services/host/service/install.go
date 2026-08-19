@@ -184,8 +184,21 @@ func launchdInstall(run cmdRunner, fs installFS, uid int, home, hostBin string, 
 			return fmt.Errorf("launchctl bootstrap failed (%v) and load -w fallback failed (%v)", err, lerr)
 		}
 	}
-	// Start it now; RunAtLoad usually already did, so a kickstart failure is not fatal.
-	_, _ = run("launchctl", "kickstart", "-k", target)
+	// Start it now — a safety net for the case where RunAtLoad did not, so a
+	// kickstart failure is not fatal.
+	//
+	// PLAIN kickstart, NOT `-k`. The bootout+bootstrap above already replaced the
+	// process with a fresh one from the plist we just wrote, and `-k` means "kill
+	// it first", so it killed that brand-new process and paid a SECOND full
+	// shutdown-plus-startup cycle for no change at all. With ExitTimeOut set (see
+	// the plist template) launchd now waits out a clean shutdown instead of
+	// SIGKILLing at 5 seconds, which made that wasted cycle the single largest
+	// cost of `pix serve install`: measured at 10.7s total, of which ~7s was this
+	// one flag. Plain kickstart starts a stopped job and no-ops a running one.
+	//
+	// launchdRestart still uses `-k` on purpose: reloading config REQUIRES
+	// replacing the running process, which is the opposite need.
+	_, _ = run("launchctl", "kickstart", target)
 	fmt.Fprintf(out, "installed managed service %s (starts at login, auto-restarts). logs: %s\n",
 		LaunchdLabel, logPath)
 	return nil
