@@ -10,6 +10,17 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **UAT capability discovery and dry runs now return the plan they claim to
+  return.** `uat_capabilities` reports the validator's legal needs, actions,
+  and assertions; the real candidate build limits; browser availability and
+  profile isolation; and the exact host-backed memory checks covered by
+  `candidate_smoke`. `uat_submit` now returns a structured plan with the
+  resolved commit, scenario steps, limits, UAT-only image and sandbox names,
+  isolated config/data/state paths, browser-profile policy, cleanup set, and
+  memory coverage. A dry run marks `mutates_host: false` and uses an explicit
+  `<run-id>` resource placeholder instead of collapsing the response to the
+  scenario name.
+
 - **Final shipping-review findings closed.** A stale comment in
   `memory_deletions_gone_test.go` claimed `plugin.Hit.Durability` still
   legitimately appears on the read side, contradicting the very test

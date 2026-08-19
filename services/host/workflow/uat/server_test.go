@@ -48,6 +48,94 @@ func (m *mockBrowserFactory) NewOAuthContext(ctx context.Context, initialURL *ua
 	return &mockBrowser{}, nil
 }
 
+func callMCPTool(t *testing.T, runner *uat.Runner, request string) map[string]interface{} {
+	t.Helper()
+	var out bytes.Buffer
+	server := uat.NewMCPServer(runner, &mockBrowserFactory{}, t.TempDir(), strings.NewReader(request+"\n"), &out, nil)
+	if err := server.Serve(context.Background()); err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	var envelope struct {
+		Result struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), &envelope); err != nil {
+		t.Fatalf("decode MCP envelope %q: %v", out.String(), err)
+	}
+	if len(envelope.Result.Content) != 1 {
+		t.Fatalf("MCP content = %#v", envelope.Result.Content)
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(envelope.Result.Content[0].Text), &payload); err != nil {
+		t.Fatalf("decode MCP text payload %q: %v", envelope.Result.Content[0].Text, err)
+	}
+	return payload
+}
+
+func TestMCPServerCapabilitiesExposeVocabularyCoverageAndBrowserState(t *testing.T) {
+	stateDir := t.TempDir()
+	pixHost := filepath.Join(stateDir, "pix-host")
+	os.WriteFile(pixHost, []byte(""), 0755)
+	runner, _ := uat.NewRunner(pixHost, "/repo", stateDir, &mockGit{}, &mockExec{}, &mockSandbox{}, &mockMCP{}, &mockImage{}, &mockLease{}, 2)
+
+	payload := callMCPTool(t, runner, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"uat_capabilities","arguments":{}}}`)
+	actions, ok := payload["legal_actions"].([]interface{})
+	if !ok || len(actions) == 0 {
+		t.Fatalf("legal_actions = %#v", payload["legal_actions"])
+	}
+	browser, ok := payload["browser"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("browser state = %#v, want object", payload["browser"])
+	}
+	if browser["uses_normal_browser_profile"] != false {
+		t.Errorf("browser isolation state = %#v", browser)
+	}
+	coverage, ok := payload["candidate_smoke"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("candidate_smoke = %#v", payload["candidate_smoke"])
+	}
+	checks, ok := coverage["memory_checks"].([]interface{})
+	if !ok || len(checks) != 9 {
+		t.Errorf("memory checks = %#v, want all 9", coverage["memory_checks"])
+	}
+}
+
+func TestMCPServerDryRunReturnsStructuredIsolationPlan(t *testing.T) {
+	stateDir := t.TempDir()
+	pixHost := filepath.Join(stateDir, "pix-host")
+	os.WriteFile(pixHost, []byte(""), 0755)
+	git := &mockGit{readTreeFile: func(context.Context, string, string) ([]byte, error) {
+		return []byte("schema: pix.uat/1\nname: smoke\ntimeout: 5m\nsteps:\n  - id: smoke_test\n    do: candidate_smoke\n"), nil
+	}}
+	runner, _ := uat.NewRunner(pixHost, "/repo", stateDir, git, &mockExec{}, &mockSandbox{}, &mockMCP{}, &mockImage{}, &mockLease{}, 1)
+
+	payload := callMCPTool(t, runner, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"uat_submit","arguments":{"commit":"abc123","scenario_path":"uat/scenarios/smoke.yaml","dry_run":true}}}`)
+	if payload["run_id"] != "" {
+		t.Errorf("dry-run run_id = %#v", payload["run_id"])
+	}
+	plan, ok := payload["plan"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("plan = %#v, want object", payload["plan"])
+	}
+	candidate, ok := plan["candidate"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("candidate plan = %#v", plan["candidate"])
+	}
+	if candidate["image_tag"] != "docker.io/mcavage/pix:uat-<run-id>" || candidate["uses_normal_pix_state"] != false {
+		t.Errorf("candidate isolation plan = %#v", candidate)
+	}
+	browserProfile, _ := candidate["browser_profile"].(string)
+	if !strings.HasSuffix(browserProfile, filepath.Join("uat", "browser", "temp", "<run-id>")) {
+		t.Errorf("browser_profile = %q, want disposable UAT profile", browserProfile)
+	}
+	if _, ok := plan["candidate_build_limits"].(map[string]interface{}); !ok {
+		t.Errorf("candidate_build_limits = %#v, want object", plan["candidate_build_limits"])
+	}
+}
+
 type slowSandbox struct {
 	mockSandbox
 }
@@ -166,7 +254,7 @@ func TestMCPServerIsolation(t *testing.T) {
 
 	mg := &mockGit{
 		readTreeFile: func(ctx context.Context, commit, path string) ([]byte, error) {
-			return []byte("schema: pix.uat/1\nname: test\ntimeout: 1m\nsteps:\n  - id: smoke\n    do: check"), nil
+			return []byte("schema: pix.uat/1\nname: test\ntimeout: 1m\nsteps:\n  - id: remove\n    do: mcp_remove\n    with:\n      name: test"), nil
 		},
 	}
 

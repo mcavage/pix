@@ -93,6 +93,37 @@ type Inputs struct {
 	StepsDir string
 }
 
+type matrixCheck struct {
+	name string
+	fn   func(context.Context, io.Writer, string, string, string) error
+}
+
+func checks() []matrixCheck {
+	return []matrixCheck{
+		{"cold_start_no_ollama", checkColdStartNoOllama},
+		{"repeated_recall_star", checkRepeatedRecallStar},
+		{"stale_daemon_no_success", checkStaleDaemonNoSuccess},
+		{"explicit_mode_no_watcher", checkExplicitModeNoWatcher},
+		{"experimental_auto_budget", checkExperimentalAutoBudget},
+		{"remember_source_watcher_spoof", checkRememberSourceSpoof},
+		{"v1_migration", checkV1Migration},
+		{"forget_missing_exit1", checkForgetMissingExit1},
+		{"plugin_restart_retains_row", checkPluginRestartRetainsRow},
+	}
+}
+
+// CheckNames returns the exact host-backed memory checks candidate_smoke runs.
+// Capability and dry-run responses consume this list so advertised coverage
+// cannot drift from execution.
+func CheckNames() []string {
+	matrixChecks := checks()
+	names := make([]string, 0, len(matrixChecks))
+	for _, check := range matrixChecks {
+		names = append(names, check.name)
+	}
+	return names
+}
+
 // Run executes the memory checks against candidate binaries, in isolation,
 // before the sandbox launches.
 func Run(ctx context.Context, in Inputs) error {
@@ -113,22 +144,7 @@ func Run(ctx context.Context, in Inputs) error {
 		return fmt.Errorf("memory matrix: create scratch root: %w", err)
 	}
 
-	checks := []struct {
-		name string
-		fn   func(context.Context, io.Writer, string, string, string) error
-	}{
-		{"cold_start_no_ollama", checkColdStartNoOllama},
-		{"repeated_recall_star", checkRepeatedRecallStar},
-		{"stale_daemon_no_success", checkStaleDaemonNoSuccess},
-		{"explicit_mode_no_watcher", checkExplicitModeNoWatcher},
-		{"experimental_auto_budget", checkExperimentalAutoBudget},
-		{"remember_source_watcher_spoof", checkRememberSourceSpoof},
-		{"v1_migration", checkV1Migration},
-		{"forget_missing_exit1", checkForgetMissingExit1},
-		{"plugin_restart_retains_row", checkPluginRestartRetainsRow},
-	}
-
-	for _, c := range checks {
+	for _, c := range checks() {
 		phaseDir := filepath.Join(matrixRoot, c.name)
 		if err := os.MkdirAll(phaseDir, 0700); err != nil {
 			return fmt.Errorf("memory matrix: create phase dir %s: %w", c.name, err)

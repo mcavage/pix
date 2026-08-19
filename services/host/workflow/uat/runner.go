@@ -42,7 +42,8 @@ type Runner struct {
 	mu         sync.Mutex
 	activeRuns map[string]*runContext
 
-	buildSem chan struct{}
+	buildSem         chan struct{}
+	buildConcurrency int
 
 	// memoryMatrix is the isolated, host-backed memory UAT coverage run against
 	// the just-built candidate binaries before sandbox launch. NewRunner wires
@@ -162,18 +163,19 @@ func NewRunner(pixHost, repoPath, stateDir string, git Git, exec Exec, sandbox S
 	}
 
 	return &Runner{
-		pixHost:      pixHost,
-		repoPath:     repoPath,
-		stateDir:     stateDir,
-		git:          git,
-		exec:         exec,
-		sandbox:      sandbox,
-		mcp:          mcp,
-		image:        image,
-		lease:        lease,
-		activeRuns:   make(map[string]*runContext),
-		buildSem:     make(chan struct{}, buildConcurrency),
-		memoryMatrix: memoryMatrix,
+		pixHost:          pixHost,
+		repoPath:         repoPath,
+		stateDir:         stateDir,
+		git:              git,
+		exec:             exec,
+		sandbox:          sandbox,
+		mcp:              mcp,
+		image:            image,
+		lease:            lease,
+		activeRuns:       make(map[string]*runContext),
+		buildSem:         make(chan struct{}, buildConcurrency),
+		buildConcurrency: buildConcurrency,
+		memoryMatrix:     memoryMatrix,
 	}, nil
 }
 
@@ -183,9 +185,142 @@ type SubmitRequest struct {
 	DryRun       bool
 }
 
+func maxRunTimeout() time.Duration { return 60 * time.Minute }
+
+type executionLimits struct {
+	BuildConcurrency int    `json:"build_concurrency"`
+	MaxRunTimeout    string `json:"max_run_timeout"`
+	MaxLogBytes      int    `json:"max_log_bytes"`
+	MaxArtifactBytes int    `json:"max_artifact_bytes"`
+}
+
+type candidateSmokeCoverage struct {
+	Builds       []string `json:"builds"`
+	MemoryChecks []string `json:"memory_checks"`
+	HostServices []string `json:"host_services"`
+}
+
+type runnerCapabilities struct {
+	Runner          bool                   `json:"runner"`
+	ScenarioSchema  string                 `json:"scenario_schema"`
+	LegalNeeds      []string               `json:"legal_needs"`
+	LegalActions    []string               `json:"legal_actions"`
+	LegalAssertions []string               `json:"legal_assertions"`
+	NamedChecks     []string               `json:"named_checks"`
+	Limits          executionLimits        `json:"candidate_build_limits"`
+	CandidateSmoke  candidateSmokeCoverage `json:"candidate_smoke"`
+}
+
+func (r *Runner) limits() executionLimits {
+	return executionLimits{
+		BuildConcurrency: r.buildConcurrency,
+		MaxRunTimeout:    maxRunTimeout().String(),
+		MaxLogBytes:      candidateLogMaxBytes,
+		MaxArtifactBytes: candidateLogMaxBytes,
+	}
+}
+
+// Capabilities reports the runner's actual closed vocabulary and limits. The
+// lists come from the scenario validator and memory matrix, not a parallel
+// documentation-only registry.
+func (r *Runner) capabilities() runnerCapabilities {
+	legalNeeds, legalActions, legalAssertions := uattypes.LegalVocabulary()
+	return runnerCapabilities{
+		Runner:          true,
+		ScenarioSchema:  "pix.uat/1",
+		LegalNeeds:      legalNeeds,
+		LegalActions:    legalActions,
+		LegalAssertions: legalAssertions,
+		NamedChecks:     []string{},
+		Limits:          r.limits(),
+		CandidateSmoke: candidateSmokeCoverage{
+			Builds:       []string{"sandbox_image", "darwin_pix", "darwin_pix_host"},
+			MemoryChecks: uatmatrix.CheckNames(),
+			HostServices: []string{"memory"},
+		},
+	}
+}
+
+type planStep struct {
+	ID     string `json:"id"`
+	Action string `json:"action"`
+}
+
+type candidatePlan struct {
+	ImageTag                 string   `json:"image_tag"`
+	SandboxName              string   `json:"sandbox_name"`
+	RunRoot                  string   `json:"run_root"`
+	SourceDir                string   `json:"source_dir"`
+	OutDir                   string   `json:"out_dir"`
+	FixtureDir               string   `json:"fixture_dir"`
+	ConfigDir                string   `json:"config_dir"`
+	DataDir                  string   `json:"data_dir"`
+	StateDir                 string   `json:"state_dir"`
+	CacheDir                 string   `json:"cache_dir"`
+	BrowserProfile           string   `json:"browser_profile"`
+	UsesNormalPixState       bool     `json:"uses_normal_pix_state"`
+	UsesNormalBrowserProfile bool     `json:"uses_normal_browser_profile"`
+	Builds                   []string `json:"builds"`
+	MemoryChecks             []string `json:"memory_checks"`
+	Cleanup                  []string `json:"cleanup"`
+}
+
+type submitPlan struct {
+	Scenario     string          `json:"scenario"`
+	Commit       string          `json:"commit"`
+	ScenarioPath string          `json:"scenario_path"`
+	Timeout      string          `json:"timeout"`
+	Needs        []string        `json:"needs"`
+	Steps        []planStep      `json:"steps"`
+	MutatesHost  bool            `json:"mutates_host"`
+	Limits       executionLimits `json:"candidate_build_limits"`
+	Candidate    *candidatePlan  `json:"candidate,omitempty"`
+}
+
 type SubmitResponse struct {
-	RunID string
-	Plan  string
+	RunID string     `json:"run_id"`
+	Plan  submitPlan `json:"plan"`
+}
+
+func (r *Runner) plan(resolvedCommit, scenarioPath, runID string, scenario *uattypes.Scenario, mutatesHost bool) (submitPlan, error) {
+	plan := submitPlan{
+		Scenario:     scenario.Name,
+		Commit:       resolvedCommit,
+		ScenarioPath: scenarioPath,
+		Timeout:      scenario.Timeout,
+		Needs:        append([]string(nil), scenario.Needs...),
+		MutatesHost:  mutatesHost,
+		Limits:       r.limits(),
+	}
+	for _, step := range scenario.Steps {
+		plan.Steps = append(plan.Steps, planStep{ID: step.ID, Action: step.Do})
+		if step.Do == "candidate_smoke" && plan.Candidate == nil {
+			resources := candidateRunResources(r.stateDir, runID)
+			browserProfile, err := tempProfilePath(runID)
+			if err != nil {
+				return submitPlan{}, fmt.Errorf("resolve fresh UAT browser profile: %w", err)
+			}
+			plan.Candidate = &candidatePlan{
+				ImageTag:                 "docker.io/mcavage/pix:" + resources.ImageTag,
+				SandboxName:              resources.SandboxName,
+				RunRoot:                  filepath.Join(r.stateDir, "runs", runID),
+				SourceDir:                resources.SourceDir,
+				OutDir:                   resources.OutDir,
+				FixtureDir:               resources.FixtureDir,
+				ConfigDir:                filepath.Join(r.stateDir, "runs", runID, "config"),
+				DataDir:                  filepath.Join(r.stateDir, "runs", runID, "data"),
+				StateDir:                 filepath.Join(r.stateDir, "runs", runID, "state"),
+				CacheDir:                 filepath.Join(r.stateDir, "runs", runID, "cache"),
+				BrowserProfile:           browserProfile,
+				UsesNormalPixState:       false,
+				UsesNormalBrowserProfile: false,
+				Builds:                   []string{"sandbox_image", "darwin_pix", "darwin_pix_host"},
+				MemoryChecks:             uatmatrix.CheckNames(),
+				Cleanup:                  []string{"sandbox", "image", "sbx_template", "candidate_process_group", "fresh_browser_profile"},
+			}
+		}
+	}
+	return plan, nil
 }
 
 func (r *Runner) Submit(ctx context.Context, req SubmitRequest) (*SubmitResponse, error) {
@@ -205,7 +340,11 @@ func (r *Runner) Submit(ctx context.Context, req SubmitRequest) (*SubmitResponse
 	}
 
 	if req.DryRun {
-		return &SubmitResponse{RunID: "", Plan: scenario.Name}, nil
+		plan, planErr := r.plan(resolvedCommit, req.ScenarioPath, "<run-id>", scenario, false)
+		if planErr != nil {
+			return nil, planErr
+		}
+		return &SubmitResponse{RunID: "", Plan: plan}, nil
 	}
 
 	b := make([]byte, 4)
@@ -213,6 +352,11 @@ func (r *Runner) Submit(ctx context.Context, req SubmitRequest) (*SubmitResponse
 		return nil, fmt.Errorf("generate id: %w", err)
 	}
 	runID := fmt.Sprintf("run-%s-%s", time.Now().Format("20060102-150405"), hex.EncodeToString(b))
+
+	plan, err := r.plan(resolvedCommit, req.ScenarioPath, runID, scenario, true)
+	if err != nil {
+		return nil, err
+	}
 
 	runDir := filepath.Join(r.stateDir, "runs", runID)
 	if err := os.MkdirAll(runDir, 0700); err != nil {
@@ -234,8 +378,8 @@ func (r *Runner) Submit(ctx context.Context, req SubmitRequest) (*SubmitResponse
 	if timeoutDur == 0 {
 		timeoutDur = 10 * time.Minute
 	}
-	if timeoutDur > 60*time.Minute {
-		timeoutDur = 60 * time.Minute
+	if timeoutDur > maxRunTimeout() {
+		timeoutDur = maxRunTimeout()
 	}
 	runCtx, cancel := context.WithTimeout(context.Background(), timeoutDur)
 
@@ -245,7 +389,7 @@ func (r *Runner) Submit(ctx context.Context, req SubmitRequest) (*SubmitResponse
 
 	go r.executeAsync(runCtx, runID, resolvedCommit, scenario)
 
-	return &SubmitResponse{RunID: runID, Plan: scenario.Name}, nil
+	return &SubmitResponse{RunID: runID, Plan: plan}, nil
 }
 
 func (r *Runner) Abort(ctx context.Context, runID string) error {

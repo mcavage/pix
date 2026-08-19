@@ -150,15 +150,20 @@ type RunResources struct {
 	SandboxName string
 }
 
-func (r *Runner) executeCandidateSmoke(ctx context.Context, runID, commit string, scenario *uattypes.Scenario, stepID string) error {
-	res := RunResources{
-		SourceDir:   filepath.Join(r.stateDir, "runs", runID, "source"),
-		OutDir:      filepath.Join(r.stateDir, "runs", runID, "out"),
-		ImageTar:    filepath.Join(r.stateDir, "runs", runID, "image.tar"),
-		FixtureDir:  filepath.Join(r.stateDir, "runs", runID, "fixture"),
+func candidateRunResources(stateDir, runID string) RunResources {
+	runRoot := filepath.Join(stateDir, "runs", runID)
+	return RunResources{
+		SourceDir:   filepath.Join(runRoot, "source"),
+		OutDir:      filepath.Join(runRoot, "out"),
+		ImageTar:    filepath.Join(runRoot, "image.tar"),
+		FixtureDir:  filepath.Join(runRoot, "fixture"),
 		ImageTag:    "uat-" + runID,
 		SandboxName: "pix-uat-" + runID,
 	}
+}
+
+func (r *Runner) executeCandidateSmoke(ctx context.Context, runID, commit string, scenario *uattypes.Scenario, stepID string) error {
+	res := candidateRunResources(r.stateDir, runID)
 
 	if err := r.lease.Acquire(ctx, runID, "sandbox_"+res.SandboxName); err != nil {
 		return err
@@ -474,9 +479,6 @@ func (r *Runner) executeStep(ctx context.Context, runID, commit string, scenario
 		}
 		return nil
 
-	case "check":
-		// named check
-		return nil
 	default:
 		return fmt.Errorf("unknown action: %s", step.Do)
 	}

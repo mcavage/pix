@@ -175,8 +175,79 @@ steps:
 		t.Errorf("expected empty RunID for dry run, got %q", resp.RunID)
 	}
 
-	if resp.Plan != "test-scenario" {
-		t.Errorf("expected plan 'test-scenario', got %q", resp.Plan)
+	if resp.Plan.Scenario != "test-scenario" {
+		t.Errorf("plan scenario = %q, want test-scenario", resp.Plan.Scenario)
+	}
+	if resp.Plan.Commit != "main" {
+		t.Errorf("plan commit = %q, want main", resp.Plan.Commit)
+	}
+	if resp.Plan.MutatesHost {
+		t.Error("dry-run plan must not mutate the host")
+	}
+	if len(resp.Plan.Steps) != 1 || resp.Plan.Steps[0].Action != "mcp_add" {
+		t.Fatalf("plan steps = %#v, want the resolved mcp_add step", resp.Plan.Steps)
+	}
+}
+
+func TestSubmitDryRunCandidateSmokeDescribesIsolation(t *testing.T) {
+	stateDir := t.TempDir()
+	mg := &mockGit{
+		resolveCommit: func(ctx context.Context, commit string) (string, error) {
+			return "0123456789abcdef", nil
+		},
+		readTreeFile: func(ctx context.Context, commit, path string) ([]byte, error) {
+			return []byte(`schema: pix.uat/1
+name: smoke
+timeout: 5m
+needs: [docker, sbx]
+steps:
+  - id: smoke_test
+    do: candidate_smoke`), nil
+		},
+	}
+
+	pixHost := filepath.Join(stateDir, "pix-host")
+	os.WriteFile(pixHost, []byte(""), 0755)
+	runner, _ := uat.NewRunner(pixHost, "/repo", stateDir, mg, &mockExec{}, &mockSandbox{}, &mockMCP{}, &mockImage{}, &mockLease{}, 2)
+
+	resp, err := runner.Submit(context.Background(), uat.SubmitRequest{
+		Commit:       "HEAD",
+		ScenarioPath: "uat/scenarios/smoke.yaml",
+		DryRun:       true,
+	})
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	plan := resp.Plan
+	if plan.Candidate == nil {
+		t.Fatal("candidate_smoke dry run omitted candidate plan")
+	}
+	candidate := plan.Candidate
+	if candidate.ImageTag != "docker.io/mcavage/pix:uat-<run-id>" {
+		t.Errorf("image tag = %q", candidate.ImageTag)
+	}
+	if candidate.SandboxName != "pix-uat-<run-id>" {
+		t.Errorf("sandbox name = %q", candidate.SandboxName)
+	}
+	if !strings.HasPrefix(candidate.RunRoot, stateDir+string(os.PathSeparator)) {
+		t.Errorf("run root %q is not isolated below %q", candidate.RunRoot, stateDir)
+	}
+	if candidate.UsesNormalPixState || candidate.UsesNormalBrowserProfile {
+		t.Errorf("candidate isolation flags are unsafe: %#v", candidate)
+	}
+	profileSuffix := filepath.Join("uat", "browser", "temp", "<run-id>")
+	if !strings.HasSuffix(candidate.BrowserProfile, profileSuffix) {
+		t.Errorf("browser profile = %q, want disposable UAT suffix %q", candidate.BrowserProfile, profileSuffix)
+	}
+	if strings.HasSuffix(candidate.BrowserProfile, filepath.Join("uat", "browser", "profile")) {
+		t.Errorf("candidate plan points at the persistent OAuth profile: %q", candidate.BrowserProfile)
+	}
+	if !slices.Contains(candidate.MemoryChecks, "cold_start_no_ollama") ||
+		!slices.Contains(candidate.MemoryChecks, "plugin_restart_retains_row") {
+		t.Errorf("candidate memory checks are incomplete: %v", candidate.MemoryChecks)
+	}
+	if plan.Limits.BuildConcurrency != 2 || plan.Limits.MaxRunTimeout != "1h0m0s" {
+		t.Errorf("plan limits = %#v", plan.Limits)
 	}
 }
 

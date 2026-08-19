@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -23,6 +24,15 @@ type Step struct {
 	Do     string    `yaml:"do"`
 	With   yaml.Node `yaml:"with"`
 	Expect yaml.Node `yaml:"expect"`
+}
+
+// LegalVocabulary returns the exact closed scenario vocabulary accepted by
+// UnmarshalScenario. Capability reporting uses the same slices as validation,
+// so the advertised contract cannot drift from execution.
+func LegalVocabulary() (needs, actions, assertions []string) {
+	return []string{"browser", "docker", "mcp", "sbx"},
+		[]string{"browser_check", "candidate_smoke", "mcp_add", "mcp_auth", "mcp_remove", "mcp_status"},
+		[]string{"artifact_contains", "artifact_exists", "browser_text", "browser_url", "mcp_status", "verdict"}
 }
 
 func UnmarshalScenario(data []byte) (*Scenario, error) {
@@ -63,14 +73,9 @@ func UnmarshalScenario(data []byte) (*Scenario, error) {
 		return nil, errors.New("at least one step is required")
 	}
 
-	allowedNeeds := map[string]bool{
-		"mcp":     true,
-		"browser": true,
-		"docker":  true,
-		"sbx":     true,
-	}
+	allowedNeeds, allowedActions, allowedAssertions := LegalVocabulary()
 	for _, n := range s.Needs {
-		if !allowedNeeds[n] {
+		if !slices.Contains(allowedNeeds, n) {
 			return nil, fmt.Errorf("invalid need: %s", n)
 		}
 	}
@@ -89,10 +94,10 @@ func UnmarshalScenario(data []byte) (*Scenario, error) {
 			return nil, fmt.Errorf("steps[%d]: do action is required", i)
 		}
 
-		if err := validateStepWith(&step, i); err != nil {
+		if err := validateStepWith(&step, i, allowedActions); err != nil {
 			return nil, err
 		}
-		if err := validateStepExpect(&step, i); err != nil {
+		if err := validateStepExpect(&step, i, allowedAssertions); err != nil {
 			return nil, err
 		}
 	}
@@ -100,17 +105,8 @@ func UnmarshalScenario(data []byte) (*Scenario, error) {
 	return &s, nil
 }
 
-func validateStepWith(step *Step, index int) error {
-	allowedActions := map[string]bool{
-		"mcp_add":         true,
-		"mcp_auth":        true,
-		"mcp_status":      true,
-		"mcp_remove":      true,
-		"candidate_smoke": true,
-		"check":           true,
-		"browser_check":   true,
-	}
-	if !allowedActions[step.Do] {
+func validateStepWith(step *Step, index int, allowedActions []string) error {
+	if !slices.Contains(allowedActions, step.Do) {
 		return fmt.Errorf("steps[%d]: unknown action: %s", index, step.Do)
 	}
 
@@ -152,19 +148,11 @@ func hasKey(node *yaml.Node, targetKey string) bool {
 	return false
 }
 
-func validateStepExpect(step *Step, index int) error {
+func validateStepExpect(step *Step, index int, allowedAssertions []string) error {
 	if step.Expect.Kind == yaml.MappingNode {
-		allowedAssertions := map[string]bool{
-			"mcp_status":        true,
-			"browser_url":       true,
-			"browser_text":      true,
-			"artifact_exists":   true,
-			"artifact_contains": true,
-			"verdict":           true,
-		}
 		for i := 0; i < len(step.Expect.Content); i += 2 {
 			keyNode := step.Expect.Content[i]
-			if !allowedAssertions[keyNode.Value] {
+			if !slices.Contains(allowedAssertions, keyNode.Value) {
 				return fmt.Errorf("steps[%d].expect: unknown assertion: %s", index, keyNode.Value)
 			}
 		}

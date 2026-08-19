@@ -115,7 +115,7 @@ func TestMCPServer_EndToEnd(t *testing.T) {
 		{
 			"tool_capabilities",
 			`{"jsonrpc":"2.0","id":"abc","method":"tools/call","params":{"name":"uat_capabilities","arguments":{}}}`,
-			`\"browser\":true`,
+			`\"scenario_schema\":\"pix.uat/1\"`,
 		},
 		{
 			"tool_artifact",

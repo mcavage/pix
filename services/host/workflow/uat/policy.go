@@ -62,6 +62,11 @@ func ProfilePath() (string, error) {
 	return p, nil
 }
 
+// tempProfilePath intentionally lives under the launcher-wide UAT browser
+// root, not a session runner's stateDir. Browser processes are host-global and
+// cleanup may run after the session-scoped MCP server exits. This is still a
+// disposable UAT-only profile; it never points at the user's normal browser
+// profile or the persistent UAT OAuth profile.
 func tempProfilePath(runID string) (string, error) {
 	state, err := config.StateDir()
 	if err != nil {
