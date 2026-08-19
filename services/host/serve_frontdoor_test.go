@@ -15,10 +15,12 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // frontDoorCall posts one JSON-RPC request at a handler and returns the decoded body.
@@ -142,5 +144,84 @@ func TestBindFrontDoorsIsImmediatelyAnswerable(t *testing.T) {
 	res, _ := frontDoorCall(t, all[0].h, "identity")["result"].(map[string]any)
 	if res["name"] != identityMemory || res["ready"] != false {
 		t.Errorf("freshly-bound front door identity = %v, want name=%q ready=false", res, identityMemory)
+	}
+}
+
+// TestSwapHandlerWaitsForRealWorkButNotForProbes is the regression test for the
+// CI failure this design took to get right. Two requirements pull in opposite
+// directions on the SAME not-yet-ready front door:
+//
+//   - a readiness probe must be answered IMMEDIATELY (a probe that blocks is the
+//     original bug: install's identity check timed out on a healthy daemon), and
+//   - real work must WAIT for the unit, because that is what it did before the
+//     front door served early — the POST sat in the unaccepted backlog and then
+//     succeeded. uatmatrix's `remember` right after start relies on it.
+func TestSwapHandlerWaitsForRealWorkButNotForProbes(t *testing.T) {
+	sh := newSwapHandler(startingMux(identityMemory, 11435))
+
+	// The probe must not wait for the swap that has not happened yet.
+	done := make(chan map[string]any, 1)
+	go func() { done <- frontDoorCall(t, sh, "identity") }()
+	select {
+	case got := <-done:
+		res, _ := got["result"].(map[string]any)
+		if res["ready"] != false {
+			t.Errorf("probe before the swap: ready = %v, want false", res["ready"])
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("identity blocked before the swap; a readiness probe must never wait")
+	}
+
+	// Real work must block until the real mux lands, then be served BY it.
+	work := make(chan map[string]any, 1)
+	go func() { work <- frontDoorCall(t, sh, "remember") }()
+	select {
+	case got := <-work:
+		t.Fatalf("remember returned %v before the swap; it must wait for the unit", got)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	sh.set(jsonrpcMux(map[string]func(jsonObj) (any, error){
+		"remember": func(jsonObj) (any, error) { return jsonObj{"id": "served-by-the-real-mux"}, nil },
+	}))
+	select {
+	case got := <-work:
+		res, _ := got["result"].(map[string]any)
+		if res["id"] != "served-by-the-real-mux" {
+			t.Errorf("after the swap, remember = %v, want the real mux to have served it", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("remember never completed after the swap")
+	}
+}
+
+// TestIsIdentityCallTreatsUnrecognisedBodiesAsWork: only a recognised probe may
+// skip the wait. Anything else waits, because answering "not ready" to real work
+// is the failure mode being avoided.
+func TestIsIdentityCallTreatsUnrecognisedBodiesAsWork(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		want       bool
+	}{
+		{"identity probe", `{"jsonrpc":"2.0","id":1,"method":"identity"}`, true},
+		{"real work", `{"jsonrpc":"2.0","id":1,"method":"remember"}`, false},
+		{"batch", `[{"jsonrpc":"2.0","id":1,"method":"identity"}]`, false},
+		{"garbage", `not json at all`, false},
+		{"empty", ``, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tc.body))
+			if got := isIdentityCall(r); got != tc.want {
+				t.Errorf("isIdentityCall(%s) = %v, want %v", tc.body, got, tc.want)
+			}
+			// The body MUST still be readable by the handler that runs next.
+			rest, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("body not restored: %v", err)
+			}
+			if string(rest) != tc.body {
+				t.Errorf("body after peek = %q, want %q", rest, tc.body)
+			}
+		})
 	}
 }

@@ -69,19 +69,47 @@ type hostService struct {
 // Measured: TCP answered at 0.26s, HTTP at 15.22s (one pack daemon's preflight
 // held the phase), against install's 10s verification budget, so `pix serve
 // install` ALWAYS reported a healthy daemon as unreachable.
-type swapHandler struct{ cur atomic.Pointer[http.Handler] }
-
-func newSwapHandler(h http.Handler) *swapHandler {
-	s := &swapHandler{}
-	s.set(h)
-	return s
+// A request arriving BEFORE the swap is answered by KIND, and getting that wrong
+// broke uatmatrix. A probe is answered NOW (a probe that blocks is the original
+// bug); real work WAITS, because that is what it effectively did before this file
+// served early — the POST sat in an unaccepted backlog and then SUCCEEDED, and
+// answering "not ready" instead turned a sure thing into a coin flip. Waiting is
+// the default: only a recognised probe skips it.
+type swapHandler struct {
+	starting http.Handler                 // answers probes until real arrives
+	real     atomic.Pointer[http.Handler] // the unit's own mux, once dispensed
+	ready    chan struct{}                // closed on the first set
+	once     sync.Once
 }
 
-// set swaps the live handler; an in-flight request keeps the one it started with.
-func (s *swapHandler) set(h http.Handler) { s.cur.Store(&h) }
+func newSwapHandler(starting http.Handler) *swapHandler {
+	return &swapHandler{starting: starting, ready: make(chan struct{})}
+}
+
+// set installs the unit's real mux and releases everything waiting on ready.
+func (s *swapHandler) set(h http.Handler) {
+	s.real.Store(&h)
+	s.once.Do(func() { close(s.ready) })
+}
 
 func (s *swapHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	(*s.cur.Load()).ServeHTTP(w, r)
+	if h := s.real.Load(); h != nil {
+		(*h).ServeHTTP(w, r)
+		return
+	}
+	if isIdentityCall(r) {
+		s.starting.ServeHTTP(w, r)
+		return
+	}
+	// Bounded by the REQUEST's context and nothing else, exactly as the backlog
+	// bounded it before. A grace timer would only invent a second deadline,
+	// shorter than the caller's own.
+	select {
+	case <-s.ready:
+	case <-r.Context().Done():
+		return
+	}
+	(*s.real.Load()).ServeHTTP(w, r)
 }
 
 // frontDoorShutdownTimeout bounds how long a front-door http.Server is given to
