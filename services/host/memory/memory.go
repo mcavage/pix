@@ -75,8 +75,16 @@ func (m CLI) Remember(content string, asJSON bool) error {
 	return nil
 }
 
-// Forget deletes one fact by id (or id prefix). A miss is reported as a miss,
-// never as a deletion.
+// Forget deletes one fact by id (or id prefix). A miss is a FAILURE (exit 1,
+// diagnostic on stderr), never a silent no-op dressed up as success: a caller
+// who asked to delete a specific id and got nothing needs that distinguishable
+// from an actual deletion, by both exit code and stream.
+//
+// --json still prints the {"ok":false} result to Out (stdout stays parseable
+// either way — a script piping `pix memory forget --json` never has to
+// special-case a miss to get valid JSON), but the command still returns the
+// error: dispatch's single exit mapper turns that into the honest exit 1, and
+// its "pix: …" line lands on stderr same as the plain-text path.
 func (m CLI) Forget(id string, asJSON bool) error {
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -88,42 +96,28 @@ func (m CLI) Forget(id string, asJSON bool) error {
 	}
 	ok, _ := res["ok"].(bool)
 	if asJSON {
-		return cli.WriteJSONOut(m.Out, res)
-	}
-	if ok {
-		fmt.Fprintf(m.Out, "forgot %s\n", id)
-	} else {
-		fmt.Fprintf(m.Out, "no fact matched %q\n", id)
-	}
-	return nil
-}
-
-// Learnings lists the recurring lessons seen at least min times — the
-// promotable set the `promote` skill reads.
-func (m CLI) Learnings(min int, asJSON bool) error {
-	res, err := m.Client.Call("promotable", map[string]any{"minFrequency": min, "profile": m.Profile})
-	if err != nil {
-		return err
-	}
-	cands := rpc.AsList(res["candidates"])
-	if asJSON {
-		return cli.WriteJSONOut(m.Out, map[string]any{"candidates": cands})
-	}
-	if len(cands) == 0 {
-		fmt.Fprintf(m.Out, "(no learnings seen %d+ times)\n", min)
-		return nil
-	}
-	for _, cn := range cands {
-		freq := 0
-		if f, ok := cn["frequency"].(float64); ok {
-			freq = int(f)
+		if err := cli.WriteJSONOut(m.Out, res); err != nil {
+			return err
 		}
-		fmt.Fprintf(m.Out, "%s  %s  (%dx)  %s\n", memoryTimestamp(rpc.Str(cn, "createdAt")), shortID(rpc.Str(cn, "id")), freq, rpc.Str(cn, "content"))
+	} else if ok {
+		fmt.Fprintf(m.Out, "forgot %s\n", id)
+	}
+	if !ok {
+		return fmt.Errorf("no fact matched %q", id)
 	}
 	return nil
 }
 
-// Stats prints the daemon's counts by kind and durability.
+// Stats prints the daemon's counts by kind. The durable/perishable split is
+// gone end to end (host, plugin, and CLI): every row this binary writes is
+// durable, so it was never a meaningful distinction to show.
+//
+// The kind the watcher writes for a rule the user stated ("stop using em
+// dashes") is stored under the JSON key "learnings", which reads to a user
+// as "things the agent learned" — vague, and easy to confuse with facts. The
+// LABEL is therefore "corrections", which is what those rows actually are.
+// The key is deliberately NOT renamed: it is the wire contract shared with
+// the plugin, the RPC and --json consumers.
 func (m CLI) Stats(asJSON bool) error {
 	res, err := m.Client.Call("stats", map[string]any{"profile": m.Profile})
 	if err != nil {
@@ -138,24 +132,48 @@ func (m CLI) Stats(asJSON bool) error {
 		}
 		return 0
 	}
-	fmt.Fprintf(m.Out, "active %d  (durable %d, perishable %d)  facts %d  learnings %d  deleted %d\n",
-		num("active"), num("durable"), num("perishable"), num("facts"), num("learnings"), num("deleted"))
+	fmt.Fprintf(m.Out, "active %d  facts %d  corrections %d  deleted %d\n",
+		num("active"), num("facts"), num("learnings"), num("deleted"))
 	return nil
 }
 
-// memoryMeta renders the trailing "[kind·durability·project score]" annotation.
+// displayKind is the DX-6a render-only alias: the stored/JSON kind stays
+// "learning" (no schema migration, and --json output keeps emitting
+// "learning" for compatibility); only the human-facing render calls this to
+// show "correction" instead, since that's what a learning actually is from
+// the user's side. Every other kind renders unchanged. Mirrored in the
+// sandbox's extensions/memory-recall.ts's displayKind so the two surfaces
+// never wear different labels for one row.
+func displayKind(kind string) string {
+	if kind == "learning" {
+		return "correction"
+	}
+	return kind
+}
+
+// memoryMeta renders the trailing "[kind/project/auto score]" annotation.
+// "auto" only appears for a watcher-sourced (experimental-auto capture) row,
+// so an auto row is visibly distinguishable from an explicit one — the
+// existing `/forget <id>` is the feedback/undo mechanism, this is only the
+// visibility half. The separator is "/", matching the sandbox's own
+// `/recall` render (extensions/memory-recall.ts's formatHitLine): the same
+// row seen through two surfaces should not wear two different punctuations.
+// durability is not rendered: the read side was retired (U9) once every row
+// this binary writes became durable; the DB column stays, inert, for on-disk
+// compatibility only. kind is rendered through displayKind (DX-6a): "learning"
+// shows as "correction", everything else passes through.
 func memoryMeta(h map[string]any) string {
 	var parts []string
 	if k := rpc.Str(h, "kind"); k != "" {
-		parts = append(parts, k)
-	}
-	if d := rpc.Str(h, "durability"); d != "" {
-		parts = append(parts, d)
+		parts = append(parts, displayKind(k))
 	}
 	if p := rpc.Str(h, "project"); p != "" {
 		parts = append(parts, p)
 	}
-	meta := strings.Join(parts, "·")
+	if rpc.Str(h, "source") == "watcher" {
+		parts = append(parts, "auto")
+	}
+	meta := strings.Join(parts, "/")
 	if sc, ok := h["score"].(float64); ok {
 		if meta != "" {
 			meta += " "

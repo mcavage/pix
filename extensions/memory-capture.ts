@@ -4,6 +4,13 @@
 // watcher and decides what's worth remembering. The agent never chooses to
 // remember; this just forwards the turn.
 //
+// memory_capture (the host's config key) decides whether this happens AT
+// ALL: explicit is the shipped default and sends ZERO observe requests. The
+// live mode is read ONCE at load from <cwd>/.pix/memory-capture (written by
+// the launcher, launch.WriteMemoryCaptureFile) — no RPC round trip, and a
+// missing/garbled marker fails closed to explicit. The host's own memObserve
+// admission gate stays authoritative regardless of what this file says.
+//
 // Reliability: pi awaits before_agent_start (that's how recall injection lands),
 // but does NOT wait on agent_end, so a hand-off fired only at agent_end races
 // process teardown in print mode. So we capture the last COMPLETE exchange at
@@ -82,24 +89,54 @@ async function call(method: string, params: any): Promise<any> {
 	return response;
 }
 
-// Surface a disabled watcher ONCE per session instead of dropping captures in
-// silence. The daemon returns {result:{accepted:false, reason}} when the watcher
-// model isn't pulled/reachable; without this the whole capture half looks dead
-// with zero signal (the exact bug this guards).
-let warnedCaptureOff = false;
-let warnedPostErr = false; // one stderr line per session when the observe POST fails
-function warnIfCaptureOff(resp: any): void {
+// Surface a not-accepted observe ONCE per session instead of dropping captures
+// in silence — e.g. the watcher model isn't pulled/reachable, or the daily
+// budget is exhausted. This is informational, not an alarm: in the shipped
+// default (explicit) this never fires at all, because capture() never sends
+// observe in the first place.
+//
+// It goes through ctx.ui.notify, NOT process.stderr: in the TUI a raw stderr
+// write lands wherever the renderer happens to be painting (or nowhere at
+// all in fullscreen mode, the shipped default), so the one message that
+// explains "capture is on but nothing is being stored" was the one message
+// the user could not see. stderr stays the fallback for a ctx with no ui
+// (print mode, tests).
+let warnedNotAccepted = false;
+let warnedPostErr = false; // one notice per session when the observe POST fails
+function notify(ctx: any, text: string): void {
+	try {
+		if (typeof ctx?.ui?.notify === "function") {
+			ctx.ui.notify(text, "info");
+			return;
+		}
+		process.stderr.write(`${text}\n`);
+	} catch {
+		/* best-effort; never break a turn over a notice */
+	}
+}
+function warnIfNotAccepted(ctx: any, resp: any): void {
 	try {
 		const r = resp?.result;
-		if (r && r.accepted === false && !warnedCaptureOff) {
-			warnedCaptureOff = true;
-			const reason = typeof r.reason === "string" ? r.reason : "watcher unavailable";
-			process.stderr.write(`[memory] automatic fact capture is OFF: ${reason}\n`);
+		if (r && r.accepted === false && !warnedNotAccepted) {
+			warnedNotAccepted = true;
+			const reason = typeof r.reason === "string" ? r.reason : "not accepted";
+			notify(ctx, `[memory] capture not accepted: ${reason}`);
 		}
 	} catch {
 		/* best-effort; never break a turn over a warning */
 	}
 }
+
+// Read EXACTLY ONCE at load and frozen, same pattern as ACTIVE_PROFILE
+// below for .pix/profile. A missing/garbled marker fails closed to explicit.
+const CAPTURE_MODE: "explicit" | "experimental-auto" = (() => {
+	try {
+		const raw = readFileSync(join(process.cwd(), ".pix", "memory-capture"), "utf8").trim();
+		return raw === "experimental-auto" ? raw : "explicit";
+	} catch {
+		return "explicit"; // missing marker is the normal, un-launched/older-sandbox case
+	}
+})();
 
 // The active profile stamps captures (recall then scopes to {profile}∪{default}).
 // The launcher writes it to <cwd>/.pix/profile per run, mirroring the
@@ -166,9 +203,12 @@ const textOf = (e: any): string => {
 	return "";
 };
 
-// The most recent complete exchange: the last assistant message and the user
-// message before it.
-function lastCompleteExchange(hist: any[]): { user: string; assistant: string } | null {
+// The user message from the most recent complete exchange (the last assistant
+// message, and the user message before it). The watcher only ever observes
+// the USER'S message (never the agent's reply, see the file header), and the
+// assistant text has no other consumer, so only the anchor position (is there
+// a completed assistant turn yet?) matters here, not its content.
+function lastCompleteExchange(hist: any[]): { user: string } | null {
 	let ai = -1;
 	for (let i = hist.length - 1; i >= 0; i--)
 		if (roleOf(hist[i]) === "assistant") {
@@ -183,7 +223,7 @@ function lastCompleteExchange(hist: any[]): { user: string; assistant: string } 
 			break;
 		}
 	if (ui < 0) return null;
-	return { user: textOf(hist[ui]), assistant: textOf(hist[ai]) };
+	return { user: textOf(hist[ui]) };
 }
 
 // Prefix for any user-role message pix itself synthesizes and hands to
@@ -213,27 +253,38 @@ async function capture(ctx: any, awaited: boolean): Promise<void> {
 	if (!ex) return;
 	const user = ex.user?.trim() ?? "";
 	if (!shouldCaptureUserText(user)) return;
-	const key = createHash("sha256").update(ex.user + " " + ex.assistant).digest("hex").slice(0, 16);
+	// explicit (the default) sends ZERO observe requests — not even one the
+	// host would refuse.
+	if (CAPTURE_MODE === "explicit") return;
+	// The dedup key is the payload's identity, not the exchange's: it hashes the
+	// user text ALONE (assistant text was dropped as an input above, so hashing
+	// it here would only rehash something no longer sent). That is a deliberate
+	// trade-off, not an oversight: two genuinely identical prompts sent back to
+	// back in the same session collide on this key, so the second is skipped as
+	// a dup even though it is a distinct turn with a distinct (if repetitive)
+	// exchange. Accepted because a real duplicate observe — the
+	// before_agent_start retry racing agent_end for the SAME completed exchange,
+	// the case this key exists to catch — is far more common than a user
+	// deliberately repeating themselves verbatim, and the cost of misfiring on
+	// that rare case is one skipped watcher call, not a lost fact.
+	const key = createHash("sha256").update(ex.user).digest("hex").slice(0, 16);
 	if (key === lastSent || key === inFlight) return;
 	inFlight = key;
-	const params = { user: ex.user, assistant: ex.assistant, project: currentProject(ctx), profile: ACTIVE_PROFILE };
+	const params = { user: ex.user, project: currentProject(ctx), profile: ACTIVE_PROFILE };
 	// Observability: a failed observe POST (host daemon unreachable, timeout) used
-	// to be swallowed silently, so a broken capture pipe was invisible. Log it once
-	// per session to stderr so "memory didn't store" is diagnosable.
+	// to be swallowed silently, so a broken capture pipe was invisible. Surface it
+	// once per session (notify: the TUI when there is one, stderr otherwise) so
+	// "memory didn't store" is diagnosable.
 	const onErr = (e: any) => {
 		if (!warnedPostErr) {
 			warnedPostErr = true;
-			try {
-				process.stderr.write(`[memory] capture POST to ${MEMORY_URL} failed: ${e?.message ?? e}\n`);
-			} catch {
-				/* best-effort */
-			}
+			notify(ctx, `[memory] capture POST to ${MEMORY_URL} failed: ${e?.message ?? e}`);
 		}
 	};
 	const send = async () => {
 		try {
 			const response = await call("observe", params);
-			warnIfCaptureOff(response);
+			warnIfNotAccepted(ctx, response);
 			lastSent = key; // only a completed RPC earns deduplication
 		} catch (e) {
 			onErr(e); // leave lastSent untouched so the next awaited hook retries

@@ -446,15 +446,19 @@ func resolveServices(cli, cfgServices []string) []string {
 	return cfgServices
 }
 
-// applyMemoryModelEnv wires the configured memory model names into the env the
-// memory unit inherits (memembed.go reads them there), so an explicit env
-// override wins and the config value applies otherwise. Set only in the memory
-// branch so it never leaks into an unrelated plugin subprocess.
+// applyMemoryModelEnv wires the configured memory model names AND the capture
+// admission mode into the env the memory unit inherits (memembed.go reads the
+// models, memory_capture_mode.go reads MEMORY_CAPTURE_MODE), so an explicit
+// env override wins and the config value applies otherwise. Set only in the
+// memory branch so none of this leaks into an unrelated plugin subprocess.
 func applyMemoryModelEnv(cfg *config.Config) {
 	if os.Getenv("MEMORY_WATCHER_MODEL") == "" && cfg.MemoryWatcherModel != "" {
 		os.Setenv("MEMORY_WATCHER_MODEL", cfg.MemoryWatcherModel)
 	}
 	if os.Getenv("MEMORY_EMBED_MODEL") == "" && cfg.MemoryEmbedModel != "" {
 		os.Setenv("MEMORY_EMBED_MODEL", cfg.MemoryEmbedModel)
+	}
+	if os.Getenv("MEMORY_CAPTURE_MODE") == "" && cfg.MemoryCapture != "" {
+		os.Setenv("MEMORY_CAPTURE_MODE", cfg.MemoryCapture)
 	}
 }

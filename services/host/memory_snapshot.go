@@ -36,9 +36,10 @@ import (
 )
 
 // memSnapshotSchemaVersion is the memory schema (PRAGMA user_version) this
-// binary understands; newMemStore stamps the same value. A db claiming a newer
-// one came from a newer pix and is refused.
-const memSnapshotSchemaVersion = 1
+// binary understands; newMemStore stamps the same value (memSchemaVersion,
+// memory.go — the two are the SAME number, not merely kept in sync by hand).
+// A db claiming a newer one came from a newer pix and is refused.
+const memSnapshotSchemaVersion = memSchemaVersion
 
 type snapshotResult struct {
 	Path        string

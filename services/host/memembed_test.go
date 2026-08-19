@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,9 +17,26 @@ import (
 // atomics, not per-test fixtures).
 func resetWatcherState() {
 	watcherUnavailable.Store(false)
+	watcherExercised.Store(false)
 	setWatcherReason("")
 	watcherDegradedUntil.Store(0)
 	watcherLastProbe.Store(0)
+}
+
+// newWatcherFakeServer spins an httptest server behind OLLAMA_HOST, resets the
+// package-level watcher atomics before AND after the test, and points
+// MEMORY_WATCHER_MODEL at a fixed test model — the exact boilerplate every
+// watcher latch/backoff/timeout test below repeats, so each test states only
+// its handler and its own state setup/assertions.
+func newWatcherFakeServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	resetWatcherState()
+	t.Cleanup(resetWatcherState)
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	t.Setenv("OLLAMA_HOST", srv.URL)
+	t.Setenv("MEMORY_WATCHER_MODEL", "test-watcher")
+	return srv
 }
 
 // TestWatcherCaptureAvailableBreaksLatch proves the fix for the silent-capture
@@ -27,16 +46,13 @@ func resetWatcherState() {
 // live re-probe must recover without a restart.
 func TestWatcherCaptureAvailableBreaksLatch(t *testing.T) {
 	var present bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	newWatcherFakeServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		if present {
 			w.WriteHeader(200)
 		} else {
 			w.WriteHeader(404)
 		}
-	}))
-	defer srv.Close()
-	t.Setenv("OLLAMA_HOST", srv.URL)
-	t.Setenv("MEMORY_WATCHER_MODEL", "test-watcher")
+	})
 
 	// Latched off, model absent, throttle window open (last probe = 0).
 	watcherUnavailable.Store(true)
@@ -75,19 +91,14 @@ func TestWatcherCaptureAvailableBreaksLatch(t *testing.T) {
 // a reason that says WHY (not just the generic "model not pulled" text), and
 // open a degraded-until backoff window.
 func TestMemWatchTimeout(t *testing.T) {
-	resetWatcherState()
-	t.Cleanup(resetWatcherState)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	newWatcherFakeServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/chat" {
 			time.Sleep(300 * time.Millisecond) // >> the test's MEMORY_WATCHER_TIMEOUT_MS
 			w.WriteHeader(200)
 			return
 		}
 		w.WriteHeader(200)
-	}))
-	defer srv.Close()
-	t.Setenv("OLLAMA_HOST", srv.URL)
-	t.Setenv("MEMORY_WATCHER_MODEL", "test-watcher")
+	})
 	t.Setenv("MEMORY_WATCHER_TIMEOUT_MS", "50")
 
 	before := time.Now()
@@ -108,24 +119,70 @@ func TestMemWatchTimeout(t *testing.T) {
 	}
 }
 
+// TestMemWatchNeverLogsRawOutput proves an unparseable/undecodable watcher
+// response never puts the raw content in a log line -- it may itself carry
+// unfiltered user text the secret filter never saw, across the two distinct
+// ways a watcher response reaches memWatch's log line: content that fails to
+// parse as JSON at all, and content that parses but has a `facts` field the
+// WRONG SHAPE for a list (a bare string instead of an array/object/null) --
+// flexibleStringList's error used to embed that value verbatim ("list field
+// has unexpected shape: %s"), so the sentinel would have reached the log
+// unfiltered. Only model/shape/length may ever appear, never raw content.
+func TestMemWatchNeverLogsRawOutput(t *testing.T) {
+	cases := []struct {
+		name       string
+		content    string
+		sentinel   string
+		wantLogged string // a substring that MUST still appear (shape-only, never raw)
+	}{
+		{name: "unparseable", content: "AKIASECRETSHAPEDCONTENTHERE12345 not valid json", sentinel: "AKIASECRETSHAPEDCONTENTHERE12345 not valid json"},
+		{
+			name:       "wrong-shaped facts field",
+			sentinel:   "AKIASECRETSHAPEDSENTINELVALUE0001",
+			wantLogged: "unexpected shape",
+		},
+	}
+	cases[1].content = `{"facts": "` + cases[1].sentinel + `", "corrections": []}`
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			newWatcherFakeServer(t, func(w http.ResponseWriter, r *http.Request) {
+				b, _ := json.Marshal(map[string]any{"message": map[string]any{"content": tc.content}})
+				w.WriteHeader(200)
+				w.Write(b)
+			})
+
+			var logbuf bytes.Buffer
+			prevOut := log.Writer()
+			log.SetOutput(&logbuf)
+			defer log.SetOutput(prevOut)
+
+			if got := memWatch("hello"); got != nil {
+				t.Fatalf("%s: should return nil, got %+v", tc.name, got)
+			}
+			if strings.Contains(logbuf.String(), tc.sentinel) {
+				t.Fatalf("%s: raw watcher output must never be logged, got: %s", tc.name, logbuf.String())
+			}
+			if tc.wantLogged != "" && !strings.Contains(logbuf.String(), tc.wantLogged) {
+				t.Fatalf("%s: expected the shape-only error to still be logged, got: %s", tc.name, logbuf.String())
+			}
+		})
+	}
+}
+
 // TestWatcherCaptureAvailableDuringBackoffSkipsProbe proves the fix for the
 // /api/show lie: that metadata endpoint returns 200 instantly even while
 // /api/chat is wedged, so during the post-timeout backoff window
 // watcherCaptureAvailable must NOT re-probe it (that would flip capture back to
 // "available" while inference is still hung).
 func TestWatcherCaptureAvailableDuringBackoffSkipsProbe(t *testing.T) {
-	resetWatcherState()
-	t.Cleanup(resetWatcherState)
 	var showHits int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	newWatcherFakeServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/show" {
 			atomic.AddInt32(&showHits, 1)
 		}
 		w.WriteHeader(200)
-	}))
-	defer srv.Close()
-	t.Setenv("OLLAMA_HOST", srv.URL)
-	t.Setenv("MEMORY_WATCHER_MODEL", "test-watcher")
+	})
 
 	watcherUnavailable.Store(true)
 	watcherLastProbe.Store(0)
@@ -143,21 +200,16 @@ func TestWatcherCaptureAvailableDuringBackoffSkipsProbe(t *testing.T) {
 // once the backoff window elapses: the throttled /api/show re-probe runs again,
 // and a subsequent successful memWatch clears every piece of degraded state.
 func TestWatcherCaptureAvailableRecoversAfterBackoff(t *testing.T) {
-	resetWatcherState()
-	t.Cleanup(resetWatcherState)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	newWatcherFakeServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/chat":
 			w.Header().Set("content-type", "application/json")
 			w.WriteHeader(200)
-			w.Write([]byte(`{"message":{"content":"{\"facts\":[],\"events\":[],\"corrections\":[],\"valence\":0}"}}`))
+			w.Write([]byte(`{"message":{"content":"{\"facts\":[],\"corrections\":[]}"}}`))
 		default: // /api/show
 			w.WriteHeader(200)
 		}
-	}))
-	defer srv.Close()
-	t.Setenv("OLLAMA_HOST", srv.URL)
-	t.Setenv("MEMORY_WATCHER_MODEL", "test-watcher")
+	})
 
 	watcherUnavailable.Store(true)
 	setWatcherReason(`model "test-watcher" is not pulled (or Ollama is down), run ` + "`ollama pull test-watcher`")
@@ -180,6 +232,34 @@ func TestWatcherCaptureAvailableRecoversAfterBackoff(t *testing.T) {
 	}
 }
 
+// TestWatcherHealthState_UnknownDegradedHealthyRecovery is watcher health's
+// twin of TestEmbedHealthState_UnknownDegradedHealthyRecovery: a fresh
+// (unexercised) watcher must report unknown (nil), a real capture failure
+// must flip it to degraded (false), and a real recovery must flip it to
+// healthy (true).
+func TestWatcherHealthState_UnknownDegradedHealthyRecovery(t *testing.T) {
+	resetWatcherState()
+	t.Cleanup(resetWatcherState)
+
+	if got, reason := watcherHealthState(); got != nil || reason != "" {
+		t.Fatalf("fresh/unexercised watcher: watcherHealthState() = (%v, %q), want (nil, \"\")", got, reason)
+	}
+
+	watcherDegrade("simulated failure") // what a real memWatch() failure calls
+	got, reason := watcherHealthState()
+	if got == nil || *got {
+		t.Fatalf("after a real failure: watcherHealthState() = (%v, %q), want a non-nil false (degraded)", got, reason)
+	}
+	if reason == "" {
+		t.Error("degraded watcherHealthState() should carry a non-empty reason")
+	}
+
+	watcherHealthy() // what a real memWatch() success calls
+	if got, _ := watcherHealthState(); got == nil || !*got {
+		t.Fatalf("after a real recovery: watcherHealthState() = %v, want a non-nil true (healthy)", got)
+	}
+}
+
 // TestObserveReturnsDegradedReason proves the reason travels all the way to
 // the RPC client: observe() must return {accepted:false, reason:...} with the
 // LIVE reason (e.g. the timeout text), not just the generic
@@ -187,11 +267,15 @@ func TestWatcherCaptureAvailableRecoversAfterBackoff(t *testing.T) {
 func TestObserveReturnsDegradedReason(t *testing.T) {
 	resetWatcherState()
 	t.Cleanup(resetWatcherState)
+	// The watcher-availability gate this test exercises only runs in a mode
+	// that actually invokes the watcher; the default (explicit) short-circuits
+	// before ever consulting it.
+	t.Setenv("MEMORY_CAPTURE_MODE", "experimental-auto")
 	store, err := newMemStore(":memory:", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(newMemoryMux(store, false))
+	srv := httptest.NewServer(newMemoryMux(store))
 	defer srv.Close()
 
 	watcherUnavailable.Store(true)
@@ -225,8 +309,8 @@ func TestObserveReturnsDegradedReason(t *testing.T) {
 // wedged Ollama on /api/embed must return nil promptly (recall already falls
 // back to keyword search on a nil vector) rather than blocking a turn.
 func TestMemEmbedTimeout(t *testing.T) {
-	embedDisabled.Store(false)
-	t.Cleanup(func() { embedDisabled.Store(false) })
+	resetEmbedState()
+	t.Cleanup(resetEmbedState)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(300 * time.Millisecond) // >> the test's MEMORY_EMBED_TIMEOUT_MS
 		w.WriteHeader(200)
@@ -241,6 +325,32 @@ func TestMemEmbedTimeout(t *testing.T) {
 	}
 	if elapsed := time.Since(before); elapsed > 2*time.Second {
 		t.Fatalf("memEmbed should have returned promptly on timeout, took %v", elapsed)
+	}
+}
+
+// TestEmbedHealthState_UnknownDegradedHealthyRecovery is the direct,
+// network-free proof of the tri-state: a fresh (unexercised) embedder must
+// report unknown (nil), a real failure must flip it to degraded (false), and
+// a real success must flip it to healthy (true) — it must never read
+// "healthy" before something has actually confirmed that.
+func TestEmbedHealthState_UnknownDegradedHealthyRecovery(t *testing.T) {
+	resetEmbedState()
+	t.Cleanup(resetEmbedState)
+
+	if got := embedHealthState(); got != nil {
+		t.Fatalf("fresh/unexercised embedder: embedHealthState() = %v, want nil (unknown)", *got)
+	}
+
+	embedUnavailable("simulated failure") // what a real memEmbed failure calls
+	if got := embedHealthState(); got == nil || *got {
+		t.Fatalf("after a real failure: embedHealthState() = %v, want a non-nil false (degraded)", got)
+	}
+
+	// A real success clears the latch (mirrors memEmbed's own success path).
+	embedExercised.Store(true)
+	embedDisabled.Store(false)
+	if got := embedHealthState(); got == nil || !*got {
+		t.Fatalf("after a real success: embedHealthState() = %v, want a non-nil true (healthy)", got)
 	}
 }
 
@@ -373,41 +483,40 @@ func TestFlexibleStringList(t *testing.T) {
 
 func TestParseWatchJSON(t *testing.T) {
 	cases := []struct {
-		name       string
-		in         string
-		wantFacts  []string
-		wantErr    bool
-		wantValNum float64
+		name      string
+		in        string
+		wantFacts []string
+		wantErr   bool
 	}{
 		{
 			name:      "proper arrays",
-			in:        `{"facts":["uses pnpm"],"events":[],"corrections":[],"valence":0.5}`,
-			wantFacts: []string{"uses pnpm"}, wantValNum: 0.5,
+			in:        `{"facts":["uses pnpm"],"corrections":[]}`,
+			wantFacts: []string{"uses pnpm"},
 		},
 		{
 			// observed qwen output: fenced JSON with facts as {} instead of [].
 			name:      "fenced JSON with empty object facts, salvaged via extractJSONObject",
-			in:        "here you go:\n```json\n{\"facts\":{},\"events\":[],\"corrections\":[],\"valence\":0}\n```",
-			wantFacts: []string{}, wantValNum: 0,
+			in:        "here you go:\n```json\n{\"facts\":{},\"corrections\":[]}\n```",
+			wantFacts: []string{},
 		},
 		{
 			name:      "empty object facts",
-			in:        `{"facts":{},"events":[],"corrections":[],"valence":0}`,
-			wantFacts: []string{}, wantValNum: 0,
+			in:        `{"facts":{},"corrections":[]}`,
+			wantFacts: []string{},
 		},
 		{
 			name:      "null facts",
-			in:        `{"facts":null,"events":[],"corrections":[],"valence":0}`,
-			wantFacts: []string{}, wantValNum: 0,
+			in:        `{"facts":null,"corrections":[]}`,
+			wantFacts: []string{},
 		},
 		{
 			name:    "non-empty object facts rejected",
-			in:      `{"facts":{"a":"b"},"events":[],"corrections":[],"valence":0}`,
+			in:      `{"facts":{"a":"b"},"corrections":[]}`,
 			wantErr: true,
 		},
 		{
 			name:    "wrong scalar facts rejected",
-			in:      `{"facts":"nope","events":[],"corrections":[],"valence":0}`,
+			in:      `{"facts":"nope","corrections":[]}`,
 			wantErr: true,
 		},
 		{
@@ -427,32 +536,22 @@ func TestParseWatchJSON(t *testing.T) {
 		},
 		{
 			name:    "missing facts key rejected",
-			in:      `{"events":[],"corrections":[],"valence":0}`,
-			wantErr: true,
-		},
-		{
-			name:    "missing events key rejected",
-			in:      `{"facts":[],"corrections":[],"valence":0}`,
+			in:      `{"corrections":[]}`,
 			wantErr: true,
 		},
 		{
 			name:    "missing corrections key rejected",
-			in:      `{"facts":[],"events":[],"valence":0}`,
-			wantErr: true,
-		},
-		{
-			name:    "missing valence key rejected",
-			in:      `{"facts":[],"events":[],"corrections":[]}`,
+			in:      `{"facts":[]}`,
 			wantErr: true,
 		},
 		{
 			name:    "top-level array rejected (wrong top-level type)",
-			in:      `["facts","events"]`,
+			in:      `["facts","corrections"]`,
 			wantErr: true,
 		},
 		{
 			name:    "top-level array containing otherwise-valid object is not salvaged",
-			in:      `[{"facts":[],"events":[],"corrections":[],"valence":0}]`,
+			in:      `[{"facts":[],"corrections":[]}]`,
 			wantErr: true,
 		},
 		{
@@ -490,9 +589,6 @@ func TestParseWatchJSON(t *testing.T) {
 				if got.Facts[i] != c.wantFacts[i] {
 					t.Fatalf("parseWatchContent(%q).Facts = %v, want %v", c.in, got.Facts, c.wantFacts)
 				}
-			}
-			if got.Valence != c.wantValNum {
-				t.Fatalf("parseWatchContent(%q).Valence = %v, want %v", c.in, got.Valence, c.wantValNum)
 			}
 		})
 	}
@@ -681,7 +777,7 @@ func watchServer(t *testing.T, content string) *memStore {
 // the observed incident: a question about memory itself must never land as a
 // stored fact, even when the watcher model wrongly extracted one.
 func TestMemCaptureDropsFactsForQuestionOnlyMessage(t *testing.T) {
-	st := watchServer(t, `{"facts":["user is using memory"],"events":[],"corrections":[],"valence":0}`)
+	st := watchServer(t, `{"facts":["user is using memory"],"corrections":[]}`)
 	memCaptureSem <- struct{}{}
 	memCapture(st, "so are you using my memories?", "", false, "default")
 
@@ -694,17 +790,14 @@ func TestMemCaptureDropsFactsForQuestionOnlyMessage(t *testing.T) {
 	}
 }
 
-// TestMemCaptureAppliesNoiseFilterToFactsAndEventsOnlyAndSevenDayEventTTL
-// proves the watcherNoise filter runs on facts and events but is NEVER
-// applied to corrections (a correction may legitimately be phrased exactly
-// like a noise prefix, e.g. "the user requested the agent stop doing X"),
-// that legitimate items in each channel still survive, and that a captured
-// event gets the 7-day TTL (not the old 21).
-func TestMemCaptureAppliesNoiseFilterToFactsAndEventsOnlyAndSevenDayEventTTL(t *testing.T) {
+// TestMemCaptureAppliesNoiseFilterToFactsOnly proves the watcherNoise filter
+// runs on facts but is NEVER applied to corrections (a correction may
+// legitimately be phrased exactly like a noise prefix, e.g. "the user
+// requested the agent stop doing X"), and that legitimate facts and
+// corrections still survive.
+func TestMemCaptureAppliesNoiseFilterToFactsOnly(t *testing.T) {
 	content := `{"facts":["user asked about the deploy process","user requested guidance","the user prefers tabs over spaces"],` +
-		`"events":["user ran the test suite twice","migrating the staging DB this week"],` +
-		`"corrections":["the user requested this be ignored","always confirm before deleting a branch"],` +
-		`"valence":0}`
+		`"corrections":["the user requested this be ignored","always confirm before deleting a branch"]}`
 	st := watchServer(t, content)
 	memCaptureSem <- struct{}{}
 	memCapture(st, "an assertion-bearing message, not a question.", "", false, "default")
@@ -720,7 +813,6 @@ func TestMemCaptureAppliesNoiseFilterToFactsAndEventsOnlyAndSevenDayEventTTL(t *
 	for _, noisy := range []string{
 		"user asked about the deploy process",
 		"user requested guidance",
-		"user ran the test suite twice",
 	} {
 		if seen[noisy] {
 			t.Errorf("noise item %q should have been dropped before storage, got %+v", noisy, seen)
@@ -728,23 +820,13 @@ func TestMemCaptureAppliesNoiseFilterToFactsAndEventsOnlyAndSevenDayEventTTL(t *
 	}
 	for _, legit := range []string{
 		"the user prefers tabs over spaces",
-		"migrating the staging DB this week",
 		"always confirm before deleting a branch",
 		// A correction is NEVER run through the noise filter, even though this
-		// phrasing would trip the "requested" prefix on the fact/event channels.
+		// phrasing would trip the "requested" prefix on the fact channel.
 		"the user requested this be ignored",
 	} {
 		if !seen[legit] {
 			t.Errorf("legitimate item %q should have survived the noise filter, got %+v", legit, seen)
 		}
-	}
-
-	var expiresAt string
-	if err := st.db.QueryRow("SELECT expires_at FROM memories WHERE content = ?", "migrating the staging DB this week").Scan(&expiresAt); err != nil {
-		t.Fatal(err)
-	}
-	days := time.Until(parseTime(expiresAt)).Hours() / 24
-	if days < 6.9 || days > 7.1 {
-		t.Fatalf("expected a ~7 day TTL on a captured event, got %.2f days (expiresAt=%s)", days, expiresAt)
 	}
 }

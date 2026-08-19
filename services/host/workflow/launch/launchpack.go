@@ -46,6 +46,7 @@ func WritePackContextFiles(cfg *config.Config, o RunOpts, effectivePack string, 
 		fmt.Fprintf(warn, "pix: could not add .pix ws state to git excludes: %v\n", err)
 	}
 	WriteOllamaBridgeFile(o.Workspace, cfg.OllamaBridgeModel)
+	WriteMemoryCaptureFile(o.Workspace, cfg.MemoryCapture)
 	var activePack *packinfo.Info
 	if effectivePack != "" {
 		if lp, lerr := packinfo.LoadPack(effectivePack); lerr == nil {

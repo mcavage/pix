@@ -16,25 +16,27 @@ type MemoryStore interface {
 	Remember(RememberReq) (RememberResp, error)
 	Recall(RecallReq) (RecallResp, error)
 	Forget(ForgetReq) (ForgetResp, error)
-	Synthesize(SynthesizeReq) (SynthesizeResp, error)
-	Promotable(PromotableReq) (PromotableResp, error)
 	Observe(ObserveReq) (ObserveResp, error)
 	Stats(profile string) (Stats, error)
 	Health() (Health, error)
 }
 
 // RememberReq mirrors memory.go's rememberInput / rememberFromParams.
+//
+// Durability, TTLDays, and Reward are all gone from the write path: every
+// row this binary writes is durable (the perishable/TTL behavior Durability/
+// TTLDays configured was removed along with the watcher's event channel),
+// and reward is no longer accepted as write-side input at all (it was never
+// read back into recall's score even before this). The `reward` column
+// stays in the schema, inert, defaulting to 0 on every row.
 type RememberReq struct {
 	Content    string
 	Kind       string
-	Durability string
 	Source     string
 	Project    string
 	Profile    string
 	HasProject bool
-	TTLDays    int
 	Confidence float64
-	Reward     float64
 	Tags       []string
 	Dedupe     float64
 	HasDedupe  bool
@@ -57,14 +59,21 @@ type RecallReq struct {
 }
 
 // Hit mirrors a scoredHit as surfaced by the recall JSON-RPC result.
+// Durability is deliberately absent: recall's read side dropped it (U9 —
+// every reader, host CLI and sandbox extension alike, had already stopped
+// consuming it). The `durability` DB column and its "durable" INSERT literal
+// stay for on-disk compatibility; only this read thread is gone.
 type Hit struct {
-	ID         string
-	Content    string
-	Score      float64
-	Kind       string
-	Durability string
-	Project    string
-	CreatedAt  string // RFC3339; the recall extension renders it
+	ID        string
+	Content   string
+	Score     float64
+	Kind      string
+	Project   string
+	CreatedAt string // RFC3339; the recall extension renders it
+	// Source is the closed-vocabulary origin ("user"/"cli"/"watcher"/"unknown"),
+	// exposed so a caller can tell an auto-captured row (watcher) apart from an
+	// explicit one — /forget <id> is the only feedback/undo mechanism.
+	Source string
 }
 
 // RecallResp wraps the hit list ({"hits": [...]}).
@@ -82,34 +91,6 @@ type ForgetResp struct {
 	OK bool
 }
 
-// SynthesizeReq / SynthesizeResp mirror synthesize(threshold) -> {merged, expired}.
-type SynthesizeReq struct {
-	Threshold float64
-}
-
-type SynthesizeResp struct {
-	Merged  int
-	Expired int64
-}
-
-// PromotableReq / PromotableResp mirror promotable(minFrequency) -> {candidates}.
-type PromotableReq struct {
-	MinFrequency int
-	Profile      string
-}
-
-type Candidate struct {
-	ID        string
-	Content   string
-	Frequency int
-	Project   string
-	CreatedAt string // RFC3339; `pix memory learnings` renders it
-}
-
-type PromotableResp struct {
-	Candidates []Candidate
-}
-
 // ObserveReq / ObserveResp mirror the observe method (async memCapture).
 type ObserveReq struct {
 	User       string
@@ -123,21 +104,26 @@ type ObserveResp struct {
 	Reason   string
 }
 
-// Stats mirrors stats().
+// Stats mirrors stats(). Durable/Perishable are gone end to end (every row
+// this binary writes is durable; schema v2 retires any legacy perishable row).
 type Stats struct {
-	Active     int
-	Durable    int
-	Perishable int
-	Facts      int
-	Learnings  int
-	Deleted    int
+	Active    int
+	Facts     int
+	Learnings int
+	Deleted   int
 }
 
 // Health mirrors the health method ({ok, vector, capture, watcherModel}).
+// Vector/Capture are tri-state: nil means "not yet exercised" (no real
+// embed/watcher attempt has happened since the process started), so a
+// pointer is used rather than a bool that could only ever say true/false and
+// would have to pick one of them to mean "don't actually know yet" — the
+// false-healthy gap this type closes. See embedHealthState/watcherHealthState
+// in the host's memembed.go/memory.go.
 type Health struct {
 	OK            bool
-	Vector        bool
-	Capture       bool
+	Vector        *bool
+	Capture       *bool
 	WatcherModel  string
 	CaptureReason string // explains a false Capture (JSON-RPC `captureReason`)
 }

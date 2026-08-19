@@ -25,6 +25,8 @@ func ConfigValue(cfg *config.Config, key string) (string, error) {
 		return cfg.OllamaBridgeModel, nil
 	case "run_intent":
 		return cfg.RunIntent, nil
+	case "memory_capture":
+		return cfg.MemoryCapture, nil
 	case "pack":
 		return cfg.Pack, nil
 	case "host.autoserve":
@@ -46,12 +48,39 @@ const ConfigKeysHelp = `keys:
                             session (the "overlord"); resolves the session model
                             when neither --model nor --intent is passed. Use
                             'none' to opt out to pi's own default model
+  memory_capture <mode>     watcher capture admission: explicit (default, no
+                            automatic observation) or experimental-auto (write
+                            straight to memories under a fixed daily budget).
+                            Turning it OFF (explicit) takes effect at once, the
+                            host refuses capture for running sandboxes too;
+                            turning it ON reaches NEW sandboxes only
   pack <path>               active pack dir (run mounts its skills + knowledge);
                             usually set via 'pix pack use'
   host.autoserve true|false lazy auto-start of the services daemon on run/
                             memory (default true; PIX_NO_AUTOSERVE env also
                             disables it)
 `
+
+// memoryCaptureSummary reports what the new memory_capture value actually
+// changes, which is NOT symmetric — the old single line ("applies to new
+// sandboxes") was wrong in the direction that matters most:
+//
+//   - explicit: the HOST's own admission gate (memObserve) reads the live
+//     config on every call and refuses immediately, so capture stops for
+//     ALREADY-RUNNING sandboxes too. A stale in-sandbox marker can only cause
+//     an observe attempt the host then refuses; it cannot store a row.
+//   - experimental-auto: turning capture ON needs the sandbox to send observe
+//     at all, and each sandbox reads its mode once at launch, so this reaches
+//     NEW sandboxes only. It ALSO needs a reachable watcher model, which this
+//     command does not (and cannot, without a network call) verify — so it
+//     names the check instead of claiming the feature is now working.
+func memoryCaptureSummary(mode string) string {
+	if mode == config.MemoryCaptureExperimentalAuto {
+		return fmt.Sprintf("memory_capture = %q (reaches NEW sandboxes only; an already-running one keeps the mode it launched with)\n"+
+			"  capture also requires a reachable Ollama watcher model, not checked here: verify with `ollama list` (the model `pix config get memory_watcher_model` names)", mode)
+	}
+	return fmt.Sprintf("memory_capture = %q (effective immediately: the host refuses automatic capture for already-running sandboxes too)", mode)
+}
 
 // ApplyConfigChange applies a set (unset=false) or unset to cfg and returns a
 // one-line summary of the new value. Pure + testable: it mutates cfg but does
@@ -133,6 +162,17 @@ func ApplyConfigChange(cfg *config.Config, unset bool, key string, args []string
 			cfg.RunIntent = args[0]
 		}
 		return fmt.Sprintf("run_intent = %q", cfg.RunIntent), nil
+
+	case "memory_capture":
+		if unset {
+			cfg.MemoryCapture = config.DefaultMemoryCapture
+		} else {
+			if len(args) != 1 || !config.ValidMemoryCapture(args[0]) {
+				return "", fmt.Errorf("config set memory_capture <mode>: needs exactly one of %s", strings.Join(config.MemoryCaptureModes, "|"))
+			}
+			cfg.MemoryCapture = args[0]
+		}
+		return memoryCaptureSummary(cfg.MemoryCapture), nil
 
 	case "pack":
 		if unset {

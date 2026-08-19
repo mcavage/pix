@@ -120,7 +120,7 @@ neighbors first.
    If `gh` is unavailable, push the branch and report the compare URL so the user
    can open the PR themselves.
 
-## The /learnings → OKF bridge
+## The promote → OKF bridge
 
 When running `promote` over recurring learnings, apply the personal-vs-shared
 test to each candidate. If a recurring learning is **shared domain knowledge**

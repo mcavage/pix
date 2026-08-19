@@ -35,19 +35,27 @@ const segment = (id) => result.segments.find((s) => s.id === id);
 const KNOWN_OVER_BUDGET = [
 	{
 		id: "project-context",
-		ceiling: 42_300,
+		ceiling: 42_500,
 		why:
-			"AGENTS.md (37.5 KB) + the kit agentInstructions (3.9 KB) against an 8 KB budget. " +
+			"AGENTS.md (37.5 KB) + the kit agentInstructions (~4.1 KB) against an 8 KB budget. " +
 			"U-W0b.08 removed the 15 KB launcher CLI reference; the remainder is repo layout, build/load/run, " +
 			"extension and skill authoring rules, and the hard-won gotchas — all of it load-bearing prose that a " +
 			"byte trim cannot delete, only RESTRUCTURE into always/on-demand/reference tiers. That restructuring is " +
 			"`pix context compile` (AC-P1-701), and this miss is the D7 condition that promotes it back to P0. " +
 			"Ratcheted +300 B for sbx v0.38's noninteractive-rm safety invariant #7 update (a genuine, reviewed " +
-			"content addition, not drift — see docs/upstream/sbx-0.38-noninteractive-rm.md).",
+			"content addition, not drift — see docs/upstream/sbx-0.38-noninteractive-rm.md). Ratcheted a further " +
+			"+150 B for the memory/legal docs closeout: the kit's agentInstructions dropped the retired `pix host` " +
+			"escape-hatch claim, retitled the memory section as automatic recall/explicit capture with the " +
+			"`experimental-auto` opt-in explained, and dropped the deleted `/learnings` command — a genuine, " +
+			"reviewed content correction, not drift. Ratcheted a further +50 B for the kit's subagent roster: " +
+			"fanout/deep/review used to name a vendor/model nickname (haiku/opus/cross-vendor), which goes stale " +
+			"the moment routing policy moves a model; the roster now names the INTENT each preset resolves through " +
+			"(breadth/max-accuracy/review) and points at `pix agent ls` for the live resolved model — a genuine, " +
+			"reviewed content correction, not drift.",
 	},
 	{
 		id: "project-owned-total",
-		ceiling: 52_000,
+		ceiling: 52_050,
 		why: "Follows from project-context above; the other two sub-budgets are met.",
 	},
 ];

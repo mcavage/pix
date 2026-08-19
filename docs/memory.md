@@ -40,13 +40,11 @@ similarity with FTS5 keyword match, then adjusts for:
   forever.
 - **Project match.** Memories tagged with the current project are boosted;
   memories from other projects are down-weighted, not hidden.
-- **A perishable relevance floor.** A **perishable** (watcher-captured event)
-  hit scoring below 0.30 is dropped from this silent injection entirely, it's
-  the least trustworthy long-term signal, so it doesn't get to compete for
-  space in every relevant turn. **Durable** hits are never filtered by score
-  here. This floor applies only to the silent auto-injection path: an explicit
-  `/recall`, or the agent calling the `memory_recall` tool, skips this score
-  filter entirely.
+The silent auto-injection path used to also drop a low-scoring **perishable**
+hit below a 0.30 floor. That filter was deleted along with the write-side
+perishable/TTL behavior it existed to police: every row pix writes is durable
+now (see Legacy data below for a store with rows written before that was
+true), so there was nothing left for a durability-based floor to filter.
 
 The injected block itself says as much: it tells the model this is a
 relevance-filtered subset from the host daemon, not the full store, and to use
@@ -58,19 +56,151 @@ up to 100 rows (with a large enough `charBudget` that the daemon's normal
 1200-character response cap doesn't cut it short first), not a true
 unbounded dump of the store. If the store has more than 100 visible rows, the
 response says so with a truncation line rather than silently showing a
-partial page as if it were everything. An explicit non-`*` search query keeps
-the smaller default (6 hits) tuned for relevance search.
+partial page as if it were everything. An explicit non-`*` search query's
+default is **not the same number everywhere**: the `memory_recall` agent
+tool defaults to 6 hits (tuned for the silent per-turn injection path, which
+uses the same small number); the `/recall` slash command sends no explicit
+`limit` for a non-`*` query, so it falls through to the daemon's own default
+of 8; and `pix memory recall <query>` (the host CLI) has its own `--limit`
+flag defaulted to 8, landing on the same number by a different route. Neither
+is a security boundary, just a relevance tuning choice, and each is
+overridable (`memory_recall`'s `limit` param, or `pix memory recall --limit
+N`).
 
 ## How capture works
 
-After a turn, the `memory-capture` extension sends the exchange to the watcher
-model, which extracts three things: durable **facts** (preferences, decisions,
-project conventions, no automatic expiry), perishable **events**
-(time-bound status: what you're doing right now, what's installed today -
-these expire after **7 days**), and **corrections** (the agent got something
-wrong and you told it so; stored durably). Everything is stored with a
-durability class and a confidence score, de-duplicated by content hash. You
-never call it directly.
+**Capture is explicit by default.** `memory_capture` (a `pix config` key) has
+two values:
+
+- **`explicit` (the default).** No automatic observation at all. The
+  `memory-capture` extension sends **zero** `observe` requests. It decides
+  this from a launch-scoped marker file, `.pix/memory-capture` — the
+  launcher writes it at launch from `memory_capture`, and the extension
+  reads it once, at load, exactly like `.pix/profile` — so there is no RPC
+  round trip involved in the decision at all. Even if something called
+  `observe` anyway, the daemon refuses it before ever touching the
+  watcher: no watcher inference, no side-effect Ollama probe. **The host
+  is always authoritative, but the two directions take effect on different
+  schedules**: setting `explicit` takes effect *immediately*, even for an
+  already-running sandbox — `memObserve` re-reads the live host config on
+  every call and refuses there regardless of what the sandbox's marker
+  says. Enabling `experimental-auto` only reaches a sandbox's marker at
+  launch: an already-running sandbox's `memory-capture` extension still
+  checks the marker it launched with before ever placing the `observe`
+  call, so a marker stuck on `explicit` goes on sending zero requests
+  until that sandbox is recreated, even though the host would now accept
+  them. Facts still land the way they always could: `/remember`,
+  `pix memory remember`, or the agent's own explicit tools — a human or an
+  explicit command chose to store it, not an automatic listener.
+- **`experimental-auto` (opt-in).** The watcher extracts durable **facts**
+  (preferences, decisions, project conventions, no automatic expiry) and
+  **corrections** (the agent got something wrong and you told it so), and
+  writes them straight to memories with internal `source="watcher"`. A
+  correction is stored with the row `kind` set to `learning`, not
+  `correction` — that reuses the schema's pre-existing `kind` vocabulary
+  (the same one the now-deleted pix memory learnings / /learnings command
+  once read) rather than adding a new one. This is naming, not a leftover of
+  that deleted command: `pix memory stats`'s `learnings` count **is** the
+  count of captured corrections, and the row's `kind` is stored, and any
+  `--json` output emits it, as `learning` verbatim, never `correction`.
+  `/recall` and `pix memory recall` render that same stored `learning` kind
+  as `correction` for a person reading the line (a render-only alias, no
+  schema migration: see DX-6a) — so the internal/JSON value and the
+  human-facing label are deliberately different words for one row. Under
+  **one fixed daily budget: at most 10 STORED rows/day** (UTC calendar
+  day), counted by a real `SELECT COUNT(*)` over `memories` rows with
+  `source='watcher'` created today — not by counting `observe` attempts, so
+  it survives a daemon restart exactly, and an empty/noise-filtered/
+  secret-filtered watcher call never costs anything against it. The budget
+  is peeked *before* the watcher is ever invoked (at `observe` admission,
+  and again fresh right before the actual watcher call), so an exhausted
+  day costs zero inference; if a single watcher result would extract more
+  items than remain, only the remaining rows are stored and the rest are
+  dropped (logged as a count, never content). **Only a row that actually
+  lands NEW counts against the budget**: an item that reaffirms an existing
+  row (same content hash) or collapses into one via the embedding-similarity
+  dedupe path — either way, the same `reaffirmed` outcome `remember` already
+  reports — or that fails to store, is never counted, matching exactly what
+  the persisted `SELECT COUNT(*)` would report; only a genuinely stored row
+  moves the needle. A row that is later `/forget`-ed (soft-deleted) still
+  counts against the day it was stored — forgetting is feedback on what's
+  recalled, not a refund on capture volume, and only a new UTC day resets
+  the count. Like the mode switch above, this budget lives on the host and
+  is unaffected by anything sandbox-side. Budget exhaustion is an
+  honest `{accepted:false, reason}`, not a silently dropped attempt. This is
+  UX policy on an experimental feature (a sane cap, not a security
+  boundary) — there are no session ids, maps, or per-session counters, just
+  a SQLite COUNT.
+
+Change it with `pix config set memory_capture <mode>`; it is daemon-affecting
+(the running `pix-host serve` gets restarted, per its lifecycle mode, to pick
+it up — the standalone `pix-host memory` daemon applies the same config->env
+translation, so it is never silently ignored there either). **Enabling or
+disabling the mode this way only reaches a *new* sandbox**: each sandbox
+reads the mode once, at launch, into its own `.pix/memory-capture` marker, so
+an already-running sandbox keeps whatever mode it launched with until it is
+recreated (`pix config set memory_capture <mode>` itself confirms this in its
+output). That marker can go stale in EITHER direction once the host config
+changes after launch — stuck on `explicit` after the host moves to
+`experimental-auto`, or stuck on `experimental-auto` after the host moves
+back to `explicit`. Either way, EFFECTIVE capture behavior never drifts from
+what the host's *live* config allows today: the marker only decides whether
+the sandbox extension bothers sending an `observe` call at all, while the
+host's own admission check (`memObserve`) re-reads its live config on every
+call and is authoritative regardless. So a marker stuck on
+`experimental-auto` can cause a harmless `observe` attempt the host then
+refuses, and a marker stuck on `explicit` can suppress an attempt the host
+would have accepted — but no combination of a stale marker and the current
+host config ever stores a row the host's live setting would not have
+allowed. `pix config unset memory_capture` restores `explicit`, same
+new-sandboxes-only rule.
+
+There is no review/staging mode: automatic capture is the experiment, and a
+review-before-store workflow is deferred until evidence says it's needed. The
+feedback/undo mechanism today is the existing `/forget <id>` — a `/recall` hit
+names its `source`, and the sandbox/CLI render an `auto` tag when it's
+`watcher`, so an auto-captured row is visibly distinct from an explicit one.
+There is no bulk revoke and no new verb: `/forget` by id is it.
+
+External `remember` (the RPC/plugin surface, `/remember`, `pix memory
+remember`) is always explicit and can never claim `source="watcher"` — an
+external caller trying to spoof it is normalized to `"unknown"` instead,
+regardless of which capture mode is live.
+
+**A conservative, two-stage secret filter runs in capture only** (never on
+an explicit `remember`): once before the watcher ever sees your message, and
+again before any extracted fact/correction is stored. A match — a private
+key block, a recognizable vendor token shape (AWS, GitHub, Slack, OpenAI,
+Stripe, Google, a JWT, a labeled `api_key=`/`token=`/`password=` assignment,
+including a realistic `SCREAMING_SNAKE_CASE` env-var name like
+`AWS_SECRET_ACCESS_KEY=`), a 1Password reference (`op://vault/item/field`,
+treated as secret-shaped even though it's a LOCATOR rather than the value
+itself — it still names exactly where to go fetch one), or a long unbroken
+high-entropy run — drops the content entirely (fails closed: never a
+partial or redacted store). An
+all-hex run (a git commit SHA, a content digest) is deliberately NOT
+treated as secret-shaped: it is indistinguishable from an ordinary hash by
+shape alone, and flagging every SHA a user types is a false positive this
+filter cannot tell apart from a real secret. Neither the matched text nor
+the raw watcher output is ever logged — a parse failure logs only the
+model, the error, and the content length.
+
+**This is a best-effort heuristic, never a guarantee.** A secret with no
+recognizable shape (no vendor prefix, no labeling keyword, not high-entropy
+enough) can still slip through. Do not rely on it as your only safeguard
+for anything sensitive.
+
+## Legacy data
+
+An older pix watcher also extracted perishable, time-bound **events** ("doing
+X right now") that expired after 7 days, and seeded a small reward from a
+sentiment score. Both are gone: the watcher only emits facts and corrections
+now, and nothing it writes ever expires. That leaves one loose end for a
+store that predates the change — a live perishable row waiting to expire,
+with nothing left to ever expire it — which the schema v2 migration below
+retires as part of its one-time sweep. The `reward` column itself is
+untouched by any of this: it stays in the schema, always 0, ignored by
+recall's scoring.
 
 Two precision guards run before anything is stored:
 
@@ -82,11 +212,74 @@ Two precision guards run before anything is stored:
   question.
 - **A conservative noise filter** drops watcher output that's session
   narration rather than a durable thing worth recalling ("user asked about
-  X", "user ran the tests"), applied to **facts and events only**, matched
-  by prefix so it never eats legitimate content that happens to mention "the
-  user" mid-sentence. **Corrections are never filtered**: a correction can
+  X", "user ran the tests"), applied to **facts only**, matched by prefix so
+  it never eats legitimate content that happens to mention "the user"
+  mid-sentence. **Corrections are never filtered**: a correction can
   legitimately be phrased exactly like a noise prefix ("the user requested
   the agent stop doing X" is a real, capturable rule, not narration).
+
+## Schema v2: a one-time source sweep
+
+Upgrading a pre-v2 store runs a small, one-time DATA migration — no new
+column, no new concept, just a sweep of what's already there. In ONE
+database transaction (`migrateMemorySchema`, `services/host/memory.go`),
+three things happen: (1) the legacy `profile` column is added if a
+pre-profile-scoping db still lacks it; (2) every LIVE row whose recorded
+`source` is neither `user` nor `cli` (the watcher's past captures, or a
+source pix has never seen) is **soft-deleted** — the exact same `deleted_at`
+mechanism `/forget` already uses; (3) every LIVE row still carrying the
+legacy `durability = 'perishable'` marker (see "Legacy data" above) is
+**also soft-deleted** the same way — this used to be its own every-startup
+query, now it's folded into this same one-time sweep. `PRAGMA user_version`
+is then stamped to 2. A crash or error anywhere in that transaction rolls
+back everything, leaving the store fully at its old version; completion is
+judged by `user_version` alone, so the sweep runs exactly once per store,
+and a row written after the stamp (including a brand new watcher capture) is
+never touched by it again.
+
+This is an ADVISORY, one-time reading of pre-v2 free-text history, never a
+verified trust boundary: pre-v2 `source` was operator-set text with no
+enforcement behind it. `user`/`cli` (an explicit ask, from `/remember` or
+`pix memory remember`) survives outright; everything else predates any
+verification of where it came from, so it's swept. An already soft-deleted
+row is left exactly alone.
+
+**Reversibility is nothing new, but it's two statements, not one.** Soft-delete
+(`/forget`, and this sweep) always drops the row's FTS index entry alongside
+stamping `deleted_at` — the pair that must always happen together, since a
+row left in the index would still answer keyword searches after being
+"deleted". So reviving it needs the same pair run backwards: clearing
+`deleted_at` alone puts the row back in the active set (visible to `pix
+memory recall '*'` and to vector-similarity recall if it still has an
+embedding), but it stays invisible to plain keyword search until its FTS
+entry is rebuilt too. Directly in the database file, with the service
+stopped:
+
+```sql
+UPDATE memories SET deleted_at = NULL WHERE id = '...';
+INSERT INTO memories_fts (rowid, content)
+  SELECT rowid, content FROM memories WHERE id = '...';
+```
+
+There is no live undelete verb; this is a manual, service-stopped edit of
+the db file, on purpose. If you want a point-in-time copy
+before upgrading at all, run `pix-host memory snapshot` first (see "Backing
+it up, and putting it back" below); the migration itself does not take one
+automatically.
+
+**Keeping `source` closed and un-spoofable.** The free-text `source` column
+is normalized to a closed vocabulary (`user`/`cli`/`watcher`, else
+`unknown`). `remember` — the RPC/plugin surface every external caller
+reaches — additionally treats a caller-supplied `source="watcher"` as
+spoofing: it normalizes to `unknown` instead of being stored verbatim. Only
+the watcher's own internal capture path (`rememberWatcherCapture`, an
+unexported Go call no request can reach) ever writes `source="watcher"`.
+
+> A trust-state/provenance schema (admitted/proposed/quarantined rows, a
+> named eligibility predicate, an automatic pre-migration snapshot) was
+> designed and built for this upgrade, then rejected on review as more
+> machinery than the actual problem warranted — see
+> docs/design/self-learning-loop.md's "Rejected" note.
 
 ## Driving it by hand
 
@@ -113,18 +306,21 @@ Inside the sandbox, the write/delete operations are available as slash commands:
 - `/recall <query>`, search memory and show what matches (blank = everything).
 - `/remember <fact>`, store a fact now, explicitly.
 - `/forget <id|query>`, soft-delete a memory by id or its top query match.
-- `/learnings`, show what the watcher has captured repeatedly (the raw material
-  the `promote` skill graduates into skills or conventions).
 
 From the host, without launching a sandbox:
 
 ```bash
 pix memory recall "<query>"
 pix memory remember "<fact>"
-pix memory forget "<query>"
-pix memory learnings
+pix memory forget <id>   # id or unique id-prefix only, from `pix memory recall` — no query fallback on the host
 pix memory stats
 ```
+
+The query-fallback convenience (drop the top match for a free-text query with
+no id) is a **sandbox slash-command-only** feature — `/forget <query>` inside
+a sandbox does that lookup for you. The host `pix memory forget` CLI takes
+only a fact id or a unique prefix of one (get it from `pix memory recall`
+first); it has no query form.
 
 If the daemon is down, the host commands and the agent's tools/slash commands
 all surface a clear error, they do not fail silently. Only the silent
@@ -144,20 +340,33 @@ the full loop.
 ### When semantic recall is silently keyword-only
 
 If recall has dropped to keyword-only even though Ollama is installed, the embed
-model was almost certainly unavailable when the daemon started (or an embed call
-failed once). The embedder **latches off on the first failure** and, unlike the
-capture watcher, which live re-probes every 30s and self-recovers, it does **not**
-retry, so semantic recall stays degraded for the life of the daemon process. Pull
-the embed model, then restart the daemon so it re-probes at startup:
+model was unavailable at the moment of a real recall/remember call (there is no
+startup probe: the store never blocks on Ollama just to construct itself).
+The embedder **latches off on that failure** and, like the capture watcher,
+re-probes automatically (once per `embedProbeInterval`, 60s) on the next
+real call, so semantic recall recovers on its own — **no daemon restart
+required**. `pix-memory identity`/`health` report the LIVE state (never a
+boot-time snapshot), so a degraded reading always reflects what's true right
+now.
+
+`health`'s `vector`/`capture` fields are **tri-state**: `null` means "not yet
+exercised" — a fresh daemon that has never actually attempted a real
+embed/capture call, which is the normal state right after `pix serve` starts,
+since construction makes no boot-time probe. It only becomes `true`/`false`
+once a real attempt has happened; a brand-new daemon reporting `true` before
+that would be a guess dressed up as a fact. `identity`'s `degraded_reason`
+follows the same rule: it is only set on a CONFIRMED `false`, never on
+`null`, so a daemon that simply hasn't been asked to embed anything yet is
+not reported as degraded.
+
+To restore a confirmed-degraded embedder immediately instead of waiting for
+the next call:
 
 ```bash
 ollama pull nomic-embed-text          # or whatever MEMORY_EMBED_MODEL names
-pix serve stop && pix serve  # restart so the embedder re-probes
 ```
 
-A daemon-affecting `pix config set` (e.g. `memory_embed_model`) already
-restarts a managed or lazy daemon for you; only a foreground `pix serve` must
-be restarted by hand.
+The next recall or remember re-probes and, on success, semantic recall is back.
 
 ## Backing it up, and putting it back
 
@@ -269,6 +478,7 @@ hosts), and treat `MEMORY_AUTH` as reserved.
 | `MEMORY_DB` | `~/.local/share/pix/memory/memory.db` | store path |
 | `MEMORY_EMBED_MODEL` | (config) | Ollama embedding model for recall ranking |
 | `MEMORY_WATCHER_MODEL` | (config) | Ollama model for capture extraction |
+| `MEMORY_CAPTURE_MODE` | `explicit` | capture admission mode (`explicit`\|`experimental-auto`); set via `pix config set memory_capture`, never by hand |
 | `OLLAMA_HOST` | Ollama default | where the daemon reaches Ollama |
 
 The design reasoning lives in

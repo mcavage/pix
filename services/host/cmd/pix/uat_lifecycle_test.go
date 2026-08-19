@@ -69,7 +69,7 @@ func TestUATLifecycle_CreateDev(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	rec := &uat.Registration{SessionID: id, MCPName: "pix-uat-test-" + id}
+	rec := &uat.Registration{SessionID: id, MCPName: "pix-uat-" + id}
 	if err := uat.WriteRegistration(env, "test", rec); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

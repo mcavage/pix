@@ -32,6 +32,25 @@ const EnsureTimeout = 15 * time.Second
 // never feel slow because of this (the in-VM extensions retry anyway).
 const EnsureRunTimeout = 8 * time.Second
 
+// EnsureMemoryTimeout is the READ-SIDE budget `pix memory …` uses (U3-lifecycle):
+// a recall/remember/forget is a foreground, user-waited-on command, so it gets a
+// much shorter cold-start allowance than EnsureTimeout's 15s. If the daemon is
+// not up within 3s, EnsureUp gives up quietly (best-effort) and the RPC call
+// that follows fails with the existing rpc.ErrServiceDown path — so a slow cold
+// start degrades to one honest error instead of a long, silent hang on every
+// memory invocation.
+//
+// 3s is a deliberately SHORT bound, not a guess: sqlite init under an
+// advisory flock is normally sub-second, and this is a foreground command a
+// human is staring at. Because a cold start CAN still outrun 3s (architect
+// round 2), the error message that follows (cmd/pix/memory_cmd.go's
+// withMemory) never flatly says "start it" — EnsureUp, right above, already
+// tried that — it names BOTH honest possibilities: a slow autostart that
+// just needs a retry, or a genuinely down/opted-out daemon that needs
+// starting. Pinned by TestMemoryCmd_ServiceDownMessage_* in
+// cmd/pix/memory_cmd_test.go.
+const EnsureMemoryTimeout = 3 * time.Second
+
 // serveSpawnLockRetry paces Ensure's non-blocking spawn-lock attempts.
 const serveSpawnLockRetry = 100 * time.Millisecond
 
@@ -328,71 +347,25 @@ func tailFileLines(path string, n int) string {
 // base config, run Ensure with the real ops, and swallow the error (Ensure told
 // the user why on progress) so the primary action proceeds. progress is the
 // caller's stderr, never its stdout.
+//
+// U3-lifecycle: this is a READ-SIDE path, called on EVERY `pix run` / `pix
+// memory …` invocation, and it must never MUTATE the running daemon. It used
+// to also detect a version-mismatched daemon here and restart it
+// (staleServeVersion/restartStaleServe, deleted), but that restart's "success"
+// was only ever the MECHANICAL signal that TCP came back up or launchctl exited
+// 0 — never a re-check that the daemon behind the port actually answered as the
+// NEW version. A restart that never converged (stale PATH, a symlink pinned at
+// a deleted Cellar dir, …) printed "updated pix services X → Y" and then did
+// the exact same non-convergent restart again on the NEXT call, once per
+// invocation, forever — `pix memory recall '*'` never returning, never fixing
+// anything. Version reconciliation now lives ONLY on the explicit start path
+// (`pix serve start` / `install`, see verifyManagedInstallHealth in install.go),
+// where it runs AT MOST ONCE per invocation and is gated on a verified identity
+// probe before any success wording. See docs/design/serve-lifecycle.md.
 func EnsureUp(progress io.Writer, services []string, timeout time.Duration) {
 	cfg, err := config.Load()
 	if err != nil {
 		return // a broken config fails loudly in the primary action instead
 	}
-	if from, stale := staleServeVersion(cfg, sys.Real{}, services, rpc.IdentityProbe); stale {
-		restartStaleServe(DefaultReloader(progress), from, launcher.Version, progress)
-	}
 	_ = Ensure(DefaultStarter(progress), cfg, EnsureOpts{Services: services, Timeout: timeout})
-}
-
-// staleServeVersion recognizes ONLY a positively identified Pix service at a
-// different launcher.Version; a foreign or mute port holder is never
-// restarted. An EMPTY version answering as our own service name is not
-// "nothing to compare, so leave it alone" — it is a daemon old enough to
-// predate the identity method reporting a version at all, which makes it
-// stale/incompatible by construction, not silently current. Either way this
-// only ever names OUR OWN service as stale; it never signals or kills the
-// foreign process behind a port that answers with a different name.
-func staleServeVersion(cfg *config.Config, env portProbe, requested []string, probe rpc.IdentityProber) (string, bool) {
-	if cfg == nil || probe == nil {
-		return "", false
-	}
-	st := serveStarter{getenv: env.Getenv}
-	for _, p := range requiredServePorts(st, cfg, requested) {
-		if !env.DialLocal(p.port) {
-			continue
-		}
-		id, err := probe(p.port)
-		want := rpc.MemoryName
-		if err != nil || id.Name != want || id.Version == launcher.Version {
-			continue
-		}
-		from := id.Version
-		if from == "" {
-			from = "unknown (pre-version daemon)"
-		}
-		return from, true
-	}
-	return "", false
-}
-
-// restartStaleServe preserves lifecycle ownership: managed restarts through its
-// supervisor, lazy stops safely and relaunches, foreground is left to its
-// terminal owner. serveDown shares the lazy path deliberately — an unrecorded
-// orphan (no pidfile, no marker) was still PROVEN to be Pix by the identity
-// probe, so it is recycled the same safe way.
-func restartStaleServe(rl serveReloader, from, to string, out io.Writer) {
-	switch mode := rl.mode(); mode {
-	case serveManaged:
-		if err := rl.kickManaged(); err != nil {
-			fmt.Fprintf(out, "warning: could not update pix services from %s to %s: %v\n", from, to, err)
-			return
-		}
-		fmt.Fprintf(out, "updated pix services %s → %s.\n", from, to)
-	case serveForeground:
-		fmt.Fprintf(out, "pix services %s are running in another terminal; restart them to use %s.\n", from, to)
-	case serveLazy, serveDown:
-		switch r := relazyServe(rl); {
-		case r.stopErr != nil || r.notStopped:
-			fmt.Fprintf(out, "warning: could not safely stop pix services %s — run: pix serve stop && pix serve\n", from)
-		case r.startErr != nil:
-			fmt.Fprintf(out, "warning: pix services stopped but %s did not start: %v\n", to, r.startErr)
-		default:
-			fmt.Fprintf(out, "updated pix services %s → %s.\n", from, to)
-		}
-	}
 }

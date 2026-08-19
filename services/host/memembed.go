@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math"
 	"net"
 	"net/http"
 	"os"
@@ -72,15 +71,39 @@ var modelProbeClient = &http.Client{Timeout: 10 * time.Second}
 
 var embedDisabled atomic.Bool
 
+// embedExercised is set true the moment a REAL /api/embed attempt (success or
+// failure) has actually happened. Health reporting (embedHealthState) must
+// never call the embedder "healthy" before this: buildMemStore attaches
+// memEmbed with no boot-time probe, so a fresh store has made zero network
+// calls and its true state is simply not known yet, not good. embedDisabled
+// alone can't tell unknown from healthy — both read as "false" — which is
+// exactly the false-healthy gap this flag closes.
+var embedExercised atomic.Bool
+
 // embedUnavailable latches semantic recall off and returns the nil vector
 // memEmbed answers with. It logs only on the FIRST latch (a wedged Ollama cannot
 // flood the log) and names the retry interval, so the degradation reads as
 // temporary.
 func embedUnavailable(why string) []float64 {
+	embedExercised.Store(true)
 	if !embedDisabled.Swap(true) {
 		log.Printf("memory embed: semantic recall DISABLED, %s; will retry automatically every %.0fs", why, embedProbeInterval.Seconds())
 	}
 	return nil
+}
+
+// embedHealthState reports the tri-state EMBED health `health`/`identity`
+// surface: nil ("unknown") until embedExercised flips true on the first real
+// attempt, then the SAME live embedDisabled latch this file has always
+// tracked. A pointer, not a bool, so nil is representable on the wire as
+// JSON null rather than a value that could be mistaken for "confirmed good"
+// or "confirmed bad".
+func embedHealthState() *bool {
+	if !embedExercised.Load() {
+		return nil
+	}
+	healthy := !embedDisabled.Load()
+	return &healthy
 }
 
 func memEmbed(text string) []float64 {
@@ -111,7 +134,9 @@ func memEmbed(text string) []float64 {
 	if res.StatusCode != 200 {
 		return embedUnavailable(fmt.Sprintf("embed HTTP %d", res.StatusCode))
 	}
-	// Success: if the flag was set (recovery path), announce the restoration.
+	// Success: mark exercised (a real call just completed) and, if the flag was
+	// set (recovery path), announce the restoration.
+	embedExercised.Store(true)
 	if embedDisabled.Swap(false) {
 		log.Printf("memory embed: embed model available again, semantic recall RE-ENABLED")
 	}
@@ -127,8 +152,6 @@ func memEmbed(text string) []float64 {
 	return parsed.Embeddings[0]
 }
 
-func memEmbedderAvailable() bool { return memEmbed("probe") != nil }
-
 func memWatcherModel() string {
 	if v := os.Getenv("MEMORY_WATCHER_MODEL"); v != "" {
 		return v
@@ -140,31 +163,15 @@ func memWatcherModel() string {
 	return "qwen3.5:9b"
 }
 
-// memWatcherWarm forces the watcher model resident in Ollama at startup so the
-// FIRST real capture doesn't pay the cold-load latency that caused watcher
-// timeouts. Best-effort and background; warming is priming, not a readiness
-// verdict, so it never touches the capture flags. No-op if the model isn't
-// pulled.
-func memWatcherWarm() {
-	m := memWatcherModel()
-	if !memOllamaHasModel(m) {
-		return
-	}
-	body, _ := json.Marshal(map[string]any{
-		"model": m, "stream": false,
-		"keep_alive": "10m", // stay resident so the first real capture isn't a cold reload
-		"messages":   []map[string]any{{"role": "user", "content": "ok"}},
-		"options":    map[string]any{"num_predict": 1},
-	})
-	client := &http.Client{Timeout: 5 * time.Minute} // generous: a cold load can be slow
-	res, err := client.Post(ollamaHost()+"/api/chat", "application/json", bytes.NewReader(body))
-	if err != nil {
-		return
-	}
-	io.Copy(io.Discard, io.LimitReader(res.Body, 1<<20))
-	res.Body.Close()
-	log.Printf("memory watcher: warmed model %q", m)
-}
+// memWatcherWarm (the boot-time "force the watcher model resident" call) was
+// deleted along with the boot-time probe (see watcherCaptureAvailable's doc
+// comment): warming at startup made every listener wait on Ollama again,
+// the exact cost this unit removed. That is a deliberate simplification, not
+// a verdict that priming is unwanted forever — an opt-in capture mode still
+// wants to avoid paying a cold-model-load penalty on its FIRST real capture.
+// The honest place for that is lazy: warm once whatever actually activates
+// capture (the listener starting, an opt-in mode flipping on) fires, not
+// unconditionally at process boot. Tracked for U7; not implemented here.
 
 // watcherUnavailable is set true once a capture attempt fails because the watcher
 // model isn't reachable/pulled, so `observe` tells the caller the truth instead
@@ -179,6 +186,13 @@ var watcherReason atomic.Pointer[string]
 // opens after a real memWatch() failure (timeout/transport error/non-200).
 var watcherDegradedUntil atomic.Int64
 
+// watcherExercised is embedExercised's twin for capture: set true the moment a
+// real memWatch() attempt (success or failure) has happened, so health
+// reporting (watcherHealthState) can tell "never actually tried" apart from
+// "tried and it's fine" — watcherUnavailable defaults to false either way, so
+// on its own it cannot distinguish unknown from healthy.
+var watcherExercised atomic.Bool
+
 func setWatcherReason(s string) { watcherReason.Store(&s) }
 
 // watcherDegrade is the ONE way capture goes off: record why, open the backoff
@@ -186,6 +200,7 @@ func setWatcherReason(s string) { watcherReason.Store(&s) }
 // /api/show probe, which succeeds while inference is wedged), and log once so a
 // dead capture half stays diagnosable. Recall works throughout.
 func watcherDegrade(reason string) {
+	watcherExercised.Store(true)
 	watcherUnavailable.Store(true)
 	setWatcherReason(reason)
 	watcherDegradedUntil.Store(time.Now().Add(watcherBackoff).UnixNano())
@@ -193,8 +208,12 @@ func watcherDegrade(reason string) {
 }
 
 // watcherHealthy is its inverse: capture is on, with no reason and no backoff
-// left over from an earlier failure.
+// left over from an earlier failure. Also reached on the FIRST ever successful
+// memWatch() call (no prior watcherDegrade), so it marks exercised too —
+// otherwise a store whose very first capture attempt succeeds would still
+// report "unknown" forever.
 func watcherHealthy() {
+	watcherExercised.Store(true)
 	watcherUnavailable.Store(false)
 	setWatcherReason("")
 	watcherDegradedUntil.Store(0)
@@ -229,20 +248,6 @@ func memOllamaHasModel(model string) bool {
 	return res.StatusCode == 200
 }
 
-// memWatcherProbe runs once at memory startup: is the configured watcher model
-// actually pulled? If not, log the exact fix and flip watcherUnavailable so the
-// self-learning capture half fails loudly instead of silently.
-func memWatcherProbe() {
-	m := memWatcherModel()
-	if memOllamaHasModel(m) {
-		watcherHealthy()
-		return
-	}
-	watcherUnavailable.Store(true)
-	setWatcherReason(fmt.Sprintf("model %q is not pulled (or Ollama is down), run `ollama pull %s`", m, m))
-	log.Printf("memory watcher: model %q is not pulled (or Ollama is down), fact capture is DISABLED until you run `ollama pull %s` (recall still works). Set MEMORY_WATCHER_MODEL to override.", m, m)
-}
-
 // watcherProbeInterval throttles the live re-probe so a disabled watcher does not
 // hammer Ollama /api/show on every captured turn.
 const watcherProbeInterval = 30 * time.Second
@@ -250,12 +255,22 @@ const watcherProbeInterval = 30 * time.Second
 // watcherLastProbe is the unix-nano time of the last live re-probe.
 var watcherLastProbe atomic.Int64
 
-// watcherCaptureAvailable reports whether fact capture can run RIGHT NOW, and
-// breaks the startup latch: memWatcherProbe() runs once at boot, so an Ollama
-// that was down then would otherwise keep capture off forever (observe
-// short-circuits before the watcher call that would clear the flag). When marked
-// unavailable it re-probes at most once per interval. Available is the common
-// path and returns at once.
+// watcherCaptureAvailable reports whether fact capture can run RIGHT NOW. There
+// is no boot-time probe: watcherUnavailable defaults to false (optimistic,
+// capture assumed live) and only latches true from a REAL memWatch() failure,
+// so a store never waits on Ollama at startup and a wrong initial guess simply
+// self-corrects on the first actual capture attempt. When marked unavailable it
+// re-probes at most once per interval. Available is the common path and returns
+// at once.
+//
+// SIDE EFFECT WORTH NAMING: when unavailable and the throttle window has
+// elapsed, this makes a REAL network call (memOllamaHasModel's /api/show).
+// memWatcherStatus/watcherHealthState both route through this, which means
+// something that reads as a passive health check (`health`, `identity`, even
+// `pix doctor`) can trigger live Ollama traffic as a side effect — bounded to
+// once per watcherProbeInterval, never more, but real. Not a bug: it's how
+// capture recovers with no daemon restart. Just don't assume a health read is
+// free of network I/O.
 func watcherCaptureAvailable() bool {
 	if time.Now().UnixNano() < watcherDegradedUntil.Load() {
 		// Backing off after a real inference failure: the metadata-only /api/show
@@ -288,34 +303,28 @@ func watcherCaptureAvailable() bool {
 
 type watchResult struct {
 	Facts       []string
-	Events      []string
 	Corrections []string
-	Valence     float64
 }
 
-const memWatcherSystem = `You read ONE message a user sent to their coding agent and extract only what is worth remembering for future sessions, plus the user's sentiment. You see ONLY the user's message, never the agent's reply, so everything must come from what the user themselves said.
+const memWatcherSystem = `You read ONE message a user sent to their coding agent and extract only what is worth remembering for future sessions. You see ONLY the user's message, never the agent's reply, so everything must come from what the user themselves said.
 
 Be very conservative. Most messages contain nothing worth saving. Saving noise is worse than saving nothing.
 
 Return JSON:
 - "facts": DURABLE things, true until the user changes their mind: preferences, identity, conventions, how they like to work, settled decisions. Each self-contained and still useful months from now.
-- "events": TIME-BOUND status that will go stale on its own: what they are doing right now, a current activity or transition ("migrating to X", "working on Y this week"), what is installed/pulled today, anything dated. Saved but short-lived.
 - "corrections": the user telling the agent to stop doing something or do it differently ("don't X", "always Y"). Phrase each as a durable rule.
-- "valence": -1 (frustrated) to 1 (pleased) reading the user's tone. 0 if neutral.
-
-The fact-vs-event test: if a statement could become false without the user changing their mind (a status, a current task, an installed thing, a date), it is an EVENT, not a fact. When a sentence mixes both, split it: keep the durable half as a fact, the perishable half as an event.
 
 Hard rules:
 - Only what the USER asserts. A QUESTION states nothing ("which branch do I use?" => all empty).
 - NEVER infer preferences, interests, or tool usage from a question. Asking ABOUT a capability is not evidence the user has it, wants it, or is using it. A question about memory itself, in particular, asserts nothing about the user, never record "user is interested in memory" or "user is using memory" from it. Examples that must produce all-empty output: "so are you using my memories?", "why do we think those are the right things to inject?", "can I see what you remember?", "is memory working right now?", "how does recall pick what to show me?".
-- NEVER record mood or feelings; that is what valence is for.
 - Acknowledgments ("thanks", "great", "cool") => all empty.
 - Code, file names, and one-off task details are not worth saving.
+- Time-bound status (what the user is doing right now, a current activity or transition, what's installed/pulled today) is not worth saving either: it goes stale on its own and this watcher does not track it.
 - When in doubt, leave it out. Empty arrays are the common, correct answer.
-- "facts", "events", and "corrections" are always JSON arrays of strings, never objects, even when empty. An empty list is [], not {}.
+- "facts" and "corrections" are always JSON arrays of strings, never objects, even when empty. An empty list is [], not {}.
 
 Output only the JSON, compact, no prose, no code fence. Exact shape:
-{"facts":[],"events":[],"corrections":[],"valence":0}`
+{"facts":[],"corrections":[]}`
 
 // fencedCodeBlockRE matches a ``` ... ``` fenced code block (any language tag,
 // any content, including newlines) so questionOnlyUserMessage can ignore code
@@ -412,7 +421,7 @@ func questionOnlyUserMessage(user string) bool {
 }
 
 // watcherNoisePrefixes are conservative, observed session-narration openers the
-// watcher model sometimes emits in place of a real fact/event. Prefix-only (not
+// watcher model sometimes emits in place of a real fact. Prefix-only (not
 // substring) so a legitimate fact mentioning "the user" mid-sentence survives.
 //
 // It deliberately excludes what the user "expects": "the user expects tests on
@@ -427,8 +436,8 @@ var watcherNoisePrefixes = []string{
 }
 
 // watcherNoise reports whether content opens with one of watcherNoisePrefixes
-// (case-insensitive). Apply it to the fact and event channels ONLY, never to
-// corrections: a real correction can be phrased exactly like these openers.
+// (case-insensitive). Apply it to the fact channel ONLY, never to corrections:
+// a real correction can be phrased exactly like these openers.
 func watcherNoise(content string) bool {
 	lower := strings.ToLower(strings.TrimSpace(content))
 	for _, p := range watcherNoisePrefixes {
@@ -476,10 +485,16 @@ func extractJSONObject(s string) string {
 	return ""
 }
 
-// flexibleStringList decodes a watcher list field (facts/events/corrections),
+// flexibleStringList decodes a watcher list field (facts/corrections),
 // which should be a JSON array of strings — but some models (observed: qwen) emit
 // an empty object {} for an empty list. Accepts a string array, null/absent, or
 // an empty object; any other shape is an error so the caller can fall back.
+//
+// Every error here reports SHAPE and LENGTH only, never the raw field content:
+// `trimmed` is the watcher's own JSON for this field, which is itself derived
+// from the user's original (possibly secret-shaped) message, and these errors
+// get logged by memWatch's caller on a parse failure -- exactly the raw-
+// watcher-output-in-logs leak the rest of this file guards against.
 func flexibleStringList(raw json.RawMessage) ([]string, error) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 || string(trimmed) == "null" {
@@ -494,9 +509,9 @@ func flexibleStringList(raw json.RawMessage) ([]string, error) {
 		if len(obj) == 0 {
 			return []string{}, nil
 		}
-		return nil, fmt.Errorf("list field is a non-empty object: %s", trimmed)
+		return nil, fmt.Errorf("list field is a non-empty object (%d byte(s))", len(trimmed))
 	}
-	return nil, fmt.Errorf("list field has unexpected shape: %s", trimmed)
+	return nil, fmt.Errorf("list field has unexpected shape (%d byte(s))", len(trimmed))
 }
 
 // parseWatchJSON decodes one candidate JSON object (the model's raw content, or
@@ -516,7 +531,7 @@ func parseWatchJSON(s string) (*watchResult, error) {
 		// must be rejected explicitly rather than read as an all-empty capture.
 		return nil, fmt.Errorf("top-level value is null, not a JSON object")
 	}
-	for _, key := range []string{"facts", "events", "corrections", "valence"} {
+	for _, key := range []string{"facts", "corrections"} {
 		if _, ok := top[key]; !ok {
 			return nil, fmt.Errorf("missing required key %q", key)
 		}
@@ -525,22 +540,11 @@ func parseWatchJSON(s string) (*watchResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("facts: %w", err)
 	}
-	events, err := flexibleStringList(top["events"])
-	if err != nil {
-		return nil, fmt.Errorf("events: %w", err)
-	}
 	corrections, err := flexibleStringList(top["corrections"])
 	if err != nil {
 		return nil, fmt.Errorf("corrections: %w", err)
 	}
-	var valence float64
-	if err := json.Unmarshal(top["valence"], &valence); err != nil {
-		return nil, fmt.Errorf("valence: %w", err)
-	}
-	return &watchResult{
-		Facts: facts, Events: events, Corrections: corrections,
-		Valence: math.Max(-1, math.Min(1, valence)),
-	}, nil
+	return &watchResult{Facts: facts, Corrections: corrections}, nil
 }
 
 func parseWatchContent(content string) (*watchResult, error) {
@@ -601,24 +605,21 @@ func memWatch(user string) *watchResult {
 		} `json:"message"`
 	}
 	if json.Unmarshal(rawBody, &chat) != nil || chat.Message.Content == "" {
-		raw := string(rawBody)
-		if len(raw) > 400 {
-			raw = raw[:400] + "..."
-		}
-		log.Printf("memory watcher: empty/undecodable chat response from model %q, raw: %q", model, raw)
+		// Never log the raw response: it is the user's own message, echoed or
+		// paraphrased by the watcher model, and may itself carry sensitive
+		// content the secret filter never saw (that filter runs on capture
+		// output, not on this transport-level parse failure). Length only.
+		log.Printf("memory watcher: empty/undecodable chat response from model %q (%d bytes)", model, len(rawBody))
 		return nil
 	}
 	// Primary: the content IS the JSON object. Fallback: a model that wraps it in
-	// prose or a fence gets salvaged. On total failure log the raw output, so
-	// "returned nil" is never a mystery about which model said what.
+	// prose or a fence gets salvaged. On total failure, log only the model, the
+	// error, and the content length -- never the raw watcher output, which may
+	// contain the user's own unfiltered text.
 	content := chat.Message.Content
 	p, err := parseWatchContent(content)
 	if err != nil || p == nil {
-		raw := content
-		if len(raw) > 300 {
-			raw = raw[:300] + "..."
-		}
-		log.Printf("memory watcher: model %q returned unparseable output (no JSON object), raw: %q", model, raw)
+		log.Printf("memory watcher: model %q returned unparseable output (no JSON object), %d bytes, error: %v", model, len(content), err)
 		return nil
 	}
 	clean := func(in []string) []string {
@@ -630,8 +631,5 @@ func memWatch(user string) *watchResult {
 		}
 		return out
 	}
-	return &watchResult{
-		Facts: clean(p.Facts), Events: clean(p.Events), Corrections: clean(p.Corrections),
-		Valence: p.Valence,
-	}
+	return &watchResult{Facts: clean(p.Facts), Corrections: clean(p.Corrections)}
 }

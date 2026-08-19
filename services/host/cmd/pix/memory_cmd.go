@@ -23,7 +23,22 @@ func (c *memoryCmd) Help() string {
 	return `Inspect and repair the agent's recall without launching a sandbox.
 
 Facts live in the memory daemon (:11435), started by 'pix serve': these verbs
-auto-start it if it is down, and exit 3 if it cannot be reached.
+auto-start it if it is down (up to 3s), and exit 3 if it cannot be reached.
+They never restart an already-running daemon; run 'pix serve start' to move
+it to a newer version.
+
+What gets stored depends on the capture mode ('pix config get memory_capture'):
+  explicit (default)  nothing is stored unless YOU store it: 'pix memory
+                      remember', or /remember in a sandbox. Turning the mode
+                      back to explicit stops capture at once, for sandboxes
+                      already running too.
+  experimental-auto   a local watcher model also reads your side of each
+                      exchange and stores what it judges worth keeping, up to
+                      10 new rows/UTC day. It reaches sandboxes launched after
+                      the change, and needs a reachable watcher model. Rows it
+                      wrote are tagged 'auto' in recall output; '/forget <id>'
+                      (or 'pix memory forget') is the undo.
+Recall reads the same store in either mode.
 
 The only unreproducible artifact is memory.db; config.toml is recreated with
 "pix config set" and op-refs.env holds op:// references, not secrets, so
@@ -33,19 +48,24 @@ neither needs a backup. Snapshot/restore live on the host binary:
 }
 
 type memoryCmd struct {
-	Recall    memoryRecallCmd    `cmd:"" help:"Search stored facts."`
-	Remember  memoryRememberCmd  `cmd:"" help:"Store a fact. (WRITES)"`
-	Forget    memoryForgetCmd    `cmd:"" help:"Delete a fact by id or id prefix. (WRITES)"`
-	Learnings memoryLearningsCmd `cmd:"" help:"Recurring learnings, promotable into a skill."`
-	Stats     memoryStatsCmd     `cmd:"" help:"Counts by kind and durability."`
+	Recall   memoryRecallCmd   `cmd:"" help:"Search stored facts."`
+	Remember memoryRememberCmd `cmd:"" help:"Store a fact. (WRITES)"`
+	Forget   memoryForgetCmd   `cmd:"" help:"Delete a fact by id or id prefix. (WRITES)"`
+	Stats    memoryStatsCmd    `cmd:"" help:"Counts by kind."`
 }
 
 // withMemory resolves what every subcommand needs (a live-enough daemon, a client,
 // the scope profile), runs the call, and maps the one failure the root cannot
 // classify: a down daemon is exit 3 with the recovery command. EnsureUp is
 // best-effort; on failure the client's own ErrServiceDown lands here.
+//
+// EnsureMemoryTimeout (not the general EnsureTimeout) bounds the wait: this is
+// a READ-SIDE, foreground command a human is staring at, so a cold daemon gets
+// a short 3s allowance rather than the general 15s cold-start budget — and,
+// per U3-lifecycle, this path never restarts an already-running daemon for a
+// version mismatch (that reconciliation lives only on `pix serve start`).
 func withMemory(d *cli.Deps, sub string, call func(memory.CLI) error) error {
-	service.EnsureUp(d.Err, []string{"memory"}, service.EnsureTimeout)
+	service.EnsureUp(d.Err, []string{"memory"}, service.EnsureMemoryTimeout)
 	_, profile, err := workspace.LoadResolvedConfig()
 	if err == nil {
 		err = call(memory.CLI{Client: rpc.MemoryClient(), Out: d.Out, Profile: profile})
@@ -54,7 +74,15 @@ func withMemory(d *cli.Deps, sub string, call func(memory.CLI) error) error {
 	case err == nil:
 		return nil
 	case errors.Is(err, rpc.ErrServiceDown):
-		fmt.Fprintf(d.Err, "pix memory %s: service unreachable: start it with `pix serve`\n", sub)
+		// This must not flatly say "start it with `pix serve`" (architect round
+		// 2): EnsureUp, just above, ALREADY tried to auto-start the daemon —
+		// telling the user to start ANOTHER one when the real cause is a cold
+		// start that outran the 3s EnsureMemoryTimeout budget (sqlite init under
+		// an advisory flock is not always instant) is actively wrong advice, not
+		// merely unhelpful. It is honest about BOTH real causes instead: a slow
+		// autostart that just needs a retry, or a genuinely down/opted-out
+		// daemon that does need starting.
+		fmt.Fprintf(d.Err, "pix memory %s: service unreachable: if it just started, wait a moment and retry — otherwise start it with `pix serve`\n", sub)
 		return cli.SilentError{Code: rpc.ExitServiceDown}
 	default:
 		return fmt.Errorf("memory %s: %w", sub, err)
@@ -94,15 +122,6 @@ type memoryForgetCmd struct {
 
 func (c *memoryForgetCmd) Run(d *cli.Deps) error {
 	return withMemory(d, "forget", func(m memory.CLI) error { return m.Forget(c.ID, c.JSON) })
-}
-
-type memoryLearningsCmd struct {
-	Min  int  `default:"3" help:"Only lessons seen at least N times." placeholder:"N"`
-	JSON bool `help:"Emit machine-readable JSON."`
-}
-
-func (c *memoryLearningsCmd) Run(d *cli.Deps) error {
-	return withMemory(d, "learnings", func(m memory.CLI) error { return m.Learnings(c.Min, c.JSON) })
 }
 
 type memoryStatsCmd struct {

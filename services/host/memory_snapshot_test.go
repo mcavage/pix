@@ -75,8 +75,8 @@ func TestSnapshotRestoreRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("restored db does not verify: %v", err)
 	}
-	if uv != 1 || rows != 3 {
-		t.Errorf("restored db user_version=%d rows=%d, want 1/3", uv, rows)
+	if uv != memSchemaVersion || rows != 3 {
+		t.Errorf("restored db user_version=%d rows=%d, want %d/3", uv, rows, memSchemaVersion)
 	}
 
 	// The store must be usable, and keyword recall must find a restored term.
@@ -110,8 +110,8 @@ func TestSnapshotIsHotAndDoesNotTouchTheSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hot snapshot failed: %v", err)
 	}
-	if res.Rows != 2 || res.UserVersion != 1 {
-		t.Errorf("snapshot reported rows=%d user_version=%d, want 2/1", res.Rows, res.UserVersion)
+	if res.Rows != 2 || res.UserVersion != memSchemaVersion {
+		t.Errorf("snapshot reported rows=%d user_version=%d, want 2/%d", res.Rows, res.UserVersion, memSchemaVersion)
 	}
 	if res.Size <= 0 {
 		t.Errorf("snapshot size = %d, want > 0", res.Size)

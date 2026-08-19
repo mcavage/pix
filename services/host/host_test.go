@@ -3,7 +3,6 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -195,44 +194,12 @@ func TestMemProfileIsolation(t *testing.T) {
 }
 
 // TestMemProfileMigration opens a store over a DB created WITHOUT the profile
-// column (a legacy store) and confirms the idempotent ALTER runs, that legacy
-// rows are treated as the default bucket (visible under every profile), and that
-// new writes still work.
+// column (a legacy store, legacySchemaNoProfile/legacyDB in
+// memory_schema_v2_test.go) and confirms the idempotent ALTER runs, that
+// legacy rows are treated as the default bucket (visible under every
+// profile), and that new writes still work.
 func TestMemProfileMigration(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "legacy.db")
-
-	// Build a legacy DB: memories table WITHOUT the profile column.
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	const legacySchema = `
-CREATE TABLE memories (
-  rowid INTEGER PRIMARY KEY, id TEXT UNIQUE NOT NULL, kind TEXT NOT NULL, content TEXT NOT NULL,
-  content_hash TEXT NOT NULL, durability TEXT NOT NULL, confidence REAL NOT NULL,
-  frequency INTEGER NOT NULL DEFAULT 1, reward REAL NOT NULL DEFAULT 0, access_count INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL, last_accessed TEXT, expires_at TEXT, source TEXT NOT NULL,
-  tags TEXT NOT NULL DEFAULT '[]', project TEXT, embedding TEXT, deleted_at TEXT
-);
-CREATE VIRTUAL TABLE memories_fts USING fts5(content);`
-	if _, err := db.Exec(legacySchema); err != nil {
-		t.Fatalf("legacy schema: %v", err)
-	}
-	const legacyContent = "legacy migration widget fact"
-	res, err := db.Exec(`INSERT INTO memories
-		(id, kind, content, content_hash, durability, confidence, reward, source, tags, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?)`,
-		"legacy-id", "fact", legacyContent, memHash(legacyContent), "durable", 0.8, 0.0, "user", "[]", memNowIso())
-	if err != nil {
-		t.Fatalf("legacy insert: %v", err)
-	}
-	rowid, _ := res.LastInsertId()
-	if _, err := db.Exec("INSERT INTO memories_fts (rowid, content) VALUES (?, ?)", rowid, legacyContent); err != nil {
-		t.Fatalf("legacy fts insert: %v", err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
+	path := legacyDB(t, legacySchemaNoProfile, map[string]legacyRow{"legacy-id": {source: "user"}}, 0)
 
 	// Reopen through newMemStore — the ALTER migration must run cleanly.
 	st, err := newMemStore(path, nil)
@@ -243,11 +210,11 @@ CREATE VIRTUAL TABLE memories_fts USING fts5(content);`
 	// The legacy row (profile NULL) is the default bucket: visible under default
 	// AND under any named profile.
 	for _, profile := range []string{"default", "work"} {
-		hits, err := st.recall("legacy widget", 8, 100000, "", "", profile)
+		hits, err := st.recall("content", 8, 100000, "", "", profile)
 		if err != nil {
 			t.Fatalf("recall(%q): %v", profile, err)
 		}
-		if len(hits) != 1 || hits[0].content != legacyContent {
+		if len(hits) != 1 || hits[0].content != "content for legacy-id" {
 			t.Fatalf("recall(%q) did not surface the legacy row: %+v", profile, hits)
 		}
 	}
@@ -258,10 +225,15 @@ CREATE VIRTUAL TABLE memories_fts USING fts5(content);`
 	}
 }
 
+// boolPtr is the plumbing helper for plugin.Health's tri-state Vector/Capture
+// fields (nil = unknown, see embedHealthState/watcherHealthState) in tests
+// that need to assert a definite true/false, not the zero value.
+func boolPtr(b bool) *bool { return &b }
+
 // fakeKeywordEmbedder returns a one-hot vector indexed by a string's FIRST
 // token, so two strings that share a first token are cosine-identical (1.0)
 // while keeping distinct content hashes. Deterministic; no Ollama needed. Used
-// to exercise findSimilar/synthesize (the vector paths) in isolation tests.
+// to exercise findSimilar (the vector paths) in isolation tests.
 func fakeKeywordEmbedder(dims int) func(string) []float64 {
 	idx := map[string]int{}
 	next := 0
@@ -306,23 +278,6 @@ func profileOf(t *testing.T, st *memStore, id string) string {
 		return p.String
 	}
 	return ""
-}
-
-// bucketSurvivor returns the id and frequency of the single active row in one
-// exact storage bucket. It fails the test if the bucket does not hold exactly
-// one active row, so callers get a clear error rather than a silent first-row
-// pick. Used to assert per-bucket survivor frequency after synthesize.
-func bucketSurvivor(t *testing.T, st *memStore, profile string) (string, int) {
-	t.Helper()
-	if got := bucketActive(t, st, profile); got != 1 {
-		t.Fatalf("bucketSurvivor(%q): want exactly 1 active row, got %d", profile, got)
-	}
-	var id string
-	var freq int
-	if err := st.db.QueryRow("SELECT id, frequency FROM memories WHERE deleted_at IS NULL AND "+memProfileStorage, profile).Scan(&id, &freq); err != nil {
-		t.Fatalf("bucketSurvivor(%q): %v", profile, err)
-	}
-	return id, freq
 }
 
 // TestMemDedupeIsolation proves reaffirm is scoped to the STORAGE bucket: the
@@ -478,79 +433,6 @@ func TestMemFindSimilarIsolation(t *testing.T) {
 	}
 }
 
-// TestMemSynthesizeIsolation proves synthesize merges only WITHIN a storage
-// bucket. Seed a vector-identical pair in each of work/personal plus a lone
-// default row; after synthesis each bucket keeps exactly one row (its own pair
-// merged), no row changed profile, and merged==2 (never a cross-profile merge
-// that would have collapsed everything into one bucket).
-func TestMemSynthesizeIsolation(t *testing.T) {
-	st, err := newMemStore(":memory:", fakeKeywordEmbedder(16))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// mkN remembers content in a bucket `times` times. The first insert creates
-	// the row (frequency 1); each subsequent same-bucket remember reaffirms it
-	// (frequency +1). Reaffirm returns the same id, so the id is stable. This
-	// lets us give each seed row a KNOWN, distinct starting frequency.
-	mkN := func(content, profile string, times int) string {
-		var id string
-		for i := 0; i < times; i++ {
-			r, err := st.remember(rememberInput{content: content, profile: profile})
-			if err != nil {
-				t.Fatal(err)
-			}
-			id = r["id"].(string)
-		}
-		return id
-	}
-	// All "alpha *" share a vector (cosine 1.0), so global (broken) synthesis
-	// would merge all five into one bucket; scoped synthesis merges per bucket.
-	// Frequencies are chosen so the survivor of each within-bucket merge has a
-	// KNOWN total, and so any cross-bucket frequency transfer (the bug) would
-	// change it: synthesizeBucket bumps the survivor by frequency += dead.freq,
-	// and the survivor is the highest-frequency row (ORDER BY frequency DESC).
-	//   work:     alpha one freq 3 (survivor) + alpha two freq 1  -> survivor 4
-	//   personal: alpha four freq 2 (survivor) + alpha three freq 1 -> survivor 3
-	//   default:  alpha five freq 1 (lone, nothing to merge)      -> stays 1
-	mkN("alpha one", "work", 3)
-	mkN("alpha two", "work", 1)
-	mkN("alpha three", "personal", 1)
-	mkN("alpha four", "personal", 2)
-	defID := mkN("alpha five", "default", 1)
-
-	res := st.synthesize(0.9)
-	merged, _ := res["merged"].(int)
-	if merged != 2 {
-		t.Errorf("merged = %d, want 2 (one within work, one within personal; never across)", merged)
-	}
-	if got := bucketActive(t, st, "work"); got != 1 {
-		t.Errorf("work bucket active = %d, want 1", got)
-	}
-	if got := bucketActive(t, st, "personal"); got != 1 {
-		t.Errorf("personal bucket active = %d, want 1", got)
-	}
-	if got := bucketActive(t, st, "default"); got != 1 {
-		t.Errorf("default bucket active = %d, want 1 (lone row, nothing to merge)", got)
-	}
-	if got := profileOf(t, st, defID); got != "default" {
-		t.Errorf("default row profile = %q after synthesize, want default (unchanged)", got)
-	}
-
-	// Survivor frequencies must reflect ONLY same-bucket merges. Cross-profile
-	// frequency transfer (a synthesizeBucket scoped to memProfileVisible, which
-	// would pull the default row's frequency into the work/personal survivor)
-	// would push these totals above the within-bucket expectation.
-	if _, freq := bucketSurvivor(t, st, "work"); freq != 4 {
-		t.Errorf("work survivor frequency = %d, want 4 (3 + 1, same bucket only)", freq)
-	}
-	if _, freq := bucketSurvivor(t, st, "personal"); freq != 3 {
-		t.Errorf("personal survivor frequency = %d, want 3 (2 + 1, same bucket only)", freq)
-	}
-	if _, freq := bucketSurvivor(t, st, "default"); freq != 1 {
-		t.Errorf("default survivor frequency = %d, want 1 (lone row, no merge, none transferred out)", freq)
-	}
-}
-
 // TestMemForgetIsolation proves forget is scoped to the VISIBLE set: a profile
 // cannot delete a SIBLING's row by its id/prefix, but can forget its own and
 // default rows.
@@ -602,6 +484,60 @@ func TestMemForgetIsolation(t *testing.T) {
 	// The owner can still forget its own work row.
 	if !st.forget(workID, "work") {
 		t.Error("work should forget its own row")
+	}
+}
+
+// TestForgetThenBareDeletedAtClearMissesKeywordRecall is the SEC-3
+// regression: docs/memory.md used to say clearing deleted_at BY ITSELF
+// "restores that row exactly as recall() reads it", which is not true for
+// keyword (FTS) recall -- forget() always drops the row's FTS entry
+// alongside stamping deleted_at (see softDelete), so a bare `UPDATE memories
+// SET deleted_at = NULL` leaves the row un-searchable by keyword until its
+// FTS entry is rebuilt too. Uses a no-embedder store so FTS is the only
+// recall signal, isolating exactly what the corrected docs call out.
+func TestForgetThenBareDeletedAtClearMissesKeywordRecall(t *testing.T) {
+	st, err := newMemStore(":memory:", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := st.remember(rememberInput{content: "the roadmap review is postponed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := res["id"].(string)
+	if !st.forget(id, "default") {
+		t.Fatal("forget should succeed")
+	}
+
+	// The bare, docs-used-to-say-this-is-enough recipe: clear deleted_at only.
+	if _, err := st.db.Exec("UPDATE memories SET deleted_at = NULL WHERE id = ?", id); err != nil {
+		t.Fatal(err)
+	}
+
+	// Visible in the unbounded listing (deleted_at IS NULL is the only gate there)...
+	starHits, err := st.recall("*", 50, 100000, "", "", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, h := range starHits {
+		if h.id == id {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("clearing deleted_at should restore the row to the unbounded '*' listing")
+	}
+
+	// ...but NOT found by an ordinary keyword search: its FTS entry is still gone.
+	kwHits, err := st.recall("roadmap", 50, 100000, "", "", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range kwHits {
+		if h.id == id {
+			t.Fatal("a bare deleted_at clear must NOT be keyword-searchable (its FTS entry was never rebuilt) -- this is exactly why the docs correction exists, and why the correct recipe is the two-statement one below, not this one")
+		}
 	}
 }
 

@@ -47,6 +47,26 @@ func TestResolveServices(t *testing.T) {
 	}
 }
 
+// TestApplyMemoryModelEnvSetsCaptureMode proves standalone propagation: BOTH
+// `serve` and the bare `pix-host memory` daemon (runMemory) route through
+// this one function, so cfg.MemoryCapture reaches MEMORY_CAPTURE_MODE
+// without either caller needing its own translation, and an explicit env
+// override still wins.
+func TestApplyMemoryModelEnvSetsCaptureMode(t *testing.T) {
+	t.Setenv("MEMORY_CAPTURE_MODE", "")
+	os.Unsetenv("MEMORY_CAPTURE_MODE")
+	applyMemoryModelEnv(&config.Config{MemoryCapture: "experimental-auto"})
+	if got := os.Getenv("MEMORY_CAPTURE_MODE"); got != "experimental-auto" {
+		t.Fatalf("MEMORY_CAPTURE_MODE = %q, want experimental-auto", got)
+	}
+
+	t.Setenv("MEMORY_CAPTURE_MODE", "explicit")
+	applyMemoryModelEnv(&config.Config{MemoryCapture: "experimental-auto"})
+	if got := os.Getenv("MEMORY_CAPTURE_MODE"); got != "explicit" {
+		t.Fatalf("an explicit env override was clobbered: got %q, want explicit", got)
+	}
+}
+
 // --- F5: an external plugin unit refuses to launch unless the bytes match -----
 
 // TestLaunchRefusesUnpinnedAndMismatchedExternal drives the REAL refusal path:
@@ -166,25 +186,19 @@ func (stubStore) Remember(r plugin.RememberReq) (plugin.RememberResp, error) {
 	return plugin.RememberResp{ID: "id-1", Reaffirmed: false}, nil
 }
 func (stubStore) Recall(r plugin.RecallReq) (plugin.RecallResp, error) {
-	return plugin.RecallResp{Hits: []plugin.Hit{{ID: "id-1", Content: "hello", Score: 0.5, Kind: "fact", Durability: "durable", Project: ""}}}, nil
+	return plugin.RecallResp{Hits: []plugin.Hit{{ID: "id-1", Content: "hello", Score: 0.5, Kind: "fact", Project: ""}}}, nil
 }
 func (stubStore) Forget(r plugin.ForgetReq) (plugin.ForgetResp, error) {
 	return plugin.ForgetResp{OK: r.ID != ""}, nil
-}
-func (stubStore) Synthesize(plugin.SynthesizeReq) (plugin.SynthesizeResp, error) {
-	return plugin.SynthesizeResp{Merged: 1, Expired: 2}, nil
-}
-func (stubStore) Promotable(plugin.PromotableReq) (plugin.PromotableResp, error) {
-	return plugin.PromotableResp{}, nil
 }
 func (stubStore) Observe(plugin.ObserveReq) (plugin.ObserveResp, error) {
 	return plugin.ObserveResp{Accepted: true}, nil
 }
 func (stubStore) Stats(string) (plugin.Stats, error) {
-	return plugin.Stats{Active: 3, Durable: 2, Perishable: 1}, nil
+	return plugin.Stats{Active: 3, Facts: 2, Learnings: 1}, nil
 }
 func (stubStore) Health() (plugin.Health, error) {
-	return plugin.Health{OK: true, Vector: true, Capture: true, WatcherModel: "stub-model"}, nil
+	return plugin.Health{OK: true, Vector: boolPtr(true), Capture: boolPtr(true), WatcherModel: "stub-model"}, nil
 }
 
 func rpcCall(t *testing.T, srv *httptest.Server, method string) map[string]any {
@@ -228,7 +242,7 @@ func TestMemoryProxyMuxContract(t *testing.T) {
 
 	// stats: same fields the built-in mux emits.
 	sresult, _ := rpcCall(t, srv, "stats")["result"].(map[string]any)
-	for _, k := range []string{"active", "durable", "perishable", "facts", "learnings", "deleted"} {
+	for _, k := range []string{"active", "facts", "learnings", "deleted"} {
 		if _, present := sresult[k]; !present {
 			t.Errorf("stats result missing %q: %v", k, sresult)
 		}

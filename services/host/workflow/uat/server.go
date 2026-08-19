@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -19,6 +20,49 @@ type browserEntry struct {
 	ready chan struct{}
 	b     Browser
 	err   error
+}
+
+type browserCapabilityState struct {
+	Available                bool     `json:"available"`
+	DedicatedProfile         string   `json:"dedicated_profile"`
+	FreshProfilePerRun       bool     `json:"fresh_profile_per_run"`
+	UsesNormalBrowserProfile bool     `json:"uses_normal_browser_profile"`
+	Actions                  []string `json:"actions"`
+}
+
+type capabilitiesResponse struct {
+	runnerCapabilities
+	Sandbox     bool                   `json:"sandbox"`
+	Browser     browserCapabilityState `json:"browser"`
+	RetryReport map[string]string      `json:"retry_report"`
+}
+
+func (s *MCPServer) capabilities() capabilitiesResponse {
+	browserState := browserCapabilityState{
+		DedicatedProfile:         "not_bootstrapped",
+		FreshProfilePerRun:       true,
+		UsesNormalBrowserProfile: false,
+		Actions:                  []string{"click", "read_visible_text", "snapshot"},
+	}
+	if s.browserFactory != nil {
+		if _, err := findChrome(); err == nil {
+			browserState.Available = true
+		}
+	}
+	if profile, err := PeekProfilePath(); err == nil {
+		if info, statErr := os.Stat(profile); statErr == nil && info.IsDir() {
+			browserState.DedicatedProfile = "ready"
+		}
+	}
+	if !browserState.Available {
+		browserState.DedicatedProfile = "unavailable"
+	}
+	return capabilitiesResponse{
+		runnerCapabilities: s.runner.capabilities(),
+		Sandbox:            true,
+		Browser:            browserState,
+		RetryReport:        s.retryReport,
+	}
 }
 
 type toolDescriptor struct {
@@ -355,13 +399,7 @@ func (s *MCPServer) handleToolCall(ctx context.Context, id interface{}, params j
 
 	switch p.Name {
 	case "uat_capabilities":
-		respMap := map[string]interface{}{
-			"runner":       true,
-			"browser":      true,
-			"sandbox":      true,
-			"retry_report": s.retryReport,
-		}
-		respBytes, _ := json.Marshal(respMap)
+		respBytes, _ := json.Marshal(s.capabilities())
 		textResult = string(respBytes)
 	case "uat_submit":
 		commit := getString("commit")
@@ -433,7 +471,7 @@ func (s *MCPServer) handleToolCall(ctx context.Context, id interface{}, params j
 
 		// Use safe ReadArtifact
 		runDir := filepath.Join(s.stateDir, "runs", runID)
-		b, nextCursor, readErr := hostuat.ReadArtifact(runDir, artifactPath, 1<<20, int(tail), cursor)
+		b, nextCursor, readErr := hostuat.ReadArtifact(runDir, artifactPath, candidateLogMaxBytes, int(tail), cursor)
 		if readErr != nil {
 			err = fmt.Errorf("read artifact: %w", readErr)
 			break

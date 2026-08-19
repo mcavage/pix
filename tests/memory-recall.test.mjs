@@ -75,6 +75,20 @@ function getRecallHandler(mod, pi) {
 	return handler;
 }
 
+// Generic sibling of getRecallHandler for /remember and /forget, used by the
+// dead-daemon/RPC-error and miss-severity tests below.
+function getCommandHandler(mod, commandName) {
+	let handler = null;
+	mod.default({
+		on() {},
+		registerCommand(name, cfg) {
+			if (name === commandName) handler = cfg.handler;
+		},
+	});
+	assert.ok(handler, `/${commandName} command registered`);
+	return handler;
+}
+
 // Captures every registered slash command and tool so tool tests can exercise
 // memory_recall/memory_stats directly.
 function capturePi(mod) {
@@ -134,7 +148,7 @@ test("an explicit /recall query is passed through unchanged, keeping the daemon'
 });
 
 test("/recall on '*' appends a truncation notice when the daemon returns a full 100-hit page", async (t) => {
-	const hits = Array.from({ length: 100 }, (_, i) => ({ id: `id${i}`.padEnd(8, "0"), kind: "fact", durability: "durable", content: `fact ${i}` }));
+	const hits = Array.from({ length: 100 }, (_, i) => ({ id: `id${i}`.padEnd(8, "0"), kind: "fact", content: `fact ${i}` }));
 	const { server } = makeFakeDaemon(() => ({ hits }));
 	t.after(() => server.close());
 	const MEMORY_URL = await listen(server);
@@ -168,29 +182,73 @@ test("formatHitLine includes the timestamp when createdAt is valid, omits it whe
 	const withDate = mod.formatHitLine({
 		id: "abcdef1234567890",
 		kind: "fact",
-		durability: "durable",
 		content: "hello",
 		createdAt: "2026-07-22T10:59:34-07:00",
 	});
-	assert.equal(withDate, "• [abcdef12] (fact/durable) 2026-07-22T10:59:34-07:00 hello");
+	assert.equal(withDate, "• [abcdef12] (fact) 2026-07-22T10:59:34-07:00 hello");
 
 	const noDate = mod.formatHitLine({
 		id: "abcdef1234567890",
 		kind: "fact",
-		durability: "durable",
 		content: "hello",
 		createdAt: null,
 	});
-	assert.equal(noDate, "• [abcdef12] (fact/durable) hello");
+	assert.equal(noDate, "• [abcdef12] (fact) hello");
 
 	const badDate = mod.formatHitLine({
 		id: "abcdef1234567890",
 		kind: "fact",
-		durability: "durable",
 		content: "hello",
 		createdAt: "garbage",
 	});
-	assert.equal(badDate, "• [abcdef12] (fact/durable) hello");
+	assert.equal(badDate, "• [abcdef12] (fact) hello");
+});
+
+// formatHitLine used to also render a `/durability` segment; the write path
+// makes every row durable now (see extensions/memory-recall.ts), so the
+// per-hit annotation was deleted along with the perishable score filter
+// below. A hit that still carries a legacy durability field must not leak it
+// back into the line.
+test("formatHitLine no longer renders a durability segment, even if a hit still carries one", () => {
+	const line = pureMod.formatHitLine({ id: "abcdef1234567890", kind: "fact", durability: "perishable", content: "hello" });
+	assert.equal(line, "• [abcdef12] (fact) hello");
+});
+
+// DX-6a: displayKind is a render-only alias, no schema migration. A stored
+// "learning" kind renders as "correction"; every other kind, including one
+// that merely contains the substring "learning", passes through unchanged.
+test("displayKind aliases learning to correction and leaves everything else unchanged", () => {
+	const cases = [
+		["learning", "correction"],
+		["fact", "fact"],
+		["", ""],
+		["learnings", "learnings"],
+		["preference", "preference"],
+	];
+	for (const [kind, want] of cases) {
+		assert.equal(pureMod.displayKind(kind), want, `displayKind(${JSON.stringify(kind)})`);
+	}
+});
+
+// The alias applies only to the rendered line; a hit's raw kind field (as
+// would be re-serialized to JSON) is untouched by formatHitLine.
+test("formatHitLine renders a learning hit's kind as correction, other kinds unchanged", () => {
+	const learning = pureMod.formatHitLine({ id: "abcdef1234567890", kind: "learning", content: "hello" });
+	assert.equal(learning, "• [abcdef12] (correction) hello");
+
+	const fact = pureMod.formatHitLine({ id: "abcdef1234567890", kind: "fact", content: "hello" });
+	assert.equal(fact, "• [abcdef12] (fact) hello");
+});
+
+// A watcher-sourced (experimental-auto) row renders an "/auto" tag so it is
+// visibly distinct from an explicit one; anything else (or an absent source)
+// renders exactly as before.
+test("formatHitLine tags a watcher-sourced hit as auto, leaves an explicit hit untagged", () => {
+	const auto = pureMod.formatHitLine({ id: "abcdef1234567890", kind: "fact", content: "hello", source: "watcher" });
+	assert.equal(auto, "• [abcdef12] (fact/auto) hello");
+
+	const explicit = pureMod.formatHitLine({ id: "abcdef1234567890", kind: "fact", content: "hello", source: "user" });
+	assert.equal(explicit, "• [abcdef12] (fact) hello");
 });
 
 // ── (3) command errors notify a concise, actionable message, never vanish ──
@@ -236,6 +294,139 @@ test("a JSON-RPC error surfaces a visible error instead of '(nothing)'", async (
 	assert.equal(notes.length, 1);
 	assert.equal(notes[0].level, "error");
 	assert.match(notes[0].msg, /database unavailable/);
+});
+
+// ── /remember and /forget mirror /recall's try/catch: a dead daemon or an
+// RPC error must surface as a visible ctx.ui.notify error, never vanish into
+// safe()'s undefined. These commands used to be wrapped in safe(), which
+// swallowed exactly this failure mode.
+
+test("/remember: a transport error from a dead daemon surfaces a visible error notification", async () => {
+	const mod = await loadWithEnv({ MEMORY_URL: "http://127.0.0.1:1", MEMORY_COMMAND_TIMEOUT_MS: "500" });
+	const handler = getCommandHandler(mod, "remember");
+	const notes = [];
+	await handler("docker sandboxes are great", fakeCtx(notes));
+	assert.equal(notes.length, 1, "an error must be reported, not swallowed");
+	assert.equal(notes[0].level, "error");
+	assert.match(notes[0].msg, /\/remember failed/i);
+});
+
+test("/remember: a JSON-RPC error surfaces a visible error instead of silently vanishing", async (t) => {
+	const server = http.createServer((req, res) => {
+		let body = "";
+		req.on("data", (c) => (body += c));
+		req.on("end", () => {
+			const parsed = JSON.parse(body);
+			res.writeHead(200, { "content-type": "application/json" });
+			res.end(JSON.stringify({ jsonrpc: "2.0", id: parsed.id, error: { code: -32000, message: "database unavailable" } }));
+		});
+	});
+	t.after(() => server.close());
+	const mod = await loadWithEnv({ MEMORY_URL: await listen(server) });
+	const handler = getCommandHandler(mod, "remember");
+	const notes = [];
+	await handler("docker sandboxes are great", fakeCtx(notes));
+	assert.equal(notes.length, 1);
+	assert.equal(notes[0].level, "error");
+	assert.match(notes[0].msg, /database unavailable/);
+});
+
+test("/remember: blank args show usage and never call the daemon or claim success", async (t) => {
+	const { server, requests } = makeFakeDaemon(() => ({ id: "should-not-be-reached", reaffirmed: false }));
+	t.after(() => server.close());
+	const mod = await loadWithEnv({ MEMORY_URL: await listen(server) });
+	const handler = getCommandHandler(mod, "remember");
+	for (const blank of ["", "   ", undefined, null]) {
+		const notes = [];
+		await handler(blank, fakeCtx(notes));
+		assert.equal(requests.length, 0, "blank /remember must never reach the daemon");
+		assert.equal(notes.length, 1);
+		assert.match(notes[0].msg, /usage: \/remember/i);
+		assert.doesNotMatch(notes[0].msg, /remembered|reaffirmed/i);
+	}
+});
+
+test("/remember: a daemon response with an empty id is a visible error, never 'remembered'", async (t) => {
+	const { server } = makeFakeDaemon(() => ({ id: "", reaffirmed: false }));
+	t.after(() => server.close());
+	const mod = await loadWithEnv({ MEMORY_URL: await listen(server) });
+	const handler = getCommandHandler(mod, "remember");
+	const notes = [];
+	await handler("docker sandboxes are great", fakeCtx(notes));
+	assert.equal(notes.length, 1);
+	assert.equal(notes[0].level, "error");
+	assert.doesNotMatch(notes[0].msg, /^remembered$|^reaffirmed$/i);
+});
+
+test("/forget: a transport error from a dead daemon surfaces a visible error notification", async () => {
+	const mod = await loadWithEnv({ MEMORY_URL: "http://127.0.0.1:1", MEMORY_COMMAND_TIMEOUT_MS: "500" });
+	const handler = getCommandHandler(mod, "forget");
+	const notes = [];
+	await handler("abcdef1234567890", fakeCtx(notes));
+	assert.equal(notes.length, 1, "an error must be reported, not swallowed");
+	assert.equal(notes[0].level, "error");
+	assert.match(notes[0].msg, /\/forget failed/i);
+});
+
+test("/forget: a JSON-RPC error surfaces a visible error instead of silently vanishing", async (t) => {
+	const server = http.createServer((req, res) => {
+		let body = "";
+		req.on("data", (c) => (body += c));
+		req.on("end", () => {
+			const parsed = JSON.parse(body);
+			res.writeHead(200, { "content-type": "application/json" });
+			res.end(JSON.stringify({ jsonrpc: "2.0", id: parsed.id, error: { code: -32000, message: "database unavailable" } }));
+		});
+	});
+	t.after(() => server.close());
+	const mod = await loadWithEnv({ MEMORY_URL: await listen(server) });
+	const handler = getCommandHandler(mod, "forget");
+	const notes = [];
+	// A hex-ish id skips the /forget lookup recall() and goes straight to
+	// forget(), which is the RPC that errors here.
+	await handler("abcdef1234567890", fakeCtx(notes));
+	assert.equal(notes.length, 1);
+	assert.equal(notes[0].level, "error");
+	assert.match(notes[0].msg, /database unavailable/);
+});
+
+// A forget MISS (the daemon responds, but {ok:false} because the id/query
+// didn't match anything) is a distinct case from a transport/RPC error: it's
+// not swallowed either way, but it must notify at "error" severity, not
+// "info" — the caller asked to delete something specific and nothing happened.
+// The message must also name the actual reasons an id can miss (absent, already
+// forgotten, or a different profile scope), not complain about formatting —
+// the id shape was already accepted before this RPC ever fired.
+test("/forget: an id miss (daemon responds ok:false) notifies at error severity with an actionable, non-formatting message", async (t) => {
+	const { server } = makeFakeDaemon((req) => (req.method === "forget" ? { ok: false } : { hits: [] }));
+	t.after(() => server.close());
+	const MEMORY_URL = await listen(server);
+	const mod = await loadWithEnv({ MEMORY_URL });
+	const handler = getCommandHandler(mod, "forget");
+	const notes = [];
+	await handler("abcdef1234567890", fakeCtx(notes));
+	assert.equal(notes.length, 1);
+	assert.equal(notes[0].level, "error", "a forget miss must be a visible error, not an info-level no-op");
+	assert.match(notes[0].msg, /absent|already forgotten|different profile/i, "must name a concrete reason, not just complain about id formatting");
+	assert.doesNotMatch(notes[0].msg, /use a full id from \/recall/i, "must not reduce to a formatting complaint");
+});
+
+// A QUERY miss (no id given, and /recall found nothing to resolve it to) is a
+// distinct path from the id-miss above: the lookup recall() itself came back
+// empty, so /forget never even reached the daemon's forget RPC. This must
+// also be an error, not an info no-op, and must tell the caller what to try.
+test("/forget: a query with no match notifies at error severity with an actionable message", async (t) => {
+	const { server } = makeFakeDaemon(() => ({ hits: [] }));
+	t.after(() => server.close());
+	const MEMORY_URL = await listen(server);
+	const mod = await loadWithEnv({ MEMORY_URL });
+	const handler = getCommandHandler(mod, "forget");
+	const notes = [];
+	await handler("some query that matches nothing", fakeCtx(notes));
+	assert.equal(notes.length, 1);
+	assert.equal(notes[0].level, "error", "a forget query miss must be a visible error, not an info-level no-op");
+	assert.match(notes[0].msg, /no memory matched/i);
+	assert.match(notes[0].msg, /\/recall/, "must point the caller at /recall as the actionable next step");
 });
 
 // The command-timeout MAGNITUDE (200ms here vs. the real 10s production
@@ -328,6 +519,16 @@ test("buildRecallBlock itself rejects on a dead daemon (safe() is the hook's job
 	await assert.rejects(() => mod.buildRecallBlock("some prompt"));
 });
 
+test("buildRecallBlock returns null on a zero-hit response, never an empty header-only block", async (t) => {
+	const { server } = makeFakeDaemon(() => ({ hits: [] }));
+	t.after(() => server.close());
+	const MEMORY_URL = await listen(server);
+	const mod = await loadWithEnv({ MEMORY_URL });
+
+	const block = await mod.buildRecallBlock("some prompt");
+	assert.equal(block, null, "no hits must short-circuit to null, not the header rendered with zero rows");
+});
+
 // ── typed agent-facing tools (memory_recall/memory_stats, read-only) ───────
 
 test("only the two read-only memory tools are registered; write/delete stay human slash commands", async () => {
@@ -336,7 +537,7 @@ test("only the two read-only memory tools are registered; write/delete stay huma
 	assert.deepEqual([...tools.keys()].sort(), ["memory_recall", "memory_stats"]);
 	assert.ok(!tools.has("memory_remember"), "memory_remember must not be agent-callable");
 	assert.ok(!tools.has("memory_forget"), "memory_forget must not be agent-callable");
-	for (const name of ["recall", "remember", "forget", "learnings"]) {
+	for (const name of ["recall", "remember", "forget"]) {
 		assert.ok(commands.has(name), `/${name} command still registered`);
 	}
 });
@@ -344,7 +545,7 @@ test("only the two read-only memory tools are registered; write/delete stay huma
 test("memory_recall defaults query to '*', requests up to 100 rows with a large charBudget, and returns formatted hit lines", async (t) => {
 	const { server, requests } = makeFakeDaemon(() => ({
 		hits: [
-			{ id: "abcdef1234567890", kind: "fact", durability: "durable", content: "hello", createdAt: null },
+			{ id: "abcdef1234567890", kind: "fact", content: "hello", createdAt: null },
 		],
 	}));
 	t.after(() => server.close());
@@ -357,7 +558,7 @@ test("memory_recall defaults query to '*', requests up to 100 rows with a large 
 	assert.equal(requests[0].params.query, "*");
 	assert.equal(requests[0].params.limit, 100, "'*' defaults to the full 100-row cap, not the search default of 6");
 	assert.equal(requests[0].params.charBudget, 1_000_000, "'*' must not be truncated by the daemon's 1200-char default");
-	assert.equal(toolText(r), "• [abcdef12] (fact/durable) hello");
+	assert.equal(toolText(r), "• [abcdef12] (fact) hello");
 });
 
 test("memory_recall keeps a search default of 6 (and no charBudget override) for an explicit non-'*' query", async (t) => {
@@ -393,7 +594,7 @@ test("memory_recall passes an explicit query through and clamps limit to 1..100"
 });
 
 test("memory_recall appends a clear truncation line when hits.length equals the effective limit", async (t) => {
-	const hits = Array.from({ length: 3 }, (_, i) => ({ id: `id${i}`.padEnd(8, "0"), kind: "fact", durability: "durable", content: `fact ${i}` }));
+	const hits = Array.from({ length: 3 }, (_, i) => ({ id: `id${i}`.padEnd(8, "0"), kind: "fact", content: `fact ${i}` }));
 	const { server } = makeFakeDaemon(() => ({ hits }));
 	t.after(() => server.close());
 	const MEMORY_URL = await listen(server);
@@ -405,7 +606,7 @@ test("memory_recall appends a clear truncation line when hits.length equals the 
 });
 
 test("memory_recall does NOT append a truncation line when hits.length is below the limit", async (t) => {
-	const hits = [{ id: "id00000", kind: "fact", durability: "durable", content: "only one" }];
+	const hits = [{ id: "id00000", kind: "fact", content: "only one" }];
 	const { server } = makeFakeDaemon(() => ({ hits }));
 	t.after(() => server.close());
 	const MEMORY_URL = await listen(server);
@@ -422,8 +623,11 @@ test("memory_recall throws (does not swallow) when the daemon is unreachable", a
 	await assert.rejects(() => tools.get("memory_recall").execute("id", {}, undefined, undefined, noopCtx));
 });
 
+// memory_stats is a raw passthrough of whatever the host returns; the host's
+// durable/perishable split is gone end to end now, so this just pins the
+// remaining shape rather than special-casing or stripping anything client-side.
 test("memory_stats calls the stats RPC with the active profile and returns the raw counts", async (t) => {
-	const { server, requests } = makeFakeDaemon(() => ({ active: 3, durable: 2, perishable: 1 }));
+	const { server, requests } = makeFakeDaemon(() => ({ active: 3, facts: 2, learnings: 1 }));
 	t.after(() => server.close());
 	const MEMORY_URL = await listen(server);
 	const mod = await loadWithEnv({ MEMORY_URL });
@@ -431,7 +635,7 @@ test("memory_stats calls the stats RPC with the active profile and returns the r
 
 	const r = await tools.get("memory_stats").execute("id", {}, undefined, undefined, noopCtx);
 	assert.equal(requests[0].method, "stats");
-	assert.deepEqual(JSON.parse(toolText(r)), { active: 3, durable: 2, perishable: 1 });
+	assert.deepEqual(JSON.parse(toolText(r)), { active: 3, facts: 2, learnings: 1 });
 });
 
 test("memory_stats throws when the daemon is unreachable", async () => {
@@ -440,50 +644,8 @@ test("memory_stats throws when the daemon is unreachable", async () => {
 	await assert.rejects(() => tools.get("memory_stats").execute("id", {}, undefined, undefined, noopCtx));
 });
 
-// ── buildRecallBlock: perishable relevance floor (silent injection only) ───
-
-test("buildRecallBlock omits a low-score perishable hit but keeps a low-score durable one", async (t) => {
-	const hits = [
-		{ content: "low-score perishable status", durability: "perishable", score: 0.1 },
-		{ content: "low-score durable fact", durability: "durable", score: 0.05 },
-	];
-	const { server } = makeFakeDaemon(() => ({ hits }));
-	t.after(() => server.close());
-	const MEMORY_URL = await listen(server);
-	const mod = await loadWithEnv({ MEMORY_URL });
-
-	const block = await mod.buildRecallBlock("some prompt");
-	assert.ok(!block.includes("low-score perishable status"), "low-score perishable must be filtered from silent injection");
-	assert.ok(block.includes("low-score durable fact"), "durable hits are never filtered by score");
-});
-
-test("buildRecallBlock keeps a perishable hit at or above the 0.30 floor", async (t) => {
-	const hits = [
-		{ content: "boundary perishable", durability: "perishable", score: 0.3 },
-		{ content: "well above floor perishable", durability: "perishable", score: 0.9 },
-	];
-	const { server } = makeFakeDaemon(() => ({ hits }));
-	t.after(() => server.close());
-	const MEMORY_URL = await listen(server);
-	const mod = await loadWithEnv({ MEMORY_URL });
-
-	const block = await mod.buildRecallBlock("some prompt");
-	assert.ok(block.includes("boundary perishable"), "exactly 0.30 must be included, not excluded");
-	assert.ok(block.includes("well above floor perishable"));
-});
-
-test("buildRecallBlock returns null when every hit is filtered out", async (t) => {
-	const hits = [{ content: "dropped", durability: "perishable", score: 0.01 }];
-	const { server } = makeFakeDaemon(() => ({ hits }));
-	t.after(() => server.close());
-	const MEMORY_URL = await listen(server);
-	const mod = await loadWithEnv({ MEMORY_URL });
-
-	assert.equal(await mod.buildRecallBlock("some prompt"), null);
-});
-
 test("the injected block tells the model it's a relevance-filtered subset and to use memory_recall", async (t) => {
-	const hits = [{ content: "some fact", durability: "durable", score: 0.9 }];
+	const hits = [{ content: "some fact", score: 0.9 }];
 	const { server } = makeFakeDaemon(() => ({ hits }));
 	t.after(() => server.close());
 	const MEMORY_URL = await listen(server);
@@ -532,14 +694,19 @@ test("memory_recall description tells the model when to use it and that it can r
 	assert.doesNotMatch(d, /the full store/i, "must not claim memory_recall sees the unbounded full store");
 });
 
-test("every memory tool description states direct-daemon access and never shelling out", async () => {
+test("every memory tool description states direct-daemon access, never shelling out, and no claim that anything expires", async () => {
 	const mod = await loadWithEnv({ MEMORY_URL: "http://127.0.0.1:1" });
 	const { tools } = capturePi(mod);
 	for (const name of ["memory_recall", "memory_stats"]) {
 		const d = tools.get(name).description;
 		assert.match(d, /never shell out to `pix` or `curl`/, `${name} description`);
-		assert.match(d, /durable memories have no automatic expiry/i, `${name} description`);
-		assert.match(d, /perishable and expire after 7 days/i, `${name} description`);
+		assert.match(d, /every memory is durable/i, `${name} description`);
+		assert.match(d, /no automatic expiry/i, `${name} description`);
+		// The watcher's perishable, 7-day-TTL "events" channel was removed
+		// host-side: nothing this tool surface can return expires any more, so
+		// the description must never claim otherwise.
+		assert.doesNotMatch(d, /expire/i, `${name} description must not claim anything expires`);
+		assert.doesNotMatch(d, /7 days/i, `${name} description must not reference the removed 7-day watcher-event TTL`);
 	}
 });
 
@@ -571,5 +738,38 @@ test("the capture-honesty guideline never claims a statement is off-topic for co
 		MEMORY_CAPTURE_HONESTY_GUIDELINE,
 		/won'?t help( with)? code/i,
 		"must not claim something 'won't help code so won't save'",
+	);
+});
+
+// ── retired surface sentinels ──────────────────────────────────────────────
+// `/learnings` (and the `promotable` RPC behind it) was deleted along with the
+// durable/perishable split: every row the host writes is durable, so "recurring
+// learnings worth promoting" had no distinct set left to draw from. A
+// command-registration absence test is the honest check — grepping the source
+// would pass just as happily on a command registered under a computed name,
+// while this drives the REAL factory and asserts the command is not there.
+test("no /learnings command is registered (the promotable surface is deleted)", async () => {
+	const mod = await loadWithEnv({ MEMORY_URL: "http://127.0.0.1:1" });
+	const { commands } = capturePi(mod);
+	assert.ok(commands.size > 0, "the extension must register its commands for this absence check to mean anything");
+	assert.equal(commands.has("learnings"), false, "/learnings was deleted and must not come back");
+	// The living surface, asserted in the same breath so a factory that stopped
+	// registering ANYTHING cannot make the line above pass vacuously.
+	for (const name of ["recall", "remember", "forget"]) {
+		assert.ok(commands.has(name), `/${name} must still be registered`);
+	}
+});
+
+// The perishable-only relevance floor that used to filter auto-injected rows
+// is gone with the split it depended on. Source-level sentinel (the constant
+// was module-private, so there is nothing to observe at runtime): its return
+// would silently drop rows from the injected block again.
+test("memory-recall.ts carries no AUTO_INJECT_PERISHABLE score floor", async () => {
+	const { readFileSync } = await import("node:fs");
+	const src = readFileSync(new URL("../extensions/memory-recall.ts", import.meta.url), "utf8");
+	assert.equal(
+		src.includes("AUTO_INJECT_PERISHABLE"),
+		false,
+		"the perishable auto-inject score floor was deleted; every row is durable now",
 	);
 });

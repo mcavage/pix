@@ -15,24 +15,21 @@ import (
 )
 
 // memoryStoreAdapter wraps the real *memStore and satisfies plugin.MemoryStore.
-// hasVector is the `hasEmb` value health() reports, so the typed surface and the
-// JSON-RPC surface agree.
 type memoryStoreAdapter struct {
-	store     *memStore
-	hasVector bool
+	store *memStore
 }
 
-func newMemoryStoreAdapter(store *memStore, hasVector bool) *memoryStoreAdapter {
-	return &memoryStoreAdapter{store: store, hasVector: hasVector}
+func newMemoryStoreAdapter(store *memStore) *memoryStoreAdapter {
+	return &memoryStoreAdapter{store: store}
 }
 
 var _ plugin.MemoryStore = (*memoryStoreAdapter)(nil)
 
 func (a *memoryStoreAdapter) Remember(req plugin.RememberReq) (plugin.RememberResp, error) {
 	res, err := a.store.remember(rememberInput{
-		content: req.Content, kind: req.Kind, durability: req.Durability, source: req.Source,
-		project: req.Project, profile: req.Profile, hasProject: req.HasProject, ttlDays: req.TTLDays,
-		confidence: req.Confidence, reward: req.Reward, tags: req.Tags,
+		content: req.Content, kind: req.Kind, source: req.Source,
+		project: req.Project, profile: req.Profile, hasProject: req.HasProject,
+		confidence: req.Confidence, tags: req.Tags,
 		dedupe: req.Dedupe, hasDedupe: req.HasDedupe,
 	})
 	if err != nil {
@@ -56,7 +53,7 @@ func (a *memoryStoreAdapter) Recall(req plugin.RecallReq) (plugin.RecallResp, er
 		}
 		out = append(out, plugin.Hit{
 			CreatedAt: h.createdAt, ID: h.id, Content: h.content, Score: h.score,
-			Kind: h.kind, Durability: h.durability, Project: project,
+			Kind: h.kind, Project: project, Source: h.source,
 		})
 	}
 	return plugin.RecallResp{Hits: out}, nil
@@ -64,26 +61,6 @@ func (a *memoryStoreAdapter) Recall(req plugin.RecallReq) (plugin.RecallResp, er
 
 func (a *memoryStoreAdapter) Forget(req plugin.ForgetReq) (plugin.ForgetResp, error) {
 	return plugin.ForgetResp{OK: a.store.forget(req.ID, req.Profile)}, nil
-}
-
-func (a *memoryStoreAdapter) Synthesize(req plugin.SynthesizeReq) (plugin.SynthesizeResp, error) {
-	res := a.store.synthesize(req.Threshold)
-	merged, _ := res["merged"].(int)
-	expired, _ := res["expired"].(int64)
-	return plugin.SynthesizeResp{Merged: merged, Expired: expired}, nil
-}
-
-func (a *memoryStoreAdapter) Promotable(req plugin.PromotableReq) (plugin.PromotableResp, error) {
-	cands := a.store.promotable(req.MinFrequency, req.Profile)
-	out := make([]plugin.Candidate, 0, len(cands))
-	for _, c := range cands {
-		id, _ := c["id"].(string)
-		content, _ := c["content"].(string)
-		freq, _ := c["frequency"].(int)
-		project, _ := c["project"].(string) // nil (no project) -> ""
-		out = append(out, plugin.Candidate{ID: id, Content: content, Frequency: freq, Project: project})
-	}
-	return plugin.PromotableResp{Candidates: out}, nil
 }
 
 // Observe and Health call the shared helpers (memObserve, memWatcherStatus).
@@ -98,15 +75,20 @@ func (a *memoryStoreAdapter) Stats(profile string) (plugin.Stats, error) {
 	s := a.store.stats(profile)
 	get := func(k string) int { n, _ := s[k].(int); return n }
 	return plugin.Stats{
-		Active: get("active"), Durable: get("durable"), Perishable: get("perishable"),
-		Facts: get("facts"), Learnings: get("learnings"), Deleted: get("deleted"),
+		Active: get("active"), Facts: get("facts"), Learnings: get("learnings"), Deleted: get("deleted"),
 	}, nil
 }
 
+// Health reports the CURRENT tri-state embed/capture health, both read live:
+// Vector comes from embedHealthState (memembed.go), Capture from
+// watcherHealthState (memory.go). Both are nil ("unknown") until a real
+// attempt has actually happened — never a boot-time snapshot, and never a
+// probe THIS call makes itself, though watcherHealthState's underlying check
+// can trigger its own throttled live re-probe (see watcherCaptureAvailable).
 func (a *memoryStoreAdapter) Health() (plugin.Health, error) {
-	capture, reason := memWatcherStatus()
+	capture, reason := watcherHealthState()
 	return plugin.Health{
-		OK: true, Vector: a.hasVector, Capture: capture,
+		OK: true, Vector: embedHealthState(), Capture: capture,
 		WatcherModel: memWatcherModel(), CaptureReason: reason,
 	}, nil
 }
@@ -119,10 +101,10 @@ func servePluginMemory() {
 	// Held for the process lifetime; fails fast if another holder owns the db.
 	release := lockMemoryStoreOrFatal(nil)
 	defer release()
-	store, hasEmb, err := buildMemStore()
+	store, err := buildMemStore()
 	if err != nil {
 		log.Fatalf("%v", err)
 	}
-	adapter := newMemoryStoreAdapter(store, hasEmb)
+	adapter := newMemoryStoreAdapter(store)
 	plugin.Serve(map[string]goplugin.Plugin{"memory": &plugin.MemoryPlugin{Impl: adapter}})
 }

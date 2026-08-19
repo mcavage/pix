@@ -320,6 +320,24 @@ func psFake(comm, args string, commErr, argsErr error) func(string, ...string) (
 	}
 }
 
+func TestProcessStatExited_OnlyZombieIsExited(t *testing.T) {
+	for _, tc := range []struct {
+		stat string
+		want bool
+	}{
+		{"Z", true},
+		{"Z+", true},
+		{"Zs", true},
+		{"S+", false},
+		{"R", false},
+		{"", false},
+	} {
+		if got := processStatExited(tc.stat); got != tc.want {
+			t.Errorf("processStatExited(%q) = %v, want %v", tc.stat, got, tc.want)
+		}
+	}
+}
+
 // TestVerifyServeProcPS_Darwin: the darwin/BSD verify path matches our serve
 // process from injected `ps -o comm=`/`args=` calls and rejects an unrelated
 // process; an absent ps yields known=false (can't tell, trust the pidfile).
@@ -445,6 +463,40 @@ func TestStopServe_ReVerifyBeforeKill(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "PID reuse") {
 		t.Errorf("want a PID-reuse refusal note, got %q", buf.String())
+	}
+}
+
+// TestStopServe_TerminatedZombieCountsAsExited reproduces the launchd restart
+// race seen on macOS: after SIGTERM the process has terminated and released its
+// resources, but remains as a zombie until its parent reaps it. kill(pid, 0)
+// still succeeds and ps no longer exposes the original argv, so treating only
+// ESRCH as exit reaches the PID-reuse refusal and strands the stale pidfile.
+func TestStopServe_TerminatedZombieCountsAsExited(t *testing.T) {
+	removed := false
+	proc := &fakeProc{pid: 212, alive: true, dieOnTerm: false}
+	verifyCalls := 0
+	ctl := ctlFor("212", nil, proc, &removed, func(int) (bool, bool) {
+		verifyCalls++
+		if verifyCalls == 1 {
+			return true, true
+		}
+		return false, true // a zombie's ps argv no longer verifies as `serve`
+	})
+	ctl.exited = func(int) bool { return len(proc.sigs) == 1 && proc.sigs[0] == syscall.SIGTERM }
+
+	var buf bytes.Buffer
+	stopped, err := Stop(ctl, &buf)
+	if err != nil || !stopped {
+		t.Fatalf("Stop = (%v,%v), want (true,nil); output: %q", stopped, err, buf.String())
+	}
+	if verifyCalls != 1 {
+		t.Fatalf("terminated process was re-verified as if still running: verify calls = %d", verifyCalls)
+	}
+	if !removed {
+		t.Error("pidfile must be removed after the terminated process is observed")
+	}
+	if strings.Contains(buf.String(), "PID reuse") {
+		t.Errorf("terminated zombie was misreported as PID reuse: %q", buf.String())
 	}
 }
 

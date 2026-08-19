@@ -137,7 +137,7 @@ serve: running (pid 60013)
   memory (:11435): up
 
 $ pix memory stats
-active 1  (durable 0, perishable 1)  facts 1  learnings 0  deleted 0
+active 1  facts 1  corrections 0  deleted 0
 ```
 
 `pix doctor` and `pix status` read host state only. Neither can see inside a
@@ -182,9 +182,14 @@ No. Ollama is optional. Pix runs fine without it. Here is exactly what changes.
 | Capability | With Ollama | Without Ollama |
 | --- | --- | --- |
 | Memory recall | vector ranking plus keyword search | FTS5 keyword search only |
-| Automatic fact capture | on, a watcher model extracts facts | off, there is no watcher model |
+| Automatic fact capture (`memory_capture experimental-auto`, opt-in) | works, a watcher model extracts facts | unavailable, there is no watcher model to extract facts |
 | `/remember` and `/forget` | work | work (an explicit store, not an extraction) |
 | Local model in the session | the model named by `ollama_bridge_model` | cloud models only |
+
+Capture is `explicit` by default either way: Ollama being installed does not
+turn automatic capture on by itself. It only decides whether
+`experimental-auto` (if you opt in with `pix config set memory_capture
+experimental-auto`) has a watcher model to run.
 
 Three config keys name the models Pix will use if Ollama is present:
 

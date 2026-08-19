@@ -41,7 +41,12 @@ make run -> out/pix run --dev
 ```
 
 Attaching to an existing sandbox does not retrofit the capability. Like kit and
-static MCP changes today, the sandbox must be recreated.
+static MCP changes today, the sandbox must be recreated. An explicit `--dev`
+attach therefore fails closed when the sandbox has no recorded session UAT
+registration and prints the exact `pix rm <box> && pix run --dev` recovery. It
+must never attach successfully while omitting `uat_capabilities`. At a terminal,
+`pix --dev` is the direct shorthand for `pix run --dev`; like every implicit
+launch it refuses non-interactive use, where the explicit spelling is required.
 
 ## User experience
 

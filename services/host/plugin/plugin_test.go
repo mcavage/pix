@@ -15,14 +15,12 @@ import (
 // checked against the public interfaces.
 type noopMemory struct{}
 
-func (noopMemory) Remember(RememberReq) (RememberResp, error)       { return RememberResp{}, nil }
-func (noopMemory) Recall(RecallReq) (RecallResp, error)             { return RecallResp{}, nil }
-func (noopMemory) Forget(ForgetReq) (ForgetResp, error)             { return ForgetResp{}, nil }
-func (noopMemory) Synthesize(SynthesizeReq) (SynthesizeResp, error) { return SynthesizeResp{}, nil }
-func (noopMemory) Promotable(PromotableReq) (PromotableResp, error) { return PromotableResp{}, nil }
-func (noopMemory) Observe(ObserveReq) (ObserveResp, error)          { return ObserveResp{}, nil }
-func (noopMemory) Stats(string) (Stats, error)                      { return Stats{}, nil }
-func (noopMemory) Health() (Health, error)                          { return Health{}, nil }
+func (noopMemory) Remember(RememberReq) (RememberResp, error) { return RememberResp{}, nil }
+func (noopMemory) Recall(RecallReq) (RecallResp, error)       { return RecallResp{}, nil }
+func (noopMemory) Forget(ForgetReq) (ForgetResp, error)       { return ForgetResp{}, nil }
+func (noopMemory) Observe(ObserveReq) (ObserveResp, error)    { return ObserveResp{}, nil }
+func (noopMemory) Stats(string) (Stats, error)                { return Stats{}, nil }
+func (noopMemory) Health() (Health, error)                    { return Health{}, nil }
 
 // Compile-time proof the trivial impl satisfies the interface.
 var _ MemoryStore = noopMemory{}
@@ -136,16 +134,10 @@ func (echoMemory) Recall(r RecallReq) (RecallResp, error) {
 	return RecallResp{Hits: []Hit{{ID: "h1", Content: r.Query, Score: 0.5}}}, nil
 }
 func (echoMemory) Forget(r ForgetReq) (ForgetResp, error) { return ForgetResp{OK: r.ID != ""}, nil }
-func (echoMemory) Synthesize(r SynthesizeReq) (SynthesizeResp, error) {
-	return SynthesizeResp{Merged: 3, Expired: 7}, nil
-}
-func (echoMemory) Promotable(r PromotableReq) (PromotableResp, error) {
-	return PromotableResp{Candidates: []Candidate{{ID: "c1", Frequency: r.MinFrequency}}}, nil
-}
 func (echoMemory) Observe(r ObserveReq) (ObserveResp, error) {
 	return ObserveResp{Accepted: true, Reason: r.User}, nil
 }
-func (echoMemory) Stats(string) (Stats, error) { return Stats{Active: 11, Durable: 22}, nil }
+func (echoMemory) Stats(string) (Stats, error) { return Stats{Active: 11, Facts: 22}, nil }
 func (echoMemory) Health() (Health, error)     { return Health{OK: true, WatcherModel: "m"}, nil }
 
 func TestRPCRoundTripMemory(t *testing.T) {
@@ -161,17 +153,11 @@ func TestRPCRoundTripMemory(t *testing.T) {
 	if got, err := c.Forget(ForgetReq{ID: "x"}); err != nil || !got.OK {
 		t.Fatalf("Forget round trip: got %+v err %v", got, err)
 	}
-	if got, err := c.Synthesize(SynthesizeReq{Threshold: 0.9}); err != nil || got.Merged != 3 || got.Expired != 7 {
-		t.Fatalf("Synthesize round trip: got %+v err %v", got, err)
-	}
-	if got, err := c.Promotable(PromotableReq{MinFrequency: 5}); err != nil || len(got.Candidates) != 1 || got.Candidates[0].Frequency != 5 {
-		t.Fatalf("Promotable round trip: got %+v err %v", got, err)
-	}
 	if got, err := c.Observe(ObserveReq{User: "alice"}); err != nil || !got.Accepted || got.Reason != "alice" {
 		t.Fatalf("Observe round trip: got %+v err %v", got, err)
 	}
 	// Zero-arg method — the exact shape net/rpc would drop with an unexported arg.
-	if got, err := c.Stats(""); err != nil || got.Active != 11 || got.Durable != 22 {
+	if got, err := c.Stats(""); err != nil || got.Active != 11 || got.Facts != 22 {
 		t.Fatalf("Stats round trip: got %+v err %v", got, err)
 	}
 	// Zero-arg method.

@@ -10,6 +10,238 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **UAT capability discovery and dry runs now return the plan they claim to
+  return.** `uat_capabilities` reports the validator's legal needs, actions,
+  and assertions; the real candidate build limits; browser availability and
+  profile isolation; and the exact host-backed memory checks covered by
+  `candidate_smoke`. `uat_submit` now returns a structured plan with the
+  resolved commit, scenario steps, limits, UAT-only image and sandbox names,
+  isolated config/data/state paths, browser-profile policy, cleanup set, and
+  memory coverage. A dry run marks `mutates_host: false` and uses an explicit
+  `<run-id>` resource placeholder instead of collapsing the response to the
+  scenario name.
+
+- **Final shipping-review findings closed.** A stale comment in
+  `memory_deletions_gone_test.go` claimed `plugin.Hit.Durability` still
+  legitimately appears on the read side, contradicting the very test
+  (`TestHitDroppedDurabilityReadSide`) that proves it does not; it now
+  points at the actual surviving lowercase examples (the inert `durability`
+  DB column and its `const durability = "durable"` write). `memory_test.go`
+  had `TestMemoryMeta`'s doc comment sitting above the wrong function
+  (`TestDisplayKind`); moved back to its own test. `pi-kit/spec.yaml`'s
+  subagent roster named vendor/model nicknames (`haiku`, `opus`) that go
+  stale the moment routing policy changes; it now names the INTENT each
+  preset resolves through (`fanout` = breadth, `deep` = max-accuracy,
+  `review` = review) and points at `pix agent ls` for the live model, with a
+  new drift test (`tests/kit-subagent-roster-intents.test.mjs`) failing if a
+  nickname creeps back in. `/forget`'s no-match paths now both notify at
+  `error` severity with an actionable message: a query with no hit tells the
+  caller to try `/recall`, and an id miss says the id may be absent, already
+  forgotten, or in a different profile scope, instead of complaining about
+  formatting. `docs/legal/PRIVACY.md` now asserts `api.parallel.ai` in the
+  regression test's disclosed-host list, and reframes the `web_search` row
+  to match the baked `web-search.json` (`provider: "parallel"`) exactly:
+  with `PARALLEL_API_KEY` set, Parallel is the **pinned** backend for every
+  search, not merely a preferred fallback; without that key, resolution
+  falls through to OpenAI's search if wired, then the keyless Exa default,
+  then the remaining allowed/configured backends (Perplexity, Gemini) in
+  order. `docs/legal/RELEASE-SAFEGUARDS.md`'s
+  privacy summary no longer implies pix only talks to providers/servers you
+  configured; it now names the default destinations (web-search fallbacks,
+  npm version check, package downloads) too.
+
+- **Docs/kit/legal closeout: last stale memory claims fixed.** The kit's
+  `agentInstructions` (`pi-kit/spec.yaml`) no longer tells the agent `pix
+  host` is an unsandboxed escape hatch (that verb is deleted); its memory
+  section is retitled "automatic recall, explicit capture", explains the
+  opt-in `experimental-auto` capture mode, and drops the deleted
+  `/learnings` command. Its stale monitor comment now says the tap
+  subsystem is gone outright, not repurposed to write NDJSON. `docs/memory.md`
+  and `docs/reference.md` correct two more stale claims: a captured
+  correction is stored internally as `kind: "learning"` (verbatim in
+  `--json`) but rendered to a person as `correction`; and the pack/memory
+  contrast is now scope-based (personal, unversioned, per-machine memory vs.
+  versioned, shared pack context) instead of the stale "learned by
+  watching" line, which stopped matching capture's explicit-by-default
+  default. `docs/legal/PRIVACY.md` adds `api.parallel.ai` to the `web_search`
+  recipient row (it was missing from an otherwise exhaustive list) and
+  softens its egress-allowlist claim from an exact bijection to "every
+  sandbox-egress destination is disclosed", calling out the build-time
+  (`go.dev`) and loopback host-service destinations the table also lists
+  that never traverse that allowlist. `scripts/arch-metrics/budgets.json`'s
+  `pix/host/health` note is reworded to end "a deliberate, reviewed raise of
+  a shrink-only budget", matching every other package's note instead of the
+  stray "reviewed shrink." it had been left with.
+- **A stored `learning` now reads as `correction` everywhere it's rendered
+  for a person, DX-6a.** Sandbox `/recall` (`formatHitLine`) and the host
+  `pix memory recall` CLI (`memoryMeta`) both display `correction` instead
+  of the internal `learning` kind; every other kind is unchanged. This is a
+  render-only alias, not a schema migration: the stored row and any
+  `--json` output still carry `kind: "learning"` for compatibility.
+- **A slow Ollama embed no longer blocks every other memory call.** The
+  embed is a network round trip that can take many seconds, and it used to
+  run with the memory store's single mutex held, so ONE slow embed
+  head-of-line blocked every concurrent recall and remember on the host.
+  `remember` is three phases now (exact-hash reaffirm under the lock, the
+  embed with no lock held, then a revalidating re-check plus semantic
+  dedupe, budget check and INSERT under one uninterrupted hold), and
+  `recall` embeds its query before it takes the lock. The phase-3
+  revalidation is what keeps two concurrent remembers of the same content
+  from each writing their own row; reaffirm, dedupe and the exact daily
+  watcher budget all still hold, now proven by dedicated concurrency tests
+  (including under `-race`).
+- **`pix config set memory_capture` said the same thing for both modes, and
+  one of them was wrong.** Turning capture OFF (`explicit`) is a HOST-side
+  refusal that takes effect immediately, including for sandboxes already
+  running; only turning it ON reaches new sandboxes only. The confirmation
+  line now says which, and enabling `experimental-auto` warns that a
+  reachable watcher model is required and names the command to check it,
+  instead of implying capture is now working.
+- **A refused capture now reaches the user.** The host's
+  `{accepted:false, reason}` (watcher model missing, daily budget exhausted,
+  capture saturated) went to raw stderr, which the fullscreen TUI does not
+  show — so the one message explaining "capture is on but nothing is being
+  stored" was invisible. It goes through the UI notification channel now,
+  still exactly once per session, with stderr as the fallback for print mode.
+- **The daily watcher capture budget (10 stored rows/day) now holds exactly
+  under concurrent captures.** Each in-flight `memCapture` used to peek
+  `watcherBudgetRemaining()` once and then store against its own stale local
+  count, so several of the up to 8 concurrently allowed captures could each
+  believe there was still budget left and collectively store well past the
+  cap. The exact enforcement point moved to `rememberSourced`'s own atomic,
+  mutex-held check-then-insert (the same `s.mu` every store read/write
+  already serializes through), so a `source="watcher"` row is only ever
+  inserted if today's count is still under budget at that instant — closing
+  the race with no new locking primitive.
+- **The capture secret filter now sees the full message before truncation,
+  not after.** `memObserve` used to truncate a user message to 8000 chars
+  before the stage-1 secret filter ever ran, so a secret sitting past that
+  cutoff in a long message could reach the watcher model and, if echoed
+  back, get stored. The filter now runs on the untruncated text; truncation
+  happens only afterward, to bound the watcher-model call itself.
+- **The capture secret filter also blocks a 1Password reference
+  (`op://vault/item/field`).** It's a locator rather than the secret value
+  itself, but it still names exactly where to go fetch one, so it's treated
+  as secret-shaped and dropped like any other match.
+- **`docs/memory.md`'s undelete recipe was incomplete.** It said clearing
+  `deleted_at` for a soft-deleted row "restores that row exactly as
+  recall() reads it", but forget() always drops the row's FTS entry
+  alongside stamping `deleted_at`, so a bare `deleted_at` clear leaves the
+  row invisible to keyword search until its FTS entry is rebuilt too. The
+  doc now gives the correct two-statement recipe (there is still no live
+  undelete verb — this is a manual, service-stopped edit of the db file).
+- **The marker-staleness note in `docs/memory.md` was backwards.** It claimed
+  a stale `.pix/memory-capture` marker "can only ever be MORE restrictive
+  than the host's current config, never less", which isn't true — a marker
+  frozen on `experimental-auto` after the host moves back to `explicit` is
+  the less-restrictive side of that comparison. Reworded around what's
+  actually guaranteed: the host's live `memObserve` check re-reads its
+  config on every call and is authoritative regardless, so effective capture
+  behavior never drifts from what the host's current config allows, even
+  though the marker itself can go stale in either direction.
+
+### Changed
+
+- **Memory counts say "corrections", not "learnings".** The rows the watcher
+  writes for a rule you stated ("stop using em dashes") are corrections;
+  "learnings" read as vague and was easily confused with facts. `pix memory
+  stats` and the `memory_stats` tool description use the accurate word. The
+  JSON/RPC key stays `learnings`, so `--json` consumers are unaffected.
+- **`pix memory --help` now states the capture-mode mental model** — what
+  `explicit` and `experimental-auto` each actually store, which direction of
+  a mode change binds an already-running sandbox, and that `/forget <id>` is
+  the undo — instead of leaving it to be discovered from the docs.
+- **A recalled row wears the same `auto` tag punctuation on both surfaces.**
+  The host CLI rendered `[fact·project·auto]` while the sandbox's `/recall`
+  rendered `(fact/project/auto)`; both use `/` now.
+
+### Docs
+
+- **`docs/reference.md`'s Memory section still described the pre-explicit
+  model** ("a background watcher looks at each exchange... you don't call a
+  save function") and a deleted 0.30 perishable score floor. Rewritten
+  around the shipped default: capture is explicit, `experimental-auto` is an
+  opt-in `pix config set memory_capture` value, and a watcher-captured row is
+  tagged `auto` and undone with `/forget`, same as any other row.
+- **README's `pix memory stats` example still showed the deleted
+  durable/perishable split**, and its Ollama capability table implied
+  automatic capture turns on whenever Ollama is present. Both corrected:
+  the real output is `active N  facts N  learnings N  deleted N`, and the
+  table states capture stays `explicit` (off) either way — Ollama only
+  decides whether an opted-in `experimental-auto` has a watcher model to run.
+- **`docs/getting-started.md`'s "Is Ollama required?" answer made the same
+  implication** (no Ollama -> "automatic capture is off", read as: Ollama
+  present -> capture on). Reworded so Ollama availability and the
+  `memory_capture` mode are stated as the two independent switches they are.
+- **`docs/legal/RELEASE-SAFEGUARDS.md` still listed "monitor" among what
+  stays loopback-local.** The monitor transcript tap was removed outright
+  (see `docs/legal/PRIVACY.md`'s "What stays local"), not merely kept local;
+  the pointer no longer implies a live local feature that doesn't exist.
+- **`docs/legal/PRIVACY.md` didn't say what happens to a recalled row, or
+  who else can reach the store.** Added: recalled content leaves the
+  machine in the prompt sent to the active model provider (extraction and
+  embedding are the only local-only part), and the memory daemon is
+  unauthenticated by design, so any sandbox you launch can read and write it
+  directly, not just the agent's read-only tools. Links to `docs/memory.md`
+  for the full trust model.
+- **`docs/memory.md` understated how much the query defaults vary, and left
+  a correction's internal storage kind unstated.** The non-`*` search
+  default is 6 hits for the `memory_recall` tool but 8 for `/recall` and the
+  `pix memory recall` host CLI, not one number as written. And a captured
+  correction is stored with `kind="learning"` (reusing the schema's
+  pre-existing vocabulary, the same one the deleted `pix memory
+  learnings`/`/learnings` command read) rather than a `kind="correction"`
+  that doesn't exist — so `pix memory stats`'s `learnings` count is the
+  count of captured corrections, not a leftover of that deleted command.
+
+### Removed
+
+- **Every memory write is durable, with no expiry, reward, or
+  perishable/valence production anywhere in the pipeline.** The watcher only
+  ever extracts `Facts`/`Corrections` (no time-bound `events`, no sentiment
+  score); `remember()` silently ignores a legacy caller's
+  `durability`/`ttlDays`/`reward` input; the `reward`/`durability` DB columns
+  stay, inert, for on-disk compatibility only. A pre-upgrade store's live
+  legacy-perishable rows are retired (soft-deleted) as part of the one-time
+  schema v2 migration (`migrateMemorySchema`), not a separate every-startup
+  sweep. See docs/memory.md's "Legacy data" and "Schema v2" sections.
+
+- **Every surface built around perishable/reward is gone end to end, not
+  just its production.** `extensions/memory-recall.ts` drops the perishable
+  score floor and durability-based recall filter, and no longer reads an
+  `assistant` field off `observe`'s RPC params (the watcher only ever read
+  the user's message); `formatHitLine`/`pix memory recall` stop rendering a
+  `/durability` annotation, because the read side — `scoredHit`/`memRow`/
+  `plugin.Hit` — no longer carries the field at all; `pix memory stats`/
+  `memory_stats` drop the durable/perishable counts entirely, host, plugin,
+  and CLI alike; `/learnings`, `pix memory learnings`, and the
+  `promotable`/`synthesize` JSON-RPC methods (plus their plugin request/
+  response types and store queries) are deleted, since nothing in-tree ever
+  called them once the recurrence-ranked promotion and near-duplicate-merge
+  surfaces were cut; the `promote` skill now sources candidates through
+  `/recall` instead.
+
+- **Startup no longer blocks on a synchronous readiness probe, and two
+  test-only seams are gone.** `buildMemStore` never round-trips Ollama
+  before constructing the store; `identity`/`health` read the embedder's and
+  watcher's live, tri-state health instead of a value captured once at boot
+  (`hasEmb`/`hasVector`/`memWatcherProbe`/`memWatcherWarm` are deleted).
+  `MemoryUnitProbe.WantVersion` — a seam no production caller ever set — is
+  deleted too; the probe always compares against `launcher.Version`.
+
+### Fixed
+
+- **`recall()` no longer writes `access_count`/`last_accessed` at all, star or
+  scored.** Listing the store (`pix memory recall '*'`, a blank sandbox
+  `/recall`) used to bump both columns on every visible row exactly like a
+  real relevance lookup, so merely browsing memory perturbed its own usage
+  signal; a first pass fixed that for `*` only, by adding one batched
+  `UPDATE ... WHERE id IN (...)` for a genuinely scored recall. That batched
+  write is now deleted too: nothing anywhere reads either column back (they
+  never fed scoring, same shape as the already-inert `reward` column), so the
+  write bought nothing but churn. `bump()` (the reaffirm/dedupe path) drops
+  its own `last_accessed` write for the same reason. Both columns stay in the
+  schema, reserved/inert, for additive/legacy compatibility.
 - **Subagents no longer die for running a long command.** The inactivity
   watchdog killed a child that emitted nothing for 5 minutes. That is a sound
   liveness proxy while the MODEL is working and an unsound one while a TOOL is:
@@ -34,6 +266,110 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`memory_capture`: two admission modes, explicit by default.** New `pix
+  config` key, `explicit` (the default) | `experimental-auto`, daemon-affecting
+  (`pix config set memory_capture <mode>` restarts serve to apply it, same as
+  `memory_watcher_model`; the standalone `pix-host memory` daemon now applies
+  the SAME config->env translation `serve` does, closing a gap where it
+  silently ignored `memory_capture`/the model names with no env override).
+  **`explicit`** turns automatic observation off entirely: the
+  `memory-capture` extension sends zero `observe` requests, deciding this from
+  a launch-scoped marker file (`.pix/memory-capture`, written by the launcher
+  from host config, read once at load exactly like `.pix/profile`) instead of
+  an RPC round trip. `memObserve` still refuses before ever consulting watcher
+  availability even if something calls `observe` anyway — no watcher
+  inference, no side-effect Ollama probe — so the host stays authoritative
+  regardless of what the marker says, and a config change applies to new
+  sandboxes (existing ones keep the marker they launched with). `/remember`,
+  `pix memory remember`, and the agent's own explicit tools are unaffected in
+  either mode.
+
+  **`experimental-auto`** writes straight to memories with internal
+  `source="watcher"` (pix's original always-on behavior), under ONE fixed
+  daily budget of at most 10 STORED rows/day, counted by a real
+  `SELECT COUNT(*)` over `memories` rows with `source='watcher'` created today
+  (UTC) — survives a daemon restart exactly, because it counts what actually
+  landed, not how many times `observe` was called. No session ids, maps, or
+  mutex: a SQLite COUNT is the whole mechanism, since this is UX policy on an
+  experimental feature, not a security boundary. The budget is peeked BEFORE
+  the watcher is ever invoked (both at `observe`-admission time and again,
+  fresh, immediately before the actual watcher call), so an exhausted day
+  costs zero inference, and a single watcher result whose extraction exceeds
+  the remaining budget stores only the remaining rows, dropping the rest
+  (logged as a count, never content). Only a genuinely NEW row counts toward
+  that total: a batch item that reaffirms via content-hash, or collapses
+  into an existing row via the embedding-similarity dedupe path (the same
+  "reaffirmed" outcome, so the same rule covers both), or fails to store
+  outright, is never counted — matching what the persisted
+  `SELECT COUNT(*)` itself would report. A `/forget`-ed (soft-deleted)
+  watcher row still counts against the day it was STORED: forgetting is
+  feedback on recall content, not a refund on capture volume, and only a new
+  UTC day resets the budget. A conservative, two-stage,
+  capture-only secret filter (`services/host/memory_secretfilter.go`) runs
+  before the watcher ever sees a message and again before any extracted
+  fact/correction is stored: a private-key block, a recognizable vendor token
+  shape (AWS/GitHub/Slack/OpenAI/Stripe/Google), a JWT, a labeled
+  secret-looking assignment (including a realistic `SCREAMING_SNAKE_CASE`
+  env-var shape like `AWS_SECRET_ACCESS_KEY=`, which a plain `\b` boundary
+  missed), or a long high-entropy run drops the content outright (fail
+  closed, no partial/redacted store) — this is a BEST-EFFORT heuristic, never
+  a guarantee, and docs/memory.md says so plainly. An all-hex run (a git
+  commit SHA, a content digest) is not treated as secret-shaped, since it is
+  indistinguishable from an ordinary hash by shape alone. The raw watcher
+  output is never logged, on a parse failure or otherwise — only the model,
+  the error, and the content length; the same rule now covers a
+  wrong-shaped `facts`/`corrections` field too (`flexibleStringList`'s own
+  parse errors report shape and byte length only, never the field's raw
+  content, closing the one place a malformed watcher response could still
+  have leaked it into a log line). External `remember` still cannot spoof
+  `source="watcher"` in either mode (pre-existing guard, now covered by
+  mode-parameterized tests). A recall hit now exposes `source`, and the
+  sandbox/CLI render an `auto` tag for a watcher-sourced row, so an
+  auto-captured row is visible — the existing `/forget <id>` is the
+  feedback/undo mechanism; no bulk revoke, no new verb. There is
+  deliberately no third (review/staging) mode: see docs/design/
+  self-learning-loop.md's "Rejected: a review/staging capture mode". See
+  docs/memory.md's "How capture works".
+
+- **Memory schema v2: a small, atomic one-time DATA sweep, not a new trust
+  schema.** Upgrading a pre-v2 store, in ONE transaction
+  (`migrateMemorySchema`, `services/host/memory.go`): adds the legacy
+  `profile` column if still missing, soft-deletes every live row whose
+  recorded `source` is neither `user` nor `cli` (the watcher's past
+  captures, or a source this binary has never seen — an ADVISORY reading of
+  that pre-v2 free text, never a verified trust boundary), then stamps
+  `PRAGMA user_version = 2`. A crash or error anywhere rolls back the whole
+  transaction, so the sweep is judged (and runs) exactly once per store; a
+  row written after the stamp (a new watcher capture included) is never
+  swept. Reversibility is the store's EXISTING soft-delete semantics —
+  clear `deleted_at` for an id to bring a row back — and an operator who
+  wants a point-in-time copy first should run the already-existing
+  `pix-host memory snapshot` before upgrading; this migration does not take
+  one automatically. `source` stays normalized to a closed vocabulary
+  (`user`/`cli`/`watcher`, else `unknown`), and `remember` (the RPC/plugin
+  surface every external caller reaches) treats a caller-supplied
+  `source="watcher"` as spoofing, normalizing it to `unknown`: only the
+  watcher's own internal capture path (`rememberWatcherCapture`, unexported)
+  ever writes that value. See docs/memory.md's "Schema v2: a one-time source
+  sweep" section. (A trust-state/provenance/eligibility-predicate design was
+  built for this and rejected on review as more machinery than the problem
+  warranted; see docs/design/self-learning-loop.md.)
+- **Memory `health`/`identity` now report tri-state embed/watcher health,
+  never a false "healthy".** `embedHealthState`/`watcherHealthState` return
+  `nil` ("unknown") until the first real `/api/embed`/`/api/chat` attempt has
+  actually happened, tracked by new `embedExercised`/`watcherExercised`
+  latches alongside the existing `embedDisabled`/`watcherUnavailable` ones —
+  the boot-time-probe removal above means a fresh daemon's embedder/watcher
+  really is unconfirmed, and reporting "healthy" for a service that has never
+  been exercised would be a lie the very next request could contradict. Wire
+  shape: `plugin.Health.Vector`/`.Capture` are now `*bool` (JSON
+  `null`/`true`/`false`); `identity`'s `degraded_reason` only fires on a
+  CONFIRMED `false`, never on unknown. No new network calls: construction
+  still makes zero, and the only I/O involved is the pre-existing throttled
+  watcher re-probe (`watcherCaptureAvailable`), now called out explicitly in
+  its doc comment as a side effect a caller of `health`/`identity` should know
+  about. New tests cover the full unknown → degraded → healthy recovery cycle
+  for both.
 - **Self-development UAT for `pix run --dev`.** Fresh dev sandboxes receive a unique, session-scoped host MCP with a closed tool set for committed scenario validation, candidate builds, disposable `pix-uat-*` sandboxes, bounded artifacts, and browser/OAuth checks through a dedicated Chrome profile. The runner owns typed leases, crash cleanup, concurrency limits, and per-step logs without exposing a host shell or changing normal pix configuration. `pix uat status`, `pix uat browser bootstrap`, and `uat/scenarios/smoke.yaml` provide the bootstrap path; the first real host smoke run passed end to end.
 - **Optional document-write capability.** `docs-write` defaults to `none`, allowing private packs to attach a separate narrowly scoped writer while the existing `gworkspace` capability remains read-only.
 - **Supervision-tree observability, end to end.** `pix-host serve` now publishes

@@ -56,10 +56,47 @@ func ReadRegistration(env hostenv.Env, sandboxName string) (*Registration, error
 	if err := json.Unmarshal([]byte(data), &rec); err != nil {
 		return nil, err
 	}
+	if err := validateRegistration(&rec); err != nil {
+		return nil, fmt.Errorf("invalid UAT registration %s: %w", path, err)
+	}
 	return &rec, nil
 }
 
+// ResolveAttachRegistration reads the create-time UAT record for an existing
+// sandbox. A caller explicitly asking for --dev must never be silently attached
+// to a sandbox without that record: static MCP servers cannot be retrofitted,
+// so the resulting session would look like dev mode while lacking every UAT
+// tool. Ordinary attaches legitimately return nil when the sandbox was not
+// created in dev mode.
+func ResolveAttachRegistration(env hostenv.Env, sandboxName string, devRequested bool) (*Registration, error) {
+	rec, err := ReadRegistration(env, sandboxName)
+	if err != nil {
+		return nil, fmt.Errorf("read UAT registration for %s: %w", sandboxName, err)
+	}
+	if !devRequested {
+		return rec, nil
+	}
+	if rec == nil {
+		return nil, devAttachRecreateError(sandboxName, "it was not created with the session UAT server")
+	}
+	out, err := env.Run("sbx", "mcp", "ls")
+	if err != nil {
+		return nil, fmt.Errorf("verify dev UAT registration %s: %w", rec.MCPName, err)
+	}
+	if !hasMCPExact(out, rec.MCPName) {
+		return nil, devAttachRecreateError(sandboxName, "its session UAT server is no longer registered")
+	}
+	return rec, nil
+}
+
+func devAttachRecreateError(sandboxName, reason string) error {
+	return fmt.Errorf("--dev cannot attach sandbox %q because %s; static MCP tools attach only at creation. Recreate it: pix rm %s && pix run --dev", sandboxName, reason, sandboxName)
+}
+
 func WriteRegistration(env hostenv.Env, sandboxName string, rec *Registration) error {
+	if err := validateRegistration(rec); err != nil {
+		return err
+	}
 	dir, err := StateDir(env)
 	if err != nil {
 		return err
@@ -73,15 +110,64 @@ func WriteRegistration(env hostenv.Env, sandboxName string, rec *Registration) e
 }
 
 func DeleteRegistration(env hostenv.Env, sandboxName string) error {
+	rec, err := ReadRegistration(env, sandboxName)
+	if err != nil {
+		return err
+	}
 	dir, err := StateDir(env)
 	if err != nil {
 		return err
+	}
+	if rec != nil {
+		if err := removeSessionState(dir, rec.SessionID); err != nil {
+			return err // keep the registration so a later teardown can retry
+		}
 	}
 	err = os.Remove(filepath.Join(dir, sandboxName+".json"))
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	return nil
+}
+
+func validateRegistration(rec *Registration) error {
+	if rec == nil {
+		return fmt.Errorf("registration is nil")
+	}
+	if err := ValidateID(rec.SessionID); err != nil {
+		return fmt.Errorf("session id: %w", err)
+	}
+	if want := "pix-uat-" + rec.SessionID; rec.MCPName != want {
+		return fmt.Errorf("MCP name %q does not match session id (want %q)", rec.MCPName, want)
+	}
+	return nil
+}
+
+func removeSessionState(uatDir, sessionID string) error {
+	if err := ValidateID(sessionID); err != nil {
+		return fmt.Errorf("refuse unsafe UAT session path: %w", err)
+	}
+	sessionsDir := filepath.Join(uatDir, "sessions")
+	if info, err := os.Lstat(sessionsDir); err == nil {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("UAT sessions path %s is not a real directory", sessionsDir)
+		}
+	} else if os.IsNotExist(err) {
+		return nil
+	} else {
+		return err
+	}
+	sessionDir := filepath.Join(sessionsDir, sessionID)
+	if info, err := os.Lstat(sessionDir); err == nil {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("UAT session path %s is not a real directory", sessionDir)
+		}
+	} else if os.IsNotExist(err) {
+		return nil
+	} else {
+		return err
+	}
+	return os.RemoveAll(sessionDir)
 }
 
 func GenerateSessionID() (string, error) {
@@ -93,6 +179,9 @@ func GenerateSessionID() (string, error) {
 }
 
 func RegisterMCP(env hostenv.Env, rec *Registration, repoPath, statePath string) error {
+	if err := validateRegistration(rec); err != nil {
+		return err
+	}
 	hostBin, err := env.HostBinary()
 	if err != nil {
 		return err
@@ -120,6 +209,18 @@ func RegisterMCP(env hostenv.Env, rec *Registration, repoPath, statePath string)
 	if err != nil {
 		_ = os.RemoveAll(runnerStatePath)
 		return fmt.Errorf("sbx mcp add failed: %v, output: %s", err, out)
+	}
+	listed, lerr := env.Run("sbx", "mcp", "ls")
+	if lerr != nil || !hasMCPExact(listed, rec.MCPName) {
+		// add may have mutated the gateway despite an unusable/ambiguous result.
+		// Roll back by exact UAT-owned name before the caller creates a sandbox
+		// whose static MCP set can never produce uat_capabilities.
+		_, _ = env.Run("sbx", "mcp", "rm", "--", rec.MCPName)
+		_ = os.RemoveAll(runnerStatePath)
+		if lerr != nil {
+			return fmt.Errorf("verify UAT MCP registration %s: %w", rec.MCPName, lerr)
+		}
+		return fmt.Errorf("sbx mcp add succeeded but %s is absent from sbx mcp ls", rec.MCPName)
 	}
 	return nil
 }

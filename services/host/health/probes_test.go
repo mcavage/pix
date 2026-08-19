@@ -14,6 +14,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"pix/host/launcher"
 )
 
 // These tests cross the real boundaries: a compiled fixture EXECUTABLE for
@@ -237,10 +239,11 @@ func deadPort(t *testing.T) int {
 }
 
 func TestMemoryUnitProbe_RealListenerOutcomes(t *testing.T) {
-	ready := `{"jsonrpc":"2.0","id":1,"result":{"name":"pix-memory","version":"1","ready":true,"port":1}}`
+	ready := fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"result":{"name":"pix-memory","version":%q,"ready":true,"port":1}}`, launcher.Version)
 	degraded := `{"jsonrpc":"2.0","id":1,"result":{"name":"pix-memory","ready":false,"degraded_reason":"unit backoff: plugin exited"}}`
 	foreign := `{"jsonrpc":"2.0","id":1,"result":{"name":"something-else","ready":true}}`
 	malformed := `{"jsonrpc":"2.0",`
+	staleVersion := `{"jsonrpc":"2.0","id":1,"result":{"name":"pix-memory","version":"0.1.7","ready":true,"port":1}}`
 
 	t.Run("running unit is ready", func(t *testing.T) {
 		r := check(t, MemoryUnitProbe{Port: memoryUnit(t, ready, false), Enabled: true}, 3*time.Second)
@@ -254,6 +257,16 @@ func TestMemoryUnitProbe_RealListenerOutcomes(t *testing.T) {
 		}
 		if r.Fix == "" {
 			t.Error("a verified gap must carry an exact fix")
+		}
+	})
+	t.Run("a ready unit on the wrong version is a verified, read-only degraded gap", func(t *testing.T) {
+		r := check(t, MemoryUnitProbe{Port: memoryUnit(t, staleVersion, false), Enabled: true}, 3*time.Second)
+		wantStatus(t, r, StatusAbsent)
+		if !strings.Contains(r.Detail, "degraded") || !strings.Contains(r.Detail, "0.1.7") || !strings.Contains(r.Detail, launcher.Version) {
+			t.Errorf("detail must name actual and expected versions, got %q", r.Detail)
+		}
+		if r.Fix != ServeVersionMismatchFix {
+			t.Errorf("fix = %q, want %q (never a bare restart hint that cannot close a version gap)", r.Fix, ServeVersionMismatchFix)
 		}
 	})
 	t.Run("a foreign process holding the port is never ready", func(t *testing.T) {

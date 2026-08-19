@@ -223,9 +223,14 @@ dependency edges, so nobody can quietly drop the `needs` and keep the file.
   it per build. Each entry lists what it explicitly does **not** cover
   (trademark license, third-party DHI entitlement, other contributors'
   employment agreements).
-- `docs/legal/PRIVACY.md` — what data leaves the machine and to whom (model
-  providers and MCP servers you configured; no pix backend, no telemetry),
-  what stays loopback-local (memory, monitor), how credentials are handled
+- `docs/legal/PRIVACY.md` — what data leaves the machine and to whom: not
+  just the model providers and MCP servers you configured, but also the
+  DEFAULT destinations pix ships with and never asks about (the zero-config
+  `web_search` backend, `api.parallel.ai` and the other keyed search
+  fallbacks, the npm version check, and package/toolchain downloads) — no
+  pix backend, no telemetry, but not "no traffic unless configured" either.
+  Also states what stays loopback-local (memory; the monitor transcript tap
+  was removed outright, not merely made local), how credentials are handled
   (`op://` refs, never written to disk), and the honest limit: the real
   exposure is the data you route through it, and lawful basis/retention for
   that data is the operator's obligation, not pix's.

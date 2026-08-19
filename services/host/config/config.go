@@ -18,6 +18,8 @@ const (
 	// must reliably emit STRUCTURED JSON (facts/events/corrections).
 	DefaultMemoryWatcherModel = "qwen3.5:9b"
 	DefaultMemoryEmbedModel   = "nomic-embed-text"
+	// DefaultMemoryCapture: no automatic observation until a user opts in.
+	DefaultMemoryCapture = MemoryCaptureExplicit
 	// DefaultOllamaBridgeModel is the local model the sandbox's ollama-bridge
 	// exposes to pi (the interactive Alt+P cycle) AND the router's local option.
 	DefaultOllamaBridgeModel = "qwen3.5:9b"
@@ -32,6 +34,27 @@ const (
 // DefaultServices is intentionally empty: memory needs a verified local Ollama
 // watcher + embedding model, so only setup enables it once those probes pass.
 var DefaultServices = []string{}
+
+// The two memory_capture admission modes. Explicit is the default; there is
+// no review/staging mode.
+const (
+	MemoryCaptureExplicit         = "explicit"
+	MemoryCaptureExperimentalAuto = "experimental-auto"
+)
+
+// MemoryCaptureModes is the closed vocabulary for memory_capture, in the
+// order help text should list them.
+var MemoryCaptureModes = []string{MemoryCaptureExplicit, MemoryCaptureExperimentalAuto}
+
+// ValidMemoryCapture reports whether s is one of MemoryCaptureModes.
+func ValidMemoryCapture(s string) bool {
+	for _, m := range MemoryCaptureModes {
+		if s == m {
+			return true
+		}
+	}
+	return false
+}
 
 // PluginSpec configures one plugin slot: how it is implemented and, for external
 // impls, where the binary lives and how it is verified/reached.
@@ -75,6 +98,9 @@ type Config struct {
 	MemoryWatcherModel string `toml:"memory_watcher_model,omitempty"`
 	MemoryEmbedModel   string `toml:"memory_embed_model,omitempty"`
 	OllamaBridgeModel  string `toml:"ollama_bridge_model,omitempty"`
+	// MemoryCapture: explicit (default) or experimental-auto. See
+	// config.MemoryCaptureModes; a garbled value resolves to explicit.
+	MemoryCapture string `toml:"memory_capture,omitempty"`
 
 	// RunIntent is the routing intent for the top-level interactive session (the
 	// "overlord"), resolved through the router when neither --model nor --intent.
@@ -405,6 +431,11 @@ func (c *Config) applyDefaults() {
 	if c.RunIntent == "" {
 		c.RunIntent = DefaultRunIntent
 	}
+	// Fail closed: absent or garbled both resolve to the default, never to the
+	// opt-in mode nobody actually chose.
+	if !ValidMemoryCapture(c.MemoryCapture) {
+		c.MemoryCapture = DefaultMemoryCapture
+	}
 	if c.MemoryEmbedModel == "" {
 		c.MemoryEmbedModel = DefaultMemoryEmbedModel
 	}
@@ -548,6 +579,9 @@ func (c *Config) sparseForSave() *Config {
 	}
 	if sp.OllamaBridgeModel == DefaultOllamaBridgeModel {
 		sp.OllamaBridgeModel = ""
+	}
+	if sp.MemoryCapture == DefaultMemoryCapture {
+		sp.MemoryCapture = ""
 	}
 	if sp.RunIntent == DefaultRunIntent {
 		sp.RunIntent = ""

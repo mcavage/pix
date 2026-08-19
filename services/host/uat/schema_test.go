@@ -50,6 +50,20 @@ steps:
 			wantErr: true,
 		},
 		{
+			name: "Unimplemented named check cannot silently pass",
+			data: `
+schema: pix.uat/1
+name: test
+timeout: "5s"
+steps:
+  - id: step1
+    do: check
+    with:
+      name: services.memory_restart
+`,
+			wantErr: true,
+		},
+		{
 			name: "Forbidden need",
 			data: `
 schema: pix.uat/1

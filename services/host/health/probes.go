@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"pix/host/launcher"
 	"pix/host/rpc"
 	"pix/host/sys"
 )
@@ -40,7 +41,15 @@ const (
 	// `serve start` is the (re)start alias — rather than naming a bare
 	// `restart` subcommand kong has never answered to.
 	ServeRestartFix = "pix serve stop && pix serve start"
-	PackUseFix      = "pix pack use <path|owner/repo>"
+	// ServeVersionMismatchFix repairs a daemon that answers its port AND its
+	// identity, but as a version other than this binary's — the read-side
+	// analogue of verifyServeIdentity (service/install.go), detected here
+	// without ever restarting anything. `pix serve start` is the SAME alias
+	// serve_start.go binds to `serve install`, so this is the one command
+	// that both brings a down unit up AND reconciles a stale one, verifying
+	// the new version actually came up before it reports success.
+	ServeVersionMismatchFix = "pix serve start"
+	PackUseFix              = "pix pack use <path|owner/repo>"
 	// ServiceEnableFix repairs "the host has not enabled this service". `pix
 	// serve start` cannot: serve starts only what `services` names, so telling
 	// someone to run it for a service their config leaves out is a fix that
@@ -339,6 +348,7 @@ func (p MemoryUnitProbe) Check(ctx context.Context) Result {
 		return Result{Name: p.Name(), Status: StatusUnknown, Required: p.Enabled,
 			Detail: "unit did not answer", Evidence: fmt.Sprintf("identity on :%d: %s", p.Port, classifyNetErr(ctx, err))}
 	}
+	want := launcher.Version
 	switch {
 	case id.Name != rpc.MemoryName:
 		return Result{Name: p.Name(), Status: StatusAbsent, Required: p.Enabled,
@@ -351,6 +361,19 @@ func (p MemoryUnitProbe) Check(ctx context.Context) Result {
 		}
 		return Result{Name: p.Name(), Status: StatusAbsent, Required: p.Enabled, Detail: detail,
 			Fix: ServeRestartFix, Evidence: fmt.Sprintf(":%d identity ready=false", p.Port)}
+	// A unit that answers ready, on our own name, can STILL be the wrong
+	// build: a listening port (and even a ready unit) is not evidence the
+	// RIGHT binary is behind it, the same gap verifyServeIdentity closes on
+	// the explicit start path. Detected here READ-ONLY — this probe reports,
+	// it never restarts — and the fix is the one command that both starts a
+	// down unit and reconciles a stale one (verifying convergence before it
+	// claims success), never a bare restart hint that could not close a
+	// version gap on its own.
+	case id.Version != "" && id.Version != want:
+		return Result{Name: p.Name(), Status: StatusAbsent, Required: p.Enabled,
+			Detail:   fmt.Sprintf("degraded: running version %s, host expects %s", id.Version, want),
+			Fix:      ServeVersionMismatchFix,
+			Evidence: fmt.Sprintf(":%d identity version = %q, want %q", p.Port, id.Version, want)}
 	}
 	return Result{Name: p.Name(), Status: StatusReady, Required: p.Enabled,
 		Detail: fmt.Sprintf("unit running (:%d)", p.Port), Evidence: fmt.Sprintf(":%d identity = %s", p.Port, id.Name)}

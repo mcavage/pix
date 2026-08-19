@@ -40,7 +40,7 @@ test in A5; do not independently fan out across every model or agent.
 This raw curl is an explicit **harness diagnostic**, it hits the daemon directly
 to verify the service itself is up, separate from whether any memory has been
 captured yet. It is NOT how a normal agent workflow reads memory; that's the
-`memory_recall`/`memory_stats` tools (or `/recall`/`/learnings` in the
+`memory_recall`/`memory_stats` tools (or `/recall`/`/remember`/`/forget` in the
 sandbox, `pix memory stats` on the host), which is the path to point
 someone at for actually using memory.
 ```bash

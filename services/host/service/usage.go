@@ -11,4 +11,10 @@ anything after -- is passed to pix-host serve unchanged.
 
 You usually do NOT need to run this yourself: pix run / memory auto-start a
 detached serve when its ports are down (logs in ~/.local/state/pix/serve.log).
-Opt out with PIX_NO_AUTOSERVE=1 or 'pix config set host.autoserve false'.`
+Opt out with PIX_NO_AUTOSERVE=1 or 'pix config set host.autoserve false'.
+
+Auto-start never restarts an already-running daemon (it only brings a DOWN one
+up): if you upgraded pix and want the running services on the new version,
+run 'pix serve start' (or 'install') — it verifies the new version actually
+came up before reporting success, and tells you exactly what to run if it did
+not.`

@@ -1,1 +1,38 @@
-[]
+[
+	{
+		"id": "config-keys.top-level.surface",
+		"rationale": "The memory_capture unit adds one new top-level config key, memory_capture (explicit|experimental-auto, default explicit), following the exact pattern of memory_watcher_model/memory_embed_model/run_intent: applyDefaults resolves it, sparseForSave omits the default, ConfigValue/ApplyConfigChange/ConfigKeysHelp wire get/set/unset. There is no third (review/staging) mode.",
+		"evidence": "unit/memory-capture-modes",
+		"changes": [
+			{
+				"file": "services/host/config/config.go",
+				"kind": "set",
+				"to": ["services", "mcp", "memory_watcher_model", "memory_embed_model", "memory_capture", "ollama_bridge_model", "run_intent", "inference"]
+			}
+		]
+	},
+	{
+		"id": "memory.rpc.methods.server",
+		"rationale": "U2 (delete-ts-cli) deletes the promotable RPC method end to end: /learnings, `pix memory learnings`, and the frequency-ranked promotable surface had no remaining in-tree consumer once both were removed, so the JSON-RPC method table drops \"promotable\" along with them. (`synthesize` is itself deleted outright by the later U9 pass, so it no longer belongs in this entry's `to` either — see memory.rpc.methods.server's current `expected` set, which this now matches exactly.)",
+		"evidence": "unit/memory-delete-ts-cli",
+		"changes": [
+			{
+				"file": "services/host/serve_plugin.go",
+				"kind": "set",
+				"to": ["forget", "health", "identity", "observe", "recall", "remember", "stats"]
+			}
+		]
+	},
+	{
+		"id": "memory.rpc.methods.client-witness",
+		"rationale": "extensions/memory-recall.ts's /learnings command was the only client caller of the \"promotable\" RPC method; deleting the command (see memory.rpc.methods.server) removes the call too.",
+		"evidence": "unit/memory-delete-ts-cli",
+		"changes": [
+			{
+				"file": "extensions/memory-recall.ts",
+				"kind": "set",
+				"to": ["forget", "recall", "remember", "stats"]
+			}
+		]
+	}
+]

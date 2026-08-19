@@ -1,6 +1,7 @@
 // workspacestate.go is the single symlink-safe writer AND remover for the
 // launcher's per-Workspace state files (<Workspace>/.pix/*: sandbox.pack,
-// profile, ollama-bridge.model, knowledge.scope, knowledge, onboarding.json).
+// profile, ollama-bridge.model, memory-capture, knowledge.scope, knowledge,
+// onboarding.json).
 package workspace
 
 import (

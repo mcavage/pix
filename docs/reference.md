@@ -21,7 +21,7 @@ CLI reference of its own.
 | `setup` | the guided host+agent setup path (keys, memory, pack, identity) | `docs/design/onboarding.md` |
 | `reset` | start over: config, data and runtime state moved aside, sandboxes removed | §9 |
 | `serve` | the long-running host services (memory :11435) | `docs/design/serve-lifecycle.md` |
-| `memory` (`mem`) | recall/remember/forget/learnings/stats from the host | §2, `docs/memory.md` |
+| `memory` (`mem`) | recall/remember/forget/stats from the host | §2, `docs/memory.md` |
 | `pack` | the portable capability context: ls/show/use/rm (no authoring verb, edit `pack.toml`/`skills/` by hand) | §5, `docs/design/packs-v2.md` |
 | `mcp` | `add`/`ls`/`auth` the MCP servers your pack declares, through the sbx gateway (the one door integrations come through) | §8 |
 | `secret` | manage the 1Password `op://` refs (never the values) | §8 |
@@ -53,21 +53,37 @@ the host, so it survives even though the sandbox doesn't.
 pix run [DIR]               # launch (default: current dir)
 pix resume SESSION [DIR]    # resume the exact session named on exit
 pix                         # same as `pix run` at a terminal; status when piped
+pix --dev                   # at a terminal: `pix run --dev`; scripts must use the explicit form
 ```
+
+Dev mode's UAT MCP is fixed at sandbox creation. If that sandbox already exists
+without its session UAT registration, `pix --dev` refuses rather than attaching
+a session with missing tools. Run the exact recreate command it prints.
 
 ## 2. Memory
 
-pix learns from what you do, without you telling it to. A background
-watcher looks at each exchange and decides what's worth keeping: durable facts,
-preferences, corrections. You don't call a save function. You correct it by
-acting differently next time, the same way you'd correct a person.
+pix remembers durable facts, preferences, and conventions across sessions,
+so you don't re-teach the agent every time you open a new sandbox.
+**Capture is explicit by default**: nothing is written unless a human or an
+explicit command asks for it (`/remember`, `pix memory remember`, or the
+agent's own explicit tools). There is no background watcher writing memory
+out of the box.
 
 ```
 /recall <query>       # what memory would surface for this query
-/remember <text>      # pin a fact immediately, no waiting on the watcher
+/remember <text>      # pin a fact immediately
 /forget <id|query>     # drop a memory; id from /recall, or a query to drop its top match
-/learnings [minFreq]  # recurring captured facts worth promoting into a skill (see the `promote` skill)
 ```
+
+**Opt in to automatic capture** with `pix config set memory_capture
+experimental-auto` if you want a background watcher to extract facts and
+corrections from what you say, under one fixed daily budget (10 stored
+rows/day). This only reaches a *new* sandbox: an already-running one keeps
+the mode it launched with. A watcher-captured row is tagged with an `auto`
+annotation on `/recall`/`memory_recall`, visibly distinct from an explicit
+one, and `/forget <id>` is the feedback/undo mechanism for it, same as any
+other row. See `docs/memory.md`'s "How capture works" for the full
+admission rules, the secret filter, and the budget accounting.
 
 The agent has read-only access via **typed tools** (`memory_recall`,
 `memory_stats`) that reach the host daemon directly, it never shells out to
@@ -87,25 +103,28 @@ row is recalled, its content goes into the prompt sent to whichever model is
 active (Claude, OpenAI, Gemini, or local Ollama). Never store secrets, tokens,
 or credentials in memory.
 
-Example: you tell pi three times across different sessions that your staging
-DB is `postgres://staging.internal:5432`. The watcher notices the repetition
-and remembers it without being asked. Next session, `/recall staging db` finds
-it, or it surfaces unprompted in the system prompt when it's relevant.
+Example: you tell pi your staging DB is `postgres://staging.internal:5432` and
+say `/remember`. Next session, `/recall staging db` finds it, or it surfaces
+unprompted in the system prompt when it's relevant. With `experimental-auto`
+capture opted in, the watcher can extract and store the same kind of fact on
+its own, without an explicit `/remember`.
 
 **Durability.** A durable fact (preference, decision, convention) has no
-automatic expiry. A watcher-captured **event** (time-bound status: what you're
-doing right now) is perishable and expires after 7 days on its own. `/remember`
-is the reliable explicit write, driven by the human, not the agent, though a
-stable fact the watcher captures on its own can also land durable.
+automatic expiry, and every row pix writes is durable now, there is no
+perishable/TTL write path any more. `/remember` is the reliable explicit
+write, driven by the human, not the agent, though a stable fact the watcher
+captures on its own can also land durable. A store that predates this is
+retired once at startup rather than left holding rows nothing will ever
+expire; see docs/memory.md's Legacy data section.
 
 **What gets silently injected vs. what you can see.** Each turn, only a small
-relevance-filtered subset is silently added to context, low-scoring
-perishable hits are left out of that silent injection specifically, so a
-noisy time-bound status doesn't compete for space in every turn. Durable hits
-are never filtered by score. An explicit `/recall` or `memory_recall` skips
-that score filter, but is still capped: a blank query (or `*`) returns up to
-100 rows (with a truncation line if the store has more), not a true unbounded
-dump.
+relevance-filtered subset is silently added to context; every row is durable,
+so there is no score-based durability floor filtering anything out (a legacy
+perishable-scoring floor existed here once, deleted along with the write-side
+perishable/TTL path it policed). An explicit `/recall` or `memory_recall`
+skips that ranking filter entirely, but is still capped: a blank query (or
+`*`) returns up to 100 rows (with a
+truncation line if the store has more), not a true unbounded dump.
 
 **Limits.** Memory runs as a host service (`pix serve`, port 11435) and is
 per-machine, not shared across your laptop and your desktop, and not shared
@@ -114,9 +133,10 @@ with teammates. It's SQLite plus FTS5 and embeddings on disk at
 is down, the commands and tools above surface a clear error rather than
 failing silently; only the silent per-turn auto-injection degrades quietly (no
 memory gets added that turn, so a dead daemon never blocks the conversation).
-Nothing here is a pack: memory is what pix learned by watching, not what
-you deliberately taught it (that's a pack, see §5); a pack can still scope
-memory to itself via `memory_scope` (see [memory.md](memory.md)).
+Nothing here is a pack: memory is personal, per-machine storage with no
+versioning and no sharing (see Limits above); a pack is versioned, shared
+capability context you'd `git diff` (see §5). A pack can still scope memory
+to itself via `memory_scope` (see [memory.md](memory.md)).
 
 ## 3. Skills (the flows)
 
@@ -571,8 +591,8 @@ slate. Afterwards: `pix setup`.
 4. When you catch yourself repeating a preference or a wrapper script across
    sessions, that's the trigger, not before: write a `pack.toml` and a
    `skills/<name>/SKILL.md` by hand to save what worked as a reusable flow,
-   then `pix pack use <path>` to activate it. Run `/learnings` first if you
-   want to know what the watcher already noticed repeating.
+   then `pix pack use <path>` to activate it. Run `/recall` first if you
+   want to see what the watcher already captured on the topic.
 
 That's the whole loop: run, work, let the parts introduce themselves, save
 the repeat.

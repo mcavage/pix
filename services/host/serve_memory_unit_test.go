@@ -82,9 +82,13 @@ func TestMemoryUnitIsSelfExecAndPreservesTheRPCSurface(t *testing.T) {
 		t.Fatalf("recall over the plugin unit found nothing: %v", rec)
 	}
 	top, _ := hits[0].(map[string]any)
-	for _, k := range []string{"id", "content", "score", "kind", "durability", "project", "createdAt"} {
+	// durability is deliberately absent from this list: the U9 schema work
+	// retired the read thread end-to-end (no caller, host CLI or sandbox
+	// extension, ever consumed it again after U4); the DB column stays for
+	// on-disk compatibility, but the JSON-RPC response no longer carries it.
+	for _, k := range []string{"id", "content", "score", "kind", "project", "createdAt"} {
 		if _, present := top[k]; !present {
-			t.Errorf("recall hit is missing %q (the extension reads it): %v", k, top)
+			t.Errorf("recall hit is missing %q: %v", k, top)
 		}
 	}
 	if ca, _ := top["createdAt"].(string); strings.TrimSpace(ca) == "" {
@@ -114,8 +118,6 @@ func TestMemoryUnitIsSelfExecAndPreservesTheRPCSurface(t *testing.T) {
 			t.Errorf("health missing %q: %v", k, hres)
 		}
 	}
-	// the remaining methods are all still routable.
-	for _, m := range []string{"synthesize", "promotable", "observe"} {
-		rpcPost(t, srv.URL, m, map[string]any{"user": "hello", "minFrequency": 3})
-	}
+	// the remaining method is still routable.
+	rpcPost(t, srv.URL, "observe", map[string]any{"user": "hello"})
 }

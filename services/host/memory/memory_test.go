@@ -72,14 +72,13 @@ func capturingRPCServer(t *testing.T, results map[string]any, seen map[string]ma
 }
 
 // TestMemoryProfileForwarded checks the active profile is forwarded on the
-// profile-scoped verbs (recall, remember, learnings, stats).
+// profile-scoped verbs (recall, remember, stats).
 func TestMemoryProfileForwarded(t *testing.T) {
 	seen := map[string]map[string]any{}
 	c := capturingRPCServer(t, map[string]any{
-		"recall":     map[string]any{"hits": []any{}},
-		"remember":   map[string]any{"id": "x", "reaffirmed": false},
-		"promotable": map[string]any{"candidates": []any{}},
-		"stats":      map[string]any{"active": 0.0},
+		"recall":   map[string]any{"hits": []any{}},
+		"remember": map[string]any{"id": "x", "reaffirmed": false},
+		"stats":    map[string]any{"active": 0.0},
 	}, seen)
 
 	cases := []struct {
@@ -89,7 +88,6 @@ func TestMemoryProfileForwarded(t *testing.T) {
 	}{
 		{"recall", func() error { return (CLI{c, &bytes.Buffer{}, "work"}).Recall("q", 8, "", false) }, "recall"},
 		{"remember", func() error { return (CLI{c, &bytes.Buffer{}, "work"}).Remember("a fact", false) }, "remember"},
-		{"learnings", func() error { return (CLI{c, &bytes.Buffer{}, "work"}).Learnings(3, false) }, "promotable"},
 		{"stats", func() error { return (CLI{c, &bytes.Buffer{}, "work"}).Stats(false) }, "stats"},
 	}
 	for _, tc := range cases {
@@ -206,26 +204,59 @@ func TestMemoryForget(t *testing.T) {
 	}
 }
 
-func TestMemoryLearnings(t *testing.T) {
-	c := fakeRPCServer(t, map[string]any{"promotable": map[string]any{"candidates": []any{
-		map[string]any{"id": "aa11-bb", "content": "always run tests", "frequency": 5.0, "createdAt": "2026-07-22T16:15:03Z"},
-	}}})
+// QA-2: a miss must be an honest FAILURE, not a silent success dressed up as
+// one. `pix memory forget <missing>` returns a non-nil, non-usage error (so
+// dispatch maps it to exit 1) and writes NOTHING to Out in plain-text mode
+// — the diagnostic belongs on stderr, which is dispatch's job once an error
+// comes back, not this layer's.
+func TestMemoryForget_MissIsAFailure(t *testing.T) {
+	c := fakeRPCServer(t, map[string]any{"forget": map[string]any{"ok": false}})
 	var out bytes.Buffer
-	if err := (CLI{c, &out, "default"}).Learnings(3, false); err != nil {
-		t.Fatalf("learnings: %v", err)
+	err := (CLI{c, &out, "default"}).Forget("missing123", false)
+	if err == nil {
+		t.Fatal("forget of a missing id must return an error, got nil")
 	}
-	if !strings.Contains(out.String(), "5x") || !strings.Contains(out.String(), "always run tests") {
-		t.Errorf("learnings output = %q", out.String())
+	if cli.IsUsage(err) {
+		t.Errorf("a miss is not a usage error, got %v", err)
 	}
-	wantLocal := time.Date(2026, 7, 22, 16, 15, 3, 0, time.UTC).Local().Format(time.RFC3339)
-	if !strings.HasPrefix(out.String(), wantLocal) {
-		t.Errorf("learnings output must lead with the local-time timestamp %q, got: %q", wantLocal, out.String())
+	if cli.ExitCode(err) != 1 {
+		t.Errorf("forget miss exit code = %d, want 1", cli.ExitCode(err))
+	}
+	if !strings.Contains(err.Error(), "missing123") {
+		t.Errorf("error must name the id that missed, got %v", err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("plain-text forget miss must write nothing to Out (stdout), got %q", out.String())
 	}
 }
 
+// A --json miss still emits the parseable {"ok":false} result to Out — a
+// script piping `pix memory forget --json` never has to special-case a miss
+// to get valid JSON — but the call still fails, so the exit code is honest.
+func TestMemoryForget_MissJSONStillParseableButFails(t *testing.T) {
+	c := fakeRPCServer(t, map[string]any{"forget": map[string]any{"ok": false}})
+	var out bytes.Buffer
+	err := (CLI{c, &out, "default"}).Forget("missing123", true)
+	if err == nil {
+		t.Fatal("forget --json of a missing id must still return an error")
+	}
+	if cli.ExitCode(err) != 1 {
+		t.Errorf("forget --json miss exit code = %d, want 1", cli.ExitCode(err))
+	}
+	var parsed map[string]any
+	if jerr := json.Unmarshal(out.Bytes(), &parsed); jerr != nil {
+		t.Fatalf("--json miss output is not valid JSON: %v\n%s", jerr, out.String())
+	}
+	if ok, _ := parsed["ok"].(bool); ok {
+		t.Errorf("--json miss result must report ok:false, got %v", parsed)
+	}
+}
+
+// The durable/perishable split is gone end to end (host, plugin, CLI); this
+// only pins the plain-text render's remaining fields.
 func TestMemoryStats(t *testing.T) {
 	c := fakeRPCServer(t, map[string]any{"stats": map[string]any{
-		"active": 10.0, "durable": 3.0, "perishable": 7.0, "facts": 8.0, "learnings": 2.0, "deleted": 1.0,
+		"active": 10.0, "facts": 8.0, "learnings": 2.0, "deleted": 1.0,
 	}})
 	var out bytes.Buffer
 	if err := (CLI{c, &out, "default"}).Stats(false); err != nil {
@@ -233,6 +264,9 @@ func TestMemoryStats(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "active 10") {
 		t.Errorf("stats output = %q", out.String())
+	}
+	if strings.Contains(out.String(), "durable") || strings.Contains(out.String(), "perishable") {
+		t.Errorf("stats output must drop the durable/perishable split, got: %q", out.String())
 	}
 }
 
@@ -373,5 +407,66 @@ func TestFlagSetTerminator(t *testing.T) {
 	}
 	if strings.Join(pos, " ") != "a --not-a-flag b" {
 		t.Errorf("pos = %v, want [a --not-a-flag b]", pos)
+	}
+}
+
+// TestDisplayKind is the direct table test for the DX-6a render-only alias:
+// a stored "learning" kind must render as "correction", and every other kind
+// (including one that merely contains the substring "learning") must pass
+// through unchanged. No schema migration backs this: the alias lives only at
+// render time.
+func TestDisplayKind(t *testing.T) {
+	cases := []struct {
+		name string
+		kind string
+		want string
+	}{
+		{"learning renders as correction", "learning", "correction"},
+		{"fact passes through unchanged", "fact", "fact"},
+		{"empty kind passes through unchanged", "", ""},
+		{"a kind that merely contains learning is not aliased", "learnings", "learnings"},
+		{"unknown kind passes through unchanged", "preference", "preference"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := displayKind(tc.kind); got != tc.want {
+				t.Errorf("displayKind(%q) = %q, want %q", tc.kind, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestMemoryMeta is the direct table test for the ONE annotation that tells a
+// user where a row came from: a watcher-sourced (experimental-auto) row must
+// render "auto", and an explicit one must render nothing of the sort. The
+// existing coverage only reached memoryMeta THROUGH Recall's rendered line,
+// so an "auto" that stopped appearing (or started appearing for user/cli
+// rows, the worse direction: it would misattribute a fact the user typed to
+// the watcher) was only ever asserted indirectly.
+func TestMemoryMeta(t *testing.T) {
+	cases := []struct {
+		name string
+		hit  map[string]any
+		want string
+	}{
+		{"watcher row is tagged auto", map[string]any{"kind": "fact", "source": "watcher"}, "  [fact/auto]"},
+		{"user row is not tagged", map[string]any{"kind": "fact", "source": "user"}, "  [fact]"},
+		{"cli row is not tagged", map[string]any{"kind": "fact", "source": "cli"}, "  [fact]"},
+		{"unknown source is not tagged", map[string]any{"kind": "fact", "source": "unknown"}, "  [fact]"},
+		{"absent source is not tagged", map[string]any{"kind": "fact"}, "  [fact]"},
+		{"a source that merely contains watcher is not tagged", map[string]any{"kind": "fact", "source": "not-watcher"}, "  [fact]"},
+		{"a bare learning kind renders as correction", map[string]any{"kind": "learning"}, "  [correction]"},
+		{"a kind that merely contains learning is not aliased", map[string]any{"kind": "learnings"}, "  [learnings]"},
+		{"kind, project and auto share one separator", map[string]any{"kind": "learning", "project": "pix", "source": "watcher"}, "  [correction/pix/auto]"},
+		{"score follows the tags", map[string]any{"kind": "fact", "source": "watcher", "score": 0.59}, "  [fact/auto 0.59]"},
+		{"a score alone still renders", map[string]any{"score": 0.5}, "  [0.50]"},
+		{"nothing to say renders nothing", map[string]any{}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := memoryMeta(tc.hit); got != tc.want {
+				t.Errorf("memoryMeta(%v) = %q, want %q", tc.hit, got, tc.want)
+			}
+		})
 	}
 }

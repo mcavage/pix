@@ -111,12 +111,17 @@ See `docs/gworkspace.md` for the Workspace case worked through, and the
 
 ## Common questions
 
-**Is Ollama required?** No. Without it, memory still works but *degraded*: recall
-falls back to FTS5 keyword search (no vector ranking) and automatic capture is
-off, because there is no watcher model to extract facts from. `/remember` is
-unaffected: it is an explicit store, not an extraction. `pix doctor` reports the
-`models` row as optional. Install Ollama and pull the two models to get the full
-loop; see `docs/memory.md`.
+**Is Ollama required?** No. Without it, memory still works but *degraded*:
+recall falls back to FTS5 keyword search (no vector ranking). `/remember` is
+unaffected either way: it is an explicit store, not an extraction. Automatic
+capture is a **separate, opt-in** setting (`pix config set memory_capture
+experimental-auto`) that pix does not turn on for you: capture stays
+`explicit` (off) by default whether or not Ollama is installed. Ollama merely
+determines whether `experimental-auto`, if you opt into it, has a watcher
+model available to extract facts from; without Ollama there is no watcher
+model, so `experimental-auto` has nothing to run. `pix doctor` reports the
+`models` row as optional. Install Ollama and pull the two models to get
+semantic recall and a usable `experimental-auto`; see `docs/memory.md`.
 
 **Can I still launch the image with sbx directly?** Yes, through the kit:
 

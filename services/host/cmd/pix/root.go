@@ -59,7 +59,7 @@ type rootCmd struct {
 	Doctor doctorCmd `cmd:"" group:"Setup & health" help:"Diagnose problems and print the fix commands."`
 	Reset  resetCmd  `cmd:"" group:"Setup & health" help:"Clean slate: move config+data aside, clear runtime state, remove sandboxes."`
 
-	Memory memoryCmd `cmd:"" group:"Data" aliases:"mem" help:"recall | remember | forget | learnings | stats."`
+	Memory memoryCmd `cmd:"" group:"Data" aliases:"mem" help:"recall | remember | forget | stats."`
 	Pack   packCmd   `cmd:"" group:"Data" help:"ls | show | use | rm."`
 
 	Models ModelsCmd `cmd:"" group:"Models & agents" help:"Which models pix can use, and which are wired."`
@@ -126,6 +126,13 @@ func newRootDeps() *cli.Deps {
 // It is the SINGLE exit mapper: 0 success, 1 failure, 2 a wrong invocation, and
 // a SilentError's own code (3, readiness' unverifiable arm).
 func dispatch(argv []string, d *cli.Deps) int {
+	// `pix --dev` is the direct shorthand for an implicit dev launch. Preserve
+	// the same TTY boundary as bare `pix`/`pix DIR`; scripts have the explicit
+	// and auditable `pix run --dev` spelling.
+	if len(argv) > 0 && argv[0] == "--dev" && !d.Interactive {
+		fmt.Fprintln(d.Err, "pix: refusing an implicit --dev launch on a non-interactive terminal. Run it explicitly instead: pix run --dev")
+		return 2
+	}
 	argv = normalizeArgv(argv)
 	// A bare positional is `run DIR` when it names a directory, and a verb typo
 	// otherwise. kong would call both "unexpected argument".
@@ -164,6 +171,11 @@ func dispatch(argv []string, d *cli.Deps) int {
 // and run's `--` pi tail. A REWRITE, not a parse: the root still owns every
 // decision downstream, and it never fires for a real subcommand.
 func normalizeArgv(argv []string) []string {
+	// Plain `pix` is implicit `pix run`; let its dev-mode spelling take the
+	// same direct form instead of making `pix --dev` an unknown root flag.
+	if len(argv) > 0 && argv[0] == "--dev" {
+		argv = append([]string{"run"}, argv...)
+	}
 	if len(argv) == 3 && argv[0] == "task" && argv[2] == "path" && !isTaskKnownVerb(argv[1]) {
 		return []string{"task", "path", argv[1]}
 	}

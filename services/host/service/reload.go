@@ -19,6 +19,7 @@ var daemonAffectingKeys = map[string]bool{
 	"services":             true,
 	"memory_watcher_model": true,
 	"memory_embed_model":   true,
+	"memory_capture":       true,
 }
 
 // IsDaemonAffecting reports whether a config key change requires a serve
@@ -84,10 +85,12 @@ func detectServeMode(ctl serveCtl, managedActive func() bool, lazyPid func() (in
 }
 
 // serveRelazyResult is why a stop-then-lazy-start sequence ended: at most one
-// field is set. Both callers that recycle a background daemon (config
-// propagation, the stale-version upgrade) run the SAME sequence and only word the
-// report differently — so neither can forget the notStopped case, where
-// re-spawning would double-start against a still-live daemon (M4).
+// field is set. Config propagation is the one caller that recycles a
+// background daemon this way (U3-lifecycle: the read-side version-restart that
+// used to share this sequence was deleted — see EnsureUp in start.go) — it only
+// needs to word the report once, but the notStopped case still must not be
+// forgotten, where re-spawning would double-start against a still-live daemon
+// (M4).
 type serveRelazyResult struct {
 	stopErr    error // Stop failed
 	notStopped bool  // Stop refused an unverified pid, or found nothing to stop

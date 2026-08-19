@@ -151,21 +151,25 @@ export function formatMemoryIso(value: unknown): string | null {
 	return match ? `${match[1]}T${match[2]}${match[3].toUpperCase()}` : null;
 }
 
-// One rendered /recall line: id, kind/durability/project, an optional local
-// timestamp, then the content.
-export function formatHitLine(h: any): string {
-	const ts = formatMemoryIso(h?.createdAt);
-	return `• [${String(h.id).slice(0, 8)}] (${h.kind}/${h.durability}${h.project ? "/" + h.project : ""})${ts ? ` ${ts}` : ""} ${h.content}`;
+// DX-6a: render-only alias. The stored/JSON kind stays "learning" (no schema
+// migration, and --json output keeps emitting "learning" for compatibility);
+// only the human-facing line renders it as "correction", which is what a
+// learning actually is from the user's side of the interaction. Every other
+// kind renders unchanged. Mirrored in services/host/memory/memory.go's
+// memoryMeta so the two surfaces never wear different labels for one row.
+export function displayKind(kind: unknown): string {
+	return kind === "learning" ? "correction" : String(kind);
 }
 
-// Below this score, a PERISHABLE hit is noisy enough that silently injecting
-// it into every relevant turn does more harm than good (the watcher's own
-// time-bound "status" rows are the least trustworthy long-term signal). This
-// floor applies ONLY to the silent auto-injection path (buildRecallBlock):
-// an explicit `/recall` or the memory_recall tool always shows everything, so
-// the user (or the model, when explicitly asked) can still see the full
-// picture. Durable hits are never filtered here.
-const AUTO_INJECT_PERISHABLE_SCORE_FLOOR = 0.3;
+// One rendered /recall line: id, kind/project (plus an "auto" tag for a
+// watcher-sourced row, so an experimental-auto capture is visibly distinct
+// from an explicit one -- /forget <id> is the feedback/undo mechanism, this
+// is only the visibility half), an optional local timestamp, then the content.
+export function formatHitLine(h: any): string {
+	const ts = formatMemoryIso(h?.createdAt);
+	const tag = h?.source === "watcher" ? "/auto" : "";
+	return `• [${String(h.id).slice(0, 8)}] (${displayKind(h.kind)}${h.project ? "/" + h.project : ""}${tag})${ts ? ` ${ts}` : ""} ${h.content}`;
+}
 
 // The block header, verbatim. The second line is the untrusted-content wrapper
 // and the third is the provenance label: they are what stop the model reading a
@@ -181,7 +185,7 @@ export const RECALL_HEADER = [
 /** One recalled hit as one line of the injected block. Pure. */
 export const renderRecallRow = (h: any): string => `- ${h.content}`;
 
-// Ask the store, then drop the perishable noise. Split out from
+// Ask the store for a small relevance-scored set. Split out from
 // buildRecallBlock so the per-turn hook can dedupe and cap ROWS (which it can
 // count and cut at a boundary) instead of a pre-rendered string.
 export async function fetchRecallRows(
@@ -191,9 +195,7 @@ export async function fetchRecallRows(
 ): Promise<any[]> {
 	if (!prompt || !prompt.trim()) return [];
 	const r = await rpc("recall", { query: prompt, project, profile, limit: 6, charBudget: 1000 });
-	return (r?.hits ?? []).filter(
-		(h: any) => h.durability !== "perishable" || typeof h.score !== "number" || h.score >= AUTO_INJECT_PERISHABLE_SCORE_FLOOR,
-	);
+	return r?.hits ?? [];
 }
 
 // Pure-ish and testable: prompt in, injected block out (or null). Hits come from
@@ -212,9 +214,9 @@ export async function buildRecallBlock(
 // accurate picture of the capability instead of guessing: it reaches the host
 // daemon directly (no shelling out), auto-recall only injects a small filtered
 // subset each turn (this tool can return up to 100 rows, not the whole store),
-// durable memories never expire on their own, watcher-captured events are
-// perishable and expire after 7 days, and writes/deletes are human-driven
-// slash commands (`/remember`, `/forget`).
+// every memory is durable with no automatic expiry (see docs/memory.md's
+// Legacy data section for what that replaced), and writes/deletes are
+// human-driven slash commands (`/remember`, `/forget`).
 //
 // IMPORTANT, this is a UX/safety posture, not a security boundary: the host
 // memory daemon is unauthenticated and reachable at host.docker.internal (see
@@ -225,7 +227,7 @@ export async function buildRecallBlock(
 const MEMORY_TOOL_SEMANTICS =
 	"Reaches the host memory daemon directly over host.docker.internal, never shell out to `pix` or `curl`. " +
 	"Only a small relevance-filtered subset of memory is silently injected into context each turn; this tool can return up to 100 rows visible to the active profile, not the whole store. " +
-	"Durable memories have no automatic expiry. Watcher-captured events are perishable and expire after 7 days. " +
+	"Every memory is durable, with no automatic expiry. " +
 	"This tool surface is read-only: it can inspect memory but cannot store or delete it. Writing (`/remember`) and deleting (`/forget`) are human-driven slash commands, not agent tools, " +
 	"that's a UX/safety design choice on this tool surface, not a security control.";
 
@@ -333,13 +335,16 @@ export default function (pi: any) {
 	pi.registerTool?.({
 		name: "memory_stats",
 		label: "Memory stats",
-		promptSnippet: "Read durable, perishable, active, and deleted memory counts",
+		promptSnippet: "Read active, facts, corrections, and deleted memory counts",
 		promptGuidelines: [
 			"Use memory_stats for memory-store counts instead of guessing or probing the daemon with shell commands.",
 			MEMORY_CAPTURE_HONESTY_GUIDELINE,
 		],
 		description: [
-			"Report counts from the memory store (active, durable, perishable, facts, learnings, deleted). Use this when the user asks how much memory there is, or what the current store looks like.",
+			// "corrections" is what those rows are (a rule the user stated, e.g. "stop using em dashes"); "learnings" is only the
+			// wire key the host has always returned, kept as-is so --json/RPC consumers don't break. Both are named so the model
+			// can read the raw JSON this tool returns without inventing a fourth category.
+			"Report counts from the memory store: active, facts, corrections (the JSON key for these is `learnings`), deleted. Use this when the user asks how much memory there is, or what the current store looks like.",
 			MEMORY_TOOL_SEMANTICS,
 		].join(" "),
 		parameters: MemoryStatsParams as any,
@@ -383,21 +388,42 @@ export default function (pi: any) {
 
 	pi.registerCommand?.("remember", {
 		description: "Store a durable fact in memory (global)",
-		handler: async (args: any, ctx: any) =>
-			safe(async () => {
-				const r = await rpc("remember", {
-					content: String(args ?? "").trim(),
-					source: "user",
-					profile: ACTIVE_PROFILE,
-				});
+		handler: async (args: any, ctx: any) => {
+			const content = String(args ?? "").trim();
+			// A blank /remember never reaches the daemon and never claims success:
+			// show usage and stop, matching /forget's own blank-arg guard above.
+			if (!content) return ctx?.ui?.notify?.("usage: /remember <fact>", "info");
+			// Deliberately NOT wrapped in safe(): this is a user-invoked command, so a
+			// dead/slow memory service must surface as a visible error, not vanish (see
+			// /recall above, whose try/catch this mirrors). The silent best-effort
+			// behavior stays on the before_agent_start hook only.
+			try {
+				const r = await rpc("remember", { content, source: "user", profile: ACTIVE_PROFILE });
+				// The daemon can respond 200 with an empty id (e.g. content collapsed to
+				// "" after its own trim, or a budget/dedupe path returned nothing to
+				// store) — that is NOT success and must not be reported as "remembered"
+				// or "reaffirmed".
+				if (!r?.id) {
+					return ctx?.ui?.notify?.(
+						`/remember failed: memory service did not store this fact (empty id in response)`,
+						"error",
+					);
+				}
 				ctx?.ui?.notify?.(r?.reaffirmed ? "reaffirmed" : "remembered", "info");
-			}),
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				ctx?.ui?.notify?.(`/remember failed: ${msg} (is the memory service reachable?)`, "error");
+			}
+		},
 	});
 
 	pi.registerCommand?.("forget", {
 		description: "Forget a memory. Pass an 8+ char id (from /recall) or a query to drop its top match.",
-		handler: async (args: any, ctx: any) =>
-			safe(async () => {
+		handler: async (args: any, ctx: any) => {
+			// Deliberately NOT wrapped in safe(): same reasoning as /remember and
+			// /recall above, a dead/slow memory service must surface as a visible
+			// error, not vanish.
+			try {
 				const arg = String(args ?? "").trim();
 				if (!arg) return ctx?.ui?.notify?.("usage: /forget <id|query>", "info");
 				// A bare hex-ish token is treated as an id; otherwise recall the top match.
@@ -406,26 +432,34 @@ export default function (pi: any) {
 				if (!id) {
 					const r = await rpc("recall", { query: arg, limit: 1, project: currentProject(ctx), profile: ACTIVE_PROFILE });
 					const hit = r?.hits?.[0];
-					if (!hit) return ctx?.ui?.notify?.("no match to forget", "info");
+					// A no-match query is a visible error, not info: nothing was forgotten,
+					// so a quiet "info" reads as success. Actionable, not just a fact: tell
+					// the caller what to try next.
+					if (!hit)
+						return ctx?.ui?.notify?.(
+							`no memory matched "${arg}" — nothing was forgotten. Try /recall ${arg} to see what is actually stored, or narrow/broaden the query.`,
+							"error",
+						);
 					id = hit.id;
 					content = hit.content;
 				}
 				const r = await rpc("forget", { id, profile: ACTIVE_PROFILE });
-				ctx?.ui?.notify?.(r?.ok ? `forgot: ${content}` : "not found (use a full id from /recall)", "info");
-			}),
-	});
-
-	pi.registerCommand?.("learnings", {
-		description: "Show recurring captured learnings worth promoting into a skill or convention",
-		handler: async (args: any, ctx: any) =>
-			safe(async () => {
-				const min = Number(String(args ?? "").trim()) || 3;
-				const r = await rpc("promotable", { minFrequency: min, profile: ACTIVE_PROFILE });
-				const c = r?.candidates ?? [];
-				const text = c.length
-					? c.map((x: any) => `(${x.frequency}x) ${x.content}`).join("\n")
-					: "(nothing recurring yet)";
-				ctx?.ui?.notify?.(text, "info");
-			}),
+				if (r?.ok) {
+					ctx?.ui?.notify?.(`forgot: ${content}`, "info");
+				} else {
+					// A miss is a visible error, not info: the id the caller supplied did
+					// not match anything IN THE ACTIVE PROFILE. Name the actual reasons
+					// (absent, already forgotten, or a different profile scope), not a
+					// formatting complaint, since the id shape was already accepted above.
+					ctx?.ui?.notify?.(
+						`no memory with id "${id}" in this scope — it may not exist, may already be forgotten, or may belong to a different profile. Run /recall to check.`,
+						"error",
+					);
+				}
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				ctx?.ui?.notify?.(`/forget failed: ${msg} (is the memory service reachable?)`, "error");
+			}
+		},
 	});
 }
