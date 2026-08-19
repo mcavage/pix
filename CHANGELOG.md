@@ -10,6 +10,23 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **A front door that is bound but not yet dispensed waits for real work instead
+  of refusing it.** The readiness fix that landed in #90 answered `identity`
+  from the instant a listener binds, which is right for a probe and was wrong
+  for everything else: the same handler told genuine calls "the supervised unit
+  is not up yet", when before it served early those calls sat in an unaccepted
+  backlog and then succeeded. `pix memory recall` through the `EnsureUp`
+  autostart path exited 1 instead of waiting, because `EnsureUp` dials the port
+  and deliberately does not pay an identity RPC on every command. The front door
+  now dispatches by kind: a recognised `identity` probe is answered at once with
+  `ready=false`, and anything else waits for the unit's mux, bounded by the
+  request's own context exactly as the backlog bounded it. Anything
+  unrecognisable — an unreadable body, a parse failure, a batch — counts as work
+  and waits, because telling real work "not ready" is the failure being avoided.
+  `waitRPCReady` in the UAT matrix now requires `ready=true` rather than
+  treating "identity answered" as up; those were equivalent only while a bound
+  listener could not answer at all.
+
 - **`pix serve install` no longer warns that a healthy daemon failed its
   identity check, and finishes in under a second instead of eleven.** Three
   defects combined into one failure. First, `serve` bound every HTTP front door

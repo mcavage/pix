@@ -7,6 +7,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -253,6 +254,23 @@ func memoryProxyMux(h *pluginHolder) http.Handler {
 // name and port MUST match what the real unit reports, or a probe reads this as
 // a foreign listener. db_path stays empty: no store is open yet and no probe
 // matches on it, so naming one would be the same kind of small untruth.
+// isIdentityCall reports whether this request is an `identity` probe, RESTORING
+// r.Body either way so the next handler still reads it. The 1<<20 limit MUST
+// match jsonrpcMuxFallback's below, or this truncates the body it puts back.
+// Anything unrecognised (unreadable, unparseable, a batch) is NOT a probe, so it
+// waits: telling real work "not ready" is the failure this path exists to avoid.
+func isIdentityCall(r *http.Request) bool {
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		return false
+	}
+	r.Body = io.NopCloser(bytes.NewReader(raw))
+	var msg struct {
+		Method string `json:"method"`
+	}
+	return json.Unmarshal(raw, &msg) == nil && msg.Method == "identity"
+}
+
 func startingMux(name string, port int) http.Handler {
 	const reason = "the supervised unit is not up yet"
 	return jsonrpcMuxFallback(map[string]func(jsonObj) (any, error){

@@ -539,14 +539,23 @@ func rpcCall(ctx context.Context, port int, method string, params map[string]any
 	return r, nil
 }
 
+// It requires ready=true, NOT merely that identity answered. The front door
+// answers `identity` from the moment its listener binds, precisely so a probe
+// never hangs (serve.go's swapHandler/startingMux), so "it answered" stopped
+// meaning "the unit is up" — and a caller that treated the two as the same
+// returned on the first poll and raced the real work behind it.
 func waitRPCReady(ctx context.Context, port int, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	for time.Now().Before(deadline) {
-		if _, err := rpcCall(ctx, port, "identity", map[string]any{}); err == nil {
-			return nil
-		} else {
+		res, err := rpcCall(ctx, port, "identity", map[string]any{})
+		switch {
+		case err != nil:
 			lastErr = err
+		case res["ready"] == true:
+			return nil
+		default:
+			lastErr = fmt.Errorf("identity answers but reports ready=false (%v)", res["degraded_reason"])
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
