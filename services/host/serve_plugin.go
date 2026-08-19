@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -241,6 +242,29 @@ func memoryProxyMux(h *pluginHolder) http.Handler {
 	})
 }
 
+// startingMux serves a front door between "the listener is bound" and "the unit
+// is dispensed" (swapHandler, serve.go). It answers `identity` TRUTHFULLY —
+// right name, right version, ready=false, with the reason — because that is what
+// a caller cannot work out from outside: install/start/doctor all distinguish
+// "not ready yet" (wait) from "wrong version" (stale binary) from "not us
+// holding the port", and a hung request collapses all three into "unreachable".
+// Other methods report the same reason, not a misleading "method not found".
+//
+// name and port MUST match what the real unit reports, or a probe reads this as
+// a foreign listener. db_path stays empty: no store is open yet and no probe
+// matches on it, so naming one would be the same kind of small untruth.
+func startingMux(name string, port int) http.Handler {
+	const reason = "the supervised unit is not up yet"
+	return jsonrpcMuxFallback(map[string]func(jsonObj) (any, error){
+		"identity": func(jsonObj) (any, error) {
+			// Ready is left at false, which is the entire point of this handler.
+			return serviceIdentity{Name: name, Version: version, Port: port, DegradedReason: reason}.obj(), nil
+		},
+	}, func(method string, _ jsonObj) (any, error) {
+		return nil, fmt.Errorf("%s is starting: %s (retry in a moment)", name, reason)
+	})
+}
+
 // memoryStoreMux is THE :11435 JSON-RPC surface, expressed once over the typed
 // MemoryStore interface. `use` resolves and calls the store per request — a
 // Holder.Use-wrapped plugin client for the supervised unit, or a direct call
@@ -341,12 +365,23 @@ func memoryStoreMux(use memoryUse) http.Handler {
 // jsonrpcMux wraps a method table in the same JSON-RPC 2.0 envelope handling
 // memoryMux() uses (single + batch, parse-error, method-not-found).
 func jsonrpcMux(methods map[string]func(jsonObj) (any, error)) http.Handler {
+	return jsonrpcMuxFallback(methods, nil)
+}
+
+// jsonrpcMuxFallback is jsonrpcMux with a handler for every method NOT in the
+// map. nil keeps the -32601 "method not found" default, which is what every
+// steady-state surface wants; a front door whose unit is still coming up passes
+// one so a method it will support in a moment says WHY, not that it is unknown.
+func jsonrpcMuxFallback(methods map[string]func(jsonObj) (any, error), fallback func(method string, params jsonObj) (any, error)) http.Handler {
 	handleOne := func(msg jsonObj) jsonObj {
 		id := msg["id"]
 		method, _ := msg["method"].(string)
 		fn := methods[method]
-		if fn == nil {
+		if fn == nil && fallback == nil {
 			return jsonObj{"jsonrpc": "2.0", "id": id, "error": jsonObj{"code": -32601, "message": "method not found"}}
+		}
+		if fn == nil {
+			fn = func(p jsonObj) (any, error) { return fallback(method, p) }
 		}
 		params, _ := msg["params"].(map[string]any)
 		if params == nil {

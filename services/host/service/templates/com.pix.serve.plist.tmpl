@@ -48,6 +48,19 @@
   <true/>
   <key>KeepAlive</key>
   <true/>
+  <!-- launchd's DEFAULT exit timeout is 5 seconds, and `pix-host serve` needs
+       longer than that to shut down cleanly: it drains every front door first
+       (frontDoorShutdownTimeout, 5s) and only THEN tears down the supervised
+       backend (supervise.DefaultBudgets Stop, 15s). At the default, every
+       `launchctl bootout` and `kickstart -k` SIGKILLed pix-host partway through
+       that sequence, and each pack daemon, which deliberately runs in its OWN
+       process group so a vendor CLI it spawned cannot outlive it, was reparented
+       to launchd with its loopback port STILL BOUND. One such orphan is
+       permanent, and it makes every later start spend the full preflight budget
+       discovering the port is taken before failing that daemon for good. Keep
+       this at or above the sum of those two budgets. -->
+  <key>ExitTimeOut</key>
+  <integer>30</integer>
   <key>StandardOutPath</key>
   <string>{{.LogPath}}</string>
   <key>StandardErrorPath</key>

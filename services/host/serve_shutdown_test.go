@@ -6,8 +6,8 @@ package main
 //  1. bind-before-spawn: a bound-port conflict on a built-in HTTP front door
 //     leaves ZERO child-spawn side effects — no pack unit, no memory plugin
 //     subprocess, no pidfile — because bindFrontDoors (Phase 1) cannot spawn
-//     anything by construction, and spawnChildren (Phase 2) is only ever
-//     reached once every bind in Phase 1 has already succeeded.
+//     anything by construction, and spawnMemory/reconcilePacks (Phases 3 and 4)
+//     are only ever reached once every bind in Phase 1 has already succeeded.
 //  2. drain-before-teardown: on shutdown, every front door stops accepting
 //     and drains its in-flight work FIRST, bounded, before the supervised
 //     backend is torn down.
@@ -61,7 +61,7 @@ func TestBindFrontDoorsReturnsErrorWithoutSpawningAnything(t *testing.T) {
 // against an already-occupied port. It must exit 1, and — the property that
 // matters — never write a pidfile and never publish a supervision-tree
 // snapshot, which only happens once a unit is actually launched. If
-// spawnChildren ran before the bind failed, the memory plugin subprocess
+// spawnMemory ran before the bind failed, the memory plugin subprocess
 // would already be up and the units snapshot would exist.
 func TestServeProcessSpawnsNoChildOnMemoryPortConflict(t *testing.T) {
 	if testing.Short() {

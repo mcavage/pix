@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"pix/host/config"
 	"pix/host/launcher"
 	"pix/host/rpc"
+	"pix/host/supervise"
 )
 
 // recRunner records every command invocation and answers from a script.
@@ -85,6 +87,11 @@ func TestRenderPlist(t *testing.T) {
 		"<string>serve</string>",
 		"<key>RunAtLoad</key>",
 		"<key>KeepAlive</key>",
+		// ExitTimeOut must be present at all: launchd's default is 5 seconds,
+		// which is SHORTER than serve's own shutdown sequence, so every bootout
+		// and kickstart SIGKILLed pix-host mid-teardown and orphaned its pack
+		// daemons with their ports still bound. See the template's comment.
+		"<key>ExitTimeOut</key>",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("plist missing %q:\n%s", want, got)
@@ -98,10 +105,33 @@ func TestRenderPlist(t *testing.T) {
 	if strings.Contains(got, "Library/Logs") {
 		t.Errorf("plist still references ~/Library/Logs:\n%s", got)
 	}
+	// The exit timeout must COVER serve's shutdown sequence: front doors drain
+	// first (frontDoorShutdownTimeout, 5s), then the supervised backend
+	// (supervise.DefaultBudgets().Stop, 15s). A value under that sum is the bug
+	// this assertion exists to prevent, not a tuning preference: launchd SIGKILLs
+	// at the timeout, and a pack daemon killed with pix-host survives in its own
+	// process group holding its port forever.
+	m := regexp.MustCompile(`<key>ExitTimeOut</key>\s*<integer>(\d+)</integer>`).FindStringSubmatch(got)
+	if m == nil {
+		t.Fatalf("plist has no ExitTimeOut integer:\n%s", got)
+	}
+	secs, cerr := strconv.Atoi(m[1])
+	if cerr != nil {
+		t.Fatalf("ExitTimeOut %q is not an integer", m[1])
+	}
+	wantAtLeast := int((5*time.Second + supervise.DefaultBudgets().Stop) / time.Second)
+	if secs < wantAtLeast {
+		t.Errorf("ExitTimeOut = %ds, want >= %ds (front-door drain + supervise Stop budget); "+
+			"launchd would SIGKILL pix-host mid-shutdown and orphan its pack daemons", secs, wantAtLeast)
+	}
 }
 
 // TestLaunchdInstall: plist written to the right path (0644) and launchctl
 // invoked in the right order: bootout (idempotence) -> bootstrap -> kickstart.
+//
+// The kickstart must NOT carry `-k`. bootstrap+RunAtLoad has already started a
+// fresh process from the plist just written, so `-k` only kills it and pays a
+// second shutdown-plus-startup cycle. launchdRestart is where `-k` belongs.
 func TestLaunchdInstall(t *testing.T) {
 	r := &recRunner{}
 	f := newRecFS()
@@ -119,7 +149,7 @@ func TestLaunchdInstall(t *testing.T) {
 	want := []string{
 		"launchctl bootout gui/501/com.pix.serve",
 		"launchctl bootstrap gui/501 " + plistPath,
-		"launchctl kickstart -k gui/501/com.pix.serve",
+		"launchctl kickstart gui/501/com.pix.serve",
 	}
 	if len(r.calls) != len(want) {
 		t.Fatalf("calls = %v, want %v", r.calls, want)

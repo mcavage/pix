@@ -4,11 +4,15 @@
 // every sandbox depends on. MCP servers are stdio and spawned on demand by the
 // sbx gateway, not here.
 //
-// Startup is two strict phases, in order (bindFrontDoors, then
-// spawnChildren): every built-in HTTP front door binds FIRST — before a
-// single pack/plugin child is spawned or the pidfile is written — so a port
-// conflict fails with zero subprocesses ever launched. Shutdown mirrors that
-// (performShutdown): drain every front door first with a bounded context, then
+// Startup is four strict phases: bindFrontDoors (every front door binds FIRST,
+// so a port conflict fails with zero subprocesses ever launched), then serve
+// those listeners at once behind a starting-up handler (swapHandler — a bound
+// port is never open behind nothing, and this still spawns nothing, so phase
+// 1's guarantee holds), then spawnMemory, then reconcilePacks LAST because a
+// pack daemon's preflight can take 15s and memory must not wait on it.
+//
+// Shutdown mirrors that (performShutdown): drain every front door first with a
+// bounded context, then
 // tear down the supervised backend — and no exit path calls os.Exit until that
 // full sequence has returned, so exit-1 semantics on a fatal error are
 // preserved but never early.
@@ -28,6 +32,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -48,7 +53,35 @@ type hostService struct {
 	name string
 	addr string
 	ln   net.Listener
-	mux  http.Handler
+	// h is live from the instant the port is bound, replaced in place once the
+	// supervised unit is up. See swapHandler.
+	h *swapHandler
+}
+
+// swapHandler lets a listener be SERVED from the instant it binds, behind
+// startingMux, with the real mux swapped in once the unit is dispensed.
+//
+// It exists because the port used to lie: http.Serve was called only after the
+// child-spawn phase returned, so for that whole phase the kernel accepted
+// connections into the backlog of a listener no goroutine read from. The port
+// was OPEN and every request HUNG — a TCP dial says "up", `identity` says
+// "unreachable", and no caller can tell a starting daemon from a wedged one.
+// Measured: TCP answered at 0.26s, HTTP at 15.22s (one pack daemon's preflight
+// held the phase), against install's 10s verification budget, so `pix serve
+// install` ALWAYS reported a healthy daemon as unreachable.
+type swapHandler struct{ cur atomic.Pointer[http.Handler] }
+
+func newSwapHandler(h http.Handler) *swapHandler {
+	s := &swapHandler{}
+	s.set(h)
+	return s
+}
+
+// set swaps the live handler; an in-flight request keeps the one it started with.
+func (s *swapHandler) set(h http.Handler) { s.cur.Store(&h) }
+
+func (s *swapHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	(*s.cur.Load()).ServeHTTP(w, r)
 }
 
 // frontDoorShutdownTimeout bounds how long a front-door http.Server is given to
@@ -94,12 +127,16 @@ func runServe(argv []string) {
 	}
 
 	sup := &supervisor{}
-	// fatalf routes every fatal exit through plugin cleanup: a plain log.Fatalf
-	// skips the signal-handler shutdown and orphans a launched plugin subprocess.
-	// sup.shutdown() is a no-op with none running, so use it for EVERY fatal below.
+	// Populated in Phase 2, read by fatalf; both on THIS goroutine only, so the
+	// read needs no synchronization.
+	var httpServers []*http.Server
+	// fatalf routes every fatal exit through the SAME sequence the signal path
+	// uses: drain the serving front doors, then the backend. A plain log.Fatalf
+	// skips both and orphans a launched plugin subprocess. Both calls no-op on an
+	// empty list / no running unit, so this is correct in ANY phase.
 	fatalf := func(format string, a ...any) {
 		log.Printf("serve: "+format, a...)
-		sup.shutdown()
+		performShutdown(httpServers, sup.shutdown)
 		os.Exit(1)
 	}
 
@@ -142,16 +179,6 @@ func runServe(argv []string) {
 		fatalf("no services enabled (run: pix config set services %s)", strings.Join(valid, ","))
 	}
 
-	// Phase 2: only once EVERY front door above is bound do we spawn pack units
-	// and the memory plugin child — the one place either is ever launched.
-	spawnChildren(cfg, sup, selfPath, all, fatalf)
-
-	// Record our pid so the launcher's `serve stop`/`serve status` can find and
-	// signal us safely (no blind pkill).
-	writeServePidFile()
-	defer removeServePidFile()
-	defer removeServeLazyMarker()
-
 	// fatalCh carries service-goroutine errors (e.g. port already in use) back to
 	// the main goroutine, and sigCh carries SIGINT/SIGTERM: both are handled in the
 	// select below rather than by a side goroutine calling os.Exit, so the deferred
@@ -160,14 +187,18 @@ func runServe(argv []string) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	httpServers := make([]*http.Server, 0, len(all))
+	// Phase 2: START SERVING every bound front door, BEFORE any child is spawned,
+	// so a bound port never accepts a connection nothing will read — it answers an
+	// honest ready=false identity while its unit comes up (swapHandler). Spawns
+	// nothing, so Phase 1's bind-before-spawn guarantee is untouched.
+	httpServers = make([]*http.Server, 0, len(all))
 	for _, s := range all {
 		s := s
 		// Bound HTTP servers: ReadTimeout prevents slow-loris header floods,
 		// WriteTimeout caps long-running handlers. Synthesis is the ~60s ceiling.
 		srv := &http.Server{
 			Addr:         s.addr,
-			Handler:      s.mux,
+			Handler:      s.h,
 			ReadTimeout:  30 * time.Second,
 			WriteTimeout: 90 * time.Second,
 		}
@@ -179,6 +210,22 @@ func runServe(argv []string) {
 			}
 		}()
 	}
+
+	// Phase 3: spawn the memory plugin child and swap its real mux in behind the
+	// front door. Reached only once every bind succeeded, so nothing can orphan.
+	spawnMemory(cfg, sup, selfPath, all, fatalf)
+
+	// Record our pid so the launcher's `serve stop`/`serve status` can find and
+	// signal us safely (no blind pkill).
+	writeServePidFile()
+	defer removeServePidFile()
+	defer removeServeLazyMarker()
+
+	// Phase 4: pack units, LAST and deliberately OFF the readiness path. A pack
+	// daemon whose port a foreign process holds (a leaked orphan, say) burns its
+	// whole 15s preflight discovering that, and used to burn it BEFORE memory
+	// could answer at all. Memory's readiness must not depend on any pack's.
+	reconcilePacks(cfg, sup, selfPath)
 
 	// Block until a signal or a service failure. Both paths run the SAME fixed
 	// shutdown order: drain every front door first, then the supervised
@@ -223,19 +270,46 @@ func bindFrontDoors(enabledSvc func(string) bool) ([]hostService, error) {
 		if lerr != nil {
 			return nil, fmt.Errorf("bind memory (%s): %w", addr, lerr)
 		}
-		all = append(all, hostService{name: "memory", addr: addr, ln: ln})
+		// Answerable the moment it is bound: until spawnMemory dispenses the unit,
+		// `identity` reports the right name and version with ready=false, never a hang.
+		all = append(all, hostService{name: "memory", addr: addr, ln: ln,
+			h: newSwapHandler(startingMux(identityMemory, servicePort("MEMORY_PORT", 11435)))})
 	}
 
 	return all, nil
 }
 
-// spawnChildren launches every pack/plugin child process — each active pack's
-// Tier-1-accepted [[services]] units, then the memory plugin unit — and is the
-// ONLY place either is spawned. runServe calls it exactly once, and only AFTER
-// bindFrontDoors has already succeeded, so a bind failure can never leave one
-// of these orphaned. It attaches the memory unit's proxy mux onto the
-// already-bound hostService in `all`, in place.
-func spawnChildren(cfg *config.Config, sup *supervisor, selfPath string, all []hostService, fatalf func(string, ...any)) {
+// spawnMemory launches the memory plugin unit and swaps its real JSON-RPC mux in
+// behind the already-serving front door. The ONLY place that child is spawned;
+// called exactly once, and only AFTER bindFrontDoors succeeded, so a bind
+// failure can never orphan it. It runs BEFORE reconcilePacks: memory is what
+// every `pix run`, `pix memory …` and readiness probe blocks on, so nothing a
+// pack does may sit between the bind and the first answerable request.
+func spawnMemory(cfg *config.Config, sup *supervisor, selfPath string, all []hostService, fatalf func(string, ...any)) {
+	for i := range all {
+		if all[i].name != "memory" {
+			continue
+		}
+		// Wire the configured model names into the env the unit inherits; an explicit
+		// env override still wins.
+		applyMemoryModelEnv(cfg)
+		spec := cfg.Plugin("memory")
+		h, lerr := sup.launch("memory", "memory", spec, selfPath, spec.ExtraEnv)
+		if lerr != nil {
+			fatalf("launch memory unit: %v", lerr)
+			return
+		}
+		// The starting-up handler is replaced here, and only here: from this
+		// point the port answers ready=true.
+		all[i].h.set(memoryProxyMux(h))
+	}
+}
+
+// reconcilePacks brings every active pack's Tier-1-accepted [[services]] units
+// — daemons first, then go-plugin units — to their desired state. The ONLY place
+// a pack child is spawned; never returns an error (one pack's breakage must not
+// stop serve or its siblings); runs LAST (see Phase 4 in runServe).
+func reconcilePacks(cfg *config.Config, sup *supervisor, selfPath string) {
 	// Every active pack's Tier-1-accepted [[services]] view, collected across ALL
 	// active packs and reconciled against the tree in exactly ONE call: no
 	// `plugins.*` shortcut, and one bad pack's load/export failure only logs,
@@ -267,10 +341,10 @@ func spawnChildren(cfg *config.Config, sup *supervisor, selfPath string, all []h
 	if mergeErr != nil {
 		log.Printf("serve: pack services: %v", mergeErr)
 	}
-	// Daemons first: a pack's daemon is what the SANDBOX reaches (snow-proxy on
-	// its loopback port), so a session that starts while it is still coming up
+	// Daemons before go-plugin units: a pack's daemon is what the SANDBOX reaches
+	// (snow-proxy on its loopback port), so a session starting while it comes up
 	// gets connection-refused on its first query. Failures are logged, never
-	// fatal — one pack's broken daemon must not stop serve or its siblings.
+	// fatal — one broken daemon must not stop serve, a sibling, or (now) memory.
 	if derr := sup.reconcileDaemons(selfPath, merged); derr != nil {
 		log.Printf("serve: pack daemons: %v", derr)
 	}
@@ -280,22 +354,6 @@ func spawnChildren(cfg *config.Config, sup *supervisor, selfPath string, all []h
 	}
 	if len(units) > 0 {
 		log.Printf("serve: supervising %d pack service(s): %s", len(units), strings.Join(slices.Sorted(maps.Keys(units)), ", "))
-	}
-
-	for i := range all {
-		if all[i].name != "memory" {
-			continue
-		}
-		// Wire the configured model names into the env the unit inherits; an explicit
-		// env override still wins.
-		applyMemoryModelEnv(cfg)
-		spec := cfg.Plugin("memory")
-		h, lerr := sup.launch("memory", "memory", spec, selfPath, spec.ExtraEnv)
-		if lerr != nil {
-			fatalf("launch memory unit: %v", lerr)
-			return
-		}
-		all[i].mux = memoryProxyMux(h)
 	}
 }
 

@@ -10,6 +10,34 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`pix serve install` no longer warns that a healthy daemon failed its
+  identity check, and finishes in under a second instead of eleven.** Three
+  defects combined into one failure. First, `serve` bound every HTTP front door
+  in its first startup phase but only called `http.Serve` after the
+  child-spawn phase returned, so for the whole of that phase the kernel
+  accepted connections into a backlog no goroutine read from: a TCP dial
+  reported "up" while every HTTP request hung. Second, pack-daemon
+  reconciliation ran before the memory plugin launched, so a pack daemon whose
+  port is held by a foreign process spent its full fifteen-second preflight
+  budget ahead of memory. Together those made install's ten-second
+  verification window expire on a daemon that was fine, printing
+  "memory answered its port but not its identity check (service unreachable)".
+  Third, the generated LaunchAgent set no `ExitTimeOut`, so launchd used its
+  five-second default and SIGKILLed `pix-host` partway through a shutdown
+  sequence that budgets up to twenty seconds; pack daemons run in their own
+  process group and survived, reparented to launchd with their ports still
+  bound, which is how the port-holding orphan got created in the first place.
+  Startup is now four ordered phases (bind, serve, memory, packs): a bound
+  listener is served from the instant it binds, behind a handler that answers
+  `identity` with the right name and version and `ready=false` plus a reason,
+  so "still starting" is never indistinguishable from "wedged" or "stale
+  binary"; pack units are reconciled last, off memory's readiness path; and
+  the plist carries an `ExitTimeOut` that covers the real shutdown budget.
+  Install also stopped passing `-k` to its `launchctl kickstart`, which was
+  killing the process `bootstrap` had just started and paying a second full
+  restart cycle for no change. `launchctl kickstart -k` remains correct for
+  `launchdRestart`, where replacing the running process is the point.
+
 - **UAT capability discovery and dry runs now return the plan they claim to
   return.** `uat_capabilities` reports the validator's legal needs, actions,
   and assertions; the real candidate build limits; browser availability and
