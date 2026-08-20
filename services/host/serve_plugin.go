@@ -318,8 +318,7 @@ func memoryStoreMux(use memoryUse) http.Handler {
 			if err != nil {
 				return nil, err
 			}
-			return jsonObj{"ok": r.OK, "vector": r.Vector, "capture": r.Capture,
-				"captureReason": r.CaptureReason, "watcherModel": r.WatcherModel}, nil
+			return jsonObj{"ok": r.OK, "vector": r.Vector, "capture": r.Capture, "captureMode": memCaptureMode(), "captureReason": r.CaptureReason, "watcherModel": r.WatcherModel}, nil
 		}),
 		"stats": with(func(s plugin.MemoryStore, p jsonObj) (any, error) {
 			r, err := s.Stats(profileFromParams(p))
@@ -339,9 +338,7 @@ func memoryStoreMux(use memoryUse) http.Handler {
 			}
 			list := []jsonObj{}
 			for _, hit := range r.Hits {
-				list = append(list, jsonObj{"id": hit.ID, "content": hit.Content, "score": hit.Score,
-					"kind": hit.Kind, "project": projOrNil(hit.Project),
-					"createdAt": hit.CreatedAt, "source": hit.Source})
+				list = append(list, jsonObj{"id": hit.ID, "content": hit.Content, "score": hit.Score, "kind": hit.Kind, "project": projOrNil(hit.Project), "createdAt": hit.CreatedAt, "source": hit.Source})
 			}
 			return jsonObj{"hits": list}, nil
 		}),
@@ -366,6 +363,9 @@ func memoryStoreMux(use memoryUse) http.Handler {
 			return jsonObj{"ok": r.OK}, nil
 		}),
 		"observe": with(func(s plugin.MemoryStore, p jsonObj) (any, error) {
+			if memCaptureMode() == config.MemoryCaptureExplicit {
+				return jsonObj{"accepted": false, "reason": "automatic capture is off (memory_capture=explicit); use explicit remember"}, nil
+			}
 			project, hasProj := projectFromParams(p)
 			r, err := s.Observe(plugin.ObserveReq{User: getStr(p, "user"), Project: project, HasProject: hasProj, Profile: profileFromParams(p)})
 			if err != nil {
