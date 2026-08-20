@@ -349,15 +349,19 @@ required**. `pix-memory identity`/`health` report the LIVE state (never a
 boot-time snapshot), so a degraded reading always reflects what's true right
 now.
 
-`health`'s `vector`/`capture` fields are **tri-state**: `null` means "not yet
+`health` reports the host's current admission setting separately as
+`captureMode` (`explicit` or `experimental-auto`). Its `vector`/`capture`
+fields are **tri-state readiness**, not configuration: `null` means "not yet
 exercised" — a fresh daemon that has never actually attempted a real
 embed/capture call, which is the normal state right after `pix serve` starts,
-since construction makes no boot-time probe. It only becomes `true`/`false`
+since construction makes no boot-time probe. They only become `true`/`false`
 once a real attempt has happened; a brand-new daemon reporting `true` before
-that would be a guess dressed up as a fact. `identity`'s `degraded_reason`
-follows the same rule: it is only set on a CONFIRMED `false`, never on
-`null`, so a daemon that simply hasn't been asked to embed anything yet is
-not reported as degraded.
+that would be a guess dressed up as a fact. To diagnose effective automatic
+capture from a sandbox, compare this live host `captureMode` with the sandbox's
+launch-scoped `.pix/memory-capture` marker. Both must be `experimental-auto`.
+`identity`'s `degraded_reason` follows the same readiness rule: it is only set
+on a CONFIRMED `false`, never on `null`, so a daemon that simply hasn't been
+asked to embed anything yet is not reported as degraded.
 
 To restore a confirmed-degraded embedder immediately instead of waiting for
 the next call:

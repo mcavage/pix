@@ -44,20 +44,43 @@ captured yet. It is NOT how a normal agent workflow reads memory; that's the
 sandbox, `pix memory stats` on the host), which is the path to point
 someone at for actually using memory.
 ```bash
+launch_capture_mode="explicit"
+if [ -f .pix/memory-capture ]; then
+  marker_mode="$(python3 -c 'from pathlib import Path; print(Path(".pix/memory-capture").read_text().strip(), end="")' 2>/dev/null || true)"
+  case "$marker_mode" in
+    explicit|experimental-auto) launch_capture_mode="$marker_mode" ;;
+  esac
+fi
+printf 'sandboxLaunchCaptureMode=%s\n' "$launch_capture_mode"
 curl -s -m3 -X POST "${MEMORY_URL:-http://host.docker.internal:11435}" \
   -d '{"jsonrpc":"2.0","id":1,"method":"health"}' || echo "no memory service"
 ```
-Reads as `{"ok":true,"vector":<bool>,"capture":<bool>,"captureReason":"<string>","watcherModel":"<name>"}`.
-`ok` means the daemon answered at all, "no memory service" (a failed curl)
-means the host hasn't started it (`make memory-serve` / `pix serve` on the
-host); the harness still works, recall is just empty. Given `ok`, report the
-other fields as **daemon-reported state**, not proof of a live inference:
-`vector:true` means the startup embedding probe succeeded, but a later failure
-can still force keyword-only fallback; `capture:true` means the watcher is not
-currently latched unavailable, but it does not prove the next chat request will
-finish. `capture:false` plus `captureReason` is a confirmed degraded state, so
-quote that reason. A full end-to-end check requires an actual recall/capture
-operation; do not certify those paths from `health` alone.
+The launch marker is authoritative for what the sandbox capture extension read
+when it started; missing or garbled fails closed to `explicit`, exactly like the
+extension. Health reads as
+`{"ok":true,"vector":<bool|null>,"capture":<bool|null>,"captureMode":"explicit|experimental-auto","captureReason":"<string>","watcherModel":"<name>"}`.
+`captureMode` is the host's CURRENT admission mode. It is separate from
+`capture`, which is watcher readiness: `capture:null` means not yet exercised,
+not that automatic capture is on or off; `capture:true` means the watcher is not
+currently latched unavailable, but does not prove the next request will finish;
+`capture:false` plus `captureReason` is a confirmed degraded watcher, so quote
+the reason. `vector` has the same tri-state semantics for embedding readiness.
+
+Always report **effective automatic capture** by comparing the two modes:
+
+- both `experimental-auto`: ON; report watcher readiness separately (`unknown`
+  when `capture:null`)
+- launch `explicit`, host `experimental-auto`: OFF in this sandbox; recreate it
+  so the extension starts sending observe requests
+- launch `experimental-auto`, host `explicit`: OFF; the host refuses attempts
+- both `explicit`: OFF
+
+`ok` means the daemon answered at all. "no memory service" means the host hasn't
+started it (`pix serve` on the host); recall and capture are unavailable, but the
+rest of the harness can still work. A full end-to-end check requires an actual
+recall operation and, only when effective automatic capture is ON, a real capture
+attempt. Never trigger watcher inference merely to diagnose an explicitly-off
+mode.
 
 ### A3. MCP servers
 ```

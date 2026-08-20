@@ -10,6 +10,16 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Memory health now distinguishes configuration from readiness.** The JSON-RPC
+  health response reports the host's live `captureMode` separately from the
+  watcher's tri-state `capture` readiness, while the healthcheck compares that
+  host mode with the sandbox's launch-scoped `.pix/memory-capture` marker before
+  reporting whether automatic capture is effectively on. Explicit mode is also
+  enforced at the outer host boundary, so an external memory plugin cannot
+  receive an automatic observation the host configuration refused. Executable
+  regression coverage keeps the marker parser aligned with the extension's
+  fail-closed whitespace and malformed-input behavior.
+
 - **A front door that is bound but not yet dispensed waits for real work instead
   of refusing it.** The readiness fix that landed in #90 answered `identity`
   from the instant a listener binds, which is right for a probe and was wrong
