@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -144,7 +145,7 @@ func TestPluginEnvStripsBearer(t *testing.T) {
 // security guarantee introduced by the allowlist refactor of pluginEnv() (M-3).
 func TestPluginEnvAllowlistStripsSecrets(t *testing.T) {
 	sensitive := map[string]string{
-		"AWS_ACCESS_KEY_ID":     "AKIAIOSFODNN7EXAMPLE",
+		"AWS_ACCESS_KEY_ID":     "test-aws-access-key-id",
 		"AWS_SECRET_ACCESS_KEY": "wJalrXUtnFEMI/K7MDENG",
 		"GITHUB_TOKEN":          "ghp_example1234",
 		"SSH_AUTH_SOCK":         "/tmp/ssh-agent.sock",
@@ -216,7 +217,38 @@ func rpcCall(t *testing.T, srv *httptest.Server, method string) map[string]any {
 	return out
 }
 
+type countingObserveStore struct {
+	stubStore
+	observeCalls int
+}
+
+func (s *countingObserveStore) Observe(plugin.ObserveReq) (plugin.ObserveResp, error) {
+	s.observeCalls++
+	return plugin.ObserveResp{Accepted: true}, nil
+}
+
+func TestMemoryProxyMuxRefusesObserveInExplicitModeBeforePlugin(t *testing.T) {
+	t.Setenv("MEMORY_CAPTURE_MODE", config.MemoryCaptureExplicit)
+	store := &countingObserveStore{}
+	h := &pluginHolder{}
+	h.Set(store, nil)
+	srv := httptest.NewServer(memoryProxyMux(h))
+	defer srv.Close()
+
+	result, _ := rpcCall(t, srv, "observe")["result"].(map[string]any)
+	if accepted, _ := result["accepted"].(bool); accepted {
+		t.Fatalf("explicit mode accepted observe: %v", result)
+	}
+	if !strings.Contains(fmt.Sprint(result["reason"]), "memory_capture=explicit") {
+		t.Errorf("explicit refusal has no actionable reason: %v", result)
+	}
+	if store.observeCalls != 0 {
+		t.Fatalf("explicit mode delegated %d observe call(s) to plugin", store.observeCalls)
+	}
+}
+
 func TestMemoryProxyMuxContract(t *testing.T) {
+	t.Setenv("MEMORY_CAPTURE_MODE", config.MemoryCaptureExperimentalAuto)
 	h := &pluginHolder{}
 	h.Set(stubStore{}, nil)
 	srv := httptest.NewServer(memoryProxyMux(h))
@@ -231,10 +263,13 @@ func TestMemoryProxyMuxContract(t *testing.T) {
 	if !ok {
 		t.Fatalf("health missing result: %v", resp)
 	}
-	for _, k := range []string{"ok", "vector", "capture", "watcherModel"} {
+	for _, k := range []string{"ok", "vector", "capture", "captureMode", "watcherModel"} {
 		if _, present := result[k]; !present {
 			t.Errorf("health result missing %q: %v", k, result)
 		}
+	}
+	if result["captureMode"] != config.MemoryCaptureExperimentalAuto {
+		t.Errorf("health captureMode = %v, want %q", result["captureMode"], config.MemoryCaptureExperimentalAuto)
 	}
 	if result["watcherModel"] != "stub-model" {
 		t.Errorf("health watcherModel = %v, want stub-model", result["watcherModel"])

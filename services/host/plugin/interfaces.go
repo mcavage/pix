@@ -113,7 +113,8 @@ type Stats struct {
 	Deleted   int
 }
 
-// Health mirrors the health method ({ok, vector, capture, watcherModel}).
+// Health carries plugin-owned readiness for the health method. The outer
+// JSON-RPC mux adds the host-owned captureMode admission setting.
 // Vector/Capture are tri-state: nil means "not yet exercised" (no real
 // embed/watcher attempt has happened since the process started), so a
 // pointer is used rather than a bool that could only ever say true/false and

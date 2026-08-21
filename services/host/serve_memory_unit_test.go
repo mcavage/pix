@@ -113,7 +113,7 @@ func TestMemoryUnitIsSelfExecAndPreservesTheRPCSurface(t *testing.T) {
 
 	// health keeps every key the doctor/extension read.
 	hres, _ := rpcPost(t, srv.URL, "health", nil)["result"].(map[string]any)
-	for _, k := range []string{"ok", "vector", "capture", "captureReason", "watcherModel"} {
+	for _, k := range []string{"ok", "vector", "capture", "captureMode", "captureReason", "watcherModel"} {
 		if _, present := hres[k]; !present {
 			t.Errorf("health missing %q: %v", k, hres)
 		}
