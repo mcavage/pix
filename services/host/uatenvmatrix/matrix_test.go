@@ -5,6 +5,7 @@ package uatenvmatrix_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,7 +62,7 @@ func TestCheckNames_NonEmptyAndDerivesFromRegistry(t *testing.T) {
 	if len(names) == 0 {
 		t.Fatal("CheckNames() is empty; capabilities.named_checks must be non-empty")
 	}
-	want := []string{"environment_create_then_exec_invocation", "environment_uses_local_candidate_image"}
+	want := []string{"environment_create_then_exec_invocation", "environment_uses_local_candidate_image", "environment_recreate_boundary"}
 	if len(names) != len(want) {
 		t.Fatalf("CheckNames() = %#v, want %#v", names, want)
 	}
@@ -90,10 +91,14 @@ func TestRun_MissingCandidateBinaryFailsClosed(t *testing.T) {
 // successfulExecutor answers a create call with the fixture's expected
 // instance name and every exec call with a plain success — the deterministic
 // success path. It also satisfies environment_uses_local_candidate_image
-// (the second registered check, which every full Run() now also executes):
-// a `docker image inspect` call answers with a fixed digest, and every `sbx
-// env create` call (shared by both checks' fixtures) echoes that same
-// digest, so both checks pass deterministically off the same fake.
+// and environment_recreate_boundary (the second and third registered
+// checks, which every full Run() now also executes): a `docker image
+// inspect` call answers with a fixed digest, every `sbx env create` call
+// echoes that same digest and the requesting fixture's own expected
+// instance name (read from the fixture bytes at the path it was handed,
+// exactly like a real `sbx` binary would), and the one call carrying
+// environment_recreate_boundary's drifted facet is refused — the expected
+// native contract that check's whole assertion rests on.
 func successfulExecutor() *fakeExecutor {
 	fe := &fakeExecutor{}
 	fe.onCall = func(call recordedCall) (string, string, error) {
@@ -101,6 +106,14 @@ func successfulExecutor() *fakeExecutor {
 			return fakeCandidateDigest + "\n", "", nil
 		}
 		if len(call.args) > 0 && call.args[0] == "env" {
+			fixtureBytes, _ := os.ReadFile(call.args[len(call.args)-1])
+			content := string(fixtureBytes)
+			if strings.Contains(content, "memory: 60g") {
+				return "", "environment declaration changed since creation", errors.New("refused: drifted declaration")
+			}
+			if strings.Contains(content, "memory: 6g") {
+				return "created pix-uatenv-fixture-recreate (positively identified) image digest: " + fakeCandidateDigest + "\n", "", nil
+			}
 			return "created pix-uatenv-fixture-0 (positively identified) image digest: " + fakeCandidateDigest + "\n", "", nil
 		}
 		return "", "", nil
@@ -136,13 +149,14 @@ func TestRun_EnvironmentCreateThenExecInvocation_Success(t *testing.T) {
 		t.Errorf("artifact does not record PASS: %s", b)
 	}
 
-	// Run() now executes both registered checks: this check's own create+exec
-	// calls (calls[0], calls[1]) plus environment_uses_local_candidate_image's
-	// docker-inspect+create calls (calls[2], calls[3]) it triggers immediately
-	// after. This test asserts only on the first check's own two calls.
+	// Run() now executes all three registered checks: this check's own
+	// create+exec calls (calls[0], calls[1]), environment_uses_local_candidate_image's
+	// docker-inspect+create calls (calls[2], calls[3]), and
+	// environment_recreate_boundary's baseline+drifted create calls (calls[4],
+	// calls[5]). This test asserts only on the first check's own two calls.
 	calls := fe.snapshot()
-	if len(calls) != 4 {
-		t.Fatalf("expected exactly 4 executor calls (create, exec, docker inspect, create), got %d: %#v", len(calls), calls)
+	if len(calls) != 6 {
+		t.Fatalf("expected exactly 6 executor calls (create, exec, docker inspect, create, create, create), got %d: %#v", len(calls), calls)
 	}
 	create := calls[0]
 	if create.name != "sbx" || len(create.args) != 3 || create.args[0] != "env" || create.args[1] != "create" {
@@ -287,6 +301,14 @@ func TestRun_BoundedArtifact(t *testing.T) {
 			return fakeCandidateDigest + "\n", "", nil
 		}
 		if len(call.args) > 0 && call.args[0] == "env" {
+			fixtureBytes, _ := os.ReadFile(call.args[len(call.args)-1])
+			content := string(fixtureBytes)
+			if strings.Contains(content, "memory: 60g") {
+				return "", "environment declaration changed since creation", errors.New("refused: drifted declaration")
+			}
+			if strings.Contains(content, "memory: 6g") {
+				return "pix-uatenv-fixture-recreate (positively identified) image digest: " + fakeCandidateDigest + " " + huge, "", nil
+			}
 			return "pix-uatenv-fixture-0 (positively identified) image digest: " + fakeCandidateDigest + " " + huge, "", nil
 		}
 		return "", "", nil

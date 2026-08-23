@@ -72,6 +72,7 @@ func checks(imageTag string) []envMatrixCheck {
 		{"environment_uses_local_candidate_image", func(ctx context.Context, lw io.Writer, executor Executor, phaseDir string) error {
 			return checkEnvironmentUsesLocalCandidateImage(ctx, lw, executor, phaseDir, imageTag)
 		}},
+		{"environment_recreate_boundary", checkEnvironmentRecreateBoundary},
 	}
 }
 
