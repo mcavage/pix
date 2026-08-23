@@ -62,7 +62,7 @@ func TestCheckNames_NonEmptyAndDerivesFromRegistry(t *testing.T) {
 	if len(names) == 0 {
 		t.Fatal("CheckNames() is empty; capabilities.named_checks must be non-empty")
 	}
-	want := []string{"environment_create_then_exec_invocation", "environment_uses_local_candidate_image", "environment_recreate_boundary", "environment_failed_create_cleanup"}
+	want := []string{"environment_create_then_exec_invocation", "environment_uses_local_candidate_image", "environment_recreate_boundary", "environment_failed_create_cleanup", "environment_rm_scope_refusal"}
 	if len(names) != len(want) {
 		t.Fatalf("CheckNames() = %#v, want %#v", names, want)
 	}

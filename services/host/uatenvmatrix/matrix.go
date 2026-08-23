@@ -74,6 +74,7 @@ func checks(imageTag string) []envMatrixCheck {
 		}},
 		{"environment_recreate_boundary", checkEnvironmentRecreateBoundary},
 		{"environment_failed_create_cleanup", checkEnvironmentFailedCreateCleanup},
+		{"environment_rm_scope_refusal", checkEnvironmentRmScopeRefusal},
 	}
 }
 
