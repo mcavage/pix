@@ -111,6 +111,7 @@ func TestCheckNames_IncludesLocalCandidateImageCheckInDeterministicOrder(t *test
 		"environment_recreate_boundary",
 		"environment_failed_create_cleanup",
 		"environment_rm_scope_refusal",
+		"environment_custom_agent_ollama",
 	}
 	if len(names) != len(want) {
 		t.Fatalf("CheckNames() = %#v, want %#v", names, want)

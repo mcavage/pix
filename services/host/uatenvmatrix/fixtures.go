@@ -90,6 +90,50 @@ sandboxOptions:
 `)
 }
 
+// ollamaCapabilityFixtureName is the literal `pix-*` sandbox name Story 0
+// authors for environment_custom_agent_ollama's declaration — owned
+// directly here, exactly like every other fixture name in this package
+// (this file's package doc).
+const ollamaCapabilityFixtureName = "pix-uatenv-fixture-ollama"
+
+// ollamaCapabilityMarker is the literal env key ollamaCapabilityFixtureYAML
+// sets so a fake executor (or a human reading a captured artifact) can
+// distinguish this fixture's create call from customAgentFixture's, whose
+// YAML is otherwise structurally identical (`agent: pix` plus one kit path).
+const ollamaCapabilityMarker = "PIX_OLLAMA_PROBE"
+
+// ollamaCapabilityFixtureYAML renders the one authored declaration
+// environment_custom_agent_ollama creates: the same custom Pix agent
+// selection customAgentFixture proves (`agent: pix` plus one kit), with no
+// model/resume facts of its own — this check probes sbx's own `--model`/
+// `--provider` transport flags, not pi's session model. Like every other
+// fixture in this file, it is a package-owned literal, never derived from
+// envinfo.
+func ollamaCapabilityFixtureYAML() []byte {
+	return []byte(`schemaVersion: "1"
+agent: pix
+
+kits:
+  - ./kit
+
+env:
+  ` + ollamaCapabilityMarker + `: "1"
+`)
+}
+
+// ollamaCapabilityFixture is the one fixture
+// checkEnvironmentCustomAgentOllama exercises: a registered environment
+// whose `agent: pix` selects the candidate Pix custom agent kit, reusing
+// customAgentFixture's Kit path since both checks target the same generated
+// candidate kit layout.
+func ollamaCapabilityFixture() EnvironmentFixture {
+	return EnvironmentFixture{
+		Name: ollamaCapabilityFixtureName,
+		YAML: ollamaCapabilityFixtureYAML(),
+		Kit:  "/opt/pix/kit",
+	}
+}
+
 // customAgentFixture is the one fixture this unit's check exercises: a
 // registered environment whose `agent: pix` selects the candidate Pix custom
 // agent kit, with a deterministic set of live skill trees, model, and resume

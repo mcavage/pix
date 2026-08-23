@@ -62,7 +62,7 @@ func TestCheckNames_NonEmptyAndDerivesFromRegistry(t *testing.T) {
 	if len(names) == 0 {
 		t.Fatal("CheckNames() is empty; capabilities.named_checks must be non-empty")
 	}
-	want := []string{"environment_create_then_exec_invocation", "environment_uses_local_candidate_image", "environment_recreate_boundary", "environment_failed_create_cleanup", "environment_rm_scope_refusal"}
+	want := []string{"environment_create_then_exec_invocation", "environment_uses_local_candidate_image", "environment_recreate_boundary", "environment_failed_create_cleanup", "environment_rm_scope_refusal", "environment_custom_agent_ollama"}
 	if len(names) != len(want) {
 		t.Fatalf("CheckNames() = %#v, want %#v", names, want)
 	}
@@ -91,17 +91,22 @@ func TestRun_MissingCandidateBinaryFailsClosed(t *testing.T) {
 // successfulExecutor answers a create call with the fixture's expected
 // instance name and every exec call with a plain success — the deterministic
 // success path. It also satisfies environment_uses_local_candidate_image,
-// environment_recreate_boundary, and environment_failed_create_cleanup (the
-// second, third, and fourth registered checks, which every full Run() now
-// also executes): a `docker image inspect` call answers with a fixed
-// digest, every `sbx env create` call echoes that same digest and the
-// requesting fixture's own expected instance name (read from the fixture
-// bytes at the path it was handed, exactly like a real `sbx` binary would),
-// the one call carrying environment_recreate_boundary's drifted facet is
-// refused — the expected native contract that check's whole assertion rests
-// on — and the one call carrying environment_failed_create_cleanup's
-// fixture fails outright with no instance ever positively identified, the
-// before-receipt scenario that check's whole assertion rests on.
+// environment_recreate_boundary, environment_failed_create_cleanup, and
+// environment_custom_agent_ollama (the second, third, fourth, and sixth
+// registered checks, which every full Run() now also executes): a `docker
+// image inspect` call answers with a fixed digest, every `sbx env create`
+// call echoes that same digest and the requesting fixture's own expected
+// instance name (read from the fixture bytes at the path it was handed,
+// exactly like a real `sbx` binary would), the one call carrying
+// environment_recreate_boundary's drifted facet is refused — the expected
+// native contract that check's whole assertion rests on — the one call
+// carrying environment_failed_create_cleanup's fixture fails outright with
+// no instance ever positively identified, the before-receipt scenario that
+// check's whole assertion rests on — and environment_custom_agent_ollama's
+// create-then-probe pair both succeed plainly (the "supported" capability
+// branch), since this executor exists to prove Run() end to end, not to
+// exercise every capability branch (check_custom_agent_ollama_test.go does
+// that in isolation).
 func successfulExecutor() *fakeExecutor {
 	fe := &fakeExecutor{}
 	fe.onCall = func(call recordedCall) (string, string, error) {
@@ -119,6 +124,9 @@ func successfulExecutor() *fakeExecutor {
 			}
 			if strings.Contains(content, "memory: 4g") {
 				return "", "sbx: internal error resolving scoped secrets", errors.New("create failed before receipt")
+			}
+			if strings.Contains(content, "PIX_OLLAMA_PROBE") {
+				return "created pix-uatenv-fixture-ollama (positively identified) image digest: " + fakeCandidateDigest + "\n", "", nil
 			}
 			return "created pix-uatenv-fixture-0 (positively identified) image digest: " + fakeCandidateDigest + "\n", "", nil
 		}
@@ -155,16 +163,18 @@ func TestRun_EnvironmentCreateThenExecInvocation_Success(t *testing.T) {
 		t.Errorf("artifact does not record PASS: %s", b)
 	}
 
-	// Run() now executes all four registered checks: this check's own
+	// Run() now executes all six registered checks: this check's own
 	// create+exec calls (calls[0], calls[1]), environment_uses_local_candidate_image's
 	// docker-inspect+create calls (calls[2], calls[3]),
 	// environment_recreate_boundary's baseline+drifted create calls (calls[4],
-	// calls[5]), and environment_failed_create_cleanup's single failed create
-	// call (calls[6]). This test asserts only on the first check's own two
-	// calls.
+	// calls[5]), environment_failed_create_cleanup's single failed create call
+	// (calls[6]), environment_rm_scope_refusal's zero calls (it never touches
+	// the injected Executor), and environment_custom_agent_ollama's own
+	// create+probe pair (calls[7], calls[8]). This test asserts only on the
+	// first check's own two calls.
 	calls := fe.snapshot()
-	if len(calls) != 7 {
-		t.Fatalf("expected exactly 7 executor calls (create, exec, docker inspect, create, create, create, create), got %d: %#v", len(calls), calls)
+	if len(calls) != 9 {
+		t.Fatalf("expected exactly 9 executor calls (create, exec, docker inspect, create, create, create, create, create, exec), got %d: %#v", len(calls), calls)
 	}
 	create := calls[0]
 	if create.name != "sbx" || len(create.args) != 3 || create.args[0] != "env" || create.args[1] != "create" {
@@ -316,6 +326,9 @@ func TestRun_BoundedArtifact(t *testing.T) {
 			}
 			if strings.Contains(content, "memory: 6g") {
 				return "pix-uatenv-fixture-recreate (positively identified) image digest: " + fakeCandidateDigest + " " + huge, "", nil
+			}
+			if strings.Contains(content, "PIX_OLLAMA_PROBE") {
+				return "pix-uatenv-fixture-ollama (positively identified) image digest: " + fakeCandidateDigest + " " + huge, "", nil
 			}
 			return "pix-uatenv-fixture-0 (positively identified) image digest: " + fakeCandidateDigest + " " + huge, "", nil
 		}
