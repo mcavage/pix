@@ -100,7 +100,7 @@ func checkEnvironmentFailedCreateCleanup(ctx context.Context, lw io.Writer, exec
 	}
 	fmt.Fprintf(lw, "fixture written to %s\n", fixturePath)
 
-	env := isolatedExecEnv(phaseDir)
+	env := hostToolExecEnv()
 	createArgs := []string{"env", "create", fixturePath}
 	fmt.Fprintf(lw, "$ sbx %s\n", strings.Join(createArgs, " "))
 	createOut, createErrOut, err := guarded.Run(ctx, "sbx", createArgs, env, phaseDir)

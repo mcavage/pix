@@ -49,7 +49,7 @@ func checkEnvironmentCreateThenExecInvocation(ctx context.Context, lw io.Writer,
 	}
 	fmt.Fprintf(lw, "authored fixture written to %s\n", fixturePath)
 
-	env := isolatedExecEnv(phaseDir)
+	env := hostToolExecEnv()
 
 	createArgs := []string{"env", "create", fixturePath}
 	fmt.Fprintf(lw, "$ sbx %s\n", strings.Join(createArgs, " "))

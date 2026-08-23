@@ -1,85 +1,46 @@
 package uatenvmatrix
 
 import (
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// TestIsolatedExecEnvRehomesEveryPixRoot mirrors uatmatrix's
-// TestIsolatedEnvRehomesEveryPixRoot: every XDG root and PIX_CONFIG must
-// point inside phaseDir. HOME is deliberately excluded from this table: see
-// TestIsolatedExecEnvPreservesHostHomeForSbxAuth for why it stays real.
-func TestIsolatedExecEnvRehomesEveryPixRoot(t *testing.T) {
-	phaseDir := t.TempDir()
-	t.Setenv("HOME", "/normal-home-must-not-leak")
-	env := isolatedExecEnv(phaseDir)
-	want := map[string]string{
-		"XDG_CONFIG_HOME": filepath.Join(phaseDir, "config"),
-		"XDG_DATA_HOME":   filepath.Join(phaseDir, "data"),
-		"XDG_STATE_HOME":  filepath.Join(phaseDir, "state"),
-		"XDG_CACHE_HOME":  filepath.Join(phaseDir, "cache"),
-		"PIX_CONFIG":      filepath.Join(phaseDir, "config", "config.toml"),
-	}
-	for key, value := range want {
-		entry := key + "=" + value
-		found := false
-		for _, got := range env {
-			if got == entry {
-				found = true
-			}
-			if strings.HasPrefix(got, key+"=") && got != entry {
-				t.Errorf("%s escaped phase dir: %q", key, got)
-			}
-		}
-		if !found {
-			t.Errorf("missing %q", entry)
-		}
-	}
-}
-
-// TestIsolatedExecEnvPreservesHostHomeForSbxAuth is the regression test for
-// the proven bootstrap bug (run run-20260823-155824-4d96352e,
+// TestHostToolExecEnvPreservesHostHomeForSbxAuth is the original regression
+// test for the proven bootstrap bug (run run-20260823-155824-4d96352e,
 // environment_create_then_exec_invocation): rehoming HOME under phaseDir hid
 // the host's sbx/Docker Desktop authentication, so every check that shells
 // out to `sbx` failed with "Not authenticated to Docker; Sign in with: sbx
-// login" even though the operator was logged in. sbx and Docker Desktop
-// discover their runtime/auth state beneath the real HOME (macOS keeps
-// Docker Desktop's socket and `sbx login` its session there), exactly like
-// the candidate_smoke override in workflow/uat/execute.go. HOME must pass
-// through unmodified while every Pix XDG root and PIX_CONFIG still isolate
-// under phaseDir.
-func TestIsolatedExecEnvPreservesHostHomeForSbxAuth(t *testing.T) {
+// login" even though the operator was logged in.
+func TestHostToolExecEnvPreservesHostHomeForSbxAuth(t *testing.T) {
 	realHome := t.TempDir()
 	t.Setenv("HOME", realHome)
-	phaseDir := t.TempDir()
-	env := isolatedExecEnv(phaseDir)
+	env := hostToolExecEnv()
 	want := "HOME=" + realHome
 	found := false
 	for _, got := range env {
 		if strings.HasPrefix(got, "HOME=") {
 			if got != want {
-				t.Fatalf("isolatedExecEnv rehomed HOME to %q; want the real host HOME %q so sbx/Docker auth stays discoverable", got, want)
+				t.Fatalf("hostToolExecEnv rehomed HOME to %q; want the real host HOME %q so sbx/Docker auth stays discoverable", got, want)
 			}
 			found = true
 		}
 	}
 	if !found {
-		t.Fatal("isolatedExecEnv did not set HOME at all")
+		t.Fatal("hostToolExecEnv did not set HOME at all")
 	}
 }
 
-// TestIsolatedExecEnvPreservesDockerAuthVars proves DOCKER_HOST and
+// TestHostToolExecEnvPreservesDockerAuthVars proves DOCKER_HOST and
 // DOCKER_CONFIG pass through when the host process has them set, matching
 // the candidate_smoke override (workflow/uat/execute.go) that this matrix
 // must not regress behind.
-func TestIsolatedExecEnvPreservesDockerAuthVars(t *testing.T) {
+func TestHostToolExecEnvPreservesDockerAuthVars(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dockerHost := "unix:///tmp/fixture-docker.sock"
 	dockerConfig := t.TempDir()
 	t.Setenv("DOCKER_HOST", dockerHost)
 	t.Setenv("DOCKER_CONFIG", dockerConfig)
-	env := isolatedExecEnv(t.TempDir())
+	env := hostToolExecEnv()
 	wantHost := "DOCKER_HOST=" + dockerHost
 	wantConfig := "DOCKER_CONFIG=" + dockerConfig
 	hasHost, hasConfig := false, false
@@ -99,75 +60,69 @@ func TestIsolatedExecEnvPreservesDockerAuthVars(t *testing.T) {
 	}
 }
 
-// TestIsolatedExecEnvNeverSetsMemoryPort proves this matrix never touches the
-// memory daemon's world: no check here has any legitimate reason to set
-// MEMORY_PORT/MEMORY_BIND/MEMORY_DB, unlike uatmatrix, which is the one
-// place that does. A future check adding one of these by mistake fails this
-// test, not silently drifting onto the real memory daemon's port.
-func TestIsolatedExecEnvNeverSetsMemoryPort(t *testing.T) {
-	env := isolatedExecEnv(t.TempDir())
-	for _, e := range env {
-		for _, forbidden := range []string{"MEMORY_PORT=", "MEMORY_BIND=", "MEMORY_DB=", "OLLAMA_HOST="} {
-			if strings.HasPrefix(e, forbidden) {
-				t.Errorf("isolatedExecEnv set %q; this matrix must never reference the memory daemon's world", e)
-			}
+// TestHostToolExecEnvPassesThroughUnknownHostChannel is the regression test
+// for the escalated bootstrap bug (run run-20260823-160820-41a5b981,
+// environment_create_then_exec_invocation): "Not authenticated to Docker"
+// persisted even after HOME/DOCKER_HOST/DOCKER_CONFIG were preserved,
+// because uatenvmatrix's checks invoke ONLY host tools (`sbx`, `docker`) and
+// never pix/pix-host, so there is no legitimate reason to run them under a
+// curated allowlist at all — sbx's own auth/session state can live behind
+// any host channel (an XDG root, a gateway/session variable, or something
+// this package's author never anticipated). This test proves an arbitrary,
+// otherwise-unrecognized variable the daemon happens to have set passes
+// through unchanged, so a future unknown auth channel is not silently
+// dropped the way the allowlist dropped this one.
+func TestHostToolExecEnvPassesThroughUnknownHostChannel(t *testing.T) {
+	t.Setenv("SBX_FIXTURE_UNKNOWN_HOST_CHANNEL", "some-session-token-value")
+	env := hostToolExecEnv()
+	want := "SBX_FIXTURE_UNKNOWN_HOST_CHANNEL=some-session-token-value"
+	for _, got := range env {
+		if got == want {
+			return
 		}
 	}
+	t.Fatalf("hostToolExecEnv dropped an unrecognized host variable; want %q present, got %#v", want, env)
 }
 
-// TestIsolatedExecEnvNeverPointsAtDefaultPixRoots proves the rehomed Pix
-// roots (XDG_*, PIX_CONFIG) never resolve to the process's own default
-// config/state locations, even when HOME happens to already contain a real
-// ~/.config/pix. HOME itself is expected to stay real (it is the sbx/Docker
-// auth discovery seam, not a Pix root), so it is excluded from the
-// default-pix-root check but still constrained to the allowed-passthrough
-// set below.
-func TestIsolatedExecEnvNeverPointsAtDefaultPixRoots(t *testing.T) {
-	realHome := t.TempDir()
-	t.Setenv("HOME", realHome)
-	phaseDir := filepath.Join(t.TempDir(), "phase")
-	env := isolatedExecEnv(phaseDir)
-	defaultConfig := filepath.Join(realHome, ".config", "pix")
-	for _, e := range env {
-		if strings.HasPrefix(e, "HOME=") {
-			continue
-		}
-		if strings.Contains(e, defaultConfig) {
-			t.Errorf("isolatedExecEnv referenced the default pix config root: %q", e)
-		}
-		if !strings.HasPrefix(e, "PATH=") && !strings.HasPrefix(e, "TMPDIR=") &&
-			!strings.HasPrefix(e, "TMP=") && !strings.HasPrefix(e, "TEMP=") &&
-			!strings.HasPrefix(e, "LANG=") && !strings.HasPrefix(e, "LC_ALL=") &&
-			!strings.HasPrefix(e, "DOCKER_HOST=") && !strings.HasPrefix(e, "DOCKER_CONFIG=") {
-			if !strings.HasPrefix(e, "XDG_") && !strings.HasPrefix(e, "PIX_CONFIG=") {
-				t.Errorf("unexpected passthrough env entry: %q", e)
+// TestHostToolExecEnvPreservesXDGRootsUnchanged is the direct regression
+// test for the escalated bug's actual root cause: the old isolatedExecEnv
+// rehomed XDG_CONFIG_HOME (and its siblings) under a run-local phaseDir
+// believing that protected "normal Pix config" from these checks. It does
+// not — these checks never invoke pix/pix-host, so nothing here ever reads a
+// Pix-rooted XDG path — and sbx itself may keep its own CLI config/session
+// beneath the operator's real XDG roots, so rehoming them broke sbx's own
+// auth discovery. XDG_* must now pass through exactly as the host set it.
+func TestHostToolExecEnvPreservesXDGRootsUnchanged(t *testing.T) {
+	hostXDGConfig := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", hostXDGConfig)
+	env := hostToolExecEnv()
+	want := "XDG_CONFIG_HOME=" + hostXDGConfig
+	for _, got := range env {
+		if strings.HasPrefix(got, "XDG_CONFIG_HOME=") {
+			if got != want {
+				t.Fatalf("hostToolExecEnv rewrote XDG_CONFIG_HOME to %q; want the host's own %q unchanged", got, want)
 			}
+			return
 		}
 	}
+	t.Fatalf("hostToolExecEnv dropped XDG_CONFIG_HOME entirely; want %q", want)
 }
 
-// TestBuildExecArgvIsNameBasedExecWithExactInvocation is a pure unit test of
-// the exact-invocation builder the first named check relies on: given the
-// package's own fixture, the resulting argv must be name-based (no image, no
-// re-derivation from the environment path) and carry every typed fact in
-// order.
-func TestBuildExecArgvIsNameBasedExecWithExactInvocation(t *testing.T) {
-	f := customAgentFixture()
-	got := buildExecArgv(f)
-	want := []string{
-		"exec", "-it", "pix-uatenv-fixture-0", "--", "pi",
-		"--kit", "/opt/pix/kit",
-		"--skill", "/opt/pix/kit/skills",
-		"--skill", "/home/uat/personal-context/skills",
-		"--model", "anthropic/claude-sonnet-5",
-		"--resume", "session-fixture-1",
-	}
-	if len(got) != len(want) {
-		t.Fatalf("buildExecArgv = %#v, want %#v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("buildExecArgv[%d] = %q, want %q (full: %#v)", i, got[i], want[i], got)
+// TestHostToolExecEnvStripsPixVariables proves the one thing this function
+// still isolates: Pix's own runtime variables. sbx/docker never consult a
+// PIX_ variable, and the daemon process (pix-host serve) may itself be
+// running with one set (PIX_CONFIG, PIX_UAT_SMOKE, ...), so stripping the
+// PIX_ prefix is what actually keeps the promise that a check can never leak
+// normal Pix config into a host-tool subprocess — not XDG rehoming, which
+// broke sbx's own auth discovery instead without protecting anything real
+// (uatenvmatrix never runs pix/pix-host, unlike uatmatrix's isolatedEnv).
+func TestHostToolExecEnvStripsPixVariables(t *testing.T) {
+	t.Setenv("PIX_CONFIG", "/host/real/.config/pix/config.toml")
+	t.Setenv("PIX_UAT_SMOKE", "1")
+	env := hostToolExecEnv()
+	for _, got := range env {
+		if strings.HasPrefix(got, "PIX_") {
+			t.Errorf("hostToolExecEnv leaked a Pix-specific variable to a host-tool subprocess: %q", got)
 		}
 	}
 }

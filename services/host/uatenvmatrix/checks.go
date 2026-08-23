@@ -98,61 +98,49 @@ func runEnvCheck(stepsDir, name string, fn func(io.Writer) error) error {
 	return nil
 }
 
-// isolatedExecEnv builds the run-local env every check hands to Executor.Run:
-// PATH/HOME/TMPDIR/LANG pass through (needed to exec `sbx` at all), and every
-// XDG root plus PIX_CONFIG point inside phaseDir. It NEVER sets MEMORY_PORT,
-// MEMORY_BIND, or any other memory-daemon variable — this matrix has no
-// business anywhere near the memory port, unlike uatmatrix, which is the
-// one place that legitimately does.
+// hostToolExecEnv builds the env every check hands to Executor.Run. Every
+// check in this package shells out ONLY to real host tools — `sbx` and
+// `docker` — and NEVER to pix or pix-host, so unlike uatmatrix (which runs
+// the candidate pix binary and must rehome its Pix roots to avoid touching
+// the operator's real config), this matrix has nothing of Pix's to protect
+// on the sbx/Docker side: sbx and Docker Desktop discover their runtime
+// socket and login/auth/session state beneath whatever host channels the
+// daemon process itself was started with (HOME, XDG roots, or something
+// this package's author never anticipated), so the daemon's FULL
+// environment passes through unchanged.
 //
-// HOME is passed through UNCHANGED rather than rehomed under phaseDir. sbx
-// and Docker Desktop discover their runtime socket and login/auth state
-// beneath the real HOME (on macOS that's Docker Desktop's socket and `sbx
-// login`'s session); rehoming HOME hides that discovery and every check that
-// shells out to `sbx` fails with "Not authenticated to Docker; Sign in with:
-// sbx login" even though the operator is logged in on the host (this is
-// exactly what happened in run run-20260823-155824-4d96352e's
-// environment_create_then_exec_invocation). DOCKER_HOST and DOCKER_CONFIG
-// pass through for the same reason, mirroring the candidate_smoke override
-// in workflow/uat/execute.go. Every Pix root — XDG_CONFIG_HOME,
-// XDG_DATA_HOME, XDG_STATE_HOME, XDG_CACHE_HOME, PIX_CONFIG — still isolates
-// under phaseDir, so a check can never read or mutate normal Pix config.
-func isolatedExecEnv(phaseDir string) []string {
-	var base []string
-	for _, e := range os.Environ() {
-		for _, allow := range []string{"PATH=", "HOME=", "TMPDIR=", "TMP=", "TEMP=", "LANG=", "LC_ALL=", "DOCKER_HOST=", "DOCKER_CONFIG="} {
-			if strings.HasPrefix(e, allow) {
-				base = append(base, e)
-				break
-			}
-		}
-	}
-	cfgDir := phaseDir + "/config"
-	dataDir := phaseDir + "/data"
-	stateDir := phaseDir + "/state"
-	cacheDir := phaseDir + "/cache"
-	for _, d := range []string{cfgDir, dataDir, stateDir, cacheDir} {
-		_ = os.MkdirAll(d, 0700)
-	}
-	base = setEnv(base, "XDG_CONFIG_HOME", cfgDir)
-	base = setEnv(base, "XDG_DATA_HOME", dataDir)
-	base = setEnv(base, "XDG_STATE_HOME", stateDir)
-	base = setEnv(base, "XDG_CACHE_HOME", cacheDir)
-	base = setEnv(base, "PIX_CONFIG", cfgDir+"/config.toml")
-	return base
-}
-
-// setEnv overrides key in env, filtering any existing entry first — the same
-// caution uatmatrix's setEnv documents: os/exec does not define which of two
-// duplicate-keyed entries a child observes.
-func setEnv(env []string, key, val string) []string {
-	prefix := key + "="
-	out := make([]string, 0, len(env)+1)
-	for _, e := range env {
-		if strings.HasPrefix(e, prefix) {
+// This was previously `isolatedExecEnv`, which curated an allowlist (PATH,
+// HOME, TMPDIR, LANG, DOCKER_HOST, DOCKER_CONFIG) and rehomed every XDG root
+// plus PIX_CONFIG under phaseDir, believing that protected Pix config from
+// this package's checks. It did not: nothing in this package ever invokes
+// pix/pix-host, so nothing here ever reads a Pix-rooted XDG path in the
+// first place — the rehoming only broke sbx's own config/session discovery,
+// which lives under those same real XDG roots. Preserving HOME/DOCKER_HOST/
+// DOCKER_CONFIG alone (run run-20260823-155824-4d96352e) was not enough: the
+// escalated failure (run run-20260823-160820-41a5b981) persisted with those
+// three fixed, because the allowlist was still dropping whatever other host
+// channel sbx's own auth actually depends on. Passing the full environment
+// through is the smallest correction that cannot keep dropping channels this
+// package's author has not enumerated.
+//
+// The one thing still stripped is Pix's own runtime variables (the PIX_
+// prefix: PIX_CONFIG, PIX_UAT_SMOKE, ...). sbx/docker never consult one, and
+// the daemon process (pix-host serve) may itself be running with one set, so
+// dropping the prefix is what actually keeps the promise that a check can
+// never leak normal Pix config into a host-tool subprocess. It never sets
+// MEMORY_PORT, MEMORY_BIND, or any other memory-daemon variable either —
+// this matrix has no business anywhere near the memory port, unlike
+// uatmatrix, which is the one place that legitimately does — but if the
+// daemon's own environment happens to carry one, it passes through inert:
+// sbx/docker do not read it.
+func hostToolExecEnv() []string {
+	environ := os.Environ()
+	out := make([]string, 0, len(environ))
+	for _, e := range environ {
+		if strings.HasPrefix(e, "PIX_") {
 			continue
 		}
 		out = append(out, e)
 	}
-	return append(out, prefix+val)
+	return out
 }

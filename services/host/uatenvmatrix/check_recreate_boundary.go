@@ -46,7 +46,7 @@ func recreateCommand(name, envName string) string {
 // comes from sbx's own positive identification, the same contract
 // checkEnvironmentCreateThenExecInvocation relies on.
 func checkEnvironmentRecreateBoundary(ctx context.Context, lw io.Writer, executor Executor, phaseDir string) error {
-	env := isolatedExecEnv(phaseDir)
+	env := hostToolExecEnv()
 	fixturePath := filepath.Join(phaseDir, "recreate-boundary.sbxenv.yaml")
 
 	if err := os.WriteFile(fixturePath, recreateBoundaryFixtureYAML(), 0600); err != nil {

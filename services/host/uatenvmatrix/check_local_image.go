@@ -66,7 +66,7 @@ func checkEnvironmentUsesLocalCandidateImage(ctx context.Context, lw io.Writer, 
 		return fmt.Errorf("environment_uses_local_candidate_image: no candidate image tag supplied (caller bug: Inputs.ImageTag must always be set)")
 	}
 
-	env := isolatedExecEnv(phaseDir)
+	env := hostToolExecEnv()
 
 	inspectArgs := []string{"image", "inspect", "--format", "{{.Id}}", imageTag}
 	fmt.Fprintf(lw, "$ docker %s\n", strings.Join(inspectArgs, " "))
