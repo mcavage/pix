@@ -47,6 +47,14 @@ type Inputs struct {
 	OutDir   string
 	StepsDir string
 	Executor Executor
+	// ImageTag is the exact candidate image reference this run built,
+	// saved, and `sbx template load`ed (docker.io/mcavage/pix:<tag>).
+	// environment_uses_local_candidate_image (E0.2) requires it to prove a
+	// created environment's image digest matches the locally loaded
+	// candidate rather than a registry pull; production always sets it,
+	// the same caller-bug contract the candidate-binary check above
+	// enforces for OutDir.
+	ImageTag string
 }
 
 type envMatrixCheck struct {
@@ -54,9 +62,16 @@ type envMatrixCheck struct {
 	fn   func(ctx context.Context, lw io.Writer, executor Executor, phaseDir string) error
 }
 
-func checks() []envMatrixCheck {
+// checks builds the ordered named-check registry. imageTag is threaded only
+// to the checks that need it (currently environment_uses_local_candidate_image);
+// CheckNames calls this with an empty imageTag since it only reads names,
+// never executes a check.
+func checks(imageTag string) []envMatrixCheck {
 	return []envMatrixCheck{
 		{"environment_create_then_exec_invocation", checkEnvironmentCreateThenExecInvocation},
+		{"environment_uses_local_candidate_image", func(ctx context.Context, lw io.Writer, executor Executor, phaseDir string) error {
+			return checkEnvironmentUsesLocalCandidateImage(ctx, lw, executor, phaseDir, imageTag)
+		}},
 	}
 }
 
@@ -65,7 +80,7 @@ func checks() []envMatrixCheck {
 // cannot drift from execution — the same contract uatmatrix.CheckNames
 // gives the memory matrix.
 func CheckNames() []string {
-	matrixChecks := checks()
+	matrixChecks := checks("")
 	names := make([]string, 0, len(matrixChecks))
 	for _, check := range matrixChecks {
 		names = append(names, check.name)
@@ -92,6 +107,10 @@ func Run(ctx context.Context, in Inputs) error {
 		}
 	}
 
+	if in.ImageTag == "" {
+		return fmt.Errorf("env matrix: no candidate image tag supplied (caller bug: Inputs.ImageTag must always be set)")
+	}
+
 	executor := in.Executor
 	if executor == nil {
 		executor = execExecutor{}
@@ -102,7 +121,7 @@ func Run(ctx context.Context, in Inputs) error {
 		return fmt.Errorf("env matrix: create scratch root: %w", err)
 	}
 
-	for _, c := range checks() {
+	for _, c := range checks(in.ImageTag) {
 		phaseDir := filepath.Join(matrixRoot, c.name)
 		if err := os.MkdirAll(phaseDir, 0700); err != nil {
 			return fmt.Errorf("env matrix: create phase dir %s: %w", c.name, err)

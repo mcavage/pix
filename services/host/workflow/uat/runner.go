@@ -168,7 +168,7 @@ func NewRunner(pixHost, repoPath, stateDir string, git Git, exec Exec, sandbox S
 	}
 
 	envMatrix := func(ctx context.Context, res RunResources, stepsDir string) error {
-		return uatenvmatrix.Run(ctx, uatenvmatrix.Inputs{OutDir: res.OutDir, StepsDir: stepsDir})
+		return uatenvmatrix.Run(ctx, uatenvmatrix.Inputs{OutDir: res.OutDir, StepsDir: stepsDir, ImageTag: "docker.io/mcavage/pix:" + res.ImageTag})
 	}
 	// Same override seam as memoryMatrix, for the same reason: a mock Exec
 	// produces no runnable candidate binaries for uatenvmatrix's own fail-closed

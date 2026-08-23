@@ -61,7 +61,7 @@ func TestCheckNames_NonEmptyAndDerivesFromRegistry(t *testing.T) {
 	if len(names) == 0 {
 		t.Fatal("CheckNames() is empty; capabilities.named_checks must be non-empty")
 	}
-	want := []string{"environment_create_then_exec_invocation"}
+	want := []string{"environment_create_then_exec_invocation", "environment_uses_local_candidate_image"}
 	if len(names) != len(want) {
 		t.Fatalf("CheckNames() = %#v, want %#v", names, want)
 	}
@@ -89,17 +89,30 @@ func TestRun_MissingCandidateBinaryFailsClosed(t *testing.T) {
 
 // successfulExecutor answers a create call with the fixture's expected
 // instance name and every exec call with a plain success — the deterministic
-// success path.
+// success path. It also satisfies environment_uses_local_candidate_image
+// (the second registered check, which every full Run() now also executes):
+// a `docker image inspect` call answers with a fixed digest, and every `sbx
+// env create` call (shared by both checks' fixtures) echoes that same
+// digest, so both checks pass deterministically off the same fake.
 func successfulExecutor() *fakeExecutor {
 	fe := &fakeExecutor{}
 	fe.onCall = func(call recordedCall) (string, string, error) {
+		if call.name == "docker" {
+			return fakeCandidateDigest + "\n", "", nil
+		}
 		if len(call.args) > 0 && call.args[0] == "env" {
-			return "created pix-uatenv-fixture-0 (positively identified)\n", "", nil
+			return "created pix-uatenv-fixture-0 (positively identified) image digest: " + fakeCandidateDigest + "\n", "", nil
 		}
 		return "", "", nil
 	}
 	return fe
 }
+
+// fakeCandidateDigest is the one digest matrix_test.go's shared fake
+// executors answer with, both from `docker image inspect` and from the
+// digest line embedded in a fake `sbx env create` log — kept identical so
+// environment_uses_local_candidate_image's equality check passes.
+const fakeCandidateDigest = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 
 func TestRun_EnvironmentCreateThenExecInvocation_Success(t *testing.T) {
 	outDir := writeFakeCandidateBinaries(t)
@@ -110,7 +123,7 @@ func TestRun_EnvironmentCreateThenExecInvocation_Success(t *testing.T) {
 	}
 	fe := successfulExecutor()
 
-	if err := uatenvmatrix.Run(context.Background(), uatenvmatrix.Inputs{OutDir: outDir, StepsDir: stepsDir, Executor: fe}); err != nil {
+	if err := uatenvmatrix.Run(context.Background(), uatenvmatrix.Inputs{OutDir: outDir, StepsDir: stepsDir, Executor: fe, ImageTag: "docker.io/mcavage/pix:test-candidate"}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -123,9 +136,13 @@ func TestRun_EnvironmentCreateThenExecInvocation_Success(t *testing.T) {
 		t.Errorf("artifact does not record PASS: %s", b)
 	}
 
+	// Run() now executes both registered checks: this check's own create+exec
+	// calls (calls[0], calls[1]) plus environment_uses_local_candidate_image's
+	// docker-inspect+create calls (calls[2], calls[3]) it triggers immediately
+	// after. This test asserts only on the first check's own two calls.
 	calls := fe.snapshot()
-	if len(calls) != 2 {
-		t.Fatalf("expected exactly 2 executor calls (create, exec), got %d: %#v", len(calls), calls)
+	if len(calls) != 4 {
+		t.Fatalf("expected exactly 4 executor calls (create, exec, docker inspect, create), got %d: %#v", len(calls), calls)
 	}
 	create := calls[0]
 	if create.name != "sbx" || len(create.args) != 3 || create.args[0] != "env" || create.args[1] != "create" {
@@ -178,7 +195,7 @@ func TestRun_EnvironmentCreateThenExecInvocation_CreateFailure(t *testing.T) {
 		return "", "no such command\n", context.DeadlineExceeded
 	}}
 
-	err := uatenvmatrix.Run(context.Background(), uatenvmatrix.Inputs{OutDir: outDir, StepsDir: stepsDir, Executor: fe})
+	err := uatenvmatrix.Run(context.Background(), uatenvmatrix.Inputs{OutDir: outDir, StepsDir: stepsDir, Executor: fe, ImageTag: "docker.io/mcavage/pix:test-candidate"})
 	if err == nil {
 		t.Fatal("expected Run to fail when sbx env create errors, got nil")
 	}
@@ -217,7 +234,7 @@ func TestRun_EnvironmentCreateThenExecInvocation_UnidentifiedInstanceNameFails(t
 		return "accepted\n", "", nil
 	}}
 
-	err := uatenvmatrix.Run(context.Background(), uatenvmatrix.Inputs{OutDir: outDir, StepsDir: stepsDir, Executor: fe})
+	err := uatenvmatrix.Run(context.Background(), uatenvmatrix.Inputs{OutDir: outDir, StepsDir: stepsDir, Executor: fe, ImageTag: "docker.io/mcavage/pix:test-candidate"})
 	if err == nil {
 		t.Fatal("expected Run to fail when create never reports a positively identified instance")
 	}
@@ -240,7 +257,7 @@ func TestRun_EnvironmentCreateThenExecInvocation_ExecFailure(t *testing.T) {
 		return "", "connection refused\n", context.Canceled
 	}}
 
-	err := uatenvmatrix.Run(context.Background(), uatenvmatrix.Inputs{OutDir: outDir, StepsDir: stepsDir, Executor: fe})
+	err := uatenvmatrix.Run(context.Background(), uatenvmatrix.Inputs{OutDir: outDir, StepsDir: stepsDir, Executor: fe, ImageTag: "docker.io/mcavage/pix:test-candidate"})
 	if err == nil {
 		t.Fatal("expected Run to fail when the name-based exec errors")
 	}
@@ -266,13 +283,16 @@ func TestRun_BoundedArtifact(t *testing.T) {
 	}
 	huge := strings.Repeat("x", 2*1024*1024)
 	fe := &fakeExecutor{onCall: func(call recordedCall) (string, string, error) {
+		if call.name == "docker" {
+			return fakeCandidateDigest + "\n", "", nil
+		}
 		if len(call.args) > 0 && call.args[0] == "env" {
-			return "pix-uatenv-fixture-0 (positively identified) " + huge, "", nil
+			return "pix-uatenv-fixture-0 (positively identified) image digest: " + fakeCandidateDigest + " " + huge, "", nil
 		}
 		return "", "", nil
 	}}
 
-	if err := uatenvmatrix.Run(context.Background(), uatenvmatrix.Inputs{OutDir: outDir, StepsDir: stepsDir, Executor: fe}); err != nil {
+	if err := uatenvmatrix.Run(context.Background(), uatenvmatrix.Inputs{OutDir: outDir, StepsDir: stepsDir, Executor: fe, ImageTag: "docker.io/mcavage/pix:test-candidate"}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	logPath := filepath.Join(stepsDir, "env_environment_create_then_exec_invocation.log")
