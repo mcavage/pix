@@ -272,6 +272,18 @@ func (r *Runner) executeCandidateSmoke(ctx context.Context, runID, commit string
 		return fmt.Errorf("memory matrix: %w", err)
 	}
 
+	// Story 0's host-backed native-environment UAT matrix (uatenvmatrix) runs
+	// immediately after the memory matrix, same isolation contract: run-local
+	// scratch, its own bounded artifacts, never the real ~/.config/pix or the
+	// memory port. envMatrix is nil only for the same caller-bug reason
+	// memoryMatrix is: NewRunner is the only supported constructor.
+	if r.envMatrix == nil {
+		return errors.New("candidate_smoke: no env matrix wired (Runner must be built by NewRunner)")
+	}
+	if err := r.envMatrix(ctx, res, stepsDir); err != nil {
+		return fmt.Errorf("env matrix: %w", err)
+	}
+
 	if err := os.MkdirAll(res.FixtureDir, 0755); err != nil {
 		return err
 	}

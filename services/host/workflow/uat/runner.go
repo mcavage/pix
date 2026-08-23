@@ -13,6 +13,7 @@ import (
 	"time"
 
 	uattypes "pix/host/uat"
+	"pix/host/uatenvmatrix"
 	"pix/host/uatmatrix"
 )
 
@@ -50,6 +51,10 @@ type Runner struct {
 	// the real matrix unless the injected Exec supplies the narrow test-only
 	// override method described there.
 	memoryMatrix func(context.Context, RunResources, string) error
+	// envMatrix is Story 0's host-backed native-environment UAT coverage
+	// (uatenvmatrix), run immediately after memoryMatrix and before the
+	// sandbox launches, with the identical override seam.
+	envMatrix func(context.Context, RunResources, string) error
 }
 
 func (r *Runner) RetryCleanups() map[string]string {
@@ -162,6 +167,18 @@ func NewRunner(pixHost, repoPath, stateDir string, git Git, exec Exec, sandbox S
 		memoryMatrix = override.RunCandidateMemoryMatrix
 	}
 
+	envMatrix := func(ctx context.Context, res RunResources, stepsDir string) error {
+		return uatenvmatrix.Run(ctx, uatenvmatrix.Inputs{OutDir: res.OutDir, StepsDir: stepsDir})
+	}
+	// Same override seam as memoryMatrix, for the same reason: a mock Exec
+	// produces no runnable candidate binaries for uatenvmatrix's own fail-closed
+	// guard, so orchestration-only tests may replace just this matrix.
+	if override, ok := exec.(interface {
+		RunCandidateEnvMatrix(context.Context, RunResources, string) error
+	}); ok {
+		envMatrix = override.RunCandidateEnvMatrix
+	}
+
 	return &Runner{
 		pixHost:          pixHost,
 		repoPath:         repoPath,
@@ -176,6 +193,7 @@ func NewRunner(pixHost, repoPath, stateDir string, git Git, exec Exec, sandbox S
 		buildSem:         make(chan struct{}, buildConcurrency),
 		buildConcurrency: buildConcurrency,
 		memoryMatrix:     memoryMatrix,
+		envMatrix:        envMatrix,
 	}, nil
 }
 
@@ -231,7 +249,7 @@ func (r *Runner) capabilities() runnerCapabilities {
 		LegalNeeds:      legalNeeds,
 		LegalActions:    legalActions,
 		LegalAssertions: legalAssertions,
-		NamedChecks:     []string{},
+		NamedChecks:     uatenvmatrix.CheckNames(),
 		Limits:          r.limits(),
 		CandidateSmoke: candidateSmokeCoverage{
 			Builds:       []string{"sandbox_image", "darwin_pix", "darwin_pix_host"},

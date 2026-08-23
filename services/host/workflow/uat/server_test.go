@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"pix/host/uatenvmatrix"
 	"pix/host/workflow/uat"
 )
 
@@ -100,6 +101,20 @@ func TestMCPServerCapabilitiesExposeVocabularyCoverageAndBrowserState(t *testing
 	checks, ok := coverage["memory_checks"].([]interface{})
 	if !ok || len(checks) != 9 {
 		t.Errorf("memory checks = %#v, want all 9", coverage["memory_checks"])
+	}
+
+	namedChecks, ok := payload["named_checks"].([]interface{})
+	if !ok || len(namedChecks) == 0 {
+		t.Fatalf("named_checks = %#v, want the non-empty uatenvmatrix registry", payload["named_checks"])
+	}
+	wantNamed := uatenvmatrix.CheckNames()
+	if len(namedChecks) != len(wantNamed) {
+		t.Fatalf("named_checks = %#v, want %#v", namedChecks, wantNamed)
+	}
+	for i, want := range wantNamed {
+		if namedChecks[i] != want {
+			t.Errorf("named_checks[%d] = %#v, want %q", i, namedChecks[i], want)
+		}
 	}
 }
 

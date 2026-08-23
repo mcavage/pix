@@ -4,6 +4,34 @@ import (
 	"testing"
 )
 
+// TestLegalVocabulary_IsByteForByteStable pins the closed scenario vocabulary.
+// Story 0 of docs/design/environments.md extends candidate_smoke with typed
+// internal named checks (uatenvmatrix), NOT a new action, need, or assertion —
+// this is the byte-for-byte guard that a future change accidentally growing
+// the MCP-facing vocabulary (instead of the internal named-check registry)
+// must fail.
+func TestLegalVocabulary_IsByteForByteStable(t *testing.T) {
+	needs, actions, assertions := LegalVocabulary()
+	wantNeeds := []string{"browser", "docker", "mcp", "sbx"}
+	wantActions := []string{"browser_check", "candidate_smoke", "mcp_add", "mcp_auth", "mcp_remove", "mcp_status"}
+	wantAssertions := []string{"artifact_contains", "artifact_exists", "browser_text", "browser_url", "mcp_status", "verdict"}
+
+	assertEqual := func(label string, got, want []string) {
+		t.Helper()
+		if len(got) != len(want) {
+			t.Fatalf("%s = %#v, want %#v", label, got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("%s[%d] = %q, want %q (full: %#v)", label, i, got[i], want[i], got)
+			}
+		}
+	}
+	assertEqual("needs", needs, wantNeeds)
+	assertEqual("actions", actions, wantActions)
+	assertEqual("assertions", assertions, wantAssertions)
+}
+
 func TestUnmarshalScenario_Validation(t *testing.T) {
 	tests := []struct {
 		name    string

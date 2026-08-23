@@ -127,6 +127,15 @@ var pkgLayer = map[string]int{
 	// fixture mechanics only. workflow/uat supplies run-local paths and invokes
 	// it; the probe imports no capability sibling and owns no orchestration.
 	"uatmatrix": layerCapability,
+	// uatenvmatrix is Story 0's host-backed native-environment probe
+	// (docs/design/environments.md): the named checks candidate_smoke runs
+	// after the memory matrix, mirroring uatmatrix's shape exactly. It owns
+	// its own literal `.sbxenv.yaml` fixture bytes and MUST NOT import the
+	// future `envinfo` capability (see
+	// TestArchitecture_UatenvmatrixNeverImportsEnvinfo below) — envinfo does
+	// not exist on disk yet, so the general down-only scan cannot catch that
+	// import by itself.
+	"uatenvmatrix": layerCapability,
 
 	// supervise sits ABOVE the capabilities on purpose: it is the process
 	// lifecycle that RUNS one (plugin), not a domain of its own. Filing it at L1
@@ -352,6 +361,29 @@ func TestArchitecture_SiblingWorkflowRuleIsEnforced(t *testing.T) {
 	checkImports(clean, map[string][]string{from: nil, to: nil})
 	if clean.Failed() {
 		t.Errorf("two workflows importing nothing must satisfy the rule; the check is over-broad")
+	}
+}
+
+// TestArchitecture_UatenvmatrixNeverImportsEnvinfo is the explicit guard
+// TestArchitecture_ImportsPointDown cannot provide by itself: envinfo (Story
+// 1's L1 `.sbxenv.yaml`/pix.toml capability) does not exist on disk yet, so
+// the general down-only scan has no placement to compare against and would
+// silently accept the import the day someone adds it. Story 0's whole point
+// (docs/design/environments.md section 11, ADR-ENV-003) is that uatenvmatrix
+// proves the upstream contract from its OWN literal fixture bytes, never from
+// envinfo's renderer — otherwise an agreement between the two would be a
+// tautology, not evidence. This test scans uatenvmatrix's real import graph
+// (via the same scanPackages helper) for that one forbidden import path.
+func TestArchitecture_UatenvmatrixNeverImportsEnvinfo(t *testing.T) {
+	pkgs := scanPackages(t)
+	imports, ok := pkgs["uatenvmatrix"]
+	if !ok {
+		t.Fatal("uatenvmatrix package not found on disk")
+	}
+	for _, imp := range imports {
+		if imp == "envinfo" || strings.HasPrefix(imp, "envinfo/") {
+			t.Fatalf("uatenvmatrix imports %q; it must prove the upstream contract from its own literal fixtures, never from envinfo's renderer (ADR-ENV-003)", imp)
+		}
 	}
 }
 
