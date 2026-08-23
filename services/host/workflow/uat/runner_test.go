@@ -24,7 +24,7 @@ func (matrixSkippingExec) RunCandidateMemoryMatrix(context.Context, uat.RunResou
 	return nil
 }
 
-func (matrixSkippingExec) RunCandidateEnvMatrix(context.Context, uat.RunResources, string) error {
+func (matrixSkippingExec) RunCandidateEnvMatrix(ctx context.Context, outDir, stepsDir, imageTag string) error {
 	return nil
 }
 

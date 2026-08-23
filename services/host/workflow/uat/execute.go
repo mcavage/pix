@@ -13,6 +13,7 @@ import (
 	"time"
 
 	uattypes "pix/host/uat"
+	"pix/host/uatenvmatrix"
 )
 
 func (r *Runner) executeAsync(ctx context.Context, runID, commit string, scenario *uattypes.Scenario) {
@@ -258,29 +259,18 @@ func (r *Runner) executeCandidateSmoke(ctx context.Context, runID, commit string
 		return fmt.Errorf("create step artifacts: %w", err)
 	}
 
-	// The memory UAT matrix runs the candidate pix/pix-host binaries directly,
-	// in run-local isolation, against a deterministic fake Ollama — entirely
-	// before the sandbox launches below. It never touches port 11435 or the
-	// normal pix config/store (uatmatrix). memoryMatrix is nil only if
-	// a caller constructed a Runner some other way than NewRunner; that is a
-	// caller bug, not a supported way to skip this coverage, so it fails
-	// closed rather than silently proceeding to the sandbox launch.
+	// The memory and native-environment UAT matrices (uatmatrix, uatenvmatrix)
+	// run the candidate binaries directly, in run-local isolation, before the
+	// sandbox launches; neither touches port 11435 or ~/.config/pix.
+	// memoryMatrix is nil only if a Runner was built some way other than
+	// NewRunner; RunForCandidateSmoke owns its own override seam instead.
 	if r.memoryMatrix == nil {
 		return errors.New("candidate_smoke: no memory matrix wired (Runner must be built by NewRunner)")
 	}
 	if err := r.memoryMatrix(ctx, res, stepsDir); err != nil {
 		return fmt.Errorf("memory matrix: %w", err)
 	}
-
-	// Story 0's host-backed native-environment UAT matrix (uatenvmatrix) runs
-	// immediately after the memory matrix, same isolation contract: run-local
-	// scratch, its own bounded artifacts, never the real ~/.config/pix or the
-	// memory port. envMatrix is nil only for the same caller-bug reason
-	// memoryMatrix is: NewRunner is the only supported constructor.
-	if r.envMatrix == nil {
-		return errors.New("candidate_smoke: no env matrix wired (Runner must be built by NewRunner)")
-	}
-	if err := r.envMatrix(ctx, res, stepsDir); err != nil {
+	if err := uatenvmatrix.RunForCandidateSmoke(ctx, r.exec, res.OutDir, stepsDir, res.ImageTag); err != nil {
 		return fmt.Errorf("env matrix: %w", err)
 	}
 

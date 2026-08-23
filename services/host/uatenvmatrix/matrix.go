@@ -92,6 +92,27 @@ func CheckNames() []string {
 	return names
 }
 
+// candidateOverride lets a mock host-command executor replace the real
+// host-backed env matrix in candidate_smoke orchestration tests: mocks
+// produce no runnable candidate binaries for Run's own fail-closed guard, so
+// tests may implement this method to replace just this matrix.
+type candidateOverride interface {
+	RunCandidateEnvMatrix(ctx context.Context, outDir, stepsDir, imageTag string) error
+}
+
+// RunForCandidateSmoke is candidate_smoke's env-matrix hook: exec's
+// RunCandidateEnvMatrix override when present, else Run itself against the
+// candidate binaries at outDir, addressed by the sandbox image built from
+// imageTag. workflow/uat.executeCandidateSmoke is the sole caller; exec is
+// its injected Exec, accepted as any so this L1 package never imports its
+// L3 caller.
+func RunForCandidateSmoke(ctx context.Context, exec any, outDir, stepsDir, imageTag string) error {
+	if override, ok := exec.(candidateOverride); ok {
+		return override.RunCandidateEnvMatrix(ctx, outDir, stepsDir, imageTag)
+	}
+	return Run(ctx, Inputs{OutDir: outDir, StepsDir: stepsDir, ImageTag: "docker.io/mcavage/pix:" + imageTag})
+}
+
 // Run executes the named environment checks, in isolation, against the
 // candidate binaries built for this run — after the memory matrix, before
 // the sandbox launches. It fails closed if the candidate binaries a real

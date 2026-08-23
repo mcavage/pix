@@ -46,15 +46,10 @@ type Runner struct {
 	buildSem         chan struct{}
 	buildConcurrency int
 
-	// memoryMatrix is the isolated, host-backed memory UAT coverage run against
-	// the just-built candidate binaries before sandbox launch. NewRunner wires
-	// the real matrix unless the injected Exec supplies the narrow test-only
-	// override method described there.
+	// memoryMatrix is the isolated, host-backed memory UAT coverage run
+	// against the just-built candidate binaries before sandbox launch.
+	// NewRunner wires the real matrix unless exec supplies the override below.
 	memoryMatrix func(context.Context, RunResources, string) error
-	// envMatrix is Story 0's host-backed native-environment UAT coverage
-	// (uatenvmatrix), run immediately after memoryMatrix and before the
-	// sandbox launches, with the identical override seam.
-	envMatrix func(context.Context, RunResources, string) error
 }
 
 func (r *Runner) RetryCleanups() map[string]string {
@@ -157,26 +152,12 @@ func NewRunner(pixHost, repoPath, stateDir string, git Git, exec Exec, sandbox S
 	memoryMatrix := func(ctx context.Context, res RunResources, stepsDir string) error {
 		return uatmatrix.Run(ctx, uatmatrix.Inputs{OutDir: res.OutDir, StepsDir: stepsDir})
 	}
-	// Mock command executors do not produce runnable candidate binaries. Tests
-	// that exercise candidate_smoke's orchestration may implement this optional
-	// method to replace only the host-backed matrix; production's realExec does
-	// not implement it, so production cannot silently skip the checks.
+	// Mock command executors produce no runnable candidate binaries; tests may
+	// implement this optional method so production cannot silently skip it.
 	if override, ok := exec.(interface {
 		RunCandidateMemoryMatrix(context.Context, RunResources, string) error
 	}); ok {
 		memoryMatrix = override.RunCandidateMemoryMatrix
-	}
-
-	envMatrix := func(ctx context.Context, res RunResources, stepsDir string) error {
-		return uatenvmatrix.Run(ctx, uatenvmatrix.Inputs{OutDir: res.OutDir, StepsDir: stepsDir, ImageTag: "docker.io/mcavage/pix:" + res.ImageTag})
-	}
-	// Same override seam as memoryMatrix, for the same reason: a mock Exec
-	// produces no runnable candidate binaries for uatenvmatrix's own fail-closed
-	// guard, so orchestration-only tests may replace just this matrix.
-	if override, ok := exec.(interface {
-		RunCandidateEnvMatrix(context.Context, RunResources, string) error
-	}); ok {
-		envMatrix = override.RunCandidateEnvMatrix
 	}
 
 	return &Runner{
@@ -193,7 +174,6 @@ func NewRunner(pixHost, repoPath, stateDir string, git Git, exec Exec, sandbox S
 		buildSem:         make(chan struct{}, buildConcurrency),
 		buildConcurrency: buildConcurrency,
 		memoryMatrix:     memoryMatrix,
-		envMatrix:        envMatrix,
 	}, nil
 }
 
