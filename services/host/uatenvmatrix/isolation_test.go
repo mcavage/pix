@@ -8,14 +8,13 @@ import (
 
 // TestIsolatedExecEnvRehomesEveryPixRoot mirrors uatmatrix's
 // TestIsolatedEnvRehomesEveryPixRoot: every XDG root and PIX_CONFIG must
-// point inside phaseDir, and the real HOME set on this test process must
-// never leak through.
+// point inside phaseDir. HOME is deliberately excluded from this table: see
+// TestIsolatedExecEnvPreservesHostHomeForSbxAuth for why it stays real.
 func TestIsolatedExecEnvRehomesEveryPixRoot(t *testing.T) {
 	phaseDir := t.TempDir()
 	t.Setenv("HOME", "/normal-home-must-not-leak")
 	env := isolatedExecEnv(phaseDir)
 	want := map[string]string{
-		"HOME":            filepath.Join(phaseDir, "home"),
 		"XDG_CONFIG_HOME": filepath.Join(phaseDir, "config"),
 		"XDG_DATA_HOME":   filepath.Join(phaseDir, "data"),
 		"XDG_STATE_HOME":  filepath.Join(phaseDir, "state"),
@@ -39,6 +38,67 @@ func TestIsolatedExecEnvRehomesEveryPixRoot(t *testing.T) {
 	}
 }
 
+// TestIsolatedExecEnvPreservesHostHomeForSbxAuth is the regression test for
+// the proven bootstrap bug (run run-20260823-155824-4d96352e,
+// environment_create_then_exec_invocation): rehoming HOME under phaseDir hid
+// the host's sbx/Docker Desktop authentication, so every check that shells
+// out to `sbx` failed with "Not authenticated to Docker; Sign in with: sbx
+// login" even though the operator was logged in. sbx and Docker Desktop
+// discover their runtime/auth state beneath the real HOME (macOS keeps
+// Docker Desktop's socket and `sbx login` its session there), exactly like
+// the candidate_smoke override in workflow/uat/execute.go. HOME must pass
+// through unmodified while every Pix XDG root and PIX_CONFIG still isolate
+// under phaseDir.
+func TestIsolatedExecEnvPreservesHostHomeForSbxAuth(t *testing.T) {
+	realHome := t.TempDir()
+	t.Setenv("HOME", realHome)
+	phaseDir := t.TempDir()
+	env := isolatedExecEnv(phaseDir)
+	want := "HOME=" + realHome
+	found := false
+	for _, got := range env {
+		if strings.HasPrefix(got, "HOME=") {
+			if got != want {
+				t.Fatalf("isolatedExecEnv rehomed HOME to %q; want the real host HOME %q so sbx/Docker auth stays discoverable", got, want)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("isolatedExecEnv did not set HOME at all")
+	}
+}
+
+// TestIsolatedExecEnvPreservesDockerAuthVars proves DOCKER_HOST and
+// DOCKER_CONFIG pass through when the host process has them set, matching
+// the candidate_smoke override (workflow/uat/execute.go) that this matrix
+// must not regress behind.
+func TestIsolatedExecEnvPreservesDockerAuthVars(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dockerHost := "unix:///tmp/fixture-docker.sock"
+	dockerConfig := t.TempDir()
+	t.Setenv("DOCKER_HOST", dockerHost)
+	t.Setenv("DOCKER_CONFIG", dockerConfig)
+	env := isolatedExecEnv(t.TempDir())
+	wantHost := "DOCKER_HOST=" + dockerHost
+	wantConfig := "DOCKER_CONFIG=" + dockerConfig
+	hasHost, hasConfig := false, false
+	for _, got := range env {
+		if got == wantHost {
+			hasHost = true
+		}
+		if got == wantConfig {
+			hasConfig = true
+		}
+	}
+	if !hasHost {
+		t.Errorf("missing %q in %#v", wantHost, env)
+	}
+	if !hasConfig {
+		t.Errorf("missing %q in %#v", wantConfig, env)
+	}
+}
+
 // TestIsolatedExecEnvNeverSetsMemoryPort proves this matrix never touches the
 // memory daemon's world: no check here has any legitimate reason to set
 // MEMORY_PORT/MEMORY_BIND/MEMORY_DB, unlike uatmatrix, which is the one
@@ -55,9 +115,13 @@ func TestIsolatedExecEnvNeverSetsMemoryPort(t *testing.T) {
 	}
 }
 
-// TestIsolatedExecEnvNeverPointsAtDefaultPixRoots proves the rehomed roots
-// never resolve to the process's own default config/state locations, even
-// when HOME happens to already contain a real ~/.config/pix.
+// TestIsolatedExecEnvNeverPointsAtDefaultPixRoots proves the rehomed Pix
+// roots (XDG_*, PIX_CONFIG) never resolve to the process's own default
+// config/state locations, even when HOME happens to already contain a real
+// ~/.config/pix. HOME itself is expected to stay real (it is the sbx/Docker
+// auth discovery seam, not a Pix root), so it is excluded from the
+// default-pix-root check but still constrained to the allowed-passthrough
+// set below.
 func TestIsolatedExecEnvNeverPointsAtDefaultPixRoots(t *testing.T) {
 	realHome := t.TempDir()
 	t.Setenv("HOME", realHome)
@@ -65,13 +129,17 @@ func TestIsolatedExecEnvNeverPointsAtDefaultPixRoots(t *testing.T) {
 	env := isolatedExecEnv(phaseDir)
 	defaultConfig := filepath.Join(realHome, ".config", "pix")
 	for _, e := range env {
+		if strings.HasPrefix(e, "HOME=") {
+			continue
+		}
 		if strings.Contains(e, defaultConfig) {
 			t.Errorf("isolatedExecEnv referenced the default pix config root: %q", e)
 		}
 		if !strings.HasPrefix(e, "PATH=") && !strings.HasPrefix(e, "TMPDIR=") &&
 			!strings.HasPrefix(e, "TMP=") && !strings.HasPrefix(e, "TEMP=") &&
-			!strings.HasPrefix(e, "LANG=") && !strings.HasPrefix(e, "LC_ALL=") {
-			if !strings.HasPrefix(e, "HOME="+phaseDir) && !strings.HasPrefix(e, "XDG_") && !strings.HasPrefix(e, "PIX_CONFIG=") {
+			!strings.HasPrefix(e, "LANG=") && !strings.HasPrefix(e, "LC_ALL=") &&
+			!strings.HasPrefix(e, "DOCKER_HOST=") && !strings.HasPrefix(e, "DOCKER_CONFIG=") {
+			if !strings.HasPrefix(e, "XDG_") && !strings.HasPrefix(e, "PIX_CONFIG=") {
 				t.Errorf("unexpected passthrough env entry: %q", e)
 			}
 		}

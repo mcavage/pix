@@ -104,25 +104,36 @@ func runEnvCheck(stepsDir, name string, fn func(io.Writer) error) error {
 // MEMORY_BIND, or any other memory-daemon variable — this matrix has no
 // business anywhere near the memory port, unlike uatmatrix, which is the
 // one place that legitimately does.
+//
+// HOME is passed through UNCHANGED rather than rehomed under phaseDir. sbx
+// and Docker Desktop discover their runtime socket and login/auth state
+// beneath the real HOME (on macOS that's Docker Desktop's socket and `sbx
+// login`'s session); rehoming HOME hides that discovery and every check that
+// shells out to `sbx` fails with "Not authenticated to Docker; Sign in with:
+// sbx login" even though the operator is logged in on the host (this is
+// exactly what happened in run run-20260823-155824-4d96352e's
+// environment_create_then_exec_invocation). DOCKER_HOST and DOCKER_CONFIG
+// pass through for the same reason, mirroring the candidate_smoke override
+// in workflow/uat/execute.go. Every Pix root — XDG_CONFIG_HOME,
+// XDG_DATA_HOME, XDG_STATE_HOME, XDG_CACHE_HOME, PIX_CONFIG — still isolates
+// under phaseDir, so a check can never read or mutate normal Pix config.
 func isolatedExecEnv(phaseDir string) []string {
 	var base []string
 	for _, e := range os.Environ() {
-		for _, allow := range []string{"PATH=", "TMPDIR=", "TMP=", "TEMP=", "LANG=", "LC_ALL="} {
+		for _, allow := range []string{"PATH=", "HOME=", "TMPDIR=", "TMP=", "TEMP=", "LANG=", "LC_ALL=", "DOCKER_HOST=", "DOCKER_CONFIG="} {
 			if strings.HasPrefix(e, allow) {
 				base = append(base, e)
 				break
 			}
 		}
 	}
-	homeDir := phaseDir + "/home"
 	cfgDir := phaseDir + "/config"
 	dataDir := phaseDir + "/data"
 	stateDir := phaseDir + "/state"
 	cacheDir := phaseDir + "/cache"
-	for _, d := range []string{homeDir, cfgDir, dataDir, stateDir, cacheDir} {
+	for _, d := range []string{cfgDir, dataDir, stateDir, cacheDir} {
 		_ = os.MkdirAll(d, 0700)
 	}
-	base = setEnv(base, "HOME", homeDir)
 	base = setEnv(base, "XDG_CONFIG_HOME", cfgDir)
 	base = setEnv(base, "XDG_DATA_HOME", dataDir)
 	base = setEnv(base, "XDG_STATE_HOME", stateDir)
