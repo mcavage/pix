@@ -95,7 +95,21 @@ func TestRun_MissingCandidateBinaryFailsClosed(t *testing.T) {
 // name at a time via strings.Contains, so a combined listing is exactly what
 // a real `sbx ls` would show while more than one of this run's fixtures is
 // still live).
-const successfulFixtureNames = "pix-uatenv-fixture-0 pix-uatenv-fixture-image pix-uatenv-fixture-recreate pix-uatenv-fixture-ollama"
+// successfulCandidateImageFixtureName is the deterministic, run-unique
+// name candidateImageFixtureName (check_local_image.go) derives from the
+// fixed "docker.io/mcavage/pix:test-candidate" tag every test in this file
+// passes as Inputs.ImageTag — pinned here as its own literal because
+// matrix_test.go is package uatenvmatrix_test and cannot call the
+// unexported derivation function directly.
+const successfulCandidateImageFixtureName = "pix-uatenv-fixture-image-test-candidate"
+
+const successfulFixtureNames = "pix-uatenv-fixture-0 " + successfulCandidateImageFixtureName + " pix-uatenv-fixture-recreate pix-uatenv-fixture-ollama"
+
+// fakeTemplateListOut models a real `sbx template ls`'s REPOSITORY/TAG
+// table (docker images' own convention), listing exactly the run-unique
+// candidate repo:tag environment_uses_local_candidate_image requires be
+// present before it ever attempts create.
+const fakeTemplateListOut = "REPOSITORY               TAG             IMAGE ID       CREATED         SIZE\ndocker.io/mcavage/pix    test-candidate  " + fakeCandidateDigest + "   2 minutes ago   1.2GB\n"
 
 // successfulFixtureNamesJSON renders successfulFixtureNames as a minimal
 // `sbx ls --json` body: a bare array of rows, each reporting "running", one
@@ -157,6 +171,9 @@ func successfulExecutor() *fakeExecutor {
 		if call.name == "docker" {
 			return fakeCandidateDigest + "\n", "", nil
 		}
+		if len(call.args) > 1 && call.args[0] == "template" && call.args[1] == "ls" {
+			return fakeTemplateListOut, "", nil
+		}
 		if len(call.args) > 0 && call.args[0] == "exec" {
 			return echoProbeFakeResponse(call.args), "", nil
 		}
@@ -170,19 +187,25 @@ func successfulExecutor() *fakeExecutor {
 			fixturePath := call.args[len(call.args)-1]
 			switch filepath.Base(fixturePath) {
 			case "authored.sbxenv.yaml":
-				return "created pix-uatenv-fixture-0 (positively identified) kit ./kit image digest: " + fakeCandidateDigest + "\n", "", nil
+				return "created pix-uatenv-fixture-0 (positively identified) kit ./kit\n", "", nil
 			case "candidate-image.sbxenv.yaml":
-				return "created pix-uatenv-fixture-image (positively identified) image digest: " + fakeCandidateDigest + "\n", "", nil
+				// The verbatim shape fresh UAT run run-20260824-092338-d4c384f5
+				// actually observed: a "PREPARE IMAGE" line naming the exact
+				// resolved image, a neutral "image ready" confirmation, and a
+				// positively identified instance line — never a fabricated
+				// "image digest: sha256:..." line, and never a host-Docker
+				// container reference.
+				return "PREPARE IMAGE \u2192 check docker.io/mcavage/pix:test-candidate\n\u2713 image ready\ncreated " + successfulCandidateImageFixtureName + " (positively identified)\n", "", nil
 			case "recreate-boundary.sbxenv.yaml":
 				fixtureBytes, _ := os.ReadFile(fixturePath)
 				if strings.Contains(string(fixtureBytes), "memory: 60g") {
 					return "", "environment declaration changed since creation", errors.New("refused: drifted declaration")
 				}
-				return "created pix-uatenv-fixture-recreate (positively identified) image digest: " + fakeCandidateDigest + "\n", "", nil
+				return "created pix-uatenv-fixture-recreate (positively identified)\n", "", nil
 			case "failed-create-cleanup.sbxenv.yaml":
 				return "", "sbx: internal error resolving scoped secrets", errors.New("create failed before receipt")
 			case "ollama-capability.sbxenv.yaml":
-				return "created pix-uatenv-fixture-ollama (positively identified) image digest: " + fakeCandidateDigest + "\n", "", nil
+				return "created pix-uatenv-fixture-ollama (positively identified)\n", "", nil
 			}
 			return "", "", fmt.Errorf("successfulExecutor: unrecognized create fixture path %s", fixturePath)
 		}
@@ -191,10 +214,10 @@ func successfulExecutor() *fakeExecutor {
 	return fe
 }
 
-// fakeCandidateDigest is the one digest matrix_test.go's shared fake
-// executors answer with, both from `docker image inspect` and from the
-// digest line embedded in a fake `sbx env create` log — kept identical so
-// environment_uses_local_candidate_image's equality check passes.
+// fakeCandidateDigest is the local candidate image ID matrix_test.go's
+// shared fake executors answer `docker image inspect` with — evidence-only
+// logging inside environment_uses_local_candidate_image now (there is no
+// created-sandbox digest field to compare it against; see check_local_image.go).
 const fakeCandidateDigest = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 
 func TestRun_EnvironmentCreateThenExecInvocation_Success(t *testing.T) {
@@ -225,21 +248,23 @@ func TestRun_EnvironmentCreateThenExecInvocation_Success(t *testing.T) {
 	// this check's own create+poll+probe+cleanup-probe+remove calls
 	// (calls[0..4] — one extra call versus its siblings, the bounded
 	// pre-exec poll for a positively identified running row),
-	// environment_uses_local_candidate_image's docker-image-inspect+create+
-	// actual-docker-inspect+cleanup-probe+remove calls (calls[5..9] — one
-	// extra call versus the pre-fix version, the actual created sandbox's own
-	// `docker inspect --format {{.Image}}` identity probe), environment_
+	// environment_uses_local_candidate_image's docker-image-inspect+template-
+	// list+create+poll+cleanup-probe+remove calls (calls[5..10] — the
+	// corrected AC-2 evidence chain: `sbx template ls` proves the run-unique
+	// candidate repo:tag is registered before create, and the bounded poll for
+	// a positively identified running row replaces the prior version's
+	// invented `docker inspect <sandbox name>` probe), environment_
 	// recreate_boundary's baseline+drifted create calls plus its one cleanup
-	// probe+remove pair keyed on the baseline's own receipt (calls[10..13]),
+	// probe+remove pair keyed on the baseline's own receipt (calls[11..14]),
 	// environment_failed_create_cleanup's single failed create call with no
-	// cleanup calls at all — no receipt, no removal authority (calls[14]),
+	// cleanup calls at all — no receipt, no removal authority (calls[15]),
 	// environment_rm_scope_refusal's zero calls (it never touches the
 	// injected Executor), and environment_custom_agent_ollama's create+probe
-	// pair plus its own cleanup probe+remove pair (calls[15..18]). This test
+	// pair plus its own cleanup probe+remove pair (calls[16..19]). This test
 	// asserts only on the first check's own create+poll+exec calls.
 	calls := fe.snapshot()
-	if len(calls) != 19 {
-		t.Fatalf("expected exactly 19 executor calls, got %d: %#v", len(calls), calls)
+	if len(calls) != 20 {
+		t.Fatalf("expected exactly 20 executor calls, got %d: %#v", len(calls), calls)
 	}
 	create := calls[0]
 	if create.name != "sbx" || len(create.args) != 3 || create.args[0] != "env" || create.args[1] != "create" {
@@ -401,6 +426,9 @@ func TestRun_BoundedArtifact(t *testing.T) {
 		if call.name == "docker" {
 			return fakeCandidateDigest + "\n", "", nil
 		}
+		if len(call.args) > 1 && call.args[0] == "template" && call.args[1] == "ls" {
+			return fakeTemplateListOut, "", nil
+		}
 		if len(call.args) > 0 && call.args[0] == "exec" {
 			return echoProbeFakeResponse(call.args), "", nil
 		}
@@ -414,19 +442,19 @@ func TestRun_BoundedArtifact(t *testing.T) {
 			fixturePath := call.args[len(call.args)-1]
 			switch filepath.Base(fixturePath) {
 			case "authored.sbxenv.yaml":
-				return "pix-uatenv-fixture-0 (positively identified) kit ./kit image digest: " + fakeCandidateDigest + " " + huge, "", nil
+				return "pix-uatenv-fixture-0 (positively identified) kit ./kit " + huge, "", nil
 			case "candidate-image.sbxenv.yaml":
-				return "pix-uatenv-fixture-image (positively identified) image digest: " + fakeCandidateDigest + " " + huge, "", nil
+				return "PREPARE IMAGE \u2192 check docker.io/mcavage/pix:test-candidate\n\u2713 image ready\n" + successfulCandidateImageFixtureName + " (positively identified) " + huge, "", nil
 			case "recreate-boundary.sbxenv.yaml":
 				fixtureBytes, _ := os.ReadFile(fixturePath)
 				if strings.Contains(string(fixtureBytes), "memory: 60g") {
 					return "", "environment declaration changed since creation", errors.New("refused: drifted declaration")
 				}
-				return "pix-uatenv-fixture-recreate (positively identified) image digest: " + fakeCandidateDigest + " " + huge, "", nil
+				return "pix-uatenv-fixture-recreate (positively identified) " + huge, "", nil
 			case "failed-create-cleanup.sbxenv.yaml":
 				return "", "sbx: internal error resolving scoped secrets", errors.New("create failed before receipt")
 			case "ollama-capability.sbxenv.yaml":
-				return "pix-uatenv-fixture-ollama (positively identified) image digest: " + fakeCandidateDigest + " " + huge, "", nil
+				return "pix-uatenv-fixture-ollama (positively identified) " + huge, "", nil
 			}
 			return "", "", fmt.Errorf("TestRun_BoundedArtifact: unrecognized create fixture path %s", fixturePath)
 		}
