@@ -20,6 +20,15 @@ package uatenvmatrix
 // by importing workflow/launch's real argv builder or the sandbox package,
 // for the same non-tautology reason.
 type EnvironmentFixture struct {
+	// RelativeKits is the exact set of relative paths this fixture's YAML
+	// declares under its own top-level `kits:` list (fixtures.go's package
+	// doc: these are literal, hand-authored bytes, so nothing parses YAML to
+	// discover them). writeAuthoredFixture materializes each one as a real
+	// directory next to the authored file, rooted the SAME way sbx itself
+	// resolves a relative kit reference: relative to the `.sbxenv.yaml`
+	// file's own directory, never the process's working directory. A
+	// fixture that declares no `kits:` at all leaves this nil.
+	RelativeKits []string
 	// Name is the literal `pix-*` sandbox name this fixture's environment
 	// creates as. Story 0 owns this name directly (a registered environment
 	// normally omits `name`; Pix's own naming algorithm belongs to Story 1's
@@ -136,9 +145,10 @@ env:
 // candidate kit layout.
 func ollamaCapabilityFixture() EnvironmentFixture {
 	return EnvironmentFixture{
-		Name: ollamaCapabilityFixtureName,
-		YAML: ollamaCapabilityFixtureYAML(),
-		Kit:  "/opt/pix/kit",
+		Name:         ollamaCapabilityFixtureName,
+		YAML:         ollamaCapabilityFixtureYAML(),
+		Kit:          "/opt/pix/kit",
+		RelativeKits: []string{"./kit"},
 	}
 }
 
@@ -162,9 +172,10 @@ env:
   PIX_MEMORY_SCOPE: personal
 `
 	return EnvironmentFixture{
-		Name: name,
-		YAML: []byte(yaml),
-		Kit:  "/opt/pix/kit",
+		Name:         name,
+		YAML:         []byte(yaml),
+		Kit:          "/opt/pix/kit",
+		RelativeKits: []string{"./kit"},
 		LiveSkills: []string{
 			"/opt/pix/kit/skills",
 			"/home/uat/personal-context/skills",

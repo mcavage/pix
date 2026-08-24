@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -43,9 +41,9 @@ func buildExecArgv(f EnvironmentFixture) []string {
 func checkEnvironmentCreateThenExecInvocation(ctx context.Context, lw io.Writer, executor Executor, phaseDir string) (retErr error) {
 	fixture := customAgentFixture()
 
-	fixturePath := filepath.Join(phaseDir, "authored.sbxenv.yaml")
-	if err := os.WriteFile(fixturePath, fixture.YAML, 0600); err != nil {
-		return fmt.Errorf("write authored fixture: %w", err)
+	fixturePath, err := writeAuthoredFixture(phaseDir, "authored.sbxenv.yaml", fixture)
+	if err != nil {
+		return err
 	}
 	fmt.Fprintf(lw, "authored fixture written to %s\n", fixturePath)
 
