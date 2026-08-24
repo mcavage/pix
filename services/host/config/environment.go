@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -67,6 +68,29 @@ func isCanonicalEnvironmentPath(path string) bool {
 	return filepath.Clean(path) == path
 }
 
+// environmentNameRE is the documented safe shape for an environment name: it
+// must start with a letter or digit, then hold only letters, digits, '.',
+// '_', '-', capped at 128 bytes. It is byte-for-byte the same pattern
+// recreatelog's envNameRE enforces on the diagnostic log it keys by this same
+// name (recreatelog/recreatelog.go, docs/design/environments.md section
+// 10.2) — duplicated here rather than imported, because config is L0
+// (foundation) and recreatelog is L1 (capability): an L0 package may never
+// import a capability (see ../arch_test.go). recreatelog's own
+// TestEnvironmentNameShapeMatchesConfig is the parity check that keeps the
+// two definitions from drifting apart; it lives there (not here) because L1
+// may legally import L0, not the reverse.
+var environmentNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+
+// validEnvironmentName reports whether name is safe to both write into
+// `config.toml`'s `[environments]` table AND thread through to a filesystem-
+// adjacent identifier (recreatelog's environment field, a future `pix env`
+// verb's naming). It rejects a leading space, a slash, a control character,
+// leading punctuation (anything but a letter or digit to start), and
+// anything over 128 bytes.
+func validEnvironmentName(name string) bool {
+	return environmentNameRE.MatchString(name)
+}
+
 // AddEnvironment registers name against path in the Environments index,
 // canonicalizing path first (see CanonicalEnvironmentPath) so what gets
 // persisted is always absolute regardless of what the caller typed. It
@@ -83,6 +107,9 @@ func (c *Config) AddEnvironment(name, path string) (string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return "", fmt.Errorf("environment name must not be empty")
+	}
+	if !validEnvironmentName(name) {
+		return "", fmt.Errorf("environment name %q must start with a letter or digit and contain only letters, digits, '.', '_', '-' (max 128 bytes)", name)
 	}
 	if strings.TrimSpace(path) == "" {
 		return "", fmt.Errorf("environment path must not be empty")

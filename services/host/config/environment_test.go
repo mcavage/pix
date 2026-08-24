@@ -102,6 +102,110 @@ func TestAddEnvironmentRejectsWhitespaceName(t *testing.T) {
 	}
 }
 
+// ── unsafe names are refused, not silently persisted ────────────────────
+//
+// AddEnvironment is the write-side boundary for [environments] keys: this is
+// the ONLY place a name reaches config.toml, so it is the ONLY place that can
+// refuse an unsafe one before it exists anywhere. The accepted shape mirrors
+// recreatelog's documented environment-name pattern (start alnum, then alnum
+// plus '.', '_', '-', <=128 bytes) byte-for-byte; see environment.go's
+// validEnvironmentName doc for why it is duplicated rather than imported, and
+// recreatelog's TestEnvironmentNameShapeMatchesConfig for the parity check.
+
+func TestAddEnvironmentRejectsSpaceInName(t *testing.T) {
+	tempConfig(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.AddEnvironment("my env", "/abs/home"); err == nil {
+		t.Fatal("AddEnvironment with a space in the name must be refused")
+	}
+	if len(cfg.Environments) != 0 {
+		t.Errorf("a refused AddEnvironment must not register anything, got %v", cfg.Environments)
+	}
+}
+
+func TestAddEnvironmentRejectsSlashInName(t *testing.T) {
+	tempConfig(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.AddEnvironment("my/env", "/abs/home"); err == nil {
+		t.Fatal("AddEnvironment with a slash in the name must be refused")
+	}
+	if len(cfg.Environments) != 0 {
+		t.Errorf("a refused AddEnvironment must not register anything, got %v", cfg.Environments)
+	}
+}
+
+func TestAddEnvironmentRejectsControlCharInName(t *testing.T) {
+	tempConfig(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.AddEnvironment("my\tenv", "/abs/home"); err == nil {
+		t.Fatal("AddEnvironment with a control character in the name must be refused")
+	}
+	if _, err := cfg.AddEnvironment("my\nenv", "/abs/home"); err == nil {
+		t.Fatal("AddEnvironment with a newline in the name must be refused")
+	}
+	if len(cfg.Environments) != 0 {
+		t.Errorf("a refused AddEnvironment must not register anything, got %v", cfg.Environments)
+	}
+}
+
+func TestAddEnvironmentRejectsLeadingPunctuationInName(t *testing.T) {
+	tempConfig(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"-env", ".env", "_env"} {
+		if _, err := cfg.AddEnvironment(name, "/abs/home"); err == nil {
+			t.Errorf("AddEnvironment(%q, ...) with leading punctuation must be refused", name)
+		}
+	}
+	if len(cfg.Environments) != 0 {
+		t.Errorf("a refused AddEnvironment must not register anything, got %v", cfg.Environments)
+	}
+}
+
+func TestAddEnvironmentRejectsOverlongName(t *testing.T) {
+	tempConfig(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	toolong := strings.Repeat("a", 129)
+	if _, err := cfg.AddEnvironment(toolong, "/abs/home"); err == nil {
+		t.Fatal("AddEnvironment with a name over 128 bytes must be refused")
+	}
+	if len(cfg.Environments) != 0 {
+		t.Errorf("a refused AddEnvironment must not register anything, got %v", cfg.Environments)
+	}
+}
+
+// TestAddEnvironmentAcceptsWordEnvironments pins the one name that MUST stay
+// valid despite sharing its spelling with the `[environments]` table itself —
+// the safe-shape check is about characters, not about colliding with a TOML
+// section name.
+func TestAddEnvironmentAcceptsWordEnvironments(t *testing.T) {
+	tempConfig(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.AddEnvironment("environments", "/abs/home"); err != nil {
+		t.Fatalf("AddEnvironment(%q, ...) must be accepted, got %v", "environments", err)
+	}
+	if _, ok := cfg.Environments["environments"]; !ok {
+		t.Errorf("Environments = %v, want it to include %q", cfg.Environments, "environments")
+	}
+}
+
 func TestAddEnvironmentAlreadyAbsoluteStaysClean(t *testing.T) {
 	tempConfig(t)
 	cfg, err := Load()
@@ -335,6 +439,76 @@ func TestLoadDropsNoncanonicalEnvironmentPaths(t *testing.T) {
 	}
 	if slices.Contains(unknown, "environments.good") {
 		t.Errorf("UnknownKeys() wrongly flagged the canonical entry: %v", unknown)
+	}
+}
+
+// TestSaveErasesHandEditedNoncanonicalEnvironment is the explicit regression
+// test for the fail-closed behavior TestLoadDropsNoncanonicalEnvironmentPaths
+// documents at the in-memory level: a hand-edited noncanonical [environments]
+// entry does not just fail to round-trip through Load, it is PERMANENTLY
+// ERASED the moment anything calls Save() on that loaded Config, because
+// Save() always writes the in-memory (already-dropped) Environments map back
+// to disk. That is deliberate — AddEnvironment is the only writer trusted to
+// produce a canonical path, so a value that could only have reached the file
+// by hand is never round-tripped — but "deliberate" must never mean "silent":
+// this test proves the diagnostic (UnknownKeys) is already populated the
+// instant Load returns, strictly BEFORE the destructive Save() call, so a
+// caller that checks UnknownKeys() first (see cli.Deps.Config's
+// warnUnknownConfigKeys, which does exactly this on every command) sees the
+// warning with time to back up the file before the entry becomes
+// unrecoverable.
+func TestSaveErasesHandEditedNoncanonicalEnvironment(t *testing.T) {
+	path := tempConfig(t)
+	const before = "environment = \"home\"\n\n[environments]\n" +
+		"home = \"~/envs/home\"\n" +
+		"good = \"/abs/canonical/good\"\n"
+	if err := os.WriteFile(path, []byte(before), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The diagnostic must exist BEFORE Save is ever called — this is the
+	// window in which the drop is still recoverable (the raw file on disk
+	// still has the hand-edited entry; only the in-memory Config forgot it).
+	if !slices.Contains(cfg.UnknownKeys(), "environments.home") {
+		t.Fatalf("UnknownKeys() = %v, want it to already include %q before Save is ever called",
+			cfg.UnknownKeys(), "environments.home")
+	}
+	raw := rawFile(t, path)
+	if !strings.Contains(raw, "~/envs/home") {
+		t.Fatalf("file on disk no longer has the hand-edited entry before Save was called: %s", raw)
+	}
+
+	// Now the destructive step: Save() persists the in-memory (already-
+	// dropped) state, which is the point of no return for the hand-edited
+	// entry.
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	after := rawFile(t, path)
+	if strings.Contains(after, "~") || strings.Contains(after, "envs/home") {
+		t.Errorf("Save must have erased the noncanonical entry from disk, got:\n%s", after)
+	}
+	if !strings.Contains(after, "/abs/canonical/good") {
+		t.Errorf("Save must keep the canonical sibling entry, got:\n%s", after)
+	}
+
+	// The erasure is now permanent and, on a FRESH load of the rewritten
+	// file, silent: there is nothing left to flag. This is exactly why the
+	// pre-Save diagnostic above is the only chance a user gets to notice.
+	reloaded, err := LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := reloaded.Environments["home"]; ok {
+		t.Errorf("Environments still has the erased entry after Save+reload: %v", reloaded.Environments)
+	}
+	if slices.Contains(reloaded.UnknownKeys(), "environments.home") {
+		t.Errorf("UnknownKeys() = %v, want no trace after the entry was already erased by Save", reloaded.UnknownKeys())
 	}
 }
 
