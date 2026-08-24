@@ -125,3 +125,46 @@ func TestApplyConfigChange_RefusesExactEnvironmentsKeyUnset(t *testing.T) {
 		t.Errorf("exact `environments` key must hit the owned-key refusal, not the generic unknown-key path, got %v", err)
 	}
 }
+
+// An environment literally NAMED "environments" produces the registry key
+// `environments.environments` — a real per-name entry, not the bare
+// `environments` key. environmentKeyRefusal must tell these apart by the
+// EXACT key string (`key == "environments"` vs `environments.<name>`), never
+// by inferring exactness from the trimmed suffix: trimming the
+// "environments." prefix off "environments.environments" leaves "environments"
+// too, so a suffix-equality check collapses the two and silently drops the
+// specific env name from the guidance, pointing at `pix env add <name>`
+// instead of `pix env add environments`.
+func TestApplyConfigChange_RefusesEnvironmentNamedEnvironmentsSet(t *testing.T) {
+	cfg := &config.Config{}
+	_, err := ApplyConfigChange(cfg, false, "environments.environments", []string{"/abs/environments"})
+	if err == nil {
+		t.Fatal("expected a refusal for `config set environments.environments`")
+	}
+	if !strings.Contains(err.Error(), "environments.environments") {
+		t.Errorf("error should name the specific key `environments.environments`, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "pix env add environments") {
+		t.Errorf("error should direct to `pix env add environments` (the specific env name), got %v", err)
+	}
+	if strings.Contains(err.Error(), "<name>") {
+		t.Errorf("error must not fall back to the generic bare-key placeholder, got %v", err)
+	}
+}
+
+func TestApplyConfigChange_RefusesEnvironmentNamedEnvironmentsUnset(t *testing.T) {
+	cfg := &config.Config{}
+	_, err := ApplyConfigChange(cfg, true, "environments.environments", nil)
+	if err == nil {
+		t.Fatal("expected a refusal for `config unset environments.environments`")
+	}
+	if !strings.Contains(err.Error(), "environments.environments") {
+		t.Errorf("error should name the specific key `environments.environments`, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "pix env forget environments") {
+		t.Errorf("error should direct to `pix env forget environments` (the specific env name), got %v", err)
+	}
+	if strings.Contains(err.Error(), "<name>") {
+		t.Errorf("error must not fall back to the generic bare-key placeholder, got %v", err)
+	}
+}

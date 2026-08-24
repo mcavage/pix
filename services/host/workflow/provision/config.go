@@ -234,18 +234,21 @@ func environmentKeyRefusal(unset bool, key string) error {
 	if key == "environment" {
 		return fmt.Errorf("config %s environment: the default environment is managed by `pix env use <name>`, never `pix config %s` (see `pix env --help`)", verb, verb)
 	}
-	name := strings.TrimPrefix(key, "environments.")
-	if name == "environments" {
-		name = ""
-	}
-	if unset {
-		if name == "" {
+	// Exactness is decided by the KEY STRING itself (`key == "environments"`),
+	// never inferred from the trimmed suffix: `environments.environments` (the
+	// registry entry for an environment literally named "environments") also
+	// trims down to the substring "environments", so a suffix-equality check
+	// would wrongly collapse it into the bare-key case and drop the specific
+	// env name from the guidance.
+	if key == "environments" {
+		if unset {
 			return fmt.Errorf("config unset environments: the environment registry is managed by `pix env forget <name>`, never `pix config unset` (see `pix env --help`)")
 		}
-		return fmt.Errorf("config unset environments.%s: the environment registry is managed by `pix env forget %s`, never `pix config unset` (see `pix env --help`)", name, name)
-	}
-	if name == "" {
 		return fmt.Errorf("config set environments: the environment registry is managed by `pix env add <name> [path]`, never `pix config set` (see `pix env --help`)")
+	}
+	name := strings.TrimPrefix(key, "environments.")
+	if unset {
+		return fmt.Errorf("config unset environments.%s: the environment registry is managed by `pix env forget %s`, never `pix config unset` (see `pix env --help`)", name, name)
 	}
 	return fmt.Errorf("config set environments.%s: the environment registry is managed by `pix env add %s [path]`, never `pix config set` (see `pix env --help`)", name, name)
 }
