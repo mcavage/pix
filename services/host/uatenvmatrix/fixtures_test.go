@@ -107,6 +107,63 @@ func TestWriteAuthoredFixture_MaterializesRelativeKitPaths(t *testing.T) {
 	}
 }
 
+// TestWriteAuthoredFixture_MaterializedKitDeclaresAuthoredAgentIdentity is
+// the regression test for host UAT run run-20260824-082317-e58d0587: `sbx
+// env create` failed with `ERROR: agent "pix" does not match agent kit name
+// "kit" (set agent: "pix" in .sbxenv.yaml)` because writeAuthoredFixture
+// named every materialized kit's spec.yaml after its directory basename
+// ("./kit" -> "kit") instead of the identity the fixture's own authored
+// YAML declares under its top-level `agent:` field ("pix"). sbx's real
+// agent-kit identity check compares the environment's declared `agent:`
+// value against the referenced kit's own declared name, never the kit
+// directory's basename — so this proves the materialized `./kit/spec.yaml`
+// declares the SAME agent identity ("pix") the authored environment names,
+// for every fixture this package routes through writeAuthoredFixture, not
+// just customAgentFixture.
+func TestWriteAuthoredFixture_MaterializedKitDeclaresAuthoredAgentIdentity(t *testing.T) {
+	cases := []struct {
+		label   string
+		fixture EnvironmentFixture
+	}{
+		{"customAgentFixture", customAgentFixture()},
+		{"ollamaCapabilityFixture", ollamaCapabilityFixture()},
+	}
+	for _, c := range cases {
+		t.Run(c.label, func(t *testing.T) {
+			var declaredAgent string
+			for _, line := range strings.Split(string(c.fixture.YAML), "\n") {
+				trimmed := strings.TrimSpace(line)
+				if rest, ok := strings.CutPrefix(trimmed, "agent:"); ok {
+					declaredAgent = strings.TrimSpace(rest)
+					break
+				}
+			}
+			if declaredAgent == "" {
+				t.Fatalf("%s's authored YAML declares no top-level `agent:` field; this test cannot prove the materialized kit agrees with it", c.label)
+			}
+
+			phaseDir := t.TempDir()
+			fixturePath, err := writeAuthoredFixture(phaseDir, "authored.sbxenv.yaml", c.fixture)
+			if err != nil {
+				t.Fatalf("writeAuthoredFixture: %v", err)
+			}
+
+			for _, rel := range c.fixture.RelativeKits {
+				specPath := filepath.Join(filepath.Dir(fixturePath), rel, "spec.yaml")
+				specBytes, err := os.ReadFile(specPath)
+				if err != nil {
+					t.Fatalf("materialized kit %q has no spec.yaml: %v", rel, err)
+				}
+				spec := string(specBytes)
+				want := "name: " + declaredAgent
+				if !strings.Contains(spec, want) {
+					t.Errorf("materialized kit spec.yaml for %q does not declare %q; it declares an identity derived from the kit directory's basename instead of the authored environment's `agent: %s` field, which is exactly the `agent %q does not match agent kit name` failure host UAT run run-20260824-082317-e58d0587 hit. Got:\n%s", rel, want, declaredAgent, declaredAgent, spec)
+				}
+			}
+		})
+	}
+}
+
 // TestFixtureYAML_RecreateBoundaryDeclaresSameIdentityAcrossDrift proves the
 // one property environment_recreate_boundary's whole assertion rests on: the
 // baseline and drifted fixture bodies declare the SAME environment identity

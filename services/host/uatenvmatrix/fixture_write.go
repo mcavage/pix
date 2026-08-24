@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // fixtureKitSpecImage is the literal, hand-picked sandbox image this
@@ -70,16 +71,49 @@ func writeAuthoredFixture(phaseDir, filename string, fixture EnvironmentFixture)
 		return "", fmt.Errorf("write authored fixture: %w", err)
 	}
 
+	if len(fixture.RelativeKits) == 0 {
+		return fixturePath, nil
+	}
+
+	agentName, err := declaredFixtureAgent(fixture.YAML)
+	if err != nil {
+		return "", fmt.Errorf("determine materialized kit identity: %w", err)
+	}
+
 	for _, rel := range fixture.RelativeKits {
 		kitDir := filepath.Join(phaseDir, rel)
 		if err := os.MkdirAll(kitDir, 0700); err != nil {
 			return "", fmt.Errorf("materialize relative kit path %q: %w", rel, err)
 		}
 		specPath := filepath.Join(kitDir, "spec.yaml")
-		if err := os.WriteFile(specPath, fixtureKitSpecYAML(filepath.Base(kitDir)), 0600); err != nil {
+		if err := os.WriteFile(specPath, fixtureKitSpecYAML(agentName), 0600); err != nil {
 			return "", fmt.Errorf("materialize kit spec for %q: %w", rel, err)
 		}
 	}
 
 	return fixturePath, nil
+}
+
+// declaredFixtureAgent extracts the literal value a fixture's own authored
+// YAML declares under its top-level `agent:` field. Host UAT run
+// run-20260824-082317-e58d0587 hit `ERROR: agent "pix" does not match agent
+// kit name "kit"` because every materialized kit was named after its own
+// directory's basename ("./kit" -> "kit") instead of the identity the
+// authored environment actually declares: a real `sbx env create` checks
+// the environment's `agent:` value against the referenced kit's own
+// declared name, never the kit directory's basename. This is a plain
+// substring scan, not a YAML parser, matching fixtures.go's package doc
+// that every fixture body here is a literal, hand-authored byte string this
+// package owns outright — never a reason to import a YAML library or
+// envinfo's renderer.
+func declaredFixtureAgent(fixtureYAML []byte) (string, error) {
+	for _, line := range strings.Split(string(fixtureYAML), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if rest, ok := strings.CutPrefix(trimmed, "agent:"); ok {
+			if agent := strings.TrimSpace(rest); agent != "" {
+				return agent, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("fixture YAML declares no top-level `agent:` field")
 }
