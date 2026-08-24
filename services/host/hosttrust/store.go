@@ -2,7 +2,7 @@ package hosttrust
 
 import (
 	"encoding/json"
-	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -64,31 +64,69 @@ func WithLock(lockPath string, fn func() error) error {
 }
 
 // ReadDocumentBytes reads path's raw bytes, refusing a symlinked source
-// rather than following it. Absent is reported via the plain os.ReadFile
-// error (os.IsNotExist), so a caller can supply its own fresh-document
-// default; any other error (unreadable, a symlink) is the caller's to
-// propagate — never a partial or substituted document.
+// rather than following it. It opens path with O_NOFOLLOW (openNoFollow)
+// instead of Lstat-then-ReadFile: that two-step sequence leaves a TOCTOU
+// window in which a symlink swapped in between the Lstat and the ReadFile is
+// silently followed and its target's bytes returned as if they were the
+// document's own — exactly the confused-deputy read this gate exists to
+// prevent. Absent is reported via os.IsNotExist (openNoFollow wraps ENOENT
+// in a *os.PathError, which satisfies it), so a caller can supply its own
+// fresh-document default; any other error (unreadable, a symlink) is the
+// caller's to propagate — never a partial or substituted document.
 func ReadDocumentBytes(path string) ([]byte, error) {
-	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-		return nil, fmt.Errorf("%s is a symlink; refusing to read through it", path)
+	f, err := openNoFollow(path, os.O_RDONLY, 0)
+	if err != nil {
+		return nil, err
 	}
-	return os.ReadFile(path)
+	defer f.Close()
+	return io.ReadAll(f)
 }
 
 // SaveDocument marshals doc as indented JSON and writes it to dir/name
-// symlink-safe + atomic: Lstat-refuse a symlinked destination, then a
-// same-dir temp file + rename (sys.AtomicWriteInDir).
+// symlink-safe + atomic: refuse an already-symlinked destination (checked
+// with openNoFollow, not a standalone Lstat — see below), then a same-dir
+// temp file + rename (sys.AtomicWriteInDir).
+//
+// The refusal check is a fail-fast policy decision, not the sole line of
+// defense: sys.AtomicWriteInDir's final step is os.Rename(tmp, dest), and
+// POSIX rename(2) never follows a symlink at its destination argument — it
+// atomically replaces the DIRECTORY ENTRY named dest, whatever it currently
+// is, rather than writing through to whatever a symlink there points at. So
+// even a destination that becomes a symlink in the (now much narrower)
+// window between this check and the rename cannot result in this package
+// writing an attacker-chosen document through to an arbitrary target; the
+// worst case is the rename silently clobbering the symlink instead of this
+// function refusing it up front. openNoFollow closes the check itself
+// against the same class of TOCTOU ReadDocumentBytes closes: a plain Lstat
+// followed by a later, separate operation on the same path is racy in
+// principle even when (as here) the final operation happens to be safe on
+// its own.
 func SaveDocument(dir, name string, doc any) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	dest := filepath.Join(dir, name)
-	if fi, err := os.Lstat(dest); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("%s is a symlink; refusing to write through it", dest)
+	if err := refuseSymlinkedDestination(dest); err != nil {
+		return err
 	}
 	b, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return err
 	}
 	return sys.AtomicWriteInDir(dir, name, append(b, '\n'), 0o644)
+}
+
+// refuseSymlinkedDestination reports an error iff dest currently exists and
+// is a symlink, using the no-follow open itself (rather than Lstat) as the
+// existence+symlink probe so the check cannot be fooled by a symlink
+// appearing after a separate stat call returns.
+func refuseSymlinkedDestination(dest string) error {
+	f, err := openNoFollow(dest, os.O_RDONLY, 0)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	return f.Close()
 }

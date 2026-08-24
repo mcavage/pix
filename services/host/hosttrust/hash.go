@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 )
 
@@ -16,14 +17,20 @@ func IsSymlink(path string) bool {
 }
 
 // HashFile is the content-hashing half of a fingerprint: read path's bytes
-// and hash them, refusing a symlink rather than following it. An unhashable
-// surface is an ERROR — it can be neither accepted nor installed, so a
-// caller fails closed rather than fingerprinting a partial surface.
+// and hash them, refusing a symlink rather than following it. It opens path
+// with O_NOFOLLOW (openNoFollow) rather than checking IsSymlink and then
+// opening separately: the two-step check-then-open would leave a TOCTOU
+// window where a symlink swapped in between the check and the read is
+// silently followed. An unhashable surface is an ERROR — it can be neither
+// accepted nor installed, so a caller fails closed rather than
+// fingerprinting a partial surface.
 func HashFile(path, label string) (string, error) {
-	if IsSymlink(path) {
-		return "", fmt.Errorf("%s is a symlink; refusing to fingerprint it", label)
+	f, err := openNoFollow(path, os.O_RDONLY, 0)
+	if err != nil {
+		return "", fmt.Errorf("%s: %v (cannot fingerprint the host-exec surface; fail closed)", label, err)
 	}
-	data, err := os.ReadFile(path)
+	defer f.Close()
+	data, err := io.ReadAll(f)
 	if err != nil {
 		return "", fmt.Errorf("%s: %v (cannot fingerprint the host-exec surface; fail closed)", label, err)
 	}
