@@ -114,7 +114,7 @@ type Config struct {
 	Environment string `toml:"environment,omitempty"`
 
 	// Environments is the registered name -> CANONICAL ABSOLUTE local
-	// directory path index. `pix env add`/`pix env rm` are the only writers;
+	// directory path index. `pix env add`/`pix env forget` are the only writers;
 	// AddEnvironment canonicalizes (expanding a leading ~, then making the
 	// result absolute and clean) before a value is ever assigned here, so
 	// Save() never persists anything else. A hand-edited noncanonical entry

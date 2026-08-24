@@ -337,7 +337,7 @@ backend = "anthropic"
 upstream_id = "claude-sonnet-5"
 ```
 
-`pix env add|rm` are the only writers of `[environments]`. `pix env use` is the
+`pix env add|forget` are the only writers of `[environments]`. `pix env use` is the
 only writer of `environment`. Input may use `~`, but Pix persists only canonical
 absolute paths. `pix config set` refuses these keys and names the correct env
 command, preserving the trust gate.
@@ -489,7 +489,7 @@ pix env use NAME
 pix env show [NAME] [--json] [--path]
 pix env edit [NAME] [--sbxenv]
 pix env review NAME [--yes]
-pix env rm NAME [--force]
+pix env forget NAME [--force]
 
 pix run [DIR] [--env NAME] [--model ID]
 ```
@@ -509,8 +509,10 @@ pix run [DIR] [--env NAME] [--model ID]
   the editor exits and reports whether `review` is required.
 - `review` reruns the host bill-of-materials gate after an intentional local or
   Git change.
-- `rm` unregisters but never deletes the environment directory. It refuses the
-  default or a live holder unless the explicit force contract permits it.
+- `forget` unregisters but never deletes the environment directory. It refuses
+  the default or a live holder unless the explicit force contract permits it.
+  `pix env rm` is not a command; it is reserved as a future pointer error, not
+  guidance.
 
 Names are exact. Only `add` accepts a path. There is no fuzzy or prefix action.
 `pix reset` renames scaffolded environment sources with the data directory and
@@ -618,7 +620,7 @@ Ordinary sandbox teardown never removes host-global MCP registrations or
 credential bindings. Pix never passes `--prune-bindings` on an automatic path;
 that flag deletes complete shared binding entries and can break other sandboxes.
 Only a future explicit named command may expose it, with the shared-binding
-warning and a positive post-mutation probe. `pix env rm` unregisters the alias,
+warning and a positive post-mutation probe. `pix env forget` unregisters the alias,
 not shared upstream state. Explicit review/reconciliation and `pix reset` own
 safe cleanup. UAT/session-owned registrations remain scoped and cleaned by their
 existing lease.

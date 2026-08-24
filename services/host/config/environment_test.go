@@ -58,6 +58,50 @@ func TestAddEnvironmentCanonicalizesRelativePath(t *testing.T) {
 	}
 }
 
+// ── empty/whitespace input is refused, never silently canonicalized ─────
+
+func TestAddEnvironmentRejectsEmptyPath(t *testing.T) {
+	tempConfig(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.AddEnvironment("home", ""); err == nil {
+		t.Fatal("AddEnvironment with an empty path must be refused, not canonicalized to CWD")
+	}
+	if _, ok := cfg.Environments["home"]; ok {
+		t.Error("a refused AddEnvironment must not register anything")
+	}
+}
+
+func TestAddEnvironmentRejectsWhitespacePath(t *testing.T) {
+	tempConfig(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.AddEnvironment("home", "   "); err == nil {
+		t.Fatal("AddEnvironment with a whitespace-only path must be refused, not canonicalized to CWD")
+	}
+	if _, ok := cfg.Environments["home"]; ok {
+		t.Error("a refused AddEnvironment must not register anything")
+	}
+}
+
+func TestAddEnvironmentRejectsWhitespaceName(t *testing.T) {
+	tempConfig(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.AddEnvironment("   ", "/abs/home"); err == nil {
+		t.Fatal("AddEnvironment with a whitespace-only name must be refused")
+	}
+	if len(cfg.Environments) != 0 {
+		t.Errorf("a refused AddEnvironment must not register anything, got %v", cfg.Environments)
+	}
+}
+
 func TestAddEnvironmentAlreadyAbsoluteStaysClean(t *testing.T) {
 	tempConfig(t)
 	cfg, err := Load()

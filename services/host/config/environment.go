@@ -72,10 +72,20 @@ func isCanonicalEnvironmentPath(path string) bool {
 // persisted is always absolute regardless of what the caller typed. It
 // overwrites an existing registration under the same name. Returns the
 // canonical path actually stored.
+//
+// An empty or whitespace-only path is refused outright rather than passed to
+// CanonicalEnvironmentPath: filepath.Abs("") resolves to the current working
+// directory, so a blank path would silently register whatever directory the
+// caller happened to be standing in as the environment root instead of
+// failing loudly. Same for name: a whitespace-only name would otherwise
+// register under a name indistinguishable from empty once trimmed elsewhere.
 func (c *Config) AddEnvironment(name, path string) (string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return "", fmt.Errorf("environment name must not be empty")
+	}
+	if strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("environment path must not be empty")
 	}
 	canon, err := CanonicalEnvironmentPath(path)
 	if err != nil {

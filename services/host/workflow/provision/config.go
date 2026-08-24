@@ -61,7 +61,7 @@ const ConfigKeysHelp = `keys:
                             disables it)
   environment / environments.*  NOT settable here — the default environment
                             is managed by 'pix env use', the registry by
-                            'pix env add'/'pix env rm' (see pix env --help)
+                            'pix env add'/'pix env forget' (see pix env --help)
 `
 
 // memoryCaptureSummary reports what the new memory_capture value actually
@@ -94,7 +94,7 @@ func ApplyConfigChange(cfg *config.Config, unset bool, key string, args []string
 	if unset {
 		verb = "unset"
 	}
-	if key == "environment" || strings.HasPrefix(key, "environments.") {
+	if key == "environment" || key == "environments" || strings.HasPrefix(key, "environments.") {
 		return "", environmentKeyRefusal(unset, key)
 	}
 	switch key {
@@ -214,17 +214,18 @@ func ApplyConfigChange(cfg *config.Config, unset bool, key string, args []string
 	}
 }
 
-// environmentKeyRefusal is the fixed refusal for `environment` and every
-// `environments.<name>` key (Story 1, native sandbox environments,
-// docs/design/environments.md §5.3): both ARE real config-schema fields
-// (config.Config.Environment / .Environments), so falling through to the
-// generic "unknown key" error would hide that they exist. But they have no
-// hand-edit path — `pix env use` is the only writer of the default, and
-// `pix env add`/`pix env rm` (Wave C) are the only writers of the registry —
-// so `pix config set/unset` refuses both shapes outright and names the
-// command that actually writes them, rather than silently no-op'ing (the
-// failure mode host.enabled's removal already guards against elsewhere in
-// this file).
+// environmentKeyRefusal is the fixed refusal for `environment`, the exact
+// `environments` key, and every `environments.<name>` key (Story 1, native
+// sandbox environments, docs/design/environments.md §5.3): all ARE real
+// config-schema fields (config.Config.Environment / .Environments), so
+// falling through to the generic "unknown key" error would hide that they
+// exist. But they have no hand-edit path — `pix env use` is the only writer
+// of the default, and `pix env add`/`pix env forget` (Wave C) are the only
+// writers of the registry (`pix env rm` names no working command; it is
+// reserved as a future pointer error, never guidance) — so `pix config
+// set/unset` refuses every shape outright and names the command that
+// actually writes them, rather than silently no-op'ing (the failure mode
+// host.enabled's removal already guards against elsewhere in this file).
 func environmentKeyRefusal(unset bool, key string) error {
 	verb := "set"
 	if unset {
@@ -234,8 +235,17 @@ func environmentKeyRefusal(unset bool, key string) error {
 		return fmt.Errorf("config %s environment: the default environment is managed by `pix env use <name>`, never `pix config %s` (see `pix env --help`)", verb, verb)
 	}
 	name := strings.TrimPrefix(key, "environments.")
+	if name == "environments" {
+		name = ""
+	}
 	if unset {
-		return fmt.Errorf("config unset environments.%s: the environment registry is managed by `pix env rm %s`, never `pix config unset` (see `pix env --help`)", name, name)
+		if name == "" {
+			return fmt.Errorf("config unset environments: the environment registry is managed by `pix env forget <name>`, never `pix config unset` (see `pix env --help`)")
+		}
+		return fmt.Errorf("config unset environments.%s: the environment registry is managed by `pix env forget %s`, never `pix config unset` (see `pix env --help`)", name, name)
+	}
+	if name == "" {
+		return fmt.Errorf("config set environments: the environment registry is managed by `pix env add <name> [path]`, never `pix config set` (see `pix env --help`)")
 	}
 	return fmt.Errorf("config set environments.%s: the environment registry is managed by `pix env add %s [path]`, never `pix config set` (see `pix env --help`)", name, name)
 }

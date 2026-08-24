@@ -58,8 +58,36 @@ func TestConfigCmd_UnsetEnvironmentsRegistryRefused(t *testing.T) {
 	if err == nil || cli.ExitCode(err) != 2 {
 		t.Fatalf("config unset environments.home: err=%v, want a refusal (exit 2)", err)
 	}
-	if !strings.Contains(err.Error(), "pix env rm") {
-		t.Errorf("error should direct to `pix env rm`, got %v", err)
+	if !strings.Contains(err.Error(), "pix env forget") {
+		t.Errorf("error should direct to `pix env forget`, got %v", err)
+	}
+}
+
+func TestConfigCmd_SetExactEnvironmentsKeyRefused(t *testing.T) {
+	d, _, _ := configDeps(t)
+	err := runConfigParse([]string{"config", "set", "environments", "home", "/abs/home"}, d)
+	if err == nil || cli.ExitCode(err) != 2 {
+		t.Fatalf("config set environments: err=%v, want a refusal (exit 2)", err)
+	}
+	if !strings.Contains(err.Error(), "pix env add") {
+		t.Errorf("error should direct to `pix env add`, got %v", err)
+	}
+	if strings.Contains(err.Error(), "unknown key") {
+		t.Errorf("exact `environments` key must hit the owned-key refusal, not generic unknown, got %v", err)
+	}
+}
+
+func TestConfigCmd_UnsetExactEnvironmentsKeyRefused(t *testing.T) {
+	d, _, _ := configDeps(t)
+	err := runConfigParse([]string{"config", "unset", "environments"}, d)
+	if err == nil || cli.ExitCode(err) != 2 {
+		t.Fatalf("config unset environments: err=%v, want a refusal (exit 2)", err)
+	}
+	if !strings.Contains(err.Error(), "pix env forget") {
+		t.Errorf("error should direct to `pix env forget`, got %v", err)
+	}
+	if strings.Contains(err.Error(), "unknown key") {
+		t.Errorf("exact `environments` key must hit the owned-key refusal, not generic unknown, got %v", err)
 	}
 }
 
