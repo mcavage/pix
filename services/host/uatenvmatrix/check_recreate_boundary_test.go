@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -129,6 +130,34 @@ func TestCheckEnvironmentRecreateBoundary_BaselineUnidentifiedFails(t *testing.T
 	}
 	if calls != 1 {
 		t.Fatalf("expected exactly 1 executor call when the baseline instance is never positively identified, got %d", calls)
+	}
+}
+
+// TestCheckEnvironmentRecreateBoundary_MaterializesPixKit is the regression
+// test for fresh UAT run run-20260824-095511-de9ece08:
+// checkEnvironmentRecreateBoundary's baseline create failed with `ERROR:
+// "pix" is not a known agent` because the baseline fixture was written via a
+// bare os.WriteFile, never through writeAuthoredFixture, so no `./kit`
+// directory (and no kit-spec declaring agent identity "pix") was ever
+// materialized next to the authored file. It proves the check now routes
+// its baseline write through writeAuthoredFixture and ends up with a real,
+// minimally valid kit-spec declaring "pix" on disk.
+func TestCheckEnvironmentRecreateBoundary_MaterializesPixKit(t *testing.T) {
+	phaseDir := t.TempDir()
+	var lw strings.Builder
+	executor := recreateBoundaryFakeExecutor{driftedErr: errors.New("sbx: environment declaration drifted since creation")}
+
+	if err := checkEnvironmentRecreateBoundary(context.Background(), &lw, executor, phaseDir); err != nil {
+		t.Fatalf("checkEnvironmentRecreateBoundary: %v", err)
+	}
+
+	specPath := filepath.Join(phaseDir, "kit", "spec.yaml")
+	spec, err := os.ReadFile(specPath)
+	if err != nil {
+		t.Fatalf("baseline fixture did not materialize a kit at %s: %v (this is the exact `\"pix\" is not a known agent` failure fresh UAT run run-20260824-095511-de9ece08 hit)", specPath, err)
+	}
+	if !strings.Contains(string(spec), "name: pix") {
+		t.Errorf("materialized kit spec.yaml does not declare agent identity \"pix\":\n%s", spec)
 	}
 }
 

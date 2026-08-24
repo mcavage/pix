@@ -66,6 +66,7 @@ func TestWriteAuthoredFixture_MaterializesRelativeKitPaths(t *testing.T) {
 		{"customAgentFixture", customAgentFixture()},
 		{"ollamaCapabilityFixture", ollamaCapabilityFixture()},
 		{"candidateImageFixture", candidateImageFixture("docker.io/mcavage/pix:uat-test")},
+		{"recreateBoundaryFixture", recreateBoundaryFixture()},
 	}
 	for _, c := range cases {
 		t.Run(c.label, func(t *testing.T) {
@@ -129,6 +130,7 @@ func TestWriteAuthoredFixture_MaterializedKitDeclaresAuthoredAgentIdentity(t *te
 		{"customAgentFixture", customAgentFixture()},
 		{"ollamaCapabilityFixture", ollamaCapabilityFixture()},
 		{"candidateImageFixture", candidateImageFixture("docker.io/mcavage/pix:uat-test")},
+		{"recreateBoundaryFixture", recreateBoundaryFixture()},
 	}
 	for _, c := range cases {
 		t.Run(c.label, func(t *testing.T) {
@@ -178,5 +180,52 @@ func TestFixtureYAML_RecreateBoundaryDeclaresSameIdentityAcrossDrift(t *testing.
 	want := "name: " + recreateBoundaryFixtureName
 	if !strings.Contains(baseline, want) || !strings.Contains(drifted, want) {
 		t.Fatalf("baseline and drifted fixtures must both declare %q; baseline=%q drifted=%q", want, baseline, drifted)
+	}
+}
+
+// TestFixtureYAML_RecreateBoundaryDeclaresKits is the regression test for
+// fresh UAT run run-20260824-095511-de9ece08: environment_recreate_boundary's
+// baseline create failed with `ERROR: "pix" is not a known agent` because
+// neither recreateBoundaryFixtureYAML nor recreateBoundaryMutatedFixtureYAML
+// ever declared a `kits:` entry — the established host contract
+// (fixtures.go's own package doc; customAgentFixture, ollamaCapabilityFixture,
+// candidateImageFixture) is that every `agent: pix` fixture must reference a
+// materialized kit whose own declared name is "pix". It proves both fixture
+// bodies declare the same `kits: [./kit]` entry recreateBoundaryFixture's
+// RelativeKits materializes.
+func TestFixtureYAML_RecreateBoundaryDeclaresKits(t *testing.T) {
+	want := "kits:\n  - ./kit"
+	baseline := string(recreateBoundaryFixtureYAML())
+	drifted := string(recreateBoundaryMutatedFixtureYAML())
+	if !strings.Contains(baseline, want) {
+		t.Errorf("baseline recreate-boundary fixture does not declare %q:\n%s", want, baseline)
+	}
+	if !strings.Contains(drifted, want) {
+		t.Errorf("drifted recreate-boundary fixture does not declare %q:\n%s", want, drifted)
+	}
+}
+
+// TestFixtureYAML_RecreateBoundaryOnlyMemoryFacetDiffers proves the baseline
+// and drifted fixture bodies are identical apart from the one mutated facet
+// recreateBoundaryMutatedFacet names — never a broader rewrite (e.g. adding
+// `kits:` only to one side) that would dilute the check's one-fact mutation
+// or change which sandbox/kit identity is under test.
+func TestFixtureYAML_RecreateBoundaryOnlyMemoryFacetDiffers(t *testing.T) {
+	baselineLines := strings.Split(string(recreateBoundaryFixtureYAML()), "\n")
+	driftedLines := strings.Split(string(recreateBoundaryMutatedFixtureYAML()), "\n")
+	if len(baselineLines) != len(driftedLines) {
+		t.Fatalf("baseline and drifted fixtures have different line counts (%d vs %d); the only intended change is the memory facet's value", len(baselineLines), len(driftedLines))
+	}
+	diffs := 0
+	for i := range baselineLines {
+		if baselineLines[i] != driftedLines[i] {
+			diffs++
+			if !strings.Contains(baselineLines[i], "memory:") || !strings.Contains(driftedLines[i], "memory:") {
+				t.Errorf("unexpected non-memory line diff at line %d: %q vs %q", i, baselineLines[i], driftedLines[i])
+			}
+		}
+	}
+	if diffs != 1 {
+		t.Errorf("expected exactly 1 differing line between baseline and drifted fixtures, got %d", diffs)
 	}
 }

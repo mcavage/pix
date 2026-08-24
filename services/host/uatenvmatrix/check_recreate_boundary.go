@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -47,9 +46,19 @@ func recreateCommand(name, envName string) string {
 // checkEnvironmentCreateThenExecInvocation relies on.
 func checkEnvironmentRecreateBoundary(ctx context.Context, lw io.Writer, executor Executor, phaseDir string) (retErr error) {
 	env := hostToolExecEnv()
-	fixturePath := filepath.Join(phaseDir, "recreate-boundary.sbxenv.yaml")
 
-	if err := os.WriteFile(fixturePath, recreateBoundaryFixtureYAML(), 0600); err != nil {
+	// The baseline write goes through writeAuthoredFixture, exactly like
+	// every other `agent: pix` fixture in this package: recreateBoundaryFixture's
+	// RelativeKits materializes a real `./kit` directory whose kit-spec
+	// declares agent identity "pix", the established host contract fresh UAT
+	// run run-20260824-095511-de9ece08 found missing here (`ERROR: "pix" is
+	// not a known agent`). The later mutated write below overwrites only
+	// this same authored YAML path directly via os.WriteFile: the mutated
+	// fixture declares the identical `kits: [./kit]` entry, so the kit
+	// already materialized by this call never needs to be re-created for the
+	// one changed facet (recreateBoundaryMutatedFacet).
+	fixturePath, err := writeAuthoredFixture(phaseDir, "recreate-boundary.sbxenv.yaml", recreateBoundaryFixture())
+	if err != nil {
 		return fmt.Errorf("write baseline recreate-boundary fixture: %w", err)
 	}
 	fmt.Fprintf(lw, "baseline fixture written to %s\n", fixturePath)

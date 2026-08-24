@@ -87,6 +87,9 @@ func recreateBoundaryFixtureYAML() []byte {
 agent: pix
 name: ` + recreateBoundaryFixtureName + `
 
+kits:
+  - ./kit
+
 sandboxOptions:
   memory: 6g
 `)
@@ -101,9 +104,33 @@ func recreateBoundaryMutatedFixtureYAML() []byte {
 agent: pix
 name: ` + recreateBoundaryFixtureName + `
 
+kits:
+  - ./kit
+
 sandboxOptions:
   memory: 60g
 `)
+}
+
+// recreateBoundaryFixture is the typed EnvironmentFixture representation of
+// recreateBoundaryFixtureYAML's baseline declaration, routed through
+// writeAuthoredFixture exactly like every other `agent: pix` fixture in this
+// package (customAgentFixture, ollamaCapabilityFixture, candidateImageFixture):
+// its RelativeKits materializes a real `./kit` directory whose kit-spec
+// declares agent identity "pix", closing the fresh UAT run
+// run-20260824-095511-de9ece08 failure (`ERROR: "pix" is not a known agent`)
+// the same way run-20260824-082317-e58d0587 was already closed for the other
+// fixtures. The mutated fixture (recreateBoundaryMutatedFixtureYAML) declares
+// the identical `kits:` entry and is written directly over this fixture's
+// already-materialized YAML path, so the already-materialized `./kit` never
+// needs to be re-created for the one changed facet
+// (recreateBoundaryMutatedFacet).
+func recreateBoundaryFixture() EnvironmentFixture {
+	return EnvironmentFixture{
+		Name:         recreateBoundaryFixtureName,
+		YAML:         recreateBoundaryFixtureYAML(),
+		RelativeKits: []string{"./kit"},
+	}
 }
 
 // ollamaCapabilityFixtureName is the literal `pix-*` sandbox name Story 0
