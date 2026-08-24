@@ -29,14 +29,18 @@ test("upstream env doc: list-concatenation/key-merge composition is an explicit 
 	);
 });
 
-test("upstream env doc: the existing A3 digest-equality non-claim survives untouched", () => {
+test("upstream env doc: the existing digest-equality non-claim survives untouched, correctly cross-referenced as AC-2, not A3", () => {
 	assert.match(
 		upstreamDoc,
 		/Do not claim\s+digest equality anywhere in this codebase; it is not observable with this sbx\s+release\./,
 	);
-	// The new A6 note cross-references A3's honest posture rather than
-	// duplicating or contradicting it.
-	assert.match(upstreamDoc, /the same honest posture section 7 below takes for digest equality\s+\(A3\)/);
+	// The A6 note cross-references the digest-equality correction's honest
+	// posture by its real acceptance-criterion id, AC-2 (section 7's own
+	// heading), rather than duplicating or contradicting it. It must never
+	// reuse the A3 label: A3 names Story 0's safe-scoped-removal stop
+	// condition (PRD §8), a distinct fact pinned in the removal test below.
+	assert.match(upstreamDoc, /the same honest posture section 7 below takes for digest equality\s+\(AC-2\)/);
+	assert.doesNotMatch(upstreamDoc, /digest equality\s*\(A3\)/);
 });
 
 test("design doc trust section: every authored ${VAR} reference must appear in host trust review with source var + destination field", () => {
@@ -113,6 +117,31 @@ test("self-development-uat doc: never claims env scrubbing exists, and non-goals
 		uatDoc,
 		/scrubbing, filtering, or sandboxing the operator shell's environment before\s+candidate execution \(none exists today/,
 	);
+});
+
+test("upstream env doc: host-global binding/MCP-registration preservation across removal is an explicit non-claim (A3), distinct from the digest-equality correction (AC-2)", () => {
+	assert.match(
+		upstreamDoc,
+		/This run makes no claim about host-global binding or MCP-registration\s+preservation across removal \(A3\)/,
+	);
+	assert.match(
+		upstreamDoc,
+		/Do not cite this run as\s+evidence for\s+binding\/MCP preservation; it is unobserved here/,
+	);
+	// It must also land in the "left as later-story responsibility" summary,
+	// carrying the same (A3) tag, not just a passing mention in section 12.
+	assert.match(
+		upstreamDoc,
+		/host-global credential binding and MCP-registration preservation across\s+removal \(A3\), for an environment that actually declares them/,
+	);
+	// The digest-equality non-claim in section 6/7 must never reuse the A3
+	// label: A3 is Story 0's safe-scoped-removal stop condition, not digest
+	// equality. It is now correctly cross-referenced as AC-2 instead.
+	assert.match(
+		upstreamDoc,
+		/the same honest posture section 7 below takes for digest equality\s+\(AC-2\)/,
+	);
+	assert.doesNotMatch(upstreamDoc, /digest equality\s*\(A3\)/);
 });
 
 test("self-development-uat doc: production/non-dev sessions never receive the UAT surface", () => {

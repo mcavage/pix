@@ -79,6 +79,29 @@ func TestUpstreamEnvironmentsDoc_RecordsAllThreeInterpolationOutcomes(t *testing
 	}
 }
 
+func TestUpstreamEnvironmentsDoc_InterpolationEvidenceIsTwoFixturesOneCreateCallEachAcrossThreeForms(t *testing.T) {
+	doc := readUpstreamEnvironmentsDoc(t)
+	// Pins the exact fixture/create-call shape backing the three interpolation
+	// outcomes: two fixtures, one create call each, never a single fixture or
+	// create call claimed to cover all three forms at once.
+	if !strings.Contains(doc, "Two fixtures, one create call each, together carrying three interpolation") {
+		t.Errorf("upstream doc does not pin the two-fixture/one-create-call-each interpolation evidence shape")
+	}
+	if !strings.Contains(doc, "Every fixture in this section issued exactly one `sbx env create` against\nexactly one authored file.") {
+		t.Errorf("upstream doc does not pin that each interpolation fixture issued exactly one create call against exactly one file")
+	}
+	// The named fixture functions must both appear: one shared fixture for the
+	// defined/default forms, a separate fixture for the bare-missing form.
+	for _, want := range []string{
+		"observeDefinedDefaultInterpolation",
+		"observeUndefinedVariableBehavior",
+	} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("upstream doc does not name the interpolation fixture function %q", want)
+		}
+	}
+}
+
 func TestUpstreamEnvironmentsDoc_CorrectsCandidateImageEvidenceToExactTagNoDigest(t *testing.T) {
 	doc := readUpstreamEnvironmentsDoc(t)
 	for _, want := range []string{
@@ -108,6 +131,13 @@ func TestUpstreamEnvironmentsDoc_RecordsOllamaUnsupportedAndBridgeRequirement(t 
 		if !strings.Contains(doc, want) {
 			t.Errorf("upstream doc does not record the Ollama capability fact %q", want)
 		}
+	}
+	// The unsupported+bridge-required conclusion must be identified as the A7
+	// observation, not left as an unlabeled capability note: A7 is the P1-3
+	// promotion trigger ("Host UAT proves stable custom-agent local-model
+	// transport (A7 flips)") that keeps extensions/ollama-bridge.ts alive.
+	if !strings.Contains(doc, "this is the A7 observation (section 11)") {
+		t.Errorf("upstream doc does not identify the Ollama unsupported/bridge-required conclusion as the A7 observation")
 	}
 }
 

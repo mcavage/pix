@@ -168,7 +168,7 @@ multi-file compose and observe the resulting list and map shape before
 Pix's effective-file adapter relies on it. Do not cite this document as
 evidence for list-concatenation or key-merge behavior; it is unobserved
 here, the same honest posture section 7 below takes for digest equality
-(A3).
+(AC-2).
 
 ## 7. Candidate image evidence (AC-2 correction)
 
@@ -282,11 +282,14 @@ removal, then removed with `sbx env rm -f <fixture-path>`. Observed output
 reported the sandbox removed and scoped secrets removed.
 
 This run makes no claim about host-global binding or MCP-registration
-preservation across removal. `docs/design/environments.md` §4/§9.2 documents
-that credential bindings and MCP registrations are host-global and preserved
-by default, but this run's fixtures declared no bindings and no MCP servers,
-so removal never exercised that path. Do not cite this run as evidence for
-binding/MCP preservation; it is unobserved here.
+preservation across removal (A3). `docs/design/environments.md` §4/§9.2
+documents that credential bindings and MCP registrations are host-global and
+preserved by default, but this run's fixtures declared no bindings and no MCP
+servers, so removal never exercised that path. Do not cite this run as
+evidence for binding/MCP preservation; it is unobserved here. Upstream's own
+Story 0 stop condition (`A3`) is safe scoped removal, not preservation of
+bindings/MCP across removal; this document keeps those two facts separate
+rather than treating a passing removal check as proof of the latter.
 
 ## 13. Closed check vocabulary
 
@@ -363,7 +366,7 @@ Left as later-story responsibility, not proven here:
 - computing and enforcing a semantic creation/host-trust fingerprint over
   every effective facet (Story 2)
 - host-global credential binding and MCP-registration preservation across
-  removal, for an environment that actually declares them (unobserved by
+  removal (A3), for an environment that actually declares them (unobserved by
   this run's fixtures)
 - any production `sandbox.PlanEnvRemove` implementation (Story 2)
 - multi-file list-concatenation and key-merge semantics (A6): no fixture in
