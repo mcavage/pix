@@ -34,9 +34,10 @@
       "exits": 0
     },
     "pix/host/envinfo": {
-      "prod_loc": 795,
-      "exports": 36,
-      "globals": 7,
+      "_prod_loc_note": "795 -> 860, exports 36 -> 37, globals 7 -> 8: pre-merge E1.2 finding fixes. (1) BuildTree now scans mcp.servers[].args for authored `${VAR}` interpolation (it previously scanned only url/command), plus the audit's two other real gaps on fields BuildTree already exposed as nodes but never scanned: a kit's raw authored path (kits[i]) and a binding's destination domain (bindings.<svc>.apiKey.domains[<domain>]). (2) BuildTree now refuses a duplicate domain within one service's apiKey.domains as a stable-identity collision (ErrDuplicateIdentity, reusing the existing sentinel rather than growing a second one) instead of silently emitting two BindingDomainNode entries sharing one key path -- covering both a duplicate authored directly in one file and one introduced only by merge.go's documented list-concatenation across files. (3) the one new export and new global, ErrEmptyBindingDomains: a binding whose effective, post-merge domain list is empty no longer evaporates from the tree with no trace -- BuildTree refuses it by name (`bindings.<svc>.apiKey.domains`) rather than inventing a zero-domain tree node upstream gives no meaning to (docs/upstream/sbx-0.37-binding-warning.md already shows sbx itself treating a zero-domain binding as a functionless no-op: \"no domains allowed by your bindings; not injecting\"). A deliberate, reviewed raise of a shrink-only budget.",
+      "prod_loc": 860,
+      "exports": 37,
+      "globals": 8,
       "edges": 0,
       "exits": 0
     },

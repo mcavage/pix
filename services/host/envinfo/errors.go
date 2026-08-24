@@ -19,6 +19,13 @@ var ErrUnsupportedSchemaVersion = errors.New("envinfo: unsupported schemaVersion
 // two entries both claim. BuildTree refuses to guess which one wins.
 var ErrDuplicateIdentity = errors.New("envinfo: duplicate identity")
 
+// ErrEmptyBindingDomains is wrapped into a %w-formatted error naming the
+// exact `bindings.<service>.apiKey.domains` key path a service declared
+// with an effective, post-merge domain list of zero. A binding that can
+// never inject into any domain is never a valid declaration to carry
+// forward silently — see tree.go's BuildTree for the full rationale.
+var ErrEmptyBindingDomains = errors.New("envinfo: binding declared with zero domains")
+
 // errNoDocuments and errNoSchemaVersion are Merge's own two refusals: no
 // input at all, or an input set whose every document somehow declared an
 // empty schemaVersion (Parse already refuses that per file, so this is a

@@ -47,6 +47,14 @@
 //     already in use is a stable-identity VIOLATION and BuildTree refuses
 //     it, rather than silently letting the last one win — that would make
 //     "which entry does `mcp.servers[github]` mean" depend on merge order.
+//     A binding domain collision is refused the same way, whether it comes
+//     from one file repeating a domain or from merge.go's documented
+//     list-concatenation across files introducing the repeat only after
+//     composition (docs/design/environments.md §4). A service whose
+//     effective, post-merge domain list is empty is a separate refusal
+//     (ErrEmptyBindingDomains, tree.go): the empty case has no stable
+//     identity to collide over, but letting it through would make the
+//     service itself disappear from the tree with no trace.
 //   - index-addressed: `kits[<i>]`. `kits` has no field upstream treats as
 //     a name, so two kit entries can be identical strings with no
 //     ambiguity to detect; index is the only stable address available and

@@ -2,6 +2,7 @@ package envinfo_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"pix/host/envinfo"
@@ -219,6 +220,184 @@ mcp:
 	_, err := envinfo.BuildTree(m)
 	if err == nil {
 		t.Fatal("BuildTree: expected an error for an mcp server with no name")
+	}
+}
+
+// TestTree_MCPServerArgsInterpolationScanned pins finding (1): BuildTree
+// must scan every authored `${VAR}` reference in mcp.servers[].args, not
+// only url/command, and attribute each one to a stable, index-addressed
+// destination key path with no resolved value anywhere on the result.
+func TestTree_MCPServerArgsInterpolationScanned(t *testing.T) {
+	m := mustMergeOne(t, `schemaVersion: "1"
+mcp:
+  servers:
+    - name: warehouse
+      command: warehouse-proxy
+      args:
+        - "--tenant=${WAREHOUSE_TENANT}"
+        - "--region=${WAREHOUSE_REGION:-us-east-1}"
+`)
+	tr, err := envinfo.BuildTree(m)
+	if err != nil {
+		t.Fatalf("BuildTree: %v", err)
+	}
+	if len(tr.Interpolations) != 2 {
+		t.Fatalf("Interpolations = %+v, want 2", tr.Interpolations)
+	}
+	first, second := tr.Interpolations[0], tr.Interpolations[1]
+	if first.Var != "WAREHOUSE_TENANT" || first.KeyPath != "mcp.servers[warehouse].args[0]" {
+		t.Errorf("first = %+v, want Var=WAREHOUSE_TENANT KeyPath=mcp.servers[warehouse].args[0]", first)
+	}
+	if second.Var != "WAREHOUSE_REGION" || second.KeyPath != "mcp.servers[warehouse].args[1]" {
+		t.Errorf("second = %+v, want Var=WAREHOUSE_REGION KeyPath=mcp.servers[warehouse].args[1]", second)
+	}
+	if second.Default == nil || *second.Default != "us-east-1" {
+		t.Errorf("second.Default = %v, want us-east-1", second.Default)
+	}
+	// The literal args survive unresolved on the node itself.
+	if len(tr.MCPServers) != 1 || tr.MCPServers[0].Args[0] != "--tenant=${WAREHOUSE_TENANT}" {
+		t.Errorf("MCPServers = %+v, want unresolved literal args", tr.MCPServers)
+	}
+}
+
+// TestTree_KitsInterpolationScanned closes the same audit for the other
+// authored-string field BuildTree exposes as a node but did not scan: a
+// local kit path's raw authored text.
+func TestTree_KitsInterpolationScanned(t *testing.T) {
+	m := mustMergeOne(t, `schemaVersion: "1"
+kits:
+  - "./${KIT_DIR:-kit}"
+`)
+	tr, err := envinfo.BuildTree(m)
+	if err != nil {
+		t.Fatalf("BuildTree: %v", err)
+	}
+	if len(tr.Interpolations) != 1 {
+		t.Fatalf("Interpolations = %+v, want 1", tr.Interpolations)
+	}
+	got := tr.Interpolations[0]
+	if got.Var != "KIT_DIR" || got.KeyPath != "kits[0]" {
+		t.Errorf("got = %+v, want Var=KIT_DIR KeyPath=kits[0]", got)
+	}
+}
+
+// TestTree_BindingDomainInterpolationScanned closes the audit for the
+// remaining authored-string node field BuildTree exposed but never
+// scanned: a binding's destination domain.
+func TestTree_BindingDomainInterpolationScanned(t *testing.T) {
+	m := mustMergeOne(t, `schemaVersion: "1"
+bindings:
+  anthropic:
+    apiKey:
+      domains:
+        - "${ANTHROPIC_DOMAIN:-api.anthropic.com}"
+`)
+	tr, err := envinfo.BuildTree(m)
+	if err != nil {
+		t.Fatalf("BuildTree: %v", err)
+	}
+	if len(tr.Interpolations) != 1 {
+		t.Fatalf("Interpolations = %+v, want 1", tr.Interpolations)
+	}
+	got := tr.Interpolations[0]
+	if got.Var != "ANTHROPIC_DOMAIN" {
+		t.Errorf("Var = %q, want ANTHROPIC_DOMAIN", got.Var)
+	}
+	wantKP := "bindings.anthropic.apiKey.domains[${ANTHROPIC_DOMAIN:-api.anthropic.com}]"
+	if got.KeyPath != wantKP {
+		t.Errorf("KeyPath = %q, want %q", got.KeyPath, wantKP)
+	}
+}
+
+// TestTree_BindingDomainDuplicateWithinOneFileRefused pins finding (2): a
+// service authoring the identical domain twice in one file is a
+// stable-identity collision, refused the same way a duplicate mcp.servers
+// name or ports sandbox port is refused — never silently deduplicated or
+// silently emitting two identical key paths.
+func TestTree_BindingDomainDuplicateWithinOneFileRefused(t *testing.T) {
+	m := mustMergeOne(t, `schemaVersion: "1"
+bindings:
+  anthropic:
+    apiKey:
+      domains:
+        - api.anthropic.com
+        - api.anthropic.com
+`)
+	_, err := envinfo.BuildTree(m)
+	if !errors.Is(err, envinfo.ErrDuplicateIdentity) {
+		t.Fatalf("BuildTree error = %v, want errors.Is ErrDuplicateIdentity", err)
+	}
+}
+
+// TestTree_BindingDomainDuplicateAcrossMergedFilesRefused pins the harder
+// half of finding (2): merge.go concatenates apiKey.domains lists across
+// files (docs/design/environments.md §4), so a duplicate can be introduced
+// purely by composition even though neither file alone repeats itself.
+// BuildTree must still refuse it as a stable-identity collision, not emit
+// two BindingDomainNode entries sharing one key path.
+func TestTree_BindingDomainDuplicateAcrossMergedFilesRefused(t *testing.T) {
+	base := mustParseBytes(t, `schemaVersion: "1"
+bindings:
+  anthropic:
+    apiKey:
+      domains:
+        - api.anthropic.com
+`, "base.yaml", "/envs/home")
+	overlay := mustParseBytes(t, `schemaVersion: "1"
+bindings:
+  anthropic:
+    apiKey:
+      domains:
+        - api.anthropic.com
+`, "overlay.yaml", "/envs/home")
+	merged, err := envinfo.Merge(base, overlay)
+	if err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
+	_, err = envinfo.BuildTree(merged)
+	if !errors.Is(err, envinfo.ErrDuplicateIdentity) {
+		t.Fatalf("BuildTree error = %v, want errors.Is ErrDuplicateIdentity (list-concatenation-induced collision)", err)
+	}
+}
+
+// TestTree_BindingWithZeroDomainsRefused pins finding (3): a binding whose
+// effective, merged domain list is empty must not silently evaporate from
+// the tree (BuildTree's loop over an empty slice would otherwise just emit
+// nothing and a reviewer would never learn the service was declared at
+// all). It is refused during validation instead, naming the exact service
+// and key path — see doc.go/BuildTree's rationale comment for why refusal
+// beats a zero-domain tree node: upstream sbx already treats a zero-domain
+// binding as a functionless no-op (docs/upstream/sbx-0.37-binding-warning.md:
+// "no domains allowed by your bindings; not injecting"), so it is never a
+// valid declaration to carry forward silently.
+func TestTree_BindingWithZeroDomainsRefused(t *testing.T) {
+	m := mustMergeOne(t, `schemaVersion: "1"
+bindings:
+  anthropic:
+    apiKey: {}
+`)
+	_, err := envinfo.BuildTree(m)
+	if !errors.Is(err, envinfo.ErrEmptyBindingDomains) {
+		t.Fatalf("BuildTree error = %v, want errors.Is ErrEmptyBindingDomains", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "bindings.anthropic.apiKey.domains") {
+		t.Errorf("error = %v, want it to name bindings.anthropic.apiKey.domains", err)
+	}
+}
+
+// TestTree_BindingWithZeroDomainsRefused_EmptyList covers the explicit
+// `domains: []` spelling as well as the omitted-field spelling above — both
+// must refuse identically, since both merge to the same empty slice.
+func TestTree_BindingWithZeroDomainsRefused_EmptyList(t *testing.T) {
+	m := mustMergeOne(t, `schemaVersion: "1"
+bindings:
+  anthropic:
+    apiKey:
+      domains: []
+`)
+	_, err := envinfo.BuildTree(m)
+	if !errors.Is(err, envinfo.ErrEmptyBindingDomains) {
+		t.Fatalf("BuildTree error = %v, want errors.Is ErrEmptyBindingDomains", err)
 	}
 }
 
