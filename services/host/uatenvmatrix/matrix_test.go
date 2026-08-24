@@ -225,19 +225,21 @@ func TestRun_EnvironmentCreateThenExecInvocation_Success(t *testing.T) {
 	// this check's own create+poll+probe+cleanup-probe+remove calls
 	// (calls[0..4] — one extra call versus its siblings, the bounded
 	// pre-exec poll for a positively identified running row),
-	// environment_uses_local_candidate_image's docker-inspect+create+probe+remove
-	// calls (calls[5..8]), environment_recreate_boundary's baseline+drifted
-	// create calls plus its one cleanup probe+remove pair keyed on the
-	// baseline's own receipt (calls[9..12]), environment_failed_create_cleanup's
-	// single failed create call with no cleanup calls at all — no receipt,
-	// no removal authority (calls[13]), environment_rm_scope_refusal's zero
-	// calls (it never touches the injected Executor), and
-	// environment_custom_agent_ollama's create+probe pair plus its own
-	// cleanup probe+remove pair (calls[14..17]). This test asserts only on
-	// the first check's own create+poll+exec calls.
+	// environment_uses_local_candidate_image's docker-image-inspect+create+
+	// actual-docker-inspect+cleanup-probe+remove calls (calls[5..9] — one
+	// extra call versus the pre-fix version, the actual created sandbox's own
+	// `docker inspect --format {{.Image}}` identity probe), environment_
+	// recreate_boundary's baseline+drifted create calls plus its one cleanup
+	// probe+remove pair keyed on the baseline's own receipt (calls[10..13]),
+	// environment_failed_create_cleanup's single failed create call with no
+	// cleanup calls at all — no receipt, no removal authority (calls[14]),
+	// environment_rm_scope_refusal's zero calls (it never touches the
+	// injected Executor), and environment_custom_agent_ollama's create+probe
+	// pair plus its own cleanup probe+remove pair (calls[15..18]). This test
+	// asserts only on the first check's own create+poll+exec calls.
 	calls := fe.snapshot()
-	if len(calls) != 18 {
-		t.Fatalf("expected exactly 18 executor calls, got %d: %#v", len(calls), calls)
+	if len(calls) != 19 {
+		t.Fatalf("expected exactly 19 executor calls, got %d: %#v", len(calls), calls)
 	}
 	create := calls[0]
 	if create.name != "sbx" || len(create.args) != 3 || create.args[0] != "env" || create.args[1] != "create" {

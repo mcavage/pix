@@ -4,9 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
-	"regexp"
 	"strings"
 )
 
@@ -16,21 +13,52 @@ import (
 const candidateImageFixtureName = "pix-uatenv-fixture-image"
 
 // candidateImageFixtureYAML renders the one authored declaration this check
-// exercises: a native environment pinned to the exact candidate image this
-// UAT run just built and loaded locally (imageTag), with pullPolicy: missing
-// so sbx must use the local image rather than reach a registry — the literal
-// ownership boundary docs/design/environments.md section 6.2 documents
-// ("pinned Pix template and pullPolicy: missing"). It is a package-owned
-// literal, like customAgentFixture, never derived from envinfo's renderer.
+// exercises: a native environment whose `agent: pix` selects the candidate
+// custom Pix agent kit — declared via a relative `kits:` entry, exactly
+// like every other `agent: pix` fixture in this package
+// (customAgentFixture, ollamaCapabilityFixture) — pinned to the exact
+// candidate image this UAT run just built and loaded locally (imageTag) via
+// sandboxOptions.template with pullPolicy: missing so sbx must use the
+// local image rather than reach a registry — the literal ownership
+// boundary docs/design/environments.md section 6.2 documents ("pinned Pix
+// template and pullPolicy: missing"). It is a package-owned literal, never
+// derived from envinfo's renderer.
+//
+// Host UAT run run-20260824-091306-29559f3a hit `ERROR: "pix" is not a
+// known agent` because this fixture declared `agent: pix` with no kit at
+// all: a real `sbx env create` refuses an `agent: pix` declaration outright
+// unless a referenced kit resolves to a materialized kit-spec whose own
+// declared name is "pix" (the same fix run-20260824-082317-e58d0587 already
+// established for customAgentFixture/ollamaCapabilityFixture). Declaring
+// `kits: [./kit]` here, and routing this fixture through writeAuthoredFixture
+// (see candidateImageFixture below), closes that gap the same way.
 func candidateImageFixtureYAML(imageTag string) []byte {
 	return []byte(fmt.Sprintf(`schemaVersion: "1"
 agent: pix
 name: %s
 
+kits:
+  - ./kit
+
 sandboxOptions:
   template: %s
   pullPolicy: missing
 `, candidateImageFixtureName, imageTag))
+}
+
+// candidateImageFixture is the one fixture
+// checkEnvironmentUsesLocalCandidateImage exercises, materialized through
+// writeAuthoredFixture exactly like every other fixture in this package
+// that declares `agent: pix`: RelativeKits ensures the referenced kit is
+// materialized with kit-spec name "pix", so sbx's own agent/kit identity
+// check passes and sandboxOptions.template + pullPolicy: missing still
+// selects the UAT candidate image.
+func candidateImageFixture(imageTag string) EnvironmentFixture {
+	return EnvironmentFixture{
+		Name:         candidateImageFixtureName,
+		YAML:         candidateImageFixtureYAML(imageTag),
+		RelativeKits: []string{"./kit"},
+	}
 }
 
 // registryPullMarkers are literal substrings a real `sbx env create` log
@@ -45,19 +73,26 @@ var registryPullMarkers = []string{
 	"pulling image",
 }
 
-// createdImageDigestPattern extracts the image digest a create log reports
-// having actually used to start the sandbox. checkEnvironmentUsesLocalCandidateImage
-// fails closed with a parse error when this line is absent, rather than
-// silently skipping the digest comparison AC-2 requires.
-var createdImageDigestPattern = regexp.MustCompile(`image[ _]?digest[:=]\s*(sha256:[0-9a-f]{64})`)
-
 // checkEnvironmentUsesLocalCandidateImage is Story 0's second named check
 // (AC-2, docs/design/environments.md section 11): prove that a native
 // environment pinned to the just-built, just-loaded candidate image starts
 // from that exact local image — never a registry pull — by comparing the
-// locally loaded image's digest against the digest the observed `sbx env
-// create` log reports having actually used, and by scanning that same log
-// for registry-pull evidence.
+// locally loaded candidate image's ID against the actually created
+// sandbox's own image ID, and by scanning the create log for registry-pull
+// evidence.
+//
+// The actual image identity comparison is a SECOND, independent Executor
+// call issued after the create receipt (`docker inspect --format
+// {{.Image}} <exact sandbox name>`) — never parsed out of the create log.
+// Host UAT run run-20260824-091306-29559f3a's preceding check
+// (environment_create_then_exec_invocation) proved a real `sbx env create`
+// reports the selected image/tag and layer presence, never a fabricated
+// `image digest: sha256:...` line, so asserting on one here would only ever
+// pass against a scripted test fake. Addressing the container by the exact
+// sandbox name is the narrowest, established observable this repo has for
+// it: sandbox/list.go's own `container_name` key alias documents that a
+// listed sandbox's underlying container is addressable by the sandbox's
+// own name.
 //
 // Every host command goes through the injected Executor, exactly like
 // checkEnvironmentCreateThenExecInvocation: no real `docker` or `sbx` binary
@@ -76,14 +111,15 @@ func checkEnvironmentUsesLocalCandidateImage(ctx context.Context, lw io.Writer, 
 	if err != nil {
 		return fmt.Errorf("docker image inspect %s: %w", imageTag, err)
 	}
-	localDigest := strings.TrimSpace(inspectOut)
-	if localDigest == "" {
-		return fmt.Errorf("docker image inspect %s returned no digest", imageTag)
+	localImageID := strings.TrimSpace(inspectOut)
+	if localImageID == "" {
+		return fmt.Errorf("docker image inspect %s returned no image ID", imageTag)
 	}
 
-	fixturePath := filepath.Join(phaseDir, "candidate-image.sbxenv.yaml")
-	if err := os.WriteFile(fixturePath, candidateImageFixtureYAML(imageTag), 0600); err != nil {
-		return fmt.Errorf("write candidate-image fixture: %w", err)
+	fixture := candidateImageFixture(imageTag)
+	fixturePath, err := writeAuthoredFixture(phaseDir, "candidate-image.sbxenv.yaml", fixture)
+	if err != nil {
+		return err
 	}
 	fmt.Fprintf(lw, "authored fixture written to %s\n", fixturePath)
 
@@ -92,15 +128,15 @@ func checkEnvironmentUsesLocalCandidateImage(ctx context.Context, lw io.Writer, 
 	createOut, createErrOut, err := executor.Run(ctx, "sbx", createArgs, env, phaseDir)
 	fmt.Fprintf(lw, "stdout: %s\nstderr: %s\nerr: %v\n", createOut, createErrOut, err)
 	defer func() {
-		if cleanupErr := cleanupCreatedFixture(ctx, lw, executor, env, phaseDir, fixturePath, candidateImageFixtureName, createOut, err); cleanupErr != nil && retErr == nil {
+		if cleanupErr := cleanupCreatedFixture(ctx, lw, executor, env, phaseDir, fixturePath, fixture.Name, createOut, err); cleanupErr != nil && retErr == nil {
 			retErr = cleanupErr
 		}
 	}()
 	if err != nil {
 		return fmt.Errorf("sbx env create: %w", err)
 	}
-	if !strings.Contains(createOut, candidateImageFixtureName) {
-		return fmt.Errorf("sbx env create did not report the expected positively-identified instance name %q (stdout=%q)", candidateImageFixtureName, createOut)
+	if !strings.Contains(createOut, fixture.Name) {
+		return fmt.Errorf("sbx env create did not report the expected positively-identified instance name %q (stdout=%q)", fixture.Name, createOut)
 	}
 
 	combinedLog := createOut + "\n" + createErrOut
@@ -110,15 +146,21 @@ func checkEnvironmentUsesLocalCandidateImage(ctx context.Context, lw io.Writer, 
 		}
 	}
 
-	match := createdImageDigestPattern.FindStringSubmatch(combinedLog)
-	if match == nil {
-		return fmt.Errorf("sbx env create log did not report the created sandbox's image digest (log=%q)", combinedLog)
+	actualInspectArgs := []string{"inspect", "--format", "{{.Image}}", fixture.Name}
+	fmt.Fprintf(lw, "$ docker %s\n", strings.Join(actualInspectArgs, " "))
+	actualOut, actualErrOut, err := executor.Run(ctx, "docker", actualInspectArgs, env, phaseDir)
+	fmt.Fprintf(lw, "stdout: %s\nstderr: %s\nerr: %v\n", actualOut, actualErrOut, err)
+	if err != nil {
+		return fmt.Errorf("docker inspect %s (actual created sandbox image identity): %w", fixture.Name, err)
 	}
-	createdDigest := match[1]
-	if createdDigest != localDigest {
-		return fmt.Errorf("created sandbox image digest = %q, want the locally loaded candidate digest %q", createdDigest, localDigest)
+	actualImageID := strings.TrimSpace(actualOut)
+	if actualImageID == "" {
+		return fmt.Errorf("docker inspect %s returned no image ID for the actually created sandbox", fixture.Name)
 	}
-	fmt.Fprintf(lw, "local candidate digest %s matches created sandbox digest; no registry pull observed\n", localDigest)
+	if actualImageID != localImageID {
+		return fmt.Errorf("created sandbox %s image ID = %q, want the locally loaded candidate image ID %q", fixture.Name, actualImageID, localImageID)
+	}
+	fmt.Fprintf(lw, "local candidate image ID %s matches the actually created sandbox %s; no registry pull observed\n", localImageID, fixture.Name)
 
 	return nil
 }
