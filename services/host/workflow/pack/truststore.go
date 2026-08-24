@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"pix/host/config"
+	"pix/host/hosttrust"
 	"pix/host/packinfo"
 	"pix/host/sys"
 )
@@ -44,7 +45,7 @@ func packTrustLockPath() string {
 // flock is per open file description, so a nested acquire self-deadlocks. Code
 // already holding the lock uses the *Locked variants.
 func withPackTrustLock(fn func() error) error {
-	return sys.Lock(packTrustLockPath(), fn)
+	return hosttrust.WithLock(packTrustLockPath(), fn)
 }
 
 // withPackTrustLockOn is withPackTrustLock for a caller that has somewhere to
@@ -75,20 +76,12 @@ func mutatePackTrustStore(mutate func(*PackTrustStore) error) (*PackTrustStore, 
 }
 
 // mutatePackTrustStoreLocked is the ALREADY-HOLDING-THE-LOCK core of
-// mutatePackTrustStore: fresh load → mutate → save, acquiring nothing, so a
-// locked region (`pack rm`, the wrapper refresh) never self-deadlocks.
+// mutatePackTrustStore: fresh load → mutate → save (hosttrust.LoadMutateSave),
+// acquiring nothing, so a locked region (`pack rm`, the wrapper refresh)
+// never self-deadlocks — see hosttrust's doc comment for why that is true by
+// construction, not merely by convention here.
 func mutatePackTrustStoreLocked(mutate func(*PackTrustStore) error) (*PackTrustStore, error) {
-	s, lerr := loadPackTrustStore()
-	if lerr != nil {
-		return nil, lerr
-	}
-	if merr := mutate(s); merr != nil {
-		return nil, merr
-	}
-	if serr := s.Save(); serr != nil {
-		return nil, serr
-	}
-	return s, nil
+	return hosttrust.LoadMutateSave(loadPackTrustStore, mutate, func(s *PackTrustStore) error { return s.Save() })
 }
 
 // packTrustStorePath is <config-dir>/pack-trust.json — beside config.toml,
@@ -98,13 +91,12 @@ func packTrustStorePath() string {
 }
 
 // PackTrustRecord is one accepted host-exec surface: the fingerprint the user
-// approved, plus provenance for the record's own hygiene.
-type PackTrustRecord struct {
-	Path        string `json:"path,omitempty"`
-	Remote      string `json:"remote,omitempty"`
-	Commit      string `json:"commit,omitempty"`
-	Fingerprint string `json:"fingerprint"`
-}
+// approved, plus provenance for the record's own hygiene. It is a type ALIAS
+// for hosttrust.Record, not a parallel definition: a pack's acceptance record
+// and a future environment's are the SAME shape (F6 of the hosttrust
+// extraction), and this alias exists only so every call site here keeps its
+// pre-extraction name and JSON tags unchanged.
+type PackTrustRecord = hosttrust.Record
 
 // packProvenance is host-recorded clone provenance (written by markPackAdopted
 // at clone time — never read from the pack payload).
@@ -149,11 +141,9 @@ type PackTrustStore struct {
 func loadPackTrustStore() (*PackTrustStore, error) {
 	// Lstat-REFUSE a symlinked store file on READ too (write already does): a
 	// pack-trust.json symlinked at an attacker-readable/-writable file must
-	// never supply crafted acceptance records. Fail closed, never follow.
-	if fi, lerr := os.Lstat(packTrustStorePath()); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
-		return nil, fmt.Errorf("%s is a symlink; refusing to read through it", packTrustStorePath())
-	}
-	b, err := os.ReadFile(packTrustStorePath())
+	// never supply crafted acceptance records. Fail closed, never follow
+	// (hosttrust.ReadDocumentBytes).
+	b, err := hosttrust.ReadDocumentBytes(packTrustStorePath())
 	if err != nil {
 		if os.IsNotExist(err) {
 			return &PackTrustStore{Version: 1}, nil
@@ -190,23 +180,11 @@ func migrateLegacyActivation(s *PackTrustStore, raw []byte) {
 	s.Activations = append(s.Activations, *legacy.Activation)
 }
 
-// Save writes the store symlink-safe + atomic: Lstat-REFUSE a symlinked
-// destination, then a same-dir temp + rename.
+// Save writes the store symlink-safe + atomic (hosttrust.SaveDocument):
+// Lstat-REFUSE a symlinked destination, then a same-dir temp + rename.
 func (s *PackTrustStore) Save() error {
-	dir := filepath.Dir(config.Path())
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	dest := filepath.Join(dir, packTrustStoreName)
-	if fi, err := os.Lstat(dest); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("%s is a symlink; refusing to write through it", dest)
-	}
 	s.Version = 1
-	b, err := json.MarshalIndent(s, "", "  ")
-	if err != nil {
-		return err
-	}
-	return sys.AtomicWriteInDir(dir, packTrustStoreName, append(b, '\n'), 0o644)
+	return hosttrust.SaveDocument(filepath.Dir(config.Path()), packTrustStoreName, s)
 }
 
 // TrustKey resolves a pack's identity for trust-store lookup: launcher-recorded
@@ -216,7 +194,7 @@ func (s *PackTrustStore) Save() error {
 // identity buys nothing (the fingerprint still has to match byte-for-byte), and
 // it is NEVER derived from pack.lock (untrusted payload).
 func (s *PackTrustStore) TrustKey(root string) string {
-	canon := packinfo.CanonicalizePackRoot(root)
+	canon := hosttrust.CanonicalRoot(root)
 	if s != nil {
 		if prov, ok := s.Adopted[canon]; ok && strings.TrimSpace(prov.Remote) != "" {
 			return "remote:" + strings.TrimSpace(prov.Remote)
@@ -289,7 +267,7 @@ func (s *PackTrustStore) activationFor(root string) packLock {
 	if s == nil {
 		return packLock{}
 	}
-	path, owner := packinfo.CanonicalizePackRoot(root), s.TrustKey(root)
+	path, owner := hosttrust.CanonicalRoot(root), s.TrustKey(root)
 	for i := len(s.Activations) - 1; i >= 0; i-- {
 		if a := s.Activations[i]; a.Path == path || a.Owner == owner {
 			return a.lock()
@@ -301,7 +279,7 @@ func (s *PackTrustStore) activationFor(root string) packLock {
 func (s *PackTrustStore) newActivationRecord(root string, lock packLock) packActivationRecord {
 	return packActivationRecord{
 		Owner:                  s.TrustKey(root),
-		Path:                   packinfo.CanonicalizePackRoot(root),
+		Path:                   hosttrust.CanonicalRoot(root),
 		MCP:                    append([]string(nil), lock.MCP...),
 		OllamaBridgeModel:      lock.OllamaBridgeModel,
 		PriorOllamaBridgeModel: lock.PriorOllamaBridgeModel,
@@ -320,7 +298,7 @@ func recordPackAdoptionInTrustStore(root, remote, commit string) error {
 		if s.Adopted == nil {
 			s.Adopted = map[string]packProvenance{}
 		}
-		s.Adopted[packinfo.CanonicalizePackRoot(root)] = packProvenance{Remote: remote, Commit: commit}
+		s.Adopted[hosttrust.CanonicalRoot(root)] = packProvenance{Remote: remote, Commit: commit}
 		return nil
 	})
 	return err

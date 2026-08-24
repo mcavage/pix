@@ -19,6 +19,7 @@ import (
 	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/hostenv"
+	"pix/host/hosttrust"
 	"pix/host/inference"
 	"pix/host/packinfo"
 	"pix/host/secret"
@@ -594,7 +595,7 @@ func recordPackAcceptance(out io.Writer, key, root, fingerprint, remote, commit 
 	if fingerprint == "" {
 		return
 	}
-	rec := PackTrustRecord{Path: packinfo.CanonicalizePackRoot(root), Fingerprint: fingerprint, Remote: remote, Commit: commit}
+	rec := PackTrustRecord{Path: hosttrust.CanonicalRoot(root), Fingerprint: fingerprint, Remote: remote, Commit: commit}
 	if _, werr := mutatePackTrustStore(func(s *PackTrustStore) error {
 		if rec.Remote == "" {
 			if prov, ok := s.Adopted[rec.Path]; ok {
@@ -618,7 +619,7 @@ func isAdoptedPack(root string) bool {
 		return true
 	}
 	if store, err := loadPackTrustStore(); err == nil {
-		if _, ok := store.Adopted[packinfo.CanonicalizePackRoot(root)]; ok {
+		if _, ok := store.Adopted[hosttrust.CanonicalRoot(root)]; ok {
 			return true
 		}
 	}
@@ -1191,7 +1192,7 @@ func resolveUseTarget(env hostenv.Env, out io.Writer, arg string) (root, remote,
 // adoptionMarker resolves the fail-safe adoption marker to carry forward: HOST
 // state first, the pack's own lock only as a hint (a forged one only RESTRICTS).
 func adoptionMarker(store *PackTrustStore, root string, hint packLock) (remote, commit string) {
-	if prov, ok := store.Adopted[packinfo.CanonicalizePackRoot(root)]; ok {
+	if prov, ok := store.Adopted[hosttrust.CanonicalRoot(root)]; ok {
 		return prov.Remote, prov.Commit
 	}
 	return strings.TrimSpace(hint.Remote), strings.TrimSpace(hint.Commit)
