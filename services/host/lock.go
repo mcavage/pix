@@ -15,6 +15,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -42,6 +44,19 @@ func acquireLock(path string) (release func(), err error) {
 		_ = f.Close()
 		return nil, fmt.Errorf("lock %s: %w", path, err)
 	}
+	// Stamp the holder INTO the lock file, now that we hold it. The flock
+	// itself is anonymous: the kernel will tell a loser that someone holds the
+	// lock and nothing more, so a holder that outlives its supervisor (a
+	// go-plugin child of a SIGKILLed `pix serve`, which nothing reaps and
+	// nothing can find) turns every later start into a dead end — the failure
+	// is perfectly diagnosed and completely unactionable. A pid makes it a one
+	// -line fix. It can only ever be read UNDER CONTENTION, i.e. while a real
+	// holder exists, so it cannot go stale in a way that matters: a crashed
+	// holder releases the lock, and whoever takes it next overwrites this.
+	// Best-effort — failing to annotate a lock we already hold must never fail
+	// the acquire.
+	_ = f.Truncate(0)
+	_, _ = f.WriteAt([]byte(strconv.Itoa(os.Getpid())+"\n"), 0)
 	var once sync.Once
 	return func() {
 		once.Do(func() {
@@ -49,6 +64,24 @@ func acquireLock(path string) (release func(), err error) {
 			_ = f.Close()
 		})
 	}, nil
+}
+
+// lockHolderHint reads the pid a CONTENDED lock file records (see acquireLock)
+// and renders it as a sentence naming what to look at and what to do about it.
+// Returns "" when there is no usable pid — an older holder that predates the
+// stamp, a truncated write, or our own pid (which would send an operator after
+// themselves). Purely advisory: it is appended to a refusal, never acted on.
+func lockHolderHint(path string) string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || pid <= 0 || pid == os.Getpid() {
+		return ""
+	}
+	return fmt.Sprintf("\n  the lock file records pid %d as the holder — check it with `ps -p %d`;"+
+		" if it is a memory server left behind by a hard-killed `pix serve`, stop it with `kill %d` and retry", pid, pid, pid)
 }
 
 // lockMemoryStoreOrFatal is the shared prologue every LIVE-SERVING memory entry
@@ -66,7 +99,7 @@ func lockMemoryStoreOrFatal(fatal func(format string, a ...any)) func() {
 	path := config.MemoryLockPath()
 	release, err := acquireMemLockFn(path)
 	if err != nil {
-		fatal("memory: could not acquire store lock at %s — another memory server or a restore is using the database, only one may hold it: %v", path, err)
+		fatal("memory: could not acquire store lock at %s — another memory server or a restore is using the database, only one may hold it: %v%s", path, err, lockHolderHint(path))
 		return func() {} // unreachable once fatal exits; a no-op keeps callers defer-safe
 	}
 	return release

@@ -231,11 +231,21 @@ func (s *GoPluginService) stopChild(client *goplugin.Client, drain bool) {
 	go func() { client.Kill(); close(done) }()
 	select {
 	case <-done:
+		s.clearReattach()
 	case <-time.After(s.tree.budgets.Stop):
 		s.tree.emit(Event{Unit: s.spec.Name, Type: EventStopTimeout,
 			Message: fmt.Sprintf("child did not stop within %v", s.tree.budgets.Stop)})
+		// The kill never came back, so the child may still be RUNNING — and this
+		// record is the only thing the next supervisor can find it by, to
+		// reattach or to reap. Revoking it here is exactly how a child that
+		// outlives its stop budget becomes an unreachable orphan on the store
+		// flock. A record kept for a dead pid costs nothing (the next
+		// tryReattach reads "process is gone" and drops it); one dropped for a
+		// live pid costs the daemon.
+		if client.Exited() {
+			s.clearReattach()
+		}
 	}
-	s.clearReattach()
 }
 
 func dispense(client *goplugin.Client, kind string) (any, error) {
@@ -326,21 +336,35 @@ func (s *GoPluginService) tryReattach() (*goplugin.Client, any, bool) {
 		s.clearReattach()
 		return nil, nil, false
 	}
-	reason := ""
+	// Liveness and address come FIRST so the two supersede cases below inherit
+	// a pid already proven alive and ours — the precondition their kill rests
+	// on. (A dead pid also reads better reported as dead than as a rename.)
+	reason, supersede := "", false
 	switch {
 	case st.Unit != s.spec.Name || st.Kind != s.spec.Kind:
 		reason = "state names a different unit"
-	case st.Identity != s.spec.identity():
-		reason = "executable identity changed"
-	case st.ProtocolVersion != int(s.tree.handshake.ProtocolVersion):
-		reason = "plugin protocol version changed"
 	case st.Pid <= 0 || !processAlive(st.Pid):
 		reason = "recorded process is gone or not ours"
 	case st.Address == "":
 		reason = "no recorded address"
+	// SUPERSEDED, not foreign: the state named this unit and kind above, so the
+	// live pid it records is our OWN earlier generation, launched from a
+	// surface we have since changed (the ordinary upgrade: pix-host rebuilt
+	// under a hard-killed supervisor's surviving child). Refusing to adopt it
+	// is right; dropping its record and walking away is the bug — that leaves
+	// it running, unsupervised and now unfindable, holding what the unit owns
+	// exclusively. For memory that is the store flock, so every later spawn
+	// dies on it and `serve` never starts again until someone finds the pid.
+	case st.Identity != s.spec.identity():
+		reason, supersede = "executable identity changed", true
+	case st.ProtocolVersion != int(s.tree.handshake.ProtocolVersion):
+		reason, supersede = "plugin protocol version changed", true
 	}
 	if reason == "" {
 		reason = verifyReattachTarget(st.Network, st.Address)
+	}
+	if supersede {
+		reason += s.reapSupersededOrphan(st, reason)
 	}
 	if reason == "" {
 		// Snapshot the pid's kernel-reported start time NOW, at the moment every
@@ -365,40 +389,53 @@ func (s *GoPluginService) tryReattach() (*goplugin.Client, any, bool) {
 		}
 		client.Kill()
 		reason = "reattach failed: " + derr.Error()
-		// Every check above (unit/kind name, the exact identity fingerprint, the
-		// negotiated protocol version, processAlive's uid check, and
-		// verifyReattachTarget's uid-owned-unix-socket check) already PROVED
-		// st.Pid is our own previously-launched generation of this unit at the
-		// time of that check — not merely a live process wearing that pid, and
-		// not necessarily still true NOW: the dispense attempt just spent real
-		// time (up to the handshake budget) during which the pid could have
-		// exited and been reused. client.Kill() above only reaches the OS
-		// process when go-plugin's own reattach dial succeeded (it sets a
-		// runner only then); a unit that stopped answering its socket entirely
-		// — the exact failure that would otherwise leave memory's exclusive
-		// store flock held forever, deadlocking every spawn `serve` tries next
-		// — dials to ErrProcessNotFound and leaves client.Kill() a no-op.
-		// killVerifiedOrphan is the ONLY path that still reaps it, and it is
-		// reachable ONLY after revalidateOrphan re-confirms, right now, that
-		// the pid (by start time, where available) and its socket are still
-		// the exact target already verified above: a stale or partial
-		// revalidation refuses to kill rather than risk a reused pid.
-		if ok, revReason := revalidateOrphan(st.Pid, st.Network, st.Address, startBefore, startKnown); ok {
-			switch killVerifiedOrphan(st.Pid) {
-			case orphanKillConfirmedDead:
-				s.tree.emit(Event{Unit: s.spec.Name, Type: EventOrphanKilled, Message: fmt.Sprintf("pid %d: %s", st.Pid, reason)})
-			case orphanKillSignalFailed:
-				s.tree.emit(Event{Unit: s.spec.Name, Type: EventOrphanKillFailed, Message: fmt.Sprintf("pid %d: kill signal not delivered: %s", st.Pid, reason)})
-			case orphanKillNotConfirmed:
-				s.tree.emit(Event{Unit: s.spec.Name, Type: EventOrphanKillFailed, Message: fmt.Sprintf("pid %d: still alive %v after SIGKILL: %s", st.Pid, orphanKillWait, reason)})
-			}
-		} else {
-			reason = reason + " (verified orphan NOT killed: " + revReason + ")"
-		}
+		// client.Kill() above reaches the OS process only when go-plugin's own
+		// reattach dial succeeded (it sets a runner only then). A unit that
+		// stopped answering its socket entirely — the failure that would
+		// otherwise leave memory's store flock held forever — dials to
+		// ErrProcessNotFound and leaves that Kill a no-op, so the reaper is
+		// what actually ends it. startBefore is what lets it tell the pid it
+		// verified from a successor that reused the number meanwhile.
+		reason += s.reapVerifiedOrphan(st, startBefore, startKnown, reason)
 	}
 	s.tree.emit(Event{Unit: s.spec.Name, Type: EventReattachRejected, Message: reason})
 	s.clearReattach()
 	return nil, nil, false
+}
+
+// reapVerifiedOrphan is the ONE path from "we refused to reattach to a live
+// child we recorded" to signaling it, and killVerifiedOrphan's only caller. It
+// re-proves through revalidateOrphan, immediately before the kill, that the pid
+// and socket are STILL the target the caller verified (a stale or partial
+// answer refuses, rather than risk a reused pid), and emits a typed event —
+// EventOrphanKilled only for a CONFIRMED death. why is the rejection that led
+// here, carried into the event. Returns "" when the orphan was signaled, else a
+// note for the caller's reason: a refusal leaves a process an operator has to
+// find by hand, so it must never be silent.
+func (s *GoPluginService) reapVerifiedOrphan(st reattachState, startBefore uint64, startKnown bool, why string) string {
+	ok, revReason := revalidateOrphan(st.Pid, st.Network, st.Address, startBefore, startKnown)
+	if !ok {
+		return " (verified orphan NOT killed: " + revReason + ")"
+	}
+	switch killVerifiedOrphan(st.Pid) {
+	case orphanKillConfirmedDead:
+		s.tree.emit(Event{Unit: s.spec.Name, Type: EventOrphanKilled, Message: fmt.Sprintf("pid %d: %s", st.Pid, why)})
+	case orphanKillSignalFailed:
+		s.tree.emit(Event{Unit: s.spec.Name, Type: EventOrphanKillFailed, Message: fmt.Sprintf("pid %d: kill signal not delivered: %s", st.Pid, why)})
+	case orphanKillNotConfirmed:
+		s.tree.emit(Event{Unit: s.spec.Name, Type: EventOrphanKillFailed, Message: fmt.Sprintf("pid %d: still alive %v after SIGKILL: %s", st.Pid, orphanKillWait, why)})
+	}
+	return ""
+}
+
+// reapSupersededOrphan reaps the child of a generation we refused to adopt
+// because WE changed, not because anything about the child went wrong. No RPC
+// was attempted, so unlike the dispense-failure path there is no reuse window
+// to close; the snapshot and revalidation happen anyway, so every kill in this
+// package goes through exactly one set of proofs.
+func (s *GoPluginService) reapSupersededOrphan(st reattachState, why string) string {
+	startBefore, startKnown := processStartTime(st.Pid)
+	return s.reapVerifiedOrphan(st, startBefore, startKnown, why)
 }
 
 // orphanKillWait bounds how long killVerifiedOrphan waits for a verified
@@ -429,6 +466,13 @@ const (
 // above occurred; the caller emits EventOrphanKilled ONLY for
 // orphanKillConfirmedDead.
 func killVerifiedOrphan(pid int) orphanKillResult {
+	// Guard the PRIMITIVE, not just its callers: on unix pid 0 signals our whole
+	// process group and a negative pid another group (-1: everything this uid
+	// can reach), so one arriving here turns "reap an orphan" into "kill the
+	// supervisor and all it started". No caller passes one; it stops here anyway.
+	if pid <= 0 {
+		return orphanKillSignalFailed
+	}
 	p, err := os.FindProcess(pid)
 	if err != nil {
 		return orphanKillConfirmedDead // nothing to signal: already gone
@@ -463,6 +507,9 @@ func killVerifiedOrphan(pid int) orphanKillResult {
 // process, so it is not sufficient to kill. Any stale or partial result here
 // — not just an outright mismatch — means "do not kill".
 func revalidateOrphan(pid int, network, address string, startBefore uint64, startKnown bool) (ok bool, reason string) {
+	if pid <= 0 {
+		return false, "no recorded pid to identify a process by"
+	}
 	if !processAlive(pid) {
 		return false, "process is gone or no longer ours as of the kill decision"
 	}
@@ -511,6 +558,11 @@ func verifyReattachTarget(network, address string) string {
 
 // processAlive: the recorded pid must exist AND be ours. A signal-0 EPERM proves only that SOME process wears the pid — after pid reuse that is anybody — so EPERM is a refusal, not proof; where /proc exposes the owner, the real uid must equal ours.
 func processAlive(pid int) bool {
+	// 0 and negatives address process GROUPS: signal 0 to one we belong to
+	// succeeds, reporting "alive and ours" for a pid naming no process at all.
+	if pid <= 0 {
+		return false
+	}
 	p, err := os.FindProcess(pid)
 	if err != nil || p.Signal(syscall.Signal(0)) != nil {
 		return false

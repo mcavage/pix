@@ -136,7 +136,10 @@ func memoryRestore(p restoreParams) (restoreResult, error) {
 	}
 	release, err := acquire(lockPath)
 	if err != nil {
-		return restoreResult{}, fmt.Errorf("the memory service (or another restore) is using the database — stop it first: pix serve stop")
+		// `pix serve stop` is the answer when a SUPERVISED server holds it; it is
+		// no answer at all when the holder is an orphan no supervisor knows
+		// about, so name the holder too (lock.go stamps it).
+		return restoreResult{}, fmt.Errorf("the memory service (or another restore) is using the database — stop it first: pix serve stop%s", lockHolderHint(lockPath))
 	}
 	defer release()
 
