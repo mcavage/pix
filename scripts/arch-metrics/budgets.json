@@ -104,6 +104,14 @@
       "edges": 0,
       "exits": 0
     },
+    "pix/host/recreatelog": {
+      "_prod_loc_note": "E1.6: initial budget for the local-only, bounded (MaxRecords=100) environment recreate-boundary diagnostic log (docs/design/environments.md section 10.2). Two files, recreatelog.go + doc.go: Record{Timestamp,Environment,ChangedKeyPaths}, canonicalization/validation (reject empty/absolute/traversal/control-char changed key paths, reject invalid environment names), an flock-guarded append (dedicated lock file, distinct from the atomically-swapped data file) and a strict DisallowUnknownFields reader that fails closed on malformed or foreign-written content. Zero internal imports by construction (F10, guard_test.go), so it satisfies the L1 down-only/no-sibling rule without help. Not wired into doctor or any workflow yet (deferred to Story 2).",
+      "prod_loc": 301,
+      "exports": 4,
+      "globals": 5,
+      "edges": 0,
+      "exits": 0
+    },
     "pix/host/routing": {
       "prod_loc": 939,
       "exports": 29,
