@@ -42,6 +42,15 @@ export default [
 				// travels as that integration's env_keys in op-refs.env. A core
 				// config key for one vendor's account was the last piece of the
 				// special case — see docs/design/integrations-remediation.md.
+				//
+				// environment / environments added E1.5 (Story 1, native sandbox
+				// environments, docs/design/environments.md §5.3): the machine
+				// default environment NAME and the name -> canonical absolute
+				// local path registry. Both are real on-disk keys with no
+				// hand-edit path at all — `pix config set/unset` refuses them
+				// outright (workflow/provision/config.go's environmentKeyRefusal);
+				// `pix env use`/`pix env add`/`pix env rm` (Wave C) are the only
+				// writers.
 				expected: [
 					"services",
 					"mcp",
@@ -51,6 +60,8 @@ export default [
 					"ollama_bridge_model",
 					"run_intent",
 					"inference",
+					"environment",
+					"environments",
 				],
 			},
 		],
