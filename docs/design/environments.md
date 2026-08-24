@@ -1,6 +1,8 @@
 # Native sandbox environments
 
-Status: PLAN, ready for implementation after Story 0 proves the sbx contract
+Status: Story 0 proven on sbx v0.39.0. Implementation of Story 1 onward is in
+progress; see `docs/upstream/sbx-0.39-environments.md` for the observed
+contract this section summarizes.
 
 Supersedes the unimplemented named-pack-rigs plan on this branch. At landing it
 also supersedes `packs.md`, `packs-v2.md`, `packs-v2-impl.md`, `routing.md`, and
@@ -109,8 +111,33 @@ is wrong and must be deleted.
 
 ## 4. Verified sbx 0.39 contract
 
-Story 0 must re-prove these facts against the installed host release, but they
-are already documented upstream:
+Story 0 re-proved these facts against a real `sbx v0.39.0` host release
+(run `run-20260824-110322-d24dac52`, candidate
+`33499a056a4390b5095d0b50d51475b3580cd2ec`); the full observed argv, output,
+and corrections are in `docs/upstream/sbx-0.39-environments.md`. Three
+facts below are corrected from the pre-Story-0 assumption, not merely
+confirmed:
+
+- **Local candidate image proof is exact-tag, no-pull, and running, never
+  digest equality.** sbx 0.39's `sbx ls --json` exposes no created-sandbox
+  digest field, and a sandbox is not a host-Docker container addressable by
+  its sandbox name. The proof is: the run-unique tag is registered in
+  `sbx template ls` before create, the create receipt names that exact tag
+  with no mixed reference, no registry-pull marker appears in the log, and a
+  fresh `sbx ls --json` poll confirms the instance running.
+- **Interpolation has three observed outcomes**, not merely a documented
+  mechanism: a defined `${VAR}` resolves to its host value; a missing
+  `${VAR:-default}` resolves to the literal default; a bare missing `${VAR}`
+  with no default resolved to a sandbox-side environment variable set to the
+  empty string (create succeeded; it was not refused).
+- **Custom-agent Ollama transport is unsupported**, with a concrete observed
+  failure: sbx forwards `--model` to the container runtime as the command to
+  execute (`executable file '--model' not found in $PATH`). Section 4.1
+  below and `extensions/ollama-bridge.ts` reflect this result, not an
+  assumption.
+
+The remaining facts below were already documented upstream and Story 0
+confirmed them:
 
 - `sbx env` requires sbx 0.39.0 or later and is experimental.
 - `sbx env run [PATH...]` creates if needed and attaches the declared agent. It
@@ -148,6 +175,13 @@ sbx run --model gemma4 --provider ollama claude
 That feature is experimental, unsupported on Windows, absent from the
 `.sbxenv.yaml` schema, and not documented for custom agents. Pix runs Pi through
 a custom agent kit, so `extensions/ollama-bridge.ts` stays.
+
+Story 0 probed the analogous shape for the Pix custom agent
+(`sbx exec -it NAME --model gemma4 --provider ollama -- pi ...`) and observed
+it fail: sbx forwards `--model` to the container runtime as the exec command
+rather than recognizing a transport flag
+(`docs/upstream/sbx-0.39-environments.md`). This is recorded as an explicit,
+non-failing `unsupported` capability result, not a design stop.
 
 Delete the bridge only after host UAT proves that sbx exposes a stable local
 model transport to the Pix custom agent. Until then it is a transport adapter,
@@ -694,6 +728,14 @@ Story 0 extends candidate smoke with capability-named checks, not a generic
 The scenario remains `uat/scenarios/smoke.yaml`; capabilities report the named
 checks. Each check owns typed inputs internally, so the MCP caller cannot supply
 host commands, argv, environment variables, or arbitrary paths.
+
+All six checks passed against a real host and candidate
+(`docs/upstream/sbx-0.39-environments.md`). That document is the source of
+truth for observed argv, output, and the exact-tag/interpolation/Ollama
+corrections above; this section states scope, not evidence. It also records
+external cleanup debt: an earlier run leaked a `pix-uatenv-fixture-image`
+sandbox before the run-unique-name fix landed. Story 0 is proven, not
+leak-free.
 
 The UAT matrix must prove:
 

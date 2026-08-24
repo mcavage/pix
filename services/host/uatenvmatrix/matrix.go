@@ -56,9 +56,12 @@ type Inputs struct {
 	Executor Executor
 	// ImageTag is the exact candidate image reference this run built,
 	// saved, and `sbx template load`ed (docker.io/mcavage/pix:<tag>).
-	// environment_uses_local_candidate_image (E0.2) requires it to prove a
-	// created environment's image digest matches the locally loaded
-	// candidate rather than a registry pull; production always sets it,
+	// environment_uses_local_candidate_image (E0.2) requires it to prove
+	// the created environment started from that exact local tag with no
+	// registry pull. sbx 0.39's `sbx ls --json` exposes no created-sandbox
+	// digest field, so this is exact-tag plus no-pull plus running
+	// evidence, never digest equality; see check_local_image.go and
+	// docs/upstream/sbx-0.39-environments.md. Production always sets it,
 	// the same caller-bug contract the candidate-binary check above
 	// enforces for OutDir.
 	ImageTag string
