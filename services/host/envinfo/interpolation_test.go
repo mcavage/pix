@@ -104,6 +104,32 @@ env:
 	}
 }
 
+// TestInterpolation_UnbracedVarIsNotInterpolation is a grammar pin (Wave B
+// finding): docs/design/environments.md §9.1 defines exactly two forms,
+// `${VAR}` and `${VAR:-default}` — both brace-delimited. A bare `$VAR` with
+// no braces is deliberately NOT interpolation and must never be surfaced as
+// one, even though shell and many other tools would treat it as a variable
+// reference. This is a fitness function against a future "helpfully"
+// widened regex, not a description of a gap: scanInterpolations is a pure
+// string scan (interpolation.go) and authors get exactly the grammar this
+// package documents, nothing looser.
+func TestInterpolation_UnbracedVarIsNotInterpolation(t *testing.T) {
+	m := mustMergeOne(t, `schemaVersion: "1"
+env:
+  PLAIN: "$FOO and $BAR:-default and $BAZ"
+`)
+	tr, err := envinfo.BuildTree(m)
+	if err != nil {
+		t.Fatalf("BuildTree: %v", err)
+	}
+	if len(tr.Interpolations) != 0 {
+		t.Fatalf("Interpolations = %+v, want none: unbraced $VAR is not authored interpolation grammar", tr.Interpolations)
+	}
+	if tr.Env[0].Value != "$FOO and $BAR:-default and $BAZ" {
+		t.Errorf("Env node value = %q, want the literal unbraced text untouched", tr.Env[0].Value)
+	}
+}
+
 // TestInterpolationTypeCarriesNoResolvedValue is a structural guard for
 // docs/design/environments.md §9.1's Story 1 obligation: the type itself
 // must have no field a resolved secret could ever occupy, not merely "the

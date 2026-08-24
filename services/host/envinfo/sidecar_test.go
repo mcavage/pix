@@ -383,6 +383,107 @@ func TestValidateSkillWorkspacesFailsClosedWithNoWorkspaces(t *testing.T) {
 	}
 }
 
+// --- Wave B security/QA finding: ValidateSkillWorkspaces must resolve
+// symlinks on both the workspace roots and the skill path before checking
+// containment, refusing a nonexistent/unresolvable path or one that only
+// LOOKS contained until its symlink is followed. ---
+
+func TestValidateSkillWorkspacesRejectsNonexistentSkillPath(t *testing.T) {
+	dir := t.TempDir()
+	// deliberately do not create dir/skills
+	path := writeSidecar(t, dir, validSidecar)
+	s, err := ParseSidecar(path)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	err = ValidateSkillWorkspaces(path, s, []string{dir})
+	if err == nil {
+		t.Fatal("expected error: skills path does not exist")
+	}
+	serr, ok := err.(*Error)
+	if !ok {
+		t.Fatalf("error type = %T, want *envinfo.Error", err)
+	}
+	if serr.Key != "pi.skills" {
+		t.Errorf("Key = %q, want %q", serr.Key, "pi.skills")
+	}
+	if !strings.Contains(serr.Reason, "does not exist") {
+		t.Errorf("Reason = %q, want it to name the missing path", serr.Reason)
+	}
+}
+
+func TestValidateSkillWorkspacesResolvesSymlinkedWorkspaceRoot(t *testing.T) {
+	// The workspace root itself is a symlink to the real workspace; the
+	// skill path is still validated correctly because both sides of the
+	// comparison are resolved.
+	realWorkspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(realWorkspace, "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	symlinkedWorkspace := filepath.Join(t.TempDir(), "workspace-link")
+	if err := os.Symlink(realWorkspace, symlinkedWorkspace); err != nil {
+		t.Skipf("symlinks unsupported in this environment: %v", err)
+	}
+	path := writeSidecar(t, realWorkspace, validSidecar)
+	s, err := ParseSidecar(path)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if err := ValidateSkillWorkspaces(path, s, []string{symlinkedWorkspace}); err != nil {
+		t.Errorf("ValidateSkillWorkspaces: unexpected error with a symlinked workspace root: %v", err)
+	}
+}
+
+func TestValidateSkillWorkspacesRejectsEscapingSymlink(t *testing.T) {
+	// The authored skills path sits literally inside the workspace, but is
+	// itself a symlink whose real target escapes it. Containment must be
+	// checked against the RESOLVED path, not the authored one.
+	workspace := t.TempDir()
+	outside := t.TempDir()
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	escapingLink := filepath.Join(workspace, "skills")
+	if err := os.Symlink(outside, escapingLink); err != nil {
+		t.Skipf("symlinks unsupported in this environment: %v", err)
+	}
+	path := writeSidecar(t, workspace, validSidecar)
+	s, err := ParseSidecar(path)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	err = ValidateSkillWorkspaces(path, s, []string{workspace})
+	if err == nil {
+		t.Fatal("expected error: skills path is a symlink escaping the workspace")
+	}
+	serr, ok := err.(*Error)
+	if !ok {
+		t.Fatalf("error type = %T, want *envinfo.Error", err)
+	}
+	if !strings.Contains(serr.Reason, "outside every declared workspace") {
+		t.Errorf("Reason = %q, want the outside-workspace refusal", serr.Reason)
+	}
+}
+
+func TestValidateSkillWorkspacesRejectsUnresolvableWorkspaceRoot(t *testing.T) {
+	// A declared workspace root that does not itself exist can never
+	// legitimately contain anything, so it drops silently out of the
+	// containment set rather than making a real workspace pass by accident.
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := writeSidecar(t, dir, validSidecar)
+	s, err := ParseSidecar(path)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	nonexistentWorkspace := filepath.Join(t.TempDir(), "never-created")
+	if err := ValidateSkillWorkspaces(path, s, []string{nonexistentWorkspace}); err == nil {
+		t.Fatal("expected error: the only declared workspace root does not exist")
+	}
+}
+
 // --- Pre-merge findings: quoted-key strictness must come from the real
 // decoder's metadata, never a regex line-scanner, and TOML quoting must be
 // honored so a quoted dotted segment is one identity, not split. ---

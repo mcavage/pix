@@ -240,11 +240,27 @@ func ParseSidecar(path string) (*Sidecar, error) {
 }
 
 // ValidateSkillWorkspaces confirms every [pi].skills path resolves, relative
-// to the pix.toml directory, to a location inside one of the supplied
-// workspace roots. workspaces must already be canonical absolute paths — the
-// environment adapter's job, not this package's — since this function does
-// not itself resolve symlinks. An environment with no declared workspaces
-// fails every skills path closed rather than defaulting to "allowed".
+// to the pix.toml directory, to a REAL (symlink-resolved) location inside
+// one of the supplied workspace roots. workspaces need only be absolute —
+// the environment adapter's job, not this package's — since this function
+// resolves symlinks on both sides of the comparison itself:
+//
+//   - each workspace root is passed through filepath.EvalSymlinks once. A
+//     root that does not exist, or whose symlink chain is broken, cannot
+//     legitimately contain anything, so it silently drops out of the
+//     containment set rather than aborting the whole call — one intact
+//     workspace root among several still gets a real check.
+//   - each skills path is passed through filepath.EvalSymlinks too. A path
+//     that does not exist, or is an unresolvable/looping symlink, fails
+//     closed with its own precise reason rather than being compared at all.
+//   - containment is then checked on the two RESOLVED (real) paths, not the
+//     authored ones. This is what refuses a skills entry that is itself a
+//     symlink pointing outside every workspace: its literal path may sit
+//     inside a workspace while its real target does not, and the real
+//     target is what Pi actually loads.
+//
+// An environment with no declared workspaces — or none that resolve — fails
+// every skills path closed rather than defaulting to "allowed".
 func ValidateSkillWorkspaces(sidecarPath string, s *Sidecar, workspaces []string) error {
 	base := filepath.Base(sidecarPath)
 	dir := filepath.Dir(sidecarPath)
@@ -252,6 +268,16 @@ func ValidateSkillWorkspaces(sidecarPath string, s *Sidecar, workspaces []string
 	if data, err := os.ReadFile(sidecarPath); err == nil {
 		line = locateKeyLines(string(data))["pi.skills"]
 	}
+
+	var realWorkspaces []string
+	for _, ws := range workspaces {
+		real, err := filepath.EvalSymlinks(filepath.Clean(ws))
+		if err != nil {
+			continue
+		}
+		realWorkspaces = append(realWorkspaces, real)
+	}
+
 	for _, rel := range s.Pi.Skills {
 		abs := rel
 		if !filepath.IsAbs(abs) {
@@ -259,10 +285,19 @@ func ValidateSkillWorkspaces(sidecarPath string, s *Sidecar, workspaces []string
 		}
 		abs = filepath.Clean(abs)
 
+		real, err := filepath.EvalSymlinks(abs)
+		if err != nil {
+			return &Error{
+				File:   base,
+				Line:   line,
+				Key:    "pi.skills",
+				Reason: fmt.Sprintf("%q does not exist or could not be resolved: %v", rel, err),
+			}
+		}
+
 		inside := false
-		for _, ws := range workspaces {
-			ws = filepath.Clean(ws)
-			if abs == ws || strings.HasPrefix(abs, ws+string(filepath.Separator)) {
+		for _, ws := range realWorkspaces {
+			if real == ws || strings.HasPrefix(real, ws+string(filepath.Separator)) {
 				inside = true
 				break
 			}
