@@ -129,23 +129,27 @@ proof substitutes a terminating shell for the non-terminating TUI.
 
 ## 6. Interpolation
 
-Three fixtures, one create call each, observed against a real `sbx env
-create`:
+Two fixtures, one create call each, together carrying three interpolation
+forms, observed against a real `sbx env create`:
 
-| form | fixture value | observed sandbox-side result |
-| --- | --- | --- |
-| defined `${VAR}` | `${PIX_UAT_STORY0_DEFINED}` (host set to `pix-uat-story0-defined-value`) | `pix-uat-story0-defined-value` |
-| missing with default `${VAR:-default}` | `${PIX_UAT_STORY0_MISSING:-fallback-value}` (host var stripped) | `fallback-value` |
-| bare missing `${VAR}` | `${PIX_UAT_STORY0_MISSING}` (host var stripped) | create succeeded; the reference resolved to a sandbox-side environment variable set to the empty string |
+| fixture | form | fixture value | observed sandbox-side result |
+| --- | --- | --- | --- |
+| defined/default (`observeDefinedDefaultInterpolation`) | defined `${VAR}` | `${PIX_UAT_STORY0_DEFINED}` (host set to `pix-uat-story0-defined-value`) | `pix-uat-story0-defined-value` |
+| defined/default (`observeDefinedDefaultInterpolation`) | missing with default `${VAR:-default}` | `${PIX_UAT_STORY0_MISSING:-fallback-value}` (host var stripped) | `fallback-value` |
+| undefined variable (`observeUndefinedVariableBehavior`) | bare missing `${VAR}` | `${PIX_UAT_STORY0_MISSING}` (host var stripped) | create succeeded; the reference resolved to a sandbox-side environment variable set to the empty string |
 
-The bare-missing case had two legitimate outcomes going in: a loader/create
-refusal, or a create success with some classifiable sandbox-side value
-(unset, empty, or the literal unexpanded `${VAR}` text). This run observed
-create success with an empty string, not a refusal and not literal passthrough.
-Section 5 of `docs/design/environments.md` should be read with this exact
-result, not as an open question.
+The defined and missing-with-default forms share one fixture and one create
+call because both resolve inside the same probe script in a single sandbox;
+the bare-missing form is exercised by a second, separate fixture and create
+call, because it is the one case with two legitimate outcomes going in — a
+loader/create refusal, or a create success with some classifiable
+sandbox-side value (unset, empty, or the literal unexpanded `${VAR}` text) —
+and isolating it keeps that ambiguity from being attributed to the wrong
+create call. This run observed create success with an empty string, not a
+refusal and not literal passthrough. Section 5 of `docs/design/environments.md`
+should be read with this exact result, not as an open question.
 
-Every positively receipted interpolation fixture (all three) was
+Each of the two positively receipted interpolation fixtures was
 fresh-probe-gated before removal and removed by the same shared
 `cleanupCreatedFixture` path every other check in this package uses: no
 receipt, no removal attempt; a receipt with a failed fresh reconfirmation,
@@ -333,8 +337,9 @@ Proven, with host evidence, on sbx v0.39.0:
 - both non-`pix-*` and instance-mismatched removal are refused before any
   removal argv
 - the custom-agent Ollama transport is unsupported today, with a concrete
-  observed failure signature (A3 does not require Ollama support; it
-  requires the bridge decision to be evidence-based, which it now is)
+  observed failure signature: this is the A7 observation (section 11), and
+  its unsupported result is exactly what preserves `extensions/ollama-bridge.ts`
+  rather than retiring it
 - safe removal (`sbx env rm -f`) reports the sandbox and scoped secrets
   removed
 
