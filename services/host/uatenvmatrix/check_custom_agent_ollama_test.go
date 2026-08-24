@@ -167,9 +167,80 @@ func TestRecognizedOllamaUnsupportedReason_UnrelatedErrorsNotRecognized(t *testi
 		"context deadline exceeded",
 		"sbx: command not found",
 		"panic: runtime error",
+		// A genuinely different missing-executable failure (e.g. `pi` itself
+		// missing from $PATH inside the sandbox) must never be swallowed by
+		// the observed `--model`-forwarded-as-executable marker below: only
+		// the exact attempted executable `--model` is recognized.
+		"OCI runtime exec failed: executable file `pi` not found in $PATH: No such file or directory",
+		"exec: \"pi\": executable file not found in $PATH",
 	} {
 		if recognizedOllamaUnsupportedReason(out) != "" {
 			t.Errorf("expected %q to NOT be recognized as an unsupported-capability response", out)
 		}
+	}
+}
+
+// observedOllamaModelFlagForwardedAsExecutableStdout is the EXACT stdout
+// byte-for-byte (CRLF included) captured from a real host UAT run
+// (run-20260824-100925-6a672010) probing this check's assumed
+// `sbx exec -it <name> --model gemma4 --provider ollama -- pi --kit
+// /opt/pix/kit` transport: sbx forwarded the literal `--model` flag to the
+// container runtime as the command to execute, rather than recognizing it
+// as a pre-command transport flag. stderr was empty; the process exited 127.
+const observedOllamaModelFlagForwardedAsExecutableStdout = "OCI runtime exec failed: executable file `--model` not found in $PATH: No such file or directory\r\n"
+
+// TestRecognizedOllamaUnsupportedReason_ObservedModelFlagForwardedAsExecutableRecognized
+// pins the exact observed host evidence above as a recognized unsupported-
+// transport marker: this is host evidence that `sbx exec` does not accept
+// this check's assumed pre-command `--model`/`--provider` transport for a
+// custom agent, forwarding `--model` as the executable instead.
+func TestRecognizedOllamaUnsupportedReason_ObservedModelFlagForwardedAsExecutableRecognized(t *testing.T) {
+	reason := recognizedOllamaUnsupportedReason(observedOllamaModelFlagForwardedAsExecutableStdout)
+	if reason == "" {
+		t.Fatalf("expected the exact observed run-20260824-100925-6a672010 stdout to be recognized as an unsupported-capability response, got no match for %q", observedOllamaModelFlagForwardedAsExecutableStdout)
+	}
+	if !strings.Contains(reason, "--model") {
+		t.Errorf("reason does not name --model as the flag sbx forwarded as the executable: %q", reason)
+	}
+}
+
+// TestCheckEnvironmentCustomAgentOllama_ObservedModelFlagForwardedAsExecutableSucceedsAndRecordsBridgeRequirement
+// replays the exact observed host command/response from run-20260824-100925-
+// 6a672010 through the full check (create, exec probe, cleanup) and proves
+// it lands on the non-failing "unsupported" branch, states the bridge
+// requirement, and still cleans up its fixture.
+func TestCheckEnvironmentCustomAgentOllama_ObservedModelFlagForwardedAsExecutableSucceedsAndRecordsBridgeRequirement(t *testing.T) {
+	phaseDir := t.TempDir()
+	var lw strings.Builder
+	rmCalled := false
+	executor := recordingExecutor{fn: func(args []string) (string, string, error) {
+		if len(args) > 0 && args[0] == "ls" {
+			return "created " + ollamaCapabilityFixtureName + " (positively identified)\n", "", nil
+		}
+		if len(args) > 1 && args[0] == "env" && args[1] == "rm" {
+			rmCalled = true
+			return "removed\n", "", nil
+		}
+		if len(args) > 0 && args[0] == "env" {
+			return "created " + ollamaCapabilityFixtureName + " (positively identified)\n", "", nil
+		}
+		// The exec probe itself: the exact observed host response.
+		return observedOllamaModelFlagForwardedAsExecutableStdout, "", errors.New("exit status 127")
+	}}
+
+	err := checkEnvironmentCustomAgentOllama(context.Background(), &lw, executor, phaseDir)
+	if err != nil {
+		t.Fatalf("the exact observed run-20260824-100925-6a672010 response must not fail the check, got: %v", err)
+	}
+	if !rmCalled {
+		t.Error("expected the fixture to be cleaned up (sbx env rm) even on the recognized-unsupported branch")
+	}
+
+	logged := lw.String()
+	if !strings.Contains(logged, "capability: unsupported") {
+		t.Errorf("artifact does not record the structured capability field for the unsupported branch: %s", logged)
+	}
+	if !strings.Contains(logged, "extensions/ollama-bridge.ts remains required") {
+		t.Errorf("artifact does not state that extensions/ollama-bridge.ts remains required: %s", logged)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 )
 
@@ -62,12 +63,39 @@ var ollamaUnsupportedMarkers = []ollamaUnsupportedMarker{
 	{"experimental and unavailable", "sbx reports the Ollama provider transport as experimental and unavailable for this invocation"},
 }
 
+// ollamaModelFlagForwardedAsExecutablePattern recognizes the OBSERVED
+// concrete OCI runtime-exec failure this package saw in a real host UAT run
+// (run-20260824-100925-6a672010): `sbx exec` forwarded the literal
+// `--model` flag to the container runtime as if it were the sandbox's
+// command to execute, rather than recognizing it as this check's own
+// assumed pre-command transport flag
+// (`sbx exec -it <name> --model gemma4 --provider ollama -- pi --kit ...`).
+//
+// The pattern intentionally requires the failing executable to be
+// identified as exactly `--model` (in backticks, single, or double quotes)
+// rather than matching any "executable ... not found" text: a genuinely
+// different missing-executable failure (a typo'd binary, a missing `pi`, a
+// broken PATH) must still fail the check as infrastructure breakage, never
+// be silently absorbed here.
+var ollamaModelFlagForwardedAsExecutablePattern = regexp.MustCompile(
+	`(?i)executable file\s*[` + "`" + `'"]?--model[` + "`" + `'"]?\s*not found in \$path`,
+)
+
+// ollamaModelFlagForwardedAsExecutableReason is the human-readable reason
+// recorded when ollamaModelFlagForwardedAsExecutablePattern matches: it
+// names the flag sbx forwarded and states plainly this was NOT a real
+// executor/infrastructure failure.
+const ollamaModelFlagForwardedAsExecutableReason = "sbx forwarded --model as the sandbox exec command rather than recognizing the custom-agent model/provider transport (OCI runtime exec failed: executable file `--model` not found)"
+
 // recognizedOllamaUnsupportedReason reports the human-readable reason this
 // package recognizes combinedOutput as a legitimate "unsupported" response,
 // or "" if combinedOutput does not match any known marker — in which case
 // the caller must treat the failure as infrastructure/executor breakage,
 // never as a silently-assumed unsupported capability.
 func recognizedOllamaUnsupportedReason(combinedOutput string) string {
+	if ollamaModelFlagForwardedAsExecutablePattern.MatchString(combinedOutput) {
+		return ollamaModelFlagForwardedAsExecutableReason
+	}
 	lower := strings.ToLower(combinedOutput)
 	for _, m := range ollamaUnsupportedMarkers {
 		if strings.Contains(lower, m.substr) {
