@@ -55,6 +55,120 @@ type EnvironmentFixture struct {
 	Resume string
 }
 
+// interpolationDefinedHostVar is the exact host environment variable name
+// interpDefinedDefaultFixtureYAML references as a plain, defined
+// interpolation (`${VAR}`) — AC-7's first required interpolation case. The
+// interpolation observation phase (check_create_exec_interpolation.go)
+// explicitly sets this key on the create call's own Executor env, to a
+// known value, before ever shelling out — never merely hoping the ambient
+// host process happens to carry it — so a real `sbx env create` observes it
+// genuinely defined regardless of what the daemon's own environment holds.
+const interpolationDefinedHostVar = "PIX_UAT_STORY0_DEFINED"
+
+// interpolationDefinedHostValue is the exact known value
+// interpolationDefinedHostVar is set to for the defined/default fixture's
+// create call, asserted verbatim against that fixture's own exec probe
+// output.
+const interpolationDefinedHostValue = "pix-uat-story0-defined-value"
+
+// interpolationMissingHostVar is the exact host environment variable name
+// BOTH interpolation fixtures reference as an undefined variable:
+// interpDefinedDefaultFixtureYAML's own missing-with-default `${VAR:-default}`
+// form (AC-7's second required case), and interpMissingFixtureYAML's own
+// bare `${VAR}` form (AC-7's third). The interpolation observation phase
+// explicitly STRIPS this key from every create call's own env — never
+// merely assuming the ambient host process happens to lack it — so a real
+// `sbx env create` observes it genuinely undefined even if the host daemon
+// process happens to carry it.
+const interpolationMissingHostVar = "PIX_UAT_STORY0_MISSING"
+
+// interpolationDefaultFallbackValue is the exact literal default
+// interpDefinedDefaultFixtureYAML's own `${VAR:-default}` form declares.
+const interpolationDefaultFallbackValue = "fallback-value"
+
+// interpolationDefinedEnvKey / interpolationDefaultEnvKey are the exact
+// sandbox-side environment variable names interpDefinedDefaultFixtureYAML
+// assigns its two interpolated values to, so that fixture's own exec probe
+// can read them back in an unambiguous, labeled line format.
+const interpolationDefinedEnvKey = "PIX_UAT_INTERP_DEFINED"
+const interpolationDefaultEnvKey = "PIX_UAT_INTERP_DEFAULT"
+
+// interpolationMissingEnvKey is the exact sandbox-side environment variable
+// name interpMissingFixtureYAML assigns its bare, undefined-variable
+// interpolation to.
+const interpolationMissingEnvKey = "PIX_UAT_INTERP_MISSING"
+
+// interpDefinedDefaultFixtureName is the literal `pix-uatenv-*` sandbox name
+// the defined/default interpolation fixture creates as — owned directly
+// here, exactly like every other fixture name in this package.
+const interpDefinedDefaultFixtureName = "pix-uatenv-interp-defined-default"
+
+// interpMissingFixtureName is the literal `pix-uatenv-*` sandbox name the
+// bare-missing-variable interpolation fixture creates as.
+const interpMissingFixtureName = "pix-uatenv-interp-missing"
+
+// interpDefinedDefaultFixtureYAML renders AC-7's first two required
+// interpolation cases in the SAME declared environment, since both facets
+// share one Executor env setup (interpolationDefinedHostVar explicitly set,
+// interpolationMissingHostVar explicitly stripped): a plain defined `${VAR}`
+// reference, and a missing-with-default `${VAR:-default}` reference. Like
+// every other fixture in this file, it is a package-owned literal, never
+// derived from envinfo.
+func interpDefinedDefaultFixtureYAML() []byte {
+	return []byte(`schemaVersion: "1"
+agent: pix
+name: ` + interpDefinedDefaultFixtureName + `
+
+kits:
+  - ./kit
+
+env:
+  ` + interpolationDefinedEnvKey + `: "${` + interpolationDefinedHostVar + `}"
+  ` + interpolationDefaultEnvKey + `: "${` + interpolationMissingHostVar + `:-` + interpolationDefaultFallbackValue + `}"
+`)
+}
+
+// interpDefinedDefaultFixture is the typed EnvironmentFixture
+// interpDefinedDefaultFixtureYAML materializes through writeAuthoredFixture,
+// exactly like every other `agent: pix` fixture in this package.
+func interpDefinedDefaultFixture() EnvironmentFixture {
+	return EnvironmentFixture{
+		Name:         interpDefinedDefaultFixtureName,
+		YAML:         interpDefinedDefaultFixtureYAML(),
+		RelativeKits: []string{"./kit"},
+	}
+}
+
+// interpMissingFixtureYAML renders AC-7's third required interpolation
+// case: a bare `${VAR}` reference to interpolationMissingHostVar with no
+// default at all — the case where BOTH a loader/create refusal and a
+// create success (with the reference resolving to some observable
+// sandbox-side value) are legitimate observation evidence
+// (check_create_exec_interpolation.go).
+func interpMissingFixtureYAML() []byte {
+	return []byte(`schemaVersion: "1"
+agent: pix
+name: ` + interpMissingFixtureName + `
+
+kits:
+  - ./kit
+
+env:
+  ` + interpolationMissingEnvKey + `: "${` + interpolationMissingHostVar + `}"
+`)
+}
+
+// interpMissingFixture is the typed EnvironmentFixture interpMissingFixtureYAML
+// materializes through writeAuthoredFixture, exactly like every other
+// `agent: pix` fixture in this package.
+func interpMissingFixture() EnvironmentFixture {
+	return EnvironmentFixture{
+		Name:         interpMissingFixtureName,
+		YAML:         interpMissingFixtureYAML(),
+		RelativeKits: []string{"./kit"},
+	}
+}
+
 // recreateBoundaryFixtureName is the literal pix-* sandbox name Story 0
 // authors for environment_recreate_boundary's baseline declaration — owned
 // directly here, exactly like the other two fixtures' names (fixtures.go's

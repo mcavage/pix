@@ -34,6 +34,8 @@ func TestFixtureYAML_DeclaresOwnNameExplicitly(t *testing.T) {
 		{"ollamaCapabilityFixtureYAML", ollamaCapabilityFixtureName, ollamaCapabilityFixtureYAML()},
 		{"candidateImageFixture", candidateImageFixture(candidateTag).Name, candidateImageFixture(candidateTag).YAML},
 		{"failedCreateCleanupFixtureYAML", failedCreateCleanupFixtureName, failedCreateCleanupFixtureYAML()},
+		{"interpDefinedDefaultFixture", interpDefinedDefaultFixture().Name, interpDefinedDefaultFixture().YAML},
+		{"interpMissingFixture", interpMissingFixture().Name, interpMissingFixture().YAML},
 	}
 	for _, c := range cases {
 		want := "name: " + c.name
@@ -67,6 +69,8 @@ func TestWriteAuthoredFixture_MaterializesRelativeKitPaths(t *testing.T) {
 		{"ollamaCapabilityFixture", ollamaCapabilityFixture()},
 		{"candidateImageFixture", candidateImageFixture("docker.io/mcavage/pix:uat-test")},
 		{"recreateBoundaryFixture", recreateBoundaryFixture()},
+		{"interpDefinedDefaultFixture", interpDefinedDefaultFixture()},
+		{"interpMissingFixture", interpMissingFixture()},
 	}
 	for _, c := range cases {
 		t.Run(c.label, func(t *testing.T) {
@@ -131,6 +135,8 @@ func TestWriteAuthoredFixture_MaterializedKitDeclaresAuthoredAgentIdentity(t *te
 		{"ollamaCapabilityFixture", ollamaCapabilityFixture()},
 		{"candidateImageFixture", candidateImageFixture("docker.io/mcavage/pix:uat-test")},
 		{"recreateBoundaryFixture", recreateBoundaryFixture()},
+		{"interpDefinedDefaultFixture", interpDefinedDefaultFixture()},
+		{"interpMissingFixture", interpMissingFixture()},
 	}
 	for _, c := range cases {
 		t.Run(c.label, func(t *testing.T) {

@@ -103,7 +103,7 @@ func TestRun_MissingCandidateBinaryFailsClosed(t *testing.T) {
 // unexported derivation function directly.
 const successfulCandidateImageFixtureName = "pix-uatenv-fixture-image-test-candidate"
 
-const successfulFixtureNames = "pix-uatenv-fixture-0 " + successfulCandidateImageFixtureName + " pix-uatenv-fixture-recreate pix-uatenv-fixture-ollama"
+const successfulFixtureNames = "pix-uatenv-fixture-0 " + successfulCandidateImageFixtureName + " pix-uatenv-fixture-recreate pix-uatenv-fixture-ollama pix-uatenv-interp-defined-default pix-uatenv-interp-missing"
 
 // fakePrepareImageSection renders the REAL, line-separated "PREPARE IMAGE"
 // section shape fresh UAT run run-20260824-092338-d4c384f5's own host
@@ -149,6 +149,38 @@ func echoProbeFakeResponse(args []string) string {
 	return strings.Join(args[prefixLen:], "\n") + "\n"
 }
 
+// interpolationExecFakeResponse answers the two interpolation-observation-
+// phase exec probes (check_create_exec_interpolation.go), routed by the
+// target name at args[2] (`exec -i <name> -- sh -c <script>`), or "", false
+// if args do not name either interpolation fixture — in which case the
+// caller falls back to echoProbeFakeResponse for the primary fixture's own
+// argv-echo probe.
+func interpolationExecFakeResponse(args []string) (string, bool) {
+	if len(args) <= 2 {
+		return "", false
+	}
+	switch args[2] {
+	case "pix-uatenv-interp-defined-default":
+		return "PIX_UAT_INTERP_DEFINED=pix-uat-story0-defined-value\nPIX_UAT_INTERP_DEFAULT=fallback-value\n", true
+	case "pix-uatenv-interp-missing":
+		return "PIX_UAT_INTERP_MISSING:UNSET\n", true
+	}
+	return "", false
+}
+
+// interpolationCreateFakeResponse answers the two interpolation-observation-
+// phase create calls, routed by the authored fixture's own basename, or
+// "", false if fixturePath names neither interpolation fixture.
+func interpolationCreateFakeResponse(fixturePath string) (string, bool) {
+	switch filepath.Base(fixturePath) {
+	case "interp-defined-default.sbxenv.yaml":
+		return "created pix-uatenv-interp-defined-default (positively identified)\n", true
+	case "interp-missing.sbxenv.yaml":
+		return "created pix-uatenv-interp-missing (positively identified)\n", true
+	}
+	return "", false
+}
+
 func successfulFixtureNamesJSON() string {
 	names := strings.Fields(successfulFixtureNames)
 	rows := make([]string, len(names))
@@ -192,6 +224,9 @@ func successfulExecutor() *fakeExecutor {
 			return fakeTemplateListOut, "", nil
 		}
 		if len(call.args) > 0 && call.args[0] == "exec" {
+			if out, ok := interpolationExecFakeResponse(call.args); ok {
+				return out, "", nil
+			}
 			return echoProbeFakeResponse(call.args), "", nil
 		}
 		if len(call.args) > 0 && call.args[0] == "ls" {
@@ -202,6 +237,9 @@ func successfulExecutor() *fakeExecutor {
 		}
 		if len(call.args) > 1 && call.args[0] == "env" && call.args[1] == "create" {
 			fixturePath := call.args[len(call.args)-1]
+			if out, ok := interpolationCreateFakeResponse(fixturePath); ok {
+				return out, "", nil
+			}
 			switch filepath.Base(fixturePath) {
 			case "authored.sbxenv.yaml":
 				return "created pix-uatenv-fixture-0 (positively identified) kit ./kit\n", "", nil
@@ -273,28 +311,33 @@ func TestRun_EnvironmentCreateThenExecInvocation_Success(t *testing.T) {
 	// Run() now executes all six registered checks, each of the four that
 	// creates a real fixture instance also running its own receipt-gated
 	// cleanup (a fresh `sbx ls --json` probe, then `sbx env rm -f <path>`):
-	// this check's own bounded version-probe+create+poll+probe+cleanup-
-	// probe+remove calls (calls[0..5] — the version probe AC-7/E0.7 require
-	// runs first, before any fixture mutation, and one extra call versus its
-	// siblings for the bounded pre-exec poll for a positively identified
-	// running row), environment_uses_local_candidate_image's docker-image-
-	// inspect+template-list+create+poll+cleanup-probe+remove calls
-	// (calls[6..11] — the corrected AC-2 evidence chain: `sbx template ls`
-	// proves the run-unique candidate repo:tag is registered before create,
-	// and the bounded poll for a positively identified running row replaces
-	// the prior version's invented `docker inspect <sandbox name>` probe),
-	// environment_recreate_boundary's baseline+drifted create calls plus its
-	// one cleanup probe+remove pair keyed on the baseline's own receipt
-	// (calls[12..15]), environment_failed_create_cleanup's single failed
-	// create call with no cleanup calls at all — no receipt, no removal
-	// authority (calls[16]), environment_rm_scope_refusal's zero calls (it
-	// never touches the injected Executor), and environment_custom_agent_
-	// ollama's create+probe pair plus its own cleanup probe+remove pair
-	// (calls[17..20]). This test asserts only on the first check's own
-	// version-probe+create+poll+exec calls.
+	// this check's own bounded version-probe+create+poll+probe calls
+	// (calls[0..3] — the version probe AC-7/E0.7 require runs first, before
+	// any fixture mutation), PLUS the AC-7 interpolation observation phase
+	// (check_create_exec_interpolation.go) that now runs immediately after,
+	// inside this SAME first check: the defined/default fixture's own
+	// create+poll+exec+cleanup-probe+remove (calls[4..8]) and the
+	// undefined-variable fixture's own create+poll+exec+cleanup-probe+remove
+	// on its success branch (calls[9..13]), then this first check's own
+	// primary-fixture cleanup-probe+remove (calls[14..15]) — 16 calls total
+	// for this one check. environment_uses_local_candidate_image's
+	// docker-image-inspect+template-list+create+poll+cleanup-probe+remove
+	// calls (calls[16..21] — the corrected AC-2 evidence chain: `sbx template
+	// ls` proves the run-unique candidate repo:tag is registered before
+	// create, and the bounded poll for a positively identified running row
+	// replaces the prior version's invented `docker inspect <sandbox name>`
+	// probe), environment_recreate_boundary's baseline+drifted create calls
+	// plus its one cleanup probe+remove pair keyed on the baseline's own
+	// receipt (calls[22..25]), environment_failed_create_cleanup's single
+	// failed create call with no cleanup calls at all — no receipt, no
+	// removal authority (calls[26]), environment_rm_scope_refusal's zero
+	// calls (it never touches the injected Executor), and
+	// environment_custom_agent_ollama's create+probe pair plus its own
+	// cleanup probe+remove pair (calls[27..30]). This test asserts only on
+	// the first check's own version-probe+create+poll+exec calls.
 	calls := fe.snapshot()
-	if len(calls) != 21 {
-		t.Fatalf("expected exactly 21 executor calls, got %d: %#v", len(calls), calls)
+	if len(calls) != 31 {
+		t.Fatalf("expected exactly 31 executor calls, got %d: %#v", len(calls), calls)
 	}
 	versionCall := calls[0]
 	if versionCall.name != "sbx" || len(versionCall.args) != 1 || versionCall.args[0] != "--version" {
@@ -478,6 +521,9 @@ func TestRun_BoundedArtifact(t *testing.T) {
 			return fakeTemplateListOut, "", nil
 		}
 		if len(call.args) > 0 && call.args[0] == "exec" {
+			if out, ok := interpolationExecFakeResponse(call.args); ok {
+				return out, "", nil
+			}
 			return echoProbeFakeResponse(call.args), "", nil
 		}
 		if len(call.args) > 0 && call.args[0] == "ls" {
@@ -488,6 +534,9 @@ func TestRun_BoundedArtifact(t *testing.T) {
 		}
 		if len(call.args) > 1 && call.args[0] == "env" && call.args[1] == "create" {
 			fixturePath := call.args[len(call.args)-1]
+			if out, ok := interpolationCreateFakeResponse(fixturePath); ok {
+				return out, "", nil
+			}
 			switch filepath.Base(fixturePath) {
 			case "authored.sbxenv.yaml":
 				return "pix-uatenv-fixture-0 (positively identified) kit ./kit " + huge, "", nil

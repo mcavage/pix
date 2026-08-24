@@ -78,6 +78,46 @@ type createExecFakeExecutor struct {
 
 	rmErr error
 	calls [][]string
+
+	// interpDefinedCreateOut/Err and interpMissingCreateOut/Err answer the
+	// two additional interpolation-observation-phase create calls
+	// (check_create_exec_interpolation.go) that now run AFTER the primary
+	// create/exec proof above succeeds. Each defaults to a deterministic
+	// success response derived from the corresponding fixture when left
+	// unset (out == "" && err == nil), so every test in this file that only
+	// ever configures the PRIMARY fixture's fields still drives both
+	// interpolation phases through their own successful path without
+	// needing to know they exist.
+	interpDefinedCreateOut string
+	interpDefinedCreateErr error
+	interpDefinedExecOut   string
+	interpDefinedExecErr   error
+
+	interpMissingCreateOut string
+	interpMissingCreateErr error
+	interpMissingExecOut   string
+	interpMissingExecErr   error
+}
+
+// appendAlwaysRunningInterpRows extends a bare `sbx ls --json` array body
+// with deterministic "running" rows for both interpolation-phase fixtures,
+// so every test in this file that only ever configures the PRIMARY
+// fixture's ls behavior still lets the interpolation phases' own poll
+// (pollForRunningInstance, the SAME shared poll the primary fixture uses)
+// observe a running row once they start. It is a no-op passthrough for
+// anything that is not a bare JSON array (an error path has no output to
+// extend in the first place).
+func appendAlwaysRunningInterpRows(out string) string {
+	trimmed := strings.TrimSpace(strings.TrimRight(out, "\n"))
+	if !strings.HasPrefix(trimmed, "[") || !strings.HasSuffix(trimmed, "]") {
+		return out
+	}
+	inner := strings.TrimSuffix(strings.TrimPrefix(trimmed, "["), "]")
+	extra := fmt.Sprintf(`{"name":%q,"status":"running"},{"name":%q,"status":"running"}`, interpDefinedDefaultFixtureName, interpMissingFixtureName)
+	if strings.TrimSpace(inner) == "" {
+		return "[" + extra + "]\n"
+	}
+	return "[" + inner + "," + extra + "]\n"
 }
 
 func (f *createExecFakeExecutor) Run(ctx context.Context, name string, args, env []string, dir string) (string, string, error) {
@@ -91,24 +131,63 @@ func (f *createExecFakeExecutor) Run(ctx context.Context, name string, args, env
 	case len(args) > 0 && args[0] == "version":
 		return f.versionFallbackOut, f.versionFallbackErrOut, f.versionFallbackErr
 	case len(args) > 0 && args[0] == "ls":
+		var out string
 		if len(f.lsSequence) > 0 {
 			idx := f.lsCalls
 			f.lsCalls++
 			if idx < len(f.lsSequence) {
-				return f.lsSequence[idx], "", nil
+				out = f.lsSequence[idx]
+			} else if f.lsErr != nil {
+				return "", "", f.lsErr
+			} else {
+				out = f.lsSequence[len(f.lsSequence)-1]
 			}
+		} else {
+			f.lsCalls++
 			if f.lsErr != nil {
 				return "", "", f.lsErr
 			}
-			return f.lsSequence[len(f.lsSequence)-1], "", nil
+			out = f.lsOut
 		}
-		f.lsCalls++
-		return f.lsOut, "", f.lsErr
+		return appendAlwaysRunningInterpRows(out), "", nil
 	case len(args) > 1 && args[0] == "env" && args[1] == "rm":
 		return "", "", f.rmErr
 	case len(args) > 1 && args[0] == "env" && args[1] == "create":
-		return f.createOut, "", f.createErr
-	default: // name-based `sbx exec` (the argv-echo probe)
+		fixturePath := args[len(args)-1]
+		switch {
+		case strings.HasSuffix(fixturePath, "interp-defined-default.sbxenv.yaml"):
+			out, cerr := f.interpDefinedCreateOut, f.interpDefinedCreateErr
+			if out == "" && cerr == nil {
+				out = "created " + interpDefinedDefaultFixtureName + " (positively identified)\n"
+			}
+			return out, "", cerr
+		case strings.HasSuffix(fixturePath, "interp-missing.sbxenv.yaml"):
+			out, cerr := f.interpMissingCreateOut, f.interpMissingCreateErr
+			if out == "" && cerr == nil {
+				out = "created " + interpMissingFixtureName + " (positively identified)\n"
+			}
+			return out, "", cerr
+		default:
+			return f.createOut, "", f.createErr
+		}
+	default: // name-based `sbx exec`
+		if len(args) > 2 {
+			switch args[2] {
+			case interpDefinedDefaultFixtureName:
+				out, eerr := f.interpDefinedExecOut, f.interpDefinedExecErr
+				if out == "" && eerr == nil {
+					out = expectedInterpolationDefinedDefaultProbeOutput()
+				}
+				return out, "", eerr
+			case interpMissingFixtureName:
+				out, eerr := f.interpMissingExecOut, f.interpMissingExecErr
+				if out == "" && eerr == nil {
+					out = undefinedVariableProbeUnsetToken + "\n"
+				}
+				return out, "", eerr
+			}
+		}
+		// the primary fixture's argv-echo probe
 		if f.execFn != nil {
 			return f.execFn(ctx, args)
 		}

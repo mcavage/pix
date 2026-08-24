@@ -233,7 +233,13 @@ func createOutputIdentifiesKit(createOut string, f EnvironmentFixture) bool {
 // create a native environment fixture with the candidate Pix custom agent
 // (`agent: pix`), poll for a positively identified running instance, then
 // prove name-based `sbx exec` receives the exact intended pi invocation the
-// fixture's typed facts demand — never a command sbx derived itself from the
+// fixture's typed facts demand. AFTER that primary proof succeeds, it also
+// runs a bounded interpolation observation phase
+// (check_create_exec_interpolation.go) that closes the final E0.7
+// host-evidence gap: AC-7 requires the exact observed `${VAR}`,
+// `${VAR:-default}`, and undefined-variable behavior, and this is added
+// INSIDE this same first named check rather than as a seventh check name,
+// so CheckNames() stays at exactly six entries — never a command sbx derived itself from the
 // environment path, and never merely "the exec command exited 0".
 //
 // A read-only deep investigation (see this file's helpers) found the prior
@@ -320,6 +326,16 @@ func checkEnvironmentCreateThenExecInvocation(ctx context.Context, lw io.Writer,
 		return fmt.Errorf("name-based sbx exec argv-echo probe did not echo the exact intended pi invocation unchanged: got %q, want %q", probeOut, want)
 	}
 	fmt.Fprintf(lw, "argv-echo probe confirmed all %d intended pi invocation facet(s) arrived unchanged\n", len(intended))
+
+	// AC-7 / E0.7: the interpolation observation phase runs only after the
+	// primary create/exec proof above has already succeeded, and never as a
+	// seventh named check (checks.go still registers exactly six).
+	if err := observeDefinedDefaultInterpolation(ctx, lw, executor, phaseDir); err != nil {
+		return err
+	}
+	if err := observeUndefinedVariableBehavior(ctx, lw, executor, phaseDir); err != nil {
+		return err
+	}
 
 	return nil
 }

@@ -46,6 +46,7 @@ import (
 // guard silently stops covering it.
 var checkFilesCallingCleanupCreatedFixture = []string{
 	"check_create_exec.go",
+	"check_create_exec_interpolation.go",
 	"check_local_image.go",
 	"check_custom_agent_ollama.go",
 	"check_recreate_boundary.go",
