@@ -57,8 +57,8 @@
       "exits": 0
     },
     "pix/host/hosttrust": {
-      "_prod_loc_note": "Initial budget. E1.4: the launcher-owned host-exec trust mechanism (canonical identity, the JSON-then-sha256 fingerprint engine, the one Record/AcceptanceStore shape keyed by opaque Subject{Kind,Root}, flock-serialized fresh-load->mutate->save, symlink-refused atomic document I/O, and content hashing) extracted from workflow/pack's trust.go/truststore.go, which shrank by exactly what moved here (see that package's own note). No behavior changed: workflow/pack's fingerprints, file paths, and JSON shapes are byte-identical before and after (trust_fingerprint_compat_test.go). L1 capability, no sibling import.",
-      "prod_loc": 288,
+      "_prod_loc_note": "Initial budget. E1.4: the launcher-owned host-exec trust mechanism (canonical identity, the JSON-then-sha256 fingerprint engine, the one Record/AcceptanceStore shape keyed by opaque Subject{Kind,Root}, flock-serialized fresh-load->mutate->save, symlink-refused atomic document I/O, and content hashing) extracted from workflow/pack's trust.go/truststore.go, which shrank by exactly what moved here (see that package's own note). No behavior changed: workflow/pack's fingerprints, file paths, and JSON shapes are byte-identical before and after (trust_fingerprint_compat_test.go). L1 capability, no sibling import. Wave B fix (fix/waveb-trust, e942f3eb): closed a TOCTOU symlink race in the fresh-load->mutate->save cycle -- hash.go and store.go now re-verify the target is not a symlink between the existence check and the open (nofollow_unix.go's O_NOFOLLOW-backed open on platforms that support it, nofollow_other.go's honest fallback elsewhere), plus parity and symlink-attack regression tests. prod_loc 288 -> 382. A deliberate, reviewed raise of a shrink-only budget.",
+      "prod_loc": 382,
       "exports": 13,
       "globals": 0,
       "edges": 1,
