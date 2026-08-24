@@ -75,8 +75,48 @@ func TestParseTemplateListRepoTag_EmptyOutputErrors(t *testing.T) {
 	}
 }
 
+// fakePrepareImageSection renders the REAL, line-separated "PREPARE IMAGE"
+// section shape every fake `sbx env create` receipt in this package must
+// use: a boxed section-header line ("\u2500\u2500 PREPARE IMAGE"), then the
+// section's own body lines each on their OWN indented line below it
+// ("\u2192 check <ref>", then "\u2713 image ready") — never the single
+// joined "PREPARE IMAGE \u2192 check <ref>" line a prior version of this
+// parser invented and every fake in this package used to fabricate.
+func fakePrepareImageSection(ref string) string {
+	return "\u2500\u2500 PREPARE IMAGE\n" +
+		"   \u2192 check " + ref + "\n" +
+		"   \u2713 image ready\n"
+}
+
+// verbatimPrepareImageCreateReceipt is transcribed character-for-character
+// from fresh UAT run run-20260824-092338-d4c384f5's own real host receipt:
+//
+//	── PREPARE IMAGE
+//	   → check docker.io/mcavage/pix:uat-run-20260824-092338-d4c384f5
+//	   ✓ image ready
+//
+// A prior version of extractPrepareImageCheckRef instead assumed an
+// invented single joined "PREPARE IMAGE \u2192 check <ref>" line, which
+// this exact two-line shape (section header, then an indented "\u2192
+// check" body line) can never match. This constant guards that regression
+// from ever recurring.
+const verbatimPrepareImageCreateReceipt = "\u2500\u2500 PREPARE IMAGE\n" +
+	"   \u2192 check docker.io/mcavage/pix:uat-run-20260824-092338-d4c384f5\n" +
+	"   \u2713 image ready\n"
+
+func TestExtractPrepareImageCheckRef_VerbatimHostReceiptShape(t *testing.T) {
+	ref, found := extractPrepareImageCheckRef(verbatimPrepareImageCreateReceipt)
+	if !found {
+		t.Fatal("expected to find the PREPARE IMAGE check ref in the verbatim, line-separated host receipt shape")
+	}
+	want := "docker.io/mcavage/pix:uat-run-20260824-092338-d4c384f5"
+	if ref != want {
+		t.Fatalf("extractPrepareImageCheckRef = %q, want %q", ref, want)
+	}
+}
+
 func TestExtractPrepareImageCheckRef(t *testing.T) {
-	out := "PREPARE IMAGE \u2192 check docker.io/mcavage/pix:uat-test\n\u2713 image ready\ncreated pix-uatenv-fixture-image-uat-test (positively identified)\n"
+	out := fakePrepareImageSection("docker.io/mcavage/pix:uat-test") + "created pix-uatenv-fixture-image-uat-test (positively identified)\n"
 	ref, found := extractPrepareImageCheckRef(out)
 	if !found {
 		t.Fatal("expected to find the PREPARE IMAGE line")
@@ -93,9 +133,29 @@ func TestExtractPrepareImageCheckRef_MissingLine(t *testing.T) {
 	}
 }
 
+// TestExtractPrepareImageCheckRef_IgnoresCheckLineOutsideSection proves the
+// parser is section-aware: a "\u2192 check <ref>" line under some OTHER
+// section header (or with no PREPARE IMAGE header ever opened) must never
+// be matched, even though the literal body-line text is identical to what
+// the PREPARE IMAGE section itself uses.
+func TestExtractPrepareImageCheckRef_IgnoresCheckLineOutsideSection(t *testing.T) {
+	out := "\u2500\u2500 SOME OTHER SECTION\n   \u2192 check docker.io/mcavage/pix:latest\n"
+	_, found := extractPrepareImageCheckRef(out)
+	if found {
+		t.Fatal("expected a \u2192 check line outside the PREPARE IMAGE section to be ignored")
+	}
+}
+
+func TestValidateCreateReceiptResolvedImage_AcceptsVerbatimHostReceiptShape(t *testing.T) {
+	imageTag := "docker.io/mcavage/pix:uat-run-20260824-092338-d4c384f5"
+	if err := validateCreateReceiptResolvedImage(verbatimPrepareImageCreateReceipt, imageTag); err != nil {
+		t.Fatalf("expected the verbatim host receipt shape to validate cleanly, got: %v", err)
+	}
+}
+
 func TestValidateCreateReceiptResolvedImage_AcceptsVerbatimObservedShape(t *testing.T) {
 	imageTag := "docker.io/mcavage/pix:uat-test"
-	out := "PREPARE IMAGE \u2192 check " + imageTag + "\n\u2713 image ready\ncreated pix-uatenv-fixture-image-uat-test (positively identified)\n"
+	out := fakePrepareImageSection(imageTag) + "created pix-uatenv-fixture-image-uat-test (positively identified)\n"
 	if err := validateCreateReceiptResolvedImage(out, imageTag); err != nil {
 		t.Fatalf("expected the verbatim observed shape to validate cleanly, got: %v", err)
 	}
@@ -111,7 +171,7 @@ func TestValidateCreateReceiptResolvedImage_RejectsMissingLine(t *testing.T) {
 
 func TestValidateCreateReceiptResolvedImage_RejectsExactTagSubstitution(t *testing.T) {
 	imageTag := "docker.io/mcavage/pix:uat-test"
-	out := "PREPARE IMAGE \u2192 check docker.io/mcavage/pix:latest\n\u2713 image ready\n"
+	out := fakePrepareImageSection("docker.io/mcavage/pix:latest")
 	if err := validateCreateReceiptResolvedImage(out, imageTag); err == nil {
 		t.Fatal("expected an error when the receipt resolves a substituted tag for the same repository")
 	}
@@ -119,7 +179,7 @@ func TestValidateCreateReceiptResolvedImage_RejectsExactTagSubstitution(t *testi
 
 func TestValidateCreateReceiptResolvedImage_RejectsMixedRepoRefs(t *testing.T) {
 	imageTag := "docker.io/mcavage/pix:uat-test"
-	out := "PREPARE IMAGE \u2192 check " + imageTag + "\n\u2713 image ready\ncached layer for docker.io/mcavage/pix:latest\n"
+	out := fakePrepareImageSection(imageTag) + "cached layer for docker.io/mcavage/pix:latest\n"
 	if err := validateCreateReceiptResolvedImage(out, imageTag); err == nil {
 		t.Fatal("expected an error when the receipt mentions the same repository with a different tag elsewhere")
 	}

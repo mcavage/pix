@@ -60,14 +60,15 @@ docker.io/mcavage/pix    latest     sha256:bbbb    2 minutes ago   1.2GB
 `
 
 // fakeCreateOutSuccess is a realistic `sbx env create` receipt shape, per
-// run-20260824-092338-d4c384f5's own observation: a "PREPARE IMAGE" line
-// naming the exact resolved image, a neutral "image ready" confirmation
-// once the already-loaded local image satisfies it, and a positively
-// identified instance line. It intentionally never fabricates an "image
-// digest: sha256:..." line — the prior version's own invalid assumption.
+// run-20260824-092338-d4c384f5's own verbatim observation: a boxed
+// "── PREPARE IMAGE" section header, its own indented "→ check <ref>" and
+// "✓ image ready" body lines each on their OWN line (never a single joined
+// "PREPARE IMAGE → check <ref>" line — the prior version's own invalid
+// assumption), and a positively identified instance line. It intentionally
+// never fabricates an "image digest: sha256:..." line — another of the
+// prior version's own invalid assumptions.
 func fakeCreateOutSuccess(name string) string {
-	return "PREPARE IMAGE \u2192 check " + fakeCandidateTag + "\n" +
-		"\u2713 image ready\n" +
+	return fakePrepareImageSection(fakeCandidateTag) +
 		"created " + name + " (positively identified)\n"
 }
 
@@ -322,8 +323,7 @@ func TestCheckEnvironmentUsesLocalCandidateImage_SubstitutedTagFails(t *testing.
 	var lw strings.Builder
 	name := candidateImageFixtureName(fakeCandidateTag)
 	executor := defaultLocalImageFakeExecutor(name)
-	executor.createOut = "PREPARE IMAGE \u2192 check " + fakeCandidateRepo + ":latest\n" +
-		"\u2713 image ready\n" +
+	executor.createOut = fakePrepareImageSection(fakeCandidateRepo+":latest") +
 		"created " + name + " (positively identified)\n"
 	err := checkEnvironmentUsesLocalCandidateImage(context.Background(), &lw, executor, phaseDir, fakeCandidateTag)
 	if err == nil {

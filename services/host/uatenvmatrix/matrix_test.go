@@ -105,6 +105,20 @@ const successfulCandidateImageFixtureName = "pix-uatenv-fixture-image-test-candi
 
 const successfulFixtureNames = "pix-uatenv-fixture-0 " + successfulCandidateImageFixtureName + " pix-uatenv-fixture-recreate pix-uatenv-fixture-ollama"
 
+// fakePrepareImageSection renders the REAL, line-separated "PREPARE IMAGE"
+// section shape fresh UAT run run-20260824-092338-d4c384f5's own host
+// receipt actually used: a boxed section-header line, then the section's
+// own body lines each on their OWN indented line below it — never the
+// single joined "PREPARE IMAGE \u2192 check <ref>" line a prior version of
+// this package's parser invented. This is matrix_test.go's own copy of the
+// package-internal create_receipt_test.go helper of the same name (this
+// file lives in the external uatenvmatrix_test package and cannot see it).
+func fakePrepareImageSection(ref string) string {
+	return "\u2500\u2500 PREPARE IMAGE\n" +
+		"   \u2192 check " + ref + "\n" +
+		"   \u2713 image ready\n"
+}
+
 // fakeTemplateListOut models a real `sbx template ls`'s REPOSITORY/TAG
 // table (docker images' own convention), listing exactly the run-unique
 // candidate repo:tag environment_uses_local_candidate_image requires be
@@ -189,13 +203,15 @@ func successfulExecutor() *fakeExecutor {
 			case "authored.sbxenv.yaml":
 				return "created pix-uatenv-fixture-0 (positively identified) kit ./kit\n", "", nil
 			case "candidate-image.sbxenv.yaml":
-				// The verbatim shape fresh UAT run run-20260824-092338-d4c384f5
-				// actually observed: a "PREPARE IMAGE" line naming the exact
-				// resolved image, a neutral "image ready" confirmation, and a
-				// positively identified instance line — never a fabricated
-				// "image digest: sha256:..." line, and never a host-Docker
+				// The verbatim, line-separated shape fresh UAT run
+				// run-20260824-092338-d4c384f5 actually observed: a boxed
+				// "── PREPARE IMAGE" section header, its own indented
+				// "→ check <ref>" and "✓ image ready" body lines each on their
+				// OWN line, and a positively identified instance line — never
+				// a single joined "PREPARE IMAGE → check <ref>" line, a
+				// fabricated "image digest: sha256:..." line, or a host-Docker
 				// container reference.
-				return "PREPARE IMAGE \u2192 check docker.io/mcavage/pix:test-candidate\n\u2713 image ready\ncreated " + successfulCandidateImageFixtureName + " (positively identified)\n", "", nil
+				return fakePrepareImageSection("docker.io/mcavage/pix:test-candidate") + "created " + successfulCandidateImageFixtureName + " (positively identified)\n", "", nil
 			case "recreate-boundary.sbxenv.yaml":
 				fixtureBytes, _ := os.ReadFile(fixturePath)
 				if strings.Contains(string(fixtureBytes), "memory: 60g") {
@@ -444,7 +460,7 @@ func TestRun_BoundedArtifact(t *testing.T) {
 			case "authored.sbxenv.yaml":
 				return "pix-uatenv-fixture-0 (positively identified) kit ./kit " + huge, "", nil
 			case "candidate-image.sbxenv.yaml":
-				return "PREPARE IMAGE \u2192 check docker.io/mcavage/pix:test-candidate\n\u2713 image ready\n" + successfulCandidateImageFixtureName + " (positively identified) " + huge, "", nil
+				return fakePrepareImageSection("docker.io/mcavage/pix:test-candidate") + successfulCandidateImageFixtureName + " (positively identified) " + huge, "", nil
 			case "recreate-boundary.sbxenv.yaml":
 				fixtureBytes, _ := os.ReadFile(fixturePath)
 				if strings.Contains(string(fixtureBytes), "memory: 60g") {

@@ -227,20 +227,56 @@ func templateListHasExactRepoTag(out, repo, tag string) (bool, error) {
 	return false, nil
 }
 
-// prepareImageCheckPrefix is the literal marker a real `sbx env create`
-// receipt uses to name the exact image reference it is about to prepare
-// (fresh UAT run run-20260824-092338-d4c384f5's own observed create log:
-// "PREPARE IMAGE \u2192 check <exact tag>", followed by a neutral "\u2713
-// image ready" once the already-loaded local image satisfies it).
-const prepareImageCheckPrefix = "PREPARE IMAGE \u2192 check "
+// prepareImageSectionHeaderPrefix is the literal box-drawing marker a real
+// `sbx env create` receipt uses to open a named section. Fresh UAT run
+// run-20260824-092338-d4c384f5's own verbatim receipt is TWO separate
+// lines, never one joined line:
+//
+//	── PREPARE IMAGE
+//	   → check <exact tag>
+//	   ✓ image ready
+//
+// A prior version of this parser invented a single joined
+// "PREPARE IMAGE \u2192 check <ref>" line that this real shape can never
+// match.
+const prepareImageSectionHeaderPrefix = "\u2500\u2500 "
+
+// prepareImageSectionTitle is the exact section title following
+// prepareImageSectionHeaderPrefix for the image-preparation section.
+const prepareImageSectionTitle = "PREPARE IMAGE"
+
+// prepareImageCheckLinePrefix is the literal marker a real receipt's own
+// indented body line uses, inside the PREPARE IMAGE section, to name the
+// exact image reference being checked.
+const prepareImageCheckLinePrefix = "\u2192 check "
 
 // extractPrepareImageCheckRef returns the exact image reference named on
-// createOut's own "PREPARE IMAGE \u2192 check <ref>" line, or "", false if no
-// such line is present.
+// createOut's own PREPARE IMAGE section body line ("\u2192 check <ref>"),
+// or "", false if that section — or a check line within it — is never
+// present. It is deliberately section-aware: a line reading "\u2192 check
+// <ref>" that appears OUTSIDE the PREPARE IMAGE section (under some other
+// section header, or before any header is ever opened) is never matched —
+// only an indented body line belonging to that exact section counts. This
+// mirrors the real receipt's own two-line shape (a section header line,
+// then its own indented body lines below it) rather than scanning for the
+// check marker as a bare substring anywhere in the output.
 func extractPrepareImageCheckRef(createOut string) (string, bool) {
+	inSection := false
 	for _, line := range strings.Split(createOut, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if rest, ok := strings.CutPrefix(trimmed, prepareImageCheckPrefix); ok {
+		if title, ok := strings.CutPrefix(trimmed, prepareImageSectionHeaderPrefix); ok {
+			inSection = strings.TrimSpace(title) == prepareImageSectionTitle
+			continue
+		}
+		if !inSection {
+			continue
+		}
+		if line != "" && !isIndentedReceiptLine(line) {
+			// A non-indented, non-header line ends this section's body.
+			inSection = false
+			continue
+		}
+		if rest, ok := strings.CutPrefix(trimmed, prepareImageCheckLinePrefix); ok {
 			ref := strings.TrimSpace(rest)
 			if ref != "" {
 				return ref, true
@@ -248,6 +284,14 @@ func extractPrepareImageCheckRef(createOut string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// isIndentedReceiptLine reports whether line (before trimming) starts with
+// leading whitespace — the real receipt's own convention for a section's
+// body lines, as opposed to a section header or an unrelated top-level
+// line.
+func isIndentedReceiptLine(line string) bool {
+	return len(line) > 0 && (line[0] == ' ' || line[0] == '\t')
 }
 
 // candidateRepoImageRefPattern builds the regexp matching every
@@ -274,7 +318,7 @@ func validateCreateReceiptResolvedImage(createOut, imageTag string) error {
 	}
 	ref, found := extractPrepareImageCheckRef(createOut)
 	if !found {
-		return fmt.Errorf("sbx env create receipt never printed a %q line naming the resolved image", strings.TrimSpace(prepareImageCheckPrefix))
+		return fmt.Errorf("sbx env create receipt never printed a %q section with a %q line naming the resolved image", prepareImageSectionTitle, strings.TrimSpace(prepareImageCheckLinePrefix))
 	}
 	if ref != imageTag {
 		return fmt.Errorf("sbx env create receipt resolved image %q, want the exact candidate tag %q", ref, imageTag)
