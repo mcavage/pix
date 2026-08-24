@@ -155,6 +155,21 @@ fresh-probe-gated before removal and removed by the same shared
 receipt, no removal attempt; a receipt with a failed fresh reconfirmation,
 no removal attempt.
 
+**Not observed here: multi-file list-concatenation merge semantics (A6).**
+Every fixture in this section issued exactly one `sbx env create` against
+exactly one authored file. This run never composed two environment files in
+argument order and never observed sbx's documented merge behavior in
+practice. `docs/design/environments.md` section 6.2 states that upstream
+composition is nested-maps-merge-by-key, lists-concatenate, and
+later-file-scalars-win; that statement is carried over from upstream's own
+documentation, not independently proven by Story 0. It remains a Story 1
+parser/composition test obligation: that package must create a real
+multi-file compose and observe the resulting list and map shape before
+Pix's effective-file adapter relies on it. Do not cite this document as
+evidence for list-concatenation or key-merge behavior; it is unobserved
+here, the same honest posture section 7 below takes for digest equality
+(A3).
+
 ## 7. Candidate image evidence (AC-2 correction)
 
 - local candidate image ID (evidence only, via `docker image inspect
@@ -351,6 +366,10 @@ Left as later-story responsibility, not proven here:
   removal, for an environment that actually declares them (unobserved by
   this run's fixtures)
 - any production `sandbox.PlanEnvRemove` implementation (Story 2)
+- multi-file list-concatenation and key-merge semantics (A6): no fixture in
+  this run composed more than one file at create time, so the documented
+  merge behavior in `docs/design/environments.md` section 6.2 is an
+  upstream-documented claim, not a Story-0-observed one
 - cleanup of the specific pre-fix leaked sandbox named in section 14
 
 ## 16. Evidence paths

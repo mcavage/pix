@@ -557,12 +557,33 @@ undefined-variable behavior is pinned by Story 0. Referenced local executable
 and kit bytes are hashed with symlink refusal. Remote sources must be immutable
 or rejected.
 
+**Story 1 requirement, not yet implemented:** resolving `${VAR}` before
+hashing closes one gap and opens another Story 0 did not close. Every
+authored `${VAR}` reference in the environment file must appear as its own
+line item in the host trust review, naming the source host variable and the
+destination field it resolves into (for example, `env.PIX_MEMORY_SCOPE` <-
+`${PIX_MEMORY_SCOPE}`). The review must never display or persist the
+resolved value, only the reference and its destination. The creation
+fingerprint has a matching constraint: it must never hash a low-entropy
+resolved value directly, because a bare hash of a short or
+dictionary-guessable secret is offline-crackable from the fingerprint alone.
+Each interpolated field's contribution to the creation fingerprint is instead
+the unresolved expression plus a keyed digest (HMAC, or an equally concrete
+non-reversible keyed construction) of the resolved value, keyed by a
+fingerprint-local key that is itself never persisted in the fingerprint
+document. That still detects a create-time change in the resolved value
+without exposing it to offline guessing. Neither the review line-items nor
+the keyed digest exist yet; both are Story 1 obligations, not implemented
+behavior.
+
 The trust fingerprint includes:
 
 - canonical environment root
 - local MCP command and ordered args
 - MCP URL/OCI identity and definition digest
 - secret and registry `ref` or `command` declarations, never resolved values
+- authored `${VAR}` interpolation references, by source variable name and
+  destination field only, never the resolved value (Story 1)
 - registry host and `noVerify` state
 - credential bindings and destination domains
 - local kit paths and content digests
@@ -797,6 +818,9 @@ Changes:
 - lift canonical identity, trust store, fingerprint, atomic write, and lock
   primitives out of pack code with environment names
 - refuse `pix config set` for launcher-owned environment keys
+- add host trust review line items for every authored `${VAR}` reference
+  (source variable, destination field), and keyed-digest/HMAC fingerprinting
+  of resolved interpolated values, never a raw hash of the resolved value
 
 Acceptance:
 
@@ -806,6 +830,10 @@ Acceptance:
 - dangerous changes require review; names never transfer acceptance
 - `use` changes only the default field
 - `rm` never deletes source files
+- host trust review lists every authored `${VAR}` reference by source
+  variable and destination field, never a resolved value; the creation
+  fingerprint records each interpolated field as expression plus keyed
+  digest/HMAC, never a raw hash of the resolved value
 
 ### Story 2: Launch through `sbx env`
 

@@ -132,6 +132,42 @@ argv — with no `run_cmd` lifecycle wiring yet.
 Normal pix sandboxes never receive the UAT server. A startup reaper removes
 expired UAT registrations and resources after a hard crash.
 
+## Security boundary: operator environment inheritance
+
+`uat-worker` executes submitted candidate code on the host as a child process
+of the operator's own `pix run --dev` invocation, precisely because that is
+the only process in the tree holding the operator's authenticated `sbx`,
+Docker, and browser-profile session (see above). That inheritance is not
+incidental — it is the fix that makes `uat-worker` work at all — and it comes
+with a consequence that must be stated plainly, not assumed away.
+
+`uat-worker` inherits the operator shell's full environment, unfiltered. It
+does not scrub, allowlist, or redact environment variables before building
+candidate binaries or running scenario steps. Any environment variable
+exported in the shell that ran `pix run --dev` — including a long-lived
+provider or cloud API key the operator happens to have exported for
+unrelated work — is visible to whatever the submitted candidate build and
+scenario execute on the host. This is an accepted, dev-only boundary, not a
+gap slated for a later unit: `--dev` is explicitly the mode where a
+committed but not-yet-trusted candidate gets host execution, and proving that
+candidate's behavior before it ships is the point of this design. No
+mechanism described here removes, wraps, or filters the inherited
+environment, and none should be assumed present until one is designed,
+implemented, and covered by a test that proves scrubbing actually happens.
+
+**Operators must not launch `pix run --dev` from a shell that has exported
+long-lived provider or cloud API secrets.** Use a clean shell, or one scoped
+to only the credentials `sbx`, Docker, and the browser controller actually
+need, before running `--dev`. Treat any secret exported into that shell as
+potentially exposed to whatever a submitted UAT scenario executes.
+
+This boundary is dev-only by construction. `uat-mcp`/`uat-worker` are wired
+only into sessions started with `--dev` (see "Decision" above: normal pix
+sandboxes never receive the UAT server). A production or non-dev session
+never spawns a worker, never receives `uat_capabilities`, and never executes
+submitted candidate code on the host. The risk above is scoped to the
+self-development loop, not to ordinary `pix run` usage.
+
 ## Tool contract
 
 The server exposes a closed tool set:
@@ -392,4 +428,7 @@ tool exists.
 - generic browser automation outside an active UAT run;
 - bypassing MFA;
 - interactive TUI automation in the first version;
-- changing the user's normal pix configuration or browser profile.
+- changing the user's normal pix configuration or browser profile;
+- scrubbing, filtering, or sandboxing the operator shell's environment before
+  candidate execution (none exists today; see "Security boundary: operator
+  environment inheritance").
