@@ -125,6 +125,72 @@ func classifyUndefinedVariableProbeOutput(out string) (string, error) {
 // enough to read at a glance, never a raw, arbitrarily long stack dump.
 const undefinedVariableRefusalReasonMaxLen = 400
 
+// recognizedUndefinedVariableInterpolationPhrases are documented,
+// interpolation-specific phrases this package accepts on their own,
+// without requiring the exact missing host variable name to appear
+// verbatim alongside them — each phrase already names the undefined-
+// variable interpolation mechanism directly, so it cannot plausibly
+// describe an unrelated auth failure, timeout, missing binary, or generic
+// loader/image error.
+var recognizedUndefinedVariableInterpolationPhrases = []string{
+	"undefined variable",
+	"variable interpolation",
+	"host variable",
+	undefinedVariableLiteralUnexpanded,
+}
+
+// recognizedUndefinedVariableRefusalKeywords are the only keywords this
+// package accepts as concrete evidence a refusal was caused by the missing
+// value itself, and ONLY when paired with the exact missing host variable
+// name interpolationMissingHostVar somewhere in the same output — never on
+// their own, since "missing" or "required" alone says nothing about WHICH
+// variable, and could just as easily describe an unrelated missing flag,
+// missing image, or missing credential.
+var recognizedUndefinedVariableRefusalKeywords = []string{
+	"undefined",
+	"not set",
+	"unset",
+	"is required",
+	"missing",
+	"no value",
+}
+
+// recognizedUndefinedVariableRefusal reports whether createOut/createErrOut
+// carry CONCRETE evidence tying an `sbx env create` refusal to the exact
+// undefined `${PIX_UAT_STORY0_MISSING}` interpolation this phase
+// exercises — either a documented, interpolation-specific phrase naming the
+// mechanism directly, or the exact missing host variable name alongside one
+// of a small, closed set of undefined/missing-value keywords. createErr's
+// own text is deliberately NOT consulted here: a wrapped generic message
+// like "exit status 1" or "context deadline exceeded" carries no such
+// evidence on its own, and boundedRefusalReason already falls back to it
+// only for the human-readable log line, never for this classification.
+//
+// Any createErr this returns false for — an auth failure, a context
+// deadline, a missing sbx binary, a generic loader/image error, or any
+// other unrelated infrastructure failure — is NOT a legitimate
+// undefined-variable observation: observeUndefinedVariableBehavior must
+// fail the check outright rather than mislabel it as "refused".
+func recognizedUndefinedVariableRefusal(createOut, createErrOut string) bool {
+	combined := strings.ToLower(createOut + " " + createErrOut)
+
+	for _, phrase := range recognizedUndefinedVariableInterpolationPhrases {
+		if strings.Contains(combined, strings.ToLower(phrase)) {
+			return true
+		}
+	}
+
+	if !strings.Contains(combined, strings.ToLower(interpolationMissingHostVar)) {
+		return false
+	}
+	for _, kw := range recognizedUndefinedVariableRefusalKeywords {
+		if strings.Contains(combined, kw) {
+			return true
+		}
+	}
+	return false
+}
+
 // boundedRefusalReason normalizes createOut/createErrOut/createErr into one
 // short, whitespace-collapsed line describing WHY sbx refused, truncated to
 // undefinedVariableRefusalReasonMaxLen. It never returns an empty string: a
@@ -248,13 +314,22 @@ func observeDefinedDefaultInterpolation(ctx context.Context, lw io.Writer, execu
 // check_custom_agent_ollama.go already uses — so BOTH a loader/create
 // refusal and a create success are legitimate observation evidence:
 //
-//   - refused before a positive receipt (createErr != nil): logs a
-//     normalized "undefined variable behavior: refused: <bounded reason>"
-//     line and issues NO removal at all — cleanupCreatedFixture's own
-//     no-receipt branch already guarantees this (it never calls a real
-//     command when createErr != nil), so this branch returns success
-//     without ever attempting cleanup itself beyond the deferred call every
-//     other fixture-creating check in this package already makes.
+//   - a RECOGNIZED refusal before a positive receipt (createErr != nil AND
+//     recognizedUndefinedVariableRefusal reports concrete evidence tying
+//     it to the exact undefined interpolationMissingHostVar interpolation
+//     this phase exercises): logs a normalized "undefined variable
+//     behavior: refused: <bounded reason>" line and issues NO removal at
+//     all — cleanupCreatedFixture's own no-receipt branch already
+//     guarantees this (it never calls a real command when createErr !=
+//     nil), so this branch returns success without ever attempting cleanup
+//     itself beyond the deferred call every other fixture-creating check in
+//     this package already makes. An UNRECOGNIZED createErr — an auth
+//     failure, a context deadline, a missing sbx binary, a generic
+//     loader/image error, or any other unrelated infrastructure failure
+//     that says nothing about this specific interpolation — is NOT
+//     legitimate evidence: it fails the check outright as an
+//     unrelated/inconclusive infrastructure failure, though the deferred
+//     no-receipt cleanup still issues no removal either way.
 //   - create success: requires a positive instance-name receipt, polls for
 //     a running row (reusing the SAME bounded poll every other check in
 //     this package uses), execs the terminating classification probe
@@ -294,6 +369,9 @@ func observeUndefinedVariableBehavior(ctx context.Context, lw io.Writer, executo
 	}()
 
 	if createErr != nil {
+		if !recognizedUndefinedVariableRefusal(createOut, createErrOut) {
+			return fmt.Errorf("interpolation (undefined variable): sbx env create failed with an error this package cannot attribute to the undefined %s interpolation this phase exercises; unrelated/inconclusive infrastructure failure: %w (stdout=%q stderr=%q)", interpolationMissingHostVar, createErr, createOut, createErrOut)
+		}
 		reason := boundedRefusalReason(createOut, createErrOut, createErr)
 		fmt.Fprintf(lw, "undefined variable behavior: refused: %s\n", reason)
 		return nil

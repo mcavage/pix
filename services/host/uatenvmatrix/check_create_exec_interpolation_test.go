@@ -14,6 +14,7 @@ package uatenvmatrix
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -384,32 +385,120 @@ func (f *interpMissingFakeExecutor) Run(ctx context.Context, name string, args, 
 }
 
 // TestObserveUndefinedVariableBehavior_RefusalBranchLogsAndIssuesNoRemoval
-// proves the first legitimate outcome: a create refusal before any positive
-// receipt logs a normalized "refused: <bounded reason>" line and issues
-// ZERO removal calls (cleanupCreatedFixture's own no-receipt branch), and
-// the check itself succeeds (an accurate "refused" observation is not a
-// check failure).
+// proves the first legitimate outcome: a create refusal that carries
+// CONCRETE evidence tying it to the exact undefined
+// PIX_UAT_STORY0_MISSING interpolation this phase exercises (never a bare
+// generic "exit status 1") logs a normalized "refused: <bounded reason>"
+// line and issues ZERO removal calls (cleanupCreatedFixture's own
+// no-receipt branch), and the check itself succeeds (an accurate "refused"
+// observation is not a check failure).
 func TestObserveUndefinedVariableBehavior_RefusalBranchLogsAndIssuesNoRemoval(t *testing.T) {
 	fastInterpolationBounds(t)
 	phaseDir := t.TempDir()
 	var lw strings.Builder
 	fe := &interpMissingFakeExecutor{
 		createErr: errors.New("exit status 1"),
-		createOut: "",
+		createOut: "error: environment variable PIX_UAT_STORY0_MISSING is not set\n",
 	}
 
 	if err := observeUndefinedVariableBehavior(context.Background(), &lw, fe, phaseDir); err != nil {
-		t.Fatalf("expected the refusal branch to succeed, got: %v", err)
+		t.Fatalf("expected the recognized refusal branch to succeed, got: %v", err)
 	}
 
 	logged := lw.String()
 	if !strings.Contains(logged, "undefined variable behavior: refused:") {
 		t.Errorf("artifact does not record the normalized refusal line: %s", logged)
 	}
+	if !strings.Contains(logged, "PIX_UAT_STORY0_MISSING") {
+		t.Errorf("artifact's bounded reason lost the concrete evidence tying it to the missing variable: %s", logged)
+	}
 	for _, call := range fe.calls {
 		if len(call) > 1 && call[0] == "env" && call[1] == "rm" {
 			t.Fatalf("refusal branch must issue NO removal call, got: %v", call)
 		}
+	}
+}
+
+// unrecognizedUndefinedVariableRefusalCases are createErr/createOut/
+// createErrOut shapes that MUST NOT satisfy recognizedUndefinedVariableRefusal:
+// each is a real class of unrelated infrastructure failure
+// observeUndefinedVariableBehavior must never mislabel as legitimate
+// upstream undefined-variable evidence just because createErr != nil.
+func unrecognizedUndefinedVariableRefusalCases() []struct {
+	name          string
+	createOut     string
+	createErrOut  string
+	createErr     error
+	wantErrPhrase string
+} {
+	return []struct {
+		name          string
+		createOut     string
+		createErrOut  string
+		createErr     error
+		wantErrPhrase string
+	}{
+		{
+			name:          "auth failure",
+			createErrOut:  "error: authentication failed: invalid or expired token\n",
+			createErr:     errors.New("exit status 1"),
+			wantErrPhrase: "unrelated/inconclusive",
+		},
+		{
+			name:          "context deadline",
+			createErr:     fmt.Errorf("sbx env create: %w", context.DeadlineExceeded),
+			wantErrPhrase: "unrelated/inconclusive",
+		},
+		{
+			name:          "generic loader failure",
+			createErrOut:  "error: failed to load config: yaml: line 4: mapping values are not allowed in this context\n",
+			createErr:     errors.New("exit status 1"),
+			wantErrPhrase: "unrelated/inconclusive",
+		},
+		{
+			name:          "missing sbx binary",
+			createErr:     errors.New(`exec: "sbx": executable file not found in $PATH`),
+			wantErrPhrase: "unrelated/inconclusive",
+		},
+	}
+}
+
+// TestObserveUndefinedVariableBehavior_UnrecognizedCreateErrFailsCheck proves
+// the check's own contract, restated by this file's doc comment: an
+// unrelated infrastructure failure (auth, a context deadline, a generic
+// loader error, a missing sbx binary — none of which say anything about
+// the undefined PIX_UAT_STORY0_MISSING interpolation this phase exercises)
+// must NEVER be mislabeled as a legitimate "refused" observation. Each case
+// fails the check with an unrelated/inconclusive error, and the deferred
+// no-receipt cleanup still issues zero removal calls.
+func TestObserveUndefinedVariableBehavior_UnrecognizedCreateErrFailsCheck(t *testing.T) {
+	for _, c := range unrecognizedUndefinedVariableRefusalCases() {
+		t.Run(c.name, func(t *testing.T) {
+			fastInterpolationBounds(t)
+			phaseDir := t.TempDir()
+			var lw strings.Builder
+			fe := &interpMissingFakeExecutor{
+				createOut: c.createOut,
+				createErr: c.createErr,
+			}
+
+			err := observeUndefinedVariableBehavior(context.Background(), &lw, fe, phaseDir)
+			if err == nil {
+				t.Fatalf("expected the unrecognized createErr to fail the check, got nil (log=%s)", lw.String())
+			}
+			if !strings.Contains(err.Error(), c.wantErrPhrase) {
+				t.Fatalf("expected error to contain %q, got: %v", c.wantErrPhrase, err)
+			}
+			logged := lw.String()
+			if strings.Contains(logged, "undefined variable behavior: refused:") {
+				t.Errorf("unrecognized createErr must never log a normalized refusal line: %s", logged)
+			}
+			for _, call := range fe.calls {
+				if len(call) > 1 && call[0] == "env" && call[1] == "rm" {
+					t.Fatalf("unrecognized createErr must issue NO removal call, got: %v", call)
+				}
+			}
+		})
 	}
 }
 
