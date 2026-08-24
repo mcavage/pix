@@ -20,10 +20,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
 )
+
+// sbxTestVersionOK is the recognizable, well-formed `sbx --version`
+// banner most of this file's fakes seed so a test built without any
+// version-probe intent still exercises the check's real post-probe
+// behavior, rather than tripping over the new probe by omission (an empty
+// versionOut fails closed per probeSbxVersion's contract).
+const sbxTestVersionOK = "sbx version 0.39\n"
 
 // createExecFakeExecutor answers create/exec/ls/rm calls independently, so
 // each test can compose exactly the failure combination it needs.
@@ -31,7 +39,22 @@ type createExecFakeExecutor struct {
 	createOut string
 	createErr error
 
-	// execOut/execErr answer the check's actual transport probe: a
+	// versionOut/versionErrOut/versionErr answer the check's bounded
+	// version probe's PRIMARY `sbx --version` attempt; versionFallbackOut/
+	// versionFallbackErrOut/versionFallbackErr answer the ONE known
+	// alternate `sbx version` attempt, issued only when the primary is
+	// refused as an unknown flag. versionFn, when set, takes precedence over
+	// versionOut/versionErrOut/versionErr and lets a test observe exactly
+	// when (relative to fixture-file state) the primary attempt runs.
+	versionOut            string
+	versionErrOut         string
+	versionErr            error
+	versionFn             func() (string, string, error)
+	versionFallbackOut    string
+	versionFallbackErrOut string
+	versionFallbackErr    error
+
+	// execOut/execErr answer the check's actual transport probe:
 	// non-TTY, name-based `sbx exec -i` argv-echo probe (never the
 	// production `-it` shape — see buildEchoProbeArgv). execFn, when set,
 	// takes precedence and lets a test simulate a hung probe honoring ctx.
@@ -60,6 +83,13 @@ type createExecFakeExecutor struct {
 func (f *createExecFakeExecutor) Run(ctx context.Context, name string, args, env []string, dir string) (string, string, error) {
 	f.calls = append(f.calls, append([]string(nil), args...))
 	switch {
+	case len(args) > 0 && args[0] == "--version":
+		if f.versionFn != nil {
+			return f.versionFn()
+		}
+		return f.versionOut, f.versionErrOut, f.versionErr
+	case len(args) > 0 && args[0] == "version":
+		return f.versionFallbackOut, f.versionFallbackErrOut, f.versionFallbackErr
 	case len(args) > 0 && args[0] == "ls":
 		if len(f.lsSequence) > 0 {
 			idx := f.lsCalls
@@ -125,9 +155,10 @@ func fakeExecutorForSuccess(t *testing.T) (*createExecFakeExecutor, string) {
 	fixture := customAgentFixture()
 	name := fixture.Name
 	return &createExecFakeExecutor{
-		createOut: createReceiptOut(name, fixture.RelativeKits),
-		lsOut:     runningRowJSON(name, "running"),
-		execOut:   expectedEchoProbeOutput(intendedPiInvocation(fixture)),
+		versionOut: sbxTestVersionOK,
+		createOut:  createReceiptOut(name, fixture.RelativeKits),
+		lsOut:      runningRowJSON(name, "running"),
+		execOut:    expectedEchoProbeOutput(intendedPiInvocation(fixture)),
 	}, name
 }
 
@@ -196,6 +227,7 @@ func TestCheckEnvironmentCreateThenExecInvocation_PollHappensBeforeExec(t *testi
 	fixture := customAgentFixture()
 	name := fixture.Name
 	fe := &createExecFakeExecutor{
+		versionOut: sbxTestVersionOK,
 		createOut:  createReceiptOut(name, fixture.RelativeKits),
 		lsSequence: []string{runningRowJSON(name, "creating"), runningRowJSON(name, "creating"), runningRowJSON(name, "running")},
 		execOut:    expectedEchoProbeOutput(intendedPiInvocation(fixture)),
@@ -240,8 +272,9 @@ func TestCheckEnvironmentCreateThenExecInvocation_PollTimeoutNeverExecs(t *testi
 	fixture := customAgentFixture()
 	name := fixture.Name
 	fe := &createExecFakeExecutor{
-		createOut: createReceiptOut(name, fixture.RelativeKits),
-		lsOut:     runningRowJSON(name, "creating"), // never transitions to running
+		versionOut: sbxTestVersionOK,
+		createOut:  createReceiptOut(name, fixture.RelativeKits),
+		lsOut:      runningRowJSON(name, "creating"), // never transitions to running
 	}
 
 	err := checkEnvironmentCreateThenExecInvocation(context.Background(), &lw, fe, phaseDir)
@@ -276,9 +309,10 @@ func TestCheckEnvironmentCreateThenExecInvocation_ProbeUsesNonTTYExecAndExactArg
 	mangled := append([]string(nil), intended...)
 	mangled[len(mangled)-1] = "session-DIFFERENT" // mangle the --session value
 	fe := &createExecFakeExecutor{
-		createOut: createReceiptOut(name, fixture.RelativeKits),
-		lsOut:     runningRowJSON(name, "running"),
-		execOut:   expectedEchoProbeOutput(mangled),
+		versionOut: sbxTestVersionOK,
+		createOut:  createReceiptOut(name, fixture.RelativeKits),
+		lsOut:      runningRowJSON(name, "running"),
+		execOut:    expectedEchoProbeOutput(mangled),
 	}
 
 	err := checkEnvironmentCreateThenExecInvocation(context.Background(), &lw, fe, phaseDir)
@@ -321,8 +355,9 @@ func TestCheckEnvironmentCreateThenExecInvocation_HungProbeIsBoundedAndAttribute
 	fixture := customAgentFixture()
 	name := fixture.Name
 	fe := &createExecFakeExecutor{
-		createOut: createReceiptOut(name, fixture.RelativeKits),
-		lsOut:     runningRowJSON(name, "running"),
+		versionOut: sbxTestVersionOK,
+		createOut:  createReceiptOut(name, fixture.RelativeKits),
+		lsOut:      runningRowJSON(name, "running"),
 		execFn: func(ctx context.Context, args []string) (string, string, error) {
 			<-ctx.Done()
 			return "", "", ctx.Err()
@@ -362,7 +397,8 @@ func TestCheckEnvironmentCreateThenExecInvocation_CreateOutputMustIdentifyKit(t 
 	fixture := customAgentFixture()
 	name := fixture.Name
 	fe := &createExecFakeExecutor{
-		createOut: "created " + name + " (positively identified)\n", // no kit facet
+		versionOut: sbxTestVersionOK,
+		createOut:  "created " + name + " (positively identified)\n", // no kit facet
 	}
 
 	err := checkEnvironmentCreateThenExecInvocation(context.Background(), &lw, fe, phaseDir)
@@ -387,7 +423,8 @@ func TestCheckEnvironmentCreateThenExecInvocation_FreshProbeFailureFailsTheCheck
 	fixture := customAgentFixture()
 	name := fixture.Name
 	fe := &createExecFakeExecutor{
-		createOut: createReceiptOut(name, fixture.RelativeKits),
+		versionOut: sbxTestVersionOK,
+		createOut:  createReceiptOut(name, fixture.RelativeKits),
 		// The poll needs one running row to proceed; cleanup's OWN fresh
 		// probe must fail independently of the poll's. lsSequence supplies
 		// the poll's single running row, then errors on every later `ls`
@@ -421,6 +458,7 @@ func TestCheckEnvironmentCreateThenExecInvocation_CleanupNeverMasksExecFailure(t
 	fixture := customAgentFixture()
 	name := fixture.Name
 	fe := &createExecFakeExecutor{
+		versionOut: sbxTestVersionOK,
 		createOut:  createReceiptOut(name, fixture.RelativeKits),
 		lsSequence: []string{runningRowJSON(name, "running")},
 		lsErr:      errors.New("dial tcp: connection refused (probe)"),
@@ -460,5 +498,77 @@ func TestCheckEnvironmentCreateThenExecInvocation_RemovalCommandFailureFailsTheC
 	}
 	if !strings.Contains(err.Error(), "sbx env rm -f") {
 		t.Fatalf("expected the removal failure to name the environment-scoped command, got: %v", err)
+	}
+}
+
+// TestCheckEnvironmentCreateThenExecInvocation_VersionProbeRunsFirstAndLogsObservedVersion
+// proves the E0.7 unit's requirement directly: the bounded version probe
+// runs at the very start of this check, before any fixture mutation
+// (writeAuthoredFixture has not yet created the fixture file when the
+// probe's own Executor call happens), and the check's bounded artifact
+// carries a normalized "observed sbx version: <value>" line.
+func TestCheckEnvironmentCreateThenExecInvocation_VersionProbeRunsFirstAndLogsObservedVersion(t *testing.T) {
+	fastPollAndProbeBounds(t, pollConfig{Interval: time.Millisecond, Timeout: time.Second}, time.Second)
+	phaseDir := t.TempDir()
+	var lw strings.Builder
+	fixture := customAgentFixture()
+	name := fixture.Name
+	fixturePath := phaseDir + "/authored.sbxenv.yaml"
+	versionCalled := false
+	fe := &createExecFakeExecutor{
+		createOut: createReceiptOut(name, fixture.RelativeKits),
+		lsOut:     runningRowJSON(name, "running"),
+		execOut:   expectedEchoProbeOutput(intendedPiInvocation(fixture)),
+	}
+	fe.versionFn = func() (string, string, error) {
+		versionCalled = true
+		if _, statErr := os.Stat(fixturePath); !os.IsNotExist(statErr) {
+			t.Errorf("expected the authored fixture to not exist yet when the version probe runs (stat err=%v)", statErr)
+		}
+		return sbxTestVersionOK, "", nil
+	}
+
+	if err := checkEnvironmentCreateThenExecInvocation(context.Background(), &lw, fe, phaseDir); err != nil {
+		t.Fatalf("expected success, got: %v (log=%s)", err, lw.String())
+	}
+	if !versionCalled {
+		t.Fatal("expected the version probe to actually run")
+	}
+	if len(fe.calls) == 0 || fe.calls[0][0] != "--version" {
+		t.Fatalf("expected `sbx --version` to be the very first Executor call, got calls=%v", fe.calls)
+	}
+	if !strings.Contains(lw.String(), "observed sbx version: 0.39") {
+		t.Errorf("artifact does not record the normalized observed-version line: %s", lw.String())
+	}
+}
+
+// TestCheckEnvironmentCreateThenExecInvocation_VersionProbeFailureFailsClosedBeforeMutation
+// proves the version probe fails the whole check closed, and does so before
+// any fixture is created or any other Executor call is issued.
+func TestCheckEnvironmentCreateThenExecInvocation_VersionProbeFailureFailsClosedBeforeMutation(t *testing.T) {
+	fastPollAndProbeBounds(t, pollConfig{Interval: time.Millisecond, Timeout: time.Second}, time.Second)
+	phaseDir := t.TempDir()
+	var lw strings.Builder
+	fe := &createExecFakeExecutor{
+		versionErr:    errors.New("exit status 1"),
+		versionErrOut: "Error: permission denied\n",
+	}
+
+	err := checkEnvironmentCreateThenExecInvocation(context.Background(), &lw, fe, phaseDir)
+	if err == nil {
+		t.Fatal("expected the version probe failure to fail the check, got nil")
+	}
+	if !strings.Contains(err.Error(), "sbx version probe") {
+		t.Fatalf("expected an attributed version-probe error, got: %v", err)
+	}
+	if len(fe.calls) != 1 {
+		t.Fatalf("expected the version probe's single primary attempt to be the ONLY Executor call before failing closed, got calls=%v", fe.calls)
+	}
+	entries, statErr := os.ReadDir(phaseDir)
+	if statErr != nil {
+		t.Fatalf("read phaseDir: %v", statErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected no fixture mutation before the version probe runs, phaseDir has entries: %v", entries)
 	}
 }

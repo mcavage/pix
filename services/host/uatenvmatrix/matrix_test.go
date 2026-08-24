@@ -185,6 +185,9 @@ func successfulExecutor() *fakeExecutor {
 		if call.name == "docker" {
 			return fakeCandidateDigest + "\n", "", nil
 		}
+		if len(call.args) > 0 && call.args[0] == "--version" {
+			return fakeSbxVersionOut, "", nil
+		}
 		if len(call.args) > 1 && call.args[0] == "template" && call.args[1] == "ls" {
 			return fakeTemplateListOut, "", nil
 		}
@@ -236,6 +239,12 @@ func successfulExecutor() *fakeExecutor {
 // created-sandbox digest field to compare it against; see check_local_image.go).
 const fakeCandidateDigest = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 
+// fakeSbxVersionOut is the recognizable `sbx --version` banner every shared
+// fake Executor in this file answers with, so end-to-end Run() coverage
+// exercises the version probe's real success path rather than tripping
+// over it by omission (probeSbxVersion fails closed on empty output).
+const fakeSbxVersionOut = "sbx version 0.39\n"
+
 func TestRun_EnvironmentCreateThenExecInvocation_Success(t *testing.T) {
 	outDir := writeFakeCandidateBinaries(t)
 	runDir := t.TempDir()
@@ -257,32 +266,42 @@ func TestRun_EnvironmentCreateThenExecInvocation_Success(t *testing.T) {
 	if !strings.Contains(string(b), "RESULT: PASS") {
 		t.Errorf("artifact does not record PASS: %s", b)
 	}
+	if !strings.Contains(string(b), "observed sbx version: 0.39") {
+		t.Errorf("artifact does not record the normalized observed-version line (AC-7/E0.7): %s", b)
+	}
 
 	// Run() now executes all six registered checks, each of the four that
 	// creates a real fixture instance also running its own receipt-gated
 	// cleanup (a fresh `sbx ls --json` probe, then `sbx env rm -f <path>`):
-	// this check's own create+poll+probe+cleanup-probe+remove calls
-	// (calls[0..4] — one extra call versus its siblings, the bounded
-	// pre-exec poll for a positively identified running row),
-	// environment_uses_local_candidate_image's docker-image-inspect+template-
-	// list+create+poll+cleanup-probe+remove calls (calls[5..10] — the
-	// corrected AC-2 evidence chain: `sbx template ls` proves the run-unique
-	// candidate repo:tag is registered before create, and the bounded poll for
-	// a positively identified running row replaces the prior version's
-	// invented `docker inspect <sandbox name>` probe), environment_
-	// recreate_boundary's baseline+drifted create calls plus its one cleanup
-	// probe+remove pair keyed on the baseline's own receipt (calls[11..14]),
-	// environment_failed_create_cleanup's single failed create call with no
-	// cleanup calls at all — no receipt, no removal authority (calls[15]),
-	// environment_rm_scope_refusal's zero calls (it never touches the
-	// injected Executor), and environment_custom_agent_ollama's create+probe
-	// pair plus its own cleanup probe+remove pair (calls[16..19]). This test
-	// asserts only on the first check's own create+poll+exec calls.
+	// this check's own bounded version-probe+create+poll+probe+cleanup-
+	// probe+remove calls (calls[0..5] — the version probe AC-7/E0.7 require
+	// runs first, before any fixture mutation, and one extra call versus its
+	// siblings for the bounded pre-exec poll for a positively identified
+	// running row), environment_uses_local_candidate_image's docker-image-
+	// inspect+template-list+create+poll+cleanup-probe+remove calls
+	// (calls[6..11] — the corrected AC-2 evidence chain: `sbx template ls`
+	// proves the run-unique candidate repo:tag is registered before create,
+	// and the bounded poll for a positively identified running row replaces
+	// the prior version's invented `docker inspect <sandbox name>` probe),
+	// environment_recreate_boundary's baseline+drifted create calls plus its
+	// one cleanup probe+remove pair keyed on the baseline's own receipt
+	// (calls[12..15]), environment_failed_create_cleanup's single failed
+	// create call with no cleanup calls at all — no receipt, no removal
+	// authority (calls[16]), environment_rm_scope_refusal's zero calls (it
+	// never touches the injected Executor), and environment_custom_agent_
+	// ollama's create+probe pair plus its own cleanup probe+remove pair
+	// (calls[17..20]). This test asserts only on the first check's own
+	// version-probe+create+poll+exec calls.
 	calls := fe.snapshot()
-	if len(calls) != 20 {
-		t.Fatalf("expected exactly 20 executor calls, got %d: %#v", len(calls), calls)
+	if len(calls) != 21 {
+		t.Fatalf("expected exactly 21 executor calls, got %d: %#v", len(calls), calls)
 	}
-	create := calls[0]
+	versionCall := calls[0]
+	if versionCall.name != "sbx" || len(versionCall.args) != 1 || versionCall.args[0] != "--version" {
+		t.Fatalf("version call = %#v, want `sbx --version`, issued BEFORE any fixture mutation", versionCall)
+	}
+
+	create := calls[1]
 	if create.name != "sbx" || len(create.args) != 3 || create.args[0] != "env" || create.args[1] != "create" {
 		t.Fatalf("create call = %#v, want `sbx env create <fixture>`", create)
 	}
@@ -297,12 +316,12 @@ func TestRun_EnvironmentCreateThenExecInvocation_Success(t *testing.T) {
 		t.Errorf("authored fixture does not declare the Pix custom agent: %s", fixtureBytes)
 	}
 
-	pollCall := calls[1]
+	pollCall := calls[2]
 	if pollCall.name != "sbx" || len(pollCall.args) != 2 || pollCall.args[0] != "ls" || pollCall.args[1] != "--json" {
 		t.Fatalf("poll call = %#v, want `sbx ls --json`, issued BEFORE any exec", pollCall)
 	}
 
-	execCall := calls[2]
+	execCall := calls[3]
 	const echoProbeScript = `for a in "$@"; do printf '%s\n' "$a"; done`
 	wantExecArgs := []string{
 		"exec", "-i", "pix-uatenv-fixture-0", "--", "sh", "-c", echoProbeScript, "sh",
@@ -343,6 +362,9 @@ func TestRun_EnvironmentCreateThenExecInvocation_CreateFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	fe := &fakeExecutor{onCall: func(call recordedCall) (string, string, error) {
+		if len(call.args) > 0 && call.args[0] == "--version" {
+			return fakeSbxVersionOut, "", nil
+		}
 		return "", "no such command\n", context.DeadlineExceeded
 	}}
 
@@ -363,11 +385,12 @@ func TestRun_EnvironmentCreateThenExecInvocation_CreateFailure(t *testing.T) {
 		t.Errorf("artifact does not record FAIL: %s", b)
 	}
 
-	// Only the create call should ever have been attempted: a failed create
-	// must not proceed to a name-based exec against an instance that was
-	// never positively identified.
-	if calls := fe.snapshot(); len(calls) != 1 {
-		t.Fatalf("expected exactly 1 executor call after a failed create, got %d: %#v", len(calls), calls)
+	// The version probe succeeds first (call 1), then the create call should
+	// be the only OTHER call ever attempted: a failed create must not
+	// proceed to a name-based exec against an instance that was never
+	// positively identified.
+	if calls := fe.snapshot(); len(calls) != 2 {
+		t.Fatalf("expected exactly 2 executor calls (version probe + failed create) , got %d: %#v", len(calls), calls)
 	}
 }
 
@@ -379,6 +402,9 @@ func TestRun_EnvironmentCreateThenExecInvocation_UnidentifiedInstanceNameFails(t
 		t.Fatal(err)
 	}
 	fe := &fakeExecutor{onCall: func(call recordedCall) (string, string, error) {
+		if len(call.args) > 0 && call.args[0] == "--version" {
+			return fakeSbxVersionOut, "", nil
+		}
 		// A create call that succeeds (err == nil) but never reports the
 		// expected instance name must still fail the check: an accepted
 		// call is not the same as a positively identified instance.
@@ -389,8 +415,8 @@ func TestRun_EnvironmentCreateThenExecInvocation_UnidentifiedInstanceNameFails(t
 	if err == nil {
 		t.Fatal("expected Run to fail when create never reports a positively identified instance")
 	}
-	if calls := fe.snapshot(); len(calls) != 1 {
-		t.Fatalf("expected exactly 1 executor call, got %d: %#v", len(calls), calls)
+	if calls := fe.snapshot(); len(calls) != 2 {
+		t.Fatalf("expected exactly 2 executor calls (version probe + create), got %d: %#v", len(calls), calls)
 	}
 }
 
@@ -402,6 +428,9 @@ func TestRun_EnvironmentCreateThenExecInvocation_ExecFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	fe := &fakeExecutor{onCall: func(call recordedCall) (string, string, error) {
+		if len(call.args) > 0 && call.args[0] == "--version" {
+			return fakeSbxVersionOut, "", nil
+		}
 		if len(call.args) > 0 && call.args[0] == "ls" {
 			// The bounded pre-exec poll must succeed fast so this test
 			// exercises the actual probe's own failure, not a poll timeout.
@@ -441,6 +470,9 @@ func TestRun_BoundedArtifact(t *testing.T) {
 	fe := &fakeExecutor{onCall: func(call recordedCall) (string, string, error) {
 		if call.name == "docker" {
 			return fakeCandidateDigest + "\n", "", nil
+		}
+		if len(call.args) > 0 && call.args[0] == "--version" {
+			return fakeSbxVersionOut, "", nil
 		}
 		if len(call.args) > 1 && call.args[0] == "template" && call.args[1] == "ls" {
 			return fakeTemplateListOut, "", nil

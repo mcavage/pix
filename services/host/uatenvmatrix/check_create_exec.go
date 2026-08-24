@@ -255,6 +255,16 @@ func createOutputIdentifiesKit(createOut string, f EnvironmentFixture) bool {
 // no real `sbx` binary to run under `go test`: production wires the real
 // execExecutor, tests inject a fake that records and answers deterministically.
 func checkEnvironmentCreateThenExecInvocation(ctx context.Context, lw io.Writer, executor Executor, phaseDir string) (retErr error) {
+	env := hostToolExecEnv()
+
+	// AC-7 / the E0.7 unit require this check's own bounded artifact to
+	// carry the exact observed sbx version — captured HERE, before any
+	// fixture mutation, so a version probe failure fails the check outright
+	// rather than being silently skipped once fixture state already changed.
+	if _, err := probeSbxVersion(ctx, lw, executor, env, phaseDir); err != nil {
+		return fmt.Errorf("sbx version probe: %w", err)
+	}
+
 	fixture := customAgentFixture()
 
 	fixturePath, err := writeAuthoredFixture(phaseDir, "authored.sbxenv.yaml", fixture)
@@ -262,8 +272,6 @@ func checkEnvironmentCreateThenExecInvocation(ctx context.Context, lw io.Writer,
 		return err
 	}
 	fmt.Fprintf(lw, "authored fixture written to %s\n", fixturePath)
-
-	env := hostToolExecEnv()
 
 	createArgs := []string{"env", "create", fixturePath}
 	fmt.Fprintf(lw, "$ sbx %s\n", strings.Join(createArgs, " "))
