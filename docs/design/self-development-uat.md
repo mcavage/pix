@@ -70,26 +70,67 @@ A run starts from a commit, never uncommitted bytes or an arbitrary host path:
 The host verifies that the commit is reachable from the checkout bound to the
 UAT session, then makes a disposable local clone for the run.
 
-## Session-scoped MCP
+## Session-scoped MCP: gateway relay + host-context worker
 
-On creation of a `--dev` sandbox, the host launcher:
+The first implementation planned to have the sbx gateway spawn `pix-host
+uat-mcp` directly, with that one process both speaking stdio MCP to the client
+and constructing the UAT Runner (which shells out to `git`, `docker`, `sbx`,
+and a host browser). Building it exposed why that shape cannot work: sbx's
+local gateway spawns MCP host commands from its OWN daemon process tree, not
+from the operator's interactive shell. A process born under that ancestry
+never inherits the operator's `sbx`/Docker login session, SSH agent, or
+browser-profile state — the exact host authentication the UAT Runner needs to
+drive real lifecycle operations. Every gateway-spawned `uat-mcp` therefore hit
+"not authenticated to Docker"-shaped failures that had nothing to do with the
+scenario under test.
 
-1. generates a random session capability;
-2. registers a uniquely named host-command MCP server, for example
-   `pix-uat-a8f32c`;
-3. starts `pix-host uat-mcp` with fixed arguments naming the canonical checkout,
-   UAT state root, session capability, and resource namespace;
-4. adds only that registration to this sandbox's `--static-mcp` set;
-5. records the registration and resources in the sandbox lease;
-6. removes them when the last session exits.
+The fix is a two-process split, authorized as the explicit fallback in this
+document's original MVP note ("use a per-session loopback worker … the tool
+contract and runner remain the same") rather than an exec broker or a
+network-exposed backdoor:
+
+- **`pix-host uat-mcp`** stays what the gateway spawns per client connection,
+  but it is now a DUMB stdio↔Unix-socket relay. It takes one flag,
+  `--connect <socket>`, dials the session's worker socket (bounded retries,
+  then an actionable error naming `pix run --dev`), and copies bytes
+  bidirectionally until either side closes. It constructs no Runner, and it
+  must never import `os/exec` or `pix/host/workflow/uat` again — a structural
+  sentinel test (`TestUatMcpGatewayIsADumbRelay`) pins that fact at the source
+  level so the regression cannot silently return.
+- **`pix-host uat-worker`** owns the real UAT Runner and every host command it
+  runs. It is started later, by `pix run --dev` itself — a process launched
+  from the operator's own interactive shell, which is exactly where the
+  authenticated `sbx`/Docker/browser context lives. It listens on a
+  session-owned Unix socket under the same 0700 per-session state directory
+  `RegisterMCP` already creates (`<state>/sessions/<sessionID>/uat.sock`),
+  accepts one client connection at a time (single-flight), and survives a
+  client EOF: only that connection's MCP `Serve` loop ends, never the worker
+  process, so a gateway relay reconnecting (a new pi session in the same
+  sandbox) picks the same live Runner back up.
+
+The socket path is hardened with the same session-id/root rules
+`RegisterMCP`/`removeSessionState` already enforce (absolute, real directory,
+never a symlink, 0700, owned by the current uid), plus a symlink check on the
+socket file itself, before either side (the worker's `Listen` or the
+gateway's `Dial`) touches it.
+
+The registration argv changes accordingly: `sbx mcp add <name> --command
+<pix-host> --args uat-mcp --args --connect --args <socket>`, with the repo
+path, state root, and session id no longer part of the gateway command at all
+(the worker receives those directly from `pix run --dev`, not from the
+gateway's registration). The tool contract — `uat_capabilities`, `uat_submit`,
+`uat_status`, `uat_artifact`, `uat_browser_action`, `uat_abort` — and the
+underlying Runner are unchanged; only the transport and which process
+constructs the Runner moved.
+
+Wiring `pix run --dev` to actually spawn and supervise `uat-worker` (start
+ordering, lifecycle, teardown alongside the sandbox) is the next unit, not
+this one: this change lands the reusable transport primitives — the socket
+hardening, the relay, the worker's accept loop, and the planner/registration
+argv — with no `run_cmd` lifecycle wiring yet.
 
 Normal pix sandboxes never receive the UAT server. A startup reaper removes
 expired UAT registrations and resources after a hard crash.
-
-The first implementation must prove that sbx isolates a uniquely attached
-static MCP registration as expected. If it does not, use a per-session loopback
-JSON-RPC worker with a bearer capability injected only into the dev sandbox.
-The tool contract and runner remain the same.
 
 ## Tool contract
 

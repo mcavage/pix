@@ -2,197 +2,112 @@ package main
 
 import (
 	"bytes"
-	"context"
-	"encoding/json"
-	"net/url"
+	"errors"
+	"go/parser"
+	"go/token"
+	"io"
 	"os"
-	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
-	"time"
-
-	"pix/host/workflow/uat"
 )
 
-type fakeGit struct{}
-
-func (f *fakeGit) ResolveCommit(ctx context.Context, commit string) (string, error) {
-	return commit, nil
-}
-func (f *fakeGit) ReadTreeFile(ctx context.Context, commit, path string) ([]byte, error) {
-	return []byte("test"), nil
-}
-func (f *fakeGit) Clone(ctx context.Context, commit, destPath string) error { return nil }
-
-type fakeSandbox struct{}
-
-func (f *fakeSandbox) Create(ctx context.Context, runID string) error { return nil }
-func (f *fakeSandbox) Probe(ctx context.Context, runID string) error  { return nil }
-func (f *fakeSandbox) Remove(ctx context.Context, runID string) error { return nil }
-
-type fakeMCP struct{}
-
-func (f *fakeMCP) Add(ctx context.Context, name string, argv []string) error { return nil }
-func (f *fakeMCP) Auth(ctx context.Context, runID string, name string) error { return nil }
-func (f *fakeMCP) Status(ctx context.Context, name string) (string, error)   { return "ready", nil }
-func (f *fakeMCP) Remove(ctx context.Context, name string) error             { return nil }
-
-type fakeImage struct{}
-
-func (f *fakeImage) Load(ctx context.Context, tag, workspacePath string) error { return nil }
-func (f *fakeImage) Probe(ctx context.Context, tag string) error               { return nil }
-
-type fakeLease struct{}
-
-func (f *fakeLease) Acquire(ctx context.Context, runID, resource string) error { return nil }
-func (f *fakeLease) Release(ctx context.Context, runID, resource string) error { return nil }
-func (f *fakeLease) Cleanup(ctx context.Context, runID string) error           { return nil }
-
-type fakeExec struct{}
-
-func (f *fakeExec) CommandContext(ctx context.Context, name string, args ...string) uat.ExecCmd {
-	return nil
-} // Might panic if ExecCmd is called
-
-type fakeBrowser struct{}
-
-func (f *fakeBrowser) Snapshot(ctx context.Context) (*uat.Snapshot, error) {
-	return &uat.Snapshot{DOM: "<html></html>"}, nil
-}
-func (f *fakeBrowser) Click(ctx context.Context, refID string) error    { return nil }
-func (f *fakeBrowser) WaitForURL(ctx context.Context, u *url.URL) error { return nil }
-func (f *fakeBrowser) CurrentURL(ctx context.Context) (*url.URL, error) {
-	return url.Parse("about:blank")
-}
-func (f *fakeBrowser) Title(ctx context.Context) (string, error)       { return "Title", nil }
-func (f *fakeBrowser) VisibleText(ctx context.Context) (string, error) { return "text", nil }
-func (f *fakeBrowser) Close() error                                    { return nil }
-
-type fakeFactory struct{}
-
-func (f *fakeFactory) NewContext(ctx context.Context, runID string, initialURL *uat.ValidatedURL, policy uat.URLValidator) (uat.Browser, error) {
-	return &fakeBrowser{}, nil
-}
-func (f *fakeFactory) NewOAuthContext(ctx context.Context, initialURL *uat.ValidatedURL, policy uat.URLValidator) (uat.Browser, error) {
-	return &fakeBrowser{}, nil
+// fakeConn is a minimal io.ReadWriteCloser double for relayBytes: it lets a
+// test drive both the "worker" side (what relayBytes reads/writes as conn)
+// without a real socket.
+type fakeConn struct {
+	r      io.Reader
+	w      *bytes.Buffer
+	closed bool
 }
 
-func TestMCPServer_EndToEnd(t *testing.T) {
-	stateDir := t.TempDir()
-	repoDir := t.TempDir()
+func (f *fakeConn) Read(p []byte) (int, error)  { return f.r.Read(p) }
+func (f *fakeConn) Write(p []byte) (int, error) { return f.w.Write(p) }
+func (f *fakeConn) Close() error                { f.closed = true; return nil }
 
-	pixHost := filepath.Join(stateDir, "pix-host")
-	os.WriteFile(pixHost, []byte(""), 0755)
-	runner, _ := uat.NewRunner(pixHost, repoDir, stateDir, &fakeGit{}, &fakeExec{}, &fakeSandbox{}, &fakeMCP{}, &fakeImage{}, &fakeLease{}, 1)
-	bf := &fakeFactory{}
+func TestRelayBytesCopiesBothDirections(t *testing.T) {
+	clientToWorker := strings.NewReader("request-from-mcp-client")
+	var toClient bytes.Buffer
+	conn := &fakeConn{r: strings.NewReader("response-from-worker"), w: &toClient}
 
-	runID := "run-12345"
-	runDir := filepath.Join(stateDir, "runs", runID)
-	os.MkdirAll(runDir, 0755)
-	os.WriteFile(filepath.Join(runDir, "artifact.txt"), []byte("hello world"), 0644)
-
-	tests := []struct {
-		name         string
-		req          string
-		expectSubstr string
-	}{
-		{
-			"initialize",
-			`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`,
-			`"protocolVersion"`,
-		},
-		{
-			"notification_silence",
-			`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
-			``, // no output expected
-		},
-		{
-			"tools_list",
-			`{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`,
-			`"uat_capabilities"`,
-		},
-		{
-			"tool_capabilities",
-			`{"jsonrpc":"2.0","id":"abc","method":"tools/call","params":{"name":"uat_capabilities","arguments":{}}}`,
-			`\"scenario_schema\":\"pix.uat/1\"`,
-		},
-		{
-			"tool_artifact",
-			`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"uat_artifact","arguments":{"run_id":"run-12345","path":"artifact.txt"}}}`,
-			`hello world`,
-		},
-		{
-			"unknown_method",
-			`{"jsonrpc":"2.0","id":5,"method":"unknown_method"}`,
-			`"error":{"code":-32601`,
-		},
-		{
-			"unknown_tool",
-			`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"unknown_tool","arguments":{}}}`,
-			`"error":{"code":-32601`,
-		},
-		{
-			"malformed",
-			`{invalid json`,
-			`"error":{"code":-32700`,
-		},
+	var fromWorker bytes.Buffer
+	err := relayBytes(clientToWorker, &fromWorker, conn)
+	if err != nil {
+		t.Fatalf("relayBytes: %v", err)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			in := bytes.NewBufferString(tt.req + "\n")
-			out := &safeBuffer{}
-			server := uat.NewMCPServer(runner, bf, stateDir, in, out, nil)
-
-			err := server.Serve(context.Background())
-			if err != nil {
-				t.Fatalf("Serve error: %v", err)
-			}
-
-			var res string
-			for i := 0; i < 50; i++ {
-				res = out.String()
-				if tt.expectSubstr == "" || strings.Contains(res, tt.expectSubstr) {
-					break
-				}
-				time.Sleep(10 * time.Millisecond)
-			}
-			if tt.expectSubstr == "" {
-				if res != "" {
-					t.Errorf("expected no output, got %q", res)
-				}
-			} else {
-				if !strings.Contains(res, tt.expectSubstr) {
-					t.Errorf("expected %q in output, got %q", tt.expectSubstr, res)
-				}
-
-				// Protocol purity: should be valid JSON
-				if res != "" {
-					for _, line := range strings.Split(strings.TrimSpace(res), "\n") {
-						var m map[string]interface{}
-						if err := json.Unmarshal([]byte(line), &m); err != nil {
-							t.Errorf("stdout not valid JSON: %v, line: %s", err, line)
-						}
-					}
-				}
-			}
-		})
+	if toClient.String() != "request-from-mcp-client" {
+		t.Errorf("bytes relayed stdin->conn = %q, want %q", toClient.String(), "request-from-mcp-client")
+	}
+	if fromWorker.String() != "response-from-worker" {
+		t.Errorf("bytes relayed conn->stdout = %q, want %q", fromWorker.String(), "response-from-worker")
+	}
+	if !conn.closed {
+		t.Error("relayBytes must close conn once a direction reaches EOF")
 	}
 }
 
-type safeBuffer struct {
-	bytes.Buffer
-	sync.Mutex
+func TestRelayBytesPropagatesConnReadError(t *testing.T) {
+	boom := errors.New("boom")
+	conn := &fakeConn{r: errReader{boom}, w: &bytes.Buffer{}}
+	var out bytes.Buffer
+	err := relayBytes(strings.NewReader(""), &out, conn)
+	if err == nil {
+		t.Fatal("expected relayBytes to surface the conn read error")
+	}
 }
 
-func (s *safeBuffer) Write(p []byte) (n int, err error) {
-	s.Lock()
-	defer s.Unlock()
-	return s.Buffer.Write(p)
+type errReader struct{ err error }
+
+func (e errReader) Read([]byte) (int, error) { return 0, e.err }
+
+// TestUatMcpGatewayIsADumbRelay is the structural sentinel for the U1 split
+// (docs/design/self-development-uat.md): `pix-host uat-mcp`, spawned by the
+// sbx gateway, must never regain the ability to construct a UAT Runner or
+// execute host commands directly — that authority moved to `pix-host
+// uat-worker`, started later by `pix run --dev` so it inherits the operator's
+// authenticated host context. A source-level import check is deliberately
+// blunt (mirroring cmd/pix/hostmode_gone_test.go's identical rationale): it
+// catches the regression the moment either forbidden import reappears in this
+// file, wherever in it that happens.
+func TestUatMcpGatewayIsADumbRelay(t *testing.T) {
+	violations := uatMcpForbiddenImports(t, "uat_mcp.go")
+	for _, v := range violations {
+		t.Errorf("uat_mcp.go imports %q; the gateway relay must never construct a Runner or exec host commands — that moved to uat-worker (docs/design/self-development-uat.md)", v)
+	}
 }
-func (s *safeBuffer) String() string {
-	s.Lock()
-	defer s.Unlock()
-	return s.Buffer.String()
+
+// TestUatMcpSentinelDetectsAPlantedViolation proves the check above actually
+// fires, the same discipline hostmode_gone_test.go's plausibility test
+// applies: a guard that has only ever been seen passing has never been proven
+// to catch anything.
+func TestUatMcpSentinelDetectsAPlantedViolation(t *testing.T) {
+	dir := t.TempDir()
+	planted := dir + "/planted.go"
+	src := "package main\n\nimport (\n\t\"os/exec\"\n\n\t_ \"pix/host/workflow/uat\"\n)\n\nvar _ = exec.Command\n"
+	if err := os.WriteFile(planted, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	violations := uatMcpForbiddenImports(t, planted)
+	if len(violations) != 2 {
+		t.Fatalf("expected 2 planted violations (os/exec, workflow/uat), got %v", violations)
+	}
+}
+
+func uatMcpForbiddenImports(t *testing.T, file string) []string {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, file, nil, parser.ImportsOnly)
+	if err != nil {
+		t.Fatalf("parse %s: %v", file, err)
+	}
+	forbidden := []string{"os/exec", "pix/host/workflow/uat"}
+	var found []string
+	for _, spec := range f.Imports {
+		p := strings.Trim(spec.Path.Value, `"`)
+		for _, bad := range forbidden {
+			if p == bad {
+				found = append(found, bad)
+			}
+		}
+	}
+	return found
 }

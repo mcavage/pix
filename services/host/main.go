@@ -57,6 +57,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(2)
 		}
+	case "uat-worker":
+		if err := runUatWorker(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
 
 	case "route":
 		runRouteHost(os.Args[2:])

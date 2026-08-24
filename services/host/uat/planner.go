@@ -6,7 +6,10 @@ import (
 )
 
 type MCPPlanner struct {
-	pixHost   string
+	pixHost string
+	// repoPath is retained for the uat-worker start-argv planning that lands in
+	// U2 (the gateway command itself no longer names a repo: it only connects
+	// to a socket).
 	repoPath  string
 	statePath string
 	sessionID string
@@ -33,14 +36,18 @@ func NewMCPPlanner(pixHost, repoPath, statePath, sessionID string) (*MCPPlanner,
 	}, nil
 }
 
+// PlanRegistrationAdd plans the `sbx mcp add` argv the sbx gateway will use to
+// spawn `pix-host uat-mcp` per client connection. That process is a dumb
+// stdio<->Unix-socket relay (see docs/design/self-development-uat.md): it
+// carries no repo, no state root, and no session id, only the socket a
+// separately started `pix-host uat-worker` is listening on.
 func (p *MCPPlanner) PlanRegistrationAdd(name string) []string {
 	return []string{
 		"mcp", "add", name,
 		"--command", p.pixHost,
 		"--args", "uat-mcp",
-		"--args", "--repo", "--args", p.repoPath,
-		"--args", "--state", "--args", p.statePath,
-		"--args", "--session", "--args", p.sessionID,
+		"--args", "--connect",
+		"--args", SessionSocketPath(p.statePath),
 	}
 }
 

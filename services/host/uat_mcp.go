@@ -1,82 +1,83 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"io"
 	"net/url"
 	"os"
 	"path/filepath"
+	"time"
 
 	hostuat "pix/host/uat"
-	"pix/host/workflow/uat"
 )
 
+// uatConnectAttempts/uatConnectDelay bound how long the gateway relay waits
+// for pix-host uat-worker's socket to appear. The worker is a separate
+// process `pix run --dev` starts once the sandbox's session directory exists
+// (docs/design/self-development-uat.md); a short race with sandbox/session
+// startup is expected, an absent worker after this bound is not.
+const (
+	uatConnectAttempts = 15
+	uatConnectDelay    = 200 * time.Millisecond
+)
+
+// runUatMcp is `pix-host uat-mcp`, the process the sbx gateway spawns per MCP
+// client connection. It is a DUMB stdio<->Unix-socket relay and nothing else:
+// it must never construct a UAT Runner or execute a host command, because
+// gateway-spawned ancestry does not carry the operator's authenticated
+// sbx/docker/browser context (docs/design/self-development-uat.md). That
+// authority lives entirely in `pix-host uat-worker`, started later by
+// `pix run --dev` so it inherits that context. TestUatMcpGatewayIsADumbRelay
+// pins that this file can never import os/exec or pix/host/workflow/uat
+// again.
 func runUatMcp(args []string) error {
 	fs := flag.NewFlagSet("uat-mcp", flag.ContinueOnError)
-	// We want to return an error instead of exiting, but ContinueOnError will just return err.
-	// But usage should not os.Exit either.
-	fs.SetOutput(io.Discard) // Handle usage manually or don't print
+	fs.SetOutput(io.Discard)
 
-	repo := fs.String("repo", "", "absolute path to the repo")
-	state := fs.String("state", "", "absolute path to the state directory")
-	session := fs.String("session", "", "strict session identifier")
+	connect := fs.String("connect", "", "absolute path to the session's UAT worker Unix socket")
 
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-
-	if *repo == "" || !filepath.IsAbs(*repo) {
-		return fmt.Errorf("uat-mcp: --repo is required and must be absolute")
+	if *connect == "" || !filepath.IsAbs(*connect) {
+		return fmt.Errorf("uat-mcp: --connect is required and must be an absolute Unix socket path")
 	}
-	if *state == "" || !filepath.IsAbs(*state) {
-		return fmt.Errorf("uat-mcp: --state is required and must be absolute")
-	}
-	if *session == "" {
-		return fmt.Errorf("uat-mcp: --session is required")
-	}
-
-	if err := hostuat.ValidateID(*session); err != nil {
-		return fmt.Errorf("uat-mcp: invalid session: %w", err)
-	}
-
-	if st, err := os.Stat(*repo); err != nil || !st.IsDir() {
-		return fmt.Errorf("uat-mcp: repo must be an existing directory")
-	}
-	if st, err := os.Stat(*state); err != nil || !st.IsDir() {
-		return fmt.Errorf("uat-mcp: state must be an existing directory")
-	}
-
 	if fs.NArg() > 0 {
 		return fmt.Errorf("uat-mcp: unknown arguments: %v", fs.Args())
 	}
 
-	execAdapter := uat.NewRealExec()
-	gitAdapter := uat.NewRealGit(*repo, execAdapter)
-	sandboxAdapter := uat.NewRealSandbox(execAdapter)
-
-	hostBin, err := os.Executable()
+	conn, err := hostuat.DialSocket(*connect, uatConnectAttempts, uatConnectDelay)
 	if err != nil {
-		return fmt.Errorf("uat-mcp: failed to get executable path: %w", err)
+		return fmt.Errorf("uat-mcp: %w", err)
 	}
+	defer conn.Close()
 
-	browserFactory := uat.NewRealBrowserFactory()
-	mcpAdapter := uat.NewRealMCP(hostBin, *state, execAdapter, browserFactory)
-	imageAdapter := uat.NewRealImage(execAdapter)
-	leaseAdapter := uat.NewRealLease(*state, execAdapter)
+	return relayBytes(os.Stdin, os.Stdout, conn)
+}
 
-	runner, err := uat.NewRunner(hostBin, *repo, *state, gitAdapter, execAdapter, sandboxAdapter, mcpAdapter, imageAdapter, leaseAdapter, 1)
-	if err != nil {
-		return fmt.Errorf("uat-mcp: failed to initialize runner: %w", err)
-	}
-	retryReport := runner.RetryCleanups()
-
-	mcpServer := uat.NewMCPServer(runner, browserFactory, *state, os.Stdin, os.Stdout, retryReport)
-	if err := mcpServer.Serve(context.Background()); err != nil {
-		return fmt.Errorf("uat-mcp server failed: %w", err)
-	}
-	return nil
+// relayBytes copies bytes bidirectionally between the local stdio pair (in,
+// out — how sbx's gateway wires this process to the MCP client) and conn (the
+// connected uat-worker socket), stopping once either direction reaches EOF or
+// errors. It has zero knowledge of the MCP protocol carried inside: a pure
+// byte relay is the entire point of this process.
+func relayBytes(in io.Reader, out io.Writer, conn io.ReadWriteCloser) error {
+	done := make(chan error, 2)
+	go func() {
+		_, err := io.Copy(conn, in)
+		if cw, ok := conn.(interface{ CloseWrite() error }); ok {
+			_ = cw.CloseWrite()
+		}
+		done <- err
+	}()
+	go func() {
+		_, err := io.Copy(out, conn)
+		done <- err
+	}()
+	first := <-done
+	_ = conn.Close()
+	<-done
+	return first
 }
 
 func runUatBrowserCaptureShim(args []string) error {

@@ -16,9 +16,8 @@ func TestMCPPlanner(t *testing.T) {
 		"mcp", "add", "mcp-server",
 		"--command", "/usr/local/bin/pix-host",
 		"--args", "uat-mcp",
-		"--args", "--repo", "--args", "/repo",
-		"--args", "--state", "--args", "/state",
-		"--args", "--session", "--args", "session-id",
+		"--args", "--connect",
+		"--args", "/state/uat.sock",
 	}
 
 	if len(cmd) != len(expected) {
