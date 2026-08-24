@@ -106,6 +106,21 @@ type Config struct {
 	// "overlord"), resolved through the router when neither --model nor --intent.
 	RunIntent string `toml:"run_intent,omitempty"`
 
+	// Environment is the machine default environment NAME (Story 1, native
+	// sandbox environments — docs/design/environments.md §5.3), resolved
+	// against Environments. Empty = no registered default. `pix env use` is
+	// the ONLY writer; `pix config set/unset` refuses this key outright (see
+	// provision.environmentKeyRefusal).
+	Environment string `toml:"environment,omitempty"`
+
+	// Environments is the registered name -> CANONICAL ABSOLUTE local
+	// directory path index. `pix env add`/`pix env forget` are the only writers;
+	// AddEnvironment canonicalizes (expanding a leading ~, then making the
+	// result absolute and clean) before a value is ever assigned here, so
+	// Save() never persists anything else. A hand-edited noncanonical entry
+	// is dropped on Load, fail closed (see applyDefaults).
+	Environments map[string]string `toml:"environments,omitempty"`
+
 	// Inference describes WHERE catalog models can be called: user/pack-owned
 	// backend wiring and model-id bindings only, never model identity or secrets.
 	Inference InferenceConfig `toml:"inference,omitempty"`
@@ -461,6 +476,51 @@ func (c *Config) applyDefaults() {
 		}
 		c.Plugins = map[string]PluginSpec{}
 		sort.Strings(c.unknownKeys)
+	}
+	c.dropNoncanonicalEnvironments()
+}
+
+// dropNoncanonicalEnvironments fails closed on a hand-edited (or otherwise
+// corrupted) `[environments]` entry: AddEnvironment is the only writer Save()
+// ever exercises, and it never persists anything but a canonical absolute
+// path, so a `~`-bearing or relative value can only have reached the file by
+// hand. It is dropped rather than trusted as a local root, and recorded in
+// unknownKeys — the same "tell them" contract a retired [plugins.*] slot
+// gets — so the user sees why their edit had no effect. A default naming a
+// dropped (or never-registered) name resolves to no default rather than a
+// dangling selection.
+func (c *Config) dropNoncanonicalEnvironments() {
+	if len(c.Environments) == 0 {
+		if c.Environment != "" {
+			c.Environment = ""
+		}
+		return
+	}
+	seen := map[string]bool{}
+	for _, k := range c.unknownKeys {
+		seen[k] = true
+	}
+	kept := make(map[string]string, len(c.Environments))
+	dropped := false
+	for name, path := range c.Environments {
+		if isCanonicalEnvironmentPath(path) {
+			kept[name] = path
+			continue
+		}
+		dropped = true
+		if key := "environments." + name; !seen[key] {
+			c.unknownKeys = append(c.unknownKeys, key)
+			seen[key] = true
+		}
+	}
+	c.Environments = kept
+	if dropped {
+		sort.Strings(c.unknownKeys)
+	}
+	if c.Environment != "" {
+		if _, ok := c.Environments[c.Environment]; !ok {
+			c.Environment = ""
+		}
 	}
 }
 

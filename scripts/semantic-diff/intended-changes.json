@@ -1,1 +1,15 @@
-[]
+[
+  {
+    "id": "config-keys.top-level.surface",
+    "rationale": "E1.5 (Story 1, native sandbox environments, docs/design/environments.md §5.3) adds two real top-level config.toml keys: `environment` (the machine default environment NAME) and `environments` (the name -> canonical absolute local path registry). Both have no hand-edit path at all — `pix config set/unset` refuses them outright and names the correct `pix env` command (workflow/provision/config.go's environmentKeyRefusal); `pix env use`/`pix env add`/`pix env rm` (Wave C) are the only writers.",
+    "evidence": "services/host/config/config.go (Config.Environment / Config.Environments, applyDefaults' dropNoncanonicalEnvironments); services/host/config/environment.go (CanonicalEnvironmentPath/AddEnvironment/RemoveEnvironment/UseEnvironment); services/host/workflow/provision/config.go (environmentKeyRefusal); services/host/config/environment_test.go; services/host/workflow/provision/config_environment_test.go; services/host/cmd/pix/config_environment_cmd_test.go",
+    "changes": [
+      {
+        "file": "services/host/config/config.go",
+        "kind": "set",
+        "from": ["services", "mcp", "memory_watcher_model", "memory_embed_model", "memory_capture", "ollama_bridge_model", "run_intent", "inference"],
+        "to": ["services", "mcp", "memory_watcher_model", "memory_embed_model", "memory_capture", "ollama_bridge_model", "run_intent", "inference", "environment", "environments"]
+      }
+    ]
+  }
+]
