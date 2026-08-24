@@ -160,6 +160,16 @@ var pkgLayer = map[string]int{
 	// `yaml:"schemaVersion"` for this schema; see
 	// TestOnlyEnvinfoDecodesNativeEnvYAML below.
 	"envinfo": layerCapability,
+	// recreatelog is E1.6's local-only bounded diagnostic log of environment
+	// recreate-boundary drift (docs/design/environments.md section 10.2):
+	// timestamp, environment name, and canonical changed key paths only, never
+	// facet values, credential names, argv, or a path outside the environment
+	// root (see its doc.go). It has NO L1 siblings in the load-bearing sense —
+	// it imports nothing from this module at all (recreatelog/guard_test.go's
+	// F10 pins that from inside the package too) and nothing else in L1 imports
+	// it; wiring it into a reader (doctor or otherwise) is explicitly deferred
+	// past this unit.
+	"recreatelog": layerCapability,
 
 	// supervise sits ABOVE the capabilities on purpose: it is the process
 	// lifecycle that RUNS one (plugin), not a domain of its own. Filing it at L1
