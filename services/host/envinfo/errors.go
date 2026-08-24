@@ -19,6 +19,25 @@ var ErrUnsupportedSchemaVersion = errors.New("envinfo: unsupported schemaVersion
 // two entries both claim. BuildTree refuses to guess which one wins.
 var ErrDuplicateIdentity = errors.New("envinfo: duplicate identity")
 
+// ErrTrailingDocument is wrapped into a %w-formatted error naming the exact
+// document source when a `.sbxenv.yaml` file authors more than one YAML
+// document (a second `---`-separated document, even an empty one, a
+// host-exec payload, or a second copy of `value`/`ref`/`command` fields).
+// Only the first document is ever decoded; a strict parser that silently
+// stops at the first document without checking for EOF right after would
+// let a reviewer approve one document while a second, unreviewed one rides
+// along in the same file undetected.
+var ErrTrailingDocument = errors.New("envinfo: trailing YAML document")
+
+// ErrAmbiguousKitReference is wrapped into a %w-formatted error naming the
+// exact `kits[<i>]` entry that contains a colon but does not match a
+// recognized URL scheme (`scheme://...`) — the scp-style shorthand git
+// itself accepts (`git@host:path`, `host:path`) and any other bare
+// colon-bearing reference. resolveLocalKits (parse.go) refuses to guess
+// which of "local path" or "remote reference" was meant; the author must
+// use an explicit scheme or a plain local path instead.
+var ErrAmbiguousKitReference = errors.New("envinfo: ambiguous kit reference")
+
 // ErrEmptyBindingDomains is wrapped into a %w-formatted error naming the
 // exact `bindings.<service>.apiKey.domains` key path a service declared
 // with an effective, post-merge domain list of zero. A binding that can
