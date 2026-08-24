@@ -75,11 +75,114 @@ const (
 
 const SbxMinVersion = "0.39.0"
 
-// versionish matches the dotted numeric run a real `--version` banner
-// carries — one or more `.NNN` groups after the first `major.minor`, so
-// "0.38.2" is captured whole rather than truncated to "0.38". It is the
-// difference between "the tool answered" and "something printed bytes".
-var versionish = regexp.MustCompile(`[0-9]+\.[0-9]+(?:\.[0-9]+)*`)
+// sbxVersionNumber matches the dotted numeric run at the heart of a real sbx
+// version string: an optional "v" prefix (the observed `sbx version: v0.39.0
+// <hash>` fallback banner, docs/upstream/sbx-0.39-environments.md), then two
+// or more dot-separated integer components. Component COUNT is deliberately
+// permissive — "0.39" (partial) and "0.39.0.1" (an extra trailing
+// component) both parse whole, because sbx's dotted-version grammar has
+// never been pinned to exactly three components anywhere this repo has
+// observed it — but WHERE it may appear is not: see sbxVersionLabeled and
+// sbxVersionOnly below, the only two contexts this file trusts as an actual
+// version answer rather than an arbitrary dotted number occurring elsewhere
+// in chattier output (a Go build banner, a commit hash).
+const sbxVersionNumber = `v?([0-9]+(?:\.[0-9]+)+)`
+
+// sbxVersionSuffix matches a prerelease/build tag glued directly onto the
+// version number with no intervening space — "-rc1", ".beta2", "rc1" — so
+// "sbx version 0.39.0-rc1 (unstable)" reads the tag as part of the version
+// rather than losing it to a bare digit-run match. It must start with a
+// letter: a fourth numeric component ("0.39.0.1") is not a suffix, it is
+// more of the version number itself — sbxVersionNumber already consumed it.
+const sbxVersionSuffix = `([-.]?[A-Za-z][A-Za-z0-9.]*)?`
+
+// sbxVersionOnly recognizes the one unlabeled shape this parser trusts: the
+// ENTIRE trimmed output is a version and nothing else, for a build whose
+// exact `--version`/`version` grammar prints the bare number with no banner
+// at all. Anything else unlabeled — a bare number buried in chattier text,
+// a Go build banner's "go1.21.5" — is deliberately not trusted: guessing
+// which number in multi-line noise is the real one is exactly the "first
+// dotted numeric substring" bug this parser replaces.
+var sbxVersionOnly = regexp.MustCompile(`^` + sbxVersionNumber + sbxVersionSuffix + `$`)
+
+// sbxVersionLabeled recognizes a version explicitly INTRODUCED by the word
+// "version" — optionally scoped by an immediately preceding "sbx" (the real
+// `sbx version: v0.39.0 <hash>` banner and the fixtures' `sbx version
+// 0.39.0`), optionally followed by a colon (the real banner's exact
+// spelling), then the version number and its optional suffix. Capture group
+// 1 is the "sbx " scope (empty when absent), group 2 the numeric version,
+// group 3 the suffix.
+var sbxVersionLabeled = regexp.MustCompile(`(?i)(sbx\s+)?version:?\s+` + sbxVersionNumber + sbxVersionSuffix)
+
+// sbxVersionMatch is one recognized version answer: the numeric part alone
+// (used for the min-version compare), the exact text as seen including any
+// suffix (used for Detail/evidence so a prerelease tag is never silently
+// dropped), and whether that suffix means the release is not "explicitly
+// known stable".
+type sbxVersionMatch struct {
+	number     string
+	raw        string
+	prerelease bool
+}
+
+func newSbxVersionMatch(number, suffix string) sbxVersionMatch {
+	return sbxVersionMatch{number: number, raw: number + suffix, prerelease: suffix != ""}
+}
+
+// parseSbxVersion is the one honest reading of an sbx version probe's raw
+// output: a version is trusted ONLY when it is either the entire (trimmed)
+// output on its own, or explicitly introduced by the word "version" — never
+// a dotted number picked out of chattier text on the theory that it looked
+// close enough. That is the fix for the low finding this replaces: a bare
+// "first dotted numeric substring" scan reads "built with go 1.21.5 ...
+// sbx version 0.38.2" as "1.21.5" — comfortably past SbxMinVersion — and
+// fails OPEN on a too-old sbx, exactly backwards from this package's
+// fail-closed model.
+//
+// When the labeled form finds more than one candidate and they disagree, or
+// an unlabeled scan (no "sbx" scope present at all) turns up more than one,
+// that is ambiguous chatter, not a version: it fails closed exactly like
+// output with no version at all, because guessing which of several numbers
+// is the real one is the same failure mode with extra steps. An explicit
+// "sbx version" match always wins over a bare "version" match elsewhere in
+// the same output — a Go build banner's "go version go1.21.5" never carries
+// the "sbx" scope, so it never even competes.
+//
+// A version whose text carries anything after the dotted number itself (a
+// "-rc1"/"beta2"/etc. build tag with no space before it) is reported with
+// prerelease=true: the fail-closed prerelease policy trusts as "explicitly
+// known stable" only a bare release number, never a tagged one, regardless
+// of what the tag itself says.
+func parseSbxVersion(out string) (sbxVersionMatch, bool) {
+	if trimmed := strings.TrimSpace(out); trimmed != "" {
+		if m := sbxVersionOnly.FindStringSubmatch(trimmed); m != nil {
+			return newSbxVersionMatch(m[1], m[2]), true
+		}
+	}
+	all := sbxVersionLabeled.FindAllStringSubmatch(out, -1)
+	if len(all) == 0 {
+		return sbxVersionMatch{}, false
+	}
+	var scoped, unscoped [][]string
+	for _, m := range all {
+		if strings.TrimSpace(m[1]) != "" {
+			scoped = append(scoped, m)
+		} else {
+			unscoped = append(unscoped, m)
+		}
+	}
+	candidates := scoped
+	if len(candidates) == 0 {
+		candidates = unscoped
+	}
+	first := candidates[0]
+	for _, m := range candidates[1:] {
+		if m[2] != first[2] || m[3] != first[3] {
+			return sbxVersionMatch{}, false
+		}
+	}
+	return newSbxVersionMatch(first[2], first[3]), true
+}
 
 // sbxUnparsableDetail is SbxProbe's own Detail wording for a version reply
 // that ran to completion but carried no recognizable version at all. It is a
@@ -219,24 +322,32 @@ func sbxProbeResult(name string, o execOutcome, usedFallback bool) Result {
 	case o.timedOut || o.failed:
 		return unknownExec(name, o, "sbx --version")
 	}
-	v := versionish.FindString(o.out)
-	if v == "" {
+	match, ok := parseSbxVersion(o.out)
+	if !ok {
 		return Result{Name: name, Status: StatusUnknown, Detail: sbxUnparsableDetail,
 			Evidence: "sbx --version printed no version"}
 	}
-	evidence := "sbx --version = " + v
+	evidence := "sbx --version = " + match.raw
 	if usedFallback {
-		evidence = "sbx version = " + v + " (fell back from --version, which this sbx build rejected)"
+		evidence = "sbx version = " + match.raw + " (fell back from --version, which this sbx build rejected)"
+	}
+	// A prerelease/build-tagged answer is never "explicitly known stable":
+	// fail closed on it exactly like a too-old version, regardless of what its
+	// numeric part alone would say, and regardless of what the tag itself
+	// reads as.
+	if match.prerelease {
+		return Result{Name: name, Status: StatusAbsent, Detail: match.raw, Fix: SbxUpgradeFix,
+			Evidence: evidence + "; a prerelease/build-tagged version is not treated as a stable release"}
 	}
 	// Native environments require SbxMinVersion or later (PRD section 4/5.6,
 	// AC-20): a version that answered and parsed cleanly, but is too old, is a
 	// VERIFIED gap with its own exact fix — distinct from SbxInstallFix, which
 	// repairs a missing binary, not an old one.
-	if !sbxVersionAtLeast(v, SbxMinVersion) {
-		return Result{Name: name, Status: StatusAbsent, Detail: v, Fix: SbxUpgradeFix,
+	if !sbxVersionAtLeast(match.number, SbxMinVersion) {
+		return Result{Name: name, Status: StatusAbsent, Detail: match.number, Fix: SbxUpgradeFix,
 			Evidence: evidence + fmt.Sprintf("; native environments require %s or later", SbxMinVersion)}
 	}
-	return Result{Name: name, Status: StatusReady, Detail: v, Evidence: evidence}
+	return Result{Name: name, Status: StatusReady, Detail: match.number, Evidence: evidence}
 }
 
 // sbxVersionAtLeast reports whether v (a dotted version SbxProbe already
