@@ -337,8 +337,8 @@ backend = "anthropic"
 upstream_id = "claude-sonnet-5"
 ```
 
-`pix env add|rm` are the only writers of `[environments]`. `pix env use` is the
-only writer of `environment`. Input may use `~`, but Pix persists only canonical
+`pix env add|forget` are the only writers of `[environments]`. `pix env use` is
+the only writer of `environment`. Input may use `~`, but Pix persists only canonical
 absolute paths. `pix config set` refuses these keys and names the correct env
 command, preserving the trust gate.
 
@@ -370,7 +370,8 @@ registered server enters a sandbox.
 
 1. `pix run --env NAME`
 2. `config.toml` `environment`
-3. no registered environment
+3. `none`: no environment is registered or selected, and Pix launches with its
+   own built-in defaults
 
 A workspace `.sbxenv.yaml` is never selected automatically. If one exists, Pix
 may print a single hint, but it launches without it until the user runs
@@ -385,11 +386,17 @@ sbx env create <state>/environments/<sandbox-name>/effective.sbxenv.yaml
 sbx exec -it <sandbox-name> -- pi <exact invocation>
 ```
 
-The leaf environment adapter parses the authored file, resolves local relative
-paths against its source directory, applies documented sbx merge semantics, and
-adds only Pix-owned runtime facts:
+Sandbox identity is attributed before composition: the adapter first computes
+the canonical `pix-*` sandbox name from the workspace and the selected
+environment name, independent of anything the authored files declare. That
+pre-composition identity names the effective file and every later probe;
+composition never determines identity, it only fills in the file identity
+already names.
 
-- canonical `pix-*` sandbox name
+The leaf environment adapter then parses the authored file, resolves local
+relative paths against its source directory, applies documented sbx merge
+semantics, and adds only Pix-owned runtime facts:
+
 - pinned Pix template and `pullPolicy: missing`
 - workspace in object form, including clone choice
 - unconditional personal-context additional workspace
@@ -405,7 +412,8 @@ positive absent probe. Create and remove always use this same path. The adapter
 is the only package that knows native environment grammar; it does not revive a
 second authored schema.
 
-With no selected environment, the effective file is generated from Pix defaults.
+With environment selection resolved to `none`, the effective file is generated
+from Pix's built-in defaults.
 First-run `pix run` remains possible without teaching environments during setup.
 Story 0 proves relative paths, `${VAR}` and `${VAR:-default}` interpolation,
 custom-agent selection, and candidate-image behavior before this adapter lands.
@@ -487,12 +495,15 @@ pix env ls [--json]
 pix env add NAME [PATH] [--yes]
 pix env use NAME
 pix env show [NAME] [--json] [--path]
-pix env edit [NAME] [--sbxenv]
+pix env edit NAME pix|sbxenv
 pix env review NAME [--yes]
-pix env rm NAME [--force]
+pix env forget NAME [--force]
 
 pix run [DIR] [--env NAME] [--model ID]
 ```
+
+Seven verbs, no more: `ls`, `add`, `use`, `show`, `edit`, `review`, `forget`.
+`pix env rm` is not one of them; see the refusal below.
 
 ### 8.1 Command behavior
 
@@ -505,12 +516,19 @@ pix run [DIR] [--env NAME] [--model ID]
   registration, or probing. An unreviewed environment is refused.
 - `show` displays authored environment and Pix facts. `--path` prints only the
   canonical root.
-- `edit` opens `pix.toml`; `--sbxenv` opens the native file. It validates after
-  the editor exits and reports whether `review` is required.
+- `edit NAME pix|sbxenv` takes an exact positional enum, not a flag: `pix`
+  opens `pix.toml`, `sbxenv` opens the native file. It validates after the
+  editor exits and reports whether `review` is required.
 - `review` reruns the host bill-of-materials gate after an intentional local or
   Git change.
-- `rm` unregisters but never deletes the environment directory. It refuses the
-  default or a live holder unless the explicit force contract permits it.
+- `forget NAME` unregisters the alias and never deletes the environment
+  directory: the source is untouched. It refuses the default or a live holder
+  unless the explicit force contract permits it.
+- `pix env rm` performs no action. It is a pointer error that names three
+  distinct things a user may actually want, so the wrong one is never removed
+  by accident: the **sandbox** (`pix rm SANDBOX`), the **source** directory on
+  disk (Pix never deletes it; remove it yourself), and the **registration**
+  (`pix env forget NAME`).
 
 Names are exact. Only `add` accepts a path. There is no fuzzy or prefix action.
 `pix reset` renames scaffolded environment sources with the data directory and
@@ -532,11 +550,18 @@ pix: environment "work" changed what it runs on your host.
 ```text
 pix: sandbox pix-repo-home was created with environment "home".
      create-time environment state differs.
-     create the work environment: pix run --env work --name pix-repo-work
+     recreate it: pix rm pix-repo-home && pix run --env home
 ```
 
-`pix setup` does not require an environment. Environments are progressive
-disclosure for users who want a named context beyond the working default.
+```text
+pix: "env rm" is not a command.
+     remove the sandbox:   pix rm pix-repo-home
+     unregister the alias: pix env forget home
+     delete the source directory yourself; pix never deletes it
+```
+
+`pix setup` does not require an environment and never walks `pix env` commands
+inline. When environments are relevant it points only to `pix help env`.
 
 ## 9. Trust and credentials
 
@@ -618,10 +643,10 @@ Ordinary sandbox teardown never removes host-global MCP registrations or
 credential bindings. Pix never passes `--prune-bindings` on an automatic path;
 that flag deletes complete shared binding entries and can break other sandboxes.
 Only a future explicit named command may expose it, with the shared-binding
-warning and a positive post-mutation probe. `pix env rm` unregisters the alias,
-not shared upstream state. Explicit review/reconciliation and `pix reset` own
-safe cleanup. UAT/session-owned registrations remain scoped and cleaned by their
-existing lease.
+warning and a positive post-mutation probe. `pix env forget` unregisters the
+alias, not shared upstream state. Explicit review/reconciliation and
+`pix reset` own safe cleanup. UAT/session-owned registrations remain scoped and
+cleaned by their existing lease.
 
 ### 9.3 Failed creation
 
@@ -638,6 +663,12 @@ secrets are removed, while bindings and MCP registrations survive. If create
 failed before a receipt, Pix fails closed and reports possible residue instead
 of risking another sandbox. The next run and orphan sweep use the create intent
 to diagnose partial state without guessing.
+
+Pix retains at most 100 create-intent records, evicting the oldest first, so
+this diagnostic list can never grow unbounded on a host that fails creation
+repeatedly. `pix doctor` stays silent when zero records are pending, prints one
+summary line when any are pending (for example, `3 pending environment
+recreates`), and defers every per-record detail to `pix doctor --recreates`.
 
 ## 10. Lifecycle
 
@@ -812,7 +843,8 @@ Changes:
 - add a leaf native-env parser/renderer package isolated from Pix workflows
 - add strict `pix.toml` parsing and model/host metadata validation
 - add config environment index/default fields
-- add `pix env ls|add|use|show|edit|review|rm`
+- add `pix env ls|add|use|show|edit|review|forget`; `pix env rm` is refused
+  with a pointer error naming the sandbox, source, and registration
 - gate `pix run` and `doctor` on a positively parsed sbx version `>= 0.39.0`;
   unknown fails closed with an exact upgrade instruction
 - lift canonical identity, trust store, fingerprint, atomic write, and lock
@@ -829,7 +861,7 @@ Acceptance:
 - environment roots inside writable workspaces or through symlinks are refused
 - dangerous changes require review; names never transfer acceptance
 - `use` changes only the default field
-- `rm` never deletes source files
+- `forget` never deletes source files; `pix env rm` performs no action
 - host trust review lists every authored `${VAR}` reference by source
   variable and destination field, never a resolved value; the creation
   fingerprint records each interpolated field as expression plus keyed
@@ -1013,7 +1045,7 @@ repeat this estimate as fact.
 
 ### Golden
 
-- no environment
+- `none`: no environment registered or selected
 - scaffolded home environment
 - environment with native remote and local MCP
 - private exclusive custom backend
@@ -1040,8 +1072,8 @@ repeat this estimate as fact.
 - no launch-time config save
 - one package owns native sbx env grammar
 - one generated file owns Pi models and roster
-- composed effective name equals the recorded `pix-*` sandbox name before create
-  or remove
+- the pre-composition `pix-*` sandbox name equals the recorded name before
+  create or remove
 - local Ollama table contains no price, accuracy, or routing fields
 - `uat-mcp` stays dev-only and absent from host MCP listing
 - docs command/config enumerations match generated help

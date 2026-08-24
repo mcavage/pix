@@ -146,6 +146,64 @@ const RETIRED_ON_PURPOSE = [
 	{ file: "AGENTS.md", verb: "loaded", says: /deleted it/ },
 ];
 
+// docs/design/** is excluded from SURFACES above because it is mostly HISTORY:
+// a record of what changed and why, where naming a removed verb is correct
+// prose. `docs/design/environments.md` is the one design doc that is not pure
+// history: its "CLI contract" section (§8) and adjoining precedence/lifecycle
+// prose are the LIVE spec for the not-yet-implemented `pix env` surface, and
+// three drafting rounds left it internally inconsistent with itself — a
+// `pix env rm` that both "unregisters" (§8.1) and is later described as
+// upstream sandbox+credential removal (§4), a `--sbxenv` flag next to a spec
+// that also wants an exact positional enum, and a recreate example that still
+// carried a deleted `--name` flag. None of that is catchable by the kong-tree
+// walk above (the verb does not exist in Go yet), so this checks the live
+// sections against the reconciled design directly: presence of the corrected
+// surface, and absence of the stale one.
+test("docs/design/environments.md's live env-verb spec carries no stale references", () => {
+	const doc = read("docs/design/environments.md");
+
+	// Stale forms that a prior drafting round left behind. Each must be gone
+	// from the live spec now that `forget` replaces the unregister half of `rm`
+	// and `rm` itself is a pointer error, not a working verb.
+	const stale = [
+		[/pix env rm NAME \[--force\]/, "the old CLI-contract line still lists `rm` as a working verb"],
+		[/--sbxenv/, "the old `--sbxenv` flag is still documented instead of the `pix|sbxenv` positional enum"],
+		[/--name pix-repo-work/, "the recreate example still carries the deleted `--name` flag"],
+		[/no registered environment\n/, "env-selection precedence still leaves the no-environment case unnamed instead of calling it `none`"],
+	];
+	for (const [pattern, why] of stale) {
+		assert.doesNotMatch(doc, pattern, `docs/design/environments.md: ${why}`);
+	}
+
+	// Corrected forms the reconciled design must state.
+	const required = [
+		[/pix env forget NAME \[--force\]/, "the CLI contract must list `forget`, not `rm`, as the unregister verb"],
+		[/pix env edit NAME pix\|sbxenv/, "`edit` must take the exact `pix|sbxenv` positional enum"],
+		[/pix rm \S+ && pix run --env \S+/, "the recreate command must be `pix rm NAME && pix run --env ENV`, with no `--name`"],
+		[/`none`/, "the no-environment case must be named `none`"],
+		[/pix env rm.{0,80}(sandbox|source|registration)/s, "`pix env rm` must be documented as a pointer error naming sandbox/source/registration"],
+		[/pix help env/, "setup must point only to `pix help env`, not walk `pix env` commands inline"],
+		[/at most 100 create-intent records/, "the create-intent list must be capped at 100 entries"],
+		[/pix doctor --recreates/, "per-record recreate detail must be behind `pix doctor --recreates`"],
+		[/pre-composition/, "sandbox identity must be attributed pre-composition, not injected as a post-parse runtime fact"],
+	];
+	for (const [pattern, why] of required) {
+		assert.match(doc, pattern, `docs/design/environments.md: ${why}`);
+	}
+
+	// Exactly seven env verbs, matching the seven Pix jobs pattern this design
+	// already uses elsewhere (§3.2): ls, add, use, show, edit, review, forget.
+	// `rm` is deliberately excluded: it is a refusal, not a verb.
+	const contract = doc.match(/```console\npix env\s+# alias for ls\n([\s\S]*?)```/);
+	assert.ok(contract, "docs/design/environments.md: could not find the `pix env` CLI contract block");
+	const verbs = [...contract[1].matchAll(/^pix env (\S+)/gm)].map((m) => m[1]);
+	assert.deepEqual(
+		verbs,
+		["ls", "add", "use", "show", "edit", "review", "forget"],
+		"docs/design/environments.md: the CLI contract must list exactly these seven env verbs, in order",
+	);
+});
+
 test("every `pix <verb>` in a user- or agent-facing surface names a real verb", () => {
 	const types = verbTree();
 	// The harvest must be a real TREE, or a path check silently degrades into the
