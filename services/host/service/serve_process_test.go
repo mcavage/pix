@@ -24,6 +24,17 @@ import (
 	"pix/host/config"
 )
 
+// idleFixtureLoop is the body of every fixture below whose only job is to STAY
+// ALIVE while a test inspects it from the outside. The BOUND is what makes it
+// safe to orphan one: these children are deliberately detached
+// (spawnDetachedServe) or get reparented whenever `go test` is interrupted or
+// hits its timeout, and an unbounded `while :; do sleep …; done` then forks
+// `sleep` ~20x/sec until the machine reboots — leaked fixtures spinning for
+// days is not hypothetical here. Same reasoning and same shape as
+// awaitRelease in workflow/launch: a bound in ITERATIONS (~200s of wall clock
+// at 4000), far above any wait these tests need and far below "forever".
+const idleFixtureLoop = "i=0\nwhile [ \"$i\" -lt 4000 ]; do i=$((i+1)); sleep 0.05; done\n"
+
 // startProcNamed launches a REAL long-lived process whose argv[0] basename is
 // `name` and whose argv[1] is `arg`, WITHOUT compiling a helper binary: a
 // symlink named `name` pointing at /bin/sh, invoked with a script file called
@@ -49,7 +60,7 @@ func startProcNamed(t *testing.T, name, arg string) (dir string, pid int) {
 	if err := os.Symlink(sh, bin); err != nil {
 		t.Fatalf("symlink %s -> %s: %v", bin, sh, err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, arg), []byte("while :; do sleep 0.05; done\n"), 0o700); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, arg), []byte(idleFixtureLoop), 0o700); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
 	cmd := exec.Command(bin, arg)
@@ -321,7 +332,7 @@ func TestSpawnDetachedServe_RealChildSessionLogAndPidfile(t *testing.T) {
 	if err := os.Symlink(sh, bin); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "serve"), []byte("echo up\nwhile :; do sleep 0.05; done\n"), 0o700); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "serve"), []byte("echo up\n"+idleFixtureLoop), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Chdir(dir) // the child inherits cwd, where its `serve` script lives
