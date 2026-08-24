@@ -136,6 +136,18 @@ var pkgLayer = map[string]int{
 	// not exist on disk yet, so the general down-only scan cannot catch that
 	// import by itself.
 	"uatenvmatrix": layerCapability,
+	// envinfo is Story 1's L1 native-environment capability (docs/design/
+	// environments.md §5.1): strict `.sbxenv.yaml` v1 parsing, upstream's
+	// documented multi-file merge semantics, local relative kit-path
+	// resolution against the SOURCE FILE's own directory, and the
+	// PRE-COMPOSITION semantic tree (stable identity key paths, host-exec
+	// facets, surfaced-never-resolved `${VAR}` interpolation references).
+	// It imports no sibling capability — see envinfo/doc.go — and it takes
+	// no dependency on `sandbox`: a caller supplies any rendered `pix-*`
+	// name itself. It is the ONE package allowed to decode a struct tagged
+	// `yaml:"schemaVersion"` for this schema; see
+	// TestOnlyEnvinfoDecodesNativeEnvYAML below.
+	"envinfo": layerCapability,
 
 	// supervise sits ABOVE the capabilities on purpose: it is the process
 	// lifecycle that RUNS one (plugin), not a domain of its own. Filing it at L1
@@ -365,10 +377,10 @@ func TestArchitecture_SiblingWorkflowRuleIsEnforced(t *testing.T) {
 }
 
 // TestArchitecture_UatenvmatrixNeverImportsEnvinfo is the explicit guard
-// TestArchitecture_ImportsPointDown cannot provide by itself: envinfo (Story
-// 1's L1 `.sbxenv.yaml`/pix.toml capability) does not exist on disk yet, so
-// the general down-only scan has no placement to compare against and would
-// silently accept the import the day someone adds it. Story 0's whole point
+// TestArchitecture_ImportsPointDown cannot provide by itself: even now that
+// envinfo (Story 1's L1 `.sbxenv.yaml` capability) is placed in pkgLayer
+// beside it, the general down-only + sibling rule only forbids an edge
+// BETWEEN two capabilities — it has no opinion on WHY. Story 0's whole point
 // (docs/design/environments.md section 11, ADR-ENV-003) is that uatenvmatrix
 // proves the upstream contract from its OWN literal fixture bytes, never from
 // envinfo's renderer — otherwise an agreement between the two would be a
@@ -384,6 +396,69 @@ func TestArchitecture_UatenvmatrixNeverImportsEnvinfo(t *testing.T) {
 		if imp == "envinfo" || strings.HasPrefix(imp, "envinfo/") {
 			t.Fatalf("uatenvmatrix imports %q; it must prove the upstream contract from its own literal fixtures, never from envinfo's renderer (ADR-ENV-003)", imp)
 		}
+	}
+}
+
+// TestOnlyEnvinfoDecodesNativeEnvYAML (F3) is the import-graph guard the
+// implementation plan asks for: envinfo/document.go is the ONE place in
+// this module allowed to declare a struct field tagged
+// `yaml:"schemaVersion"` — the exact tag a native `.sbxenv.yaml` v1
+// decode target must carry (envinfo/document.go's own Document.SchemaVersion
+// field). A second package growing that tag would be a second, silently
+// diverging native-env parser/loader, which is precisely the "one package
+// owns native sbx env grammar" fitness function docs/design/environments.md
+// section 14 lists. This scans Go SOURCE TEXT rather than only import
+// edges, because uatenvmatrix's own fixtures.go legitimately contains the
+// literal bytes `schemaVersion:` inside hand-authored YAML string
+// constants (never a struct tag) — a decode-target guard must tell
+// "declares a field for this" apart from "embeds these bytes as data",
+// which an import-graph check alone cannot.
+func TestOnlyEnvinfoDecodesNativeEnvYAML(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const tag = `yaml:"schemaVersion"`
+	var offenders []string
+	scanned := 0
+	err = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if name := d.Name(); name == "testdata" || strings.HasPrefix(name, ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		rel, _ := filepath.Rel(root, path)
+		rel = filepath.ToSlash(rel)
+		if rel == "envinfo/document.go" {
+			return nil
+		}
+		content, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		scanned++
+		if strings.Contains(string(content), tag) {
+			offenders = append(offenders, rel)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scanned < 50 {
+		t.Fatalf("walk scanned only %d production .go files; that is implausibly few and means this guard is scanning nothing", scanned)
+	}
+	sort.Strings(offenders)
+	if len(offenders) > 0 {
+		t.Fatalf("only services/host/envinfo/document.go may declare a %s struct field; also found in: %v\n"+
+			"envinfo is the one package that decodes native `.sbxenv.yaml` — see envinfo/doc.go", tag, offenders)
 	}
 }
 
