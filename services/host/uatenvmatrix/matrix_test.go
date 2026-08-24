@@ -97,6 +97,39 @@ func TestRun_MissingCandidateBinaryFailsClosed(t *testing.T) {
 // still live).
 const successfulFixtureNames = "pix-uatenv-fixture-0 pix-uatenv-fixture-image pix-uatenv-fixture-recreate pix-uatenv-fixture-ollama"
 
+// successfulFixtureNamesJSON renders successfulFixtureNames as a minimal
+// `sbx ls --json` body: a bare array of rows, each reporting "running", one
+// per fixture name. environment_create_then_exec_invocation's own bounded
+// poll (pollForRunningInstance) now parses this as JSON before proceeding to
+// exec, so the fake `ls` response must be schema-usable JSON, not merely a
+// substring cleanupCreatedFixture's own fresh probe can find its expected
+// name inside of (which this JSON also still satisfies, since every name
+// still appears verbatim).
+// echoProbeFakeResponse answers environment_create_then_exec_invocation's
+// actual transport probe (`sbx exec -i <name> -- sh -c <script> sh
+// <intended...>`): it echoes back everything after the fixed 8-element
+// `exec -i <name> -- sh -c <script> sh` prefix, one per line, exactly the
+// way a real POSIX shell running echoProbeScript would. environment_custom_
+// agent_ollama's own `exec` call (check_custom_agent_ollama.go) also lands
+// here, but that check only ever inspects the returned ERROR (nil here),
+// never this stdout, so echoing its differently-shaped argv back is inert.
+func echoProbeFakeResponse(args []string) string {
+	const prefixLen = 8
+	if len(args) <= prefixLen {
+		return ""
+	}
+	return strings.Join(args[prefixLen:], "\n") + "\n"
+}
+
+func successfulFixtureNamesJSON() string {
+	names := strings.Fields(successfulFixtureNames)
+	rows := make([]string, len(names))
+	for i, n := range names {
+		rows[i] = fmt.Sprintf(`{"name":%q,"status":"running"}`, n)
+	}
+	return "[" + strings.Join(rows, ",") + "]"
+}
+
 // successfulExecutor answers every command this package's checks (and their
 // shared cleanupCreatedFixture teardown) can issue, keyed on ARGV SHAPE, not
 // on guessing from fixture content — the deterministic success path,
@@ -124,8 +157,11 @@ func successfulExecutor() *fakeExecutor {
 		if call.name == "docker" {
 			return fakeCandidateDigest + "\n", "", nil
 		}
+		if len(call.args) > 0 && call.args[0] == "exec" {
+			return echoProbeFakeResponse(call.args), "", nil
+		}
 		if len(call.args) > 0 && call.args[0] == "ls" {
-			return successfulFixtureNames + "\n", "", nil
+			return successfulFixtureNamesJSON() + "\n", "", nil
 		}
 		if len(call.args) > 1 && call.args[0] == "env" && call.args[1] == "rm" {
 			return "removed\n", "", nil
@@ -134,7 +170,7 @@ func successfulExecutor() *fakeExecutor {
 			fixturePath := call.args[len(call.args)-1]
 			switch filepath.Base(fixturePath) {
 			case "authored.sbxenv.yaml":
-				return "created pix-uatenv-fixture-0 (positively identified) image digest: " + fakeCandidateDigest + "\n", "", nil
+				return "created pix-uatenv-fixture-0 (positively identified) kit ./kit image digest: " + fakeCandidateDigest + "\n", "", nil
 			case "candidate-image.sbxenv.yaml":
 				return "created pix-uatenv-fixture-image (positively identified) image digest: " + fakeCandidateDigest + "\n", "", nil
 			case "recreate-boundary.sbxenv.yaml":
@@ -186,20 +222,22 @@ func TestRun_EnvironmentCreateThenExecInvocation_Success(t *testing.T) {
 	// Run() now executes all six registered checks, each of the four that
 	// creates a real fixture instance also running its own receipt-gated
 	// cleanup (a fresh `sbx ls --json` probe, then `sbx env rm -f <path>`):
-	// this check's own create+exec+probe+remove calls (calls[0..3]),
+	// this check's own create+poll+probe+cleanup-probe+remove calls
+	// (calls[0..4] — one extra call versus its siblings, the bounded
+	// pre-exec poll for a positively identified running row),
 	// environment_uses_local_candidate_image's docker-inspect+create+probe+remove
-	// calls (calls[4..7]), environment_recreate_boundary's baseline+drifted
+	// calls (calls[5..8]), environment_recreate_boundary's baseline+drifted
 	// create calls plus its one cleanup probe+remove pair keyed on the
-	// baseline's own receipt (calls[8..11]), environment_failed_create_cleanup's
+	// baseline's own receipt (calls[9..12]), environment_failed_create_cleanup's
 	// single failed create call with no cleanup calls at all — no receipt,
-	// no removal authority (calls[12]), environment_rm_scope_refusal's zero
+	// no removal authority (calls[13]), environment_rm_scope_refusal's zero
 	// calls (it never touches the injected Executor), and
 	// environment_custom_agent_ollama's create+probe pair plus its own
-	// cleanup probe+remove pair (calls[13..16]). This test asserts only on
-	// the first check's own create+exec calls.
+	// cleanup probe+remove pair (calls[14..17]). This test asserts only on
+	// the first check's own create+poll+exec calls.
 	calls := fe.snapshot()
-	if len(calls) != 17 {
-		t.Fatalf("expected exactly 17 executor calls, got %d: %#v", len(calls), calls)
+	if len(calls) != 18 {
+		t.Fatalf("expected exactly 18 executor calls, got %d: %#v", len(calls), calls)
 	}
 	create := calls[0]
 	if create.name != "sbx" || len(create.args) != 3 || create.args[0] != "env" || create.args[1] != "create" {
@@ -216,22 +254,35 @@ func TestRun_EnvironmentCreateThenExecInvocation_Success(t *testing.T) {
 		t.Errorf("authored fixture does not declare the Pix custom agent: %s", fixtureBytes)
 	}
 
-	execCall := calls[1]
+	pollCall := calls[1]
+	if pollCall.name != "sbx" || len(pollCall.args) != 2 || pollCall.args[0] != "ls" || pollCall.args[1] != "--json" {
+		t.Fatalf("poll call = %#v, want `sbx ls --json`, issued BEFORE any exec", pollCall)
+	}
+
+	execCall := calls[2]
+	const echoProbeScript = `for a in "$@"; do printf '%s\n' "$a"; done`
 	wantExecArgs := []string{
-		"exec", "-it", "pix-uatenv-fixture-0", "--", "pi",
-		"--kit", "/opt/pix/kit",
+		"exec", "-i", "pix-uatenv-fixture-0", "--", "sh", "-c", echoProbeScript, "sh",
+		"pi",
 		"--skill", "/opt/pix/kit/skills",
 		"--skill", "/home/uat/personal-context/skills",
 		"--model", "anthropic/claude-sonnet-5",
-		"--resume", "session-fixture-1",
+		"--session", "session-fixture-1",
 	}
 	if execCall.name != "sbx" || len(execCall.args) != len(wantExecArgs) {
-		t.Fatalf("exec call = %#v, want name %q with %d args", execCall, "sbx", len(wantExecArgs))
+		t.Fatalf("exec call = %#v, want name %q with %d args (%#v)", execCall, "sbx", len(wantExecArgs), wantExecArgs)
 	}
 	for i, want := range wantExecArgs {
 		if execCall.args[i] != want {
 			t.Errorf("exec call args[%d] = %q, want %q (full: %#v)", i, execCall.args[i], want, execCall.args)
 		}
+	}
+	joined := strings.Join(execCall.args, " ")
+	if strings.Contains(joined, "--kit") {
+		t.Errorf("actual exec/probe call must never pass pi --kit: %#v", execCall.args)
+	}
+	if strings.Contains(joined, "--resume") {
+		t.Errorf("actual exec/probe call must never use --resume: %#v", execCall.args)
 	}
 
 	for _, e := range execCall.env {
@@ -308,8 +359,13 @@ func TestRun_EnvironmentCreateThenExecInvocation_ExecFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	fe := &fakeExecutor{onCall: func(call recordedCall) (string, string, error) {
+		if len(call.args) > 0 && call.args[0] == "ls" {
+			// The bounded pre-exec poll must succeed fast so this test
+			// exercises the actual probe's own failure, not a poll timeout.
+			return `[{"name":"pix-uatenv-fixture-0","status":"running"}]` + "\n", "", nil
+		}
 		if len(call.args) > 0 && call.args[0] == "env" {
-			return "created pix-uatenv-fixture-0 (positively identified)\n", "", nil
+			return "created pix-uatenv-fixture-0 (positively identified) kit ./kit\n", "", nil
 		}
 		return "", "connection refused\n", context.Canceled
 	}}
@@ -343,8 +399,11 @@ func TestRun_BoundedArtifact(t *testing.T) {
 		if call.name == "docker" {
 			return fakeCandidateDigest + "\n", "", nil
 		}
+		if len(call.args) > 0 && call.args[0] == "exec" {
+			return echoProbeFakeResponse(call.args), "", nil
+		}
 		if len(call.args) > 0 && call.args[0] == "ls" {
-			return successfulFixtureNames + "\n", "", nil
+			return successfulFixtureNamesJSON() + "\n", "", nil
 		}
 		if len(call.args) > 1 && call.args[0] == "env" && call.args[1] == "rm" {
 			return "removed\n", "", nil
@@ -353,7 +412,7 @@ func TestRun_BoundedArtifact(t *testing.T) {
 			fixturePath := call.args[len(call.args)-1]
 			switch filepath.Base(fixturePath) {
 			case "authored.sbxenv.yaml":
-				return "pix-uatenv-fixture-0 (positively identified) image digest: " + fakeCandidateDigest + " " + huge, "", nil
+				return "pix-uatenv-fixture-0 (positively identified) kit ./kit image digest: " + fakeCandidateDigest + " " + huge, "", nil
 			case "candidate-image.sbxenv.yaml":
 				return "pix-uatenv-fixture-image (positively identified) image digest: " + fakeCandidateDigest + " " + huge, "", nil
 			case "recreate-boundary.sbxenv.yaml":
