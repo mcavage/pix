@@ -435,6 +435,21 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		if rec != nil {
 			o.StaticMCP = composeStaticMCP(o.StaticMCP, nil, []string{rec.MCPName})
 			uatRec = rec
+			if o.Dev {
+				// A kept sandbox reattached after its original launcher exited may
+				// have no live uat-worker at all (the owner stopped it on its own
+				// exit) or a stale one; EnsureWorker dials first so a worker that
+				// IS still live (another concurrent attach) is adopted, never
+				// unlinked or replaced. Must happen before session attach below.
+				repoRoot, rerr := launch.ResolveRepoRoot()
+				if rerr != nil {
+					return runFail(d, 1, "--dev attach: %v", rerr)
+				}
+				uatState, _ := defaultShellEnv().StateDir()
+				if werr := ensureUatWorkerOrFail(defaultShellEnv(), repoRoot, filepath.Join(uatState, "uat"), rec); werr != nil {
+					return runFail(d, 1, "failed to start UAT worker: %v", werr)
+				}
+			}
 		}
 	}
 
@@ -509,6 +524,14 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		if err := uat.RegisterMCP(defaultShellEnv(), uatRec, o.DevRoot, filepath.Join(uatState, "uat")); err != nil {
 			_ = uat.DeleteRegistration(defaultShellEnv(), o.Name)
 			return runFail(d, 1, "failed to register UAT MCP: %v", err)
+		}
+		// Started AFTER the secure per-session runner state directory exists
+		// (RegisterMCP just created it) and BEFORE anything execs sbx below, so
+		// the gateway relay can never need it before it is listening.
+		if werr := ensureUatWorkerOrFail(defaultShellEnv(), o.DevRoot, filepath.Join(uatState, "uat"), uatRec); werr != nil {
+			_ = uat.UnregisterMCP(defaultShellEnv(), uatRec.MCPName)
+			_ = uat.DeleteRegistration(defaultShellEnv(), o.Name)
+			return runFail(d, 1, "failed to start UAT worker: %v", werr)
 		}
 	}
 

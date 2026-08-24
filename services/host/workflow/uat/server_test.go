@@ -83,6 +83,9 @@ func TestMCPServerCapabilitiesExposeVocabularyCoverageAndBrowserState(t *testing
 	runner, _ := uat.NewRunner(pixHost, "/repo", stateDir, &mockGit{}, &mockExec{}, &mockSandbox{}, &mockMCP{}, &mockImage{}, &mockLease{}, 2)
 
 	payload := callMCPTool(t, runner, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"uat_capabilities","arguments":{}}}`)
+	if got := payload["exec_context"]; got != uat.SessionWorkerExecContext {
+		t.Fatalf("exec_context = %#v, want %q — only pix-host uat-worker may ever answer uat_capabilities", got, uat.SessionWorkerExecContext)
+	}
 	actions, ok := payload["legal_actions"].([]interface{})
 	if !ok || len(actions) == 0 {
 		t.Fatalf("legal_actions = %#v", payload["legal_actions"])

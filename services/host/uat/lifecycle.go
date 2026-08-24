@@ -119,6 +119,13 @@ func DeleteRegistration(env hostenv.Env, sandboxName string) error {
 		return err
 	}
 	if rec != nil {
+		// The worker must be stopped BEFORE its socket/pid record is removed
+		// out from under it by removeSessionState below — including on the
+		// hard-crash/orphan sweep path, where the launcher that started it is
+		// long gone.
+		if err := StopWorker(filepath.Join(dir, "sessions", rec.SessionID), rec.SessionID); err != nil {
+			return err // keep the registration so a later teardown can retry
+		}
 		if err := removeSessionState(dir, rec.SessionID); err != nil {
 			return err // keep the registration so a later teardown can retry
 		}

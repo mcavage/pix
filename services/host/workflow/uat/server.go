@@ -32,10 +32,23 @@ type browserCapabilityState struct {
 
 type capabilitiesResponse struct {
 	runnerCapabilities
+	// ExecContext identifies which process actually constructed this Runner
+	// and is answering the tool call: always "session-worker" now that
+	// `pix-host uat-mcp` (the sbx-gateway-spawned process) is a dumb
+	// stdio<->socket relay with no Runner of its own — the operator-context
+	// process `pix run --dev` starts, `pix-host uat-worker`, is the only
+	// thing that can ever answer uat_capabilities at all
+	// (docs/design/self-development-uat.md). A caller that ever sees
+	// anything else here has found a regression back toward
+	// gateway-constructed Runners, not a new legitimate value.
+	ExecContext string                 `json:"exec_context"`
 	Sandbox     bool                   `json:"sandbox"`
 	Browser     browserCapabilityState `json:"browser"`
 	RetryReport map[string]string      `json:"retry_report"`
 }
+
+// SessionWorkerExecContext is the one legal value ExecContext ever carries.
+const SessionWorkerExecContext = "session-worker"
 
 func (s *MCPServer) capabilities() capabilitiesResponse {
 	browserState := browserCapabilityState{
@@ -59,6 +72,7 @@ func (s *MCPServer) capabilities() capabilitiesResponse {
 	}
 	return capabilitiesResponse{
 		runnerCapabilities: s.runner.capabilities(),
+		ExecContext:        SessionWorkerExecContext,
 		Sandbox:            true,
 		Browser:            browserState,
 		RetryReport:        s.retryReport,
