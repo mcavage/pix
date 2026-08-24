@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -61,11 +62,32 @@ const (
 	// provider key, so the repair names one provider rather than listing three
 	// commands a user must choose between.
 	ModelKeyFix = "pix models add anthropic"
+	// SbxUpgradeFix repairs a too-old or unparsable sbx version — a different
+	// problem from a missing binary (SbxInstallFix), so it gets its own exact
+	// command rather than reusing that one.
+	SbxUpgradeFix = "brew upgrade docker/tap/sbx"
 )
 
-// versionish matches the digit.digit any real `--version` banner carries. It
-// is the difference between "the tool answered" and "something printed bytes".
-var versionish = regexp.MustCompile(`[0-9]+\.[0-9]+`)
+// SbxMinVersion is the lowest sbx release native environments require (PRD
+// docs/design/environments.md section 4, section 5.6; AC-20). It is a
+// package const, read by SbxVersionGate and SbxVersionGateMessage, so a
+// future bump changes exactly one line.
+
+const SbxMinVersion = "0.39.0"
+
+// versionish matches the dotted numeric run a real `--version` banner
+// carries — one or more `.NNN` groups after the first `major.minor`, so
+// "0.38.2" is captured whole rather than truncated to "0.38". It is the
+// difference between "the tool answered" and "something printed bytes".
+var versionish = regexp.MustCompile(`[0-9]+\.[0-9]+(?:\.[0-9]+)*`)
+
+// sbxUnparsableDetail is SbxProbe's own Detail wording for a version reply
+// that ran to completion but carried no recognizable version at all. It is a
+// package const, not a literal repeated in two places, because
+// SbxVersionGate matches against this EXACT string to decide the same
+// question independently of SbxProbe's own (unchanged) Unknown
+// classification for this case.
+const sbxUnparsableDetail = "unrecognized version output"
 
 // execOutcome is one bounded exec, classified.
 type execOutcome struct {
@@ -199,14 +221,94 @@ func sbxProbeResult(name string, o execOutcome, usedFallback bool) Result {
 	}
 	v := versionish.FindString(o.out)
 	if v == "" {
-		return Result{Name: name, Status: StatusUnknown, Detail: "unrecognized version output",
+		return Result{Name: name, Status: StatusUnknown, Detail: sbxUnparsableDetail,
 			Evidence: "sbx --version printed no version"}
 	}
+	evidence := "sbx --version = " + v
 	if usedFallback {
-		return Result{Name: name, Status: StatusReady, Detail: v,
-			Evidence: "sbx version = " + v + " (fell back from --version, which this sbx build rejected)"}
+		evidence = "sbx version = " + v + " (fell back from --version, which this sbx build rejected)"
 	}
-	return Result{Name: name, Status: StatusReady, Detail: v, Evidence: "sbx --version = " + v}
+	// Native environments require SbxMinVersion or later (PRD section 4/5.6,
+	// AC-20): a version that answered and parsed cleanly, but is too old, is a
+	// VERIFIED gap with its own exact fix — distinct from SbxInstallFix, which
+	// repairs a missing binary, not an old one.
+	if !sbxVersionAtLeast(v, SbxMinVersion) {
+		return Result{Name: name, Status: StatusAbsent, Detail: v, Fix: SbxUpgradeFix,
+			Evidence: evidence + fmt.Sprintf("; native environments require %s or later", SbxMinVersion)}
+	}
+	return Result{Name: name, Status: StatusReady, Detail: v, Evidence: evidence}
+}
+
+// sbxVersionAtLeast reports whether v (a dotted version SbxProbe already
+// parsed, e.g. "0.39.0") is at least min, comparing NUMERICALLY component by
+// component rather than lexicographically — "0.40.1" must read as newer than
+// "0.38.2", and a lexical compare would also get "0.9" vs "0.10" backwards.
+// A component that fails to parse as a number reads as 0: an ambiguous
+// component must never be read as "obviously satisfies", because this feeds
+// a fail-closed gate.
+func sbxVersionAtLeast(v, min string) bool {
+	vp, mp := sbxVersionParts(v), sbxVersionParts(min)
+	for i := 0; i < len(vp) || i < len(mp); i++ {
+		var a, b int
+		if i < len(vp) {
+			a = vp[i]
+		}
+		if i < len(mp) {
+			b = mp[i]
+		}
+		if a != b {
+			return a > b
+		}
+	}
+	return true
+}
+
+func sbxVersionParts(v string) []int {
+	fields := strings.Split(v, ".")
+	out := make([]int, 0, len(fields))
+	for _, f := range fields {
+		n, err := strconv.Atoi(f)
+		if err != nil {
+			n = 0
+		}
+		out = append(out, n)
+	}
+	return out
+}
+
+// SbxVersionGate answers the fail-closed check native environments require on
+// top of SbxProbe's own classification (PRD docs/design/environments.md
+// section 5.6, AC-20): sbx must be SbxMinVersion or later, and a version that
+// could not be read AT ALL is refused exactly like a too-old one. It reads an
+// ALREADY-COMPUTED SbxProbe Result rather than probing again, so a caller
+// that already ran the probe (doctor's Snapshot) pays for exactly one exec,
+// and `pix run`'s own gate call is the only other one.
+//
+// It fires ONLY on a POSITIVE read: sbx missing, refused by policy, timed
+// out, or failed for a reason SbxProbe could not interpret is a DIFFERENT,
+// already honest gap (SbxInstallFix is its remedy) — turning "could not
+// check" into a version refusal would be exactly the dishonesty this
+// package's model (see health.go's package doc) exists to prevent.
+func SbxVersionGate(r Result) (blocked bool, found string) {
+	switch {
+	case r.Status == StatusReady:
+		return false, r.Detail
+	case r.Status == StatusAbsent && r.Fix == SbxUpgradeFix:
+		return true, r.Detail
+	case r.Status == StatusUnknown && r.Detail == sbxUnparsableDetail:
+		return true, "unknown (sbx --version was not understood)"
+	default:
+		return false, ""
+	}
+}
+
+// SbxVersionGateMessage renders the exact PRD section 5.6 copy, byte for
+// byte, for a version SbxVersionGate has already ruled blocked. Both `pix
+// run` and `pix doctor` call this ONE function so the two surfaces can never
+// drift onto slightly different wording for the same requirement.
+func SbxVersionGateMessage(found string) string {
+	return fmt.Sprintf("pix: native environments require sbx %s or later.\n     found: %s\n     upgrade it: %s\n",
+		SbxMinVersion, found, SbxUpgradeFix)
 }
 
 // --- launchd ----------------------------------------------------------------

@@ -21,6 +21,7 @@ package doctor
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"sort"
 
@@ -45,12 +46,35 @@ func RunDoctor(ctx context.Context, cfg *config.Config, profile string, out io.W
 		o.Budget = health.DoctorBudget
 	}
 	snap := Check(ctx, cfg, o)
+	// Native environments require sbx health.SbxMinVersion or later (PRD
+	// docs/design/environments.md section 5.6, AC-20): a too-old or unparsable
+	// version fails closed here even though it reads an ALREADY-VERIFIED gap
+	// (a too-old version) — sbxProbeResult already flags that as a normal
+	// StatusAbsent row — as well as one the base SbxProbe classification
+	// deliberately still reports Unknown (unparsable output), which is why the
+	// exit code is computed from the gate, not from snap.ExitCode() alone.
+	exit := snap.ExitCode()
+	var gateMsg string
+	if sbxResult, ok := snap.Find("sbx"); ok {
+		if blocked, found := health.SbxVersionGate(sbxResult); blocked {
+			gateMsg = health.SbxVersionGateMessage(found)
+			exit = health.ExitNotReady
+		}
+	}
 	if jsonOut {
-		_ = cli.WriteJSONOut(out, ReportJSON(snap, profile, snap.ExitCode()))
-		return snap.ExitCode()
+		// The gate still fails the exit code here; the exact prose line is a
+		// human-readable-mode-only concern, same as every other rendered fix
+		// text — the JSON schema already carries the sbx row's own
+		// Fix/Detail/Evidence for a machine reader.
+		_ = cli.WriteJSONOut(out, ReportJSON(snap, profile, exit))
+		return exit
+	}
+	if gateMsg != "" {
+		fmt.Fprint(out, gateMsg)
+		fmt.Fprintln(out)
 	}
 	health.RenderDoctorWith(out, snap, health.DoctorOpts{Verbose: verbose})
-	return snap.ExitCode()
+	return exit
 }
 
 // Description is the prose above doctor's GENERATED usage: what it proves and

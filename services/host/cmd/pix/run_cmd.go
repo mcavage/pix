@@ -217,6 +217,29 @@ func runFail(d *cli.Deps, code int, format string, a ...any) error {
 	return cli.SilentError{Code: code}
 }
 
+// gateSbxVersion refuses `pix run` before ANY sandbox side effect when the
+// installed sbx cannot do what native environments will require: older than
+// health.SbxMinVersion, or so unparsable a version cannot be read from it at
+// all (docs/design/environments.md section 5.6, AC-20). bin is the SbxProbe
+// seam a test points at a fixture; production always passes the real "sbx"
+// resolved off PATH.
+//
+// Missing, denied, or otherwise unreachable sbx is a DIFFERENT, already
+// honest gap — unloadedLocalImage and the "exec sbx" failure further down
+// this file both name doctor.SbxInstallHint for it — so health.SbxVersionGate
+// deliberately fires ONLY on a positive read; this gate never turns "could
+// not check" into a version refusal.
+func gateSbxVersion(d *cli.Deps, bin string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), health.StatusBudget)
+	defer cancel()
+	r := health.SbxProbe{Bin: bin}.Check(ctx)
+	if blocked, found := health.SbxVersionGate(r); blocked {
+		fmt.Fprint(d.Err, health.SbxVersionGateMessage(found))
+		return cli.SilentError{Code: 1}
+	}
+	return nil
+}
+
 // unloadedLocalImage is the refusal both local-image preflight arms share: what
 // was pinned, why sbx would stall on it, and the one command that fixes it.
 func unloadedLocalImage(d *cli.Deps, what string) error {
@@ -231,6 +254,11 @@ func unloadedLocalImage(d *cli.Deps, what string) error {
 // forwards NO credential bearer into the sandbox: host MCP servers authenticate on
 // the host, so there is nothing to inject.
 func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
+	// Fail closed before anything else: an sbx that cannot run native
+	// environments must not get far enough to attempt a create or attach.
+	if verr := gateSbxVersion(d, "sbx"); verr != nil {
+		return verr
+	}
 	var generatedKitDirs []string
 	defer func() {
 		if cerr := launch.CleanupGeneratedKitDirs(generatedKitDirs); cerr != nil {
