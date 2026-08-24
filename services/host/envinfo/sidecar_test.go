@@ -382,3 +382,149 @@ func TestValidateSkillWorkspacesFailsClosedWithNoWorkspaces(t *testing.T) {
 		t.Fatal("expected fail-closed error with no declared workspaces")
 	}
 }
+
+// --- Pre-merge findings: quoted-key strictness must come from the real
+// decoder's metadata, never a regex line-scanner, and TOML quoting must be
+// honored so a quoted dotted segment is one identity, not split. ---
+
+// A quoted unknown key must fail exactly like its bare-key equivalent. The
+// old line-scanner's key regex (`^([A-Za-z0-9_-]+...)\s*=`) never matches a
+// quoted key, so the line was silently skipped and the key sailed through to
+// the final decode, which BurntSushi does not error on for unknown fields.
+func TestParseRejectsQuotedUnknownKey(t *testing.T) {
+	content := "[models]\nmain = \"zai/glm-5\"\n\"typo_field\" = \"oops\"\n"
+	path := writeSidecar(t, t.TempDir(), content)
+
+	_, err := Parse(path)
+	if err == nil {
+		t.Fatal("Parse: expected error for quoted unknown key, got nil (silent bypass)")
+	}
+	serr, ok := err.(*Error)
+	if !ok {
+		t.Fatalf("Parse error type = %T, want *envinfo.Error", err)
+	}
+	if serr.Line != 3 {
+		t.Errorf("Line = %d, want 3", serr.Line)
+	}
+	if serr.Key != "models.typo_field" {
+		t.Errorf("Key = %q, want %q", serr.Key, "models.typo_field")
+	}
+}
+
+// A quoted native-owned key must still be classified as native-owned, not
+// merely "unknown key" — the friendlier .sbxenv.yaml redirect must survive
+// quoting.
+func TestParseRejectsQuotedNativeOwnedRootKey(t *testing.T) {
+	content := "\"kits\" = [\"./kit\"]\n"
+	path := writeSidecar(t, t.TempDir(), content)
+
+	_, err := Parse(path)
+	if err == nil {
+		t.Fatal("expected rejection for quoted native-owned key")
+	}
+	serr, ok := err.(*Error)
+	if !ok {
+		t.Fatalf("error type = %T, want *envinfo.Error", err)
+	}
+	if serr.Key != "kits" {
+		t.Errorf("Key = %q, want %q", serr.Key, "kits")
+	}
+	if !strings.Contains(serr.Reason, ".sbxenv.yaml") {
+		t.Errorf("Reason = %q, want it to name .sbxenv.yaml as the owner", serr.Reason)
+	}
+}
+
+// A quoted host.mcp.<name>.url/command must still hit the native-owned
+// reason even though the field name itself is quoted.
+func TestParseRejectsQuotedHostMCPURLAsNativeOwned(t *testing.T) {
+	content := "[host.mcp.warehouse]\n\"url\" = \"https://example.com\"\n"
+	path := writeSidecar(t, t.TempDir(), content)
+	_, err := Parse(path)
+	if err == nil {
+		t.Fatal("expected rejection for quoted host.mcp.warehouse.url")
+	}
+	serr := err.(*Error)
+	if serr.Key != "host.mcp.warehouse.url" {
+		t.Errorf("Key = %q, want %q", serr.Key, "host.mcp.warehouse.url")
+	}
+	if !strings.Contains(serr.Reason, ".sbxenv.yaml") {
+		t.Errorf("Reason = %q, want it to name .sbxenv.yaml as the owner", serr.Reason)
+	}
+}
+
+// [host.mcp."github.copilot"] is one dynamic identity — the server name
+// "github.copilot" — not a split at the embedded dot. Quoting is TOML
+// syntax for "this is a single key segment", and the parser must honor it.
+func TestParseAcceptsQuotedDottedHostMCPIdentity(t *testing.T) {
+	content := "[host.mcp.\"github.copilot\"]\nenv_keys = [\"GH_TOKEN\"]\n"
+	path := writeSidecar(t, t.TempDir(), content)
+
+	s, err := Parse(path)
+	if err != nil {
+		t.Fatalf("Parse: unexpected error for quoted dotted host.mcp identity: %v", err)
+	}
+	entry, ok := s.Host.MCP["github.copilot"]
+	if !ok {
+		t.Fatalf("Host.MCP[%q] missing; got keys %v", "github.copilot", s.Host.MCP)
+	}
+	if entry.Name != "github.copilot" {
+		t.Errorf("Host.MCP[%q].Name = %q, want %q", "github.copilot", entry.Name, "github.copilot")
+	}
+	if len(entry.EnvKeys) != 1 || entry.EnvKeys[0] != "GH_TOKEN" {
+		t.Errorf("Host.MCP[%q].EnvKeys = %v", "github.copilot", entry.EnvKeys)
+	}
+}
+
+// A native-owned field nested inside a quoted dotted identity must still be
+// rejected, and the reported key must render the identity quoted as one
+// segment (host.mcp."github.copilot".url), never split.
+func TestParseRejectsNativeOwnedFieldInsideQuotedDottedIdentity(t *testing.T) {
+	content := "[host.mcp.\"github.copilot\"]\nurl = \"https://example.com\"\n"
+	path := writeSidecar(t, t.TempDir(), content)
+
+	_, err := Parse(path)
+	if err == nil {
+		t.Fatal("expected rejection for native-owned url under a quoted dotted identity")
+	}
+	serr := err.(*Error)
+	wantKey := `host.mcp."github.copilot".url`
+	if serr.Key != wantKey {
+		t.Errorf("Key = %q, want %q", serr.Key, wantKey)
+	}
+	if !strings.Contains(serr.Reason, ".sbxenv.yaml") {
+		t.Errorf("Reason = %q, want it to name .sbxenv.yaml as the owner", serr.Reason)
+	}
+}
+
+// Audit: quoted agent, model-backend, and inference-model identities must
+// decode as literal freeform names, dots and all — never split, never
+// rejected as unknown, since agent/backend names are user-chosen.
+func TestParseAcceptsQuotedDottedAgentAndBackendIdentities(t *testing.T) {
+	content := `schema = 1
+
+[agents]
+"github.copilot" = "zai/glm-5"
+
+[inference.backends."my.custom.backend"]
+driver = "openai-compatible"
+protocol = "openai-completions"
+base_url = "https://example.com"
+auth = "1password"
+key_env = "X_API_KEY"
+`
+	path := writeSidecar(t, t.TempDir(), content)
+	s, err := Parse(path)
+	if err != nil {
+		t.Fatalf("Parse: unexpected error: %v", err)
+	}
+	if got, want := s.Agents["github.copilot"], "zai/glm-5"; got != want {
+		t.Errorf("Agents[%q] = %q, want %q", "github.copilot", got, want)
+	}
+	be, ok := s.Inference.Backends["my.custom.backend"]
+	if !ok {
+		t.Fatalf("Inference.Backends[%q] missing; got %v", "my.custom.backend", s.Inference.Backends)
+	}
+	if be.Driver != "openai-compatible" {
+		t.Errorf("Inference.Backends[%q].Driver = %q", "my.custom.backend", be.Driver)
+	}
+}

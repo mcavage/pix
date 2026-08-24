@@ -14,8 +14,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -154,11 +154,52 @@ func (e *Error) Error() string {
 
 const ownedByEnvFile = "native-owned; declare it in .sbxenv.yaml, not pix.toml"
 
+// nativeOwnedRoot names the top-level fields .sbxenv.yaml owns exclusively.
+// A pix.toml that declares any of these fails closed with a reason pointing
+// at the right file, rather than the generic "unknown key".
+var nativeOwnedRoot = map[string]bool{
+	"kits":           true,
+	"workspaces":     true,
+	"workspace":      true,
+	"env":            true,
+	"secrets":        true,
+	"bindings":       true,
+	"mcp":            true,
+	"resources":      true,
+	"sandboxOptions": true,
+	"ports":          true,
+}
+
+// nativeOwnedReason classifies an offending dotted key path: a top-level
+// native-owned field, a host.mcp.<name>.url/command command definition
+// (also native-owned — sbx already owns that server's transport), or a
+// plain unknown key/typo. key is authoritative — each element is one
+// resolved TOML key segment, quoted-dotted segments already collapsed to a
+// single element by the decoder — so this never re-splits on '.'.
+func nativeOwnedReason(key toml.Key) string {
+	if len(key) == 1 && nativeOwnedRoot[key[0]] {
+		return ownedByEnvFile
+	}
+	if len(key) == 4 && key[0] == "host" && key[1] == "mcp" && (key[3] == "url" || key[3] == "command") {
+		return ownedByEnvFile
+	}
+	return "unknown key"
+}
+
 // Parse reads and strictly validates the pix.toml at path, returning typed
 // facts for exactly the design-of-record sections. Any key outside that
 // schema — a typo or a native-owned field sbx already owns — fails the parse
 // with an *Error naming the exact key and line; nothing is silently defaulted
 // or merged.
+//
+// Strictness comes from the real TOML decoder's own metadata
+// (toml.MetaData.Undecoded), never from a hand-rolled regex line-scanner: a
+// scanner that only recognizes bare, unquoted keys would silently wave a
+// quoted unknown or native-owned key straight through to the final decode,
+// which BurntSushi does not error on for fields the target struct doesn't
+// declare. Undecoded also resolves TOML's own quoting rules, so a quoted
+// dotted identity like host.mcp."github.copilot" is one key segment, never
+// split at the embedded dot.
 func Parse(path string) (*Sidecar, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -167,26 +208,26 @@ func Parse(path string) (*Sidecar, error) {
 	text := string(data)
 	base := filepath.Base(path)
 
-	// Confirm the file is syntactically valid TOML using the real parser
-	// before trusting the lightweight line-scanner's well-formed-line
-	// assumptions below.
-	var probe map[string]any
-	if _, derr := toml.Decode(text, &probe); derr != nil {
-		if pe, ok := derr.(toml.ParseError); ok {
+	var s Sidecar
+	md, err := toml.Decode(text, &s)
+	if err != nil {
+		if pe, ok := err.(toml.ParseError); ok {
 			return nil, &Error{File: base, Line: pe.Position.Line, Key: pe.LastKey, Reason: "invalid TOML: " + pe.Message}
 		}
-		return nil, fmt.Errorf("envinfo: %s: %w", base, derr)
-	}
-
-	if _, serr := scanFile(text); serr != nil {
-		serr.File = base
-		return nil, serr
-	}
-
-	var s Sidecar
-	if _, err := toml.Decode(text, &s); err != nil {
 		return nil, fmt.Errorf("envinfo: %s: %w", base, err)
 	}
+
+	if undecoded := md.Undecoded(); len(undecoded) > 0 {
+		key := undecoded[0]
+		locs := locateKeyLines(text)
+		return nil, &Error{
+			File:   base,
+			Line:   locs[key.String()],
+			Key:    key.String(),
+			Reason: nativeOwnedReason(key),
+		}
+	}
+
 	for name, entry := range s.Host.MCP {
 		entry.Name = name
 		s.Host.MCP[name] = entry
@@ -205,9 +246,7 @@ func ValidateSkillWorkspaces(sidecarPath string, s *Sidecar, workspaces []string
 	dir := filepath.Dir(sidecarPath)
 	line := 0
 	if data, err := os.ReadFile(sidecarPath); err == nil {
-		if locs, _ := scanFile(string(data)); locs != nil {
-			line = locs["pi.skills"]
-		}
+		line = locateKeyLines(string(data))["pi.skills"]
 	}
 	for _, rel := range s.Pi.Skills {
 		abs := rel
@@ -236,124 +275,15 @@ func ValidateSkillWorkspaces(sidecarPath string, s *Sidecar, workspaces []string
 	return nil
 }
 
-// schemaNode is one location in the strict pix.toml key tree.
-type schemaNode struct {
-	// fields are leaf keys allowed directly at this node.
-	fields map[string]bool
-	// forbiddenLocal are leaf keys that are explicitly refused at this node,
-	// with the reason to report (used for native-owned fields).
-	forbiddenLocal map[string]string
-	// children are fixed-name child tables (e.g. host.mcp, host.services).
-	children map[string]*schemaNode
-	// dynamicChild, when set, is the node any single additional path segment
-	// resolves to (e.g. the server name under host.mcp, or the backend name
-	// under inference.backends).
-	dynamicChild *schemaNode
-	// freeform means any leaf key name is accepted here without further
-	// checks (the [agents] table: agent names are user-chosen).
-	freeform bool
-}
-
-func newSchema() *schemaNode {
-	mcpEntry := &schemaNode{
-		fields: map[string]bool{"env_keys": true, "probe_args": true},
-		forbiddenLocal: map[string]string{
-			"url":     ownedByEnvFile,
-			"command": ownedByEnvFile,
-		},
-	}
-	mcpContainer := &schemaNode{dynamicChild: mcpEntry}
-	servicesEntry := &schemaNode{
-		fields: map[string]bool{"name": true, "command": true, "args": true, "port": true, "probe": true},
-	}
-	host := &schemaNode{
-		children: map[string]*schemaNode{"mcp": mcpContainer, "services": servicesEntry},
-	}
-
-	backendEntry := &schemaNode{
-		fields: map[string]bool{"driver": true, "protocol": true, "base_url": true, "auth": true, "key_env": true},
-	}
-	backendsContainer := &schemaNode{dynamicChild: backendEntry}
-	modelsEntry := &schemaNode{
-		fields: map[string]bool{
-			"id": true, "backend": true, "upstream_id": true,
-			"context_window": true, "max_output_tokens": true, "reasoning": true,
-		},
-	}
-	inference := &schemaNode{
-		children: map[string]*schemaNode{"backends": backendsContainer, "models": modelsEntry},
-	}
-
-	models := &schemaNode{fields: map[string]bool{"main": true, "exclusive": true}}
-	agents := &schemaNode{freeform: true}
-	memory := &schemaNode{fields: map[string]bool{"scope": true}}
-	pi := &schemaNode{fields: map[string]bool{"skills": true}}
-
-	return &schemaNode{
-		fields: map[string]bool{"schema": true},
-		forbiddenLocal: map[string]string{
-			"kits":           ownedByEnvFile,
-			"workspaces":     ownedByEnvFile,
-			"workspace":      ownedByEnvFile,
-			"env":            ownedByEnvFile,
-			"secrets":        ownedByEnvFile,
-			"bindings":       ownedByEnvFile,
-			"mcp":            ownedByEnvFile,
-			"resources":      ownedByEnvFile,
-			"sandboxOptions": ownedByEnvFile,
-			"ports":          ownedByEnvFile,
-		},
-		children: map[string]*schemaNode{
-			"models": models, "agents": agents, "memory": memory, "pi": pi,
-			"host": host, "inference": inference,
-		},
-	}
-}
-
-// check walks path from the schema root. When allowLeaf is true the final
-// segment may match a fields entry (a "key = value" line); when false every
-// segment must resolve through children/dynamicChild (a "[table]" or
-// "[[table]]" header). It returns nil when path is legal, else an *Error
-// naming the exact offending key (the full dotted path as authored).
-func (n *schemaNode) check(path []string, allowLeaf bool) *Error {
-	cur := n
-	for i, seg := range path {
-		if cur.freeform {
-			return nil
-		}
-		if reason, bad := cur.forbiddenLocal[seg]; bad {
-			return &Error{Key: strings.Join(path, "."), Reason: reason}
-		}
-		last := i == len(path)-1
-		if allowLeaf && last && cur.fields[seg] {
-			return nil
-		}
-		if child, ok := cur.children[seg]; ok {
-			cur = child
-			continue
-		}
-		if cur.dynamicChild != nil {
-			cur = cur.dynamicChild
-			continue
-		}
-		return &Error{Key: strings.Join(path, "."), Reason: "unknown key"}
-	}
-	return nil
-}
-
-var (
-	reArrayHeader = regexp.MustCompile(`^\[\[\s*([^\]]+?)\s*\]\]\s*(#.*)?$`)
-	reHeader      = regexp.MustCompile(`^\[\s*([^\]]+?)\s*\]\s*(#.*)?$`)
-	reKey         = regexp.MustCompile(`^([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)\s*=`)
-)
-
-// scanFile walks pix.toml text line by line, validating every header and key
-// path against the strict schema and recording the first line each dotted
-// path is seen at. It assumes syntactically valid TOML (Parse confirms that
-// with the real parser first) and does not itself handle quoted keys or
-// dots embedded inside quoted path segments.
-func scanFile(text string) (map[string]int, *Error) {
-	root := newSchema()
+// locateKeyLines walks pix.toml text line by line purely to find the first
+// line each dotted key path is defined at, for diagnostics. It is
+// TOML-quote-aware — a quoted segment (e.g. "github.copilot") is kept as one
+// key element, matching how the real decoder resolves it — but it is
+// cosmetic only: Parse's accept/reject decision is made from
+// toml.MetaData.Undecoded against the already-validated, already-decoded
+// document, never from this scan. An imperfect match here can only cost a
+// diagnostic's line number, never create or hide a validation bypass.
+func locateKeyLines(text string) map[string]int {
 	locs := map[string]int{}
 	var curPath []string
 	for i, raw := range strings.Split(text, "\n") {
@@ -362,48 +292,172 @@ func scanFile(text string) (map[string]int, *Error) {
 		if t == "" || strings.HasPrefix(t, "#") {
 			continue
 		}
-		switch {
-		case reArrayHeader.MatchString(t):
-			path := splitDotted(reArrayHeader.FindStringSubmatch(t)[1])
-			if err := root.check(path, false); err != nil {
-				err.Line = line
-				return locs, err
-			}
+		if inner, ok := trimBrackets(t, "[[", "]]"); ok {
+			path := parseDottedKey(inner)
 			curPath = path
 			recordLoc(locs, path, line)
-		case reHeader.MatchString(t):
-			path := splitDotted(reHeader.FindStringSubmatch(t)[1])
-			if err := root.check(path, false); err != nil {
-				err.Line = line
-				return locs, err
-			}
+			continue
+		}
+		if inner, ok := trimBrackets(t, "[", "]"); ok {
+			path := parseDottedKey(inner)
 			curPath = path
 			recordLoc(locs, path, line)
-		case reKey.MatchString(t):
-			keyPath := splitDotted(reKey.FindStringSubmatch(t)[1])
-			full := append(append([]string{}, curPath...), keyPath...)
-			if err := root.check(full, true); err != nil {
-				err.Line = line
-				return locs, err
-			}
+			continue
+		}
+		if keyText, ok := splitKeyValueLine(t); ok {
+			full := append(append([]string{}, curPath...), parseDottedKey(keyText)...)
 			recordLoc(locs, full, line)
 		}
 	}
-	return locs, nil
+	return locs
 }
 
+// trimBrackets strips a table-header line's open/close delimiters (and any
+// trailing comment), returning the inner dotted-key text. The close search
+// is quote-aware so a literal "]" inside a quoted segment or a trailing
+// comment never gets mistaken for the header's own delimiter.
+func trimBrackets(t, open, close string) (string, bool) {
+	if !strings.HasPrefix(t, open) {
+		return "", false
+	}
+	if open == "[" && strings.HasPrefix(t, "[[") {
+		return "", false
+	}
+	rest := t[len(open):]
+	idx := findUnquotedIndex(rest, close)
+	if idx < 0 {
+		return "", false
+	}
+	return strings.TrimSpace(rest[:idx]), true
+}
+
+// findUnquotedIndex returns the index of sub's first occurrence in s outside
+// any quoted span, or -1.
+func findUnquotedIndex(s, sub string) int {
+	var inQuote byte
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if inQuote != 0 {
+			if c == '\\' && inQuote == '"' && i+1 < len(s) {
+				i++
+				continue
+			}
+			if c == inQuote {
+				inQuote = 0
+			}
+			continue
+		}
+		if c == '"' || c == '\'' {
+			inQuote = c
+			continue
+		}
+		if strings.HasPrefix(s[i:], sub) {
+			return i
+		}
+	}
+	return -1
+}
+
+// splitKeyValueLine finds a line's "key = value" split point, tracking quote
+// state so an '=' inside a quoted key or value is never mistaken for the
+// assignment operator.
+func splitKeyValueLine(t string) (string, bool) {
+	var inQuote byte
+	for i := 0; i < len(t); i++ {
+		c := t[i]
+		if inQuote != 0 {
+			if c == '\\' && inQuote == '"' && i+1 < len(t) {
+				i++
+				continue
+			}
+			if c == inQuote {
+				inQuote = 0
+			}
+			continue
+		}
+		switch c {
+		case '"', '\'':
+			inQuote = c
+		case '=':
+			return strings.TrimSpace(t[:i]), true
+		}
+	}
+	return "", false
+}
+
+// recordLoc records the first line a dotted key path is seen at, keyed by
+// the same quoting-aware rendering toml.Key.String() produces, so a lookup
+// against an *Error's toml.Key-derived Key field always hits.
 func recordLoc(locs map[string]int, path []string, line int) {
-	key := strings.Join(path, ".")
+	if len(path) == 0 {
+		return
+	}
+	key := toml.Key(path).String()
 	if _, ok := locs[key]; !ok {
 		locs[key] = line
 	}
 }
 
-func splitDotted(s string) []string {
-	parts := strings.Split(s, ".")
-	out := make([]string, len(parts))
-	for i, p := range parts {
-		out[i] = strings.Trim(strings.TrimSpace(p), `"'`)
+// parseDottedKey splits a dotted-key text into its resolved segments,
+// honoring TOML quoting: a dot inside a quoted segment (basic "..." or
+// literal '...') never splits that segment. This is what makes
+// host.mcp."github.copilot" one identity instead of two.
+func parseDottedKey(s string) []string {
+	raw := splitDottedRaw(strings.TrimSpace(s))
+	out := make([]string, len(raw))
+	for i, seg := range raw {
+		out[i] = unquoteKeySegment(seg)
 	}
 	return out
+}
+
+// splitDottedRaw splits on top-level '.' characters only — one still inside
+// an open quote is kept as part of the current segment.
+func splitDottedRaw(s string) []string {
+	var segs []string
+	var cur strings.Builder
+	var inQuote byte
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if inQuote != 0 {
+			cur.WriteByte(c)
+			if c == '\\' && inQuote == '"' && i+1 < len(s) {
+				i++
+				cur.WriteByte(s[i])
+				continue
+			}
+			if c == inQuote {
+				inQuote = 0
+			}
+			continue
+		}
+		switch c {
+		case '"', '\'':
+			inQuote = c
+			cur.WriteByte(c)
+		case '.':
+			segs = append(segs, strings.TrimSpace(cur.String()))
+			cur.Reset()
+		default:
+			cur.WriteByte(c)
+		}
+	}
+	segs = append(segs, strings.TrimSpace(cur.String()))
+	return segs
+}
+
+// unquoteKeySegment strips and unescapes one raw key segment: a TOML basic
+// string ("...", Go-compatible escapes), a literal string ('...', no
+// escapes), or a bare key (returned unchanged).
+func unquoteKeySegment(seg string) string {
+	if len(seg) >= 2 && strings.HasPrefix(seg, `"`) && strings.HasSuffix(seg, `"`) {
+		if u, err := strconv.Unquote(seg); err == nil {
+			return u
+		}
+		return strings.Trim(seg, `"`)
+	}
+	if len(seg) >= 2 && strings.HasPrefix(seg, "'") && strings.HasSuffix(seg, "'") {
+		return seg[1 : len(seg)-1]
+	}
+	return seg
 }

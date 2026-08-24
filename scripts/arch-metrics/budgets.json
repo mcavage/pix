@@ -34,10 +34,10 @@
       "exits": 0
     },
     "pix/host/envinfo": {
-      "_prod_loc_note": "E1.3 (docs/design/environments.md section 5.2): the strict pix.toml sidecar parser. Self-contained on unit/native-e1-3 while E1.2 lays out the rest of the package in parallel; TestArchitecture_ImportsPointDown's pkgLayer placement is E1.2's to add on merge.",
-      "prod_loc": 409,
+      "_prod_loc_note": "E1.3 (docs/design/environments.md section 5.2): the strict pix.toml sidecar parser. Self-contained on unit/native-e1-3 while E1.2 lays out the rest of the package in parallel; TestArchitecture_ImportsPointDown's pkgLayer placement is E1.2's to add on merge. Pre-merge finding fix: prod_loc 409 -> 463, globals 4 -> 2. The regex-based line-scanner (scanFile/schemaNode/newSchema/check, three package-level regexps) only recognized bare unquoted keys, so a quoted unknown or native-owned key (e.g. \"typo_field\" = \"oops\") never matched and sailed straight through to the final toml.Decode, which does not error on fields a target struct doesn't declare -- a silent strict-parsing bypass. The naive splitDotted also split a quoted dotted identity like host.mcp.\"github.copilot\" into two segments at the embedded dot, wrongly rejecting a single legitimate identity. Both are fixed by deriving accept/reject from the real decoder's own metadata (toml.MetaData.Undecoded on the same Decode call that already produces Sidecar) instead of a hand-rolled schema tree: the Sidecar struct's toml tags already ARE the schema, and Undecoded's keys already resolve TOML's quoting rules, so a quoted key can no longer be missed and a quoted dotted segment can no longer be split. The former scanner is now locateKeyLines, a quote-aware, cosmetic-only line-number lookup for diagnostics -- it can never affect the accept/reject decision, so an imperfect match there costs a line number, never a validation bypass. Deliberate, reviewed raise of a shrink-only budget.",
+      "prod_loc": 463,
       "exports": 14,
-      "globals": 4,
+      "globals": 2,
       "edges": 0,
       "exits": 0
     },
