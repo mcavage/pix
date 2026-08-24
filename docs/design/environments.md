@@ -1125,3 +1125,39 @@ safe removal through native environments. Those are requirements, not polish.
   crossover.
 - Pack and scored-routing production code are absent.
 - The resulting change removes substantially more code than it adds.
+
+## 17. Decision alignment (D1–D24)
+
+This table is the PRD-to-design traceability index, not a second copy of the
+prose. Each row names the section that carries the actual mechanism; when a
+decision changes, edit the owning section and this row's pointer only.
+`tests/environments-decision-alignment.test.mjs` is the anti-drift gate: D1–D24
+must each appear exactly once, in order, with every section pointer resolving
+to a heading that still exists.
+
+| ID | Decision | Section |
+| --- | --- | --- |
+| D1 | Native `.sbxenv.yaml` + `pix.toml` environments replace the pack format and sandbox-composition engine. | §1 |
+| D2 | Old pack/router surfaces are deleted outright, not deprecated; Pix has no released users to preserve compatibility for. | §1 |
+| D3 | `.sbxenv.yaml` is the single authored sandbox declaration; sbx owns agent/kits/workspaces/env/resources/secrets/bindings/registries/MCP/ports/lifecycle. | §3.1 |
+| D4 | Pix keeps exactly seven jobs: environment selection, trust, Pi setup, literal model roster, lifecycle, host-only services, development UAT. | §3.2 |
+| D5 | Local candidate image proof is exact-tag/no-pull/running; digest equality is not observable and is never claimed. | §4 |
+| D6 | Interpolation has three observed outcomes: a defined value, missing-with-default, and bare-missing resolving to an empty string. | §4 |
+| D7 | Custom-agent Ollama transport is unsupported today; `extensions/ollama-bridge.ts` stays until a future UAT run proves otherwise. | §4, §4.1 |
+| D8 | Pix imposes six restrictions on the upstream `.sbxenv.yaml` parser (no literal secret values, host-exec review, fingerprinted `noVerify`, root-outside-workspace, pinned/fingerprinted kit sources, `agent: pix` resolution). | §5.1 |
+| D9 | A registered environment omits `name`; Pix computes the workspace-specific `pix-*` sandbox name and writes it only into the generated effective file. | §5.1 |
+| D10 | `pix.toml` carries only concepts sbx cannot express: model/agent roster, memory scope, Pi-only load paths, `host.mcp` annotations, host services, and optional custom inference backends. | §5.2 |
+| D11 | `config.toml` gains `[environments]` and a default `environment` field; only `env add\|forget`/`env use` write them, and `pix config set` refuses those keys. | §5.3 |
+| D12 | Machine inference declarations are presence-only: `available`, `verified*`, `allowed_models`, `roster_providers`, and `run_intent` all disappear. | §5.3 |
+| D13 | Environment selection precedence is `--env`, then `config.toml` default, then `none`; a workspace `.sbxenv.yaml` is never auto-selected. | §6.1 |
+| D14 | One stable effective environment file is materialized per sandbox; sandbox identity is attributed pre-composition, never injected as a post-parse fact. | §6.2 |
+| D15 | Session model precedence is `--model`, then the environment's `[models].main`, then Pi's default; `[models].exclusive` narrows to environment-local inference definitions only. | §6.3 |
+| D16 | Agent model precedence is an explicit agent `model:`, then `[agents].<name>`, then the main model, then inherit the parent; shipped agents declare no `intent:`/`model:`. | §6.4 |
+| D17 | One generated `~/.pi/agent/inference.json` v1 is the single roster artifact every extension reads; there is no second, possibly-disagreeing routing artifact. | §7 |
+| D18 | The CLI contract is exactly seven verbs (`ls, add, use, show, edit, review, forget`); `pix env rm` performs no action and is a pointer error naming sandbox/source/registration. | §8, §8.1 |
+| D19 | Two separate canonical fingerprints: a host trust fingerprint gating `pix env review`, and a creation fingerprint over every effective create-time facet gating recreate. | §9.1 |
+| D20 | sbx env owns MCP registration/attachment; Pix verifies the reviewed digest before launch and wraps local-MCP credentials in a per-server `op run` env-file, never a shared one. | §9.2 |
+| D21 | Failed creation is fail-closed: a bounded, capped-at-100 create-intent record gates removal authority, and only scoped secrets (never bindings/MCP) are removed after a positive receipt. | §9.3 |
+| D22 | Attach requires a schema-verified running row, matching instance id, matching creation fingerprint, and a reviewed environment; P0 treats every effective change as recreate-only, never `sbx env run`. | §10.1, §10.2 |
+| D23 | Removal keeps the existing proof chain (`pix-*` scope, holder exclusivity, fresh instance-id probe, no keep marker, fail-closed on unknown) and never appends `--prune-bindings`. | §10.3 |
+| D24 | Host services stay machine-global: the desired set unions the default and every live-holder environment's services, and a unit stops only once none reference it. | §10.4 |
