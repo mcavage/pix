@@ -31,6 +31,12 @@ func TestCheckEnvironmentCustomAgentOllama_SupportedSucceedsAndRecordsCapability
 	phaseDir := t.TempDir()
 	var lw strings.Builder
 	executor := recordingExecutor{fn: func(args []string) (string, string, error) {
+		if len(args) > 0 && args[0] == "ls" {
+			return "created " + ollamaCapabilityFixtureName + " (positively identified)\n", "", nil
+		}
+		if len(args) > 1 && args[0] == "env" && args[1] == "rm" {
+			return "removed\n", "", nil
+		}
 		if len(args) > 0 && args[0] == "env" {
 			return "created " + ollamaCapabilityFixtureName + " (positively identified)\n", "", nil
 		}
@@ -55,6 +61,12 @@ func TestCheckEnvironmentCustomAgentOllama_RecognizedUnsupportedSucceedsAndRecor
 	phaseDir := t.TempDir()
 	var lw strings.Builder
 	executor := recordingExecutor{fn: func(args []string) (string, string, error) {
+		if len(args) > 0 && args[0] == "ls" {
+			return "created " + ollamaCapabilityFixtureName + " (positively identified)\n", "", nil
+		}
+		if len(args) > 1 && args[0] == "env" && args[1] == "rm" {
+			return "removed\n", "", nil
+		}
 		if len(args) > 0 && args[0] == "env" {
 			return "created " + ollamaCapabilityFixtureName + " (positively identified)\n", "", nil
 		}

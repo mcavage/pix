@@ -25,11 +25,12 @@ const candidateImageFixtureName = "pix-uatenv-fixture-image"
 func candidateImageFixtureYAML(imageTag string) []byte {
 	return []byte(fmt.Sprintf(`schemaVersion: "1"
 agent: pix
+name: %s
 
 sandboxOptions:
   template: %s
   pullPolicy: missing
-`, imageTag))
+`, candidateImageFixtureName, imageTag))
 }
 
 // registryPullMarkers are literal substrings a real `sbx env create` log
@@ -61,7 +62,7 @@ var createdImageDigestPattern = regexp.MustCompile(`image[ _]?digest[:=]\s*(sha2
 // Every host command goes through the injected Executor, exactly like
 // checkEnvironmentCreateThenExecInvocation: no real `docker` or `sbx` binary
 // is ever required under `go test`.
-func checkEnvironmentUsesLocalCandidateImage(ctx context.Context, lw io.Writer, executor Executor, phaseDir string, imageTag string) error {
+func checkEnvironmentUsesLocalCandidateImage(ctx context.Context, lw io.Writer, executor Executor, phaseDir string, imageTag string) (retErr error) {
 	if imageTag == "" {
 		return fmt.Errorf("environment_uses_local_candidate_image: no candidate image tag supplied (caller bug: Inputs.ImageTag must always be set)")
 	}
@@ -90,8 +91,16 @@ func checkEnvironmentUsesLocalCandidateImage(ctx context.Context, lw io.Writer, 
 	fmt.Fprintf(lw, "$ sbx %s\n", strings.Join(createArgs, " "))
 	createOut, createErrOut, err := executor.Run(ctx, "sbx", createArgs, env, phaseDir)
 	fmt.Fprintf(lw, "stdout: %s\nstderr: %s\nerr: %v\n", createOut, createErrOut, err)
+	defer func() {
+		if cleanupErr := cleanupCreatedFixture(ctx, lw, executor, env, phaseDir, fixturePath, candidateImageFixtureName, createOut, err); cleanupErr != nil && retErr == nil {
+			retErr = cleanupErr
+		}
+	}()
 	if err != nil {
 		return fmt.Errorf("sbx env create: %w", err)
+	}
+	if !strings.Contains(createOut, candidateImageFixtureName) {
+		return fmt.Errorf("sbx env create did not report the expected positively-identified instance name %q (stdout=%q)", candidateImageFixtureName, createOut)
 	}
 
 	combinedLog := createOut + "\n" + createErrOut

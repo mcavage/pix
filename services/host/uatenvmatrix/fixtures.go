@@ -23,7 +23,12 @@ type EnvironmentFixture struct {
 	// Name is the literal `pix-*` sandbox name this fixture's environment
 	// creates as. Story 0 owns this name directly (a registered environment
 	// normally omits `name`; Pix's own naming algorithm belongs to Story 1's
-	// envinfo, not to this fixture).
+	// envinfo, not to this fixture) — which is exactly why every fixture's
+	// YAML below declares an explicit top-level `name: <Name>` field: unlike
+	// a Pix-composed effective file, nothing else tells a real `sbx env
+	// create` which name to use, and every check in this package asserts
+	// that the create receipt positively identifies this exact literal
+	// value.
 	Name string
 	// YAML is the exact bytes written to disk as the authored native
 	// declaration and passed to `sbx env create`.
@@ -71,6 +76,7 @@ const recreateBoundaryMutatedFacet = "sandboxOptions.memory"
 func recreateBoundaryFixtureYAML() []byte {
 	return []byte(`schemaVersion: "1"
 agent: pix
+name: ` + recreateBoundaryFixtureName + `
 
 sandboxOptions:
   memory: 6g
@@ -84,6 +90,7 @@ sandboxOptions:
 func recreateBoundaryMutatedFixtureYAML() []byte {
 	return []byte(`schemaVersion: "1"
 agent: pix
+name: ` + recreateBoundaryFixtureName + `
 
 sandboxOptions:
   memory: 60g
@@ -112,6 +119,7 @@ const ollamaCapabilityMarker = "PIX_OLLAMA_PROBE"
 func ollamaCapabilityFixtureYAML() []byte {
 	return []byte(`schemaVersion: "1"
 agent: pix
+name: ` + ollamaCapabilityFixtureName + `
 
 kits:
   - ./kit
@@ -139,8 +147,10 @@ func ollamaCapabilityFixture() EnvironmentFixture {
 // agent kit, with a deterministic set of live skill trees, model, and resume
 // facts a name-based exec must reproduce exactly.
 func customAgentFixture() EnvironmentFixture {
-	const yaml = `schemaVersion: "1"
+	const name = "pix-uatenv-fixture-0"
+	yaml := `schemaVersion: "1"
 agent: pix
+name: ` + name + `
 
 kits:
   - ./kit
@@ -152,7 +162,7 @@ env:
   PIX_MEMORY_SCOPE: personal
 `
 	return EnvironmentFixture{
-		Name: "pix-uatenv-fixture-0",
+		Name: name,
 		YAML: []byte(yaml),
 		Kit:  "/opt/pix/kit",
 		LiveSkills: []string{

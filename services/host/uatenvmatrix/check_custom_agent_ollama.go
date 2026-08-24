@@ -101,7 +101,7 @@ func recognizedOllamaUnsupportedReason(combinedOutput string) string {
 // Every host command goes through the injected Executor, exactly like the
 // other checks in this package: no real `sbx` binary is required under `go
 // test`.
-func checkEnvironmentCustomAgentOllama(ctx context.Context, lw io.Writer, executor Executor, phaseDir string) error {
+func checkEnvironmentCustomAgentOllama(ctx context.Context, lw io.Writer, executor Executor, phaseDir string) (retErr error) {
 	fixture := ollamaCapabilityFixture()
 
 	fixturePath := filepath.Join(phaseDir, "ollama-capability.sbxenv.yaml")
@@ -116,6 +116,11 @@ func checkEnvironmentCustomAgentOllama(ctx context.Context, lw io.Writer, execut
 	fmt.Fprintf(lw, "$ sbx %s\n", strings.Join(createArgs, " "))
 	createOut, createErrOut, err := executor.Run(ctx, "sbx", createArgs, env, phaseDir)
 	fmt.Fprintf(lw, "stdout: %s\nstderr: %s\nerr: %v\n", createOut, createErrOut, err)
+	defer func() {
+		if cleanupErr := cleanupCreatedFixture(ctx, lw, executor, env, phaseDir, fixturePath, fixture.Name, createOut, err); cleanupErr != nil && retErr == nil {
+			retErr = cleanupErr
+		}
+	}()
 	if err != nil {
 		return fmt.Errorf("sbx env create (infrastructure, not a capability signal): %w", err)
 	}

@@ -40,7 +40,7 @@ func buildExecArgv(f EnvironmentFixture) []string {
 // Every host command goes through the injected Executor, so this check needs
 // no real `sbx` binary to run under `go test`: production wires the real
 // execExecutor, tests inject a fake that records and answers deterministically.
-func checkEnvironmentCreateThenExecInvocation(ctx context.Context, lw io.Writer, executor Executor, phaseDir string) error {
+func checkEnvironmentCreateThenExecInvocation(ctx context.Context, lw io.Writer, executor Executor, phaseDir string) (retErr error) {
 	fixture := customAgentFixture()
 
 	fixturePath := filepath.Join(phaseDir, "authored.sbxenv.yaml")
@@ -53,10 +53,21 @@ func checkEnvironmentCreateThenExecInvocation(ctx context.Context, lw io.Writer,
 
 	createArgs := []string{"env", "create", fixturePath}
 	fmt.Fprintf(lw, "$ sbx %s\n", strings.Join(createArgs, " "))
-	createOut, createErrOut, err := executor.Run(ctx, "sbx", createArgs, env, phaseDir)
-	fmt.Fprintf(lw, "stdout: %s\nstderr: %s\nerr: %v\n", createOut, createErrOut, err)
-	if err != nil {
-		return fmt.Errorf("sbx env create: %w", err)
+	// createErr is deliberately its own named variable, never reused for the
+	// exec call below: cleanupCreatedFixture is gated on the CREATE's own
+	// receipt, and the deferred closure captures createOut/createErr by
+	// reference, so reusing the same variable name for a later call (as this
+	// package once did) would have the exec call's outcome silently
+	// overwrite the create's by the time the deferred cleanup actually runs.
+	createOut, createErrOut, createErr := executor.Run(ctx, "sbx", createArgs, env, phaseDir)
+	fmt.Fprintf(lw, "stdout: %s\nstderr: %s\nerr: %v\n", createOut, createErrOut, createErr)
+	defer func() {
+		if cleanupErr := cleanupCreatedFixture(ctx, lw, executor, env, phaseDir, fixturePath, fixture.Name, createOut, createErr); cleanupErr != nil && retErr == nil {
+			retErr = cleanupErr
+		}
+	}()
+	if createErr != nil {
+		return fmt.Errorf("sbx env create: %w", createErr)
 	}
 	if !strings.Contains(createOut, fixture.Name) {
 		return fmt.Errorf("sbx env create did not report the expected positively-identified instance name %q (stdout=%q)", fixture.Name, createOut)
@@ -64,10 +75,10 @@ func checkEnvironmentCreateThenExecInvocation(ctx context.Context, lw io.Writer,
 
 	execArgs := buildExecArgv(fixture)
 	fmt.Fprintf(lw, "$ sbx %s\n", strings.Join(execArgs, " "))
-	execOut, execErrOut, err := executor.Run(ctx, "sbx", execArgs, env, phaseDir)
-	fmt.Fprintf(lw, "stdout: %s\nstderr: %s\nerr: %v\n", execOut, execErrOut, err)
-	if err != nil {
-		return fmt.Errorf("name-based sbx exec: %w", err)
+	execOut, execErrOut, execErr := executor.Run(ctx, "sbx", execArgs, env, phaseDir)
+	fmt.Fprintf(lw, "stdout: %s\nstderr: %s\nerr: %v\n", execOut, execErrOut, execErr)
+	if execErr != nil {
+		return fmt.Errorf("name-based sbx exec: %w", execErr)
 	}
 
 	return nil

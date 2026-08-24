@@ -26,6 +26,20 @@ type recreateBoundaryFakeExecutor struct {
 }
 
 func (f recreateBoundaryFakeExecutor) Run(ctx context.Context, name string, args, env []string, dir string) (string, string, error) {
+	// The fresh-probe and removal calls cleanupCreatedFixture issues after
+	// this check's own create calls are routed by ARGV SHAPE, never by
+	// re-sniffing the fixture file's current (possibly drifted) content: the
+	// same fixturePath is reused for both the baseline and drifted create
+	// calls, so by the time cleanup runs the file on disk holds whichever
+	// content was written last — exactly like a real `sbx env rm -f <path>`
+	// call, which resolves the environment's identity from registered state,
+	// never by re-parsing the file's current bytes.
+	if len(args) > 0 && args[0] == "ls" {
+		return "created " + recreateBoundaryFixtureName + " (positively identified)\n", "", nil
+	}
+	if len(args) > 1 && args[0] == "env" && args[1] == "rm" {
+		return "removed\n", "", nil
+	}
 	fixturePath := args[len(args)-1]
 	content := mustReadFile(fixturePath)
 	if strings.Contains(content, "memory: 60g") {

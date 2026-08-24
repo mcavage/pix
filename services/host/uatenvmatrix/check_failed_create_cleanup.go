@@ -21,6 +21,7 @@ const failedCreateCleanupFixtureName = "pix-uatenv-fixture-failed-create"
 func failedCreateCleanupFixtureYAML() []byte {
 	return []byte(`schemaVersion: "1"
 agent: pix
+name: ` + failedCreateCleanupFixtureName + `
 
 sandboxOptions:
   memory: 4g

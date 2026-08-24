@@ -45,7 +45,7 @@ func recreateCommand(name, envName string) string {
 // no user-authored `--name` is ever passed — the reported instance name
 // comes from sbx's own positive identification, the same contract
 // checkEnvironmentCreateThenExecInvocation relies on.
-func checkEnvironmentRecreateBoundary(ctx context.Context, lw io.Writer, executor Executor, phaseDir string) error {
+func checkEnvironmentRecreateBoundary(ctx context.Context, lw io.Writer, executor Executor, phaseDir string) (retErr error) {
 	env := hostToolExecEnv()
 	fixturePath := filepath.Join(phaseDir, "recreate-boundary.sbxenv.yaml")
 
@@ -58,6 +58,19 @@ func checkEnvironmentRecreateBoundary(ctx context.Context, lw io.Writer, executo
 	fmt.Fprintf(lw, "$ sbx %s\n", strings.Join(baselineArgs, " "))
 	baselineOut, baselineErrOut, err := executor.Run(ctx, "sbx", baselineArgs, env, phaseDir)
 	fmt.Fprintf(lw, "stdout: %s\nstderr: %s\nerr: %v\n", baselineOut, baselineErrOut, err)
+	// cleanupCreatedFixture is deferred here, immediately after the baseline
+	// create, and keyed on the BASELINE's own receipt: the baseline is the
+	// one call that ever creates a real instance under this declared
+	// identity (docs/design/environments.md section 10.2's create-never-
+	// attaches contract means the drifted call below must never succeed in
+	// creating a second one), so it is the baseline's receipt — not the
+	// drifted call's outcome — that gates removal, regardless of which
+	// branch this check's own assertion below takes.
+	defer func() {
+		if cleanupErr := cleanupCreatedFixture(ctx, lw, executor, env, phaseDir, fixturePath, recreateBoundaryFixtureName, baselineOut, err); cleanupErr != nil && retErr == nil {
+			retErr = cleanupErr
+		}
+	}()
 	if err != nil {
 		return fmt.Errorf("baseline sbx env create: %w", err)
 	}
