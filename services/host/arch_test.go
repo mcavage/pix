@@ -108,6 +108,18 @@ var pkgLayer = map[string]int{
 	// non-force removal planning. Pure and dependency-free (see sandbox/doc.go),
 	// same tier as its capability siblings, invisible to them.
 	"sandbox": layerCapability,
+	// hosttrust is E1.4's launcher-owned host-exec trust mechanism, extracted
+	// from workflow/pack: canonical identity, the fingerprint engine, the one
+	// Record/AcceptanceStore shape keyed by an opaque Subject{Kind,Root} (so a
+	// pack record and a future environment record never collide), the
+	// flock-serialized fresh-load->mutate->save shape, symlink-refused atomic
+	// document I/O, and content hashing. Pure mechanism only — it has no
+	// knowledge of packs, environments, or anything else that HAS a host-exec
+	// surface — so, like every other L1 capability, it imports no sibling
+	// (packinfo included: CanonicalRoot/IsSymlink duplicate a few of
+	// packinfo's lines rather than import it, exactly as sandbox and
+	// uatenvmatrix already duplicate rather than import across this boundary).
+	"hosttrust": layerCapability,
 	// packinfo is the READ-ONLY pack model — pack.toml's schema, the fail-closed
 	// loader, active-root resolution and the facts derived from them. It exists
 	// because launch, doctor and provision all need "what pack is active and what

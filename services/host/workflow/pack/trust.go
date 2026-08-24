@@ -14,14 +14,11 @@ package pack
 
 import (
 	"bufio"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"pix/host/hostenv"
+	"pix/host/hosttrust"
 	"pix/host/packinfo"
 	"sort"
 	"strconv"
@@ -110,7 +107,7 @@ func (b hostBoM) Tier1() bool {
 // Tier-0 case and no longer can be: every integration declares a transport, and
 // all four are host-exec or third-party egress. Nothing here
 // executes pack code: setup hooks and wrapper scripts are only HASHED
-// (hashHostExecFile), never run.
+// (hosttrust.HashFile), never run.
 func VerifyPackLaunchTrust(p *packinfo.Info, env hostenv.Env) error {
 	if p == nil {
 		return nil
@@ -308,7 +305,7 @@ func computeHostExecFingerprintWithSetup(root string, b hostBoM, setupBytes map[
 	doc.Containers = sortedByKey(doc.Containers, func(c hostBoMContainer) string { return c.Name })
 	doc.RemoteMCP = sortedByKey(b.RemoteMCP, func(r hostBoMRemote) string { return r.Name })
 	for _, name := range b.Proxies {
-		sha, err := hashHostExecFile(filepath.Join(root, "bin", name), "host wrapper "+strconv.Quote(name))
+		sha, err := hosttrust.HashFile(filepath.Join(root, "bin", name), "host wrapper "+strconv.Quote(name))
 		if err != nil {
 			return "", nil, err
 		}
@@ -331,12 +328,11 @@ func computeHostExecFingerprintWithSetup(root string, b hostBoM, setupBytes map[
 			ok = true
 		}
 		if data, snapshotted := setupBytes[s.ID]; snapshotted {
-			sum := sha256.Sum256(data)
-			sha, ok = hex.EncodeToString(sum[:]), true
+			sha, ok = hosttrust.HashBytes(data), true
 		}
 		if !ok {
 			var err error
-			if sha, err = hashHostExecFile(filepath.Join(root, s.Path), "setup hook "+strconv.Quote(s.ID)); err != nil {
+			if sha, err = hosttrust.HashFile(filepath.Join(root, s.Path), "setup hook "+strconv.Quote(s.ID)); err != nil {
 				return "", nil, err
 			}
 		}
@@ -360,12 +356,11 @@ func computeHostExecFingerprintWithSetup(root string, b hostBoM, setupBytes map[
 	}
 	// Names are unique (validatePackServices), so name order is total.
 	doc.Services = sortedByKey(doc.Services, func(s packinfo.Service) string { return s.Name })
-	enc, err := json.Marshal(doc)
+	fp, err := hosttrust.Fingerprint(doc)
 	if err != nil {
 		return "", nil, fmt.Errorf("encoding host-exec surface: %v", err)
 	}
-	sum := sha256.Sum256(enc)
-	return hex.EncodeToString(sum[:]), proxySHA, nil
+	return fp, proxySHA, nil
 }
 
 // sortedByKey returns a sorted COPY of in — the canonical ordering every
@@ -374,21 +369,6 @@ func sortedByKey[T any](in []T, key func(T) string) []T {
 	out := append([]T(nil), in...)
 	sort.Slice(out, func(i, j int) bool { return key(out[i]) < key(out[j]) })
 	return out
-}
-
-// hashHostExecFile is the fingerprint side of the content pin: hash the bytes
-// on disk, symlink-refused. An unhashable surface is an ERROR — it can be
-// neither accepted nor installed.
-func hashHostExecFile(path, label string) (string, error) {
-	if packinfo.IsSymlinkPath(path) {
-		return "", fmt.Errorf("%s is a symlink; refusing to fingerprint it", label)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("%s: %v (cannot fingerprint the host-exec surface; fail closed)", label, err)
-	}
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:]), nil
 }
 
 // renderRequireHint prints a requirement's pack-authored guidance on the
