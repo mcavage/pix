@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -180,4 +181,86 @@ func TestServingEntryPointsRefuseWhenLockHeld(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A contended lock must NAME its holder. The flock itself is anonymous, so
+// without this an orphaned memory server — a plugin child of a `pix serve`
+// that was SIGKILLed, which no supervisor knows about and no reattach record
+// points at — makes every subsequent start fail with a perfectly accurate
+// message an operator cannot act on. The pid is what turns it into `kill N`.
+func TestLockRefusalNamesTheHolder(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".memory.lock")
+
+	// A REAL holder in another process: `sh -c 'flock…'` is not portable, so a
+	// child of the test binary takes the lock and waits, exactly as a leaked
+	// memory server does.
+	holder := exec.Command(os.Args[0], "-test.run=TestLockHolderHelperProcess")
+	holder.Env = append(os.Environ(), lockHelperEnv+"="+path)
+	stdout, err := holder.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := holder.Start(); err != nil {
+		t.Fatalf("start the holder: %v", err)
+	}
+	reaped := make(chan struct{})
+	go func() { _, _ = holder.Process.Wait(); close(reaped) }()
+	t.Cleanup(func() { _ = holder.Process.Kill(); <-reaped })
+
+	// The helper prints one line once the lock is HELD; until then a refusal
+	// here would be testing nothing.
+	buf := make([]byte, 16)
+	if _, err := stdout.Read(buf); err != nil {
+		t.Fatalf("waiting for the holder to take the lock: %v", err)
+	}
+
+	if _, err := acquireLock(path); err == nil {
+		t.Fatal("acquired a lock another process holds")
+	}
+	hint := lockHolderHint(path)
+	if !strings.Contains(hint, strconv.Itoa(holder.Process.Pid)) {
+		t.Errorf("hint %q does not name the holding pid %d", hint, holder.Process.Pid)
+	}
+	for _, want := range []string{"ps -p", "kill "} {
+		if !strings.Contains(hint, want) {
+			t.Errorf("hint %q does not tell the operator to %q", hint, want)
+		}
+	}
+
+	// It must never send an operator after their own process, and an
+	// unstamped/absent file must stay silent rather than guess.
+	own := filepath.Join(dir, "own.lock")
+	rel, err := acquireLock(own)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rel()
+	if got := lockHolderHint(own); got != "" {
+		t.Errorf("hint for a lock WE hold = %q, want silence", got)
+	}
+	if got := lockHolderHint(filepath.Join(dir, "absent.lock")); got != "" {
+		t.Errorf("hint for a missing lock file = %q, want silence", got)
+	}
+}
+
+// lockHelperEnv names the env var that turns the test binary into the
+// lock-holding child TestLockRefusalNamesTheHolder needs.
+const lockHelperEnv = "PIX_TEST_LOCK_HOLDER_PATH"
+
+// TestLockHolderHelperProcess is not a test: re-exec'd by
+// TestLockRefusalNamesTheHolder, it takes the real flock in a SEPARATE process
+// (the only way to contend for one — flock is per open file description, so a
+// second acquire in-process could succeed) and holds it until killed.
+func TestLockHolderHelperProcess(t *testing.T) {
+	path := os.Getenv(lockHelperEnv)
+	if path == "" {
+		t.Skip("helper process: not invoked by its parent test")
+	}
+	if _, err := acquireLock(path); err != nil {
+		fmt.Println("lock-failed")
+		return
+	}
+	fmt.Println("locked")
+	select {} // held until the parent kills us
 }

@@ -15,6 +15,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -42,6 +44,16 @@ func acquireLock(path string) (release func(), err error) {
 		_ = f.Close()
 		return nil, fmt.Errorf("lock %s: %w", path, err)
 	}
+	// Stamp the holder in, now that we hold it. The flock is ANONYMOUS: the
+	// kernel says only that someone holds it, so a holder outliving its
+	// supervisor (a go-plugin child of a SIGKILLed `pix serve`, which nothing
+	// reaps and nothing can name) makes every later start a dead end —
+	// perfectly diagnosed, wholly unactionable. A pid makes it one command.
+	// Read only UNDER CONTENTION, so it cannot go stale in a way that matters:
+	// a crashed holder releases the lock, and its taker overwrites this.
+	// Best-effort; failing to annotate a lock we hold must not fail the acquire.
+	_ = f.Truncate(0)
+	_, _ = f.WriteAt([]byte(strconv.Itoa(os.Getpid())+"\n"), 0)
 	var once sync.Once
 	return func() {
 		once.Do(func() {
@@ -49,6 +61,24 @@ func acquireLock(path string) (release func(), err error) {
 			_ = f.Close()
 		})
 	}, nil
+}
+
+// lockHolderHint renders the pid a CONTENDED lock file records (see
+// acquireLock) as a sentence saying what to look at and what to do. Silent
+// when there is no usable pid — a holder predating the stamp, a torn write, or
+// our own pid (which would send an operator after themselves). Advisory only:
+// appended to a refusal, never acted on.
+func lockHolderHint(path string) string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || pid <= 0 || pid == os.Getpid() {
+		return ""
+	}
+	return fmt.Sprintf("\n  the lock file records pid %d as the holder — check it with `ps -p %d`;"+
+		" if it is a memory server left behind by a hard-killed `pix serve`, stop it with `kill %d` and retry", pid, pid, pid)
 }
 
 // lockMemoryStoreOrFatal is the shared prologue every LIVE-SERVING memory entry
@@ -66,7 +96,7 @@ func lockMemoryStoreOrFatal(fatal func(format string, a ...any)) func() {
 	path := config.MemoryLockPath()
 	release, err := acquireMemLockFn(path)
 	if err != nil {
-		fatal("memory: could not acquire store lock at %s — another memory server or a restore is using the database, only one may hold it: %v", path, err)
+		fatal("memory: could not acquire store lock at %s — another memory server or a restore is using the database, only one may hold it: %v%s", path, err, lockHolderHint(path))
 		return func() {} // unreachable once fatal exits; a no-op keeps callers defer-safe
 	}
 	return release
