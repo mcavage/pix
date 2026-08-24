@@ -13,7 +13,6 @@ import (
 	"time"
 
 	uattypes "pix/host/uat"
-	"pix/host/uatenvmatrix"
 )
 
 func (r *Runner) executeAsync(ctx context.Context, runID, commit string, scenario *uattypes.Scenario) {
@@ -263,14 +262,17 @@ func (r *Runner) executeCandidateSmoke(ctx context.Context, runID, commit string
 	// run the candidate binaries directly, in run-local isolation, before the
 	// sandbox launches; neither touches port 11435 or ~/.config/pix.
 	// memoryMatrix is nil only if a Runner was built some way other than
-	// NewRunner; RunForCandidateSmoke owns its own override seam instead.
+	// NewRunner; envMatrix owns its own equivalent nil guard (runEnvMatrixStep
+	// below), since env_matrix.go's runCandidateEnvMatrix executes the
+	// SUBMITTED candidate's own uat-env-matrix binary rather than any linked-in
+	// uatenvmatrix call this file could make directly.
 	if r.memoryMatrix == nil {
 		return errors.New("candidate_smoke: no memory matrix wired (Runner must be built by NewRunner)")
 	}
 	if err := r.memoryMatrix(ctx, res, stepsDir); err != nil {
 		return fmt.Errorf("memory matrix: %w", err)
 	}
-	if err := uatenvmatrix.RunForCandidateSmoke(ctx, r.exec, res.OutDir, stepsDir, res.ImageTag); err != nil {
+	if err := r.runEnvMatrixStep(ctx, res, stepsDir); err != nil {
 		return fmt.Errorf("env matrix: %w", err)
 	}
 

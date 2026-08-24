@@ -50,6 +50,16 @@ type Runner struct {
 	// against the just-built candidate binaries before sandbox launch.
 	// NewRunner wires the real matrix unless exec supplies the override below.
 	memoryMatrix func(context.Context, RunResources, string) error
+
+	// envMatrix is candidate_smoke's native-environment UAT coverage step,
+	// run immediately after memoryMatrix. NewRunner wires it to
+	// runCandidateEnvMatrix (env_matrix.go), which execs the SUBMITTED
+	// candidate's own `<res.OutDir>/pix-host uat-env-matrix` — never the
+	// worker's own statically linked uatenvmatrix.Run — unless exec supplies
+	// the RunCandidateEnvMatrix override below. See
+	// TestCandidateSmokeNeverCallsLinkedEnvMatrix and
+	// docs/design/self-development-uat.md.
+	envMatrix func(context.Context, RunResources, string) error
 }
 
 func (r *Runner) RetryCleanups() map[string]string {
@@ -160,6 +170,20 @@ func NewRunner(pixHost, repoPath, stateDir string, git Git, exec Exec, sandbox S
 		memoryMatrix = override.RunCandidateMemoryMatrix
 	}
 
+	envMatrix := func(ctx context.Context, res RunResources, stepsDir string) error {
+		return runCandidateEnvMatrix(ctx, exec, res, stepsDir)
+	}
+	// Same mock seam as memoryMatrix above, kept at this L3 Runner boundary
+	// (not inside uatenvmatrix, an L1 capability) so a mock Exec can replace
+	// this step without uatenvmatrix ever knowing candidate_smoke exists.
+	if override, ok := exec.(interface {
+		RunCandidateEnvMatrix(ctx context.Context, outDir, stepsDir, imageTag string) error
+	}); ok {
+		envMatrix = func(ctx context.Context, res RunResources, stepsDir string) error {
+			return override.RunCandidateEnvMatrix(ctx, res.OutDir, stepsDir, res.ImageTag)
+		}
+	}
+
 	return &Runner{
 		pixHost:          pixHost,
 		repoPath:         repoPath,
@@ -174,6 +198,7 @@ func NewRunner(pixHost, repoPath, stateDir string, git Git, exec Exec, sandbox S
 		buildSem:         make(chan struct{}, buildConcurrency),
 		buildConcurrency: buildConcurrency,
 		memoryMatrix:     memoryMatrix,
+		envMatrix:        envMatrix,
 	}, nil
 }
 
@@ -221,6 +246,18 @@ func (r *Runner) limits() executionLimits {
 // Capabilities reports the runner's actual closed vocabulary and limits. The
 // lists come from the scenario validator and memory matrix, not a parallel
 // documentation-only registry.
+//
+// NamedChecks (named_checks) is WORKER-advertised vocabulary: the set of
+// checks this worker's own build of uatenvmatrix declares via CheckNames(),
+// a pure static read that never executes anything. It is what a scenario
+// author can rely on candidate_smoke to run in NORMAL operation, since a
+// submitted candidate built from the same or a compatible commit reports the
+// identical set. It is not, and must never be read as, proof of what a given
+// run actually executed: the execution evidence for that is
+// steps/env_matrix.log, which lists the SUBMITTED CANDIDATE's own
+// --list-checks output (env_matrix.go's runCandidateEnvMatrix) — candidate
+// names, captured from the candidate's own child process, not this worker's
+// linked-in copy.
 func (r *Runner) capabilities() runnerCapabilities {
 	legalNeeds, legalActions, legalAssertions := uattypes.LegalVocabulary()
 	return runnerCapabilities{

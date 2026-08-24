@@ -23,6 +23,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"pix/host/uatenvmatrix"
 )
 
 // version is stamped at build time via -ldflags "-X main.version=..." for both
@@ -62,6 +64,12 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(2)
 		}
+	case "uat-env-matrix":
+		// Intentionally absent from usageText: this is the internal candidate
+		// subcommand workflow/uat.Runner's env-matrix seam execs against the
+		// SUBMITTED candidate's own out-dir binary
+		// (docs/design/self-development-uat.md), never a public verb.
+		os.Exit(uatenvmatrix.RunCLI(os.Args[2:], os.Stdout, os.Stderr))
 
 	case "route":
 		runRouteHost(os.Args[2:])

@@ -20,10 +20,17 @@
 // asked envinfo to build its own fixture. arch_test.go's
 // TestArchitecture_UatenvmatrixNeverImportsEnvinfo is the explicit guard.
 //
-// executeCandidateSmoke calls Run through workflow/uat.Runner.envMatrix AFTER
-// the existing memory matrix and before the sandbox launches. Every check
-// here must be testable through an injected Executor — unit tests in this
-// package never need a real `sbx` binary on PATH.
+// candidate_smoke reaches this package's checks ONLY through the SUBMITTED
+// candidate's own `pix-host uat-env-matrix` binary, run as a child process by
+// workflow/uat.Runner's envMatrix seam (workflow/uat/env_matrix.go) after the
+// existing memory matrix and before the sandbox launches. This package's Run
+// and CheckNames are never called directly by workflow/uat's own linked-in
+// code again — see workflow/uat's TestCandidateSmokeNeverCallsLinkedEnvMatrix
+// sentinel and docs/design/self-development-uat.md (host run
+// run-20260823-201941-8f7b648b proved the prior linked-in call executed the
+// worker's own pre-candidate uatenvmatrix rather than the candidate's).
+// Every check here must be testable through an injected Executor — unit
+// tests in this package never need a real `sbx` binary on PATH.
 package uatenvmatrix
 
 import (
@@ -90,27 +97,6 @@ func CheckNames() []string {
 		names = append(names, check.name)
 	}
 	return names
-}
-
-// candidateOverride lets a mock host-command executor replace the real
-// host-backed env matrix in candidate_smoke orchestration tests: mocks
-// produce no runnable candidate binaries for Run's own fail-closed guard, so
-// tests may implement this method to replace just this matrix.
-type candidateOverride interface {
-	RunCandidateEnvMatrix(ctx context.Context, outDir, stepsDir, imageTag string) error
-}
-
-// RunForCandidateSmoke is candidate_smoke's env-matrix hook: exec's
-// RunCandidateEnvMatrix override when present, else Run itself against the
-// candidate binaries at outDir, addressed by the sandbox image built from
-// imageTag. workflow/uat.executeCandidateSmoke is the sole caller; exec is
-// its injected Exec, accepted as any so this L1 package never imports its
-// L3 caller.
-func RunForCandidateSmoke(ctx context.Context, exec any, outDir, stepsDir, imageTag string) error {
-	if override, ok := exec.(candidateOverride); ok {
-		return override.RunCandidateEnvMatrix(ctx, outDir, stepsDir, imageTag)
-	}
-	return Run(ctx, Inputs{OutDir: outDir, StepsDir: stepsDir, ImageTag: "docker.io/mcavage/pix:" + imageTag})
 }
 
 // Run executes the named environment checks, in isolation, against the
