@@ -1,5 +1,3 @@
-//go:build unix
-
 package recreatelog
 
 import (
@@ -11,7 +9,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -150,14 +147,18 @@ func isWindowsAbs(p string) bool {
 	return len(p) >= 2 && p[1] == ':' && ((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z'))
 }
 
-// withAppendLock serializes the read-modify-write around fn behind an flock
-// on a lock file DISTINCT from the data file: flock is held on an inode, and
-// the data file's atomic swap replaces that inode out from under any holder
-// who locked the data file directly (the same reason lease keeps refs.lock
-// separate from record.json).
+// withAppendLock serializes the read-modify-write around fn behind an
+// advisory exclusive lock on a lock file DISTINCT from the data file: the
+// lock is held on the lock file's own identity, and the data file's atomic
+// swap replaces its inode/handle out from under any holder who locked the
+// data file directly (the same reason lease keeps refs.lock separate from
+// record.json). The actual lock primitive is platform-specific
+// (tryLockExclusive/unlockExclusive: syscall.Flock on unix, LockFileEx on
+// windows — see lock_unix.go/lock_windows.go); this retry loop, and the
+// timeout it enforces, are identical on every platform.
 func withAppendLock(dir string, fn func() error) error {
 	lockPath := filepath.Join(dir, lockFileName)
-	f, err := openNoFollow(lockPath, syscall.O_RDWR|syscall.O_CREAT, 0o600)
+	f, err := openNoFollow(lockPath, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return err
 	}
@@ -165,19 +166,19 @@ func withAppendLock(dir string, fn func() error) error {
 
 	deadline := time.Now().Add(appendLockTimeout)
 	for {
-		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
-		if err == nil {
-			break
-		}
-		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
+		acquired, err := tryLockExclusive(f)
+		if err != nil {
 			return &os.PathError{Op: "flock", Path: lockPath, Err: err}
+		}
+		if acquired {
+			break
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("recreatelog: timed out waiting for the append lock on %s", lockPath)
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
-	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	defer unlockExclusive(f)
 	return fn()
 }
 
@@ -185,7 +186,7 @@ func withAppendLock(dir string, fn func() error) error {
 // rather than being silently dropped, because an unknown field is exactly
 // the shape a leaked facet value or credential name would take.
 func readRecordsFile(path string) ([]Record, error) {
-	f, err := openNoFollow(path, syscall.O_RDONLY, 0)
+	f, err := openNoFollow(path, os.O_RDONLY, 0)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -217,7 +218,7 @@ func writeRecordsFile(path string, records []Record) error {
 		return fmt.Errorf("recreatelog: marshal records: %w", err)
 	}
 	tmp := path + ".tmp"
-	f, err := openNoFollow(tmp, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_TRUNC, 0o600)
+	f, err := openNoFollow(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
@@ -235,19 +236,4 @@ func writeRecordsFile(path string, records []Record) error {
 		return fmt.Errorf("recreatelog: rename into place %s: %w", path, err)
 	}
 	return nil
-}
-
-// openNoFollow opens path with O_NOFOLLOW so a symlink at path is refused
-// (ELOOP), never followed — the same primitive services/host/lease uses,
-// duplicated here rather than imported: recreatelog holds zero internal
-// imports on purpose (see guard_test.go's F10 and doc.go's "no L1 siblings").
-func openNoFollow(path string, flag int, perm os.FileMode) (*os.File, error) {
-	fd, err := syscall.Open(path, flag|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, uint32(perm))
-	if err != nil {
-		if errors.Is(err, syscall.ELOOP) {
-			return nil, fmt.Errorf("recreatelog: refusing to follow symlink at %s", path)
-		}
-		return nil, &os.PathError{Op: "open", Path: path, Err: err}
-	}
-	return os.NewFile(uintptr(fd), path), nil
 }

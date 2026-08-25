@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"pix/host/envinfo"
@@ -309,6 +310,48 @@ func TestParse_SchemaVersionMustBeAuthoredString(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("Parse: unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// --- Wave B review round 1: a duplicate `schemaVersion` mapping key must
+// never let a second, differently-typed authoring silently win. ---
+//
+// gopkg.in/yaml.v3 refuses a duplicate mapping key unconditionally on the
+// strict struct decode ("mapping key ... already defined"), independent of
+// KnownFields — confirmed directly against the vendored decoder before
+// writing this test, not assumed. A NUMERIC first occurrence never reaches
+// that duplicate-key check at all: checkSchemaVersionIsAuthoredString
+// inspects only the FIRST `schemaVersion` node in the raw probe and refuses
+// it as ErrUnsupportedSchemaVersion before the strict decode ever runs. Both
+// outcomes are strict refusal, so this test accepts either rather than
+// pinning one internal code path — the finding is about there being NO
+// bypass, not about which of two already-correct errors fires. Production is
+// deliberately UNCHANGED by this test: no redundant duplicate-key parsing is
+// added on top of what yaml.v3 already enforces.
+func TestParse_DuplicateSchemaVersionKeyRefused(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+	}{
+		{"string-then-numeric", "schemaVersion: \"1\"\nschemaVersion: 1\n"},
+		{"numeric-then-string", "schemaVersion: 1\nschemaVersion: \"1\"\n"},
+		{"string-then-string", "schemaVersion: \"1\"\nschemaVersion: \"1\"\n"},
+		{"numeric-then-numeric", "schemaVersion: 1\nschemaVersion: 1\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := writeFixture(t, dir, ".sbxenv.yaml", tc.yaml)
+			doc, err := envinfo.Parse(path)
+			if err == nil {
+				t.Fatalf("Parse: expected an error for a duplicate schemaVersion key, got a document: %+v", doc)
+			}
+			isUnsupported := errors.Is(err, envinfo.ErrUnsupportedSchemaVersion)
+			isDuplicateKey := strings.Contains(err.Error(), "already defined")
+			if !isUnsupported && !isDuplicateKey {
+				t.Errorf("Parse error = %v, want either ErrUnsupportedSchemaVersion (a mistyped first occurrence) or yaml's own duplicate-key refusal (\"already defined\")", err)
 			}
 		})
 	}

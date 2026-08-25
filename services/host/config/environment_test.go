@@ -512,6 +512,111 @@ func TestSaveErasesHandEditedNoncanonicalEnvironment(t *testing.T) {
 	}
 }
 
+// TestLoadDropsInvalidEnvironmentNames is the Wave B review round-1 gap in
+// TestLoadDropsNoncanonicalEnvironmentPaths above: that test hand-edits an
+// unsafe PATH under a well-formed name. AddEnvironment is the only writer
+// that ever checks validEnvironmentName, so a hand-edited config.toml is
+// also the only way an unsafe NAME — one AddEnvironment would have refused
+// outright — reaches [environments], and Load must fail closed on it exactly
+// like a noncanonical path: dropped, never trusted as a registration, and
+// surfaced via UnknownKeys so the drop is diagnosable before it becomes
+// permanent at the next Save. Every entry below carries an otherwise-valid
+// CANONICAL path, isolating the name check from the path check.
+func TestLoadDropsInvalidEnvironmentNames(t *testing.T) {
+	path := tempConfig(t)
+	overlong := strings.Repeat("a", 129)
+	raw := "environment = \"bad/name\"\n\n[environments]\n" +
+		"\"bad/name\" = \"/abs/canonical/slash\"\n" +
+		"\"../evil\" = \"/abs/canonical/traversal\"\n" +
+		"\"bad\\tname\" = \"/abs/canonical/control\"\n" +
+		"\"" + overlong + "\" = \"/abs/canonical/overlong\"\n" +
+		"good = \"/abs/canonical/good\"\n"
+	if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	badNames := []string{"bad/name", "../evil", "bad\tname", overlong}
+	for _, badName := range badNames {
+		if _, ok := got.Environments[badName]; ok {
+			t.Errorf("Environments kept an invalid name %q: %v", badName, got.Environments)
+		}
+	}
+	if len(got.Environments) != 1 {
+		t.Errorf("Environments = %v, want exactly the one valid entry", got.Environments)
+	}
+	if p, ok := got.Environments["good"]; !ok || p != "/abs/canonical/good" {
+		t.Errorf("Environments[good] = %q, ok=%v, want the untouched canonical entry", p, ok)
+	}
+	if got.Environment != "" {
+		t.Errorf("Environment = %q, want cleared (its registration had an invalid name)", got.Environment)
+	}
+	unknown := got.UnknownKeys()
+	for _, badName := range badNames {
+		want := "environments." + badName
+		if !slices.Contains(unknown, want) {
+			t.Errorf("UnknownKeys() = %v, want it to include %q", unknown, want)
+		}
+	}
+	if slices.Contains(unknown, "environments.good") {
+		t.Errorf("UnknownKeys() wrongly flagged the valid entry: %v", unknown)
+	}
+}
+
+// TestSaveErasesHandEditedInvalidEnvironmentName is the name-side sibling of
+// TestSaveErasesHandEditedNoncanonicalEnvironment: the diagnostic
+// (UnknownKeys) must already be populated the instant Load returns, strictly
+// BEFORE the destructive Save() call that permanently erases the entry —
+// proving the invalid-name drop does not survive a save, and does not
+// silently survive undetected before one either.
+func TestSaveErasesHandEditedInvalidEnvironmentName(t *testing.T) {
+	path := tempConfig(t)
+	const before = "environment = \"home\"\n\n[environments]\n" +
+		"\"../evil\" = \"/abs/canonical/evil\"\n" +
+		"good = \"/abs/canonical/good\"\n"
+	if err := os.WriteFile(path, []byte(before), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(cfg.UnknownKeys(), "environments.../evil") {
+		t.Fatalf("UnknownKeys() = %v, want it to already include %q before Save is ever called",
+			cfg.UnknownKeys(), "environments.../evil")
+	}
+	raw := rawFile(t, path)
+	if !strings.Contains(raw, "../evil") {
+		t.Fatalf("file on disk no longer has the hand-edited entry before Save was called: %s", raw)
+	}
+
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	after := rawFile(t, path)
+	if strings.Contains(after, "evil") {
+		t.Errorf("Save must have erased the invalid-name entry from disk, got:\n%s", after)
+	}
+	if !strings.Contains(after, "/abs/canonical/good") {
+		t.Errorf("Save must keep the valid sibling entry, got:\n%s", after)
+	}
+
+	reloaded, err := LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := reloaded.Environments["../evil"]; ok {
+		t.Errorf("Environments still has the erased entry after Save+reload: %v", reloaded.Environments)
+	}
+	if slices.Contains(reloaded.UnknownKeys(), "environments.../evil") {
+		t.Errorf("UnknownKeys() = %v, want no trace after the entry was already erased by Save", reloaded.UnknownKeys())
+	}
+}
+
 func TestLoadDropsDanglingEnvironmentDefault(t *testing.T) {
 	path := tempConfig(t)
 	const toml = "environment = \"ghost\"\n"

@@ -1,5 +1,13 @@
-//go:build unix
-
+// recreatelog_test.go carries no build tag on purpose: it exercises only the
+// public API (Append/Read) plus validation, none of which is unix-specific,
+// so it is the platform-independent proof that Wave B review round 1 asked
+// for — the SAME assertions (atomicity, the retention cap, restrictive
+// permissions, fail-closed malformed/unknown-field reads, concurrent-append
+// safety) hold whether the build picked lock_unix.go's flock or
+// lock_windows.go's LockFileEx. symlink_test.go and
+// environment_name_parity_test.go stay `//go:build unix`: the former needs
+// real unix symlink semantics, the latter only ever runs where recreatelog
+// and config are both built (see its own doc comment).
 package recreatelog
 
 import (
