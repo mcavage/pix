@@ -1,6 +1,8 @@
 package hosttrust
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"go/ast"
@@ -109,11 +111,19 @@ func TestFingerprint_DeterministicAndSensitiveToContent(t *testing.T) {
 		Names []string `json:"names"`
 	}
 	a := doc{V: 1, Names: []string{"x", "y"}}
-	fp1, err := Fingerprint(a)
+	docA1, err := Canonicalize(a)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fp2, err := Fingerprint(a)
+	fp1, err := Fingerprint(docA1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	docA2, err := Canonicalize(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp2, err := Fingerprint(docA2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +131,11 @@ func TestFingerprint_DeterministicAndSensitiveToContent(t *testing.T) {
 		t.Errorf("Fingerprint is not deterministic: %q != %q", fp1, fp2)
 	}
 	b := doc{V: 1, Names: []string{"x", "y", "z"}}
-	fp3, err := Fingerprint(b)
+	docB, err := Canonicalize(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp3, err := Fingerprint(docB)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +152,11 @@ func TestFingerprint_IsSha256OfCanonicalJSON(t *testing.T) {
 		A int    `json:"a"`
 		B string `json:"b"`
 	}{A: 1, B: "x"}
-	got, err := Fingerprint(v)
+	doc, err := Canonicalize(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Fingerprint(doc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,12 +164,41 @@ func TestFingerprint_IsSha256OfCanonicalJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, err := Fingerprint(json.RawMessage(enc))
+	sum := sha256.Sum256(enc)
+	want := hex.EncodeToString(sum[:])
+	if got != want {
+		t.Errorf("Fingerprint(Canonicalize(v)) = %q, want %q (sha256 hex of v's own json.Marshal)", got, want)
+	}
+}
+
+// TestCanonicalize_DeterministicOnEqualValues: Canonicalize itself — the only
+// path to a CanonicalDoc — must reproduce the identical byte encoding for two
+// equal values, since a divergent encoding is a divergent fingerprint
+// downstream regardless of what Fingerprint does with it.
+func TestCanonicalize_DeterministicOnEqualValues(t *testing.T) {
+	type doc struct {
+		V     int      `json:"v"`
+		Names []string `json:"names"`
+	}
+	a := doc{V: 1, Names: []string{"x", "y"}}
+	d1, err := Canonicalize(a)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != want {
-		t.Errorf("Fingerprint(v) = %q, want %q (sha256 of v's own json.Marshal)", got, want)
+	d2, err := Canonicalize(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp1, err := Fingerprint(d1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp2, err := Fingerprint(d2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fp1 != fp2 {
+		t.Errorf("Canonicalize(a) fingerprinted twice = %q, %q; want identical bytes for identical input", fp1, fp2)
 	}
 }
 

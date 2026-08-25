@@ -13,10 +13,13 @@
 //   - identity.go   — Subject{Kind, Root}: the opaque identity an acceptance
 //     record is keyed by, plus CanonicalRoot, the filesystem-root
 //     normalization every identity is built from.
-//   - fingerprint.go — Fingerprint: the canonical-JSON-then-sha256 engine
-//     behind every host-exec fingerprint. The caller still owns what gets
-//     marshaled (field order, sorted slices, omitempty) — that is domain
-//     knowledge — this is only the hash-of-the-encoding mechanism.
+//   - fingerprint.go — Canonicalize + CanonicalDoc + Fingerprint: the
+//     canonical-JSON-then-sha256 engine behind every host-exec fingerprint.
+//     The caller still owns what gets marshaled (field order, sorted slices,
+//     omitempty) — that is domain knowledge — but Fingerprint takes only a
+//     CanonicalDoc (producible solely via Canonicalize), so "canonicalize
+//     before you hash" is a compile-time constraint, not a comment a caller
+//     has to trust.
 //   - hash.go       — IsSymlink and HashFile: the content-hashing half of a
 //     fingerprint, symlink-refused.
 //   - store.go      — Record (the ONE acceptance-record shape) and
