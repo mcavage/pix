@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -325,6 +326,104 @@ func TestParseSurfacesRealTOMLSyntaxErrorsWithLine(t *testing.T) {
 		if serr.Line == 0 {
 			t.Error("Line = 0, want a real line number from the syntax error")
 		}
+	}
+}
+
+// TestParseUnknownKeyInsideInlineTableFallsBackToContainingLine: an unknown
+// key nested inside a `{ ... }` inline table is a REAL Undecoded key
+// (toml.MetaData.Undecoded drills into it), but locateKeyLines is a line-
+// oriented scanner over TOML's own `[section]`/`[[section]]` headers and
+// `key = value` assignments — it never walks into an inline table literal's
+// own sub-keys, so nothing on the nested key's own dotted path was ever
+// recorded. Before this fix that produced Line: 0, which no editor line
+// number can mean; the fallback degrades to the containing table/key—here,
+// the outermost `inference = { ... }` assignment—rather than lying with 0.
+func TestParseUnknownKeyInsideInlineTableFallsBackToContainingLine(t *testing.T) {
+	content := "inference = { backends = { zai = { driver = \"x\", bogus = \"y\" } } }\n"
+	path := writeSidecar(t, t.TempDir(), content)
+
+	_, err := ParseSidecar(path)
+	if err == nil {
+		t.Fatal("Parse: expected error for unknown key inside inline table, got nil")
+	}
+	serr, ok := err.(*Error)
+	if !ok {
+		t.Fatalf("error type = %T, want *envinfo.Error", err)
+	}
+	if serr.Key != "inference.backends.zai.bogus" {
+		t.Errorf("Key = %q, want %q", serr.Key, "inference.backends.zai.bogus")
+	}
+	if serr.Line == 0 {
+		t.Error("Line = 0, want a real line number (the containing table/key), never 0")
+	}
+	if serr.Line != 1 {
+		t.Errorf("Line = %d, want 1 (the line the containing `inference = { ... }` assignment starts on)", serr.Line)
+	}
+}
+
+// TestParseArrayOfTableMisuseOnAgentsNamesTheStructuralProblem: `agents` is a
+// Go map[string]string field, so BurntSushi does not refuse `[[agents]]`
+// (array-of-tables syntax) with a type error — it silently decodes each
+// array element's keys as Undecoded, leaving agents empty. Reported as a
+// plain "unknown key" for "agents.name", that message tells the author the
+// wrong thing to fix (as if `name` itself were a typo'd agent key) instead of
+// the real, structural problem: `agents` itself must be a table, not an
+// array of tables.
+func TestParseArrayOfTableMisuseOnAgentsNamesTheStructuralProblem(t *testing.T) {
+	content := "[[agents]]\nname = \"x\"\n"
+	path := writeSidecar(t, t.TempDir(), content)
+
+	_, err := ParseSidecar(path)
+	if err == nil {
+		t.Fatal("Parse: expected error for [[agents]] array-of-table misuse, got nil")
+	}
+	serr, ok := err.(*Error)
+	if !ok {
+		t.Fatalf("error type = %T, want *envinfo.Error", err)
+	}
+	if serr.Key != "agents" {
+		t.Errorf("Key = %q, want %q (the structural root, not the misleading %q)", serr.Key, "agents", "agents.name")
+	}
+	if !strings.Contains(serr.Reason, "agents") || !strings.Contains(serr.Reason, "table") {
+		t.Errorf("Reason = %q, want it to name agents as needing to be a table", serr.Reason)
+	}
+	if serr.Line != 1 {
+		t.Errorf("Line = %d, want 1 (the [[agents]] header line)", serr.Line)
+	}
+	if strings.Contains(serr.Error(), "agents.name") {
+		t.Errorf("Error() = %q, must not surface the misleading %q", serr.Error(), "agents.name")
+	}
+}
+
+// TestParseSyntaxErrorWithNoKeyOmitsEmptyKeySuffix: some real TOML syntax
+// errors (a blank key before '=', an unexpected token before any key is
+// parsed) carry an empty toml.ParseError.LastKey — there IS no key, the
+// error is purely positional. *Error's %q rendering of an empty Key would
+// print a bare `: ""` on the end of the message, which reads as "the key is
+// the empty string" rather than "there was no key at all".
+func TestParseSyntaxErrorWithNoKeyOmitsEmptyKeySuffix(t *testing.T) {
+	content := "= 1\n"
+	path := writeSidecar(t, t.TempDir(), content)
+
+	_, err := ParseSidecar(path)
+	if err == nil {
+		t.Fatal("Parse: expected a syntax error, got nil")
+	}
+	serr, ok := err.(*Error)
+	if !ok {
+		t.Fatalf("error type = %T, want *envinfo.Error", err)
+	}
+	if serr.Key != "" {
+		t.Errorf("Key = %q, want empty (this syntax error carries no key)", serr.Key)
+	}
+	if serr.Line == 0 {
+		t.Error("Line = 0, want a real line number from the syntax error")
+	}
+	if strings.HasSuffix(serr.Error(), `: ""`) {
+		t.Errorf("Error() = %q, must not end with the misleading empty-key suffix", serr.Error())
+	}
+	if serr.Error() != serr.File+":"+strconv.Itoa(serr.Line)+": "+serr.Reason {
+		t.Errorf("Error() = %q, want the no-key shape <file>:<line>: <reason>", serr.Error())
 	}
 }
 

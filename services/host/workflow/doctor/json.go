@@ -120,11 +120,39 @@ func ReportJSON(s health.Snapshot, profile string, exit int) ReportJSONView {
 			Required:   r.Required,
 			Detail:     r.Detail,
 			Evidence:   r.Evidence,
-			Fix:        r.Fix,
+			Fix:        sbxJSONFix(r),
 			DurationMS: r.Took.Milliseconds(),
 		})
 	}
 	return v
+}
+
+// sbxJSONFix answers a check's JSON `fix` field, filling in the ONE gap the
+// shared health.Run pipeline leaves for a machine reader: an sbx reply that
+// ran to completion but parsed as no version at all is StatusUnknown, not
+// StatusAbsent (probes.go's sbxProbeResult), so health.go's runOne strips its
+// Fix along with every other non-Missing() result's — Fix is reserved for a
+// VERIFIED gap, and "I could not read this" is deliberately not one. A human
+// reading doctor's text mode still gets the exact repair command, because
+// RunDoctor renders it from health.SbxVersionGate directly into the gate
+// line above the report. A JSON consumer has no such prose to parse, only
+// this row, so the same already-computed gate verdict is read back onto the
+// row for the JSON schema alone. StatusUnknown/Detail/Evidence are read from
+// r unchanged: SbxVersionGate never asks for or changes them, and the health
+// package's own honesty rule keeps unparsable as unparsable everywhere else
+// (Snapshot.Gaps/Blocking/Fixes) — only the JSON `fix` field for this exact
+// row gains a value it did not carry before.
+func sbxJSONFix(r health.Result) string {
+	if r.Fix != "" {
+		return r.Fix
+	}
+	if r.Name != "sbx" {
+		return ""
+	}
+	if blocked, _ := health.SbxVersionGate(r); blocked {
+		return health.SbxUpgradeFix
+	}
+	return ""
 }
 
 // verdictOf reduces a snapshot to one word, by the same precedence the

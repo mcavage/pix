@@ -451,3 +451,23 @@ ports:
 		t.Errorf("ports = %+v", doc.Ports)
 	}
 }
+
+// TestClassifyKit_AmbiguousErrorHasNoEmDash is a copy regression: the
+// ambiguous-kit-reference error (classifyKit, parse.go) is USER-FACING —
+// Parse surfaces it verbatim to whoever authored a `.sbxenv.yaml` — and the
+// repo's copy standard (tests/anti-em-dash.test.mjs) bans the em dash on
+// every primary surface. That JS lint globs docs and SKILL.md files only; it
+// has no reach into Go string literals, so this error shipped with two em
+// dashes baked into the sentence a user actually reads. Pinned here because
+// nothing else in the suite reads this exact string.
+func TestClassifyKit_AmbiguousErrorHasNoEmDash(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFixture(t, dir, ".sbxenv.yaml", "schemaVersion: \"1\"\nkits:\n  - \"git@github.com:org/repo.git\"\n")
+	_, err := envinfo.Parse(path)
+	if err == nil {
+		t.Fatal("Parse: expected an ambiguous-kit-reference error, got nil")
+	}
+	if strings.Contains(err.Error(), "\u2014") {
+		t.Errorf("ambiguous-kit error contains an em dash, want direct punctuation: %v", err)
+	}
+}
