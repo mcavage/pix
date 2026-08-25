@@ -271,9 +271,10 @@ func TestUseEnvironmentRefusesUnregistered(t *testing.T) {
 	}
 }
 
-// TestUseEnvironmentUnknownErrorShape pins the PRD §5.1 actionable error
-// copy verbatim, with known names sorted deterministically regardless of
-// registration order.
+// TestUseEnvironmentUnknownErrorShape pins the Wave B / P0 subset of the
+// PRD §5.1 actionable error copy verbatim, with known names sorted
+// deterministically regardless of registration order. `closest:` is §5.1's
+// structured Wave C presentation and is out of scope here.
 func TestUseEnvironmentUnknownErrorShape(t *testing.T) {
 	tempConfig(t)
 	cfg, err := Load()
@@ -291,7 +292,7 @@ func TestUseEnvironmentUnknownErrorShape(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error selecting an unregistered environment")
 	}
-	want := "pix: no environment named \"hoem\".\n     known: home, work\n     register one: pix env add hoem [path]"
+	want := "pix: no environment named \"hoem\".\n     known: home, work\n     register one: pix env add <name> [path]"
 	if got := err.Error(); got != want {
 		t.Errorf("Error() =\n%s\nwant\n%s", got, want)
 	}
@@ -337,7 +338,7 @@ func TestUseEnvironmentUnknownErrorNoneWhenEmpty(t *testing.T) {
 	}
 
 	err = cfg.UseEnvironment("anything")
-	want := "pix: no environment named \"anything\".\n     known: none\n     register one: pix env add anything [path]"
+	want := "pix: no environment named \"anything\".\n     known: none\n     register one: pix env add <name> [path]"
 	if err == nil || err.Error() != want {
 		t.Errorf("Error() = %v, want %q", err, want)
 	}
@@ -345,8 +346,9 @@ func TestUseEnvironmentUnknownErrorNoneWhenEmpty(t *testing.T) {
 
 // TestUseEnvironmentUnknownErrorSpecialSafeName covers a name that is safe
 // per validEnvironmentName (dots, underscore, hyphen) but still unregistered:
-// the message must quote and repeat it unchanged, not choke on the
-// punctuation.
+// the "no environment named" line must quote and repeat it unchanged, not
+// choke on the punctuation, while the register-one line stays the fixed
+// `<name>` placeholder regardless of what was typed.
 func TestUseEnvironmentUnknownErrorSpecialSafeName(t *testing.T) {
 	tempConfig(t)
 	cfg, err := Load()
@@ -359,7 +361,7 @@ func TestUseEnvironmentUnknownErrorSpecialSafeName(t *testing.T) {
 
 	name := "stage-2.prod_env"
 	err = cfg.UseEnvironment(name)
-	want := "pix: no environment named \"stage-2.prod_env\".\n     known: home\n     register one: pix env add stage-2.prod_env [path]"
+	want := "pix: no environment named \"stage-2.prod_env\".\n     known: home\n     register one: pix env add <name> [path]"
 	if err == nil || err.Error() != want {
 		t.Errorf("Error() = %v, want %q", err, want)
 	}
