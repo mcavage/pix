@@ -42,7 +42,7 @@ func symlinkOrSkip(t *testing.T, oldname, newname string) {
 	}
 }
 
-// --- lock file (recreate.log.lock) ------------------------------------------
+// --- lock file (recreates.log.lock) -----------------------------------------
 
 // TestAppend_RefusesSymlinkedLockFile: withAppendLock opens lockFileName with
 // openNoFollow before ever taking the flock. A symlinked lock file must
@@ -106,7 +106,7 @@ func TestAppend_ConcurrentAppendsWithSymlinkedLockAlwaysRefuse(t *testing.T) {
 	}
 }
 
-// --- data file (recreate.log.json) ------------------------------------------
+// --- data file (recreates.log) -----------------------------------------------
 
 // TestRead_RefusesSymlinkedDataFile: readRecordsFile opens fileName with
 // openNoFollow. Unlike a genuinely absent file (which Read reports as zero
@@ -161,7 +161,7 @@ func TestAppend_RefusesSymlinkedDataFile(t *testing.T) {
 	}
 }
 
-// --- temp file (recreate.log.json.tmp) --------------------------------------
+// --- temp file (recreates.log.tmp) --------------------------------------------
 
 // TestAppend_RefusesSymlinkedTempFile: writeRecordsFile opens the temp file
 // (path+".tmp") with openNoFollow before writing the marshaled records and

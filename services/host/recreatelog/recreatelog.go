@@ -18,9 +18,25 @@ import (
 const MaxRecords = 100
 
 const (
-	fileName     = "recreate.log.json"
-	lockFileName = "recreate.log.lock"
+	// fileName is the ONE literal spelling of the on-disk diagnostic log's
+	// name: PRD §5.9 names it exactly `recreates.log`, no `.json` extension
+	// — this package still encodes the file as JSON (readRecordsFile /
+	// writeRecordsFile), but the PRD names the file, not its encoding.
+	// lockFileName derives from it (a `.lock` suffix) so the name is never
+	// duplicated as a second, independent literal; Path is the only exported
+	// accessor and the temp path (writeRecordsFile) derives from Path's
+	// result the same way.
+	fileName     = "recreates.log"
+	lockFileName = fileName + ".lock"
 )
+
+// Path returns the exact on-disk path to the recreate log inside dir:
+// <dir>/recreates.log (PRD §5.9). It is the sole accessor a later `pix
+// doctor` wiring should call to locate the log; Append and Read use it
+// internally too, so this join happens in exactly one place.
+func Path(dir string) string {
+	return filepath.Join(dir, fileName)
+}
 
 // appendLockTimeout bounds how long Append waits for the flock before giving
 // up. It is not a liveness signal, only a fixed bound on a fast local
@@ -57,7 +73,7 @@ func Append(dir, environment string, changedKeyPaths []string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("recreatelog: create state dir %s: %w", dir, err)
 	}
-	path := filepath.Join(dir, fileName)
+	path := Path(dir)
 	return withAppendLock(dir, func() error {
 		existing, err := readRecordsFile(path)
 		if err != nil {
@@ -84,7 +100,7 @@ func Read(dir string) ([]Record, error) {
 	if dir == "" {
 		return nil, errors.New("recreatelog: empty state dir")
 	}
-	return readRecordsFile(filepath.Join(dir, fileName))
+	return readRecordsFile(Path(dir))
 }
 
 func validateEnvironment(name string) error {

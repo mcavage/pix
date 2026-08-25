@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -276,6 +277,98 @@ func TestAppend_RejectsControlCharacterChangedKeyPath(t *testing.T) {
 func TestMaxRecords_IsExactly100(t *testing.T) {
 	if MaxRecords != 100 {
 		t.Fatalf("MaxRecords = %d, want 100", MaxRecords)
+	}
+}
+
+// TestFileName_IsExactlyRecreatesLog pins the on-disk diagnostic log's
+// filename to PRD §5.9: `recreates.log`, no `.json` extension. This package
+// still ENCODES the file as JSON (readRecordsFile/writeRecordsFile), but the
+// PRD names the file, not the encoding, so the name carries no extension
+// hint about the format inside it.
+func TestFileName_IsExactlyRecreatesLog(t *testing.T) {
+	if fileName != "recreates.log" {
+		t.Fatalf("fileName = %q, want %q (PRD §5.9)", fileName, "recreates.log")
+	}
+}
+
+// TestPath_JoinsDirAndFileName pins the exported accessor's exact shape:
+// dir joined with the PRD-named file, nothing more. This is the sole
+// accessor a later doctor wiring should call to locate the log — Read and
+// Append use it internally too (see TestPath_MatchesWhereAppendWrites), so
+// there is exactly one place the join happens.
+func TestPath_JoinsDirAndFileName(t *testing.T) {
+	dir := filepath.Join("some", "state", "dir")
+	want := filepath.Join(dir, "recreates.log")
+	if got := Path(dir); got != want {
+		t.Fatalf("Path(%q) = %q, want %q", dir, got, want)
+	}
+}
+
+// TestPath_DefaultStateDirLayout pins the exact absolute shape a default
+// launcher state dir produces: ~/.local/state/pix/recreates.log. recreatelog
+// itself never resolves $HOME or XDG_STATE_HOME — a caller always supplies
+// dir — but this is the concrete path PRD §5.9 names, and the one a doctor
+// wiring will actually see on a real host.
+func TestPath_DefaultStateDirLayout(t *testing.T) {
+	home := string(filepath.Separator) + filepath.Join("home", "example")
+	dir := filepath.Join(home, ".local", "state", "pix")
+	want := filepath.Join(home, ".local", "state", "pix", "recreates.log")
+	if got := Path(dir); got != want {
+		t.Fatalf("Path(%q) = %q, want %q", dir, got, want)
+	}
+}
+
+// TestPath_MatchesWhereAppendWrites proves Path is not merely a parallel
+// literal that happens to agree today: it names the exact file Append wrote
+// and Read reads, so a future edit that changes fileName without updating
+// Path (or vice versa) fails here, not silently in a caller.
+func TestPath_MatchesWhereAppendWrites(t *testing.T) {
+	dir := t.TempDir()
+	if err := Append(dir, "home", []string{"a.b"}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if _, err := os.Stat(Path(dir)); err != nil {
+		t.Fatalf("Path(dir) does not name the file Append wrote: %v", err)
+	}
+	raw, err := os.ReadFile(Path(dir))
+	if err != nil {
+		t.Fatalf("read via Path(dir): %v", err)
+	}
+	if !strings.Contains(string(raw), `"environment":"home"`) {
+		t.Fatalf("content at Path(dir) does not look like the appended record: %s", raw)
+	}
+}
+
+// TestNoStaleJSONExtensionFileName scans this package's OWN source (both
+// production and test files, since a stale name in a comment is exactly as
+// misleading as one in code) for the retired `recreate.log.json` /
+// `recreate.log.lock` literals Wave B review round 1 shipped, so a future
+// edit can never silently reintroduce the pre-PRD-§5.9 name.
+func TestNoStaleJSONExtensionFileName(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := []string{"recreate.log.json", "recreate.log.lock"}
+	checked := 0
+	for _, f := range files {
+		if f == "recreatelog_test.go" {
+			// this file names the stale strings above to describe them.
+			continue
+		}
+		checked++
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, s := range stale {
+			if strings.Contains(string(raw), s) {
+				t.Errorf("%s contains stale name %q; the on-disk log is now named per PRD §5.9", f, s)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("found no other .go files to scan — did the package move?")
 	}
 }
 
