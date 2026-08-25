@@ -148,11 +148,36 @@ type Error struct {
 	Reason string
 }
 
+// Error() always names a key when there is one (AC-18's shape). Some real
+// TOML syntax errors carry no key at all — they are purely positional (a
+// blank key before '=', a stray token before anything was parsed) — and
+// %q-quoting an empty Key would print a bare `: ""` on the end, which reads
+// as "the key is the empty string" rather than "there was no key". Key ==
+// "" therefore drops the trailing `: %q` clause instead of rendering it
+// empty.
 func (e *Error) Error() string {
+	if e.Key == "" {
+		return fmt.Sprintf("%s:%d: %s", e.File, e.Line, e.Reason)
+	}
 	return fmt.Sprintf("%s:%d: %s: %q", e.File, e.Line, e.Reason, e.Key)
 }
 
 const ownedByEnvFile = "native-owned; declare it in .sbxenv.yaml, not pix.toml"
+
+// arrayOfTableRoots names sidecar top-level fields the Go struct decodes as
+// a map (agents.<name> = <model>), not a slice — so `[[agents]]` (array-of-
+// tables syntax) is a structural type mismatch the TOML decoder does NOT
+// itself refuse: BurntSushi silently decodes each array element's keys as
+// Undecoded (agents stays empty) rather than erroring on the shape
+// mismatch, because a Go map is a perfectly valid decode target for either
+// TOML shape considered in isolation. Reported as a plain "unknown key" for
+// e.g. "agents.name", that message sends the author to fix the wrong thing
+// (as if `name` were a typo'd field) instead of the real, structural
+// problem named by arrayOfTableMisuseReason below: `agents` itself must be
+// authored as a table, not an array of tables.
+var arrayOfTableRoots = map[string]bool{
+	"agents": true,
+}
 
 // nativeOwnedRoot names the top-level fields .sbxenv.yaml owns exclusively.
 // A pix.toml that declares any of these fails closed with a reason pointing
@@ -186,6 +211,43 @@ func nativeOwnedReason(key toml.Key) string {
 	return "unknown key"
 }
 
+// arrayOfTableMisuseReason recognizes the ONE shape arrayOfTableRoots
+// exists for: an Undecoded key rooted at a map-typed field with at least
+// one further segment. That shape can ONLY arise from `[[root]]` (array-of-
+// tables) syntax against a map field — the correct `[root]\nkey = value`
+// form decodes cleanly with no Undecoded entries at all, so there is no
+// ambiguity to guess at. ok is false for every other key, including a
+// bare, single-segment "agents" (which cannot happen: a wholly unknown
+// bare `agents = ...` of the wrong TOML type is a decode type error, not an
+// Undecoded key).
+func arrayOfTableMisuseReason(key toml.Key) (root, reason string, ok bool) {
+	if len(key) < 2 || !arrayOfTableRoots[key[0]] {
+		return "", "", false
+	}
+	root = key[0]
+	return root, fmt.Sprintf("%q must be declared as a table ([%s]), not an array of tables ([[%s]])", root, root, root), true
+}
+
+// resolveLine finds the diagnostic line for key in locs, degrading to its
+// containing table/key when the exact dotted path was never itself
+// recorded as a line. That gap is real: locateKeyLines is a line-oriented
+// scanner over TOML's own `[section]`/`[[section]]` headers and top-level
+// `key = value` assignments, and it never walks into a `{ ... }` inline
+// table literal's own sub-keys — so an unknown key nested only inside one
+// (a REAL Undecoded entry; toml.MetaData.Undecoded does drill into inline
+// tables) has nothing recorded on its own path. Progressively shortening
+// the path to its containing table, and ultimately the whole file (line 1),
+// is how a partial line answer degrades — NEVER to 0, which no editor line
+// number can mean.
+func resolveLine(locs map[string]int, key toml.Key) int {
+	for n := len(key); n > 0; n-- {
+		if line, ok := locs[toml.Key(key[:n]).String()]; ok {
+			return line
+		}
+	}
+	return 1
+}
+
 // ParseSidecar reads and strictly validates the pix.toml sidecar at path,
 // returning typed facts for exactly the design-of-record sections. Any key
 // outside that schema — a typo or a native-owned field sbx already owns —
@@ -216,7 +278,11 @@ func ParseSidecar(path string) (*Sidecar, error) {
 	md, err := toml.Decode(text, &s)
 	if err != nil {
 		if pe, ok := err.(toml.ParseError); ok {
-			return nil, &Error{File: base, Line: pe.Position.Line, Key: pe.LastKey, Reason: "invalid TOML: " + pe.Message}
+			line := pe.Position.Line
+			if line <= 0 {
+				line = 1
+			}
+			return nil, &Error{File: base, Line: line, Key: pe.LastKey, Reason: "invalid TOML: " + pe.Message}
 		}
 		return nil, fmt.Errorf("envinfo: %s: %w", base, err)
 	}
@@ -224,9 +290,17 @@ func ParseSidecar(path string) (*Sidecar, error) {
 	if undecoded := md.Undecoded(); len(undecoded) > 0 {
 		key := undecoded[0]
 		locs := locateKeyLines(text)
+		if root, reason, ok := arrayOfTableMisuseReason(key); ok {
+			return nil, &Error{
+				File:   base,
+				Line:   resolveLine(locs, toml.Key{root}),
+				Key:    root,
+				Reason: reason,
+			}
+		}
 		return nil, &Error{
 			File:   base,
-			Line:   locs[key.String()],
+			Line:   resolveLine(locs, key),
 			Key:    key.String(),
 			Reason: nativeOwnedReason(key),
 		}

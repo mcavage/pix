@@ -165,7 +165,7 @@ func classifyKit(raw string) (local bool, err error) {
 	}
 	stripped := interpolationRE.ReplaceAllString(raw, "")
 	if strings.Contains(stripped, ":") {
-		return false, fmt.Errorf("%w: %q has a colon but does not match a recognized URL scheme (scheme://...); this is the scp-style shorthand git itself accepts as remote (e.g. git@host:path) — use an explicit scheme (e.g. git+ssh://) or a plain local path", ErrAmbiguousKitReference, raw)
+		return false, fmt.Errorf("%w: %q has a colon but does not match a recognized URL scheme (scheme://...). This is the scp-style shorthand git itself accepts as remote (e.g. git@host:path). Use an explicit scheme (e.g. git+ssh://) or a plain local path", ErrAmbiguousKitReference, raw)
 	}
 	return true, nil
 }

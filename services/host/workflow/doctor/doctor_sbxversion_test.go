@@ -2,6 +2,7 @@ package doctor
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,5 +99,52 @@ func TestRunDoctor_JSONModeStillFailsClosed(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "native environments require sbx") {
 		t.Errorf("--json output must stay pure JSON, got %s", out.String())
+	}
+}
+
+// TestRunDoctor_JSONModeUnparsableCarriesFix: an sbx reply that ran to
+// completion but parsed as no version at all is StatusUnknown, not
+// StatusAbsent — health.Result.Fix is stripped from every non-Missing()
+// result (runOne, health.go), so the sbx row's own Fix is empty by the time
+// it reaches JSON. That leaves a machine reader of `--json` with an exit code
+// that says "blocked" and a row with no repair command at all, the one thing
+// a JSON consumer cannot fill in from prose the way a human reads the text-
+// mode gate line. The gate already knows this row is blocked (SbxVersionGate
+// says so — doctor's own exit code depends on it); the JSON check for "sbx"
+// must carry that same verdict's fix, brew upgrade docker/tap/sbx, without
+// the row's status/detail/evidence moving off unknown.
+func TestRunDoctor_JSONModeUnparsableCarriesFix(t *testing.T) {
+	cfg, o := healthyHost(t)
+	o.SbxBin = sbxFixture(t, "#!/bin/sh\necho 'not a version at all'\n")
+	o.SbxArgs = nil
+	var out strings.Builder
+	code := RunDoctor(context.Background(), cfg, "default", &out, o, true, false)
+	if code != health.ExitNotReady {
+		t.Fatalf("exit = %d, want %d (%s)", code, health.ExitNotReady, out.String())
+	}
+	var v ReportJSONView
+	if err := json.Unmarshal([]byte(out.String()), &v); err != nil {
+		t.Fatalf("--json output did not parse: %v\n%s", err, out.String())
+	}
+	var sbx *CheckJSON
+	for i := range v.Checks {
+		if v.Checks[i].Name == "sbx" {
+			sbx = &v.Checks[i]
+		}
+	}
+	if sbx == nil {
+		t.Fatalf("no sbx check in JSON output: %s", out.String())
+	}
+	if sbx.Status != "unknown" {
+		t.Errorf("sbx.Status = %q, want unknown (an unparsable reply is never absent)", sbx.Status)
+	}
+	if sbx.Detail != "unrecognized version output" {
+		t.Errorf("sbx.Detail = %q, want the unchanged unparsable detail", sbx.Detail)
+	}
+	if sbx.Evidence != "sbx --version printed no version" {
+		t.Errorf("sbx.Evidence = %q, want the unchanged unparsable evidence", sbx.Evidence)
+	}
+	if sbx.Fix != health.SbxUpgradeFix {
+		t.Errorf("sbx.Fix = %q, want %q", sbx.Fix, health.SbxUpgradeFix)
 	}
 }
