@@ -8,8 +8,7 @@
       "Bash(echo \"--- exit $?\")",
       "Bash(./out/pix-host route *)",
       "Bash(./out/pix --help)",
-      "WebFetch(domain:github.com)",
-      "Bash(ps *)"
+      "WebFetch(domain:github.com)"
     ]
   }
 }
