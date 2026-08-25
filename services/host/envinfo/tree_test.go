@@ -409,3 +409,146 @@ func hasFacet(facets []envinfo.HostExecFacet, keyPath, kind string) bool {
 	}
 	return false
 }
+
+func findMCPServer(servers []envinfo.MCPServerNode, name string) (envinfo.MCPServerNode, bool) {
+	for _, s := range servers {
+		if s.Name == name {
+			return s, true
+		}
+	}
+	return envinfo.MCPServerNode{}, false
+}
+
+func findInterpolation(interps []envinfo.Interpolation, v string) (envinfo.Interpolation, bool) {
+	for _, ip := range interps {
+		if ip.Var == v {
+			return ip, true
+		}
+	}
+	return envinfo.Interpolation{}, false
+}
+
+// TestTree_MCPServerInsertionStability (F9/E1.2) is the fitness gap this
+// file closes: proof, in table form, that mcp.servers' identity addressing
+// (doc.go's "Stable identity" — keyed by the server's own `name`, not by
+// position) actually holds when the list around an existing entry changes
+// shape, not merely in the single-entry fixtures every other test in this
+// file uses. Adding an unrelated server BEFORE or AFTER an existing one
+// must never move that existing server's own KeyPath, the KeyPath of its
+// interpolation line items, or its HostExecFacet attribution — a reviewer
+// approves a SPECIFIC server by that stable address (and a fingerprint
+// hashes it by the same address), so an address that silently drifted
+// because a sibling entry was inserted would misattribute review/consent
+// exactly as badly as an index-addressed scheme would.
+//
+// The table's last two cases are the documented CONTRAST, in the same
+// shape, for an IDENTITYLESS (index-addressed) list: `kits` has no field
+// upstream treats as a name (doc.go), so inserting an unrelated kit before
+// an existing one legitimately shifts that existing entry's KeyPath. That
+// is expected, in-scope behavior for an index-addressed list, not a second
+// instance of the bug class this test guards mcp.servers against — the
+// point of including it is to make the CONTRAST explicit in one place
+// rather than let a reader infer scope from two unrelated test names.
+//
+// Explicitly NOT claimed here: anything about upstream sbx's own multi-file
+// list-concatenation/key-merge behavior. docs/upstream/sbx-0.39-environments.md
+// §6 names that "A6" and states plainly it was never observed against a
+// real `sbx env create` ("Do not cite this document as evidence for
+// list-concatenation or key-merge behavior"). This test proves envinfo's
+// OWN BuildTree, in-process, on synthetic YAML for a single already-merged
+// document — it is evidence for THIS package's addressing scheme, not a
+// substitute for the still-unfilled Story 1 obligation to observe upstream
+// composition against a real binary.
+func TestTree_MCPServerInsertionStability(t *testing.T) {
+	const existingServer = `    - name: warehouse
+      command: warehouse-proxy
+      args:
+        - "--tenant=${WAREHOUSE_TENANT}"
+`
+	const unrelatedServer = `    - name: aux
+      url: https://aux.example/mcp
+`
+	const existingKit = `  - ./existing
+`
+	const unrelatedKit = `  - ./unrelated
+`
+
+	const wantServerKeyPath = "mcp.servers[warehouse]"
+	const wantArgKeyPath = "mcp.servers[warehouse].args[0]"
+
+	cases := []struct {
+		name string
+		yaml string
+		// scope distinguishes the identity-addressed assertion (mcp.servers,
+		// stable regardless of position) from the index-addressed contrast
+		// (kits, which legitimately shifts).
+		scope string // "identity" | "index"
+		// wantKitKeyPath is only checked when scope == "index".
+		wantKitKeyPath string
+	}{
+		{
+			name:  "identity_addressed/baseline_no_insertion",
+			yaml:  "schemaVersion: \"1\"\nmcp:\n  servers:\n" + existingServer,
+			scope: "identity",
+		},
+		{
+			name:  "identity_addressed/unrelated_server_inserted_before",
+			yaml:  "schemaVersion: \"1\"\nmcp:\n  servers:\n" + unrelatedServer + existingServer,
+			scope: "identity",
+		},
+		{
+			name:  "identity_addressed/unrelated_server_inserted_after",
+			yaml:  "schemaVersion: \"1\"\nmcp:\n  servers:\n" + existingServer + unrelatedServer,
+			scope: "identity",
+		},
+		{
+			name:           "index_addressed_contrast/baseline_no_insertion",
+			yaml:           "schemaVersion: \"1\"\nkits:\n" + existingKit,
+			scope:          "index",
+			wantKitKeyPath: "kits[0]",
+		},
+		{
+			name:           "index_addressed_contrast/unrelated_kit_inserted_before_shifts_existing",
+			yaml:           "schemaVersion: \"1\"\nkits:\n" + unrelatedKit + existingKit,
+			scope:          "index",
+			wantKitKeyPath: "kits[1]", // shifted — expected for an identityless list
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := mustMergeOne(t, c.yaml)
+			tr, err := envinfo.BuildTree(m)
+			if err != nil {
+				t.Fatalf("BuildTree: %v", err)
+			}
+
+			switch c.scope {
+			case "identity":
+				srv, ok := findMCPServer(tr.MCPServers, "warehouse")
+				if !ok || srv.KeyPath != wantServerKeyPath {
+					t.Fatalf("warehouse node = %+v (ok=%v), want KeyPath %q — inserting an unrelated server must never move it", srv, ok, wantServerKeyPath)
+				}
+				if !hasFacet(tr.HostExecFacets, wantServerKeyPath, "mcp-command") {
+					t.Errorf("HostExecFacets = %+v, want an mcp-command facet still attributed to %q", tr.HostExecFacets, wantServerKeyPath)
+				}
+				ip, ok := findInterpolation(tr.Interpolations, "WAREHOUSE_TENANT")
+				if !ok || ip.KeyPath != wantArgKeyPath {
+					t.Errorf("WAREHOUSE_TENANT interpolation = %+v (ok=%v), want KeyPath %q", ip, ok, wantArgKeyPath)
+				}
+			case "index":
+				var got *envinfo.KitNode
+				for i := range tr.Kits {
+					if tr.Kits[i].Raw == "./existing" {
+						got = &tr.Kits[i]
+					}
+				}
+				if got == nil || got.KeyPath != c.wantKitKeyPath {
+					t.Fatalf("./existing kit = %+v, want KeyPath %q (index-addressed lists legitimately shift on insertion)", got, c.wantKitKeyPath)
+				}
+			default:
+				t.Fatalf("unknown scope %q", c.scope)
+			}
+		})
+	}
+}
