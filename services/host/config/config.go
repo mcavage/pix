@@ -115,10 +115,11 @@ type Config struct {
 
 	// Environments is the registered name -> CANONICAL ABSOLUTE local
 	// directory path index. `pix env add`/`pix env forget` are the only writers;
-	// AddEnvironment canonicalizes (expanding a leading ~, then making the
-	// result absolute and clean) before a value is ever assigned here, so
-	// Save() never persists anything else. A hand-edited noncanonical entry
-	// is dropped on Load, fail closed (see applyDefaults).
+	// AddEnvironment validates the name (validEnvironmentName) and canonicalizes
+	// the path (expanding a leading ~, then making the result absolute and
+	// clean) before either is ever assigned here, so Save() never persists
+	// anything else. A hand-edited entry with an unsafe NAME or a noncanonical
+	// PATH is dropped on Load, fail closed (see applyDefaults).
 	Environments map[string]string `toml:"environments,omitempty"`
 
 	// Inference describes WHERE catalog models can be called: user/pack-owned
@@ -482,13 +483,15 @@ func (c *Config) applyDefaults() {
 
 // dropNoncanonicalEnvironments fails closed on a hand-edited (or otherwise
 // corrupted) `[environments]` entry: AddEnvironment is the only writer Save()
-// ever exercises, and it never persists anything but a canonical absolute
-// path, so a `~`-bearing or relative value can only have reached the file by
-// hand. It is dropped rather than trusted as a local root, and recorded in
-// unknownKeys — the same "tell them" contract a retired [plugins.*] slot
-// gets — so the user sees why their edit had no effect. A default naming a
-// dropped (or never-registered) name resolves to no default rather than a
-// dangling selection.
+// ever exercises, and it never persists a name validEnvironmentName would
+// have refused, nor anything but a canonical absolute path — so an unsafe
+// NAME (a slash, a traversal segment, a control character, over 128 bytes)
+// or a `~`-bearing/relative PATH can only have reached the file by hand.
+// Either defect is dropped rather than trusted as a registration, and
+// recorded in unknownKeys — the same "tell them" contract a retired
+// [plugins.*] slot gets — so the user sees why their edit had no effect. A
+// default naming a dropped (or never-registered) name resolves to no default
+// rather than a dangling selection.
 func (c *Config) dropNoncanonicalEnvironments() {
 	if len(c.Environments) == 0 {
 		if c.Environment != "" {
@@ -503,7 +506,7 @@ func (c *Config) dropNoncanonicalEnvironments() {
 	kept := make(map[string]string, len(c.Environments))
 	dropped := false
 	for name, path := range c.Environments {
-		if isCanonicalEnvironmentPath(path) {
+		if validEnvironmentName(name) && isCanonicalEnvironmentPath(path) {
 			kept[name] = path
 			continue
 		}

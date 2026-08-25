@@ -1,5 +1,3 @@
-//go:build unix
-
 // Package recreatelog is a local-only, bounded diagnostic log of environment
 // recreate-boundary drift (docs/design/environments.md section 10.2: Pix P0
 // treats every effective declaration change as recreate-only). It answers
@@ -45,4 +43,26 @@
 // never wires into `pix doctor` or any other workflow — that composition, if
 // it ever happens, belongs to whichever L3 workflow calls sandbox.Diff and
 // decides to log the result, not to this package.
+//
+// # Cross-platform: unix and windows both get a real implementation
+//
+// The API, the record shape, the flock-guarded atomicity, and the
+// symlink-refusing reads/writes are IDENTICAL on every platform: only the two
+// primitives an operating system does not standardize — the advisory
+// exclusive lock and the "refuse to open through a symlink" check — are
+// split into platform files (lock_unix.go/lock_windows.go for the lock,
+// alongside each platform's own openNoFollow). Windows has no flock, so
+// lock_windows.go uses LockFileEx/UnlockFileEx over the same maximal byte
+// range gofrs/flock and other cross-platform Go file-lockers use for "the
+// whole file, however large it grows" — polled under the SAME
+// appendLockTimeout deadline as unix, so a wedged holder times out
+// identically on both platforms rather than hanging forever on one of them.
+// Windows also has no O_NOFOLLOW at open(2), so its openNoFollow falls back
+// to the Lstat-then-open sequence this codebase already uses for the same
+// gap elsewhere (hosttrust/nofollow_other.go, workspace/state_other.go):
+// this narrows, but does not fully close, the TOCTOU window a symlink
+// swapped in between the Lstat and the Open could exploit. No build in this
+// tree currently exercises Windows end to end, so that fallback is a
+// good-faith implementation of the same primitive, not a hardened guarantee
+// — never an unimplemented stub that skips the check outright.
 package recreatelog
