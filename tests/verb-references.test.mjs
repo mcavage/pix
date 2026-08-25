@@ -165,11 +165,33 @@ test("docs/design/environments.md's live env-verb spec carries no stale referenc
 	// Stale forms that a prior drafting round left behind. Each must be gone
 	// from the live spec now that `forget` replaces the unregister half of `rm`
 	// and `rm` itself is a pointer error, not a working verb.
+	//
+	// `--sbxenv` is checked with a lookbehind, not a bare substring match: the
+	// corrected spec must still be able to SAY "there is no `--sbxenv` flag" in
+	// prose (the same RETIRED_ON_PURPOSE pattern the rest of this file uses for
+	// a removed verb) without that true sentence tripping the guard meant to
+	// catch the flag being documented as if it worked.
 	const stale = [
 		[/pix env rm NAME \[--force\]/, "the old CLI-contract line still lists `rm` as a working verb"],
-		[/--sbxenv/, "the old `--sbxenv` flag is still documented instead of the `pix|sbxenv` positional enum"],
+		[/(?<!no `)--sbxenv/, "the old `--sbxenv` flag is documented as usable, not just named while explaining it does not exist"],
 		[/--name pix-repo-work/, "the recreate example still carries the deleted `--name` flag"],
 		[/no registered environment\n/, "env-selection precedence still leaves the no-environment case unnamed instead of calling it `none`"],
+		// Wave B closeout: `env forget` never had a real force override (D21's
+		// refusals for "current default" and "live holder" are absolute), so a
+		// `[--force]` escape hatch on `forget` is a stale, never-shipped surface.
+		[/forget NAME \[--force\]/, "`env forget` must not document a `[--force]` escape; both its refusals (default, live holder) have no override"],
+		[/unless the explicit force contract permits it/, "`forget`'s refusal prose must not describe a force override that does not exist"],
+		// PRD §5.3's rejected alternative, named explicitly in the PRD's own D12
+		// row: an unattributed refusal makes the recreate tax feel arbitrary.
+		[/create-time environment state differs/, "the recreate refusal must name drifted facets by canonical key path (PRD §5.3), not the rejected vague form"],
+		// "alias" is the wrong noun for a registered environment name: the design
+		// doc used to call the name/registration an "alias" in several places,
+		// which reads as though `pix env forget` or repointing a name could ever
+		// carry or transfer trust the way an alias implies. "registration"/"name"
+		// are what is actually true. The one exception is the CLI-verb sense
+		// (`pix env` is a command ALIAS for `pix env ls`), which is a different,
+		// correct use of the word and is excluded by requiring "the alias".
+		[/\bthe alias\b/, "'alias' must not stand in for the environment name/registration; say 'registration' or 'name'"],
 	];
 	for (const [pattern, why] of stale) {
 		assert.doesNotMatch(doc, pattern, `docs/design/environments.md: ${why}`);
@@ -177,7 +199,8 @@ test("docs/design/environments.md's live env-verb spec carries no stale referenc
 
 	// Corrected forms the reconciled design must state.
 	const required = [
-		[/pix env forget NAME \[--force\]/, "the CLI contract must list `forget`, not `rm`, as the unregister verb"],
+		[/pix env forget NAME(?! \[)/, "the CLI contract must list bare `forget NAME`, not `rm`, as the unregister verb, and with no bracketed flag"],
+		[/pix env show \[NAME\] \[--json\] \[--path\] \[--effective\]/, "the CLI contract must add `--effective` to `show`, alongside `--json`/`--path`"],
 		[/pix env edit NAME pix\|sbxenv/, "`edit` must take the exact `pix|sbxenv` positional enum"],
 		[/pix rm \S+ && pix run --env \S+/, "the recreate command must be `pix rm NAME && pix run --env ENV`, with no `--name`"],
 		[/`none`/, "the no-environment case must be named `none`"],
@@ -186,6 +209,22 @@ test("docs/design/environments.md's live env-verb spec carries no stale referenc
 		[/at most 100 create-intent records/, "the create-intent list must be capped at 100 entries"],
 		[/pix doctor --recreates/, "per-record recreate detail must be behind `pix doctor --recreates`"],
 		[/pre-composition/, "sandbox identity must be attributed pre-composition, not injected as a post-parse runtime fact"],
+		// PRD §5.2/§5.3 exact copy: both example refusals must attribute the
+		// change to a canonical `changed:` key path, not just gesture at it.
+		[/changed: host\.services\.warehouse-proxy\.command/, "the host-execution-change example (PRD §5.2) must show a `changed:` key-path line"],
+		[/changed: mcp\.servers\[github\]\.url, env\.PIX_MEMORY_SCOPE/, "the recreate-required example (PRD §5.3) must show a `changed:` key-path line"],
+		[/cannot be reused\. Its environment changed since it\s+was created\./, "the recreate-required example must use the PRD §5.3 wording, not the rejected 'create-time environment state differs'"],
+		// PRD §5.5 exact wording/order: what-failed sentence, then forget, then
+		// rm, then rm -rf, in that order.
+		[/pix: `pix env rm` does not exist\. Registering a name is not owning the files\./, "the `env rm` pointer error must open with the PRD §5.5 sentence"],
+		[/pix env forget home[\s\S]{0,80}pix rm pix-repo-home[\s\S]{0,80}rm -rf <path>/, "the `env rm` pointer error must list forget, then rm, then rm -rf, in PRD §5.5 order"],
+		// D22/D24 (I4 recreate log) vs the failed-create `create intent`: two
+		// distinct bounded records that a prior draft conflated by making
+		// `pix doctor --recreates` describe the create-intent list instead of the
+		// PRD §5.9 recreate log.
+		[/### 9\.4 Recreate diagnostics \(I4\)/, "the recreate log (I4) needs its own section, separate from §9.3's create-intent bookkeeping"],
+		[/is not the `I4` recreate log below, and `pix doctor` never reports\s+create-intent records/, "§9.3 must say create-intent records are never what `pix doctor`/`--recreates` reports"],
+		[/environments {3}12 unplanned recreates recorded {3}pix doctor --recreates/, "the doctor one-line form must match PRD §5.9 exactly"],
 	];
 	for (const [pattern, why] of required) {
 		assert.match(doc, pattern, `docs/design/environments.md: ${why}`);

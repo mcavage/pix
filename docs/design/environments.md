@@ -91,8 +91,8 @@ Pix does not mirror these fields in `pix.toml` or `config.toml`.
 
 Pix keeps seven jobs:
 
-1. **Environment selection.** Exact-name aliases, one machine default, and an
-   explicit per-run override.
+1. **Environment selection.** Exact-name registrations, one machine default,
+   and an explicit per-run override.
 2. **Trust.** Canonical source identity, host-execution review, accepted
    fingerprints outside the environment payload, and re-review on change.
 3. **Pi setup.** The Pix agent kit, extensions, personal context, and generated
@@ -373,6 +373,10 @@ registered server enters a sandbox.
 3. `none`: no environment is registered or selected, and Pix launches with its
    own built-in defaults
 
+An unknown explicit `--env` exits non-zero and launches nothing; it never
+falls back to the configured default, since a typo silently launching the
+wrong credential set is the worst outcome this feature can produce.
+
 A workspace `.sbxenv.yaml` is never selected automatically. If one exists, Pix
 may print a single hint, but it launches without it until the user runs
 `pix env add` and reviews it.
@@ -494,10 +498,10 @@ pix env                         # alias for ls
 pix env ls [--json]
 pix env add NAME [PATH] [--yes]
 pix env use NAME
-pix env show [NAME] [--json] [--path]
+pix env show [NAME] [--json] [--path] [--effective]
 pix env edit NAME pix|sbxenv
 pix env review NAME [--yes]
-pix env forget NAME [--force]
+pix env forget NAME
 
 pix run [DIR] [--env NAME] [--model ID]
 ```
@@ -514,25 +518,52 @@ Seven verbs, no more: `ls`, `add`, `use`, `show`, `edit`, `review`, `forget`.
   is runnable and equivalent to the current default, not an empty stub.
 - `use NAME` only changes the machine default. It performs no adoption, host
   registration, or probing. An unreviewed environment is refused.
-- `show` displays authored environment and Pix facts. `--path` prints only the
-  canonical root.
+- `add NAME` with no path is refused outright when `$PWD` already contains a
+  `.sbxenv.yaml`: one omitted token must not silently pick between registering
+  that file and scaffolding an unrelated new one, so the refusal names both the
+  register and the scaffold forms and lets the user pick.
+- `show` is a lossy summary by default: authored environment and Pix facts,
+  review state, and live-sandbox drift state, sized to fit one screen.
+  `--path` prints only the canonical root, nothing else. `--effective` renders
+  the byte-identical document Pix hands to `sbx env create`, and does so with
+  no sandbox in existence: it is the answer to "what would a recreate produce",
+  needed exactly before running one, never gated on a live sandbox.
 - `edit NAME pix|sbxenv` takes an exact positional enum, not a flag: `pix`
-  opens `pix.toml`, `sbxenv` opens the native file. It validates after the
-  editor exits and reports whether `review` is required.
+  opens `pix.toml`, `sbxenv` opens the native file; there is no `--sbxenv`
+  flag. With no token, a TTY prints a two-line file selection and reads a
+  choice; non-TTY with no token exits 2 naming both paths. After the editor
+  exits, `edit` validates and prints exactly one of three verdicts: valid with
+  no host-executing change, valid and printing `pix env review NAME` (never an
+  inline `[y/N]`, since "I meant that edit" and "I accept these host commands"
+  are different authorities), or invalid with the file left unregistered. An
+  optional `--review` flag that pre-commits to running review immediately
+  after a valid edit is real but deferred to P1, not P0.
 - `review` reruns the host bill-of-materials gate after an intentional local or
-  Git change.
-- `forget NAME` unregisters the alias and never deletes the environment
-  directory: the source is untouched. It refuses the default or a live holder
-  unless the explicit force contract permits it.
+  Git change. It is the one explicit audit boundary; non-TTY fails closed
+  without `--yes`.
+- `forget NAME` unregisters the registration and never deletes the environment
+  directory: the source is untouched. It refuses the current default and
+  refuses a live holder, with no override of either refusal.
 - `pix env rm` performs no action. It is a pointer error that names three
   distinct things a user may actually want, so the wrong one is never removed
   by accident: the **sandbox** (`pix rm SANDBOX`), the **source** directory on
   disk (Pix never deletes it; remove it yourself), and the **registration**
   (`pix env forget NAME`).
+- There is no `pix env current` verb: `ls` marks the default and `show --path`
+  prints the root, and a third read verb for one already-visible fact is
+  exactly the accretion this design avoids.
 
-Names are exact. Only `add` accepts a path. There is no fuzzy or prefix action.
-`pix reset` renames scaffolded environment sources with the data directory and
-invalidates every acceptance; it does not delete those sources.
+Names are exact. Only `add` accepts a path. There is no fuzzy or prefix action;
+a close-name suggestion, where printed, is informational data only
+(`closest: home`), never an offer to run or select anything on the user's
+behalf. `pix reset` renames scaffolded environment sources with the data
+directory and invalidates every acceptance, scaffolded or externally
+registered; it deletes no environment source.
+
+Exit codes follow one scheme everywhere in `pix env`: `2` for a usage error or
+a refusal, a nonzero code other than `2` for an operational failure, and `0`
+only for a completed operation, including printing a path because `$EDITOR`
+was unset.
 
 Example errors:
 
@@ -544,20 +575,22 @@ pix: no environment named "hoem".
 
 ```text
 pix: environment "work" changed what it runs on your host.
+     changed: host.services.warehouse-proxy.command
      review it: pix env review work
 ```
 
 ```text
-pix: sandbox pix-repo-home was created with environment "home".
-     create-time environment state differs.
+pix: sandbox pix-repo-home cannot be reused. Its environment changed since it
+     was created.
+     changed: mcp.servers[github].url, env.PIX_MEMORY_SCOPE
      recreate it: pix rm pix-repo-home && pix run --env home
 ```
 
 ```text
-pix: "env rm" is not a command.
-     remove the sandbox:   pix rm pix-repo-home
-     unregister the alias: pix env forget home
-     delete the source directory yourself; pix never deletes it
+pix: `pix env rm` does not exist. Registering a name is not owning the files.
+     pix env forget home     unregister the name (deletes no files)
+     pix rm pix-repo-home    remove the sandbox
+     rm -rf <path>           delete the source yourself; pix will not
 ```
 
 `pix setup` does not require an environment and never walks `pix env` commands
@@ -621,6 +654,22 @@ The accepted record lives in launcher-owned state outside the environment. A
 name never carries trust, and repointing a name never transfers acceptance.
 Non-TTY review fails closed without `--yes`.
 
+`pix env review` prints a summary by default: counts, plus each host command
+and host service name, every credential destination, and every mount
+expansion. Full argv and content digests are behind `--verbose`; counts alone
+train a reflexive `y`, and full argv by default is noise that also trains one,
+so the default view names what executes and where secrets go without either
+failure mode.
+
+A creation-fingerprint attach refusal names the drifted facets by canonical
+key path, read from the adapter's pre-composition semantic tree rather than
+the composed document: the composed document concatenates lists, so a later
+unrelated addition shifts a post-composition index and would name the wrong
+facet. A facet is named by its own schema identity wherever the native schema
+has one (`mcp.servers[github].url`, bindings by service/domain, host services
+by port); an indexed path (`mounts[2]`) is used only where the schema gives no
+identity. No refusal is ever hash-only.
+
 ### 9.2 MCP registration
 
 sbx env owns registration and attachment. Pix verifies before launch that every
@@ -644,7 +693,7 @@ credential bindings. Pix never passes `--prune-bindings` on an automatic path;
 that flag deletes complete shared binding entries and can break other sandboxes.
 Only a future explicit named command may expose it, with the shared-binding
 warning and a positive post-mutation probe. `pix env forget` unregisters the
-alias, not shared upstream state. Explicit review/reconciliation and
+registration, not shared upstream state. Explicit review/reconciliation and
 `pix reset` own safe cleanup. UAT/session-owned registrations remain scoped and
 cleaned by their existing lease.
 
@@ -666,9 +715,48 @@ to diagnose partial state without guessing.
 
 Pix retains at most 100 create-intent records, evicting the oldest first, so
 this diagnostic list can never grow unbounded on a host that fails creation
-repeatedly. `pix doctor` stays silent when zero records are pending, prints one
-summary line when any are pending (for example, `3 pending environment
-recreates`), and defers every per-record detail to `pix doctor --recreates`.
+repeatedly. A create-intent record is failed-create residue bookkeeping only:
+it gates removal authority for a sandbox that never reached a positive
+receipt. It is not the `I4` recreate log below, and `pix doctor` never reports
+create-intent records; conflating the two would tell a user a routine drifted
+attach looks like a failed create, or the reverse.
+
+### 9.4 Recreate diagnostics (I4)
+
+A creation-fingerprint attach refusal (§10.2) is a *recreate*, not a failed
+create: sbx already holds a running sandbox, and P0 treats any effective
+declaration drift as recreate-only. Each such refusal appends one record to a
+separate bounded log, `I4`, so the recreate tax stays measurable without
+becoming a project narrative in casual output:
+
+- the log keeps at most 100 records, oldest dropped first, in
+  `~/.local/state/pix/recreates.log`, plain text, local only, never uploaded;
+- a record carries a timestamp, the environment name, and the drifted
+  canonical key paths (§9.1) only — no facet values, no credential names, no
+  argv, no path outside the environment root;
+- `pix doctor` prints exactly one line, and only when the count is nonzero:
+
+  ```text
+    environments   12 unplanned recreates recorded   pix doctor --recreates
+  ```
+
+  At count zero, `doctor` says nothing about recreates; a user with no drift
+  never learns the counter exists;
+- full facet key paths need the explicit, separate `pix doctor --recreates`:
+
+  ```text
+  recreate records: 12 (cap 100, oldest dropped)
+  file: /Users/alice/.local/state/pix/recreates.log
+
+  2026-07-14T09:02:11Z  work  mcp.servers[github].url
+  2026-07-14T11:40:03Z  home  env.PIX_MEMORY_SCOPE, mounts[] (2 entries changed)
+
+  local only, never uploaded. delete the file whenever you like; that is not an error.
+  ```
+
+This is a `doctor` flag, not an eighth `env` verb: the seven-verb contract
+(§8) is a stated boundary, and an eighth verb for one counter is exactly the
+accretion it exists to refuse.
 
 ## 10. Lifecycle
 
@@ -1035,7 +1123,7 @@ repeat this estimate as fact.
 ### Unit
 
 - strict environment and sidecar parsing
-- exact alias/path resolution
+- exact name/path resolution
 - canonical path and workspace-containment refusal
 - model/backend/roster reference validation
 - semantic trust and creation fingerprints
@@ -1128,36 +1216,42 @@ safe removal through native environments. Those are requirements, not polish.
 
 ## 17. Decision alignment (D1–D24)
 
-This table is the PRD-to-design traceability index, not a second copy of the
-prose. Each row names the section that carries the actual mechanism; when a
-decision changes, edit the owning section and this row's pointer only.
+D1–D24 here are the PRD's own decision IDs (`PRD: native sandbox environments`
+§2, "Fixed decisions and taste calls", closed by §9 for D21–D24). This table is
+the PRD-to-design traceability index, not a second copy of the PRD's prose and
+not a second, differently-numbered decision list: an earlier draft of this
+section invented its own 24 decisions and reused the D1–D24 labels for them,
+which collided with the PRD's real D1–D24 under the same names. Each row below
+carries the PRD's actual one-line decision text and names the section that
+carries its mechanism; when a decision's mechanism moves, edit the owning
+section and this row's pointer only, never the decision text.
 `tests/environments-decision-alignment.test.mjs` is the anti-drift gate: D1–D24
-must each appear exactly once, in order, with every section pointer resolving
-to a heading that still exists.
+must each appear exactly once, in order, with text matching the PRD and every
+section pointer resolving to a heading that still exists.
 
 | ID | Decision | Section |
 | --- | --- | --- |
-| D1 | Native `.sbxenv.yaml` + `pix.toml` environments replace the pack format and sandbox-composition engine. | §1 |
-| D2 | Old pack/router surfaces are deleted outright, not deprecated; Pix has no released users to preserve compatibility for. | §1 |
-| D3 | `.sbxenv.yaml` is the single authored sandbox declaration; sbx owns agent/kits/workspaces/env/resources/secrets/bindings/registries/MCP/ports/lifecycle. | §3.1 |
-| D4 | Pix keeps exactly seven jobs: environment selection, trust, Pi setup, literal model roster, lifecycle, host-only services, development UAT. | §3.2 |
-| D5 | Local candidate image proof is exact-tag/no-pull/running; digest equality is not observable and is never claimed. | §4 |
-| D6 | Interpolation has three observed outcomes: a defined value, missing-with-default, and bare-missing resolving to an empty string. | §4 |
-| D7 | Custom-agent Ollama transport is unsupported today; `extensions/ollama-bridge.ts` stays until a future UAT run proves otherwise. | §4, §4.1 |
-| D8 | Pix imposes six restrictions on the upstream `.sbxenv.yaml` parser (no literal secret values, host-exec review, fingerprinted `noVerify`, root-outside-workspace, pinned/fingerprinted kit sources, `agent: pix` resolution). | §5.1 |
-| D9 | A registered environment omits `name`; Pix computes the workspace-specific `pix-*` sandbox name and writes it only into the generated effective file. | §5.1 |
-| D10 | `pix.toml` carries only concepts sbx cannot express: model/agent roster, memory scope, Pi-only load paths, `host.mcp` annotations, host services, and optional custom inference backends. | §5.2 |
-| D11 | `config.toml` gains `[environments]` and a default `environment` field; only `env add\|forget`/`env use` write them, and `pix config set` refuses those keys. | §5.3 |
-| D12 | Machine inference declarations are presence-only: `available`, `verified*`, `allowed_models`, `roster_providers`, and `run_intent` all disappear. | §5.3 |
-| D13 | Environment selection precedence is `--env`, then `config.toml` default, then `none`; a workspace `.sbxenv.yaml` is never auto-selected. | §6.1 |
-| D14 | One stable effective environment file is materialized per sandbox; sandbox identity is attributed pre-composition, never injected as a post-parse fact. | §6.2 |
-| D15 | Session model precedence is `--model`, then the environment's `[models].main`, then Pi's default; `[models].exclusive` narrows to environment-local inference definitions only. | §6.3 |
-| D16 | Agent model precedence is an explicit agent `model:`, then `[agents].<name>`, then the main model, then inherit the parent; shipped agents declare no `intent:`/`model:`. | §6.4 |
-| D17 | One generated `~/.pi/agent/inference.json` v1 is the single roster artifact every extension reads; there is no second, possibly-disagreeing routing artifact. | §7 |
-| D18 | The CLI contract is exactly seven verbs (`ls, add, use, show, edit, review, forget`); `pix env rm` performs no action and is a pointer error naming sandbox/source/registration. | §8, §8.1 |
-| D19 | Two separate canonical fingerprints: a host trust fingerprint gating `pix env review`, and a creation fingerprint over every effective create-time facet gating recreate. | §9.1 |
-| D20 | sbx env owns MCP registration/attachment; Pix verifies the reviewed digest before launch and wraps local-MCP credentials in a per-server `op run` env-file, never a shared one. | §9.2 |
-| D21 | Failed creation is fail-closed: a bounded, capped-at-100 create-intent record gates removal authority, and only scoped secrets (never bindings/MCP) are removed after a positive receipt. | §9.3 |
-| D22 | Attach requires a schema-verified running row, matching instance id, matching creation fingerprint, and a reviewed environment; P0 treats every effective change as recreate-only, never `sbx env run`. | §10.1, §10.2 |
-| D23 | Removal keeps the existing proof chain (`pix-*` scope, holder exclusivity, fresh instance-id probe, no keep marker, fail-closed on unknown) and never appends `--prune-bindings`. | §10.3 |
-| D24 | Host services stay machine-global: the desired set unions the default and every live-holder environment's services, and a unit stops only once none reference it. | §10.4 |
+| D1 | One authored sandbox grammar, `.sbxenv.yaml`, owned upstream; one narrow sidecar `pix.toml` for Pi/Pix gaps only. | §1, §3.1, §3.2 |
+| D2 | The verb is `pix env forget NAME`, not `env rm`. | §8 |
+| D3 | `pix env rm` is dispatched to a pointer error that performs nothing and names all three removal objects. | §8, §8.1 |
+| D4 | `pix env edit NAME pix\|sbxenv` is an exact positional enum; TTY with no token prints a two-line selection, non-TTY with no token exits 2. | §8.1 |
+| D5 | After `edit`, print `pix env review NAME`; no inline `[y/N]`. | §8.1 |
+| D6 | The optional `--review` pre-commitment flag is P1. | §8.1 |
+| D7 | `env show` is a lossy summary by default, `--effective` renders the byte-identical document, `--path` prints only the path. | §8.1 |
+| D8 | `--effective` renders with no sandbox in existence. | §8.1 |
+| D9 | An unknown explicit `--env` exits non-zero and launches nothing; it never falls back to the default. | §6.1 |
+| D10 | Zero-path `pix env add NAME` is refused when `$PWD` contains a `.sbxenv.yaml`, naming both register and scaffold intents. | §8.1 |
+| D11 | The recreate line is `pix rm NAME && pix run --env ENV`; Pix never asks the user to invent `--name`. | §8.1 |
+| D12 | The recreate refusal names the drifted facets by canonical key path. | §8.1, §9.1 |
+| D13 | `pix setup` has no environment step, no prompt, no probe; one closing `pix help env` pointer, plus one conditional launch hint. | §6.1, §8.1 |
+| D14 | Exact-name suggestions are informational data, never an offer; `closest: home` is allowed, `did you mean home? [Y/n]` is not. | §8.1 |
+| D15 | Trust review shows counts plus host commands/services, credential destinations, and mount expansion by default; full argv and digests behind `--verbose`. | §9.1 |
+| D16 | `pix env review NAME` stays the explicit audit boundary; non-TTY fails closed without `--yes`. | §9.1 |
+| D17 | The no-environment state is named `none`; the prose is built-in defaults. | §6.1 |
+| D18 | Model selection is a literal table; no score, price, benchmark, status taxonomy, or `WHY` column. | §6.3, §7 |
+| D19 | Exit codes: 2 for usage errors and refusals, non-zero-not-2 for operational failure, 0 only for a completed operation. | §8.1 |
+| D20 | No `pix env current` verb. | §8 |
+| D21 | `pix reset` invalidates every environment trust acceptance, scaffolded or externally registered, and deletes no environment source. | §8.1 |
+| D22 | The `I4` recreate log keeps at most 100 records, oldest dropped; `pix doctor` prints one line, only when the count is nonzero; full facet key paths need explicit `pix doctor --recreates`. | §9.4 |
+| D23 | Drift attribution reads the adapter's pre-composition semantic tree; facets are attributed by stable identity where the native schema has one, indexed paths only where the schema has no identity, never an opaque hash-only message. | §9.1 |
+| D24 | A new `pix env` verb is not how diagnostics ship; `--recreates` is a flag on the existing `doctor` verb. | §9.4 |
