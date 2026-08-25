@@ -356,7 +356,16 @@ func computeHostExecFingerprintWithSetup(root string, b hostBoM, setupBytes map[
 	}
 	// Names are unique (validatePackServices), so name order is total.
 	doc.Services = sortedByKey(doc.Services, func(s packinfo.Service) string { return s.Name })
-	fp, err := hosttrust.Fingerprint(doc)
+	// hosttrust.Fingerprint takes only a hosttrust.CanonicalDoc, not doc
+	// directly — Canonicalize runs the identical json.Marshal step Fingerprint
+	// used to run inline, so this is byte-identical to before, but the
+	// canonicalization is now a type the caller must actually produce rather
+	// than a convention it could skip.
+	canonical, err := hosttrust.Canonicalize(doc)
+	if err != nil {
+		return "", nil, fmt.Errorf("encoding host-exec surface: %v", err)
+	}
+	fp, err := hosttrust.Fingerprint(canonical)
 	if err != nil {
 		return "", nil, fmt.Errorf("encoding host-exec surface: %v", err)
 	}
