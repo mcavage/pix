@@ -271,10 +271,11 @@ func TestUseEnvironmentRefusesUnregistered(t *testing.T) {
 	}
 }
 
-// TestUseEnvironmentUnknownErrorShape pins the Wave B / P0 subset of the
-// PRD §5.1 actionable error copy verbatim, with known names sorted
-// deterministically regardless of registration order. `closest:` is §5.1's
-// structured Wave C presentation and is out of scope here.
+// TestUseEnvironmentUnknownErrorShape pins the Wave B / P0 subset of
+// docs/design/environments.md §8.1's actionable error copy verbatim (the
+// PRD's §5.1 counterpart), with known names sorted deterministically
+// regardless of registration order. `closest:` is §8.1's structured Wave C
+// presentation and is out of scope here.
 func TestUseEnvironmentUnknownErrorShape(t *testing.T) {
 	tempConfig(t)
 	cfg, err := Load()

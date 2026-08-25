@@ -146,9 +146,10 @@ func (c *Config) RemoveEnvironment(name string) bool {
 // than only a formatted string, so a later Wave C caller (e.g. `pix env use`)
 // can render its own presentation — a closest-name suggestion, a non-TTY
 // short form, JSON — without re-parsing Error()'s prose. Error() itself is
-// still the PRD §5.1 actionable shape verbatim, for any caller that just
-// prints err. That shape is the Wave B / P0 subset of §5.1: the three lines
-// this type renders. `closest:` is §5.1's structured Wave C presentation —
+// still docs/design/environments.md §8.1's actionable shape verbatim (the
+// PRD's §5.1 counterpart), for any caller that just prints err. That shape
+// is the Wave B / P0 subset of §8.1: the three lines this type renders.
+// `closest:` is §8.1's structured Wave C presentation —
 // a labelled fact printed only when a single close match exists — and is
 // deliberately out of scope here; Known is exposed precisely so a Wave C
 // caller can compute and add it without touching this type.
@@ -165,11 +166,14 @@ type UnknownEnvironmentError struct {
 	Known []string // sorted; empty (not nil) when the registry is empty
 }
 
-// Error renders the PRD §5.1 actionable shape verbatim. The register-one line
-// is a fixed, literal `pix env add <name> [path]` — it never interpolates the
-// mistyped Name. Echoing the typo back as the "fix" would read as an
-// instruction to register the typo itself; `<name>` is the placeholder the
-// user fills in with the name they actually meant.
+// Error renders the Wave B / P0 subset of docs/design/environments.md §8.1's
+// actionable copy verbatim — the three lines this type carries — and omits
+// `closest:`, §8.1's structured Wave C presentation printed only when a
+// single close match exists; it is not reproduced here. The register-one
+// line is a fixed, literal `pix env add <name> [path]` — it never
+// interpolates the mistyped Name. Echoing the typo back as the "fix" would
+// read as an instruction to register the typo itself; `<name>` is the
+// placeholder the user fills in with the name they actually meant.
 func (e *UnknownEnvironmentError) Error() string {
 	known := "none"
 	if len(e.Known) > 0 {
