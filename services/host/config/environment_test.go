@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -267,6 +268,100 @@ func TestUseEnvironmentRefusesUnregistered(t *testing.T) {
 	}
 	if cfg.Environment != "" {
 		t.Errorf("Environment = %q, want unchanged empty after a refused selection", cfg.Environment)
+	}
+}
+
+// TestUseEnvironmentUnknownErrorShape pins the PRD §5.1 actionable error
+// copy verbatim, with known names sorted deterministically regardless of
+// registration order.
+func TestUseEnvironmentUnknownErrorShape(t *testing.T) {
+	tempConfig(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.AddEnvironment("work", "/abs/work"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.AddEnvironment("home", "/abs/home"); err != nil {
+		t.Fatal(err)
+	}
+
+	err = cfg.UseEnvironment("hoem")
+	if err == nil {
+		t.Fatal("expected an error selecting an unregistered environment")
+	}
+	want := "pix: no environment named \"hoem\".\n     known: home, work\n     register one: pix env add hoem [path]"
+	if got := err.Error(); got != want {
+		t.Errorf("Error() =\n%s\nwant\n%s", got, want)
+	}
+	if cfg.Environment != "" {
+		t.Errorf("Environment = %q, want unchanged empty after a refused selection", cfg.Environment)
+	}
+}
+
+// TestUseEnvironmentUnknownErrorIsTyped proves UseEnvironment returns a
+// *UnknownEnvironmentError (Name/Known), not just an opaque error, so a
+// future Wave C caller can render its own presentation without scraping
+// Error()'s string.
+func TestUseEnvironmentUnknownErrorIsTyped(t *testing.T) {
+	tempConfig(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.AddEnvironment("work", "/abs/work"); err != nil {
+		t.Fatal(err)
+	}
+
+	err = cfg.UseEnvironment("nope")
+	var unknown *UnknownEnvironmentError
+	if !errors.As(err, &unknown) {
+		t.Fatalf("UseEnvironment error = %#v, want *UnknownEnvironmentError", err)
+	}
+	if unknown.Name != "nope" {
+		t.Errorf("Name = %q, want nope", unknown.Name)
+	}
+	if want := []string{"work"}; !slices.Equal(unknown.Known, want) {
+		t.Errorf("Known = %v, want %v", unknown.Known, want)
+	}
+}
+
+// TestUseEnvironmentUnknownErrorNoneWhenEmpty proves the "known: none" case:
+// an empty registry must not render as "known: " or a comma-joined blank.
+func TestUseEnvironmentUnknownErrorNoneWhenEmpty(t *testing.T) {
+	tempConfig(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = cfg.UseEnvironment("anything")
+	want := "pix: no environment named \"anything\".\n     known: none\n     register one: pix env add anything [path]"
+	if err == nil || err.Error() != want {
+		t.Errorf("Error() = %v, want %q", err, want)
+	}
+}
+
+// TestUseEnvironmentUnknownErrorSpecialSafeName covers a name that is safe
+// per validEnvironmentName (dots, underscore, hyphen) but still unregistered:
+// the message must quote and repeat it unchanged, not choke on the
+// punctuation.
+func TestUseEnvironmentUnknownErrorSpecialSafeName(t *testing.T) {
+	tempConfig(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.AddEnvironment("home", "/abs/home"); err != nil {
+		t.Fatal(err)
+	}
+
+	name := "stage-2.prod_env"
+	err = cfg.UseEnvironment(name)
+	want := "pix: no environment named \"stage-2.prod_env\".\n     known: home\n     register one: pix env add stage-2.prod_env [path]"
+	if err == nil || err.Error() != want {
+		t.Errorf("Error() = %v, want %q", err, want)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -139,17 +140,56 @@ func (c *Config) RemoveEnvironment(name string) bool {
 	return true
 }
 
+// UnknownEnvironmentError is returned by UseEnvironment when name is not in
+// Environments. It carries the structured pieces (the rejected Name, and
+// Known — the registry's names, sorted for a deterministic message) rather
+// than only a formatted string, so a later Wave C caller (e.g. `pix env use`)
+// can render its own presentation — a closest-name suggestion, a non-TTY
+// short form, JSON — without re-parsing Error()'s prose. Error() itself is
+// still the PRD §5.1 actionable shape verbatim, for any caller that just
+// prints err.
+//
+// `pix env add` is the ONLY command this message references, and it is named
+// here purely as the fix a user would type; it does not exist yet. Wave C
+// owns that verb, and this schema-level helper is not wiring one in early —
+// see the package doc at the top of this file. This foundation (E1.5) is not
+// independently releasable ahead of the `pix env` verb surface (E1.9): the
+// message is correct today, but nothing in this repo can act on it until
+// then.
+type UnknownEnvironmentError struct {
+	Name  string
+	Known []string // sorted; empty (not nil) when the registry is empty
+}
+
+func (e *UnknownEnvironmentError) Error() string {
+	known := "none"
+	if len(e.Known) > 0 {
+		known = strings.Join(e.Known, ", ")
+	}
+	return fmt.Sprintf("pix: no environment named %q.\n     known: %s\n     register one: pix env add %s [path]",
+		e.Name, known, e.Name)
+}
+
 // UseEnvironment sets the machine default environment NAME. name must already
 // be registered in Environments, or empty to clear the default outright. This
 // enforces only "this name exists" — the host trust review Wave C's `pix env
 // use` performs before selecting an environment is a separate, later gate.
+//
+// On refusal it returns an *UnknownEnvironmentError and leaves Environment
+// (and Environments) untouched: a rejected selection is never a partial
+// mutation.
 func (c *Config) UseEnvironment(name string) error {
 	if name == "" {
 		c.Environment = ""
 		return nil
 	}
 	if _, ok := c.Environments[name]; !ok {
-		return fmt.Errorf("no environment named %q (register it first: pix env add %s [path])", name, name)
+		known := make([]string, 0, len(c.Environments))
+		for n := range c.Environments {
+			known = append(known, n)
+		}
+		slices.Sort(known)
+		return &UnknownEnvironmentError{Name: name, Known: known}
 	}
 	c.Environment = name
 	return nil
