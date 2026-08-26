@@ -197,6 +197,12 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **pi bumped to 0.84.3.** The patch release clears the runtime update notice.
+  All three vendored pi-core patches apply to a clean 0.84.3 install, including
+  the bottom-pin patch against pi-tui 0.84.3's `dist/tui-main-screen.js`.
+  Extension pins remain unchanged: the current pi-mcp-adapter 2.27.0 still
+  breaks the problems-only status patch's startup anchor, and pi-web-access
+  remains deliberately pinned pending its separate config-key migration.
 - **Memory counts say "corrections", not "learnings".** The rows the watcher
   writes for a rule you stated ("stop using em dashes") are corrections;
   "learnings" read as vague and was easily confused with facts. `pix memory
