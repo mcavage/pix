@@ -197,6 +197,9 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **`ship` now waits for required PR checks.** A queued or running check no
+  longer counts as shipped. The workflow watches CI to completion and, on
+  failure, inspects the job, fixes the cause, pushes, and watches again.
 - **pi bumped to 0.84.3.** The patch release clears the runtime update notice.
   All three vendored pi-core patches apply to a clean 0.84.3 install, including
   the bottom-pin patch against pi-tui 0.84.3's `dist/tui-main-screen.js`.
