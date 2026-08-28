@@ -284,6 +284,176 @@ func TestRequiresSymlinkCheckFailsClosedOnAmbiguousShapes(t *testing.T) {
 	}
 }
 
+// ── registered root canonicalized/validated before ANY Join/stat/read ────
+
+// TestResolveEnvironmentFailsClosedOnHandEditedRelativeRoot proves
+// ResolveEnvironment validates the raw value Resolve returns BEFORE doing
+// anything else with it: a *config.Config built directly (bypassing
+// Register/config.AddEnvironment entirely, exactly what a hand-edited
+// config.toml would look like in memory once TOML-decoded) with a relative
+// registered root must refuse, never silently resolve that value against
+// the calling process's current directory. Standing in a cwd that genuinely
+// has a matching subdirectory proves this the hard way: if
+// ResolveEnvironment ever fell through to filepath.Abs/os.Stat on the raw
+// value, this exact setup would succeed instead of refusing.
+func TestResolveEnvironmentFailsClosedOnHandEditedRelativeRoot(t *testing.T) {
+	cfg := &config.Config{Environments: map[string]string{"home": "relative-env"}}
+
+	cwd := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cwd, "relative-env"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	origWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origWD) })
+	if err := os.Chdir(cwd); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = ResolveEnvironment(cfg, "home", nil)
+	if err == nil {
+		t.Fatal("ResolveEnvironment must refuse a noncanonical (relative) hand-edited root, not resolve it against cwd")
+	}
+	if got := cli.ExitCode(err); got != 2 {
+		t.Errorf("cli.ExitCode(err) = %d, want 2", got)
+	}
+	var nonCanon *NoncanonicalRootError
+	if !errors.As(err, &nonCanon) {
+		t.Fatalf("error = %#v, want *NoncanonicalRootError", err)
+	}
+	if nonCanon.Name != "home" || nonCanon.Root != "relative-env" {
+		t.Errorf("NoncanonicalRootError = %+v, want {Name: home, Root: relative-env}", nonCanon)
+	}
+}
+
+// TestResolveEnvironmentFailsClosedOnHandEditedTildeRoot: same refusal for a
+// leading-`~` value — the other shape config.AddEnvironment always expands
+// before persisting, so it too can only reach cfg.Environments by hand or by
+// a caller building *config.Config directly.
+func TestResolveEnvironmentFailsClosedOnHandEditedTildeRoot(t *testing.T) {
+	cfg := &config.Config{Environments: map[string]string{"home": "~/envs/home"}}
+
+	_, err := ResolveEnvironment(cfg, "home", nil)
+	if err == nil {
+		t.Fatal("ResolveEnvironment must refuse a noncanonical (tilde) hand-edited root")
+	}
+	var nonCanon *NoncanonicalRootError
+	if !errors.As(err, &nonCanon) {
+		t.Fatalf("error = %#v, want *NoncanonicalRootError", err)
+	}
+}
+
+// TestResolveEnvironmentAcceptsAlreadyCanonicalRoot is the negative control:
+// a root that IS already canonical (exactly what Register/AddEnvironment
+// always produce) passes the new check untouched.
+func TestResolveEnvironmentAcceptsAlreadyCanonicalRoot(t *testing.T) {
+	tempConfig(t)
+	cfg := loadConfig(t)
+	root := t.TempDir()
+	canon, err := Register(cfg, "home", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ResolveEnvironment(cfg, "home", nil)
+	if err != nil {
+		t.Fatalf("ResolveEnvironment on an already-canonical root = %v, want nil", err)
+	}
+	if got != canon {
+		t.Errorf("ResolveEnvironment = %q, want %q", got, canon)
+	}
+}
+
+// ── local executable references resolve deterministically, never via cwd ─
+
+// TestResolveLocalCommandBarePathSymlinkRegularMissing is the bare-command
+// PATH matrix: symlinked target refused-worthy (the resolved path IS a
+// symlink), a regular executable (resolved, not a symlink), and a missing
+// one (lookPath fails, nothing to check — the same silence the prior
+// os.Lstat-based check gave a nonexistent file).
+func TestResolveLocalCommandBarePathSymlinkRegularMissing(t *testing.T) {
+	dir := t.TempDir()
+	realExec := filepath.Join(dir, "warehouse-proxy-real")
+	if err := writeFile(t, realExec, "#!/bin/sh\n"); err != nil {
+		t.Fatal(err)
+	}
+	linkedExec := filepath.Join(dir, "warehouse-proxy-link")
+	if err := os.Symlink(realExec, linkedExec); err != nil {
+		t.Fatal(err)
+	}
+
+	fake := func(target string, err error) func(string) (string, error) {
+		return func(name string) (string, error) { return target, err }
+	}
+
+	resolved, ok := ResolveLocalCommand(dir, "warehouse-proxy", fake(linkedExec, nil))
+	if !ok || resolved != linkedExec {
+		t.Fatalf("ResolveLocalCommand(bare, symlinked) = (%q, %v), want (%q, true)", resolved, ok, linkedExec)
+	}
+	if !hosttrust.IsSymlink(resolved) {
+		t.Errorf("resolved path %q must be the symlink lookPath found, not something Lstat'd relative to cwd", resolved)
+	}
+
+	resolved, ok = ResolveLocalCommand(dir, "warehouse-proxy", fake(realExec, nil))
+	if !ok || resolved != realExec {
+		t.Fatalf("ResolveLocalCommand(bare, regular) = (%q, %v), want (%q, true)", resolved, ok, realExec)
+	}
+	if hosttrust.IsSymlink(resolved) {
+		t.Errorf("resolved path %q must not read as a symlink", resolved)
+	}
+
+	_, ok = ResolveLocalCommand(dir, "warehouse-proxy", fake("", errNotFound))
+	if ok {
+		t.Error("ResolveLocalCommand(bare, missing) must report ok=false: nothing local was found to check")
+	}
+}
+
+// TestResolveLocalCommandRelativePathResolvesAgainstRootNotCwd: a raw value
+// containing a path separator ("./bin/proxy") is NOT a bare PATH name — it
+// must resolve against the environment's own root, never the calling
+// process's cwd, exercised from >= 3 distinct cwd values the same way
+// AC-10's TestResolveIdenticalAcrossThreeOrMoreCwds proves Resolve itself is
+// cwd-independent.
+func TestResolveLocalCommandRelativePathResolvesAgainstRootNotCwd(t *testing.T) {
+	root := t.TempDir()
+	want := filepath.Join(root, "bin", "proxy")
+
+	origWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origWD) })
+
+	for _, cwd := range []string{t.TempDir(), t.TempDir(), t.TempDir()} {
+		t.Run(cwd, func(t *testing.T) {
+			if err := os.Chdir(cwd); err != nil {
+				t.Fatal(err)
+			}
+			got, ok := ResolveLocalCommand(root, "./bin/proxy", nil)
+			if !ok || got != want {
+				t.Errorf("ResolveLocalCommand from cwd %s = (%q, %v), want (%q, true)", cwd, got, ok, want)
+			}
+		})
+	}
+}
+
+// TestResolveLocalCommandAbsolutePathStaysAbsolute: an absolute raw value is
+// returned unchanged (cleaned), never re-joined against root.
+func TestResolveLocalCommandAbsolutePathStaysAbsolute(t *testing.T) {
+	root := t.TempDir()
+	abs := filepath.Join(t.TempDir(), "proxy")
+	got, ok := ResolveLocalCommand(root, abs, nil)
+	if !ok || got != abs {
+		t.Errorf("ResolveLocalCommand(absolute) = (%q, %v), want (%q, true)", got, ok, abs)
+	}
+}
+
+// errNotFound stands in for exec.ErrNotFound in a fake lookPath: only the
+// non-nil-ness matters to ResolveLocalCommand.
+var errNotFound = errors.New("executable file not found in $PATH")
+
 // ── AC-16: repointing a name never inherits acceptance ───────────────────
 
 // TestRepointNeverInheritsAcceptance is the exact red_first_tests case:

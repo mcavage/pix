@@ -506,7 +506,7 @@ func (c *Config) dropNoncanonicalEnvironments() {
 	kept := make(map[string]string, len(c.Environments))
 	dropped := false
 	for name, path := range c.Environments {
-		if validEnvironmentName(name) && isCanonicalEnvironmentPath(path) {
+		if validEnvironmentName(name) && IsCanonicalEnvironmentPath(path) {
 			kept[name] = path
 			continue
 		}

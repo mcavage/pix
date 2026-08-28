@@ -99,6 +99,16 @@ func ResolveEnvironment(cfg *config.Config, name string, workspaces []string) (s
 		// makes errors.As(err, &unknownEnvErr) find the original type.
 		return "", cli.UsageError{Err: err}
 	}
+	// Canonicalize/validate root IMMEDIATELY, before RefuseSymlinkedRoot's own
+	// os.Lstat (a filesystem read) ever runs on it: config.AddEnvironment
+	// (E1.5) never persists anything but an already-canonical value, and
+	// config.Load's dropNoncanonicalEnvironments drops a hand-edited one on
+	// disk load — but a *config.Config a caller assembles directly never runs
+	// that pass, so this package cannot trust cfg.Environments
+	// unconditionally. See NoncanonicalRootError's doc comment (resolve.go).
+	if !config.IsCanonicalEnvironmentPath(root) {
+		return "", cli.UsageError{Err: &NoncanonicalRootError{Name: name, Root: root}}
+	}
 	if err := RefuseSymlinkedRoot(root); err != nil {
 		return "", err
 	}
@@ -130,7 +140,7 @@ func ResolveEnvironment(cfg *config.Config, name string, workspaces []string) (s
 // (cli.ExitCode == 1) for an operational failure Load cannot itself
 // resolve, such as a file that exists but could not be read for a reason
 // unrelated to its content (a permissions error, for example).
-func Load(cfg *config.Config, store *hosttrust.AcceptanceStore, name string, workspaces []string) (*Environment, error) {
+func Load(cfg *config.Config, store *hosttrust.AcceptanceStore, name string, workspaces []string, lookPath func(string) (string, error)) (*Environment, error) {
 	root, err := ResolveEnvironment(cfg, name, workspaces)
 	if err != nil {
 		return nil, err
@@ -177,7 +187,7 @@ func Load(cfg *config.Config, store *hosttrust.AcceptanceStore, name string, wor
 		}
 	}
 
-	if err := refuseLocalReferenceSymlinks(doc, sidecar, tree); err != nil {
+	if err := refuseLocalReferenceSymlinks(doc, sidecar, tree, root, lookPath); err != nil {
 		return nil, err
 	}
 
@@ -205,7 +215,15 @@ func Load(cfg *config.Config, store *hosttrust.AcceptanceStore, name string, wor
 // and host-service commands that SAME fail-closed treatment here, since
 // envinfo's sidecar/native schemas do not classify those two fields
 // themselves.
-func refuseLocalReferenceSymlinks(doc *envinfo.Document, sidecar *envinfo.Sidecar, tree *envinfo.Tree) error {
+//
+// srv.Command and svc.Command are BARE-OR-PATH command references, unlike a
+// kit's already-resolved Resolved field: neither envinfo's native nor
+// sidecar schema resolves them, so this function does what
+// ResolveLocalCommand documents — a bare name through lookPath, a relative
+// path against root, an absolute path unchanged — rather than handing the
+// raw string straight to a symlink check that would Lstat it relative to
+// this PROCESS's cwd (never the environment's).
+func refuseLocalReferenceSymlinks(doc *envinfo.Document, sidecar *envinfo.Sidecar, tree *envinfo.Tree, root string, lookPath func(string) (string, error)) error {
 	for i, k := range doc.Kits {
 		if !k.Local {
 			continue
@@ -218,7 +236,11 @@ func refuseLocalReferenceSymlinks(doc *envinfo.Document, sidecar *envinfo.Sideca
 		if srv.Command == "" || !RequiresSymlinkCheck(srv.Command) {
 			continue
 		}
-		if err := RefuseSymlinkedReference(fmt.Sprintf("MCP server command %s", srv.KeyPath), srv.Command); err != nil {
+		resolved, ok := ResolveLocalCommand(root, srv.Command, lookPath)
+		if !ok {
+			continue
+		}
+		if err := RefuseSymlinkedReference(fmt.Sprintf("MCP server command %s", srv.KeyPath), resolved); err != nil {
 			return err
 		}
 	}
@@ -227,7 +249,11 @@ func refuseLocalReferenceSymlinks(doc *envinfo.Document, sidecar *envinfo.Sideca
 			if svc.Command == "" || !RequiresSymlinkCheck(svc.Command) {
 				continue
 			}
-			if err := RefuseSymlinkedReference(fmt.Sprintf("host service command %s", svc.Name), svc.Command); err != nil {
+			resolved, ok := ResolveLocalCommand(root, svc.Command, lookPath)
+			if !ok {
+				continue
+			}
+			if err := RefuseSymlinkedReference(fmt.Sprintf("host service command %s", svc.Name), resolved); err != nil {
 				return err
 			}
 		}

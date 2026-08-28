@@ -2,6 +2,7 @@ package env
 
 import (
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -31,6 +32,32 @@ func Resolve(cfg *config.Config, name string) (string, error) {
 		return "", &config.UnknownEnvironmentError{Name: name, Known: Known(cfg)}
 	}
 	return root, nil
+}
+
+// NoncanonicalRootError is ResolveEnvironment's refusal when a registered
+// environment's stored root is not already exactly what config's own
+// canonicalization (config.IsCanonicalEnvironmentPath) would produce: an
+// absolute, clean path with no leading `~`. config.AddEnvironment (E1.5)
+// never persists anything else, and config.Load's own
+// dropNoncanonicalEnvironments already drops a hand-edited entry that
+// somehow reached config.toml — but a *config.Config a caller assembles
+// directly (a test, a future in-memory composition) never runs that pass at
+// all, so ResolveEnvironment applies the SAME check itself rather than
+// trusting cfg.Environments unconditionally. This is what stops a relative
+// or `~`-prefixed value from ever reaching this package's first
+// filepath.Join/os.Stat/os.Lstat, which would otherwise resolve it against
+// the CALLING PROCESS's own working directory — silently reading whatever
+// happens to sit there instead of refusing outright.
+type NoncanonicalRootError struct {
+	Name string
+	Root string
+}
+
+func (e *NoncanonicalRootError) Error() string {
+	return fmt.Sprintf(
+		"pix: environment %q's registered root %q is not a canonical absolute path; refusing rather than resolving it against the current directory (re-register with `pix env add %s <path>`)",
+		e.Name, e.Root, e.Name,
+	)
 }
 
 // ContainmentError is RefuseContainment's structured refusal (AC-11): Root
@@ -152,6 +179,46 @@ var remoteSchemeRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://`)
 // check rather than silently skipping it.
 func RequiresSymlinkCheck(raw string) bool {
 	return !remoteSchemeRE.MatchString(raw)
+}
+
+// ResolveLocalCommand resolves raw — a native `mcp.servers[].command` or a
+// pix.toml `[[host.services]].command` reference — to the absolute
+// filesystem path Load's symlink check must inspect, without ever touching
+// the calling process's own working directory (the same "resolves
+// identically from any cwd" invariant AC-10 already holds Resolve to):
+//
+//   - a BARE name (no path separator) is looked up on PATH via lookPath —
+//     the exec.LookPath production seam a test overrides to pin a
+//     symlinked, regular, or missing binary without touching the real PATH.
+//     A nil lookPath defaults to the real exec.LookPath.
+//   - a RELATIVE path containing a separator resolves against root, the
+//     environment's own canonical root — never the caller's cwd.
+//   - an ABSOLUTE path is returned unchanged (cleaned).
+//
+// The second return is false when raw could not be resolved to a concrete
+// path at all (lookPath found nothing on PATH for a bare name): that is not
+// itself a symlink refusal, only "nothing local to check" — the same
+// silence the prior os.Lstat-based check gave a nonexistent file. A missing
+// binary is a `pix doctor`-shaped gap (health.MCPProbe already reports it),
+// not this package's concern.
+func ResolveLocalCommand(root, raw string, lookPath func(string) (string, error)) (string, bool) {
+	if raw == "" {
+		return "", false
+	}
+	if filepath.IsAbs(raw) {
+		return filepath.Clean(raw), true
+	}
+	if strings.ContainsRune(raw, filepath.Separator) || strings.ContainsRune(raw, '/') {
+		return filepath.Join(root, raw), true
+	}
+	if lookPath == nil {
+		lookPath = exec.LookPath
+	}
+	resolved, err := lookPath(raw)
+	if err != nil {
+		return "", false
+	}
+	return resolved, true
 }
 
 // SubjectKind is the hosttrust.Subject.Kind namespace under which every

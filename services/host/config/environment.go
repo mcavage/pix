@@ -58,11 +58,17 @@ func expandHome(path string) (string, error) {
 	return filepath.Join(home, strings.TrimPrefix(path, "~/")), nil
 }
 
-// isCanonicalEnvironmentPath reports whether path is already exactly what
+// IsCanonicalEnvironmentPath reports whether path is already exactly what
 // CanonicalEnvironmentPath would produce: absolute, no leading `~`, and equal
-// to its own filepath.Clean. Load uses this to fail closed on a value that
-// could only have reached the file by hand.
-func isCanonicalEnvironmentPath(path string) bool {
+// to its own filepath.Clean. config.Load's own dropNoncanonicalEnvironments
+// uses this to fail closed on a hand-edited value; it is exported so a
+// caller one layer up (workflow/env's ResolveEnvironment) can apply the SAME
+// check to a registered root immediately after resolution — before its own
+// first filepath.Join/os.Stat/os.Lstat — rather than trusting that whatever
+// config.Load already sanitized on disk is the only way a *Config ever
+// reaches it (a caller can also build one in memory, bypassing that pass
+// entirely).
+func IsCanonicalEnvironmentPath(path string) bool {
 	if path == "" || strings.HasPrefix(path, "~") || !filepath.IsAbs(path) {
 		return false
 	}

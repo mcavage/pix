@@ -59,7 +59,7 @@ func TestLoad_BothFilesParsed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := Load(cfg, &hosttrust.AcceptanceStore{}, "home", []string{workspace})
+	got, err := Load(cfg, &hosttrust.AcceptanceStore{}, "home", []string{workspace}, nil)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestLoad_InvalidOptionalSidecarRefuses(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := Load(cfg, nil, "home", nil)
+	_, err := Load(cfg, nil, "home", nil, nil)
 	if err == nil {
 		t.Fatal("Load must refuse an invalid pix.toml, got nil error")
 	}
@@ -135,7 +135,7 @@ func TestLoad_MissingOptionalSidecarAccepted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := Load(cfg, nil, "home", nil)
+	got, err := Load(cfg, nil, "home", nil, nil)
 	if err != nil {
 		t.Fatalf("Load with no pix.toml must succeed, got: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestLoad_MissingRequiredNativeFileRefuses(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := Load(cfg, nil, "home", nil)
+	_, err := Load(cfg, nil, "home", nil, nil)
 	if err == nil {
 		t.Fatal("Load must refuse a root with no .sbxenv.yaml")
 	}
@@ -191,7 +191,7 @@ func TestLoad_UnknownNativeFieldRefuses(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := Load(cfg, nil, "home", nil)
+	_, err := Load(cfg, nil, "home", nil, nil)
 	if err == nil {
 		t.Fatal("Load must refuse an unknown top-level .sbxenv.yaml field")
 	}
@@ -222,7 +222,7 @@ func TestLoad_ContainmentCalledFromComposition(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := Load(cfg, nil, "home", []string{workspace})
+	_, err := Load(cfg, nil, "home", []string{workspace}, nil)
 	if err == nil {
 		t.Fatal("Load must refuse a root that resolves inside a declared workspace")
 	}
@@ -262,7 +262,7 @@ func TestLoad_RootSymlinkReachedEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := Load(cfg, nil, "linked", nil)
+	_, err := Load(cfg, nil, "linked", nil, nil)
 	if err == nil {
 		t.Fatal("Load must refuse a symlinked registered root")
 	}
@@ -298,7 +298,7 @@ func TestLoad_ReferencedKitSymlinkReachedEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := Load(cfg, nil, "home", nil)
+	_, err := Load(cfg, nil, "home", nil, nil)
 	if err == nil {
 		t.Fatal("Load must refuse a symlinked local kit reference")
 	}
@@ -338,7 +338,7 @@ func TestLoad_ReferencedHostServiceCommandSymlinkReachedEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := Load(cfg, nil, "home", nil)
+	_, err := Load(cfg, nil, "home", nil, nil)
 	if err == nil {
 		t.Fatal("Load must refuse a symlinked host.services command")
 	}
@@ -348,6 +348,101 @@ func TestLoad_ReferencedHostServiceCommandSymlinkReachedEndToEnd(t *testing.T) {
 	var symErr *SymlinkError
 	if !errors.As(err, &symErr) || symErr.Path != linkedExec {
 		t.Fatalf("error = %#v, want *SymlinkError{Path: %q}", err, linkedExec)
+	}
+}
+
+// ── bare local-command references resolve via PATH, never Lstat(cwd) ────
+
+// TestLoad_BareMCPServerCommandSymlinkReachedEndToEnd proves a NATIVE
+// `mcp.servers[].command` naming a BARE PATH command (no separator) is
+// resolved through the injected lookPath — the exec.LookPath production
+// seam — and the RESOLVED executable is what gets symlink-checked, never an
+// os.Lstat of the bare name relative to the calling process's cwd. Standing
+// in a cwd that happens to have an unrelated file with the SAME bare name
+// proves the fix: the old Lstat-relative-to-cwd behavior would have checked
+// that unrelated cwd file instead of the real one lookPath resolves to.
+func TestLoad_BareMCPServerCommandSymlinkReachedEndToEnd(t *testing.T) {
+	tempConfig(t)
+	cfg := loadConfig(t)
+
+	root := t.TempDir()
+	realExec := filepath.Join(root, "warehouse-proxy-real")
+	if err := writeFile(t, realExec, "#!/bin/sh\n"); err != nil {
+		t.Fatal(err)
+	}
+	linkedExec := filepath.Join(root, "warehouse-proxy-link")
+	if err := os.Symlink(realExec, linkedExec); err != nil {
+		t.Fatal(err)
+	}
+	writeEnvFile(t, root, ".sbxenv.yaml", "schemaVersion: \"1\"\nmcp:\n  servers:\n    - name: warehouse\n      command: warehouse-proxy\n")
+
+	if _, err := Register(cfg, "home", root); err != nil {
+		t.Fatal(err)
+	}
+
+	// A cwd with a DIFFERENT, non-symlinked file that happens to share the
+	// bare command's name — the exact trap an os.Lstat(cwd-relative) check
+	// would fall into.
+	cwd := t.TempDir()
+	if err := writeFile(t, filepath.Join(cwd, "warehouse-proxy"), "#!/bin/sh\n"); err != nil {
+		t.Fatal(err)
+	}
+	origWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origWD) })
+	if err := os.Chdir(cwd); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeLookPath := func(name string) (string, error) {
+		if name == "warehouse-proxy" {
+			return linkedExec, nil
+		}
+		return "", errNotFound
+	}
+
+	_, err = Load(cfg, nil, "home", nil, fakeLookPath)
+	if err == nil {
+		t.Fatal("Load must refuse a bare MCP command that resolves (via PATH) to a symlink")
+	}
+	if got := cli.ExitCode(err); got != 2 {
+		t.Errorf("cli.ExitCode(err) = %d, want 2", got)
+	}
+	var symErr *SymlinkError
+	if !errors.As(err, &symErr) || symErr.Path != linkedExec {
+		t.Fatalf("error = %#v, want *SymlinkError{Path: %q} (the PATH-resolved executable, not a cwd-relative Lstat)", err, linkedExec)
+	}
+}
+
+// TestLoad_BareMCPServerCommandRegularPassesAndMissingSkips: the other two
+// legs of the bare-command matrix reached through Load — a regular
+// (non-symlink) PATH resolution passes clean, and a command lookPath cannot
+// find at all is not itself a refusal (that is a `pix doctor`-shaped
+// concern, not a symlink one).
+func TestLoad_BareMCPServerCommandRegularPassesAndMissingSkips(t *testing.T) {
+	tempConfig(t)
+	cfg := loadConfig(t)
+
+	root := t.TempDir()
+	realExec := filepath.Join(root, "warehouse-proxy-real")
+	if err := writeFile(t, realExec, "#!/bin/sh\n"); err != nil {
+		t.Fatal(err)
+	}
+	writeEnvFile(t, root, ".sbxenv.yaml", "schemaVersion: \"1\"\nmcp:\n  servers:\n    - name: warehouse\n      command: warehouse-proxy\n")
+	if _, err := Register(cfg, "home", root); err != nil {
+		t.Fatal(err)
+	}
+
+	regular := func(string) (string, error) { return realExec, nil }
+	if _, err := Load(cfg, nil, "home", nil, regular); err != nil {
+		t.Fatalf("Load with a regular (non-symlink) PATH-resolved command = %v, want nil", err)
+	}
+
+	missing := func(string) (string, error) { return "", errNotFound }
+	if _, err := Load(cfg, nil, "home", nil, missing); err != nil {
+		t.Fatalf("Load with a bare command missing from PATH = %v, want nil (not a symlink refusal)", err)
 	}
 }
 
@@ -375,7 +470,7 @@ func TestLoad_AcceptanceStateChangesOnRepoint(t *testing.T) {
 	store := &hosttrust.AcceptanceStore{}
 	store.Put(Subject(canonOld), hosttrust.Record{Fingerprint: "accepted-old-fp"})
 
-	before, err := Load(cfg, store, "home", nil)
+	before, err := Load(cfg, store, "home", nil, nil)
 	if err != nil {
 		t.Fatalf("Load (before repoint): %v", err)
 	}
@@ -387,7 +482,7 @@ func TestLoad_AcceptanceStateChangesOnRepoint(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	after, err := Load(cfg, store, "home", nil)
+	after, err := Load(cfg, store, "home", nil, nil)
 	if err != nil {
 		t.Fatalf("Load (after repoint): %v", err)
 	}
@@ -408,7 +503,7 @@ func TestLoad_AcceptanceStateChangesOnRepoint(t *testing.T) {
 func TestLoad_UnknownNameIsUsageError(t *testing.T) {
 	tempConfig(t)
 	cfg := loadConfig(t)
-	_, err := Load(cfg, nil, "nope", nil)
+	_, err := Load(cfg, nil, "nope", nil, nil)
 	if err == nil {
 		t.Fatal("Load must fail for an unregistered name")
 	}
