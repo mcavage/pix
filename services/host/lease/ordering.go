@@ -66,19 +66,9 @@ func AttachRefUnderLifecycle(ctx context.Context, dir string, fn func() error) (
 	return rl, nil
 }
 
-// TryReapProof runs fn only when, under dir's lifecycle lock EXCLUSIVE, the refs
-// lock's EXCLUSIVE can ALSO be proven non-blocking — zero live reference holders.
+// TryReapProof takes refs EX before lifecycle EX so simultaneous last-shell
+// exits converge on one non-blocking, zero-reference reaper; see slim_test.go.
 func TryReapProof(dir string, fn func() error) error {
-	lc, err := OpenLifecycleLock(dir)
-	if err != nil {
-		return err
-	}
-	defer lc.Close()
-	if err := lc.TryExclusive(); err != nil {
-		return err
-	}
-	defer lc.Unlock()
-
 	rl, err := OpenRefLease(dir)
 	if err != nil {
 		return err
@@ -88,6 +78,16 @@ func TryReapProof(dir string, fn func() error) error {
 		return err
 	}
 	defer rl.Unlock()
+
+	lc, err := OpenLifecycleLock(dir)
+	if err != nil {
+		return err
+	}
+	defer lc.Close()
+	if err := lc.TryExclusive(); err != nil {
+		return err
+	}
+	defer lc.Unlock()
 	return fn()
 }
 
