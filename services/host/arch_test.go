@@ -232,6 +232,15 @@ var pkgLayer = map[string]int{
 	// gog is registered generically through `pix mcp register`.
 	"workflow/pack":   layerWorkflow,
 	"workflow/doctor": layerWorkflow,
+	// workflow/env is E1.7's new L3 workflow (native-environment registry,
+	// exact-name resolution, location/symlink refusals — docs/design/
+	// environments.md §5.3/§8.1). It is filed under workflow/ like
+	// workflow/task, but unlike that leaf capability it IS a workflow: it
+	// composes config (L0) with the hosttrust and envinfo L1 capabilities
+	// and orchestrates nothing beneath it directly. It imports no other
+	// workflow/* package (the sibling-workflow rule below) and carries no
+	// `pix env` verb yet — that is E1.9-E1.13's cmd/pix wiring.
+	"workflow/env": layerWorkflow,
 	"workflow/launch": layerWorkflow,
 	// workflow/models is `pix models add`: the inference selection, live
 	// verification and roster machinery that used to be welded into setup's
