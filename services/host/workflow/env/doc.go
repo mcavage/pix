@@ -23,6 +23,22 @@
 //     never by NAME, so a name that starts pointing somewhere else is, from
 //     hosttrust's point of view, simply a different subject with no record
 //     at all.
+//   - load.go — ResolveEnvironment (Resolve + RefuseSymlinkedRoot +
+//     RefuseContainment composed into the one root-resolution step every
+//     later stage shares) and Load: the end-to-end pre-spine composition
+//     this unit's primitives alone did not provide. Load reads the required
+//     native `.sbxenv.yaml` and optional `pix.toml` sidecar (envinfo.Parse /
+//     envinfo.ParseSidecar), builds the pre-composition Tree (envinfo.Merge
+//     + envinfo.BuildTree), validates every sidecar skill path against the
+//     caller-supplied workspaces (envinfo.ValidateSkillWorkspaces), and
+//     refuses every local referenced kit/command/executable it can name
+//     that is symlinked or ambiguously classified. It returns the typed
+//     *Environment aggregate — root, native doc/tree, optional sidecar,
+//     subject/review state — E1.8's bill-of-materials/review consumes
+//     without re-doing any of this package's work, distinguishing a
+//     usage/refusal failure (cli.UsageError, exit 2) from an operational one
+//     it cannot itself resolve (a plain error, exit 1). Still no `pix env`
+//     verb: Load is a library composition, not a command.
 //
 // # Why this is a workflow, not a capability
 //
@@ -32,7 +48,7 @@
 // per this unit's own scope, contains no domain knowledge envinfo or
 // hosttrust do not already own: it wires their answers together and returns
 // the caller (E1.8, E1.9, a future `pix env` verb) a resolved root, a typed
-// refusal, or a trust lookup.
+// refusal, a trust lookup, or (load.go) the full composed result.
 //
 // # No process globals
 //

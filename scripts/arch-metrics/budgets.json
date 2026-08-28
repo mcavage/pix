@@ -235,11 +235,11 @@
       "exits": 0
     },
     "pix/host/workflow/env": {
-      "_prod_loc_note": "E1.7: initial budget for the new L3 registry/exact-name-resolution/location-refusal spine (docs/design/environments.md §5.3/§8.1, units.json E1.7). Two files, registry.go + resolve.go: thin config-owned Register/Unregister/Root/Known wrappers, exact-name Resolve (typed *config.UnknownEnvironmentError, no fuzzy fallback), RefuseContainment (AC-11), RefuseSymlinkedRoot/RefuseSymlinkedReference (AC-12), RequiresSymlinkCheck's fail-closed local-vs-remote classifier, and the Subject/IsAccepted pair proving a repointed name never inherits hosttrust acceptance (AC-16). No `pix env` verb yet; that is E1.9-E1.13.",
-      "prod_loc": 284,
-      "exports": 14,
+      "_prod_loc_note": "E1.7: initial budget for the new L3 registry/exact-name-resolution/location-refusal spine (docs/design/environments.md §5.3/§8.1, units.json E1.7). Two files, registry.go + resolve.go: thin config-owned Register/Unregister/Root/Known wrappers, exact-name Resolve (typed *config.UnknownEnvironmentError, no fuzzy fallback), RefuseContainment (AC-11), RefuseSymlinkedRoot/RefuseSymlinkedReference (AC-12), RequiresSymlinkCheck's fail-closed local-vs-remote classifier, and the Subject/IsAccepted pair proving a repointed name never inherits hosttrust acceptance (AC-16). No `pix env` verb yet; that is E1.9-E1.13. Then the E1.7 pre-spine BLOCK fix: load.go adds ResolveEnvironment (Resolve + RefuseSymlinkedRoot + RefuseContainment composed into the one root-resolution step) and Load, the end-to-end resolve/read/build-tree/validate/refuse composition this unit's primitives alone did not provide — required `.sbxenv.yaml` plus optional `pix.toml` via envinfo Parse/ParseSidecar, envinfo.Merge/BuildTree, envinfo.ValidateSkillWorkspaces against the caller's workspaces, and RefuseSymlinkedReference/RequiresSymlinkCheck over every local kit/MCP-command/host-service-command reference, returning the typed *Environment aggregate (root, native doc/tree, optional sidecar, subject/review state) E1.8 consumes. prod_loc 284 -> 536, exports 14 -> 18 (Environment, MissingRequiredFileError, ResolveEnvironment, Load), edges 3 -> 4 (envinfo). A deliberate, reviewed raise of a shrink-only budget.",
+      "prod_loc": 536,
+      "exports": 18,
       "globals": 2,
-      "edges": 3,
+      "edges": 4,
       "exits": 0
     },
     "pix/host/workflow/launch": {
