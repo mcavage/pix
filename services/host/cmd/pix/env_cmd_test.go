@@ -9,6 +9,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,7 @@ import (
 
 	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/sys/systest"
 	"pix/host/workflow/env"
 )
 
@@ -787,12 +789,268 @@ func TestEnvRm_HelpListsExactlySevenWorkingVerbs(t *testing.T) {
 		t.Fatalf("env --help: %v", err)
 	}
 	got := out.String()
-	for _, verb := range []string{"ls", "add", "show", "use", "review", "forget"} {
+	for _, verb := range []string{"ls", "add", "use", "show", "edit", "review", "forget"} {
 		if !strings.Contains(got, " "+verb+" ") && !strings.Contains(got, " "+verb+"\n") {
 			t.Errorf("pix env --help missing wired verb %q:\n%s", verb, got)
 		}
 	}
 	if strings.Contains(got, " rm ") || strings.Contains(got, " rm\n") {
 		t.Errorf("pix env --help must never list `rm` as a verb:\n%s", got)
+	}
+}
+
+// ── env edit: E1.12, through the SAME kong dispatch production uses ──────
+
+// envEditDeps is envDeps plus a systest.Fake wired as d.Sys, so `env edit`
+// dispatch tests can control $VISUAL/$EDITOR and the editor invocation
+// without ever spawning a real process.
+func envEditDeps(t *testing.T, fake *systest.Fake) (*cli.Deps, *bytes.Buffer, *bytes.Buffer) {
+	t.Helper()
+	d, out, errb := envDeps(t)
+	d.Sys = fake
+	return d, out, errb
+}
+
+func noEditorEditFake() *systest.Fake {
+	return &systest.Fake{GetenvFn: func(string) string { return "" }}
+}
+
+// TestEnvEdit_TargetTokenTable is the dispatch-level analog of
+// workflow/env/edit_test.go's TestEdit_TargetTokenTable: the exact
+// positional enum, through kong argv parsing.
+func TestEnvEdit_TargetTokenTable(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		argv []string
+		want string // "" means success
+	}{
+		{name: "pix", argv: []string{"env", "edit", "work", "pix"}, want: ""},
+		{name: "sbxenv", argv: []string{"env", "edit", "work", "sbxenv"}, want: ""},
+		{name: "unrecognized", argv: []string{"env", "edit", "work", "yaml"}, want: `unknown target "yaml"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, out, errb := envEditDeps(t, noEditorEditFake())
+			d.Interactive = false
+			registerTier0Env(t, "work")
+			code := dispatch(tc.argv, d)
+			if tc.want == "" {
+				if code != 0 {
+					t.Fatalf("dispatch(%v) = %d, want 0 (stderr: %s)", tc.argv, code, errb.String())
+				}
+				return
+			}
+			if code != 2 {
+				t.Fatalf("dispatch(%v) = %d, want 2 (stdout: %s)", tc.argv, code, out.String())
+			}
+			if !strings.Contains(errb.String(), tc.want) {
+				t.Errorf("stderr = %q, want it to contain %q", errb.String(), tc.want)
+			}
+			if !strings.Contains(errb.String(), "pix env edit work pix") || !strings.Contains(errb.String(), "pix env edit work sbxenv") {
+				t.Errorf("stderr = %q, want both explicit forms named", errb.String())
+			}
+		})
+	}
+}
+
+// TestEnvEdit_NonTTYNoTargetExitsTwo: no token, no TTY -> exit 2 naming both
+// explicit forms (AC-50), through the real kong-parsed positional (which
+// leaves Target == "" since it is `optional:""`).
+func TestEnvEdit_NonTTYNoTargetExitsTwo(t *testing.T) {
+	d, _, errb := envEditDeps(t, noEditorEditFake())
+	d.Interactive = false
+	registerTier0Env(t, "work")
+	code := dispatch([]string{"env", "edit", "work"}, d)
+	if code != 2 {
+		t.Fatalf("dispatch = %d, want 2 (stderr: %s)", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "pix env edit work pix") || !strings.Contains(errb.String(), "pix env edit work sbxenv") {
+		t.Errorf("stderr = %q, want both explicit forms named", errb.String())
+	}
+}
+
+// TestEnvEdit_TTYNoTargetPromptsAndReadsChoice: same, but a TTY reads one
+// bounded choice off d.In instead of refusing.
+func TestEnvEdit_TTYNoTargetPromptsAndReadsChoice(t *testing.T) {
+	d, out, errb := envEditDeps(t, noEditorEditFake())
+	d.Interactive = true
+	d.In = strings.NewReader("sbxenv\n")
+	root := registerTier0Env(t, "work")
+	code := dispatch([]string{"env", "edit", "work"}, d)
+	if code != 0 {
+		t.Fatalf("dispatch = %d, want 0 (stderr: %s)", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "which file? [pix/sbxenv]: ") {
+		t.Errorf("stdout = %q, want the selection prompt", out.String())
+	}
+	if want := filepath.Join(root, ".sbxenv.yaml") + "\n"; !strings.HasSuffix(out.String(), want) {
+		t.Errorf("stdout = %q, want it to end with %q (no editor configured)", out.String(), want)
+	}
+}
+
+// TestEnvEdit_BothUnsetPrintsPathAndExitsZero exercises §8.1's exit-code
+// scheme's own example verbatim: "0 only for a completed operation,
+// including printing a path because $EDITOR was unset".
+func TestEnvEdit_BothUnsetPrintsPathAndExitsZero(t *testing.T) {
+	d, out, errb := envEditDeps(t, noEditorEditFake())
+	d.Interactive = false
+	root := registerTier0Env(t, "work")
+	code := dispatch([]string{"env", "edit", "work", "sbxenv"}, d)
+	if code != 0 {
+		t.Fatalf("dispatch = %d, want 0 (stderr: %s)", code, errb.String())
+	}
+	if want := filepath.Join(root, ".sbxenv.yaml") + "\n"; out.String() != want {
+		t.Errorf("stdout = %q, want ONLY %q", out.String(), want)
+	}
+}
+
+// TestEnvEdit_ArgvSpacesNoShell: a multi-word $EDITOR is split into a real
+// argv and invoked directly (RunInteractive, never a shell).
+func TestEnvEdit_ArgvSpacesNoShell(t *testing.T) {
+	fake := &systest.Fake{
+		GetenvFn:         func(string) string { return "myeditor --wait --flag" },
+		RunInteractiveFn: func(string, ...string) error { return nil },
+	}
+	d, _, errb := envEditDeps(t, fake)
+	d.Interactive = false
+	root := registerTier0Env(t, "work")
+	code := dispatch([]string{"env", "edit", "work", "pix"}, d)
+	if code != 0 {
+		t.Fatalf("dispatch = %d, want 0 (stderr: %s)", code, errb.String())
+	}
+	want := "myeditor --wait --flag " + filepath.Join(root, "pix.toml")
+	if len(fake.Calls) != 1 || fake.Calls[0] != want {
+		t.Errorf("fake.Calls = %v, want exactly [%q]", fake.Calls, want)
+	}
+}
+
+// TestEnvEdit_EditorFailureIsOperationalNonTwo: through dispatch, the exit
+// code an editor failure surfaces as is non-zero and NOT 2 (a refusal), the
+// same distinction env_cmd.go's envRun preserves via cli.ExitCode.
+func TestEnvEdit_EditorFailureIsOperationalNonTwo(t *testing.T) {
+	fake := &systest.Fake{
+		GetenvFn:         func(string) string { return "brokeneditor" },
+		RunInteractiveFn: func(string, ...string) error { return errors.New("exit status 127") },
+	}
+	d, _, errb := envEditDeps(t, fake)
+	d.Interactive = false
+	registerTier0Env(t, "work")
+	code := dispatch([]string{"env", "edit", "work", "sbxenv"}, d)
+	if code == 0 || code == 2 {
+		t.Fatalf("dispatch = %d, want a non-zero, non-2 operational code", code)
+	}
+	if !strings.Contains(errb.String(), "brokeneditor") {
+		t.Errorf("stderr = %q, want it to name the editor", errb.String())
+	}
+}
+
+// TestEnvEdit_VerdictOkReviewInvalid runs all three PRD §5.4 verdicts
+// through dispatch, over a no-op editor that either leaves the file
+// untouched (ok/review) or corrupts it (invalid).
+func TestEnvEdit_VerdictOkReviewInvalid(t *testing.T) {
+	t.Run("ok: accepted and unchanged", func(t *testing.T) {
+		fake := &systest.Fake{
+			GetenvFn:         func(string) string { return "true" },
+			RunInteractiveFn: func(string, ...string) error { return nil },
+		}
+		d, _, errb := envEditDeps(t, fake)
+		d.Interactive = false
+		// A Tier0 fixture's `env review` never writes a record at all (there
+		// is nothing to review), so a real accepted-and-unchanged verdict
+		// needs the Tier1 host-exec fixture the review tests already use.
+		registerHostExecEnv(t, "work")
+		// Accept the environment as-is, over the SAME scratch config/trust
+		// store the subsequent edit dispatch reads.
+		if code := dispatch([]string{"env", "review", "work", "--yes"}, d); code != 0 {
+			t.Fatalf("env review work --yes = %d, want 0 (stderr: %s)", code, errb.String())
+		}
+		d2, out2, errb2 := freshDeps()
+		d2.Sys = fake
+		d2.Interactive = false
+		code := dispatch([]string{"env", "edit", "work", "sbxenv"}, d2)
+		if code != 0 {
+			t.Fatalf("dispatch = %d, want 0 (stderr: %s)", code, errb2.String())
+		}
+		if !strings.Contains(out2.String(), "pix env use work") {
+			t.Errorf("stdout = %q, want the ok verdict", out2.String())
+		}
+	})
+
+	t.Run("review: never accepted", func(t *testing.T) {
+		fake := &systest.Fake{
+			GetenvFn:         func(string) string { return "true" },
+			RunInteractiveFn: func(string, ...string) error { return nil },
+		}
+		d, out, errb := envEditDeps(t, fake)
+		d.Interactive = false
+		// A Tier0 fixture can never sit unaccepted (review.go's own Review
+		// writes no record for it at all, and postEditVerdict's Tier0 branch
+		// says "ok" unconditionally): the never-accepted "review" verdict is
+		// only real for a Tier1 host-exec fixture nobody has run `env review`
+		// against yet.
+		registerHostExecEnv(t, "work")
+		code := dispatch([]string{"env", "edit", "work", "sbxenv"}, d)
+		if code != 0 {
+			t.Fatalf("dispatch = %d, want 0 (stderr: %s)", code, errb.String())
+		}
+		if !strings.Contains(out.String(), "pix env review work") {
+			t.Errorf("stdout = %q, want the review verdict", out.String())
+		}
+	})
+
+	t.Run("ok: Tier0 with no acceptance record at all", func(t *testing.T) {
+		// E1.12 pre-merge BLOCK fix (finding 3): a Tier0 environment must
+		// verdict "ok" even though it was never run through `env review` —
+		// there is nothing for review to accept in the first place.
+		fake := &systest.Fake{
+			GetenvFn:         func(string) string { return "true" },
+			RunInteractiveFn: func(string, ...string) error { return nil },
+		}
+		d, out, errb := envEditDeps(t, fake)
+		d.Interactive = false
+		registerTier0Env(t, "work")
+		code := dispatch([]string{"env", "edit", "work", "sbxenv"}, d)
+		if code != 0 {
+			t.Fatalf("dispatch = %d, want 0 (stderr: %s)", code, errb.String())
+		}
+		if !strings.Contains(out.String(), "pix env use work") {
+			t.Errorf("stdout = %q, want the ok verdict", out.String())
+		}
+		if strings.Contains(out.String(), "pix env review") {
+			t.Errorf("stdout = %q, must never point a Tier0 environment at review", out.String())
+		}
+	})
+
+	t.Run("invalid: corrupted by the editor", func(t *testing.T) {
+		var root string
+		fake := &systest.Fake{
+			GetenvFn: func(string) string { return "true" },
+			RunInteractiveFn: func(string, ...string) error {
+				return os.WriteFile(filepath.Join(root, ".sbxenv.yaml"),
+					[]byte("schemaVersion: \"1\"\nagent: pix\nnot_a_real_field: true\n"), 0o644)
+			},
+		}
+		d, out, errb := envEditDeps(t, fake)
+		d.Interactive = false
+		root = registerTier0Env(t, "work")
+		code := dispatch([]string{"env", "edit", "work", "sbxenv"}, d)
+		if code != 0 {
+			t.Fatalf("dispatch = %d, want 0 (stderr: %s)", code, errb.String())
+		}
+		if !strings.Contains(out.String(), "next: pix env edit work sbxenv") {
+			t.Errorf("stdout = %q, want the invalid verdict's re-edit command", out.String())
+		}
+	})
+}
+
+// TestEnvEdit_NoSbxenvFlagInHelp: the ONLY spelling of the native-file
+// target anywhere in `pix env edit --help`'s live usage text is the
+// positional "sbxenv", never a "--sbxenv" flag.
+func TestEnvEdit_NoSbxenvFlagInHelp(t *testing.T) {
+	d, out, errb := envDeps(t)
+	if code := dispatch([]string{"env", "edit", "--help"}, d); code != 0 {
+		t.Fatalf("pix env edit --help = %d, want 0 (stderr: %s)", code, errb.String())
+	}
+	if strings.Contains(out.String(), "--sbxenv") {
+		t.Errorf("help text = %q, must never advertise a --sbxenv flag", out.String())
 	}
 }

@@ -6,11 +6,13 @@
 // `review` (E1.8's workflow/env/review.go). E1.10 added `add`
 // (workflow/env/add.go): register a caller-authored directory, or
 // scaffold a fresh one, then ALWAYS run the same E1.8 review before
-// anything commits. E1.11 (this unit) added `use`, `forget`, and the `rm`
-// pointer error below. Every later verb unit (E1.12 `edit`) adds its own
-// ONE field line here and lands in ID order (units.json's file-conflict
-// table: "E1.9 owns the struct; each verb unit adds one field line + its
-// own file. Land in ID order, rebase.").
+// anything commits. E1.11 added `use`, `forget`, and the `rm` pointer
+// error below. E1.12 (this unit) added `edit` (workflow/env/edit.go):
+// open pix.toml or .sbxenv.yaml in $VISUAL/$EDITOR, then reload and
+// validate. All seven verbs (units.json's file-conflict table: "E1.9 owns
+// the struct; each verb unit adds one field line + its own file. Land in
+// ID order, rebase.") are now wired, in PRD §5.10 order: ls, add, use,
+// show, edit, review, forget, plus the hidden `rm` pointer.
 //
 // There is deliberately NO placeholder field for a verb that does not
 // exist yet: an unregistered subcommand answers with kong's own generic
@@ -62,8 +64,12 @@ servers. See docs/design/environments.md.
 
 Seven verbs: ls, add, use, show, edit, review, forget. There is no
 'pix env rm' — registering a name is not owning its files; forget only
-unregisters, and it deletes nothing. 'edit' lands in a later unit; ls,
-add, show, use, review and forget work now.
+unregisters, and it deletes nothing. All seven work now.
+
+'edit NAME pix|sbxenv' opens pix.toml or .sbxenv.yaml in $VISUAL/$EDITOR
+(exact positional enum, no flag), then reloads and validates: it never
+prompts to accept a host-execution change inline — a changed footprint
+prints 'pix env review NAME' as the next step instead.
 
 An environment that runs code on your host or hands it a credential halts
 at 'pix env review NAME': [y/N], default No. A non-TTY review fails closed
@@ -76,8 +82,9 @@ unless --yes.`
 type envCmd struct {
 	Ls     envLsCmd     `cmd:"" default:"1" help:"List registered environments. Marks the default."`
 	Add    envAddCmd    `cmd:"" help:"Register a directory, or scaffold a new one, then review it."`
-	Show   envShowCmd   `cmd:"" help:"What NAME is: files, models, mounts, MCP, review state, drift."`
 	Use    envUseCmd    `cmd:"" help:"Set the machine default. Refuses an unreviewed or changed environment."`
+	Show   envShowCmd   `cmd:"" help:"What NAME is: files, models, mounts, MCP, review state, drift."`
+	Edit   envEditCmd   `cmd:"" help:"Open pix.toml or .sbxenv.yaml in $VISUAL/$EDITOR, then validate."`
 	Review envReviewCmd `cmd:"" help:"Read and accept what NAME runs on your host."`
 	Forget envForgetCmd `cmd:"" help:"Unregister NAME. Never deletes the environment directory."`
 	// Rm is not a verb (Seven verbs, no more — this file's own package doc
@@ -199,6 +206,31 @@ func countTrue(bs ...bool) int {
 		}
 	}
 	return n
+}
+
+// ── edit ─────────────────────────────────────────────────────────────────
+
+// envEditCmd's Target is an exact positional enum ("pix" or "sbxenv"),
+// never a flag — there is deliberately no `--sbxenv` flag anywhere in this
+// dispatch. It is validated by hand in workflow/env.Edit, the same
+// `optional:""` + hand-checked-switch idiom configPathCmd's Kind already
+// uses, rather than kong's own `enum` tag: an unrecognized or omitted
+// token needs THIS package's own two-explicit-forms message (env.Edit's
+// editTargetUsageError), not kong's generic "expected one of" text.
+type envEditCmd struct {
+	Name   string `arg:"" help:"Exact environment name."`
+	Target string `arg:"" optional:"" help:"'pix' for pix.toml, 'sbxenv' for .sbxenv.yaml. Omit on a TTY to be asked."`
+}
+
+func (c *envEditCmd) Run(d *cli.Deps) error {
+	cfg, err := d.Config()
+	if err != nil {
+		return err
+	}
+	_, err = env.Edit(cfg, d.Sys, c.Name, c.Target, env.EditOptions{
+		TTY: d.Interactive, In: d.In, Out: d.Out,
+	})
+	return envRun(d, err)
 }
 
 // ── review ───────────────────────────────────────────────────────────────
