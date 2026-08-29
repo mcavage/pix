@@ -140,6 +140,38 @@ func TestShellSplit_Table(t *testing.T) {
 			in:      `editor "path\"`,
 			wantErr: ErrUnmatchedQuote,
 		},
+		// --- POSIX line continuation outside quotes ---------------------
+		// Outside any quote, a backslash immediately followed by a newline
+		// is a line continuation: BOTH characters vanish and the two lines
+		// join with no separator — it is not a literal newline embedded in
+		// the token (that would be the pre-fix, wrong behavior: the
+		// existing outside-quote backslash rule treats \<newline> like any
+		// other bare escape and keeps the newline as token text).
+		{
+			name: "line continuation within a token",
+			in:   "editor fo\\\no --wait",
+			want: []string{"editor", "foo", "--wait"},
+		},
+		{
+			name: "line continuation between tokens (joins two words with no space)",
+			in:   "editor foo\\\nbar --wait",
+			want: []string{"editor", "foobar", "--wait"},
+		},
+		{
+			name: "line continuation before an argument, whitespace on both sides",
+			in:   "editor \\\n  --wait",
+			want: []string{"editor", "--wait"},
+		},
+		{
+			name: "line continuation at end of input leaves no trailing artifact",
+			in:   "editor --wait\\\n",
+			want: []string{"editor", "--wait"},
+		},
+		{
+			name:    "trailing standalone backslash with no newline is still unmatched",
+			in:      `editor --wait\`,
+			wantErr: ErrUnmatchedQuote,
+		},
 	}
 
 	for _, tc := range cases {

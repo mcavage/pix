@@ -22,7 +22,10 @@ var ErrEmptyCommand = errors.New("empty command")
 // other rune the backslash is preserved literally, exactly as POSIX
 // specifies), and a bare backslash outside any quote escaping the next
 // character outright (so a space can be embedded in a token without
-// quoting it) — WITHOUT ever constructing or invoking a shell. It
+// quoting it), with one exception: a backslash immediately followed by a
+// newline is POSIX line continuation — both characters vanish rather than
+// producing a literal embedded newline or escaping it — WITHOUT ever
+// constructing or invoking a shell. It
 // performs no globbing, no variable expansion, no command substitution: a
 // shell metacharacter that appears outside quotes (or an unescaped one
 // inside double quotes) is ordinary token text. Adjacent quoted and
@@ -97,6 +100,16 @@ func ShellSplit(s string) ([]string, error) {
 		case escaped:
 			cur.WriteRune(r)
 			escaped = false
+		case r == '\\' && i+1 < len(runes) && runes[i+1] == '\n':
+			// POSIX: outside any quote, a backslash immediately followed
+			// by a newline is a line continuation — both characters
+			// vanish and the two lines join with no separator. It is
+			// NOT a literal newline embedded in the token (that was the
+			// pre-fix bug: falling through to the generic escaped-rune
+			// case below just kept the newline as token text). This has
+			// no effect on haveToken/cur either way, so it works whether
+			// it lands mid-token, between tokens, or before an argument.
+			i++
 		case r == '\\':
 			// Outside any quote a bare backslash escapes the very next
 			// rune outright (dropped itself), letting e.g. a space be
