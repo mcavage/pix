@@ -26,11 +26,44 @@ type Record struct {
 	// liveness, ownership, or exclusivity. The flock in lock.go is the only
 	// correctness primitive; this field must never become one.
 	CreatedPID int `json:"created_pid"`
+
+	// Name is the sandbox name this instance was created under, set only by
+	// CreateRecordFor (the create-intent recovery path — see
+	// workflow/launch/createintent.go). It is ADDITIVE and OPTIONAL: a
+	// record.json written before this field existed, or written through the
+	// plain CreateRecord the pix-* name-keyed lifecycle already uses (where
+	// the lease directory's own key already IS the name), decodes with
+	// Name == "" and every existing reader — ReferencesHeld, ReadKeep, the
+	// reap.go instance-id mismatch check — is unaffected, because none of
+	// them look at it. Once non-empty, Name is immutable exactly like
+	// InstanceID: a later CreateRecordFor call for the same dir with a
+	// DIFFERENT non-empty name is refused, the same relabel refusal
+	// InstanceID already gets.
+	Name string `json:"name,omitempty"`
 }
 
 const recordFileName = "record.json"
 
 func CreateRecord(dir, instanceID string) (*Record, error) {
+	return createRecord(dir, instanceID, "")
+}
+
+// CreateRecordFor is CreateRecord plus the sandbox Name a create-intent
+// recovery flow needs recorded alongside the instance id: the ONE thing a
+// later fresh-probe removal decision (DecideEnvRemoval) must be able to
+// re-derive from this directory alone, since the directory's own key is not
+// guaranteed to be the sandbox name for an environment-identity-keyed create
+// (unlike the pix-* workspace-keyed lifecycle, where it already is). name
+// must be non-empty; use CreateRecord when there is no name to bind (the
+// existing pix-* lifecycle, which needs none).
+func CreateRecordFor(dir, instanceID, name string) (*Record, error) {
+	if name == "" {
+		return nil, fmt.Errorf("lease: CreateRecordFor requires a non-empty sandbox name")
+	}
+	return createRecord(dir, instanceID, name)
+}
+
+func createRecord(dir, instanceID, name string) (*Record, error) {
 	if err := ValidateInstanceID(instanceID); err != nil {
 		return nil, err
 	}
@@ -43,12 +76,15 @@ func CreateRecord(dir, instanceID string) (*Record, error) {
 		if existing.InstanceID != instanceID {
 			return nil, fmt.Errorf("lease: %s already records instance %q, refusing to relabel as %q", path, existing.InstanceID, instanceID)
 		}
+		if name != "" && existing.Name != "" && existing.Name != name {
+			return nil, fmt.Errorf("lease: %s already records name %q, refusing to relabel as %q", path, existing.Name, name)
+		}
 		return existing, nil
 	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
 
-	rec := &Record{InstanceID: instanceID, CreatedAt: time.Now().UTC(), CreatedPID: os.Getpid()}
+	rec := &Record{InstanceID: instanceID, CreatedAt: time.Now().UTC(), CreatedPID: os.Getpid(), Name: name}
 	data, err := json.Marshal(rec)
 	if err != nil {
 		return nil, fmt.Errorf("lease: marshal record: %w", err)
