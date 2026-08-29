@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"pix/host/cli"
+	"pix/host/config"
 	"pix/host/health"
 	"pix/host/workflow/doctor"
 	"pix/host/workspace"
@@ -20,11 +21,22 @@ import (
 func (c *doctorCmd) Help() string { return doctor.Description }
 
 type doctorCmd struct {
-	JSON    bool `help:"Emit the machine-readable snapshot (schema_version 5)."`
-	Verbose bool `help:"Show the evidence for every check, not only the ones that failed."`
+	JSON      bool `help:"Emit the machine-readable snapshot (schema_version 5)."`
+	Verbose   bool `help:"Show the evidence for every check, not only the ones that failed."`
+	Recreates bool `help:"Show every recorded environment recreate: timestamp, environment, and the drifted canonical key paths (docs/design/environments.md section 9.4)."`
 }
 
 func (c *doctorCmd) Run(d *cli.Deps) error {
+	// --recreates is its own diagnostic view, not an eighth `env` verb
+	// (docs/design/environments.md §9.4) and not gated on a loadable config:
+	// it reads the I4 log directly and never runs a probe.
+	if c.Recreates {
+		dir, derr := config.StateDir()
+		if derr != nil {
+			return derr
+		}
+		return doctor.RenderRecreates(d.Out, dir)
+	}
 	cfg, profile, err := workspace.LoadResolvedConfig()
 	if err != nil {
 		// Doctor DOES fail here: an unreadable config is a verified gap in something
@@ -32,7 +44,15 @@ func (c *doctorCmd) Run(d *cli.Deps) error {
 		health.RenderDoctorWith(d.Out, doctor.ConfigLoadSnapshot(err), health.DoctorOpts{Verbose: c.Verbose})
 		return cli.SilentError{Code: health.ExitNotReady}
 	}
-	if code := doctor.RunDoctor(context.Background(), cfg, profile, d.Out, doctorOptions(), c.JSON, c.Verbose); code != health.ExitOK {
+	code := doctor.RunDoctor(context.Background(), cfg, profile, d.Out, doctorOptions(), c.JSON, c.Verbose)
+	if !c.JSON {
+		// Best-effort: the recreate-log pointer line is diagnostic-only, and a
+		// missing/unreadable state dir must never change doctor's own exit code.
+		if dir, derr := config.StateDir(); derr == nil {
+			_ = doctor.RecreateSummaryLine(d.Out, dir)
+		}
+	}
+	if code != health.ExitOK {
 		return cli.SilentError{Code: code}
 	}
 	return nil

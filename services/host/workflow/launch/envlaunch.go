@@ -43,6 +43,7 @@ import (
 	"pix/host/inference"
 	"pix/host/lease"
 	"pix/host/mcp"
+	"pix/host/recreatelog"
 	"pix/host/sandbox"
 	"pix/host/sys"
 )
@@ -498,6 +499,56 @@ func DecideEnvAttach(g AttachGate, sandboxName, envName string) AttachDecision {
 		return refuse("names an environment that is no longer reviewed", nil)
 	}
 	return AttachDecision{Attach: true}
+}
+
+// RecordAttachRefusal appends exactly one recreatelog record (E1.6's
+// bounded I4 diagnostic) when decision refused an attach because the
+// environment's creation fingerprint drifted (docs/design/
+// environments.md §9.4) — the ONLY §10.2 condition DecideEnvAttach
+// attaches a non-empty Drifts to. Every OTHER refusal reason (not a
+// schema-verified running sandbox, a different instance, no longer
+// reviewed) has nothing drifted to log and is unrelated recreate-boundary
+// tracking: this appends nothing for those, and nothing at all for a
+// successful attach.
+//
+// envName is the recreatelog record's environment field; an empty name
+// (the `none` state — no environment selected) has nothing to key a
+// recreate-boundary record by, so it is skipped quietly rather than
+// handed to recreatelog, which would otherwise refuse it outright.
+//
+// This is a diagnostic side-channel, never a reason `pix run` fails
+// differently: a write error here (a wedged lock, an unwritable state
+// dir) is returned to the caller to log at its own discretion, but must
+// never change or block the refusal it is describing.
+func RecordAttachRefusal(dir, envName string, decision AttachDecision) error {
+	if decision.Attach || len(decision.Drifts) == 0 {
+		return nil
+	}
+	if strings.TrimSpace(envName) == "" {
+		return nil
+	}
+	paths := make([]string, 0, len(decision.Drifts))
+	for _, d := range decision.Drifts {
+		paths = append(paths, changedKeyPathForDrift(d))
+	}
+	return recreatelog.Append(dir, envName, paths)
+}
+
+// changedKeyPathForDrift is recreatelog's canonical changed-path for one
+// attributed envinfo.Drift: the PRE-composition KeyPath Attribute traced
+// (identity-bearing, e.g. "mcp.servers[github].url"), or — when no
+// pre-composition source exists — the composed key itself: a Pix-managed
+// singleton ("env.PIX_MEMORY_SCOPE changed (pix-managed, no
+// pre-composition source)" collapses to its ComposedKey), a collapsed
+// identityless-list group ("kits[]"/"mounts[]"), or ResetInvalidatedDrift's
+// single "*" record. Every one of those is still a bare canonical key path
+// recreatelog.Append accepts — never a facet value, never an argv, never a
+// path outside the environment root.
+func changedKeyPathForDrift(d envinfo.Drift) string {
+	if d.KeyPath != "" {
+		return d.KeyPath
+	}
+	return d.ComposedKey
 }
 
 // SelectSessionModel is §6.3's precedence, in one place: an explicit
