@@ -6,6 +6,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { parseRoster, type Roster } from "../lib/inference-roster.ts";
 
 type Backend = {
 	driver: "native" | "openai-compatible" | "ollama";
@@ -28,7 +29,24 @@ type Model = {
 	output_cost?: number;
 };
 
-type Manifest = { version: 1; backends: Record<string, Backend>; models: Model[] };
+// `roster` is additive (docs/design/environments.md §7): a manifest an older
+// host wrote, or a launcher that never composed an environment roster,
+// simply omits the key. This extension never resolves an agent's model — it
+// only registers providers — so it never reads `roster` itself; the field is
+// carried on the type (and re-exported via readRoster below) purely so
+// extensions/subagents.ts and tests can resolve the SAME manifest object
+// this file already parses, instead of a second, divergent read.
+type Manifest = { version: 1; backends: Record<string, Backend>; models: Model[]; roster?: Roster };
+
+// readRoster resolves the additive roster out of an already-parsed v1
+// manifest. Pure passthrough to the shared parser (lib/inference-roster.ts):
+// kept here, re-exported, so a caller/test can resolve a roster from the
+// exact same Manifest shape this file's own readManifest() validates,
+// instead of importing the shared module directly and risking a second,
+// divergent notion of "the manifest".
+export function readRoster(manifest: Manifest): Roster | undefined {
+	return parseRoster(manifest);
+}
 
 // Pi's default OpenAI Responses affinity mode adds a `session_id` HTTP
 // header. Some standards-compliant gateways reject underscore-bearing header
