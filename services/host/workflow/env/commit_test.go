@@ -403,6 +403,35 @@ func countSaveCalls(t *testing.T, file string) int {
 	return n
 }
 
+// TestCountSaveCalls_SelfTest is finding A2's planted-violation proof for
+// the .Save()-call AST scanner: a throwaway file with a KNOWN number of
+// .Save() call expressions (0, 1, 2, and one that only MENTIONS Save() in a
+// comment/doc string, which must not count) must report exactly that count.
+func TestCountSaveCalls_SelfTest(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		name string
+		src  string
+		want int
+	}{
+		{"zero", "package planted\nfunc f() {}\n", 0},
+		{"one", "package planted\nfunc f(c interface{ Save() error }) { c.Save() }\n", 1},
+		{"two", "package planted\nfunc f(a, b interface{ Save() error }) { a.Save(); b.Save() }\n", 2},
+		{"comment mention does not count", "package planted\n// this calls Save() but only in prose\nfunc f() {}\n", 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			path := filepath.Join(dir, c.name+".go")
+			if err := os.WriteFile(path, []byte(c.src), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if got := countSaveCalls(t, path); got != c.want {
+				t.Errorf("countSaveCalls(%s) = %d, want %d", c.name, got, c.want)
+			}
+		})
+	}
+}
+
 func TestEnvRegistryWriters_SaveOnlyInsideLockedCommit(t *testing.T) {
 	for _, f := range []string{"add.go", "use.go", "forget.go"} {
 		if got := countSaveCalls(t, f); got != 0 {

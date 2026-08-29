@@ -34,6 +34,7 @@ package env
 
 import (
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -63,29 +64,76 @@ const trustConfirmation = "Accept this host-execution footprint? [y/N]:"
 // which a source scan alone cannot, since a source literal is clean before
 // a runtime substitution and a bug could still be introduced by what gets
 // interpolated into it.
-func assertFamilyCopy(t *testing.T, label, msg string) {
-	t.Helper()
+// familyCopyViolations is the pure form of the family's copy contract: it
+// returns one description string per violation found in msg, never calling
+// into *testing.T at all. assertFamilyCopy (below) is a thin t.Errorf
+// wrapper over this; a planted-violation self-test
+// (TestAssertFamilyCopy_SelfTest) calls this directly so it can assert
+// "the scanner found exactly one finding" without a failing subtest
+// propagating Fail() up to a meta-test that is supposed to pass.
+func familyCopyViolations(msg string) []string {
+	var findings []string
 	if strings.Contains(msg, "\u2014") {
-		t.Errorf("%s: contains an em dash: %q", label, msg)
+		findings = append(findings, fmt.Sprintf("contains an em dash: %q", msg))
 	}
 	if m := bannedFillerWordsRE.FindString(msg); m != "" {
-		t.Errorf("%s: contains banned filler word %q: %q", label, m, msg)
+		findings = append(findings, fmt.Sprintf("contains banned filler word %q: %q", m, msg))
 	}
 	if m := bannedSuccessWordsRE.FindString(msg); m != "" {
-		t.Errorf("%s: a refusal must never claim an unearned success verdict %q: %q", label, m, msg)
+		findings = append(findings, fmt.Sprintf("a refusal must never claim an unearned success verdict %q: %q", m, msg))
 	}
 	lower := strings.ToLower(msg)
 	if strings.Contains(lower, "sbx env rm") {
-		t.Errorf("%s: suggests `sbx env rm`, which does not exist: %q", label, msg)
+		findings = append(findings, fmt.Sprintf("suggests `sbx env rm`, which does not exist: %q", msg))
 	}
 	if strings.Contains(lower, "did you mean") {
-		t.Errorf("%s: offers a name correction as a question rather than data: %q", label, msg)
+		findings = append(findings, fmt.Sprintf("offers a name correction as a question rather than data: %q", msg))
 	}
 	// D14/AC-57: the only yes/no this family may ever render is the trust
 	// confirmation itself; any OTHER bracketed yes/no is a name-selection or
 	// name-correction question this family must never ask.
 	if idx := strings.Index(lower, "[y/n]"); idx != -1 && !strings.Contains(msg, trustConfirmation) {
-		t.Errorf("%s: carries a yes/no prompt other than the trust confirmation: %q", label, msg)
+		findings = append(findings, fmt.Sprintf("carries a yes/no prompt other than the trust confirmation: %q", msg))
+	}
+	return findings
+}
+
+func assertFamilyCopy(t *testing.T, label, msg string) {
+	t.Helper()
+	for _, f := range familyCopyViolations(msg) {
+		t.Errorf("%s: %s", label, f)
+	}
+}
+
+// TestAssertFamilyCopy_SelfTest is finding A2's planted-violation proof for
+// the RENDERED-text scanner: each of familyCopyViolations' six classes,
+// exercised with a minimal string that should trip exactly that one class
+// and no other. A scanner nobody has seen catch anything is not a scanner.
+func TestAssertFamilyCopy_SelfTest(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  string
+	}{
+		{"em dash", "pix: bad \u2014 thing"},
+		{"filler word", "please leverage this path"},
+		{"unearned success word", "the environment is ready"},
+		{"sbx env rm", "run sbx env rm work"},
+		{"did you mean", "did you mean home?"},
+		{"stray yes/no", "rename it? [y/n]"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := familyCopyViolations(c.msg)
+			if len(got) != 1 {
+				t.Errorf("familyCopyViolations(%q) found %d violation(s), want exactly 1: %v", c.msg, len(got), got)
+			}
+		})
+	}
+	// Negative control: clean, PRD-shaped copy trips nothing.
+	if got := familyCopyViolations(`pix: environment "work" is the current default.
+     default: work
+     pick a different default first: pix env use <name>`); len(got) != 0 {
+		t.Errorf("familyCopyViolations on clean copy found %v, want none", got)
 	}
 }
 

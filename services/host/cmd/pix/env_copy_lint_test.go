@@ -19,6 +19,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -37,16 +38,23 @@ var (
 	copyLintSuccessRE = regexp.MustCompile(`(?i)\b(configured|enabled|ready|verified)\b`)
 )
 
-// lintCopyFile scans every string literal (BasicLit, kind STRING — never a
-// comment) in file for the family's banned copy: an em dash, a filler
-// word, an unearned success verdict, or a suggestion to run `sbx env rm`.
-func lintCopyFile(t *testing.T, file string) {
+// scanCopyLintSource is the pure form of the copy lint: parse src (Go source
+// text, filename only used for position reporting and parse errors) and
+// return one description string per banned-copy finding — an em dash, a
+// filler word, an unearned success verdict, or a suggestion to run `sbx env
+// rm` — across every string literal (BasicLit, kind STRING, never a
+// comment). It never calls into *testing.T, so a planted-violation
+// self-test (TestEnvCopyLint_SelfTest) can assert "found exactly one
+// finding" on a synthetic bad snippet without a failing subtest's Fail()
+// propagating up to a meta-test that must itself pass.
+func scanCopyLintSource(t *testing.T, filename string, src []byte) []string {
 	t.Helper()
 	fset := token.NewFileSet()
-	node, err := parser.ParseFile(fset, file, nil, 0)
+	node, err := parser.ParseFile(fset, filename, src, 0)
 	if err != nil {
-		t.Fatalf("parse %s: %v", file, err)
+		t.Fatalf("parse %s: %v", filename, err)
 	}
+	var findings []string
 	ast.Inspect(node, func(n ast.Node) bool {
 		lit, ok := n.(*ast.BasicLit)
 		if !ok || lit.Kind != token.STRING {
@@ -57,21 +65,66 @@ func lintCopyFile(t *testing.T, file string) {
 			return true
 		}
 		pos := fset.Position(lit.Pos())
-		where := file + ":" + strconv.Itoa(pos.Line)
+		where := filename + ":" + strconv.Itoa(pos.Line)
 		if strings.Contains(val, "\u2014") {
-			t.Errorf("%s: contains an em dash in a user-facing string: %q", where, val)
+			findings = append(findings, fmt.Sprintf("%s: contains an em dash in a user-facing string: %q", where, val))
 		}
 		if m := copyLintFillerRE.FindString(val); m != "" {
-			t.Errorf("%s: contains banned filler word %q: %q", where, m, val)
+			findings = append(findings, fmt.Sprintf("%s: contains banned filler word %q: %q", where, m, val))
 		}
 		if m := copyLintSuccessRE.FindString(val); m != "" {
-			t.Errorf("%s: contains unearned success word %q: %q", where, m, val)
+			findings = append(findings, fmt.Sprintf("%s: contains unearned success word %q: %q", where, m, val))
 		}
 		if strings.Contains(strings.ToLower(val), "sbx env rm") {
-			t.Errorf("%s: suggests `sbx env rm`, which does not exist: %q", where, val)
+			findings = append(findings, fmt.Sprintf("%s: suggests `sbx env rm`, which does not exist: %q", where, val))
 		}
 		return true
 	})
+	return findings
+}
+
+// lintCopyFile reads file from disk and reports every scanCopyLintSource
+// finding as a t.Errorf — the production check TestEnvCopyLint_SourceLiterals
+// runs against the real env_cmd.go/workflow/env source tree.
+func lintCopyFile(t *testing.T, file string) {
+	t.Helper()
+	src, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read %s: %v", file, err)
+	}
+	for _, f := range scanCopyLintSource(t, file, src) {
+		t.Error(f)
+	}
+}
+
+// TestEnvCopyLint_SelfTest is finding A2's planted-violation proof for the
+// SOURCE-literal scanner: each banned-copy class, planted alone in a
+// throwaway snippet, must trip exactly one finding. Mirrors the existing
+// forcerm_guard_test.go self-test pattern for this package's other AST
+// scanner.
+func TestEnvCopyLint_SelfTest(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{"em dash", "package planted\n\nconst s = \"pix: bad \\u2014 thing\"\n"},
+		{"filler word", "package planted\n\nconst s = \"please leverage this path\"\n"},
+		{"unearned success word", "package planted\n\nconst s = \"the environment is ready\"\n"},
+		{"sbx env rm", "package planted\n\nconst s = \"run sbx env rm work\"\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := scanCopyLintSource(t, "planted.go", []byte(c.src))
+			if len(got) != 1 {
+				t.Errorf("scanCopyLintSource found %d finding(s) for planted %s violation, want exactly 1: %v", len(got), c.name, got)
+			}
+		})
+	}
+	// Negative control: clean source trips nothing.
+	clean := "package planted\n\nconst s = \"pix: environment not found\"\n"
+	if got := scanCopyLintSource(t, "planted.go", []byte(clean)); len(got) != 0 {
+		t.Errorf("scanCopyLintSource on clean source found %v, want none", got)
+	}
 }
 
 // TestEnvCopyLint_SourceLiterals is F15/AC-67: no env-path string uses an
