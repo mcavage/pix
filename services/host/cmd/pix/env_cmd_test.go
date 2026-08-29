@@ -16,6 +16,7 @@ import (
 
 	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/workflow/env"
 )
 
 func envDeps(t *testing.T) (*cli.Deps, *bytes.Buffer, *bytes.Buffer) {
@@ -487,5 +488,311 @@ func TestEnvAdd_ZeroPathCwdAmbiguityRefusesNamingBothForms(t *testing.T) {
 	}
 	if !strings.Contains(got, "pix env add home") {
 		t.Errorf("stderr = %q, want it to name the bare scaffold form", got)
+	}
+}
+
+// ── env use ───────────────────────────────────────────────────────────────
+
+func TestEnvUse_Tier0Succeeds(t *testing.T) {
+	d, out, errb := envDeps(t)
+	registerTier0Env(t, "home")
+
+	if code := dispatch([]string{"env", "use", "home"}, d); code != 0 {
+		t.Fatalf("pix env use home = %d, want 0 (stderr: %s)", code, errb.String())
+	}
+	if !strings.Contains(out.String(), `"home" is now the default`) {
+		t.Errorf("stdout = %q, want the default-set success line", out.String())
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Environment != "home" {
+		t.Errorf("config.Environment = %q, want %q", cfg.Environment, "home")
+	}
+}
+
+func TestEnvUse_UnreviewedTier1Refuses(t *testing.T) {
+	d, _, errb := envDeps(t)
+	registerHostExecEnv(t, "work")
+
+	code := dispatch([]string{"env", "use", "work"}, d)
+	if code != 2 {
+		t.Fatalf("pix env use work (unreviewed) = %d, want 2 (stderr: %s)", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "pix env review work") {
+		t.Errorf("stderr = %q, want it to name `pix env review work`", errb.String())
+	}
+	if strings.Contains(errb.String(), "pix: pix:") {
+		t.Errorf("stderr = %q, must never double-prefix \"pix: \"", errb.String())
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Environment != "" {
+		t.Errorf("a refused `env use` must never set the default; config.Environment = %q", cfg.Environment)
+	}
+}
+
+func TestEnvUse_ReviewedThenChangedRefuses(t *testing.T) {
+	d, _, errb := envDeps(t)
+	registerHostExecEnv(t, "work")
+	if code := dispatch([]string{"env", "review", "work", "--yes"}, d); code != 0 {
+		t.Fatalf("pix env review work --yes = %d, want 0 (stderr: %s)", code, errb.String())
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, ok := env.Root(cfg, "work")
+	if !ok {
+		t.Fatal("work must be registered")
+	}
+	sbxenvPath := filepath.Join(root, ".sbxenv.yaml")
+	data, err := os.ReadFile(sbxenvPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewritten := strings.Replace(string(data),
+		"    - name: warehouse-mcp\n      command: warehouse-mcp-server\n",
+		"    - name: warehouse-mcp\n      command: warehouse-mcp-server\n    - name: extra-mcp\n      command: extra-mcp-server\n",
+		1)
+	if rewritten == string(data) {
+		t.Fatal("test setup error: fixture .sbxenv.yaml did not match the expected replace target")
+	}
+	if err := os.WriteFile(sbxenvPath, []byte(rewritten), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	d2, _, errb2 := freshDeps()
+	code := dispatch([]string{"env", "use", "work"}, d2)
+	if code != 2 {
+		t.Fatalf("pix env use work (changed since review) = %d, want 2 (stderr: %s)", code, errb2.String())
+	}
+	if !strings.Contains(errb2.String(), "changed") || !strings.Contains(errb2.String(), "pix env review work") {
+		t.Errorf("stderr = %q, want it to say changed and name `pix env review work`", errb2.String())
+	}
+}
+
+func TestEnvUse_ConfigMutationIsOnlyTheEnvironmentKey(t *testing.T) {
+	d, _, errb := envDeps(t)
+	registerTier0Env(t, "home")
+	before, err := os.ReadFile(config.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if code := dispatch([]string{"env", "use", "home"}, d); code != 0 {
+		t.Fatalf("pix env use home = %d, want 0 (stderr: %s)", code, errb.String())
+	}
+	after, err := os.ReadFile(config.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	inBefore := map[string]bool{}
+	for _, l := range strings.Split(string(before), "\n") {
+		inBefore[l] = true
+	}
+	var added []string
+	for _, l := range strings.Split(string(after), "\n") {
+		if strings.TrimSpace(l) == "" || inBefore[l] {
+			continue
+		}
+		added = append(added, l)
+	}
+	if len(added) != 1 || !strings.HasPrefix(added[0], "environment") {
+		t.Fatalf("config diff lines = %v, want exactly one `environment = ...` line added", added)
+	}
+}
+
+// ── env forget ────────────────────────────────────────────────────────────
+
+func TestEnvForget_SucceedsAndLeavesSourceByteIdentical(t *testing.T) {
+	d, out, errb := envDeps(t)
+	root := registerTier0Env(t, "home")
+	sentinel := filepath.Join(root, ".sbxenv.yaml")
+	before, err := os.ReadFile(sentinel)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if code := dispatch([]string{"env", "forget", "home"}, d); code != 0 {
+		t.Fatalf("pix env forget home = %d, want 0 (stderr: %s)", code, errb.String())
+	}
+	got := out.String()
+	if !strings.Contains(got, `"home"`) || !strings.Contains(got, root) {
+		t.Errorf("stdout = %q, want it to name the environment and the surviving root %s", got, root)
+	}
+	if strings.Contains(got, "removed") || strings.Contains(got, "deleted") {
+		t.Errorf("stdout = %q, must never say removed/deleted", got)
+	}
+
+	after, err := os.ReadFile(sentinel)
+	if err != nil {
+		t.Fatalf("source file must survive forget: %v", err)
+	}
+	if string(after) != string(before) {
+		t.Errorf("source bytes changed: before %q, after %q", before, after)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cfg.Environments["home"]; ok {
+		t.Error("home must no longer be registered after forget")
+	}
+}
+
+func TestEnvForget_CurrentDefaultRefuses(t *testing.T) {
+	d, _, errb := envDeps(t)
+	registerTier0Env(t, "home")
+	if code := dispatch([]string{"env", "use", "home"}, d); code != 0 {
+		t.Fatalf("pix env use home = %d, want 0 (stderr: %s)", code, errb.String())
+	}
+
+	d2, _, errb2 := freshDeps()
+	code := dispatch([]string{"env", "forget", "home"}, d2)
+	if code != 2 {
+		t.Fatalf("pix env forget home (current default) = %d, want 2 (stderr: %s)", code, errb2.String())
+	}
+	if !strings.Contains(errb2.String(), "current default") {
+		t.Errorf("stderr = %q, want it to name the current-default refusal", errb2.String())
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cfg.Environments["home"]; !ok {
+		t.Error("a refused forget must leave the registration in place")
+	}
+	if cfg.Environment != "home" {
+		t.Errorf("config.Environment = %q, want unchanged %q", cfg.Environment, "home")
+	}
+}
+
+func TestEnvForget_UnknownNameRefuses(t *testing.T) {
+	d, _, errb := envDeps(t)
+	code := dispatch([]string{"env", "forget", "hoem"}, d)
+	if code != 2 {
+		t.Fatalf("pix env forget hoem = %d, want 2 (stderr: %s)", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), `no environment named "hoem"`) {
+		t.Errorf("stderr = %q, want the unknown-name form", errb.String())
+	}
+}
+
+// ── pix env rm: pointer error, not a working alias ───────────────────────
+
+func TestEnvRm_IsAPointerErrorWithZeroMutation(t *testing.T) {
+	envDeps(t)
+	root := registerTier0Env(t, "home")
+	beforeConfig, err := os.ReadFile(config.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(root, ".sbxenv.yaml")
+	beforeSource, err := os.ReadFile(sentinel)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const want = "pix: `pix env rm` does not exist. Registering a name is not owning the files.\n" +
+		"     pix env forget home     unregister the name (deletes no files)\n" +
+		"     pix rm pix-repo-home    remove the sandbox\n" +
+		"     rm -rf <path>           delete the source yourself; pix will not\n"
+
+	for _, argv := range [][]string{
+		{"env", "rm"},
+		{"env", "rm", "home"},
+		{"env", "rm", "--force", "home"},
+	} {
+		d2, out2, errb2 := freshDeps()
+		code := dispatch(argv, d2)
+		if code != 2 {
+			t.Errorf("dispatch(%v) = %d, want 2", argv, code)
+		}
+		if out2.String() != "" {
+			t.Errorf("dispatch(%v) stdout = %q, want nothing", argv, out2.String())
+		}
+		if errb2.String() != want {
+			t.Errorf("dispatch(%v) stderr = %q, want the exact pointer error %q", argv, errb2.String(), want)
+		}
+	}
+
+	afterConfig, err := os.ReadFile(config.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(afterConfig) != string(beforeConfig) {
+		t.Errorf("config.toml changed after `pix env rm`; before %q, after %q", beforeConfig, afterConfig)
+	}
+	afterSource, err := os.ReadFile(sentinel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(afterSource) != string(beforeSource) {
+		t.Errorf("environment source changed after `pix env rm`")
+	}
+
+	ts, err := os.ReadDir(filepath.Dir(config.Path()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range ts {
+		if e.Name() == "environment-trust.json" {
+			t.Errorf("`pix env rm` must never create the environment trust store")
+		}
+	}
+}
+
+// TestEnvRm_AbsentFromHelp checks only the generated "Commands:" block (the
+// actual verb LISTING, one dispatchable node per line) rather than the
+// whole help text: envCmd's own Help() prose deliberately NAMES `pix env
+// rm` to explain why it does not exist (this file's `envRmPointerError`
+// wording), exactly as the design doc's own help text does, so asserting
+// "the substring `rm` never appears anywhere" would fail on that correct,
+// intentional sentence. `hidden:""` (envCmd's Rm field) is what this test
+// actually proves: rm dispatches (TestEnvRm_IsAPointerErrorWithZeroMutation)
+// but never appears as a listed command.
+func TestEnvRm_AbsentFromHelp(t *testing.T) {
+	var out bytes.Buffer
+	d := &cli.Deps{Out: &out, Err: &out}
+	if err := cli.RunRoot[envCmd]("pix env", "", "", []string{"--help"}, d); err != nil {
+		t.Fatalf("env --help: %v", err)
+	}
+	idx := strings.Index(out.String(), "Commands:")
+	if idx < 0 {
+		t.Fatalf("pix env --help has no \"Commands:\" block:\n%s", out.String())
+	}
+	commands := out.String()[idx:]
+	for _, line := range strings.Split(commands, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "rm" || strings.HasPrefix(trimmed, "rm ") || strings.HasPrefix(trimmed, "rm<") || strings.HasPrefix(trimmed, "rm[") {
+			t.Errorf("pix env --help lists `rm` as a command:\n%s", commands)
+		}
+	}
+}
+
+func TestEnvRm_HelpListsExactlySevenWorkingVerbs(t *testing.T) {
+	var out bytes.Buffer
+	d := &cli.Deps{Out: &out, Err: &out}
+	if err := cli.RunRoot[envCmd]("pix env", "", "", []string{"--help"}, d); err != nil {
+		t.Fatalf("env --help: %v", err)
+	}
+	got := out.String()
+	for _, verb := range []string{"ls", "add", "show", "use", "review", "forget"} {
+		if !strings.Contains(got, " "+verb+" ") && !strings.Contains(got, " "+verb+"\n") {
+			t.Errorf("pix env --help missing wired verb %q:\n%s", verb, got)
+		}
+	}
+	if strings.Contains(got, " rm ") || strings.Contains(got, " rm\n") {
+		t.Errorf("pix env --help must never list `rm` as a verb:\n%s", got)
 	}
 }

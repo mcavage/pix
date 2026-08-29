@@ -3,14 +3,14 @@
 // define (`ls add use show edit review forget`; `pix env rm` is never one
 // of them). E1.9 wired the first three verbs workflow/env already had
 // behind it — `ls` (workflow/env/ls.go), `show` (workflow/env/show.go),
-// `review` (E1.8's workflow/env/review.go). E1.10 adds the fourth field,
-// `add` (workflow/env/add.go): register a caller-authored directory, or
+// `review` (E1.8's workflow/env/review.go). E1.10 added `add`
+// (workflow/env/add.go): register a caller-authored directory, or
 // scaffold a fresh one, then ALWAYS run the same E1.8 review before
-// anything commits. Every later verb unit (E1.11 `use`/`forget`/the `rm`
-// pointer, E1.12 `edit`) adds its own ONE field line here and lands in ID
-// order (units.json's file-conflict table: "E1.9 owns the struct; each
-// verb unit adds one field line + its own file. Land in ID order,
-// rebase.").
+// anything commits. E1.11 (this unit) added `use`, `forget`, and the `rm`
+// pointer error below. Every later verb unit (E1.12 `edit`) adds its own
+// ONE field line here and lands in ID order (units.json's file-conflict
+// table: "E1.9 owns the struct; each verb unit adds one field line + its
+// own file. Land in ID order, rebase.").
 //
 // There is deliberately NO placeholder field for a verb that does not
 // exist yet: an unregistered subcommand answers with kong's own generic
@@ -62,8 +62,8 @@ servers. See docs/design/environments.md.
 
 Seven verbs: ls, add, use, show, edit, review, forget. There is no
 'pix env rm' — registering a name is not owning its files; forget only
-unregisters, and it deletes nothing. 'use'/'edit'/'forget' land in later
-units; ls, add, show and review work now.
+unregisters, and it deletes nothing. 'edit' lands in a later unit; ls,
+add, show, use, review and forget work now.
 
 An environment that runs code on your host or hands it a credential halts
 at 'pix env review NAME': [y/N], default No. A non-TTY review fails closed
@@ -77,7 +77,18 @@ type envCmd struct {
 	Ls     envLsCmd     `cmd:"" default:"1" help:"List registered environments. Marks the default."`
 	Add    envAddCmd    `cmd:"" help:"Register a directory, or scaffold a new one, then review it."`
 	Show   envShowCmd   `cmd:"" help:"What NAME is: files, models, mounts, MCP, review state, drift."`
+	Use    envUseCmd    `cmd:"" help:"Set the machine default. Refuses an unreviewed or changed environment."`
 	Review envReviewCmd `cmd:"" help:"Read and accept what NAME runs on your host."`
+	Forget envForgetCmd `cmd:"" help:"Unregister NAME. Never deletes the environment directory."`
+	// Rm is not a verb (Seven verbs, no more — this file's own package doc
+	// comment, docs/design/environments.md §8): it exists ONLY so kong's own
+	// dispatch resolves `pix env rm ...` to THIS deterministic pointer error
+	// rather than kong's generic "unexpected argument" — see envRmCmd's own
+	// doc comment. `hidden:""` is what keeps it off every help listing
+	// (models_cmd.go's Status field is the same idiom) while leaving it
+	// fully dispatchable; help_test.go's exact-seven-verb assertions are what
+	// prove `hidden` actually holds that line.
+	Rm envRmCmd `cmd:"" hidden:""`
 }
 
 // ── ls ───────────────────────────────────────────────────────────────────
@@ -224,4 +235,89 @@ func (c *envReviewCmd) Run(d *cli.Deps) error {
 		Verbose: c.Verbose, Yes: c.Yes, TTY: d.Interactive, In: d.In, Out: d.Out,
 	})
 	return envRun(d, err)
+}
+
+// ── use ──────────────────────────────────────────────────────────────────
+
+type envUseCmd struct {
+	Name string `arg:"" help:"Exact environment name."`
+}
+
+// Run performs env.Use's ONE gated mutation (cfg.Environment) then Saves —
+// the same "workflow mutates in memory, the command owns Save()" split
+// Register's own doc comment establishes for `add`. There is no lookPath
+// override here for the same reason `env review`/`env show` pass nil: a
+// real symlink/PATH check runs against the actual filesystem in
+// production, and a test reaches env.Use directly to inject one. Use never
+// launches anything — its whole effect ends at this one Save().
+func (c *envUseCmd) Run(d *cli.Deps) error {
+	cfg, err := d.Config()
+	if err != nil {
+		return err
+	}
+	if err := env.Use(cfg, c.Name, nil); err != nil {
+		return envRun(d, err)
+	}
+	if err := cfg.Save(); err != nil {
+		return err
+	}
+	fmt.Fprintf(d.Out, "pix: environment %q is now the default.\n", c.Name)
+	return nil
+}
+
+// ── forget ───────────────────────────────────────────────────────────────
+
+type envForgetCmd struct {
+	Name string `arg:"" help:"Exact environment name."`
+}
+
+// Run performs env.Forget's ONE gated mutation (unregistering c.Name, and
+// clearing the machine default only if it happened to name c.Name — which
+// Forget itself already refuses, so in practice this Save() only ever
+// touches [environments]) then Saves. No holder probe is wired here yet:
+// no launch cutover exists that could make one true (env.NoLiveHolders'
+// own doc comment), so nil defaults to it — the seam is real even though
+// nothing populates it today.
+func (c *envForgetCmd) Run(d *cli.Deps) error {
+	cfg, err := d.Config()
+	if err != nil {
+		return err
+	}
+	root, err := env.Forget(cfg, c.Name, nil)
+	if err != nil {
+		return envRun(d, err)
+	}
+	if err := cfg.Save(); err != nil {
+		return err
+	}
+	fmt.Fprintf(d.Out, "pix: environment %q unregistered. Source untouched: %s\n", c.Name, root)
+	return nil
+}
+
+// ── rm: the pointer error, not a working alias ──────────────────────────
+
+// envRmPointerError is docs/design/environments.md §8.1's exact rm refusal
+// (PRD §5.5), verbatim: it names the three distinct things a user might
+// actually want removed, so the wrong one is never removed by accident.
+const envRmPointerError = "pix: `pix env rm` does not exist. Registering a name is not owning the files.\n" +
+	"     pix env forget home     unregister the name (deletes no files)\n" +
+	"     pix rm pix-repo-home    remove the sandbox\n" +
+	"     rm -rf <path>           delete the source yourself; pix will not\n"
+
+// envRmCmd exists only to give kong a deterministic node to dispatch `pix
+// env rm ...` TO — see this struct field's own comment on envCmd. Args
+// swallows anything after `rm` (a name, flags, garbage) so no shape of
+// invocation ever falls through to kong's own "unexpected argument";
+// every one of them lands here and gets the SAME pointer error. Run reads
+// no config, resolves no name, and touches no file: this command performs
+// ZERO mutation of any kind before returning its fixed exit 2, exactly
+// because it never earns the chance to — there is nothing here it could
+// even ask permission for.
+type envRmCmd struct {
+	Args []string `arg:"" optional:"" passthrough:"" hidden:""`
+}
+
+func (c *envRmCmd) Run(d *cli.Deps) error {
+	fmt.Fprint(d.Err, envRmPointerError)
+	return cli.SilentError{Code: 2}
 }
