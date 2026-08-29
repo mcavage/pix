@@ -265,6 +265,11 @@ func TestPackInferenceCredentialRoutingIsReverifiedAtLaunch(t *testing.T) {
 	}
 }
 
+// TestPackInferenceRejectsModelOutsideCatalog: catalog membership is a
+// decision about THIS HOST's stack, so it is enforced where a pack binding
+// reaches config (ApplyPackInference), not by packinfo's loader — an L1
+// capability may not import inference, and reading a pack (launch, doctor,
+// provision) must not need the catalog. Loading stays clean; applying refuses.
 func TestPackInferenceRejectsModelOutsideCatalog(t *testing.T) {
 	root := t.TempDir()
 	m := packinfo.Manifest{Name: "team", Schema: 1, Inference: &packinfo.Inference{
@@ -274,8 +279,17 @@ func TestPackInferenceRejectsModelOutsideCatalog(t *testing.T) {
 	if err := pack.WriteManifest(root, m); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := packinfo.LoadPack(root); err == nil || !strings.Contains(err.Error(), "not in the Pix model catalog") {
+	p, err := packinfo.LoadPack(root)
+	if err != nil {
+		t.Fatalf("LoadPack() must not need the catalog: %v", err)
+	}
+	cfg := &config.Config{}
+	err = pack.ApplyPackInference(cfg, p.Manifest.Inference, root)
+	if err == nil || !strings.Contains(err.Error(), "not in the Pix model catalog") {
 		t.Fatalf("error = %v", err)
+	}
+	if len(cfg.Inference.Models) != 0 || len(cfg.Inference.Backends) != 0 {
+		t.Fatalf("a refused pack must write nothing into config: %+v", cfg.Inference)
 	}
 }
 

@@ -18,7 +18,6 @@ import (
 	"pix/host/envinfo"
 	"pix/host/hostenv"
 	"pix/host/inference"
-	"pix/host/routing"
 )
 
 // inference.go — what this host BINDS: the backends, the candidate bindings
@@ -180,11 +179,11 @@ func classifyOllamaTag(tag string, info ollamaTagInfo) (cloud, classified bool) 
 
 // ollamaTagFitsMemory estimates whether an unknown-catalog local tag's
 // on-disk weight size fits a USABLE-memory budget. It is deliberately WEAKER
-// than routing.Model.FitsMemory, not stronger: there is no catalog MinRAMGB
+// than inference.Model.FitsMemory, not stronger: there is no catalog MinRAMGB
 // for a tag outside the registry — no declared context window means no
 // KV-cache term to price — so this prices ONLY the weights: the same 1.15
 // runtime-overhead factor and flat 1GB floor MinRAMGB itself is computed with
-// (see routing.Model's doc comment), applied to the on-disk size the listing
+// (see inference.Model's doc comment), applied to the on-disk size the listing
 // already reports. That undercounts a large-context load, so it is a real gate
 // against the case a "no gate at all" claim would always miss — raw weights
 // alone already exceeding usable RAM — without pretending to price a context
@@ -216,7 +215,7 @@ type ollamaPlan struct {
 	// bound anyway (that absence is the bug this plan exists to fix), classified
 	// local or cloud from the listing itself — never guessed. UnknownUnclassified
 	// is a tag the listing could not classify either way: reported, never bound.
-	// None of the three ever earns a routing intent (see routing.Resolve: an
+	// None of the three is ever picked for the user (see the roster: an
 	// unscored model is never a candidate) or a bestLocal/rung role — those stay
 	// scoped to the catalog, exactly as before this pass existed.
 	UnknownLocal        []string
@@ -322,7 +321,7 @@ func ConfigureOllamaInference(cfg *config.Config, env hostenv.Env, sel OllamaSel
 	if err != nil {
 		return ollamaPlan{}, err
 	}
-	reg, err := routing.LoadRegistry()
+	cat, err := inference.LoadCatalog()
 	if err != nil {
 		return ollamaPlan{}, err
 	}
@@ -335,25 +334,26 @@ func ConfigureOllamaInference(cfg *config.Config, env hostenv.Env, sel OllamaSel
 	for _, b := range cfg.Inference.Models {
 		bound[b.Model] = true
 	}
-	bindOnce := func(m routing.Model) {
+	bindOnce := func(m inference.Model) {
 		if !bound[m.ID] {
 			bound[m.ID] = true
 			bind(cfg, m.ID, "ollama", inference.OllamaTagFor(m.ID))
 		}
 	}
 
-	var rung, bestLocal routing.Model
+	var rung, bestLocal inference.Model
+	bestLocalRAMGB := 0.0
 	rungOK := false
 	if sel.Local {
 		plan.Memory = inference.ProbeHostMemory(env)
 		// The RAM/download/context offer decision is a setup-only inference fact
 		// (E4.3, hardware.go), independent of the scored catalog; the offered
 		// rung is then looked up in the catalog so the rest of this flow (which
-		// still binds through routing.Model) sees the same shape it always has.
+		// still binds through inference.Model) sees the same shape it always has.
 		var offerRung inference.LocalOllamaRung
 		var offered bool
 		if offerRung, offered = inference.ChooseLocalRung(plan.Memory); offered {
-			if m, known := reg.Get(offerRung.ID); known {
+			if m, known := cat.Get(offerRung.ID); known {
 				rung = m
 				rungOK = true
 				plan.BestFit = inference.OllamaTagFor(rung.ID)
@@ -362,7 +362,7 @@ func ConfigureOllamaInference(cfg *config.Config, env hostenv.Env, sel OllamaSel
 		fmt.Fprintln(out, inference.LocalRungOfferLine(plan.Memory, offerRung, rungOK))
 	}
 	knownTags := map[string]bool{}
-	for _, m := range reg.Models {
+	for _, m := range cat.Models {
 		if m.Provider == "ollama" {
 			// Unconditional on m.Available: a retired row (e.g. kimi-k3:cloud, gated
 			// to extra-usage-only) is a considered decision, and its catalog id is
@@ -379,13 +379,17 @@ func ConfigureOllamaInference(cfg *config.Config, env hostenv.Env, sel OllamaSel
 			// The RAM gate decides what to OFFER TO PULL. A rung already on disk
 			// costs nothing to bind and the probe judges it better, so the gate only
 			// skips a listed model on a machine we measured and it does not fit.
-			if plan.Memory.OK && !m.FitsMemory(plan.Memory.UsableGB) {
+			// The RAM facts are the rung table's (E4.3), never the catalog
+			// row's: a local model with no declared rung has no sized
+			// requirement, and an undeclared requirement is not a small one.
+			rung, sized := inference.LocalOllamaRungFor(m.ID)
+			if plan.Memory.OK && !rung.FitsMemory(plan.Memory.UsableGB) {
 				plan.SkippedRAM = append(plan.SkippedRAM, m.ID)
 			} else if _, ok := listed[inference.OllamaTagFor(m.ID)]; ok {
 				bindOnce(m)
 				plan.LocalBound = append(plan.LocalBound, m.ID)
-				if m.MinRAMGB >= bestLocal.MinRAMGB {
-					bestLocal = m
+				if sized && rung.MinRAMGB >= bestLocalRAMGB {
+					bestLocal, bestLocalRAMGB = m, rung.MinRAMGB
 				}
 			}
 		case !m.Local && sel.Cloud:
@@ -399,11 +403,9 @@ func ConfigureOllamaInference(cfg *config.Config, env hostenv.Env, sel OllamaSel
 	// Second pass: every tag the daemon listed that the shipped catalog does not
 	// know at all. THIS is the fix — without it, a user's `ollama pull` of
 	// anything not already in models.json was installed, listed, and completely
-	// invisible to Pix. Binding is NOT routing: bindOnce writes a candidate with
-	// no scorecard entry, and routing.Resolve already skips a model with none
-	// (see routing/overlord_fallback_test.go for the cost-0-wins-everything
-	// precedent this must never repeat), so an unknown tag can be called by
-	// name (`pix run --model ollama/<tag>`) but never wins an intent.
+	// invisible to Pix. Binding is not selection: bindOnce writes a candidate
+	// the user can call by name (`pix run --model ollama/<tag>`), and nothing
+	// picks a model on the user's behalf.
 	tags := make([]string, 0, len(listed))
 	for tag := range listed {
 		if !knownTags[tag] {
@@ -508,7 +510,7 @@ func emptyOllamaSelectionMessage(sel OllamaSelection, plan ollamaPlan) string {
 // ConfigureDirectInference derives native backend bindings from the provider
 // refs that resolved. The catalog stays the one source of model metadata.
 func ConfigureDirectInference(cfg *config.Config, providers []string) error {
-	reg, err := routing.LoadRegistry()
+	cat, err := inference.LoadCatalog()
 	if err != nil {
 		return err
 	}
@@ -529,7 +531,7 @@ func ConfigureDirectInference(cfg *config.Config, providers []string) error {
 		}
 	}
 	cfg.Inference.Models = kept
-	for _, m := range reg.Models {
+	for _, m := range cat.Models {
 		if m.Available && wanted[m.Provider] {
 			bind(cfg, m.ID, m.Provider, m.ID)
 		}
@@ -546,7 +548,7 @@ func ConfigureModelRoster(cfg *config.Config, in io.Reader, out io.Writer, inter
 	if cfg == nil || cfg.Inference.ExclusiveSource != "" {
 		return nil
 	}
-	reg, err := routing.LoadRegistry()
+	cat, err := inference.LoadCatalog()
 	if err != nil {
 		return err
 	}
@@ -560,8 +562,8 @@ func ConfigureModelRoster(cfg *config.Config, in io.Reader, out io.Writer, inter
 			unproven[b.Model] = true
 		}
 	}
-	var candidates []routing.Model
-	for _, m := range reg.Models {
+	var candidates []inference.Model
+	for _, m := range cat.Models {
 		if m.Available && callable[m.ID] {
 			candidates = append(candidates, m)
 		}
@@ -590,7 +592,7 @@ func ConfigureModelRoster(cfg *config.Config, in io.Reader, out io.Writer, inter
 				}
 				token = candidates[n-1].ID
 			}
-			m, known := reg.Get(token)
+			m, known := cat.Get(token)
 			switch {
 			case known && unproven[m.ID] && !callable[m.ID]:
 				return nil, fmt.Errorf("model %q is bound but has not passed a probe: pix setup --pull-models", token)
@@ -663,7 +665,7 @@ func ConfigureModelRoster(cfg *config.Config, in io.Reader, out io.Writer, inter
 // model's provider: a gateway backend can serve anthropic models.
 func WidenRosterForProvider(cfg *config.Config, provider string) {
 	if provider != "" {
-		widenRoster(cfg, func(_ config.InferenceModelBinding, m routing.Model) bool { return m.Provider == provider })
+		widenRoster(cfg, func(_ config.InferenceModelBinding, m inference.Model) bool { return m.Provider == provider })
 	}
 }
 
@@ -675,17 +677,17 @@ func widenRosterForNewProviders(cfg *config.Config, prior map[string]bool) {
 		return
 	}
 	seen := rosterSeenProviders(cfg, prior)
-	widenRoster(cfg, func(b config.InferenceModelBinding, _ routing.Model) bool { return !seen[b.Backend] })
+	widenRoster(cfg, func(b config.InferenceModelBinding, _ inference.Model) bool { return !seen[b.Backend] })
 }
 
 // widenRoster is the one widening mechanism. An EMPTY roster already means "no
 // restriction" and is never widened: turning an absence of policy into an
 // explicit list is how the roster froze in the first place.
-func widenRoster(cfg *config.Config, admit func(config.InferenceModelBinding, routing.Model) bool) {
+func widenRoster(cfg *config.Config, admit func(config.InferenceModelBinding, inference.Model) bool) {
 	if cfg == nil || cfg.Inference.ExclusiveSource != "" || len(cfg.Inference.AllowedModels) == 0 {
 		return
 	}
-	reg, err := routing.LoadRegistry()
+	cat, err := inference.LoadCatalog()
 	if err != nil {
 		return
 	}
@@ -693,7 +695,7 @@ func widenRoster(cfg *config.Config, admit func(config.InferenceModelBinding, ro
 		if !b.Available || slices.Contains(cfg.Inference.AllowedModels, b.Model) {
 			continue
 		}
-		if m, ok := reg.Get(b.Model); ok && m.Available && admit(b, m) {
+		if m, ok := cat.Get(b.Model); ok && m.Available && admit(b, m) {
 			cfg.Inference.AllowedModels = append(cfg.Inference.AllowedModels, b.Model)
 		}
 	}
@@ -733,7 +735,7 @@ func rosterSeenProviders(cfg *config.Config, prior map[string]bool) map[string]b
 
 // recordRosterProviders stamps the providers this decision covered, so the next
 // reconcile can tell a new provider from one the user declined models from.
-func recordRosterProviders(cfg *config.Config, candidates []routing.Model) {
+func recordRosterProviders(cfg *config.Config, candidates []inference.Model) {
 	seen := append([]string{}, cfg.Inference.RosterProviders...)
 	for _, m := range candidates {
 		if !slices.Contains(seen, m.Provider) {

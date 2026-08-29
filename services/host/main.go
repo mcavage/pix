@@ -1,9 +1,9 @@
 // pix-host — the single compiled binary for everything that runs on the HOST
 // (outside the sandbox). Convention: host code is Go, in-sandbox code (pi extensions, in-box MCP) is TypeScript — see AGENTS.md.
 //
-// Subcommands: memory (:11435 JSON-RPC store + snapshot/restore), route (model
-// router CLI), mcp --list (local stdio servers: NONE), plugin memory (built-in
-// go-plugin server, self-exec via `serve`), serve (the long-running services).
+// Subcommands: memory (:11435 JSON-RPC store + snapshot/restore), mcp --list
+// (local stdio servers: NONE), plugin memory (built-in go-plugin server,
+// self-exec via `serve`), serve (the long-running services).
 //
 // Company-specific integrations are never compiled in: they ship as a pack, as
 // a container MCP server the sbx gateway runs, or as a standalone host daemon
@@ -71,8 +71,6 @@ func main() {
 		// (docs/design/self-development-uat.md), never a public verb.
 		os.Exit(uatenvmatrix.RunCLI(os.Args[2:], os.Stdout, os.Stderr))
 
-	case "route":
-		runRouteHost(os.Args[2:])
 	case "serve":
 		runServe(os.Args[2:])
 	case "-h", "--help", "help":
@@ -121,7 +119,6 @@ usage: pix-host <subcommand>
 subcommands:
   version        print the stamped host-binary version
   memory         self-learning memory store, JSON-RPC (:11435)
-  route <cmd>    model router: pick | compile | show | models
   mcp --list     local stdio MCP servers this binary serves (none)
   plugin memory  built-in go-plugin server, self-exec
   serve          run the long-running HTTP services (memory)

@@ -10,7 +10,6 @@ import (
 	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/inference"
-	"pix/host/routing"
 	"pix/host/secret"
 )
 
@@ -177,7 +176,7 @@ func VerifyOllamaInference(cfg *config.Config, env hostenv.Env, out io.Writer) (
 	if out == nil {
 		out = io.Discard
 	}
-	reg, err := routing.LoadRegistry()
+	cat, err := inference.LoadCatalog()
 	if err != nil {
 		return res, fmt.Errorf("verify ollama inference: %w", err)
 	}
@@ -207,9 +206,12 @@ func VerifyOllamaInference(cfg *config.Config, env hostenv.Env, out io.Writer) (
 		// num_ctx is the rung's DECLARED context, so the probe allocates the same
 		// KV cache the RAM gate priced: a rung that cannot hold its own context
 		// fails here, which is exactly when we want to find out.
-		m, found := reg.Get(c.label)
+		m, found := cat.Get(c.label)
 		if found && m.Local {
-			c.numCtx, c.minRAM = m.ContextWindow, m.MinRAMGB
+			// RAM comes from the rung table (E4.3), the one home for local
+			// hardware facts; the catalog declares the context to probe with.
+			rung, _ := inference.LocalOllamaRungFor(m.ID)
+			c.numCtx, c.minRAM = m.ContextWindow, rung.MinRAMGB
 			local = append(local, c)
 			continue
 		}

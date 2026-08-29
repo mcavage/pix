@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"pix/host/config"
-	"pix/host/routing"
 )
 
 // live.go — the REAL provider probes (call the endpoint, report whether a
@@ -26,7 +25,7 @@ import (
 const directInferenceProbeTimeout = 8 * time.Second
 
 // inferenceManifestFilename names the generated manifest inside the mixin's
-// agent dir, beside routing.json. extensions/inference.ts and
+// agent dir. extensions/inference.ts and
 // extensions/ollama-bridge.ts hardcode the same literal on the TS side;
 // tests/inference-manifest-filename.test.mjs cross-checks all three so a
 // rename on one side can never drift from the others silently.
@@ -127,12 +126,12 @@ func ConfiguredKeylessInference() bool {
 
 // SynthesizeInferenceKit creates a create-time mixin containing only generated
 // public metadata. It carries no credential values. The extension reads the
-// manifest; subagents read the compiled routing file beside it.
+// manifest; there is no second generated file beside it to disagree with.
 func SynthesizeInferenceKit(cfg *config.Config, roster RosterInput) (string, error) {
 	if !Configured(cfg) {
 		return "", nil
 	}
-	compiled, manifest, err := CompileInferenceRuntime(cfg, time.Now(), roster)
+	manifest, err := RuntimeManifest(cfg, roster)
 	if err != nil {
 		return "", err
 	}
@@ -162,9 +161,6 @@ func SynthesizeInferenceKit(cfg *config.Config, roster RosterInput) (string, err
 	if err := os.MkdirAll(agentDir, 0o700); err != nil {
 		return "", err
 	}
-	if err := routing.WriteCompiled(filepath.Join(agentDir, "routing.json"), compiled); err != nil {
-		return "", err
-	}
 	b, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return "", err
@@ -190,11 +186,11 @@ func CallableRuntimeModels(cfg *config.Config) ([]string, error) {
 	if !Configured(cfg) {
 		return nil, nil
 	}
-	reg, err := routing.LoadRegistry()
+	cat, err := LoadCatalog()
 	if err != nil {
 		return nil, err
 	}
-	models := manifestModels(cfg, reg)
+	models := manifestModels(cfg, cat)
 	ids := make([]string, 0, len(models))
 	for _, m := range models {
 		ids = append(ids, m.ID)
@@ -213,23 +209,17 @@ func AllowsModel(cfg *config.Config, id string) bool {
 	return slices.Contains(models, id)
 }
 
-func CompileInferenceRuntime(cfg *config.Config, now time.Time, roster RosterInput) (routing.CompiledRouting, runtimeInferenceManifest, error) {
-	reg, err := routing.LoadRegistry()
+// RuntimeManifest builds the create-time inference manifest: the backends this
+// host may use and the models a probed binding makes callable, with the limits
+// and request shape the catalog declares for each. It resolves nothing and
+// ranks nothing — the model a session runs is the user's choice, checked
+// against this set.
+func RuntimeManifest(cfg *config.Config, roster RosterInput) (runtimeInferenceManifest, error) {
+	cat, err := LoadCatalog()
 	if err != nil {
-		return routing.CompiledRouting{}, runtimeInferenceManifest{}, err
+		return runtimeInferenceManifest{}, err
 	}
-	sc, err := routing.LoadScorecard()
-	if err != nil {
-		return routing.CompiledRouting{}, runtimeInferenceManifest{}, err
-	}
-	pol, err := routing.LoadPolicy()
-	if err != nil {
-		return routing.CompiledRouting{}, runtimeInferenceManifest{}, err
-	}
-	bindings := Bindings(cfg)
-	filtered := routing.RegistryForBindings(reg, bindings, "")
-	compiled := routing.MaterializeBindings(routing.Compile(filtered, sc, pol, now), bindings, "")
-	manifest := runtimeInferenceManifest{Version: 1, Backends: map[string]runtimeBackend{}, Models: manifestModels(cfg, reg)}
+	manifest := runtimeInferenceManifest{Version: 1, Backends: map[string]runtimeBackend{}, Models: manifestModels(cfg, cat)}
 	for name, b := range cfg.Inference.Backends {
 		if !BackendAllowed(cfg, b, name) {
 			continue
@@ -242,10 +232,10 @@ func CompileInferenceRuntime(cfg *config.Config, now time.Time, roster RosterInp
 	// builds no roster at all, so the additive field stays fully absent.
 	r, err := buildRoster(roster, manifest.Models)
 	if err != nil {
-		return routing.CompiledRouting{}, runtimeInferenceManifest{}, err
+		return runtimeInferenceManifest{}, err
 	}
 	manifest.Roster = r
-	return compiled, manifest, nil
+	return manifest, nil
 }
 
 // manifestModels is the ONE place a callable binding becomes runtime metadata,
@@ -257,21 +247,20 @@ func CompileInferenceRuntime(cfg *config.Config, now time.Time, roster RosterInp
 // the binding would sit in config.toml forever, provably bound, and never
 // reach CallableRuntimeModels or the bridge, so `pix run --model ollama/<tag>`
 // fails at the AllowsModel gate no matter how the binding got there. There is
-// no catalog row to draw a label, context window, or price from, and
-// inventing one would be a lie (a wrong number is worse than an absent one),
-// so the entry carries only what IS known — id, backend, upstream name — and
-// leaves limits/cost at their zero value; CatalogModel stays "" so this can
+// no catalog row to draw a label or context window from, and inventing one
+// would be a lie (a wrong number is worse than an absent one), so the entry
+// carries only what IS known — id, backend, upstream name — and leaves the
+// limits at their zero value; CatalogModel stays "" so this can
 // never be mistaken for a catalog row downstream. The bridge's own fallback
 // (extensions/ollama-bridge.ts modelsFromManifest: context/maxTokens default
-// when unset, cost always $0 for ollama) covers the gap on the runtime side.
-// Critically, a synthesized entry here can NEVER leak into routing:
-// routing.RegistryForBindings only ever flips Available on a catalog row that
-// ALREADY exists by ID, so an id with no catalog row is never added to the
-// registry and can never become a routing candidate, let alone win an intent.
-func manifestModels(cfg *config.Config, reg *routing.Registry) []runtimeModel {
+// when unset) covers the gap on the runtime side.
+// Critically, a synthesized entry stays synthesized: CatalogForBindings only
+// ever flips Available on a catalog row that ALREADY exists by ID, so an id
+// with no catalog row is never added to the catalog by being bound.
+func manifestModels(cfg *config.Config, cat *Catalog) []runtimeModel {
 	var out []runtimeModel
 	for _, b := range Bindings(cfg) {
-		m, ok := reg.Get(b.Model)
+		m, ok := cat.Get(b.Model)
 		if !ok {
 			out = append(out, runtimeModel{ID: RuntimeID(b), Backend: b.Backend, Name: b.UpstreamID})
 			continue
@@ -280,7 +269,6 @@ func manifestModels(cfg *config.Config, reg *routing.Registry) []runtimeModel {
 			ID: RuntimeID(b), CatalogModel: m.ID, Backend: b.Backend, Name: m.Label,
 			ContextWindow: m.ContextWindow, MaxTokens: m.MaxOutputTokens,
 			Reasoning: true, AdaptiveThinking: m.AdaptiveThinking,
-			InputCost: m.InputPerMTok, OutputCost: m.OutputPerMTok,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
@@ -417,14 +405,12 @@ type runtimeBackend struct {
 }
 
 type runtimeModel struct {
-	ID               string  `json:"id"`
-	CatalogModel     string  `json:"catalog_model"`
-	Backend          string  `json:"backend"`
-	Name             string  `json:"name"`
-	ContextWindow    int     `json:"context_window,omitempty"`
-	MaxTokens        int     `json:"max_tokens,omitempty"`
-	Reasoning        bool    `json:"reasoning,omitempty"`
-	AdaptiveThinking bool    `json:"adaptive_thinking,omitempty"`
-	InputCost        float64 `json:"input_cost,omitempty"`
-	OutputCost       float64 `json:"output_cost,omitempty"`
+	ID               string `json:"id"`
+	CatalogModel     string `json:"catalog_model"`
+	Backend          string `json:"backend"`
+	Name             string `json:"name"`
+	ContextWindow    int    `json:"context_window,omitempty"`
+	MaxTokens        int    `json:"max_tokens,omitempty"`
+	Reasoning        bool   `json:"reasoning,omitempty"`
+	AdaptiveThinking bool   `json:"adaptive_thinking,omitempty"`
 }

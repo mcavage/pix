@@ -41,6 +41,9 @@ import (
 // until setup actually earns it; Verified is reserved for that probe and is
 // never set here.
 func ApplyPackInference(cfg *config.Config, inf *packinfo.Inference, source string) error {
+	if err := checkPackModelsInCatalog(inf); err != nil {
+		return err
+	}
 	if cfg == nil || inf == nil {
 		return nil
 	}
@@ -96,6 +99,28 @@ func ApplyPackInference(cfg *config.Config, inf *packinfo.Inference, source stri
 	}
 	if inf.Exclusive {
 		cfg.Inference.ExclusiveSource = source
+	}
+	return nil
+}
+
+// checkPackModelsInCatalog is the catalog-membership gate packinfo cannot own:
+// an L1 capability may not import inference, and "is this id in THIS stack's
+// catalog" is a decision, not a fact about the pack file. It runs at the one
+// point a pack binding reaches config, so a pack naming a model Pix has never
+// heard of is still refused — before anything is written — rather than sitting
+// in config.toml describing nothing.
+func checkPackModelsInCatalog(inf *packinfo.Inference) error {
+	if inf == nil || len(inf.Models) == 0 {
+		return nil
+	}
+	catalog, err := inference.LoadCatalog()
+	if err != nil {
+		return fmt.Errorf("loading model catalog: %w", err)
+	}
+	for _, binding := range inf.Models {
+		if _, ok := catalog.Get(binding.Model); !ok {
+			return fmt.Errorf("pack inference model %q is not in the Pix model catalog", binding.Model)
+		}
 	}
 	return nil
 }

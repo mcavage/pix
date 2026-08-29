@@ -169,6 +169,19 @@ func LocalOllamaRungs() []LocalOllamaRung {
 	return out
 }
 
+// LocalOllamaRungFor returns the rung for a fully qualified local model id
+// ("ollama/<tag>") and whether one is declared. It is how a caller holding a
+// catalog row gets that row's RAM/download/KV facts: those live HERE, once
+// (E4.3), and never on the catalog row itself.
+func LocalOllamaRungFor(id string) (LocalOllamaRung, bool) {
+	for _, m := range localOllamaRungs {
+		if m.ID == id {
+			return m, true
+		}
+	}
+	return LocalOllamaRung{}, false
+}
+
 // ChooseLocalRung picks the largest local rung whose min_ram_gb fits the probed
 // USABLE budget, on a machine big enough to be offered one at all. An OFFER
 // filter, never a verdict and never a download. A machine we could not size

@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"pix/host/hostenv"
-	"pix/host/routing"
 	"pix/host/sys/systest"
 )
 
@@ -174,29 +173,6 @@ func TestMinRAMArithmeticMatchesTheShippedCatalog(t *testing.T) {
 		want := math.Ceil(m.DownloadGB*1.15 + float64(m.ContextWindow)*m.KVGBPerTok + 1.0)
 		if want != m.MinRAMGB {
 			t.Errorf("%s: catalog min_ram_gb %g, recomputed %g", m.ID, m.MinRAMGB, want)
-		}
-	}
-}
-
-// TestLocalOllamaRungsMatchRoutingCatalog is a TRANSITIONAL drift guard: while
-// the (soon deleted) scored router's models.json still carries its own copy
-// of these four local rungs, the two tables must agree. Once the router is
-// gone this test's routing import goes with it; until then it is the thing
-// that catches a hand-edit to one table that forgot the other.
-func TestLocalOllamaRungsMatchRoutingCatalog(t *testing.T) {
-	reg, err := routing.LoadRegistry()
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := routing.LocalRungs(reg)
-	got := LocalOllamaRungs()
-	if len(got) != len(want) {
-		t.Fatalf("LocalOllamaRungs() has %d rungs, routing catalog has %d", len(got), len(want))
-	}
-	for i, g := range got {
-		w := want[i]
-		if g.ID != w.ID || g.ContextWindow != w.ContextWindow || g.MinRAMGB != w.MinRAMGB || g.DownloadGB != w.DownloadGB || g.KVGBPerTok != w.KVGBPerTok {
-			t.Errorf("rung %d: inference table %+v, routing catalog %+v", i, g, w)
 		}
 	}
 }

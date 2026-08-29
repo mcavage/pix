@@ -13,31 +13,26 @@ import (
 	"strings"
 
 	"pix/host/cli"
+	"pix/host/inference"
 	"pix/host/launcher"
-	"pix/host/routing"
 	"pix/host/workflow/models"
 )
 
 // modelsDescription is the prose kong puts above the generated command list. A
-// FUNC, not a const, so the override paths it prints are the REAL resolved ones
-// and never the repo's embedded defaults, which mean nothing to a consumer.
+// FUNC, not a const, so the override path it prints is the REAL resolved one
+// and never the repo's embedded default, which means nothing to a consumer.
 func modelsDescription() string {
 	return `Which models pix can use, and which are wired up.
 
-Every command here describes THIS HOST: the shipped catalog narrowed to the
-models a probed backend binding makes callable. ls/show/pick/route also take
---catalog, which drops the host filter and describes the shipped catalog itself.
+Bare ` + "`pix models`" + ` describes THIS HOST: the models machine config and the
+selected environment declare, and the backend each is bound through. Nothing
+here picks a model for you — that is ` + "`pix run --model`" + `, [models].main, or a
+pack's binding.
 
 Add a model to the catalog: one entry in
-  ` + routing.ModelsPath() + `
-and its scores in
-  ` + routing.ScorecardPath() + `
-then rebuild the baked map (maintainer path below). Neither file exists: absent
-means "use the defaults built into this binary", so create only the one you
-want to override.
-(Maintainer-only, not a personal override: the shipped defaults live in
-services/host/routing/defaults/*.json in the pix repo checkout, and the image's
-baked map is compiled with ` + "`--catalog --out ./routing.json`" + `.)`
+  ` + inference.CatalogPath() + `
+That file does not exist by default: absent means "use the catalog built into
+this binary", so create it only to override.`
 }
 
 // ModelsCmd is the verb tree. Bare `pix models` is the status screen, so Status
@@ -46,16 +41,13 @@ func (c *ModelsCmd) Help() string { return modelsDescription() }
 
 type ModelsCmd struct {
 	Status ModelsStatusCmd `cmd:"" default:"1" hidden:""`
-	Ls     ModelsLsCmd     `cmd:"" help:"One row per model: wired / unwired / retired."`
-	Show   ModelsShowCmd   `cmd:"" help:"ls, plus the scorecard and the resolved intent table."`
-	Pick   ModelsPickCmd   `cmd:"" help:"Resolve one intent to a model, with the rationale."`
 	Add    ModelsAddCmd    `cmd:"" help:"Wire a provider in and prove it with a live request. (WRITES)"`
-	// `route`/`compile` are GONE from the user CLI. Recompiling the intent map
-	// was never a step a user had to take: every `pix run` recompiles from the
-	// current bindings. The only real caller is the maintainer baking the image
-	// default, which is `make routing` in the repo, over `pix-host route compile`.
-	// Leaving it on the launcher taught users a command whose honest answer to
-	// "when do I run this?" is "never".
+	// `ls`, `show`, `pick`, `route`/`compile` and the `--catalog` flag are GONE
+	// with the router they described (Wave F). Every one of them existed to
+	// explain a SCORED pick — wired/unwired taxonomies, the scorecard, the
+	// resolved intent table, the rationale — and there is no pick anymore: a
+	// model is chosen by name. What survives is the fact screen (bare
+	// `pix models`) and wiring a provider in (`add`).
 }
 
 // ModelsStatusCmd is the read-only screen: no probe, no mutation.
@@ -77,43 +69,6 @@ func (c *ModelsStatusCmd) Run(d *cli.Deps) error {
 	}
 	renderModelsStatus(cfg, facts, d.Out)
 	return nil
-}
-
-// hostQuery is the flag pair every read-only router query shares. Each subcommand
-// is still its OWN type: they forward to different host verbs, and a shared type
-// could not tell which one kong selected.
-type hostQuery struct {
-	JSON    bool `help:"Emit machine-readable JSON."`
-	Catalog bool `help:"Describe the shipped catalog, not this host."`
-}
-
-func (q hostQuery) flags() []string {
-	var out []string
-	if q.JSON {
-		out = append(out, "--json")
-	}
-	if q.Catalog {
-		out = append(out, "--catalog")
-	}
-	return out
-}
-
-type ModelsLsCmd struct{ hostQuery }
-
-func (c *ModelsLsCmd) Run(d *cli.Deps) error { return execHostRoute(d, "models", c.flags()) }
-
-type ModelsShowCmd struct{ hostQuery }
-
-func (c *ModelsShowCmd) Run(d *cli.Deps) error { return execHostRoute(d, "show", c.flags()) }
-
-// ModelsPickCmd resolves one intent.
-type ModelsPickCmd struct {
-	hostQuery
-	Intent string `arg:"" help:"Intent name (see 'pix models show')."`
-}
-
-func (c *ModelsPickCmd) Run(d *cli.Deps) error {
-	return execHostRoute(d, "pick", append([]string{c.Intent}, c.flags()...))
 }
 
 // ModelsAddCmd wires a provider end to end. `enum` does real work: the provider
@@ -141,12 +96,6 @@ func (c *ModelsAddCmd) Run(d *cli.Deps) error {
 		return models.AddOllamaProvider(d, cfg, env, models.OllamaSelection{Local: c.Local, Cloud: c.Cloud})
 	}
 	return models.AddKeyedProvider(d, cfg, env, name)
-}
-
-// execHostRoute forwards to the sibling pix-host binary, which owns the router.
-// It is the one place that knows the host tree is still spelled `route`.
-func execHostRoute(d *cli.Deps, verb string, argv []string) error {
-	return execHostBinary(d, append([]string{"route", verb}, argv...))
 }
 
 // execHostBinary runs the sibling pix-host with argv, wired to this command's

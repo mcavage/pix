@@ -62,10 +62,10 @@ func TestEveryDispatchedSubcommandAppearsInItsUsage(t *testing.T) {
 		"config": {"show", "path", "get", "set", "unset"},
 		"mcp":    {"add", "ls", "auth"},
 		"secret": {"ls", "set", "rm", "check", "sync"},
-		// "add" and "setup" join this list once the reconcile seam lands
-		// (docs/design/models-cli.md); this rename-only change only wires
-		// ls/show/pick/route.
-		"models": {"ls", "show", "pick", "route"},
+		// `models` has exactly one listed subcommand left: ls/show/pick/route
+		// went with the router (Wave F), and bare `pix models` is the default
+		// status screen, not a token in the command list.
+		"models": {"add"},
 	} {
 		d, out, _ := rootDeps()
 		dispatch([]string{"help", verb}, d)

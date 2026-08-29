@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"pix/host/config"
 	"pix/host/hostenv"
@@ -16,7 +15,7 @@ import (
 	"pix/host/workflow/provision"
 )
 
-func TestCompileInferenceRuntimeNoModelAndExclusiveFiltering(t *testing.T) {
+func TestRuntimeManifestNoModelAndExclusiveFiltering(t *testing.T) {
 	cfg := &config.Config{Inference: config.InferenceConfig{
 		Backends: map[string]config.InferenceBackend{
 			"direct":  {Driver: "native", Auth: "1password"},
@@ -28,7 +27,7 @@ func TestCompileInferenceRuntimeNoModelAndExclusiveFiltering(t *testing.T) {
 			{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "reasoner", Available: true},
 		},
 	}}
-	routes, manifest, err := inference.CompileInferenceRuntime(cfg, time.Unix(1, 0), inference.RosterInput{})
+	manifest, err := inference.RuntimeManifest(cfg, inference.RosterInput{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,17 +40,9 @@ func TestCompileInferenceRuntimeNoModelAndExclusiveFiltering(t *testing.T) {
 	if _, ok := manifest.Backends["direct"]; ok {
 		t.Fatal("exclusive runtime leaked a disallowed backend")
 	}
-	if len(routes.Routes) == 0 {
-		t.Fatal("one callable model should serve scored intents")
-	}
-	for name, route := range routes.Routes {
-		if route.Model != "gateway/reasoner" {
-			t.Fatalf("route %s = %s", name, route.Model)
-		}
-	}
 }
 
-func TestCompileInferenceRuntimeCarriesAdaptiveThinkingFromCatalog(t *testing.T) {
+func TestRuntimeManifestCarriesAdaptiveThinkingFromCatalog(t *testing.T) {
 	cfg := &config.Config{Inference: config.InferenceConfig{
 		Backends: map[string]config.InferenceBackend{
 			"gateway": {Driver: "openai-compatible", Protocol: "anthropic-messages", Auth: "sbx-session", BaseURL: "https://models.example.test"},
@@ -60,7 +51,7 @@ func TestCompileInferenceRuntimeCarriesAdaptiveThinkingFromCatalog(t *testing.T)
 			{Model: "anthropic/claude-opus-5", Backend: "gateway", Upstream: "claude-opus-5", Available: true},
 		},
 	}}
-	_, manifest, err := inference.CompileInferenceRuntime(cfg, time.Unix(1, 0), inference.RosterInput{})
+	manifest, err := inference.RuntimeManifest(cfg, inference.RosterInput{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +78,7 @@ func TestConfigureDirectInferenceUsesCatalog(t *testing.T) {
 	}
 }
 
-func TestConfigureModelRosterRestrictsRuntimeAndRoutes(t *testing.T) {
+func TestConfigureModelRosterRestrictsRuntimeManifest(t *testing.T) {
 	cfg := &config.Config{}
 	if err := models.ConfigureDirectInference(cfg, []string{"anthropic", "openai"}); err != nil {
 		t.Fatal(err)
@@ -104,17 +95,12 @@ func TestConfigureModelRosterRestrictsRuntimeAndRoutes(t *testing.T) {
 	if got := strings.Join(cfg.Inference.AllowedModels, ","); got != "openai/gpt-5.6-sol" {
 		t.Fatalf("allowed models = %q", got)
 	}
-	routes, manifest, err := inference.CompileInferenceRuntime(cfg, time.Unix(1, 0), inference.RosterInput{})
+	manifest, err := inference.RuntimeManifest(cfg, inference.RosterInput{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(manifest.Models) != 1 || manifest.Models[0].CatalogModel != "openai/gpt-5.6-sol" {
 		t.Fatalf("runtime roster leaked another model: %+v", manifest.Models)
-	}
-	for intent, route := range routes.Routes {
-		if route.Model != "openai/gpt-5.6-sol" {
-			t.Fatalf("route %s escaped roster: %s", intent, route.Model)
-		}
 	}
 }
 

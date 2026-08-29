@@ -132,14 +132,14 @@ func TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode(t *testing.T) {
 		{name: "env show unknown", argv: []string{"env", "show", "ghost"}},
 		{name: "env edit missing NAME", argv: []string{"env", "edit"}},
 		{
-			name: "env edit no target, registered (TTY-sensitive)",
-			argv: []string{"env", "edit", "work"},
+			name:  "env edit no target, registered (TTY-sensitive)",
+			argv:  []string{"env", "edit", "work"},
 			setup: func(t *testing.T) []string { registerNonTTYTier0(t, "work"); return nil },
 		},
 		{name: "env review missing NAME", argv: []string{"env", "review"}},
 		{
-			name: "env review registered tier1 (TTY-sensitive)",
-			argv: []string{"env", "review", "work"},
+			name:  "env review registered tier1 (TTY-sensitive)",
+			argv:  []string{"env", "review", "work"},
 			setup: func(t *testing.T) []string { registerNonTTYTier1(t, "work"); return nil },
 		},
 		{name: "env forget missing NAME", argv: []string{"env", "forget"}},

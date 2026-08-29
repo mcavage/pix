@@ -10,7 +10,7 @@ package main
 //	L3  workflow/*     orchestrate L1+L2
 //	L2  health         L1 probes -> a Snapshot
 //	L1  capability/*   one domain each; MAY NOT import each other
-//	L0  foundation     sys, config, routing, rpc, cli, hostenv
+//	L0  foundation     sys, config, rpc, cli, hostenv
 //
 // The sideways ban on L1 is the load-bearing clause. The 40,905-line package
 // this architecture replaces was a web precisely because capabilities called
@@ -57,7 +57,6 @@ var pkgLayer = map[string]int{
 	// caller.
 	"sys/systest": layerFoundation,
 	"config":      layerFoundation,
-	"routing":     layerFoundation,
 	"rpc":         layerFoundation,
 	"cli":         layerFoundation,
 	// hostenv, unlike sys/systest, is genuinely production L0: pack, provision,
@@ -268,7 +267,7 @@ var pkgLayer = map[string]int{
 	// "." is the pix-host daemon binary's own root package — a separate program
 	// from cmd/pix, but the same shape: argv/RPC in, dispatch out. It was
 	// exempted (-1) as a placeholder; it earns L4 honestly — its production
-	// imports (config, cli, routing, inference, plugin, supervise,
+	// imports (config, cli, inference, plugin, supervise,
 	// workflow/pack) are all L0-L3, so it satisfies the down-only rule without
 	// help. Its examples/ tree is gone with the MCP plugin transport it
 	// demonstrated (U11j).
@@ -279,12 +278,12 @@ var pkgLayer = map[string]int{
 // structure: sys and config are the true bottom, and cli/hostenv are allowed to
 // build on them. Without this, "equal layers may not import each other" would
 // forbid cli from importing sys, which is nonsense.
-// Ranks, lowest first: config and routing are pure file formats with no
-// dependencies at all; sys sits above them because sys.Real.StateDir delegates
+// Ranks, lowest first: config is a pure file format with no dependencies at
+// all; sys sits above it because sys.Real.StateDir delegates
 // to config, which is correct — the OS seam should not re-derive the launcher's
 // data layout.
 var l0Order = map[string]int{
-	"config": 0, "routing": 0, "unitreport": 0,
+	"config": 0, "unitreport": 0,
 	"sys": 1, "rpc": 1, "launcher": 1,
 	"workspace":   2,
 	"sys/systest": 2, "hostenv": 3,

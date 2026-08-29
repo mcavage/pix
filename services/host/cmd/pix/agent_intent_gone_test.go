@@ -123,15 +123,16 @@ func TestAgentMetaHasNoIntentField(t *testing.T) {
 	}
 }
 
-// TestRoutingArtifactAndPackageStillExist pins the other half of the review
-// finding: this fix touches agent PARSERS only. routing.json and
-// services/host/routing are Wave F's job, not this one's.
-func TestRoutingArtifactAndPackageStillExist(t *testing.T) {
+// TestRoutingArtifactAndPackageAreGone is the other half of the review
+// finding, now closed: Wave F deleted the compiled artifact and the package
+// that produced it. Kept as a file-level sentinel so a merge or a revert
+// cannot quietly restore either one.
+func TestRoutingArtifactAndPackageAreGone(t *testing.T) {
 	_, repoRoot := repoRootForAgentIntentSentinel(t)
-	if _, err := os.Stat(filepath.Join(repoRoot, "routing.json")); err != nil {
-		t.Errorf("routing.json must still exist (Wave F deletes it, not this fix): %v", err)
+	if _, err := os.Stat(filepath.Join(repoRoot, "routing.json")); !os.IsNotExist(err) {
+		t.Errorf("routing.json is back (err=%v); the compiled intent map was deleted with the router", err)
 	}
-	if fi, err := os.Stat(filepath.Join(repoRoot, "services", "host", "routing")); err != nil || !fi.IsDir() {
-		t.Errorf("services/host/routing must still exist as a package (Wave F deletes it, not this fix): err=%v", err)
+	if _, err := os.Stat(filepath.Join(repoRoot, "services", "host", "routing")); !os.IsNotExist(err) {
+		t.Errorf("services/host/routing is back (err=%v); the scored router package was deleted, not retired", err)
 	}
 }

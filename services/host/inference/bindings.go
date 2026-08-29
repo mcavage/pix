@@ -1,12 +1,13 @@
 // Package inference answers ONE question for every binary in the stack: which
 // catalog models can this host actually call right now?
 //
-// The catalog says what a model IS (prices, limits, retired-or-not); config
+// The catalog says what a model IS (limits, local-or-not, still-offered); config
 // says what this host may CALL (a probed binding, filtered by topology and
 // roster). Conflating them once routed a keyless host to openai and wrote that
-// route into routing.json, so "callable" has exactly one implementation and
-// both binaries read it here. Layering: routing and config stay independent;
-// this package is the only place allowed to know both.
+// bound a keyless host to a provider it could not call, so "callable" has
+// exactly one implementation and both binaries read it here. catalog.go holds
+// the shipped facts; config holds this host's decisions; this file is the only
+// place allowed to know both.
 package inference
 
 import (
@@ -15,20 +16,19 @@ import (
 	"strings"
 
 	"pix/host/config"
-	"pix/host/routing"
 )
 
 // Bindings returns the callable bindings in cfg, in config order. An uncallable
 // binding is OMITTED rather than emitted with Available:false: consumers read
 // presence, and an unavailable entry has fooled that reading before.
-func Bindings(cfg *config.Config) []routing.Binding {
+func Bindings(cfg *config.Config) []Binding {
 	if cfg == nil {
 		return nil
 	}
-	out := make([]routing.Binding, 0, len(cfg.Inference.Models))
+	out := make([]Binding, 0, len(cfg.Inference.Models))
 	for _, b := range cfg.Inference.Models {
 		if Callable(cfg, b) {
-			out = append(out, routing.Binding{Model: b.Model, Backend: b.Backend, UpstreamID: b.Upstream, Available: true})
+			out = append(out, Binding{Model: b.Model, Backend: b.Backend, UpstreamID: b.Upstream, Available: true})
 		}
 	}
 	return out
@@ -39,18 +39,6 @@ func Bindings(cfg *config.Config) []routing.Binding {
 // empty set marks every catalog model unavailable and describes nothing.
 func Configured(cfg *config.Config) bool {
 	return cfg != nil && len(cfg.Inference.Models) > 0
-}
-
-// BoundRegistry narrows catalog to what this host can call and reports whether
-// the narrowing happened; bound == false means the caller is showing the raw
-// catalog and MUST say so. Every row survives (unbound => Available:false), so
-// `pix models ls` still describes the whole catalog.
-func BoundRegistry(cfg *config.Config, catalog *routing.Registry) (reg *routing.Registry, bound bool) {
-	if catalog == nil || !Configured(cfg) {
-		return catalog, false
-	}
-	// No exclusiveBackend argument: Bindings already applied the topology filter.
-	return routing.RegistryForBindings(catalog, Bindings(cfg), ""), true
 }
 
 // Callable is the single definition of "this host can call this model now":
@@ -127,8 +115,8 @@ func HostProofRequired(backend config.InferenceBackend, source string) bool {
 
 // RuntimeID is the id a runtime provider calls a bound model by: the upstream
 // id qualified by its backend, without double-qualifying one that already is.
-func RuntimeID(b routing.Binding) string {
-	if routing.IsQualifiedID(b.UpstreamID) && strings.HasPrefix(b.UpstreamID, b.Backend+"/") {
+func RuntimeID(b Binding) string {
+	if IsQualifiedID(b.UpstreamID) && strings.HasPrefix(b.UpstreamID, b.Backend+"/") {
 		return b.UpstreamID
 	}
 	return b.Backend + "/" + b.UpstreamID

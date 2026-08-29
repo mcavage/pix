@@ -2,14 +2,14 @@ package main
 
 // redrive_dxfix_test.go — DX-consultant redrive findings 1/3/4:
 //
-//  1: `pix route --help` (now `pix models --help`) pointed a consumer at the embedded repo source
-//     (services/host/routing/defaults/scorecard.json) for the override file
-//     they should hand-edit. That path only exists inside a pix repo
-//     checkout and means nothing on a consumer machine — the consumer-facing
-//     recovery path must be the live override dir
-//     (~/.local/share/pix/routing/, honoring $ROUTING_DIR/$XDG_DATA_HOME);
+//  1: `pix models --help` pointed a consumer at the embedded repo source for
+//     the override file they should hand-edit. That path only exists inside a
+//     pix repo checkout and means nothing on a consumer machine — the
+//     consumer-facing recovery path must be the live override file
+//     (inference.CatalogPath(), honoring $PIX_MODEL_CATALOG/$XDG_DATA_HOME);
 //     a mention of the maintainer's embedded repo source is fine ONLY when
-//     explicitly labeled as such.
+//     explicitly labeled as such. The scorecard half of this finding went with
+//     the router (Wave F): there is no scored file left to point anywhere.
 //  3: `pix mcp register/load/auth/bundle` (and, by the same policy,
 //     read-only `mcp ls`) printed "would run: ..." and exited 0 when sbx
 //     isn't on PATH — a command that PROMISES an operation must not report a
@@ -31,8 +31,8 @@ import (
 	"testing"
 
 	"pix/host/cli"
+	"pix/host/inference"
 	"pix/host/packinfo"
-	"pix/host/routing"
 	"pix/host/rpc"
 	"pix/host/sys"
 )
@@ -50,37 +50,30 @@ func modelsHelp(t *testing.T) string {
 
 // --- finding 1: route/models help is repo-less for the consumer -----------
 
-// TestRouteUsage_ConsumerPathsAreLiveOverrideDir proves `models --help` points
-// at the REAL resolved override paths (honoring $ROUTING_DIR), never a
-// hardcoded guess and never the repo's embedded default source. (Test name
-// kept from the `route` era; docs/design/models-cli.md renamed the verb, not
-// this file's history.)
-func TestRouteUsage_ConsumerPathsAreLiveOverrideDir(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("ROUTING_DIR", dir)
+// TestModelsUsage_ConsumerPathIsLiveOverrideFile proves `models --help` points
+// at the REAL resolved override path (honoring $PIX_MODEL_CATALOG), never a
+// hardcoded guess and never the repo's embedded default source.
+func TestModelsUsage_ConsumerPathIsLiveOverrideFile(t *testing.T) {
+	want := filepath.Join(t.TempDir(), "models.json")
+	t.Setenv("PIX_MODEL_CATALOG", want)
 
 	usage := modelsHelp(t)
 
-	wantModels := filepath.Join(dir, "models.json")
-	wantScorecard := filepath.Join(dir, "scorecard.json")
-	if !strings.Contains(usage, wantModels) {
-		t.Errorf("route usage must point at the live override path %q, got:\n%s", wantModels, usage)
+	if !strings.Contains(usage, want) {
+		t.Errorf("models usage must point at the live override path %q, got:\n%s", want, usage)
 	}
-	if !strings.Contains(usage, wantScorecard) {
-		t.Errorf("route usage must point at the live override path %q, got:\n%s", wantScorecard, usage)
-	}
-	if strings.Contains(usage, routing.Dir()) && routing.Dir() != dir {
-		t.Errorf("route usage resolved a stale routing dir, not the injected $ROUTING_DIR")
+	if got := inference.CatalogPath(); got != want {
+		t.Errorf("models usage resolved a stale catalog path %q, not the injected $PIX_MODEL_CATALOG", got)
 	}
 }
 
-// TestRouteUsage_EmbeddedRepoSourceIsLabeledMaintainerOnly: the ONE remaining
-// mention of the repo's embedded default source (for a pix maintainer
-// editing shipped defaults, not a personal override) must be explicitly
-// labeled — never presented as if it were the consumer's recovery path.
-func TestRouteUsage_EmbeddedRepoSourceIsLabeledMaintainerOnly(t *testing.T) {
+// TestModelsUsage_EmbeddedRepoSourceIsLabeledMaintainerOnly: any mention of the
+// repo's embedded default source (for a pix maintainer editing the shipped
+// catalog, not a personal override) must be explicitly labeled — never
+// presented as if it were the consumer's recovery path.
+func TestModelsUsage_EmbeddedRepoSourceIsLabeledMaintainerOnly(t *testing.T) {
 	usage := modelsHelp(t)
-	idx := strings.Index(usage, "services/host/routing/defaults")
+	idx := strings.Index(usage, "services/host/inference/catalog")
 	if idx < 0 {
 		return // no mention at all is also fine
 	}
@@ -92,16 +85,16 @@ func TestRouteUsage_EmbeddedRepoSourceIsLabeledMaintainerOnly(t *testing.T) {
 
 // --- finding 4: sweep for the same mistake elsewhere -----------------------
 
-// TestNoUnlabeledRepoRoutingDefaultsInSource is the regression guard for the
-// sweep: any mention of services/host/routing/defaults ANYWHERE in this
+// TestNoUnlabeledRepoCatalogSourceInSource is the regression guard for the
+// sweep: any mention of the shipped catalog's repo path ANYWHERE in this
 // package's non-test source must sit within an explicitly maintainer-labeled
 // window, never bare as if it were a consumer's file to edit.
-func TestNoUnlabeledRepoRoutingDefaultsInSource(t *testing.T) {
+func TestNoUnlabeledRepoCatalogSourceInSource(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	const needle = "services/host/routing/defaults"
+	const needle = "services/host/inference/catalog"
 	for _, f := range files {
 		if strings.HasSuffix(f, "_test.go") {
 			continue
@@ -127,7 +120,7 @@ func TestNoUnlabeledRepoRoutingDefaultsInSource(t *testing.T) {
 			}
 			window := strings.ToLower(src[start:end])
 			if !strings.Contains(window, "repo checkout") && !strings.Contains(window, "maintainer") {
-				t.Errorf("%s: unlabeled repo-relative routing path at byte %d — label it maintainer-only or point at routing.ScorecardPath()/ModelsPath() instead:\n%s", f, pos, src[start:end])
+				t.Errorf("%s: unlabeled repo-relative catalog path at byte %d — label it maintainer-only or point at inference.CatalogPath() instead:\n%s", f, pos, src[start:end])
 			}
 			i = pos + len(needle)
 		}
