@@ -82,8 +82,18 @@ type AddOptions struct {
 
 // AddResult is what Add did, for a caller to report.
 type AddResult struct {
-	Name       string
-	Root       string
+	Name string
+	Root string
+	// OldRoot is name's previously registered canonical root, when this Add
+	// REPOINTED an existing registration to a different one. It is empty
+	// for a first-time registration/scaffold, and empty for an idempotent
+	// re-add of the SAME root (commitAddRegistration's own "two identical
+	// concurrent adds are idempotent" case) — in both of those, nothing
+	// actually moved, so there is no old root worth naming. A repoint never
+	// carries acceptance across (AC-16: keyed by root, never by name), so
+	// OldRoot names the FILE location that changed, never a trust claim
+	// about it.
+	OldRoot    string
 	Scaffolded bool
 	Review     ReviewResult
 }
@@ -264,17 +274,44 @@ func registerAdd(cfg *config.Config, name, path string, opts AddOptions) (*AddRe
 		)
 	}
 
-	printAddSuccess(out, name, canonRoot, false)
-	return &AddResult{Name: name, Root: canonRoot, Review: *result}, nil
+	oldRoot := repointOldRoot(observed, observedOK, canonRoot)
+	printAddSuccess(out, name, canonRoot, false, oldRoot)
+	return &AddResult{Name: name, Root: canonRoot, OldRoot: oldRoot, Review: *result}, nil
+}
+
+// repointOldRoot is the ONE place registerAdd/scaffoldAdd decide whether
+// this Add is a genuine repoint: observed/observedOK is the expected-state
+// snapshot both already capture before Review runs (commitAddRegistration's
+// own doc comment), and newRoot is what just committed. Absent before
+// (!observedOK) or unchanged (observed == newRoot, the idempotent re-add
+// case) both answer "" — nothing moved, so there is no old root to report.
+func repointOldRoot(observed string, observedOK bool, newRoot string) string {
+	if observedOK && observed != newRoot {
+		return observed
+	}
+	return ""
 }
 
 // printAddSuccess is the ONE success line both registerAdd and scaffoldAdd
-// end on: it names the literal next command, `pix env use NAME`, and
-// nothing that reads as an unearned success verdict ("configured",
-// "enabled", "ready", "verified" never appear here — review.go's own
-// acceptance line, printed just above this one for a Tier1 environment,
-// already said what was actually checked).
-func printAddSuccess(out io.Writer, name, root string, scaffolded bool) {
+// end on — the only output either prints AFTER its commit; everything
+// before it in either branch is the E1.8 review bill itself (plus, for a
+// scaffold, the created root's own path, printed the moment the directory
+// exists, well before Review even runs — scaffoldAdd's own doc comment on
+// why). oldRoot is repointOldRoot's answer: empty names the ordinary
+// registered/scaffolded-at form; non-empty means this Add REPOINTED name
+// from oldRoot to root, and the line names BOTH absolute roots so a caller
+// sees exactly what moved without diffing config.toml themselves. Neither
+// form ever prints anything that reads as an unearned success verdict
+// ("configured", "enabled", "ready", "verified" never appear here —
+// review.go's own acceptance line, printed just above this one for a
+// Tier1 environment, already said what was actually checked), and neither
+// ever prints a resolved secret value — root/oldRoot are directory paths,
+// never anything from `secrets`/`registries`.
+func printAddSuccess(out io.Writer, name, root string, scaffolded bool, oldRoot string) {
+	if oldRoot != "" {
+		fmt.Fprintf(out, "pix: environment %q repointed from %s to %s.\n\npix env use %s\n", name, oldRoot, root, name)
+		return
+	}
 	verb := "registered"
 	if scaffolded {
 		verb = "scaffolded"
@@ -378,8 +415,9 @@ func scaffoldAdd(cfg *config.Config, name string, opts AddOptions) (*AddResult, 
 	}
 
 	committed = true
-	printAddSuccess(out, name, root, true)
-	return &AddResult{Name: name, Root: root, Scaffolded: true, Review: *result}, nil
+	oldRoot := repointOldRoot(observed, observedOK, root)
+	printAddSuccess(out, name, root, true, oldRoot)
+	return &AddResult{Name: name, Root: root, OldRoot: oldRoot, Scaffolded: true, Review: *result}, nil
 }
 
 // scaffoldDirectory creates root (and config.EnvsDir() itself, if absent)

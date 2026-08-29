@@ -368,6 +368,102 @@ func TestUseEnvironmentUnknownErrorSpecialSafeName(t *testing.T) {
 	}
 }
 
+// ── closest: (D14) ────────────────────────────────────────────────────────
+
+// TestClosestKnownName_UniqueSingleEditMatch is the plain positive case: one
+// registered name a single substitution away from what was typed, well
+// within threshold, and nothing else close enough to tie it.
+func TestClosestKnownName_UniqueSingleEditMatch(t *testing.T) {
+	got, ok := closestKnownName("worc", []string{"work", "home"})
+	if !ok || got != "work" {
+		t.Errorf("closestKnownName(worc, [work home]) = (%q, %v), want (work, true)", got, ok)
+	}
+}
+
+// TestClosestKnownName_TranspositionAtThresholdIsOmitted pins the exact
+// documented consequence of NOT using a transposition-discounted distance
+// (closestKnownName's own doc comment): "hoem" is Levenshtein-distance 2
+// from "home" (two substitutions, since this algorithm has no cheaper
+// adjacent-swap move), which exceeds a 4-rune name's threshold of 1 — so no
+// closest match is offered even though a human reads "hoem" as an obvious
+// transposition of "home". This is also why the PRD's own worked example
+// (docs/design/environments.md §8.1, "hoem" against "home, work, luna")
+// never shows a `closest:` line.
+func TestClosestKnownName_TranspositionAtThresholdIsOmitted(t *testing.T) {
+	if d := levenshteinDistance("hoem", "home"); d != 2 {
+		t.Fatalf("levenshteinDistance(hoem, home) = %d, want 2 (this test's premise)", d)
+	}
+	got, ok := closestKnownName("hoem", []string{"home", "work", "luna"})
+	if ok {
+		t.Errorf("closestKnownName(hoem, ...) = (%q, true), want ok=false (distance 2 exceeds the 4-rune threshold of 1)", got)
+	}
+}
+
+// TestClosestKnownName_TieOmitsAMatch proves "which one?" is never
+// answered by guessing: two known names tied at the same minimal distance
+// within threshold must omit a suggestion entirely, even though either one
+// alone would have qualified.
+func TestClosestKnownName_TieOmitsAMatch(t *testing.T) {
+	// "cae" is a single substitution from BOTH "cat" (t->e) and "car" (r->e).
+	if _, ok := closestKnownName("cae", []string{"cat", "car"}); ok {
+		t.Error("closestKnownName(cae, [cat car]) = ok=true, want ok=false (tied at distance 1)")
+	}
+}
+
+// TestClosestKnownName_FarNameOmitted proves a name with no known entry
+// within threshold omits a suggestion rather than offering the nearest one
+// regardless of distance.
+func TestClosestKnownName_FarNameOmitted(t *testing.T) {
+	if _, ok := closestKnownName("zzzzzz", []string{"home", "work"}); ok {
+		t.Error("closestKnownName(zzzzzz, [home work]) = ok=true, want ok=false (nothing close)")
+	}
+}
+
+// TestClosestKnownName_EmptyKnownOmitted proves an empty registry never
+// panics or fabricates a match.
+func TestClosestKnownName_EmptyKnownOmitted(t *testing.T) {
+	if _, ok := closestKnownName("anything", nil); ok {
+		t.Error("closestKnownName(anything, nil) = ok=true, want ok=false")
+	}
+}
+
+// TestClosestKnownName_LongerNameUsesWiderThreshold proves the length-scaled
+// threshold: a 2-edit-distance typo on a name longer than 4 runes still
+// qualifies, where the same distance on a short name (proven above) would
+// not.
+func TestClosestKnownName_LongerNameUsesWiderThreshold(t *testing.T) {
+	if d := levenshteinDistance("warehoyze", "warehouse"); d != 2 {
+		t.Fatalf("levenshteinDistance(warehoyze, warehouse) = %d, want 2 (this test's premise)", d)
+	}
+	got, ok := closestKnownName("warehoyze", []string{"warehouse"})
+	if !ok || got != "warehouse" {
+		t.Errorf("closestKnownName(warehoyze, [warehouse]) = (%q, %v), want (warehouse, true)", got, ok)
+	}
+}
+
+// TestUseEnvironmentUnknownErrorClosestUniqueMatch proves `closest:` reaches
+// the actual rendered Error() text, positioned between `known:` and the
+// fixed register-one line, exactly when closestKnownName finds one.
+func TestUseEnvironmentUnknownErrorClosestUniqueMatch(t *testing.T) {
+	tempConfig(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.AddEnvironment("work", "/abs/work"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.AddEnvironment("home", "/abs/home"); err != nil {
+		t.Fatal(err)
+	}
+
+	err = cfg.UseEnvironment("worc")
+	want := "pix: no environment named \"worc\".\n     known: home, work\n     closest: work\n     register one: pix env add <name> [path]"
+	if got := err.Error(); got != want {
+		t.Errorf("Error() =\n%s\nwant\n%s", got, want)
+	}
+}
+
 func TestUseEnvironmentEmptyClearsDefault(t *testing.T) {
 	tempConfig(t)
 	cfg, err := Load()

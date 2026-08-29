@@ -194,7 +194,7 @@ func runSetupHandoff(dir, name string, state sandbox.State, out io.Writer, runFn
 		fmt.Fprintf(out, "Host configuration reconciled. Existing sandbox %q was left alone.\n", name)
 		fmt.Fprintln(out, "Attaching keeps the sandbox exactly as it was created (its pack, MCP")
 		fmt.Fprintln(out, "servers, and skills were attached at create time). To pick up current")
-		fmt.Fprintln(out, "settings instead, remove it first — removal is proof-gated, so it refuses")
+		fmt.Fprintln(out, "settings instead, remove it first: removal is proof-gated, so it refuses")
 		fmt.Fprintln(out, "while another shell is still attached. Choose one:")
 		fmt.Fprintf(out, "  pix run%s                 # attach as-is\n", dirArg)
 		fmt.Fprintf(out, "  pix rm %s && pix setup%s  # recreate with current settings + get the tour\n", sys.ShellQuote(name), dirArg)
@@ -203,7 +203,7 @@ func runSetupHandoff(dir, name string, state sandbox.State, out io.Writer, runFn
 
 	// launch.SbxAbsent (positively confirmed): normal first launch.
 	fmt.Fprintln(out, "")
-	fmt.Fprintln(out, "Launching Pix — the agent will take it from here.")
+	fmt.Fprintln(out, "Launching Pix: the agent will take it from here.")
 	return runFn(kickoffArgs())
 }
 

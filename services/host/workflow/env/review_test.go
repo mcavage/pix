@@ -9,6 +9,7 @@ import (
 
 	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/hosttrust"
 )
 
 // tempConfigAndState isolates BOTH $PIX_CONFIG and $XDG_STATE_HOME at fresh
@@ -352,4 +353,80 @@ func (m *mutateOnFirstRead) Read(p []byte) (int, error) {
 		m.mutate()
 	}
 	return m.r.Read(p)
+}
+
+// ── finding C12: --verbose shows a digest only where one is resolvable ─────
+
+// resolvingLookPath answers ok for exactly one bare command name (the
+// fixture's resolvable service), pointing it at a real regular file this
+// test controls the bytes of, and fails every other bare name exactly as
+// noBareLookPath does — so a test can prove BOTH the resolvable and the
+// unresolvable cases against the SAME bill without two different fixtures.
+func resolvingLookPath(resolvable map[string]string) func(string) (string, error) {
+	return func(name string) (string, error) {
+		if p, ok := resolvable[name]; ok {
+			return p, nil
+		}
+		return "", errNotFound
+	}
+}
+
+// TestRenderVerboseDetails_HostServiceDigestOnlyWhenResolvable is C12: a
+// host service command that DOES resolve to a real local path shows its
+// content digest ("sha256:<hex>", the exact hash of the bytes this test
+// wrote); one that does NOT resolve at all shows the argv line and nothing
+// else — no blank or placeholder "sha256:" line pretending a digest exists
+// where none could be computed. This is the positive half
+// bom_e18block_test.go's argv-only assertions never covered: every
+// existing verbose test in this package runs noBareLookPath, so nothing
+// before this proved a digest is ever actually PRINTED, only that its
+// absence is tolerated.
+func TestRenderVerboseDetails_HostServiceDigestOnlyWhenResolvable(t *testing.T) {
+	tempConfigAndState(t)
+	cfg := loadConfig(t)
+	root := t.TempDir()
+	binDir := t.TempDir()
+	resolvedPath := filepath.Join(binDir, "warehouse-proxy")
+	content := []byte("#!/bin/sh\necho warehouse-proxy\n")
+	if err := os.WriteFile(resolvedPath, content, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wantSHA := hosttrust.HashBytes(content)
+
+	copyFixture(t, "testdata/hostexec-fixture", root)
+	if _, err := Register(cfg, "work", root); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	env, err := Load(cfg, &hosttrust.AcceptanceStore{}, "work", nil, noBareLookPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Resolvable: the fixture's "warehouse-proxy" host service resolves to
+	// resolvedPath and gets a real digest.
+	resolvedBoM, err := ComputeBoM(env, nil, resolvingLookPath(map[string]string{"warehouse-proxy": resolvedPath}))
+	if err != nil {
+		t.Fatalf("ComputeBoM (resolvable): %v", err)
+	}
+	var resolvedOut bytes.Buffer
+	renderVerboseDetails(&resolvedOut, resolvedBoM)
+	if !strings.Contains(resolvedOut.String(), "sha256:"+wantSHA) {
+		t.Errorf("verbose (resolvable) = %q, want the digest sha256:%s", resolvedOut.String(), wantSHA)
+	}
+
+	// Unresolvable (noBareLookPath, exactly as every other test in this
+	// package already runs): the argv line prints, no sha256 line at all.
+	unresolvedBoM, err := ComputeBoM(env, nil, noBareLookPath)
+	if err != nil {
+		t.Fatalf("ComputeBoM (unresolvable): %v", err)
+	}
+	var unresolvedOut bytes.Buffer
+	renderVerboseDetails(&unresolvedOut, unresolvedBoM)
+	got := unresolvedOut.String()
+	if !strings.Contains(got, "host service warehouse-proxy") {
+		t.Errorf("verbose (unresolvable) = %q, want the host service argv line regardless", got)
+	}
+	if strings.Contains(got, "sha256:") {
+		t.Errorf("verbose (unresolvable) = %q, must not print a sha256 line when nothing could be resolved", got)
+	}
 }
