@@ -55,12 +55,19 @@ func commitEnvRegistryMutation(cfg *config.Config, apply func(fresh *config.Conf
 			return err
 		}
 		if cfg != nil && cfg != fresh {
-			// Synchronize the caller's in-memory view with the committed
-			// state (the fresh map, not a re-application of the stale one):
-			// a Deps-cached cfg that stays stale here would just re-create
-			// the lost update on the NEXT save from this process.
-			cfg.Environments = fresh.Environments
-			cfg.Environment = fresh.Environment
+			// Synchronize the caller's ENTIRE in-memory view with the
+			// committed state, not merely the two env-owned fields: fresh
+			// was just loaded under this same lock, so it already reflects
+			// every field any concurrent `pix config set`/pack/etc. writer
+			// committed while cfgA sat stale in memory. Copying only
+			// Environments/Environment left every OTHER field frozen at
+			// whatever cfgA held when it was first loaded — a lost update
+			// one level up, sprung the moment this same caller later calls
+			// cfg.Save() itself and reverts that concurrent write. *cfg =
+			// *fresh is a value copy of the whole struct (maps/slices keep
+			// pointing at fresh's underlying data, which is fine: fresh is
+			// a throwaway local, never mutated or reused after this).
+			*cfg = *fresh
 		}
 		return nil
 	})

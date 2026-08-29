@@ -290,6 +290,43 @@ func TestForget_RefusesWhenConcurrentUseMadeItTheDefault(t *testing.T) {
 	}
 }
 
+// ── commit: the ENTIRE fresh config syncs back, not just env fields ─────
+
+// TestCommit_SyncsEntireConfigIncludingUnrelatedFields is finding A3: a
+// concurrent process's change to a field commitEnvRegistryMutation does not
+// own (RunIntent here, standing in for any non-env key) must still be
+// visible on the caller's cfg after an env commit, and a LATER cfg.Save()
+// from that same caller must not revert it — that is the lost-update this
+// finding closes, one level up from the env-registry fields themselves.
+func TestCommit_SyncsEntireConfigIncludingUnrelatedFields(t *testing.T) {
+	tempConfigAndState(t)
+	cfgA := loadConfig(t) // stale snapshot: RunIntent still unset here
+
+	otherProcessCommit(t, func(c *config.Config) error {
+		c.RunIntent = "strategy"
+		return nil
+	})
+
+	if _, err := Add(cfgA, "mine", tier0Root(t), AddOptions{Yes: true, Out: &bytes.Buffer{}}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	if cfgA.RunIntent != "strategy" {
+		t.Errorf("cfgA.RunIntent = %q, want the concurrent unrelated field %q synced back after commit", cfgA.RunIntent, "strategy")
+	}
+
+	// A later caller Save() of the now-synced cfgA must not revert the
+	// concurrent unrelated field: it was already folded in, so re-saving is a
+	// no-op for RunIntent, not a regression back to the stale value.
+	if err := cfgA.Save(); err != nil {
+		t.Fatal(err)
+	}
+	fresh := freshConfig(t)
+	if fresh.RunIntent != "strategy" {
+		t.Errorf("a later caller Save() reverted the unrelated concurrent field: RunIntent = %q, want %q", fresh.RunIntent, "strategy")
+	}
+}
+
 // ── parallel: N concurrent disjoint adds all survive (run with -race) ─────
 
 func TestEnvMutations_ParallelDisjointAddsAllSurvive(t *testing.T) {
