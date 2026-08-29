@@ -12,7 +12,7 @@ import (
 )
 
 // testCfg is the one-backend, one-model config every roster test composes
-// against: a single callable binding "zai/glm-5", so BuildRoster's "known
+// against: a single callable binding "zai/glm-5", so buildRoster's "known
 // models" set is exactly {"zai/glm-5"}.
 func testCfg() *config.Config {
 	return &config.Config{Inference: config.InferenceConfig{
@@ -33,12 +33,12 @@ func testCfg() *config.Config {
 // never named an environment.
 func TestBuildRoster_EmptyMainIsNoRoster(t *testing.T) {
 	models := manifestModels(testCfg(), mustRegistry(t))
-	roster, err := BuildRoster(RosterInput{}, models)
+	roster, err := buildRoster(RosterInput{}, models)
 	if err != nil {
-		t.Fatalf("BuildRoster() error = %v, want nil", err)
+		t.Fatalf("buildRoster() error = %v, want nil", err)
 	}
 	if roster != nil {
-		t.Fatalf("BuildRoster() = %+v, want nil (no environment roster selected)", roster)
+		t.Fatalf("buildRoster() = %+v, want nil (no environment roster selected)", roster)
 	}
 }
 
@@ -47,17 +47,17 @@ func TestBuildRoster_EmptyMainIsNoRoster(t *testing.T) {
 // the doc's own bracket-table key spelling, and a reason naming the model.
 func TestBuildRoster_UndefinedMainModel_ExactError(t *testing.T) {
 	models := manifestModels(testCfg(), mustRegistry(t))
-	_, err := BuildRoster(RosterInput{Main: "zai/glm-4"}, models)
+	_, err := buildRoster(RosterInput{Main: "zai/glm-4"}, models)
 	if err == nil {
-		t.Fatal("BuildRoster() error = nil, want an undefined-model error")
+		t.Fatal("buildRoster() error = nil, want an undefined-model error")
 	}
 	rerr, ok := err.(*RosterError)
 	if !ok {
-		t.Fatalf("BuildRoster() error type = %T, want *RosterError", err)
+		t.Fatalf("buildRoster() error type = %T, want *RosterError", err)
 	}
 	want := &RosterError{File: "pix.toml", Key: "[models].main", Reason: `"zai/glm-4" is not a generated model`}
 	if *rerr != *want {
-		t.Fatalf("BuildRoster() error = %+v, want %+v", rerr, want)
+		t.Fatalf("buildRoster() error = %+v, want %+v", rerr, want)
 	}
 	wantText := `pix.toml: [models].main: "zai/glm-4" is not a generated model`
 	if rerr.Error() != wantText {
@@ -75,17 +75,17 @@ func TestBuildRoster_UndefinedAgentModel_ExactError(t *testing.T) {
 		Agents:        map[string]string{"engineer": "zai/glm-4"},
 		ShippedAgents: []string{"engineer", "review"},
 	}
-	_, err := BuildRoster(in, models)
+	_, err := buildRoster(in, models)
 	if err == nil {
-		t.Fatal("BuildRoster() error = nil, want an undefined-model error")
+		t.Fatal("buildRoster() error = nil, want an undefined-model error")
 	}
 	rerr, ok := err.(*RosterError)
 	if !ok {
-		t.Fatalf("BuildRoster() error type = %T, want *RosterError", err)
+		t.Fatalf("buildRoster() error type = %T, want *RosterError", err)
 	}
 	want := &RosterError{File: "pix.toml", Key: "[agents].engineer", Reason: `"zai/glm-4" is not a generated model`}
 	if *rerr != *want {
-		t.Fatalf("BuildRoster() error = %+v, want %+v", rerr, want)
+		t.Fatalf("buildRoster() error = %+v, want %+v", rerr, want)
 	}
 }
 
@@ -98,12 +98,12 @@ func TestBuildRoster_AbsentAgentMapsToMain(t *testing.T) {
 		Agents:        map[string]string{"engineer": "zai/glm-5"},
 		ShippedAgents: []string{"engineer", "review", "fanout"},
 	}
-	roster, err := BuildRoster(in, models)
+	roster, err := buildRoster(in, models)
 	if err != nil {
-		t.Fatalf("BuildRoster() error = %v", err)
+		t.Fatalf("buildRoster() error = %v", err)
 	}
 	if roster == nil {
-		t.Fatal("BuildRoster() = nil, want a roster")
+		t.Fatal("buildRoster() = nil, want a roster")
 	}
 	if roster.Main != "zai/glm-5" {
 		t.Fatalf("roster.Main = %q, want zai/glm-5", roster.Main)
@@ -127,9 +127,9 @@ func TestBuildRoster_AbsentAgentMapsToMain(t *testing.T) {
 func TestBuildRoster_CustomAgentNotShippedGetsNoEntry(t *testing.T) {
 	models := manifestModels(testCfg(), mustRegistry(t))
 	in := RosterInput{Main: "zai/glm-5", ShippedAgents: []string{"engineer"}}
-	roster, err := BuildRoster(in, models)
+	roster, err := buildRoster(in, models)
 	if err != nil {
-		t.Fatalf("BuildRoster() error = %v", err)
+		t.Fatalf("buildRoster() error = %v", err)
 	}
 	if _, ok := roster.Agents["custom-agent"]; ok {
 		t.Fatalf("roster.Agents = %+v, must not carry an entry for an unnamed custom agent", roster.Agents)
@@ -151,9 +151,9 @@ func TestBuildRoster_AuthoredAgentOverridesShippedDefault(t *testing.T) {
 		Agents:        map[string]string{"review": "google/gemini-3.1-pro-preview"},
 		ShippedAgents: []string{"engineer", "review"},
 	}
-	roster, err := BuildRoster(in, models)
+	roster, err := buildRoster(in, models)
 	if err != nil {
-		t.Fatalf("BuildRoster() error = %v", err)
+		t.Fatalf("buildRoster() error = %v", err)
 	}
 	if roster.Agents["engineer"] != "zai/glm-5" {
 		t.Fatalf("roster.Agents[engineer] = %q, want the main default", roster.Agents["engineer"])
@@ -164,7 +164,7 @@ func TestBuildRoster_AuthoredAgentOverridesShippedDefault(t *testing.T) {
 }
 
 // TestManifestModelsAlwaysReferenceAGeneratedBackend pins the invariant
-// BuildRoster's validation leans on: every model CompileInferenceRuntime
+// buildRoster's validation leans on: every model CompileInferenceRuntime
 // emits already references a backend present in the SAME manifest's
 // Backends map — never a backend narrowed out by exclusivity or otherwise
 // absent — so validating a roster reference against the model list is
@@ -188,7 +188,7 @@ func TestManifestModelsAlwaysReferenceAGeneratedBackend(t *testing.T) {
 
 // TestCompileInferenceRuntime_RosterErrorPropagates confirms an invalid
 // roster fails CompileInferenceRuntime itself (the composition boundary a
-// real caller uses), carrying the same *RosterError a direct BuildRoster
+// real caller uses), carrying the same *RosterError a direct buildRoster
 // call produces — never swallowed into a generic error.
 func TestCompileInferenceRuntime_RosterErrorPropagates(t *testing.T) {
 	cfg := testCfg()

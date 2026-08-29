@@ -17,9 +17,15 @@ import (
 )
 
 // RosterInput is the typed composition-boundary input for the literal
-// roster. A zero value means "no environment roster is in effect": every
-// existing caller that has not been taught to resolve one yet passes this,
-// and BuildRoster's result is nil with no error, so the manifest carries no
+// roster, and the ONLY roster-shaped type this package exports: an external
+// caller resolves the environment's typed facts on its own and hands them
+// across the boundary as a RosterInput to CompileInferenceRuntime or
+// SynthesizeInferenceKit — composition against the generated model list
+// (buildRoster, unexported below) is an internal step of those two
+// functions, never a separate call an outside package makes itself. A zero
+// value means "no environment roster is in effect": every existing caller
+// that has not been taught to resolve one yet passes this, and
+// buildRoster's result is nil with no error, so the manifest carries no
 // "roster" key at all — the additive-field guarantee holds for every caller
 // this story does not touch.
 type RosterInput struct {
@@ -57,7 +63,7 @@ func (e *RosterError) Error() string {
 // rosterSourceFile is the one sidecar file every roster fact comes from.
 const rosterSourceFile = "pix.toml"
 
-// BuildRoster composes and validates a manifest roster from in against
+// buildRoster composes and validates a manifest roster from in against
 // models — the SAME generated model list the manifest is about to ship,
 // never a second, divergent resolution path. Every model in models already
 // references a backend the manifest generates a provider for
@@ -66,9 +72,20 @@ const rosterSourceFile = "pix.toml"
 // reference for membership in models IS checking "resolves to a model whose
 // backend Pix generates a provider for" — one set, one check.
 //
-// A blank in.Main means no environment roster is selected: BuildRoster
+// A blank in.Main means no environment roster is selected: buildRoster
 // returns (nil, nil), and the manifest omits "roster" entirely.
-func BuildRoster(in RosterInput, models []runtimeModel) (*runtimeRoster, error) {
+//
+// Unexported on purpose: models and the *runtimeRoster result are this
+// package's own runtime types, which an external caller can neither
+// construct nor name. The only sanctioned composition boundary is
+// RosterInput through CompileInferenceRuntime/SynthesizeInferenceKit (see
+// RosterInput's doc); this is the one call site that resolves the SAME
+// manifest.Models those functions are about to ship, so exporting a second
+// entry point here would only invite a caller to validate against a
+// divergent, hand-built model list. See TestPublicAPINeverExposesUnexported
+// in public_api_test.go, which fails the build the moment any exported
+// function parameter references an unexported package type again.
+func buildRoster(in RosterInput, models []runtimeModel) (*runtimeRoster, error) {
 	if strings.TrimSpace(in.Main) == "" {
 		return nil, nil
 	}

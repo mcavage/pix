@@ -236,11 +236,11 @@ func CompileInferenceRuntime(cfg *config.Config, now time.Time, roster RosterInp
 		}
 		manifest.Backends[name] = runtimeBackend{Driver: b.Driver, Protocol: b.Protocol, BaseURL: b.BaseURL, Auth: b.Auth, KeyEnv: b.KeyEnv}
 	}
-	// roster.go's BuildRoster validates against manifest.Models — the exact
+	// roster.go's buildRoster validates against manifest.Models — the exact
 	// set this manifest ships — never a separate resolution path; a
 	// zero-value RosterInput (every caller not yet taught to resolve one)
 	// builds no roster at all, so the additive field stays fully absent.
-	r, err := BuildRoster(roster, manifest.Models)
+	r, err := buildRoster(roster, manifest.Models)
 	if err != nil {
 		return routing.CompiledRouting{}, runtimeInferenceManifest{}, err
 	}
