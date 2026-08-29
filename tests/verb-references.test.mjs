@@ -144,6 +144,11 @@ const RETIRED_ON_PURPOSE = [
 	{ file: "AGENTS.md", verb: "host", says: /DELETED|retired|PIX_RETIRED/ },
 	{ file: "AGENTS.md", verb: "gworkspace", says: /old|deleted|retired/ },
 	{ file: "AGENTS.md", verb: "loaded", says: /deleted it/ },
+	// D2/D3: `pix env rm` is deliberately never a working verb (env_cmd.go's
+	// envCmd has no Rm field at all) — its own doc comments say so, in the
+	// same "naming a thing that does not exist in order to say it does not
+	// exist" sense every other RETIRED_ON_PURPOSE entry covers.
+	{ file: "services/host/cmd/pix/env_cmd.go", verb: "rm", says: /is never one|not owning its files/ },
 ];
 
 // docs/design/** is excluded from SURFACES above because it is mostly HISTORY:

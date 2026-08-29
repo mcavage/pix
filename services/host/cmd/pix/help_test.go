@@ -192,6 +192,77 @@ func TestHelpAll_ListsExpertVerbs(t *testing.T) {
 
 // TestSuggestVerb: a near-miss typo suggests the closest verb; a far-off input
 // yields no suggestion.
+// TestHelpAll_EnvIsFirstUnderConfigAndContext: PRD §5.10/AC-62 — `pix help
+// --all` lists `env` under the "Config & context" group as its FIRST row
+// (before `config`), and its line is the exact seven-verb contract string
+// D24/AC-27/AC-62 fix, even though only ls/show/review are wired yet
+// (E1.9's own scope: "Help group line ... per PRD section 5.10").
+func TestHelpAll_EnvIsFirstUnderConfigAndContext(t *testing.T) {
+	all := helpAll()
+	idx := strings.Index(all, "Config & context")
+	if idx < 0 {
+		t.Fatalf("help --all has no \"Config & context\" group:\n%s", all)
+	}
+	rest := all[idx:]
+	lines := strings.Split(rest, "\n")
+	// lines[0] is the group header itself; the first VERB row follows.
+	var firstVerbLine string
+	for _, l := range lines[1:] {
+		if strings.TrimSpace(l) != "" {
+			firstVerbLine = l
+			break
+		}
+	}
+	if !strings.Contains(firstVerbLine, "env") {
+		t.Errorf("first row under Config & context = %q, want it to name `env`", firstVerbLine)
+	}
+	const wantLine = "Named launch contexts: ls | add | use | show | edit | review | forget."
+	if !strings.Contains(firstVerbLine, wantLine) {
+		t.Errorf("env's help --all line = %q, want it to contain the PRD §5.10 group line %q", firstVerbLine, wantLine)
+	}
+	// config must come AFTER env, not before it.
+	if ci := strings.Index(rest, "config"); ci < strings.Index(rest, "env") {
+		t.Errorf("`config` appears before `env` under Config & context:\n%s", rest)
+	}
+}
+
+// TestHelpAll_NoEnvCurrentVerb: D20 — there is no `pix env current`. `ls`
+// marks the default and `show --path` prints the root; a third read verb
+// for one fact is the surface D20 refuses.
+func TestHelpAll_NoEnvCurrentVerb(t *testing.T) {
+	if strings.Contains(helpAll(), "current") {
+		t.Errorf("help --all mentions `current`, want no such env verb (D20):\n%s", helpAll())
+	}
+	var out bytes.Buffer
+	d := &cli.Deps{Out: &out, Err: &out}
+	if err := cli.RunRoot[envCmd]("pix env", "", "", []string{"--help"}, d); err != nil {
+		t.Fatalf("env --help: %v", err)
+	}
+	if strings.Contains(out.String(), "current") {
+		t.Errorf("pix env --help mentions `current`:\n%s", out.String())
+	}
+}
+
+// TestEnvHelp_PerVerbFirstLinesMatchPRD: PRD §5.10's per-verb first lines,
+// exact, for the three verbs E1.9 wires (ls, show, review).
+func TestEnvHelp_PerVerbFirstLinesMatchPRD(t *testing.T) {
+	var out bytes.Buffer
+	d := &cli.Deps{Out: &out, Err: &out}
+	if err := cli.RunRoot[envCmd]("pix env", "", "", []string{"--help"}, d); err != nil {
+		t.Fatalf("env --help: %v", err)
+	}
+	got := out.String()
+	for _, want := range []string{
+		"List registered environments. Marks the default.",
+		"What NAME is: files, models, mounts, MCP, review state, drift.",
+		"Read and accept what NAME runs on your host.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("pix env --help missing PRD §5.10 line %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestSuggestVerb(t *testing.T) {
 	if s, ok := suggestVerb("memoyr"); !ok || s != "memory" {
 		t.Errorf("suggestVerb(memoyr) = %q,%v, want memory,true", s, ok)

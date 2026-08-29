@@ -65,6 +65,7 @@ type rootCmd struct {
 	Models ModelsCmd `cmd:"" group:"Models & agents" help:"Which models pix can use, and which are wired."`
 	Agent  AgentCmd  `cmd:"" group:"Models & agents" help:"List the roster: resolved model + WHY (new/edit/rm/reassess retired; edit agents/*.md)."`
 
+	Env    envCmd    `cmd:"" group:"Config & context" help:"Named launch contexts: ls | add | use | show | edit | review | forget."`
 	Config configCmd `cmd:"" group:"Config & context" help:"show | path | get | set | unset."`
 
 	Task taskCmd `cmd:"" group:"Parallel work" help:"Parallel task checkouts of one repo."`
