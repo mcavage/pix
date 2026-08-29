@@ -30,6 +30,7 @@ import (
 	"pix/host/service"
 	"pix/host/uat"
 	"pix/host/workflow/doctor"
+	nativeenv "pix/host/workflow/env"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/pack"
 	"pix/host/workflow/provision"
@@ -321,6 +322,14 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	cfg, _, err := workspace.LoadResolvedConfig()
 	if err != nil {
 		return runFail(d, 1, "%v", err)
+	}
+	// D13/AC-59: the one quiet, negative-first nudge about an unregistered
+	// workspace `.sbxenv.yaml` — read-only, no prompt, no config mutation, at
+	// most once per canonical workspace ever (workflow/env.RunHint owns every
+	// suppression rule: a registered environment anywhere, an already-shown
+	// durable marker, or no file at all all resolve to "").
+	if hint := nativeenv.RunHint(cfg, o.Workspace); hint != "" {
+		fmt.Fprint(d.Err, hint)
 	}
 	if !inference.AllowsModel(cfg, o.Model) {
 		return runFail(d, 2, "model %q is not available through the configured inference backends", o.Model)

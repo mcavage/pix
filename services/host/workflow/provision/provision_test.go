@@ -313,6 +313,27 @@ func TestRenderNamesWhatWasAppliedAndWhatRemains(t *testing.T) {
 	}
 }
 
+// TestRender_ClosingEnvironmentPointer pins D13/AC-58: the closing block
+// names `pix help env` exactly once, and nothing else about environments—
+// no `pix env add`, no `pix env use`, no implication that one is required.
+func TestRender_ClosingEnvironmentPointer(t *testing.T) {
+	var buf bytes.Buffer
+	Outcome{}.Render(&buf)
+	out := buf.String()
+	const want = "Environments are optional and not part of this setup: pix help env"
+	if !strings.Contains(out, want) {
+		t.Fatalf("render = %q, want the exact closing line %q", out, want)
+	}
+	if n := strings.Count(out, "pix help env"); n != 1 {
+		t.Errorf("render names `pix help env` %d times, want exactly 1:\n%s", n, out)
+	}
+	for _, forbidden := range []string{"pix env add", "pix env use", "pix env review", "pix env ls"} {
+		if strings.Contains(out, forbidden) {
+			t.Errorf("render names %q; the closing block must name only `pix help env`:\n%s", forbidden, out)
+		}
+	}
+}
+
 func TestBudgetIsHonoured(t *testing.T) {
 	o := Run(context.Background(), Options{Budget: 50 * time.Millisecond}, Step{
 		Name:  "slow",
