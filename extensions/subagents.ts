@@ -303,7 +303,7 @@ function loadAgentsFromDir(
 		// every child (cloud may be unavailable); otherwise explicit `model:`
 		// wins (back-compat); otherwise the selected environment's
 		// `roster.agents[<this agent's own name>]`; otherwise `roster.main`.
-		// Nothing left unresolved inherits the parent session's own model —
+		// Anything left unresolved inherits the parent session's own model —
 		// including an agent name absent from the roster, which is the normal,
 		// unremarkable case (most agents have no override), not a warning.
 		let model = PARENT_OLLAMA_MODEL || explicitModel;
