@@ -60,40 +60,50 @@ func (e *UseNotReviewedError) Error() string {
 // A Tier0 environment has nothing to review (Review's own short-circuit:
 // "Tier0 ... return accepted with NO output"), so Use never gates one.
 //
-// On success it calls cfg.UseEnvironment(name), which sets ONLY
-// cfg.Environment — no other field, no Save(): the caller (cmd/pix's `env
-// use`) still owns persisting cfg, exactly as Register's own doc comment
-// already establishes for `add`. On any refusal cfg is left completely
-// untouched.
+// The WHOLE of Use — resolve, validate, gate, set, save — runs under the
+// env-registry lock (commit.go), against a FRESH under-lock reload of the
+// live config, never the caller's possibly stale cfg (Wave C security L1):
+// a name another process just forgot refuses as unknown, a name another
+// process just repointed is validated as what it points at NOW, and the
+// save is of the fresh document, so a registration committed by a
+// concurrent process is never reverted. Holding the lock across the whole
+// verb is the simpler of the two safe shapes and is safe HERE because Use
+// never prompts: its longest step is a bounded filesystem walk, nowhere
+// near the flock's 30-second budget (contrast add.go's
+// commitAddRegistration, which must go optimistic because of its prompt).
+// On success the caller's cfg is synchronized with the committed state;
+// on any refusal both cfg and the file are left completely untouched.
 //
 // lookPath is threaded straight to Load/ComputeBoM, exactly as
 // env_cmd.go's `env review`/`env show` already do; nil defaults to the
 // real exec.LookPath (ResolveLocalCommand's own contract).
 func Use(cfg *config.Config, name string, lookPath func(string) (string, error)) error {
-	ts, err := loadEnvironmentTrustStore()
-	if err != nil {
-		return err
-	}
-	loaded, err := Load(cfg, &ts.AcceptanceStore, name, nil, lookPath)
-	if err != nil {
-		return err
-	}
-	bom, err := ComputeBoM(loaded, nil, lookPath)
-	if err != nil {
-		return err
-	}
-	if bom.Tier1() {
-		fp, err := Fingerprint(bom)
+	return commitEnvRegistryMutation(cfg, func(fresh *config.Config) error {
+		ts, err := loadEnvironmentTrustStore()
 		if err != nil {
 			return err
 		}
-		rec, ok := ts.Get(loaded.Subject)
-		if !ok {
-			return cli.UsageError{Err: &UseNotReviewedError{Name: name}}
+		loaded, err := Load(fresh, &ts.AcceptanceStore, name, nil, lookPath)
+		if err != nil {
+			return err
 		}
-		if rec.Fingerprint != fp {
-			return cli.UsageError{Err: &UseNotReviewedError{Name: name, Changed: true}}
+		bom, err := ComputeBoM(loaded, nil, lookPath)
+		if err != nil {
+			return err
 		}
-	}
-	return cfg.UseEnvironment(name)
+		if bom.Tier1() {
+			fp, err := Fingerprint(bom)
+			if err != nil {
+				return err
+			}
+			rec, ok := ts.Get(loaded.Subject)
+			if !ok {
+				return cli.UsageError{Err: &UseNotReviewedError{Name: name}}
+			}
+			if rec.Fingerprint != fp {
+				return cli.UsageError{Err: &UseNotReviewedError{Name: name, Changed: true}}
+			}
+		}
+		return fresh.UseEnvironment(name)
+	})
 }

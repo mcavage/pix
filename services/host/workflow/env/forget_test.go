@@ -12,7 +12,7 @@ import (
 // ── happy path: unregisters, touches no source bytes ─────────────────────
 
 func TestForget_UnregistersAndLeavesSourceByteIdentical(t *testing.T) {
-	tempConfig(t)
+	tempConfigAndState(t)
 	cfg := loadConfig(t)
 	envDir := t.TempDir()
 	sentinel := filepath.Join(envDir, ".sbxenv.yaml")
@@ -31,6 +31,9 @@ func TestForget_UnregistersAndLeavesSourceByteIdentical(t *testing.T) {
 
 	root, err := Register(cfg, "home", envDir)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Save(); err != nil { // Forget commits against the live file
 		t.Fatal(err)
 	}
 
@@ -64,7 +67,7 @@ func TestForget_UnregistersAndLeavesSourceByteIdentical(t *testing.T) {
 // ── unknown name ──────────────────────────────────────────────────────────
 
 func TestForget_UnknownNameRefuses(t *testing.T) {
-	tempConfig(t)
+	tempConfigAndState(t)
 	cfg := loadConfig(t)
 
 	_, err := Forget(cfg, "hoem", NoLiveHolders)
@@ -79,12 +82,15 @@ func TestForget_UnknownNameRefuses(t *testing.T) {
 // ── current default refuses, with no override ────────────────────────────
 
 func TestForget_CurrentDefaultRefuses(t *testing.T) {
-	tempConfig(t)
+	tempConfigAndState(t)
 	cfg := loadConfig(t)
 	if _, err := Register(cfg, "home", t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
 	if err := cfg.UseEnvironment("home"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Save(); err != nil { // Forget commits against the live file
 		t.Fatal(err)
 	}
 
@@ -110,9 +116,12 @@ func TestForget_CurrentDefaultRefuses(t *testing.T) {
 // ── live holder refuses ───────────────────────────────────────────────────
 
 func TestForget_LiveHolderRefuses(t *testing.T) {
-	tempConfig(t)
+	tempConfigAndState(t)
 	cfg := loadConfig(t)
 	if _, err := Register(cfg, "home", t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Save(); err != nil {
 		t.Fatal(err)
 	}
 	held := func(name string) (bool, error) { return true, nil }
@@ -136,9 +145,12 @@ func TestForget_LiveHolderRefuses(t *testing.T) {
 // ── unknown holder-probe outcome fails closed ─────────────────────────────
 
 func TestForget_UnknownHolderProbeFailsClosed(t *testing.T) {
-	tempConfig(t)
+	tempConfigAndState(t)
 	cfg := loadConfig(t)
 	if _, err := Register(cfg, "home", t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Save(); err != nil {
 		t.Fatal(err)
 	}
 	unknown := func(name string) (bool, error) { return false, errors.New("sbx unreachable") }
@@ -162,9 +174,12 @@ func TestForget_UnknownHolderProbeFailsClosed(t *testing.T) {
 // ── nil probe defaults to NoLiveHolders ───────────────────────────────────
 
 func TestForget_NilProbeDefaultsToNoLiveHolders(t *testing.T) {
-	tempConfig(t)
+	tempConfigAndState(t)
 	cfg := loadConfig(t)
 	if _, err := Register(cfg, "home", t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Save(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Forget(cfg, "home", nil); err != nil {

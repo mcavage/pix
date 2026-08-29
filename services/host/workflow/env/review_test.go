@@ -33,6 +33,12 @@ func reviewFixture(t *testing.T, name string) (string, *config.Config) {
 	if _, err := Register(cfg, name, root); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
+	// Persist the registration: Use/Forget commit against a FRESH
+	// under-lock reload of the live file (commit.go), exactly as
+	// production always runs them after a persisted `pix env add`.
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
 	return root, cfg
 }
 

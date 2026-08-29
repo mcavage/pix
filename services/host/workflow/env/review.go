@@ -20,6 +20,15 @@
 // refusal (symlinked root/reference, containment, strict parse) exactly as
 // the first one did, so a mutation introduced during an interactive
 // prompt's wait fails the SAME way a first-time Load would.
+//
+// Re-running the refusals alone is not enough, though: a PARSE-VALID
+// mutation (an argv swap, a credential ref pointed elsewhere, a changed
+// interpolation expression) loads cleanly both times and would otherwise
+// be fingerprinted and persisted as if it were the bill the human read.
+// So Review also pins the fingerprint of the RENDERED bill before the
+// prompt, and the under-lock recompute must reproduce it byte-identically;
+// any drift refuses (ReviewChangedDuringPromptError, exit 2) and persists
+// nothing at all — the trust store's bytes are exactly what they were.
 package env
 
 import (
@@ -296,6 +305,24 @@ func gate(in io.Reader, out io.Writer, tty, yes bool, name string, b BillOfMater
 	return cli.UsageError{Err: fmt.Errorf("environment %q not accepted (you said no)", name)}
 }
 
+// ReviewChangedDuringPromptError is Review's commit-time refusal (Wave C
+// security H1) when the host-execution footprint recomputed UNDER the
+// acceptance-store lock no longer fingerprints to the bill that was
+// rendered before the prompt: someone (or something) rewrote a parse-valid
+// facet — a command's argv, a credential target, an interpolation
+// expression — while the [y/N] was waiting for an answer. The consent that
+// was given applies to a bill that no longer exists, so nothing is
+// recorded, and the only honest next step is reading the current bill.
+type ReviewChangedDuringPromptError struct{ Name string }
+
+func (e *ReviewChangedDuringPromptError) Error() string {
+	return fmt.Sprintf(
+		"pix: environment %q changed its host-execution footprint while the review prompt was open.\n"+
+			"     recorded: nothing; the bill you answered is not the bill on disk now.\n"+
+			"     read the current bill: pix env review %s",
+		e.Name, e.Name)
+}
+
 // ── Review: the composed entry point ─────────────────────────────────────
 
 // ReviewOptions groups review's I/O and mode — everything a future `pix env
@@ -353,6 +380,15 @@ func Review(cfg *config.Config, name string, effective EffectiveMounts, lookPath
 		return &ReviewResult{Accepted: true}, nil
 	}
 
+	// Pin the fingerprint of the bill ABOUT TO BE RENDERED, before any
+	// prompt can wait: this is the exact surface the consent below applies
+	// to, and the under-lock recompute must reproduce it or the acceptance
+	// is refused (see this file's TOCTOU doc comment).
+	renderedFP, err := Fingerprint(bom)
+	if err != nil {
+		return nil, err
+	}
+
 	out := opts.Out
 	if out == nil {
 		out = io.Discard
@@ -381,6 +417,14 @@ func Review(cfg *config.Config, name string, effective EffectiveMounts, lookPath
 		fp, err := Fingerprint(freshBoM)
 		if err != nil {
 			return err
+		}
+		if fp != renderedFP {
+			// A parse-valid mutation the reload's refusals cannot catch:
+			// the surface loads cleanly but is no longer the one the
+			// human consented to. Refuse (exit 2) and persist NOTHING —
+			// returning an error here aborts LoadMutateSave before its
+			// save step, so the store's bytes stay exactly as they were.
+			return cli.UsageError{Err: &ReviewChangedDuringPromptError{Name: name}}
 		}
 		s.Put(Subject(reloaded.Root), hosttrust.Record{Fingerprint: fp})
 		result = ReviewResult{Accepted: true, Fingerprint: fp}

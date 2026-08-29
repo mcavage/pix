@@ -171,6 +171,55 @@ func candidateConfig(cfg *config.Config) *config.Config {
 	return &clone
 }
 
+// commitAddRegistration is Add's ONE commit point, shared by both entry
+// shapes: under the env-registry lock, fresh-load the live config, enforce
+// the expected-state precondition, register, save (commit.go). The
+// precondition is optimistic-concurrency, deliberately: the lock is NOT
+// held across Review's interactive prompt (an unbounded human wait inside
+// a 30-second-budget flock would make every concurrent env mutation time
+// out spuriously), so whatever another process committed while the prompt
+// was open is re-read here and judged fresh:
+//
+//   - name absent, or already registered to this SAME canonical root:
+//     proceed (two identical concurrent adds are idempotent);
+//   - name registered to a DIFFERENT root: refuse deterministically
+//     (ConcurrentRegistrationError, exit 2) — never silently repoint a
+//     registration this add's review never saw.
+//
+// The expected state is what THIS add observed in its caller's cfg when it
+// started (observed/observedOK, captured before Review could wait on a
+// human): a deliberate repoint — `add NAME NEWPATH` over an existing
+// registration the user could see — is ordinary and proceeds when the live
+// config still matches what they saw; ANY intervening change to this name
+// (registered where it was absent, repointed elsewhere, or forgotten)
+// refuses deterministically instead of being silently overwritten. The
+// name already registered to canonRoot itself is always fine: two
+// identical concurrent adds are idempotent.
+//
+// A refusal here can leave an acceptance record for canonRoot in the trust
+// store (Review persisted it before this commit ran). That is harmless and
+// honest: the human really did review that root; acceptance is keyed by
+// root, never by name (AC-16), so the record grants nothing to the name's
+// current registration.
+func commitAddRegistration(cfg *config.Config, name, path, canonRoot, observed string, observedOK bool) error {
+	return commitEnvRegistryMutation(cfg, func(fresh *config.Config) error {
+		existing, ok := fresh.Environments[name]
+		switch {
+		case ok && existing == canonRoot:
+			// idempotent: the live config already says exactly this
+		case ok == observedOK && existing == observed:
+			// unchanged since this add started: absent both times, or
+			// still the same root the user is deliberately repointing from
+		case ok:
+			return cli.UsageError{Err: &ConcurrentRegistrationError{Name: name, Existing: existing, Attempted: canonRoot}}
+		default:
+			return cli.UsageError{Err: &ConcurrentRegistrationError{Name: name, Attempted: canonRoot}}
+		}
+		_, err := fresh.AddEnvironment(name, path)
+		return err
+	})
+}
+
 // reviewOptionsFrom adapts AddOptions straight into ReviewOptions — the
 // one seam that would otherwise have to be repeated in both registerAdd
 // and scaffoldAdd.
@@ -185,6 +234,10 @@ func registerAdd(cfg *config.Config, name, path string, opts AddOptions) (*AddRe
 	if out == nil {
 		out = io.Discard
 	}
+
+	// The expected-state snapshot commitAddRegistration compares against:
+	// what the user could actually see when they asked for this add.
+	observed, observedOK := cfg.Environments[name]
 
 	candidate := candidateConfig(cfg)
 	canonRoot, err := candidate.AddEnvironment(name, path)
@@ -201,14 +254,10 @@ func registerAdd(cfg *config.Config, name, path string, opts AddOptions) (*AddRe
 		return nil, err
 	}
 
-	if _, err := cfg.AddEnvironment(name, path); err != nil {
-		// Unreachable in practice: candidate.AddEnvironment already
-		// accepted the identical name/path above. Guarded anyway so a
-		// future divergence between the two calls fails loudly rather than
-		// silently registering something Review never actually reviewed.
-		return nil, err
-	}
-	if err := cfg.Save(); err != nil {
+	if err := commitAddRegistration(cfg, name, path, canonRoot, observed, observedOK); err != nil {
+		if cli.ExitCode(err) == 2 {
+			return nil, err // a commit-time refusal (concurrent repoint), already fully worded
+		}
 		return nil, fmt.Errorf(
 			"pix: environment %q was reviewed and accepted, but saving the registration failed: %w (re-run `pix env add %s %s` to retry)",
 			name, err, name, path,
@@ -299,6 +348,11 @@ func scaffoldAdd(cfg *config.Config, name string, opts AddOptions) (*AddResult, 
 	// Tier0) fails.
 	fmt.Fprintln(out, root)
 
+	// Same expected-state snapshot as registerAdd's (see
+	// commitAddRegistration): scaffolding an already-registered name is
+	// a repoint like any other and gets the same concurrent-change gate.
+	observed, observedOK := cfg.Environments[name]
+
 	candidate := candidateConfig(cfg)
 	if _, err := candidate.AddEnvironment(name, root); err != nil {
 		return nil, err // unreachable: the same inputs were just accepted above
@@ -308,15 +362,15 @@ func scaffoldAdd(cfg *config.Config, name string, opts AddOptions) (*AddResult, 
 		return nil, err
 	}
 
-	if _, err := cfg.AddEnvironment(name, root); err != nil {
-		return nil, err // unreachable, see registerAdd's identical guard
-	}
-	if err := cfg.Save(); err != nil {
-		// committed stays false: the deferred cleanup above removes the
-		// scaffold whole, so a retry starts clean rather than tripping the
-		// scaffold-collision refusal against a directory nobody ever
-		// finished registering ("no partial dirs" holds for THIS failure
-		// too, not only a load/review failure).
+	if err := commitAddRegistration(cfg, name, root, root, observed, observedOK); err != nil {
+		// committed stays false on EITHER failure shape: the deferred
+		// cleanup above removes the scaffold whole, so a retry starts clean
+		// rather than tripping the scaffold-collision refusal against a
+		// directory nobody ever finished registering ("no partial dirs"
+		// holds for a commit failure too, not only a load/review failure).
+		if cli.ExitCode(err) == 2 {
+			return nil, err // a commit-time refusal (concurrent repoint), already fully worded
+		}
 		return nil, fmt.Errorf(
 			"pix: environment %q was scaffolded and accepted, but saving the registration failed: %w (re-run `pix env add %s` to retry)",
 			name, err, name,

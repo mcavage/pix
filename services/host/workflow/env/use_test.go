@@ -21,6 +21,9 @@ func TestUse_Tier0NeedsNoReview(t *testing.T) {
 	if _, err := Register(cfg, "home", root); err != nil {
 		t.Fatal(err)
 	}
+	if err := cfg.Save(); err != nil { // Use commits against the live file
+		t.Fatal(err)
+	}
 
 	if err := Use(cfg, "home", noBareLookPath); err != nil {
 		t.Fatalf("Use on a Tier0 environment: %v", err)

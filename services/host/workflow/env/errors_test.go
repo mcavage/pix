@@ -251,6 +251,36 @@ func TestErrorFamily_UseNotReviewed(t *testing.T) {
 		`environment "work" changed what it runs on your host`, "review it: pix env review work")
 }
 
+// ── review.go / commit.go: the two Wave C concurrency refusals ──────────
+
+func TestErrorFamily_ReviewChangedDuringPrompt(t *testing.T) {
+	err := &ReviewChangedDuringPromptError{Name: "work"}
+	assertRefusal(t, "footprint changed during the prompt", cli.UsageError{Err: err}, 1,
+		`environment "work" changed its host-execution footprint while the review prompt was open`,
+		"recorded: nothing",
+		"read the current bill: pix env review work")
+	// H1's contract is EXACTLY one runnable `pix env review work`, so a
+	// user can never pick the wrong one of two.
+	if got := strings.Count(err.Error(), "pix env review work"); got != 1 {
+		t.Errorf("message must name `pix env review work` exactly once, got %d", got)
+	}
+}
+
+func TestErrorFamily_ConcurrentRegistration(t *testing.T) {
+	repointed := &ConcurrentRegistrationError{Name: "work", Existing: "/env/theirs", Attempted: "/env/yours"}
+	assertRefusal(t, "concurrent repoint mid-add", cli.UsageError{Err: repointed}, 1,
+		`environment "work" now points at a different root`,
+		"theirs: /env/theirs",
+		"yours:  /env/yours",
+		"re-run to repoint it deliberately: pix env add work /env/yours")
+
+	forgotten := &ConcurrentRegistrationError{Name: "work", Attempted: "/env/yours"}
+	assertRefusal(t, "concurrent forget mid-add", cli.UsageError{Err: forgotten}, 1,
+		`environment "work" was unregistered by another process`,
+		"yours: /env/yours",
+		"re-run to register it deliberately: pix env add work /env/yours")
+}
+
 // ── forget.go: current default, live holder (both branches) ─────────────
 
 func TestErrorFamily_ForgetCurrentDefault(t *testing.T) {
@@ -276,11 +306,14 @@ func TestErrorFamily_ForgetLiveHolder(t *testing.T) {
 // comment on Forget's probe parameter), so this is exercised directly
 // against the workflow function, not through dispatch.
 func TestErrorFamily_ForgetLiveHolder_ViaForget(t *testing.T) {
-	tempConfig(t)
+	tempConfigAndState(t)
 	cfg := loadConfig(t)
 	root := t.TempDir()
 	writeEnvFile(t, root, ".sbxenv.yaml", minimalSbxenv)
 	if _, err := Register(cfg, "work", root); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Save(); err != nil { // Forget commits against the live file
 		t.Fatal(err)
 	}
 

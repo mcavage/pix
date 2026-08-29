@@ -284,13 +284,16 @@ type envUseCmd struct {
 	Name string `arg:"" help:"Exact environment name."`
 }
 
-// Run performs env.Use's ONE gated mutation (cfg.Environment) then Saves —
-// the same "workflow mutates in memory, the command owns Save()" split
-// Register's own doc comment establishes for `add`. There is no lookPath
-// override here for the same reason `env review`/`env show` pass nil: a
-// real symlink/PATH check runs against the actual filesystem in
-// production, and a test reaches env.Use directly to inject one. Use never
-// launches anything — its whole effect ends at this one Save().
+// Run delegates env.Use's ONE gated mutation (cfg.Environment) whole:
+// validation, the mutation, AND the save all happen inside env.Use, under
+// the env-registry lock against a fresh under-lock config reload
+// (workflow/env/commit.go) — never a cfg.Save() here on the Deps-cached
+// copy, which may be stale against a concurrent pix process's commit.
+// There is no lookPath override here for the same reason `env review`/
+// `env show` pass nil: a real symlink/PATH check runs against the actual
+// filesystem in production, and a test reaches env.Use directly to inject
+// one. Use never launches anything — its whole effect ends at that one
+// locked commit.
 func (c *envUseCmd) Run(d *cli.Deps) error {
 	cfg, err := d.Config()
 	if err != nil {
@@ -298,9 +301,6 @@ func (c *envUseCmd) Run(d *cli.Deps) error {
 	}
 	if err := env.Use(cfg, c.Name, nil); err != nil {
 		return envRun(d, err)
-	}
-	if err := cfg.Save(); err != nil {
-		return err
 	}
 	fmt.Fprintf(d.Out, "pix: environment %q is now the default.\n", c.Name)
 	return nil
@@ -312,13 +312,14 @@ type envForgetCmd struct {
 	Name string `arg:"" help:"Exact environment name."`
 }
 
-// Run performs env.Forget's ONE gated mutation (unregistering c.Name, and
-// clearing the machine default only if it happened to name c.Name — which
-// Forget itself already refuses, so in practice this Save() only ever
-// touches [environments]) then Saves. No holder probe is wired here yet:
-// no launch cutover exists that could make one true (env.NoLiveHolders'
-// own doc comment), so nil defaults to it — the seam is real even though
-// nothing populates it today.
+// Run delegates env.Forget's ONE gated mutation (unregistering c.Name)
+// whole: refusals, the mutation, AND the save all happen inside env.Forget,
+// under the env-registry lock against a fresh under-lock config reload
+// (workflow/env/commit.go) — never a cfg.Save() here on the Deps-cached
+// copy, which may be stale against a concurrent pix process's commit. No
+// holder probe is wired here yet: no launch cutover exists that could make
+// one true (env.NoLiveHolders' own doc comment), so nil defaults to it —
+// the seam is real even though nothing populates it today.
 func (c *envForgetCmd) Run(d *cli.Deps) error {
 	cfg, err := d.Config()
 	if err != nil {
@@ -327,9 +328,6 @@ func (c *envForgetCmd) Run(d *cli.Deps) error {
 	root, err := env.Forget(cfg, c.Name, nil)
 	if err != nil {
 		return envRun(d, err)
-	}
-	if err := cfg.Save(); err != nil {
-		return err
 	}
 	fmt.Fprintf(d.Out, "pix: environment %q unregistered. Source untouched: %s\n", c.Name, root)
 	return nil

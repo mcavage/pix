@@ -86,24 +86,40 @@ func (e *ForgetLiveHolderError) Error() string {
 //
 // probe is threaded straight from the caller (cmd/pix's `env forget`); a
 // nil probe defaults to NoLiveHolders.
+// The whole check-then-unregister sequence runs under the env-registry
+// lock against a FRESH under-lock reload (commit.go, Wave C security L1),
+// so every refusal judges the config as it is NOW, not as this process
+// loaded it: a concurrent `use` that just made name the default refuses
+// here (never silently reverted), and the save is of the fresh document,
+// so a registration a concurrent `add` just committed is never lost.
+// Forget never prompts, so holding the lock across the whole verb is safe
+// (see Use's identical reasoning). On success the caller's cfg is
+// synchronized with the committed state.
 func Forget(cfg *config.Config, name string, probe HolderProbe) (root string, err error) {
-	root, ok := Root(cfg, name)
-	if !ok {
-		return "", cli.UsageError{Err: &config.UnknownEnvironmentError{Name: name, Known: Known(cfg)}}
+	err = commitEnvRegistryMutation(cfg, func(fresh *config.Config) error {
+		r, ok := Root(fresh, name)
+		if !ok {
+			return cli.UsageError{Err: &config.UnknownEnvironmentError{Name: name, Known: Known(fresh)}}
+		}
+		if fresh.Environment == name {
+			return cli.UsageError{Err: &ForgetCurrentDefaultError{Name: name}}
+		}
+		if probe == nil {
+			probe = NoLiveHolders
+		}
+		held, perr := probe(name)
+		if perr != nil {
+			return cli.UsageError{Err: &ForgetLiveHolderError{Name: name, Unknown: true}}
+		}
+		if held {
+			return cli.UsageError{Err: &ForgetLiveHolderError{Name: name}}
+		}
+		Unregister(fresh, name)
+		root = r
+		return nil
+	})
+	if err != nil {
+		return "", err
 	}
-	if cfg.Environment == name {
-		return "", cli.UsageError{Err: &ForgetCurrentDefaultError{Name: name}}
-	}
-	if probe == nil {
-		probe = NoLiveHolders
-	}
-	held, perr := probe(name)
-	if perr != nil {
-		return "", cli.UsageError{Err: &ForgetLiveHolderError{Name: name, Unknown: true}}
-	}
-	if held {
-		return "", cli.UsageError{Err: &ForgetLiveHolderError{Name: name}}
-	}
-	Unregister(cfg, name)
 	return root, nil
 }

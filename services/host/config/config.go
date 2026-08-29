@@ -329,6 +329,22 @@ func PidFileLockPath(path string) string {
 	return path + ".lock"
 }
 
+// EnvRegistryLockPath is the flock every `pix env` registry/default
+// mutation (add, use, forget) serializes on around its fresh-load ->
+// mutate -> save of config.toml — Wave C security L1: without one lock
+// shared by every env writer, two processes interleaving across a review
+// prompt lost-update each other's registrations. It lives in the STATE
+// dir with the other launcher-owned locks (ServeSpawnLockPath,
+// environmentTrustLockPath's reasoning): moving or renaming the CONFIG dir
+// aside (pix reset's .bak-<ts> rename) must never strand a held lock.
+func EnvRegistryLockPath() string {
+	dir, err := StateDir()
+	if err != nil {
+		return "env-registry.lock"
+	}
+	return filepath.Join(dir, "env-registry.lock")
+}
+
 // StateDir resolves the per-user state dir: $XDG_STATE_HOME/pix, else
 // ~/.local/state/pix. Runtime state and serve.log live here, never config.
 func StateDir() (string, error) {
