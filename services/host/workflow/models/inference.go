@@ -346,10 +346,20 @@ func ConfigureOllamaInference(cfg *config.Config, env hostenv.Env, sel OllamaSel
 	rungOK := false
 	if sel.Local {
 		plan.Memory = inference.ProbeHostMemory(env)
-		if rung, rungOK = inference.ChooseLocalRung(reg, plan.Memory); rungOK {
-			plan.BestFit = inference.OllamaTagFor(rung.ID)
+		// The RAM/download/context offer decision is a setup-only inference fact
+		// (E4.3, hardware.go), independent of the scored catalog; the offered
+		// rung is then looked up in the catalog so the rest of this flow (which
+		// still binds through routing.Model) sees the same shape it always has.
+		var offerRung inference.LocalOllamaRung
+		var offered bool
+		if offerRung, offered = inference.ChooseLocalRung(plan.Memory); offered {
+			if m, known := reg.Get(offerRung.ID); known {
+				rung = m
+				rungOK = true
+				plan.BestFit = inference.OllamaTagFor(rung.ID)
+			}
 		}
-		fmt.Fprintln(out, inference.LocalRungOfferLine(plan.Memory, rung, rungOK))
+		fmt.Fprintln(out, inference.LocalRungOfferLine(plan.Memory, offerRung, rungOK))
 	}
 	knownTags := map[string]bool{}
 	for _, m := range reg.Models {

@@ -104,10 +104,6 @@ func TestProbeHostMemoryReadsBothPlatformSeams(t *testing.T) {
 // a 32 GB Mac is offered the 9b, NOT the 27b — rev 1's arithmetic (weights
 // only, no KV term) offered the 27b to exactly the machine that thrashes on it.
 func TestChooseLocalRungByRAM(t *testing.T) {
-	reg, err := routing.LoadRegistry()
-	if err != nil {
-		t.Fatal(err)
-	}
 	for _, tc := range []struct {
 		goos    string
 		totalGB float64
@@ -140,7 +136,7 @@ func TestChooseLocalRungByRAM(t *testing.T) {
 		if !mem.OK {
 			t.Fatalf("%s %gGB: probe failed: %+v", tc.goos, tc.totalGB, mem)
 		}
-		rung, ok := ChooseLocalRung(reg, mem)
+		rung, ok := ChooseLocalRung(mem)
 		switch {
 		case tc.want == "" && ok:
 			t.Errorf("%s %gGB (usable %.1f): offered %s, want nothing", tc.goos, tc.totalGB, mem.UsableGB, rung.ID)
@@ -158,11 +154,7 @@ func TestChooseLocalRungByRAM(t *testing.T) {
 // hands a local model to exactly the machines the floor exists to protect,
 // since an unmeasured machine is likelier small than large.
 func TestUnknownMemoryOffersNothing(t *testing.T) {
-	reg, err := routing.LoadRegistry()
-	if err != nil {
-		t.Fatal(err)
-	}
-	rung, ok := ChooseLocalRung(reg, HostMemory{Source: "sysctl hw.memsize"})
+	rung, ok := ChooseLocalRung(HostMemory{Source: "sysctl hw.memsize"})
 	if ok {
 		t.Fatalf("an unsized machine was offered %s; unknown size must mean no local offer", rung.ID)
 	}
@@ -178,14 +170,33 @@ func TestUnknownMemoryOffersNothing(t *testing.T) {
 // rung's gate, and an exported helper that only a test calls is a claim the
 // product does not make.
 func TestMinRAMArithmeticMatchesTheShippedCatalog(t *testing.T) {
+	for _, m := range LocalOllamaRungs() {
+		want := math.Ceil(m.DownloadGB*1.15 + float64(m.ContextWindow)*m.KVGBPerTok + 1.0)
+		if want != m.MinRAMGB {
+			t.Errorf("%s: catalog min_ram_gb %g, recomputed %g", m.ID, m.MinRAMGB, want)
+		}
+	}
+}
+
+// TestLocalOllamaRungsMatchRoutingCatalog is a TRANSITIONAL drift guard: while
+// the (soon deleted) scored router's models.json still carries its own copy
+// of these four local rungs, the two tables must agree. Once the router is
+// gone this test's routing import goes with it; until then it is the thing
+// that catches a hand-edit to one table that forgot the other.
+func TestLocalOllamaRungsMatchRoutingCatalog(t *testing.T) {
 	reg, err := routing.LoadRegistry()
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, m := range routing.LocalRungs(reg) {
-		want := math.Ceil(m.DownloadGB*1.15 + float64(m.ContextWindow)*m.KVGBPerTok + 1.0)
-		if want != m.MinRAMGB {
-			t.Errorf("%s: catalog min_ram_gb %g, recomputed %g", m.ID, m.MinRAMGB, want)
+	want := routing.LocalRungs(reg)
+	got := LocalOllamaRungs()
+	if len(got) != len(want) {
+		t.Fatalf("LocalOllamaRungs() has %d rungs, routing catalog has %d", len(got), len(want))
+	}
+	for i, g := range got {
+		w := want[i]
+		if g.ID != w.ID || g.ContextWindow != w.ContextWindow || g.MinRAMGB != w.MinRAMGB || g.DownloadGB != w.DownloadGB || g.KVGBPerTok != w.KVGBPerTok {
+			t.Errorf("rung %d: inference table %+v, routing catalog %+v", i, g, w)
 		}
 	}
 }
