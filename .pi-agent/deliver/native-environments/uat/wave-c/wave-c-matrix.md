@@ -1,4 +1,4 @@
-# Wave C QA/UAT Matrix — E1.7–E1.15 `pix env`, committed HEAD 8ab00d7e
+# Wave C QA/UAT Matrix — E1.7–E1.15 `pix env`, closure HEAD 83385b0a (base comprehensive QA at 8ab00d7e)
 
 Executed by an independent QA subagent standing in for the `qa-lead` preset,
 which twice failed to start (local Ollama unavailable — an infrastructure
@@ -142,3 +142,37 @@ doctor/run-hint-once surfaces) passes at committed HEAD `8ab00d7e`. Full
 unstaged legal-doc cleanup stashed out and restored byte-identical
 afterward (verified by matching `git status` and matching patch SHA256).
 No claim in this document depends on an unavailable host `sbx`.
+
+## Appendix: final-patch closure at 83385b0a
+
+Everything above is the comprehensive 36-row QA pass at committed HEAD
+`8ab00d7e`; its per-row logs and that HEAD are unchanged and not restated
+here. One further small DX/copy nits patch landed after it, verified
+separately rather than by re-running or relabeling the 36 rows above:
+
+- **Patch:** `83385b0a` — `env use` help drops internal Tier1 jargon for
+  plain language; `show` JSON `model_count`/`mount_count`/`mcp_count` drop
+  `omitempty` so a zero count is never silently absent; the non-TTY review
+  refusal prints a leading blank line so it never glues to a shared-stream
+  `[y/N]` prompt; `SymlinkError`/`ScaffoldCollisionError`/
+  `UseNotReviewedError` now follow the error family's three-part
+  (failure/fact/runnable-command) form.
+- **Focused + race re-verification:** the six new/updated red-first tests
+  for those exact surfaces, plus a full `-race` re-run of `workflow/env` and
+  `workflow/reset`, all pass with no regressions against any of the 36 rows
+  above.
+- **Full top-level gate at 83385b0a:** all 11 segments PASS, total
+  **35.622s** (`logs/gate-final-closure-head.log`). The user's unstaged
+  legal-doc cleanup (7 files) was preserved exactly across this run: patch
+  sha256 `c6df92b5ac482047c92b7224c6e8427cb21ae829825c33f49d4057382dc0536d`
+  identical before and after, never staged.
+- **Reviews at closure:** official round1 BLOCK (3 original findings plus
+  later review/security findings surfaced across unit merges, all fixed
+  through `8ab00d7e`/`83385b0a`), round2 LGTM at `0bc0333b` (security review
+  run separately against that same head found M1, a terminal-control
+  injection risk at the trust-bill renderer), round3 LGTM at `8ab00d7e`
+  after the M1 fix, final-patch LGTM at `83385b0a`.
+- **Security final:** APPROVE. **Product final:** PM APPROVE; DX APPROVE
+  with the final small nits above fixed in `83385b0a`; UX findings
+  adjudicated and fixed, or explicitly D10/out-of-scope.
+- No claim in this appendix depends on an unavailable host `sbx` either.

@@ -1,6 +1,8 @@
 {
-  "head": "8ab00d7e",
-  "head_full": "8ab00d7eee26f2fdda82cc9716638ce17383bc50",
+  "head": "83385b0a",
+  "head_full": "83385b0a3c82a78da0c995122086257696891a62",
+  "base_comprehensive_qa_head": "8ab00d7e",
+  "base_comprehensive_qa_head_full": "8ab00d7eee26f2fdda82cc9716638ce17383bc50",
   "wave": "C",
   "units": "E1.7-E1.15",
   "round": "Final Wave C QA/UAT executed by an independent QA subagent after the qa-lead preset failed to start twice (local Ollama unavailable, infrastructure only)",
@@ -138,8 +140,40 @@
     {"severity": "NOTE", "text": "qa-lead preset Ollama-unavailable failure recorded as infrastructure, not product; QA substituted direct execution with no coverage loss."}
   ],
   "no_unavailable_host_sbx_claims": true,
+  "final_patch_closure": {
+    "description": "Final small DX/copy nits patch on top of the comprehensive QA base above (env use help plain-language, JSON zero-count omitempty removal, non-TTY review refusal blank-line, error-family three-part-form consistency).",
+    "patch_commit": "83385b0a3c82a78da0c995122086257696891a62",
+    "focused_and_race_review": {
+      "description": "Focused unit tests for the exact changed surfaces plus a full -race pass over workflow/env and workflow/reset re-run at the final head; no new races, no regressions in any previously-passing row above.",
+      "tests": [
+        "TestEnvUseHelp_PlainLanguageNoTier1",
+        "TestRenderShowJSON_CountsNeverOmittedAndAgreeWithHumanCounts",
+        "TestEnvReview_NonTTYFailsClosed_MergedStreamNeverGluesPromptToError",
+        "TestErrorFamily_SymlinkedRoot",
+        "TestErrorFamily_ScaffoldCollision",
+        "TestErrorFamily_UseNotReviewed"
+      ],
+      "result": "pass"
+    },
+    "gate": {
+      "verdict": "pass",
+      "segments_ok": 11,
+      "total_s": 35.622,
+      "git_head": "83385b0a3c82a78da0c995122086257696891a62",
+      "log": "logs/gate-final-closure-head.log"
+    },
+    "user_cleanup_preserved": {
+      "patch_sha256_before": "c6df92b5ac482047c92b7224c6e8427cb21ae829825c33f49d4057382dc0536d",
+      "patch_sha256_after": "c6df92b5ac482047c92b7224c6e8427cb21ae829825c33f49d4057382dc0536d",
+      "never_staged_or_committed": true
+    },
+    "reviews": "round1 BLOCK (3 original + later review/security findings, all fixed through 8ab00d7e/83385b0a), round2 LGTM at 0bc0333b (security separately found M1), round3 LGTM at 8ab00d7e, final patch LGTM at 83385b0a",
+    "security_final": "APPROVE",
+    "product_final": "PM APPROVE; DX APPROVE with final small nits fixed in 83385b0a; UX findings adjudicated/fixed or explicit D10/out-of-scope"
+  },
   "evidence": {
     "matrix": ".pi-agent/deliver/native-environments/uat/wave-c/wave-c-matrix.md",
-    "logs_dir": ".pi-agent/deliver/native-environments/uat/wave-c/logs/"
+    "logs_dir": ".pi-agent/deliver/native-environments/uat/wave-c/logs/",
+    "final_gate_log": ".pi-agent/deliver/native-environments/uat/wave-c/logs/gate-final-closure-head.log"
   }
 }

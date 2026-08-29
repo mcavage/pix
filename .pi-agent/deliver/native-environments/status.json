@@ -1,0 +1,1362 @@
+{
+  "acceptance_bar": "Replace selectable Pix packs and scored model routing with native sbx environments plus a literal Pi roster, preserve lifecycle/trust/host services/UAT, delete dead machinery, and commit a fully proven implementation.",
+  "product": {
+    "classification": "non-trivial",
+    "classification_reason": "Cross-cutting CLI, config, trust, launch, lifecycle, inference, UAT, and documentation redesign.",
+    "spec_path": ".pi-agent/deliver/native-environments/prd.md",
+    "roles": [
+      {
+        "role": "product-manager",
+        "phase": "0.5",
+        "status": "ran",
+        "reason": null,
+        "artifact": ".pi-agent/deliver/native-environments/product/pm-frame.md"
+      },
+      {
+        "role": "dx-consultant",
+        "phase": "0.5",
+        "status": "ran",
+        "reason": null,
+        "artifact": ".pi-agent/deliver/native-environments/product/dx.md"
+      },
+      {
+        "role": "ux-copywriter",
+        "phase": "0.5",
+        "status": "ran",
+        "reason": null,
+        "artifact": ".pi-agent/deliver/native-environments/product/copy.md"
+      },
+      {
+        "role": "product-manager",
+        "phase": "10",
+        "status": "pending",
+        "reason": null,
+        "artifact": ".pi-agent/deliver/native-environments/product/closeout-pm.md"
+      },
+      {
+        "role": "dx-consultant",
+        "phase": "10",
+        "status": "pending",
+        "reason": null,
+        "artifact": ".pi-agent/deliver/native-environments/product/closeout-dx.md"
+      },
+      {
+        "role": "ux-copywriter",
+        "phase": "10",
+        "status": "pending",
+        "reason": null,
+        "artifact": ".pi-agent/deliver/native-environments/product/closeout-copy.md"
+      }
+    ],
+    "taste_calls": [
+      {
+        "question": "Unregister verb",
+        "decision": "Use pix env forget; env rm remains unknown and performs nothing.",
+        "rationale": "rm implies deletion while unregistering preserves source files."
+      },
+      {
+        "question": "Environment editor target",
+        "decision": "Use exact positional pix|sbxenv, with TTY selection only.",
+        "rationale": "A hidden default between two files is ambiguous and does not scale."
+      },
+      {
+        "question": "Trust after edit",
+        "decision": "Print the explicit pix env review command; no inline consent.",
+        "rationale": "Consent remains a distinct auditable action."
+      },
+      {
+        "question": "Reset trust behavior",
+        "decision": "Invalidate all launcher-owned environment acceptances.",
+        "rationale": "Reset renames launcher state and must not create a second source-side trust store."
+      },
+      {
+        "question": "Recreate diagnostics",
+        "decision": "Keep 100 value-free local records; doctor is silent at zero and details require --recreates.",
+        "rationale": "Enough evidence to revisit recreate-only P0 without leaking values or adding telemetry."
+      },
+      {
+        "question": "Drift attribution",
+        "decision": "Diff the pre-composition semantic tree by stable native identity.",
+        "rationale": "Post-composition list indices can shift and name the wrong facet."
+      }
+    ],
+    "phase_0_5_done": true,
+    "closeout_done": false
+  },
+  "commands": {
+    "build": "cd services/host && go build ./...",
+    "test": "make gate",
+    "lint": "make gate (open-core, secret-scan, deadcode, invariant segments)",
+    "typecheck": "make gate (typecheck segment)"
+  },
+  "baseline": {
+    "build": "green",
+    "tests": "all gate packages passing",
+    "lint": "clean",
+    "typecheck": "clean",
+    "label": "BASELINE-GREEN",
+    "evidence": ".pi-agent/deliver/native-environments/logs/baseline-gate.log"
+  },
+  "review_model": "google/gemini-3.1-pro-preview",
+  "units": [
+    {
+      "id": "E0.1",
+      "status": "done",
+      "subagent_run_id": "e0.1"
+    },
+    {
+      "id": "E0.2",
+      "status": "done",
+      "subagent_run_id": "e0.2"
+    },
+    {
+      "id": "E0.3",
+      "status": "done",
+      "subagent_run_id": "e0.3"
+    },
+    {
+      "id": "E0.4",
+      "status": "done",
+      "subagent_run_id": "e0.4"
+    },
+    {
+      "id": "E0.5",
+      "status": "done",
+      "subagent_run_id": "e0.5"
+    },
+    {
+      "id": "E0.6",
+      "status": "done",
+      "subagent_run_id": "e0.6"
+    },
+    {
+      "id": "E0.7",
+      "status": "done",
+      "subagent_run_id": "run-20260824-110322-d24dac52"
+    },
+    {
+      "id": "E1.0",
+      "status": "done",
+      "subagent_run_id": "wave-b-e1.0"
+    },
+    {
+      "id": "E1.1",
+      "status": "done",
+      "subagent_run_id": "wave-b-e1.1"
+    },
+    {
+      "id": "E1.2",
+      "status": "done",
+      "subagent_run_id": "wave-b-e1.2"
+    },
+    {
+      "id": "E1.3",
+      "status": "done",
+      "subagent_run_id": "wave-b-e1.3"
+    },
+    {
+      "id": "E1.4",
+      "status": "done",
+      "subagent_run_id": "wave-b-e1.4"
+    },
+    {
+      "id": "E1.5",
+      "status": "done",
+      "subagent_run_id": "wave-b-e1.5"
+    },
+    {
+      "id": "E1.6",
+      "status": "done",
+      "subagent_run_id": "wave-b-e1.6"
+    },
+    {
+      "id": "E1.7",
+      "status": "done",
+      "subagent_run_id": "wave-c-e1.7"
+    },
+    {
+      "id": "E1.8",
+      "status": "done",
+      "subagent_run_id": "wave-c-e1.8"
+    },
+    {
+      "id": "E1.9",
+      "status": "done",
+      "subagent_run_id": "wave-c-e1.9"
+    },
+    {
+      "id": "E1.10",
+      "status": "done",
+      "subagent_run_id": "wave-c-e1.10"
+    },
+    {
+      "id": "E1.11",
+      "status": "done",
+      "subagent_run_id": "wave-c-e1.11"
+    },
+    {
+      "id": "E1.12",
+      "status": "done",
+      "subagent_run_id": "wave-c-e1.12"
+    },
+    {
+      "id": "E1.13",
+      "status": "done",
+      "subagent_run_id": "wave-c-e1.13"
+    },
+    {
+      "id": "E1.14",
+      "status": "done",
+      "subagent_run_id": "wave-c-e1.14"
+    },
+    {
+      "id": "E1.15",
+      "status": "done",
+      "subagent_run_id": "wave-c-e1.15"
+    }
+  ],
+  "subagent_runs": [
+    {
+      "id": "product-frame",
+      "agent": "product-manager",
+      "model": "router-resolved",
+      "task_summary": "JTBD, P0 cut, assumptions, acceptance criteria",
+      "status": "completed",
+      "timestamp": "2026-08-22T23:37:00Z"
+    },
+    {
+      "id": "product-dx",
+      "agent": "dx-consultant",
+      "model": "router-resolved",
+      "task_summary": "CLI and developer-experience review",
+      "status": "completed",
+      "timestamp": "2026-08-22T23:38:00Z"
+    },
+    {
+      "id": "product-copy",
+      "agent": "ux-copywriter",
+      "model": "router-resolved",
+      "task_summary": "CLI error and trust copy",
+      "status": "completed",
+      "timestamp": "2026-08-22T23:38:00Z"
+    },
+    {
+      "id": "product-synthesis",
+      "agent": "product-manager",
+      "model": "router-resolved",
+      "task_summary": "Final PRD and decision synthesis",
+      "status": "completed",
+      "timestamp": "2026-08-22T23:39:00Z"
+    },
+    {
+      "id": "e0.1",
+      "agent": "engineer",
+      "model": "router-resolved",
+      "task_summary": "E0.1 Story 0 named check",
+      "status": "completed",
+      "timestamp": "2026-08-22T23:45:00Z"
+    },
+    {
+      "id": "e0.2",
+      "agent": "engineer",
+      "model": "router-resolved",
+      "task_summary": "E0.2 Story 0 named check",
+      "status": "completed",
+      "timestamp": "2026-08-22T23:45:00Z"
+    },
+    {
+      "id": "e0.3",
+      "agent": "engineer",
+      "model": "router-resolved",
+      "task_summary": "E0.3 Story 0 named check",
+      "status": "completed",
+      "timestamp": "2026-08-22T23:45:00Z"
+    },
+    {
+      "id": "e0.4",
+      "agent": "engineer",
+      "model": "router-resolved",
+      "task_summary": "E0.4 Story 0 named check",
+      "status": "completed",
+      "timestamp": "2026-08-22T23:45:00Z"
+    },
+    {
+      "id": "e0.5",
+      "agent": "engineer",
+      "model": "router-resolved",
+      "task_summary": "E0.5 Story 0 named check",
+      "status": "completed",
+      "timestamp": "2026-08-22T23:45:00Z"
+    },
+    {
+      "id": "e0.6",
+      "agent": "engineer",
+      "model": "router-resolved",
+      "task_summary": "E0.6 Story 0 named check",
+      "status": "completed",
+      "timestamp": "2026-08-22T23:45:00Z"
+    },
+    {
+      "id": "uat-bootstrap",
+      "agent": "deep",
+      "model": "router-resolved",
+      "task_summary": "Trace candidate UAT execution and bootstrap options",
+      "status": "completed-blocked",
+      "timestamp": "2026-08-22T23:55:00Z"
+    },
+    {
+      "id": "e0.7-auth-fix-1",
+      "agent": "engineer",
+      "model": "router-resolved",
+      "task_summary": "Preserve host HOME and Docker auth variables in uatenvmatrix",
+      "status": "completed",
+      "timestamp": "2026-08-23T23:07:51Z"
+    },
+    {
+      "id": "e0.7-auth-deep",
+      "agent": "deep",
+      "model": "router-resolved",
+      "task_summary": "Escalated investigation of repeated host UAT authentication failure",
+      "status": "completed",
+      "timestamp": "2026-08-23T23:15:00Z"
+    },
+    {
+      "id": "e0.7-auth-fix-2",
+      "agent": "engineer",
+      "model": "router-resolved",
+      "task_summary": "Stop allowlisting host-tool environment for uatenvmatrix",
+      "status": "completed",
+      "timestamp": "2026-08-23T23:20:00Z"
+    }
+  ],
+  "uat_matrix": [
+    {
+      "path": "Story 0 authoritative native-environment contract",
+      "preconditions": "host Docker/sbx authenticated; candidate 33499a05",
+      "steps": "UAT run run-20260824-110322-d24dac52",
+      "expected": "all six named checks pass",
+      "actual": "all six passed on sbx v0.39.0",
+      "evidence_path": ".pi-agent/deliver/native-environments/logs/story0-verdict.json",
+      "covers_criteria": [
+        "AC-1",
+        "AC-2",
+        "AC-3",
+        "AC-4",
+        "AC-5",
+        "AC-6",
+        "AC-7",
+        "AC-8"
+      ],
+      "result": "pass"
+    },
+    {
+      "path": "Wave B E1.0-E1.6 foundations",
+      "preconditions": "integrated HEAD 788a78b7; no Wave C code",
+      "steps": "commands recorded in uat/wave-b/wave-b-commands.log",
+      "expected": "all mapped Wave B acceptance halves and security rows pass",
+      "actual": "9-package Go suite, docs, architecture, Windows compile, sentinels, and make gate passed",
+      "evidence_path": ".pi-agent/deliver/native-environments/uat/wave-b/wave-b-matrix.md",
+      "covers_criteria": [
+        "AC-13 write side",
+        "AC-17",
+        "AC-18 parse half",
+        "AC-19 parse half",
+        "AC-20",
+        "AC-29 reference-facts half",
+        "AC-32 parse half",
+        "AC-38",
+        "AC-68",
+        "AC-72 tree half",
+        "D1-D24"
+      ],
+      "result": "pass"
+    },
+    {
+      "path": "Wave C E1.7-E1.15 pix env verbs",
+      "preconditions": "integrated HEAD 83385b0a; user's unstaged legal-doc cleanup preserved throughout, never staged",
+      "steps": "commands recorded in uat/wave-c/logs/; independent QA execution after qa-lead preset infrastructure failure",
+      "expected": "all seven pix env verbs plus hidden rm pointer, tier0/tier1 review states, TTY/non-TTY/--yes consent, shell/terminal injection hardening, containment, concurrency/race, edit targets, forget/default, reset invariants, doctor/run-hint-once all pass; make gate clean at final head",
+      "actual": "36/36 matrix rows PASS at committed HEAD 8ab00d7e (QA evidence commit b02b8586); final small DX/copy patch 83385b0a re-verified with a fresh 11/11 segment make gate in 35.622s, user-cleanup patch sha256 identical before/after stash",
+      "evidence_path": ".pi-agent/deliver/native-environments/uat/wave-c/wave-c-summary.json",
+      "covers_criteria": [
+        "AC-9",
+        "AC-10",
+        "AC-11",
+        "AC-12",
+        "AC-13",
+        "AC-14",
+        "AC-15",
+        "AC-16",
+        "AC-18 (post-edit half)",
+        "AC-42",
+        "AC-43",
+        "AC-44",
+        "AC-46",
+        "AC-47",
+        "AC-48",
+        "AC-49",
+        "AC-50",
+        "AC-51",
+        "AC-52",
+        "AC-53",
+        "AC-55",
+        "AC-56",
+        "AC-57",
+        "AC-58",
+        "AC-59",
+        "AC-60",
+        "AC-62 (help half)",
+        "AC-64",
+        "AC-65",
+        "AC-66",
+        "AC-67",
+        "AC-69",
+        "AC-70"
+      ],
+      "result": "pass"
+    }
+  ],
+  "review_rounds": [
+    {
+      "round": 1,
+      "model": "google/gemini-3.1-pro-preview",
+      "timestamp": "2026-08-25T01:33:53.221239+00:00",
+      "verdict": "BLOCK",
+      "findings_count": 3,
+      "clean": false,
+      "scope": "Wave B",
+      "fix_commit": "79289f45"
+    },
+    {
+      "round": 2,
+      "model": "google/gemini-3.1-pro-preview",
+      "timestamp": "2026-08-25T01:33:53.221239+00:00",
+      "verdict": "LGTM",
+      "findings_count": 0,
+      "clean": true,
+      "scope": "Wave B",
+      "head": "e3eeed66"
+    },
+    {
+      "round": 3,
+      "model": "google/gemini-3.1-pro-preview",
+      "timestamp": "2026-08-25T01:33:53.221239+00:00",
+      "verdict": "LGTM",
+      "findings_count": 0,
+      "clean": true,
+      "scope": "Wave B",
+      "head": "788a78b7"
+    },
+    {
+      "round": 4,
+      "model": "google/gemini-3.1-pro-preview",
+      "timestamp": "2026-08-29T15:56:00.000000+00:00",
+      "verdict": "BLOCK",
+      "findings_count": 3,
+      "clean": false,
+      "scope": "Wave C",
+      "note": "3 original findings plus later review/security findings surfaced across unit merges, all fixed through 8ab00d7e/83385b0a",
+      "fix_commit": "8ab00d7e/83385b0a"
+    },
+    {
+      "round": 5,
+      "model": "google/gemini-3.1-pro-preview",
+      "timestamp": "2026-08-29T15:56:00.000000+00:00",
+      "verdict": "LGTM",
+      "findings_count": 0,
+      "clean": true,
+      "scope": "Wave C",
+      "head": "0bc0333b",
+      "note": "code review clean at this head; security review run separately against the same head found M1 (terminal control injection at the trust bill renderer), fixed next round"
+    },
+    {
+      "round": 6,
+      "model": "google/gemini-3.1-pro-preview",
+      "timestamp": "2026-08-29T15:56:00.000000+00:00",
+      "verdict": "LGTM",
+      "findings_count": 0,
+      "clean": true,
+      "scope": "Wave C",
+      "head": "8ab00d7e",
+      "note": "M1 fix (terminal-safe display sanitization) verified"
+    },
+    {
+      "round": 7,
+      "model": "google/gemini-3.1-pro-preview",
+      "timestamp": "2026-08-29T15:56:00.000000+00:00",
+      "verdict": "LGTM",
+      "findings_count": 0,
+      "clean": true,
+      "scope": "Wave C final patch",
+      "head": "83385b0a",
+      "note": "final small DX/copy nits patch reviewed clean"
+    }
+  ],
+  "findings_ledger": [
+    {
+      "id": "F-TEST-1",
+      "source": "tests",
+      "round": 0,
+      "text": "make gate: pix/host/workflow/uat prod_loc grew 3159 -> 3189",
+      "status": "fixed",
+      "fix_commit": "37eccecd",
+      "triage_message_ref": null
+    },
+    {
+      "id": "F-UAT-1",
+      "source": "uat",
+      "round": 0,
+      "text": "The active long-lived pix-host uat-mcp daemon predates uatenvmatrix; candidate_smoke builds candidate binaries but executes matrix code compiled into the old runner, so Story 0 checks cannot run through this session.",
+      "status": "fixed",
+      "fix_commit": null,
+      "triage_message_ref": null
+    },
+    {
+      "id": "F-UAT-2",
+      "source": "uat",
+      "round": 0,
+      "text": "Host-backed Story 0 retry run-20260823-154545-b5d88dca failed environment_create_then_exec_invocation before contract proof because sbx env create returned: ERROR: Not authenticated to Docker. Sign in with: sbx login",
+      "status": "fixed",
+      "fix_commit": "a5394d23",
+      "triage_message_ref": null
+    },
+    {
+      "id": "F-UAT-3",
+      "source": "uat",
+      "round": 0,
+      "text": "uatenvmatrix rehomed or dropped host environment channels needed by sbx authentication.",
+      "status": "fixed",
+      "fix_commit": "6cc0105d",
+      "triage_message_ref": null
+    },
+    {
+      "id": "F-UAT-4",
+      "source": "uat",
+      "round": 0,
+      "text": "Even with the daemon's full inherited host environment, host UAT run run-20260823-162346-1c30333b reports `ERROR: Not authenticated to Docker` from `sbx env create`; the long-lived host MCP/UAT execution context does not observe the user's current sbx login session and must be restarted or reauthenticated before Story 0 can proceed.",
+      "status": "fixed",
+      "fix_commit": "a5394d23",
+      "triage_message_ref": null
+    },
+    {
+      "id": "F-UAT-5",
+      "source": "orchestrator",
+      "round": 0,
+      "text": "Successful environment matrix create paths currently lack receipt-gated teardown and would leak named UAT sandboxes once Story 0 gets past authentication.",
+      "status": "fixed",
+      "fix_commit": "33499a05",
+      "triage_message_ref": null
+    },
+    {
+      "id": "F-SEC-1",
+      "source": "security",
+      "round": 1,
+      "text": "Future production environment interpolation must review source variable names and destination fields and must not raw-hash low-entropy resolved secrets.",
+      "status": "deferred-to-story-1",
+      "fix_commit": "d18e324b",
+      "triage_message_ref": null
+    },
+    {
+      "id": "F-SEC-2",
+      "source": "security",
+      "round": 1,
+      "text": "Dev-only candidate UAT executes with the operator shell inherited environment; document the accepted boundary and operator warning.",
+      "status": "documented-accepted-risk",
+      "fix_commit": "d18e324b",
+      "triage_message_ref": null
+    },
+    {
+      "id": "F-QA-1",
+      "source": "qa",
+      "round": 1,
+      "text": "Story 0 did not prove A3 host-global binding/MCP preservation or A6 merge semantics; preserve both as explicit non-claims and future obligations.",
+      "status": "fixed",
+      "fix_commit": "9cab2f5e",
+      "triage_message_ref": null
+    },
+    {
+      "id": "F-REVIEW-1",
+      "source": "review",
+      "round": 2,
+      "text": "Anti-drift coverage did not pin A3 removal non-claim, two-fixture interpolation structure, or A7 traceability.",
+      "status": "fixed",
+      "fix_commit": "9cab2f5e",
+      "triage_message_ref": null
+    },
+    {
+      "id": "F-CLEANUP-1",
+      "source": "uat",
+      "round": 0,
+      "text": "Pre-fix run leaked pix-uatenv-fixture-image; final-run sbx listing reconfirmed it running. Removal requires explicit operator action on the host.",
+      "status": "external-cleanup-debt",
+      "fix_commit": null,
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-PRE-01",
+      "source": "review",
+      "round": 0,
+      "text": "E1.0 lacked D1-D24 traceability",
+      "status": "fixed",
+      "fix_commit": "d85ca1b2",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-PRE-02",
+      "source": "review",
+      "round": 0,
+      "text": "envinfo missed MCP-arg/kit/domain interpolation metadata",
+      "status": "fixed",
+      "fix_commit": "088c8467",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-PRE-03",
+      "source": "review",
+      "round": 0,
+      "text": "duplicate binding domains could claim one stable identity twice",
+      "status": "fixed",
+      "fix_commit": "088c8467",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-PRE-04",
+      "source": "review",
+      "round": 0,
+      "text": "zero-domain bindings evaporated from the semantic tree",
+      "status": "fixed",
+      "fix_commit": "088c8467",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-PRE-05",
+      "source": "review",
+      "round": 0,
+      "text": "quoted TOML keys bypassed strict sidecar validation",
+      "status": "fixed",
+      "fix_commit": "dc87f8c8",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-PRE-06",
+      "source": "review",
+      "round": 0,
+      "text": "quoted dotted TOML identities were split incorrectly",
+      "status": "fixed",
+      "fix_commit": "dc87f8c8",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-PRE-07",
+      "source": "review",
+      "round": 0,
+      "text": "config refusal used env rm instead of env forget",
+      "status": "fixed",
+      "fix_commit": "ff3352aa",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-PRE-08",
+      "source": "review",
+      "round": 0,
+      "text": "exact environments key bypassed owned-key refusal",
+      "status": "fixed",
+      "fix_commit": "ff3352aa",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-PRE-09",
+      "source": "review",
+      "round": 0,
+      "text": "empty environment path canonicalized to cwd",
+      "status": "fixed",
+      "fix_commit": "ff3352aa",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-PRE-10",
+      "source": "review",
+      "round": 0,
+      "text": "environment named environments collided with exact-key handling",
+      "status": "fixed",
+      "fix_commit": "6f1b47f2",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-SEC-01",
+      "source": "security",
+      "round": 0,
+      "text": "trailing YAML documents bypassed strict parsing",
+      "status": "fixed",
+      "fix_commit": "2d412adf",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-SEC-02",
+      "source": "security",
+      "round": 0,
+      "text": "chatty/prerelease/ambiguous sbx version output could be misclassified",
+      "status": "fixed",
+      "fix_commit": "42c35597",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-SEC-03",
+      "source": "security",
+      "round": 0,
+      "text": "scp-style kit references were misclassified as local",
+      "status": "fixed",
+      "fix_commit": "2d412adf",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-SEC-04",
+      "source": "security",
+      "round": 0,
+      "text": "canonical-root implementations lacked parity pin",
+      "status": "fixed",
+      "fix_commit": "e942f3eb",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-SEC-05",
+      "source": "security",
+      "round": 0,
+      "text": "hosttrust Lstat/open symlink TOCTOU",
+      "status": "fixed",
+      "fix_commit": "e942f3eb",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-SEC-06",
+      "source": "security",
+      "round": 0,
+      "text": "environment names were not validated at config write boundary",
+      "status": "fixed",
+      "fix_commit": "a71d93d1",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-SEC-07",
+      "source": "security",
+      "round": 0,
+      "text": "skills containment was lexical and allowed symlink escape",
+      "status": "fixed",
+      "fix_commit": "2d412adf",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-SEC-08",
+      "source": "security",
+      "round": 0,
+      "text": "noncanonical hand edits needed a pre-save diagnostic pin",
+      "status": "fixed",
+      "fix_commit": "a71d93d1",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-SEC-09",
+      "source": "security",
+      "round": 0,
+      "text": "recreatelog symlink refusal lacked shipped tests",
+      "status": "fixed",
+      "fix_commit": "e942f3eb",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-SEC-10",
+      "source": "security",
+      "round": 0,
+      "text": "non-unix no-follow fallback retains documented TOCTOU",
+      "status": "deferred-platform-risk",
+      "fix_commit": null,
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-QA-01",
+      "source": "qa",
+      "round": 0,
+      "text": "numeric schemaVersion coercion needed strict refusal",
+      "status": "fixed",
+      "fix_commit": "2d412adf",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-QA-02",
+      "source": "qa",
+      "round": 0,
+      "text": "version comparator edge table was too narrow",
+      "status": "fixed",
+      "fix_commit": "42c35597",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-QA-03",
+      "source": "qa",
+      "round": 0,
+      "text": "unbraced $VAR behavior lacked an explicit grammar pin",
+      "status": "fixed",
+      "fix_commit": "2d412adf",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-R1-01",
+      "source": "review",
+      "round": 0,
+      "text": "hand-edited invalid environment names survived config load",
+      "status": "fixed",
+      "fix_commit": "79289f45",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-R1-02",
+      "source": "review",
+      "round": 0,
+      "text": "duplicate schemaVersion strictness lacked exact regression proof",
+      "status": "fixed",
+      "fix_commit": "79289f45",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-R1-03",
+      "source": "review",
+      "round": 0,
+      "text": "recreatelog had no Windows implementation",
+      "status": "fixed",
+      "fix_commit": "79289f45",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-PM-01",
+      "source": "product",
+      "round": 0,
+      "text": "interpolation review and keyed-HMAC obligations had no owning future units",
+      "status": "fixed",
+      "fix_commit": ".pi-agent units E1.8/E2.2",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-PM-02",
+      "source": "product",
+      "round": 0,
+      "text": "F9 insertion-stability fitness test was missing",
+      "status": "fixed",
+      "fix_commit": "4250384f",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-PM-03",
+      "source": "product",
+      "round": 0,
+      "text": "F6 one-acceptance-record sentinel was missing",
+      "status": "fixed",
+      "fix_commit": "4250384f",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-PM-04",
+      "source": "product",
+      "round": 0,
+      "text": "E1.3 overclaimed AC-29 exact error copy",
+      "status": "fixed",
+      "fix_commit": ".pi-agent units E1.3",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-DX-01",
+      "source": "product",
+      "round": 0,
+      "text": "design D1-D24 table collided with PRD meanings",
+      "status": "fixed",
+      "fix_commit": "b4b3f306",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-DX-02",
+      "source": "product",
+      "round": 0,
+      "text": "doctor --recreates was conflated with create intents",
+      "status": "fixed",
+      "fix_commit": "b4b3f306",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-DX-03",
+      "source": "product",
+      "round": 0,
+      "text": "recreate and host-change copy omitted changed key paths",
+      "status": "fixed",
+      "fix_commit": "b4b3f306",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-DX-04",
+      "source": "product",
+      "round": 0,
+      "text": "unparsable sbx doctor JSON omitted upgrade fix",
+      "status": "fixed",
+      "fix_commit": "267c1975",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-DX-05",
+      "source": "product",
+      "round": 0,
+      "text": "show --effective was absent from design contract",
+      "status": "fixed",
+      "fix_commit": "b4b3f306",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-DX-06",
+      "source": "product",
+      "round": 0,
+      "text": "recreatelog filename/accessor diverged from PRD",
+      "status": "fixed",
+      "fix_commit": "85331395",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-DX-07",
+      "source": "product",
+      "round": 0,
+      "text": "env forget incorrectly exposed force semantics",
+      "status": "fixed",
+      "fix_commit": "b4b3f306",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-DX-08",
+      "source": "product",
+      "round": 0,
+      "text": "sidecar diagnostics emitted line 0/empty key/misleading array key",
+      "status": "fixed",
+      "fix_commit": "267c1975",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-DX-09",
+      "source": "product",
+      "round": 0,
+      "text": "environment registration terminology and env rm pointer copy drifted",
+      "status": "fixed",
+      "fix_commit": "b4b3f306",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-DX-10",
+      "source": "product",
+      "round": 0,
+      "text": "hosttrust Fingerprint accepted untyped arbitrary values",
+      "status": "fixed",
+      "fix_commit": "7a235beb",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-COPY-01",
+      "source": "product",
+      "round": 0,
+      "text": "ambiguous-kit error used an em dash",
+      "status": "fixed",
+      "fix_commit": "267c1975",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-COPY-02",
+      "source": "product",
+      "round": 0,
+      "text": "unknown-environment error lacked known/none actionable shape",
+      "status": "fixed",
+      "fix_commit": "aec3868c",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-COPY-03",
+      "source": "product",
+      "round": 0,
+      "text": "unknown-environment fix echoed the typo instead of literal <name>",
+      "status": "fixed",
+      "fix_commit": "3f8575c7",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-COPY-04",
+      "source": "product",
+      "round": 0,
+      "text": "UnknownEnvironmentError comments overclaimed full PRD copy and cited untracked PRD ambiguously",
+      "status": "fixed",
+      "fix_commit": "788a78b7",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-SCOPE-01",
+      "source": "product",
+      "round": 0,
+      "text": "config refusals reference planned Wave C env verbs; foundation branch is not independently releasable before E1.9; resolved once E1.9 landed the real cmd/pix env dispatch/read verbs.",
+      "status": "fixed",
+      "fix_commit": "9e6e707f",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-SCOPE-02",
+      "source": "qa",
+      "round": 0,
+      "text": "AC-18/19/29/32 remaining launch/edit halves and doctor --recreates wiring are downstream scope",
+      "status": "deferred-to-named-units",
+      "fix_commit": null,
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-NONCLAIM-01",
+      "source": "qa",
+      "round": 0,
+      "text": "envinfo merge tests model A6 but do not prove upstream A6; A3 removal preservation remains unproven",
+      "status": "documented-nonclaim",
+      "fix_commit": null,
+      "triage_message_ref": null
+    },
+    {
+      "id": "WB-EXT-01",
+      "source": "uat",
+      "round": 0,
+      "text": "pre-fix pix-uatenv-fixture-image external host cleanup debt remains",
+      "status": "external-cleanup-debt",
+      "fix_commit": null,
+      "triage_message_ref": null
+    },
+    {
+      "id": "WC-BASE-01",
+      "source": "tests",
+      "round": 0,
+      "text": "Wave C baseline make gate hit pre-existing flaky TestSubmitAndAbort nil dereference; standalone focused rerun passed. Baseline remains BASELINE-RED by contract.",
+      "status": "baseline-red-known-flake",
+      "fix_commit": null,
+      "triage_message_ref": null
+    },
+    {
+      "id": "WC-SEC-01",
+      "source": "review",
+      "round": 4,
+      "text": "env review consent had a TOCTOU (H1) window between bill computation and recorded acceptance.",
+      "status": "fixed",
+      "fix_commit": "d232272e",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WC-SEC-02",
+      "source": "review",
+      "round": 4,
+      "text": "env config registry mutation (L1) was a lost-update race: commitEnvRegistryMutation did not sync the entire fresh config.",
+      "status": "fixed",
+      "fix_commit": "4ac9f494",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WC-SEC-03",
+      "source": "security",
+      "round": 4,
+      "text": "containment refusal (A1) used lexical path comparison; a symlinked environment root or referenced executable could escape containment. Fixed with EvalSymlinks-based physical containment.",
+      "status": "fixed",
+      "fix_commit": "7cd2f775",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WC-SEC-04",
+      "source": "security",
+      "round": 4,
+      "text": "shell/terminal injection: dynamic tokens (names, paths, argv) were interpolated into runnable pix env commands and terminal output without shell-quoting or control-byte sanitization, allowing command injection via a crafted environment name/path and terminal repaint/consent-forgery via hostile .sbxenv.yaml/pix.toml content rendered at the trust-bill review screen.",
+      "status": "fixed",
+      "fix_commit": "e1b15a97/8ab00d7e",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WC-REVIEW-01",
+      "source": "review",
+      "round": 4,
+      "text": "env review-state lacked an explicit not_required/accepted/unaccepted/changed taxonomy in show/ls/JSON, and the run-hint copy/trigger needed an exact, at-most-once, fail-open-toward-silence contract.",
+      "status": "fixed",
+      "fix_commit": "e731714f",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WC-DX-01",
+      "source": "dx-consultant",
+      "round": 4,
+      "text": "final small DX/copy nits: env use help leaked internal Tier1 jargon, JSON counts used omitempty (a zero count silently disappeared), the non-TTY review refusal glued its error to a shared-stream [y/N] prompt, and SymlinkError/ScaffoldCollisionError/UseNotReviewedError did not follow the family's three-part actionable-copy form.",
+      "status": "fixed",
+      "fix_commit": "83385b0a",
+      "triage_message_ref": null
+    }
+  ],
+  "attempts": [
+    {
+      "stage": "baseline",
+      "attempt": 1,
+      "hypothesis": "The design branch is green before implementation.",
+      "change": "No shipping change.",
+      "command": "make gate",
+      "output_summary": "exit 0, all gate segments passed in 34.676s",
+      "timestamp": "2026-08-22T23:36:18Z"
+    },
+    {
+      "stage": "story0-pre-uat-gate",
+      "attempt": 1,
+      "hypothesis": "Story 0 named-check commits fit the architecture budgets.",
+      "change": "Ran fresh full gate after E0.1-E0.6.",
+      "command": "make gate",
+      "output_summary": "failed only arch-metrics: workflow/uat prod_loc +30",
+      "timestamp": "2026-08-22T23:49:00Z"
+    },
+    {
+      "stage": "story0-pre-uat-gate",
+      "attempt": 2,
+      "hypothesis": "Move the new override seam into uatenvmatrix without raising the existing workflow budget.",
+      "change": "Engineer refactored the seam and added the new package budget.",
+      "command": "make gate",
+      "output_summary": "subagent reported exit 0; top-level UAT remained blocked before final acceptance",
+      "timestamp": "2026-08-22T23:52:00Z"
+    },
+    {
+      "stage": "host-backed-uat",
+      "attempt": 1,
+      "hypothesis": "The active UAT runner discovers named checks from the submitted candidate.",
+      "change": "Queried capabilities and dry-ran candidate commit 37eccecd.",
+      "command": "mcp_gateway_uat_capabilities; mcp_gateway_uat_submit dry_run",
+      "output_summary": "named_checks=[]; plan contains only old candidate_smoke/memory checks",
+      "timestamp": "2026-08-22T23:53:00Z"
+    },
+    {
+      "stage": "host-backed-uat",
+      "attempt": 2,
+      "hypothesis": "A real candidate_smoke or existing self-development scenario invokes candidate-owned matrix code despite the old daemon.",
+      "change": "Deep agent traced registration, submit, build, matrix, and candidate launch call paths.",
+      "command": "source trace of services/host/uat and workflow/uat",
+      "output_summary": "No. Matrix code is linked into the frozen runner; closed vocabulary has no candidate-owned selfcheck seam.",
+      "timestamp": "2026-08-22T23:55:00Z"
+    },
+    {
+      "stage": "story0-host-uat-after-bootstrap",
+      "attempt": 1,
+      "hypothesis": "The refreshed host UAT runner can execute all six named environment checks against commit 37eccecd.",
+      "change": "Confirmed the six environment_* capabilities, submitted uat/scenarios/smoke.yaml, polled run-20260823-153957-e44ee96d to terminal state, and collected bounded artifacts.",
+      "command": "mcp_gateway_uat_capabilities; mcp_gateway_uat_submit; mcp_gateway_uat_status; mcp_gateway_uat_artifact",
+      "output_summary": "Run failed at environment_create_then_exec_invocation because host sbx env create exited 1: Not authenticated to Docker; host directs: sbx login.",
+      "timestamp": "2026-08-23T22:41:43Z"
+    },
+    {
+      "stage": "story0-host-uat-auth-retry",
+      "attempt": 2,
+      "hypothesis": "The host Docker authentication blocker has been cleared and Story 0 can prove the sbx environment contract.",
+      "change": "Confirmed all six environment_* capabilities, submitted candidate 37eccecd6cab8508a2f8db426cc3ba5000e9a428, polled run-20260823-154545-b5d88dca, and read the bounded failing artifact.",
+      "command": "mcp_gateway_uat_capabilities; mcp_gateway_uat_submit; mcp_gateway_uat_status; mcp_gateway_uat_artifact",
+      "output_summary": "Run failed again at environment_create_then_exec_invocation: sbx env create exited 1 because the host is not authenticated to Docker; host directs: sbx login.",
+      "timestamp": "2026-08-23T22:46:52Z"
+    },
+    {
+      "stage": "story0-host-uat-auth-code-fix",
+      "attempt": 1,
+      "hypothesis": "Preserving HOME, DOCKER_HOST, and DOCKER_CONFIG will expose the authenticated sbx session while Pix XDG roots remain isolated.",
+      "change": "Engineer commit 2bea6545 preserved those host channels and added regression tests.",
+      "command": "mcp_gateway_uat_submit(commit=2bea6545, scenario_path=uat/scenarios/smoke.yaml); poll run-20260823-160820-41a5b981; read steps/env_environment_create_then_exec_invocation.log",
+      "output_summary": "Failed identically: sbx env create still reports Not authenticated to Docker.",
+      "timestamp": "2026-08-23T23:09:31Z"
+    },
+    {
+      "stage": "story0-host-uat-auth-code-fix",
+      "attempt": 2,
+      "hypothesis": "The host-tool allowlist/XDG rehoming hides an unknown sbx auth channel; inheriting the daemon's full environment will expose it.",
+      "change": "After deep escalation, engineer commit 6cc0105d replaced the allowlist with full host-env passthrough while stripping PIX_* variables.",
+      "command": "mcp_gateway_uat_submit(commit=6cc0105d, scenario_path=uat/scenarios/smoke.yaml); poll run-20260823-162346-1c30333b; read steps/env_environment_create_then_exec_invocation.log",
+      "output_summary": "Failed identically even under the daemon's full inherited environment. This falsifies environment shaping as the remaining cause and points to the long-lived MCP/UAT process context not observing the current sbx login session.",
+      "timestamp": "2026-08-23T23:24:59Z"
+    },
+    {
+      "stage": "story0-final-verification",
+      "attempt": 1,
+      "hypothesis": "Final Story 0 HEAD remains green after architecture, security, QA, and review fixes.",
+      "change": "No shipping change; fresh top-level verification.",
+      "command": "cd services/host && go test -count=1 ./uatenvmatrix/... ./workflow/uat/... ./uat/...; node --test tests/environments-security-docs.test.mjs; make gate",
+      "output_summary": "All targeted suites passed; make gate passed all 11 segments in 32.906s.",
+      "timestamp": "2026-08-24T19:25:45Z"
+    },
+    {
+      "stage": "wave-b-baseline",
+      "attempt": 1,
+      "hypothesis": "Story 0 closure HEAD is green before Story 1 foundations begin.",
+      "change": "No shipping change.",
+      "command": "make gate",
+      "output_summary": "All 11 segments passed in 33.318s.",
+      "timestamp": "2026-08-24T22:02:22.513289+00:00",
+      "log": ".pi-agent/deliver/native-environments/logs/wave-b-baseline-gate.log"
+    },
+    {
+      "stage": "wave-b-final-verification",
+      "attempt": 1,
+      "hypothesis": "Integrated Wave B HEAD is green after security, QA, three official reviews, and product/DX/copy closeout fixes.",
+      "change": "No shipping change; fresh top-level verification.",
+      "command": "focused Wave B Go suites; Windows recreatelog/config build; 20 node doc tests; make gate",
+      "output_summary": "All focused suites passed; Windows build passed; node 20/20; make gate all 11 segments passed in 30.980s.",
+      "timestamp": "2026-08-25T01:33:53.221239+00:00",
+      "log": ".pi-agent/deliver/native-environments/logs/wave-b-final-gate.log"
+    },
+    {
+      "stage": "wave-c-final-verification",
+      "attempt": 1,
+      "hypothesis": "Wave C E1.7-E1.15 is fully implemented and the QA-substituted independent execution proves it at committed HEAD.",
+      "change": "Independent QA executor ran the full Wave C matrix directly after the qa-lead preset failed to start twice (local Ollama unavailable, infrastructure only).",
+      "command": "uat/wave-c matrix commands + make gate",
+      "output_summary": "36/36 matrix rows PASS at HEAD 8ab00d7e; make gate 11/11 segments pass, 32.778s; evidence committed as b02b8586",
+      "timestamp": "2026-08-29T08:15:00Z"
+    },
+    {
+      "stage": "wave-c-final-patch-verification",
+      "attempt": 1,
+      "hypothesis": "The final DX/copy nits patch (83385b0a) introduces no regression and the user's unstaged legal-doc cleanup survives untouched.",
+      "change": "Applied 83385b0a; re-ran the full top-level gate at that head with the user's 7-file unstaged cleanup stashed out and restored byte-identical.",
+      "command": "make gate",
+      "output_summary": "all 11 segments PASS, total 35.622s; user-cleanup git diff sha256 c6df92b5ac482047c92b7224c6e8427cb21ae829825c33f49d4057382dc0536d identical before and after; git status/HEAD unchanged by the run",
+      "timestamp": "2026-08-29T08:42:00Z"
+    }
+  ],
+  "final_evidence": {
+    "story": "Story 0 / E0.1-E0.7",
+    "state": "done",
+    "authoritative_uat": ".pi-agent/deliver/native-environments/logs/story0-verdict.json",
+    "run_id": "run-20260824-110322-d24dac52",
+    "candidate_commit": "33499a056a4390b5095d0b50d51475b3580cd2ec",
+    "sbx_version": "v0.39.0",
+    "checks": "all six passed",
+    "head_verified": "9cab2f5ec336b4f1416964dae895c13dd3b69daf",
+    "head_delta_after_uat": "Story 0 evidence docs, comments, architecture budget, security/non-claim docs, and anti-drift tests only; no matrix behavior changed after the authoritative run.",
+    "gate": "make gate passed all 11 segments in 32.906s on 2026-08-24T19:25:45Z",
+    "reviews": "security and QA found no blockers; cross-vendor rounds 1 and 3 LGTM; round 2 findings fixed in 9cab2f5e",
+    "external_cleanup_debt": "pix-uatenv-fixture-image from run-20260824-092338-d4c384f5 remained running in the final-run sbx listing and requires explicit host cleanup",
+    "wave_b_started": false
+  },
+  "commit": "83385b0a3c82a78da0c995122086257696891a62",
+  "wave_b": {
+    "status": "complete",
+    "started_at": "2026-08-24T22:02:22.513270+00:00",
+    "completed_at": "2026-08-25T01:33:53.221239+00:00",
+    "story": 1,
+    "units": [
+      "E1.0",
+      "E1.1",
+      "E1.2",
+      "E1.3",
+      "E1.4",
+      "E1.5",
+      "E1.6"
+    ],
+    "head": "788a78b71f1d3d2c4940d2267066324bcb6cb7a8",
+    "constraint": "E1.1 landed first; Wave C has not started",
+    "uat": ".pi-agent/deliver/native-environments/uat/wave-b/wave-b-summary.json",
+    "product_checkpoint": {
+      "product-manager": "APPROVE",
+      "dx-consultant": "APPROVE",
+      "ux-copywriter": "APPROVE"
+    }
+  },
+  "wave_b_evidence": {
+    "state": "complete",
+    "head": "788a78b71f1d3d2c4940d2267066324bcb6cb7a8",
+    "baseline": "BASELINE-GREEN",
+    "uat": ".pi-agent/deliver/native-environments/uat/wave-b/wave-b-summary.json",
+    "security": "APPROVE, zero actionable findings after follow-up",
+    "product_checkpoint": "PM APPROVE; DX APPROVE; UX copy APPROVE",
+    "reviews": "official rounds: BLOCK(3 fixed), LGTM, LGTM final",
+    "final_gate": {
+      "command": "make gate",
+      "exit": 0,
+      "duration": "30.980s",
+      "timestamp": "2026-08-25T01:33:53.221239+00:00",
+      "log": ".pi-agent/deliver/native-environments/logs/wave-b-final-gate.log"
+    },
+    "windows_compile": "GOOS=windows GOARCH=amd64 go build ./recreatelog/... ./config/...: pass",
+    "wave_c_started": false
+  },
+  "wave_c": {
+    "status": "complete",
+    "started_at": "2026-08-28T22:34:59.713826+00:00",
+    "completed_at": "2026-08-29T15:56:00.000000+00:00",
+    "story": 1,
+    "units": [
+      "E1.7",
+      "E1.8",
+      "E1.9",
+      "E1.10",
+      "E1.11",
+      "E1.12",
+      "E1.13",
+      "E1.14",
+      "E1.15"
+    ],
+    "head": "83385b0a3c82a78da0c995122086257696891a62",
+    "constraint": "E1.7 -> E1.8 -> E1.9 spine landed serialized; E1.10-E1.12 landed in ID order; E1.13 closed family consistency; Wave D not started",
+    "uat": ".pi-agent/deliver/native-environments/uat/wave-c/wave-c-summary.json",
+    "product_checkpoint": {
+      "product-manager": "APPROVE",
+      "dx-consultant": "APPROVE, final small nits fixed in 83385b0a",
+      "ux-copywriter": "findings adjudicated and fixed, or explicit D10/out-of-scope"
+    }
+  },
+  "wave_c_baseline": {
+    "label": "BASELINE-RED",
+    "command": "make gate",
+    "result": "one pre-existing flaky failure: workflow/uat TestSubmitAndAbort nil dereference; standalone rerun passed",
+    "log": ".pi-agent/deliver/native-environments/logs/wave-c-baseline-gate.log",
+    "timestamp": "2026-08-28T22:34:59.713826+00:00"
+  },
+  "wave_c_evidence": {
+    "state": "complete",
+    "head": "83385b0a3c82a78da0c995122086257696891a62",
+    "code_head_verified": "83385b0a3c82a78da0c995122086257696891a62",
+    "baseline": "BASELINE-RED",
+    "uat": ".pi-agent/deliver/native-environments/uat/wave-c/wave-c-summary.json",
+    "uat_evidence_commit": "b02b85862aea19cbd3febce4e3d2c2a0b2ce6e9e",
+    "uat_qa_substitution": "qa-lead preset failed to start twice (local Ollama unavailable, infrastructure only, non-product); independent QA executor fully substituted, 36/36 matrix rows PASS",
+    "security": "final APPROVE",
+    "product_checkpoint": "PM APPROVE; DX APPROVE with final small nits fixed in 83385b0a; UX findings adjudicated/fixed or explicit D10/out-of-scope",
+    "reviews": "official rounds: round1 BLOCK (3 original + later review/security findings, all fixed through 8ab00d7e/83385b0a), round2 LGTM at 0bc0333b (security separately found M1), round3 LGTM at 8ab00d7e, final patch LGTM at 83385b0a",
+    "final_gate": {
+      "command": "make gate",
+      "exit": 0,
+      "segments_ok": 11,
+      "duration": "35.622s",
+      "timestamp": "2026-08-29T15:56:00.000000+00:00",
+      "git_head": "83385b0a3c82a78da0c995122086257696891a62",
+      "log": ".pi-agent/deliver/native-environments/logs/wave-c-final-gate.log"
+    },
+    "user_cleanup_preserved": {
+      "files": [
+        ".claude/settings.local.json",
+        "CODE_OF_CONDUCT.md",
+        "CONTRIBUTING.md",
+        "LICENSE",
+        "NOTICE.md",
+        "SECURITY.md",
+        "THIRD_PARTY_NOTICES.md"
+      ],
+      "never_staged_or_committed": true,
+      "patch_sha256_before": "c6df92b5ac482047c92b7224c6e8427cb21ae829825c33f49d4057382dc0536d",
+      "patch_sha256_after": "c6df92b5ac482047c92b7224c6e8427cb21ae829825c33f49d4057382dc0536d"
+    },
+    "host_sbx_launch_claims": "none",
+    "wave_d_started": false
+  },
+  "wave_d": {
+    "status": "not_started",
+    "story": 2,
+    "units": [
+      "E2.1",
+      "E2.2",
+      "E2.3",
+      "E2.4",
+      "E2.5",
+      "E2.6",
+      "E2.7",
+      "E2.8"
+    ],
+    "constraint": "private work environment converted and run live before E2.8 (A8/R6); see HANDOFF.md for the exact next order"
+  }
+}
