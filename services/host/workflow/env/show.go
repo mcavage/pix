@@ -56,9 +56,30 @@ type ShowResult struct {
 	// error).
 	SbxenvPresent  bool
 	SidecarPresent bool
-	Accepted       bool
-	// Fingerprint is "" when Accepted is false.
+	// ReviewState is the full four-state answer (computeReviewState,
+	// reviewstate.go) — the source of truth this ShowResult carries.
+	// Accepted is kept alongside it, never derived independently, purely
+	// for backward compatibility with a caller still reading the
+	// pre-existing bool: it is exactly `ReviewState == ReviewAccepted`.
+	ReviewState ReviewState
+	Accepted    bool
+	// Fingerprint is "" unless ReviewState is ReviewAccepted — docs/design/
+	// environments.md D21's own invariant (workflow/reset's
+	// reset_env_invariants_test.go): a re-registered, unaccepted-again
+	// environment must never report a fingerprint, and ReviewChanged's
+	// freshly computed digest is not what was ever actually accepted, so it
+	// is never surfaced here either — only `--verbose`'s full detail (a
+	// later wave) or `pix env review` itself computes and shows that one.
 	Fingerprint string
+	// ModelCount, MountCount and MCPCount are the concise "what NAME is"
+	// facts envCmd's own help text promises ("files, models, mounts, MCP,
+	// review state, drift") but the default screen never rendered: counts
+	// only, derived from the parsed Sidecar/BillOfMaterials — never the
+	// model ids, mount paths, or server names themselves (those stay
+	// `pix env review`'s job).
+	ModelCount int
+	MountCount int
+	MCPCount   int
 }
 
 // resolvedShowName returns the exact name `env show` resolves against: the
@@ -93,15 +114,36 @@ func ComputeShow(cfg *config.Config, explicit string) (ShowResult, error) {
 	if err != nil {
 		return ShowResult{}, err
 	}
-	rec, _ := ts.Get(loaded.Subject)
+	status, err := computeReviewState(loaded, ts, nil, nil)
+	if err != nil {
+		return ShowResult{}, err
+	}
+	modelCount := 0
+	if loaded.Sidecar != nil {
+		modelCount = len(loaded.Sidecar.ModelReferences())
+	}
+	// Fingerprint stays "" for anything but ReviewAccepted (docs/design/
+	// environments.md D21; reset_env_invariants_test.go pins this in
+	// workflow/reset): a re-registered, unaccepted-again environment must
+	// never report a fingerprint at all, and a CHANGED environment's freshly
+	// computed digest is not what was ever actually accepted — there is no
+	// accepted fingerprint to name until a fresh `pix env review` writes one.
+	fingerprint := ""
+	if status.State == ReviewAccepted {
+		fingerprint = status.Fingerprint
+	}
 	return ShowResult{
 		Selected:       true,
 		Name:           loaded.Name,
 		Root:           loaded.Root,
 		SbxenvPresent:  loaded.SbxenvPath != "",
 		SidecarPresent: loaded.SidecarPath != "",
-		Accepted:       loaded.Accepted,
-		Fingerprint:    rec.Fingerprint,
+		ReviewState:    status.State,
+		Accepted:       status.State == ReviewAccepted,
+		Fingerprint:    fingerprint,
+		ModelCount:     modelCount,
+		MountCount:     len(status.BoM.EffectiveMounts),
+		MCPCount:       len(status.BoM.MCPServers),
 	}, nil
 }
 
@@ -136,6 +178,7 @@ func RenderShowDefault(out io.Writer, r ShowResult) {
 	fmt.Fprintf(out, "environment %q\n", r.Name)
 	fmt.Fprintf(out, "  root:      %s\n", r.Root)
 	fmt.Fprintf(out, "  files:     %s\n", showAuthoredFiles(r))
+	fmt.Fprintf(out, "  declares:  %s\n", showDeclaredCounts(r))
 	fmt.Fprintf(out, "  review:    %s\n", showReviewState(r))
 	// No Wave D launch cutover exists yet (E2.x): there is no honest way to
 	// ask whether a live sandbox matches this environment, so this line
@@ -155,11 +198,33 @@ func showAuthoredFiles(r ShowResult) string {
 	return strings.Join(files, ", ")
 }
 
+// showDeclaredCounts renders the concise "what NAME is" facts envCmd's own
+// help text promises ("files, models, mounts, MCP, review state, drift")
+// as counts only — never the model ids, mount paths, or MCP server names
+// themselves, which stay `pix env review`'s (and its `--verbose`) job.
+func showDeclaredCounts(r ShowResult) string {
+	return fmt.Sprintf("%s, %s, %s",
+		pluralize(r.ModelCount, "model"), pluralize(r.MountCount, "mount"), pluralize(r.MCPCount, "MCP server"))
+}
+
+// showReviewState renders the review line for every ReviewState
+// computeReviewState can produce. ReviewNotRequired's exact human text
+// ("nothing runs on your host") is the honest Tier0 answer — there IS no
+// review to accept, so it is never worded as a variant of "unaccepted".
+// ReviewChanged names `pix env review NAME` exactly once, the same next
+// step ReviewUnaccepted already names, since either way that is the only
+// command that changes this state.
 func showReviewState(r ShowResult) string {
-	if !r.Accepted {
+	switch r.ReviewState {
+	case ReviewNotRequired:
+		return "not-required (nothing runs on your host)"
+	case ReviewAccepted:
+		return fmt.Sprintf("accepted (fingerprint %s)", shortFingerprint(r.Fingerprint))
+	case ReviewChanged:
+		return fmt.Sprintf("changed (footprint differs from what was accepted; run: pix env review %s)", r.Name)
+	default: // ReviewUnaccepted, and the zero value of a hand-built ShowResult
 		return fmt.Sprintf("unaccepted (run: pix env review %s)", r.Name)
 	}
-	return fmt.Sprintf("accepted (fingerprint %s)", shortFingerprint(r.Fingerprint))
 }
 
 // RenderShowPath writes ONLY the canonical root plus a trailing newline
@@ -171,15 +236,22 @@ func RenderShowPath(out io.Writer, r ShowResult) {
 	fmt.Fprintln(out, r.Root)
 }
 
-// showJSONView is `env show --json`'s wire shape.
+// showJSONView is `env show --json`'s wire shape. Accepted deliberately
+// carries NO `omitempty`: false is exactly as meaningful an answer as true
+// (unaccepted vs accepted), and a caller reading it for its own boolean
+// truthiness must never see the key vanish instead of read `false`.
 type showJSONView struct {
-	SchemaVersion  int    `json:"schema_version"`
-	Environment    string `json:"environment"`
-	Root           string `json:"root,omitempty"`
-	SbxenvPresent  bool   `json:"sbxenv_present,omitempty"`
-	SidecarPresent bool   `json:"sidecar_present,omitempty"`
-	Accepted       bool   `json:"accepted,omitempty"`
-	Fingerprint    string `json:"fingerprint,omitempty"`
+	SchemaVersion  int         `json:"schema_version"`
+	Environment    string      `json:"environment"`
+	Root           string      `json:"root,omitempty"`
+	SbxenvPresent  bool        `json:"sbxenv_present,omitempty"`
+	SidecarPresent bool        `json:"sidecar_present,omitempty"`
+	Accepted       bool        `json:"accepted"`
+	ReviewState    ReviewState `json:"review_state,omitempty"`
+	Fingerprint    string      `json:"fingerprint,omitempty"`
+	ModelCount     int         `json:"model_count,omitempty"`
+	MountCount     int         `json:"mount_count,omitempty"`
+	MCPCount       int         `json:"mcp_count,omitempty"`
 }
 
 // RenderShowJSON writes `env show --json`. Environment is "none" exactly
@@ -193,7 +265,8 @@ func RenderShowJSON(out io.Writer, r ShowResult) error {
 	view := showJSONView{
 		SchemaVersion: ShowSchemaVersion, Environment: name, Root: r.Root,
 		SbxenvPresent: r.SbxenvPresent, SidecarPresent: r.SidecarPresent,
-		Accepted: r.Accepted, Fingerprint: r.Fingerprint,
+		Accepted: r.Accepted, ReviewState: r.ReviewState, Fingerprint: r.Fingerprint,
+		ModelCount: r.ModelCount, MountCount: r.MountCount, MCPCount: r.MCPCount,
 	}
 	enc := json.NewEncoder(out)
 	enc.SetIndent("", "  ")

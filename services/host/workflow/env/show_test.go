@@ -16,7 +16,7 @@ import (
 // (schemaVersion + agent only — no mcp/secrets/host.services) under name,
 // returning its canonical root. A Tier0 environment needs no review at all
 // (bom.go's Tier1()), so this is what most `show` tests want: the default
-// screen's "review: unaccepted" line without pulling in the review/gate
+// screen's "review: not-required" line without pulling in the review/gate
 // machinery hostexec-fixture exercises.
 func tier0Fixture(t *testing.T, cfg *config.Config, name string) string {
 	t.Helper()
@@ -95,6 +95,45 @@ func TestComputeShow_OmittedNameUsesMachineDefault(t *testing.T) {
 	}
 }
 
+// TestComputeShow_CountsModelsMountsAndMCPServers proves this unit's own
+// addition: the concise "what NAME is" facts envCmd's own help text
+// promises ("files, models, mounts, MCP, review state, drift") are counts
+// only, derived from the parsed Sidecar/BillOfMaterials — never a leaked
+// model id, mount path, or server name.
+func TestComputeShow_CountsModelsMountsAndMCPServers(t *testing.T) {
+	tempConfigAndState(t)
+	cfg := loadConfig(t)
+	root := t.TempDir()
+	writeEnvFile(t, root, ".sbxenv.yaml", "schemaVersion: \"1\"\nmcp:\n  servers:\n    - name: worker-mcp\n      command: worker-mcp-server\n    - name: other-mcp\n      url: https://example.com/mcp\n")
+	writeEnvFile(t, root, "pix.toml", "schema = 1\n\n[models]\nmain = \"zai/glm-5\"\n")
+	if _, err := Register(cfg, "work", root); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := ComputeShow(cfg, "work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.ModelCount != 1 {
+		t.Errorf("ModelCount = %d, want 1 (models.main)", r.ModelCount)
+	}
+	if r.MCPCount != 2 {
+		t.Errorf("MCPCount = %d, want 2 (both native mcp.servers entries)", r.MCPCount)
+	}
+	if r.MountCount != 0 {
+		t.Errorf("MountCount = %d, want 0 (show supplies no caller EffectiveMounts pre-E2)", r.MountCount)
+	}
+
+	var out bytes.Buffer
+	RenderShowDefault(&out, r)
+	got := out.String()
+	for _, want := range []string{"1 model", "0 mounts", "2 MCP servers"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("default show missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // ── unknown exact name: the typed error, never a fuzzy match ────────────
 
 func TestComputeShow_UnknownNameExact(t *testing.T) {
@@ -169,7 +208,10 @@ func TestRenderShowDefault_GoldenLineCountAndEffectivePointer(t *testing.T) {
 	if want := "full rendered environment: pix env show work --effective"; last != want {
 		t.Errorf("last line = %q, want %q", last, want)
 	}
-	for _, want := range []string{"work", "root:", ".sbxenv.yaml", "review:", "unaccepted", "sandbox:"} {
+	for _, want := range []string{
+		"work", "root:", ".sbxenv.yaml", "declares:", "0 models", "0 mounts", "0 MCP servers",
+		"review:", "not-required", "nothing runs on your host", "sandbox:",
+	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("default show missing %q:\n%s", want, got)
 		}
@@ -187,7 +229,7 @@ func TestRenderShowDefault_SidecarPresentIsListed(t *testing.T) {
 func TestRenderShowDefault_AcceptedShowsFingerprint(t *testing.T) {
 	var out bytes.Buffer
 	RenderShowDefault(&out, ShowResult{
-		Selected: true, Name: "work", Root: "/w", Accepted: true,
+		Selected: true, Name: "work", Root: "/w", ReviewState: ReviewAccepted, Accepted: true,
 		Fingerprint: "0123456789abcdef0123456789abcdef",
 	})
 	got := out.String()
@@ -196,6 +238,36 @@ func TestRenderShowDefault_AcceptedShowsFingerprint(t *testing.T) {
 	}
 	if !strings.Contains(got, "0123456789ab") {
 		t.Errorf("accepted show must name the (short) fingerprint, got:\n%s", got)
+	}
+}
+
+// TestRenderShowDefault_UnacceptedNamesReviewCommand pins ReviewUnaccepted's
+// exact next step: `pix env review NAME`, appearing exactly once.
+func TestRenderShowDefault_UnacceptedNamesReviewCommand(t *testing.T) {
+	var out bytes.Buffer
+	RenderShowDefault(&out, ShowResult{Selected: true, Name: "work", Root: "/w", ReviewState: ReviewUnaccepted})
+	got := out.String()
+	if n := strings.Count(got, "pix env review work"); n != 1 {
+		t.Errorf("unaccepted show contains %d occurrences of \"pix env review work\", want exactly 1:\n%s", n, got)
+	}
+}
+
+// TestRenderShowDefault_ChangedNamesReviewCommandExactlyOnce is this unit's
+// own new state: a Tier1 environment whose content no longer matches its
+// last accepted record must say so as "changed", distinct from never having
+// been reviewed at all, and still name `pix env review NAME` exactly once.
+func TestRenderShowDefault_ChangedNamesReviewCommandExactlyOnce(t *testing.T) {
+	var out bytes.Buffer
+	RenderShowDefault(&out, ShowResult{
+		Selected: true, Name: "work", Root: "/w", ReviewState: ReviewChanged,
+		Fingerprint: "fedcba9876543210fedcba9876543210",
+	})
+	got := out.String()
+	if !strings.Contains(got, "changed") {
+		t.Errorf("changed show must say changed, got:\n%s", got)
+	}
+	if n := strings.Count(got, "pix env review work"); n != 1 {
+		t.Errorf("changed show contains %d occurrences of \"pix env review work\", want exactly 1:\n%s", n, got)
 	}
 }
 
@@ -229,5 +301,40 @@ func TestRenderShowJSON_SelectedCarriesFacts(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("show --json missing %q:\n%s", want, got)
 		}
+	}
+}
+
+// TestRenderShowJSON_CarriesReviewStateAndCounts is this unit's own
+// addition: `review_state` alongside the backward `accepted` bool, plus the
+// model/mount/MCP counts the default screen now also renders.
+func TestRenderShowJSON_CarriesReviewStateAndCounts(t *testing.T) {
+	var out bytes.Buffer
+	err := RenderShowJSON(&out, ShowResult{
+		Selected: true, Name: "work", Root: "/w", ReviewState: ReviewChanged,
+		ModelCount: 1, MountCount: 2, MCPCount: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, want := range []string{
+		`"review_state": "changed"`, `"model_count": 1`, `"mount_count": 2`, `"mcp_count": 3`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("show --json missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestRenderShowJSON_AcceptedBoolNeverOmitted proves `accepted` renders
+// even when false — no `omitempty` on that field — since false is exactly
+// as meaningful an answer as true.
+func TestRenderShowJSON_AcceptedBoolNeverOmitted(t *testing.T) {
+	var out bytes.Buffer
+	if err := RenderShowJSON(&out, ShowResult{Selected: true, Name: "work", Root: "/w", ReviewState: ReviewUnaccepted}); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); !strings.Contains(got, `"accepted": false`) {
+		t.Errorf("show --json with an unaccepted environment = %s, want an explicit \"accepted\": false, never an omitted key", got)
 	}
 }

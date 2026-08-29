@@ -104,12 +104,36 @@ func TestRenderLs_MarksDefaultAndReviewState(t *testing.T) {
 	RenderLs(&out, LsResult{
 		Default: "work",
 		Entries: []LsEntry{
-			{Name: "home", Root: "/h", Default: false, Accepted: true},
-			{Name: "work", Root: "/w", Default: true, Accepted: false},
+			{Name: "home", Root: "/h", Default: false, Accepted: true, ReviewState: ReviewAccepted},
+			{Name: "work", Root: "/w", Default: true, Accepted: false, ReviewState: ReviewUnaccepted},
 		},
 	})
 	got := out.String()
 	for _, want := range []string{"home", "work", "accepted", "unaccepted", "/h", "/w"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("ls output missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestRenderLs_AllFourReviewStatesPlusInvalid pins the ONE ls-column
+// spelling for every ReviewState computeReviewState (or ComputeLs's own
+// invalid-degrade) can produce — the exact four-plus-one taxonomy this
+// unit adds, never a silently blank column for a state a future caller
+// introduces.
+func TestRenderLs_AllFourReviewStatesPlusInvalid(t *testing.T) {
+	var out bytes.Buffer
+	RenderLs(&out, LsResult{
+		Entries: []LsEntry{
+			{Name: "a", Root: "/a", ReviewState: ReviewNotRequired},
+			{Name: "b", Root: "/b", ReviewState: ReviewUnaccepted},
+			{Name: "c", Root: "/c", ReviewState: ReviewAccepted},
+			{Name: "d", Root: "/d", ReviewState: ReviewChanged},
+			{Name: "e", Root: "/e", ReviewState: ReviewInvalid},
+		},
+	})
+	got := out.String()
+	for _, want := range []string{"n/a", "unaccepted", "accepted", "changed", "invalid"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("ls output missing %q:\n%s", want, got)
 		}
@@ -130,6 +154,25 @@ func TestRenderLsJSON_SchemaVersionAndNoneWhenUnselected(t *testing.T) {
 	}
 	if !strings.Contains(got, `"environments": []`) {
 		t.Errorf("ls --json with an empty registry = %s, want an empty array, not null", got)
+	}
+}
+
+// TestRenderLsJSON_CarriesReviewStateAndBackwardAcceptedBool proves the
+// `review_state` addition never drops the pre-existing `accepted` bool a
+// script may already read.
+func TestRenderLsJSON_CarriesReviewStateAndBackwardAcceptedBool(t *testing.T) {
+	var out bytes.Buffer
+	if err := RenderLsJSON(&out, LsResult{
+		Default: "work",
+		Entries: []LsEntry{{Name: "work", Root: "/w", Default: true, Accepted: true, ReviewState: ReviewAccepted}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, want := range []string{`"accepted": true`, `"review_state": "accepted"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("ls --json = %s, want %q", got, want)
+		}
 	}
 }
 

@@ -297,35 +297,37 @@ func postEditVerdict(cfg *config.Config, name, target string) (verdict, message 
 		return "invalid", msg, nil
 	}
 
-	bom, err := ComputeBoM(loaded, nil, nil)
+	// The SAME shared derivation ls.go/show.go use (reviewstate.go's
+	// computeReviewState) — this file no longer re-implements its own
+	// Tier0/Tier1/record-vs-fingerprint comparison. "review" collapses BOTH
+	// ReviewUnaccepted and ReviewChanged: either way, the stored record (if
+	// any) is read here, never mutated or deleted, and the next command is
+	// the same — only a fresh `pix env review NAME`, run by the caller,
+	// ever changes it.
+	status, err := computeReviewState(loaded, ts, nil, nil)
 	if err != nil {
 		return "", "", err
 	}
 
-	if !bom.Tier1() {
+	switch status.State {
+	case ReviewNotRequired:
 		// A Tier0 environment has no host-execution facet Review's own gate
 		// would ever ask about: Review(...) returns Accepted with no prompt
 		// and, deliberately, NO trust-store write for exactly this bill
-		// (see review.go's own doc comment). Falling through to the
-		// fingerprint/record check below would demand an acceptance record
-		// that a Tier0 environment can never have, permanently stranding it
-		// on the "review" verdict for content that was never host-executing
-		// in the first place — and silently pointing the user at `pix env
-		// review NAME`, which would run and find nothing to gate, a no-op
-		// masquerading as an outstanding action.
+		// (see review.go's own doc comment). Treating it as "review" would
+		// demand an acceptance record that a Tier0 environment can never
+		// have, permanently stranding it on that verdict for content that
+		// was never host-executing in the first place — and silently
+		// pointing the user at `pix env review NAME`, which would run and
+		// find nothing to gate, a no-op masquerading as an outstanding
+		// action.
 		msg := fmt.Sprintf("pix: environment %q is valid; no host-execution footprint to review.\n     next: pix env use %s\n", name, name)
 		return "ok", msg, nil
-	}
-
-	fp, err := Fingerprint(bom)
-	if err != nil {
-		return "", "", err
-	}
-
-	if rec, ok := ts.Get(loaded.Subject); ok && rec.Fingerprint == fp {
+	case ReviewAccepted:
 		msg := fmt.Sprintf("pix: environment %q is valid; host-execution footprint unchanged.\n     next: pix env use %s\n", name, name)
 		return "ok", msg, nil
+	default: // ReviewUnaccepted or ReviewChanged
+		msg := fmt.Sprintf("pix: environment %q is valid, but its host-execution footprint changed (or was never reviewed).\n     next: pix env review %s\n", name, name)
+		return "review", msg, nil
 	}
-	msg := fmt.Sprintf("pix: environment %q is valid, but its host-execution footprint changed (or was never reviewed).\n     next: pix env review %s\n", name, name)
-	return "review", msg, nil
 }

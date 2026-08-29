@@ -26,11 +26,15 @@ import (
 const SbxEnvFileName = ".sbxenv.yaml"
 
 // sbxenvHintMessage leads with the negative (Pix did not select this), says
-// so is not automatic, and names exactly one next step — `pix env add` — and
-// nothing else: no `pix env review`, no `pix help env`, no implication that
-// an environment is required to keep running.
+// so is not automatic, and names exactly one next step: the register-and-
+// select chain that actually leaves the workspace launchable next time
+// (`pix env add <name> . && pix env use <name>`) — registering alone would
+// leave a reader believing that was the whole story, when `pix run` still
+// would not pick the new registration up as the default without `use`.
+// Nothing else is named: no `pix env review`, no `pix help env`, no
+// implication that an environment is required to keep running.
 const sbxenvHintMessage = "pix: did not select the .sbxenv.yaml found in this workspace; pix run\n" +
-	"never picks one up on its own. Register it if you want it: pix env add <name> [path]\n"
+	"never picks one up on its own. Register and select it: pix env add <name> . && pix env use <name>\n"
 
 // RunHint returns the D13/AC-59 hint text, or "" when any of these hold:
 //
