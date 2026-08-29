@@ -76,18 +76,30 @@ func (e *MissingRequiredFileError) Error() string {
 // ResolveEnvironment composes the three checks every later stage of Load
 // shares into the ONE root-resolution step: Resolve (AC-10, exact name ->
 // canonical root, no fuzzy fallback), RefuseSymlinkedRoot (AC-12, half),
-// and RefuseContainment (AC-11, the root must not resolve inside any of
-// workspaces). It is exported in its own right — not merely a Load
-// implementation detail — because a caller that only needs a trustworthy
-// root (no file parsing at all) should never have to duplicate this
-// ordering to get one.
+// and RefuseContainment (AC-11, the root must not resolve inside any
+// WRITABLE entry of effective). It is exported in its own right — not
+// merely a Load implementation detail — because a caller that only needs a
+// trustworthy root (no file parsing at all) should never have to duplicate
+// this ordering to get one.
+//
+// effective is the ONE typed effective workspace set (bom.go's
+// EffectiveMounts — {Path, ReadOnly}) that flows end-to-end through Load,
+// Review and ComputeShow: there is no separate, independently-suppliable
+// `workspaces []string` a caller could pass out of step with what a
+// review/BoM computation sees (that was E1.9's BLOCK finding — two
+// unrelated lists reaching the same environment, free to diverge). Only
+// the WRITABLE entries of effective are ever checked here
+// (writableWorkspacePaths): restriction 4 (docs/design/environments.md
+// §5.1) is explicitly a WRITABLE-workspace rule, and a read-only entry —
+// including the intrinsic environment-root source workspace Load itself
+// adds below — must never self-refuse merely by existing.
 //
 // Order is deliberate: an unknown name is reported before either location
 // refusal runs at all, since neither has a root to inspect otherwise; the
 // symlink check runs before containment so a symlinked root is always
 // named as exactly that, never mischaracterized as a containment problem
 // merely because its resolved target happens to sit somewhere unexpected.
-func ResolveEnvironment(cfg *config.Config, name string, workspaces []string) (string, error) {
+func ResolveEnvironment(cfg *config.Config, name string, effective EffectiveMounts) (string, error) {
 	root, err := Resolve(cfg, name)
 	if err != nil {
 		// Resolve itself returns a bare *config.UnknownEnvironmentError (it
@@ -112,10 +124,46 @@ func ResolveEnvironment(cfg *config.Config, name string, workspaces []string) (s
 	if err := RefuseSymlinkedRoot(root); err != nil {
 		return "", err
 	}
-	if err := RefuseContainment(root, workspaces); err != nil {
+	if err := RefuseContainment(root, writableWorkspacePaths(effective)); err != nil {
 		return "", err
 	}
 	return root, nil
+}
+
+// workspacePaths returns every Path in mounts, regardless of its ReadOnly
+// bit — the full set envinfo.ValidateSkillWorkspaces checks a LOCAL
+// sidecar skill against: a skill may legitimately live under a read-only
+// mount exactly as well as a writable one, and Load always adds the
+// environment's own root to this set (see Load's own doc comment) so a
+// skill declared right under the environment's own directory has
+// somewhere to resolve against even when no other workspace was ever
+// supplied.
+func workspacePaths(mounts EffectiveMounts) []string {
+	out := make([]string, 0, len(mounts))
+	for _, m := range mounts {
+		out = append(out, m.Path)
+	}
+	return out
+}
+
+// writableWorkspacePaths returns only the WRITABLE entries of mounts —
+// RefuseContainment's sole input. docs/design/environments.md §5.1
+// restriction 4 is explicitly scoped to a WRITABLE workspace ("must not
+// resolve inside any writable workspace it mounts"); a read-only entry can
+// never trigger it. This is what makes it safe for Load to unconditionally
+// add the environment's own canonical root, read-only, to the workspace
+// set it validates sidecar skills against (skillWorkspaces in Load, below)
+// without that addition ever self-refusing: every environment's root
+// trivially "resolves inside" itself, which would otherwise turn Load's
+// own intrinsic bookkeeping into a universal refusal.
+func writableWorkspacePaths(mounts EffectiveMounts) []string {
+	var out []string
+	for _, m := range mounts {
+		if !m.ReadOnly {
+			out = append(out, m.Path)
+		}
+	}
+	return out
 }
 
 // Load is the end-to-end E1.7 pre-spine composition: resolve name to a
@@ -123,15 +171,35 @@ func ResolveEnvironment(cfg *config.Config, name string, workspaces []string) (s
 // native `.sbxenv.yaml` and the optional `pix.toml` sidecar (envinfo.Parse
 // / envinfo.ParseSidecar), build the pre-composition Tree
 // (envinfo.Merge + envinfo.BuildTree), validate every sidecar skill path
-// against workspaces (envinfo.ValidateSkillWorkspaces), and refuse every
-// local referenced kit/command/executable Load can name that is either
-// symlinked or whose local-vs-remote classification is ambiguous
+// against every resolved workspace (envinfo.ValidateSkillWorkspaces), and
+// refuse every local referenced kit/command/executable Load can name that
+// is either symlinked or whose local-vs-remote classification is ambiguous
 // (RefuseSymlinkedReference + RequiresSymlinkCheck, the same fail-closed
-// rule AC-12 already established). workspaces is the caller-supplied list
-// of writable workspace roots this environment would mount — the same
-// input RefuseContainment and ValidateSkillWorkspaces both need, and
-// neither this package nor envinfo derives it on its own (see resolve.go's
-// RefuseContainment doc comment for why).
+// rule AC-12 already established).
+//
+// effective is the ONE caller-supplied, typed effective workspace set
+// (EffectiveMounts) this call composes against — the same value
+// ResolveEnvironment's containment refusal and this function's own skill
+// validation both derive their inputs from, so there is no second,
+// independently-suppliable `workspaces []string` a caller could pass out
+// of step with it (E1.9's BLOCK finding). Neither this package nor
+// envinfo derives effective's caller-declared entries on its own — that
+// composition belongs to whichever later unit builds the effective launch
+// declaration (E1.8's bill of materials, a future E2 renderer); see
+// EffectiveMounts's own doc comment for the compile-time seam that forces
+// E2 to supply real writable mounts here rather than reviving a bare
+// []string.
+//
+// Load ALWAYS additionally validates sidecar skills against the
+// environment's own canonical root, read-only — an intrinsic source
+// workspace no caller ever has to supply and no caller can omit: a LOCAL
+// `[pi].skills` entry legitimately lives right under the environment's own
+// directory (docs/design/environments.md §5.2), and until a future E2
+// launch composition supplies any writable mount at all, root is the ONLY
+// workspace such a skill could possibly resolve inside. This addition is
+// purely internal to skill validation — it is never returned on
+// *Environment, never reaches ComputeBoM/Review's bill, and (being
+// read-only) can never trigger RefuseContainment's self-refusal.
 //
 // Load returns a structured error, never a bare string: a cli.UsageError
 // (cli.ExitCode == 2) for anything the user can fix by editing what they
@@ -140,8 +208,8 @@ func ResolveEnvironment(cfg *config.Config, name string, workspaces []string) (s
 // (cli.ExitCode == 1) for an operational failure Load cannot itself
 // resolve, such as a file that exists but could not be read for a reason
 // unrelated to its content (a permissions error, for example).
-func Load(cfg *config.Config, store *hosttrust.AcceptanceStore, name string, workspaces []string, lookPath func(string) (string, error)) (*Environment, error) {
-	root, err := ResolveEnvironment(cfg, name, workspaces)
+func Load(cfg *config.Config, store *hosttrust.AcceptanceStore, name string, effective EffectiveMounts, lookPath func(string) (string, error)) (*Environment, error) {
+	root, err := ResolveEnvironment(cfg, name, effective)
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +250,11 @@ func Load(cfg *config.Config, store *hosttrust.AcceptanceStore, name string, wor
 	}
 
 	if sidecar != nil {
-		if err := envinfo.ValidateSkillWorkspaces(sidecarPath, sidecar, workspaces); err != nil {
+		// skillWorkspaces is every caller-declared effective mount PLUS the
+		// environment's own root — see Load's doc comment above for why the
+		// root is always implicitly present here and nowhere else.
+		skillWorkspaces := append(workspacePaths(effective), root)
+		if err := envinfo.ValidateSkillWorkspaces(sidecarPath, sidecar, skillWorkspaces); err != nil {
 			return nil, cli.UsageError{Err: err}
 		}
 	}

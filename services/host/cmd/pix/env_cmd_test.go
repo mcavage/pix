@@ -93,6 +93,38 @@ func registerHostExecEnv(t *testing.T, name string) string {
 	return registerFixtureEnv(t, src, name)
 }
 
+// registerEnvWithLocalSkill registers name against a fresh root declaring a
+// LOCAL `[pi].skills` entry at a relative path under root ("./skills") —
+// the E1.9 BLOCK regression fixture: `env show`/`env review` supply no
+// caller EffectiveMounts at all (env_cmd.go's own nil), so this only
+// succeeds when Load itself validates the skill against its own implicit,
+// read-only environment-root workspace.
+func registerEnvWithLocalSkill(t *testing.T, name string) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".sbxenv.yaml"), []byte("schemaVersion: \"1\"\nagent: pix\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "pix.toml"), []byte("schema = 1\n\n[pi]\nskills = [\"./skills\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	canon, err := cfg.AddEnvironment(name, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	return canon
+}
+
 // ── bare `pix env` is `env ls` ───────────────────────────────────────────
 
 func TestEnvBareIsLs(t *testing.T) {
@@ -262,5 +294,37 @@ func TestEnvReview_YesAccepts(t *testing.T) {
 	}
 	if !strings.Contains(out2.String(), "accepted") {
 		t.Errorf("env show after review --yes = %q, want it to report accepted", out2.String())
+	}
+}
+
+// ── E1.9 BLOCK: full dispatch with a local sidecar skill under root ──────
+
+// TestEnvShow_WithLocalSidecarSkillSucceeds proves `pix env show` — which
+// supplies no writable workspace at all pre-E2 — still succeeds for an
+// environment declaring a LOCAL skill under its own root, through the SAME
+// kong dispatch production uses.
+func TestEnvShow_WithLocalSidecarSkillSucceeds(t *testing.T) {
+	d, out, errb := envDeps(t)
+	registerEnvWithLocalSkill(t, "work")
+	if code := dispatch([]string{"env", "show", "work"}, d); code != 0 {
+		t.Fatalf("pix env show work (local sidecar skill under root) = %d, want 0 (stderr: %s)", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "pix.toml") {
+		t.Errorf("env show work = %q, want it to list pix.toml as an authored file", out.String())
+	}
+}
+
+// TestEnvReview_WithLocalSidecarSkillSucceeds proves the same for `pix env
+// review`: this fixture is Tier0 (no host-exec facet), so it succeeds
+// silently with no gate, but only once Load's own skill validation passes.
+func TestEnvReview_WithLocalSidecarSkillSucceeds(t *testing.T) {
+	d, out, errb := envDeps(t)
+	d.Interactive = false
+	registerEnvWithLocalSkill(t, "work")
+	if code := dispatch([]string{"env", "review", "work"}, d); code != 0 {
+		t.Fatalf("pix env review work (local sidecar skill under root) = %d, want 0 (stderr: %s)", code, errb.String())
+	}
+	if out.String() != "" {
+		t.Errorf("env review work (Tier0) = %q, want no output at all", out.String())
 	}
 }

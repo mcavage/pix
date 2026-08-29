@@ -48,15 +48,24 @@ type WorkspaceMount struct {
 	ReadOnly bool
 }
 
-// EffectiveMounts is the reviewed, effective set of additional workspace
-// mounts this environment's launch-time composition intends to expand host
-// access with. It is a DISTINCT named type, not a bare []WorkspaceMount,
-// precisely so ComputeBoM and Review's signatures cannot be satisfied by an
+// EffectiveMounts is the ONE typed effective workspace set that flows
+// end-to-end through Load, Review and ComputeShow (workflow/env's own
+// composition, load.go/review.go), and the reviewed set of additional
+// workspace mounts ComputeBoM fingerprints/renders here. It is a DISTINCT
+// named type, not a bare []WorkspaceMount or []string, precisely so
+// Load's, Review's and ComputeBoM's signatures cannot be satisfied by an
 // unrelated slice a caller happened to have lying around (an ad hoc CLI
 // flag, a workspace list built for some other purpose): a caller must
 // consciously construct an EffectiveMounts value from whatever launch-time
 // composition actually decided the effective mount set is, exactly the same
 // discipline this package already holds every other host-exec fact to.
+// Before this type existed as Load's own parameter, Load and Review took a
+// SECOND, independent `workspaces []string` alongside it — two unrelated
+// lists a caller was free to let diverge, so a mount that should have
+// refused containment could reach the reviewed bill having never been
+// checked (E1.9's BLOCK finding). There is now exactly one parameter of
+// this type on each of Load/Review, so no caller can pass workspaces
+// separately from effective mounts at all.
 //
 // E1.7/envinfo has no native "workspace" modeling of its own yet (resolve.go's
 // RefuseContainment doc comment: "that composition belongs to whichever
@@ -65,7 +74,15 @@ type WorkspaceMount struct {
 // the caller asserts is effective, exactly as it already does for every
 // other host-exec fact. Actually COMPUTING the effective set (from declared
 // workspaces, kit mounts, and whatever else `sbx env` would mount) is a
-// future E2 renderer's job, not this package's.
+// future E2 renderer's job, not this package's: a caller (env_cmd.go, pre-
+// E2) supplies nil today, and Load derives only its own INTRINSIC
+// environment-root read-only entry internally for skill validation — never
+// a project/current-cwd mount, since that would depend on the calling
+// process's cwd (see load.go's Load doc comment). This is the compile-time
+// seam a future E2 must fill: EffectiveMounts is a required, typed
+// parameter on Load/Review, not an optional bare string list, so E2's
+// launch composition cannot supply a real writable mount without
+// constructing a genuine value of this type.
 type EffectiveMounts []WorkspaceMount
 
 // HostCommand is one local-command MCP server: docs/design/environments.md

@@ -170,12 +170,24 @@ func (c *envReviewCmd) Run(d *cli.Deps) error {
 	if err != nil {
 		return err
 	}
-	// No composition-owned effective mounts yet (nil workspaces, nil
-	// EffectiveMounts — "effective mounts (none until composition owns
-	// them)") and a nil lookPath (env.Review defaults it to the real
-	// exec.LookPath): the same "not composed yet" state review.go's own
-	// package doc comment already describes.
-	_, err = env.Review(cfg, c.Name, nil, nil, nil, env.ReviewOptions{
+	// No composition-owned EffectiveMounts yet: nil is the intrinsic
+	// pre-E2 set, derived deterministically and CWD-independently —
+	// Load itself adds the environment's own root, read-only, for skill
+	// validation (load.go's own doc comment), and NEVER a project/current-
+	// cwd mount, since neither this dispatcher nor Load ever consults
+	// os.Getwd. There is no separate `workspaces` argument here to diverge
+	// from this value — env.Review takes exactly one typed effective
+	// workspace set and feeds it identically to Load and ComputeBoM (see
+	// env.Review's own doc comment). A nil lookPath defaults to the real
+	// exec.LookPath.
+	//
+	// Future E2's launch composition is FORCED, by this same signature, to
+	// supply a real EffectiveMounts value here instead of nil — the
+	// compile-time seam is env.Review's parameter type itself
+	// (EffectiveMounts, not a bare []string a caller could satisfy with an
+	// unrelated slice): E2 cannot add a writable project mount without
+	// constructing one.
+	_, err = env.Review(cfg, c.Name, nil, nil, env.ReviewOptions{
 		Verbose: c.Verbose, Yes: c.Yes, TTY: d.Interactive, In: d.In, Out: d.Out,
 	})
 	return envRun(d, err)

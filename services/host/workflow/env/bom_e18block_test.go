@@ -361,7 +361,7 @@ func TestReview_EffectiveMountAloneRefusesNonTTY(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	res, err := Review(cfg, "home", nil, EffectiveMounts{{Path: "/workspaces/extra"}}, noBareLookPath, ReviewOptions{Out: &out, TTY: false, Yes: false})
+	res, err := Review(cfg, "home", EffectiveMounts{{Path: "/workspaces/extra"}}, noBareLookPath, ReviewOptions{Out: &out, TTY: false, Yes: false})
 	if err == nil {
 		t.Fatal("a new mount expansion must gate review even with no other host-exec facet")
 	}

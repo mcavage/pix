@@ -48,7 +48,7 @@ func TestReview_NonTTYWithoutYesFailsClosedAndWritesNothing(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	res, err := Review(cfg, "work", nil, prdMounts(), noBareLookPath, ReviewOptions{Out: &out, TTY: false, Yes: false})
+	res, err := Review(cfg, "work", prdMounts(), noBareLookPath, ReviewOptions{Out: &out, TTY: false, Yes: false})
 	if err == nil {
 		t.Fatal("Review must fail closed on a non-TTY without --yes")
 	}
@@ -80,7 +80,7 @@ func TestReview_InteractivePromptYesAccepts(t *testing.T) {
 	root, cfg := reviewFixture(t, "work")
 
 	var out bytes.Buffer
-	res, err := Review(cfg, "work", nil, prdMounts(), noBareLookPath, ReviewOptions{
+	res, err := Review(cfg, "work", prdMounts(), noBareLookPath, ReviewOptions{
 		Out: &out, TTY: true, In: strings.NewReader("yes\n"),
 	})
 	if err != nil {
@@ -113,7 +113,7 @@ func TestReview_InteractivePromptNoRefusesAndWritesNothing(t *testing.T) {
 	_, cfg := reviewFixture(t, "work")
 
 	var out bytes.Buffer
-	res, err := Review(cfg, "work", nil, prdMounts(), noBareLookPath, ReviewOptions{
+	res, err := Review(cfg, "work", prdMounts(), noBareLookPath, ReviewOptions{
 		Out: &out, TTY: true, In: strings.NewReader("no\n"),
 	})
 	if err == nil {
@@ -135,7 +135,7 @@ func TestReview_InteractivePromptEOFRefusesAndWritesNothing(t *testing.T) {
 	_, cfg := reviewFixture(t, "work")
 
 	var out bytes.Buffer
-	res, err := Review(cfg, "work", nil, prdMounts(), noBareLookPath, ReviewOptions{
+	res, err := Review(cfg, "work", prdMounts(), noBareLookPath, ReviewOptions{
 		Out: &out, TTY: true, In: strings.NewReader(""),
 	})
 	if err == nil {
@@ -165,7 +165,7 @@ func TestReview_Tier0IsSilentAndWritesNothing(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	res, err := Review(cfg, "home", nil, nil, nil, ReviewOptions{Out: &out, TTY: false, Yes: false})
+	res, err := Review(cfg, "home", nil, nil, ReviewOptions{Out: &out, TTY: false, Yes: false})
 	if err != nil {
 		t.Fatalf("Review on a Tier0 environment must succeed with no gate, got: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestReview_AcceptancePersistsRepointCannotInheritAndChangeRegates(t *testin
 	}
 
 	// accept once
-	res1, err := Review(cfg, "work", nil, prdMounts(), noBareLookPath, ReviewOptions{Out: &bytes.Buffer{}, Yes: true})
+	res1, err := Review(cfg, "work", prdMounts(), noBareLookPath, ReviewOptions{Out: &bytes.Buffer{}, Yes: true})
 	if err != nil {
 		t.Fatalf("first Review: %v", err)
 	}
@@ -220,7 +220,7 @@ func TestReview_AcceptancePersistsRepointCannotInheritAndChangeRegates(t *testin
 	if _, err := Register(cfg, "work", newRoot); err != nil {
 		t.Fatal(err)
 	}
-	_, err = Review(cfg, "work", nil, prdMounts(), noBareLookPath, ReviewOptions{Out: &bytes.Buffer{}, TTY: false, Yes: false})
+	_, err = Review(cfg, "work", prdMounts(), noBareLookPath, ReviewOptions{Out: &bytes.Buffer{}, TTY: false, Yes: false})
 	if err == nil {
 		t.Fatal("a repointed name must not inherit the old root's acceptance — non-TTY review must fail closed")
 	}
@@ -239,7 +239,7 @@ func TestReview_AcceptancePersistsRepointCannotInheritAndChangeRegates(t *testin
 	// change-regate: accept the new root, then mutate its surface (a new
 	// host command) and accept again — the STORED fingerprint must move to
 	// reflect the new surface, never silently keep the old one.
-	res2, err := Review(cfg, "work", nil, prdMounts(), noBareLookPath, ReviewOptions{Out: &bytes.Buffer{}, Yes: true})
+	res2, err := Review(cfg, "work", prdMounts(), noBareLookPath, ReviewOptions{Out: &bytes.Buffer{}, Yes: true})
 	if err != nil {
 		t.Fatalf("Review on repointed root: %v", err)
 	}
@@ -259,7 +259,7 @@ func TestReview_AcceptancePersistsRepointCannotInheritAndChangeRegates(t *testin
 		t.Fatal(err)
 	}
 
-	res3, err := Review(cfg, "work", nil, prdMounts(), noBareLookPath, ReviewOptions{Out: &bytes.Buffer{}, Yes: true})
+	res3, err := Review(cfg, "work", prdMounts(), noBareLookPath, ReviewOptions{Out: &bytes.Buffer{}, Yes: true})
 	if err != nil {
 		t.Fatalf("Review after surface change: %v", err)
 	}
@@ -311,7 +311,7 @@ func TestReview_MutationDuringPromptFailsClosedAtCommit(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	res, err := Review(cfg, "work", nil, nil, nil, ReviewOptions{Out: &out, TTY: true, In: in})
+	res, err := Review(cfg, "work", nil, nil, ReviewOptions{Out: &out, TTY: true, In: in})
 	if !mutated {
 		t.Fatal("test setup error: the mutating reader was never invoked")
 	}

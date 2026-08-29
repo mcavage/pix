@@ -323,12 +323,23 @@ type ReviewResult struct {
 // record under hosttrust — outside the environment's own payload, keyed by
 // Subject(root), never by name (a repoint can never inherit acceptance:
 // AC-16).
-func Review(cfg *config.Config, name string, workspaces []string, effective EffectiveMounts, lookPath func(string) (string, error), opts ReviewOptions) (*ReviewResult, error) {
+//
+// effective is the ONE typed effective workspace set (EffectiveMounts) fed
+// identically to BOTH Load (containment refusal on its writable entries,
+// skill validation on every entry plus the environment's own root) and
+// ComputeBoM (the reviewed bill/fingerprint). Earlier revisions of this
+// function took a SECOND, independent `workspaces []string` for Load alone
+// — a caller could hand Load one list and ComputeBoM a different one, so a
+// mount that should have refused containment could reach the bill having
+// never been checked at all (E1.9's BLOCK finding). There is now no such
+// back door: whatever effective names is exactly what both Load and
+// ComputeBoM see, with no way to pass one without the other.
+func Review(cfg *config.Config, name string, effective EffectiveMounts, lookPath func(string) (string, error), opts ReviewOptions) (*ReviewResult, error) {
 	ts, err := loadEnvironmentTrustStore()
 	if err != nil {
 		return nil, err
 	}
-	loaded, err := Load(cfg, &ts.AcceptanceStore, name, workspaces, lookPath)
+	loaded, err := Load(cfg, &ts.AcceptanceStore, name, effective, lookPath)
 	if err != nil {
 		return nil, err
 	}
@@ -357,7 +368,7 @@ func Review(cfg *config.Config, name string, workspaces []string, effective Effe
 		// is caught HERE, by the exact same refusals a first Load would
 		// hit, rather than silently accepted under a fingerprint of a
 		// surface nobody actually reviewed.
-		reloaded, err := Load(cfg, &s.AcceptanceStore, name, workspaces, lookPath)
+		reloaded, err := Load(cfg, &s.AcceptanceStore, name, effective, lookPath)
 		if err != nil {
 			return err
 		}

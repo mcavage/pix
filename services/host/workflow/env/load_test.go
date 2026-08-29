@@ -59,7 +59,7 @@ func TestLoad_BothFilesParsed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := Load(cfg, &hosttrust.AcceptanceStore{}, "home", []string{workspace}, nil)
+	got, err := Load(cfg, &hosttrust.AcceptanceStore{}, "home", EffectiveMounts{{Path: workspace}}, nil)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -222,7 +222,7 @@ func TestLoad_ContainmentCalledFromComposition(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := Load(cfg, nil, "home", []string{workspace}, nil)
+	_, err := Load(cfg, nil, "home", EffectiveMounts{{Path: workspace}}, nil)
 	if err == nil {
 		t.Fatal("Load must refuse a root that resolves inside a declared workspace")
 	}
