@@ -128,21 +128,27 @@ func TestRelaxedRouteIsVisibleInReasonAndCompiledOutput(t *testing.T) {
 	}
 }
 
-// TestCompiledRoutingVersionIsUnchanged is the fleet guard (review nit N4).
-// extensions/subagents.ts requires an EXACT version match; bumping the constant
-// for an additive field drops every agent in every already-built sandbox image
-// to "inherit parent model" until that image is rebuilt and reloaded.
+// TestCompiledRoutingVersionIsUnchanged was the fleet guard (review nit N4)
+// while extensions/subagents.ts still read routing.json and required an EXACT
+// version match on it. E3.2 (docs/design/environments.md §7) moved every
+// sandbox reader — extensions/inference.ts, extensions/subagents.ts, and
+// extensions/ollama-bridge.ts — onto the additive `roster` field of the
+// generated inference.json instead: there is no second generated routing
+// artifact left for a sandbox extension to disagree with, so
+// CompiledRoutingVersion no longer has a cross-language reader to stay pinned
+// against. This guard now asserts the other half of that fact directly: no
+// extension reads routing.json at all (Wave F deletes the artifact and this
+// package; until then it simply has no sandbox-side reader left).
 func TestCompiledRoutingVersionIsUnchanged(t *testing.T) {
 	if CompiledRoutingVersion != 1 {
-		t.Fatalf("CompiledRoutingVersion = %d, want 1 \u2014 bumping it bricks routing in every already-built image", CompiledRoutingVersion)
+		t.Fatalf("CompiledRoutingVersion = %d, want 1 \u2014 bumping it is a no-op for sandbox readers now, but still a needless break for any external reader of the artifact before Wave F removes it", CompiledRoutingVersion)
 	}
 	src, err := os.ReadFile(filepath.Join("..", "..", "..", "extensions", "subagents.ts"))
 	if err != nil {
 		t.Skipf("subagents.ts not readable from here: %v", err)
 	}
-	want := "const ROUTING_SCHEMA = 1"
-	if !strings.Contains(string(src), want) {
-		t.Fatalf("extensions/subagents.ts no longer declares %q; the sandbox reader and CompiledRoutingVersion have drifted", want)
+	if strings.Contains(string(src), "routing.json") {
+		t.Fatalf("extensions/subagents.ts must not read routing.json (docs/design/environments.md \u00a77); resolve the roster from inference.json instead")
 	}
 }
 

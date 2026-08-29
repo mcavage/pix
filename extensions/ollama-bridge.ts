@@ -25,6 +25,7 @@ import { createServer, request } from "node:http";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { parseRoster, type Roster } from "../lib/inference-roster.ts";
 
 // The bridge model is configured on the HOST (`pix config set
 // ollama_bridge_model <tag>`); `pix run` writes the resolved value into
@@ -98,7 +99,7 @@ function bridgeTagModel(): BridgeModel {
 }
 
 // manifestModels reads the ollama models the HOST decided this sandbox can
-// call, from the inference.json the launcher generates beside routing.json.
+// call, from the inference.json the launcher generates.
 //
 // Why this exists: `pix run` passes pi a `--models` cycle built from every
 // callable binding in config, which today includes each probed Ollama model —
@@ -159,25 +160,42 @@ export function modelsFromManifest(
 // Best-effort by design — a missing, unreadable, or malformed manifest is the
 // pre-manifest world, where the bridge tag alone is exactly right.
 function bridgeModels(): BridgeModel[] {
+	return modelsFromManifest(readManifest(), bridgeTagModel());
+}
+
+// readManifest parses <agentDir>/inference.json once so both the model-list
+// builder above and the roster reader below work from the identical parsed
+// document, never two independent reads that could observe different bytes
+// mid-write. Absent/unparseable is the pre-manifest world (null); a present
+// but unparseable file is diagnosed loudly, the same guard
+// extensions/inference.ts's readManifest applies.
+function readManifest(): any {
 	const manifestPath = join(getAgentDir(), "inference.json");
 	let raw: string | undefined;
 	try {
 		raw = readFileSync(manifestPath, "utf8");
 	} catch {
 		/* absent -> bridge tag only, the expected pre-manifest world */
+		return null;
 	}
-	let parsed: any = null;
-	if (raw !== undefined) {
-		// Present but unparseable is loud: this is the failure mode that let
-		// the "json" vs. "inference.json" filename bug ship silently (see
-		// extensions/inference.ts's readManifest for the same guard).
-		try {
-			parsed = JSON.parse(raw);
-		} catch (err) {
-			process.stderr.write(`[ollama-bridge] ${manifestPath} is present but failed to parse as JSON: ${err}\n`);
-		}
+	try {
+		return JSON.parse(raw);
+	} catch (err) {
+		process.stderr.write(`[ollama-bridge] ${manifestPath} is present but failed to parse as JSON: ${err}\n`);
+		return null;
 	}
-	return modelsFromManifest(parsed, bridgeTagModel());
+}
+
+// readRoster resolves the additive roster (docs/design/environments.md §7)
+// from the same manifest bridgeModels() just read. Never used to pick THIS
+// bridge's own default model: the local-model transport limitation (§4.1)
+// means the parent-Ollama inheritance exception stays a subagents.ts
+// concern, not a roster-driven one, until native custom-agent local-model
+// transport lands. Exported so a test can assert this file resolves the
+// identical roster shape extensions/inference.ts and extensions/subagents.ts
+// do, from the identical file.
+export function readRoster(): Roster | undefined {
+	return parseRoster(readManifest());
 }
 
 export default async function (pi: any): Promise<void> {

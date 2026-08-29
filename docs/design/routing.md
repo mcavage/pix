@@ -260,12 +260,14 @@ roster. Consequently every compiled route and runtime model cycle stays inside
 the setup choice. Exclusive packs bypass (but do not erase) that personal
 roster and compile only from their own bindings.
 
-An agent may declare `fallback_intent:` for a narrow provider-policy recovery.
-The subagent runner retries once only when the primary response is positively
-classified as a usage-policy refusal. Authentication, timeout, transport, and
-invalid-route failures never trigger cross-provider spend. `security-lead`
-uses `review` as its cross-vendor fallback because defensive cyber prompts can
-trip Anthropic's classifier even when the task is legitimate.
+`fallback_intent:` is legacy frontmatter left over from the retired
+cross-vendor-retry-on-policy-refusal feature. It is parsed only (see
+`extensions/subagents.ts`'s `AgentConfig.fallbackIntent`) and has NO runtime
+effect: it is never a `roster.agents` lookup and never changes which model
+runs, including on a provider policy refusal, which is now reported as an
+ordinary failure like any other. `agents/security-lead.md` still ships
+`fallback_intent: review` from that era; removing the dead field from shipped
+agent frontmatter is E3.4's job, not a re-open of this fix.
 
 Agent presets migrate from a hard-coded `model:` to an `intent:`. `routing.json`
 is baked at `~/.pi/agent/routing.json` next to `capabilities.json`.
