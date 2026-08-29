@@ -128,11 +128,11 @@ func ConfiguredKeylessInference() bool {
 // SynthesizeInferenceKit creates a create-time mixin containing only generated
 // public metadata. It carries no credential values. The extension reads the
 // manifest; subagents read the compiled routing file beside it.
-func SynthesizeInferenceKit(cfg *config.Config) (string, error) {
+func SynthesizeInferenceKit(cfg *config.Config, roster RosterInput) (string, error) {
 	if !Configured(cfg) {
 		return "", nil
 	}
-	compiled, manifest, err := CompileInferenceRuntime(cfg, time.Now())
+	compiled, manifest, err := CompileInferenceRuntime(cfg, time.Now(), roster)
 	if err != nil {
 		return "", err
 	}
@@ -213,7 +213,7 @@ func AllowsModel(cfg *config.Config, id string) bool {
 	return slices.Contains(models, id)
 }
 
-func CompileInferenceRuntime(cfg *config.Config, now time.Time) (routing.CompiledRouting, runtimeInferenceManifest, error) {
+func CompileInferenceRuntime(cfg *config.Config, now time.Time, roster RosterInput) (routing.CompiledRouting, runtimeInferenceManifest, error) {
 	reg, err := routing.LoadRegistry()
 	if err != nil {
 		return routing.CompiledRouting{}, runtimeInferenceManifest{}, err
@@ -236,6 +236,15 @@ func CompileInferenceRuntime(cfg *config.Config, now time.Time) (routing.Compile
 		}
 		manifest.Backends[name] = runtimeBackend{Driver: b.Driver, Protocol: b.Protocol, BaseURL: b.BaseURL, Auth: b.Auth, KeyEnv: b.KeyEnv}
 	}
+	// roster.go's BuildRoster validates against manifest.Models — the exact
+	// set this manifest ships — never a separate resolution path; a
+	// zero-value RosterInput (every caller not yet taught to resolve one)
+	// builds no roster at all, so the additive field stays fully absent.
+	r, err := BuildRoster(roster, manifest.Models)
+	if err != nil {
+		return routing.CompiledRouting{}, runtimeInferenceManifest{}, err
+	}
+	manifest.Roster = r
 	return compiled, manifest, nil
 }
 
@@ -392,6 +401,11 @@ type runtimeInferenceManifest struct {
 	Version  int                       `json:"version"`
 	Backends map[string]runtimeBackend `json:"backends"`
 	Models   []runtimeModel            `json:"models"`
+	// Roster is additive: nil omits the key entirely (omitempty on the
+	// pointer), so an existing v1 reader that only ever checked
+	// version/backends/models sees byte-for-byte the same shape it always
+	// has. See roster.go.
+	Roster *runtimeRoster `json:"roster,omitempty"`
 }
 
 type runtimeBackend struct {

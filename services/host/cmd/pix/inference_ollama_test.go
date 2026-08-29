@@ -638,7 +638,7 @@ func TestUnverifiedOllamaBindingIsNotCallable(t *testing.T) {
 	if ids, err := inference.CallableRuntimeModels(cfg); err != nil || len(ids) != 0 {
 		t.Fatalf("callable runtime models = %v (%v)", ids, err)
 	}
-	_, manifest, err := inference.CompileInferenceRuntime(cfg, time.Unix(1, 0))
+	_, manifest, err := inference.CompileInferenceRuntime(cfg, time.Unix(1, 0), inference.RosterInput{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -690,7 +690,7 @@ func TestNonInteractiveModelsFlagRejectsUnprobedModel(t *testing.T) {
 // TestSynthesizeInferenceKitErrorNamesTheFix (S5): a dead-end refusal.
 func TestSynthesizeInferenceKitErrorNamesTheFix(t *testing.T) {
 	cfg := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
-	_, err := inference.SynthesizeInferenceKit(cfg)
+	_, err := inference.SynthesizeInferenceKit(cfg, inference.RosterInput{})
 	if err == nil {
 		t.Fatal("a config with no callable binding must refuse to build a kit")
 	}
