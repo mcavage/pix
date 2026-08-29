@@ -1,14 +1,14 @@
 // env_cmd.go — `pix env`: the dispatch skeleton (E1.9) for the seven-verb
 // native-environment surface docs/design/environments.md §8 and PRD §5.10
 // define (`ls add use show edit review forget`; `pix env rm` is never one
-// of them). This unit wires exactly the three verbs workflow/env already
+// of them). This unit wires four of the seven verbs workflow/env already
 // has behind it — `ls` (workflow/env/ls.go), `show` (workflow/env/show.go),
-// `review` (E1.8's workflow/env/review.go) — as the FIRST fields of envCmd.
-// Every later verb unit (E1.10 `add`, E1.11 `use`/`forget`/the `rm`
-// pointer, E1.12 `edit`) adds its own ONE field line here and lands in ID
-// order (units.json's file-conflict table: "E1.9 owns the struct; each
-// verb unit adds one field line + its own file. Land in ID order,
-// rebase.").
+// `edit` (E1.12's workflow/env/edit.go), `review` (E1.8's
+// workflow/env/review.go) — as fields of envCmd. Every later verb unit
+// (E1.10 `add`, E1.11 `use`/`forget`/the `rm` pointer) adds its own ONE
+// field line here and lands in ID order (units.json's file-conflict
+// table: "E1.9 owns the struct; each verb unit adds one field line + its
+// own file. Land in ID order, rebase.").
 //
 // There is deliberately NO placeholder field for a verb that does not
 // exist yet: an unregistered subcommand answers with kong's own generic
@@ -60,8 +60,13 @@ servers. See docs/design/environments.md.
 
 Seven verbs: ls, add, use, show, edit, review, forget. There is no
 'pix env rm' — registering a name is not owning its files; forget only
-unregisters, and it deletes nothing. 'add'/'use'/'edit'/'forget' land in
-later units; ls, show and review work now.
+unregisters, and it deletes nothing. 'add'/'use'/'forget' land in later
+units; ls, show, edit and review work now.
+
+'edit NAME pix|sbxenv' opens pix.toml or .sbxenv.yaml in $VISUAL/$EDITOR
+(exact positional enum, no flag), then reloads and validates: it never
+prompts to accept a host-execution change inline — a changed footprint
+prints 'pix env review NAME' as the next step instead.
 
 An environment that runs code on your host or hands it a credential halts
 at 'pix env review NAME': [y/N], default No. A non-TTY review fails closed
@@ -74,6 +79,7 @@ unless --yes.`
 type envCmd struct {
 	Ls     envLsCmd     `cmd:"" default:"1" help:"List registered environments. Marks the default."`
 	Show   envShowCmd   `cmd:"" help:"What NAME is: files, models, mounts, MCP, review state, drift."`
+	Edit   envEditCmd   `cmd:"" help:"Open pix.toml or .sbxenv.yaml in $VISUAL/$EDITOR, then validate."`
 	Review envReviewCmd `cmd:"" help:"Read and accept what NAME runs on your host."`
 }
 
@@ -155,6 +161,31 @@ func countTrue(bs ...bool) int {
 		}
 	}
 	return n
+}
+
+// ── edit ─────────────────────────────────────────────────────────────────
+
+// envEditCmd's Target is an exact positional enum ("pix" or "sbxenv"),
+// never a flag — there is deliberately no `--sbxenv` flag anywhere in this
+// dispatch. It is validated by hand in workflow/env.Edit, the same
+// `optional:""` + hand-checked-switch idiom configPathCmd's Kind already
+// uses, rather than kong's own `enum` tag: an unrecognized or omitted
+// token needs THIS package's own two-explicit-forms message (env.Edit's
+// editTargetUsageError), not kong's generic "expected one of" text.
+type envEditCmd struct {
+	Name   string `arg:"" help:"Exact environment name."`
+	Target string `arg:"" optional:"" help:"'pix' for pix.toml, 'sbxenv' for .sbxenv.yaml. Omit on a TTY to be asked."`
+}
+
+func (c *envEditCmd) Run(d *cli.Deps) error {
+	cfg, err := d.Config()
+	if err != nil {
+		return err
+	}
+	_, err = env.Edit(cfg, d.Sys, c.Name, c.Target, env.EditOptions{
+		TTY: d.Interactive, In: d.In, Out: d.Out,
+	})
+	return envRun(d, err)
 }
 
 // ── review ───────────────────────────────────────────────────────────────
