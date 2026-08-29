@@ -403,7 +403,11 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		effectivePack = o.ApplyPackContribution(contributed)
 		// Inference is a generated create-time facet like pack wrappers: probed models,
 		// compiled routes, public endpoint metadata. No credential value enters it.
-		inferenceKit, ierr := inference.SynthesizeInferenceKit(cfg)
+		// TODO(E3.2/E3.3): resolve the selected environment's pix.toml sidecar
+		// facts into an inference.RosterInput here; today every launch composes
+		// with the zero value (no environment roster), which is a no-op for
+		// BuildRoster and leaves the manifest's additive "roster" key absent.
+		inferenceKit, ierr := inference.SynthesizeInferenceKit(cfg, inference.RosterInput{})
 		if ierr != nil {
 			return runFail(d, 1, "inference: %v", ierr)
 		}

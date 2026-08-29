@@ -90,7 +90,7 @@ func TestCallableRuntimeModelsUnknownBindingNeverEntersCatalogRouting(t *testing
 	if _, ok := reg.Get("ollama/llama5.1:70b-instruct"); ok {
 		t.Fatal("the base catalog must never contain the unknown tag before compile")
 	}
-	_, manifest, err := CompileInferenceRuntime(cfg, time.Now())
+	_, manifest, err := CompileInferenceRuntime(cfg, time.Now(), RosterInput{})
 	if err != nil {
 		t.Fatal(err)
 	}

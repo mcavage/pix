@@ -28,7 +28,7 @@ func TestCompileInferenceRuntimeNoModelAndExclusiveFiltering(t *testing.T) {
 			{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "reasoner", Available: true},
 		},
 	}}
-	routes, manifest, err := inference.CompileInferenceRuntime(cfg, time.Unix(1, 0))
+	routes, manifest, err := inference.CompileInferenceRuntime(cfg, time.Unix(1, 0), inference.RosterInput{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestCompileInferenceRuntimeCarriesAdaptiveThinkingFromCatalog(t *testing.T)
 			{Model: "anthropic/claude-opus-5", Backend: "gateway", Upstream: "claude-opus-5", Available: true},
 		},
 	}}
-	_, manifest, err := inference.CompileInferenceRuntime(cfg, time.Unix(1, 0))
+	_, manifest, err := inference.CompileInferenceRuntime(cfg, time.Unix(1, 0), inference.RosterInput{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestConfigureModelRosterRestrictsRuntimeAndRoutes(t *testing.T) {
 	if got := strings.Join(cfg.Inference.AllowedModels, ","); got != "openai/gpt-5.6-sol" {
 		t.Fatalf("allowed models = %q", got)
 	}
-	routes, manifest, err := inference.CompileInferenceRuntime(cfg, time.Unix(1, 0))
+	routes, manifest, err := inference.CompileInferenceRuntime(cfg, time.Unix(1, 0), inference.RosterInput{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -36,7 +36,7 @@ func TestSynthesizeInferenceKitMixinLayout(t *testing.T) {
 		},
 	}}
 
-	dir, err := SynthesizeInferenceKit(cfg)
+	dir, err := SynthesizeInferenceKit(cfg, RosterInput{})
 	if err != nil {
 		t.Fatal(err)
 	}

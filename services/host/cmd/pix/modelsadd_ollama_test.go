@@ -197,7 +197,7 @@ func TestInferenceManifestCarriesOllamaModels(t *testing.T) {
 			probed("ollama/qwen3.5:9b", "qwen3.5:9b"),
 		},
 	}}
-	_, manifest, err := inference.CompileInferenceRuntime(cfg, time.Time{})
+	_, manifest, err := inference.CompileInferenceRuntime(cfg, time.Time{}, inference.RosterInput{})
 	if err != nil {
 		t.Fatal(err)
 	}

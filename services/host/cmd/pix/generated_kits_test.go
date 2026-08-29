@@ -22,7 +22,7 @@ func TestCleanupGeneratedKitDirsRemovesSynthesizedKitsOnly(t *testing.T) {
 			{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "reasoner", Available: true},
 		},
 	}}
-	inferenceKit, err := inference.SynthesizeInferenceKit(cfg)
+	inferenceKit, err := inference.SynthesizeInferenceKit(cfg, inference.RosterInput{})
 	if err != nil {
 		t.Fatal(err)
 	}
