@@ -55,7 +55,7 @@ type NoncanonicalRootError struct {
 
 func (e *NoncanonicalRootError) Error() string {
 	return fmt.Sprintf(
-		"pix: environment %q's registered root %q is not a canonical absolute path; refusing rather than resolving it against the current directory (re-register with `pix env add %s <path>`)",
+		"pix: environment %q's registered root is not a canonical absolute path; refusing rather than resolving it against the current directory.\n     root: %s\n     re-register it: pix env add %s <path>",
 		e.Name, e.Root, e.Name,
 	)
 }
@@ -71,8 +71,8 @@ type ContainmentError struct {
 
 func (e *ContainmentError) Error() string {
 	return fmt.Sprintf(
-		"pix: environment root %s resolves inside writable workspace %s it mounts; refusing",
-		e.Root, e.Workspace,
+		"pix: environment root %s resolves inside writable workspace %s it mounts; refusing.\n     workspace: %s\n     register a root outside it: pix env add <name> <path>",
+		e.Root, e.Workspace, e.Workspace,
 	)
 }
 

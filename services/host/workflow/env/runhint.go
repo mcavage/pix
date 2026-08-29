@@ -29,7 +29,7 @@ const SbxEnvFileName = ".sbxenv.yaml"
 // so is not automatic, and names exactly one next step — `pix env add` — and
 // nothing else: no `pix env review`, no `pix help env`, no implication that
 // an environment is required to keep running.
-const sbxenvHintMessage = "pix: did not select the .sbxenv.yaml found in this workspace — pix run\n" +
+const sbxenvHintMessage = "pix: did not select the .sbxenv.yaml found in this workspace; pix run\n" +
 	"never picks one up on its own. Register it if you want it: pix env add <name> [path]\n"
 
 // RunHint returns the D13/AC-59 hint text, or "" when any of these hold:

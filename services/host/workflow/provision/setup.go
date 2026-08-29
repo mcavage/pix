@@ -6,7 +6,7 @@
 // SCOPE. Setup installs four things — the launchd agent, requested packs,
 // consented local models, and (on a terminal) ONE provider key, by running the
 // `pix models add` interview rather than reimplementing it. MCP registration and
-// identity seeding stay out: they belong to `pix mcp register` and the sandbox
+// identity seeding stay out: they belong to `pix mcp add` and the sandbox
 // itself, each having been a way for setup to claim something it had not proven.
 // sbx stays probe-only for the same reason, and names the exact brew line.
 //

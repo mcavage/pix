@@ -142,8 +142,10 @@ type Config struct {
 
 	Plugins map[string]PluginSpec `toml:"plugins"`
 
-	// Host gates + configures `pix host` (the unsandboxed escape hatch). GLOBAL,
-	// never per-profile: leaving the sandbox is a machine-level decision.
+	// Host is the `[host]` table (see HostMode's own doc comment: the
+	// unsandboxed escape hatch it once gated is retired; only the launcher's
+	// lazy `pix-host serve` autoserve toggle lives here now). GLOBAL, never
+	// per-profile: how pix-host starts is a machine-level decision.
 	Host HostMode `toml:"host,omitempty"`
 
 	// unknownKeys are the keys in the file that this binary does nothing with:

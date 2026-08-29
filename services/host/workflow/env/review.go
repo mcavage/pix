@@ -285,13 +285,15 @@ func gate(in io.Reader, out io.Writer, tty, yes bool, name string, b BillOfMater
 	sc := bufio.NewScanner(in)
 	fmt.Fprintln(out)
 	if !sc.Scan() {
-		return fmt.Errorf("environment %q not accepted (no answer; default is No)", name)
+		fmt.Fprintf(out, "pix env review %s\n", name)
+		return cli.UsageError{Err: fmt.Errorf("environment %q not accepted (no answer; default is No)", name)}
 	}
 	switch strings.ToLower(strings.TrimSpace(sc.Text())) {
 	case "y", "yes":
 		return nil
 	}
-	return fmt.Errorf("environment %q not accepted (you said no)", name)
+	fmt.Fprintf(out, "pix env review %s\n", name)
+	return cli.UsageError{Err: fmt.Errorf("environment %q not accepted (you said no)", name)}
 }
 
 // ── Review: the composed entry point ─────────────────────────────────────

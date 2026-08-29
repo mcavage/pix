@@ -115,7 +115,7 @@ func resolveTarget(name, target string, opts EditOptions) (string, error) {
 		return promptForTarget(name, opts)
 	default:
 		return "", editTargetUsageError(name, fmt.Sprintf(
-			"`pix env edit %s %s` — unknown target %q.", name, target, target))
+			"`pix env edit %s %s`: unknown target %q.", name, target, target))
 	}
 }
 
@@ -142,7 +142,7 @@ func promptForTarget(name string, opts EditOptions) (string, error) {
 		return TargetSbxenv, nil
 	default:
 		return "", editTargetUsageError(name, fmt.Sprintf(
-			"`pix env edit %s` — %q is not pix or sbxenv.", name, answer))
+			"`pix env edit %s`: %q is not pix or sbxenv.", name, answer))
 	}
 }
 

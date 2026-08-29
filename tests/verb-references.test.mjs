@@ -117,6 +117,15 @@ const SURFACES = [
 		.readdirSync(path.join(repoRoot, "services/host/cmd/pix"))
 		.filter((f) => f.endsWith(".go") && !f.endsWith("_test.go"))
 		.map((f) => `services/host/cmd/pix/${f}`),
+	// Wave B carry-forward (E1.13): both packages narrate `pix env` verbs in
+	// doc comments and refusal text (config/environment.go's `pix env add`/
+	// `pix env use`, workflow/provision/config.go's config-key refusals
+	// pointing at `pix env use`/`add`/`forget`) written BEFORE the verb
+	// surface existed to resolve. All seven verbs are wired now (E1.9-E1.13),
+	// so these two packages are added to the surfaces a wrong verb cannot
+	// hide in, same as every other production Go file in this list.
+	...listFiles("services/host/config", (f) => f.endsWith(".go") && !f.endsWith("_test.go")),
+	...listFiles("services/host/workflow/provision", (f) => f.endsWith(".go") && !f.endsWith("_test.go")),
 ];
 
 // An INVOCATION, not prose. "pix learns from what you do" is English about the

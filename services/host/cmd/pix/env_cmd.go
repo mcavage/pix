@@ -63,12 +63,12 @@ func (c *envCmd) Help() string {
 servers. See docs/design/environments.md.
 
 Seven verbs: ls, add, use, show, edit, review, forget. There is no
-'pix env rm' — registering a name is not owning its files; forget only
+'pix env rm': registering a name is not owning its files; forget only
 unregisters, and it deletes nothing. All seven work now.
 
 'edit NAME pix|sbxenv' opens pix.toml or .sbxenv.yaml in $VISUAL/$EDITOR
 (exact positional enum, no flag), then reloads and validates: it never
-prompts to accept a host-execution change inline — a changed footprint
+prompts to accept a host-execution change inline: a changed footprint
 prints 'pix env review NAME' as the next step instead.
 
 An environment that runs code on your host or hands it a credential halts
@@ -165,7 +165,16 @@ type envShowCmd struct {
 
 func (c *envShowCmd) Run(d *cli.Deps) error {
 	if countTrue(c.Path, c.JSON, c.Effective) > 1 {
-		return cli.Usagef("env show: --path, --json and --effective are mutually exclusive; choose one")
+		name := c.Name
+		if name == "" {
+			name = "<name>"
+		}
+		return cli.Usagef(
+			"pix: env show: --path, --json and --effective are mutually exclusive; pick exactly one.\n"+
+				"     pix env show %s --path         canonical root only\n"+
+				"     pix env show %s --json         machine-readable summary\n"+
+				"     pix env show %s --effective    the byte-identical sbx document",
+			name, name, name)
 	}
 	cfg, err := d.Config()
 	if err != nil {

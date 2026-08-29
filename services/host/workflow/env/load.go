@@ -65,12 +65,15 @@ type Environment struct {
 // there is no fallback default document Load may substitute for a missing
 // one, unlike pix.toml (§5.2), which is genuinely optional.
 type MissingRequiredFileError struct {
+	Name string
 	Root string
 	File string
 }
 
 func (e *MissingRequiredFileError) Error() string {
-	return fmt.Sprintf("pix: environment root %s has no required %s", e.Root, e.File)
+	return fmt.Sprintf(
+		"pix: environment %q has no required %s.\n     missing: %s\n     create it: pix env edit %s sbxenv",
+		e.Name, e.File, filepath.Join(e.Root, e.File), e.Name)
 }
 
 // ResolveEnvironment composes the three checks every later stage of Load
@@ -217,7 +220,7 @@ func Load(cfg *config.Config, store *hosttrust.AcceptanceStore, name string, eff
 	sbxenvPath := filepath.Join(root, ".sbxenv.yaml")
 	if _, statErr := os.Stat(sbxenvPath); statErr != nil {
 		if os.IsNotExist(statErr) {
-			return nil, cli.UsageError{Err: &MissingRequiredFileError{Root: root, File: ".sbxenv.yaml"}}
+			return nil, cli.UsageError{Err: &MissingRequiredFileError{Name: name, Root: root, File: ".sbxenv.yaml"}}
 		}
 		return nil, fmt.Errorf("pix: environment %s: %w", name, statErr)
 	}
