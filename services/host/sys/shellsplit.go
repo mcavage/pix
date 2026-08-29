@@ -17,15 +17,24 @@ var ErrEmptyCommand = errors.New("empty command")
 
 // ShellSplit tokenizes s the way a POSIX shell would split ONE command
 // line into argv — single quotes ('...', fully literal, no escapes
-// recognized inside), double quotes ("...", where a backslash escapes the
-// next character), and a bare backslash outside any quote escaping the
-// next character (so a space can be embedded in a token without quoting
-// it) — WITHOUT ever constructing or invoking a shell. It performs no
-// globbing, no variable expansion, no command substitution: a shell
-// metacharacter that appears outside quotes is ordinary token text.
-// Adjacent quoted and unquoted runs with no separating whitespace merge
-// into a single token, exactly as they would in a real shell
-// (`foo"bar baz"qux` -> one token `foo` + `bar baz` + `qux`).
+// recognized inside), double quotes ("...", where a backslash removes
+// quoting ONLY for the next ", \, $, backtick, or newline — before any
+// other rune the backslash is preserved literally, exactly as POSIX
+// specifies), and a bare backslash outside any quote escaping the next
+// character outright (so a space can be embedded in a token without
+// quoting it) — WITHOUT ever constructing or invoking a shell. It
+// performs no globbing, no variable expansion, no command substitution: a
+// shell metacharacter that appears outside quotes (or an unescaped one
+// inside double quotes) is ordinary token text. Adjacent quoted and
+// unquoted runs with no separating whitespace merge into a single token,
+// exactly as they would in a real shell (`foo"bar baz"qux` -> one token
+// `foo` + `bar baz` + `qux`).
+//
+// The double-quote/backslash distinction matters in practice: a naive
+// "backslash escapes anything" tokenizer mangles Windows-style paths
+// (`"C:\path\to\editor.exe"`) and regex arguments (`"s/\s+/ /g"`) by
+// silently eating backslashes that were never a shell escape to begin
+// with.
 //
 // This exists so workflow/env's editor invocation ($VISUAL/$EDITOR) can
 // accept a quoted executable path containing spaces ("code --wait" would
@@ -38,6 +47,7 @@ var ErrEmptyCommand = errors.New("empty command")
 // that tokenizes to nothing runnable — no tokens at all, or a lone empty
 // first token (`""`, `”`) — is ErrEmptyCommand.
 func ShellSplit(s string) ([]string, error) {
+	runes := []rune(s)
 	var argv []string
 	var cur strings.Builder
 	haveToken := false
@@ -51,11 +61,9 @@ func ShellSplit(s string) ([]string, error) {
 		}
 	}
 
-	for _, r := range s {
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
 		switch {
-		case escaped:
-			cur.WriteRune(r)
-			escaped = false
 		case inSingle:
 			if r == '\'' {
 				inSingle = false
@@ -63,15 +71,36 @@ func ShellSplit(s string) ([]string, error) {
 				cur.WriteRune(r)
 			}
 		case inDouble:
-			switch r {
-			case '"':
+			switch {
+			case r == '"':
 				inDouble = false
-			case '\\':
-				escaped = true
+			case r == '\\' && i+1 < len(runes):
+				// POSIX: inside "..." a backslash only loses its literal
+				// meaning (and is dropped) when it precedes ", \, $, a
+				// backtick, or a newline (line continuation, dropped
+				// entirely). Before any other rune the backslash stays —
+				// this is what keeps regexes (`\s+`) and Windows paths
+				// (`C:\path`) intact.
+				next := runes[i+1]
+				switch next {
+				case '"', '\\', '$', '`':
+					cur.WriteRune(next)
+					i++
+				case '\n':
+					i++ // line continuation: backslash + newline both dropped
+				default:
+					cur.WriteRune(r)
+				}
 			default:
 				cur.WriteRune(r)
 			}
+		case escaped:
+			cur.WriteRune(r)
+			escaped = false
 		case r == '\\':
+			// Outside any quote a bare backslash escapes the very next
+			// rune outright (dropped itself), letting e.g. a space be
+			// embedded in a token without quoting it.
 			escaped = true
 			haveToken = true
 		case r == '\'':

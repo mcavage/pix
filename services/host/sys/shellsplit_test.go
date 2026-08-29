@@ -95,6 +95,51 @@ func TestShellSplit_Table(t *testing.T) {
 			in:      "",
 			wantErr: ErrEmptyCommand,
 		},
+		// --- POSIX double-quote backslash semantics ---------------------
+		// Inside double quotes a backslash removes quoting ONLY when it
+		// precedes ", \, $, or a backtick (or a newline, as a line
+		// continuation): those four/five are the only runes a shell lets
+		// you escape inside "...". Before any other rune the backslash is
+		// NOT an escape — it is preserved literally, and the following
+		// rune is also preserved. A naive "backslash escapes anything"
+		// implementation (the pre-fix behavior here) eats backslashes it
+		// has no business touching: regex character classes, Windows
+		// paths, anything with backslash sequences that aren't shell
+		// escapes.
+		{
+			name: "backslash before an ordinary rune inside double quotes stays literal (regex)",
+			in:   `editor "s/\s+/ /g"`,
+			want: []string{"editor", `s/\s+/ /g`},
+		},
+		{
+			name: "Windows-style backslash path inside double quotes is untouched",
+			in:   `editor "C:\path\to\editor.exe" --wait`,
+			want: []string{"editor", `C:\path\to\editor.exe`, "--wait"},
+		},
+		{
+			// \" -> ", \\ -> \, \$ -> $, \` -> ` (the four POSIX-recognized
+			// double-quote escapes), each consuming its backslash.
+			name: "escaped quote, backslash, dollar, and backtick inside double quotes are unescaped",
+			in:   "editor \"" + "\\\"" + "\\\\" + "\\$" + "\\`" + "x\"",
+			want: []string{"editor", "\"\\$`x"},
+		},
+		{
+			// A trailing \\ right before the closing quote is an escaped
+			// backslash (-> one literal \), not an escape of the quote: the
+			// quote still closes normally afterward.
+			name: "escaped backslash immediately before the closing double quote",
+			in:   "editor \"path\\\\\"",
+			want: []string{"editor", "path\\"},
+		},
+		{
+			// A single trailing backslash right before the closing quote
+			// instead escapes the QUOTE (not one of the four specials'
+			// siblings, but " itself is), so the quote never closes: the
+			// whole command line is an unterminated double quote.
+			name:    "trailing backslash escaping the closing double quote leaves it unterminated",
+			in:      `editor "path\"`,
+			wantErr: ErrUnmatchedQuote,
+		},
 	}
 
 	for _, tc := range cases {
@@ -132,5 +177,21 @@ func TestShellSplit_ShellMetacharactersAreInertText(t *testing.T) {
 	want := []string{"editor", "--title=$(whoami)"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("ShellSplit(...) = %#v, want %#v (command substitution left as literal text)", got, want)
+	}
+}
+
+// TestShellSplit_MetacharactersInertInsideDoubleQuotes pins the same
+// no-expansion guarantee as TestShellSplit_ShellMetacharactersAreInertText,
+// but for text sitting inside double quotes: a shell would still leave `;`
+// and `|` alone there (only $, `, ", and \ are special), and unescaping the
+// backslash in front of $( must not make ShellSplit start interpreting it.
+func TestShellSplit_MetacharactersInertInsideDoubleQuotes(t *testing.T) {
+	got, err := ShellSplit(`editor "a;b|c\$(whoami)"`)
+	if err != nil {
+		t.Fatalf("ShellSplit: %v", err)
+	}
+	want := []string{"editor", "a;b|c$(whoami)"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ShellSplit(...) = %#v, want %#v (metacharacters and unescaped $ stay literal text)", got, want)
 	}
 }
