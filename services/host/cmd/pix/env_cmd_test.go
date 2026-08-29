@@ -514,13 +514,41 @@ func TestEnvEdit_VerdictOkReviewInvalid(t *testing.T) {
 		}
 		d, out, errb := envEditDeps(t, fake)
 		d.Interactive = false
-		registerTier0Env(t, "work")
+		// A Tier0 fixture can never sit unaccepted (review.go's own Review
+		// writes no record for it at all, and postEditVerdict's Tier0 branch
+		// says "ok" unconditionally): the never-accepted "review" verdict is
+		// only real for a Tier1 host-exec fixture nobody has run `env review`
+		// against yet.
+		registerHostExecEnv(t, "work")
 		code := dispatch([]string{"env", "edit", "work", "sbxenv"}, d)
 		if code != 0 {
 			t.Fatalf("dispatch = %d, want 0 (stderr: %s)", code, errb.String())
 		}
 		if !strings.Contains(out.String(), "pix env review work") {
 			t.Errorf("stdout = %q, want the review verdict", out.String())
+		}
+	})
+
+	t.Run("ok: Tier0 with no acceptance record at all", func(t *testing.T) {
+		// E1.12 pre-merge BLOCK fix (finding 3): a Tier0 environment must
+		// verdict "ok" even though it was never run through `env review` —
+		// there is nothing for review to accept in the first place.
+		fake := &systest.Fake{
+			GetenvFn:         func(string) string { return "true" },
+			RunInteractiveFn: func(string, ...string) error { return nil },
+		}
+		d, out, errb := envEditDeps(t, fake)
+		d.Interactive = false
+		registerTier0Env(t, "work")
+		code := dispatch([]string{"env", "edit", "work", "sbxenv"}, d)
+		if code != 0 {
+			t.Fatalf("dispatch = %d, want 0 (stderr: %s)", code, errb.String())
+		}
+		if !strings.Contains(out.String(), "pix env use work") {
+			t.Errorf("stdout = %q, want the ok verdict", out.String())
+		}
+		if strings.Contains(out.String(), "pix env review") {
+			t.Errorf("stdout = %q, must never point a Tier0 environment at review", out.String())
 		}
 	})
 

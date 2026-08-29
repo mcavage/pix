@@ -148,18 +148,28 @@ func promptForTarget(name string, opts EditOptions) (string, error) {
 
 // resolveEditorArgv follows the standard $VISUAL-then-$EDITOR convention:
 // $VISUAL wins when both are set, an empty/whitespace-only value is
-// treated as unset, and the resolved value is split on whitespace into an
-// argv — "code --wait" becomes ["code", "--wait"] — so a multi-word editor
-// command is invoked directly (argv[0] plus its own flags), never through
-// a shell. Both unset returns nil, the caller's signal to print only the
-// path and stop.
-func resolveEditorArgv(sysEnv sys.System) []string {
+// treated as unset. The resolved value is tokenized by sys.ShellSplit — a
+// small, independently tested, shell-quote-aware parser (single/double
+// quotes, backslash escapes) — never a naive strings.Fields() whitespace
+// split, which would silently cut a quoted "code --wait"-shaped editor
+// path containing a space in two. The result is handed to RunInteractive
+// as a real argv (argv[0] plus its own flags): ShellSplit never invokes a
+// shell itself, and neither does this function. Both unset returns (nil,
+// nil), the caller's signal to print only the path and stop. A malformed
+// value (unmatched quote, empty command) is a usage error naming which of
+// $VISUAL/$EDITOR was at fault — the editor is never invoked on a value
+// that could not be parsed.
+func resolveEditorArgv(sysEnv sys.System) ([]string, error) {
 	for _, name := range []string{"VISUAL", "EDITOR"} {
 		if v := strings.TrimSpace(sysEnv.Getenv(name)); v != "" {
-			return strings.Fields(v)
+			argv, err := sys.ShellSplit(v)
+			if err != nil {
+				return nil, cli.UsageError{Err: fmt.Errorf("pix: $%s %q is not a valid shell command: %w", name, v, err)}
+			}
+			return argv, nil
 		}
 	}
-	return nil
+	return nil, nil
 }
 
 // prefixedPix ensures msg starts with "pix: " exactly once: some error
@@ -196,7 +206,10 @@ func Edit(cfg *config.Config, sysEnv sys.System, name, target string, opts EditO
 	}
 	path := filepath.Join(root, targetFileName(resolved))
 
-	editorArgv := resolveEditorArgv(sysEnv)
+	editorArgv, err := resolveEditorArgv(sysEnv)
+	if err != nil {
+		return nil, err
+	}
 	if len(editorArgv) == 0 {
 		// §8.1's exit-code scheme names this explicitly: "0 only for a
 		// completed operation, including printing a path because $EDITOR
@@ -204,6 +217,30 @@ func Edit(cfg *config.Config, sysEnv sys.System, name, target string, opts EditO
 		// runs at all — no file was ever touched.
 		fmt.Fprintln(opts.Out, path)
 		return &EditResult{Path: path, Target: resolved}, nil
+	}
+
+	// Fail closed if the target itself is a symlink, immediately before
+	// handing the terminal to an external editor process that will open
+	// path directly — this is the last point this function ever touches
+	// path before doing so. root is already proven canonical/non-symlink
+	// (ResolveEnvironment's RefuseSymlinkedRoot, above), so at most the
+	// final component (pix.toml or .sbxenv.yaml) could have been swapped
+	// for a symlink pointing anywhere else on the host; RefuseSymlinkedReference
+	// (the same hosttrust.IsSymlink primitive Load's own reference checks
+	// use) catches exactly that, without touching or following the decoy.
+	// A missing file (Lstat ENOENT) is not a symlink and is not refused
+	// here — the editor is expected to create pix.toml on first edit.
+	//
+	// Residual race, documented rather than pretended away: once
+	// RunInteractive returns, this process no longer controls path at
+	// all — the external editor opened it directly, on its own schedule,
+	// by name. A symlink swapped in AFTER this check but before the
+	// editor's own open() (or at any point during a long interactive
+	// session) is not caught by this check and cannot be from out here:
+	// no external editor exposes a hook this process could interpose on.
+	// This check closes the window BEFORE launch, not the one during it.
+	if err := RefuseSymlinkedReference("edit target", path); err != nil {
+		return nil, err
 	}
 
 	argv := append(append([]string(nil), editorArgv...), path)
@@ -235,13 +272,20 @@ func Edit(cfg *config.Config, sysEnv sys.System, name, target string, opts EditO
 //     the reload error's own message (AC-18's shape for a strict-parse
 //     failure), followed by the exact command to edit the SAME target
 //     again.
-//   - "ok": the reload succeeded and the freshly computed host-exec
+//   - "ok": the reload succeeded and EITHER the environment is Tier0 (no
+//     host-execution facet at all — the same BillOfMaterials.Tier1() gate
+//     review.go's own Review uses to skip its prompt entirely and never
+//     write a record) OR it is Tier1 and the freshly computed host-exec
 //     fingerprint MATCHES whatever record review.go last wrote for this
-//     subject — no new host-execution surface to review.
-//   - "review": the reload succeeded but the fingerprint does not match
-//     (never reviewed at all, or reviewed under different content) — the
-//     stored record is read here, never mutated or deleted; only a fresh,
-//     successful `pix env review NAME` ever changes it.
+//     subject — no new host-execution surface to review either way.
+//   - "review": the reload succeeded, the environment IS Tier1, and the
+//     fingerprint does not match (never reviewed at all, or reviewed
+//     under different content) — the stored record is read here, never
+//     mutated or deleted, and `pix env review NAME` is never invoked from
+//     here either: this only prints the next command, it never loops back
+//     into an interactive review of its own accord. Only a fresh,
+//     successful `pix env review NAME` run by the caller ever changes the
+//     stored record.
 func postEditVerdict(cfg *config.Config, name, target string) (verdict, message string, err error) {
 	ts, err := loadEnvironmentTrustStore()
 	if err != nil {
@@ -257,6 +301,22 @@ func postEditVerdict(cfg *config.Config, name, target string) (verdict, message 
 	if err != nil {
 		return "", "", err
 	}
+
+	if !bom.Tier1() {
+		// A Tier0 environment has no host-execution facet Review's own gate
+		// would ever ask about: Review(...) returns Accepted with no prompt
+		// and, deliberately, NO trust-store write for exactly this bill
+		// (see review.go's own doc comment). Falling through to the
+		// fingerprint/record check below would demand an acceptance record
+		// that a Tier0 environment can never have, permanently stranding it
+		// on the "review" verdict for content that was never host-executing
+		// in the first place — and silently pointing the user at `pix env
+		// review NAME`, which would run and find nothing to gate, a no-op
+		// masquerading as an outstanding action.
+		msg := fmt.Sprintf("pix: environment %q is valid; no host-execution footprint to review.\n     next: pix env use %s\n", name, name)
+		return "ok", msg, nil
+	}
+
 	fp, err := Fingerprint(bom)
 	if err != nil {
 		return "", "", err

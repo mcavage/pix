@@ -13,6 +13,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -34,6 +35,32 @@ func tier0EditFixture(t *testing.T, name string) (string, *config.Config) {
 	cfg := loadConfig(t)
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, ".sbxenv.yaml"), []byte("schemaVersion: \"1\"\nagent: pix\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Register(cfg, name, root); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("cfg.Save: %v", err)
+	}
+	return root, cfg
+}
+
+// tier1EditFixture is tier0EditFixture's Tier1 twin: a registered
+// environment whose .sbxenv.yaml declares a host-executing secret command,
+// so BillOfMaterials.Tier1() is true and review.go's own gate would
+// actually render a bill and demand consent — the fixture the "unaccepted
+// still says review" / "accepted record matches, says ok" verdict tests
+// need, as opposed to tier0EditFixture's non-host-executing environment,
+// which review.go accepts with no record at all (see postEditVerdict's own
+// Tier0 branch).
+func tier1EditFixture(t *testing.T, name string) (string, *config.Config) {
+	t.Helper()
+	tempConfigAndState(t)
+	cfg := loadConfig(t)
+	root := t.TempDir()
+	sbxenv := "schemaVersion: \"1\"\nagent: pix\nsecrets:\n  db:\n    command: [\"db-secret-tool\"]\n"
+	if err := os.WriteFile(filepath.Join(root, ".sbxenv.yaml"), []byte(sbxenv), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Register(cfg, name, root); err != nil {
@@ -313,7 +340,7 @@ func noopEditorFake(editorValue string) *systest.Fake {
 }
 
 func TestEdit_VerdictOkWhenFootprintUnchangedAndAccepted(t *testing.T) {
-	root, cfg := tier0EditFixture(t, "work")
+	root, cfg := tier1EditFixture(t, "work")
 
 	ts, err := loadEnvironmentTrustStore()
 	if err != nil {
@@ -355,7 +382,7 @@ func TestEdit_VerdictOkWhenFootprintUnchangedAndAccepted(t *testing.T) {
 }
 
 func TestEdit_VerdictReviewWhenUnaccepted(t *testing.T) {
-	_, cfg := tier0EditFixture(t, "work")
+	_, cfg := tier1EditFixture(t, "work")
 
 	var out bytes.Buffer
 	res, err := Edit(cfg, noopEditorFake("true"), "work", TargetSbxenv, EditOptions{Out: &out})
@@ -367,6 +394,35 @@ func TestEdit_VerdictReviewWhenUnaccepted(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "pix env review work") {
 		t.Errorf("stdout = %q, want the exact next: pix env review work line", out.String())
+	}
+}
+
+// TestEdit_VerdictOkForTier0RegardlessOfAcceptanceRecord is the E1.12
+// pre-merge BLOCK fix (finding 3): a Tier0 (non-host-executing) environment
+// must return "ok"/"pix env use NAME" after a valid edit WITHOUT ever
+// consulting or requiring an environment-trust acceptance record —
+// review.go's own Review() never writes one for a Tier0 bill in the first
+// place ("return accepted with NO output and NO store write"), so gating
+// this verdict on a record that can never exist would permanently strand
+// every Tier0 environment on the "review" verdict. tier0EditFixture here
+// registers NOTHING into the trust store — no Get, no Put — and the
+// verdict must still be "ok".
+func TestEdit_VerdictOkForTier0RegardlessOfAcceptanceRecord(t *testing.T) {
+	_, cfg := tier0EditFixture(t, "work")
+
+	var out bytes.Buffer
+	res, err := Edit(cfg, noopEditorFake("true"), "work", TargetSbxenv, EditOptions{Out: &out})
+	if err != nil {
+		t.Fatalf("Edit: %v", err)
+	}
+	if res.Verdict != "ok" {
+		t.Errorf("Verdict = %q, want ok: a Tier0 environment needs no acceptance record at all", res.Verdict)
+	}
+	if !strings.Contains(out.String(), "pix env use work") {
+		t.Errorf("stdout = %q, want the exact next: pix env use work line", out.String())
+	}
+	if strings.Contains(out.String(), "pix env review") {
+		t.Errorf("stdout = %q, must never point a Tier0 environment at `pix env review` — there is nothing for it to gate", out.String())
 	}
 }
 
@@ -403,6 +459,172 @@ func TestEdit_VerdictInvalidLeavesConfigAndTrustByteIdentical(t *testing.T) {
 	}
 	if trustHashBefore != trustHashAfter {
 		t.Error("environment-trust store changed after an invalid post-edit reload; Edit must never mutate it")
+	}
+}
+
+// ── E1.12 BLOCK fix (finding 2): symlinked target refused before launch ──
+
+// TestEdit_SymlinkedTargetRefusedBeforeEditor proves Edit lstats the
+// resolved target path and refuses outright — never invoking the editor,
+// never touching the decoy — when either pix.toml or .sbxenv.yaml has been
+// replaced with a symlink pointing somewhere else on the host. root itself
+// is already proven canonical/non-symlink by ResolveEnvironment; this is
+// the residual "final path component swapped" case a registered root alone
+// cannot rule out.
+func TestEdit_SymlinkedTargetRefusedBeforeEditor(t *testing.T) {
+	cases := []struct {
+		name   string
+		target string
+		file   string
+	}{
+		{name: "sbxenv symlink decoy", target: TargetSbxenv, file: ".sbxenv.yaml"},
+		{name: "pix.toml symlink decoy", target: TargetPix, file: "pix.toml"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root, cfg := tier0EditFixture(t, "work")
+
+			elsewhere := filepath.Join(t.TempDir(), "elsewhere")
+			if err := os.WriteFile(elsewhere, []byte("attacker-controlled content"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			decoy := filepath.Join(root, tc.file)
+			_ = os.Remove(decoy) // pix.toml may not exist yet; sbxenv does
+			if err := os.Symlink(elsewhere, decoy); err != nil {
+				t.Fatal(err)
+			}
+
+			fake := &systest.Fake{
+				GetenvFn: func(string) string { return "myeditor" },
+				RunInteractiveFn: func(string, ...string) error {
+					t.Fatal("editor must never be invoked on a symlinked target")
+					return nil
+				},
+			}
+
+			_, err := Edit(cfg, fake, "work", tc.target, EditOptions{Out: &bytes.Buffer{}})
+			if err == nil {
+				t.Fatal("Edit must refuse a symlinked target file")
+			}
+			var symErr *SymlinkError
+			if !errors.As(err, &symErr) {
+				t.Fatalf("err = %#v, want it to wrap *SymlinkError", err)
+			}
+			if symErr.Path != decoy {
+				t.Errorf("SymlinkError.Path = %q, want %q", symErr.Path, decoy)
+			}
+			if got := cli.ExitCode(err); got != 2 {
+				t.Errorf("cli.ExitCode(err) = %d, want 2", got)
+			}
+			if len(fake.Calls) != 0 {
+				t.Errorf("fake.Calls = %v, want none: the editor must never launch", fake.Calls)
+			}
+
+			link, lerr := os.Readlink(decoy)
+			if lerr != nil || link != elsewhere {
+				t.Errorf("decoy changed: Readlink = (%q, %v), want it still pointing at %q, untouched", link, lerr, elsewhere)
+			}
+		})
+	}
+}
+
+// ── E1.12 BLOCK fix (finding 1): shell-quote-aware editor argv parsing ────
+
+// TestEdit_QuotedExecutablePathWithSpacesAndQuotedArgs proves a quoted
+// $EDITOR value — a spaced executable path, a double-quoted argument
+// containing a space, and a backslash-escaped space — tokenizes into the
+// argv a real shell would produce, with the target path appended as its
+// own final argument. RunInteractiveFn captures the raw name/args
+// (unlike fake.Calls' space-joined string, which cannot distinguish one
+// multi-word token from several single-word ones).
+func TestEdit_QuotedExecutablePathWithSpacesAndQuotedArgs(t *testing.T) {
+	root, cfg := tier0EditFixture(t, "work")
+	var gotName string
+	var gotArgs []string
+	fake := &systest.Fake{
+		GetenvFn: func(string) string {
+			return `"/Applications/My Editor.app/Contents/MacOS/edit" --wait --message="hello world" foo\ bar`
+		},
+		RunInteractiveFn: func(name string, args ...string) error {
+			gotName = name
+			gotArgs = append([]string(nil), args...)
+			return nil
+		},
+	}
+
+	_, err := Edit(cfg, fake, "work", TargetPix, EditOptions{Out: &bytes.Buffer{}})
+	if err != nil {
+		t.Fatalf("Edit: %v", err)
+	}
+	if gotName != "/Applications/My Editor.app/Contents/MacOS/edit" {
+		t.Errorf("editor binary = %q, want the quoted path with spaces preserved as one argv[0]", gotName)
+	}
+	wantArgs := []string{"--wait", "--message=hello world", "foo bar", filepath.Join(root, "pix.toml")}
+	if !reflect.DeepEqual(gotArgs, wantArgs) {
+		t.Errorf("args = %#v, want %#v", gotArgs, wantArgs)
+	}
+}
+
+// TestEdit_MalformedEditorEnvRefusedNeverInvokesEditor proves an unterminated
+// quote in $EDITOR is refused as a usage error naming $EDITOR, with the
+// editor never invoked at all — never a best-effort guess at where the
+// quote was meant to close.
+func TestEdit_MalformedEditorEnvRefusedNeverInvokesEditor(t *testing.T) {
+	_, cfg := tier0EditFixture(t, "work")
+	fake := &systest.Fake{
+		GetenvFn: func(name string) string {
+			if name == "EDITOR" {
+				return `editor "unterminated`
+			}
+			return ""
+		},
+		RunInteractiveFn: func(string, ...string) error {
+			t.Fatal("must never invoke an editor parsed from a malformed $EDITOR value")
+			return nil
+		},
+	}
+
+	_, err := Edit(cfg, fake, "work", TargetSbxenv, EditOptions{Out: &bytes.Buffer{}})
+	if err == nil {
+		t.Fatal("Edit must refuse a malformed $EDITOR value")
+	}
+	if got := cli.ExitCode(err); got != 2 {
+		t.Errorf("cli.ExitCode(err) = %d, want 2 (usage)", got)
+	}
+	if !strings.Contains(err.Error(), "EDITOR") {
+		t.Errorf("err = %q, want it to name $EDITOR", err.Error())
+	}
+	if len(fake.Calls) != 0 {
+		t.Errorf("fake.Calls = %v, want none", fake.Calls)
+	}
+}
+
+// TestEdit_EmptyQuotedEditorEnvRefused proves $EDITOR="\"\"" (a value that
+// tokenizes to a single empty command, never something exec-able) is
+// refused the same way a malformed quote is — not silently treated as
+// "unset" (that path only ever applies to a whitespace-only raw value,
+// before ShellSplit ever runs).
+func TestEdit_EmptyQuotedEditorEnvRefused(t *testing.T) {
+	_, cfg := tier0EditFixture(t, "work")
+	fake := &systest.Fake{
+		GetenvFn: func(name string) string {
+			if name == "EDITOR" {
+				return `""`
+			}
+			return ""
+		},
+		RunInteractiveFn: func(string, ...string) error {
+			t.Fatal("must never invoke an editor parsed from an empty-command $EDITOR value")
+			return nil
+		},
+	}
+
+	_, err := Edit(cfg, fake, "work", TargetSbxenv, EditOptions{Out: &bytes.Buffer{}})
+	if err == nil {
+		t.Fatal("Edit must refuse an empty-command $EDITOR value")
+	}
+	if got := cli.ExitCode(err); got != 2 {
+		t.Errorf("cli.ExitCode(err) = %d, want 2 (usage)", got)
 	}
 }
 
