@@ -33,6 +33,40 @@
     ]
   },
   {
+    "id": "config-keys.top-level.surface",
+    "rationale": "E4.1 (Story 4, delete the router) removes `run_intent` outright: --intent and config run_intent are deleted, the top-level session model precedence is now --model > the selected environment's [models].main > pi's own default, and `pix config set/unset run_intent` falls through to the ordinary unknown-key refusal.",
+    "evidence": "services/host/config/config.go (Config.RunIntent/DefaultRunIntent removed); services/host/workflow/provision/config.go (run_intent case removed from ConfigValue/ApplyConfigChange/ConfigKeysHelp); services/host/cmd/pix/run_cmd.go (--intent flag removed); services/host/workflow/launch/run.go (ApplyConfiguredSessionModel removed); services/host/inference/session.go (ResolveSessionModel removed)",
+    "changes": [
+      {
+        "file": "services/host/config/config.go",
+        "kind": "set",
+        "from": [
+          "services",
+          "mcp",
+          "memory_watcher_model",
+          "memory_embed_model",
+          "memory_capture",
+          "ollama_bridge_model",
+          "run_intent",
+          "inference",
+          "environment",
+          "environments"
+        ],
+        "to": [
+          "services",
+          "mcp",
+          "memory_watcher_model",
+          "memory_embed_model",
+          "memory_capture",
+          "ollama_bridge_model",
+          "inference",
+          "environment",
+          "environments"
+        ]
+      }
+    ]
+  },
+  {
     "id": "lifecycle.lease.instance-id-immutable",
     "rationale": "E2.3 review fix (P0-7): lease.CreateRecord's write-once install moved off a direct O_CREAT|O_EXCL open on record.json's own final path, which made write-once a syscall guarantee one syscall too early \u2014 a crash between that open and its write left EXACTLY the corrupt/partial file a reader must never see, present and EEXIST-able before a single byte of its content existed. writeRecordOnce now writes the full content to a same-directory 0600 temp file, fsyncs and closes it, and only THEN installs it via os.Link (never os.Rename): link(2), like the O_EXCL open before it, refuses rather than replaces an existing target, so write-once stays exactly the same syscall-level guarantee, just reachable only once the content it publishes is already durable. The identity-match check that used to run only before a create attempt is now the shared checkExistingRecord, reused after a lost create race too: the old EEXIST branch was a bare `return readRecordFile(path)` with no validation, silently handing a racing caller asking for a DIFFERENT instance id the WINNER's record as if it were its own.",
     "evidence": "services/host/lease/record.go (writeRecordOnce, checkExistingRecord, createRecord); services/host/lease/record_test.go (TestCreateRecord_ConcurrentDifferentIdentityLoserIsRefusedNotSilentlyAccepted, TestCreateRecord_ConcurrentSameIdentityAllSucceedIdempotently, TestCreateRecord_NoLeftoverTempFileAfterWrite)",

@@ -37,7 +37,7 @@ func TestConfigCmd_Show(t *testing.T) {
 		t.Fatalf("config show: %v", err)
 	}
 	got := out.String()
-	for _, want := range []string{"# path: ", "config.toml", "run_intent = "} {
+	for _, want := range []string{"# path: ", "config.toml", "ollama_bridge_model = "} {
 		if !strings.Contains(got, want) {
 			t.Errorf("config show missing %q, got:\n%s", want, got)
 		}
@@ -102,11 +102,11 @@ func TestConfigCmd_PathBadArgument(t *testing.T) {
 // newline a shell command substitution strips anyway.
 func TestConfigCmd_GetStdoutIsClean(t *testing.T) {
 	d, out, errb := configDeps(t)
-	if err := runConfigParse([]string{"config", "get", "run_intent"}, d); err != nil {
-		t.Fatalf("config get run_intent: %v", err)
+	if err := runConfigParse([]string{"config", "get", "ollama_bridge_model"}, d); err != nil {
+		t.Fatalf("config get ollama_bridge_model: %v", err)
 	}
-	if got := out.String(); got != "overlord\n" {
-		t.Errorf("stdout = %q, want exactly \"overlord\\n\" (script-clean)", got)
+	if got := out.String(); got != "qwen3.5:9b\n" {
+		t.Errorf("stdout = %q, want exactly \"qwen3.5:9b\\n\" (script-clean)", got)
 	}
 	if errb.String() != "" {
 		t.Errorf("stderr = %q, want empty", errb.String())
@@ -149,10 +149,10 @@ func TestConfigCmd_GetRemovedKey(t *testing.T) {
 
 func TestConfigCmd_SetAndUnset(t *testing.T) {
 	d, out, _ := configDeps(t)
-	if err := runConfigParse([]string{"config", "set", "run_intent", "strategy"}, d); err != nil {
+	if err := runConfigParse([]string{"config", "set", "ollama_bridge_model", "llama3"}, d); err != nil {
 		t.Fatalf("config set: %v", err)
 	}
-	if !strings.Contains(out.String(), `run_intent = "strategy"`) {
+	if !strings.Contains(out.String(), `ollama_bridge_model = "llama3"`) {
 		t.Errorf("set output missing new value, got:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), "# saved to "+config.Path()) {
@@ -164,20 +164,38 @@ func TestConfigCmd_SetAndUnset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.RunIntent != "strategy" {
-		t.Errorf("RunIntent after set = %q, want strategy", cfg.RunIntent)
+	if cfg.OllamaBridgeModel != "llama3" {
+		t.Errorf("OllamaBridgeModel after set = %q, want llama3", cfg.OllamaBridgeModel)
 	}
 
 	out.Reset()
-	if err := runConfigParse([]string{"config", "unset", "run_intent"}, d); err != nil {
+	if err := runConfigParse([]string{"config", "unset", "ollama_bridge_model"}, d); err != nil {
 		t.Fatalf("config unset: %v", err)
 	}
 	cfg, err = config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.RunIntent != config.DefaultRunIntent {
-		t.Errorf("RunIntent after unset = %q, want the default %q", cfg.RunIntent, config.DefaultRunIntent)
+	if cfg.OllamaBridgeModel != config.DefaultOllamaBridgeModel {
+		t.Errorf("OllamaBridgeModel after unset = %q, want the default %q", cfg.OllamaBridgeModel, config.DefaultOllamaBridgeModel)
+	}
+}
+
+// TestConfigCmd_SetRunIntentRefused: run_intent (and --intent) are deleted
+// outright (Story 4, docs/design/routing.md's removal). It is an ordinary
+// unknown key now -- no shim, no bespoke retired-key notice -- so `pix config
+// set run_intent x` refuses exactly like any other typo.
+func TestConfigCmd_SetRunIntentRefused(t *testing.T) {
+	d, out, _ := configDeps(t)
+	err := runConfigParse([]string{"config", "set", "run_intent", "strategy"}, d)
+	if err == nil || cli.ExitCode(err) != 2 {
+		t.Fatalf("config set run_intent: err=%v, want a usage (exit 2) refusal", err)
+	}
+	if !strings.Contains(err.Error(), "unknown key") {
+		t.Errorf("error should say unknown key, got %v", err)
+	}
+	if out.String() != "" {
+		t.Errorf("stdout must stay clean on a refusal, got %q", out.String())
 	}
 }
 
@@ -186,7 +204,7 @@ func TestConfigCmd_SetAndUnset(t *testing.T) {
 // mapping its error to a usage (exit 2) failure is the whole job.
 func TestConfigCmd_SetArityError(t *testing.T) {
 	d, _, _ := configDeps(t)
-	err := runConfigParse([]string{"config", "set", "run_intent"}, d)
+	err := runConfigParse([]string{"config", "set", "ollama_bridge_model"}, d)
 	if err == nil {
 		t.Fatal("expected an arity error for set with no value")
 	}

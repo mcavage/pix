@@ -23,8 +23,6 @@ func ConfigValue(cfg *config.Config, key string) (string, error) {
 		return cfg.MemoryEmbedModel, nil
 	case "ollama_bridge_model":
 		return cfg.OllamaBridgeModel, nil
-	case "run_intent":
-		return cfg.RunIntent, nil
 	case "memory_capture":
 		return cfg.MemoryCapture, nil
 	case "pack":
@@ -43,11 +41,7 @@ const ConfigKeysHelp = `keys:
   services <name>           add/remove a host service in the services list
   memory_watcher_model <m>  ollama model for fact capture (host, resident)
   memory_embed_model <m>    ollama model for semantic recall (host)
-  ollama_bridge_model <m>   local model the sandbox exposes to pi + the router
-  run_intent <intent>       default routing intent for the top-level interactive
-                            session (the "overlord"); resolves the session model
-                            when neither --model nor --intent is passed. Use
-                            'none' to opt out to pi's own default model
+  ollama_bridge_model <m>   local model the sandbox exposes to pi
   memory_capture <mode>     watcher capture admission: explicit (default, no
                             automatic observation) or experimental-auto (write
                             straight to memories under a fixed daily budget).
@@ -157,17 +151,6 @@ func ApplyConfigChange(cfg *config.Config, unset bool, key string, args []string
 			cfg.OllamaBridgeModel = args[0]
 		}
 		return fmt.Sprintf("ollama_bridge_model = %q", cfg.OllamaBridgeModel), nil
-
-	case "run_intent":
-		if unset {
-			cfg.RunIntent = config.DefaultRunIntent
-		} else {
-			if len(args) != 1 {
-				return "", fmt.Errorf("config set run_intent <intent>: needs exactly one value (e.g. overlord, strategy)")
-			}
-			cfg.RunIntent = args[0]
-		}
-		return fmt.Sprintf("run_intent = %q", cfg.RunIntent), nil
 
 	case "memory_capture":
 		if unset {
