@@ -91,6 +91,7 @@ type runCmd struct {
 	Mcp      []string `help:"Attach an MCP server at creation (repeatable)." placeholder:"M"`
 	Pack     string   `help:"Active pack for this run (path or git-url); overrides the configured one." placeholder:"P"`
 	Name     string   `help:"Sandbox name." placeholder:"N"`
+	Env      string   `help:"Launch under a registered environment by EXACT name (never a prefix); overrides the configured default for this run only." placeholder:"NAME"`
 	Model    string   `help:"Active pi model (passed through to pi)." placeholder:"M"`
 	Intent   string   `help:"Resolve the session model via the router; --model overrides it. Intents: pix models show." placeholder:"NAME"`
 	Task     string   `help:"Launch an existing task's sandbox (same as 'pix task run NAME')." placeholder:"NAME"`
@@ -129,6 +130,7 @@ func (c *runCmd) opts() (launch.RunOpts, error) {
 		Template:    c.Template,
 		MCP:         c.Mcp,
 		Name:        c.Name,
+		Env:         c.Env,
 		Model:       c.Model,
 		Intent:      c.Intent,
 		Pack:        c.Pack,
@@ -267,6 +269,30 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		}
 	}()
 
+	// Resolve the environment BEFORE any model defaulting, any probe, and any
+	// sandbox side effect (§6.1, AC-21): an explicit `--env` names an EXACT
+	// registered environment, never a prefix and never a fuzzy match, and an
+	// unknown one exits non-zero having created nothing and having fallen back
+	// to no default — a typo silently launching the wrong credential set is the
+	// worst outcome this feature can produce. Nothing on this path writes
+	// config: `--env` selects for THIS run only (AC-22).
+	selection, serr := resolveRunEnvironment(o.Env)
+	if serr != nil {
+		fmt.Fprintln(d.Err, strings.TrimRight(serr.Error(), "\n"))
+		return cli.SilentError{Code: 2}
+	}
+	o.EnvName = selection.Name
+
+	// §6.3's model precedence, in one place: --model > the selected
+	// environment's [models].main > pi's own default. The configured run_intent
+	// default below no-ops once either of the first two answered.
+	if model, source := launch.SelectSessionModel(o.Model, selection.Sidecar); model != "" {
+		o.Model = model
+		if source == "[models].main" {
+			fmt.Fprintf(d.Err, "pix: environment %q -> model %s\n", selection.Name, model)
+		}
+	}
+
 	// Default the session intent from config (run_intent, the "overlord") when the
 	// user pinned neither --model nor --intent.
 	if o.Intent == "" && o.Model == "" {
@@ -403,11 +429,15 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		effectivePack = o.ApplyPackContribution(contributed)
 		// Inference is a generated create-time facet like pack wrappers: probed models,
 		// compiled routes, public endpoint metadata. No credential value enters it.
-		// TODO(E3.2/E3.3): resolve the selected environment's pix.toml sidecar
-		// facts into an inference.RosterInput here; today every launch composes
-		// with the zero value (no environment roster), which is a no-op for
-		// BuildRoster and leaves the manifest's additive "roster" key absent.
-		inferenceKit, ierr := inference.SynthesizeInferenceKit(cfg, inference.RosterInput{})
+		// The selected environment's authored roster (E3.1) travels into the
+		// generated mixin kit, and is validated (E3.3) against the SAME model
+		// set the manifest ships before anything is created.
+		shipped, _, _ := listAgents()
+		roster := launch.RosterInputFor(selection.Sidecar, shipped)
+		if verr := validateRunRoster(cfg, selection, shipped); verr != nil {
+			return runFail(d, 2, "%v", verr)
+		}
+		inferenceKit, ierr := inference.SynthesizeInferenceKit(cfg, roster)
 		if ierr != nil {
 			return runFail(d, 1, "inference: %v", ierr)
 		}
@@ -515,7 +545,31 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	fp := launch.SessionFingerprint(cfg, o)
 	attachExec := false
 	if plan.Reattach {
-		_, attachExec = launch.FindPositivelyIdentifiedRunning(defaultShellEnv(), o.Name)
+		entry, _ := launch.FindPositivelyIdentifiedRunning(defaultShellEnv(), o.Name)
+		// §10.2's third condition: the RECREATE-ONLY creation fingerprint,
+		// recomputed from the environment as it is now under the STORED
+		// launcher key (never a freshly generated one — a missing key is the
+		// post-reset state and attributes as exactly one drift).
+		stored, storedFound := launch.ReadCreationFingerprint(sessionKey)
+		current, resetInvalidated, cerr := currentCreationFingerprint(cfg, o, selection, version)
+		if cerr != nil {
+			return runFail(d, 1, "environment: %v", cerr)
+		}
+		rec, _ := launch.ReadSessionEnvironment(sessionKey)
+		decision := launch.DecideEnvAttach(launch.AttachGate{
+			Entry:              entry,
+			RecordedInstanceID: launch.ReadRecordedInstanceID(sessionKey),
+			Stored:             stored,
+			StoredFound:        storedFound,
+			Current:            current,
+			ResetInvalidated:   resetInvalidated && storedFound,
+			Reviewed:           !selection.Selected() || selection.Reviewed,
+			Tree:               selection.Tree,
+		}, o.Name, rec.Name)
+		if !decision.Attach {
+			return runFail(d, 1, "%s", decision.Refusal)
+		}
+		attachExec = true
 	} else if verr := launch.ValidateCreateKits(plan.Args, launch.ValidateSbxKit); verr != nil {
 		return runFail(d, 1, "%v", verr)
 	}
@@ -551,8 +605,12 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		packForState = o.Pack
 	}
 	// A HARD contract: a generated prompt is the fenced agent's ONLY trusted host
-	// truth, so a launch that cannot build it ABORTS before exec.
-	args, perr := launch.InjectTrustedHostState(plan.Args, cfg, defaultShellEnv(), packForState)
+	// truth, so a launch that cannot build it ABORTS before exec. After the
+	// cutover the payload is injected into the pi INVOCATION this launch
+	// actually execs (`sbx exec -it <name> -- pi <invocation>`), not into an
+	// `sbx run` argv that is no longer spawned.
+	invocation := launch.BuildPiInvocation(launch.LiveSkillDirs(cfg, o), o)
+	invocation, perr := launch.InjectTrustedHostState(invocation, cfg, defaultShellEnv(), packForState)
 	if perr != nil {
 		return runFail(d, 1, "could not build trusted host state: %v", perr)
 	}
@@ -585,7 +643,7 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	}()
 
 	if os.Getenv("PIX_DEBUG") != "" {
-		fmt.Fprintln(d.Err, "+ sbx "+strings.Join(args, " "))
+		fmt.Fprintln(d.Err, "+ sbx "+strings.Join(plan.Args, " "))
 	}
 
 	// launch.RunSession OWNS the create/attach ordering: lifecycle lock EX, a fresh
@@ -595,14 +653,50 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	// and the words, never the ordering. ONE invocation builder serves both the argv
 	// this create records and the default an attach falls back to, so they cannot
 	// drift.
-	invocation := launch.BuildPiInvocation(launch.LiveSkillDirs(cfg, o), o)
+	// E2.5's ONE create path: compose the real RuntimeFacts once, render them
+	// through the single effective-document producer, persist the EXACT bytes
+	// this create is about to use, and create through `sbx env create` — the
+	// same stable path removal recomposes. No parallel old create path stays
+	// selectable.
+	var envCreateArgs []string
+	if creating {
+		in, ierr := runEffectiveInput(cfg, o, selection, version)
+		if ierr != nil {
+			return runFail(d, 1, "environment: %v", ierr)
+		}
+		// The launcher's creation-fingerprint key is ESTABLISHED here, once,
+		// before the first fingerprint and before anything is created. A
+		// fresh host's first interpolated create is an ordinary create, not a
+		// reset-invalidated one.
+		resolver, kerr := launch.CreateHMACResolver(configDirOrEmpty(), nil)
+		if kerr != nil {
+			return runFail(d, 1, "environment: %v", kerr)
+		}
+		eff, eerr := launch.RenderEffectiveEnvironment(in, resolver)
+		if eerr != nil {
+			return runFail(d, 1, "environment: %v", eerr)
+		}
+		envCreateArgs = launch.EnvCreateArgs(eff.Path)
+		if rerr := launch.RecordCreationFingerprint(sessionKey, eff.Fingerprint); rerr != nil {
+			return runFail(d, 1, "environment: %v", rerr)
+		}
+		if ierr := launch.WriteCreateIntentFor(sessionKey, selection.Root, selection.Name, o.Name, eff.Fingerprint); ierr != nil {
+			return runFail(d, 1, "environment: %v", ierr)
+		}
+		if rerr := launch.RecordSessionEnvironment(sessionKey, launch.SessionEnvironment{
+			Name: selection.Name, Root: selection.Root, SandboxName: o.Name, EffectivePath: eff.Path,
+		}); rerr != nil {
+			fmt.Fprintf(d.Err, "pix: warning: %v\n", rerr)
+		}
+	}
 	spec := launch.SessionSpec{
 		Key:               sessionKey,
 		Name:              o.Name,
+		EnvCreateArgs:     envCreateArgs,
 		Workspace:         o.Workspace,
 		Creating:          creating,
 		Keep:              o.Keep,
-		CreateArgs:        args,
+		AttachArgs:        plan.Args,
 		AttachTTY:         d.Interactive,
 		AttachExec:        attachExec,
 		Fingerprint:       fp,
@@ -613,6 +707,10 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		Env:  defaultShellEnv(),
 		Poll: launch.SbxCreatePoll(defaultShellEnv()),
 		Warn: d.Err,
+		// Teardown routes through the environment-scoped planner (E2.4), so
+		// the stable effective file this launch created is what removal names
+		// — inside the SAME proof chain, never beside it.
+		Teardown: launch.TeardownOptions{Planner: launch.EnvTeardownPlanner(o.Name)},
 		Spawn: func(argv []string) *exec.Cmd {
 			cmd := exec.Command("sbx", argv...)
 			cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
@@ -639,7 +737,9 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 			code = exitErr.ExitCode()
 			// A pinned git #ref kit that sbx could not resolve fails with an opaque
 			// git 128; replace it with an actionable note.
-			if msg := launch.KitResolveFailureMsg(launch.PinnedGitKit(args)); msg != "" {
+			// The pinned git kit now lives in the effective document's kit
+			// list, composed by EnvExtraKits from the same inputs.
+			if msg := launch.KitResolveFailureMsg(launch.PinnedGitKit(launch.EnvExtraKits(cfg, o, version))); msg != "" {
 				fmt.Fprintln(d.Err, msg)
 			}
 		} else {

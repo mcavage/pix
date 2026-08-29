@@ -262,7 +262,7 @@ exit 0
 `)
 	err := RunSession(SessionSpec{
 		Key: SessionName(t.TempDir()), Name: "pix-demo", Creating: true,
-		CreateArgs: []string{"run", "--name", "pix-demo"},
+		EnvCreateArgs: []string{"env", "create", "/tmp/effective.sbxenv.yaml"},
 	}, SessionDeps{Env: realEnv(), Poll: SbxCreatePoll(realEnv()), Warn: io.Discard, Spawn: fixtureSpawn(t)})
 
 	var refused *SessionRefused
@@ -287,7 +287,7 @@ if [ "$1" = "ls" ]; then exit 0; fi
 exit 0
 `)
 	err := RunSession(SessionSpec{
-		Key: SessionName(t.TempDir()), Name: "pix-demo", CreateArgs: []string{"run", "--name", "pix-demo"},
+		Key: SessionName(t.TempDir()), Name: "pix-demo", AttachArgs: []string{"run", "--name", "pix-demo"},
 	}, SessionDeps{Env: realEnv(), Poll: SbxCreatePoll(realEnv()), Warn: io.Discard, Spawn: fixtureSpawn(t)})
 
 	var refused *SessionRefused
@@ -318,7 +318,7 @@ exit 0
 	err := RunSession(SessionSpec{
 		Key: key, Name: "pix-demo", AttachExec: true,
 		Fingerprint: sandbox.Fingerprint{"static_mcp": "slack,notion"},
-		CreateArgs:  []string{"run", "--name", "pix-demo"},
+		AttachArgs:  []string{"run", "--name", "pix-demo"},
 	}, SessionDeps{Env: realEnv(), Poll: SbxCreatePoll(realEnv()), Warn: io.Discard, Spawn: fixtureSpawn(t)})
 
 	var refused *SessionRefused
@@ -355,7 +355,7 @@ exit 0
 	err := RunSession(SessionSpec{
 		Key: key, Name: "pix-demo", AttachExec: true,
 		Fingerprint: sandbox.Fingerprint{"static_mcp": "slack,notion"},
-		CreateArgs:  []string{"run", "--name", "pix-demo"},
+		AttachArgs:  []string{"run", "--name", "pix-demo"},
 	}, SessionDeps{Env: realEnv(), Poll: SbxCreatePoll(realEnv()), Warn: io.Discard, Spawn: fixtureSpawn(t)})
 
 	var refused *SessionRefused
@@ -385,7 +385,7 @@ exit 0
 	var warn strings.Builder
 	if err := RunSession(SessionSpec{
 		Key: key, Name: "pix-demo", Keep: true,
-		CreateArgs: []string{"run", "--name", "pix-demo"},
+		AttachArgs: []string{"run", "--name", "pix-demo"},
 	}, SessionDeps{Env: realEnv(), Poll: SbxCreatePoll(realEnv()), Warn: &warn, Spawn: fixtureSpawn(t)}); err != nil {
 		t.Fatalf("RunSession: %v", err)
 	}

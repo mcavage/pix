@@ -124,3 +124,19 @@ func Forget(cfg *config.Config, name string, probe HolderProbe) (root string, er
 	}
 	return root, nil
 }
+
+// LoadForLaunch is the launch path's ONE entry into this package's
+// environment loader (E2.5): it reads the environment trust store fresh
+// and resolves name through the SAME Load every other verb uses — exact
+// name, canonical root, symlink and containment refusals, strict parse of
+// both authored files, and the current acceptance bit — so a launch can
+// never resolve an environment by a laxer rule than `pix env show` does.
+// It exists because the trust store itself is this package's private
+// document; no caller outside it may open one.
+func LoadForLaunch(cfg *config.Config, name string) (*Environment, error) {
+	ts, err := loadEnvironmentTrustStore()
+	if err != nil {
+		return nil, err
+	}
+	return Load(cfg, &ts.AcceptanceStore, name, nil, nil)
+}

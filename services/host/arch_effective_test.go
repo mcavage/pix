@@ -9,6 +9,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -119,11 +120,21 @@ func TestArchitecture_ExactlyOneEffectiveDocumentProducer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("walk: %v", err)
 	}
-	if len(sites) != 1 {
-		t.Fatalf("envinfo.RenderEffective must have exactly one production call site (F17); found %v", sites)
+	// F17 pins ONE RENDERER, not one caller: the two callers are the two
+	// documented compositions — `pix env show --effective`'s deterministic
+	// preview and E2.5's real launch — and the sibling-workflow rule
+	// (arch_test.go's TestArchitecture_ImportsPointDown) forbids the launch
+	// from reaching the preview's wrapper, so it renders its own richer
+	// RuntimeFacts through the SAME envinfo.RenderEffective. What F17
+	// forbids is a SECOND effective grammar; any third call site is one.
+	want := []string{
+		filepath.FromSlash("workflow/env/effective.go"),
+		filepath.FromSlash("workflow/launch/envlaunch.go"),
 	}
-	if want := filepath.FromSlash("workflow/env/effective.go"); sites[0] != want {
-		t.Fatalf("envinfo.RenderEffective's one call site must be %s (env show and every future launch composition share it); found %s", want, sites[0])
+	sort.Strings(sites)
+	sort.Strings(want)
+	if strings.Join(sites, ",") != strings.Join(want, ",") {
+		t.Fatalf("envinfo.RenderEffective's production call sites must be exactly %v (F17: one renderer, the two documented compositions); found %v", want, sites)
 	}
 
 	// cmd/pix must never call envinfo.RenderEffective directly.

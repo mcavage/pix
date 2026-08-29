@@ -29,6 +29,13 @@ type RunOpts struct {
 	MCP           []string // --mcp M: extra servers on top of config.MCP (folded into StaticMCP by the caller)
 	StaticMCP     []string // RESOLVED create-time set, emitted as --static-mcp (mcp.AllPreloadedMCP of cfg.MCP+MCP)
 	Name          string   // --name N: sandbox name
+	// Env is `--env NAME`: the EXACT registered environment this run
+	// launches under, overriding the configured default for this run only
+	// (never written back to config). EnvName is the name that actually
+	// RESOLVED (the explicit one, else the machine default, else "" for
+	// D17's `none`), filled in by the command layer once selection ran.
+	Env     string
+	EnvName string
 	Model         string   // --model M: active pi model (passed through to pi)
 	Models        []string // create-time callable model cycle, derived from probed bindings
 	Intent        string   // --intent NAME: resolve the session model via the router (unless --model overrides)

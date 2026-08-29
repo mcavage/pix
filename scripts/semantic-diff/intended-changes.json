@@ -1,27 +1,96 @@
 [
   {
     "id": "config-keys.top-level.surface",
-    "rationale": "E1.5 (Story 1, native sandbox environments, docs/design/environments.md §5.3) adds two real top-level config.toml keys: `environment` (the machine default environment NAME) and `environments` (the name -> canonical absolute local path registry). Both have no hand-edit path at all — `pix config set/unset` refuses them outright and names the correct `pix env` command (workflow/provision/config.go's environmentKeyRefusal); `pix env use`/`pix env add`/`pix env rm` (Wave C) are the only writers.",
+    "rationale": "E1.5 (Story 1, native sandbox environments, docs/design/environments.md \u00a75.3) adds two real top-level config.toml keys: `environment` (the machine default environment NAME) and `environments` (the name -> canonical absolute local path registry). Both have no hand-edit path at all \u2014 `pix config set/unset` refuses them outright and names the correct `pix env` command (workflow/provision/config.go's environmentKeyRefusal); `pix env use`/`pix env add`/`pix env rm` (Wave C) are the only writers.",
     "evidence": "services/host/config/config.go (Config.Environment / Config.Environments, applyDefaults' dropNoncanonicalEnvironments); services/host/config/environment.go (CanonicalEnvironmentPath/AddEnvironment/RemoveEnvironment/UseEnvironment); services/host/workflow/provision/config.go (environmentKeyRefusal); services/host/config/environment_test.go; services/host/workflow/provision/config_environment_test.go; services/host/cmd/pix/config_environment_cmd_test.go",
     "changes": [
       {
         "file": "services/host/config/config.go",
         "kind": "set",
-        "from": ["services", "mcp", "memory_watcher_model", "memory_embed_model", "memory_capture", "ollama_bridge_model", "run_intent", "inference"],
-        "to": ["services", "mcp", "memory_watcher_model", "memory_embed_model", "memory_capture", "ollama_bridge_model", "run_intent", "inference", "environment", "environments"]
+        "from": [
+          "services",
+          "mcp",
+          "memory_watcher_model",
+          "memory_embed_model",
+          "memory_capture",
+          "ollama_bridge_model",
+          "run_intent",
+          "inference"
+        ],
+        "to": [
+          "services",
+          "mcp",
+          "memory_watcher_model",
+          "memory_embed_model",
+          "memory_capture",
+          "ollama_bridge_model",
+          "run_intent",
+          "inference",
+          "environment",
+          "environments"
+        ]
       }
     ]
   },
   {
     "id": "lifecycle.lease.instance-id-immutable",
-    "rationale": "E2.3 review fix (P0-7): lease.CreateRecord's write-once install moved off a direct O_CREAT|O_EXCL open on record.json's own final path, which made write-once a syscall guarantee one syscall too early — a crash between that open and its write left EXACTLY the corrupt/partial file a reader must never see, present and EEXIST-able before a single byte of its content existed. writeRecordOnce now writes the full content to a same-directory 0600 temp file, fsyncs and closes it, and only THEN installs it via os.Link (never os.Rename): link(2), like the O_EXCL open before it, refuses rather than replaces an existing target, so write-once stays exactly the same syscall-level guarantee, just reachable only once the content it publishes is already durable. The identity-match check that used to run only before a create attempt is now the shared checkExistingRecord, reused after a lost create race too: the old EEXIST branch was a bare `return readRecordFile(path)` with no validation, silently handing a racing caller asking for a DIFFERENT instance id the WINNER's record as if it were its own.",
+    "rationale": "E2.3 review fix (P0-7): lease.CreateRecord's write-once install moved off a direct O_CREAT|O_EXCL open on record.json's own final path, which made write-once a syscall guarantee one syscall too early \u2014 a crash between that open and its write left EXACTLY the corrupt/partial file a reader must never see, present and EEXIST-able before a single byte of its content existed. writeRecordOnce now writes the full content to a same-directory 0600 temp file, fsyncs and closes it, and only THEN installs it via os.Link (never os.Rename): link(2), like the O_EXCL open before it, refuses rather than replaces an existing target, so write-once stays exactly the same syscall-level guarantee, just reachable only once the content it publishes is already durable. The identity-match check that used to run only before a create attempt is now the shared checkExistingRecord, reused after a lost create race too: the old EEXIST branch was a bare `return readRecordFile(path)` with no validation, silently handing a racing caller asking for a DIFFERENT instance id the WINNER's record as if it were its own.",
     "evidence": "services/host/lease/record.go (writeRecordOnce, checkExistingRecord, createRecord); services/host/lease/record_test.go (TestCreateRecord_ConcurrentDifferentIdentityLoserIsRefusedNotSilentlyAccepted, TestCreateRecord_ConcurrentSameIdentityAllSucceedIdempotently, TestCreateRecord_NoLeftoverTempFileAfterWrite)",
     "changes": [
       {
         "file": "services/host/lease/record.go",
         "kind": "contains",
-        "from": ["if existing.InstanceID != instanceID {", "syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL"],
-        "to": ["if existing.InstanceID != instanceID {", "os.Link(tmpPath, path)", "errors.Is(werr, os.ErrExist)"]
+        "from": [
+          "if existing.InstanceID != instanceID {",
+          "syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL"
+        ],
+        "to": [
+          "if existing.InstanceID != instanceID {",
+          "os.Link(tmpPath, path)",
+          "errors.Is(werr, os.ErrExist)"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "lifecycle.session.record-before-lifecycle-unlock",
+    "rationale": "E2.5 escalation (BLOCK 3): RunSession's lease-failure fallback is DELETED. It used to warn and then spawn spec.CreateArgs with no lease at all \u2014 after the cutover that is a second, selectable create path (the exact thing PRD \u00a78 forbids), and it created a sandbox nothing on this host could prove it owned. A lease/state-dir failure is now a hard SessionRefused before anything spawns, so the literal `return child.Wait()` that belonged to that fallback is gone; the invariant this pin exists for is untouched and still pinned by the two surviving literals (the transition runs inside AttachRefUnderLifecycle's fn, and the child is waited for only after the refs reference is held).",
+    "evidence": "services/host/workflow/launch/session.go (RunSession's lease-dir refusal); services/host/workflow/launch/envcutover_test.go (TestRunSession_LeaseDirFailure_RefusesAndSpawnsNothing, TestRunSession_CreateWithoutEffectiveEnvironmentRefuses, TestRunSession_CreateSpawnsEnvCreateThenExec_NeverSbxRun)",
+    "changes": [
+      {
+        "file": "services/host/workflow/launch/session.go",
+        "kind": "contains",
+        "from": [
+          "ref, err := lease.AttachRefUnderLifecycle(ctx, dir, func() error {",
+          "child, terr = startSessionTransition(spec, deps)",
+          "return child.Wait()"
+        ],
+        "to": [
+          "ref, err := lease.AttachRefUnderLifecycle(ctx, dir, func() error {",
+          "child, terr = startSessionTransition(spec, deps)",
+          "werr := child.Wait()"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "lifecycle.session.create-record-requires-verified-instance-id",
+    "rationale": "E2.5 escalation (BLOCK 6): the create no longer merely RECORDS a lease, it PROMOTES the bounded create intent into the instance-bound, write-once receipt (E2.3's PromoteCreateIntent), which binds instance id AND name and clears the intent. Recording therefore happens only on the create path's own promotion step, so startSessionTransition's attach branch no longer computes `recorded := SessionRecorded(spec.Key)` for a create it does not perform \u2014 it consults SessionRecorded only to decide whether -k/--keep has a record to bind to. The verified-instance-id requirement this pin exists for is unchanged and still pinned by the two surviving literals, and is now additionally enforced in PromoteSessionCreation.",
+    "evidence": "services/host/workflow/launch/session.go (PromoteSessionCreation, startEnvCreateTransition, startSessionTransition's keep branch); services/host/workflow/launch/envcutover_test.go (TestRunSession_CreatePromotesIntentToAReceipt, TestRunSession_NoReceipt_RefusesWithZeroRemovals)",
+    "changes": [
+      {
+        "file": "services/host/workflow/launch/session.go",
+        "kind": "contains",
+        "from": [
+          "if found == nil || !found.IdentityVerified || found.InstanceID == nil || *found.InstanceID == \"\" {",
+          "return false, nil // present but unowned: no verifiable instance id to record",
+          "recorded := SessionRecorded(spec.Key)"
+        ],
+        "to": [
+          "if found == nil || !found.IdentityVerified || found.InstanceID == nil || *found.InstanceID == \"\" {",
+          "return false, nil // present but unowned: no verifiable instance id to record",
+          "case !SessionRecorded(spec.Key):"
+        ]
       }
     ]
   }
