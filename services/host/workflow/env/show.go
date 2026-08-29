@@ -40,7 +40,7 @@ const ShowSchemaVersion = 1
 // is a plain error: cli.ExitCode reports it as an OPERATIONAL failure (1),
 // matching D19's "non-zero-not-2 for operational failure", never exit 2.
 var ErrEffectiveNotAvailable = errors.New(
-	"pix: `--effective` is not yet available (E2.1 renders the effective document); there is no alternative rendering to fall back to")
+	"pix: `--effective` is not yet available; there is no alternative rendering to fall back to")
 
 // ShowResult is what `env show` found, before any of its three renderings
 // reads it. Selected is false only when no NAME was given AND no machine

@@ -282,6 +282,17 @@ func TestErrEffectiveNotAvailable_IsOperationalNotUsage(t *testing.T) {
 	}
 }
 
+// TestErrEffectiveNotAvailable_NamesNoInternalUnitID is finding C12: the
+// message a user actually sees must never leak an internal unit/ticket
+// label ("E2.1", the renderer's own tracking ID) — that is planning
+// metadata for this repo, not information that helps whoever typed
+// `--effective`.
+func TestErrEffectiveNotAvailable_NamesNoInternalUnitID(t *testing.T) {
+	if msg := ErrEffectiveNotAvailable.Error(); strings.Contains(msg, "E2.1") {
+		t.Errorf("ErrEffectiveNotAvailable = %q, must not name the internal unit E2.1", msg)
+	}
+}
+
 // ── --json carries schema_version and every structured fact (AC-64) ─────
 
 func TestRenderShowJSON_SelectedCarriesFacts(t *testing.T) {

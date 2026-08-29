@@ -220,6 +220,65 @@ func TestAdd_RegisterRepointRequiresNewRootAcceptance(t *testing.T) {
 	}
 }
 
+// TestAdd_RepointNamesOldAndNewAbsoluteRootsOnSuccess is finding C11: a
+// successful repoint's printed line, and its AddResult, must name BOTH the
+// old and the new absolute root — not merely the plain "registered at"
+// form a first-time add uses.
+func TestAdd_RepointNamesOldAndNewAbsoluteRootsOnSuccess(t *testing.T) {
+	tempConfigAndState(t)
+	cfg := loadConfig(t)
+	rootA := hosttrust.CanonicalRoot(writeTier0Fixture(t))
+	rootB := hosttrust.CanonicalRoot(writeTier0Fixture(t))
+
+	var out1 bytes.Buffer
+	res1, err := Add(cfg, "home", rootA, AddOptions{Out: &out1, LookPath: noBareLookPath})
+	if err != nil {
+		t.Fatalf("Add rootA: %v (stdout: %s)", err, out1.String())
+	}
+	if res1.OldRoot != "" {
+		t.Errorf("first-time Add: AddResult.OldRoot = %q, want empty", res1.OldRoot)
+	}
+	if strings.Contains(out1.String(), "repointed") {
+		t.Errorf("first-time Add stdout = %q, must not mention a repoint", out1.String())
+	}
+
+	// An idempotent re-add of the SAME root is not a repoint either: nothing
+	// actually moved.
+	var outSame bytes.Buffer
+	resSame, err := Add(cfg, "home", rootA, AddOptions{Out: &outSame, LookPath: noBareLookPath})
+	if err != nil {
+		t.Fatalf("Add rootA again: %v (stdout: %s)", err, outSame.String())
+	}
+	if resSame.OldRoot != "" {
+		t.Errorf("idempotent re-add: AddResult.OldRoot = %q, want empty (root unchanged)", resSame.OldRoot)
+	}
+	if strings.Contains(outSame.String(), "repointed") {
+		t.Errorf("idempotent re-add stdout = %q, must not mention a repoint", outSame.String())
+	}
+
+	var out2 bytes.Buffer
+	res2, err := Add(cfg, "home", rootB, AddOptions{Out: &out2, LookPath: noBareLookPath})
+	if err != nil {
+		t.Fatalf("Add rootB (repoint): %v (stdout: %s)", err, out2.String())
+	}
+	if res2.OldRoot != rootA {
+		t.Errorf("repoint: AddResult.OldRoot = %q, want the old root %q", res2.OldRoot, rootA)
+	}
+	if res2.Root != rootB {
+		t.Errorf("repoint: AddResult.Root = %q, want the new root %q", res2.Root, rootB)
+	}
+	stdout := out2.String()
+	if !strings.Contains(stdout, rootA) {
+		t.Errorf("repoint stdout = %q, want it to name the old root %q", stdout, rootA)
+	}
+	if !strings.Contains(stdout, rootB) {
+		t.Errorf("repoint stdout = %q, want it to name the new root %q", stdout, rootB)
+	}
+	if !strings.Contains(stdout, "pix env use home") {
+		t.Errorf("repoint stdout = %q, want it to still name `pix env use home`", stdout)
+	}
+}
+
 // ── zero-path: cwd ambiguity (D10) ───────────────────────────────────────
 
 func TestAdd_ZeroPath_CwdHasSbxenvRefusesNamingBothIntents(t *testing.T) {
