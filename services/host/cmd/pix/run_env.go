@@ -13,6 +13,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/envinfo"
+	"pix/host/sandbox"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/models"
 
@@ -63,7 +64,7 @@ func resolveRunEnvironment(explicit string) (launch.EnvSelection, error) {
 // unconditional personal-context workspace, the generated mixin kit, and
 // `--dev`'s checkout kit with its live skill arguments. Every value is one
 // this launch already decided; nothing is re-derived here.
-func runEffectiveInput(cfg *config.Config, o launch.RunOpts, sel launch.EnvSelection) launch.EffectiveInput {
+func runEffectiveInput(cfg *config.Config, o launch.RunOpts, sel launch.EnvSelection, version string) (launch.EffectiveInput, error) {
 	template := o.Template
 	if template == "" {
 		if o.LocalImageTag != "" {
@@ -72,29 +73,53 @@ func runEffectiveInput(cfg *config.Config, o launch.RunOpts, sel launch.EnvSelec
 			template = launch.DockerImageRepo
 		}
 	}
-	primary := o.Workspace
-	if sel.Root != "" && primary == "" {
-		primary = sel.Root
+	// The PRIMARY workspace is this run's own project directory — `pix run
+	// DIR`, else the current directory. The selected environment's SOURCE
+	// ROOT is a different thing and is never substituted for it: an
+	// environment root holds declarations, and §5.1 restriction 4 requires
+	// it to resolve outside every writable workspace it mounts. The old
+	// `sel.Root != "" && primary == ""` fallback could only ever fire on an
+	// empty workspace string, which is exactly the accident
+	// PrimaryWorkspaceFact now refuses outright.
+	primary, err := launch.PrimaryWorkspaceFact(o.Workspace)
+	if err != nil {
+		return launch.EffectiveInput{}, err
 	}
 	in := launch.EffectiveInput{
 		Selection:        sel,
 		SandboxName:      o.Name,
 		Template:         template,
 		PullPolicy:       launch.EffectivePullPolicy,
-		PrimaryWorkspace: envinfo.WorkspaceFact{Path: primary},
+		PrimaryWorkspace: primary,
 		PersonalContext:  envinfo.WorkspaceFact{Path: config.ContextDir()},
 		PixEnvVars:       map[string]string{},
 	}
+	// `sbx env create` reads ONLY this document, so every mount and kit the
+	// pre-cutover `sbx run` argv carried has to travel inside it. Both lists
+	// are composed from the SAME producers the old argv used (MountDirs,
+	// EnvExtraKits over BuildSbxArgs' own kit order), so an active pack's
+	// contributed skills/knowledge and mixin kits reach the sandbox exactly
+	// as before rather than being silently dropped at the cutover.
+	mounts := launch.MountDirs(cfg, o)
+	if o.Dev && o.DevRoot != "" {
+		mounts = append(mounts, filepath.Join(o.DevRoot, "skills"))
+	}
+	in.AdditionalWorkspaces = launch.WorkspaceFacts(mounts)
+	in.ExtraKits = launch.EnvExtraKits(cfg, o, version)
 	if len(o.PackKits) > 0 {
-		// The generated Pi mixin kit is the LAST kit this launch
-		// materialized (inference first, then personal context); both are
-		// generated mixins, and RenderEffective renders the reference only.
+		// The generated Pi mixin kit is the FIRST kit this launch
+		// materialized (inference, then personal context); the rest stack as
+		// ordinary extra kits. RenderEffective renders references only.
 		in.MixinKit = o.PackKits[0]
 	}
 	if o.Dev {
 		in.DevKit = envinfo.DevKitFact{Kit: o.LocalKit, LiveSkills: launch.LiveSkillDirs(cfg, o)}
 	}
-	return in
+	// The environment's OWN declared servers (with their reviewed pix.toml
+	// credential wrappers) plus the host-global names this create preloads.
+	in.EnvMCPServers = launch.EnvMCPWrapperFacts(sel.Document, sel.Sidecar)
+	in.MCPServers = launch.ComposeMCPServerFacts(in.EnvMCPServers, o.StaticMCP)
+	return in, nil
 }
 
 // validateRunRoster runs E3.3's roster validation over the environment
@@ -119,11 +144,25 @@ func validateRunRoster(cfg *config.Config, sel launch.EnvSelection, shipped []st
 }
 
 // configDirOrEmpty is the launcher config dir the creation HMAC key record
-// lives in. An unresolvable one degrades to "": the resolver then reports
-// the key as missing, which is the reset-invalidated state — fail closed,
-// never a silently unkeyed fingerprint.
+// lives in. An unresolvable one degrades to "": the ATTACH resolver then
+// reports the key as missing, which is the reset-invalidated state, and the
+// CREATE resolver refuses outright — fail closed either way, never a
+// silently unkeyed fingerprint.
 func configDirOrEmpty() string {
 	return filepath.Dir(config.Path())
+}
+
+// currentCreationFingerprint is the ATTACH half of §10.2's third condition:
+// recompute the creation fingerprint from the environment as it is NOW,
+// under the stored launcher key, for comparison against the one recorded at
+// create. reset is true when that key is gone (post-`pix reset`), which
+// attributes as exactly ONE drift record.
+func currentCreationFingerprint(cfg *config.Config, o launch.RunOpts, sel launch.EnvSelection, version string) (sandbox.Fingerprint, bool, error) {
+	in, err := runEffectiveInput(cfg, o, sel, version)
+	if err != nil {
+		return nil, false, err
+	}
+	return launch.CreationFingerprint(launch.CreationFactsFor(in), launch.AttachHMACResolver(configDirOrEmpty(), nil))
 }
 
 // envHolderProbe is `pix env forget`'s REAL live-holder check (C7): a

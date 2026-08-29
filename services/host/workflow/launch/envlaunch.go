@@ -30,16 +30,19 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"pix/host/config"
 	"pix/host/envinfo"
+	"pix/host/health"
 	"pix/host/hostenv"
 	"pix/host/hosttrust"
 	"pix/host/inference"
 	"pix/host/lease"
+	"pix/host/mcp"
 	"pix/host/sandbox"
 	"pix/host/sys"
 )
@@ -82,17 +85,73 @@ type EffectiveInput struct {
 	Template   string
 	PullPolicy string
 
+	// PrimaryWorkspace is the run's OWN project workspace — `pix run DIR`,
+	// or the current directory — never the selected environment's source
+	// root. An environment root is a declaration directory, not a project:
+	// docs/design/environments.md §5.1 restriction 4 requires it to resolve
+	// OUTSIDE every writable workspace it mounts, so mounting it as the
+	// project workspace would be exactly backwards. PrimaryWorkspaceFact is
+	// the ONE producer of this fact and refuses an empty path outright, so
+	// no launch can pick a workspace by empty-string accident.
 	PrimaryWorkspace envinfo.WorkspaceFact
 	PersonalContext  envinfo.WorkspaceFact
+	// AdditionalWorkspaces are this launch's other host mounts (workflow's
+	// MountDirs: configured skill trees, `--skills`, an active pack's
+	// contributed skills/knowledge, `--dev`'s repo skills). After the
+	// cutover `sbx env create` reads ONLY the effective document, so these
+	// travel as workspace facts rather than as extra `sbx run` positionals.
+	AdditionalWorkspaces []envinfo.WorkspaceFact
 
 	// MixinKit is the generated Pi mixin kit REFERENCE (a directory this
 	// launch already materialized). DevKit carries `--dev`'s checkout kit
-	// and its live skill arguments.
-	MixinKit string
-	DevKit   envinfo.DevKitFact
+	// and its live skill arguments. ExtraKits is every OTHER kit the old
+	// argv passed as `--kit`: the base image kit, `--kit` overrides, an
+	// active pack's generated mixin kits, the configured stack.
+	MixinKit  string
+	ExtraKits []string
+	DevKit    envinfo.DevKitFact
 
 	PixEnvVars map[string]string
-	MCPServers []envinfo.MCPWrapperFact
+	// MCPServers is the full create-time server set the effective document
+	// declares. EnvMCPServers is the subset the ENVIRONMENT itself declares
+	// (its `.sbxenv.yaml` servers plus their pix.toml credential wrappers) —
+	// the only MCP facts an attach can recompute, and therefore the only
+	// ones the creation fingerprint covers (see CreationFactsFor).
+	MCPServers    []envinfo.MCPWrapperFact
+	EnvMCPServers []envinfo.MCPWrapperFact
+}
+
+// PrimaryWorkspaceFact is the ONE producer of the primary project
+// workspace fact. It refuses an empty path rather than substituting
+// anything (an environment root, the process's cwd, or ""): the launch
+// resolved a workspace before it ever got here, and a silently substituted
+// one would mount the wrong tree read-write.
+func PrimaryWorkspaceFact(workspace string) (envinfo.WorkspaceFact, error) {
+	if strings.TrimSpace(workspace) == "" {
+		return envinfo.WorkspaceFact{}, errors.New("launch: a primary workspace is required; refusing to compose one from an empty path")
+	}
+	abs, err := filepath.Abs(workspace)
+	if err != nil {
+		return envinfo.WorkspaceFact{}, fmt.Errorf("launch: resolve workspace %q: %w", workspace, err)
+	}
+	return envinfo.WorkspaceFact{Path: abs}, nil
+}
+
+// WorkspaceFacts lifts an ordered list of host mount paths into workspace
+// facts, dropping empties. Order is the caller's.
+func WorkspaceFacts(paths []string) []envinfo.WorkspaceFact {
+	var out []envinfo.WorkspaceFact
+	for _, p := range paths {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			abs = p
+		}
+		out = append(out, envinfo.WorkspaceFact{Path: abs})
+	}
+	return out
 }
 
 // EffectivePullPolicy is §6.2's pinned pull policy. A launch never leaves
@@ -137,11 +196,45 @@ func ComposeRuntimeFacts(in EffectiveInput) envinfo.RuntimeFacts {
 		PullPolicy:               pull,
 		PrimaryWorkspace:         in.PrimaryWorkspace,
 		PersonalContextWorkspace: in.PersonalContext,
+		AdditionalWorkspaces:     in.AdditionalWorkspaces,
+		ExtraKits:                in.ExtraKits,
 		MixinKit:                 in.MixinKit,
 		DevKit:                   in.DevKit,
 		PixEnvVars:               envVars,
 		MCPServers:               in.MCPServers,
 	}
+}
+
+// CreationFactsFor is the facts value the CREATION FINGERPRINT is computed
+// over, on BOTH the create and the attach path, and it is deliberately a
+// SUBSET of what ComposeRuntimeFacts renders.
+//
+// §10.2 requires an attach to recompute this fingerprint and compare it to
+// the recorded one. An attach resolves NO create-only flag (run_cmd's own
+// contract: nothing in the create-only block is even resolved on an
+// attach), so any fact only a create resolves — the pinned image tag, the
+// freshly materialized mixin-kit temp directory, an active pack's per-run
+// generated kits and mounts, the host-global static-MCP name set — would
+// differ on every attach and refuse every second `pix run`. Those facts are
+// NOT left unguarded: the create-time session fingerprint
+// (SessionFingerprint: the static MCP set and the image) still refuses an
+// attach whose MCP set or image moved, under the lifecycle lock, exactly as
+// it did before the cutover.
+//
+// What stays in, because both paths compute it identically from state that
+// outlives one launch: the authored environment (document + sidecar), the
+// pre-composition sandbox identity, the pinned pull policy, the project and
+// personal-context workspaces, Pix env vars, and the environment's own
+// declared MCP servers with their reviewed credential wrappers.
+func CreationFactsFor(in EffectiveInput) envinfo.RuntimeFacts {
+	facts := ComposeRuntimeFacts(in)
+	facts.Template = ""
+	facts.ExtraKits = nil
+	facts.MixinKit = ""
+	facts.DevKit = envinfo.DevKitFact{}
+	facts.AdditionalWorkspaces = nil
+	facts.MCPServers = in.EnvMCPServers
+	return facts
 }
 
 // EffectiveEnvDir/EffectiveEnvPath resolve the launcher-owned state
@@ -208,12 +301,15 @@ type EffectiveEnvironment struct {
 // RenderEffectiveEnvironment composes, renders and persists in ONE step,
 // so no caller can render one set of bytes and persist another.
 func RenderEffectiveEnvironment(in EffectiveInput, resolve envinfo.InterpolationResolver) (EffectiveEnvironment, error) {
+	if in.PrimaryWorkspace.Path == "" {
+		return EffectiveEnvironment{}, errors.New("launch: refusing to render an effective environment with no primary workspace")
+	}
 	facts := ComposeRuntimeFacts(in)
 	data, err := envinfo.RenderEffective(facts)
 	if err != nil {
 		return EffectiveEnvironment{}, err
 	}
-	fp, reset, err := CreationFingerprint(facts, resolve)
+	fp, reset, err := CreationFingerprint(CreationFactsFor(in), resolve)
 	if err != nil {
 		return EffectiveEnvironment{}, err
 	}
@@ -240,13 +336,14 @@ func CreationFingerprint(facts envinfo.RuntimeFacts, resolve envinfo.Interpolati
 	return sandbox.FromFacetMap(fp), false, nil
 }
 
-// CreationHMACResolver is the launcher-keyed interpolation resolver E2.2
-// requires: an authored ${VAR} is fingerprinted as an HMAC of its RESOLVED
-// value under the one stored launcher key — never the raw value, never an
-// unkeyed hash. A missing key record (the state `pix reset` leaves behind)
-// maps hosttrust's sentinel onto envinfo's, which is the ONLY way the
-// reset-invalidated attribution can be reached.
-func CreationHMACResolver(configDir string, lookupEnv func(string) (string, bool)) envinfo.InterpolationResolver {
+// AttachHMACResolver is the ATTACH path's launcher-keyed interpolation
+// resolver: an authored ${VAR} is fingerprinted as an HMAC of its RESOLVED
+// value under the one ALREADY STORED launcher key — never the raw value,
+// never an unkeyed hash, and never a freshly generated key. It LOADS only:
+// a missing key record is the state `pix reset` leaves behind for records
+// written BEFORE the reset, and mapping hosttrust's sentinel onto envinfo's
+// is the ONLY way the single reset-invalidated attribution is reached.
+func AttachHMACResolver(configDir string, lookupEnv func(string) (string, bool)) envinfo.InterpolationResolver {
 	if lookupEnv == nil {
 		lookupEnv = os.LookupEnv
 	}
@@ -258,16 +355,51 @@ func CreationHMACResolver(configDir string, lookupEnv func(string) (string, bool
 			}
 			return "", err
 		}
-		value, ok := lookupEnv(varName)
-		if !ok {
-			if def != nil {
-				value = *def
-			} else {
-				value = ""
-			}
-		}
-		return hosttrust.SignResolvedValue(key, value), nil
+		return hosttrust.SignResolvedValue(key, resolveInterpolation(lookupEnv, varName, def)), nil
 	}
+}
+
+// CreateHMACResolver is the CREATE path's resolver. A create is the moment
+// the launcher's creation-fingerprint key comes into existence, so the key
+// is ENSURED — generated once, under hosttrust's own lock, at 0600 — BEFORE
+// the first fingerprint this launch computes, and captured for every facet
+// afterwards. Two consequences are load-bearing:
+//
+//   - Exactly ONE ensure per launch, before anything is fingerprinted or
+//     created. Ensuring lazily inside the closure would re-enter the lock
+//     once per interpolated facet.
+//   - A fresh host's FIRST interpolated create is a normal create, not a
+//     "reset invalidated" one. The reset attribution belongs to records
+//     written before the key went away — an attach — and a create that
+//     cannot establish a key fails outright rather than silently
+//     fingerprinting an environment it could not key.
+func CreateHMACResolver(configDir string, lookupEnv func(string) (string, bool)) (envinfo.InterpolationResolver, error) {
+	if strings.TrimSpace(configDir) == "" {
+		return nil, errors.New("launch: cannot establish the creation fingerprint key without a config dir")
+	}
+	if lookupEnv == nil {
+		lookupEnv = os.LookupEnv
+	}
+	key, err := hosttrust.EnsureCreationHMACKey(configDir)
+	if err != nil {
+		return nil, err
+	}
+	return func(varName string, def *string) (string, error) {
+		return hosttrust.SignResolvedValue(key, resolveInterpolation(lookupEnv, varName, def)), nil
+	}, nil
+}
+
+// resolveInterpolation is the ${VAR} / ${VAR:-default} lookup both
+// resolvers share. The value it returns is handed straight to
+// hosttrust.SignResolvedValue and never travels anywhere else.
+func resolveInterpolation(lookupEnv func(string) (string, bool), varName string, def *string) string {
+	if value, ok := lookupEnv(varName); ok {
+		return value
+	}
+	if def != nil {
+		return *def
+	}
+	return ""
 }
 
 // EnvCreateArgs is the ONE create argv this launcher composes:
@@ -427,11 +559,22 @@ func ReadSessionEnvironment(sessionKey string) (SessionEnvironment, bool) {
 	return rec, true
 }
 
+// HolderProbeBudget bounds the ONE schema-verified listing every
+// environment-holder question is answered from. An unbounded `sbx` here is
+// what turns `pix env forget` or `pix env show` into a hang.
+const HolderProbeBudget = health.StatusBudget
+
 // EnvironmentHolders answers §10.4's live-holder question for ONE
 // environment root: which sandboxes this host recorded against it are
 // still positively live. It FAILS CLOSED — an sbx state it cannot read is
 // an error, never "no holders" — because a wrong "nobody is holding it"
 // is what turns `env forget` into a silent teardown of someone's session.
+//
+// It runs ONE bounded, SCHEMA-VERIFIED listing (`sbx ls --json`, parsed by
+// package sandbox) for the whole answer, not a raw `sbx ls` per recorded
+// sandbox: one timeout instead of N, one parse contract instead of column
+// scraping, and "could not read the listing" is a single honest unknown
+// rather than a per-sandbox guess.
 func EnvironmentHolders(env hostenv.Env, envRoot string) ([]string, error) {
 	root, err := leaseRoot()
 	if err != nil {
@@ -445,7 +588,7 @@ func EnvironmentHolders(env hostenv.Env, envRoot string) ([]string, error) {
 		return nil, err
 	}
 	want := strings.TrimSpace(envRoot)
-	var held []string
+	var recorded []string
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -461,11 +604,26 @@ func EnvironmentHolders(env hostenv.Env, envRoot string) ([]string, error) {
 		if rec.Root == "" || rec.Root != want || rec.SandboxName == "" {
 			continue
 		}
-		switch ProbeTaskSandbox(env, rec.SandboxName) {
-		case SbxRunning:
-			held = append(held, rec.SandboxName)
-		case SbxUnknown:
-			return nil, fmt.Errorf("launch: could not determine whether %s is still running; refusing to answer as unheld", rec.SandboxName)
+		recorded = append(recorded, rec.SandboxName)
+	}
+	if len(recorded) == 0 {
+		return nil, nil
+	}
+	listing, trusted := sbxListing(env, HolderProbeBudget)
+	if !trusted {
+		return nil, fmt.Errorf("launch: could not read a schema-verified `sbx ls` within %s; refusing to answer as unheld", HolderProbeBudget)
+	}
+	var held []string
+	for _, name := range recorded {
+		entry := sandbox.FindByName(listing, name)
+		if entry == nil {
+			continue // positively absent: nothing holds it
+		}
+		if !entry.IdentityVerified {
+			return nil, fmt.Errorf("launch: `sbx ls` did not positively identify %s; refusing to answer as unheld", name)
+		}
+		if entry.State == sandbox.StateRunning {
+			held = append(held, name)
 		}
 	}
 	sort.Strings(held)
@@ -547,9 +705,166 @@ func ReadRecordedInstanceID(sessionKey string) string {
 	return rec.InstanceID
 }
 
-// ReadSessionFingerprintFor exposes the recorded creation fingerprint to
-// the command layer's attach gate. found is false when nothing was ever
-// recorded — which is NOT drift: there is no stored value to diverge from.
-func ReadSessionFingerprintFor(sessionKey string) (sandbox.Fingerprint, bool) {
-	return readSessionFingerprint(sessionKey)
+// creationFingerprintFileName is the recorded CREATION fingerprint (§9.1),
+// kept beside the lease as its own record rather than inside the session
+// fingerprint: the two answer different questions ("did the environment
+// declaration change" vs "did the static MCP set or image change") and are
+// computed from different inputs, and folding them into one file would
+// make an attach compare an environment fingerprint against a session one.
+const creationFingerprintFileName = "creationfingerprint.json"
+
+// RecordCreationFingerprint persists the creation fingerprint this create
+// is FOR, beside the create intent and before `sbx env create` runs, so a
+// later attach has something to compare against even if this process dies
+// mid-create.
+func RecordCreationFingerprint(sessionKey string, fp sandbox.Fingerprint) error {
+	return writeSessionState(sessionKey, creationFingerprintFileName, fp)
+}
+
+// ReadCreationFingerprint reads it back. found is false when nothing was
+// ever recorded (a pre-cutover sandbox), which is NOT drift.
+func ReadCreationFingerprint(sessionKey string) (sandbox.Fingerprint, bool) {
+	var fp sandbox.Fingerprint
+	if !readSessionState(sessionKey, creationFingerprintFileName, &fp) || len(fp) == 0 {
+		return nil, false
+	}
+	return fp, true
+}
+
+// ReleaseEffectiveEnv implements §10.3's "State and the effective file
+// clear only after a positive absent probe": the retained effective
+// document for sandboxName is deleted ONLY when ONE bounded,
+// schema-verified listing positively reports no such sandbox. A listing it
+// could not read, or one that still shows the sandbox, RETAINS the file —
+// removal is the one thing that cannot be undone, and the file is what a
+// later environment-scoped removal recomposes.
+func ReleaseEffectiveEnv(env hostenv.Env, sandboxName string) (released bool, err error) {
+	dir, derr := EffectiveEnvDir(sandboxName)
+	if derr != nil {
+		return false, derr
+	}
+	listing, trusted := sbxListing(env, HolderProbeBudget)
+	if !trusted {
+		return false, fmt.Errorf("launch: could not read a schema-verified `sbx ls` within %s; retaining %s's effective environment file", HolderProbeBudget, sandboxName)
+	}
+	if sandbox.FindByName(listing, sandboxName) != nil {
+		return false, nil // still there: retain
+	}
+	if rerr := os.RemoveAll(dir); rerr != nil {
+		return false, rerr
+	}
+	return true, nil
+}
+
+// EnvExtraKits is the launch's non-authored kit list, composed from the
+// SAME inputs and in the SAME order BuildSbxArgs emitted `--kit` for
+// before the cutover: the base image kit (a `--kit` override replaces it),
+// the user's `--kit` values, the pack/generated mixin kits beyond the Pi
+// mixin itself, then the configured stack. It exists because `sbx env
+// create` reads only the effective document — a kit that used to travel as
+// an argv flag has nowhere else to go, and dropping it would quietly
+// unmount an active pack's contribution.
+func EnvExtraKits(cfg *config.Config, o RunOpts, version string) []string {
+	var kits []string
+	if len(o.Kits) == 0 {
+		if o.LocalKit != "" {
+			kits = append(kits, o.LocalKit)
+		} else {
+			kits = append(kits, gitKitURLRef(o.KitRef, version))
+		}
+	}
+	kits = append(kits, o.Kits...)
+	if len(o.PackKits) > 1 {
+		// PackKits[0] is the generated Pi mixin kit (RuntimeFacts.MixinKit);
+		// the rest stack as ordinary extra kits.
+		kits = append(kits, o.PackKits[1:]...)
+	}
+	if cfg != nil {
+		kits = append(kits, cfg.Kits.Stack...)
+	}
+	return kits
+}
+
+// EnvMCPWrapperFacts composes §9.2's reviewed MCP facts for the SELECTED
+// environment's own `.sbxenv.yaml` servers: a local-command server whose
+// pix.toml `[host.mcp.<name>]` declares env_keys is wrapped through the ONE
+// op-run grammar this module has (package mcp's OpRunWrap — never a second
+// hand-built copy, arch_effective_test.go's
+// TestArchitecture_NoDuplicateOpRunGrammar), and every other server renders
+// its bare definition unchanged.
+//
+// It deliberately mirrors workflow/env's preview composition rather than
+// calling it: workflow/launch may not import a sibling workflow package
+// (F17), and the shared, non-duplicable part — the credential wrapper
+// grammar itself — is the mcp.OpRunWrap call both go through.
+func EnvMCPWrapperFacts(doc *envinfo.Document, sidecar *envinfo.Sidecar) []envinfo.MCPWrapperFact {
+	if doc == nil {
+		return nil
+	}
+	var hostMCP map[string]envinfo.HostMCPEntry
+	if sidecar != nil {
+		hostMCP = sidecar.Host.MCP
+	}
+	var out []envinfo.MCPWrapperFact
+	for _, srv := range doc.MCP.Servers {
+		fact := envinfo.MCPWrapperFact{Name: srv.Name, URL: srv.URL}
+		if srv.Command == "" {
+			out = append(out, fact)
+			continue
+		}
+		argv := append([]string{srv.Command}, srv.Args...)
+		if entry, ok := hostMCP[srv.Name]; ok && len(entry.EnvKeys) > 0 {
+			argv = opRunWrapIfAvailable(argv)
+		}
+		fact.Command = argv[0]
+		fact.Args = argv[1:]
+		out = append(out, fact)
+	}
+	return out
+}
+
+// opRunWrapIfAvailable wraps argv through mcp.OpRunWrap when this host has
+// both `op` and a refs file, and returns it unchanged otherwise (1Password
+// stays optional — OpRunWrap's own no-op contract, reused rather than
+// reimplemented).
+func opRunWrapIfAvailable(argv []string) []string {
+	opPath, err := exec.LookPath("op")
+	if err != nil {
+		return argv
+	}
+	refs := config.OpRefsPath()
+	if _, serr := os.Stat(refs); serr != nil {
+		return argv
+	}
+	return mcp.OpRunWrap(opPath, refs, argv)
+}
+
+// ComposeMCPServerFacts folds the host-global server names this create
+// preloads (the pre-cutover `--static-mcp` set: configured servers, `--mcp`
+// flags, an active pack's contribution, the ephemeral UAT server) into the
+// environment's own declared servers, by NAME only.
+//
+// A host-global server is registered with, and run by, the sbx gateway
+// (AGENTS.md's MCP rules); Pix holds no command or URL for it and must not
+// invent one — so it travels as the stable identity it actually has. A name
+// the environment already declares is never duplicated: the environment's
+// own definition wins, since that is the one host review accepted.
+func ComposeMCPServerFacts(envServers []envinfo.MCPWrapperFact, staticNames []string) []envinfo.MCPWrapperFact {
+	seen := map[string]bool{}
+	out := append([]envinfo.MCPWrapperFact(nil), envServers...)
+	for _, s := range out {
+		seen[s.Name] = true
+	}
+	for _, name := range staticNames {
+		n := strings.TrimSpace(name)
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		out = append(out, envinfo.MCPWrapperFact{Name: n})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

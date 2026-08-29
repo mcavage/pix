@@ -185,6 +185,26 @@ type RuntimeFacts struct {
 	PrimaryWorkspace         WorkspaceFact
 	PersonalContextWorkspace WorkspaceFact
 
+	// AdditionalWorkspaces are the caller's OTHER host mounts, in the
+	// caller's own order, rendered after the primary and personal-context
+	// ones (workflow/launch's MountDirs: configured skill trees, `--skills`
+	// trees, an active pack's skills/knowledge). They exist because
+	// `sbx env create` takes ONLY this document: a mount the pre-cutover
+	// `sbx run` argv passed as an extra positional has nowhere else to go,
+	// and silently dropping it would take a pack's skills away from the
+	// session. A nil slice renders no extra mount and never fabricates one.
+	AdditionalWorkspaces []WorkspaceFact
+
+	// ExtraKits are the caller's other already-resolved kit references, in
+	// the caller's own order: the base image kit (a local checkout or the
+	// pinned git URL), `--kit` overrides, an active pack's generated mixin
+	// kits, and the configured kit stack. Same reason as
+	// AdditionalWorkspaces: after the cutover this document is the only
+	// channel a kit can reach `sbx env create` through. They render AFTER
+	// the authored `kits:` and BEFORE the generated Pi mixin kit, so the
+	// Pix-generated mixin always stacks last.
+	ExtraKits []string
+
 	// MixinKit is the generated Pi mixin kit's REFERENCE ONLY — a
 	// directory path or a kit URL string, never its content. This package
 	// never creates, writes, or cleans up whatever that reference points
@@ -287,15 +307,22 @@ func effectiveName(facts RuntimeFacts) string {
 	return facts.Document.Name
 }
 
-// effectiveWorkspaces renders the primary workspace followed by the
-// personal-context workspace, each in object form, skipping any fact
-// whose Path is unset.
+// effectiveWorkspaces renders the primary workspace, then the
+// personal-context workspace, then the caller's additional mounts, each in
+// object form, skipping any fact whose Path is unset and any exact path
+// repeat.
 func effectiveWorkspaces(facts RuntimeFacts) []effectiveWorkspace {
 	var out []effectiveWorkspace
-	for _, ws := range []WorkspaceFact{facts.PrimaryWorkspace, facts.PersonalContextWorkspace} {
-		if ws.Path == "" {
+	all := append([]WorkspaceFact{facts.PrimaryWorkspace, facts.PersonalContextWorkspace}, facts.AdditionalWorkspaces...)
+	seen := map[string]bool{}
+	for _, ws := range all {
+		// An unset fact renders no mount; a repeated path renders once (the
+		// personal-context tree is BOTH the unconditional mount and, for a
+		// caller that also lists it as a skill tree, an additional one).
+		if ws.Path == "" || seen[ws.Path] {
 			continue
 		}
+		seen[ws.Path] = true
 		out = append(out, effectiveWorkspace{Path: ws.Path, ReadOnly: ws.ReadOnly, Clone: ws.Clone})
 	}
 	return out
@@ -315,6 +342,11 @@ func effectiveKits(facts RuntimeFacts) []string {
 		}
 		if k.Raw != "" {
 			out = append(out, k.Raw)
+		}
+	}
+	for _, k := range facts.ExtraKits {
+		if k != "" {
+			out = append(out, k)
 		}
 	}
 	if facts.MixinKit != "" {

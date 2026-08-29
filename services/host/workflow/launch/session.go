@@ -175,7 +175,17 @@ func readSessionInvocation(sessionKey string) (invocation []string, found bool) 
 	return invocation, true
 }
 
-func sbxEntry(env hostenv.Env, name string, within time.Duration) (entry *sandbox.Entry, trusted bool) {
+// sbxListing is the module's ONE parser of `sbx ls --json` (slim_test.go's
+// TestLifecycle_OneParserPerSbxListing pins that), and the ONE bounded read
+// every environment-scoped question (live holders, effective-file release,
+// the create receipt) is answered from. trusted means the listing itself
+// was READ and parsed into a documented shape inside within; per-row
+// identity stays the caller's own check (sandbox.Entry.IdentityVerified),
+// because one unowned row in a shared listing must not invalidate the
+// answer about a different, positively identified sandbox. An untrusted
+// answer is never downgraded into "absent" by any caller — that is the
+// fail-closed half of each of those questions.
+func sbxListing(env hostenv.Env, within time.Duration) (entries []sandbox.Entry, trusted bool) {
 	var out string
 	var err error
 	if within > 0 {
@@ -194,7 +204,15 @@ func sbxEntry(env hostenv.Env, name string, within time.Duration) (entry *sandbo
 	if perr != nil {
 		return nil, false
 	}
-	return sandbox.FindByName(parsed.Entries, name), true
+	return parsed.Entries, true
+}
+
+func sbxEntry(env hostenv.Env, name string, within time.Duration) (entry *sandbox.Entry, trusted bool) {
+	entries, ok := sbxListing(env, within)
+	if !ok {
+		return nil, false
+	}
+	return sandbox.FindByName(entries, name), true
 }
 
 func FindPositivelyIdentifiedRunning(env hostenv.Env, name string) (*sandbox.Entry, bool) {
@@ -203,6 +221,41 @@ func FindPositivelyIdentifiedRunning(env hostenv.Env, name string) (*sandbox.Ent
 		return nil, false
 	}
 	return found, true
+}
+
+// PromoteSessionCreation is the cutover's create-receipt step: a bounded,
+// schema-verified probe must positively identify the sandbox and its
+// instance id, and only then is the bounded create intent PROMOTED into the
+// instance-bound, write-once lease record (E2.3's PromoteCreateIntent),
+// followed by this session's fingerprint and exact invocation.
+//
+// The returned warning is the promotion's CleanupWarning: the lease record
+// is already durable and only the redundant intent file survived. It is
+// reported, never treated as a failed create — the exact false-abort
+// PromotionResult was shaped to make unreachable.
+func PromoteSessionCreation(env hostenv.Env, sessionKey, name string, fp sandbox.Fingerprint, invocation []string) (recorded bool, warning error, err error) {
+	found, _ := sbxEntry(env, name, 0)
+	if found == nil || !found.IdentityVerified || found.InstanceID == nil || *found.InstanceID == "" {
+		return false, nil, nil // present but unowned: no verifiable instance id to promote against
+	}
+	dir, derr := leaseDirFor(sessionKey)
+	if derr != nil {
+		return false, nil, derr
+	}
+	res, perr := PromoteCreateIntent(dir, CreateReceipt{InstanceID: *found.InstanceID, SandboxName: found.Name})
+	if perr != nil {
+		return false, nil, fmt.Errorf("launch: could not record %s's creation lease: %w", name, perr)
+	}
+	if !res.Promoted() {
+		return false, nil, fmt.Errorf("launch: %s's creation lease was not recorded", name)
+	}
+	if werr := writeSessionState(sessionKey, sessionFingerprintFileName, fp); werr != nil {
+		return false, res.CleanupWarning, fmt.Errorf("launch: could not record %s's session fingerprint: %w", name, werr)
+	}
+	if werr := writeSessionState(sessionKey, sessionInvocationFileName, invocation); werr != nil {
+		return false, res.CleanupWarning, fmt.Errorf("launch: could not record %s's session invocation: %w", name, werr)
+	}
+	return true, res.CleanupWarning, nil
 }
 
 func RecordSessionCreation(env hostenv.Env, sessionKey, name string, fp sandbox.Fingerprint, invocation []string) (recorded bool, err error) {
@@ -249,15 +302,19 @@ type SessionSpec struct {
 	// look for a persisted session beside it and say how to resume.
 	Workspace string
 
-	CreateArgs []string
 	// EnvCreateArgs, when non-empty, makes a CREATE two-phase — E2.5's
 	// cutover shape (docs/design/environments.md §10.1): `sbx env create
 	// <effective>` runs to completion FIRST, the positively identified
 	// instance is recorded (lease promoted to that instance id), and only
 	// THEN is the session started as a name-based `sbx exec -it <name> --
 	// pi <exact invocation>`. There is no second selectable create path:
-	// when this is set, CreateArgs is not spawned at all.
+	// this is the ONLY create shape: an `sbx run`-style create argv is not
+	// a field on this type at all after the cutover, so no crash, lease
+	// failure or unset flag can select one (PRD §8; envargv_sentinel_test.go).
 	EnvCreateArgs []string
+	// AttachArgs is the ONE non-exec attach argv a caller may supply (the
+	// pre-cutover `run --name` re-attach). It is NEVER used for a create.
+	AttachArgs []string
 	// AttachTTY selects `sbx exec -it` (interactive) vs `-i` (piped).
 	AttachTTY bool
 	// AttachExec is true when the pre-lock probe positively identified a RUNNING,
@@ -299,14 +356,15 @@ func RunSession(spec SessionSpec, deps SessionDeps) error {
 	if deps.Spawn == nil {
 		return fmt.Errorf("launch: RunSession needs a Spawn (the command layer owns stdio wiring)")
 	}
+	// A lease/state-dir failure is a HARD refusal, not a degraded launch.
+	// Before the cutover this fell back to spawning the old create argv
+	// without any lease at all; after it there is no second create path to
+	// fall back TO, and "create a sandbox nothing on this host can prove it
+	// owns" is precisely what the create-intent/receipt machinery exists to
+	// prevent (PRD §8, §9.3).
 	dir, derr := leaseDirFor(spec.Key)
 	if derr != nil {
-		fmt.Fprintf(deps.Warn, "pix: warning: running without %s's lifecycle lease (%v); a future orphan sweep could not see this session\n", spec.Key, derr)
-		child, err := StartSbxSession(deps.Spawn(spec.CreateArgs), deps.Poll, spec.Creating, spec.Name)
-		if err != nil {
-			return err
-		}
-		return child.Wait()
+		return &SessionRefused{Err: fmt.Errorf("cannot take %s's lifecycle lease (%v); refusing to create or attach without one", spec.Key, derr)}
 	}
 
 	timeout := deps.LockTimeout
@@ -336,8 +394,25 @@ func RunSession(spec SessionSpec, deps SessionDeps) error {
 		fmt.Fprintf(deps.Warn, "pix: warning: releasing %s's reference lease: %v; skipping teardown\n", spec.Key, cerr)
 		return werr
 	}
-	reportTeardown(deps.Warn, TeardownSandbox(deps.Env, spec.Key, spec.Name, TriggerSession, deps.Teardown), spec.Workspace)
+	res := TeardownSandbox(deps.Env, spec.Key, spec.Name, TriggerSession, deps.Teardown)
+	reportTeardown(deps.Warn, res, spec.Workspace)
+	releaseEffectiveAfterTeardown(deps, spec.Name, res)
 	return werr
+}
+
+// releaseEffectiveAfterTeardown clears the retained effective document only
+// after a removal, and then only on a POSITIVE absent probe (§10.3). Every
+// other outcome — kept, failed, or a listing that could not be read —
+// retains the file, because it is what a later environment-scoped removal
+// recomposes and deleting it early strands that path on the name-based
+// fallback.
+func releaseEffectiveAfterTeardown(deps SessionDeps, name string, res TeardownResult) {
+	if !res.Removed() {
+		return
+	}
+	if _, err := ReleaseEffectiveEnv(deps.Env, name); err != nil && deps.Warn != nil {
+		fmt.Fprintf(deps.Warn, "pix: warning: %v\n", err)
+	}
 }
 
 // killUnreferencedAndTeardown is RunSession's failed-ref path: the transition
@@ -411,9 +486,18 @@ func startEnvCreateTransition(spec SessionSpec, deps SessionDeps) (*SessionChild
 	if !creator.Appeared && !settleAfterExit(deps.Poll, spec.Name) {
 		return nil, &SessionRefused{Err: fmt.Errorf("`sbx env create` exited successfully but %q never appeared in sbx ls — nothing was attached to", spec.Name)}
 	}
-	recorded, rerr := RecordSessionCreation(deps.Env, spec.Key, spec.Name, spec.Fingerprint, spec.Invocation)
+	// PROMOTE, don't merely record: the bounded create intent written before
+	// the spawn is replaced by the instance-bound lease record (E2.3), which
+	// is the ONE thing that ever counts as a positive create receipt. A
+	// cleanup warning means the record IS durable and only the now-redundant
+	// intent file survived — informational, never a reason to abort a create
+	// that already succeeded (PromotionResult's own contract).
+	recorded, warning, rerr := PromoteSessionCreation(deps.Env, spec.Key, spec.Name, spec.Fingerprint, spec.Invocation)
 	if rerr != nil {
 		return nil, rerr
+	}
+	if warning != nil {
+		fmt.Fprintf(deps.Warn, "pix: warning: %v\n", warning)
 	}
 	if !recorded {
 		return nil, &SessionRefused{Err: fmt.Errorf("%q was created but reports no verifiable instance id — refusing to attach to a sandbox this host cannot prove it owns", spec.Name)}
@@ -436,7 +520,7 @@ func startEnvCreateTransition(spec SessionSpec, deps SessionDeps) (*SessionChild
 // startSessionTransition is the body that runs UNDER the lifecycle lock. It
 // returns as soon as the transition is recorded, with the child still running:
 func startSessionTransition(spec SessionSpec, deps SessionDeps) (*SessionChild, error) {
-	argv := spec.CreateArgs
+	argv := spec.AttachArgs
 	if spec.Creating {
 		// A create that finds the sandbox already there lost the race: another
 		// process created it while this one was resolving kits. Refuse — the
@@ -468,28 +552,28 @@ func startSessionTransition(spec SessionSpec, deps SessionDeps) (*SessionChild, 
 		}
 	}
 
-	if spec.Creating && len(spec.EnvCreateArgs) > 0 {
+	if spec.Creating {
+		// THE create path, and the only one: `sbx env create <effective>`.
+		if len(spec.EnvCreateArgs) == 0 {
+			return nil, &SessionRefused{Err: fmt.Errorf("%q has no effective environment to create from; refusing to create a sandbox outside the environment path", spec.Name)}
+		}
 		return startEnvCreateTransition(spec, deps)
+	}
+	if len(argv) == 0 {
+		return nil, &SessionRefused{Err: fmt.Errorf("%q has no attach argv; refusing to spawn sbx with nothing to do", spec.Name)}
 	}
 
 	child, err := StartSbxSession(deps.Spawn(argv), deps.Poll, spec.Creating, spec.Name)
 	if err != nil {
 		return nil, err
 	}
-	// Everything a later attach — or a future reaper — reads is written HERE,
-	// before the lifecycle lock is released and before the session is waited
-	// for: a creator killed mid-session still leaves a complete record.
-	recorded := SessionRecorded(spec.Key)
-	if spec.Creating && child.Appeared {
-		var rerr error
-		recorded, rerr = RecordSessionCreation(deps.Env, spec.Key, spec.Name, spec.Fingerprint, spec.Invocation)
-		if rerr != nil {
-			fmt.Fprintf(deps.Warn, "pix: warning: %v\n", rerr)
-		}
-	}
+	// An attach records nothing new: the create-time facts are already on
+	// disk (a create wrote them under this same lock before the lock was
+	// released). Only the keep marker, which is this shell's own request,
+	// is bound here.
 	if spec.Keep {
 		switch {
-		case !recorded:
+		case !SessionRecorded(spec.Key):
 			fmt.Fprintf(deps.Warn, "pix: warning: -k/--keep not recorded: %q has no verified creation record to bind a keep to\n", spec.Name)
 		default:
 			if kerr := setSessionKeep(spec.Key); kerr != nil {

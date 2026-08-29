@@ -57,6 +57,16 @@ ls)
 	fi
 	exit 0
 	;;
+env)
+	# the cutover create: sbx env create <effective> returns as soon as the
+	# sandbox exists; the SESSION is a separate exec below.
+	touch "$d/created"
+	exit 0
+	;;
+exec)
+	touch "$d/attached"` + awaitRelease + `
+	exit 0
+	;;
 run)
 	touch "$d/created"` + awaitRelease + `
 	exit 0
@@ -277,9 +287,9 @@ func runFixtureSessionSpec(t *testing.T, key, ws string, warn io.Writer, opts Te
 	t.Helper()
 	return RunSession(SessionSpec{
 		Key: key, Name: "pix-demo", Creating: true, Keep: keep,
-		CreateArgs:  []string{"run", "--name", "pix-demo"},
-		Fingerprint: sandbox.Fingerprint{"static_mcp": "slack"},
-		Invocation:  []string{"--model", "m"},
+		EnvCreateArgs: []string{"env", "create", "/tmp/effective.sbxenv.yaml"},
+		Fingerprint:   sandbox.Fingerprint{"static_mcp": "slack"},
+		Invocation:    []string{"--model", "m"},
 	}, SessionDeps{
 		Env: realEnv(), Poll: fastPoll(), Warn: warn,
 		Spawn:    fixtureSpawn(t),

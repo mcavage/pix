@@ -546,14 +546,23 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	attachExec := false
 	if plan.Reattach {
 		entry, _ := launch.FindPositivelyIdentifiedRunning(defaultShellEnv(), o.Name)
-		stored, storedFound := launch.ReadSessionFingerprintFor(sessionKey)
+		// §10.2's third condition: the RECREATE-ONLY creation fingerprint,
+		// recomputed from the environment as it is now under the STORED
+		// launcher key (never a freshly generated one — a missing key is the
+		// post-reset state and attributes as exactly one drift).
+		stored, storedFound := launch.ReadCreationFingerprint(sessionKey)
+		current, resetInvalidated, cerr := currentCreationFingerprint(cfg, o, selection, version)
+		if cerr != nil {
+			return runFail(d, 1, "environment: %v", cerr)
+		}
 		rec, _ := launch.ReadSessionEnvironment(sessionKey)
 		decision := launch.DecideEnvAttach(launch.AttachGate{
 			Entry:              entry,
 			RecordedInstanceID: launch.ReadRecordedInstanceID(sessionKey),
 			Stored:             stored,
 			StoredFound:        storedFound,
-			Current:            fp,
+			Current:            current,
+			ResetInvalidated:   resetInvalidated && storedFound,
 			Reviewed:           !selection.Selected() || selection.Reviewed,
 			Tree:               selection.Tree,
 		}, o.Name, rec.Name)
@@ -596,8 +605,12 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		packForState = o.Pack
 	}
 	// A HARD contract: a generated prompt is the fenced agent's ONLY trusted host
-	// truth, so a launch that cannot build it ABORTS before exec.
-	args, perr := launch.InjectTrustedHostState(plan.Args, cfg, defaultShellEnv(), packForState)
+	// truth, so a launch that cannot build it ABORTS before exec. After the
+	// cutover the payload is injected into the pi INVOCATION this launch
+	// actually execs (`sbx exec -it <name> -- pi <invocation>`), not into an
+	// `sbx run` argv that is no longer spawned.
+	invocation := launch.BuildPiInvocation(launch.LiveSkillDirs(cfg, o), o)
+	invocation, perr := launch.InjectTrustedHostState(invocation, cfg, defaultShellEnv(), packForState)
 	if perr != nil {
 		return runFail(d, 1, "could not build trusted host state: %v", perr)
 	}
@@ -630,7 +643,7 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	}()
 
 	if os.Getenv("PIX_DEBUG") != "" {
-		fmt.Fprintln(d.Err, "+ sbx "+strings.Join(args, " "))
+		fmt.Fprintln(d.Err, "+ sbx "+strings.Join(plan.Args, " "))
 	}
 
 	// launch.RunSession OWNS the create/attach ordering: lifecycle lock EX, a fresh
@@ -640,7 +653,6 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	// and the words, never the ordering. ONE invocation builder serves both the argv
 	// this create records and the default an attach falls back to, so they cannot
 	// drift.
-	invocation := launch.BuildPiInvocation(launch.LiveSkillDirs(cfg, o), o)
 	// E2.5's ONE create path: compose the real RuntimeFacts once, render them
 	// through the single effective-document producer, persist the EXACT bytes
 	// this create is about to use, and create through `sbx env create` — the
@@ -648,15 +660,27 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	// selectable.
 	var envCreateArgs []string
 	if creating {
-		eff, eerr := launch.RenderEffectiveEnvironment(runEffectiveInput(cfg, o, selection), launch.CreationHMACResolver(configDirOrEmpty(), nil))
+		in, ierr := runEffectiveInput(cfg, o, selection, version)
+		if ierr != nil {
+			return runFail(d, 1, "environment: %v", ierr)
+		}
+		// The launcher's creation-fingerprint key is ESTABLISHED here, once,
+		// before the first fingerprint and before anything is created. A
+		// fresh host's first interpolated create is an ordinary create, not a
+		// reset-invalidated one.
+		resolver, kerr := launch.CreateHMACResolver(configDirOrEmpty(), nil)
+		if kerr != nil {
+			return runFail(d, 1, "environment: %v", kerr)
+		}
+		eff, eerr := launch.RenderEffectiveEnvironment(in, resolver)
 		if eerr != nil {
 			return runFail(d, 1, "environment: %v", eerr)
 		}
 		envCreateArgs = launch.EnvCreateArgs(eff.Path)
-		if !eff.ResetInvalidated {
-			fp = eff.Fingerprint
+		if rerr := launch.RecordCreationFingerprint(sessionKey, eff.Fingerprint); rerr != nil {
+			return runFail(d, 1, "environment: %v", rerr)
 		}
-		if ierr := launch.WriteCreateIntentFor(sessionKey, selection.Root, selection.Name, o.Name, fp); ierr != nil {
+		if ierr := launch.WriteCreateIntentFor(sessionKey, selection.Root, selection.Name, o.Name, eff.Fingerprint); ierr != nil {
 			return runFail(d, 1, "environment: %v", ierr)
 		}
 		if rerr := launch.RecordSessionEnvironment(sessionKey, launch.SessionEnvironment{
@@ -672,7 +696,7 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 		Workspace:         o.Workspace,
 		Creating:          creating,
 		Keep:              o.Keep,
-		CreateArgs:        args,
+		AttachArgs:        plan.Args,
 		AttachTTY:         d.Interactive,
 		AttachExec:        attachExec,
 		Fingerprint:       fp,
@@ -713,7 +737,9 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 			code = exitErr.ExitCode()
 			// A pinned git #ref kit that sbx could not resolve fails with an opaque
 			// git 128; replace it with an actionable note.
-			if msg := launch.KitResolveFailureMsg(launch.PinnedGitKit(args)); msg != "" {
+			// The pinned git kit now lives in the effective document's kit
+			// list, composed by EnvExtraKits from the same inputs.
+			if msg := launch.KitResolveFailureMsg(launch.PinnedGitKit(launch.EnvExtraKits(cfg, o, version))); msg != "" {
 				fmt.Fprintln(d.Err, msg)
 			}
 		} else {

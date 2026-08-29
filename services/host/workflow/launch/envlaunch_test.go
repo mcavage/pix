@@ -259,7 +259,7 @@ func TestCreationFingerprint_HMACKeyed(t *testing.T) {
 	lookup := func(string) (string, bool) { return "super-secret-value", true }
 
 	// No key record yet: reset-invalidated, no error, no fingerprint.
-	fp, reset, err := CreationFingerprint(facts, CreationHMACResolver(cfgDir, lookup))
+	fp, reset, err := CreationFingerprint(facts, AttachHMACResolver(cfgDir, lookup))
 	if err != nil || !reset || fp != nil {
 		t.Fatalf("missing key: got (%v, %v, %v), want (nil, true, nil)", fp, reset, err)
 	}
@@ -267,7 +267,7 @@ func TestCreationFingerprint_HMACKeyed(t *testing.T) {
 	if _, err := hosttrust.EnsureCreationHMACKey(cfgDir); err != nil {
 		t.Fatalf("EnsureCreationHMACKey: %v", err)
 	}
-	fp, reset, err = CreationFingerprint(facts, CreationHMACResolver(cfgDir, lookup))
+	fp, reset, err = CreationFingerprint(facts, AttachHMACResolver(cfgDir, lookup))
 	if err != nil || reset {
 		t.Fatalf("with key: (%v, %v)", reset, err)
 	}
@@ -320,7 +320,9 @@ func unreadableSbx() hostenv.Env {
 
 // runningSbx reports exactly one RUNNING, schema-verified row for name.
 func runningSbx(name string) hostenv.Env {
-	row := "NAME  IMAGE  STATE\n" + name + "  pix  running\n"
+	// A schema-verified `sbx ls --json` listing: the ONE bounded probe
+	// every environment-holder answer is read from.
+	row := `[{"name":"` + name + `","state":"running","instance_id":"inst-` + name + `"}]`
 	return hostenv.Env{System: &systest.Fake{
 		LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil },
 		RunFn:      func(string, ...string) (string, error) { return row, nil },
