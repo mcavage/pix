@@ -376,6 +376,15 @@ func ContextDir() string { return filepath.Join(dataDirOr(), "context") }
 // at <PacksDir>/<name>. Distinct from PackDir (the single default pack).
 func PacksDir() string { return filepath.Join(dataDirOr(), "packs") }
 
+// EnvsDir is where a zero-path `pix env add NAME` scaffolds a new native
+// environment: $XDG_DATA_HOME/pix/envs, else ~/.local/share/pix/envs —
+// docs/design/environments.md §1's own directory listing
+// (`~/.local/share/pix/envs/home/`). Each scaffolded environment lives at
+// <EnvsDir>/<name>; an externally registered environment (`pix env add
+// NAME PATH`) never lives here unless the caller happened to point PATH at
+// this same tree themselves.
+func EnvsDir() string { return filepath.Join(dataDirOr(), "envs") }
+
 // dataDirOr returns DataDir() or, if HOME cannot be resolved, a relative
 // "pix" so path builders never panic on an empty base.
 func dataDirOr() string {

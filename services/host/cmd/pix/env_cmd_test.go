@@ -328,3 +328,164 @@ func TestEnvReview_WithLocalSidecarSkillSucceeds(t *testing.T) {
 		t.Errorf("env review work (Tier0) = %q, want no output at all", out.String())
 	}
 }
+
+// ── env add: E1.10, dispatched through the SAME kong entry point ──────────
+
+// tier0Source/tier1Source build the same two authored-file shapes
+// registerTier0Env/registerHostExecEnv register directly, but as a bare
+// SOURCE DIRECTORY `env add` itself must register — `add` has no verb yet
+// to bypass in these tests, unlike every earlier env_cmd_test.go helper.
+func tier0Source(t *testing.T) string {
+	t.Helper()
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, ".sbxenv.yaml"), []byte("schemaVersion: \"1\"\nagent: pix\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return src
+}
+
+func tier1Source(t *testing.T) string {
+	t.Helper()
+	src := t.TempDir()
+	fixture := filepath.Join("..", "..", "workflow", "env", "testdata", "hostexec-fixture")
+	entries, err := os.ReadDir(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		data, err := os.ReadFile(filepath.Join(fixture, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(src, e.Name()), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return src
+}
+
+func TestEnvAdd_RegisterTier0(t *testing.T) {
+	d, out, errb := envDeps(t)
+	root := tier0Source(t)
+	if code := dispatch([]string{"env", "add", "work", root}, d); code != 0 {
+		t.Fatalf("pix env add work %s = %d, want 0 (stderr: %s)", root, code, errb.String())
+	}
+	if !strings.Contains(out.String(), "pix env use work") {
+		t.Errorf("stdout = %q, want it to name `pix env use work`", out.String())
+	}
+
+	d2, out2, errb2 := freshDeps()
+	if code := dispatch([]string{"env", "show", "work", "--path"}, d2); code != 0 {
+		t.Fatalf("pix env show work --path = %d, want 0 (stderr: %s)", code, errb2.String())
+	}
+	if strings.TrimSpace(out2.String()) == "" {
+		t.Error("env show work --path after add is empty; add must have registered and saved it")
+	}
+}
+
+func TestEnvAdd_RegisterTier1_NonTTYFailsClosedTransactionally(t *testing.T) {
+	d, out, errb := envDeps(t)
+	d.Interactive = false
+	root := tier1Source(t)
+
+	code := dispatch([]string{"env", "add", "work", root}, d)
+	if code != 2 {
+		t.Fatalf("pix env add work %s (non-TTY) = %d, want 2 (stdout: %s, stderr: %s)", root, code, out.String(), errb.String())
+	}
+	if !strings.Contains(out.String(), "Accept this host-execution footprint?") {
+		t.Errorf("stdout = %q, want the review bill", out.String())
+	}
+
+	// Nothing was registered: a fresh `env show work` still reports unknown.
+	d2, _, errb2 := freshDeps()
+	if code := dispatch([]string{"env", "show", "work"}, d2); code != 2 {
+		t.Fatalf("pix env show work after a refused add = %d, want 2", code)
+	}
+	if !strings.Contains(errb2.String(), `no environment named "work"`) {
+		t.Errorf("stderr = %q, want the unknown-name form (nothing was registered)", errb2.String())
+	}
+}
+
+func TestEnvAdd_RegisterTier1_YesAccepts(t *testing.T) {
+	d, out, errb := envDeps(t)
+	root := tier1Source(t)
+	if code := dispatch([]string{"env", "add", "work", root, "--yes"}, d); code != 0 {
+		t.Fatalf("pix env add work %s --yes = %d, want 0 (stderr: %s)", root, code, errb.String())
+	}
+	if !strings.Contains(out.String(), `recorded acceptance for environment "work"`) {
+		t.Errorf("stdout = %q, want the acceptance line", out.String())
+	}
+	if !strings.Contains(out.String(), "pix env use work") {
+		t.Errorf("stdout = %q, want it to name `pix env use work`", out.String())
+	}
+}
+
+// TestEnvAdd_ZeroPathScaffoldsUnderDataDir proves the zero-path form end to
+// end through dispatch: cwd genuinely has no `.sbxenv.yaml` (a scratch temp
+// dir this test os.Chdir's into and restores afterward — the ONE test in
+// this file that does, since envAddCmd.Run wires no Getwd override:
+// production always resolves the real cwd).
+func TestEnvAdd_ZeroPathScaffoldsUnderDataDir(t *testing.T) {
+	d, out, errb := envDeps(t)
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwd := t.TempDir()
+	if err := os.Chdir(cwd); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	if code := dispatch([]string{"env", "add", "home"}, d); code != 0 {
+		t.Fatalf("pix env add home (scaffold) = %d, want 0 (stderr: %s)", code, errb.String())
+	}
+	firstLine, _, _ := strings.Cut(out.String(), "\n")
+	if !filepath.IsAbs(firstLine) {
+		t.Errorf("first output line = %q, want an absolute created root", firstLine)
+	}
+	if !strings.Contains(firstLine, filepath.Join("pix", "envs", "home")) {
+		t.Errorf("first output line = %q, want it under <data-dir>/envs/home", firstLine)
+	}
+	if _, err := os.Stat(filepath.Join(firstLine, ".sbxenv.yaml")); err != nil {
+		t.Errorf("scaffolded .sbxenv.yaml missing at %s: %v", firstLine, err)
+	}
+	if !strings.Contains(out.String(), "pix env use home") {
+		t.Errorf("stdout = %q, want it to name `pix env use home`", out.String())
+	}
+}
+
+// TestEnvAdd_ZeroPathCwdAmbiguityRefusesNamingBothForms proves D10 through
+// dispatch: a real cwd that already holds `.sbxenv.yaml` refuses a
+// zero-path add outright.
+func TestEnvAdd_ZeroPathCwdAmbiguityRefusesNamingBothForms(t *testing.T) {
+	d, _, errb := envDeps(t)
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cwd, ".sbxenv.yaml"), []byte("schemaVersion: \"1\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(cwd); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	code := dispatch([]string{"env", "add", "home"}, d)
+	if code != 2 {
+		t.Fatalf("pix env add home (cwd has .sbxenv.yaml) = %d, want 2", code)
+	}
+	got := errb.String()
+	if !strings.Contains(got, "pix env add home "+cwd) {
+		t.Errorf("stderr = %q, want it to name the register form", got)
+	}
+	if !strings.Contains(got, "pix env add home") {
+		t.Errorf("stderr = %q, want it to name the bare scaffold form", got)
+	}
+}
