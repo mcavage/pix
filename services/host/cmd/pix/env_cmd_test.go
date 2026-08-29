@@ -246,6 +246,41 @@ func TestEnvShow_EffectiveNotYetAvailable(t *testing.T) {
 	}
 }
 
+// TestEnvShow_EffectiveByteIdenticalToProducer pins AC-54's "stdout
+// byte-identical to producer output" requirement: `pix env show NAME
+// --effective`'s stdout must be EXACTLY whatever
+// env.RenderEffectiveDocument(cfg, NAME) itself returns, whether that is
+// a successful document (a future state) or an error (today's E2.1 RED
+// state, where stdout must stay empty and the error surfaces on stderr
+// only through envRun, never partially written to stdout).
+func TestEnvShow_EffectiveByteIdenticalToProducer(t *testing.T) {
+	d, out, _ := envDeps(t)
+	registerTier0Env(t, "work")
+	cfg, err := d.Config()
+	if err != nil {
+		t.Fatalf("d.Config(): %v", err)
+	}
+	want, wantErr := env.RenderEffectiveDocument(cfg, "work")
+
+	code := dispatch([]string{"env", "show", "work", "--effective"}, d)
+
+	if wantErr != nil {
+		if out.Len() != 0 {
+			t.Errorf("stdout = %q, want empty when the producer errors", out.String())
+		}
+		if code == 0 {
+			t.Errorf("dispatch code = 0, want non-zero when the producer errors")
+		}
+		return
+	}
+	if code != 0 {
+		t.Fatalf("dispatch code = %d, want 0 when the producer succeeds", code)
+	}
+	if got := out.Bytes(); string(got) != string(want) {
+		t.Errorf("env show --effective stdout = %q, want producer output %q byte-identical", got, want)
+	}
+}
+
 // ── env show: --path/--json/--effective are mutually exclusive ──────────
 
 func TestEnvShow_FlagsMutuallyExclusive(t *testing.T) {

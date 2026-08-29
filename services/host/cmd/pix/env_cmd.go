@@ -199,10 +199,17 @@ func (c *envShowCmd) Run(d *cli.Deps) error {
 		return err
 	}
 	if c.Effective {
-		// Declared now, but a caller-selectable alternative path does not
-		// exist until E2.1 builds the effective renderer (D8) — never any
-		// other rendering in its place.
-		return envRun(d, env.ErrEffectiveNotAvailable)
+		// E2.1 wires this to workflow/env's ONE call site into envinfo's ONE
+		// effective-document producer (F17) — never a second, independently
+		// shaped rendering in its place. The bytes this prints are, byte for
+		// byte, whatever env.RenderEffectiveDocument returns: no reformatting,
+		// no trailing-newline massage, nothing added or removed here.
+		out, err := env.RenderEffectiveDocument(cfg, c.Name)
+		if err != nil {
+			return envRun(d, err)
+		}
+		d.Out.Write(out)
+		return nil
 	}
 	r, err := env.ComputeShow(cfg, c.Name)
 	if err != nil {
