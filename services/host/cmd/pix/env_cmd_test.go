@@ -226,23 +226,75 @@ func TestEnvShow_UnknownNameExact(t *testing.T) {
 	}
 }
 
-// ── env show --effective: declared, not yet available (D8) ──────────────
+// ── env show --effective: renders the effective document (D8, AC-54) ────
 
-func TestEnvShow_EffectiveNotYetAvailable(t *testing.T) {
-	d, _, errb := envDeps(t)
+// TestEnvShow_EffectiveRendersDocument replaces this file's earlier
+// TestEnvShow_EffectiveNotYetAvailable, which pinned the placeholder state
+// (`--effective` declared but answering "not yet available") that existed
+// only until the effective renderer shipped. That state is now gone, so the
+// assertion moves with it: `--effective` succeeds, prints a real effective
+// document on stdout, says nothing on stderr, and never regresses to the
+// old refusal copy.
+//
+// It also pins the no-sandbox property: this test's scratch $PIX_CONFIG /
+// $XDG_STATE_HOME have no sandbox and no `sbx` of any kind, so a rendering
+// that needed a live sandbox could not produce these bytes at all.
+func TestEnvShow_EffectiveRendersDocument(t *testing.T) {
+	d, out, errb := envDeps(t)
 	registerTier0Env(t, "work")
 	code := dispatch([]string{"env", "show", "work", "--effective"}, d)
-	if code == 0 || code == 2 {
-		t.Fatalf("pix env show work --effective = %d, want a non-zero, non-2 operational code", code)
+	if code != 0 {
+		t.Fatalf("pix env show work --effective = %d (stderr %q), want 0", code, errb.String())
 	}
-	if !strings.Contains(errb.String(), "not yet available") {
-		t.Errorf("stderr = %q, want it to say not yet available", errb.String())
+	if errb.Len() != 0 {
+		t.Errorf("stderr = %q, want nothing on a successful render", errb.String())
 	}
-	if strings.Contains(errb.String(), "pix: pix:") {
-		t.Errorf("stderr = %q, must never double-prefix \"pix: \"", errb.String())
+	got := out.String()
+	if !strings.HasPrefix(got, "schemaVersion: \"1\"\n") {
+		t.Errorf("stdout = %q, want a native effective document starting at schemaVersion", got)
 	}
-	if strings.Contains(errb.String(), "E2.1") {
-		t.Errorf("stderr = %q, must never name the internal unit E2.1", errb.String())
+	for _, want := range []string{"agent: pix", "name: pix-", "template: ", "pullPolicy: missing"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("stdout = %q, want it to carry %q", got, want)
+		}
+	}
+	if strings.Contains(got, "not yet available") || strings.Contains(errb.String(), "not yet available") {
+		t.Errorf("`--effective` must no longer answer \"not yet available\": stdout %q stderr %q", got, errb.String())
+	}
+}
+
+// TestEnvShow_EffectiveByteIdenticalToProducer pins AC-54's "stdout
+// byte-identical to producer output" requirement: `pix env show NAME
+// --effective`'s stdout must be EXACTLY whatever
+// env.RenderEffectiveDocument(cfg, NAME) itself returns, whether that is
+// a successful document (a future state) or an error (today's E2.1 RED
+// state, where stdout must stay empty and the error surfaces on stderr
+// only through envRun, never partially written to stdout).
+func TestEnvShow_EffectiveByteIdenticalToProducer(t *testing.T) {
+	d, out, _ := envDeps(t)
+	registerTier0Env(t, "work")
+	cfg, err := d.Config()
+	if err != nil {
+		t.Fatalf("d.Config(): %v", err)
+	}
+	want, wantErr := env.RenderEffectiveDocument(cfg, "work")
+
+	code := dispatch([]string{"env", "show", "work", "--effective"}, d)
+
+	if wantErr != nil {
+		if out.Len() != 0 {
+			t.Errorf("stdout = %q, want empty when the producer errors", out.String())
+		}
+		if code == 0 {
+			t.Errorf("dispatch code = 0, want non-zero when the producer errors")
+		}
+		return
+	}
+	if code != 0 {
+		t.Fatalf("dispatch code = %d, want 0 when the producer succeeds", code)
+	}
+	if got := out.Bytes(); string(got) != string(want) {
+		t.Errorf("env show --effective stdout = %q, want producer output %q byte-identical", got, want)
 	}
 }
 

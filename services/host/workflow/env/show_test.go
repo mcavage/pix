@@ -271,28 +271,6 @@ func TestRenderShowDefault_ChangedNamesReviewCommandExactlyOnce(t *testing.T) {
 	}
 }
 
-// ── --effective: declared, but not yet available (D8) ───────────────────
-
-func TestErrEffectiveNotAvailable_IsOperationalNotUsage(t *testing.T) {
-	if got := cli.ExitCode(ErrEffectiveNotAvailable); got == 2 || got == 0 {
-		t.Errorf("cli.ExitCode(ErrEffectiveNotAvailable) = %d, want a non-zero, non-2 operational code (D19)", got)
-	}
-	if !strings.Contains(ErrEffectiveNotAvailable.Error(), "not yet available") {
-		t.Errorf("ErrEffectiveNotAvailable = %q, want it to say not yet available", ErrEffectiveNotAvailable.Error())
-	}
-}
-
-// TestErrEffectiveNotAvailable_NamesNoInternalUnitID is finding C12: the
-// message a user actually sees must never leak an internal unit/ticket
-// label ("E2.1", the renderer's own tracking ID) — that is planning
-// metadata for this repo, not information that helps whoever typed
-// `--effective`.
-func TestErrEffectiveNotAvailable_NamesNoInternalUnitID(t *testing.T) {
-	if msg := ErrEffectiveNotAvailable.Error(); strings.Contains(msg, "E2.1") {
-		t.Errorf("ErrEffectiveNotAvailable = %q, must not name the internal unit E2.1", msg)
-	}
-}
-
 // ── --json carries schema_version and every structured fact (AC-64) ─────
 
 func TestRenderShowJSON_SelectedCarriesFacts(t *testing.T) {

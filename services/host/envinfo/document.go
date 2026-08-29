@@ -128,3 +128,61 @@ type Port struct {
 	Sandbox int `yaml:"sandbox"`
 	Host    int `yaml:"host,omitempty"`
 }
+
+// ── the ENCODE half of the same schema (envinfo/render.go's output) ──────
+//
+// These types live HERE, beside Document, for the reason
+// TestOnlyEnvinfoDecodesNativeEnvYAML (arch_test.go) exists: ONE file in
+// this module declares the native `.sbxenv.yaml` field set, so a shape
+// Pix WRITES can never quietly drift from the shape Pix READS. They are
+// unexported because only RenderEffective builds one.
+
+// effectiveDocument is the rendered shape: upstream's `.sbxenv.yaml`
+// schema, in one fixed field order. It is deliberately a SEPARATE type
+// from Document — Document is the strict decoder for an AUTHORED file
+// (document.go: "this struct IS the schema"), and the effective file
+// carries Pix-owned facts (workspaces in object form) an authored file's
+// decoder does not model.
+type effectiveDocument struct {
+	SchemaVersion  string                       `yaml:"schemaVersion"`
+	Agent          string                       `yaml:"agent,omitempty"`
+	Name           string                       `yaml:"name,omitempty"`
+	Workspaces     []effectiveWorkspace         `yaml:"workspaces,omitempty"`
+	Kits           []string                     `yaml:"kits,omitempty"`
+	SandboxOptions map[string]string            `yaml:"sandboxOptions,omitempty"`
+	Env            map[string]string            `yaml:"env"`
+	Secrets        map[string]effectiveSecret   `yaml:"secrets,omitempty"`
+	Registries     map[string]effectiveRegistry `yaml:"registries,omitempty"`
+	Bindings       map[string]Binding           `yaml:"bindings,omitempty"`
+	MCP            *MCPBlock                    `yaml:"mcp,omitempty"`
+	Ports          []Port                       `yaml:"ports,omitempty"`
+}
+
+// effectiveWorkspace is one workspace in object form. readOnly and clone
+// are rendered even when false: this document is the declaration a create
+// is fingerprinted against (E2.2), so an omitted-because-false field would
+// make "read-only" and "unset" indistinguishable to a later reader.
+type effectiveWorkspace struct {
+	Path     string `yaml:"path"`
+	ReadOnly bool   `yaml:"readOnly"`
+	Clone    bool   `yaml:"clone"`
+}
+
+// effectiveSecret/effectiveRegistry mirror SecretRef/RegistryRef with the
+// `value` field STRUCTURALLY ABSENT rather than merely omitted-when-empty.
+// Pix refuses a literal value at parse time (§5.1, restriction 1); making
+// it unrepresentable here means no future edit to this renderer can put a
+// resolved value into a file on disk (render_test.go's
+// TestRenderEffective_NoSecretValues).
+type effectiveSecret struct {
+	Ref     string   `yaml:"ref,omitempty"`
+	Command []string `yaml:"command,omitempty"`
+}
+
+type effectiveRegistry struct {
+	Ref     string   `yaml:"ref,omitempty"`
+	Command []string `yaml:"command,omitempty"`
+	// NoVerify is rendered whenever set; it is never silently dropped —
+	// §5.1 restriction 3 requires it stay visible wherever it applies.
+	NoVerify bool `yaml:"noVerify,omitempty"`
+}

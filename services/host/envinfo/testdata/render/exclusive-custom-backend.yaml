@@ -1,0 +1,16 @@
+schemaVersion: "1"
+agent: pix
+name: pix-gateway-33333333
+workspaces:
+  - path: /home/user/gateway
+    readOnly: false
+    clone: false
+  - path: /home/user/.local/share/pix/context
+    readOnly: false
+    clone: false
+kits:
+  - /tmp/pix-mixin-33333333
+sandboxOptions:
+  pullPolicy: missing
+  template: docker.io/mcavage/pix:v0.0.0
+env: {}

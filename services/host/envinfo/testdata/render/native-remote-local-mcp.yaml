@@ -1,0 +1,29 @@
+schemaVersion: "1"
+agent: pix
+name: pix-work-22222222
+workspaces:
+  - path: /home/user/work
+    readOnly: false
+    clone: false
+  - path: /home/user/.local/share/pix/context
+    readOnly: false
+    clone: false
+kits:
+  - /tmp/pix-mixin-22222222
+sandboxOptions:
+  pullPolicy: missing
+  template: docker.io/mcavage/pix:v0.0.0
+env: {}
+mcp:
+  servers:
+    - name: remote-mcp
+      url: https://mcp.example.com/sse
+    - name: github-mcp
+      command: /usr/bin/op
+      args:
+        - run
+        - --no-masking
+        - --env-file=/home/user/.config/pix/mcp/github-mcp.env
+        - --
+        - github-mcp-server
+        - --stdio
