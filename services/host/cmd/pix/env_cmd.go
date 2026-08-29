@@ -224,6 +224,7 @@ func (c *envShowCmd) Run(d *cli.Deps) error {
 	if c.JSON {
 		return env.RenderShowJSON(d.Out, r)
 	}
+	r.SandboxState = envSandboxState(cfg, r.Root)
 	env.RenderShowDefault(d.Out, r)
 	return nil
 }
@@ -349,7 +350,7 @@ func (c *envForgetCmd) Run(d *cli.Deps) error {
 	if err != nil {
 		return err
 	}
-	root, err := env.Forget(cfg, c.Name, nil)
+	root, err := env.Forget(cfg, c.Name, envHolderProbe(cfg))
 	if err != nil {
 		return envRun(d, err)
 	}

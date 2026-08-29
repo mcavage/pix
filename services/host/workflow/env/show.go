@@ -71,6 +71,12 @@ type ShowResult struct {
 	ModelCount int
 	MountCount int
 	MCPCount   int
+	// SandboxState is the REAL live state of this environment's sandboxes
+	// (E2.5): "running: <names>", "not running", or an explicit unknown
+	// when sbx could not be read. Empty renders as "not running" — never a
+	// fabricated state, and never Wave C's "lands with a later wave"
+	// placeholder.
+	SandboxState string
 }
 
 // resolvedShowName returns the exact name `env show` resolves against: the
@@ -171,12 +177,11 @@ func RenderShowDefault(out io.Writer, r ShowResult) {
 	fmt.Fprintf(out, "  files:     %s\n", showAuthoredFiles(r))
 	fmt.Fprintf(out, "  declares:  %s\n", showDeclaredCounts(r))
 	fmt.Fprintf(out, "  review:    %s\n", showReviewState(r))
-	// No Wave D launch cutover exists yet (E2.x): there is no honest way to
-	// ask whether a live sandbox matches this environment, so this line
-	// says exactly that rather than fabricating a state. See the unit's
-	// scope: "live-sandbox drift state if safely observable (otherwise
-	// explicit not running/unknown, never fabricated)".
-	fmt.Fprintln(out, "  sandbox:   unknown (live-launch drift lands with a later wave)")
+	// The REAL live state, from the sandboxes this host recorded against
+	// this environment's root (E2.5's launch facts): running holders, an
+	// explicit "not running", or an explicit unknown when sbx could not be
+	// read — never a fabricated state.
+	fmt.Fprintf(out, "  sandbox:   %s\n", showSandboxState(r))
 	fmt.Fprintln(out)
 	fmt.Fprintf(out, "full rendered environment: pix env show %s --effective\n", sys.ShellQuote(r.Name))
 }
@@ -266,4 +271,15 @@ func RenderShowJSON(out io.Writer, r ShowResult) error {
 	enc := json.NewEncoder(out)
 	enc.SetIndent("", "  ")
 	return enc.Encode(view)
+}
+
+// showSandboxState defaults an unset live state to the honest "not
+// running": a caller that supplied no probe has observed no holder, and
+// inventing a drift verdict from that would be exactly the fabrication
+// this line replaced.
+func showSandboxState(r ShowResult) string {
+	if strings.TrimSpace(r.SandboxState) == "" {
+		return "not running"
+	}
+	return r.SandboxState
 }

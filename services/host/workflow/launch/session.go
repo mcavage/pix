@@ -250,6 +250,14 @@ type SessionSpec struct {
 	Workspace string
 
 	CreateArgs []string
+	// EnvCreateArgs, when non-empty, makes a CREATE two-phase — E2.5's
+	// cutover shape (docs/design/environments.md §10.1): `sbx env create
+	// <effective>` runs to completion FIRST, the positively identified
+	// instance is recorded (lease promoted to that instance id), and only
+	// THEN is the session started as a name-based `sbx exec -it <name> --
+	// pi <exact invocation>`. There is no second selectable create path:
+	// when this is set, CreateArgs is not spawned at all.
+	EnvCreateArgs []string
 	// AttachTTY selects `sbx exec -it` (interactive) vs `-i` (piped).
 	AttachTTY bool
 	// AttachExec is true when the pre-lock probe positively identified a RUNNING,
@@ -382,6 +390,49 @@ func reportTeardown(warn io.Writer, res TeardownResult, _ string) {
 	}
 }
 
+// startEnvCreateTransition is the E2.5 create: `sbx env create <effective>`
+// is a CREATE, not a session — it returns as soon as the sandbox exists —
+// so it is run to completion under the lifecycle lock, its receipt is
+// demanded POSITIVELY (a bounded poll that must see a schema-verified row
+// whose instance id is recordable), the lease/fingerprint/invocation are
+// promoted against that instance, and only then is the actual session
+// started as `sbx exec -it <name> -- pi <exact invocation>`. A create that
+// fails, or that leaves nothing positively identifiable behind, refuses
+// here: it never falls through to an exec against a sandbox this host
+// cannot prove it made.
+func startEnvCreateTransition(spec SessionSpec, deps SessionDeps) (*SessionChild, error) {
+	creator, err := StartSbxSession(deps.Spawn(spec.EnvCreateArgs), deps.Poll, true, spec.Name)
+	if err != nil {
+		return nil, err
+	}
+	if werr := creator.Wait(); werr != nil {
+		return nil, werr
+	}
+	if !creator.Appeared && !settleAfterExit(deps.Poll, spec.Name) {
+		return nil, &SessionRefused{Err: fmt.Errorf("`sbx env create` exited successfully but %q never appeared in sbx ls — nothing was attached to", spec.Name)}
+	}
+	recorded, rerr := RecordSessionCreation(deps.Env, spec.Key, spec.Name, spec.Fingerprint, spec.Invocation)
+	if rerr != nil {
+		return nil, rerr
+	}
+	if !recorded {
+		return nil, &SessionRefused{Err: fmt.Errorf("%q was created but reports no verifiable instance id — refusing to attach to a sandbox this host cannot prove it owns", spec.Name)}
+	}
+	if spec.Keep {
+		if kerr := setSessionKeep(spec.Key); kerr != nil {
+			fmt.Fprintf(deps.Warn, "pix: warning: -k/--keep could not be recorded: %v\n", kerr)
+		}
+	}
+	execArgs, aerr := BuildAttachArgv(spec.Name, spec.AttachTTY, spec.Invocation)
+	if aerr != nil {
+		return nil, &SessionRefused{Err: aerr}
+	}
+	// The session itself is an ATTACH to a sandbox that already exists, so it
+	// is started with creating=false: the create receipt was already demanded
+	// above, and re-polling for it here would only re-answer a settled question.
+	return StartSbxSession(deps.Spawn(execArgs), deps.Poll, false, spec.Name)
+}
+
 // startSessionTransition is the body that runs UNDER the lifecycle lock. It
 // returns as soon as the transition is recorded, with the child still running:
 func startSessionTransition(spec SessionSpec, deps SessionDeps) (*SessionChild, error) {
@@ -415,6 +466,10 @@ func startSessionTransition(spec SessionSpec, deps SessionDeps) (*SessionChild, 
 			}
 			argv = execArgs
 		}
+	}
+
+	if spec.Creating && len(spec.EnvCreateArgs) > 0 {
+		return startEnvCreateTransition(spec, deps)
 	}
 
 	child, err := StartSbxSession(deps.Spawn(argv), deps.Poll, spec.Creating, spec.Name)
