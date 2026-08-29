@@ -1,5 +1,5 @@
 {
-  "acceptance_bar": "Replace selectable Pix packs and scored model routing with native sbx environments plus a literal Pi roster, preserve lifecycle/trust/host services/UAT, delete dead machinery, and commit a fully proven implementation.",
+  "acceptance_bar": "Full migration, no partial stop: replace every selectable Pix pack and scored model routing path with native sbx environments plus a literal Pi roster end-to-end through Wave H (Waves D, E, F, G, H all land), preserve lifecycle/trust/host services/UAT, delete dead machinery with a named replacement for every deleted trust test, and commit a fully proven implementation with no selectable pack or routing path remaining anywhere in the tree. Opened as a full-send at the user's explicit direction; not a per-wave checkpoint stop.",
   "product": {
     "classification": "non-trivial",
     "classification_reason": "Cross-cutting CLI, config, trust, launch, lifecycle, inference, UAT, and documentation redesign.",
@@ -81,6 +81,7 @@
       }
     ],
     "phase_0_5_done": true,
+    "phase_0_5_scope_note": "Phase 0.5 product framing (pm-frame.md, dx.md, copy.md) covers the whole PRD, not one wave; it remains valid unchanged through Waves D-H and is not re-run per wave. Only the Phase 10 closeout (product.closeout_done) is a separate, later, whole-project gate.",
     "closeout_done": false
   },
   "commands": {
@@ -213,6 +214,66 @@
       "id": "E1.15",
       "status": "done",
       "subagent_run_id": "wave-c-e1.15"
+    },
+    {
+      "id": "E2.1",
+      "status": "running",
+      "subagent_run_id": "wave-d-e2.1"
+    },
+    {
+      "id": "E2.2",
+      "status": "pending",
+      "subagent_run_id": null
+    },
+    {
+      "id": "E2.3",
+      "status": "pending",
+      "subagent_run_id": null
+    },
+    {
+      "id": "E2.4",
+      "status": "pending",
+      "subagent_run_id": null
+    },
+    {
+      "id": "E2.5",
+      "status": "pending",
+      "subagent_run_id": null
+    },
+    {
+      "id": "E2.6",
+      "status": "pending",
+      "subagent_run_id": null
+    },
+    {
+      "id": "E2.7",
+      "status": "pending",
+      "subagent_run_id": null
+    },
+    {
+      "id": "E2.8",
+      "status": "pending",
+      "subagent_run_id": null
+    },
+    {
+      "id": "E3.1",
+      "status": "running",
+      "subagent_run_id": "wave-e-e3.1"
+    },
+    {
+      "id": "E3.2",
+      "status": "pending",
+      "subagent_run_id": null
+    },
+    {
+      "id": "E3.3",
+      "status": "pending",
+      "subagent_run_id": null
+    },
+    {
+      "id": "E3.4",
+      "status": "pending",
+      "subagent_run_id": null
     }
   ],
   "subagent_runs": [
@@ -1086,6 +1147,114 @@
       "status": "fixed",
       "fix_commit": "83385b0a",
       "triage_message_ref": null
+    },
+    {
+      "id": "C1",
+      "source": "architect",
+      "round": 0,
+      "text": "Wave D dependency graph gap: E2.2 (creation fingerprint + HMAC attribution) consumes E2.1's effective render but did not depend_on E2.1; E2.3/E2.4 already had that edge.",
+      "status": "plan-fixed",
+      "fix_commit": ".pi-agent units.json E2.2 depends_on",
+      "triage_message_ref": null
+    },
+    {
+      "id": "C2",
+      "source": "architect",
+      "round": 0,
+      "text": "E2.2 scope did not require the launcher-keyed HMAC key to be exactly one stored hosttrust record, nor require pix reset to invalidate/rotate that one record alongside every acceptance record (F6 extension).",
+      "status": "plan-fixed",
+      "fix_commit": ".pi-agent units.json E2.2 scope/files",
+      "triage_message_ref": null
+    },
+    {
+      "id": "C3",
+      "source": "architect",
+      "round": 0,
+      "text": "E2.1's renderer scope did not state it must be a PURE function over a caller-supplied RuntimeFacts value; as written it could legitimately compute sandbox/mcp facts itself, which the L1 layer rule forbids.",
+      "status": "plan-fixed",
+      "fix_commit": ".pi-agent units.json E2.1 scope",
+      "triage_message_ref": null
+    },
+    {
+      "id": "C4",
+      "source": "architect",
+      "round": 0,
+      "text": "No fitness function guarded 'envinfo imports neither mcp nor sandbox' or 'exactly one producer of the Pi mixin kit'; added F17.",
+      "status": "plan-fixed",
+      "fix_commit": ".pi-agent architecture.md F17 / units.json E2.1",
+      "triage_message_ref": null
+    },
+    {
+      "id": "C5",
+      "source": "architect",
+      "round": 0,
+      "text": "E2.1's file list omitted services/host/cmd/pix/env_cmd.go even though the --effective wiring and RuntimeFacts assembly happen at that call site.",
+      "status": "plan-fixed",
+      "fix_commit": ".pi-agent units.json E2.1 files",
+      "triage_message_ref": null
+    },
+    {
+      "id": "C6",
+      "source": "architect",
+      "round": 0,
+      "text": "Without an explicit single-producer rule, a second Pi mixin materialization implementation could appear in cmd/pix/env_cmd.go or workflow/launch, duplicating envinfo/mixin.go's logic and creating two disagreeing sources of the same kit; now guarded by F17.",
+      "status": "plan-fixed",
+      "fix_commit": ".pi-agent architecture.md F17",
+      "triage_message_ref": null
+    },
+    {
+      "id": "C7",
+      "source": "architect",
+      "round": 0,
+      "text": "E2.5's cutover scope did not wire the env forget/show seams to live-launch facts: forget on a currently attached environment could leave a bound lease/instance behind, and show still rendered Wave C's 'unknown ... lands with a later wave' placeholder instead of real drift/attach state.",
+      "status": "plan-fixed",
+      "fix_commit": ".pi-agent units.json E2.5 scope/files",
+      "triage_message_ref": null
+    },
+    {
+      "id": "C8",
+      "source": "architect",
+      "round": 0,
+      "text": "E2.7's desired host-service union was wired through services/host/pack_units.go, a file E5.2 deletes outright; a durable Wave D capability must not live inside doomed pack machinery.",
+      "status": "plan-fixed",
+      "fix_commit": ".pi-agent units.json E2.7 files/scope",
+      "triage_message_ref": null
+    },
+    {
+      "id": "C9",
+      "source": "architect",
+      "round": 0,
+      "text": "E5.1 enumerated six pack-trust test files as a fixed list frozen at architecture time; by Wave G execution the live tree may have moved or added trust-relevant tests, so the enumeration must be re-derived from the live tree at execution time, not trusted as written.",
+      "status": "open",
+      "fix_commit": null,
+      "triage_message_ref": null
+    },
+    {
+      "id": "C10",
+      "source": "architect",
+      "round": 0,
+      "text": "E6.1 listed SECURITY.md as an edit target, but SECURITY.md is one of the user's seven pending unstaged legal-file cleanup items; editing it before the user resolves that disposition would collide with out-of-scope user work.",
+      "status": "open",
+      "fix_commit": null,
+      "triage_message_ref": null
+    },
+    {
+      "id": "C11",
+      "source": "architect",
+      "round": 0,
+      "text": "E2.8's private-work-environment-converted-and-run-live precondition (PRD section 6, A8/R6) was recorded only as descriptive prose, not as an enforced gate requiring recorded evidence; tightened so E2.8 refuses to land without a named evidence artifact.",
+      "status": "open",
+      "fix_commit": null,
+      "triage_message_ref": null
+    },
+    {
+      "id": "C12",
+      "source": "architect",
+      "round": 0,
+      "text": "status.json still read as pre-Wave-D planning state (acceptance bar silent on full migration, wave_d.status not_started) despite the user's explicit full-send instruction to open Waves D-H.",
+      "status": "plan-fixed",
+      "fix_commit": ".pi-agent status.json acceptance_bar/wave_d",
+      "triage_message_ref": null
     }
   ],
   "attempts": [
@@ -1345,7 +1514,7 @@
     "wave_d_started": false
   },
   "wave_d": {
-    "status": "not_started",
+    "status": "in_progress",
     "story": 2,
     "units": [
       "E2.1",
@@ -1357,6 +1526,69 @@
       "E2.7",
       "E2.8"
     ],
-    "constraint": "private work environment converted and run live before E2.8 (A8/R6); see HANDOFF.md for the exact next order"
+    "running": [
+      "E2.1"
+    ],
+    "pending": [
+      "E2.2",
+      "E2.3",
+      "E2.4",
+      "E2.5",
+      "E2.6",
+      "E2.7",
+      "E2.8"
+    ],
+    "constraint": "private work environment converted and run live before E2.8 (A8/R6), enforced by a recorded evidence artifact (architect correction C11); see HANDOFF.md for the exact next order"
+  },
+  "wave_e": {
+    "status": "in_progress",
+    "story": 3,
+    "units": [
+      "E3.1",
+      "E3.2",
+      "E3.3",
+      "E3.4"
+    ],
+    "running": [
+      "E3.1"
+    ],
+    "pending": [
+      "E3.2",
+      "E3.3",
+      "E3.4"
+    ],
+    "constraint": "E3.1 runs concurrently with the Wave D spine (architecture.md section 6); E3.2 is TypeScript-only and safe alongside all of Wave D"
+  },
+  "wave_f": {
+    "status": "pending",
+    "story": 4,
+    "units": [
+      "E4.1",
+      "E4.2",
+      "E4.3",
+      "E4.4"
+    ]
+  },
+  "wave_g": {
+    "status": "pending",
+    "story": 5,
+    "units": [
+      "E5.1",
+      "E5.2",
+      "E5.3",
+      "E5.4"
+    ],
+    "constraint": "E5.1 is a hard gate; re-derive the pack-trust test enumeration from the live tree at execution time (architect correction C9), not from the snapshot in units.json"
+  },
+  "wave_h": {
+    "status": "pending",
+    "story": 6,
+    "units": [
+      "E6.1",
+      "E6.2",
+      "E6.3",
+      "E6.4"
+    ],
+    "constraint": "E6.1 excludes SECURITY.md, one of the user's seven pending unstaged legal-file cleanup items, until the user resolves its disposition (architect correction C10)"
   }
 }

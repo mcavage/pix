@@ -9,8 +9,64 @@ Continue the native-environments delivery from this durable handoff.
 ## Current state
 
 Story 0 / Wave A, Story 1 foundations / Wave B, and Story 1 verbs / Wave C
-are all complete. Units E0.1-E0.7, E1.0-E1.6, and E1.7-E1.15 are done. Wave D
-(launch cutover, E2.1-E2.8) has not started.
+are all complete. Units E0.1-E0.7, E1.0-E1.6, and E1.7-E1.15 are done. At the
+user's explicit direction this delivery is now OPEN full-send through Waves
+D-H (the full migration, no partial stop). **Wave D (launch cutover) is
+in_progress: E2.1 is running, E2.2-E2.8 are pending.** Wave E (literal
+roster) is running concurrently per the architecture's cross-wave
+parallelism: E3.1 is running, E3.2-E3.4 are pending. Waves F, G and H remain
+pending and unopened until their gating waves close (E5.1 gates G; G gates
+H's SECURITY.md follow-up).
+
+Phase 0.5 product framing (`product/pm-frame.md`, `dx.md`, `copy.md` in
+`status.json`) is a whole-PRD artifact, not a per-wave one; it remains valid
+unchanged for Waves D-H and is not re-run. Frozen product decisions (PRD, the
+six taste calls in `status.json`) are unchanged by this update.
+
+### Architect corrections incorporated at open (findings C1-C12, `status.json`)
+
+1. **C1/C2 — E2.2 now `depends_on` E2.1 directly** (it consumes E2.1's
+   effective render), plus a new requirement: the launcher-keyed HMAC key used
+   for interpolation fingerprinting is exactly **one** stored `hosttrust`
+   record, and `pix reset` invalidates/rotates that one record alongside
+   every acceptance record (extends F6's one-store invariant to the key).
+2. **C3/C4/C5/C6 — E2.1's renderer is a pure function over a caller-supplied
+   `RuntimeFacts` value.** `envinfo` must import neither `mcp` nor `sandbox`
+   (new fitness function **F17**), it is the single producer of the Pi mixin
+   kit (no second materialization site in `cmd/pix/env_cmd.go` or
+   `workflow/launch`), and its file list now includes
+   `services/host/cmd/pix/env_cmd.go`.
+3. **C7 — E2.5 wires the `env forget`/`env show` seams** to the new
+   live-launch facts: `forget` tears down a bound lease/instance before
+   invalidating trust; `show` renders real live-holder/drift/attach state
+   instead of the Wave C placeholder.
+4. **C8 — E2.7's desired-set union lives solely in
+   `workflow/launch/hostservices_env.go` + `serve.go`**, never in
+   `services/host/pack_units.go` (E5.2 deletes that file outright; a durable
+   Wave D capability cannot live inside doomed pack machinery).
+5. **C11 — E2.8's private-work-environment gate is now enforced, not
+   descriptive**: it refuses to land without a recorded live-conversion
+   evidence artifact (commit or log path in this delivery's evidence tree).
+6. **C9 — E5.1's named pack-trust test file list is a snapshot, not an
+   authoritative input.** At execution time, re-derive the enumeration from
+   the live tree (Waves D-F may move or add trust-adjacent tests before
+   Wave G starts) rather than trusting the list frozen in `units.json`.
+7. **C10 — E6.1 excludes `SECURITY.md`.** It is one of the user's seven
+   pending unstaged legal-file cleanup items and stays out of scope until the
+   user resolves that disposition; the rest of E6.1's doc cut (README,
+   reference, getting-started, AGENTS.md, onboarding/healthcheck skills)
+   proceeds unaffected.
+8. **C12 — `status.json`'s acceptance bar and Wave D block were stale
+   pre-open planning state**; both now explicitly record the full-migration
+   commitment and the in-progress/running/pending unit statuses.
+
+Full detail for every corrected unit is in `units.json` (look for
+"ARCHITECT CORRECTION" markers) and `architecture.md` section 3 (F17) and the
+new Wave D architect-corrections paragraph. C9, C10 and C11 remain `open` in
+the findings ledger (the plan is corrected; the underlying condition — live
+re-derivation, the user's SECURITY.md disposition, and the recorded private-host
+conversion evidence — is only resolved when the gated unit actually executes).
+C1-C8 and C12 are `plan-fixed` now, in this same edit.
 
 The working tree carries seven unstaged, user-owned files. This is the
 user's own cleanup, entirely outside this delivery's scope, and must remain
@@ -126,16 +182,23 @@ Fresh top-level verification at closure HEAD `83385b0a`:
 ## Carry-forward obligations (next: Wave D, exact order E2.1 → E2.8)
 
 1. **E2.1 — Effective environment render + Pi mixin kit generation.**
-   Depends on E1.13. Render ONE stable effective `.sbxenv.yaml` per sandbox
-   from authored + sidecar + Pix-owned runtime facts. This unblocks every
-   other Wave D unit below.
+   RUNNING NOW. Depends on E1.13. Render ONE stable effective `.sbxenv.yaml`
+   per sandbox from authored + sidecar + Pix-owned runtime facts. This
+   unblocks every other Wave D unit below. **Corrected (C3-C6):** the
+   renderer is a pure function over one caller-supplied `RuntimeFacts` value;
+   it imports neither `mcp` nor `sandbox` (F17); it is the single producer of
+   the Pi mixin kit (no duplicate materialization in `cmd/pix/env_cmd.go` or
+   `workflow/launch`); its file list includes `services/host/cmd/pix/env_cmd.go`.
 2. **E2.2 — Creation fingerprint + drift attribution map.** Depends on
-   E2.1/E1.2. **Use the authored expression plus a launcher-keyed
+   E2.1/E1.2/E1.4 (**corrected, C1**: now depends_on `E2.1` directly, not
+   only transitively). **Use the authored expression plus a launcher-keyed
    HMAC/digest of the resolved value for interpolation fingerprinting —
    never persist the value or an unkeyed raw-value hash.** This carries
    forward directly from the Wave B/C interpolation-review obligation
    (never display or persist a resolved `${VAR}` value, only source variable
-   + destination key path).
+   + destination key path). **Corrected (C2):** the HMAC key itself is
+   exactly one stored `hosttrust` record, and `pix reset` invalidates/rotates
+   that one record alongside every acceptance record (F6 extension).
 3. **E2.3 — Create intent + failed-create recovery state machine.** Depends
    on E2.1.
 4. **E2.4 — `sandbox.PlanEnvRemove` + name-based fallback with cleanup
@@ -146,14 +209,23 @@ Fresh top-level verification at closure HEAD `83385b0a`:
    Wave C shipped `EffectiveMounts` as one typed set end-to-end but sandbox
    drift and live-holder probing are still `unknown (live-launch drift lands
    with a later wave)` / injectable defaulting to `NoLiveHolders` — this is
-   the wave that makes them real against a live `sbx`.
+   the wave that makes them real against a live `sbx`. **Corrected (C7):**
+   also wires the `env forget`/`env show` seams to these facts — `forget`
+   tears down a bound lease/instance before invalidating trust, and `show`
+   replaces the Wave C placeholder text with real drift/attach state.
 6. **E2.6 — Recreate log wiring + `pix doctor --recreates`.** Depends on
    E2.5, E1.6.
 7. **E2.7 — Host-service desired set = default env UNION live holders.**
-   Depends on E2.5.
+   Depends on E2.5. **Corrected (C8):** lives solely in
+   `workflow/launch/hostservices_env.go` + `serve.go`, never in
+   `services/host/pack_units.go` (E5.2 deletes that file outright).
 8. **E2.8 — Delete every selectable pack launch path.** Depends on E2.5,
    E2.7. Last unit of Wave D; after this, nothing pack-shaped remains
-   user-selectable beside the environment path.
+   user-selectable beside the environment path. **Corrected (C11), tighter
+   gate:** refuses to land without a recorded evidence artifact proving the
+   private work environment was converted to a native environment and run
+   live end-to-end through E2.5's cutover path (PRD §6, A8/R6) — a verbal
+   confirmation does not satisfy this gate.
 
 ## Non-claims carried forward unchanged
 
@@ -201,9 +273,19 @@ C and remains open.
 2. Confirm HEAD is `83385b0a3c82a78da0c995122086257696891a62` and preserve
    the seven-file user cleanup listed above exactly as-is, unstaged.
 3. Do not repeat Wave A/B/C planning or UAT.
-4. Start Wave D only when explicitly asked. Begin **E2.1** and follow the
-   dependency order above (E2.1 → E2.2/E2.3/E2.4 → E2.5 → E2.6/E2.7 → E2.8);
-   consult `units.json` for the authoritative file-conflict and
-   parallel-safety data per unit.
-5. Do not run full project Phase 10 closeout yet; the PM/DX/copy results
-   above are the Wave C checkpoint only.
+4. **Waves D-H are OPEN** (user's explicit full-send). Continue **E2.1**
+   (running) and follow the dependency order above (E2.1 →
+   E2.2/E2.3/E2.4 → E2.5 → E2.6/E2.7 → E2.8), with **E3.1** (Wave E,
+   running) proceeding concurrently per architecture section 6; consult
+   `units.json` for the authoritative file-conflict and parallel-safety data
+   per unit, including every "ARCHITECT CORRECTION" marker.
+5. When Wave G opens, re-derive E5.1's pack-trust test enumeration from the
+   live tree before trusting the list in `units.json` (C9, still `open`).
+6. When Wave H opens, do not stage, edit, or restore `SECURITY.md` in E6.1
+   until the user resolves its disposition (C10, still `open`); land the
+   rest of the doc cut normally.
+7. E2.8 does not land without a recorded private-work-environment
+   live-conversion evidence artifact (C11, still `open`).
+8. Do not run full project Phase 10 closeout yet; the PM/DX/copy results
+   above are the Wave C checkpoint only. Phase 0.5 covers the whole PRD and
+   needs no re-run for Waves D-H.
