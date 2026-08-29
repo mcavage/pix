@@ -397,6 +397,41 @@ func TestEdit_VerdictReviewWhenUnaccepted(t *testing.T) {
 	}
 }
 
+// TestEdit_VerdictReviewWhenChanged proves the ReviewChanged half of
+// postEditVerdict's shared computeReviewState: a STALE record (present, but
+// not matching the current content) verdicts "review" exactly like a
+// completely unaccepted environment does — the same collapsed next step,
+// never mutating or deleting the stale record itself.
+func TestEdit_VerdictReviewWhenChanged(t *testing.T) {
+	root, cfg := tier1EditFixture(t, "work")
+	if _, err := mutateEnvironmentTrustStoreLocked(func(s *environmentTrustStore) error {
+		s.Put(Subject(root), hosttrust.Record{Fingerprint: "stale-fingerprint-not-matching-anything"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	res, err := Edit(cfg, noopEditorFake("true"), "work", TargetSbxenv, EditOptions{Out: &out})
+	if err != nil {
+		t.Fatalf("Edit: %v", err)
+	}
+	if res.Verdict != "review" {
+		t.Errorf("Verdict = %q, want review", res.Verdict)
+	}
+	if !strings.Contains(out.String(), "pix env review work") {
+		t.Errorf("stdout = %q, want the exact next: pix env review work line", out.String())
+	}
+
+	ts, err := loadEnvironmentTrustStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec, ok := ts.Get(Subject(root)); !ok || rec.Fingerprint != "stale-fingerprint-not-matching-anything" {
+		t.Errorf("stale record = %+v (ok=%v), want it left byte-identical — Edit never mutates the trust store", rec, ok)
+	}
+}
+
 // TestEdit_VerdictOkForTier0RegardlessOfAcceptanceRecord is the E1.12
 // pre-merge BLOCK fix (finding 3): a Tier0 (non-host-executing) environment
 // must return "ok"/"pix env use NAME" after a valid edit WITHOUT ever

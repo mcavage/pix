@@ -18,12 +18,18 @@ import (
 // env` --json surface carries one).
 const LsSchemaVersion = 1
 
-// LsEntry is one registered environment row.
+// LsEntry is one registered environment row. ReviewState is the full
+// four-state answer (computeReviewState, reviewstate.go); Accepted is kept
+// alongside it — never derived independently again — purely for backward
+// compatibility with a caller still reading the pre-existing bool: it is
+// exactly `ReviewState == ReviewAccepted`, no longer a separate
+// presence-only check.
 type LsEntry struct {
-	Name     string `json:"name"`
-	Root     string `json:"root"`
-	Default  bool   `json:"default"`
-	Accepted bool   `json:"accepted"`
+	Name        string      `json:"name"`
+	Root        string      `json:"root"`
+	Default     bool        `json:"default"`
+	Accepted    bool        `json:"accepted"`
+	ReviewState ReviewState `json:"review_state"`
 }
 
 // LsResult is `env ls`'s complete, already-computed answer, before either
@@ -40,10 +46,18 @@ type LsResult struct {
 // sorted, so the listing is deterministic across runs and working
 // directories (AC-10's same discipline extended to a listing rather than a
 // single lookup) — each marked Default when it equals cfg.Environment and
-// Accepted per a LIVE IsAccepted lookup against its CURRENT canonical root.
-// A repointed name (AC-16) is never cached as accepted: its NEW root is
-// simply a Subject the trust store has never seen, so this reports it
+// carrying the full computeReviewState answer for its CURRENT canonical
+// root. A repointed name (AC-16) is never cached as accepted: its NEW root
+// is simply a Subject the trust store has never seen, so this reports it
 // unaccepted the instant it is looked up.
+//
+// A single broken registration must never take down the whole listing: a
+// name whose Load fails outright (a missing or now-invalid `.sbxenv.yaml`,
+// a location refusal, ...) — or whose bill cannot be computed even once
+// Load succeeds — renders as ReviewInvalid rather than aborting ComputeLs
+// for every OTHER, perfectly healthy row. `pix env show NAME` (or `edit`)
+// is where that one broken entry's actual diagnostic lives; `ls` only ever
+// names that something is wrong, never why.
 func ComputeLs(cfg *config.Config) (LsResult, error) {
 	ts, err := loadEnvironmentTrustStore()
 	if err != nil {
@@ -53,12 +67,48 @@ func ComputeLs(cfg *config.Config) (LsResult, error) {
 	entries := make([]LsEntry, 0, len(names))
 	for _, name := range names {
 		root, _ := Root(cfg, name)
-		entries = append(entries, LsEntry{
-			Name: name, Root: root, Default: name == cfg.Environment,
-			Accepted: IsAccepted(&ts.AcceptanceStore, root),
-		})
+		entry := LsEntry{Name: name, Root: root, Default: name == cfg.Environment}
+		loaded, loadErr := Load(cfg, &ts.AcceptanceStore, name, nil, nil)
+		if loadErr != nil {
+			entry.ReviewState = ReviewInvalid
+			entries = append(entries, entry)
+			continue
+		}
+		status, statusErr := computeReviewState(loaded, ts, nil, nil)
+		if statusErr != nil {
+			entry.ReviewState = ReviewInvalid
+			entries = append(entries, entry)
+			continue
+		}
+		entry.ReviewState = status.State
+		entry.Accepted = status.State == ReviewAccepted
+		entries = append(entries, entry)
 	}
 	return LsResult{Default: cfg.Environment, Entries: entries}, nil
+}
+
+// lsReviewColumn renders one entry's REVIEW column: the four explicit
+// states in their own short, lowercase ls-column spelling —
+// ReviewNotRequired as "n/a" (nothing to review, never a fifth taxonomy
+// word), plus ReviewInvalid (a Load/bill failure ComputeLs degrades to
+// rather than aborting the whole listing — its own doc comment). Any other
+// value (never produced by ComputeLs today) prints its own raw string
+// rather than silently blanking a state a future caller adds.
+func lsReviewColumn(s ReviewState) string {
+	switch s {
+	case ReviewNotRequired:
+		return "n/a"
+	case ReviewUnaccepted:
+		return "unaccepted"
+	case ReviewAccepted:
+		return "accepted"
+	case ReviewChanged:
+		return "changed"
+	case ReviewInvalid:
+		return "invalid"
+	default:
+		return string(s)
+	}
 }
 
 // RenderLs writes `env ls`'s human presentation: PRD D17's own "built-in
@@ -66,7 +116,8 @@ func ComputeLs(cfg *config.Config) (LsResult, error) {
 // environment" — banned as vocabulary, §5 rule 4), otherwise one row per
 // entry naming only the facts §5.10 promises ("List registered
 // environments. Marks the default.") plus the review state every other
-// `pix env` verb already exposes — no status taxonomy, no WHY column.
+// `pix env` verb already exposes — no status taxonomy beyond the shared
+// four-state ReviewState, no WHY column.
 func RenderLs(out io.Writer, r LsResult) {
 	if len(r.Entries) == 0 {
 		fmt.Fprintln(out, "no environments registered; pix runs with its own built-in defaults.")
@@ -80,11 +131,7 @@ func RenderLs(out io.Writer, r LsResult) {
 		if e.Default {
 			def = "*"
 		}
-		review := "unaccepted"
-		if e.Accepted {
-			review = "accepted"
-		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", e.Name, def, review, e.Root)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", e.Name, def, lsReviewColumn(e.ReviewState), e.Root)
 	}
 	tw.Flush()
 }

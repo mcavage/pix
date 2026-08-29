@@ -58,6 +58,19 @@ func TestRunHint_PresentFile_NoRegistration_Hints(t *testing.T) {
 	}
 }
 
+// TestRunHint_ExactRegisterAndSelectCommand pins the exact next-step
+// command: register AND select, chained, so a reader is never left
+// believing registration alone makes `pix run` pick the environment up.
+func TestRunHint_ExactRegisterAndSelectCommand(t *testing.T) {
+	setRunHintState(t)
+	ws := t.TempDir()
+	writeSbxenv(t, ws)
+	got := RunHint(&config.Config{}, ws)
+	if !strings.Contains(got, "pix env add <name> . && pix env use <name>") {
+		t.Errorf("hint = %q, want the exact chained register-and-select command", got)
+	}
+}
+
 // AC-59/AC-60: at least one registered environment anywhere on the host
 // suppresses the hint outright, even with an unregistered .sbxenv.yaml
 // sitting right here.
