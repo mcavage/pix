@@ -47,12 +47,17 @@ func ShellQuote(s string) string {
 	return "'" + strings.ReplaceAll(sanitized, "'", `'\''`) + "'"
 }
 
-// sanitizeControlBytes replaces every ASCII control byte (0x00-0x1f, 0x7f)
-// in s with a visible backslash-escape placeholder: `\n`/`\r`/`\t` for the
-// three common ones, `\xHH` for anything else. Each placeholder is plain
-// text — a single-quoted shell string gives backslash no special meaning
-// at all — so ShellQuote's output can never contain a literal line break
-// or other control byte, no matter what was in the original name/path.
+// sanitizeControlBytes replaces every terminal control in s with a
+// visible backslash-escape placeholder: `\n`/`\r`/`\t` for the three
+// common C0 controls, `\xHH` for the rest of C0 and DEL, and `\uXXXX` for
+// the C1 range (U+0080–U+009F — U+009B is a ONE-RUNE CSI on terminals
+// honoring 8-bit controls, so C0-only sanitization is not enough) and the
+// Unicode bidi controls (U+061C, U+200E/U+200F, U+202A–U+202E,
+// U+2066–U+2069), which visually reorder the very text a human reads.
+// Each placeholder is plain text — a single-quoted shell string gives
+// backslash no special meaning at all — so neither ShellQuote's output nor
+// TerminalSafe's can ever contain a literal line break, escape sequence,
+// or reordering control, no matter what was in the original name/path.
 func sanitizeControlBytes(s string) string {
 	var b strings.Builder
 	for _, r := range s {
@@ -65,9 +70,26 @@ func sanitizeControlBytes(s string) string {
 			b.WriteString(`\t`)
 		case r < 0x20 || r == 0x7f:
 			fmt.Fprintf(&b, `\x%02x`, r)
+		case r >= 0x80 && r <= 0x9f, isBidiControl(r):
+			fmt.Fprintf(&b, `\u%04x`, r)
 		default:
 			b.WriteRune(r)
 		}
 	}
 	return b.String()
+}
+
+// isBidiControl reports whether r is one of the Unicode bidirectional
+// control characters relevant to terminal display: the explicit
+// embedding/override pairs and PDF (U+202A–U+202E), the isolates
+// (U+2066–U+2069), the marks (U+200E/U+200F), and the Arabic letter mark
+// (U+061C).
+func isBidiControl(r rune) bool {
+	switch {
+	case r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069:
+		return true
+	case r == 0x200e || r == 0x200f || r == 0x061c:
+		return true
+	}
+	return false
 }

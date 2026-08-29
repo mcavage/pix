@@ -153,13 +153,25 @@ func pluralize(n int, singular string) string {
 // writeCountLine renders one §5.8 count line: the label and the first value
 // share a line; every additional value gets its own continuation line,
 // indented to the SAME value column (an empty label, padded identically).
+//
+// Every VALUE passes through sys.TerminalSafe here (Wave C security M1):
+// count-line values are composed from authored .sbxenv.yaml/pix.toml
+// content — attacker-controlled for a cloned/shared environment — and this
+// is the boundary where they cross into the terminal a human is reading to
+// answer [y/N]. A raw ESC/CSI/OSC could repaint or retitle the consent
+// screen, a raw newline could forge a renderer-owned line (a fake count, a
+// fake prompt, a fake acceptance verdict), and a C1/bidi control does
+// either without a single C0 byte; TerminalSafe replaces each with a
+// visible, inert escape. Labels are renderer-owned (pluralize over fixed
+// nouns), so only values need it. Display-only: the canonical BoM and its
+// fingerprint never pass through here.
 func writeCountLine(out io.Writer, label string, values []string) {
 	if len(values) == 0 {
 		return
 	}
-	fmt.Fprintf(out, "  %-*s %s\n", labelColumnWidth, label, values[0])
+	fmt.Fprintf(out, "  %-*s %s\n", labelColumnWidth, label, sys.TerminalSafe(values[0]))
 	for _, v := range values[1:] {
-		fmt.Fprintf(out, "  %-*s %s\n", labelColumnWidth, "", v)
+		fmt.Fprintf(out, "  %-*s %s\n", labelColumnWidth, "", sys.TerminalSafe(v))
 	}
 }
 
@@ -230,27 +242,32 @@ func interpolationSource(v string, def *string) string {
 
 // renderVerboseDetails is `--verbose`'s addition (AC-66): full argv for
 // every host command and host service, and the content digest for every
-// local kit and resolved host service executable.
+// local kit and resolved host service executable. Every document-sourced
+// field (names, argv/args/command, kit raw/resolved, digests) passes
+// through sys.TerminalSafe for the same reason writeCountLine's values do
+// (see its doc comment): this is the render boundary where authored
+// environment content reaches the consent terminal. Display-only — the
+// fingerprinted facts are untouched.
 func renderVerboseDetails(out io.Writer, b BillOfMaterials) {
 	for _, c := range b.HostCommands {
-		fmt.Fprintf(out, "  host command %-10s argv: %s\n", c.Name, strings.Join(c.Argv, " "))
+		fmt.Fprintf(out, "  host command %-10s argv: %s\n", sys.TerminalSafe(c.Name), sys.TerminalSafe(strings.Join(c.Argv, " ")))
 	}
 	for _, s := range b.HostServices {
 		line := s.Command
 		if len(s.Args) > 0 {
 			line += " " + strings.Join(s.Args, " ")
 		}
-		fmt.Fprintf(out, "  host service %-10s argv: %s\n", s.Name, line)
+		fmt.Fprintf(out, "  host service %-10s argv: %s\n", sys.TerminalSafe(s.Name), sys.TerminalSafe(line))
 		if s.SHA != "" {
-			fmt.Fprintf(out, "                            sha256:%s\n", s.SHA)
+			fmt.Fprintf(out, "                            sha256:%s\n", sys.TerminalSafe(s.SHA))
 		}
 	}
 	for _, k := range b.Kits {
 		if !k.Local {
 			continue
 		}
-		fmt.Fprintf(out, "  kit %-16s path: %s\n", k.Raw, k.Resolved)
-		fmt.Fprintf(out, "                      sha256:%s\n", k.SHA)
+		fmt.Fprintf(out, "  kit %-16s path: %s\n", sys.TerminalSafe(k.Raw), sys.TerminalSafe(k.Resolved))
+		fmt.Fprintf(out, "                      sha256:%s\n", sys.TerminalSafe(k.SHA))
 	}
 }
 
@@ -261,7 +278,11 @@ func renderVerboseDetails(out io.Writer, b BillOfMaterials) {
 // because it cannot (non-TTY): "prints the same bill" (§5.8) is true by
 // construction because both paths call this one function.
 func renderBill(out io.Writer, name string, b BillOfMaterials, verbose bool) {
-	fmt.Fprintf(out, "Environment %q runs code on your host and hands it credentials.\n\n", name)
+	// The header's one dynamic token gets the same terminal-safe treatment
+	// as every bill value; %q would escape most controls itself, but the
+	// bill's safety property must not depend on a fmt verb's incidental
+	// escaping rules (M1 — sanitize every dynamic token at this boundary).
+	fmt.Fprintf(out, "Environment %q runs code on your host and hands it credentials.\n\n", sys.TerminalSafe(name))
 	renderCounts(out, b)
 	fmt.Fprintln(out)
 	if verbose {
