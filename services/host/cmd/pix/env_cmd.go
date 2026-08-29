@@ -1,10 +1,12 @@
 // env_cmd.go — `pix env`: the dispatch skeleton (E1.9) for the seven-verb
 // native-environment surface docs/design/environments.md §8 and PRD §5.10
 // define (`ls add use show edit review forget`; `pix env rm` is never one
-// of them). This unit wires exactly the three verbs workflow/env already
-// has behind it — `ls` (workflow/env/ls.go), `show` (workflow/env/show.go),
-// `review` (E1.8's workflow/env/review.go) — as the FIRST fields of envCmd.
-// Every later verb unit (E1.10 `add`, E1.11 `use`/`forget`/the `rm`
+// of them). E1.9 wired the first three verbs workflow/env already had
+// behind it — `ls` (workflow/env/ls.go), `show` (workflow/env/show.go),
+// `review` (E1.8's workflow/env/review.go). E1.10 adds the fourth field,
+// `add` (workflow/env/add.go): register a caller-authored directory, or
+// scaffold a fresh one, then ALWAYS run the same E1.8 review before
+// anything commits. Every later verb unit (E1.11 `use`/`forget`/the `rm`
 // pointer, E1.12 `edit`) adds its own ONE field line here and lands in ID
 // order (units.json's file-conflict table: "E1.9 owns the struct; each
 // verb unit adds one field line + its own file. Land in ID order,
@@ -60,8 +62,8 @@ servers. See docs/design/environments.md.
 
 Seven verbs: ls, add, use, show, edit, review, forget. There is no
 'pix env rm' — registering a name is not owning its files; forget only
-unregisters, and it deletes nothing. 'add'/'use'/'edit'/'forget' land in
-later units; ls, show and review work now.
+unregisters, and it deletes nothing. 'use'/'edit'/'forget' land in later
+units; ls, add, show and review work now.
 
 An environment that runs code on your host or hands it a credential halts
 at 'pix env review NAME': [y/N], default No. A non-TTY review fails closed
@@ -73,6 +75,7 @@ unless --yes.`
 // this file's package doc comment.
 type envCmd struct {
 	Ls     envLsCmd     `cmd:"" default:"1" help:"List registered environments. Marks the default."`
+	Add    envAddCmd    `cmd:"" help:"Register a directory, or scaffold a new one, then review it."`
 	Show   envShowCmd   `cmd:"" help:"What NAME is: files, models, mounts, MCP, review state, drift."`
 	Review envReviewCmd `cmd:"" help:"Read and accept what NAME runs on your host."`
 }
@@ -97,6 +100,36 @@ func (c *envLsCmd) Run(d *cli.Deps) error {
 	}
 	env.RenderLs(d.Out, r)
 	return nil
+}
+
+// ── add ──────────────────────────────────────────────────────────────────
+
+// envAddCmd is `pix env add NAME [PATH]` (E1.10, docs/design/
+// environments.md §8.1, D10). Path optional (empty) means scaffold; any
+// other value means register that exact directory. Verbose/Yes are
+// forwarded to the SAME E1.8 review Add always ends with — review's own
+// `--verbose`/`--yes` (envReviewCmd, above), not a second, independent
+// trust gate `add` invents for itself.
+type envAddCmd struct {
+	Name    string `arg:"" help:"Exact environment name."`
+	Path    string `arg:"" optional:"" help:"Canonical local directory (omit to scaffold a new one)."`
+	Verbose bool   `help:"Full argv and content digests for every host command/service (forwarded to review)."`
+	Yes     bool   `help:"Accept the host-execution bill without an interactive prompt (forwarded to review)."`
+}
+
+func (c *envAddCmd) Run(d *cli.Deps) error {
+	cfg, err := d.Config()
+	if err != nil {
+		return err
+	}
+	// nil LookPath below defaults (inside Load) to the real exec.LookPath —
+	// see envReviewCmd.Run's identical nil-effective-mounts note for why
+	// there is no separate, independently-suppliable workspace list here
+	// either.
+	_, err = env.Add(cfg, c.Name, c.Path, env.AddOptions{
+		Verbose: c.Verbose, Yes: c.Yes, TTY: d.Interactive, In: d.In, Out: d.Out,
+	})
+	return envRun(d, err)
 }
 
 // ── show ─────────────────────────────────────────────────────────────────
