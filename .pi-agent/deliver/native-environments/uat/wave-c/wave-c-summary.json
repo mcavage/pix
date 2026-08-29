@@ -1,0 +1,145 @@
+{
+  "head": "8ab00d7e",
+  "head_full": "8ab00d7eee26f2fdda82cc9716638ce17383bc50",
+  "wave": "C",
+  "units": "E1.7-E1.15",
+  "round": "Final Wave C QA/UAT executed by an independent QA subagent after the qa-lead preset failed to start twice (local Ollama unavailable, infrastructure only)",
+  "verdict": "PASS",
+  "preset_infrastructure_failure": {
+    "preset": "qa-lead",
+    "reason": "local Ollama backend unreachable, session could not start",
+    "attempts": 2,
+    "classification": "infrastructure, non-product",
+    "mitigation": "QA executed directly: every command and test in this evidence was run by hand, not through the failed preset"
+  },
+  "user_cleanup_handling": {
+    "files": [
+      ".claude/settings.local.json",
+      "CODE_OF_CONDUCT.md",
+      "CONTRIBUTING.md",
+      "LICENSE",
+      "NOTICE.md",
+      "SECURITY.md",
+      "THIRD_PARTY_NOTICES.md"
+    ],
+    "never_staged_or_committed": true,
+    "gate_as_is": {
+      "verdict": "fail",
+      "failing_segment": "node-test",
+      "all_other_segments": "ok",
+      "attribution": "exclusively tests/legal-inclusion-and-docker-base.test.mjs, tests/legal-third-party-notices.test.mjs, scripts/check-third-party-notices.sh, caused by the unstaged deletion of NOTICE.md/CONTRIBUTING.md/THIRD_PARTY_NOTICES.md and the LICENSE edit",
+      "log": "logs/gate-asis-with-user-cleanup.log"
+    },
+    "patch_sha256": "c6df92b5ac482047c92b7224c6e8427cb21ae829825c33f49d4057382dc0536d",
+    "patch_file": "logs/user-cleanup.patch",
+    "stash_method": "git stash push -- <7 named files> (no untracked files existed)",
+    "restore_verified": {
+      "status_before_equals_after": true,
+      "patch_sha256_before_equals_after": true
+    },
+    "gate_at_committed_head": {
+      "verdict": "pass",
+      "log": "logs/gate-final-committed-head.log"
+    }
+  },
+  "isolation": {
+    "xdg_config_home": "scratch (per-run temp dir)",
+    "xdg_state_home": "scratch (per-run temp dir)",
+    "xdg_data_home": "scratch (per-run temp dir)",
+    "pix_config": "scratch (per-run temp dir)/config.toml",
+    "candidate_binary": "built from services/host/cmd/pix at HEAD 8ab00d7e, no real user config or sandbox touched"
+  },
+  "focused_packages": {
+    "pass": 848,
+    "fail": 0,
+    "skip": 1,
+    "skip_reason": "TestOAuthBrowserLockHeldDuringLifetime, unrelated to env",
+    "packages": [
+      {"pkg": "workflow/env", "result": "ok"},
+      {"pkg": "workflow/reset", "result": "ok"},
+      {"pkg": "workflow/doctor", "result": "ok"},
+      {"pkg": "workflow/provision", "result": "ok"},
+      {"pkg": "workflow/uat", "result": "ok"},
+      {"pkg": "cmd/pix", "result": "ok"},
+      {"pkg": "cmd/pix/corpus", "result": "ok"}
+    ],
+    "log": "logs/focused-tests.log"
+  },
+  "env_package_full": {
+    "pass": 206,
+    "fail": 0,
+    "skip": 0,
+    "log": "logs/env-package-verbose.log"
+  },
+  "race_tests": {
+    "env_reset_race_clean": true,
+    "concurrency_race_tests_pass": 10,
+    "concurrency_race_tests_fail": 0,
+    "tests": [
+      "TestAdd_CommitPreservesConcurrentDisjointRegistration",
+      "TestAdd_ConcurrentRepointDuringPromptRefusesDeterministically",
+      "TestAdd_ConcurrentSameRootRegistrationIsIdempotent",
+      "TestUse_CommitPreservesConcurrentRegistration",
+      "TestUse_RefusesWhenNameForgottenConcurrently",
+      "TestForget_CommitPreservesConcurrentRegistration",
+      "TestForget_RefusesWhenConcurrentUseMadeItTheDefault",
+      "TestCommit_SyncsEntireConfigIncludingUnrelatedFields",
+      "TestEnvMutations_ParallelDisjointAddsAllSurvive",
+      "TestCountSaveCalls_SelfTest"
+    ],
+    "shell_terminal_injection_race_tests_pass": 16,
+    "shell_terminal_injection_race_tests_fail": 0,
+    "live_concurrent_registration": {
+      "processes": 5,
+      "disjoint_names": true,
+      "all_succeeded": true,
+      "no_lost_update": true,
+      "log": "logs/live-concurrent-registration.log"
+    },
+    "logs": ["logs/race-env-reset.log", "logs/race-registry-concurrent.log", "logs/shell-terminal-injection.log"]
+  },
+  "node_criteria": {
+    "pass": 20,
+    "fail": 0,
+    "suites": [
+      "tests/environments-decision-alignment.test.mjs",
+      "tests/environments-security-docs.test.mjs",
+      "tests/verb-references.test.mjs",
+      "tests/anti-em-dash.test.mjs"
+    ],
+    "log": "logs/node-criteria-suite.log"
+  },
+  "live_matrix_rows": 36,
+  "live_matrix_all_pass": true,
+  "make_gate": {
+    "verdict": "pass",
+    "total_ms": 32778,
+    "segments_ok": 11,
+    "git_sha": "8ab00d7eee26f2fdda82cc9716638ce17383bc50",
+    "segments": [
+      {"name": "go-build", "ms": 939, "status": "ok"},
+      {"name": "go-vet", "ms": 367, "status": "ok"},
+      {"name": "go-test", "ms": 11850, "status": "ok"},
+      {"name": "node-test", "ms": 9087, "status": "ok"},
+      {"name": "typecheck", "ms": 929, "status": "ok"},
+      {"name": "open-core", "ms": 637, "status": "ok"},
+      {"name": "recall-xport", "ms": 20, "status": "ok"},
+      {"name": "secret-scan", "ms": 1265, "status": "ok"},
+      {"name": "arch-metrics", "ms": 358, "status": "ok"},
+      {"name": "deadcode", "ms": 6861, "status": "ok"},
+      {"name": "rename-guard", "ms": 458, "status": "ok"}
+    ],
+    "log": "logs/gate-final-committed-head.log"
+  },
+  "findings": [
+    {"severity": "INFO", "text": "run-hint live trigger lives inside the real sandbox launch path (cmd/pix/run_cmd.go), which needs host sbx; not claimed as tested here. RunHint() itself is fully unit-tested (7/7: absent/present/exact-command/suppressed/shows-once/different-workspaces/durable-marker) and re-verified directly."},
+    {"severity": "INFO", "text": "env show --effective remains ErrEffectiveNotAvailable (exit 1) by design; effective renderer is E2.1, out of Wave C scope."},
+    {"severity": "INFO", "text": "sandbox drift reported as unknown (live-launch drift lands with a later wave); live-holder probing is injectable, defaults to NoLiveHolders; real holder checks are later wave / host-sbx scope."},
+    {"severity": "NOTE", "text": "qa-lead preset Ollama-unavailable failure recorded as infrastructure, not product; QA substituted direct execution with no coverage loss."}
+  ],
+  "no_unavailable_host_sbx_claims": true,
+  "evidence": {
+    "matrix": ".pi-agent/deliver/native-environments/uat/wave-c/wave-c-matrix.md",
+    "logs_dir": ".pi-agent/deliver/native-environments/uat/wave-c/logs/"
+  }
+}

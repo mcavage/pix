@@ -1,0 +1,49 @@
+=== 32. closest suggestion: typo 'hme' ===
+pix: no environment named "hme".
+     known: home
+     closest: home
+     register one: pix env add <name> [path]
+exit=2
+
+=== 33. closest suggestion: typo 'homr' (use) ===
+pix: no environment named "homr".
+     known: home
+     closest: home
+     register one: pix env add <name> [path]
+exit=2
+
+=== 34. containment: relative path refused ===
+pix: /Users/mcavage/dev/pix/relative/path does not exist.
+     path: /Users/mcavage/dev/pix/relative/path
+     scaffold instead: pix env add rel
+exit=2
+
+=== 35. containment: ~ path refused ===
+pix: /home/agent/somewhere does not exist.
+     path: /home/agent/somewhere
+     scaffold instead: pix env add til
+exit=2
+
+=== 36. missing dir path ===
+pix: /tmp/wave-c-run/does-not-exist does not exist.
+     path: /tmp/wave-c-run/does-not-exist
+     scaffold instead: pix env add missing
+exit=2
+
+=== 37. non-dir path (a file) ===
+pix: /tmp/wave-c-run/afile.txt is not a directory.
+     path: /tmp/wave-c-run/afile.txt
+     scaffold instead: pix env add notadir
+exit=2
+
+=== 38. scaffold collision: add home again (no path -> scaffold at existing dir) ===
+pix: /tmp/wave-c-run/xdg-data/pix/envs/home already exists; refusing to overwrite it. Pick a different name, or register it as-is: pix env add <name> /tmp/wave-c-run/xdg-data/pix/envs/home
+exit=2
+
+=== 39. physical symlink containment: env root itself is a symlink ===
+pix: environment root /tmp/wave-c-run/symlinked-env is a symlink; refusing
+exit=2
+
+=== 40. env ls (only home registered) ===
+NAME  DEFAULT  REVIEW  ROOT
+home           n/a     /tmp/wave-c-run/xdg-data/pix/envs/home

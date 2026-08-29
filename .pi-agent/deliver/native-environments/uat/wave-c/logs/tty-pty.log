@@ -1,0 +1,50 @@
+=== 28. TTY: env add ttyenv, python pty sends 'n' -> refuse ===
+Environment "ttyenv" runs code on your host and hands it credentials.
+
+  1 host command       secret:db
+  1 credential target  command: echo tty-secret        -> (unbound)
+
+  full argv and content digests: pix env review ttyenv --verbose
+
+Accept this host-execution footprint? [y/N]:
+n
+pix: environment "ttyenv" not accepted (you said no).
+     recorded: nothing
+     retry: pix env add ttyenv /tmp/wave-c-run/xdg-data/pix/envs/ttyenv
+
+EXIT=2
+
+=== 29. env show ttyenv after refusal ===
+pix: no environment named "ttyenv".
+     known: none
+     register one: pix env add <name> [path]
+exit=2
+
+=== 30. TTY: env add ttyenv again, sends 'y' -> accept ===
+Environment "ttyenv" runs code on your host and hands it credentials.
+
+  1 host command       secret:db
+  1 credential target  command: echo tty-secret        -> (unbound)
+
+  full argv and content digests: pix env review ttyenv --verbose
+
+Accept this host-execution footprint? [y/N]:
+y
+pix: recorded acceptance for environment "ttyenv" (fingerprint a8197f2dede7).
+pix: environment "ttyenv" registered at /tmp/wave-c-run/xdg-data/pix/envs/ttyenv.
+
+pix env use ttyenv
+
+EXIT=0
+
+=== 31. env show ttyenv --json (accepted via TTY y) ===
+{
+  "schema_version": 1,
+  "environment": "ttyenv",
+  "root": "/tmp/wave-c-run/xdg-data/pix/envs/ttyenv",
+  "sbxenv_present": true,
+  "accepted": true,
+  "review_state": "accepted",
+  "fingerprint": "a8197f2dede7a88eaf3426216033015b8c7fb79e1fd076af440ecb9462fa97cf"
+}
+exit=0

@@ -1,0 +1,30 @@
+=== RUN   TestAdd_ConcurrentRepointDuringPromptRefusesDeterministically
+--- PASS: TestAdd_ConcurrentRepointDuringPromptRefusesDeterministically (0.01s)
+=== RUN   TestAdd_ConcurrentSameRootRegistrationIsIdempotent
+--- PASS: TestAdd_ConcurrentSameRootRegistrationIsIdempotent (0.00s)
+=== RUN   TestUse_CommitPreservesConcurrentRegistration
+--- PASS: TestUse_CommitPreservesConcurrentRegistration (0.00s)
+=== RUN   TestUse_RefusesWhenNameForgottenConcurrently
+--- PASS: TestUse_RefusesWhenNameForgottenConcurrently (0.00s)
+=== RUN   TestForget_CommitPreservesConcurrentRegistration
+--- PASS: TestForget_CommitPreservesConcurrentRegistration (0.00s)
+=== RUN   TestForget_RefusesWhenConcurrentUseMadeItTheDefault
+--- PASS: TestForget_RefusesWhenConcurrentUseMadeItTheDefault (0.00s)
+=== RUN   TestCommit_SyncsEntireConfigIncludingUnrelatedFields
+--- PASS: TestCommit_SyncsEntireConfigIncludingUnrelatedFields (0.00s)
+=== RUN   TestEnvMutations_ParallelDisjointAddsAllSurvive
+--- PASS: TestEnvMutations_ParallelDisjointAddsAllSurvive (0.14s)
+=== RUN   TestCountSaveCalls_SelfTest
+=== RUN   TestCountSaveCalls_SelfTest/zero
+=== RUN   TestCountSaveCalls_SelfTest/one
+=== RUN   TestCountSaveCalls_SelfTest/two
+=== RUN   TestCountSaveCalls_SelfTest/comment_mention_does_not_count
+--- PASS: TestCountSaveCalls_SelfTest (0.00s)
+    --- PASS: TestCountSaveCalls_SelfTest/zero (0.00s)
+    --- PASS: TestCountSaveCalls_SelfTest/one (0.00s)
+    --- PASS: TestCountSaveCalls_SelfTest/two (0.00s)
+    --- PASS: TestCountSaveCalls_SelfTest/comment_mention_does_not_count (0.00s)
+=== RUN   TestEnvRegistryWriters_SaveOnlyInsideLockedCommit
+--- PASS: TestEnvRegistryWriters_SaveOnlyInsideLockedCommit (0.01s)
+PASS
+ok  	pix/host/workflow/env	1.242s
