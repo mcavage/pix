@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"testing"
 )
 
@@ -60,3 +61,34 @@ func TestDiff_AddedAndRemovedKeysCountAsDrift(t *testing.T) {
 		t.Fatalf("Diff = %v, want %v", got, want)
 	}
 }
+
+// TestFromFacetMap_RoundTripsThroughDiff (E2.2) proves FromFacetMap is a
+// plain type conversion, not a second comparison engine: a facet map from
+// a richer key space (envinfo.ComputeFingerprint's composed keys, modeled
+// here as a plain map literal since sandbox may not import envinfo, an L1
+// sibling) drives Diff/Equal exactly the way a native Fingerprint literal
+// already does.
+func TestFromFacetMap_RoundTripsThroughDiff(t *testing.T) {
+	storedFacets := map[string]string{"env.FOO": "bar", "mcp.servers[github].url": "https://a"}
+	currentFacets := map[string]string{"env.FOO": "baz", "mcp.servers[github].url": "https://a"}
+
+	stored := FromFacetMap(storedFacets)
+	current := FromFacetMap(currentFacets)
+
+	got := Diff(stored, current)
+	want := []string{"env.FOO"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Diff(FromFacetMap(...)) = %v, want %v", got, want)
+	}
+	if Equal(stored, current) {
+		t.Fatal("Equal must be false when env.FOO changed")
+	}
+	// Every reported key is a human-readable facet name, never a hash.
+	for _, k := range got {
+		if bareHashREForFingerprintTest.MatchString(k) {
+			t.Errorf("diverged key %q looks hash-only, never allowed", k)
+		}
+	}
+}
+
+var bareHashREForFingerprintTest = regexp.MustCompile(`^[0-9a-f]{16,}$`)
