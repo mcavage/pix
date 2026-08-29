@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"pix/host/cli"
+	"pix/host/envinfo"
 	"pix/host/health"
 	"pix/host/hostenv"
 	"pix/host/lease"
@@ -317,3 +318,87 @@ shell still references the sandbox. Only an explicitly named --force skips it.
   pix rm pix-a pix-b               remove several
   pix rm --all --keep pix-pix      remove all but one (never forced)
   pix rm --orphans                 remove only unreferenced pix-owned boxes`
+
+// envRemoveFallbackReport is the exact explicit note docs/design/
+// environments.md §10.3 requires when the stable effective file is absent:
+// "It reports that environment-scoped secret cleanup could not run; it
+// never guesses or prunes shared state." %q is the recorded pix-* instance
+// name a caller is falling back to removing by name alone.
+const envRemoveFallbackReport = "environment-scoped secret cleanup could not run: no effective environment file was found for %q; falling back to name-based removal (bindings and MCP registrations are host-global and are left untouched either way)"
+
+// EnvRemovalPlan is what PlanEnvRemoveSeam composed: Argv is what a
+// caller passes to `sbx` — never executed by this function, exactly like
+// every other Plan* function in this module and in package sandbox — and
+// Report is set ONLY on the fallback branch (see envRemoveFallbackReport).
+type EnvRemovalPlan struct {
+	Argv   []string
+	Report string
+}
+
+// PlanEnvRemoveSeam is E2.4's launch-integration seam for docs/design/
+// environments.md §10.3's environment-scoped removal: the future E2.5
+// launch cutover's caller for "how do I tear down a sandbox this host may
+// have launched through a stable effective environment file".
+//
+// It composes the SAME effectivePath a launch would have created (§6.2:
+// "Create and remove always use this same path"), and when a file exists
+// there, recomputes the effective name FROM THAT DOCUMENT — reading its own
+// `name:` field back via envinfo.Parse, never re-deriving one independently
+// — and plans through sandbox.PlanEnvRemove: refusing anything outside
+// pix-* scope or unequal to recordedInstanceName before any argv is ever
+// composed. A refusal here is a cli.UsageError (exit 2): the same posture
+// validateRmShape already gives every other malformed-removal-intent
+// refusal in this file, because a scope or instance mismatch is exactly
+// that — an invocation this caller must not proceed with, not a
+// transient failure.
+//
+// When effectivePath names no file — "as with a pre-migration sandbox or a
+// hard crash that lost state" (§10.3) — PlanEnvRemoveSeam falls back
+// to this package's EXISTING name-based planner, sandbox.PlanForceRemove
+// when force is true or sandbox.PlanRemove otherwise: the IDENTICAL
+// pix-*/name-safety scope check every other removal path in this file
+// already runs. This function only PLANS that fallback argv; it never
+// executes anything, so it can neither weaken nor skip the
+// holder/keep/instance-id/fresh-probe proof chain TeardownSandbox already
+// enforces before ever forwarding removal argv to sbx — a caller MUST
+// still route the returned Argv through TeardownSandbox/RemovePixSandbox
+// exactly as every other removal in this file does today. The fallback
+// plan's Report states, in the operator's own words, that environment-
+// scoped secret cleanup could not run, so a caller can surface that
+// instead of silently pretending it happened.
+//
+// Neither branch ever appends `--prune-bindings`, or any flag beyond `-f`:
+// see sandbox.PlanEnvRemove's own doc comment on A3's nonclaim.
+func PlanEnvRemoveSeam(effectivePath, recordedInstanceName string, force bool) (EnvRemovalPlan, error) {
+	if effectivePath != "" {
+		_, statErr := os.Stat(effectivePath)
+		switch {
+		case statErr == nil:
+			doc, perr := envinfo.Parse(effectivePath)
+			if perr != nil {
+				return EnvRemovalPlan{}, fmt.Errorf("launch: could not read effective environment file %s: %w", effectivePath, perr)
+			}
+			argv, rerr := sandbox.PlanEnvRemove(effectivePath, doc.Name, recordedInstanceName)
+			if rerr != nil {
+				return EnvRemovalPlan{}, cli.Usagef("%v", rerr)
+			}
+			return EnvRemovalPlan{Argv: argv}, nil
+		case !os.IsNotExist(statErr):
+			return EnvRemovalPlan{}, fmt.Errorf("launch: could not check effective environment file %s: %w", effectivePath, statErr)
+		}
+		// statErr is a plain "not exist": fall through to the name-based plan.
+	}
+
+	planFallback := sandbox.PlanRemove
+	if force {
+		planFallback = sandbox.PlanForceRemove
+	}
+	argv, rerr := planFallback(recordedInstanceName)
+	if rerr != nil {
+		return EnvRemovalPlan{}, cli.Usagef("%v", rerr)
+	}
+	return EnvRemovalPlan{
+		Argv:   argv,
+		Report: fmt.Sprintf(envRemoveFallbackReport, recordedInstanceName),
+	}, nil
+}
