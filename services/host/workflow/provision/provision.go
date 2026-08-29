@@ -282,4 +282,9 @@ func (o Outcome) Render(w io.Writer) {
 	// is the last thing a new user sees, and nothing tells them a fuller report
 	// exists.
 	fmt.Fprintln(w, "\nFor the full host report, including MCP servers and pack daemons: pix doctor")
+	// D13/AC-58: setup has no environment step, no prompt, and no probe — this
+	// is the ONE closing line it ever prints about native environments, naming
+	// only `pix help env` and nothing else. It never says an environment is
+	// required or expected; it says only where to look if one is relevant.
+	fmt.Fprintln(w, "Environments are optional and not part of this setup: pix help env")
 }

@@ -58,6 +58,21 @@ var binDirs = map[string]string{}
 
 func realEnv() hostenv.Env { return hostenv.Env{System: sys.Real{}, Quiet: true} }
 
+// TestSetupSteps_NoEnvironmentStep pins D13: `pix setup` has no environment
+// step, no prompt, no probe. setupSteps is the WHOLE of what setup
+// provisions (setup.go's own doc comment), so proving no step here mentions
+// an environment proves the negative for the whole command, not just the
+// four known steps by name.
+func TestSetupSteps_NoEnvironmentStep(t *testing.T) {
+	steps := setupSteps(&config.Config{}, realEnv(), Opts{}, strings.NewReader(""), io.Discard, false)
+	for _, s := range steps {
+		name := stepName(s)
+		if strings.Contains(strings.ToLower(name), "env") {
+			t.Errorf("setup step %q mentions an environment; D13 forbids an environment step, prompt, or probe in `pix setup`", name)
+		}
+	}
+}
+
 // neutralHostSteps pins the two probes a pack-focused test does not mean to
 // exercise — sbx and launchd — to a deterministic, always-ready fixture PATH,
 // and traps the real launchd installer behind a recorder that fails the test

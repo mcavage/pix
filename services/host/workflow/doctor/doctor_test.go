@@ -207,6 +207,35 @@ func TestProbes_RequirementFollowsTheConfiguredServices(t *testing.T) {
 	}
 }
 
+// TestStatus_EmptyEnvironmentsHasNoEnvironmentRow pins AC-60/D18: with an
+// empty `[environments]` registry, `pix status` (and `pix doctor`, the same
+// snapshot under a different renderer) names no environment row at all —
+// not even an empty or "none" one. Native environments have no status
+// taxonomy; the absence of any mention IS the correct rendering here, not a
+// gap to fill in later.
+func TestStatus_EmptyEnvironmentsHasNoEnvironmentRow(t *testing.T) {
+	cfg, o := healthyHost(t)
+	if len(cfg.Environments) != 0 {
+		t.Fatalf("fixture host must start with no registered environments, got %v", cfg.Environments)
+	}
+	s := run(t, cfg, o)
+	for _, name := range s.Names() {
+		if strings.Contains(strings.ToLower(name), "environment") {
+			t.Errorf("snapshot has a row named %q with no registered environments", name)
+		}
+	}
+	var buf strings.Builder
+	if code := RenderStatus(context.Background(), cfg, "default", &buf, o, false); code != StatusExit {
+		t.Fatalf("RenderStatus exit = %d, want %d", code, StatusExit)
+	}
+	out := buf.String()
+	for _, word := range []string{"environment", "Environment"} {
+		if strings.Contains(out, word) {
+			t.Errorf("status output mentions %q with no registered environments:\n%s", word, out)
+		}
+	}
+}
+
 func TestDoctor_HealthyHostIsReadyAndPrintsNoFixes(t *testing.T) {
 	cfg, o := healthyHost(t)
 	s := run(t, cfg, o)
