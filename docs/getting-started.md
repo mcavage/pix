@@ -92,7 +92,7 @@ pix agent ls            # the subagent roster: each agent's model
 Memory is a host service (`pix serve`, started lazily); packs are git-backed
 capability bundles you activate with `pix setup --pack <url>` or `pix pack
 use`; a model is picked by name (`pix run --model <provider/id>`, or an
-environment's `[models].main`) — nothing resolves one for you.
+environment's `[models].main`): nothing resolves one for you.
 
 ## 7. Slack, Google Workspace, and every other integration
 
