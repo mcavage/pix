@@ -216,13 +216,14 @@ interface AgentConfig {
 	// there is no compiled router left to resolve it against — kept only for
 	// display (clarifyRoutedModelFailure, the `/subagents` listing).
 	intent?: string;
-	// Optional cross-vendor recovery route for provider policy refusals. This is
-	// deliberately agent-authored rather than a global retry: only roles whose
-	// work predictably brushes a provider policy boundary should pay for a second
-	// attempt. The name resolves through the same roster.agents table an
-	// agent's own name does (see loadAgentsFromDir).
+	// LEGACY frontmatter (`fallback_intent:`), pending outright deletion in E3.4
+	// (docs/design/routing.md, architecture table). Parsed only so an
+	// AgentConfig carries visible evidence it was declared — it is NEVER a
+	// roster.agents lookup, is NEVER resolved to a model, and has NO effect on
+	// which model runs, including on a provider policy refusal (that used to
+	// trigger a cross-vendor retry; the retry mechanism has been removed
+	// entirely, not just detached from this field).
 	fallbackIntent?: string;
-	fallbackModel?: string;
 	thinking?: string;
 	maxTurns?: number;
 	// Per-agent watchdog overrides (frontmatter idle_ms / wall_ms, milliseconds).
@@ -296,31 +297,22 @@ function loadAgentsFromDir(
 		// no compiled router left to resolve it against; the roster below is keyed
 		// by the agent's own NAME, not by a declared intent.
 		const intent = frontmatter.intent?.trim() || undefined;
-		// Model resolution order (docs/design/environments.md §6.4): an explicitly
-		// selected parent Ollama model is inherited by every child (cloud may be
-		// unavailable); otherwise explicit `model:` wins (back-compat); otherwise
-		// the selected environment's `roster.agents[name]`; otherwise
-		// `roster.main`. Nothing left unresolved inherits the parent session's own
-		// model — including an agent name absent from the roster, which is the
-		// normal, unremarkable case (most agents have no override), not a warning.
+		// Model resolution order (docs/design/environments.md §6.4), and this is
+		// the WHOLE chain — nothing else, including `fallback_intent:` below, may
+		// join it: an explicitly selected parent Ollama model is inherited by
+		// every child (cloud may be unavailable); otherwise explicit `model:`
+		// wins (back-compat); otherwise the selected environment's
+		// `roster.agents[<this agent's own name>]`; otherwise `roster.main`.
+		// Nothing left unresolved inherits the parent session's own model —
+		// including an agent name absent from the roster, which is the normal,
+		// unremarkable case (most agents have no override), not a warning.
 		let model = PARENT_OLLAMA_MODEL || explicitModel;
 		if (!model) model = resolveRosterModel(ROSTER?.agents[name]);
 		if (!model) model = resolveRosterModel(ROSTER?.main);
+		// `fallback_intent:` is legacy frontmatter pending E3.4 deletion. It is
+		// parsed for visibility only — see the AgentConfig.fallbackIntent comment
+		// for why it is never a roster.agents lookup and never touches `model`.
 		const fallbackIntent = frontmatter.fallback_intent?.trim() || undefined;
-		let fallbackModel: string | undefined;
-		if (fallbackIntent) {
-			// A fallback name resolves through the SAME roster.agents table an
-			// agent's own name does — there is no separate intent table to consult
-			// anymore. It never falls through to roster.main: an unresolved
-			// fallback means "no retry route", not "retry with the main model".
-			fallbackModel =
-				PARENT_OLLAMA_MODEL || resolveRosterModel(ROSTER?.agents[fallbackIntent]);
-			if (!fallbackModel) {
-				warnings.push(
-					`fallback_intent "${fallbackIntent}" is not a roster.agents entry in inference.json — policy refusals will be returned without retry.`,
-				);
-			}
-		}
 		let thinking = frontmatter.thinking?.trim().toLowerCase() || undefined;
 		if (thinking && !VALID_THINKING.has(thinking)) {
 			warnings.push(`thinking "${thinking}" is not a valid level; ignoring.`);
@@ -351,7 +343,6 @@ function loadAgentsFromDir(
 			model,
 			intent,
 			fallbackIntent,
-			fallbackModel,
 			thinking,
 			web,
 			maxTurns: Number.isFinite(maxTurns as number)
@@ -1363,7 +1354,6 @@ async function runSingle(
 		preRunId?: string; // pre-registered "queued" row to adopt (parallel/chain)
 		enabled?: boolean; // false = don't pin (e.g. the doctor canary)
 	},
-	retryingPolicyRefusal = false,
 ): Promise<SingleResult> {
 	// CENTRAL kill switch: every spawn path (tool single/parallel/chain, trees,
 	// the doctor canary, anything added later) funnels through runSingle, so the
@@ -1749,56 +1739,13 @@ async function runSingle(
 		}
 		clarifyRoutedModelFailure(result, agent);
 
-		// Security review prompts can legitimately trip a provider's cyber-policy
-		// classifier. When (and only when) the agent declares a cross-vendor
-		// fallback intent, retry once through that compiled route. The fallback is
-		// still roster/materialization constrained; a missing route means no retry.
-		if (
-			!retryingPolicyRefusal &&
-			isFailed(result) &&
-			isProviderPolicyRefusal(result) &&
-			agent.fallbackModel &&
-			agent.fallbackModel !== agent.model
-		) {
-			const primaryModel = agent.model || "inherited parent model";
-			const primaryUsage = { ...result.usage };
-			const fallbackAgent: AgentConfig = {
-				...agent,
-				model: agent.fallbackModel,
-				fallbackIntent: undefined,
-				fallbackModel: undefined,
-			};
-			const retryAgents = agents.map((a) => (a === agent ? fallbackAgent : a));
-			const retry = await runSingle(
-				defaultCwd,
-				retryAgents,
-				agentName,
-				task,
-				cwd,
-				step,
-				signal,
-				onUpdate,
-				makeDetails,
-				{ mode: track?.mode ?? "single", enabled: false },
-				true,
-			);
-			const retryUsage = retry.usage;
-			Object.assign(result, retry);
-			result.agent = agentName;
-			result.agentSource = agent.source;
-			result.task = task;
-			result.step = step;
-			result.fallbackFrom = primaryModel;
-			result.usage = {
-				input: primaryUsage.input + retryUsage.input,
-				output: primaryUsage.output + retryUsage.output,
-				cacheRead: primaryUsage.cacheRead + retryUsage.cacheRead,
-				cacheWrite: primaryUsage.cacheWrite + retryUsage.cacheWrite,
-				cost: primaryUsage.cost + retryUsage.cost,
-				contextTokens: Math.max(primaryUsage.contextTokens, retryUsage.contextTokens),
-				turns: primaryUsage.turns + retryUsage.turns,
-			};
-		}
+		// There is no cross-vendor retry-on-policy-refusal anymore: it used to
+		// switch models by resolving the legacy `fallback_intent:` frontmatter
+		// through roster.agents, which is exactly the hidden model-choice effect
+		// that field must never have (see AgentConfig.fallbackIntent). A provider
+		// policy refusal is reported as an ordinary failure like any other;
+		// isProviderPolicyRefusal/clarifyRoutedModelFailure remain as general
+		// diagnostics, not as inputs to a retry decision.
 		if (runId) finalizeRun(runId, result);
 		return result;
 	} finally {
