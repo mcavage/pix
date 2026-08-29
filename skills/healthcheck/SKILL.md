@@ -27,14 +27,14 @@ false signal.
 ### A1. Inference availability
 ```bash
 cat ~/.pi/agent/inference.json
-cat ~/.pi/agent/routing.json
 ```
-The generated inference manifest and compiled routes are authoritative. One
-working route is sufficient; every vendor is not required. Never classify
-missing native env keys as failures when a custom gateway or Ollama supplies
-the resolved models. `proxy-managed` is a sentinel, not secret evidence and not
-a direct API key. Exercise the session model plus the three-agent routing smoke
-test in A5; do not independently fan out across every model or agent.
+The generated inference manifest is authoritative: it names the backends and
+the models this host can call. One working model is sufficient; every vendor is
+not required. Never classify missing native env keys as failures when a custom
+gateway or Ollama supplies the callable models. `proxy-managed` is a sentinel,
+not secret evidence and not a direct API key. Exercise the session model plus
+the three-agent smoke test in A5; do not independently fan out across every
+model or agent.
 
 ### A2. Memory service
 This raw curl is an explicit **harness diagnostic**, it hits the daemon directly

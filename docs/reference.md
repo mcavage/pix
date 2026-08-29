@@ -28,7 +28,7 @@ CLI reference of its own.
 | `uat` | `status`/`browser bootstrap` for self-UAT | `docs/HOST-UAT.md` |
 | `config` | `show`/`path`/`get`/`set`/`unset` the single runtime config | §1 |
 | `task` | isolated parallel-work clones + sandboxes | `docs/design/worktree-tasks.md` |
-| `models` | which models pix can use, and what the router resolves: ls/show/pick/add | `docs/design/routing.md`, `docs/design/models-cli.md` |
+| `models` | which models pix can use and how they are bound: bare status, `add` | `docs/design/ollama-inference.md` |
 | `agent` | the subagent roster, read-only: `ls` only (`new`/`edit`/`rm`/`reassess` were removed) | §4 |
 | `version`, `help` | stamped version; tiered help | (none) |
 
@@ -193,29 +193,27 @@ overlap with the author's.
 Alt+P               # cycle models without leaving the keyboard
 ```
 
-An agent (a subagent preset) declares an **intent**, not a pinned model:
-`code`, `review`, `red-team`, `breadth`, `max-accuracy`, and more. The router
-resolves intent to a model against cost, latency, and accuracy, so `review`
-resolves to a different vendor than whichever one wrote the code, on purpose.
+An agent (a subagent preset) names a model, or inherits the session's. There is
+no router: nothing resolves a model on your behalf, and nothing scores one.
+Pointing `review` at a different vendor than the one that wrote the code is a
+choice you make in the agent file, and it is worth making.
 
 ```
-pix agent ls                 # roster with each agent's resolved model and WHY
-pix models pick <intent>     # what the router would resolve for that intent
+pix agent ls                 # roster with each agent's model and where it came from
+pix models                   # the models this host can call, and their backends
 ```
 
 `pix agent ls` is the only `agent` subcommand. `new`/`edit`/`rm`/`reassess`
 were removed: an
 agent is a hand-edited `agents/*.md` file, not a CLI mutation surface. To
-change one, edit its frontmatter (or add a new file) directly, then run
-`make routing` to re-resolve intents and recompile `routing.json`.
+change one, edit its frontmatter (or add a new file) directly.
 
 Example: `code-review` finishes its own pass, then dispatches the `review`
-subagent, which the router resolves to GPT if your code was written by Claude.
-You get an adversarial second opinion, not an echo.
+subagent, which you have pointed at GPT because your code was written by
+Claude. You get an adversarial second opinion, not an echo.
 
-**Limits.** Model routing is hand-maintained, not measured: scores in
-`scorecard.json` come from published benchmarks, not a live eval harness. If
-a model shipped last week, run `model-refresh` before trusting `agent ls`.
+**Limits.** A model is only as good as the one you picked: pix measures none of
+them and ranks none of them.
 Subagents run headless (`pi --no-extensions`), so a child that gets stuck has
 no UI to show you; a watchdog kills it after an idle or wall-clock timeout and
 reports the failure instead of hanging forever.

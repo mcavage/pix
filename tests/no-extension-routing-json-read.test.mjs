@@ -42,13 +42,14 @@ test("lib/inference-roster.ts (the shared roster reader) never mentions routing.
 	assert.doesNotMatch(src, /routing\.json/);
 });
 
-// The artifact and its host package must still exist: E3.2 removes the
-// EXTENSION reads only. Deleting routing.json / services/host/routing is
-// explicitly deferred to Wave F.
-test("routing.json artifact and its host package are untouched (Wave F deletes them, not E3.2)", () => {
-	assert.ok(fs.existsSync(path.join(repoRoot, "routing.json")), "routing.json must still exist");
+// E3.2 removed the EXTENSION reads; Wave F then deleted what they read. Both
+// halves are asserted here so a revert of either one fails loudly: an
+// extension reading a file that no longer exists is the same bug as the file
+// coming back for an extension to read.
+test("the routing.json artifact and its host package are gone (Wave F)", () => {
+	assert.ok(!fs.existsSync(path.join(repoRoot, "routing.json")), "routing.json must not exist");
 	assert.ok(
-		fs.existsSync(path.join(repoRoot, "services", "host", "routing")),
-		"services/host/routing must still exist",
+		!fs.existsSync(path.join(repoRoot, "services", "host", "routing")),
+		"services/host/routing must not exist",
 	);
 });

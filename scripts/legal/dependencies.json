@@ -1,6 +1,6 @@
 {
   "$schema": "hand-maintained curated dependency/license ledger — see docs/legal/RELEASE-SAFEGUARDS.md",
-  "_comment": "Same convention as scripts/arch-metrics/budgets.json and routing/scorecard.json: derived from real, checkable evidence at the time it was written (license text in the local Go module cache, or package.json 'license' field for baked npm packages), then hand-maintained going forward. scripts/check-third-party-notices.sh re-derives the LIVE dependency set at gate time and fails closed if it diverges from this ledger IN EITHER DIRECTION (a new dep with no entry, an entry whose class the policy disallows, or a ledger row that is no longer in the live build graph — stale attribution).",
+  "_comment": "Same convention as scripts/arch-metrics/budgets.json and inference/catalog/models.json: derived from real, checkable evidence at the time it was written (license text in the local Go module cache, or package.json 'license' field for baked npm packages), then hand-maintained going forward. scripts/check-third-party-notices.sh re-derives the LIVE dependency set at gate time and fails closed if it diverges from this ledger IN EITHER DIRECTION (a new dep with no entry, an entry whose class the policy disallows, or a ledger row that is no longer in the live build graph — stale attribution).",
   "goModules": [
     {
       "module": "github.com/BurntSushi/toml",

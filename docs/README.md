@@ -29,10 +29,6 @@ tutorials.
   Slack's built-in implementation was deleted (W2/U02a); this names the
   required pinned/on-demand posture for an external pack replacement and the
   per-user credential rules it must keep. Not evidence anything external works.
-- [routing.md](design/routing.md) — the model router: registry, scorecard,
-  policy, and how `pix-host route compile` (`make routing`) bakes `routing.json`.
-- [models-cli.md](design/models-cli.md) — the `pix models` noun rename and the
-  first-run "add a second provider key" fix.
 - [subagents-extension.md](design/subagents-extension.md) — the `subagent` tool
   (single / parallel / chain / trees) and the watchdog.
 - [subagent-pin-tracker.md](design/subagent-pin-tracker.md) — the pinned
