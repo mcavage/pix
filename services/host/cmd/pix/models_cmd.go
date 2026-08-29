@@ -66,7 +66,16 @@ func (c *ModelsStatusCmd) Run(d *cli.Deps) error {
 	if err != nil {
 		return err
 	}
-	renderModelsStatus(cfg, d.Out)
+	// shippedAgents is nil: this screen reports MODELS, not the agent roster,
+	// and ResolveEnvironmentRoster never needs it for that.
+	facts, err := models.ResolveEnvironmentRoster(cfg, nil)
+	if err != nil {
+		return err
+	}
+	if err := models.ValidateRoster(cfg, facts); err != nil {
+		return cli.UsageError{Err: err}
+	}
+	renderModelsStatus(cfg, facts, d.Out)
 	return nil
 }
 

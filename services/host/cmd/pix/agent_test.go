@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"pix/host/routing"
 	"pix/host/sys/systest"
+	"pix/host/workflow/models"
 
 	"gopkg.in/yaml.v3"
 )
@@ -57,55 +57,55 @@ func TestParseAgentCRLF(t *testing.T) {
 	}
 }
 
-func testRouting() (*routing.Registry, *routing.Scorecard, *routing.Policy) {
-	reg := &routing.Registry{Models: []routing.Model{
-		{ID: "anthropic/opus", Provider: "anthropic", Available: true},
-		{ID: "openai/gpt", Provider: "openai", Available: true},
-	}}
-	sc := &routing.Scorecard{Scores: []routing.Score{
-		{Model: "anthropic/opus", TaskType: "code", Accuracy: 0.9},
-		{Model: "openai/gpt", TaskType: "code", Accuracy: 0.86},
-	}}
-	pol := &routing.Policy{DefaultFallback: "anthropic/opus", Intents: []routing.Intent{
-		{Name: "code", TaskType: "code", Objective: "accuracy"},
-	}}
-	return reg, sc, pol
-}
+// TestResolveAgentSource pins E3.3's own resolution order: explicit model:
+// wins outright; otherwise an authored [agents].<name> roster entry; else
+// [models].main when a roster is in effect at all; else "(inherit parent)"
+// with no environment roster in effect. No routing decision (no intent, no
+// score, no WHY) plays any part.
+func TestResolveAgentSource(t *testing.T) {
+	// Explicit model: wins, even with a roster in effect.
+	facts := models.EnvironmentRosterFacts{Name: "work"}
+	facts.Roster.Main = "anthropic/opus"
+	m, src := resolveAgentSource("engineer", agentMeta{Model: "x/y"}, facts)
+	if m != "x/y" || src != agentSourceExplicit {
+		t.Fatalf("explicit: model=%q source=%q", m, src)
+	}
 
-func TestResolveAgentModel(t *testing.T) {
-	reg, sc, pol := testRouting()
+	// Authored [agents].<name> roster entry wins over the bare main fallback.
+	facts.Roster.Agents = map[string]string{"engineer": "openai/gpt"}
+	m, src = resolveAgentSource("engineer", agentMeta{}, facts)
+	if m != "openai/gpt" || src != agentSourceRoster {
+		t.Fatalf("roster: model=%q source=%q", m, src)
+	}
 
-	// Pinned model wins.
-	m, why := resolveAgentModel(agentMeta{Model: "x/y"}, reg, sc, pol)
-	if m != "x/y" || !strings.Contains(why, "pinned") {
-		t.Fatalf("pinned: %q %q", m, why)
+	// No [agents] entry for THIS name falls back to [models].main.
+	m, src = resolveAgentSource("reviewer", agentMeta{}, facts)
+	if m != "anthropic/opus" || src != agentSourceMain {
+		t.Fatalf("main: model=%q source=%q", m, src)
 	}
-	// Intent resolves; WHY explains the pick (objective + what it beat).
-	m, why = resolveAgentModel(agentMeta{Intent: "code"}, reg, sc, pol)
-	if m != "anthropic/opus" || !strings.Contains(why, "code:") || !strings.Contains(why, "beat gpt") {
-		t.Fatalf("intent: %q %q", m, why)
+
+	// No environment selected at all -> inherit parent, no roster.
+	m, src = resolveAgentSource("engineer", agentMeta{}, models.EnvironmentRosterFacts{})
+	if m != "(inherit parent)" || src != agentSourceNone {
+		t.Fatalf("none: model=%q source=%q", m, src)
 	}
-	// No intent -> inherit.
-	m, why = resolveAgentModel(agentMeta{}, reg, sc, pol)
-	if !strings.Contains(m, "inherit") || !strings.Contains(why, "no intent") {
-		t.Fatalf("inherit: %q %q", m, why)
-	}
-	// Unknown intent -> inherit, flagged.
-	m, why = resolveAgentModel(agentMeta{Intent: "ghost"}, reg, sc, pol)
-	if !strings.Contains(m, "inherit") || !strings.Contains(why, "not in policy") {
-		t.Fatalf("unknown: %q %q", m, why)
+
+	// Environment selected but no roster main declared -> still inherit parent.
+	m, src = resolveAgentSource("engineer", agentMeta{}, models.EnvironmentRosterFacts{Name: "work"})
+	if m != "(inherit parent)" || src != agentSourceNone {
+		t.Fatalf("selected-but-empty: model=%q source=%q", m, src)
 	}
 }
 
 // TestAgentLs proves the surviving roster path end to end: it discovers every
-// agents/*.md file (listAgents), resolves each one's model + WHY
-// (resolveAgentModel via loadAgentMeta), and renders both the table and the
+// agents/*.md file (listAgents), resolves each one's MODEL + SOURCE
+// (resolveAgentSource via loadAgentMeta), and renders both the table and the
 // --json form the way subagents.ts's own (independent) roster read expects the
-// files to look, without going through any of the retired mutation surfaces.
+// files to look, without going through any of the retired mutation surfaces
+// or any scored routing decision.
 func TestAgentLs(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
-	t.Setenv("ROUTING_DIR", t.TempDir())
 	if err := os.MkdirAll("agents", 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -127,34 +127,41 @@ func TestAgentLs(t *testing.T) {
 	if len(rows) != 1 || rows[0].Name != "go-eng" {
 		t.Fatalf("roster = %+v, want one row named go-eng", rows)
 	}
-	if rows[0].Intent != "code" || rows[0].Budget != 0.25 || rows[0].Tools != "read,edit" {
+	// No environment selected and no explicit model: -> inherit parent, no roster.
+	if rows[0].Model != "(inherit parent)" || rows[0].Source != agentSourceNone {
 		t.Fatalf("row = %+v", rows[0])
 	}
 
-	// Human table form: same roster, rendered with the WHY. agentLs's table
-	// branch writes to Deps.Out like every other command, so it's assertable
-	// straight off the injected buffer — no os.Stdout swap, no pipe, nothing
-	// that can deadlock if the writer ever outpaces an unread pipe.
+	// Human table form: same roster. agentLs's table branch writes to Deps.Out
+	// like every other command, so it's assertable straight off the injected
+	// buffer — no os.Stdout swap, no pipe, nothing that can deadlock if the
+	// writer ever outpaces an unread pipe.
 	d2, out2, _ := rootDeps()
 	d2.Sys = &systest.Fake{}
 	if err := runRootParse([]string{"agent", "ls"}, d2); err != nil {
 		t.Fatalf("agent ls: %v", err)
 	}
-	if !strings.Contains(out2.String(), "AGENT") || !strings.Contains(out2.String(), "go-eng") {
-		t.Errorf("agent ls table missing header/row, got:\n%s", out2.String())
+	for _, want := range []string{"AGENT", "MODEL", "SOURCE", "go-eng"} {
+		if !strings.Contains(out2.String(), want) {
+			t.Errorf("agent ls table missing %q, got:\n%s", want, out2.String())
+		}
+	}
+	for _, banned := range []string{"WHY", "why", "score", "wired", "unwired", "retired"} {
+		if strings.Contains(out2.String(), banned) {
+			t.Errorf("agent ls table must be facts-only, got banned %q in:\n%s", banned, out2.String())
+		}
 	}
 }
 
 // TestAgentLsMalformedYAML proves a broken agents/*.md frontmatter surfaces as
 // a named error on that agent's own row — both in the table and the --json
 // form — instead of silently falling through to the same "(inherit parent)"
-// a well-formed, intent-less agent gets. loadAgentMeta's error was being
+// a well-formed, roster-less agent gets. loadAgentMeta's error was being
 // discarded (`m, _, _ := loadAgentMeta(...)`), which hid a malformed file
 // behind a misleadingly benign roster row.
 func TestAgentLsMalformedYAML(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
-	t.Setenv("ROUTING_DIR", t.TempDir())
 	if err := os.MkdirAll("agents", 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -189,11 +196,11 @@ func TestAgentLsMalformedYAML(t *testing.T) {
 	if badRow == nil {
 		t.Fatalf("no row for bad.md in %+v", rows)
 	}
-	if strings.Contains(badRow.Why, "inherit") {
+	if strings.Contains(badRow.Source, "inherit") {
 		t.Fatalf("malformed agent silently reported as inherit: %+v", badRow)
 	}
-	if !strings.Contains(badRow.Why, "bad frontmatter") {
-		t.Fatalf("malformed agent's WHY should name the error, got %+v", badRow)
+	if !strings.Contains(badRow.Source, "bad frontmatter") {
+		t.Fatalf("malformed agent's SOURCE should name the error, got %+v", badRow)
 	}
 
 	// Same story in the human table: the bad row and its error text render,
@@ -229,7 +236,6 @@ func TestAgentLs_WorksFromAnySubdirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Chdir(sub)
-	t.Setenv("ROUTING_DIR", t.TempDir())
 	t.Setenv("PIX_AGENTS_DIR", "")
 
 	names, dir, err := listAgents()

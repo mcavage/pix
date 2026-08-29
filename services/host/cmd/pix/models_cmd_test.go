@@ -37,6 +37,9 @@ func testDeps(cfg *config.Config) (*cli.Deps, *bytes.Buffer, *bytes.Buffer) {
 
 // TestModelsStatus_RendersToDepsOut: output goes to cli.Deps.Out, not the process's
 // stdout. That is the property that removes the need for a subprocess.
+//
+// E3.3: the bare screen is FACTS ONLY — MODEL/BACKEND/SOURCE, no WHY, no
+// score, no price, no wired/unwired/retired taxonomy.
 func TestModelsStatus_RendersToDepsOut(t *testing.T) {
 	cfg := &config.Config{Inference: config.InferenceConfig{
 		AllowedModels: []string{"anthropic/claude-opus-5"},
@@ -53,9 +56,14 @@ func TestModelsStatus_RendersToDepsOut(t *testing.T) {
 	if err := runRootParse([]string{"models"}, d); err != nil {
 		t.Fatalf("bare `models` must succeed: %v", err)
 	}
-	for _, want := range []string{"Runtime", "Backends", "anthropic", "Roster"} {
+	for _, want := range []string{"MODEL", "BACKEND", "SOURCE", "anthropic/claude-opus-5", "machine config"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("status screen missing %q:\n%s", want, out.String())
+		}
+	}
+	for _, banned := range []string{"WHY", "wired", "unwired", "retired", "Runtime", "verified"} {
+		if strings.Contains(out.String(), banned) {
+			t.Errorf("status screen must be facts-only, got banned %q in:\n%s", banned, out.String())
 		}
 	}
 }

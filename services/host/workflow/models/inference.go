@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/envinfo"
 	"pix/host/hostenv"
 	"pix/host/inference"
 	"pix/host/routing"
@@ -734,4 +737,160 @@ func recordRosterProviders(cfg *config.Config, candidates []routing.Model) {
 // ContainsString is the roster's membership test.
 func ContainsString(haystack []string, needle string) bool {
 	return slices.Contains(haystack, needle)
+}
+
+// EnvironmentRosterFacts is what `pix models` and `pix agent ls` (E3.3) read
+// to print FACTS ONLY: no WHY, no score, no price, no wired/unwired/retired
+// status taxonomy. A zero value (Name == "") means no environment is
+// selected — cfg.Environment is empty, or (defensively) names an entry not
+// present in cfg.Environments.
+type EnvironmentRosterFacts struct {
+	// Name is the selected environment's registered name, "" when none.
+	Name string
+	// Root is that environment's canonical directory.
+	Root string
+	// Exclusive mirrors the sidecar's [models].exclusive (§6.3): true narrows
+	// every roster reference to this environment's OWN [inference.models]
+	// definitions — never a machine-config binding — and ValidateRoster
+	// refuses any reference that escapes that boundary.
+	Exclusive bool
+	// Roster is the RosterInput this environment authored: Main is
+	// [models].main, Agents is the [agents] table VERBATIM (no shipped-agent
+	// default filled in — a caller that needs the shipped-agent-maps-to-main
+	// default composed in supplies ShippedAgents and reads the result of
+	// ValidateRoster's own inference.CompileInferenceRuntime call instead of
+	// this raw map, exactly the distinction `pix agent ls` needs to tell an
+	// authored [agents] override from a bare Main fallback).
+	Roster inference.RosterInput
+	// LocalModels is this environment's own [[inference.models]] declarations,
+	// id -> backend name — the set [models].exclusive narrows resolution to.
+	LocalModels map[string]string
+}
+
+// ResolveEnvironmentRoster reads the machine's selected environment
+// (cfg.Environment) and its optional pix.toml sidecar directly: config and
+// envinfo are both L1 packages, and this composition — deciding WHICH
+// environment is selected, then handing its resolved facts across the
+// boundary as a RosterInput — is exactly the caller's job roster.go's own
+// doc comment describes. inference (L1) never resolves a sidecar itself,
+// and this function never asks workflow/env to Load one either: `pix
+// models`/`pix agent ls` are read-only fact reports, not a launch, and Load's
+// containment/trust/symlink machinery exists for the launch path, not this
+// one.
+//
+// shippedAgents is the caller's own agent-name set (nil is fine for `pix
+// models`, which has no use for it) — this package never reads agents/*.md
+// itself.
+//
+// A caller with no selected environment, or a selected environment with no
+// pix.toml sidecar, gets a zero-Name EnvironmentRosterFacts back: "no
+// environment roster is in effect", never an error.
+func ResolveEnvironmentRoster(cfg *config.Config, shippedAgents []string) (EnvironmentRosterFacts, error) {
+	if cfg == nil || strings.TrimSpace(cfg.Environment) == "" {
+		return EnvironmentRosterFacts{}, nil
+	}
+	name := cfg.Environment
+	root, ok := cfg.Environments[name]
+	if !ok {
+		// config.Load already fails closed on a dangling default
+		// (dropNoncanonicalEnvironments); a hand-assembled *config.Config that
+		// skipped that pass gets the same honest "no roster" here, not a panic.
+		return EnvironmentRosterFacts{}, nil
+	}
+	facts := EnvironmentRosterFacts{Name: name, Root: root}
+	sidecarPath := filepath.Join(root, "pix.toml")
+	switch _, statErr := os.Stat(sidecarPath); {
+	case statErr == nil:
+		sc, err := envinfo.ParseSidecar(sidecarPath)
+		if err != nil {
+			return EnvironmentRosterFacts{}, err
+		}
+		facts.Exclusive = sc.Models.Exclusive
+		facts.Roster = inference.RosterInput{Main: sc.Models.Main, Agents: sc.Agents, ShippedAgents: shippedAgents}
+		facts.LocalModels = make(map[string]string, len(sc.Inference.Models))
+		for _, m := range sc.Inference.Models {
+			facts.LocalModels[m.ID] = m.Backend
+		}
+	case os.IsNotExist(statErr):
+		// pix.toml is optional (docs/design/environments.md §5.2): no sidecar
+		// means no roster and no environment-local models, not an error.
+	default:
+		return EnvironmentRosterFacts{}, statErr
+	}
+	return facts, nil
+}
+
+// rosterKnownModels is the membership set ValidateRoster checks a roster
+// reference against: this environment's own [[inference.models]]
+// declarations, PLUS — unless [models].exclusive narrows it away — every
+// model id machine config has bound (cfg.Inference.Models), regardless of
+// probe/verification state. Facts-only display never gates on "has this
+// been probed yet": that is what `pix setup`/`pix doctor` are for.
+func rosterKnownModels(cfg *config.Config, facts EnvironmentRosterFacts) map[string]bool {
+	known := make(map[string]bool, len(facts.LocalModels)+len(cfg.Inference.Models))
+	if !facts.Exclusive {
+		for _, b := range cfg.Inference.Models {
+			known[b.Model] = true
+		}
+	}
+	for id := range facts.LocalModels {
+		known[id] = true
+	}
+	return known
+}
+
+// checkRosterReferences walks every roster reference (Main, then each
+// authored [agents] entry in sorted order for a deterministic first
+// offender) against known, refusing the first one known does not contain.
+// The error names the exact source file and bracket-table key (PRD §5.7's
+// shape), reusing inference.RosterError — E3.1's own composition-boundary
+// error type — so this reads identically to buildRoster's "not a generated
+// model" refusal, whichever boundary actually fired.
+func checkRosterReferences(facts EnvironmentRosterFacts, known map[string]bool) error {
+	reason := "is not declared by machine config or this environment's own [inference.models]"
+	if facts.Exclusive {
+		reason = "is not defined in this environment's own [inference.models] (exclusive = true)"
+	}
+	check := func(key, model string) error {
+		if strings.TrimSpace(model) == "" || known[model] {
+			return nil
+		}
+		return &inference.RosterError{File: "pix.toml", Key: key, Reason: fmt.Sprintf("%q %s", model, reason)}
+	}
+	if err := check("[models].main", facts.Roster.Main); err != nil {
+		return err
+	}
+	names := make([]string, 0, len(facts.Roster.Agents))
+	for n := range facts.Roster.Agents {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		if err := check("[agents]."+n, facts.Roster.Agents[n]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ValidateRoster refuses a roster this host cannot actually honor, exit 2
+// (the caller wraps this in cli.UsageError): [models].exclusive = true
+// narrows resolution to this environment's OWN [inference.models]
+// declarations ONLY — a private-gateway environment's roster must never
+// silently fall through to a machine-config binding it was defined to
+// exclude. Otherwise a roster reference may resolve to EITHER a
+// machine-config-bound model or one this environment declares itself (E3.3's
+// own scope: "models declared by machine config or the selected
+// environment"). facts.Name == "" (no environment selected) always passes:
+// there is no roster to validate. This never invokes E3.1's
+// CompileInferenceRuntime/buildRoster pipeline — that pipeline answers "is
+// this a CALLABLE (probed) model", the launch question; this answers "is
+// this a DECLARED model", the read/display question — but it reuses that
+// same pipeline's public RosterInput/RosterError types (roster.go) so the
+// two boundaries never grow divergent shapes.
+func ValidateRoster(cfg *config.Config, facts EnvironmentRosterFacts) error {
+	if facts.Name == "" {
+		return nil
+	}
+	return checkRosterReferences(facts, rosterKnownModels(cfg, facts))
 }
