@@ -57,8 +57,8 @@ func copyFixture(t *testing.T, src, dst string) {
 	}
 }
 
-func prdMounts() []WorkspaceMount {
-	return []WorkspaceMount{{Path: "/Users/alice/dev/work-pix-env", ReadOnly: false}}
+func prdMounts() EffectiveMounts {
+	return EffectiveMounts{{Path: "/Users/alice/dev/work-pix-env", ReadOnly: false}}
 }
 
 // wantPRDBillDefault is byte-exact PRD §5.8's own fixture text (the
@@ -170,7 +170,7 @@ func TestFingerprint_ChangesOnEveryFingerprintedFact(t *testing.T) {
 		{"host command argv", func(b *BillOfMaterials) { b.HostCommands[0].Argv = append(b.HostCommands[0].Argv, "--extra") }},
 		{"host service port", func(b *BillOfMaterials) { b.HostServices[0].Port = 9999 }},
 		{"credential destination", func(b *BillOfMaterials) { b.CredentialTargets[0].Destination = "other.example.com" }},
-		{"mount read-only bit", func(b *BillOfMaterials) { b.Mounts[0].ReadOnly = true }},
+		{"mount read-only bit", func(b *BillOfMaterials) { b.EffectiveMounts[0].ReadOnly = true }},
 		{"secret ref", func(b *BillOfMaterials) { b.Secrets[0].Ref = "op://Personal/Anthropic/other-key" }},
 		{"registry noVerify", func(b *BillOfMaterials) {
 			b.Registries = append(b.Registries, RegistryFact{Host: "registry.example.com", NoVerify: true})
@@ -195,7 +195,7 @@ func TestFingerprint_ChangesOnEveryFingerprintedFact(t *testing.T) {
 			mutated.HostCommands = append([]HostCommand(nil), baseBoM.HostCommands...)
 			mutated.HostServices = append([]HostServiceItem(nil), baseBoM.HostServices...)
 			mutated.CredentialTargets = append([]CredentialTarget(nil), baseBoM.CredentialTargets...)
-			mutated.Mounts = append([]WorkspaceMount(nil), baseBoM.Mounts...)
+			mutated.EffectiveMounts = append(EffectiveMounts(nil), baseBoM.EffectiveMounts...)
 			mutated.Secrets = append([]SecretFact(nil), baseBoM.Secrets...)
 			mutated.Registries = append([]RegistryFact(nil), baseBoM.Registries...)
 			mutated.MCPServers = append([]MCPServerFact(nil), baseBoM.MCPServers...)

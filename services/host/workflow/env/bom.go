@@ -33,16 +33,40 @@ import (
 // WorkspaceMount is one additional, non-kit writable workspace this
 // environment would mount if launched: docs/design/environments.md §5.1
 // restriction 4 already refuses a root resolving INSIDE one of these
-// (RefuseContainment, resolve.go); this is that SAME caller-supplied list,
-// reused here as the "N new mount" review facet. It is supplied by the
-// caller — this package derives no workspace list of its own, exactly as
-// resolve.go's RefuseContainment doc comment already establishes: "that
-// composition belongs to whichever later unit builds the effective
-// declaration (E1.8's bill of materials, E2.1's renderer)".
+// (RefuseContainment, resolve.go). It is supplied by the caller — this
+// package derives no workspace list of its own, exactly as resolve.go's
+// RefuseContainment doc comment already establishes: "that composition
+// belongs to whichever later unit builds the effective declaration (E1.8's
+// bill of materials, E2.1's renderer)". A mount expands what the host makes
+// available to the sandbox, so — unlike an interpolation reference or a
+// kit — it is itself Tier1 (docs/design/environments.md §9.1: the trust
+// fingerprint covers whatever "expand[s] mounted host access"); see
+// EffectiveMounts below for the typed collection this package actually
+// accepts.
 type WorkspaceMount struct {
 	Path     string
 	ReadOnly bool
 }
+
+// EffectiveMounts is the reviewed, effective set of additional workspace
+// mounts this environment's launch-time composition intends to expand host
+// access with. It is a DISTINCT named type, not a bare []WorkspaceMount,
+// precisely so ComputeBoM and Review's signatures cannot be satisfied by an
+// unrelated slice a caller happened to have lying around (an ad hoc CLI
+// flag, a workspace list built for some other purpose): a caller must
+// consciously construct an EffectiveMounts value from whatever launch-time
+// composition actually decided the effective mount set is, exactly the same
+// discipline this package already holds every other host-exec fact to.
+//
+// E1.7/envinfo has no native "workspace" modeling of its own yet (resolve.go's
+// RefuseContainment doc comment: "that composition belongs to whichever
+// later unit builds the effective declaration"), so this package cannot
+// derive EffectiveMounts itself — it only fingerprints and renders whatever
+// the caller asserts is effective, exactly as it already does for every
+// other host-exec fact. Actually COMPUTING the effective set (from declared
+// workspaces, kit mounts, and whatever else `sbx env` would mount) is a
+// future E2 renderer's job, not this package's.
+type EffectiveMounts []WorkspaceMount
 
 // HostCommand is one local-command MCP server: docs/design/environments.md
 // §5.1's `mcp.servers[].command` — sbx spawns Argv[0] with Argv[1:] on this
@@ -173,7 +197,7 @@ type BillOfMaterials struct {
 	HostCommands      []HostCommand
 	HostServices      []HostServiceItem
 	CredentialTargets []CredentialTarget
-	Mounts            []WorkspaceMount
+	EffectiveMounts   EffectiveMounts
 	Secrets           []SecretFact
 	Registries        []RegistryFact
 	Bindings          []BindingFact
@@ -185,15 +209,20 @@ type BillOfMaterials struct {
 	Interpolations    []envinfo.Interpolation
 }
 
-// Tier1 reports whether this environment executes anything on the host or
-// hands out a credential at all — the review gate (Review, review.go) never
-// prompts, and writes no acceptance, unless this is true. A workspace
-// mount, an interpolation reference, or a kit alone never raises the tier:
-// none of the three is itself host EXECUTION or a credential handoff (the
-// same reasoning workflow/pack's hostBoM.Tier1 already applies to egress
-// and credential-NAME solicitation alone).
+// Tier1 reports whether this environment executes anything on the host,
+// hands out a credential, or expands what the host mounts into the sandbox
+// — the review gate (Review, review.go) never prompts, and writes no
+// acceptance, unless this is true. An interpolation reference or a kit
+// ALONE never raises the tier: neither is itself host EXECUTION, a
+// credential handoff, or a mount expansion (the same reasoning
+// workflow/pack's hostBoM.Tier1 already applies to egress and
+// credential-NAME solicitation alone). A new EffectiveMounts entry DOES
+// raise it: docs/design/environments.md §9.1 names "expand mounted host
+// access" as one of the four things the trust fingerprint exists to gate,
+// alongside host execution, credential disclosure, and model-traffic
+// routing.
 func (b BillOfMaterials) Tier1() bool {
-	return len(b.HostCommands) > 0 || len(b.HostServices) > 0 || len(b.CredentialTargets) > 0 || len(b.NoVerifyRegistries()) > 0
+	return len(b.HostCommands) > 0 || len(b.HostServices) > 0 || len(b.CredentialTargets) > 0 || len(b.NoVerifyRegistries()) > 0 || len(b.EffectiveMounts) > 0
 }
 
 // NoVerifyRegistries returns the subset of Registries with NoVerify set —
@@ -210,18 +239,19 @@ func (b BillOfMaterials) NoVerifyRegistries() []RegistryFact {
 }
 
 // ComputeBoM derives env's complete BillOfMaterials. It is a pure function
-// of env's already-parsed Document/Sidecar/Tree plus mounts (the caller-
-// supplied additional-workspace list, WorkspaceMount) and lookPath (the
-// SAME exec.LookPath production seam Load's own symlink checks use, a nil
-// value defaulting to the real one) — no other filesystem or process state.
-// It returns an error only when a LOCAL kit or resolved host-service
+// of env's already-parsed Document/Sidecar/Tree plus effective (the
+// caller-supplied, consciously-constructed EffectiveMounts — never a bare
+// []WorkspaceMount some unrelated caller happened to build) and lookPath
+// (the SAME exec.LookPath production seam Load's own symlink checks use, a
+// nil value defaulting to the real one) — no other filesystem or process
+// state. It returns an error only when a LOCAL kit or resolved host-service
 // executable cannot be content-hashed (a symlink introduced since Load ran,
 // a permissions error, or the path disappearing): an unfingerprintable
 // surface is refused, never silently fingerprinted as absent.
-func ComputeBoM(env *Environment, mounts []WorkspaceMount, lookPath func(string) (string, error)) (BillOfMaterials, error) {
+func ComputeBoM(env *Environment, effective EffectiveMounts, lookPath func(string) (string, error)) (BillOfMaterials, error) {
 	var b BillOfMaterials
-	b.Mounts = append([]WorkspaceMount(nil), mounts...)
-	sort.Slice(b.Mounts, func(i, j int) bool { return b.Mounts[i].Path < b.Mounts[j].Path })
+	b.EffectiveMounts = append(EffectiveMounts(nil), effective...)
+	sort.Slice(b.EffectiveMounts, func(i, j int) bool { return b.EffectiveMounts[i].Path < b.EffectiveMounts[j].Path })
 
 	if env.Document != nil {
 		if err := computeSecretsAndCredentials(env.Document, &b); err != nil {
@@ -253,6 +283,13 @@ func ComputeBoM(env *Environment, mounts []WorkspaceMount, lookPath func(string)
 	return b, nil
 }
 
+// unboundCredentialDestination is the Destination a secret's command/ref
+// renders with when it exists but nothing in `bindings.<name>` names a
+// domain for it (restriction 3: "still render its command and a
+// credential/source fact... without inventing a domain") — a literal,
+// unambiguous placeholder, never a fabricated or guessed hostname.
+const unboundCredentialDestination = "(unbound)"
+
 func computeSecretsAndCredentials(doc *envinfo.Document, b *BillOfMaterials) error {
 	for _, name := range sortedKeys(doc.Secrets) {
 		s := doc.Secrets[name]
@@ -260,6 +297,14 @@ func computeSecretsAndCredentials(doc *envinfo.Document, b *BillOfMaterials) err
 			Name: name, Ref: s.Ref, HasCommand: len(s.Command) > 0,
 			Command: append([]string(nil), s.Command...),
 		})
+		// Restriction 3: a secret `command` is host execution whether or not
+		// it is ever bound to a domain — an unbound secret's command still
+		// runs on this host every time the secret is resolved.
+		if len(s.Command) > 0 {
+			b.HostCommands = append(b.HostCommands, HostCommand{
+				Name: "secret:" + name, Argv: append([]string(nil), s.Command...),
+			})
+		}
 		if s.Ref == "" && len(s.Command) == 0 {
 			continue
 		}
@@ -273,6 +318,11 @@ func computeSecretsAndCredentials(doc *envinfo.Document, b *BillOfMaterials) err
 			for _, d := range domains {
 				b.CredentialTargets = append(b.CredentialTargets, CredentialTarget{Source: source, Destination: d})
 			}
+		} else {
+			// No binding names a destination domain — the secret's ref/command
+			// is still a credential-bearing source and must still render, but
+			// with an explicit unbound marker rather than an invented domain.
+			b.CredentialTargets = append(b.CredentialTargets, CredentialTarget{Source: source, Destination: unboundCredentialDestination})
 		}
 	}
 	for _, svc := range sortedKeys(doc.Bindings) {
@@ -290,6 +340,15 @@ func computeRegistries(doc *envinfo.Document, b *BillOfMaterials) {
 			Host: host, Ref: r.Ref, HasCommand: len(r.Command) > 0,
 			Command: append([]string(nil), r.Command...), NoVerify: r.NoVerify,
 		})
+		// Restriction 4: a registry `command` is host execution exactly like a
+		// secret's — named by the registry's OWN stable identity (its host),
+		// so two registries that happen to author the identical argv are
+		// still two distinct HostCommand entries, never collapsed into one.
+		if len(r.Command) > 0 {
+			b.HostCommands = append(b.HostCommands, HostCommand{
+				Name: "registry:" + host, Argv: append([]string(nil), r.Command...),
+			})
+		}
 		if r.Ref == "" && len(r.Command) == 0 {
 			continue
 		}
@@ -359,6 +418,15 @@ func computeHostMCP(s *envinfo.Sidecar, b *BillOfMaterials) {
 		for _, key := range envKeys {
 			b.CredentialTargets = append(b.CredentialTargets, CredentialTarget{Source: key, Destination: name + " (host)"})
 		}
+		// Restriction 2: `pix doctor` runs probe_args on this host — that is
+		// host execution regardless of whether this entry names any
+		// env_keys at all, so it gets its own named HostCommand fact rather
+		// than only ever being described alongside a credential grant.
+		if len(e.ProbeArgs) > 0 {
+			b.HostCommands = append(b.HostCommands, HostCommand{
+				Name: name + " (probe)", Argv: append([]string(nil), e.ProbeArgs...),
+			})
+		}
 	}
 }
 
@@ -368,6 +436,18 @@ func computeInference(s *envinfo.Sidecar, b *BillOfMaterials) {
 		b.Inference = append(b.Inference, InferenceFact{
 			Name: name, Driver: be.Driver, Protocol: be.Protocol, BaseURL: be.BaseURL, Auth: be.Auth, KeyEnv: be.KeyEnv,
 		})
+		// Restriction 1: `key_env` names a host environment variable a
+		// launched Pi session hands this backend as a credential — a
+		// credential target exactly like a bound secret's, source is the
+		// env var NAME (never a value), destination is the backend's own
+		// endpoint (falling back to its name when it declares no base_url).
+		if be.KeyEnv != "" {
+			dest := be.BaseURL
+			if dest == "" {
+				dest = name + " (inference)"
+			}
+			b.CredentialTargets = append(b.CredentialTargets, CredentialTarget{Source: be.KeyEnv, Destination: dest})
+		}
 	}
 }
 
@@ -453,13 +533,14 @@ func hashDir(dir string) (string, error) {
 // fpDoc is the canonical, versioned JSON shape Fingerprint hashes. Field
 // names, order, and omitempty are load-bearing exactly as workflow/pack's
 // analogous fpDoc documents: changing one re-gates every already-accepted
-// environment. V bumps whenever this shape changes.
+// environment. V bumps whenever this shape changes — v2 renames the
+// `mounts` key to `effective_mounts` (BillOfMaterials.EffectiveMounts).
 type fpDoc struct {
 	V                 int                     `json:"v"`
 	HostCommands      []HostCommand           `json:"host_commands,omitempty"`
 	HostServices      []HostServiceItem       `json:"host_services,omitempty"`
 	CredentialTargets []CredentialTarget      `json:"credential_targets,omitempty"`
-	Mounts            []WorkspaceMount        `json:"mounts,omitempty"`
+	EffectiveMounts   EffectiveMounts         `json:"effective_mounts,omitempty"`
 	Secrets           []SecretFact            `json:"secrets,omitempty"`
 	Registries        []RegistryFact          `json:"registries,omitempty"`
 	Bindings          []BindingFact           `json:"bindings,omitempty"`
@@ -482,11 +563,11 @@ type fpDoc struct {
 // fingerprint boundary rather than trusting an upstream producer's order).
 func Fingerprint(b BillOfMaterials) (string, error) {
 	doc := fpDoc{
-		V:                 1,
+		V:                 2,
 		HostCommands:      sortedByField(b.HostCommands, func(v HostCommand) string { return v.Name }),
 		HostServices:      sortedByField(b.HostServices, func(v HostServiceItem) string { return v.Name }),
 		CredentialTargets: sortedByField(b.CredentialTargets, func(v CredentialTarget) string { return v.Source + "\x00" + v.Destination }),
-		Mounts:            sortedByField(b.Mounts, func(v WorkspaceMount) string { return v.Path }),
+		EffectiveMounts:   EffectiveMounts(sortedByField([]WorkspaceMount(b.EffectiveMounts), func(v WorkspaceMount) string { return v.Path })),
 		Secrets:           sortedByField(b.Secrets, func(v SecretFact) string { return v.Name }),
 		Registries:        sortedByField(b.Registries, func(v RegistryFact) string { return v.Host }),
 		Bindings:          sortedByField(b.Bindings, func(v BindingFact) string { return v.Service }),

@@ -181,9 +181,9 @@ func renderCounts(out io.Writer, b BillOfMaterials) {
 		}
 		writeCountLine(out, pluralize(n, "credential target"), vals)
 	}
-	if n := len(b.Mounts); n > 0 {
+	if n := len(b.EffectiveMounts); n > 0 {
 		vals := make([]string, n)
-		for i, m := range b.Mounts {
+		for i, m := range b.EffectiveMounts {
 			ro := "rw"
 			if m.ReadOnly {
 				ro = "ro"
@@ -323,7 +323,7 @@ type ReviewResult struct {
 // record under hosttrust — outside the environment's own payload, keyed by
 // Subject(root), never by name (a repoint can never inherit acceptance:
 // AC-16).
-func Review(cfg *config.Config, name string, workspaces []string, mounts []WorkspaceMount, lookPath func(string) (string, error), opts ReviewOptions) (*ReviewResult, error) {
+func Review(cfg *config.Config, name string, workspaces []string, effective EffectiveMounts, lookPath func(string) (string, error), opts ReviewOptions) (*ReviewResult, error) {
 	ts, err := loadEnvironmentTrustStore()
 	if err != nil {
 		return nil, err
@@ -332,7 +332,7 @@ func Review(cfg *config.Config, name string, workspaces []string, mounts []Works
 	if err != nil {
 		return nil, err
 	}
-	bom, err := ComputeBoM(loaded, mounts, lookPath)
+	bom, err := ComputeBoM(loaded, effective, lookPath)
 	if err != nil {
 		return nil, err
 	}
@@ -361,7 +361,7 @@ func Review(cfg *config.Config, name string, workspaces []string, mounts []Works
 		if err != nil {
 			return err
 		}
-		freshBoM, err := ComputeBoM(reloaded, mounts, lookPath)
+		freshBoM, err := ComputeBoM(reloaded, effective, lookPath)
 		if err != nil {
 			return err
 		}
