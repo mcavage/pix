@@ -2,6 +2,7 @@ package env
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -84,6 +85,24 @@ func (e *ContainmentError) Error() string {
 // correct regardless of how either was authored (relative, `~`-prefixed,
 // with a trailing slash, ...).
 //
+// A lexically-canonical path can still be a SYMLINK ALIAS of somewhere
+// else: root itself, an ancestor directory of root, the workspace itself,
+// or an ancestor of the workspace, can each be a symlink whose target sits
+// on the opposite side of the containment boundary from what the authored
+// path string suggests (a workspace registered by its symlinked alias while
+// the environment root sits under the physical target, or the reverse).
+// RefuseSymlinkedRoot only Lstats root itself — it never walks root's
+// ancestors — so it cannot catch an aliased ANCESTOR component; a workspace
+// path is never symlink-checked at all before this function runs. So when a
+// canonical path actually EXISTS on disk, physicalPath additionally resolves
+// it with filepath.EvalSymlinks before the within check, and the within
+// check compares those PHYSICAL forms rather than the lexical ones — that is
+// the only comparison a symlink alias on either side cannot bypass. A path
+// that does not exist yet (the common case in a pure location-arithmetic
+// test, and legitimately possible for a workspace declaration this function
+// itself does not create) has nothing to resolve, so it falls back to the
+// lexical canonical form unchanged, exactly as before this check existed.
+//
 // workspaces is supplied by the caller, not derived here: this package
 // takes no dependency on which sbx facet ultimately declares a writable
 // workspace (mounts, the primary workspace, an additional one) — that
@@ -94,19 +113,57 @@ func (e *ContainmentError) Error() string {
 //
 // The returned error is wrapped in cli.UsageError so cli.ExitCode(err) is 2
 // (a usage/refusal, not an operational failure) while errors.As still finds
-// the underlying *ContainmentError through UsageError's Unwrap.
+// the underlying *ContainmentError through UsageError's Unwrap. Error() is
+// always constructed from the AUTHORED canonical forms (canonRoot/canonWS),
+// never the resolved physical ones: a user registered and reads back the
+// path they authored, not an internal symlink target they may never have
+// seen.
 func RefuseContainment(root string, workspaces []string) error {
 	canonRoot := hosttrust.CanonicalRoot(root)
+	physRoot, rootExisted, rootErr := physicalPath(canonRoot)
+	if rootExisted && rootErr != nil {
+		// Fail closed: root exists but its physical location could not be
+		// established (a permission failure, a symlink loop, ...) — refuse
+		// rather than silently falling back to a lexical comparison a real
+		// alias could defeat. There is no workspace to name yet at this
+		// point, so the authored root itself stands in for Workspace too;
+		// this is the same fields-both-set shape every other ContainmentError
+		// carries, just naming the side that actually failed.
+		return cli.UsageError{Err: &ContainmentError{Root: canonRoot, Workspace: canonRoot}}
+	}
 	for _, ws := range workspaces {
 		canonWS := hosttrust.CanonicalRoot(ws)
 		if canonWS == "" {
 			continue
 		}
-		if withinDir(canonRoot, canonWS) {
+		physWS, wsExisted, wsErr := physicalPath(canonWS)
+		if wsExisted && wsErr != nil {
+			return cli.UsageError{Err: &ContainmentError{Root: canonRoot, Workspace: canonWS}}
+		}
+		if withinDir(physRoot, physWS) {
 			return cli.UsageError{Err: &ContainmentError{Root: canonRoot, Workspace: canonWS}}
 		}
 	}
 	return nil
+}
+
+// physicalPath resolves p's real, symlink-free location with
+// filepath.EvalSymlinks when p exists on disk. existed reports whether p
+// was found at all (an Lstat probe, no-follow, so a symlink whose target is
+// missing still counts as "existed" — there IS something at p to resolve,
+// and EvalSymlinks below is what actually reports whether resolving it
+// failed). When p does not exist, physicalPath returns p unchanged and
+// existed=false: nothing to resolve is not a failure, and RefuseContainment
+// falls back to the lexical canonical form for exactly that case.
+func physicalPath(p string) (resolved string, existed bool, err error) {
+	if _, statErr := os.Lstat(p); statErr != nil {
+		return p, false, nil
+	}
+	resolved, err = filepath.EvalSymlinks(p)
+	if err != nil {
+		return p, true, err
+	}
+	return resolved, true, nil
 }
 
 // withinDir reports whether path is dir itself, or nested under it. Both

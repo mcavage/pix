@@ -185,6 +185,92 @@ func TestRefuseContainmentChecksEveryDeclaredWorkspace(t *testing.T) {
 	}
 }
 
+// TestRefuseContainmentWorkspaceSymlinkAliasBypass is finding A1's planted
+// bypass: the WORKSPACE is registered by a symlinked alias path, while the
+// environment root is a real subdirectory of the alias's physical target.
+// Lexically the two paths share no prefix at all (disjoint text), so the
+// pre-fix string-only comparison let this straight through; the physical
+// (EvalSymlinks) forms are nested, and must be refused.
+func TestRefuseContainmentWorkspaceSymlinkAliasBypass(t *testing.T) {
+	realWorkspace := t.TempDir()
+	root := filepath.Join(realWorkspace, "env")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	aliasParent := t.TempDir()
+	workspaceAlias := filepath.Join(aliasParent, "workspace-alias")
+	if err := os.Symlink(realWorkspace, workspaceAlias); err != nil {
+		t.Fatal(err)
+	}
+
+	err := RefuseContainment(root, []string{workspaceAlias})
+	if err == nil {
+		t.Fatal("RefuseContainment must refuse: root is physically nested inside the workspace's symlinked alias, even though the authored strings are lexically disjoint")
+	}
+	var containment *ContainmentError
+	if !errors.As(err, &containment) {
+		t.Fatalf("error = %#v, want *ContainmentError", err)
+	}
+	// The error still names the AUTHORED (alias) workspace path, not the
+	// resolved physical target a user never registered.
+	if containment.Workspace != workspaceAlias {
+		t.Errorf("Workspace = %q, want the authored alias path %q", containment.Workspace, workspaceAlias)
+	}
+}
+
+// TestRefuseContainmentRootParentSymlinkAliasBypass is finding A1's other
+// planted bypass: an ANCESTOR of root (not root itself, so
+// RefuseSymlinkedRoot's own Lstat-of-root-only check would never catch it)
+// is a symlink into the workspace. The lexical root path shares no prefix
+// with the workspace, but its physical location is nested underneath it.
+func TestRefuseContainmentRootParentSymlinkAliasBypass(t *testing.T) {
+	workspace := t.TempDir()
+	hidden := filepath.Join(workspace, "hidden")
+	actualEnv := filepath.Join(hidden, "actualenv")
+	if err := os.MkdirAll(actualEnv, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	elsewhere := t.TempDir()
+	aliasedAncestor := filepath.Join(elsewhere, "alias")
+	if err := os.Symlink(hidden, aliasedAncestor); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(aliasedAncestor, "actualenv") // root itself is a real dir, not a symlink
+
+	if hosttrust.IsSymlink(root) {
+		t.Fatal("test setup error: root itself must not be a symlink (that is RefuseSymlinkedRoot's own, separate case)")
+	}
+
+	err := RefuseContainment(root, []string{workspace})
+	if err == nil {
+		t.Fatal("RefuseContainment must refuse: root's own ancestor is a symlink whose target is nested inside the workspace")
+	}
+	var containment *ContainmentError
+	if !errors.As(err, &containment) {
+		t.Fatalf("error = %#v, want *ContainmentError", err)
+	}
+	if containment.Root != root {
+		t.Errorf("Root = %q, want the authored (unresolved) root %q", containment.Root, root)
+	}
+}
+
+// TestRefuseContainmentNonexistentPathsStillUsePureArithmetic is the negative
+// control the doc comment promises: paths that do not exist on disk at all
+// (the shape every hypothetical/fabricated-path test in this file and
+// errors_test.go already relies on) have nothing to EvalSymlinks, so they
+// still resolve via lexical canonicalization alone — unaffected by this
+// finding's fix.
+func TestRefuseContainmentNonexistentPathsStillUsePureArithmetic(t *testing.T) {
+	if err := RefuseContainment("/does/not/exist/env", []string{"/does/not/exist"}); err == nil {
+		t.Fatal("a nonexistent root nested (lexically) inside a nonexistent workspace must still refuse via lexical arithmetic")
+	}
+	if err := RefuseContainment("/does/not/exist/other", []string{"/does/not/exist/ws"}); err != nil {
+		t.Fatalf("disjoint nonexistent paths = %v, want nil", err)
+	}
+}
+
 func containsAll(s string, substrs ...string) bool {
 	for _, sub := range substrs {
 		if !strings.Contains(s, sub) {
