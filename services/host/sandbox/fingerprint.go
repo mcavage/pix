@@ -39,3 +39,20 @@ func Diff(stored, current Fingerprint) []string {
 func Equal(stored, current Fingerprint) bool {
 	return len(Diff(stored, current)) == 0
 }
+
+// FromFacetMap adapts any facet-keyed map[string]string — e.g. envinfo's
+// ComputeFingerprint (E2.2), whose composed-facet key space ("env.FOO",
+// "mcp.servers[github].url", "kits[2]") is richer than SessionFingerprint's
+// small "static_mcp"/"template" set — into a Fingerprint, so Diff/Equal
+// work unchanged over it. This package never derives, resolves, or hashes
+// a facet value itself (this file's own doc comment: "The CALLER decides
+// what goes in it"); FromFacetMap is a straight type conversion, not a
+// second comparison engine, and it never imports envinfo or any other L1
+// sibling to do it — the caller hands over a plain map, already computed.
+func FromFacetMap(facets map[string]string) Fingerprint {
+	out := make(Fingerprint, len(facets))
+	for k, v := range facets {
+		out[k] = v
+	}
+	return out
+}

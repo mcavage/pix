@@ -7,7 +7,12 @@
 // `<path>.bak-<unixts>` sibling, never removed. Renaming it back is a complete
 // undo, and that is what makes this verb safe to type. Three dirs go:
 //
-//   - the config dir (config.toml, op-refs.env, pack-trust.json)
+//   - the config dir (config.toml, op-refs.env, pack-trust.json,
+//     environment-trust.json, and the ONE creation-hmac.key record E2.2's
+//     interpolation fingerprint is keyed with — moving the whole config
+//     dir aside is what invalidates/rotates that key together with every
+//     other acceptance record, with no environment-specific code path in
+//     this file at all; see workflow/reset's own hmackey reset test)
 //   - the data root (memory, packs, personal context)
 //   - the state dir (the daemon's pidfile/lazy marker/spawn lock/unit
 //     snapshot/log, the per-sandbox lease records, the teardown journal)
