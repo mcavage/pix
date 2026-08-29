@@ -99,6 +99,8 @@
     "evidence": ".pi-agent/deliver/native-environments/logs/baseline-gate.log"
   },
   "review_model": "google/gemini-3.1-pro-preview",
+  "lean_mode": true,
+  "lean_mode_note": "User-approved at this handoff: one engineer pass per remaining wave (no per-unit reviews), focused tests during development, make gate only after each wave's merges land and once at the very end, findings batched rather than triaged per-finding, cheap static checks preferred over full gate mid-wave, no broken-Ollama qa-lead retries, mandatory final security review, final QA, and 2 cross-vendor reviews only. Supersedes the prior per-unit review cadence (review_model/review_rounds below still apply, just consolidated to the mandatory final gates) but does not relax the acceptance bar, E2.8's private-work-environment live-conversion gate, C9/C10/C11, or the host-gate proof requirements.",
   "units": [
     {
       "id": "E0.1",
@@ -239,8 +241,14 @@
     },
     {
       "id": "E2.5",
-      "status": "pending",
-      "subagent_run_id": null
+      "status": "review_pending",
+      "subagent_run_id": "wave-d-e2.5",
+      "branch": "unit/native-e2-5",
+      "worktree": "/tmp/pix-native-e2-5",
+      "initial_head": "a3ac29e1",
+      "initial_review_verdict": "BLOCK",
+      "fix_head": "7b2ff399",
+      "note": "Fixes landed for env root vs primary workspace semantics, Ensure HMAC create/load attach, deletion of the legacy sbx run fallback, create/attach fingerprint parity, MCP/kits/mounts preservation, promote-intent receipt, and a bounded one-shot sbx JSON listing. Agent self-report claims a full green gate; NOT independently reverified at the top level yet. Needs exactly one more concise final review before merge."
     },
     {
       "id": "E2.6",
@@ -276,8 +284,14 @@
     },
     {
       "id": "E3.4",
-      "status": "pending",
-      "subagent_run_id": null
+      "status": "review_pending",
+      "subagent_run_id": "wave-e-e3.4",
+      "branch": "unit/native-e3-4",
+      "worktree": "/tmp/pix-native-e3-4",
+      "initial_head": "03d4ddba",
+      "initial_review_verdict": "concerns",
+      "fix_head": "94a9c908",
+      "note": "Fixes remove every shipped intent/fallback/model, parsers no longer retain intent, and docs corrected. Needs exactly one more concise final review before merge."
     }
   ],
   "subagent_runs": [
@@ -1444,7 +1458,7 @@
     "external_cleanup_debt": "pix-uatenv-fixture-image from run-20260824-092338-d4c384f5 remained running in the final-run sbx listing and requires explicit host cleanup",
     "wave_b_started": false
   },
-  "commit": "83385b0a3c82a78da0c995122086257696891a62",
+  "commit": "7275e5fe2721ed9ff15b56e956f144085bc61c55",
   "wave_b": {
     "status": "complete",
     "started_at": "2026-08-24T22:02:22.513270+00:00",
@@ -1575,13 +1589,15 @@
       "E2.4"
     ],
     "running": [],
+    "review_pending": [
+      "E2.5"
+    ],
     "pending": [
-      "E2.5",
       "E2.6",
       "E2.7",
       "E2.8"
     ],
-    "constraint": "private work environment converted and run live before E2.8 (A8/R6), enforced by a recorded evidence artifact (architect correction C11); see HANDOFF.md for the exact next order",
+    "constraint": "private work environment converted and run live before E2.8 (A8/R6), enforced by a recorded evidence artifact (architect correction C11); E2.5 is one concise final review from merge (worktree /tmp/pix-native-e2-5, branch unit/native-e2-5, fix head 7b2ff399); E2.6/E2.7 may run as one lean parallel/batched pass but the HOST GATE (see HANDOFF.md) must pass before E2.8 opens; see HANDOFF.md for the exact next order",
     "e2_1_evidence": {
       "state": "complete",
       "merge_sha": "0d24399e003a9be14d4b8e69227aa4867148eaa8",
@@ -1632,6 +1648,23 @@
         "patch_sha256": "2dd22c878cb7723c929bf6c5f21c0a8567bdc3fc5d75dc057f30e8fcf4656691",
         "never_staged_or_committed": true
       }
+    },
+    "e2_5_evidence": {
+      "state": "review_pending",
+      "branch": "unit/native-e2-5",
+      "worktree": "/tmp/pix-native-e2-5",
+      "initial_head": "a3ac29e1",
+      "initial_review_verdict": "BLOCK",
+      "fix_head": "7b2ff399",
+      "key_fixes": "env root vs primary workspace semantics; Ensure HMAC create/load attach; deleted the legacy sbx run fallback entirely; create and attach now derive the same fingerprints; MCP/kits/mounts preserved; promote-intent receipt; bounded one-shot sbx JSON listing",
+      "agent_claim": "full gate green (self-reported by the unit agent)",
+      "top_level_verification": "not yet performed; must be reverified at the top level after merge",
+      "non_claim": "host live proof of native MCP name/render is explicitly not claimed here; that proof belongs to the host gate ahead of E2.8, not to this unit's merge",
+      "next_step": "exactly one concise final review, then merge",
+      "user_cleanup_preserved": {
+        "patch_sha256": "2dd22c878cb7723c929bf6c5f21c0a8567bdc3fc5d75dc057f30e8fcf4656691",
+        "never_staged_or_committed": true
+      }
     }
   },
   "wave_e": {
@@ -1649,10 +1682,11 @@
       "E3.3"
     ],
     "running": [],
-    "pending": [
+    "review_pending": [
       "E3.4"
     ],
-    "constraint": "E3.1 runs concurrently with the Wave D spine (architecture.md section 6); E3.2 is TypeScript-only and safe alongside all of Wave D",
+    "pending": [],
+    "constraint": "E3.1 runs concurrently with the Wave D spine (architecture.md section 6); E3.2 is TypeScript-only and safe alongside all of Wave D; E3.4 is one concise final review from merge (worktree /tmp/pix-native-e3-4, branch unit/native-e3-4, fix head 94a9c908), closing Wave E",
     "e3_1_evidence": {
       "state": "complete",
       "merge_sha": "55025e0f0801b1c692a96147b3d5837e829ef399",
@@ -1746,6 +1780,20 @@
         "unit/native-e3-2",
         "unit/native-e3-3"
       ]
+    },
+    "e3_4_evidence": {
+      "state": "review_pending",
+      "branch": "unit/native-e3-4",
+      "worktree": "/tmp/pix-native-e3-4",
+      "initial_head": "03d4ddba",
+      "initial_review_verdict": "concerns",
+      "fix_head": "94a9c908",
+      "key_fixes": "every shipped intent/fallback/model removed; parsers no longer retain intent; docs fixed",
+      "next_step": "exactly one concise final review, then merge; this is the last unit of Wave E",
+      "user_cleanup_preserved": {
+        "patch_sha256": "2dd22c878cb7723c929bf6c5f21c0a8567bdc3fc5d75dc057f30e8fcf4656691",
+        "never_staged_or_committed": true
+      }
     }
   },
   "wave_f": {
