@@ -595,6 +595,61 @@ func TestAppendTeardownJournal_CleansStaleTempFiles(t *testing.T) {
 	}
 }
 
+// TestAppendTeardownJournal_BracketPathTempCleanup is
+// TestAppendTeardownJournal_CleansStaleTempFiles's bracket-path variant: the
+// journal path lives under config.StateDir(), a root this package does not
+// control (it resolves under the user's $HOME or $XDG_STATE_HOME, either of
+// which could contain '[', ']', '*' or '?'). cleanStaleJournalTemp used to
+// sweep leftovers with filepath.Glob(path+".tmp-*"), which treats those
+// bytes as pattern metacharacters wherever they appear in the full path, not
+// just its final segment — so a bracket-containing directory could make the
+// sweep silently miss the exact leftover it was asked to remove. It now
+// goes through removeAtomicTempSiblings (atomic.go), a literal os.ReadDir +
+// prefix match with no such surface; this pins that for the journal's own
+// call site, the same fix createintent.go's ClearCreateIntent got.
+func TestAppendTeardownJournal_BracketPathTempCleanup(t *testing.T) {
+	isolateState(t)
+	dir := filepath.Join(t.TempDir(), "[archived]-state")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "teardown.jsonl")
+	stale := path + ".tmp-crash1"
+	if err := os.WriteFile(stale, []byte("half-written"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	o := TeardownOptions{JournalPath: path}.withDefaults()
+	if err := appendTeardownJournal(o, TeardownResult{
+		Sandbox: "pix-demo", Key: "pix-demo", Trigger: TriggerSession, Verdict: TeardownRemoved,
+	}); err != nil {
+		t.Fatalf("appendTeardownJournal: %v", err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Errorf("stale temp %s still present after an append in a bracket-containing dir (err=%v)", stale, err)
+	}
+}
+
+// TestClearSessionState_BracketPathTempCleanup is the same bracket-path fix,
+// pinned at clearSessionState's own call site (the fingerprint/invocation
+// crash-leftover sweep, distinct from the teardown journal's).
+func TestClearSessionState_BracketPathTempCleanup(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "[archived]-sandboxes", "pix-demo")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(dir, sessionFingerprintFileName+".tmp-crash1")
+	if err := os.WriteFile(stale, []byte("half-written"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := clearSessionState(dir); err != nil {
+		t.Fatalf("clearSessionState: %v", err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Errorf("stale temp %s still present after clearSessionState in a bracket-containing dir (err=%v)", stale, err)
+	}
+}
+
 // TestAppendTeardownJournal_ConcurrentAppendsLoseNoEntries: the journal's
 // append is read-modify-write (read every prior line, append one, rewrite
 // the whole file). Without cross-process serialization, two writers racing

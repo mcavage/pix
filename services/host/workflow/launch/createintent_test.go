@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"pix/host/lease"
 	"pix/host/sandbox"
@@ -236,6 +237,103 @@ func TestCreateIntent_ConcurrentWritesLeaveOneCompleteFile(t *testing.T) {
 	}
 }
 
+// TestClearCreateIntent_BracketPathTempCleanup pins the Glob->ReadDir fix:
+// filepath.Glob(path+".tmp-*") treats '[' and ']' ANYWHERE in the pattern —
+// including in a directory segment that isn't the final one — as pattern
+// metacharacters, not literal bytes. An environment root a user chose
+// (".../[archived]-project/...") is an entirely plausible real-world path
+// containing exactly those bytes, and under the old Glob-based sweep it made
+// ClearCreateIntent silently fail to find (and therefore never remove) a
+// crash-leftover writeFileAtomic temp file living right next to
+// createintent.json in that directory.
+func TestClearCreateIntent_BracketPathTempCleanup(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "[archived]-project")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteCreateIntent(dir, sampleIntent()); err != nil {
+		t.Fatalf("WriteCreateIntent into a bracket-containing dir: %v", err)
+	}
+	// The exact shape writeFileAtomic leaves behind if a writer dies between
+	// its CreateTemp and its Rename.
+	leftover := filepath.Join(dir, CreateIntentFileName+".tmp-deadbeef")
+	if err := os.WriteFile(leftover, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ClearCreateIntent(dir); err != nil {
+		t.Fatalf("ClearCreateIntent: %v", err)
+	}
+	if _, err := os.Stat(leftover); !os.IsNotExist(err) {
+		t.Errorf("leftover temp file in a bracket-containing dir was not removed (glob-vs-literal-prefix bug): stat err = %v", err)
+	}
+}
+
+// TestCreateIntent_ReadNeverFollowsAConcurrentlySwappedSymlink plants an
+// adversarial symlink swap CONCURRENTLY with ReadCreateIntent: one goroutine
+// repeatedly replaces createintent.json with a symlink to a file carrying a
+// payload that is trivially distinguishable from a genuine create intent
+// (an impossible sandbox name), then restores a real intent file, for the
+// whole span a second goroutine hammers ReadCreateIntent in a loop.
+//
+// ReadCreateIntent's fix (a single openNoFollow call, read from that same
+// fd) leaves no Lstat-then-read window for a test to force deterministically
+// — that absence of a seam IS the property being proved, unlike
+// lease/toctou_test.go's forced single-step races against an exposed
+// flockHandle. What this test asserts instead is the one outcome that must
+// NEVER happen no matter how an adversarial interleaving falls: a returned
+// intent naming the poisoned symlink target's payload.
+func TestCreateIntent_ReadNeverFollowsAConcurrentlySwappedSymlink(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "sess")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, CreateIntentFileName)
+	poisonTarget := filepath.Join(root, "poison.json")
+	poison := CreateIntent{EnvironmentRoot: "/poison", SandboxName: "pix-should-never-be-observed"}
+	poisonData, err := json.Marshal(poison)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(poisonTarget, poisonData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteCreateIntent(dir, sampleIntent()); err != nil {
+		t.Fatalf("WriteCreateIntent: %v", err)
+	}
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			_ = os.Remove(path)
+			_ = os.Symlink(poisonTarget, path)
+			_ = os.Remove(path)
+			_ = WriteCreateIntent(dir, sampleIntent())
+		}
+	}()
+
+	deadline := time.Now().Add(150 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		got, found, rerr := ReadCreateIntent(dir)
+		if rerr == nil && found && got.SandboxName == poison.SandboxName {
+			close(stop)
+			wg.Wait()
+			t.Fatal("ReadCreateIntent returned the symlink target's payload: the read followed a concurrently-swapped symlink")
+		}
+	}
+	close(stop)
+	wg.Wait()
+}
+
 // ── no secrets: the field set is fixed and allowlisted ──────────────────────
 
 func TestCreateIntent_JSONKeysAreAllowlisted(t *testing.T) {
@@ -271,10 +369,17 @@ func TestPromoteCreateIntent_BindsRecordAndClearsIntent(t *testing.T) {
 	if err := WriteCreateIntent(dir, in); err != nil {
 		t.Fatalf("WriteCreateIntent: %v", err)
 	}
-	rec, err := PromoteCreateIntent(dir, CreateReceipt{InstanceID: "inst-1", SandboxName: in.SandboxName})
+	result, err := PromoteCreateIntent(dir, CreateReceipt{InstanceID: "inst-1", SandboxName: in.SandboxName})
 	if err != nil {
 		t.Fatalf("PromoteCreateIntent: %v", err)
 	}
+	if !result.Promoted() {
+		t.Fatal("result.Promoted() = false, want true")
+	}
+	if result.CleanupWarning != nil {
+		t.Errorf("CleanupWarning = %v, want nil for a clean promotion", result.CleanupWarning)
+	}
+	rec := result.Record
 	if rec.InstanceID != "inst-1" || rec.Name != in.SandboxName {
 		t.Errorf("promoted record = %+v", rec)
 	}
@@ -283,6 +388,59 @@ func TestPromoteCreateIntent_BindsRecordAndClearsIntent(t *testing.T) {
 	}
 	if got := LoadCreateReceipt(dir); got == nil || got.InstanceID != "inst-1" || got.SandboxName != in.SandboxName {
 		t.Errorf("LoadCreateReceipt after promotion = %+v", got)
+	}
+}
+
+// TestPromoteCreateIntent_RecordSucceedsButCleanupFailsIsPromotedSuccessWithWarning
+// is the promotion-semantics fix itself: once the lease record is durably
+// created, a failure clearing the now-redundant (weaker) create-intent file
+// must never look like an aborted, orphaning create to a caller. The OLD
+// two-return-value PromoteCreateIntent(dir, receipt) (*lease.Record, error)
+// returned a non-nil error for exactly this case, which Go's ordinary "if
+// err != nil { return err }" reflex cannot tell apart from a genuine create
+// failure — it would throw away the already-durable record and treat a
+// fully successful create as a failure. The typed PromotionResult closes
+// that off: PromoteCreateIntent's own error is nil here, Promoted() is
+// true, and the cleanup failure surfaces ONLY as CleanupWarning.
+func TestPromoteCreateIntent_RecordSucceedsButCleanupFailsIsPromotedSuccessWithWarning(t *testing.T) {
+	dir := t.TempDir()
+	in := sampleIntent()
+	if err := WriteCreateIntent(dir, in); err != nil {
+		t.Fatalf("WriteCreateIntent: %v", err)
+	}
+	// Force ClearCreateIntent to fail WITHOUT touching the lease record's own
+	// write path: replace createintent.json with a non-empty directory, so
+	// os.Remove on it fails with ENOTEMPTY rather than succeeding or
+	// reporting not-exist. record.json lives beside it in the same dir and is
+	// entirely unaffected by this.
+	intentPath := filepath.Join(dir, CreateIntentFileName)
+	if err := os.Remove(intentPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(intentPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(intentPath, "x"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := PromoteCreateIntent(dir, CreateReceipt{InstanceID: "inst-1", SandboxName: in.SandboxName})
+	if err != nil {
+		t.Fatalf("PromoteCreateIntent returned a hard error for a durably-created record with only a cleanup failure: %v (this is exactly the abort-and-orphan shape callers must never see)", err)
+	}
+	if !result.Promoted() {
+		t.Fatal("result.Promoted() = false, want true: the lease record WAS durably created")
+	}
+	if result.Record == nil || result.Record.InstanceID != "inst-1" {
+		t.Errorf("Record = %+v, want InstanceID inst-1", result.Record)
+	}
+	if result.CleanupWarning == nil {
+		t.Error("CleanupWarning = nil, want a warning describing the failed intent cleanup")
+	}
+	// The record itself really is on disk, independent of the API shape.
+	rec, rerr := lease.ReadRecord(dir)
+	if rerr != nil || rec.InstanceID != "inst-1" {
+		t.Fatalf("lease record not durably on disk after a cleanup-warning promotion: %+v, %v", rec, rerr)
 	}
 }
 

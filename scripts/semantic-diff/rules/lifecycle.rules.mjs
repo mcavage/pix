@@ -83,12 +83,12 @@ export default [
 	{
 		id: "lifecycle.lease.instance-id-immutable",
 		description:
-			"lease.CreateRecord writes the immutable instance record exactly once (O_EXCL makes write-once a syscall-level guarantee, not an app-level check-then-write race) and refuses to relabel an existing lease directory under a different instance ID — a create/teardown pair can never alias two different sandbox lifetimes onto the same lease dir. ValidateInstanceID's allowlist regex is the other half: only [A-Za-z0-9._-], so an instance ID can never traverse or escape SandboxDir's path join.",
+			"lease.CreateRecord writes the immutable instance record exactly once and refuses to relabel an existing lease directory under a different instance ID — a create/teardown pair can never alias two different sandbox lifetimes onto the same lease dir. E2.3 review fix: write-once moved from a direct O_CREAT|O_EXCL open on record.json's own final path (which left a window between 'the name exists' and 'the name's content is complete' a crash could land in) to writeRecordOnce's temp-file-fsync-then-os.Link install — os.Link, like O_EXCL before it, REFUSES (EEXIST) rather than replaces an existing target, so write-once stays a syscall-level guarantee, just reachable only once the content it publishes is already durable. checkExistingRecord is the ONE identity-match check reused both before a create attempt and after losing a create race, so a loser asking for a DIFFERENT identity is refused rather than silently handed the winner's record. ValidateInstanceID's allowlist regex is the other half: only [A-Za-z0-9._-], so an instance ID can never traverse or escape SandboxDir's path join.",
 		checks: [
 			{
 				file: "services/host/lease/record.go",
 				kind: "contains",
-				values: ["if existing.InstanceID != instanceID {", "syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL"],
+				values: ["if existing.InstanceID != instanceID {", "os.Link(tmpPath, path)", "errors.Is(werr, os.ErrExist)"],
 			},
 			{
 				file: "services/host/lease/paths.go",

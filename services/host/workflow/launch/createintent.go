@@ -36,6 +36,7 @@ package launch
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -91,16 +92,21 @@ func validateCreateIntent(intent CreateIntent) error {
 }
 
 // refuseSymlinkAt refuses when a real filesystem entry already exists at
-// path AND is a symlink. A missing path is not an error here.
+// path AND is a symlink. A missing path is not an error here. It checks via
+// openNoFollow (open-with-O_NOFOLLOW) rather than a standalone os.Lstat: an
+// Lstat here would only prove "no symlink at the instant of the stat", and a
+// symlink swapped in immediately after would be invisible to it — the same
+// TOCTOU class ReadCreateIntent below closes for its own read. Doing the
+// check with the same syscall a real open would use means there is nothing
+// for a race to land in between "checked" and "acted on": they are the same
+// call.
 func refuseSymlinkAt(path string) (os.FileInfo, error) {
-	fi, err := os.Lstat(path)
+	f, err := openNoFollow(path, os.O_RDONLY, 0)
 	if err != nil {
 		return nil, err
 	}
-	if fi.Mode()&os.ModeSymlink != 0 {
-		return nil, fmt.Errorf("launch: refusing to follow symlink at %s", path)
-	}
-	return fi, nil
+	defer f.Close()
+	return f.Stat()
 }
 
 // WriteCreateIntent writes intent to dir's create-intent record BEFORE the
@@ -152,19 +158,26 @@ func WriteCreateIntent(dir string, intent CreateIntent) error {
 // nil error) when nothing was ever written there — the ordinary shape once
 // PromoteCreateIntent has cleared it, or for a directory that never started
 // a create at all.
+//
+// This opens path EXACTLY ONCE (openNoFollow) and reads from that same file
+// descriptor: unlike a check-then-read sequence (an Lstat or refuseSymlinkAt
+// call followed by a separate os.ReadFile), there is no window between
+// "confirmed not a symlink" and "read the bytes" for a concurrently-swapped
+// symlink to be silently followed — the fd this function reads from is
+// PINNED to whatever inode O_NOFOLLOW accepted, before a single byte is
+// read, and nothing that happens to the path afterward can redirect it.
 func ReadCreateIntent(dir string) (intent *CreateIntent, found bool, err error) {
 	path := filepath.Join(dir, CreateIntentFileName)
-	if _, err := refuseSymlinkAt(path); err != nil {
-		if os.IsNotExist(err) {
+	f, oerr := openNoFollow(path, os.O_RDONLY, 0)
+	if oerr != nil {
+		if os.IsNotExist(oerr) {
 			return nil, false, nil
 		}
-		return nil, false, err
+		return nil, false, oerr
 	}
-	data, rerr := os.ReadFile(path)
+	defer f.Close()
+	data, rerr := io.ReadAll(f)
 	if rerr != nil {
-		if os.IsNotExist(rerr) {
-			return nil, false, nil
-		}
 		return nil, false, rerr
 	}
 	var v CreateIntent
@@ -182,13 +195,7 @@ func ClearCreateIntent(dir string) error {
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	leftover, _ := filepath.Glob(path + ".tmp-*")
-	for _, p := range leftover {
-		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-	}
-	return nil
+	return removeAtomicTempSiblings(path)
 }
 
 // CreateReceipt is the VERIFIED POSITIVE outcome of a create: the instance id
@@ -201,6 +208,43 @@ type CreateReceipt struct {
 	SandboxName string
 }
 
+// PromotionResult is PromoteCreateIntent's outcome. Record is the durable
+// lease.Record whenever PromoteCreateIntent itself returns a nil error —
+// full stop, whether or not CleanupWarning is also set.
+//
+// CleanupWarning is set ONLY when the record was already durably created but
+// this call could not ALSO clear the now-redundant create-intent file: that
+// is leftover diagnostic debris (DiagnoseResidue already treats a surviving
+// intent alongside a confirmed record as "not residue", precisely for this
+// window), never a failed create. A caller MUST treat a non-nil
+// CleanupWarning as informational — log it, surface it in a doctor-style
+// report — and MUST NOT treat its presence as "the create failed" or retry
+// the create: Record being non-nil (equivalently, Promoted() reporting true)
+// is definitive, independent proof it already durably succeeded.
+//
+// This shape exists so the correct handling is the ONLY handling reachable
+// through Go's ordinary reflex. "rec, err := PromoteCreateIntent(...); if
+// err != nil { return err }" was the shape the OLD two-return-value
+// PromoteCreateIntent invited: it could return a non-nil rec ALONGSIDE a
+// non-nil err purely because intent cleanup failed, and that reflex would
+// throw the already-durable rec away and treat a fully successful create as
+// a failure — aborting a caller's flow and orphaning a receipt that was
+// never actually lost, just not yet reported. With this shape,
+// PromoteCreateIntent's own returned error is non-nil if AND ONLY IF the
+// promotion itself — the lease record's creation — did not happen; the
+// ordinary "if err != nil" reflex is therefore always safe, and a caller
+// that wants to surface the cleanup debt separately reads CleanupWarning off
+// the result it already has in hand.
+type PromotionResult struct {
+	Record         *lease.Record
+	CleanupWarning error
+}
+
+// Promoted reports whether the lease record was durably created — the ONE
+// fact that answers "did the create succeed", independent of whether the
+// now-redundant intent file was also successfully cleaned up.
+func (r PromotionResult) Promoted() bool { return r.Record != nil }
+
 // PromoteCreateIntent replaces dir's create-intent with the instance-bound
 // lease record on a verified positive create receipt: it creates the
 // (immutable, write-once) lease.Record for receipt naming BOTH the instance
@@ -208,21 +252,28 @@ type CreateReceipt struct {
 // that order, so a crash between the two still leaves the lease record (the
 // stronger proof) on disk; it can never leave neither, and it can never
 // leave a cleared intent with no record to replace it.
-func PromoteCreateIntent(dir string, receipt CreateReceipt) (*lease.Record, error) {
+//
+// The returned error is non-nil ONLY when the record itself could not be
+// created — an actual promotion failure. A record that WAS durably created
+// but whose now-redundant intent file could not also be cleared is still a
+// nil-error, Promoted()==true result; see PromotionResult's doc comment for
+// why that split is the point.
+func PromoteCreateIntent(dir string, receipt CreateReceipt) (PromotionResult, error) {
 	if receipt.InstanceID == "" {
-		return nil, fmt.Errorf("launch: cannot promote a create intent with no receipt instance id")
+		return PromotionResult{}, fmt.Errorf("launch: cannot promote a create intent with no receipt instance id")
 	}
 	if receipt.SandboxName == "" {
-		return nil, fmt.Errorf("launch: cannot promote a create intent with no receipt sandbox name")
+		return PromotionResult{}, fmt.Errorf("launch: cannot promote a create intent with no receipt sandbox name")
 	}
 	rec, err := lease.CreateRecordFor(dir, receipt.InstanceID, receipt.SandboxName)
 	if err != nil {
-		return nil, err
+		return PromotionResult{}, err
 	}
-	if err := ClearCreateIntent(dir); err != nil {
-		return rec, fmt.Errorf("launch: promoted %s but could not clear its create intent: %w", receipt.InstanceID, err)
+	result := PromotionResult{Record: rec}
+	if cerr := ClearCreateIntent(dir); cerr != nil {
+		result.CleanupWarning = fmt.Errorf("launch: promoted %s but could not clear its create intent: %w", receipt.InstanceID, cerr)
 	}
-	return rec, nil
+	return result, nil
 }
 
 // LoadCreateReceipt reads dir's lease.Record — the ONLY thing that ever
