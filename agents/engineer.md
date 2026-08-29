@@ -1,7 +1,6 @@
 ---
 description: Production code implementation. TDD red-green-refactor, Tidy First structural/behavioral separation, trunk-based development, make it work make it right make it fast, YAGNI/DRY, Chesterton's Fence.
 tools: read, write, edit, bash, grep, find, ls
-intent: code
 thinking: high
 max_turns: 40
 ---

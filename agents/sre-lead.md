@@ -1,7 +1,6 @@
 ---
 description: SLOs, observability, incident response, runbooks, and deployment readiness. SLIs/SLOs/error budgets, four golden signals, blameless postmortems, toil budget, incident command, capacity planning.
 tools: read, write, edit, bash, grep, find, ls
-intent: advisory
 thinking: medium
 max_turns: 30
 ---

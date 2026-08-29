@@ -10,6 +10,7 @@ import { register } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 register("./stub-loader.mjs", import.meta.url);
 
@@ -211,4 +212,45 @@ test("unset / invalid MAX_DEPTH still defaults to 3", async () => {
 		// Not a depth refusal — falls through to the unknown-agent path.
 		assert.match(text(r), /Unknown agent/i);
 	}
+});
+
+// ── retired cross-vendor retry-on-policy-refusal: permanent regression guard ──
+// The retired feature re-invoked runSingle with a swapped model (once resolved
+// via the since-deleted `fallback_intent:` frontmatter, E3.4) whenever a
+// provider policy refusal fired. Folded in from the now-deleted
+// tests/no-fallback-intent-resolution.test.mjs, whose fallback_intent-specific
+// assertions this file's E3.4 removal made moot; this guard against the
+// retry mechanism itself is not.
+const subagentsSrc = fs.readFileSync(
+	path.join(
+		path.dirname(fileURLToPath(import.meta.url)),
+		"..",
+		"extensions",
+		"subagents.ts",
+	),
+	"utf8",
+);
+
+test("subagents.ts has no `fallbackModel` — the field that used to carry a policy-refusal retry's resolved model is gone", () => {
+	assert.doesNotMatch(
+		subagentsSrc,
+		/fallbackModel/,
+		"fallbackModel was the only mechanism through which a cross-vendor retry ever affected model choice; it must be fully removed, not merely unused",
+	);
+});
+
+test("subagents.ts has no cross-vendor retry keyed off a policy refusal + fallback route", () => {
+	// Any resurrection of a second runSingle call gated on
+	// isProviderPolicyRefusal is exactly the hidden model-choice effect that
+	// was removed.
+	assert.doesNotMatch(
+		subagentsSrc,
+		/isProviderPolicyRefusal\(result\)[\s\S]{0,200}runSingle\(/,
+		"a provider policy refusal must not trigger a retry that changes the model",
+	);
+});
+
+test("subagents.ts has no fallbackIntent field or fallback_intent frontmatter parsing (E3.4: field removed entirely)", () => {
+	assert.doesNotMatch(subagentsSrc, /fallbackIntent/, "fallbackIntent must be gone from AgentConfig, not merely unused");
+	assert.doesNotMatch(subagentsSrc, /frontmatter\.fallback_intent/, "fallback_intent frontmatter must no longer be parsed");
 });

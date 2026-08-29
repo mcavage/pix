@@ -1,7 +1,6 @@
 ---
 description: Working React/Tailwind UI components. All states covered, empty, loading, error, edge, permission. Pairs with the design-system skill. Nielsen's heuristics, Norman's affordances/signifiers, Gestalt principles, Double Diamond, atomic design/tokens, WCAG.
 tools: read, write, edit, bash, grep, find, ls
-intent: code
 thinking: high
 max_turns: 30
 ---

@@ -232,45 +232,46 @@ Launcher (`pix`): `agent ls` (roster only — new/edit/rm/reassess retired),
 ## Agent lifecycle
 
 An agent is a first-class object (`agents/<name>.md` frontmatter): identity,
-`description` (used for auto-selection), prompt, `tools`, an **`intent`** (not a
-pinned model), an optional provider constraint, and an advisory `budget_usd`.
+`description` (used for auto-selection), prompt, `tools`, an optional pinned
+`model`, and an advisory `budget_usd`. **E3.4 (done):** shipped `agents/*.md`
+no longer declare `intent:`, `fallback_intent:`, or `model:` at all — the
+environment roster (`docs/design/environments.md` §6.4) is the one editable
+table for a shipped role's model; a custom project agent may still pin its
+own exact `model:`. `intent`/`routing.json` remain live for exactly one
+thing now: the top-level session model (`pix run --intent`, `run_intent`),
+until Wave F retires the router entirely (`docs/design/architecture.md`).
 
-- **`agent ls`** shows each agent's resolved model and WHY (its intent, and
-  whether the resolver fell back). This is what makes "sensible default with
-  override" legible — you never pick a model per task. It is the entire
-  surviving `agent` surface.
+- **`agent ls`** shows each agent's resolved MODEL and SOURCE — facts only,
+  no WHY, no scored fallback narrative (that framing described v1/v2 of this
+  doc; see `docs/design/environments.md` §6.4 for the current resolution
+  order). It is the entire surviving `agent` surface.
 - Authoring, editing and removing an agent is a hand-edit of its
-  `agents/<name>.md` frontmatter (`intent`, `description`, `tools`,
-  `budget_usd`, an optional pinned `model`) — add, change, or delete the file
-  directly; if a new `intent` needs scores, hand-add them to `scorecard.json`.
-  Then run `make routing` to recompile `routing.json` and relaunch the
-  sandbox to pick it up. `agent new|edit|rm|reassess` are deleted; typing one
-  gets the ordinary unknown-command answer, not a notice naming this path.
+  `agents/<name>.md` frontmatter (`description`, `tools`, `budget_usd`, an
+  optional pinned `model`) — add, change, or delete the file directly. A
+  custom project agent may still declare its own `model:`. `agent
+  new|edit|rm|reassess` are deleted; typing one gets the ordinary
+  unknown-command answer, not a notice naming this path.
 
 ## Sandbox integration
 
-`subagents.ts` model resolution order:
+`subagents.ts` resolves an agent's model from the environment roster, never
+from `routing.json` (`docs/design/environments.md` §6.4):
 
-1. explicit `model:` frontmatter (back-compat — always wins),
-2. `intent:` frontmatter → `routing.json` resolved map → model id,
-3. neither → inherit the parent model (current default).
+1. an explicitly selected parent Ollama model (transport exception),
+2. explicit `model:` frontmatter (back-compat — a custom project agent's own
+   pin always wins),
+3. the selected environment's `roster.agents[<agent name>]`,
+4. the environment's `roster.main`,
+5. neither → inherit the parent model.
 
-The host first filters bindings through the user's `inference.allowed_models`
-roster. Consequently every compiled route and runtime model cycle stays inside
-the setup choice. Exclusive packs bypass (but do not erase) that personal
-roster and compile only from their own bindings.
+`fallback_intent:` was legacy frontmatter left over from the retired
+cross-vendor-retry-on-policy-refusal feature: it was never a `roster.agents`
+lookup and never changed which model ran. E3.4 removed the field from every
+shipped agent (`agents/security-lead.md` was the last holdout) and removed
+its parsing/display from `extensions/subagents.ts`.
 
-`fallback_intent:` is legacy frontmatter left over from the retired
-cross-vendor-retry-on-policy-refusal feature. It is parsed only (see
-`extensions/subagents.ts`'s `AgentConfig.fallbackIntent`) and has NO runtime
-effect: it is never a `roster.agents` lookup and never changes which model
-runs, including on a provider policy refusal, which is now reported as an
-ordinary failure like any other. `agents/security-lead.md` still ships
-`fallback_intent: review` from that era; removing the dead field from shipped
-agent frontmatter is E3.4's job, not a re-open of this fix.
-
-Agent presets migrate from a hard-coded `model:` to an `intent:`. `routing.json`
-is baked at `~/.pi/agent/routing.json` next to `capabilities.json`.
+`routing.json` is baked at `~/.pi/agent/routing.json` next to
+`capabilities.json`, and still resolves the top-level session model only.
 
 ## Adding a model later (the whole point)
 

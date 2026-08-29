@@ -212,18 +212,13 @@ interface AgentConfig {
 	description: string;
 	tools?: string[];
 	model?: string;
-	// Declared intent (frontmatter `intent:`). No longer resolves `model` —
-	// there is no compiled router left to resolve it against — kept only for
-	// display (clarifyRoutedModelFailure, the `/subagents` listing).
+	// Declared intent (frontmatter `intent:`). No shipped `agents/*.md` carries
+	// this anymore (E3.4: the environment roster is the one editable table for
+	// a shipped role's model, docs/design/environments.md §6.4) — kept only so
+	// a custom project agent that still names one shows it for display
+	// (clarifyRoutedModelFailure, the `/subagents` listing). It never resolves
+	// `model`; there is no compiled router left to resolve it against.
 	intent?: string;
-	// LEGACY frontmatter (`fallback_intent:`), pending outright deletion in E3.4
-	// (docs/design/routing.md, architecture table). Parsed only so an
-	// AgentConfig carries visible evidence it was declared — it is NEVER a
-	// roster.agents lookup, is NEVER resolved to a model, and has NO effect on
-	// which model runs, including on a provider policy refusal (that used to
-	// trigger a cross-vendor retry; the retry mechanism has been removed
-	// entirely, not just detached from this field).
-	fallbackIntent?: string;
 	thinking?: string;
 	maxTurns?: number;
 	// Per-agent watchdog overrides (frontmatter idle_ms / wall_ms, milliseconds).
@@ -295,12 +290,13 @@ function loadAgentsFromDir(
 		// `intent:` is kept only as display metadata (see clarifyRoutedModelFailure
 		// and the `/subagents` listing) — it no longer resolves a model. There is
 		// no compiled router left to resolve it against; the roster below is keyed
-		// by the agent's own NAME, not by a declared intent.
+		// by the agent's own NAME, not by a declared intent. No shipped
+		// `agents/*.md` declares this anymore (E3.4); a custom project agent still
+		// can, for display only.
 		const intent = frontmatter.intent?.trim() || undefined;
 		// Model resolution order (docs/design/environments.md §6.4), and this is
-		// the WHOLE chain — nothing else, including `fallback_intent:` below, may
-		// join it: an explicitly selected parent Ollama model is inherited by
-		// every child (cloud may be unavailable); otherwise explicit `model:`
+		// the WHOLE chain: an explicitly selected parent Ollama model is inherited
+		// by every child (cloud may be unavailable); otherwise explicit `model:`
 		// wins (back-compat); otherwise the selected environment's
 		// `roster.agents[<this agent's own name>]`; otherwise `roster.main`.
 		// Anything left unresolved inherits the parent session's own model —
@@ -309,10 +305,6 @@ function loadAgentsFromDir(
 		let model = PARENT_OLLAMA_MODEL || explicitModel;
 		if (!model) model = resolveRosterModel(ROSTER?.agents[name]);
 		if (!model) model = resolveRosterModel(ROSTER?.main);
-		// `fallback_intent:` is legacy frontmatter pending E3.4 deletion. It is
-		// parsed for visibility only — see the AgentConfig.fallbackIntent comment
-		// for why it is never a roster.agents lookup and never touches `model`.
-		const fallbackIntent = frontmatter.fallback_intent?.trim() || undefined;
 		let thinking = frontmatter.thinking?.trim().toLowerCase() || undefined;
 		if (thinking && !VALID_THINKING.has(thinking)) {
 			warnings.push(`thinking "${thinking}" is not a valid level; ignoring.`);
@@ -342,7 +334,6 @@ function loadAgentsFromDir(
 			tools: tools && tools.length > 0 ? tools : undefined,
 			model,
 			intent,
-			fallbackIntent,
 			thinking,
 			web,
 			maxTurns: Number.isFinite(maxTurns as number)
@@ -1740,10 +1731,10 @@ async function runSingle(
 		clarifyRoutedModelFailure(result, agent);
 
 		// There is no cross-vendor retry-on-policy-refusal anymore: it used to
-		// switch models by resolving the legacy `fallback_intent:` frontmatter
-		// through roster.agents, which is exactly the hidden model-choice effect
-		// that field must never have (see AgentConfig.fallbackIntent). A provider
-		// policy refusal is reported as an ordinary failure like any other;
+		// switch models by resolving the now-deleted `fallback_intent:`
+		// frontmatter through roster.agents, which is exactly the hidden
+		// model-choice effect that field must never have had. A provider policy
+		// refusal is reported as an ordinary failure like any other;
 		// isProviderPolicyRefusal/clarifyRoutedModelFailure remain as general
 		// diagnostics, not as inputs to a retry decision.
 		if (runId) finalizeRun(runId, result);

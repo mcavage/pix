@@ -228,9 +228,9 @@ agentInstructions:
     killed and reported, never left hanging. Call it with {agent, task} (single),
     {tasks:[...]} (parallel), or {chain:[...]} with a {previous} placeholder:
     agent = a preset in ~/.pi/agent/agents (see `pix agent ls`):
-      - fanout (intent breadth, cheap/read-only): spawn many for breadth.
-      - deep (intent max-accuracy): one genuinely hard sub-problem.
-      - review (intent review, cross-vendor): adversarial second opinion.
+      - fanout (cheap/read-only): spawn many for breadth.
+      - deep: one genuinely hard sub-problem.
+      - review (cross-vendor): adversarial second opinion.
       - specialists: architect, engineer, designer, product-manager, qa-lead,
         security-lead, sre-lead, devrel, dx-consultant, legal, finance-analyst,
         growth-marketing, ux-copywriter, enterprise-admin.
