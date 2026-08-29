@@ -26,6 +26,7 @@ import (
 
 	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/sys"
 )
 
 // ShowSchemaVersion is `env show --json`'s schema_version (AC-64).
@@ -144,7 +145,7 @@ func RenderShowDefault(out io.Writer, r ShowResult) {
 	// explicit not running/unknown, never fabricated)".
 	fmt.Fprintln(out, "  sandbox:   unknown (live-launch drift lands with a later wave)")
 	fmt.Fprintln(out)
-	fmt.Fprintf(out, "full rendered environment: pix env show %s --effective\n", r.Name)
+	fmt.Fprintf(out, "full rendered environment: pix env show %s --effective\n", sys.ShellQuote(r.Name))
 }
 
 func showAuthoredFiles(r ShowResult) string {
@@ -157,7 +158,7 @@ func showAuthoredFiles(r ShowResult) string {
 
 func showReviewState(r ShowResult) string {
 	if !r.Accepted {
-		return fmt.Sprintf("unaccepted (run: pix env review %s)", r.Name)
+		return fmt.Sprintf("unaccepted (run: pix env review %s)", sys.ShellQuote(r.Name))
 	}
 	return fmt.Sprintf("accepted (fingerprint %s)", shortFingerprint(r.Fingerprint))
 }

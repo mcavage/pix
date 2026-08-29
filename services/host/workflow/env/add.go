@@ -103,11 +103,13 @@ type CwdHasSbxenvError struct {
 }
 
 func (e *CwdHasSbxenvError) Error() string {
+	name := sys.ShellQuote(e.Name)
+	cwdArg := sys.ShellQuote(e.Cwd)
 	return fmt.Sprintf(
 		"pix: %s already has a %s; a zero-path `pix env add %s` is ambiguous between registering it and scaffolding an unrelated new environment. Pick one explicitly:\n"+
 			"     register this directory: pix env add %s %s\n"+
 			"     scaffold a new one:      cd elsewhere && pix env add %s",
-		e.Cwd, sbxenvFilename, e.Name, e.Name, e.Cwd, e.Name,
+		e.Cwd, sbxenvFilename, name, name, cwdArg, name,
 	)
 }
 
@@ -192,7 +194,7 @@ type ScaffoldCollisionError struct {
 func (e *ScaffoldCollisionError) Error() string {
 	return fmt.Sprintf(
 		"pix: %s already exists; refusing to overwrite it. Pick a different name, or register it as-is: pix env add <name> %s",
-		e.Root, e.Root,
+		e.Root, sys.ShellQuote(e.Root),
 	)
 }
 
@@ -355,7 +357,7 @@ func registerAdd(cfg *config.Config, name, path string, opts AddOptions) (*AddRe
 		}
 		return nil, fmt.Errorf(
 			"pix: environment %q was reviewed and accepted, but saving the registration failed: %w (re-run `pix env add %s %s` to retry)",
-			name, err, name, path,
+			name, err, sys.ShellQuote(name), sys.ShellQuote(path),
 		)
 	}
 
@@ -374,7 +376,7 @@ func printAddSuccess(out io.Writer, name, root string, scaffolded bool) {
 	if scaffolded {
 		verb = "scaffolded"
 	}
-	fmt.Fprintf(out, "pix: environment %q %s at %s.\n\npix env use %s\n", name, verb, root, name)
+	fmt.Fprintf(out, "pix: environment %q %s at %s.\n\npix env use %s\n", name, verb, root, sys.ShellQuote(name))
 }
 
 // scaffoldAdd implements `pix env add NAME` (no PATH). See Add's own doc
@@ -468,7 +470,7 @@ func scaffoldAdd(cfg *config.Config, name string, opts AddOptions) (*AddResult, 
 		}
 		return nil, fmt.Errorf(
 			"pix: environment %q was scaffolded and accepted, but saving the registration failed: %w (re-run `pix env add %s` to retry)",
-			name, err, name,
+			name, err, sys.ShellQuote(name),
 		)
 	}
 

@@ -9,6 +9,7 @@ import (
 	"pix/host/config"
 	"pix/host/envinfo"
 	"pix/host/hosttrust"
+	"pix/host/sys"
 )
 
 // Environment is Load's fully composed result: the ONE typed aggregate a
@@ -73,7 +74,7 @@ type MissingRequiredFileError struct {
 func (e *MissingRequiredFileError) Error() string {
 	return fmt.Sprintf(
 		"pix: environment %q has no required %s.\n     missing: %s\n     create it: pix env edit %s sbxenv",
-		e.Name, e.File, filepath.Join(e.Root, e.File), e.Name)
+		e.Name, e.File, filepath.Join(e.Root, e.File), sys.ShellQuote(e.Name))
 }
 
 // ResolveEnvironment composes the three checks every later stage of Load

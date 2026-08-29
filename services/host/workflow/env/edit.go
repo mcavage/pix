@@ -93,9 +93,10 @@ func targetFileName(target string) string {
 // or a TTY answer that named neither choice) and an explicit unrecognized
 // token render: the same two explicit, runnable command forms either way.
 func editTargetUsageError(name, headline string) error {
+	quoted := sys.ShellQuote(name)
 	return cli.UsageError{Err: fmt.Errorf(
 		"pix: %s\n     pix env edit %s pix       edit pix.toml\n     pix env edit %s sbxenv    edit .sbxenv.yaml",
-		headline, name, name)}
+		headline, quoted, quoted)}
 }
 
 // resolveTarget settles edit's second positional to exactly TargetPix or
@@ -109,13 +110,15 @@ func resolveTarget(name, target string, opts EditOptions) (string, error) {
 		return target, nil
 	case "":
 		if !opts.TTY {
+			quoted := sys.ShellQuote(name)
 			return "", editTargetUsageError(name, fmt.Sprintf(
-				"`pix env edit %s` needs a target file; no TTY to ask interactively.", name))
+				"`pix env edit %s` needs a target file; no TTY to ask interactively.", quoted))
 		}
 		return promptForTarget(name, opts)
 	default:
+		quoted, quotedTarget := sys.ShellQuote(name), sys.ShellQuote(target)
 		return "", editTargetUsageError(name, fmt.Sprintf(
-			"`pix env edit %s %s`: unknown target %q.", name, target, target))
+			"`pix env edit %s %s`: unknown target %q.", quoted, quotedTarget, target))
 	}
 }
 
@@ -142,7 +145,7 @@ func promptForTarget(name string, opts EditOptions) (string, error) {
 		return TargetSbxenv, nil
 	default:
 		return "", editTargetUsageError(name, fmt.Sprintf(
-			"`pix env edit %s`: %q is not pix or sbxenv.", name, answer))
+			"`pix env edit %s`: %q is not pix or sbxenv.", sys.ShellQuote(name), answer))
 	}
 }
 
@@ -293,7 +296,12 @@ func postEditVerdict(cfg *config.Config, name, target string) (verdict, message 
 	}
 	loaded, loadErr := Load(cfg, &ts.AcceptanceStore, name, nil, nil)
 	if loadErr != nil {
-		msg := fmt.Sprintf("%s\n     next: pix env edit %s %s\n", prefixedPix(loadErr.Error()), name, target)
+		// target is always resolveTarget's own TargetPix/TargetSbxenv literal
+		// here (Edit's caller passes through exactly what resolveTarget
+		// returned), never arbitrary caller input — shell-quoted anyway, for
+		// the same reason name is: a no-op on an already-safe token, and one
+		// less thing a future refactor could quietly turn unsafe.
+		msg := fmt.Sprintf("%s\n     next: pix env edit %s %s\n", prefixedPix(loadErr.Error()), sys.ShellQuote(name), sys.ShellQuote(target))
 		return "invalid", msg, nil
 	}
 
@@ -313,7 +321,7 @@ func postEditVerdict(cfg *config.Config, name, target string) (verdict, message 
 		// in the first place — and silently pointing the user at `pix env
 		// review NAME`, which would run and find nothing to gate, a no-op
 		// masquerading as an outstanding action.
-		msg := fmt.Sprintf("pix: environment %q is valid; no host-execution footprint to review.\n     next: pix env use %s\n", name, name)
+		msg := fmt.Sprintf("pix: environment %q is valid; no host-execution footprint to review.\n     next: pix env use %s\n", name, sys.ShellQuote(name))
 		return "ok", msg, nil
 	}
 
@@ -323,9 +331,9 @@ func postEditVerdict(cfg *config.Config, name, target string) (verdict, message 
 	}
 
 	if rec, ok := ts.Get(loaded.Subject); ok && rec.Fingerprint == fp {
-		msg := fmt.Sprintf("pix: environment %q is valid; host-execution footprint unchanged.\n     next: pix env use %s\n", name, name)
+		msg := fmt.Sprintf("pix: environment %q is valid; host-execution footprint unchanged.\n     next: pix env use %s\n", name, sys.ShellQuote(name))
 		return "ok", msg, nil
 	}
-	msg := fmt.Sprintf("pix: environment %q is valid, but its host-execution footprint changed (or was never reviewed).\n     next: pix env review %s\n", name, name)
+	msg := fmt.Sprintf("pix: environment %q is valid, but its host-execution footprint changed (or was never reviewed).\n     next: pix env review %s\n", name, sys.ShellQuote(name))
 	return "review", msg, nil
 }

@@ -17,6 +17,7 @@ import (
 
 	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/sys"
 )
 
 // UseNotReviewedError is Use's refusal (AC-14) when NAME's host-exec
@@ -42,14 +43,15 @@ type UseNotReviewedError struct {
 // [y/N]" reasoning applies here too: a default-selection command is not
 // the place to ask someone to accept a host-execution bill).
 func (e *UseNotReviewedError) Error() string {
+	name := sys.ShellQuote(e.Name)
 	if e.Changed {
 		return fmt.Sprintf(
 			"pix: environment %q changed what it runs on your host.\n     review it: pix env review %s",
-			e.Name, e.Name)
+			e.Name, name)
 	}
 	return fmt.Sprintf(
 		"pix: environment %q has not been reviewed.\n     review it: pix env review %s",
-		e.Name, e.Name)
+		e.Name, name)
 }
 
 // Use resolves name to a trustworthy, freshly loaded *Environment (Load —

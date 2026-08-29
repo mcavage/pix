@@ -29,6 +29,7 @@ import (
 	"strings"
 
 	"pix/host/cli"
+	"pix/host/sys"
 	"pix/host/workflow/env"
 )
 
@@ -174,9 +175,17 @@ func (c *envShowCmd) Run(d *cli.Deps) error {
 		// this used to) so its self-prefixed "pix: " is never doubled by
 		// dispatch's own generic `"pix: %v"` printer — the same reason every
 		// other typed refusal in this package goes through envRun.
-		name := c.Name
-		if name == "" {
-			name = "<name>"
+		// An empty NAME is a genuinely omitted positional, never a typed
+		// value to echo back — `<name>` is the placeholder the caller fills
+		// in, the same convention config's UnknownEnvironmentError already
+		// establishes for a rejected name (never echo a typo back as the
+		// "fix"). A NON-empty NAME is exactly what the caller typed and IS
+		// the correct retry argument, so it is shell-quoted (sys.ShellQuote)
+		// rather than replaced — this refusal is about the conflicting
+		// FLAGS, never about NAME's own validity.
+		name := "<name>"
+		if c.Name != "" {
+			name = sys.ShellQuote(c.Name)
 		}
 		return envRun(d, cli.Usagef(
 			"pix: env show: --path, --json and --effective are mutually exclusive; pick exactly one.\n"+

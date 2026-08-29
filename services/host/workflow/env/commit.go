@@ -35,6 +35,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/hosttrust"
+	"pix/host/sys"
 )
 
 // commitEnvRegistryMutation runs apply against a FRESH under-lock reload of
@@ -90,17 +91,19 @@ type ConcurrentRegistrationError struct {
 }
 
 func (e *ConcurrentRegistrationError) Error() string {
+	name := sys.ShellQuote(e.Name)
+	attempted := sys.ShellQuote(e.Attempted)
 	if e.Existing == "" {
 		return fmt.Sprintf(
 			"pix: environment %q was unregistered by another process while this add was running.\n"+
 			"     yours: %s\n"+
 			"     re-run to register it deliberately: pix env add %s %s",
-			e.Name, e.Attempted, e.Name, e.Attempted)
+			e.Name, e.Attempted, name, attempted)
 	}
 	return fmt.Sprintf(
 		"pix: environment %q now points at a different root: another process registered it while this add was running.\n"+
 			"     theirs: %s\n"+
 			"     yours:  %s\n"+
 			"     re-run to repoint it deliberately: pix env add %s %s",
-		e.Name, e.Existing, e.Attempted, e.Name, e.Attempted)
+		e.Name, e.Existing, e.Attempted, name, attempted)
 }

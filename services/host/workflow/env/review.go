@@ -43,6 +43,7 @@ import (
 	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/hosttrust"
+	"pix/host/sys"
 )
 
 // ── launcher-owned trust state ──────────────────────────────────────────
@@ -267,7 +268,7 @@ func renderBill(out io.Writer, name string, b BillOfMaterials, verbose bool) {
 		renderVerboseDetails(out, b)
 		fmt.Fprintln(out)
 	} else {
-		fmt.Fprintf(out, "  full argv and content digests: pix env review %s --verbose\n\n", name)
+		fmt.Fprintf(out, "  full argv and content digests: pix env review %s --verbose\n\n", sys.ShellQuote(name))
 	}
 	fmt.Fprint(out, "Accept this host-execution footprint? [y/N]:")
 }
@@ -295,10 +296,10 @@ func renderBill(out io.Writer, name string, b BillOfMaterials, verbose bool) {
 // unknown-name refusal.
 func gate(in io.Reader, out io.Writer, tty, yes bool, name, retry, nonTTYRetry string, b BillOfMaterials, verbose bool) error {
 	if retry == "" {
-		retry = fmt.Sprintf("pix env review %s", name)
+		retry = fmt.Sprintf("pix env review %s", sys.ShellQuote(name))
 	}
 	if nonTTYRetry == "" {
-		nonTTYRetry = fmt.Sprintf("pix env review %s --yes", name)
+		nonTTYRetry = fmt.Sprintf("pix env review %s --yes", sys.ShellQuote(name))
 	}
 	renderBill(out, name, b, verbose)
 	if yes {
@@ -347,7 +348,7 @@ func (e *ReviewChangedDuringPromptError) Error() string {
 		"pix: environment %q changed its host-execution footprint while the review prompt was open.\n"+
 			"     recorded: nothing; the bill you answered is not the bill on disk now.\n"+
 			"     read the current bill: pix env review %s",
-		e.Name, e.Name)
+		e.Name, sys.ShellQuote(e.Name))
 }
 
 // ── Review: the composed entry point ─────────────────────────────────────

@@ -18,6 +18,7 @@ import (
 
 	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/sys"
 )
 
 // HolderProbe is Forget's injectable, fail-closed live-holder check: given
@@ -69,7 +70,7 @@ func (e *ForgetLiveHolderError) Error() string {
 	if e.Unknown {
 		return fmt.Sprintf(
 			"pix: could not confirm no live sandbox still references environment %q; forget refuses without a fresh, positive probe.\n     probe: inconclusive\n     retry: pix env forget %s",
-			e.Name, e.Name)
+			e.Name, sys.ShellQuote(e.Name))
 	}
 	return fmt.Sprintf(
 		"pix: environment %q is still held by a live sandbox; forget refuses to unregister it while one is running.\n     holder: a live sandbox\n     remove the sandbox first: pix rm <sandbox>",
