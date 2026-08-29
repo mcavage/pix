@@ -20,11 +20,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"maps"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -38,8 +40,11 @@ import (
 
 	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/envinfo"
+	"pix/host/hostenv"
 	"pix/host/packinfo"
 	"pix/host/sys"
+	"pix/host/workflow/launch"
 	"pix/host/workflow/pack"
 )
 
@@ -255,6 +260,13 @@ func runServe(argv []string) {
 	// could answer at all. Memory's readiness must not depend on any pack's.
 	reconcilePacks(cfg, sup, selfPath)
 
+	// E2.7 (docs/design/environments.md §10.4): every environment-declared
+	// [[host.services]] entry the machine default or a positively live
+	// holder wants, reconciled into the SAME supervision tree, independent
+	// of pack_units.go (architect correction C8 — that file is deleted
+	// outright in E5.2, and this mechanism must survive that untouched).
+	reconcileEnvironmentServices(cfg, sup, selfPath)
+
 	// Block until a signal or a service failure. Both paths run the SAME fixed
 	// shutdown order: drain every front door first, then the supervised
 	// backend. Neither path calls os.Exit until that full sequence has actually
@@ -383,6 +395,168 @@ func reconcilePacks(cfg *config.Config, sup *supervisor, selfPath string) {
 	if len(units) > 0 {
 		log.Printf("serve: supervising %d pack service(s): %s", len(units), strings.Join(slices.Sorted(maps.Keys(units)), ", "))
 	}
+}
+
+// reconcileEnvironmentServices is E2.7's desired-set union
+// (docs/design/environments.md §10.4), integrated into serve's real
+// supervision tree — not a dead helper nobody calls. It snapshots every
+// registered environment's liveness and declared [[host.services]],
+// computes launch.DesiredHostServices (the machine default's services
+// UNION every positively live holder's, unknown-state fail-closed,
+// synchronous unit-name/port collision refusal), and hands the result to
+// the SAME reconcileDaemons a pack daemon goes through — ADD-only, so this
+// call can never remove a unit reconcilePacks (above) already added, and
+// vice versa. A collision refusal or a snapshot failure only logs: one
+// misconfigured environment must never stop serve, memory, or a pack's own
+// services.
+//
+// This is the ONLY function in this file (plus DesiredHostServices/
+// checkHostServiceCollisions in workflow/launch/hostservices_env.go) that
+// computes this union; pack_units.go carries none of it and imports
+// nothing from workflow/launch (architect correction C8).
+func reconcileEnvironmentServices(cfg *config.Config, sup *supervisor, selfPath string) {
+	snapshots, serr := environmentServiceSnapshots(cfg, hostenv.Env{System: sys.Real{}})
+	if serr != nil {
+		log.Printf("serve: environment services: %v", serr)
+	}
+	wanted, derr := launch.DesiredHostServices(cfg.Environment, snapshots)
+	if derr != nil {
+		log.Printf("serve: environment host services: %v", derr)
+		return
+	}
+	if len(wanted) == 0 {
+		return
+	}
+	views, cerr := environmentHostServiceViews(wanted)
+	if cerr != nil {
+		log.Printf("serve: environment host services: %v", cerr)
+	}
+	if len(views) == 0 {
+		return
+	}
+	if derr := sup.reconcileDaemons(selfPath, views); derr != nil {
+		log.Printf("serve: environment host services: %v", derr)
+	}
+}
+
+// environmentServiceSnapshots reads every registered environment's optional
+// pix.toml sidecar for its declared [[host.services]] (a MISSING sidecar
+// declares none, never an error — docs/design/environments.md §5.2) and
+// probes its current liveness via launch.EnvironmentHolders, the SAME
+// fail-closed holder answer `env forget`/`env show` already use: an
+// untrusted `sbx ls` marks the environment Unknown rather than guessing
+// Live=false. One environment's broken sidecar is reported and skipped,
+// never allowed to blank out every other environment's snapshot.
+func environmentServiceSnapshots(cfg *config.Config, env hostenv.Env) ([]launch.EnvironmentServiceSnapshot, error) {
+	if len(cfg.Environments) == 0 {
+		return nil, nil
+	}
+	names := slices.Sorted(maps.Keys(cfg.Environments))
+	var errs []error
+	snapshots := make([]launch.EnvironmentServiceSnapshot, 0, len(names))
+	for _, name := range names {
+		root := cfg.Environments[name]
+		services, perr := hostServicesForRoot(root)
+		if perr != nil {
+			errs = append(errs, fmt.Errorf("environment %s: %w", name, perr))
+			continue
+		}
+		snap := launch.EnvironmentServiceSnapshot{Name: name, Services: services}
+		holders, herr := launch.EnvironmentHolders(env, root)
+		if herr != nil {
+			snap.Unknown = true
+		} else {
+			snap.Live = len(holders) > 0
+		}
+		snapshots = append(snapshots, snap)
+	}
+	if len(errs) > 0 {
+		return snapshots, fmt.Errorf("%d environment(s) unreadable: %w", len(errs), errors.Join(errs...))
+	}
+	return snapshots, nil
+}
+
+// hostServicesForRoot reads root's optional pix.toml sidecar for its
+// [[host.services]] table. A missing sidecar declares none; a present but
+// unparsable one is the only error case.
+func hostServicesForRoot(root string) ([]envinfo.HostService, error) {
+	sidecarPath := filepath.Join(root, "pix.toml")
+	if _, statErr := os.Stat(sidecarPath); statErr != nil {
+		if os.IsNotExist(statErr) {
+			return nil, nil
+		}
+		return nil, statErr
+	}
+	sc, perr := envinfo.ParseSidecar(sidecarPath)
+	if perr != nil {
+		return nil, perr
+	}
+	return sc.Host.Services, nil
+}
+
+// environmentHostServiceViews adapts each desired launch.HostServiceWant
+// into the pack.AcceptedService shape reconcileDaemons already consumes—
+// the ONE place that conversion happens, so it is never duplicated in
+// pack_units.go. An environment-declared service carries no SHA pin (no
+// field for one exists on envinfo.HostService), so it always takes
+// reconcileDaemons' bare-Command branch, the same one a PATH-resolved pack
+// daemon takes. A service whose Probe cannot be read as a supervisable
+// health check (see environmentServiceHealth) is skipped and reported,
+// never silently started with no health check at all.
+func environmentHostServiceViews(wanted []launch.HostServiceWant) ([]pack.AcceptedService, error) {
+	var errs []error
+	views := make([]pack.AcceptedService, 0, len(wanted))
+	for _, w := range wanted {
+		health, ok := environmentServiceHealth(w.Service.Probe)
+		if !ok {
+			errs = append(errs, fmt.Errorf("environment %s service %s: probe %q is not a supervisable health check (\"tcp\" or an http://127.0.0.1 URL)", w.Environment, w.Service.Name, w.Service.Probe))
+			continue
+		}
+		views = append(views, pack.AcceptedService{
+			Name:       w.Service.Name,
+			Activation: "always",
+			Runtime:    packinfo.ServiceRuntimeDaemon,
+			Command:    w.Service.Command,
+			Argv:       append([]string(nil), w.Service.Args...),
+			Port:       int(w.Service.Port),
+			Health:     health,
+		})
+	}
+	return views, errors.Join(errs...)
+}
+
+// environmentServiceHealth adapts one HostService.Probe into
+// supervise.DaemonSpec's Health shape: "tcp" passes through unchanged; an
+// http(s) URL on loopback (127.0.0.1 or localhost, matching Listen's own
+// default) is reduced to its path (+ query), because the supervisor probes
+// its OWN daemon's address and Health is only ever the path appended to
+// it. A probe on any other host, an unparsable URL, or an empty string is
+// refused: a daemon with no supervisable health check is refused at load
+// by supervise itself, and a probe pointed at a THIRD-PARTY host is not a
+// health check this supervisor can honestly perform.
+func environmentServiceHealth(probe string) (string, bool) {
+	probe = strings.TrimSpace(probe)
+	if probe == "" {
+		return "", false
+	}
+	if probe == "tcp" {
+		return "tcp", true
+	}
+	u, err := url.Parse(probe)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return "", false
+	}
+	if host := u.Hostname(); host != "" && host != "127.0.0.1" && host != "localhost" {
+		return "", false
+	}
+	path := u.EscapedPath()
+	if path == "" {
+		path = "/"
+	}
+	if u.RawQuery != "" {
+		path += "?" + u.RawQuery
+	}
+	return path, true
 }
 
 // performShutdown is the ONE shutdown sequence every exit path — signal,
