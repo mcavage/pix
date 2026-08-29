@@ -28,7 +28,7 @@ dependency edges, so nobody can quietly drop the `needs` and keep the file.
 ## AC-REL-01 — generated THIRD_PARTY_NOTICES + fail-closed license gate
 
 - `scripts/legal/dependencies.json` — hand-maintained ledger (same convention
-  as `scripts/arch-metrics/budgets.json` / `services/host/routing/scorecard.json`):
+  as `scripts/arch-metrics/budgets.json` / `services/host/inference/catalog/models.json`):
   every Go module actually reachable from `services/host`'s build graph (**34**,
   derived via `go list -deps` across the release GOOS/GOARCH set, see
   `scripts/legal/list-go-modules.sh`), every

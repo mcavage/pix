@@ -142,7 +142,7 @@ func TestConfigSaveRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	// One scalar key and one list key, so both write paths are covered.
-	if _, err := provision.ApplyConfigChange(cfg, false, "run_intent", []string{"strategy"}); err != nil {
+	if _, err := provision.ApplyConfigChange(cfg, false, "ollama_bridge_model", []string{"llama3"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := provision.ApplyConfigChange(cfg, false, "mcp", []string{testMCPServer}); err != nil {
@@ -155,7 +155,7 @@ func TestConfigSaveRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.RunIntent != "strategy" || !slices.Contains(got.MCP, testMCPServer) {
+	if got.OllamaBridgeModel != "llama3" || !slices.Contains(got.MCP, testMCPServer) {
 		t.Errorf("round-trip lost data: %+v", got)
 	}
 }

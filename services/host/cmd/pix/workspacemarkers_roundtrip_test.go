@@ -40,13 +40,14 @@
 //	                                   prove that stays true even after every
 //	                                   OTHER marker above has been written into
 //	                                   the same workspace
-//	routing, artifacts, custom-memory.db — NOT workspace ".pix" markers at
-//	                                   all: routing.Dir()/workspace.TaskArtifactRoot()
-//	                                   resolve under the HOST's
-//	                                   XDG_DATA_HOME/pix tree, never under
-//	                                   any workspace's .pix; TestRoutingAnd
-//	                                   ArtifactsAreHostDataRootNotWorkspaceMarker
-//	                                   below pins that boundary so a future edit
+//	model catalog, artifacts, custom-memory.db — NOT workspace ".pix" markers
+//	                                   at all: inference.CatalogPath()/
+//	                                   workspace.TaskArtifactRoot() resolve
+//	                                   under the HOST's XDG_DATA_HOME/pix tree,
+//	                                   never under any workspace's .pix;
+//	                                   TestCatalogAndArtifactsAreHostDataRoot
+//	                                   NotWorkspaceMarkers below pins that
+//	                                   boundary so a future edit
 //	                                   can't accidentally nest them under a
 //	                                   workspace without this test noticing.
 package main
@@ -63,7 +64,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/hostenv"
-	"pix/host/routing"
+	"pix/host/inference"
 	"pix/host/sys"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/provision"
@@ -252,20 +253,20 @@ func TestMarkerRoundTrip_HostStateNeverBecomesAWorkspaceFile(t *testing.T) {
 	}
 }
 
-// ── routing / artifacts / custom-memory.db: host data-root, not a workspace
+// ── model catalog / artifacts / custom-memory.db: host data-root, not a workspace
 // marker ───────────────────────────────────────────────────────────────────
 
-func TestRoutingAndArtifactsAreHostDataRootNotWorkspaceMarkers(t *testing.T) {
+func TestCatalogAndArtifactsAreHostDataRootNotWorkspaceMarkers(t *testing.T) {
 	ws := t.TempDir()
 	dataHome := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", dataHome)
-	t.Setenv("ROUTING_DIR", "")
+	t.Setenv("PIX_MODEL_CATALOG", "")
 
-	routingDir := routing.Dir()
+	catalogDir := filepath.Dir(inference.CatalogPath())
 	artifactsDir := workspace.TaskArtifactRoot()
 
 	for _, p := range []struct{ name, dir string }{
-		{"routing", routingDir},
+		{"model catalog", catalogDir},
 		{"artifacts", artifactsDir},
 	} {
 		if !strings.HasPrefix(p.dir, dataHome) {

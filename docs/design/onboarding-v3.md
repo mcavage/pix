@@ -1,11 +1,9 @@
 # Onboarding v3: inference-first progressive setup
 
 Status: IMPLEMENTED. This document is the delivery contract; readiness claims
-must follow live probes, not configuration presence. See also
-`docs/design/models-cli.md`, which renamed the launcher verb this doc calls
-the "route compiler" to `pix models` (`make routing` compiles it) and adds
-the `pix models add <provider>` later-path this doc's setup flow currently
-lacks.
+must follow live probes, not configuration presence. HISTORICAL NOTE: where
+this doc says "route compiler", read nothing — Wave F deleted the router
+outright, and the surviving verb is `pix models add <provider>`.
 
 ## Goal
 

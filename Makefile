@@ -71,7 +71,7 @@ MEMORY_EMBED_MODEL   ?= $(shell "$(PIX_BIN)" config get memory_embed_model 2>/de
 # resident), so it can be bigger than the watcher. `pix run` reads this from
 # ~/.config/pix/config.toml (ollama_bridge_model); `make run` writes it into
 # the workspace so dev runs pick it up the same way. Keep in sync with the router
-# registry id in services/host/routing/defaults/models.json.
+# catalog id in services/host/inference/catalog/models.json.
 OLLAMA_BRIDGE_MODEL ?= $(shell "$(PIX_BIN)" config get ollama_bridge_model 2>/dev/null)
 
 # SERVICES: which host services `make serve` runs (config.toml `services`,
@@ -97,7 +97,7 @@ SERVE_ENV ?=
 # at parse time so every target can rely on it.
 $(shell mkdir -p out)
 
-.PHONY: help build load publish validate inspect run run-published run-no-mcp serve doctor memory-serve mcp-register mcp-auth pull-models secrets pack install clean launcher models routing require-launcher gate
+.PHONY: help build load publish validate inspect run run-published run-no-mcp serve doctor memory-serve mcp-register mcp-auth pull-models secrets pack install clean launcher require-launcher gate
 
 # Bare `make` builds the launcher binaries (the one thing require-launcher
 # demands as a prerequisite for run/serve/doctor), so a dev iterating on the
@@ -126,7 +126,7 @@ help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 	@echo ""
-	@echo "Runtime, routing, agent, and parallel-task commands live in the launcher,"
+	@echo "Runtime, agent, and parallel-task commands live in the launcher,"
 	@echo "not make:  pix help --all  (e.g. pix models add,"
 	@echo "pix agent ls, pix task new)."
 
@@ -267,30 +267,6 @@ serve: require-launcher ## Start the host services named in SERVICES (config.tom
 	@echo "Host services [$(SERVICES)] — sandboxes reach these on host.docker.internal. Ctrl-C stops all."
 	@(cd services/host && go build -ldflags "-X main.version=$(LAUNCHER_VERSION)" -o $(CURDIR)/out/pix-host .) || { echo "go build failed (pix-host)"; exit 1; }
 	@exec env $(SERVE_ENV) MEMORY_WATCHER_MODEL=$(MEMORY_WATCHER_MODEL) MEMORY_EMBED_MODEL=$(MEMORY_EMBED_MODEL) out/pix-host serve $(SERVICES)
-
-# models is MAINTAINER tooling for the model router, run from the repo (it
-# reads services/host/routing/). It is NOT part of the consumer surface: the
-# repo-built pix-host binary underneath is still called `route` there
-# (docs/design/models-cli.md: only the launcher-facing noun renamed, `pix-host
-# route` does not move) — this target is named to match the launcher's `pix
-# models` for muscle memory. See the `model-refresh` skill +
-# docs/design/routing.md. Scores are hand-maintained in
-# services/host/routing/defaults/scorecard.json — edit it, then `make models
-# ARGS=compile` (or, for the baked default map, `make routing`).
-# Bare `make models` defaults to the safe, read-only `show` (the scorecard /
-# resolved table) so it never errors without ARGS.
-models: ## Model router (maintainer): make models ARGS="show" | "models" | "compile" | "pick <intent>"
-	@(cd services/host && go build -ldflags "-X main.version=$(LAUNCHER_VERSION)" -o $(CURDIR)/out/pix-host .) && ./out/pix-host route $(if $(strip $(ARGS)),$(ARGS),show)
-
-# routing: bake the image's DEFAULT intent->model map into ./routing.json. This
-# is the only reason anyone compiles routing by hand, and it is a maintainer
-# action, not a user one: a real host recompiles its own map from its own
-# bindings on every `pix run`. `pix models route` used to exist for this and was
-# deleted from the launcher, because a user could only ever run it to no effect.
-# Run this after editing services/host/routing/defaults/*.json, then `make load`.
-routing: ## Recompile the BAKED default routing.json (after editing routing/defaults/*.json)
-	@$(MAKE) models ARGS="compile --catalog --out routing.json"
-	@echo "routing.json rebuilt. Bake it into the image with: make load"
 
 pull-models: require-launcher ## Pull the local Ollama models the stack uses (memory watcher + embed, and the bridge/router local model)
 	@command -v ollama >/dev/null 2>&1 || { echo "ollama not installed — see https://ollama.com (optional: enables semantic recall + fact capture + the local model)"; exit 1; }

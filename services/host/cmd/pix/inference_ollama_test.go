@@ -638,7 +638,7 @@ func TestUnverifiedOllamaBindingIsNotCallable(t *testing.T) {
 	if ids, err := inference.CallableRuntimeModels(cfg); err != nil || len(ids) != 0 {
 		t.Fatalf("callable runtime models = %v (%v)", ids, err)
 	}
-	_, manifest, err := inference.CompileInferenceRuntime(cfg, time.Unix(1, 0), inference.RosterInput{})
+	manifest, err := inference.RuntimeManifest(cfg, inference.RosterInput{})
 	if err != nil {
 		t.Fatal(err)
 	}

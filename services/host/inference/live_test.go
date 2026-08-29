@@ -2,10 +2,8 @@ package inference
 
 import (
 	"testing"
-	"time"
 
 	"pix/host/config"
-	"pix/host/routing"
 )
 
 // TestCallableRuntimeModelsIncludesUnknownOllamaBinding pins BLOCKER 1: an
@@ -43,9 +41,9 @@ func TestCallableRuntimeModelsIncludesUnknownOllamaBinding(t *testing.T) {
 	}
 
 	// The manifest itself must carry the entry too — the bridge reads THIS,
-	// not just the id list — with no invented price or context window (both
-	// zero/omitted is correct: there is no catalog row to draw them from).
-	reg, err := routing.LoadRegistry()
+	// not just the id list — with no invented context window (zero/omitted is
+	// correct: there is no catalog row to draw one from).
+	reg, err := LoadCatalog()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,19 +60,15 @@ func TestCallableRuntimeModelsIncludesUnknownOllamaBinding(t *testing.T) {
 	if found.CatalogModel != "" {
 		t.Fatalf("CatalogModel = %q, want empty: there is no catalog row, and a synthesized one must never look like there is", found.CatalogModel)
 	}
-	if found.InputCost != 0 || found.OutputCost != 0 {
-		t.Fatalf("a model with no catalog row must never be priced: %+v", found)
-	}
 	if found.ContextWindow != 0 || found.MaxTokens != 0 {
 		t.Fatalf("a model with no catalog row must never have an invented context window/max tokens: %+v", found)
 	}
 }
 
-// TestCallableRuntimeModelsUnknownBindingNeverEntersCatalogRouting pins the
-// other half of the fix: making the tag callable by name must never let it
-// leak into the routing registry (an unscored, uncataloged model must never
-// win an intent — see routing/resolve_test.go's overlord-fallback precedent).
-func TestCallableRuntimeModelsUnknownBindingNeverEntersCatalogRouting(t *testing.T) {
+// TestCallableRuntimeModelsUnknownBindingNeverEntersCatalog pins the other
+// half of the fix: making the tag callable by name must never add it to the
+// shipped catalog — a bound id and a catalogued model stay different things.
+func TestCallableRuntimeModelsUnknownBindingNeverEntersCatalog(t *testing.T) {
 	cfg := &config.Config{Inference: config.InferenceConfig{
 		Backends: map[string]config.InferenceBackend{
 			"ollama": {Driver: "ollama", BaseURL: "http://127.0.0.1:11434/v1", Auth: "none"},
@@ -83,14 +77,14 @@ func TestCallableRuntimeModelsUnknownBindingNeverEntersCatalogRouting(t *testing
 			{Model: "ollama/llama5.1:70b-instruct", Backend: "ollama", Upstream: "llama5.1:70b-instruct", Available: true, Verified: true},
 		},
 	}}
-	reg, err := routing.LoadRegistry()
+	reg, err := LoadCatalog()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := reg.Get("ollama/llama5.1:70b-instruct"); ok {
-		t.Fatal("the base catalog must never contain the unknown tag before compile")
+		t.Fatal("the base catalog must never contain the unknown tag")
 	}
-	_, manifest, err := CompileInferenceRuntime(cfg, time.Now(), RosterInput{})
+	manifest, err := RuntimeManifest(cfg, RosterInput{})
 	if err != nil {
 		t.Fatal(err)
 	}

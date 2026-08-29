@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"pix/host/hostenv"
-	"pix/host/routing"
 )
 
 // hardware.go owns ONE fact — this machine's physical memory — for one purpose:
@@ -125,27 +124,84 @@ func parseMemTotalKB(body string) (float64, bool) {
 // the thrash mid-session.
 const LocalFloorTotalGB = 24
 
+// LocalOllamaRung is the hand-maintained, setup-only local-hardware fact for
+// one Ollama rung pix can offer to pull: RAM, download size, and declared
+// context only. It carries no price, no accuracy, no score, and no
+// routing/intent binding -- those lived on the (deleted) router's scored
+// catalog and never belong here. hardware_shape_test.go pins that boundary
+// by reflection so a future edit cannot quietly widen this struct back into
+// a routing candidate.
+type LocalOllamaRung struct {
+	ID            string  // fully qualified "ollama/<tag>"
+	Label         string  // human label
+	ContextWindow int     // declared RAM-budgeted context, also the num_ctx setup/the bridge send
+	MinRAMGB      float64 // ceil(DownloadGB*1.15 + ContextWindow*KVGBPerTok + 1)
+	DownloadGB    float64 // on-disk weight size
+	KVGBPerTok    float64 // fp16 KV-cache cost per token MinRAMGB was priced with
+}
+
+// FitsMemory reports whether m fits a USABLE-memory budget in GB. A rung with
+// no declared MinRAMGB never fits: an undeclared requirement is not a small one.
+func (m LocalOllamaRung) FitsMemory(usableGB float64) bool {
+	if m.MinRAMGB <= 0 {
+		return false
+	}
+	return m.MinRAMGB <= usableGB
+}
+
+// localOllamaRungs is the shipped local ladder, LARGEST FIRST (by MinRAMGB, id
+// as the deterministic tiebreak): setup offers the largest rung that fits, and
+// the setup probe walks the same order. Four rows, hand-maintained here rather
+// than sourced from any scored catalog -- see docs/design/ollama-inference.md
+// for the RAM formula each row was priced with.
+var localOllamaRungs = []LocalOllamaRung{
+	{ID: "ollama/qwen3.5:35b", Label: "Qwen 3.5 35B (local)", ContextWindow: 32768, MinRAMGB: 33, DownloadGB: 24.0, KVGBPerTok: 0.0001220703125},
+	{ID: "ollama/qwen3.5:27b", Label: "Qwen 3.5 27B (local)", ContextWindow: 32768, MinRAMGB: 24, DownloadGB: 17.0, KVGBPerTok: 9.1552734375e-05},
+	{ID: "ollama/qwen3.5:9b", Label: "Qwen 3.5 9B (local)", ContextWindow: 16384, MinRAMGB: 10, DownloadGB: 6.6, KVGBPerTok: 4.57763671875e-05},
+	{ID: "ollama/qwen3.5:4b", Label: "Qwen 3.5 4B (local)", ContextWindow: 8192, MinRAMGB: 6, DownloadGB: 3.4, KVGBPerTok: 3.0517578125e-05},
+}
+
+// LocalOllamaRungs returns the shipped local ladder, largest MinRAMGB first. A
+// fresh copy every call: callers are free to mutate their own slice.
+func LocalOllamaRungs() []LocalOllamaRung {
+	out := make([]LocalOllamaRung, len(localOllamaRungs))
+	copy(out, localOllamaRungs)
+	return out
+}
+
+// LocalOllamaRungFor returns the rung for a fully qualified local model id
+// ("ollama/<tag>") and whether one is declared. It is how a caller holding a
+// catalog row gets that row's RAM/download/KV facts: those live HERE, once
+// (E4.3), and never on the catalog row itself.
+func LocalOllamaRungFor(id string) (LocalOllamaRung, bool) {
+	for _, m := range localOllamaRungs {
+		if m.ID == id {
+			return m, true
+		}
+	}
+	return LocalOllamaRung{}, false
+}
+
 // ChooseLocalRung picks the largest local rung whose min_ram_gb fits the probed
 // USABLE budget, on a machine big enough to be offered one at all. An OFFER
 // filter, never a verdict and never a download. A machine we could not size
 // gets NOTHING: unmeasured is likelier small than large, so the floor rung
 // would land on exactly the machines the floor protects.
-func ChooseLocalRung(reg *routing.Registry, mem HostMemory) (routing.Model, bool) {
-	rungs := routing.LocalRungs(reg) // largest first
-	if len(rungs) == 0 || !mem.OK || mem.TotalGB < LocalFloorTotalGB {
-		return routing.Model{}, false
+func ChooseLocalRung(mem HostMemory) (LocalOllamaRung, bool) {
+	if !mem.OK || mem.TotalGB < LocalFloorTotalGB {
+		return LocalOllamaRung{}, false
 	}
-	for _, m := range rungs {
+	for _, m := range localOllamaRungs {
 		if m.FitsMemory(mem.UsableGB) {
 			return m, true
 		}
 	}
-	return routing.Model{}, false
+	return LocalOllamaRung{}, false
 }
 
 // LocalRungOfferLine is the one sentence setup prints about the machine it just
 // measured: what is offered, and why nothing is when nothing fits.
-func LocalRungOfferLine(mem HostMemory, rung routing.Model, ok bool) string {
+func LocalRungOfferLine(mem HostMemory, rung LocalOllamaRung, ok bool) string {
 	switch {
 	case !mem.OK:
 		source := mem.Source

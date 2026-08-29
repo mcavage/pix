@@ -23,9 +23,6 @@ const (
 	// DefaultOllamaBridgeModel is the local model the sandbox's ollama-bridge
 	// exposes to pi (the interactive Alt+P cycle) AND the router's local option.
 	DefaultOllamaBridgeModel = "qwen3.5:9b"
-	// DefaultRunIntent is the routing intent the top-level interactive session
-	// (the "overlord") resolves to when the user pins neither --model nor --intent.
-	DefaultRunIntent = "overlord"
 	// BuiltinImpl is the default plugin impl: compiled into the host binary
 	// rather than run as an external sub-process.
 	BuiltinImpl = "builtin"
@@ -101,10 +98,6 @@ type Config struct {
 	// MemoryCapture: explicit (default) or experimental-auto. See
 	// config.MemoryCaptureModes; a garbled value resolves to explicit.
 	MemoryCapture string `toml:"memory_capture,omitempty"`
-
-	// RunIntent is the routing intent for the top-level interactive session (the
-	// "overlord"), resolved through the router when neither --model nor --intent.
-	RunIntent string `toml:"run_intent,omitempty"`
 
 	// Environment is the machine default environment NAME (Story 1, native
 	// sandbox environments — docs/design/environments.md §5.3), resolved
@@ -471,9 +464,6 @@ func (c *Config) applyDefaults() {
 	if c.OllamaBridgeModel == "" {
 		c.OllamaBridgeModel = DefaultOllamaBridgeModel
 	}
-	if c.RunIntent == "" {
-		c.RunIntent = DefaultRunIntent
-	}
 	// Fail closed: absent or garbled both resolve to the default, never to the
 	// opt-in mode nobody actually chose.
 	if !ValidMemoryCapture(c.MemoryCapture) {
@@ -672,9 +662,6 @@ func (c *Config) sparseForSave() *Config {
 	}
 	if sp.MemoryCapture == DefaultMemoryCapture {
 		sp.MemoryCapture = ""
-	}
-	if sp.RunIntent == DefaultRunIntent {
-		sp.RunIntent = ""
 	}
 	// applyDefaults allocates an empty Plugins map (and fills Impl=builtin) so
 	// readers never nil-check; don't petrify that resolution either.

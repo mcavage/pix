@@ -483,7 +483,7 @@ func TestDataDirDefaultHome(t *testing.T) {
 func TestUnknownKeysReportsATypo(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	// One real key (so the file is otherwise valid), one typo, one nested typo.
-	const body = "run_intent = \"code\"\nmemory_watchr_model = \"x\"\n\n[inference]\nbackendz = 1\n"
+	const body = "ollama_bridge_model = \"code\"\nmemory_watchr_model = \"x\"\n\n[inference]\nbackendz = 1\n"
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -491,8 +491,8 @@ func TestUnknownKeysReportsATypo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFrom: %v", err) // an unknown key must never fail the load
 	}
-	if c.RunIntent != "code" {
-		t.Errorf("RunIntent = %q, want the recognized key to still apply", c.RunIntent)
+	if c.OllamaBridgeModel != "code" {
+		t.Errorf("OllamaBridgeModel = %q, want the recognized key to still apply", c.OllamaBridgeModel)
 	}
 	for _, want := range []string{"memory_watchr_model", "inference.backendz"} {
 		if !slices.Contains(c.UnknownKeys(), want) {
@@ -505,7 +505,7 @@ func TestUnknownKeysReportsATypo(t *testing.T) {
 // that is entirely understood, or it becomes noise everyone learns to ignore.
 func TestUnknownKeysEmptyForACleanConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
-	if err := os.WriteFile(path, []byte("run_intent = \"code\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("ollama_bridge_model = \"code\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	c, err := LoadFrom(path)

@@ -5,10 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"pix/host/config"
-	"pix/host/routing"
 )
 
 // testCfg is the one-backend, one-model config every roster test composes
@@ -164,7 +162,7 @@ func TestBuildRoster_AuthoredAgentOverridesShippedDefault(t *testing.T) {
 }
 
 // TestManifestModelsAlwaysReferenceAGeneratedBackend pins the invariant
-// buildRoster's validation leans on: every model CompileInferenceRuntime
+// buildRoster's validation leans on: every model RuntimeManifest
 // emits already references a backend present in the SAME manifest's
 // Backends map — never a backend narrowed out by exclusivity or otherwise
 // absent — so validating a roster reference against the model list is
@@ -172,7 +170,7 @@ func TestBuildRoster_AuthoredAgentOverridesShippedDefault(t *testing.T) {
 // with no separate backend lookup to fall out of sync.
 func TestManifestModelsAlwaysReferenceAGeneratedBackend(t *testing.T) {
 	cfg := testCfg()
-	_, manifest, err := CompileInferenceRuntime(cfg, time.Now(), RosterInput{})
+	manifest, err := RuntimeManifest(cfg, RosterInput{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,18 +184,18 @@ func TestManifestModelsAlwaysReferenceAGeneratedBackend(t *testing.T) {
 	}
 }
 
-// TestCompileInferenceRuntime_RosterErrorPropagates confirms an invalid
-// roster fails CompileInferenceRuntime itself (the composition boundary a
+// TestRuntimeManifest_RosterErrorPropagates confirms an invalid
+// roster fails RuntimeManifest itself (the composition boundary a
 // real caller uses), carrying the same *RosterError a direct buildRoster
 // call produces — never swallowed into a generic error.
-func TestCompileInferenceRuntime_RosterErrorPropagates(t *testing.T) {
+func TestRuntimeManifest_RosterErrorPropagates(t *testing.T) {
 	cfg := testCfg()
-	_, _, err := CompileInferenceRuntime(cfg, time.Now(), RosterInput{Main: "zai/glm-4"})
+	_, err := RuntimeManifest(cfg, RosterInput{Main: "zai/glm-4"})
 	if err == nil {
-		t.Fatal("CompileInferenceRuntime() error = nil, want the undefined-model roster error")
+		t.Fatal("RuntimeManifest() error = nil, want the undefined-model roster error")
 	}
 	if _, ok := err.(*RosterError); !ok {
-		t.Fatalf("CompileInferenceRuntime() error type = %T, want *RosterError", err)
+		t.Fatalf("RuntimeManifest() error type = %T, want *RosterError", err)
 	}
 }
 
@@ -243,10 +241,10 @@ func TestSynthesizeInferenceKit_WithRosterWritesAdditiveField(t *testing.T) {
 
 	raw := readManifestFile(t, dir)
 	var doc struct {
-		Version int                       `json:"version"`
+		Version  int                       `json:"version"`
 		Backends map[string]map[string]any `json:"backends"`
-		Models  []map[string]any          `json:"models"`
-		Roster  *struct {
+		Models   []map[string]any          `json:"models"`
+		Roster   *struct {
 			Main   string            `json:"main"`
 			Agents map[string]string `json:"agents"`
 		} `json:"roster"`
@@ -280,9 +278,9 @@ func readManifestFile(t *testing.T, kitDir string) []byte {
 	return raw
 }
 
-func mustRegistry(t *testing.T) *routing.Registry {
+func mustRegistry(t *testing.T) *Catalog {
 	t.Helper()
-	reg, err := routing.LoadRegistry()
+	reg, err := LoadCatalog()
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -85,14 +85,14 @@ branch, so two agents never race in one working tree. See
 /recall <query>       # what memory would surface right now
 /remember <text>      # pin a fact immediately
 pix pack ls            # the active pack, if any
-pix models ls           # which models are wired
-pix agent ls            # the subagent roster: resolved model + why
+pix models             # which models this host can call
+pix agent ls            # the subagent roster: each agent's model
 ```
 
 Memory is a host service (`pix serve`, started lazily); packs are git-backed
 capability bundles you activate with `pix setup --pack <url>` or `pix pack
-use`; models resolve by **intent**, not a pinned name: see
-`docs/design/routing.md`.
+use`; a model is picked by name (`pix run --model <provider/id>`, or an
+environment's `[models].main`) — nothing resolves one for you.
 
 ## 7. Slack, Google Workspace, and every other integration
 

@@ -294,16 +294,16 @@ func TestForget_RefusesWhenConcurrentUseMadeItTheDefault(t *testing.T) {
 
 // TestCommit_SyncsEntireConfigIncludingUnrelatedFields is finding A3: a
 // concurrent process's change to a field commitEnvRegistryMutation does not
-// own (RunIntent here, standing in for any non-env key) must still be
+// own (OllamaBridgeModel here, standing in for any non-env key) must still be
 // visible on the caller's cfg after an env commit, and a LATER cfg.Save()
 // from that same caller must not revert it — that is the lost-update this
 // finding closes, one level up from the env-registry fields themselves.
 func TestCommit_SyncsEntireConfigIncludingUnrelatedFields(t *testing.T) {
 	tempConfigAndState(t)
-	cfgA := loadConfig(t) // stale snapshot: RunIntent still unset here
+	cfgA := loadConfig(t) // stale snapshot: OllamaBridgeModel still unset here
 
 	otherProcessCommit(t, func(c *config.Config) error {
-		c.RunIntent = "strategy"
+		c.OllamaBridgeModel = "strategy"
 		return nil
 	})
 
@@ -311,19 +311,19 @@ func TestCommit_SyncsEntireConfigIncludingUnrelatedFields(t *testing.T) {
 		t.Fatalf("Add: %v", err)
 	}
 
-	if cfgA.RunIntent != "strategy" {
-		t.Errorf("cfgA.RunIntent = %q, want the concurrent unrelated field %q synced back after commit", cfgA.RunIntent, "strategy")
+	if cfgA.OllamaBridgeModel != "strategy" {
+		t.Errorf("cfgA.OllamaBridgeModel = %q, want the concurrent unrelated field %q synced back after commit", cfgA.OllamaBridgeModel, "strategy")
 	}
 
 	// A later caller Save() of the now-synced cfgA must not revert the
 	// concurrent unrelated field: it was already folded in, so re-saving is a
-	// no-op for RunIntent, not a regression back to the stale value.
+	// no-op for OllamaBridgeModel, not a regression back to the stale value.
 	if err := cfgA.Save(); err != nil {
 		t.Fatal(err)
 	}
 	fresh := freshConfig(t)
-	if fresh.RunIntent != "strategy" {
-		t.Errorf("a later caller Save() reverted the unrelated concurrent field: RunIntent = %q, want %q", fresh.RunIntent, "strategy")
+	if fresh.OllamaBridgeModel != "strategy" {
+		t.Errorf("a later caller Save() reverted the unrelated concurrent field: OllamaBridgeModel = %q, want %q", fresh.OllamaBridgeModel, "strategy")
 	}
 }
 

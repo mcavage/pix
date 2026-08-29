@@ -54,7 +54,6 @@ skills/*
 !skills/ingest
 !skills/debug
 !skills/microcopy
-!skills/model-refresh
 !skills/promote
 !skills/qa
 !skills/peer-review

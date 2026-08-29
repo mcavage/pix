@@ -1,11 +1,9 @@
-// pix models — the launcher side of the model router. `ls`/`show`/`pick`/
-// `route` are thin passthroughs to the unchanged `pix-host route` subcommand
-// tree (see execHostRoute); bare `pix models` is this file: a launcher-local,
-// read-only, FACTS-ONLY status screen (E3.3) — MODEL/BACKEND/SOURCE, nothing
-// scored: no WHY, no price, no wired/unwired/retired taxonomy. See
-// docs/design/routing.md, docs/design/models-cli.md, docs/design/
-// environments.md §6.3/§6.4 for the environment roster this screen also
-// reads.
+// pix models — bare `pix models` is this file: a launcher-local, read-only,
+// FACTS-ONLY status screen (E3.3) — MODEL/BACKEND/SOURCE, nothing scored: no
+// WHY, no price, no wired/unwired/retired taxonomy. The scored passthroughs
+// (`ls`/`show`/`pick`/`route`) went with the router in Wave F. See
+// docs/design/environments.md §6.3/§6.4 for the environment roster this screen
+// also reads.
 
 package main
 

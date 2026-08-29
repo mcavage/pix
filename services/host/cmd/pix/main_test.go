@@ -496,33 +496,6 @@ func TestBuildSbxArgs_NameModelPassthrough(t *testing.T) {
 	}
 }
 
-func TestApplyConfiguredSessionModel_DefaultAndOptOut(t *testing.T) {
-	// Keep axis.ResolveSessionModel off the developer's real config: with no explicit
-	// bindings it resolves the shipped catalog, whose overlord route is Sol.
-	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
-
-	o := launch.RunOpts{}
-	applied, err := launch.ApplyConfiguredSessionModel(&o, &config.Config{RunIntent: config.DefaultRunIntent})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !applied || o.Intent != config.DefaultRunIntent || o.Model != "openai/gpt-5.6-sol" {
-		t.Fatalf("configured session route = applied:%v intent:%q model:%q, want overlord -> openai/gpt-5.6-sol", applied, o.Intent, o.Model)
-	}
-
-	o = launch.RunOpts{}
-	applied, err = launch.ApplyConfiguredSessionModel(&o, &config.Config{RunIntent: "none"})
-	if err != nil || !applied || o.Model != "" || o.Intent != "" {
-		t.Fatalf("none opt-out = applied:%v intent:%q model:%q err:%v", applied, o.Intent, o.Model, err)
-	}
-
-	o = launch.RunOpts{Model: "google/pinned"}
-	applied, err = launch.ApplyConfiguredSessionModel(&o, &config.Config{RunIntent: config.DefaultRunIntent})
-	if err != nil || applied || o.Model != "google/pinned" {
-		t.Fatalf("explicit model must win = applied:%v model:%q err:%v", applied, o.Model, err)
-	}
-}
-
 func TestBuildSbxArgs_LiveSkillsMountedAndLoaded(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Skills.Paths = []string{"/cfg/skills"}

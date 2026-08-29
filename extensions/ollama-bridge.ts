@@ -50,8 +50,9 @@ const HOST_PORT = Number(process.env.OLLAMA_BRIDGE_HOST_PORT ?? 11434);
 // Which local model to expose in the cycle. It MUST match a tag pulled on the
 // HOST (`ollama pull <tag>`), or the call 404s. Default: qwen3.5:9b — the current
 // all-rounder that still fits a 16GB box (loads on demand, not resident). This is
-// the SAME id the router registers as its local option (models.json), so routing
-// to local and the interactive cycle agree. Override via env (e.g. in the
+// the SAME id the shipped catalog carries as its local rung
+// (services/host/inference/catalog/models.json), so the generated manifest and
+// the interactive cycle agree on how local is spelled. Override via env (e.g. in the
 // sandbox's /etc/sandbox-persistent.sh) for a bigger/smaller model — no code edit:
 //   OLLAMA_BRIDGE_MODEL, OLLAMA_BRIDGE_CONTEXT (and OLLAMA_BRIDGE_MODEL_NAME to
 // override the auto-derived display label). contextWindow is what pi will fill; a

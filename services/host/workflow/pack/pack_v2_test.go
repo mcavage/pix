@@ -29,8 +29,8 @@ memory_scope = "work"
 # once; a pack still carrying it must load, with the value simply never read.
 gog_account = "me@company.com"
 
-[routing]
-policy = "routing/policy.json"
+[unknown_facet]
+key = "value"
 
 [[integrations]]
 name    = "Fastmail"

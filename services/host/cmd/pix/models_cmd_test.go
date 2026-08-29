@@ -14,6 +14,7 @@ package main
 
 import (
 	"bytes"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -122,25 +123,29 @@ func kongParseInto(t *testing.T, _ *ModelsAddCmd, argv []string) error {
 	return err
 }
 
-// TestModelsHasNoRouteVerb: recompiling the intent map is not a user action.
-// Every `pix run` recompiles it from the current bindings, so a `route` verb on
-// the launcher could only ever teach a step whose honest answer to "when do I
-// run this?" is "never". Baking the image default is a maintainer job and lives
-// in `make routing` / `pix-host route compile`.
-func TestModelsHasNoRouteVerb(t *testing.T) {
-	for _, verb := range []string{"route", "compile"} {
+// TestModelsHasNoScoredVerbOrFlag: every scored surface went with the router
+// (Wave F). `ls`/`show`/`pick`/`route`/`compile` existed only to explain a
+// resolver's choice, and `--catalog` only to drop the host filter from those
+// listings. A model is chosen by name now, so each of these must get the
+// ordinary unknown-command answer rather than a deprecation notice.
+func TestModelsHasNoScoredVerbOrFlag(t *testing.T) {
+	for _, argv := range [][]string{
+		{"models", "route"},
+		{"models", "compile"},
+		{"models", "ls"},
+		{"models", "show"},
+		{"models", "pick", "overlord"},
+		{"models", "--catalog"},
+		{"models", "add", "anthropic", "--catalog"},
+	} {
 		d, _, _ := testDeps(&config.Config{})
-		if err := runRootParse([]string{"models", verb}, d); err == nil {
-			t.Errorf("`pix models %s` parsed; it must not exist on the user CLI", verb)
+		if err := runRootParse(argv, d); err == nil {
+			t.Errorf("`pix %s` parsed; it must not exist on the user CLI", strings.Join(argv, " "))
 		}
 	}
-	// The read-only and wiring verbs are untouched.
-	q := hostQuery{JSON: true, Catalog: true}
-	if got := strings.Join(q.flags(), " "); got != "--json --catalog" {
-		t.Errorf("hostQuery.flags() = %q", got)
-	}
-	if got := len(hostQuery{}.flags()); got != 0 {
-		t.Errorf("no flags set must forward nothing, got %d", got)
+	// What survives: the fact screen and wiring a provider in.
+	if got := reflect.TypeOf(ModelsCmd{}).NumField(); got != 2 {
+		t.Errorf("ModelsCmd has %d verbs, want exactly Status + Add", got)
 	}
 }
 

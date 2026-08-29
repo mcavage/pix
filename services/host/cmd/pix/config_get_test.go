@@ -17,7 +17,6 @@ func TestConfigValue(t *testing.T) {
 	cfg.MemoryWatcherModel = "qwen3.5:9b"
 	cfg.MemoryEmbedModel = "nomic-embed-text"
 	cfg.OllamaBridgeModel = "qwen3.5:9b"
-	cfg.RunIntent = "overlord"
 	cfg.MemoryCapture = "experimental-auto"
 	cfg.Pack = "/packs/work"
 
@@ -31,7 +30,7 @@ func TestConfigValue(t *testing.T) {
 		{key: "memory_watcher_model", want: "qwen3.5:9b"},
 		{key: "memory_embed_model", want: "nomic-embed-text"},
 		{key: "ollama_bridge_model", want: "qwen3.5:9b"},
-		{key: "run_intent", want: "overlord"},
+		{key: "run_intent", wantErr: true},
 		{key: "memory_capture", want: "experimental-auto"},
 		{key: "pack", want: "/packs/work"},
 		{key: "host.autoserve", want: "true"},

@@ -161,8 +161,8 @@ tracks which pack is active.
 A pack carries BOTH model layers, which are distinct:
 - **Routing config** — intent -> model (the crew: `code`->sonnet,
   `review`->gpt, under cost/latency/accuracy). Pack-level overrides to
-  `models.json` / `scorecard.json` / `policy.json`, recompiled to
-  `routing.json`. A work pack can pin approved-vendor-only routing.
+  `models.json`. A work pack pins its approved vendors through
+  `inference.exclusive_backend`/`exclusive_source`, at the binding layer.
 - **Model prefs** — specific choices: `ollama_bridge_model`, the default
   session model/intent. Plain scalars.
 

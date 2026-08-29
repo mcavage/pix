@@ -55,9 +55,9 @@ lifecycle (matches sbx's own re-attach model):
                                  the sandbox has its create-time session UAT
                                  record; otherwise it refuses with the recreate
                                  command, because static MCP cannot be added
-                                 later. --model/--intent are NOT create-only:
-                                 they are pi runtime args, so they still reach
-                                 the pi session on an attach too.
+                                 later. --model is NOT create-only: it is a pi
+                                 runtime arg, so it still reaches the pi
+                                 session on an attach too.
                                  An attach whose create-time MCP set or image
                                  no longer matches is REFUSED, not silently
                                  attached; to recreate, remove it first:
@@ -93,7 +93,6 @@ type runCmd struct {
 	Name     string   `help:"Sandbox name." placeholder:"N"`
 	Env      string   `help:"Launch under a registered environment by EXACT name (never a prefix); overrides the configured default for this run only." placeholder:"NAME"`
 	Model    string   `help:"Active pi model (passed through to pi)." placeholder:"M"`
-	Intent   string   `help:"Resolve the session model via the router; --model overrides it. Intents: pix models show." placeholder:"NAME"`
 	Task     string   `help:"Launch an existing task's sandbox (same as 'pix task run NAME')." placeholder:"NAME"`
 	Keep     bool     `short:"k" help:"Keep the sandbox when the last shell exits: a sticky, identity-bound marker the teardown/orphan reaper refuses on (an explicit 'pix rm' still removes it)."`
 
@@ -132,7 +131,6 @@ func (c *runCmd) opts() (launch.RunOpts, error) {
 		Name:        c.Name,
 		Env:         c.Env,
 		Model:       c.Model,
-		Intent:      c.Intent,
 		Pack:        c.Pack,
 		Passthrough: c.PiArg,
 		Keep:        c.Keep,
@@ -284,44 +282,12 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 	o.EnvName = selection.Name
 
 	// §6.3's model precedence, in one place: --model > the selected
-	// environment's [models].main > pi's own default. The configured run_intent
-	// default below no-ops once either of the first two answered.
+	// environment's [models].main > pi's own default.
 	if model, source := launch.SelectSessionModel(o.Model, selection.Sidecar); model != "" {
 		o.Model = model
 		if source == "[models].main" {
 			fmt.Fprintf(d.Err, "pix: environment %q -> model %s\n", selection.Name, model)
 		}
-	}
-
-	// Default the session intent from config (run_intent, the "overlord") when the
-	// user pinned neither --model nor --intent.
-	if o.Intent == "" && o.Model == "" {
-		if cfg, cerr := config.Load(); cerr == nil {
-			if applied, rerr := launch.ApplyConfiguredSessionModel(&o, cfg); rerr != nil {
-				// A bad config value must not brick launch, but it must be loud. The
-				// explicit --intent path below remains a hard usage error.
-				fmt.Fprintf(d.Err, "pix: run_intent %q did not resolve (%v); using pi's default model. Fix with `pix config set run_intent <intent>`.\n", strings.TrimSpace(cfg.RunIntent), rerr)
-			} else if applied && o.Model != "" {
-				fmt.Fprintf(d.Err, "pix: intent %q -> model %s\n", o.Intent, o.Model)
-			}
-		}
-	}
-
-	// "none"/"off" is the documented opt-out (for both --intent and run_intent):
-	// pi's own default model, no router.
-	if o.Model == "" && (strings.EqualFold(o.Intent, "none") || strings.EqualFold(o.Intent, "off")) {
-		o.Intent = ""
-	}
-
-	// Resolve --intent through the router (--model wins), so the INTERACTIVE
-	// session routes the same way the subagent crew does.
-	if o.Intent != "" && o.Model == "" {
-		m, rerr := inference.ResolveSessionModel(o.Intent)
-		if rerr != nil {
-			return runFail(d, 2, "--intent %q: %v", o.Intent, rerr)
-		}
-		o.Model = m
-		fmt.Fprintf(d.Err, "pix: intent %q -> model %s\n", o.Intent, m)
 	}
 
 	// A pi session needs at least one provider key: resolve the 1Password refs into

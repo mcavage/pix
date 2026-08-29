@@ -14,7 +14,7 @@
 // the config transaction all stay in workflow/pack. This package reads and
 // validates; it never decides that a pack may run something on this host, and
 // it holds no state. Consistent with L1, it imports no sibling capability —
-// only config, routing, sys and workspace.
+// only config, sys and workspace.
 package packinfo
 
 import (
@@ -27,7 +27,6 @@ import (
 	"strings"
 
 	"pix/host/config"
-	"pix/host/routing"
 	"pix/host/sys"
 	"pix/host/workspace"
 
@@ -323,6 +322,15 @@ func LoadPack(root string) (*Info, error) {
 	return p, nil
 }
 
+// isQualifiedModelID reports whether id is a fully qualified provider/id. Four
+// lines duplicated from inference rather than imported: packinfo is an L1
+// capability and may not import a sibling (see arch_test.go), the same reason
+// sandbox and hosttrust each carry their own copy of a helper this size.
+func isQualifiedModelID(id string) bool {
+	i := strings.IndexByte(id, '/')
+	return i > 0 && i < len(id)-1
+}
+
 // validateWebSearchJSON accepts only a bounded JSON object.
 func validateWebSearchJSON(b []byte) error {
 	var value any
@@ -341,10 +349,6 @@ func validateWebSearchJSON(b []byte) error {
 // non-symlinked and SHA-pinned.
 func validatePackFacets(root string, m *Manifest) error {
 	if inf := m.Inference; inf != nil {
-		catalog, err := routing.LoadRegistry()
-		if err != nil {
-			return fmt.Errorf("pack %s: loading model catalog: %w", root, err)
-		}
 		if inf.RequiredBackend != "" {
 			if _, ok := inf.Backends[inf.RequiredBackend]; !ok {
 				return fmt.Errorf("pack %s: inference.required_backend %q is not declared in inference.backends", root, inf.RequiredBackend)
@@ -389,11 +393,13 @@ func validatePackFacets(root string, m *Manifest) error {
 			}
 		}
 		for _, binding := range inf.Models {
-			if !routing.IsQualifiedID(binding.Model) {
+			// STRUCTURAL only. Whether the id is one this stack's catalog knows
+			// is a decision about THIS HOST, and packinfo decides nothing: the
+			// membership check lives where a pack binding actually reaches
+			// config (workflow/pack.ApplyPackInference), so reading a pack
+			// (launch, doctor, provision) never needs the catalog.
+			if !isQualifiedModelID(binding.Model) {
 				return fmt.Errorf("pack %s: inference model %q is not a canonical lab/model id", root, binding.Model)
-			}
-			if _, ok := catalog.Get(binding.Model); !ok {
-				return fmt.Errorf("pack %s: inference model %q is not in the Pix model catalog", root, binding.Model)
 			}
 			if _, ok := inf.Backends[binding.Backend]; !ok {
 				return fmt.Errorf("pack %s: inference model %q references unknown backend %q", root, binding.Model, binding.Backend)

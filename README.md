@@ -160,14 +160,14 @@ The exception: a host whose configured backends carry their own auth, such as a
 pack that ships an authenticated gateway. There `pix doctor` prints
 `providers required no provider key needed` and means it.
 
-To see the roster:
+To see what this host can call:
 
 ```console
-$ pix models ls
-MODEL                           PROVIDER   IN $/Mtok  OUT $/Mtok  EST/RUN  LOCAL  STATUS
-anthropic/claude-opus-5         anthropic  5.00       25.00       $0.2250  false  wired
+$ pix models
+MODEL                           BACKEND    SOURCE
+anthropic/claude-opus-5         anthropic  machine config
 ...
-ollama/qwen3.5:9b               ollama     0.00       0.00        free     true   unwired
+ollama/qwen3.5:9b               ollama     machine config
 ```
 
 `wired` means a probed backend can call it here. `unwired` means it is in the
@@ -394,7 +394,6 @@ Maintenance is `make`, not the CLI:
 make gate      # the fast test gate
 make build     # build the image (needs a DHI-entitled Docker account)
 make load      # build and load it into the sandbox image store
-make routing   # recompile the baked default model map
 ```
 
 ## Where to go next

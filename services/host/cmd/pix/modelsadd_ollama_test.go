@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-	"time"
 
 	"pix/host/config"
 	"pix/host/hostenv"
@@ -197,7 +196,7 @@ func TestInferenceManifestCarriesOllamaModels(t *testing.T) {
 			probed("ollama/qwen3.5:9b", "qwen3.5:9b"),
 		},
 	}}
-	_, manifest, err := inference.CompileInferenceRuntime(cfg, time.Time{}, inference.RosterInput{})
+	manifest, err := inference.RuntimeManifest(cfg, inference.RosterInput{})
 	if err != nil {
 		t.Fatal(err)
 	}
