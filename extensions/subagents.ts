@@ -152,10 +152,10 @@ const VALID_THINKING = new Set([
 // otherwise the selected environment's `roster.agents[name]` (the shipped
 // preset's OWN name, e.g. "engineer"/"review") wins; otherwise `roster.main`;
 // otherwise inherit the parent session's own model. An agent name absent
-// from the roster degrades straight to inherit — the same as an unknown
-// intent used to under the deleted router, except there is no scored pick
-// left to fall back to first: the roster is a literal table, never a
-// computed one.
+// from the roster degrades straight to inherit — there is no scored pick to
+// fall back to first, and no `intent:` frontmatter feeds this chain at all
+// (E3.4 review fix): the roster is a literal table, keyed by the agent's own
+// name, never a computed one.
 function loadRoster(): Roster | undefined {
 	try {
 		const p = path.join(getAgentDir(), "inference.json");
@@ -212,18 +212,6 @@ interface AgentConfig {
 	description: string;
 	tools?: string[];
 	model?: string;
-	// Declared intent (frontmatter `intent:`). No longer resolves `model` —
-	// there is no compiled router left to resolve it against — kept only for
-	// display (clarifyRoutedModelFailure, the `/subagents` listing).
-	intent?: string;
-	// LEGACY frontmatter (`fallback_intent:`), pending outright deletion in E3.4
-	// (docs/design/routing.md, architecture table). Parsed only so an
-	// AgentConfig carries visible evidence it was declared — it is NEVER a
-	// roster.agents lookup, is NEVER resolved to a model, and has NO effect on
-	// which model runs, including on a provider policy refusal (that used to
-	// trigger a cross-vendor retry; the retry mechanism has been removed
-	// entirely, not just detached from this field).
-	fallbackIntent?: string;
 	thinking?: string;
 	maxTurns?: number;
 	// Per-agent watchdog overrides (frontmatter idle_ms / wall_ms, milliseconds).
@@ -292,15 +280,14 @@ function loadAgentsFromDir(
 				`model "${explicitModel}" is not fully qualified (provider/id); a bare name can resolve to a keyless provider and hang. Fix the agent file.`,
 			);
 		}
-		// `intent:` is kept only as display metadata (see clarifyRoutedModelFailure
-		// and the `/subagents` listing) — it no longer resolves a model. There is
-		// no compiled router left to resolve it against; the roster below is keyed
-		// by the agent's own NAME, not by a declared intent.
-		const intent = frontmatter.intent?.trim() || undefined;
+		// `intent:` frontmatter (a leftover from the deleted router) is a plain
+		// unknown field now (E3.4 review fix): it is never read, never resolved,
+		// and never displayed — same as any other key this parser doesn't name.
+		// The roster below is keyed by the agent's own NAME, not by any declared
+		// intent, and there is no compiled router left to resolve one against.
 		// Model resolution order (docs/design/environments.md §6.4), and this is
-		// the WHOLE chain — nothing else, including `fallback_intent:` below, may
-		// join it: an explicitly selected parent Ollama model is inherited by
-		// every child (cloud may be unavailable); otherwise explicit `model:`
+		// the WHOLE chain: an explicitly selected parent Ollama model is inherited
+		// by every child (cloud may be unavailable); otherwise explicit `model:`
 		// wins (back-compat); otherwise the selected environment's
 		// `roster.agents[<this agent's own name>]`; otherwise `roster.main`.
 		// Anything left unresolved inherits the parent session's own model —
@@ -309,10 +296,6 @@ function loadAgentsFromDir(
 		let model = PARENT_OLLAMA_MODEL || explicitModel;
 		if (!model) model = resolveRosterModel(ROSTER?.agents[name]);
 		if (!model) model = resolveRosterModel(ROSTER?.main);
-		// `fallback_intent:` is legacy frontmatter pending E3.4 deletion. It is
-		// parsed for visibility only — see the AgentConfig.fallbackIntent comment
-		// for why it is never a roster.agents lookup and never touches `model`.
-		const fallbackIntent = frontmatter.fallback_intent?.trim() || undefined;
 		let thinking = frontmatter.thinking?.trim().toLowerCase() || undefined;
 		if (thinking && !VALID_THINKING.has(thinking)) {
 			warnings.push(`thinking "${thinking}" is not a valid level; ignoring.`);
@@ -341,8 +324,6 @@ function loadAgentsFromDir(
 			description,
 			tools: tools && tools.length > 0 ? tools : undefined,
 			model,
-			intent,
-			fallbackIntent,
 			thinking,
 			web,
 			maxTurns: Number.isFinite(maxTurns as number)
@@ -628,9 +609,8 @@ export function clarifyRoutedModelFailure(r: SingleResult, agent: AgentConfig): 
 		.join("\n");
 	if (!/(model.{0,40}not found|unknown model|invalid (?:model|route|provider)|route.{0,40}invalid)/i.test(raw))
 		return;
-	const route = agent.intent ? `intent "${agent.intent}"` : "explicit model route";
 	r.errorMessage =
-		`Agent "${agent.name}" ${route} resolved to "${agent.model}", but that model is not registered in this sandbox. ` +
+		`Agent "${agent.name}" resolved to model "${agent.model}", but that model is not registered in this sandbox. ` +
 		`Recreate the sandbox to pick up the current inference config: \`pix rm <box> && pix run\`. Original: ${readableFailure(r)}`;
 }
 
@@ -1740,10 +1720,10 @@ async function runSingle(
 		clarifyRoutedModelFailure(result, agent);
 
 		// There is no cross-vendor retry-on-policy-refusal anymore: it used to
-		// switch models by resolving the legacy `fallback_intent:` frontmatter
-		// through roster.agents, which is exactly the hidden model-choice effect
-		// that field must never have (see AgentConfig.fallbackIntent). A provider
-		// policy refusal is reported as an ordinary failure like any other;
+		// switch models by resolving the now-deleted `fallback_intent:`
+		// frontmatter through roster.agents, which is exactly the hidden
+		// model-choice effect that field must never have had. A provider policy
+		// refusal is reported as an ordinary failure like any other;
 		// isProviderPolicyRefusal/clarifyRoutedModelFailure remain as general
 		// diagnostics, not as inputs to a retry decision.
 		if (runId) finalizeRun(runId, result);
@@ -2383,7 +2363,7 @@ export default function (pi: ExtensionAPI) {
 				if (agents.length === 0) lines.push("  (no agents found)");
 				for (const a of agents.sort((x, y) => x.name.localeCompare(y.name))) {
 					lines.push(
-						`  ${a.name} (${a.source})${a.intent ? ` · intent:${a.intent}` : ""}${a.model ? ` · ${a.model}` : " · model:inherit"}${a.thinking ? ` · think:${a.thinking}` : ""}${a.tools ? ` · tools:${a.tools.length}` : " · tools:all"}`,
+						`  ${a.name} (${a.source})${a.model ? ` · ${a.model}` : " · model:inherit"}${a.thinking ? ` · think:${a.thinking}` : ""}${a.tools ? ` · tools:${a.tools.length}` : " · tools:all"}`,
 					);
 					if (a.description)
 						lines.push(`    ${a.description.split("\n")[0].slice(0, 100)}`);

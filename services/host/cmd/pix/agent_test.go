@@ -47,12 +47,14 @@ func TestParseAgentCRLF(t *testing.T) {
 		t.Fatalf("body = %q", body)
 	}
 
-	// The frontmatter round-trips through YAML once normalized to LF.
+	// The frontmatter round-trips through YAML once normalized to LF. `intent:`
+	// is not a field on agentMeta (E3.4 review fix) so it must decode silently
+	// as an unrecognized key, never surfacing on the decoded struct.
 	var m agentMeta
 	if err := yaml.Unmarshal([]byte(fm), &m); err != nil {
 		t.Fatalf("unmarshal CRLF frontmatter: %v", err)
 	}
-	if m.Intent != "code" || m.Description != "hi" {
+	if m.Description != "hi" {
 		t.Fatalf("meta = %+v", m)
 	}
 }

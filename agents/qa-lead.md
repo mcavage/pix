@@ -1,7 +1,6 @@
 ---
 description: Test strategy, edge-case enumeration, and coverage-gap analysis. Test Pyramid, risk-based testing, session-based test management, equivalence partitioning, boundary value analysis, test oracles.
 tools: read, grep, find, ls, bash
-intent: verify
 thinking: medium
 max_turns: 25
 ---

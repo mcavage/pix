@@ -1,7 +1,6 @@
 ---
 description: System design, RFCs, ADRs, technology selection, tech-debt scoring. ADRs, C4 model, evolutionary architecture, fitness functions, ATAM-style tradeoff analysis, YAGNI.
 tools: read, write, edit, bash, grep, find, ls
-intent: strategy
 thinking: high
 max_turns: 30
 ---

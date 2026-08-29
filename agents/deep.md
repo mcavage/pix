@@ -1,7 +1,6 @@
 ---
 description: Top general reasoner (Opus 5) for one genuinely hard sub-problem, a thorny bug, a tricky implementation, a subtle root cause. Use sparingly; it is the expensive one. (Fable 5 is reserved for security red-team, not general hard work.)
 tools: read, write, edit, bash, grep, find, ls
-intent: max-accuracy
 thinking: high
 max_turns: 40
 # This agent thinks hard and runs long; give it generous watchdog budgets so the
