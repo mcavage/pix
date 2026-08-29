@@ -98,7 +98,7 @@ test("an explicit parent Ollama model becomes the subagent availability boundary
 			"docker-openai/gpt-5.6-sol",
 		]),
 		"",
-		"cloud parents retain normal intent routing",
+		"cloud parents retain normal roster resolution",
 	);
 });
 
@@ -138,10 +138,9 @@ test("invalid compiled routes become actionable diagnostics", async () => {
 	};
 	reg.mod.clarifyRoutedModelFailure(result, {
 		name: "review",
-		intent: "review",
 		model: "docker-google/gemini-bad",
 	});
-	assert.match(result.errorMessage, /intent "review" resolved to/);
+	assert.match(result.errorMessage, /resolved to model "docker-google\/gemini-bad"/);
 	assert.match(result.errorMessage, /pix rm <box> && pix run/);
 	assert.match(result.errorMessage, /Original: Model/);
 });
@@ -254,3 +253,30 @@ test("subagents.ts has no fallbackIntent field or fallback_intent frontmatter pa
 	assert.doesNotMatch(subagentsSrc, /fallbackIntent/, "fallbackIntent must be gone from AgentConfig, not merely unused");
 	assert.doesNotMatch(subagentsSrc, /frontmatter\.fallback_intent/, "fallback_intent frontmatter must no longer be parsed");
 });
+
+// ── E3.4 review fix: `intent` follows `fallbackIntent` out entirely ──────────
+// The first E3.4 commit deleted `fallback_intent:` but left `intent` parsed
+// and displayed "for display only". Review flagged that as inconsistent: a
+// field with zero effect on behavior has no business being parsed, typed, or
+// shown either — it is exactly the same kind of dead frontmatter the
+// `fallbackIntent` deletion above already treats as intolerable. A custom
+// agent's `intent:` must now be indistinguishable from any other unknown
+// frontmatter key: never extracted, never on AgentConfig, never rendered.
+test("subagents.ts has no `intent` field on AgentConfig or frontmatter.intent parsing (E3.4 review fix: field removed entirely, not merely unused)", () => {
+	assert.doesNotMatch(
+		subagentsSrc,
+		/intent\?:\s*string/,
+		"AgentConfig must not declare an `intent` field",
+	);
+	assert.doesNotMatch(
+		subagentsSrc,
+		/frontmatter\.intent\b/,
+		"`intent:` frontmatter must no longer be parsed",
+	);
+	assert.doesNotMatch(
+		subagentsSrc,
+		/\bagent\.intent\b|\ba\.intent\b/,
+		"no call site may read an AgentConfig's `.intent` — the field is gone",
+	);
+});
+

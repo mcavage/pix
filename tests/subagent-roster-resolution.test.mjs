@@ -138,7 +138,7 @@ test("an agent name absent from BOTH roster.agents and any roster at all inherit
 	assert.doesNotMatch(listing, /designer.*·\s*(zai|google|anthropic|openai)\//);
 });
 
-test("declaring `intent:` in frontmatter has NO effect on the resolved model (no vestigial intent routing)", async () => {
+test("declaring `intent:` in frontmatter has NO effect on the resolved model and is never shown (E3.4 review fix: not merely inert, entirely unparsed/displayless)", async () => {
 	const { agentDir, projectRoot } = setup();
 	writeInference(agentDir, {
 		version: 1,
@@ -152,8 +152,13 @@ test("declaring `intent:` in frontmatter has NO effect on the resolved model (no
 	const reg = await loadSubagents();
 	const listing = await listAgents(reg, projectRoot);
 	// Falls through to roster.main, exactly as an agent with no intent at all
-	// would — the declared intent is display-only.
+	// would — the declared intent has no effect on resolution.
 	assert.match(lineFor(listing, "engineer"), /· zai\/glm-5/);
+	// And, unlike the first E3.4 commit's "kept for display" treatment, it must
+	// never even be SHOWN: an `intent:` frontmatter key is now an ordinary
+	// unknown field, indistinguishable from a typo.
+	assert.doesNotMatch(lineFor(listing, "engineer"), /intent/i);
+	assert.doesNotMatch(listing, /intent:code|intent:"code"/);
 });
 
 test("declaring `fallback_intent: review` (security-lead's shipped value) has NO effect on the resolved model — it is never a roster.agents lookup", async () => {

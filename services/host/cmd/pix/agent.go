@@ -81,10 +81,15 @@ func resolveAgentsDir() (string, error) {
 		"and no agents/ dir was found in this checkout or its parents; set $PIX_AGENTS_DIR, or run from inside a pix repo checkout")
 }
 
-// agentMeta is the typed view of an agent's frontmatter.
+// agentMeta is the typed view of an agent's frontmatter. It deliberately has
+// no `Intent` field: E3.4's review fix removed the last dead parse of
+// `intent:` here (it was never read by resolveAgentSource — nothing in this
+// package ever routed by intent). A custom agent's `intent:` frontmatter now
+// falls into yaml.Unmarshal's ordinary "key not in the struct" case, exactly
+// like any other unrecognized field: parsed nowhere, held nowhere, shown
+// nowhere.
 type agentMeta struct {
 	Description string  `yaml:"description,omitempty"`
-	Intent      string  `yaml:"intent,omitempty"`
 	Model       string  `yaml:"model,omitempty"`
 	Tools       string  `yaml:"tools,omitempty"`
 	Thinking    string  `yaml:"thinking,omitempty"`

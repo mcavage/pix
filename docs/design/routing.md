@@ -1,13 +1,20 @@
 # Model routing — cost / latency / accuracy tradeoff selection
 
-**Status:** built (v2). See also `docs/design/models-cli.md`, which renamed the
-launcher-facing verb from `pix route` to `pix models` (the host binary's own
-`pix-host route` subcommand tree, referenced throughout this doc, did not
-move). The router replaces hand-pinned model ids on every agent
-with a declared *intent* (a hard constraint) that resolves to a concrete model
-from a scorecard. Scores are seeded from published benchmarks and pricing and
-are **hand-maintained** (edit `scorecard.json` directly); the resolver picks,
-nobody toggles models by hand.
+**Status:** built (v2), scope narrowed by E3.4. See also
+`docs/design/models-cli.md`, which renamed the launcher-facing verb from
+`pix route` to `pix models` (the host binary's own `pix-host route`
+subcommand tree, referenced throughout this doc, did not move). The router
+originally replaced hand-pinned model ids on every AGENT with a declared
+*intent* (a hard constraint) that resolves to a concrete model from a
+scorecard; **as of E3.4, no agent parser (TS or Go) reads `intent:` or
+`routing.json` at all** — a shipped agent's model comes from the environment
+roster (`docs/design/environments.md` §6.4), and a custom project agent may
+still pin its own explicit `model:`. `intent`/`routing.json` remain live for
+exactly one thing: the top-level interactive SESSION model (`pix run
+--intent`, `run_intent`) — until Wave F (`docs/design/architecture.md`)
+deletes the router entirely. Scores are seeded from published benchmarks and
+pricing and are **hand-maintained** (edit `scorecard.json` directly); the
+resolver picks, nobody toggles models by hand.
 
 **v2 reshape (agent lifecycle).** v1 shipped the engine but read as "a
 router." v2 reframes it as what it is for: **agents are first-class objects
@@ -98,21 +105,23 @@ resolve it in one file, swap the file to retarget everything. The router is the
 same idea for models.
 
 ```
-HOST (Go, tested, owns the truth)            SANDBOX (TS, reads one file)
+HOST (Go, tested, owns the truth)            SANDBOX (TS)
 ┌───────────────────────────────┐            ┌──────────────────────────┐
-│ models.json (limits+price)     │            │ routing.json (resolved)  │
-│ scorecard.json (hand-edited)   │  compile   │  intent -> model + why   │
-│ policy.json (intents)          │ ─────────▶ │                          │
-│      │                         │            │ subagents.ts reads it:   │
-│  Resolve() constrained-opt     │            │  intent: -> model id     │
-│      ▲                         │            │  (explicit model: wins)  │
-│  hand-edit scorecard.json      │            └──────────────────────────┘
-└───────────────────────────────┘
+│ models.json (limits+price)     │            │ pix run --intent reads   │
+│ scorecard.json (hand-edited)   │  compile   │ routing.json for the     │
+│ policy.json (intents)          │ ─────────▶ │ SESSION model ONLY       │
+│      │                         │            │                          │
+│  Resolve() constrained-opt     │            │ subagents.ts / agent.go: │
+│      ▲                         │            │  roster only, keyed by   │
+│  hand-edit scorecard.json      │            │  NAME — never intent:,   │
+└───────────────────────────────┘            │  never routing.json      │
+                                              └──────────────────────────┘
 ```
 
 The sandbox never calls the host at spawn time (that path can hang a subagent).
-It reads a precompiled `routing.json` — deterministic, offline, auditable. The
-host regenerates that file with `make routing`, and the user bakes it
+`pix run --intent` reads a precompiled `routing.json` — deterministic, offline,
+auditable — to resolve the SESSION model only; no agent/subagent parser reads
+it. The host regenerates that file with `make routing`, and the user bakes it
 (`make load`) on a new-model release. This matches the "on new model release,
 manual, easy to plug a model in" cadence the feature was scoped to.
 
@@ -233,13 +242,18 @@ Launcher (`pix`): `agent ls` (roster only — new/edit/rm/reassess retired),
 
 An agent is a first-class object (`agents/<name>.md` frontmatter): identity,
 `description` (used for auto-selection), prompt, `tools`, an optional pinned
-`model`, and an advisory `budget_usd`. **E3.4 (done):** shipped `agents/*.md`
-no longer declare `intent:`, `fallback_intent:`, or `model:` at all — the
-environment roster (`docs/design/environments.md` §6.4) is the one editable
-table for a shipped role's model; a custom project agent may still pin its
-own exact `model:`. `intent`/`routing.json` remain live for exactly one
-thing now: the top-level session model (`pix run --intent`, `run_intent`),
-until Wave F retires the router entirely (`docs/design/architecture.md`).
+`model`, and an advisory `budget_usd`. **E3.4 (done, review fix landed):**
+shipped `agents/*.md` no longer declare `intent:`, `fallback_intent:`, or
+`model:` at all — the environment roster (`docs/design/environments.md`
+§6.4) is the one editable table for a shipped role's model; a custom project
+agent may still pin its own exact `model:`. Neither agent parser —
+`extensions/subagents.ts` (TS, sandbox) nor `services/host/cmd/pix/agent.go`
+(Go, `pix agent ls`) — declares an `intent` field, parses `intent:`
+frontmatter, or displays one: a custom agent's `intent:` is now an ordinary
+unknown key, not merely an inert one. `intent`/`routing.json` remain live for
+exactly one thing now: the top-level session model (`pix run --intent`,
+`run_intent`), until Wave F retires the router entirely
+(`docs/design/architecture.md`).
 
 - **`agent ls`** shows each agent's resolved MODEL and SOURCE — facts only,
   no WHY, no scored fallback narrative (that framing described v1/v2 of this
@@ -254,10 +268,13 @@ until Wave F retires the router entirely (`docs/design/architecture.md`).
 
 ## Sandbox integration
 
-`subagents.ts` resolves an agent's model from the environment roster, never
-from `routing.json` (`docs/design/environments.md` §6.4):
+`subagents.ts` (sandbox) and `agent.go`'s `resolveAgentSource` (host, `pix
+agent ls`) both resolve an agent's model from the environment roster ONLY —
+never from `routing.json`, and never from a declared `intent:`
+(`docs/design/environments.md` §6.4):
 
-1. an explicitly selected parent Ollama model (transport exception),
+1. an explicitly selected parent Ollama model (transport exception,
+   `subagents.ts` only),
 2. explicit `model:` frontmatter (back-compat — a custom project agent's own
    pin always wins),
 3. the selected environment's `roster.agents[<agent name>]`,
@@ -266,9 +283,22 @@ from `routing.json` (`docs/design/environments.md` §6.4):
 
 `fallback_intent:` was legacy frontmatter left over from the retired
 cross-vendor-retry-on-policy-refusal feature: it was never a `roster.agents`
-lookup and never changed which model ran. E3.4 removed the field from every
-shipped agent (`agents/security-lead.md` was the last holdout) and removed
-its parsing/display from `extensions/subagents.ts`.
+lookup and never changed which model ran. E3.4's first commit removed the
+field from every shipped agent (`agents/security-lead.md` was the last
+holdout) and from `extensions/subagents.ts`'s parsing/display.
+
+**Review fix (this commit):** the first E3.4 commit left `intent:` itself
+parsed and shown "for display only" in both parsers — `AgentConfig.intent`
+in `subagents.ts` and `agentMeta.Intent` in `agent.go`. Neither ever fed a
+model decision, so keeping either was the same dead-frontmatter residue
+`fallback_intent:` was removed for. Both fields, their frontmatter parsing,
+and every display site (`clarifyRoutedModelFailure`, the `/subagents`
+listing) are gone entirely now: a custom agent's `intent:` is inert AND
+invisible, exactly like any other key this parser doesn't name. Static
+sentinels pin it on both sides: `tests/subagents-disabled.test.mjs` (TS) and
+`services/host/cmd/pix/agent_intent_gone_test.go` (Go) fail if either parser
+ever retains `intent`/`fallback_intent` again, while confirming `routing.json`
+and `services/host/routing` are untouched (Wave F's job).
 
 `routing.json` is baked at `~/.pi/agent/routing.json` next to
 `capabilities.json`, and still resolves the top-level session model only.
