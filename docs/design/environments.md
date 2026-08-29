@@ -570,6 +570,7 @@ Example errors:
 ```text
 pix: no environment named "hoem".
      known: home, work, luna
+     closest: home
      register one: pix env add <name> [path]
 ```
 

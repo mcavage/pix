@@ -171,8 +171,8 @@ type UnknownEnvironmentError struct {
 	Known []string // sorted; empty (not nil) when the registry is empty
 }
 
-// closestKnownNameThreshold returns the maximum Levenshtein edit distance
-// closestKnownName still treats as "close enough to suggest", scaled by how
+// closestKnownNameThreshold returns the maximum edit distance
+// (optimalStringAlignmentDistance) closestKnownName still treats as "close enough to suggest", scaled by how
 // short name is: a short name has less room before a suggestion stops being
 // trustworthy (a distance of 2 on a 4-character name is HALF the string), so
 // a name of 4 runes or fewer gets the tighter threshold. The two constants
@@ -185,32 +185,32 @@ func closestKnownNameThreshold(name string) int {
 	return 2
 }
 
-// closestKnownName implements `closest:` (D14): case-sensitive Levenshtein
-// edit distance (insert/delete/substitute, each cost 1 — there is no
-// separate, cheaper transposition move, so swapping two adjacent characters
-// costs 2, not 1) between name and each entry of known, filtered to
+// closestKnownName implements `closest:` (D14): case-sensitive
+// adjacent-transposition-aware edit distance (optimalStringAlignmentDistance
+// below) between name and each entry of known, filtered to
 // closestKnownNameThreshold(name) or less. A match is offered only when
 // exactly one known name attains the minimum distance found: two or more
 // names tied at that minimum, every known name farther than the threshold,
 // or an empty known list, all return ok=false — "which one?" is not
 // answerable from a tie, so none is offered rather than guessing.
 //
-// The no-transposition-discount choice is deliberate and has a visible
-// consequence worth naming: "hoem" is Levenshtein-distance 2 from "home"
-// (both characters at the swapped positions are substitutions), which is
-// farther than a 4-rune name's threshold of 1 tolerates — so "home" is NOT
-// offered as `hoem`'s closest match even though a human reads the typo as
-// obvious. That is this algorithm's documented behavior, not a bug: a
-// looser (Damerau-Levenshtein) distance would need its own threshold
-// re-tuning, which is a decision for whoever needs transposition typos
-// caught, not an accidental side effect of this one.
+// The transposition discount is deliberate and has a visible, PRD-pinned
+// consequence: docs/design/environments.md §8.1's own worked example is
+// `hoem` against a registry containing `home` (plus `work`, `luna`, both
+// far away) — a plain Levenshtein distance charges two substitutions for
+// that swap (distance 2), which a 4-rune name's threshold of 1 would
+// reject; optimalStringAlignmentDistance's one adjacent-swap move prices
+// the SAME pair at distance 1, so `home` is offered, uniquely, exactly as a
+// human reading `hoem` as an obvious transposition would expect.
+// TestUseEnvironmentUnknownErrorShape pins this end to end through
+// Error()'s rendered `closest:` line.
 func closestKnownName(name string, known []string) (string, bool) {
 	threshold := closestKnownNameThreshold(name)
 	best := ""
 	bestDistance := threshold + 1
 	tie := false
 	for _, k := range known {
-		d := levenshteinDistance(name, k)
+		d := optimalStringAlignmentDistance(name, k)
 		if d > threshold {
 			continue
 		}
@@ -227,35 +227,54 @@ func closestKnownName(name string, known []string) (string, bool) {
 	return best, true
 }
 
-// levenshteinDistance is the classic case-sensitive edit distance (insert,
-// delete, substitute — no transposition move; see closestKnownName's own
-// doc comment for why that matters here), computed over runes so a
-// multi-byte name never miscounts. It is a small, independent copy of the
-// same algorithm cmd/pix's suggestVerb already runs for a mistyped VERB
-// (help.go's own levenshtein): config cannot import cmd/pix (the dependency
-// runs the other way), and the two operate over unrelated vocabularies
-// (verbs vs. registered environment names), so sharing one helper package
-// for a ~15-line function would be premature coupling, not
-// deduplication.
-func levenshteinDistance(a, b string) int {
+// optimalStringAlignmentDistance is a case-sensitive Damerau-Levenshtein
+// variant known as "optimal string alignment" (OSA): the same
+// insert/delete/substitute moves as plain Levenshtein, PLUS one adjacent
+// transposition move (swapping two neighboring runes) at the SAME cost of
+// 1 as a substitution — so "hoem"/"home" costs 1, not 2. OSA differs from
+// full ("unrestricted") Damerau-Levenshtein in one deliberate way: it
+// never edits a substring more than once (a transposed pair is never
+// itself later substituted or transposed again), which makes it NOT a
+// true metric (it can violate the triangle inequality on pathological
+// inputs) but keeps the classic O(len(a)*len(b)) dynamic-programming table
+// — no extra bookkeeping of "last time this rune pair appeared" the
+// unrestricted algorithm needs. That tradeoff is irrelevant here:
+// closestKnownName only ever compares name against ONE known entry at a
+// time and takes the minimum, never chains distances, so the metric
+// property was never load-bearing.
+//
+// Computed over runes so a multi-byte name never miscounts. It is a small,
+// independent copy of the same edit-distance IDEA cmd/pix's suggestVerb
+// already runs for a mistyped VERB (help.go's own levenshtein, plain
+// Levenshtein with no transposition move): config cannot import cmd/pix
+// (the dependency runs the other way), and the two operate over unrelated
+// vocabularies (verbs vs. registered environment names) with different
+// tuning needs, so sharing one helper package for a ~25-line function
+// would be premature coupling, not deduplication.
+func optimalStringAlignmentDistance(a, b string) int {
 	ra, rb := []rune(a), []rune(b)
-	prev := make([]int, len(rb)+1)
-	for j := range prev {
-		prev[j] = j
+	la, lb := len(ra), len(rb)
+	d := make([][]int, la+1)
+	for i := range d {
+		d[i] = make([]int, lb+1)
+		d[i][0] = i
 	}
-	cur := make([]int, len(rb)+1)
-	for i := 1; i <= len(ra); i++ {
-		cur[0] = i
-		for j := 1; j <= len(rb); j++ {
+	for j := 0; j <= lb; j++ {
+		d[0][j] = j
+	}
+	for i := 1; i <= la; i++ {
+		for j := 1; j <= lb; j++ {
 			cost := 1
 			if ra[i-1] == rb[j-1] {
 				cost = 0
 			}
-			cur[j] = min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
+			d[i][j] = min(d[i-1][j]+1, d[i][j-1]+1, d[i-1][j-1]+cost)
+			if i > 1 && j > 1 && ra[i-1] == rb[j-2] && ra[i-2] == rb[j-1] {
+				d[i][j] = min(d[i][j], d[i-2][j-2]+cost)
+			}
 		}
-		prev, cur = cur, prev
 	}
-	return prev[len(rb)]
+	return d[la][lb]
 }
 
 // Error renders docs/design/environments.md §8.1's actionable copy: the
