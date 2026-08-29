@@ -37,10 +37,7 @@
       "jsonKeys": [
         "Name",
         "Model",
-        "Why",
-        "Intent",
-        "Tools",
-        "Budget"
+        "Source"
       ]
     }
   ]
