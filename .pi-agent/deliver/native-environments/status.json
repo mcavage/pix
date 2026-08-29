@@ -1259,6 +1259,24 @@
       "status": "fixed",
       "fix_commit": ".pi-agent status.json E2.1/E3.1 marked done with merge SHAs, wave_d/wave_e running lists emptied and done lists populated, this very update",
       "triage_message_ref": null
+    },
+    {
+      "id": "WD-WE-BUDGET-01",
+      "source": "tests",
+      "round": 0,
+      "text": "Merging E2.2/E2.3/E2.4/E3.2/E3.3 into design/simplify-pack-rigs produced arch-metrics budgets.json conflicts on every merge but E3.2 (E2.3: lease+workflow/launch encoding-only divergence; E2.4: envinfo+lease HEAD-superset plus genuine sandbox+workflow/launch additive combines; E3.3: envinfo+lease+workflow/launch HEAD-superset plus a real cmd/pix shrink after E3.3 deleted the WHY/score/price/status-taxonomy columns). No production Go or TypeScript file conflicted; all real code merges were clean.",
+      "status": "fixed",
+      "fix_commit": "77d0b665/582e8746/4d124221/83741eca/25154552",
+      "triage_message_ref": null
+    },
+    {
+      "id": "WD-WE-VERIFY-01",
+      "source": "tests",
+      "round": 0,
+      "text": "No real integration defect surfaced across the E2.2/E2.3/E2.4/E3.2/E3.3 integration: focused Go suites (envinfo/hosttrust/sandbox/lease/workflow-launch/inference/workflow-models/cmd-pix/workflow-reset), tsc --noEmit, 64/64 roster-related node tests, race runs on workflow/launch+lease+envinfo, and two consecutive full make gate runs all passed clean on the first attempt with no flaky UAT or other failure to triage.",
+      "status": "no-defect-found",
+      "fix_commit": null,
+      "triage_message_ref": null
     }
   ],
   "attempts": [
@@ -1399,6 +1417,16 @@
       "output_summary": "E2.1 merge 0d24399e clean, no conflicts. E3.1 merge 55025e0f conflicted only on scripts/arch-metrics/budgets.json's pix/host/cmd/pix entry (both units raised the same 4005 base to disjoint targets: E2.1->4012, E3.1->4009); an arch-metrics budget conflict, not a logic conflict -- no code file collided. First resolution attempt mistakenly dropped E3.1's separate inference package budget bump (953->1097/33->35/8->9) by rebuilding the file from the pre-E3.1 'ours' stage; caught by a violating make gate run, fixed by restoring the inference entry from the E3.1 side and amending the merge commit. Focused suites all pass (go envinfo/workflow-env/cmd/inference; 14/14 node inference tests). First full make gate hit a transient, pre-existing, merge-unrelated flake (pix/host TestRelayBytesPropagatesConnReadError, untouched by this merge, passes standalone and on the immediate full-gate rerun); two consecutive clean make gate runs afterward both exit 0. No integration defect requiring a red-first fix commit. User-cleanup patch sha256 2dd22c878cb7723c929bf6c5f21c0a8567bdc3fc5d75dc057f30e8fcf4656691 identical before stash and after pop; git status showed the same 8 unstaged legal-doc/Dockerfile/LICENSE changes throughout, never staged. Both worktrees (/tmp/pix-native-e2-1, /tmp/pix-native-e3-1) removed after verification.",
       "timestamp": "2026-08-29T17:05:00Z",
       "log": ".pi-agent/deliver/native-environments/logs/wave-d-e2.1-e3.1-final-gate.log"
+    },
+    {
+      "stage": "wave-d-e2.2-e2.4-wave-e-e3.2-e3.3-integration",
+      "attempt": 1,
+      "hypothesis": "unit/native-e2-2 (f63b9237), unit/native-e2-3 (20ec95f1), unit/native-e2-4 (ffa33fd8), unit/native-e3-2 (through 7b556e33), and unit/native-e3-3 (15971ed1) integrate into design/simplify-pack-rigs in exact order with --no-ff, only arch-metrics budget-note conflicts, and the user's unstaged cleanup (now including the modified Dockerfile) survives byte-identical.",
+      "change": "Captured git diff|sha256sum and git status, ran a green make-gate baseline, git stash push -u, merged the five units --no-ff in the exact given order (E2.2 clean; E2.3 one budgets.json conflict, pure JSON-encoding divergence, resolved by taking the branch's superset side; E2.4 four budgets.json conflicts, two HEAD-superset and two genuine additive combines requiring the two units' notes to be concatenated; E3.2 clean, TypeScript-only; E3.3 three budgets.json conflicts, all HEAD-superset, plus a real cmd/pix shrink discovered only by fresh remeasurement), remeasured every touched package fresh with go run ./scripts/arch-metrics -root services/host after every conflicted merge and overwrote the recorded numbers to match exactly, ran the full focused suite set (envinfo/hosttrust/sandbox/lease/workflow-launch/inference/workflow-models/cmd-pix/workflow-reset Go packages, npx tsc --noEmit, 64 roster/subagent/ollama-bridge node tests, go test -race on workflow/launch+lease+envinfo), ran make gate twice, popped the stash and diffed the patch hash, removed all five worktrees and their now-fully-merged unit branches.",
+      "command": "git diff | sha256sum; make gate; git stash push -u; git merge --no-ff unit/native-e2-2; git merge --no-ff unit/native-e2-3; (resolve budgets.json); git merge --no-ff unit/native-e2-4; (resolve budgets.json x4); git merge --no-ff unit/native-e3-2; git merge --no-ff unit/native-e3-3; (resolve budgets.json x3, ratchet cmd/pix down); go test ./envinfo/... ./hosttrust/... ./sandbox/... ./lease/... ./workflow/launch/... ./inference/... ./workflow/models/... ./cmd/pix/... ./workflow/reset/...; npx tsc --noEmit; node --test tests/roster-resolution.test.mjs tests/subagent-usage.test.mjs tests/ollama-bridge.test.mjs tests/inference-roster.test.mjs tests/inference-roster-provider-id-parity.test.mjs tests/no-extension-routing-json-read.test.mjs tests/no-fallback-intent-resolution.test.mjs tests/subagent-roster-resolution.test.mjs; go test -race ./workflow/launch/... ./lease/... ./envinfo/...; make gate; make gate; git stash pop; git diff | sha256sum; git worktree remove x5; git branch -D x5",
+      "output_summary": "Baseline make gate green (35.740s) before any merge. All five merges landed --no-ff in the exact required order: E2.2 clean (77d0b665, no conflicts). E2.3 (582e8746) conflicted only in scripts/arch-metrics/budgets.json's pix/host/lease and pix/host/workflow/launch entries; both were the SAME shrink-only text on both sides, differing only in JSON unicode-escaping of an em dash, with the branch side already carrying the full superset note -- resolved by taking that side verbatim, confirmed by fresh measurement matching exactly (lease 904/20/12, workflow/launch 3134/131/52). E2.4 (4d124221) conflicted on four budgets.json entries: envinfo and lease were HEAD-is-superset (unit/native-e2-4 branched before E2.2/E2.3 and never touches either package) and resolved by keeping HEAD; sandbox and workflow/launch were genuine divergent additive notes (E2.2's FromFacetMap note vs E2.4's PlanEnvRemove note for sandbox; E2.3's createintent review-fix note vs E2.4's PlanEnvRemoveSeam note for workflow/launch) and were resolved by combining both units' texts into one _prod_loc_note field each, then overwriting all four packages' numeric fields with a fresh measurement: envinfo 2503/66/17, lease 904/20/12, sandbox 970/29/23, workflow/launch 3296/134/53/edges16. E3.2 (83741eca) merged clean, TypeScript-only, zero Go conflicts as its unit scope promised. E3.3 (25154552) conflicted on envinfo/lease/workflow/launch again (unit/native-e3-3 also branched before E2.2-E2.4 and is a strict textual subset of HEAD for those three, confirmed byte-for-byte before resolving by keeping HEAD) and additionally exposed that E3.3's own deletion of the WHY/score/price/status-taxonomy rendering code actually SHRANK pix/host/cmd/pix's prod_loc from the stale recorded 4015 to a freshly measured 3926 -- the budget was ratcheted down to the fresh number with a combined note; workflow/models matched its recorded 1528/22/10 exactly with no conflict. No production Go or TypeScript file ever conflicted across any of the five merges; every conflict was confined to scripts/arch-metrics/budgets.json's notes/numbers. Full focused suite run all green (go build ./... clean; envinfo/hosttrust/sandbox/lease/workflow-launch/inference/workflow-models/cmd-pix/workflow-reset all pass; npx tsc --noEmit clean; 64/64 roster-family node tests pass; go test -race on workflow/launch (2.064s), lease (29.614s), envinfo (1.074s) all pass with no race detected). Two consecutive full make gate runs both exit 0 clean on the first attempt (36.193s then 36.xxxs), no flaky UAT surfaced, so no integration defect and no red-first fix commit was needed. User-cleanup patch sha256 2dd22c878cb7723c929bf6c5f21c0a8567bdc3fc5d75dc057f30e8fcf4656691 identical before stash and after pop, now explicitly covering the modified Dockerfile alongside the prior seven legal-doc/LICENSE changes, never staged or committed. All five worktrees (/tmp/pix-native-e2-2, -e2-3, -e2-4, -e3-2, -e3-3) removed, and the five now-fully-merged unit branches deleted as part of worktree cleanup.",
+      "timestamp": "2026-08-29T18:20:00Z",
+      "log": ".pi-agent/deliver/native-environments/logs/wave-d-e2.2-e2.4-wave-e-e3.2-e3.3-final-gate.log"
     }
   ],
   "final_evidence": {
@@ -1541,13 +1569,13 @@
       "E2.8"
     ],
     "done": [
-      "E2.1"
+      "E2.1",
+      "E2.2",
+      "E2.3",
+      "E2.4"
     ],
     "running": [],
     "pending": [
-      "E2.2",
-      "E2.3",
-      "E2.4",
       "E2.5",
       "E2.6",
       "E2.7",
@@ -1569,6 +1597,41 @@
         "patch_sha256": "2dd22c878cb7723c929bf6c5f21c0a8567bdc3fc5d75dc057f30e8fcf4656691",
         "never_staged_or_committed": true
       }
+    },
+    "e2_2_evidence": {
+      "state": "complete",
+      "merge_sha": "77d0b665a6fb3495263c8b553e79f9785a9bd128",
+      "unit_head": "f63b9237",
+      "merge_method": "git merge --no-ff unit/native-e2-2 into design/simplify-pack-rigs, clean (no conflicts)",
+      "focused_suites": "go test ./envinfo/... ./sandbox/... ./hosttrust/... ./workflow/reset/... : all pass",
+      "user_cleanup_preserved": {
+        "patch_sha256": "2dd22c878cb7723c929bf6c5f21c0a8567bdc3fc5d75dc057f30e8fcf4656691",
+        "never_staged_or_committed": true
+      }
+    },
+    "e2_3_evidence": {
+      "state": "complete",
+      "merge_sha": "582e87463a5af615ea6464c6d23520962c7149ee",
+      "unit_head": "20ec95f1",
+      "merge_method": "git merge --no-ff unit/native-e2-3 into design/simplify-pack-rigs, one conflict in scripts/arch-metrics/budgets.json (pix/host/lease and pix/host/workflow/launch entries only; no logic conflict)",
+      "conflict_resolution": "both conflicts were pure JSON-encoding divergence (HEAD's \\u2014 escape vs the branch's literal em dash) wrapping the SAME shrink-only text, with unit/native-e2-3's side already carrying the full superset note (its own E2.3 review-fix addendum) and matching numbers; resolved by taking the e2-3 side verbatim, then measuring fresh on the merged tree (go run ./scripts/arch-metrics -root services/host): pix/host/lease prod_loc 904/exports 20/globals 12 and pix/host/workflow/launch prod_loc 3134/exports 131/globals 52 both confirmed exact matches, budgets check passes",
+      "focused_suites": "go test ./workflow/launch/... -run 'CreateIntent|Recovery' : pass (also covered by the full ./workflow/launch/... run)",
+      "user_cleanup_preserved": {
+        "patch_sha256": "2dd22c878cb7723c929bf6c5f21c0a8567bdc3fc5d75dc057f30e8fcf4656691",
+        "never_staged_or_committed": true
+      }
+    },
+    "e2_4_evidence": {
+      "state": "complete",
+      "merge_sha": "4d1242217d2c29942b306c993fb4f528f72f5d3e",
+      "unit_head": "ffa33fd8",
+      "merge_method": "git merge --no-ff unit/native-e2-4 into design/simplify-pack-rigs, four conflicts in scripts/arch-metrics/budgets.json only (pix/host/envinfo, pix/host/lease: pure superset/HEAD-already-includes-it, no logic; pix/host/sandbox and pix/host/workflow/launch: genuine divergent additive notes)",
+      "conflict_resolution": "envinfo and lease conflicts were HEAD-is-superset (unit/native-e2-4 branched before E2.2/E2.3 landed, so its budgets.json side was stale for packages it never touches) -- resolved by keeping HEAD verbatim. pix/host/sandbox and pix/host/workflow/launch were real combines: E2.2's FromFacetMap note plus E2.4's PlanEnvRemove note were concatenated into one _prod_loc_note field for sandbox (removing the pre-existing duplicate _prod_loc_note key), and E2.3's createintent review-fix note plus E2.4's PlanEnvRemoveSeam note were concatenated for workflow/launch. All four packages' prod_loc/exports/globals/edges were then overwritten with a fresh measurement on the merged tree (go run ./scripts/arch-metrics -root services/host): envinfo 2503/66/17, lease 904/20/12, sandbox 970/29/23, workflow/launch 3296/134/53/edges 16 -- budgets check passes clean at these fresh numbers",
+      "focused_suites": "go test ./sandbox/... ./workflow/launch/... -run 'Remove|EnvRemove' : pass (also covered by the full ./sandbox/... and ./workflow/launch/... runs)",
+      "user_cleanup_preserved": {
+        "patch_sha256": "2dd22c878cb7723c929bf6c5f21c0a8567bdc3fc5d75dc057f30e8fcf4656691",
+        "never_staged_or_committed": true
+      }
     }
   },
   "wave_e": {
@@ -1581,12 +1644,12 @@
       "E3.4"
     ],
     "done": [
-      "E3.1"
+      "E3.1",
+      "E3.2",
+      "E3.3"
     ],
     "running": [],
     "pending": [
-      "E3.2",
-      "E3.3",
       "E3.4"
     ],
     "constraint": "E3.1 runs concurrently with the Wave D spine (architecture.md section 6); E3.2 is TypeScript-only and safe alongside all of Wave D",
@@ -1609,6 +1672,80 @@
         "never_staged_or_committed": true
       },
       "worktrees_removed": ["/tmp/pix-native-e2-1", "/tmp/pix-native-e3-1"]
+    },
+    "e3_2_evidence": {
+      "state": "complete",
+      "merge_sha": "83741eca22b7a6baec60f2e5ee633f51930e5f7a",
+      "unit_head": "7b556e33",
+      "merge_method": "git merge --no-ff unit/native-e3-2 into design/simplify-pack-rigs, clean (no conflicts, TypeScript-only unit)",
+      "focused_suites": "node --test tests/roster-resolution.test.mjs tests/subagent-usage.test.mjs tests/ollama-bridge.test.mjs tests/inference-roster.test.mjs tests/inference-roster-provider-id-parity.test.mjs tests/no-extension-routing-json-read.test.mjs tests/no-fallback-intent-resolution.test.mjs tests/subagent-roster-resolution.test.mjs : 64/64 pass; npx tsc --noEmit : clean",
+      "user_cleanup_preserved": {
+        "patch_sha256": "2dd22c878cb7723c929bf6c5f21c0a8567bdc3fc5d75dc057f30e8fcf4656691",
+        "never_staged_or_committed": true
+      }
+    },
+    "e3_3_evidence": {
+      "state": "complete",
+      "merge_sha": "2515455217a5008cceabc8bd8f6097610432f75a",
+      "unit_head": "15971ed1",
+      "merge_method": "git merge --no-ff unit/native-e3-3 into design/simplify-pack-rigs, three conflicts in scripts/arch-metrics/budgets.json only (pix/host/envinfo, pix/host/lease, pix/host/workflow/launch: unit/native-e3-3 branched before E2.2-E2.4 landed, so its side was a strict subset of HEAD's already-merged notes for packages it never touches; no logic conflict)",
+      "conflict_resolution": "all three resolved by keeping HEAD verbatim (confirmed byte-for-byte subset relationship before resolving). E3.3's own packages (pix/host/cmd/pix, pix/host/workflow/models) auto-merged with no conflict; fresh measurement on the merged tree (go run ./scripts/arch-metrics -root services/host) found cmd/pix had actually SHRUNK to prod_loc 3926 (from the stale recorded 4015) after E3.3 deleted the WHY/score/price/status-taxonomy rendering code, so the budget was ratcheted down to the fresh number with a combined note documenting the shrink; workflow/models matched its recorded 1528/22/10 exactly. Budgets check passes clean",
+      "focused_suites": "go test ./cmd/pix/ -run 'Models|Agent' ./workflow/models/... : pass (also covered by the full ./cmd/pix/... and ./workflow/models/... runs)",
+      "user_cleanup_preserved": {
+        "patch_sha256": "2dd22c878cb7723c929bf6c5f21c0a8567bdc3fc5d75dc057f30e8fcf4656691",
+        "never_staged_or_committed": true
+      }
+    },
+    "e2.2_e2.4_e3.2_e3.3_final_verification": {
+      "state": "complete",
+      "merge_order": ["E2.2", "E2.3", "E2.4", "E3.2", "E3.3"],
+      "merge_shas": {
+        "E2.2": "77d0b665a6fb3495263c8b553e79f9785a9bd128",
+        "E2.3": "582e87463a5af615ea6464c6d23520962c7149ee",
+        "E2.4": "4d1242217d2c29942b306c993fb4f528f72f5d3e",
+        "E3.2": "83741eca22b7a6baec60f2e5ee633f51930e5f7a",
+        "E3.3": "2515455217a5008cceabc8bd8f6097610432f75a"
+      },
+      "head": "2515455217a5008cceabc8bd8f6097610432f75a",
+      "baseline_gate": {"command": "make gate", "exit": 0, "duration": "35.740s", "note": "pre-merge baseline at fa90c520, clean before any of the five merges"},
+      "focused_suites": "go test ./envinfo/... ./hosttrust/... ./sandbox/... ./lease/... ./workflow/launch/... ./inference/... ./workflow/models/... ./cmd/pix/... ./workflow/reset/... : all pass; npx tsc --noEmit : clean; node --test (roster/subagent/ollama-bridge suites) : 64/64 pass; go test -race ./workflow/launch/... ./lease/... ./envinfo/... : all pass, no race detected",
+      "final_gate": {
+        "command": "make gate",
+        "runs": 2,
+        "exit": [0, 0],
+        "note": "both consecutive full runs passed clean on the first attempt; no flaky UAT or other failure surfaced, so no third rerun was needed and no integration defect required a red-first fix commit",
+        "log": ".pi-agent/deliver/native-environments/logs/wave-d-e2.2-e2.4-wave-e-e3.2-e3.3-final-gate.log"
+      },
+      "user_cleanup_preserved": {
+        "files": [
+          ".claude/settings.local.json",
+          "CODE_OF_CONDUCT.md",
+          "CONTRIBUTING.md",
+          "Dockerfile",
+          "LICENSE",
+          "NOTICE.md",
+          "SECURITY.md",
+          "THIRD_PARTY_NOTICES.md"
+        ],
+        "patch_sha256_before": "2dd22c878cb7723c929bf6c5f21c0a8567bdc3fc5d75dc057f30e8fcf4656691",
+        "patch_sha256_after": "2dd22c878cb7723c929bf6c5f21c0a8567bdc3fc5d75dc057f30e8fcf4656691",
+        "never_staged_or_committed": true,
+        "note": "captured via git diff | sha256sum before git stash push -u, popped after all five merges and the final gate, identical hash confirms byte-exact preservation including the previously-modified Dockerfile"
+      },
+      "worktrees_removed": [
+        "/tmp/pix-native-e2-2",
+        "/tmp/pix-native-e2-3",
+        "/tmp/pix-native-e2-4",
+        "/tmp/pix-native-e3-2",
+        "/tmp/pix-native-e3-3"
+      ],
+      "unit_branches_deleted": [
+        "unit/native-e2-2",
+        "unit/native-e2-3",
+        "unit/native-e2-4",
+        "unit/native-e3-2",
+        "unit/native-e3-3"
+      ]
     }
   },
   "wave_f": {
