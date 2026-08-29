@@ -385,9 +385,11 @@ func TestReset_ExternalEnvironmentSource_UntouchedByteIdenticalAcceptanceGone(t 
 	if got := cli.ExitCode(reviewErr); got != 2 {
 		t.Errorf("cli.ExitCode(reviewErr) = %d, want 2 (a refusal, not an operational failure)", got)
 	}
+	// The retry command lives in the refusal's own three-part text now
+	// (C7), never a second, output-only line on reviewOut.
 	wantFix := "pix env review extenv --yes"
-	if !strings.Contains(reviewOut.String(), wantFix) {
-		t.Errorf("Review's refusal must name itself as the fix (%q); got:\n%s", wantFix, reviewOut.String())
+	if !strings.Contains(reviewErr.Error(), wantFix) {
+		t.Errorf("Review's refusal must name itself as the fix (%q); got:\n%s", wantFix, reviewErr.Error())
 	}
 }
 

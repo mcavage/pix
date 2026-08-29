@@ -236,6 +236,43 @@ func TestErrorFamily_MissingRequiredFile(t *testing.T) {
 		`environment "home" has no required .sbxenv.yaml`, "missing:", "create it: pix env edit home sbxenv")
 }
 
+// ── add.go: PATH prevalidation (C8) ──────────────────────────────────────
+
+func TestErrorFamily_AddPathPrevalidation(t *testing.T) {
+	missing := &AddPathError{Name: "home", Path: "/no/such/dir", Kind: "does not exist"}
+	assertRefusal(t, "add PATH does not exist", cli.UsageError{Err: missing}, 1,
+		"/no/such/dir does not exist", "path: /no/such/dir", "scaffold instead: pix env add home")
+
+	notDir := &AddPathError{Name: "home", Path: "/etc/hosts", Kind: "is not a directory"}
+	assertRefusal(t, "add PATH is not a directory", cli.UsageError{Err: notDir}, 1,
+		"/etc/hosts is not a directory", "path: /etc/hosts", "scaffold instead: pix env add home")
+}
+
+// TestErrorFamily_AddMissingRequiredFile_ScaffoldRetry is C8's other half:
+// an empty, otherwise-valid PATH (a real directory, but with no
+// `.sbxenv.yaml` inside it) reaches Load's own MissingRequiredFileError
+// through Review — and add's context needs a DIFFERENT next step than
+// load.go's other callers, since NAME is not registered yet
+// (addMissingRequiredFileRetry's own doc comment): never the impossible
+// `pix env edit NAME sbxenv` against an unregistered name, always the
+// scaffold form.
+func TestErrorFamily_AddMissingRequiredFile_ScaffoldRetry(t *testing.T) {
+	orig := cli.UsageError{Err: &MissingRequiredFileError{Name: "home", Root: "/env/home", File: ".sbxenv.yaml"}}
+	got := addMissingRequiredFileRetry("home", orig)
+	assertRefusal(t, "add-time missing .sbxenv.yaml rewritten to scaffold retry", got, 1,
+		`environment "home" has no required .sbxenv.yaml`, "missing: /env/home/.sbxenv.yaml", "scaffold instead: pix env add home")
+	if strings.Contains(got.Error(), "pix env edit") {
+		t.Errorf("add-time retry must never point at `pix env edit`, an impossible command against an unregistered name: %q", got.Error())
+	}
+
+	// A different error type passes through unchanged — this rewrite is
+	// scoped to exactly one error shape.
+	other := cli.UsageError{Err: &ScaffoldCollisionError{Root: "/data/envs/home"}}
+	if rewritten := addMissingRequiredFileRetry("home", other); rewritten != other {
+		t.Errorf("addMissingRequiredFileRetry rewrote an unrelated error: %v", rewritten)
+	}
+}
+
 // ── resolve.go: noncanonical root, containment, symlinked root ──────────
 //
 // Neither is reachable through a wired `pix env` verb today (see this
@@ -418,11 +455,13 @@ func countExactLine(text, want string) int {
 
 // ── review.go: the gate's three refusal shapes, output + error combined ──
 //
-// The gate's runnable command is PRINTED to stdout alongside the bill (the
-// SAME thing every other `pix env` refusal's Error() string carries
-// inline) — see review.go's gate doc comment — so these three assertions
-// look at out+err together, exactly as a real terminal session would show
-// them one after another.
+// The bill renders to stdout; the gate's runnable retry command lives
+// entirely in the returned error's own three-part text (the SAME place
+// every other `pix env` refusal's Error() string carries its command) —
+// see review.go's gate doc comment — so these three assertions look at
+// out+err together, exactly as a real terminal session would show them one
+// after another, while still proving the retry is never ALSO duplicated as
+// a second, output-only line on stdout.
 
 func TestErrorFamily_ReviewGate(t *testing.T) {
 	newFixture := func(t *testing.T) *config.Config {
@@ -451,10 +490,10 @@ func TestErrorFamily_ReviewGate(t *testing.T) {
 		if !strings.Contains(combined, trustConfirmation) {
 			t.Errorf("combined output = %q, want the rendered bill", combined)
 		}
-		if got := countExactLine(combined, "pix env review work --yes"); got != 1 {
+		if got := countExactLine(combined, "retry: pix env review work --yes"); got != 1 {
 			t.Errorf("combined output names `pix env review work --yes` %d times, want exactly 1:\n%s", got, combined)
 		}
-		if got := countExactLine(combined, "pix env review work"); got != 0 {
+		if got := countExactLine(combined, "retry: pix env review work"); got != 0 {
 			t.Errorf("non-TTY refusal must never ALSO print the bare re-run line, got %d:\n%s", got, combined)
 		}
 	})
@@ -471,7 +510,7 @@ func TestErrorFamily_ReviewGate(t *testing.T) {
 		}
 		combined := out.String() + "\n" + err.Error()
 		assertFamilyCopy(t, "review EOF refusal", combined)
-		if got := countExactLine(combined, "pix env review work"); got != 1 {
+		if got := countExactLine(combined, "retry: pix env review work"); got != 1 {
 			t.Errorf("combined output names the bare re-run command %d times, want exactly 1:\n%s", got, combined)
 		}
 	})
@@ -488,7 +527,7 @@ func TestErrorFamily_ReviewGate(t *testing.T) {
 		}
 		combined := out.String() + "\n" + err.Error()
 		assertFamilyCopy(t, "review no-answer refusal", combined)
-		if got := countExactLine(combined, "pix env review work"); got != 1 {
+		if got := countExactLine(combined, "retry: pix env review work"); got != 1 {
 			t.Errorf("combined output names the bare re-run command %d times, want exactly 1:\n%s", got, combined)
 		}
 	})

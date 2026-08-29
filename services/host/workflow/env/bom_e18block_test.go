@@ -510,7 +510,7 @@ func TestClassificationMatrix_EachFacetAloneIsTier1DefaultVisibleAndFingerprints
 			}
 
 			var out bytes.Buffer
-			err = gate(nil, &out, false, false, "iso", bom, false)
+			err = gate(nil, &out, false, false, "iso", "", "", bom, false)
 			if err == nil {
 				t.Fatal("facet alone must refuse non-TTY review without --yes")
 			}

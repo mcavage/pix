@@ -165,16 +165,24 @@ type envShowCmd struct {
 
 func (c *envShowCmd) Run(d *cli.Deps) error {
 	if countTrue(c.Path, c.JSON, c.Effective) > 1 {
+		// Three-part (C6): the failure statement, the valid modes as DATA
+		// (never three separate command lines a reader could mistake for
+		// three independent fixes), and exactly ONE runnable retry — the
+		// plain `env show NAME` form, since it is the one invocation that is
+		// always valid regardless of which conflicting combination was
+		// given. Routed through envRun (rather than returned directly, as
+		// this used to) so its self-prefixed "pix: " is never doubled by
+		// dispatch's own generic `"pix: %v"` printer — the same reason every
+		// other typed refusal in this package goes through envRun.
 		name := c.Name
 		if name == "" {
 			name = "<name>"
 		}
-		return cli.Usagef(
+		return envRun(d, cli.Usagef(
 			"pix: env show: --path, --json and --effective are mutually exclusive; pick exactly one.\n"+
-				"     pix env show %s --path         canonical root only\n"+
-				"     pix env show %s --json         machine-readable summary\n"+
-				"     pix env show %s --effective    the byte-identical sbx document",
-			name, name, name)
+				"     valid: --path, --json, --effective\n"+
+				"     retry: pix env show %s",
+			name))
 	}
 	cfg, err := d.Config()
 	if err != nil {

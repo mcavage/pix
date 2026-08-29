@@ -67,8 +67,13 @@ func TestReview_NonTTYWithoutYesFailsClosedAndWritesNothing(t *testing.T) {
 	if !strings.Contains(out.String(), wantPRDBillDefault) {
 		t.Errorf("non-TTY output must contain the same bill, got:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "pix env review work --yes") {
-		t.Errorf("non-TTY output must name the --yes re-run command, got:\n%s", out.String())
+	// The retry command lives in the error's own three-part text now, never
+	// a second, output-only line (C7): out carries the bill only.
+	if strings.Contains(out.String(), "pix env review work --yes") {
+		t.Errorf("non-TTY output must not ALSO print the retry command separately from the error, got:\n%s", out.String())
+	}
+	if !strings.Contains(err.Error(), "pix env review work --yes") {
+		t.Errorf("non-TTY refusal error must name the --yes re-run command, got:\n%s", err.Error())
 	}
 
 	ts, err := loadEnvironmentTrustStore()

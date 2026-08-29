@@ -131,8 +131,8 @@ func TestAdd_RegisterTier1_YesAccepts(t *testing.T) {
 	if !strings.Contains(out.String(), "Accept this host-execution footprint?") {
 		t.Errorf("stdout = %q, want the review bill", out.String())
 	}
-	if !strings.Contains(out.String(), "accepted via --yes") {
-		t.Errorf("stdout = %q, want the --yes acceptance line", out.String())
+	if !strings.Contains(out.String(), "consent supplied via --yes") {
+		t.Errorf("stdout = %q, want the --yes consent line", out.String())
 	}
 }
 
@@ -466,5 +466,116 @@ func TestAdd_ConfigExactSave(t *testing.T) {
 	}
 	if reloaded.Environment != "" {
 		t.Errorf("reloaded Environment (machine default) = %q, want empty: Add never selects a default", reloaded.Environment)
+	}
+}
+
+// ── register: PATH prevalidation (C8) ────────────────────────────────────
+
+func TestAdd_RegisterPath_NonexistentRefusesWithScaffoldRetry(t *testing.T) {
+	tempConfigAndState(t)
+	cfg := loadConfig(t)
+	parent := t.TempDir()
+	missing := filepath.Join(parent, "nope")
+
+	_, err := Add(cfg, "home", missing, AddOptions{LookPath: noBareLookPath})
+	if err == nil {
+		t.Fatal("Add against a nonexistent PATH must refuse")
+	}
+	if got := cli.ExitCode(err); got != 2 {
+		t.Errorf("cli.ExitCode(err) = %d, want 2", got)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, missing+" does not exist") {
+		t.Errorf("error = %q, want it to name the exact path and grounded kind", msg)
+	}
+	if !strings.Contains(msg, "scaffold instead: pix env add home") {
+		t.Errorf("error = %q, want the scaffold retry (the register form cannot work against this PATH)", msg)
+	}
+	if len(cfg.Environments) != 0 {
+		t.Errorf("cfg.Environments = %v, want untouched", cfg.Environments)
+	}
+}
+
+func TestAdd_RegisterPath_NotADirectoryRefusesWithScaffoldRetry(t *testing.T) {
+	tempConfigAndState(t)
+	cfg := loadConfig(t)
+	parent := t.TempDir()
+	file := filepath.Join(parent, "plain-file")
+	if err := os.WriteFile(file, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Add(cfg, "home", file, AddOptions{LookPath: noBareLookPath})
+	if err == nil {
+		t.Fatal("Add against a non-directory PATH must refuse")
+	}
+	if got := cli.ExitCode(err); got != 2 {
+		t.Errorf("cli.ExitCode(err) = %d, want 2", got)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, file+" is not a directory") {
+		t.Errorf("error = %q, want it to name the exact path and grounded kind", msg)
+	}
+	if !strings.Contains(msg, "scaffold instead: pix env add home") {
+		t.Errorf("error = %q, want the scaffold retry", msg)
+	}
+}
+
+// TestAdd_RegisterPath_EmptyExistingDirNeverSuggestsEdit is C8's other
+// half: PATH itself IS a valid, existing directory (prevalidation passes),
+// but it holds no `.sbxenv.yaml` — Load's own MissingRequiredFileError,
+// reached through Review, must be rewritten for add's context (NAME is not
+// registered in the real config yet) rather than pointing at the
+// impossible `pix env edit home sbxenv`.
+func TestAdd_RegisterPath_EmptyExistingDirNeverSuggestsEdit(t *testing.T) {
+	tempConfigAndState(t)
+	cfg := loadConfig(t)
+	empty := t.TempDir() // exists, is a directory, holds nothing
+
+	_, err := Add(cfg, "home", empty, AddOptions{LookPath: noBareLookPath})
+	if err == nil {
+		t.Fatal("Add against an empty existing directory must refuse (no .sbxenv.yaml)")
+	}
+	if got := cli.ExitCode(err); got != 2 {
+		t.Errorf("cli.ExitCode(err) = %d, want 2", got)
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "pix env edit") {
+		t.Errorf("error = %q, must never point at `pix env edit`, an impossible command against an unregistered name", msg)
+	}
+	if !strings.Contains(msg, "scaffold instead: pix env add home") {
+		t.Errorf("error = %q, want the scaffold retry", msg)
+	}
+	if len(cfg.Environments) != 0 {
+		t.Errorf("cfg.Environments = %v, want untouched", cfg.Environments)
+	}
+}
+
+// TestAdd_ScaffoldRetryForm proves reviewOptionsFrom's scaffold-origin
+// retry string is the bare `pix env add NAME` form (never the internal
+// config.EnvsDir() scaffold target the caller never typed) — exercised
+// directly since scaffoldAdd's document is always Tier0 (bom.Tier1() is
+// always false), so the gate this retry feeds is never actually reached
+// through the live scaffold path today.
+func TestAdd_ScaffoldRetryForm(t *testing.T) {
+	opts := reviewOptionsFrom(AddOptions{}, nil, "my env", "")
+	if opts.Retry != "pix env add 'my env'" {
+		t.Errorf("scaffold Retry = %q, want the quoted bare `pix env add NAME` form", opts.Retry)
+	}
+	if opts.NonTTYRetry != "pix env add 'my env' --yes" {
+		t.Errorf("scaffold NonTTYRetry = %q, want the quoted bare form plus --yes", opts.NonTTYRetry)
+	}
+}
+
+// TestAdd_RegisterRetryForm proves reviewOptionsFrom's register-origin
+// retry string correctly POSIX-shell-quotes both NAME and PATH.
+func TestAdd_RegisterRetryForm(t *testing.T) {
+	opts := reviewOptionsFrom(AddOptions{}, nil, "home", "/needs a quote's/path")
+	want := `pix env add home '/needs a quote'\''s/path'`
+	if opts.Retry != want {
+		t.Errorf("register Retry = %q, want %q", opts.Retry, want)
+	}
+	if opts.NonTTYRetry != want+" --yes" {
+		t.Errorf("register NonTTYRetry = %q, want %q", opts.NonTTYRetry, want+" --yes")
 	}
 }

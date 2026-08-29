@@ -275,34 +275,61 @@ func renderBill(out io.Writer, name string, b BillOfMaterials, verbose bool) {
 // ── the gate ──────────────────────────────────────────────────────────────
 
 // gate renders the bill and requires explicit consent. yes accepts outright
-// (the bill still renders, for the record). A non-TTY without yes prints
-// the SAME bill plus the exact `--yes` re-run command and fails closed as a
-// cli.UsageError (exit 2) — nothing is written. On a TTY the default answer
-// is No: EOF, a blank line, or anything but y/yes refuses.
-func gate(in io.Reader, out io.Writer, tty, yes bool, name string, b BillOfMaterials, verbose bool) error {
+// (the bill still renders, for the record, and the line printed for it says
+// only that CONSENT was supplied — never "accepted": persistence still has
+// to survive the under-lock reload below, so claiming acceptance here would
+// be a pre-store verdict the TOCTOU recheck could still fail). A refusal
+// (non-TTY without yes; an EOF, blank, or non-y/yes TTY answer) is the
+// family's own three-part form — what failed, the grounded "recorded:
+// nothing" fact, and exactly ONE runnable retry — carried entirely in the
+// returned cli.UsageError's own text, never split across a second,
+// output-only command line printed to out: retry/nonTTYRetry are the ONE
+// place that command lives, so a caller reading only the error (envRun's
+// stderr line) still gets the complete, runnable next step.
+//
+// retry/nonTTYRetry are ORIGIN-appropriate (ReviewOptions' own doc
+// comment): a direct `pix env review NAME` retries itself, so an empty
+// value here defaults to exactly that; `pix env add NAME [PATH]` supplies
+// its own POSIX-shell-quoted form instead, since NAME is not registered in
+// the real config yet and "pix env review NAME" would itself fail with an
+// unknown-name refusal.
+func gate(in io.Reader, out io.Writer, tty, yes bool, name, retry, nonTTYRetry string, b BillOfMaterials, verbose bool) error {
+	if retry == "" {
+		retry = fmt.Sprintf("pix env review %s", name)
+	}
+	if nonTTYRetry == "" {
+		nonTTYRetry = fmt.Sprintf("pix env review %s --yes", name)
+	}
 	renderBill(out, name, b, verbose)
 	if yes {
-		fmt.Fprintln(out, "\naccepted via --yes")
+		fmt.Fprintln(out, "\nconsent supplied via --yes")
 		return nil
 	}
 	if !tty || in == nil {
-		fmt.Fprintf(out, "\npix env review %s --yes\n", name)
 		return cli.UsageError{Err: fmt.Errorf(
-			"environment %q would run the above on your host; refusing to review it non-interactively (fail closed)", name,
+			"pix: environment %q would run the above on your host; refusing to review it non-interactively (fail closed).\n"+
+				"     recorded: nothing\n"+
+				"     retry: %s", name, nonTTYRetry,
 		)}
 	}
 	sc := bufio.NewScanner(in)
 	fmt.Fprintln(out)
 	if !sc.Scan() {
-		fmt.Fprintf(out, "pix env review %s\n", name)
-		return cli.UsageError{Err: fmt.Errorf("environment %q not accepted (no answer; default is No)", name)}
+		return cli.UsageError{Err: fmt.Errorf(
+			"pix: environment %q not accepted (no answer; default is No).\n"+
+				"     recorded: nothing\n"+
+				"     retry: %s", name, retry,
+		)}
 	}
 	switch strings.ToLower(strings.TrimSpace(sc.Text())) {
 	case "y", "yes":
 		return nil
 	}
-	fmt.Fprintf(out, "pix env review %s\n", name)
-	return cli.UsageError{Err: fmt.Errorf("environment %q not accepted (you said no)", name)}
+	return cli.UsageError{Err: fmt.Errorf(
+		"pix: environment %q not accepted (you said no).\n"+
+			"     recorded: nothing\n"+
+			"     retry: %s", name, retry,
+	)}
 }
 
 // ReviewChangedDuringPromptError is Review's commit-time refusal (Wave C
@@ -333,6 +360,21 @@ type ReviewOptions struct {
 	TTY     bool
 	In      io.Reader
 	Out     io.Writer
+	// Retry is the runnable command gate's TTY refusals (EOF, an explicit
+	// "no") point back to — no `--yes`, since a human is right there to
+	// answer again. Empty defaults to the bare `pix env review NAME` form,
+	// correct for a direct `env review` call; `env add` supplies its own
+	// origin-appropriate, POSIX-shell-quoted `pix env add NAME [PATH]`
+	// instead (add.go's reviewOptionsFrom), because NAME is not yet
+	// registered in the real config — Review only ever sees add's
+	// throwaway candidateConfig (Add's own doc comment) — so "pix env
+	// review NAME" would itself fail with an unknown-name refusal rather
+	// than actually retrying anything.
+	Retry string
+	// NonTTYRetry is the same, `--yes`-suffixed non-interactive form gate's
+	// non-TTY refusal points back to. Empty defaults to the bare Retry form
+	// plus " --yes".
+	NonTTYRetry string
 }
 
 // ReviewResult is what Review did, for a caller to report. Fingerprint is
@@ -393,7 +435,7 @@ func Review(cfg *config.Config, name string, effective EffectiveMounts, lookPath
 	if out == nil {
 		out = io.Discard
 	}
-	if err := gate(opts.In, out, opts.TTY, opts.Yes, name, bom, opts.Verbose); err != nil {
+	if err := gate(opts.In, out, opts.TTY, opts.Yes, name, opts.Retry, opts.NonTTYRetry, bom, opts.Verbose); err != nil {
 		return nil, err
 	}
 
