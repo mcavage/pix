@@ -567,6 +567,14 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 			Tree:               selection.Tree,
 		}, o.Name, rec.Name)
 		if !decision.Attach {
+			// E1.6/E2.6's I4 diagnostic: a creation-fingerprint drift refusal
+			// appends one bounded recreatelog record; every other refusal
+			// reason (RecordAttachRefusal's own guard) appends nothing. This
+			// is diagnostic only — a write failure here is swallowed rather
+			// than layered onto the refusal it is describing.
+			if sdir, serr := config.StateDir(); serr == nil {
+				_ = launch.RecordAttachRefusal(sdir, rec.Name, decision)
+			}
 			return runFail(d, 1, "%s", decision.Refusal)
 		}
 		attachExec = true
