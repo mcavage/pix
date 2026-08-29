@@ -217,8 +217,10 @@
     },
     {
       "id": "E2.1",
-      "status": "running",
-      "subagent_run_id": "wave-d-e2.1"
+      "status": "done",
+      "subagent_run_id": "wave-d-e2.1",
+      "merge_sha": "0d24399e003a9be14d4b8e69227aa4867148eaa8",
+      "unit_head": "ba77859d"
     },
     {
       "id": "E2.2",
@@ -257,8 +259,10 @@
     },
     {
       "id": "E3.1",
-      "status": "running",
-      "subagent_run_id": "wave-e-e3.1"
+      "status": "done",
+      "subagent_run_id": "wave-e-e3.1",
+      "merge_sha": "55025e0f0801b1c692a96147b3d5837e829ef399",
+      "unit_head": "f452ec52"
     },
     {
       "id": "E3.2",
@@ -1171,8 +1175,8 @@
       "source": "architect",
       "round": 0,
       "text": "E2.1's renderer scope did not state it must be a PURE function over a caller-supplied RuntimeFacts value; as written it could legitimately compute sandbox/mcp facts itself, which the L1 layer rule forbids.",
-      "status": "plan-fixed",
-      "fix_commit": ".pi-agent units.json E2.1 scope",
+      "status": "fixed",
+      "fix_commit": "0d24399e (E2.1 merge): envinfo/render.go's RenderEffective takes a caller-supplied RuntimeFacts and imports neither mcp nor sandbox, pinned by arch_effective_test.go's no-sibling-import sentinel",
       "triage_message_ref": null
     },
     {
@@ -1180,8 +1184,8 @@
       "source": "architect",
       "round": 0,
       "text": "No fitness function guarded 'envinfo imports neither mcp nor sandbox' or 'exactly one producer of the Pi mixin kit'; added F17.",
-      "status": "plan-fixed",
-      "fix_commit": ".pi-agent architecture.md F17 / units.json E2.1",
+      "status": "fixed",
+      "fix_commit": "0d24399e (E2.1 merge): arch_effective_test.go ships F17 as one of its three named E2.1 sentinels (no sibling import on envinfo/render.go, no duplicate op-run grammar, exactly one effective-document producer), verified green in the integrated tree's focused suite run",
       "triage_message_ref": null
     },
     {
@@ -1189,8 +1193,8 @@
       "source": "architect",
       "round": 0,
       "text": "E2.1's file list omitted services/host/cmd/pix/env_cmd.go even though the --effective wiring and RuntimeFacts assembly happen at that call site.",
-      "status": "plan-fixed",
-      "fix_commit": ".pi-agent units.json E2.1 files",
+      "status": "fixed",
+      "fix_commit": "0d24399e (E2.1 merge): env_cmd.go's --effective branch calls env.RenderEffectiveDocument and writes its bytes verbatim, landed as part of the unit/native-e2-1 diff",
       "triage_message_ref": null
     },
     {
@@ -1198,8 +1202,8 @@
       "source": "architect",
       "round": 0,
       "text": "Without an explicit single-producer rule, a second Pi mixin materialization implementation could appear in cmd/pix/env_cmd.go or workflow/launch, duplicating envinfo/mixin.go's logic and creating two disagreeing sources of the same kit; now guarded by F17.",
-      "status": "plan-fixed",
-      "fix_commit": ".pi-agent architecture.md F17",
+      "status": "fixed",
+      "fix_commit": "0d24399e (E2.1 merge): same F17 sentinel as C4, exactly-one-effective-document-producer, green in the integrated tree",
       "triage_message_ref": null
     },
     {
@@ -1252,8 +1256,8 @@
       "source": "architect",
       "round": 0,
       "text": "status.json still read as pre-Wave-D planning state (acceptance bar silent on full migration, wave_d.status not_started) despite the user's explicit full-send instruction to open Waves D-H.",
-      "status": "plan-fixed",
-      "fix_commit": ".pi-agent status.json acceptance_bar/wave_d",
+      "status": "fixed",
+      "fix_commit": ".pi-agent status.json E2.1/E3.1 marked done with merge SHAs, wave_d/wave_e running lists emptied and done lists populated, this very update",
       "triage_message_ref": null
     }
   ],
@@ -1385,6 +1389,16 @@
       "command": "make gate",
       "output_summary": "all 11 segments PASS, total 35.622s; user-cleanup git diff sha256 c6df92b5ac482047c92b7224c6e8427cb21ae829825c33f49d4057382dc0536d identical before and after; git status/HEAD unchanged by the run",
       "timestamp": "2026-08-29T08:42:00Z"
+    },
+    {
+      "stage": "wave-d-e2.1-wave-e-e3.1-integration",
+      "attempt": 1,
+      "hypothesis": "unit/native-e2-1 (ba77859d) and unit/native-e3-1 (f452ec52) integrate into design/simplify-pack-rigs cleanly, with only the expected arch-metrics budget conflict, and the user's unstaged legal-doc cleanup survives untouched.",
+      "change": "Captured the user-cleanup patch hash, git stash push -u, merged unit/native-e2-1 --no-ff (clean, no conflicts), merged unit/native-e3-1 --no-ff (one conflict: scripts/arch-metrics/budgets.json pix/host/cmd/pix entry only), resolved by combining both units' incremental notes and re-measuring the merged tree fresh with go run ./scripts/arch-metrics -root services/host, ran focused E2.1 (envinfo/workflow-env/cmd) and E3.1 (inference + node inference-provider/inference-manifest-filename) suites, ran make gate, popped the stash and diffed the patch hash.",
+      "command": "git diff | sha256sum; git stash push -u; git merge --no-ff unit/native-e2-1; git merge --no-ff unit/native-e3-1; (resolve budgets.json conflict); go test ./envinfo/... ./workflow/env/... ./cmd/pix/... ./inference/...; node --test tests/inference-provider.test.mjs tests/inference-manifest-filename.test.mjs; make gate; git stash pop; git diff | sha256sum",
+      "output_summary": "E2.1 merge 0d24399e clean, no conflicts. E3.1 merge 55025e0f conflicted only on scripts/arch-metrics/budgets.json's pix/host/cmd/pix entry (both units raised the same 4005 base to disjoint targets: E2.1->4012, E3.1->4009); an arch-metrics budget conflict, not a logic conflict -- no code file collided. First resolution attempt mistakenly dropped E3.1's separate inference package budget bump (953->1097/33->35/8->9) by rebuilding the file from the pre-E3.1 'ours' stage; caught by a violating make gate run, fixed by restoring the inference entry from the E3.1 side and amending the merge commit. Focused suites all pass (go envinfo/workflow-env/cmd/inference; 14/14 node inference tests). First full make gate hit a transient, pre-existing, merge-unrelated flake (pix/host TestRelayBytesPropagatesConnReadError, untouched by this merge, passes standalone and on the immediate full-gate rerun); two consecutive clean make gate runs afterward both exit 0. No integration defect requiring a red-first fix commit. User-cleanup patch sha256 2dd22c878cb7723c929bf6c5f21c0a8567bdc3fc5d75dc057f30e8fcf4656691 identical before stash and after pop; git status showed the same 8 unstaged legal-doc/Dockerfile/LICENSE changes throughout, never staged. Both worktrees (/tmp/pix-native-e2-1, /tmp/pix-native-e3-1) removed after verification.",
+      "timestamp": "2026-08-29T17:05:00Z",
+      "log": ".pi-agent/deliver/native-environments/logs/wave-d-e2.1-e3.1-final-gate.log"
     }
   ],
   "final_evidence": {
@@ -1526,9 +1540,10 @@
       "E2.7",
       "E2.8"
     ],
-    "running": [
+    "done": [
       "E2.1"
     ],
+    "running": [],
     "pending": [
       "E2.2",
       "E2.3",
@@ -1538,7 +1553,23 @@
       "E2.7",
       "E2.8"
     ],
-    "constraint": "private work environment converted and run live before E2.8 (A8/R6), enforced by a recorded evidence artifact (architect correction C11); see HANDOFF.md for the exact next order"
+    "constraint": "private work environment converted and run live before E2.8 (A8/R6), enforced by a recorded evidence artifact (architect correction C11); see HANDOFF.md for the exact next order",
+    "e2_1_evidence": {
+      "state": "complete",
+      "merge_sha": "0d24399e003a9be14d4b8e69227aa4867148eaa8",
+      "unit_head": "ba77859d",
+      "merge_method": "git merge --no-ff unit/native-e2-1 into design/simplify-pack-rigs, clean (no conflicts)",
+      "focused_suites": "go test ./envinfo/... ./workflow/env/... ./cmd/pix/... : all pass",
+      "final_gate": {
+        "command": "make gate",
+        "exit": 0,
+        "log": ".pi-agent/deliver/native-environments/logs/wave-d-e2.1-e3.1-final-gate.log"
+      },
+      "user_cleanup_preserved": {
+        "patch_sha256": "2dd22c878cb7723c929bf6c5f21c0a8567bdc3fc5d75dc057f30e8fcf4656691",
+        "never_staged_or_committed": true
+      }
+    }
   },
   "wave_e": {
     "status": "in_progress",
@@ -1549,15 +1580,36 @@
       "E3.3",
       "E3.4"
     ],
-    "running": [
+    "done": [
       "E3.1"
     ],
+    "running": [],
     "pending": [
       "E3.2",
       "E3.3",
       "E3.4"
     ],
-    "constraint": "E3.1 runs concurrently with the Wave D spine (architecture.md section 6); E3.2 is TypeScript-only and safe alongside all of Wave D"
+    "constraint": "E3.1 runs concurrently with the Wave D spine (architecture.md section 6); E3.2 is TypeScript-only and safe alongside all of Wave D",
+    "e3_1_evidence": {
+      "state": "complete",
+      "merge_sha": "55025e0f0801b1c692a96147b3d5837e829ef399",
+      "unit_head": "f452ec52",
+      "merge_method": "git merge --no-ff unit/native-e3-1 into design/simplify-pack-rigs, one conflict in scripts/arch-metrics/budgets.json (pix/host/cmd/pix arch-metrics budget entry only; no logic conflict)",
+      "conflict_resolution": "both E2.1 and E3.1 raised cmd/pix from the same 4005 base to disjoint targets (4012 vs 4009); resolved by combining both incremental _prod_loc_note texts and measuring fresh on the merged tree (go run ./scripts/arch-metrics -root services/host): cmd/pix prod_loc 4015; envinfo/workflow/env keep E2.1's numbers, inference keeps E3.1's numbers, both confirmed unchanged by the fresh measurement",
+      "focused_suites": "go test ./inference/... : pass; node --test tests/inference-provider.test.mjs tests/inference-manifest-filename.test.mjs : 14/14 pass",
+      "final_gate": {
+        "command": "make gate",
+        "exit": 0,
+        "note": "one transient run hit a known-flaky pix/host TestRelayBytesPropagatesConnReadError (unrelated to E2.1/E3.1, untouched by the merge, passes deterministically standalone and on the very next full-gate rerun); two subsequent consecutive full runs both exit 0 clean, no integration defect, no fix commit needed",
+        "log": ".pi-agent/deliver/native-environments/logs/wave-d-e2.1-e3.1-final-gate.log"
+      },
+      "user_cleanup_preserved": {
+        "patch_sha256_before": "2dd22c878cb7723c929bf6c5f21c0a8567bdc3fc5d75dc057f30e8fcf4656691",
+        "patch_sha256_after": "2dd22c878cb7723c929bf6c5f21c0a8567bdc3fc5d75dc057f30e8fcf4656691",
+        "never_staged_or_committed": true
+      },
+      "worktrees_removed": ["/tmp/pix-native-e2-1", "/tmp/pix-native-e3-1"]
+    }
   },
   "wave_f": {
     "status": "pending",
