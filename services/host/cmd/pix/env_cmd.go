@@ -84,7 +84,7 @@ unless --yes.`
 type envCmd struct {
 	Ls     envLsCmd     `cmd:"" default:"1" help:"List registered environments. Marks the default."`
 	Add    envAddCmd    `cmd:"" help:"Register a directory, or scaffold a new one, then review it."`
-	Use    envUseCmd    `cmd:"" help:"Set the machine default. Refuses an unaccepted Tier1 environment, or one whose footprint changed since review."`
+	Use    envUseCmd    `cmd:"" help:"Set the machine default. Refuses an environment that runs code on your host until it has been reviewed, or one whose footprint changed since review."`
 	Show   envShowCmd   `cmd:"" help:"What NAME is: files, models, mounts, MCP, review state, drift."`
 	Edit   envEditCmd   `cmd:"" help:"Open pix.toml or .sbxenv.yaml in $VISUAL/$EDITOR, then validate."`
 	Review envReviewCmd `cmd:"" help:"Read and accept what NAME runs on your host."`

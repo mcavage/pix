@@ -120,6 +120,16 @@ func TestShellInjection_ScaffoldCollision(t *testing.T) {
 	}
 }
 
+// ── SymlinkError: Path (the inspect-it `ls -ld PATH` command) ───────────
+
+func TestShellInjection_SymlinkError(t *testing.T) {
+	for _, payload := range []string{spaceAndMetaPayload, quotePayload} {
+		path := "/ws/" + payload
+		err := &SymlinkError{Kind: "environment root", Path: path}
+		assertPayloadIsOneToken(t, err.Error(), "inspect it: ls -ld ", path)
+	}
+}
+
 // ── ConcurrentRegistrationError: Name, Attempted (both branches) ────────
 
 func TestShellInjection_ConcurrentRegistration(t *testing.T) {

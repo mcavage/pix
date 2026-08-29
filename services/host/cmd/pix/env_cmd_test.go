@@ -311,6 +311,40 @@ func TestEnvReview_NonTTYFailsClosed(t *testing.T) {
 	}
 }
 
+// TestEnvReview_NonTTYFailsClosed_MergedStreamNeverGluesPromptToError proves
+// item 3's fix at the real dispatch layer: when stdout and stderr share ONE
+// underlying writer (exactly what a real terminal session shows, one stream
+// after another), the bill's trailing consent prompt and the refusal
+// error's own "pix: " line must never run together as a single glued
+// line — exactly one newline separates them, matching the same blank line
+// the interactive TTY branch already prints before it reads an answer.
+func TestEnvReview_NonTTYFailsClosed_MergedStreamNeverGluesPromptToError(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	var merged bytes.Buffer
+	d := &cli.Deps{Out: &merged, Err: &merged, In: strings.NewReader(""), Interactive: false}
+	registerHostExecEnv(t, "work")
+
+	code := dispatch([]string{"env", "review", "work"}, d)
+	if code != 2 {
+		t.Fatalf("pix env review work (non-TTY) = %d, want 2 (merged: %s)", code, merged.String())
+	}
+	got := merged.String()
+	if strings.Contains(got, "[y/N]:pix:") {
+		t.Errorf("merged stdout+stderr glues the consent prompt straight to the error, want a newline between them, got:\n%q", got)
+	}
+	const boundary = "Accept this host-execution footprint? [y/N]:"
+	i := strings.Index(got, boundary)
+	if i < 0 {
+		t.Fatalf("merged output missing the consent prompt, got:\n%s", got)
+	}
+	after := got[i+len(boundary):]
+	if !strings.HasPrefix(after, "\npix: ") {
+		t.Errorf("want exactly one newline then the error's own \"pix: \" prefix immediately after the prompt, got %q", after)
+	}
+}
+
 func TestEnvReview_YesAccepts(t *testing.T) {
 	d, out, errb := envDeps(t)
 	registerHostExecEnv(t, "work")
@@ -1099,9 +1133,13 @@ func TestEnvRm_HelpListsExactlySevenWorkingVerbs(t *testing.T) {
 }
 
 // TestEnvUse_HelpNamesTheActualGate is finding C12: `use`'s help must say
-// what Use (use.go) ACTUALLY refuses — an unaccepted or changed Tier1
-// environment — not the looser "unreviewed" wording that reads as if EVERY
-// environment needs review; a Tier0 environment never gates here at all.
+// what Use (use.go) ACTUALLY refuses — an unaccepted or changed
+// host-executing environment — not the looser "unreviewed" wording that
+// reads as if EVERY environment needs review; an environment that runs
+// nothing on the host never gates here at all. The plain-language DX pass
+// keeps that same precision ("runs code on your host", never a bare
+// "unreviewed") without the internal "Tier1" vocabulary a reader never had
+// to learn.
 func TestEnvUse_HelpNamesTheActualGate(t *testing.T) {
 	var out bytes.Buffer
 	d := &cli.Deps{Out: &out, Err: &out}
@@ -1110,10 +1148,13 @@ func TestEnvUse_HelpNamesTheActualGate(t *testing.T) {
 	}
 	got := out.String()
 	if strings.Contains(got, "unreviewed") {
-		t.Errorf("pix env use --help = %q, must not say \"unreviewed\" (Use never gates a Tier0 environment at all)", got)
+		t.Errorf("pix env use --help = %q, must not say \"unreviewed\" (Use never gates an environment that runs nothing on the host)", got)
 	}
-	if !strings.Contains(got, "Tier1") {
-		t.Errorf("pix env use --help = %q, want it to name the Tier1 gate explicitly", got)
+	if strings.Contains(got, "Tier1") || strings.Contains(got, "Tier0") {
+		t.Errorf("pix env use --help = %q, must never name the internal Tier1/Tier0 vocabulary", got)
+	}
+	if !strings.Contains(got, "runs code on your host") {
+		t.Errorf("pix env use --help = %q, want it to name the actual gate in plain language", got)
 	}
 }
 
@@ -1370,5 +1411,26 @@ func TestEnvEdit_NoSbxenvFlagInHelp(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "--sbxenv") {
 		t.Errorf("help text = %q, must never advertise a --sbxenv flag", out.String())
+	}
+}
+
+// TestEnvUseHelp_PlainLanguageNoTier1 proves `pix env use --help` describes
+// the refusal in plain language a reader never had to learn pix's internal
+// tier vocabulary for: an environment that runs code on the host requires
+// review, and a changed footprint is refused. "Tier1" (or "Tier0") never
+// appears anywhere in the live help text.
+func TestEnvUseHelp_PlainLanguageNoTier1(t *testing.T) {
+	d, out, errb := envDeps(t)
+	if code := dispatch([]string{"env", "use", "--help"}, d); code != 0 {
+		t.Fatalf("pix env use --help = %d, want 0 (stderr: %s)", code, errb.String())
+	}
+	got := out.String()
+	if strings.Contains(got, "Tier1") || strings.Contains(got, "Tier0") {
+		t.Errorf("pix env use --help = %q, must never name the internal Tier1/Tier0 vocabulary", got)
+	}
+	for _, want := range []string{"runs code on your host", "reviewed", "footprint changed"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("pix env use --help = %q, want it to contain %q", got, want)
+		}
 	}
 }

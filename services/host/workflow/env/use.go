@@ -46,11 +46,11 @@ func (e *UseNotReviewedError) Error() string {
 	name := sys.ShellQuote(e.Name)
 	if e.Changed {
 		return fmt.Sprintf(
-			"pix: environment %q changed what it runs on your host.\n     review it: pix env review %s",
+			"pix: environment %q changed what it runs on your host.\n     state: accepted fingerprint no longer matches\n     review it: pix env review %s",
 			e.Name, name)
 	}
 	return fmt.Sprintf(
-		"pix: environment %q has not been reviewed.\n     review it: pix env review %s",
+		"pix: environment %q has not been reviewed.\n     state: no accepted fingerprint on record\n     review it: pix env review %s",
 		e.Name, name)
 }
 

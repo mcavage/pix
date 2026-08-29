@@ -187,7 +187,10 @@ type SymlinkError struct {
 }
 
 func (e *SymlinkError) Error() string {
-	return fmt.Sprintf("pix: %s %s is a symlink; refusing", e.Kind, e.Path)
+	return fmt.Sprintf(
+		"pix: %s %s is a symlink; refusing.\n     path: %s\n     inspect it: ls -ld %s",
+		e.Kind, e.Path, e.Path, sys.ShellQuote(e.Path),
+	)
 }
 
 // RefuseSymlinkedRoot refuses when root itself (not a directory it happens

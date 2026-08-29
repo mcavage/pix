@@ -138,11 +138,14 @@ func TestAssertFamilyCopy_SelfTest(t *testing.T) {
 }
 
 // commandOccurrences counts lines (after the first, when the message is
-// multi-line) that name a runnable command — "pix ..." or "rm -rf ...".
-// The FIRST line is always this family's failure statement, and several
-// failure statements legitimately mention a command in backtick-quoted
-// prose while explaining what was ambiguous (CwdHasSbxenvError's headline
-// is the sharpest example): counting it would double-count the exact
+// multi-line) that name a runnable command — "pix ...", "rm -rf ...", or
+// "ls -ld ..." (SymlinkError's own non-destructive inspection command:
+// the family's fix is never a pix verb when the offending thing is a
+// symlink pix cannot safely resolve on a caller's behalf). The FIRST line
+// is always this family's failure statement, and several failure
+// statements legitimately mention a command in backtick-quoted prose
+// while explaining what was ambiguous (CwdHasSbxenvError's headline is
+// the sharpest example): counting it would double-count the exact
 // disambiguation those types exist to present cleanly on their own
 // dedicated lines. A single-line message (no failure/command split at
 // all) is counted whole, since there is no separate line to exclude.
@@ -153,7 +156,7 @@ func commandOccurrences(msg string) int {
 	}
 	n := 0
 	for _, l := range lines {
-		if strings.Contains(l, "pix ") || strings.Contains(l, "rm -rf ") {
+		if strings.Contains(l, "pix ") || strings.Contains(l, "rm -rf ") || strings.Contains(l, "ls -ld ") {
 			n++
 		}
 	}
@@ -296,16 +299,14 @@ func TestErrorFamily_SymlinkedRoot(t *testing.T) {
 	// an MCP command, a kit path, a host service command, and an edit
 	// target — see resolve.go's own doc comment), so there is no single
 	// `pix env <verb> NAME` fix this type can name honestly; the concrete
-	// fix is always a filesystem edit outside pix entirely. It is still
-	// held to the copy contract and to naming the exact offending path —
-	// grounded context — but is exempt from the command-count assertion
-	// the rest of this table applies.
-	err := &SymlinkError{Kind: "environment root", Path: "/ws/link"}
-	msg := err.Error()
-	assertFamilyCopy(t, "symlinked root", msg)
-	if !strings.Contains(msg, "environment root") || !strings.Contains(msg, "/ws/link") {
-		t.Errorf("SymlinkError.Error() = %q, want it to name the kind and the exact path", msg)
-	}
+	// fix is always a filesystem edit outside pix entirely. It still follows
+	// the family's three-part form: the failure statement, the exact
+	// offending kind/path as grounded fact, and one non-destructive,
+	// runnable inspection command (`ls -ld PATH`, shell-quoted) — never a
+	// destructive fix pix cannot safely propose sight-unseen.
+	err := cli.UsageError{Err: &SymlinkError{Kind: "environment root", Path: "/ws/link"}}
+	assertRefusal(t, "symlinked root", err, 1,
+		"environment root", "/ws/link is a symlink", "path: /ws/link", "inspect it: ls -ld /ws/link")
 }
 
 // ── add.go: zero-path cwd collision (two commands, D10/AC-47), scaffold collision ──
@@ -321,7 +322,7 @@ func TestErrorFamily_CwdHasSbxenv(t *testing.T) {
 func TestErrorFamily_ScaffoldCollision(t *testing.T) {
 	err := cli.UsageError{Err: &ScaffoldCollisionError{Root: "/data/envs/home"}}
 	assertRefusal(t, "scaffold target already exists", err, 1,
-		"/data/envs/home already exists", "pix env add <name> /data/envs/home")
+		"/data/envs/home already exists", "occupied: /data/envs/home", "pix env add <name> /data/envs/home")
 }
 
 // ── use.go: unreviewed / changed since review ────────────────────────────
@@ -329,11 +330,11 @@ func TestErrorFamily_ScaffoldCollision(t *testing.T) {
 func TestErrorFamily_UseNotReviewed(t *testing.T) {
 	err := &UseNotReviewedError{Name: "work"}
 	assertRefusal(t, "never reviewed", cli.UsageError{Err: err}, 1,
-		`environment "work" has not been reviewed`, "review it: pix env review work")
+		`environment "work" has not been reviewed`, "state: no accepted fingerprint on record", "review it: pix env review work")
 
 	err2 := &UseNotReviewedError{Name: "work", Changed: true}
 	assertRefusal(t, "changed since review", cli.UsageError{Err: err2}, 1,
-		`environment "work" changed what it runs on your host`, "review it: pix env review work")
+		`environment "work" changed what it runs on your host`, "state: accepted fingerprint no longer matches", "review it: pix env review work")
 }
 
 // ── review.go / commit.go: the two Wave C concurrency refusals ──────────

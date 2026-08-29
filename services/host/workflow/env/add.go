@@ -203,8 +203,8 @@ type ScaffoldCollisionError struct {
 
 func (e *ScaffoldCollisionError) Error() string {
 	return fmt.Sprintf(
-		"pix: %s already exists; refusing to overwrite it. Pick a different name, or register it as-is: pix env add <name> %s",
-		e.Root, sys.ShellQuote(e.Root),
+		"pix: %s already exists; refusing to overwrite it.\n     occupied: %s\n     register it as-is: pix env add <name> %s",
+		e.Root, e.Root, sys.ShellQuote(e.Root),
 	)
 }
 

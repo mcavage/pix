@@ -237,10 +237,14 @@ func RenderShowPath(out io.Writer, r ShowResult) {
 	fmt.Fprintln(out, r.Root)
 }
 
-// showJSONView is `env show --json`'s wire shape. Accepted deliberately
-// carries NO `omitempty`: false is exactly as meaningful an answer as true
-// (unaccepted vs accepted), and a caller reading it for its own boolean
-// truthiness must never see the key vanish instead of read `false`.
+// showJSONView is `env show --json`'s wire shape. Accepted, ModelCount,
+// MountCount, and MCPCount deliberately carry NO `omitempty`: false/0 is
+// exactly as meaningful an answer as true/nonzero (unaccepted vs accepted;
+// declares nothing vs declares something), and a caller reading any of
+// them for its own truthiness must never see the key vanish instead of
+// read the honest zero value — the same reasoning agreeing with
+// showDeclaredCounts' own human-readable "0 models, 0 mounts, 0 MCP
+// servers" line, which never omits a zero count either.
 type showJSONView struct {
 	SchemaVersion  int         `json:"schema_version"`
 	Environment    string      `json:"environment"`
@@ -250,9 +254,9 @@ type showJSONView struct {
 	Accepted       bool        `json:"accepted"`
 	ReviewState    ReviewState `json:"review_state,omitempty"`
 	Fingerprint    string      `json:"fingerprint,omitempty"`
-	ModelCount     int         `json:"model_count,omitempty"`
-	MountCount     int         `json:"mount_count,omitempty"`
-	MCPCount       int         `json:"mcp_count,omitempty"`
+	ModelCount     int         `json:"model_count"`
+	MountCount     int         `json:"mount_count"`
+	MCPCount       int         `json:"mcp_count"`
 }
 
 // RenderShowJSON writes `env show --json`. Environment is "none" exactly

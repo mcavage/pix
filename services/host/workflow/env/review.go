@@ -328,6 +328,13 @@ func gate(in io.Reader, out io.Writer, tty, yes bool, name, retry, nonTTYRetry s
 		return nil
 	}
 	if !tty || in == nil {
+		// A blank line before the error, exactly like the TTY branch prints
+		// before it reads an answer just below: out ends with the bare
+		// consent prompt (no trailing newline, by design — renderBill's own
+		// golden), so without this the returned error's "pix: " text would
+		// glue straight onto "[y/N]:" whenever a caller's stdout and stderr
+		// share one stream, exactly as a real terminal session shows them.
+		fmt.Fprintln(out)
 		return cli.UsageError{Err: fmt.Errorf(
 			"pix: environment %q would run the above on your host; refusing to review it non-interactively (fail closed).\n"+
 				"     recorded: nothing\n"+

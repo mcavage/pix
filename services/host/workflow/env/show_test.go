@@ -349,3 +349,34 @@ func TestRenderShowJSON_AcceptedBoolNeverOmitted(t *testing.T) {
 		t.Errorf("show --json with an unaccepted environment = %s, want an explicit \"accepted\": false, never an omitted key", got)
 	}
 }
+
+// TestRenderShowJSON_CountsNeverOmittedAndAgreeWithHumanCounts proves the
+// same "false is a meaningful answer" reasoning extends to model_count/
+// mount_count/mcp_count: no `omitempty`, so a zero count (a real, honest
+// "declares nothing" fact) renders as an explicit 0 key rather than
+// vanishing, and the JSON counts agree with RenderShowDefault's own
+// human-readable line for the exact same ShowResult.
+func TestRenderShowJSON_CountsNeverOmittedAndAgreeWithHumanCounts(t *testing.T) {
+	r := ShowResult{Selected: true, Name: "work", Root: "/w", ModelCount: 0, MountCount: 0, MCPCount: 0}
+
+	var jsonOut bytes.Buffer
+	if err := RenderShowJSON(&jsonOut, r); err != nil {
+		t.Fatal(err)
+	}
+	got := jsonOut.String()
+	for _, want := range []string{`"model_count": 0`, `"mount_count": 0`, `"mcp_count": 0`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("show --json with zero counts = %s, want an explicit %q key, never omitted", got, want)
+		}
+	}
+
+	var defaultOut bytes.Buffer
+	RenderShowDefault(&defaultOut, r)
+	humanCounts := showDeclaredCounts(r)
+	if !strings.Contains(defaultOut.String(), humanCounts) {
+		t.Errorf("default show = %s, want it to contain the same declared counts %q the --json view reports", defaultOut.String(), humanCounts)
+	}
+	if !strings.Contains(humanCounts, "0 models") || !strings.Contains(humanCounts, "0 mounts") || !strings.Contains(humanCounts, "0 MCP servers") {
+		t.Errorf("showDeclaredCounts(zero counts) = %q, want the same zero counts the --json view now also reports explicitly", humanCounts)
+	}
+}
