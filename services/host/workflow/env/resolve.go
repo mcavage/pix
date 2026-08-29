@@ -11,6 +11,7 @@ import (
 	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/hosttrust"
+	"pix/host/sys"
 )
 
 // Resolve returns the canonical root registered under name in cfg. It is a
@@ -57,7 +58,7 @@ type NoncanonicalRootError struct {
 func (e *NoncanonicalRootError) Error() string {
 	return fmt.Sprintf(
 		"pix: environment %q's registered root is not a canonical absolute path; refusing rather than resolving it against the current directory.\n     root: %s\n     re-register it: pix env add %s <path>",
-		e.Name, e.Root, e.Name,
+		e.Name, e.Root, sys.ShellQuote(e.Name),
 	)
 }
 

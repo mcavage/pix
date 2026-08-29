@@ -22,6 +22,7 @@
 package env
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -102,12 +103,83 @@ type CwdHasSbxenvError struct {
 }
 
 func (e *CwdHasSbxenvError) Error() string {
+	name := sys.ShellQuote(e.Name)
+	cwdArg := sys.ShellQuote(e.Cwd)
 	return fmt.Sprintf(
 		"pix: %s already has a %s; a zero-path `pix env add %s` is ambiguous between registering it and scaffolding an unrelated new environment. Pick one explicitly:\n"+
 			"     register this directory: pix env add %s %s\n"+
 			"     scaffold a new one:      cd elsewhere && pix env add %s",
-		e.Cwd, sbxenvFilename, e.Name, e.Name, e.Cwd, e.Name,
+		e.Cwd, sbxenvFilename, name, name, cwdArg, name,
 	)
+}
+
+// AddPathError is `pix env add NAME PATH`'s PATH-prevalidation refusal
+// (C8): PATH must already be a real, existing directory before anything
+// else is attempted — checked BEFORE the candidate ever reaches Review's
+// Load, whose own `.sbxenv.yaml` os.Stat, several calls later, would
+// otherwise name the wrong thing (the missing FILE) when the problem is
+// actually the missing or non-directory PATH itself. Kind grounds exactly
+// what failed ("does not exist", "is not a directory"); the only honest
+// next step is the scaffold form — the register form this refusal fires
+// from cannot possibly work against this PATH, so naming it again would be
+// an impossible retry.
+type AddPathError struct {
+	Name string
+	Path string
+	Kind string
+}
+
+func (e *AddPathError) Error() string {
+	return fmt.Sprintf(
+		"pix: %s %s.\n     path: %s\n     scaffold instead: pix env add %s",
+		e.Path, e.Kind, e.Path, sys.ShellQuote(e.Name),
+	)
+}
+
+// validateAddPath is registerAdd's prevalidation gate: canonRoot (the exact
+// canonical path that would be stored) must already exist and be a
+// directory. A permissions failure or anything else os.Stat cannot
+// classify as "missing"/"not a directory" is an operational failure (exit
+// 1), never this refusal — there is nothing wrong with what the caller
+// authored, pix simply could not check it.
+func validateAddPath(name, canonRoot string) error {
+	fi, err := os.Stat(canonRoot)
+	switch {
+	case err == nil && fi.IsDir():
+		return nil
+	case err == nil:
+		return cli.UsageError{Err: &AddPathError{Name: name, Path: canonRoot, Kind: "is not a directory"}}
+	case os.IsNotExist(err):
+		return cli.UsageError{Err: &AddPathError{Name: name, Path: canonRoot, Kind: "does not exist"}}
+	default:
+		return fmt.Errorf("pix: checking %s: %w", canonRoot, err)
+	}
+}
+
+// addMissingRequiredFileRetry rewrites Load's MissingRequiredFileError,
+// reached through Review's own Load call, for add's context: NAME is not
+// registered in the real config yet — Review only ever sees add's
+// throwaway candidateConfig (Add's own doc comment) — so
+// MissingRequiredFileError's own "create it: pix env edit NAME sbxenv" (the
+// correct fix for an ALREADY-REGISTERED environment load.go's other callers
+// resolve) would itself fail with an unknown-name refusal here: an
+// impossible retry against a name that does not exist yet. The only
+// alternative that is actually runnable is the scaffold form, which builds
+// its own fresh, valid `.sbxenv.yaml` under pix's own control rather than
+// asking a caller to hand-author one inside a directory add cannot safely
+// write into on their behalf. Every other error Review can return (an
+// unknown-command refusal, a strict parse failure, a containment/symlink
+// refusal, ...) already names a fix that is equally runnable whether or not
+// NAME is registered yet, so it passes through unchanged.
+func addMissingRequiredFileRetry(name string, err error) error {
+	var missing *MissingRequiredFileError
+	if !errors.As(err, &missing) {
+		return err
+	}
+	return cli.UsageError{Err: fmt.Errorf(
+		"pix: environment %q has no required %s.\n     missing: %s\n     scaffold instead: pix env add %s",
+		name, missing.File, filepath.Join(missing.Root, missing.File), sys.ShellQuote(name),
+	)}
 }
 
 // ScaffoldCollisionError is a zero-path `add`'s refusal when its computed
@@ -122,7 +194,7 @@ type ScaffoldCollisionError struct {
 func (e *ScaffoldCollisionError) Error() string {
 	return fmt.Sprintf(
 		"pix: %s already exists; refusing to overwrite it. Pick a different name, or register it as-is: pix env add <name> %s",
-		e.Root, e.Root,
+		e.Root, sys.ShellQuote(e.Root),
 	)
 }
 
@@ -222,9 +294,23 @@ func commitAddRegistration(cfg *config.Config, name, path, canonRoot, observed s
 
 // reviewOptionsFrom adapts AddOptions straight into ReviewOptions — the
 // one seam that would otherwise have to be repeated in both registerAdd
-// and scaffoldAdd.
-func reviewOptionsFrom(opts AddOptions, out io.Writer) ReviewOptions {
-	return ReviewOptions{Verbose: opts.Verbose, Yes: opts.Yes, TTY: opts.TTY, In: opts.In, Out: out}
+// and scaffoldAdd — and supplies add's own origin-appropriate retry
+// commands (ReviewOptions.Retry/NonTTYRetry's own doc comment): the exact
+// `pix env add NAME [PATH]` invocation the caller just made, POSIX-shell-
+// quoted (sys.ShellQuote) so a NAME or PATH containing a space or shell
+// metacharacter still round-trips through copy-paste-and-run. path is ""
+// for scaffoldAdd's bare `pix env add NAME` form — never the internal
+// scaffold target under config.EnvsDir(), which the caller never typed and
+// a retry must not name in their place.
+func reviewOptionsFrom(opts AddOptions, out io.Writer, name, path string) ReviewOptions {
+	retry := fmt.Sprintf("pix env add %s", sys.ShellQuote(name))
+	if path != "" {
+		retry = fmt.Sprintf("pix env add %s %s", sys.ShellQuote(name), sys.ShellQuote(path))
+	}
+	return ReviewOptions{
+		Verbose: opts.Verbose, Yes: opts.Yes, TTY: opts.TTY, In: opts.In, Out: out,
+		Retry: retry, NonTTYRetry: retry + " --yes",
+	}
 }
 
 // registerAdd implements `pix env add NAME PATH` — see Add's own doc
@@ -247,11 +333,22 @@ func registerAdd(cfg *config.Config, name, path string, opts AddOptions) (*AddRe
 		return nil, cli.UsageError{Err: err}
 	}
 
-	result, err := Review(candidate, name, nil, opts.LookPath, reviewOptionsFrom(opts, out))
+	// C8: PATH must already be a real directory before Review/Load ever
+	// gets to its own `.sbxenv.yaml` check — see AddPathError's own doc
+	// comment for why a later, deeper refusal would misname the problem.
+	if err := validateAddPath(name, canonRoot); err != nil {
+		return nil, err
+	}
+
+	result, err := Review(candidate, name, nil, opts.LookPath, reviewOptionsFrom(opts, out, name, path))
 	if err != nil {
 		// Review failed or was refused against the CANDIDATE cfg only; the
 		// real cfg was never touched, so there is nothing to roll back.
-		return nil, err
+		// A missing-`.sbxenv.yaml` refusal needs add's own context-aware
+		// retry (addMissingRequiredFileRetry's doc comment); every other
+		// error already names a fix that works whether or not NAME is
+		// registered yet, so it passes through unchanged.
+		return nil, addMissingRequiredFileRetry(name, err)
 	}
 
 	if err := commitAddRegistration(cfg, name, path, canonRoot, observed, observedOK); err != nil {
@@ -260,7 +357,7 @@ func registerAdd(cfg *config.Config, name, path string, opts AddOptions) (*AddRe
 		}
 		return nil, fmt.Errorf(
 			"pix: environment %q was reviewed and accepted, but saving the registration failed: %w (re-run `pix env add %s %s` to retry)",
-			name, err, name, path,
+			name, err, sys.ShellQuote(name), sys.ShellQuote(path),
 		)
 	}
 
@@ -279,7 +376,7 @@ func printAddSuccess(out io.Writer, name, root string, scaffolded bool) {
 	if scaffolded {
 		verb = "scaffolded"
 	}
-	fmt.Fprintf(out, "pix: environment %q %s at %s.\n\npix env use %s\n", name, verb, root, name)
+	fmt.Fprintf(out, "pix: environment %q %s at %s.\n\npix env use %s\n", name, verb, root, sys.ShellQuote(name))
 }
 
 // scaffoldAdd implements `pix env add NAME` (no PATH). See Add's own doc
@@ -357,7 +454,7 @@ func scaffoldAdd(cfg *config.Config, name string, opts AddOptions) (*AddResult, 
 	if _, err := candidate.AddEnvironment(name, root); err != nil {
 		return nil, err // unreachable: the same inputs were just accepted above
 	}
-	result, err := Review(candidate, name, nil, opts.LookPath, reviewOptionsFrom(opts, out))
+	result, err := Review(candidate, name, nil, opts.LookPath, reviewOptionsFrom(opts, out, name, ""))
 	if err != nil {
 		return nil, err
 	}
@@ -373,7 +470,7 @@ func scaffoldAdd(cfg *config.Config, name string, opts AddOptions) (*AddResult, 
 		}
 		return nil, fmt.Errorf(
 			"pix: environment %q was scaffolded and accepted, but saving the registration failed: %w (re-run `pix env add %s` to retry)",
-			name, err, name,
+			name, err, sys.ShellQuote(name),
 		)
 	}
 

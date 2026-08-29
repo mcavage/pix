@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -252,9 +253,37 @@ func TestEnvShow_FlagsMutuallyExclusive(t *testing.T) {
 		if code := dispatch(argv, d); code != 2 {
 			t.Errorf("dispatch(%v) = %d, want 2 (usage refusal)", argv, code)
 		}
-		if !strings.Contains(errb.String(), "mutually exclusive") {
-			t.Errorf("dispatch(%v) stderr = %q, want a mutually-exclusive refusal", argv, errb.String())
+		got := errb.String()
+		if !strings.Contains(got, "mutually exclusive") {
+			t.Errorf("dispatch(%v) stderr = %q, want a mutually-exclusive refusal", argv, got)
 		}
+		// C6: no doubled "pix: " prefix (dispatch's own generic printer must
+		// never re-add it on top of the family's own self-prefixed message).
+		if strings.Contains(got, "pix: pix:") {
+			t.Errorf("dispatch(%v) stderr = %q, must never double-prefix \"pix: \"", argv, got)
+		}
+		// valid modes are DATA (one line), never three separate command lines.
+		if !strings.Contains(got, "valid: --path, --json, --effective") {
+			t.Errorf("dispatch(%v) stderr = %q, want the valid modes listed as data", argv, got)
+		}
+		// exactly one runnable retry, naming the actual NAME given.
+		if want := "retry: pix env show work"; !strings.Contains(got, want) {
+			t.Errorf("dispatch(%v) stderr = %q, want %q", argv, got, want)
+		}
+		if n := strings.Count(got, "pix env show work"); n != 1 {
+			t.Errorf("dispatch(%v) stderr = %q, want exactly one runnable command, got %d", argv, got, n)
+		}
+	}
+
+	// No NAME given: the retry uses the `<name>` placeholder, never an empty
+	// or malformed command.
+	d, _, errb := envDeps(t)
+	code := dispatch([]string{"env", "show", "--path", "--json"}, d)
+	if code != 2 {
+		t.Fatalf("dispatch = %d, want 2", code)
+	}
+	if want := "retry: pix env show <name>"; !strings.Contains(errb.String(), want) {
+		t.Errorf("stderr = %q, want %q", errb.String(), want)
 	}
 }
 
@@ -272,8 +301,8 @@ func TestEnvReview_NonTTYFailsClosed(t *testing.T) {
 	if !strings.Contains(out.String(), "Accept this host-execution footprint?") {
 		t.Errorf("stdout = %q, want the review bill", out.String())
 	}
-	if !strings.Contains(out.String(), "pix env review work --yes") {
-		t.Errorf("stdout = %q, want the --yes re-run command", out.String())
+	if !strings.Contains(errb.String(), "pix env review work --yes") {
+		t.Errorf("stderr = %q, want the --yes re-run command", errb.String())
 	}
 }
 
@@ -406,6 +435,98 @@ func TestEnvAdd_RegisterTier1_NonTTYFailsClosedTransactionally(t *testing.T) {
 	}
 	if !strings.Contains(errb2.String(), `no environment named "work"`) {
 		t.Errorf("stderr = %q, want the unknown-name form (nothing was registered)", errb2.String())
+	}
+}
+
+// extractRetryLine pulls C7's labeled `retry: ...` line out of a refusal's
+// text — the ONE runnable next command the review-gate family now carries
+// entirely in the error, never a second, output-only line.
+func extractRetryLine(t *testing.T, text string) string {
+	t.Helper()
+	for _, line := range strings.Split(text, "\n") {
+		if s, ok := strings.CutPrefix(strings.TrimSpace(line), "retry: "); ok {
+			return s
+		}
+	}
+	t.Fatalf("no `retry: ...` line found in:\n%s", text)
+	return ""
+}
+
+// shellTokenize proves a retry command is actually POSIX-shell-quoted, not
+// merely printf-formatted to look that way: it hands cmd to a REAL `sh -c`
+// (via `set --`) and reads back argv exactly as a shell would expand it,
+// rather than reimplementing shell-word-splitting by hand in the test.
+func shellTokenize(t *testing.T, cmd string) []string {
+	t.Helper()
+	script := "set -- " + cmd + "\nfor a in \"$@\"; do printf '%s\\000' \"$a\"; done"
+	out, err := exec.Command("sh", "-c", script).Output()
+	if err != nil {
+		t.Fatalf("sh -c tokenize %q: %v", cmd, err)
+	}
+	trimmed := strings.TrimSuffix(string(out), "\x00")
+	if trimmed == "" {
+		return nil
+	}
+	return strings.Split(trimmed, "\x00")
+}
+
+// TestEnvAdd_NonTTYRetryCommandIsShellTokenizableAndRedispatchSucceeds is
+// C7's own proof, not merely a golden string match: `pix env add NAME PATH`
+// against a Tier1 fixture whose PATH needs real POSIX quoting (a space and
+// a shell metacharacter) refuses non-interactively, its emitted `retry:`
+// command survives a REAL `sh -c` tokenization back into the exact
+// NAME/PATH argv pair, and re-dispatching that argv (a fresh, unregistered
+// process-equivalent run) actually SUCCEEDS — the whole point of an
+// origin-appropriate retry over the bare `pix env review NAME` this used
+// to (wrongly) print, which would have failed with an unknown-name
+// refusal since NAME was never registered by the first, refused attempt.
+func TestEnvAdd_NonTTYRetryCommandIsShellTokenizableAndRedispatchSucceeds(t *testing.T) {
+	d, _, errb := envDeps(t)
+	d.Interactive = false
+
+	parent := t.TempDir()
+	root := filepath.Join(parent, "needs quoting & stuff")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join("..", "..", "workflow", "env", "testdata", "hostexec-fixture")
+	entries, err := os.ReadDir(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		data, err := os.ReadFile(filepath.Join(fixture, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, e.Name()), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	code := dispatch([]string{"env", "add", "work", root}, d)
+	if code != 2 {
+		t.Fatalf("pix env add work %q (non-TTY) = %d, want 2 (stderr: %s)", root, code, errb.String())
+	}
+	if strings.Contains(errb.String(), "pix env review work") {
+		t.Errorf("stderr = %q, must never point at `pix env review work`: NAME is not registered yet, so that command would itself fail", errb.String())
+	}
+
+	retry := extractRetryLine(t, errb.String())
+	if !strings.Contains(retry, "--yes") {
+		t.Errorf("retry command %q, want the --yes non-interactive form", retry)
+	}
+	argv := shellTokenize(t, retry)
+	if len(argv) < 2 || argv[0] != "pix" {
+		t.Fatalf("retry command %q did not tokenize to a `pix ...` argv: %v", retry, argv)
+	}
+
+	d2, out2, errb2 := freshDeps()
+	if code := dispatch(argv[1:], d2); code != 0 {
+		t.Fatalf("re-dispatch of retry command %q (argv %v) = %d, want 0 (stdout: %s, stderr: %s)", retry, argv, code, out2.String(), errb2.String())
+	}
+	if !strings.Contains(out2.String(), `recorded acceptance for environment "work"`) {
+		t.Errorf("re-dispatch stdout = %q, want the acceptance line", out2.String())
 	}
 }
 
