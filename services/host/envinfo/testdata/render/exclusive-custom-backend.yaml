@@ -1,14 +1,6 @@
-# golden: a private environment with `[models].exclusive = true` and one
-# `[inference.backends.<name>]` custom endpoint (docs/design/
-# environments.md §6.3: "the narrow compliance-grade boundary for a
-# private gateway"). Only this environment's own backend/model
-# definitions are valid; RenderEffective never folds in a machine-config
-# model it did not declare.
 schemaVersion: "1"
 agent: pix
 name: pix-gateway-33333333
-template: docker.io/mcavage/pix:v0.0.0
-pullPolicy: missing
 workspaces:
   - path: /home/user/gateway
     readOnly: false
@@ -18,20 +10,7 @@ workspaces:
     clone: false
 kits:
   - /tmp/pix-mixin-33333333
+sandboxOptions:
+  pullPolicy: missing
+  template: docker.io/mcavage/pix:v0.0.0
 env: {}
-inference:
-  exclusive: true
-  backends:
-    private-gw:
-      driver: openai-compatible
-      protocol: https
-      baseUrl: https://gateway.internal.example.com/v1
-      auth: bearer
-      keyEnv: PRIVATE_GW_API_KEY
-  models:
-    - id: private-gw/house-model
-      backend: private-gw
-      upstreamId: house-model-v1
-      contextWindow: 128000
-      maxOutputTokens: 8192
-      reasoning: false

@@ -30,7 +30,19 @@ import (
 )
 
 // effectiveTemplateRepo/effectivePullPolicyMissing are docs/design/
-// environments.md §6.2's pinned Pix template and `pullPolicy: missing`.
+// environments.md §6.2's Pix template and `pullPolicy: missing`, rendered
+// (per envinfo/render.go) as `sandboxOptions.template` /
+// `sandboxOptions.pullPolicy` — the placement Story 0 created a real
+// sandbox with (docs/upstream/sbx-0.39-environments.md §7).
+//
+// The REPO is all a preview can honestly name: which exact tag a launch
+// pins is a launch-time decision (workflow/launch's BuildSbxArgs pins
+// `<repo>:<out/.local-image-tag>` only when a resolved checkout carries
+// one, and otherwise leaves the kit's own pinned `image:` to select it),
+// and `env show --effective` makes no launch decision. A future E2.5
+// composition supplies the exact resolved reference it actually used as
+// RuntimeFacts.Template; this preview never invents a tag it cannot
+// prove.
 // This is a deliberate, small duplication of workflow/launch's
 // DockerImageRepo constant, not an import of it: workflow/env may not
 // import a sibling workflow package (this package's own doc comment,

@@ -1,10 +1,5 @@
-# golden: no environment registered or selected (D17's "none" state).
-# RenderEffective's effective document for Pix's own built-in defaults:
-# no authored .sbxenv.yaml/pix.toml at all, only Pix-owned runtime facts.
 schemaVersion: "1"
 name: pix-workspace-00000000
-template: docker.io/mcavage/pix:v0.0.0
-pullPolicy: missing
 workspaces:
   - path: /home/user/workspace
     readOnly: false
@@ -14,4 +9,7 @@ workspaces:
     clone: false
 kits:
   - /tmp/pix-mixin-00000000
+sandboxOptions:
+  pullPolicy: missing
+  template: docker.io/mcavage/pix:v0.0.0
 env: {}

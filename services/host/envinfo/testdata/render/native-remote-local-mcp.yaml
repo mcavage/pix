@@ -1,14 +1,6 @@
-# golden: a native environment declaring both a remote (url) MCP server
-# and a local (command) MCP server, the local one wrapped by the
-# already-composed, already-reviewed op-run credential wrapper
-# (docs/design/environments.md §9.2). Each server renders in isolation:
-# github-mcp's env_keys never leak into warehouse-mcp's argv or vice versa
-# (render_test.go's TestRenderEffective_MCPServerIsolation).
 schemaVersion: "1"
 agent: pix
 name: pix-work-22222222
-template: docker.io/mcavage/pix:v0.0.0
-pullPolicy: missing
 workspaces:
   - path: /home/user/work
     readOnly: false
@@ -18,6 +10,9 @@ workspaces:
     clone: false
 kits:
   - /tmp/pix-mixin-22222222
+sandboxOptions:
+  pullPolicy: missing
+  template: docker.io/mcavage/pix:v0.0.0
 env: {}
 mcp:
   servers:
@@ -29,6 +24,6 @@ mcp:
         - run
         - --no-masking
         - --env-file=/home/user/.config/pix/mcp/github-mcp.env
-        - "--"
+        - --
         - github-mcp-server
         - --stdio

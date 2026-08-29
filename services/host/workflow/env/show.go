@@ -9,9 +9,10 @@
 //     else (AC-55);
 //   - --json: the same facts, schema_version-carrying (AC-64), "none" for
 //     `environment` exactly when nothing is selected (D17, AC-46);
-//   - --effective: declared now, but answers ErrEffectiveNotAvailable
-//     until E2.1 exists to render it (D8) — never an alternative
-//     rendering in its place.
+//   - --effective: the full rendered environment (D8, AC-54), produced by
+//     the ONE effective-document producer (effective.go's
+//     RenderEffectiveDocument → envinfo.RenderEffective) — never a second,
+//     independently shaped rendering in its place.
 //
 // Per doc.go's "no process globals" rule, ComputeShow takes cfg explicitly
 // and never calls config.Load itself.
@@ -19,7 +20,6 @@ package env
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -31,16 +31,6 @@ import (
 
 // ShowSchemaVersion is `env show --json`'s schema_version (AC-64).
 const ShowSchemaVersion = 1
-
-// ErrEffectiveNotAvailable is `--effective`'s answer until E2.1 ships the
-// renderer it points at (D8; this unit's own scope line: "--effective is
-// declared and errors 'not yet available' only until E2.1 ... it is not a
-// user-selectable alternative path"). Asking for a real, declared flag is
-// not a usage mistake — the feature genuinely does not exist yet — so this
-// is a plain error: cli.ExitCode reports it as an OPERATIONAL failure (1),
-// matching D19's "non-zero-not-2 for operational failure", never exit 2.
-var ErrEffectiveNotAvailable = errors.New(
-	"pix: `--effective` is not yet available; there is no alternative rendering to fall back to")
 
 // ShowResult is what `env show` found, before any of its three renderings
 // reads it. Selected is false only when no NAME was given AND no machine

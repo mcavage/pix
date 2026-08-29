@@ -533,14 +533,3 @@ func TestErrorFamily_ReviewGate(t *testing.T) {
 		}
 	})
 }
-
-// ── ErrEffectiveNotAvailable: operational, not a refusal — exit 1, no
-//    three-part requirement (it is a declared-but-unbuilt feature, not a
-//    usage mistake or a fixable state) ────────────────────────────────────
-
-func TestErrorFamily_EffectiveNotAvailableIsOperationalNotARefusal(t *testing.T) {
-	if got := cli.ExitCode(ErrEffectiveNotAvailable); got == 0 || got == 2 {
-		t.Errorf("cli.ExitCode(ErrEffectiveNotAvailable) = %d, want a non-zero, non-2 operational code", got)
-	}
-	assertFamilyCopy(t, "--effective not yet available", ErrEffectiveNotAvailable.Error())
-}

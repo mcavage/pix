@@ -39,8 +39,7 @@ import (
 // because workflow/env's own error types (resolve.go/load.go's
 // UnknownEnvironmentError, ContainmentError, SymlinkError,
 // MissingRequiredFileError, NoncanonicalRootError; show.go's
-// NoSelectionForPathError; show.go's ErrEffectiveNotAvailable) already
-// self-prefix "pix: " — the root's own generic
+// NoSelectionForPathError) already self-prefix "pix: " — the root's own generic
 // `fmt.Fprintf(d.Err, "pix: %v\n", err)` would otherwise print
 // "pix: pix: ...". Printing here and returning the error SILENT (so the
 // root never touches it again) is correct either way: an
