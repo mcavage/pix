@@ -120,6 +120,42 @@ type TeardownOptions struct {
 	// Now is the clock the budget is measured against, injectable so a test
 	// asserts the bound instead of sleeping through it.
 	Now func() time.Time
+	// Planner composes the removal ARGV that gets EXECUTED — but only from
+	// the two call sites in this file that have already cleared this
+	// domain's own authority gate: an explicitly-named removal intent with
+	// no lease state left to prove a reference against, or (inside
+	// teardownUnderProof) every zero-holder/keep/instance-id/fresh-probe
+	// proof this file enforces, in that order. Planning itself is inert —
+	// it returns argv and stops, exactly like every sandbox.Plan* function —
+	// so it is safe to call at either of those two already-authorized
+	// points; what makes E2.5's environment-scoped argv safe to EXECUTE is
+	// that removeAndConfirm, the one place Planner's output ever reaches
+	// env.RunWithin, is reachable only from those same two points. A caller
+	// cannot use Planner to skip a proof: the pix-* scope guard at the top
+	// of decideTeardown is a FIXED check, not this field, and runs before
+	// either point regardless of what Planner is set to.
+	//
+	// Nil (the default, set by withDefaults) is byte-compatible with the
+	// pre-E2.5 hardcoded behavior: sandbox.PlanForceRemove(name), no Report.
+	Planner TeardownPlanner
+}
+
+// TeardownPlanner composes the argv a teardown will execute for name, and an
+// optional human-readable Report surfaced in the result's Detail — the shape
+// PlanEnvRemoveSeam's EnvRemovalPlan already returns, reused here rather than
+// inventing a second identical struct. See TeardownOptions.Planner for WHEN
+// it may be called.
+type TeardownPlanner func(name string) (EnvRemovalPlan, error)
+
+// defaultTeardownPlanner is the byte-compatible default: the exact
+// sandbox.PlanForceRemove(name) call every teardown planned before E2.5's
+// injectable Planner existed, wrapped with an always-empty Report.
+func defaultTeardownPlanner(name string) (EnvRemovalPlan, error) {
+	argv, err := sandbox.PlanForceRemove(name)
+	if err != nil {
+		return EnvRemovalPlan{}, err
+	}
+	return EnvRemovalPlan{Argv: argv}, nil
 }
 
 func (o TeardownOptions) withDefaults() TeardownOptions {
@@ -140,6 +176,9 @@ func (o TeardownOptions) withDefaults() TeardownOptions {
 	}
 	if o.Now == nil {
 		o.Now = time.Now
+	}
+	if o.Planner == nil {
+		o.Planner = defaultTeardownPlanner
 	}
 	return o
 }
@@ -199,15 +238,14 @@ func kept(v TeardownVerdict, format string, a ...any) TeardownResult {
 func decideTeardown(env hostenv.Env, key, name string, trigger TeardownTrigger, o TeardownOptions) TeardownResult {
 	deadline := o.Now().Add(o.Budget)
 
-	// pix-* scope FIRST, and through the planner that composes the argv. This
-	// plans a FORCE removal (sandbox.PlanForceRemove) so the argv skips sbx
-	// v0.38's non-interactive confirmation refusal — see the file header for
-	// why that is a transport bypass, not an authority one: every path that
-	// reaches removeAndConfirm below has already cleared this domain's OWN
-	// gate (zero-holder proof, or an explicit individually-named intent with
-	// no lease state left to prove against) before rmArgv is ever run.
-	rmArgv, perr := sandbox.PlanForceRemove(name)
-	if perr != nil {
+	// pix-* scope FIRST — a FIXED guard, not the injectable o.Planner, so no
+	// caller-supplied planner can widen scope or skip it: the SAME check
+	// sandbox.PlanForceRemove/PlanRemove already run, exercised here purely
+	// to refuse before any lease, probe, or proof work runs. The argv that
+	// actually gets EXECUTED is composed separately, by o.Planner, only at
+	// the two points below that have already cleared this domain's OWN
+	// authority gate — never here.
+	if _, perr := sandbox.PlanForceRemove(name); perr != nil {
 		return kept(TeardownKeptUnowned, "%v", perr)
 	}
 	dir, derr := existingLeaseDir(key)
@@ -217,12 +255,20 @@ func decideTeardown(env hostenv.Env, key, name string, trigger TeardownTrigger, 
 		}
 		// An explicit rm of a box with no lease state has nothing to prove a
 		// reference against and nothing to clear: remove it directly, bounded.
-		return removeAndConfirm(env, "", name, rmArgv, o, deadline)
+		// This IS the second authorized posture (an explicitly, individually
+		// named removal intent with no lease state left to prove against), so
+		// planning the executed argv here — not gated by TryReapProof, because
+		// there is no proof left to take — is correct, not a bypass.
+		plan, perr := o.Planner(name)
+		if perr != nil {
+			return kept(TeardownKeptUnowned, "%v", perr)
+		}
+		return removeAndConfirm(env, "", name, plan, o, deadline)
 	}
 
 	var res TeardownResult
 	proofErr := lease.TryReapProof(dir, func() error {
-		res = teardownUnderProof(env, dir, key, name, rmArgv, trigger, o, deadline)
+		res = teardownUnderProof(env, dir, key, name, trigger, o, deadline)
 		return nil
 	})
 	switch {
@@ -235,7 +281,7 @@ func decideTeardown(env hostenv.Env, key, name string, trigger TeardownTrigger, 
 	}
 }
 
-func teardownUnderProof(env hostenv.Env, dir, key, name string, rmArgv []string, trigger TeardownTrigger, o TeardownOptions, deadline time.Time) TeardownResult {
+func teardownUnderProof(env hostenv.Env, dir, key, name string, trigger TeardownTrigger, o TeardownOptions, deadline time.Time) TeardownResult {
 	rec, rerr := lease.ReadRecord(dir)
 	if trigger.requiresOwnership() {
 		switch {
@@ -281,10 +327,22 @@ func teardownUnderProof(env hostenv.Env, dir, key, name string, rmArgv []string,
 	case rerr == nil && *entry.InstanceID != rec.InstanceID:
 		return kept(TeardownKeptMismatch, "%q now runs instance %q, not the recorded %q — the name was reused", name, *entry.InstanceID, rec.InstanceID)
 	}
-	return removeAndConfirm(env, dir, name, rmArgv, o, deadline)
+
+	// Every zero-holder/keep/instance-id/fresh-probe proof above has now
+	// passed. Only from this point may the injected planner's argv reach
+	// removeAndConfirm — and therefore env.RunWithin: teardownUnderProof is
+	// itself only ever invoked from inside lease.TryReapProof's closure
+	// above, so a proof failure (ErrHeld or otherwise) means this function,
+	// and o.Planner with it, is never called at all.
+	plan, perr := o.Planner(name)
+	if perr != nil {
+		return kept(TeardownKeptUnowned, "%v", perr)
+	}
+	return removeAndConfirm(env, dir, name, plan, o, deadline)
 }
 
-func removeAndConfirm(env hostenv.Env, dir, name string, rmArgv []string, o TeardownOptions, deadline time.Time) TeardownResult {
+func removeAndConfirm(env hostenv.Env, dir, name string, plan EnvRemovalPlan, o TeardownOptions, deadline time.Time) TeardownResult {
+	rmArgv := plan.Argv
 	rmBudget := budgetedTimeout(o.RmTimeout, o, deadline)
 	if rmBudget <= 0 {
 		return kept(TeardownKeptUnknown, "teardown budget (%s) elapsed before %q could be removed", o.Budget, name)
@@ -292,9 +350,9 @@ func removeAndConfirm(env hostenv.Env, dir, name string, rmArgv []string, o Tear
 	out, timedOut, err := env.RunWithin(rmBudget, "sbx", rmArgv...)
 	switch {
 	case timedOut:
-		return TeardownResult{Verdict: TeardownFailed, Detail: fmt.Sprintf("`sbx %s` did not finish within %s; %q may still exist and its state is retained", strings.Join(rmArgv, " "), rmBudget, name)}
+		return withPlanReport(TeardownResult{Verdict: TeardownFailed, Detail: fmt.Sprintf("`sbx %s` did not finish within %s; %q may still exist and its state is retained", strings.Join(rmArgv, " "), rmBudget, name)}, plan)
 	case err != nil:
-		return TeardownResult{Verdict: TeardownFailed, Detail: fmt.Sprintf("`sbx %s` failed: %v: %s", strings.Join(rmArgv, " "), err, firstLine(out))}
+		return withPlanReport(TeardownResult{Verdict: TeardownFailed, Detail: fmt.Sprintf("`sbx %s` failed: %v: %s", strings.Join(rmArgv, " "), err, firstLine(out))}, plan)
 	}
 
 	for attempt := 0; attempt <= o.ProbeRetries; attempt++ {
@@ -306,10 +364,22 @@ func removeAndConfirm(env hostenv.Env, dir, name string, rmArgv []string, o Tear
 			break
 		}
 		if probeStateWithin(env, name, within) == SbxAbsent {
-			return clearedResult(TeardownRemoved, dir, name, "removed %q (pix's own zero-reference/explicit-intent gate, not sbx's -f) and confirmed it is gone", name)
+			return withPlanReport(clearedResult(TeardownRemoved, dir, name, "removed %q (pix's own zero-reference/explicit-intent gate, not sbx's -f) and confirmed it is gone", name), plan)
 		}
 	}
-	return TeardownResult{Verdict: TeardownFailed, Detail: fmt.Sprintf("`sbx %s` reported success but %q was never confirmed absent within %d probes; its state is retained", strings.Join(rmArgv, " "), name, o.ProbeRetries+1)}
+	return withPlanReport(TeardownResult{Verdict: TeardownFailed, Detail: fmt.Sprintf("`sbx %s` reported success but %q was never confirmed absent within %d probes; its state is retained", strings.Join(rmArgv, " "), name, o.ProbeRetries+1)}, plan)
+}
+
+// withPlanReport appends plan.Report (E2.4's fallback cleanup-not-run note,
+// set only when PlanEnvRemoveSeam fell back to name-based removal) to res's
+// Detail, so a caller sees it regardless of whether the removal itself
+// succeeded or failed. Empty Report (the default planner, and the primary
+// environment-scoped path) leaves Detail untouched.
+func withPlanReport(res TeardownResult, plan EnvRemovalPlan) TeardownResult {
+	if plan.Report != "" {
+		res.Detail += fmt.Sprintf("; %s", plan.Report)
+	}
+	return res
 }
 
 // clearedResult clears the session's recorded state (launcher-owned files

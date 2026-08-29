@@ -361,11 +361,18 @@ type EnvRemovalPlan struct {
 // executes anything, so it can neither weaken nor skip the
 // holder/keep/instance-id/fresh-probe proof chain TeardownSandbox already
 // enforces before ever forwarding removal argv to sbx — a caller MUST
-// still route the returned Argv through TeardownSandbox/RemovePixSandbox
-// exactly as every other removal in this file does today. The fallback
-// plan's Report states, in the operator's own words, that environment-
-// scoped secret cleanup could not run, so a caller can surface that
-// instead of silently pretending it happened.
+// still route the returned EnvRemovalPlan through TeardownSandbox exactly
+// as every other removal in this file does today: reap.go's
+// TeardownOptions.Planner is that seam (a func(name string)
+// (EnvRemovalPlan, error), of which this function is one valid shape), and
+// it is consulted ONLY from the two points inside decideTeardown/
+// teardownUnderProof that have already cleared this domain's own authority
+// gate — there is no other API that executes an EnvRemovalPlan. The
+// fallback plan's Report states, in the operator's own words, that
+// environment-scoped secret cleanup could not run, and TeardownResult's
+// Detail carries it forward regardless of whether the removal itself
+// succeeds, so a caller can surface that instead of silently pretending it
+// happened.
 //
 // Neither branch ever appends `--prune-bindings`, or any flag beyond `-f`:
 // see sandbox.PlanEnvRemove's own doc comment on A3's nonclaim.
