@@ -11,6 +11,13 @@
 // "scored" pick, because the deleted intent router is gone, not merely
 // unreachable.
 //
+// BLOCK fix: legacy `fallback_intent:` frontmatter (pending outright deletion
+// in E3.4) must never join this chain — it is not a roster.agents lookup and
+// has zero effect on the resolved model, proven below with security-lead's
+// shipped `fallback_intent: review` and an arbitrary `fallback_intent:
+// breadth`. See tests/no-fallback-intent-resolution.test.mjs for the paired
+// source/static sentinel.
+//
 // These tests read the resolved model off the `/subagents` listing (which
 // prints `a.model`), never by actually spawning a child pi process: model
 // RESOLUTION is pure per-agent-file logic and does not need a live model
@@ -147,6 +154,59 @@ test("declaring `intent:` in frontmatter has NO effect on the resolved model (no
 	// Falls through to roster.main, exactly as an agent with no intent at all
 	// would — the declared intent is display-only.
 	assert.match(lineFor(listing, "engineer"), /· zai\/glm-5/);
+});
+
+test("declaring `fallback_intent: review` (security-lead's shipped value) has NO effect on the resolved model — it is never a roster.agents lookup", async () => {
+	const { agentDir, projectRoot } = setup();
+	writeInference(agentDir, {
+		version: 1,
+		backends: {},
+		models: [],
+		// "review" IS a live roster.agents key here — if fallback_intent were ever
+		// resolved as a roster.agents name lookup, security-lead would wrongly
+		// pick up google/gemini-3.1-pro-preview instead of falling through to
+		// roster.main, since "security-lead" itself has no roster entry.
+		roster: {
+			main: "zai/glm-5",
+			agents: { review: "google/gemini-3.1-pro-preview" },
+		},
+	});
+	writeUserAgent(agentDir, "security-lead", {
+		description: "sec",
+		intent: "red-team",
+		fallback_intent: "review",
+	});
+	process.env.PI_TEST_AGENT_DIR = agentDir;
+	const reg = await loadSubagents();
+	const listing = await listAgents(reg, projectRoot);
+	// Falls through to roster.main, exactly as if fallback_intent were absent.
+	assert.match(lineFor(listing, "security-lead"), /· zai\/glm-5/);
+	assert.doesNotMatch(lineFor(listing, "security-lead"), /gemini-3\.1-pro-preview/);
+	// No warning is emitted about fallback_intent resolution either — it is
+	// never resolved in the first place, so there is nothing to warn about.
+	assert.doesNotMatch(listing, /fallback_intent/);
+});
+
+test("declaring an arbitrary, never-a-real-intent `fallback_intent: breadth` also has NO effect on the resolved model", async () => {
+	const { agentDir, projectRoot } = setup();
+	writeInference(agentDir, {
+		version: 1,
+		backends: {},
+		models: [],
+		roster: {
+			main: "zai/glm-5",
+			agents: { engineer: "anthropic/claude-sonnet-5", breadth: "google/gemini-3.1-flash-lite" },
+		},
+	});
+	writeUserAgent(agentDir, "engineer", { description: "eng", fallback_intent: "breadth" });
+	process.env.PI_TEST_AGENT_DIR = agentDir;
+	const reg = await loadSubagents();
+	const listing = await listAgents(reg, projectRoot);
+	// Resolves through the normal chain — roster.agents["engineer"] — exactly
+	// as if fallback_intent were never declared; the "breadth" roster entry it
+	// names is never consulted.
+	assert.match(lineFor(listing, "engineer"), /· anthropic\/claude-sonnet-5/);
+	assert.doesNotMatch(lineFor(listing, "engineer"), /gemini-3\.1-flash-lite/);
 });
 
 test("a custom PROJECT agent's explicit model: wins over BOTH roster.agents[name] and roster.main", async () => {
