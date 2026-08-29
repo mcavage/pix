@@ -328,17 +328,26 @@ func clearedResult(v TeardownVerdict, dir, name, format string, a ...any) Teardo
 func clearSessionState(dir string) error {
 	var errs []error
 	for _, name := range []string{sessionFingerprintFileName, sessionInvocationFileName} {
-		if err := os.Remove(filepath.Join(dir, name)); err != nil && !os.IsNotExist(err) {
+		path := filepath.Join(dir, name)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			errs = append(errs, err)
 		}
 		// writeFileAtomic's temp names carry a random suffix (unlike the old
 		// fixed ".tmp"), so a crash-leftover from a write that never reached
-		// its rename needs a glob, not an exact name, to find and remove.
-		leftover, _ := filepath.Glob(filepath.Join(dir, name+".tmp-*"))
-		for _, p := range leftover {
-			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
-				errs = append(errs, err)
-			}
+		// its rename needs a directory scan, not an exact name, to find and
+		// remove. removeAtomicTempSiblings (atomic.go) does that via
+		// os.ReadDir plus a literal prefix match rather than filepath.Glob:
+		// dir here is always root/<validated-instance-id> (lease.SandboxDir
+		// enforces lease.ValidateInstanceID's [A-Za-z0-9._-] charset on the
+		// key segment, so THAT component can never carry a glob
+		// metacharacter) but root itself is config.StateDir(), a path this
+		// package does not control — it resolves under the user's $HOME or
+		// $XDG_STATE_HOME, either of which could in principle contain '[',
+		// ']', '*' or '?'. The literal-prefix helper closes that off
+		// unconditionally rather than leaving it as a documented-but-live
+		// gap in a sibling file to this commit's createintent.go fix.
+		if err := removeAtomicTempSiblings(path); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	errs = append(errs, lease.ClearState(dir))
@@ -572,10 +581,12 @@ func appendTeardownJournal(o TeardownOptions, res TeardownResult) error {
 // finished, the same crash-recovery posture clearSessionState already applies
 // to the fingerprint/invocation files next door.
 func cleanStaleJournalTemp(path string) {
-	leftover, _ := filepath.Glob(path + ".tmp-*")
-	for _, p := range leftover {
-		_ = os.Remove(p)
-	}
+	// Best-effort, like the caller's own doc comment: see
+	// removeAtomicTempSiblings (atomic.go) for why this is a literal-prefix
+	// directory scan rather than filepath.Glob(path+".tmp-*") — the journal
+	// path is under config.StateDir(), the same not-fully-controlled root
+	// clearSessionState's use of the same helper documents.
+	_ = removeAtomicTempSiblings(path)
 }
 
 func journalBytes(lines []string) int {
