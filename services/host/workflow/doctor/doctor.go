@@ -80,9 +80,11 @@ func RunDoctor(ctx context.Context, cfg *config.Config, profile string, out io.W
 // Description is the prose above doctor's GENERATED usage: what it proves and
 // what its exit codes mean. The flag list is not here — the command struct's
 // tags are the flag list, and a second copy could only disagree with it.
-const Description = `Diagnose host health: the sbx CLI, the active pack, provider keys, the memory
-unit and the LaunchAgent. Every check reports what it PROVED,
-with the exact command that repairs a verified gap.
+const Description = `Diagnose host health, read-only: PIX_HOME and the release manifest, Docker
+and the sbx CLI, provider keys, GitHub credentials, the pix-memory container,
+and its sbx MCP registration. Every check reports what it PROVED, with the
+exact command that repairs a verified gap. Doctor never repairs, registers,
+restarts, authenticates, or rewrites configuration.
 
 --json emits the machine-readable snapshot (schema_version 6).
 
