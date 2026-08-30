@@ -1,61 +1,65 @@
-// Unit tests for extensions/memory-recall.ts (the /recall command UX fix).
+// Unit tests for extensions/memory-recall.ts (the /recall command UX fix, now
+// speaking MCP through the sbx Gateway instead of direct JSON-RPC — U9, see
+// docs/design/pix-v2-architecture.md §9.3).
 // Run: node --test tests/
 //
-// MEMORY_URL/TIMEOUT_MS are read once at module load, so each scenario that
-// needs a live (fake) memory service sets the env first, then dynamic-imports
-// a fresh module instance via a cache-busting query string.
+// MEMORY_TIMEOUT_MS/MEMORY_COMMAND_TIMEOUT_MS are read once at module load, and
+// the Gateway endpoint is resolved once at CALL time from $PI_CODING_AGENT_DIR's
+// mcp.json (see lib/mcp-gateway-client.ts), so each scenario that needs a live
+// (fake) Gateway sets the env/config first, then dynamic-imports a fresh module
+// instance via a cache-busting query string.
 import assert from "node:assert";
 import * as http from "node:http";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { register } from "node:module";
-import { test } from "node:test";
+import { test, after } from "node:test";
+import { makeFakeGateway, listen, writeGatewayConfig } from "./fake-mcp-gateway.mjs";
 
 // memory-recall.ts imports `typebox` for the tool schemas; stub it (and the
 // other pi runtime packages) so plain node can import the extension.
 register("./stub-loader.mjs", import.meta.url);
 
-// A minimal fake memory daemon: records every JSON-RPC request it receives and
-// replies with a canned result per method. Lets tests assert on query/timeout
-// behavior without touching the real host service.
+// Thin adapter over the shared fake Gateway fixture: keeps every existing
+// `responder({ method, params })` callback in this file unchanged (`method` is
+// now the MCP tool name, e.g. "memory_recall", not the old bare "recall").
 function makeFakeDaemon(responder) {
-	const requests = [];
-	const server = http.createServer((req, res) => {
-		let body = "";
-		req.on("data", (c) => (body += c));
-		req.on("end", () => {
-			const parsed = JSON.parse(body);
-			requests.push(parsed);
-			const result = responder(parsed);
-			res.writeHead(200, { "content-type": "application/json" });
-			res.end(JSON.stringify({ jsonrpc: "2.0", id: parsed.id, result }));
-		});
-	});
-	return { server, requests };
-}
-
-async function listen(server) {
-	await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-	const { port } = server.address();
-	return `http://127.0.0.1:${port}`;
+	return makeFakeGateway((name, args) => responder({ method: name, params: args }));
 }
 
 let seq = 0;
-// Import a FRESH memory-recall.ts instance with MEMORY_URL/timeouts pinned to
-// this test's fake server, restoring the env afterward.
-async function loadWithEnv(env) {
-	const ENV_KEYS = ["MEMORY_URL", "MEMORY_TIMEOUT_MS", "MEMORY_COMMAND_TIMEOUT_MS"];
-	const saved = {};
-	for (const k of ENV_KEYS) saved[k] = process.env[k];
-	for (const k of ENV_KEYS) delete process.env[k];
-	for (const [k, v] of Object.entries(env)) process.env[k] = v;
-	try {
-		const url = new URL(`../extensions/memory-recall.ts?case=${seq++}`, import.meta.url);
-		return await import(url.href);
-	} finally {
-		for (const k of ENV_KEYS) {
-			if (saved[k] === undefined) delete process.env[k];
-			else process.env[k] = saved[k];
-		}
+const ENV_KEYS = ["PI_CODING_AGENT_DIR", "MEMORY_TIMEOUT_MS", "MEMORY_COMMAND_TIMEOUT_MS"];
+const ORIGINAL_ENV = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
+// Restore the real environment once, after every test in this file has run.
+// Deliberately NOT per-call: unlike the old MEMORY_URL (read once at module
+// load into a const), the Gateway endpoint is resolved at CALL TIME on every
+// callTool() (see lib/mcp-gateway-client.ts), so the env override must still be
+// in effect when the test later invokes the handler/tool, not just during the
+// dynamic import. node:test runs this file's top-level tests sequentially, so
+// leaving the override in place until the next loadWithEnv() (or the final
+// restore below) is safe.
+after(() => {
+	for (const k of ENV_KEYS) {
+		if (ORIGINAL_ENV[k] === undefined) delete process.env[k];
+		else process.env[k] = ORIGINAL_ENV[k];
 	}
+});
+
+// Import a FRESH memory-recall.ts instance with the Gateway config (when
+// MEMORY_URL is given, a temp $PI_CODING_AGENT_DIR/mcp.json pointing at it) and
+// timeouts pinned to this test's fake Gateway.
+async function loadWithEnv(env) {
+	for (const k of ENV_KEYS) delete process.env[k];
+	const { MEMORY_URL, ...rest } = env;
+	for (const [k, v] of Object.entries(rest)) process.env[k] = v;
+	if (MEMORY_URL !== undefined) {
+		const agentDir = mkdtempSync(join(tmpdir(), "pix-agentdir-"));
+		writeGatewayConfig(agentDir, MEMORY_URL);
+		process.env.PI_CODING_AGENT_DIR = agentDir;
+	}
+	const url = new URL(`../extensions/memory-recall.ts?case=${seq++}`, import.meta.url);
+	return await import(url.href);
 }
 
 function fakeCtx(notes) {
@@ -124,7 +128,7 @@ test("blank /recall queries '*' instead of an empty string", async (t) => {
 
 	assert.equal(requests.length, 3);
 	for (const req of requests) {
-		assert.equal(req.method, "recall");
+		assert.equal(req.method, "memory_recall");
 		assert.equal(req.params.query, "*");
 		// A blank /recall means "show everything": it must ask for the full
 		// 100-row cap and a charBudget large enough that the daemon's 1200-char
@@ -398,7 +402,7 @@ test("/forget: a JSON-RPC error surfaces a visible error instead of silently van
 // forgotten, or a different profile scope), not complain about formatting —
 // the id shape was already accepted before this RPC ever fired.
 test("/forget: an id miss (daemon responds ok:false) notifies at error severity with an actionable, non-formatting message", async (t) => {
-	const { server } = makeFakeDaemon((req) => (req.method === "forget" ? { ok: false } : { hits: [] }));
+	const { server } = makeFakeDaemon((req) => (req.method === "memory_forget" ? { ok: false } : { hits: [] }));
 	t.after(() => server.close());
 	const MEMORY_URL = await listen(server);
 	const mod = await loadWithEnv({ MEMORY_URL });
@@ -554,7 +558,7 @@ test("memory_recall defaults query to '*', requests up to 100 rows with a large 
 	const { tools } = capturePi(mod);
 
 	const r = await tools.get("memory_recall").execute("id", {}, undefined, undefined, noopCtx);
-	assert.equal(requests[0].method, "recall");
+	assert.equal(requests[0].method, "memory_recall");
 	assert.equal(requests[0].params.query, "*");
 	assert.equal(requests[0].params.limit, 100, "'*' defaults to the full 100-row cap, not the search default of 6");
 	assert.equal(requests[0].params.charBudget, 1_000_000, "'*' must not be truncated by the daemon's 1200-char default");
@@ -634,7 +638,7 @@ test("memory_stats calls the stats RPC with the active profile and returns the r
 	const { tools } = capturePi(mod);
 
 	const r = await tools.get("memory_stats").execute("id", {}, undefined, undefined, noopCtx);
-	assert.equal(requests[0].method, "stats");
+	assert.equal(requests[0].method, "memory_stats");
 	assert.deepEqual(JSON.parse(toolText(r)), { active: 3, facts: 2, learnings: 1 });
 });
 

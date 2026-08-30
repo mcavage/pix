@@ -20,12 +20,12 @@ export default [
 	},
 	{
 		id: "memory.rpc.methods.client-witness",
-		description: "extensions/memory-recall.ts only ever calls the memory RPC methods it is documented to use. A method appearing here that the server does not expose (or vice versa, see memory.rpc.methods.server) is a real contract break, not a refactor artifact.",
+		description: "extensions/memory-recall.ts only ever calls the MEMORY_TOOL identifiers (MCP tool names via lib/mcp-gateway-client.ts's tools/call, see docs/design/pix-v2-architecture.md §9.3) it is documented to use. An identifier appearing here that lib/mcp-gateway-client.ts's MEMORY_TOOL map does not expose (or vice versa) is a real contract break, not a refactor artifact.",
 		checks: [
 			{
 				file: "extensions/memory-recall.ts",
 				kind: "set",
-				pattern: 'rpc\\("([a-z]+)"',
+				pattern: "rpc\\(MEMORY_TOOL\\.([a-zA-Z]+)",
 				expected: ["forget", "recall", "remember", "stats"],
 			},
 		],
@@ -73,7 +73,7 @@ export default [
 			{
 				file: "extensions/memory-recall.ts",
 				kind: "contains",
-				region: { start: 'rpc("recall", { query: prompt', end: "});" },
+				region: { start: "rpc(MEMORY_TOOL.recall, { query: prompt", end: "});" },
 				values: ["project", "profile", "limit:", "charBudget:"],
 			},
 		],

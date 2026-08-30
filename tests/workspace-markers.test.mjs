@@ -28,33 +28,30 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { register } from "node:module";
-import { test } from "node:test";
+import { test, after } from "node:test";
+import { makeFakeGateway, listen, writeGatewayConfig } from "./fake-mcp-gateway.mjs";
 
 // Extensions import `typebox` for tool schemas; stub it (and the other pi
 // runtime packages) so plain node can import them, same as memory-recall.test.mjs.
 register("./stub-loader.mjs", import.meta.url);
 
+// Thin adapter over the shared fake Gateway fixture (U9: memory-recall.ts and
+// memory-capture.ts now speak MCP through the sbx Gateway, not direct
+// JSON-RPC): keeps every existing `responder({ method, params })` callback in
+// this file unchanged (`method` is the MCP tool name, e.g. "memory_recall").
 function makeFakeDaemon(responder) {
-	const requests = [];
-	const server = http.createServer((req, res) => {
-		let body = "";
-		req.on("data", (c) => (body += c));
-		req.on("end", () => {
-			const parsed = JSON.parse(body);
-			requests.push(parsed);
-			const result = responder(parsed);
-			res.writeHead(200, { "content-type": "application/json" });
-			res.end(JSON.stringify({ jsonrpc: "2.0", id: parsed.id, result }));
-		});
-	});
-	return { server, requests };
+	return makeFakeGateway((name, args) => responder({ method: name, params: args }));
 }
 
-async function listen(server) {
-	await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-	const { port } = server.address();
-	return `http://127.0.0.1:${port}`;
-}
+// Restore the real $PI_CODING_AGENT_DIR once, after every test in this file:
+// the Gateway endpoint is resolved at CALL TIME (lib/mcp-gateway-client.ts),
+// not at module load, so importFromWorkspace's override must still be active
+// when a test later invokes the tool/hook, not just during the dynamic import.
+const PRIOR_AGENT_DIR = process.env.PI_CODING_AGENT_DIR;
+after(() => {
+	if (PRIOR_AGENT_DIR === undefined) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = PRIOR_AGENT_DIR;
+});
 
 // Builds a temp workspace with a .pix/<name> marker containing EXACTLY
 // `content` (byte-for-byte — callers pass the literal string the Go writer
@@ -74,16 +71,28 @@ let seq = 0;
 // also read once at module load).
 async function importFromWorkspace(specifier, workspace, env = {}) {
 	const prevCwd = process.cwd();
-	const envKeys = Object.keys(env);
-	const saved = {};
-	for (const k of envKeys) saved[k] = process.env[k];
 	process.chdir(workspace);
 	// An explicit `undefined` in `env` means "force-clear" (e.g. OLLAMA_BRIDGE_MODEL,
 	// whose own code uses `??`, so setting it to "" would short-circuit the very
 	// workspace-marker fallback under test).
-	for (const [k, v] of Object.entries(env)) {
+	//
+	// MEMORY_URL is special-cased: memory-recall.ts/memory-capture.ts no longer
+	// read it directly (U9). It stands for "stand up a fake Gateway config
+	// pointed at this URL", written to a temp $PI_CODING_AGENT_DIR/mcp.json —
+	// NOT restored per call (see the file-level `after()` above), because the
+	// Gateway endpoint is resolved at CALL TIME, after this function returns.
+	const { MEMORY_URL, ...rest } = env;
+	const envKeys = Object.keys(rest);
+	const saved = {};
+	for (const k of envKeys) saved[k] = process.env[k];
+	for (const [k, v] of Object.entries(rest)) {
 		if (v === undefined) delete process.env[k];
 		else process.env[k] = v;
+	}
+	if (MEMORY_URL !== undefined) {
+		const agentDir = mkdtempSync(join(tmpdir(), "pix-agentdir-"));
+		writeGatewayConfig(agentDir, MEMORY_URL);
+		process.env.PI_CODING_AGENT_DIR = agentDir;
 	}
 	try {
 		const url = new URL(`${specifier}?case=${seq++}`, import.meta.url);
@@ -199,7 +208,7 @@ test("memory-capture.ts stamps captured exchanges with the SAME .pix/profile mar
 	await beforeAgentStart({}, ctx);
 
 	assert.equal(requests.length, 1, "one observe call for the completed exchange");
-	assert.equal(requests[0].method, "observe");
+	assert.equal(requests[0].method, "memory_observe");
 	assert.equal(requests[0].params.profile, "work", "capture must stamp the same profile recall queries, or the two silently diverge");
 });
 
