@@ -170,6 +170,25 @@ var pkgLayer = map[string]int{
 	// past this unit.
 	"recreatelog": layerCapability,
 
+	// pixhome is Pix v2 U1's PIX_HOME resolution + home-directory layout and
+	// idempotent initialization (docs/design/pix-v2-architecture.md §5): where
+	// is the one root, what lives under it, and how `git init -b main` plus
+	// the fixed directory/README/.gitignore set get created without ever
+	// overwriting something already there. It is L0 like config and workspace
+	// — pure path/location resolution, no domain knowledge — but it imports
+	// nothing from this module at all, unlike config's still-XDG-aware
+	// StateDir/DataDir. It is deliberately independent of config: collapsing
+	// the REST of the launcher's paths onto PIX_HOME is a later cutover step
+	// (architecture §13 step 4), not U1.
+	"pixhome": layerFoundation,
+	// release is Pix v2 U1's release-manifest schema (docs/design/
+	// pix-v2-architecture.md §3, §12): the one document binding a Pix version
+	// to the pix-agent digest, pix-memory digest, runtime archive digest, and
+	// kit revision, its parser/validation, and the on-disk install-state
+	// location. It takes a home path as a plain string parameter rather than
+	// importing pixhome, so it has no intra-module imports either.
+	"release": layerFoundation,
+
 	// supervise sits ABOVE the capabilities on purpose: it is the process
 	// lifecycle that RUNS one (plugin), not a domain of its own. Filing it at L1
 	// would make its plugin import a sideways call; filing it at L2 states the
@@ -239,7 +258,7 @@ var pkgLayer = map[string]int{
 	// and orchestrates nothing beneath it directly. It imports no other
 	// workflow/* package (the sibling-workflow rule below) and carries no
 	// `pix env` verb yet — that is E1.9-E1.13's cmd/pix wiring.
-	"workflow/env": layerWorkflow,
+	"workflow/env":    layerWorkflow,
 	"workflow/launch": layerWorkflow,
 	// workflow/models is `pix models add`: the inference selection, live
 	// verification and roster machinery that used to be welded into setup's
