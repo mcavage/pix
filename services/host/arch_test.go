@@ -176,6 +176,13 @@ var pkgLayer = map[string]int{
 	// it; wiring it into a reader (doctor or otherwise) is explicitly deferred
 	// past this unit.
 	"recreatelog": layerCapability,
+	// container is this unit's Docker adapter + reconciliation for the one
+	// named pix-memory container (docs/design/pix-v2-architecture.md §9.1):
+	// docker inspect/create/start/stop/rm argv, the config fingerprint that
+	// decides adopt vs start vs replace, and the injectable post-reconcile
+	// readiness Prober. Pure docker-CLI + HTTP mechanism, no sibling import,
+	// same tier as sandbox and session.
+	"container": layerCapability,
 
 	// pixhome is Pix v2 U1's PIX_HOME resolution + home-directory layout and
 	// idempotent initialization (docs/design/pix-v2-architecture.md §5): where
