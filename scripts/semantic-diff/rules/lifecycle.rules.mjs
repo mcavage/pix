@@ -243,7 +243,7 @@ export default [
 			{
 				file: "services/host/sandbox/argv.go",
 				kind: "contains",
-				values: ['args := []string{"exec", ttyFlag(o.TTY), o.Name}', 'return "-it"'],
+				values: ['args := []string{"exec", ttyFlag(o.TTY), o.Name, "--"}', 'return "-it"'],
 			},
 			{
 				file: "services/host/workflow/launch/session.go",
@@ -309,8 +309,8 @@ export default [
 				file: "services/host/cmd/pix/root.go",
 				kind: "contains",
 				values: [
-					'short:"k" help:"With --all: keep this one (repeatable)."',
-					"append(append([]string(nil), c.Keep...), c.Except...),",
+					'short:"k" help:"With --all/--orphans: keep this one (repeatable)."',
+					"Except:      c.Keep,",
 				],
 			},
 		],

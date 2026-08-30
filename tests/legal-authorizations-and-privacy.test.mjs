@@ -24,8 +24,10 @@ const legalWorkflow = read(".github/workflows/legal.yml");
 // --- B1 -----------------------------------------------------------------------
 
 test("every MPL-2.0 ledger entry pins a Source Code Form URL at the linked version", () => {
+	// Pix v2 deletion sweep removed go-plugin/yamux with pix-host's supervision
+	// tree; there is currently no live weak-copyleft entry, so this loop covers
+	// zero entries by default and only re-engages the moment one lands again.
 	const mpl = deps.goModules.filter((m) => m.class === "weak-copyleft");
-	assert.ok(mpl.length >= 2, "expected go-plugin + yamux");
 	for (const m of mpl) {
 		assert.match(m.sourceUrl, /^https:\/\//, `${m.module} has no https source URL`);
 		assert.ok(
@@ -78,9 +80,8 @@ test("the real ledger passes the copyleft-disclosure gate against the real tree"
 	assert.equal(res.ok, true, JSON.stringify(res.findings, null, 2));
 });
 
-test("notices disclose the MPL source URLs and the shipped text, with no contradiction", () => {
-	assert.match(notices, /https:\/\/github\.com\/hashicorp\/go-plugin\/tree\/v1\.8\.0/);
-	assert.match(notices, /https:\/\/github\.com\/hashicorp\/yamux\/tree\/v0\.1\.2/);
+test("notices carry no contradiction about whether license texts are reproduced (no live MPL-2.0 entry to disclose a source URL for today)", () => {
+	assert.equal(deps.goModules.filter((m) => m.class === "weak-copyleft").length, 0, "go-plugin/yamux were deleted with pix-host; a weak-copyleft entry here should also update this test's URL assertions");
 	assert.match(notices, /licenses\/MPL-2\.0\.txt/);
 	// The old text claimed BOTH "reproduced below" and "not reproduced here".
 	assert.doesNotMatch(notices, /reproduced below/);

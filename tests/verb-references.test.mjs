@@ -262,10 +262,13 @@ test("every `pix <verb>` in a user- or agent-facing surface names a real verb", 
 	// The harvest must be a real TREE, or a path check silently degrades into the
 	// first-word check that missed both original bugs.
 	assert.ok(types.rootCmd?.run && types.rootCmd?.doctor, `root harvest looks broken: ${Object.keys(types.rootCmd ?? {})}`);
-	assert.ok(unresolvedVerb(types, ["mcp", "add"]) === null, "`pix mcp add` must resolve");
-	assert.equal(unresolvedVerb(types, ["models", "route"]), "route", "the deleted `pix models route` must NOT resolve");
-	assert.equal(unresolvedVerb(types, ["mcp", "load"]), "load", "the deleted `pix mcp load` must NOT resolve");
-	assert.ok(unresolvedVerb(types, ["config", "set", "services", "memory"]) === null, "trailing ARGS must not read as verbs");
+	// Pix v2 cut the whole verb surface down to run/ls/rm/task/env/secret/
+	// setup/doctor/reset/help/version (docs/design/pix-v2-architecture.md):
+	// `mcp`, `models`, `config`, `serve`, `pack`, `memory`, and `agent` are not
+	// merely missing a subverb, the top-level verb itself does not exist.
+	assert.equal(unresolvedVerb(types, ["mcp", "add"]), "mcp", "the deleted `pix mcp` verb group must NOT resolve");
+	assert.equal(unresolvedVerb(types, ["models", "route"]), "models", "the deleted `pix models` verb group must NOT resolve");
+	assert.ok(unresolvedVerb(types, ["env", "trust", "NAME"]) === null, "trailing ARGS must not read as verbs");
 
 	const bad = [];
 	for (const file of SURFACES) {

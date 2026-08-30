@@ -129,6 +129,42 @@
     ]
   },
   {
+    "id": "lifecycle.session.attach-execs-stored-invocation",
+    "rationale": "Stale pin, not a behavior change: ExecArgv already places the replayed command after a literal `--` separator (docs/design/pix-v2-architecture.md §6.3, so an in-sandbox flag like --model/--resume is never ambiguous with sbx's own flags) and this pin's `services/host/sandbox/argv.go` literal predates that separator. Updated to match the shipped argv exactly; nothing in ExecArgv's behavior moved this commit.",
+    "evidence": "services/host/sandbox/argv.go (ExecArgv's unconditional trailing \"--\")",
+    "changes": [
+      {
+        "file": "services/host/sandbox/argv.go",
+        "kind": "contains",
+        "from": [
+          "args := []string{\"exec\", ttyFlag(o.TTY), o.Name}"
+        ],
+        "to": [
+          "args := []string{\"exec\", ttyFlag(o.TTY), o.Name, \"--\"}"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "lifecycle.rm.keep-short-and-long-flag",
+    "rationale": "Stale pin, not a behavior change: `pix rm --keep`/`-k` already applies to --orphans as well as --all (the help text and RmOptions.Except fold both already reflect that), and this pin's two literals predate both the --orphans wording and the direct `Except: c.Keep` fold (the intermediate append-append expression it pinned was never shipped in this form). Updated to match cmd/pix/root.go exactly; the keep-polarity direction pinned separately by lifecycle.rm.keep-polarity-except is unchanged.",
+    "evidence": "services/host/cmd/pix/root.go (rmCmd.Keep help text, rmCmd.Run's Except fold)",
+    "changes": [
+      {
+        "file": "services/host/cmd/pix/root.go",
+        "kind": "contains",
+        "from": [
+          "short:\"k\" help:\"With --all: keep this one (repeatable).\"",
+          "append(append([]string(nil), c.Keep...), c.Except...),"
+        ],
+        "to": [
+          "short:\"k\" help:\"With --all/--orphans: keep this one (repeatable).\"",
+          "Except:      c.Keep,"
+        ]
+      }
+    ]
+  },
+  {
     "id": "argv.op-run-wrapper.exact-grammar",
     "rationale": "Pix v2 deletion sweep (docs/design/pix-v2-architecture.md \u00a714, AC-16): the pack system is deleted outright, so workflow/doctor/mcp.go (the pack-declared-MCP-server health-probe classifier this pin's second check named) no longer exists. mcp.OpRunWrap's own grammar is unchanged and still pinned by the surviving check; registerServers (cmd/pix/setup_cmd.go) is the wrapper's only remaining caller now that doctor has no pack-declared servers to probe.",
     "evidence": "services/host/workflow/doctor/mcp.go (deleted); services/host/workflow/doctor/probes.go (Probes() no longer builds an MCP probe); services/host/cmd/pix/setup_cmd.go (registerServers, the surviving OpRunWrap caller)",

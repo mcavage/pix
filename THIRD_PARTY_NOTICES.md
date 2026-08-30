@@ -36,50 +36,9 @@ from the source of truth.
 | --- | --- | --- |
 | github.com/alecthomas/kong | v1.16.0 | MIT |
 | github.com/BurntSushi/toml | v1.6.0 | MIT |
-| github.com/chromedp/cdproto | v0.0.0-20260714215040-dc233986426f | MIT |
-| github.com/chromedp/chromedp | v0.16.0 | MIT |
-| github.com/chromedp/sysutil | v1.1.0 | MIT |
-| github.com/dustin/go-humanize | v1.0.1 | MIT |
-| github.com/fatih/color | v1.13.0 | MIT |
-| github.com/go-json-experiment/json | v0.0.0-20260623181947-01eb4420fa68 | BSD-3-Clause |
-| github.com/gobwas/httphead | v0.1.0 | MIT |
-| github.com/gobwas/pool | v0.2.1 | MIT |
-| github.com/gobwas/ws | v1.4.0 | MIT |
-| github.com/golang/protobuf | v1.5.4 | BSD-3-Clause |
-| github.com/google/uuid | v1.6.0 | BSD-3-Clause |
-| github.com/hashicorp/go-hclog | v1.6.3 | MIT |
-| github.com/hashicorp/go-plugin | v1.8.0 | MPL-2.0 |
-| github.com/hashicorp/yamux | v0.1.2 | MPL-2.0 |
-| github.com/mattn/go-colorable | v0.1.12 | MIT |
-| github.com/mattn/go-isatty | v0.0.22 | MIT |
-| github.com/ncruces/go-strftime | v1.0.0 | MIT |
-| github.com/oklog/run | v1.1.0 | Apache-2.0 |
-| github.com/remyoudompheng/bigfft | v0.0.0-20230129092748-24d4a6f8daec | BSD-3-Clause |
-| github.com/thejerf/suture/v4 | v4.0.6 | MIT |
-| golang.org/x/net | v0.53.0 | BSD-3-Clause |
 | golang.org/x/sys | v0.47.0 | BSD-3-Clause |
 | golang.org/x/term | v0.42.0 | BSD-3-Clause |
-| golang.org/x/text | v0.36.0 | BSD-3-Clause |
-| google.golang.org/genproto/googleapis/rpc | v0.0.0-20260414002931-afd174a4e478 | Apache-2.0 |
-| google.golang.org/grpc | v1.82.1 | Apache-2.0 |
-| google.golang.org/protobuf | v1.36.11 | BSD-3-Clause |
 | gopkg.in/yaml.v3 | v3.0.1 | Apache-2.0 AND MIT |
-| modernc.org/libc | v1.74.1 | BSD-3-Clause |
-| modernc.org/mathutil | v1.7.1 | BSD-3-Clause |
-| modernc.org/memory | v1.11.0 | BSD-3-Clause |
-| modernc.org/sqlite | v1.53.0 | BSD-3-Clause |
-
-### MPL-2.0 components (weak copyleft — noted per MPL-2.0 s3.2/s3.3)
-
-The complete, verbatim MPL-2.0 license text ships with every pix distribution:
-`licenses/MPL-2.0.txt`, baked into the image and bundled in the Homebrew
-tarball. Each component below is linked into `pix-host` in Executable Form and
-is unmodified, so pix distributes no Modifications; the Source Code Form for
-the exact version linked is published at the URL given, which is how a
-recipient obtains it under MPL-2.0 s3.2(a).
-
-- **github.com/hashicorp/go-plugin@v1.8.0** — MPL-2.0. Source Code Form (MPL-2.0 s3.2), version v1.8.0: https://github.com/hashicorp/go-plugin/tree/v1.8.0. Full license text: `licenses/MPL-2.0.txt`. File-level weak copyleft. Linked into pix-host in Executable Form via an unmodified Go module import — pix creates no Modifications (MPL-2.0 s1.10), so the only Source Code Form a recipient needs is the upstream one linked above, at the pinned version. Attribution per MPL-2.0 s3.3 is this entry plus the verbatim license text shipped at licenses/MPL-2.0.txt.
-- **github.com/hashicorp/yamux@v0.1.2** — MPL-2.0. Source Code Form (MPL-2.0 s3.2), version v0.1.2: https://github.com/hashicorp/yamux/tree/v0.1.2. Full license text: `licenses/MPL-2.0.txt`. Same MPL-2.0 posture as go-plugin (yamux is go-plugin's multiplexed-stream transport): unmodified import, no Modifications distributed.
 
 ## npm packages baked into the image (Dockerfile `npm install -g` / `pi install`)
 

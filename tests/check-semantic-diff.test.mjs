@@ -736,7 +736,12 @@ test("every real pin holds against THIS repository right now under the shipped a
 	const pins = await loadRules(REAL_RULES_DIR);
 	assert.ok(pins.length >= 15, "should ship a meaningful pin set across all documented domains");
 	const domains = new Set(pins.map((p) => p.domain));
-	for (const expected of ["memory-rpc", "ports", "sandbox-scope", "permissions", "stdio", "subprocess-argv", "config-keys", "lifecycle"]) {
+	// memory-rpc and ports were both deleted along with the custom :11435
+	// JSON-RPC memory daemon and its reserved-port wiring in the Pix v2 cutover
+	// (docs/design/pix-v2-architecture.md §14, AC-16) — see the dedicated
+	// "ports domain was removed" test below, which pins the same deletion for
+	// that domain specifically.
+	for (const expected of ["sandbox-scope", "permissions", "stdio", "subprocess-argv", "config-keys", "lifecycle"]) {
 		assert.ok(domains.has(expected), `missing domain shard: ${expected}`);
 	}
 
@@ -832,19 +837,21 @@ test("the CLI exits 0 against the real repo and exits 1 against a fixture with a
 	const root = mkTmpDir();
 	fs.cpSync(path.join(REPO_ROOT, "services"), path.join(root, "services"), { recursive: true });
 	fs.cpSync(path.join(REPO_ROOT, "extensions"), path.join(root, "extensions"), { recursive: true });
-	// Corrupt the memory RPC method table: rename "remember" -> "rememberFact".
-	// The table lives in serve_plugin.go (memoryStoreMux): U11j collapsed the
-	// duplicate in memory.go into it, so both :11435 entry points answer through
-	// this one map — which is exactly the file a lockstep rename would hit.
-	const muxGo = path.join(root, "services/host/serve_plugin.go");
-	fs.writeFileSync(muxGo, fs.readFileSync(muxGo, "utf8").replace('"remember": with(func(', '"rememberFact": with(func('));
+	// Corrupt the pix-* sandbox-scope refusal: the custom memory JSON-RPC
+	// daemon this planted-corruption fixture used to target (serve_plugin.go's
+	// memoryStoreMux) was deleted outright in the Pix v2 cutover (docs/design/
+	// pix-v2-architecture.md §14, AC-16), so it corrupts sandbox.go's
+	// AGENTS.md-invariant-#12 literal instead — still a real, currently-pinned
+	// production file, still enough to prove the CLI wiring end-to-end.
+	const sandboxGo = path.join(root, "services/host/workflow/launch/sandbox.go");
+	fs.writeFileSync(sandboxGo, fs.readFileSync(sandboxGo, "utf8").replace('strings.HasPrefix(n, "pix-")', 'strings.HasPrefix(n, "pix2-")'));
 
 	let failed = false;
 	try {
 		execFileSync("node", [CLI, "--root", root, "--no-git"], { encoding: "utf8" });
 	} catch (err) {
 		failed = true;
-		assert.match(err.stdout, /memory\.rpc\.methods\.server/);
+		assert.match(err.stdout, /sandbox-scope\.prefix\.rm-refuses-foreign/);
 		assert.match(err.stdout, /semantic-diff: FAIL/);
 	}
 	assert.equal(failed, true, "CLI must exit non-zero on a planted corruption");

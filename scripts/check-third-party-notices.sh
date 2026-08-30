@@ -130,11 +130,24 @@ require_text() { # require_text <pattern> <label>
 require_text 'astral-sh/ruff' "ruff (baked tool) attribution"
 require_text 'sharkdp/fd' "fd (baked tool) attribution"
 require_text 'go\.dev/dl' "Go toolchain (baked tool) attribution"
-require_text 'hashicorp/go-plugin.*MPL-2\.0|MPL-2\.0.*go-plugin' "go-plugin MPL-2.0"
-require_text 'hashicorp/yamux.*MPL-2\.0|MPL-2\.0.*yamux' "yamux MPL-2.0"
-require_text 'thejerf/suture' "Suture attribution"
+# go-plugin/yamux (MPL-2.0) and Suture were deleted with pix-host's
+# supervision tree in the Pix v2 cutover (docs/design/pix-v2-architecture.md
+# §14, AC-16). Their attribution is required ONLY while the ledger actually
+# carries a live entry for them — requiring it unconditionally would fail
+# closed on a correct, honest ledger the moment the dependency is gone.
+if [ "$(node -e 'process.stdout.write(String((require("./scripts/legal/dependencies.json").goModules||[]).filter(m=>m.class==="weak-copyleft").length))')" != "0" ]; then
+	require_text 'MPL-2\.0' "weak-copyleft (MPL-2.0) attribution for the live ledger entry/entries"
+	require_text 'licenses/MPL-2\.0\.txt' "pointer to the shipped MPL-2.0 license text"
+else
+	ok "no weak-copyleft (MPL-2.0) dependency in the ledger (go-plugin/yamux deleted with pix-host; nothing to attribute)"
+fi
+if [ "$(node -e 'process.stdout.write(String((require("./scripts/legal/dependencies.json").goModules||[]).filter(m=>/suture/.test(m.module)).length))')" != "0" ]; then
+	require_text 'thejerf/suture' "Suture attribution"
+else
+	ok "no live Suture dependency in the ledger (deleted with pix-host's supervision tree; nothing to attribute)"
+fi
 # The planned-dependency marker is only required while the ledger actually
-# carries a planned entry (Suture was the last one; it is live as of U07).
+# carries a planned entry.
 if [ "$(node -e 'process.stdout.write(String((require("./scripts/legal/dependencies.json").goModulesPlanned||[]).length))')" != "0" ]; then
 	require_text 'planned' "planned-dependency marker"
 else
@@ -142,9 +155,6 @@ else
 fi
 require_text '@earendil-works/pi-tui' "patched pi-tui attribution"
 require_text 'PATCH' "patched-component marker"
-require_text 'github\.com/hashicorp/go-plugin/tree/v1\.8\.0' "go-plugin Source Code Form URL (MPL-2.0 s3.2)"
-require_text 'github\.com/hashicorp/yamux/tree/v0\.1\.2' "yamux Source Code Form URL (MPL-2.0 s3.2)"
-require_text 'licenses/MPL-2\.0\.txt' "pointer to the shipped MPL-2.0 license text"
 
 # --- 4. inclusion: image + tarball -------------------------------------------
 if grep -qE 'COPY[[:space:]].*THIRD_PARTY_NOTICES\.md[[:space:]]' images/agent/Dockerfile; then

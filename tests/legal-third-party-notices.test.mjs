@@ -7,9 +7,11 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 // AC-REL-01: generated THIRD_PARTY_NOTICES.md, with a fail-closed license-class
-// gate over the live Go module set. Covers: MPL-2.0 go-plugin/yamux attribution,
-// the live Suture entry, npm globals (incl. the patched pi-tui), and the
-// committed file staying in sync with the ledger.
+// gate over the live Go module set. Covers: the live Go module ledger (kong,
+// toml, x/sys, x/term, yaml.v3 — the Pix v2 deletion sweep removed the
+// go-plugin/yamux/Suture dependency tree entirely, so there is currently no
+// weak-copyleft entry to attribute), npm globals (incl. the patched pi-tui),
+// and the committed file staying in sync with the ledger.
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const genScript = path.join(repoRoot, "scripts/legal/generate-third-party-notices.mjs");
@@ -24,15 +26,19 @@ const gen = await import(`${genScript.replace(/\\/g, "/")}?t=${Date.now()}`).cat
 const deps = JSON.parse(fs.readFileSync(depsPath, "utf8"));
 const policy = JSON.parse(fs.readFileSync(policyPath, "utf8"));
 
-test("ledger declares MPL-2.0 for go-plugin and yamux, allowlisted by policy", () => {
-	const goPlugin = deps.goModules.find((m) => m.module === "github.com/hashicorp/go-plugin");
-	const yamux = deps.goModules.find((m) => m.module === "github.com/hashicorp/yamux");
-	assert.equal(goPlugin.license, "MPL-2.0");
-	assert.equal(goPlugin.class, "weak-copyleft");
-	assert.equal(yamux.license, "MPL-2.0");
-	assert.equal(yamux.class, "weak-copyleft");
-	assert.ok(policy.weakCopyleftAllowlist.includes(goPlugin.module));
-	assert.ok(policy.weakCopyleftAllowlist.includes(yamux.module));
+// Pix v2 deletion sweep (docs/design/pix-v2-architecture.md §14, AC-16):
+// pix-host/serve/packs/Suture/go-plugin were deleted outright, taking
+// go-plugin and yamux (the only weak-copyleft entries) with them. No live
+// dependency is weak-copyleft today; the allowlist stays as policy for a
+// dependency that might land later, but it must not currently attribute any
+// module that is no longer in the build graph.
+test("no live ledger entry is weak-copyleft (go-plugin/yamux deleted with pix-host); the allowlist names no live module", () => {
+	const weakCopyleft = deps.goModules.filter((m) => m.class === "weak-copyleft");
+	assert.deepEqual(weakCopyleft, [], "a weak-copyleft entry reappearing here would attribute a resurrected go-plugin/yamux dependency");
+	const liveModuleNames = new Set(deps.goModules.map((m) => m.module));
+	for (const allowlisted of policy.weakCopyleftAllowlist) {
+		assert.ok(!liveModuleNames.has(allowlisted), `${allowlisted} is allowlisted but also live — it should carry a weak-copyleft ledger row`);
+	}
 });
 
 test("bakedTools ledger records ruff, fd, and go with license/source/version provenance", () => {
@@ -87,16 +93,14 @@ test("CLI --check-baked-tools passes against the real Dockerfile", () => {
 	void out;
 });
 
-// U07 landed the supervision tree, so Suture stopped being a plan and became a
-// linked dependency: it must now be a LIVE ledger entry (license verified at
-// the exact version in go.mod), and it must no longer sit in the planned list —
-// a shipped dependency disclosed as "planned" is the failure this guards.
-test("Suture is a live, license-verified ledger entry", () => {
+// Suture was live from U07 through the Pix v2 cutover; the deletion sweep
+// removed the supervision tree it backed along with pix-host/serve, so it
+// must be gone from BOTH the live ledger and the planned list — a deleted
+// dependency lingering in either is exactly the stale attribution this repo's
+// reverse-direction ledger-liveness gate exists to catch.
+test("Suture is fully removed: no live ledger entry, no planned entry", () => {
 	const live = deps.goModules.find((m) => m.module === "github.com/thejerf/suture/v4");
-	assert.ok(live, "expected a live ledger entry for thejerf/suture/v4");
-	assert.equal(live.license, "MIT");
-	assert.equal(live.class, "permissive");
-	assert.ok(live.version.startsWith("v4."), `unexpected version ${live.version}`);
+	assert.equal(live, undefined, "thejerf/suture/v4 was deleted with pix-host/serve; a ledger row here is stale attribution");
 	assert.ok(!(deps.goModulesPlanned || []).some((m) => m.module.includes("suture")));
 });
 
@@ -125,7 +129,7 @@ test("validateLiveModules(): fails closed on a live dependency absent from the l
 });
 
 test("validateLiveModules(): fails closed on a version drift from the pinned ledger entry", () => {
-	const live = ["github.com/hashicorp/go-plugin@v99.0.0"];
+	const live = ["github.com/alecthomas/kong@v99.0.0"];
 	const { ok, findings } = gen.validateLiveModules(live, deps, policy);
 	assert.equal(ok, false);
 	assert.match(findings[0].reason, /re-verify the license/);
@@ -140,9 +144,7 @@ test("validateLiveModules(): passes when every live module matches the ledger", 
 test("renderNotices() output contains required sections", () => {
 	const rendered = gen.renderNotices(deps);
 	assert.match(rendered, /THIRD.PARTY|Third-Party Notices/i);
-	assert.match(rendered, /github\.com\/hashicorp\/go-plugin/);
-	assert.match(rendered, /MPL-2\.0/);
-	assert.match(rendered, /thejerf\/suture/);
+	assert.match(rendered, /github\.com\/alecthomas\/kong/);
 	assert.match(rendered, /@earendil-works\/pi-tui/);
 	assert.match(rendered, /not affiliated/i);
 	assert.match(rendered, /astral-sh\/ruff/);
@@ -201,12 +203,12 @@ test("CLI --check-live passes on the real, live services/host module set", () =>
 
 test("validateLedgerLiveness(): fails closed on a ledger row that is no longer in the live build graph", () => {
 	const live = deps.goModules
-		.filter((m) => m.module !== "github.com/hashicorp/yamux")
+		.filter((m) => m.module !== "golang.org/x/term")
 		.map((m) => `${m.module}@${m.version}`);
 	const { ok, findings } = gen.validateLedgerLiveness(live, deps);
 	assert.equal(ok, false);
 	assert.equal(findings.length, 1);
-	assert.equal(findings[0].module, "github.com/hashicorp/yamux");
+	assert.equal(findings[0].module, "golang.org/x/term");
 	assert.match(findings[0].reason, /NOT in the live build graph/);
 });
 

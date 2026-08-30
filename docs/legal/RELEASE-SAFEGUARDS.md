@@ -29,14 +29,17 @@ dependency edges, so nobody can quietly drop the `needs` and keep the file.
 
 - `scripts/legal/dependencies.json` — hand-maintained ledger (same convention
   as `scripts/arch-metrics/budgets.json` / `services/host/inference/catalog/models.json`):
-  every Go module actually reachable from `services/host`'s build graph (**34**,
+  every Go module actually reachable from `services/host`'s build graph (**5**,
   derived via `go list -deps` across the release GOOS/GOARCH set, see
-  `scripts/legal/list-go-modules.sh`), every
-  npm package baked into the image, the **MPL-2.0** entries for
-  `github.com/hashicorp/go-plugin` and `github.com/hashicorp/yamux`, and the
-  **MIT** entry for `github.com/thejerf/suture/v4` (live in `go.mod` since
-  U07's host `serve` supervision tree, not a placeholder — license verified
-  against the vendored module cache at the pinned `v4.0.6`).
+  `scripts/legal/list-go-modules.sh`) and every npm package baked into the
+  image. The Pix v2 deletion sweep (docs/design/pix-v2-architecture.md §14,
+  AC-16) removed `pix-host`'s Suture supervision tree, go-plugin subprocess
+  units, and the custom memory JSON-RPC daemon outright, taking their
+  dependencies — `github.com/hashicorp/go-plugin`, `github.com/hashicorp/yamux`
+  (both MPL-2.0) and `github.com/thejerf/suture/v4` (MIT) — with them. There is
+  currently no live weak-copyleft entry in the ledger; the surviving module set
+  is `alecthomas/kong`, `BurntSushi/toml`, `golang.org/x/sys`, `golang.org/x/term`
+  and `gopkg.in/yaml.v3`, all permissive.
 - `bakedTools` (same file) — the **directly-downloaded static binaries** the
   Dockerfile `curl`s straight from a GitHub Releases page (or, for Go,
   `go.dev/dl`) and bakes into the image, rather than installing via npm/`go.mod`
@@ -81,24 +84,31 @@ dependency edges, so nobody can quietly drop the `needs` and keep the file.
 - `scripts/check-third-party-notices.sh` — the CI check: regenerate + diff
   (no stale notices), live license-class gate, the `bakedTools` version gate
   (`--check-baked-tools Dockerfile`, ruff/fd/go pins match the ledger),
-  required-attribution assertions (go-plugin/yamux MPL-2.0, the live Suture
-  entry, the patched pi-tui, ruff/fd/go), and **inclusion** checks
-  (Dockerfile `COPY`, the Homebrew tarball in `publish.yml`).
+  required-attribution assertions (the patched pi-tui, ruff/fd/go), and
+  **inclusion** checks (Dockerfile `COPY`, the Homebrew tarball in
+  `publish.yml`).
 
-### MPL-2.0 disclosure (B1)
+### MPL-2.0 disclosure (B1) — currently dormant, kept ready for the next weak-copyleft dependency
 
-- `licenses/MPL-2.0.txt` — the **full, verbatim** MPL-2.0 text, shipped in
+- No live ledger entry is weak-copyleft today: `github.com/hashicorp/go-plugin`
+  and `github.com/hashicorp/yamux` were deleted with `pix-host`'s supervision
+  tree in the Pix v2 cutover. The disclosure mechanism below stays in place
+  rather than getting ripped out, because it is generic (keyed off
+  `class: "weak-copyleft"` in the ledger, not off any one module by name) and
+  the next MPL-2.0 dependency should not have to reinvent it.
+- `licenses/MPL-2.0.txt` — the **full, verbatim** MPL-2.0 text still ships in
   the image and the Homebrew tarball. The notices previously said license
   texts were "reproduced below" in one paragraph and "not reproduced
   verbatim here" in another; that contradiction is gone, and
   `check-third-party-notices.sh` fails if the blanket "not reproduced" claim
   ever comes back while the file ships.
-- Each MPL-2.0 ledger entry carries a `sourceUrl` pinned to the **exact
-  version linked** (`.../tree/v1.8.0`, `.../tree/v0.1.2`) and a
-  `licenseTextFile`. `--check-copyleft-disclosure` (new,
-  `validateCopyleftDisclosure()`) fails closed if a weak-copyleft entry has
+- Any future MPL-2.0 ledger entry must carry a `sourceUrl` pinned to the
+  **exact version linked** and a `licenseTextFile`. `--check-copyleft-disclosure`
+  (`validateCopyleftDisclosure()`) fails closed if a weak-copyleft entry has
   no https source URL, a URL that does not pin the ledger version, or names
-  a license text that is not actually present in the tree.
+  a license text that is not actually present in the tree; with zero
+  weak-copyleft entries today, it currently has nothing to check and passes
+  vacuously.
 
 ## AC-REL-02 — tarball/image inclusion
 
