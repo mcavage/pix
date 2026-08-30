@@ -1,13 +1,16 @@
 // pix, auto-recall injector (client side).
 //
-// Before every turn, ask the host memory service for a small high-signal working
+// Before every turn, ask the memory MCP tools for a small high-signal working
 // set for what you're about to do, and APPEND it to the message list. No
-// ceremony: you never ask for it, it's just there. The store itself lives on the
-// host (global, single writer, persistent); this extension only calls it over
-// JSON-RPC via host.docker.internal. Defensive throughout: if the service is
-// down or slow, recall is skipped and the turn proceeds normally.
+// ceremony: you never ask for it, it's just there. The store itself lives on
+// the host behind the sbx MCP Gateway (global, single writer, persistent);
+// this extension calls it with a deterministic `tools/call` through the same
+// injected Gateway endpoint pi-mcp-adapter uses (see
+// ../lib/mcp-gateway-client.ts). It never dials the memory container or
+// host.docker.internal directly. Defensive throughout: if the Gateway or the
+// memory service is down or slow, recall is skipped and the turn proceeds
+// normally.
 //
-//   MEMORY_URL                 default http://host.docker.internal:11435
 //   MEMORY_TIMEOUT_MS          default 2000 (a slow store must never stall a turn)
 //   MEMORY_COMMAND_TIMEOUT_MS  default 10000 (a user-invoked /recall can afford to
 //                              wait longer than the silent per-turn auto-recall)
@@ -15,12 +18,10 @@
 import { basename, join } from "node:path";
 import { execSync } from "node:child_process";
 import { createRecallChannel } from "../lib/recall-message.ts";
+import { createMcpGatewayClient, MEMORY_TOOL } from "../lib/mcp-gateway-client.ts";
 import { readFileSync } from "node:fs";
-import { request as httpRequest } from "node:http";
-import { request as httpsRequest } from "node:https";
 import { Type } from "typebox";
 
-const MEMORY_URL = process.env.MEMORY_URL ?? "http://host.docker.internal:11435";
 // Named, exported defaults are the timeout/clock seam: production always runs
 // on these unless MEMORY_TIMEOUT_MS/MEMORY_COMMAND_TIMEOUT_MS override them, and
 // tests can assert the real production defaults instantly (no waiting) while
@@ -41,53 +42,13 @@ const safe = async <T>(fn: () => Promise<T>): Promise<T | undefined> => {
 	}
 };
 
-// IMPORTANT: use node:http, not fetch. In an sbx sandbox pi installs a global
-// undici proxy dispatcher (HTTP_PROXY -> the sbx proxy), and sbx's NO_PROXY does
-// NOT include host.docker.internal, so fetch() to the host store gets routed
-// through the proxy and fails. node:http ignores that dispatcher and goes direct.
-function postJson(urlStr: string, body: unknown, timeoutMs: number): Promise<any> {
-	return new Promise((resolve, reject) => {
-		const u = new URL(urlStr);
-		const data = JSON.stringify(body);
-		const req = (u.protocol === "https:" ? httpsRequest : httpRequest)(
-			{
-				hostname: u.hostname,
-				port: u.port || (u.protocol === "https:" ? 443 : 80),
-				path: u.pathname || "/",
-				method: "POST",
-				headers: { "content-type": "application/json", "content-length": Buffer.byteLength(data) },
-				timeout: timeoutMs,
-			},
-			(res) => {
-				let chunks = "";
-				res.on("data", (c) => (chunks += c));
-				res.on("end", () => {
-					if ((res.statusCode ?? 500) < 200 || (res.statusCode ?? 500) >= 300) {
-						return reject(new Error(`memory service HTTP ${res.statusCode ?? "unknown"}`));
-					}
-					try {
-						resolve(chunks ? JSON.parse(chunks) : null);
-					} catch (e) {
-						reject(e);
-					}
-				});
-			},
-		);
-		req.on("error", reject);
-		req.on("timeout", () => req.destroy(new Error("timeout")));
-		req.write(data);
-		req.end();
-	});
-}
+// One Gateway client for this extension instance; owns its own MCP session
+// (see createMcpGatewayClient's doc comment for why this is per-instance, not
+// module-global).
+const gateway = createMcpGatewayClient();
 
-let rpcId = 0;
 async function rpc(method: string, params: any, timeoutMs: number = TIMEOUT_MS): Promise<any> {
-	const j = await postJson(MEMORY_URL, { jsonrpc: "2.0", id: ++rpcId, method, params }, timeoutMs);
-	if (j?.error) {
-		const message = typeof j.error.message === "string" ? j.error.message : "memory service RPC error";
-		throw new Error(message);
-	}
-	return j?.result ?? null;
+	return (await gateway.callTool(method, params, timeoutMs)) ?? null;
 }
 
 // The active profile scopes recall/capture (recall sees {profile}∪{default};
@@ -194,7 +155,7 @@ export async function fetchRecallRows(
 	profile: string = "default",
 ): Promise<any[]> {
 	if (!prompt || !prompt.trim()) return [];
-	const r = await rpc("recall", { query: prompt, project, profile, limit: 6, charBudget: 1000 });
+	const r = await rpc(MEMORY_TOOL.recall, { query: prompt, project, profile, limit: 6, charBudget: 1000 });
 	return r?.hits ?? [];
 }
 
@@ -211,21 +172,22 @@ export async function buildRecallBlock(
 }
 
 // Shared semantics every memory tool description repeats, so the model gets an
-// accurate picture of the capability instead of guessing: it reaches the host
-// daemon directly (no shelling out), auto-recall only injects a small filtered
-// subset each turn (this tool can return up to 100 rows, not the whole store),
-// every memory is durable with no automatic expiry (see docs/memory.md's
-// Legacy data section for what that replaced), and writes/deletes are
-// human-driven slash commands (`/remember`, `/forget`).
+// accurate picture of the capability instead of guessing: it reaches the
+// memory service through the sbx MCP Gateway (no shelling out), auto-recall
+// only injects a small filtered subset each turn (this tool can return up to
+// 100 rows, not the whole store), every memory is durable with no automatic
+// expiry (see docs/memory.md's Legacy data section for what that replaced),
+// and writes/deletes are human-driven slash commands (`/remember`, `/forget`).
 //
-// IMPORTANT, this is a UX/safety posture, not a security boundary: the host
-// memory daemon is unauthenticated and reachable at host.docker.internal (see
-// docs/memory.md's Trust model), so it does NOT claim the agent or sandbox
-// code is incapable of writing to memory, arbitrary sandbox code could still
-// POST directly to the daemon. It only says this specific tool surface (the
-// two tools below) is read-only by design.
+// IMPORTANT, this is a UX/safety posture, not a security boundary: the
+// Gateway-fronted memory service enforces no per-caller identity beyond the
+// sandbox's own Gateway credential (see docs/memory.md's Trust model), so it
+// does NOT claim the agent or sandbox code is incapable of writing to memory,
+// arbitrary sandbox code could still call the same MCP tools directly. It
+// only says this specific tool surface (the two tools below) is read-only by
+// design.
 const MEMORY_TOOL_SEMANTICS =
-	"Reaches the host memory daemon directly over host.docker.internal, never shell out to `pix` or `curl`. " +
+	"Reaches the memory service through the sbx MCP Gateway, never a direct host connection, never shell out to `pix` or `curl`. " +
 	"Only a small relevance-filtered subset of memory is silently injected into context each turn; this tool can return up to 100 rows visible to the active profile, not the whole store. " +
 	"Every memory is durable, with no automatic expiry. " +
 	"This tool surface is read-only: it can inspect memory but cannot store or delete it. Writing (`/remember`) and deleting (`/forget`) are human-driven slash commands, not agent tools, " +
@@ -324,7 +286,7 @@ export default function (pi: any) {
 			// daemon's 1200-char default doesn't cut the response off well short of
 			// `limit` rows.
 			if (isAll) rpcParams.charBudget = MEMORY_ALL_QUERY_CHAR_BUDGET;
-			const r = await rpc("recall", rpcParams, COMMAND_TIMEOUT_MS);
+			const r = await rpc(MEMORY_TOOL.recall, rpcParams, COMMAND_TIMEOUT_MS);
 			const hits = r?.hits ?? [];
 			let text = hits.length ? hits.map(formatHitLine).join("\n") : "(nothing)";
 			if (hits.length === limit) text += truncationNotice(limit);
@@ -349,7 +311,7 @@ export default function (pi: any) {
 		].join(" "),
 		parameters: MemoryStatsParams as any,
 		async execute() {
-			const r = await rpc("stats", { profile: ACTIVE_PROFILE }, COMMAND_TIMEOUT_MS);
+			const r = await rpc(MEMORY_TOOL.stats, { profile: ACTIVE_PROFILE }, COMMAND_TIMEOUT_MS);
 			return { content: [{ type: "text", text: JSON.stringify(r ?? {}) }], details: r };
 		},
 	});
@@ -374,7 +336,7 @@ export default function (pi: any) {
 					rpcParams.limit = MEMORY_ALL_QUERY_LIMIT;
 					rpcParams.charBudget = MEMORY_ALL_QUERY_CHAR_BUDGET;
 				}
-				const r = await rpc("recall", rpcParams, COMMAND_TIMEOUT_MS);
+				const r = await rpc(MEMORY_TOOL.recall, rpcParams, COMMAND_TIMEOUT_MS);
 				const hits = r?.hits ?? [];
 				let text = hits.length ? hits.map(formatHitLine).join("\n") : "(nothing)";
 				if (isAll && hits.length === MEMORY_ALL_QUERY_LIMIT) text += truncationNotice(MEMORY_ALL_QUERY_LIMIT);
@@ -398,7 +360,7 @@ export default function (pi: any) {
 			// /recall above, whose try/catch this mirrors). The silent best-effort
 			// behavior stays on the before_agent_start hook only.
 			try {
-				const r = await rpc("remember", { content, source: "user", profile: ACTIVE_PROFILE });
+				const r = await rpc(MEMORY_TOOL.remember, { content, source: "user", profile: ACTIVE_PROFILE });
 				// The daemon can respond 200 with an empty id (e.g. content collapsed to
 				// "" after its own trim, or a budget/dedupe path returned nothing to
 				// store) — that is NOT success and must not be reported as "remembered"
@@ -430,7 +392,7 @@ export default function (pi: any) {
 				let id = /^[0-9a-f-]{8,}$/i.test(arg) ? arg : null;
 				let content = arg;
 				if (!id) {
-					const r = await rpc("recall", { query: arg, limit: 1, project: currentProject(ctx), profile: ACTIVE_PROFILE });
+					const r = await rpc(MEMORY_TOOL.recall, { query: arg, limit: 1, project: currentProject(ctx), profile: ACTIVE_PROFILE });
 					const hit = r?.hits?.[0];
 					// A no-match query is a visible error, not info: nothing was forgotten,
 					// so a quiet "info" reads as success. Actionable, not just a fact: tell
@@ -443,7 +405,7 @@ export default function (pi: any) {
 					id = hit.id;
 					content = hit.content;
 				}
-				const r = await rpc("forget", { id, profile: ACTIVE_PROFILE });
+				const r = await rpc(MEMORY_TOOL.forget, { id, profile: ACTIVE_PROFILE });
 				if (r?.ok) {
 					ctx?.ui?.notify?.(`forgot: ${content}`, "info");
 				} else {
